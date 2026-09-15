@@ -3,7 +3,7 @@
 # 放进技能目录即被 tf 自动发现，全局 tf.yaml 里不用再抄 steps。
 # 覆盖优先级：本文件 < 全局 tf.yaml 的 task_types.band-dft-cpu < 项目 tf_<项目>.yaml
 # =============================================================================
-schema: 2          # 2 = 支持 io_schema / flow / corrections 自描述段（tf schema 看）
+schema: 2          # 2 = 支持 io_schema / flow / corrections 自描述段（phonoagent schema 看）
 name: band-dft-cpu
 desc: 能带(DFT/CPU)
 version: "1.3"
@@ -17,7 +17,7 @@ template_layout: shared
 
 # =============================================================================
 # 自描述三段（schema 2，v1.0 新增；只给人/AI 看，不参与运行期装配）
-#   看：tf schema band-dft-cpu        机器可读：tf schema band-dft-cpu --json
+#   看：phonoagent schema band-dft-cpu        机器可读：phonoagent schema band-dft-cpu --json
 #   写新技能照 skill/_template/ 抄。
 # =============================================================================
 io_schema:

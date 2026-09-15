@@ -13,7 +13,7 @@
   3. 实现 suggest(ctx) -> Suggestion（必须），可选 apply(ctx, cfg) -> (rc, changed 列表)；
   4. 文件末尾写 HANDLER = XxxCorrection()；
   5. 想让某个技能"自己声明会用这个纠错"，在该技能 skill.yaml 里写
-     corrections: [<名字>]（不写也能被全局兜底命中——声明只是为了 tf schema 里显示出来）。
+     corrections: [<名字>]（不写也能被全局兜底命中——声明只是为了 phonoagent schema 里显示出来）。
 
 ★ 纪律：apply() 只允许**改输入文件**（写前必须备份 + 原子替换），
    绝不允许自己 sbatch/scancel/rm——提交与取消永远只走 tf（见 AGENTS.md 铁律 1）。

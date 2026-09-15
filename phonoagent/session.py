@@ -5,7 +5,7 @@
 setting/history.jsonl、翻 monitor 日志、再自己写说明——每篇文章重来一遍，而且
 很容易漏（"这步的输入是怎么生成的"往往就说不清）。
 
-**做法**：`tf session export -p <材料>` 把**一个材料**的完整"操作与来路"打成一个
+**做法**：`phonoagent session export -p <材料>` 把**一个材料**的完整"操作与来路"打成一个
 tar.gz（默认落 cwd 的 tmp/）：
 
   manifest.json          机器可读总账：tf 版本 / git 提交 / 时间 / 材料 / 技能 /
@@ -13,7 +13,7 @@ tar.gz（默认落 cwd 的 tmp/）：
   README.txt             这份包里有什么、怎么读、怎么重放（给人看）
   status.txt             导出时刻的步骤状态（label / kind / 诊断 / 作业号）
   history.jsonl          该材料的状态转移 + 动作事件 + 完成耗时（tf history 的数据源）
-  agent_log.jsonl        LLM 动作审计（tf act 的流水；没有就不放）
+  agent_log.jsonl        LLM 动作审计（phonoagent act 的流水；没有就不放）
   provenance/<步骤>.json  每步"输入 sha256 / step.conf 参数 / 工具版本 / 作业号"
 
 **边界**：全程只读本地文件（不连超算、不提交、不改任何东西）；provenance 只收
@@ -21,7 +21,7 @@ tar.gz（默认落 cwd 的 tmp/）：
 也不含 config 的敏感段（只记配置路径 + host + work_dir）。`--json` 只打印总账、不写包。
 
 用法：
-  tf session export -p Si_auto [--out 路径.tar.gz] [--since 7d] [--json]
+  phonoagent session export -p Si_auto [--out 路径.tar.gz] [--since 7d] [--json]
 """
 
 import os
@@ -63,7 +63,7 @@ python3 -m json.tool provenance/S1_opt.json | head -40    # 某一步的来路
 2. 按 provenance 里的参数逐字段核对生成输入：`tf -p %(mat)s -j <步骤> init`；
 3. 用 `tf prove -p %(mat)s --verify` 逐字节校验输入是否与档案一致。
 
-> 说明：包由 `tf session export` 生成，只读本地已回拉的数据；远端仍有而本地
+> 说明：包由 `phonoagent session export` 生成，只读本地已回拉的数据；远端仍有而本地
 > 未 fetch 的产物不在此包内（要收全先跑 `tf -p %(mat)s fetch`）。
 """
 
@@ -121,7 +121,7 @@ def _session_collect(cfg, data, proj, since=None):
     files["history.jsonl"] = "".join(
         json.dumps(e, ensure_ascii=False) + "\n" for e in evs)
 
-    # 2) agent 审计（P0-1 的 tf act 流水）
+    # 2) agent 审计（P0-1 的 phonoagent act 流水）
     ags, _atot = agent_log_load(cfg, proj=mat, since=since)
     agent_txt = "".join(json.dumps(e, ensure_ascii=False) + "\n" for e in ags)
     if agent_txt:
@@ -198,9 +198,9 @@ def _session_sha(data):
 
 def cmd_session(cfg, data, proj, job=None, out=None, since=None,
                 json_out=False, write=True):
-    """tf session export -p <材料> [--out 文件] [--since 7d] [--json]"""
+    """phonoagent session export -p <材料> [--out 文件] [--since 7d] [--json]"""
     if not proj:
-        print("用法：tf session export -p <材料> [--out 路径.tar.gz] [--since 7d] [--json]")
+        print("用法：phonoagent session export -p <材料> [--out 路径.tar.gz] [--since 7d] [--json]")
         print("      把该材料的操作历史 + provenance + agent 审计打成一个包，"
               "做论文的可复现性补充材料。")
         return 2

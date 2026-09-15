@@ -9,7 +9,7 @@
     - 输出 workflow_method.txt（FUNC/GGA/IVDW/DIM/MAG/LDAU）+ CONTCAR +
       OUTCAR/EIGENVAL（step4/5 从它们读带隙/磁矩定 ISMEAR/ISPIN）
     - 12 核提交：step.conf [submit] nodes=1 ntasks_per_node=12
-      （模板 ntasks-per-node=24 由 apply_submit 覆盖；改核数用 tf conf）
+      （模板 ntasks-per-node=24 由 apply_submit 覆盖；改核数用 phonoagent conf）
 
 结构来源：材料目录 POSCAR（无上一步，全新体系从这里开始）。
 """

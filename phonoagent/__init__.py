@@ -35,12 +35,12 @@ from . import (  # noqa: E402
     bootstrap, collect, data, workflow, report, ops, cli, yamlmini,
     # v1.0（加技能友好化）新增两个模块：
     #   skillspec   —— skill.yaml 扩展段（io_schema / flow / corrections）的规范、
-    #                  校验与 tf schema 渲染（建议 1.2 / 1.3）
+    #                  校验与 phonoagent schema 渲染（建议 1.2 / 1.3）
     #   corrections —— _corrections/ 纠错 handler 库的加载、匹配与 tf correct（建议 1.1）
     #   history     —— 步骤状态的时间序列（history.jsonl）+ tf history（W5–8）
     #   prov        —— 每步 provenance.json（输入 sha256 / 参数 / 工具版本）+ tf prove
-    #   agentgate   —— LLM 动作网关（风险分档 + 一次性批准令牌）+ 审计流水 tf act（P0-1）
-    #   session     —— 会话导出（操作历史 + provenance + 审计打包）tf session export（P1-7）
+    #   agentgate   —— LLM 动作网关（风险分档 + 一次性批准令牌）+ 审计流水 phonoagent act（P0-1）
+    #   session     —— 会话导出（操作历史 + provenance + 审计打包）phonoagent session export（P1-7）
     skillspec, corrections, history, prov, agentgate, session,
 )
 _MODULES = (bootstrap, collect, data, workflow, report, ops, cli, yamlmini,

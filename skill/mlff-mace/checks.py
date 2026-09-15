@@ -16,7 +16,7 @@
     ck_publish     step9：publish_status.json 存在；pass 时必须还有 model_card.json
 
 代数一致性是「手动推进下一代」的触发器：bump GENERATION → rerun -j 4（重新推送
-step.conf + 生成新代清单）→ 本判据自动把 5/6/7/8 判成未完成 → tf retry/start 重跑。
+step.conf + 生成新代清单）→ 本判据自动把 5/6/7/8 判成未完成 → phonoagent retry/start 重跑。
 """
 import os
 import re
@@ -264,7 +264,7 @@ def ck_relax_injob(d, sc):
         return True, "converged"
     if not os.path.isfile(os.path.join(d, "OUTCAR")):
         return False, "OUTCAR missing"
-    return False, "弛豫未收敛 —— 看 OUTCAR 尾部定位震荡来源，调参后 tf retry"
+    return False, "弛豫未收敛 —— 看 OUTCAR 尾部定位震荡来源，调参后 phonoagent retry"
 
 
 CHECKERS = {

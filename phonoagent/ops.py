@@ -309,7 +309,7 @@ def _hung_resume(cfg, wdir):
     先校验 CONTCAR 完整（>=8 行、原子数行与 POSCAR 一致），通过才 cp CONTCAR POSCAR，
     否则保留原 POSCAR 直接重跑并告警（IO 异常时 CONTCAR 可能是截断的，不能覆盖好 POSCAR）；
     备份旧输出为 *.hung，清理二进制残留，重新 sbatch（走目录锁 + 实时队列去重守卫，
-    避免与 tf start/auto_advance 并发时重复提交）。返回 (rc, msg)。'''
+    避免与 phonoagent start/auto_advance 并发时重复提交）。返回 (rc, msg)。'''
     prep = (
         "cd %s && mv -f OUTCAR OUTCAR.hung 2>/dev/null; "
         "mv -f OSZICAR OSZICAR.hung 2>/dev/null; "
@@ -562,19 +562,19 @@ def cmd_init(cfg, types, proj, name=None, tt=None, force=False, yes=False):
     """初始化项目配置。
     -p 指定材料 → 只初始化这些材料（多个用逗号分隔，如 -p Mg2C60,Mo2S3）；
     不带 -p → 当前目录下所有项目批量初始化（cwd 下一层就是材料目录时，
-    cwd 本身作为一个项目）。位置参数可指定项目名（tf init 名字）。
+    cwd 本身作为一个项目）。位置参数可指定项目名（phonoagent init 名字）。
     不带 -tt 时对【全部技能】各建一套 project_setting；动手前先列计划并确认（-y 跳过）。"""
     _keys = skill_keys(cfg, tt)
     if not _keys:
         print("错误：tf.yaml 里没有定义任何技能（task_types 为空）。")
         return 1
     if not yes and not tt:   # 明确指定了 -tt 就是明确选择，不再确认
-        print("tf init 将为下列技能各建一套项目配置：%s" % "、".join(_keys))
+        print("phonoagent init 将为下列技能各建一套项目配置：%s" % "、".join(_keys))
         print("范围：%s" % (("材料 " + "、".join(
             x.strip() for x in str(proj).split(",") if x.strip())) if proj
             else "当前目录下所有材料（%s）" % os.getcwd()))
         print("init 只在本地生成配置和模板，不连超算、不提交任何计算；")
-        print("要开算是之后的 tf start。已存在的文件不覆盖（除非加 -f）。")
+        print("要开算是之后的 phonoagent start。已存在的文件不覆盖（除非加 -f）。")
         print("（只想初始化其中一个技能就加 -tt，如 tf -tt band init）")
         try:
             ans = input("继续？ [y/N] ").strip().lower()
@@ -702,7 +702,7 @@ def cmd_init(cfg, types, proj, name=None, tt=None, force=False, yes=False):
         fails += _init_one(cfg, types, d, None, tt=tt, force=force,
                            known_names=known_names)
     if not fails:
-        print("材料初始化就绪（新 %d 个）。tf 查看状态，tf start 全部开始。" % done)
+        print("材料初始化就绪（新 %d 个）。tf 查看状态，phonoagent start 全部开始。" % done)
     return fails
 
 # ===== _scan_root_dirs (原 L5423-L5435) =====
@@ -831,14 +831,14 @@ def _scope_to_material(content, tkey):
     discover_local 会把同级所有带 POSCAR 的目录都扫成本技能的材料 ——
     在一个材料下 init 某技能，兄弟材料全被拉进该技能的表。
     显式写 local_root: ".."（相对 project_setting 的父目录 = <材料>/<技能>）
-    即指向材料目录本身，只发现这一个材料。要整批管就到上级目录 tf init。
+    即指向材料目录本身，只发现这一个材料。要整批管就到上级目录 phonoagent init。
     """
     if re.search(r"(?m)^\s+local_root:", content):
         return content
     m = re.search(r"(?m)^(\s*)%s:\s*$" % re.escape(str(tkey or "")), content)
     if not m:
         return content
-    line = '%s  local_root: ".."   # 只发现本材料；整批管请到上级目录 tf init\n' % m.group(1)
+    line = '%s  local_root: ".."   # 只发现本材料；整批管请到上级目录 phonoagent init\n' % m.group(1)
     return content[:m.end()] + "\n" + line + content[m.end() + 1:]
 
 # ===== _init_one_skill (原 L5559-L5792) =====
@@ -915,14 +915,14 @@ def _init_one_skill(cfg, types, target, name=None, tt=None, force=False,
             # 批量 init 预扫过的名字表 → O(1) 查重，避免每个材料全树重扫
             if pname in known_names:
                 print("错误：项目配置名 tf_%s.yaml 已被 %s 占用，"
-                      "请换个名字（tf init <名字>）。" % (pname, known_names[pname]))
+                      "请换个名字（phonoagent init <名字>）。" % (pname, known_names[pname]))
                 return 1
         else:
             roots = cfg.get("project_roots") or [cfg.get("_config_dir")]
             for n2, p2, _ in scan_project_configs(roots):
                 if n2 == pname:
                     print("错误：项目配置名 tf_%s.yaml 已被 %s 占用，"
-                          "请换个名字（tf init <名字>）。" % (pname, p2))
+                          "请换个名字（phonoagent init <名字>）。" % (pname, p2))
                     return 1
         src = pkg_setting_path("tf_default.yaml")
         content = None
@@ -1303,13 +1303,13 @@ def cmd_hpc(cfg, types, projs, cluster, tt, yes):
         else:
             tdir = (m.get("ps") or {}).get("dir")
             if not tdir:
-                print("%s: 失败——缺 project_setting（先 tf init）" % m["name"])
+                print("%s: 失败——缺 project_setting（先 phonoagent init）" % m["name"])
                 fails += 1
                 continue
         target = os.path.join(tdir, "hpc.yaml")
         new = _load_yaml_file(target) or {}
         new.update(master)   # 主配置字段全量覆盖；旧文件里的额外字段保留
-        _write_hpc_yaml(target, new, "超算配置（tf hpc %s 于 %s 生成/更新）"
+        _write_hpc_yaml(target, new, "超算配置（phonoagent hpc %s 于 %s 生成/更新）"
                         % (cluster, time.strftime("%Y-%m-%d %H:%M:%S")))
         resolve_material_local(t, root, m)   # 重新解析（带上新写的 hpc.yaml）再查模板
         missing = [lg for lg in (master.get("template_map") or {})
@@ -1419,7 +1419,7 @@ def cmd_level(cfg, types, tt, proj, arg):
             _level_write(scp, level)
             print("  %-28s %s -> %s" % (w, eff or "(未写)", level))
     if level:
-        print("下次 tf / tf start 装配步骤图时生效。已跑完的 step4 产物不会被"
+        print("下次 tf / phonoagent start 装配步骤图时生效。已跑完的 step4 产物不会被"
               "删除，只是不再出现在状态表里。")
     return fails
 
@@ -1471,7 +1471,7 @@ def cmd_auto_project(cfg, types, proj, tt, arg):
                       % (w, k, len(marks) - len(remaining)))
             print("  %s[%s]：auto_advance = %s" % (w, k, "true" if on else "false"))
     if not cfg.get("auto_advance"):
-        print("注意：全局 auto_advance 还是关的，本开关要配合 tf auto on 才生效。")
+        print("注意：全局 auto_advance 还是关的，本开关要配合 phonoagent auto on 才生效。")
     return fails
 
 # ===== _skill_local_mats (原 L6173-L6190) =====
@@ -1541,7 +1541,7 @@ def _set_yaml_bool(path, key, on):
 
 # ===== cmd_auto (原 L6237-L6275) =====
 def cmd_auto(cfg, arg):
-    """v1.5 tf auto [on|off]：一键开关自动提交（改写全局 tf.yaml 的
+    """v1.5 phonoagent auto [on|off]：一键开关自动提交（改写全局 tf.yaml 的
     auto_advance 行；没有该行则补在文件头）。无参数 = 显示当前状态。
     只影响 auto_advance；后台监控（auto_watch）不受影响。"""
     path = cfg.get("_config_path")
@@ -1551,7 +1551,7 @@ def cmd_auto(cfg, arg):
     if arg is None:
         print("auto_advance 当前：%s（%s）"
               % ("开" if cfg.get("auto_advance") else "关", path))
-        print("切换：tf auto on / tf auto off")
+        print("切换：phonoagent auto on / phonoagent auto off")
         return 0
     a = str(arg).strip().lower()
     if a not in ("on", "off", "1", "0", "true", "false", "开", "关"):
@@ -1577,7 +1577,7 @@ def cmd_auto(cfg, arg):
         print("status/monitor 会自动提交可开始的步骤；手动 start/retry/rerun 不受影响。")
     else:
         print("status/monitor 只看不提交；手动 start/retry/rerun 不受影响。")
-        print("后台监控仍在跑（只拉结果）；停监控用 tf monitor --stop。")
+        print("后台监控仍在跑（只拉结果）；停监控用 phonoagent monitor --stop。")
     return 0
 
 # ===== cmd_adopt (原 L6278-L6388) =====
@@ -1674,7 +1674,7 @@ def cmd_adopt(cfg, types, proj, yes, dry, tt):
     cfg2 = merge_project_configs(cfg2)
     types2 = get_types(cfg2, tt=tt)
     if not types2:
-        print("错误：%s 还没有任何项目配置段——先 tf init，再重跑 adopt。" % tt)
+        print("错误：%s 还没有任何项目配置段——先 phonoagent init，再重跑 adopt。" % tt)
         return 1
     data2 = collect_data(cfg2, types2)
     by_name = {m["name"]: m for t2 in data2["types"] for m in t2["materials"]}
@@ -1683,7 +1683,7 @@ def cmd_adopt(cfg, types, proj, yes, dry, tt):
         rel = os.path.relpath(D, root)
         m = by_name.get(rel)
         if m is None:
-            print("%s: 跳过——未被识别为材料（材料根缺 POSCAR？补好后 tf init）" % rel)
+            print("%s: 跳过——未被识别为材料（材料根缺 POSCAR？补好后 phonoagent init）" % rel)
             continue
         if not (m.get("ps") or {}).get("dir"):
             print("%s: 跳过——缺 project_setting（先 tf -tt %s -p %s init，"
@@ -1810,7 +1810,7 @@ def cmd_migrate_subdir(cfg, data, proj, yes, dry):
 def _watch_files(cfg=None):
     from phonoagent import WATCH_LOG, WATCH_PID
     """watch 的 pid/log 路径：v1.10 起锚定配置文件所在目录（setting/），
-    在任何目录执行 tf monitor --stop 都找得到；旧版 cwd 下的 pid 文件由
+    在任何目录执行 phonoagent monitor --stop 都找得到；旧版 cwd 下的 pid 文件由
     _watch_stop 兜底识别。"""
     base = (cfg or {}).get("_config_dir") or os.getcwd()
     return (os.path.join(base, WATCH_PID), os.path.join(base, WATCH_LOG))
@@ -1842,12 +1842,12 @@ def _watch_pid_alive(pid):
 
 # ===== _watch_daemon (原 L6878-L6908) =====
 def _watch_daemon(a, mat_toks, root, cfg=None):
-    """tf monitor -d：把监控作为 detached 子进程放后台，日志写配置目录下。"""
+    """phonoagent monitor -d：把监控作为 detached 子进程放后台，日志写配置目录下。"""
     pidfile, logfile = _watch_files(cfg)
     pid, _ = _watch_running_pid(cfg)
     if pid:
-        print("tf monitor 已在后台运行 (PID %d)" % pid)
-        print("日志：%s（tail -f 查看）；停止：tf monitor --stop" % logfile)
+        print("phonoagent monitor 已在后台运行 (PID %d)" % pid)
+        print("日志：%s（tail -f 查看）；停止：phonoagent monitor --stop" % logfile)
         return
     argv = [sys.executable, os.path.realpath(sys.argv[0])]
     if a.config:
@@ -1869,13 +1869,13 @@ def _watch_daemon(a, mat_toks, root, cfg=None):
                          stderr=subprocess.STDOUT, start_new_session=True)
     with open(pidfile, "w") as f:
         f.write(str(p.pid))
-    print("tf monitor 已转入后台 (PID %d)" % p.pid)
+    print("phonoagent monitor 已转入后台 (PID %d)" % p.pid)
     print("日志：%s（tail -f %s 查看）" % (logfile, logfile))
-    print("停止：tf monitor --stop")
+    print("停止：phonoagent monitor --stop")
 
 # ===== _watch_stop (原 L6911-L6924) =====
 def _watch_stop(cfg=None):
-    """tf monitor --stop：按 pid 文件停止后台监控（任意目录可执行）。"""
+    """phonoagent monitor --stop：按 pid 文件停止后台监控（任意目录可执行）。"""
     import signal as _sig
     pid, pidfile = _watch_running_pid(cfg)
     if pid:
@@ -1884,15 +1884,15 @@ def _watch_stop(cfg=None):
             os.remove(pidfile)
         except OSError:
             pass
-        print("已停止 tf monitor (PID %d)。" % pid)
+        print("已停止 phonoagent monitor (PID %d)。" % pid)
         return 0
-    print("没有运行中的 tf monitor。")
+    print("没有运行中的 phonoagent monitor。")
     return 1
 
 # ===== _watch_ensure (原 L6927-L6950) =====
 def _watch_ensure(cfg):
     """v1.10 auto_watch：任何 tf 命令顺带确保后台监控在跑（没在跑就拉起）。
-    配合 tf monitor --install 的 crontab 保活 = 零输入全自动：
+    配合 phonoagent monitor --install 的 crontab 保活 = 零输入全自动：
     重启/WSL 关闭后 cron 拉起；平时敲任何 tf 命令也会顺带拉起。
     保活失败绝不影响主命令。"""
     if not cfg.get("auto_watch"):
@@ -1911,14 +1911,14 @@ def _watch_ensure(cfg):
                              stderr=subprocess.STDOUT, start_new_session=True)
         with open(pidfile, "w") as f:
             f.write(str(p.pid))
-        print("已自动启动后台监控 tf monitor (PID %d)。日志：%s" % (p.pid, logfile))
+        print("已自动启动后台监控 phonoagent monitor (PID %d)。日志：%s" % (p.pid, logfile))
     except Exception:
         pass
 
 # ===== _watch_cron (原 L6953-L6979) =====
 def _watch_cron(install):
-    """tf monitor --install/--uninstall：crontab 保活——每 10 分钟检查，
-    监控死了（重启/崩溃）自动拉起。tf monitor -d 有 pid 检查，不会重复启动。"""
+    """phonoagent monitor --install/--uninstall：crontab 保活——每 10 分钟检查，
+    监控死了（重启/崩溃）自动拉起。phonoagent monitor -d 有 pid 检查，不会重复启动。"""
     import shutil as _sh
     marker = "# tf-watch-keepalive"
     if not _sh.which("crontab"):
@@ -1938,8 +1938,8 @@ def _watch_cron(install):
         print("写入 crontab 失败：%s" % (r.stderr or "").strip())
         return 1
     if install:
-        print("已写入 crontab 保活：每 10 分钟确保 tf monitor 在跑（重启后自动恢复）")
-        print("查看：crontab -l；移除：tf monitor --uninstall")
+        print("已写入 crontab 保活：每 10 分钟确保 phonoagent monitor 在跑（重启后自动恢复）")
+        print("查看：crontab -l；移除：phonoagent monitor --uninstall")
     else:
         print("已移除 crontab 保活。")
     return 0
@@ -2021,7 +2021,7 @@ def cmd_watch(cfg, types, projs, exclude, interval, tt=None, root=None,
                     sig = s2
             data = collect_data(cfg, types)
             fill_local_dim(cfg, data, types)
-            # patch_state_cache：把本轮采集结果写进本地缓存，前台 tf list/summary
+            # patch_state_cache：把本轮采集结果写进本地缓存，前台 phonoagent list/summary
             # 在 TTL 内直接读它，不用再 ssh 采集一遍。
             _state_cache_save(cfg, data, types, tt, root)
             # v1.0（W5–8）：监控每轮把状态转移记进 history.jsonl —— 后台监控在跑时

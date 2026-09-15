@@ -413,7 +413,7 @@ def ck_relax_skip(d, sc):
             bad = gate("a")
             if bad:
                 return False, ("a 轨迹异常，不放行 b：%s → 按对策处理后 "
-                               "tf retry 本段" % bad)
+                               "phonoagent retry 本段" % bad)
             return True, "ran（未收敛，流转 b）"
         if ran("b") or ran("c"):
             return True, "后续段已跑"

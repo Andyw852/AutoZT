@@ -122,10 +122,10 @@ def main():
         print("taskflow (tf) version %s" % PHONOAGENT_VERSION)
         print("程序: %s" % os.path.realpath(globals().get("_PROG_PATH") or _PKG_ROOT))
         print("")
-        print("  tf list      只读总表（不拉取、不提交）")
-        print("  tf summary   只读极简汇总（巡检省 token，见 AGENTS.md）")
-        print("  tf status    刷新状态 + auto-fetch + auto-advance")
-        print("  tf monitor   后台监控（-i 秒，-d 后台，restart 重做；watch 为旧名）")
+        print("  phonoagent list      只读总表（不拉取、不提交）")
+        print("  phonoagent summary   只读极简汇总（巡检省 token，见 AGENTS.md）")
+        print("  phonoagent status    刷新状态 + auto-fetch + auto-advance")
+        print("  phonoagent monitor   后台监控（-i 秒，-d 后台，restart 重做；watch 为旧名）")
         print("  tf -h        常用命令；tf --help-all 查看完整帮助")
         return
     p = argparse.ArgumentParser(prog="phonoagent")
@@ -146,9 +146,9 @@ def main():
     p.add_argument("-d", "--daemon", action="store_true",
                    help="monitor 放后台运行（日志 .tf_watch.log）")
     p.add_argument("--stop", action="store_true",
-                   help="停止后台运行的 tf monitor")
+                   help="停止后台运行的 phonoagent monitor")
     p.add_argument("--install", action="store_true",
-                   help="写入 crontab 保活（tf monitor 重启后自动恢复）")
+                   help="写入 crontab 保活（phonoagent monitor 重启后自动恢复）")
     p.add_argument("--uninstall", action="store_true",
                    help="移除 crontab 保活")
     p.add_argument("--restart", action="store_true",
@@ -189,7 +189,7 @@ def main():
                    help="history：采集一次并把变化写进 history.jsonl（默认只读）")
     p.add_argument("-clean", "--clean", dest="clean", action="store_true")
     p.add_argument("--purge-config", dest="purge_config", action="store_true",
-                   help="clean：连 project_setting 一起删（默认保留，重算需 tf init）")
+                   help="clean：连 project_setting 一起删（默认保留，重算需 phonoagent init）")
     p.add_argument("--from-skill", dest="from_skill", action="store_true",
                    help="rerun：忽略项目侧模板/step.conf，只用 skill 库出厂版生成")
     p.add_argument("--set", dest="sets", action="append", metavar="节.键=值",
@@ -296,7 +296,7 @@ def main():
     if cmd == "skills":
         return cmd_skills(cfg, tt=a.tt)
     if cmd == "schema":   # v1.0：看技能自描述（纯本地、不采集、不提交）
-        # 技能名既可用 -tt，也可直接当位置参数写：tf schema band-dft-cpu
+        # 技能名既可用 -tt，也可直接当位置参数写：phonoagent schema band-dft-cpu
         _which = a.tt or (mat_toks[0] if mat_toks else None)
         sys.exit(cmd_schema(cfg, tt=_which, json_out=a.json_out, strict=a.strict))
     if cmd == "skill":   # v1.0：技能卡片（论文图 2 的机器可读来源；纯本地）
@@ -351,7 +351,7 @@ def main():
     if cmd == "auto":   # v1.5：一键开关 auto_advance（纯本地改 tf.yaml）
         # autonow2：从位置参数里挑 on/off 当开关，其余位置参数当材料名，
         # 并标记为已消费。原来固定取 mat_toks[0] 且不消费，导致
-        #   `tf auto on`           -> "on" 落到后面被当材料名解析而报错
+        #   `phonoagent auto on`           -> "on" 落到后面被当材料名解析而报错
         #   `tf -tt ke <材料> auto on` -> 材料名被当成了 on/off 参数
         _AUTO_WORDS = ("on", "off", "1", "0", "true", "false", "resume",
                        "\u5f00", "\u5173")
@@ -380,7 +380,7 @@ def main():
                 "on", "1", "true", "开", "resume"):
             sys.exit(_rc)
         print("auto_advance 已开，下面立刻提交可开始的步骤"
-              "（只想看不提交：tf list）。")
+              "（只想看不提交：phonoagent list）。")
         _force_advance = True
         cmd = "status"
 
@@ -574,7 +574,7 @@ def main():
         _t1 = _time.time()
         auto_fetch(cfg, data)   # 算完的步骤自动保存到本地 result/
         _dbg_t("auto-fetch 拉回", _t1)
-        # autonow：只有从 auto on 落过来时才推进；裸 tf / tf status / tf list
+        # autonow：只有从 auto on 落过来时才推进；裸 tf / phonoagent status / tf list
         # 仍是 fixte⑤ 的只读语义（不提交任务）。
         if _force_advance:
             _t1 = _time.time()
@@ -593,7 +593,7 @@ def main():
             if new:
                 print("发现 %d 个新材料目录未初始化：%s"
                       % (len(new), ", ".join(new)))
-                print("→ tf init 纳入管理；配 auto_advance: true 后下次 tf 自动开算")
+                print("→ phonoagent init 纳入管理；配 auto_advance: true 后下次 tf 自动开算")
     elif cmd == "conf":
         if not projs or not jobs or not jobs[0]:
             sys.exit("错误：conf 需要 -p 材料 -j 步骤（如 tf -tt bd -p Mg2C60 -j 2 conf）。")

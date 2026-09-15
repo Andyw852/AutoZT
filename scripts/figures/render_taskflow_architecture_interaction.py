@@ -136,9 +136,9 @@ def draw_interaction_flow(d, x, y, w, h):
             "purple",
             ">",
         ),
-        (2, "Configure", "initialize -> skill -> HPC (optional)", ["tf -p MAT init", "tf skills"], "gold", "$"),
-        (3, "Start / Advance", "generate inputs -> submit -> advance", ["tf -p MAT start", "tf start"], "teal", "$"),
-        (4, "Monitor / Inspect", "observe changes -> inspect -> report", ["tf summary --diff", "tf -p MAT status"], "blue", "$"),
+        (2, "Configure", "initialize -> skill -> HPC (optional)", ["tf -p MAT init", "phonoagent skills"], "gold", "$"),
+        (3, "Start / Advance", "generate inputs -> submit -> advance", ["tf -p MAT start", "phonoagent start"], "teal", "$"),
+        (4, "Monitor / Inspect", "observe changes -> inspect -> report", ["phonoagent summary --diff", "tf -p MAT status"], "blue", "$"),
     ]
     for yy, (number, title_value, purpose, commands, accent, code_prefix) in zip(card_y, cards):
         interaction_card(d, card_x, yy, card_w, card_h, number, title_value, purpose, commands, accent, code_prefix)

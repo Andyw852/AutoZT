@@ -71,7 +71,7 @@ def _cell_word(s):
     if k == "FAIL":
         return "error"
     if k == "SCANCEL":
-        return "scancel"   # v1.4：tf stop 取消，auto 不会重跑
+        return "scancel"   # v1.4：phonoagent stop 取消，auto 不会重跑
     # patch_cell_word：DAG 调度后同时有多个步骤可启动，把"能开火"和
     # "被依赖卡住"分开显示，不然汇总表里全是 waiting，看不出该动哪个。
     if k == "WAIT":
@@ -282,7 +282,7 @@ def render_table(data):
     scl = [(m["tt"], m["name"], s["label"]) for _, m in all_mats
            for s in m["steps"] if s["kind"] == "SCANCEL"]
     if scl:
-        print("\nSCANCELLED（tf stop 取消，auto 不会重跑；重跑用 "
+        print("\nSCANCELLED（phonoagent stop 取消，auto 不会重跑；重跑用 "
               "-status scancel start / rerun）:")
         for tt, name, lab in scl:
             print("  [%-3s] %-22s %s" % (tt, name, lab))
@@ -429,7 +429,7 @@ def _skill_asset_dirs(t, m, base, sname=None):
         <技能>/templates/<步骤名>/<文件>  →  <技能>/templates/<文件>
                                           →  <技能>/<文件>
         每个步骤先找自己的目录；步骤目录里没有才回落到公共模板。
-        不知道是哪个步骤时（如 tf hpc 查模板齐不齐），所有步骤目录都算命中。
+        不知道是哪个步骤时（如 phonoagent hpc 查模板齐不齐），所有步骤目录都算命中。
 
     两种布局都保留最后的平铺兜底，所以模板直接摊在技能根目录下依然能用。
     """
@@ -514,7 +514,7 @@ def find_asset(cfg, t, m, fname, sname=None):
         dirs, troot = [], os.path.join(root, tdir)
         if sname:
             dirs.append(os.path.join(troot, str(sname)))
-        else:      # 不指定步骤（如 tf hpc 查模板齐不齐）：所有步骤目录都算命中
+        else:      # 不指定步骤（如 phonoagent hpc 查模板齐不齐）：所有步骤目录都算命中
             dirs.extend(sorted(d for d in glob.glob(os.path.join(troot, "*"))
                                if os.path.isdir(d)))
         dirs.append(troot)
@@ -1019,7 +1019,7 @@ def cmd_summary(data, diff=False, state_path=None):
 
     diff=True 时：与 state_path 里的结构化快照对比，无变化则不输出（token≈0）；
     有变化（或首次）才输出汇总 + 「变更:」步骤级清单（谁从什么变到什么），并写回
-    快照——agent 无需再跑 tf list / squeue 去猜哪里变了。
+    快照——agent 无需再跑 phonoagent list / squeue 去猜哪里变了。
     """
     if diff and state_path:
         new_snap = _summary_snapshot(data)
@@ -1226,7 +1226,7 @@ def cmd_diagnose(cfg, data, mname, jname):
     }
 
 
-# ===== json 裁剪/分页（v2.0：tf json 批分析时控 token）=====
+# ===== json 裁剪/分页（v2.0：phonoagent json 批分析时控 token）=====
 def _json_errors_only(data):
     """json --errors-only：只保留含 FAIL 步骤的材料，且每材料只留 FAIL 步骤。"""
     out = dict(data)

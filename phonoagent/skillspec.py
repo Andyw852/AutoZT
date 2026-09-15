@@ -11,11 +11,11 @@
 本模块只做三件事，**纯函数、不读盘、不连超算、不改状态**：
   1. 定义三段的字段规范（哪些键合法、哪些必填）；
   2. 校验一份 skill.yaml 的这三段，产出人类可读的问题清单（错误/警告分级）；
-  3. 把三段渲染成 tf schema 的控制台文本 / 结构化 dict。
+  3. 把三段渲染成 phonoagent schema 的控制台文本 / 结构化 dict。
 
 调用方：
-  · phonoagent/bootstrap.py  发现技能时算一份轻量 issues（tf skills 显示）
-  · phonoagent/cli.py        tf schema [<技能>] 子命令（cmd_schema）
+  · phonoagent/bootstrap.py  发现技能时算一份轻量 issues（phonoagent skills 显示）
+  · phonoagent/cli.py        phonoagent schema [<技能>] 子命令（cmd_schema）
 
 命名与 atomate2 的对应（供熟悉 atomate2 的人对照）：
   io_schema.inputs/outputs  ≈ Maker 的输入结构/输出文档模型
@@ -30,7 +30,7 @@ SPEC_SCHEMA_MIN = 2
 # ---- io_schema 字段规范 -----------------------------------------------------
 _IO_TOP_KEYS = ("inputs", "outputs", "params", "steps", "notes")
 _IO_LIST_KEYS = ("inputs", "outputs", "params")
-# name 必填；其余可选。desc 建议写（tf schema 直接展示给人看）。
+# name 必填；其余可选。desc 建议写（phonoagent schema 直接展示给人看）。
 _IO_ITEM_KEYS = {
     "inputs": ("name", "from", "required", "desc", "type"),
     "outputs": ("name", "path", "step", "desc", "type", "consumers"),
@@ -68,7 +68,7 @@ def _issue(level, fmt, *args):
 
 
 def issues_fatal(issues):
-    """问题清单里是否有致命项（tf schema --strict 据此返回非零）。"""
+    """问题清单里是否有致命项（phonoagent schema --strict 据此返回非零）。"""
     return any(str(i).startswith("[%s]" % _ERR) for i in (issues or []))
 
 
@@ -147,10 +147,10 @@ def _refs_from_from_field(val):
 # =============================================================================
 def validate_skill_spec(key, man, skel=None, known_skills=None, handler_names=None):
     """校验一份 skill.yaml 的扩展段，返回人类可读的问题清单（可为空）。
-    分级：[错误] 会让 tf schema --strict 失败（结构不合法）；[警告] 只提示（多半是笔误）。
+    分级：[错误] 会让 phonoagent schema --strict 失败（结构不合法）；[警告] 只提示（多半是笔误）。
 
     handler_names=None 时跳过"corrections 名是否已注册"这一条（tf 启动期的
-    轻量校验用；tf schema 会带上真正的 handler 注册表做完整校验）。"""
+    轻量校验用；phonoagent schema 会带上真正的 handler 注册表做完整校验）。"""
     man = man if isinstance(man, dict) else {}
     issues = []
     try:
@@ -374,7 +374,7 @@ def _validate_corrections(key, corr, handler_names):
 
 
 # =============================================================================
-# 抽取 + 统计（tf skills 一行摘要 / tf schema 表头都用）
+# 抽取 + 统计（phonoagent skills 一行摘要 / phonoagent schema 表头都用）
 # =============================================================================
 def spec_of(man):
     """从 skill.yaml 原始字典里抽出三段（没有的段给 None）。"""
@@ -413,7 +413,7 @@ def _kv_lines(pairs, indent="    "):
 
 
 def render_schema(key, spec, skel=None, issues=None, extra_head=None):
-    """把单个技能的三段渲染成控制台文本（tf schema <技能>）。"""
+    """把单个技能的三段渲染成控制台文本（phonoagent schema <技能>）。"""
     skel = skel or {}
     spec = spec or {}
     st = spec_stats(spec)
@@ -530,7 +530,7 @@ def render_schema(key, spec, skel=None, issues=None, extra_head=None):
 
 
 def render_schema_table(rows):
-    """tf schema（不带技能名）：全部技能一览。rows = [(key, skel, spec, issues)]"""
+    """phonoagent schema（不带技能名）：全部技能一览。rows = [(key, skel, spec, issues)]"""
     L = []
     L.append("%-14s %-18s %-6s %-6s %s" % ("技能", "io_schema(入/出/参)", "flow",
                                            "纠错", "问题"))
@@ -547,12 +547,12 @@ def render_schema_table(rows):
     n_fl = sum(1 for _k, _s, sp, _i in rows if spec_stats(sp)["has_flow"])
     L.append("")
     L.append("共 %d 个技能：io_schema %d · flow %d" % (n_all, n_io, n_fl))
-    L.append("看单个技能：tf schema <技能名>     机器可读：tf schema --json")
+    L.append("看单个技能：phonoagent schema <技能名>     机器可读：phonoagent schema --json")
     return "\n".join(L)
 
 
 def schema_dict(key, skel, spec, issues):
-    """tf schema --json 的单技能结构（稳定字段名，供工具/AI 判读）。"""
+    """phonoagent schema --json 的单技能结构（稳定字段名，供工具/AI 判读）。"""
     return {
         "skill": key,
         "version": skel.get("_skill_version"),
@@ -572,7 +572,7 @@ def schema_dict(key, skel, spec, issues):
 # 命令入口：tf schema
 # =============================================================================
 def cmd_schema(cfg, tt=None, json_out=False, strict=False):
-    """tf schema [<技能>] —— 打印技能的自描述（io_schema / flow / corrections）+ 校验。
+    """phonoagent schema [<技能>] —— 打印技能的自描述（io_schema / flow / corrections）+ 校验。
 
     纯本地、不采集、不提交、不改任何文件（安全，可随便跑）。
     退出码：0 正常；--strict 且存在 [错误] 级问题时返回 1。"""
@@ -910,7 +910,7 @@ def render_skill_card(key, skel, spec, width=110, issues=None, full=False,
             errs, warns = split_issues(issues)
             if errs or warns:
                 body.append(_pad(" Validation: %d errors / %d warnings "
-                                 "(see tf schema %s)" % (len(errs), len(warns), key), inner))
+                                 "(see phonoagent schema %s)" % (len(errs), len(warns), key), inner))
 
     out = ["┌" + "─" * inner + "┐"]
     out += ["│" + b + "│" for b in body]

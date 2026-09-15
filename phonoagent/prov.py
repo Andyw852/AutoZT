@@ -280,7 +280,7 @@ def render_provenance(rows):
     if not rows:
         L.append("没有找到任何 provenance.json。")
         L.append("说明：档案在**生成输入时**由 tf 自动写进远端步骤目录，随 fetch 回拉本地")
-        L.append("      （result/<步骤>/provenance.json）。跑过 tf start/init 的步骤才有。")
+        L.append("      （result/<步骤>/provenance.json）。跑过 phonoagent start/init 的步骤才有。")
         return "\n".join(L)
     for r in rows:
         prov = r.get("prov") or {}

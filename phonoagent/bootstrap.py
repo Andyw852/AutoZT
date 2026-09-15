@@ -55,7 +55,7 @@ project_roots:
   - /home/wangchao/Fullerene_Network
 
 # task_types：只写站点相关覆盖。技能的 steps / gen_need / aux_files 由
-# skill/<技能>/skill.yaml 自描述，tf 启动时自动发现（tf skills 查看），
+# skill/<技能>/skill.yaml 自描述，tf 启动时自动发现（phonoagent skills 查看），
 # 这里不用再抄一遍。key 就是 -tt 用的短名，等于技能名。
 task_types:
   band:
@@ -112,7 +112,7 @@ task_types:
 
 # ===== DEFAULT_HPC_SETTING (原 L812-L823) =====
 DEFAULT_HPC_SETTING = """\
-# 超算配置（创建项目时由 tf init 复制为 project_setting/hpc.yaml，按项目改）
+# 超算配置（创建项目时由 phonoagent init 复制为 project_setting/hpc.yaml，按项目改）
 name: jzzn                 # 显示在状态表 hpc 列
 ssh_host: jzzn             # 该超算的 ssh 别名
 # 模板映射：gen 要的逻辑名 -> skill 目录里的实际模板文件（2D/3D 各一套，
@@ -130,11 +130,11 @@ DEFAULT_PROJECT_SETTING = """\
 # v1.9.9：新建的技能默认【不参与自动推进】——init 只是把配置建好，
 # 不等于你想现在就算它。想让本技能跟着 auto_advance 自动开算，改成 true：
 #     tf -tt <技能> -p <材料> auto on      （或直接把下面这行改 true）
-# 手动 tf start / retry / rerun 不受本开关影响，随时可以单独跑。
+# 手动 phonoagent start / retry / rerun 不受本开关影响，随时可以单独跑。
 auto_advance: false
 # 路径占位符：{matdir}=材料目录 {mat}=材料名 {root}=本地项目根
 base_dir: "{matdir}"
-result_dir: "{matdir}/result"     # tf fetch 回拉目的地（每步一个子目录）
+result_dir: "{matdir}/result"     # phonoagent fetch 回拉目的地（每步一个子目录）
 log_dir: "{matdir}/log"           # 该项目的操作日志 tf.log
 # work_dir 缺省继承项目配置 tf_<项目名>.yaml 里的类型定义；只在要为这个
 # 项目单独换超算工作根时才取消注释（优先级高于类型配置）：
@@ -177,7 +177,7 @@ _LOCAL_ONLY_STEP_KEYS = {"gen", "gen_need", "aux_files", "run", "group", "seq",
                          "src"}   # v1.5 src
 
 # ===== SCANCEL_MARK (原 L2157-L2157) =====
-SCANCEL_MARK = ".tf_scancel.json"   # lpath 下的"tf stop 取消"标记（v1.4）
+SCANCEL_MARK = ".tf_scancel.json"   # lpath 下的"phonoagent stop 取消"标记（v1.4）
 
 # ===== _MAX_INFLIGHT_DEFAULT (原 L2246-L2246) =====
 _MAX_INFLIGHT_DEFAULT = int(os.environ.get("PHONOAGENT_MAX_INFLIGHT", "6") or 6)
@@ -270,7 +270,7 @@ QUICK_USAGE = """\
                      工具版本 / 作业号（gen 时自动落档，--verify 校验输入没被改）
 
 AI 审计（v1.0 P0-1，agent 走网关：风险分档 + 每次调用留痕）：
-  act <命令>         agent 的唯一入口：tf act -p 材料 summary / tf act start …
+  act <命令>         agent 的唯一入口：phonoagent act -p 材料 summary / phonoagent act start …
                      （只读与推进类放行并记账；stop/rerun/clean/-f/-y 需人工批准）
   act log           看审计流水（.tf_agent_log.jsonl）；act policy 看风险分档表
   approve <命令>     人工在**交互终端**批准一条破坏性动作（一次性令牌，默认 15 分钟）
@@ -294,29 +294,29 @@ USAGE = """\
   probe     只读探测作业健康度：判每作业 弛豫/收敛/SCF发散/崩溃/掉队/排队，
             输出结构化 JSON（判据+结论），不采集、不提交、不改文件。
             需 -p 材料，可配 -j 步骤（如 tf -tt defect-dft-cpu -p Sn2Sb2Te5 probe）
-  schema    看技能的自描述（v1.0，只读、纯本地）：tf schema [技能名]
+  schema    看技能的自描述（v1.0，只读、纯本地）：phonoagent schema [技能名]
             io_schema = 吃什么/吐什么/有哪些旋钮；flow = 整条流程与产物能喂给谁；
             corrections = 这类失败怎么纠。--json 机器可读；--strict 有 [错误] 返回非零。
-            写新技能照 skill/_template/ 抄；看真实例子：tf schema band-dft-cpu
+            写新技能照 skill/_template/ 抄；看真实例子：phonoagent schema band-dft-cpu
   correct   把 FAIL/指定步骤的诊断喂给 skill/_common/_corrections/ 纠错 handler 库：
             tf correct -p 材料 [-j 步骤]      只列出命中的 handler + 建议命令（只读）
             tf correct -p 材料 [-j 步骤] -y   执行 handler.apply（改远端输入，
                                               自动备份 INCAR；作业在跑时拒绝执行）
-            ★ 永不提交作业、永不删目录——提交仍走 tf start。
+            ★ 永不提交作业、永不删目录——提交仍走 phonoagent start。
   history   步骤状态的时间序列（v1.0，只读、不采集、不连超算）：
             tf history [-p 材料] [-tt 技能] [--since 7d] [-n 40] [--json]
-            记录是**自动**的：任何一次真正采集（tf list/summary/status/monitor）
+            记录是**自动**的：任何一次真正采集（phonoagent list/summary/status/monitor）
             之后，状态转移就追加进 setting/history.jsonl；任何技能加进来就自动有历史。
   skill     技能卡片（v1.0，只读、纯本地）：tf skill [show] [技能名] [--json]
             把技能渲染成一张卡片：每步的 生成器脚本 / 用什么算(Tool) / 判据(Validator)
             / 产物(Output)，外加输入、可调参数、能接哪些下游技能、纠错 handler。
             数据来自 skill.yaml 的 steps[] + io_schema.steps[]（见 skill/_template/）。
             不给技能名 = 全部技能一行摘要（含工具链）。写论文的图 2 可以直接用它。
-  act       agent 动作网关（v1.0 P0-1）：agent 把命令交给 `tf act <原命令>`——
+  act       agent 动作网关（v1.0 P0-1）：agent 把命令交给 `phonoagent act <原命令>`——
             只读/推进类放行并记账；stop/rerun/clean 与任何 -f/-y 属破坏性，
-            必须人工在交互终端 `tf approve <同一条命令>` 换一次性令牌（默认 900 秒）。
+            必须人工在交互终端 `phonoagent approve <同一条命令>` 换一次性令牌（默认 900 秒）。
             每次调用都追加 {ts,actor,cmd,risk,decision,exit_code,approved_by} 到配置
-            目录的 .tf_agent_log.jsonl：`tf act log` 看流水，`tf act policy` 看风险分档。
+            目录的 .tf_agent_log.jsonl：`phonoagent act log` 看流水，`phonoagent act policy` 看风险分档。
             不设 PHONOAGENT_ACTOR 也不用 act 时，行为与此前完全一致。
   prove     每一步"结果是怎么来的"（v1.0，只读、读本地档案）：
             tf prove -p 材料 [-j 步骤] [--json] [--verify]
@@ -340,7 +340,7 @@ USAGE = """\
   clean     只删不建，回到 PREP：无 -p = 全部材料清空（本地+超算只留 POSCAR）；
             -p X = 该材料清空；-p C20 = 该体系所有材料；-p X -j Y = 只删该步骤目录。
             关联作业一并取消（有确认，-y 跳过）
-  auto      一键开关自动提交：tf auto on 开 / tf auto off 关 / 无参看当前。
+  auto      一键开关自动提交：phonoagent auto on 开 / phonoagent auto off 关 / 无参看当前。
             改写全局 tf.yaml 的 auto_advance；关后 status/monitor 只看不提交，
             手动 start/retry/rerun 不受影响（动目录、恢复备份前先 off）
   hpc       把 -p 指定的项目分配到指定超算（未指定的项目一律不动）：
@@ -371,10 +371,10 @@ USAGE = """\
             每轮自动检测配置文件改动（tf.yaml、project_setting/*.yaml、
             材料或技能的 hpc.yaml）并重载——改配置不用重启监控。
             加 -d 放后台运行（日志 .tf_watch.log，不占用终端），
-            tf monitor --stop 停止后台监控（任意目录可执行），
-            tf monitor --restart 重做后台监控（先停旧的再起新的）。
+            phonoagent monitor --stop 停止后台监控（任意目录可执行），
+            phonoagent monitor --restart 重做后台监控（先停旧的再起新的）。
             零输入全自动：tf.yaml 里 auto_watch: true（任何 tf 命令顺带拉起
-            监控）+ tf monitor --install（crontab 保活，重启后自动恢复，
+            监控）+ phonoagent monitor --install（crontab 保活，重启后自动恢复，
             --uninstall 移除）。watch 是 monitor 的旧名，仍可用。
   json      输出 JSON
   config    打印示例配置
@@ -416,7 +416,7 @@ USAGE = """\
 规则:
   同一任务类型下项目名不允许重复（启动即报错）；不同类型下允许同名。
   状态词: done 完成 | running 运行中 | pd 排队 | error 未通过判据 | waiting 未开始
-        | scancel 被 tf stop 取消（打标记，auto 不会重跑；显式 start/
+        | scancel 被 phonoagent stop 取消（打标记，auto 不会重跑；显式 start/
           retry/rerun 重跑后标记自动清除）
   表格 hpc 列 = 该项目所用超算，dim 列 = 2D/3D 判定；每个项目两行：
   第一行 = 各步骤状态词，第二行 = 节点/任务号/已跑时间（排队时为任务号+原因）。
@@ -433,7 +433,7 @@ USAGE = """\
   BANDGAP = pbe|hse（默认 hse）。pbe = 只算到 PBE 带隙+画图，跳过整段 HSE；
   hse = 继续 HSE。改这一个键即增删 HSE 步骤，无需改 skill.yaml。
   按材料改每步输入：编辑 project_setting/templates/<步骤名>/ 下的 incar_*.tpl、
-  submit_*.tpl（只影响本材料；缺时回落技能库出厂模板）。tf init 从技能库铺一套。
+  submit_*.tpl（只影响本材料；缺时回落技能库出厂模板）。phonoagent init 从技能库铺一套。
   技能子目录：类型配置 skill_subdir: true 时，该技能的计算放进材料目录下的
   技能子文件夹（远端 work/材料/<dir_name>/stepN，本地 result 在 材料/<dir_name>/result），
   dir_name 缺省 = 类型 key（想叫别的名字就写 dir_name: 名字）。同一材料可同时
@@ -445,7 +445,7 @@ USAGE = """\
   按技能限制并发提交：task_types.<key>.max_jobs: N（全局 max_jobs 兜底，
   PHONOAGENT_MAX_JOBS 环境变量再兜底）。上限只卡「提交超算（sbatch）」，不卡本地
   生成输入：达到上限后新任务先本地生成输入（变 TODO）待命，watch 每轮拉状态
-  发现有空位（有作业算完）就自动补交；手动 tf start 同样只卡提交不卡生成。
+  发现有空位（有作业算完）就自动补交；手动 phonoagent start 同样只卡提交不卡生成。
 
 示例:
   tf                                   全部状态总表
@@ -460,27 +460,27 @@ USAGE = """\
   tf -p qHPC20 stop                    取消该材料所有作业（有确认，打 scancel 标记）
   tf -status scancel                   只看被 stop 取消的材料
   tf -status scancel start             把它们全部重跑（保留文件直接重交）
-  tf auto off                          暂停自动提交（动目录/恢复备份前先做）
-  tf auto on                           恢复自动提交
+  phonoagent auto off                          暂停自动提交（动目录/恢复备份前先做）
+  phonoagent auto on                           恢复自动提交
   tf -tt band adopt --dry-run          接管手工整理的 band/ 目录：先看计划
   tf -tt band adopt -y                 执行接管（POSCAR/配置回根 + 远端迁入 band/）
   tf -tt elastic -p qHPC20 hpc tianhe  qHPC20 的 elastic 技能切到 tianhe 集群
   tf -p qHPC20 -job 1 dir              输出该步骤在超算的目录路径
   ssh jzzn "cd $(tf -p qHPC20 -job 1 dir) && tail -50 OUTCAR"
-  tf start                             一键推进所有材料（提交）
-  tf list                              只读状态总表（不提交、不拉取）
-  tf stop -y                           一键停止全部作业
-  tf retry                             一键重生成所有 FAIL 步骤输入（不提交，再 start）
-  tf rerun                             全部材料清空重生成（有确认，不提交）
+  phonoagent start                             一键推进所有材料（提交）
+  phonoagent list                              只读状态总表（不提交、不拉取）
+  phonoagent stop -y                           一键停止全部作业
+  phonoagent retry                             一键重生成所有 FAIL 步骤输入（不提交，再 start）
+  phonoagent rerun                             全部材料清空重生成（有确认，不提交）
   tf -j S3_WAVECAR rerun -y            全部材料只重做 S3（本地最新脚本重生成，不提交）
   tf -j S3_WAVECAR -x qHPC60 rerun -y  同上但跳过 qHPC60
   tf -j S2_static start                全部材料只提交 S2 步骤
   tf -j S3.1_plot S4.1_plot start      全部材料只跑两个画图步骤
-  cd ~/Fullerene_Network && tf init    批量初始化目录下所有项目
+  cd ~/Fullerene_Network && phonoagent init    批量初始化目录下所有项目
   tf -p C20/qHPC20 init                只初始化 C20 这一个项目
   tf -p qHPC20 fetch                   拉回该材料各步骤结果到 result/
-  tf fetch                             拉回全部材料结果
-  tf clean                             全部材料清空（留 POSCAR）
+  phonoagent fetch                             拉回全部材料结果
+  phonoagent clean                             全部材料清空（留 POSCAR）
   tf -p C20 clean                      清空 C20 体系所有材料
   tf -p qHPC20 -j 1 clean              只删 S1_opt 步骤目录
 """
@@ -507,7 +507,7 @@ WATCH_PID = ".tf_watch.pid"     # watch 后台模式的 pid 文件名
 # ===== WATCH_LOG (原 L6843-L6843) =====
 WATCH_LOG = ".tf_watch.log"     # watch 后台模式的日志文件名
 
-# ===== JSON_SCHEMA（v2.0 新增，tf json --schema 用）=====
+# ===== JSON_SCHEMA（v2.0 新增，phonoagent json --schema 用）=====
 JSON_SCHEMA = """\
 任务状态 JSON 输出结构（schema_version 2）
 
@@ -668,7 +668,7 @@ def _load_manifest(path):
     skel["_skill_version"] = man.get("version")
     skel["_skill_requires"] = man.get("requires") or {}
     # v1.0：把清单的自描述扩展段（io_schema / flow / corrections）+ schema 号原样
-    # 带出来，供 tf schema / tf skills 展示与校验。它们**不参与运行期装配**
+    # 带出来，供 phonoagent schema / phonoagent skills 展示与校验。它们**不参与运行期装配**
     # （不在 _MANIFEST_TYPE_KEYS 里），纯自描述，老 tf / 老技能都不受影响。
     from phonoagent import SPEC_SECTIONS as _SPEC_SECTIONS
     _spec = {s: man[s] for s in _SPEC_SECTIONS if man.get(s) is not None}
@@ -707,9 +707,9 @@ def discover_skills(cfg, verbose=False):
     if bad and verbose:
         for mp, why in bad:
             sys.stderr.write("警告：技能清单 %s 已忽略（%s）\n" % (mp, why))
-    # v1.0：给每个技能算一份轻量自描述问题清单（tf skills 一行显示 / tf schema 详情）。
+    # v1.0：给每个技能算一份轻量自描述问题清单（phonoagent skills 一行显示 / phonoagent schema 详情）。
     # 这里**不**校验 corrections 里的 handler 名是否已注册——那要加载 _corrections/
-    # handler 库；tf schema 会带上注册表做完整校验。发现期只做零依赖的结构校验。
+    # handler 库；phonoagent schema 会带上注册表做完整校验。发现期只做零依赖的结构校验。
     try:
         from phonoagent import validate_skill_spec
         _known = set(found)
@@ -870,7 +870,7 @@ def skill_checks_for(cfg, keys):
 
 # ===== cmd_skills (原 L1346-L1368) =====
 def cmd_skills(cfg, tt=None):
-    """tf skills —— 列出已发现的技能。"""
+    """phonoagent skills —— 列出已发现的技能。"""
     skills = cfg.get("_skills") or discover_skills(cfg, verbose=True)
     if not skills:
         print("没有发现任何技能清单（skill/*/skill.yaml）。搜索路径：")
@@ -880,7 +880,7 @@ def cmd_skills(cfg, tt=None):
     black = set(cfg.get("disabled_skills") or [])
     white = cfg.get("enabled_skills")
     # v1.0：多一列「自描述」（io_schema 入/出/参 · flow · corrections 数量），
-    # 后面的 !N 是自描述里的问题条数（tf schema <技能> 看详情）。
+    # 后面的 !N 是自描述里的问题条数（phonoagent schema <技能> 看详情）。
     print("%-12s %-7s %-5s %-6s %-16s %s"
           % ("技能", "版本", "步骤", "状态", "自描述", "清单"))
     n_io = n_flow = n_corr = n_bad = 0
@@ -902,7 +902,7 @@ def cmd_skills(cfg, tt=None):
               "有问题 %d 个" % (n_io, len(skills), n_flow, len(skills),
                               n_corr, len(skills), n_bad))
         print("补自描述 = 在 skill.yaml 里写 io_schema / flow / corrections 三段"
-              "（照 skill/band-dft-cpu/skill.yaml 抄）；看详情：tf schema <技能>")
+              "（照 skill/band-dft-cpu/skill.yaml 抄）；看详情：phonoagent schema <技能>")
     print("\n搜索路径（靠前优先）：")
     for d in skill_search_dirs(cfg):
         print("  " + d)

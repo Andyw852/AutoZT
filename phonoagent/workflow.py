@@ -84,7 +84,7 @@ def _scancel_save(m, marks):
 
 # ===== _scancel_set (原 L2192-L2197) =====
 def _scancel_set(m, step_name, jobid=None):
-    """tf stop 成功后调用：给该步骤打 scancel 标记（auto 不再自动重跑）。"""
+    """phonoagent stop 成功后调用：给该步骤打 scancel 标记（auto 不再自动重跑）。"""
     marks = _scancel_load(m)
     marks["%s/%s" % (m.get("tt"), step_name)] = {
         "jobid": jobid, "time": time.strftime("%Y-%m-%d %H:%M:%S")}
@@ -118,7 +118,7 @@ def step_state(step, blocked):
         return (st, "OTHER")
     if step["done"]:
         return ("OK", "OK")
-    if step.get("scancel"):   # v1.4：tf stop 取消的标记（压过 FAIL/TODO）
+    if step.get("scancel"):   # v1.4：phonoagent stop 取消的标记（压过 FAIL/TODO）
         return ("scancel", "SCANCEL")
     if step.get("imaginary"):
         return ("imaginary", "IMAG")   # 算完了但有虚频，不是 error
@@ -193,7 +193,7 @@ def _skill_busy_jobs(t):
 # ===== _SkillGate (原 L2313-L2349) =====
 class _SkillGate(object):
     """按技能统计「已提交作业数」并卡上限；跨材料共享、线程安全。
-    auto_advance 串行、tf start 批量并行都走它，保证同一技能不超 max_jobs。
+    auto_advance 串行、phonoagent start 批量并行都走它，保证同一技能不超 max_jobs。
     同 key 的多个段（v2/v3 混合、多项目）在构造时把 busy 累加在一起。"""
     def __init__(self, cfg, data):
         import threading
@@ -309,7 +309,7 @@ def annotate(data):
             blocked = False
             m["active"] = None
             m["action"] = "-"
-            marks = _scancel_load(m)   # v1.4：tf stop 打的本步骤标记
+            marks = _scancel_load(m)   # v1.4：phonoagent stop 打的本步骤标记
             marks_dirty = False
             for s in m["steps"]:
                 sc = marks.get("%s/%s" % (t["key"], s["name"]))
@@ -1187,7 +1187,7 @@ def do_run_gen_step(cfg, t, m, s, tag):
 def do_submit(cfg, t, m, s, force, gen_first, contcar_cp, tag, submit=True):
     from phonoagent import log_action, run_remote, step_cfg
     """返回 True=成功 / False=失败或被拒绝（供退出码统计）。
-    submit=False：只生成输入（gen），不 sbatch、不触发本地生成步，交由 tf start。"""
+    submit=False：只生成输入（gen），不 sbatch、不触发本地生成步，交由 phonoagent start。"""
     if step_cfg(t, s["name"], m).get("run") == "gen":  # v3.21：画图等轻量步骤
         if not submit:
             print("%s: 本地生成步（画图/读取），已就绪，待 tf … start 触发。" % tag)
@@ -1443,7 +1443,7 @@ def auto_advance(cfg, data):
     """status 时自动推进可开始的步骤（全局 tf.yaml 写 auto_advance: true 开启；
     项目 setting.yaml 里 auto_advance: false 可单独关闭）。
     只推进 TODO/PREP（输入就绪/未生成）的活跃步骤；error 不自动重试；
-    v1.4：SCANCEL（tf stop 打了标记的）同样不推进，须显式 start/retry/rerun。"""
+    v1.4：SCANCEL（phonoagent stop 打了标记的）同样不推进，须显式 start/retry/rerun。"""
     if not cfg.get("auto_advance"):
         return
     # fixte⑬：磁盘复核 —— watch 是长驻进程，内存里的 cfg 可能是启动时的旧值
@@ -1693,7 +1693,7 @@ def cmd_clean(cfg, data, proj, job, yes, purge_config=False):
         ans = input("clean %d 个材料（删除全部生成物，只留 POSCAR%s%s）？ [y/N] "
                     % (len(todo),
                        "，并取消 %d 个作业" % njob if njob else "",
-                       "；project_setting 也一并删除，重算需 tf init"
+                       "；project_setting 也一并删除，重算需 phonoagent init"
                        if purge_config else
                        "；project_setting 保留，可直接重算")
                     ).strip().lower()
@@ -1720,7 +1720,7 @@ def cmd_clean(cfg, data, proj, job, yes, purge_config=False):
                 shutil.rmtree(d, ignore_errors=True)
         _scancel_clear(m)   # v1.4：材料回到全新状态，stop 标记一并清
         # v1.6：材料自己的 project_setting 一并删除（材料回到全新未初始化状态，
-        # 重算需 tf init）；体系级共享配置（如 C20/project_setting）保留不动，
+        # 重算需 phonoagent init）；体系级共享配置（如 C20/project_setting）保留不动，
         # 否则会误删兄弟材料的配置。
         # v1.3.4：技能段感知——多技能项目的配置里还有其他技能的段时，只移除
         # 本技能段、保留 project_setting；本技能是最后一个段才整目录删。
@@ -1737,7 +1737,7 @@ def cmd_clean(cfg, data, proj, job, yes, purge_config=False):
         if own_ps and not purge_config:
             # v1.9.7：默认保留 project_setting。它是手写的配置，删了不能自动恢复，
             # 而且删光之后连材料都发现不到（local_root 就写在这些 tf_*.yaml 里），
-            # 只能靠在项目根裸跑 tf init 兜回来。要连配置一起清用 --purge-config。
+            # 只能靠在项目根裸跑 phonoagent init 兜回来。要连配置一起清用 --purge-config。
             kept_note = "，project_setting 保留（要连配置一起删加 --purge-config）"
         elif own_ps:
             f0s = glob.glob(os.path.join(ps, "tf_*.yaml"))
@@ -1752,7 +1752,7 @@ def cmd_clean(cfg, data, proj, job, yes, purge_config=False):
                     key, ", ".join(remaining))
             else:
                 shutil.rmtree(ps, ignore_errors=True)   # log 已删，不写日志
-                kept_note = "，project_setting 已删，重算需 tf init"
+                kept_note = "，project_setting 已删，重算需 phonoagent init"
         else:
             kept_note = "，体系级共享配置保留"
         print("%s: 已清理（本地+超算只留 POSCAR%s）" % (m["name"], kept_note))
@@ -2168,7 +2168,7 @@ def _start_ready(cfg, t, m, force, incl_scancel=False, gate=None):
                      m["tt"], m["name"], s["label"]))
             continue
         if s["kind"] == "SCANCEL" and not incl_scancel:
-            print("SCANCEL: %s [%s|%s] 曾被 tf stop 取消，不会自动重跑"
+            print("SCANCEL: %s [%s|%s] 曾被 phonoagent stop 取消，不会自动重跑"
                   "（重跑：tf -tt %s -p '%s' -j %s start，或 "
                   "-status scancel start）"
                   % (m["name"], m["tt"], s["label"], m["tt"], m["name"],
@@ -2790,7 +2790,7 @@ def rerun_project(cfg, t, m, yes):
     """整材料 rerun：清空整个 <材料>/<技能> 远程工作目录（只保留 POSCAR）
     + 删本地 log/result，再从第一步从头生成提交。彻底从零，不留任何旧步骤
     目录或结果。project_setting 在本地、不在工作目录内，故 BANDGAP 等参数与
-    模板保留不动（要连配置一起清用 tf clean --purge-config）。
+    模板保留不动（要连配置一起清用 phonoagent clean --purge-config）。
     注意：带 -j 的单步 rerun 走 do_rerun_step，仍只删该步，不受此影响。"""
     jobs = [s["job"] for s in m["steps"] if s.get("job")]
     if not yes:
@@ -2805,7 +2805,7 @@ def rerun_project(cfg, t, m, yes):
         remote_scancel(cfg, [j["id"] for j in jobs], host=host)
         print("%s: scancel %s" % (m["name"], " ".join(j["id"] for j in jobs)))
     if m.get("path"):
-        # 与 tf clean 同款：清空工作目录内一切、只留 POSCAR（重生成要用它）
+        # 与 phonoagent clean 同款：清空工作目录内一切、只留 POSCAR（重生成要用它）
         line = ("[ -d %s ] && find %s -mindepth 1 -maxdepth 1 ! -name POSCAR "
                 "-exec rm -rf -- {} + || true"
                 % (shlex.quote(m["path"]), shlex.quote(m["path"])))

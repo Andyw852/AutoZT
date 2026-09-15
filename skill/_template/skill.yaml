@@ -5,7 +5,7 @@
 #   ① 把下面 enabled: false 这行删掉（或改 true）——复制前它是"未启用"的模板；
 #   ② 改 name / desc / version；name 必须是全局唯一的技能 key（= tf -tt 用的名字）；
 #   ③ 按你的流程改 steps（每步一个 gen 脚本 + 一个判据 check）；
-#   ④ 填 io_schema / flow / corrections 三段自描述（tf schema 会校验，写错会提示）；
+#   ④ 填 io_schema / flow / corrections 三段自描述（phonoagent schema 会校验，写错会提示）；
 #   ⑤ cd 到仓库根跑  python3 bin/phonoagent skills  看它有没有被自动发现（无需改任何配置），
 #      再跑  python3 bin/phonoagent schema <你的技能名>  自检。
 # 详细清单见同目录 README.md。真实范例：skill/opt-dft-cpu/（VASP 计算步最全）、
@@ -42,7 +42,7 @@ steps:
      fetch_all: true}
 
 # =============================================================================
-# 自描述三段（只给人/AI 看，不参与运行期装配；tf schema <技能> 展示 + 校验）
+# 自描述三段（只给人/AI 看，不参与运行期装配；phonoagent schema <技能> 展示 + 校验）
 # =============================================================================
 io_schema:
   inputs:
@@ -58,7 +58,7 @@ io_schema:
   notes: "run: gen 步的产物直接落本地 result/<步骤>/。"
 
 flow:
-  summary: 一句话说清这条流水线干什么（tf schema 第一行就会显示）
+  summary: 一句话说清这条流水线干什么（phonoagent schema 第一行就会显示）
   stages:
     - {name: 取数, steps: [S1_summary], produces: [template_summary.json],
        desc: 从上游步骤产物里读数、汇总成 JSON}
@@ -67,5 +67,5 @@ flow:
   requires: {POSCAR: 材料目录根必须有 POSCAR}
 
 # ---- 本技能声明会用到的纠错 handler（名字见 skill/_common/_corrections/）----
-# 不写也能被全局 handler 命中；写出来只是自描述，让 tf schema 看得到。
+# 不写也能被全局 handler 命中；写出来只是自描述，让 phonoagent schema 看得到。
 corrections: [node_fail]

@@ -87,7 +87,7 @@ def main():
         status_json["note"] = card["note"]
     else:
         note = ("status=%s：还没到发布阶段。按 README 手动推进下一代："
-                "tf conf --set params.GENERATION=%d → tf -j 4 rerun → tf start。"
+                "phonoagent conf --set params.GENERATION=%d → tf -j 4 rerun → phonoagent start。"
                 % (status, gen + 1))
         (out / "publish_skip.json").write_text(
             json.dumps({"status": status, "note": note}, ensure_ascii=False, indent=2)

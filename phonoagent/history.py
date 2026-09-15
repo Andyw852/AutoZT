@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 """history —— 步骤状态的时间序列（history.jsonl）+ tf history 命令（v1.0 W5–8）。
 
-为什么要它：现在只有"此刻的状态"（tf list/summary）和"与上次比变了什么"
-（tf summary --diff）。于是
+为什么要它：现在只有"此刻的状态"（phonoagent list/summary）和"与上次比变了什么"
+（phonoagent summary --diff）。于是
   · 一个材料什么时候开始跑、排队排了多久、FAIL 了几次、谁把它救回来的，
     全靠 monitor 日志里翻；
   · 新技能加进来后，"这个技能的历史"根本不存在——没有地方记。
@@ -13,7 +13,7 @@
   history.jsonl            事件流，每行一个 JSON（追加写，跨会话保留）
   .tf_history_state.json   上次采集的状态快照（用于 diff；不是给人看的）
 
-记录时机：任何**真正采集**（tf list/summary/status/json/monitor）之后自动记录；
+记录时机：任何**真正采集**（phonoagent list/summary/status/json/monitor）之后自动记录；
 首次运行只落基线快照、不写事件（避免给几千个材料刷一屏"首次见到"）。
 
 事件字段：
@@ -254,7 +254,7 @@ def cmd_history(cfg, proj=None, tt=None, since=None, last_n=40, json_out=False):
     """tf history [-p 材料] [-tt 技能] [--since 7d] [-n 40] [--json]
 
     只读：直接读 history.jsonl，不采集、不连超算、不提交。
-    记录是**自动**的——任何一次真正采集（tf list/summary/status/monitor）之后
+    记录是**自动**的——任何一次真正采集（phonoagent list/summary/status/monitor）之后
     都会把状态转移追加进去，任何技能加进来就自动有历史。"""
     path = history_path(cfg)
     evs, total = history_load(cfg, proj=proj, tt=tt, since=since)
@@ -266,7 +266,7 @@ def cmd_history(cfg, proj=None, tt=None, since=None, last_n=40, json_out=False):
     if total == 0:
         print("还没有历史记录（%s 不存在或为空）。" % path)
         print("历史是**自动**记的：跑一次会采集的命令即可开始积累——")
-        print("  tf list --refresh      # 或 tf summary --refresh / tf status / tf monitor")
+        print("  phonoagent list --refresh      # 或 phonoagent summary --refresh / phonoagent status / phonoagent monitor")
         print("（首次采集只落基线快照，不写事件；下一次采集起，状态变化逐条落 history.jsonl）")
         return 0
     show = evs[-int(last_n or 40):]
