@@ -56,7 +56,12 @@ artifact that carries the evidence, so a reviewer can re-run it.
     tests/test_i18n.py             6
     tests/test_suites.py           drives the ten end-to-end suites (cluster ones tagged)
 
-## 7. Known gaps
+## 7. Measured numbers
+
+See docs/EVALUATION.md for the scripts, the table of measured values and the
+controlled ablation, plus the threats-to-validity section.
+
+## 8. Known gaps
 
 - Runtime messages are only partly translated: help is 100% English, but the body of
   status/ops messages remains Chinese; scripts/i18n_report.py reports the lower bound.

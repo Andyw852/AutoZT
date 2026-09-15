@@ -14,6 +14,7 @@ nav:
   - MCP interface: mcp.md
   - Releasing: RELEASING.md
   - Acceptance checklist: ACCEPTANCE.md
+  - Evaluation: EVALUATION.md
   - Development notes:
       - Code map: dev/CONTEXT.md
       - Isolation rules: dev/DEV-ISOLATION.md
