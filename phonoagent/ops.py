@@ -4,6 +4,8 @@
 对外接口：auto_recover_hung / cmd_init / cmd_hpc / cmd_watch 等。"""
 
 import os
+
+from phonoagent import i18n as _i18n  # noqa: E402
 import sys
 import re
 import json
@@ -566,7 +568,7 @@ def cmd_init(cfg, types, proj, name=None, tt=None, force=False, yes=False):
     不带 -tt 时对【全部技能】各建一套 project_setting；动手前先列计划并确认（-y 跳过）。"""
     _keys = skill_keys(cfg, tt)
     if not _keys:
-        print("错误：tf.yaml 里没有定义任何技能（task_types 为空）。")
+        print(_i18n.t("错误：", "error: ") + "tf.yaml 里没有定义任何技能（task_types 为空）。")
         return 1
     if not yes and not tt:   # 明确指定了 -tt 就是明确选择，不再确认
         print("phonoagent init 将为下列技能各建一套项目配置：%s" % "、".join(_keys))
@@ -597,7 +599,7 @@ def cmd_init(cfg, types, proj, name=None, tt=None, force=False, yes=False):
         for w in wants:
             lp = resolve_mat_dir(cfg, types, tt, w)
             if not lp:
-                print("错误：找不到材料 %s —— 当前目录、project_roots 和各技能的 "
+                print(_i18n.t("错误：", "error: ") + "找不到材料 %s —— 当前目录、project_roots 和各技能的 "
                       "local_root 下都没有同名的、带 POSCAR 的目录。" % w)
                 fails += 1
                 continue
@@ -647,7 +649,7 @@ def cmd_init(cfg, types, proj, name=None, tt=None, force=False, yes=False):
                       for pat in ("*/POSCAR", "*/*/POSCAR", "*/*/*/POSCAR")
                       for p in _glob.glob(os.path.join(cwd, pat))})
     if not matdirs:
-        print("错误：当前目录下没有发现材料目录（含 POSCAR）。")
+        print(_i18n.t("错误：", "error: ") + "当前目录下没有发现材料目录（含 POSCAR）。")
         return 1
     # v1.5：批量 init 只初始化 project_roots 覆盖范围内的目录——在家目录等
     # 大范围目录下运行时，其他工作流的材料（不在 tf 管理内）跳过不误建。
@@ -663,7 +665,7 @@ def cmd_init(cfg, types, proj, name=None, tt=None, force=False, yes=False):
         print("跳过 %s（不在 tf.yaml 的 project_roots 内；要纳入管理，"
               "先把它的根目录加进 project_roots）" % os.path.relpath(d, cwd))
     if not managed:
-        print("错误：发现的材料目录都不在 project_roots 内，未初始化任何项目。")
+        print(_i18n.t("错误：", "error: ") + "发现的材料目录都不在 project_roots 内，未初始化任何项目。")
         return 1
     matdirs = managed
     fails, done = 0, 0
@@ -914,14 +916,14 @@ def _init_one_skill(cfg, types, target, name=None, tt=None, force=False,
         if known_names is not None:
             # 批量 init 预扫过的名字表 → O(1) 查重，避免每个材料全树重扫
             if pname in known_names:
-                print("错误：项目配置名 tf_%s.yaml 已被 %s 占用，"
+                print(_i18n.t("错误：", "error: ") + "项目配置名 tf_%s.yaml 已被 %s 占用，"
                       "请换个名字（phonoagent init <名字>）。" % (pname, known_names[pname]))
                 return 1
         else:
             roots = cfg.get("project_roots") or [cfg.get("_config_dir")]
             for n2, p2, _ in scan_project_configs(roots):
                 if n2 == pname:
-                    print("错误：项目配置名 tf_%s.yaml 已被 %s 占用，"
+                    print(_i18n.t("错误：", "error: ") + "项目配置名 tf_%s.yaml 已被 %s 占用，"
                           "请换个名字（phonoagent init <名字>）。" % (pname, p2))
                     return 1
         src = pkg_setting_path("tf_default.yaml")
@@ -1243,14 +1245,14 @@ def cmd_hpc(cfg, types, projs, cluster, tt, yes):
     集群主配置 = 包内 setting/<集群名>.yaml（照 jzzn.yaml 建）；其 template_map
     指向的模板文件须能被找到（skill/<技能>/、project_setting/ 或 <技能>/）。"""
     if not cluster:
-        print("错误：缺集群名。用法：phonoagent -p 项目[,项目...] [-tt 技能] hpc <集群名>")
+        print(_i18n.t("错误：", "error: ") + "缺集群名。用法：phonoagent -p 项目[,项目...] [-tt 技能] hpc <集群名>")
         return 1
     if not projs:
-        print("错误：hpc 必须用 -p 显式指定项目（逗号分隔多个）；未指定的不动。")
+        print(_i18n.t("错误：", "error: ") + "hpc 必须用 -p 显式指定项目（逗号分隔多个）；未指定的不动。")
         return 1
     master_path = pkg_setting_path(cluster + ".yaml")
     if not master_path:
-        print("错误：没有集群主配置 setting/%s.yaml。照 jzzn.yaml 建一份："
+        print(_i18n.t("错误：", "error: ") + "没有集群主配置 setting/%s.yaml。照 jzzn.yaml 建一份："
               "name/ssh_host/template_map（指向 submit_%s_vaspstd_*.tpl 等，"
               "模板文件放进 skill/<技能>/ 目录）。可用集群：%s"
               % (cluster, cluster, _list_pkg_clusters()))
@@ -1275,7 +1277,7 @@ def cmd_hpc(cfg, types, projs, cluster, tt, yes):
                 seen.add(key)
                 todo.append((t, root, m))
     if not todo:
-        print("错误：没找到 -p 指定的项目（%s）。" % ", ".join(projs))
+        print(_i18n.t("错误：", "error: ") + "没找到 -p 指定的项目（%s）。" % ", ".join(projs))
         return 1
     print("将把 %d 个项目的%s分配到集群 %s（ssh_host=%s）："
           % (len(todo), (" [%s] 技能" % tt) if tt else "（全部技能）",
@@ -1389,7 +1391,7 @@ def cmd_level(cfg, types, tt, proj, arg):
     if arg is not None:
         level = _LEVEL_ALIAS.get(str(arg).strip().lower())
         if level is None:
-            print("错误：level 只接受 pbe / hse（也认 step3 / step4；收到 %r）。"
+            print(_i18n.t("错误：", "error: ") + "level 只接受 pbe / hse（也认 step3 / step4；收到 %r）。"
                   % arg)
             return 1
     fails = 0
@@ -1443,10 +1445,10 @@ def cmd_auto_project(cfg, types, proj, tt, arg):
         return 0
     a = str(arg).strip().lower()
     if a == "resume" and not tt:
-        print("错误：auto resume 必须用 -tt 指定技能和 -p 指定项目。")
+        print(_i18n.t("错误：", "error: ") + "auto resume 必须用 -tt 指定技能和 -p 指定项目。")
         return 1
     if a not in ("on", "off", "1", "0", "true", "false", "开", "关", "resume"):
-        print("错误：auto 只接受 on/off（收到 %r）。" % arg)
+        print(_i18n.t("错误：", "error: ") + "auto 只接受 on/off（收到 %r）。" % arg)
         return 1
     on = a in ("on", "1", "true", "开", "resume")
     fails = 0
@@ -1546,7 +1548,7 @@ def cmd_auto(cfg, arg):
     只影响 auto_advance；后台监控（auto_watch）不受影响。"""
     path = cfg.get("_config_path")
     if not path:
-        print("错误：没有找到配置文件。")
+        print(_i18n.t("错误：", "error: ") + "没有找到配置文件。")
         return 1
     if arg is None:
         print("auto_advance 当前：%s（%s）"
@@ -1555,7 +1557,7 @@ def cmd_auto(cfg, arg):
         return 0
     a = str(arg).strip().lower()
     if a not in ("on", "off", "1", "0", "true", "false", "开", "关"):
-        print("错误：auto 只接受 on/off（收到 '%s'）。" % arg)
+        print(_i18n.t("错误：", "error: ") + "auto 只接受 on/off（收到 '%s'）。" % arg)
         return 1
     on = a in ("on", "1", "true", "开")
     try:
@@ -1570,7 +1572,7 @@ def cmd_auto(cfg, arg):
         with open(path, "w", encoding="utf-8") as f:
             f.writelines(lines)
     except OSError as e:
-        print("错误：读写配置失败：%s" % e)
+        print(_i18n.t("错误：", "error: ") + "读写配置失败：%s" % e)
         return 1
     print("auto_advance 已%s（%s）。" % ("开启" if on else "关闭", path))
     if on:
@@ -1593,13 +1595,13 @@ def cmd_adopt(cfg, types, proj, yes, dry, tt):
                           有作业在跑的跳过，算完再跑一次 adopt 即可。
     用法：phonoagent -tt band adopt [--dry-run] [-y] [-p MAT]"""
     if not tt:
-        print("错误：adopt 需要 -tt 指定接管哪个技能（如 tf -tt band adopt）。")
+        print(_i18n.t("错误：", "error: ") + "adopt 需要 -tt 指定接管哪个技能（如 tf -tt band adopt）。")
         return 1
     raw_tt = ((cfg.get("task_types") or {}).get(tt) or {})
     sub = str(raw_tt.get("dir_name") or tt)
     roots = [os.path.expanduser(r) for r in (cfg.get("project_roots") or [])]
     if not roots:
-        print("错误：全局 tf.yaml 没有 project_roots。")
+        print(_i18n.t("错误：", "error: ") + "全局 tf.yaml 没有 project_roots。")
         return 1
     # ---- 第 1 步：扫 <root>/**/<sub>，上一级即材料目录 ----
     targets, plans = [], {}
@@ -1674,7 +1676,7 @@ def cmd_adopt(cfg, types, proj, yes, dry, tt):
     cfg2 = merge_project_configs(cfg2)
     types2 = get_types(cfg2, tt=tt)
     if not types2:
-        print("错误：%s 还没有任何项目配置段——先 phonoagent init，再重跑 adopt。" % tt)
+        print(_i18n.t("错误：", "error: ") + "%s 还没有任何项目配置段——先 phonoagent init，再重跑 adopt。" % tt)
         return 1
     data2 = collect_data(cfg2, types2)
     by_name = {m["name"]: m for t2 in data2["types"] for m in t2["materials"]}
@@ -1706,7 +1708,7 @@ def cmd_migrate_subdir(cfg, data, proj, yes, dry):
     mats = [m for m in t["materials"]
             if not proj or _name_matches(m, proj)]
     if proj and not mats:
-        print("错误：%s 下没有材料 %s。" % (key, proj))
+        print(_i18n.t("错误：", "error: ") + "%s 下没有材料 %s。" % (key, proj))
         return 1
     todo, skipped = [], []
     for m in mats:

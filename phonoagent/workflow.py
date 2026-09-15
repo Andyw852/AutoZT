@@ -10,6 +10,8 @@ remote_gen / cmd_start / cmd_stop / cmd_retry / cmd_rerun / cmd_clean 等。
 外部依赖（00/02/03/04/05/07/08/14 片的名字）在函数内用 from phonoagent import ... 延迟解析。
 """
 import os
+
+from phonoagent import i18n as _i18n  # noqa: E402
 import sys
 import re
 import json
@@ -422,7 +424,7 @@ def check_duplicates(data):
                   % (key, len(qualified[key]), ", ".join(sorted(qualified[key]))),
                   file=sys.stderr)
     if errs:
-        sys.exit("错误：\n" + "\n".join(errs))
+        sys.exit(_i18n.t("错误：", "error: ") + "\n" + "\n".join(errs))
 
 
 # ===== 来自 09_submit.py =====
@@ -1638,7 +1640,7 @@ def cmd_step_init(cfg, data, proj, job, force):
     """tf -p MAT -j STEP init：只生成该步骤的输入文件（gen），不提交。
     已有输入时不覆盖（要推倒重来用 rerun）；前序未完成需 -f。"""
     if not proj or not job:
-        print("错误：步骤级 init 需要 -p 材料 和 -j 步骤。")
+        print(_i18n.t("错误：", "error: ") + "步骤级 init 需要 -p 材料 和 -j 步骤。")
         return 1
     t, m = find_material(data, proj)
     s = find_step(m, job)
@@ -2480,13 +2482,13 @@ def _ask_confirm(prompt):
     旧代码直接 input()：非交互场景（agent / cron / 管道）会抛
     EOFError traceback，既不友好也不说明该加 -y。"""
     if not sys.stdin or not sys.stdin.isatty():
-        sys.exit("错误：%s 需要确认，但当前不是交互终端。"
+        sys.exit(_i18n.t("错误：", "error: ") + "%s 需要确认，但当前不是交互终端。"
                  "请显式加 -y 表示同意（例：tf -tt <技能> -p <材料> -j <步骤> stop -y）"
                  % "该操作")
     try:
         return input(prompt).strip().lower()
     except EOFError:
-        sys.exit("错误：读取确认输入失败（stdin 已关闭）。请显式加 -y 表示同意。")
+        sys.exit(_i18n.t("错误：", "error: ") + "读取确认输入失败（stdin 已关闭）。请显式加 -y 表示同意。")
 
 
 def cmd_stop(cfg, data, mname, jname, yes):
@@ -2691,7 +2693,7 @@ def step_targets(data, jname):
             if s is not None:
                 out.append((t, m, s))
     if not out:
-        sys.exit("错误：没有任何材料有步骤 '%s'。" % jname)
+        sys.exit(_i18n.t("错误：", "error: ") + "没有任何材料有步骤 '%s'。" % jname)
     return out
 
 # ===== _optional_off_hit (原 L4156-L4175) =====

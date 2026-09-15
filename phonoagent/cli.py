@@ -3,6 +3,8 @@
 对外接口：main。"""
 
 import os
+
+from phonoagent import i18n as _i18n  # noqa: E402
 import sys
 import re
 import json
@@ -244,7 +246,7 @@ def main():
     for tok in pos:
         if os.path.isdir(os.path.expanduser(tok)):
             if root is not None:
-                sys.exit("错误：只能指定一个 ROOT（收到多个目录）。")
+                sys.exit(_i18n.t("错误：", "error: ") + "只能指定一个 ROOT（收到多个目录）。")
             root = tok
         else:
             mat_toks.append(tok)
@@ -257,7 +259,7 @@ def main():
         _probe = os.path.join(_PKG_ROOT, "scripts", "probe_jobs.py")
         _mats = [m.strip() for m in (a.proj or "").split(",") if m.strip()] + mat_toks
         if not _mats:
-            sys.exit("错误：probe 需要 -p 材料名（如 tf -tt defect-dft-cpu -p Sn2Sb2Te5 probe）。")
+            sys.exit(_i18n.t("错误：", "error: ") + "probe 需要 -p 材料名（如 tf -tt defect-dft-cpu -p Sn2Sb2Te5 probe）。")
         _argv = [sys.executable, _probe, "-p", ",".join(_mats)]
         if a.job:
             _argv += ["-j", a.job]
@@ -271,7 +273,7 @@ def main():
         sys.exit(_sp.call(["bash", _push, _msg]))
     if a.job and not a.proj and not mat_toks and cmd not in (
             "start", "stop", "retry", "rerun", "clean", "status"):
-        sys.exit("错误：-j 必须和 -p 一起用（start/stop/retry/rerun/clean "
+        sys.exit(_i18n.t("错误：", "error: ") + "-j 必须和 -p 一起用（start/stop/retry/rerun/clean "
                  "支持不带 -p，表示对全部材料只操作该步骤）。")
 
     cfg, cfg_path = load_config(a.config)
@@ -334,7 +336,7 @@ def main():
     if cmd not in ("watch", "monitor"):
         _watch_ensure(cfg)   # v1.10：auto_watch 时顺带确保后台监控在跑
     if cmd in ("status", "json") and not types and not a.tt:
-        sys.exit("错误：没有任何任务类型"
+        sys.exit(_i18n.t("错误：", "error: ") + "没有任何任务类型"
                  "（在全局 tf.yaml 或项目 project_setting/tf_*.yaml 里定义）。")
     # v1.1：-tt 指定的类型有骨架但无项目段时 types 为空——前面已打印引导
     # 提示，这里放行，按空表/无目标处理（不算错误）。
@@ -368,7 +370,7 @@ def main():
                  if str(x).strip().lower() not in _AUTO_WORDS]
         _proj = a.proj or (",".join(_rest) if _rest else None)
         if _arg == "resume" and (not _proj or not a.tt):
-            print("错误：auto resume 必须用 -tt 指定技能和 -p 指定项目。")
+            print(_i18n.t("错误：", "error: ") + "auto resume 必须用 -tt 指定技能和 -p 指定项目。")
             sys.exit(1)
         mat_toks, a.proj = [], _proj
         if _proj:       # v1.9.9：带 -p（或位置参数）就只改这些材料/技能
@@ -476,7 +478,7 @@ def main():
                 close = difflib.get_close_matches(
                     tok, sorted(names | set(bases) | stepnames | commands),
                     n=1, cutoff=0.6)
-                sys.exit("错误：'%s' 不是命令、材料或步骤%s"
+                sys.exit(_i18n.t("错误：", "error: ") + "'%s' 不是命令、材料或步骤%s"
                          % (tok, ("，你是不是想 '%s'？" % close[0]) if close else "。"))
     jobs = jobs or [None]
 
@@ -511,7 +513,7 @@ def main():
 
     if cmd == "init":  # -p MAT -j STEP init：只生成该步骤输入，不提交
         if len(projs) > 1:
-            sys.exit("错误：步骤级 init 一次只支持一个材料。")
+            sys.exit(_i18n.t("错误：", "error: ") + "步骤级 init 一次只支持一个材料。")
         fails = 0
         for jb in jobs:
             fails += 0 if cmd_step_init(cfg, data, projs[0] if projs else None,
@@ -531,7 +533,7 @@ def main():
         return
     if cmd == "diagnose":   # v2.0：一键结构化诊断（只读；默认输出 FAIL 步）
         if not projs:
-            sys.exit("错误：diagnose 需要 -p 材料（如 tf -p C24/qHPC24 diagnose）。")
+            sys.exit(_i18n.t("错误：", "error: ") + "diagnose 需要 -p 材料（如 tf -p C24/qHPC24 diagnose）。")
         _outs = [cmd_diagnose(cfg, data, pj, jobs[0]) for pj in projs]
         print(json.dumps(_outs[0] if len(_outs) == 1 else _outs,
                          ensure_ascii=False, indent=2))
@@ -545,7 +547,7 @@ def main():
         sys.exit(1 if _fails else 0)
     if cmd == "prove":   # v1.0：看这一步"结果是怎么来的"（只读本地档案，不提交）
         if not projs:
-            sys.exit("错误：prove 需要 -p 材料（如 tf -p C24/qHPC24 prove）。")
+            sys.exit(_i18n.t("错误：", "error: ") + "prove 需要 -p 材料（如 tf -p C24/qHPC24 prove）。")
         _rc = 0
         for pj in projs:
             _rc |= cmd_prove(cfg, data, pj, jobs[0], json_out=a.json_out,
@@ -608,7 +610,7 @@ def main():
                 print("→ phonoagent init 纳入管理；配 auto_advance: true 后下次 tf 自动开算")
     elif cmd == "conf":
         if not projs or not jobs or not jobs[0]:
-            sys.exit("错误：conf 需要 -p 材料 -j 步骤（如 tf -tt bd -p Mg2C60 -j 2 conf）。")
+            sys.exit(_i18n.t("错误：", "error: ") + "conf 需要 -p 材料 -j 步骤（如 tf -tt bd -p Mg2C60 -j 2 conf）。")
         fails = 0
         for pj in projs:
             for jb in jobs:
@@ -651,7 +653,7 @@ def main():
             elif a.tt:
                 _dirs.append(data["types"][0]["root"])
             else:
-                sys.exit("错误：dir 需要 -p（可配 -j）或 -tt 指定对象。")
+                sys.exit(_i18n.t("错误：", "error: ") + "dir 需要 -p（可配 -j）或 -tt 指定对象。")
             print(json.dumps(_dirs, ensure_ascii=False))
         elif projs:
             for pj in projs:
@@ -661,10 +663,10 @@ def main():
         elif a.tt:
             print(data["types"][0]["root"])
         else:
-            sys.exit("错误：dir 需要 -p（可配 -j）或 -tt 指定对象。")
+            sys.exit(_i18n.t("错误：", "error: ") + "dir 需要 -p（可配 -j）或 -tt 指定对象。")
     elif cmd == "migrate-subdir":
         if not a.tt:
-            sys.exit("错误：migrate-subdir 需要 -tt 指定迁哪个技能"
+            sys.exit(_i18n.t("错误：", "error: ") + "migrate-subdir 需要 -tt 指定迁哪个技能"
                      "（如 tf -tt band migrate-subdir）。")
         fails = 0
         for pj in (projs or [None]):

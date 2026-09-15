@@ -331,13 +331,13 @@ def find_material(data, name):
         if hits:
             break
     if not hits:
-        sys.exit("错误：找不到材料 '%s'。" % name)
+        sys.exit(_i18n.t("错误：", "error: ") + "找不到材料 '%s'。" % name)
     tts = {t["key"] for t, _ in hits}
     if len(hits) > 1:
         if len(tts) > 1:
-            sys.exit("错误：'%s' 同时属于多个任务类型（%s），请用 -tt 指定。"
+            sys.exit(_i18n.t("错误：", "error: ") + "'%s' 同时属于多个任务类型（%s），请用 -tt 指定。"
                      % (name, "/".join(sorted(tts))))
-        sys.exit("错误：'%s' 匹配到多个材料：%s，请写完整名。"
+        sys.exit(_i18n.t("错误：", "error: ") + "'%s' 匹配到多个材料：%s，请写完整名。"
                  % (name, ", ".join(m["name"] for _, m in hits)))
     return hits[0]
 
@@ -380,7 +380,7 @@ def find_step(m, jname):
         for s in steps:
             if _step_seq_match(s, int(jname)):
                 return s
-        sys.exit("错误：没有序号 %s 对应的步骤（现有：%s）。"
+        sys.exit(_i18n.t("错误：", "error: ") + "没有序号 %s 对应的步骤（现有：%s）。"
                  % (jname, ", ".join("%s|%s" % (s["label"], s["name"])
                                      for s in steps)))
     for s in steps:
@@ -396,9 +396,9 @@ def find_step(m, jname):
     if len(_base) == 1:
         return _base[0]
     if len(_base) > 1:
-        sys.exit("错误：%s 有多个步骤以 '%s' 结尾，请写全名：%s"
+        sys.exit(_i18n.t("错误：", "error: ") + "%s 有多个步骤以 '%s' 结尾，请写全名：%s"
                  % (m["name"], jname, ", ".join(s["name"] for s in _base)))
-    sys.exit("错误：%s 没有步骤 '%s'（现有：%s）。"
+    sys.exit(_i18n.t("错误：", "error: ") + "%s 没有步骤 '%s'（现有：%s）。"
              % (m["name"], jname,
                 ", ".join("%s|%s" % (s["label"], s["name"]) for s in steps)))
 
@@ -796,12 +796,12 @@ def cmd_conf(cfg, data, proj, jname, sets=None):
     sname = s["name"]
     mod = _stepconf_mod(cfg, t, m)
     if not mod:
-        print("错误：该技能目录里没有 stepconf.py。")
+        print(_i18n.t("错误：", "error: ") + "该技能目录里没有 stepconf.py。")
         return 1
     if sets:
         ps = (m.get("ps") or {}).get("dir")
         if not ps:
-            print("错误：该材料还没有 project_setting，先跑 tf -p %s init。" % m["name"])
+            print(_i18n.t("错误：", "error: ") + "该材料还没有 project_setting，先跑 tf -p %s init。" % m["name"])
             return 1
         dst = os.path.join(ps, m.get("template_subdir") or "templates",
                            sname, STEP_CONF)
