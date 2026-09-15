@@ -17,8 +17,8 @@
 \node[font=\scriptsize, below=1mm of ta] {(e.g.\ AtomAgents, DREAMS)};
 \node[agency, below=6mm of ta, text width=56mm] (planner) {LLM planner / critic / executor\\ \scriptsize open-ended decisions, tokens per step};
 \node[box, fill=orange!8, draw=orange!45!black, below=5mm of planner, text width=56mm] (tools) {tool library (bash / ASE / VASP wrappers)};
-\node[exec, below=5mm of tools, text width=56mm] (clusterA) {single cluster, ad-hoc queues\\ \scriptsize one DFT run per decision};
-\node[lbl, below=5mm of clusterA] (pa) {\textbf{properties}\\ $+$ explores unknown design space\\ $-$ non-deterministic trace (replay)\\ $-$ token cost scales with decisions\\ $-$ destructive actions are one\\ \phantom{$-$} hallucination away};
+\node[exec, below=5mm of tools, text width=56mm] (clusterA) {HPC execution managed by an agent\\ \scriptsize workflow choices remain agent-mediated};
+\node[lbl, below=5mm of clusterA] (pa) {\textbf{properties}\\ $+$ explores unknown design space\\ $+$ DREAMS includes HPC scheduling, safety guards and provenance checks\\ $-$ token cost scales with agent decisions\\ $-$ guard and provenance live inside the agent stack};
 \draw[-{Latex}] (planner) -- (tools);
 \draw[-{Latex}] (tools) -- (clusterA);
 

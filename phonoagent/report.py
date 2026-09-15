@@ -4,6 +4,8 @@
 对外接口：render_table / render_detail / find_material / find_asset / cmd_summary 等。"""
 
 import os
+
+from phonoagent import i18n as _i18n  # noqa: E402
 import sys
 import re
 import json
@@ -299,7 +301,7 @@ def render_detail(m):
     if m.get("result_dir"):
         extra += "\nResult: %s" % m["result_dir"]
     if m.get("work_dir_src"):
-        extra += "\nwork_dir 来源: %s" % m["work_dir_src"]
+        extra += _i18n.t("\nwork_dir 来源: %s", "\nwork_dir source: %s") % m["work_dir_src"]
     print("Material: %s  (tt=%s, %s)\nDir: %s%s"
           % (m["name"], m["tt"], m["desc"], m["path"], extra))
     for s in m["steps"]:
@@ -902,7 +904,7 @@ def cmd_status(cfg, data, mname, jname):
             _src = ("project_setting/setting.yaml" if _st.get("work_dir")
                     else "project_setting/hpc.yaml" if _hp.get("work_dir")
                     else "继承类型/集群默认")
-        print("work_dir 来源: %s" % _src)
+        print(_i18n.t("work_dir 来源: %s", "work_dir source: %s") % _src)
     else:
         render_table(data)
 
