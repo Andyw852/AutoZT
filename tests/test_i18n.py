@@ -44,3 +44,26 @@ def test_lang_env_alone_is_enough():
     out = _run("import sys;sys.path.insert(0,'.');"
                "from phonoagent import i18n;print(i18n.is_en())", lang="en")
     assert out == "True"
+
+
+def test_diag_maps_known_phrases_only_when_english():
+    code = ("import sys;sys.path.insert(0,'.');"
+            "from phonoagent import i18n;"
+            "print(i18n.diag('converged（5/3 段）'));"
+            "print(i18n.diag('dir missing'));"
+            "print(i18n.diag('完全没见过的短语'))")
+    assert _run(code).splitlines() == ["converged（5/3 段）", "dir missing", "完全没见过的短语"]
+    en = _run(code, lang="en").splitlines()
+    assert en[0] == "converged (5/3 stages)"
+    assert en[1] == "dir missing"
+    assert en[2] == "完全没见过的短语"      # 未知短语原样返回，不丢信息
+
+
+def test_diag_handles_empty_and_pd():
+    code = ("import sys;sys.path.insert(0,'.');"
+            "from phonoagent import i18n;"
+            "print(repr(i18n.diag('')));"
+            "print(i18n.diag('job PD  (Priority)'))")
+    en = _run(code, lang="en").splitlines()
+    assert en[0] == "''"
+    assert en[1] == "job pending: (Priority)"

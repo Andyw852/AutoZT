@@ -274,7 +274,7 @@ def render_table(data):
     if attn:
         print("\nFAILED / NEEDS ATTENTION:")
         for tt, name, lab, diag in attn:
-            print("  [%-3s] %-22s %-10s %s" % (tt, name, lab, diag))
+            print("  [%-3s] %-22s %-10s %s" % (tt, name, lab, _i18n.diag(diag)))
     imag = [(m["tt"], m["name"], s["label"], s["diag"]) for _, m in all_mats
             for s in m["steps"] if s["kind"] == "IMAG"]
     if imag:
@@ -1020,7 +1020,7 @@ def _summary_lines(data):
                      % (t["key"], n, cnt["done"], cnt["run"], cnt["pd"],
                         cnt["err"], cnt["sc"], cnt["wait"]))
         for name, lab, diag in fails:
-            lines.append("  FAIL %s %s %s" % (name, lab, diag))
+            lines.append("  FAIL %s %s %s" % (name, lab, _i18n.diag(diag)))
     q = data.get("queue")
     if q and (q.get("R") or q.get("PD") or q.get("total")):
         lines.append(_i18n.t("队列(全部作业): R=%d PD=%d 共 %d",
