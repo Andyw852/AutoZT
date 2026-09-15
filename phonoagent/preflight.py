@@ -10,6 +10,8 @@
 """
 import re
 
+from phonoagent import i18n as _i18n
+
 _PART_RE = re.compile(r"^#SBATCH\s+--partition=(\S+)", re.M)
 _CPT_RE = re.compile(r"^#SBATCH\s+--cpus-per-task=(\d+)", re.M)
 _NPN_RE = re.compile(r"^#SBATCH\s+--ntasks-per-node=(\d+)", re.M)
@@ -25,6 +27,30 @@ def parse_submit(text):
     return {"partition": part.group(1) if part else "",
             "cpus_per_task": int(cpt.group(1)) if cpt else 0,
             "ntasks_per_node": int(npn.group(1)) if npn else 0}
+
+
+# 英文版提示（按"检查种类"取用；缺失时回退中文，绝不空输出）
+EN_HINTS = {
+    "resources": ("hint: the submit template asks for too many cores; the job then waits "
+                  "in PD(PartitionConfig) forever and no log line says why. Lower "
+                  "cpus-per-task in a project-level copy of the template."),
+    "partition": ("hint: the submit template requests a partition the target cluster does "
+                  "not use. Copy the template into project_setting/templates and set a "
+                  "partition that cluster accepts."),
+    "conda": ("hint: the template activates a conda environment or conda.sh path that does "
+              "not exist on the target cluster. Activation fails silently, the preparation "
+              "stage may still pass and the compute stage exits without a message. Point "
+              "CONDA_SH/CONDA_ENV in that step's step.conf at the cluster's environment."),
+    "fail_step": ("hint: a FAIL step is not in the DAG's active set, so -f alone does not "
+                  "pick it up. Resubmit it explicitly with -j STEP start -f."),
+}
+
+
+def hint(kind, zh_text="", cluster=""):
+    """按语言返回提示文本（英文缺失时回退中文，绝不空输出）。"""
+    if not _i18n.is_en():
+        return zh_text or EN_HINTS.get(kind, "")
+    return EN_HINTS.get(kind, zh_text)
 
 
 def check_resources(res, max_cpus):

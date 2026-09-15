@@ -1311,7 +1311,7 @@ def _remote_submit_preflight(cfg, m, s, t=None):
     _declared = str(_cc.get("partition") or _cc.get("queue") or "").strip()
     _sub_path = os.path.join(s["dir"], str(s.get("submit") or "submit.sh"))
     _want = (_res.get("partition") or "").strip()
-    if _want and not _declared:
+    if _want and not _declared:  # noqa: E501 (分区提示见 preflight.check_partition)
         # 集群没声明分区时，去该集群自带的模板里找实际使用的分区名，只做提示
         # （实测 3090 用 fakeslurm 时 --partition=cpu192 照样能跑，硬拦会误伤）
         _sugg = set()
@@ -1344,11 +1344,13 @@ def _remote_submit_preflight(cfg, m, s, t=None):
     if _mc:
         _rmsg = _pf.check_resources(_res, _mc)
         if _rmsg:
-            print(_rmsg, file=sys.stderr)
+            print(_pf.hint("resources", _rmsg, m.get("hpc_name")), file=sys.stderr)
     if _want and _declared and _want != _declared:
         print("提示：提交模板要求 --partition=%s，集群 %s 声明的是 %s；"
               "若作业卡在 PD(PartitionConfig) 就按这两处之一改。"
               % (_want, m.get("hpc_name"), _declared), file=sys.stderr)
+        if _pf._i18n.is_en():
+            print(_pf.hint("partition"), file=sys.stderr)
     # 提交模板的环境自检：模板里的 conda 环境/conda.sh 路径必须存在于目标集群。
     # 实测教训（2026-09-15 fc-fit 切 3090）：模板激活的是 atomate2_p_a 与
     # /public/home/wangchao/... （源集群的），激活静默失败后脚本照跑，prep 侥幸
@@ -2291,6 +2293,8 @@ def _start_ready(cfg, t, m, force, incl_scancel=False, gate=None):
                   "        phonoagent -tt %s -p %s -j %s start -f"
                   % (m["name"], m["tt"], len(_fails), m["tt"], m["name"],
                      _fails[0].get("label") or _fails[0]["name"]))
+        if _pf._i18n.is_en():
+            print(_pf.hint("fail_step"), file=sys.stderr)
         else:
             print("%s[%s]：没有可启动的步骤（都在跑、已完成，或被依赖卡住）。"
                   % (m["name"], m["tt"]))
