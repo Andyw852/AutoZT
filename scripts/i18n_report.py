@@ -24,7 +24,7 @@ def main():
         hits = PAT.findall(txt)
         # 只统计真正的 t(...) 调用：前面不是标识符字符（避免把 print("中文... 也算进来）
         translated = len(re.findall(
-            r'(?<![A-Za-z0-9_.])t\(\s*"[^"\n]*[\u4e00-\u9fff]', txt))
+            r'(?<![A-Za-z0-9_])t\(\s*"[^"\n]*[\u4e00-\u9fff]', txt))
         if hits:
             rows.append((p.name, len(hits), translated))
             for h in hits[:3]:

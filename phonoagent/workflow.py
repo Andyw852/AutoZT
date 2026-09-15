@@ -2268,7 +2268,8 @@ def _start_ready(cfg, t, m, force, incl_scancel=False, gate=None):
         # patch_max_jobs：技能级并发提交上限（先于材料级 max_inflight）。
         # 只卡 sbatch，不卡本地生成输入：达上限时把剩余就绪步骤输入先生成好。
         if gate is not None and not _is_gen and not gate.try_acquire(m["tt"]):
-            print("%s[%s]：技能 %s 已提交 %d 个作业，达上限 %d，未提交的任务"
+            print(_i18n.t("%s[%s]：技能 %s 已提交 %d 个作业，达上限 %d，未提交的任务",
+                  "%s[%s]: skill %s already has %d jobs (cap %d); the rest were")
                   "先本地生成输入（不提交），等有空位自动补交（改 "
                   "task_types.%s.max_jobs 或 PHONOAGENT_MAX_JOBS 调整）。"
                   % (m["name"], m["tt"], m["tt"], gate.busy(m["tt"]),
@@ -2303,7 +2304,8 @@ def _start_ready(cfg, t, m, force, incl_scancel=False, gate=None):
         if _pf._i18n.is_en():
             print(_pf.hint("fail_step"), file=sys.stderr)
         else:
-            print("%s[%s]：没有可启动的步骤（都在跑、已完成，或被依赖卡住）。"
+            print(_i18n.t("%s[%s]：没有可启动的步骤（都在跑、已完成，或被依赖卡住）。",
+                  "%s[%s]: nothing to start (all steps are running, done or blocked).")
                   % (m["name"], m["tt"]))
     return fails
 
