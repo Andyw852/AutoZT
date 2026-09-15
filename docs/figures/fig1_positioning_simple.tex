@@ -1,0 +1,39 @@
+% Simple positioning figure (TikZ), for a two-column paper.
+% \input{fig1_positioning_simple}
+\begin{figure}[t]
+\centering
+\begin{tikzpicture}[
+  font=\footnotesize, node distance=3mm,
+  b/.style={draw, rounded corners=2pt, align=center, inner sep=3.5pt, minimum height=8mm},
+]
+% (a)
+\node[font=\small\bfseries, text=red!45!black] (ta) {(a) agency-first};
+\node[b, fill=red!8, draw=red!40!black, right=4mm of ta, text width=24mm] (llm) {LLM planner};
+\node[b, fill=orange!8, draw=orange!45!black, right=4mm of llm, text width=24mm] (tools) {tools / DFT};
+\draw[-{Latex}] (llm) -- (tools);
+\node[below=1mm of llm.south west, anchor=north west, font=\scriptsize, text=red!40!black, align=left]
+  {tokens per decision; trace not replayable};
+
+% (b)
+\node[font=\small\bfseries, text=green!35!black, below=10mm of ta.south west, anchor=north west] (tb)
+  {(b) determinism-first (PhonoAgent)};
+\node[b, fill=green!14, draw=green!40!black, right=4mm of tb, text width=22mm] (crit) {criteria engine};
+\node[b, fill=green!10, draw=green!40!black, right=3mm of crit, text width=22mm] (gate) {gate: act/approve};
+\node[b, fill=blue!7, draw=blue!40!black, right=3mm of gate, text width=20mm] (clu) {clusters};
+\node[b, fill=green!8, draw=green!30!black, right=3mm of clu, text width=20mm] (arc) {archive};
+\draw[-{Latex}] (crit) -- (gate);
+\draw[-{Latex}] (gate) -- (clu);
+\draw[-{Latex}] (clu) -- (arc);
+\node[below=1mm of clu.south east, anchor=north east, font=\scriptsize, text=green!35!black]
+  {0 tokens in steady state; hash-stable};
+
+% bridge
+\draw[-{Latex}, dashed, gray] (llm.south) to[out=-90, in=150]
+  node[pos=0.45, above, font=\scriptsize, gray, align=center]{planner may\\ drive the gate (MCP)} (gate.north west);
+\end{tikzpicture}
+\caption{Agency-first automation lets the LLM decide every step. Determinism-first
+automation keeps step decisions in physical convergence criteria and exposes only a
+graded, audited action surface to the agent: cheaper at scale, replayable, and unable to
+bypass the gate.}
+\label{fig:positioning-simple}
+\end{figure}

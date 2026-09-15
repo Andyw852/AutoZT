@@ -1,4 +1,4 @@
-__version__ = "1.0.0"
+__version__ = "1.1.0"
 __agent_name__ = "PhonoAgent"
 __cli_name__ = "phonoagent"
 

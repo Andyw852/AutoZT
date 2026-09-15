@@ -209,7 +209,7 @@ def main():
         return
 
     commands = {"status", "list", "summary", "start", "stop", "retry", "rerun",
-                "json", "config", "dir", "fetch", "init", "clean", "watch",
+                "json", "config", "dir", "fetch", "init", "clean", "watch", "mcp",
                 "monitor", "restart", "help", "auto", "adopt", "migrate-subdir",
                 "hpc", "skills", "conf", "level", "diagnose", "probe", "push",
                 # v1.0（加技能友好化）：schema = 看技能自描述（io_schema/flow/corrections）
@@ -544,6 +544,11 @@ def main():
             _rc |= cmd_prove(cfg, data, pj, jobs[0], json_out=a.json_out,
                              verify=a.verify)
         sys.exit(_rc)
+    if cmd == "mcp":   # C 差异化：以 MCP stdio 服务暴露给上层 agent
+        from phonoagent import mcp as _mcp
+        return _mcp.main(sys.argv[1:] if "--list-tools" in sys.argv
+                         or "--call" in sys.argv else [])
+
     if cmd == "session":   # v1.0（P1-7）：会话导出（只读本地，打论文补充材料包）
         _sargs = list(mat_toks)
         if _sargs and _sargs[0] in ("export", "bundle"):

@@ -9,6 +9,14 @@ _PKG_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _PKG_ROOT not in sys.path:
     sys.path.insert(0, _PKG_ROOT)
 
+# mcp 子命令在参数解析之前拦截：MCP 客户端用 stdio JSON-RPC，
+# --list-tools/--call 是给人和测试用的，不该被主解析器当材料名。
+import sys as _sys
+if 'mcp' in _sys.argv[1:]:
+    _i = _sys.argv.index('mcp')
+    from phonoagent import mcp as _mcp_intercept
+    _sys.exit(_mcp_intercept.main(_sys.argv[_i + 1:]))
+
 from phonoagent import main
 
 if __name__ == "__main__":

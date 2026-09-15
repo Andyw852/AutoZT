@@ -1,0 +1,51 @@
+% PhonoAgent positioning figure (TikZ). Compile with pdflatex; needs no extra packages
+% beyond tikz + positioning + arrows.meta + shadows (all in TeX Live).
+% Include:  \input{fig1_positioning}
+\begin{figure*}[t]
+\centering
+\begin{tikzpicture}[
+  font=\small,
+  box/.style={draw, rounded corners=2pt, align=center, inner sep=4pt, minimum height=9mm},
+  agency/.style={box, fill=red!8, draw=red!45!black},
+  det/.style={box, fill=green!8, draw=green!35!black},
+  exec/.style={box, fill=blue!7, draw=blue!40!black},
+  gate/.style={box, fill=green!16, draw=green!40!black, very thick},
+  lbl/.style={font=\footnotesize, align=left, text width=58mm},
+]
+% ---------------- (a) agency-first ----------------
+\node[font=\small\bfseries] (ta) at (-4.2,5.2) {(a) Agency-first: LLM plans, tools execute};
+\node[font=\scriptsize, below=1mm of ta] {(e.g.\ AtomAgents, DREAMS)};
+\node[agency, below=6mm of ta, text width=56mm] (planner) {LLM planner / critic / executor\\ \scriptsize open-ended decisions, tokens per step};
+\node[box, fill=orange!8, draw=orange!45!black, below=5mm of planner, text width=56mm] (tools) {tool library (bash / ASE / VASP wrappers)};
+\node[exec, below=5mm of tools, text width=56mm] (clusterA) {single cluster, ad-hoc queues\\ \scriptsize one DFT run per decision};
+\node[lbl, below=5mm of clusterA] (pa) {\textbf{properties}\\ $+$ explores unknown design space\\ $-$ non-deterministic trace (replay)\\ $-$ token cost scales with decisions\\ $-$ destructive actions are one\\ \phantom{$-$} hallucination away};
+\draw[-{Latex}] (planner) -- (tools);
+\draw[-{Latex}] (tools) -- (clusterA);
+
+% ---------------- (b) determinism-first ----------------
+\node[font=\small\bfseries] (tb) at (4.2,5.2) {(b) Determinism-first: criteria drive, agents supervise};
+\node[font=\scriptsize, below=1mm of tb] {(PhonoAgent)};
+\node[det, below=6mm of tb, text width=56mm] (sup) {LLM supervisor (optional, off the critical path)};
+\node[gate, below=5mm of sup, text width=56mm] (gate) {\textbf{action gateway: act / approve}\\ \scriptsize risk tiers \textbullet\ TTL approval \textbullet\ audit log};
+\node[det, below=5mm of gate, text width=62mm] (crit) {\textbf{criteria engine (deterministic DAG)}\\ \scriptsize converged / imaginary frequency / marker\\ \scriptsize steady state: zero LLM calls};
+\node[exec, below=5mm of crit, text width=26mm] (cA) {cluster A\\ \scriptsize SLURM, DFT};
+\node[exec, right=4mm of cA, text width=26mm] (cB) {cluster B\\ \scriptsize bare GPU};
+\node[det, below=4mm of cA.south east, anchor=north, text width=62mm, yshift=-1mm] (prov) {\textbf{provenance (sha256) + session archive}\\ \scriptsize prove --verify, replayable, hash-stable};
+\node[box, fill=green!5, draw=green!30!black, below=4mm of prov, text width=62mm] (plug) {skill plugin layer (skill.yaml + schema --strict)\\ \scriptsize the agent surface never changes};
+\draw[-{Latex}] (sup) -- (gate);
+\draw[-{Latex}] (gate) -- (crit);
+\draw[-{Latex}] (crit) -- (cA);
+\draw[-{Latex}] (crit) -- (cB);
+\draw[-{Latex}] (cA) -- (prov);
+\draw[-{Latex}] (prov) -- (plug);
+
+% ---------------- bridge ----------------
+\draw[-{Latex}, dashed, gray] (planner.east) to[out=0,in=170] node[above, font=\scriptsize, gray]{MCP / tool API} (gate.west);
+\end{tikzpicture}
+\caption{Agency-first automation lets an LLM choose every next action that a tool then
+executes. Determinism-first automation keeps the decision of \emph{what to compute next}
+inside physical convergence criteria and exposes only a graded, audited action surface to
+the agent; the planner may still sit on top through a tool interface, but it can no longer
+bypass the gate. The two designs are complementary rather than competing.}
+\label{fig:positioning}
+\end{figure*}

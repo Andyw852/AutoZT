@@ -1,0 +1,117 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="980" height="620" viewBox="0 0 980 620"
+     font-family="Helvetica, Arial, sans-serif">
+  <defs>
+    <marker id="arw" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto">
+      <path d="M0,0 L10,4 L0,8 z" fill="#333"/>
+    </marker>
+    <marker id="arwg" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto">
+      <path d="M0,0 L10,4 L0,8 z" fill="#1a7f37"/>
+    </marker>
+  </defs>
+  <rect x="0" y="0" width="980" height="620" fill="#ffffff"/>
+
+  <text x="490" y="30" text-anchor="middle" font-size="19" font-weight="bold">
+    Agency-first vs. determinism-first automation for phonon workflows
+  </text>
+
+  <!-- ============ LEFT: agency-first ============ -->
+  <rect x="30" y="60" width="420" height="530" rx="10" fill="#fdf6f6" stroke="#c98b8b" stroke-dasharray="5 3"/>
+  <text x="240" y="86" text-anchor="middle" font-size="15" font-weight="bold" fill="#8c2f2f">
+    (a) Agency-first: LLM plans, tools execute
+  </text>
+  <text x="240" y="105" text-anchor="middle" font-size="11.5" fill="#8c2f2f">
+    e.g. AtomAgents, DREAMS
+  </text>
+
+  <rect x="120" y="125" width="240" height="46" rx="8" fill="#f6d5d5" stroke="#b56565"/>
+  <text x="240" y="147" text-anchor="middle" font-size="12.5">LLM planner / critic / executor</text>
+  <text x="240" y="163" text-anchor="middle" font-size="11" fill="#6b3535">open-ended decision making (tokens per step)</text>
+
+  <rect x="120" y="200" width="240" height="40" rx="8" fill="#efe3d5" stroke="#b59b7a"/>
+  <text x="240" y="225" text-anchor="middle" font-size="12.5">tool library (bash / ASE / VASP wrappers)</text>
+
+  <rect x="120" y="269" width="240" height="60" rx="8" fill="#e6eef7" stroke="#7d9dbf"/>
+  <text x="240" y="292" text-anchor="middle" font-size="12.5">single cluster, ad-hoc queues</text>
+  <text x="240" y="310" text-anchor="middle" font-size="11.5" fill="#3d5f82">DFT run per decision; little cross-run caching</text>
+
+  <rect x="70" y="360" width="340" height="96" rx="8" fill="#ffffff" stroke="#b56565"/>
+  <text x="240" y="382" text-anchor="middle" font-size="12" font-weight="bold" fill="#8c2f2f">
+    properties
+  </text>
+  <text x="88" y="404" font-size="11.5">+ explores unknown design space (discovery)</text>
+  <text x="88" y="423" font-size="11.5">- non-deterministic trace (hard to replay bit-exactly)</text>
+  <text x="88" y="442" font-size="11.5">- token cost grows with number of decisions</text>
+
+  <rect x="70" y="472" width="340" height="100" rx="8" fill="#fff7e6" stroke="#c9a227"/>
+  <text x="240" y="494" text-anchor="middle" font-size="12" font-weight="bold" fill="#8a6d1a">
+    safety boundary today
+  </text>
+  <text x="88" y="516" font-size="11.5">LLM holds the tools directly; failures surface</text>
+  <text x="88" y="535" font-size="11.5">only after the fact (no pre-action gate).</text>
+  <text x="88" y="557" font-size="11.5" fill="#8a6d1a">-&gt; destructive actions are one hallucination away</text>
+
+  <!-- ============ RIGHT: determinism-first ============ -->
+  <rect x="530" y="60" width="420" height="530" rx="10" fill="#f4fbf6" stroke="#7aa98a" stroke-dasharray="5 3"/>
+  <text x="740" y="86" text-anchor="middle" font-size="15" font-weight="bold" fill="#1a5c33">
+    (b) Determinism-first: criteria drive, agents supervise
+  </text>
+  <text x="740" y="105" text-anchor="middle" font-size="11.5" fill="#1a5c33">PhonoAgent</text>
+
+  <rect x="620" y="125" width="240" height="40" rx="8" fill="#e8f2ea" stroke="#7aa98a"/>
+  <text x="740" y="150" text-anchor="middle" font-size="12.5">LLM supervisor (optional, off the critical path)</text>
+
+  <rect x="600" y="188" width="280" height="52" rx="8" fill="#d9ecdf" stroke="#4f8a63" stroke-width="1.6"/>
+  <text x="740" y="210" text-anchor="middle" font-size="12.5" font-weight="bold">action gateway: act / approve</text>
+  <text x="740" y="228" text-anchor="middle" font-size="11">risk tiers - TTL approval - audit log</text>
+
+  <rect x="580" y="262" width="320" height="64" rx="8" fill="#cfe6d6" stroke="#4f8a63" stroke-width="1.6"/>
+  <text x="740" y="284" text-anchor="middle" font-size="12.5" font-weight="bold">
+    criteria engine (deterministic DAG)
+  </text>
+  <text x="740" y="302" text-anchor="middle" font-size="11">converged / imaginary frequency / marker / wall-clock</text>
+  <text x="740" y="318" text-anchor="middle" font-size="11">steady state: zero LLM calls</text>
+
+  <rect x="560" y="348" width="150" height="60" rx="8" fill="#e6eef7" stroke="#7d9dbf"/>
+  <text x="635" y="371" text-anchor="middle" font-size="11.5">cluster A</text>
+  <text x="635" y="388" text-anchor="middle" font-size="10.5" fill="#3d5f82">SLURM, CPU/DFT</text>
+  <rect x="722" y="348" width="150" height="60" rx="8" fill="#e6eef7" stroke="#7d9dbf"/>
+  <text x="797" y="371" text-anchor="middle" font-size="11.5">cluster B</text>
+  <text x="797" y="388" text-anchor="middle" font-size="10.5" fill="#3d5f82">bare GPU, no scheduler</text>
+  <text x="740" y="428" text-anchor="middle" font-size="10.5" fill="#3d5f82">
+    unified cores, inputs, supercell - per-material cluster switch
+  </text>
+
+  <rect x="560" y="441" width="360" height="66" rx="8" fill="#e8f2ea" stroke="#4f8a63"/>
+  <text x="740" y="462" text-anchor="middle" font-size="12" font-weight="bold" fill="#1a5c33">
+    provenance per step (sha256) + session archive
+  </text>
+  <text x="740" y="481" text-anchor="middle" font-size="11">prove --verify  -  replayable export  -  hash-stable reruns</text>
+  <text x="740" y="500" text-anchor="middle" font-size="10.5" fill="#3d5f82">
+    same input, same artifacts, bit-for-bit checkable
+  </text>
+
+  <rect x="560" y="523" width="360" height="52" rx="8" fill="#ffffff" stroke="#7aa98a"/>
+  <text x="740" y="543" text-anchor="middle" font-size="12" font-weight="bold" fill="#1a5c33">
+    skill plugin layer (skill.yaml + schema --strict)
+  </text>
+  <text x="740" y="561" text-anchor="middle" font-size="10.5">new skill = config + scripts; the agent surface stays unchanged</text>
+
+  <!-- arrows in (a) -->
+  <line x1="240" y1="171" x2="240" y2="198" stroke="#333" stroke-width="1.4" marker-end="url(#arw)"/>
+  <line x1="240" y1="240" x2="240" y2="267" stroke="#333" stroke-width="1.4" marker-end="url(#arw)"/>
+
+  <!-- arrows in (b) -->
+  <line x1="740" y1="165" x2="740" y2="186" stroke="#1a7f37" stroke-width="1.4" marker-end="url(#arwg)"/>
+  <line x1="740" y1="240" x2="740" y2="260" stroke="#1a7f37" stroke-width="1.4" marker-end="url(#arwg)"/>
+  <line x1="740" y1="326" x2="740" y2="346" stroke="#1a7f37" stroke-width="1.4" marker-end="url(#arwg)"/>
+  <line x1="740" y1="408" x2="740" y2="439" stroke="#1a7f37" stroke-width="1.4" marker-end="url(#arwg)"/>
+
+  <!-- bridging arrow: planner may drive the gateway -->
+  <path d="M360,150 C470,150 500,196 596,210" stroke="#666" stroke-width="1.6"
+        fill="none" stroke-dasharray="6 4" marker-end="url(#arw)"/>
+  <text x="478" y="182" text-anchor="middle" font-size="11" fill="#444">MCP / tool API</text>
+  <text x="478" y="197" text-anchor="middle" font-size="10.5" fill="#666">
+    planner keeps autonomy, gains a gate
+  </text>
+</svg>
