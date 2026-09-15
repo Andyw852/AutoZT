@@ -892,6 +892,17 @@ def cmd_status(cfg, data, mname, jname):
     if mname:
         t, m = find_material(data, mname)
         render_detail(m)
+        # work_dir 从哪一层解析来的——切集群后最容易踩的坑（项目 setting.yaml
+        # 里钉着旧集群路径，优先级高于 hpc.yaml，tf hpc 不会替你改）
+        _src = m.get("work_dir_src")
+        if not _src:
+            _ps = m.get("ps") or {}
+            _st = (_ps.get("setting") or {}) if isinstance(_ps, dict) else {}
+            _hp = (_ps.get("hpc") or {}) if isinstance(_ps, dict) else {}
+            _src = ("project_setting/setting.yaml" if _st.get("work_dir")
+                    else "project_setting/hpc.yaml" if _hp.get("work_dir")
+                    else "继承类型/集群默认")
+        print("work_dir 来源: %s" % _src)
     else:
         render_table(data)
 
