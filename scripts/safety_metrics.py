@@ -17,6 +17,7 @@
 import hashlib
 import json
 import os
+import shutil
 import subprocess
 import sys
 
@@ -26,12 +27,16 @@ sys.path.insert(0, ROOT)
 from phonoagent import mcp as M  # noqa: E402
 
 
-def _run(args, actor="mcp", timeout=300):
+def _run(args, actor="mcp", timeout=300, strict=None):
     env = dict(os.environ)
     if actor:
         env["PHONOAGENT_ACTOR"] = actor
     else:
         env.pop("PHONOAGENT_ACTOR", None)
+    if strict is None:
+        env.pop("PHONOAGENT_AGENT_STRICT", None)
+    else:
+        env["PHONOAGENT_AGENT_STRICT"] = str(strict)
     p = subprocess.run([sys.executable, PROG] + args, capture_output=True,
                        text=True, env=env, cwd=ROOT, timeout=timeout)
     return p.returncode, (p.stdout or "") + (p.stderr or "")
@@ -93,6 +98,48 @@ def metric_determinism():
             "rows": rows}
 
 
+
+def _ablation_sandbox():
+    """临时项目 + 一个只有 POSCAR 的材料：clean 在它上面执行也无害。"""
+    base = os.path.join(ROOT, "tmp", "_ablation")
+    shutil.rmtree(base, ignore_errors=True)
+    proj = os.path.join(base, "projects")
+    mat = os.path.join(proj, "Si_x")
+    os.makedirs(mat, exist_ok=True)
+    src = os.path.join(ROOT, "test", "tf_test", "Si", "POSCAR")
+    shutil.copy(src, os.path.join(mat, "POSCAR"))
+    cfg = os.path.join(base, "tf.yaml")
+    with open(cfg, "w", encoding="utf-8") as f:
+        f.write("host: \"\"\nproject_roots:\n  - %s\n"
+                "auto_advance: false\nauto_watch: false\n"
+                "task_types:\n  opt-dft-cpu:\n    max_jobs: 1\n" % proj)
+    _run(["-c", cfg, "-tt", "opt-dft-cpu", "-p", "Si_x", "init"], actor=None)
+    return cfg
+
+
+def ablation():
+    """Ablation：同一危险动作在"网关严格"与"严格关闭"下的对照。
+
+    在临时项目里放一个只有 POSCAR 的材料：严格关闭时命令会真的执行，但只清理
+    这个临时目录（无害），因此实验可以放心在 CI 里跑。
+    """
+    cfg = _ablation_sandbox()
+    rows = []
+    for strict in (1, 0):
+        rc, out = _run(["-c", cfg, "-tt", "opt-dft-cpu", "-p", "Si_x", "clean", "-y"],
+                       actor="mcp", strict=str(strict))
+        blocked = ("approve" in out or "批准" in out or "拒绝" in out)
+        rows.append({"gateway_strict": strict, "returncode": rc, "blocked": blocked,
+                     "executed": (rc == 0),
+                     "readonly_still_ok": _run(["skills"], actor="mcp",
+                                               strict=str(strict))[0] == 0})
+    with_gate, without_gate = rows[0], rows[1]
+    return {"rows": rows,
+            "gateway_blocks_hazardous": with_gate["blocked"] and not with_gate["executed"],
+            "bypass_executes_hazardous": without_gate["executed"],
+            "readonly_ok_in_both": all(r["readonly_still_ok"] for r in rows)}
+
+
 def main():
     rep = {"schema_version": "1",
            "interception": metric_interception(),
@@ -103,6 +150,22 @@ def main():
         "mis_operations": rep["interception"]["executed"],
         "determinism_rate": rep["determinism"]["determinism_rate"],
     }
+    if "--ablation" in sys.argv:
+        ab = ablation()
+        if "--json" in sys.argv:
+            print(json.dumps(ab, ensure_ascii=False, indent=1))
+        else:
+            print("== agent 安全 ablation（危险动作：clean -y 目标为不存在的材料）==")
+            print("%-16s %6s %8s %9s %10s" % ("gateway_strict", "rc", "blocked",
+                                              "executed", "readonly"))
+            for r in ab["rows"]:
+                print("%-16s %6d %8s %9s %10s" % (r["gateway_strict"], r["returncode"],
+                                                  r["blocked"], r["executed"],
+                                                  r["readonly_still_ok"]))
+            print("网关挡住危险动作: %s | 关闭严格后会真执行: %s | 只读两种设置都正常: %s"
+                  % (ab["gateway_blocks_hazardous"], ab["bypass_executes_hazardous"],
+                     ab["readonly_ok_in_both"]))
+        return 0
     if "--json" in sys.argv:
         print(json.dumps(rep, ensure_ascii=False, indent=1))
         return 0

@@ -84,3 +84,14 @@ def test_handle_serves_resource_methods():
     bad = M.handle({"jsonrpc": "2.0", "id": 8, "method": "resources/read",
                     "params": {"uri": "phonoagent://doc/nope.md"}})
     assert bad["error"]["code"] == -32602
+
+
+def test_prompts_list_and_get():
+    items = M._prompts_list()
+    assert {p["name"] for p in items} == {"triage-failures", "review-before-submit"}
+    got = M._prompt_get("review-before-submit", {"material": "Si_demo", "step": "S1_opt"})
+    assert "Si_demo" in got["messages"][0]["content"]["text"]
+    assert M._prompt_get("nope") is None
+    resp = M.handle({"jsonrpc": "2.0", "id": 9, "method": "prompts/get",
+                     "params": {"name": "nope"}})
+    assert resp["error"]["code"] == -32602

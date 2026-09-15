@@ -185,6 +185,16 @@ def handle(req):
                     "error": {"code": -32602, "message": "resource not found: %s"
                               % params.get("uri")}}
         result = got
+    elif method == "prompts/list":
+        result = {"prompts": _prompts_list()}
+    elif method == "prompts/get":
+        params = req.get("params") or {}
+        got = _prompt_get(params.get("name"), params.get("arguments"))
+        if got is None:
+            return {"jsonrpc": "2.0", "id": rid,
+                    "error": {"code": -32602, "message": "prompt not found: %s"
+                              % params.get("name")}}
+        result = got
     elif method == "tools/call":
         params = req.get("params") or {}
         result = call_tool(params.get("name"), params.get("arguments") or {})
@@ -284,3 +294,40 @@ def _resource_read(uri):
         return None
     mime = "text/markdown" if p.endswith(".md") else "application/yaml"
     return {"contents": [{"uri": uri, "mimeType": mime, "text": text[:200000]}]}
+
+# ---- MCP prompts：两个"照做就不会踩坑"的现成提词 ----
+PROMPTS = (
+    {"name": "triage-failures",
+     "description": "Look at failing steps and decide what to do, using the tool table",
+     "arguments": []},
+    {"name": "review-before-submit",
+     "description": "Check generated inputs before submitting a step",
+     "arguments": [{"name": "material", "description": "material name", "required": True},
+                   {"name": "step", "description": "step label", "required": False}]},
+)
+
+
+def _prompts_list():
+    return [{"name": p["name"], "description": p["description"],
+             "arguments": p["arguments"]} for p in PROMPTS]
+
+
+def _prompt_get(name, args=None):
+    args = args or {}
+    if name == "triage-failures":
+        text = ("Run get_summary, then get_status for every material it lists as FAIL. "
+                "For each failing step read the diagnosis, decide between retry (keep "
+                "products) and rerun (delete and regenerate), and remember that "
+                "destructive tools are refused for agent sessions: propose the command "
+                "and let a human approve it.")
+    elif name == "review-before-submit":
+        mat = args.get("material") or "<material>"
+        step = args.get("step") or "<step>"
+        text = ("Call conf_get for material %s (step %s) and get_status for the same "
+                "material. Check the effective step.conf, the remote directory reported "
+                "by status, and the work_dir source line; only then call start_step."
+                % (mat, step))
+    else:
+        return None
+    return {"description": name, "messages": [{"role": "user",
+                                               "content": {"type": "text", "text": text}}]}
