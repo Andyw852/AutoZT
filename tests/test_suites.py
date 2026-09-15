@@ -16,6 +16,11 @@ LOCAL = ["agentgate", "session", "autodeps", "history", "skillspec",
 CLUSTER = ["dropin"]
 
 
+# 干净克隆里没有 tmp/（gitignore），依赖本机测试配置的套件自动跳过
+NEEDS_TMP = {"autodeps": "tmp/tf_jzzn_smoke.yaml",
+             "uniform": "tmp/tf_jzzn_si_all.yaml"}
+
+
 def _run(name):
     p = subprocess.run([sys.executable, os.path.join(ROOT, "tests", "test_v1_%s.py" % name)],
                        capture_output=True, text=True, cwd=ROOT, timeout=1800)
@@ -25,6 +30,9 @@ def _run(name):
 
 @pytest.mark.parametrize("name", LOCAL)
 def test_local_suite(name):
+    need = NEEDS_TMP.get(name)
+    if need and not os.path.isfile(os.path.join(ROOT, need)):
+        pytest.skip("clean clone: %s is not shipped" % need)
     assert _run(name) == 0, "suite %s failed" % name
 
 
