@@ -1365,6 +1365,18 @@ def resolve_material_local(t, root, m):
     _cp = pkg_setting_path(str(m["hpc_name"]) + ".yaml")
     if _cp:
         _cluster_work_dir = (_load_yaml_file(_cp) or {}).get("work_dir")
+    # 记下 work_dir 到底来自哪一层——切集群后最容易踩的坑就是"改了 hpc，
+    # 但项目 setting.yaml 里还钉着旧集群的路径"，而它优先级最高。
+    if st.get("work_dir"):
+        m["work_dir_src"] = "project_setting/setting.yaml"
+    elif hpc.get("work_dir"):
+        m["work_dir_src"] = "project_setting/hpc.yaml"
+    elif _cluster_work_dir:
+        m["work_dir_src"] = "setting/%s.yaml (集群默认)" % m["hpc_name"]
+    elif t.get("work_dir"):
+        m["work_dir_src"] = "task_types.%s.work_dir (项目/全局配置)" % t.get("key")
+    else:
+        m["work_dir_src"] = "技能 root"
     m["work_dir_eff"] = (st.get("work_dir") or hpc.get("work_dir")
                          or _cluster_work_dir or t.get("work_dir")
                          or t.get("root"))

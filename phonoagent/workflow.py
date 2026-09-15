@@ -1202,6 +1202,11 @@ def do_submit(cfg, t, m, s, force, gen_first, contcar_cp, tag, submit=True):
         ok, out = remote_gen(cfg, t, m, s["name"], host=s.get("_host"), wd=s.get("_wd"))
         if not ok:
             print("%s: gen 失败。%s" % (tag, out))
+            print("  提示：材料 work_dir = %s（来源：%s）。切过集群后最常见的失败原因\n"
+                  "        是 project_setting/setting.yaml 里还钉着旧集群的路径——\n"
+                  "        它的优先级高于 hpc.yaml，tf hpc 不会替你改它。"
+                  % (m.get("work_dir_eff") or "(未解析)",
+                     m.get("work_dir_src") or "未知"), file=sys.stderr)
             return False
         print("%s: gen 完成。%s" % (tag, out.strip().splitlines()[-1] if out.strip() else ""))
     if contcar_cp:

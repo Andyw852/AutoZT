@@ -298,6 +298,8 @@ def render_detail(m):
         extra += "\nLocal: %s" % m["lpath"]
     if m.get("result_dir"):
         extra += "\nResult: %s" % m["result_dir"]
+    if m.get("work_dir_src"):
+        extra += "\nwork_dir 来源: %s" % m["work_dir_src"]
     print("Material: %s  (tt=%s, %s)\nDir: %s%s"
           % (m["name"], m["tt"], m["desc"], m["path"], extra))
     for s in m["steps"]:
