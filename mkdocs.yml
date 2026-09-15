@@ -15,6 +15,7 @@ nav:
   - Releasing: RELEASING.md
   - Acceptance checklist: ACCEPTANCE.md
   - Evaluation: EVALUATION.md
+  - Translating messages: I18N.md
   - Development notes:
       - Code map: dev/CONTEXT.md
       - Isolation rules: dev/DEV-ISOLATION.md
