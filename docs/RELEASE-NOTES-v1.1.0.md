@@ -2,7 +2,7 @@
 
 **Title**: v1.1.0 — MCP interface, safety metrics, cluster-switch self-checks
 
-**Tag**: v1.1.0
+**Tag**: v1.1.0   (superseded by v1.2.0: see docs/RELEASE-NOTES-v1.2.0.md)
 
 ## Highlights
 

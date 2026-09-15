@@ -17,6 +17,7 @@ nav:
   - Evaluation: EVALUATION.md
   - Translating messages: I18N.md
   - Delivery inventory: DELIVERY.md
+  - Release notes (1.2.0): RELEASE-NOTES-v1.2.0.md
   - Development notes:
       - Code map: dev/CONTEXT.md
       - Isolation rules: dev/DEV-ISOLATION.md

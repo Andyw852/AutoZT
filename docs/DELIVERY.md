@@ -50,7 +50,7 @@ Where everything lives, so a collaborator can pick the project up without asking
 
 ## Repository
 
-- Remote: github.com/Andyw852/AutoZT (private), branch master, tags v1.0.0 and v1.1.0.
+- Remote: github.com/Andyw852/AutoZT (private), branch master, tags v1.0.0, v1.1.0 and v1.2.0.
 - No DOI by choice; a GitHub release is optional and its notes are ready.
 
 ## Not done (honest list)

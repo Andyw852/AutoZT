@@ -1,4 +1,4 @@
-# Acceptance checklist (AutoZT 1.1.0)
+# Acceptance checklist (AutoZT 1.2.0)
 
 Everything below was produced and verified inside this repository. Each row names the
 artifact that carries the evidence, so a reviewer can re-run it.
