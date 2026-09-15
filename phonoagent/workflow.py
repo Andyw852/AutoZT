@@ -1285,7 +1285,8 @@ def _remote_submit_preflight(cfg, m, s, t=None):
     存在的输入清单（默认行为不变）。"""
     import subprocess
     host = str(s.get("_host") or m.get("host_eff") or cfg.get("host") or "")
-    connector = "/home/wangchao/bin/hanhai25-connect" if "hanhai" in host.lower() else ""
+    # 站点相关：HanHai 的连接助手脚本位置从配置读（hanhai_connect），不写死个人路径
+    connector = (str(cfg.get("hanhai_connect") or "") if "hanhai" in host.lower() else "")
     if connector and os.path.isfile(connector):
         p = subprocess.run([connector], capture_output=True, text=True,
                            timeout=30)

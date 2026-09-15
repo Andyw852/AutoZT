@@ -1,5 +1,7 @@
 # PhonoAgent（phonoagent）—— 多材料 · 多步骤 · 多超算 VASP/MACE 流水线管理器
 
+[![CI](https://github.com/Andyw852/PhonoAgent/actions/workflows/ci.yml/badge.svg)](https://github.com/Andyw852/PhonoAgent/actions/workflows/ci.yml) [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE) [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.XXXXXXX.svg)](https://doi.org/10.5281/zenodo.XXXXXXX)
+
 > 一句话：用一条 `phonoagent` 命令，在多个超算上自动跑完成百上千个材料的 VASP / MACE 多步计算，全程只读巡检、异常诊断、自动续跑。
 
 > **v2.0 重构**：本目录是重构版——原 7463 行单体脚本已拆成 `phonoagent/` 包（`bin/phonoagent` 为入口），代码导航见 [`CONTEXT.md`](CONTEXT.md)。原始单体保留在 `versions/v1.0/tf` 作对比基准。

@@ -1,0 +1,20 @@
+site_name: PhonoAgent
+site_description: Multi-material, multi-step, multi-cluster orchestration for VASP/MACE phonon and force-constant workflows
+repo_url: https://github.com/Andyw852/PhonoAgent
+theme:
+  name: material
+  features: [navigation.sections, content.code.copy]
+nav:
+  - Home: index.md
+  - Installation: installation.md
+  - Quick start: quickstart.md
+  - Configuring clusters: CONFIGURING.md
+  - CLI reference: cli.md
+  - Skills: skills.md
+  - Releasing: RELEASING.md
+  - Development notes:
+      - Code map: dev/CONTEXT.md
+      - Isolation rules: dev/DEV-ISOLATION.md
+      - Roadmap (v1.0): dev/V1.0-ROADMAP.md
+      - Git/ops memo (WSL): dev/WSL-GIT-OPS.md
+markdown_extensions: [admonition, tables, toc]

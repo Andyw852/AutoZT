@@ -52,14 +52,14 @@ host: jzzn                 # 默认 ssh 别名（可被项目 project_setting/hp
 # 如 C20/project_setting/tf_C20.yaml）。配置跟着项目走，加新项目 = 在项目里
 # 放一份 project_setting/tf_<项目名>.yaml（tf -p X init 可生成），不用改这里。
 project_roots:
-  - /home/wangchao/Fullerene_Network
+  - /path/to/projects
 
 # task_types：只写站点相关覆盖。技能的 steps / gen_need / aux_files 由
 # skill/<技能>/skill.yaml 自描述，tf 启动时自动发现（phonoagent skills 查看），
 # 这里不用再抄一遍。key 就是 -tt 用的短名，等于技能名。
 task_types:
   band:
-    work_dir: /public/home/wangchao/Fullerene_Network/work
+    work_dir: /public/path/to/projects/work
                            # 超算工作根：远端目录 = work_dir + 材料相对路径
     # hpc: jzzn            # 覆盖清单里的默认集群
     # plot_steps: false    # 关掉该技能清单里 optional_steps 的画图步骤组
@@ -75,7 +75,7 @@ task_types:
                            # hang_grace_rounds 轮宽限期。hang_dry_run: true 只打印不动手（观察期）。
     # steps: [...]         # 逃生口：写了就完全接管清单里的步骤定义
   elastic:
-    work_dir: /public/home/wangchao/Fullerene_Network/work
+    work_dir: /public/path/to/projects/work
 
 # 技能开关与搜索路径（都可选）
 # enabled_skills: [band, elastic]     # 白名单，写了就只启用这些
@@ -93,7 +93,7 @@ DEFAULT_PROJECT_CONFIG = """\
 task_types:
   band:
     desc: 能带计算
-    work_dir: /public/home/wangchao/Fullerene_Network/fullerene_network/test
+    work_dir: /public/path/to/projects/fullerene_network/test
     local_root: ".."       # ".." = 体系根（如 Fullerene_Network）：材料名带 C20/ 前缀，
                            # 超算目录 = work_dir/C20/qHPC20（与本地树一致，推荐）
                            # 缺省 "." = 项目目录本身：材料名 qHPC20，超算 = work_dir/qHPC20
@@ -138,7 +138,7 @@ result_dir: "{matdir}/result"     # phonoagent fetch 回拉目的地（每步一
 log_dir: "{matdir}/log"           # 该项目的操作日志 tf.log
 # work_dir 缺省继承项目配置 tf_<项目名>.yaml 里的类型定义；只在要为这个
 # 项目单独换超算工作根时才取消注释（优先级高于类型配置）：
-# work_dir: /public/home/wangchao/Fullerene_Network/fullerene_network/test
+# work_dir: /public/path/to/projects/fullerene_network/test
 # fetch 回拉的文件清单：v1.11 起由技能 skill.yaml 的 fetch_files 自描述；
 # 项目要覆盖时再取消注释、写自己的清单（否则继承技能的 fetch_files）。
 # fetch_files: [INCAR, POSCAR, POTCAR, KPOINTS, KPOINTS_OPT, kpath.json, submit.sh, OUTCAR, CONTCAR, EIGENVAL, vasprun.xml, queue.out]
