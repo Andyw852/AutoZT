@@ -1365,6 +1365,42 @@ def _remote_submit_preflight(cfg, m, s, t=None):
         print("提示：提交模板要求 --partition=%s，集群 %s 声明的是 %s；"
               "若作业卡在 PD(PartitionConfig) 就按这两处之一改。"
               % (_want, m.get("hpc_name"), _declared), file=sys.stderr)
+    # 提交模板的环境自检：模板里的 conda 环境/conda.sh 路径必须存在于目标集群。
+    # 实测教训（2026-09-15 fc-fit 切 3090）：模板激活的是 atomate2_p_a 与
+    # /public/home/wangchao/... （源集群的），激活静默失败后脚本照跑，prep 侥幸
+    # 成功、fit 一行输出都没有就退出——最难查的一类"静默死亡"。
+    _rc3, _so3 = _rrm(cfg, "sed -n '1,60p' %s 2>/dev/null" % _sub_path, host=host)
+    _acts = []
+    for _ln in (_so3 or "").splitlines():
+        _l = _ln.strip()
+        if _l.startswith("conda activate "):
+            _acts.append(("env", _l.split(None, 2)[2].strip()))
+        elif "profile.d/conda.sh" in _l:
+            _tok = _l.split()[-1]
+            if _tok.endswith(".sh"):
+                _acts.append(("sh", _tok))
+    if _acts:
+        _chk = " ; ".join(
+            ("test -f %s && echo OK-sh-%d || echo MISS-sh-%d" % (t, i, i)) if k == "sh"
+            else ("ls -d \"$HOME\"/miniconda3/envs/%s >/dev/null 2>&1 && echo OK-env-%d"
+                  " || echo MISS-env-%d" % (t, i, i))
+            for i, (k, t) in enumerate(_acts))
+        _rc4, _so4 = _rrm(cfg, _chk, host=host)
+        _miss = [t for i, (k, t) in enumerate(_acts)
+                 if ("MISS-sh-%d" % i) in (_so4 or "") or ("MISS-env-%d" % i) in (_so4 or "")]
+        if _miss:
+            _env_hint = ""
+            try:
+                _cl = _lyf(_pkg) or {}
+                _env_hint = str(_cl.get("conda_env") or "")
+            except Exception:                   # noqa: BLE001
+                pass
+            print("提示：提交模板引用的环境/路径在集群 %s 上不存在：%s\n"
+                  "      激活失败后脚本会继续跑，计算阶段可能'无日志死亡'。"
+                  "把该步 step.conf 的 CONDA_SH/CONDA_ENV 改成该集群的值%s。"
+                  % (m.get("hpc_name"), ", ".join(_miss),
+                     ("（setting/%s.yaml 里写的是 %s）" % (m.get("hpc_name"), _env_hint)
+                      if _env_hint else "")), file=sys.stderr)
     is_mace = "mace" in str(m.get("tt") or "").lower()
     # v3.24：不跑 VASP 的技能（力常数拟合等）没有 INCAR/KPOINTS，硬要求会让
     # 它永远提交不出去。技能声明了就用它的清单，否则沿用历史默认。
