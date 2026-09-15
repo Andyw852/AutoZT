@@ -1023,7 +1023,8 @@ def _summary_lines(data):
             lines.append("  FAIL %s %s %s" % (name, lab, diag))
     q = data.get("queue")
     if q and (q.get("R") or q.get("PD") or q.get("total")):
-        lines.append("队列(全部作业): R=%d PD=%d 共 %d"
+        lines.append(_i18n.t("队列(全部作业): R=%d PD=%d 共 %d",
+                            "queue (all jobs): R=%d PD=%d total %d")
                      % (q.get("R", 0), q.get("PD", 0), q.get("total", 0)))
     return lines
 
