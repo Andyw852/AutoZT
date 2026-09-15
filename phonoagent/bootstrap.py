@@ -30,7 +30,7 @@ import sys
 import time
 
 # ===== PHONOAGENT_VERSION (原 L731-L731) =====
-PHONOAGENT_VERSION = __version__   # 单一事实来源：phonoagent/__init__.py
+PHONOAGENT_VERSION = "1.1.0"   # 与 phonoagent/__init__.py 的 __version__ 保持一致（发布时两处同改）
 
 # ===== CONFIG_SEARCH (原 L735-L743) =====
 CONFIG_SEARCH = [
