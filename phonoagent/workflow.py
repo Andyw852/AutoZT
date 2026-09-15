@@ -1301,7 +1301,8 @@ def _remote_submit_preflight(cfg, m, s, t=None):
     # 无 SLURM 的机器（如 3090，靠 fakeslurm 垫片）配置里没有 partition 键，
     # 此时模板若仍写死 #SBATCH --partition=cpu192（jzzn 的分区），作业只会
     # 永远卡在 PD(PartitionConfig)——真跑 fc-fit 切集群时实测过这个坑。
-    from phonoagent import _PKG_ROOT as _PKGR, _load_yaml_file as _lyf
+    from phonoagent import (_PKG_ROOT as _PKGR, _load_yaml_file as _lyf,
+                            run_remote as _rrm)
     _pkg = os.path.join(_PKGR, "setting", str(m.get("hpc_name")) + ".yaml")
     try:
         _cc = _lyf(_pkg) or {}
@@ -1309,22 +1310,33 @@ def _remote_submit_preflight(cfg, m, s, t=None):
         _cc = {}
     _declared = str(_cc.get("partition") or _cc.get("queue") or "").strip()
     _sub_path = os.path.join(s["dir"], str(s.get("submit") or "submit.sh"))
-    _rc, _so = run_remote(cfg, "grep -h '^#SBATCH --partition=' %s 2>/dev/null | head -1"
+    _rc, _so = _rrm(cfg, "grep -h '^#SBATCH --partition=' %s 2>/dev/null | head -1"
                           % _sub_path, host=host)
     _want = ""
     if _so and "--partition=" in _so:
         _want = _so.split("--partition=", 1)[1].strip().split()[0]
     if _want and not _declared:
-        return False, ("提交模板要求 --partition=%s，但集群 %s 的配置里没有声明任何"
-                       "分区/队列（无 SLURM 的机器或未配置）。\n"
-                       "        改法：把该步骤用的提交模板（skill/<技能>/templates/**/"
-                       " 或项目 project_setting/templates/**）复制一份去掉 "
-                       "--partition 行，或给 setting/%s.yaml 补上 partition 字段。"
-                       % (_want, m.get("hpc_name"), m.get("hpc_name")))
+        # 集群没声明分区时，去该集群自带的模板里找实际使用的分区名，只做提示
+        # （实测 3090 用 fakeslurm 时 --partition=cpu192 照样能跑，硬拦会误伤）
+        _sugg = set()
+        for _f in glob.glob(os.path.join(_PKGR, "setting", str(m.get("hpc_name")),
+                                         "templates", "*.tpl")):
+            try:
+                _t = open(_f, encoding="utf-8").read()
+            except OSError:
+                continue
+            _sugg.update(re.findall(r"^#SBATCH --partition=(\S+)", _t, re.M))
+        _hint = ("该集群自带模板使用的分区名是：%s。" % ", ".join(sorted(_sugg))
+                 if _sugg else "该集群自带模板里也没写分区。")
+        print("提示：提交模板要求 --partition=%s，集群 %s 未声明分区。%s\n"
+              "      若作业一直 PD(PartitionConfig)，把该步模板复制到项目级改成正确分区名，"
+              "或给 setting/%s.yaml 补 partition 字段。" % (_want, m.get("hpc_name"),
+                                                          _hint, m.get("hpc_name")),
+              file=sys.stderr)
     if _want and _declared and _want != _declared:
-        return False, ("提交模板要求 --partition=%s，而集群 %s 声明的是 %s；"
-                       "请改模板或改 setting/%s.yaml 的 partition 字段。"
-                       % (_want, m.get("hpc_name"), _declared, m.get("hpc_name")))
+        print("提示：提交模板要求 --partition=%s，集群 %s 声明的是 %s；"
+              "若作业卡在 PD(PartitionConfig) 就按这两处之一改。"
+              % (_want, m.get("hpc_name"), _declared), file=sys.stderr)
     is_mace = "mace" in str(m.get("tt") or "").lower()
     # v3.24：不跑 VASP 的技能（力常数拟合等）没有 INCAR/KPOINTS，硬要求会让
     # 它永远提交不出去。技能声明了就用它的清单，否则沿用历史默认。
