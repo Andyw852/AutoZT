@@ -26,11 +26,20 @@ does nothing harmful.
     gateway_strict   rc  blocked  executed  readonly_still_ok
     1                 3    True     False     True
     0                 0    False    True      True
+    read-only profile: 6 of 14 tools exposed; hazardous tool call refused = True
 
-Reading: with the gateway enforced the action is refused before dispatch and no state
-changes; with the strictness switched off the same command executes (which is why the
-gateway exists, and why approvals are TTY-only). Read-only commands behave identically in
-both settings, so supervision is not impaired.
+Three arms, all measured by the same script:
+
+| Arm | Setting | Behaviour |
+|---|---|---|
+| A gateway enforced | PHONOAGENT_AGENT_STRICT=1 | hazardous action refused before dispatch (rc=3), nothing executed |
+| B gateway switched off | PHONOAGENT_AGENT_STRICT=0 | the very same command executes (only inside the throwaway sandbox) |
+| C read-only profile | PHONOAGENT_MCP_READONLY=1 | mutating and destructive verbs are not exposed at all (6 of 14 tools); a direct call to them is refused too |
+
+Reading: arm A is the default for agent sessions; arm B shows what the gateway prevents,
+which is the reason approvals are TTY-only and destructive verbs carry their own risk tier;
+arm C is the posture for "let the agent look but not touch", enforced one level earlier
+than a refusal (the verb is absent from the tool table, and the dispatcher double-checks).
 
 ## 2. Reproducibility
 

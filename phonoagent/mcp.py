@@ -127,6 +127,11 @@ def call_tool(name, args):
         return {"isError": True, "content": [{"type": "text",
                 "text": "unknown tool: %s" % name}]}
     _n, _d, _schema, risk, verb = BY_NAME[name]
+    if readonly_profile() and risk != "read":
+        return {"isError": True, "content": [{"type": "text",
+                "text": "tool %s is not exposed in the read-only profile "
+                        "(PHONOAGENT_MCP_READONLY=1)" % name}],
+                "structuredContent": {"risk": risk, "schema_version": SCHEMA_VERSION}}
     args = args or {}
     argv = _mat_args(args)
     if name == "conf_get":
@@ -155,9 +160,22 @@ def call_tool(name, args):
                                   "schema_version": SCHEMA_VERSION}}
 
 
+def readonly_profile():
+    """只读档：PHONOAGENT_MCP_READONLY 为真时只暴露 read 档工具。
+
+    给"只让 agent 看、不让它动"的场景用：变更/破坏性动词在协议层就不出现，
+    比"出现但被拒"更省事，也更难被绕过。
+    """
+    v = (os.environ.get("PHONOAGENT_MCP_READONLY") or "").strip().lower()
+    return v in ("1", "true", "yes", "on")
+
+
 def _tools_list():
     out = []
+    only_read = readonly_profile()
     for name, desc, schema, risk, _verb in TOOLS:
+        if only_read and risk != "read":
+            continue
         s = dict(schema)
         s["description"] = desc
         s["x-risk"] = risk

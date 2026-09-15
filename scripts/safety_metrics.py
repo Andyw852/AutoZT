@@ -133,8 +133,23 @@ def ablation():
                      "executed": (rc == 0),
                      "readonly_still_ok": _run(["skills"], actor="mcp",
                                                strict=str(strict))[0] == 0})
+    # 第三臂：只读档下暴露多少工具、危险工具能否被调用
+    env_backup = os.environ.get("PHONOAGENT_MCP_READONLY")
+    os.environ["PHONOAGENT_MCP_READONLY"] = "1"
+    try:
+        import importlib
+        M = importlib.import_module("phonoagent.mcp")
+        exposed = len(M._tools_list())
+        refused = M.call_tool("clean_material", {"material": "Si_x"})
+    finally:
+        if env_backup is None:
+            os.environ.pop("PHONOAGENT_MCP_READONLY", None)
+        else:
+            os.environ["PHONOAGENT_MCP_READONLY"] = env_backup
+    readonly_arm = {"tools_exposed": exposed,
+                    "hazardous_call_refused": bool(refused.get("isError"))}
     with_gate, without_gate = rows[0], rows[1]
-    return {"rows": rows,
+    return {"rows": rows, "readonly_profile": readonly_arm,
             "gateway_blocks_hazardous": with_gate["blocked"] and not with_gate["executed"],
             "bypass_executes_hazardous": without_gate["executed"],
             "readonly_ok_in_both": all(r["readonly_still_ok"] for r in rows)}
@@ -162,6 +177,9 @@ def main():
                 print("%-16s %6d %8s %9s %10s" % (r["gateway_strict"], r["returncode"],
                                                   r["blocked"], r["executed"],
                                                   r["readonly_still_ok"]))
+            ra = ab["readonly_profile"]
+            print("只读档：暴露工具 %d 个；危险工具调用被拒 = %s"
+                  % (ra["tools_exposed"], ra["hazardous_call_refused"]))
             print("网关挡住危险动作: %s | 关闭严格后会真执行: %s | 只读两种设置都正常: %s"
                   % (ab["gateway_blocks_hazardous"], ab["bypass_executes_hazardous"],
                      ab["readonly_ok_in_both"]))

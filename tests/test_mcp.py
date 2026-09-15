@@ -95,3 +95,18 @@ def test_prompts_list_and_get():
     resp = M.handle({"jsonrpc": "2.0", "id": 9, "method": "prompts/get",
                      "params": {"name": "nope"}})
     assert resp["error"]["code"] == -32602
+
+
+def test_readonly_profile_hides_hazardous_tools(monkeypatch=None):
+    import os
+    os.environ["PHONOAGENT_MCP_READONLY"] = "1"
+    try:
+        names = [t["name"] for t in M._tools_list()]
+        assert names, "只读档不该为空"
+        assert all(n in {x[0] for x in M.TOOLS if x[3] == "read"} for n in names)
+        res = M.call_tool("clean_material", {"material": "Si_x"})
+        assert res["isError"], "只读档下危险工具必须被拒"
+    finally:
+        os.environ.pop("PHONOAGENT_MCP_READONLY", None)
+    full = [t["name"] for t in M._tools_list()]
+    assert len(full) > len(names), "默认档应比只读档暴露更多工具"
