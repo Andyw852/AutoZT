@@ -10,6 +10,7 @@
 
 协议：JSON-RPC 2.0 over stdio，支持 initialize / tools/list / tools/call（MCP 最小可用集）。
 """
+import glob
 import json
 import os
 import subprocess
@@ -174,6 +175,16 @@ def handle(req):
                   "serverInfo": {"name": "phonoagent", "version": SCHEMA_VERSION}}
     elif method in ("tools/list", "list_tools"):
         result = {"tools": _tools_list()}
+    elif method == "resources/list":
+        result = {"resources": _resources_list()}
+    elif method == "resources/read":
+        params = req.get("params") or {}
+        got = _resource_read(params.get("uri"))
+        if got is None:
+            return {"jsonrpc": "2.0", "id": rid,
+                    "error": {"code": -32602, "message": "resource not found: %s"
+                              % params.get("uri")}}
+        result = got
     elif method == "tools/call":
         params = req.get("params") or {}
         result = call_tool(params.get("name"), params.get("arguments") or {})
@@ -214,3 +225,62 @@ def main(argv=None):
 
 if __name__ == "__main__":
     sys.exit(main())
+
+# ---- MCP resources：把技能与项目文档作为只读资源暴露（agent 直接拿到上下文）----
+def _skill_dirs():
+    return sorted(d for d in glob.glob(os.path.join(ROOT, "skill", "*"))
+                  if os.path.isdir(d))
+
+
+def _resources_list():
+    out = []
+    for d in _skill_dirs():
+        name = os.path.basename(d)
+        for f in ("skill.yaml", "README.md"):
+            p = os.path.join(d, f)
+            if os.path.isfile(p):
+                out.append({"uri": "phonoagent://skill/%s/%s" % (name, f),
+                            "name": "%s/%s" % (name, f),
+                            "mimeType": "text/markdown" if f.endswith(".md")
+                            else "application/yaml"})
+    for f in ("README.md", "README.en.md", "CHANGELOG.md", "docs/ACCEPTANCE.md",
+              "docs/CONFIGURING.md", "docs/mcp.md"):
+        if os.path.isfile(os.path.join(ROOT, f)):
+            out.append({"uri": "phonoagent://doc/%s" % f, "name": f,
+                        "mimeType": "text/markdown"})
+    return out
+
+
+def _resource_path(uri):
+    """phonoagent://skill/<name>/<file> 或 phonoagent://doc/<path> → 仓库内真实路径。
+
+    只允许仓库内的常规文件：任何 .. 或绝对路径都拒绝（agent 不能借资源接口越权读盘）。
+    """
+    if not isinstance(uri, str) or not uri.startswith("phonoagent://"):
+        return None
+    rest = uri[len("phonoagent://"):]
+    if rest.startswith("skill/"):
+        rel = os.path.join(rest.split("/", 1)[0], rest.split("/", 1)[1])
+    elif rest.startswith("doc/"):
+        rel = rest[len("doc/"):]
+    else:
+        return None
+    if ".." in rel.split("/") or rel.startswith("/"):
+        return None
+    p = os.path.realpath(os.path.join(ROOT, rel))
+    root = os.path.realpath(ROOT)
+    if not p.startswith(root + os.sep) or not os.path.isfile(p):
+        return None
+    return p
+
+
+def _resource_read(uri):
+    p = _resource_path(uri)
+    if not p:
+        return None
+    try:
+        text = open(p, encoding="utf-8", errors="replace").read()
+    except OSError:
+        return None
+    mime = "text/markdown" if p.endswith(".md") else "application/yaml"
+    return {"contents": [{"uri": uri, "mimeType": mime, "text": text[:200000]}]}

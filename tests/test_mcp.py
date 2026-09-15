@@ -57,3 +57,30 @@ def test_destructive_tool_goes_through_gateway():
     text = out + err
     assert rc != 0, "破坏性动作在 agent 会话下必须被拒"
     assert "approve" in text or "批准" in text, text[:200]
+
+
+def test_resources_list_exposes_skill_docs():
+    items = M._resources_list()
+    uris = [r["uri"] for r in items]
+    assert items and any(u.startswith("phonoagent://skill/") for u in uris)
+    assert any(u.endswith("/skill.yaml") for u in uris)
+
+
+def test_resources_read_returns_file_content():
+    uri = "phonoagent://doc/README.en.md"
+    got = M._resource_read(uri)
+    assert got and got["contents"][0]["text"].startswith("# PhonoAgent")
+
+
+def test_resources_read_refuses_traversal_and_unknown():
+    assert M._resource_read("phonoagent://doc/../../etc/passwd") is None
+    assert M._resource_read("phonoagent://doc/does-not-exist.md") is None
+    assert M._resource_read("http://example.com/x") is None
+
+
+def test_handle_serves_resource_methods():
+    resp = M.handle({"jsonrpc": "2.0", "id": 7, "method": "resources/list"})
+    assert resp["result"]["resources"]
+    bad = M.handle({"jsonrpc": "2.0", "id": 8, "method": "resources/read",
+                    "params": {"uri": "phonoagent://doc/nope.md"}})
+    assert bad["error"]["code"] == -32602

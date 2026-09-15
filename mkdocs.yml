@@ -13,6 +13,7 @@ nav:
   - Skills: skills.md
   - MCP interface: mcp.md
   - Releasing: RELEASING.md
+  - Acceptance checklist: ACCEPTANCE.md
   - Development notes:
       - Code map: dev/CONTEXT.md
       - Isolation rules: dev/DEV-ISOLATION.md
