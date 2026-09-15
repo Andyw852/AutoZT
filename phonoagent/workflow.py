@@ -2277,8 +2277,17 @@ def _start_ready(cfg, t, m, force, incl_scancel=False, gate=None):
                 gate.release(m["tt"])
             fails += 1
     if not fired and not fails:
-        print("%s[%s]：没有可启动的步骤（都在跑、已完成，或被依赖卡住）。"
-              % (m["name"], m["tt"]))
+        # FAIL 步骤不在 DAG 的 actives 里，-f 也救不了它（-f 只对已选中的 FAIL 生效）。
+        # 这种情况提示语要给出真正可执行的命令，而不是"都在跑/已完成/被依赖卡住"。
+        _fails = [x for x in m["steps"] if x.get("kind") == "FAIL" and not x.get("done")]
+        if _fails:
+            print("%s[%s]：没有可启动的步骤。有 %d 个 FAIL 步骤需要显式指定才能重交：\n"
+                  "        phonoagent -tt %s -p %s -j %s start -f"
+                  % (m["name"], m["tt"], len(_fails), m["tt"], m["name"],
+                     _fails[0].get("label") or _fails[0]["name"]))
+        else:
+            print("%s[%s]：没有可启动的步骤（都在跑、已完成，或被依赖卡住）。"
+                  % (m["name"], m["tt"]))
     return fails
 
 # ===== _retry_targets (原 L3864-L3866) =====
