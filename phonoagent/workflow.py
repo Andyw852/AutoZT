@@ -1310,11 +1310,7 @@ def _remote_submit_preflight(cfg, m, s, t=None):
         _cc = {}
     _declared = str(_cc.get("partition") or _cc.get("queue") or "").strip()
     _sub_path = os.path.join(s["dir"], str(s.get("submit") or "submit.sh"))
-    _rc, _so = _rrm(cfg, "grep -h '^#SBATCH --partition=' %s 2>/dev/null | head -1"
-                          % _sub_path, host=host)
-    _want = ""
-    if _so and "--partition=" in _so:
-        _want = _so.split("--partition=", 1)[1].strip().split()[0]
+    _want = (_res.get("partition") or "").strip()
     if _want and not _declared:
         # 集群没声明分区时，去该集群自带的模板里找实际使用的分区名，只做提示
         # （实测 3090 用 fakeslurm 时 --partition=cpu192 照样能跑，硬拦会误伤）
@@ -1336,31 +1332,19 @@ def _remote_submit_preflight(cfg, m, s, t=None):
     # 资源申请自检：--cpus-per-task × --ntasks-per-node 不能超过集群声明的上限。
     # 实测教训（2026-09-15 fc-fit 切 3090）：模板写 --cpus-per-task=48 而机器只给
     # 24 → 作业永远 PD(PartitionConfig)，日志里一个字都不说；改成 24 立刻开跑。
+    from phonoagent import preflight as _pf
     _mc = 0
     try:
         _mc = int(_cc.get("max_cpus") or _cc.get("max_cpus_per_task") or 0)
     except (TypeError, ValueError):
         _mc = 0
+    # 一次读回 submit.sh 头部，分区/资源/conda 三项检查共用（省一次 ssh 往返）
+    _rc3, _so3 = _rrm(cfg, "sed -n '1,60p' %s 2>/dev/null" % _sub_path, host=host)
+    _res = _pf.parse_submit(_so3 or "")
     if _mc:
-        _rc2, _so2 = _rrm(cfg, "grep -hE '^#SBATCH --(cpus-per-task|ntasks-per-node)=' %s"
-                               " 2>/dev/null" % _sub_path, host=host)
-        _cpt = _npn = 0
-        for _ln in (_so2 or "").splitlines():
-            try:
-                _v = int(_ln.split("=", 1)[1].strip())
-            except (IndexError, ValueError):
-                continue
-            if "cpus-per-task" in _ln:
-                _cpt = _v
-            elif "ntasks-per-node" in _ln:
-                _npn = _v
-        _need = _cpt * max(_npn, 1)
-        if _need > _mc:
-            print("提示：提交模板申请 %d 核（cpus-per-task=%d × ntasks-per-node=%d），"
-                  "集群 %s 声明上限 %d。\n"
-                  "      实测这种超配会让作业永远 PD(PartitionConfig) 且日志无提示；"
-                  "把该步模板复制到项目级并把 cpus-per-task 降到 %d 以内。"
-                  % (_need, _cpt, _npn, m.get("hpc_name"), _mc, _mc), file=sys.stderr)
+        _rmsg = _pf.check_resources(_res, _mc)
+        if _rmsg:
+            print(_rmsg, file=sys.stderr)
     if _want and _declared and _want != _declared:
         print("提示：提交模板要求 --partition=%s，集群 %s 声明的是 %s；"
               "若作业卡在 PD(PartitionConfig) 就按这两处之一改。"
@@ -1369,8 +1353,6 @@ def _remote_submit_preflight(cfg, m, s, t=None):
     # 实测教训（2026-09-15 fc-fit 切 3090）：模板激活的是 atomate2_p_a 与
     # /public/home/wangchao/... （源集群的），激活静默失败后脚本照跑，prep 侥幸
     # 成功、fit 一行输出都没有就退出——最难查的一类"静默死亡"。
-    _rc3, _so3 = _rrm(cfg, "sed -n '1,60p' %s 2>/dev/null" % _sub_path, host=host)
-    from phonoagent import preflight as _pf
     _acts = _pf.parse_conda_activations(_so3 or "")
     if _acts:
         _chk = _pf.conda_probe_command(_acts)
