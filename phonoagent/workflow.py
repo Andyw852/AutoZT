@@ -1370,24 +1370,12 @@ def _remote_submit_preflight(cfg, m, s, t=None):
     # /public/home/wangchao/... （源集群的），激活静默失败后脚本照跑，prep 侥幸
     # 成功、fit 一行输出都没有就退出——最难查的一类"静默死亡"。
     _rc3, _so3 = _rrm(cfg, "sed -n '1,60p' %s 2>/dev/null" % _sub_path, host=host)
-    _acts = []
-    for _ln in (_so3 or "").splitlines():
-        _l = _ln.strip()
-        if _l.startswith("conda activate "):
-            _acts.append(("env", _l.split(None, 2)[2].strip()))
-        elif "profile.d/conda.sh" in _l:
-            _tok = _l.split()[-1]
-            if _tok.endswith(".sh"):
-                _acts.append(("sh", _tok))
+    from phonoagent import preflight as _pf
+    _acts = _pf.parse_conda_activations(_so3 or "")
     if _acts:
-        _chk = " ; ".join(
-            ("test -f %s && echo OK-sh-%d || echo MISS-sh-%d" % (t, i, i)) if k == "sh"
-            else ("ls -d \"$HOME\"/miniconda3/envs/%s >/dev/null 2>&1 && echo OK-env-%d"
-                  " || echo MISS-env-%d" % (t, i, i))
-            for i, (k, t) in enumerate(_acts))
+        _chk = _pf.conda_probe_command(_acts)
         _rc4, _so4 = _rrm(cfg, _chk, host=host)
-        _miss = [t for i, (k, t) in enumerate(_acts)
-                 if ("MISS-sh-%d" % i) in (_so4 or "") or ("MISS-env-%d" % i) in (_so4 or "")]
+        _miss = _pf.missing_activations(_acts, _so4)
         if _miss:
             _env_hint = ""
             try:
