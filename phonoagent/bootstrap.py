@@ -235,7 +235,7 @@ _LEVEL_HEADER = "# step.conf —— 本材料共用参数（BANDGAP 由 tf level
 
 # ===== USAGE (原 L6489-L6653) =====
 QUICK_USAGE = """\
-用法：tf [-tt 技能] [-p 材料] [-j 步骤] 命令
+用法：phonoagent [-tt 技能] [-p 材料] [-j 步骤] 命令
 
 查看：
   summary [--diff]    只读汇总；--diff 无变化静默

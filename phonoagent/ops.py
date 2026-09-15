@@ -1243,7 +1243,7 @@ def cmd_hpc(cfg, types, projs, cluster, tt, yes):
     集群主配置 = 包内 setting/<集群名>.yaml（照 jzzn.yaml 建）；其 template_map
     指向的模板文件须能被找到（skill/<技能>/、project_setting/ 或 <技能>/）。"""
     if not cluster:
-        print("错误：缺集群名。用法：tf -p 项目[,项目...] [-tt 技能] hpc <集群名>")
+        print("错误：缺集群名。用法：phonoagent -p 项目[,项目...] [-tt 技能] hpc <集群名>")
         return 1
     if not projs:
         print("错误：hpc 必须用 -p 显式指定项目（逗号分隔多个）；未指定的不动。")
@@ -1591,7 +1591,7 @@ def cmd_adopt(cfg, types, proj, yes, dry, tt):
       第 2 步（并入迁移）：重新载入配置+采集，逐材料 migrate-subdir——远端
                           step* 移进 <技能>/、项目配置开 skill_subdir；
                           有作业在跑的跳过，算完再跑一次 adopt 即可。
-    用法：tf -tt band adopt [--dry-run] [-y] [-p MAT]"""
+    用法：phonoagent -tt band adopt [--dry-run] [-y] [-p MAT]"""
     if not tt:
         print("错误：adopt 需要 -tt 指定接管哪个技能（如 tf -tt band adopt）。")
         return 1

@@ -1,0 +1,24 @@
+cff-version: 1.2.0
+title: "PhonoAgent: multi-cluster orchestration for high-throughput phonon and force-constant workflows"
+message: "If you use PhonoAgent in your research, please cite it as below."
+type: software
+authors:
+  - family-names: "wangchao"
+    given-names: ""
+version: 1.0.0
+date-released: "2026-09-15"
+license: MIT
+repository-code: "https://github.com/Andyw852/PhonoAgent"
+keywords:
+  - phonons
+  - force constants
+  - high-throughput
+  - VASP
+  - MACE
+  - workflow
+abstract: >-
+  PhonoAgent orchestrates multi-step DFT (VASP) and machine-learning-potential (MACE)
+  workflows for phonon and force-constant calculations across several HPC clusters.
+  It provides criterion-driven step advancement, provenance tracking, reproducible
+  session export, an approval gate for agent-driven actions, and a drop-in interface
+  for new skills.

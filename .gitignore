@@ -76,3 +76,17 @@ processes_local.f90
 
 # 3090 集成测试残留 step.conf（不进仓库）
 step.conf.sb3090
+
+# ---- 不再分发：模型权重与赝势（各站点自行准备）----
+*.model
+*.pt
+*.pth
+POTCAR
+POTCAR.*
+# ---- 站点配置：模板照发，真实配置不发 ----
+setting/*.yaml
+!setting/template-cluster.yaml
+# ---- 开发期临时物与配图 ----
+output/
+hfeshell_tmp/
+Codex 图像*.png

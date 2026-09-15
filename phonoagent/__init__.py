@@ -1,3 +1,7 @@
+__version__ = "1.0.0"
+__agent_name__ = "PhonoAgent"
+__cli_name__ = "phonoagent"
+
 # -*- coding: utf-8 -*-
 """phonoagent —— taskflow v2 包（深模块化重构完成）。
 
