@@ -1297,6 +1297,34 @@ def _remote_submit_preflight(cfg, m, s, t=None):
                            timeout=30)
         if p.returncode != 0:
             return False, (p.stderr or p.stdout or "hanhai25-connect 失败").strip()
+    # 目标集群与提交模板自洽性：模板里的 --partition 必须能在该集群落地。
+    # 无 SLURM 的机器（如 3090，靠 fakeslurm 垫片）配置里没有 partition 键，
+    # 此时模板若仍写死 #SBATCH --partition=cpu192（jzzn 的分区），作业只会
+    # 永远卡在 PD(PartitionConfig)——真跑 fc-fit 切集群时实测过这个坑。
+    from phonoagent import _PKG_ROOT as _PKGR, _load_yaml_file as _lyf
+    _pkg = os.path.join(_PKGR, "setting", str(m.get("hpc_name")) + ".yaml")
+    try:
+        _cc = _lyf(_pkg) or {}
+    except Exception:                       # noqa: BLE001
+        _cc = {}
+    _declared = str(_cc.get("partition") or _cc.get("queue") or "").strip()
+    _sub_path = os.path.join(s["dir"], str(s.get("submit") or "submit.sh"))
+    _rc, _so = run_remote(cfg, "grep -h '^#SBATCH --partition=' %s 2>/dev/null | head -1"
+                          % _sub_path, host=host)
+    _want = ""
+    if _so and "--partition=" in _so:
+        _want = _so.split("--partition=", 1)[1].strip().split()[0]
+    if _want and not _declared:
+        return False, ("提交模板要求 --partition=%s，但集群 %s 的配置里没有声明任何"
+                       "分区/队列（无 SLURM 的机器或未配置）。\n"
+                       "        改法：把该步骤用的提交模板（skill/<技能>/templates/**/"
+                       " 或项目 project_setting/templates/**）复制一份去掉 "
+                       "--partition 行，或给 setting/%s.yaml 补上 partition 字段。"
+                       % (_want, m.get("hpc_name"), m.get("hpc_name")))
+    if _want and _declared and _want != _declared:
+        return False, ("提交模板要求 --partition=%s，而集群 %s 声明的是 %s；"
+                       "请改模板或改 setting/%s.yaml 的 partition 字段。"
+                       % (_want, m.get("hpc_name"), _declared, m.get("hpc_name")))
     is_mace = "mace" in str(m.get("tt") or "").lower()
     # v3.24：不跑 VASP 的技能（力常数拟合等）没有 INCAR/KPOINTS，硬要求会让
     # 它永远提交不出去。技能声明了就用它的清单，否则沿用历史默认。
