@@ -11,6 +11,7 @@ nav:
   - Configuring clusters: CONFIGURING.md
   - CLI reference: cli.md
   - Skills: skills.md
+  - MCP interface: mcp.md
   - Releasing: RELEASING.md
   - Development notes:
       - Code map: dev/CONTEXT.md

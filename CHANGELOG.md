@@ -3,6 +3,24 @@
 All notable changes to PhonoAgent are documented here.
 This project adheres to Semantic Versioning; versions before 1.0.0 are development snapshots.
 
+## [Unreleased]
+
+### Added
+- docs/mcp.md: the MCP interface (tool table, risk tiers, measured safety numbers).
+
+### Fixed
+- Cluster-switch self-checks, each backed by a real failure observed in testing:
+  work_dir provenance is printed by status; resource requests above the cluster's
+  declared max_cpus are flagged; a partition the target cluster does not use is
+  reported with the partitions its own templates use; and conda environments or
+  conda.sh paths that do not exist on the target cluster are flagged before
+  submission (this was the cause of a silent stage death: activation failed, the
+  preparation stage still passed and the fit stage exited without a message).
+- start now prints the exact command needed to resubmit a FAIL step
+  (phonoagent -tt SKILL -p MATERIAL -j STEP start -f) instead of claiming that all
+  steps are running, finished or dependency-blocked.
+- docs/CONFIGURING.md section 5 documents the four cluster-switch traps.
+
 ## [1.1.0] - 2026-09-15
 
 ### Added
