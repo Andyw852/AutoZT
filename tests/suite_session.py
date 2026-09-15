@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""v1.0 自测：会话导出 phonoagent session export（P1-7）。
+"""v1.0 自测：会话导出 autozt session export（P1-7）。
 
 纯本地：tmp/_session_test/ 里造一份假材料 + 假 history.jsonl + 假 agent 审计 +
 假 provenance.json，然后调 cmd_session 打包，逐项验证包内容、sha256、过滤与
@@ -14,7 +14,7 @@ import tarfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
-from phonoagent import cmd_session, agent_audit                    # noqa: E402
+from autozt import cmd_session, agent_audit                    # noqa: E402
 
 BASE = os.path.join(ROOT, "tmp", "_session_test")
 FAILS = []

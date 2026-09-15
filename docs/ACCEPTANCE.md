@@ -1,4 +1,4 @@
-# Acceptance checklist (PhonoAgent 1.1.0)
+# Acceptance checklist (AutoZT 1.1.0)
 
 Everything below was produced and verified inside this repository. Each row names the
 artifact that carries the evidence, so a reviewer can re-run it.
@@ -7,10 +7,10 @@ artifact that carries the evidence, so a reviewer can re-run it.
 
 | Item | Evidence |
 |---|---|
-| CLI works under both names (phonoagent, pa) | bin/phonoagent, bin/pa; pyproject scripts |
-| English help | PHONOAGENT_LANG=en pa --help (50 lines, 29 commands, no Chinese left) |
-| MCP server (JSON-RPC over stdio) | phonoagent mcp; tests/test_mcp.py 6/6 |
-| 14 generic MCP tools, capped at 20 | phonoagent mcp --list-tools; test asserts tool names are skill-agnostic |
+| CLI works under both names (autozt, pa) | bin/autozt, bin/pa; pyproject scripts |
+| English help | AUTOZT_LANG=en pa --help (50 lines, 29 commands, no Chinese left) |
+| MCP server (JSON-RPC over stdio) | autozt mcp; tests/test_mcp.py 6/6 |
+| 14 generic MCP tools, capped at 20 | autozt mcp --list-tools; test asserts tool names are skill-agnostic |
 
 ## 2. Safety
 
@@ -28,7 +28,7 @@ artifact that carries the evidence, so a reviewer can re-run it.
 |---|---|---|
 | provenance verification on a real cluster | 17/17 comparable inputs byte-identical | pa ... prove --verify on a completed material |
 | local output determinism | 100% | scripts/safety_metrics.py |
-| reproducible archive | session export (manifest + per-file sha256 + replay hints) | phonoagent/session.py; tests/suite_session.py |
+| reproducible archive | session export (manifest + per-file sha256 + replay hints) | autozt/session.py; tests/suite_session.py |
 
 ## 4. Skill coverage (real runs)
 

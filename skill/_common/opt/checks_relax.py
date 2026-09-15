@@ -87,7 +87,7 @@ def ck_relax_injob(d, sc):
     done, planned, half, skipped = _stage_progress(d)
     if planned and done >= planned:
         return False, ("%d 段全部跑完但未收敛 —— 看 OUTCAR.s* / OSZICAR.s* 定位是哪一段"
-                       "开始震荡，调完 step.conf 后 phonoagent retry" % planned)
+                       "开始震荡，调完 step.conf 后 autozt retry" % planned)
     if half:
         return False, ("第 %d 段中断（有 .started 无 .done）：可能撞墙钟或被看门狗杀掉；"
                        "重投会从 CONTCAR 续跑" % (done + 1))

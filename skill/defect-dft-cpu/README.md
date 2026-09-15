@@ -4,7 +4,7 @@
 做本征缺陷形成能并判断 P/N 型。band+ELF 只能给带隙与带边，P/N 与"最容易的缺陷"
 必须靠缺陷超胞总能，且必须用下面这版修正后的方法论。
 
-## 流程（5 步，全自动，phonoagent 一条龙）
+## 流程（5 步，全自动，autozt 一条龙）
 
 | 步 | 内容 | 类型 |
 |---|---|---|
@@ -61,7 +61,7 @@
 
 - jzzn（默认）：VASP 6.4.3 + POTCAR 库(potpaw_PBE_54/64) + 192 核节点，HSE+SOC 唯一现实选择。
 - 3090：仅 CPU VASP（vasp_normal，24 核，无 GPU-VASP），且未找到 POTCAR 库——只适合补
-  POTCAR 后跑 PBE 批；HSE 在 24 核上不现实。切换： phonoagent -p 材料名 hpc 3090
+  POTCAR 后跑 PBE 批；HSE 在 24 核上不现实。切换： autozt -p 材料名 hpc 3090
 
 ## 使用（全自动，5 步一条龙）
 
@@ -69,7 +69,7 @@
 2. 一次性准备凸包参考相（只需做一次，4 材料共享）：把 9 个相 POSCAR 放进
    REFERENCES_DIR/convex_hull_references/<相>/POSCAR（Pb_fcc、Sn_beta、Sb_rhombo、
    Bi_rhombo、Te_trig、PbTe_rs、SnTe_rs、Sb2Te3、Bi2Te3）。
-3. phonoagent -tt defect-dft-cpu -p 材料名 init → 检查 → start 提交 → watch 无人值守。
+3. autozt -tt defect-dft-cpu -p 材料名 init → 检查 → start 提交 → watch 无人值守。
    S0 参考相与 S1 bulk 并行；S4 自动跑凸包出化学势、再算形成能/转变能级/P-N。
 4. 补 energies.json 的物理量（凸包只填 mu，还需手动/脚本补）：
    E_gap（band 步）、epsilon（静态介电常数）、mstar_e/mstar_h（有效质量）。
@@ -83,7 +83,7 @@
 
 ## 自动化（v1.11）
 
-- 挂死自动恢复：phonoagent watch 用**进度指纹**判定挂死——(OUTCAR 字节数, OSZICAR 行数)
+- 挂死自动恢复：autozt watch 用**进度指纹**判定挂死——(OUTCAR 字节数, OSZICAR 行数)
   连续 hang_min_stale_rounds（默认 2）轮不变且输出年龄超 hang_stale_secs 才算
   （指纹在涨 = 活着；SCF 迭代 rms 还在降 = 慢但活着，都不判）。判定后按原因处理：
   SCF 空转 → 自动升级 INCAR（补 AMIX/BMIX → ALGO=All → NELM≥200，原子写+备份
@@ -91,7 +91,7 @@
   hang_grace_rounds 轮宽限期；NODE_FAIL → 直接重跑；磁盘满 → 只告警不重跑。
   每个作业最多 hang_max_retries 次，计数在 <配置目录>/.tf_hung.json；超限只告警。
   ★当前 hang_dry_run: true（观察期只打印判定不动手），确认无误后改 false。
-  参数优先级：项目 setting.yaml > 技能 task_types.defect-dft-cpu.* > 全局 phonoagent.yaml >
+  参数优先级：项目 setting.yaml > 技能 task_types.defect-dft-cpu.* > 全局 autozt.yaml >
   默认。关掉写 hang_check: false，不想自动改 INCAR 写 hang_fix_scf: false。
 - SOC 缺陷弛豫 SCF 易空转（空位悬挂键电荷涨落），INCAR 模板默认 ALGO=All + AMIX=0.1 +
   BMIX=0.0001（精细混合），配合上面的挂死自动恢复，整条流水线可无人值守。

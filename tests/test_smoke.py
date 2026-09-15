@@ -1,10 +1,10 @@
-"""PhonoAgent 冒烟测试（不需要集群）。pytest -q 即可；需要真集群的用例打 cluster 标记。"""
+"""AutoZT 冒烟测试（不需要集群）。pytest -q 即可；需要真集群的用例打 cluster 标记。"""
 import os
 import subprocess
 import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-PROG = os.path.join(ROOT, "bin", "phonoagent")
+PROG = os.path.join(ROOT, "bin", "autozt")
 
 
 def run(*args):
@@ -15,13 +15,13 @@ def run(*args):
 def test_version_banner_names_the_tool():
     p = run("--version")
     out = (p.stdout or "") + (p.stderr or "")
-    assert "PhonoAgent" in out and "phonoagent" in out
+    assert "AutoZT" in out and "autozt" in out
     assert "taskflow" not in out and "(tf)" not in out
 
 
 def test_help_uses_new_cli_name():
     out = (lambda p: (p.stdout or "") + (p.stderr or ""))(run("--help"))
-    assert "phonoagent" in out and "用法：tf" not in out
+    assert "autozt" in out and "用法：tf" not in out
 
 
 def test_skills_and_schema():
@@ -31,8 +31,8 @@ def test_skills_and_schema():
 
 def test_package_has_version():
     sys.path.insert(0, ROOT)
-    import phonoagent
-    assert phonoagent.__version__.count(".") >= 1
+    import autozt
+    assert autozt.__version__.count(".") >= 1
 
 
 def test_publication_metadata_present():

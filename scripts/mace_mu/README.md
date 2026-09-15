@@ -6,7 +6,7 @@
 形成能：`E_form = E_tot − Σ n_i·μ_i`，μ 就是公式里的"参考态能量"。E_form < 0 = 相对参考态（石墨碳 + 块体金属）热力学稳定。
 
 ## 为什么在本地跑
-脚本很小（38 个金属小胞 + 1 个 α-Mn 58 原子），本地 CPU 几分钟就跑完，无需走超算排队。模型文件用 PhonoAgent 技能自带副本（kl-mace-cpu/templates/mace/MACE-matpes-pbe-omat-ft.model，与超算一致）。
+脚本很小（38 个金属小胞 + 1 个 α-Mn 58 原子），本地 CPU 几分钟就跑完，无需走超算排队。模型文件用 AutoZT 技能自带副本（kl-mace-cpu/templates/mace/MACE-matpes-pbe-omat-ft.model，与超算一致）。
 
 ## 用法
 ```bash

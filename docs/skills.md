@@ -1,7 +1,7 @@
 # Skills
 
 A skill is a directory under skill/ with a skill.yaml declaring its steps, generation
-scripts, convergence criteria and default cluster. PhonoAgent ships 18 skills:
+scripts, convergence criteria and default cluster. AutoZT ships 18 skills:
 
 | Family | Skills |
 |---|---|
@@ -10,5 +10,5 @@ scripts, convergence criteria and default cluster. PhonoAgent ships 18 skills:
 | Auxiliary | te-screen (thermoelectric surrogate screening), unihamgnn (graph data generation) |
 | Fitting | fc-fit (phono3py / pheasy / hiphive force-constant fitting) |
 
-Adding a skill means adding a directory; phonoagent schema --strict validates it against
+Adding a skill means adding a directory; autozt schema --strict validates it against
 the skill schema.

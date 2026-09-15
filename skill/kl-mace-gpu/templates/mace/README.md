@@ -1,15 +1,15 @@
 # templates/mace/ —— MACE 模型库
 
-放 `.model` 权重文件的地方。**它是本地模型库，不是 phonoagent 的模板搜索路径。**
+放 `.model` 权重文件的地方。**它是本地模型库，不是 autozt 的模板搜索路径。**
 
-先把这一条说清楚，免得你把模型丢进来发现远端找不到：phonoagent 找 `gen_need` 里的文件时，
+先把这一条说清楚，免得你把模型丢进来发现远端找不到：autozt 找 `gen_need` 里的文件时，
 搜索链是
 
 ```
 templates/<步骤名>/ → templates/ → <技能根>/ → _common/… 
 ```
 
-`templates/mace/` **不在这条链上**（它不是步骤名）。所以模型放这里 phonoagent 不会自动推。
+`templates/mace/` **不在这条链上**（它不是步骤名）。所以模型放这里 autozt 不会自动推。
 这是刻意的——`mace-mp` medium 权重 ~130 MB，`large` ~600 MB，按 `gen_need` 推送
 意味着**每个材料的每一步都要比一次 md5、可能推一遍**，几十个材料下来纯属折磨 ssh。
 
@@ -28,8 +28,8 @@ bash skill/kl-mace-gpu/templates/mace/push_model.sh jzzn /public/home/wangchao/s
 然后在 step.conf 里指名字（路径由 `MACE_MODEL_DIR` 提供）：
 
 ```
-phonoagent -tt kl-mace-gpu -p <材料> conf --set params.MACE_MODEL=mace-mpa-0-medium.model
-phonoagent -tt kl-mace-gpu -p <材料> conf --set params.MACE_MODEL_DIR=/public/home/wangchao/software/mace_models
+autozt -tt kl-mace-gpu -p <材料> conf --set params.MACE_MODEL=mace-mpa-0-medium.model
+autozt -tt kl-mace-gpu -p <材料> conf --set params.MACE_MODEL_DIR=/public/home/wangchao/software/mace_models
 ```
 
 `MACE_MODEL_DIR` 一般写进全局 `templates/step.conf` 一次就够，不用每个材料设。
@@ -37,7 +37,7 @@ phonoagent -tt kl-mace-gpu -p <材料> conf --set params.MACE_MODEL_DIR=/public/
 ## 备选：跟着 gen_need 走（小模型 / 每个材料用不同微调模型时）
 
 把 `.model` 拷进 `templates/step2_disp_force/` 和 `templates/step1_mace_relax/`，
-再把文件名加进 `skill.yaml` 里这两步的 `gen_need`。phonoagent 就会把它推到材料目录，
+再把文件名加进 `skill.yaml` 里这两步的 `gen_need`。autozt 就会把它推到材料目录，
 `MACE_MODEL` 只写文件名即可（脚本会在步骤目录、材料目录里找）。
 
 代价前面说了：每个材料一份副本。**只有在不同材料要用不同模型时才值得**（比如你为

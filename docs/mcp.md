@@ -1,12 +1,12 @@
 # MCP interface
 
-PhonoAgent can expose itself as a Model Context Protocol (MCP) server so that an
+AutoZT can expose itself as a Model Context Protocol (MCP) server so that an
 LLM-driven planner (or any MCP-capable client) can drive the workflow without bespoke
 glue code, while every dangerous action still passes through the approval gate.
 
-    phonoagent mcp                 # JSON-RPC 2.0 over stdio: initialize / tools/list / tools/call
-    phonoagent mcp --list-tools    # print the tool table (for humans and tests)
-    phonoagent mcp --call NAME JSON
+    autozt mcp                 # JSON-RPC 2.0 over stdio: initialize / tools/list / tools/call
+    autozt mcp --list-tools    # print the tool table (for humans and tests)
+    autozt mcp --call NAME JSON
 
 ## Design rules
 

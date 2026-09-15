@@ -33,11 +33,11 @@ S2_plot  (login node, optional)  phonon band figures from fc2.hdf5
 
 ~~~bash
 cd <material root>
-phonoagent -tt fc-fit -p <material> -j step1_fit conf          # effective parameters
-phonoagent -tt fc-fit -p <material> -j step1_fit \
+autozt -tt fc-fit -p <material> -j step1_fit conf          # effective parameters
+autozt -tt fc-fit -p <material> -j step1_fit \
    conf --set params.FIT_ENGINE=hiphive               # switch engine
-phonoagent -tt fc-fit -p <material> start                     # generate inputs + submit
-phonoagent -tt fc-fit -p <material> status                    # collect and inspect
+autozt -tt fc-fit -p <material> start                     # generate inputs + submit
+autozt -tt fc-fit -p <material> status                    # collect and inspect
 ~~~
 
 The gen step locates the dataset automatically. It searches `step4_disp`,
@@ -50,7 +50,7 @@ whose step starts with `step*disp*` or `step*force*`, so a producer that does
 not exist yet is found without editing anything. Point it somewhere else explicitly:
 
 ~~~bash
-phonoagent -tt fc-fit -p <material> -j step1_fit \
+autozt -tt fc-fit -p <material> -j step1_fit \
    conf --set params.FIT_INPUT_DIR=../<other-skill>/<step>
 ~~~
 
@@ -269,7 +269,7 @@ step1_fit/
   queue.out queue.err      job log
 ~~~
 
-`phonon_summary.json` carries `tool_ok`, `stable` and `min_frequency_THz`, so phonoagent's
+`phonon_summary.json` carries `tool_ok`, `stable` and `min_frequency_THz`, so autozt's
 built-in `phonon` judge gives three outcomes:
 
 * **stable** - the step is done, downstream steps may run;
@@ -349,11 +349,11 @@ end-to-end thermal-conductivity workflow. `fc-fit` is for fitting force
 constants on their own - from a dataset another skill produced, from a
 hand-assembled dataset, or as a sandbox for comparing engines on the same data.
 
-## PhonoAgent integration notes
+## AutoZT integration notes
 
-Two things are specific to how this skill plugs into `phonoagent`:
+Two things are specific to how this skill plugs into `autozt`:
 
-* **`submit_required`.** `phonoagent/workflow.py::_remote_submit_preflight` checks,
+* **`submit_required`.** `autozt/workflow.py::_remote_submit_preflight` checks,
   before every `sbatch`, that the step's inputs exist locally, and its
   historical default is `INCAR, POSCAR, KPOINTS, submit.sh` for anything whose
   skill name does not contain *mace*. A fitting skill runs no VASP and its gen
@@ -365,10 +365,10 @@ Two things are specific to how this skill plugs into `phonoagent`:
   submit_required: [fit_config.json, submit.sh]
   ~~~
 
-  `phonoagent/bootstrap.py` carries the key through `_MANIFEST_TYPE_KEYS`, and the
+  `autozt/bootstrap.py` carries the key through `_MANIFEST_TYPE_KEYS`, and the
   preflight falls back to the old default when a skill does not declare it,
   so every existing skill behaves exactly as before.
-* **The dataset is not part of the skill.** `phonoagent` pushes only the gen, its
+* **The dataset is not part of the skill.** `autozt` pushes only the gen, its
   `gen_need` files and the templates; the displacement+force dataset stays
   where it is. Point `FIT_INPUT_DIR` at it (an absolute path on the cluster
   works) or let the auto-search find a sibling `kl-*`/`phonon-*` step.
@@ -379,7 +379,7 @@ The rows below were run with the `atomate2_p_a` environment, pinned to what
 the jzzn login node has (phonopy 2.47.1, phono3py 3.24.0, symfc 1.6.0,
 hiphive 1.5, numpy 2.3.5), by invoking the compute-node driver directly — the
 same `prep` / `fit` / `post` sequence the submit script runs -, except the
-last row, which is a real `phonoagent start` submission. Datasets: the 250-atom BaS
+last row, which is a real `autozt start` submission. Datasets: the 250-atom BaS
 supercell produced by `kl-dft-cpu` (10 frames, `phono3py_params.yaml`), a
 16-atom / 100-frame model dataset in the three array layouts, and a 128-atom
 Si 4x4x4 supercell (90 frames) on the cluster.
@@ -393,7 +393,7 @@ Si 4x4x4 supercell (90 frames) on the cluster.
 | 16 atoms, fc2+fc3 | hiphive (streaming fc3 writers, `shengbte/FORCE_CONSTANTS_3RD` written) | stable, RMSE 0.14 % |
 | 16 atoms, fc2 | hiphive, pkl-only dataset (auto-detected, supercell deduced) | stable, mesh min -9.9e-08 THz |
 | BaS 250 atoms | plot step (optional S2_plot, login node) | both PNGs + `phonon_band_summary.json`, bands 0-21 THz |
-| Si 128 atoms, 90 frames, fc2 | pheasy OLS, c2 = 5 A, submitted through `phonoagent start` to jzzn | ran on cu18, gate **stable**, but 80 % fit error -- the cutoff is far too tight, see below |
+| Si 128 atoms, 90 frames, fc2 | pheasy OLS, c2 = 5 A, submitted through `autozt start` to jzzn | ran on cu18, gate **stable**, but 80 % fit error -- the cutoff is far too tight, see below |
 | Si 128 atoms, 90 frames, fc2+fc3 | pheasy OLS, c2 = inf, c3 = 5 A, same dataset | 147 free IFCs and 69.5 % relative error -- **identical to the user's own bench run**; gate correctly reports **imaginary** |
 
 The three-way judge was exercised in all three states: **stable** (cases
@@ -402,9 +402,9 @@ above), **imaginary** (the deliberately under-fitted pheasy run, mesh min
 route was checked against an ASE-Atoms supercell, which made the gate exit
 non-zero instead of reporting a false verdict).
 
-### Cluster run (jzzn, through `phonoagent`)
+### Cluster run (jzzn, through `autozt`)
 
-A real submission, `phonoagent -tt fc-fit -p Si_fcfit -j step1_fit start`, on a
+A real submission, `autozt -tt fc-fit -p Si_fcfit -j step1_fit start`, on a
 2-atom Si cell / 128-atom 4x4x4 supercell / 90-frame pkl dataset on the
 shared filesystem: job `3828909` ran on `cu18` and produced
 `fc2.hdf5`, `shengbte/FORCE_CONSTANTS_2ND`, `phonon_summary.json`

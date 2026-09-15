@@ -12,8 +12,8 @@ import json
 
 # ===== _dbg_t (原 L6656-L6660) =====
 def _dbg_t(label, t0):
-    """PHONOAGENT_DEBUG_TIME=1 时向 stderr 打印各阶段耗时。"""
-    if os.environ.get("PHONOAGENT_DEBUG_TIME"):
+    """AUTOZT_DEBUG_TIME=1 时向 stderr 打印各阶段耗时。"""
+    if os.environ.get("AUTOZT_DEBUG_TIME"):
         import time as _t
         print("[计时] %s: %.1fs" % (label, _t.time() - t0), file=sys.stderr)
 
@@ -82,7 +82,7 @@ def _state_cache_load(cfg, types, tt, root, ttl):
 # ===== collect_data (原 L6733-L6765) =====
 def collect_data(cfg, types):
     """按类型采集全部材料状态（远端/本地两段路径），供各命令及 watch 循环复用。"""
-    from phonoagent import (collect, collect_v3_batch, _dedup_segments, annotate,
+    from autozt import (collect, collect_v3_batch, _dedup_segments, annotate,
                        _queue_total, check_duplicates)
     data_types = []
     queue_by_host = {}
@@ -119,7 +119,7 @@ def collect_data(cfg, types):
 # ===== apply_exclude (原 L6768-L6776) =====
 def apply_exclude(data, exclude):
     """-x：跳过指定项目（全名 / basename / <项目名>/<完整名>，逗号分隔）。"""
-    from phonoagent import _name_matches
+    from autozt import _name_matches
     if not exclude:
         return
     ex = [x.strip() for x in exclude.split(",") if x.strip()]
@@ -130,7 +130,7 @@ def apply_exclude(data, exclude):
 # ===== filter_projs (原 L6779-L6787) =====
 def filter_projs(data, projs):
     """只保留指定材料（全名 / basename / <项目名>/<完整名>）；空列表 = 不过滤。"""
-    from phonoagent import _name_matches
+    from autozt import _name_matches
     if not projs:
         return
     want = [x for x in projs if x]
@@ -143,7 +143,7 @@ def filter_status(data, spec):
     """v1.4 -status：只保留"有步骤处于指定状态"的材料（对任意命令生效：
     status 只看它们，start/retry/rerun/stop 只操作它们）。
     状态词大小写不限、支持别名，逗号分隔多个。"""
-    from phonoagent import STATUS_ALIAS
+    from autozt import STATUS_ALIAS
     kinds = set()
     for x in str(spec or "").split(","):
         x = x.strip()

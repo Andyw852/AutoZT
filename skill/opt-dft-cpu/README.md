@@ -13,9 +13,9 @@ S3_energy   能量后处理（登录节点，读 E_tot + 组分 + step.conf 参�
 
 ```bash
 # 在含 POSCAR 的材料的上级目录，或项目目录里
-phonoagent -tt opt-dft-cpu init                    # 生成 project_setting/
-phonoagent -tt opt-dft-cpu -p <材料> start         # 推进（先 gen 再提交）
-phonoagent -tt opt-dft-cpu -p <材料> status        # 看状态
+autozt -tt opt-dft-cpu init                    # 生成 project_setting/
+autozt -tt opt-dft-cpu -p <材料> start         # 推进（先 gen 再提交）
+autozt -tt opt-dft-cpu -p <材料> status        # 看状态
 ```
 
 第一步结束后 `S3_energy` 会自动算能并把 `energy_summary.json` 拉回本地。
@@ -54,10 +54,10 @@ phonoagent -tt opt-dft-cpu -p <材料> status        # 看状态
 ## 参考能量怎么填（改 step3）
 
 ```bash
-phonoagent -tt opt-dft-cpu -p <材料> -j 3 conf --set params.MU="C:-9.0 Li:-1.9"
-phonoagent -tt opt-dft-cpu -p <材料> -j 3 conf --set params.GUEST_ELEMENT=Li
-phonoagent -tt opt-dft-cpu -p <材料> -j 3 conf --set params.HOST_ENERGY=-1400.0
-phonoagent -tt opt-dft-cpu -p <材料> -j 3 conf --set params.MU_GUEST=-1.9
+autozt -tt opt-dft-cpu -p <材料> -j 3 conf --set params.MU="C:-9.0 Li:-1.9"
+autozt -tt opt-dft-cpu -p <材料> -j 3 conf --set params.GUEST_ELEMENT=Li
+autozt -tt opt-dft-cpu -p <材料> -j 3 conf --set params.HOST_ENERGY=-1400.0
+autozt -tt opt-dft-cpu -p <材料> -j 3 conf --set params.MU_GUEST=-1.9
 ```
 
 - `MU`：元素化学势，单位 eV/原子。μ_C 常用石墨/石墨烯每原子总能，μ_Li 用 bcc Li 每原子总能。

@@ -4,8 +4,8 @@
 本文只写 CPU 版特有的东西。
 
 ```
-phonoagent -tt kl-mace-cpu -p <材料> init
-phonoagent -tt kl-mace-cpu -p <材料> start
+autozt -tt kl-mace-cpu -p <材料> init
+autozt -tt kl-mace-cpu -p <材料> start
 ```
 
 ## 为什么还要 CPU 版
@@ -33,9 +33,9 @@ phonoagent -tt kl-mace-cpu -p <材料> start
 | `MACE_MODEL` 换 small | 最后才考虑 | 快 2~3 倍，但势的质量下降、虚频判断更不可信 |
 
 ```bash
-phonoagent -tt kl-mace-cpu -p <材料> -j step2_disp_force conf --set params.METHOD=random
-phonoagent -tt kl-mace-cpu -p <材料> -j step2_disp_force conf --set params.N_RANDOM=120   # 固定帧数；不设=auto
-phonoagent -tt kl-mace-cpu -p <材料> -j step2_disp_force conf --set params.FC2_SUPERCELL="5 5 5"
+autozt -tt kl-mace-cpu -p <材料> -j step2_disp_force conf --set params.METHOD=random
+autozt -tt kl-mace-cpu -p <材料> -j step2_disp_force conf --set params.N_RANDOM=120   # 固定帧数；不设=auto
+autozt -tt kl-mace-cpu -p <材料> -j step2_disp_force conf --set params.FC2_SUPERCELL="5 5 5"
 ```
 
 默认值：`MIN_SC_LEN=12`、`KAPPA_MESH=15 15 15`（2D 自动将真空轴设为 1，z 真空即 `15 15 1`；默认关闭 `MESH_SCAN`）、`CKPT=10`、`N_RANDOM=auto`（按 ALM 数出的
@@ -50,12 +50,12 @@ MACE 靠 torch 线程并行，`mpirun -np N` 只会起 N 份互相抢核的独�
 MACE 在 CPU 上的线程扩展性一般 16~32 核就饱和，整节点 48 核未必快多少，还要多等队列。
 第一次跑完看 `mace_forces.log` 里的「帧/s」，再决定下次申请多少。
 
-`CKPT=10` 意味着每 10 帧落一次盘。作业被墙钟砍掉后 `phonoagent -tt kl-mace-cpu -p <材料> retry`
+`CKPT=10` 意味着每 10 帧落一次盘。作业被墙钟砍掉后 `autozt -tt kl-mace-cpu -p <材料> retry`
 从断点接着跑，不用从头再来——CPU 版跑得久，这个比 GPU 版更常用到。
 
 ## 起始结构：复用其它链的 CONTCAR
 
-kl 链的 S1（MACE 弛豫）从**材料根目录的 `POSCAR`** 开始（phonoagent 的 gen 一律从材料根取初始
+kl 链的 S1（MACE 弛豫）从**材料根目录的 `POSCAR`** 开始（autozt 的 gen 一律从材料根取初始
 结构，技能子目录里的 POSCAR 不被使用），**总是会重新弛豫**（MACE 势自己的极小点），但
 起始点越接近极小，离子步越少、越稳。
 
@@ -91,7 +91,7 @@ step4_kappa 的 `SOLVER` 支持 `phono3py`（默认）与 `shengbte`（三声子
     从 fc2/fc3.hdf5 转 ShengBTE 格式（格式已验证：Si RTA κ 与 phono3py 一致）。
 - **运行**：`SOLVER=shengbte` + step4 step.conf 填 `SHENGBTE_EXE`（按集群绝对路径）：
   - jzzn = `/public/home/wangchao/software/sousaw-shengbte-aocl/ShengBTE`（CPU/AOCL）
-  - 3090 = `/home/wangchaoyue852/software/PhonoAgent/shengbte-gpu/ShengBTE`（GPU fork，~4.6x）
+  - 3090 = `/home/wangchaoyue852/software/AutoZT/shengbte-gpu/ShengBTE`（GPU fork，~4.6x）
 - **3090 GPU 注意**：ShengBTE GPU 用 2020 CUDA fork（phonopy fc2 输入已验证正确）。
   FourPhonon v1.3 官方 OpenACC GPU 版对 phonopy fc2 有 bug（κ 错 67-71x）勿用；
   但它的 CPU 版（`fourphonon-v13/bin_cpu`）是完整超集（含四声子）。

@@ -1,4 +1,4 @@
-# PhonoAgent v1.1.0 — release notes (ready to paste into the GitHub Release form)
+# AutoZT v1.1.0 — release notes (ready to paste into the GitHub Release form)
 
 **Title**: v1.1.0 — MCP interface, safety metrics, cluster-switch self-checks
 
@@ -6,7 +6,7 @@
 
 ## Highlights
 
-- **MCP interface.** PhonoAgent now speaks the Model Context Protocol over stdio
+- **MCP interface.** AutoZT now speaks the Model Context Protocol over stdio
   (initialize / tools/list / tools/call) so an LLM planner can drive it directly. The
   tool table holds 14 generic verbs and is capped at 20: skills are discovered from
   skill.yaml, so adding a skill never adds a tool. Read-only tools call the CLI
@@ -23,8 +23,8 @@
   supplied it), resource requests above the cluster's declared max_cpus, a partition the
   target cluster does not use, and conda environments or conda.sh paths that do not exist
   on the target cluster (that one used to kill a stage without writing any log line).
-- **Short command.** Both phonoagent and pa are installed; they are the same program.
-- **English help.** PHONOAGENT_LANG=en (or --lang en) prints the complete command
+- **Short command.** Both autozt and pa are installed; they are the same program.
+- **English help.** AUTOZT_LANG=en (or --lang en) prints the complete command
   reference in English; the i18n mechanism and an inventory script
   (scripts/i18n_report.py) make the remaining runtime messages incrementally translatable.
 
@@ -39,6 +39,6 @@
 
 ## Notes
 
-- PhonoAgent does not redistribute pseudopotentials, MACE model weights or third-party
+- AutoZT does not redistribute pseudopotentials, MACE model weights or third-party
   training data; obtain them from their licensed sources.
 - Configuration for your own clusters: docs/CONFIGURING.md.

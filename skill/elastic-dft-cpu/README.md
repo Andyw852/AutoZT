@@ -1,6 +1,6 @@
 # skill/el —— 弹性 / 力学性能计算技能
 
-在 PhonoAgent 的 bd（能带）技能同一套框架上扩展的力学性能流水线。输入一个 POSCAR
+在 AutoZT 的 bd（能带）技能同一套框架上扩展的力学性能流水线。输入一个 POSCAR
 （原胞或任意标准胞，2D/3D 皆可），自动完成：**标准化 → 弛豫 → 弹性常数 → 力学性能+出图**。
 2D/3D 全程自适应；输出体/剪切/杨氏模量、泊松比、Born 稳定性、Pugh/Cauchy、硬度、
 各向异性、Debye 温度、声速，2D 则给面内刚度(N/m)与 Y₂D/ν₂D。
@@ -23,7 +23,7 @@
 | `README.md`                 | 本文件 |
 
 > 轨迹诊断（判震荡）已**内联进 `step1_check_and_resubmit.py`**，不再单独放 `relax_diag.py`。
-> 若你希望 phonoagent 主程序也共用同一份诊断，可把该段抽成模块两边 import；单技能自用则内联即可。
+> 若你希望 autozt 主程序也共用同一份诊断，可把该段抽成模块两边 import；单技能自用则内联即可。
 
 ---
 
@@ -93,7 +93,7 @@ python step2_check_and_resubmit.py     # 查弹性张量是否算出
 python gen_step3_postprocess.py        # 本地后处理 + 出图 -> step3_postprocess/
 ```
 
-### 注册进 phonoagent（`setting/tf.yaml` 的 `task_types:` 下）
+### 注册进 autozt（`setting/tf.yaml` 的 `task_types:` 下）
 ```yaml
   elastic-dft-cpu:
     desc: 弹性/力学性能

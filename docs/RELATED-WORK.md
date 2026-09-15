@@ -1,4 +1,4 @@
-# Related work: PhonoAgent against agentic and workflow systems
+# Related work: AutoZT against agentic and workflow systems
 
 Sources read locally (extracted text): AtomAgents (PNAS 2025, 10.1073/pnas.2414074122,
 12 pages) and DREAMS (arXiv:2507.14267v2, 91 pages). Line numbers below refer to the
@@ -31,20 +31,20 @@ reproducibility, determinism, token/API cost or provenance. The correct statemen
 
 ## 2. Defensible differences (rewritten after reading the sources)
 
-| Dimension | DREAMS / AtomAgents | PhonoAgent | Basis |
+| Dimension | DREAMS / AtomAgents | AutoZT | Basis |
 |---|---|---|---|
 | Where the loop decision lives | LLM agents decide and a critic/judge validates the decision | Physical criteria decide (converged / imaginary frequency / marker); the steady-state loop contains no LLM call | own repository (verifiable) vs DREAMS/AtomAgents architecture |
-| Nature of the safety guard | Guard lives inside the agent stack (validation of values, provenance checks, judge) | Guard lives at the tool boundary: risk tiers, TTY-only time-bounded human approval, audit log; agent never receives an ungated destructive command | DREAMS line 19/253 vs PhonoAgent gateway |
-| Provenance granularity | Claim-level provenance graph audited by a judge | Artifact-level: per-file sha256 per step, verifiable archive, replayable session export | DREAMS line 24 vs PhonoAgent prov/session |
-| Determinism target | Deterministic validation of values and parameters inside the agent's reasoning | Deterministic execution: same input, same artifacts, hash-checkable reruns | DREAMS line 149/284 vs PhonoAgent prove --verify |
-| Infrastructure model | One HPC cluster, scheduler managed by an HPC agent | Heterogeneous: multiple real SLURM clusters plus a scheduler-less GPU host, per-material cluster choice, mixed DFT and MLIP steps | DREAMS line 289 vs PhonoAgent config/status |
-| Cost model | Token cost per agent decision (reported by DREAMS) | Zero LLM calls in steady state; LLM only on failure paths | DREAMS line token counts vs PhonoAgent rule engine |
+| Nature of the safety guard | Guard lives inside the agent stack (validation of values, provenance checks, judge) | Guard lives at the tool boundary: risk tiers, TTY-only time-bounded human approval, audit log; agent never receives an ungated destructive command | DREAMS line 19/253 vs AutoZT gateway |
+| Provenance granularity | Claim-level provenance graph audited by a judge | Artifact-level: per-file sha256 per step, verifiable archive, replayable session export | DREAMS line 24 vs AutoZT prov/session |
+| Determinism target | Deterministic validation of values and parameters inside the agent's reasoning | Deterministic execution: same input, same artifacts, hash-checkable reruns | DREAMS line 149/284 vs AutoZT prove --verify |
+| Infrastructure model | One HPC cluster, scheduler managed by an HPC agent | Heterogeneous: multiple real SLURM clusters plus a scheduler-less GPU host, per-material cluster choice, mixed DFT and MLIP steps | DREAMS line 289 vs AutoZT config/status |
+| Cost model | Token cost per agent decision (reported by DREAMS) | Zero LLM calls in steady state; LLM only on failure paths | DREAMS line token counts vs AutoZT rule engine |
 | Scope | Open-ended research and discovery campaigns | Production throughput on known pipelines, with explicit refusal when a capability is unsupported | both sources |
 
 ## 3. Honest positioning sentence
 
-PhonoAgent does not claim to be the first system with a safety guard, provenance or HPC
-awareness; DREAMS already combines those inside an agentic research engine. PhonoAgent
+AutoZT does not claim to be the first system with a safety guard, provenance or HPC
+awareness; DREAMS already combines those inside an agentic research engine. AutoZT
 differs in WHERE those guarantees live and WHAT they cover: its guarantees are attached
 to the execution substrate (criteria, per-file artifacts, action gate, multi-cluster
 scheduler) rather than to the reasoning stack, they are measurable (interception rate,

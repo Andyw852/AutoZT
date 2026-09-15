@@ -52,8 +52,8 @@ if [ ${#_py[@]} -gt 0 ]; then
     echo "pyflakes 通过"
   fi
 fi
-# 交互确认（PHONOAGENT_PUSH_YES=1 跳过，供脚本/CI 用）
-if [ "${PHONOAGENT_PUSH_YES:-0}" != "1" ]; then
+# 交互确认（AUTOZT_PUSH_YES=1 跳过，供脚本/CI 用）
+if [ "${AUTOZT_PUSH_YES:-0}" != "1" ]; then
   read -r -p "确认把上面这些改动 sanitize 并推到 GitHub？[y/N] " _ans
   case "${_ans:-}" in y|Y|yes) ;; *) echo "已取消"; exit 1;; esac
 fi

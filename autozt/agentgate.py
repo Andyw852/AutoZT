@@ -2,30 +2,30 @@
 """agentgate —— LLM 动作网关 + 审计（v1.0 P0-1）。
 
 **要解决的问题**：tf 分不清"人敲的"和"agent 敲的"。LLM 会话里一次手滑的
-`phonoagent rerun` 就会 rm -rf 掉算完的步骤目录，事后连"谁、什么时候、下的什么手"
+`autozt rerun` 就会 rm -rf 掉算完的步骤目录，事后连"谁、什么时候、下的什么手"
 都查不到（材料目录里的 tf.log 只记成功动作，不记被拒的调用、没有 actor）。
 
 **做法**（两层，都不改既有命令的行为）：
 
-1. **网关 `phonoagent act <真实命令>`** —— agent 的唯一入口。命令按风险分三档：
+1. **网关 `autozt act <真实命令>`** —— agent 的唯一入口。命令按风险分三档：
    - `read`（list/summary/status/dir/skills/skill/schema/history/prove/probe/
      config/help/diagnose/session，以及任何带 `--dry-run` 的调用）：直接放行；
    - `mutate`（start/retry/fetch/init/adopt/level/hpc/auto/conf --set/correct/
      monitor…）：放行（本来就是 agent 该干的事）；
    - `destructive`（stop/rerun/clean/migrate-subdir/`correct -y`，以及任何带
      `-f`/`--force`/`-y`/`--yes`/`--purge-config` 的调用）：**必须人工批准**。
-     人工在**交互终端**里跑一次 `phonoagent approve <同一条命令>`（非 TTY 直接拒绝——
+     人工在**交互终端**里跑一次 `autozt approve <同一条命令>`（非 TTY 直接拒绝——
      agent 没法自己批准自己）；批准按"命令签名"记账，默认 15 分钟、一次用完即销。
 
-2. **审计 `.tf_agent_log.jsonl`**（落在配置目录）：每次 `phonoagent act` 调用都追加一条
+2. **审计 `.tf_agent_log.jsonl`**（落在配置目录）：每次 `autozt act` 调用都追加一条
    {ts, actor, cmd, argv, risk, decision, exit_code, dur, cwd, approved_by, …}
-   ——放行、拒绝、失败都记。另外，agent 会话（环境变量 `PHONOAGENT_ACTOR` 已设）**直接**
+   ——放行、拒绝、失败都记。另外，agent 会话（环境变量 `AUTOZT_ACTOR` 已设）**直接**
    敲 tf 也会记一条（decision=direct），堵住"绕过网关就没人知道"。
 
 **边界与开关**：
-- 不设 `PHONOAGENT_ACTOR` 且不用 `phonoagent act` → 行为与本改动前**完全一致**；
-- 设了 `PHONOAGENT_ACTOR` → 直接调用也审计；破坏性动作是否要令牌由 `PHONOAGENT_AGENT_STRICT`
-  决定（缺省：设了 PHONOAGENT_ACTOR 就严格；`PHONOAGENT_AGENT_STRICT=0` 可关，给用户自己的
+- 不设 `AUTOZT_ACTOR` 且不用 `autozt act` → 行为与本改动前**完全一致**；
+- 设了 `AUTOZT_ACTOR` → 直接调用也审计；破坏性动作是否要令牌由 `AUTOZT_AGENT_STRICT`
+  决定（缺省：设了 AUTOZT_ACTOR 就严格；`AUTOZT_AGENT_STRICT=0` 可关，给用户自己的
   定时脚本留后门）；
 - 只写配置目录下的两个文件，不碰材料目录、不碰超算、不发任何网络请求。
 
@@ -44,10 +44,10 @@ import subprocess
 # 审计与批准落盘位置（都在**配置目录**里，和 history.jsonl / .tf_hung.json 同级）
 AGENT_LOG_NAME = ".tf_agent_log.jsonl"
 AGENT_APPROVAL_NAME = ".tf_approvals.json"
-AGENT_ACTOR_ENV = "PHONOAGENT_ACTOR"
-AGENT_STRICT_ENV = "PHONOAGENT_AGENT_STRICT"
-AGENT_GATEWAY_ENV = "PHONOAGENT_AGENT_GATEWAY"     # 网关子进程用它避免重复记账
-AGENT_TTL_ENV = "PHONOAGENT_APPROVE_TTL"
+AGENT_ACTOR_ENV = "AUTOZT_ACTOR"
+AGENT_STRICT_ENV = "AUTOZT_AGENT_STRICT"
+AGENT_GATEWAY_ENV = "AUTOZT_AGENT_GATEWAY"     # 网关子进程用它避免重复记账
+AGENT_TTL_ENV = "AUTOZT_APPROVE_TTL"
 AGENT_TTL_DEFAULT = 900                    # 批准有效期（秒）
 
 # 三档风险：read / mutate / destructive
@@ -62,7 +62,7 @@ AGENT_MUTATE_CMDS = {
 AGENT_DESTRUCTIVE_CMDS = {"stop", "rerun", "clean", "migrate-subdir"}
 AGENT_DESTRUCTIVE_FLAGS = {"-f", "--force", "-y", "--yes", "--purge-config"}
 
-# 取值型选项：扫"命令词"时要跳过它们后面的值（phonoagent act -p Si stop → stop 才是命令）
+# 取值型选项：扫"命令词"时要跳过它们后面的值（autozt act -p Si stop → stop 才是命令）
 AGENT_VALUE_FLAGS = {
     "-p", "-j", "-job", "-tt", "-c", "--config", "-x", "--exclude",
     "-status", "--status", "-i", "--interval", "-n", "--since", "--limit",
@@ -72,12 +72,12 @@ AGENT_VALUE_FLAGS = {
 
 # ===== 基础工具 =====
 def agent_actor():
-    """当前动作的发起者：PHONOAGENT_ACTOR 优先；空串 = 不是 agent 会话。"""
+    """当前动作的发起者：AUTOZT_ACTOR 优先；空串 = 不是 agent 会话。"""
     return (os.environ.get(AGENT_ACTOR_ENV) or "").strip()
 
 
 def agent_strict():
-    """破坏性动作要不要令牌。设了 PHONOAGENT_ACTOR 就默认严格；显式 0/false/off/关 可关。"""
+    """破坏性动作要不要令牌。设了 AUTOZT_ACTOR 就默认严格；显式 0/false/off/关 可关。"""
     v = os.environ.get(AGENT_STRICT_ENV)
     if v is None or str(v).strip() == "":
         return True
@@ -189,7 +189,7 @@ def agent_classify(cmd, argv=()):
 def agent_signature(cmd, argv):
     """命令签名：对"命令词 + 参数（忽略顺序与 -y/--yes）"取 sha256 前 12 位。
 
-    人工 `phonoagent approve` 与 agent `phonoagent act` 各算一次，参数顺序不同也能对上；
+    人工 `autozt approve` 与 agent `autozt act` 各算一次，参数顺序不同也能对上；
     -y/--yes 只是"我知道自己在干什么"，不参与签名。
     """
     toks = [str(x) for x in (argv or []) if str(x) not in ("-y", "--yes")]
@@ -377,7 +377,7 @@ def _wrap_words(text, width=78):
 
 
 def render_agent_policy():
-    L = ["phonoagent act —— agent 动作网关（v1.0 P0-1）", ""]
+    L = ["autozt act —— agent 动作网关（v1.0 P0-1）", ""]
     for risk, cmds, policy in AGENT_POLICY_ROWS:
         L.append("【%s】 %s" % (AGENT_RISK_CN.get(risk, risk), policy))
         L.append("    命令：%s" % _wrap_words(cmds, 74)[0])
@@ -385,17 +385,17 @@ def render_agent_policy():
             L.append("          %s" % extra)
     L.append("")
     L.append("用法：")
-    L.append("  phonoagent act <和 tf 一模一样的命令>     # agent 的唯一入口（自动记账）")
-    L.append("  phonoagent approve <同一条命令>           # 人工在交互终端批准破坏性动作")
-    L.append("  phonoagent act log [-n 40] [--json]       # 看审计流水")
-    L.append("  phonoagent act policy                     # 看这张表")
+    L.append("  autozt act <和 tf 一模一样的命令>     # agent 的唯一入口（自动记账）")
+    L.append("  autozt approve <同一条命令>           # 人工在交互终端批准破坏性动作")
+    L.append("  autozt act log [-n 40] [--json]       # 看审计流水")
+    L.append("  autozt act policy                     # 看这张表")
     L.append("")
     L.append("说明：批准按「命令签名」记账（同一命令、参数顺序无关），默认 %d 秒内一次有效；"
              % AGENT_TTL_DEFAULT)
-    L.append("      非交互终端（管道 / agent 子进程 / 定时任务）不能执行 phonoagent approve")
+    L.append("      非交互终端（管道 / agent 子进程 / 定时任务）不能执行 autozt approve")
     L.append("      ——agent 无法自我批准。")
-    L.append("      环境变量：PHONOAGENT_ACTOR=名字（谁在操作）、PHONOAGENT_AGENT_STRICT=0（关令牌）、")
-    L.append("                PHONOAGENT_APPROVE_TTL=秒（批准有效期）。")
+    L.append("      环境变量：AUTOZT_ACTOR=名字（谁在操作）、AUTOZT_AGENT_STRICT=0（关令牌）、")
+    L.append("                AUTOZT_APPROVE_TTL=秒（批准有效期）。")
     return "\n".join(L)
 
 
@@ -409,7 +409,7 @@ def agent_render_log(cfg, n=40, json_out=False, proj=None, since=None):
         return 0
     if total == 0:
         print("还没有审计记录（%s 不存在或为空）。" % path)
-        print("agent 侧：phonoagent act <命令> 自动记一条；设了 PHONOAGENT_ACTOR 的直接调用也记。")
+        print("agent 侧：autozt act <命令> 自动记一条；设了 AUTOZT_ACTOR 的直接调用也记。")
         return 0
     show = evs[-int(n or 40):]
     print("agent 审计  %s" % path)
@@ -439,7 +439,7 @@ def agent_render_log(cfg, n=40, json_out=False, proj=None, since=None):
 
 
 def agent_deny_message(cfg, cmd, inner, sig, why, prog=None):
-    prog = prog or "bin/phonoagent"
+    prog = prog or "bin/autozt"
     L = ["✗ 拒绝执行：tf %s %s 属**破坏性动作**，agent 不能自行决定（AGENTS.md 铁律 2）。"
          % (cmd, " ".join(str(x) for x in inner))]
     if why:
@@ -456,16 +456,16 @@ def agent_deny_message(cfg, cmd, inner, sig, why, prog=None):
 
 # ===== 命令入口 =====
 def cmd_act(cfg, raw_argv):
-    """phonoagent act <真实命令> —— agent 的唯一入口：判定风险 + 记账 + 转发。
+    """autozt act <真实命令> —— agent 的唯一入口：判定风险 + 记账 + 转发。
 
     返回子进程退出码（放行）或 3（拒绝）。
     """
-    from phonoagent import _PKG_ROOT
+    from autozt import _PKG_ROOT
     verb, inner, outer = agent_split(raw_argv)
     if verb == "act-error":
         print("错误：act 之前的选项里混进了 -p/-j/-tt/-f/-y 这类会影响目标的参数。\n"
               "      请把它们写在 act 之后（否则批准的命令和执行的命令不是同一条）：\n"
-              "        phonoagent act -p <材料> [-j <步骤>] <命令>")
+              "        autozt act -p <材料> [-j <步骤>] <命令>")
         return 2
     if not inner:
         print(render_agent_policy())
@@ -486,7 +486,7 @@ def cmd_act(cfg, raw_argv):
     actor = agent_actor() or os.environ.get("USER") or "?"
     sig = agent_signature(sub, inner)
     approved_by = None
-    prog = os.path.join(_PKG_ROOT, "bin", "phonoagent")
+    prog = os.path.join(_PKG_ROOT, "bin", "autozt")
     if risk == "destructive":
         ok, approver = agent_take_approval(cfg, sig)
         if not ok:
@@ -513,15 +513,15 @@ def cmd_act(cfg, raw_argv):
 
 
 def cmd_approve(cfg, raw_argv):
-    """phonoagent approve <命令> —— 人工批准一条破坏性命令（必须在交互终端里跑）。"""
+    """autozt approve <命令> —— 人工批准一条破坏性命令（必须在交互终端里跑）。"""
     verb, inner, outer = agent_split(raw_argv)
     if verb == "act-error" or not inner:
-        print("用法：phonoagent approve -p <材料> [-j <步骤>] <破坏性命令>\n"
-              "      例：phonoagent approve -p C24/qHPC24 clean")
+        print("用法：autozt approve -p <材料> [-j <步骤>] <破坏性命令>\n"
+              "      例：autozt approve -p C24/qHPC24 clean")
         return 2
     sub = agent_command(inner)
     if sub is None:
-        print("用法：phonoagent approve -p <材料> [-j <步骤>] <破坏性命令>")
+        print("用法：autozt approve -p <材料> [-j <步骤>] <破坏性命令>")
         return 2
     risk, why = agent_classify(sub, inner)
     if risk != "destructive":
@@ -554,12 +554,12 @@ def cmd_approve(cfg, raw_argv):
     agent_audit(cfg, by, sub, inner, risk, "approved-by-human", why=why,
                 sig=sig, approved_by=by, gateway="approve", ev="approve")
     print("✓ 已批准（签名 %s，%d 秒内一次有效）。\n"
-          "  agent 现在可以把**同一条命令**用 phonoagent act 重跑。" % (sig, agent_ttl()))
+          "  agent 现在可以把**同一条命令**用 autozt act 重跑。" % (sig, agent_ttl()))
     return 0
 
 
 def agent_direct_gate(cfg, cmd, raw_argv):
-    """agent 会话（PHONOAGENT_ACTOR 已设）**直接**敲 tf 时的旁路钩子。
+    """agent 会话（AUTOZT_ACTOR 已设）**直接**敲 tf 时的旁路钩子。
 
     返回 None（放行）或非零退出码（拒绝）。网关子进程 / 非 agent 会话直接放行，
     所以对现有用法是**零影响**。
@@ -579,9 +579,9 @@ def agent_direct_gate(cfg, cmd, raw_argv):
         if not ok:
             agent_audit(cfg, actor, cmd, inner, risk, "deny-need-approval",
                         why=why, exit_code=3, sig=sig, gateway="direct")
-            print("✗ 拒绝执行：agent 会话（PHONOAGENT_ACTOR=%s）直接执行破坏性命令 tf %s。\n"
-                  "  请走网关：phonoagent act %s\n"
-                  "  人工批准：phonoagent approve %s"
+            print("✗ 拒绝执行：agent 会话（AUTOZT_ACTOR=%s）直接执行破坏性命令 tf %s。\n"
+                  "  请走网关：autozt act %s\n"
+                  "  人工批准：autozt approve %s"
                   % (actor, cmd, " ".join(inner), " ".join(inner)))
             return 3
         agent_audit(cfg, actor, cmd, inner, risk, "allow-direct-approved",

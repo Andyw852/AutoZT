@@ -48,12 +48,12 @@
 
 ## 测试
 
-    phonoagent skills                        # 应看到 unihamgnn，版本 0.1，3 步
-    phonoagent -tt unihamgnn list            # 列头 = S1_graph / S2_predict / S3_band
+    autozt skills                        # 应看到 unihamgnn，版本 0.1，3 步
+    autozt -tt unihamgnn list            # 列头 = S1_graph / S2_predict / S3_band
     cd <含 POSCAR 的材料上级目录>
-    phonoagent -tt unihamgnn init
-    phonoagent -tt unihamgnn -p <材料> -j 1 init     # 只生成输入、不提交，检查后再 start
-    phonoagent -tt unihamgnn -p <材料> start
+    autozt -tt unihamgnn init
+    autozt -tt unihamgnn -p <材料> -j 1 init     # 只生成输入、不提交，检查后再 start
+    autozt -tt unihamgnn -p <材料> start
 
 ## 注意
 

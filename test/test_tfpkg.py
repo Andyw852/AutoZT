@@ -2,8 +2,8 @@
 """taskflow v2.0 单元测试（纯函数 + CLI 冒烟）。
 
 运行：
-  cd ~/software/taskflow-v2.0 && python3 test/test_phonoagent.py      # 独立运行器
-  cd ~/software/taskflow-v2.0 && python3 -m pytest test/test_phonoagent.py -v   # 若有 pytest
+  cd ~/software/taskflow-v2.0 && python3 test/test_autozt.py      # 独立运行器
+  cd ~/software/taskflow-v2.0 && python3 -m pytest test/test_autozt.py -v   # 若有 pytest
 """
 import os
 import sys
@@ -16,25 +16,25 @@ _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, _ROOT)
 os.chdir(_ROOT)
 
-import phonoagent
+import autozt
 
 
 def test_vasp_selection_uses_cluster_profiles():
-    from phonoagent.workflow import render_vasp_template
+    from autozt.workflow import render_vasp_template
     profiles = {
         "standard": {"std": "/configured/standard/vasp_std", "ncl": "/configured/standard/vasp_ncl"},
         "relax_2d": {"std": "/configured/patched/vasp_std", "cell_constraint": "ioptcell_tag"}}
     template = '#!/bin/bash\n#SBATCH --nodes=1\nmpirun -np 16 /obsolete/vasp_std\n'
     output = render_vasp_template(template, "submit_std_2d.tpl", "step1_opt", profiles)
     assert "/configured/patched/vasp_std" in output and "/obsolete" not in output
-    assert output.index("#SBATCH") < output.index("export PHONOAGENT_CELL_CONSTRAINT")
-    assert "PHONOAGENT_CELL_CONSTRAINT=ioptcell_tag" in output
+    assert output.index("#SBATCH") < output.index("export AUTOZT_CELL_CONSTRAINT")
+    assert "AUTOZT_CELL_CONSTRAINT=ioptcell_tag" in output
     for step_name, filename in (("step2_static", "submit_std_2d.tpl"),
                                 ("step1_opt", "submit_std_3d.tpl"),
                                 ("step1_opt", "submit_std_0d.tpl")):
         result = render_vasp_template(template, filename, step_name, profiles)
         assert "/configured/standard/vasp_std" in result
-        assert "PHONOAGENT_CELL_CONSTRAINT=none" in result
+        assert "AUTOZT_CELL_CONSTRAINT=none" in result
     result = render_vasp_template(template, "submit_ncl_3d.tpl", "step3_soc", profiles)
     assert "/configured/standard/vasp_ncl" in result
     result = render_vasp_template(template, "submit_std_2d.tpl", "step1_opt", {"standard": profiles["standard"]})
@@ -42,7 +42,7 @@ def test_vasp_selection_uses_cluster_profiles():
 
 
 def test_vasp_selection_replaces_suffixed_executable():
-    from phonoagent.workflow import render_vasp_template
+    from autozt.workflow import render_vasp_template
     profiles = {
         "standard": {"std": "/configured/standard/vasp_std"},
         "relax_2d": {
@@ -57,13 +57,13 @@ def test_vasp_selection_replaces_suffixed_executable():
 
 
 def test_remote_path_prefix_matches_ssh_alias_case():
-    from phonoagent.collect import _effective_remote_path_prefix
+    from autozt.collect import _effective_remote_path_prefix
     assert _effective_remote_path_prefix({}, "A800") == (
         "/fs0/home/wangcch/software/taskflow/pybin")
 
 
 def test_monitor_alias_normalization():
-    from phonoagent.cli import normalize_monitor_command
+    from autozt.cli import normalize_monitor_command
     for command, positional, flag in (
             ("restart", ["Mg4C60"], False),
             ("watch", ["restart", "Mg4C60"], False),
@@ -77,7 +77,7 @@ def test_monitor_alias_normalization():
 
 
 def test_cli_help_levels():
-    entry = os.path.join(_ROOT, "bin", "phonoagent")
+    entry = os.path.join(_ROOT, "bin", "autozt")
     def help_output(argument):
         result = subprocess.run([sys.executable, entry, argument],
                                 capture_output=True, text=True, encoding="utf-8")
@@ -94,7 +94,7 @@ def test_cli_help_levels():
 def test_auto_resume_scopes_cancelled_steps():
     from unittest.mock import patch
     from pathlib import Path
-    from phonoagent import ops, workflow
+    from autozt import ops, workflow
     with tempfile.TemporaryDirectory(dir=os.path.join(_ROOT, "tmp")) as folder:
         setting = Path(folder) / "setting.yaml"
         setting.write_text("auto_advance: false\n", encoding="utf-8")
@@ -139,9 +139,9 @@ def test_collector_integrity():
     orig = [n.value.value for n in tree.body
             if isinstance(n, ast.Assign)
             and any(isinstance(t, ast.Name) and t.id == "COLLECTOR" for t in n.targets)][0]
-    assert phonoagent.COLLECTOR == orig, "COLLECTOR 与原单体不一致"
-    remote = open(os.path.join(_ROOT, "phonoagent/_collector_remote.py"), encoding="utf-8").read()
-    assert remote == phonoagent.COLLECTOR, "_collector_remote.py 与 COLLECTOR 不一致"
+    assert autozt.COLLECTOR == orig, "COLLECTOR 与原单体不一致"
+    remote = open(os.path.join(_ROOT, "autozt/_collector_remote.py"), encoding="utf-8").read()
+    assert remote == autozt.COLLECTOR, "_collector_remote.py 与 COLLECTOR 不一致"
     # 语法可编译
     compile(remote, "_collector_remote.py", "exec")
 
@@ -151,7 +151,7 @@ def test_load_config_file():
         f.write("a: x\nb: y\n")
         path = f.name
     try:
-        cfg, p = phonoagent.load_config(path)
+        cfg, p = autozt.load_config(path)
         assert cfg == {"a": "x", "b": "y"}
         assert p == path
     finally:
@@ -159,14 +159,14 @@ def test_load_config_file():
 
 
 def test_load_config_real():
-    cfg, path = phonoagent.load_config(os.path.join(_ROOT, "setting/tf.yaml"))
+    cfg, path = autozt.load_config(os.path.join(_ROOT, "setting/tf.yaml"))
     assert isinstance(cfg, dict)
     assert "task_types" in cfg
     assert os.path.basename(path) == "tf.yaml"
 
 
 def test_discover_skills():
-    skills = phonoagent.discover_skills({})
+    skills = autozt.discover_skills({})
     assert len(skills) >= 15, "应发现 15+ 技能，实际 %d" % len(skills)
     for k in ("opt-mace-cpu", "band-dft-cpu", "mlff-mace"):
         assert k in skills, "缺少技能 %s" % k
@@ -175,7 +175,7 @@ def test_discover_skills():
 
 def test_apply_skills():
     cfg = {}
-    phonoagent.apply_skills(cfg)
+    autozt.apply_skills(cfg)
     assert "task_types" in cfg
     assert "opt-mace-cpu" in cfg["task_types"]
     assert "_skills" in cfg
@@ -184,32 +184,32 @@ def test_apply_skills():
 def test_merge_type():
     skel = {"a": 1, "b": {"x": 1, "y": 2}}
     over = {"b": {"y": 3}, "c": 4}
-    out = phonoagent._merge_type(skel, over)
+    out = autozt._merge_type(skel, over)
     assert out["a"] == 1
     assert out["b"] == {"x": 1, "y": 3}, "一层字典应递归合并"
     assert out["c"] == 4
 
 
 def test_step_status_word():
-    assert phonoagent._step_status_word({"kind": "OK"}) == "done"
-    assert phonoagent._step_status_word({"kind": "R"}) == "R"
-    assert phonoagent._step_status_word({"kind": "FAIL"}) == "FAIL"
-    assert phonoagent._step_status_word({"kind": "PD"}) == "PD"
-    assert phonoagent._step_status_word({"kind": "PD", "job": {"info": "QOSMaxJobsPerUserLimit"}}) == "PD(QOSMaxJobsPerUserLimit)"
-    assert phonoagent._step_status_word({"kind": "WAIT"}) == "wait"
-    assert phonoagent._step_status_word({"kind": "SCANCEL"}) == "scancel"
-    assert phonoagent._step_status_word({"kind": "PREP"}) == "prep"
+    assert autozt._step_status_word({"kind": "OK"}) == "done"
+    assert autozt._step_status_word({"kind": "R"}) == "R"
+    assert autozt._step_status_word({"kind": "FAIL"}) == "FAIL"
+    assert autozt._step_status_word({"kind": "PD"}) == "PD"
+    assert autozt._step_status_word({"kind": "PD", "job": {"info": "QOSMaxJobsPerUserLimit"}}) == "PD(QOSMaxJobsPerUserLimit)"
+    assert autozt._step_status_word({"kind": "WAIT"}) == "wait"
+    assert autozt._step_status_word({"kind": "SCANCEL"}) == "scancel"
+    assert autozt._step_status_word({"kind": "PREP"}) == "prep"
 
 
 def test_summary_lines():
-    lines = phonoagent._summary_lines(_mk_data())
+    lines = autozt._summary_lines(_mk_data())
     assert any("opt-mace-cpu: 2 材料 done=0 run=1 pd=0 err=1" in l for l in lines)
     assert any("FAIL Ge step1 force not converged" in l for l in lines)
     assert any("队列(全部作业): R=1 PD=0 共 1" in l for l in lines)
 
 
 def test_summary_json():
-    j = phonoagent._summary_json(_mk_data())
+    j = autozt._summary_json(_mk_data())
     assert j["types"][0]["key"] == "opt-mace-cpu"
     assert j["types"][0]["materials"] == 2
     assert j["types"][0]["counts"] == {"done": 0, "run": 1, "pd": 0, "err": 1, "scancel": 0, "wait": 0}
@@ -220,14 +220,14 @@ def test_summary_json():
 def test_snapshot_diff():
     old = {"t": {"m": {"s1": "todo"}}}
     new = {"t": {"m": {"s1": "PD"}}}
-    ch = phonoagent._snapshot_diff(old, new)
+    ch = autozt._snapshot_diff(old, new)
     assert ch == [("t", "m", "s1", "todo", "PD")]
     # 无变化 → 空
-    assert phonoagent._snapshot_diff(old, old) == []
+    assert autozt._snapshot_diff(old, old) == []
 
 
 def test_natkey():
-    assert sorted(["S10", "S2", "S1"], key=phonoagent._natkey) == ["S1", "S2", "S10"]
+    assert sorted(["S10", "S2", "S1"], key=autozt._natkey) == ["S1", "S2", "S10"]
 
 
 def _run(cmd):
@@ -236,7 +236,7 @@ def _run(cmd):
 
 
 def test_cli_smoke():
-    tf = "python3 bin/phonoagent"
+    tf = "python3 bin/autozt"
     for cmd, name in [
         (tf + " --help", "--help"),
         (tf + " --schema", "--schema"),
@@ -257,11 +257,11 @@ def test_cli_json_flag():
         f.write("{}\n")
         path = f.name
     try:
-        rc, out, err = _run("python3 bin/phonoagent -c %s list --json" % path)
+        rc, out, err = _run("python3 bin/autozt -c %s list --json" % path)
         assert rc == 0, "rc=%d err=%s" % (rc, err)
         d = json.loads(out)
         assert "types" in d
-        rc, out, err = _run("python3 bin/phonoagent -c %s summary --json" % path)
+        rc, out, err = _run("python3 bin/autozt -c %s summary --json" % path)
         assert rc == 0 and json.loads(out)["types"] == []
     finally:
         os.unlink(path)
@@ -273,7 +273,7 @@ def test_cli_dry_run():
         f.write("{}\n")
         path = f.name
     try:
-        rc, out, err = _run("python3 bin/phonoagent -c %s start --dry-run" % path)
+        rc, out, err = _run("python3 bin/autozt -c %s start --dry-run" % path)
         assert rc == 0, "rc=%d err=%s" % (rc, err)
         assert "【dry-run】" in out
         assert "0 个材料" in out
@@ -284,7 +284,7 @@ def test_cli_dry_run():
 def test_cli_diagnose():
     # 沙盒：一键结构化诊断（只读、不提交）
     sand = os.path.join(_ROOT, "test", "sandbox", "tf.yaml")
-    rc, out, err = _run("python3 bin/phonoagent -c %s -tt opt-mace-cpu -p Si diagnose" % sand)
+    rc, out, err = _run("python3 bin/autozt -c %s -tt opt-mace-cpu -p Si diagnose" % sand)
     assert rc == 0, "rc=%d err=%s" % (rc, err)
     d = json.loads(out)
     assert d["material"] == "Si"
@@ -295,10 +295,10 @@ def test_cli_diagnose():
 def test_cli_json_filters():
     # 沙盒：json --errors-only / --limit 分页
     sand = os.path.join(_ROOT, "test", "sandbox", "tf.yaml")
-    rc, out, err = _run("python3 bin/phonoagent -c %s json --errors-only" % sand)
+    rc, out, err = _run("python3 bin/autozt -c %s json --errors-only" % sand)
     assert rc == 0, "rc=%d err=%s" % (rc, err)
     assert "types" in json.loads(out)
-    rc, out, err = _run("python3 bin/phonoagent -c %s json --limit 1" % sand)
+    rc, out, err = _run("python3 bin/autozt -c %s json --limit 1" % sand)
     assert rc == 0, "rc=%d err=%s" % (rc, err)
     d = json.loads(out)
     assert "materials" in d and "total" in d
@@ -308,7 +308,7 @@ def test_cli_json_filters():
 def test_cli_json_changes():
     # 沙盒：json --changes 输出结构化变更快照
     sand = os.path.join(_ROOT, "test", "sandbox", "tf.yaml")
-    rc, out, err = _run("python3 bin/phonoagent -c %s json --changes" % sand)
+    rc, out, err = _run("python3 bin/autozt -c %s json --changes" % sand)
     assert rc == 0, "rc=%d err=%s" % (rc, err)
     d = json.loads(out)
     assert "changes" in d and "count" in d and "first_run" in d
@@ -339,7 +339,7 @@ def test_retry_targets():
         {"name": "s3", "label": "s3", "kind": "R"},
     ]}
     retryable = lambda s: s["kind"] == "FAIL"
-    tgt = phonoagent._retry_targets(m, retryable)
+    tgt = autozt._retry_targets(m, retryable)
     assert [s["name"] for s in tgt] == ["s1"], "retry 应只命中 FAIL 步"
 
 
@@ -349,27 +349,27 @@ def test_dry_run_steps_for():
     s2 = {"name": "s2", "label": "S2", "kind": "TODO"}
     s3 = {"name": "s3", "label": "S3", "kind": "R", "job": {"id": "9"}}
     m = {"steps": [s1, s2, s3], "actives": [s2]}
-    assert [s["name"] for s in phonoagent._dry_run_steps_for("retry", m, None)] == ["s1"]
-    assert [s["name"] for s in phonoagent._dry_run_steps_for("start", m, None)] == ["s2"]
-    assert [s["name"] for s in phonoagent._dry_run_steps_for("stop", m, None)] == ["s3"]
-    assert [s["name"] for s in phonoagent._dry_run_steps_for("fetch", m, None)] == []
+    assert [s["name"] for s in autozt._dry_run_steps_for("retry", m, None)] == ["s1"]
+    assert [s["name"] for s in autozt._dry_run_steps_for("start", m, None)] == ["s2"]
+    assert [s["name"] for s in autozt._dry_run_steps_for("stop", m, None)] == ["s3"]
+    assert [s["name"] for s in autozt._dry_run_steps_for("fetch", m, None)] == []
     # 带 -j 指定步骤时按名字命中（即使非 FAIL）
-    assert [s["name"] for s in phonoagent._dry_run_steps_for("retry", m, "S2")] == ["s2"]
+    assert [s["name"] for s in autozt._dry_run_steps_for("retry", m, "S2")] == ["s2"]
     # rerun/clean 无 -j 是整材料级
-    assert phonoagent._dry_run_steps_for("rerun", m, None) is None
+    assert autozt._dry_run_steps_for("rerun", m, None) is None
 
 
 def test_diag_code():
     # 诊断文本 → 稳定结构化错误码（--json 机器判读）
-    assert phonoagent._diag_code("relax_summary.json missing") == "relax_summary_missing"
-    assert phonoagent._diag_code("relax_summary.json incomplete") == "relax_summary_incomplete"
-    assert phonoagent._diag_code("force not converged") == "force_not_converged"
-    assert phonoagent._diag_code("未收敛 [oscillating] 大幅振荡") == "relax_oscillating"
-    assert phonoagent._diag_code("job RUNNING") == "job"
-    assert phonoagent._diag_code("") == "none"
-    assert phonoagent._diag_code("随便什么未知错误") == "unknown"
+    assert autozt._diag_code("relax_summary.json missing") == "relax_summary_missing"
+    assert autozt._diag_code("relax_summary.json incomplete") == "relax_summary_incomplete"
+    assert autozt._diag_code("force not converged") == "force_not_converged"
+    assert autozt._diag_code("未收敛 [oscillating] 大幅振荡") == "relax_oscillating"
+    assert autozt._diag_code("job RUNNING") == "job"
+    assert autozt._diag_code("") == "none"
+    assert autozt._diag_code("随便什么未知错误") == "unknown"
     # _summary_json 的 fails 带 code 字段
-    j = phonoagent._summary_json(_mk_data())
+    j = autozt._summary_json(_mk_data())
     assert j["types"][0]["fails"][0]["code"] == "force_not_converged"
     # fails 现在带建议动作（机器化 AGENTS.md §5 决策表）
     assert j["types"][0]["fails"][0]["action"] == "retry"
@@ -377,22 +377,22 @@ def test_diag_code():
 
 def test_diag_action_map():
     # diag_code → 确定性建议动作（机器化决策表）
-    assert phonoagent._suggested_action("force_not_converged")[0] == "retry"
-    assert phonoagent._suggested_action("relax_nsw")[0] == "retry"
-    assert phonoagent._suggested_action("node_fail")[0] == "retry"
-    assert phonoagent._suggested_action("dir_missing")[0] == "rerun"
-    assert phonoagent._suggested_action("not_started")[0] == "start"
-    assert phonoagent._suggested_action("stepconf_unknown_params")[0] == "human_review"
-    assert phonoagent._suggested_action("unknown")[0] == "human_review"
-    assert phonoagent._suggested_action("none") == ("none", "")
+    assert autozt._suggested_action("force_not_converged")[0] == "retry"
+    assert autozt._suggested_action("relax_nsw")[0] == "retry"
+    assert autozt._suggested_action("node_fail")[0] == "retry"
+    assert autozt._suggested_action("dir_missing")[0] == "rerun"
+    assert autozt._suggested_action("not_started")[0] == "start"
+    assert autozt._suggested_action("stepconf_unknown_params")[0] == "human_review"
+    assert autozt._suggested_action("unknown")[0] == "human_review"
+    assert autozt._suggested_action("none") == ("none", "")
     # 每个 retry/rerun 动作都有理由
-    for code, (act, reason) in phonoagent._ACTION_MAP.items():
+    for code, (act, reason) in autozt._ACTION_MAP.items():
         assert reason, "%s 缺理由" % code
 
 
 def test_diagnose():
     # cmd_diagnose：默认输出 FAIL 步，结构化带 diag_code + suggested_action
-    d = phonoagent.cmd_diagnose({}, _mk_data(), "Ge", None)
+    d = autozt.cmd_diagnose({}, _mk_data(), "Ge", None)
     assert d["material"] == "Ge"
     assert d["type"] == "opt-mace-cpu"
     assert len(d["steps"]) == 1
@@ -403,13 +403,13 @@ def test_diagnose():
     assert s["suggested_action"] == "retry"
     assert s["action_reason"]
     # -j 指定非 FAIL 步也输出
-    d2 = phonoagent.cmd_diagnose({}, _mk_data(), "Ge", "step2")
+    d2 = autozt.cmd_diagnose({}, _mk_data(), "Ge", "step2")
     assert len(d2["steps"]) == 1 and d2["steps"][0]["kind"] == "OK"
 
 
 def test_json_errors_only():
     # 只保留含 FAIL 步骤的材料，且只留 FAIL 步骤
-    out = phonoagent._json_errors_only(_mk_data())
+    out = autozt._json_errors_only(_mk_data())
     mats = out["types"][0]["materials"]
     assert [m["name"] for m in mats] == ["Ge"]          # Si 无 FAIL 被滤掉
     assert [s["label"] for s in mats[0]["steps"]] == ["step1"]  # 只留 FAIL 步
@@ -417,16 +417,16 @@ def test_json_errors_only():
 
 def test_json_paginate():
     # 展平材料分页：扁平结构 + total/offset/limit
-    out = phonoagent._json_paginate(_mk_data(), 0, 10)
+    out = autozt._json_paginate(_mk_data(), 0, 10)
     assert out["total"] == 2
     assert out["offset"] == 0 and out["limit"] == 10
     names = [m["name"] for m in out["materials"]]
     assert names == ["Ge", "Si"]                        # 按 (type,name) 排序
     assert out["materials"][0]["type"] == "opt-mace-cpu"
     # limit=1 只取 1 个
-    assert len(phonoagent._json_paginate(_mk_data(), 0, 1)["materials"]) == 1
+    assert len(autozt._json_paginate(_mk_data(), 0, 1)["materials"]) == 1
     # offset=1 跳过第 1 个
-    assert phonoagent._json_paginate(_mk_data(), 1, 10)["materials"][0]["name"] == "Si"
+    assert autozt._json_paginate(_mk_data(), 1, 10)["materials"][0]["name"] == "Si"
 
 
 def test_json_changes():
@@ -434,18 +434,18 @@ def test_json_changes():
     fd, path = tempfile.mkstemp(suffix=".txt")
     os.close(fd)
     try:
-        r1 = phonoagent._json_changes(_mk_data(), path)
+        r1 = autozt._json_changes(_mk_data(), path)
         assert r1["first_run"] is True and r1["count"] == 0
         # Ge step1 FAIL → OK，状态词 FAIL → done
         d2 = _mk_data()
         d2["types"][0]["materials"][1]["steps"][0]["kind"] = "OK"
-        r2 = phonoagent._json_changes(d2, path)
+        r2 = autozt._json_changes(d2, path)
         assert r2["first_run"] is False and r2["count"] == 1
         c = r2["changes"][0]
         assert (c["type"], c["material"], c["step"]) == ("opt-mace-cpu", "Ge", "step1")
         assert c["old"] == "FAIL" and c["new"] == "done"
         # 同数据再跑 → unchanged
-        r3 = phonoagent._json_changes(d2, path)
+        r3 = autozt._json_changes(d2, path)
         assert r3["unchanged"] is True and r3["count"] == 0
     finally:
         os.remove(path)
@@ -453,41 +453,41 @@ def test_json_changes():
 
 def test_yamlmini_module():
     # yamlmini 是真深模块：可独立 import，parse() 是唯一对外接口
-    import phonoagent.yamlmini as y
+    import autozt.yamlmini as y
     assert y.parse("a: 1\nb:\n  - 2\n  - 3") == {"a": 1, "b": [2, 3]}
     # 装配后注入共享命名空间，行为不变（_mini_yaml 同源）
-    assert phonoagent._mini_yaml is y._mini_yaml
-    assert phonoagent.parse is y.parse
+    assert autozt._mini_yaml is y._mini_yaml
+    assert autozt.parse is y.parse
 
 
 def test_data_module():
     # data 是真深模块：collect_data + 过滤 + 缓存 + 快照，环2 破
-    import phonoagent.data as d
+    import autozt.data as d
     assert callable(d.collect_data) and callable(d.filter_status)
-    assert phonoagent.collect_data is d.collect_data
+    assert autozt.collect_data is d.collect_data
     # filter_status 空数据/空 spec 不报错、返回 None
     assert d.filter_status({"types": []}, "error") is None
     # 延迟 import 生效：collect_data 函数体里能取到包命名空间的 collect/annotate
     src = __import__("inspect").getsource(d.collect_data)
-    assert "from phonoagent import" in src
+    assert "from autozt import" in src
 
 
 def test_workflow_module():
     # workflow 是大深模块：06/09/13/11 合并，环1 消除
-    import phonoagent.workflow as w
+    import autozt.workflow as w
     for name in ("step_state", "do_submit", "auto_advance", "auto_fetch",
                  "remote_gen", "cmd_start", "cmd_stop", "cmd_retry",
                  "cmd_rerun", "cmd_clean", "annotate", "check_duplicates",
                  "do_rerun_step", "kill_if_queued"):
         assert callable(getattr(w, name, None)), name
     # 注入共享命名空间，行为不变
-    assert phonoagent.step_state is w.step_state
-    assert phonoagent.do_submit is w.do_submit
+    assert autozt.step_state is w.step_state
+    assert autozt.do_submit is w.do_submit
 
 
 def test_namespace_complete():
     # 深模块化安全网：8 个真模块的名字全部注入包命名空间
-    import phonoagent
+    import autozt
     stdlib = {"os", "sys", "re", "json", "time", "shlex", "hashlib", "base64",
               "collections", "functools", "itertools", "subprocess", "tempfile",
               "threading", "socket", "argparse", "glob", "math", "random", "shutil",
@@ -496,10 +496,10 @@ def test_namespace_complete():
               "ast", "inspect", "warnings", "csv"}
     for modname in ("bootstrap", "collect", "data", "workflow", "report",
                     "ops", "cli", "yamlmini"):
-        m = getattr(phonoagent, modname)
+        m = getattr(autozt, modname)
         missing = [n for n in vars(m)
                    if not n.startswith("__") and n not in stdlib
-                   and not hasattr(phonoagent, n)]
+                   and not hasattr(autozt, n)]
         assert not missing, "%s 未注入: %s" % (modname, missing)
 
 

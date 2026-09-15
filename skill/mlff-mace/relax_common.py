@@ -1282,7 +1282,7 @@ def extract_vasp_cmd(submit_text):
         s = ln.strip()
         if not s or s.startswith("#"):
             continue
-        if re.match(r"(?:mpirun|mpiexec|srun)\b", s) and re.search(r"vasp_(std|ncl|gam)|PHONOAGENT_VASP_BIN", s):
+        if re.match(r"(?:mpirun|mpiexec|srun)\b", s) and re.search(r"vasp_(std|ncl|gam)|AUTOZT_VASP_BIN", s):
             return s
     return None
 
@@ -1579,7 +1579,7 @@ def main():
     dim, vac_axis, dim_note = resolve_dimension(cwd / "POSCAR")
     incar_tpl = resolve_tpl(cwd, "incar", dim)
     submit_tpl = resolve_tpl(cwd, "submit_std", dim)
-    capability = re.search(r"^export PHONOAGENT_CELL_CONSTRAINT=(ioptcell_tag|optcell_file|none)$",
+    capability = re.search(r"^export AUTOZT_CELL_CONSTRAINT=(ioptcell_tag|optcell_file|none)$",
                            submit_tpl.read_text(encoding="utf-8"), re.M)
     apply_cell_constraint_2d._constraint_mode = capability.group(1) if capability else "none"
     print(f"[..] 维度：{dim.upper()} — {dim_note}")

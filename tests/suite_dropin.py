@@ -4,11 +4,11 @@
 把 skill/_template/ 原样复制到两个"投放点"——① 配置目录旁的 skill/，
 ② tf.yaml 的 skill_paths 指向的另一个目录——然后断言：
 
-  · 被自动发现（phonoagent skills 认得，版本/步骤数正确）；
+  · 被自动发现（autozt skills 认得，版本/步骤数正确）；
   · tf skill show 能渲染出卡片（论文图 2 那套版式，零代码改动）；
   · tf schema --strict 不报错（自描述三段合法）；
   · 它的 step1 真能跑（gen → done_marker 落地 + provenance 自动落档）；
-  · **核心代码零改动**：跑完前后 phonoagent/*.py 与 bin/phonoagent 的 sha256 一个没变。
+  · **核心代码零改动**：跑完前后 autozt/*.py 与 bin/autozt 的 sha256 一个没变。
 
 全程本地（type hpc 指向不存在的 local 档 + ssh_host 置空 → gen 走 bash），
 不连超算、不碰任何真实材料。
@@ -26,7 +26,7 @@ BASE = os.path.join(ROOT, "tmp", "_dropin_test")
 CFG = os.path.join(BASE, "tf.yaml")
 PROJ = os.path.join(BASE, "projects")
 SHIM = os.path.join(BASE, "bin")
-PROG = os.path.join(ROOT, "bin", "phonoagent")
+PROG = os.path.join(ROOT, "bin", "autozt")
 FAILS = []
 
 
@@ -39,15 +39,15 @@ def ok(cond, msg):
 
 
 def core_hashes():
-    """核心代码指纹：phonoagent/*.py + bin/phonoagent（技能是数据，核心是代码——要分清）。"""
+    """核心代码指纹：autozt/*.py + bin/autozt（技能是数据，核心是代码——要分清）。"""
     out = {}
-    d = os.path.join(ROOT, "phonoagent")
+    d = os.path.join(ROOT, "autozt")
     for fn in sorted(os.listdir(d)):
         if fn.endswith(".py"):
             with open(os.path.join(d, fn), "rb") as f:
-                out["phonoagent/" + fn] = hashlib.sha256(f.read()).hexdigest()
-    with open(os.path.join(ROOT, "bin", "phonoagent"), "rb") as f:
-        out["bin/phonoagent"] = hashlib.sha256(f.read()).hexdigest()
+                out["autozt/" + fn] = hashlib.sha256(f.read()).hexdigest()
+    with open(os.path.join(ROOT, "bin", "autozt"), "rb") as f:
+        out["bin/autozt"] = hashlib.sha256(f.read()).hexdigest()
     return out
 
 
@@ -121,9 +121,9 @@ ok(os.path.isfile(os.path.join(BASE, "skill", "newsill", "skill.yaml")),
 ok(os.path.isfile(os.path.join(BASE, "skill2", "newsill2", "skill.yaml")),
    "投放点②：tf.yaml 的 skill_paths 指向的 skill2/newsill2/")
 
-print("[1] 自动发现：phonoagent skills 认得新技能（无需改任何配置）")
+print("[1] 自动发现：autozt skills 认得新技能（无需改任何配置）")
 rc, out = run(["skills"])
-ok(rc == 0, "phonoagent skills 正常退出")
+ok(rc == 0, "autozt skills 正常退出")
 ok("newsill" in out and "newsill2" in out, "两个新技能都在列表里")
 line = next((x for x in out.splitlines() if x.strip().startswith("newsill ")), "")
 ok("0.1" in line and re.search(r"\b1\b", line) is not None,
@@ -177,12 +177,12 @@ ok(bool([p for p in prov if "provenance" in p]) or bool(prov),
    "provenance 由 tf 自动写入：%s"
    % (os.path.relpath(prov[0], BASE) if prov else "-"))
 rc, out = run(["-tt", "newsill", "-p", "Si_new", "list"])
-ok(rc == 0 and "Si_new" in out, "phonoagent list 能列出新材料")
+ok(rc == 0 and "Si_new" in out, "autozt list 能列出新材料")
 
 print("[7] 核心代码零改动（技能是数据，不是代码）")
 H1 = core_hashes()
 diff = [k for k in H0 if H0[k] != H1.get(k)]
-ok(not diff, "phonoagent/*.py 与 bin/phonoagent 的 sha256 一个没变")
+ok(not diff, "autozt/*.py 与 bin/autozt 的 sha256 一个没变")
 ok(set(H0) == set(H1), "没有新增/删除核心文件")
 
 print("")

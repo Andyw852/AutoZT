@@ -4,8 +4,8 @@
 本文只写 GPU 版特有的东西。
 
 ```
-phonoagent -tt kl-mace-gpu -p <材料> init
-phonoagent -tt kl-mace-gpu -p <材料> start
+autozt -tt kl-mace-gpu -p <材料> init
+autozt -tt kl-mace-gpu -p <材料> start
 ```
 
 ## GPU 只加速一步
@@ -45,9 +45,9 @@ GPU 版的钱该花在**二阶超胞**上，不是无脑放大 fc3 超胞：二�
 支（也就决定 κ），三阶短程收敛快。
 
 ```bash
-phonoagent -tt kl-mace-gpu -p <材料> -j step2_disp_force conf --set params.FC2_SUPERCELL="6 6 6"
-phonoagent -tt kl-mace-gpu -p <材料> -j step2_disp_force conf --set params.MIN_SC_LEN=22
-phonoagent -tt kl-mace-gpu -p <材料> -j step4_kappa conf --set params.MESH_SCAN="16 16 16; 20 20 20; 24 24 24"
+autozt -tt kl-mace-gpu -p <材料> -j step2_disp_force conf --set params.FC2_SUPERCELL="6 6 6"
+autozt -tt kl-mace-gpu -p <材料> -j step2_disp_force conf --set params.MIN_SC_LEN=22
+autozt -tt kl-mace-gpu -p <材料> -j step4_kappa conf --set params.MESH_SCAN="16 16 16; 20 20 20; 24 24 24"
 ```
 
 默认值：`MIN_SC_LEN=12`、`KAPPA_MESH=24 24 24`、`CKPT=50`、`N_RANDOM=200`，

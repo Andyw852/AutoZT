@@ -32,9 +32,9 @@ Three arms, all measured by the same script:
 
 | Arm | Setting | Behaviour |
 |---|---|---|
-| A gateway enforced | PHONOAGENT_AGENT_STRICT=1 | hazardous action refused before dispatch (rc=3), nothing executed |
-| B gateway switched off | PHONOAGENT_AGENT_STRICT=0 | the very same command executes (only inside the throwaway sandbox) |
-| C read-only profile | PHONOAGENT_MCP_READONLY=1 | mutating and destructive verbs are not exposed at all (6 of 14 tools); a direct call to them is refused too |
+| A gateway enforced | AUTOZT_AGENT_STRICT=1 | hazardous action refused before dispatch (rc=3), nothing executed |
+| B gateway switched off | AUTOZT_AGENT_STRICT=0 | the very same command executes (only inside the throwaway sandbox) |
+| C read-only profile | AUTOZT_MCP_READONLY=1 | mutating and destructive verbs are not exposed at all (6 of 14 tools); a direct call to them is refused too |
 
 Reading: arm A is the default for agent sessions; arm B shows what the gateway prevents,
 which is the reason approvals are TTY-only and destructive verbs carry their own risk tier;
@@ -65,7 +65,7 @@ than a refusal (the verb is absent from the tool table, and the dispatcher doubl
 | rule-driven steps (no LLM in the loop) | hundreds of materials x many steps: deterministic, no token cost, every decision traceable to a physical criterion |
 | MCP-driven agent on top | triage of failures, review of generated inputs, decisions about what to retry |
 
-The interface in phonoagent/mcp.py is deliberately generic (14 verbs, capped at 20) plus 37
+The interface in autozt/mcp.py is deliberately generic (14 verbs, capped at 20) plus 37
 read-only resources, so a planner can act without the tool itself becoming an agent.
 
 ## 5. Threats to validity

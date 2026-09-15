@@ -1,11 +1,11 @@
-# PhonoAgent (phonoagent) 使用说明
+# AutoZT (autozt) 使用说明
 
-> 本文是 PhonoAgent 的**总文档**：用户手册 + 技能总览 + 技能开发规范。
+> 本文是 AutoZT 的**总文档**：用户手册 + 技能总览 + 技能开发规范。
 > 配套文件：`AGENTS.md`（给 LLM/agent 的操作规范）。原独立文档 SKILL_DEV.md（技能开发规范）、
 > skill_prompt_mlff-mace.md（mlff-mace 设计提示词）、使用说明.md（step.conf 开发记录）的内容均已并入本文
 > （分别见第 7 章、§6.9、§5.3），不再单独保留。
 
-**当前版本 1.0**（版本号自 1.0 起重新计数，与 `phonoagent -V` 一致；文中不再逐条标注历史版本号）。
+**当前版本 1.0**（版本号自 1.0 起重新计数，与 `autozt -V` 一致；文中不再逐条标注历史版本号）。
 
 VASP/DFT 与 MACE/MLFF 多材料·多步骤·**多任务类型**流水线管理框架（SLURM + 无调度器垫片）。单文件 Python，**零第三方依赖**（内置迷你 YAML 解析器，装了 PyYAML 会优先用），超算端零安装、零状态文件。
 
@@ -21,21 +21,21 @@ VASP/DFT 与 MACE/MLFF 多材料·多步骤·**多任务类型**流水线管理�
 
 ## 0. 适用范围与能力边界
 
-> 一句话：phonoagent 是**调度器 + 判据检查器**，不是计算引擎。物理量是 VASP / MACE / phono3py / AMSET / BoltzTraP2 算的，phonoagent 只负责把它们串成流水线、盯收敛、接下一步、判成败。环境依赖见根目录 `environment.yml`。
+> 一句话：autozt 是**调度器 + 判据检查器**，不是计算引擎。物理量是 VASP / MACE / phono3py / AMSET / BoltzTraP2 算的，autozt 只负责把它们串成流水线、盯收敛、接下一步、判成败。环境依赖见根目录 `environment.yml`。
 
 **覆盖范围（能做什么）**
 
 - 16 个技能、多类引擎：**VASP/DFT**（能带、弹性常数、电子热导率、晶格热导率、结构优化+能量、缺陷形成能）＋ **MACE/MLFF**（晶格热导率、结构优化+形成能、声子谱、随机位移法 MLFF 训练）＋ **替代模型**（热电快速筛选、Uni-HamGNN 能带）。
 - 多材料 × 多步骤 × 多任务类型编排：`needs` 显式 DAG 依赖、扇出步骤（fanout，一步下 N 个并行作业）、可选步骤组、断点续跑、跨技能共用结果（如 kl-mace 接 kl-dft-cpu 的 BORN）。
-- 跨技能结构复用：phonoagent 的 gen 一律从**材料根 POSCAR** 取初始结构（技能子目录里的 POSCAR 不被使用），所以复用 = 把其它链已优化的 CONTCAR 复制成材料根 POSCAR（覆盖前备份 POSCAR_raw）。kl-dft-cpu 的 `reuse_structure.py` 自动做（ke → opt → band → elastic 顺序找候选）；手动等价于 `cp <材料>/ke-dft-cpu/result/step1_opt/CONTCAR <材料>/POSCAR`。复用只给各技能 S1 更好的起始点（省离子步、更稳），**不跳过 S1 的重新优化**；材料根 POSCAR 是所有技能共用的初始结构，覆盖影响所有未跑 S1 的技能。详见 `skill/kl-dft-cpu/README.md`、`skill/kl-mace-cpu/README.md`。
-- 三种运行环境：真 SLURM（jzzn cpu192 / a800 GPU 分区）、无 SLURM 服务器（3090，fakeslurm 垫片），一台项目用 `phonoagent hpc` 切换。
+- 跨技能结构复用：autozt 的 gen 一律从**材料根 POSCAR** 取初始结构（技能子目录里的 POSCAR 不被使用），所以复用 = 把其它链已优化的 CONTCAR 复制成材料根 POSCAR（覆盖前备份 POSCAR_raw）。kl-dft-cpu 的 `reuse_structure.py` 自动做（ke → opt → band → elastic 顺序找候选）；手动等价于 `cp <材料>/ke-dft-cpu/result/step1_opt/CONTCAR <材料>/POSCAR`。复用只给各技能 S1 更好的起始点（省离子步、更稳），**不跳过 S1 的重新优化**；材料根 POSCAR 是所有技能共用的初始结构，覆盖影响所有未跑 S1 的技能。详见 `skill/kl-dft-cpu/README.md`、`skill/kl-mace-cpu/README.md`。
+- 三种运行环境：真 SLURM（jzzn cpu192 / a800 GPU 分区）、无 SLURM 服务器（3090，fakeslurm 垫片），一台项目用 `autozt hpc` 切换。
 - 自动化：auto_fetch / auto_advance / auto_watch（零输入全自动）、retry / rerun / stop / clean、内置判据自动判成败、0D/2D/3D 维度自动判定。
-- 技能开发：`skill/<名>/skill.yaml` 自描述，放进 `skill/` 即被自动发现，不改 phonoagent 主程序（见第 7 章）。
+- 技能开发：`skill/<名>/skill.yaml` 自描述，放进 `skill/` 即被自动发现，不改 autozt 主程序（见第 7 章）。
 
 **不在范围内（不能做什么）**
 
-- **不提供计算引擎**：不内置 VASP/MACE/phono3py/AMSET 等，全部依赖外部程序；phonoagent 本身是单文件 Python、零第三方依赖（PyYAML 可选）。
-- **需要外部许可 / 资产**：VASP 需商业许可（DFT 类技能）；MACE 类技能需要一个**预先训练好的 `.model` 势文件**（`MACE_MODEL`，phonoagent 不负责训练它——唯一例外是 mlff-mace 本身产出势）。
+- **不提供计算引擎**：不内置 VASP/MACE/phono3py/AMSET 等，全部依赖外部程序；autozt 本身是单文件 Python、零第三方依赖（PyYAML 可选）。
+- **需要外部许可 / 资产**：VASP 需商业许可（DFT 类技能）；MACE 类技能需要一个**预先训练好的 `.model` 势文件**（`MACE_MODEL`，autozt 不负责训练它——唯一例外是 mlff-mace 本身产出势）。
 - **物理覆盖面有限**：目前只有上述 11 类。**没有**光学性质、磁性专项、分子动力学（MD）、NEB 过渡态、自旋轨道耦合（SOC）等技能。
 - **MACE 的原理性缺失**：MACE 势给不出 Born 有效电荷和 ε∞（势里无电荷响应）——极性材料算晶格热导率需从 kl-dft-cpu 的 DFPT 接 `NAC_BORN`；`phonon-mace-cpu` 只算 2 阶力常数（fc2），不产 fc3 / κ。
 - **0D 分子支持有限**：只有 band-dft-cpu step1 开了 `MOL_BRANCH`；弹性 / 热导 / 形变势对分子无定义，未开 0D 的技能会明确报错。
@@ -53,7 +53,7 @@ VASP/DFT 与 MACE/MLFF 多材料·多步骤·**多任务类型**流水线管理�
 | 0.1 | ke-dft-cpu、opt-dft-cpu、kl-mace-cpu/gpu、opt-mace-cpu/gpu、phonon-mace-cpu、mlff-mace |
 
 - mlff-mace 的 GPU 路径（a800/3090 `submit_mace.tpl` + CONDA_ENV）**已预留、未实测**（jzzn 登录节点无 GPU 分区，DEVICE=auto 恒落 CPU）。
-- 各技能 / 各超算的实时状态以 `phonoagent summary` 与 `skill/<名>/README.md` 为准。
+- 各技能 / 各超算的实时状态以 `autozt summary` 与 `skill/<名>/README.md` 为准。
 
 ---
 
@@ -62,18 +62,18 @@ VASP/DFT 与 MACE/MLFF 多材料·多步骤·**多任务类型**流水线管理�
 推荐版本化布局（详见第 10 节"目录结构与版本管理"）：
 
 ```bash
-mkdir -p ~/software/PhonoAgent/versions/v1.0 ~/.local/bin
-cp phonoagent ~/software/PhonoAgent/versions/v1.0/tf && chmod +x ~/software/PhonoAgent/versions/v1.0/tf
-cp phonoagent.example.yaml ~/software/PhonoAgent/setting/tf.yaml
-ln -sf ~/software/PhonoAgent/versions/v1.0/tf ~/.local/bin/phonoagent
-phonoagent --version
+mkdir -p ~/software/AutoZT/versions/v1.0 ~/.local/bin
+cp autozt ~/software/AutoZT/versions/v1.0/tf && chmod +x ~/software/AutoZT/versions/v1.0/tf
+cp autozt.example.yaml ~/software/AutoZT/setting/tf.yaml
+ln -sf ~/software/AutoZT/versions/v1.0/tf ~/.local/bin/autozt
+autozt --version
 ```
 
 ---
 
 ## 2. 核心概念
 
-- **任务类型（tt）**：一类计算 = 一套步骤流水线 = 一个技能。流水线由 `skill/<技能名>/skill.yaml` **自描述**（phonoagent 自动发现，全局 phonoagent.yaml 不用再抄 steps）。
+- **任务类型（tt）**：一类计算 = 一套步骤流水线 = 一个技能。流水线由 `skill/<技能名>/skill.yaml` **自描述**（autozt 自动发现，全局 autozt.yaml 不用再抄 steps）。
   当前 11 个技能：
 
   | 类型 key | 中文名 | 引擎 | 版本 |
@@ -92,119 +92,119 @@ phonoagent --version
 - **job（-j）**：项目里的一个步骤，可写步骤全名 / label / 序号，**必须配 -p**（不带 -p 时 `-j` = 对全部材料只操作该步骤）。序号是 `skill.yaml` 里的 `seq`（画图步用小数，如 3.1；带隙子步用 2.1~2.35）。
 - **命名规则**：同一类型下项目名不允许重复（启动即报错）；不同类型下允许同名。`-p` 不带 `-tt` 时跨类型解析，唯一即用，重名会提示补 `-tt`。
 - **本地模式（v3）**：输入文件（POSCAR 等）以本地项目目录为准，超算只做计算服务，目录树 = `work_dir + 项目相对路径`。类型配置写 `local_root` 即启用；只写 `root` 则是 v2 远端模式，两者可混用。
-- **多超算**：`setting/<hpc>.yaml` + `setting/<hpc>/templates/` 定义一台超算；状态表 `hpc` 列显示每项目实际用的机器，`phonoagent hpc` 切换（见 5.4）。
+- **多超算**：`setting/<hpc>.yaml` + `setting/<hpc>/templates/` 定义一台超算；状态表 `hpc` 列显示每项目实际用的机器，`autozt hpc` 切换（见 5.4）。
 - **公共池 `skill/_common/`**：多个技能共用的引擎与模板（`relax_common.py`、`dim_common.py`、`stepconf.py`、`_common/mace/` 等），技能目录里没有的文件回落到池子里取（见 7.2）。
 
 ---
 
 ## 3. 命令参考
 
-简明帮助：`phonoagent -h`、`phonoagent --help`、`phonoagent help`；完整参数和高级命令：`phonoagent --help-all`。`retry` 保留产物重生成，`rerun` 删除后重生成，`clean` 只删除，三者不合并。`auto` 控制推进开关，`monitor` 持续执行采集和推进。
+简明帮助：`autozt -h`、`autozt --help`、`autozt help`；完整参数和高级命令：`autozt --help-all`。`retry` 保留产物重生成，`rerun` 删除后重生成，`clean` 只删除，三者不合并。`auto` 控制推进开关，`monitor` 持续执行采集和推进。
 
 ```
-phonoagent summary                        巡检首选：只读极简汇总（每任务类型一行 done/run/err/
+autozt summary                        巡检首选：只读极简汇总（每任务类型一行 done/run/err/
                                   scancel/wait 计数 + FAIL 清单），省 token，绝不提交。
                                   尊重 -tt/-status/-x/--hide-done 过滤，如
-                                  phonoagent -status error summary 只看失败的
-phonoagent summary --diff                 巡检更省：与上次快照对比，无变化输出 0 字节（静默），
+                                  autozt -status error summary 只看失败的
+autozt summary --diff                 巡检更省：与上次快照对比，无变化输出 0 字节（静默），
                                   有变化才输出汇总。快照按过滤范围分开存在配置文件
                                   目录（.tf_summary_*.txt），首次运行建立基线
                                   （summary 同 list 走本地缓存，--refresh 强制刷新）
-phonoagent list                           只读状态总表：不 auto-fetch、不 auto-advance，纯查看、
+autozt list                           只读状态总表：不 auto-fetch、不 auto-advance，纯查看、
                                   绝不提交（巡检/查看优先用它，别用 status）。
-                                  默认 PHONOAGENT_CACHE_TTL 秒内（默认 60）复用本地采集缓存、
-                                  跳过 ssh 秒开；--refresh 强制重新采集，PHONOAGENT_CACHE_TTL=0 关闭
-phonoagent [ROOT] / phonoagent status             状态总表 + auto-fetch + auto-advance（会拉文件、会提交）。
-                                  注意：裸 phonoagent（无参）只报版本，不采集
-phonoagent -tt band-dft-cpu                       只看某类型（也支持 phonoagent -tt band-dft-cpu summary 只汇总该类型）
-phonoagent -tt band-dft-cpu -p MAT status         单材料详情
-phonoagent [-tt TT] [-p MAT] start       开始：输入没生成先 gen 再提交；无 -p = 推进全部
-phonoagent [-tt TT] [-p MAT] stop        取消作业。取消的步骤打 scancel 标记
+                                  默认 AUTOZT_CACHE_TTL 秒内（默认 60）复用本地采集缓存、
+                                  跳过 ssh 秒开；--refresh 强制重新采集，AUTOZT_CACHE_TTL=0 关闭
+autozt [ROOT] / autozt status             状态总表 + auto-fetch + auto-advance（会拉文件、会提交）。
+                                  注意：裸 autozt（无参）只报版本，不采集
+autozt -tt band-dft-cpu                       只看某类型（也支持 autozt -tt band-dft-cpu summary 只汇总该类型）
+autozt -tt band-dft-cpu -p MAT status         单材料详情
+autozt [-tt TT] [-p MAT] start       开始：输入没生成先 gen 再提交；无 -p = 推进全部
+autozt [-tt TT] [-p MAT] stop        取消作业。取消的步骤打 scancel 标记
                                   （本地材料目录 .tf_scancel.json）：状态列显示
                                   scancel，auto_advance 和批量 start 都不会再动它。
                                   显式重跑：-p MAT start（保留文件直接重交）/retry/rerun，
                                   或跨材料 -status scancel start（retry/rerun）；
                                   重交成功/rerun/clean 后标记自动清除，
                                   步骤出现新作业或已完成时标记也会自愈
-phonoagent [-tt TT] [-p MAT] retry       保留 OUTCAR/CONTCAR 等产物，按项目配置重新生成输入，
+autozt [-tt TT] [-p MAT] retry       保留 OUTCAR/CONTCAR 等产物，按项目配置重新生成输入，
                                   不提交；检查后 start。持久参数改到项目配置/模板，
                                   不要假定远端手改的 INCAR 会原样保留。
-phonoagent -p A B retry                  同时操作多个项目（也支持 -p A,B 逗号分隔；
+autozt -p A B retry                  同时操作多个项目（也支持 -p A,B 逗号分隔；
                                   start/stop/rerun/clean/status/dir/fetch 同样适用）
-phonoagent [-tt TT] [-p MAT] rerun       删除旧步骤产物 → gen 重新生成；不提交，检查后 start
-phonoagent -j STEP rerun                 跨材料只重做该步骤（gen 脚本改动后一键修复全部材料；
+autozt [-tt TT] [-p MAT] rerun       删除旧步骤产物 → gen 重新生成；不提交，检查后 start
+autozt -j STEP rerun                 跨材料只重做该步骤（gen 脚本改动后一键修复全部材料；
                                   自动跳过 done 的和前序未完成的，加 -f 可强制）
-phonoagent -j STEP start/stop/retry/clean  同理：-j 不带 -p = 对全部材料只操作该步骤
-phonoagent -x A,B ...                    任何命令加 -x 跳过指定项目（逗号分隔，全名或 basename）
-phonoagent -status ST ...                只保留含指定状态步骤的材料，对任意命令生效：
-                                  phonoagent -status scancel          只看被 stop 取消的
-                                  phonoagent -status scancel start    把它们全部重跑（保留文件重交）
-                                  phonoagent -status error retry      重生成全部失败步骤输入（不提交）
+autozt -j STEP start/stop/retry/clean  同理：-j 不带 -p = 对全部材料只操作该步骤
+autozt -x A,B ...                    任何命令加 -x 跳过指定项目（逗号分隔，全名或 basename）
+autozt -status ST ...                只保留含指定状态步骤的材料，对任意命令生效：
+                                  autozt -status scancel          只看被 stop 取消的
+                                  autozt -status scancel start    把它们全部重跑（保留文件重交）
+                                  autozt -status error retry      重生成全部失败步骤输入（不提交）
                                   状态词 done/running/pd/error/waiting/scancel，逗号分隔
-phonoagent [-p MAT] [-j STEP] clean       只删不建回到 PREP：无 -p=全部材料（本地+超算只留 POSCAR）；
+autozt [-p MAT] [-j STEP] clean       只删不建回到 PREP：无 -p=全部材料（本地+超算只留 POSCAR）；
                                   -p C20=该体系全部材料；-p -j=单个步骤目录。
                                   多技能：-tt elastic-dft-cpu clean 只清 elastic-dft-cpu 的产物并从项目配置
                                   移除 elastic-dft-cpu 段（band-dft-cpu 段和配置目录保留；
                                   本技能是最后一个段才整目录删 project_setting）
-phonoagent skills                        列出已发现的所有技能（版本、步骤数、清单路径、警告）
-phonoagent -tt TT dir                    输出类型根目录路径
-phonoagent -p MAT [-j STEP] dir          输出材料/步骤在超算上的目录路径（只输出路径，便于拼接命令）
-phonoagent [-p MAT] fetch                手动强制拉回结果（status 时已自动保存完成的步骤到 result/，
+autozt skills                        列出已发现的所有技能（版本、步骤数、清单路径、警告）
+autozt -tt TT dir                    输出类型根目录路径
+autozt -p MAT [-j STEP] dir          输出材料/步骤在超算上的目录路径（只输出路径，便于拼接命令）
+autozt [-p MAT] fetch                手动强制拉回结果（status 时已自动保存完成的步骤到 result/，
                                   项目 setting.yaml 里 auto_fetch: false 可关闭）。
                                   按 result/<step>/.tf_fetched 戳记判"已抓取"，
                                   不再每次重拉；步骤重提交后自动清戳重拉，
-                                  phonoagent fetch 手动拉不受戳记限制（结果不完整时就用它强制重拉）
-                                  phonoagent fetch --all 把每个步骤整个目录拉回
-phonoagent -p A,B hpc 集群名              指定项目跑哪台超算：材料级写 project_setting/hpc.yaml；
-phonoagent -tt TT -p A,B hpc 集群名        技能级写 材料/<技能>/hpc.yaml（只改该技能，优先级最高）。
+                                  autozt fetch 手动拉不受戳记限制（结果不完整时就用它强制重拉）
+                                  autozt fetch --all 把每个步骤整个目录拉回
+autozt -p A,B hpc 集群名              指定项目跑哪台超算：材料级写 project_setting/hpc.yaml；
+autozt -tt TT -p A,B hpc 集群名        技能级写 材料/<技能>/hpc.yaml（只改该技能，优先级最高）。
                                   必须搭配 -p，只动指定项目、老项目不变；只影响之后提交的作业
-phonoagent [-tt TT] -p MAT -j STEP conf    查看/修改该步骤的 step.conf（分层合并后的最终值）。
+autozt [-tt TT] -p MAT -j STEP conf    查看/修改该步骤的 step.conf（分层合并后的最终值）。
                                   不带 --set = 打印合并结果 + 各层来源；
                                   --set 节.键=值 写进本材料 project_setting/templates/<步骤>/step.conf
                                   （键名不带点 = 写入 [params] 节；值留空 = 删键）。
-                                  例：phonoagent -tt kl-mace-cpu -p X -j 2 conf
-                                      phonoagent -tt kl-mace-cpu -p X -j 2 conf --set params.METHOD=random
-                                      phonoagent -tt opt-dft-cpu -p X -j 3 conf --set MU="C:-9.0 Li:-1.9"
-phonoagent auto [on|off]                 开关全局 auto_advance（动目录/恢复备份前先 off）
-phonoagent -tt TT -p MAT auto on|off      只改指定项目的技能开关；on 会立即推进就绪步骤
-phonoagent -tt TT -p MAT auto resume      开启推进并清除该项目该技能的取消标记；仍按依赖等待，
+                                  例：autozt -tt kl-mace-cpu -p X -j 2 conf
+                                      autozt -tt kl-mace-cpu -p X -j 2 conf --set params.METHOD=random
+                                      autozt -tt opt-dft-cpu -p X -j 3 conf --set MU="C:-9.0 Li:-1.9"
+autozt auto [on|off]                 开关全局 auto_advance（动目录/恢复备份前先 off）
+autozt -tt TT -p MAT auto on|off      只改指定项目的技能开关；on 会立即推进就绪步骤
+autozt -tt TT -p MAT auto resume      开启推进并清除该项目该技能的取消标记；仍按依赖等待，
                                   不删除产物、不重算已完成步骤、不清除其他技能标记。
                                   必须显式指定 -tt/-p；普通 auto on 保留取消标记。
-phonoagent init                          批量初始化：当前目录下所有项目生成 project_setting/
-phonoagent -p MAT init                   只初始化该项目（如 -p C20/qHPC20 → C20/project_setting）
-phonoagent -p MAT -j STEP init           只生成该步骤输入文件（gen），不提交——提交前可先检查
-phonoagent monitor [-i 秒]                监控模式（前台）：每 interval 秒（默认 300）自动
+autozt init                          批量初始化：当前目录下所有项目生成 project_setting/
+autozt -p MAT init                   只初始化该项目（如 -p C20/qHPC20 → C20/project_setting）
+autozt -p MAT -j STEP init           只生成该步骤输入文件（gen），不提交——提交前可先检查
+autozt monitor [-i 秒]                监控模式（前台）：每 interval 秒（默认 300）自动
                                   重新采集 → auto-fetch → auto-advance；
                                   状态有变化才打印总表，否则一行心跳；Ctrl+C 退出。
-                                  每轮自动检测配置文件改动并重载（phonoagent.yaml、project_setting/*.yaml、
-                                  材料/技能的 hpc.yaml）——改配置或换 phonoagent 版本后不用重启监控
-phonoagent monitor -d                    后台监控（推荐）：不占终端，日志/pid 固定在
-                                  phonoagent.yaml 所在目录（.tf_watch.log，tail -f 查看）；
-                                  phonoagent monitor --stop 任意目录可停止
-phonoagent monitor --restart             重启后台监控：先停旧的再起新的（换 phonoagent 版本后使用）
-phonoagent monitor --install / --uninstall crontab 保活：每 10 分钟检查，监控死了自动
+                                  每轮自动检测配置文件改动并重载（autozt.yaml、project_setting/*.yaml、
+                                  材料/技能的 hpc.yaml）——改配置或换 autozt 版本后不用重启监控
+autozt monitor -d                    后台监控（推荐）：不占终端，日志/pid 固定在
+                                  autozt.yaml 所在目录（.tf_watch.log，tail -f 查看）；
+                                  autozt monitor --stop 任意目录可停止
+autozt monitor --restart             重启后台监控：先停旧的再起新的（换 autozt 版本后使用）
+autozt monitor --install / --uninstall crontab 保活：每 10 分钟检查，监控死了自动
                                   拉起（重启/WSL 关闭后自动恢复），不会重复启动
                                   （watch 是 monitor 的旧名，仍可用；restart、watch restart、
                                   monitor restart 均兼容 monitor --restart）
-phonoagent -tt TT migrate-subdir [--dry-run | -y]  迁移材料到 技能子目录 布局（band-dft-cpu 已迁移完，
+autozt -tt TT migrate-subdir [--dry-run | -y]  迁移材料到 技能子目录 布局（band-dft-cpu 已迁移完，
                                   新技能默认 skill_subdir: true，一般用不到）
-phonoagent -tt TT adopt [--dry-run | -y]  接管"人手工搬进 材料/<技能>/"的目录（先 phonoagent auto off）
-phonoagent json / phonoagent config              JSON 输出（全量，token 大）/ 打印示例配置
+autozt -tt TT adopt [--dry-run | -y]  接管"人手工搬进 材料/<技能>/"的目录（先 autozt auto off）
+autozt json / autozt config              JSON 输出（全量，token 大）/ 打印示例配置
 ```
 
-**零输入全自动（推荐配置）**：phonoagent.yaml 里写 `auto_advance: true` + `auto_watch: true`，再执行一次 `phonoagent monitor --install`——之后**不需要敲任何命令、不需要手动挂监控**：监控死了任何 phonoagent 命令顺带拉起（auto_watch），重启/WSL 关闭后 crontab 保活拉起（--install）。想彻底关掉后台监控：`auto_watch: false` + `phonoagent monitor --stop` + `phonoagent monitor --uninstall`。WSL 注意：保活依赖 WSL 里的 cron 服务在跑（`sudo service cron start`；wsl.conf 开 systemd 则自动）。Windows 侧更稳的替代：任务计划程序加"登录时运行" `wsl -e bash -lc "phonoagent monitor -d"`。
+**零输入全自动（推荐配置）**：autozt.yaml 里写 `auto_advance: true` + `auto_watch: true`，再执行一次 `autozt monitor --install`——之后**不需要敲任何命令、不需要手动挂监控**：监控死了任何 autozt 命令顺带拉起（auto_watch），重启/WSL 关闭后 crontab 保活拉起（--install）。想彻底关掉后台监控：`auto_watch: false` + `autozt monitor --stop` + `autozt monitor --uninstall`。WSL 注意：保活依赖 WSL 里的 cron 服务在跑（`sudo service cron start`；wsl.conf 开 systemd 则自动）。Windows 侧更稳的替代：任务计划程序加"登录时运行" `wsl -e bash -lc "autozt monitor -d"`。
 
 状态总表每个项目**两行**：第一行是各步骤状态词，第二行是 job 实况（已去掉总体 Status 列）。
 
-- 状态词：`done` 完成 / `running` 运行中 / `pd` 排队 / `error` 未通过判据 / `waiting` 未开始（输入未生成、就绪待交、被前序阻塞都算）/ `scancel` 被 phonoagent stop 取消（打标记，auto 不会重跑，显式重跑后自动清除）
+- 状态词：`done` 完成 / `running` 运行中 / `pd` 排队 / `error` 未通过判据 / `waiting` 未开始（输入未生成、就绪待交、被前序阻塞都算）/ `scancel` 被 autozt stop 取消（打标记，auto 不会重跑，显式重跑后自动清除）
 - 第二行：running → `节点 任务号 已跑时长`（如 `cu41 3569183 0:42:11`）；pd → `任务号 (原因)`；scancel → `已取消(原任务号)`；其余 `-`
 - `hpc` 列 = 该项目使用的超算；`dim` 列 = 0D/2D/3D 判定
 
-选项：`-tt` 类型、`-p` 材料（完整名 `C20/qHPC20` 或唯一 basename `qHPC20`；多个用逗号分隔或空格跟在后面）、`-j`/`-job` 步骤（全名/label/序号）、`-x` 跳过指定项目、`-status` 按步骤状态过滤材料、`-c` 配置、`--host`、`-u` squeue 用户、`-f` 强制（先取消再交）、`-y` 免确认、`--refresh` list/summary 强制跳过本地缓存重新采集。帮助：`phonoagent -h` 或 `phonoagent help`（含常用示例）。
+选项：`-tt` 类型、`-p` 材料（完整名 `C20/qHPC20` 或唯一 basename `qHPC20`；多个用逗号分隔或空格跟在后面）、`-j`/`-job` 步骤（全名/label/序号）、`-x` 跳过指定项目、`-status` 按步骤状态过滤材料、`-c` 配置、`--host`、`-u` squeue 用户、`-f` 强制（先取消再交）、`-y` 免确认、`--refresh` list/summary 强制跳过本地缓存重新采集。帮助：`autozt -h` 或 `autozt help`（含常用示例）。
 
 SLURM 作业名：提交时统一改为 `材料-任务类型-步骤label`（如 `qHPC20-band-S1_opt`），覆盖 submit.sh 里原有的 `--job-name`/`-J`，squeue 里一眼对应项目。**3090 已装真 SLURM 24.05.8**（分区 cpu192 默认 + gpu 6 卡），sbatch/squeue/scancel 走 `/usr/bin`。
 
-新增材料：把带 POSCAR 的目录放进项目根（如 `C20/qHPC20new/`），`phonoagent` 状态表末尾会提示"发现新材料目录未初始化"；`phonoagent init` 是增量的——只给新材料生成 `project_setting/`，已初始化的自动跳过。init 后 `phonoagent start` 开始；配了 `auto_advance: true` 则下次 `phonoagent` 自动开算。
+新增材料：把带 POSCAR 的目录放进项目根（如 `C20/qHPC20new/`），`autozt` 状态表末尾会提示"发现新材料目录未初始化"；`autozt init` 是增量的——只给新材料生成 `project_setting/`，已初始化的自动跳过。init 后 `autozt start` 开始；配了 `auto_advance: true` 则下次 `autozt` 自动开算。
 
 ---
 
@@ -218,7 +218,7 @@ SLURM 作业名：提交时统一改为 `材料-任务类型-步骤label`（如 
 | `OK` | 完成 | 判据返回 True |
 | `FAIL` | 算完了但判据不过 | 无作业 + 判据 False，`diag` 给原因 |
 | `WAIT` | 被前序步骤阻塞 | 前一步没 OK |
-| `SCANCEL` | 被 phonoagent stop 取消 | 打了 .tf_scancel.json 标记 |
+| `SCANCEL` | 被 autozt stop 取消 | 打了 .tf_scancel.json 标记 |
 
 - 画图/后处理等 `run: gen` 步骤不用这套词，用 `completed` / `not started` / `error`（无 running/pd）。
 - 扇出（fanout）步骤显示 `3/5 2R 0PD`（完成数/总数、在跑、排队）。
@@ -228,24 +228,24 @@ SLURM 作业名：提交时统一改为 `材料-任务类型-步骤label`（如 
 
 ## 5. 配置
 
-### 5.1 全局 phonoagent.yaml + 项目配置
+### 5.1 全局 autozt.yaml + 项目配置
 
-**配置跟着项目走**。全局 phonoagent.yaml 只登记站点信息和每技能的工作根；**流水线步骤定义在 `skill/<技能>/skill.yaml` 里**（技能自描述），覆盖优先级：
+**配置跟着项目走**。全局 autozt.yaml 只登记站点信息和每技能的工作根；**流水线步骤定义在 `skill/<技能>/skill.yaml` 里**（技能自描述），覆盖优先级：
 
 ```
-skill/<技能>/skill.yaml  <  全局 phonoagent.yaml 的 task_types.<key>  <  项目 tf_<项目名>.yaml
+skill/<技能>/skill.yaml  <  全局 autozt.yaml 的 task_types.<key>  <  项目 tf_<项目名>.yaml
 ```
 
 ```yaml
-# ~/software/PhonoAgent/setting/tf.yaml（全局，实际现状）
+# ~/software/AutoZT/setting/tf.yaml（全局，实际现状）
 host: jzzn                            # 默认 ssh 别名（项目 hpc.yaml 可覆盖）
 remote_path_prefix: /home/wangchaoyue852/software/pybin    # 只注入 python/python3/vaspkit 软链（供 gen 脚本用 numpy/pymatgen/vaspkit）；sbatch 走各机器真 SLURM
 project_roots:                        # 项目根列表：扫描其下 project_setting/tf_*.yaml（含一层子目录）
   - /mnt/d/tf_data
-  - /home/wangchao/software/PhonoAgent/tf_test
+  - /home/wangchao/software/AutoZT/tf_test
   - /mnt/d/tf_data/Fullerene_Network/gen_metalfullence/doped/intercalation
 auto_advance: true                    # status/monitor 时自动提交可开始的步骤
-auto_watch: false                     # 设为 true = 任何 phonoagent 命令顺带拉起后台监控
+auto_watch: false                     # 设为 true = 任何 autozt 命令顺带拉起后台监控
 task_types:                           # 只写与 skill.yaml 不同的站点字段（work_dir 必须配）
   band-dft-cpu:
     work_dir: /public/home/wangchao/Fullerene_Network/work
@@ -258,19 +258,19 @@ task_types:                           # 只写与 skill.yaml 不同的站点字�
 
 - **命名**：`tf_<项目名>.yaml`（如 `tf_C20.yaml`），**全局唯一，禁止重复**——两个项目放同名文件会直接报错并列出两个路径。
 - **local_root 推荐写 `".."`**（= 体系根）：材料名带 `C20/` 前缀，超算目录 = `work_dir/C20/qHPC20`，与本地目录树一致。缺省 = project_setting 父目录。
-- **字段继承**：没写的字段（steps/skill_dir/hpc/gen_need/work_dir）自动继承全局 phonoagent.yaml 同 key 类型，再往下继承 skill.yaml；写了就覆盖。
+- **字段继承**：没写的字段（steps/skill_dir/hpc/gen_need/work_dir）自动继承全局 autozt.yaml 同 key 类型，再往下继承 skill.yaml；写了就覆盖。
 - **分段合并**：多个项目配置定义同一个类型 key = 该类型的多个分段，各自发现材料，表格里合并显示。
-- 用了项目配置，全局就不要写 local_root；新增项目 = 放好 POSCAR 跑 `phonoagent init`，不用动全局配置。
+- 用了项目配置，全局就不要写 local_root；新增项目 = 放好 POSCAR 跑 `autozt init`，不用动全局配置。
 
 ### 5.2 project_setting/（就近优先）
 
-从材料目录向上找最近的 `project_setting/`（如 `C20/project_setting` 对其下所有材料生效，`C20/qHPC20/project_setting` 可再覆盖单个材料）。用 `phonoagent -p MAT init` 生成，含：
+从材料目录向上找最近的 `project_setting/`（如 `C20/project_setting` 对其下所有材料生效，`C20/qHPC20/project_setting` 可再覆盖单个材料）。用 `autozt -p MAT init` 生成，含：
 
 - **setting.yaml**（路径与结果，占位符 `{matdir} {mat} {root}`）：
   ```yaml
   base_dir: "{matdir}"              # 项目基准目录
   result_dir: "{matdir}/result"     # fetch 拉回位置（result/<step>/）
-  log_dir: "{matdir}/log"           # phonoagent 操作日志 phonoagent.log
+  log_dir: "{matdir}/log"           # autozt 操作日志 autozt.log
   work_dir: /public/home/...        # 可覆盖类型的超算工作根
   fetch_files: [INCAR, POSCAR, POTCAR, KPOINTS, KPOINTS_OPT, kpath.json, submit.sh, OUTCAR, CONTCAR, EIGENVAL, vasprun.xml, queue.out]
   ```
@@ -296,7 +296,7 @@ task_types:                           # 只写与 skill.yaml 不同的站点字�
 
 推送/渲染到超算时文件名始终是逻辑名，gen 脚本不用改。
 
-### 5.3 step.conf 三层合并与 phonoagent conf
+### 5.3 step.conf 三层合并与 autozt conf
 
 **参数一律走 step.conf**，不硬编码在 gen 脚本顶部。三层合并：
 
@@ -306,12 +306,12 @@ skill 出厂默认（skill/<技能>/templates/step.conf）
   → 项目 templates/<步骤名>/step.conf（只覆盖该步骤）
 ```
 
-phonoagent 推送时先在本地把各层合并成**一份**带 `# <- [N]` 来源注释的文件再推，超算上只有一份、零回落逻辑。查看/修改：
+autozt 推送时先在本地把各层合并成**一份**带 `# <- [N]` 来源注释的文件再推，超算上只有一份、零回落逻辑。查看/修改：
 
 ```bash
-phonoagent -tt kl-mace-cpu -p <材料> -j 2 conf                    # 看合并后的最终值 + 各层来源
-phonoagent -tt kl-mace-cpu -p <材料> -j 2 conf --set params.METHOD=random
-phonoagent -tt opt-dft-cpu  -p <材料> -j 3 conf --set MU="C:-9.0 Li:-1.9"
+autozt -tt kl-mace-cpu -p <材料> -j 2 conf                    # 看合并后的最终值 + 各层来源
+autozt -tt kl-mace-cpu -p <材料> -j 2 conf --set params.METHOD=random
+autozt -tt opt-dft-cpu  -p <材料> -j 3 conf --set MU="C:-9.0 Li:-1.9"
 ```
 
 `--set` 永远写进**本步的项目文件**，绝不动 skill 出厂默认。
@@ -331,9 +331,9 @@ INCAR 生效顺序固定：`上一步继承 → [incar] → 脚本自动计算 �
 覆盖核数的典型用法：
 
 ```bash
-phonoagent -tt opt-dft-cpu -p X -j 1 conf --set submit.ntasks_per_node=12   # VASP 类(MPI)
-phonoagent -tt kl-mace-cpu -p X -j 2 conf --set submit.cpus_per_task=12  # MACE 类(torch线程)
-# 改完重新 gen：phonoagent -p X -j N init -f 只生成不提交，检查后再 start
+autozt -tt opt-dft-cpu -p X -j 1 conf --set submit.ntasks_per_node=12   # VASP 类(MPI)
+autozt -tt kl-mace-cpu -p X -j 2 conf --set submit.cpus_per_task=12  # MACE 类(torch线程)
+# 改完重新 gen：autozt -p X -j N init -f 只生成不提交，检查后再 start
 ```
 
 类型支持 `str` / `int` / `float` / `bool` / `words`（空白切分）/ `elemmap`（`Mn:5.0 In:0.0` → dict）。
@@ -349,15 +349,15 @@ phonoagent -tt kl-mace-cpu -p X -j 2 conf --set submit.cpus_per_task=12  # MACE 
 |---|---|---|---|---|---|
 | `jzzn` | `jzzn` | CPU 集群（cpu192 分区） | 真 SLURM | VASP 6.4.x；MACE 走 venv `~/venvs/mace_cpu`（torch 2.7.1+cpu） | `/public/home/wangchao/Fullerene_Network/work` |
 | `a800` | `A800` | 4 节点 × 8×A800-SXM4-80GB，每节点 128 CPU | 真 SLURM（分区 a800，GRES gpu:a800） | VASP 6.4.3 GPU 版；conda `mace`（mace 0.3.16+torch cu128+phono3py+symfc+pheasy 单环境） | `/fs0/home/wangcch/work`（/fs0 已 97% 满，注意） |
-| `3090` | `wangchao_3090` | 8×RTX3090 | 真 SLURM 24.05.8（分区 cpu192 默认 + gpu 6 卡） | conda `mace-gpu`；VASP 6.6.0 GPU 版（OpenACC，`~/software/vasp.6.6.0/bin/{vasp_std,gam,ncl}`，NVIDIA HPC-SDK 24.11 环境） | `/home/wangchaoyue852/PhonoAgent/work` |
+| `3090` | `wangchao_3090` | 8×RTX3090 | 真 SLURM 24.05.8（分区 cpu192 默认 + gpu 6 卡） | conda `mace-gpu`；VASP 6.6.0 GPU 版（OpenACC，`~/software/vasp.6.6.0/bin/{vasp_std,gam,ncl}`，NVIDIA HPC-SDK 24.11 环境） | `/home/wangchaoyue852/AutoZT/work` |
 
-- **切换**：`phonoagent -p qHPC20,qHPC24 hpc a800`（材料级）/ `phonoagent -tt elastic-dft-cpu -p qHPC20 hpc a800`（技能级）。只动 `-p` 指定的项目；只影响之后提交的作业。
+- **切换**：`autozt -p qHPC20,qHPC24 hpc a800`（材料级）/ `autozt -tt elastic-dft-cpu -p qHPC20 hpc a800`（技能级）。只动 `-p` 指定的项目；只影响之后提交的作业。
 - **接入一台新超算（两步）**：① 照 `setting/jzzn.yaml` 建 `setting/<名>.yaml`（name/ssh_host/模板映射/集群默认 work_dir 与 conda 环境）；② 把提交模板放到 `setting/<名>/templates/`（逻辑名即文件名，如 `submit_std_2d.tpl`、`submit_mace.tpl`、`<步骤名>/submit_std_2d.tpl` 变体）。`#SBATCH --job-name` 必须写成 `{{JOBNAME}}` 占位符。
 - 旧版散在 skill 里的 `submit_jzzn_*.tpl` 已移到 `setting/.migrated/submit_backup/` 备份；现有项目各自的 `project_setting/templates/` 副本不受影响（优先级最高）。
 
 #### 5.4.1 每步可指定超算（v1.12）
 
-默认整材料跑一台超算（`phonoagent hpc` 切）；v1.12 起**单个步骤也能指定超算**：在 skill.yaml（或项目 `tf_<项目>.yaml`）的步骤定义里加 `hpc: <集群名>` 字段即可，例如：
+默认整材料跑一台超算（`autozt hpc` 切）；v1.12 起**单个步骤也能指定超算**：在 skill.yaml（或项目 `tf_<项目>.yaml`）的步骤定义里加 `hpc: <集群名>` 字段即可，例如：
 
 ```yaml
   - {seq: 2, name: step2_disp_force, label: S2_force, hpc: jzzn, ...}
@@ -381,7 +381,7 @@ conda_env: mace-gpu                                        # 该集群默认 con
 amset_env: amset                                           # amset 专用环境（amset deform/read/run）
 ```
 
-phonoagent 在合成每步 step.conf 时，把这些键作为 `[params] CONDA_SH / CONDA_ENV / AMSET_ENV / MACE_MODEL_DIR` **注入所有技能的步骤**（`stepconf.py` 已把它们列为通用保留参数）。gen 脚本 / 提交模板需要时从 step.conf 读，例如 amset 步骤：
+autozt 在合成每步 step.conf 时，把这些键作为 `[params] CONDA_SH / CONDA_ENV / AMSET_ENV / MACE_MODEL_DIR` **注入所有技能的步骤**（`stepconf.py` 已把它们列为通用保留参数）。gen 脚本 / 提交模板需要时从 step.conf 读，例如 amset 步骤：
 
 ```python
 # gen 脚本里：优先读 step.conf 注入的集群参数，缺省才回退主机探测
@@ -392,21 +392,21 @@ _AMSET_ENV_SRC = "source %s && conda activate %s" % (CONDA_SH, AMSET_ENV)
 
 ### 5.5 自动化开关
 
-- `auto_advance: true`（全局 phonoagent.yaml 顶层）：status/monitor 时自动提交可开始的步骤（gen+提交一条龙，流水线算完自动接下一步；error 不自动重试，留给人/agent 判断；项目 setting.yaml 里 `auto_advance: false` 可单独关闭；可用 `phonoagent auto on/off` 一键切换）。
-- `auto_watch: true` + `phonoagent monitor --install`：零输入全自动（见第 3 节）。
-- 动目录、恢复备份、大批量调整前先 `phonoagent auto off`，完事 `on`。
+- `auto_advance: true`（全局 autozt.yaml 顶层）：status/monitor 时自动提交可开始的步骤（gen+提交一条龙，流水线算完自动接下一步；error 不自动重试，留给人/agent 判断；项目 setting.yaml 里 `auto_advance: false` 可单独关闭；可用 `autozt auto on/off` 一键切换）。
+- `auto_watch: true` + `autozt monitor --install`：零输入全自动（见第 3 节）。
+- 动目录、恢复备份、大批量调整前先 `autozt auto off`，完事 `on`。
 
 ### 5.6 其它配置项
 
 - **run_steps 步骤子集**（全局或项目级均可）：`run_steps: [1]` 只跑 seq=1 的步骤；元素匹配 `seq`、`name` 或 `label`，不写 = 全部步骤。
-- **max_jobs 按技能限制并发提交**：每个 `task_types.<key>` 写 `max_jobs: N`；也可写全局默认；环境变量 `PHONOAGENT_MAX_JOBS` 兜底。只卡「提交超算（sbatch）」：达到上限后尚未提交的任务先本地生成输入（`PREP` → `TODO`）待命，monitor 每轮（默认 300 秒）发现有作业算完就自动补交。kl 类扇出步骤按实际子作业数计。
+- **max_jobs 按技能限制并发提交**：每个 `task_types.<key>` 写 `max_jobs: N`；也可写全局默认；环境变量 `AUTOZT_MAX_JOBS` 兜底。只卡「提交超算（sbatch）」：达到上限后尚未提交的任务先本地生成输入（`PREP` → `TODO`）待命，monitor 每轮（默认 300 秒）发现有作业算完就自动补交。kl 类扇出步骤按实际子作业数计。
 - **挂死作业自动恢复（v1.11，`hang_check`）**：monitor 每轮检查 RUNNING 作业，**用进度指纹判定挂死**——记录每个作业的（`OUTCAR` 字节数, `OSZICAR` 行数），指纹连续 `hang_min_stale_rounds`（默认 2）轮不变 **且** 输出年龄 ≥ `hang_stale_secs`（默认 1.5h）才算挂死（指纹在涨 = 活着，放它继续算；OSZICAR 尾的 SCF 迭代 rms 还在降 = 慢但活着，也不判）。判定后**先诊断原因再处理**：
   - `scf`（OSZICAR 尾是 SCF 迭代行且 rms 不再降）：SCF 空转/尾部卡死——只重跑会再次挂死，`hang_fix_scf` 时自动升级 INCAR（补 `AMIX=0.1`/`BMIX=0.0001` → 改 `ALGO=All` → `NELM≥200`，**原子写 + 备份 `INCAR.bak.*`**），再从 CONTCAR 续跑重交，并给 `hang_grace_rounds` 轮宽限期（AMIX 降低使 SCF 变慢，防被再次误判）。
   - `node`（queue.err 或 `sacct` 查到的 NODE_FAIL）：节点故障，直接重跑（换节点即可）。
   - `disk`（No space）：磁盘满，**只告警不重跑**（满盘上写文件会写坏 INCAR/POSCAR）。
   - `unknown`：直接重跑。
-  恢复动作：`scancel` → 轮询等作业退出 → **校验 CONTCAR 完整**（≥8 行、原子数与 POSCAR 一致，不完整则保留原 POSCAR 并告警）→ 备份旧输出 `*.hung` → 重新 `sbatch`。恢复次数受 `hang_max_retries`（默认 2）限制，计数存 `<配置目录>/.tf_hung.json`；超限只告警。**`hang_dry_run: true` 时只打印判定不动手（观察期安全模式）**。参数优先级：项目 `setting.yaml` > 技能 `task_types.<key>.*` > 全局 `phonoagent.yaml` > 默认。关掉写 `hang_check: false`，不想自动改 INCAR 写 `hang_fix_scf: false`。
-- **hide_done**：`phonoagent --hide-done` 只显示未完成项目；全局写 `hide_done: true` 设为默认，`--show-done` 临时恢复。
+  恢复动作：`scancel` → 轮询等作业退出 → **校验 CONTCAR 完整**（≥8 行、原子数与 POSCAR 一致，不完整则保留原 POSCAR 并告警）→ 备份旧输出 `*.hung` → 重新 `sbatch`。恢复次数受 `hang_max_retries`（默认 2）限制，计数存 `<配置目录>/.tf_hung.json`；超限只告警。**`hang_dry_run: true` 时只打印判定不动手（观察期安全模式）**。参数优先级：项目 `setting.yaml` > 技能 `task_types.<key>.*` > 全局 `autozt.yaml` > 默认。关掉写 `hang_check: false`，不想自动改 INCAR 写 `hang_fix_scf: false`。
+- **hide_done**：`autozt --hide-done` 只显示未完成项目；全局写 `hide_done: true` 设为默认，`--show-done` 临时恢复。
 - **维度自动判定（0D/2D/3D）**：`dim_common.detect_dimension()` 按 POSCAR 真空层（阈值 8 Å）判定——0 个真空方向 = 3D，1 个 = 2D（真空轴记入 workflow_method.txt 的 `DIM=`，后续步骤继承），**≥2 个 = 0D（孤立分子）**。0D 只有开了 `MOL_BRANCH` 的技能（band-dft-cpu step1）支持；弹性/热导/形变势对分子无定义，未开 0D 的技能会明确报错而不是默默跑出数。
 
 ---
@@ -430,9 +430,9 @@ _AMSET_ENV_SRC = "source %s && conda activate %s" % (CONDA_SH, AMSET_ENV)
 
 - **带隙层级由 step.conf 的 `BANDGAP` 参数控制**：`pbe` = 只到 PBE 带隙（1,2,3+3.1/3.2），跳过整段 HSE；`hse`（默认）= 继续 step4+4.1/4.2。
 - 可选步骤组开关（默认全开）：`plot_steps: false`、`vacuum_align: false`、`bandgap_hse: false`。
-- **作业内三段弛豫**（`STAGE_MODE=in_job`，默认）：一次排队，段间 `cp CONTCAR POSCAR` 接力，某段收敛即跳过后续段（EARLY_EXIT），断点续跑靠 `.sN.done` 标记，OUTCAR 停滞 `STALL_MIN` 分钟看门狗判卡死。想回到旧 phonoagent 级三段（每段一次排队 + `relax_skip` 空转诊断）→ `STAGE_MODE=tf_stages`；单段 → `STAGE_MODE=single`。
+- **作业内三段弛豫**（`STAGE_MODE=in_job`，默认）：一次排队，段间 `cp CONTCAR POSCAR` 接力，某段收敛即跳过后续段（EARLY_EXIT），断点续跑靠 `.sN.done` 标记，OUTCAR 停滞 `STALL_MIN` 分钟看门狗判卡死。想回到旧 autozt 级三段（每段一次排队 + `relax_skip` 空转诊断）→ `STAGE_MODE=tf_stages`；单段 → `STAGE_MODE=single`。
 - 2D/3D/0D 自动判定；0D（分子）支持到 step1（`MOL_BRANCH=True`，`incar_0d.tpl`），step3/4 对分子无定义、不该跑。
-- `aux_files` 随 gen 推送 4 个 `stepN_check_and_resubmit.py`（agent 诊断用）：只允许加 `--check-only` 运行（退出码 0=converged / 10=not_converged / 20=running / 30=重启超限 / 40=error），**重投一律用 phonoagent retry/rerun**。
+- `aux_files` 随 gen 推送 4 个 `stepN_check_and_resubmit.py`（agent 诊断用）：只允许加 `--check-only` 运行（退出码 0=converged / 10=not_converged / 20=running / 30=重启超限 / 40=error），**重投一律用 autozt retry/rerun**。
 - 已全量迁移到 `skill_subdir` 布局（`材料/band-dft-cpu/`）；旧平铺目录用 `migrate-subdir` 迁移，手工搬乱了的用 `adopt` 接管（历史迁移，新项目无需关心）。
 - 参数（step.conf）：`FUNC=pbesol|pbe|pbe-d3|auto`、`KSPACING`、`BANDGAP`、`MOL_*`（0D）、`STALL_MINUTES` 等。
 
@@ -444,7 +444,7 @@ _AMSET_ENV_SRC = "source %s && conda activate %s" % (CONDA_SH, AMSET_ENV)
 | `step2_elastic` | S2_elastic | IBRION=6 / NFREE=4 有限形变（应力-应变法）；ISYM 自动 | OUTCAR 含 `TOTAL ELASTIC MODULI` |
 | `step3_postprocess` | S3_post | 登录节点后处理（不交 SLURM）：Cij 解析、Born 判据、2D→N/m 换算（C×L×0.1）、各向异性图 → `mechanical_properties.json` | done_marker |
 
-- 部署：`phonoagent -tt elastic-dft-cpu init`（在本地材料目录执行，一键追加配置段）或新材料直接 `phonoagent -tt elastic-dft-cpu -p <材料> init`。
+- 部署：`autozt -tt elastic-dft-cpu init`（在本地材料目录执行，一键追加配置段）或新材料直接 `autozt -tt elastic-dft-cpu -p <材料> init`。
 - 超算登录节点需要 pymatgen（`pip install --user pymatgen`，2026 年起自动带出核心包 pymatgen-core）与 matplotlib。Born 判据不稳定按"科学结果"处理：文件照出，状态显示 error 提醒人工看。
 - 同一材料挂多个技能 = 项目配置里写多段（`band-dft-cpu:` + `elastic-dft-cpu:`），目录互不干扰（默认 `skill_subdir: true`）。
 
@@ -487,7 +487,7 @@ S5_fc 拟合器由 `FIT_ENGINE` 选：`phono3py`（symfc/alm，默认）| `pheas
 `PHEASY_FIT_METHOD`（LASSO / RFE / OLS）、`PHEASY_C3_CUTOFF`、`PHEASY_ENABLE_FC`。两个软件都在 `~/software/` 下，CLI 参数一致：
 
 ```bash
-phonoagent -tt kl-dft-cpu -p <材料> -j 5 conf --set params.FIT_ENGINE=pheasy params.PHEASY_BIN=pheasy-gpu
+autozt -tt kl-dft-cpu -p <材料> -j 5 conf --set params.FIT_ENGINE=pheasy params.PHEASY_BIN=pheasy-gpu
 ```
 
 ### 6.5 opt-dft-cpu 结构优化 + 能量（v0.1）
@@ -507,8 +507,8 @@ S3 产出三个相对稳定性量：
 | `E_embed_eV` / `E_embed_per_guest_eV` | E_tot − E_host − n_g·μ_g | 要（`GUEST_ELEMENT`/`HOST_ENERGY`/`MU_GUEST`） |
 
 ```bash
-phonoagent -tt opt-dft-cpu -p <材料> -j 3 conf --set MU="C:-9.0 Li:-1.9"
-phonoagent -tt opt-dft-cpu -p <材料> -j 3 conf --set GUEST_ELEMENT=Li
+autozt -tt opt-dft-cpu -p <材料> -j 3 conf --set MU="C:-9.0 Li:-1.9"
+autozt -tt opt-dft-cpu -p <材料> -j 3 conf --set GUEST_ELEMENT=Li
 ```
 
 参考化学势 μ_i 取**同一参考态**（如石墨 C、bcc Li）用同一套设置单独算每原子总能填进来；不填也不报错（`E_per_atom` 照常输出）。最严格的判据是凸包上方能量（E_hull），本技能只算形成能（E_hull 的原料），凸包比对用 pymatgen/MP API 离线做。
@@ -527,14 +527,14 @@ phonoagent -tt opt-dft-cpu -p <材料> -j 3 conf --set GUEST_ELEMENT=Li
 **三件必须知道的事**（详见 `skill/_common/mace/README.md`）：
 
 1. **结构一定要用同一个势重弛豫**——力常数是在势自身的能量极小点上做泰勒展开；在 DFT 极小点直接取 MACE 力，残余力混进二阶力常数，Γ 点声学支直接假虚频。`RESIDUAL_TOL`（默认 2e-3 eV/Å）就是这道闸；S2 还会再测未位移超胞的残余力并扣掉。
-2. **MACE 给不出 Born 有效电荷和 ε∞**（势里没有电荷响应，原理性缺失）——极性材料不加 NAC 会缺 LO-TO 劈裂、高温 κ 偏。用 `kl-dft-cpu` 跑过 DFPT 的接 BORN：`phonoagent -tt kl-mace-cpu -p <材料> -j step3_fc conf --set params.NAC_BORN=/public/home/.../kl-dft-cpu/step3_nac/BORN`。
+2. **MACE 给不出 Born 有效电荷和 ε∞**（势里没有电荷响应，原理性缺失）——极性材料不加 NAC 会缺 LO-TO 劈裂、高温 κ 偏。用 `kl-dft-cpu` 跑过 DFPT 的接 BORN：`autozt -tt kl-mace-cpu -p <材料> -j step3_fc conf --set params.NAC_BORN=/public/home/.../kl-dft-cpu/step3_nac/BORN`。
 3. **`DTYPE` 必须 float64**——float32 的力误差（~1e-3 eV/Å）足以在声学支上造出假虚频。
 
-关键参数（step.conf）：`MACE_MODEL` / `MACE_MODEL_DIR` / `DEVICE` / `CONDA_ENV`（jzzn 上是 venv，写路径即按 venv 激活）、`METHOD=random`（默认 MC-rattle 随机位移）/ `findiff`（有限位移）、`N_RANDOM=auto`（按 ALM 数出的自由力常数反推帧数）、`FC2_SUPERCELL`、`MIN_SC_LEN`、`KAPPA_MESH`、`CKPT`（断点续算）、`ALM_CUT3`、`FIT_SOFTWARE=phono3py`/`pheasy`。GPU 版跑 `opt-mace-gpu` 同款 GPU 机器（`phonoagent hpc` 切）。
+关键参数（step.conf）：`MACE_MODEL` / `MACE_MODEL_DIR` / `DEVICE` / `CONDA_ENV`（jzzn 上是 venv，写路径即按 venv 激活）、`METHOD=random`（默认 MC-rattle 随机位移）/ `findiff`（有限位移）、`N_RANDOM=auto`（按 ALM 数出的自由力常数反推帧数）、`FC2_SUPERCELL`、`MIN_SC_LEN`、`KAPPA_MESH`、`CKPT`（断点续算）、`ALM_CUT3`、`FIT_SOFTWARE=phono3py`/`pheasy`。GPU 版跑 `opt-mace-gpu` 同款 GPU 机器（`autozt hpc` 切）。
 
 **pheasy 拟合软件选择**（S3_fc 当 `FIT_SOFTWARE=pheasy` 时）：`PHEASY_BIN=pheasy`（CPU 版，默认）| `pheasy-gpu`（GPU 版，走 `pheasy_gpu` 模块 + CUDA 后端），配合 `PHEASY_METHOD`（OLS / LASSO / RFE / RFE_TSQR）。两者都在 `~/software/` 下（`pheasy` / `pheasy-gpu`），CLI 参数一致、GPU 版只是把重活稠密线性代数搬到 GPU（`PHEASY_USE_GPU` 控制，缺省 auto）。示例：
 ```bash
-phonoagent -tt kl-mace-gpu -p <材料> -j 3 conf --set params.FIT_SOFTWARE=pheasy params.PHEASY_BIN=pheasy-gpu
+autozt -tt kl-mace-gpu -p <材料> -j 3 conf --set params.FIT_SOFTWARE=pheasy params.PHEASY_BIN=pheasy-gpu
 ```
 
 ### 6.7 opt-mace-cpu / opt-mace-gpu 结构优化 + 形成能（MACE，3 步）
@@ -590,12 +590,12 @@ bash scripts/mace_mu/run_mu.sh        # 产出 results.json + 一行 MU= 可直�
 
 **★ step5_label 操作定则（必须遵守）**：扇出步骤、整条链唯一花大钱的地方——**只用 `retry` 或 `start -f`，绝不用 `rerun` 和 `clean`**（后两者会 `rm -rf` 步骤目录，毁掉已算完的 DFT 帧）。`retry` 只补没完成的帧；单独补某几帧就进对应 `cfg-*` 目录手工 sbatch。
 
-**代数迭代（PhonoAgent 是 DAG，代数用 step.conf 的 GENERATION 表达）**：
+**代数迭代（AutoZT 是 DAG，代数用 step.conf 的 GENERATION 表达）**：
 
 ```bash
-phonoagent -tt mlff-mace -p <材料> conf --set params.GENERATION=1
-phonoagent -tt mlff-mace -p <材料> -j 4 rerun    # 只删 step4 结构清单重生成（安全）
-phonoagent -tt mlff-mace -p <材料> start         # 判据检测到「代数不一致」→ 5/6/7/8 自动补生成/重跑/提交
+autozt -tt mlff-mace -p <材料> conf --set params.GENERATION=1
+autozt -tt mlff-mace -p <材料> -j 4 rerun    # 只删 step4 结构清单重生成（安全）
+autozt -tt mlff-mace -p <材料> start         # 判据检测到「代数不一致」→ 5/6/7/8 自动补生成/重跑/提交
 ```
 
 **验收闸（step8，10 条，写入 validation_summary.json）**：① 声子谱 RMSE < 0.2 THz（主收敛闸，autoplex 判据）；② imagmodes(pot)==imagmodes(dft)（3D 阈 −0.1 THz）；②b（仅 2D）ZA 支 |q|<0.05|b| 内最低频率 ≥ −0.05 THz；③ 平衡结构残余力 < 1e-3 eV/Å 且空间群不变（**必须用微调后势自身重弛豫再取力**）；④ ASR 违反 < 1e-3 eV/Å²；⑤ 测试集力 RMSE < 40 meV/Å；⑥ 能量 RMSE < 3 meV/atom；⑦ 弛豫晶格常数偏差 < 1%；⑧ EOS/模量偏差 < 5%（3D 体模量 / 2D 面内二维模量）；⑨ committee σ_F 外推率 < 5%；⑩ 模式 Grüneisen γ MAE < 0.3（验收唯一的三阶敏感量，但**fc3 与 κ 的最终可信度由下游 kl-mace-* 背书，本技能不替它背书**）。
@@ -633,20 +633,20 @@ phonoagent -tt mlff-mace -p <材料> start         # 判据检测到「代数不
 ```bash
 # 0. 建材料 + 检查
 mkdir -p <材料> && cd <材料> && cp <POSCAR> POSCAR
-phonoagent -tt mlff-mace -p <材料> init                # 生成 project_setting/
+autozt -tt mlff-mace -p <材料> init                # 生成 project_setting/
 # 1. 三步启动（每步 start 推进，看 status）
-phonoagent -tt mlff-mace -p <材料> start               # S1 弛豫（VASP 12 核）
-phonoagent -tt mlff-mace -p <材料> start               # S2 超胞 + S3 标定（登录节点）
-phonoagent -tt mlff-mace -p <材料> start               # S4 生成本代构型清单
+autozt -tt mlff-mace -p <材料> start               # S1 弛豫（VASP 12 核）
+autozt -tt mlff-mace -p <材料> start               # S2 超胞 + S3 标定（登录节点）
+autozt -tt mlff-mace -p <材料> start               # S4 生成本代构型清单
 # 2. DFT 标注（S5，最贵，fanout）
-phonoagent -tt mlff-mace -p <材料> -j 5 start -f       # 提交所有 cfg-* 帧
+autozt -tt mlff-mace -p <材料> -j 5 start -f       # 提交所有 cfg-* 帧
 # 3. 数据集 + 训练（S6/S7）
-phonoagent -tt mlff-mace -p <材料> -j 6 start          # 建数据集
-printf 'step7_finetune\ny\n' | phonoagent -tt mlff-mace -p <材料> -j 7 rerun   # 生成 N_COMMITTEE 个 seed
+autozt -tt mlff-mace -p <材料> -j 6 start          # 建数据集
+printf 'step7_finetune\ny\n' | autozt -tt mlff-mace -p <材料> -j 7 rerun   # 生成 N_COMMITTEE 个 seed
 # 4. 验收（S8）
-phonoagent -tt mlff-mace -p <材料> -j 8 retry && phonoagent -tt mlff-mace -p <材料> -j 8 start
+autozt -tt mlff-mace -p <材料> -j 8 retry && autozt -tt mlff-mace -p <材料> -j 8 start
 # 5. 通过后发布（S9）
-phonoagent -tt mlff-mace -p <材料> start               # 仅 status=pass 才发布
+autozt -tt mlff-mace -p <材料> start               # 仅 status=pass 才发布
 ```
 
 **每步资源规格（3090 实测）**：
@@ -674,14 +674,14 @@ phonoagent -tt mlff-mace -p <材料> start               # 仅 status=pass 才�
 
 ## 7. 技能开发规范（原 SKILL_DEV.md 内容）
 
-> 本章即原独立的 `SKILL_DEV.md`，内容已并入本文。照本章写出的技能目录，放进 `skill/` 即可被 `phonoagent` 自动发现，**不需要修改 phonoagent 主程序的任何一行**。本章可以整份喂给 AI 让它生成技能（7.13 有现成提示词模板）。
+> 本章即原独立的 `SKILL_DEV.md`，内容已并入本文。照本章写出的技能目录，放进 `skill/` 即可被 `autozt` 自动发现，**不需要修改 autozt 主程序的任何一行**。本章可以整份喂给 AI 让它生成技能（7.13 有现成提示词模板）。
 
 ### 7.1 心智模型：谁负责什么
 
 ```
 本地（你的机器）                          超算（登录节点 + 计算节点）
 ┌──────────────────────────┐             ┌──────────────────────────────┐
-│ phonoagent 主程序                 │             │                              │
+│ autozt 主程序                 │             │                              │
 │  · 读 skill.yaml 装配流水线 │  ssh 推送   │ 材料目录/                     │
 │  · 决定「下一步该干什么」    │ ─────────► │   ├── POSCAR                 │
 │  · 提交 / 取消 / 重跑       │            │   ├── gen_stepN_xxx.py       │
@@ -699,11 +699,11 @@ phonoagent -tt mlff-mace -p <材料> start               # 仅 status=pass 才�
 
 | 角色 | 在哪跑 | 干什么 |
 |---|---|---|
-| `skill.yaml` | 本地被 phonoagent 解析 | **声明**有哪些步骤、每步用哪个 gen 脚本、用什么判据判完成 |
+| `skill.yaml` | 本地被 autozt 解析 | **声明**有哪些步骤、每步用哪个 gen 脚本、用什么判据判完成 |
 | `gen_*.py` | 超算登录节点，cwd = **材料目录** | **造**出 `<步骤名>/` 目录及其中的 INCAR/KPOINTS/POTCAR/POSCAR/submit.sh |
-| 判据（`check:`） | 超算登录节点，在 phonoagent 下发的采集器里 | **判断**某个步骤目录算完没有、结果对不对 |
+| 判据（`check:`） | 超算登录节点，在 autozt 下发的采集器里 | **判断**某个步骤目录算完没有、结果对不对 |
 
-phonoagent 自己**不懂任何物理**。它只会：建目录 → 推文件 → 跑 gen → sbatch → 按判据看状态 → 拉结果。所有 VASP/MACE 知识都在技能里。
+autozt 自己**不懂任何物理**。它只会：建目录 → 推文件 → 跑 gen → sbatch → 按判据看状态 → 拉结果。所有 VASP/MACE 知识都在技能里。
 
 ### 7.2 目录结构与公共池
 
@@ -723,9 +723,9 @@ skill/_common/                 公共池（没有 skill.yaml，不会被当成�
 └── opt/                       结构优化公共件
 ```
 
-**公共池规则（当前约定）**：与超算无关的公共库（`dim_common.py`、`stepconf.py`、`check_common.py`、`relax_common.py` 等）放 `skill/_common/` **只写一份，所有技能共用**；改公共池 = 所有技能一起改。技能目录里有同名文件就优先用自己的（想给某一版彻底自包含：把池子里的文件 `cp` 进技能目录即可，副本优先；删掉副本就回到共用）。`gen_need` 清单写文件名就行，变的是 phonoagent 去哪里找。**技能之间不许跨目录 import**（`import ../别的技能/xxx` 是不允许的）——要复用就依赖公共池或拷副本。
+**公共池规则（当前约定）**：与超算无关的公共库（`dim_common.py`、`stepconf.py`、`check_common.py`、`relax_common.py` 等）放 `skill/_common/` **只写一份，所有技能共用**；改公共池 = 所有技能一起改。技能目录里有同名文件就优先用自己的（想给某一版彻底自包含：把池子里的文件 `cp` 进技能目录即可，副本优先；删掉副本就回到共用）。`gen_need` 清单写文件名就行，变的是 autozt 去哪里找。**技能之间不许跨目录 import**（`import ../别的技能/xxx` 是不允许的）——要复用就依赖公共池或拷副本。
 
-技能名 = 目录名 = `-tt` 的短名（如 `phonoagent -tt kl-dft-cpu start`）。用小写字母、数字、连字符。
+技能名 = 目录名 = `-tt` 的短名（如 `autozt -tt kl-dft-cpu start`）。用小写字母、数字、连字符。
 
 ### 7.3 模板放哪：`template_layout`
 
@@ -741,9 +741,9 @@ skill/_common/                 公共池（没有 skill.yaml，不会被当成�
 | `shared` | `templates/<文件>` → `<技能根>/<文件>` |
 | `per_step` | `templates/<步骤名>/<文件>` → `templates/<文件>` → `<技能根>/<文件>` |
 
-> ⚠️ `per_step` 布局下 `phonoagent init` **不会**把模板复制进 `project_setting/`（那里一份会盖住所有步骤）。要按项目改某步的模板，放 `材料/<技能>/templates/<步骤名>/` 下。
+> ⚠️ `per_step` 布局下 `autozt init` **不会**把模板复制进 `project_setting/`（那里一份会盖住所有步骤）。要按项目改某步的模板，放 `材料/<技能>/templates/<步骤名>/` 下。
 
-只放**实际用得到**的文件（全程 `vasp_std` 就不放 `submit_ncl_*.tpl`；纯 3D 技能不放 `incar_2d.tpl`），不用的模板放进来只会让 `phonoagent init` 报无意义的警告。
+只放**实际用得到**的文件（全程 `vasp_std` 就不放 `submit_ncl_*.tpl`；纯 3D 技能不放 `incar_2d.tpl`），不用的模板放进来只会让 `autozt init` 报无意义的警告。
 
 **提交模板只写逻辑名**（`submit_std_2d.tpl`、`submit_std_3d.tpl`、`submit_mace.tpl`、`submit_amset.tpl`…），实际文件放在 `setting/<hpc>/templates/`（逻辑名即文件名，按超算分文件夹；`<步骤名>/` 子目录放该步骤变体）。技能目录**不写死** `submit_jzzn_*`，换超算不用改技能。
 
@@ -755,13 +755,13 @@ skill/_common/                 公共池（没有 skill.yaml，不会被当成�
 schema: 1                  # 必需。清单格式版本，当前固定 1
 name: kl-dft-cpu                   # 可选。类型 key，缺省 = 目录名
 desc: 晶格热导率            # 必需。状态表和帮助里显示的中文名
-version: "0.1"             # 可选。技能自身版本，phonoagent skills 会显示
+version: "0.1"             # 可选。技能自身版本，autozt skills 会显示
 enabled: true              # 可选。false = 不装载（默认 true）
 
-defaults:                  # 可选。站点相关缺省值，用户在 phonoagent.yaml 里覆盖
+defaults:                  # 可选。站点相关缺省值，用户在 autozt.yaml 里覆盖
   hpc: jzzn                #   默认集群（对应 setting/<name>.yaml）
   skill_subdir: true       #   true = 材料目录下建 <技能名>/ 子目录（新技能一律 true）
-  # work_dir: ...          #   一般不写，让用户在 phonoagent.yaml 里配
+  # work_dir: ...          #   一般不写，让用户在 autozt.yaml 里配
 
 gen_need: [...]            # 可选。类型级依赖文件（gen 前推到材料目录，已存在按 md5 比对）
 aux_files: [...]           # 可选。辅助脚本（同上，只补不覆盖）
@@ -798,7 +798,7 @@ requires:                  # 可选。人读为主
 | `needs` | | **显式 DAG 依赖**：本步要等列出的步骤全 OK 才启动；没写则回退为"上一步"（ke-dft-cpu/kl-dft-cpu 用） |
 | `src` | | 源目录字段：嵌套步骤（`step2_bandgap/step2.1_static`）从技能目录的哪个子目录取脚本/模板 |
 | `contcar_to_poscar` | | `true` = `retry` 续跑前先把 CONTCAR 盖回 POSCAR（弛豫步用） |
-| `submit` | | 提交脚本文件名，缺省 `submit.sh`（phonoagent 也会兜底找 `sub.sh/job.sh/run.sh/sub.slurm`） |
+| `submit` | | 提交脚本文件名，缺省 `submit.sh`（autozt 也会兜底找 `sub.sh/job.sh/run.sh/sub.slurm`） |
 | `fanout` | | 扇出步骤：步骤目录下每个匹配子目录是一个独立作业，见 7.9。值是 glob，如 `"cfg-*"` |
 | `hpc` | | **本步骤指定超算**（v1.12）：写集群名（如 `hpc: jzzn`）则本步骤的采集/状态检查/提交/模板都走该集群，材料其余步骤留在默认集群。见 5.4.1 |
 | `fetch_all` | | `true` = 完成后整目录拉回本地 `result/`（画图/后处理步用） |
@@ -814,7 +814,7 @@ requires:                  # 可选。人读为主
 | `outcar` | OUTCAR 尾部含 `General timing and accounting informations` | — |
 | `outcar_relax` | 上面 + 含 `reached required accuracy` + 末次 `external pressure` 绝对值 ≤ 阈值；不过时附弛豫空转诊断 | `phrase`（默认 `reached required accuracy`）、`pressure_tol`（默认 5.0 kB） |
 | `relax_injob` | **作业内分段弛豫判据**（公共池 `../_common/checks_relax.py`）：OUTCAR 总闸收敛；未收敛时从 `.sN.done` 数进度并区分"跑完没收敛 / 某段中断"；兼容老 `step1{a,b,c}_*` 目录 | `pressure_tol`、`stage` |
-| `relax_skip` | 收敛感知的 phonoagent 级多段弛豫判据（旧 `STAGE_MODE=tf_stages`）：a 收敛则 b/c 自动跳过，c 是总闸 | `stage`（`a`/`b`/`c`）、`relax_diag` |
+| `relax_skip` | 收敛感知的 autozt 级多段弛豫判据（旧 `STAGE_MODE=tf_stages`）：a 收敛则 b/c 自动跳过，c 是总闸 | `stage`（`a`/`b`/`c`）、`relax_diag` |
 | `wavecar` | WAVECAR 存在且 ≥ 阈值 | `wavecar_min`（默认 1 MB） |
 | `eigenval` | EIGENVAL 存在；有 KPOINTS_OPT 时还要有 vasprun.xml | — |
 | `marker` | **通用判据**：`marker: "文件名:要找的字符串"` | `marker`（必填） |
@@ -840,10 +840,10 @@ requires:                  # 可选。人读为主
 
 1. 创建 `<步骤名>/` 目录（名字必须等于 `skill.yaml` 里的 `name`）。
 2. 在其中生成输入文件：`POSCAR`（从上一步 CONTCAR 接力）、`INCAR`、`KPOINTS`、`POTCAR`、`submit.sh` 等。
-3. 出错就 `sys.exit("[ERROR] ...")`，非零退出码 → phonoagent 报 gen 失败并把 stderr 原样呈给用户。
+3. 出错就 `sys.exit("[ERROR] ...")`，非零退出码 → autozt 报 gen 失败并把 stderr 原样呈给用户。
 4. 结构接力要**显式**：前一步的 CONTCAR/summary/`.model` 不存在就报错退出，**绝不能拿旧文件默默往下算**。
 
-**可以依赖的东西**（phonoagent 会自动推到材料目录）：
+**可以依赖的东西**（autozt 会自动推到材料目录）：
 
 - `gen_need` / `aux_files` 里列的所有文件，与 gen 脚本同目录（`Path(__file__).parent`）
 - `dim_common.py` 常用 API：
@@ -879,7 +879,7 @@ requires:                  # 可选。人读为主
 
 **模板逻辑名机制**（换超算不用改技能）：技能里只写**逻辑名** `submit_std_2d.tpl`、`submit_std_3d.tpl`、`submit_mace.tpl` 等；实际文件在 `setting/<集群>/templates/`（逻辑名即文件名）。模板里的 `{{JOBNAME}}` 由 gen 脚本替换。
 
-**`run: gen` 的步骤**（后处理/画图）：同样在登录节点跑，但 phonoagent **不提交 SLURM**，跑完就按 `check: plot` + `done_marker` 判完成。所以这类脚本要自己算完并写出产物文件，且不能太重（登录节点跑得动）。
+**`run: gen` 的步骤**（后处理/画图）：同样在登录节点跑，但 autozt **不提交 SLURM**，跑完就按 `check: plot` + `done_marker` 判完成。所以这类脚本要自己算完并写出产物文件，且不能太重（登录节点跑得动）。
 
 ### 7.8 可选步骤组 `optional_steps`
 
@@ -898,12 +898,12 @@ optional_steps:
 
 - `after` 是**步骤名前缀**。锚点在本技能里不存在 → 该条自动不注入（不会报错）。
 - 一个技能可以有多个开关组，键名自取；组内步骤可写 `needs` 建组间/组内 DAG。
-- 用户在 `phonoagent.yaml` 或项目 `tf_<项目>.yaml` 里写 `<开关名>: false` 即关闭；step.conf 参数也可以驱动开关（如 `BANDGAP=pbe|hse` 映射到 `bandgap_hse` 组的开/关）。
+- 用户在 `autozt.yaml` 或项目 `tf_<项目>.yaml` 里写 `<开关名>: false` 即关闭；step.conf 参数也可以驱动开关（如 `BANDGAP=pbe|hse` 映射到 `bandgap_hse` 组的开/关）。
 - `run_steps` 是另一个正交机制（用户侧）：`run_steps: [1, 2, 3.1]` 只跑列出的步骤，元素匹配 `seq`、`name` 或 `label`。**所以每个步骤都写 `seq` 很重要**，否则用户只能敲全名。
 
 ### 7.9 扇出步骤 `fanout`：一步下面 N 个并行作业
 
-有些计算天然是「同一步骤、N 份独立输入、各跑各的」——形变势的 13 个应变、phono3py 的 N 个位移、mlff-mace 的 DFT 标注帧（`cfg-*`）与多 seed 微调（`seed-*`）。phonoagent 默认「一步 = 一个目录 = 一次 sbatch」，这类步骤用 `fanout` 声明：
+有些计算天然是「同一步骤、N 份独立输入、各跑各的」——形变势的 13 个应变、phono3py 的 N 个位移、mlff-mace 的 DFT 标注帧（`cfg-*`）与多 seed 微调（`seed-*`）。autozt 默认「一步 = 一个目录 = 一次 sbatch」，这类步骤用 `fanout` 声明：
 
 ```yaml
 - {seq: 7, name: step7_deform, label: S7_deform, check: outcar,
@@ -911,7 +911,7 @@ optional_steps:
    gen: gen_step7_deform.py, fetch_all: true}
 ```
 
-gen 脚本负责在步骤目录下造出这些子目录，**每个子目录一份完整输入 + 自己的 `submit.sh`**。之后 phonoagent 全自动：
+gen 脚本负责在步骤目录下造出这些子目录，**每个子目录一份完整输入 + 自己的 `submit.sh`**。之后 autozt 全自动：
 
 | 操作 | 行为 |
 |---|---|
@@ -956,19 +956,19 @@ CHECKERS = {"kappa_conv": ck_kappa_conv}    # ← 必须有这一行
 
 **硬约束**：
 
-1. 这个文件的源码会被 phonoagent 读出来、base64 塞进采集器、在**超算登录节点 `exec` 执行**。
+1. 这个文件的源码会被 autozt 读出来、base64 塞进采集器、在**超算登录节点 `exec` 执行**。
 2. **只能用标准库**。不能 `import numpy`、不能 `import pymatgen`。
 3. **不能有顶层副作用**：除了 `def` 和 `CHECKERS = {...}`，不要有 print、文件读写、`import` 之外的语句。
 4. **不要写 `import os` 等**——采集器已经在全局命名空间提供了：`os` `re` `json` `glob` `subprocess`，以及 `tail_text(path, nbytes=1000000)`（读文件尾部）、`read_oszicar_ionic(d)`（OSZICAR 离子步能量）、`relax_diagnose(d, cfg)`（弛豫空转诊断）。写了 `import os` 也不报错，但没必要。
 5. **判据要能在 1 秒内返回**。它对每个材料的每个步骤都要跑一遍，不能扫全文件、不能起子进程算东西。**数值重活留给作业脚本算完写 json，判据只读 json**（mlff-mace 的 benchmark 就是这么分工的）。
-6. **判据名不能和内置判据重名**（`outcar`/`marker`/`plot`/…），重名 phonoagent 会直接报错退出。
-7. 判据参数从 `sc` 取（`sc.get("kappa_rtol", 0.01)`），参数写在 `skill.yaml` 那条 step 上，phonoagent 会自动透传到远端。
+6. **判据名不能和内置判据重名**（`outcar`/`marker`/`plot`/…），重名 autozt 会直接报错退出。
+7. 判据参数从 `sc` 取（`sc.get("kappa_rtol", 0.01)`），参数写在 `skill.yaml` 那条 step 上，autozt 会自动透传到远端。
 
 判据可以放公共池：`checks: ../_common/checks_relax.py`（band/elastic/ke/kl 的 `relax_injob` 都在这里）。
 
 ### 7.11 用户侧配置（技能作者要知道的）
 
-技能装好后，用户在全局 `phonoagent.yaml` 里只需要：
+技能装好后，用户在全局 `autozt.yaml` 里只需要：
 
 ```yaml
 task_types:
@@ -982,7 +982,7 @@ task_types:
 
 **不要在技能清单里写 `work_dir` 的具体路径**，那是站点信息，留给用户。
 
-同理，**集群相关的环境路径（conda.sh / conda 环境 / amset 环境等）也不要写死在技能或 gen 脚本里**：写在 `setting/<集群名>.yaml` 的 `conda_sh` / `conda_env` / `amset_env`，phonoagent 自动注入每步 step.conf（见 5.4.2），gen 脚本从 step.conf 读。换人换机器只改 `setting/<集群名>.yaml`。
+同理，**集群相关的环境路径（conda.sh / conda 环境 / amset 环境等）也不要写死在技能或 gen 脚本里**：写在 `setting/<集群名>.yaml` 的 `conda_sh` / `conda_env` / `amset_env`，autozt 自动注入每步 step.conf（见 5.4.2），gen 脚本从 step.conf 读。换人换机器只改 `setting/<集群名>.yaml`。
 
 ### 7.12 自检清单
 
@@ -990,23 +990,23 @@ task_types:
 
 ```bash
 # 1. 清单能被解析、技能能被发现
-phonoagent skills
+autozt skills
 #    应看到你的技能，版本、步骤数、清单路径都对
 
 # 2. 步骤表能正确展开（含 optional_steps）
-phonoagent -tt <技能名>
+autozt -tt <技能名>
 #    列头 = 你的 label，顺序 = 你的 steps 顺序
 
 # 3. 挂到一个测试材料上（纯本地，不连超算）
 cd <含 POSCAR 的材料的上级目录>
-phonoagent -tt <技能名> init
+autozt -tt <技能名> init
 
 # 4. 只生成第一步输入、不提交，人工检查 INCAR/KPOINTS/POTCAR
-phonoagent -tt <技能名> -p <材料> -j 1 init
-phonoagent -tt <技能名> -p <材料> dir     # 拿到远端路径，ssh 过去看
+autozt -tt <技能名> -p <材料> -j 1 init
+autozt -tt <技能名> -p <材料> dir     # 拿到远端路径，ssh 过去看
 
 # 5. 真跑
-phonoagent -tt <技能名> -p <材料> start
+autozt -tt <技能名> -p <材料> start
 ```
 
 逐条对照：
@@ -1022,14 +1022,14 @@ phonoagent -tt <技能名> -p <材料> start
 - [ ] 后处理/画图步写了 `run: gen` + `check: plot` + `done_marker` + `fetch_all: true`
 - [ ] 扇出步骤：gen 脚本造的子目录名与 `fanout` 的 glob 对得上，每个子目录都有自己的 `submit.sh`，gen 幂等
 - [ ] 若有 `checks.py`：只用标准库、无顶层副作用、判据名不与内置重名、秒级返回
-- [ ] `phonoagent skills` 里没有关于你这个技能的警告
+- [ ] `autozt skills` 里没有关于你这个技能的警告
 
 ### 7.13 喂给 AI 的提示词模板
 
 把本章整份贴进去，然后追加：
 
 ```
-上面是 PhonoAgent 的技能开发规范。请按它生成一个新技能，要求如下：
+上面是 AutoZT 的技能开发规范。请按它生成一个新技能，要求如下：
 
 【技能名】     <目录名，如 dielectric>
 【中文描述】   <如 DFPT 介电常数计算>
@@ -1050,7 +1050,7 @@ phonoagent -tt <技能名> -p <材料> start
   4. 一份自检清单的逐条核对结果
 
 约束：
-  - 不要修改 phonoagent 主程序，不要要求我改 phonoagent.yaml 里除 work_dir 以外的东西
+  - 不要修改 autozt 主程序，不要要求我改 autozt.yaml 里除 work_dir 以外的东西
   - 依赖文件要么在本技能目录（自包含），要么引用公共池 skill/_common/（gen_need 写文件名即可），
     不许跨技能目录 import。需要公共池里没有的文件时，明确告诉我「从哪个目录 cp 哪几个文件」
   - 依赖清单写在步骤级 gen_need，每一步都要列全提交模板逻辑名；模板本体放 setting/<hpc>/templates/
@@ -1066,7 +1066,7 @@ phonoagent -tt <技能名> -p <材料> start
 | 步骤永远 `PREP` | `steps[].name` ≠ gen 脚本创建的目录名 |
 | 步骤永远 `FAIL` | 判据字符串在真实输出里根本不出现；先 `grep` 一遍真 OUTCAR 再写 `marker` |
 | 新材料报「找不到模板」 | 只写了 `gen_need` 没包含提交模板逻辑名；步骤级 `gen_need` 会完全替代类型级并跳过自动补推，得自己列全 |
-| `phonoagent skills` 里技能不出现 | 清单没有 `steps`、`enabled: false`、或被 `phonoagent.yaml` 的 `disabled_skills` 关掉了；带 `-v` 看警告 |
+| `autozt skills` 里技能不出现 | 清单没有 `steps`、`enabled: false`、或被 `autozt.yaml` 的 `disabled_skills` 关掉了；带 `-v` 看警告 |
 | 自定义判据在本地测好好的，远端报错 | 用了非标准库，或有顶层副作用 |
 | 判据拿不到参数 | 参数写在了错误的层级——必须写在 `steps[]` 的那一条里 |
 | 状态表列宽爆炸 | `label` 太长，或没用 `group` 合并多段步骤 |
@@ -1080,38 +1080,38 @@ phonoagent -tt <技能名> -p <材料> start
 
 ## 8. 工作原理（无状态）
 
-作业与步骤的对应关系来自 `squeue` 的工作目录（%Z），同名作业不混淆；scancel 后状态自动回落为文件判据，无状态残留。每次调用只 ssh 一次，同时采集所有任务类型。三台机器都已装真 SLURM，phonoagent 采集照常工作。
+作业与步骤的对应关系来自 `squeue` 的工作目录（%Z），同名作业不混淆；scancel 后状态自动回落为文件判据，无状态残留。每次调用只 ssh 一次，同时采集所有任务类型。三台机器都已装真 SLURM，autozt 采集照常工作。
 
 ---
 
 ## 9. 给大语言模型用（agent 接入）
 
-`phonoagent` 按"LLM 工具"设计，三个接口约定：
+`autozt` 按"LLM 工具"设计，三个接口约定：
 
 1. **命令原子化**：`summary/list/status/start/stop/retry/rerun/json`，参数 `-tt/-p/-j` 语义稳定，适合 agent 调用。
-2. **`phonoagent summary`（巡检主输入，省 token）**：只读极简汇总，每类型一行计数 + FAIL 清单；配合 `-status error` 只拉失败的。`phonoagent json` 是**全量结构化状态**（`types → materials → steps`，含 `kind/diag/job/action`），token 巨大，只在写工具/做批量分析时用，巡检禁止每轮拉。
+2. **`autozt summary`（巡检主输入，省 token）**：只读极简汇总，每类型一行计数 + FAIL 清单；配合 `-status error` 只拉失败的。`autozt json` 是**全量结构化状态**（`types → materials → steps`，含 `kind/diag/job/action`），token 巨大，只在写工具/做批量分析时用，巡检禁止每轮拉。
 3. **退出码**：0 = 成功；非 0 = 失败或被拒绝（如步骤已有作业未加 `-f`、FAIL 步骤直接 `start`、取消确认被拒）。agent 据此判成败，不用猜文本。
 
 配套文件 **`AGENTS.md`**：给 LLM 的完整接入规范（角色、安全铁律、命令参考、FAIL 诊断决策树、token 省流监控技能、汇报模板）。用法：
 
 - **Kimi Claw**：内容贴进人设/SOUL 或长期记忆，按文档第七节（token 省流监控）建 30 分钟定时巡检任务；
-- **Kimi Code / IDE agent**：文件放 PhonoAgent 软件目录（`~/software/PhonoAgent/AGENTS.md`），在 `~/software/PhonoAgent` 启动即生效。
+- **Kimi Code / IDE agent**：文件放 AutoZT 软件目录（`~/software/AutoZT/AGENTS.md`），在 `~/software/AutoZT` 启动即生效。
 
-核心原则：agent 只做诊断、建议和经授权的操作；一切超算变更必须经过 `phonoagent`，禁止 agent 直接拼 ssh/sbatch/scancel/rm。
+核心原则：agent 只做诊断、建议和经授权的操作；一切超算变更必须经过 `autozt`，禁止 agent 直接拼 ssh/sbatch/scancel/rm。
 
 ---
 
 ## 10. 目录结构与版本管理
 
-推荐布局：所有 PhonoAgent 文件收进一个独立目录，版本收进 `versions/`，技能脚本收进 `skill/`：
+推荐布局：所有 AutoZT 文件收进一个独立目录，版本收进 `versions/`，技能脚本收进 `skill/`：
 
 ```
-~/software/PhonoAgent/            # 软件包（程序 + 默认模板 + 技能 + 文档，全部在这里）
+~/software/AutoZT/            # 软件包（程序 + 默认模板 + 技能 + 文档，全部在这里）
 ├── versions/
 │   ├── <旧版本>/tf             # 旧版本留档
 │   └── v1.0/tf                 # 当前版本主程序
 ├── setting/                    # 站点配置中心
-│   ├── phonoagent.yaml                 #   全局配置（host + project_roots + 每技能 work_dir/max_jobs）
+│   ├── autozt.yaml                 #   全局配置（host + project_roots + 每技能 work_dir/max_jobs）
 │   ├── tf_default.yaml         #   项目配置模板 → project_setting/tf_<项目名>.yaml
 │   ├── <hpc>.yaml              #   每台超算：jzzn.yaml / a800.yaml / 3090.yaml（name/ssh_host/环境/work_dir）
 │   ├── <hpc>/templates/        #   该超算的提交模板（逻辑名即文件名，含 <步骤名>/ 变体）
@@ -1124,7 +1124,7 @@ phonoagent -tt <技能名> -p <材料> start
 ├── scripts/mace_mu/            # 本地算参考化学势 μ 的固化脚本（形成能用）
 ├── TASKFLOW.md                 # 本文件（用户手册 + 技能总览 + 开发规范）
 └── AGENTS.md                   # 智能体操作规范（只放这里，项目文件夹不放）
-~/.local/bin/phonoagent -> ~/software/PhonoAgent/versions/v1.0/tf   # 软链接 = 当前生效版本
+~/.local/bin/autozt -> ~/software/AutoZT/versions/v1.0/tf   # 软链接 = 当前生效版本
 ```
 
 项目侧（project_roots 登记，如 `/mnt/d/tf_data`）：
@@ -1134,7 +1134,7 @@ phonoagent -tt <技能名> -p <材料> start
 └── C20/
     ├── qHPC20/
     │   ├── POSCAR          # 输入文件在本地
-    │   ├── project_setting/    # 材料专用配置（phonoagent init 生成，每个材料一份；可就近向上共享）
+    │   ├── project_setting/    # 材料专用配置（autozt init 生成，每个材料一份；可就近向上共享）
     │   │   ├── tf_qHPC20.yaml  #   材料配置（命名全局唯一；缺省继承全局/上级/skill.yaml）
     │   │   ├── setting.yaml    #   路径/结果/日志/fetch 清单
     │   │   ├── hpc.yaml        #   超算 + 模板映射（换超算改它）
@@ -1142,40 +1142,40 @@ phonoagent -tt <技能名> -p <材料> start
     │   ├── band-dft-cpu/       # 技能子目录（skill_subdir：result/ + log/ + 技能私有 hpc.yaml）
     │   └── elastic-dft-cpu/    # 同上结构（多技能互不干扰）
     └── qTPC20-b/           # 同上结构
-超算（jzzn）：只放 work_dir 计算目录树（phonoagent 自动建），无需存放任何脚本
+超算（jzzn）：只放 work_dir 计算目录树（autozt 自动建），无需存放任何脚本
 ```
 
 ```bash
 # 初次安装
-mkdir -p ~/software/PhonoAgent/versions/v1.0 ~/software/PhonoAgent/setting ~/.local/bin
-cp phonoagent ~/software/PhonoAgent/versions/v1.0/tf && chmod +x ~/software/PhonoAgent/versions/v1.0/tf
-cp phonoagent.example.yaml ~/software/PhonoAgent/setting/tf.yaml      # 按项目编辑
-ln -sf ~/software/PhonoAgent/versions/v1.0/tf ~/.local/bin/phonoagent
-phonoagent --version                               # 查看当前版本
+mkdir -p ~/software/AutoZT/versions/v1.0 ~/software/AutoZT/setting ~/.local/bin
+cp autozt ~/software/AutoZT/versions/v1.0/tf && chmod +x ~/software/AutoZT/versions/v1.0/tf
+cp autozt.example.yaml ~/software/AutoZT/setting/tf.yaml      # 按项目编辑
+ln -sf ~/software/AutoZT/versions/v1.0/tf ~/.local/bin/autozt
+autozt --version                               # 查看当前版本
 
-# 以后升级（拿到新版 phonoagent）
-mkdir -p ~/software/PhonoAgent/versions/v1.1
-cp 新phonoagent ~/software/PhonoAgent/versions/v1.1/tf && chmod +x ~/software/PhonoAgent/versions/v1.1/tf
-ln -sf ~/software/PhonoAgent/versions/v1.1/tf ~/.local/bin/phonoagent   # 切换
+# 以后升级（拿到新版 autozt）
+mkdir -p ~/software/AutoZT/versions/v1.1
+cp 新autozt ~/software/AutoZT/versions/v1.1/tf && chmod +x ~/software/AutoZT/versions/v1.1/tf
+ln -sf ~/software/AutoZT/versions/v1.1/tf ~/.local/bin/autozt   # 切换
 
 # 出问题一键回滚
-ln -sf ~/software/PhonoAgent/versions/<旧版本>/tf ~/.local/bin/phonoagent
+ln -sf ~/software/AutoZT/versions/<旧版本>/tf ~/.local/bin/autozt
 ```
 
 要点：
 
-- **配置只有一份**（`setting/tf.yaml`，`~/software/PhonoAgent/tf.yaml` 也可被自动搜索到；当前目录 ./tf.yaml 优先级最高），`versions/vX.Y/` 和旧版 `vX.Y/` 平铺布局都能自动找到，升级不用动配置。
-- **skill_dir**：gen 需要的脚本/模板在材料目录缺失时，phonoagent 从本地 skill 目录**经 ssh 推送**到超算（base64 编码，只补不覆盖），超算上无需再集中存放。`gen_dir` 保留为远端兜底。
+- **配置只有一份**（`setting/tf.yaml`，`~/software/AutoZT/tf.yaml` 也可被自动搜索到；当前目录 ./tf.yaml 优先级最高），`versions/vX.Y/` 和旧版 `vX.Y/` 平铺布局都能自动找到，升级不用动配置。
+- **skill_dir**：gen 需要的脚本/模板在材料目录缺失时，autozt 从本地 skill 目录**经 ssh 推送**到超算（base64 编码，只补不覆盖），超算上无需再集中存放。`gen_dir` 保留为远端兜底。
 - **setting/<hpc>.yaml**：包内默认超算配置；项目 `project_setting/hpc.yaml` 缺省时回退到它。新增一台超算 = 加一份 `<名>.yaml` + `<名>/templates/`（见 5.4）。
 - 版本目录名随意（`v1.0`、`2026-07` 都行），软链接指谁谁是当前版。
 
 ### 10.1 改脚本就提交 GitHub（★ 每次改完代码就做）
 
-> **规则**：每次修改了脚本/代码（`skill/`、`scripts/`、`phonoagent/`、`versions/v1.0/tf` 主程序、`AGENTS.md`/`TASKFLOW.md` 文档等），改完**立即提交到 GitHub**，不要攒一批再交。用 `phonoagent push`（或在任意目录用独立脚本 `tfpush`）：
+> **规则**：每次修改了脚本/代码（`skill/`、`scripts/`、`autozt/`、`versions/v1.0/tf` 主程序、`AGENTS.md`/`TASKFLOW.md` 文档等），改完**立即提交到 GitHub**，不要攒一批再交。用 `autozt push`（或在任意目录用独立脚本 `tfpush`）：
 
 ```bash
-cd ~/software/PhonoAgent            # 或任何 git 仓库目录
-phonoagent push "改了什么的简述"           # 等价：tfpush "..." 或 bash scripts/tf-git-push.sh "..."
+cd ~/software/AutoZT            # 或任何 git 仓库目录
+autozt push "改了什么的简述"           # 等价：tfpush "..." 或 bash scripts/tf-git-push.sh "..."
 ```
 
 脚本做三件事：① 本地 `git add -A` + 提交「真实版」（保留真实超算/用户名，**不 push**）；② 基于远端建 `push-sanitized` 快照分支，按敏感词映射（`setting/git-sanitize.conf`）脱敏后提交「脱敏版」；③ 推送脱敏版到 `origin/main`（GitHub 走 SSH 443，自动重试 8 次），最后切回原分支、删临时分支。

@@ -14,7 +14,7 @@ workflow_method.txt / POSCAR.provenance / mu_provenance，覆盖不全、格式�
 
 设计原则：**只加不减、永不阻断计算**。
   · gen 推送阶段由 tf 自己写（写失败只警告，不影响 gen；开关 tf.yaml 的
-    provenance: false 或环境变量 PHONOAGENT_PROVENANCE=0 可整体关掉）
+    provenance: false 或环境变量 AUTOZT_PROVENANCE=0 可整体关掉）
   · 作业/脚本侧可选补写（provenance_common.py 合并字段，不覆盖 tf 写的）
   · 只读读取：tf prove -p 材料 [-j 步骤]（读本地 result/ 里回拉的那份）
 """
@@ -50,8 +50,8 @@ def sha256_file(path, limit=None):
 
 
 def provenance_enabled(cfg):
-    """开关：环境变量 PHONOAGENT_PROVENANCE=0 关；否则看 tf.yaml 的 provenance（缺省开）。"""
-    env = str(os.environ.get("PHONOAGENT_PROVENANCE", "")).strip().lower()
+    """开关：环境变量 AUTOZT_PROVENANCE=0 关；否则看 tf.yaml 的 provenance（缺省开）。"""
+    env = str(os.environ.get("AUTOZT_PROVENANCE", "")).strip().lower()
     if env in ("0", "false", "no", "off"):
         return False
     val = (cfg or {}).get("provenance")
@@ -63,7 +63,7 @@ def provenance_enabled(cfg):
 def _step_conf_summary(cfg, t, m, sname):
     """step.conf 合并后的最终参数（复现的关键）。拿不到就返回 None。"""
     try:
-        from phonoagent import build_step_conf, STEP_CONF
+        from autozt import build_step_conf, STEP_CONF
         text, _lg = build_step_conf(cfg, t, m, sname)
     except Exception:
         return None
@@ -83,13 +83,13 @@ def build_gen_provenance(cfg, t, m, sname, files, host=None, gen_script=None,
 
     files: {远端文件名: {"sha256":..., "source": 本地路径 或 null, "origin": "skill"/"project"/"gen_dir"}}
     任何异常由调用方兜住——档案不该影响计算。"""
-    from phonoagent import PHONOAGENT_VERSION
+    from autozt import AUTOZT_VERSION
     now = time.strftime("%Y-%m-%dT%H:%M:%S")
     prov = {
         "schema": PROV_SCHEMA,
         "kind": "gen",
         "ts": now,
-        "tf_version": PHONOAGENT_VERSION,
+        "tf_version": AUTOZT_VERSION,
         "skill": {
             "key": t.get("key") if isinstance(t, dict) else None,
             "version": (t or {}).get("_skill_version"),
@@ -111,7 +111,7 @@ def build_gen_provenance(cfg, t, m, sname, files, host=None, gen_script=None,
         "inputs": {k: v for k, v in sorted(files.items())},
         "step_conf": _step_conf_summary(cfg, t, m, sname),
         "run": {
-            "actor": os.environ.get("PHONOAGENT_ACTOR") or os.environ.get("USER") or "",
+            "actor": os.environ.get("AUTOZT_ACTOR") or os.environ.get("USER") or "",
             "cwd": os.getcwd(),
             "argv": " ".join(__import__("sys").argv[:1]),
         },
@@ -129,7 +129,7 @@ def build_gen_provenance(cfg, t, m, sname, files, host=None, gen_script=None,
             "step": sname,
             "material": prov["material"]["name"],
             "hpc": prov["hpc"],
-            "tf_version": PHONOAGENT_VERSION,
+            "tf_version": AUTOZT_VERSION,
             "generator": {"script": gen_script,
                           "sha256": prov["generator"]["sha256"]},
             "n_inputs": len(files),
@@ -206,7 +206,7 @@ def fetch_provenance_dir(cfg, m, quiet=True):
     返回 True/False（拉到东西了没）。"""
     import shlex as _shlex
     import subprocess as _sp
-    from phonoagent import _ssh_cmd
+    from autozt import _ssh_cmd
     rd = (m or {}).get("result_dir")
     sdir = None
     for s in (m or {}).get("steps") or []:      # 用任一步骤目录推出材料目录
@@ -280,7 +280,7 @@ def render_provenance(rows):
     if not rows:
         L.append("没有找到任何 provenance.json。")
         L.append("说明：档案在**生成输入时**由 tf 自动写进远端步骤目录，随 fetch 回拉本地")
-        L.append("      （result/<步骤>/provenance.json）。跑过 phonoagent start/init 的步骤才有。")
+        L.append("      （result/<步骤>/provenance.json）。跑过 autozt start/init 的步骤才有。")
         return "\n".join(L)
     for r in rows:
         prov = r.get("prov") or {}
@@ -335,7 +335,7 @@ def render_provenance(rows):
 def cmd_prove(cfg, data, proj, job=None, json_out=False, verify=False):
     """tf prove -p <材料> [-j <步骤>] [--json] [--verify]
     只读：从本地 result/ 读回拉的 provenance.json，打印"这一步怎么来的"。"""
-    from phonoagent import find_material, find_step
+    from autozt import find_material, find_step
     t, m = find_material(data, proj)
     if m is None or t is None:
         print("错误：找不到材料 %s。" % proj)

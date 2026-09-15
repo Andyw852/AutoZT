@@ -1,17 +1,17 @@
-# CONTEXT.md —— PhonoAgent v2.0 代码导航（给 AI / 维护者）
+# CONTEXT.md —— AutoZT v2.0 代码导航（给 AI / 维护者）
 
-> 本文件是 PhonoAgent-v2.0 的代码地图，读代码 / 改代码前先看这里。
-> 一句话：v2.0 把原 7463 行单体脚本 `versions/v1.0/tf` 拆成 `phonoagent/` 包的
+> 本文件是 AutoZT-v2.0 的代码地图，读代码 / 改代码前先看这里。
+> 一句话：v2.0 把原 7463 行单体脚本 `versions/v1.0/tf` 拆成 `autozt/` 包的
 > 8 个真深模块（小接口 + 深实现），行为与原版完全等价。
 
 ## 1. 目录结构
 
 ```
-PhonoAgent-v2.0/
-├── bin/phonoagent                  # ★ 入口脚本（等价于原 versions/v1.0/tf）
-├── phonoagent/                  # 新拆分的 Python 包
+AutoZT-v2.0/
+├── bin/autozt                  # ★ 入口脚本（等价于原 versions/v1.0/tf）
+├── autozt/                  # 新拆分的 Python 包
 │   ├── __init__.py         # 装配器：导入 8 个真深模块并把名字注入包命名空间
-│   ├── __main__.py         # python -m phonoagent
+│   ├── __main__.py         # python -m autozt
 │   ├── _collector_remote.py  # 远端采集脚本（真实 .py，可 lint；装配时读成 COLLECTOR 字符串）
 │   ├── bootstrap.py        # 配置/发现流
 │   ├── collect.py          # 远端采集
@@ -23,7 +23,7 @@ PhonoAgent-v2.0/
 │   └── yamlmini.py         # YAML 解析器
 ├── versions/v1.0/tf        # 原始单体（保留作对比基准，勿改）
 ├── skill/                  # 技能（模板 / 脚本 / skill.yaml）
-├── setting/                # 集群 / 全局配置（phonoagent.yaml、<集群>.yaml）
+├── setting/                # 集群 / 全局配置（autozt.yaml、<集群>.yaml）
 ├── scripts/                # 辅助脚本（sanitize、git push）
 ├── test/                   # 测试夹具
 ├── AGENTS.md               # agent 操作规范（铁律 / 命令 / 判读 / 决策）
@@ -32,29 +32,29 @@ PhonoAgent-v2.0/
 
 ## 2. 架构：深模块（deep modules，小接口 + 深实现）
 
-原 `phonoagent` 是 7463 行的单体脚本，184 个函数 / 类 / 常量共享一个模块级命名空间，
+原 `autozt` 是 7463 行的单体脚本，184 个函数 / 类 / 常量共享一个模块级命名空间，
 函数之间按名字直接引用，且存在多处**循环依赖**（见第 5 节，均已消除）。
 
 v2.0 的做法：
 
-- 把原文件按职责合并成 `phonoagent/` 下的 8 个真深模块（见第 4 节地图）。
+- 把原文件按职责合并成 `autozt/` 下的 8 个真深模块（见第 4 节地图）。
 - `__init__.py` 导入这 8 个模块，并把它们的名字注入包命名空间。
-- 跨模块引用在**函数内**用 `from phonoagent import X` 延迟解析（调用时才解析，避开模块级 import 环）。
+- 跨模块引用在**函数内**用 `from autozt import X` 延迟解析（调用时才解析，避开模块级 import 环）。
 
 **改代码时的规则**：
 
 - 改某个功能 → 打开对应模块（见第 4 节地图）。
-- 跨模块引用：函数内 `from phonoagent import X`（不要加模块级 import，避免环）。
+- 跨模块引用：函数内 `from autozt import X`（不要加模块级 import，避免环）。
 - 模块内引用：直接按名字调用（同模块）。
 
 ## 3. 关键不变量（改代码别破坏）
 
 1. **路径常量**（原 `__file__` 深度 hack 已消除）：`__init__.py` 注入 `_PKG_ROOT`（包根）、
-   `_PKG_DIR`（phonoagent 包目录）、`_SLICE_DIR`（_slice 目录）三个显式常量，替代分片里
-   `dirname(__file__)/../..` 之类的路径计算；`__file__` 保持真实值 `phonoagent/__init__.py`。
+   `_PKG_DIR`（autozt 包目录）、`_SLICE_DIR`（_slice 目录）三个显式常量，替代分片里
+   `dirname(__file__)/../..` 之类的路径计算；`__file__` 保持真实值 `autozt/__init__.py`。
    （`_SLICE_DIR` 已废弃——`_slice/` 目录已删除，所有代码并入真模块。）
 2. **`COLLECTOR` 独立成 `_collector_remote.py`**：远端采集脚本现在是一个真实、可 lint
-   的 `.py` 文件 `phonoagent/_collector_remote.py`；`__init__.py` 装配时把它读回成字符串注入
+   的 `.py` 文件 `autozt/_collector_remote.py`；`__init__.py` 装配时把它读回成字符串注入
    命名空间，运行时字节与原单体完全一致（base64 下发超算的行为不变）。
 3. **命令入口**：`main()` 在 `cli.py`，命令分发逻辑也在其中。
 4. **副作用顺序**：装配时 `00_state.py` 里会执行 `os.environ.get(...)` 等常量求值，
@@ -76,10 +76,10 @@ v2.0 的做法：
 ## 4.5 模块对外契约（AI 调用指南——不读实现就能用）
 
 深模块的核心是「小接口 + 深实现」。下面是 8 个模块对外暴露的接口（外部调用
-只看这些，实现细节不必读）。跨模块一律 from phonoagent import X（函数内延迟解析）。
+只看这些，实现细节不必读）。跨模块一律 from autozt import X（函数内延迟解析）。
 
 ### bootstrap.py —— 配置 / 发现流
-- load_config(path) → (cfg_dict, cfg_path)：加载全局 phonoagent.yaml。
+- load_config(path) → (cfg_dict, cfg_path)：加载全局 autozt.yaml。
 - discover_skills() → 扫 skill/*/skill.yaml 的技能清单。
 - apply_skills(cfg, verbose=) → 把技能装配进 cfg（返回 cfg）。
 - merge_project_configs(cfg) → 合并 project_setting/tf_*.yaml。
@@ -125,8 +125,8 @@ v2.0 的做法：
 拆分前做了全量依赖分析，发现以下循环。深模块化时已用「合并成真模块 + 函数内延迟
 import」全部打破（见 §10），此处保留原始边图供追溯：
 
-- `06_state ↔ 09_submit ↔ 13_advance ↔ 11_actions`（工作流执行主环）✅ **已破**：四片合并为真模块 `phonoagent/workflow.py`
-- `15_hpc ↔ 17_cli ↔ 16_watch`（命令路由环）✅ **已破**：数据簇抽 `phonoagent/data.py`
+- `06_state ↔ 09_submit ↔ 13_advance ↔ 11_actions`（工作流执行主环）✅ **已破**：四片合并为真模块 `autozt/workflow.py`
+- `15_hpc ↔ 17_cli ↔ 16_watch`（命令路由环）✅ **已破**：数据簇抽 `autozt/data.py`
 
 **环的具体边（函数级，2025 实测）**：
 
@@ -138,17 +138,17 @@ import」全部打破（见 §10），此处保留原始边图供追溯：
   - `13_advance → 11_actions`：`guard_predecessors`、`step_targets`
   - `11_actions → 06_state`：`_SkillGate`、`_dag_max_inflight`、`_dag_recompute`、`_gen_step_input`、`_pregenerate_ready`、`_scancel_clear`、`_scancel_set`
   - `11_actions → 09_submit`：`_scancel_desc`、`do_rerun_step`、`do_submit`、`kill_if_queued`、`remote_scancel`、`tag_of`
-  - **✅ 已破**：四片合并成 `phonoagent/workflow.py`（上述内部边全变模块内引用，无 import），
-    外部依赖（00/02/03/04/05/07/08/14）在函数内 `from phonoagent import ...` 延迟解析。
+  - **✅ 已破**：四片合并成 `autozt/workflow.py`（上述内部边全变模块内引用，无 import），
+    外部依赖（00/02/03/04/05/07/08/14）在函数内 `from autozt import ...` 延迟解析。
 - 环2（命令路由，有清晰缝）：
   - `15_hpc → 17_cli`：`collect_data`
   - `17_cli → 15_hpc`：`cmd_adopt`、`cmd_auto`、`cmd_auto_project`、`cmd_auto_skill`、`cmd_hpc`、`cmd_level`、`cmd_migrate_subdir`
   - `16_watch → 17_cli`：`_snapshot`、`_state_cache_save`、`apply_exclude`、`collect_data`、`filter_projs`
   - `17_cli → 16_watch`：`_watch_cron`、`_watch_daemon`、`_watch_ensure`、`_watch_stop`、`cmd_watch`
   - 破环缝：把 `collect_data`/`_snapshot`/`_state_cache_save`/`apply_exclude`/`filter_projs`
-    （数据采集/过滤工具，17 定义、被 15/16 依赖）抽成叶子深模块 `phonoagent/data.py`，
+    （数据采集/过滤工具，17 定义、被 15/16 依赖）抽成叶子深模块 `autozt/data.py`，
     15/16 依赖它而非 17，环2 即破。
-  - **✅ 已破**：`phonoagent/data.py` 已抽出（见 §10），15/16 不再依赖 17 的数据函数。
+  - **✅ 已破**：`autozt/data.py` 已抽出（见 §10），15/16 不再依赖 17 的数据函数。
 
 这正是 v2.0 选用「单一命名空间装配」而非真实 import 的原因——它是唯一能
 在不改动任何函数体、保证行为等价的前提下完成拆分的方案。
@@ -156,46 +156,46 @@ import」全部打破（见 §10），此处保留原始边图供追溯：
 ## 6. 如何运行 / 验证
 
 ```bash
-cd ~/software/PhonoAgent-v2.0
-python3 bin/phonoagent --help        # 帮助（与原版逐字节一致）
-python3 bin/phonoagent skills        # 只读，读 skill/*/skill.yaml
-python3 bin/phonoagent config        # 打印示例配置
-python3 -m phonoagent             # 等价入口
-python3 -c "import phonoagent"    # 装配成功 = 8 个深模块就位
+cd ~/software/AutoZT-v2.0
+python3 bin/autozt --help        # 帮助（与原版逐字节一致）
+python3 bin/autozt skills        # 只读，读 skill/*/skill.yaml
+python3 bin/autozt config        # 打印示例配置
+python3 -m autozt             # 等价入口
+python3 -c "import autozt"    # 装配成功 = 8 个深模块就位
 ```
 
 只读回归命令（不碰超算）：`--help` / `config` / `skills` / `--schema`。
 
-单测：`python3 test/test_phonoagent.py`（28 个用例，自带运行器，无需 pytest）。
+单测：`python3 test/test_autozt.py`（28 个用例，自带运行器，无需 pytest）。
 
 ## 7. 已知差异（已消除）
 
-- ~~`phonoagent --version` / 裸 `phonoagent` 的「程序:」行显示 `_slice/00_state.py`~~ —— 已修复：
-  `__init__.py` 注入 `_PROG_PATH` 指向真实入口 `bin/phonoagent`，版本 / 裸 phonoagent 的「程序:」行
+- ~~`autozt --version` / 裸 `autozt` 的「程序:」行显示 `_slice/00_state.py`~~ —— 已修复：
+  `__init__.py` 注入 `_PROG_PATH` 指向真实入口 `bin/autozt`，版本 / 裸 autozt 的「程序:」行
   改用 `_PROG_PATH` 显示；`包根` 计算仍用 `__file__`（保持深度不变量）。
-  现在 `--help` 与原版逐字节一致，`--version` 显示 `bin/phonoagent`。
+  现在 `--help` 与原版逐字节一致，`--version` 显示 `bin/autozt`。
 
 ## 8. v2.0 增强（已完成）
 
-- **COLLECTOR 独立**：`phonoagent/_collector_remote.py`（真实 .py，可 `py_compile` / lint），
+- **COLLECTOR 独立**：`autozt/_collector_remote.py`（真实 .py，可 `py_compile` / lint），
   装配时读回字符串注入命名空间，字节与原单体一致（有单测 `test_collector_integrity`）。
-- **pytest 单测**：`test/test_phonoagent.py` 28 个用例（COLLECTOR 完整性、config 加载、
+- **pytest 单测**：`test/test_autozt.py` 28 个用例（COLLECTOR 完整性、config 加载、
   skills 发现/装配、summary 格式化、状态词、快照 diff、自然排序、CLI 冒烟）。
   自带独立运行器，不依赖 pytest 是否安装。
 - **`--dry-run`**：`start/stop/retry/rerun/clean/fetch` 加 `--dry-run`，只打印将影响的
   材料/步骤，不执行任何变更、不提交作业。
-- **`phonoagent json` schema**：输出加 `schema_version: 2` + `tf_version`；`phonoagent json --schema`
-  （或 `phonoagent --schema`）打印字段说明（常量 `JSON_SCHEMA`）。
+- **`autozt json` schema**：输出加 `schema_version: 2` + `tf_version`；`autozt json --schema`
+  （或 `autozt --schema`）打印字段说明（常量 `JSON_SCHEMA`）。
 - **`--json` 输出**：`list/summary/status/dir` 加 `--json`，输出机器可读 JSON
   （summary 用 `_summary_json` 结构化；status 的 `--json` 只读、不 auto_fetch/advance）。
 - **建议动作映射（机器化决策表）**：report.py 新增 _suggested_action(code)，把 diag_code
   机器化映射到确定性动作（retry/rerun/start/human_review）+ 理由——即把 AGENTS.md §5 的
   散文决策表搬进代码。--json 的 step 带 suggested_action + action_reason，
   summary 的 fails[].action 也带动作。AI 不再读散文规则做决策。
-- **一键诊断 phonoagent -p X [-j STEP] diagnose**：把 FAIL 诊断的固定套路（状态 + diag +
+- **一键诊断 autozt -p X [-j STEP] diagnose**：把 FAIL 诊断的固定套路（状态 + diag +
   diag_code + suggested_action + job + dir）合成一条命令，输出结构化 JSON（只读、
   不采集不提交）。AI 从「跑 3-4 步 + 读散文」→「跑 1 步 + 读 JSON」。
-- **phonoagent json 裁剪/分页/变更**：--errors-only（只留含 FAIL 的材料与 FAIL 步）、
+- **autozt json 裁剪/分页/变更**：--errors-only（只留含 FAIL 的材料与 FAIL 步）、
   --limit N / --offset M（材料展平按 (type,name) 排序分页，返回
   {materials,total,offset,limit}）。批分析时不再吞全表。
   --changes 只输出相对上次快照的步骤级变更（{changes:[{type,material,step,old,new}],count,first_run,unchanged}），
@@ -216,7 +216,7 @@ python3 -c "import phonoagent"    # 装配成功 = 8 个深模块就位
 
 ## 10. AI 友好增强（第二波）与待办
 
-- **git 化**：v2.0 已 `git init` 并推送 GitHub（`github.com/Andyw852/PhonoAgent-v2.0`）。
+- **git 化**：v2.0 已 `git init` 并推送 GitHub（`github.com/Andyw852/AutoZT-v2.0`）。
   `.gitignore` 排除 `setting/`（配置）、`*.model`（大模型权重）、`test/` 数据子目录，
   只跟踪代码（294 文件 ~4.7MB）。
 - **对齐自动审计**：`scripts/sync_check.sh` 一键 diff v2.0 vs 原版 skill/setting
@@ -228,7 +228,7 @@ python3 -c "import phonoagent"    # 装配成功 = 8 个深模块就位
   `--json` 输出的 step 加 `diag_code`、summary 的 `fails[].code` 也带 code，
   agent 无需 grep（如 `relax_summary_missing` / `relax_summary_incomplete` /
   `force_not_converged` / `relax_oscillating` / `stepconf_unknown_params`）。
-- **测试**：`test/test_phonoagent.py` 14 → 28 个用例（新增 stepconf 白名单回归、
+- **测试**：`test/test_autozt.py` 14 → 28 个用例（新增 stepconf 白名单回归、
   retry 目标、dry-run 语义、diag_code、yamlmini/data/workflow 深模块、命名空间完整性）。
 
 **深模块化（已完成）**：
@@ -237,6 +237,6 @@ python3 -c "import phonoagent"    # 装配成功 = 8 个深模块就位
   `ops.py`（运维流）、`cli.py`（命令入口）、`yamlmini.py`（YAML 解析器）。
   `_slice/` 目录已删除，单一命名空间装配已退役。
 - 两个循环依赖环均已消除（环1 合并进 workflow.py、环2 抽 data.py）；跨模块引用
-  统一用函数内 `from phonoagent import ...` 延迟解析。
+  统一用函数内 `from autozt import ...` 延迟解析。
 - 28 个单测（含命名空间完整性安全网 `test_namespace_complete`）。
 

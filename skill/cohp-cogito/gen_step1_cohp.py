@@ -63,21 +63,21 @@ OUT_DIR = "step1_cohp"   # run:gen 步骤在技能目录下运行，产物写入
 
 
 def _tf_bin() -> str:
-    """找"正在跑我的那个 tf"：PHONOAGENT_BIN 环境变量 > 本仓库 bin/phonoagent > PATH 里的 tf。
+    """找"正在跑我的那个 tf"：AUTOZT_BIN 环境变量 > 本仓库 bin/autozt > PATH 里的 tf。
 
-    不要直接写 "phonoagent"：① 副本树常以 python3 bin/phonoagent 调用，PATH 里可能没有 tf；
-    ② PATH 里的 tf 可能指向**另一棵树**（如 ~/.local/bin/phonoagent → 生产树），
+    不要直接写 "autozt"：① 副本树常以 python3 bin/autozt 调用，PATH 里可能没有 tf；
+    ② PATH 里的 tf 可能指向**另一棵树**（如 ~/.local/bin/autozt → 生产树），
     一调用就会拿错配置去提交——这里必须优先用同一个仓库里的入口。
     """
-    env = os.environ.get("PHONOAGENT_BIN")
+    env = os.environ.get("AUTOZT_BIN")
     if env and os.path.isfile(env):
         return env
     here = Path(__file__).resolve().parent          # skill/cohp-cogito/
     for up in (here.parent.parent, here.parent, here):   # 仓库根 → 技能目录
-        cand = up / "bin" / "phonoagent"
+        cand = up / "bin" / "autozt"
         if cand.is_file():
             return str(cand)
-    return shutil.which("phonoagent") or "phonoagent"
+    return shutil.which("autozt") or "autozt"
 
 
 def main() -> int:

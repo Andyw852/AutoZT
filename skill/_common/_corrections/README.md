@@ -1,6 +1,6 @@
 # _corrections/ —— 纠错 handler 库
 
-> PhonoAgent-v1.0 建议 1.1。目标：**把"这个报错该怎么办"从人的脑子里搬进仓库**，
+> AutoZT-v1.0 建议 1.1。目标：**把"这个报错该怎么办"从人的脑子里搬进仓库**，
 > 让新成员/新技能不必读完 AGENTS.md 决策表 + 问作者。
 
 ## 1. 它解决什么
@@ -21,14 +21,14 @@ handler 库把这件事变成**可枚举的代码**：
 ## 2. 怎么用
 
 ```bash
-phonoagent diagnose -p C24/qHPC24              # 诊断里直接带 corrections 建议（只读）
-phonoagent correct  -p C24/qHPC24 -j S1_opt    # 只打印命中的 handler + 建议命令（只读）
-phonoagent correct  -p C24/qHPC24 -j S1_opt -y # 执行 handler.apply（改远端 INCAR，自动备份）
-phonoagent schema   band-dft-cpu               # 看某技能声明了哪些 corrections
+autozt diagnose -p C24/qHPC24              # 诊断里直接带 corrections 建议（只读）
+autozt correct  -p C24/qHPC24 -j S1_opt    # 只打印命中的 handler + 建议命令（只读）
+autozt correct  -p C24/qHPC24 -j S1_opt -y # 执行 handler.apply（改远端 INCAR，自动备份）
+autozt schema   band-dft-cpu               # 看某技能声明了哪些 corrections
 ```
 
-★ `phonoagent correct` **永不提交作业、永不删目录**：apply 只允许改输入文件（备份 + 原子写），
-提交仍走 `phonoagent start`、重生成仍走 `phonoagent retry/rerun`。
+★ `autozt correct` **永不提交作业、永不删目录**：apply 只允许改输入文件（备份 + 原子写），
+提交仍走 `autozt start`、重生成仍走 `autozt retry/rerun`。
 
 ## 3. 怎么写一个新 handler（照 zbrent.py 复制改 20 分钟）
 
@@ -56,7 +56,7 @@ class MyCaseCorrection(CorrectionHandler):
 HANDLER = MyCaseCorrection()
 ```
 
-写完 `phonoagent schema <技能>` 就能看到它（`phonoagent diagnose` 会自动命中，不注册也行）。
+写完 `autozt schema <技能>` 就能看到它（`autozt diagnose` 会自动命中，不注册也行）。
 
 ## 4. 放哪 & 优先级
 
@@ -66,11 +66,11 @@ HANDLER = MyCaseCorrection()
 | `skill/<技能>/_corrections/` | **技能私有**：只对该技能生效，同名可覆盖全局 |
 
 技能 `skill.yaml` 里写 `corrections: [名字, ...]` 表示"本技能声明会用到这些纠错"——
-这只是**自描述**（`phonoagent schema` 展示给人看），不写也照样能被全局兜底命中。
+这只是**自描述**（`autozt schema` 展示给人看），不写也照样能被全局兜底命中。
 
 ## 5. 纪律（写 handler 前必读）
 
-1. `apply()` 只改输入文件，**必须**先备份再原子写（参考 `phonoagent._hung_incar_fix`）；
-2. **禁止**在 handler 里 sbatch / scancel / rm / mv 目录——提交与取消永远只走 phonoagent；
+1. `apply()` 只改输入文件，**必须**先备份再原子写（参考 `autozt._hung_incar_fix`）；
+2. **禁止**在 handler 里 sbatch / scancel / rm / mv 目录——提交与取消永远只走 autozt；
 3. 风险等级别乱标：`safe` 才允许无人值守；`destructive` 只许给建议（`dir_missing` 就是范例）；
 4. 判据要窄：宁可漏判（人再判断），不可误判（把正常推进的作业当成故障处理）。

@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
-"""python -m phonoagent 入口。"""
+"""python -m autozt 入口。"""
 import os
 import sys
 
-from phonoagent import main
+from autozt import main
 
 if __name__ == "__main__":
     try:

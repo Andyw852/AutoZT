@@ -7,7 +7,7 @@ import contextlib
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
-from phonoagent import cmd_correct, cmd_diagnose  # noqa: E402
+from autozt import cmd_correct, cmd_diagnose  # noqa: E402
 
 FAILS = []
 
@@ -48,7 +48,7 @@ if step["corrections"]:
     c0 = step["corrections"][0]
     ok(c0["handler"] == "nsw_continue", "命中 nsw_continue（实际 %s）" % c0["handler"])
     ok(c0["risk"] == "safe" and c0["auto"] is True, "风险等级/auto 正确")
-    ok(any("retry" in x for x in c0["commands"]), "建议里带 phonoagent retry 命令")
+    ok(any("retry" in x for x in c0["commands"]), "建议里带 autozt retry 命令")
 
 print("[2] tf correct 只读模式（不 -y）")
 rc, txt = run(cmd_correct, cfg, mkdata(), "qHPC24", None, False, False)

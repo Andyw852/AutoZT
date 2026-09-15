@@ -6,10 +6,10 @@ import unittest.mock as _mock
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, _ROOT)
 os.chdir(_ROOT)
-import phonoagent
-from phonoagent import workflow
+import autozt
+from autozt import workflow
 
-_FAKE_SCHED = "import os, sys, json, time, re, fcntl\nSTATE = os.environ.get('PHONOAGENT_FAKE_STATE')\nLOCK = STATE + '.lock'\ndef _fenv(k, dflt):\n    try: return float(os.environ.get(k, str(dflt)))\n    except ValueError: return dflt\ndef _load_unlocked():\n    if os.path.isfile(STATE): return json.load(open(STATE))\n    return {'next_id': 1000, 'sbatch_count': 0, 'jobs': []}\ndef _read():\n    with open(LOCK, 'a+') as lf:\n        fcntl.flock(lf, fcntl.LOCK_EX)\n        try: return _load_unlocked()\n        finally: fcntl.flock(lf, fcntl.LOCK_UN)\ndef _mutate(fn):\n    with open(LOCK, 'a+') as lf:\n        fcntl.flock(lf, fcntl.LOCK_EX)\n        try:\n            d = _load_unlocked(); r = fn(d)\n            tmp = STATE + '.tmp'\n            json.dump(d, open(tmp, 'w')); os.replace(tmp, STATE)\n            return r\n        finally:\n            fcntl.flock(lf, fcntl.LOCK_UN)\ndef cmd_sbatch(args):\n    script = args[-1] if args else ''\n    name = ''\n    try:\n        m = re.search(r'^#SBATCH\\s+--job-name=(\\S+)', open(script).read(), re.M)\n        name = m.group(1) if m else ''\n    except OSError: pass\n    holder = {}\n    def go(d):\n        jid = d['next_id']; d['next_id'] += 1\n        d['sbatch_count'] += 1\n        d['jobs'].append({'id': str(jid), 'name': name, 'wd': os.getcwd(), 'state': 'PENDING', 'ts': time.time()})\n        holder['jid'] = jid\n    _mutate(go)\n    print('Submitted batch job %d' % holder['jid'])\ndef cmd_squeue(args):\n    if os.environ.get('PHONOAGENT_FAKE_SQUEUE_FAIL') == '1':\n        sys.stderr.write('slurm_load_jobs error: Invalid partition\\n'); sys.exit(1)\n    fmt = ''\n    for i, a in enumerate(args):\n        if a == '-o' and i + 1 < len(args): fmt = args[i + 1]\n    delay = _fenv('PHONOAGENT_FAKE_SQUEUE_DELAY', 0)\n    dur = _fenv('PHONOAGENT_FAKE_JOB_DURATION', 999999)\n    now = time.time(); d = _read()\n    use_wd = '%Z' in fmt\n    only_name = ('%i' not in fmt) and ('%j' in fmt)\n    for j in d['jobs']:\n        age = now - j['ts']\n        if age < delay: continue\n        if age >= dur: continue\n        if only_name: print(j['name'])\n        elif use_wd: print('%s|%s|%s' % (j['id'], j['wd'], j['state']))\n        else: print('%s|%s|%s' % (j['id'], j['name'], j['state']))\n    sys.exit(0)\ndef cmd_sacct(args):\n    if os.environ.get('PHONOAGENT_FAKE_SACCT_FAIL') == '1':\n        sys.stderr.write('sacct: error: slurmdbd unreachable\\n'); sys.exit(1)\n    jid = None\n    for i, a in enumerate(args):\n        if a == '-j' and i + 1 < len(args): jid = args[i + 1]\n    delay = _fenv('PHONOAGENT_FAKE_SACCT_DELAY', 0)\n    dur = _fenv('PHONOAGENT_FAKE_JOB_DURATION', 999999)\n    now = time.time(); d = _read()\n    for j in d['jobs']:\n        if j['id'] == jid:\n            age = now - j['ts']\n            if age < delay: sys.exit(0)\n            print('%s|%s|' % (j['id'], 'RUNNING' if age < dur else 'COMPLETED')); sys.exit(0)\n    sys.exit(0)\nif __name__ == '__main__':\n    cmd = sys.argv[1] if len(sys.argv) > 1 else ''\n    a = sys.argv[2:]\n    if cmd == 'sbatch': cmd_sbatch(a)\n    elif cmd == 'squeue': cmd_squeue(a)\n    elif cmd == 'sacct': cmd_sacct(a)\n    else: sys.exit(2)\n"
+_FAKE_SCHED = "import os, sys, json, time, re, fcntl\nSTATE = os.environ.get('AUTOZT_FAKE_STATE')\nLOCK = STATE + '.lock'\ndef _fenv(k, dflt):\n    try: return float(os.environ.get(k, str(dflt)))\n    except ValueError: return dflt\ndef _load_unlocked():\n    if os.path.isfile(STATE): return json.load(open(STATE))\n    return {'next_id': 1000, 'sbatch_count': 0, 'jobs': []}\ndef _read():\n    with open(LOCK, 'a+') as lf:\n        fcntl.flock(lf, fcntl.LOCK_EX)\n        try: return _load_unlocked()\n        finally: fcntl.flock(lf, fcntl.LOCK_UN)\ndef _mutate(fn):\n    with open(LOCK, 'a+') as lf:\n        fcntl.flock(lf, fcntl.LOCK_EX)\n        try:\n            d = _load_unlocked(); r = fn(d)\n            tmp = STATE + '.tmp'\n            json.dump(d, open(tmp, 'w')); os.replace(tmp, STATE)\n            return r\n        finally:\n            fcntl.flock(lf, fcntl.LOCK_UN)\ndef cmd_sbatch(args):\n    script = args[-1] if args else ''\n    name = ''\n    try:\n        m = re.search(r'^#SBATCH\\s+--job-name=(\\S+)', open(script).read(), re.M)\n        name = m.group(1) if m else ''\n    except OSError: pass\n    holder = {}\n    def go(d):\n        jid = d['next_id']; d['next_id'] += 1\n        d['sbatch_count'] += 1\n        d['jobs'].append({'id': str(jid), 'name': name, 'wd': os.getcwd(), 'state': 'PENDING', 'ts': time.time()})\n        holder['jid'] = jid\n    _mutate(go)\n    print('Submitted batch job %d' % holder['jid'])\ndef cmd_squeue(args):\n    if os.environ.get('AUTOZT_FAKE_SQUEUE_FAIL') == '1':\n        sys.stderr.write('slurm_load_jobs error: Invalid partition\\n'); sys.exit(1)\n    fmt = ''\n    for i, a in enumerate(args):\n        if a == '-o' and i + 1 < len(args): fmt = args[i + 1]\n    delay = _fenv('AUTOZT_FAKE_SQUEUE_DELAY', 0)\n    dur = _fenv('AUTOZT_FAKE_JOB_DURATION', 999999)\n    now = time.time(); d = _read()\n    use_wd = '%Z' in fmt\n    only_name = ('%i' not in fmt) and ('%j' in fmt)\n    for j in d['jobs']:\n        age = now - j['ts']\n        if age < delay: continue\n        if age >= dur: continue\n        if only_name: print(j['name'])\n        elif use_wd: print('%s|%s|%s' % (j['id'], j['wd'], j['state']))\n        else: print('%s|%s|%s' % (j['id'], j['name'], j['state']))\n    sys.exit(0)\ndef cmd_sacct(args):\n    if os.environ.get('AUTOZT_FAKE_SACCT_FAIL') == '1':\n        sys.stderr.write('sacct: error: slurmdbd unreachable\\n'); sys.exit(1)\n    jid = None\n    for i, a in enumerate(args):\n        if a == '-j' and i + 1 < len(args): jid = args[i + 1]\n    delay = _fenv('AUTOZT_FAKE_SACCT_DELAY', 0)\n    dur = _fenv('AUTOZT_FAKE_JOB_DURATION', 999999)\n    now = time.time(); d = _read()\n    for j in d['jobs']:\n        if j['id'] == jid:\n            age = now - j['ts']\n            if age < delay: sys.exit(0)\n            print('%s|%s|' % (j['id'], 'RUNNING' if age < dur else 'COMPLETED')); sys.exit(0)\n    sys.exit(0)\nif __name__ == '__main__':\n    cmd = sys.argv[1] if len(sys.argv) > 1 else ''\n    a = sys.argv[2:]\n    if cmd == 'sbatch': cmd_sbatch(a)\n    elif cmd == 'squeue': cmd_squeue(a)\n    elif cmd == 'sacct': cmd_sacct(a)\n    else: sys.exit(2)\n"
 
 def _make_scheduler(tmp):
     bin_dir = os.path.join(tmp, "fakebin")
@@ -28,7 +28,7 @@ def _make_mock(bin_dir, state, delays):
     def fake_run_remote(cfg, shell_line, host="__default__", use_stdin=False):
         env = dict(os.environ)
         env["PATH"] = bin_dir + os.pathsep + env.get("PATH", "")
-        env["PHONOAGENT_FAKE_STATE"] = state
+        env["AUTOZT_FAKE_STATE"] = state
         for k, v in delays.items():
             env[k] = str(v)
         r = subprocess.run(["bash", "-c", shell_line], env=env,
@@ -76,8 +76,8 @@ def test_remote_sbatch_dedup_concurrent_squeue_visible():
     with tempfile.TemporaryDirectory(dir=os.path.join(_ROOT, "tmp")) as tmp:
         bin_dir, state = _make_scheduler(tmp)
         s, step_dir = _mk_step(tmp)
-        mock = _make_mock(bin_dir, state, {"PHONOAGENT_FAKE_SQUEUE_DELAY": 0, "PHONOAGENT_FAKE_JOB_DURATION": 999999})
-        with _mock.patch.object(phonoagent, "run_remote", side_effect=mock):
+        mock = _make_mock(bin_dir, state, {"AUTOZT_FAKE_SQUEUE_DELAY": 0, "AUTOZT_FAKE_JOB_DURATION": 999999})
+        with _mock.patch.object(autozt, "run_remote", side_effect=mock):
             results = _concurrent(lambda: workflow.remote_sbatch({}, s, jobname="Mg4C60-test-S6"))
         assert sum(1 for r in results if r[0]) == 1, "应只有一路提交成功: %r" % (results,)
         assert _read_state(state)["sbatch_count"] == 1
@@ -87,8 +87,8 @@ def test_remote_sbatch_dedup_visibility_delay_receipt_sacct():
     with tempfile.TemporaryDirectory(dir=os.path.join(_ROOT, "tmp")) as tmp:
         bin_dir, state = _make_scheduler(tmp)
         s, step_dir = _mk_step(tmp)
-        mock = _make_mock(bin_dir, state, {"PHONOAGENT_FAKE_SQUEUE_DELAY": 10, "PHONOAGENT_FAKE_SACCT_DELAY": 0, "PHONOAGENT_FAKE_JOB_DURATION": 999999})
-        with _mock.patch.object(phonoagent, "run_remote", side_effect=mock):
+        mock = _make_mock(bin_dir, state, {"AUTOZT_FAKE_SQUEUE_DELAY": 10, "AUTOZT_FAKE_SACCT_DELAY": 0, "AUTOZT_FAKE_JOB_DURATION": 999999})
+        with _mock.patch.object(autozt, "run_remote", side_effect=mock):
             results = _concurrent(lambda: workflow.remote_sbatch({}, s, jobname="Mg4C60-test-S6"))
         assert sum(1 for r in results if r[0]) == 1, "应只有一路提交成功: %r" % (results,)
         assert _read_state(state)["sbatch_count"] == 1
@@ -100,8 +100,8 @@ def test_remote_sbatch_fanout_dedup_concurrent():
     with tempfile.TemporaryDirectory(dir=os.path.join(_ROOT, "tmp")) as tmp:
         bin_dir, state = _make_scheduler(tmp)
         s, step_dir = _mk_step(tmp, fanout=True, subdirs=("d1", "d2", "d3"))
-        mock = _make_mock(bin_dir, state, {"PHONOAGENT_FAKE_SQUEUE_DELAY": 0, "PHONOAGENT_FAKE_JOB_DURATION": 999999})
-        with _mock.patch.object(phonoagent, "run_remote", side_effect=mock):
+        mock = _make_mock(bin_dir, state, {"AUTOZT_FAKE_SQUEUE_DELAY": 0, "AUTOZT_FAKE_JOB_DURATION": 999999})
+        with _mock.patch.object(autozt, "run_remote", side_effect=mock):
             results = _concurrent(lambda: workflow.remote_sbatch({}, s, jobname="Mg4C60-test-S6"))
         assert sum(1 for r in results if r[0]) == 1, "应只有一路提交成功: %r" % (results,)
         assert _read_state(state)["sbatch_count"] == 3
@@ -111,8 +111,8 @@ def test_remote_sbatch_fail_closed_on_squeue_failure():
     with tempfile.TemporaryDirectory(dir=os.path.join(_ROOT, "tmp")) as tmp:
         bin_dir, state = _make_scheduler(tmp)
         s, step_dir = _mk_step(tmp)
-        mock = _make_mock(bin_dir, state, {"PHONOAGENT_FAKE_SQUEUE_FAIL": 1})
-        with _mock.patch.object(phonoagent, "run_remote", side_effect=mock):
+        mock = _make_mock(bin_dir, state, {"AUTOZT_FAKE_SQUEUE_FAIL": 1})
+        with _mock.patch.object(autozt, "run_remote", side_effect=mock):
             ok, out, jid = workflow.remote_sbatch({}, s, jobname="Mg4C60-test-S6")
         assert ok is False
         assert "squeue" in (out or "")
@@ -123,8 +123,8 @@ def test_remote_sbatch_single_submit_ok():
     with tempfile.TemporaryDirectory(dir=os.path.join(_ROOT, "tmp")) as tmp:
         bin_dir, state = _make_scheduler(tmp)
         s, step_dir = _mk_step(tmp)
-        mock = _make_mock(bin_dir, state, {"PHONOAGENT_FAKE_SQUEUE_DELAY": 0, "PHONOAGENT_FAKE_JOB_DURATION": 999999})
-        with _mock.patch.object(phonoagent, "run_remote", side_effect=mock):
+        mock = _make_mock(bin_dir, state, {"AUTOZT_FAKE_SQUEUE_DELAY": 0, "AUTOZT_FAKE_JOB_DURATION": 999999})
+        with _mock.patch.object(autozt, "run_remote", side_effect=mock):
             ok, out, jid = workflow.remote_sbatch({}, s, jobname="Mg4C60-test-S6")
         assert ok is True and jid
         assert _read_state(state)["sbatch_count"] == 1
@@ -135,8 +135,8 @@ def test_remote_sbatch_resubmit_after_completion():
     with tempfile.TemporaryDirectory(dir=os.path.join(_ROOT, "tmp")) as tmp:
         bin_dir, state = _make_scheduler(tmp)
         s, step_dir = _mk_step(tmp)
-        mock = _make_mock(bin_dir, state, {"PHONOAGENT_FAKE_SQUEUE_DELAY": 0, "PHONOAGENT_FAKE_SACCT_DELAY": 0, "PHONOAGENT_FAKE_JOB_DURATION": 0.2})
-        with _mock.patch.object(phonoagent, "run_remote", side_effect=mock):
+        mock = _make_mock(bin_dir, state, {"AUTOZT_FAKE_SQUEUE_DELAY": 0, "AUTOZT_FAKE_SACCT_DELAY": 0, "AUTOZT_FAKE_JOB_DURATION": 0.2})
+        with _mock.patch.object(autozt, "run_remote", side_effect=mock):
             ok1, _, jid1 = workflow.remote_sbatch({}, s, jobname="Mg4C60-test-S6")
             assert ok1 and jid1
             time.sleep(0.5)
@@ -156,19 +156,19 @@ def test_defects_common_guarded_sbatch_dedup():
         os.makedirs(workdir, exist_ok=True)
         with open(os.path.join(workdir, "submit.sh"), "w") as f:
             f.write("#!/bin/bash\n#SBATCH --job-name=ref_Pb_fcc\necho run\n")
-        old_path, old_state = os.environ.get("PATH"), os.environ.get("PHONOAGENT_FAKE_STATE")
+        old_path, old_state = os.environ.get("PATH"), os.environ.get("AUTOZT_FAKE_STATE")
         os.environ["PATH"] = bin_dir + os.pathsep + (old_path or "")
-        os.environ["PHONOAGENT_FAKE_STATE"] = state
-        os.environ["PHONOAGENT_FAKE_SQUEUE_DELAY"] = "0"
-        os.environ["PHONOAGENT_FAKE_JOB_DURATION"] = "999999"
+        os.environ["AUTOZT_FAKE_STATE"] = state
+        os.environ["AUTOZT_FAKE_SQUEUE_DELAY"] = "0"
+        os.environ["AUTOZT_FAKE_JOB_DURATION"] = "999999"
         try:
             results = _concurrent(lambda: D.guarded_sbatch(workdir, "ref_Pb_fcc")[0])
         finally:
             os.environ["PATH"] = old_path
             if old_state is not None:
-                os.environ["PHONOAGENT_FAKE_STATE"] = old_state
+                os.environ["AUTOZT_FAKE_STATE"] = old_state
             else:
-                os.environ.pop("PHONOAGENT_FAKE_STATE", None)
+                os.environ.pop("AUTOZT_FAKE_STATE", None)
         assert _read_state(state)["sbatch_count"] == 1
         assert all(r for r in results), "应都 ok（一个提交，一个幂等跳过）: %r" % (results,)
 
@@ -183,19 +183,19 @@ def test_defects_common_guarded_sbatch_fail_closed():
         os.makedirs(workdir, exist_ok=True)
         with open(os.path.join(workdir, "submit.sh"), "w") as f:
             f.write("#!/bin/bash\necho run\n")
-        old_path, old_state = os.environ.get("PATH"), os.environ.get("PHONOAGENT_FAKE_STATE")
+        old_path, old_state = os.environ.get("PATH"), os.environ.get("AUTOZT_FAKE_STATE")
         os.environ["PATH"] = bin_dir + os.pathsep + (old_path or "")
-        os.environ["PHONOAGENT_FAKE_STATE"] = state
-        os.environ["PHONOAGENT_FAKE_SQUEUE_FAIL"] = "1"
+        os.environ["AUTOZT_FAKE_STATE"] = state
+        os.environ["AUTOZT_FAKE_SQUEUE_FAIL"] = "1"
         try:
             ok, msg = D.guarded_sbatch(workdir, "ref_Pb_fcc")
         finally:
             os.environ["PATH"] = old_path
             if old_state is not None:
-                os.environ["PHONOAGENT_FAKE_STATE"] = old_state
+                os.environ["AUTOZT_FAKE_STATE"] = old_state
             else:
-                os.environ.pop("PHONOAGENT_FAKE_STATE", None)
-            os.environ.pop("PHONOAGENT_FAKE_SQUEUE_FAIL", None)
+                os.environ.pop("AUTOZT_FAKE_STATE", None)
+            os.environ.pop("AUTOZT_FAKE_SQUEUE_FAIL", None)
         assert ok is False
         assert "squeue" in msg
         assert _read_state(state)["sbatch_count"] == 0
@@ -207,8 +207,8 @@ def test_remote_sbatch_fanout_retry_only_unfinished():
         bin_dir, state = _make_scheduler(tmp)
         s, step_dir = _mk_step(tmp, fanout=True, subdirs=("d1", "d2", "d3"))
         s["fan_todo"] = ["d2"]   # retry 只补 d2（d1/d3 已完成）
-        mock = _make_mock(bin_dir, state, {"PHONOAGENT_FAKE_SQUEUE_DELAY": 0, "PHONOAGENT_FAKE_JOB_DURATION": 999999})
-        with _mock.patch.object(phonoagent, "run_remote", side_effect=mock):
+        mock = _make_mock(bin_dir, state, {"AUTOZT_FAKE_SQUEUE_DELAY": 0, "AUTOZT_FAKE_JOB_DURATION": 999999})
+        with _mock.patch.object(autozt, "run_remote", side_effect=mock):
             ok, out, jid = workflow.remote_sbatch({}, s, jobname="Mg4C60-test-S6")
         assert ok is True, "fanout retry 应提交成功: %r" % (out,)
         st = _read_state(state)

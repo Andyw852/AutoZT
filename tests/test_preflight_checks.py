@@ -9,7 +9,7 @@ import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
-from phonoagent import preflight as pf  # noqa: E402
+from autozt import preflight as pf  # noqa: E402
 
 OK_SUBMIT = """#!/bin/bash
 #SBATCH --partition=cpu192

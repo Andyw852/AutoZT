@@ -13,8 +13,8 @@ import tempfile
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
-import phonoagent  # noqa: E402
-from phonoagent import (load_correction_handlers, correction_handler_names,  # noqa: E402
+import autozt  # noqa: E402
+from autozt import (load_correction_handlers, correction_handler_names,  # noqa: E402
                    match_corrections, make_ctx, suggest_for_diag,
                    validate_skill_spec, spec_stats, issues_fatal)
 
@@ -146,7 +146,7 @@ ok(spec_stats({})["has_io"] is False, "空 spec 统计不炸")
 
 
 print("[9] io_schema.steps（按步 I/O）+ tf skill show 卡片渲染")
-from phonoagent.skillspec import (_validate_io_steps, step_io_map, render_skill_card,
+from autozt.skillspec import (_validate_io_steps, step_io_map, render_skill_card,
                              card_dict, _disp_width, _fit)  # noqa: E402
 
 skel_card = {

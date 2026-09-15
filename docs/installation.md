@@ -1,10 +1,10 @@
 # Installation
 
-PhonoAgent's command-line core has no third-party dependency. Both phonoagent and the
+AutoZT's command-line core has no third-party dependency. Both autozt and the
 short form pa are installed; they are the same program.
 
-    git clone https://github.com/Andyw852/PhonoAgent
-    cd PhonoAgent
+    git clone https://github.com/Andyw852/AutoZT
+    cd AutoZT
     pip install -e .            # CLI only
     pip install -e ".[yaml]"    # + PyYAML (read yaml configuration)
 
@@ -16,6 +16,6 @@ computing side:
     pip install -e ".[hiphive]" # hiphive + ase
     pip install -e ".[dev]"     # pytest, ruff, build
 
-PhonoAgent does not redistribute pseudopotentials (POTCAR), MACE model weights or
+AutoZT does not redistribute pseudopotentials (POTCAR), MACE model weights or
 third-party training data. Obtain them from their licensed sources and point the
 configuration at them.

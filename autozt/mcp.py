@@ -1,11 +1,11 @@
 # -*- coding: utf-8 -*-
-"""phonoagent mcp —— 把 PhonoAgent 以 MCP（Model Context Protocol）stdio 服务暴露给上层 agent。
+"""autozt mcp —— 把 AutoZT 以 MCP（Model Context Protocol）stdio 服务暴露给上层 agent。
 
 设计三条硬约束（决定了"新技能仍然方便"和"agent 不能乱来"）：
   1. **只调 CLI，不 import 内部函数**：门禁/审计/档案只有一份事实来源，不可能与命令行漂移。
   2. **工具是通用动词，不认识任何具体技能**：技能清单/步骤清单都从 skill.yaml 动态读，
      所以加新技能 = 加目录，MCP 侧零改动、工具数量恒定（上限 20，超了就说明有人按技能加工具）。
-  3. **风险在协议边界收口**：只读工具直连 CLI；变更/破坏性工具一律走 phonoagent act
+  3. **风险在协议边界收口**：只读工具直连 CLI；变更/破坏性工具一律走 autozt act
      （风险分级 + 人工批准 + 审计日志），approve 只从真 TTY 生效，agent 无法自我批准。
 
 协议：JSON-RPC 2.0 over stdio，支持 initialize / tools/list / tools/call（MCP 最小可用集）。
@@ -20,7 +20,7 @@ PROTOCOL_VERSION = "2024-11-05"
 SCHEMA_VERSION = "1"
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-PROG = os.path.join(ROOT, "bin", "phonoagent")
+PROG = os.path.join(ROOT, "bin", "autozt")
 
 # 通用动词工具表：读/写/破坏三类，与技能无关
 TOOLS = [
@@ -92,8 +92,8 @@ BY_NAME = {t[0]: t for t in TOOLS}
 
 
 def _cfg_args():
-    cfg = (os.environ.get("PHONOAGENT_CONFIG")
-           or os.environ.get("PHONOAGENT_CFG") or "").strip()
+    cfg = (os.environ.get("AUTOZT_CONFIG")
+           or os.environ.get("AUTOZT_CFG") or "").strip()
     return ["-c", cfg] if cfg else []
 
 
@@ -101,7 +101,7 @@ def _run(argv, timeout=1800):
     """只通过 CLI 执行——门禁/审计/档案全部沿用命令行那一套。"""
     cmd = [sys.executable, PROG] + _cfg_args() + argv
     env = dict(os.environ)
-    env.setdefault("PHONOAGENT_ACTOR", "mcp")   # 让 act 网关认出这是 agent 会话
+    env.setdefault("AUTOZT_ACTOR", "mcp")   # 让 act 网关认出这是 agent 会话
     try:
         p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout,
                            env=env)
@@ -122,7 +122,7 @@ def _mat_args(a):
 
 
 def call_tool(name, args):
-    """执行一个工具：只读直连，变更/破坏性走 phonoagent act（会返回需批准的错误）。"""
+    """执行一个工具：只读直连，变更/破坏性走 autozt act（会返回需批准的错误）。"""
     if name not in BY_NAME:
         return {"isError": True, "content": [{"type": "text",
                 "text": "unknown tool: %s" % name}]}
@@ -130,7 +130,7 @@ def call_tool(name, args):
     if readonly_profile() and risk != "read":
         return {"isError": True, "content": [{"type": "text",
                 "text": "tool %s is not exposed in the read-only profile "
-                        "(PHONOAGENT_MCP_READONLY=1)" % name}],
+                        "(AUTOZT_MCP_READONLY=1)" % name}],
                 "structuredContent": {"risk": risk, "schema_version": SCHEMA_VERSION}}
     args = args or {}
     argv = _mat_args(args)
@@ -161,12 +161,12 @@ def call_tool(name, args):
 
 
 def readonly_profile():
-    """只读档：PHONOAGENT_MCP_READONLY 为真时只暴露 read 档工具。
+    """只读档：AUTOZT_MCP_READONLY 为真时只暴露 read 档工具。
 
     给"只让 agent 看、不让它动"的场景用：变更/破坏性动词在协议层就不出现，
     比"出现但被拒"更省事，也更难被绕过。
     """
-    v = (os.environ.get("PHONOAGENT_MCP_READONLY") or "").strip().lower()
+    v = (os.environ.get("AUTOZT_MCP_READONLY") or "").strip().lower()
     return v in ("1", "true", "yes", "on")
 
 
@@ -190,7 +190,7 @@ def handle(req):
     if method == "initialize":
         result = {"protocolVersion": PROTOCOL_VERSION,
                   "capabilities": {"tools": {}},
-                  "serverInfo": {"name": "phonoagent", "version": SCHEMA_VERSION}}
+                  "serverInfo": {"name": "autozt", "version": SCHEMA_VERSION}}
     elif method in ("tools/list", "list_tools"):
         result = {"tools": _tools_list()}
     elif method == "resources/list":
@@ -267,26 +267,26 @@ def _resources_list():
         for f in ("skill.yaml", "README.md"):
             p = os.path.join(d, f)
             if os.path.isfile(p):
-                out.append({"uri": "phonoagent://skill/%s/%s" % (name, f),
+                out.append({"uri": "autozt://skill/%s/%s" % (name, f),
                             "name": "%s/%s" % (name, f),
                             "mimeType": "text/markdown" if f.endswith(".md")
                             else "application/yaml"})
     for f in ("README.md", "README.en.md", "CHANGELOG.md", "docs/ACCEPTANCE.md",
               "docs/CONFIGURING.md", "docs/mcp.md"):
         if os.path.isfile(os.path.join(ROOT, f)):
-            out.append({"uri": "phonoagent://doc/%s" % f, "name": f,
+            out.append({"uri": "autozt://doc/%s" % f, "name": f,
                         "mimeType": "text/markdown"})
     return out
 
 
 def _resource_path(uri):
-    """phonoagent://skill/<name>/<file> 或 phonoagent://doc/<path> → 仓库内真实路径。
+    """autozt://skill/<name>/<file> 或 autozt://doc/<path> → 仓库内真实路径。
 
     只允许仓库内的常规文件：任何 .. 或绝对路径都拒绝（agent 不能借资源接口越权读盘）。
     """
-    if not isinstance(uri, str) or not uri.startswith("phonoagent://"):
+    if not isinstance(uri, str) or not uri.startswith("autozt://"):
         return None
-    rest = uri[len("phonoagent://"):]
+    rest = uri[len("autozt://"):]
     if rest.startswith("skill/"):
         rel = os.path.join(rest.split("/", 1)[0], rest.split("/", 1)[1])
     elif rest.startswith("doc/"):

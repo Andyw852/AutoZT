@@ -7,11 +7,11 @@
 模块后环消除。对外接口（小）：step_state / do_submit / auto_advance / auto_fetch /
 remote_gen / cmd_start / cmd_stop / cmd_retry / cmd_rerun / cmd_clean 等。
 
-外部依赖（00/02/03/04/05/07/08/14 片的名字）在函数内用 from phonoagent import ... 延迟解析。
+外部依赖（00/02/03/04/05/07/08/14 片的名字）在函数内用 from autozt import ... 延迟解析。
 """
 import os
 
-from phonoagent import i18n as _i18n  # noqa: E402
+from autozt import i18n as _i18n  # noqa: E402
 import sys
 import re
 import json
@@ -30,7 +30,7 @@ import threading
 # -*- coding: utf-8 -*-
 # 06_state —— 步骤状态机 / DAG / 技能并发门控
 #
-# 本分片由 phonoagent/__init__.py 装配器在单一命名空间里按顺序执行；
+# 本分片由 autozt/__init__.py 装配器在单一命名空间里按顺序执行；
 # 函数之间的引用按名字解析（与原单文件一致），分片间无需 import。
 # 内容清单（按原文件行号）：
 #   L2160  _scancel_path
@@ -53,7 +53,7 @@ import threading
 
 # ===== _scancel_path (原 L2160-L2162) =====
 def _scancel_path(m):
-    from phonoagent import SCANCEL_MARK
+    from autozt import SCANCEL_MARK
     lp = m.get("lpath")
     return os.path.join(lp, SCANCEL_MARK) if lp else None
 
@@ -86,7 +86,7 @@ def _scancel_save(m, marks):
 
 # ===== _scancel_set (原 L2192-L2197) =====
 def _scancel_set(m, step_name, jobid=None):
-    """phonoagent stop 成功后调用：给该步骤打 scancel 标记（auto 不再自动重跑）。"""
+    """autozt stop 成功后调用：给该步骤打 scancel 标记（auto 不再自动重跑）。"""
     marks = _scancel_load(m)
     marks["%s/%s" % (m.get("tt"), step_name)] = {
         "jobid": jobid, "time": time.strftime("%Y-%m-%d %H:%M:%S")}
@@ -120,7 +120,7 @@ def step_state(step, blocked):
         return (st, "OTHER")
     if step["done"]:
         return ("OK", "OK")
-    if step.get("scancel"):   # v1.4：phonoagent stop 取消的标记（压过 FAIL/TODO）
+    if step.get("scancel"):   # v1.4：autozt stop 取消的标记（压过 FAIL/TODO）
         return ("scancel", "SCANCEL")
     if step.get("imaginary"):
         return ("imaginary", "IMAG")   # 算完了但有虚频，不是 error
@@ -136,7 +136,7 @@ def step_state(step, blocked):
 
 # ===== _dag_needs (原 L2250-L2259) =====
 def _dag_needs(t, m, s, prev_name):
-    from phonoagent import step_cfg
+    from autozt import step_cfg
     """步骤 s 的依赖名列表。skill.yaml 没写 needs 就回退成\"上一步\"，
     这样没改造过的技能（band / elastic）行为完全不变。"""
     sc = step_cfg(t, s["name"], m) or {}
@@ -149,7 +149,7 @@ def _dag_needs(t, m, s, prev_name):
 
 # ===== _dag_max_inflight (原 L2262-L2271) =====
 def _dag_max_inflight(cfg, m):
-    from phonoagent import _MAX_INFLIGHT_DEFAULT
+    from autozt import _MAX_INFLIGHT_DEFAULT
     st = (m.get("ps") or {}).get("setting") or {}
     for src in (st, cfg):
         v = src.get("max_inflight")
@@ -162,7 +162,7 @@ def _dag_max_inflight(cfg, m):
 
 # ===== _skill_max_jobs (原 L2283-L2297) =====
 def _skill_max_jobs(cfg, t):
-    from phonoagent import _MAX_JOBS_DEFAULT
+    from autozt import _MAX_JOBS_DEFAULT
     """返回该技能（任务类型）的并发提交上限；None = 不限。"""
     tc = (cfg.get("task_types") or {}).get(t.get("key")) or {}
     v = tc.get("max_jobs")
@@ -180,7 +180,7 @@ def _skill_max_jobs(cfg, t):
 
 # ===== _skill_busy_jobs (原 L2300-L2310) =====
 def _skill_busy_jobs(t):
-    from phonoagent import _BUSY_KINDS
+    from autozt import _BUSY_KINDS
     """该技能当前已提交（在跑/排队）的超算作业数。
     普通步骤 1 步 = 1 个作业；扇出步骤按 fan_jobids 里的子作业数计。"""
     n = 0
@@ -195,7 +195,7 @@ def _skill_busy_jobs(t):
 # ===== _SkillGate (原 L2313-L2349) =====
 class _SkillGate(object):
     """按技能统计「已提交作业数」并卡上限；跨材料共享、线程安全。
-    auto_advance 串行、phonoagent start 批量并行都走它，保证同一技能不超 max_jobs。
+    auto_advance 串行、autozt start 批量并行都走它，保证同一技能不超 max_jobs。
     同 key 的多个段（v2/v3 混合、多项目）在构造时把 busy 累加在一起。"""
     def __init__(self, cfg, data):
         import threading
@@ -233,7 +233,7 @@ class _SkillGate(object):
 
 # ===== _gen_step_input (原 L2352-L2368) =====
 def _gen_step_input(cfg, t, m, s):
-    from phonoagent import log_action, step_cfg
+    from autozt import log_action, step_cfg
     """只生成单步输入（不 sbatch），供达 max_jobs 上限时本地预初始化用。
     返回 True=成功或无需 gen（已生成/本地即时步），False=gen 失败。
     max_jobs 只卡「提交超算」，不卡本地生成输入。"""
@@ -302,7 +302,7 @@ def _dag_recompute(t, m):
 
 # ===== annotate (原 L2420-L2462) =====
 def annotate(data):
-    from phonoagent import FAN_JOBIDS
+    from autozt import FAN_JOBIDS
     for t in data["types"]:
         for m in t["materials"]:
             m["tt"] = t["key"]
@@ -311,7 +311,7 @@ def annotate(data):
             blocked = False
             m["active"] = None
             m["action"] = "-"
-            marks = _scancel_load(m)   # v1.4：phonoagent stop 打的本步骤标记
+            marks = _scancel_load(m)   # v1.4：autozt stop 打的本步骤标记
             marks_dirty = False
             for s in m["steps"]:
                 sc = marks.get("%s/%s" % (t["key"], s["name"]))
@@ -432,7 +432,7 @@ def check_duplicates(data):
 # -*- coding: utf-8 -*-
 # 09_submit —— 远端生成 / sbatch 提交 / scancel 取消
 #
-# 本分片由 phonoagent/__init__.py 装配器在单一命名空间里按顺序执行；
+# 本分片由 autozt/__init__.py 装配器在单一命名空间里按顺序执行；
 # 函数之间的引用按名字解析（与原单文件一致），分片间无需 import。
 # 内容清单（按原文件行号）：
 #   L3253  _scancel_desc
@@ -449,7 +449,7 @@ def check_duplicates(data):
 
 # ===== _scancel_desc (原 L3253-L3266) =====
 def _scancel_desc(jobids):
-    from phonoagent import FAN_JOBIDS
+    from autozt import FAN_JOBIDS
     """fixte⑫：把代表 jobid 展开成真实取消数量，用于回显。
 
     扇出步骤一个"代表 jobid"背后是几百个子作业（remote_scancel 会用
@@ -466,7 +466,7 @@ def _scancel_desc(jobids):
 
 # ===== remote_scancel (原 L3269-L3279) =====
 def remote_scancel(cfg, jobids, host="__default__"):
-    from phonoagent import FAN_JOBIDS, run_remote
+    from autozt import FAN_JOBIDS, run_remote
     ids = []                                  # v1.4：代表 jobid → 全部 jobid
     for x in (jobids or []):
         for y in FAN_JOBIDS.get(str(x), [str(x)]):
@@ -493,24 +493,24 @@ def render_vasp_template(text, filename, step_name, profiles):
     interface = profile.get("cell_constraint", "none")
     if not executable:
         if constrained:
-            return '#!/bin/bash\nexport PHONOAGENT_CELL_CONSTRAINT=none\necho "ERROR: cluster has no configured constrained VASP" >&2\nexit 1\n'
+            return '#!/bin/bash\nexport AUTOZT_CELL_CONSTRAINT=none\necho "ERROR: cluster has no configured constrained VASP" >&2\nexit 1\n'
         raise ValueError("VASP 配置缺少 standard." + variant)
     if constrained and interface not in ("ioptcell_tag", "optcell_file"):
         raise ValueError("二维变胞优化需要已配置的 VASP 约束接口")
     lines = text.splitlines()
     launches = [index for index, line in enumerate(lines)
                 if re.match(r"\s*(mpirun|mpiexec|srun)\b", line)
-                and re.search(r"vasp_(std|gam|ncl)|PHONOAGENT_VASP_BIN", line)]
+                and re.search(r"vasp_(std|gam|ncl)|AUTOZT_VASP_BIN", line)]
     if len(launches) != 1:
         raise ValueError("提交模板必须包含唯一的 VASP 启动命令: " + filename)
     index = launches[0]
-    lines[index] = re.sub(r'(?:\S*/)?vasp_(?:std|gam|ncl)(?:_[A-Za-z0-9.-]+)?|"?\$PHONOAGENT_VASP_BIN"?',
+    lines[index] = re.sub(r'(?:\S*/)?vasp_(?:std|gam|ncl)(?:_[A-Za-z0-9.-]+)?|"?\$AUTOZT_VASP_BIN"?',
                          lambda match: shlex.quote(str(executable)), lines[index])
-    lines = [line for line in lines if not line.startswith("export PHONOAGENT_CELL_CONSTRAINT=")]
+    lines = [line for line in lines if not line.startswith("export AUTOZT_CELL_CONSTRAINT=")]
     insertion = next(index for index, line in enumerate(lines)
                      if re.match(r"\s*(mpirun|mpiexec|srun)\b", line)
                      and re.search(r"vasp_(std|gam|ncl)", line))
-    lines.insert(insertion, "export PHONOAGENT_CELL_CONSTRAINT=" + (interface if constrained else "none"))
+    lines.insert(insertion, "export AUTOZT_CELL_CONSTRAINT=" + (interface if constrained else "none"))
     setup = profile.get("setup") or ""
     if setup:
         lines[insertion:insertion] = str(setup).splitlines()
@@ -584,7 +584,7 @@ print("[cores] 统一为 %d 核：%s" % (n, "; ".join(hits) if hits else "无 su
 def resolve_cores(cfg, t, m, sname=None):
     """统一核数来源（都不写就是 None=不动）：项目 setting.yaml > 项目/技能 hpc.yaml >
     类型配置 task_types.<key>.cores > 全局 tf.yaml 的 cores。"""
-    from phonoagent import step_cfg
+    from autozt import step_cfg
     ps = (m or {}).get("ps") or {}
     st = ps.get("setting") if isinstance(ps, dict) else None
     st = st if isinstance(st, dict) else {}
@@ -593,7 +593,7 @@ def resolve_cores(cfg, t, m, sname=None):
     # 技能子目录私有 hpc.yaml（材料/<技能>/hpc.yaml）也认，优先级同上。
     # 任何异常都吞掉：核数解析绝不能把 gen 拖崩。
     try:
-        from phonoagent import _load_yaml_file
+        from autozt import _load_yaml_file
         _sdir = (m or {}).get("_skill_dir_local")
         if _sdir:
             _shpc = _load_yaml_file(os.path.join(_sdir, "hpc.yaml")) or {}
@@ -632,7 +632,7 @@ def _cores_cmd(n, sub=""):
 
 
 def remote_gen(cfg, t, m, sname, host=None, wd=None):
-    from phonoagent import (PROV_DIR, PROV_NAME, STEP_CONF, build_gen_provenance,
+    from autozt import (PROV_DIR, PROV_NAME, STEP_CONF, build_gen_provenance,
                        build_step_conf, find_asset, provenance_enabled, run_remote,
                        sh_b64, step_cfg)
     """执行 gen：先建目录、补 POSCAR（v3 本地模式）和 gen_need 依赖文件、gen 脚本，
@@ -705,7 +705,7 @@ def remote_gen(cfg, t, m, sname, host=None, wd=None):
     # 也救不回来）。这类"公共池加文件忘改清单"今后自动兜住。
     # 只做【补】不做【减】：清单写了什么照推；同名文件技能目录优先（与 find_asset
     # 一致），所以技能自带的同名模块不会被公共池的覆盖。
-    # 开关：tf.yaml 的 common_autodeps: false（或缺省时 PHONOAGENT_COMMON_AUTODEPS=0）。
+    # 开关：tf.yaml 的 common_autodeps: false（或缺省时 AUTOZT_COMMON_AUTODEPS=0）。
     try:
         if common_autodeps_enabled(cfg):
             need = list(need) + _common_dep_closure(cfg, t, m, list(need), sname)
@@ -730,7 +730,7 @@ def remote_gen(cfg, t, m, sname, host=None, wd=None):
                 data = fh.read()
             _raw = data          # 渲染前的本地原文（下面可能要按集群渲染）
             if re.fullmatch(r"submit_(std|gam|ncl)_(0d|2d|3d)\.tpl", f):
-                from phonoagent import pkg_setting_path, _load_yaml_file
+                from autozt import pkg_setting_path, _load_yaml_file
                 cluster = str(sc.get("hpc") or m.get("hpc_name") or host)
                 config_path = pkg_setting_path(cluster + ".yaml")
                 profiles = ((_load_yaml_file(config_path) or {}).get("vasp")
@@ -776,7 +776,7 @@ def remote_gen(cfg, t, m, sname, host=None, wd=None):
     # 为了让每一步各留一份、互不覆盖（gen 的 cwd 是材料目录，不是步骤目录）。
     # 只加不减：任何异常都吞掉——档案绝不阻断计算。开关见 prov.provenance_enabled。
     try:
-        from phonoagent import build_gen_provenance, provenance_enabled
+        from autozt import build_gen_provenance, provenance_enabled
         if provenance_enabled(cfg):
             _arg = dict(files=prov_files, host=host, gen_script=gen_script,
                         step_dir=step_dir)
@@ -1058,7 +1058,7 @@ if __name__ == "__main__":
 
 def _sbatch_guarded(cfg, step_dir, host="__default__", jobname=None, fanout=None,
                     only=None, force=False, submit=None):
-    from phonoagent import run_remote
+    from autozt import run_remote
     """在远端 step_dir 上：目录锁 + 实时 squeue 去重 + 回执/sacct 防可见性延迟，再 sbatch。
     返回 (ok, out, 逗号分隔 jobid 或 None)。查询失败一律 fail closed（拒绝提交）。"""
     _conf = {
@@ -1069,9 +1069,9 @@ def _sbatch_guarded(cfg, step_dir, host="__default__", jobname=None, fanout=None
         "force": bool(force),
         "submit": submit or "submit.sh",
         "lock_timeout": float(os.environ.get(
-            "PHONOAGENT_SBATCH_LOCK_TIMEOUT", str(cfg.get("sbatch_lock_timeout", 120))) or 120),
+            "AUTOZT_SBATCH_LOCK_TIMEOUT", str(cfg.get("sbatch_lock_timeout", 120))) or 120),
         "vis_window": float(os.environ.get(
-            "PHONOAGENT_SBATCH_VIS_WINDOW", str(cfg.get("sbatch_vis_window", 60))) or 60),
+            "AUTOZT_SBATCH_VIS_WINDOW", str(cfg.get("sbatch_vis_window", 60))) or 60),
         "user": str(cfg.get("user") or ""),
     }
     b64_script = base64.b64encode(_SBATCH_GUARD.encode("utf-8")).decode()
@@ -1094,7 +1094,7 @@ def _sbatch_guarded(cfg, step_dir, host="__default__", jobname=None, fanout=None
 
 
 def remote_sbatch_fanout(cfg, s, jobname=None, force=False):
-    from phonoagent import run_remote, sh_b64
+    from autozt import run_remote, sh_b64
     """扇出步骤：步骤目录下每个匹配子目录各自 sbatch 一次（目录锁 + 实时队列去重）。
 
     s["fan_todo"] 非空时只提交这些子目录（retry 只补没完成的）；
@@ -1107,7 +1107,7 @@ def remote_sbatch_fanout(cfg, s, jobname=None, force=False):
     # max_inflight 只数步骤、不数子目录 —— kl 的 findiff 三阶位移动辄上千个，
     # auto_advance 会一口气全交出去，占满作业配额把别的技能一起堵死。
     # 这里先远端数一遍，超阈值直接拒绝（retry 补帧的 fan_todo 不受限）。
-    _cap = int(os.environ.get("PHONOAGENT_FANOUT_MAX",
+    _cap = int(os.environ.get("AUTOZT_FANOUT_MAX",
                               str(cfg.get("fanout_max", 200))) or 200)
     if _cap > 0 and not only:
         _rc0, _o0 = run_remote(cfg, sh_b64(
@@ -1121,7 +1121,7 @@ def remote_sbatch_fanout(cfg, s, jobname=None, force=False):
         if _n > _cap:
             return (False,
                     "扇出 %d 个子目录，超过上限 %d，已拒绝提交。\n"
-                    "  确认要交：PHONOAGENT_FANOUT_MAX=%d tf -tt <技能> -p <材料> start\n"
+                    "  确认要交：AUTOZT_FANOUT_MAX=%d tf -tt <技能> -p <材料> start\n"
                     "  或先减少位移数：tf -tt kl -p <材料> -j 4 "
                     "conf --set params.METHOD=alm\n"
                     "  永久调阈值：全局 tf.yaml 写 fanout_max: <N>"
@@ -1156,7 +1156,7 @@ def kill_if_queued(cfg, s, force, tag):
 
 # ===== do_run_gen_step (原 L3479-L3510) =====
 def do_run_gen_step(cfg, t, m, s, tag):
-    from phonoagent import log_action, run_remote, step_cfg
+    from autozt import log_action, run_remote, step_cfg
     """run: gen 的步骤（v3.21 能带画图等）：只在材料目录远端执行 gen 脚本，
     不提交 SLURM；完成后按 done_marker 复判。失败（目录残留无产出）下次
     状态显示 error，retry/rerun 可重来。"""
@@ -1191,9 +1191,9 @@ def do_run_gen_step(cfg, t, m, s, tag):
 
 # ===== do_submit (原 L3513-L3546) =====
 def do_submit(cfg, t, m, s, force, gen_first, contcar_cp, tag, submit=True):
-    from phonoagent import log_action, run_remote, step_cfg
+    from autozt import log_action, run_remote, step_cfg
     """返回 True=成功 / False=失败或被拒绝（供退出码统计）。
-    submit=False：只生成输入（gen），不 sbatch、不触发本地生成步，交由 phonoagent start。"""
+    submit=False：只生成输入（gen），不 sbatch、不触发本地生成步，交由 autozt start。"""
     if step_cfg(t, s["name"], m).get("run") == "gen":  # v3.21：画图等轻量步骤
         if not submit:
             print("%s: 本地生成步（画图/读取），已就绪，待 tf … start 触发。" % tag)
@@ -1272,7 +1272,7 @@ def _discover_step_inputs(cfg, host, step_dir, subdir=None):
     任何异常都退回空元组，调用方按历史默认清单兜底——绝不因为发现失败而卡住提交。
     """
     import subprocess
-    from phonoagent import _ssh_cmd
+    from autozt import _ssh_cmd
     root = os.path.join(step_dir, str(subdir)) if subdir else step_dir
     remote = ("cd %s 2>/dev/null || exit 0; find . -maxdepth 2 -type f "
               "-size -40M -printf '%%P\\n' 2>/dev/null | head -300" % shlex.quote(root))
@@ -1312,7 +1312,7 @@ def _remote_submit_preflight(cfg, m, s, t=None):
     # 无 SLURM 的机器（如 3090，靠 fakeslurm 垫片）配置里没有 partition 键，
     # 此时模板若仍写死 #SBATCH --partition=cpu192（jzzn 的分区），作业只会
     # 永远卡在 PD(PartitionConfig)——真跑 fc-fit 切集群时实测过这个坑。
-    from phonoagent import (_PKG_ROOT as _PKGR, _load_yaml_file as _lyf,
+    from autozt import (_PKG_ROOT as _PKGR, _load_yaml_file as _lyf,
                             run_remote as _rrm)
     _pkg = os.path.join(_PKGR, "setting", str(m.get("hpc_name")) + ".yaml")
     try:
@@ -1343,7 +1343,7 @@ def _remote_submit_preflight(cfg, m, s, t=None):
     # 资源申请自检：--cpus-per-task × --ntasks-per-node 不能超过集群声明的上限。
     # 实测教训（2026-09-15 fc-fit 切 3090）：模板写 --cpus-per-task=48 而机器只给
     # 24 → 作业永远 PD(PartitionConfig)，日志里一个字都不说；改成 24 立刻开跑。
-    from phonoagent import preflight as _pf
+    from autozt import preflight as _pf
     _mc = 0
     try:
         _mc = int(_cc.get("max_cpus") or _cc.get("max_cpus_per_task") or 0)
@@ -1423,7 +1423,7 @@ def _remote_submit_preflight(cfg, m, s, t=None):
             remote = ("cd %s || exit 1; tar --ignore-failed-read -cf - %s"
                       % (shlex.quote(s["dir"]),
                          " ".join(shlex.quote(path) for path in paths)))
-            from phonoagent import _ssh_cmd
+            from autozt import _ssh_cmd
             cmd = _ssh_cmd(cfg, host, [remote])
             os.makedirs(dest, exist_ok=True)
             p1 = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -1483,7 +1483,7 @@ def _fanout_guard(m, s, yes, action):
 
 # ===== do_rerun_step (原 L3581-L3604) =====
 def do_rerun_step(cfg, t, m, s, yes, tag):
-    from phonoagent import log_action, run_remote
+    from autozt import log_action, run_remote
     if s.get("job"):
         if not kill_if_queued(cfg, s, True, tag):
             return False
@@ -1518,7 +1518,7 @@ def tag_of(m, s):
 # -*- coding: utf-8 -*-
 # 13_advance —— auto_advance / auto_fetch / clean / step init
 #
-# 本分片由 phonoagent/__init__.py 装配器在单一命名空间里按顺序执行；
+# 本分片由 autozt/__init__.py 装配器在单一命名空间里按顺序执行；
 # 函数之间的引用按名字解析（与原单文件一致），分片间无需 import。
 # 内容清单（按原文件行号）：
 #   L4776  auto_advance
@@ -1532,11 +1532,11 @@ def tag_of(m, s):
 
 # ===== auto_advance (原 L4776-L4885) =====
 def auto_advance(cfg, data):
-    from phonoagent import _AUTO_CASCADE_MAX, _BUSY_KINDS, _load_yaml_file, step_cfg
+    from autozt import _AUTO_CASCADE_MAX, _BUSY_KINDS, _load_yaml_file, step_cfg
     """status 时自动推进可开始的步骤（全局 tf.yaml 写 auto_advance: true 开启；
     项目 setting.yaml 里 auto_advance: false 可单独关闭）。
     只推进 TODO/PREP（输入就绪/未生成）的活跃步骤；error 不自动重试；
-    v1.4：SCANCEL（phonoagent stop 打了标记的）同样不推进，须显式 start/retry/rerun。"""
+    v1.4：SCANCEL（autozt stop 打了标记的）同样不推进，须显式 start/retry/rerun。"""
     if not cfg.get("auto_advance"):
         return
     # fixte⑬：磁盘复核 —— watch 是长驻进程，内存里的 cfg 可能是启动时的旧值
@@ -1597,7 +1597,7 @@ def auto_advance(cfg, data):
                     if not _is_gen and not _gate.try_acquire(t["key"]):
                         print("auto-advance：技能 %s 已提交 %d 个作业，达上限 %d；"
                               "其余就绪步骤先本地生成输入（不提交），等有空位自动补交"
-                              "（改 task_types.%s.max_jobs 或 PHONOAGENT_MAX_JOBS 调整）。"
+                              "（改 task_types.%s.max_jobs 或 AUTOZT_MAX_JOBS 调整）。"
                               % (t["key"], _gate.busy(t["key"]),
                                  _gate.cap(t["key"]), t["key"]))
                         if _i18n.is_en():
@@ -1608,7 +1608,7 @@ def auto_advance(cfg, data):
                     if _busy >= _cap:
                         print("auto-advance：%s[%s] 在跑 %d 个已达上限 %d，"
                               "本轮不再提交（改 max_inflight 或 "
-                              "PHONOAGENT_MAX_INFLIGHT 调整）"
+                              "AUTOZT_MAX_INFLIGHT 调整）"
                               % (m["name"], m["tt"], _busy, _cap))
                         if _i18n.is_en():
                             print("hint: the running-job cap is reached; the remaining steps were not submitted.", file=sys.stderr)
@@ -1649,7 +1649,7 @@ def auto_advance(cfg, data):
 
 # ===== cmd_step_init (原 L4888-L4927) =====
 def cmd_step_init(cfg, data, proj, job, force):
-    from phonoagent import find_material, find_step, log_action, run_remote, step_cfg
+    from autozt import find_material, find_step, log_action, run_remote, step_cfg
     """tf -p MAT -j STEP init：只生成该步骤的输入文件（gen），不提交。
     已有输入时不覆盖（要推倒重来用 rerun）；前序未完成需 -f。"""
     if not proj or not job:
@@ -1692,7 +1692,7 @@ def cmd_step_init(cfg, data, proj, job, force):
 
 # ===== cmd_clean (原 L4930-L5085) =====
 def cmd_clean(cfg, data, proj, job, yes, purge_config=False):
-    from phonoagent import _load_yaml_file, _parallel_map, _yaml_type_block_remove, find_material, find_step, log_action, run_remote
+    from autozt import _load_yaml_file, _parallel_map, _yaml_type_block_remove, find_material, find_step, log_action, run_remote
     """删除生成物，回到 PREP（材料级保留 POSCAR）。
     无 -p      → 全部材料；-p 材料 → 该材料；-p 体系目录（如 C20）→ 其下所有材料；
     -p -j      → 单个步骤目录；-j 不带 -p → 全部材料的该步骤目录。
@@ -1790,7 +1790,7 @@ def cmd_clean(cfg, data, proj, job, yes, purge_config=False):
         ans = input("clean %d 个材料（删除全部生成物，只留 POSCAR%s%s）？ [y/N] "
                     % (len(todo),
                        "，并取消 %d 个作业" % njob if njob else "",
-                       "；project_setting 也一并删除，重算需 phonoagent init"
+                       "；project_setting 也一并删除，重算需 autozt init"
                        if purge_config else
                        "；project_setting 保留，可直接重算")
                     ).strip().lower()
@@ -1817,7 +1817,7 @@ def cmd_clean(cfg, data, proj, job, yes, purge_config=False):
                 shutil.rmtree(d, ignore_errors=True)
         _scancel_clear(m)   # v1.4：材料回到全新状态，stop 标记一并清
         # v1.6：材料自己的 project_setting 一并删除（材料回到全新未初始化状态，
-        # 重算需 phonoagent init）；体系级共享配置（如 C20/project_setting）保留不动，
+        # 重算需 autozt init）；体系级共享配置（如 C20/project_setting）保留不动，
         # 否则会误删兄弟材料的配置。
         # v1.3.4：技能段感知——多技能项目的配置里还有其他技能的段时，只移除
         # 本技能段、保留 project_setting；本技能是最后一个段才整目录删。
@@ -1834,7 +1834,7 @@ def cmd_clean(cfg, data, proj, job, yes, purge_config=False):
         if own_ps and not purge_config:
             # v1.9.7：默认保留 project_setting。它是手写的配置，删了不能自动恢复，
             # 而且删光之后连材料都发现不到（local_root 就写在这些 tf_*.yaml 里），
-            # 只能靠在项目根裸跑 phonoagent init 兜回来。要连配置一起清用 --purge-config。
+            # 只能靠在项目根裸跑 autozt init 兜回来。要连配置一起清用 --purge-config。
             kept_note = "，project_setting 保留（要连配置一起删加 --purge-config）"
         elif own_ps:
             f0s = glob.glob(os.path.join(ps, "tf_*.yaml"))
@@ -1849,7 +1849,7 @@ def cmd_clean(cfg, data, proj, job, yes, purge_config=False):
                     key, ", ".join(remaining))
             else:
                 shutil.rmtree(ps, ignore_errors=True)   # log 已删，不写日志
-                kept_note = "，project_setting 已删，重算需 phonoagent init"
+                kept_note = "，project_setting 已删，重算需 autozt init"
         else:
             kept_note = "，体系级共享配置保留"
         print(_i18n.t("%s: 已清理（本地+超算只留 POSCAR%s）",
@@ -1861,7 +1861,7 @@ def cmd_clean(cfg, data, proj, job, yes, purge_config=False):
 
 # ===== _fetch_stamp_clear (原 L5091-L5098) =====
 def _fetch_stamp_clear(m, step_name):
-    from phonoagent import FETCH_STAMP
+    from autozt import FETCH_STAMP
     """步骤重提交/重生成后调用：清掉抓取戳记，让 auto-fetch 重拉新结果。"""
     try:
         sp = os.path.join(m.get("result_dir") or "", step_name, FETCH_STAMP)
@@ -1872,7 +1872,7 @@ def _fetch_stamp_clear(m, step_name):
 
 # ===== _relay_prev_across_host (原 L5101-L5142) =====
 def _relay_prev_across_host(cfg, m, s, t=None):
-    from phonoagent import _ssh_cmd, log_action
+    from autozt import _ssh_cmd, log_action
     """per-step 跨集群数据传递：当前步骤与其依赖(needs)步骤不在同一超算时，把本地
     result_dir/<dep>/ 已 fetch 的产物上传到当前 host 的 <dep>/ 目录，让 gen
     脚本的 find_prev_dir 就地找到。v1.13：按 needs 回传（不只 seq 前序），并把
@@ -1945,7 +1945,7 @@ def _fetch_receipt_valid(cfg, m, s):
     # callers also gate this, but keep the invariant at the receipt seam.
     if not s.get("done") or s.get("job"):
         return False
-    from phonoagent import FETCH_STAMP
+    from autozt import FETCH_STAMP
     try:
         with open(os.path.join(m["result_dir"], s["name"], FETCH_STAMP)) as f:
             return json.load(f) == _fetch_receipt(cfg, m, s)
@@ -1954,7 +1954,7 @@ def _fetch_receipt_valid(cfg, m, s):
 
 
 def _fetch_receipt_write(cfg, m, s):
-    from phonoagent import FETCH_STAMP
+    from autozt import FETCH_STAMP
     if not s.get("done") or s.get("job"):
         return
     dest = os.path.join(m["result_dir"], s["name"])
@@ -1972,7 +1972,7 @@ def _fetch_receipt_write(cfg, m, s):
 
 def fetch_material(cfg, m, only_steps=None, quiet=False, all_files=False,
                    force_steps=None, fetch_files_override=None):
-    from phonoagent import FETCH_STAMP, PROV_DIR, _ssh_cmd, log_action
+    from autozt import FETCH_STAMP, PROV_DIR, _ssh_cmd, log_action
     """把该材料各已存在步骤的 fetch_files 从超算拉回本地 result_dir/<step>/。
     用 tar 管道流式传输，缺失文件自动跳过。only_steps = 只拉这些步骤名。"""
     host = m.get("host_eff") or cfg.get("host")
@@ -2021,7 +2021,7 @@ def fetch_material(cfg, m, only_steps=None, quiet=False, all_files=False,
     _prov_local = os.path.join(m.get("result_dir") or "", PROV_DIR)
     if nstep or (m.get("result_dir") and not os.path.isdir(_prov_local)):
         try:
-            from phonoagent import fetch_provenance_dir
+            from autozt import fetch_provenance_dir
             fetch_provenance_dir(cfg, m, quiet=True)
         except Exception:      # noqa: BLE001
             pass
@@ -2033,7 +2033,7 @@ def fetch_material(cfg, m, only_steps=None, quiet=False, all_files=False,
 
 # ===== auto_fetch (原 L5193-L5253) =====
 def auto_fetch(cfg, data):
-    from phonoagent import FETCH_STAMP, PROV_DIR
+    from autozt import FETCH_STAMP, PROV_DIR
     """status 时自动把"已完成但尚未拉回"的步骤结果保存到本地（本地模式；
     项目 setting.yaml 里 auto_fetch: false 可关闭）。失败只警告不打断。"""
     pending = []
@@ -2058,7 +2058,7 @@ def auto_fetch(cfg, data):
                 _pl = os.path.join(m.get("result_dir") or "", PROV_DIR)
                 if m.get("result_dir") and not os.path.isdir(_pl):
                     try:
-                        from phonoagent import fetch_provenance_dir
+                        from autozt import fetch_provenance_dir
                         fetch_provenance_dir(cfg, m, quiet=True)
                     except Exception:      # noqa: BLE001
                         pass
@@ -2093,8 +2093,8 @@ def auto_fetch(cfg, data):
 # ===== v1.0 公共模块依赖补全（common_autodeps）=====
 def common_autodeps_enabled(cfg):
     """公共模块自动带依赖：默认开；tf.yaml 写 common_autodeps: false 关闭，
-    或用环境变量 PHONOAGENT_COMMON_AUTODEPS=0 临时关。"""
-    env = os.environ.get("PHONOAGENT_COMMON_AUTODEPS")
+    或用环境变量 AUTOZT_COMMON_AUTODEPS=0 临时关。"""
+    env = os.environ.get("AUTOZT_COMMON_AUTODEPS")
     if env is not None:
         return str(env).strip().lower() not in ("0", "false", "no", "off")
     val = (cfg or {}).get("common_autodeps")
@@ -2133,7 +2133,7 @@ def _py_sibling_imports(path):
 
 def _common_pool_roots(cfg):
     """所有技能搜索根下的 _common/ 目录（可能不止一个）。"""
-    from phonoagent import COMMON_POOL_DIR, skill_search_dirs
+    from autozt import COMMON_POOL_DIR, skill_search_dirs
     out = []
     for root in skill_search_dirs(cfg or {}):
         c = os.path.normpath(os.path.join(root, COMMON_POOL_DIR))
@@ -2156,7 +2156,7 @@ def _common_dep_closure(cfg, t, m, need, sname=None):
 
     技能目录里已有同名文件时不补（与 find_asset 的技能优先一致）。返回追加的
     文件名列表（去重、保序）。"""
-    from phonoagent import find_asset
+    from autozt import find_asset
     # 技能搜索根可能有多个（./skill、tf.yaml 的 skill_paths、配置目录旁的 skill、
     # 包根 skill）；逐个找 _common/，找到哪个就算哪个——单测里就靠这个用小树跑。
     pools = _common_pool_roots(cfg)
@@ -2190,7 +2190,7 @@ def _common_dep_closure(cfg, t, m, need, sname=None):
 
 # ===== cmd_fetch (原 L5256-L5269) =====
 def cmd_fetch(cfg, data, mname, all_files=False):
-    from phonoagent import find_material
+    from autozt import find_material
     fails = 0
     if mname:
         t, m = find_material(data, mname)
@@ -2211,7 +2211,7 @@ def cmd_fetch(cfg, data, mname, all_files=False):
 # -*- coding: utf-8 -*-
 # 11_actions —— start / stop / retry / rerun 命令
 #
-# 本分片由 phonoagent/__init__.py 装配器在单一命名空间里按顺序执行；
+# 本分片由 autozt/__init__.py 装配器在单一命名空间里按顺序执行；
 # 函数之间的引用按名字解析（与原单文件一致），分片间无需 import。
 # 内容清单（按原文件行号）：
 #   L3790  _start_ready
@@ -2233,7 +2233,7 @@ def cmd_fetch(cfg, data, mname, all_files=False):
 
 # ===== _start_ready (原 L3790-L3861) =====
 def _start_ready(cfg, t, m, force, incl_scancel=False, gate=None):
-    from phonoagent import _BUSY_KINDS, step_cfg
+    from autozt import _BUSY_KINDS, step_cfg
     """patch_start_dag：把一个材料当前所有就绪步骤交掉，返回失败数。
 
     就绪 = _dag_recompute 算出的 actives（依赖全 OK 的 TODO/PREP）。
@@ -2267,7 +2267,7 @@ def _start_ready(cfg, t, m, force, incl_scancel=False, gate=None):
                      m["tt"], m["name"], s["label"]))
             continue
         if s["kind"] == "SCANCEL" and not incl_scancel:
-            print("SCANCEL: %s [%s|%s] 曾被 phonoagent stop 取消，不会自动重跑"
+            print("SCANCEL: %s [%s|%s] 曾被 autozt stop 取消，不会自动重跑"
                   "（重跑：tf -tt %s -p '%s' -j %s start，或 "
                   "-status scancel start）"
                   % (m["name"], m["tt"], s["label"], m["tt"], m["name"],
@@ -2280,14 +2280,14 @@ def _start_ready(cfg, t, m, force, incl_scancel=False, gate=None):
         if gate is not None and not _is_gen and not gate.try_acquire(m["tt"]):
             print("%s[%s]：技能 %s 已提交 %d 个作业，达上限 %d，未提交的任务"
                   "先本地生成输入（不提交），等有空位自动补交（改 "
-                  "task_types.%s.max_jobs 或 PHONOAGENT_MAX_JOBS 调整）。"
+                  "task_types.%s.max_jobs 或 AUTOZT_MAX_JOBS 调整）。"
                   % (m["name"], m["tt"], m["tt"], gate.busy(m["tt"]),
                      gate.cap(m["tt"]), m["tt"]))
             _pregenerate_ready(cfg, t, m, _fired)
             break
         if busy >= cap:
             print("%s[%s]：在跑 %d 个已达上限 %d，剩下的没交"
-                  "（改 max_inflight 或 PHONOAGENT_MAX_INFLIGHT）"
+                  "（改 max_inflight 或 AUTOZT_MAX_INFLIGHT）"
                   % (m["name"], m["tt"], busy, cap))
             if _i18n.is_en():
                 print("hint: the running-job cap is reached; the remaining steps were not submitted.", file=sys.stderr)
@@ -2309,7 +2309,7 @@ def _start_ready(cfg, t, m, force, incl_scancel=False, gate=None):
         _fails = [x for x in m["steps"] if x.get("kind") == "FAIL" and not x.get("done")]
         if _fails:
             print("%s[%s]：没有可启动的步骤。有 %d 个 FAIL 步骤需要显式指定才能重交：\n"
-                  "        phonoagent -tt %s -p %s -j %s start -f"
+                  "        autozt -tt %s -p %s -j %s start -f"
                   % (m["name"], m["tt"], len(_fails), m["tt"], m["name"],
                      _fails[0].get("label") or _fails[0]["name"]))
         if _pf._i18n.is_en():
@@ -2352,7 +2352,7 @@ def guard_predecessors(m, s, force):
 
 # ===== cmd_start (原 L3894-L3973) =====
 def cmd_start(cfg, data, mname, jname, force, incl_scancel=False):
-    from phonoagent import _parallel_map, find_material, find_step, step_cfg
+    from autozt import _parallel_map, find_material, find_step, step_cfg
     """返回失败次数（含被拒绝的操作）。
     incl_scancel：-status scancel 显式筛选过时，SCANCEL 步骤也可被 start
     （否则批量 start 一律跳过被 stop 标记的步骤——v1.4"不会自动重跑"）。"""
@@ -2379,7 +2379,7 @@ def cmd_start(cfg, data, mname, jname, force, incl_scancel=False):
             if not _is_gen and not gate.try_acquire(m["tt"]):
                 print("技能 %s 已提交 %d 个作业，达上限 %d，%s 先本地生成输入"
                       "（不提交），等有空位自动补交（改 task_types.%s.max_jobs "
-                      "或 PHONOAGENT_MAX_JOBS 调整）。"
+                      "或 AUTOZT_MAX_JOBS 调整）。"
                       % (m["tt"], gate.busy(m["tt"]), gate.cap(m["tt"]),
                          m["name"], m["tt"]))
                 _gen_step_input(cfg, t, m, s)
@@ -2444,7 +2444,7 @@ def _is_protected(m):
     ps = ((m or {}).get("ps") or {}).get("dir")
     if ps and os.path.isfile(os.path.join(ps, "setting.yaml")):
         try:
-            from phonoagent import _load_yaml_file
+            from autozt import _load_yaml_file
             _d = _load_yaml_file(os.path.join(ps, "setting.yaml")) or {}
         except Exception:
             _d = {}
@@ -2510,7 +2510,7 @@ def _ask_confirm(prompt):
 
 
 def cmd_stop(cfg, data, mname, jname, yes):
-    from phonoagent import find_material, find_step, log_action
+    from autozt import find_material, find_step, log_action
     if jname and not mname:  # v3.11：取消全部材料的指定步骤作业
         jobs = [(s["job"], m, s) for _, m, s in step_targets(data, jname)
                 if s.get("job")]
@@ -2625,7 +2625,7 @@ def cmd_stop(cfg, data, mname, jname, yes):
 
 # ===== retry_submit (原 L4068-L4079) =====
 def retry_submit(cfg, t, m, s, force, tag):
-    from phonoagent import step_cfg
+    from autozt import step_cfg
     """v1.9：retry = 先 scancel 在跑的作业 -> 用【项目配置】重新生成输入 -> 重新提交。
     与 rerun 的区别：retry 不删除步骤目录（保留 OUTCAR/CONTCAR 等已有产物），
     只覆盖生成的输入文件；rerun 会 rm -rf 整个步骤目录。"""
@@ -2640,7 +2640,7 @@ def retry_submit(cfg, t, m, s, force, tag):
 
 # ===== cmd_retry (原 L4082-L4126) =====
 def cmd_retry(cfg, data, mname, jname, force, incl_scancel=False):
-    from phonoagent import find_material, find_step
+    from autozt import find_material, find_step
     """incl_scancel：-status scancel 显式筛选过时，SCANCEL 步骤也可 retry
     （v1.4；默认批量 retry 只动 FAIL，不碰 scancel 标记的步骤）。"""
     fails = 0
@@ -2690,7 +2690,7 @@ def cmd_retry(cfg, data, mname, jname, force, incl_scancel=False):
 
 # ===== find_step_soft (原 L4129-L4140) =====
 def find_step_soft(m, jname):
-    from phonoagent import _find_by_dotted, _step_seq_match
+    from autozt import _find_by_dotted, _step_seq_match
     """find_step 的宽容版：材料没有该步骤时返回 None 而不是退出。"""
     steps = m["steps"]
     if jname.isdigit():
@@ -2718,7 +2718,7 @@ def step_targets(data, jname):
 
 # ===== _optional_off_hit (原 L4156-L4175) =====
 def _optional_off_hit(m, jname):
-    from phonoagent import _name_seq, _seq_key, step_seq
+    from autozt import _name_seq, _seq_key, step_seq
     """在被关闭的可选组里找 jname（label/name/seq）。返回 (flag, defs) 或 None。"""
     seg = m.get("_seg") or {}
     flat = seg.get("optional_off_flat") or {}
@@ -2741,7 +2741,7 @@ def _optional_off_hit(m, jname):
 
 # ===== _def_matches (原 L4178-L4188) =====
 def _def_matches(d, jname):
-    from phonoagent import _name_seq, _seq_key, step_seq
+    from autozt import _name_seq, _seq_key, step_seq
     """可选组步骤定义是否命中 -j token（label/name/seq）。"""
     if jname == str(d.get("name")) or jname == str(d.get("label")):
         return True
@@ -2769,7 +2769,7 @@ def _fresh_step_dict(m, sname, sc):
 
 # ===== enable_optional_group (原 L4205-L4255) =====
 def enable_optional_group(cfg, t, m, flag, defs, jname):
-    from phonoagent import _seq_sort_steps, _yaml_type_block_set
+    from autozt import _seq_sort_steps, _yaml_type_block_set
     """按需启用被关闭的可选组：写入项目配置持久化 + 注入当前材料工作流。
     返回 jname 对应的步骤 dict（找不到返回 None）。"""
     # 1) 持久化：项目配置 task_types.<tt> 写 flag: true。step.conf 的 BANDGAP
@@ -2836,7 +2836,7 @@ def cmd_rerun(cfg, data, mname, jname, yes, force=False, from_skill=False):
 
 # ===== _cmd_rerun (原 L4271-L4321) =====
 def _cmd_rerun(cfg, data, mname, jname, yes, force=False):
-    from phonoagent import _parallel_map, find_material, find_step
+    from autozt import _parallel_map, find_material, find_step
     fails = 0
     if jname and not mname:  # v3.11：跨材料只 rerun 指定步骤
         tgts = step_targets(data, jname)
@@ -2901,11 +2901,11 @@ def rerun_project(cfg, t, m, yes):
     if _is_protected(m):
         _protect_refuse(m, "rerun")
         return False
-    from phonoagent import log_action, run_remote
+    from autozt import log_action, run_remote
     """整材料 rerun：清空整个 <材料>/<技能> 远程工作目录（只保留 POSCAR）
     + 删本地 log/result，再从第一步从头生成提交。彻底从零，不留任何旧步骤
     目录或结果。project_setting 在本地、不在工作目录内，故 BANDGAP 等参数与
-    模板保留不动（要连配置一起清用 phonoagent clean --purge-config）。
+    模板保留不动（要连配置一起清用 autozt clean --purge-config）。
     注意：带 -j 的单步 rerun 走 do_rerun_step，仍只删该步，不受此影响。"""
     jobs = [s["job"] for s in m["steps"] if s.get("job")]
     if not yes:
@@ -2920,7 +2920,7 @@ def rerun_project(cfg, t, m, yes):
         remote_scancel(cfg, [j["id"] for j in jobs], host=host)
         print("%s: scancel %s" % (m["name"], " ".join(j["id"] for j in jobs)))
     if m.get("path"):
-        # 与 phonoagent clean 同款：清空工作目录内一切、只留 POSCAR（重生成要用它）
+        # 与 autozt clean 同款：清空工作目录内一切、只留 POSCAR（重生成要用它）
         line = ("[ -d %s ] && find %s -mindepth 1 -maxdepth 1 ! -name POSCAR "
                 "-exec rm -rf -- {} + || true"
                 % (shlex.quote(m["path"]), shlex.quote(m["path"])))

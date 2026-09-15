@@ -1,6 +1,6 @@
 """MCP 接口测试（不需要集群）：工具表、协议握手、风险分级、网关拒绝。
 
-MCP 是 PhonoAgent 对外给 agent 用的唯一入口，所以这层必须锁死：
+MCP 是 AutoZT 对外给 agent 用的唯一入口，所以这层必须锁死：
   1. 工具是通用动词，数量封顶 20（不许按技能加工具）；
   2. 危险动作必须在协议边界被拒绝并给出批准命令（agent 不能自我批准）；
   3. 只读调用不触发任何提交。
@@ -11,9 +11,9 @@ import subprocess
 import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-PROG = os.path.join(ROOT, "bin", "phonoagent")
+PROG = os.path.join(ROOT, "bin", "autozt")
 sys.path.insert(0, ROOT)
-from phonoagent import mcp as M  # noqa: E402
+from autozt import mcp as M  # noqa: E402
 
 
 def test_tool_table_is_generic_and_capped():
@@ -42,7 +42,7 @@ def test_initialize_and_tools_list():
                        json.dumps({"jsonrpc": "2.0", "id": 2, "method": "tools/list"}) + "\n",
                        capture_output=True, text=True, cwd=ROOT, timeout=120)
     lines = [json.loads(x) for x in p.stdout.splitlines() if x.strip()]
-    assert lines[0]["result"]["serverInfo"]["name"] == "phonoagent"
+    assert lines[0]["result"]["serverInfo"]["name"] == "autozt"
     assert len(lines[1]["result"]["tools"]) == len(M.TOOLS)
 
 
@@ -62,19 +62,19 @@ def test_destructive_tool_goes_through_gateway():
 def test_resources_list_exposes_skill_docs():
     items = M._resources_list()
     uris = [r["uri"] for r in items]
-    assert items and any(u.startswith("phonoagent://skill/") for u in uris)
+    assert items and any(u.startswith("autozt://skill/") for u in uris)
     assert any(u.endswith("/skill.yaml") for u in uris)
 
 
 def test_resources_read_returns_file_content():
-    uri = "phonoagent://doc/README.en.md"
+    uri = "autozt://doc/README.en.md"
     got = M._resource_read(uri)
-    assert got and got["contents"][0]["text"].startswith("# PhonoAgent")
+    assert got and got["contents"][0]["text"].startswith("# AutoZT")
 
 
 def test_resources_read_refuses_traversal_and_unknown():
-    assert M._resource_read("phonoagent://doc/../../etc/passwd") is None
-    assert M._resource_read("phonoagent://doc/does-not-exist.md") is None
+    assert M._resource_read("autozt://doc/../../etc/passwd") is None
+    assert M._resource_read("autozt://doc/does-not-exist.md") is None
     assert M._resource_read("http://example.com/x") is None
 
 
@@ -82,7 +82,7 @@ def test_handle_serves_resource_methods():
     resp = M.handle({"jsonrpc": "2.0", "id": 7, "method": "resources/list"})
     assert resp["result"]["resources"]
     bad = M.handle({"jsonrpc": "2.0", "id": 8, "method": "resources/read",
-                    "params": {"uri": "phonoagent://doc/nope.md"}})
+                    "params": {"uri": "autozt://doc/nope.md"}})
     assert bad["error"]["code"] == -32602
 
 
@@ -99,7 +99,7 @@ def test_prompts_list_and_get():
 
 def test_readonly_profile_hides_hazardous_tools(monkeypatch=None):
     import os
-    os.environ["PHONOAGENT_MCP_READONLY"] = "1"
+    os.environ["AUTOZT_MCP_READONLY"] = "1"
     try:
         names = [t["name"] for t in M._tools_list()]
         assert names, "只读档不该为空"
@@ -107,6 +107,6 @@ def test_readonly_profile_hides_hazardous_tools(monkeypatch=None):
         res = M.call_tool("clean_material", {"material": "Si_x"})
         assert res["isError"], "只读档下危险工具必须被拒"
     finally:
-        os.environ.pop("PHONOAGENT_MCP_READONLY", None)
+        os.environ.pop("AUTOZT_MCP_READONLY", None)
     full = [t["name"] for t in M._tools_list()]
     assert len(full) > len(names), "默认档应比只读档暴露更多工具"

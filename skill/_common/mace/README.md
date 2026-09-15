@@ -3,13 +3,13 @@
 两个技能 `kl-mace-gpu` 和 `kl-mace-cpu` 共用这一份代码。技能目录里只有 `skill.yaml`
 和 `templates/`，差异全在模板里（队列、`DEVICE`、超胞默认值）。
 
-`phonoagent` 的资源查找链是
+`autozt` 的资源查找链是
 
 ```
 <技能>/templates/<步骤名>/ → <技能>/templates/ → <技能>/ → _common/*/ → _common/*/templates/
 ```
 
-所以 `gen_need` 里写文件名就够，phonoagent 会自己找到这里。**技能目录里有同名文件时优先用
+所以 `gen_need` 里写文件名就够，autozt 会自己找到这里。**技能目录里有同名文件时优先用
 技能自己的**——想让某一版彻底自包含（比如你要给某个版本改引擎而不影响另一个）：
 
 ```bash
@@ -52,7 +52,7 @@ rm skill/kl-mace-gpu/*.py                          # 删掉 = 回到共用
 补救：拿同一材料 DFPT 算的 BORN 接进来，比如你已经用 `kl-dft-cpu` 跑过 `step3_nac`：
 
 ```
-phonoagent -tt kl-mace-cpu -p <材料> -j step3_fc conf --set \
+autozt -tt kl-mace-cpu -p <材料> -j step3_fc conf --set \
    params.NAC_BORN=/public/home/.../<材料>/kl-dft-cpu/step3_nac/BORN
 ```
 
@@ -66,8 +66,8 @@ phonoagent -tt kl-mace-cpu -p <材料> -j step3_fc conf --set \
 
 ```bash
 # 解包（会把引擎放进 _common/mace/，两个技能各一个目录）
-tar xzf klmace2.tar.gz -C ~/software/PhonoAgent/
-phonoagent skills            # 应看到 kl-mace-gpu / kl-mace-cpu 各 4 步、启用
+tar xzf klmace2.tar.gz -C ~/software/AutoZT/
+autozt skills            # 应看到 kl-mace-gpu / kl-mace-cpu 各 4 步、启用
 ```
 
 超算上准备 conda 环境。环境名/路径写进 `setting/<hpc>.yaml` 的 `conda_env`
@@ -91,15 +91,15 @@ GPU 集群上想把 S3 拟合换成 **pheasy-gpu**（`pheasy_gpu` 包 + `pheasy-
 ```bash
 pip install -e '.[gpu]'    # 在 ~/software/pheasy-gpu 里执行，装出 pheasy-gpu 命令 + torch(CUDA)
 # 然后把 S3 的拟合软件指过去：
-phonoagent -tt kl-mace-gpu -p <材料> -j 3 conf --set params.FIT_SOFTWARE=pheasy params.PHEASY_BIN=pheasy-gpu
+autozt -tt kl-mace-gpu -p <材料> -j 3 conf --set params.FIT_SOFTWARE=pheasy params.PHEASY_BIN=pheasy-gpu
 ```
 
 > S3 拟合作业模板：`PHEASY_BIN=pheasy-gpu` 时 gen 自动改选 **submit_fc_gpu.tpl**
 > （自动加 `--gres=gpu:<类型>:1` 并降核），只有 a800/3090 配了该模板；纯 CPU 集群
 > （jzzn/hanhai25）gen 期直接报错提示换 `PHEASY_BIN=pheasy`，不会排进队才失败。
-> 旧项目需重跑一次 `phonoagent -p X init`（刷新项目 templates/）才能拿到新 GPU 模板。
+> 旧项目需重跑一次 `autozt -p X init`（刷新项目 templates/）才能拿到新 GPU 模板。
 
-`phonoagent.yaml` 里加两条 work_dir（**两个 task_type，同一材料可以各跑一遍互相对照**，
+`autozt.yaml` 里加两条 work_dir（**两个 task_type，同一材料可以各跑一遍互相对照**，
 目录不会打架）：
 
 ```yaml
@@ -132,7 +132,7 @@ task_types:
 
 MACE 技能出厂 step.conf **不写死任何机器的 conda/模型路径**——`CONDA_SH`/`CONDA_ENV`/
 `MACE_MODEL_DIR` 由 `setting/<hpc>.yaml` 的 `conda_sh`/`conda_env`/`mace_model_dir`
-自动注入（最低优先级），所以换超算只需改项目的 hpc `name`（`phonoagent -p <材料> hpc <集群>`），
+自动注入（最低优先级），所以换超算只需改项目的 hpc `name`（`autozt -p <材料> hpc <集群>`），
 环境与模型自动跟着走；项目级 `project_setting/templates/step.conf` 可覆盖。详见
 `setting/README.md` 的「集群级默认」。
 

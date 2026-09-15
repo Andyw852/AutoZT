@@ -13,7 +13,7 @@ import tempfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
-import phonoagent  # noqa: E402
+import autozt  # noqa: E402
 
 OK = []
 FAIL = []
@@ -24,7 +24,7 @@ def ck(cond, msg):
     print("  %s %s" % ("PASS" if cond else "FAIL", msg))
 
 
-NORM = phonoagent._CORES_NORMALIZER
+NORM = autozt._CORES_NORMALIZER
 
 
 def normalize(d, n, sub=""):
@@ -92,29 +92,29 @@ ck("#SBATCH --ntasks-per-node=1" in read(os.path.join(step, "submit.sh")),
 print("== A2. cores 来源优先级 ==")
 base_cfg = {"cores": 8, "task_types": {"defect-dft-cpu": {"cores": 4}}}
 m = {"ps": {"setting": {"cores": 16}, "hpc": {"cores": 2}}, "tt": "defect-dft-cpu"}
-ck(phonoagent.resolve_cores(base_cfg, {"key": "defect-dft-cpu"}, m) == 16,
+ck(autozt.resolve_cores(base_cfg, {"key": "defect-dft-cpu"}, m) == 16,
    "项目 setting.yaml 最高（16）")
 m2 = {"ps": {"setting": {}, "hpc": {"cores": 2}}, "tt": "defect-dft-cpu"}
-ck(phonoagent.resolve_cores(base_cfg, {"key": "defect-dft-cpu"}, m2) == 2,
+ck(autozt.resolve_cores(base_cfg, {"key": "defect-dft-cpu"}, m2) == 2,
    "项目 hpc.yaml 次之（2）")
 m3 = {"ps": {"setting": {}, "hpc": {}}, "tt": "defect-dft-cpu"}
-ck(phonoagent.resolve_cores(base_cfg, {"key": "defect-dft-cpu"}, m3) == 4,
+ck(autozt.resolve_cores(base_cfg, {"key": "defect-dft-cpu"}, m3) == 4,
    "类型配置再次（4）")
-ck(phonoagent.resolve_cores(base_cfg, {"key": "opt-dft-cpu"}, {"ps": {}}) == 8,
+ck(autozt.resolve_cores(base_cfg, {"key": "opt-dft-cpu"}, {"ps": {}}) == 8,
    "全局 tf.yaml cores 兜底（8）")
-ck(phonoagent.resolve_cores({}, {"key": "x"}, {"ps": {}}) is None,
+ck(autozt.resolve_cores({}, {"key": "x"}, {"ps": {}}) is None,
    "都没配 → None（保持出厂行为，零改动）")
-ck(phonoagent.resolve_cores({"cores": "0"}, {"key": "x"}, {"ps": {}}) is None,
+ck(autozt.resolve_cores({"cores": "0"}, {"key": "x"}, {"ps": {}}) is None,
    "cores: 0 视为未配置")
 
 print("== B. 提交前清单（统一发现）==")
-ck(phonoagent._step_input_name_ok("POSCAR"), "POSCAR 算输入")
-ck(phonoagent._step_input_name_ok("graph_data_gen.yaml"), "任意 gen 产物算输入")
-ck(not phonoagent._step_input_name_ok("OUTCAR"), "OUTCAR 不算输入")
-ck(not phonoagent._step_input_name_ok("vasprun.xml"), "vasprun.xml 不算输入")
-ck(not phonoagent._step_input_name_ok("slurm-123.out"), "slurm-*.out 不算输入")
-ck(not phonoagent._step_input_name_ok("queue.out"), "queue.out 不算输入")
-ck(not phonoagent._step_input_name_ok(".tf_cores.py"), "tf 自己的临时文件不算输入")
+ck(autozt._step_input_name_ok("POSCAR"), "POSCAR 算输入")
+ck(autozt._step_input_name_ok("graph_data_gen.yaml"), "任意 gen 产物算输入")
+ck(not autozt._step_input_name_ok("OUTCAR"), "OUTCAR 不算输入")
+ck(not autozt._step_input_name_ok("vasprun.xml"), "vasprun.xml 不算输入")
+ck(not autozt._step_input_name_ok("slurm-123.out"), "slurm-*.out 不算输入")
+ck(not autozt._step_input_name_ok("queue.out"), "queue.out 不算输入")
+ck(not autozt._step_input_name_ok(".tf_cores.py"), "tf 自己的临时文件不算输入")
 
 # 真实远端：unihamgnn 的 S1_graph 步骤目录（非 VASP，历史上被默认清单卡死）
 cfg = None
@@ -128,7 +128,7 @@ if cfg:
     cfg.setdefault("_config_path", os.path.join(ROOT, "tmp", "tf_jzzn_si_all.yaml"))
     d3090 = ("/home/wangchaoyue852/taskflow/work/tf_smoke/Si_unihamgnn/"
              "unihamgnn/step1_graph_data")
-    got = phonoagent._discover_step_inputs(cfg, "wangchao_3090", d3090)
+    got = autozt._discover_step_inputs(cfg, "wangchao_3090", d3090)
     if not got:
         print("  SKIP 远端测试材料已清理（%s 不存在）——远端相关断言跳过" % d3090)
         REMOTE_OK = False
@@ -142,7 +142,7 @@ if cfg:
            "发现清单含 gen 写的 yaml（技能无需自报）")
         ck(not any(x.startswith(("OUTCAR", "vasprun")) for x in got),
            "清单里没有输出文件")
-    got2 = phonoagent._discover_step_inputs(cfg, "wangchao_3090", "/nonexistent/xyz")
+    got2 = autozt._discover_step_inputs(cfg, "wangchao_3090", "/nonexistent/xyz")
     ck(got2 == (), "远端目录不存在 → 空清单（调用方兜底，不阻断提交）")
 
 print("== C. 真实提交前检查（unihamgnn 已删掉自报清单）==")
@@ -157,7 +157,7 @@ if cfg:
         print("  SKIP 远端测试材料已清理——真实提交前检查的端到端断言跳过")
     else:
         try:
-            ok, reason = phonoagent._remote_submit_preflight(cfg, mat, step, {})
+            ok, reason = autozt._remote_submit_preflight(cfg, mat, step, {})
             ck(ok, "非 VASP 技能（无 INCAR/KPOINTS）提交前检查通过：%s"
                % (reason or "OK"))
         except Exception as exc:                             # noqa: BLE001
@@ -165,7 +165,7 @@ if cfg:
     # 反面：把清单临时改成 VASP 四件套（老默认行为），应当报缺 INCAR
     mat2 = dict(mat, result_dir=tempfile.mkdtemp(prefix="tf_uni_res_"))
     try:
-        phonoagent._remote_submit_preflight(cfg, mat2, dict(step), {})
+        autozt._remote_submit_preflight(cfg, mat2, dict(step), {})
         ck(False, "老默认清单（硬要 INCAR）本应拦住非 VASP 步骤")
     except Exception:                                        # noqa: BLE001
         ck(True, "老默认清单会拦住非 VASP 步骤（反证统一发现的必要性）")

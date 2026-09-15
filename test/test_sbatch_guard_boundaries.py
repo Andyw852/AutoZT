@@ -13,7 +13,7 @@ def test_fanout_vs_direct_child():
         parent, directory = t["_mk_step"](tmp, fanout=True, subdirs=("d1",))
         child = dict(parent, dir=os.path.join(directory, "d1"))
         child.pop("fanout")
-        mock = t["_make_mock"](bin_dir, state, {"PHONOAGENT_FAKE_SQUEUE_DELAY": 20})
+        mock = t["_make_mock"](bin_dir, state, {"AUTOZT_FAKE_SQUEUE_DELAY": 20})
         import threading
         counter = iter((parent, child))
         mutex = threading.Lock()
@@ -21,7 +21,7 @@ def test_fanout_vs_direct_child():
             with mutex:
                 step = next(counter)
             return t["workflow"].remote_sbatch({}, step, jobname="boundary")
-        with t["_mock"].patch.object(t["phonoagent"], "run_remote", side_effect=mock):
+        with t["_mock"].patch.object(t["autozt"], "run_remote", side_effect=mock):
             results = t["_concurrent"](submit)
         assert t["_read_state"](state)["sbatch_count"] == 1, results
 
@@ -31,7 +31,7 @@ def test_aged_unknown_receipt_blocks():
         step, directory = t["_mk_step"](tmp)
         Path(directory, ".tf_job_receipt").write_text("98765 1\n")
         mock = t["_make_mock"](bin_dir, state, {})
-        with t["_mock"].patch.object(t["phonoagent"], "run_remote", side_effect=mock):
+        with t["_mock"].patch.object(t["autozt"], "run_remote", side_effect=mock):
             result = t["workflow"].remote_sbatch({}, step, jobname="boundary")
         assert not result[0], result
 

@@ -1,7 +1,16 @@
 # Changelog
 
-All notable changes to PhonoAgent are documented here.
+All notable changes to AutoZT are documented here.
 This project adheres to Semantic Versioning; versions before 1.0.0 are development snapshots.
+
+## [1.2.0] - 2026-09-16
+
+### Changed
+- Renamed the software to AutoZT: package autozt, commands autozt (short form az), environment
+  variables AUTOZT_*, configuration directory ~/.config/autozt. The previous command names
+  (pa, phonoagent) remain as compatibility wrappers pointing at the same program, so existing
+  scripts keep working.
+- Version banner and metadata report AutoZT 1.2.0.
 
 ## [Unreleased]
 
@@ -17,21 +26,21 @@ This project adheres to Semantic Versioning; versions before 1.0.0 are developme
   submission (this was the cause of a silent stage death: activation failed, the
   preparation stage still passed and the fit stage exited without a message).
 - start now prints the exact command needed to resubmit a FAIL step
-  (phonoagent -tt SKILL -p MATERIAL -j STEP start -f) instead of claiming that all
+  (autozt -tt SKILL -p MATERIAL -j STEP start -f) instead of claiming that all
   steps are running, finished or dependency-blocked.
 - docs/CONFIGURING.md section 5 documents the four cluster-switch traps.
 
 ## [1.1.0] - 2026-09-15
 
 ### Added
-- MCP interface: phonoagent mcp exposes the tool as a JSON-RPC 2.0 stdio server
+- MCP interface: autozt mcp exposes the tool as a JSON-RPC 2.0 stdio server
   (initialize / tools/list / tools/call). The tool table holds 14 generic verbs
   (list_skills, list_materials, get_summary, get_status, get_json, conf_get, start_step,
   retry_step, fetch_results, conf_set, stop_step, rerun_step, clean_material,
   session_export) and is capped at 20: skills are discovered from skill.yaml, so adding a
   skill never adds a tool.
 - MCP policy boundary: read-only tools call the CLI directly; mutating and destructive
-  tools are routed through the action gateway (phonoagent act), so an agent session gets
+  tools are routed through the action gateway (autozt act), so an agent session gets
   needs-approval instead of execution, and approvals only work from a real TTY.
 - work_dir provenance: every status output names the configuration layer that supplied
   work_dir, and a failing generation prints that layer plus the hint that
@@ -48,12 +57,12 @@ This project adheres to Semantic Versioning; versions before 1.0.0 are developme
 First public release, derived from the taskflow code base (v1.0 refactor).
 
 ### Added
-- Package layout phonoagent/ with the phonoagent CLI (zero third-party dependency core).
+- Package layout autozt/ with the autozt CLI (zero third-party dependency core).
 - Criterion-driven step engine: every step declares a physical convergence criterion and
   the engine advances, retries or reports accordingly.
-- Provenance per step plus phonoagent prove --verify, and phonoagent session export for
+- Provenance per step plus autozt prove --verify, and autozt session export for
   reproducible archival (manifest with per-file sha256, history timeline, replay hints).
-- Action gateway (phonoagent act / approve) with risk tiers, audit log and TTL-bounded
+- Action gateway (autozt act / approve) with risk tiers, audit log and TTL-bounded
   human approvals for agent-driven sessions.
 - Unified core count control: one "cores" setting normalises submit scripts and INCAR
   (NCORE/KPAR) for every skill, whatever template names it uses.
@@ -63,7 +72,7 @@ First public release, derived from the taskflow code base (v1.0 refactor).
   integer matrix ("2 1 0 -1 2 0 0 0 1", phonopy/phono3py --dim semantics).
 - 18 skills covering VASP (band, elastic, defect, ke, kl, opt, phonon), MACE
   (kl/opt/phonon CPU and GPU, mlff-mace), plus te-screen and unihamgnn.
-- Drop-in skill interface with phonoagent schema --strict validation.
+- Drop-in skill interface with autozt schema --strict validation.
 
 ### Fixed
 - vasp_ncl submit template loaded an Intel module environment while executing the

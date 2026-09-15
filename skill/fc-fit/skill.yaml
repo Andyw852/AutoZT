@@ -45,7 +45,7 @@ defaults:
   hpc: jzzn
   skill_subdir: true
 
-# Pre-submit input check (phonoagent/workflow.py::_remote_submit_preflight): this
+# Pre-submit input check (autozt/workflow.py::_remote_submit_preflight): this
 # skill runs no VASP, so INCAR/KPOINTS/POSCAR never exist in the step directory
 # at submission time -- the gen writes only the recipe and the submit script,
 # and prep copies the cells on the compute node.  Declaring the real inputs is

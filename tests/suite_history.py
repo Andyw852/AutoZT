@@ -8,7 +8,7 @@ import tempfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
-from phonoagent import history_record, cmd_history, history_path  # noqa: E402
+from autozt import history_record, cmd_history, history_path  # noqa: E402
 
 FAILS = []
 
@@ -68,13 +68,13 @@ try:
     ok(rc == 0, "按 basename 过滤读得动")
     rc = cmd_history(cfg, proj="NoSuchMat")
     ok(rc == 0, "过滤不到也不报错")
-    evs, total = __import__("phonoagent").history_load(cfg, tt="band-dft-cpu")
+    evs, total = __import__("autozt").history_load(cfg, tt="band-dft-cpu")
     ok(len(evs) == 3 and total == 3, "按技能过滤：3 条")
-    evs2, _t2 = __import__("phonoagent").history_load(cfg, since="1d")
+    evs2, _t2 = __import__("autozt").history_load(cfg, since="1d")
     ok(len(evs2) == 3, "--since 1d 命中今天的 3 条")
-    evs3, _t3 = __import__("phonoagent").history_load(cfg, since="2020-01-01")
+    evs3, _t3 = __import__("autozt").history_load(cfg, since="2020-01-01")
     ok(len(evs3) == 3, "--since 绝对时间")
-    evs4, _t4 = __import__("phonoagent").history_load(cfg, since="7d")
+    evs4, _t4 = __import__("autozt").history_load(cfg, since="7d")
     ok(True, "since 解析：7d / 12h / 90m / 绝对时间都支持")
 finally:
     shutil.rmtree(tmpd, ignore_errors=True)

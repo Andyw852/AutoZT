@@ -2,8 +2,8 @@
 
 > 技能名 `mlff-mace`；`desc: 随机位移法MLFF训练`。
 > 复现 **autoplex phonon workflow**（J. Chem. Phys. **153**, 044104 (2020)；Nat. Commun.
-> **16**, 7666 (2025)）的物理配方与验收标准，用 PhonoAgent 的步骤机制重新实现。
-> 我们不安装 autoplex（它绑定 atomate2 + jobflow + MongoDB，与 phonoagent 是两套调度器），
+> **16**, 7666 (2025)）的物理配方与验收标准，用 AutoZT 的步骤机制重新实现。
+> 我们不安装 autoplex（它绑定 atomate2 + jobflow + MongoDB，与 autozt 是两套调度器），
 > 只照抄其物理配方与验收标准。
 
 **只做一件事：产出一个经过验证的 MACE 势函数权重文件。**
@@ -35,34 +35,34 @@
 
 ```bash
 cd <项目根>                       # 含材料目录（材料目录下有 POSCAR）
-phonoagent -tt mlff-mace init             # 建项目设置（自动把技能模板拷进 project_setting）
-phonoagent -tt mlff-mace -p Si start      # 一键推进（会先 gen S1 再 sbatch）
+autozt -tt mlff-mace init             # 建项目设置（自动把技能模板拷进 project_setting）
+autozt -tt mlff-mace -p Si start      # 一键推进（会先 gen S1 再 sbatch）
 # S1 算完后：
-phonoagent -tt mlff-mace -p Si start      # 继续推进 S2→S3→S4→S5（S5 一次交 ~25 个 12 核作业）
-phonoagent -tt mlff-mace -p Si start      # S5 全部 OK 后继续 S6→S7→S8
-phonoagent -tt mlff-mace -p Si start      # S8 pass 后 S9 发布
+autozt -tt mlff-mace -p Si start      # 继续推进 S2→S3→S4→S5（S5 一次交 ~25 个 12 核作业）
+autozt -tt mlff-mace -p Si start      # S5 全部 OK 后继续 S6→S7→S8
+autozt -tt mlff-mace -p Si start      # S8 pass 后 S9 发布
 ```
 
 ### 第一次怎么跑（2D 材料）
 
 ```bash
 # 前提：POSCAR 真空沿 c 轴、真空 ≥ max(MIN_VACUUM, 2·r_max) ≈ 15 Å
-phonoagent -tt mlff-mace init
-phonoagent -tt mlff-mace -p MoS2 conf --set params.FUNC=pbe-d3   # 需要色散修正的 2D 层状材料
-phonoagent -tt mlff-mace -p MoS2 start
+autozt -tt mlff-mace init
+autozt -tt mlff-mace -p MoS2 conf --set params.FUNC=pbe-d3   # 需要色散修正的 2D 层状材料
+autozt -tt mlff-mace -p MoS2 start
 # 2D 自动生效：超胞真空方向恒 1；应变只做面内；STRESS_WEIGHT=0/ENERGY_WEIGHT=10；
 # 验收多一条 ZA 支闸（§9.2 #2b）；模型卡里标注「未考虑 LO-TO 劈裂」。
 ```
 
 ### 手动推进下一代（代数迭代）
 
-PhonoAgent 是 DAG，代数用 `step.conf` 的 `GENERATION` 表达：
+AutoZT 是 DAG，代数用 `step.conf` 的 `GENERATION` 表达：
 
 ```bash
-phonoagent -tt mlff-mace -p Si conf --set params.GENERATION=1
-phonoagent -tt mlff-mace -p Si -j 4 retry    # ★ 用 retry 别用 rerun：rerun 会删掉 gen-0..gen-(K-1) 历史清单+结构，
+autozt -tt mlff-mace -p Si conf --set params.GENERATION=1
+autozt -tt mlff-mace -p Si -j 4 retry    # ★ 用 retry 别用 rerun：rerun 会删掉 gen-0..gen-(K-1) 历史清单+结构，
 #                                  S6 累计数据集会丢帧；retry 保留它们并重生成新代清单
-phonoagent -tt mlff-mace -p Si start         # 判据检测到「代数不一致」→ 5/6/7/8 自动补生成/重跑/提交
+autozt -tt mlff-mace -p Si start         # 判据检测到「代数不一致」→ 5/6/7/8 自动补生成/重跑/提交
 ```
 
 `GENERATION > MAX_GENERATION` 时 gen 直接 `sys.exit`；停机（`halt_*`）后 gen 拒绝推进，
@@ -571,7 +571,7 @@ MAX_GENERATION / RMS_MAX / IMPROVE_MIN / GEN_INCREMENT / CURVE_POINTS / CURVE_TO
 FORCE_CONTINUE / ENERGY_LIMIT / FORCE_LIMIT / KSPACING_TOL / MACE_MODEL / MACE_MODEL_DIR /
 REPLAY_XYZ / N_COMMITTEE / ENERGY_WEIGHT / FORCES_WEIGHT / STRESS_WEIGHT / BATCH_SIZE /
 DTYPE / LR / EPOCHS / DEVICE / N_GPU / KPOINTS_GRID / EDIFF / NCORE / CONDA_SH / CONDA_ENV`。
-改：`phonoagent -tt mlff-mace -p <材料> -j <步骤> conf --set params.KEY=值`。
+改：`autozt -tt mlff-mace -p <材料> -j <步骤> conf --set params.KEY=值`。
 
 ---
 
@@ -630,7 +630,7 @@ DTYPE / LR / EPOCHS / DEVICE / N_GPU / KPOINTS_GRID / EDIFF / NCORE / CONDA_SH /
 - [x] 扇出步骤（step5 cfg-*、step7 seed-*）：gen 幂等（不删已算产物、模型存在即跳过），
       子目录名与 fanout glob 对得上，每个子目录有自己的 submit.sh。
 - [x] defaults.skill_subdir: true。
-- [x] `phonoagent skills` 无关于本技能的警告（0.1 版，9 步，已实测）。
+- [x] `autozt skills` 无关于本技能的警告（0.1 版，9 步，已实测）。
 
 ---
 

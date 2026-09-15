@@ -1,27 +1,27 @@
-# PhonoAgent 相关工作补充与优势分析
+# AutoZT 相关工作补充与优势分析
 
-本文献清单用于定位 PhonoAgent，不把“文献没有讨论”写成“文献不具备”。DREAMS 与 AtomAgents 的修正结论见 `RELATED-WORK.md`。
+本文献清单用于定位 AutoZT，不把“文献没有讨论”写成“文献不具备”。DREAMS 与 AtomAgents 的修正结论见 `RELATED-WORK.md`。
 
 ## 1. 相关文献谱系
 
-| 方向 | 代表文献 | 系统贡献 | PhonoAgent 可区分的切入点 |
+| 方向 | 代表文献 | 系统贡献 | AutoZT 可区分的切入点 |
 |---|---|---|---|
-| 工作流与计算基础设施 | Pizzi et al., **AiiDA**, *Comput. Mater. Sci.* 111, 218 (2016), DOI: 10.1016/j.commatsci.2015.09.013 | provenance-aware 的材料计算工作流、数据节点和可追溯执行 | PhonoAgent 面向 VASP/MACE 热输运等固定技能，提供物理判据驱动的推进和运维恢复 |
-| 工作流与作业编排 | Jain et al., **FireWorks**, *Concurrency Computat.: Pract. Exper.* 27, 5037 (2015), DOI: 10.1002/cpe.3505 | 大规模计算任务的队列、依赖和故障恢复 | PhonoAgent 将步骤状态、集群切换、失败分类和 retry 语义绑定到材料工作流 |
-| 自动化材料工作流 | Ong et al., **atomate**, *Comput. Mater. Sci.* 68, 314 (2013), DOI: 10.1016/j.commatsci.2012.10.023 | 基于 pymatgen/FireWorks 的可复用材料计算 recipes | PhonoAgent 的重点是跨 DFT/MLIP、跨 CPU/GPU 和生产吞吐治理 |
-| 新一代工作流 | Montoya et al., **atomate2**, *Comput. Mater. Sci.* 223, 112169 (2023), DOI: 10.1016/j.commatsci.2023.112169 | 更模块化、可组合的材料工作流构建 | PhonoAgent 增加面向实际超算差异的 HPC profile、审批网关和逐文件校验 |
-| 材料数据与计算平台 | Jain et al., **Materials Project**, *APL Mater.* 1, 011002 (2013), DOI: 10.1063/1.4812323 | 大规模材料性质数据库与计算基础设施 | PhonoAgent 是执行层与运行监督层，不是材料数据库 |
-| 原子模拟接口 | Larsen et al., **ASE**, *J. Phys.: Condens. Matter* 29, 273002 (2017), DOI: 10.1088/1361-648X/aa680e | 统一原子模拟 calculator 与结构操作接口 | PhonoAgent 位于 calculator 之上，负责多步任务、队列、判据和恢复 |
-| 声子计算 | Togo and Tanaka, **Phonopy**, *Scr. Mater.* 108, 1 (2015), DOI: 10.1016/j.scriptamat.2015.07.003 | 有限位移声子、动力学矩阵与热力学性质 | PhonoAgent 编排 phonon/force/fit/transport 链路并检查虚频、残差和收敛 |
-| 晶格热输运 | Li et al., **ShengBTE**, *Comput. Phys. Commun.* 185, 1747 (2014), DOI: 10.1016/j.cpc.2014.02.015 | 三阶力常数与玻尔兹曼输运方程求解 | PhonoAgent 将结构优化、力生成、力常数拟合和输运求解变为可监控流水线 |
-| 晶格热输运 | Carrete et al., **almaBTE**, *Comput. Phys. Commun.* 185, 277 (2014), DOI: 10.1016/j.cpc.2013.09.007 | 声子输运与复杂晶体热导率计算 | PhonoAgent 关注重复批量计算的输入一致性、失败恢复和结果归档 |
-| 机器学习势 | Batatia et al., **MACE**, arXiv:2206.07697 (2022); 后续版本发表于 *NeurIPS* 2022 workshop | 等变消息传递原子模型与高效势能面 | PhonoAgent 将 MACE 与 VASP 放进同一技能/材料/HPC 状态模型，并支持 MLFF 迭代 |
-| AI 科学智能体 | Bran et al., **ChemCrow**, *Nature Machine Intelligence* 8, 525 (2024), DOI: 10.1038/s42256-024-00832-8 | LLM 规划器调用化学工具完成开放式任务 | PhonoAgent 的稳态推进由物理判据和状态机完成，LLM 可作为失败路径的可替换上层 |
-| AI 材料发现 | Zeni et al., **MatterGen**, *Nature* 626, 123 (2025), DOI: 10.1038/s41586-025-08628-5 | 生成式模型进行无机材料结构设计 | PhonoAgent 的目标是已知计算流程的可靠生产吞吐，而非生成新结构 |
-| 多智能体材料模拟 | Wang et al., **DREAMS**, arXiv:2507.14267v2 (2025) | DFT agent、HPC agent、安全 guard 与 claim provenance | PhonoAgent 将保证附着于执行底座：判据、动作闸门、产物哈希、多集群和可重放会话 |
-| 多模态材料发现 | Ghafarollahi and Buehler, **Automating alloy design and discovery with physics-aware multimodal multiagent AI**, PNAS 2025, DOI: 10.1073/pnas.2414074122 | planner/critic 与物理感知多模态合金设计 | PhonoAgent 不竞争开放式发现定位，而强调运行期确定性、批处理吞吐和运维可观测性 |
+| 工作流与计算基础设施 | Pizzi et al., **AiiDA**, *Comput. Mater. Sci.* 111, 218 (2016), DOI: 10.1016/j.commatsci.2015.09.013 | provenance-aware 的材料计算工作流、数据节点和可追溯执行 | AutoZT 面向 VASP/MACE 热输运等固定技能，提供物理判据驱动的推进和运维恢复 |
+| 工作流与作业编排 | Jain et al., **FireWorks**, *Concurrency Computat.: Pract. Exper.* 27, 5037 (2015), DOI: 10.1002/cpe.3505 | 大规模计算任务的队列、依赖和故障恢复 | AutoZT 将步骤状态、集群切换、失败分类和 retry 语义绑定到材料工作流 |
+| 自动化材料工作流 | Ong et al., **atomate**, *Comput. Mater. Sci.* 68, 314 (2013), DOI: 10.1016/j.commatsci.2012.10.023 | 基于 pymatgen/FireWorks 的可复用材料计算 recipes | AutoZT 的重点是跨 DFT/MLIP、跨 CPU/GPU 和生产吞吐治理 |
+| 新一代工作流 | Montoya et al., **atomate2**, *Comput. Mater. Sci.* 223, 112169 (2023), DOI: 10.1016/j.commatsci.2023.112169 | 更模块化、可组合的材料工作流构建 | AutoZT 增加面向实际超算差异的 HPC profile、审批网关和逐文件校验 |
+| 材料数据与计算平台 | Jain et al., **Materials Project**, *APL Mater.* 1, 011002 (2013), DOI: 10.1063/1.4812323 | 大规模材料性质数据库与计算基础设施 | AutoZT 是执行层与运行监督层，不是材料数据库 |
+| 原子模拟接口 | Larsen et al., **ASE**, *J. Phys.: Condens. Matter* 29, 273002 (2017), DOI: 10.1088/1361-648X/aa680e | 统一原子模拟 calculator 与结构操作接口 | AutoZT 位于 calculator 之上，负责多步任务、队列、判据和恢复 |
+| 声子计算 | Togo and Tanaka, **Phonopy**, *Scr. Mater.* 108, 1 (2015), DOI: 10.1016/j.scriptamat.2015.07.003 | 有限位移声子、动力学矩阵与热力学性质 | AutoZT 编排 phonon/force/fit/transport 链路并检查虚频、残差和收敛 |
+| 晶格热输运 | Li et al., **ShengBTE**, *Comput. Phys. Commun.* 185, 1747 (2014), DOI: 10.1016/j.cpc.2014.02.015 | 三阶力常数与玻尔兹曼输运方程求解 | AutoZT 将结构优化、力生成、力常数拟合和输运求解变为可监控流水线 |
+| 晶格热输运 | Carrete et al., **almaBTE**, *Comput. Phys. Commun.* 185, 277 (2014), DOI: 10.1016/j.cpc.2013.09.007 | 声子输运与复杂晶体热导率计算 | AutoZT 关注重复批量计算的输入一致性、失败恢复和结果归档 |
+| 机器学习势 | Batatia et al., **MACE**, arXiv:2206.07697 (2022); 后续版本发表于 *NeurIPS* 2022 workshop | 等变消息传递原子模型与高效势能面 | AutoZT 将 MACE 与 VASP 放进同一技能/材料/HPC 状态模型，并支持 MLFF 迭代 |
+| AI 科学智能体 | Bran et al., **ChemCrow**, *Nature Machine Intelligence* 8, 525 (2024), DOI: 10.1038/s42256-024-00832-8 | LLM 规划器调用化学工具完成开放式任务 | AutoZT 的稳态推进由物理判据和状态机完成，LLM 可作为失败路径的可替换上层 |
+| AI 材料发现 | Zeni et al., **MatterGen**, *Nature* 626, 123 (2025), DOI: 10.1038/s41586-025-08628-5 | 生成式模型进行无机材料结构设计 | AutoZT 的目标是已知计算流程的可靠生产吞吐，而非生成新结构 |
+| 多智能体材料模拟 | Wang et al., **DREAMS**, arXiv:2507.14267v2 (2025) | DFT agent、HPC agent、安全 guard 与 claim provenance | AutoZT 将保证附着于执行底座：判据、动作闸门、产物哈希、多集群和可重放会话 |
+| 多模态材料发现 | Ghafarollahi and Buehler, **Automating alloy design and discovery with physics-aware multimodal multiagent AI**, PNAS 2025, DOI: 10.1073/pnas.2414074122 | planner/critic 与物理感知多模态合金设计 | AutoZT 不竞争开放式发现定位，而强调运行期确定性、批处理吞吐和运维可观测性 |
 
-## 2. PhonoAgent 最稳妥的优势
+## 2. AutoZT 最稳妥的优势
 
 ### 2.1 执行底座独立于规划层
 
@@ -37,7 +37,7 @@
 
 ### 2.4 失败是可分类、可恢复的状态
 
-PhonoAgent 用退出码、OUTCAR/日志判据和步骤状态区分收敛困难、节点故障、排队、挂死和结构/参数错误；`retry` 保留已有产物，`rerun` 才从头重建。图 2 的 known failure 分支可对应到可审计动作，而不是把所有异常交给 LLM 猜测。
+AutoZT 用退出码、OUTCAR/日志判据和步骤状态区分收敛困难、节点故障、排队、挂死和结构/参数错误；`retry` 保留已有产物，`rerun` 才从头重建。图 2 的 known failure 分支可对应到可审计动作，而不是把所有异常交给 LLM 猜测。
 
 ### 2.5 产物级 provenance 与会话级重放
 
@@ -66,5 +66,5 @@ PhonoAgent 用退出码、OUTCAR/日志判据和步骤状态区分收敛困难�
 
 ## 5. 可直接使用的定位句
 
-> DREAMS 和 AtomAgents 证明了 agent 栈可以规划、校验并组织材料研究；PhonoAgent 把已知的 VASP/MACE 计算流程变成跨异构超算的生产执行底座：下一步由物理判据推进，动作经过风险分级和人工闸门，产物按文件哈希归档，失败按状态分类恢复。其核心主张不是拥有某个单独功能，而是当规划层被替换时，执行确定性、可追溯性和运行治理仍然保持不变。
+> DREAMS 和 AtomAgents 证明了 agent 栈可以规划、校验并组织材料研究；AutoZT 把已知的 VASP/MACE 计算流程变成跨异构超算的生产执行底座：下一步由物理判据推进，动作经过风险分级和人工闸门，产物按文件哈希归档，失败按状态分类恢复。其核心主张不是拥有某个单独功能，而是当规划层被替换时，执行确定性、可追溯性和运行治理仍然保持不变。
 

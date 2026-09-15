@@ -1,9 +1,9 @@
-# PhonoAgent
+# AutoZT
 
 Multi-material, multi-step, multi-cluster orchestration for VASP and MACE phonon and
 force-constant workflows.
 
-PhonoAgent takes a directory of structures and drives them through multi-step pipelines
+AutoZT takes a directory of structures and drives them through multi-step pipelines
 (relaxation, static, supercell and displacement generation, force-constant fitting,
 phonon and thermal-conductivity post-processing) across several HPC clusters, while
 keeping every step inspectable and every input traceable.

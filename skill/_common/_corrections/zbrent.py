@@ -12,7 +12,7 @@
      （AMIX=0.1 / BMIX=0.0001 → ALGO=All → NELM≥200，写前备份 INCAR.bak.<ts>）；
   3. 仍不过：人工看 MAGMOM / ISMEAR / 结构是否合理。
 
-apply() 复用 tf 挂死恢复里的同一份 INCAR 升级实现（phonoagent._hung_incar_fix），
+apply() 复用 tf 挂死恢复里的同一份 INCAR 升级实现（autozt._hung_incar_fix），
 保证"手动纠错"和"自动恢复"改的是同一套参数，不会两套逻辑打架。
 """
 from .base import CorrectionHandler, Suggestion
@@ -50,9 +50,9 @@ class ZbrentCorrection(CorrectionHandler):
         if not ctx.workdir:
             return 1, []
         try:
-            from phonoagent import _hung_incar_fix
+            from autozt import _hung_incar_fix
         except Exception as e:            # 独立运行（不经 tf）时的兜底
-            raise RuntimeError("apply 需要 tf 运行环境（phonoagent._hung_incar_fix 不可用：%s）" % e)
+            raise RuntimeError("apply 需要 tf 运行环境（autozt._hung_incar_fix 不可用：%s）" % e)
         return _hung_incar_fix(cfg, ctx.workdir, int(self.incar_level))
 
 

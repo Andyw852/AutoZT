@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""v1.0 自测：agent 动作网关（phonoagent act / phonoagent approve）+ 审计流水（P0-1）。
+"""v1.0 自测：agent 动作网关（autozt act / autozt approve）+ 审计流水（P0-1）。
 
 全程本地沙盒：tmp/_agentgate_test/ 里的假项目 + 假配置（host 为空 = 只在本机跑），
 不连任何超算、不碰真实材料。用 pty 模拟「人在交互终端里批准」。
@@ -18,7 +18,7 @@ CFG = os.path.join(BASE, "tf.yaml")
 PROJ = os.path.join(BASE, "projects")
 LOG = os.path.join(BASE, ".tf_agent_log.jsonl")
 APPR = os.path.join(BASE, ".tf_approvals.json")
-PROG = os.path.join(ROOT, "bin", "phonoagent")
+PROG = os.path.join(ROOT, "bin", "autozt")
 FAILS = []
 
 
@@ -42,23 +42,23 @@ def setup():
                 "auto_advance: false\nauto_watch: false\n"
                 "task_types:\n  opt-dft-cpu:\n    max_jobs: 2\n" % PROJ)
     env = dict(os.environ)
-    env.pop("PHONOAGENT_ACTOR", None)
+    env.pop("AUTOZT_ACTOR", None)
     subprocess.run([sys.executable, PROG, "-c", CFG, "-tt", "opt-dft-cpu",
                     "-p", "Si_ag", "init"], capture_output=True, text=True, env=env)
 
 
 def run(args, actor=None, strict=None, ttl=None, tty=False, answer="y\n"):
     env = dict(os.environ)
-    env.pop("PHONOAGENT_AGENT_STRICT", None)
-    env.pop("PHONOAGENT_APPROVE_TTL", None)
+    env.pop("AUTOZT_AGENT_STRICT", None)
+    env.pop("AUTOZT_APPROVE_TTL", None)
     if actor:
-        env["PHONOAGENT_ACTOR"] = actor
+        env["AUTOZT_ACTOR"] = actor
     else:
-        env.pop("PHONOAGENT_ACTOR", None)
+        env.pop("AUTOZT_ACTOR", None)
     if strict is not None:
-        env["PHONOAGENT_AGENT_STRICT"] = str(strict)
+        env["AUTOZT_AGENT_STRICT"] = str(strict)
     if ttl is not None:
-        env["PHONOAGENT_APPROVE_TTL"] = str(ttl)
+        env["AUTOZT_APPROVE_TTL"] = str(ttl)
     argv = [sys.executable, PROG, "-c", CFG] + [str(a) for a in args]
     if not tty:
         p = subprocess.run(argv, capture_output=True, text=True, env=env,
@@ -105,7 +105,7 @@ setup()
 ok(os.path.isfile(CFG), "假配置就绪：tmp/_agentgate_test/tf.yaml")
 ok(not os.path.exists(LOG), "还没审计日志（干净起点）")
 
-print("[1] 零影响：不设 PHONOAGENT_ACTOR 时，一切照旧（不拦、不记）")
+print("[1] 零影响：不设 AUTOZT_ACTOR 时，一切照旧（不拦、不记）")
 rc, out = run(["-tt", "opt-dft-cpu", "-p", "Si_ag", "clean", "-y"])
 ok(rc == 0 and "已清理" in out, "直连 clean -y 正常执行（rc=%d）" % rc)
 ok(not os.path.exists(LOG), "非 agent 会话不写审计日志")
@@ -115,12 +115,12 @@ n0 = len(log_recs())
 rc, out = run(["-tt", "opt-dft-cpu", "-p", "Si_ag", "clean", "-y"], actor="claude")
 ok(rc == 3, "被拒绝（rc=3）")
 ok("已清理" not in out, "命令没有被执行（输出里没有实际动作）")
-ok("phonoagent approve" in out, "提示里给了人工批准的命令")
+ok("autozt approve" in out, "提示里给了人工批准的命令")
 recs = log_recs()
 ok(len(recs) == n0 + 1 and recs[-1]["decision"] == "deny-need-approval"
    and recs[-1]["risk"] == "destructive", "审计记了一条 deny-need-approval")
 
-print("[3] PHONOAGENT_AGENT_STRICT=0：agent 直连放行（给用户自己的脚本留的后门）")
+print("[3] AUTOZT_AGENT_STRICT=0：agent 直连放行（给用户自己的脚本留的后门）")
 rc, out = run(["-tt", "opt-dft-cpu", "-p", "Si_ag", "clean", "-y"],
               actor="claude", strict=0)
 ok(rc == 0 and "已清理" in out, "关闭严格后放行且真执行（rc=%d）" % rc)
@@ -128,7 +128,7 @@ ok(log_recs()[-1]["decision"] == "direct", "审计记 decision=direct")
 
 print("[4] 网关只读命令：放行 + 记账（含退出码）")
 rc, out = run(["act", "-p", "Si_ag", "list"], actor="claude")
-ok(rc == 0 and "Si_ag" in out, "phonoagent act list 正常输出（rc=%d）" % rc)
+ok(rc == 0 and "Si_ag" in out, "autozt act list 正常输出（rc=%d）" % rc)
 r = log_recs()[-1]
 ok(r["risk"] == "read" and r["decision"] == "allow" and r["exit_code"] == 0,
    "审计：read / allow / exit_code=0")
@@ -137,15 +137,15 @@ print("[5] 网关破坏性命令：无批准 → 拒绝（exit 3）")
 rc, out = run(["act", "-tt", "opt-dft-cpu", "-p", "Si_ag", "clean", "-y"],
               actor="claude")
 ok(rc == 3 and "拒绝执行" in out, "拒绝并说明理由")
-ok("命令签名" in out and "phonoagent approve" in out, "给出签名与批准命令")
+ok("命令签名" in out and "autozt approve" in out, "给出签名与批准命令")
 ok(log_recs()[-1]["decision"] == "deny-need-approval", "审计记拒绝")
 
-print("[6] phonoagent approve 必须交互终端（非 TTY 一律拒绝）")
+print("[6] autozt approve 必须交互终端（非 TTY 一律拒绝）")
 rc, out = run(["approve", "-tt", "opt-dft-cpu", "-p", "Si_ag", "clean", "-y"])
 ok(rc == 3 and "交互终端" in out, "非 TTY 拒绝批准（rc=3）")
 ok(approvals() == [], "批准文件里没有条目")
 
-print("[7] phonoagent approve 在 pty 里确认 y → 写入一次性令牌")
+print("[7] autozt approve 在 pty 里确认 y → 写入一次性令牌")
 rc, out = run(["approve", "-tt", "opt-dft-cpu", "-p", "Si_ag", "clean", "-y"],
               tty=True, answer="y\n")
 ok(rc == 0 and "已批准" in out, "批准成功（rc=%d）" % rc)
@@ -167,7 +167,7 @@ rc, out = run(["act", "clean", "-y", "-tt", "opt-dft-cpu", "-p", "Si_ag"],
               actor="claude")
 ok(rc == 3 and "拒绝执行" in out, "无令牌可用 → 拒绝（不可重放）")
 
-print("[10] 令牌会过期（PHONOAGENT_APPROVE_TTL=1s）")
+print("[10] 令牌会过期（AUTOZT_APPROVE_TTL=1s）")
 rc, _ = run(["approve", "-tt", "opt-dft-cpu", "-p", "Si_ag", "clean", "-y"],
             tty=True, answer="y\n", ttl=1)
 ok(rc == 0, "先批准（TTL=1s）")
@@ -208,7 +208,7 @@ rc, out = run(["act", "log"], actor="claude")
 ok(rc == 0 and "agent 审计" in out and "退出码" in out, "act log 打出审计流水")
 ok("approve" not in out.split("时间")[0], "log 与 policy 不串")
 
-print("[15] 不设 PHONOAGENT_ACTOR 也能用网关（actor 退化成 USER 环境变量）")
+print("[15] 不设 AUTOZT_ACTOR 也能用网关（actor 退化成 USER 环境变量）")
 rc, out = run(["act", "-p", "Si_ag", "summary"])
 ok(rc == 0, "act summary 正常（rc=%d）" % rc)
 ok(log_recs()[-1]["actor"] == (os.environ.get("USER") or ""),
@@ -218,7 +218,7 @@ print("[16] act 不能嵌套，签名对 -y 不敏感")
 rc, out = run(["act", "act", "list"], actor="claude")
 ok(rc == 2 and "嵌套" in out, "act act 被拒（rc=2）")
 sys.path.insert(0, ROOT)
-from phonoagent import agent_signature as _sig          # noqa: E402
+from autozt import agent_signature as _sig          # noqa: E402
 ok(_sig("clean", ["-p", "A", "clean", "-y"]) == _sig("clean", ["clean", "-p", "A"]),
    "签名忽略参数顺序与 -y")
 

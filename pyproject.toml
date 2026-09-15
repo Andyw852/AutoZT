@@ -3,8 +3,8 @@ requires = ["setuptools>=64"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "phonoagent"
-version = "1.1.0"
+name = "autozt"
+version = "1.2.0"
 description = "Multi-material, multi-step, multi-cluster orchestration for VASP/MACE phonon and force-constant workflows"
 readme = "README.en.md"
 requires-python = ">=3.9"
@@ -29,15 +29,16 @@ hiphive = ["hiphive", "numpy", "ase"]
 dev = ["pytest>=7", "ruff", "build"]
 
 [project.scripts]
-phonoagent = "phonoagent.cli:main"
-pa = "phonoagent.cli:main"   # 短命令：等价入口
+autozt = "autozt.cli:main"
+pa = "autozt.cli:main"   # 兼容旧短名
+az = "autozt.cli:main"   # 短命令   # 短命令：等价入口
 
 [project.urls]
-Homepage = "https://github.com/Andyw852/PhonoAgent"
-Issues = "https://github.com/Andyw852/PhonoAgent/issues"
+Homepage = "https://github.com/Andyw852/AutoZT"
+Issues = "https://github.com/Andyw852/AutoZT/issues"
 
 [tool.setuptools]
-packages = ["phonoagent"]
+packages = ["autozt"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

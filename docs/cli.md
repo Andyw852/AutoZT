@@ -1,10 +1,10 @@
-phonoagent --help 输出（自动生成）
+autozt --help 输出（自动生成）
 
-    phonoagent [-tt <skill>] [-p <material>] [-j <step>] <command>
+    autozt [-tt <skill>] [-p <material>] [-j <step>] <command>
 
 完整命令列表：
 
-    用法：phonoagent [-tt 技能] [-p 材料] [-j 步骤] 命令
+    用法：autozt [-tt 技能] [-p 材料] [-j 步骤] 命令
     
     查看：
       summary [--diff]    只读汇总；--diff 无变化静默
@@ -39,7 +39,7 @@ phonoagent --help 输出（自动生成）
                          工具版本 / 作业号（gen 时自动落档，--verify 校验输入没被改）
     
     AI 审计（v1.0 P0-1，agent 走网关：风险分档 + 每次调用留痕）：
-      act <命令>         agent 的唯一入口：phonoagent act -p 材料 summary / phonoagent act start …
+      act <命令>         agent 的唯一入口：autozt act -p 材料 summary / autozt act start …
                          （只读与推进类放行并记账；stop/rerun/clean/-f/-y 需人工批准）
       act log           看审计流水（.tf_agent_log.jsonl）；act policy 看风险分档表
       approve <命令>     人工在**交互终端**批准一条破坏性动作（一次性令牌，默认 15 分钟）

@@ -25,7 +25,7 @@
 - `~/.ssh/config` 的 github 段：`HostName ssh.github.com` + `Port 443`
 - **用账号级 SSH key**（不是 deploy key）：`~/.ssh/id_ed25519`
   - 账号级认证返回 `Hi Andyw852!`
-  - deploy key 返回 `Hi Andyw852/PhonoAgent!`，且只能推单个仓库 → 其他仓库会 `denied to deploy key`
+  - deploy key 返回 `Hi Andyw852/AutoZT!`，且只能推单个仓库 → 其他仓库会 `denied to deploy key`
 - 验证：`ssh -T git@github.com` 应返回 `Hi Andyw852!`
 - https 协议仓库推不动（github.com:443 被墙，报 `Empty reply from server`）→ 改 ssh：
   `git remote set-url origin git@github.com:Andyw852/xxx.git`

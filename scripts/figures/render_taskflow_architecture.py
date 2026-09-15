@@ -425,7 +425,7 @@ def draw_terminal(d, x, y, w, h):
     yy = y + h - 15.0 * mm
     yy = terminal_group(d, tx, yy, 1, "initialize a project", ["tf -tt opt-mace-cpu -p MAT init"])
     yy -= 2.0 * mm
-    yy = terminal_group(d, tx, yy, 2, "start or advance", ["tf -tt opt-mace-cpu -p MAT start", "phonoagent start"])
+    yy = terminal_group(d, tx, yy, 2, "start or advance", ["tf -tt opt-mace-cpu -p MAT start", "autozt start"])
     yy -= 2.0 * mm
     yy = terminal_group(
         d,
@@ -433,7 +433,7 @@ def draw_terminal(d, x, y, w, h):
         yy,
         3,
         "inspect (read-only)",
-        ["phonoagent summary --diff", "tf -tt kl-dft-cpu summary", "tf -tt band-dft-cpu -p C24/qHPC24 status"],
+        ["autozt summary --diff", "tf -tt kl-dft-cpu summary", "tf -tt band-dft-cpu -p C24/qHPC24 status"],
     )
     yy -= 2.0 * mm
     yy = terminal_group(

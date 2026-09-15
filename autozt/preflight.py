@@ -10,7 +10,7 @@
 """
 import re
 
-from phonoagent import i18n as _i18n
+from autozt import i18n as _i18n
 
 _PART_RE = re.compile(r"^#SBATCH\s+--partition=(\S+)", re.M)
 _CPT_RE = re.compile(r"^#SBATCH\s+--cpus-per-task=(\d+)", re.M)

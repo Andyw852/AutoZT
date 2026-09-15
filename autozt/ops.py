@@ -5,7 +5,7 @@
 
 import os
 
-from phonoagent import i18n as _i18n  # noqa: E402
+from autozt import i18n as _i18n  # noqa: E402
 import sys
 import re
 import json
@@ -32,7 +32,7 @@ from concurrent.futures import ThreadPoolExecutor
 # -*- coding: utf-8 -*-
 # 12_hang —— 挂死作业检测与自动恢复
 #
-# 本分片由 phonoagent/__init__.py 装配器在单一命名空间里按顺序执行；
+# 本分片由 autozt/__init__.py 装配器在单一命名空间里按顺序执行；
 # 函数之间的引用按名字解析（与原单文件一致），分片间无需 import。
 # 内容清单（按原文件行号）：
 #   L4373  _hung_cfg
@@ -89,7 +89,7 @@ def _hung_state_save(cfg, state):
 
 # ===== _hung_scan (原 L4412-L4499) =====
 def _hung_scan(cfg, host="__default__"):
-    from phonoagent import run_remote
+    from autozt import run_remote
     '''远端一次性扫描：挂死检测 + 原因诊断合并为一次调用。
     返回 (rc, text)，text 为 JSON 数组，每个作业一条：
       {jobid, wd, running, age, bytes, lines, last3, err_node, err_disk, algo, amix, nelm}
@@ -237,7 +237,7 @@ def _hung_scf_rms_trend(last3):
 
 # ===== _hung_incar_fix (原 L4530-L4577) =====
 def _hung_incar_fix(cfg, workdir, level):
-    from phonoagent import run_remote
+    from autozt import run_remote
     '''远端升级 INCAR 抗 SCF 空转（幂等 + 原子写 + 备份）：
     level=1：补 AMIX=0.1 / BMIX=0.0001（精细混合）
     level=2：再改 ALGO=All（Davidson）；INCAR 没写 ALGO 行时补上（默认 Normal 也要显式 All）
@@ -288,7 +288,7 @@ print(json.dumps(changed))
 
 # ===== _hung_scancel_wait (原 L4580-L4593) =====
 def _hung_scancel_wait(cfg, jobid, timeout=90):
-    from phonoagent import run_remote
+    from autozt import run_remote
     '''scancel 后轮询 squeue 直到作业消失（避免旧 VASP 进程还在写文件时我们动文件）。
     返回 (ok, msg)。'''
     rc, _ = run_remote(cfg, "scancel %s" % jobid)
@@ -305,13 +305,13 @@ def _hung_scancel_wait(cfg, jobid, timeout=90):
 
 # ===== _hung_resume (原 L4596-L4612) =====
 def _hung_resume(cfg, wdir):
-    from phonoagent import run_remote
-    from phonoagent.workflow import _sbatch_guarded
+    from autozt import run_remote
+    from autozt.workflow import _sbatch_guarded
     '''从 CONTCAR 续跑（数据安全版）：
     先校验 CONTCAR 完整（>=8 行、原子数行与 POSCAR 一致），通过才 cp CONTCAR POSCAR，
     否则保留原 POSCAR 直接重跑并告警（IO 异常时 CONTCAR 可能是截断的，不能覆盖好 POSCAR）；
     备份旧输出为 *.hung，清理二进制残留，重新 sbatch（走目录锁 + 实时队列去重守卫，
-    避免与 phonoagent start/auto_advance 并发时重复提交）。返回 (rc, msg)。'''
+    避免与 autozt start/auto_advance 并发时重复提交）。返回 (rc, msg)。'''
     prep = (
         "cd %s && mv -f OUTCAR OUTCAR.hung 2>/dev/null; "
         "mv -f OSZICAR OSZICAR.hung 2>/dev/null; "
@@ -333,7 +333,7 @@ def _hung_resume(cfg, wdir):
 
 # ===== auto_recover_hung (原 L4615-L4773) =====
 def auto_recover_hung(cfg, data):
-    from phonoagent import log_action
+    from autozt import log_action
     '''v1.11 挂死作业自动恢复（watch 每轮调用一次）。
 
     检测用【进度指纹】而不是单次年龄：每轮记录每个 RUNNING 作业的
@@ -544,7 +544,7 @@ def auto_recover_hung(cfg, data):
 # -*- coding: utf-8 -*-
 # 14_init —— 项目初始化（init / init_skill / yaml block 编辑）
 #
-# 本分片由 phonoagent/__init__.py 装配器在单一命名空间里按顺序执行；
+# 本分片由 autozt/__init__.py 装配器在单一命名空间里按顺序执行；
 # 函数之间的引用按名字解析（与原单文件一致），分片间无需 import。
 # 内容清单（按原文件行号）：
 #   L5272  cmd_init
@@ -560,23 +560,23 @@ def auto_recover_hung(cfg, data):
 
 # ===== cmd_init (原 L5272-L5417) =====
 def cmd_init(cfg, types, proj, name=None, tt=None, force=False, yes=False):
-    from phonoagent import scan_project_configs
+    from autozt import scan_project_configs
     """初始化项目配置。
     -p 指定材料 → 只初始化这些材料（多个用逗号分隔，如 -p Mg2C60,Mo2S3）；
     不带 -p → 当前目录下所有项目批量初始化（cwd 下一层就是材料目录时，
-    cwd 本身作为一个项目）。位置参数可指定项目名（phonoagent init 名字）。
+    cwd 本身作为一个项目）。位置参数可指定项目名（autozt init 名字）。
     不带 -tt 时对【全部技能】各建一套 project_setting；动手前先列计划并确认（-y 跳过）。"""
     _keys = skill_keys(cfg, tt)
     if not _keys:
         print(_i18n.t("错误：", "error: ") + "tf.yaml 里没有定义任何技能（task_types 为空）。")
         return 1
     if not yes and not tt:   # 明确指定了 -tt 就是明确选择，不再确认
-        print("phonoagent init 将为下列技能各建一套项目配置：%s" % "、".join(_keys))
+        print("autozt init 将为下列技能各建一套项目配置：%s" % "、".join(_keys))
         print("范围：%s" % (("材料 " + "、".join(
             x.strip() for x in str(proj).split(",") if x.strip())) if proj
             else "当前目录下所有材料（%s）" % os.getcwd()))
         print("init 只在本地生成配置和模板，不连超算、不提交任何计算；")
-        print("要开算是之后的 phonoagent start。已存在的文件不覆盖（除非加 -f）。")
+        print("要开算是之后的 autozt start。已存在的文件不覆盖（除非加 -f）。")
         print("（只想初始化其中一个技能就加 -tt，如 tf -tt band init）")
         try:
             ans = input("继续？ [y/N] ").strip().lower()
@@ -610,7 +610,7 @@ def cmd_init(cfg, types, proj, name=None, tt=None, force=False, yes=False):
                                tt=tt, force=force, known_names=known_names)
         elif _targets:                      # 多材料：并行 init（与不带 -p 的批量同策略）
             import concurrent.futures as _cf
-            _nw = int(os.environ.get("PHONOAGENT_INIT_WORKERS", "16") or 16)
+            _nw = int(os.environ.get("AUTOZT_INIT_WORKERS", "16") or 16)
             _real_out = sys.stdout
             _failed = []
 
@@ -674,7 +674,7 @@ def cmd_init(cfg, types, proj, name=None, tt=None, force=False, yes=False):
     # 并行纯本地 I/O（配合上面的 O(1) 查重，整体 O(N)）。循环期间 stdout 静默
     # 以免成千上万个材料刷屏交错，进度走 stderr；失败的材料结束后串行重跑回显。
     import concurrent.futures as _cf
-    _nw = int(os.environ.get("PHONOAGENT_INIT_WORKERS", "16") or 16)
+    _nw = int(os.environ.get("AUTOZT_INIT_WORKERS", "16") or 16)
     _real_out = sys.stdout
     _failed = []
 
@@ -704,12 +704,12 @@ def cmd_init(cfg, types, proj, name=None, tt=None, force=False, yes=False):
         fails += _init_one(cfg, types, d, None, tt=tt, force=force,
                            known_names=known_names)
     if not fails:
-        print("材料初始化就绪（新 %d 个）。tf 查看状态，phonoagent start 全部开始。" % done)
+        print("材料初始化就绪（新 %d 个）。tf 查看状态，autozt start 全部开始。" % done)
     return fails
 
 # ===== _scan_root_dirs (原 L5423-L5435) =====
 def _scan_root_dirs(root):
-    from phonoagent import _MAT_DIR_CACHE
+    from autozt import _MAT_DIR_CACHE
     """扫一个根下所有带 POSCAR 的目录（缓存）。批量 auto/clean 反复按名解析时，
     串行逐材料 glob 整个 project_roots（/mnt/d 这种 9p 挂载极慢）会退化成 O(N*树)，
     这里扫一次缓存、后面 O(1) 查表。"""
@@ -725,7 +725,7 @@ def _scan_root_dirs(root):
 
 # ===== resolve_mat_dir (原 L5441-L5487) =====
 def resolve_mat_dir(cfg, types, tt, want, cwd=None):
-    from phonoagent import _RESOLVE_DISC_CACHE, _name_matches, discover_local, get_types
+    from autozt import _RESOLVE_DISC_CACHE, _name_matches, discover_local, get_types
     """按名字定位材料的本地目录，找不到返回 None。
     先走正常发现（local_root -> discover_local）；再扫盘兜底——clean 删光
     project_setting 后 local_root 也跟着没了，只能靠扫盘自举回来。
@@ -833,20 +833,20 @@ def _scope_to_material(content, tkey):
     discover_local 会把同级所有带 POSCAR 的目录都扫成本技能的材料 ——
     在一个材料下 init 某技能，兄弟材料全被拉进该技能的表。
     显式写 local_root: ".."（相对 project_setting 的父目录 = <材料>/<技能>）
-    即指向材料目录本身，只发现这一个材料。要整批管就到上级目录 phonoagent init。
+    即指向材料目录本身，只发现这一个材料。要整批管就到上级目录 autozt init。
     """
     if re.search(r"(?m)^\s+local_root:", content):
         return content
     m = re.search(r"(?m)^(\s*)%s:\s*$" % re.escape(str(tkey or "")), content)
     if not m:
         return content
-    line = '%s  local_root: ".."   # 只发现本材料；整批管请到上级目录 phonoagent init\n' % m.group(1)
+    line = '%s  local_root: ".."   # 只发现本材料；整批管请到上级目录 autozt init\n' % m.group(1)
     return content[:m.end()] + "\n" + line + content[m.end() + 1:]
 
 # ===== _init_one_skill (原 L5559-L5792) =====
 def _init_one_skill(cfg, types, target, name=None, tt=None, force=False,
                     known_names=None):
-    from phonoagent import DEFAULT_HPC_SETTING, DEFAULT_PROJECT_CONFIG, DEFAULT_PROJECT_SETTING, _PKG_ROOT, _load_yaml_file, _same_file, _skill_asset_dirs, pkg_setting_path, scan_project_configs
+    from autozt import DEFAULT_HPC_SETTING, DEFAULT_PROJECT_CONFIG, DEFAULT_PROJECT_SETTING, _PKG_ROOT, _load_yaml_file, _same_file, _skill_asset_dirs, pkg_setting_path, scan_project_configs
     """在 target 目录生成 project_setting/（tf_<项目名>.yaml + setting.yaml +
     hpc.yaml + 映射模板）。已存在的文件不覆盖；项目配置名全局唯一，重复即报错。
     known_names：批量 init 预扫好的 {项目名: tf_*.yaml 路径}，传入则查重 O(1)
@@ -917,14 +917,14 @@ def _init_one_skill(cfg, types, target, name=None, tt=None, force=False,
             # 批量 init 预扫过的名字表 → O(1) 查重，避免每个材料全树重扫
             if pname in known_names:
                 print(_i18n.t("错误：", "error: ") + "项目配置名 tf_%s.yaml 已被 %s 占用，"
-                      "请换个名字（phonoagent init <名字>）。" % (pname, known_names[pname]))
+                      "请换个名字（autozt init <名字>）。" % (pname, known_names[pname]))
                 return 1
         else:
             roots = cfg.get("project_roots") or [cfg.get("_config_dir")]
             for n2, p2, _ in scan_project_configs(roots):
                 if n2 == pname:
                     print(_i18n.t("错误：", "error: ") + "项目配置名 tf_%s.yaml 已被 %s 占用，"
-                          "请换个名字（phonoagent init <名字>）。" % (pname, p2))
+                          "请换个名字（autozt init <名字>）。" % (pname, p2))
                     return 1
         src = pkg_setting_path("tf_default.yaml")
         content = None
@@ -1200,7 +1200,7 @@ def _yaml_type_block_remove(path, tkey):
 # -*- coding: utf-8 -*-
 # 15_hpc —— hpc / level / auto / adopt / migrate-subdir 命令
 #
-# 本分片由 phonoagent/__init__.py 装配器在单一命名空间里按顺序执行；
+# 本分片由 autozt/__init__.py 装配器在单一命名空间里按顺序执行；
 # 函数之间的引用按名字解析（与原单文件一致），分片间无需 import。
 # 内容清单（按原文件行号）：
 #   L5908  _write_hpc_yaml
@@ -1238,7 +1238,7 @@ def _write_hpc_yaml(path, d, note):
 
 # ===== cmd_hpc (原 L5926-L6013) =====
 def cmd_hpc(cfg, types, projs, cluster, tt, yes):
-    from phonoagent import _load_yaml_file, _name_matches, discover_local, find_asset, pkg_setting_path, resolve_material_local
+    from autozt import _load_yaml_file, _name_matches, discover_local, find_asset, pkg_setting_path, resolve_material_local
     """v1.7：把 -p 指定的项目（一个或多个）分配到指定超算；未指定的项目一律不动。
       tf -p X,Y hpc <集群名>             材料级：改写 project_setting/hpc.yaml
                                          （该材料全部技能生效）
@@ -1247,7 +1247,7 @@ def cmd_hpc(cfg, types, projs, cluster, tt, yes):
     集群主配置 = 包内 setting/<集群名>.yaml（照 jzzn.yaml 建）；其 template_map
     指向的模板文件须能被找到（skill/<技能>/、project_setting/ 或 <技能>/）。"""
     if not cluster:
-        print(_i18n.t("错误：", "error: ") + "缺集群名。用法：phonoagent -p 项目[,项目...] [-tt 技能] hpc <集群名>")
+        print(_i18n.t("错误：", "error: ") + "缺集群名。用法：autozt -p 项目[,项目...] [-tt 技能] hpc <集群名>")
         return 1
     if not projs:
         print(_i18n.t("错误：", "error: ") + "hpc 必须用 -p 显式指定项目（逗号分隔多个）；未指定的不动。")
@@ -1307,13 +1307,13 @@ def cmd_hpc(cfg, types, projs, cluster, tt, yes):
         else:
             tdir = (m.get("ps") or {}).get("dir")
             if not tdir:
-                print("%s: 失败——缺 project_setting（先 phonoagent init）" % m["name"])
+                print("%s: 失败——缺 project_setting（先 autozt init）" % m["name"])
                 fails += 1
                 continue
         target = os.path.join(tdir, "hpc.yaml")
         new = _load_yaml_file(target) or {}
         new.update(master)   # 主配置字段全量覆盖；旧文件里的额外字段保留
-        _write_hpc_yaml(target, new, "超算配置（phonoagent hpc %s 于 %s 生成/更新）"
+        _write_hpc_yaml(target, new, "超算配置（autozt hpc %s 于 %s 生成/更新）"
                         % (cluster, time.strftime("%Y-%m-%d %H:%M:%S")))
         resolve_material_local(t, root, m)   # 重新解析（带上新写的 hpc.yaml）再查模板
         missing = [lg for lg in (master.get("template_map") or {})
@@ -1329,11 +1329,11 @@ def cmd_hpc(cfg, types, projs, cluster, tt, yes):
 
 # ===== _list_pkg_clusters (原 L6016-L6025) =====
 def _list_pkg_clusters():
-    from phonoagent import _PKG_DIR, _PKG_ROOT
+    from autozt import _PKG_DIR, _PKG_ROOT
     out = []
     for d in (os.path.join(_PKG_ROOT, "setting"),
               os.path.join(_PKG_DIR, "setting"),
-              os.path.expanduser("~/.config/phonoagent/setting")):
+              os.path.expanduser("~/.config/autozt/setting")):
         if os.path.isdir(d):
             out += [f[:-5] for f in os.listdir(d)
                     if f.endswith(".yaml") and f != "tf_default.yaml"]
@@ -1352,7 +1352,7 @@ def _level_stepconf_path(lpath, tkey):
 
 # ===== _level_write (原 L6060-L6088) =====
 def _level_write(path, level):
-    from phonoagent import _LEVEL_HEADER
+    from autozt import _LEVEL_HEADER
     """把 [params].BANDGAP 改成 level，其余内容与注释原样保留。"""
     note = ("# 计算级别（tf level 维护）：pbe = 只算到 step3（PBE/PBEsol，"
             "跳过整段 HSE）；hse = 继续算到 step4（HSE06）")
@@ -1384,7 +1384,7 @@ def _level_write(path, level):
 
 # ===== cmd_level (原 L6091-L6132) =====
 def cmd_level(cfg, types, tt, proj, arg):
-    from phonoagent import _LEVEL_ALIAS, _LEVEL_DESC, _stepconf_param_from_file
+    from autozt import _LEVEL_ALIAS, _LEVEL_DESC, _stepconf_param_from_file
     """tf [-tt 技能] [-p 材料] level [pbe|hse] —— 设/查计算级别。"""
     keys = skill_keys(cfg, tt)
     wants = ([x.strip() for x in str(proj).split(",") if x.strip()]
@@ -1423,13 +1423,13 @@ def cmd_level(cfg, types, tt, proj, arg):
             _level_write(scp, level)
             print("  %-28s %s -> %s" % (w, eff or "(未写)", level))
     if level:
-        print("下次 tf / phonoagent start 装配步骤图时生效。已跑完的 step4 产物不会被"
+        print("下次 tf / autozt start 装配步骤图时生效。已跑完的 step4 产物不会被"
               "删除，只是不再出现在状态表里。")
     return fails
 
 # ===== cmd_auto_project (原 L6135-L6170) =====
 def cmd_auto_project(cfg, types, proj, tt, arg):
-    from phonoagent import _load_yaml_file
+    from autozt import _load_yaml_file
     """v1.9.9：tf [-tt X] -p 材料 auto on|off —— 改该技能项目的
     project_setting/setting.yaml，不动全局 tf.yaml。"""
     keys = skill_keys(cfg, tt)
@@ -1465,7 +1465,7 @@ def cmd_auto_project(cfg, types, proj, tt, arg):
                 continue
             _set_yaml_bool(f, "auto_advance", on)
             if a == "resume":
-                from phonoagent.workflow import _scancel_load, _scancel_save
+                from autozt.workflow import _scancel_load, _scancel_save
                 material = {"lpath": lp, "tt": k}
                 marks = _scancel_load(material)
                 remaining = {key: value for key, value in marks.items()
@@ -1475,12 +1475,12 @@ def cmd_auto_project(cfg, types, proj, tt, arg):
                       % (w, k, len(marks) - len(remaining)))
             print("  %s[%s]：auto_advance = %s" % (w, k, "true" if on else "false"))
     if not cfg.get("auto_advance"):
-        print("注意：全局 auto_advance 还是关的，本开关要配合 phonoagent auto on 才生效。")
+        print("注意：全局 auto_advance 还是关的，本开关要配合 autozt auto on 才生效。")
     return fails
 
 # ===== _skill_local_mats (原 L6173-L6190) =====
 def _skill_local_mats(cfg, types, tt):
-    from phonoagent import discover_local
+    from autozt import discover_local
     """patch_auto：列出该技能下本地已发现的材料名（纯本地，不连超算）。"""
     names, seen = [], set()
     for t0 in (types or []):
@@ -1545,7 +1545,7 @@ def _set_yaml_bool(path, key, on):
 
 # ===== cmd_auto (原 L6237-L6275) =====
 def cmd_auto(cfg, arg):
-    """v1.5 phonoagent auto [on|off]：一键开关自动提交（改写全局 tf.yaml 的
+    """v1.5 autozt auto [on|off]：一键开关自动提交（改写全局 tf.yaml 的
     auto_advance 行；没有该行则补在文件头）。无参数 = 显示当前状态。
     只影响 auto_advance；后台监控（auto_watch）不受影响。"""
     path = cfg.get("_config_path")
@@ -1555,7 +1555,7 @@ def cmd_auto(cfg, arg):
     if arg is None:
         print("auto_advance 当前：%s（%s）"
               % ("开" if cfg.get("auto_advance") else "关", path))
-        print("切换：phonoagent auto on / phonoagent auto off")
+        print("切换：autozt auto on / autozt auto off")
         return 0
     a = str(arg).strip().lower()
     if a not in ("on", "off", "1", "0", "true", "false", "开", "关"):
@@ -1581,12 +1581,12 @@ def cmd_auto(cfg, arg):
         print("status/monitor 会自动提交可开始的步骤；手动 start/retry/rerun 不受影响。")
     else:
         print("status/monitor 只看不提交；手动 start/retry/rerun 不受影响。")
-        print("后台监控仍在跑（只拉结果）；停监控用 phonoagent monitor --stop。")
+        print("后台监控仍在跑（只拉结果）；停监控用 autozt monitor --stop。")
     return 0
 
 # ===== cmd_adopt (原 L6278-L6388) =====
 def cmd_adopt(cfg, types, proj, yes, dry, tt):
-    from phonoagent import collect_data, get_types, load_config, merge_project_configs
+    from autozt import collect_data, get_types, load_config, merge_project_configs
     """v1.5：接管手工整理的技能子目录结构。适用场景：人手工把 POSCAR、
     project_setting、result、log 搬进了 材料/<技能>/。tf 的规矩是 POSCAR 和
     project_setting 必须在材料根（所有技能共用），<技能>/ 里只放该技能产物。
@@ -1595,7 +1595,7 @@ def cmd_adopt(cfg, types, proj, yes, dry, tt):
       第 2 步（并入迁移）：重新载入配置+采集，逐材料 migrate-subdir——远端
                           step* 移进 <技能>/、项目配置开 skill_subdir；
                           有作业在跑的跳过，算完再跑一次 adopt 即可。
-    用法：phonoagent -tt band adopt [--dry-run] [-y] [-p MAT]"""
+    用法：autozt -tt band adopt [--dry-run] [-y] [-p MAT]"""
     if not tt:
         print(_i18n.t("错误：", "error: ") + "adopt 需要 -tt 指定接管哪个技能（如 tf -tt band adopt）。")
         return 1
@@ -1678,7 +1678,7 @@ def cmd_adopt(cfg, types, proj, yes, dry, tt):
     cfg2 = merge_project_configs(cfg2)
     types2 = get_types(cfg2, tt=tt)
     if not types2:
-        print(_i18n.t("错误：", "error: ") + "%s 还没有任何项目配置段——先 phonoagent init，再重跑 adopt。" % tt)
+        print(_i18n.t("错误：", "error: ") + "%s 还没有任何项目配置段——先 autozt init，再重跑 adopt。" % tt)
         return 1
     data2 = collect_data(cfg2, types2)
     by_name = {m["name"]: m for t2 in data2["types"] for m in t2["materials"]}
@@ -1687,7 +1687,7 @@ def cmd_adopt(cfg, types, proj, yes, dry, tt):
         rel = os.path.relpath(D, root)
         m = by_name.get(rel)
         if m is None:
-            print("%s: 跳过——未被识别为材料（材料根缺 POSCAR？补好后 phonoagent init）" % rel)
+            print("%s: 跳过——未被识别为材料（材料根缺 POSCAR？补好后 autozt init）" % rel)
             continue
         if not (m.get("ps") or {}).get("dir"):
             print("%s: 跳过——缺 project_setting（先 tf -tt %s -p %s init，"
@@ -1700,7 +1700,7 @@ def cmd_adopt(cfg, types, proj, yes, dry, tt):
 
 # ===== cmd_migrate_subdir (原 L6391-L6483) =====
 def cmd_migrate_subdir(cfg, data, proj, yes, dry):
-    from phonoagent import _mat_all_done, _name_matches, log_action, run_remote
+    from autozt import _mat_all_done, _name_matches, log_action, run_remote
     """v1.2：把该技能已完成材料的数据迁进技能子目录（跟着项目走的目录结构）。
     远端 work/材料/step* → work/材料/<技能>/step*；本地 result、log → 材料/<技能>/；
     项目配置该技能段加 skill_subdir: true（状态随即按新路径采集，保持 done）。
@@ -1797,7 +1797,7 @@ def cmd_migrate_subdir(cfg, data, proj, yes, dry):
 # -*- coding: utf-8 -*-
 # 16_watch —— 后台监控 watch（daemon/cron）
 #
-# 本分片由 phonoagent/__init__.py 装配器在单一命名空间里按顺序执行；
+# 本分片由 autozt/__init__.py 装配器在单一命名空间里按顺序执行；
 # 函数之间的引用按名字解析（与原单文件一致），分片间无需 import。
 # 内容清单（按原文件行号）：
 #   L6846  _watch_files
@@ -1812,16 +1812,16 @@ def cmd_migrate_subdir(cfg, data, proj, yes, dry):
 
 # ===== _watch_files (原 L6846-L6851) =====
 def _watch_files(cfg=None):
-    from phonoagent import WATCH_LOG, WATCH_PID
+    from autozt import WATCH_LOG, WATCH_PID
     """watch 的 pid/log 路径：v1.10 起锚定配置文件所在目录（setting/），
-    在任何目录执行 phonoagent monitor --stop 都找得到；旧版 cwd 下的 pid 文件由
+    在任何目录执行 autozt monitor --stop 都找得到；旧版 cwd 下的 pid 文件由
     _watch_stop 兜底识别。"""
     base = (cfg or {}).get("_config_dir") or os.getcwd()
     return (os.path.join(base, WATCH_PID), os.path.join(base, WATCH_LOG))
 
 # ===== _watch_running_pid (原 L6854-L6867) =====
 def _watch_running_pid(cfg=None):
-    from phonoagent import WATCH_PID
+    from autozt import WATCH_PID
     """返回在跑的后台监控 PID（没有在跑返回 None）。先看锚定位置，再看 cwd。"""
     cands = [_watch_files(cfg)[0], os.path.abspath(WATCH_PID)]
     for pidfile in dict.fromkeys(cands):
@@ -1846,12 +1846,12 @@ def _watch_pid_alive(pid):
 
 # ===== _watch_daemon (原 L6878-L6908) =====
 def _watch_daemon(a, mat_toks, root, cfg=None):
-    """phonoagent monitor -d：把监控作为 detached 子进程放后台，日志写配置目录下。"""
+    """autozt monitor -d：把监控作为 detached 子进程放后台，日志写配置目录下。"""
     pidfile, logfile = _watch_files(cfg)
     pid, _ = _watch_running_pid(cfg)
     if pid:
-        print("phonoagent monitor 已在后台运行 (PID %d)" % pid)
-        print("日志：%s（tail -f 查看）；停止：phonoagent monitor --stop" % logfile)
+        print("autozt monitor 已在后台运行 (PID %d)" % pid)
+        print("日志：%s（tail -f 查看）；停止：autozt monitor --stop" % logfile)
         return
     argv = [sys.executable, os.path.realpath(sys.argv[0])]
     if a.config:
@@ -1873,13 +1873,13 @@ def _watch_daemon(a, mat_toks, root, cfg=None):
                          stderr=subprocess.STDOUT, start_new_session=True)
     with open(pidfile, "w") as f:
         f.write(str(p.pid))
-    print("phonoagent monitor 已转入后台 (PID %d)" % p.pid)
+    print("autozt monitor 已转入后台 (PID %d)" % p.pid)
     print("日志：%s（tail -f %s 查看）" % (logfile, logfile))
-    print("停止：phonoagent monitor --stop")
+    print("停止：autozt monitor --stop")
 
 # ===== _watch_stop (原 L6911-L6924) =====
 def _watch_stop(cfg=None):
-    """phonoagent monitor --stop：按 pid 文件停止后台监控（任意目录可执行）。"""
+    """autozt monitor --stop：按 pid 文件停止后台监控（任意目录可执行）。"""
     import signal as _sig
     pid, pidfile = _watch_running_pid(cfg)
     if pid:
@@ -1888,15 +1888,15 @@ def _watch_stop(cfg=None):
             os.remove(pidfile)
         except OSError:
             pass
-        print("已停止 phonoagent monitor (PID %d)。" % pid)
+        print("已停止 autozt monitor (PID %d)。" % pid)
         return 0
-    print("没有运行中的 phonoagent monitor。")
+    print("没有运行中的 autozt monitor。")
     return 1
 
 # ===== _watch_ensure (原 L6927-L6950) =====
 def _watch_ensure(cfg):
     """v1.10 auto_watch：任何 tf 命令顺带确保后台监控在跑（没在跑就拉起）。
-    配合 phonoagent monitor --install 的 crontab 保活 = 零输入全自动：
+    配合 autozt monitor --install 的 crontab 保活 = 零输入全自动：
     重启/WSL 关闭后 cron 拉起；平时敲任何 tf 命令也会顺带拉起。
     保活失败绝不影响主命令。"""
     if not cfg.get("auto_watch"):
@@ -1915,14 +1915,14 @@ def _watch_ensure(cfg):
                              stderr=subprocess.STDOUT, start_new_session=True)
         with open(pidfile, "w") as f:
             f.write(str(p.pid))
-        print("已自动启动后台监控 phonoagent monitor (PID %d)。日志：%s" % (p.pid, logfile))
+        print("已自动启动后台监控 autozt monitor (PID %d)。日志：%s" % (p.pid, logfile))
     except Exception:
         pass
 
 # ===== _watch_cron (原 L6953-L6979) =====
 def _watch_cron(install):
-    """phonoagent monitor --install/--uninstall：crontab 保活——每 10 分钟检查，
-    监控死了（重启/崩溃）自动拉起。phonoagent monitor -d 有 pid 检查，不会重复启动。"""
+    """autozt monitor --install/--uninstall：crontab 保活——每 10 分钟检查，
+    监控死了（重启/崩溃）自动拉起。autozt monitor -d 有 pid 检查，不会重复启动。"""
     import shutil as _sh
     marker = "# tf-watch-keepalive"
     if not _sh.which("crontab"):
@@ -1942,8 +1942,8 @@ def _watch_cron(install):
         print("写入 crontab 失败：%s" % (r.stderr or "").strip())
         return 1
     if install:
-        print("已写入 crontab 保活：每 10 分钟确保 phonoagent monitor 在跑（重启后自动恢复）")
-        print("查看：crontab -l；移除：phonoagent monitor --uninstall")
+        print("已写入 crontab 保活：每 10 分钟确保 autozt monitor 在跑（重启后自动恢复）")
+        print("查看：crontab -l；移除：autozt monitor --uninstall")
     else:
         print("已移除 crontab 保活。")
     return 0
@@ -1982,7 +1982,7 @@ def _watch_cfg_sig(cfg):
 # ===== cmd_watch (原 L7013-L7075) =====
 def cmd_watch(cfg, types, projs, exclude, interval, tt=None, root=None,
               overrides=None):
-    from phonoagent import _snapshot, _state_cache_save, apply_exclude, apply_hide_done, apply_skills, auto_advance, auto_fetch, cmd_status, collect_data, fill_local_dim, filter_projs, get_types, load_config, merge_project_configs
+    from autozt import _snapshot, _state_cache_save, apply_exclude, apply_hide_done, apply_skills, auto_advance, auto_fetch, cmd_status, collect_data, fill_local_dim, filter_projs, get_types, load_config, merge_project_configs
     """v3.15 监控模式：每 interval 秒重新采集 → auto-fetch → auto-advance。
     v1.8：每轮检测配置文件改动（tf.yaml / project_setting/*.yaml / 各级
     hpc.yaml），变了自动重载——改配置或换 tf 版本后不用手动重启监控。
@@ -2025,7 +2025,7 @@ def cmd_watch(cfg, types, projs, exclude, interval, tt=None, root=None,
                     sig = s2
             data = collect_data(cfg, types)
             fill_local_dim(cfg, data, types)
-            # patch_state_cache：把本轮采集结果写进本地缓存，前台 phonoagent list/summary
+            # patch_state_cache：把本轮采集结果写进本地缓存，前台 autozt list/summary
             # 在 TTL 内直接读它，不用再 ssh 采集一遍。
             _state_cache_save(cfg, data, types, tt, root)
             # v1.0（W5–8）：监控每轮把状态转移记进 history.jsonl —— 后台监控在跑时

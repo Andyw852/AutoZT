@@ -4,7 +4,7 @@
 
 import os
 
-from phonoagent import i18n as _i18n  # noqa: E402
+from autozt import i18n as _i18n  # noqa: E402
 import sys
 import re
 import json
@@ -30,16 +30,16 @@ from concurrent.futures import ThreadPoolExecutor
 # -*- coding: utf-8 -*-
 # 17_cli —— main() 入口与命令分发
 #
-# 本分片由 phonoagent/__init__.py 装配器在单一命名空间里按顺序执行；
+# 本分片由 autozt/__init__.py 装配器在单一命名空间里按顺序执行；
 # 函数之间的引用按名字解析（与原单文件一致），分片间无需 import。
 # 内容清单（按原文件行号）：
 #   L7078  main
 #   （数据簇 _dbg_t/_state_cache_*/collect_data/apply_exclude/filter_projs/
-#    filter_status/status_spec_has_scancel/_snapshot 已抽成真模块 phonoagent/data.py）
+#    filter_status/status_spec_has_scancel/_snapshot 已抽成真模块 autozt/data.py）
 
 # ===== main (原 L7078-L7453) =====
 def _dry_run_steps_for(cmd, m, jb):
-    from phonoagent import find_step_soft
+    from autozt import find_step_soft
     """--dry-run：某材料在命令 cmd、步骤筛选 jb 下实际会动的步骤。
     返回步骤列表；None 表示"整材料级"（rerun/clean 无 -j 时）。"""
     if jb:
@@ -60,7 +60,7 @@ def _dry_run_steps_for(cmd, m, jb):
 
 
 def _dry_run_report(cfg, data, cmd, projs, jobs):
-    from phonoagent import find_material
+    from autozt import find_material
     """--dry-run：打印真实目标对象（复用 _dry_run_steps_for 的语义）。"""
     mats = []
     if projs:
@@ -105,10 +105,10 @@ def normalize_monitor_command(command, positional, restart=False):
 
 
 def main():
-    from phonoagent import EXAMPLE_CONFIG, JSON_SCHEMA, PHONOAGENT_VERSION, USAGE, USAGE_EN, _PKG_ROOT, _add_diag_codes, _json_changes, _json_errors_only, _json_paginate, _dbg_t, _state_cache_load, _state_cache_save, _summary_json, _watch_cron, _watch_daemon, _watch_ensure, _watch_stop, apply_exclude, apply_hide_done, apply_skills, auto_advance, auto_fetch, auto_recover_hung, cmd_adopt, cmd_auto, cmd_auto_project, cmd_auto_skill, cmd_clean, cmd_conf, cmd_diagnose, cmd_fetch, cmd_hpc, cmd_init, cmd_level, cmd_migrate_subdir, cmd_rerun, cmd_retry, cmd_skills, cmd_start, cmd_status, cmd_step_init, cmd_stop, cmd_summary, cmd_watch, collect_data, fill_local_dim, filter_status, find_material, find_step, find_uninited, get_types, load_config, merge_project_configs, render_table, status_spec_has_scancel, cmd_schema, cmd_skill_show, cmd_correct, cmd_correct_usage, cmd_history, history_record, cmd_prove, set_active_cfg, cmd_act, cmd_approve, agent_direct_gate, agent_audit, cmd_session
+    from autozt import EXAMPLE_CONFIG, JSON_SCHEMA, AUTOZT_VERSION, USAGE, USAGE_EN, _PKG_ROOT, _add_diag_codes, _json_changes, _json_errors_only, _json_paginate, _dbg_t, _state_cache_load, _state_cache_save, _summary_json, _watch_cron, _watch_daemon, _watch_ensure, _watch_stop, apply_exclude, apply_hide_done, apply_skills, auto_advance, auto_fetch, auto_recover_hung, cmd_adopt, cmd_auto, cmd_auto_project, cmd_auto_skill, cmd_clean, cmd_conf, cmd_diagnose, cmd_fetch, cmd_hpc, cmd_init, cmd_level, cmd_migrate_subdir, cmd_rerun, cmd_retry, cmd_skills, cmd_start, cmd_status, cmd_step_init, cmd_stop, cmd_summary, cmd_watch, collect_data, fill_local_dim, filter_status, find_material, find_step, find_uninited, get_types, load_config, merge_project_configs, render_table, status_spec_has_scancel, cmd_schema, cmd_skill_show, cmd_correct, cmd_correct_usage, cmd_history, history_record, cmd_prove, set_active_cfg, cmd_act, cmd_approve, agent_direct_gate, agent_audit, cmd_session
     if "--help-all" in sys.argv[1:]:
-        # 英文帮助：PHONOAGENT_LANG=en 或命令行 --lang en
-        _lang = (os.environ.get('PHONOAGENT_LANG') or '').lower()
+        # 英文帮助：AUTOZT_LANG=en 或命令行 --lang en
+        _lang = (os.environ.get('AUTOZT_LANG') or '').lower()
         if '--lang' in sys.argv:
             try:
                 _lang = sys.argv[sys.argv.index('--lang') + 1].lower()
@@ -117,27 +117,27 @@ def main():
         print(USAGE_EN if _lang.startswith('en') else USAGE)
         return
     if any(a in ("-h", "--help") for a in sys.argv[1:]):
-        from phonoagent import QUICK_USAGE
+        from autozt import QUICK_USAGE
         print(QUICK_USAGE)
         return
     if any(a in ("-V", "--version") for a in sys.argv[1:]):
-        print("PhonoAgent (phonoagent) version %s" % PHONOAGENT_VERSION)
+        print("AutoZT (autozt) version %s" % AUTOZT_VERSION)
         pkg = _PKG_ROOT
         _prog = os.path.realpath(globals().get("_PROG_PATH") or _PKG_ROOT)
         print("程序: %s" % _prog)
         print("包根: %s（setting/ = 默认模板，skill/ = 技能脚本）" % pkg)
         return
     if len(sys.argv) == 1:   # patch_auto：纯 tf = 只报版本，不采集/不提交
-        print("PhonoAgent (phonoagent) version %s" % PHONOAGENT_VERSION)
+        print("AutoZT (autozt) version %s" % AUTOZT_VERSION)
         print("程序: %s" % os.path.realpath(globals().get("_PROG_PATH") or _PKG_ROOT))
         print("")
-        print("  phonoagent list      只读总表（不拉取、不提交）")
-        print("  phonoagent summary   只读极简汇总（巡检省 token，见 AGENTS.md）")
-        print("  phonoagent status    刷新状态 + auto-fetch + auto-advance")
-        print("  phonoagent monitor   后台监控（-i 秒，-d 后台，restart 重做；watch 为旧名）")
+        print("  autozt list      只读总表（不拉取、不提交）")
+        print("  autozt summary   只读极简汇总（巡检省 token，见 AGENTS.md）")
+        print("  autozt status    刷新状态 + auto-fetch + auto-advance")
+        print("  autozt monitor   后台监控（-i 秒，-d 后台，restart 重做；watch 为旧名）")
         print("  tf -h        常用命令；tf --help-all 查看完整帮助")
         return
-    p = argparse.ArgumentParser(prog="phonoagent")
+    p = argparse.ArgumentParser(prog="autozt")
     p.add_argument("-tt", dest="tt")
     p.add_argument("-p", dest="proj")
     p.add_argument("-j", "-job", dest="job")
@@ -155,9 +155,9 @@ def main():
     p.add_argument("-d", "--daemon", action="store_true",
                    help="monitor 放后台运行（日志 .tf_watch.log）")
     p.add_argument("--stop", action="store_true",
-                   help="停止后台运行的 phonoagent monitor")
+                   help="停止后台运行的 autozt monitor")
     p.add_argument("--install", action="store_true",
-                   help="写入 crontab 保活（phonoagent monitor 重启后自动恢复）")
+                   help="写入 crontab 保活（autozt monitor 重启后自动恢复）")
     p.add_argument("--uninstall", action="store_true",
                    help="移除 crontab 保活")
     p.add_argument("--restart", action="store_true",
@@ -198,7 +198,7 @@ def main():
                    help="history：采集一次并把变化写进 history.jsonl（默认只读）")
     p.add_argument("-clean", "--clean", dest="clean", action="store_true")
     p.add_argument("--purge-config", dest="purge_config", action="store_true",
-                   help="clean：连 project_setting 一起删（默认保留，重算需 phonoagent init）")
+                   help="clean：连 project_setting 一起删（默认保留，重算需 autozt init）")
     p.add_argument("--from-skill", dest="from_skill", action="store_true",
                    help="rerun：忽略项目侧模板/step.conf，只用 skill 库出厂版生成")
     p.add_argument("--set", dest="sets", action="append", metavar="节.键=值",
@@ -233,7 +233,7 @@ def main():
     root, cmd, pos = None, "status", []
     for tok in a.args:  # v3.14：位置参数先收集，之后按"材料名/目录"消歧
         if tok == "help":
-            from phonoagent import QUICK_USAGE
+            from autozt import QUICK_USAGE
             print(QUICK_USAGE)
             return
         if tok in commands and cmd == "status":
@@ -305,7 +305,7 @@ def main():
     if cmd == "skills":
         return cmd_skills(cfg, tt=a.tt)
     if cmd == "schema":   # v1.0：看技能自描述（纯本地、不采集、不提交）
-        # 技能名既可用 -tt，也可直接当位置参数写：phonoagent schema band-dft-cpu
+        # 技能名既可用 -tt，也可直接当位置参数写：autozt schema band-dft-cpu
         _which = a.tt or (mat_toks[0] if mat_toks else None)
         sys.exit(cmd_schema(cfg, tt=_which, json_out=a.json_out, strict=a.strict))
     if cmd == "skill":   # v1.0：技能卡片（论文图 2 的机器可读来源；纯本地）
@@ -360,7 +360,7 @@ def main():
     if cmd == "auto":   # v1.5：一键开关 auto_advance（纯本地改 tf.yaml）
         # autonow2：从位置参数里挑 on/off 当开关，其余位置参数当材料名，
         # 并标记为已消费。原来固定取 mat_toks[0] 且不消费，导致
-        #   `phonoagent auto on`           -> "on" 落到后面被当材料名解析而报错
+        #   `autozt auto on`           -> "on" 落到后面被当材料名解析而报错
         #   `tf -tt ke <材料> auto on` -> 材料名被当成了 on/off 参数
         _AUTO_WORDS = ("on", "off", "1", "0", "true", "false", "resume",
                        "\u5f00", "\u5173")
@@ -389,7 +389,7 @@ def main():
                 "on", "1", "true", "开", "resume"):
             sys.exit(_rc)
         print("auto_advance 已开，下面立刻提交可开始的步骤"
-              "（只想看不提交：phonoagent list）。")
+              "（只想看不提交：autozt list）。")
         _force_advance = True
         cmd = "status"
 
@@ -421,14 +421,14 @@ def main():
                      or not os.path.isfile(os.path.join(
                          os.path.realpath(t["local_root"]), "POSCAR")))]
     # patch_state_cache：list/summary 只读命令优先读本地缓存（跳过 ssh 采集），
-    # --refresh 或 PHONOAGENT_CACHE_TTL=0 强制刷新；会改状态的命令一律现采。
-    _ttl = int(os.environ.get("PHONOAGENT_CACHE_TTL", "60") or 0)
+    # --refresh 或 AUTOZT_CACHE_TTL=0 强制刷新；会改状态的命令一律现采。
+    _ttl = int(os.environ.get("AUTOZT_CACHE_TTL", "60") or 0)
     _cached = None
     if cmd in ("list", "summary") and not a.refresh and _ttl > 0:
         _cached = _state_cache_load(cfg, types, a.tt, root, _ttl)
     if _cached is not None:
         data = _cached
-        if os.environ.get("PHONOAGENT_DEBUG_TIME"):
+        if os.environ.get("AUTOZT_DEBUG_TIME"):
             print("[缓存] 命中本地状态缓存，跳过 ssh 采集（--refresh 强制刷新）",
                   file=sys.stderr)
     else:
@@ -440,7 +440,7 @@ def main():
         # 加进来就自动有历史，不必各技能自己写日志；走缓存那一支不重复记录。
         try:
             _n_hist = history_record(cfg, data)
-            if _n_hist and os.environ.get("PHONOAGENT_DEBUG_TIME"):
+            if _n_hist and os.environ.get("AUTOZT_DEBUG_TIME"):
                 print("[history] 记录 %d 条状态转移" % _n_hist, file=sys.stderr)
         except Exception:
             pass
@@ -554,7 +554,7 @@ def main():
                              verify=a.verify)
         sys.exit(_rc)
     if cmd == "mcp":   # C 差异化：以 MCP stdio 服务暴露给上层 agent
-        from phonoagent import mcp as _mcp
+        from autozt import mcp as _mcp
         return _mcp.main(sys.argv[1:] if "--list-tools" in sys.argv
                          or "--call" in sys.argv else [])
 
@@ -588,7 +588,7 @@ def main():
         _t1 = _time.time()
         auto_fetch(cfg, data)   # 算完的步骤自动保存到本地 result/
         _dbg_t("auto-fetch 拉回", _t1)
-        # autonow：只有从 auto on 落过来时才推进；裸 tf / phonoagent status / tf list
+        # autonow：只有从 auto on 落过来时才推进；裸 tf / autozt status / tf list
         # 仍是 fixte⑤ 的只读语义（不提交任务）。
         if _force_advance:
             _t1 = _time.time()
@@ -607,7 +607,7 @@ def main():
             if new:
                 print("发现 %d 个新材料目录未初始化：%s"
                       % (len(new), ", ".join(new)))
-                print("→ phonoagent init 纳入管理；配 auto_advance: true 后下次 tf 自动开算")
+                print("→ autozt init 纳入管理；配 auto_advance: true 后下次 tf 自动开算")
     elif cmd == "conf":
         if not projs or not jobs or not jobs[0]:
             sys.exit(_i18n.t("错误：", "error: ") + "conf 需要 -p 材料 -j 步骤（如 tf -tt bd -p Mg2C60 -j 2 conf）。")
@@ -631,10 +631,10 @@ def main():
                                    ".tf_json_snapshot_%s.txt" % _h)
                 _out = _json_changes(data, _sp)
                 _out["schema_version"] = 2
-                _out["tf_version"] = PHONOAGENT_VERSION
+                _out["tf_version"] = AUTOZT_VERSION
                 print(json.dumps(_out, ensure_ascii=False, indent=2))
                 return
-            _out = {"schema_version": 2, "tf_version": PHONOAGENT_VERSION}
+            _out = {"schema_version": 2, "tf_version": AUTOZT_VERSION}
             _out.update(data)
             if a.errors_only:                       # v2.0：只留 FAIL 材料/步骤
                 _out = _json_errors_only(_out)

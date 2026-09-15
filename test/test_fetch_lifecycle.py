@@ -10,13 +10,13 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-import phonoagent
-from phonoagent import workflow
+import autozt
+from autozt import workflow
 
 
 def engine(version):
     if version == "v2":
-        return workflow, phonoagent
+        return workflow, autozt
     path = ROOT.parent / "taskflow/versions/v1.0/tf"
     loader = importlib.machinery.SourceFileLoader("tf_fetch_v1", str(path))
     spec = importlib.util.spec_from_loader(loader.name, loader)

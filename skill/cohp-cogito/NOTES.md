@@ -64,13 +64,13 @@ ISYM = 2
 
 ```bash
 # 1) 跑完 band-dft-cpu 到 step3（PBE 静态 + WAVECAR）
-phonoagent -tt band-dft-cpu -p Pb2Sb2Te5 start          # 逐步推进到 S3_WAVECAR
+autozt -tt band-dft-cpu -p Pb2Sb2Te5 start          # 逐步推进到 S3_WAVECAR
 
 # 2) 切到本技能
-phonoagent -tt cohp-cogito -p Pb2Sb2Te5 start           # S1_COGITO -> S2_analyze -> S3_post
+autozt -tt cohp-cogito -p Pb2Sb2Te5 start           # S1_COGITO -> S2_analyze -> S3_post
 
 # 3) 看结果
-phonoagent -tt cohp-cogito -p Pb2Sb2Te5 fetch
+autozt -tt cohp-cogito -p Pb2Sb2Te5 fetch
 cat <result>/step3_post/icohp_report.md
 ```
 

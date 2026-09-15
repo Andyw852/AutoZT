@@ -88,7 +88,7 @@ requires:
   exe: [phono3py, ShengBTE]  # phono3py(默认) / ShengBTE(SOLVER=shengbte，见 README)
 # =============================================================================
 # 自描述（schema 2，v1.0）—— io_schema / flow / corrections
-#   只给人和工具看（论文图 2 的技能卡片、phonoagent schema 校验），**不参与运行期装配**。
+#   只给人和工具看（论文图 2 的技能卡片、autozt schema 校验），**不参与运行期装配**。
 #   渲染： tf skill show kl-mace-gpu        机器可读： tf skill show kl-mace-gpu --json
 # =============================================================================
 io_schema:

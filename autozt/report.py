@@ -5,7 +5,7 @@
 
 import os
 
-from phonoagent import i18n as _i18n  # noqa: E402
+from autozt import i18n as _i18n  # noqa: E402
 import sys
 import re
 import json
@@ -27,13 +27,13 @@ import random
 from collections import Counter, defaultdict
 from concurrent.futures import ThreadPoolExecutor
 
-from phonoagent.bootstrap import REASON_MAX
+from autozt.bootstrap import REASON_MAX
 
 # ===== 来自 07_render.py =====
 # -*- coding: utf-8 -*-
 # 07_render —— 状态表/详情渲染 + 材料/步骤查找
 #
-# 本分片由 phonoagent/__init__.py 装配器在单一命名空间里按顺序执行；
+# 本分片由 autozt/__init__.py 装配器在单一命名空间里按顺序执行；
 # 函数之间的引用按名字解析（与原单文件一致），分片间无需 import。
 # 内容清单（按原文件行号）：
 #   L2491  _cell_word
@@ -73,7 +73,7 @@ def _cell_word(s):
     if k == "FAIL":
         return "error"
     if k == "SCANCEL":
-        return "scancel"   # v1.4：phonoagent stop 取消，auto 不会重跑
+        return "scancel"   # v1.4：autozt stop 取消，auto 不会重跑
     # patch_cell_word：DAG 调度后同时有多个步骤可启动，把"能开火"和
     # "被依赖卡住"分开显示，不然汇总表里全是 waiting，看不出该动哪个。
     if k == "WAIT":
@@ -82,7 +82,7 @@ def _cell_word(s):
 
 # ===== _short_reason (原 L2525-L2530) =====
 def _short_reason(info, limit=REASON_MAX):
-    from phonoagent import REASON_MAX
+    from autozt import REASON_MAX
     """squeue/qstat 给的原因：去外层括号、压掉空白、截断到 limit 个字符。"""
     r = " ".join(str(info or "").split())
     while len(r) >= 2 and r[0] == "(" and r[-1] == ")":
@@ -284,7 +284,7 @@ def render_table(data):
     scl = [(m["tt"], m["name"], s["label"]) for _, m in all_mats
            for s in m["steps"] if s["kind"] == "SCANCEL"]
     if scl:
-        print("\nSCANCELLED（phonoagent stop 取消，auto 不会重跑；重跑用 "
+        print("\nSCANCELLED（autozt stop 取消，auto 不会重跑；重跑用 "
               "-status scancel start / rerun）:")
         for tt, name, lab in scl:
             print("  [%-3s] %-22s %s" % (tt, name, lab))
@@ -343,7 +343,7 @@ def find_material(data, name):
 
 # ===== _step_seq_match (原 L2786-L2799) =====
 def _step_seq_match(s, n):
-    from phonoagent import _seq_key
+    from autozt import _seq_key
     """v1.8：整数 -j N 匹配逻辑步骤号 N。
     - seq 恰为 N（整数）→ 命中；
     - 名字 stepN 开头，但**排除 stepN.M 子步**（step2 命中，step2.1 不命中）；
@@ -360,7 +360,7 @@ def _step_seq_match(s, n):
 
 # ===== _find_by_dotted (原 L2802-L2813) =====
 def _find_by_dotted(steps, jname):
-    from phonoagent import _name_seq, _seq_key, step_seq
+    from autozt import _name_seq, _seq_key, step_seq
     """v1.8：-j 2.1 这类点号 token，按 seq / 名字序号精确匹配。命中返回步骤，否则 None。"""
     want = _seq_key(jname)
     if want is None:
@@ -406,7 +406,7 @@ def find_step(m, jname):
 # -*- coding: utf-8 -*-
 # 08_assets —— 技能资源定位 / step.conf 构建
 #
-# 本分片由 phonoagent/__init__.py 装配器在单一命名空间里按顺序执行；
+# 本分片由 autozt/__init__.py 装配器在单一命名空间里按顺序执行；
 # 函数之间的引用按名字解析（与原单文件一致），分片间无需 import。
 # 内容清单（按原文件行号）：
 #   L2839  _skill_asset_dirs
@@ -422,7 +422,7 @@ def find_step(m, jname):
 
 # ===== _skill_asset_dirs (原 L2839-L2904) =====
 def _skill_asset_dirs(t, m, base, sname=None):
-    from phonoagent import COMMON_POOL_DIR
+    from autozt import COMMON_POOL_DIR
     """一个技能根目录下的查找顺序（模板目录布局，v1.3）。
 
     template_layout: shared（缺省）
@@ -433,7 +433,7 @@ def _skill_asset_dirs(t, m, base, sname=None):
         <技能>/templates/<步骤名>/<文件>  →  <技能>/templates/<文件>
                                           →  <技能>/<文件>
         每个步骤先找自己的目录；步骤目录里没有才回落到公共模板。
-        不知道是哪个步骤时（如 phonoagent hpc 查模板齐不齐），所有步骤目录都算命中。
+        不知道是哪个步骤时（如 autozt hpc 查模板齐不齐），所有步骤目录都算命中。
 
     两种布局都保留最后的平铺兜底，所以模板直接摊在技能根目录下依然能用。
     """
@@ -499,7 +499,7 @@ def _same_file(a, b):
 
 # ===== find_asset (原 L2918-L2993) =====
 def find_asset(cfg, t, m, fname, sname=None):
-    from phonoagent import _PKG_DIR, _PKG_ROOT, _SKILL_ONLY, step_cfg
+    from autozt import _PKG_DIR, _PKG_ROOT, _SKILL_ONLY, step_cfg
     """v3 资源查找链：材料/<技能>/逻辑名（v1.6 最优先）→ project_setting/逻辑名
     → project_setting/映射名 → skill_dir 内按 _skill_asset_dirs 的顺序（v1.3）。
     命中返回本地路径，否则 None。
@@ -518,7 +518,7 @@ def find_asset(cfg, t, m, fname, sname=None):
         dirs, troot = [], os.path.join(root, tdir)
         if sname:
             dirs.append(os.path.join(troot, str(sname)))
-        else:      # 不指定步骤（如 phonoagent hpc 查模板齐不齐）：所有步骤目录都算命中
+        else:      # 不指定步骤（如 autozt hpc 查模板齐不齐）：所有步骤目录都算命中
             dirs.extend(sorted(d for d in glob.glob(os.path.join(troot, "*"))
                                if os.path.isdir(d)))
         dirs.append(troot)
@@ -544,7 +544,7 @@ def find_asset(cfg, t, m, fname, sname=None):
     if hpc_key:
         for _sdir in (os.path.join(_PKG_ROOT, "setting"),
                       os.path.join(_PKG_DIR, "setting"),
-                      os.path.expanduser("~/.config/phonoagent/setting")):
+                      os.path.expanduser("~/.config/autozt/setting")):
             _hroot = os.path.join(_sdir, str(hpc_key))
             for _d in _proj_dirs(_hroot):
                 cands.append(os.path.join(_d, fname))
@@ -576,7 +576,7 @@ def find_asset(cfg, t, m, fname, sname=None):
 
 # ===== _stepconf_mod (原 L3000-L3013) =====
 def _stepconf_mod(cfg, t, m):
-    from phonoagent import _STEPCONF_MOD
+    from autozt import _STEPCONF_MOD
     """按技能加载该技能目录里的 stepconf.py（与 dim_common.py 一样每技能一份）。"""
     key = t.get("key")
     if key in _STEPCONF_MOD:
@@ -593,7 +593,7 @@ def _stepconf_mod(cfg, t, m):
 
 # ===== step_conf_sources (原 L3016-L3055) =====
 def step_conf_sources(cfg, t, m, sname):
-    from phonoagent import STEP_CONF, _PKG_ROOT, _SKILL_ONLY
+    from autozt import STEP_CONF, _PKG_ROOT, _SKILL_ONLY
     """收集该步骤的 step.conf 分层来源，低优先级在前。
     顺序：skill 出厂默认 → 项目 templates/step.conf → 项目 templates/<步骤>/step.conf
     （材料/<技能>/ 下的同名文件优先级最高，最后叠加）。"""
@@ -635,7 +635,7 @@ def step_conf_sources(cfg, t, m, sname):
 
 # ===== _cluster_conda_step_conf (原 L3058-L3092) =====
 def _cluster_conda_step_conf(m, hpc_name=None):
-    from phonoagent import _load_yaml_file, pkg_setting_path
+    from autozt import _load_yaml_file, pkg_setting_path
     """从集群 setting/<name>.yaml 读 conda_sh/conda_env/mace_model_dir，拼成 step.conf
     片段（最低优先级；仅 MACE 技能调用，因为只有它们的 gen 脚本声明 CONDA_SH/CONDA_ENV/
     MACE_MODEL_DIR）。切超算 = 改 hpc.yaml 的 name，这些键自动跟着集群走；项目
@@ -673,7 +673,7 @@ def _cluster_conda_step_conf(m, hpc_name=None):
 
 # ===== build_step_conf (原 L3095-L3126) =====
 def build_step_conf(cfg, t, m, sname):
-    from phonoagent import step_cfg
+    from autozt import step_cfg
     """把分层 step.conf 合并成一份带来源注释的文本。无任何来源时返回 None。"""
     mod = _stepconf_mod(cfg, t, m)
     srcs = step_conf_sources(cfg, t, m, sname)
@@ -708,7 +708,7 @@ def build_step_conf(cfg, t, m, sname):
 
 # ===== _dim_mod (原 L3132-L3173) =====
 def _dim_mod(cfg, t):
-    from phonoagent import COMMON_POOL_DIR, _DIM_MOD, _PKG_ROOT
+    from autozt import COMMON_POOL_DIR, _DIM_MOD, _PKG_ROOT
     """按技能加载 dim_common.py（band 在技能根，ke 在 step1_opt/ 等子目录）。"""
     key = t.get("key")
     if key in _DIM_MOD:
@@ -789,7 +789,7 @@ def fill_local_dim(cfg, data, types=None):
 
 # ===== cmd_conf (原 L3213-L3250) =====
 def cmd_conf(cfg, data, proj, jname, sets=None):
-    from phonoagent import STEP_CONF
+    from autozt import STEP_CONF
     """查看/修改某步骤的 step.conf。--set 一律写进【本步的项目文件】。"""
     t, m = find_material(data, proj)
     s = find_step(m, jname)
@@ -832,7 +832,7 @@ def cmd_conf(cfg, data, proj, jname, sets=None):
 # -*- coding: utf-8 -*-
 # 10_summary —— status / summary 命令
 #
-# 本分片由 phonoagent/__init__.py 装配器在单一命名空间里按顺序执行；
+# 本分片由 autozt/__init__.py 装配器在单一命名空间里按顺序执行；
 # 函数之间的引用按名字解析（与原单文件一致），分片间无需 import。
 # 内容清单（按原文件行号）：
 #   L3614  find_uninited
@@ -847,7 +847,7 @@ def cmd_conf(cfg, data, proj, jname, sets=None):
 
 # ===== find_uninited (原 L3614-L3635) =====
 def find_uninited(cfg):
-    from phonoagent import discover_local, find_ps_dir
+    from autozt import discover_local, find_ps_dir
     """project_roots 下有 POSCAR 但向上找不到 project_setting/tf_*.yaml 的材料目录
     （= 新加进来还没 init 的材料）。
     v1.2 之前只扫已有段的 local_root：新建体系（如 Mg2C60 直接放项目根下）
@@ -1035,7 +1035,7 @@ def cmd_summary(data, diff=False, state_path=None):
 
     diff=True 时：与 state_path 里的结构化快照对比，无变化则不输出（token≈0）；
     有变化（或首次）才输出汇总 + 「变更:」步骤级清单（谁从什么变到什么），并写回
-    快照——agent 无需再跑 phonoagent list / squeue 去猜哪里变了。
+    快照——agent 无需再跑 autozt list / squeue 去猜哪里变了。
     """
     if diff and state_path:
         new_snap = _summary_snapshot(data)
@@ -1210,7 +1210,7 @@ def cmd_diagnose(cfg, data, mname, jname):
         # 库不在/加载失败都不影响 diagnose 本身——空列表即可。
         corr = []
         try:
-            from phonoagent import suggest_for_diag
+            from autozt import suggest_for_diag
             corr = suggest_for_diag(
                 cfg, material=m.get("name"), skill=t.get("key"),
                 step=s.get("name"), label=s.get("label"), workdir=s.get("dir"),
@@ -1242,7 +1242,7 @@ def cmd_diagnose(cfg, data, mname, jname):
     }
 
 
-# ===== json 裁剪/分页（v2.0：phonoagent json 批分析时控 token）=====
+# ===== json 裁剪/分页（v2.0：autozt json 批分析时控 token）=====
 def _json_errors_only(data):
     """json --errors-only：只保留含 FAIL 步骤的材料，且每材料只留 FAIL 步骤。"""
     out = dict(data)

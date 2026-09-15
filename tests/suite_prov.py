@@ -11,9 +11,9 @@ import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
-from phonoagent import remote_gen, PROV_NAME, PROV_DIR  # noqa: E402
-from phonoagent import prov as P                       # noqa: E402
-from phonoagent import cmd_prove                       # noqa: E402
+from autozt import remote_gen, PROV_NAME, PROV_DIR  # noqa: E402
+from autozt import prov as P                       # noqa: E402
+from autozt import cmd_prove                       # noqa: E402
 
 FAILS = []
 BASE = os.path.join(ROOT, "tmp", "_prov_test")
@@ -107,13 +107,13 @@ with open(os.path.join(loc, "POSCAR"), "a", encoding="utf-8") as f:
 v2 = P.verify_provenance(prov, [loc, skill])
 ok(any(x[1] == "changed" for x in v2), "改动后能查出来（changed）")
 
-print("[3] 开关：PHONOAGENT_PROVENANCE=0 时不写档案")
-os.environ["PHONOAGENT_PROVENANCE"] = "0"
+print("[3] 开关：AUTOZT_PROVENANCE=0 时不写档案")
+os.environ["AUTOZT_PROVENANCE"] = "0"
 shutil.rmtree(mat, ignore_errors=True)
 os.makedirs(mat, exist_ok=True)
 okr2, _ = remote_gen(cfg, t, m, "step1")
 ok(okr2 and not os.path.isfile(ppath), "关掉后不再写档案（gen 仍成功）")
-os.environ.pop("PHONOAGENT_PROVENANCE")
+os.environ.pop("AUTOZT_PROVENANCE")
 ok(P.provenance_enabled({}) is True and P.provenance_enabled({"provenance": False}) is False,
    "开关解析正常（缺省开 / tf.yaml 可关）")
 

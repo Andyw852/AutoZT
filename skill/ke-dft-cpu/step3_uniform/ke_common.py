@@ -145,7 +145,7 @@ def apply_parallel_tags(incar_path):
 # 却按裸 GGA 非自旋极化算，两者不是同一个哈密顿量。这里从上游步骤把这些标签接过来。
 #
 # ★ 上游 ISPIN!=2 且没有 LDAU 时【完全不动 INCAR】，非磁无 U 体系零改动。
-# ★ 关掉：export PHONOAGENT_KE_NO_SCF_INHERIT=1
+# ★ 关掉：export AUTOZT_KE_NO_SCF_INHERIT=1
 SCF_SPIN_TAGS = ("ISPIN", "MAGMOM", "NUPDOWN", "LMAXMIX")
 SCF_U_TAGS = ("LDAU", "LDAUTYPE", "LDAUL", "LDAUU", "LDAUJ", "LDAUPRINT")
 SCF_SRC_DIRS = ("step2_bandgap/step2.1_static", "step1_opt",
@@ -164,7 +164,7 @@ def find_scf_source(cwd):
 
 def inherit_scf_tags(incar_path, cwd, with_u=True, label=""):
     """把上游的自旋/U 标签注入已渲染好的 INCAR。返回注入的键列表（空 = 没动）。"""
-    if os.environ.get("PHONOAGENT_KE_NO_SCF_INHERIT"):
+    if os.environ.get("AUTOZT_KE_NO_SCF_INHERIT"):
         return []
     src = find_scf_source(cwd)
     if src is None:

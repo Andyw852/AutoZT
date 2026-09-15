@@ -59,7 +59,7 @@ optional_steps:
          gen: "plot_phonon_band.py", check: plot, run: gen, gen_need: [],
          done_marker: phonon_band_summary.json, fetch_all: true}
 
-  # FC_CUTOFF 收敛性检查（default: false，不自动跑；phonoagent start -j 按需启用）。
+  # FC_CUTOFF 收敛性检查（default: false，不自动跑；autozt start -j 按需启用）。
   # 对每个 cutoff 重拟合 fc2 + mesh(60) + band，写 cutoff_conv_summary.json。
   cutoff_conv:
     default: false

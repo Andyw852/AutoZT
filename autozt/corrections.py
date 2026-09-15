@@ -3,7 +3,7 @@
 
 设计（2026-09-14 建议 1.1，详见 skill/_common/_corrections/README.md）：
   · handler = 一个"诊断特征 → 该动什么"的可枚举单元（skill/_common/_corrections/*.py）；
-  · 本模块负责把它们**按需加载**（tf 启动时不加载，只有 phonoagent schema / tf diagnose /
+  · 本模块负责把它们**按需加载**（tf 启动时不加载，只有 autozt schema / tf diagnose /
     tf correct 真正需要时才 import），并做"诊断 ↔ handler"的匹配；
   · 匹配纯字符串、纯本地，不连超算；只有 handler.apply() 会碰远端输入文件，
     且那一步由 tf correct -y 显式触发。
@@ -37,7 +37,7 @@ def correction_dirs(cfg):
     顺序：① 各技能搜索路径下的公共池 _common/_corrections（全局库）
           ② 每个已发现技能的私有 <技能目录>/_corrections（只对该技能生效）
     同名 handler 先命中者生效（全局库在前），避免某技能偷偷改掉全局纠错行为。"""
-    from phonoagent import skill_search_dirs
+    from autozt import skill_search_dirs
     out, seen = [], set()
 
     def _add(d, owner):
@@ -180,12 +180,12 @@ def load_correction_handlers(cfg, verbose=False):
 
 
 def correction_handler_names(cfg):
-    """已注册 handler 的名字列表（phonoagent schema 校验 corrections 引用时用）。"""
+    """已注册 handler 的名字列表（autozt schema 校验 corrections 引用时用）。"""
     return sorted(load_correction_handlers(cfg or {}).keys())
 
 
 def correction_issues(cfg):
-    """加载期产生的问题（供 phonoagent schema 打印）。"""
+    """加载期产生的问题（供 autozt schema 打印）。"""
     dirs = correction_dirs(cfg or {})
     key = tuple(d for d, _o in dirs)
     hit = _CACHE.get(key)
@@ -300,7 +300,7 @@ def cmd_correct(cfg, data, proj, job=None, yes=False, dry=False):
 
     默认只打印命中情况 + 建议命令（只读）；加 -y 才执行 handler.apply()
     （只允许改输入文件；作业在跑时拒绝执行）。返回 0/1。"""
-    from phonoagent import find_material, find_step, _add_diag_codes
+    from autozt import find_material, find_step, _add_diag_codes
     _add_diag_codes(data)
     t, m = find_material(data, proj)
     if m is None or t is None:
@@ -359,7 +359,7 @@ def cmd_correct(cfg, data, proj, job=None, yes=False, dry=False):
                 continue
             if running:
                 print("      ✗ 拒绝执行 apply：该步骤有作业在跑（job=%s）。"
-                      "先 phonoagent stop 再改输入。" % (jobinfo.get("id") or "?"))
+                      "先 autozt stop 再改输入。" % (jobinfo.get("id") or "?"))
                 continue
             try:
                 rc, changed = h.apply(ctx, cfg)
@@ -388,4 +388,4 @@ def cmd_correct(cfg, data, proj, job=None, yes=False, dry=False):
 def cmd_correct_usage():
     return ("用法: tf correct -p <材料> [-j <步骤>] [-y]\n"
             "  只读列出命中的纠错 handler 与建议命令；-y 才执行 handler.apply。\n"
-            "  ★ 永不提交作业、永不删目录：提交走 phonoagent start，重生成走 phonoagent retry/rerun。")
+            "  ★ 永不提交作业、永不删目录：提交走 autozt start，重生成走 autozt retry/rerun。")

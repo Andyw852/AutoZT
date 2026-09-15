@@ -6,8 +6,8 @@
 #   */10 * * * * "$(cd "$(dirname "$0")" /home/wangchao/software/taskflow/home/wangchao/software/taskflow pwd)"/monitor.sh >> "$(cd "$(dirname "$0")" /home/wangchao/software/taskflow/home/wangchao/software/taskflow pwd)"/.tf_monitor.out 2>&1
 #
 # 省 token 的关键：
-#   1. phonoagent auto on 的推进日志静默到 .tf_monitor.log（不刷屏）；
-#   2. phonoagent summary --diff 无变化时输出 0 字节，只有状态真变（有作业完成/新失败/
+#   1. autozt auto on 的推进日志静默到 .tf_monitor.log（不刷屏）；
+#   2. autozt summary --diff 无变化时输出 0 字节，只有状态真变（有作业完成/新失败/
 #      排队变化）才打印几行汇总——agent/人只看这最后几行。
 # =============================================================================
 cd "$(cd "$(dirname "$0")" /home/wangchao/software/taskflow/home/wangchao/software/taskflow pwd)" || exit 1
@@ -19,13 +19,13 @@ export PATH="/home/wangchao/.local/bin:$PATH"
 (
     cd "$(cd "$(dirname "$0")" /home/wangchao/software/taskflow/home/wangchao/software/taskflow pwd)"-v2.0 || exit 1
     /home/wangchao/bin/hanhai25-connect >> tmp/ke_auto_monitor.log 2>&1 || exit 1
-    PHONOAGENT_OP_WORKERS=8 timeout 600 python3 bin/phonoagent -tt ke-dft-cpu -p Mg4C60,Mg4C60_monolayer auto on >> tmp/ke_auto_monitor.log 2>&1
-    timeout 600 python3 bin/phonoagent -tt ke-dft-cpu -p Mg4C60,Mg4C60_monolayer summary --diff
+    AUTOZT_OP_WORKERS=8 timeout 600 python3 bin/autozt -tt ke-dft-cpu -p Mg4C60,Mg4C60_monolayer auto on >> tmp/ke_auto_monitor.log 2>&1
+    timeout 600 python3 bin/autozt -tt ke-dft-cpu -p Mg4C60,Mg4C60_monolayer summary --diff
 )
 
 
 # 1) 推进流水线（DAG 自动推进：按依赖找就绪步骤，S0 FAIL 不再阻塞 S3；FAIL 只报告不动），日志静默
-PHONOAGENT_OP_WORKERS=8 timeout 600 phonoagent auto on >> .tf_monitor.log 2>&1
+AUTOZT_OP_WORKERS=8 timeout 600 autozt auto on >> .tf_monitor.log 2>&1
 
 # 2) 采集 + 变更检测：无变化 0 输出，有变化才打印汇总 + FAIL 清单
-PHONOAGENT_OP_WORKERS=8 timeout 600 phonoagent summary --diff 2>&1
+AUTOZT_OP_WORKERS=8 timeout 600 autozt summary --diff 2>&1

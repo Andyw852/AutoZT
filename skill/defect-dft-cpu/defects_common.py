@@ -367,7 +367,7 @@ def guarded_sbatch(workdir, jobname, submit_file="submit.sh", user=None,
                    lock_timeout=120, vis_window=60):
     """带锁防重复 sbatch（纯标准库，登录节点可跑）。
 
-    与 phonoagent 远端提交守卫等价：flock 目录锁串行化，锁内实时 squeue 按 jobname
+    与 autozt 远端提交守卫等价：flock 目录锁串行化，锁内实时 squeue 按 jobname
     匹配所有活动态，查询失败 fail closed；再用持久回执 + sacct 兜住 sbatch
     可见性延迟。返回 (ok, msg)：ok=True 表示已提交或已存在（幂等，调用方继续），
     ok=False 表示查询/提交失败，调用方应告警（不重试不改状态）。

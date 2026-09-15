@@ -1,0 +1,44 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""taskflow v2 入口脚本（等价于原 versions/v1.0/tf）。"""
+import os
+import sys
+
+# 让 bin/autozt 直接运行（不经安装）时也能找到 tfpkg 包
+_PKG_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _PKG_ROOT not in sys.path:
+    sys.path.insert(0, _PKG_ROOT)
+
+# mcp 子命令在参数解析之前拦截：MCP 客户端用 stdio JSON-RPC，
+# --list-tools/--call 是给人和测试用的，不该被主解析器当材料名。
+import sys as _sys
+if 'mcp' in _sys.argv[1:]:
+    _i = _sys.argv.index('mcp')
+    from autozt import mcp as _mcp_intercept
+    _sys.exit(_mcp_intercept.main(_sys.argv[_i + 1:]))
+
+# 英文帮助：AUTOZT_LANG=en（或 --lang en）时用 USAGE_EN，其余保持中文。
+# 放在最前面拦截，避免 argparse 的 --help 抢先输出中文。
+import os as _os, sys as _sys2
+_lang = (_os.environ.get('AUTOZT_LANG') or '').lower()
+if '--lang' in _sys2.argv:
+    try:
+        _lang = _sys2.argv[_sys2.argv.index('--lang') + 1].lower()
+    except IndexError:
+        pass
+if _lang.startswith('en') and ('--help' in _sys2.argv or '-h' in _sys2.argv):
+    from autozt import USAGE_EN as _en
+    print(_en)
+    _sys2.exit(0)
+
+from autozt import main
+
+if __name__ == "__main__":
+    try:
+        main()
+        sys.stdout.flush()
+    except BrokenPipeError:
+        devnull = os.open(os.devnull, os.O_WRONLY)
+        os.dup2(devnull, sys.stdout.fileno())
+        sys.exit(0)
+

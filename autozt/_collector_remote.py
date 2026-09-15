@@ -9,13 +9,13 @@ def natkey(s):
 #   1) 进程内 memo：同一轮采集里同一文件尾只读一次（消除三段弛豫/振荡判据的重复读）。
 #   2) 跨进程磁盘缓存：key=(路径,mtime_ns,ctime_ns,size,nbytes)。任一写操作都会改变
 #      mtime/ctime/size 三者之一，命中即内容未变，无陈旧风险——watch 每 300 秒的
-#      "无变化"轮从此近乎零 IO。PHONOAGENT_READ_CACHE=0 关闭；路径/上限可用环境变量调。
-_READ_CACHE_DISABLE = os.environ.get("PHONOAGENT_READ_CACHE") == "0"
+#      "无变化"轮从此近乎零 IO。AUTOZT_READ_CACHE=0 关闭；路径/上限可用环境变量调。
+_READ_CACHE_DISABLE = os.environ.get("AUTOZT_READ_CACHE") == "0"
 _READ_CACHE_PATH = os.path.expanduser(
-    os.environ.get("PHONOAGENT_READ_CACHE_PATH") or "~/.cache/taskflow/read_cache.json")
+    os.environ.get("AUTOZT_READ_CACHE_PATH") or "~/.cache/taskflow/read_cache.json")
 try:
-    _READ_CACHE_MAX_ENTRIES = int(os.environ.get("PHONOAGENT_READ_CACHE_MAX", "2048") or 2048)
-    _READ_CACHE_MAX_BYTES = int(os.environ.get("PHONOAGENT_READ_CACHE_BYTES", "134217728") or 134217728)
+    _READ_CACHE_MAX_ENTRIES = int(os.environ.get("AUTOZT_READ_CACHE_MAX", "2048") or 2048)
+    _READ_CACHE_MAX_BYTES = int(os.environ.get("AUTOZT_READ_CACHE_BYTES", "134217728") or 134217728)
 except (TypeError, ValueError):
     _READ_CACHE_MAX_ENTRIES, _READ_CACHE_MAX_BYTES = 2048, 134217728
 
@@ -413,7 +413,7 @@ def ck_relax_skip(d, sc):
             bad = gate("a")
             if bad:
                 return False, ("a 轨迹异常，不放行 b：%s → 按对策处理后 "
-                               "phonoagent retry 本段" % bad)
+                               "autozt retry 本段" % bad)
             return True, "ran（未收敛，流转 b）"
         if ran("b") or ran("c"):
             return True, "后续段已跑"

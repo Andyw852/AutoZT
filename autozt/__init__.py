@@ -1,9 +1,9 @@
-__version__ = "1.1.0"
-__agent_name__ = "PhonoAgent"
-__cli_name__ = "phonoagent"
+__version__ = "1.2.0"
+__agent_name__ = "AutoZT"
+__cli_name__ = "autozt"
 
 # -*- coding: utf-8 -*-
-"""phonoagent —— taskflow v2 包（深模块化重构完成）。
+"""autozt —— taskflow v2 包（深模块化重构完成）。
 
 架构：真深模块（real deep modules，小接口 + 深实现）。
   原 versions/v1.0/tf 是 7463 行单体脚本。v2.0 先按职责切成 _slice/ 分片做
@@ -18,33 +18,33 @@ __cli_name__ = "phonoagent"
   - cli.py        命令入口（原 17_cli）
   - yamlmini.py   YAML 解析器
 
-  跨模块引用在函数内用 from phonoagent import ... 延迟解析（调用时才解析，避开
+  跨模块引用在函数内用 from autozt import ... 延迟解析（调用时才解析，避开
   模块级 import 环）；本文件把各模块的名字全部注入包命名空间，保证
-  from phonoagent import X 在调用时都能命中。两个历史循环依赖环均已消除。
+  from autozt import X 在调用时都能命中。两个历史循环依赖环均已消除。
 """
 import os
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _NS = globals()
 
-# 路径常量：_PKG_ROOT = 包根（setting/ skill/ 所在），_PKG_DIR = phonoagent 目录，
+# 路径常量：_PKG_ROOT = 包根（setting/ skill/ 所在），_PKG_DIR = autozt 目录，
 # _SLICE_DIR = _slice 目录（已废弃，仅保留兼容）。
 _NS["_PKG_ROOT"] = os.path.normpath(os.path.dirname(_HERE))
 _NS["_PKG_DIR"] = os.path.normpath(_HERE)
 _NS["_SLICE_DIR"] = os.path.normpath(os.path.join(_HERE, "_slice"))
 
-# 导入全部真深模块。bootstrap 必须最先（report 模块级 from phonoagent.bootstrap
+# 导入全部真深模块。bootstrap 必须最先（report 模块级 from autozt.bootstrap
 # import REASON_MAX 依赖它；其余模块无模块级跨模块依赖，顺序无关）。
 from . import (  # noqa: E402
     bootstrap, collect, data, workflow, report, ops, cli, yamlmini,
     # v1.0（加技能友好化）新增两个模块：
     #   skillspec   —— skill.yaml 扩展段（io_schema / flow / corrections）的规范、
-    #                  校验与 phonoagent schema 渲染（建议 1.2 / 1.3）
+    #                  校验与 autozt schema 渲染（建议 1.2 / 1.3）
     #   corrections —— _corrections/ 纠错 handler 库的加载、匹配与 tf correct（建议 1.1）
     #   history     —— 步骤状态的时间序列（history.jsonl）+ tf history（W5–8）
     #   prov        —— 每步 provenance.json（输入 sha256 / 参数 / 工具版本）+ tf prove
-    #   agentgate   —— LLM 动作网关（风险分档 + 一次性批准令牌）+ 审计流水 phonoagent act（P0-1）
-    #   session     —— 会话导出（操作历史 + provenance + 审计打包）phonoagent session export（P1-7）
+    #   agentgate   —— LLM 动作网关（风险分档 + 一次性批准令牌）+ 审计流水 autozt act（P0-1）
+    #   session     —— 会话导出（操作历史 + provenance + 审计打包）autozt session export（P1-7）
     skillspec, corrections, history, prov, agentgate, session,
 )
 _MODULES = (bootstrap, collect, data, workflow, report, ops, cli, yamlmini,
@@ -66,12 +66,12 @@ for _mod in _MODULES:
         _NS[_nm] = _obj
 del _mod, _nm, _obj
 
-# COLLECTOR（远端采集脚本）已独立成 phonoagent/_collector_remote.py —— 真实 .py 文件。
+# COLLECTOR（远端采集脚本）已独立成 autozt/_collector_remote.py —— 真实 .py 文件。
 # 这里读回成字符串注入命名空间，运行时字节与原单体脚本里的 r'''...''' 字面量一致。
 with open(os.path.join(_HERE, "_collector_remote.py"), encoding="utf-8") as _fh:
     _NS["COLLECTOR"] = _fh.read()
 
-# v2.0：记录真实入口路径（bin/phonoagent），供 --version / 裸 tf 的「程序:」行显示。
-_prog = os.path.join(os.path.dirname(_HERE), "bin", "phonoagent")
+# v2.0：记录真实入口路径（bin/autozt），供 --version / 裸 tf 的「程序:」行显示。
+_prog = os.path.join(os.path.dirname(_HERE), "bin", "autozt")
 _NS["_PROG_PATH"] = (os.path.realpath(_prog)
                      if os.path.isfile(_prog) else _NS["__file__"])

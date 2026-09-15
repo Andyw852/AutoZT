@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""phonoagent —— AutoZT 的兼容入口（等价于 autozt，软件曾用名）。"""
+"""az —— AutoZT 的短命令（等价于 autozt）。"""
 import os, runpy, sys
 _here = os.path.dirname(os.path.abspath(__file__))
 _entry = os.path.join(_here, "autozt")

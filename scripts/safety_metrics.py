@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""safety_metrics.py —— PhonoAgent 的三项安全/复现指标（论文里可引用的数字）。
+"""safety_metrics.py —— AutoZT 的三项安全/复现指标（论文里可引用的数字）。
 
 指标定义
   1. interception_rate  破坏性/变更动作在 agent 会话下的**拦截率**（应 100%）
@@ -22,21 +22,21 @@ import subprocess
 import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-PROG = os.path.join(ROOT, "bin", "phonoagent")
+PROG = os.path.join(ROOT, "bin", "autozt")
 sys.path.insert(0, ROOT)
-from phonoagent import mcp as M  # noqa: E402
+from autozt import mcp as M  # noqa: E402
 
 
 def _run(args, actor="mcp", timeout=300, strict=None):
     env = dict(os.environ)
     if actor:
-        env["PHONOAGENT_ACTOR"] = actor
+        env["AUTOZT_ACTOR"] = actor
     else:
-        env.pop("PHONOAGENT_ACTOR", None)
+        env.pop("AUTOZT_ACTOR", None)
     if strict is None:
-        env.pop("PHONOAGENT_AGENT_STRICT", None)
+        env.pop("AUTOZT_AGENT_STRICT", None)
     else:
-        env["PHONOAGENT_AGENT_STRICT"] = str(strict)
+        env["AUTOZT_AGENT_STRICT"] = str(strict)
     p = subprocess.run([sys.executable, PROG] + args, capture_output=True,
                        text=True, env=env, cwd=ROOT, timeout=timeout)
     return p.returncode, (p.stdout or "") + (p.stderr or "")
@@ -134,32 +134,32 @@ def ablation():
                      "readonly_still_ok": _run(["skills"], actor="mcp",
                                                strict=str(strict))[0] == 0})
     # 第三臂：只读档下暴露多少工具、危险工具能否被调用
-    env_backup = os.environ.get("PHONOAGENT_MCP_READONLY")
-    os.environ["PHONOAGENT_MCP_READONLY"] = "1"
+    env_backup = os.environ.get("AUTOZT_MCP_READONLY")
+    os.environ["AUTOZT_MCP_READONLY"] = "1"
     try:
         import importlib
-        M = importlib.import_module("phonoagent.mcp")
+        M = importlib.import_module("autozt.mcp")
         exposed = len(M._tools_list())
         refused = M.call_tool("clean_material", {"material": "Si_x"})
     finally:
         if env_backup is None:
-            os.environ.pop("PHONOAGENT_MCP_READONLY", None)
+            os.environ.pop("AUTOZT_MCP_READONLY", None)
         else:
-            os.environ["PHONOAGENT_MCP_READONLY"] = env_backup
+            os.environ["AUTOZT_MCP_READONLY"] = env_backup
     readonly_arm = {"tools_exposed": exposed,
                     "hazardous_call_refused": bool(refused.get("isError"))}
     # 只读档下"只读任务"是否仍能完成（用 list_skills 作代表：它不需要集群）
-    os.environ["PHONOAGENT_MCP_READONLY"] = "1"
+    os.environ["AUTOZT_MCP_READONLY"] = "1"
     try:
         import importlib
-        M2 = importlib.import_module("phonoagent.mcp")
+        M2 = importlib.import_module("autozt.mcp")
         ok_call = M2.call_tool("list_skills", {})
         readonly_arm["readonly_task_ok"] = (not ok_call.get("isError"))
     finally:
         if env_backup is None:
-            os.environ.pop("PHONOAGENT_MCP_READONLY", None)
+            os.environ.pop("AUTOZT_MCP_READONLY", None)
         else:
-            os.environ["PHONOAGENT_MCP_READONLY"] = env_backup
+            os.environ["AUTOZT_MCP_READONLY"] = env_backup
     with_gate, without_gate = rows[0], rows[1]
     return {"rows": rows, "readonly_profile": readonly_arm,
             "gateway_blocks_hazardous": with_gate["blocked"] and not with_gate["executed"],
@@ -201,7 +201,7 @@ def main():
         print(json.dumps(rep, ensure_ascii=False, indent=1))
         return 0
     s = rep["summary"]
-    print("== PhonoAgent 安全/复现指标 ==")
+    print("== AutoZT 安全/复现指标 ==")
     print("危险动作拦截率      : %s%%（%d/%d）" % (s["interception_rate"],
           rep["interception"]["intercepted"], rep["interception"]["total_hazardous"]))
     print("实际执行的危险动作  : %d（应为 0）" % s["mis_operations"])

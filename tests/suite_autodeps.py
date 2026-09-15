@@ -4,7 +4,7 @@
 
 背景：2026-09-08 往 skill/_common/opt/ 加了 method_select.py 并让 relax_common.py
 import 它，但 5 个技能的 gen_need 都没声明 -> 永远推不到超算 -> 任何新材料首次
-gen 直接 ModuleNotFoundError（phonoagent retry 也救不回来）。
+gen 直接 ModuleNotFoundError（autozt retry 也救不回来）。
 
 本脚本验证新的"公共模块自动带同目录依赖"能在【清单故意漏写】时把它补上，
 并且：已声明时不重复、技能目录优先、开关可关、gen 能真跑通（本地 bash 模式）。
@@ -31,8 +31,8 @@ def section(t):
     print("\n[%s]" % t)
 
 
-from phonoagent import load_config, find_asset, _common_dep_closure  # noqa: E402
-from phonoagent.workflow import (common_autodeps_enabled, _py_sibling_imports,  # noqa: E402
+from autozt import load_config, find_asset, _common_dep_closure  # noqa: E402
+from autozt.workflow import (common_autodeps_enabled, _py_sibling_imports,  # noqa: E402
                             remote_gen)
 
 CFG = load_config("tmp/tf_jzzn_smoke.yaml")[0]
@@ -72,9 +72,9 @@ check("技能目录里已有的同名文件不补（技能优先）",
 
 section("4. 开关")
 check("默认开", common_autodeps_enabled(CFG) is True)
-os.environ["PHONOAGENT_COMMON_AUTODEPS"] = "0"
-check("PHONOAGENT_COMMON_AUTODEPS=0 可关", common_autodeps_enabled(CFG) is False)
-del os.environ["PHONOAGENT_COMMON_AUTODEPS"]
+os.environ["AUTOZT_COMMON_AUTODEPS"] = "0"
+check("AUTOZT_COMMON_AUTODEPS=0 可关", common_autodeps_enabled(CFG) is False)
+del os.environ["AUTOZT_COMMON_AUTODEPS"]
 check("tf.yaml common_autodeps: false 可关",
       common_autodeps_enabled({"common_autodeps": False}) is False)
 
@@ -126,13 +126,13 @@ check("gen 脚本真的 import 到了它（产物 DEMO_OK=pbe）",
       os.path.isfile(marker) and open(marker, encoding="utf-8").read().strip() == "pbe",
       open(marker, encoding="utf-8").read().strip() if os.path.isfile(marker) else "无产物")
 # 关掉开关应当【不】补推（证明开关真的生效）
-os.environ["PHONOAGENT_COMMON_AUTODEPS"] = "0"
+os.environ["AUTOZT_COMMON_AUTODEPS"] = "0"
 work2 = os.path.join(tmp, "remote2", "X", "step1")
 os.makedirs(work2, exist_ok=True)
 m3 = dict(m2, path=work2, lpath=None)
 remote_gen(cfg2, t2, m3, "step1", host=None)
-del os.environ["PHONOAGENT_COMMON_AUTODEPS"]
-check("PHONOAGENT_COMMON_AUTODEPS=0 时不补推（开关有效）",
+del os.environ["AUTOZT_COMMON_AUTODEPS"]
+check("AUTOZT_COMMON_AUTODEPS=0 时不补推（开关有效）",
       not os.path.isfile(os.path.join(work2, "method_select.py")))
 shutil.rmtree(tmp, ignore_errors=True)
 

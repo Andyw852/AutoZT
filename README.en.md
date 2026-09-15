@@ -1,11 +1,11 @@
-# PhonoAgent
+# AutoZT
 
-[![CI](https://github.com/Andyw852/PhonoAgent/actions/workflows/ci.yml/badge.svg)](https://github.com/Andyw852/PhonoAgent/actions/workflows/ci.yml) [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE) [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.XXXXXXX.svg)](https://doi.org/10.5281/zenodo.XXXXXXX)
+[![CI](https://github.com/Andyw852/AutoZT/actions/workflows/ci.yml/badge.svg)](https://github.com/Andyw852/AutoZT/actions/workflows/ci.yml) [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE) [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.XXXXXXX.svg)](https://doi.org/10.5281/zenodo.XXXXXXX)
 
 Multi-material, multi-step, multi-cluster orchestration for VASP and MACE phonon /
 force-constant workflows.
 
-PhonoAgent runs hundreds of materials through multi-step pipelines (relaxation, static,
+AutoZT runs hundreds of materials through multi-step pipelines (relaxation, static,
 supercell generation, force-constant fitting, phonon and thermal-conductivity
 post-processing) on several HPC clusters, and keeps the whole run inspectable: every
 step declares a physical convergence criterion, every input carries a provenance record,
@@ -14,19 +14,19 @@ and every failure mode is diagnosed instead of hidden.
 ## Highlights
 
 - **Criterion-driven engine.** A step advances only when its own physical criterion is
-  met; otherwise PhonoAgent retries, escalates or reports, never silently continues.
+  met; otherwise AutoZT retries, escalates or reports, never silently continues.
 - **Multi-cluster.** VASP (CPU) and MACE (CPU/GPU) pipelines across SLURM clusters and a
   bare GPU server; switching a material between clusters is a one-word configuration change.
-- **Reproducibility.** Per-step provenance (per-file SHA-256) with phonoagent prove --verify,
-  and phonoagent session export producing a self-contained, replayable archive.
-- **Agent safety.** phonoagent act / approve routes agent-driven actions through risk tiers,
+- **Reproducibility.** Per-step provenance (per-file SHA-256) with autozt prove --verify,
+  and autozt session export producing a self-contained, replayable archive.
+- **Agent safety.** autozt act / approve routes agent-driven actions through risk tiers,
   a TTL-bounded human approval and an audit log.
 - **Uniform mechanisms.** One "cores" setting normalises queue scripts and INCAR
   (NCORE/KPAR) for every skill, and required inputs are discovered from the remote step
   directory instead of per-skill hard-coded lists.
 - **Supercells.** Diagonal notation ("4 4 4") or a general 3x3 integer matrix
   ("2 1 0 -1 2 0 0 0 1", phonopy/phono3py --dim semantics) for every generation path.
-- **Drop-in skills.** A new skill is a directory with a skill.yaml; phonoagent schema
+- **Drop-in skills.** A new skill is a directory with a skill.yaml; autozt schema
   --strict validates it.
 
 ## Skills
@@ -38,7 +38,7 @@ te-screen (thermoelectric surrogate screening) and unihamgnn.
 
 ## Command name
 
-The command is phonoagent; a two-letter entry point pa is installed as well and is
+The command is autozt; a two-letter entry point pa is installed as well and is
 exactly the same program:
 
     pa status
@@ -47,8 +47,8 @@ exactly the same program:
 
 ## Install
 
-    git clone https://github.com/Andyw852/PhonoAgent
-    cd PhonoAgent
+    git clone https://github.com/Andyw852/AutoZT
+    cd AutoZT
     pip install -e .              # the CLI core has no third-party dependency
     pip install -e ".[yaml]"      # + PyYAML, to read yaml configuration
     pip install -e ".[vasp]"      # + the VASP-side scientific stack
@@ -56,7 +56,7 @@ exactly the same program:
 
 ## Quick start (no cluster needed)
 
-    phonoagent -c my.yaml -tt te-screen -p Si_demo start
+    autozt -c my.yaml -tt te-screen -p Si_demo start
 
 This runs a two-step, pure-python thermoelectric surrogate screen on a POSCAR and writes
 te_features.json plus te_screen_summary.json. See docs/CONFIGURING.md for connecting a
@@ -71,10 +71,10 @@ real cluster; setting/template-cluster.yaml is the configuration template.
 
 ## Citation
 
-See CITATION.cff. If you use PhonoAgent in published work, please cite the software and
+See CITATION.cff. If you use AutoZT in published work, please cite the software and
 the underlying methods (phonopy, phono3py, hiPhive, MACE, spglib).
 
 ## License
 
-MIT (see LICENSE). PhonoAgent does not redistribute pseudopotentials, MACE model weights
+MIT (see LICENSE). AutoZT does not redistribute pseudopotentials, MACE model weights
 or third-party training data; users obtain those from their own licensed sources.

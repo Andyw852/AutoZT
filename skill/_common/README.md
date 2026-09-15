@@ -32,7 +32,7 @@ skill/
   band-dft-cpu/  elastic-dft-cpu/  ke-dft-cpu/  kl-dft-cpu/ ← 各技能只留自己独有的东西
 ```
 
-## 解析优先级（phonoagent 补丁）
+## 解析优先级（autozt 补丁）
 
 `tf_common_pool.patch` 在 `_skill_asset_dirs()` 末尾追加两条兜底路径：
 
@@ -44,9 +44,9 @@ skill/
 含义：**技能目录里有同名文件就优先用自己的**，没有才用池子里的。
 所以迁移可以一个技能一个技能来——删掉某技能的 `dim_common.py`，它就自动
 改用池子里的；不删就还是用自己的。`gen_need` 清单**一个字都不用改**，
-因为清单写的是文件名，变的只是 phonoagent 到哪里去找这个文件。
+因为清单写的是文件名，变的只是 autozt 到哪里去找这个文件。
 
-`_common` 没有 `skill.yaml`，而技能发现只认 `skill.yaml`（`phonoagent:994`），
+`_common` 没有 `skill.yaml`，而技能发现只认 `skill.yaml`（`autozt:994`），
 所以池子不会被误认成技能。
 
 ## 各模块接口
@@ -141,7 +141,7 @@ R.run(
 `submit_std_{0d,2d,3d}.tpl`、可选 `step.conf`。
 输出：`<OUTDIR>/{POSCAR,INCAR,KPOINTS,POTCAR,submit.sh,workflow_method.txt}`，
 其中 `workflow_method.txt` 的 `FUNC/GGA/IVDW/DIM/MAG` 供 step2+ 继承。
-失败一律 `sys.exit("[ERROR] ...")`，phonoagent 只显示最后一行。
+失败一律 `sys.exit("[ERROR] ...")`，autozt 只显示最后一行。
 
 ## 等价性验证
 
@@ -161,7 +161,7 @@ workflow_method.txt / POSCAR` 全部逐字节相同，日志只差绝对路径�
 
 ## 分段弛豫：统一到"作业内分段"（STAGE_MODE）
 
-原来两套并存：band-dft-cpu 是 phonoagent 层面的 a/b/c 三个步骤，elastic-dft-cpu/ke-dft-cpu 是一个作业里
+原来两套并存：band-dft-cpu 是 autozt 层面的 a/b/c 三个步骤，elastic-dft-cpu/ke-dft-cpu 是一个作业里
 `INCAR.s1/s2/s3` + `run_relax.sh` 顺序跑。现在统一由 `STAGE_MODE` 选择，
 缺省 `in_job`：
 
@@ -169,7 +169,7 @@ workflow_method.txt / POSCAR` 全部逐字节相同，日志只差绝对路径�
 |---|---|---|
 | 排队 | 1 次 | 3 次 |
 | 段间接力 | 作业里 `cp CONTCAR POSCAR`，无残缺风险 | 跨步骤读上一段 CONTCAR，要 `validate_poscar` 防读到写了一半的文件 |
-| 提前收敛 | 某段收敛就跳过后续段（`EARLY_EXIT`） | `ck_relax_skip` 在 phonoagent 侧跳过 |
+| 提前收敛 | 某段收敛就跳过后续段（`EARLY_EXIT`） | `ck_relax_skip` 在 autozt 侧跳过 |
 | 断点续跑 | `.sN.done` 标记，重投自动跳过已完成段 | 重投整段 |
 | 段间换资源 | 不行（同一个作业） | 可以 |
 | 单独重跑某段 | 不行（只能整目录 retry） | 可以 `--stage b` |
@@ -260,10 +260,10 @@ workflow_method.txt / POSCAR` 全部逐字节相同，日志只差绝对路径�
 1. 打 `tf_common_pool.patch`（两处，共 8 行）。
 2. `skill/_common/` 放入本目录的文件。
 3. 逐技能删副本：`rm skill/band-dft-cpu/dim_common.py skill/band-dft-cpu/check_common.py
-   skill/band-dft-cpu/stepconf.py`（`gen_need` 不动）→ 跑一次 `phonoagent ... gen` 确认远端
+   skill/band-dft-cpu/stepconf.py`（`gen_need` 不动）→ 跑一次 `autozt ... gen` 确认远端
    拿到的文件 md5 与池子一致 → 再删下一个技能的。
 4. `skill/band-dft-cpu/gen_step1_PBE_opt.py` 换成薄壳，`gen_need` 里加 `relax_common.py`
-   （薄壳 import 它；gen 脚本本身 phonoagent 总是覆盖推送，但它 import 的模块要进清单）。
+   （薄壳 import 它；gen 脚本本身 autozt 总是覆盖推送，但它 import 的模块要进清单）。
 
 ## elastic-dft-cpu / ke-dft-cpu / kl-dft-cpu 的迁移
 

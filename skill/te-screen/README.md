@@ -25,9 +25,9 @@ ionization_energy_mean, electron_affinity_mean, row_mean, group_range；
 ## 使用
 
 ```bash
-phonoagent -tt te-screen -p <材料> hpc 3090     # 换跑 3090 登录节点(默认)
-phonoagent -tt te-screen -p <材料> -j 1 init   # 只生成输入不提交，先检查
-phonoagent -tt te-screen -p <材料> start        # 跑(登录节点 run:gen)
+autozt -tt te-screen -p <材料> hpc 3090     # 换跑 3090 登录节点(默认)
+autozt -tt te-screen -p <材料> -j 1 init   # 只生成输入不提交，先检查
+autozt -tt te-screen -p <材料> start        # 跑(登录节点 run:gen)
 ```
 
 材料目录只需一份 `POSCAR`。输出 `te_screen_summary.json` 含 `prediction`（n/p 的 ZT_e 与 logPF）与 `merit`。

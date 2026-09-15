@@ -17,7 +17,7 @@ SKIP = {"i18n.py"}
 
 def main():
     rows, samples = [], []
-    for p in sorted((ROOT / "phonoagent").glob("*.py")):
+    for p in sorted((ROOT / "autozt").glob("*.py")):
         if p.name in SKIP:
             continue
         txt = p.read_text(encoding="utf-8")

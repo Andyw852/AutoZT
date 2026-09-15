@@ -1,6 +1,6 @@
-site_name: PhonoAgent
+site_name: AutoZT
 site_description: Multi-material, multi-step, multi-cluster orchestration for VASP/MACE phonon and force-constant workflows
-repo_url: https://github.com/Andyw852/PhonoAgent
+repo_url: https://github.com/Andyw852/AutoZT
 theme:
   name: material
   features: [navigation.sections, content.code.copy]

@@ -199,7 +199,7 @@ def main():
     kc.check_env(conf, out)
 
     if (out / "phono3py_disp.yaml").is_file():
-        print("[..] 已有 phono3py_disp.yaml，跳过位移生成（幂等；要重来请 phonoagent rerun）")
+        print("[..] 已有 phono3py_disp.yaml，跳过位移生成（幂等；要重来请 autozt rerun）")
     elif method == "random":
         # hiphive MC-rattle（对照 kl-dft-cpu 的 make_mc_rattle_dataset）：目标 RMS + d_min 保护，
         # 替代 phono3py --rd 的固定模长随机位移。fc3 + 可选 fc2（FC2_SUPERCELL）都走它。

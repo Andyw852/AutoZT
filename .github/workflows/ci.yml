@@ -14,6 +14,6 @@ jobs:
         run: pytest -q
       - name: CLI smoke
         run: |
-          phonoagent --version
-          phonoagent skills
-          phonoagent schema --strict
+          autozt --version
+          autozt skills
+          autozt schema --strict

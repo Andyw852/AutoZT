@@ -6,8 +6,8 @@ Where everything lives, so a collaborator can pick the project up without asking
 
 | Path | What |
 |---|---|
-| bin/phonoagent, bin/pa | entry points (pa is the two-letter alias; same program) |
-| phonoagent/ | the package: bootstrap (discovery/config), cli, collect, data, ops, report, workflow (engine), preflight (pre-submission checks), i18n, mcp (MCP server), agentgate (approval gate + audit), session (reproducible archives), prov (provenance), history, corrections, skillspec, yamlmini |
+| bin/autozt, bin/pa | entry points (pa is the two-letter alias; same program) |
+| autozt/ | the package: bootstrap (discovery/config), cli, collect, data, ops, report, workflow (engine), preflight (pre-submission checks), i18n, mcp (MCP server), agentgate (approval gate + audit), session (reproducible archives), prov (provenance), history, corrections, skillspec, yamlmini |
 | skill/ | 18 skills, each a directory with skill.yaml plus generation scripts and templates |
 | setting/ | cluster templates (setting/template-cluster.yaml) and per-cluster configuration |
 | scripts/ | safety_metrics.py, i18n_report.py, check_site_specific.py and helpers |
@@ -18,7 +18,7 @@ Where everything lives, so a collaborator can pick the project up without asking
     pip install -e .            # CLI only, no third-party dependency
     pa skills                   # list the skills
     pa -c <config> -tt <skill> -p <material> status
-    PHONOAGENT_LANG=en pa --help
+    AUTOZT_LANG=en pa --help
 
 ## Documentation
 
@@ -50,7 +50,7 @@ Where everything lives, so a collaborator can pick the project up without asking
 
 ## Repository
 
-- Remote: github.com/Andyw852/PhonoAgent (private), branch master, tags v1.0.0 and v1.1.0.
+- Remote: github.com/Andyw852/AutoZT (private), branch master, tags v1.0.0 and v1.1.0.
 - No DOI by choice; a GitHub release is optional and its notes are ready.
 
 ## Not done (honest list)

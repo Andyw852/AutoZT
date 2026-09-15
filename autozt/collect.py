@@ -28,7 +28,7 @@ from concurrent.futures import ThreadPoolExecutor
 # -*- coding: utf-8 -*-
 # 05_collect —— 远端状态采集（ssh + COLLECTOR）
 #
-# 本分片由 phonoagent/__init__.py 装配器在单一命名空间里按顺序执行；
+# 本分片由 autozt/__init__.py 装配器在单一命名空间里按顺序执行；
 # 函数之间的引用按名字解析（与原单文件一致），分片间无需 import。
 # 内容清单（按原文件行号）：
 #   L1819  _dedup_segments
@@ -43,7 +43,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 # ===== _dedup_segments (原 L1819-L1871) =====
 def _dedup_segments(mats):
-    from phonoagent import _natkey
+    from autozt import _natkey
     """多段（项目配置）发现同名材料时：材料归属"其 project_setting 里 tf_*.yaml
     所对应的那个段"（如 C20/qHPC20 归 C20/project_setting/tf_C20.yaml 的段）；
     材料没有 project_setting 时归全局段。无法判定归属的重复保留给重名检查。"""
@@ -108,7 +108,7 @@ def _queue_total(queue_by_host):
 
 # ===== collect_v3_batch (原 L1889-L2043) =====
 def collect_v3_batch(cfg, segs):
-    from phonoagent import _LOCAL_ONLY_STEP_KEYS, _load_yaml_file, _natkey, discover_local, pkg_setting_path, resolve_material_local, step_cfg
+    from autozt import _LOCAL_ONLY_STEP_KEYS, _load_yaml_file, _natkey, discover_local, pkg_setting_path, resolve_material_local, step_cfg
     """v3 本地模式批量采集：所有段（项目配置）先本地解析，再按 (host, work_dir)
     全局分组——同组所有段合进一次 ssh 采集；多组之间并行。
     v3.20 之前每段各发一条 ssh：10 个材料配置就串行 10 次握手（每次 ~2s）。
@@ -189,12 +189,12 @@ def collect_v3_batch(cfg, segs):
             sys.stderr.write("警告：跳过采集失败的组 host=%s wd=%s：%s\n"
                              % (host or "本地", wdir, _e))
             return ([], host or "", {})
-    _nw = int(os.environ.get("PHONOAGENT_WORKERS", "6") or "6")   # fixte⑦：并发可配（=1 串行定位）
+    _nw = int(os.environ.get("AUTOZT_WORKERS", "6") or "6")   # fixte⑦：并发可配（=1 串行定位）
     # 大体系分块采集：同组材料太多时，单条 ssh 的 --config64 会超 argv 上限
-    # （Argument list too long）。按 PHONOAGENT_COLLECT_CHUNK 切成多块，每块单独 ssh
+    # （Argument list too long）。按 AUTOZT_COLLECT_CHUNK 切成多块，每块单独 ssh
     # （ControlMaster 复用连接，代价很小）。默认 500：大体系（数千材料）自动
     # 分块，不再需要手动设环境变量；小体系（<500 材料）仍是单块、无额外开销。
-    _chunk = max(1, int(os.environ.get("PHONOAGENT_COLLECT_CHUNK", "500") or 500))
+    _chunk = max(1, int(os.environ.get("AUTOZT_COLLECT_CHUNK", "500") or 500))
     gitems = []
     for _key, _entries in sorted(by_hw.items()):
         for _i in range(0, len(_entries), _chunk):
@@ -273,9 +273,9 @@ def collect_v3_batch(cfg, segs):
 def _ssh_cmd(cfg, host, remote_args):
     """构造 ssh 命令。v3.17：ControlMaster 连接复用——首条 ssh 建连后，
     ControlPersist 窗口内（默认 120 秒）的后续 ssh 共用通道，免去重复握手，
-    status/auto-fetch 明显加速。设环境变量 PHONOAGENT_NO_SSH_MUX=1 可关闭。"""
+    status/auto-fetch 明显加速。设环境变量 AUTOZT_NO_SSH_MUX=1 可关闭。"""
     opts = ["-o", "BatchMode=yes"]
-    if not os.environ.get("PHONOAGENT_NO_SSH_MUX"):
+    if not os.environ.get("AUTOZT_NO_SSH_MUX"):
         sockdir = os.path.expanduser("~/.ssh")
         try:
             os.makedirs(sockdir, exist_ok=True)
@@ -306,7 +306,7 @@ def _effective_remote_path_prefix(cfg, host):
     (``A800``).  Resolve both forms so input generation and collection run in
     the same remote environment.
     """
-    from phonoagent import _PKG_ROOT, _load_yaml_file, pkg_setting_path
+    from autozt import _PKG_ROOT, _load_yaml_file, pkg_setting_path
     prefix = (cfg.get("remote_path_prefix") or "").strip()
     if not host:
         return prefix
@@ -329,7 +329,7 @@ def _effective_remote_path_prefix(cfg, host):
 
 def collect(cfg, types, host="__default__"):
     # v1.2：把本次涉及技能的 checks.py 源码一起打包，远端注册成判据
-    from phonoagent import COLLECTOR, _load_yaml_file, pkg_setting_path, skill_checks_for
+    from autozt import COLLECTOR, _load_yaml_file, pkg_setting_path, skill_checks_for
     extra = skill_checks_for(cfg, [td.get("key") for td in types])
     if host == "__default__":
         host = cfg.get("host")
@@ -350,7 +350,7 @@ def collect(cfg, types, host="__default__"):
     if r.returncode != 0:
         sys.exit("错误：远端采集失败。\n" + (r.stderr or "").strip())
     data = json.loads(r.stdout)
-    if os.environ.get("PHONOAGENT_DEBUG_TIME") and data.get("timings"):
+    if os.environ.get("AUTOZT_DEBUG_TIME") and data.get("timings"):
         tm = data["timings"]
         print("[计时] 远端分解：squeue %.1fs + 目录探测 %.1fs（其余为 ssh/启动开销）"
               % (tm.get("squeue", 0), tm.get("probe", 0)), file=sys.stderr)
@@ -385,13 +385,13 @@ def sh_b64(cmd_text):
 
 # ===== _parallel_map (原 L2122-L2151) =====
 def _parallel_map(worker, items, nw=None, desc="批量操作"):
-    """并发跑 worker(item)。PHONOAGENT_OP_WORKERS 控制并发数（默认 8；=1 串行定位用）。
+    """并发跑 worker(item)。AUTOZT_OP_WORKERS 控制并发数（默认 8；=1 串行定位用）。
     批量 clean/start/auto 等逐材料操作都是"每材料若干次 ssh 往返"，串行时
     上百个材料就是上百次握手——并发后共享 ControlMaster 通道，提速明显。
     输出不锁序（各线程消息可能交错，但每行完整）；异常项吞掉并告警，不中断整批。"""
     import concurrent.futures as _cf
     items = list(items)
-    _nw = int(nw or os.environ.get("PHONOAGENT_OP_WORKERS", "8") or 8)
+    _nw = int(nw or os.environ.get("AUTOZT_OP_WORKERS", "8") or 8)
     if _nw <= 1 or len(items) <= 1:
         return [worker(x) for x in items]
 
