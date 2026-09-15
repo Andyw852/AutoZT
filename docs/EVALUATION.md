@@ -77,3 +77,13 @@ read-only resources, so a planner can act without the tool itself becoming an ag
 - Runtime messages are only partly translated to English; the help text is complete.
 - ShengBTE's CONTROL file cannot express a non-diagonal supercell, and that path raises an
   explicit error instead of approximating.
+
+### Read-only profile (added after the first pass)
+
+    tools exposed              6 of 14
+    hazardous call refused     True
+    read-only task still ok    True   (list_skills used as the representative task)
+
+This is the "let the agent look but not touch" posture: the mutating and destructive verbs
+are absent from the tool table, and the dispatcher refuses them even if a client calls a
+remembered name, while supervision tasks keep working.
