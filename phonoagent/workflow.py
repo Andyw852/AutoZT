@@ -1210,12 +1210,15 @@ def do_submit(cfg, t, m, s, force, gen_first, contcar_cp, tag, submit=True):
                   % (m.get("work_dir_eff") or "(未解析)",
                      m.get("work_dir_src") or "未知"), file=sys.stderr)
             return False
-        print("%s: gen 完成。%s" % (tag, out.strip().splitlines()[-1] if out.strip() else ""))
+        print(_i18n.t("%s: gen 完成。%s", "%s: generated. %s")
+              % (tag, out.strip().splitlines()[-1] if out.strip() else ""))
     if contcar_cp:
         run_remote(cfg, "cd %s && [ -f CONTCAR ] && cp CONTCAR POSCAR || true"
                    % shlex.quote(s["dir"]))
     if not submit:   # v3.22：只生成不提交，交由 start
-        print("%s: 已生成输入，未提交。检查后运行  tf -p %s -j %s start  提交。"
+        print(_i18n.t("%s: 已生成输入，未提交。检查后运行  pa -p %s -j %s start  提交。",
+                  "%s: inputs generated, not submitted. Review them, then run "
+                  "pa -p %s -j %s start")
               % (tag, m["name"].split("/")[-1], s["label"]))
         log_action(m, "gen %s（只生成输入，待 start 提交）" % s["label"])
         return True
@@ -1226,8 +1229,8 @@ def do_submit(cfg, t, m, s, force, gen_first, contcar_cp, tag, submit=True):
             return False
     jobname = "%s-%s-%s" % (m["name"].split("/")[-1], m["tt"], s["label"])
     ok, out, jid = remote_sbatch(cfg, s, jobname=jobname, force=force)
-    print("%s: %s" % (tag, ("已提交 %s (jobid=%s)" % (jobname, jid)) if ok
-                            else ("提交失败。" + out)))
+    print("%s: %s" % (tag, _i18n.t("已提交 %s (jobid=%s)", "submitted %s (jobid=%s)") % (jobname, jid) if ok
+                            else (_i18n.t("提交失败。", "submit failed. ") + out)))
     if ok:
         log_action(m, "%s jobid=%s" % (tag.split(" ", 1)[0] + " " + s["label"], jid))
         _fetch_stamp_clear(m, s["name"])   # v1.11：重交后结果会更新，清戳记重拉
@@ -1839,7 +1842,9 @@ def cmd_clean(cfg, data, proj, job, yes, purge_config=False):
                 kept_note = "，project_setting 已删，重算需 phonoagent init"
         else:
             kept_note = "，体系级共享配置保留"
-        print("%s: 已清理（本地+超算只留 POSCAR%s）" % (m["name"], kept_note))
+        print(_i18n.t("%s: 已清理（本地+超算只留 POSCAR%s）",
+                  "%s: cleaned (only POSCAR kept locally and remotely%s)")
+              % (m["name"], kept_note))
         return 0
     results = _parallel_map(_clean_one, todo, desc="clean")
     return sum(r or 0 for r in results)
