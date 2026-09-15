@@ -103,9 +103,16 @@ def normalize_monitor_command(command, positional, restart=False):
 
 
 def main():
-    from phonoagent import EXAMPLE_CONFIG, JSON_SCHEMA, PHONOAGENT_VERSION, USAGE, _PKG_ROOT, _add_diag_codes, _json_changes, _json_errors_only, _json_paginate, _dbg_t, _state_cache_load, _state_cache_save, _summary_json, _watch_cron, _watch_daemon, _watch_ensure, _watch_stop, apply_exclude, apply_hide_done, apply_skills, auto_advance, auto_fetch, auto_recover_hung, cmd_adopt, cmd_auto, cmd_auto_project, cmd_auto_skill, cmd_clean, cmd_conf, cmd_diagnose, cmd_fetch, cmd_hpc, cmd_init, cmd_level, cmd_migrate_subdir, cmd_rerun, cmd_retry, cmd_skills, cmd_start, cmd_status, cmd_step_init, cmd_stop, cmd_summary, cmd_watch, collect_data, fill_local_dim, filter_status, find_material, find_step, find_uninited, get_types, load_config, merge_project_configs, render_table, status_spec_has_scancel, cmd_schema, cmd_skill_show, cmd_correct, cmd_correct_usage, cmd_history, history_record, cmd_prove, set_active_cfg, cmd_act, cmd_approve, agent_direct_gate, agent_audit, cmd_session
+    from phonoagent import EXAMPLE_CONFIG, JSON_SCHEMA, PHONOAGENT_VERSION, USAGE, USAGE_EN, _PKG_ROOT, _add_diag_codes, _json_changes, _json_errors_only, _json_paginate, _dbg_t, _state_cache_load, _state_cache_save, _summary_json, _watch_cron, _watch_daemon, _watch_ensure, _watch_stop, apply_exclude, apply_hide_done, apply_skills, auto_advance, auto_fetch, auto_recover_hung, cmd_adopt, cmd_auto, cmd_auto_project, cmd_auto_skill, cmd_clean, cmd_conf, cmd_diagnose, cmd_fetch, cmd_hpc, cmd_init, cmd_level, cmd_migrate_subdir, cmd_rerun, cmd_retry, cmd_skills, cmd_start, cmd_status, cmd_step_init, cmd_stop, cmd_summary, cmd_watch, collect_data, fill_local_dim, filter_status, find_material, find_step, find_uninited, get_types, load_config, merge_project_configs, render_table, status_spec_has_scancel, cmd_schema, cmd_skill_show, cmd_correct, cmd_correct_usage, cmd_history, history_record, cmd_prove, set_active_cfg, cmd_act, cmd_approve, agent_direct_gate, agent_audit, cmd_session
     if "--help-all" in sys.argv[1:]:
-        print(USAGE)
+        # 英文帮助：PHONOAGENT_LANG=en 或命令行 --lang en
+        _lang = (os.environ.get('PHONOAGENT_LANG') or '').lower()
+        if '--lang' in sys.argv:
+            try:
+                _lang = sys.argv[sys.argv.index('--lang') + 1].lower()
+            except IndexError:
+                pass
+        print(USAGE_EN if _lang.startswith('en') else USAGE)
         return
     if any(a in ("-h", "--help") for a in sys.argv[1:]):
         from phonoagent import QUICK_USAGE

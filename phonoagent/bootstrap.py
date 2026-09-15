@@ -1480,3 +1480,57 @@ def log_action(m, text):
                        note=text)
     except Exception:      # noqa: BLE001 —— 记事件绝不能影响操作本身
         pass
+
+
+# ===== USAGE_EN（英文帮助；PHONOAGENT_LANG=en 或 --lang en 时使用）=====
+USAGE_EN = """\
+usage: phonoagent [-tt SKILL] [-p MATERIAL] [-j STEP] COMMAND [options]
+
+Language: set PHONOAGENT_LANG=en (or LANG=en_*) for this text in English.
+
+Inspect (read-only, never submits or fetches)
+  summary [--diff]        per-skill counters, FAIL list, global queue; --diff is silent when nothing changed
+  list [--refresh]        status table (no auto-fetch, no auto-advance)
+  status                  status table + auto-fetch + auto-advance (may submit)
+  json                    full structured state (types -> materials -> steps, schema_version)
+  dir                     remote directory of a material
+  skills                  list all skills (version / steps / warnings)
+  schema --strict         validate every skill.yaml against the schema
+  conf                    effective step.conf values of one step (read-only)
+  probe                   job-level diagnosis (relaxing / crashed / stuck / queued)
+
+Advance (changes cluster state; agent sessions need approval, see act/approve)
+  start [-f]              advance one material: generate inputs if needed, then submit
+  retry                   regenerate inputs, keep products, do not submit
+  rerun                   delete step dir and regenerate (destructive)
+  stop                    cancel the step's job (destructive)
+  clean [-y]              delete generated files, back to PREP (destructive)
+  fetch                   pull finished results back to the local result/ tree
+  init                    create project_setting/ for a material (or one step)
+  hpc CLUSTER             switch the cluster a material or skill runs on
+  auto [on|off]           toggle automatic step advancement
+  monitor [-i SECS] [-d]  background monitor: auto-fetch + auto-submit
+
+Reproducibility
+  prove [--verify]        verify per-step provenance (per-file sha256)
+  history                 provenance timeline of a material
+  session export          reproducible archive: manifest + provenance + replay hints
+  correct                 configuration corrections / migration helpers
+  diagnose [--codes]      diagnose the current state
+
+Agent interface (Model Context Protocol, stdio JSON-RPC)
+  mcp                     MCP server: initialize / tools/list / tools/call
+  mcp --list-tools        print the tool table (14 generic verbs, risk-tagged)
+  mcp --call NAME JSON    call one tool directly (testing)
+
+Safety gate (agent sessions only)
+  act COMMAND...          run a command through the gateway (risk tiers + audit)
+  approve COMMAND...      human approval for a pending action (requires a real TTY)
+
+Common options
+  -tt SKILL               skill key (e.g. kl-mace-gpu, band-dft-cpu); see 'phonoagent skills'
+  -p MATERIAL             material name (or unique basename)
+  -j STEP                 step label (S1_opt) or index (1..4)
+  -c CONFIG               configuration file (default: ~/.config/phonoagent/tf.yaml)
+  --json                  machine-readable output where supported
+"""

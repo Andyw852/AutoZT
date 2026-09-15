@@ -17,6 +17,20 @@ if 'mcp' in _sys.argv[1:]:
     from phonoagent import mcp as _mcp_intercept
     _sys.exit(_mcp_intercept.main(_sys.argv[_i + 1:]))
 
+# 英文帮助：PHONOAGENT_LANG=en（或 --lang en）时用 USAGE_EN，其余保持中文。
+# 放在最前面拦截，避免 argparse 的 --help 抢先输出中文。
+import os as _os, sys as _sys2
+_lang = (_os.environ.get('PHONOAGENT_LANG') or '').lower()
+if '--lang' in _sys2.argv:
+    try:
+        _lang = _sys2.argv[_sys2.argv.index('--lang') + 1].lower()
+    except IndexError:
+        pass
+if _lang.startswith('en') and ('--help' in _sys2.argv or '-h' in _sys2.argv):
+    from phonoagent import USAGE_EN as _en
+    print(_en)
+    _sys2.exit(0)
+
 from phonoagent import main
 
 if __name__ == "__main__":
