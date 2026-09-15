@@ -357,6 +357,8 @@ def collect(cfg, types, host="__default__"):
     if data.get("squeue_err"):
         print("警告：squeue 查询失败：%s（队列状态将只按文件判断）" % data["squeue_err"],
               file=sys.stderr)
+        if _i18n.is_en():
+            print("hint: squeue failed; job state will be inferred from files only.", file=sys.stderr)
     return data
 
 # ===== run_remote (原 L2100-L2115) =====

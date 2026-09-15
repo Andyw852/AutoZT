@@ -711,6 +711,8 @@ def remote_gen(cfg, t, m, sname, host=None, wd=None):
             need = list(need) + _common_dep_closure(cfg, t, m, list(need), sname)
     except Exception as _cd:      # noqa: BLE001 —— 保守兜底绝不阻断 gen
         print("警告：公共模块依赖补全失败（按原清单继续）：%s" % _cd, file=sys.stderr)
+        if _i18n.is_en():
+            print("hint: could not complete the shared-module dependency list; continuing with the declared list.", file=sys.stderr)
     for f in need:
         if f == STEP_CONF:      # v1.9：step.conf 不按单文件推，先本地合并分层
             text, _lg = build_step_conf(cfg, t, m, sname)
@@ -789,6 +791,8 @@ def remote_gen(cfg, t, m, sname, host=None, wd=None):
                 shlex.quote(os.path.join(PROV_DIR, "history.jsonl")))
     except Exception as _pe:   # noqa: BLE001
         print("警告：provenance 记录失败（不影响本次 gen）：%s" % _pe, file=sys.stderr)
+        if _i18n.is_en():
+            print("hint: provenance recording failed; the generation itself is unaffected.", file=sys.stderr)
     # 统一核数：gen 跑完后按文件模式把 submit/INCAR 归一到 cores 指定的核数
     # （不认技能、不认模板名——defect 的 submit_ncl_3d.tpl / mlff-mace 的
     #  step1_relax/ 子目录模板一样管到）。cores 没配就完全不动，保持出厂行为。
