@@ -148,6 +148,18 @@ def ablation():
             os.environ["PHONOAGENT_MCP_READONLY"] = env_backup
     readonly_arm = {"tools_exposed": exposed,
                     "hazardous_call_refused": bool(refused.get("isError"))}
+    # 只读档下"只读任务"是否仍能完成（用 list_skills 作代表：它不需要集群）
+    os.environ["PHONOAGENT_MCP_READONLY"] = "1"
+    try:
+        import importlib
+        M2 = importlib.import_module("phonoagent.mcp")
+        ok_call = M2.call_tool("list_skills", {})
+        readonly_arm["readonly_task_ok"] = (not ok_call.get("isError"))
+    finally:
+        if env_backup is None:
+            os.environ.pop("PHONOAGENT_MCP_READONLY", None)
+        else:
+            os.environ["PHONOAGENT_MCP_READONLY"] = env_backup
     with_gate, without_gate = rows[0], rows[1]
     return {"rows": rows, "readonly_profile": readonly_arm,
             "gateway_blocks_hazardous": with_gate["blocked"] and not with_gate["executed"],
@@ -178,8 +190,9 @@ def main():
                                                   r["blocked"], r["executed"],
                                                   r["readonly_still_ok"]))
             ra = ab["readonly_profile"]
-            print("只读档：暴露工具 %d 个；危险工具调用被拒 = %s"
-                  % (ra["tools_exposed"], ra["hazardous_call_refused"]))
+            print("只读档：暴露工具 %d 个；危险工具调用被拒 = %s；只读任务仍可完成 = %s"
+                  % (ra["tools_exposed"], ra["hazardous_call_refused"],
+                     ra.get("readonly_task_ok")))
             print("网关挡住危险动作: %s | 关闭严格后会真执行: %s | 只读两种设置都正常: %s"
                   % (ab["gateway_blocks_hazardous"], ab["bypass_executes_hazardous"],
                      ab["readonly_ok_in_both"]))

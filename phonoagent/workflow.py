@@ -1277,6 +1277,8 @@ def _discover_step_inputs(cfg, host, step_dir, subdir=None):
                            text=True, timeout=240)
     except Exception as exc:                    # noqa: BLE001
         print("警告：远端输入清单发现失败（按默认清单继续）：%s" % exc, file=sys.stderr)
+        if _i18n.is_en():
+            print("hint: could not list the remote step directory; falling back to the default input list.", file=sys.stderr)
         return ()
     if p.returncode != 0:
         return ()
@@ -1594,6 +1596,8 @@ def auto_advance(cfg, data):
                               "（改 task_types.%s.max_jobs 或 PHONOAGENT_MAX_JOBS 调整）。"
                               % (t["key"], _gate.busy(t["key"]),
                                  _gate.cap(t["key"]), t["key"]))
+                        if _i18n.is_en():
+                            print("hint: this skill already has its job slots taken; the remaining steps wait for a free slot.", file=sys.stderr)
                         _pregenerate_ready(cfg, t, m, _fired)
                         _sfull = True
                         break
@@ -1602,6 +1606,8 @@ def auto_advance(cfg, data):
                               "本轮不再提交（改 max_inflight 或 "
                               "PHONOAGENT_MAX_INFLIGHT 调整）"
                               % (m["name"], m["tt"], _busy, _cap))
+                        if _i18n.is_en():
+                            print("hint: the running-job cap is reached; the remaining steps were not submitted.", file=sys.stderr)
                         break
                     _fired.add(s["name"])
                     _ok = do_submit(cfg, t, m, s, False, True,
@@ -2279,6 +2285,8 @@ def _start_ready(cfg, t, m, force, incl_scancel=False, gate=None):
             print("%s[%s]：在跑 %d 个已达上限 %d，剩下的没交"
                   "（改 max_inflight 或 PHONOAGENT_MAX_INFLIGHT）"
                   % (m["name"], m["tt"], busy, cap))
+            if _i18n.is_en():
+                print("hint: the running-job cap is reached; the remaining steps were not submitted.", file=sys.stderr)
             break
         _fired.add(s["name"])
         ok = do_submit(cfg, t, m, s, force, gen_first=False,
@@ -2660,6 +2668,8 @@ def cmd_retry(cfg, data, mname, jname, force, incl_scancel=False):
         tgt = _retry_targets(m, _retryable)
         if not tgt:
             print("%s[%s]: 没有需要 retry 的步骤。" % (m["name"], m["tt"]))
+            if _i18n.is_en():
+                print("hint: no step needs a retry.", file=sys.stderr)
             return 0
         for s in tgt:
             if not retry_submit(cfg, t, m, s, force,
