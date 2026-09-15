@@ -33,6 +33,9 @@ def main():
     done = sum(r[2] for r in rows)
     print("运行期中文字面量：%d 条（已接 t() 的调用点：%d）" % (total, done))
     print("迁移进度：%.1f%%" % (100.0 * done / total if total else 0.0))
+    print("口径说明：只统计整句被 t() 包住的调用点；展示层映射"
+          "（i18n.diag 正则表 / preflight.EN_HINTS）与格式串包裹不计入，"
+          "因此这个百分比是**下界**。")
     print()
     print("%-22s %6s %8s" % ("file", "zh", "t()"))
     for name, n, tr in sorted(rows, key=lambda r: -r[1]):

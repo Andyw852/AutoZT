@@ -951,14 +951,16 @@ def _init_one_skill(cfg, types, target, name=None, tt=None, force=False,
             f.write(content)
         if known_names is not None:
             known_names[pname] = f0   # 批量 init：新名字同步进预扫集合，后续材料继续 O(1) 查重
-        print("已生成 %s（项目配置：步骤/超算/路径按项目改它）" % f0)
+        print(_i18n.t("已生成 %s（项目配置：步骤/超算/路径按项目改它）",
+                  "generated %s (project configuration: steps/cluster/paths per project)")
+              % f0)
     f1 = os.path.join(ps, "setting.yaml")
     if os.path.exists(f1):
         print("已存在，跳过 %s" % f1)
     else:
         with open(f1, "w", encoding="utf-8") as f:
             f.write(DEFAULT_PROJECT_SETTING)
-        print("已生成 %s" % f1)
+        print(_i18n.t("已生成 %s", "generated %s") % f1)
     f2 = os.path.join(ps, "hpc.yaml")
     if os.path.exists(f2):
         print("已存在，跳过 %s" % f2)
@@ -973,7 +975,7 @@ def _init_one_skill(cfg, types, target, name=None, tt=None, force=False,
             with open(f2, "w", encoding="utf-8") as f:
                 f.write(DEFAULT_HPC_SETTING.replace("name: jzzn",
                                                     "name: " + hpc_name))
-        print("已生成 %s" % f2)
+        print(_i18n.t("已生成 %s", "generated %s") % f2)
     # 按 hpc.yaml 的 template_map 把映射到的提交模板复制进项目（可再按项目改）
     hpc_cfg = _load_yaml_file(f2)
     sd = (t or {}).get("skill_dir")
