@@ -1,0 +1,679 @@
+# -*- coding: utf-8 -*-
+"""cli —— 命令入口（17_cli）。main + 分发 + dry-run。
+对外接口：main。"""
+
+import os
+import sys
+import re
+import json
+import time
+import shlex
+import hashlib
+import base64
+import collections
+import functools
+import itertools
+import subprocess
+import tempfile
+import threading
+import socket
+import argparse
+import glob
+import math
+import random
+from collections import Counter, defaultdict
+from concurrent.futures import ThreadPoolExecutor
+
+# ===== 来自 17_cli.py =====
+# -*- coding: utf-8 -*-
+# 17_cli —— main() 入口与命令分发
+#
+# 本分片由 phonoagent/__init__.py 装配器在单一命名空间里按顺序执行；
+# 函数之间的引用按名字解析（与原单文件一致），分片间无需 import。
+# 内容清单（按原文件行号）：
+#   L7078  main
+#   （数据簇 _dbg_t/_state_cache_*/collect_data/apply_exclude/filter_projs/
+#    filter_status/status_spec_has_scancel/_snapshot 已抽成真模块 phonoagent/data.py）
+
+# ===== main (原 L7078-L7453) =====
+def _dry_run_steps_for(cmd, m, jb):
+    from phonoagent import find_step_soft
+    """--dry-run：某材料在命令 cmd、步骤筛选 jb 下实际会动的步骤。
+    返回步骤列表；None 表示"整材料级"（rerun/clean 无 -j 时）。"""
+    if jb:
+        s = find_step_soft(m, jb)
+        return [s] if s is not None else []
+    if cmd == "retry":
+        return [s for s in m["steps"] if s["kind"] == "FAIL"]
+    if cmd == "start":
+        ready = m.get("actives")
+        if ready is None:
+            ready = [m.get("active")] if m.get("active") is not None else []
+        return [s for s in ready if s and s["kind"] in ("TODO", "PREP")]
+    if cmd == "stop":
+        return [s for s in m["steps"] if s.get("job")]
+    if cmd == "fetch":
+        return [s for s in m["steps"] if s["kind"] == "OK"]
+    return None   # rerun / clean：无 -j 时整材料级
+
+
+def _dry_run_report(cfg, data, cmd, projs, jobs):
+    from phonoagent import find_material
+    """--dry-run：打印真实目标对象（复用 _dry_run_steps_for 的语义）。"""
+    mats = []
+    if projs:
+        for pj in projs:
+            try:
+                mats.append(find_material(data, pj)[1])
+            except SystemExit:
+                print("  材料 %s  （未能解析）" % pj)
+    else:
+        mats = [m for t in data["types"] for m in t["materials"]]
+    shown = 0
+    for m in mats:
+        for jb in jobs:
+            steps = _dry_run_steps_for(cmd, m, jb)
+            if steps is None:
+                print("  材料 %s  （整材料 %s）" % (m["name"], cmd))
+                shown += 1
+                continue
+            if not steps:
+                print("  材料 %s  %s（无需操作）"
+                      % (m["name"], ("步骤 %s " % jb) if jb else ""))
+                continue
+            for s in steps:
+                print("  材料 %s  步骤 %s [%s]  ->  %s"
+                      % (m["name"], s.get("label", s.get("name", "?")),
+                         s.get("kind", "?"), s.get("dir", "?")))
+                shown += 1
+    if shown == 0:
+        print("  （共 %d 个材料，无任何目标）" % len(mats))
+
+
+def normalize_monitor_command(command, positional, restart=False):
+    positional = list(positional)
+    if command == "restart":
+        return "monitor", positional, True
+    if command == "watch":
+        command = "monitor"
+    if command == "monitor" and "restart" in positional:
+        positional.remove("restart")
+        restart = True
+    return command, positional, restart
+
+
+def main():
+    from phonoagent import EXAMPLE_CONFIG, JSON_SCHEMA, PHONOAGENT_VERSION, USAGE, _PKG_ROOT, _add_diag_codes, _json_changes, _json_errors_only, _json_paginate, _dbg_t, _state_cache_load, _state_cache_save, _summary_json, _watch_cron, _watch_daemon, _watch_ensure, _watch_stop, apply_exclude, apply_hide_done, apply_skills, auto_advance, auto_fetch, auto_recover_hung, cmd_adopt, cmd_auto, cmd_auto_project, cmd_auto_skill, cmd_clean, cmd_conf, cmd_diagnose, cmd_fetch, cmd_hpc, cmd_init, cmd_level, cmd_migrate_subdir, cmd_rerun, cmd_retry, cmd_skills, cmd_start, cmd_status, cmd_step_init, cmd_stop, cmd_summary, cmd_watch, collect_data, fill_local_dim, filter_status, find_material, find_step, find_uninited, get_types, load_config, merge_project_configs, render_table, status_spec_has_scancel, cmd_schema, cmd_skill_show, cmd_correct, cmd_correct_usage, cmd_history, history_record, cmd_prove, set_active_cfg, cmd_act, cmd_approve, agent_direct_gate, agent_audit, cmd_session
+    if "--help-all" in sys.argv[1:]:
+        print(USAGE)
+        return
+    if any(a in ("-h", "--help") for a in sys.argv[1:]):
+        from phonoagent import QUICK_USAGE
+        print(QUICK_USAGE)
+        return
+    if any(a in ("-V", "--version") for a in sys.argv[1:]):
+        print("taskflow (tf) version %s" % PHONOAGENT_VERSION)
+        pkg = _PKG_ROOT
+        _prog = os.path.realpath(globals().get("_PROG_PATH") or _PKG_ROOT)
+        print("程序: %s" % _prog)
+        print("包根: %s（setting/ = 默认模板，skill/ = 技能脚本）" % pkg)
+        return
+    if len(sys.argv) == 1:   # patch_auto：纯 tf = 只报版本，不采集/不提交
+        print("taskflow (tf) version %s" % PHONOAGENT_VERSION)
+        print("程序: %s" % os.path.realpath(globals().get("_PROG_PATH") or _PKG_ROOT))
+        print("")
+        print("  tf list      只读总表（不拉取、不提交）")
+        print("  tf summary   只读极简汇总（巡检省 token，见 AGENTS.md）")
+        print("  tf status    刷新状态 + auto-fetch + auto-advance")
+        print("  tf monitor   后台监控（-i 秒，-d 后台，restart 重做；watch 为旧名）")
+        print("  tf -h        常用命令；tf --help-all 查看完整帮助")
+        return
+    p = argparse.ArgumentParser(prog="phonoagent")
+    p.add_argument("-tt", dest="tt")
+    p.add_argument("-p", dest="proj")
+    p.add_argument("-j", "-job", dest="job")
+    p.add_argument("-c", "--config")
+    p.add_argument("--host")
+    p.add_argument("-u", "--user")
+    p.add_argument("-x", "--exclude", dest="exclude",
+                   help="跳过指定项目（逗号分隔，全名或 basename）")
+    p.add_argument("-status", "--status", dest="status_f", metavar="ST",
+                   help="只保留含指定状态步骤的材料：done/running/pd/error/"
+                        "waiting/scancel（逗号分隔），对任意命令生效；"
+                        "如 -status scancel start 重跑全部被 stop 取消的")
+    p.add_argument("-i", "--interval", type=int, default=300,
+                   help="monitor 刷新间隔秒数（默认 300）")
+    p.add_argument("-d", "--daemon", action="store_true",
+                   help="monitor 放后台运行（日志 .tf_watch.log）")
+    p.add_argument("--stop", action="store_true",
+                   help="停止后台运行的 tf monitor")
+    p.add_argument("--install", action="store_true",
+                   help="写入 crontab 保活（tf monitor 重启后自动恢复）")
+    p.add_argument("--uninstall", action="store_true",
+                   help="移除 crontab 保活")
+    p.add_argument("--restart", action="store_true",
+                   help="重启后台监控（先停旧的再起新的）")
+    p.add_argument("-f", "--force", action="store_true")
+    p.add_argument("--all", dest="all_files", action="store_true",
+                   help="fetch 时拉回每个步骤的全部文件（不只 fetch_files 清单）")
+    p.add_argument("--hide-done", dest="hide_done", action="store_true",
+                   help="状态表隐藏全部步骤都完成的项目")
+    p.add_argument("--show-done", dest="show_done", action="store_true",
+                   help="取消 hide_done 配置的隐藏效果")
+    p.add_argument("--diff", dest="diff", action="store_true",
+                   help="summary：与上次快照对比，无变化不输出（省 token，巡检用）")
+    p.add_argument("--changes", dest="changes", action="store_true",
+                   help="json：只输出相对上次快照的步骤级变更（结构化，批分析用）")
+    p.add_argument("--refresh", dest="refresh", action="store_true",
+                   help="list/summary 强制跳过本地状态缓存，重新 ssh 采集")
+    p.add_argument("-y", "--yes", action="store_true")
+    p.add_argument("--dry-run", dest="dry", action="store_true",
+                   help="只打印将影响的对象/计划，不执行（start/stop/retry/rerun/clean/fetch/adopt/migrate-subdir）")
+    p.add_argument("--json", dest="json_out", action="store_true",
+                   help="list/summary/status/dir 以 JSON 输出（机器可读）")
+    p.add_argument("--schema", dest="schema", action="store_true",
+                   help="json：打印字段 schema 说明")
+    p.add_argument("--verify", dest="verify", action="store_true",
+                   help="prove：逐份校验输入的 sha256 是否与档案一致")
+    p.add_argument("--out", dest="out", metavar="文件",
+                   help="session export：包输出路径（默认 cwd/tmp/session_<材料>_<时间>.tar.gz）")
+    p.add_argument("--full", dest="full", action="store_true",
+                   help="skill show：卡片里再给输入/参数/可接技能/纠错")
+    p.add_argument("--strict", dest="strict", action="store_true",
+                   help="schema：自描述有 [错误] 级问题时返回非零（CI/检查用）")
+    p.add_argument("--since", dest="since", metavar="时间",
+                   help="history：只看该时间之后的记录（如 2026-09-14 或 7d）")
+    p.add_argument("-n", dest="last_n", type=int, metavar="N",
+                   help="history：只显示最近 N 条（默认 40）")
+    p.add_argument("--write", dest="hist_write", action="store_true",
+                   help="history：采集一次并把变化写进 history.jsonl（默认只读）")
+    p.add_argument("-clean", "--clean", dest="clean", action="store_true")
+    p.add_argument("--purge-config", dest="purge_config", action="store_true",
+                   help="clean：连 project_setting 一起删（默认保留，重算需 tf init）")
+    p.add_argument("--from-skill", dest="from_skill", action="store_true",
+                   help="rerun：忽略项目侧模板/step.conf，只用 skill 库出厂版生成")
+    p.add_argument("--set", dest="sets", action="append", metavar="节.键=值",
+                   help="conf：改本步 step.conf（如 --set incar.EDIFF=1E-6；"
+                        "值留空=删除该键）")
+    p.add_argument("--errors-only", dest="errors_only", action="store_true",
+                   help="json：只保留含 FAIL 步骤的材料与 FAIL 步骤")
+    p.add_argument("--limit", dest="limit", type=int, metavar="N",
+                   help="json：只输出前 N 个材料（分页）")
+    p.add_argument("--offset", dest="offset", type=int, metavar="M",
+                   help="json：跳过前 M 个材料（配合 --limit 分页）")
+    p.add_argument("args", nargs="*")
+    a, unknown = p.parse_known_args()  # v3.14：位置参数可穿插在选项中间
+    a.args = list(a.args) + unknown    # （-p A B retry / -p A B -j 1 dir）
+    if a.schema:   # v2.0：--schema 打印 json 字段说明（无需配置/采集）
+        print(JSON_SCHEMA)
+        return
+
+    commands = {"status", "list", "summary", "start", "stop", "retry", "rerun",
+                "json", "config", "dir", "fetch", "init", "clean", "watch",
+                "monitor", "restart", "help", "auto", "adopt", "migrate-subdir",
+                "hpc", "skills", "conf", "level", "diagnose", "probe", "push",
+                # v1.0（加技能友好化）：schema = 看技能自描述（io_schema/flow/corrections）
+                #                      correct = 把 FAIL 诊断喂给 _corrections/ handler 库
+                "schema", "skill", "correct", "history", "prove",
+                # v1.0（P0-1）：act = agent 动作网关（风险分档+审计）；
+                #                approve = 人工批准破坏性动作（仅交互终端）
+                "act", "approve",
+                # v1.0（P1-7）：session export = 把一个材料的操作历史/provenance/
+                #                  审计打包成论文补充材料
+                "session"}
+    root, cmd, pos = None, "status", []
+    for tok in a.args:  # v3.14：位置参数先收集，之后按"材料名/目录"消歧
+        if tok == "help":
+            from phonoagent import QUICK_USAGE
+            print(QUICK_USAGE)
+            return
+        if tok in commands and cmd == "status":
+            cmd = tok
+        else:
+            pos.append(tok)
+    cmd, pos, a.restart = normalize_monitor_command(cmd, pos, a.restart)
+    # 本地存在的目录 → 旧版 ROOT 语义；其余位置参数留给材料名消歧
+    mat_toks = []
+    for tok in pos:
+        if os.path.isdir(os.path.expanduser(tok)):
+            if root is not None:
+                sys.exit("错误：只能指定一个 ROOT（收到多个目录）。")
+            root = tok
+        else:
+            mat_toks.append(tok)
+
+    if cmd == "config":
+        print(EXAMPLE_CONFIG)
+        return
+    if cmd == "probe":   # 只读探测：delegate 到 scripts/probe_jobs.py（不采集/不提交/不改文件）
+        import subprocess as _sp
+        _probe = os.path.join(_PKG_ROOT, "scripts", "probe_jobs.py")
+        _mats = [m.strip() for m in (a.proj or "").split(",") if m.strip()] + mat_toks
+        if not _mats:
+            sys.exit("错误：probe 需要 -p 材料名（如 tf -tt defect-dft-cpu -p Sn2Sb2Te5 probe）。")
+        _argv = [sys.executable, _probe, "-p", ",".join(_mats)]
+        if a.job:
+            _argv += ["-j", a.job]
+        if a.host:
+            _argv += ["--host", a.host]
+        sys.exit(_sp.call(_argv))
+    if cmd == "push":   # git 提交：delegate 到 scripts/tf-git-push.sh（本地真实版 + 远端脱敏版）
+        import subprocess as _sp
+        _push = os.path.join(_PKG_ROOT, "scripts", "tf-git-push.sh")
+        _msg = " ".join(mat_toks) if mat_toks else "update"
+        sys.exit(_sp.call(["bash", _push, _msg]))
+    if a.job and not a.proj and not mat_toks and cmd not in (
+            "start", "stop", "retry", "rerun", "clean", "status"):
+        sys.exit("错误：-j 必须和 -p 一起用（start/stop/retry/rerun/clean "
+                 "支持不带 -p，表示对全部材料只操作该步骤）。")
+
+    cfg, cfg_path = load_config(a.config)
+    cfg["_config_dir"] = (os.path.dirname(os.path.abspath(cfg_path))
+                          if cfg_path else os.getcwd())
+    cfg["_config_path"] = cfg_path
+    set_active_cfg(cfg)    # v1.0：让 log_action 能把动作记进 history.jsonl
+    if cmd in ("act", "approve"):   # v1.0（P0-1）：网关在**任何**采集之前短路
+        sys.exit(cmd_act(cfg, sys.argv[1:]) if cmd == "act"
+                 else cmd_approve(cfg, sys.argv[1:]))
+    _gate = agent_direct_gate(cfg, cmd, sys.argv[1:])   # agent 会话直接调用 → 审计
+    if _gate is not None:
+        sys.exit(_gate)
+    if cmd == "monitor":   # 控制类操作不采集状态，提前短路
+        if a.install:
+            sys.exit(_watch_cron(True))
+        if a.uninstall:
+            sys.exit(_watch_cron(False))
+        if a.stop:
+            sys.exit(_watch_stop(cfg))
+        if a.restart:
+            _watch_stop(cfg)
+            _watch_daemon(a, mat_toks, root, cfg)
+            return
+        if a.daemon:
+            _watch_daemon(a, mat_toks, root, cfg)
+            return
+    cfg = apply_skills(cfg, verbose=True)   # v1.2：先装配 skill/*/skill.yaml
+    if cmd == "skills":
+        return cmd_skills(cfg, tt=a.tt)
+    if cmd == "schema":   # v1.0：看技能自描述（纯本地、不采集、不提交）
+        # 技能名既可用 -tt，也可直接当位置参数写：tf schema band-dft-cpu
+        _which = a.tt or (mat_toks[0] if mat_toks else None)
+        sys.exit(cmd_schema(cfg, tt=_which, json_out=a.json_out, strict=a.strict))
+    if cmd == "skill":   # v1.0：技能卡片（论文图 2 的机器可读来源；纯本地）
+        # tf skill show <技能> / tf skill show -tt <技能> / tf skill <技能> / tf skill
+        _args = list(mat_toks)
+        if _args and _args[0] in ("show", "list"):
+            _args.pop(0)
+        sys.exit(cmd_skill_show(cfg, which=a.tt or (_args[0] if _args else None),
+                                json_out=a.json_out, full=a.full))
+    if cmd == "session" and not (a.proj or mat_toks):
+        # 缺材料名不必采集（省一次 ssh）：直接给用法
+        sys.exit(cmd_session(cfg, None, None))
+    if cmd == "history" and not a.hist_write:
+        # v1.0：直接读 history.jsonl（不采集、不连超算、不提交）。
+        # 记录是自动的——任何一次真正采集都会追加；--write 时才先采集一轮再读。
+        sys.exit(cmd_history(cfg,
+                             proj=a.proj or (mat_toks[0] if mat_toks else None),
+                             tt=a.tt, since=a.since, last_n=a.last_n or 40,
+                             json_out=a.json_out))
+    cfg = merge_project_configs(cfg)   # v3.1：合并项目配置 project_setting/tf_*.yaml
+    if a.host is not None:
+        cfg["host"] = a.host or None
+    if a.user:
+        cfg["user"] = a.user
+    types = get_types(cfg, tt=a.tt,
+                      root_override=None if cmd == "init" else root,
+                      quiet=(cmd == "init"))
+    if cmd not in ("watch", "monitor"):
+        _watch_ensure(cfg)   # v1.10：auto_watch 时顺带确保后台监控在跑
+    if cmd in ("status", "json") and not types and not a.tt:
+        sys.exit("错误：没有任何任务类型"
+                 "（在全局 tf.yaml 或项目 project_setting/tf_*.yaml 里定义）。")
+    # v1.1：-tt 指定的类型有骨架但无项目段时 types 为空——前面已打印引导
+    # 提示，这里放行，按空表/无目标处理（不算错误）。
+
+    if cmd == "init" and not a.job:  # 项目配置初始化：纯本地，不连超算
+        _gate = agent_direct_gate(cfg, cmd, sys.argv[1:])   # P0-1：init 也进审计
+        if _gate is not None:
+            sys.exit(_gate)
+        if a.proj and mat_toks:
+            print("提示：多个材料要用逗号分隔，如  -p %s,%s"
+                  % (a.proj, ",".join(mat_toks)))
+        sys.exit(cmd_init(cfg, types, a.proj, tt=a.tt,
+                          name=(mat_toks[0] if mat_toks else root),
+                          force=a.force, yes=a.yes))
+
+    if cmd == "level":  # patch_level：设/查计算级别（纯本地改 step.conf）
+        _arg = mat_toks[0] if mat_toks else None
+        sys.exit(cmd_level(cfg, types, a.tt, a.proj, _arg))
+
+    _force_advance = False   # autonow：仅 auto on 这一次允许推进
+    if cmd == "auto":   # v1.5：一键开关 auto_advance（纯本地改 tf.yaml）
+        # autonow2：从位置参数里挑 on/off 当开关，其余位置参数当材料名，
+        # 并标记为已消费。原来固定取 mat_toks[0] 且不消费，导致
+        #   `tf auto on`           -> "on" 落到后面被当材料名解析而报错
+        #   `tf -tt ke <材料> auto on` -> 材料名被当成了 on/off 参数
+        _AUTO_WORDS = ("on", "off", "1", "0", "true", "false", "resume",
+                       "\u5f00", "\u5173")
+        _arg = next((x for x in mat_toks
+                     if str(x).strip().lower() in _AUTO_WORDS), None)
+        _rest = [x for x in mat_toks
+                 if str(x).strip().lower() not in _AUTO_WORDS]
+        _proj = a.proj or (",".join(_rest) if _rest else None)
+        if _arg == "resume" and (not _proj or not a.tt):
+            print("错误：auto resume 必须用 -tt 指定技能和 -p 指定项目。")
+            sys.exit(1)
+        mat_toks, a.proj = [], _proj
+        if _proj:       # v1.9.9：带 -p（或位置参数）就只改这些材料/技能
+            _rc = cmd_auto_project(cfg, types, _proj, a.tt, _arg)
+        elif a.tt:      # patch_auto：-tt 不带材料 = 该技能下全部材料
+            _rc = cmd_auto_skill(cfg, types, a.tt, _arg)
+        else:
+            _rc = cmd_auto(cfg, _arg)
+        # patch_auto_now：原实现三条路都 sys.exit，走不到下面的 status 分支，
+        # 而 auto_advance() 只在 status / watch 里调用 —— 于是 auto on 只翻
+        # 开关不干活，还得再手敲一次 tf。这里改成：on 且全部成功 -> 不退出，
+        # 落到 status 分支跑一轮采集+推进。off / 查询 / 有失败 -> 保持原行为。
+        # autonow：on 且全部成功 → 不退出，置标志落到下面的 status 分支，
+        # 当场跑一轮采集 + 推进。off / 无参查询 / 有失败 → 原样，只翻开关。
+        if _rc != 0 or str(_arg or "").strip().lower() not in (
+                "on", "1", "true", "开", "resume"):
+            sys.exit(_rc)
+        print("auto_advance 已开，下面立刻提交可开始的步骤"
+              "（只想看不提交：tf list）。")
+        _force_advance = True
+        cmd = "status"
+
+    if cmd == "adopt":  # v1.5：接管手工整理的技能子目录（内部自做采集）
+        sys.exit(cmd_adopt(cfg, types,
+                           a.proj or (mat_toks[0] if mat_toks else None),
+                           a.yes, a.dry, tt=a.tt))
+
+    if cmd == "hpc":    # v1.7：指定项目分配到指定超算（纯本地改 hpc.yaml）
+        sys.exit(cmd_hpc(cfg, types,
+                         [x.strip() for x in (a.proj or "").split(",")
+                          if x.strip()],
+                         mat_toks[0] if mat_toks else None, a.tt, a.yes))
+
+    # v3：含 local_root 的类型走本地发现 + 按项目超算分组采集；其余远端扫描
+    # v3.1：同 key 的多个段（项目配置）合并进同一个类型条目
+    import time as _time
+    _t0 = _time.time()
+    # -p 指定了材料时，收集前先把无关的段过滤掉——大体系（数千材料）下全量
+    # 采集会逐材料读 yaml + ssh，极慢。skill_subdir 段的材料名 =
+    # basename(local_root)，可零成本精确匹配；其余段原样保留（回退全量，行为不变）。
+    if a.proj:
+        _want = {x.strip() for x in a.proj.split(",") if x.strip()}
+        # 共享(体系级)布局：local_root 是项目目录（无 POSCAR），材料名 = 相对路径
+        # 前缀，无法用 basename 精确匹配 → 保留该段回退全量收集。
+        types = [t for t in types
+                 if (not (t.get("skill_subdir") and t.get("local_root"))
+                     or os.path.basename(os.path.realpath(t["local_root"])) in _want
+                     or not os.path.isfile(os.path.join(
+                         os.path.realpath(t["local_root"]), "POSCAR")))]
+    # patch_state_cache：list/summary 只读命令优先读本地缓存（跳过 ssh 采集），
+    # --refresh 或 PHONOAGENT_CACHE_TTL=0 强制刷新；会改状态的命令一律现采。
+    _ttl = int(os.environ.get("PHONOAGENT_CACHE_TTL", "60") or 0)
+    _cached = None
+    if cmd in ("list", "summary") and not a.refresh and _ttl > 0:
+        _cached = _state_cache_load(cfg, types, a.tt, root, _ttl)
+    if _cached is not None:
+        data = _cached
+        if os.environ.get("PHONOAGENT_DEBUG_TIME"):
+            print("[缓存] 命中本地状态缓存，跳过 ssh 采集（--refresh 强制刷新）",
+                  file=sys.stderr)
+    else:
+        data = collect_data(cfg, types)
+        fill_local_dim(cfg, data, types)
+        if cmd in ("list", "summary"):
+            _state_cache_save(cfg, data, types, a.tt, root)
+        # v1.0（W5–8）：把本轮的状态转移追加进 history.jsonl。这样**任何技能**
+        # 加进来就自动有历史，不必各技能自己写日志；走缓存那一支不重复记录。
+        try:
+            _n_hist = history_record(cfg, data)
+            if _n_hist and os.environ.get("PHONOAGENT_DEBUG_TIME"):
+                print("[history] 记录 %d 条状态转移" % _n_hist, file=sys.stderr)
+        except Exception:
+            pass
+    _dbg_t("状态采集（ssh+远端扫描）", _t0)
+
+    apply_exclude(data, a.exclude)   # v3.11：-x 跳过指定项目
+
+    incl_sc = status_spec_has_scancel(a.status_f)   # v1.4
+    if a.status_f:   # v1.4：-status 只保留含指定状态步骤的材料
+        n0 = sum(len(t["materials"]) for t in data["types"])
+        filter_status(data, a.status_f)
+        n1 = sum(len(t["materials"]) for t in data["types"])
+        print("（-status %s：%d/%d 个材料匹配）" % (a.status_f, n1, n0))
+
+    # v3.14：多项目——-p 支持逗号分隔，位置参数里的材料名自动并入
+    # v1.0：多步骤——-j 支持逗号分隔，位置参数里的步骤名/label 自动并入
+    projs = [x.strip() for x in (a.proj or "").split(",") if x.strip()]
+    jobs = [x.strip() for x in (a.job or "").split(",") if x.strip()]
+    if mat_toks:
+        names, bases, stepnames = set(), {}, set()
+        for t in data["types"]:
+            for m in t["materials"]:
+                names.add(m["name"])
+                bases.setdefault(os.path.basename(m["name"]), m["name"])
+                for s in m["steps"]:
+                    stepnames.add(s["name"])
+                    stepnames.add(s["label"])
+        for tok in mat_toks:
+            if tok in names or tok in bases:
+                projs.append(tok)
+            elif tok in stepnames:
+                jobs.append(tok)
+            else:
+                import difflib
+                close = difflib.get_close_matches(
+                    tok, sorted(names | set(bases) | stepnames | commands),
+                    n=1, cutoff=0.6)
+                sys.exit("错误：'%s' 不是命令、材料或步骤%s"
+                         % (tok, ("，你是不是想 '%s'？" % close[0]) if close else "。"))
+    jobs = jobs or [None]
+
+    # v2.0：--dry-run 排练。破坏性/有副作用命令只打印将影响的对象，不执行。
+    # 按命令语义打印【真实】目标：retry=FAIL 步，start=就绪步，stop=有作业步，
+    # fetch=已完成可拉回步；rerun/clean 无 -j 时是整材料级（不再笼统"全部步骤"）。
+    _eff_cmd = "clean" if (a.clean or cmd == "clean") else cmd
+    if a.dry and _eff_cmd in ("start", "stop", "retry", "rerun", "clean",
+                              "fetch"):
+        print("【dry-run】命令 '%s' 将影响以下对象（未执行任何变更、未提交作业）："
+              % _eff_cmd)
+        _dry_run_report(cfg, data, _eff_cmd, projs, jobs)
+        return
+
+    if cmd == "monitor":   # 前台监控（控制标志已在前面短路）
+        _ov = {}                        # v1.8：自动重载时命令行覆盖照旧生效
+        if a.host is not None:
+            _ov["host"] = a.host or None
+        if a.user:
+            _ov["user"] = a.user
+        cmd_watch(cfg, types, projs, a.exclude, a.interval,
+                  tt=a.tt, root=root, overrides=_ov)
+        return
+
+    if a.clean or cmd == "clean":  # 删除生成物回到 PREP（留 POSCAR）
+        fails = 0
+        for pj in (projs or [None]):
+            for jb in jobs:
+                fails += 0 if cmd_clean(cfg, data, pj, jb, a.yes,
+                                        purge_config=a.purge_config) == 0 else 1
+        sys.exit(0 if fails == 0 else 1)
+
+    if cmd == "init":  # -p MAT -j STEP init：只生成该步骤输入，不提交
+        if len(projs) > 1:
+            sys.exit("错误：步骤级 init 一次只支持一个材料。")
+        fails = 0
+        for jb in jobs:
+            fails += 0 if cmd_step_init(cfg, data, projs[0] if projs else None,
+                                        jb, a.force) == 0 else 1
+        sys.exit(fails)
+
+    if cmd == "history":   # v1.0：--write 已先采集记录一轮，这里再读出来
+        sys.exit(cmd_history(cfg, proj=a.proj or None, tt=a.tt, since=a.since,
+                             last_n=a.last_n or 40, json_out=a.json_out))
+    if cmd == "list":   # v3.23：只读总览表格；不 auto_fetch/auto_advance（绝不提交）
+        if a.hide_done or (cfg.get("hide_done") and not a.show_done):
+            apply_hide_done(data)
+        if a.json_out:
+            print(json.dumps(_add_diag_codes(data), ensure_ascii=False, indent=2))
+        else:
+            render_table(data)
+        return
+    if cmd == "diagnose":   # v2.0：一键结构化诊断（只读；默认输出 FAIL 步）
+        if not projs:
+            sys.exit("错误：diagnose 需要 -p 材料（如 tf -p C24/qHPC24 diagnose）。")
+        _outs = [cmd_diagnose(cfg, data, pj, jobs[0]) for pj in projs]
+        print(json.dumps(_outs[0] if len(_outs) == 1 else _outs,
+                         ensure_ascii=False, indent=2))
+        return
+    if cmd == "correct":   # v1.0：把 FAIL 诊断喂给 _corrections/ handler 库
+        if not projs:
+            sys.exit(cmd_correct_usage())
+        _fails = 0
+        for pj in projs:
+            _fails += cmd_correct(cfg, data, pj, jobs[0], yes=a.yes, dry=a.dry)
+        sys.exit(1 if _fails else 0)
+    if cmd == "prove":   # v1.0：看这一步"结果是怎么来的"（只读本地档案，不提交）
+        if not projs:
+            sys.exit("错误：prove 需要 -p 材料（如 tf -p C24/qHPC24 prove）。")
+        _rc = 0
+        for pj in projs:
+            _rc |= cmd_prove(cfg, data, pj, jobs[0], json_out=a.json_out,
+                             verify=a.verify)
+        sys.exit(_rc)
+    if cmd == "session":   # v1.0（P1-7）：会话导出（只读本地，打论文补充材料包）
+        _sargs = list(mat_toks)
+        if _sargs and _sargs[0] in ("export", "bundle"):
+            _sargs.pop(0)
+        _sp = a.proj or (_sargs[0] if _sargs else None)
+        sys.exit(cmd_session(cfg, data, _sp, job=jobs[0], out=a.out,
+                             since=a.since, json_out=a.json_out))
+    if cmd == "summary":   # 只读极简汇总；不 auto_fetch/auto_advance（绝不提交）
+        if a.hide_done or (cfg.get("hide_done") and not a.show_done):
+            apply_hide_done(data)
+        _sp = None
+        if a.diff:   # 快照按过滤范围分开存，不同 -tt/-status/-x/-p 互不干扰
+            import hashlib as _hashlib
+            _p = ",".join(sorted(x.strip() for x in (a.proj or "").split(",") if x.strip()))
+            _scope = ",".join([a.tt or "", a.status_f or "", a.exclude or "", _p])
+            _h = _hashlib.md5(_scope.encode("utf-8")).hexdigest()[:8]
+            _sp = os.path.join(cfg.get("_config_dir") or os.getcwd(),
+                               ".tf_summary_%s.txt" % _h)
+        if a.json_out:
+            print(json.dumps(_summary_json(data), ensure_ascii=False, indent=2))
+        else:
+            cmd_summary(data, diff=a.diff, state_path=_sp)
+        return
+    if cmd == "status":
+        if a.json_out:
+            print(json.dumps(_add_diag_codes(data), ensure_ascii=False, indent=2))
+            return
+        _t1 = _time.time()
+        auto_fetch(cfg, data)   # 算完的步骤自动保存到本地 result/
+        _dbg_t("auto-fetch 拉回", _t1)
+        # autonow：只有从 auto on 落过来时才推进；裸 tf / tf status / tf list
+        # 仍是 fixte⑤ 的只读语义（不提交任务）。
+        if _force_advance:
+            _t1 = _time.time()
+            auto_recover_hung(cfg, data)   # v1.11: 挂死自动恢复（含 UCX 卡死），与 auto_advance 同轮
+            _dbg_t("hang-check 挂死检测", _t1)
+            _t1 = _time.time()
+            auto_advance(cfg, data)
+            _dbg_t("auto-advance 推进", _t1)
+        if a.hide_done or (cfg.get("hide_done") and not a.show_done):
+            apply_hide_done(data)   # v1.1：隐藏全部完成的项目
+        for pj in (projs or [None]):
+            for jb in jobs:
+                cmd_status(cfg, data, pj, jb)
+        if not projs:
+            new = find_uninited(cfg)   # v3.11：新材料目录自动检测（v1.2 扫 project_roots）
+            if new:
+                print("发现 %d 个新材料目录未初始化：%s"
+                      % (len(new), ", ".join(new)))
+                print("→ tf init 纳入管理；配 auto_advance: true 后下次 tf 自动开算")
+    elif cmd == "conf":
+        if not projs or not jobs or not jobs[0]:
+            sys.exit("错误：conf 需要 -p 材料 -j 步骤（如 tf -tt bd -p Mg2C60 -j 2 conf）。")
+        fails = 0
+        for pj in projs:
+            for jb in jobs:
+                fails += cmd_conf(cfg, data, pj, jb, a.sets)
+        sys.exit(1 if fails else 0)
+    elif cmd == "json":
+        if a.schema:
+            print(JSON_SCHEMA)
+        else:
+            if a.changes:                          # v2.0：只输出步骤级变更快照
+                import hashlib as _hashlib
+                _p = ",".join(sorted(x.strip() for x in
+                                     (a.proj or "").split(",") if x.strip()))
+                _scope = ",".join([a.tt or "", a.status_f or "", a.exclude or "",
+                                   _p])
+                _h = _hashlib.md5(_scope.encode("utf-8")).hexdigest()[:8]
+                _sp = os.path.join(cfg.get("_config_dir") or os.getcwd(),
+                                   ".tf_json_snapshot_%s.txt" % _h)
+                _out = _json_changes(data, _sp)
+                _out["schema_version"] = 2
+                _out["tf_version"] = PHONOAGENT_VERSION
+                print(json.dumps(_out, ensure_ascii=False, indent=2))
+                return
+            _out = {"schema_version": 2, "tf_version": PHONOAGENT_VERSION}
+            _out.update(data)
+            if a.errors_only:                       # v2.0：只留 FAIL 材料/步骤
+                _out = _json_errors_only(_out)
+            if a.limit is not None or a.offset is not None:   # v2.0：材料分页
+                _out = _json_paginate(_out, a.offset or 0, a.limit)
+            print(json.dumps(_out, ensure_ascii=False, indent=2))
+    elif cmd == "dir":
+        # 只输出路径本身，方便拼进 ssh/cd 命令：ssh jzzn "cd $(tf -p X -j 1 dir)"
+        if a.json_out:
+            _dirs = []
+            if projs:
+                for pj in projs:
+                    t, m = find_material(data, pj)
+                    for jb in jobs:
+                        _dirs.append(find_step(m, jb)["dir"] if jb else m["path"])
+            elif a.tt:
+                _dirs.append(data["types"][0]["root"])
+            else:
+                sys.exit("错误：dir 需要 -p（可配 -j）或 -tt 指定对象。")
+            print(json.dumps(_dirs, ensure_ascii=False))
+        elif projs:
+            for pj in projs:
+                t, m = find_material(data, pj)
+                for jb in jobs:
+                    print(find_step(m, jb)["dir"] if jb else m["path"])
+        elif a.tt:
+            print(data["types"][0]["root"])
+        else:
+            sys.exit("错误：dir 需要 -p（可配 -j）或 -tt 指定对象。")
+    elif cmd == "migrate-subdir":
+        if not a.tt:
+            sys.exit("错误：migrate-subdir 需要 -tt 指定迁哪个技能"
+                     "（如 tf -tt band migrate-subdir）。")
+        fails = 0
+        for pj in (projs or [None]):
+            fails += cmd_migrate_subdir(cfg, data, pj, a.yes, a.dry)
+        sys.exit(0 if fails == 0 else 1)
+    else:
+        fails = 0
+        for pj in (projs or [None]):
+            for jb in jobs:
+                if cmd == "start":
+                    fails += cmd_start(cfg, data, pj, jb, a.force,
+                                       incl_scancel=incl_sc)
+                elif cmd == "stop":
+                    fails += cmd_stop(cfg, data, pj, jb, a.yes)
+                elif cmd == "retry":
+                    fails += cmd_retry(cfg, data, pj, jb, a.force,
+                                       incl_scancel=incl_sc)
+                elif cmd == "rerun":
+                    fails += cmd_rerun(cfg, data, pj, jb, a.yes, a.force,
+                                       from_skill=a.from_skill)
+                elif cmd == "fetch":
+                    fails += cmd_fetch(cfg, data, pj, all_files=a.all_files)
+        if fails:
+            sys.exit(1)
