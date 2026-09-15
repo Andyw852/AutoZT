@@ -235,7 +235,7 @@ _LEVEL_HEADER = "# step.conf —— 本材料共用参数（BANDGAP 由 tf level
 
 # ===== USAGE (原 L6489-L6653) =====
 QUICK_USAGE = """\
-用法：phonoagent [-tt 技能] [-p 材料] [-j 步骤] 命令
+用法：phonoagent（短命令 pa）[-tt 技能] [-p 材料] [-j 步骤] 命令
 
 查看：
   summary [--diff]    只读汇总；--diff 无变化静默
@@ -1485,6 +1485,7 @@ def log_action(m, text):
 # ===== USAGE_EN（英文帮助；PHONOAGENT_LANG=en 或 --lang en 时使用）=====
 USAGE_EN = """\
 usage: phonoagent [-tt SKILL] [-p MATERIAL] [-j STEP] COMMAND [options]
+       (short form: pa -- same program, two-letter command name)
 
 Language: set PHONOAGENT_LANG=en (or LANG=en_*) for this text in English.
 

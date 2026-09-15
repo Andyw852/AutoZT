@@ -1,0 +1,18 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""pa —— PhonoAgent 的短命令。
+
+完全复用 bin/phonoagent 的入口逻辑（含 mcp 拦截与 PHONOAGENT_LANG 英文帮助），
+只是把命令名缩短成两个字母：
+    pa status / pa -tt kl-mace-gpu -p X start / pa mcp --list-tools
+"""
+import os
+import runpy
+import sys
+
+_here = os.path.dirname(os.path.abspath(__file__))
+_entry = os.path.join(_here, "phonoagent")
+if not os.path.isfile(_entry):
+    sys.exit("pa: 找不到同目录的 phonoagent 入口：%s" % _entry)
+sys.argv[0] = _entry
+runpy.run_path(_entry, run_name="__main__")

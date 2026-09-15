@@ -1,6 +1,7 @@
 # Installation
 
-PhonoAgent's command-line core has no third-party dependency.
+PhonoAgent's command-line core has no third-party dependency. Both phonoagent and the
+short form pa are installed; they are the same program.
 
     git clone https://github.com/Andyw852/PhonoAgent
     cd PhonoAgent

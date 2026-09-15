@@ -36,6 +36,15 @@ lattice thermal conductivity, structure optimisation, phonons), MACE (lattice th
 conductivity, optimisation, phonons, CPU and GPU variants, MLFF training), plus
 te-screen (thermoelectric surrogate screening) and unihamgnn.
 
+## Command name
+
+The command is phonoagent; a two-letter entry point pa is installed as well and is
+exactly the same program:
+
+    pa status
+    pa -tt kl-mace-gpu -p Si_demo start
+    pa mcp --list-tools
+
 ## Install
 
     git clone https://github.com/Andyw852/PhonoAgent

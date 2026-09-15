@@ -30,6 +30,7 @@ dev = ["pytest>=7", "ruff", "build"]
 
 [project.scripts]
 phonoagent = "phonoagent.cli:main"
+pa = "phonoagent.cli:main"   # 短命令：等价入口
 
 [project.urls]
 Homepage = "https://github.com/Andyw852/PhonoAgent"
