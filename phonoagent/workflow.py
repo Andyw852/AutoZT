@@ -1333,6 +1333,34 @@ def _remote_submit_preflight(cfg, m, s, t=None):
               "或给 setting/%s.yaml 补 partition 字段。" % (_want, m.get("hpc_name"),
                                                           _hint, m.get("hpc_name")),
               file=sys.stderr)
+    # 资源申请自检：--cpus-per-task × --ntasks-per-node 不能超过集群声明的上限。
+    # 实测教训（2026-09-15 fc-fit 切 3090）：模板写 --cpus-per-task=48 而机器只给
+    # 24 → 作业永远 PD(PartitionConfig)，日志里一个字都不说；改成 24 立刻开跑。
+    _mc = 0
+    try:
+        _mc = int(_cc.get("max_cpus") or _cc.get("max_cpus_per_task") or 0)
+    except (TypeError, ValueError):
+        _mc = 0
+    if _mc:
+        _rc2, _so2 = _rrm(cfg, "grep -hE '^#SBATCH --(cpus-per-task|ntasks-per-node)=' %s"
+                               " 2>/dev/null" % _sub_path, host=host)
+        _cpt = _npn = 0
+        for _ln in (_so2 or "").splitlines():
+            try:
+                _v = int(_ln.split("=", 1)[1].strip())
+            except (IndexError, ValueError):
+                continue
+            if "cpus-per-task" in _ln:
+                _cpt = _v
+            elif "ntasks-per-node" in _ln:
+                _npn = _v
+        _need = _cpt * max(_npn, 1)
+        if _need > _mc:
+            print("提示：提交模板申请 %d 核（cpus-per-task=%d × ntasks-per-node=%d），"
+                  "集群 %s 声明上限 %d。\n"
+                  "      实测这种超配会让作业永远 PD(PartitionConfig) 且日志无提示；"
+                  "把该步模板复制到项目级并把 cpus-per-task 降到 %d 以内。"
+                  % (_need, _cpt, _npn, m.get("hpc_name"), _mc, _mc), file=sys.stderr)
     if _want and _declared and _want != _declared:
         print("提示：提交模板要求 --partition=%s，集群 %s 声明的是 %s；"
               "若作业卡在 PD(PartitionConfig) 就按这两处之一改。"
