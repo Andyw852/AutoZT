@@ -29,10 +29,14 @@ from pathlib import Path
 # [SKILL_REV] 版本戳：写进 comparison_summary.txt。每次改本脚本逻辑后更新。
 #   陈旧副本已咬人三次（step12/step9b 盖戳后，step13 是最后一个没盖的），
 #   这里盖戳便于从产物反查到底跑的是哪份 skill 副本。
-_SKILL_REV = "2026-08-31-dpt-md-klroot"
+_SKILL_REV = "2026-09-16-amset2d"
+#   bump 记录：2026-09-16-amset2d —— 增加 step8.4_amset2d（二维散射核）对比列；
+#   仅在目录存在时读取，**不写进 needs**，以免 3D 项目因缺这个步骤而卡住。
 
 OUTDIR_NAME = "step8.3_output"
 AMSET_DIR = "step8_amset"
+# patch_amset2d：二维散射核（插件版）的结果目录。存在就一起对比，不存在就跳过。
+AMSET2D_DIR = "step8.4_amset2d"
 BT2_DIR   = "step8.1_boltztrap"
 DPT_DIR   = "step8.2_dpt"
 TARGET_T  = 300.0
@@ -69,6 +73,11 @@ def _load_json(p):
         return json.loads(Path(p).read_text())
     except Exception:
         return None
+
+
+def _num(v):
+    """数值才返回 float，其它（None/nan/字符串）返回 None。"""
+    return float(v) if isinstance(v, (int, float)) and v == v else None
 
 
 def _unwrap(v):
@@ -155,8 +164,8 @@ def _interp_loglog(x_signed, y, target_signed):
 
 
 # ---------- 读三方 ----------
-def load_amset(cwd, is_2d=False):
-    j = _load_json(Path(cwd) / AMSET_DIR / "transport.json")
+def load_amset(cwd, is_2d=False, dirname=None):
+    j = _load_json(Path(cwd) / (dirname or AMSET_DIR) / "transport.json")
     if not j:
         return None
     try:
@@ -404,9 +413,9 @@ def resolve_kappa_L(cwd):
     return r
 
 
-def _add_zt_columns(row):
+def _add_zt_columns(row, has_am2=False):
     """按 KAPPA_L_* 补 ZT 列。amset 分方向 + 面内平均；bt2 走文献口径
-    （σ=(σ/τ)·τ_DPT，κ_e=LσT）。"""
+    （σ=(σ/τ)·τ_DPT，κ_e=LσT）；has_am2=True 时同时补 amset2d 的 ZT。"""
     kxx, kyy, _ = resolve_kappa_L(Path.cwd())        # patch_kl_auto
     if kxx is None and kyy is None:
         return
@@ -421,12 +430,20 @@ def _add_zt_columns(row):
                                    row.get("bt2_sigma_%s_S/m" % d),
                                    row.get("bt2_kappa_e_WF_%s_W/mK" % d),
                                    kl, TARGET_T)
+        if has_am2:                                                   # patch_amset2d
+            row["amset2d_ZT_%s" % d] = _zt(row.get("amset2d_S_%s_uV/K" % d),
+                                           row.get("amset2d_sigma_%s_S/m" % d),
+                                           row.get("amset2d_kappa_e_%s_W/mK" % d),
+                                           kl, TARGET_T)
     kl_avg = ([k for k in (kxx, kyy) if k is not None])
     kl_avg = sum(kl_avg) / len(kl_avg)
     row["amset_ZT"] = _zt(row.get("amset_S_uV/K"), row.get("amset_sigma_S/m"),
                           row.get("amset_kappa_e_W/mK"), kl_avg, TARGET_T)
     row["bt2_ZT"] = _zt(row.get("bt2_S_uV/K"), row.get("bt2_sigma_S/m"),
                         row.get("bt2_kappa_e_WF_W/mK"), kl_avg, TARGET_T)
+    if has_am2:                                                       # patch_amset2d
+        row["amset2d_ZT"] = _zt(row.get("amset2d_S_uV/K"), row.get("amset2d_sigma_S/m"),
+                                row.get("amset2d_kappa_e_W/mK"), kl_avg, TARGET_T)
 
 
 def _dpt_tau_dir(dpt, carrier, d):
@@ -437,7 +454,27 @@ def _dpt_tau_dir(dpt, carrier, d):
     return _dpt_tau_s(dpt, carrier)
 
 
-def build_table(am, bt, dpt):
+def _amset_cols(row, tag, a, nt):
+    """把一路 amset 结果（原版 / amset2d）插值进 row，列名前缀 = tag。"""
+    row["%s_sigma_S/m" % tag] = _interp_loglog(a["doping_signed"], a["sigma"], nt)
+    row["%s_S_uV/K" % tag] = _interp_loglog(a["doping_signed"], a["seebeck"], nt)
+    row["%s_kappa_e_W/mK" % tag] = _interp_loglog(a["doping_signed"], a["kappa_e"], nt)
+    row["%s_Lorenz" % tag] = _interp_loglog(a["doping_signed"], a["lorenz"], nt)
+    row["%s_mu_cm2/Vs" % tag] = _interp_loglog(a["doping_signed"], a["mobility"], nt)
+    if any(v == v for v in a.get("mobility_adp", [])):
+        row["%s_mu_ADP_cm2/Vs" % tag] = _interp_loglog(
+            a["doping_signed"], a["mobility_adp"], nt)
+    if a.get("aniso") and a["aniso"]["anisotropic"]:
+        for d in ("xx", "yy"):
+            row["%s_S_%s_uV/K" % (tag, d)] = _interp_loglog(
+                a["doping_signed"], a["seebeck_%s" % d], nt)
+            row["%s_sigma_%s_S/m" % (tag, d)] = _interp_loglog(
+                a["doping_signed"], a["sigma_%s" % d], nt)
+            row["%s_kappa_e_%s_W/mK" % (tag, d)] = _interp_loglog(
+                a["doping_signed"], a["kappa_e_%s" % d], nt)
+
+
+def build_table(am, bt, dpt, am2=None):
     rows = []
     for nt in TARGET_N:
         typ = "n(电子)" if nt < 0 else "p(空穴)"
@@ -459,6 +496,8 @@ def build_table(am, bt, dpt):
                 row["amset_sigma_yy_S/m"] = _interp_loglog(am["doping_signed"], am["sigma_yy"], nt)
                 row["amset_kappa_e_xx_W/mK"] = _interp_loglog(am["doping_signed"], am["kappa_e_xx"], nt)
                 row["amset_kappa_e_yy_W/mK"] = _interp_loglog(am["doping_signed"], am["kappa_e_yy"], nt)
+        if am2:                                   # patch_amset2d：二维散射核
+            _amset_cols(row, "amset2d", am2, nt)
         if bt:
             row["bt2_S_uV/K"] = _interp_loglog(bt["n_signed"], bt["seebeck"], nt)
             row["bt2_Lorenz"] = _interp_loglog(bt["n_signed"], bt["lorenz"], nt)
@@ -501,16 +540,22 @@ def build_table(am, bt, dpt):
             if isinstance(mu, (int, float)) and mu > 0:
                 sig = abs(nt) * 1e6 * E_C * (mu * 1e-4)      # n cm^-3→m^-3; S/m
                 row["dpt_kappa_e_WF_W/mK"] = SOMMERFELD_L * sig * TARGET_T
-        _add_zt_columns(row)        # patch_zt
+        _add_zt_columns(row, has_am2=bool(am2))        # patch_zt / patch_amset2d
         rows.append(row)
     return rows
 
 
-def write_table(out, rows, am, bt, dpt):
+def write_table(out, rows, am, bt, dpt, am2=None):
     import csv
     cols = ["carrier_conc_cm-3", "type", "amset_sigma_S/m", "amset_S_uV/K",
             "amset_kappa_e_W/mK", "amset_Lorenz", "amset_mu_cm2/Vs",
             "amset_mu_ADP_cm2/Vs"]
+    if am2:                                   # patch_amset2d：二维散射核一路
+        cols += ["amset2d_sigma_S/m", "amset2d_S_uV/K", "amset2d_kappa_e_W/mK",
+                 "amset2d_Lorenz", "amset2d_mu_cm2/Vs", "amset2d_mu_ADP_cm2/Vs",
+                 "amset2d_S_xx_uV/K", "amset2d_S_yy_uV/K",
+                 "amset2d_sigma_xx_S/m", "amset2d_sigma_yy_S/m",
+                 "amset2d_kappa_e_xx_W/mK", "amset2d_kappa_e_yy_W/mK"]
     # 2D 面内各向异性时，把分方向列插在平均列后面
     if am and am.get("aniso") and am["aniso"]["anisotropic"]:
         cols += ["amset_S_xx_uV/K", "amset_S_yy_uV/K",
@@ -526,6 +571,7 @@ def write_table(out, rows, am, bt, dpt):
              if any(c in r for r in rows)]
     if any(resolve_kappa_L(Path.cwd())[:2]):                          # patch_kl_auto
         cols += [c for c in ("amset_ZT_xx", "amset_ZT_yy", "amset_ZT",
+                             "amset2d_ZT_xx", "amset2d_ZT_yy", "amset2d_ZT",
                              "bt2_ZT_xx", "bt2_ZT_yy", "bt2_ZT")
                  if any(c in r for r in rows)]
     with open(out / "comparison_300K.csv", "w", newline="") as fh:
@@ -539,7 +585,8 @@ def write_table(out, rows, am, bt, dpt):
     _red = "面内(xx+yy)/2 [2D]" if (am and am.get("is_2d")) else "对角(xx+yy+zz)/3 [3D]"
     lines = ["# 300 K 三方电子输运对比（详见 comparison_300K.csv）",
              "# skill_rev: %s" % _SKILL_REV,
-             "# 有 amset=%s  BoltzTraP2=%s  DPT=%s" % (bool(am), bool(bt), bool(dpt)),
+             "# 有 amset=%s  amset2d=%s  BoltzTraP2=%s  DPT=%s"
+             % (bool(am), bool(am2), bool(bt), bool(dpt)),
              "# 张量约化：%s" % _red,
              "# S/Lorenz 可直接比；σ/κ_e amset是绝对值、BT2是per-τ只比趋势；DPT迁移率仅ADP",
              "# [DPT μ] m* 取 full-BZ 二次型 m_d（面内平均），非 3 点抛物拟合"]
@@ -565,21 +612,50 @@ def write_table(out, rows, am, bt, dpt):
                      "见 CSV 的 *_xx/*_yy 列，ZT 建议分方向算"
                      % (a["max"] * 100, a["seebeck"] * 100,
                         a["sigma"] * 100, a["kappa_e"] * 100))
+    if am2:                                   # patch_amset2d：逐档给 amset2d vs amset 的比值
+        lines.append("# [amset2d] 二维散射核（插件）vs 原版 amset 的三维核：")
+        lines.append("#   弹性常数 = 原始 slab 值（标准 Voigt），散射核为二维形式；"
+                     "差异来源 = 核的 q 依赖 + 原始 slab 弹性 + 面内 pop_frequency。")
+        _m2 = [r for r in rows if _num(r.get("amset2d_mu_cm2/Vs"))]
+        if _m2 and am:
+            _rt = []
+            for r in _m2:
+                a1, a2 = _num(r.get("amset_mu_cm2/Vs")), _num(r.get("amset2d_mu_cm2/Vs"))
+                if a1 and a2:
+                    _rt.append(a2 / a1)
+            if _rt:
+                lines.append("#   μ(amset2d)/μ(amset)：%.2f ~ %.2f（中位 %.2f）"
+                             % (min(_rt), max(_rt), sorted(_rt)[len(_rt) // 2]))
+        if am2.get("aniso") and am2["aniso"]["anisotropic"]:
+            _a = am2["aniso"]
+            lines.append("#   [amset2d 各向异性] 面内 xx-yy 最大相对差 %.1f%%"
+                         "（S %.1f%% / σ %.1f%% / κ_e %.1f%%）"
+                         % (_a["max"] * 100, _a["seebeck"] * 100,
+                            _a["sigma"] * 100, _a["kappa_e"] * 100))
     lines.append("")
-    hdr = "%-13s %-8s | %-10s %-9s %-9s | %-9s %-9s | %-9s" % (
-        "n(cm^-3)", "type", "amsetS", "amsetL", "amsetμ", "bt2 S", "bt2 L", "dptμ")
+    hdr = "%-13s %-8s | %-10s %-9s %-9s |" % (
+        "n(cm^-3)", "type", "amsetS", "amsetL", "amsetμ")
+    if am2:
+        hdr += " %-10s %-9s |" % ("2dS", "2dμ")
+    hdr += " %-9s %-9s | %-9s" % ("bt2 S", "bt2 L", "dptμ")
     lines.append(hdr); lines.append("-" * len(hdr))
     for r in rows:
-        lines.append("%-13.2e %-8s | %-10s %-9s %-9s | %-9s %-9s | %-9s" % (
+        ln = "%-13.2e %-8s | %-10s %-9s %-9s |" % (
             r["carrier_conc_cm-3"], r["type"],
             fmt(r.get("amset_S_uV/K")), fmt(r.get("amset_Lorenz")),
-            fmt(r.get("amset_mu_cm2/Vs")), fmt(r.get("bt2_S_uV/K")),
-            fmt(r.get("bt2_Lorenz")), fmt(r.get("dpt_mu_cm2/Vs"))))
+            fmt(r.get("amset_mu_cm2/Vs")))
+        if am2:
+            ln += " %-10s %-9s |" % (fmt(r.get("amset2d_S_uV/K")),
+                                     fmt(r.get("amset2d_mu_cm2/Vs")))
+        ln += " %-9s %-9s | %-9s" % (fmt(r.get("bt2_S_uV/K")),
+                                     fmt(r.get("bt2_Lorenz")),
+                                     fmt(r.get("dpt_mu_cm2/Vs")))
+        lines.append(ln)
     (out / "comparison_summary.txt").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
 # ---------- 图 ----------
-def make_figure(out, am, bt, dpt):
+def make_figure(out, am, bt, dpt, am2=None):
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
@@ -598,6 +674,10 @@ def make_figure(out, am, bt, dpt):
         n, p = split(am["doping_signed"], am["seebeck"])
         if n: a.plot(*zip(*[(x, abs(y)) for x, y in n]), "o-", c="C0", label="amset n")
         if p: a.plot(*zip(*[(x, abs(y)) for x, y in p]), "s-", c="C1", label="amset p")
+    if am2:                                   # patch_amset2d
+        n, p = split(am2["doping_signed"], am2["seebeck"])
+        if n: a.plot(*zip(*[(x, abs(y)) for x, y in n]), "-.", c="C2", label="amset2d n")
+        if p: a.plot(*zip(*[(x, abs(y)) for x, y in p]), "-.", c="C3", label="amset2d p")
     if bt:
         n, p = split(bt["n_signed"], bt["seebeck"])
         if n: a.plot(*zip(*[(x, abs(y)) for x, y in n]), "--", c="C0", alpha=.7, label="BT2 n")
@@ -626,6 +706,10 @@ def make_figure(out, am, bt, dpt):
         if n: a.plot(*zip(*n), "o-", c="C0", label="amset n (abs)")
         if p: a.plot(*zip(*p), "s-", c="C1", label="amset p (abs)")
         a.set_ylabel("amset sigma (S/m)")
+    if am2:                                   # patch_amset2d
+        n, p = split(am2["doping_signed"], am2["sigma"])
+        if n: a.plot(*zip(*n), "-.", c="C2", label="amset2d n (abs)")
+        if p: a.plot(*zip(*p), "-.", c="C3", label="amset2d p (abs)")
     a.set_xscale("log"); a.set_yscale("log"); a.set_xlabel("|carrier conc| (cm$^{-3}$)")
     a.set_title("sigma @300K (amset abs; BT2 dashed=sigma/tau, shape only)")
     if bt:
@@ -641,6 +725,10 @@ def make_figure(out, am, bt, dpt):
         n, p = split(am["doping_signed"], am["kappa_e"])
         if n: a.plot(*zip(*n), "o-", c="C0", label="amset n (true)")
         if p: a.plot(*zip(*p), "s-", c="C1", label="amset p (true)")
+    if am2:                                   # patch_amset2d
+        n, p = split(am2["doping_signed"], am2["kappa_e"])
+        if n: a.plot(*zip(*n), "-.", c="C2", label="amset2d n")
+        if p: a.plot(*zip(*p), "-.", c="C3", label="amset2d p")
     if bt and dpt:                       # BT2 κ_e = (κ_e/τ)_BT × τ_DPT
         for carr, col, nm, neg in (("electron", "C0", "n", True),
                                    ("hole", "C1", "p", False)):
@@ -667,6 +755,13 @@ def make_figure(out, am, bt, dpt):
     a.legend(fontsize=7); a.grid(alpha=.3)
     # (1,1) mobility: amset total(实线) + amset-ADP(点划,与DPT同为纯声学) + DPT(虚线水平)
     a = ax[1, 1]
+    if am2:                                   # patch_amset2d：二维核一路
+        n, p = split(am2["doping_signed"], am2["mobility"])
+        if n: a.plot(*zip(*n), "-.", c="C2", marker="^", label="amset2d n (total)")
+        if p: a.plot(*zip(*p), "-.", c="C3", marker="v", label="amset2d p (total)")
+        na, pa = split(am2["doping_signed"], am2["mobility_adp"])
+        if na: a.plot(*zip(*na), ":", c="C2", alpha=.9, label="amset2d n (ADP-only)")
+        if pa: a.plot(*zip(*pa), ":", c="C3", alpha=.9, label="amset2d p (ADP-only)")
     if am:
         n, p = split(am["doping_signed"], am["mobility"])
         if n: a.plot(*zip(*n), "o-", c="C0", label="amset n (total)")
@@ -725,6 +820,14 @@ def main():
           % (dim or "未知(按3D处理)",
              "面内(xx+yy)/2" if is_2d else "对角(xx+yy+zz)/3"))
     am, bt, dpt = load_amset(cwd, is_2d=is_2d), load_bt2(cwd), load_dpt(cwd)
+    # patch_amset2d：step8.4_amset2d 存在才读（不进 needs，3D 项目缺它不会卡）
+    am2 = None
+    if (cwd / AMSET2D_DIR / "transport.json").is_file():
+        am2 = load_amset(cwd, is_2d=is_2d, dirname=AMSET2D_DIR)
+        if am2:
+            print("[..] 读到 amset2d（step8.4_amset2d，二维散射核）——一并对比")
+        else:
+            print("[WARN] %s/transport.json 存在但解析失败" % AMSET2D_DIR)
     if not any([am, bt, dpt]):
         sys.exit("[ERROR] step8/8.1/8.2 三个结果都读不到——先把它们跑出来再做对比。")
     if am and am.get("aniso") and am["aniso"]["anisotropic"]:
@@ -732,12 +835,13 @@ def main():
         print("[WARN] 2D 面内各向异性：S/σ/κ_e 的 xx-yy 最大相对差 %.1f%% (>%.0f%%)。"
               % (a["max"] * 100, ANISO_TOL * 100))
         print("       面内平均会抹掉方向信息——CSV 已附 *_xx/*_yy 分方向列，ZT 建议分方向算。")
-    got = [n for n, v in (("amset", am), ("BoltzTraP2", bt), ("DPT", dpt)) if v]
+    got = [n for n, v in (("amset", am), ("amset2d", am2), ("BoltzTraP2", bt),
+                          ("DPT", dpt)) if v]
     print("[..] 读到：%s；在 %.0f K 附近对比" % ("、".join(got), TARGET_T))
-    rows = build_table(am, bt, dpt)
-    write_table(out, rows, am, bt, dpt)
+    rows = build_table(am, bt, dpt, am2=am2)
+    write_table(out, rows, am, bt, dpt, am2=am2)
     try:
-        make_figure(out, am, bt, dpt)
+        make_figure(out, am, bt, dpt, am2=am2)
     except Exception as e:
         print("[WARN] 画图失败（%s）——表已生成，图跳过" % type(e).__name__)
     for _l in resolve_kappa_L(cwd)[2]:                # patch_kl_auto

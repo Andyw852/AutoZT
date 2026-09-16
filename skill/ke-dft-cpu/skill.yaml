@@ -199,6 +199,25 @@ optional_steps:
          needs: ["step3_uniform", "step6_elastic", "step7b_deform_read",
                  "step8.2_dpt"]}
 
+  # --- 8.4 二维散射核（amset2d 插件）：只在 2D 项目里打开 ---------------------
+  #   默认 false —— 3D 项目看不到这个步骤，零回归风险。
+  #   打开方式：项目 project_setting 里写 amset2d: true（或 tf 的技能开关）。
+  #   与 step8_amset 用同一批上游输入，DAG 上两者并行；同一个 2D 材料于是同时有
+  #   bt2(8.1) / 原版 AMSET(8) / amset2d(8.4) 三套结果，正好用于对比。
+  #   ★ 8.4 不开插件之外的一切：插件只在那一次 amset 运行里 import 生效，不改 AMSET 安装。
+  amset2d:
+    default: false
+    steps:
+      - {seq: 8.4, name: "step8.4_amset2d", label: S8.4_amset2d,
+         after: step8_amset,
+         src: step8.4_amset2d, check: marker, marker: "transport.json:thermal_conductivity",
+         gen: gen_step14_amset2d.py,
+         gen_need: [stepconf.py, step.conf, submit_amset.tpl, vdw_radii.py,
+                    discriminant_common.py, amset2d_plugin.py, amset2d_pop_freq.py],
+         fetch_all: true,
+         needs: ["step4_wave", "step5_dielect", "step6_elastic", "step7b_deform_read",
+                 "step2_bandgap/step2.2_pbe_plot", "step2_bandgap/step2.3_hse_plot"]}
+
   output_compare:
     default: true
     steps:

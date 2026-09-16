@@ -463,12 +463,26 @@ _AMSET_ENV_SRC = "source %s && conda activate %s" % (CONDA_SH, AMSET_ENV)
 | 7 | `step7_deform` | S7_deform | 形变势（**fanout** `*deform*`） | `outcar` |
 | 7.1 | `step7b_deform_read` | S7.1_read | 形变势读取（登录节点）→ `deformation.h5` | plot |
 | 8 | `step8_amset` | S8_kappa | AMSET 电子热导率 → `transport.json`（needs: wave+dielect+elastic+deform+带隙画图） | `transport.json:thermal_conductivity` |
+| 8.4 | `step8.4_amset2d` | S8.4_amset2d | **2D 专用**：二维散射核版 AMSET（插件 amset2d_plugin，可选组 `amset2d`，默认关） | `transport.json:thermal_conductivity` |
 | 8.2 | `step8.2_dpt` | S8.2_dpt | DPT 形变势迁移率 → `dpt_result.json`（必须排在 8.1 前） | plot |
 | 8.1 | `step8.1_boltztrap` | S8.1_bt2 | BoltzTraP2 CRTA × DPT-τ 文献口径完整实现 | `boltztrap_crta.json` |
-| 8.3 | `step8.3_output` | S8.3_cmp | AMSET / CRTA×DPT 两口径对比图 | `comparison_300K.png` |
+| 8.3 | `step8.3_output` | S8.3_cmp | AMSET / amset2d / CRTA×DPT 对比图与表 | `comparison_300K.png` |
 
-- 开关：`bandgap_steps: false` 完全不算带隙（手填 setting.yaml 的 bandgap）、`bandgap_hse: false`、`dpt: false`、`boltztrap_crta: false`、`output_compare: false`。
+- 开关：`bandgap_steps: false` 完全不算带隙（手填 setting.yaml 的 bandgap）、`bandgap_hse: false`、`dpt: false`、`boltztrap_crta: false`、`amset2d: false`（**2D 项目才打开**）、`output_compare: false`。
 - 依赖：`pymatgen, numpy, matplotlib, amset, BoltzTraP2` + `vaspkit`（conda 环境 `amset_clean`）。
+
+**8.4 amset2d（2D 项目专用）**：把 AMSET 的四种散射核（ADP/POP/IMP/PIE）换成二维形式
+（运行期插件，**不改 AMSET 安装**，3D 项目 `amset run` 完全不受影响）。要点：
+
+- 弹性常数写**原始 slab 值**（标准 Voigt，已从 VASP 的 XX YY ZZ XY YZ ZX 重排），**不乘 c/t**；
+- `pop_frequency` 取 Γ 点**面内极性模**（AMSET 自带口径会把面外 ZO 模算进去）；
+- `2d_correction.json` 额外写 `layer_normal` / 完整 3×3 `eps_inf_slab`、`eps_static_slab` / `eps_env` 等；
+- 8.3 的对比表/图会**自动**多一路 amset2d 列（目录存在才读，不进 `needs`，3D 项目缺它不卡）；
+- 细节与验证见 `skill/ke-dft-cpu/step8.4_amset2d/README.md`、`VERIFICATION.md`。
+
+**三维项目注意**：`read_elastic` 的 Voigt 重排（8 与 8.4 都改了）影响**所有**非立方体系 ——
+225 相 tetradymite 这类 `C44≠C66`、`C14≠0` 的材料，改前跑出的 AMSET 结果需要评估是否重算；
+立方晶系三个剪切分量相等，不受影响。
 
 ### 6.4 kl-dft-cpu 晶格热导率（v0.2，VASP）
 
