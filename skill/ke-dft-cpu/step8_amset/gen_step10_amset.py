@@ -15,6 +15,9 @@ import re
 import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+# [SKILL_REV] 版本戳：写进 settings.yaml 头，便于从结果反查跑的是哪份 skill 副本。
+_SKILL_REV = "2026-09-16-voigt-reorder"
 import stepconf  # noqa: E402
 try:
     import ke_common as kc
@@ -194,9 +197,71 @@ def read_dielectric(dielect_dir: Path):
     return eps_inf, eps_static
 
 
+# --------------------------------------------------------------------------
+# patch_voigt_order：VASP → 标准 Voigt 顺序重排
+# --------------------------------------------------------------------------
+# 【已确认 bug】VASP OUTCAR 'TOTAL ELASTIC MODULI (kBar)' 的行/列标签顺序是
+#   XX YY ZZ XY YZ ZX，
+# 而 AMSET 走 pymatgen 的 Tensor.from_voigt()，按**标准 Voigt** 顺序解析：
+#   XX YY ZZ YZ XZ XY（即 1,2,3,4,5,6 = xx,yy,zz,yz,xz,xy）。
+# 直接把 VASP 的行序当标准 Voigt 交给 AMSET，等于把第 4 位(XY)与第 6 位(ZX)互换：
+#   · 2D slab：面内剪切 C_xyxy 被换成接近 0 的 C_zxzx（实测 CrS2 单层：
+#     C66 = 22.29 GPa 被塞进 YZ 槽位，而 YZ 槽位 −0.10 GPa 被当成面内剪切），
+#     面内 TA 支刚度近零 → ADP 散射率与迁移率全错。
+#   · 3D 低对称（225 相 tetradymite 这类 C44≠C66、C14≠0 的晶系）同样读错；
+#     立方晶系三个剪切分量相等，不受影响。
+# 行列必须**同时**重排（张量指标重命名），所以用 C'[i][j] = C[p[i]][p[j]]。
+#   实测依据：step6_elastic/OUTCAR 的 XY 行对角线 = 222.8673 kBar = 22.29 GPa。
+_VASP2VOIGT = (0, 1, 2, 4, 5, 3)      # new[i] = old[_VASP2VOIGT[i]]，纯 python，不引 numpy
+_VOIGT_LABELS = ("XX", "YY", "ZZ", "YZ", "XZ", "XY")        # 标准 Voigt（AMSET/pymatgen）
+_VASP_DEFAULT_LABELS = ("XX", "YY", "ZZ", "XY", "YZ", "ZX")  # VASP OUTCAR 缺省
+
+
+def _norm_voigt_label(s):
+    """XZ 与 ZX 是同一个剪切分量，统一成 XZ。"""
+    s = str(s).upper()
+    return "XZ" if s == "ZX" else s
+
+
+def _voigt_perm(src_labels):
+    """src_labels[j] = 来源第 j 位的标签；返回 perm 使 out[i] = src[perm[i]]（标准 Voigt）。
+    标签不全时返回 None（调用方走缺省顺序兜底）。"""
+    try:
+        src = [_norm_voigt_label(s) for s in src_labels]
+        return tuple(src.index(_norm_voigt_label(l)) for l in _VOIGT_LABELS)
+    except ValueError:
+        return None
+
+
+def _reorder_voigt(mat, col_labels, row_labels=None):
+    """按来源列/行标签把 6×6 张量重排成标准 Voigt 顺序。"""
+    pc = _voigt_perm(col_labels)
+    pr = _voigt_perm(row_labels if row_labels is not None else col_labels)
+    return [[mat[pr[i]][pc[j]] for j in range(6)] for i in range(6)]
+
+
+def vasp_to_voigt_6x6(m):
+    """6×6 弹性/刚度张量：VASP 顺序 (XX YY ZZ XY YZ ZX) → 标准 Voigt (XX YY ZZ YZ XZ XY)。
+
+    只在 OUTCAR 表头认不出来时的兜底路径用；正常走 _reorder_voigt（按表头实测顺序）。"""
+    a = [[float(x) for x in row] for row in m]
+    return [[a[i][j] for j in _VASP2VOIGT] for i in _VASP2VOIGT]
+
+
+def vasp_to_voigt_piezo(e3x6):
+    """3×6 压电张量（VASP 列序 XX YY ZZ XY YZ ZX）→ 标准 Voigt 列序（只重排列）。"""
+    a = [[float(x) for x in row] for row in e3x6]
+    return [[row[j] for j in _VASP2VOIGT] for row in a]
+
+
 def read_elastic(cwd: Path):
     """弹性常数来源：MANUAL_ELASTIC 优先，否则从 step6_elastic/OUTCAR 解析。
-    返回 amset settings.yaml 用的值：单标量(GPa) 或 6x6 列表(GPa)，读不到返回 None。"""
+    返回 amset settings.yaml 用的值：单标量(GPa) 或 6x6 列表(GPa，**标准 Voigt 顺序**)，
+    读不到返回 None。
+
+    MANUAL_ELASTIC 的约定同样是**标准 Voigt 顺序**（XX YY ZZ YZ XZ XY）。
+    注意 ELASTIC_DIR/OUTCAR 对应的是 step6_elastic/OUTCAR（最后一块
+    TOTAL ELASTIC MODULI，VASP 顺序）。"""
     if MANUAL_ELASTIC is not None:
         return MANUAL_ELASTIC
     oc = cwd / ELASTIC_DIR / "OUTCAR"
@@ -206,12 +271,23 @@ def read_elastic(cwd: Path):
     i = txt.rfind("TOTAL ELASTIC MODULI")
     if i < 0:
         return None
-    rows, labels = [], ("XX", "YY", "ZZ", "XY", "YZ", "ZX")
-    for ln in txt[i:].splitlines():
+    lines = txt[i:].splitlines()
+    # 表头第 2 行给列顺序（" Direction  XX  YY  ZZ  XY  YZ  ZX"），每行行首给行标签。
+    # 按表头**实测**顺序建置换，比写死"VASP 一定是 XX YY ZZ XY YZ ZX"稳。
+    col_labels = None
+    for ln in lines[:4]:
         p = ln.split()
-        if p and p[0] in labels and len(p) >= 7:
+        if len(p) >= 7 and p[0].upper().startswith("DIRECTION"):
+            col_labels = [x.upper() for x in p[1:7]]
+            break
+    rows, row_labels = [], []
+    labels = ("XX", "YY", "ZZ", "XY", "YZ", "ZX")
+    for ln in lines:
+        p = ln.split()
+        if p and p[0].upper() in labels and len(p) >= 7:
             try:
                 rows.append([float(x) for x in p[1:7]])
+                row_labels.append(p[0].upper())
             except ValueError:
                 pass
         if len(rows) == 6:
@@ -219,7 +295,19 @@ def read_elastic(cwd: Path):
     if len(rows) != 6:
         return None
     # VASP 输出 kBar，amset 要 GPa
-    return [[round(v / 10.0, 3) for v in r] for r in rows]
+    mat = [[v / 10.0 for v in r] for r in rows]
+    # patch_voigt_order：来源顺序 -> 标准 Voigt 顺序（行列同时重排，见文件上部说明）
+    src = col_labels or row_labels
+    if _voigt_perm(src) is None or _voigt_perm(row_labels) is None:
+        print("[WARN] 弹性张量的行列标签认不全（表头 %s / 行标签 %s）——"
+              "按 VASP 缺省顺序 XX YY ZZ XY YZ ZX 重排" % (col_labels, row_labels))
+        mat = vasp_to_voigt_6x6(mat)
+        src = list(_VASP_DEFAULT_LABELS)
+    else:
+        mat = _reorder_voigt(mat, src, row_labels)
+    print("[OK] 弹性常数：来源顺序 %s 已重排为标准 Voigt (XX YY ZZ YZ XZ XY)"
+          "——不重排会把面内剪切 C66(XY) 与 C_zxzx 互换" % (" ".join(src),))
+    return [[round(v, 3) for v in r] for r in mat]
 
 
 def read_bandgap(cwd: Path):
@@ -545,6 +633,8 @@ def apply_2d_corrections(cwd: Path, elastic):
         "elastic_rescale_factor_c_over_t": round(factor, 4),
         "elastic_constant_raw_GPa": elastic,
         "elastic_constant_rescaled_GPa": new_elastic,
+        "elastic_constant_convention": "standard Voigt (XX YY ZZ YZ XZ XY)，"
+                                       "已由 read_elastic 从 VASP 的 (XX YY ZZ XY YZ ZX) 重排",
         "areal_density_factor_cm": c_len * 1e-8,
         "areal_density_note": "n_2D [cm^-2] = n_3D [cm^-3] x cell_c [cm]",
         "free_carrier_screening": bool(FREE_CARRIER_SCREENING_2D),
@@ -688,13 +778,15 @@ def _grab_matrix3(txt, tag):
     return None
 def write_settings(out: Path, eps_inf, eps_static, gap, elastic,
                    is_2d=False, c_len=None):
-    lines = ["# amset settings.yaml（gen_step10 自动生成，可手改后重跑本步）"]
+    lines = ["# amset settings.yaml（gen_step10 自动生成，可手改后重跑本步）",
+             "# skill_rev: %s" % _SKILL_REV]
     if is_2d:
         # patch_2d_amset：把 2D 的三件事和一条局限写进文件头，
         # 免得几个月后拿着 transport.json 忘了这是 slab 模型跑出来的。
         lines += [
             "# ===== 2D slab 模型 =====",
             "# 1) elastic_constant 已按 c/t 重标度（还原成层材料的等效三维值）",
+            "#    顺序为标准 Voigt (XX YY ZZ YZ XZ XY)，已从 VASP 顺序重排",
             "# 2) free_carrier_screening 已打开（否则 POP 主导时迁移率对浓度不响应）",
             "# 3) 下面的 doping 是体浓度 cm^-3；面浓度 n_2D = n_3D × c",
         ]
