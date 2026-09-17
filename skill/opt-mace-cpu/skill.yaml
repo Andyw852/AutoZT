@@ -14,7 +14,7 @@
 # CPU 版：DEVICE=cpu，跑 jzzn 的 cpu192 分区（venv mace_cpu）。
 # GPU 版见 skill/opt-mace-gpu/（同一套步骤，跑 3090 GPU 服务器）。
 # =============================================================================
-schema: 1
+schema: 2
 name: opt-mace-cpu
 desc: 结构优化(MACE/CPU)
 version: "0.1"
@@ -50,6 +50,15 @@ steps:
      gen: gen_step3_formation.py,
      gen_need: [stepconf.py, step.conf], fetch_all: true}
 
++io_schema:
+  inputs: [{name: POSCAR, from: user, required: true, desc: "材料结构"}]
+  outputs: [{name: workflow_outputs, step: final, type: directory, desc: "由技能实际步骤产生的结果文件"}]
+  params: []
+  steps: []
+flow:
+  summary: "按技能步骤生成并校验科学计算结果"
+  stages: [{name: workflow, steps: [], produces: [workflow_outputs]}]
+corrections: [node_fail, dir_missing]
 requires:
   python: [mace-torch, torch, ase, numpy]
   conda: mace_cpu

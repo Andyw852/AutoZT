@@ -1106,9 +1106,17 @@ def cmd_fit_pheasy(cfg, out):
     # selected through PHEASY_USE_RFE in the environment
     fit_flags = ["--full_ifc", "-l", ("LASSO" if method == "RFE" else method),
                  "--hdf5"]
+    # RASR (Born-Huang rotational invariance + Huang equilibrium) is read by
+    # pheasy ONLY in the null-space construction step (-c).  Passing it to -f was
+    # a silent no-op: -f loads ns_*.npz and never re-imposes the constraints, so
+    # on a 2D slab the ZA branch stayed unconstrained -- omega goes linear near
+    # Gamma instead of q^2, the frequencies can all be positive (so the imaginary
+    # frequency gate passes) and kappa is still wrong.  Flag goes on -c now, and
+    # the step output is checked to confirm the constraint really got imposed.
     rasr = str(cfg.get("pheasy_rasr") or "").strip()
+    rasr_flag = ""
     if rasr and rasr.lower() not in ("none", "false", "off"):
-        fit_flags += ["--rasr", rasr]
+        rasr_flag = " --rasr %s" % rasr
     if _truthy(cfg.get("pheasy_std"), False):
         fit_flags.append("--std")
     seed = cfg.get("pheasy_seed")
@@ -1145,15 +1153,29 @@ def cmd_fit_pheasy(cfg, out):
     disp_step = "%s -d --ndata %d --disp_file" % (base, len(disps))
 
     run_steps = (("cluster space", "setup", base + " -s"),
-                 ("symmetry constraints", "setup", base + " -c"),
+                 ("symmetry constraints", "setup", base + " -c" + rasr_flag),
                  ("displacement matrix", "displacement", disp_step))
     for label, phase, cmd in run_steps:
         print("[pheasy] %s: %s" % (label, cmd), flush=True)
-        r = subprocess.run(cmd, shell=True,
+        # capture output: the -c step is where RASR has to show up, and we need
+        # its log to prove the constraint was imposed (see below)
+        r = subprocess.run(cmd, shell=True, capture_output=True, text=True,
                            env=_pheasy_env(method, phase, ncpu, natom_super,
                                            tuning, ols_ridge, ols_maxiter))
+        _out = (r.stdout or "") + (r.stderr or "")
+        sys.stdout.write(_out)
         if r.returncode != 0:
             sys.exit("[ERROR] pheasy %s failed (rc=%d)" % (label, r.returncode))
+        if label == "symmetry constraints" and rasr_flag:
+            open("pheasy_c.log", "w").write(_out)
+            if not re.search(r"Imposing rotational invariance"
+                             r"|Imposing equilibrium conditions", _out):
+                sys.exit("[ERROR] RASR=%s requested but pheasy -c never logged "
+                         "imposing rotational invariance / equilibrium "
+                         "(see pheasy_c.log) -- force constants are not trustworthy"
+                         % rasr)
+            print("[OK] RASR=%s imposed in the null-space construction step (-c)" % rasr,
+                  flush=True)
     print("[pheasy] fit: %s" % fit_step, flush=True)
     env = _pheasy_env(method, "fit", ncpu, natom_super, tuning, ols_ridge,
                       ols_maxiter,

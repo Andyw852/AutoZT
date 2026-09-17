@@ -495,7 +495,10 @@ def render_vasp_template(text, filename, step_name, profiles):
         if constrained:
             return '#!/bin/bash\nexport AUTOZT_CELL_CONSTRAINT=none\necho "ERROR: cluster has no configured constrained VASP" >&2\nexit 1\n'
         raise ValueError("VASP 配置缺少 standard." + variant)
-    if constrained and interface not in ("ioptcell_tag", "optcell_file"):
+    # lattice_constraints = VASP 6.5+ 官方标签（P1-4）；relax_common 侧还会再核一次
+    # 版本与 c∥z，确认不了就报错（旧版会静默忽略该标签 → 真空被一起弛豫）。
+    if constrained and interface not in ("ioptcell_tag", "optcell_file",
+                                         "lattice_constraints"):
         raise ValueError("二维变胞优化需要已配置的 VASP 约束接口")
     lines = text.splitlines()
     launches = [index for index, line in enumerate(lines)
@@ -631,9 +634,27 @@ def _cores_cmd(n, sub=""):
             % (b64, n, shlex.quote(sub), n, shlex.quote(sub)))
 
 
+# ===== _contcar_to_poscar_line (2026-09-16) =====
+def _contcar_to_poscar_line(step_dir):
+    """contcar_to_poscar 的远端命令：把上一次弛豫的 CONTCAR 续跑成 POSCAR。
+
+    必须判【非空且像个结构】，不能只判存在：崩掉的作业会在步骤目录里留下 0 字节的
+    CONTCAR 占位（VASP 一启动就建文件），若用 [ -f ] 判断，就会把刚 gen 好的 POSCAR
+    直接清成 0 字节 —— 2026-09-16 MoS2 实测：VASP 因晶胞数值不对称 17 秒退出，之后
+    每次 retry 都得到空 POSCAR，submit 出去必然再崩，日志里还看不出原因。
+    """
+    return ("cd %s && [ -s CONTCAR ] && "
+            "[ \"$(wc -l < CONTCAR 2>/dev/null)\" -ge 8 ] && "
+            "[ -n \"$(head -1 CONTCAR 2>/dev/null)\" ] && "
+            "cp CONTCAR POSCAR && "
+            "echo '[tf] contcar_to_poscar：已用 CONTCAR 覆盖 POSCAR（续跑）' || true"
+            % shlex.quote(step_dir))
+
+
 def remote_gen(cfg, t, m, sname, host=None, wd=None):
     from autozt import (PROV_DIR, PROV_NAME, STEP_CONF, build_gen_provenance,
                        build_step_conf, find_asset, provenance_enabled, run_remote,
+                       stale_template_note,
                        sh_b64, step_cfg)
     """执行 gen：先建目录、补 POSCAR（v3 本地模式）和 gen_need 依赖文件、gen 脚本，
     再运行。文件来源：find_asset 查找链（project_setting > skill_dir，支持
@@ -689,15 +710,31 @@ def remote_gen(cfg, t, m, sname, host=None, wd=None):
         else:
             need = need + [gen_script]  # 本地找不到 → gen_dir 远端兜底
     lp = m.get("lpath")
-    if lp:  # v3：POSCAR 以本地项目目录为准，远端缺则推送
+    if lp:  # v3：POSCAR 以本地项目目录为准；远端内容与本地不一致就覆盖
         pos = os.path.join(lp, "POSCAR")
         if os.path.isfile(pos):
             with open(pos, "rb") as fh:
                 _pdata = fh.read()
             b64 = base64.b64encode(_pdata).decode()
-            line += "[ -f POSCAR ] || echo %s | base64 -d > POSCAR ; " % b64
-            prov_files["POSCAR"] = {"sha256": hashlib.sha256(_pdata).hexdigest(),
-                                    "source": pos, "origin": "project"}
+            _psha = hashlib.sha256(_pdata).hexdigest()
+            # v1.14：由"远端缺文件才推"改成"内容不一致就推"（与上面依赖文件同一套
+            # md5/sha 差异约定）。动机（2026-09-16 MoS2 实测）：本地按文档的结构复用
+            # 流程改了材料根 POSCAR（TASKFLOW 结构复用：把 CONTCAR 覆盖成材料根
+            # POSCAR），远端旧文件还在 -> 新结构永远推不上去，第一步 VASP 拿着旧结构
+            # 跑（那次旧胞数值不对称，直接 I REFUSE TO CONTINUE）。而 provenance 记的
+            # 是"打算推的本地文件"，两边对不上时看档案也发现不了。
+            # 写临时文件再原子 mv + 推后校验 sha，失败立刻报错退出（绝不带着旧结构往下跑）。
+            line += ("_tfp=$(sha256sum POSCAR 2>/dev/null | cut -d' ' -f1); "
+                     "[ \"$_tfp\" = %s ] || { _t=.tf_poscar.$$; "
+                     "echo %s | base64 -d > \"$_t\" && mv -f \"$_t\" POSCAR && "
+                     "echo \"[tf] POSCAR 已更新为本地版 %s（远端原为 $_tfp）\"; }; "
+                     "[ \"$(sha256sum POSCAR 2>/dev/null | cut -d' ' -f1)\" = %s ] || "
+                     "{ echo 'ERROR: POSCAR 推送后 sha256 校验失败"
+                     "——拒绝用不一致的结构继续' >&2; exit 1; }; "
+                     % (_psha, b64, _psha[:12], _psha))
+            prov_files["POSCAR"] = {"sha256": _psha, "source": pos,
+                                    "origin": "project",
+                                    "sync": "push-if-diff+verify"}
     # v1.0：公共模块带依赖——被推送的 _common/<组>/X.py 若 import 了**同目录**的
     # 兄弟模块，而清单里没写它，就自动补推。动机：2026-09-08 往 _common/opt/ 加了
     # method_select.py 并让 relax_common.py import 它，但 5 个技能的 gen_need 都没
@@ -725,6 +762,14 @@ def remote_gen(cfg, t, m, sname, host=None, wd=None):
                              "source": None, "origin": "merged(step.conf)"}
             continue
         local_src = find_asset(cfg, t, m, f, sname)
+        # 过期覆盖副本检测：项目/集群级模板优先级高于技能模板，旧副本缺了技能模板
+        # 新加的 {{占位符}} 时渲染照常、作业照跑，只是新功能被静默吃掉。提前告警。
+        try:
+            _sn = stale_template_note(cfg, t, m, f, local_src, sname)
+            if _sn:
+                print("警告：%s" % _sn, file=sys.stderr)
+        except Exception:                       # noqa: BLE001 —— 检测失败绝不阻断 gen
+            pass
         if local_src:
             with open(local_src, "rb") as fh:
                 data = fh.read()
@@ -783,8 +828,13 @@ def remote_gen(cfg, t, m, sname, host=None, wd=None):
             _pretty = build_gen_provenance(cfg, t, m, sname, **_arg)
             _oneline = build_gen_provenance(cfg, t, m, sname, compact=True, **_arg)
             _rel = os.path.join(PROV_DIR, "%s.json" % sname)
+            # 步骤名可以带子目录（如 step2_bandgap/step2.1_static），只 mkdir
+            # PROV_DIR 会让 > 写不进去："provenance/step2_bandgap/....json:
+            # No such file or directory" —— 而且那条出错行混在 gen 输出里，
+            # 档案静默丢失（2026-09-16 MoS2 S2.1_scf 实测）。所以按目标路径的
+            # 目录建。
             line += "mkdir -p %s && echo %s | base64 -d > %s ; " % (
-                shlex.quote(PROV_DIR),
+                shlex.quote(os.path.dirname(_rel) or PROV_DIR),
                 base64.b64encode(_pretty.encode("utf-8")).decode(), shlex.quote(_rel))
             line += "echo %s | base64 -d >> %s ; " % (
                 base64.b64encode((_oneline + "\n").encode("utf-8")).decode(),
@@ -1210,15 +1260,14 @@ def do_submit(cfg, t, m, s, force, gen_first, contcar_cp, tag, submit=True):
             print("%s: gen 失败。%s" % (tag, out))
             print("  提示：材料 work_dir = %s（来源：%s）。切过集群后最常见的失败原因\n"
                   "        是 project_setting/setting.yaml 里还钉着旧集群的路径——\n"
-                  "        它的优先级高于 hpc.yaml，tf hpc 不会替你改它。"
+                  "        它的优先级高于 hpc.yaml，autozt hpc 不会替你改它。"
                   % (m.get("work_dir_eff") or "(未解析)",
                      m.get("work_dir_src") or "未知"), file=sys.stderr)
             return False
         print(_i18n.t("%s: gen 完成。%s", "%s: generated. %s")
               % (tag, out.strip().splitlines()[-1] if out.strip() else ""))
     if contcar_cp:
-        run_remote(cfg, "cd %s && [ -f CONTCAR ] && cp CONTCAR POSCAR || true"
-                   % shlex.quote(s["dir"]))
+        run_remote(cfg, _contcar_to_poscar_line(s["dir"]))
     if not submit:   # v3.22：只生成不提交，交由 start
         print(_i18n.t("%s: 已生成输入，未提交。检查后运行  pa -p %s -j %s start  提交。",
                   "%s: inputs generated, not submitted. Review them, then run "
@@ -1321,6 +1370,12 @@ def _remote_submit_preflight(cfg, m, s, t=None):
         _cc = {}
     _declared = str(_cc.get("partition") or _cc.get("queue") or "").strip()
     _sub_path = os.path.join(s["dir"], str(s.get("submit") or "submit.sh"))
+    # 一次读回 submit.sh 头部，分区/资源/conda 三项检查共用（省一次 ssh 往返）。
+    # ★ 必须在下游任何 _res 使用之前完成：这里曾把读取放在使用之后，导致每次 start
+    #   都在 _res 上报 UnboundLocalError、远端提交全线失败。
+    from autozt import preflight as _pf
+    _rc3, _so3 = _rrm(cfg, "sed -n '1,60p' %s 2>/dev/null" % _sub_path, host=host)
+    _res = _pf.parse_submit(_so3 or "")
     _want = (_res.get("partition") or "").strip()
     if _want and not _declared:  # noqa: E501 (分区提示见 preflight.check_partition)
         # 集群没声明分区时，去该集群自带的模板里找实际使用的分区名，只做提示
@@ -1343,15 +1398,11 @@ def _remote_submit_preflight(cfg, m, s, t=None):
     # 资源申请自检：--cpus-per-task × --ntasks-per-node 不能超过集群声明的上限。
     # 实测教训（2026-09-15 fc-fit 切 3090）：模板写 --cpus-per-task=48 而机器只给
     # 24 → 作业永远 PD(PartitionConfig)，日志里一个字都不说；改成 24 立刻开跑。
-    from autozt import preflight as _pf
     _mc = 0
     try:
         _mc = int(_cc.get("max_cpus") or _cc.get("max_cpus_per_task") or 0)
     except (TypeError, ValueError):
         _mc = 0
-    # 一次读回 submit.sh 头部，分区/资源/conda 三项检查共用（省一次 ssh 往返）
-    _rc3, _so3 = _rrm(cfg, "sed -n '1,60p' %s 2>/dev/null" % _sub_path, host=host)
-    _res = _pf.parse_submit(_so3 or "")
     if _mc:
         _rmsg = _pf.check_resources(_res, _mc)
         if _rmsg:
@@ -1684,8 +1735,8 @@ def cmd_step_init(cfg, data, proj, job, force):
         return 1
     print("%s: gen 完成。%s" % (tag, out.strip().splitlines()[-1] if out.strip() else ""))
     if sc.get("contcar_to_poscar"):
-        run_remote(cfg, "cd %s && [ -f CONTCAR ] && cp CONTCAR POSCAR || true"
-                   % shlex.quote(s["dir"]), host=s.get("_host") or "__default__")
+        run_remote(cfg, _contcar_to_poscar_line(s["dir"]),
+                   host=s.get("_host") or "__default__")
     log_action(m, "init %s（只生成输入）" % s["label"])
     print("%s: 输入就绪 → %s（检查后用 start 提交）" % (tag, s["dir"]))
     return 0

@@ -303,10 +303,15 @@ def render_provenance(rows):
             L.append("  输入   %d 个文件（sha256 前 12 位）" % len(ins))
             for k in sorted(ins):
                 v = ins[k] or {}
-                L.append("    %-24s %s%s%s"
+                L.append("    %-24s %s%s%s%s"
                          % (k, (v.get("sha256") or "-")[:12],
                             ("  ← " + v["source"]) if v.get("source") else "",
-                            "（已按集群渲染）" if v.get("rendered") else ""))
+                            "（已按集群渲染）" if v.get("rendered") else "",
+                            ("  [推送:%s]" % v["sync"]) if v.get("sync") else ""))
+            if any((v or {}).get("sync") for v in ins.values()):
+                L.append("   注：[推送:push-if-diff+verify] 的文件在 gen 时按内容差异推送，"
+                         "推完立刻校验 sha256（不一致让 gen 直接失败），所以上面记的 sha256 "
+                         "就是远端实际内容；没标这条的是“缺文件才推”的旧约定。")
         sc = prov.get("step_conf") or {}
         if sc:
             L.append("  参数   step.conf sha256 %s（%d 字符%s）"

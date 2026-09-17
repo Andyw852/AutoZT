@@ -371,7 +371,7 @@ def main():
     jobname = args.jobname or sanitize_label(f"{label}_s2static")[:80]
     render_submit(str(submit_tpl), step2 / "submit.sh", {"JOBNAME": jobname})
     sub_ov = dict(SUBMIT_OVERRIDE)
-    sub_ov.update(stepconf.read_submit(stepconf.CONF_NAME))
+    sub_ov.update(stepconf.read_submit(stepconf.CONF_NAME, used_incar=True))
     stepconf.apply_submit(step2 / "submit.sh", sub_ov)
 
     # ---- 磁性自动处理 ----
@@ -404,6 +404,15 @@ def main():
         incar_remove.add("NUPDOWN")
     text = build_incar(items, incar_remove, incar_set)
     (step2 / "INCAR").write_text(text, encoding="utf-8", newline="\n")
+    # step.conf 的 [incar]/[incar.final]/[incar.delete] 覆盖。
+    # 此前本技能所有 gen 脚本只调 read_submit()，这三节**写了没人读**，
+    # 用户在 step.conf 里改 INCAR 会被静默忽略。2026-09-15 在 step2.3_hse 上
+    # 暴露并修复；这里改用 stepconf 里的唯一实现，避免各脚本各写一套。
+    _ic_log = []
+    stepconf.apply_incar_file(step2 / "INCAR", log=_ic_log)
+    for _m in _ic_log:
+        print("[..] %s" % _m)
+
 
     method_src = step1 / METHOD_FILE
     if method_src.exists():

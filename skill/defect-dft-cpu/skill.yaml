@@ -7,7 +7,7 @@
 #   S3_chg    各缺陷带电态单点(NELECT±q, LVHAR)          [fanout]
 #   S4_anlys  凸包出化学势 -> 形成能/转变能级/P-N（run:gen，登录节点）
 # =============================================================================
-schema: 1
+schema: 2
 name: defect-dft-cpu
 desc: 缺陷形成能(DFT/CPU)
 version: "0.1"
@@ -37,3 +37,27 @@ steps:
   - {seq: 4, name: step4_analysis, label: S4_anlys, check: plot, run: gen,
      gen: gen_step4_analysis.py, needs: [step0_references, step3_charged],
      done_marker: formation_energy_summary.json, fetch_all: true}
+
+io_schema:
+  inputs:
+    - {name: POSCAR, from: user, required: true, desc: "完美材料结构"}
+    - {name: defect_config, from: config, required: false, desc: "缺陷与电荷态配置（step.conf）"}
+  outputs:
+    - {name: references_energy.json, step: S0_refs, type: json, desc: "参考相能量"}
+    - {name: formation_energy_summary.json, step: S4_anlys, type: json, desc: "缺陷形成能、转变能级和 P/N 判断"}
+  params: []
+  steps:
+    - {step: S0_refs, title: "Reference phases", outputs: [references_energy.json], validator: "marker 文件存在"}
+    - {step: S1_bulk, title: "Relax bulk", inputs: [POSCAR], outputs: [CONTCAR, LOCPOT], validator: "OUTCAR 完成"}
+    - {step: S2_def, title: "Relax defects", inputs: [CONTCAR], outputs: ["def-*"], validator: "所有缺陷扇出 OUTCAR 完成"}
+    - {step: S3_chg, title: "Charged defects", inputs: ["def-*"], outputs: ["def-* charged outputs"], validator: "所有电荷态完成"}
+    - {step: S4_anlys, title: "Formation energy analysis", inputs: [references_energy.json], outputs: [formation_energy_summary.json], validator: "marker 文件存在"}
+flow:
+  summary: "参考相与体相弛豫 → 缺陷中性/带电态扇出 → 形成能与 P/N 分析"
+  stages:
+    - {name: 参考与体相, steps: [S0_refs, S1_bulk], produces: [references_energy.json, CONTCAR]}
+    - {name: 缺陷计算, steps: [S2_def, S3_chg], produces: ["def-* outputs"]}
+    - {name: 分析, steps: [S4_anlys], produces: [formation_energy_summary.json]}
+  next_skills: [{skill: ke-dft-cpu, via: CONTCAR, desc: "缺陷结构可继续电子输运"}]
+  requires: {POSCAR: "材料目录根必须有 POSCAR"}
+corrections: [node_fail, nsw_continue, zbrent, dir_missing]

@@ -320,25 +320,53 @@ def main():
         kc.inherit_scf_tags(d / "INCAR", cwd, with_u=True, label=d.name)
         # 并行参数按宿主机自适应（GPU 版强制 NCORE=1/KPAR=1，CPU 保持模板默认）
         kc.apply_parallel_tags(d / "INCAR")
+        # step.conf 的 [incar]/[incar.final]/[incar.delete] 覆盖。
+        # 此前本技能所有 gen 脚本只调 read_submit()，这三节**写了没人读**，
+        # 用户在 step.conf 里改 INCAR 会被静默忽略。2026-09-15 在 step2.3_hse 上
+        # 暴露并修复；这里改用 stepconf 里的唯一实现，避免各脚本各写一套。
+        _ic_log = []
+        stepconf.apply_incar_file(d / "INCAR", log=_ic_log)
+        for _m in _ic_log:
+            print("[..] %s" % _m)
+
         sub = d / "submit.sh"
         sub.write_text(submit_body.replace(
             "{{JOBNAME}}", "%s-ke-dft-cpu-%s-%s" % (cwd.name, STEP_LABEL, d.name)),
             encoding="utf-8", newline="\n")
-        stepconf.apply_submit(sub, stepconf.read_submit(stepconf.CONF_NAME))
+        stepconf.apply_submit(sub, stepconf.read_submit(stepconf.CONF_NAME, used_incar=True))
 
-    # [PATCH-IONRELAX] 对 xx±/yy± 4 个形变目录生成 ionrelax/ 子目录（共用
-    # resolve_strain_pairs 反解，与 step7b 找 ionrelax 的是同一套，不错位）。
+    # [PATCH-IONRELAX] 给**所有面内分量**的形变目录生成 ionrelax/ 子目录。
+    # 2026-09-16 二次修订：原来只建 xx±/yy± 四个。但二维 ADP 核用的是张量面内 2×2
+    # 子块（D_xx/D_yy/**D_xy**），面内剪切分量（xy）若仍是离子固定口径，同一张量里
+    # 就混了两种来源 —— 按用户定的规则：**面内只要有一个分量是 clamped 就必须报错**。
+    # 所以这里按"主导应变分量是否面内"来选目录（而不是只看 xx/yy 配对），
+    # 判据与 step7b 的 _inplane_dirs 完全一致。
     if dim == "2d":
-        _pairs, _sm = kc.resolve_strain_pairs(out)
-        if _pairs:
-            _ir_dirs = {_pairs["xx"][0], _pairs["xx"][1],
-                        _pairs["yy"][0], _pairs["yy"][1]}
+        _ir_dirs = set()
+        try:
+            import numpy as _np
+            _und = _np.array(kc.read_lattice_matrix(out / "undeformed" / "POSCAR"))
+            for _d in sorted(p for p in out.glob("deform-*") if p.is_dir()):
+                _L = _np.array(kc.read_lattice_matrix(_d / "POSCAR"))
+                _F = _np.transpose(_np.dot(_np.linalg.inv(_und), _L))
+                _E = (_np.dot(_F.T, _F) - _np.eye(3)) / 2.0
+                _i, _j = _np.unravel_index(_np.argmax(_np.abs(_E)), _E.shape)
+                if (_i, _j) in ((0, 0), (1, 1), (0, 1), (1, 0)):
+                    _ir_dirs.add(_d.name)
+        except Exception as _e:                                # noqa: BLE001
+            print("[WARN] 按应变量判面内分量失败（%s），退回 xx±/yy± 配对" % _e)
+            _pairs, _sm = kc.resolve_strain_pairs(out)
+            if _pairs:
+                _ir_dirs = {_pairs["xx"][0], _pairs["xx"][1],
+                            _pairs["yy"][0], _pairs["yy"][1]}
+        if _ir_dirs:
             for _name in sorted(_ir_dirs):
                 _build_ionrelax(out / _name, encut, _subs, submit_body)
-            print("[IONRELAX] 已生成 %d 个 ionrelax/（xx±/yy± 弛豫），E1 将用离子弛豫构型"
-                  % len(_ir_dirs))
+            print("[IONRELAX] 已生成 %d 个 ionrelax/（**全部面内分量**：%s 弛豫），"
+                  "E1/形变势用离子弛豫构型"
+                  % (len(_ir_dirs), ", ".join(sorted(_ir_dirs))))
         else:
-            print("[WARN] 应变配对反解失败，跳过 ionrelax/（E1 退回刚性单点口径）")
+            print("[WARN] 认不出面内分量，跳过 ionrelax/（形变势退回刚性单点口径）")
 
     print("[DONE] %s：%d 个形变子目录输入就绪，tf 会各自提交" % (OUTDIR_NAME, len(subs)))
 

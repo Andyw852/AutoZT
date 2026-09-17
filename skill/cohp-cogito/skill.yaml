@@ -30,7 +30,7 @@
 #     NUM_OUTER   轨道优化外循环（默认 4；收敛告警时 +1/+2）
 #     DENSIFY     COHP 曲线加密（默认空；2/3 更平滑）
 # =============================================================================
-schema: 1
+schema: 2
 name: cohp-cogito
 desc: COHP/ICOHP/ICOBI 成键分析 (COGITO)
 version: "0.2"
@@ -71,3 +71,24 @@ requires:
   python: [numpy, scipy, pymatgen]
   conda: atomate2_p_a
   exe: [COGITO, COGITOanalyze, COGITOpost]
+
+io_schema:
+  inputs:
+    - {name: WAVECAR, from: skill:band-dft-cpu/S3_WAVECAR, required: true, desc: "上游 PBE 静态波函数"}
+  outputs:
+    - {name: bond_info.txt, step: S1_COHP, type: text, desc: "COGITO 键分析原始表"}
+    - {name: icohp_report.md, step: S2_summary, type: markdown, desc: "ICOHP/ICOBI 中文汇总"}
+    - {name: cogito_summary.json, step: S2_summary, type: json, desc: "结构化键分析结果"}
+  params:
+    - {name: NUM_OUTER, default: 4, where: step.conf, desc: "COGITO 轨道优化外循环次数"}
+    - {name: DENSIFY, default: 0, where: step.conf, desc: "COHP 曲线加密级别"}
+  steps:
+    - {step: S1_COHP, title: "COHP analysis", inputs: [WAVECAR], outputs: [bond_info.txt, cogito_summary.json], validator: "bond_info.txt 存在"}
+    - {step: S2_summary, title: "Summarize bonds", inputs: [bond_info.txt], outputs: [icohp_report.md], validator: "icohp_report.md 存在"}
+flow:
+  summary: "读取 band-dft-cpu 的 WAVECAR → COGITO 成键分析 → ICOHP/ICOBI 汇总"
+  stages:
+    - {name: 分析, steps: [S1_COHP], produces: [bond_info.txt]}
+    - {name: 汇总, steps: [S2_summary], produces: [icohp_report.md, cogito_summary.json]}
+  requires: {WAVECAR: "band-dft-cpu S3_WAVECAR 产物"}
+corrections: [node_fail, dir_missing]

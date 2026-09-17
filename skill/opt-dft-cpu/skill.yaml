@@ -13,7 +13,7 @@
 #   形成能 E_form  = E_tot - Σ n_i·μ_i         （μ_i 填 step3 的 MU 参数）
 #   嵌入能 E_embed = E_tot - E_host - n_g·μ_g  （Li@C60 这类包合/插层）
 # =============================================================================
-schema: 1
+schema: 2
 name: opt-dft-cpu
 desc: 结构优化(DFT/CPU)
 version: "0.1"
@@ -43,3 +43,21 @@ steps:
   - {seq: 3, name: step3_energy, label: S3_energy, check: plot, run: gen,
      done_marker: energy_summary.json, gen: gen_step3_energy.py,
      gen_need: [stepconf.py, step.conf], fetch_all: true}
+
+io_schema:
+  inputs: [{name: POSCAR, from: user, required: true, desc: "待优化结构"}]
+  outputs:
+    - {name: CONTCAR, step: S1_opt, type: structure, desc: "优化后结构"}
+    - {name: energy_summary.json, step: S3_energy, type: json, desc: "总能量与形成能汇总"}
+  params: []
+  steps:
+    - {step: S1_opt, title: "DFT relax", inputs: [POSCAR], outputs: [CONTCAR], validator: "力收敛"}
+    - {step: S2_static, title: "Static energy", inputs: [CONTCAR], outputs: [OUTCAR], validator: "outcar"}
+    - {step: S3_energy, title: "Energy summary", inputs: [OUTCAR], outputs: [energy_summary.json], validator: "marker exists"}
+flow:
+  summary: "DFT 结构优化 → 静态总能 → 能量后处理"
+  stages:
+    - {name: 弛豫, steps: [S1_opt], produces: [CONTCAR]}
+    - {name: 能量, steps: [S2_static, S3_energy], produces: [energy_summary.json]}
+  next_skills: [{skill: band-dft-cpu, via: CONTCAR, desc: "能带计算"}]
+corrections: [node_fail, nsw_continue, zbrent, dir_missing]

@@ -41,8 +41,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 try:
     from dim_common import read_dim, detect_dimension
     _HAS_DIM = True
-except Exception:
+except Exception as _e:
+    # ★ 不静默：ImportError 会让后面所有维度相关分支整体失效，属于"能力被悄悄
+    #   关掉"这类失效 —— 症状是 2D/0D 材料被当 3D 处理，而日志里一句提示都没有。
     _HAS_DIM = False
+    print("[WARN] 无法导入 dim_common（%s: %s）—— 维度检测/处理全部关闭，"
+          "2D/0D 材料会按 3D 处理，请检查 gen_need 是否漏了 dim_common.py。"
+          % (type(_e).__name__, _e), file=sys.stderr)
 
 STATE_FILE = ".relax_state.json"
 METHOD_FILE = "workflow_method.txt"

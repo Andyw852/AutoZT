@@ -78,11 +78,38 @@ REQUIRE_BANDGAP = True
 # patch_interp_factor：AMSET 的收敛判据在**插值后**的网格上，别吃默认值 5。
 #   设 None 则不写这一行（回到 AMSET 默认）。加大前先做收敛测试。
 INTERPOLATION_FACTOR = 10
+# NWORKERS：AMSET 的并行进程数，会写进 settings.yaml 的 nworkers。
+#   ★ 2026-09-16 新增：此前**不写 nworkers**，AMSET 取默认 -1，其源码
+#     (amset/interpolation/bandstructure.py:182) 把 -1 解释成
+#         nworkers = multiprocessing.cpu_count() if nworkers == -1 else nworkers
+#     即**用满节点全部核**，而提交模板只申请 24 核 —— 于是超订节点 8 倍
+#     （jzzn 节点 192 核），抢占同节点其他作业的 CPU、违反 SLURM 分配，
+#     且耗时随节点负载剧烈波动。
+#   实测（Pb2Sb2Te5，其余设置相同）：nworkers=-1 时 4 分钟；nworkers=24 时 7.5 小时。
+#   ★ 默认 None = **自动**：由提交模板（叠加 step.conf 的 [submit] 覆盖）推出本次
+#     作业真正分配到的核数 ntasks_per_node × cpus_per_task，拿它当 nworkers。
+#     为什么要自动：三台机器的分配口径本来就不同 ——
+#         jzzn      24 × 1 = 24
+#         hanhai25 128 × 1 = 128     （写死 24 = 白占 104 核）
+#         3090       1 × 8 = 8       （写死 24 = 超订 3 倍）
+#     写死一个常数在三台上必然错两台：少要 = 算力闲置，多要 = 抢别人的 CPU。
+#   ★ 要固定值就在 step.conf 写 NWORKERS = <int>（技能侧
+#     skill/ke-dft-cpu/step8_amset/step.conf，或某材料的
+#     project_setting/templates/step8_amset/step.conf）；与本次分配不一致时打印 WARN。
+#     AMSET 在掺杂/温度维度上接近线性加速，想更快就把提交模板的核数提上去 ——
+#     自动模式会跟着走，不用再手动同步两个数。
+NWORKERS = None
+NWORKERS_FALLBACK = 24      # 提交模板里读不到 SLURM 分配（--ntasks/--cpus）时的兜底
 # --- 弹性常数来源（amset run 的 ACD 散射需要）---
 #   MANUAL_ELASTIC 填了就用它，否则从 ELASTIC_DIR/OUTCAR 自动解析（kBar→GPa）。
 #   直接填：单个数（各向同性近似，GPa），或 6x6 列表（完整 Cij，GPa）。
 MANUAL_ELASTIC = None
 ELASTIC_DIR = "step6_elastic"
+# patch_deform_ref（2026-09-16）：形变势参考口径。step7b 若已写出
+# deformation_vac.h5（真空静电势零点，二维文献通行做法），2D 默认用它；
+# 否则退回 deformation.h5（AMSET 芯态对齐，官方为体材料设计）。
+# ★ 实测影响很大：CrS2 单层 E1_core=3.53 eV vs E1_vac=5.86 eV -> μ 差 2.76 倍。
+DEFORM_REF = "auto"      # auto = 2D 优先 vacuum；或强制 "vacuum" / "core"
 # --- patch_2d_amset：2D 修正 ---------------------------------------------
 # TWO_D_MODE: "auto" = 读 step1 的 workflow_method.txt 的 DIM=；"on"/"off" 强制。
 TWO_D_MODE = "auto"
@@ -99,6 +126,11 @@ LAYER_THICKNESS = "vdw"
 STEP = "step8_amset"
 SPEC = {
     "LAYER_THICKNESS": (LAYER_THICKNESS, "str"),
+    # NWORKERS 必须在 SPEC 里声明：step.conf 的严格模式会把没声明的键判成
+    # "本脚本不认识的键" 而 SystemExit（下面对 SystemExit 的兜底会把它吞掉 →
+    # 静默回默认值，用户在 step.conf 里写了等于没写）。
+    # 技能侧的落点是 skill/ke-dft-cpu/step8_amset/step.conf，不是技能全局 step.conf。
+    "NWORKERS": (NWORKERS, "int"),
 }
 # 2D 时给 settings.yaml 写 free_carrier_screening: true
 FREE_CARRIER_SCREENING_2D = True
@@ -143,6 +175,16 @@ def read_dielectric(dielect_dir: Path):
     #      **恒等于 0** -> POP 散射被整个丢掉，只在日志里留一行 WARN。
     #      实测签名：max|mobility/POP| = 2.3e48（分母趋零），而 sigma 被系统性高估。
     # 所以这里**抛错而不往下传**。确属已知情形要强行继续，显式改本开关。
+    # ★ NaN 必须**单独**查（2026-09-16 从 taskflow-v2.0 同步）：Python 里
+    #   float('nan') < 0 / < 1.0 全是 False，所以下面所有大小比较对 NaN 一律为假 ——
+    #   全 NaN 的张量会完美绕过所有守卫。实测 2026-09-14：Pb2Sb2Te5 / Sn2Sb2Te5 的
+    #   step5_dielect 张量全是 NaN，正是从这条缝里静默流进 settings.yaml 的。
+    def _has_nan(M):
+        if M is None:
+            return False
+        import math as _m
+        return any(_m.isnan(float(x)) for r in M for x in r)
+
     def _diele_fail(msg):
         if REQUIRE_PHYSICAL_DIELECTRIC:
             raise ValueError(
@@ -160,6 +202,14 @@ def read_dielectric(dielect_dir: Path):
                     "'MACROSCOPIC STATIC DIELECTRIC TENSOR (including local field effects "
                     "in DFT)' 块）—— DFPT 没跑完或崩了。" % dielect_dir)
         return None, None
+    if _has_nan(eps_inf):
+        _diele_fail("eps_inf 含 NaN（%s/OUTCAR）—— DFPT 发散/未收敛。"
+                    "本链实测失效体系：Pb2Sb2Te5、Sn2Sb2Te5（重元素窄隙）；"
+                    "根因是 LPEAD=.TRUE.，DFPT 的 INCAR 走 skill 模板（LPEAD=.FALSE.）。"
+                    % dielect_dir)
+    if _has_nan(eps_0):
+        _diele_fail("IONIC 块含 NaN（%s/OUTCAR）—— 离子介电段发散。"
+                    "注意：DFPT 只要离子段出 NaN，整张张量都不可用。" % dielect_dir)
     # 电子静态响应必须 >= 1；< 1 在正常绝缘体里不可能出现
     _diag_inf = [eps_inf[i][i] for i in range(3)]
     if min(_diag_inf) < 1.0:
@@ -185,6 +235,9 @@ def read_dielectric(dielect_dir: Path):
     eps_static = [[eps_inf[i][j] + eps_0[i][j] for j in range(3)] for i in range(3)]
     # patch_dielec_guard：ε_ionic<0 / ε_static<=0 非物理（多为 Γ 近零声学模
     # 污染 DFPT 离子介电）——弃离子项、退回 ε∞ 兜底并告警
+    if _has_nan(eps_0):
+        _diele_fail("离子介电对角含 NaN —— 下面的 '< 0' 判断对 NaN 恒为假，会漏过；"
+                    "这里显式拦截。")
     if any(eps_0[i][i] < 0 for i in range(3)):
         raise ValueError(
             "离子介电对角项为负（eps_ionic=%.2f:%.2f:%.2f，eps_static=%.2f），非物理，"
@@ -252,6 +305,35 @@ def vasp_to_voigt_piezo(e3x6):
     """3×6 压电张量（VASP 列序 XX YY ZZ XY YZ ZX）→ 标准 Voigt 列序（只重排列）。"""
     a = [[float(x) for x in row] for row in e3x6]
     return [[row[j] for j in _VASP2VOIGT] for row in a]
+
+
+def _pick_deformation_h5(cwd, read_dir):
+    """挑形变势文件：2D 且存在 deformation_vac.h5 时用真空口径，否则 core 口径。
+
+    DEFORM_REF: "auto"（2D 优先 vacuum）/ "vacuum" / "core"。
+    缺失时只告警不回退维度闸门 —— 真空口径是**推荐**而非硬要求，
+    但要在日志里说清楚本次用的是哪个口径（绝对值差 ~2.8 倍）。
+    """
+    read_dir = Path(read_dir)
+    ref = str(DEFORM_REF).lower()
+    vacuum_ok = (read_dir / "deformation_vac.h5").is_file()
+    mode = read_dim(cwd)
+    if ref == "auto":
+        want = (mode == "2d")
+    elif ref in ("vacuum", "core"):
+        want = (ref == "vacuum")
+    else:
+        sys.exit("[ERROR] DEFORM_REF=%r 无效，只允许 auto / vacuum / core" % DEFORM_REF)
+    if want and vacuum_ok:
+        print("[OK] 形变势参考口径：**真空**（deformation_vac.h5，二维文献口径）")
+        return "deformation_vac.h5"
+    if want and not vacuum_ok:
+        print("[WARN] 想要真空口径但 %s/deformation_vac.h5 不存在 -> 退回 **core** 口径"
+              "（AMSET 芯态对齐）。要真空口径请先跑 step7b（需要形变目录里的 LOCPOT）。"
+              % read_dir)
+    else:
+        print("[..] 形变势参考口径：core（AMSET 芯态对齐）")
+    return "deformation.h5"
 
 
 def read_elastic(cwd: Path):
@@ -334,8 +416,12 @@ def read_bandgap(cwd: Path):
                         return None
                     print("[OK] 带隙 %.4f eV（键 %s）" % (_g, k))
                     return _g
-        except Exception:
-            pass
+        except Exception as _e:
+            # ★ 不静默：这里失败会**静默退回项目配置里的 bandgap**，即用了另一个
+            #   来源的带隙（可能差几十甚至几百 meV）而不自知。必须喊出来。
+            print("[WARN] 解析 %s 失败（%s: %s）—— 将回退到项目 setting.yaml 的"
+                  " bandgap。两者可能不是同一个数，请核对。"
+                  % (bs, type(_e).__name__, _e), file=sys.stderr)
     # 退回项目配置
     for cand in (cwd / "project_setting" / "setting.yaml",):
         if cand.is_file():
@@ -482,10 +568,13 @@ def read_dim(cwd: Path):
 
 
 def _read_poscar_cz(path: Path):
-    """从 POSCAR 读 (c 轴长度 Å, 原子 z 向跨度 Å)。解析不了返回 (None, None)。
+    """从 POSCAR 读 (h⊥ Å, 原子 z 向跨度 Å)。解析不了返回 (None, None)。
 
-    只处理真空沿第 3 个晶格矢量、且 c 轴基本正交于 ab 面的常规 slab —— 这正是
-    本流程强制要求的布局（dim_common 检测到真空不在 c 轴会直接退出）。
+    **h⊥ = V/|a×b| = |c·(a×b)|/|a×b|**，即垂直于 ab 面的胞高，不是 |c|。
+    AMSET/phono3py 用的体积是 V = A·h⊥，所以 2D 归一化因子必须是 h⊥/t，
+    二维映射里 kz 积分长度 |b₃| = 2π/h⊥ 也应该用 h⊥ —— 正交胞时 h⊥ = |c|，
+    c 相对层法向倾斜时两者才不同（本流程强制真空沿第 3 个矢量、层法向 ∥ z，
+    dim_common 与插件都会拦）。
     """
     try:
         lines = path.read_text(encoding="utf-8-sig", errors="ignore").splitlines()
@@ -809,6 +898,9 @@ def write_settings(out: Path, eps_inf, eps_static, gap, elastic,
               "deformation_potential: deformation.h5"]
     if INTERPOLATION_FACTOR:     # patch_interp_factor
         lines.append("interpolation_factor: %d" % int(INTERPOLATION_FACTOR))
+    # ★ 必须显式写 nworkers：不写则 AMSET 默认 -1 = 用满节点全部核，
+    #   会超订 submit 模板申请的核数（见文件头 NWORKERS 处的实测记录）。
+    lines.append("nworkers: %d" % int(NWORKERS))
     _popf = read_pop_frequency(Path.cwd() / DIELECT_DIR)
     if _popf is not None and "POP" in SCATTERING:
         lines.append("pop_frequency: %s" % _popf)
@@ -867,21 +959,91 @@ def _guard_not_0d(cwd, step_name, why):
         return
 
 
+# ---------------------------------------------------------------------------
+# 提交分配 -> AMSET 进程数
+# ---------------------------------------------------------------------------
+_SBATCH_NTASKS = re.compile(r"^\s*#SBATCH\s+--ntasks(?:-per-node)?=(\d+)", re.M)
+_SBATCH_CPUS = re.compile(r"^\s*#SBATCH\s+--cpus-per-task=(\d+)", re.M)
+
+
+def _alloc_cores(cwd: Path):
+    """本次作业真正拿到的核数 = ntasks_per_node × cpus_per_task，返回 (cores|None, 来源)。
+
+    优先级：step.conf 的 [submit] 覆盖（apply_submit 会按它改写 submit.sh）> 提交模板。
+    模板里 OMP/OPENBLAS/MKL_NUM_THREADS 都被压到 1，所以可用核数就是"任务数 × 每任务核数"。
+    """
+    here = Path(__file__).resolve().parent
+    tpl = next((p for p in (here / "submit_amset.tpl", Path(cwd) / "submit_amset.tpl")
+                if p.is_file()), None)
+    if tpl is None:
+        return None, "找不到 submit_amset.tpl"
+    text = tpl.read_text(encoding="utf-8", errors="ignore")
+    mn, mc = _SBATCH_NTASKS.search(text), _SBATCH_CPUS.search(text)
+    ntasks = int(mn.group(1)) if mn else 1
+    cpus = int(mc.group(1)) if mc else 1
+    src = tpl.name
+    try:
+        sub = stepconf.read_submit(stepconf.CONF_NAME, used_incar=True)
+    except Exception:                                       # noqa: BLE001
+        sub = {}
+    for key in ("ntasks_per_node", "cpus_per_task"):
+        v = str(sub.get(key) or "").strip()
+        if v.isdigit():
+            if key == "ntasks_per_node":
+                ntasks = int(v)
+            else:
+                cpus = int(v)
+            src += " + step.conf[submit].%s" % key
+    return max(1, ntasks * cpus), "%s（%d × %d）" % (src, ntasks, cpus)
+
+
 def main():
     _disc_gate()
     cwd = Path.cwd()
-    global LAYER_THICKNESS
+    global LAYER_THICKNESS, NWORKERS
+    _conf_nworkers = None
     if (cwd / "step.conf").is_file():
+        # strict=False：材料级 step.conf 是【全技能共用】的一份，含别的步骤的键
+        # （FUNC / CELL_POLICY 等）。严格模式会被这些键打死，而它抛的是
+        # SystemExit=BaseException —— 原来这里 except SystemExit: pass 把整段
+        # 吞掉，于是本函数对 step.conf 的所有覆盖（LAYER_THICKNESS / NWORKERS）
+        # **永远静默失效**。与 2026-09-16 S3_uniform 被 FUNC 打死是同一个坑。
+        # 另外 StepConf 没有 .get()，原来写的 _p.get("NWORKERS") 一旦真跑到
+        # 就是 AttributeError；这里改用 _p[...]（SPEC 里已给默认值）。
         try:
-            LAYER_THICKNESS = stepconf.load(SPEC, STEP, str(cwd))["LAYER_THICKNESS"]
-        except SystemExit:
-            pass  # step.conf 缺失或 STEP 串了时保持出厂默认 "vdw"
+            _p = stepconf.load(SPEC, STEP, str(cwd), strict=False)
+            if _p["LAYER_THICKNESS"]:
+                LAYER_THICKNESS = _p["LAYER_THICKNESS"]
+            # NWORKERS 允许按材料/步骤覆盖；不写（None）= 自动，见下面。
+            if _p["NWORKERS"]:
+                _conf_nworkers = int(_p["NWORKERS"])
+        except (KeyError, ValueError, TypeError):
+            pass  # step.conf 读不成时保持出厂默认（LAYER_THICKNESS="vdw" / NWORKERS 自动）
+
+    # ---- NWORKERS：默认自动 = 本次提交实际分配到的核数 ----
+    # 写死一个常数在 jzzn/hanhai25/3090 上必然错两台（少要 = 算力闲置，
+    # 多要 = 抢同节点别人的 CPU），所以默认跟着提交分配走。
+    _alloc, _src = _alloc_cores(cwd)
+    if _conf_nworkers:
+        NWORKERS = _conf_nworkers
+        if _alloc and NWORKERS != _alloc:
+            print("[WARN] step.conf 写死 NWORKERS=%d，但本次提交分配 %d 核（%s）——"
+                  "少要 = 算力闲置，多要 = 抢同节点别人的 CPU，请核对这两个数。"
+                  % (NWORKERS, _alloc, _src), file=sys.stderr)
+        else:
+            print("[..] NWORKERS = %d（step.conf 指定）" % NWORKERS)
+    elif _alloc:
+        NWORKERS = _alloc
+        print("[OK] NWORKERS = %d（自动按提交分配：%s）" % (NWORKERS, _src))
+    else:
+        NWORKERS = NWORKERS_FALLBACK
+        print("[WARN] 推不出提交分配（%s）—— NWORKERS 兜底 %d" % (_src, NWORKERS))
     _guard_not_0d(cwd, "step8_amset",
                   "载流子输运建立在能带色散和布里渊区积分上，孤立分子两者都没有")
     out = cwd / OUTDIR_NAME
     out.mkdir(exist_ok=True)
     link(out, cwd / WAVE_DIR / "wavefunction.h5", "wavefunction.h5")
-    link(out, cwd / READ_DIR / "deformation.h5", "deformation.h5")
+    link(out, cwd / READ_DIR / _pick_deformation_h5(cwd, READ_DIR), "deformation.h5")
     # patch_amset_vasprun：amset run 还需要密网格 vasprun.xml 拿能带色散
     _vr = next((cwd / _d / "vasprun.xml"
                 for _d in ("step3_uniform", "step4_wave")

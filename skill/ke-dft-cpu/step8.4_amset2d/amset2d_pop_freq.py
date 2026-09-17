@@ -69,6 +69,59 @@ def effective(freqs, weights):
     return float(np.sum(w * freqs[keep])), keep
 
 
+# ---- Δr 交叉核对（2026-09-16 新增）--------------------------------------
+# 路线①（介电）：Δr = c(ε0,∥ − ε∞,∥)/2     —— gen_step14 已在用
+# 路线②（声子模求和）：Δr_αβ = (2π/A)·Σ_ν X_να X_νβ / ω_ν²     —— 本函数
+#     X_να = Σ_κ Z*_κ,αβ' e_νκβ' / √M_κ        （原子单位：e=1、m_e=1、ħ=1）
+#     · e 用 **质量加权归一** 的本征矢（vasprun 的 normalmode_eigenvecs，
+#       Σ_κ|e_κ|²=1，即 VASP "after division by SQRT(m)" 那一组）；
+#       若改用 OUTCAR 里未除质量的那组，必须自己除 √M，别混用。
+#     · M 用**电子质量**（amu × 1822.888）—— 路线①③四位有效数字全对的前提；
+#       用 amu 会差 M 倍（实测 1125 Å vs 0.617 Å）。
+#     · 声学模必须剔除（|ω|→0，1/ω² 把数值噪声放大）。
+# 实测 MoS2 单层：路线① 0.6173 Å、路线② 0.617319 Å（5 位有效数字一致）。
+_BOHR = 0.529177210903          # Å/bohr
+_THZ_TO_HA = 4.135667696e-3 / 27.211386245988   # THz -> Hartree
+_AMU_TO_ME = 1822.888486209     # amu -> m_e
+_ACOUSTIC_THZ = 1.0             # 频率绝对值小于此值视为声学模，剔除
+
+
+def _inplane_area_bohr(structure):
+    lat = np.array(structure.lattice.matrix)
+    return float(np.linalg.norm(np.cross(lat[0], lat[1]))) / _BOHR ** 2
+
+
+def delta_r_mode_sum(freqs_thz, eigvecs, born, structure):
+    """路线②：Γ 点声子模求和给出 Δr 张量（Å，2×2）。声学模剔除。"""
+    A = _inplane_area_bohr(structure)
+    m_me = np.array([s.specie.atomic_mass * _AMU_TO_ME for s in structure])
+    ev = np.asarray(eigvecs, float)
+    w = np.asarray(freqs_thz, float)
+    x = np.einsum("kab,nkb->na", np.asarray(born, float),
+                  ev / np.sqrt(m_me)[None, :, None])          # (nmode, 3)
+    keep = np.abs(w) > _ACOUSTIC_THZ
+    w_ha = w[keep] * _THZ_TO_HA
+    xm = x[keep][:, :2]
+    tensor = (2 * np.pi / A) * np.einsum("na,nb,n->ab", xm, xm, 1.0 / w_ha ** 2)
+    return tensor * _BOHR, int(keep.sum()), int(len(w) - keep.sum())
+
+
+def delta_r_dielectric(outcar, structure):
+    """路线①：c(ε0,∥ − ε∞,∥)/2 与 r∞ = c(ε∞,∥ − 1)/2（Å，面内对角平均）。"""
+    lat = np.array(structure.lattice.matrix)
+    c_len = float(abs(np.dot(lat[2], np.cross(lat[0], lat[1])))
+                  / np.linalg.norm(np.cross(lat[0], lat[1])))
+    eps_inf = np.array(outcar.dielectric_tensor, float)
+    eps_ion = np.array(outcar.dielectric_ionic_tensor, float)
+    d_inf = (eps_inf[0, 0] + eps_inf[1, 1]) / 2.0
+    d_ion = (eps_ion[0, 0] + eps_ion[1, 1]) / 2.0
+    return {"c_A": round(c_len, 4),
+            "eps_inf_inplane": round(float(d_inf), 5),
+            "eps_ionic_inplane": round(float(d_ion), 5),
+            "r_inf_A": round(c_len * (d_inf - 1.0) / 2.0, 4),
+            "delta_r_A": round(c_len * d_ion / 2.0, 6)}
+
+
 def main():
     outcar_path = sys.argv[1] if len(sys.argv) > 1 else "OUTCAR"
     vasprun_path = sys.argv[2] if len(sys.argv) > 2 else "vasprun.xml"
@@ -103,6 +156,35 @@ def main():
         "pop_frequency_3d_ref_THz": None if f3 is None else round(f3, 4),
         "note": "pop_frequency_THz = Γ 点面内极性模权重平均（二维口径）",
     }
+    # ---- Δr 两种算法交叉核对 ----
+    try:
+        dr2, n_used, n_ac = delta_r_mode_sum(freqs, eigenvectors, born, structure)
+        dr2_iso = float((dr2[0, 0] + dr2[1, 1]) / 2.0)
+        dr1 = delta_r_dielectric(outcar, structure)
+        res["delta_r_check"] = {
+            "route1_dielectric_A": dr1["delta_r_A"],
+            "route2_mode_sum_A": round(dr2_iso, 6),
+            "route2_tensor_A": np.round(dr2, 6).tolist(),
+            "deviation_pct": (round(100.0 * (dr2_iso - dr1["delta_r_A"])
+                                    / dr1["delta_r_A"], 3)
+                              if dr1["delta_r_A"] else None),
+            "modes_used": n_used, "acoustic_removed": n_ac,
+            "r_inf_A": dr1["r_inf_A"],
+            "eps_inf_inplane": dr1["eps_inf_inplane"],
+            "eps_ionic_inplane": dr1["eps_ionic_inplane"],
+            "anchors_literature": {"MoS2_delta_r_A": 0.53, "MoS2_r_inf_A": 46.5},
+            "note": ("路线①= c(ε0-ε∞)/2（DFPT 介电）；路线②= (2π/A)ΣX²/ω²（声子模求和，"
+                     "原子单位、M 用电子质量、e 用质量加权归一的本征矢）。两条应一致；"
+                     "差几个百分点以上说明本征矢口径或声学模剔除有问题。"),
+        }
+        if dr1["delta_r_A"] and abs(res["delta_r_check"]["deviation_pct"]) > 5.0:
+            print("[amset2d][WARN] Δr 两条算法差 %.2f%%（>5%%）：检查本征矢口径"
+                  "（是否混用了除/未除质量的版本）与声学模剔除"
+                  % res["delta_r_check"]["deviation_pct"], file=sys.stderr)
+    except Exception as _e:                                    # noqa: BLE001
+        res["delta_r_check"] = {"error": "%s: %s" % (type(_e).__name__, _e)}
+        print("[amset2d][WARN] Δr 交叉核对失败：%s" % _e, file=sys.stderr)
+
     print(json.dumps(res, ensure_ascii=False))
     return 0
 

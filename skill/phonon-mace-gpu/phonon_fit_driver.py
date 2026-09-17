@@ -52,20 +52,52 @@ def main():
 
     ph.run_mesh(mesh=60.0, with_eigenvectors=False, is_mesh_symmetry=True)
     mf = float(np.min(ph.get_mesh_dict()["frequencies"]))
+    # ---- 2D：走 kz=0 的二维高对称路径（P2-1），并做 ZA 二次性检查（P2-2/P2-4）----
+    import klmace_common as kmc
+    dimtag, vac_axis = "3d", 2
     try:
-        ph.auto_band_structure(plot=False, write_yaml=True, filename="band-dft-cpu.yaml")
+        from dim_common import detect_dimension
+        dimtag, vac_axis, _ = detect_dimension("POSCAR")
+    except Exception as e:
+        print("[WARN] 维度判定失败（按 3D 处理）：%s" % e)
+    is2d = str(dimtag).lower().startswith("2")
+    za = None
+    try:
+        if is2d:
+            from phonopy.phonon.band_structure import get_band_qpoints_and_path_connections
+            paths, labels, lat = kmc.band_path_2d(uc.cell, 101, vac_axis or 2)
+            bands, conn = get_band_qpoints_and_path_connections(paths, npoints=101)
+            ph.run_band_structure(bands, path_connections=conn, labels=labels)
+            ph.write_yaml_band_structure(filename="band-dft-cpu.yaml")
+            print("[..] band-dft-cpu.yaml 用 2D 高对称路径（%s 格子，kz=0）" % lat)
+        else:
+            ph.auto_band_structure(plot=False, write_yaml=True, filename="band-dft-cpu.yaml")
     except Exception as e:
         print("[WARN] band-dft-cpu.yaml 出图跳过：%s" % e)
+    if is2d:
+        # symfc 的 fc2 没有施加 Born-Huang 旋转不变/零应力约束：2D 的 ZA 会被线性化。
+        # 这里把 p 指数记下来（判据 1.7<p<2.3），并明确提示 2D 该用 DFT 链。
+        print("[WARN] 2D + symfc fc2：没有施加 Born-Huang 旋转不变约束，ZA 弯曲支可能被"
+              "线性化（ω∝q 而非 q²）。要做 2D 的稳定性/κ，请用 kl-dft-cpu 的 pheasy+BHH 链"
+              "（PHEASY_RASR=auto）。")
+        za = kmc.za_check_2d(ph, uc.cell, vac_axis or 2)
+        print("[..] ZA 检查：%s" % za.get("note", za.get("error", "")))
 
     stable = mf >= -0.10
+    if za is not None and za.get("ok") is False:
+        stable = False
     summary = {
         "PHONON_DONE": True,
         "stable": bool(stable),
         "min_frequency_THz": mf,
         "n_disp": int(len(disps)),
         "supercell": " ".join(str(x) for x in dim),
+        "dim": str(dimtag).upper(),
+        "za_exponent": za,
         "note": "最小声子频率 %.4f THz（阈值 -0.10）：%s"
-                % (mf, "无明显虚频" if stable else "存在虚频，动力学不稳定"),
+                % (mf, "无明显虚频" if stable else
+                   ("ZA 弯曲支非二次色散（symfc 无旋转约束），2D 结果不可信"
+                    if (za and za.get("ok") is False) else "存在虚频，动力学不稳定")),
     }
     (cwd / "phonon_summary.json").write_text(
         json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8", newline="\n")

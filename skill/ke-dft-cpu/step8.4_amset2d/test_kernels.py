@@ -241,6 +241,19 @@ if gen_path.is_file():
                        np.diag([0, 1, 2, 4, 5, 3])),
            "_reorder_voigt：按来源标签把对角元放到标准 Voigt 位置")
 
+        # r∞/Δr 自检：r = c(ε∥−1)/2，Δr = r0 − r∞ = c(ε0−ε∞)/2
+        chk = g.delta_r_check(20.0, np.diag([3.0, 3.0, 1.0]),
+                              np.diag([3.02, 3.02, 1.01]))
+        ok(abs(chk["r_inf_A"] - 20.0) < 1e-6 and abs(chk["delta_r_A"] - 0.2) < 1e-6
+           and abs(chk["delta_r_over_r_inf"] - 0.01) < 1e-6,
+           "delta_r_check：c=20 Å、ε∞=3.0、ε0=3.02 -> r∞=20.000 Å、Δr=0.200 Å（1.0%）")
+        chk2 = g.delta_r_check(20.0, np.tile([[3.0, 0.0, 0.0], [0.0, 3.0, 0.0],
+                                              [0.0, 0.0, 1.0]], (1, 1)),
+                               np.diag([3.0, 3.0, 1.0]))
+        ok(chk2["delta_r_A"] == 0.0, "delta_r_check：ε0=ε∞ -> Δr=0（无离子贡献不报负值）")
+        ok(g.delta_r_check(20.0, None, None)["available"] is False,
+           "delta_r_check：张量缺失 -> available=False（不抛异常）")
+
 print()
 if FAILS:
     print("%d 项 FAIL：" % len(FAILS))

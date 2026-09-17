@@ -114,8 +114,13 @@ SUBMIT_OVERRIDE = {
 # （及上面 SUBMIT_OVERRIDE）的原值不动。
 # 若想按“step3 完整路径点数”而非本目录实际点数来判定，把 --line-density 0
 # 关闭降采样、且不切片即可（此时本目录点数 = 完整路径点数）。
-KPTS_TOTAL_THRESHOLD  = 100     # 阈值：总 k 点数【严格大于】此值才放大
-NTASKS_PER_NODE_LARGE = 48     # 超阈值时写入 submit.sh 的 --ntasks-per-node
+# ★ 2026-09-15 改为「HSE 一律 96 核」：
+#   阈值设 0 = 恒成立（总 k 点数总 > 0），于是 ntasks-per-node 一律覆盖成 96。
+#   理由：HSE 是这条链上唯一真正吃机的步骤；而单节点 96 核在 jzzn 上比整节点
+#   192 核**更好排**（整节点请求会卡在碎片里数小时，见 jzzn 实测）。
+#   小体系多要核只是效率略低，不会算错；少要核则可能跑几天。
+KPTS_TOTAL_THRESHOLD  = 0       # 0 = 恒放大（HSE 一律 96 核）
+NTASKS_PER_NODE_LARGE = 96      # 一律写入 submit.sh 的 --ntasks-per-node
 
 # ---- HSE 阶段的 DFT+U 处理（三态开关）----
 # step1/2/3 若加了 U（LDAU*），会一路继承到 step3 INCAR。到 HSE 这一步怎么办，
@@ -254,6 +259,53 @@ INCAR_SET = {
     "LASPH":    ".TRUE.",
     "LVHAR":    ".TRUE.",
 }   # KPAR 由 auto_parallel() 注入；KPOINTS_OPT 下不写 NCORE/NPAR
+
+# =====================================================================
+# HSE 成本结构 —— 用之前先读这段（2026-09-16 实测，全部有据可查；由 taskflow-v2.0 侧同步）
+#
+# ★ 结论一句话：**HSE 的瓶颈是 SCF，不是路径点数；而本步的 fanout
+#   "*p*of*" 会让同一个 SCF 被独立算 N 遍。**
+#
+# 以 128 原子 Mg4C60 体相、96 核、无 NKRED 的实测为例：
+#     SCF  ：~24~30 个电子步 × 94 分钟 ≈ 38~47 h   ← 占绝对主导
+#     KOPT ：21 个路径点 × ~18 分钟/点 ≈ 6.4 h      ← 只占 ~10%
+#   四片 fanout -> SCF 被算 4 遍：4 × 47 = 188 h，其中 141 h 是纯重复。
+#   总核时 ~20,000 core·h，而必要值只有 ~1/4；且单片 53 h > premium 墙钟 48 h，
+#   **四片会被墙钟整批砍掉**。
+#
+# ---- 因此（按性价比排序）----
+#   1) 大体系的 HSE 优先【单段跑完整路径】，而不是切成 4 片并行。
+#      路径点数只影响那 10%，切 4 片却把 90% 的 SCF 乘 4。
+#   2) 若必须并行：让后续片从第 1 片的 WAVECAR/CHGCAR 重启
+#      （ISTART=1, ICHARG=11, 无 NKRED），只做自己那段的 KOPT。
+#      实测路线 = SCF 用 NKRED 单独跑一次（~9.6 h） + 四片 KOPT-only 并行（~6.4 h）
+#      ≈ 16 h 墙钟 / ~3,400 core·h，比现状省 ~6 倍。
+#      **依据**：NKRED 崩只崩在 KPOINTS_OPT 段（见下），SCF 段完全正常。
+#   3) 再谈降路径点数。
+#
+# ---- NKRED 与 KPOINTS_OPT 硬不兼容（实测两次）----
+#   带 NKRED=2（VASP 展开 2 2 2）或 NKRED=2 2 1 时，SCF 正常收敛，
+#   但进入 "Start KPOINTS_OPT ... k-point batch [1-6\21]" 后崩于 VASP 内部错误：
+#       fock_dbl.F:1442   FOCK_FCC: number of k-points incorrect 3 32 2 2 2
+#   机制：NKRED 要求精确交换在【规则 k 网格】上降采样，而 KPOINTS_OPT 里是
+#   【任意路径点】，一致性检查必然失败。=> 二者只能二选一。
+#   ★ 注意：曾以为 "NKRED=2 2 1 能绕过崩溃" —— 实测两次都是错的，不能绕。
+#
+# ---- 路径点数：两个不同需求，别混 ----
+#   · 画能带：每腿 10~15 点才光滑（本常量的原意）。
+#   · 定带隙：采样必须【沿路径连续】，不能只挑几个"已知带边"。
+#     ★ 实测反例：体相 Mg4C60 的 HSE 带边落在 k=(0.443, -0.222, 0) —— 一个一般 k 点，
+#       **既不是 PBE 预测的 Γ，也不是 (0.5,0,0.5)**。HSE 重排能带会把带边挪走，
+#       所以"按低级别理论的带边撒几个点"会整片错过真带边。
+#   · 粗采样不引入方向性错误（路径形状还在），代价只是极值定位精度。
+#
+# ---- 跑完必须自检：带边落在采样集的内部还是边界 ----
+#   数学事实：子集带隙 >= 全体带隙。所以
+#       真带隙 = min_所有k E_CB − max_所有k E_VB，而采样只给【上界】。
+#   VBM/CBM 若落在采样区【边界】，说明真带边在区外 -> 该数值无效（只是上界）；
+#   落在【内部】才算把带边包住。对半金属/窄隙体系尤其致命：交叠区若在采样之外，
+#   会误报成"开出了隙"。判读时务必输出带边点距采样区边界的距离。
+# =====================================================================
 
 # ---- 路径降采样默认值 ----
 # 降采样是常态而非例外：HSE one-shot 成本 ∝ 路径点数，而出版级能带每腿 10~15 点
@@ -806,7 +858,10 @@ def build_step4_dir(out_dir, args, ctx, part=None):
         warn.append("无法确定自洽 k 点数（%s）—— 跳过 ntasks-per-node 自动放大，保持模板默认"
                     % _nk_src)
 
-    _override.update(stepconf.read_submit(stepconf.CONF_NAME))
+        # used_incar=True：本脚本在 build_step4_dir() 里自己消费 [incar]/[incar.final]/
+    # [incar.delete]（见那里的"step.conf 的 [incar] / [incar.final] 覆盖"段），
+    # 所以不该触发 read_submit 的"写了没人读"告警。
+    _override.update(stepconf.read_submit(stepconf.CONF_NAME, used_incar=True))
     _sub_changed = stepconf.apply_submit(os.path.join(out_dir, "submit.sh"), _override)
     if _sub_changed:
         log.append("submit.sh 覆盖 Slurm: %s" % ", ".join(_sub_changed))
@@ -853,10 +908,23 @@ def build_step4_dir(out_dir, args, ctx, part=None):
     #   杂化之前定）。
     if ALGO_FROM_DISCRIMINANT:
         _disc = None
-        _roots = [Path.cwd()]
-        if len(out_dir.parents) > 1:
-            _roots.append(out_dir.parents[1])
+        # ★ BUG FIX：out_dir 是 str（文件末尾用 os.path.join 拼出来的），
+        #   原来写 out_dir.parents 会直接 AttributeError: 'str' object has no
+        #   attribute 'parents' —— 这不是理论问题：2026-09-15 在 Mg4C60 上
+        #   retry 就是这么崩的，整段判别分支从来没跑通过，ALGO 永远停在
+        #   INCAR_SET 的 Damped。必须转 Path。
+        #   同时把"往上找几层"改成穷举 out_dir 的全部祖先：原来只试
+        #   parents[1]，而 shard 目录是 <stage>/step2_bandgap/step2.3_hse/p1of4，
+        #   parents[1] 落在 step2_bandgap 上，配 DISCRIMINANT_DIR
+        #   ("step2_bandgap/step2.15_discriminant") 恰好拼错。穷举后
+        #   cwd / 各级祖先里只要能找到判别 OUTCAR 就取。
+        _outd = Path(out_dir).resolve()
+        _roots = [Path.cwd().resolve()] + list(_outd.parents)
+        _seen_roots = set()
         for _root in _roots:
+            if str(_root) in _seen_roots:
+                continue
+            _seen_roots.add(str(_root))
             _oc = Path(_root) / DISCRIMINANT_DIR / "OUTCAR"
             if not _oc.is_file():
                 continue
@@ -948,6 +1016,29 @@ def build_step4_dir(out_dir, args, ctx, part=None):
     if _hf_val is not None:
         incar_set["HFRCUT"] = _hf_val
     log.append("库仑奇点: %s" % _hf_note)
+
+    # ---- step.conf 的 [incar] / [incar.final] 覆盖 ----
+    # ★ 这段是补接线：stepconf.py 从第一版起就把 [incar] / [incar.final] /
+    #   [incar.delete] 写进文档（"gen 脚本只读这一份"），但本技能所有 gen 脚本
+    #   此前只调用了 stepconf.read_submit()——[incar*] 三节写了没人读，属于
+    #   "文档承诺了、代码没接线"的静默失效：用户在 step.conf 里写的 ALGO 覆盖
+    #   会被无声忽略。这里按 stepconf.StepConf.apply_incar 的同一套语义补上。
+    #   顺序：继承 → [incar] → 本脚本计算 → [incar.final] → [incar.delete]
+    #   因此 [incar.final] 能压过上面 ALGO_FROM_DISCRIMINANT 选出的 ALGO。
+    # 用 stepconf 里的**唯一实现**读三节，不要各自解析 —— 各写一套正是这个
+    # 洞当初长出来的原因。
+    _ic, _icf, _icd = stepconf.incar_sections(stepconf.CONF_NAME)
+    for _sec, _d in (("incar", _ic), ("incar.final", _icf)):
+        for _ku, _v in _d.items():
+            _old = incar_set.get(_ku)
+            incar_set[_ku] = _v
+            if _old is not None and str(_old) != str(_v):
+                log.append("step.conf [%s] 覆盖 %s: %s -> %s" % (_sec, _ku, _old, _v))
+            else:
+                log.append("step.conf [%s] 设 %s = %s" % (_sec, _ku, _v))
+    for _k in sorted(_icd):
+        if incar_set.pop(_k, None) is not None:
+            log.append("step.conf [incar.delete] 删除 %s" % _k)
 
     ctx["flavor"], ctx["gga"], ctx["isym"] = _flavor, _gga, _isym4
     text = build_incar(items, incar_remove, incar_set)

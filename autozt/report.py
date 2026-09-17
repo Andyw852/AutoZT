@@ -572,9 +572,96 @@ def find_asset(cfg, t, m, fname, sname=None):
     for c in cands:
         if os.path.isfile(c):
             return c
+    # v1.14 兜底：gen_need 里的辅助模块可能住在【别的步骤的 src 子目录】里。
+    # 实测（2026-09-16 MoS2）：ke-dft-cpu 的 discriminant_common.py 只在
+    # step2_bandgap/step2.15_discriminant/ 下，而 step5_dielect / step8_amset /
+    # step8.1 / step8.4 的 gen 都 import 它 —— 按步骤查 src 永远查不到，直接
+    # "project_setting/skill_dir 里缺少 X" 让 gen 失败（历史上这几个步骤因此跑不了）。
+    # 这里在技能目录里按 basename 递归兜底搜一次，【只在唯一命中时】采用；
+    # 多份同名一律不猜（返回 None，保留原来的报错），避免选错文件。
+    for base in sdirs:
+        if not os.path.isdir(base):
+            continue
+        hits = []
+        for root, dirs, files in os.walk(base):
+            dirs[:] = [d for d in dirs if d not in (".git", "__pycache__")]
+            if fname in files:
+                hits.append(os.path.join(root, fname))
+        if not hits:
+            continue
+        if len(hits) == 1:
+            return hits[0]
+        # 多份同名：**内容完全相同**才敢任取一份（技能里本来就有按步骤各放一份、
+        # 内容一致的公共模块，如 ke_common.py）；内容不同一律不猜，保留原来的报错。
+        try:
+            from autozt.prov import sha256_file
+            digests = {sha256_file(h) for h in hits}
+        except Exception:                                  # noqa: BLE001
+            digests = set()
+        if len(digests) == 1 and None not in digests:
+            return hits[0]
     return None
 
-# ===== _stepconf_mod (原 L3000-L3013) =====
+
+# ===== 过期覆盖模板检测（2026-09-16）=====
+# 背景：项目级 project_setting/templates/ 与集群级 setting/<hpc>/templates/ 的优先级
+#   都高于技能模板。这些副本是"某次复制过去的旧版"，技能模板后来新加的 {{占位符}}
+#   在副本里没有 → 渲染出来语法完全正常、作业照跑，只是新功能被静默吃掉。
+#   实测两次：(a) 项目级 incar_force_2d.tpl 缺 {{FORCE_PREC}} → P1-3 取力精度没生效；
+#   (b) 集群级 submit_fit_pheasy.tpl 缺 NS_RANK_TOL/fit_metrics → 加的三处一个没到。
+#   enforce_incar_tags()/write_submit(require=) 是"发现后兜底"，这里是"提前告知"。
+_PH_RE = re.compile(r"{{([A-Z_0-9]+)}}")
+
+
+def _skill_only_candidates(cfg, t, m, fname, sname=None):
+    """只在【技能目录】里找 fname（跳过项目/集群覆盖层）。"""
+    from autozt import _PKG_ROOT
+    seg = (m.get("_seg") or {})
+    sd = seg.get("skill_dir") or t.get("skill_dir")
+    sdirs = []
+    if sd:
+        if os.path.isabs(sd):
+            sdirs = [sd]
+        else:
+            for base in (seg.get("_base_dir") or t.get("_base_dir"),
+                         cfg.get("_config_dir"), _PKG_ROOT):
+                if base:
+                    d = os.path.normpath(os.path.join(base, sd))
+                    if d not in sdirs:
+                        sdirs.append(d)
+    out = []
+    for base in sdirs:
+        for d in _skill_asset_dirs(t, m, base, sname):
+            out.append(os.path.join(d, fname))
+    return out
+
+
+def stale_template_note(cfg, t, m, fname, resolved, sname=None):
+    """resolved 命中的不是技能自带那份时，比对 {{占位符}} 集合。
+
+    返回告警字符串（副本缺了技能模板里的占位符）或 None（没问题/无法判断）。"""
+    if not resolved or not str(fname).endswith(".tpl"):
+        return None
+    cands = _skill_only_candidates(cfg, t, m, fname, sname)
+    _rp = os.path.abspath(str(resolved))
+    if any(os.path.abspath(c) == _rp for c in cands):
+        return None                      # 命中的就是技能自带那份
+    skill = next((c for c in cands if os.path.isfile(c)), None)
+    if not skill:
+        return None
+    try:
+        with open(skill, encoding="utf-8", errors="ignore") as fh:
+            want = set(_PH_RE.findall(fh.read()))
+        with open(str(resolved), encoding="utf-8", errors="ignore") as fh:
+            got = set(_PH_RE.findall(fh.read()))
+    except OSError:
+        return None
+    miss = sorted(want - got)
+    if not miss:
+        return None
+    return ("%s 命中的是覆盖副本 %s，它比技能模板 %s 少了占位符 %s —— 渲染不会报错，"
+            "但这些新功能会被静默吃掉；请把技能模板同步覆盖过去（先备份旧副本）"
+            % (fname, resolved, skill, "、".join("{{%s}}" % x for x in miss)))
 def _stepconf_mod(cfg, t, m):
     from autozt import _STEPCONF_MOD
     """按技能加载该技能目录里的 stepconf.py（与 dim_common.py 一样每技能一份）。"""
@@ -895,7 +982,7 @@ def cmd_status(cfg, data, mname, jname):
         t, m = find_material(data, mname)
         render_detail(m)
         # work_dir 从哪一层解析来的——切集群后最容易踩的坑（项目 setting.yaml
-        # 里钉着旧集群路径，优先级高于 hpc.yaml，tf hpc 不会替你改）
+        # 里钉着旧集群路径，优先级高于 hpc.yaml，autozt hpc 不会替你改）
         _src = m.get("work_dir_src")
         if not _src:
             _ps = m.get("ps") or {}

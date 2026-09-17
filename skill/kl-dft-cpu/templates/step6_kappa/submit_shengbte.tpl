@@ -1,14 +1,43 @@
 #!/bin/bash
 # ShengBTE BTE 提交模板（step6_kappa, SOLVER=shengbte）。占位符 {{JOBNAME}} {{SHENGBTE_EXE}}
+#   {{KAPPA_2D_FACTOR}} {{KAPPA_2D_META}} {{KAPPA_2D_THICK2D}}（2D 厚度归一化，3D 时 FACTOR=1.0）
+#   {{NTASKS}} {{CPUS_PER_TASK}} {{QOS}} —— 由 gen_step6_kappa.py 按集群 NUMA 拓扑与
+#   step.conf 的 SBATCH_QOS 算好填入（2026-09-16 从 taskflow-v2.0 同步；见下"并行布局"）
 # 输入 CONTROL + FORCE_CONSTANTS_2ND/3RD 已由 gen_step6 备好（力常数拷自 S5_fc/shengbte/）。
+#
+# =====================================================================
+# ★★ 并行布局：这一步决定「算不算得出来」，不是性能调优 ★★
+#
+# 坑 1（最致命）：ShengBTE 靠 **MPI 按 q 点并行**。
+#     写 mpirun -n 1 = 单进程 = **串行**。日志会自报
+#     "running on 1 MPI process(es)"，然后长时间停在
+#     "about to obtain the spectrum" 一个产物都不出（实测 11.8 h 零产物）。
+#     正确做法 = **一个 MPI rank 占一个 NUMA 域**：
+#         ntasks-per-node = 总核数 / 每个 NUMA 域的核数
+#         cpus-per-task   = 每个 NUMA 域的核数
+#     jzzn 实测：96 核 -> 12 rank x 8 线程，谱计算 230 秒完成。
+#
+# 坑 2：OpenMPI 4.x 下 --map-by numa:PE=N 与任何 --bind-to ... 是**冲突写法**：
+#       · 配 --bind-to core -> "would result in binding more processes than cpus"
+#       · 配 --bind-to numa -> "a conflicting binding policy was specified"
+#       · 干脆不给        -> 报 "no binding need be specified"（它自带的默认就是对的）
+#     而且 PE 不能超过 NUMA 域内的核数。**jzzn 的 NUMA 域是 8 核**
+#     （192 核 = 24 域 x 8，不是 16！），写 PE=16 会报
+#         "a directive was also given to map to an object level that has less cpus"
+#     并 8 秒退出。所以这里用**裸 --map-by numa**：不带 PE、不带 --bind-to，
+#     让 OpenMPI 自己把 rank 铺到各 NUMA 域上，这是最稳的写法。
+#
+# 换集群时只需改 step.conf 的 SHENGBTE_TOTAL_CORES / SHENGBTE_CORES_PER_NUMA，
+# 不用动本模板。
+# =====================================================================
 #SBATCH --partition=cpu192
 #SBATCH --job-name={{JOBNAME}}
 #SBATCH --nodes=1
-#SBATCH --ntasks-per-node=1
-#SBATCH --cpus-per-task=48
+#SBATCH --ntasks-per-node={{NTASKS}}
+#SBATCH --cpus-per-task={{CPUS_PER_TASK}}
 #SBATCH --output=queue.out
 #SBATCH --error=queue.err
-#SBATCH --qos=premium
+#SBATCH --qos={{QOS}}
 module purge
 module load gcc/14.1
 module load openmpi/4.0.1
@@ -17,7 +46,7 @@ conda activate atomate2_p_a
 cd $SLURM_SUBMIT_DIR
 
 for f in CONTROL FORCE_CONSTANTS_2ND FORCE_CONSTANTS_3RD; do
-    [ ! -f "$f" ] && echo "❌ 缺 $f" >&2 && exit 1
+    [ ! -f "$f" ] && echo "缺 $f" >&2 && exit 1
 done
 
 export OMP_NUM_THREADS=$SLURM_CPUS_PER_TASK
@@ -28,13 +57,30 @@ export LD_LIBRARY_PATH=/public/home/wangchao/software/aocl-gcc/5.0.0/gcc/lib_LP6
 unset MKL_NUM_THREADS MKL_DEBUG_CPU_TYPE I_MPI_PMI_LIBRARY
 ulimit -s unlimited
 
-mpirun -n 1 \
-    --bind-to core \
+# ---- 退化保护：rank 数 = 1 就是串行，宁可当场失败也不要白跑一夜 ----
+#   来源（taskflow-v2.0，2026-09-16 同步）：ShengBTE 靠 MPI 按 q 点并行，写 mpirun -n 1
+#   = 单进程 = 串行，日志自报 "running on 1 MPI process(es)" 后长时间停在
+#   "about to obtain the spectrum"，实测 11.8 h 零产物。
+if [ "$SLURM_NTASKS" -le 1 ]; then
+    echo "SLURM_NTASKS=$SLURM_NTASKS —— ShengBTE 靠 MPI 按 q 点并行，单进程等于串行" >&2
+    echo "（实测 11.8 h 停在 about to obtain the spectrum 无产物）。请检查 step.conf 的" >&2
+    echo "SHENGBTE_TOTAL_CORES / SHENGBTE_CORES_PER_NUMA。" >&2
+    exit 2
+fi
+echo "[shengbte] MPI ranks=$SLURM_NTASKS  每 rank OMP 线程=$SLURM_CPUS_PER_TASK  合计 $((SLURM_NTASKS*SLURM_CPUS_PER_TASK)) 核"
+echo "[shengbte] 节点=$SLURM_JOB_NODELIST  开始 $(date)"
+
+# --map-by numa：一个 rank 一个 NUMA 域。不要再加 --bind-to 或 PE=N
+mpirun -n $SLURM_NTASKS \
+    --map-by numa \
+    --report-bindings \
     --mca pml ucx --mca osc ucx --mca btl ^openib,tcp \
     -x UCX_TLS=rc,sm,self -x UCX_NET_DEVICES=mlx5_0:1 -x UCX_LOG_LEVEL=error \
     -x OMP_NUM_THREADS -x OMP_PROC_BIND -x OMP_PLACES \
     -x BLIS_NUM_THREADS -x AOCL_ENABLE_INSTRUCTIONS -x LD_LIBRARY_PATH \
     {{SHENGBTE_EXE}} > shengbte.log 2>&1
+_rc=$?
+echo "[shengbte] 结束 $(date)  rc=$_rc"
 
 # 汇总：优先 _CONV（迭代解），退回 _RTA
 python - <<'PY'
@@ -62,38 +108,68 @@ for c in cand:
         if c.endswith("_CONV"):
             # CONV 正常温度点数（CONTROL T 扫描计数）不足时：发散点被过滤 =
             # 曲线不完整，回退 RTA（更稳定、全温度）
-            _tmax = None
+            # T_min 原来写死成 100.0：step.conf 把 T_MIN 改成别的值时温度点数预期就
+            # 算错，正常的 CONV 结果会被误判成"发散被过滤"而退回 RTA。三个都从 CONTROL 读。
+            _tmin = _tmax = _ts = None
             try:
                 for ln in open("CONTROL"):
                     s = ln.strip()
-                    if s.startswith("T_max="):
-                        _tmax = float(s.split("=")[1].split(",")[0].strip())
-                    elif s.startswith("T_min="):
-                        pass
+                    for _key in ("T_min", "T_max", "T_step"):
+                        if s.startswith(_key + "="):
+                            _val = float(s.split("=")[1].split(",")[0].strip())
+                            if _key == "T_min":
+                                _tmin = _val
+                            elif _key == "T_max":
+                                _tmax = _val
+                            else:
+                                _ts = _val
             except Exception:
                 pass
             _nt_expected = 8
-            if _tmax:
-                try:
-                    for ln in open("CONTROL"):
-                        s = ln.strip()
-                        if s.startswith("T_step="):
-                            _ts = float(s.split("=")[1].split(",")[0].strip())
-                            _nt_expected = int(round((_tmax - 100.0) / _ts)) + 1
-                            break
-                except Exception:
-                    pass
+            if None not in (_tmin, _tmax, _ts) and _ts:
+                _nt_expected = int(round((_tmax - _tmin) / _ts)) + 1
+            else:
+                print("[shengbte] CONTROL 的 T_min/T_max/T_step 没读全，温度点数预期退回 %d"
+                      % _nt_expected)
             if len(rows) < _nt_expected:
                 print("[shengbte] CONV 温度点 %d < 预期 %d（发散被过滤），回退 RTA" % (len(rows), _nt_expected))
                 continue
         break
 f, rows = best if best else (None, [])
 d = {"KAPPA_DONE": bool(f)}
+# 2D 厚度归一化：ShengBTE 的分母和 phono3py 一样是【含真空的胞体积】(h_perp=V/A)，
+#   所以面内 κ 被胞高稀释，必须乘 FACTOR = h_perp/d（d=层有效厚度）才是层本身的量。
+#   FACTOR 由 gen_step6_kappa.py 用 _common/thickness_2d.py 算好传进来；3D 时 =1.0。
+FACTOR = {{KAPPA_2D_FACTOR}}
+META = json.loads(r'''{{KAPPA_2D_META}}''')
+THICK2D = json.loads(r'''{{KAPPA_2D_THICK2D}}''')
+d.update(META)
+if THICK2D:
+    json.dump(THICK2D, open("thickness_2d.json", "w"), ensure_ascii=False, indent=2)
+    d["thickness_2d_source"] = "kl-dft-cpu:step6_kappa"
+    # 材料级 thickness_2d.json（文档 P0-2(b) 的 kl/ke 共用契约）：谁先跑谁写，后跑方读它做对照。
+    #   作业 cwd 是 <材料>/<步骤>，材料根 = ".."；先确认 ".." 里真有别的步骤目录才写，
+    #   避免路径猜错写到别处。best-effort，失败只打一行，不拦作业。
+    try:
+        import glob as _g, os as _os
+        if _g.glob(_os.path.join("..", "step*")):
+            from thickness_2d import write_material_level
+            print(write_material_level("..", THICK2D))
+        else:
+            print("[..] 父目录里没识别出步骤目录，跳过材料级 thickness_2d.json")
+    except Exception as _e:
+        print("[WARN] 材料级 thickness_2d.json 写入跳过: %s" % _e)
 if f:
     d["source"] = f
     d["temperatures"] = [r[0] for r in rows]
     # ShengBTE KappaTensorVsT：col0=T，col1..9=kappa 张量 xx xy xz yx yy yz zx zy zz
     d["kappa_xx_yy_zz"] = [[r[1], r[5], r[9]] for r in rows]
+    # 2D 的 zz 分量无物理意义，面内单独出一份方便下游直接用
+    d["kappa_inplane_xx_yy"] = [[r[1], r[5]] for r in rows]
+    if abs(FACTOR - 1.0) > 1e-9:
+        d["kappa_2d_normalized_xx_yy_zz"] = [[float(v) * FACTOR for v in row]
+                                            for row in d["kappa_xx_yy_zz"]]
+        d["kappa_2d_normalized_inplane_xx_yy"] = [[r[1] * FACTOR, r[5] * FACTOR] for r in rows]
 json.dump(d, open("kappa_summary.json", "w"), ensure_ascii=False, indent=2)
 print("KAPPA_DONE" if d["KAPPA_DONE"] else "NO_KAPPA")
 PY

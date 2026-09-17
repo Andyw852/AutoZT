@@ -66,7 +66,7 @@ steps:
      gen: gen_step4_kappa.py,
      gen_need: [dim_common.py, stepconf.py, step.conf, klmace_common.py,
                 kappa_validation.py, submit_p3py.tpl, submit_shengbte_klm.tpl,
-                vdw_radii.py]}
+                thickness_2d.py, vdw_radii.py]}
 
 # S5 声子谱绘图（登录节点 run: gen，不提交作业）：读 step3_fc/band-dft-cpu.yaml 画
 #   全范围 + 0~10 THz 低频放大两张（共享脚本 _common/mace/plot_phonon_band.py）。

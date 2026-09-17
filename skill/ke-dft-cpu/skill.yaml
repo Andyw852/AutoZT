@@ -26,7 +26,7 @@
 # k 网格一律 VASPKIT（1→102→Γ心→kspacing），2D 用 force_kz1 压真空方向为 1。
 # 每个 gen 脚本开头都有可改参数区（ENCUT/ISMEAR/KSPACING/KPAR/NCORE…）。
 # =============================================================================
-schema: 1
+schema: 2
 name: ke-dft-cpu
 desc: 电子热导率(DFT/CPU)
 version: "0.1"
@@ -42,12 +42,19 @@ defaults:
 fetch_files: [INCAR, POSCAR, CONTCAR, POTCAR, KPOINTS, KPOINTS_OPT, kpath.json,
               submit.sh, OUTCAR, EIGENVAL, vasprun.xml, queue.out, queue.err,
               workflow_method.txt, band_summary.json, settings.yaml,
-              deformation.h5, transport.json, amset.log]
+              deformation.h5, deformation_vac.h5, band_edges.json,
+              transport.json, amset.log]
+# ★ LOCPOT 说明（patch_deform_ref，2026-09-16）：step7b 要用各形变构型 LOCPOT 的真空能级
+#   生成 deformation_vac.h5（2D 默认口径）。LOCPOT 体积大、不进 fetch_files，
+#   但**不能在 step7b 跑完之前清理**（含 step7_deform/{undeformed,deform-*}）；
+#   跑完 step7b 得到 deformation_vac.h5 之后，LOCPOT 就可以清了。
+#   autozt 目前没有全局 keep 名单，这条靠纪律：不要在 S7 之后、S7.1 之前 clean/删 LOCPOT。
 
 steps:
   - {seq: 1, name: step1_opt, label: S1_opt, src: step1_opt,
      check: relax_injob, gen: gen_step1_std_opt.py, contcar_to_poscar: true,
-     gen_need: [relax_common.py, method_select.py, mol_common.py, incar_0d.tpl, submit_std_0d.tpl, dim_common.py, stepconf.py, step.conf, check_common.py, step1_check_and_resubmit.py,
+     # thickness_2d/vdw_radii（2026-09-17 加）：2D 变胞稳定判据按层内口径换算需要
+     gen_need: [relax_common.py, method_select.py, mol_common.py, incar_0d.tpl, submit_std_0d.tpl, dim_common.py, stepconf.py, step.conf, check_common.py, step1_check_and_resubmit.py, thickness_2d.py, vdw_radii.py,
                 incar_2d.tpl, incar_3d.tpl, submit_std_2d.tpl, submit_std_3d.tpl]}
 
   - {seq: 3, name: step3_uniform, label: S3_uniform, src: step3_uniform,
@@ -59,7 +66,8 @@ steps:
 
   - {seq: 4, name: step4_wave, label: S4_wave, src: step4_wave,
      check: marker, marker: "wavefunction.h5:", gen: gen_step6_wave.py,
-     gen_need: [stepconf.py, step.conf, submit_amset.tpl],
+     # gen_step6_wave 也 import ke_common（原来没声明，靠上一步推过的残留文件才跑得通）
+     gen_need: [stepconf.py, step.conf, ke_common.py, submit_amset.tpl],
      needs: ["step3_uniform"]}
 
   - {seq: 5, name: step5_dielect, label: S5_dielect, src: step5_dielect,
@@ -70,6 +78,17 @@ steps:
                 incar_dfpt_2d.tpl, incar_dfpt_3d.tpl,
                 submit_std_2d.tpl, submit_std_3d.tpl],
      needs: ["step1_opt"]}
+
+  # seq 5.1：step5_dielect 的**数值**校验（纯分析步，run: gen）。
+  # 为什么需要：step5 的完成标记 check: marker 只看 OUTCAR 里有没有
+  # 'MACROSCOPIC STATIC DIELECTRIC TENSOR' 这个**字符串**，不看内容 ——
+  # 实测 2026-09-14 有 5 个工程（qTPC20-r/Mg2C60/Mo2S3(P1)/Pb2Sb2Te5/Sn2Sb2Te5）
+  # 张量全是 NaN 却被判为完成，一路把 NaN 送到 step8，POP 散射静默丢失。
+  # 本步用数值判据把关（NaN/ε<1/单位矩阵/缺 IONIC 块/ε_s≡ε_∞）。
+  - {seq: 5.1, name: step5_dielect_validate, label: S5.1_dievalid, src: step5_dielect,
+     check: plot, run: gen, done_marker: dielectric_check.json,
+     gen: "validate_dielectric.py", gen_need: [], fetch_all: true,
+     needs: ["step5_dielect"]}
 
   - {seq: 6, name: step6_elastic, label: S6_elastic, src: step6_elastic,
      check: marker, marker: "OUTCAR:TOTAL ELASTIC MODULI",
@@ -86,12 +105,17 @@ steps:
 
   - {seq: 7.1, name: step7b_deform_read, label: S7.1_read, src: step7_deform/step7b_read,
      check: plot, run: gen, done_marker: deformation.h5,
-     gen: gen_step9b_deform_read.py, gen_need: [], fetch_all: true,
+     # gen_need 必须显式带上 ke_common.py：gen_step9b 要 import 它、并用
+     # resolve_strain_pairs。不推的话远端留着的是**别的步骤**早先推的那份
+     # —— 2026-09-16 MoS2 实测直接 AttributeError: resolve_strain_pairs。
+     # 现在 ke_common.py **只有技能根目录一份**（原来三份同名拷贝，谁最后 gen
+     # 谁说了算），凡是 import 它的步骤都在 gen_need 里声明（S3/S4/S5/S7/S7.1/S8/S8.4）。
+     gen: gen_step9b_deform_read.py, gen_need: [ke_common.py], fetch_all: true,
      needs: ["step7_deform"]}
 
   - {seq: 8, name: step8_amset, label: S8_kappa, src: step8_amset,
      check: marker, marker: "transport.json:thermal_conductivity",
-     gen: gen_step10_amset.py, gen_need: [stepconf.py, step.conf, submit_amset.tpl, vdw_radii.py, discriminant_common.py], fetch_all: true,
+     gen: gen_step10_amset.py, gen_need: [stepconf.py, step.conf, ke_common.py, submit_amset.tpl, vdw_radii.py, discriminant_common.py], fetch_all: true,
      needs: ["step4_wave", "step5_dielect", "step6_elastic", "step7b_deform_read", "step2_bandgap/step2.2_pbe_plot", "step2_bandgap/step2.3_hse_plot"]}
 
 # --- 2 带隙段：子步嵌套进 step2_bandgap/，状态表合并成 S2_bandgap 一列 ---------
@@ -107,6 +131,47 @@ steps:
 # 计算目录名：step2_bandgap/{step2.1_static, step2.2_pbe, step2.2_pbe_plot,
 #                            step2.3_hse, step2.3_hse_plot}
 optional_steps:
+  # ---------------------------------------------------------------------------
+  # wavefunction_full（patch_full_grid，2026-09-17）—— AMSET **全网格**波函数诊断分支
+  #
+  # 目的：绕开 AMSET 的 desymmetrize_coefficients。
+  #   WavefunctionOverlapCalculator.from_coefficients 里：
+  #       if np.prod(mesh_dim) == len(kpoints):  return cls.from_data(...)
+  #   h5 的 k 点若本身构成完整网格，就完全不调用去对称化。
+  #   把 S3 的 INCAR 从 ISYM = 2 改成 **ISYM = -1**（必须 -1，不能 0 ——
+  #   ISYM = 0 仍用时间反演、只给半个网格），VASP 就产出完整网格的 WAVECAR，
+  #   amset wave 得到的 h5 便直接走 from_data。
+  #
+  # ★ 默认关闭：这是一次性诊断/裁决用的分支，**不要**给存量材料打开 ——
+  #   k 点会 x16（MoS2：416 -> 6627），WAVECAR 与 h5 同步变大（h5 约 85 MB -> 1.3 GB）。
+  #   打开方式：项目 project_setting 里写 wavefunction_full: true。
+  #
+  # 与原 S3/S4 的关系：两个新步骤各自独立目录，**不覆盖、不修改** step3_uniform /
+  # step4_wave；两者可与原步骤并存对比。
+  # 判据与裁决表见 skill/ke-dft-cpu/step8.4_amset2d/VERIFICATION.md V22.4 / V22.8。
+  # 【必须同步的项目级配置】新步骤名与 step3_uniform 不同，按步骤名合并的
+  #   project_setting/templates/<步骤名>/step.conf 不会自动继承 —— 要让网格与 S3
+  #   完全一致（只差 ISYM），必须在
+  #   project_setting/templates/step3b_uniform_full/step.conf 里写同样的
+  #   VACUUM_KZ_MIN / DK_MAX。gen 脚本末尾会与 step3_uniform/KPOINTS 对照并告警。
+  # ---------------------------------------------------------------------------
+  wavefunction_full:
+    default: false
+    steps:
+      - {seq: 3.5, name: "step3b_uniform_full", label: S3b_uniformfull,
+         after: step1_opt,
+         src: step3b_uniform_full, check: wavecar, gen: gen_step5b_uniform_full.py,
+         gen_need: [stepconf.py, step.conf, ke_common.py, dim_common.py, check_common.py,
+                    incar_uniform_full_2d.tpl, incar_uniform_full_3d.tpl,
+                    submit_std_2d.tpl, submit_std_3d.tpl],
+     needs: ["step1_opt"]}
+      - {seq: 4.5, name: "step4b_wave_full", label: S4b_wavefull,
+         after: step3b_uniform_full,
+         src: step4b_wave_full, check: marker, marker: "wavefunction.h5:",
+         gen: gen_step6b_wave_full.py,
+         gen_need: [stepconf.py, step.conf, ke_common.py, submit_amset.tpl],
+     needs: ["step3b_uniform_full"]}
+
   bandgap_steps:
     default: true
     steps:
@@ -212,7 +277,7 @@ optional_steps:
          after: step8_amset,
          src: step8.4_amset2d, check: marker, marker: "transport.json:thermal_conductivity",
          gen: gen_step14_amset2d.py,
-         gen_need: [stepconf.py, step.conf, submit_amset.tpl, vdw_radii.py,
+         gen_need: [stepconf.py, step.conf, ke_common.py, submit_amset.tpl, vdw_radii.py,
                     discriminant_common.py, amset2d_plugin.py, amset2d_pop_freq.py],
          fetch_all: true,
          needs: ["step4_wave", "step5_dielect", "step6_elastic", "step7b_deform_read",
@@ -228,6 +293,15 @@ optional_steps:
          gen: gen_step13_output.py, gen_need: [], fetch_all: true,
          needs: ["step8_amset", "step8.1_boltztrap", "step8.2_dpt"]}
 
++io_schema:
+  inputs: [{name: POSCAR, from: user, required: true, desc: "材料结构"}]
+  outputs: [{name: workflow_outputs, step: final, type: directory, desc: "由技能实际步骤产生的结果文件"}]
+  params: []
+  steps: []
+flow:
+  summary: "按技能步骤生成并校验科学计算结果"
+  stages: [{name: workflow, steps: [], produces: [workflow_outputs]}]
+corrections: [node_fail, dir_missing]
 requires:
   python: [pymatgen, numpy, matplotlib, amset, BoltzTraP2]
   conda: amset_clean

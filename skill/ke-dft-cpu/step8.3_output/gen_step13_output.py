@@ -37,6 +37,78 @@ OUTDIR_NAME = "step8.3_output"
 AMSET_DIR = "step8_amset"
 # patch_amset2d：二维散射核（插件版）的结果目录。存在就一起对比，不存在就跳过。
 AMSET2D_DIR = "step8.4_amset2d"
+# ---- 掺杂可解读范围（2026-09-16 二次修订）----------------------------------
+# 判据必须**与原胞大小无关**，所以不用面密度、用【每原胞载流子数】：
+#     n_cell = n_2D × A_cell（2D）或 n_3D × V_cell（3D）
+# 理由：同样 1e14 cm^-2，在 MoS2（A = 8.7 Å²）是每胞 0.087 个载流子，合理；
+# 在富勒烯网络 / Mg2C60 这类大胞（A 大一个量级以上）就是每胞好几个 ——
+# 早超出刚性能带近似（也超出实验可达），只按面密度判会**漏报**。
+# 上限取每原胞约 0.1 个载流子；超过的档位只在表里留数、标 NO，不作定量解读、
+# 不进论文图。物理依据见 VERIFICATION §15.10。
+NCELL_INTERPRET_MAX = 0.1         # 每原胞载流子数（2D 与 3D 同一判据）
+N2D_INTERPRET_MAX_REF = 1.0e14    # cm^-2：仅作 2D 输出的参考对照（MoS2 量级），不参与判据
+
+
+def _cell_geometry(cwd):
+    """(A_cell [cm²], V_cell [cm³])：从 step3_uniform 的 CONTCAR/POSCAR 读晶胞。
+
+    2D 用 A = |a×b|（面内），3D 用 V = |a·(b×c)|。读不到返回 (None, None)——
+    那种情况下不做每胞判据，只保留面密度列。
+    """
+    import glob as _glob
+    cands = []
+    for _d in ("step3_uniform", "step1_opt", "step1_std_opt", "."):
+        cands += sorted(_glob.glob(str(Path(cwd) / _d / "CONTCAR")))
+        cands += sorted(_glob.glob(str(Path(cwd) / _d / "POSCAR")))
+    for p in cands:
+        try:
+            ln = Path(p).read_text(errors="ignore").splitlines()
+            s = float(ln[1].split()[0])
+            L = [[float(x) * s for x in ln[2 + i].split()[:3]] for i in range(3)]
+        except (OSError, IndexError, ValueError):
+            continue
+        a, b, c = L
+        def _cross(u, v):
+            return [u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2],
+                    u[0] * v[1] - u[1] * v[0]]
+        def _norm(u):
+            return sum(x * x for x in u) ** 0.5
+        cr = _cross(a, b)
+        A = _norm(cr) * 1e-16                                # Å² -> cm²
+        # ★ 体积必须是三重积 c·(a×b)。初版误写成 a·(a×b) 恒为 0（自检当场抓到：
+        #   V_cell 打印成 0.0000 Å³），那会让 3D 的每胞判据永远"通过"。
+        V = abs(sum(c[i] * cr[i] for i in range(3))) * 1e-24  # Å³ -> cm³
+        return A, V
+    return None, None
+
+
+def _deform_geometry(cwd):
+    """形变势构型口径（ionrelax/clamped/mixed）：step7b 的 band_edges.json 里记着实际用
+    哪一套。汇总表要输出这一列 —— 回退到 clamped 时不同项目口径不一致，必须看得见。"""
+    for rel in ("step7b_deform_read", "step7_deform"):
+        p = Path(cwd) / rel / "band_edges.json"
+        if p.is_file():
+            try:
+                v = (_load_json(p) or {}).get("deform_geometry")
+            except Exception:                                  # noqa: BLE001
+                v = None
+            if v:
+                return str(v)
+    return None
+
+
+def _areal_factor_cm(cwd):
+    """2D 面密度换算因子 c（cm）：优先 amset2d 的 2d_correction.json，再 step8_amset。"""
+    for rel in (AMSET2D_DIR, AMSET_DIR):
+        p = Path(cwd) / rel / "2d_correction.json"
+        if p.is_file():
+            try:
+                v = (_load_json(p) or {}).get("areal_density_factor_cm")
+            except Exception:                                  # noqa: BLE001
+                v = None
+            if v:
+                return float(v)
+    return None
 BT2_DIR   = "step8.1_boltztrap"
 DPT_DIR   = "step8.2_dpt"
 TARGET_T  = 300.0
@@ -574,11 +646,42 @@ def write_table(out, rows, am, bt, dpt, am2=None):
                              "amset2d_ZT_xx", "amset2d_ZT_yy", "amset2d_ZT",
                              "bt2_ZT_xx", "bt2_ZT_yy", "bt2_ZT")
                  if any(c in r for r in rows)]
+    # [patch_dose_range] 每原胞载流子数 + 可解读范围标记（2D/3D 同一判据）
+    _c_cm = _areal_factor_cm(Path.cwd())
+    _A_cm2, _V_cm3 = _cell_geometry(Path.cwd())
+    _add_dose = bool(am or am2 or bt or dpt) and bool(_A_cm2 or _V_cm3)
+    if _add_dose:
+        _dcols = (["n_2D_cm-2"] if (_c_cm and (am or am2)) else [])
+        cols = _dcols + ["carriers_per_cell", "in_interpret_range"] + cols
+    # [patch_deform_geom] 形变势构型口径整列输出（每行同值；回退到 clamped 时一眼可见）
+    _dgeom = _deform_geometry(Path.cwd())
+    if _dgeom:
+        cols = cols + ["deform_geometry"]
     with open(out / "comparison_300K.csv", "w", newline="") as fh:
         w = csv.DictWriter(fh, fieldnames=cols, extrasaction="ignore")
         w.writeheader()
         for r in rows:
-            w.writerow({k: ("" if r.get(k) is None else r.get(k)) for k in cols})
+            _row = {k: ("" if r.get(k) is None else r.get(k)) for k in cols}
+            if _add_dose and r.get("carrier_conc_cm-3") is not None:
+                try:
+                    _n3a = abs(float(r["carrier_conc_cm-3"]))
+                    # [2026-09-16 修订] 2D/3D **同一个公式**：n_cell = n_3D × V_cell。
+                    # 因为 V_cell = A_cell·h⊥、n_2D = n_3D·h⊥，所以 n_2D×A_cell 恒等于
+                    # n_3D×V_cell —— 少一个分支就少一处出错的可能（原先 2D 走 A_cell、
+                    # 3D 走 V_cell 是多余的）。n_2D 那一列只作展示。
+                    _ncell = _n3a * _V_cm3 if _V_cm3 else None
+                    if _c_cm and (am or am2):
+                        _row["n_2D_cm-2"] = "%.3g" % (_n3a * _c_cm)
+                    if _ncell is not None:
+                        _row["carriers_per_cell"] = "%.3g" % _ncell
+                        _row["in_interpret_range"] = (
+                            "yes" if _ncell <= NCELL_INTERPRET_MAX else
+                            "NO(>%.2g/cell：超出刚性能带近似/实验范围)" % NCELL_INTERPRET_MAX)
+                except (TypeError, ValueError):
+                    pass
+            if _dgeom:
+                _row["deform_geometry"] = _dgeom
+            w.writerow(_row)
 
     def fmt(v, f="%.4g"):
         return (f % v) if isinstance(v, (int, float)) and v == v else "—"
@@ -590,6 +693,20 @@ def write_table(out, rows, am, bt, dpt, am2=None):
              "# 张量约化：%s" % _red,
              "# S/Lorenz 可直接比；σ/κ_e amset是绝对值、BT2是per-τ只比趋势；DPT迁移率仅ADP",
              "# [DPT μ] m* 取 full-BZ 二次型 m_d（面内平均），非 3 点抛物拟合"]
+    if _dgeom:
+        _warn = ("" if _dgeom == "ionrelax" else
+                 "  ⚠ 非离子弛豫口径：与 TOTAL ELASTIC MODULI 不同源，ADP 绝对值跨项目不可直接比")
+        lines.append("# [口径] 形变势构型 deform_geometry = %s（ionrelax=离子弛豫；clamped=离子固定）%s"
+                     % (_dgeom, _warn))
+    if _add_dose:
+        lines.append("# [范围] 可解读上限 = 每原胞 %.2g 个载流子"
+                     "（n_cell = n_2D×A_cell 或 n_3D×V_cell；本胞 A = %s Å², V = %s Å³）%s。"
+                     "超出档位在 csv 里标 in_interpret_range=NO：刚性能带近似已不成立、"
+                     "实验也达不到，只看趋势，不进论文图。"
+                     % (NCELL_INTERPRET_MAX,
+                        ("%.3g" % (_A_cm2 * 1e16)) if _A_cm2 else "?",
+                        ("%.3g" % (_V_cm3 * 1e24)) if _V_cm3 else "?",
+                        ("；面密度换算因子 c = %.4f cm" % _c_cm) if _c_cm else ""))
     # [C6/C7] DPT 真空对齐结局 / edge_flip / 来源
     if dpt:
         va = dpt.get("vac_align") or {}

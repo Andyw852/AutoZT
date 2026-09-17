@@ -33,7 +33,7 @@
 # All parameters live in step.conf (stepconf.py three-layer merge):
 #   tf -tt fc-fit -p <material> -j step1_fit conf --set params.FIT_ENGINE=hiphive
 # =============================================================================
-schema: 1
+schema: 2
 name: fc-fit
 desc: 力常数拟合 fc2/fc3 (pheasy/hiphive/phono3py)
 version: "0.1"
@@ -90,3 +90,23 @@ requires:
   python: [numpy, scipy, phonopy, spglib, ase, h5py, phono3py, symfc, hiphive, pheasy]
   conda: atomate2_p_a
   exe: [phono3py, pheasy]
+
+io_schema:
+  inputs:
+    - {name: displacement_force_dataset, from: user, required: true, desc: "已有位移-力数据集（来自 kl/phonon 技能）"}
+  outputs:
+    - {name: fc2.hdf5, step: S1_fit, type: hdf5, desc: "二阶力常数"}
+    - {name: fc3.hdf5, step: S1_fit, type: hdf5, desc: "三阶力常数（有三阶数据时）"}
+    - {name: fc_fit_summary.json, step: S1_fit, type: json, desc: "拟合与虚频判据摘要"}
+  params:
+    - {name: FIT_ENGINE, values: [phono3py, pheasy, hiphive], default: phono3py, where: step.conf, desc: "力常数拟合引擎"}
+  steps:
+    - {step: S1_fit, title: "Fit force constants", inputs: [displacement_force_dataset], outputs: [fc2.hdf5, fc3.hdf5, fc_fit_summary.json], validator: "phonon 判据且无超阈虚频"}
+    - {step: S2_plot, title: "Phonon plot", inputs: [fc2.hdf5], outputs: [phonon_band_summary.json], validator: "marker 文件存在"}
+flow:
+  summary: "读取已有位移-力数据 → 拟合 fc2/fc3 → 虚频闸与声子谱"
+  stages:
+    - {name: 拟合, steps: [S1_fit], produces: [fc2.hdf5, fc3.hdf5]}
+    - {name: 出图, steps: [S2_plot], produces: [phonon_band_summary.json]}
+  requires: {displacement_force_dataset: "需由上游技能生成或手工放置"}
+corrections: [node_fail, dir_missing]

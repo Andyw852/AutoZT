@@ -9,7 +9,7 @@
 # 引擎在 skill/phonon-mace-cpu/ 与 _common/mace/（mace_relax.py / mace_model.py /
 # klmace_common.py / submit_mace_relax.tpl 共用）。
 # =============================================================================
-schema: 1
+schema: 2
 name: phonon-mace-cpu
 desc: 声子谱(MACE/CPU)
 version: "0.1"
@@ -71,6 +71,15 @@ optional_steps:
                     cutoff_conv_driver.py, submit_mace_relax.tpl,
                     disps.npy, forces.npy, klmace_params.txt, workflow_method.txt]}
 
++io_schema:
+  inputs: [{name: POSCAR, from: user, required: true, desc: "材料结构"}]
+  outputs: [{name: workflow_outputs, step: final, type: directory, desc: "由技能实际步骤产生的结果文件"}]
+  params: []
+  steps: []
+flow:
+  summary: "按技能步骤生成并校验科学计算结果"
+  stages: [{name: workflow, steps: [], produces: [workflow_outputs]}]
+corrections: [node_fail, dir_missing]
 requires:
   python: [mace-torch, torch, ase, phonopy, symfc, spglib, numpy, alm]
   conda: mace

@@ -38,7 +38,8 @@ def _run(args, actor="mcp", timeout=300, strict=None):
     else:
         env["AUTOZT_AGENT_STRICT"] = str(strict)
     p = subprocess.run([sys.executable, PROG] + args, capture_output=True,
-                       text=True, env=env, cwd=ROOT, timeout=timeout)
+                       text=True, encoding="utf-8", errors="replace",
+                       env=env, cwd=ROOT, timeout=timeout)
     return p.returncode, (p.stdout or "") + (p.stderr or "")
 
 

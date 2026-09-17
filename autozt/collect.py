@@ -24,6 +24,8 @@ import random
 from collections import Counter, defaultdict
 from concurrent.futures import ThreadPoolExecutor
 
+from autozt import i18n as _i18n  # noqa: E402
+
 # ===== 来自 05_collect.py =====
 # -*- coding: utf-8 -*-
 # 05_collect —— 远端状态采集（ssh + COLLECTOR）

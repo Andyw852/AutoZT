@@ -4,7 +4,7 @@
 #   S2_elastic  IBRION=6 有限形变（应力-应变 → Cij）
 #   S3_post     本地后处理（不提交 SLURM）：Cij 解析、Born 判据、2D→N/m、各向异性图
 # =============================================================================
-schema: 1
+schema: 2
 name: elastic-dft-cpu
 desc: 弹性常数(DFT/CPU)
 version: "1.2"
@@ -38,3 +38,22 @@ steps:
 # S3_post 在登录节点跑，需要 numpy / matplotlib / pymatgen
 requires:
   python: [numpy, matplotlib, pymatgen]
+
+io_schema:
+  inputs: [{name: POSCAR, from: user, required: true, desc: "材料初始结构"}]
+  outputs:
+    - {name: mechanical_properties.json, step: S3_post, type: json, desc: "弹性张量、Born 稳定性和二维单位换算"}
+  params: []
+  steps:
+    - {step: S1_opt, title: "Relax structure", inputs: [POSCAR], outputs: [CONTCAR], validator: "力收敛"}
+    - {step: S2_elastic, title: "Elastic deformations", inputs: [CONTCAR], outputs: [OUTCAR], validator: "OUTCAR 含 TOTAL ELASTIC MODULI"}
+    - {step: S3_post, title: "Elastic postprocess", inputs: [OUTCAR], outputs: [mechanical_properties.json], validator: "marker 文件存在"}
+flow:
+  summary: "结构弛豫 → 有限形变应力响应 → 弹性常数与稳定性后处理"
+  stages:
+    - {name: 弛豫, steps: [S1_opt], produces: [CONTCAR]}
+    - {name: 形变, steps: [S2_elastic], produces: [OUTCAR]}
+    - {name: 后处理, steps: [S3_post], produces: [mechanical_properties.json]}
+  next_skills: [{skill: ke-dft-cpu, via: mechanical_properties.json, desc: "电子输运中的弹性散射参数"}]
+  requires: {POSCAR: "材料目录根必须有 POSCAR"}
+corrections: [node_fail, nsw_continue, zbrent, dir_missing]

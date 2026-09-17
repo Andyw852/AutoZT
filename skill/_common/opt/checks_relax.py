@@ -27,6 +27,7 @@ running 之外的"还没跑" -> OUTCAR missing
 """
 
 import os
+import re
 import glob as _glob
 
 
@@ -62,6 +63,103 @@ def _stage_progress(d):
     return done, planned, started > done, skipped
 
 
+# 末态压力门禁（kB）：脚本自身稳定判据是 PRESS_TOL_KB=1.0，这里放宽一倍留 Pulay 余量。
+#   调大/调小请改这里，或在 step.conf 用同样的键覆盖（见下 STRESS_GATE_KB 读取）。
+_STRESS_GATE_KB = 2.0
+try:                                    # step.conf [params] 里可覆盖
+    _sc_txt = open(os.path.join(os.getcwd(), "step.conf"), encoding="utf-8-sig").read()
+    _m = re.search(r"(?m)^\s*STRESS_2D_THR\s*=\s*([\d.]+)", _sc_txt)
+    if _m:
+        _STRESS_GATE_KB = float(_m.group(1)) * 4.0   # 层内口径阈值 → 胞口径粗换算
+except Exception:                       # noqa: BLE001 —— 读不到就用默认
+    pass
+
+_ISIF_RE = re.compile(r"^\s*ISIF\s*=\s*(\S+)", re.I | re.M)   # noqa: E305
+_IOPT_RE = re.compile(r"^\s*IOPTCELL\s*=", re.I | re.M)
+
+
+def _incar_moves_cell(text):
+    """这一段会不会动晶胞（ISIF>=3，或写了 IOPTCELL）。与 relax_common.stage_changes_cell 同义。"""
+    m = _ISIF_RE.search(text)
+    if m and m.group(1)[:1].isdigit() and int(m.group(1)[:1]) >= 3:
+        return True
+    return bool(_IOPT_RE.search(text))
+
+
+def _cell_stage_states(d):
+    """-> [(段文件名, 是否动胞, 状态)]，状态 ∈ {done, skipped, started, ''}。"""
+    out = []
+    for p in sorted(_glob.glob(os.path.join(d, "INCAR.s*_*"))):
+        tag = os.path.basename(p)[len("INCAR."):]          # 形如 s2_b
+        key = tag.split("_")[0]                            # s2
+        try:
+            moves = _incar_moves_cell(open(p, encoding="utf-8", errors="ignore").read())
+        except OSError:
+            moves = False
+        st = ""
+        for s in ("done", "skipped", "started"):
+            if os.path.isfile(os.path.join(d, ".%s.%s" % (key, s))):
+                st = s
+                break
+        out.append((tag, moves, st))
+    return out
+
+
+_PRESS_RE = re.compile(r"external pressure\s*=\s*(-?[\d.]+)\s*kB")
+
+
+def _last_external_pressure(d):
+    """末态 external pressure (kB)；读不到返回 None。
+
+    自包含实现（不 import 技能模块）：只认 OUTCAR 里最后一条
+    "external pressure = X kB"。它是应力张量迹的 1/3，与"晶胞是否到位"直接对应。
+    """
+    p = os.path.join(d, "OUTCAR")
+    if not os.path.isfile(p):
+        return None
+    hits = _PRESS_RE.findall(_tail(p, 400))
+    try:
+        return float(hits[-1]) if hits else None
+    except (TypeError, ValueError):
+        return None
+
+
+_STRESS_GATE_MARKERS = ("S1_STRESS_GATE.off", "S1_STRESS_GATE_OFF")
+
+
+def _stress_gate_exempt(d):
+    """应力门禁豁免：步骤目录里放 S1_STRESS_GATE.off（内容写原因）即跳过末态压力判据。
+
+    为什么需要：末态压力判据针对的是【2D 生产材料】——面内张力会把 ZA 线性化、
+    Huang 零应力条件不成立。但基准/验证类结构（Si 金刚石、LiCoO2 等 shengbte-gpu
+    对照线）本来就是拿官方 example 的结构与力常数做对照，冻结晶格很可能是有意为之，
+    重新弛豫反而会让它们与官方基准对不上。豁免必须写明原因，留痕可审计。
+    """
+    for name in _STRESS_GATE_MARKERS:
+        p = os.path.join(d, name)
+        if os.path.isfile(p):
+            try:
+                txt = open(p, encoding="utf-8", errors="ignore").read().strip()
+            except OSError:
+                txt = ""
+            return txt.splitlines()[0][:160] if txt else "（未写原因）"
+    return None
+
+
+def _job_reported_unconverged_cell(d):
+    """作业自报变胞段未稳定（run_relax.sh 末尾的 RELAX_CELL_UNCONVERGED）。"""
+    for f in ("queue.out", "queue.err"):
+        p = os.path.join(d, f)
+        if not os.path.isfile(p):
+            continue
+        try:
+            if "RELAX_CELL_UNCONVERGED" in open(p, encoding="utf-8", errors="ignore").read():
+                return True
+        except OSError:
+            pass
+    return False
+
+
 def ck_relax_injob(d, sc):
     """作业内分段弛豫的判据（check: relax_injob）。"""
     mat = os.path.dirname(d)
@@ -73,9 +171,46 @@ def ck_relax_injob(d, sc):
             return True, "旧分段 %s 已收敛，跳过" % legacy
 
     if _conv(d):
+        # ★ 2026-09-16 加固（这是"前面遇到过、后面不许再遇到"的那一类）：
+        #   ① 变胞段被"上一段力已收敛"跳过 —— 力判据说明不了晶胞/应力。实测 jzz 批次：
+        #      段2(b)/段3(c) 被跳过并写成 .sN.done，晶格 16 位不变、面内层内口径应力
+        #      −2~−62 kbar（全拉伸），而判据报 "converged（3/3 段）"，kappa 照跑。
+        #   ② 作业自己报了 RELAX_CELL_UNCONVERGED（力收敛但晶格变化/|P| 没到位）——
+        #      以前这个标记写了没人读，等于白写。
+        #   两条都在"看起来收敛"之前拦，绝不让带残余应力的结构流到 S2/S4。
+        bad = [t for t, moves, st in _cell_stage_states(d) if moves and st == "skipped"]
+        if bad:
+            return False, ("变胞段 %s 被跳过 —— 力收敛不代表晶胞/应力收敛，晶胞没有弛豫，"
+                           "残余应力会原样传到声子/热导步。清掉 .s?.done/.s?.skipped 后 "
+                           "autozt retry 重投（新代码的 gen 会自动清）。" % "、".join(bad))
+        if _job_reported_unconverged_cell(d):
+            return False, ("作业自报 RELAX_CELL_UNCONVERGED —— 变胞段的晶格变化量或 |external "
+                           "pressure| 没到位（力判据过了也没用）。看 queue.out 末态 P 值，"
+                           "按提示 cp CONTCAR POSCAR 后重投。")
+        # ③ 末态压力后置校验（物理量判据，不依赖标记语义）：有变胞段却没把应力收到位，
+        #    说明晶胞没真弛豫。实测故障件：段 b/c 被跳过 → 晶格 16 位不变、末态
+        #    external pressure = -7.93 kB，而旧判据报 "converged（3/3 段）"。
+        #    阈值取脚本自身稳定判据 PRESS_TOL_KB=1.0 的两倍，给 Pulay 应力留余量。
+        _exempt = _stress_gate_exempt(d)
+        if _exempt is not None:
+            print("[..] 变胞应力门禁已豁免（S1_STRESS_GATE.off：%s）" % _exempt)
+        if _exempt is None and any(m for _, m, _ in _cell_stage_states(d)):
+            _p = _last_external_pressure(d)
+            if _p is not None and abs(_p) > _STRESS_GATE_KB:
+                return False, ("有变胞段但末态 external pressure = %.2f kB（阈值 %.1f）—— "
+                               "晶胞没有弛豫到位（力收敛说明不了应力收敛）。这正是"
+                               "'变胞段被跳过'故障的指纹：晶格不变 + 残余应力留下。"
+                               "autozt retry 重投（gen 会清掉旧阶段标记，变胞段不会再被跳过）。"
+                               % (_p, _STRESS_GATE_KB))
         done, planned, _, skipped = _stage_progress(d)
         if planned:
-            note = "converged（%d/%d 段" % (done, planned)
+            # 变胞多遍循环会让同一个 INCAR 被跑多遍（.s2r1/.s2r2/…），于是
+            # done > planned。原来直接印 "converged（5/3 段）"，看着像 bug
+            # （2026-09-17 实测就是这个），所以分开表述。
+            if done == planned:
+                note = "converged（%d/%d 段" % (done, planned)
+            else:
+                note = "converged（%d 个阶段 INCAR、共 %d 次段运行" % (planned, done)
             if skipped:
                 note += "，跳过 %d 段" % skipped
             return True, note + "）"

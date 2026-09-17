@@ -80,6 +80,11 @@ VACUUM_MIN = 8.0     # Å；2D 常用真空 15~25 Å，8 Å 足以与层状体�
 #                    转换成 OPTCELL 文件并【删除该行】—— VASP>=6.2 遇到不认识的
 #                    INCAR 标签会直接罢工，留着它反而跑不起来。
 #   "ioptcell_tag" : 补丁读 INCAR 的 IOPTCELL 标签，原样保留，不写 OPTCELL 文件。
+#   "lattice_constraints" : VASP 6.5+ 官方标签 LATTICE_CONSTRAINTS（P1-4）：
+#                    写 ".TRUE. .TRUE. .FALSE." 放开面内、冻结 c。比 IOPTCELL 更正统，
+#                    但它按【笛卡尔方向】置零应力分量，故要求 c ∥ z；且 6.5.0 起才在
+#                    IBRION=1/2 下被读取 —— 旧版会静默忽略 → ISIF=3 连真空一起弛豫、
+#                    真空塌缩。所以本模式要求能确认 VASP 版本（见 _vasp_version_from_text）。
 #   "none"         : 两者都不做（自行处理，如 ISIF=2 + 能量-面积扫描）。
 CELL_CONSTRAINT_2D = "auto"
 
@@ -326,7 +331,21 @@ STALL_MIN = 60                       # run_relax.sh 看门狗：OUTCAR 停滞几
 #   现在：变胞段永远不被力判据跳过；被跳过的段写 .skipped（不是 .done），
 #   retry 时仍会被执行。
 EARLY_EXIT_ON_CONVERGENCE = True     # 不改晶胞的段：已收敛就跳过后续段
-PRESS_TOL_KB = 1.0                   # 变胞段稳定判据③：|external pressure| < 此值 (kB)
+PRESS_TOL_KB = 1.0                   # 变胞段稳定判据③(3D)：|external pressure| < 此值 (kB)
+# 2D 的稳定判据③改用【面内分量】（2026-09-17 修正）：
+#   原因见 run_relax.sh 里 _last_inplane 的注释 —— P=(σxx+σyy+σzz)/3，而 2D 的 σzz 是
+#   被 IOPTCELL 冻结的真空方向应力，不随面内弛豫下降，于是 |P| 判据系统性偏松：
+#   实测 Mo2S3 旧结构 P=-7.93（面内 -11.97/-10.62）、弛豫后 P=-0.51（面内 -0.06/-0.16），
+#   而 σzz 前后几乎不变（-1.21 → -1.30）。|P|<1.0 实际只等价于层内约 4 kbar，
+#   比 S4 的 STRESS_2D_THR=0.5 kbar 松 8 倍 —— 会出现"S1 说稳定、S4 门禁不过"。
+#   取 0.2 kB（胞口径）≈ 0.59 kbar 层内（h⊥/d≈2.9）—— 略高于 S4 门禁的 0.5 kbar，
+#   这样"过得 S4 门禁"的材料一定会过 S1 判据，不会出现"S1 判 FAIL 而 S4 门禁放行"的
+#   自相矛盾（实测 Mo2S3 收敛到面内 0.161 kB = 0.47 kbar，正好卡在两种口径之间）。
+#   ★ 若某材料 h⊥/d 明显偏离 2.9（真空特别厚/层特别薄），在 step.conf 里按
+#      INPLANE_STRESS_TOL_KB = STRESS_2D_THR / (h⊥/d) 显式设。
+INPLANE_TOL_KB = 0.2                 # 兜底值（算不出 h⊥/d 时用）
+TOL_LAYER_KB = 0.4                   # 2D 面内应力的【层内口径】阈值(kbar)，
+                                     # 比 S4 的 STRESS_2D_THR=0.5 留余量
 # 变胞段【多遍循环】参数 —— 把"手动 cp CONTCAR POSCAR 重跑直到零应力"固化成自动流程。
 #   为什么必须多遍：① VASP 的 EDIFFG<0 只判【力】不判【应力】，单遍跑完晶胞常差几个 kbar；
 #                  ② 体积/形状一变，平面波基组的 G 矢量集合就变了（Pulay 应力），
@@ -369,6 +388,11 @@ CONF_SPEC = {
     "FUNC": (FUNC_DEFAULT, "str"),
     "HAS_ADSORBATE": (False, "bool"),
     "FIXED_CELL": (False, "bool"),
+    # 2D 专用逃生阀：默认 false = 2D 优化必须真正弛豫面内晶格（IOPTCELL/OPTCELL/
+    #   LATTICE_CONSTRAINTS 三选一）。设 true 才允许"固定胞 + 面内应力留着"的旧行为。
+    #   背景：2026-09-16 批量核查发现 jzz P1/P2 全部 step1 都是固定胞，
+    #   面内层内口径应力 −2 ~ −62 kbar（拉伸），κ 与 ZA 都不可信。
+    "ALLOW_2D_FIXED_CELL": (False, "bool"),
     "USES_MOLECULAR_REFERENCE": (False, "bool"),
     # 晶胞策略：step.conf 可覆盖技能默认（默认 None = 不设置，用技能 R.run 默认）。
     #   CELL_POLICY: primitive | standard | none
@@ -377,7 +401,15 @@ CONF_SPEC = {
     "CELL_POLICY": (None, "str"),
     "STD_CELL": (None, "str"),
     "VACUUM_AXIS_POLICY": (None, "str"),
+    # P2-3：非对称 2D（Janus / 单面吸附）的偶极修正。
+    #   on  : 写 LDIPOL=.TRUE. / IDIPOL=3 / DIPOL=0.5 0.5 0.5 并把 ISYM 压到 0
+    #   off : 显式不加（模板里的注释行保留注释状态）
+    #   auto: 结构没有面外镜面、或上下两端元素不同 → 开
+    # 开了之后 S2/S4 必须跟 S1 用同一套（它们的 gen 从 S1 的 INCAR 抄这几个标签），
+    # 否则取力/弛豫处在不同静电边界条件下，力常数没有意义。
+    "DIPOLE_2D": (None, "str"),
     "STALL_MINUTES": (60, "int"),        # run_relax.sh 看门狗阈值
+    "INPLANE_STRESS_TOL_KB": (0.2, "float"),   # 2D 变胞稳定判据③：面内分量阈值(kB,胞口径)
     "MOL_KPOINTS": ("gamma", "str"),     # 以下 MOL_* 由 mol_common 使用
     "MOL_ISPIN": ("auto", "str"),
     "MOL_MOMENT": ("1.0", "str"),
@@ -496,6 +528,15 @@ def apply_step_params():
         globals()["STAGE_MODE"] = "single"
     if v is not None:
         globals()["STALL_MIN"] = int(v)
+    _ip = STEP_PARAMS.get("INPLANE_STRESS_TOL_KB")
+    if _ip is not None:
+        try:
+            _ipf = float(_ip)
+        except (TypeError, ValueError):
+            sys.exit("[ERROR] INPLANE_STRESS_TOL_KB=%r 不是数" % _ip)
+        if _ipf <= 0:
+            sys.exit("[ERROR] INPLANE_STRESS_TOL_KB 必须 > 0，当前 %r" % _ip)
+        globals()["INPLANE_TOL_KB"] = _ipf
 
     # ---- [PATCH-UCONS] step.conf 覆盖 DFT+U 设置（按材料生效）----
     # 原来 AUTO_U / U_OVERRIDE / U_ANION_GATE 只在本文件里（五个技能共用），
@@ -619,9 +660,10 @@ def validate_user_config():
 
     if str(DIMENSION).lower() not in ("auto", "0d", "2d", "3d"):
         sys.exit("[ERROR] DIMENSION 只允许 'auto' / '2d' / '3d'")
-    if CELL_CONSTRAINT_2D not in ("auto", "optcell_file", "ioptcell_tag", "none"):
-        sys.exit("[ERROR] CELL_CONSTRAINT_2D 只允许 "
-                 "'auto' / 'optcell_file' / 'ioptcell_tag' / 'none'")
+    if CELL_CONSTRAINT_2D not in ("auto", "optcell_file", "ioptcell_tag",
+                                  "lattice_constraints", "none"):
+        sys.exit("[ERROR] CELL_CONSTRAINT_2D 只允许 'auto' / 'optcell_file' / "
+                 "'ioptcell_tag' / 'lattice_constraints' / 'none'")
 
 
 def sanitize_label(text: str) -> str:
@@ -1154,9 +1196,100 @@ def rotate_vacuum_to_c(poscar: Path, vac_axis: int) -> None:
     poscar.write_text("\n".join(lines) + "\n", encoding="utf-8", newline="\n")
 
 
+def _poscar_zspecies(poscar):
+    """读 POSCAR 的笛卡尔 z 坐标与逐原子元素（VASP4 无元素行 → 元素为 None）。"""
+    import re as _re
+    from dim_common import read_poscar_cell_frac
+    cell, frac = read_poscar_cell_frac(poscar)
+    zs = [sum(float(frac[i][k]) * float(cell[k][2]) for k in range(3))
+          for i in range(len(frac))]
+    species = None
+    try:
+        lines = Path(poscar).read_text(encoding="utf-8-sig").splitlines()
+        l6 = lines[5].split()
+        if l6 and not _re.fullmatch(r"[+-]?\d+", l6[0]):
+            counts = [int(x) for x in lines[6].split()]
+            sp = []
+            for sym, c in zip(l6, counts):
+                sp += [sym] * c
+            if len(sp) == len(frac):
+                species = sp
+    except Exception:
+        species = None
+    return zs, species
+
+
+def slab_is_asymmetric(poscar, tol=0.05):
+    """2D 层上下不对称？判据：不存在把层映射到自身的水平镜面，或两端元素不同。
+
+    用笛卡尔 z 直接判（与真空轴是否倾斜无关）：以 (zmin+zmax)/2 为镜面，逐原子找同
+    元素、z 镜像的配对；任一个找不到就是非对称。
+    """
+    try:
+        zs, species = _poscar_zspecies(poscar)
+    except Exception as e:
+        return None, "判不了（%s）" % e
+    if not zs:
+        return None, "空结构"
+    zmin, zmax = min(zs), max(zs)
+    if zmax - zmin < 1e-6:
+        return None, "层厚为 0"
+    # 两端元素不同（Janus）——最快的一条判据
+    if species:
+        order = sorted(range(len(zs)), key=lambda i: zs[i])
+        if species[order[0]] != species[order[-1]]:
+            return True, "两端元素不同（%s / %s）" % (species[order[0]], species[order[-1]])
+    mid = 0.5 * (zmin + zmax)
+    for i, z in enumerate(zs):
+        target = 2.0 * mid - z
+        ok = False
+        for j, z2 in enumerate(zs):
+            if abs(z2 - target) < tol and (species is None or species[j] == species[i]):
+                ok = True
+                break
+        if not ok:
+            return True, "原子 %d 找不到面外镜像配对（无水平镜面）" % i
+    return False, "存在面外镜面且上下元素一致"
+
+
+def decide_dipole_2d(poscar, dim, mode=None, vac_axis=2):
+    """DIPOLE_2D 解析。返回 (on: bool, note: str)。非 2D 恒 off。"""
+    m = str(mode if mode is not None else "auto").strip().lower()
+    if m in ("off", "false", "0", "no"):
+        return False, "DIPOLE_2D=off（显式不加）"
+    if dim != "2d" and m not in ("on", "true", "1", "yes"):
+        return False, "非 2D"
+    if m in ("on", "true", "1", "yes"):
+        return True, "DIPOLE_2D=on（强制）"
+    asym, why = slab_is_asymmetric(poscar)
+    if asym is None:
+        return False, "auto 判不了（%s），保守不加；要加请设 DIPOLE_2D=on" % why
+    return bool(asym), "auto：%s" % why
+
+
+def dipole_lines(on, note=""):
+    """生成 INCAR 里的偶极修正行（含 provenance 注释）。"""
+    if not on:
+        return ["# 偶极修正：未开（%s）" % note,
+                "# 非对称 2D 需要时设 step.conf 的 DIPOLE_2D=on（S1/S2/S4 会自动保持一致）"]
+    return ["# 偶极修正：%s；S2/S4 必须沿用同一套（gen 会从本 INCAR 抄这几个标签）" % note,
+            "LDIPOL = .TRUE.",
+            "IDIPOL = 3",
+            "DIPOL  = 0.5 0.5 0.5",
+            "ISYM   = 0              # 开偶极修正后必须为 0"]
+
+
+def _lc_mode():
+    """当前是否走 LATTICE_CONSTRAINTS 流派（由 apply_cell_constraint_2d._constraint_mode 决定）。"""
+    return getattr(apply_cell_constraint_2d, "_constraint_mode", "") == "lattice_constraints"
+
+
 def apply_stage_to_incar(incar_path: Path, stage: str):
     """按 STAGE_SPEC 覆盖 INCAR 里的弛豫控制标签。值为 None 的标签直接删除。"""
     spec = {k: v for k, v in STAGE_SPEC[stage].items() if not k.startswith("_")}
+    if _lc_mode():
+        # LATTICE_CONSTRAINTS 模式：不能同时给 IOPTCELL（新老标签并存会打架）
+        spec.pop("IOPTCELL", None)
     keys = set(spec)
     keep = [ln for ln in incar_path.read_text(encoding="utf-8").splitlines()
             if not (re.match(r"\s*([A-Za-z_]+)\s*=", ln)
@@ -1237,6 +1370,65 @@ def resolve_stage(cwd: Path):
     return want, dirname(want), src
 
 
+_VASP_VER_RE = re.compile(r"vasp[._-]?(\d+)\.(\d+)\.(\d+)", re.IGNORECASE)
+
+
+def _vasp_version_from_text(text: str):
+    """从文本（submit.sh / 可执行文件路径 / OUTCAR 头）里抠 VASP 版本，返回 (major, minor)。
+
+    集群的 vasp 路径通常就带版本（.../vasp.6.4.3-optcell/bin/vasp_std），OUTCAR 头也写
+    " vasp.6.5.0 ..."。都找不到返回 None —— 调用方必须把 None 当"不支持"处理。
+    """
+    explicit = re.search(r"AUTOZT_VASP_VERSION\s*=\s*(\d+)\.(\d+)", text or "")
+    if explicit:                       # 显式声明优先（路径不带版本号时用）
+        return (int(explicit.group(1)), int(explicit.group(2)))
+    m = _VASP_VER_RE.search(text or "")
+    return (int(m.group(1)), int(m.group(2))) if m else None
+
+
+def _c_parallel_z(poscar: Path, vac_axis):
+    """2D 的 c 轴是否沿笛卡尔 z（LATTICE_CONSTRAINTS 按笛卡尔方向置零应力的前提）。"""
+    try:
+        from dim_common import read_poscar_cell_frac
+        cell, _ = read_poscar_cell_frac(poscar)
+    except Exception:
+        return False
+    ax = int(vac_axis if vac_axis is not None else 2)
+    other = [i for i in range(3) if i != ax]
+    cvec = [float(x) for x in cell[ax]]
+    if abs(cvec[2]) < 1e-6:
+        return False
+    for i in other:
+        if max(abs(float(cell[i][2])), abs(float(cell[ax][0])), abs(float(cell[ax][1]))) > 1e-3:
+            return False
+    return True
+
+
+def check_lattice_constraints_support(submit_text: str, poscar: Path, vac_axis, label=""):
+    """P1-4：用 LATTICE_CONSTRAINTS 前必须能确认 VASP>=6.5 且 c∥z，否则报错退出。
+
+    为什么必须硬拦：旧版 VASP 不认识该标签时是【静默忽略】，于是 ISIF=3 会把真空
+    一起弛豫、真空层塌缩 —— 这正好是文档要禁止的"静默退回"。宁可报错让人显式选择。
+    """
+    ver = _vasp_version_from_text(submit_text)
+    if ver is None:
+        sys.exit("[ERROR] %s集群配置声明了 cell_constraint=lattice_constraints，但无法确认 "
+                 "VASP 版本。\n        请把 setting/<集群>.yaml 的 vasp.relax_2d 二进制路径"
+                 "写成带版本号的形式（如 .../vasp.6.5.0/bin/vasp_std），\n"
+                 "        或显式声明 AUTOZT_VASP_VERSION=6.5.0；旧版 VASP 会静默忽略"
+                 "LATTICE_CONSTRAINTS → 真空被一起弛豫。" % (label or ""))
+    if ver < (6, 5):
+        sys.exit("[ERROR] %sLATTICE_CONSTRAINTS 自 VASP 6.5.0 起才在 IBRION=1/2 下被读取，"
+                 "当前检测到 VASP %d.%d。\n        请改用 cell_constraint=ioptcell_tag / "
+                 "optcell_file（配 optcell 补丁版二进制）。" % (label or "", ver[0], ver[1]))
+    if not _c_parallel_z(poscar, vac_axis):
+        sys.exit("[ERROR] %scell_constraint=lattice_constraints 要求 c 轴 ∥ z"
+                 "（该标签按笛卡尔方向把应力分量置零），当前结构不满足。\n"
+                 "        请改用 ioptcell_tag / optcell_file。" % (label or ""))
+    print("[..] 2D 变胞约束：LATTICE_CONSTRAINTS（VASP %d.%d，c ∥ z）" % ver)
+    return ver
+
+
 def apply_cell_constraint_2d(incar_path: Path, outdir: Path):
     """2D 后处理：按 CELL_CONSTRAINT_2D 处理 IOPTCELL 标签 / OPTCELL 文件。"""
     lines = incar_path.read_text(encoding="utf-8").splitlines()
@@ -1257,14 +1449,37 @@ def apply_cell_constraint_2d(incar_path: Path, outdir: Path):
         if iopt is not None:
             kept.append("IOPTCELL = " + " ".join(str(v) for v in iopt))
         if iopt is None:
-            print("[WARN] CELL_CONSTRAINT_2D='ioptcell_tag' 但模板/INCAR 中没有合法的 "
-                  "IOPTCELL 行 —— c 轴将不受约束，ISIF=3 会连真空一起弛豫！")
+            # 模板里没有 IOPTCELL 行 = 这次优化根本不会动晶胞（或 ISIF=3 会连真空一起
+            # 弛豫），面内残余应力原样留在结构里 —— Huang 零应力条件不成立，下游 κ/ZA
+            # 全不可信，而声子谱可能照样全正、过得了虚频闸。所以硬失败，不再只 WARN。
+            #   实测（2026-09-16 批量核查）：jzz P1/P2 全部 10 个 step1 都是这个状态
+            #   （ISIF=2 + 无 IOPTCELL），面内层内口径应力 −2 ~ −62 kbar，全部拉伸。
+            if not STEP_PARAMS.get("ALLOW_2D_FIXED_CELL", False):
+                sys.exit("[ERROR] 2D 优化：CELL_CONSTRAINT_2D='ioptcell_tag' 但模板 %s "
+                         "里没有合法的 IOPTCELL 行 —— 晶胞不会弛豫，面内残余应力会原样"
+                         "留到声子/热导步。请修模板（项目级 project_setting/templates/ "
+                         "副本可能遮蔽了技能模板），或在 step.conf 显式设 "
+                         "ALLOW_2D_FIXED_CELL = true 表示你确实要固定胞。"
+                         % (incar_path.name,))
+            print("[WARN] 2D 优化：ioptcell_tag 但无 IOPTCELL 行，已按 "
+                  "ALLOW_2D_FIXED_CELL=true 放行 —— 晶胞不动，残余应力自负。")
         return                # 原样保留，什么都不改
 
     if iopt is None:
         if any(re.match(r"\s*ISIF\s*=\s*2\b", ln, re.IGNORECASE) for ln in kept):
             return
         iopt = [1, 1, 0, 1, 1, 0, 0, 0, 0]   # 默认：面内 xx/yy/xy 放开，c 固定
+
+    if mode == "lattice_constraints":
+        # P1-4：VASP 6.5+ 官方标签。IOPTCELL 行必须删掉（老标签 + 新标签同时给会打架），
+        # 由 LATTICE_CONSTRAINTS 承担"只放面内 xx/yy/xy、冻结 c"的约束。
+        kept.append("")
+        kept.append("# 2D 约束变胞（VASP>=6.5 官方标签，P1-4）：只放开面内，c 轴冻结")
+        kept.append("LATTICE_CONSTRAINTS = .TRUE. .TRUE. .FALSE.")
+        incar_path.write_text("\n".join(kept) + "\n", encoding="utf-8", newline="\n")
+        print("[OK] LATTICE_CONSTRAINTS = .TRUE. .TRUE. .FALSE. 已写入 INCAR"
+              "（IOPTCELL 行已移除）")
+        return
 
     if mode == "optcell_file":
         optcell = outdir / "OPTCELL"
@@ -1280,12 +1495,21 @@ def apply_cell_constraint_2d(incar_path: Path, outdir: Path):
               % tuple("".join(str(iopt[3 * r + c]) for c in range(3)) for r in range(3)))
         return
 
-    # mode == "none"
+    # mode == "none"：既不写 IOPTCELL 也不写 OPTCELL。对 2D 来说这等于"面内晶格不弛豫"，
+    #   而文档里承诺的"能量-面积扫描另定面内晶格"在技能里并不存在 —— 这正是 2026-09-16
+    #   查出的系统性残余应力来源。默认硬失败；确要固定胞请显式开 ALLOW_2D_FIXED_CELL。
     incar_path.write_text("\n".join(kept) + "\n", encoding="utf-8", newline="\n")
     vals = {k: v for k, v in read_incar_values(incar_path).items()}
     if vals.get("ISIF", "").startswith("3"):
         print("[WARN] CELL_CONSTRAINT_2D='none' 且 ISIF=3 —— c 轴（真空层）会被一起"
               "弛豫、真空可能塌缩！请确认这是你想要的。")
+    if not STEP_PARAMS.get("ALLOW_2D_FIXED_CELL", False):
+        sys.exit("[ERROR] 2D 优化：CELL_CONSTRAINT_2D='none' —— 面内晶格不会被弛豫，"
+                 "残余应力会原样传给声子/热导步（实测该模式下 2D 材料面内应力可达 "
+                 "−60 kbar，全部拉伸，Huang 零应力条件不成立）。\n"
+                 "        正确做法：集群 vasp.relax_2d 用 ioptcell_tag/optcell_file"
+                 "（jzzn/hanhai25/hfeshell 已配，a800/3090 目前是 none）。\n"
+                 "        确实要固定胞请在 step.conf 里显式设 ALLOW_2D_FIXED_CELL = true。")
 
 
 
@@ -1335,18 +1559,26 @@ RUN_RELAX_HELPERS = r"""
 # --------------------------------------------------------------------
 _ARCHIVE="OUTCAR OSZICAR CONTCAR vasprun.xml XDATCAR"
 
-# 看门狗：VASP 挂死（MPI 死锁、IB 掉线）时 OUTCAR 会停止增长，
+# 看门狗：VASP 挂死（MPI 死锁、IB 掉线）时输出会停止增长，
 # 但作业照样占着节点直到墙钟耗尽。这里发现停滞就主动杀掉本段。
+#
+# ★ 2026-09-17 修正：进度指纹从"只看 OUTCAR 字节"改成 **OUTCAR 字节 + OSZICAR 行数**。
+#   只盯 OUTCAR 会误杀：VASP 按【离子步】写 OUTCAR，而 OSZICAR 每个电子步（DAV）加一行；
+#   大超胞上单个离子步跑几十次 DAV、超过 STALL_MIN 分钟很常见。实测当天
+#   Mo2S3(A4-3-1) 段2(b) 被误判卡死（queue.err 写 "OUTCAR 已 60 分钟无增长"），
+#   而 queue.out 里 DAV 5→10 一直在收敛 —— 白杀一次 1 小时 14 分的作业。
+#   两个指纹都没动才算真挂死；这与 autozt 自己的 hang_check 判据一致。
 _watchdog () {
-    local pid="$1" last=-1 now stall=0
+    local pid="$1" last=-1 last_o=-1 now now_o stall=0
     [ "${STALL_MIN}" -le 0 ] && return 0
     while kill -0 "${pid}" 2>/dev/null; do
         sleep 60
         now=$(stat -c %s OUTCAR 2>/dev/null || echo 0)
-        if [ "${now}" = "${last}" ]; then
+        now_o=$(wc -l < OSZICAR 2>/dev/null || echo 0)
+        if [ "${now}" = "${last}" ] && [ "${now_o}" = "${last_o}" ]; then
             stall=$((stall + 1))
             if [ "${stall}" -ge "${STALL_MIN}" ]; then
-                echo "[run_relax][watchdog] OUTCAR 已 ${STALL_MIN} 分钟无增长，判定卡死，终止本段" >&2
+                echo "[run_relax][watchdog] OUTCAR(${now}B) 与 OSZICAR(${now_o} 行) 已 ${STALL_MIN} 分钟同时无增长，判定卡死，终止本段" >&2
                 kill -TERM "${pid}" 2>/dev/null || true
                 sleep 30
                 kill -KILL "${pid}" 2>/dev/null || true
@@ -1356,6 +1588,7 @@ _watchdog () {
             stall=0
         fi
         last="${now}"
+        last_o="${now_o}"
     done
 }
 
@@ -1372,6 +1605,19 @@ _converged () {
 # _last_pressure —— OUTCAR 末态 external pressure (kB)；取不到就打印空
 _last_pressure () {
     grep -o "external pressure =[ ]*-\{0,1\}[0-9.]*" OUTCAR 2>/dev/null | tail -1 | awk '{print $NF}' || true
+}
+
+# _last_inplane —— OUTCAR 末态【面内】应力分量的最大绝对值 (kB)
+#   取 "in kB  xx yy zz xy yz zx" 行的第 1/2/4 列（xx/yy/xy）。
+#   为什么 2D 必须看分量而不是 external pressure：P=(σxx+σyy+σzz)/3，而 2D 的
+#   σzz 是【被约束的真空方向】应力（IOPTCELL 冻结 c），它不会随面内弛豫而变小。
+#   实测 2026-09-17 Mo2S3：旧结构 P=-7.93 时面内 -11.97/-10.62、σzz=-1.21；
+#   完全弛豫后 P=-0.51 但 σzz 仍是 -1.30 —— 面内已降到 -0.06/-0.16，
+#   而 P 有 2/3 被 σzz 撑着，用 |P| 当判据会系统性偏松。
+_last_inplane () {
+    grep -o "^ *in kB .*" OUTCAR 2>/dev/null | tail -1 | awk '
+        { x=$3<0?-$3:$3; y=$4<0?-$4:$4; xy=$6<0?-$6:$6;
+          m=x; if (y>m) m=y; if (xy>m) m=xy; printf "%.4f", m }' || true
 }
 
 # _abs_gt <数值> <阈值> —— |数值| > 阈值 时返回 0（真）
@@ -1396,9 +1642,16 @@ _cell_delta () {
 #   ② 本遍晶格几乎没动（< CELL_PASS_TOL）—— 说明基组/形状已经自洽
 #   ③ |P| < PRESS_TOL —— 真·零应力
 #   缺 ②③ 就会出现"力收敛但晶胞还差几个 kbar"的假收敛（历史上晶胞从未弛豫就是这么来的）。
+# _cell_settled <maxΔ晶格(Å)> <判据量(kB)> —— 三条全满足才算变胞段稳定
+#   2D 传进来的第 2 个参数是【面内最大分量】，与 INPLANE_TOL 比（见 _last_inplane 注释）；
+#   3D 传 external pressure，与 PRESS_TOL 比。
 _cell_settled () {
     if _abs_gt "$1" "${CELL_PASS_TOL}"; then return 1; fi
-    if [ -n "$2" ] && _abs_gt "$2" "${PRESS_TOL}"; then return 1; fi
+    if [ "${CELL_2D}" = "1" ]; then
+        if [ -n "$2" ] && _abs_gt "$2" "${INPLANE_TOL}"; then return 1; fi
+    else
+        if [ -n "$2" ] && _abs_gt "$2" "${PRESS_TOL}"; then return 1; fi
+    fi
     _converged
 }
 
@@ -1489,6 +1742,26 @@ def stage_changes_cell(incar_text):
     return False
 
 
+def _layer_factor(poscar, vac_axis=2):
+    """算 h⊥/d（层内口径换算因子）；算不出返回 None。
+
+    h⊥ = V/|a_i×a_j|（垂直胞高，不是 |c|），d = 原子沿真空轴的跨度 + 两端 vdW 半径。
+    单一真源在 skill/_common/thickness_2d.py（ke 链读同一份）。它依赖 ase，且需要
+    gen_need 里带上该模块 —— 缺了就走兜底（调用方打 WARN），绝不在这里硬失败。
+    """
+    try:
+        import sys as _s
+        from pathlib import Path as _P
+        _c = _P(__file__).resolve().parent.parent          # skill/_common
+        if str(_c) not in _s.path:
+            _s.path.insert(0, str(_c))
+        from thickness_2d import slab_geometry_from_poscar
+        g = slab_geometry_from_poscar(_P(poscar), int(vac_axis or 2))
+        return float(g["h_perp_A"]) / float(g["thickness_d_A"])
+    except BaseException:                                  # noqa: BLE001
+        return None
+
+
 def build_in_job_stages(outdir: Path):
     """把 outdir/INCAR 按 STAGE_SPEC 拆成 INCAR.s1_<段> …，生成 run_relax.sh，
        并把 submit.sh 里的 VASP 执行行换成 `bash run_relax.sh`。
@@ -1496,6 +1769,31 @@ def build_in_job_stages(outdir: Path):
        base = outdir/INCAR —— 此时已经过磁性/LMAXMIX/U/2D 变胞约束的全部后处理，
        所以各段只在它之上覆盖 STAGE_SPEC 里的弛豫控制标签。
        返回 True=已分段；False=没能分段（保持单段，已打印原因）。"""
+    # 本函数要用维度决定变胞稳定判据（2D 看面内分量、3D 看 |P|）。
+    # 这里自己判一次，避免依赖调用方是否已把 dim 放进作用域（2026-09-17 踩过）。
+    try:
+        _dim_bj, _vax_bj, _ = resolve_dimension(outdir / "POSCAR")
+    except BaseException:            # noqa: BLE001 —— 含 resolve_dimension 的 sys.exit
+        # 判不出来就退回 3D 判据（|P|），绝不在这里引入新的硬失败：main() 自己
+        # 还会按同一 POSCAR 再判一次并给出正确的报错。
+        _dim_bj, _vax_bj = "", 2
+
+    # 2D 的稳定判据必须换算到【层内口径】才能和 S4 的门禁（STRESS_2D_THR=0.5 kbar 层内）
+    #   对齐：σ_layer = σ_cell × h⊥/d，而 h⊥/d 因材料而异（Mo2S3≈2.91，平面单层 AlN/BeO
+    #   的 d≈3.4 Å、h⊥/d≈6）。固定用胞口径 0.2 kB 会在 AlN/BeO 上等效成 ~1.2 kbar，
+    #   比 S4 门禁还松 —— 就会出现"S1 判通过、S4 判失败"。所以：
+    #       tol_cell = TOL_LAYER / (h⊥/d)，TOL_LAYER = 0.4 kbar（比 S4 的 0.5 留余量）
+    #   h⊥/d 由 thickness_2d 现算；算不出（缺 ase/模块没推过去）就退回配置值并 WARN。
+    _tol_cell = INPLANE_TOL_KB
+    if _dim_bj == "2d":
+        _f = _layer_factor(outdir / "POSCAR", _vax_bj)
+        if _f and _f > 0:
+            _tol_cell = TOL_LAYER_KB / _f
+            print("[..] 2D 层内口径换算：h⊥/d = %.3f → 面内阈值 %.4f kB（胞口径）"
+                  "= %.2f kbar（层内）" % (_f, _tol_cell, _tol_cell * _f))
+        else:
+            print("[WARN] 算不出 h⊥/d（thickness_2d 不可用？）→ 面内阈值用配置值 %.4f kB，"
+                  "可能与 S4 的层内口径门禁不一致" % _tol_cell)
     base = (outdir / "INCAR").read_text(encoding="utf-8")
     submit_path = outdir / "submit.sh"
     vasp_cmd = extract_vasp_cmd(submit_path.read_text(encoding="utf-8"))
@@ -1506,17 +1804,29 @@ def build_in_job_stages(outdir: Path):
     stages = []
     for k, st in enumerate(STAGE_ORDER):
         spec = {a: b for a, b in STAGE_SPEC[st].items() if not a.startswith("_")}
+        if _lc_mode():
+            spec.pop("IOPTCELL", None)      # 同上：LATTICE_CONSTRAINTS 模式不给老标签
         text = set_incar_tags(base,
                               {a: b for a, b in spec.items() if b is not None},
                               remove_keys=[a for a, b in spec.items() if b is None])
         fname = "INCAR.s%d_%s" % (k + 1, st)
         (outdir / fname).write_text(text, encoding="utf-8", newline="\n")
+        # ★ step.conf 的 [incar] / [incar.final] / [incar.delete] 覆盖。
+        #   本模块此前**只消费 [params]/[submit]**，而且不调 read_submit()，
+        #   所以这三节是"连告警都没有"的纯静默洞：用户在 step1_opt 的 step.conf
+        #   里写 INCAR 覆盖完全无效。2026-09-15 接上，用 stepconf 的唯一实现，
+        #   逐段应用（每个 INCAR.s* 都要，因为作业内分段跑的是这些文件）。
+        _ic_log = []
+        stepconf.apply_incar_file(outdir / fname, log=_ic_log)
+        for _m in _ic_log:
+            print("[..] %s" % _m)
         desc = "段%d(%s) %s" % (k + 1, st, STAGE_SPEC[st].get("_desc", ""))
         if stage_changes_cell(text):
             desc += " [变胞]"
         stages.append((fname, desc, stage_changes_cell(text)))
         if k == 0:      # INCAR 本体指向第一段，便于手动排查
             (outdir / "INCAR").write_text(text, encoding="utf-8", newline="\n")
+            stepconf.apply_incar_file(outdir / "INCAR")   # 同上，[incar*] 三节
 
     # ---- 段序切分：前缀（不改胞，跑一次）／变胞主体（多遍循环）／尾部（跑一次）----
     cell_idx = [i for i, s in enumerate(stages) if s[2]]
@@ -1540,7 +1850,14 @@ def build_in_job_stages(outdir: Path):
              'VASP_CMD="%s"' % vasp_cmd,
              "STALL_MIN=%d    # OUTCAR 停滞这么多分钟判定卡死（0=关）" % int(STALL_MIN),
              'EARLY_EXIT=%s   # 不改胞的段：已收敛就跳过后续段' % ("1" if EARLY_EXIT_ON_CONVERGENCE else "0"),
-             "PRESS_TOL=%s     # 稳定判据③：|external pressure| < 此值 (kB)" % PRESS_TOL_KB,
+             "PRESS_TOL=%s     # 稳定判据③(3D)：|external pressure| < 此值 (kB)" % PRESS_TOL_KB,
+             # 2D 用面内分量判据（2026-09-17）：|P| 有 2/3 被受约束的 σzz 撑着，偏松。
+             #   INPLANE_TOL 是【胞口径】阈值，来自 step.conf 的 INPLANE_STRESS_TOL_KB；
+             #   换算到层内口径要乘 h⊥/d（本批 2D 约 2.9），0.15 kB ≈ 0.44 kbar 层内，
+             #   正好卡在 S4 的 STRESS_2D_THR=0.5 kbar 之内。
+             "CELL_2D=%s       # 1 = 2D：变胞稳定判据改用面内分量" % ("1" if _dim_bj == "2d" else "0"),
+             "INPLANE_TOL=%s   # 稳定判据③(2D)：max(|σxx|,|σyy|,|σxy|) < 此值 (kB,胞口径)"
+             % _tol_cell,
              "CELL_PASS_MAX=%d # 变胞段最多重复几遍" % int(CELL_PASS_MAX),
              "CELL_PASS_TOL=%s # 稳定判据②：本遍晶格矢量分量最大变化 (Å)" % CELL_PASS_TOL,
              "CELL_SETTLED=1   # 无变胞段时视为无需稳定判定；进循环会置 0",
@@ -1575,14 +1892,18 @@ def build_in_job_stages(outdir: Path):
             _emit(i, "s%dr${CELL_PASS}" % (i + 1), "0" if i == last_overall else "1")
         lines += ['    _dl="$(_cell_delta ".cellin.${CELL_PASS}" CONTCAR)"',
                   '    _lp="$(_last_pressure 2>/dev/null || true)"',
-                  '    echo "[run_relax] 第 ${CELL_PASS} 遍：max|Δ晶格| = ${_dl} Å   |P| = ${_lp} kB"',
-                  '    if _cell_settled "${_dl}" "${_lp}"; then',
-                  '        echo "[run_relax] 变胞段稳定（力收敛 + 晶格变化 < ${CELL_PASS_TOL} Å + |P| < ${PRESS_TOL} kB），共 ${CELL_PASS} 遍"',
+                  '    _ip="$(_last_inplane 2>/dev/null || true)"',
+                  # 2D 判面内分量、3D 判 external pressure（_cell_settled 里按 CELL_2D 分流）
+                  '    _crit="${_lp}"; _tol="${PRESS_TOL}"; [ "${CELL_2D}" = "1" ] && { _crit="${_ip}"; _tol="${INPLANE_TOL}"; }',
+                  '    _critname="|P|"; [ "${CELL_2D}" = "1" ] && _critname="面内max|σ|"',
+                  '    echo "[run_relax] 第 ${CELL_PASS} 遍：max|Δ晶格| = ${_dl} Å   |P| = ${_lp} kB   面内max|σ| = ${_ip} kB"',
+                  '    if _cell_settled "${_dl}" "${_crit}"; then',
+                  '        echo "[run_relax] 变胞段稳定（力收敛 + 晶格变化 < ${CELL_PASS_TOL} Å + ${_critname} < ${_tol} kB），共 ${CELL_PASS} 遍"',
                   "        CELL_SETTLED=1",
                   "        break",
                   "    fi",
                   '    if [ "${CELL_PASS}" -ge "${CELL_PASS_MAX}" ]; then',
-                  '        echo "[run_relax][WARN] 已跑满 ${CELL_PASS_MAX} 遍仍未稳定：max|Δ晶格|=${_dl} Å, P=${_lp} kB" >&2',
+                  '        echo "[run_relax][WARN] 已跑满 ${CELL_PASS_MAX} 遍仍未稳定：max|Δ晶格|=${_dl} Å, |P|=${_lp} kB, 面内=${_ip} kB" >&2',
                   "        break",
                   "    fi",
                   '    echo "[run_relax] 未稳定，CONTCAR -> POSCAR 重开第 $((CELL_PASS + 1)) 遍"',
@@ -1596,9 +1917,14 @@ def build_in_job_stages(outdir: Path):
 
     lines += ["",
               'lastp="$(_last_pressure 2>/dev/null || true)"',
-              'echo "[run_relax] 末态 external pressure = ${lastp:-?} kB（阈值 ${PRESS_TOL}）"',
+              'lastip="$(_last_inplane 2>/dev/null || true)"',
+              'if [ "${CELL_2D}" = "1" ]; then',
+              '    echo "[run_relax] 末态：external pressure = ${lastp:-?} kB 面内max|σ| = ${lastip:-?} kB（2D 判据阈值 ${INPLANE_TOL} kB，胞口径）"',
+              "else",
+              '    echo "[run_relax] 末态 external pressure = ${lastp:-?} kB（阈值 ${PRESS_TOL}）"',
+              "fi",
               'if [ "${CELL_SETTLED}" != "1" ]; then',
-              '    echo "[run_relax][WARN] 变胞段【未判定为稳定】—— 末态 P=${lastp:-?} kB，晶胞可能没到位。" >&2',
+              '    echo "[run_relax][WARN] 变胞段【未判定为稳定】—— 末态 P=${lastp:-?} kB、面内max|σ|=${lastip:-?} kB，晶胞可能没到位。" >&2',
               '    echo "[run_relax][WARN] 补救：cp CONTCAR POSCAR; rm -f .s?r?.done; 重投本步。" >&2',
               "    echo RELAX_CELL_UNCONVERGED",
               "fi",
@@ -1817,8 +2143,25 @@ def main():
     else:
         print(f"[WARN] 没有 POTCAR，ENCUT 暂用兜底值 {params['ENCUT']} eV")
 
+    # ---- P2-3：2D 偶极修正（Janus / 单面吸附）----
+    # 必须在 render 之前决定：模板 incar_2d.tpl 用 {{DIPOLE_LINE}} 占位。
+    _dip_on, _dip_note = decide_dipole_2d(cwd / "POSCAR", dim,
+                                          STEP_PARAMS.get("DIPOLE_2D"), vac_axis)
+    params["DIPOLE_LINE"] = "\n".join(dipole_lines(_dip_on, _dip_note))
+    if dim == "2d" or _dip_on:
+        print("[..] 偶极修正：%s — %s" % ("ON" if _dip_on else "off", _dip_note))
+
     # 生成并校验 INCAR
     render(incar_tpl, outdir / "INCAR", params)
+    if _dip_on:
+        # 项目/集群级 incar_*.tpl 优先级高于技能模板（find_asset），老副本没有
+        # {{DIPOLE_LINE}} → 偶极修正会被静默吃掉。这里兜底补写。
+        _txt = (outdir / "INCAR").read_text(encoding="utf-8", errors="ignore")
+        if not re.search(r"^\s*LDIPOL\s*=", _txt, re.M):
+            with open(outdir / "INCAR", "a", encoding="utf-8", newline="\n") as fh:
+                fh.write("\n" + "\n".join(dipole_lines(True, _dip_note)) + "\n")
+            print("[WARN] 模板 %s 没有 {{DIPOLE_LINE}} 占位符（项目级副本遮蔽？）"
+                  "→ 已把偶极修正直接追加进 INCAR。" % incar_tpl.name)
     validate_generated_incar(outdir / "INCAR")
     if STEP_PARAMS.get("FIXED_CELL", False):
         incar_path = outdir / "INCAR"
@@ -1867,6 +2210,21 @@ def main():
         incar_path = outdir / "INCAR"
         incar_path.write_text(set_incar_tags(incar_path.read_text(), p_tags))
         print("[..] 并行参数已按宿主机覆盖：%s" % ", ".join("%s=%s" % kv for kv in p_tags.items()))
+
+    # ---- step.conf 的 [incar] / [incar.final] / [incar.delete] 覆盖 ----
+    # ★ 这一段两条路径都要有：
+    #   · STAGE_MODE="in_job" -> build_in_job_stages() 内逐段应用（紧跟本块的 if）
+    #   · STAGE_MODE="single" -> 就是这里
+    #   （FIXED_CELL=true 会把 STAGE_MODE 置成 single；分子分支也走 single）
+    # 2026-09-16 踩过的坑：此前只在分段路径接了这段，于是 single 模式下
+    # step.conf 写的 [incar.final] 完全不生效 —— 实测写了 ISPIN=2/MAGMOM，
+    # 生成的 INCAR 里仍是 ISPIN=1（被 apply_magnetism_to_incar 的自动判定覆盖）。
+    # 本块放在所有 apply_* 之后 = 真正的"最终覆盖"，与 apply_incar 语义一致。
+    if STAGE_MODE != "in_job":
+        _ic_log = []
+        stepconf.apply_incar_file(outdir / "INCAR", log=_ic_log)
+        for _m in _ic_log:
+            print("[..] %s" % _m)
 
     # ---- 作业内分段：必须在 INCAR 全部后处理完成之后 ----
     staged_in_job = False

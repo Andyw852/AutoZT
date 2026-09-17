@@ -1,7 +1,7 @@
 #!/bin/bash
 # S5_fc 拟合作业模板（FIT_ENGINE=pheasy）。移植自用户 pheasy 拟合脚本，去掉 VCA/内存监控/
 # 尾部自动提交 κ；输入准备(prep)与收尾(collect/post)交给 kl_fc_backends.py。
-# 占位符：{{JOBNAME}} {{DIM}} {{FIT_METHOD}} {{ENABLE_FC}} {{C3_CUTOFF}} {{NULL_SPACE_EPS}}
+# 占位符：{{JOBNAME}} {{DIM}} {{FIT_METHOD}} {{ENABLE_FC}} {{C3_CUTOFF}} {{NULL_SPACE_EPS}} {{RASR}}
 # 资源（cpus_per_task/qos）建议按体系用 step.conf 的 [submit] 段覆盖；pheasy 较吃核与内存。
 #SBATCH --partition=cpu192
 #SBATCH --job-name={{JOBNAME}}
@@ -28,6 +28,16 @@ FIT_METHOD="{{FIT_METHOD}}"   # LASSO | RFE | OLS
 ENABLE_FC={{ENABLE_FC}}       # 2|3|4
 C3_CUTOFF="{{C3_CUTOFF}}"     # fc3 截断 Å，None=不截断
 NULL_SPACE_EPS={{NULL_SPACE_EPS}}
+# RASR = 旋转不变性(Born-Huang) + 平衡条件(Huang, 零应力)。gen 按 DIM 注入：
+#   2D→BHH（必加，否则 ZA 近 Γ 线性化/出虚频），3D→none（文献结论：对体材料可忽略）。
+#   pheasy 只在【零空间构造步 -c】读 RASR；-f 读的是 ns_*.npz，把 --rasr 放 -f 上无效。
+#   pheasy 的 --rasr 只接受 BH/H/BHH，none = 不传这个开关（不是传 "none"）。
+RASR="{{RASR}}"
+RASR_FLAGS=""
+if [ -n "${RASR}" ] && [ "${RASR}" != "none" ]; then
+    [[ "${RASR}" =~ ^(BHH|BH|H)$ ]] || { echo "❌ RASR 非法: ${RASR}（BHH|BH|H|none）"; exit 1; }
+    RASR_FLAGS="--rasr ${RASR}"
+fi
 FIT_ORDER=${ENABLE_FC}
 
 # ===== 并行 =====
@@ -57,6 +67,10 @@ export PHEASY_SM_THR=1e-12
 export PHEASY_ASR_SPARSE=1
 export PHEASY_ASR_SPARSE_THR=1e-10
 export PHEASY_ASR_COL_BLOCK=5000
+# 零空间秩判据：施加 RASR(BHH/BH/H) 时约束直接写进零空间，秩容差决定"哪些方向被当成约束"
+#   —— 放宽会漏约束、收紧会吃掉真实自由度。1e-6 与 MACE 链
+#   (_common/mace/gen_step3_fc.py) 取同一个值，两条链的 2D 行为才对得上。
+export PHEASY_NS_RANK_TOL=1e-6
 export OPENBLAS_NUM_THREADS=${NCPU_BLAS}
 export OMP_NUM_THREADS=${NCPU_BLAS}
 export MKL_NUM_THREADS=${NCPU_BLAS}
@@ -125,22 +139,50 @@ C_FLAG=""
     && [ "${FIT_ORDER}" -ge 3 ] && C_FLAG="--c3 ${C3_CUTOFF}"
 W_FLAG="-w ${FIT_ORDER}"
 CLI_METHOD="${FIT_METHOD}"; [ "${FIT_METHOD}" = "RFE" ] && CLI_METHOD="LASSO"   # RFE 走 env 重定向
-FIT_FLAGS="--full_ifc -l ${CLI_METHOD} --rasr BHH --hdf5"
+# 注意：这里【不再】带 --rasr —— RASR 只在 -c（零空间构造）步生效，放 -f 上是死参数。
+FIT_FLAGS="--full_ifc -l ${CLI_METHOD} --hdf5"
 if [ "${FIT_METHOD}" = "LASSO" ]; then
-    if [ "${FIT_ORDER}" -eq 2 ]; then FIT_FLAGS="${FIT_FLAGS} --mu_min -8 --mu_max 0 --max_iter 100000"
-    else FIT_FLAGS="${FIT_FLAGS} --mu_min -8 --mu_max -5 --max_iter 100000"; fi
-    FIT_FLAGS="${FIT_FLAGS} --cv 5 --nmu 40 --tol 0.00001"
+    # P0-3：列标准化 --std 必须开。不同阶力常数量级差很大，ℓ1 惩罚对系数尺度敏感 ——
+    #   不标准化时 fc3 幅值系统性偏低（Mg2C60 实测 fc3max 3.64 vs 参考 37.04，低 90%），
+    #   κ 相应偏高；开 --std + 去偏后 37.00（−0.13%）。--std 也决定 alpha 网格的尺度
+    #   （derive_alpha_grid 收到 standardize=True，按标准化空间的 alpha_max 锚定）。
+    #   原来写的 --mu_min/--mu_max 在 --alpha_auto（pheasy 默认）打开时是死参数，
+    #   只在自动锚定失败时兜底，这里保留作兜底并显式写 --alpha_auto 表明意图。
+    export PHEASY_LASSO_DEBIAS=1   # LS 选支撑集 + 支撑集上 OLS 去偏（pheasy 默认已开，显式钉住）
+    if [ "${FIT_ORDER}" -eq 2 ]; then FIT_FLAGS="${FIT_FLAGS} --mu_min -8 --mu_max 0"
+    else FIT_FLAGS="${FIT_FLAGS} --mu_min -8 --mu_max -5"; fi
+    FIT_FLAGS="${FIT_FLAGS} --std --alpha_auto --alpha_decades 4.0 --max_iter 100000 --cv 5 --nmu 40 --tol 0.00001"
+    echo "LASSO：--std 列标准化 + 去偏(PHEASY_LASSO_DEBIAS=${PHEASY_LASSO_DEBIAS}) + alpha_auto 锚定网格"
 elif [ "${FIT_METHOD}" = "RFE" ]; then
     FIT_FLAGS="${FIT_FLAGS} --mu_min -8 --mu_max -5 --max_iter 1000 --cv 5 --nmu 5 --tol 0.001"
 fi
 
 # ===== pheasy 四步：cluster space → 对称约束 → 位移矩阵 → 拟合 =====
-echo "【pheasy】阶次=${FIT_ORDER} 方法=${FIT_METHOD} ndata=${NDATA} C_FLAG='${C_FLAG}'"
+echo "【pheasy】阶次=${FIT_ORDER} 方法=${FIT_METHOD} ndata=${NDATA} C_FLAG='${C_FLAG}' RASR=${RASR}"
 rm -f fc2.hdf5 fc3.hdf5 fc4.hdf5
 
 export OPENBLAS_NUM_THREADS=${NCPU_BLAS} OMP_NUM_THREADS=${NCPU_BLAS} MKL_NUM_THREADS=${NCPU_BLAS}
 pheasy --dim ${DIM} ${W_FLAG} -s ${C_FLAG} --eps ${NULL_SPACE_EPS}
-pheasy --dim ${DIM} ${W_FLAG} -c ${C_FLAG} --eps ${NULL_SPACE_EPS}
+# ★ RASR 必须挂在这一步（-c 构造零空间）。挂到 -f 上是死参数（-f 直接读 ns_*.npz）。
+pheasy --dim ${DIM} ${W_FLAG} -c ${C_FLAG} --eps ${NULL_SPACE_EPS} ${RASR_FLAGS} 2>&1 | tee pheasy_c.log
+_c_rc=${PIPESTATUS[0]}
+if [ "${_c_rc}" -ne 0 ]; then echo "❌ pheasy -c 失败 rc=${_c_rc}" >&2; exit 1; fi
+
+# RASR 守卫：要求施加旋转不变性/平衡条件却没在日志里看到 → 直接失败。
+#   理由：RASR 生效与否决定 ZA 是 ω∝q² 还是线性（后者频率可能全为正、能过虚频闸，
+#   但 κ 是错的），这种错误下游看不出来，只能在源头拦住。
+if [ -n "${RASR_FLAGS}" ]; then
+    if grep -q "Imposing rotational invariance\|Imposing equilibrium conditions" pheasy_c.log; then
+        echo "✅ RASR=${RASR} 已在零空间构造步施加（pheasy_c.log）"
+        grep -n "Imposing rotational invariance\|Imposing equilibrium conditions" pheasy_c.log | tail -3
+    else
+        echo "❌ RASR=${RASR} 但 pheasy -c 日志里没有施加记录 → 力常数不可信，作业失败" >&2
+        echo "   常见原因：环境里的 pheasy 太旧（symmetry_constraints.py 没打 RASR 补丁）；" >&2
+        echo "   或 --rasr 没传到 -c 步。请核对 pheasy_c.log 与 pheasy --help 的 choices。" >&2
+        tail -30 pheasy_c.log >&2 || true
+        exit 1
+    fi
+fi
 
 export OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 PHEASY_N_JOBS=${NCPU_DISP}
 pheasy --dim ${DIM} ${W_FLAG} -d ${C_FLAG} --ndata ${NDATA} --disp_file --eps ${NULL_SPACE_EPS}
@@ -148,7 +190,9 @@ pheasy --dim ${DIM} ${W_FLAG} -d ${C_FLAG} --ndata ${NDATA} --disp_file --eps ${
 export LOKY_MAX_CPU_COUNT=${NCPU_LOKY} OPENBLAS_NUM_THREADS=${NCPU_FIT_BLAS}
 export OMP_NUM_THREADS=${NCPU_FIT_BLAS} MKL_NUM_THREADS=${NCPU_FIT_BLAS}
 export PHEASY_N_JOBS=${NCPU_LOKY} PHEASY_DOT_THREADS=${NCPU} OMP_NESTED=FALSE MKL_DYNAMIC=FALSE
-pheasy --dim ${DIM} ${W_FLAG} -f ${C_FLAG} --ndata ${NDATA} --eps ${NULL_SPACE_EPS} ${FIT_FLAGS}
+pheasy --dim ${DIM} ${W_FLAG} -f ${C_FLAG} --ndata ${NDATA} --eps ${NULL_SPACE_EPS} ${FIT_FLAGS} 2>&1 | tee pheasy_f.log
+_f_rc=${PIPESTATUS[0]}
+if [ "${_f_rc}" -ne 0 ]; then echo "❌ pheasy -f 失败 rc=${_f_rc}" >&2; exit 1; fi
 
 # ===== 输出检查 =====
 sync
@@ -158,4 +202,70 @@ ls -lh fc2.hdf5 fc3.hdf5 2>/dev/null
 
 # ===== 收尾：搬产物 + shengbte 导出 + 虚频闸 =====
 python kl_fc_backends.py collect_pheasy fit_config.json
+
+# ===== 拟合质量指标留档（A/B 对照用）=====
+#   pheasy 自报的 RMSE / Relative error / alpha，加上力常数量级、零空间自由度，
+#   统一落 fit_metrics.json；post 步会并进 phonon_summary.json。
+#   动力：2026-09-16 做 RASR=none vs BHH 的 A/B 时发现这些量一个都没记，
+#   只能靠翻日志，无法两臂对照。
+python - <<'PYEOF'
+import json, re, os, glob
+import numpy as np
+m = {}
+log = ""
+for _f in ('pheasy_f.log', 'pheasy_c.log'):
+    if os.path.isfile(_f):
+        log += open(_f, encoding='utf-8', errors='ignore').read()
+for _k, _p, _c in (
+        ('pheasy_rmse_eV_per_A', r'\bRMSE:\s*([\d.eE+-]+)', float),
+        ('pheasy_relative_error', r'Relative error:\s*([\d.eE+-]+)', float),
+        ('pheasy_worst_force_correlation', r'worst corr=([\d.]+)', float),
+        ('pheasy_free_ifcs', r'Free IFC terms:\s*(\d+)', int),
+        ('pheasy_best_alpha', r'best alpha=\s*([\d.eE+-]+)', float),
+        ('pheasy_alpha_opt', r'alpha_opt:[ ]*([0-9.eE+-]+)', float),
+        ('pheasy_alpha_min', r'alpha_min:[ ]*([0-9.eE+-]+)', float),
+        ('pheasy_alpha_max', r'alpha_max:[ ]*([0-9.eE+-]+)', float)):
+    _mm = re.search(_p, log)
+    if _mm:
+        try:
+            m[_k] = _c(_mm.group(1))
+        except ValueError:
+            pass
+# RASR 是否真在 -c 步施加（与模板里的守卫同一判据，这里留证）
+m['rasr_applied'] = bool(re.search(r'Imposing rotational invariance|Imposing equilibrium conditions', log))
+m['rasr_requested'] = os.environ.get('RASR', '') 
+m['ns_rank_tol'] = os.environ.get('PHEASY_NS_RANK_TOL', '')
+def _h5max(p):
+    if not os.path.isfile(p):
+        return None
+    try:
+        import h5py
+        with h5py.File(p) as h:
+            v = [float(np.abs(np.array(d)).max()) for d in h.values() if hasattr(d, 'shape')]
+        return max(v) if v else None
+    except Exception:
+        try:
+            return float(np.abs(np.load(p)).max())
+        except Exception:
+            return None
+for _tag, _p in (('fc2', 'phono3py/fc2.hdf5'), ('fc2', 'fc2.hdf5'),
+                 ('fc3', 'phono3py/fc3.hdf5'), ('fc3', 'fc3.hdf5')):
+    _v = _h5max(_p)
+    if _v is not None and ('%smax' % _tag) not in m:
+        m['%smax' % _tag] = _v
+# 零空间自由度：-c 步产出的 ns_*.npz
+for _p in sorted(glob.glob('ns_*.npz') + glob.glob('phono3py/ns_*.npz')):
+    try:
+        _z = np.load(_p)
+        m['%s_shape' % os.path.basename(_p)[:-4]] = [list(np.shape(_z[k])) for k in _z.files]
+        m['ns_harm_free_params' if 'harm' in _p else os.path.basename(_p)[:-4] + '_ndof'] = \
+            int(sum(int(np.prod(np.shape(_z[k])[1:])) if np.ndim(_z[k]) > 1 else 1 for k in _z.files))
+    except Exception as _e:
+        m['%s_error' % os.path.basename(_p)] = str(_e)
+open('fit_metrics.json', 'w').write(json.dumps(m, ensure_ascii=False, indent=2))
+print('[OK] fit_metrics.json：%s' % json.dumps(
+      {k: m[k] for k in ('pheasy_relative_error', 'pheasy_rmse_eV_per_A',
+                         'fc2max', 'fc3max', 'rasr_applied') if k in m}, ensure_ascii=False))
+PYEOF
+
 python kl_fc_backends.py post           fit_config.json

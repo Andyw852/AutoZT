@@ -105,6 +105,12 @@ def normalize_monitor_command(command, positional, restart=False):
 
 
 def main():
+    # JSON/MCP/agent callers and Windows consoles must see the same UTF-8 text.
+    for _stream in (sys.stdout, sys.stderr):
+        try:
+            _stream.reconfigure(encoding="utf-8", errors="replace")
+        except AttributeError:
+            pass
     from autozt import EXAMPLE_CONFIG, JSON_SCHEMA, AUTOZT_VERSION, USAGE, USAGE_EN, _PKG_ROOT, _add_diag_codes, _json_changes, _json_errors_only, _json_paginate, _dbg_t, _state_cache_load, _state_cache_save, _summary_json, _watch_cron, _watch_daemon, _watch_ensure, _watch_stop, apply_exclude, apply_hide_done, apply_skills, auto_advance, auto_fetch, auto_recover_hung, cmd_adopt, cmd_auto, cmd_auto_project, cmd_auto_skill, cmd_clean, cmd_conf, cmd_diagnose, cmd_fetch, cmd_hpc, cmd_init, cmd_level, cmd_migrate_subdir, cmd_rerun, cmd_retry, cmd_skills, cmd_start, cmd_status, cmd_step_init, cmd_stop, cmd_summary, cmd_watch, collect_data, fill_local_dim, filter_status, find_material, find_step, find_uninited, get_types, load_config, merge_project_configs, render_table, status_spec_has_scancel, cmd_schema, cmd_skill_show, cmd_correct, cmd_correct_usage, cmd_history, history_record, cmd_prove, set_active_cfg, cmd_act, cmd_approve, agent_direct_gate, agent_audit, cmd_session
     if "--help-all" in sys.argv[1:]:
         # 英文帮助：AUTOZT_LANG=en 或命令行 --lang en
@@ -453,7 +459,10 @@ def main():
         n0 = sum(len(t["materials"]) for t in data["types"])
         filter_status(data, a.status_f)
         n1 = sum(len(t["materials"]) for t in data["types"])
-        print("（-status %s：%d/%d 个材料匹配）" % (a.status_f, n1, n0))
+        # Machine-readable branches must remain a single JSON document.  The
+        # human table keeps the helpful match-count line.
+        if not a.json_out:
+            print("（-status %s：%d/%d 个材料匹配）" % (a.status_f, n1, n0))
 
     # v3.14：多项目——-p 支持逗号分隔，位置参数里的材料名自动并入
     # v1.0：多步骤——-j 支持逗号分隔，位置参数里的步骤名/label 自动并入

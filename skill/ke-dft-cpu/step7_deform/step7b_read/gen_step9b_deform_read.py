@@ -15,9 +15,24 @@ from pathlib import Path
 
 # =========================== 可改参数区 ===========================
 # [SKILL_REV] 版本戳：写进 band_edges.json，与 gen_step12_dpt.py 交叉校验一致。
-_SKILL_REV = "2026-08-29-ionrelax-nstep"
+_SKILL_REV = "2026-09-16-deform-ref-vacuum"
 OUTDIR_NAME  = "step7b_deform_read"
 DEFORM_DIR   = "step7_deform"
+# patch_deform_ref（2026-09-16）：形变势的**参考能级口径**。
+#   "vacuum" = 以真空静电势为零点（二维文献通行做法；C2DB 给的也是真空口径）。
+#   "core"   = AMSET 自带的"芯态平均势对齐"（官方文档写明，是为**体材料**设计的）。
+#   "auto"   = 2D 用 vacuum、其余用 core（默认）。
+# 实现：Δ_ij = -dE_vac/dε_ij 这一项**与能带无关**（真空势的应变导数只依赖构型），
+# 所以把它加到 deformation.h5 里所有能带、所有 k 点的 D 上即可得到真空口径张量：
+#     D_vac = D_core + Δ
+# 另写 deformation_vac.h5（core 版原样保留，便于对比与回退）。
+# 依据：二维文献普遍以真空为零点定义带能；AMSET 的芯势对齐在 slab 上会系统性偏小
+# （实测 CrS2 单层：E1_core=3.53 eV vs E1_vac=5.86 eV，μ 差 2.76 倍）。
+DEFORM_REF   = "auto"
+# 只有这些应变分量有 LOCPOT 真空势可算；其余分量 Δ 留 0 并在 json 里标注。
+_DELTA_COMP  = {"xx": (0, 0), "yy": (1, 1), "zz": (2, 2),
+                "yz": (1, 2), "zy": (1, 2), "xz": (0, 2), "zx": (0, 2),
+                "xy": (0, 1), "yx": (0, 1)}
 # patch_deform_fix：只匹配形变目录。绝不能用 "*deform*"——它会把
 # "undeformed" 自己也匹配进去，undeformed 必须单独作为 bulk 传给 read。
 DEFORM_GLOB  = "deform-*"
@@ -68,6 +83,29 @@ def _guard_not_0d(cwd, step_name, why):
         return
 
 
+def _read_dim(cwd):
+    """从 step1 的 workflow_method.txt 读 DIM=（2d/3d/0d）。"""
+    for name in ("step1_opt", "step1_std_opt", "step1c_PBE_opt",
+                 "step1b_PBE_opt", "step1a_PBE_opt"):
+        mf = Path(cwd) / name / "workflow_method.txt"
+        if not mf.is_file():
+            continue
+        for ln in mf.read_text(errors="ignore").splitlines():
+            if ln.strip().upper().startswith("DIM="):
+                return ln.split("=", 1)[1].strip().lower()
+    return None
+
+
+def _resolve_deform_ref(cwd):
+    """DEFORM_REF: auto -> 2D 用 vacuum、其余 core；显式值原样返回。"""
+    ref = str(DEFORM_REF).lower()
+    if ref == "auto":
+        return "vacuum" if _read_dim(cwd) == "2d" else "core"
+    if ref not in ("vacuum", "core"):
+        sys.exit("[ERROR] DEFORM_REF=%r 无效，只允许 auto / vacuum / core" % DEFORM_REF)
+    return ref
+
+
 def main():
     cwd = Path.cwd()
     out = cwd / OUTDIR_NAME
@@ -95,6 +133,92 @@ def main():
                  "        等 step7_deform 全部 done 再跑本步。"
                  % ", ".join(missing[:8]))
 
+    # [PATCH-DP-IONRELAX] 形变势读**离子弛豫**构型（deform-*/ionrelax/，有则用）：
+    #   ① 物理：q→0 声学声子 = 均匀应变 + 内坐标弛豫（长波声学模频率→0，原子坐标
+    #      绝热跟随；石墨烯 q→0 声学声子的第一性原理处理同此）；
+    #   ② 一致性（更硬）：ADP 核分母是 Christoffel 刚度＝含离子弛豫的弹性常数
+    #      （VASP 的 TOTAL ELASTIC MODULI），band_edges/[8.2 DPT] 也一直读 ionrelax，
+    #      分子分母必须同口径。
+    #   实测 MoS2 单层 xx 0.5%：电子 E1_vac clamped 6.58 eV vs ionrelax 8.51 eV（差 29%），
+    #   这是真实物理差别，论文方法部分要写明用哪一种。
+    # ★ 回退不能静默（2026-09-16 用户要求）：没有 ionrelax/ 的构型是**离子固定**口径，
+    #   与其它项目的离子弛豫口径不同源。跨项目的 ADP 数值本来就不可直接比，但"没人
+    #   察觉自己用的是哪一套"是更糟的失效模式 —— 所以这里 WARN + 落盘实际口径。
+    _geom_map = {}
+
+    def _dp_folder(d):
+        dd = Path(d)
+        if (dd / "ionrelax" / "vasprun.xml").is_file():
+            _geom_map[str(dd.relative_to(dfm))] = "ionrelax"
+            return dd / "ionrelax"
+        _geom_map[str(dd.relative_to(dfm))] = "clamped"
+        return dd
+
+    dp_subs = [_dp_folder(p) for p in subs if os.path.abspath(p) != os.path.abspath(und)]
+    _rel = [str(p.relative_to(dfm)) if str(p).startswith(str(dfm)) else str(p)
+            for p in dp_subs]
+    print("[..] 形变构型（%d 个，ionrelax 优先）：%s"
+          % (len(_rel), ", ".join(_rel[:6]) + (" ..." if len(_rel) > 6 else "")))
+    # ---- 口径分级（2026-09-16 二次修订，按维度区分处理）------------------
+    # 现实情况：step7 只对**面内**分量做了离子弛豫，所以一个项目里常常是
+    # "面内 ionrelax + 面外 clamped"。这不是可以含糊过去的细节：
+    #   · 二维核只用面内分量 → 面内全 ionrelax 即可放行，但标签必须写清楚；
+    #   · 三维核要全部分量同源 → 出现混合口径直接报错（AMSET 会把不同来源的分量
+    #     平均进同一个张量，结果没有物理意义）；
+    #   · 面内只要有**一个**分量是离子固定口径，二维也不能放行。
+    _clamped = sorted(k for k, v in _geom_map.items() if v == "clamped")
+    _relaxed = sorted(k for k, v in _geom_map.items() if v == "ionrelax")
+
+    def _inplane_dirs():
+        """判每个形变目录的主导应变分量是不是面内（0/1 方向）。取不到返回 None。"""
+        try:
+            import numpy as _np
+            und = _np.array(kc.read_lattice_matrix(dfm / "undeformed" / "POSCAR"))
+            out = {}
+            for k in _geom_map:
+                L = _np.array(kc.read_lattice_matrix(dfm / k / "POSCAR"))
+                F = _np.transpose(_np.dot(_np.linalg.inv(und), L))
+                E = (_np.dot(F.T, F) - _np.eye(3)) / 2.0
+                i, j = _np.unravel_index(_np.argmax(_np.abs(E)), E.shape)
+                out[k] = (i, j) in ((0, 0), (1, 1), (0, 1), (1, 0))
+            return out
+        except Exception as _e:                                # noqa: BLE001
+            print("[WARN] 应变分量判面内/面外失败（%s）；保守处理：全部当作面内" % _e)
+            return None
+
+    _ip = _inplane_dirs()
+    _clamped_in = sorted(k for k in _clamped if (_ip is None or _ip.get(k, True)))
+    _clamped_out = sorted(k for k in _clamped if not (_ip is None or _ip.get(k, True)))
+    _dim_now = _read_dim(cwd)
+    if not _clamped:
+        _def_geom = "ionrelax"
+    elif not _relaxed:
+        _def_geom = "clamped"
+    elif _clamped_in:
+        _def_geom = "mixed"
+    else:
+        _def_geom = "ionrelax(in-plane)+clamped(out-of-plane)"
+
+    if _def_geom == "mixed":
+        sys.exit(
+            "[ERROR] 形变势构型口径 mixed：面内分量里 %s 是【离子固定】、其余是离子弛豫。\n"
+            "        二维核只用面内分量，面内口径必须一致；请给这些构型补 ionrelax/ "
+            "（IBRION=2 弛豫内坐标）后重跑本步。" % ", ".join(_clamped_in))
+    if _dim_now != "2d" and _clamped and _relaxed:
+        sys.exit(
+            "[ERROR] 三维体系的形变势构型口径不一致：%d 个 ionrelax、%d 个 clamped。\n"
+            "        三维核需要全部分量同源（AMSET 会把它们平均进同一个张量），"
+            "请补齐 ionrelax/ 后重跑本步；确实不需要弛豫就在 step7 里关掉。"
+            % (len(_relaxed), len(_clamped)))
+    if _def_geom == "clamped":
+        print("[WARN] 全部 %d 个形变构型都是【离子固定】口径（没有 ionrelax/）：与弹性常数"
+              "（TOTAL ELASTIC MODULI，含离子弛豫）不同源，ADP 绝对值跨项目不可直接比。"
+              % len(_geom_map))
+    elif _def_geom.startswith("ionrelax(in-plane)"):
+        print("[..] 面内分量取自离子弛豫构型、面外分量取自离子固定构型：二维核只用面内分量，"
+              "可用；三维核若复用同一份 h5 需注意口径（本体系 DIM=%s）。" % (_dim_now or "?"))
+        print("     面外 clamped 构型：%s" % ", ".join(_clamped_out[:8]))
+    print("[..] 形变势构型口径 deform_geometry=%s（落盘到 band_edges.json）" % _def_geom)
     # amset deform read 在形变目录里跑，产出 deformation.h5，再挪到本步目录
     # patch_deform_fix：amset 的签名是 read(bulk_folder, deformation_folders...)，
     # 【未形变的必须排第一个】。原来写成 `read *deform* undeformed`，既顺序
@@ -102,7 +226,8 @@ def main():
     # 当成了 bulk。这个错不报异常，只会安静地给出错误的形变势。
     cmd = ("%s && cd %s && amset deform read undeformed %s "
            ">> deform_read.log 2>&1"
-           % (AMSET_ENV_SRC, str(dfm), DEFORM_GLOB))
+           % (AMSET_ENV_SRC, str(dfm),
+              " ".join(shlex.quote(r) for r in _rel)))
     print("[..] amset deform read ...")
     rc = subprocess.run(["bash", "-lc", cmd]).returncode
     h5 = dfm / "deformation.h5"
@@ -382,6 +507,7 @@ try:
         # [C6] 占据态翻转累计（写进 json，不只 print）
         edge_flip = []
         vac = {}
+        dvac_map = {}       # [patch_deform_ref] 带符号的 dE_vac/dε（与能带无关）
         vac_scan = {}       # [C7] 窗口敏感性扫描：{half_ratio: {ax: E1}}
         for ax, (dp_, dm_) in _pairs.items():
             g = _strain_mag[ax] if _strain_mag[ax] > 1e-6 else 0.005
@@ -395,6 +521,7 @@ try:
             v_p = _vac_level(dp_, _st_cache[dp_])
             v_m = _vac_level(dm_, _st_cache[dm_])
             dvac = ((v_p - v0) / g + (v_m - v0) / (-g)) / 2
+            dvac_map[ax] = float(dvac)      # [patch_deform_ref] 带符号保存
             # [A4/B2] 遍历所有自旋道×带（简并时平均）；形变后校验该带边占据态未翻转
             vals = []
             for spin, bidxs in bi.items():
@@ -489,7 +616,34 @@ try:
     out["vac_align"] = {"status": "ok", "window_half": VAC_WINDOW_HALF,
                         "flat_tol_eV": VAC_FLAT_TOL_EV,
                         "strain_mag": {k: round(v, 6) for k, v in _strain_mag.items()},
-                        "pairs": {k: list(v) for k, v in _pairs.items()}}
+                        "pairs": {k: list(v) for k, v in _pairs.items()},
+                        # [patch_deform_ref] 带符号 dE_vac/dε，供 deformation_vac.h5 用
+                        "dvac_eV_per_unit_strain": {k: round(v, 6)
+                                                    for k, v in dvac_map.items()}}
+    # [patch_deform_ref] Δ_ij = -dE_vac/dε_ij（与能带无关，可平移到所有带）
+    # ★ 这段跑在**嵌入的独立脚本**里（_be_code，见文件头注释），只能看到自己
+    #   定义的名字；外层模块的 _DELTA_COMP 在这里是未定义名（NameError:
+    #   name '_DELTA_COMP' is not defined，2026-09-16 MoS2 实测）。所以就地
+    #   定义一份，与文件顶部的同名常量必须保持一致。
+    _delta_comp = {"xx": (0, 0), "yy": (1, 1), "zz": (2, 2),
+                   "yz": (1, 2), "zy": (1, 2), "xz": (0, 2), "zx": (0, 2),
+                   "xy": (0, 1), "yx": (0, 1)}
+    _delta = [[0.0] * 3 for _ in range(3)]
+    _applied = []
+    for _ax, _dv in dvac_map.items():
+        _ij = _delta_comp.get(str(_ax).lower())
+        if _ij is None:
+            continue
+        _delta[_ij[0]][_ij[1]] = _delta[_ij[1]][_ij[0]] = -float(_dv)
+        _applied.append(str(_ax))
+    out["deform_ref"] = {
+        "delta_eV_per_unit_strain": _delta,
+        "dvac_eV_per_unit_strain": {k: round(v, 6) for k, v in dvac_map.items()},
+        "components_applied": _applied,
+        "formula": "D_vac = D_core + delta,  delta_ij = -dE_vac/deps_ij",
+        "note": ("Δ 与能带无关（真空势的应变导数只依赖构型），加到 deformation.h5 的"
+                 "所有带×所有 k 上即得真空口径；未施加的应变分量 Δ 留 0。"),
+    }
 # [C1] 只有这两类是合法跳过；其余守卫失败必须炸出来（静默降级 = R5 要根除的失败模式）
 except _VacSkip as _e:
     print("[SKIP] %s" % _e)
@@ -564,10 +718,247 @@ print("[OK] band_edges.json 已生成（amset 权威带边 E1 + 真空对齐 E1_
                  % (dfm, _tail))
     print("[DONE] %s：band_edges.json 已生成" % OUTDIR_NAME)
 
+    # [2026-09-16] 把**实际使用的**形变势构型口径落进 band_edges.json：settings 注释、
+    # 8.3 汇总表、provenance 都从这里取。回退到 clamped 时这里就是证据（配合上面的 WARN）。
+    try:
+        import json as _json
+        _be = _json.loads(Path(be_out).read_text())
+        _be["deform_geometry"] = _def_geom
+        _be["deform_geometry_folders"] = _geom_map
+        Path(be_out).write_text(_json.dumps(_be, indent=2, ensure_ascii=False) + "\n")
+        print("[OK] band_edges.json 记录 deform_geometry=%s（%d 个构型）"
+              % (_def_geom, len(_geom_map)))
+    except Exception as _e:                                    # noqa: BLE001
+        print("[WARN] 写 deform_geometry 失败（不影响计算）：%s" % _e)
+
+    # ---- patch_deform_ref：真空参考口径的 deformation_vac.h5 ----
+    ref = _resolve_deform_ref(cwd)
+    _vac_state = "core（未生成 deformation_vac.h5）"
+    print("[..] DEFORM_REF=%s（本体系 DIM=%s）-> %s 参考口径"
+          % (DEFORM_REF, _read_dim(cwd) or "未知", ref))
+    if ref == "vacuum":
+        # 做法（用户 2026-09-16 校对 AMSET 0.4.19 源码后指定）：**直接替换参考能级**，
+        # 而不是事后往 h5 上加 Δ。理由：potentials.py 里
+        #     diff = E_bulk - E_deform - (ref_bulk - ref_deform)
+        #     energy_diff = np.abs(diff / strain)          <- 取了绝对值
+        # 所以 (a) h5 里的 D 不带符号，往它上面加带符号 Δ 只在 D_core>0 时才对；
+        # (b) D_vac - D_core = d(E_core - E_vac)/dε 需要**两个**应变导数，
+        # 只用 -dE_vac/dε 缺一项。改成把 parse_calculation 的 reference 换成各构型
+        # LOCPOT 的真空能级，再调用 AMSET 自己的 calculate_deformation_potentials，
+        # 这样符号、分量平均、噪声过滤与 AMSET 原版完全一致。
+        _vac_code = r'''
+import json
+import sys
+from pathlib import Path
+
+import numpy as np
+from pymatgen.io.vasp.outputs import Locpot
+
+import amset.deformation.io as _io
+from amset.constants import defaults
+from amset.deformation.io import write_deformation_potentials
+from amset.deformation.potentials import (
+    calculate_deformation_potentials, extract_bands,
+    get_strain_mapping, get_symmetrized_strain_mapping, strain_coverage_ok)
+from amset.electronic_structure.common import get_ibands
+from amset.electronic_structure.symmetry import expand_bandstructure
+# bz_coverage_ok 在 tools/deformation 里，不在 deformation/potentials
+#（0.4.19 与 0.5.1 都是；2026-09-16 MoS2 实测过 ImportError）。
+from amset.tools.deformation import bz_coverage_ok, check_calculation
+
+dfm, be_json, h5_out = sys.argv[1], sys.argv[2], sys.argv[3]
+VAC_HALF, VAC_FLAT = 0.25, 0.001        # 与 band_edges 的真空窗口/平坦判据一致
+
+
+def _vac_window(structure, axis=2, half_ratio=VAC_HALF):
+    """沿真空轴选最大分数间隙，返回中心 ± half_ratio 窗口（跨边界用 4 元组）。"""
+    fracs = np.array([s.frac_coords for s in structure])
+    f = np.sort(fracs[:, axis] % 1.0)
+    gaps = np.diff(f).tolist() + [f[0] + 1.0 - f[-1]]
+    imax = int(np.argmax(gaps))
+    lo = f[imax]
+    hi = f[imax + 1] if imax < len(f) - 1 else f[0] + 1.0
+    c = (lo + hi) / 2.0
+    w = (hi - lo) * half_ratio
+    a, b = c - w, c + w
+    if b > 1.0:
+        b -= 1.0
+    if a < 0.0:
+        a += 1.0
+    if a > b:
+        return a, 1.0, 0.0, b
+    return a, b, None, None
+
+
+def _vacuum_level(folder, structure):
+    """该构型 LOCPOT 的真空区平面平均静电势（eV）。平坦度不达标直接报错。"""
+    lp = Locpot.from_file(str(Path(folder) / "LOCPOT"))
+    vz = np.asarray(lp.get_average_along_axis(2))
+    n = len(vz)
+    win = _vac_window(structure)
+    if win[2] is None:
+        a = int(np.clip(np.floor(win[0] * n), 0, n - 1))
+        b = int(np.clip(np.ceil(win[1] * n), a + 1, n))
+        seg = vz[a:b]
+    else:
+        a1 = int(np.clip(np.floor(win[0] * n), 0, n - 1))
+        b2 = int(np.clip(np.ceil(win[3] * n), 1, n))
+        seg = np.concatenate([vz[a1:n], vz[0:b2]])
+    if seg.std() > VAC_FLAT:
+        raise RuntimeError("真空区不平坦（std=%.4f eV > %.4f）：%s"
+                           % (seg.std(), VAC_FLAT, folder))
+    return float(seg.mean())
+
+
+_orig_parse = _io.parse_calculation
+
+
+def parse_calc_vac(folder, zero_weighted_kpoints=None):
+    """AMSET 原版 parse_calculation + 把 reference 换成该构型的真空能级。"""
+    if zero_weighted_kpoints is None:
+        calc = _orig_parse(folder)
+    else:
+        calc = _orig_parse(folder, zero_weighted_kpoints=zero_weighted_kpoints)
+    st = calc["bandstructure"].structure
+    calc["reference"] = _vacuum_level(folder, st)
+    calc["reference_kind"] = "vacuum"
+    return calc
+
+
+zwk = defaults["zero_weighted_kpoints"]
+symprec = defaults["symprec"]
+# symprec_deformation：constants.defaults 里**没有**这个键（0.4.19 与 0.5.1 都
+# KeyError，2026-09-16 实测）。AMSET 自己的默认是 symprec/100
+# （amset/deformation/potentials.py: get_symmetrized_strain_mapping 的形参默认值）；
+# 运行目录若有 settings.yaml 且写了该键，则用项目值。
+symprec_def = None
+try:
+    import yaml as _yaml
+    _sp = Path("settings.yaml")
+    if _sp.is_file():
+        symprec_def = (_yaml.safe_load(_sp.read_text()) or {}).get("symprec_deformation")
+except Exception as _e:                                   # noqa: BLE001
+    print("[WARN] 读 settings.yaml 的 symprec_deformation 失败（用默认）：%s" % _e)
+if symprec_def is None:
+    symprec_def = float(symprec) / 100.0
+print("[..] symprec=%s symprec_deformation=%s" % (symprec, symprec_def))
+
+print("[..] 读未形变构型（参考 = 真空能级）")
+bulk = parse_calc_vac("undeformed", zwk)
+bulk_struct = bulk["bandstructure"].structure
+print("     vacuum ref = %.4f eV" % bulk["reference"])
+
+calcs = []
+for d in sorted(Path(dfm).glob("deform-*")):
+    # 与 core 口径 h5 保持一致：形变势读**离子弛豫**构型（有 ionrelax/ 就用）
+    dd = d / "ionrelax" if (d / "ionrelax" / "vasprun.xml").is_file() else d
+    c = parse_calc_vac(str(dd), zwk)
+    print("     %-22s vacuum ref = %.4f eV" % (str(dd.relative_to(dfm)), c["reference"]))
+    c = check_calculation(bulk, c)
+    if c is not False:
+        calcs.append(c)
+if not calcs:
+    raise RuntimeError("没有可用的形变构型")
+
+sm = get_strain_mapping(bulk_struct, calcs)
+bulk["bandstructure"] = expand_bandstructure(bulk["bandstructure"], symprec=symprec)
+sm = get_symmetrized_strain_mapping(bulk_struct, sm, symprec=symprec,
+                                    symprec_deformation=symprec_def)
+if not strain_coverage_ok(list(sm.keys())):
+    raise RuntimeError("应变没有覆盖完整张量")
+if not bz_coverage_ok([bulk["bandstructure"]] + [c["bandstructure"] for c in sm.values()]):
+    raise RuntimeError("k 网格没有覆盖整个 BZ")
+
+print("[..] 用 AMSET 原版 calculate_deformation_potentials 计算（参考=真空）")
+dp = calculate_deformation_potentials(bulk, sm)
+ibands = get_ibands(defaults["energy_cutoff"], bulk["bandstructure"])
+dp = extract_bands(dp, ibands)
+kpts = np.array([k.frac_coords for k in bulk["bandstructure"].kpoints])
+write_deformation_potentials(dp, kpts, bulk_struct, filename=h5_out)
+print("[OK] 写出 %s（真空参考，AMSET 原版算法与符号约定）" % h5_out)
+
+# 自检：新 h5（真空口径）与 core 版 h5 在带边的 D 必须**不同**——相同就说明参考
+# 替换没生效（静默退回 core 口径，是本补丁最危险的失败模式）。两者都用 band_edges
+# 里那套 (band,k) 索引，读的是同一批形变目录，可比。
+# 另一条更强的内部自检：D_vac - D_core = d(E_core - E_vac)/dε，**与能带无关**，
+# 所以电子与空穴的差值必须相同。旧版（clamped 且空穴芯势 D 为负）这条不成立：
+# 空穴 1.435-0.263=1.172 vs 电子 6.595-4.897=1.698 —— AMSET 对 D 取了绝对值，
+# 把空穴芯势口径的**负号**吃掉了。这正说明"事后往 h5 上加 Δ"的做法对空穴会错，
+# 而"替换参考能级"（本实现）天然避开该坑。ionrelax 口径下两者都是 2.087（一致）。
+import h5py
+be = json.load(open(be_json))
+core_h5 = str(Path(dfm) / "deformation.h5")
+with h5py.File(h5_out, "r") as fh:
+    up = np.array(fh["deformation_potentials_up"])
+with h5py.File(core_h5, "r") as fh:
+    up_core = np.array(fh["deformation_potentials_up"])
+print("[check] 带边 D_xx：core h5 vs 真空 h5（同一批形变目录，ionrelax 优先）")
+_any_diff = False
+_shifts = {}
+for car in ("electron", "hole"):
+    hits = (be.get(car) or {}).get("hits") or []
+    if not hits:
+        continue
+    b, k = int(hits[0]["band_h5"]), int(hits[0]["k_h5"])
+    dv, dc = float(up[b, k, 0, 0]), float(up_core[b, k, 0, 0])
+    _shifts[car] = dv - dc
+    if abs(dv - dc) > 1e-6:
+        _any_diff = True
+    print("   %-8s D_xx: core=%8.4f  真空=%8.4f  比=%.2f"
+          % (car, dc, dv, (dv / dc) if dc else float("nan")))
+    # 两份 h5 现在都读 ionrelax，与 band_edges.json 同一套数据 → 应该对得上
+    # （带边 k/带索引一致时差几个百分点以内；差很多说明哪一边读错了构型）。
+    _be = be[car].get("E1_vac_xx_eV")
+    if _be:
+        print("            [对照] band_edges.json（同口径 ionrelax）E1_vac=%s → 偏差 %+.1f%%"
+              % (_be, 100.0 * (dv - float(_be)) / float(_be)))
+if not _any_diff:
+    raise RuntimeError("真空口径 h5 与 core h5 完全相同 —— 参考能级替换没生效"
+                       "（检查 parse_calculation 的 reference 是否被改掉）")
+# D_vac - D_core 与能带无关（= d(E_core-E_vac)/dε）：两种载流子必须给同一个值。
+# 不成立时通常是某一侧的 D 实际为负、被 AMSET 的 abs() 吃掉符号（口径敏感），
+# 所以只告警不中止；但要写进记录，便于回看。
+if len(_shifts) == 2:
+    _a, _b = _shifts["electron"], _shifts["hole"]
+    _rel = abs(_a - _b) / max(abs(_a), abs(_b), 1e-9)
+    print("   [check] D_vac-D_core（应与能带无关）：electron %+.4f  hole %+.4f"
+          "  相对差 %.2f%%" % (_a, _b, 100.0 * _rel))
+    if _rel > 0.05:
+        print("   [WARN] 两种载流子的参考能级偏移不一致（>5%%）—— 多半是某一侧"
+              "形变势为负被 abs() 吃了符号，或两个 h5 用了不同构型；"
+              "核对 deform 目录口径后再用。")
+'''
+        vac_h5 = out / "deformation_vac.h5"
+        # 子进程输出必须落到 deform_vac.log：autozt 只回显 gen 的**最后一行**，
+        # 不落盘就等于失败无迹可查（2026-09-16 MoS2 实测：这里 rc!=0 只打印了一行
+        # WARN，被 autozt 吞掉，只能看到最后那句 "deformation.h5 已生成（core 口径）"，
+        # 根本不知道真空口径没生成）。
+        _vlog = dfm / "deform_vac.log"
+        cmd = ("%s && cd %s && python3 -c %s %s %s %s >> %s 2>&1"
+               % (AMSET_ENV_SRC, shlex.quote(str(dfm)), shlex.quote(_vac_code),
+                  shlex.quote(str(dfm)), shlex.quote(str(be_out)),
+                  shlex.quote(str(vac_h5)), shlex.quote(str(_vlog))))
+        rc = subprocess.run(["bash", "-lc", cmd]).returncode
+        if rc != 0 or not vac_h5.is_file():
+            _tail = (_vlog.read_text(errors="ignore")[-600:]
+                     if _vlog.is_file() else "(子进程没有留下日志)")
+            _vac_state = "core（deformation_vac.h5 生成失败 rc=%d）" % rc
+            print("[WARN] deformation_vac.h5 生成失败（rc=%d）-> 本步仍按 core 口径继续；"
+                  "把 LOCPOT 留在 step7_deform 各子目录里再重跑本步即可。"
+                  "看 %s：\n%s" % (rc, _vlog, _tail))
+        else:
+            _vac_state = "vacuum（deformation_vac.h5 已生成）"
+            print("[DONE] %s：deformation_vac.h5（真空参考口径）已生成；"
+                  "deformation.h5 保留 core 口径作对比" % OUTDIR_NAME)
+    else:
+        print("[..] core 口径：不生成 deformation_vac.h5（三维默认；"
+              "AMSET 官方口径就是芯态对齐）")
     if dst.exists():
         dst.unlink()
     os.replace(str(h5), str(dst))
-    print("[DONE] %s：deformation.h5 已生成" % OUTDIR_NAME)
+    # ★ 最后一行是 autozt 唯一回显的一行，必须把"真空口径到底有没有生成"说清楚。
+    print("[DONE] %s：deformation.h5 已生成（core 口径）；DIM=%s DEFORM_REF=%s -> %s"
+          % (OUTDIR_NAME, _read_dim(cwd) or "未知", DEFORM_REF, _vac_state))
 
 
 if __name__ == "__main__":

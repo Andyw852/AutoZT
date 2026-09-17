@@ -6,7 +6,7 @@
 #   S2_disp    phonopy 2 阶对称有限位移 + 超胞单点取力（扇出 disp-*）
 #   S3_phonon  phonopy 收力 → fc2 拟合 → 声子谱（band-dft-cpu.yaml + phonon_summary.json）
 # =============================================================================
-schema: 1
+schema: 2
 name: phonon-dft-cpu
 desc: 声子谱(DFT/CPU)
 version: "0.1"
@@ -43,6 +43,15 @@ steps:
      gen_need: [dim_common.py, stepconf.py, step.conf, kl_common.py,
                 phonon_fit_driver.py, submit_fit.tpl]}
 
++io_schema:
+  inputs: [{name: POSCAR, from: user, required: true, desc: "材料结构"}]
+  outputs: [{name: workflow_outputs, step: final, type: directory, desc: "由技能实际步骤产生的结果文件"}]
+  params: []
+  steps: []
+flow:
+  summary: "按技能步骤生成并校验科学计算结果"
+  stages: [{name: workflow, steps: [], produces: [workflow_outputs]}]
+corrections: [node_fail, dir_missing]
 requires:
   python: [phonopy, numpy, spglib]
   conda: atomate2_p_a

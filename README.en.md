@@ -21,6 +21,10 @@ and every failure mode is diagnosed instead of hidden.
   and autozt session export producing a self-contained, replayable archive.
 - **Agent safety.** autozt act / approve routes agent-driven actions through risk tiers,
   a TTL-bounded human approval and an audit log.
+- **Three agent transports.** MCP clients can use `AUTOZT_MCP_PROFILE=workflow autozt mcp`;
+  one-shot callers can use `autozt agent request -`, and long-running wrappers can use
+  `autozt agent serve` for one JSON request/response per line.
+  Both paths share the skill contracts, incremental state and action audit gateway.
 - **Uniform mechanisms.** One "cores" setting normalises queue scripts and INCAR
   (NCORE/KPAR) for every skill, and required inputs are discovered from the remote step
   directory instead of per-skill hard-coded lists.
@@ -44,6 +48,9 @@ exactly the same program:
     pa status
     pa -tt kl-mace-gpu -p Si_demo start
     pa mcp --list-tools
+    AUTOZT_MCP_PROFILE=compact pa mcp   # compact tool surface for an LLM client
+    pa agent snapshot                    # stable JSON, no MCP client required
+    pa agent serve                       # persistent JSONL transport
 
 ## Install
 

@@ -275,6 +275,22 @@ AI 审计（v1.0 P0-1，agent 走网关：风险分档 + 每次调用留痕）�
   act log           看审计流水（.tf_agent_log.jsonl）；act policy 看风险分档表
   approve <命令>     人工在**交互终端**批准一条破坏性动作（一次性令牌，默认 15 分钟）
 
+稳定 JSON agent 接口（不需要 MCP 客户端）：
+  agent capabilities       协议、动作和安全边界（LLM 首次发现只调用一次）
+  agent schema             完整 JSON 请求/响应/动作 Schema（首次接入读取）
+  agent skills             紧凑技能目录
+  agent contract <技能>    输入/输出/步骤/纠错契约
+  agent snapshot           跨进程增量状态快照
+  agent inspect            一次返回关注状态和确定性候选动作
+  agent plan               一次生成可审阅计划
+  agent cycle              观察→规划；默认 dry-run，--execute 才执行
+  agent run                无 MCP 的确定性闭环；默认 dry-run
+  agent evidence -p 材料   单材料/步骤结构化诊断
+  agent request -          stdin JSON 一次请求（适合 LLM/脚本）
+  agent serve              常驻 JSONL：一行请求对应一行 JSON 响应
+  agent propose            只读生成候选动作计划
+  agent apply <计划.json>  执行 start/retry/fetch/advance（破坏性动作拒绝）
+
 旧命令和别名继续兼容。高级命令、全部参数及示例：tf --help-all
 注意：status/auto/monitor 可提交作业；只看状态用 summary 或 list。
 """
@@ -318,6 +334,8 @@ USAGE = """\
             每次调用都追加 {ts,actor,cmd,risk,decision,exit_code,approved_by} 到配置
             目录的 .tf_agent_log.jsonl：`autozt act log` 看流水，`autozt act policy` 看风险分档。
             不设 AUTOZT_ACTOR 也不用 act 时，行为与此前完全一致。
+  agent     稳定 JSON agent 接口：capabilities/inspect/plan/cycle/evidence/request/serve；
+            与 MCP 共用技能契约、状态快照和 act 审计网关。
   prove     每一步"结果是怎么来的"（v1.0，只读、读本地档案）：
             tf prove -p 材料 [-j 步骤] [--json] [--verify]
             gen 生成输入时 tf 会自动把该步档案写到 <材料>/provenance/<步骤>.json
@@ -1521,7 +1539,9 @@ Reproducibility
 
 Agent interface (Model Context Protocol, stdio JSON-RPC)
   mcp                     MCP server: initialize / tools/list / tools/call
-  mcp --list-tools        print the tool table (14 generic verbs, risk-tagged)
+  mcp --list-tools        print the tool table (21 generic verbs, risk-tagged;
+                          AUTOZT_MCP_PROFILE=compact exposes 7, workflow 9,
+                          monitor 2 LLM-facing tools)
   mcp --call NAME JSON    call one tool directly (testing)
 
 Safety gate (agent sessions only)

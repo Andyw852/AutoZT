@@ -39,6 +39,14 @@ KSPACING     = "0.03"                 # vaspkit 起点（与静态同值，所�
 DK_MAX       = None
 DK_MAX_2D    = "0.05"
 DK_MAX_3D    = "0.06"
+# ---- patch_vacuum_kz：2D 真空方向的最少分割数 ---------------------------
+#   VASPKIT 在 2D 下把真空轴压成 kz=1（省算力）。但这步的能带要喂给 AMSET：
+#   四面体求积要沿 kz 做"柱面积分"，输入只有一层 kz 时 BoltzTraP2 是沿 kz
+#   **外推**，插值网格一变结果就差 30-45%（实测：固定 c 只改
+#   interpolation_factor，ADP 迁移率 2188~2488）。设 >=3 让 kz 变成内插。
+#   默认 1 = 保持原行为（不动存量 2D 项目）；新项目在 project_setting 里设 3。
+VACUUM_KZ_MIN = 1
+SPEC = {"VACUUM_KZ_MIN": (VACUUM_KZ_MIN, "int")}
 # ---- 成本护栏：网格总点数上限 -------------------------------------------
 #   超了就【报错要求显式覆盖】，而不是静默降密 —— 否则将来又有人用"跳过加密"
 #   绕过，回到同一个坑。参考量级：Si(5.43Å) 0.08 → 25³ ≈ 1.6e4；
@@ -86,6 +94,29 @@ def main():
                     func=_func)
 
     kc.vaspkit_kpoints(out, KSCHEME, KSPACING, VASPKIT_EXE, dim, vac_axis)
+    # [patch_vacuum_kz] 把真空方向 kz 提到 VACUUM_KZ_MIN（默认 1 = 不动）
+    _kzmin = int(VACUUM_KZ_MIN)
+    if (cwd / "step.conf").is_file():
+        # strict=False：材料级 step.conf 是全技能共用的一份，含别的步骤的键
+        # （FUNC 等）。本脚本只认 VACUUM_KZ_MIN，严格模式会被别的键打死
+        # （2026-09-16 MoS2 S3_uniform 实测：FUNC 让 gen 直接 SystemExit；
+        #  stepconf.load 抛的是 SystemExit=BaseException，except Exception 拦不住）。
+        try:
+            _kzmin = int(stepconf.load(SPEC, OUTDIR_NAME, str(cwd),
+                                       strict=False)["VACUUM_KZ_MIN"])
+        except (KeyError, ValueError, TypeError):
+            pass
+    if dim == "2d" and _kzmin > 1:
+        _kp = out / "KPOINTS"
+        _ln = _kp.read_text().splitlines()
+        _n = [int(x) for x in _ln[3].split()[:3]]
+        if _n[vac_axis] < _kzmin:
+            _old = _n[vac_axis]
+            _n[vac_axis] = _kzmin
+            _ln[3] = " %d %d %d" % (_n[0], _n[1], _n[2])
+            _kp.write_text("\n".join(_ln) + "\n")
+            print("[OK] patch_vacuum_kz：真空轴 kz %d -> %d（原来只有一层时 AMSET 沿 kz 外推，"
+                  "插值网格一变结果差 30-45%%）" % (_old, _kzmin))
     # [DK_MAX] 面内笛卡尔 k 间距上限。判据是笛卡尔间距（不是分割数下限）——
     # 分割数下限对不同长度的胞给完全不同的笛卡尔间距（SS a=10.82 vs LS a=21.64，
     # 同样 N_x=8 给 0.0726 vs 0.0363），m* 拟合半径和收敛性都失真。逐轴
@@ -173,12 +204,21 @@ def main():
     kc.inherit_scf_tags(out / "INCAR", cwd, with_u=True, label="uniform")
     # 并行参数按宿主机自适应（GPU 版强制 NCORE=1/KPAR=1，CPU 保持模板默认）
     kc.apply_parallel_tags(out / "INCAR")
+    # step.conf 的 [incar]/[incar.final]/[incar.delete] 覆盖。
+    # 此前本技能所有 gen 脚本只调 read_submit()，这三节**写了没人读**，
+    # 用户在 step.conf 里改 INCAR 会被静默忽略。2026-09-15 在 step2.3_hse 上
+    # 暴露并修复；这里改用 stepconf 里的唯一实现，避免各脚本各写一套。
+    _ic_log = []
+    stepconf.apply_incar_file(out / "INCAR", log=_ic_log)
+    for _m in _ic_log:
+        print("[..] %s" % _m)
+
 
     submit_tpl = resolve_tpl(Path(__file__).resolve().parent, "submit_std", dim)
     submit = out / "submit.sh"
     submit.write_text(submit_tpl.read_text(encoding="utf-8"), encoding="utf-8", newline="\n")
     kc.patch_submit_jobname(submit, kc.new_jobname(cwd, STEP_LABEL))
-    stepconf.apply_submit(submit, stepconf.read_submit(stepconf.CONF_NAME))
+    stepconf.apply_submit(submit, stepconf.read_submit(stepconf.CONF_NAME, used_incar=True))
 
     print("[DONE] %s：INCAR/KPOINTS/POTCAR/POSCAR 就绪，可提交" % OUTDIR_NAME)
 

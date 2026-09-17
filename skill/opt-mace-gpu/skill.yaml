@@ -12,7 +12,7 @@
 # 引擎与 opt-mace-cpu 共用：gen 脚本/ mace_static.py 在本目录，mace_relax.py /
 # mace_model.py / klmace_common.py 在 _common/mace/。
 # =============================================================================
-schema: 1
+schema: 2
 name: opt-mace-gpu
 desc: 结构优化(MACE/GPU)
 version: "0.1"
@@ -48,6 +48,15 @@ steps:
      gen: gen_step3_formation.py,
      gen_need: [stepconf.py, step.conf], fetch_all: true}
 
++io_schema:
+  inputs: [{name: POSCAR, from: user, required: true, desc: "材料结构"}]
+  outputs: [{name: workflow_outputs, step: final, type: directory, desc: "由技能实际步骤产生的结果文件"}]
+  params: []
+  steps: []
+flow:
+  summary: "按技能步骤生成并校验科学计算结果"
+  stages: [{name: workflow, steps: [], produces: [workflow_outputs]}]
+corrections: [node_fail, dir_missing]
 requires:
   python: [mace-torch, torch, ase, numpy]
   conda: mace-gpu

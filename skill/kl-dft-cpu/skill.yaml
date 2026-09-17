@@ -36,14 +36,28 @@ defaults:
 fetch_files: [POSCAR, CONTCAR, INCAR, KPOINTS, POTCAR, submit.sh, OUTCAR,
               vasprun.xml, workflow_method.txt, kl_params.txt, BORN, provenance.json,
               phono3py_disp.yaml, fc2.hdf5, fc3.hdf5, band-dft-cpu.yaml,
-              phonon_summary.json, kappa_summary.json,
-              phono3py_kappa.log, queue.out, queue.err]
+              phonon_summary.json, kappa_summary.json, thickness_2d.json,
+              phono3py_kappa.log, queue.out, queue.err,
+              # 声子谱（S5.1）：数据(yaml/dat) + 图(png，含 0-10 THz 低频放大图)
+              phonon_plot_summary.json, band_nac.yaml, band_nonac.yaml,
+              band_nac.dat, band_nonac.dat, band_nac.png, band_nonac.png,
+              band_nac_lowfreq.png, band_nonac_lowfreq.png,
+              # ShengBTE（S6）产物：S6 是 fetch_all=true 会整目录拉回，这里显式列出，
+              # 使项目覆盖 fetch_files、或按单文件拉取时也不会漏掉这些结果。
+              shengbte.log, BTE.KappaTensorVsT_sg, BTE.KappaTensorVsT_CONV,
+              BTE.KappaTensorVsT_RTA, BTE.omega, BTE.v, BTE.v_full, BTE.dos,
+              BTE.pdos, BTE.cvVsT, BTE.gruneisen, BTE.gruneisenVsT_total,
+              BTE.qpoints, BTE.qpoints_full, BTE.w_boundary,
+              BTE.ReciprocalLatticeVectors, BTE.P3, BTE.P3_plus, BTE.P3_minus,
+              BTE.P3_total, BTE.P3_plus_total, BTE.P3_minus_total]
 
 steps:
   - {seq: 1, name: step1_std_opt, label: S1_opt, check: relax_injob,
      gen: gen_step1_std_opt.py, contcar_to_poscar: true,
+     # thickness_2d/vdw_radii（2026-09-17 加）：2D 变胞稳定判据要按【层内口径】换算
+     #   （tol_cell = 0.4 kbar /(h⊥/d)），relax_common 靠这两个模块现算 h⊥/d。
      gen_need: [relax_common.py, method_select.py, mol_common.py, incar_0d.tpl, submit_std_0d.tpl, dim_common.py, stepconf.py, step.conf,
-                check_common.py, step1_check_and_resubmit.py,
+                check_common.py, step1_check_and_resubmit.py, thickness_2d.py, vdw_radii.py,
                 incar_2d.tpl, incar_3d.tpl, submit_std_2d.tpl, submit_std_3d.tpl]}
 
   - {seq: 2, name: step2_static, label: S2_static, check: outcar,
@@ -57,6 +71,7 @@ steps:
      gen: gen_step4_disp.py,
      gen_need: [dim_common.py, stepconf.py, step.conf, kl_common.py, lattice_kappa.py,
                 check_common.py, step2_check_and_resubmit.py,
+                thickness_2d.py, vdw_radii.py,
                 incar_force_2d.tpl, incar_force_3d.tpl,
                 submit_std_2d.tpl, submit_std_3d.tpl]}
 
@@ -71,7 +86,8 @@ steps:
      marker: 'kappa_summary.json:"KAPPA_DONE": true',
      gen: gen_step6_kappa.py, fetch_all: true,
      gen_need: [dim_common.py, stepconf.py, step.conf, kl_common.py, lattice_kappa.py,
-                submit_p3py.tpl, submit_shengbte.tpl, submit_fourphonon.tpl, vdw_radii.py]}
+                thickness_2d.py, vdw_radii.py,
+                submit_p3py.tpl, submit_shengbte.tpl, submit_fourphonon.tpl]}
 
 # NAC 为可选步组：极性绝缘体默认开（LO-TO 劈裂需要）。
 #   关闭：项目配置写 nac: false —— tf 直接不注入 step3_nac，S5/S6 因无 BORN 自然无 NAC。
@@ -87,13 +103,27 @@ optional_steps:
                     check_common.py, step2_check_and_resubmit.py,
                     incar_2d.tpl, incar_3d.tpl, submit_std_2d.tpl, submit_std_3d.tpl]}
 
-  # S5.1 声子谱绘图（登录节点 run: gen，不提交作业）：读 step5_fc/phono3py/fc2.hdf5 画谱。
-  #   有 BORN → band_nac.* + band_nonac.* 两张；无 BORN → 只 band_nonac.*。
+  # S5.1 声子谱：数据(band_*.yaml/.dat) + 图(band_*.png，含 0-10 THz 低频放大图)。
+  #   有 BORN → band_nac.* + band_nonac.* 两套；无 BORN → 只 band_nonac.*。
+  #   这一步提交一个【计算节点小作业】（不再是登录节点 run: gen）：128 原子胞的一条
+  #   完整 band structure 在登录节点上超过 tf 给 gen 的预算，会被中途杀掉（实测连
+  #   band_<tag>.yaml 都写不完 → 步骤永远失败）。gen 只写 submit.sh；
+  #   作业里跑 gen_step5.1_plot_phonon.py --work，并支持从已算好的
+  #   band_<tag>.yaml 断点续画（重跑几秒完成）。核数/QoS 见 step.conf：
+  #   PLOT_CORES（默认 16）、SBATCH_QOS（默认 premium，jzzn 常用 regular）。
   phonon_plot:
     default: true
     steps:
+      # 2026-09-17 从 taskflow-v2.0 同步：本步由"登录节点 gen"改成【提交绘图作业】。
+      #   原来的 run: gen 让画图在登录节点跑，128 原子胞一条完整 band structure 要
+      #   几分钟到十几分钟，超过 autozt 给 gen 的预算会被中途杀掉（连 band_<tag>.yaml
+      #   都写不完 → 永远失败）。现在 gen 只写 submit.sh，真正的算谱+出图由计算节点
+      #   上的 --work 完成；脚本支持从已算好的 band_<tag>.yaml 断点续画。
+      #   步骤声明 gen_need 会【完全替代】类型级依赖，所以 step.conf/stepconf.py 要写上。
       - {seq: 5.1, name: step5_phonon_plot, label: S5.1_plot, after: step5_fc,
-         gen: "gen_step5.1_plot_phonon.py", check: plot, run: gen, gen_need: [],
+         gen: "gen_step5.1_plot_phonon.py", check: plot,
+         # 步骤声明 gen_need 会【完全替代】类型级依赖，所以 step.conf/stepconf.py 要写上
+         gen_need: [step.conf, stepconf.py, submit_plot.tpl],
          done_marker: phonon_plot_summary.json, fetch_all: true}
 
 requires:

@@ -58,12 +58,20 @@ def parse(text, src="<text>"):
     return out
 
 
-def read_submit(path, cwd="."):
+def read_submit(path, cwd=".", used_incar=False):
     """只读 step.conf 的 [submit] 节，返回 {key(小写, 连字符转下划线): value}。
 
     供那些不加载完整 step.conf（没有 [params] spec、只关心提交参数）的
     gen 脚本复用——绕开 StepConf 对 [params] 未知键的严格校验，只取 [submit]。
     文件不存在时返回 {}。value 过滤掉 None / 空。
+
+    ★ used_incar：本函数的调用方**是否也会消费** [incar] / [incar.final] /
+      [incar.delete]（走 StepConf.apply_incar 或等价逻辑）。默认 False。
+      为 False 且 step.conf 里确实写了这几节时，打印告警 —— 因为这几个节
+      只被 apply_incar 读取，只调 read_submit 的 gen 脚本会把用户写的覆盖
+      **静默忽略**（"写了以为生效、其实没生效"是这条链上反复出现的失效模式：
+      2026-09-15 之前 ke-dft-cpu 全部 gen 脚本都踩了这个洞）。
+      真会消费它们的脚本请显式传 used_incar=True，避免误报。
     """
     p = Path(path)
     if not p.is_absolute():
@@ -71,6 +79,13 @@ def read_submit(path, cwd="."):
     if not p.is_file():
         return {}
     merged = parse(p.read_text(encoding="utf-8-sig"), str(p))
+    if not used_incar:
+        _ic = [s for s in ("incar", "incar.final", "incar.delete") if merged.get(s)]
+        if _ic:
+            print("[WARN] %s 里有 [%s] 段，但本步骤的 gen 脚本只读了 [submit] —— "
+                  "这些 INCAR 覆盖会被**静默忽略**。要让它们生效，gen 脚本必须调 "
+                  "StepConf.apply_incar()（或等价逻辑）；确实不需要就请删掉这几节。"
+                  % (p, "]/[".join(_ic)), file=sys.stderr)
     return {k.lower().replace("-", "_"): v
             for k, v, _ in merged.get("submit", []) if v not in (None, "")}
 
@@ -198,12 +213,16 @@ _CAST = {
 
 
 class StepConf(object):
-    def __init__(self, merged, spec, path=None):
+    def __init__(self, merged, spec, path=None, strict=True):
         self._m, self._spec, self.path = merged, spec, path
         self.params = {}
         raw = {k.upper(): v for k, v, _ in merged.get("params", [])}
         unknown = sorted(set(raw) - {k.upper() for k in spec} - RESERVED_PARAMS)
-        if unknown:
+        # strict=False：只取自己 SPEC 里声明的键，其余键（别的步骤的参数，
+        # 如 FUNC）忽略。材料级 step.conf 是**全技能共用**的一份（"每层只写
+        # 跟上一层不一样的键"），只认自己那一两个键的脚本用严格模式必然被
+        # 别的步骤的键打死（2026-09-16 MoS2 S3_uniform 实测：FUNC 直接让 gen 退出）。
+        if strict and unknown:
             raise SystemExit("[ERROR] %s 的 [params] 里有本脚本不认识的键：%s\n"
                              "        可用键：%s"
                              % (path or CONF_NAME, ", ".join(unknown),
@@ -257,8 +276,11 @@ class StepConf(object):
         return out
 
 
-def load(spec, step_name=None, cwd="."):
-    """gen 脚本入口：读材料目录里 tf 推来的那一份 step.conf。"""
+def load(spec, step_name=None, cwd=".", strict=True):
+    """gen 脚本入口：读材料目录里 tf 推来的那一份 step.conf。
+
+    strict=False 时忽略 SPEC 之外的键（共用 step.conf 里别的步骤的参数），
+    只认自己声明的那几个 —— 给"只用一两个小开关"的 gen 脚本用。"""
     p = Path(cwd) / CONF_NAME
     if not p.is_file():
         raise SystemExit("[ERROR] 缺少 %s —— 该步骤的 gen_need 里漏了它？" % CONF_NAME)
@@ -269,7 +291,124 @@ def load(spec, step_name=None, cwd="."):
                          % (p, got, step_name))
     spec = dict(spec)
     spec.setdefault("STEP", (step_name, "str"))
-    return StepConf(merged, spec, str(p))
+    return StepConf(merged, spec, str(p), strict=strict)
+
+
+# =============================================================================
+# step.conf 的 [incar] / [incar.final] / [incar.delete] —— 面向"已经写出 INCAR 文件"
+# 的 gen 脚本的共用入口。
+#
+# 为什么要有这一段：ke-dft-cpu 的 gen 脚本分两派 ——
+#   ① 自己用 build_incar(items, remove, incar_set) 拼字符串（step2.1_static、
+#      step6_elastic、step2.3_hse）；
+#   ② 用 ke_common.render_tpl + inherit_scf_tags + apply_parallel_tags 渲染文件
+#      （step2.2_pbe、step3_uniform、step4_wave、step5_dielect、step7_deform、
+#       step8_amset）。
+# 两派此前都只调 read_submit()，于是 step.conf 里写的 [incar*] 三节**全是死的**：
+# 用户以为改了 INCAR，实际被静默忽略。2026-09-15 在 step2.3_hse 上暴露并修复。
+# 为避免"每个脚本各写一套"再走回老路，这里提供唯一实现，两派都调它。
+#
+# 语义与 StepConf.apply_incar 完全一致：
+#     继承(=文件现有内容) → [incar] → [incar.final] → [incar.delete]
+# =============================================================================
+
+_INCAR_KV = re.compile(r"^(\s*)([A-Za-z_][A-Za-z0-9_]*)(\s*=\s*)(.*?)(\s*)$")
+
+
+def incar_sections(path=CONF_NAME, cwd="."):
+    """读 step.conf，返回 ([incar] 字典, [incar.final] 字典, [incar.delete] 集合)。
+
+    键统一大写；大小写不合并不在此处理（INCAR 标签本身大小写不敏感，
+    调用方按 .upper() 比对）。文件不存在返回三个空容器。
+    """
+    p = Path(path)
+    if not p.is_absolute():
+        p = Path(cwd) / p
+    if not p.is_file():
+        return {}, {}, set()
+    merged = parse(p.read_text(encoding="utf-8-sig"), str(p))
+    _up = lambda k: k.strip().upper()
+    incar = {_up(k): v for k, v, _ in merged.get("incar", []) if v is not None}
+    final = {_up(k): v for k, v, _ in merged.get("incar.final", []) if v is not None}
+    dele = {_up(k) for k, _, _ in merged.get("incar.delete", [])}
+    return incar, final, dele
+
+
+def _split_incar_value(raw):
+    """把 INCAR 的值与行尾注释分开：'1E-7  # 说明' -> ('1E-7', '  # 说明')。"""
+    for i, ch in enumerate(raw):
+        if ch in "#!":
+            return raw[:i].rstrip(), raw[i:]
+    return raw.rstrip(), ""
+
+
+def apply_incar_file(incar_path, path=CONF_NAME, cwd=".", log=None):
+    """把 step.conf 的 [incar] / [incar.final] / [incar.delete] 应用到已写出的 INCAR。
+
+    保留原有行序、缩进、对齐与行尾注释；[incar.final] 里文件原本没有的标签
+    追加到文件末尾（并标注来源）。返回改动清单
+        [(节名, 键, 旧值-or-None, 新值-or-None), ...]
+    供调用方写进自己的 log。step.conf 不存在或三节全空时**不碰文件**。
+    """
+    changed = []
+    incar, final, dele = incar_sections(path, cwd)
+    if not (incar or final or dele):
+        return changed
+    ip = Path(incar_path)
+    if not ip.is_file():
+        return changed
+    lines = ip.read_text(encoding="utf-8").splitlines()
+
+    # 文件里已有的键 -> 行号（后出现的覆盖先出现的，与 VASP 的"后者生效"一致）
+    pos = {}
+    for i, ln in enumerate(lines):
+        m = _INCAR_KV.match(ln)
+        if m:
+            pos[m.group(2).upper()] = i
+
+    def _put(section, key, val):
+        if key in pos:
+            i = pos[key]
+            m = _INCAR_KV.match(lines[i])
+            indent, _, eq, old_raw, trail = m.groups()
+            old_val, comment = _split_incar_value(old_raw)
+            keep = comment or trail.strip()
+            lines[i] = "%s%s%s%s%s" % (indent, m.group(2), eq, val,
+                                       ("  " + keep) if keep else "")
+            if old_val != val:
+                changed.append((section, key, old_val, val))
+        else:
+            lines.append("%-9s= %s" % (key, val))
+            pos[key] = len(lines) - 1
+            changed.append((section, key, None, val))
+
+    for k, v in incar.items():
+        _put("incar", k, v)
+    for k, v in final.items():
+        _put("incar.final", k, v)
+    for k in sorted(dele):
+        if k in pos:
+            old_val, _ = _split_incar_value(_INCAR_KV.match(lines[pos[k]]).group(4))
+            del lines[pos[k]]
+            pos = {}
+            for i, ln in enumerate(lines):
+                m = _INCAR_KV.match(ln)
+                if m:
+                    pos[m.group(2).upper()] = i
+            changed.append(("incar.delete", k, old_val, None))
+
+    if changed:
+        ip.write_text("\n".join(lines) + "\n", encoding="utf-8", newline="\n")
+    if log is not None:
+        for sec, k, o, n in changed:
+            if n is None:
+                log.append("step.conf [%s] 删除 %s（原 %s）" % (sec, k, o))
+            elif o is None:
+                log.append("step.conf [%s] 新增 %s = %s" % (sec, k, n))
+            else:
+                log.append("step.conf [%s] 覆盖 %s: %s -> %s" % (sec, k, o, n))
+    return changed
+
 
 
 def _spans(lines):

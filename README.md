@@ -9,10 +9,13 @@
 ## 能干什么
 
 - **多材料**：一个项目根下几千个结构（如 `C20/qHPC20`、`Ag/qHPC20_Ag1C20_s0`）统一管理，逐材料多步流水线（弛豫 → 静态 → 后处理）自动推进。
-- **多技能**：16 个技能（`-tt`）覆盖 VASP 能带/弹性/电热导/晶格热导/结构优化，以及 MACE 同类 + 声子 + MLFF 训练 + 替代模型。
+- **多技能**：技能从 `skill/*/skill.yaml` 动态发现，覆盖 VASP 能带/弹性/电热导/晶格热导/结构优化，以及 MACE 同类、声子、MLFF 训练和替代模型；新增技能不增加 MCP 工具。
 - **多超算**：jzzn（CPU 真 SLURM）、a800（A800 GPU 真 SLURM）、3090（无 SLURM 的 fakeslurm 垫片服务器），换超算只改一个 `hpc` 名。
 - **全自动**：`auto_advance` + `autozt monitor` 后台监控，作业算完自动拉结果、自动提交下一步；挂死作业自动 `scancel`+续跑（`hang_check`）。
 - **省心巡检**：`autozt summary --diff` 无变化输出 0 字节，有变化才吐几行——适合 AI / cron 定时巡检。
+- **三种接入面**：MCP 默认使用 `workflow` 小工具面（完整面需显式设置 `AUTOZT_MCP_PROFILE=full`）；一次性脚本用 `autozt agent request -`；常驻 wrapper 用 `autozt agent serve` 的 JSONL。三者共用技能契约、快照和动作审计。
+- **低上下文巡检**：长期监控可用 `AUTOZT_MCP_PROFILE=monitor autozt mcp`，只暴露 `get_snapshot`/`cycle` 两个通用工具；异常时再切换到 `workflow`。
+- **过期计划保护**：`inspect`/`propose`/`snapshot` 返回状态 `cursor`；`apply_actions` 或 `autozt agent apply` 执行前重新核对，状态变化就拒绝旧计划并要求重新观察。
 
 ## 快速开始
 
@@ -35,9 +38,31 @@ autozt -tt opt-mace-cpu monitor -d    # 后台监控：自动拉结果 + 自动�
 # 5. 巡检
 autozt summary --diff               # 首选巡检：无变化 0 字节
 autozt -tt opt-mace-cpu summary     # 只看某技能
+
+# 给模型或脚本的稳定 JSON 接口（不需要 MCP）
+autozt agent capabilities
+autozt agent schema
+autozt agent skills
+autozt agent snapshot
+autozt agent propose > plan.json
+autozt agent apply plan.json --dry-run
+
+# 新接入推荐：一次读取/规划；cycle 默认 dry-run
+autozt agent inspect
+autozt agent cycle --dry-run
+# 明确需要时才执行非破坏性动作
+autozt agent cycle --execute
+autozt agent run --dry-run          # 确定性规则闭环，不需要 MCP/LLM
+autozt agent run --execute          # 显式执行允许的安全动作
+
+# 也可以用一个 JSON 请求代替命令行参数
+echo '{"op":"inspect","scope":{"status":"error"}}' | autozt agent request -
+
+# 多次调用时使用常驻 JSONL，逐行输入、逐行输出
+printf '%s\n%s\n' '{"op":"capabilities"}' '{"op":"snapshot"}' | autozt agent serve
 ```
 
-## 常用命令与兼容入口
+## 常用命令与接入入口
 
 `autozt --help`（或 `autozt help`）显示简明帮助；`autozt --help-all` 显示高级命令、全部参数和示例。本仓库入口为 `bin/autozt`，可用 `python3 bin/autozt --help` 检查新版；`autozt --version` 可核对 PATH 实际指向的版本。
 
@@ -62,10 +87,11 @@ autozt -tt opt-mace-cpu summary     # 只看某技能
 | a800 | `A800` | A800 GPU，真 SLURM | GPU 类技能 |
 | 3090 | `wangchao_3090` | 8×RTX3090，无 SLURM（fakeslurm 垫片） | MACE GPU 类（注意：垫片无排队，需靠 max_jobs 节流） |
 
-## 11 个技能
+## 技能清单
 
-VASP：`band-dft-cpu` 能带 / `elastic-dft-cpu` 弹性常数 / `ke-dft-cpu` 电子热导率 / `kl-dft-cpu` 晶格热导率 / `opt-dft-cpu` 结构优化+能量
-MACE：`kl-mace-cpu`/`kl-mace-gpu` 晶格热导率 / `opt-mace-cpu`/`opt-mace-gpu` 结构优化+形成能 / `phonon-mace-cpu` 声子谱 / `mlff-mace` MLFF 训练
+技能数量和版本以 `autozt skills` / `autozt agent skills` 为准；每个技能的模型契约位于
+对应的 `skill/<技能>/skill.yaml`，包括输入、输出、步骤依赖、参数和纠错策略。MCP
+只暴露通用动词，不为技能或步骤单独增加工具。
 
 ## 大规模实战（2926 材料 · opt-mace-cpu · jzzn）
 

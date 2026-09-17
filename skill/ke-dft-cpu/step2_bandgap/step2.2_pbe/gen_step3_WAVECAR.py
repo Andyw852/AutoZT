@@ -391,8 +391,16 @@ MAG_ZERO_TOL = 0.1          # |磁矩| 低于此视作 0（用于 auto 判定与
 USE_KPOINTS_OPT = True
 
 # KPOINTS_OPT 的 one-shot 阶段一次同时处理多少个 k 点（越小越省内存、越慢）。
-# None = 不写该标签（用 VASP 默认）。SOC + 大体系内存吃紧时设 8~24。
-KPOINTS_OPT_NKBATCH = 24
+# None = 不写该标签（用 VASP 默认）。
+#
+# ★ 默认值从 24 改成 6（2026-09-15）。原因是一次真实事故：
+#   单层 Mg4C60 的 HSE06（236715）用 NKBATCH=24 时在
+#       Start KPOINTS_OPT ... k-point batch [1-24\35]
+#   处被 OOM 杀掉（ExitCode 9:0）—— 自洽其实早就收敛了，8 小时全废。
+#   这个标签只控制批大小、**不改任何物理量**，所以取小是纯保险：
+#   代价是批次变多、略微变慢；收益是 128 原子级大胞不会再被内存打死。
+#   想换回大值：在材料 step.conf 写 [incar.final] KPOINTS_OPT_NKBATCH = 24。
+KPOINTS_OPT_NKBATCH = 6
 # =================================================================
 
 
@@ -1637,7 +1645,7 @@ def main():
                      % (submit_tpl, "vasp_ncl" if soc else "vasp_std",
                         submit_params["JOBNAME"]))
     sub_ov = dict(SUBMIT_OVERRIDE)
-    sub_ov.update(stepconf.read_submit(stepconf.CONF_NAME))
+    sub_ov.update(stepconf.read_submit(stepconf.CONF_NAME, used_incar=True))
     _sub_changed = stepconf.apply_submit(submit_out, sub_ov)
     if _sub_changed:
         setup_log.append("   覆盖 Slurm: %s" % ", ".join(_sub_changed))
@@ -1773,6 +1781,15 @@ def main():
         text = build_step3_incar(items, incar_remove, incar_set)
         with open(os.path.join(STEP3_DIR, "INCAR"), "w") as f:
             f.write(text)
+        # step.conf 的 [incar]/[incar.final]/[incar.delete] 覆盖。
+        # 此前本技能所有 gen 脚本只调 read_submit()，这三节**写了没人读**，
+        # 用户在 step.conf 里改 INCAR 会被静默忽略。2026-09-15 在 step2.3_hse 上
+        # 暴露并修复；这里改用 stepconf 里的唯一实现，避免各脚本各写一套。
+        _ic_log = []
+        stepconf.apply_incar_file(os.path.join(STEP3_DIR, "INCAR"), log=_ic_log)
+        for _m in _ic_log:
+            print("[..] %s" % _m)
+
         keys2   = {k for k, _ in items}
         removed = [k for k in incar_remove if k.upper() in keys2]
         overr   = [k for k in incar_set    if k.upper() in keys2]

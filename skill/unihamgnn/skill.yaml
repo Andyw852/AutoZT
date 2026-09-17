@@ -10,7 +10,7 @@
 #
 # 引擎/接口（HamGNN 仓库 + OpenMX + 通用模型 .pkl）是外部依赖，路径走 step.conf。
 # =============================================================================
-schema: 1
+schema: 2
 name: unihamgnn
 desc: 能带(Uni-HamGNN)
 version: "0.1"
@@ -52,6 +52,15 @@ steps:
      gen_need: [stepconf.py, step.conf, unihamgnn_common.py, band_cal.tpl],
      fetch_all: true}
 
++io_schema:
+  inputs: [{name: POSCAR, from: user, required: true, desc: "材料结构"}]
+  outputs: [{name: workflow_outputs, step: final, type: directory, desc: "由技能实际步骤产生的结果文件"}]
+  params: []
+  steps: []
+flow:
+  summary: "按技能步骤生成并校验科学计算结果"
+  stages: [{name: workflow, steps: [], produces: [workflow_outputs]}]
+corrections: [node_fail, dir_missing]
 requires:
   python: [torch, torch-geometric, e3nn, pymatgen, numpy, scipy, matplotlib, yaml, natsort]
   conda: hamgnn

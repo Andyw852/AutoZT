@@ -73,15 +73,19 @@ def main():
     supercell = cfg.get("supercell")
     fc2_supercell = cfg.get("fc2_supercell")
     use_nac = bool(cfg.get("nac", False))
+    rasr = str(cfg.get("pheasy_rasr") or "none")
 
     # ---- 1. 拟合 ----
     if software == "pheasy":
         p_method = str(cfg.get("pheasy_method", "OLS")).upper()
         c3 = str(cfg.get("c3_cutoff", "6.0"))
         p_bin = str(cfg.get("pheasy_bin", "pheasy"))
+        # RASR：gen 按 DIM 解析好写在 fit_config.json 里（2D=BHH / 3D=none）；
+        #   这里原样传给 _pheasy_fit.py，由它挂到 -c 步并校验施加日志。
+        rasr = str(cfg.get("pheasy_rasr") or "none")
         _env = dict(os.environ)
         _env["PHEASY_BIN"] = p_bin
-        rc = subprocess.run("python _pheasy_fit.py %s '%s'" % (p_method, c3),
+        rc = subprocess.run("python _pheasy_fit.py %s '%s' %s" % (p_method, c3, rasr),
                             shell=True, env=_env).returncode
         if rc != 0:
             sys.exit("[ERROR] pheasy 拟合失败(rc=%d)，看 fc_build.log" % rc)
@@ -144,7 +148,7 @@ def main():
 
     Path("phonon_summary.json").write_text(json.dumps(
         {"stable": bool(stable), "min_frequency_THz": mf, "method": method,
-         "fit": fit, "nac": use_nac, "input_yaml": yaml,
+         "fit": fit, "nac": use_nac, "rasr": rasr, "input_yaml": yaml,
          "supercell": supercell, "fc2_supercell": fc2_supercell, "note": note},
         ensure_ascii=False, indent=2), encoding="utf-8", newline="\n")
     print("[DONE] %s：stable=%s" % ("step3_fc", str(stable).lower()))

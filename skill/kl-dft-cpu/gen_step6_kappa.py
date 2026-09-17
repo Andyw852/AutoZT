@@ -17,6 +17,8 @@
                fourphonon（CPU 单进程枚举慢、AOCC 版易卡死，见 README）。
 产出目录：step6_kappa/
 """
+import json
+import re
 import shutil
 import sys
 from pathlib import Path
@@ -24,6 +26,9 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import kl_common as kc
 import stepconf
+# 2D 层厚/归一化唯一真源（与 ke-dft-cpu 的 AMSET 步共用同一份口径；
+#   见 skill/_common/thickness_2d.py，随 gen_need 推送到本步目录）
+from thickness_2d import slab_geometry
 
 OUTDIR = "step6_kappa"
 STEP   = "step6_kappa"
@@ -34,41 +39,52 @@ SPEC = {
     "SOLVER":       ("phono3py", "str"),  # phono3py | shengbte（= 热导率计算软件）
     "BTE_METHOD":   ("rta",     "str"),   # phono3py 路：rta(--br) | lbte(--lbte)
     "MESH_OVERRIDE": (None,     "str"),   # 空=用 step4 写入 kl_params 的 MESH
+    # q 网格收敛扫描（P1-1）：""=只跑一套 | auto=三档(N/1.25N/1.5625N) | "a b c; d e f"
+    #   判据：相邻档 300K 面内 κ 变化 < 5%（写进 kappa_summary.json 的 mesh_convergence）
+    "MESH_SCAN":    ("auto",    "str"),   # auto=2D 三档扫描/3D 单套；""=强制单套
+    "MESH_MIN":     (20,        "int"),   # auto 时每方向下限
+    # RTA vs 完整解对照（P1-2）：auto = 2D 跑一次 --lbte（正规过程主导，RTA 会低估 κ）。
+    #   两种解法的输出文件名相同，需跑完 RTA 先改名再跑 LBTE；比值写进 rta_over_full。
+    "COMPARE_LBTE": ("auto",    "str"),   # auto | on | off
     "T_MIN":        (100,       "int"),
     "T_MAX":        (800,       "int"),
     "T_STEP":       (100,       "int"),
     "ISOTOPE":      (True,      "bool"),
-    "SCALEBROAD":   (0.1,       "float"), # shengbte/fourphonon 展宽
+    "SCALEBROAD":   (1.0,       "float"), # shengbte/fourphonon 展宽（ShengBTE 默认 1.0）
     "SHENGBTE_EXE": ("ShengBTE", "str"),
+    # ShengBTE 3ph 求解：True=ShengBTE 默认的迭代自洽解（写 BTE.KappaTensorVsT_CONV），
+    # False=只算 RTA（写 ..._sg）。迭代段在 128 原子/7x7x7 这种大胞上极贵：实测 Mg8C120
+    # 96 核跑 1000 次迭代 15.1 h 后 SIGSEGV（CONV 全 NaN、白烧 13 h），而 RTA 1.5 h 就出全
+    # 温区结果。RTA-only 时 kappa_summary.json 会自动以 ..._sg 为 source（模板已回退）。
+    "KAPPA_CONVERGENCE": (True, "bool"),
+    # ---- ShengBTE 的 MPI/OMP 布局（见 submit_shengbte.tpl 文件头的两个坑）----
+    # ShengBTE 靠 MPI 按 q 点并行，mpirun -n 1 = 串行（实测 11.8 h 零产物）。
+    # 正确布局 = 一个 MPI rank 占一个 NUMA 域：
+    #     NTASKS = TOTAL_CORES / CORES_PER_NUMA，CPUS_PER_TASK = CORES_PER_NUMA
+    # jzzn：192 核 = 24 个 NUMA 域 x 8 核（**不是 16**）-> 取 96 核即 12 rank x 8 线程。
+    # 换集群只改这两个数，模板不用动。SHENGBTE_NTASKS 留 "auto" 即按上面公式算。
+    "SHENGBTE_TOTAL_CORES":    (96,     "int"),
+    "SHENGBTE_CORES_PER_NUMA": (8,      "int"),
+    "SHENGBTE_NTASKS":         ("auto", "str"),
+    # SLURM QoS：默认 premium（每用户 5 个并发作业）。jzzn 上 premium 槽位常被本账号
+    # 其它技能占满，S6_kappa 会以 QOSMaxJobsPerUserLimit 排队等很久；regular 允许
+    # 每用户 50 个并发、墙钟 1 天，RTA 级别的 κ 计算足够。见 submit_shengbte.tpl。
+    "SBATCH_QOS":              ("premium", "str"),
     "FOURPHONON_EXE": ("", "str"),          # fourphonon(multi-GPU) 可执行文件绝对路径
     "FOURPHONON_NGPU": (4, "int"),          # fourphonon 用几张 GPU(rank=卡)
     "FOURPHONON_CPUS_PER_GPU": (8, "int"),  # 每 GPU 配几个 CPU 核(cpus-per-task+OMP)
     # 集群 conda.sh（tf 从 setting/<集群>.yaml 的 conda_sh 注入 step.conf，切集群自动跟着走）
     "CONDA_SH": ("", "str"),
-    # 2D κ 厚度归一化：phono3py 用含真空的原胞体积做分母，2D 面内 κ 被 Lz 稀释，
-    #   需乘 Lz/d（d=有效厚度）。取法：vdw=原子z跨度+两侧vdW半径 | cell=用Lz(即不归一) | 数值=固定Å
+    # 2D κ 厚度归一化：phono3py 用含真空的原胞体积做分母，2D 面内 κ 被胞高稀释，
+    #   需乘 h⊥/d（h⊥=V/A 周期胞高，d=层有效厚度）。
+    #   取法：vdw=原子层跨度+两侧vdW半径 | cell=用 h⊥(即不归一) | 数值=固定Å
     "KAPPA_2D_THICKNESS": ("vdw",  "str"),
     # 2D NAC 覆盖：auto=2D默认不用3D-NAC(LO-TO在2D应趋零)/3D随BORN；on=强制用；off=强制不用
     "KAPPA_NAC":          ("auto", "str"),
 }
 
-# patch_vdw_shared：单一真源在 skill/_common/vdw_radii.py，ke-dft-cpu 读同一份。
-#   两边算层厚用同一个公式 d = zspan + vdW(top) + vdW(bot)，表必须同源。
-try:
-    from vdw_radii import VDW_RADII as _VDW
-except ImportError:
-    _VDW = {
-        "H": 1.20, "Li": 1.82, "Be": 1.53, "B": 1.92, "C": 1.70, "N": 1.55,
-        "O": 1.52, "F": 1.47, "Na": 2.27, "Mg": 1.73, "Al": 1.84, "Si": 2.10,
-        "P": 1.80, "S": 1.80, "Cl": 1.75, "K": 2.75, "Ca": 2.31, "Ti": 2.11,
-        "V": 2.07, "Cr": 2.06, "Mn": 2.05, "Fe": 2.04, "Co": 2.00, "Ni": 1.97,
-        "Cu": 1.96, "Zn": 2.01, "Ga": 1.87, "Ge": 2.11, "As": 1.85, "Se": 1.90,
-        "Br": 1.85, "Mo": 2.17, "Ru": 2.13, "Rh": 2.10, "Pd": 2.10, "Ag": 2.11,
-        "Cd": 2.18, "In": 1.93, "Sn": 2.17, "Sb": 2.06, "Te": 2.06, "I": 1.98,
-        "W": 2.18, "Pt": 2.13, "Au": 2.14, "Hg": 2.23, "Tl": 1.96, "Pb": 2.02,
-        "Bi": 2.07,
-    }
-    print("[WARN] 没找到 _common/vdw_radii.py，用内置最小表")
+# 层厚/归一化口径全部下沉到 skill/_common/thickness_2d.py（vdw 半径表在
+#   skill/_common/vdw_radii.py，ke-dft-cpu 读同一份）——本文件不再自带半径表副本。
 
 def _poscar_species(poscar):
     """从 POSCAR 读每个原子的元素符号（VASP5）；VASP4 无元素行则返回 None。"""
@@ -85,65 +101,273 @@ def _poscar_species(poscar):
 
 
 def two_d_norm_factor(poscar, vac_axis, mode):
-    """2D κ 厚度归一化因子 factor=Lz/d 与元数据。mode: vdw | cell | 数值(Å)。"""
-    import numpy as np
+    """2D κ 厚度归一化因子 factor=h⊥/d 与元数据。mode: vdw | cell | 数值(Å)。
+
+    真源是 skill/_common/thickness_2d.slab_geometry（ke 侧读同一份），本函数只负责
+    从 POSCAR 取晶格 + 元素表再转成 kappa_summary 的字段名。
+
+    修正的三个点（旧实现）：
+      ① 旧版用 Lz=|c| 当分母基准；phono3py/ShengBTE 的分母其实是 V 与面内面积 A，
+         所以基准必须是 h⊥=V/A。c 轴倾斜（α/β≠90°）时 |c|≠V/A，因子会算错。
+      ② 旧版直接取 frac 投影的 max−min；层跨越 z=0/1 周期边界时 span 被算成接近
+         整个胞高 → d>h⊥ → 因子<1（把 κ 又缩小一遍）。现按"最大间隙=真空"切口展开。
+      ③ 旧版没把因子交给 shengbte/fourphonon 模板（那两条路只写原始 κ）。
+    """
     from dim_common import read_poscar_cell_frac
     lat, frac = read_poscar_cell_frac(poscar)
-    lat = np.array(lat, float); frac = np.array(frac, float)
     ax = vac_axis if vac_axis is not None else 2
-    Lz = float(np.linalg.norm(lat[ax]))
-    axis_unit = lat[ax] / Lz
-    proj = (frac @ lat) @ axis_unit           # 原子沿真空轴的笛卡尔投影
-    zspan = float(proj.max() - proj.min()) if len(proj) else 0.0
-    m = str(mode).strip().lower()
-    try:
-        d = float(m); conv = "fixed %.3f A" % d
-    except ValueError:
-        if m in ("cell", "lz", "none", ""):
-            d = Lz; conv = "cell Lz (no norm)"
-        else:  # vdw
-            sp = _poscar_species(poscar)
-            if sp and len(sp) == len(proj):
-                order = np.argsort(proj)
-                bot, top = sp[int(order[0])], sp[int(order[-1])]
-                d = zspan + _VDW.get(top, 2.0) + _VDW.get(bot, 2.0)
-                conv = "zspan %.2f + vdW(%s,%s)" % (zspan, top, bot)
-            else:
-                d = Lz; conv = "cell Lz (no species -> fallback)"
-    factor = Lz / d if d else 1.0
-    meta = {"kappa_2d_norm_factor": round(factor, 5), "Lz_ang": round(Lz, 3),
-            "thickness_d_ang": round(d, 3) if d else None,
-            "thickness_convention": conv, "atomic_zspan_ang": round(zspan, 3),
-            "note": "kappa_2d_normalized = kappa_raw * Lz/d（面内分量才有物理意义）"}
+    sp = _poscar_species(poscar)
+    if sp is not None and len(sp) != len(frac):
+        sp = None
+    g = slab_geometry(lat, frac, sp, vac_axis=ax, mode=mode)
+    factor = float(g["kappa_2d_norm_factor"])
+    meta = {k: g[k] for k in ("h_perp_A", "Lz_A", "atomic_span_A", "vacuum_gap_A",
+                              "thickness_d_A", "thickness_convention",
+                              "kappa_2d_norm_factor")}
+    meta["note"] = ("kappa_2d_normalized = kappa_raw * h_perp/d"
+                    "（h_perp=V/A；面内分量才有物理意义，2D 的 zz 分量无物理意义）")
+    # ★ 兼容字段（不要删）：ke-dft-cpu/step8.1_boltztrap/gen_step11_boltztrap.py 直接读
+    #   kappa_summary.json 的 Lz_ang / thickness_d_ang / thickness_convention 做两条链的
+    #   元胞与厚度一致性闸门，gen_step13_output 也读 Lz_ang。这里的 Lz_ang 保持旧含义
+    #   =|c|（闸门要跟 ke 的 cell_c_A 比），h⊥ 另有 h_perp_A 字段，两者不再混用。
+    meta["Lz_ang"] = g["Lz_A"]
+    meta["thickness_d_ang"] = g["thickness_d_A"]
+    meta["atomic_zspan_ang"] = g["atomic_span_A"]
     return factor, meta
 
 
-def build_extract(factor, meta):
+# 材料级 thickness_2d.json（文档 P0-2(b) 的 kl/ke 共用契约）：谁先跑谁写，对方读它做对照。
+#   作业 cwd 是 <材料>/<步骤>，材料根 = ".."；先确认 ".." 里真有别的步骤目录（说明
+#   它就是 gen 运行的那个步骤根）才写，避免路径猜错写到别处。best-effort，失败不拦作业。
+_MAT_LEVEL = [
+    "if THICK2D:\n",
+    "    try:\n",
+    "        import glob as _g, os as _os, sys as _s\n",
+    "        if _g.glob(_os.path.join('..', 'step*')):\n",
+    # 关键：作业 cwd 是 <材料>/<技能>/<步骤>，thickness_2d.py 被 gen_need 推到
+    # <材料>/<技能>/（= '..'），不在 cwd 里。不把 '..' 加进 sys.path 就会
+    # ModuleNotFoundError 被 except 吞成一条 [WARN] —— 实测 2026-09-16 Mo2S3
+    # 试跑就是这么静默失败的（材料级 thickness_2d.json 一直没生成）。
+    "            _s.path.insert(0, _os.path.abspath('..'))\n",
+    "            from thickness_2d import write_material_level\n",
+    "            print(write_material_level('..', THICK2D))\n",
+    "        else:\n",
+    "            print('[..] 父目录里没识别出步骤目录，跳过材料级 thickness_2d.json')\n",
+    "    except Exception as _e:\n",
+    "        print('[WARN] 材料级 thickness_2d.json 写入跳过: %s' % _e)\n",
+]
+
+def build_extract(factor, meta, thick2d=None, plan=None, primary=None):
     """phono3py 跑完后就地抽 κ 到 kappa_summary.json（计算节点 conda 里执行）。
-    factor!=1 时额外写 kappa_2d_normalized（原始 κ × Lz/d）。"""
+
+    factor!=1 时额外写 kappa_2d_normalized_*（原始 κ × h⊥/d）。2D 里 zz 分量没有
+    物理意义，所以面内 xx/yy 单独也出一份 kappa_*_inplane_xx_yy 方便下游直接用
+    （kappa_xx_yy_zz 保持原样，不动下游已有读取口径）。
+    thick2d 非空时再落一份 thickness_2d.json（本步算出的层厚口径留档，
+    供 ke-dft-cpu 的 AMSET 步对照/复用同一口径）。
+    """
     import json as _json
-    return (
-        "python - <<'PY'\n"
-        "import glob,json,h5py,numpy as np\n"
-        "FACTOR=%r\n" % float(factor) +
-        "META=json.loads(%r)\n" % _json.dumps(meta, ensure_ascii=False) +
-        "fs=sorted(glob.glob('kappa-m*.hdf5'))\n"
-        "d={'KAPPA_DONE':bool(fs)}\n"
-        "d.update(META)\n"
-        "if fs:\n"
-        "    with h5py.File(fs[-1],'r') as f:\n"
-        "        T=np.array(f['temperature']); K=np.array(f['kappa'])\n"
-        "        d['file']=fs[-1]; d['temperatures']=T.tolist()\n"
-        "        raw=[[float(K[i,0]),float(K[i,1]),float(K[i,2])] for i in range(len(T))]\n"
-        "        d['kappa_xx_yy_zz']=raw\n"
-        "        if abs(FACTOR-1.0)>1e-9:\n"
-        "            d['kappa_2d_normalized_xx_yy_zz']=[[v*FACTOR for v in r] for r in raw]\n"
-        "json.dump(d,open('kappa_summary.json','w'),ensure_ascii=False,indent=2)\n"
-        "print('KAPPA_DONE' if fs else 'NO_KAPPA')\n"
-        "PY")
+    plan = plan or []
+    body = [
+        "import glob, json, h5py, numpy as np",
+        "FACTOR=%r" % float(factor),
+        "META=json.loads(%r)" % _json.dumps(meta, ensure_ascii=False),
+        "THICK2D=json.loads(%r)" % _json.dumps(thick2d or {}, ensure_ascii=False),
+        "PLAN=json.loads(%r)" % _json.dumps(plan, ensure_ascii=False),
+        "PRIMARY=%r" % (primary or ""),
+        "if THICK2D:",
+        "    json.dump(THICK2D,open('thickness_2d.json','w'),ensure_ascii=False,indent=2)",
+    ] + [ln.rstrip("\n") for ln in _MAT_LEVEL] + [
+        "def _read(f):",
+        "    with h5py.File(f, 'r') as h:",
+        "        T = np.array(h['temperature']); K = np.array(h['kappa'])",
+        "    # phono3py 的 kappa 数据集是 (n_T, 6) Voigt，这里只取对角 xx/yy/zz",
+        "    raw = [[float(K[i,0]), float(K[i,1]), float(K[i,2])] for i in range(len(T))]",
+        "    return [float(t) for t in T], raw",
+        "d = {'KAPPA_DONE': False}",
+        "d.update(META)",
+        "if THICK2D: d['thickness_2d_source'] = 'kl-dft-cpu:step6_kappa'",
+        "runs, missing, used = [], [], set()",
+        "for p in PLAN:",
+        "    _f0 = p['file']",
+        "    _cand = [x for x in glob.glob(_f0) if x not in used]",
+        "    if not _cand:",
+        "        # 文件名兜底：主文件是 kappa-m<digits>.hdf5，别把 -sg/-gv/mfp 当它",
+        "        _g = [x for x in glob.glob('kappa-m*.hdf5') if x not in used",
+        "              and 'mfp' not in x and '-sg' not in x and '-gv' not in x]",
+        "        _d = [x for x in _g if p['digits'] in x]",
+        "        if p.get('tagged'):",
+        "            _d = [x for x in _d if x.endswith('.' + p['method'] + '.hdf5')]",
+        "        _cand = _d or _g",
+        "    if not _cand:",
+        "        missing.append(_f0)",
+        "        d.setdefault('errors', []).append(",
+        "            '缺 %s（%s / %s）：该次 phono3py 没写出 kappa，看 phono3py_kappa.log'",
+        "            % (_f0, p['mesh'], p['method']))",
+        "        continue",
+        "    f = sorted(_cand)[0]",
+        "    used.add(f)",
+        "    T, raw = _read(f)",
+        "    j = int(np.argmin(np.abs(np.array(T) - 300.0)))",
+        "    rec = {'file': f, 'mesh': p['mesh'], 'method': p['method'], 'temperatures': T,",
+        "           'kappa_xx_yy_zz': raw,",
+        "           'kappa_inplane_xx_yy': [[v[0], v[1]] for v in raw],",
+        "           'kappa_300K_xx_yy_zz': raw[j],",
+        "           'kappa_inplane_300K_xx_yy': [raw[j][0], raw[j][1]],",
+        "           'kappa_inplane_300K': 0.5 * (raw[j][0] + raw[j][1])}",
+        "    if abs(FACTOR - 1.0) > 1e-9:",
+        "        rec['kappa_2d_normalized_xx_yy_zz'] = [[v * FACTOR for v in r] for r in raw]",
+        "        rec['kappa_2d_normalized_inplane_xx_yy'] = [[v[0]*FACTOR, v[1]*FACTOR] for v in raw]",
+        "        rec['kappa_2d_normalized_300K_xx_yy_zz'] = [v * FACTOR for v in raw[j]]",
+        "        rec['kappa_2d_normalized_inplane_300K'] = rec['kappa_inplane_300K'] * FACTOR",
+        "    runs.append(rec)",
+        "d['runs'] = runs",
+        "d['mesh_run_count'] = len(PLAN)",
+        "d['meshes'] = [p['mesh'] for p in PLAN]",
+        "# 顶层字段仍取【主口径】那一档（step.conf 的 BTE_METHOD + 最细网格），",
+        "#   这样 ke-dft-cpu / te-screen 读 kappa_xx_yy_zz 的口径完全不变。",
+        "prim = next((r for r in runs if (r['mesh'] + '|' + r['method']) == PRIMARY), None)",
+        "if prim is None and runs: prim = runs[-1]",
+        "if prim is not None:",
+        "    for k in ('file','mesh','temperatures','kappa_xx_yy_zz','kappa_inplane_xx_yy',",
+        "              'kappa_300K_xx_yy_zz','kappa_inplane_300K_xx_yy','kappa_inplane_300K',",
+        "              'kappa_2d_normalized_xx_yy_zz','kappa_2d_normalized_inplane_xx_yy',",
+        "              'kappa_2d_normalized_300K_xx_yy_zz','kappa_2d_normalized_inplane_300K'):",
+        "        if k in prim: d[k] = prim[k]",
+        "    d['bte_method'] = prim['method']",
+        "# ---- 网格收敛（P1-1）：同方法相邻档的 300K 面内 κ 相对变化 ----",
+        "_by = {}",
+        "for r in runs: _by.setdefault(r['method'], []).append(r)",
+        "for _m, _rs in _by.items():",
+        "    if len(_rs) < 2: continue",
+        "    _rs = sorted(_rs, key=lambda r: [int(x) for x in r['mesh'].split()])",
+        "    _kv = [r['kappa_inplane_300K'] for r in _rs]",
+        "    _rel = [abs(_kv[i+1]-_kv[i])/abs(_kv[i])*100.0",
+        "            for i in range(len(_kv)-1) if abs(_kv[i]) > 1e-12]",
+        "    d.setdefault('mesh_convergence', {})[_m] = {",
+        "        'meshes': [r['mesh'] for r in _rs], 'kappa300_inplane': _kv,",
+        "        'rel_change_pct': _rel, 'max_rel_change_pct': (max(_rel) if _rel else None),",
+        "        'converged_5pct': bool(_rel) and max(_rel) < 5.0}",
+        "    if _rel and max(_rel) >= 5.0:",
+        "        d.setdefault('warnings', []).append(",
+        "            '%s 网格还没收敛：相邻档 300K 面内 κ 变化 %.1f%% ≥ 5%%，请继续加密网格'",
+        "            % (_m, max(_rel)))",
+        "# ---- RTA vs 完整解（P1-2）：正规过程主导的 2D 里 RTA 会低估 κ ----",
+        "_rta = [r for r in runs if r['method'] == 'rta']",
+        "_full = [r for r in runs if r['method'] == 'lbte']",
+        "_common = sorted({r['mesh'] for r in _rta} & {r['mesh'] for r in _full},",
+        "                 key=lambda s: [int(x) for x in s.split()])",
+        "if _common:",
+        "    _m0 = _common[0]",
+        "    _a = next(r for r in _rta if r['mesh'] == _m0)",
+        "    _b = next(r for r in _full if r['mesh'] == _m0)",
+        "    _ra, _rb = _a['kappa_inplane_300K'], _b['kappa_inplane_300K']",
+        "    d['rta_over_full'] = {'mesh': _m0, 'kappa300_inplane_rta': _ra,",
+        "                          'kappa300_inplane_full': _rb,",
+        "                          'ratio': (_ra / _rb if abs(_rb) > 1e-12 else None),",
+        "                          'note': 'ratio<1 说明 RTA 低估 κ（2D 里正规过程主导时很常见）'}",
+        "    if _rb and _ra / _rb < 0.9:",
+        "        d.setdefault('warnings', []).append(",
+        "            'RTA/LBTE = %.3f，RTA 明显低估，生产值建议用 lbte' % (_ra / _rb))",
+        "d['KAPPA_DONE'] = bool(runs) and not missing and (not PLAN or len(runs) == len(PLAN))",
+        "json.dump(d, open('kappa_summary.json','w'), ensure_ascii=False, indent=2)",
+        "for _e in d.get('errors', []): print('  ' + _e)",
+        "for _w in d.get('warnings', []): print('[WARN] ' + _w)",
+        "print('KAPPA_DONE' if d['KAPPA_DONE'] else 'NO_KAPPA')",
+    ]
+    return "python - <<'PY'\n" + "\n".join(body) + "\nPY"
 
 
-def build_phono3py_cmd(mesh, ts, isotope, use_nac, extract, bte="rta"):
+def meshes(conf, params, dim, vac_axis):
+    """本步要跑的 q 网格列表（P1-1）。
+
+    MESH_SCAN 未设/auto → 2D 自动三档收敛扫描，3D 单套（旧行为）；
+                          网格收敛性没法从单次结果看出来，而 2D 的 ZA 支在 Γ 附近
+                          发散最慢、恰恰最需要这个判据，所以默认值按维度分。
+    MESH_SCAN = ""     → 显式只跑 kl_params（S4 按 Q_LEN 估好的）那一套
+    MESH_SCAN = on/auto→ 强制三档：N、ceil(1.25N)、ceil(1.5625N)（2D 真空轴恒 1）
+    MESH_SCAN = off    → 强制单套（同 ""）
+    MESH_SCAN = "a b c; d e f" → 显式多套
+    代价：三档 = 3 次完整 κ 求解（3D 不受影响）。
+    """
+    import math
+    ax = vac_axis if vac_axis is not None else 2
+    base = kc.mesh_str((conf["MESH_OVERRIDE"] or params.get("MESH") or "20 20 20").split(),
+                       dim, ax)
+    scan = conf["MESH_SCAN"]
+    scan = "auto" if scan is None else str(scan).strip()
+    if scan == "":                       # 显式关掉（step.conf 写 MESH_SCAN = ）
+        return [base]
+    if scan.lower() in ("auto",):
+        # 默认 auto：只有 2D 展开扫描；3D 保持单套，不动既有 3D 项目的成本
+        if dim != "2d":
+            return [base]
+        scan = "on"
+    if scan.lower() in ("on", "auto3d", "auto"):
+        n = [int(x) for x in base.split()]
+        out = []
+        for f in (1.0, 1.25, 1.5625):
+            # 第一档就是 step4 定的那套（原样，不再被 MESH_MIN 抬高 —— 扫描要以
+            #   配置的网格为锚点）；只有加密档才吃 MESH_MIN 下限。
+            m = [1 if (dim == "2d" and i == ax)
+                 else (int(v) if f == 1.0
+                       else max(int(conf["MESH_MIN"]), int(math.ceil(v * f))))
+                 for i, v in enumerate(n)]
+            out.append(" ".join(str(x) for x in m))
+        # 去重 + 保持升序（网格小的时候 1.25 倍可能四舍五入撞档）
+        seen, uniq = set(), []
+        for m in out:
+            if m not in seen:
+                seen.add(m)
+                uniq.append(m)
+        return uniq
+    return [kc.mesh_str(s.split(), dim, ax) for s in scan.split(";") if s.strip()]
+
+
+def extract_plan(plan, tagged):
+    """PLAN：extract 要读哪几个 kappa 文件、分别是哪档网格/哪种解法。
+    tagged=True 时文件名是 kappa-m<digits>.<method>.hdf5（见 build_phono3py_cmd）。"""
+    out = []
+    for m, meth in plan:
+        d = "".join(str(m).split())
+        f = ("kappa-m%s.%s.hdf5" % (d, meth)) if tagged else ("kappa-m%s.hdf5" % d)
+        out.append({"file": f, "mesh": m, "method": meth, "digits": d, "tagged": bool(tagged)})
+    return out
+
+
+def norm_subs(factor, meta, thick2d=None):
+    """shengbte / fourphonon 模板的 2D 归一化占位符（那两条路原先只写原始 κ）。"""
+    return {"KAPPA_2D_FACTOR": repr(float(factor)),
+            "KAPPA_2D_META": json.dumps(meta, ensure_ascii=False),
+            "KAPPA_2D_THICK2D": json.dumps(thick2d or {}, ensure_ascii=False)}
+
+
+def build_phono3py_cmd(plan, ts, isotope, use_nac, extract, tagged=False):
+    """按 plan=[(mesh, method)] 依次跑 phono3py，最后一次收尾做 extract。
+
+    tagged=True（同一网格既跑 RTA 又跑 LBTE 时）：每跑完一次就把主 kappa 文件改名成
+    kappa-m<digits>.<method>.hdf5 —— phono3py 两种解法的输出文件名完全相同，不改名
+    后者会直接覆盖前者，对照就白跑了。文件名仍以 kappa-m 开头，不影响 skill.yaml 里
+    声明的 outputs 通配。
+    """
+    steps = []
+    for _mesh, _method in plan:
+        _digits = "".join(str(_mesh).split())
+        _flag = "--lbte" if str(_method).lower() == "lbte" else "--br"
+        _nac = "" if use_nac else " --nonac"
+        # fc2/fc3 已在 step5_fc 拟好并拷到本目录，phono3py-load 默认读 cwd 的
+        # fc2.hdf5/fc3.hdf5（--no-read-fc2/--no-read-fc3 关闭），不会再从 disp.yaml 重拟。
+        steps.append('phono3py-load phono3py_disp.yaml %s --mesh %s --ts="%s"%s%s '
+                     '2>&1 | tee phono3py_kappa.log'
+                     % (_flag, _mesh, ts, " --isotope" if isotope else "", _nac))
+        if tagged:
+            steps.append('[ -f "kappa-m%s.hdf5" ] && mv "kappa-m%s.hdf5" '
+                         '"kappa-m%s.%s.hdf5" || true'
+                         % (_digits, _digits, _digits, _method))
+    return "\n".join(steps + [extract])
+
+
+def _unused_build_phono3py_cmd(mesh, ts, isotope, use_nac, extract, bte="rta"):
     method = "--lbte" if str(bte).lower() == "lbte" else "--br"
     # NAC：有 nac_params/BORN 就默认启用；无 --nac 开关（会被当 --nac-method），要关才 --nonac。
     #   phono3py 3.24/4.x 行为一致。use_nac=True 就默认带上（不加开关），否则显式 --nonac。
@@ -185,7 +409,8 @@ def prepare_shengbte(cwd, out, sb_src, conf, mesh, use_nac):
     C = {"kappa_mesh": [int(x) for x in mesh.split()],
          "kappa_t_min": conf["T_MIN"], "kappa_t_max": conf["T_MAX"],
          "kappa_t_step": conf["T_STEP"], "kappa_scalebroad": conf["SCALEBROAD"],
-         "kappa_isotope": conf["ISOTOPE"], "kappa_convergence": True}
+         "kappa_isotope": conf["ISOTOPE"],
+         "kappa_convergence": bool(conf["KAPPA_CONVERGENCE"])}
     lk._write_shengbte_control(C, atoms, sc, out / "CONTROL", use_nac)
     print("[OK] ShengBTE 输入就绪：FORCE_CONSTANTS_2ND/3RD（拷自 S5）+ CONTROL")
     if use_nac:
@@ -270,30 +495,95 @@ def main():
             pass
 
     params = kc.read_kl_params(out / kc.KL_PARAMS)
-    # MESH_OVERRIDE 也过 mesh_str：3D 材料被误写成 "N N 1" 时自动纠正成 "N N N"。
-    mesh = kc.mesh_str(
-        (conf["MESH_OVERRIDE"] or params.get("MESH") or "20 20 20").split(),
-        dim, vac_axis if vac_axis is not None else 2)
-    ts = " ".join(str(t) for t in range(conf["T_MIN"], conf["T_MAX"] + 1, conf["T_STEP"]))
     solver = str(conf["SOLVER"]).lower()
-    print("[..] 求解器=%s mesh=%s 温度=%s K NAC=%s DIM=%s" % (solver, mesh, ts, use_nac, dim or "?"))
+    vac_ax = vac_axis if vac_axis is not None else 2
+    # MESH_OVERRIDE / kl_params 的 MESH 也过 mesh_str：3D 被误写成 "N N 1" 时自动纠正。
+    mesh_list = meshes(conf, params, dim, vac_ax)
+    mesh = mesh_list[-1]
+    if solver != "phono3py" and len(mesh_list) > 1:
+        sys.exit("[ERROR] MESH_SCAN 多套网格只有 phono3py 支持（shengbte/fourphonon 单套）；"
+                 "当前 SOLVER=%s，请把 MESH_SCAN 留空或只写一套。" % solver)
+    if dim == "2d" and len(mesh_list) == 1:
+        print("[..] 2D 提示：MESH_SCAN=auto 可一次跑三档网格做收敛判据（P1-1，5%% 判据）")
+    bte_primary = str(conf["BTE_METHOD"] or "rta").lower()
+    # RTA vs 完整解（P1-2）：auto = 2D 打开（正规过程主导，RTA 会低估 κ）
+    _cm = str(conf["COMPARE_LBTE"] or "auto").strip().lower()
+    if _cm in ("on", "true", "1", "yes"):
+        compare_lbte = True
+    elif _cm in ("off", "false", "0", "no"):
+        compare_lbte = False
+    else:
+        # auto：不自动跑 LBTE 对照，只提示。
+        #   实测（2026-09-16，Mo2S3 2D，32×32×1）：RTA 三档网格合计 ~5 分钟，
+        #   而 LBTE 的碰撞矩阵是 (nq×nb×3)² 稠密矩阵、逐温度 dsyev 对角化，
+        #   同一网格上跑了 >50 分钟仍未结束（量级 1~2 个数量级）。默认静默开这种
+        #   开销不可接受，所以 auto = 关；文档的"RTA 会低估"结论改成显式提示。
+        compare_lbte = False
+        if dim == "2d":
+            print("[WARN] 2D 的正规过程可能让 RTA 低估 κ（文档结论），但本步默认不做 LBTE "
+                  "对照：实测 LBTE 比 RTA 贵 1~2 个数量级（稠密碰撞矩阵对角化）。\n"
+                  "       需要对照就在 step.conf 里设 COMPARE_LBTE = on（只跑最细那档网格）。")
+    plan = [(m, bte_primary) for m in mesh_list]
+    if compare_lbte and solver == "phono3py":
+        # 对照跑在最细那档网格上（同一网格两种解法 → 文件名会撞，见 build_phono3py_cmd）
+        plan.append((mesh_list[-1], "lbte" if bte_primary == "rta" else "rta"))
+    tagged = len({m for m, _ in plan}) != len(plan)
+    primary = "%s|%s" % (mesh_list[-1], bte_primary)
+    # P1-1/P1-2 的代价必须显式可见：一次 κ 求解很贵，"默认开了个对照"不该是惊喜。
+    _extra = []
+    if len(mesh_list) > 1:
+        _extra.append("网格扫描 %d 档" % len(mesh_list))
+    if len(plan) > len(mesh_list):
+        _extra.append("%s 对照" % plan[-1][1].upper())
+    if _extra:
+        print("[..] 本步共 %d 次完整 κ 求解（%s）—— 每次都是一整套 phono3py 计算，"
+              "不想跑就在 step.conf 里关：MESH_SCAN = / COMPARE_LBTE = off"
+              % (len(plan), " + ".join(_extra)))
+    if compare_lbte:
+        print("[WARN] 已开启 LBTE 对照：该次比同网格 RTA 慢 1~2 个数量级"
+              "（碰撞矩阵按 (nq×nb×3)² 稠密对角化），请留足墙钟时间。")
+    ts = " ".join(str(t) for t in range(conf["T_MIN"], conf["T_MAX"] + 1, conf["T_STEP"]))
+    print("[..] 求解器=%s mesh=%s 温度=%s K NAC=%s DIM=%s"
+          % (solver, " -> ".join(mesh_list), ts, use_nac, dim or "?"))
 
     # 2D κ 厚度归一化因子（3D 时 factor=1、不归一）
+    # REQ_2D：2D 时提交模板渲染结果里必须出现的字面量。项目级副本遮蔽技能模板时，
+    #   老副本没有这些字段 → 归一化被静默吃掉（实测 2026-09-16：本项目 step6_kappa/
+    #   submit_shengbte.tpl 就是这种 0 钩子的旧拷贝）。这里硬拦。
+    REQ_2D = ("kappa_2d_normalized",) if dim == "2d" else ()
     factor, meta = 1.0, {"dim": dim or "?"}
+    thick2d = None
     if dim == "2d":
         try:
             factor, m2 = two_d_norm_factor(out / "POSCAR", vac_axis, conf["KAPPA_2D_THICKNESS"])
             meta.update(m2)
-            print("[..] 2D κ 归一化：Lz=%.3f d=%.3f factor=Lz/d=%.4f (%s)"
-                  % (meta["Lz_ang"], meta["thickness_d_ang"], factor, meta["thickness_convention"]))
+            thick2d = dict(m2)
+            thick2d.update({"dim": "2d",
+                            "vac_axis": int(vac_axis if vac_axis is not None else 2),
+                            "source": "kl-dft-cpu:step6_kappa",
+                            "poscar": "POSCAR"})
+            print("[..] 2D κ 归一化：h⊥=%.3f Å（|c|=%.3f Å）层厚 d=%.3f Å "
+                  "（span=%.3f，真空隙=%.3f）→ factor=h⊥/d=%.4f  [%s]"
+                  % (m2["h_perp_A"], m2["Lz_A"], m2["thickness_d_A"], m2["atomic_span_A"],
+                     m2["vacuum_gap_A"], factor, m2["thickness_convention"]))
+            if thick2d["vacuum_gap_A"] <= thick2d["atomic_span_A"]:
+                print("[WARN] 真空隙 %.2f Å ≤ 层厚 %.2f Å：Wigner-Seitz 最近镜像可能跨真空，"
+                      "Born-Huang 约束里的 r_ij 会取错；建议回 S1 加厚真空重跑。"
+                      % (thick2d["vacuum_gap_A"], thick2d["atomic_span_A"]))
         except Exception as e:
-            print("[WARN] 2D 归一化因子算失败，只出原始 κ：%s" % e)
+            print("[WARN] 2D 归一化因子算失败，只出原始 κ —— 面内 κ 仍是含真空胞的体积"
+                  "口径（被 h⊥ 稀释，数值不可直接使用）：%s" % e)
 
     here = Path(__file__).resolve().parent
     if solver == "phono3py":
-        cmd = build_phono3py_cmd(mesh, ts, conf["ISOTOPE"], use_nac,
-                                 build_extract(factor, meta), conf["BTE_METHOD"])
-        print("[..] BTE 方法=%s" % str(conf["BTE_METHOD"]).lower())
+        cmd = build_phono3py_cmd(
+            plan, ts, conf["ISOTOPE"], use_nac,
+            build_extract(factor, meta, thick2d, extract_plan(plan, tagged), primary),
+            tagged=tagged)
+        print("[..] BTE 方法=%s%s" % (bte_primary,
+              ("；另跑 %d 次（%s 对照，P1-2）" % (len(plan) - len(mesh_list),
+               "lbte" if bte_primary == "rta" else "rta"))
+              if len(plan) > len(mesh_list) else ""))
         tpl = kc.resolve_submit(here, "3d", "submit_p3py")   # 单节点，无 2D/3D 之分
         # submit_p3py.tpl 的 {{CONDA_SH}}/{{CONDA_ENV}} 必须补传，否则残留字面占位符
         # （运行时 source {{CONDA_SH}} 报 No such file）。kl-dft 的 phono3py 环境是
@@ -304,26 +594,125 @@ def main():
                          "CONDA_SH": (conf["CONDA_SH"]
                                       or "/public/home/wangchao/miniconda3/etc/profile.d/conda.sh"),
                          "CONDA_ENV": "atomate2_p_a",
-                         "P3PY_CMD": cmd})
+                         "P3PY_CMD": cmd},
+                        require=REQ_2D, label="2D 归一化：")
     elif solver == "shengbte":
         prepare_shengbte(cwd, out, sbd, conf, mesh, use_nac)
         tpl = kc.resolve_submit(here, "3d", "submit_shengbte")
+        # MPI/OMP 布局：一个 rank 一个 NUMA 域。rank=1 会退化成串行（ShengBTE 靠
+        # MPI 按 q 点并行），所以这里必须显式算出来，不能沿用模板里的常量。
+        _cpus_per_numa = int(conf["SHENGBTE_CORES_PER_NUMA"] or 8)
+        _total = int(conf["SHENGBTE_TOTAL_CORES"] or 96)
+        _nt_raw = str(conf["SHENGBTE_NTASKS"] or "auto").strip()
+        if _nt_raw and _nt_raw.lower() != "auto":
+            try:
+                _ntasks = int(_nt_raw)
+            except ValueError:
+                sys.exit("[ERROR] SHENGBTE_NTASKS=%r 不是整数也不是 auto" % _nt_raw)
+        else:
+            _ntasks = max(1, _total // _cpus_per_numa)
+        if _ntasks <= 1:
+            sys.exit("[ERROR] SHENGBTE_NTASKS 算出来是 %d —— ShengBTE 靠 MPI 按 q 点"
+                     "并行，单进程等于串行（实测 11.8 h 零产物）。请检查 step.conf 的"
+                     " SHENGBTE_TOTAL_CORES=%d / SHENGBTE_CORES_PER_NUMA=%d。"
+                     % (_ntasks, _total, _cpus_per_numa))
+        if _ntasks * _cpus_per_numa != _total:
+            print("[WARN] SHENGBTE 布局 %d rank x %d 线程 = %d 核，与 "
+                  "SHENGBTE_TOTAL_CORES=%d 不一致（按 rank 数为准）"
+                  % (_ntasks, _cpus_per_numa, _ntasks * _cpus_per_numa, _total))
+        print("[..] ShengBTE 布局：%d MPI ranks x %d OMP threads = %d 核"
+              % (_ntasks, _cpus_per_numa, _ntasks * _cpus_per_numa))
+        # NTASKS/CPUS_PER_TASK/QOS：2026-09-16 从 taskflow-v2.0 同步。
+        #   ShengBTE 靠 MPI 按 q 点并行，模板里写死 mpirun -n 1 = 串行（实测 11.8 h
+        #   零产物），所以这三个必须由 gen 按集群 NUMA 拓扑算好填进去；模板里另有
+        #   SLURM_NTASKS<=1 的退化保护兜底。
         kc.write_submit(tpl, out / "submit.sh",
                         {"JOBNAME": kc.new_jobname(cwd, "S6kappa"),
-                         "SHENGBTE_EXE": conf["SHENGBTE_EXE"]})
+                         "SHENGBTE_EXE": conf["SHENGBTE_EXE"],
+                         "NTASKS": str(_ntasks),
+                         "CPUS_PER_TASK": str(_cpus_per_numa),
+                         "QOS": str(conf["SBATCH_QOS"] or "premium"),
+                         **norm_subs(factor, meta, thick2d)},
+                        require=REQ_2D, label="2D 归一化：")
+        # [FIX P48] SLURM QoS comes from step.conf, not from whichever copy of the
+        # template already sits on the cluster.  tf never overwrites an existing
+        # gen_need asset ("材料目录已有的文件不覆盖"), and every project keeps its own
+        # project_setting/templates/step6_kappa/submit_shengbte.tpl from the day it
+        # was initialised -- so a project copy carrying --qos=premium pins S6_kappa
+        # to premium's 5-jobs-per-user limit forever, no matter what the skill's
+        # template says (measured 2026-09-16: Mg4C60 kappa jobs stuck at
+        # QOSMaxJobsPerUserLimit for 40+ min while the local template said
+        # {{QOS}}).  Rewrite the RENDERED submit.sh from conf["SBATCH_QOS"], which
+        # is always fresh because the gen script itself is always re-pushed.
+        _qos = str(conf["SBATCH_QOS"] or "premium").strip()
+        _sh = out / "submit.sh"
+        _txt = _sh.read_text(encoding="utf-8")
+        _txt = re.sub(r"(?m)^#SBATCH --qos=.*$", "#SBATCH --qos=%s" % _qos, _txt)
+        # [FIX P48] the SAME shadowing trap hits the completion marker: the
+        # template's summary block lists which tensor files count as "done", and a
+        # stale project copy of submit_shengbte.tpl only knows _CONV/_RTA.  ShengBTE's
+        # RTA product is BTE.KappaTensorVsT_sg ( _RTA is the fourphonon name), so an
+        # RTA-only run -- or a run whose iterative stage crashed, like Mg8C120 v4
+        # (CONV = 1 NaN row after 15 h, while _sg had all 8 temperatures) -- was
+        # reported KAPPA_DONE=false even though the physics was complete.  Rewrite
+        # the rendered candidate line here, where the code is always current.
+        _cand = ('cand = ["BTE.KappaTensorVsT_CONV", "BTE.KappaTensorVsT_RTA", '
+                 '"BTE.KappaTensorVsT_sg"]')
+        _txt, _ncand = re.subn(r"(?m)^cand = \[.*\]$", _cand, _txt)
+        if _ncand == 0:
+            print("[WARN] submit.sh 没有 cand = [...] 行（旧模板？）：kappa_summary 的"
+                  "完成标记可能仍只认 _CONV/_RTA，RTA-only 运行会被误判 KAPPA_DONE=false")
+        _sh.write_text(_txt, encoding="utf-8", newline="\n")
+        print("[..] SLURM QoS = %s（step.conf 的 SBATCH_QOS；模板里的旧值会被覆盖）"
+              % _qos)
+        # [FIX P48] SLURM QoS comes from step.conf, not from whichever copy of the
+        # template already sits on the cluster.  tf never overwrites an existing
+        # gen_need asset ("材料目录已有的文件不覆盖"), and every project keeps its own
+        # project_setting/templates/step6_kappa/submit_shengbte.tpl from the day it
+        # was initialised -- so a project copy carrying --qos=premium pins S6_kappa
+        # to premium's 5-jobs-per-user limit forever, no matter what the skill's
+        # template says (measured 2026-09-16: Mg4C60 kappa jobs stuck at
+        # QOSMaxJobsPerUserLimit for 40+ min while the local template said
+        # {{QOS}}).  Rewrite the RENDERED submit.sh from conf["SBATCH_QOS"], which
+        # is always fresh because the gen script itself is always re-pushed.
+        _qos = str(conf["SBATCH_QOS"] or "premium").strip()
+        _sh = out / "submit.sh"
+        _txt = _sh.read_text(encoding="utf-8")
+        _txt = re.sub(r"(?m)^#SBATCH --qos=.*$", "#SBATCH --qos=%s" % _qos, _txt)
+        # [FIX P48] the SAME shadowing trap hits the completion marker: the
+        # template's summary block lists which tensor files count as "done", and a
+        # stale project copy of submit_shengbte.tpl only knows _CONV/_RTA.  ShengBTE's
+        # RTA product is BTE.KappaTensorVsT_sg ( _RTA is the fourphonon name), so an
+        # RTA-only run -- or a run whose iterative stage crashed, like Mg8C120 v4
+        # (CONV = 1 NaN row after 15 h, while _sg had all 8 temperatures) -- was
+        # reported KAPPA_DONE=false even though the physics was complete.  Rewrite
+        # the rendered candidate line here, where the code is always current.
+        _cand = ('cand = ["BTE.KappaTensorVsT_CONV", "BTE.KappaTensorVsT_RTA", '
+                 '"BTE.KappaTensorVsT_sg"]')
+        _txt, _ncand = re.subn(r"(?m)^cand = \[.*\]$", _cand, _txt)
+        if _ncand == 0:
+            print("[WARN] submit.sh 没有 cand = [...] 行（旧模板？）：kappa_summary 的"
+                  "完成标记可能仍只认 _CONV/_RTA，RTA-only 运行会被误判 KAPPA_DONE=false")
+        _sh.write_text(_txt, encoding="utf-8", newline="\n")
+        print("[..] SLURM QoS = %s（step.conf 的 SBATCH_QOS；模板里的旧值会被覆盖）"
+              % _qos)
     elif solver == "fourphonon":
-        fp_exe = str(conf.get("FOURPHONON_EXE") or "").strip()
+        # StepConf 没有 .get()（只有 __getitem__）—— 原来写 conf.get(...) 会直接
+        # AttributeError，SOLVER=fourphonon 根本进不来。用 [] 取（缺键回落 SPEC 默认）。
+        fp_exe = str(conf["FOURPHONON_EXE"] or "").strip()
         if not fp_exe:
             sys.exit("[ERROR] SOLVER=fourphonon 但 step.conf 没填 FOURPHONON_EXE"
                      "（multi-GPU 版绝对路径）。见 README「fourphonon」节。")
-        ngpu = int(conf.get("FOURPHONON_NGPU") or 4)
+        ngpu = int(conf["FOURPHONON_NGPU"] or 4)
         prepare_fourphonon(cwd, out, sbd, conf, mesh, use_nac, ngpu)
         tpl = kc.resolve_submit(here, "3d", "submit_fourphonon")
         kc.write_submit(tpl, out / "submit.sh",
                         {"JOBNAME": kc.new_jobname(cwd, "S6kappa"),
                          "FOURPHONON_EXE": fp_exe,
                          "FOURPHONON_NGPU": str(ngpu),
-                         "FOURPHONON_CPUS_PER_GPU": str(conf.get("FOURPHONON_CPUS_PER_GPU") or 8)})
+                         "FOURPHONON_CPUS_PER_GPU": str(conf["FOURPHONON_CPUS_PER_GPU"] or 8),
+                         **norm_subs(factor, meta, thick2d)},
+                        require=REQ_2D, label="2D 归一化：")
     else:
         sys.exit("[ERROR] SOLVER 只允许 phono3py / shengbte / fourphonon")
     stepconf.apply_submit(out / "submit.sh", conf.submit)

@@ -57,10 +57,20 @@ def main():
 
     here = Path(__file__).resolve().parent
     incar_tpl = kc.resolve_submit(here, dim, "incar")  # incar_<dim>.tpl
+    # P2-3：偶极修正从 S1 的 INCAR 原样继承（S1/S2/S4 必须同一静电边界条件）
+    _dip, _dip_src = kc.dipole_line_from_incar(prev / "INCAR", prev / "INCAR.s3_c")
+    if _dip_src:
+        print("[..] 偶极修正继承自 %s" % _dip_src)
     subs = {"SYSTEM": "%s static" % cwd.name, "ENCUT": encut,
             "GGA": kc.GGA_MAP.get(func, "PS"),
+            "DIPOLE_LINE": "\n".join(_dip),
             "VDW_LINE": ("IVDW = %s" % kc.VDW_MAP[func]) if kc.VDW_MAP.get(func) else "# no vdW"}
     kc.render_tpl(incar_tpl, subs, out / "INCAR")
+    if any("LDIPOL = .TRUE." in x for x in _dip):
+        # 项目级 incar_2d.tpl 会遮蔽技能模板，老副本没有 {{DIPOLE_LINE}} —— 兜底补写，
+        # 保证 S2 与 S1 的静电边界条件真的一致（P2-3 的意义就在这里）。
+        kc.enforce_incar_tags(out / "INCAR", {"LDIPOL": ".TRUE.", "IDIPOL": "3",
+                                              "ISYM": "0"}, label="step2 偶极：")
 
     submit_tpl = kc.resolve_submit(here, dim, "submit_std")
     kc.write_submit(submit_tpl, out / "submit.sh",

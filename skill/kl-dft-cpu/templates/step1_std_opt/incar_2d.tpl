@@ -56,11 +56,11 @@ LCHARG = .TRUE.
 NCORE  = 6                # 总核数/KPAR 须被 NCORE 整除;GPU(OpenACC)版必须 NCORE=1
 KPAR   = 2                # 内存 ×2,2D 大真空胞注意 OOM
 
-# ---- 非对称 2D(Janus / 单面吸附)按需开 ----
-# LDIPOL = .TRUE.
-# IDIPOL = 3
-# DIPOL  = 0.5 0.5 0.5    # 电荷质心分数坐标
-# ISYM   = 0              # 开偶极修正后必须改 0
+# ---- 非对称 2D(Janus / 单面吸附)的偶极修正（P2-3）----
+# 由 step.conf 的 DIPOLE_2D = auto|on|off 控制（auto：没有面外镜面或两端元素不同就开）。
+# 开了以后 S2/S4 必须沿用同一套静电边界条件 —— 它们的 gen 会从本 INCAR 里抄
+# LDIPOL/IDIPOL/DIPOL，不需要手动同步。
+{{DIPOLE_LINE}}
 
 
 # =====================================================================

@@ -158,6 +158,11 @@ def _zero_screening(amset_data):
     return np.zeros(amset_data.fermi_levels.shape)
 
 
+# [AMSET2D_DEBUG] 诊断开关（AMSET2D_DEBUG=1 时打印散射核内部的量）
+import os as _os_dbg
+_DEBUG = _os_dbg.environ.get("AMSET2D_DEBUG", "") not in ("", "0", "false")
+_DBG_N = [0]
+
 _QZ_ONLY_SEEN = [False]
 
 
@@ -189,6 +194,18 @@ class AcousticDeformation2D(_ADP):
         else:
             idx = 1 if band_idx > self.vb_idx[spin] else 0
             f = self.deformation_potential[idx] ** 2 / w[:, 1]
+        # [AMSET2D_DEBUG] 诊断用：把核里的量打出来，便于与解析参考逐项对齐
+        # （默认关；只打前 3 次调用，不影响生产运行）
+        if _DEBUG and _DBG_N[0] < 3:
+            _DBG_N[0] += 1
+            _k = 0
+            print("[amset2d][DEBUG] call=%d |q|=%.6e a^-1  u=(%.4f,%.4f,%.4f)  "
+                  "w_TA=%.6e  w_LA=%.6e  D_proj=%s  f=%.6e"
+                  % (_DBG_N[0], float(np.sqrt(norm_q_sq[_k])),
+                     float(u[_k, 0]), float(u[_k, 1]), float(u[_k, 2]),
+                     float(w[_k, 0]), float(w[_k, 1]),
+                     (np.round(np.abs(D), 4).tolist() if np.size(D) <= 9 else "array"),
+                     float(f[_k])), flush=True)
         return f[None, None] * np.ones(self.fermi_levels.shape + norm_q_sq.shape)
 
 
@@ -296,6 +313,17 @@ _BANNER = ("[amset2d] amset %s | c=%.3f A | r_inf=%s | mechanisms=%s"
            % (amset.__version__, _C / A2B, np.round(_r_tensor("eps_inf_slab").tolist(), 3),
               ",".join(_ACTIVE)))
 print(_BANNER, flush=True)
+# r∞/Δr 自检（gen_step14 落盘的值）。曾把体相 ε0/ε∞ 外推的 Δr=43.5 Å 当 Sohier 的
+# 0.53 Å 用，POP 单机制迁移率差约两个量级；这里每次运行都把真正喂进核的两个数打出来。
+_RCHK = _REC.get("r_inf_delta_r_check") or {}
+if _RCHK.get("available"):
+    print("[amset2d] POP: r_inf=%.3f A | delta_r=%.4f A | delta_r/r_inf=%.2f%%"
+          " (G_2D = 2*pi*c*Delta_r/[(1+r_inf*q)(1+r_0*q)])"
+          % (_RCHK["r_inf_A"], _RCHK["delta_r_A"],
+             100.0 * _RCHK["delta_r_over_r_inf"]), flush=True)
+else:
+    print("[amset2d][WARN] 2d_correction.json 里没有 r_inf_delta_r_check ——"
+          " 无法核对 POP 的 Δr 量级（老记录或手写 json）", flush=True)
 
 # spawn 子进程：ADP 以 reference 传给子进程、并在子进程里按上面的类名重建，
 # 所以子进程也必须导入本插件（否则静默退回原版 ADP）。这里包装 worker 打印实际生效的类。

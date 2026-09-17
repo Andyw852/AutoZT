@@ -411,7 +411,10 @@ USE_KPOINTS_OPT = True
 
 # KPOINTS_OPT 的 one-shot 阶段一次同时处理多少个 k 点（越小越省内存、越慢）。
 # None = 不写该标签（用 VASP 默认）。SOC + 大体系内存吃紧时设 8~24。
-KPOINTS_OPT_NKBATCH = 24
+# ★ 默认值从 24 改成 6（2026-09-15，与 ke-dft-cpu 同步）。
+#   单层 Mg4C60 的 HSE06 用 24 时在 k-point batch [1-24\35] 处被 OOM
+#   杀掉（ExitCode 9:0）。该标签只控制批大小、不改物理量，取小是纯保险。
+KPOINTS_OPT_NKBATCH = 6
 # =================================================================
 
 

@@ -347,6 +347,9 @@ KNOWN_PLACEHOLDERS = {"SYSTEM", "ENCUT", "GGA", "VDW_LINE", "JOBNAME"}
 #   所以池子里所有会读 step.conf 的模块必须共用这一份 spec、只解析一次。
 #   mol_common 不再自己 stepconf.load()，改从 STEP_PARAMS 取。
 CONF_SPEC = {
+    # 2D 专用逃生阀（与 _common/opt/relax_common.py 同义，两条链行为必须一致）：
+    #   默认 false = 2D 优化必须真正弛豫面内晶格；true 才允许旧的固定胞行为。
+    "ALLOW_2D_FIXED_CELL": (False, "bool"),
     "FUNC": (FUNC_DEFAULT, "str"),
     # 晶胞策略：step.conf 可覆盖技能默认（默认 None = 不设置，用技能 R.run 默认）。
     #   CELL_POLICY: primitive | standard | none
@@ -1198,6 +1201,18 @@ def resolve_stage(cwd: Path):
     return want, dirname(want), src
 
 
+_VASP_VER_RE = re.compile(r"vasp[._-]?(\d+)\.(\d+)\.(\d+)", re.IGNORECASE)
+
+
+def _vasp_version_from_text(text: str):
+    """从 submit.sh（可执行文件路径通常带版本）里抠 VASP 版本，返回 (major, minor) 或 None。"""
+    explicit = re.search(r"AUTOZT_VASP_VERSION\s*=\s*(\d+)\.(\d+)", text or "")
+    if explicit:                       # 显式声明优先
+        return (int(explicit.group(1)), int(explicit.group(2)))
+    m = _VASP_VER_RE.search(text or "")
+    return (int(m.group(1)), int(m.group(2))) if m else None
+
+
 def apply_cell_constraint_2d(incar_path: Path, outdir: Path):
     """2D 后处理：按 CELL_CONSTRAINT_2D 处理 IOPTCELL 标签 / OPTCELL 文件。"""
     lines = incar_path.read_text(encoding="utf-8").splitlines()
@@ -1213,13 +1228,38 @@ def apply_cell_constraint_2d(incar_path: Path, outdir: Path):
 
     mode = CELL_CONSTRAINT_2D
     mode = getattr(apply_cell_constraint_2d, "_constraint_mode", mode)
-    if mode == "none" and any(re.match(r"\s*ISIF\s*=\s*[3-8]\b", line, re.I) for line in kept):
-        sys.exit("[ERROR] 2D 变胞优化需要配置 vasp.relax_2d 约束版本")
+    # P0(2026-09-16)：2D 固定胞不再静默放行。批量核查发现 jzz P1/P2 全部 10 个 step1
+    #   都是"ISIF=2 + 无 IOPTCELL"，面内层内口径应力 −2 ~ −62 kbar（全拉伸）—— 这种结构
+    #   算出的 κ/ZA 不可信，而声子谱照样全正、过得了虚频闸，下游看不出来。
+    if mode == "none" and not STEP_PARAMS.get("ALLOW_2D_FIXED_CELL", False):
+        sys.exit("[ERROR] 2D 变胞优化需要配置 vasp.relax_2d 约束版本（cell_constraint="
+                 "none 时面内晶格不会弛豫，残余应力会传到声子/热导步）。"
+                 "确实要固定胞请显式设 ALLOW_2D_FIXED_CELL = true。")
     if mode == "ioptcell_tag":
-        if iopt is None:
-            print("[WARN] CELL_CONSTRAINT_2D='ioptcell_tag' 但模板/INCAR 中没有合法的 "
-                  "IOPTCELL 行 —— c 轴将不受约束，ISIF=3 会连真空一起弛豫！")
+        if iopt is None and not STEP_PARAMS.get("ALLOW_2D_FIXED_CELL", False):
+            sys.exit("[ERROR] 2D 优化：CELL_CONSTRAINT_2D='ioptcell_tag' 但 INCAR 模板 "
+                     "里没有合法的 IOPTCELL 行 —— 晶胞不会弛豫（项目级模板副本遮蔽"
+                     "技能模板时最常见）。要固定胞请显式设 ALLOW_2D_FIXED_CELL = true。")
         return                # 原样保留，什么都不改
+
+    if mode == "lattice_constraints":
+        # P1-4：VASP>=6.5 官方标签。这里与 _common/opt/relax_common.py 同源：
+        #   旧版 VASP 会【静默忽略】该标签，于是 ISIF=3 连真空一起弛豫 —— 所以本模式
+        #   必须先确认版本；确认不了就报错，绝不退回 ISIF=2 糊过去。
+        ver = _vasp_version_from_text(
+            (outdir / "submit.sh").read_text(encoding="utf-8", errors="ignore")
+            if (outdir / "submit.sh").is_file() else "")
+        if ver is None or ver < (6, 5):
+            sys.exit("[ERROR] cell_constraint=lattice_constraints 需要 VASP>=6.5"
+                     "（检测到 %s）。请改用 ioptcell_tag / optcell_file。"
+                     % ("未知版本" if ver is None else "%d.%d" % ver))
+        kept.append("")
+        kept.append("# 2D 约束变胞（VASP>=6.5 官方标签，P1-4）：只放开面内，c 轴冻结")
+        kept.append("LATTICE_CONSTRAINTS = .TRUE. .TRUE. .FALSE.")
+        incar_path.write_text("\n".join(kept) + "\n", encoding="utf-8", newline="\n")
+        print("[OK] LATTICE_CONSTRAINTS = .TRUE. .TRUE. .FALSE. 已写入 INCAR"
+              "（IOPTCELL 行已移除）")
+        return
 
     if iopt is None:
         iopt = [1, 1, 0, 1, 1, 0, 0, 0, 0]   # 默认：面内 xx/yy/xy 放开，c 固定
@@ -1433,6 +1473,13 @@ def build_in_job_stages(outdir: Path):
                               remove_keys=[a for a, b in spec.items() if b is None])
         fname = "INCAR.s%d_%s" % (k + 1, st)
         (outdir / fname).write_text(text, encoding="utf-8", newline="\n")
+        # ★ step.conf 的 [incar]/[incar.final]/[incar.delete] 覆盖（此前本模块只消费 [params]/[submit]，
+        #   且不调 read_submit()，是连告警都没有的纯静默洞）。2026-09-15 接上。
+        _ic_log = []
+        stepconf.apply_incar_file(outdir / fname, log=_ic_log)
+        for _m in _ic_log:
+            print("[..] %s" % _m)
+
         desc = "段%d(%s) %s" % (k + 1, st, STAGE_SPEC[st].get("_desc", ""))
         cell_stage = stage_changes_cell(text)
         if cell_stage:
@@ -1693,6 +1740,14 @@ def main():
     # ---- 2D：变胞约束流派处理（OPTCELL 文件 / IOPTCELL 标签）----
     if dim == "2d":
         apply_cell_constraint_2d(outdir / "INCAR", outdir)
+
+    # ---- step.conf 的 [incar]/[incar.final]/[incar.delete]（非分段路径）----
+    #   放在所有 apply_* 之后 = 真正的"最终覆盖"，与 stepconf.apply_incar 的
+    #   [incar.final] 语义一致（用户说了算）。分段路径在 build_in_job_stages 里逐段应用。
+    _ic_log = []
+    stepconf.apply_incar_file(outdir / "INCAR", log=_ic_log)
+    for _m in _ic_log:
+        print("[..] %s" % _m)
 
     # ---- 作业内分段：必须在 INCAR 全部后处理完成之后 ----
     staged_in_job = False

@@ -40,12 +40,27 @@ SPEC = {
     "KSCHEME":      ("2",      "str"),
     "ENCUT":        (None,     "int"),
     "ENCUT_FACTOR": (1.5,      "float"),
+    # 取力精度（P1-3）：力直接进 fc2/fc3，phonopy 官方超胞取力示例用
+    #   PREC=Accurate / EDIFF=1E-8 / LREAL=.FALSE.；LREAL=Auto 的实空间投影带格点噪声，
+    #   是 fc 假软模的常见来源。超胞几百原子时可用 FORCE_LREAL=Auto 换速度，
+    #   但要先在 3 帧上与 .FALSE. 比力（最大偏差 < 1 meV/Å）并显式设 ROPT。
+    "FORCE_PREC":   ("Accurate", "str"),
+    "FORCE_EDIFF":  ("1E-8",     "str"),
+    "FORCE_LREAL":  (".FALSE.",  "str"),
     "VASPKIT_EXE":  ("vaspkit", "str"),
     "METHOD":       ("alm",    "str"),   # alm | findiff
     "SUPERCELL":    (None,     "words"), # 显式 "3 3 3"；空=按 MIN_SC_LEN 自动
     "MIN_SC_LEN":   (12.0,     "float"),
     "MAX_MULTIPLE": (6,        "int"),
-    "KAPPA_MESH":   ("20 20 20", "str"), # 写进 kl_params 供 step6
+    # q 网格（写进 kl_params 供 step6）。auto = 2D 按倒空间长度估：
+    #   N_i = max(MESH_MIN, ceil(Q_LEN_2D/|a_i|))，真空轴=1（P1-1）。
+    #   写死 15 15 15 对 a≈3 Å 的 2D 材料只覆盖 ~47 Å 倒空间，κ 远未收敛。
+    "KAPPA_MESH":   ("auto",   "str"),   # auto | auto3d | "N N N"
+    "Q_LEN_2D":     (275.0,    "float"), # auto 时目标倒空间长度(Å)；文献 2D 用 250~300
+    "MESH_MIN":     (20,       "int"),   # auto 时每个方向的下限（BZ 采样下限）
+    # P1-4：2D 残余面内应力门禁（层内口径 σ_VASP×h⊥/d，kbar）。0 = 关掉门禁。
+    #   Huang 条件是零应力条件；有外应力时 ZA 出现线性项、压制二次项，κ 不可信。
+    "STRESS_2D_THR": (0.5,     "float"),
     "MAX_DISP":     (500,      "int"),   # ★ 位移帧数硬闸：超过就报错停步
     "FC3_CUTOFF_PAIR": (None,  "float"), # findiff 三阶对距离上限(Å)；空=全对称集
     "FD_DISTANCE":  (0.03,     "float"), # findiff 位移幅度(Å)
@@ -186,8 +201,62 @@ def write_supercells(out, ph3):
     return nums
 
 
+def _poscar_cell(path):
+    """读 POSCAR 的 3x3 晶格矩阵（纯文本解析，不引依赖）；失败返回 None。"""
+    try:
+        ln = Path(path).read_text(encoding="utf-8", errors="ignore").splitlines()
+        scale = float(ln[1].split()[0])
+        return [[float(x) * scale for x in ln[i].split()[:3]] for i in (2, 3, 4)]
+    except Exception:                                   # noqa: BLE001
+        return None
+
+
+def _disp_yaml_cell(path):
+    """读 phono3py_disp.yaml 里的 unit_cell.lattice；失败返回 None。"""
+    try:
+        import yaml
+        d = yaml.safe_load(Path(path).read_text(encoding="utf-8"))
+        return [[float(x) for x in row] for row in d["unit_cell"]["lattice"]]
+    except Exception:                                   # noqa: BLE001
+        return None
+
+
+def check_existing_matches_input(out):
+    """结构指纹校验（2026-09-17，wangchao 要求）：已有的位移/力数据必须属于【当前输入结构】。
+
+    为什么必须拦：retry 对 fanout 步骤**只补缺失的子目录**，已有 disp-* 一律不动；而
+    build_displacements 见到 phono3py_disp.yaml + POSCAR-* 就"幂等跳过"。于是 S1 换了
+    结构之后重投 S4，旧位移、旧帧、旧力会被整套沿用 —— S5 拿旧结构的力配旧位移拟合，
+    **内部自洽但与当前结构无关**，而且一声不响。实测 2026-09-17 这一批 6 个材料全部
+    中招（残留 1902 个 disp-*，含半成品 vasprun.xml）。
+    """
+    y = out / "phono3py_disp.yaml"
+    if not y.is_file():
+        return
+    old, new = _disp_yaml_cell(y), _poscar_cell(out / "POSCAR")
+    if old is None or new is None:
+        print("[WARN] 结构指纹校验跳过（读不到 %s 或 %s）"
+              % ("phono3py_disp.yaml" if old is None else "POSCAR",
+                 "POSCAR" if new is None else "phono3py_disp.yaml"))
+        return
+    dmax = max(abs(old[i][j] - new[i][j]) for i in range(3) for j in range(3))
+    if dmax > 1e-3:
+        n_disp = len(glob.glob(str(out / "disp-*")))
+        sys.exit(
+            "[ERROR] 已有位移/力数据属于【旧结构】—— phono3py_disp.yaml 的单胞与当前输入 "
+            "差异最大 %.4f Å（>1e-3 即判定不一致）。\n"
+            "        当前有 %d 个 disp-* 目录。retry 对 fanout 只补缺失帧，这些旧帧会被"
+            "整套沿用，\n"
+            "        于是 S5 会把旧结构的力配上（同样旧的）位移静默混拟合。\n"
+            "        处置：确认已归档后清空本步产物，再 retry：\n"
+            "          rm -rf %s/disp-* %s/POSCAR-* %s/phono3py_disp.yaml %s/SPOSCAR\n"
+            "        或直接 autozt -tt kl-dft-cpu -p <材料> -j S4_disp rerun（推倒重来）。"
+            % (dmax, n_disp, out, out, out, out))
+
+
 def build_displacements(out, reps, method, conf):
     """幂等：已有位移就跳过；否则先算帧数过闸，再落盘。"""
+    check_existing_matches_input(out)
     if (out / "phono3py_disp.yaml").is_file() and glob.glob(str(out / "POSCAR-*")):
         print("[..] 已有位移超胞，跳过生成（幂等）")
         return
@@ -241,18 +310,35 @@ def main():
     # 截断半径必须 ≤ 超胞安全截断（0.5×内切球直径 − margin），否则周期镜像污染力常数。
     cut3 = conf["ALM_CUT3"] if method == "alm" else conf["FC3_CUTOFF_PAIR"]
     cut3_label = "ALM_CUT3" if method == "alm" else "FC3_CUTOFF_PAIR"
+    if dim == "2d":
+        # P1-5：真空隙 ≤ 层厚 → 最近镜像跨真空（Born-Huang 的 r_ij 错）；截断 ≥ 真空隙
+        #   → 跨真空三体簇。两件都是硬错误，放在生成位移之前拦。
+        _geo = kc.check_2d_vacuum(out / "POSCAR", vac_axis, cut3=cut3)
+        # P1-4：残余面内应力门禁（Huang 条件）。应力从 S1 弛豫的 OUTCAR 末态读，
+        #   换算成层内口径 σ×h⊥/d 再比阈值。
+        _s1 = sorted(cwd.glob("step1*/OUTCAR"))
+        if _s1:
+            kc.check_2d_stress(_s1[-1], _geo["h_perp_A"], _geo["thickness_d_A"],
+                               conf["STRESS_2D_THR"])
+        else:
+            print("[WARN] 找不到 S1 的 OUTCAR（%s/step1*/OUTCAR），2D 残余应力未核验"
+                  % cwd)
     if conf["SUPERCELL"]:
         reps = [int(x) for x in conf["SUPERCELL"]]
         if dim == "2d":
             reps[vac_axis if vac_axis is not None else 2] = 1
         # 显式超胞不自动扩胞，只事后 WARN（对齐 validate_user_supercell 只 warning 语义）
-        kc.warn_cutoff_vs_supercell(out / "POSCAR", reps, cut3, label=cut3_label)
+        kc.warn_cutoff_vs_supercell(out / "POSCAR", reps, cut3, label=cut3_label,
+                                    dim=dim, vac_axis=vac_axis)
     else:
         reps = kc.supercell_matrix(out / "POSCAR", dim, conf["MIN_SC_LEN"],
                                    conf["MAX_MULTIPLE"], vac_axis if vac_axis is not None else 2,
                                    cutoff=cut3)
-    mesh = kc.mesh_str(conf["KAPPA_MESH"].split(), dim, vac_axis if vac_axis is not None else 2)
-    print("[..] 维度=%s 方法=%s 超胞=%s mesh=%s" % (dim.upper(), method, kc.dim_str(reps), mesh))
+    vac_ax = vac_axis if vac_axis is not None else 2
+    mesh, mesh_note = kc.auto_mesh(conf["KAPPA_MESH"], dim, vac_ax, out / "POSCAR",
+                                   conf["Q_LEN_2D"], conf["MESH_MIN"])
+    print("[..] 维度=%s 方法=%s 超胞=%s mesh=%s %s"
+          % (dim.upper(), method, kc.dim_str(reps), mesh, mesh_note))
     kc.write_kl_params(out / kc.KL_PARAMS, DIM=dim.upper(), SUPERCELL=kc.dim_str(reps),
                        MESH=mesh, METHOD=method, FUNC=func)
 
@@ -283,6 +369,12 @@ def main():
     here = Path(__file__).resolve().parent
     incar_tpl = kc.resolve_submit(here, dim, "incar_force")
     submit_tpl = kc.resolve_submit(here, dim, "submit_std")
+    # P2-3：偶极修正必须与 S1(弛豫)/S2(静态) 一致 —— 直接继承它们的 INCAR，
+    #   不复算（三处各自判一遍，判据一漂就没意义了）。取力与弛豫处在不同静电
+    #   边界条件下时，位移帧的力根本不对应同一势能面。
+    _dip_lines, _dip_src = kc.dipole_line_from_incar(cwd / "step2_static" / "INCAR",
+                                                     cwd / "step1_std_opt" / "INCAR")
+    print("[..] 偶极修正：%s" % (_dip_src or "上游 INCAR 没找到，未施加"))
     encut = None
     for num, pos in frames:
         d = out / ("disp-%s" % num)
@@ -300,9 +392,25 @@ def main():
         kc.render_tpl(incar_tpl, {"SYSTEM": "%s force %s" % (cwd.name, num),
                                   "ENCUT": encut,
                                   "GGA": kc.GGA_MAP.get(func, "PS"),
+                                  "FORCE_PREC": conf["FORCE_PREC"],
+                                  "FORCE_EDIFF": conf["FORCE_EDIFF"],
+                                  "FORCE_LREAL": conf["FORCE_LREAL"],
+                                  "DIPOLE_LINE": "\n".join(_dip_lines),
                                   "VDW_LINE": ("IVDW = %s" % kc.VDW_MAP[func])
                                   if kc.VDW_MAP.get(func) else "# no vdW"},
                       d / "INCAR")
+        # P1-3：项目级 incar_force_*.tpl 会遮蔽技能模板（find_asset 优先项目根），
+        #   老副本没有 {{FORCE_PREC}} 等占位符 → 渲染时被静默跳过。渲染后强制落一遍。
+        kc.enforce_incar_tags(d / "INCAR",
+                              {"PREC": conf["FORCE_PREC"],
+                               "EDIFF": conf["FORCE_EDIFF"],
+                               "LREAL": conf["FORCE_LREAL"],
+                               "ADDGRID": ".TRUE."},
+                              label="step4 取力 %s：" % num)
+        if _dip_lines and any("LDIPOL = .TRUE." in x for x in _dip_lines):
+            kc.enforce_incar_tags(d / "INCAR", {"LDIPOL": ".TRUE.", "IDIPOL": "3",
+                                                "ISYM": "0"},
+                                  label="step4 偶极 %s：" % num)
         kc.write_submit(submit_tpl, d / "submit.sh",
                         {"JOBNAME": "%s-kl-dft-cpu-S4-%s" % (cwd.name, num)})
         stepconf.apply_submit(d / "submit.sh", conf.submit)

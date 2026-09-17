@@ -18,7 +18,7 @@
 #   tf -tt kl-mace-cpu -p <材料> -j <步骤> conf --set params.MACE_MODEL=xxx.model
 # 2D 全程把真空方向压 1（超胞倍数、BTE 网格），胞优化时锁死真空方向。
 # =============================================================================
-schema: 1
+schema: 2
 name: kl-mace-cpu
 desc: 晶格热导率(MACE/CPU)
 version: "0.1"
@@ -63,7 +63,7 @@ steps:
      gen: gen_step4_kappa.py,
      gen_need: [dim_common.py, stepconf.py, step.conf, klmace_common.py,
                 kappa_validation.py, submit_p3py.tpl, submit_shengbte_klm.tpl,
-                vdw_radii.py]}
+                thickness_2d.py, vdw_radii.py]}
 
 # S5 声子谱绘图（登录节点 run: gen，不提交作业）：读 step3_fc/band-dft-cpu.yaml 画
 #   全范围 + 0~10 THz 低频放大两张（共享脚本 _common/mace/plot_phonon_band.py）。
@@ -75,6 +75,15 @@ optional_steps:
          gen: "plot_phonon_band.py", check: plot, run: gen, gen_need: [],
          done_marker: phonon_band_summary.json, fetch_all: true}
 
++io_schema:
+  inputs: [{name: POSCAR, from: user, required: true, desc: "材料结构"}]
+  outputs: [{name: workflow_outputs, step: final, type: directory, desc: "由技能实际步骤产生的结果文件"}]
+  params: []
+  steps: []
+flow:
+  summary: "按技能步骤生成并校验科学计算结果"
+  stages: [{name: workflow, steps: [], produces: [workflow_outputs]}]
+corrections: [node_fail, dir_missing]
 requires:
   python: [mace-torch, torch, ase, phonopy, phono3py, symfc, pheasy, spglib, numpy, h5py]
   # 实际 conda 环境按集群默认注入（setting/<hpc>.yaml 的 conda_env：jzzn=mace_cpu venv、

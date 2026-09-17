@@ -126,8 +126,26 @@ def main():
         sys.exit("[ERROR] mesh frequencies 为空或含非有限值")
     mf = float(np.min(mesh_freqs))
     mx = float(np.max(mesh_freqs))
+    # ---- 2D：用 kz=0 的二维高对称路径（P2-1）；seekpath 是 3D 工具，会给 Γ-A 这类
+    #   真空方向的平凡线段，写死的 Γ-M-K-Γ 又只对六方成立。----
+    import klmace_common as kmc
+    dimtag, vac_axis = "3d", 2
     try:
-        ph.auto_band_structure(plot=False, write_yaml=True, filename="band-dft-cpu.yaml")
+        from dim_common import detect_dimension
+        dimtag, vac_axis, _dn = detect_dimension("POSCAR")
+    except Exception as e:
+        print("[WARN] 维度判定失败（按 3D 处理）：%s" % e)
+    is2d = str(dimtag).lower().startswith("2")
+    try:
+        if is2d:
+            from phonopy.phonon.band_structure import get_band_qpoints_and_path_connections
+            _paths, _labels, _lat = kmc.band_path_2d(uc.cell, 101, vac_axis or 2)
+            _bands, _conn = get_band_qpoints_and_path_connections(_paths, npoints=101)
+            ph.run_band_structure(_bands, path_connections=_conn, labels=_labels)
+            ph.write_yaml_band_structure(filename="band-dft-cpu.yaml")
+            print("[..] band-dft-cpu.yaml 用 2D 高对称路径（%s 格子，kz=0）" % _lat)
+        else:
+            ph.auto_band_structure(plot=False, write_yaml=True, filename="band-dft-cpu.yaml")
     except Exception as e:
         sys.exit("[ERROR] band-dft-cpu.yaml 生成失败：%s" % e)
 
@@ -139,8 +157,20 @@ def main():
     bmf = float(np.min(band_freqs))
     bmx = float(np.max(band_freqs))
     screen_min = min(mf, bmf)
+    # ---- 2D 的 ZA 二次性（P2-2/P2-4）：symfc 的 fc2 没有施加 Born-Huang 旋转不变
+    #   约束，ZA 弯曲支可能被线性化成 ω∝q —— 那时频率全为正、虚频闸门照样过，但 2D 的
+    #   κ / 稳定性结论是错的。这里把 p 指数记进 summary，不合格直接判不稳定。----
+    za = None
+    if is2d:
+        print("[WARN] 2D + symfc fc2：没有施加 Born-Huang 旋转不变约束，ZA 可能被线性化；"
+              "2D 的稳定性/κ 请用 kl-dft-cpu 的 pheasy+BHH 链（PHEASY_RASR=auto）。")
+        za = kmc.za_check_2d(ph, uc.cell, vac_axis or 2)
+        print("[..] ZA 检查：%s" % za.get("note", za.get("error", "")))
+
     stable_mesh = mf >= -0.10
     stable = screen_min >= -0.10
+    if za is not None and za.get("ok") is False:
+        stable = False
 
     # Chemistry-specific quality flag only; not proof of a failed fit.
     bound = None
@@ -179,8 +209,12 @@ def main():
         note += "；位移帧数不足（n_disp×3N < 2阶力常数元数），拟合欠定，虚频不可信"
         print("[WARN] " + note)
 
+    if za is not None and za.get("ok") is False:
+        note += "；ZA 弯曲支非二次色散（symfc 没有旋转不变约束），2D 结论不可信"
     summary = {
         "PHONON_DONE": True,
+        "dim": str(dimtag).upper(),
+        "za_exponent": za,
         "stable": bool(stable),
         "stable_mesh": bool(stable_mesh),
         "mesh_min_frequency_THz": mf,

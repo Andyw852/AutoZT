@@ -412,6 +412,78 @@ def _parse_min_freq(band_yaml):
     return min(fr) if fr else None
 
 
+def za_power_law(ph, qdir=(1, 0, 0), qmax=0.05, n=12):
+    """沿面内方向取 q ∈ (0, qmax]（倒格子约化单位），拟合最低支 ω ∝ q^p，返回 (p, ω_min)。
+
+    ZA 弯曲支在无应力 2D 里必须 ω ∝ q²（Born-Huang 旋转不变 + Huang 零应力）。
+    只看"最小频率没有负值"是不够的 —— ZA 线性化（p≈1）时频率全是正的照样过闸门，
+    但 κ 会整体错掉（q² 支的群速度 ∝ q，近 Γ 贡献完全不同）。p 用 log-log 最小二乘
+    拟合，q 取太小主要是插值误差，故 qmax 给 0.05~0.1。返回 None 表示有非正频率。
+    """
+    import numpy as np
+    qs = np.linspace(float(qmax) / int(n), float(qmax), int(n))
+    pts = [np.array(qdir, float) * q for q in qs]
+    ph.run_qpoints(pts)
+    w = np.asarray(ph.get_qpoints_dict()["frequencies"])[:, 0]
+    if np.any(w <= 0):
+        return None, float(np.min(w))
+    p = float(np.polyfit(np.log(qs), np.log(w), 1)[0])
+    return p, float(np.min(w))
+
+
+def _inplane_qdirs(ph, vac_axis=2):
+    """两个"不等价"的面内 q 方向（约化坐标）。正交晶格取 (1,0,0)/(0,1,0)；
+    六方等非正交晶格取 (1,0,0)（Γ-M）与 (1,1,0)（Γ-K）——这两个方向对称性不同，
+    只查一个方向会漏掉各向异性导致的 ZA 异常。"""
+    import numpy as np
+    idx = [i for i in range(3) if i != int(vac_axis)]
+    try:
+        cell = np.asarray(ph.primitive.cell, float)
+        v1, v2 = cell[idx[0]], cell[idx[1]]
+        cos = float(np.dot(v1, v2) / (np.linalg.norm(v1) * np.linalg.norm(v2)))
+    except Exception:
+        cos = 0.0
+    d1 = [0.0, 0.0, 0.0]
+    d1[idx[0]] = 1.0
+    if abs(cos) > 0.2:
+        d2 = list(d1)
+        d2[idx[1]] = 1.0
+    else:
+        d2 = [0.0, 0.0, 0.0]
+        d2[idx[1]] = 1.0
+    return [tuple(d1), tuple(d2)]
+
+
+def _za_check(cfg, ph, vac_axis, is2d):
+    """P2-2：2D 的 ZA 二次性闸门。返回写进 phonon_summary.json 的 dict（3D 返回 None）。"""
+    mode = str(cfg.get("ZA_CHECK", "auto")).strip().lower()
+    if mode in ("off", "false", "0", "no") or (not is2d and mode not in ("on", "true", "1", "yes")):
+        return None
+    p_lo, p_hi = 1.7, 2.3
+    qmax = float(cfg.get("ZA_QMAX", 0.05))
+    res = {"mode": mode, "qmax": qmax, "p_range": [p_lo, p_hi], "dirs": [], "p": [],
+           "min_freq": [], "ok": False}
+    for d in _inplane_qdirs(ph, vac_axis):
+        try:
+            p, wmin = za_power_law(ph, qdir=d, qmax=qmax, n=12)
+        except Exception as e:
+            res["error"] = "ZA 拟合失败：%s" % e
+            return res
+        res["dirs"].append(list(d))
+        res["p"].append(p)
+        res["min_freq"].append(wmin)
+    ok = all(p is not None and p_lo < p < p_hi for p in res["p"])
+    res["ok"] = bool(ok)
+    res["note"] = ("ZA 二次性满足（p=%s ∈ (%.1f, %.1f)）"
+                   % (["%.2f" % p if p is not None else "None" for p in res["p"]], p_lo, p_hi)
+                   ) if ok else (
+        "ZA 不是二次色散（p=%s，要求 %.1f~%.1f）：弯曲支被线性化/有虚频。"
+        "2D 的 κ 会整体失真，S6 不启动。先查 pheasy 的 RASR 是否真在 -c 步施加了 BHH"
+        "（pheasy_c.log 里的 Imposing rotational invariance and equilibrium conditions）、"
+        "结构是否还有残余面内应力。" % (["%.2f" % p if p is not None else "None" for p in res["p"]], p_lo, p_hi))
+    return res
+
+
 def _stability_gate(cfg, out):
     # phonopy 判虚频（q-mesh 最小频率）。2D 材料默认用【无 NAC】判据：3D 库仑核的 NAC 在
     # 严格 2D 体系近 Γ 会产生【虚假虚频】(LO-TO 在真 2D 应趋零)，与 step6 KAPPA_NAC=auto 一致。
@@ -463,9 +535,32 @@ def _stability_gate(cfg, out):
         except Exception as e:
             print("[WARN] 带 NAC 的 mesh 失败，仅用无 NAC 判据：%s" % e)
 
+    # 真空轴（2D 路径与 ZA 方向都要用）
+    vax = 2
+    for _cand in (out / "POSCAR", p3dir / "POSCAR"):
+        if _cand.is_file():
+            try:
+                import kl_common as _kc
+                _, _v = _kc.resolve_dim(_cand, "2d" if is2d else "auto")
+                vax = int(_v if _v is not None else 2)
+                break
+            except Exception:
+                pass
+
     # best-effort 出图（用无 NAC 版，避免 2D 的 NAC 假象污染谱图）；其最小值并入无 NAC 判据
     try:
-        ph_nonac.auto_band_structure(plot=False, write_yaml=True, filename=str(p3dir / "band-dft-cpu.yaml"))
+        if is2d:
+            # P2-1：seekpath 是 3D 工具，2D 上会给 Γ-A 这类 kz 线段；改用二维路径表
+            import kl_common as _kc
+            from phonopy.phonon.band_structure import get_band_qpoints_and_path_connections
+            _paths, _labels, _lat = _kc.band_path_2d(ph_nonac.primitive.cell, 101, vax)
+            _bands, _conn = get_band_qpoints_and_path_connections(_paths, npoints=101)
+            ph_nonac.run_band_structure(_bands, path_connections=_conn, labels=_labels)
+            ph_nonac.write_yaml_band_structure(filename=str(p3dir / "band-dft-cpu.yaml"))
+            print("[..] band-dft-cpu.yaml 用 2D 高对称路径（%s 格子，kz=0）" % _lat)
+        else:
+            ph_nonac.auto_band_structure(plot=False, write_yaml=True,
+                                         filename=str(p3dir / "band-dft-cpu.yaml"))
         bf = _parse_min_freq(p3dir / "band-dft-cpu.yaml")
         if bf is not None:
             mf_nonac = min(mf_nonac, bf)
@@ -478,17 +573,34 @@ def _stability_gate(cfg, out):
     else:
         mf_used, nac_used = mf_nac, True
 
+    # P2-2：2D 还要查 ZA 弯曲支是不是二次色散（只看最小频率不够 —— 线性化时频率全正）
+    za = None
+    if is2d:
+        za = _za_check(cfg, ph_nonac, vax, is2d)
+        if za is not None and "error" in za:
+            print("[WARN] ZA 二次性检查没跑成（不拦，但 κ 的 ZA 部分未经验证）：%s" % za["error"])
+
     thr = float(cfg.get("IMAG_THR", 0.10))
-    stable = mf_used >= -thr
+    za_ok = (za is None) or za.get("ok") or ("error" in za)
+    stable = (mf_used >= -thr) and za_ok
     parts = ["min_freq(no-NAC)=%.3f" % mf_nonac]
     if mf_nac is not None:
         parts.append("min_freq(NAC)=%.3f" % mf_nac)
     parts.append("判据用%s=%.3f THz(阈值 -%.2f)" % ("无NAC" if not nac_used else "NAC", mf_used, thr))
-    note = "；".join(parts) + " → " + (
-        "无明显虚频，稳定" if stable else "存在虚频(imaginary frequency)，动力学不稳定")
+    if za is not None and "error" not in za:
+        parts.append(za["note"])
+    if stable:
+        note = "；".join(parts) + " → 无明显虚频，稳定"
+    elif mf_used < -thr:
+        note = "；".join(parts) + " → 存在虚频(imaginary frequency)，动力学不稳定"
+    else:
+        note = "；".join(parts) + " → ZA 弯曲支非二次色散，2D 的 κ 不可信"
     return {"tool_ok": True, "stable": stable, "min_freq": mf_used,
             "min_freq_nonac": mf_nonac, "min_freq_nac": mf_nac, "nac_used": nac_used,
-            "is_2d": is2d, "status": "stable" if stable else "imaginary", "note": note}
+            "is_2d": is2d, "za_exponent": za,
+            "status": ("stable" if stable else
+                       ("imaginary" if mf_used < -thr else "za_not_quadratic")),
+            "note": note}
 
 
 def cmd_post(cfg):
@@ -504,8 +616,21 @@ def cmd_post(cfg):
     stable, tool_ok = g["stable"], g["tool_ok"]
     print("[%s] %s" % ("OK" if stable else "FAIL", g["note"]))
 
+    # 拟合质量指标（pheasy 引擎的模板会写 fit_metrics.json；phono3py/symfc 没有 →
+    #   缺这个文件是正常的，不报错）。A/B 对照（RASR=none vs BHH）靠它读 rel_err、
+    #   fc2max/fc3max、零空间自由度。
+    _fm = {}
+    _fmp = out / "fit_metrics.json"
+    if _fmp.is_file():
+        try:
+            _fm = json.loads(_fmp.read_text(encoding="utf-8"))
+            print("[..] fit_metrics.json：rel_err=%s RMSE=%s fc2max=%s fc3max=%s rasr=%s"
+                  % (_fm.get("pheasy_relative_error"), _fm.get("pheasy_rmse_eV_per_A"),
+                     _fm.get("fc2max"), _fm.get("fc3max"), _fm.get("rasr_applied")))
+        except Exception as _e:
+            print("[WARN] fit_metrics.json 解析失败：%s" % _e)
     (out / "phonon_summary.json").write_text(json.dumps(
-        {"stable": bool(stable), "status": g["status"],
+        {"stable": bool(stable), "status": g["status"], **_fm,
          "imaginary_frequency": bool(tool_ok and not stable),
          "min_frequency_THz": g["min_freq"],
          "min_freq_nonac_THz": g["min_freq_nonac"],

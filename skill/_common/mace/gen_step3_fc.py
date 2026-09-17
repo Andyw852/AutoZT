@@ -46,7 +46,31 @@ SPEC = {
     "PHEASY_METHOD": ("OLS", "str"),      # pheasy 拟合方法：OLS | LASSO | RFE | RFE_TSQR
     "PHEASY_C3_CUTOFF": ("6.0", "str"),   # pheasy 三阶截断(Å)；None/空=不截断
     "PHEASY_BIN": ("pheasy", "str"),        # pheasy 可执行名：pheasy | pheasy-gpu（GPU 版）
+    # 旋转不变性/平衡条件（RASR）：auto = 2D 用 BHH、3D 不加。对 2D 是硬要求——
+    #   不加则 ZA 近 Γ 线性化甚至出虚频（频率可能全为正、能过虚频闸，但 κ 是错的）。
+    #   ★ 只在 pheasy 的 -c（零空间构造）步生效；-f 读 ns_*.npz，--rasr 放 -f 上无效。
+    "PHEASY_RASR": ("auto", "str"),
 }
+
+
+_RASR_VALUES = ("BHH", "BH", "H")
+
+
+def _resolve_rasr(val, dim):
+    """PHEASY_RASR：auto → 2D=BHH / 3D=none；显式值原样（none/off/false/0 → 不传开关）。
+
+    与 kl-dft-cpu/gen_step5_fc.py 的同名函数保持同一套语义（那边是 DFT 拟合链，
+    这里是 MACE 拟合链），两条链的 2D 行为必须一致。pheasy 的 --rasr choices 只有
+    BH/H/BHH，"none" 不是一个能传的值 —— 关掉就是不传这个开关。
+    """
+    v = str(val if val is not None else "auto").strip().upper()
+    if v == "AUTO":
+        return "BHH" if dim == "2d" else "none"
+    if v in _RASR_VALUES:
+        return v
+    if v in ("NONE", "OFF", "FALSE", "F", "0", ""):
+        return "none"
+    sys.exit("[ERROR] PHEASY_RASR=%r 非法：只允许 auto | BHH | BH | H | none" % val)
 
 
 def parse_min_freq(band_yaml):
@@ -103,15 +127,21 @@ except Exception:
 # pheasy 拟合（FIT_SOFTWARE=pheasy）：从 phono3py_params.yaml 抽出随机位移+力 →
 # 写 POSCAR/SPOSCAR/dataset_disps.npy/dataset_forces.npy → 四步 pheasy CLI
 # (-s cluster space / -c 对称约束 / -d 位移矩阵 / -f 拟合) → fc2.hdf5/fc3.hdf5。
-# 对照 wangchao 的通用 pheasy 脚本：float64、RASR=none、LASSO 走 celer + --std。
-# 参数：拟合方法(OLS|LASSO|RFE|RFE_TSQR) 三阶截断(Å)
-_PHEASY_FIT = r'''import os, sys, subprocess
+# 对照 wangchao 的通用 pheasy 脚本：float64、LASSO 走 celer + --std。
+# 参数：拟合方法(OLS|LASSO|RFE|RFE_TSQR) 三阶截断(Å) RASR(none|BHH|BH|H)
+#   RASR 由 gen 按 DIM 解析后传进来（2D→BHH，3D→none），只挂 -c 步并校验施加日志。
+_PHEASY_FIT = r'''import os, re, sys, subprocess
 import numpy as np
 import phono3py
 from phonopy.interface.vasp import write_vasp
 
 method = sys.argv[1] if len(sys.argv) > 1 else "OLS"
 c3 = sys.argv[2] if len(sys.argv) > 2 else "6.0"
+# RASR 由 gen 按 DIM 解析后传入（2D=BHH / 3D=none）；缺省 none 保持旧行为。
+rasr = (sys.argv[3].strip().upper() if len(sys.argv) > 3 else "") or "NONE"
+if rasr not in ("NONE", "BHH", "BH", "H"):
+    sys.exit("[ERROR] rasr 参数非法: %r（none|BHH|BH|H）" % rasr)
+rflag = "" if rasr == "NONE" else " --rasr %s" % rasr
 
 yaml = "phono3py_params.yaml" if os.path.isfile("phono3py_params.yaml") else "phono3py_disp.yaml"
 ph3 = phono3py.load(yaml, produce_fc=False, log_level=0)
@@ -155,15 +185,29 @@ if method == "LASSO":
 elif method in ("RFE", "RFE_TSQR"):
     fit += " --mu_min -8 --mu_max -5 --max_iter 1000 --cv 5 --nmu 5 --tol 0.001"
 steps = [
-    "%s --dim %s -w 3 -s %s --eps 0.001" % (bin, dim, cflag),
-    "%s --dim %s -w 3 -c %s --eps 0.001" % (bin, dim, cflag),
-    "%s --dim %s -w 3 -d %s --ndata %d --disp_file --eps 0.001" % (bin, dim, cflag, ndata),
+    ("-s", "%s --dim %s -w 3 -s %s --eps 0.001" % (bin, dim, cflag)),
+    ("-c", "%s --dim %s -w 3 -c %s --eps 0.001%s" % (bin, dim, cflag, rflag)),
+    ("-d", "%s --dim %s -w 3 -d %s --ndata %d --disp_file --eps 0.001"
+     % (bin, dim, cflag, ndata)),
 ]
-for s in steps:
+for _tag, s in steps:
     print("[pheasy]", s, flush=True)
-    r = subprocess.run(s, shell=True, env=env)
+    # 捕获输出：-c 步要留日志做 RASR 守卫（原来直接继承 stdout，看不到内容）
+    r = subprocess.run(s, shell=True, env=env, capture_output=True, text=True)
+    _out = (r.stdout or "") + (r.stderr or "")
+    sys.stdout.write(_out)
     if r.returncode != 0:
         sys.exit("[ERROR] pheasy 步骤失败(rc=%d): %s" % (r.returncode, s))
+    if _tag == "-c" and rflag:
+        # RASR 守卫：要求施加旋转不变性/平衡条件却没在 -c 输出里看到施加记录 → 硬失败。
+        #   2D 的 ZA 是否为 ω∝q² 全靠这一步；失效时频率可能仍然全为正、能过虚频闸，
+        #   但 κ 是错的，下游看不出来，所以必须在源头拦住。
+        open("pheasy_c.log", "w").write(_out)
+        if not re.search(r"Imposing rotational invariance|Imposing equilibrium conditions", _out):
+            sys.exit("[ERROR] RASR=%s 但 pheasy -c 没有施加记录（见 pheasy_c.log）——"
+                     "ZA 近 Γ 会线性化/出虚频，κ 不可信。先确认环境里的 pheasy 支持 --rasr。"
+                     % rasr)
+        print("[OK] RASR=%s 已在零空间构造步(-c)施加" % rasr, flush=True)
 
 # 拟合步：捕获输出，做 LASSO alpha 边界门禁（对照通用脚本 LASSO_GATE_ON_BOUNDARY）
 print("[pheasy]", fit, flush=True)
@@ -188,7 +232,7 @@ if method == "LASSO":
 for f in ("fc2.hdf5", "fc3.hdf5"):
     if not os.path.isfile(f):
         sys.exit("[ERROR] pheasy 未产出 %s" % f)
-print("PHEASY_DONE dim=%s ndata=%d method=%s" % (dim, ndata, method))
+print("PHEASY_DONE dim=%s ndata=%d method=%s rasr=%s" % (dim, ndata, method, rasr))
 '''
 
 
@@ -236,6 +280,16 @@ def main():
     method = (params.get("METHOD") or "findiff").lower()
     use_nac = stage_born(out, conf)
 
+    dim = (params.get("DIM") or "").lower()
+    if dim not in ("2d", "3d"):
+        # klmace_params 是 step1 写的（DIM 一定有）；真缺了就按结构现判，别把 2D 当 3D 静默放过
+        try:
+            dim = kc.resolve_dim(cwd / "POSCAR", "auto")[0] if (cwd / "POSCAR").is_file() else ""
+        except Exception:
+            dim = ""
+    rasr = _resolve_rasr(conf["PHEASY_RASR"], dim)
+    print("[..] DIM=%s  PHEASY_RASR=%s → RASR=%s" % (dim or "?", conf["PHEASY_RASR"], rasr))
+
     software = str(conf["FIT_SOFTWARE"] or "phono3py").lower()
     # p_bin 先落默认值：fit_cfg 无论哪种 software 都引用它（此前只在校验分支内赋值，
     # phono3py 路会 NameError）。PHEASY_BIN 校验对两条路都生效。
@@ -272,6 +326,7 @@ def main():
         "fit": fit,
         "pheasy_method": str(conf["PHEASY_METHOD"] or "OLS").upper(),
         "pheasy_bin": p_bin,
+        "pheasy_rasr": rasr,
         "c3_cutoff": str(conf["PHEASY_C3_CUTOFF"]),
         "method": method,
         "imag_thr": float(conf["IMAG_THR"]),

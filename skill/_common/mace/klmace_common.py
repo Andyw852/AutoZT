@@ -340,3 +340,112 @@ def resolve_submit(base_dir, kind="submit_mace", dim=None):
         return resolve_tpl(base, kind, dim or "3d")
     except SystemExit:
         sys.exit("[ERROR] 找不到提交模板 %s.tpl（gen_need 里列了吗？）" % kind)
+
+# ===========================================================================
+#  2D 声子的两个共享工具（P2-1 / P2-4）
+#  kl-dft-cpu/kl_common.py 里有一份同源的实现给 DFT 链用；这里这份给 MACE 链
+#  （kl-mace / phonon-mace）用。两边都是纯几何/纯物理判据、不含策略，改动要同步。
+# ===========================================================================
+_HS_2D = {
+    "hexagonal": [("Γ", (0, 0)), ("M", (0.5, 0)), ("K", (1.0 / 3, 1.0 / 3)), ("Γ", (0, 0))],
+    "square": [("Γ", (0, 0)), ("X", (0.5, 0)), ("M", (0.5, 0.5)), ("Γ", (0, 0))],
+    "rectangular": [("Γ", (0, 0)), ("X", (0.5, 0)), ("S", (0.5, 0.5)),
+                    ("Y", (0, 0.5)), ("Γ", (0, 0))],
+    "centered_rectangular": [("Γ", (0, 0)), ("X", (0.5, 0)), ("S", (0.5, 0.5)),
+                             ("Y", (0, 0.5)), ("Γ", (0, 0))],
+    "oblique": [("Γ", (0, 0)), ("X", (0.5, 0)), ("H", (0.5, 0.5)),
+                ("C", (0, 0.5)), ("Γ", (0, 0))],
+}
+
+
+def classify_2d_lattice(cell, vac_axis=2, tol=0.02):
+    """按面内两个原胞矢量判 2D 布拉维格子（五种）。cell 是 3×3（行=晶格矢量）。"""
+    idx = [i for i in range(3) if i != int(vac_axis)]
+    a1 = [float(x) for x in cell[idx[0]]]
+    a2 = [float(x) for x in cell[idx[1]]]
+    l1, l2 = _norm(a1), _norm(a2)
+    cosg = sum(a1[i] * a2[i] for i in range(3)) / max(l1 * l2, 1e-12)
+    cosg = max(-1.0, min(1.0, cosg))
+    eq = abs(l1 - l2) / max(l1, l2) < tol
+    if eq and (abs(cosg - 0.5) < 0.03 or abs(cosg + 0.5) < 0.03):
+        return "hexagonal"
+    if abs(cosg) < 0.03:
+        return "square" if eq else "rectangular"
+    return "centered_rectangular" if eq else "oblique"
+
+
+def band_path_2d(cell, npoints=101, vac_axis=2):
+    """2D 高对称路径（kz=0），返回 (paths, labels, lattice)。
+
+    seekpath 是 3D 工具：用在 2D 上会给出 Γ-A 这类 kz 线段（真空方向的平凡色散）；
+    写死的 Γ-M-K-Γ 又只对六方成立。这里按五种 2D 格子给固定路径。
+    """
+    lat = classify_2d_lattice(cell, vac_axis)
+    ax = int(vac_axis)
+    hs = _HS_2D[lat]
+    inplane = [i for i in range(3) if i != ax]
+    paths = []
+    for (_, q1), (_, q2) in zip(hs[:-1], hs[1:]):
+        p1, p2 = [0.0, 0.0, 0.0], [0.0, 0.0, 0.0]
+        p1[inplane[0]], p1[inplane[1]] = q1
+        p2[inplane[0]], p2[inplane[1]] = q2
+        paths.append([p1, p2])
+    labels = [("$\\Gamma$" if n == "Γ" else n) for n, _ in hs]
+    return paths, labels, lat
+
+
+def inplane_qdirs(cell, vac_axis=2):
+    """两个"不等价"面内 q 方向（约化坐标）：正交取 (1,0,0)/(0,1,0)，六方取 (1,0,0)/(1,1,0)。"""
+    idx = [i for i in range(3) if i != int(vac_axis)]
+    a1 = [float(x) for x in cell[idx[0]]]
+    a2 = [float(x) for x in cell[idx[1]]]
+    n1, n2 = _norm(a1), _norm(a2)
+    cosg = abs(sum(a1[i] * a2[i] for i in range(3)) / max(n1 * n2, 1e-12))
+    d1 = [0.0, 0.0, 0.0]
+    d1[idx[0]] = 1.0
+    if cosg > 0.2:
+        d2 = list(d1)
+        d2[idx[1]] = 1.0
+    else:
+        d2 = [0.0, 0.0, 0.0]
+        d2[idx[1]] = 1.0
+    return [tuple(d1), tuple(d2)]
+
+
+def za_power_law(ph, qdir=(1, 0, 0), qmax=0.05, n=12):
+    """沿 qdir 拟合最低支 ω ∝ q^p，返回 (p, ω_min)；有非正频率返回 (None, ω_min)。
+
+    ZA 弯曲支在零应力 2D 里必须是二次的（p≈2）。只看"最小频率非负"不够：ZA 被线性化
+    时频率全是正的照样过关，但群速度 ∝ q 错了、κ 会整体失真。
+    """
+    import numpy as np
+    qs = np.linspace(float(qmax) / int(n), float(qmax), int(n))
+    pts = [np.array(qdir, float) * q for q in qs]
+    ph.run_qpoints(pts)
+    w = np.asarray(ph.get_qpoints_dict()["frequencies"])[:, 0]
+    if np.any(w <= 0):
+        return None, float(np.min(w))
+    return float(np.polyfit(np.log(qs), np.log(w), 1)[0]), float(np.min(w))
+
+
+def za_check_2d(ph, cell, vac_axis=2, qmax=0.05, p_lo=1.7, p_hi=2.3):
+    """2D 的 ZA 二次性检查（P2-4 / P2-2）。返回可写进 summary 的 dict。"""
+    res = {"qmax": qmax, "p_range": [p_lo, p_hi], "dirs": [], "p": [], "min_freq": []}
+    for d in inplane_qdirs(cell, vac_axis):
+        try:
+            p, wmin = za_power_law(ph, qdir=d, qmax=qmax, n=12)
+        except Exception as e:
+            res["error"] = "ZA 拟合失败：%s" % e
+            return res
+        res["dirs"].append(list(d))
+        res["p"].append(p)
+        res["min_freq"].append(wmin)
+    res["ok"] = all(p is not None and p_lo < p < p_hi for p in res["p"])
+    ps = ["%.2f" % p if p is not None else "None" for p in res["p"]]
+    res["note"] = ("ZA 二次性满足（p=%s）" % ps) if res["ok"] else (
+        "ZA 不是二次色散（p=%s，要求 %.1f~%.1f）：弯曲支被线性化或有虚频，2D 的 κ/稳定性不可信。"
+        "MACE 的 symfc fc2 没有施加 Born-Huang 旋转不变约束，2D 请改用 DFT 链（pheasy + BHH）。"
+        % (ps, p_lo, p_hi))
+    return res
+
+

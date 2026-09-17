@@ -22,7 +22,7 @@
 # ★ step5_label 操作定则：只用 retry / start -f，绝不用 rerun / clean ——
 #   后两者会 rm -rf 步骤目录，毁掉已算完的 DFT 帧。
 # =============================================================================
-schema: 1
+schema: 2
 name: mlff-mace
 desc: 随机位移法MLFF训练
 version: "0.1"
@@ -102,6 +102,15 @@ steps:
      gen: "gen_step9_publish.py {mat}",
      gen_need: [mlff_common.py, dim_common.py, stepconf.py, step.conf]}
 
++io_schema:
+  inputs: [{name: POSCAR, from: user, required: true, desc: "材料结构"}]
+  outputs: [{name: workflow_outputs, step: final, type: directory, desc: "由技能实际步骤产生的结果文件"}]
+  params: []
+  steps: []
+flow:
+  summary: "按技能步骤生成并校验科学计算结果"
+  stages: [{name: workflow, steps: [], produces: [workflow_outputs]}]
+corrections: [node_fail, dir_missing]
 requires:
   python: [mace-torch, torch, ase, phonopy, numpy, matplotlib]
   exe: [vaspkit]

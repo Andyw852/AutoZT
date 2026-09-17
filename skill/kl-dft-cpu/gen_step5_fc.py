@@ -30,14 +30,26 @@ DISP_DIR = "step4_disp"
 SPEC = {
     "FUNC":        ("pbesol", "str"),   # 全局带入，本步不用
     # —— 拟合器选择 ——
-    "FIT_ENGINE":  ("phono3py", "str"), # phono3py | pheasy
+    # auto：按维度选 —— 2D 用 pheasy，3D 用 phono3py（symfc 快且稳，3D 不需要旋转不变性）。
+    #   ★ 限制在"必须走 pheasy"这一步，与用哪种回归方法无关：RASR 是在 pheasy 的 -c
+    #   （零空间构造）步写进零空间的，之后 OLS / RFE / LASSO 都能用。所以引擎默认改成
+    #   pheasy 才是 P0-1 的关键，PHEASY_FIT_METHOD 是另一个独立选择（见下）。
+    "FIT_ENGINE":  ("auto", "str"),     # auto | phono3py | pheasy
     # phono3py 路（symfc/alm）
     "FC_CALC":     ("symfc",  "str"),   # symfc | alm
     "FC3_CUTOFF":  (None,     "str"),   # fc3 截断 Å（"5.0"）；空/None=不截断
     # pheasy 路
-    "PHEASY_FIT_METHOD": ("RFE", "str"), # LASSO | RFE | OLS（OLS 最吃内存）
+    # auto：2D → LASSO、3D → RFE。与 RASR 无关（RASR 只看引擎是不是 pheasy）；
+    #   选 LASSO 是因为对照实验里 RFE/OLS 的 fc3 幅值本就贴近参考值，而 LASSO 必须靠
+    #   --std + 去偏才能压到 0.13% 以内 —— 那两项已写死在 submit_fit_pheasy.tpl 里，
+    #   用 LASSO 前务必确认模板没被项目级副本遮蔽。
+    "PHEASY_FIT_METHOD": ("auto", "str"), # auto | LASSO | RFE | OLS（OLS 最吃内存）
     "PHEASY_C3_CUTOFF":  ("5.2", "str"), # pheasy fc3 截断 Å；None=不截断
     "PHEASY_ENABLE_FC":  (3,     "int"), # 2|3|4（热导率需 ≥3）
+    # 旋转不变性/平衡条件（RASR）：auto = 2D 用 BHH、3D 不加（文献结论：对体材料可忽略，
+    #   对 2D 是硬要求——不加则 ZA 近 Γ 线性化甚至出虚频）。BHH | BH | H | none 可强制。
+    #   ★ 必须施加在 pheasy 的 -c（零空间构造）步；-f 步读的是 ns_*.npz，--rasr 在 -f 上无效。
+    "PHEASY_RASR":       ("auto", "str"),
     "PHEASY_BIN":        ("pheasy", "str"), # pheasy 可执行名：pheasy | pheasy-gpu（GPU 版）
     "NULL_SPACE_EPS":    (0.001, "float"),
     # —— 导出 & 虚频闸 ——
@@ -48,8 +60,32 @@ SPEC = {
     "EXPORT_SHENGBTE": (True, "bool"),   # 任一拟合器都产出 shengbte 力常数
     "BAND_POINTS":     (51,   "int"),
     "IMAG_THR":        (0.10, "float"),  # 虚频阈值(THz)
+    # P2-2：2D 的 ZA 弯曲支二次性检查（ω ∝ q^p，要求 1.7<p<2.3）。
+    #   auto = 2D 打开；只看最小频率不够 —— ZA 线性化时频率全是正的，照样过虚频闸门，
+    #   但 κ 会整体错掉。检查结果写进 phonon_summary.json 的 za_exponent。
+    "ZA_CHECK":        ("auto", "str"),   # auto | on | off
+    "ZA_QMAX":         (0.05, "float"),   # 拟合用 q 上限（倒格子约化单位，0.05~0.1）
     # 作业资源（核数/qos/时长）走 step.conf 的 [submit] 段覆盖 #SBATCH，不在 [params] 里。
 }
+
+
+_RASR_VALUES = ("BHH", "BH", "H")
+
+
+def _resolve_rasr(val, dim):
+    """PHEASY_RASR 解析：auto → 2D=BHH / 3D=none；显式值原样（none 归一成小写）。
+
+    pheasy 的 --rasr 只接受 BH / H / BHH（basic_io.py 的 choices），所以 "none" 不是
+    一个能传的值 —— 关掉就是不传这个开关（模板里 RASR_FLAGS 为空）。
+    """
+    v = str(val if val is not None else "auto").strip().upper()
+    if v == "AUTO":
+        return "BHH" if dim == "2d" else "none"
+    if v in _RASR_VALUES:
+        return v
+    if v in ("NONE", "OFF", "FALSE", "F", "0", ""):
+        return "none"
+    sys.exit("[ERROR] PHEASY_RASR=%r 非法：只允许 auto | BHH | BH | H | none" % val)
 
 
 def main():
@@ -65,22 +101,62 @@ def main():
     if not list(disp.glob("disp-*/vasprun.xml")):
         sys.exit("[ERROR] %s 下无 disp-*/vasprun.xml，位移单点还没算完" % disp)
 
+    # ---- 抽帧校验（2026-09-17，wangchao 要求）：力必须与位移对应 ----
+    #   S4 是 fanout，retry 只补缺失帧；若 S1 换过结构而旧 disp-* 残留，会出现
+    #   "旧结构的力 + 新位移"的静默错配。这里抽 3 帧把 vasprun.xml 的坐标与
+    #   "phono3py_disp.yaml 的超胞 + 位移"逐原子比对（周期回绕后 < 1e-3 Å）。
+    _ok, _note = kc.check_frames_match_displacements(disp)
+    print("[%s] S4 帧一致性：%s" % ("OK" if _ok else "FAIL", _note))
+    if not _ok:
+        sys.exit("[ERROR] %s\n        请清空 step4_disp 的 disp-*/POSCAR-*/phono3py_disp.yaml/SPOSCAR "
+                 "后重跑 S4（或 -j S4_disp rerun）。" % _note)
+
     params = kc.read_kl_params(disp / kc.KL_PARAMS)
     method = (params.get("METHOD") or "alm").lower()
     supercell = params.get("SUPERCELL") or ""
     dim = (params.get("DIM") or "").lower()
+    if dim not in ("2d", "3d") and (disp / "POSCAR").is_file():
+        # kl_params 是 S4 写的（DIM 一定有）；真缺了就按结构现判，别把 2D 当 3D 静默放过
+        try:
+            dim = kc.resolve_dim(disp / "POSCAR", "auto")[0]
+        except Exception:
+            dim = ""
 
-    engine = str(conf["FIT_ENGINE"]).lower()
+    engine = str(conf["FIT_ENGINE"] or "auto").strip().lower()
+    if engine in ("auto", ""):
+        engine = "pheasy" if dim == "2d" else "phono3py"
+        print("[..] FIT_ENGINE=auto → %s（DIM=%s）" % (engine, dim or "?"))
     if engine not in ("phono3py", "pheasy"):
-        sys.exit("[ERROR] FIT_ENGINE 只允许 phono3py / pheasy")
+        sys.exit("[ERROR] FIT_ENGINE 只允许 auto / phono3py / pheasy")
     if engine == "pheasy" and method != "alm":
         sys.exit("[ERROR] FIT_ENGINE=pheasy 需要随机位移（step4 METHOD=alm）。\n"
                  "        findiff 请用 FIT_ENGINE=phono3py，或把 step4 改成 alm 重跑。")
+    p_method = str(conf["PHEASY_FIT_METHOD"] or "auto").strip().upper()
+    if p_method in ("AUTO", ""):
+        p_method = "LASSO" if dim == "2d" else "RFE"
+        print("[..] PHEASY_FIT_METHOD=auto → %s（DIM=%s）" % (p_method, dim or "?"))
+    if p_method not in ("LASSO", "RFE", "OLS"):
+        sys.exit("[ERROR] PHEASY_FIT_METHOD 只允许 auto / LASSO / RFE / OLS")
     p_bin = str(conf["PHEASY_BIN"] or "pheasy").lower()
     if p_bin not in ("pheasy", "pheasy-gpu"):
         sys.exit("[ERROR] PHEASY_BIN 只允许 pheasy / pheasy-gpu")
     if str(conf["FC_CALC"]).lower() not in ("symfc", "alm"):
         sys.exit("[ERROR] FC_CALC 只允许 symfc / alm")
+
+    # ---- RASR（旋转不变性 + 零应力平衡条件）----
+    # 2D 的 ZA 弯曲支 ω∝q² 由 Born-Huang 旋转不变性保证；不加时近 Γ 会线性化、
+    #   常常还带小虚频，虚频闸可能过（频率全为正）但 κ 是错的，所以默认 2D 必加。
+    rasr = _resolve_rasr(conf["PHEASY_RASR"], dim)
+    if engine != "pheasy" and rasr != "none":
+        print("[..] FIT_ENGINE=%s 不用 pheasy 的 RASR，忽略 PHEASY_RASR=%s" % (engine, rasr))
+        rasr = "none"
+    print("[..] RASR=%s（DIM=%s，PHEASY_RASR=%s）"
+          % (rasr, dim or "?", conf["PHEASY_RASR"]))
+    if dim == "2d" and rasr == "none":
+        print("[WARN] 2D 体系关闭了 RASR（PHEASY_RASR=none）：ZA 近 Γ 可能线性化或出虚频，"
+              "拟合出的力常数与 κ 不可信。除非在做对照实验，请设 PHEASY_RASR=auto/BHH。")
+    elif dim != "2d" and rasr == "none":
+        print("[..] 3D：按文献结论不施加 RASR（auto 的行为），要强制请设 PHEASY_RASR=BHH/BH/H")
 
     # kl_params 一并拷进 step5_fc（溯源/后续继承）
     for f in (kc.KL_PARAMS, kc.METHOD_FILE):
@@ -96,7 +172,8 @@ def main():
         "FC_CALC": str(conf["FC_CALC"]).lower(),
         "FC3_CUTOFF": (None if conf["FC3_CUTOFF"] in (None, "", "None", "none")
                        else str(conf["FC3_CUTOFF"])),
-        "PHEASY_FIT_METHOD": str(conf["PHEASY_FIT_METHOD"]).upper(),
+        "PHEASY_RASR": rasr,
+        "PHEASY_FIT_METHOD": p_method,
         "PHEASY_C3_CUTOFF": str(conf["PHEASY_C3_CUTOFF"]),
         "PHEASY_ENABLE_FC": int(conf["PHEASY_ENABLE_FC"]),
         "PHEASY_BIN": p_bin,
@@ -106,6 +183,8 @@ def main():
         "EXPORT_SHENGBTE": bool(conf["EXPORT_SHENGBTE"]),
         "BAND_POINTS": int(conf["BAND_POINTS"]),
         "IMAG_THR": float(conf["IMAG_THR"]),
+        "ZA_CHECK": str(conf["ZA_CHECK"]),
+        "ZA_QMAX": float(conf["ZA_QMAX"]),
     }
     (out / "fit_config.json").write_text(
         json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8", newline="\n")
@@ -136,6 +215,7 @@ def main():
                 "FIT_METHOD": cfg["PHEASY_FIT_METHOD"],
                 "ENABLE_FC": str(cfg["PHEASY_ENABLE_FC"]),
                 "PHEASY_BIN": p_bin,
+                "RASR": rasr,
                 "C3_CUTOFF": cfg["PHEASY_C3_CUTOFF"],
                 "NULL_SPACE_EPS": str(cfg["NULL_SPACE_EPS"])}
     else:

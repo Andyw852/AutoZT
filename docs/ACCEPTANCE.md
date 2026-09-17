@@ -9,14 +9,14 @@ artifact that carries the evidence, so a reviewer can re-run it.
 |---|---|
 | CLI works under both names (autozt, pa) | bin/autozt, bin/pa; pyproject scripts |
 | English help | AUTOZT_LANG=en pa --help (50 lines, 29 commands, no Chinese left) |
-| MCP server (JSON-RPC over stdio) | autozt mcp; tests/test_mcp.py 6/6 |
-| 14 generic MCP tools, capped at 20 | autozt mcp --list-tools; test asserts tool names are skill-agnostic |
+| MCP server (JSON-RPC over stdio) | autozt mcp; tests/test_mcp.py (32 checks, including profiles, capabilities, bounded proposals, configured skill resources, failure data, and cursor snapshots) |
+| 21 generic MCP tools, capped at 21; compact exposes 7, workflow 9, monitor 2 | autozt mcp --list-tools; MCP tests assert skill-agnostic names and profile output |
 
 ## 2. Safety
 
 | Metric | Value | Evidence |
 |---|---|---|
-| interception rate of hazardous actions | 100% (8/8) | scripts/safety_metrics.py |
+| interception rate of hazardous actions | 100% (9/9) | scripts/safety_metrics.py |
 | hazardous actions actually executed | 0 | scripts/safety_metrics.py |
 | every denial offers an approval path | yes | scripts/safety_metrics.py |
 | read-only actions still allowed for agents | yes | scripts/safety_metrics.py |
@@ -50,7 +50,7 @@ artifact that carries the evidence, so a reviewer can re-run it.
 ## 6. Test inventory (all green locally; the same set runs in CI)
 
     tests/test_smoke.py            5 assertions
-    tests/test_mcp.py              6
+    tests/test_mcp.py              31
     tests/test_safety_metrics.py   4
     tests/test_preflight_checks.py 6
     tests/test_i18n.py             6

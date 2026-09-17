@@ -51,8 +51,17 @@ SPEC = {
     # ---- 求解器（phono3py 默认 | shengbte）----
     "SOLVER": ("phono3py", "str"),      # phono3py（--br/--lbte，默认）| shengbte（三声子 BTE）
     # shengbte 专属（phono3py 忽略）
-    "SCALEBROAD": (0.1, "float"),       # shengbte 高斯展宽系数（更小更快但可能漏过程）
+    "SCALEBROAD": (1.0, "float"),       # shengbte 高斯展宽系数（ShengBTE 默认 1.0；0.1 会漏过程）
     "SHENGBTE_EXE": ("ShengBTE", "str"),# shengbte 可执行（按集群填绝对路径，见 kl-dft README）
+    # ---- ShengBTE 的 MPI/OMP 布局（见 setting/<集群>/templates/submit_shengbte_klm.tpl）----
+    # ShengBTE 靠 MPI 按 q 点并行：--ntasks-per-node=1 -> $SLURM_NTASKS=1 ->
+    # mpirun -n 1 = 串行，会长时间停在 "about to obtain the spectrum" 零产物。
+    # 正确布局 = 一个 MPI rank 占一个 NUMA 域：
+    #     NTASKS = TOTAL_CORES / CORES_PER_NUMA ，CPUS_PER_TASK = CORES_PER_NUMA
+    # jzzn：192 核 = 24 域 x **8 核**（不是 16）-> 96 核即 12 rank x 8 线程。
+    "SHENGBTE_TOTAL_CORES":    (96,     "int"),
+    "SHENGBTE_CORES_PER_NUMA": (8,      "int"),
+    "SHENGBTE_NTASKS":         ("auto", "str"),
     # phono3py 网格点并行（--gp/--write-gamma/--read-gamma）：>=2 时把 q 网格均分 N 份，
     #   N 个 --write-gamma 作业并行算散射率，再 --read-gamma 收拢出 κ。单机多核白拿的加速，
     #   BTE 网格加密后尤其值得（DFT 路线同样适用）。=0/1 关闭，走单作业。
@@ -81,6 +90,10 @@ except ImportError:
             "Hg":2.23,"Tl":1.96,"Pb":2.02,"Bi":2.07}
     print("[WARN] 没找到 _common/vdw_radii.py，用内置最小表")
 
+# 2D 层厚的唯一真源（kl-dft-cpu S6 与 ke 侧同一份）：h⊥=V/A、以真空隙切口展开、
+#   d = span + vdW(top) + vdW(bot)。本步不再自己算，只做字段名映射。
+from thickness_2d import slab_geometry
+
 
 def _poscar_species(poscar):
     """从 POSCAR 读每个原子的元素符号（VASP5）；VASP4 无元素行则返回 None。"""
@@ -97,36 +110,41 @@ def _poscar_species(poscar):
 
 
 def two_d_norm_factor(poscar, vac_axis, mode):
-    """2D κ 厚度归一化因子 factor=Lz/d 与元数据。mode: vdw | cell | 数值(Å)。"""
-    import numpy as np
+    """2D κ 厚度归一化因子 factor=h⊥/d 与元数据。mode: vdw | cell | 数值(Å)。
+
+    真源是 skill/_common/thickness_2d.slab_geometry（kl-dft-cpu 的 S6 与 ke 侧读同一份），
+    本函数只负责从 POSCAR 取晶格+元素表再转回 kappa_summary 的字段名。
+
+    相对旧实现修了三处（与 kl-dft-cpu/gen_step6_kappa.py 的同名函数一致）：
+      ① 基准从 Lz=|c| 改成 h⊥=V/A —— phono3py/ShengBTE 的分母是 V 和面内面积 A，
+         c 轴倾斜时 |c|≠V/A，因子会算错；
+      ② 展开方式改成"最大间隙=真空"切口 —— 旧版直接取 frac 投影 max−min，层跨越
+         z=0/1 时 span 被算成接近整个胞高 → d>h⊥ → 因子<1（把 κ 又缩小一遍）；
+      ③ 元数据补 h_perp_A / vacuum_gap_A / thickness_d_A。
+
+    ★ 字段名保持 Lz_ang / thickness_d_ang / atomic_zspan_ang 不变：ke 的
+      step8.1_boltztrap/gen_step11_boltztrap.py 与 step8.3_output/gen_step13_output.py
+      直接读这些键做两条链的元胞/厚度一致性闸门。Lz_ang 仍是 |c|（要跟 ke 的 c 比），
+      归一化用的胞高是 h_perp_A，两者分开了。
+    """
     from dim_common import read_poscar_cell_frac
     lat, frac = read_poscar_cell_frac(poscar)
-    lat = np.array(lat, float); frac = np.array(frac, float)
     ax = vac_axis if vac_axis is not None else 2
-    Lz = float(np.linalg.norm(lat[ax]))
-    axis_unit = lat[ax] / Lz
-    proj = (frac @ lat) @ axis_unit
-    zspan = float(proj.max() - proj.min()) if len(proj) else 0.0
-    m = str(mode).strip().lower()
-    try:
-        d = float(m); conv = "fixed %.3f A" % d
-    except ValueError:
-        if m in ("cell", "lz", "none", ""):
-            d = Lz; conv = "cell Lz (no norm)"
-        else:
-            sp = _poscar_species(poscar)
-            if sp and len(sp) == len(proj):
-                order = np.argsort(proj)
-                bot, top = sp[int(order[0])], sp[int(order[-1])]
-                d = zspan + _VDW.get(top, 2.0) + _VDW.get(bot, 2.0)
-                conv = "zspan %.2f + vdW(%s,%s)" % (zspan, top, bot)
-            else:
-                d = Lz; conv = "cell Lz (no species -> fallback)"
-    factor = Lz / d if d else 1.0
-    meta = {"kappa_2d_norm_factor": round(factor, 5), "Lz_ang": round(Lz, 3),
-            "thickness_d_ang": round(d, 3) if d else None,
-            "thickness_convention": conv, "atomic_zspan_ang": round(zspan, 3),
-            "note": "kappa_2d_normalized = kappa_raw * Lz/d（面内分量才有物理意义）"}
+    sp = _poscar_species(poscar)
+    if sp is not None and len(sp) != len(frac):
+        sp = None
+    g = slab_geometry(lat, frac, sp, vac_axis=ax, mode=mode)
+    factor = float(g["kappa_2d_norm_factor"])
+    meta = {"kappa_2d_norm_factor": g["kappa_2d_norm_factor"],
+            "h_perp_A": g["h_perp_A"], "vacuum_gap_A": g["vacuum_gap_A"],
+            "thickness_d_A": g["thickness_d_A"],
+            # —— 兼容旧字段名（ke 侧在读，勿删）——
+            "Lz_ang": g["Lz_A"],
+            "thickness_d_ang": g["thickness_d_A"],
+            "thickness_convention": g["thickness_convention"],
+            "atomic_zspan_ang": g["atomic_span_A"],
+            "note": "kappa_2d_normalized = kappa_raw * h_perp/d"
+                    "（h_perp=V/A，面内分量才有物理意义）"}
     return factor, meta
 
 # 作业里抽 κ 的小脚本：把所有 kappa-m*.hdf5 都收进 summary（配合 MESH_SCAN）。
@@ -393,6 +411,25 @@ def build_shengbte_submit(cwd, out, src, conf, params, dim, vac_axis=2,
     )
 
     exe = str(conf["SHENGBTE_EXE"] or "ShengBTE").strip()
+    # MPI/OMP 布局：一个 rank 一个 NUMA 域。rank=1 会退化成串行（ShengBTE 靠 MPI
+    # 按 q 点并行），必须显式算出来，不能沿用模板里的常量。
+    _cpus_per_numa = int(conf["SHENGBTE_CORES_PER_NUMA"] or 8)
+    _total = int(conf["SHENGBTE_TOTAL_CORES"] or 96)
+    _nt_raw = str(conf["SHENGBTE_NTASKS"] or "auto").strip()
+    if _nt_raw and _nt_raw.lower() != "auto":
+        try:
+            _ntasks = int(_nt_raw)
+        except ValueError:
+            sys.exit("[ERROR] SHENGBTE_NTASKS=%r 不是整数也不是 auto" % _nt_raw)
+    else:
+        _ntasks = max(1, _total // _cpus_per_numa)
+    if _ntasks <= 1:
+        sys.exit("[ERROR] SHENGBTE_NTASKS 算出来是 %d —— ShengBTE 靠 MPI 按 q 点并行，"
+                 "单进程等于串行（实测 11.8 h 零产物）。请检查 step.conf 的 "
+                 "SHENGBTE_TOTAL_CORES=%d / SHENGBTE_CORES_PER_NUMA=%d。"
+                 % (_ntasks, _total, _cpus_per_numa))
+    print("[..] ShengBTE 布局：%d MPI ranks x %d OMP threads = %d 核"
+          % (_ntasks, _cpus_per_numa, _ntasks * _cpus_per_numa))
     here = Path(__file__).resolve().parent
     tpl = kc.resolve_submit(here, "submit_shengbte_klm")
     kc.write_submit(tpl, out / "submit.sh",
@@ -400,6 +437,8 @@ def build_shengbte_submit(cwd, out, src, conf, params, dim, vac_axis=2,
                      "CONDA_SH": conf["CONDA_SH"] or kc.DEFAULT_CONDA_SH,
                      "CONDA_ENV": conf["CONDA_ENV"] or kc.DEFAULT_CONDA_ENV,
                      "SHENGBTE_EXE": exe,
+                     "NTASKS": str(_ntasks),
+                     "CPUS_PER_TASK": str(_cpus_per_numa),
                      "SB_EXTRACT": extract})
     stepconf.apply_submit(out / "submit.sh", conf.submit)
     print("[DONE] %s：submit.sh 就绪（ShengBTE RTA），跑完写 kappa_summary.json" % OUTDIR)

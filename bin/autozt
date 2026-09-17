@@ -4,18 +4,46 @@
 import os
 import sys
 
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding='utf-8', errors='replace')
+    except AttributeError:
+        pass
+
 # 让 bin/autozt 直接运行（不经安装）时也能找到 tfpkg 包
 _PKG_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _PKG_ROOT not in sys.path:
     sys.path.insert(0, _PKG_ROOT)
 
-# mcp 子命令在参数解析之前拦截：MCP 客户端用 stdio JSON-RPC，
-# --list-tools/--call 是给人和测试用的，不该被主解析器当材料名。
+# mcp/agent 子命令在参数解析之前拦截。只识别裸命令词，避免材料名恰好
+# 叫 mcp/agent 时误路由；两者都支持把 -c/-tt/-p 放在子命令前面。
 import sys as _sys
-if 'mcp' in _sys.argv[1:]:
-    _i = _sys.argv.index('mcp')
+_value_flags = {'-c', '--config', '-tt', '-p', '-j', '-job', '-status', '--status',
+                '-x', '--exclude', '--host', '-u', '--user'}
+def _bare_index(_name):
+    _skip = False
+    for _idx, _tok in enumerate(_sys.argv[1:]):
+        if _skip:
+            _skip = False
+            continue
+        if _tok in _value_flags:
+            _skip = True
+            continue
+        if _tok == _name:
+            return _idx + 1
+    return None
+
+_i_mcp = _bare_index('mcp')
+_i_agent = _bare_index('agent')
+if _i_mcp is not None and (_i_agent is None or _i_mcp < _i_agent):
     from autozt import mcp as _mcp_intercept
-    _sys.exit(_mcp_intercept.main(_sys.argv[_i + 1:]))
+    _sys.exit(_mcp_intercept.main(_sys.argv[_i_mcp + 1:]))
+
+# agent 子命令在主解析器之前拦截：它有自己的稳定 JSON 参数面，且支持
+# `autozt -c cfg agent snapshot` 这种把全局选项放在 agent 前面的写法。
+if _i_agent is not None:
+    from autozt import agent_cli as _agent_intercept
+    _sys.exit(_agent_intercept.main(_sys.argv[1:]))
 
 # 英文帮助：AUTOZT_LANG=en（或 --lang en）时用 USAGE_EN，其余保持中文。
 # 放在最前面拦截，避免 argparse 的 --help 抢先输出中文。
@@ -41,4 +69,3 @@ if __name__ == "__main__":
         devnull = os.open(os.devnull, os.O_WRONLY)
         os.dup2(devnull, sys.stdout.fileno())
         sys.exit(0)
-

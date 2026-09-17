@@ -106,6 +106,9 @@ INTERPOLATION_FACTOR = 10
 #   直接填：单个数（各向同性近似，GPa），或 6x6 列表（完整 Cij，GPa）。
 MANUAL_ELASTIC = None
 ELASTIC_DIR = "step6_elastic"
+# patch_deform_ref：形变势参考口径（2D 默认真空）。step7b 写出 deformation_vac.h5 就用它，
+# 否则退回 deformation.h5（AMSET 芯态对齐）。实测 CrS2：3.53 -> 5.86 eV，μ 差 2.76 倍。
+DEFORM_REF = "auto"      # auto = vacuum 优先（本步只服务 2D）；或强制 core 作对比
 # --- patch_2d_amset：2D 修正 ---------------------------------------------
 # TWO_D_MODE: "auto" = 读 step1 的 workflow_method.txt 的 DIM=；"on"/"off" 强制。
 TWO_D_MODE = "on"   # 本步只服务 2D：main() 里另有 DIM 硬闸门（非 2d 直接退出）
@@ -119,13 +122,30 @@ LAYER_THICKNESS = "vdw"
 # patch_layer_thickness_conf：LAYER_THICKNESS 可从 step.conf 覆盖（出厂默认 "vdw"）。
 #   SS/LS 超晶格在 project_setting/templates/step8_amset/step.conf 写 LAYER_THICKNESS = 6.73
 #   （照文献取 CrS2 6.53 / CrSe2 6.94 的平均，非本结构 vdW 自动值 6.97）。
+# NWORKERS：AMSET 的并行进程数，写进 settings.yaml 的 nworkers。
+#   ★ 2026-09-16：本步此前**完全不写 nworkers**（gen_step10 已写、这里漏了），
+#     AMSET 取默认 -1，其源码 (amset/interpolation/bandstructure.py:182) 把 -1
+#     解释成 multiprocessing.cpu_count() = **用满节点全部核** ——
+#     jzzn 提交只申请 24 核，于是超订 8 倍，抢同节点其他作业的 CPU。
+#   ★ 默认 None = **自动**：由提交模板（叠加 step.conf 的 [submit] 覆盖）推出
+#     本次真正分配到的核数 ntasks_per_node × cpus_per_task。
+#     三台机器口径不同：jzzn 24×1=24、hanhai25 128×1=128、3090 1×8=8 ——
+#     写死常数必然错两台（少要 = 算力闲置，多要 = 抢别人的 CPU）。
+#   ★ 要固定值就在 step.conf 写 NWORKERS = <int>，与分配不一致时打印 WARN。
+#   与 gen_step10_amset.py 的同名逻辑保持同步（改一处请改两处）。
+NWORKERS = None
+NWORKERS_FALLBACK = 24      # 提交模板里读不到 SLURM 分配（--ntasks/--cpus）时的兜底
 STEP = "step8_amset"
 SPEC = {
     "LAYER_THICKNESS": (LAYER_THICKNESS, "str"),
+    # NWORKERS 必须在 SPEC 里声明，否则 step.conf 里写了会被判成"不认识的键"。
+    "NWORKERS": (NWORKERS, "int"),
 }
 # --- amset2d 插件相关（可改）---
 PLUGIN_SRC_NAME = "amset2d_plugin.py"   # 与本脚本同目录，运行时复制到 OUTDIR_NAME
 POP_FREQ_HELPER = "amset2d_pop_freq.py"  # Γ 点面内极性模频率的取法（见该文件头）
+# 该 helper 的完整 JSON（含 Δr 两种算法交叉核对），供 2d_correction.json 落盘
+_LAST_POP_JSON = {}
 # 手填 pop_frequency（THz）。None = 自动（面内极性模加权平均）。已知文献值时优先手填。
 POP_FREQUENCY_MANUAL = None
 # 二维散射机制就在上面的 SCATTERING 里选（同时写进 2d_correction.json 的 mechanisms_2d，
@@ -275,6 +295,29 @@ def _reorder_voigt(mat, col_labels, row_labels=None):
     pc = _voigt_perm(col_labels)
     pr = _voigt_perm(row_labels if row_labels is not None else col_labels)
     return [[mat[pr[i]][pc[j]] for j in range(6)] for i in range(6)]
+
+
+def _pick_deformation_h5(cwd, read_dir):
+    """挑形变势文件：默认用真空口径 deformation_vac.h5（二维文献口径），缺失则 core。
+
+    DEFORM_REF: "auto"（vacuum 优先）/ "vacuum" / "core"。口径写进 settings 注释，
+    因为两种口径的绝对值差 ~2.8 倍，必须能从产物反查。
+    """
+    read_dir = Path(read_dir)
+    ref = str(DEFORM_REF).lower()
+    if ref not in ("auto", "vacuum", "core"):
+        sys.exit("[ERROR] DEFORM_REF=%r 无效，只允许 auto / vacuum / core" % DEFORM_REF)
+    want_vacuum = ref in ("auto", "vacuum")
+    if want_vacuum and (read_dir / "deformation_vac.h5").is_file():
+        print("[OK] 形变势参考口径：**真空**（deformation_vac.h5，二维文献口径）")
+        return "deformation_vac.h5"
+    if want_vacuum:
+        print("[WARN] 想要真空口径但 %s/deformation_vac.h5 不存在 -> 退回 **core** 口径"
+              "（AMSET 芯态对齐，为体材料设计）。要真空口径请重跑 step7b"
+              "（需要 step7_deform 形变目录里的 LOCPOT）。" % read_dir)
+    else:
+        print("[..] 形变势参考口径：core（按 DEFORM_REF=%s）" % ref)
+    return "deformation.h5"
 
 
 def vasp_to_voigt_6x6(m):
@@ -519,10 +562,13 @@ def read_dim(cwd: Path):
 
 
 def _read_poscar_cz(path: Path):
-    """从 POSCAR 读 (c 轴长度 Å, 原子 z 向跨度 Å)。解析不了返回 (None, None)。
+    """从 POSCAR 读 (h⊥ Å, 原子 z 向跨度 Å)。解析不了返回 (None, None)。
 
-    只处理真空沿第 3 个晶格矢量、且 c 轴基本正交于 ab 面的常规 slab —— 这正是
-    本流程强制要求的布局（dim_common 检测到真空不在 c 轴会直接退出）。
+    **h⊥ = V/|a×b| = |c·(a×b)|/|a×b|**，即垂直于 ab 面的胞高，不是 |c|。
+    AMSET/phono3py 用的体积是 V = A·h⊥，所以 2D 归一化因子必须是 h⊥/t，
+    二维映射里 kz 积分长度 |b₃| = 2π/h⊥ 也应该用 h⊥ —— 正交胞时 h⊥ = |c|，
+    c 相对层法向倾斜时两者才不同（本流程强制真空沿第 3 个矢量、层法向 ∥ z，
+    dim_common 与插件都会拦）。
     """
     try:
         lines = path.read_text(encoding="utf-8-sig", errors="ignore").splitlines()
@@ -660,6 +706,70 @@ def _slab_tensors(dielect_dir, eps_inf_fb, eps_static_fb):
     return inf, stat
 
 
+# === patch_delta_r_check：r∞ / Δr 自检（2026-09-16 新增）===
+# 定义（与插件、METHODOLOGY §4 一致）：r = c(ε_slab,∥ − 1)/2（真空收敛后与 c 无关），
+# 插件 POP 核用的是 G_2D ∝ 2πc·Δr/[(1 + r∞q)(1 + r0q)]，其中
+#     Δr = r0 − r∞ = c(ε0,slab − ε∞,slab)/2 。
+# 把这两个数落盘并打印：曾经把**体相** ε0/ε∞ 外推出来的 Δr（43.5 Å）当成 Sohier 的
+# 0.53 Å 用，单机制迁移率因此差了约两个量级，而只看 ε 张量根本看不出来。
+# 锚点（文献）：MoS2 r∞≈46.5 Å / Δr≈0.53 Å（Δr/r∞≈1.1%）；h-BN r∞≈7.6 Å / Δr≈2.8 Å（≈37%）。
+_R_ANCHORS = {
+    "MoS2": {"r_inf_A": 46.5, "delta_r_A": 0.53},
+    "h-BN": {"r_inf_A": 7.64, "delta_r_A": 2.84},
+}
+
+
+def _inplane_mean(mat):
+    """3×3 张量的面内对角平均；读不到/非有限返回 None。"""
+    try:
+        a = [[float(mat[i][j]) for j in range(2)] for i in range(2)]
+    except (TypeError, ValueError, IndexError):
+        return None
+    vals = [a[0][0], a[1][1]]
+    if any(v != v or v in (float("inf"), float("-inf")) for v in vals):
+        return None
+    return (vals[0] + vals[1]) / 2.0
+
+
+def delta_r_check(c_len, inf33, stat33):
+    """由**原始 slab** 介电张量算 r∞ / r0 / Δr（Å），打印自检并返回落盘的 dict。"""
+    ei, es = _inplane_mean(inf33), _inplane_mean(stat33)
+    if ei is None or es is None:
+        print("[WARN] 2D 介电张量不可用 —— r∞/Δr 自检跳过"
+              "（POP 的绝对量级没有依据，结果只能看趋势）")
+        return {"available": False}
+    r_inf = c_len * (ei - 1.0) / 2.0
+    r_0 = c_len * (es - 1.0) / 2.0
+    dr = r_0 - r_inf
+    ratio = (dr / r_inf) if r_inf else float("inf")
+    out = {
+        "available": True,
+        "eps_inf_inplane_mean": round(ei, 4),
+        "eps_static_inplane_mean": round(es, 4),
+        "r_inf_A": round(r_inf, 4),
+        "r_0_A": round(r_0, 4),
+        "delta_r_A": round(dr, 4),
+        "delta_r_over_r_inf": round(ratio, 5),
+        "definition": "r = c*(eps_slab,inplane - 1)/2 (Angstrom); "
+                      "Delta r = r0 - r_inf = c*(eps0-eps_inf)/2",
+        "anchors": _R_ANCHORS,
+    }
+    print("[OK] 2D 极化长度：r∞ = %.3f Å，Δr = %.4f Å（Δr/r∞ = %.1f%%）"
+          % (r_inf, dr, 100 * ratio))
+    print("     锚点参考：MoS2 r∞≈46.5 Å / Δr≈0.53 Å（1.1%）；"
+          "h-BN r∞≈7.6 Å / Δr≈2.8 Å（37%）")
+    if dr < -1e-9:
+        print("[WARN] Δr < 0（ε0 < ε∞）：离子介电缺失或读错，POP 强度会变成 0 或负值，"
+              "请核对 %s/OUTCAR 的 IONIC CONTRIBUTION 块" % DIELECT_DIR)
+    elif ratio > 0.6:
+        print("[WARN] Δr/r∞ = %.0f%% 远大于文献锚点量级 —— 最常见的原因是把**体相** "
+              "ε0/ε∞ 外推当作 slab 值（曾出现 43.5 Å vs 0.53 Å）。"
+              "请确认 ε0/ε∞ 取自同一次 DFPT 的原始 slab 张量。" % (100 * ratio))
+    if r_inf <= 0 or r_inf > 2000:
+        print("[WARN] r∞ = %.1f Å 超出合理范围（0-2000 Å），请核对 ε∞ 张量" % r_inf)
+    return out
+
+
 def _mechanisms_2d(cwd: Path):
     """插件要替换的散射机制（落盘给插件读）与 settings 的 scattering_type 一致。"""
     mechs = list(SCATTERING)
@@ -712,6 +822,12 @@ def read_pop_frequency_2d(dielect_dir):
     """
     import json as _json
     import subprocess
+    # 本进程只需要跑一次 helper（它的 JSON 里还带 Δr 两路线交叉核对，要给 2d_correction.json 用）。
+    # ★ 顺序坑（2026-09-16 MoS2 实测）：_amset_scatterers() 里第一次调用发生在
+    #   apply_2d_corrections() **之后**，那时 2d_correction.json 已经写完了，
+    #   交叉核对字段会静默缺失。这里缓存住，并在 apply_2d_corrections 里先调一次。
+    if _LAST_POP_JSON.get("pop_frequency_THz"):
+        return round(float(_LAST_POP_JSON["pop_frequency_THz"]), 4)
     here = Path(__file__).resolve().parent
     helper = here / POP_FREQ_HELPER
     if not helper.is_file():
@@ -745,10 +861,22 @@ def read_pop_frequency_2d(dielect_dir):
             except ValueError:
                 continue
             if d.get("pop_frequency_THz"):
+                _LAST_POP_JSON.clear()
+                _LAST_POP_JSON.update(d)
                 print("[OK] 二维 pop_frequency=%.4f THz（面内极性模 %s；"
                       "三维对照 %.4f）" % (d["pop_frequency_THz"],
                                            d.get("polar_inplane_modes"),
                                            d.get("pop_frequency_3d_ref_THz") or float("nan")))
+                _drc = d.get("delta_r_check") or {}
+                if _drc.get("route1_dielectric_A") is not None:
+                    print("[OK] Δr 交叉核对：介电路线 %.6f Å vs 声子模求和 %.6f Å"
+                          "（偏差 %s%%；剔除声学模 %s 个）；r∞ = %.3f Å（文献 MoS2 "
+                          "Δr≈0.53 / r∞≈46.5 Å 作量级参考）"
+                          % (_drc["route1_dielectric_A"], _drc["route2_mode_sum_A"],
+                             _drc.get("deviation_pct"), _drc.get("acoustic_removed"),
+                             _drc.get("r_inf_A") or float("nan")))
+                elif _drc.get("error"):
+                    print("[WARN] Δr 交叉核对失败：%s" % _drc["error"])
                 return round(float(d["pop_frequency_THz"]), 4)
     print("[WARN] %s 没给出结果（命令：%s；末行错误：%s）"
           % (POP_FREQ_HELPER, script, err_tail))
@@ -829,6 +957,33 @@ def apply_2d_corrections(cwd: Path, elastic, eps_inf=None, eps_static=None):
     inf33, stat33 = _slab_tensors(cwd / DIELECT_DIR, eps_inf, eps_static)
     layer_normal = _layer_normal(cwd)
     mechanisms = _mechanisms_2d(cwd)
+    # 先把 Γ 点声子信息拿到：pop_frequency 与 Δr 交叉核对都在同一个 helper 的 JSON 里，
+    # 而 settings 那边的调用发生在写 2d_correction.json 之后（顺序坑，见 read_pop_frequency_2d）。
+    if "POP" in mechanisms:
+        try:
+            read_pop_frequency_2d(cwd / DIELECT_DIR)
+        except Exception as _e:                                # noqa: BLE001
+            print("[WARN] 预取 pop_frequency/Δr 交叉核对失败（不影响本步）：%s" % _e)
+    # [2026-09-16] 形变势构型口径：step7b 把实际用的那一套写进 band_edges.json，
+    # 这里读回来落盘/落注释 —— 回退到 clamped 时不能静默（用户要求）。
+    global _DEFORM_GEOM
+    try:
+        import json as _json
+        _be = cwd / "step7b_deform_read" / "band_edges.json"
+        if _be.is_file():
+            _DEFORM_GEOM = (_json.loads(_be.read_text()) or {}).get("deform_geometry")
+    except Exception as _e:                                    # noqa: BLE001
+        print("[WARN] 读 deform_geometry 失败（不影响计算）：%s" % _e)
+    if _DEFORM_GEOM:
+        print("[OK] 形变势构型口径 deform_geometry=%s（来自 step7b/band_edges.json）"
+              % _DEFORM_GEOM)
+        if _DEFORM_GEOM != "ionrelax":
+            print("[WARN] 形变势不是离子弛豫口径（%s）—— 与 TOTAL ELASTIC MODULI"
+                  "（含离子弛豫）不同源，ADP 绝对值跨项目不可直接比。" % _DEFORM_GEOM)
+    r_check = delta_r_check(c_len, inf33, stat33)
+    # 把 amset2d_pop_freq.py 的两路线 Δr 交叉核对挂进同一条记录（同一次运行拿到）
+    if isinstance(r_check, dict) and _LAST_POP_JSON.get("delta_r_check"):
+        r_check["delta_r_crosscheck"] = _LAST_POP_JSON["delta_r_check"]
 
     rec = {
         "cell_c_A": round(c_len, 4),
@@ -843,6 +998,8 @@ def apply_2d_corrections(cwd: Path, elastic, eps_inf=None, eps_static=None):
                                  "c/t 只用于 σ/κ 的厚度归一化（见 elastic_rescale_factor_c_over_t）",
         "eps_inf_slab": inf33,
         "eps_static_slab": stat33,
+        "r_inf_delta_r_check": r_check,
+        "deform_geometry": _DEFORM_GEOM,
         "eps_env": float(EPS_ENV),
         "imp_distance_A": float(IMP_DISTANCE_A),
         "pop_lo_dispersion": bool(POP_LO_DISPERSION),
@@ -1031,6 +1188,10 @@ def write_settings(out: Path, eps_inf, eps_static, gap, elastic,
             "# 2) 运行必须带 amset2d_plugin（submit.sh 里已 import），散射核为二维形式；",
             "#    二维核参数在 2d_correction.json（原始 slab 介电张量等）。",
             "# 3) free_carrier_screening 已打开（否则 POP/IMP 主导时迁移率对浓度不响应）",
+            "#   形变势参考口径：%s（vacuum = 真空零点/二维文献口径，core = AMSET 芯态对齐，差约 2.8 倍）"
+            % ("vacuum" if (str(DEFORM_REF).lower() in ("auto", "vacuum")
+                           and (Path.cwd() / READ_DIR / "deformation_vac.h5").is_file())
+               else "core"),
             "# 4) 下面的 doping 是体浓度 cm^-3；面浓度 n_2D = n_3D × c",
         ]
         if c_len:
@@ -1039,7 +1200,8 @@ def write_settings(out: Path, eps_inf, eps_static, gap, elastic,
                 lines.append("#      %.3e cm^-3  ->  %.3e cm^-2"
                              % (v, v * c_len * 1e-8))
         lines += [
-            "# 【局限】单一有效极性模；偶极近似（无四极矩，文献显示差 20–50%）；",
+            "# 【局限】单一有效极性模；偶极近似（无四极矩；Poncé PRL 2023 给 MoS2 室温",
+            "#   Hall 迁移率误差：电子 23%、空穴 76%）；",
             "#   忽略 Janus 结构的面外偶极耦合；屏蔽为局域场 + 二维 Thomas–Fermi",
             "#   （文献对比偏低 10–20%）。模型级近似，适合筛选与趋势，",
             "#   要发表的绝对值建议用 EPW / Perturbo（开二维库仑截断）对照。",
@@ -1047,12 +1209,21 @@ def write_settings(out: Path, eps_inf, eps_static, gap, elastic,
         ]
     _dop = expand_spec(DOPING, log=True)        # doping 对数均布
     _tmp = expand_spec(TEMPERATURES, log=False)  # 温度线性
+    lines += ["# deform_geometry: %s（形变势构型口径；ionrelax=离子弛豫、与 TOTAL ELASTIC"
+              " MODULI 同源；clamped=离子固定，跨项目 ADP 不可直接比；mixed=两者混用）"
+              % (_DEFORM_GEOM or "未知（step7b/band_edges.json 里没有这个字段）")]
+    if _DEFORM_GEOM and _DEFORM_GEOM != "ionrelax":
+        lines.append("# [WARN] 本次形变势不是离子弛豫口径 —— 与弹性常数不同源，"
+                     "与其它项目比较 ADP 绝对值时先核对这一行。")
     lines += ["doping: [%s]" % ", ".join("%.6e" % v for v in _dop),
               "temperatures: [%s]" % ", ".join("%g" % v for v in _tmp),
               "scattering_type: [%s]" % ", ".join(_amset_scatterers()),
               "deformation_potential: deformation.h5"]
     if INTERPOLATION_FACTOR:     # patch_interp_factor
         lines.append("interpolation_factor: %d" % int(INTERPOLATION_FACTOR))
+    # ★ 必须显式写 nworkers：不写则 AMSET 默认 -1 = 用满节点全部核，
+    #   会超订提交模板申请的核数（见文件头 NWORKERS 处的说明）。
+    lines.append("nworkers: %d" % int(NWORKERS))
     _popf = read_pop_frequency(Path.cwd() / DIELECT_DIR)
     if _popf is not None and "POP" in SCATTERING:
         lines.append("# pop_frequency = Γ 点面内极性模有效频率（二维口径）；插件再乘")
@@ -1129,22 +1300,86 @@ def _install_plugin(out):
     print("[OK] 二维插件就位：%s（只在本步的 amset 运行里生效）" % dst)
 
 
+# ---------------------------------------------------------------------------
+# 提交分配 -> AMSET 进程数（与 gen_step10_amset.py 的同名实现保持一致）
+# ---------------------------------------------------------------------------
+_SBATCH_NTASKS = re.compile(r"^\s*#SBATCH\s+--ntasks(?:-per-node)?=(\d+)", re.M)
+_SBATCH_CPUS = re.compile(r"^\s*#SBATCH\s+--cpus-per-task=(\d+)", re.M)
+
+
+def _alloc_cores(cwd: Path):
+    """本次作业真正拿到的核数 = ntasks_per_node × cpus_per_task，返回 (cores|None, 来源)。
+
+    优先级：step.conf 的 [submit] 覆盖（apply_submit 会按它改写 submit.sh）> 提交模板。
+    模板里 OMP/OPENBLAS/MKL_NUM_THREADS 都被压到 1，所以可用核数就是"任务数 × 每任务核数"。
+    """
+    here = Path(__file__).resolve().parent
+    tpl = next((p for p in (here / "submit_amset.tpl", Path(cwd) / "submit_amset.tpl")
+                if p.is_file()), None)
+    if tpl is None:
+        return None, "找不到 submit_amset.tpl"
+    text = tpl.read_text(encoding="utf-8", errors="ignore")
+    mn, mc = _SBATCH_NTASKS.search(text), _SBATCH_CPUS.search(text)
+    ntasks = int(mn.group(1)) if mn else 1
+    cpus = int(mc.group(1)) if mc else 1
+    src = tpl.name
+    try:
+        sub = stepconf.read_submit(stepconf.CONF_NAME, used_incar=True)
+    except Exception:                                       # noqa: BLE001
+        sub = {}
+    for key in ("ntasks_per_node", "cpus_per_task"):
+        v = str(sub.get(key) or "").strip()
+        if v.isdigit():
+            if key == "ntasks_per_node":
+                ntasks = int(v)
+            else:
+                cpus = int(v)
+            src += " + step.conf[submit].%s" % key
+    return max(1, ntasks * cpus), "%s（%d × %d）" % (src, ntasks, cpus)
+
+
 def main():
     _disc_gate()
     cwd = Path.cwd()
-    global LAYER_THICKNESS
+    global LAYER_THICKNESS, NWORKERS
+    _conf_nworkers = None
     if (cwd / "step.conf").is_file():
+        # strict=False：材料级 step.conf 是【全技能共用】的一份，含别的步骤的键
+        # （FUNC / CELL_POLICY 等）；严格模式会被它们打死，而抛的是
+        # SystemExit=BaseException —— 原来 except SystemExit: pass 把整段吞掉，
+        # 于是 LAYER_THICKNESS 的 step.conf 覆盖**永远静默失效**（同 S3_uniform）。
         try:
-            LAYER_THICKNESS = stepconf.load(SPEC, STEP, str(cwd))["LAYER_THICKNESS"]
-        except SystemExit:
-            pass  # step.conf 缺失或 STEP 串了时保持出厂默认 "vdw"
+            _p = stepconf.load(SPEC, STEP, str(cwd), strict=False)
+            if _p["LAYER_THICKNESS"]:
+                LAYER_THICKNESS = _p["LAYER_THICKNESS"]
+            if _p["NWORKERS"]:
+                _conf_nworkers = int(_p["NWORKERS"])
+        except (KeyError, ValueError, TypeError):
+            pass  # step.conf 读不成时保持出厂默认（LAYER_THICKNESS="vdw" / NWORKERS 自动）
+
+    # ---- NWORKERS：默认自动 = 本次提交实际分配到的核数 ----
+    _alloc, _src = _alloc_cores(cwd)
+    if _conf_nworkers:
+        NWORKERS = _conf_nworkers
+        if _alloc and NWORKERS != _alloc:
+            print("[WARN] step.conf 写死 NWORKERS=%d，但本次提交分配 %d 核（%s）——"
+                  "少要 = 算力闲置，多要 = 抢同节点别人的 CPU，请核对这两个数。"
+                  % (NWORKERS, _alloc, _src), file=sys.stderr)
+        else:
+            print("[..] NWORKERS = %d（step.conf 指定）" % NWORKERS)
+    elif _alloc:
+        NWORKERS = _alloc
+        print("[OK] NWORKERS = %d（自动按提交分配：%s）" % (NWORKERS, _src))
+    else:
+        NWORKERS = NWORKERS_FALLBACK
+        print("[WARN] 推不出提交分配（%s）—— NWORKERS 兜底 %d" % (_src, NWORKERS))
     _guard_dim_2d(cwd)
     out = cwd / OUTDIR_NAME
     out.mkdir(exist_ok=True)
     # 插件随本步复制到运行目录（只在那一次 amset 运行里生效，不改 AMSET 安装）
     _install_plugin(out)
     link(out, cwd / WAVE_DIR / "wavefunction.h5", "wavefunction.h5")
-    link(out, cwd / READ_DIR / "deformation.h5", "deformation.h5")
+    link(out, cwd / READ_DIR / _pick_deformation_h5(cwd, READ_DIR), "deformation.h5")
     # patch_amset_vasprun：amset run 还需要密网格 vasprun.xml 拿能带色散
     _vr = next((cwd / _d / "vasprun.xml"
                 for _d in ("step3_uniform", "step4_wave")

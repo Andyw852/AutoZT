@@ -28,13 +28,88 @@ import os
 import sys
 from pathlib import Path
 
+import numpy as np   # 画低频放大图/写数据表用（原来本文件没导入 numpy）
+
 OUT_NAME = "step5_phonon_plot"       # 步骤目录名，必须与 skill.yaml 的 name 一致
 FCSUB    = "phono3py"                # S5 拟合产物子目录
-NPOINTS  = 101                       # 每段路径采样点
+NPOINTS  = int(os.environ.get("KAPPA_PLOT_NPOINTS", "31"))
+# 每段路径采样点。128 原子胞在集群登录节点上算一条完整 band structure 要几分钟
+# （jzzn 实测 101 点/段 > 400 s，超过 tf 给 gen 的预算，步骤会被判失败），
+# 31 点/段足够看清色散与软模，也留出余量；要更细就设 KAPPA_PLOT_NPOINTS=101。
 IMAG_TOL = -0.05                     # THz，低于此判虚频（容数值噪声）
+LOWF_MAX = 10.0                      # 低频放大图的上限（THz）：声学支/软模区
+NL = chr(10)                         # 行尾常量（避免字符串里的 \n 被工具链吃掉）
 
 FCDIR = None                         # 由 _locate() 定为绝对路径
 
+# ==========================================================================
+# gen 模式：只写 submit.sh，真正的算谱+出图交给计算节点上的 --work（2026-09-17
+#   从 taskflow-v2.0 同步）。
+#   原因见 templates/step5_phonon_plot/submit_plot.tpl 顶部：登录节点上一条完整
+#   band structure 要几分钟到十几分钟，超过 autozt 给 gen 的预算会被中途杀掉。
+# ==========================================================================
+PLOT_SPEC = {
+    "SBATCH_QOS": ("regular", "str"),
+    "PLOT_CORES": (16, "int"),          # 该作业要几个核（画图/建动力学矩阵是 CPU）
+    "CONDA_SH": ("", "str"),            # 由集群配置注入
+    "CONDA_ENV": ("atomate2_p_a", "str"),
+}
+STEP = "step5_phonon_plot"
+
+
+def _write_submit(outdir):
+    """gen 模式：只写 submit.sh（作业脚本），谱的计算交给计算节点上的 --work。"""
+    conf = {k: v[0] for k, v in PLOT_SPEC.items()}
+    if Path("step.conf").is_file():
+        try:
+            import stepconf
+            conf = stepconf.load(PLOT_SPEC, STEP)
+        except BaseException as e:   # stepconf 用 sys.exit("[ERROR] ...") 报错
+            print("[..] step.conf 读取失败（%s），用默认值" % e)
+    else:
+        print("[..] cwd 没有 step.conf（gen_need 未带上），用默认值：qos=%s cores=%s"
+              % (conf["SBATCH_QOS"], conf["PLOT_CORES"]))
+    here = Path(__file__).resolve().parent
+    tpl = None
+    for cand in (Path.cwd() / "submit_plot.tpl",
+                 Path.cwd() / "templates" / "step5_phonon_plot" / "submit_plot.tpl",
+                 here / "submit_plot.tpl",
+                 here / "templates" / "step5_phonon_plot" / "submit_plot.tpl"):
+        if cand.is_file():
+            tpl = cand
+            break
+    if tpl is None:
+        _emit({"status": "error",
+               "reason": "缺 submit_plot.tpl（技能模板没推到远端？查过：cwd、"
+                         "cwd/templates/step5_phonon_plot、脚本同级）"}, 40)
+    print("[..] 模板：%s" % tpl)
+    text = tpl.read_text(encoding="utf-8")
+    subs = {"JOBNAME": "S51plot",
+            "QOS": str(conf["SBATCH_QOS"] or "premium"),
+            "NTASKS": str(int(conf["PLOT_CORES"] or 16)),
+            "CONDA_SH": str(conf["CONDA_SH"]
+                            or "/public/home/wangchao/miniconda3/etc/"
+                               "profile.d/conda.sh"),
+            "CONDA_ENV": str(conf["CONDA_ENV"] or "atomate2_p_a"),
+            # 作业的 cwd 是【步骤目录】，而本脚本在它的上一级（材料技能目录），
+            # 所以必须写绝对路径——否则作业里 "can't open file" 直接失败。
+            "PLOT_CMD": "python -u %s --work" % Path(__file__).resolve()}
+    for k, v in subs.items():
+        text = text.replace("{{%s}}" % k, str(v))
+    (outdir / "submit.sh").write_text(text, encoding="utf-8", newline=NL)
+    print("[OK] submit.sh 已写出（%s 核, qos=%s）→ 由 autozt 提交到计算节点"
+          % (subs["NTASKS"], subs["QOS"]))
+
+
+def gen_mode():
+    """登录节点：只写 submit.sh，不真算谱。"""
+    global FCDIR
+    FCDIR, outdir = _locate()
+    outdir.mkdir(parents=True, exist_ok=True)
+    os.chdir(str(outdir))
+    _write_submit(outdir)
+    _emit({"status": "ok", "stage": "gen", "submit": "submit.sh",
+           "fc_dir": str(FCDIR)}, 0)
 
 def _emit(result, code):
     print(json.dumps(result, ensure_ascii=False), flush=True)
@@ -87,9 +162,45 @@ def _set_nac(ph, on):
         ph.nac_params = None              # 显式建"无 NAC"动力学矩阵
 
 
+def _dim_axis():
+    """读 kl_params 的 DIM；读不到就用 POSCAR 现判。返回 (dim, vac_axis)。"""
+    import kl_common as kc
+    dim, ax = "", 2
+    for cand in (FCDIR.parent / kc.KL_PARAMS, FCDIR / kc.KL_PARAMS,
+                 Path.cwd() / kc.KL_PARAMS):
+        if cand.is_file():
+            dim = (kc.read_kl_params(cand).get("DIM") or "").lower()
+            break
+    pos = next((p for p in (FCDIR / "POSCAR", FCDIR.parent / "POSCAR",
+                            Path.cwd() / "POSCAR") if p.is_file()), None)
+    if pos is not None:
+        try:
+            d2, ax2 = kc.resolve_dim(pos, dim or "auto")
+            dim = dim or d2
+            ax = int(ax2 if ax2 is not None else 2)
+        except Exception:
+            pass
+    return dim, ax
+
+
 def _band_path(ph):
-    """高对称路径：优先 seekpath 自动，失败退回通用路径。"""
+    """高对称路径：2D 走 kz=0 的二维路径表；3D 优先 seekpath，失败退回六方通用路径。
+
+    P2-1：seekpath/VASPKIT-301 是 3D 工具，用在 2D 上会给出 Γ-A 这类 kz 线段
+    （真空方向的平凡色散，白占图幅还误导判读）。
+    """
     from phonopy.phonon.band_structure import get_band_qpoints_and_path_connections
+    dim, vax = _dim_axis()
+    if dim == "2d":
+        import kl_common as kc
+        try:
+            paths, labels, lat = kc.band_path_2d(ph.primitive.cell, NPOINTS, vax)
+            bands, connections = get_band_qpoints_and_path_connections(paths, npoints=NPOINTS)
+            print("[..] 2D 高对称路径：%s 格子，kz=0：%s"
+                  % (lat, "-".join(l.replace("$\\Gamma$", "Γ") for l in labels)))
+            return bands, connections, labels, "2d-%s" % lat
+        except Exception as e:
+            print("[WARN] 2D 路径生成失败，退回六方通用路径：%s" % e)
     try:
         from phonopy.phonon.band_structure import get_band_qpoints_by_seekpath
         bands, labels, connections = get_band_qpoints_by_seekpath(ph.primitive, NPOINTS)
@@ -102,29 +213,149 @@ def _band_path(ph):
         return bands, connections, ["$\\Gamma$", "M", "K", "$\\Gamma$"], "fallback"
 
 
+def _cached_band(tag):
+    """已算好的 band_<tag>.yaml（上一次运行被超时打断留下的）→ dict，否则 None。
+
+    登录节点上算不动整条路径时，谱本身在被打断前就写进 yaml 了；下一步重跑
+    直接读它，几秒钟就能出图和数据表，不必再算一遍（tf 的 gen 预算有限，
+    "算谱" 与 "画图存数据" 必须能分开重试）。
+    """
+    p = Path("band_%s.yaml" % tag)
+    if not p.is_file():
+        return None
+    try:
+        import yaml
+        d = yaml.safe_load(p.read_text(encoding="utf-8"))
+        # phonopy 的 band yaml 把【所有】q 点摊平成一个 list（每项：q-position /
+        # distance / band[分支]），而 get_band_structure_dict() 是按【路径段】分组的
+        # —— 这里用顶层的 segment_nqpoint 还原成段布局，两种来源才对得上。
+        segs = d["phonon"]
+        seg_n = [int(x) for x in (d.get("segment_nqpoint") or [len(segs)])]
+        dists, freqs, i = [], [], 0
+        for nq in seg_n:
+            chunk = segs[i:i + nq]
+            i += nq
+            if not chunk:
+                continue
+            dists.append(np.array([float(c.get("distance", 0.0)) for c in chunk],
+                                  dtype=float))
+            freqs.append(np.array([[float(b["frequency"]) for b in c["band"]]
+                                   for c in chunk], dtype=float))
+        if not freqs or not any(float(dd.max()) > 0.0 for dd in dists):
+            raise ValueError("yaml 里没有可用的 distance/band 数据")
+        return {"distances": dists, "frequencies": freqs,
+                "labels": d.get("labels") or []}
+    except Exception as e:
+        print("[..] band_%s.yaml 缓存不可用（%s），重新计算" % (tag, e))
+        return None
+
+
 def _plot(tag):
-    """tag='nac' | 'nonac'：画一张声子谱，返回摘要。"""
+    """tag='nac' | 'nonac'：画声子谱（全频段 + 0..LOWF_MAX 放大）+ 数据表。"""
     import matplotlib
     matplotlib.use("Agg")
-    ph = _build_phonopy()
-    _set_nac(ph, tag == "nac")
-    bands, conn, labels, src = _band_path(ph)
-    ph.run_band_structure(bands, path_connections=conn, labels=labels,
-                          with_eigenvectors=False)
-    ph.write_yaml_band_structure(filename="band_%s.yaml" % tag)
-    plt = ph.plot_band_structure()
-    plt.savefig("band_%s.png" % tag, dpi=200, bbox_inches="tight")
+    bs = _cached_band(tag)
+    src = "cache(band_%s.yaml)" % tag
+    if bs is not None:
+        print("[..] 复用已算好的 %s（跳过 band structure 重算）" % src)
+    else:
+        ph = _build_phonopy()
+        _set_nac(ph, tag == "nac")
+        bands, conn, labels, src = _band_path(ph)
+        ph.run_band_structure(bands, path_connections=conn, labels=labels,
+                              with_eigenvectors=False)
+        # 先落盘谱数据：即使后面绘图阶段被打断，数据也已保住
+        ph.write_yaml_band_structure(filename="band_%s.yaml" % tag)
+        bs = ph.get_band_structure_dict()
+        plt = ph.plot_band_structure()
+        plt.savefig("band_%s.png" % tag, dpi=200, bbox_inches="tight")
+        try:
+            plt.close("all")
+        except Exception:
+            pass
+    bs = {"distances": [np.asarray(d, float) for d in bs["distances"]],
+          "frequencies": [np.asarray(fr, float) for fr in bs["frequencies"]],
+          "labels": bs.get("labels") or []}
+    fmin = float(min(fr.min() for fr in bs["frequencies"]))
+    # 数据文件：距离-频率表，便于复算/画自己的图（不只留 phonopy 的 yaml）
+    ndata = _dump_band_data(bs, tag)
+    # 低频放大图（0..LOWF_MAX THz）：声学支与软模/虚频一眼可见
+    low = _draw_band(bs, tag, fmin, LOWF_MAX, "_lowfreq")
+    # 全频段图：走缓存时（上一次被超时打断）phonopy 那张没画出来，这里补上
+    if not Path("band_%s.png" % tag).is_file():
+        _draw_band(bs, tag, fmin, None, "")
+    print("[OK] band_%s.png / band_%s.yaml / band_%s.dat / %s  路径=%s  "
+          "最低频率=%.3f THz%s"
+          % (tag, tag, tag, low, src, fmin,
+             "  ⚠️含虚频" if fmin < IMAG_TOL else ""))
+    return {"tag": tag, "nac": tag == "nac", "png": "band_%s.png" % tag,
+            "yaml": "band_%s.yaml" % tag, "dat": "band_%s.dat" % tag,
+            "lowfreq_png": low, "n_band_rows": ndata,
+            "min_freq_THz": round(fmin, 4),
+            "imaginary": fmin < IMAG_TOL, "path_source": src}
+
+
+def _dump_band_data(bs, tag):
+    """band_<tag>.dat：段号/段内序号/路径距离/各支频率（THz）的纯文本表。"""
+    n = 0
+    with open("band_%s.dat" % tag, "w", encoding="utf-8") as fh:
+        fh.write("# segment q_index distance_1overA  frequencies_THz(...)" + NL)
+        for si, (d, fr) in enumerate(zip(bs["distances"], bs["frequencies"])):
+            d = np.asarray(d, float)
+            fr = np.asarray(fr, float)
+            for qi in range(fr.shape[0]):
+                fh.write("%d %d %.6f %s" % (si, qi, d[qi],
+                         " ".join("%.6f" % v for v in fr[qi])) + NL)
+                n += 1
+    return n
+
+
+def _draw_band(bs, tag, fmin, ymax, suffix):
+    """画一张声子谱：ymax=None → 全频段；ymax=LOWF_MAX → 0..10 THz 放大图。
+
+    整条谱的上限 40+ THz 会把声学支压成一条线，软模/虚频看不见，所以低频那张
+    单独出：声学支色散 + fmin<0 的虚频位置。返回文件名。
+    """
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    fig, ax = plt.subplots(figsize=(7.2, 4.6))
+    for d, fr in zip(bs["distances"], bs["frequencies"]):
+        d = np.asarray(d, float)
+        fr = np.asarray(fr, float)
+        for b in range(fr.shape[1]):
+            ax.plot(d, fr[:, b], "-", lw=0.9, color="#1f4e79")
+    ax.axhline(0.0, color="0.55", lw=0.8, ls="--")
+    if ymax is None:                       # 全频段
+        fmax = float(max(fr.max() for fr in bs["frequencies"]))
+        ax.set_ylim(min(-1.0, fmin - 3.0), fmax + 3.0)
+        ax.set_title("Phonon dispersion (%s%s)"
+                     % (tag, ", imaginary modes present" if fmin < IMAG_TOL else ""),
+                     fontsize=10)
+    else:                                  # 0..ymax THz 放大
+        ax.set_ylim(min(-1.0, fmin - 0.5), float(ymax))
+        ax.set_title("Phonon dispersion (low frequency <= %g THz, %s%s)"
+                     % (ymax, tag,
+                        ", imaginary modes present" if fmin < IMAG_TOL else ""),
+                     fontsize=10)
+    ax.set_xlim(0.0, float(np.asarray(bs["distances"][-1], float)[-1]))
+    labels = bs.get("labels") or []
+    if labels:
+        try:
+            ax.set_xticks([float(np.asarray(bs["distances"][i], float)[0])
+                           for i, lb in enumerate(labels) if lb])
+            ax.set_xticklabels([str(lb).replace("$", "") for lb in labels if lb])
+        except Exception:
+            pass
+    ax.set_xlabel("Wave vector")
+    ax.set_ylabel("Frequency (THz)")
+    name = "band_%s%s.png" % (tag, suffix)
+    fig.savefig(name, dpi=200, bbox_inches="tight")
     try:
-        plt.close("all")
+        plt.close(fig)
     except Exception:
         pass
-    bs = ph.get_band_structure_dict()
-    fmin = float(min(fr.min() for fr in bs["frequencies"]))
-    print("[OK] band_%s.png / band_%s.yaml  路径=%s  最低频率=%.3f THz%s"
-          % (tag, tag, src, fmin, "  ⚠️含虚频" if fmin < IMAG_TOL else ""))
-    return {"tag": tag, "nac": tag == "nac", "png": "band_%s.png" % tag,
-            "yaml": "band_%s.yaml" % tag, "min_freq_THz": round(fmin, 4),
-            "imaginary": fmin < IMAG_TOL, "path_source": src}
+    return name
 
 
 def main():
@@ -153,6 +384,9 @@ def main():
                "fc_dir": str(FCDIR), "out_dir": str(out),
                "note": ("有 NAC：band_nac + band_nonac 两张对照"
                         if has_born else "无 NAC：仅 band_nonac"),
+               "lowfreq_max_THz": LOWF_MAX,
+               "data_files": [p["dat"] for p in plots],
+               "lowfreq_figures": [p["lowfreq_png"] for p in plots],
                "plots": plots}
     (out / "phonon_plot_summary.json").write_text(
         json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8", newline="\n")
@@ -161,4 +395,10 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    # 两种运行方式（2026-09-17 从 taskflow-v2.0 同步）：
+    #   登录节点 gen：只写 submit.sh（gen_mode）
+    #   计算节点作业：python gen_step5.1_plot_phonon.py --work → 真算谱+出图（main）
+    if "--work" in sys.argv:
+        main()
+    else:
+        gen_mode()

@@ -138,7 +138,12 @@ job runs on any cluster.
   interactions). Keep both comfortably below half the smallest supercell edge,
   otherwise periodic images double-count interactions.
 * `PHEASY_RASR = BHH` imposes Born-Huang rotational invariance and the Huang
-  equilibrium conditions, which is what makes a truncated fit physical.
+  equilibrium conditions, which is what makes a truncated fit physical. It is
+  passed to pheasy's **null-space construction step (`-c`)** — that is the only
+  step that reads it (`-f` loads `ns_*.npz` and re-imposes nothing), and the
+  driver aborts if `-c` does not log the constraint. For 2D slabs this is
+  mandatory (without it ZA goes linear near Gamma); for bulk the conditions are
+  known to be negligible, so `PHEASY_RASR = none` is a legitimate choice there.
 * `PHEASY_BIN = pheasy | pheasy-gpu`. The GPU build needs the GPU submit
   template; if the cluster has no GPU nodes use the CPU build.
 * **The GPU only accelerates the two-level sparse matvec.** pheasy builds a

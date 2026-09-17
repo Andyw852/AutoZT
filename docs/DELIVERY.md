@@ -7,7 +7,7 @@ Where everything lives, so a collaborator can pick the project up without asking
 | Path | What |
 |---|---|
 | bin/autozt, bin/pa | entry points (pa is the two-letter alias; same program) |
-| autozt/ | the package: bootstrap (discovery/config), cli, collect, data, ops, report, workflow (engine), preflight (pre-submission checks), i18n, mcp (MCP server), agentgate (approval gate + audit), session (reproducible archives), prov (provenance), history, corrections, skillspec, yamlmini |
+| autozt/ | the package: bootstrap (discovery/config), cli, collect, data, ops, report, workflow (engine), preflight (pre-submission checks), i18n, mcp (MCP server), agent_cli/protocol/service (stable model-facing JSON layer), agentgate (approval gate + audit), session (reproducible archives), prov (provenance), history, corrections, skillspec, yamlmini |
 | skill/ | 18 skills, each a directory with skill.yaml plus generation scripts and templates |
 | setting/ | cluster templates (setting/template-cluster.yaml) and per-cluster configuration |
 | scripts/ | safety_metrics.py, i18n_report.py, check_site_specific.py and helpers |
@@ -28,7 +28,8 @@ Where everything lives, so a collaborator can pick the project up without asking
 | README.en.md | English overview and quick start |
 | docs/index.md, installation.md, quickstart.md, skills.md, cli.md | users |
 | docs/CONFIGURING.md | site configuration, including the four cluster-switch traps |
-| docs/mcp.md | the MCP interface (tools, resources, prompts, risk tiers) |
+| docs/mcp.md | the MCP interface (profiles, tools, resources, prompts, risk tiers) |
+| docs/agent-cli.md | the non-MCP stable JSON interface for models and scripts |
 | docs/I18N.md | how runtime messages are translated, and the safe migration recipe |
 | docs/ACCEPTANCE.md | acceptance checklist with evidence per item |
 | docs/EVALUATION.md | measured numbers, controlled ablation, threats to validity |
@@ -43,8 +44,9 @@ Where everything lives, so a collaborator can pick the project up without asking
   (.github/workflows/ci.yml), with suites that need a cluster tagged and skipped.
 - Real-cluster runs: input generation for 18 skills (16 without upstream products, as
   designed), 15/15 real submissions finished, force-constant fitting verified end to end.
-- Safety: interception rate of hazardous actions 100% (8/8), hazardous actions executed 0,
-  read-only profile exposes 6 of 14 tools while read-only tasks still complete.
+- Safety: interception rate of hazardous actions 100% (9/9), hazardous actions executed 0,
+  read-only profile exposes the read subset of the 20-tool full profile; compact mode
+  exposes 6 LLM-facing tools while read-only tasks still complete.
 - Reproducibility: prove --verify reported 17/17 comparable inputs byte-identical on a
   cluster; local output determinism 100%.
 
