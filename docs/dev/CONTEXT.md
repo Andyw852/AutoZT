@@ -219,8 +219,10 @@ python3 -c "import autozt"    # 装配成功 = 8 个深模块就位
 - **git 化**：v2.0 已 `git init` 并推送 GitHub（`github.com/Andyw852/AutoZT-v2.0`）。
   `.gitignore` 排除 `setting/`（配置）、`*.model`（大模型权重）、`test/` 数据子目录，
   只跟踪代码（294 文件 ~4.7MB）。
-- **对齐自动审计**：`scripts/sync_check.sh` 一键 diff v2.0 vs 原版 skill/setting
+- **对齐自动审计**：`scripts/sync_check.sh` 一键 diff 本仓 vs 参考仓的 skill/setting
   （内容级，排除 __pycache__/运行时缓存），退出码 0=对齐 / 1=有差异并给同步命令。
+  ★ 2026-09-17：默认参考仓从旧仓 `~/software/taskflow`（v1.0，已停用）改为仍在用的
+  姊妹仓 `~/software/taskflow-v2.0`；AutoZT 已是权威仓，脚本只审计、不自动同步。
 - **dry-run 精确化**：`--dry-run` 按命令语义打印真实目标——`retry`=FAIL 步、
   `start`=就绪步、`stop`=有作业步、`fetch`=已完成步；`rerun/clean` 无 `-j` 时整材料级
   （`_dry_run_steps_for` / `_dry_run_report`，见 17_cli.py）。

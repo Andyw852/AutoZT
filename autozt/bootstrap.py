@@ -18,6 +18,7 @@ _PKG_ROOT = os.path.normpath(os.path.dirname(_PKG_DIR))
 import argparse
 import base64
 import datetime
+import fnmatch
 import glob
 import hashlib
 import json
@@ -53,6 +54,11 @@ host: jzzn                 # 默认 ssh 别名（可被项目 project_setting/hp
 # 放一份 project_setting/tf_<项目名>.yaml（tf -p X init 可生成），不用改这里。
 project_roots:
   - /path/to/projects
+
+# project_root_excludes（可选）：不参与发现的子树（绝对路径 / 路径前缀 / glob 都行）。
+#   某个根下混着【别的仓正在用】的项目时把那一层排掉——本仓就看不见/不推进/不 fetch 它们。
+# project_root_excludes:
+#   - /mnt/d/tf_data/work_taskflow
 
 # task_types：只写站点相关覆盖。技能的 steps / gen_need / aux_files 由
 # skill/<技能>/skill.yaml 自描述，tf 启动时自动发现（autozt skills 查看），
@@ -275,22 +281,6 @@ AI 审计（v1.0 P0-1，agent 走网关：风险分档 + 每次调用留痕）�
   act log           看审计流水（.tf_agent_log.jsonl）；act policy 看风险分档表
   approve <命令>     人工在**交互终端**批准一条破坏性动作（一次性令牌，默认 15 分钟）
 
-稳定 JSON agent 接口（不需要 MCP 客户端）：
-  agent capabilities       协议、动作和安全边界（LLM 首次发现只调用一次）
-  agent schema             完整 JSON 请求/响应/动作 Schema（首次接入读取）
-  agent skills             紧凑技能目录
-  agent contract <技能>    输入/输出/步骤/纠错契约
-  agent snapshot           跨进程增量状态快照
-  agent inspect            一次返回关注状态和确定性候选动作
-  agent plan               一次生成可审阅计划
-  agent cycle              观察→规划；默认 dry-run，--execute 才执行
-  agent run                无 MCP 的确定性闭环；默认 dry-run
-  agent evidence -p 材料   单材料/步骤结构化诊断
-  agent request -          stdin JSON 一次请求（适合 LLM/脚本）
-  agent serve              常驻 JSONL：一行请求对应一行 JSON 响应
-  agent propose            只读生成候选动作计划
-  agent apply <计划.json>  执行 start/retry/fetch/advance（破坏性动作拒绝）
-
 旧命令和别名继续兼容。高级命令、全部参数及示例：tf --help-all
 注意：status/auto/monitor 可提交作业；只看状态用 summary 或 list。
 """
@@ -335,7 +325,14 @@ USAGE = """\
             目录的 .tf_agent_log.jsonl：`autozt act log` 看流水，`autozt act policy` 看风险分档。
             不设 AUTOZT_ACTOR 也不用 act 时，行为与此前完全一致。
   agent     稳定 JSON agent 接口：capabilities/inspect/plan/cycle/evidence/request/serve；
-            与 MCP 共用技能契约、状态快照和 act 审计网关。
+            与 MCP 共用技能契约、状态快照和 act 审计网关（不需要 MCP 客户端）。
+            capabilities 协议/动作/安全边界（LLM 首次发现只调一次）；schema 完整 JSON
+            请求/响应/动作 Schema；skills 紧凑技能目录；contract <技能> 输入输出契约；
+            snapshot 跨进程增量快照；inspect 关注状态+候选动作；plan/propose 出可审阅计划；
+            cycle 观察→规划（默认 dry-run，--execute 才执行）；run 无 MCP 的确定性闭环；
+            evidence -p 材料 结构化诊断；request - 从 stdin 读一次 JSON 请求；
+            serve 常驻 JSONL（一行请求一行响应）；apply <计划.json> 执行
+            start/retry/fetch/advance（破坏性动作拒绝）。
   prove     每一步"结果是怎么来的"（v1.0，只读、读本地档案）：
             tf prove -p 材料 [-j 步骤] [--json] [--verify]
             gen 生成输入时 tf 会自动把该步档案写到 <材料>/provenance/<步骤>.json
@@ -964,13 +961,29 @@ def _skill_spec_brief(s):
 #   L1595  step_cfg
 
 # ===== scan_project_configs (原 L1371-L1412) =====
-def scan_project_configs(roots):
+def scan_project_configs(roots, excludes=None):
     """扫描项目根下 project_setting/tf_*.yaml。
     返回 [(配置名, 路径, 项目目录)]；配置名（tf_<名>.yaml 的 <名>）全局唯一，重复即报错。
     v-perf：单次 scandir 遍历（只下探目录、不枚举文件），深度≤6，跳过
     result/log/隐藏目录——比旧实现 7 个 glob（各遍历整棵树）更快，且不枚举
-    数据文件（os.walk 在 WSL DrvFS 等慢盘上枚举文件极慢）。"""
+    数据文件（os.walk 在 WSL DrvFS 等慢盘上枚举文件极慢）。
+    excludes（可选）：不参与发现的目录子树，绝对路径 / 路径前缀 / glob 都可（tf.yaml 的
+    project_root_excludes）。用途：某个根下混着【别的仓正在用】的项目时，把那一层排掉，
+    避免本仓误推进/误 fetch 它们。"""
     seen, found = {}, []
+    # 排除项在进栈/下探两处都判：即使 project_setting 挂在更深一层也不会被发现。
+    _EXCL = [os.path.realpath(os.path.expanduser(str(x))) for x in (excludes or []) if str(x).strip()]
+
+    def _excluded(p):
+        if not _EXCL:
+            return False
+        rp = os.path.realpath(p)
+        for e in _EXCL:
+            if rp == e or rp.startswith(e + os.sep):
+                return True
+            if any(c in e for c in '*?[') and fnmatch.fnmatch(rp, e):
+                return True
+        return False
     # [FIX-重复配置] 归档/备份目录不参与扫描（软件画图/备份/archive/backup/回收站等），
     # 否则整棵 taskflow 归档副本的 tf_*.yaml 会与活跃仓库同名冲突、让 init 直接退出。
     _ARCHIVE_MARK = ("软件画图", "备份", "archive", "backup", "回收站", "Trash", ".bak", "_bak", "旧")
@@ -987,6 +1000,8 @@ def scan_project_configs(roots):
         stack = [r]
         while stack:
             d = stack.pop()
+            if _excluded(d):        # project_root_excludes：整棵子树不参与发现
+                continue
             if d.count(os.sep) - base_depth > 6:
                 continue
             try:
@@ -1001,7 +1016,8 @@ def scan_project_configs(roots):
                     if e.name == "project_setting":
                         ps_entries.append(e.path)
                     elif e.name not in ("result", "log") and not e.name.startswith(".") \
-                            and not _is_archive(e.path):   # [FIX-重复配置] 归档目录不下探
+                            and not _is_archive(e.path) \
+                            and not _excluded(e.path):     # 排除项也不下探
                         subdirs.append(e.path)
             for ps in ps_entries:
                 for p in sorted(glob.glob(os.path.join(ps, "tf_*.yaml"))):
@@ -1065,7 +1081,7 @@ def merge_project_configs(cfg):
     if not roots:
         roots = [t.get("local_root") for t in (cfg.get("task_types") or {}).values()
                  if isinstance(t, dict) and t.get("local_root")]
-    found = scan_project_configs(roots)
+    found = scan_project_configs(roots, cfg.get("project_root_excludes"))
     if not found:
         return cfg
     tt = cfg.setdefault("task_types", {})

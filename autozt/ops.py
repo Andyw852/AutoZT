@@ -589,7 +589,8 @@ def cmd_init(cfg, types, proj, name=None, tt=None, force=False, yes=False):
     # _init_one/_init_one_skill 做 O(1) 查重。否则每个材料都全树重扫一遍，
     # 大体系（成千上万个材料）会退化成 O(N²)，极其缓慢。
     known_names = {n: p for n, p, _d in scan_project_configs(
-        cfg.get("project_roots") or [cfg.get("_config_dir")])}
+        cfg.get("project_roots") or [cfg.get("_config_dir")],
+        cfg.get("project_root_excludes"))}
     if proj:
         # v1.9.8：-p 支持逗号分隔的多个材料（-p Mg2C60,Mo2S3）；定位交给
         # resolve_mat_dir，正常发现失败时会扫盘兜底。
@@ -921,7 +922,7 @@ def _init_one_skill(cfg, types, target, name=None, tt=None, force=False,
                 return 1
         else:
             roots = cfg.get("project_roots") or [cfg.get("_config_dir")]
-            for n2, p2, _ in scan_project_configs(roots):
+            for n2, p2, _ in scan_project_configs(roots, cfg.get("project_root_excludes")):
                 if n2 == pname:
                     print(_i18n.t("错误：", "error: ") + "项目配置名 tf_%s.yaml 已被 %s 占用，"
                           "请换个名字（autozt init <名字>）。" % (pname, p2))

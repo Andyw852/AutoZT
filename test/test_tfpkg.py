@@ -86,7 +86,12 @@ def test_cli_help_levels():
     brief = help_output("--help")
     assert brief == help_output("help")
     full = help_output("--help-all")
-    assert len(brief.splitlines()) < 35
+    # ★ 2026-09-17：原来卡 len(brief) < 35 行。但 v1.0 陆续加了 skill/schema/
+    #   prove/act/approve 等命令后，简短帮助本身就有 42 行——35 的上限早已过期
+    #   （不是本次 agent 命令引入的；agent 子命令清单已挪回 --help-all）。
+    #   真正要守的两条：简短帮助仍然"短"，以及深水区命令只出现在全量帮助里。
+    assert len(brief.splitlines()) < 50, len(brief.splitlines())
+    assert len(full.splitlines()) > 2 * len(brief.splitlines())
     assert "auto resume" in brief and "--help-all" in brief
     assert "migrate-subdir" in full and len(full) > len(brief)
 
@@ -133,15 +138,15 @@ def _mk_data():
 
 
 def test_collector_integrity():
-    # COLLECTOR 与原单体字节一致，且独立文件可 py_compile
-    src = open(os.path.join(_ROOT, "versions/v1.0/tf"), encoding="utf-8").read()
-    tree = ast.parse(src)
-    orig = [n.value.value for n in tree.body
-            if isinstance(n, ast.Assign)
-            and any(isinstance(t, ast.Name) and t.id == "COLLECTOR" for t in n.targets)][0]
-    assert autozt.COLLECTOR == orig, "COLLECTOR 与原单体不一致"
+    # 远端采集器两个副本必须字节一致，且能 py_compile：
+    #   autozt.COLLECTOR —— autozt/__init__.py 从 autozt/_collector_remote.py 读入的字符串
+    #   autozt/_collector_remote.py —— 真实文件（独立部署时用）
+    # ★ 2026-09-17：不再与 versions/v1.0/tf 里的 COLLECTOR 比对。那是 v1.0 冻结单体
+    #   （docs/dev/CONTEXT.md："保留作对比基准，勿改"），里面仍是 TF_* 变量名；而
+    #   v2.0/AutoZT 已把环境变量改名 AUTOZT_*，两者本来就不该再相等——原来那条断言
+    #   在改名那一刻就注定失败（与远端 collector 无关）。
     remote = open(os.path.join(_ROOT, "autozt/_collector_remote.py"), encoding="utf-8").read()
-    assert remote == autozt.COLLECTOR, "_collector_remote.py 与 COLLECTOR 不一致"
+    assert autozt.COLLECTOR == remote, "_collector_remote.py 与 COLLECTOR 不一致"
     # 语法可编译
     compile(remote, "_collector_remote.py", "exec")
 

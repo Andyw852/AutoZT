@@ -34,7 +34,7 @@ import hashlib
 import datetime
 
 SESSION_SCHEMA = 1
-SESSION_README = """# 会话导出包（taskflow session export）
+SESSION_README = """# 会话导出包（autozt session export）
 
 这个包是材料 **%(mat)s**（技能 %(skill)s，超算 %(host)s）在 %(created)s 的
 "操作与来路"快照，可直接作为论文的**可复现性补充材料**。
@@ -164,7 +164,9 @@ def _session_collect(cfg, data, proj, since=None):
               "provenance_steps": len(provs)}
     manifest = {
         "schema_version": SESSION_SCHEMA,
-        "kind": "taskflow-session-export",
+        # 2026-09-17：改名前的包 tag 是 "taskflow-session-export"，读取端不校验该字段
+        # （只作标识），旧包照常可读。
+        "kind": "autozt-session-export",
         "created": datetime.datetime.now().strftime("%Y-%m-%dT%H:%M:%S"),
         "material": mat,
         "skill": skill,
@@ -248,7 +250,7 @@ def cmd_session(cfg, data, proj, job=None, out=None, since=None,
                 ti.mtime = 0
                 ti.mode = 0o644
                 ti.uid = ti.gid = 0
-                ti.uname = ti.gname = "taskflow"
+                ti.uname = ti.gname = "autozt"
                 tf_.addfile(ti, io.BytesIO(data_b))
     except (OSError, tarfile.TarError) as _e:
         print("错误：写不出包 %s：%s" % (out, _e))

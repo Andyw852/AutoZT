@@ -17,7 +17,9 @@ from autozt import workflow
 def engine(version):
     if version == "v2":
         return workflow, autozt
-    path = ROOT.parent / "taskflow/versions/v1.0/tf"
+    # ★ 2026-09-17：原来从兄弟仓 ~/software/taskflow 读 v1.0 单体；改用本仓自带
+    #   的 versions/v1.0/tf（同一份冻结基准），AutoZT 不再依赖旧仓存在。
+    path = ROOT / "versions/v1.0/tf"
     loader = importlib.machinery.SourceFileLoader("tf_fetch_v1", str(path))
     spec = importlib.util.spec_from_loader(loader.name, loader)
     module = importlib.util.module_from_spec(spec)
