@@ -100,7 +100,7 @@ def main():
     ap.add_argument("--force", action="store_true", help="强制重写并重提交已完成（已收敛）的相")
     args = ap.parse_args()
     if args.submit:
-        ap.error("直接提交已禁用：请用 taskflow 公共提交入口，避免参考相重复作业。")
+        ap.error("直接提交已禁用：请用 autozt 公共提交入口，避免参考相重复作业。")
 
     only = {x.strip() for x in args.only.split(",") if x.strip()} if args.only else None
     refdir = Path(args.refdir)

@@ -14,8 +14,8 @@
   · validate_physical_constraints：PS+非零IVDW缺VDW_S8/A1/A2；低维 ISIF=3 无约束
 
 运行：
-  cd ~/software/taskflow-v2.0 && python3 test/test_method_select.py     # 独立运行器
-  cd ~/software/taskflow-v2.0 && python3 -m pytest test/test_method_select.py -v  # 若有 pytest
+  cd ~/software/AutoZT && python3 test/test_method_select.py     # 独立运行器
+  cd ~/software/AutoZT && python3 -m pytest test/test_method_select.py -v  # 若有 pytest
 """
 import hashlib
 import json

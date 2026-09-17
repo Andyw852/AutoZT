@@ -1,5 +1,13 @@
 # AutoZT-v1.0 —— 隔离开发副本（ISOLATED DEV FORK）
 
+> **【2026-09-17 状态变更 · 先读这段】** 本文件描述的"副本 / 生产仓在别处"的格局**已作废**：
+> 用户已明确 **`~/software/AutoZT` 是唯一权威仓库**，旧的 `~/software/taskflow-v2.0`、
+> `~/software/taskflow` 不再维护（AutoZT 已把它们的近期改动同步过来）。
+> 下面第 1 节的 `auto_advance: false` / `auto_watch: false` **仍然保留**，但理由变了：
+> 旧仓的后台监控目前还在跑（实测 v2.0 的 bin/tf monitor 有 5 个进程、crontab 里还有
+> taskflow/monitor.sh），此时开自动推进会与它们抢提交、重复投作业；等旧仓监控停掉后再按需打开。
+> 第 0 节的来源表、第 2 节的 `AutoZT-v1.0` / `AutoZT-v2.0` 路径均属历史记录，不必再照做。
+
 > 本目录 **不是** 生产仓库。生产仓库是 `~/software/AutoZT-v2.0`（用户明确要求：
 > "不要修改目前这个版本"）。这里是从 v2.0 复制出来的隔离副本，**所有新特性开发都在
 > 本副本内进行**，v2.0 一行不改。

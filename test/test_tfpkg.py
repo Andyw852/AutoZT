@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
-"""taskflow v2.0 单元测试（纯函数 + CLI 冒烟）。
+"""AutoZT 单元测试（纯函数 + CLI 冒烟）。
 
-运行：
-  cd ~/software/taskflow-v2.0 && python3 test/test_autozt.py      # 独立运行器
-  cd ~/software/taskflow-v2.0 && python3 -m pytest test/test_autozt.py -v   # 若有 pytest
+运行（test_tfpkg.py / test_autozt.py 都是它的旧文件名，以本文件为准）：
+  cd ~/software/AutoZT && python3 test/test_tfpkg.py      # 独立运行器
+  cd ~/software/AutoZT && python3 -m pytest test/test_tfpkg.py -v   # 若有 pytest
 """
 import os
 import sys

@@ -11,7 +11,7 @@ from ase.io import write
 from ase.optimize import BFGS
 from ase.filters import FrechetCellFilter
 
-MODEL = os.environ.get("MACE_MODEL_PATH", "/home/wangchao/software/taskflow/skill/kl-mace-cpu/templates/mace/MACE-matpes-pbe-omat-ft.model")
+MODEL = os.environ.get("MACE_MODEL_PATH", "/home/wangchao/software/AutoZT/skill/kl-mace-cpu/templates/mace/MACE-matpes-pbe-omat-ft.model")
 
 # 金属 -> (晶型, 晶格常数 A)；按元素常用晶型填写
 STRUCT = {
