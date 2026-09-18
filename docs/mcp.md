@@ -128,6 +128,13 @@ action, while complete evidence remains in `structuredContent.data`.
 The bundled prompts `plan-2d-zt`, `run-validated-workflow`, and
 `explain-result-provenance` encode this sequence for clients that support MCP prompts.
 
+`research_plan` also returns a `review_card`. A UI can render its `title`, numbered `steps`,
+`planned_calls`, and a `Proceed` control from `review_card.proceed`. The card separates
+`action_surface.mcp_safe_actions` from `action_surface.cli_only_actions`; a model must not
+copy the latter into `apply_actions`, because those entries may require ordinary CLI or
+human approval. This keeps the plan readable like a paper-style research-plan message
+without pretending that a descriptive plan is already an executable job submission.
+
 如果 MCP 客户端本身运行在 WSL 内，建议使用 AutoZT 的绝对路径，避免客户端工作目录
 改变后找不到程序：
 

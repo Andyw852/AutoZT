@@ -203,6 +203,43 @@ def test_workflow_profile_exposes_one_shot_control_loop(monkeypatch):
             os.environ["AUTOZT_MCP_PROFILE"] = old
 
 
+def test_science_result_uses_human_readable_conversation_text():
+    got = M._result("read", data={
+        "conversation_state": "awaiting_confirmation",
+        "message": "研究计划已生成",
+        "next_action": "confirm_plan",
+        "requires_user_confirmation": True,
+    })
+    text = got["content"][0]["text"]
+    assert "awaiting_confirmation" in text
+    assert "confirm_plan" in text
+    assert "需要用户确认" in text
+
+
+def test_research_plan_mcp_roundtrip_exposes_review_card(monkeypatch):
+    old_profile = os.environ.get("AUTOZT_MCP_PROFILE")
+    os.environ["AUTOZT_MCP_PROFILE"] = "workflow"
+    monkeypatch.setattr(M, "_run", lambda argv, timeout=1800: (
+        0, json.dumps({"skills": [{"name": "zt-dft-cpu"}]}), ""))
+    try:
+        got = M.call_tool("research_plan", {
+            "goal": "为二维材料计算 zT", "dimension": "2D", "material": "MoS2",
+            "temperature": [300], "carrier": [1e18],
+        })
+        assert not got["isError"]
+        data = got["structuredContent"]["data"]
+        assert data["conversation_state"] == "awaiting_confirmation"
+        assert data["review_card"]["proceed"]["label"] == "Proceed"
+        assert data["action_surface"]["cli_only_actions"]
+        assert "二维材料热电 zT 工作流" in got["content"][0]["text"]
+        assert "confirm_plan" in got["content"][0]["text"]
+    finally:
+        if old_profile is None:
+            os.environ.pop("AUTOZT_MCP_PROFILE", None)
+        else:
+            os.environ["AUTOZT_MCP_PROFILE"] = old_profile
+
+
 def test_capabilities_tool_returns_fixed_agent_contract():
     got = M.call_tool("capabilities", {})
     assert not got["isError"]

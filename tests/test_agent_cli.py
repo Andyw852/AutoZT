@@ -49,6 +49,19 @@ def test_contract_marks_missing_sections_and_infers_graph():
     assert got["inferred"]["step_graph"][0]["label"] == "S1"
 
 
+def test_science_envelope_promotes_conversation_metadata():
+    got = A._envelope("research_plan", {
+        "conversation_state": "awaiting_confirmation",
+        "message": "计划已生成", "next_action": "confirm_plan",
+        "requires_user_confirmation": True,
+        "confirmation_payload": {"will_submit_jobs": True},
+        "plan_id": "plan-test",
+    })
+    assert got["conversation"]["conversation_state"] == "awaiting_confirmation"
+    assert got["conversation"]["next_action"] == "confirm_plan"
+    assert got["data"]["plan_id"] == "plan-test"
+
+
 def test_snapshot_persists_and_returns_only_changes(tmp_path, monkeypatch):
     state = [_state("R"), _state("OK")]
     monkeypatch.setattr(A, "_status", lambda args: (A._compact_state(state.pop(0)), None, 0))

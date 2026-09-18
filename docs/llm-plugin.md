@@ -116,6 +116,10 @@ Agent：调用 cycle(execute=true)，动作经 autozt act，返回 job、集群�
 `awaiting_confirmation`；预检查失败时为 `preflight_review`；通过后为
 `ready_to_execute`。这些字段只表达对话边界，不替代技能自身的物理 validator。
 
+`research_plan.review_card` 是面向界面的计划卡：包含目标、编号步骤、每步输入/输出/判据、
+后续工具调用顺序和 `Proceed` 状态。`action_surface` 会把普通 CLI/人工动作与 MCP 可执行动作
+分开，模型不能把展示用的 `init_project` 或 `start_workflow` 误当成 `apply_actions` 的动作。
+
 MCP 的 `content[0].text` 也会返回一行短摘要，便于只读取文本的客户端；完整证据仍在
 `structuredContent.data`。CLI 则在同一 JSON envelope 中增加 `conversation`，因此 MCP 和
 `autozt agent` 可以互换，模型不需要为两种传输重新学习流程。推荐同时加载

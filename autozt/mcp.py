@@ -303,6 +303,9 @@ def _science_text(data):
     state = str(data.get("conversation_state"))
     next_action = str(data.get("next_action") or "review")
     confirmation = data.get("requires_user_confirmation") is True
+    summary = str(data.get("plan_summary") or "").strip()
+    if summary:
+        message = "计划：%s。%s" % (summary, message)
     suffix = " 需要用户确认后继续。" if confirmation else ""
     return "状态：%s。%s 下一步：%s。%s" % (state, message, next_action, suffix)
 

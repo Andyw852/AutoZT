@@ -71,8 +71,8 @@
 <rect x="1195" y="150" width="265" height="210" rx="14" class="purple"/>
 <text x="1327" y="192" text-anchor="middle" class="head">MCP interface</text>
 <text x="1327" y="230" text-anchor="middle" class="body">tools · resources · prompts</text>
-<text x="1327" y="260" text-anchor="middle" class="small">plan · inspect · preflight</text>
-<text x="1327" y="287" text-anchor="middle" class="small">results · skill files · workflow guidance</text>
+<text x="1327" y="260" text-anchor="middle" class="small">plan card · inspect · preflight</text>
+<text x="1327" y="287" text-anchor="middle" class="small">results · skill files · prompts</text>
 <text x="1327" y="322" text-anchor="middle" class="tiny">stdio / JSON-RPC</text>
 
 <rect x="1195" y="410" width="265" height="180" rx="14" class="green"/>
@@ -88,11 +88,12 @@
 <text x="1650" y="248" text-anchor="middle" class="head">LLM agent</text>
 <text x="1650" y="286" text-anchor="middle" class="small">discover skill</text>
 <text x="1650" y="316" text-anchor="middle" class="small">inspect evidence</text>
-<text x="1650" y="346" text-anchor="middle" class="small">review plan</text>
-<text x="1650" y="376" text-anchor="middle" class="small">request action</text>
+<text x="1650" y="346" text-anchor="middle" class="small">review plan card</text>
+<rect x="1580" y="360" width="140" height="34" rx="10" class="green"/>
+<text x="1650" y="383" text-anchor="middle" class="accent">Proceed</text>
 <rect x="1580" y="410" width="140" height="82" rx="10" class="orange"/>
 <text x="1650" y="442" text-anchor="middle" class="head">act gate</text>
-<text x="1650" y="468" text-anchor="middle" class="tiny">explicit execution</text>
+<text x="1650" y="468" text-anchor="middle" class="tiny">dry-run → execute</text>
 
 <!-- return outputs -->
 <path d="M1540 575 H1500 V690 H1130" fill="none" stroke="#a3294a" stroke-width="3" marker-end="url(#arrow)"/>

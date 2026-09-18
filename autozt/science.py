@@ -59,6 +59,53 @@ def _conversation(*, state: str, message: str, next_action: str,
     }
 
 
+def _review_card(goal: str, plan_summary: str, stages: List[Dict[str, Any]],
+                 *, has_gaps: bool, selected_skills: List[str], material: Optional[str],
+                 plan_id: str, will_submit_jobs: bool) -> Dict[str, Any]:
+    """Build the user-facing plan card used by MCP clients and CLI wrappers."""
+    steps = []
+    for index, stage in enumerate(stages, 1):
+        steps.append({
+            "number": index,
+            "id": stage.get("id"),
+            "label": stage.get("stage"),
+            "skills": stage.get("skills") or [],
+            "inputs": stage.get("requires") or [],
+            "outputs": stage.get("produces") or [],
+            "validator": stage.get("validator"),
+        })
+    planned_calls = [
+        {"tool": "list_skills", "purpose": "发现可用技能", "risk": "read"},
+        {"tool": "describe_skill", "purpose": "读取输入、输出、依赖和判据", "risk": "read"},
+        {"tool": "preflight", "purpose": "检查结构、网格、单位和二维厚度", "risk": "read"},
+        {"tool": "inspect", "purpose": "读取当前状态和诊断证据", "risk": "read"},
+        {"tool": "cycle", "mode": "dry_run", "purpose": "展示确定性动作清单", "risk": "read"},
+        {"tool": "cycle", "mode": "execute", "purpose": "确认后通过 autozt act 执行", "risk": "mutate",
+         "requires_user_confirmation": True},
+        {"tool": "results", "purpose": "读取带来源的计算结果", "risk": "read"},
+    ]
+    return {
+        "title": plan_summary,
+        "plan_id": plan_id,
+        "goal": goal,
+        "material": material,
+        "selected_skills": selected_skills,
+        "steps": steps,
+        "planned_calls": planned_calls,
+        "proceed": {
+            "label": "Proceed",
+            "enabled": not has_gaps,
+            "requires_user_confirmation": not has_gaps,
+            "next_call": "preflight" if not has_gaps else "provide_inputs",
+        },
+        "execution_boundary": {
+            "this_plan_submits_jobs": False,
+            "confirmed_execution_may_submit_jobs": bool(will_submit_jobs),
+            "gateway": "autozt act",
+        },
+    }
+
+
 def _as_list(value: Optional[Iterable[Any]]) -> List[Any]:
     if value is None:
         return []
@@ -164,6 +211,7 @@ def research_plan(goal: str, skills: Iterable[Dict[str, Any]], *, dimension: Opt
         ]
     plan_id = _plan_id(text, dimension=dimension, temperature=temps, carrier=carriers,
                        material=material, skills=selected)
+    plan_summary = ("二维材料热电 zT 工作流" if dimension == "2D" else "热电 zT 工作流")
     conversation = _conversation(
         state="needs_user_input" if gaps else "awaiting_confirmation",
         message=("研究计划缺少必要输入：" + "；".join(item["message"] for item in gaps)
@@ -176,8 +224,16 @@ def research_plan(goal: str, skills: Iterable[Dict[str, Any]], *, dimension: Opt
     return {
         "schema_version": "autozt/research-plan/1", "status": "needs_input" if gaps else "ready",
         "plan_id": plan_id, **conversation,
-        "plan_summary": ("二维材料热电 zT 工作流" if dimension == "2D" else "热电 zT 工作流"),
+        "plan_summary": plan_summary,
         "plan_steps": stages,
+        "review_card": _review_card(text, plan_summary, stages, has_gaps=bool(gaps),
+                                     selected_skills=selected, material=material,
+                                     plan_id=plan_id, will_submit_jobs=bool(actions)),
+        "action_surface": {
+            "mcp_safe_actions": [a for a in actions if a.get("action") == "advance_ready"],
+            "cli_only_actions": [a for a in actions if a.get("action") != "advance_ready"],
+            "note": "research_plan 只展示候选；MCP 执行仍需 cycle/apply_actions，CLI-only 动作需普通 CLI/人工确认。",
+        },
         "goal": text, "selected_skills": selected, "available_skills": available, "material": material,
         "assumptions": {"dimension": dimension, "temperature": temps, "carrier": carriers},
         "required_inputs": [

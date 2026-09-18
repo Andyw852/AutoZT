@@ -17,6 +17,11 @@ def test_research_plan_requires_grids_for_zt():
     assert ready["conversation_state"] == "awaiting_confirmation"
     assert ready["requires_user_confirmation"] is True
     assert ready["confirmation_payload"]["will_submit_jobs"] is True
+    assert ready["review_card"]["proceed"]["label"] == "Proceed"
+    assert ready["review_card"]["proceed"]["enabled"] is True
+    assert ready["review_card"]["execution_boundary"]["this_plan_submits_jobs"] is False
+    assert ready["action_surface"]["mcp_safe_actions"] == [ready["actions"][-1]]
+    assert len(ready["action_surface"]["cli_only_actions"]) == 2
     assert ready["execution"]["submits_jobs"] is False
     assert {a["action"] for a in ready["actions"]} == {
         "init_project", "start_workflow", "advance_ready"
