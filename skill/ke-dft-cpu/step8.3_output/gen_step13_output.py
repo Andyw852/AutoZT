@@ -997,11 +997,11 @@ def main():
         elif _r and not _u:
             # 只跑了真实重叠、没有 unity 对照 -> 按维数分档（V25）：
             #   2D：红色（已实测会错，必须用 unity 重跑）
-            #   3D：黄色（受影响面已确认，但"是否真算错"待 Si 全网格对照）
+            #   3D：黄色（Si 全网格对照已出：ADP/overall 差 3~9%、IMP 逐机制高 1.3~1.7 倍）
             if overlap_grade_only_real(dim) == "3d":
                 print("[重叠报警] **黄色**：三维 + 真实重叠（无 unity 对照）——"
-                      "受影响面已确认，是否真算错待 Si 全网格对照（VERIFICATION V25）。"
-                      "**采纳前需人工确认**。")
+                      "Si 全网格对照（V26）：ADP/overall 只差 3~9%，但 IMP 逐机制偏高 1.3~1.7 倍。"
+                      "**采纳前需人工确认逐机制值**。")
             else:
                 print("[重叠报警] ★ 红色：2D + 真实重叠（无 unity 对照）——"
                       "去对称化已实测会把重叠算坏（V23），**必须用 unity_overlap 重跑本步**，"

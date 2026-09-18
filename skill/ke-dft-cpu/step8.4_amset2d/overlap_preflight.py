@@ -252,7 +252,8 @@ def run(cwd, out_dir=None, unity_overlap=False):
         elif not complete and not unity_overlap:
             warn = True
             lines.append("     [WARN] 3D + 真实重叠 + 非完整网格 -> AMSET 会对系数去对称化，"
-                         "实测 ADP 被抬高 10~30 倍（V23）；三维是否真错等 Si 全网格对照（V25）。"
+                         "二维实测 ADP 被抬高 10~30 倍（V23）；三维 Si 全网格对照（V26）："
+                         "ADP/overall 只差 3~9%、IMP 逐机制高 1.3~1.7 倍 -> 结论值可用，逐机制值需注明。"
                          "当前 BLOCK_3D_REAL_OVERLAP=%s -> 只告警不拦。"
                          % BLOCK_3D_REAL_OVERLAP)
 

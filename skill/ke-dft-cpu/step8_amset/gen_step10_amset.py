@@ -57,6 +57,12 @@ WAVE_DIR    = "step4_wave"
 #   step3b/step4b），否则 h5 点数与 vasprun 推出的网格对不上，AMSET 会退回去对称化，
 #   对照就不成立。默认 False = 仍读 step4_wave，行为与以前完全一致。
 WAVEFUNCTION_FULL = False
+# patch_unity_overlap_override（2026-09-18，V26）：step.conf 可显式覆盖 unity_overlap，
+#   用于**受控对照**（同一份 settings 只翻这一个开关）：
+#     auto  -> 现行行为（2D 恒 true；3D 不写 = 真实重叠）
+#     true  -> 强制 unity（如给 3D / SOC 补一次 unity 比值，检查比值报警）
+#     false -> 强制真实重叠（如给 LS 这种 2D 补"同 settings 的 real 对照"）
+UNITY_OVERLAP = "auto"
 READ_DIR    = "step7b_deform_read"
 DIELECT_DIR = "step5_dielect"
 # patch_ke_dag：跟上 v1.9 的目录重命名。HSE 优先，其次 PBE，最后兼容老目录。
@@ -153,6 +159,8 @@ SPEC = {
     "NWORKERS": (NWORKERS, "int"),
     # 全网格 h5 对照（三维裁定）；默认 False，既有三维项目行为不变。
     "WAVEFUNCTION_FULL": (WAVEFUNCTION_FULL, "bool"),
+    # unity_overlap 覆盖（受控对照用）；默认 auto = 现行行为不变。
+    "UNITY_OVERLAP": (UNITY_OVERLAP, "str"),
 }
 # 2D 时给 settings.yaml 写 free_carrier_screening: true
 FREE_CARRIER_SCREENING_2D = True
@@ -928,17 +936,27 @@ def write_settings(out: Path, eps_inf, eps_static, gap, elastic,
               "deformation_potential: deformation.h5"]
     if INTERPOLATION_FACTOR:     # patch_interp_factor
         lines.append("interpolation_factor: %d" % int(INTERPOLATION_FACTOR))
-    # patch_unity_overlap_3d（V25）：2D 强制 unity；3D 只告警
-    if is_2d:
-        lines.append("unity_overlap: %s" % ("true" if UNITY_OVERLAP_2D else "false"))
-        lines.append("# ^ 2D：去对称化会把真实重叠算坏（V23），一律用 unity_overlap。")
+    # patch_unity_overlap_3d（V25）+ patch_unity_overlap_override（V26）：2D 默认 unity、3D 默认真实重叠，
+    #   但 step.conf 的 UNITY_OVERLAP=true/false 可以显式覆盖（用于受控对照）。
+    _uo_ov = None if UNITY_OVERLAP == "auto" else (UNITY_OVERLAP == "true")
+    if is_2d or _uo_ov is not None:
+        _val = UNITY_OVERLAP_2D if _uo_ov is None else _uo_ov
+        lines.append("unity_overlap: %s" % ("true" if _val else "false"))
+        if _uo_ov is None:
+            lines.append("# ^ 2D：去对称化会把真实重叠算坏（V23），一律用 unity_overlap。")
+        else:
+            lines.append("# ^ step.conf 显式覆盖 UNITY_OVERLAP=%s（受控对照：同一份 settings 只翻这一项）。"
+                         % UNITY_OVERLAP)
     else:
-        lines.append("# unity_overlap 未写 -> AMSET 默认 False = **真实重叠**。")
-        lines.append("# [WARN] 三维受影响面已确认（Si / 225 / Al5N 都走了'去对称化 + 真实重叠'"
-                     "这个组合），")
-        lines.append("#   但'是否真算错'待 Si 的全网格对照（VERIFICATION V25）。结论出来前不擅自改；")
-        lines.append("#   届时若确认要改，在此写 unity_overlap: true（注意 Si 有 6 个谷，"
-                     "unity 最多低估约 6 倍）。")
+        # ★ 必须**显式写 false**：AMSET 默认本就是 False（真实重叠），但只有写出来，
+        #   8.3 的 overlap_ratio_guard 才能把这次运行识别为"真实重叠"并给三维标黄；
+        #   不写 -> unity_overlap=None -> 8.3 报"0 unity / 0 真实重叠，跳过"（三维黄色告警不会触发）。
+        lines.append("unity_overlap: false")
+        lines.append("# ^ 三维显式写 false = 真实重叠（与 AMSET 默认一致；写出来是为了让 8.3 能识别）。")
+        lines.append("# [WARN] 三维受影响面已确认；Si 全网格对照（V26）：ADP/overall 只差 3~9%、")
+        lines.append("#   IMP 逐机制高 1.3~1.7 倍 -> 结论值可用，逐机制值需注明。")
+        lines.append("#   若要给某项目改 unity：在本步 step.conf 写 UNITY_OVERLAP = true")
+        lines.append("#   （注意 Si 有 6 个谷，unity 最多低估约 6 倍）。")
     # ★ 必须显式写 nworkers：不写则 AMSET 默认 -1 = 用满节点全部核，
     #   会超订 submit 模板申请的核数（见文件头 NWORKERS 处的实测记录）。
     lines.append("nworkers: %d" % int(NWORKERS))
@@ -1088,7 +1106,7 @@ def _preflight_gate(cwd, out, unity):
 def main():
     _disc_gate()
     cwd = Path.cwd()
-    global LAYER_THICKNESS, NWORKERS, WAVEFUNCTION_FULL
+    global LAYER_THICKNESS, NWORKERS, WAVEFUNCTION_FULL, UNITY_OVERLAP
     _conf_nworkers = None
     if (cwd / "step.conf").is_file():
         # strict=False：材料级 step.conf 是【全技能共用】的一份，含别的步骤的键
@@ -1110,6 +1128,16 @@ def main():
                 WAVEFUNCTION_FULL = True
                 print("[..] WAVEFUNCTION_FULL=true：wavefunction.h5 ← step4b_wave_full"
                       "（全网格，ISYM=-1），vasprun.xml ← step3b_uniform_full")
+            # unity_overlap 显式覆盖（受控对照）：auto/true/false
+            _uo = str(_p["UNITY_OVERLAP"]).strip().lower()
+            if _uo in ("true", "1", "yes", "on"):
+                UNITY_OVERLAP = "true"
+                print("[..] UNITY_OVERLAP=true（step.conf 覆盖）：强制 unity_overlap: true")
+            elif _uo in ("false", "0", "no", "off"):
+                UNITY_OVERLAP = "false"
+                print("[..] UNITY_OVERLAP=false（step.conf 覆盖）：强制真实重叠")
+            elif _uo != "auto":
+                print("[WARN] UNITY_OVERLAP=%r 不认识（只认 auto/true/false），按 auto 处理" % _uo)
         except (KeyError, ValueError, TypeError):
             pass  # step.conf 读不成时保持出厂默认（LAYER_THICKNESS="vdw" / NWORKERS 自动）
 

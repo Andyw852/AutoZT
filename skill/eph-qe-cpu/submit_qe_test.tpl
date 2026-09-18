@@ -23,6 +23,9 @@ export WANNIER_BIN=/public/software/wannier/3.1.0/bin
 export PERTURBO_BIN=/public/home/wangchao/software/AutoZT/qe-7.3-perturbo/perturbo/bin
 export PSEUDO_DIR=/public/home/wangchao/software/AutoZT/pseudo
 export OMP_NUM_THREADS=1
+export OMP_STACKSIZE=1G
+export BLIS_ARCH_TYPE=generic
+export BLIS_NUM_THREADS=1
 export PATH="$OPENMPI_BIN:$QE_BIN:$WANNIER_BIN:$PERTURBO_BIN:$PATH"
 for d in "$QE_BIN" "$WANNIER_BIN" "$PERTURBO_BIN"; do
   [ -z "$d" ] || export PATH="$d:$PATH"
@@ -33,7 +36,11 @@ run_mpi() {
 }
 
 run_perturbo_omp() {
-  OMP_NUM_THREADS="${SLURM_NTASKS:?SLURM_NTASKS is required}" "$@"
+  # The tested jzzn qe2pert binary can segfault in its OpenMP zdotc path.
+  # Keep the four-core allocation for QE, but run Perturbo serially for the
+  # small Si smoke test; larger production runs need a separately validated
+  # threaded Perturbo build.
+  OMP_NUM_THREADS=1 "$@"
 }
 
 {{COMMAND}}

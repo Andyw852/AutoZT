@@ -21,6 +21,10 @@ export WANNIER_BIN=/public/software/wannier/3.1.0/bin
 export PERTURBO_BIN=/public/home/wangchao/software/AutoZT/qe-7.3-perturbo/perturbo/bin
 export PSEUDO_DIR=/public/home/wangchao/software/AutoZT/pseudo
 export OMP_NUM_THREADS=1
+export OMP_STACKSIZE=1G
+# AOCL's Zen dot kernel is unstable with this qe2pert build on jzzn.
+export BLIS_ARCH_TYPE=generic
+export BLIS_NUM_THREADS=1
 export PATH=$OPENMPI_BIN:$PATH
 for d in "$QE_BIN" "$WANNIER_BIN" "$PERTURBO_BIN"; do
   [ -z "$d" ] || export PATH="$d:$PATH"
@@ -29,9 +33,11 @@ run_mpi() {
   "$OPENMPI_BIN/mpirun" -np "${SLURM_NTASKS:?SLURM_NTASKS is required}" "$@"
 }
 run_perturbo_omp() {
-  # qe2pert/perturbo must see the global FFT grid in one MPI rank; use all
-  # allocated cores as OpenMP threads instead of splitting the FFT over pools.
-  OMP_NUM_THREADS="${SLURM_NTASKS:?SLURM_NTASKS is required}" "$@"
+  # The tested jzzn qe2pert binary can segfault in its OpenMP zdotc path.
+  # Keep the four-core allocation for QE, but run Perturbo serially for the
+  # small Si smoke test; larger production runs need a separately validated
+  # threaded Perturbo build.
+  OMP_NUM_THREADS=1 "$@"
 }
 run_wannier() {
   "$INTEL_MPI_BIN/mpirun" -np 1 "$@"

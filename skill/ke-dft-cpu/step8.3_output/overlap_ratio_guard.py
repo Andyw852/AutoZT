@@ -61,7 +61,10 @@ def _read_run(d):
     if os.path.isfile(st):
         s = open(st, errors="ignore").read()
         m = re.search(r"^unity_overlap:\s*(\S+)", s, re.M)
-        unity = (m.group(1).lower() == "true") if m else None
+        # ★ 缺这一行时按 AMSET 0.4.19 的默认值 False（真实重叠）处理 —— 旧 gen 不写这一行，
+        #   若记成 None，8.3 / CLI 会把它当"未知"跳过 -> 三维黄色、二维红色都不会触发。
+        #   （settings.yaml 整个缺失时保持 None = 未知，见上面的初值。）
+        unity = (m.group(1).lower() == "true") if m else False
         m = re.search(r"^interpolation_factor:\s*(\S+)", s, re.M)
         interp = float(m.group(1)) if m else None
     try:

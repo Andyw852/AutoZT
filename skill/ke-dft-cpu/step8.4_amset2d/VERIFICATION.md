@@ -6,6 +6,50 @@ numpy 1.26.4 + numba 0.62.1 + BoltzTraP2 26.3.1，python 3.10）；另在 amset 
 数据：`/mnt/d/tf_data/jzz/jap/{CrS2_hex,CrS2_ortho,CrSe2_hex}`（ke-dft-cpu 真实产物）
 + 集群上取回的 `wavefunction.h5`。所有算例都在本地临时目录跑，未动集群状态。
 
+---
+
+## ★ 结论速览（2026-09-18，V26；细节见 §六 / §七 / §25）
+
+1. **根因是"真实重叠被算坏"这一类，不是只有去对称化**：二维 MoS2 实测去对称化把 ADP 抬 10~16 倍；
+   但 **SS 本来就是完整网格、根本不去对称化，真实重叠照样抬 6 倍** -> "换全网格 h5"**不是普遍解**
+   （kz 只有 1 层时系数插值退化成外推）。
+2. **三维裁定（Si 全网格对照）已完成**：同一 vasprun / settings / nworkers，只切 h5 ——
+   ADP **1.01 / 0.92**、overall **1.02 / 0.97**（无二维式放大）、IMP 0.58 / 0.77（被抬高 1.3~1.7 倍）；
+   重复跑**逐位相同**。**结论：三维真实重叠可用**（不必改 unity —— Si 有 6 个等价谷，改了最多低估 6 倍）；
+   引用逐机制 IMP 值时要注明偏高。
+3. **部署默认**：二维一律 `unity_overlap: true`（gen 自动写）；三维**显式写 `false`**（真实重叠）。
+4. **三道护栏已落地并端到端验证**：
+   ① `overlap_preflight.py` 运行前检查（AMSET 版本 / 重叠模式 / h5 完整性 / 带窗口一致性 / **弹性张量正定性**）；
+   ② `overlap_ratio_guard.py` 分级报警（ADP `[1,N_v]` 绿 / `(N_v,2N_v]` 黄 / `>2N_v` 红；POP 1±20%），
+      8.3 集成：2D 真实重叠 -> **红**，3D 真实重叠 -> **黄**；
+   ③ gen 显式写 `unity_overlap`（不写则报警不触发）+ guard 把"缺键"按 AMSET 0.4.19 默认 False 处理
+      （**旧项目也能被报警**，不必批量 retry）。
+5. **上游报告**已定稿：`tmp/amset2d/upstream_report_draft.md`（3 节，含 Si 实测 +
+   "文献广泛引用的验证没有覆盖即时去对称化这条代码路径"的论证）。
+6. **待你决定的事**见下。
+
+## 【附：待决事项】（都需要你点头；命令已写好）
+
+1. **LS 的受控比值**（唯一还没拿到绿/黄的二维项）：现有 09-01 real vs 今天 unity 的两侧 settings 还差
+   `pop_frequency`（14.62 -> 10.46）、介电（标量 -> 3×3 张量）、弹性 Voigt 4<->6 重排 ->
+   **不是受控对照，不能归因给重叠**。要受控比值需集群两跑（各 ~1 h）：
+   ```bash
+   # ① 受控 real 侧：在 LS 项目 project_setting/templates/step8_amset/step.conf 写 UNITY_OVERLAP = false
+   autozt -tt ke-dft-cpu -p LS -j S8_kappa retry && autozt -tt ke-dft-cpu -p LS -j S8_kappa start
+   # ② 恢复 unity 生产状态：把 UNITY_OVERLAP 改回 auto（或删行），再 retry + start
+   ```
+   （机制已就绪：`gen_step10_amset.py` 的 `UNITY_OVERLAP = auto/true/false`，默认 auto 行为不变。）
+2. **Mo2S3**：输入本身不可信（面内 C66 = −13.7 GPa，而 (C11−C12)/2 = +17.7；S1_opt 残余压力 −7.80 kB、
+   未达精度）-> 建议先修 S1_opt / S6_elastic，再谈 AMSET。
+3. **CrS2 型**（面外剪切 ≈0、符号是数值噪声）：AMSET 侧修法（面内 2×2 张量 / 面外剪切除零）批不批？
+   在批之前 `overlap_preflight` 第 ⑤ 项会把这两个材料的 S8 **拦下**（它们现在跑出来的 ADP 是废的：
+   CrS2 空穴 2×10⁴ / 0.0；Mo2S3 电子 6946）。
+4. **SOC 那批**的 unity 比值：原因已查明并记录（SOC 必须 `LSORBIT=.TRUE.` -> VASP 要求 `ISYM=-1`
+   -> 288 点全算 -> 本来就走 from_data）；它**不在 autozt ke-dft-cpu 清单内**（独立 `soc_workflow.yaml`），
+   要跑请告诉我用哪条链路。
+5. **排队中的冗余作业**：`Si-ke-dft-cpu-S8_kappa`（3849833）仍在 `Priority` 排队 ——
+   Si 判定已由本地受控跑完成，它只剩"端到端再确认"；要停需你同意（`autozt stop`）。
+
 ## V1. 核自检（合成数据，`test_kernels.py`）
 
 `python test_kernels.py` -> **14/14 PASS**，amset 0.4.19 与 0.5.1 各跑一遍都 PASS。覆盖：
@@ -1861,7 +1905,15 @@ unity 分支直接跳过），所以 unity 那次即使 h5 是断链也能跑通
 - **SS 的红最能说明问题**：它的 h5 本来就是完整网格、根本不去对称化，真实重叠照样抬 6 倍
   —— "换全网格 h5"不是普遍解（§25.8）。
 - 这几个材料的生产 `step8_amset` 结果**已切到 unity 口径**，JAP 复现数值以 unity 为准（§25.7）。
-- LS 的 unity/real 对照出结果后按同一分级补进本表（jobid 3849836）。
+- **LS 的 unity 重跑已完成**（jobid **3849836**，1h01m，transport 17:09，`unity_overlap: true`）：
+  300 K、|n|=1e17 的 r/u = eADP **11.3**、hADP **129.1**、eIMP 7.4、hIMP 6.8、POP 4.2、overall 5.9 / 7.0。
+  **但这组比值【不是受控对照】，不能归因给重叠** —— 两侧相隔 2.5 周，settings 除 `unity_overlap` 外还差：
+  `pop_frequency` 14.62 → **10.46**、介电从标量变成 **3×3 张量**、**弹性张量剪切分量做了 Voigt 4↔6 重排**
+  （C44 56.41 → 0.19、C66 0.39 → 58.41）、nworkers 8。任一项都足以造成十倍级差异。
+- **要拿 LS 的受控比值**，必须用**同一份今天的 settings 只翻 `unity_overlap` 再跑一次**。
+  为此新增 `UNITY_OVERLAP` 覆盖键（`gen_step10_amset.py`，STEP_CONF `auto/true/false`，默认 auto = 现行行为不变）：
+  LS 用 `UNITY_OVERLAP = false` 重跑即得受控 real 侧；同理 SOC 那批可用 `true` 补一次 unity 比值。
+  **这两个重跑是新的集群作业，等确认后再提交。**
 
 
 ### 25.9 SS 的 6 倍抬升从哪来：**它的 h5 里重叠本身就很低**（与去对称化无关）
@@ -2103,7 +2155,53 @@ desymmetrize_coefficients`）变换到 1331 个目标格点，逐带与 S4b 里*
 - 参考：既有 S8（2026-09-06，去对称化 h5 + S3_uniform vasprun + 真实重叠）的 transport 已存
   `tmp/amset2d/si_full/transport_sep6_desym_real.json`（新运行会覆盖远端 `transport.json`）。
 - **这一项决定"三维是否真算错"。** 本地同参数的两次对照在 `tmp/amset2d/si_full/run_pair.sh`，
-  但本地长跑会被会话重启杀掉，故改为走集群。
+  本地长跑会被会话重启杀掉，但把设置缩成"只算 300 K + 2 个掺杂"后几分钟就能跑完（见下）。
+
+**③ 真实重叠迁移率对照 —— 已完成（本地受控，2026-09-18）**
+
+条件：同一 vasprun（S3b）、同一 deformation、同一 settings（只把 `temperatures` 缩到 `[300]`、
+`doping` 缩到 `[-1e17, 1e17]`、`nworkers=6`，**两跑完全相同**），**只切 `wavefunction.h5`**：
+全网格 1331 点 vs 去对称化 56 点。两跑日志分别确认 `Desymmetrizing` 出现 **0 次 / 2 次** —— 单变量成立。
+
+| 300 K，|n|=1e17（tr/3） | 全网格 h5 | 去对称化 h5 | 全网格/去对称化 |
+|---|---|---|---|
+| 电子 ADP | 1622.7 | 1608.4 | **1.01** |
+| 电子 overall | 819.0 | 805.0 | **1.02** |
+| 空穴 ADP | 5004.2 | 5434.8 | **0.92** |
+| 空穴 overall | 1428.9 | 1474.3 | **0.97** |
+| 电子 IMP | 5466.9 | 9472.1 | 0.58 |
+| 空穴 IMP | 2807.8 | 3637.7 | 0.77 |
+
+- **判定**：**ADP 与 overall 只差 3~9%（1.01 / 0.92、1.02 / 0.97），没有二维那种 10~16 倍放大。**
+  即去对称化在 Si 这类**三维、带边不在 Γ、6 个等价谷**的体系里，**没有把迁移率算错到改变结论的程度**；
+  标准答案重叠里那 2.5% 的坏系数不足以像二维那样支配迁移率。
+- 唯一有差的是 **IMP（电子 0.58、空穴 0.77）**，方向是"去对称化把 IMP 抬高了 1.3~1.7 倍"。
+  **但必须先排除 run-to-run / nworkers 非确定性**（crit2 里 ADP 逐机制值随 nworkers 变过 2 倍），
+  已并行跑完全相同的重复对照（`fg2_local` / `ds2_local`）；**结果出来前 IMP 这一行只作观察**。
+- 与 09-06 集群参考（去对称化 + 生产 settings 9 个温度 + nworkers≈auto）：电子 ADP 1898 /
+  overall 893，与本地去对称化跑（1608 / 805）差 15~18%，符合"逐机制值随 nworkers 漂移"的已知问题；
+  **受控结论以同机同 nworkers 的两跑为准**。
+
+**④ 重复性对照（关键，排除了"噪声"解释）**
+
+完全相同的两次重复跑（`fg2_local` / `ds2_local`，同 settings、同 nworkers）：**逐机制逐位相同，
+重复差 0.0%**（ADP / IMP / overall，电子与空穴全部）。所以 ③ 里 fg/ds 的差异**是真的 h5 效应，
+不是随机噪声**；同时这也说明 crit2 里"逐机制值随 nworkers 变"是**真实存在的 nworkers 依赖**
+（同 nworkers 下完全可复现），不是运行抖动。
+
+**★ 三维最终判定（Si 全网格对照，2026-09-18）**
+
+| | 结论 |
+|---|---|
+| 标准答案重叠 | 6655 样本中位 \|I\|²=1.000，**2.5% < 0.99**（最差 4.8e-4） |
+| ADP 迁移率 | 全网格/去对称化 = **1.01（电子）/ 0.92（空穴）** -> 无显著误差 |
+| overall 迁移率 | **1.02 / 0.97** -> 无显著误差（2~3%） |
+| IMP 迁移率 | **0.58 / 0.77** -> 去对称化把 IMP 抬高 **1.3~1.7 倍**（真实效应） |
+
+- **"三维是否真算错"的答案**：**没有二维那种（10~16 倍）错误**。用于 zT 的 overall 迁移率只差
+  2~3%；但**逐机制 IMP 值确有 1.3~1.7 倍偏差**，引用逐机制数时要注明。
+- **三维策略**：真实重叠**可用**，不必改 unity（Si 有 6 个谷，unity 最多低估 6 倍）；
+  8.3 的黄色告警保留，措辞从"待 Si 全网格对照"更新为已测得的量级。
 
 **★ 顺带查明的独立问题：既有 3D 项目的"密网格"其实等于静态网格（与重叠 bug 无关）**
 
@@ -2127,6 +2225,16 @@ desymmetrize_coefficients`）变换到 1331 个目标格点，逐带与 S4b 里*
 preflight（`overlap_preflight.py`）对"三维 + 真实重叠 + 非完整网格"只**告警放行**、
 **不拦截**。三维项目在 Si 结论出来前**不统一改 unity**：Si 有 6 个等价谷，unity 最多把
 迁移率低估约 6 倍，代价比二维大得多。
+
+> **2026-09-18 修正：三维黄色告警原来根本不会触发（重要）**。`overlap_ratio_guard._read_run`
+> 把缺失的 `unity_overlap` 记成 `None`，而 8.3 只把 `is True` / `is False` 分别当作
+> unity / 真实重叠；旧 gen 对三维**只写注释、不写键** -> 8.3 输出"0 unity / 0 真实重叠，跳过"，
+> **三维黄色不会出现**。已修：`gen_step10_amset.py` 三维分支**显式写 `unity_overlap: false`**
+> （与 AMSET 默认一致，不改数值，只让运行可被识别）。端到端夹具验证：
+> 三维 + false -> **黄色**（含 V26 实测数字）；二维 + false -> **红色**。
+> 同时 `overlap_ratio_guard._read_run` 也已修：**缺 `unity_overlap` 键按 AMSET 默认 False（真实重叠）处理**
+> （旧 gen 不写这一行；记成 None 就等于静默跳过）。所以**既有三维项目不必批量 retry**
+> 也能被 8.3 标黄；retry 只是让 settings 里带上显式键（自文档化）。
 
 > **2026-09-18 修正一处判级不一致**：原判级写成
 > `_dim3 = (str(dim).lower() == "3d") if "dim" in dir() else None` —— **维度读不到时**
