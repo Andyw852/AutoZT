@@ -78,6 +78,12 @@ def main():
                       % args.hybrid_outcar)
 
     payload = dc.build_payload(verdicts)
+    # 本步（seq 2.155, 目录 step2_bandgap/step2.155_discriminant_decide）自己不产出文件，
+    # 但它没有任何地方创建自己的目录 —— 而 autozt 的 done_marker 用
+    # <步骤目录>/../step2.15_discriminant/discriminant.json 取这份 json，
+    # 路径里的 .. 要求"步骤目录"真实存在。这里补建，marker 才能命中。
+    (cwd / "step2_bandgap" / "step2.155_discriminant_decide").mkdir(
+        parents=True, exist_ok=True)
     out = d / dc.OUT_JSON
     out.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n",
                    encoding="utf-8", newline="\n")

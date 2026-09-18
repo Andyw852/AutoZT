@@ -8,9 +8,11 @@ from __future__ import annotations
 import json
 import math
 import os
+import hashlib
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 RESULT_SCHEMA = "autozt/science-result/1"
+CONVERSATION_SCHEMA = "autozt/conversation/1"
 _DIMENSIONS = (None, "0D", "1D", "2D", "3D")
 _PROPERTY_ALIASES = {
     "zt": {"zt", "zt_value", "z_t"},
@@ -24,6 +26,37 @@ _PROPERTY_UNITS = {"zt": "1", "seebeck": "uV/K", "sigma": "S/m",
                    "kappa_e": "W/m/K", "kappa_l": "W/m/K", "pf": "W/m/K^2"}
 _ROW_KEYS = {"zt": "ZT", "seebeck": "seebeck_uV/K", "sigma": "sigma_S/m",
              "kappa_e": "kappa_e_W/mK", "kappa_l": "kappa_L_W/mK", "pf": "PF_W/mK2"}
+
+
+def _plan_id(goal: str, *, dimension: Optional[str], temperature: Iterable[Any],
+             carrier: Iterable[Any], material: Optional[str], skills: Iterable[str]) -> str:
+    """Create a stable identifier so a plan can be reviewed across transports."""
+    payload = {"goal": goal, "dimension": dimension, "temperature": list(temperature),
+               "carrier": list(carrier), "material": material, "skills": list(skills)}
+    encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True,
+                          separators=(",", ":")).encode("utf-8")
+    return "plan-" + hashlib.sha256(encoded).hexdigest()[:16]
+
+
+def _conversation(*, state: str, message: str, next_action: str,
+                  requires_confirmation: bool, actions: Optional[Iterable[Any]] = None,
+                  risk: str = "read", will_submit_jobs: bool = False,
+                  plan_id: Optional[str] = None) -> Dict[str, Any]:
+    """Return the small common envelope shared by science-facing interfaces."""
+    scope = list(actions or [])
+    return {
+        "schema_version": CONVERSATION_SCHEMA,
+        "conversation_state": state,
+        "message": message,
+        "next_action": next_action,
+        "requires_user_confirmation": bool(requires_confirmation),
+        "confirmation_payload": {
+            "plan_id": plan_id,
+            "actions": scope,
+            "risk": risk,
+            "will_submit_jobs": bool(will_submit_jobs),
+        },
+    }
 
 
 def _as_list(value: Optional[Iterable[Any]]) -> List[Any]:
@@ -129,8 +162,22 @@ def research_plan(goal: str, skills: Iterable[Dict[str, Any]], *, dimension: Opt
             {"action": "advance_ready", "command": ["autozt", "-tt", primary, "-p", material, "auto", "on"],
              "risk": "may_submit_ready_jobs", "execute": "explicit_only"},
         ]
+    plan_id = _plan_id(text, dimension=dimension, temperature=temps, carrier=carriers,
+                       material=material, skills=selected)
+    conversation = _conversation(
+        state="needs_user_input" if gaps else "awaiting_confirmation",
+        message=("研究计划缺少必要输入：" + "；".join(item["message"] for item in gaps)
+                 if gaps else "研究计划已生成，当前只读预览，不会提交超算作业。"),
+        next_action="provide_inputs" if gaps else "confirm_plan",
+        requires_confirmation=not gaps,
+        actions=actions,
+        risk="mutate" if actions else "read",
+        will_submit_jobs=bool(actions), plan_id=plan_id)
     return {
         "schema_version": "autozt/research-plan/1", "status": "needs_input" if gaps else "ready",
+        "plan_id": plan_id, **conversation,
+        "plan_summary": ("二维材料热电 zT 工作流" if dimension == "2D" else "热电 zT 工作流"),
+        "plan_steps": stages,
         "goal": text, "selected_skills": selected, "available_skills": available, "material": material,
         "assumptions": {"dimension": dimension, "temperature": temps, "carrier": carriers},
         "required_inputs": [
@@ -280,8 +327,15 @@ def preflight(root: str, *, dimension: Optional[str] = None, thickness: Optional
             _check(checks, "2d_thickness_match", _close(actual, thickness, 1e-3),
                    "二维厚度与请求一致", [th_path] if th_path else [], actual, thickness)
 
+    passed = all(item["ok"] for item in checks)
+    conversation = _conversation(
+        state="ready_to_execute" if passed else "preflight_review",
+        message=("预检查通过，可进入执行前确认。" if passed else
+                 "预检查发现需要复核的输入、单位或结果证据。"),
+        next_action="confirm_execution" if passed else "review_preflight",
+        requires_confirmation=passed, risk="mutate", will_submit_jobs=False)
     return {"schema_version": "autozt/preflight/1",
-            "status": "pass" if all(item["ok"] for item in checks) else "review",
+            "status": "pass" if passed else "review", **conversation,
             "root": root, "checks": checks, "files_scanned": len(paths),
             "loaded_files": len(loaded), "parse_errors": load_errors,
             "requested": {"dimension": dimension, "temperature": _as_list(temperature),
@@ -389,7 +443,15 @@ def query_results(root: str, property_name: str, *, temperature: Optional[float]
                         walk(value, trail + "/" + str(i), ctx)
             walk(data)
 
-    return {"schema_version": RESULT_SCHEMA, "status": "found" if hits else "not_found",
+    found = bool(hits)
+    conversation = _conversation(
+        state="completed" if found else "blocked",
+        message=("已找到结果，并保留单位、validator 和 provenance。" if found else
+                 "没有找到符合条件的结果，需检查产物、性质名称或筛选条件。"),
+        next_action="review_result" if found else "inspect_results",
+        requires_confirmation=False, risk="read", will_submit_jobs=False)
+    return {"schema_version": RESULT_SCHEMA, "status": "found" if found else "not_found",
+            **conversation,
             "property": property_name,
             "filters": {"temperature": temperature, "carrier": carrier, "direction": direction},
             "results": hits[:200], "count": min(len(hits), 200), "parse_errors": errors,

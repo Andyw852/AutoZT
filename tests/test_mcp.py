@@ -107,7 +107,9 @@ def test_handle_serves_resource_methods():
 
 def test_prompts_list_and_get():
     items = M._prompts_list()
-    assert {p["name"] for p in items} == {"triage-failures", "review-before-submit"}
+    assert {p["name"] for p in items} == {
+        "triage-failures", "review-before-submit", "plan-2d-zt",
+        "run-validated-workflow", "explain-result-provenance"}
     got = M._prompt_get("review-before-submit", {"material": "Si_demo", "step": "S1_opt"})
     assert "Si_demo" in got["messages"][0]["content"]["text"]
     assert M._prompt_get("nope") is None
@@ -170,7 +172,7 @@ def test_default_profile_is_workflow_sized():
     old = os.environ.pop("AUTOZT_MCP_PROFILE", None)
     try:
         names = {item["name"] for item in M._tools_list()}
-        assert len(names) == 9
+        assert len(names) == 12
         assert "inspect" in names and "cycle" in names
         assert "stop_step" not in names and "rerun_step" not in names
     finally:
@@ -217,10 +219,11 @@ def test_workflow_profile_has_fixed_eight_tools():
     os.environ["AUTOZT_MCP_PROFILE"] = "workflow"
     try:
         names = {item["name"] for item in M._tools_list()}
-        assert len(names) == 9
+        assert len(names) == 12
         assert names == {
             "schema", "capabilities", "list_skills", "describe_skill", "get_snapshot",
-            "inspect", "probe_step", "cycle", "apply_actions",
+            "inspect", "probe_step", "cycle", "apply_actions", "research_plan",
+            "preflight", "results",
         }
     finally:
         if old is None:
@@ -251,7 +254,7 @@ def test_high_level_cycle_can_execute_hidden_primitives(monkeypatch):
 
     def fake_run(argv, timeout=1800):
         calls.append(argv)
-        if len(calls) == 1:
+        if len(calls) <= 3:
             return 0, raw, ""
         return 0, "started", ""
 
@@ -290,7 +293,7 @@ def test_cycle_execute_failure_keeps_structured_execution_data(monkeypatch):
 
     def fake_run(argv, timeout=1800):
         calls.append(argv)
-        if len(calls) == 1:
+        if len(calls) <= 3:
             return 0, raw, ""
         return 1, "", "simulated action failure"
 
@@ -337,8 +340,16 @@ def test_partial_skill_contract_gets_explicit_inferred_graph():
 def test_tool_validation_rejects_unknown_and_destructive_batch_actions():
     bad = M.call_tool("describe_skill", {"tt": "demo", "extra": 1})
     assert bad["isError"] and "unknown argument" in bad["structuredContent"]["error"]
-    bad = M.call_tool("propose_actions", {"max_actions": True})
-    assert bad["isError"] and "must be integer" in bad["structuredContent"]["error"]
+    old = os.environ.get("AUTOZT_MCP_PROFILE")
+    os.environ["AUTOZT_MCP_PROFILE"] = "full"
+    try:
+        bad = M.call_tool("propose_actions", {"max_actions": True})
+        assert bad["isError"] and "must be integer" in bad["structuredContent"]["error"]
+    finally:
+        if old is None:
+            os.environ.pop("AUTOZT_MCP_PROFILE", None)
+        else:
+            os.environ["AUTOZT_MCP_PROFILE"] = old
     bad = M.call_tool("apply_actions", {"actions": [{"action": "rerun_step"}]})
     assert bad["isError"] and "destructive" in bad["structuredContent"]["error"]
 
@@ -404,6 +415,8 @@ def test_probe_routes_non_defect_skills_to_generic_diagnose(monkeypatch=None):
 
 def test_propose_actions_is_advisory(monkeypatch=None):
     old_run = M._run
+    old_profile = os.environ.get("AUTOZT_MCP_PROFILE")
+    os.environ["AUTOZT_MCP_PROFILE"] = "full"
     M._run = lambda argv, timeout=1800: (0, _fake_status_json(
         "FAIL", "force not converged", "retry"), "")
     try:
@@ -414,10 +427,16 @@ def test_propose_actions_is_advisory(monkeypatch=None):
         assert proposal["requires_approval"] is False
     finally:
         M._run = old_run
+        if old_profile is None:
+            os.environ.pop("AUTOZT_MCP_PROFILE", None)
+        else:
+            os.environ["AUTOZT_MCP_PROFILE"] = old_profile
 
 
 def test_propose_actions_is_bounded(monkeypatch=None):
     old_run = M._run
+    old_profile = os.environ.get("AUTOZT_MCP_PROFILE")
+    os.environ["AUTOZT_MCP_PROFILE"] = "full"
     raw = {"queue": {}, "types": [{"key": "demo", "materials": [
         {"name": "Si_%d" % i, "active": {"label": "S1_opt"},
          "steps": [{"label": "S1_opt", "kind": "TODO"}]}
@@ -431,6 +450,10 @@ def test_propose_actions_is_bounded(monkeypatch=None):
         assert data["proposal_limit"] == 3
     finally:
         M._run = old_run
+        if old_profile is None:
+            os.environ.pop("AUTOZT_MCP_PROFILE", None)
+        else:
+            os.environ["AUTOZT_MCP_PROFILE"] = old_profile
 
 
 def test_apply_actions_dry_run_is_side_effect_free():

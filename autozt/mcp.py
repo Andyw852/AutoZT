@@ -295,6 +295,18 @@ def _validate_args(name, args):
     return None
 
 
+def _science_text(data):
+    """Render a short client-visible summary for science workflow responses."""
+    if not isinstance(data, dict) or not data.get("conversation_state"):
+        return None
+    message = str(data.get("message") or "科学接口返回结果")
+    state = str(data.get("conversation_state"))
+    next_action = str(data.get("next_action") or "review")
+    confirmation = data.get("requires_user_confirmation") is True
+    suffix = " 需要用户确认后继续。" if confirmation else ""
+    return "状态：%s。%s 下一步：%s。%s" % (state, message, next_action, suffix)
+
+
 def _result(risk, rc=0, data=None, error=None, text=None):
     """Build an MCP result with identical structured and text representations.
 
@@ -310,6 +322,8 @@ def _result(risk, rc=0, data=None, error=None, text=None):
     profile = (os.environ.get("AUTOZT_MCP_PROFILE") or "").strip().lower()
     if text is not None:
         rendered = text
+    elif data is not None and _science_text(data):
+        rendered = _science_text(data)
     elif data is not None and profile in ("compact", "monitor", "workflow", "agent"):
         # Modern MCP clients consume structuredContent directly. Avoid sending the same
         # potentially large snapshot twice in the model-facing text channel.
@@ -1066,6 +1080,15 @@ PROMPTS = (
      "description": "Check generated inputs before submitting a step",
      "arguments": [{"name": "material", "description": "material name", "required": True},
                    {"name": "step", "description": "step label", "required": False}]},
+    {"name": "plan-2d-zt",
+     "description": "先收集二维 zT 目标和网格，再生成可审查研究计划",
+     "arguments": []},
+    {"name": "run-validated-workflow",
+     "description": "按 plan、preflight、dry-run、确认、执行、结果的顺序调用 AutoZT",
+     "arguments": []},
+    {"name": "explain-result-provenance",
+     "description": "解释结果时同时给出数值、单位、方法、validator 和来源",
+     "arguments": []},
 )
 
 
@@ -1092,6 +1115,18 @@ def _prompt_get(name, args=None):
                 "remote directory, and work_dir source before selecting start_step; "
                 "execute only after the plan is explicit and its cursor is current."
                 % (mat, step))
+    elif name == "plan-2d-zt":
+        text = ("先向用户确认材料名、二维厚度契约、目标温度网格和载流子网格。"
+                "调用 research_plan 只生成方案；若状态为 awaiting_confirmation，"
+                "展示 plan_summary、plan_steps 和 confirmation_payload，等待用户确认，"
+                "再调用 preflight/inspect/cycle。research_plan 不会提交作业。")
+    elif name == "run-validated-workflow":
+        text = ("严格按 research_plan → preflight → inspect → cycle(execute=false) → "
+                "用户确认 → cycle(execute=true) → results 执行。所有执行动作都必须经过 "
+                "autozt act；dry-run 和 preflight 不提交作业。")
+    elif name == "explain-result-provenance":
+        text = ("回答数值时逐条引用 results 的 value、unit、method、validator、"
+                "provenance.source 和 provenance.field_path；找不到结果时说明缺少的产物或筛选条件。")
     else:
         return None
     return {"description": name, "messages": [{"role": "user",

@@ -95,6 +95,32 @@ autozt agent results --result-dir /path/to/material/zt-dft-cpu/result \
 
 MCP 的 `workflow` profile 同样暴露 `research_plan`、`preflight` 和 `results` 三个只读工具。它们不增加每个技能一套工具，也不触发超算提交。
 
+### 论文式的人机确认边界
+
+面向用户的 agent 应把科学接口当作一段可暂停的对话，而不是连续盲调用：
+
+```text
+用户：为 MoS2 计算 300–800 K 的 zT(T,n)
+Agent：我先生成研究计划，列出结构、电子输运、晶格热导和汇合步骤；当前不会提交作业。
+      research_plan -> conversation_state=awaiting_confirmation
+      [展示 plan_summary、plan_steps、缺失输入和 confirmation_payload]
+用户：继续
+Agent：执行只读 preflight 和 inspect，再给出 dry-run 动作清单；是否允许提交？
+用户：允许提交
+Agent：调用 cycle(execute=true)，动作经 autozt act，返回 job、集群、审计和结果来源。
+```
+
+`research_plan`、`preflight` 和 `results` 都带有统一的 `conversation_state`、`message`、
+`next_action`、`requires_user_confirmation` 和 `confirmation_payload` 字段。缺少温度网格、
+载流子网格或二维材料名时状态为 `needs_user_input`；计划完整但未确认时为
+`awaiting_confirmation`；预检查失败时为 `preflight_review`；通过后为
+`ready_to_execute`。这些字段只表达对话边界，不替代技能自身的物理 validator。
+
+MCP 的 `content[0].text` 也会返回一行短摘要，便于只读取文本的客户端；完整证据仍在
+`structuredContent.data`。CLI 则在同一 JSON envelope 中增加 `conversation`，因此 MCP 和
+`autozt agent` 可以互换，模型不需要为两种传输重新学习流程。推荐同时加载
+`plan-2d-zt`、`run-validated-workflow` 和 `explain-result-provenance` 三个 MCP prompt。
+
 ## 技能如何被模型发现和使用
 
 符合 AutoZT 现有步骤生命周期的新技能，通常只需要加入：

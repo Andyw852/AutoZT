@@ -205,3 +205,32 @@ def test_discriminant_done_marker_resolves_to_script_output():
     zstep = next(s for s in zdefs
                  if s.get("name") == "step2_bandgap/step2.155_discriminant_decide")
     assert zstep["done_marker"] == marker
+
+
+# ---------------------------------------------------------------- 08/09/10 [结构]
+def test_gen_steps_marker_lands_in_their_own_step_dir():
+    """两个 run:gen 步的 done_marker 必须真的会出现在【本步目录】里：
+
+    - S5.1：脚本默认写 step5_dielect/dielectric_check.json（DFPT 步的目录）→ 清单里必须
+      用 --json 指到本步目录，且脚本要会建父目录；
+    - S2.155：脚本只写 step2.15_discriminant/，清单里用 ../ 取它 → 脚本必须补建本步目录，
+      否则路径里的 .. 解析不了（test -f / isfile 都要求中间目录存在）。
+    """
+    src = open(os.path.join(ROOT, "skill", "ke-dft-cpu", "step5_dielect",
+                            "validate_dielectric.py"), encoding="utf-8").read()
+    assert "out.parent.mkdir(parents=True, exist_ok=True)" in src
+
+    dsrc = open(os.path.join(ROOT, "skill", "ke-dft-cpu", "step2_bandgap",
+                             "step2.15_discriminant", "decide_discriminant.py"),
+                encoding="utf-8").read()
+    assert "step2.155_discriminant_decide" in dsrc and "mkdir" in dsrc
+
+    for skill in ("ke-dft-cpu", "zt-dft-cpu"):
+        sk = yaml.safe_load(open(os.path.join(ROOT, "skill", skill, "skill.yaml"),
+                                 encoding="utf-8"))
+        defs = list(sk["steps"])
+        for grp in (sk.get("optional_steps") or {}).values():
+            defs += list((grp or {}).get("steps") or [])
+        st = next(s for s in defs if s.get("name") == "step5_dielect_validate")
+        assert "--json step5_dielect_validate/dielectric_check.json" in st["gen"], \
+            "%s 的 S5.1 gen 没把 json 指到本步目录：%s" % (skill, st["gen"])

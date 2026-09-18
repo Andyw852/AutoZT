@@ -132,7 +132,10 @@ optional_steps:
       - {seq: 5.1, name: step5_dielect_validate, label: S5.1_dievalid,
          src: step5_dielect,
          check: plot, run: gen, done_marker: dielectric_check.json,
-         gen: "validate_dielectric.py", gen_need: [], fetch_all: true,
+         # --json 指到本步目录（脚本默认写 step5_dielect/，那是 DFPT 步的目录）：
+         # autozt 在本步目录找 done_marker，不指就永远 error。
+         gen: "validate_dielectric.py --json step5_dielect_validate/dielectric_check.json",
+         gen_need: [], fetch_all: true,
          needs: ["step5_dielect"]}
 
       - {seq: 6, name: step6_elastic, label: S6_elastic,
@@ -170,6 +173,38 @@ optional_steps:
          needs: ["step4_wave", "step5_dielect", "step6_elastic", "step7b_deform_read",
                  "step2_bandgap/step2.2_pbe_plot", "step2_bandgap/step2.3_hse_plot"]}
 
+
+  # ---------------------------------------------------------------------------
+  # wavefunction_full：ke 的【全网格】波函数对照分支（默认关）。
+  #   S3b 与 S3_uniform 逐行等价，唯一实质差别是 ISYM = -1（不按对称性约化 k 点），
+  #   产出完整网格 WAVECAR → S4b amset wave → 完整网格 wavefunction.h5；
+  #   S8_kappa_e 在项目 step.conf 写 WAVEFUNCTION_FULL = true 时改读它，AMSET 走
+  #   from_data（不再去对称化）—— 这就是 V22.8 / V25 的"三维单变量对照"。
+  #   S3c 是附带的离网格 k 点诊断（V22.9，两段式，成本约全网格 1/16）。
+  #   ★ 锚点 step1_opt 在 electronic 组里，所以本组必须排在 electronic 之后。
+  # ---------------------------------------------------------------------------
+  wavefunction_full:
+    default: false
+    steps:
+      - {seq: 3.5, name: "step3b_uniform_full", label: S3b_uniformfull,
+         after: step1_opt,
+         src: step3b_uniform_full, check: wavecar, gen: gen_step5b_uniform_full.py,
+         gen_need: [stepconf.py, step.conf, ke_common.py, dim_common.py, check_common.py,
+                    incar_uniform_full_2d.tpl, incar_uniform_full_3d.tpl,
+                    submit_std_2d.tpl, submit_std_3d.tpl],
+         needs: ["step1_opt"]}
+      - {seq: 3.6, name: "step3c_uniform_offgrid", label: S3c_offgrid,
+         after: step3b_uniform_full,
+         src: step3c_uniform_offgrid, check: wavecar, gen: gen_step5c_uniform_offgrid.py,
+         gen_need: [stepconf.py, step.conf, ke_common.py, dim_common.py, check_common.py,
+                    submit_std_2d.tpl],
+         needs: ["step3b_uniform_full"]}
+      - {seq: 4.5, name: "step4b_wave_full", label: S4b_wavefull,
+         after: step3b_uniform_full,
+         src: step4b_wave_full, check: marker, marker: "wavefunction.h5:",
+         gen: gen_step6b_wave_full.py,
+         gen_need: [stepconf.py, step.conf, ke_common.py, submit_amset.tpl],
+         needs: ["step3b_uniform_full"]}
   # --- ke 段：带隙分支（PBE 静态 → 判别 → PBE 能带 → 画图）-------------------
   # ---------------------------------------------------------------------------
   # lattice：晶格热导段（kl-dft-cpu 链路）。默认开。关掉它 = 只跑电子段 + ZT 汇总，

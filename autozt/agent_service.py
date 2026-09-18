@@ -213,6 +213,12 @@ def capabilities() -> Dict[str, Any]:
             "steady_state": "autozt summary --diff",
         },
         "mutate": {"commands": mutate_commands, "default": "dry_run"},
+        "conversation": {
+            "schema_version": "autozt/conversation/1",
+            "sequence": ["research_plan", "preflight", "inspect",
+                          "cycle(dry_run)", "user_confirmation", "cycle(execute)", "results"],
+            "confirmation_boundary": "execution actions may submit jobs; read-only planning and preflight do not",
+        },
         "cursor": {"scope": "session", "restart": "cursor_reset",
                     "usage": "pass the cursor returned by inspect/get_snapshot to cycle or apply"},
         "actions": {
@@ -309,6 +315,15 @@ def schema() -> Dict[str, Any]:
                            "error": {"type": "string"}},
         },
         "operations": operations,
+        "conversation": {
+            "schema_version": "autozt/conversation/1",
+            "states": ["needs_user_input", "awaiting_confirmation", "preflight_review",
+                        "ready_to_execute", "executing", "completed", "blocked"],
+            "next_actions": ["provide_inputs", "confirm_plan", "review_preflight",
+                              "confirm_execution", "review_result", "inspect_results"],
+            "sequence": ["research_plan", "preflight", "inspect", "cycle(dry_run)",
+                          "user_confirmation", "cycle(execute)", "results"],
+        },
         "actions": {"schema": action_schema,
                     "automatic": sorted(protocol.ALLOWED_ACTIONS - {"retry_step"}),
                     "retry": {"name": "retry_step", "requires": "include_retry=true or explicit selection",

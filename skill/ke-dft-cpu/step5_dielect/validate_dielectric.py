@@ -200,6 +200,9 @@ def main():
     a = ap.parse_args()
     d = Path(a.step_dir)
     out = Path(a.json) if a.json else d / "dielectric_check.json"
+    # run:gen 步骤的"步骤目录"没有任何人创建（gen 在技能根目录里跑）—— 显式补一下，
+    # 否则 --json 指到步骤目录时会 FileNotFoundError，autozt 也就永远找不到 done_marker。
+    out.parent.mkdir(parents=True, exist_ok=True)
     oc = d / "OUTCAR"
     res = {"step": "step5_dielect.validate", "outcar": str(oc), "ok": False, "reasons": []}
     if not oc.is_file():

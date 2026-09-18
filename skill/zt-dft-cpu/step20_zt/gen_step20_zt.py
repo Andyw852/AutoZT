@@ -118,6 +118,28 @@ def _cell_caliber_check(cwd, kl):
             "ok": rel <= 0.02}
 
 
+def _amset_settings(cwd):
+    """读本技能 step8_amset/settings.yaml 的关键口径（散射机制 / 带隙），写进产物。
+
+    Si 这类非极性体系 AMSET 会按物理口径剔除 POP（只剩 ADP/IMP），把这一条记进
+    zt_summary.json，事后核对 ZT 数字口径时不用再去翻远端 settings.yaml。
+    """
+    p = Path(cwd) / AMSET_DIR / "settings.yaml"
+    if not p.is_file():
+        return None
+    try:
+        import yaml
+        s = yaml.safe_load(p.read_text(encoding="utf-8", errors="ignore")) or {}
+    except Exception:                                   # noqa: BLE001
+        return None
+    out = {}
+    for k in ("scattering_type", "bandgap", "interpolation_factor",
+              "free_carrier_screening", "doping", "temperatures"):
+        if k in s:
+            out[k] = s[k]
+    return out or None
+
+
 def _find_transport(cwd):
     """找 AMSET transport.json。返回 (path, src 说明)。本技能优先，其次兄弟技能。"""
     p = Path(cwd) / AMSET_DIR / "transport.json"
@@ -301,6 +323,11 @@ def main():
 
     grid = zc.build_grid(tr, kl, is_2d=is_2d, ktemp_mode=ktemp_mode,
                          const_T=const_T)
+    _amset_s = _amset_settings(cwd) if tr_src.startswith("本技能") else None
+    if _amset_s and _amset_s.get("scattering_type"):
+        grid["notes"].append("电子段 AMSET 散射机制 = %s；带隙 = %s eV"
+                             % (", ".join(map(str, _amset_s["scattering_type"])),
+                                _amset_s.get("bandgap", "?")))
     if cal is not None:      # 闸门结论也进人读汇总（notes 同时进 JSON 与 TXT）
         grid["notes"].append("元胞口径闸门：电子段胞 c=%.3f Å vs κ_L 的 Lz=%.3f Å"
                              "（差 %.1f%%）——%s"
@@ -349,6 +376,7 @@ def main():
                     "thickness_d_ang": kl.get("thickness_d_ang"),
                     "thickness_convention": kl.get("thickness_convention"),
                     "kappa_300K_xx_yy_zz": kl.get("kappa_300K_xx_yy_zz")},
+        "amset_settings": _amset_settings(cwd),
         "transport": {"source": tr_src,
                       "sibling_fallback": not str(tr_path).startswith(str(cwd))},
         "kappa_e": {"source": meta["transport_src"],

@@ -74,6 +74,8 @@ task_types:
     lattice: false        # 晶格热导已由独立 kl-dft-cpu / kl-mace-* 算过 → 只补电子段
 ```
 
+另有一个**默认关闭**的 `wavefunction_full` 组（打开后 24 → 27 步，见下面「全网格对照分支」）。
+
 | `electronic` | `lattice` | 步骤数 | 场景 |
 |---|---|---|---|
 | true | true | **24** | 默认：一条命令跑完 ZT 全流程 |
@@ -83,6 +85,35 @@ task_types:
 
 前提：借结果时两个技能必须用**同一个 `work_dir`**（同一材料目录下并排），否则兜底找不到；
 产物的 `sources.*` / `transport.sibling_fallback` 会写明实际来源（借来的会标 `兄弟技能 …`）。
+
+### 全网格对照分支（`wavefunction_full`，默认关）
+
+打开后多出 ke 的 3 个步骤（**24 → 27 步**），用于 V22.8/V25 的三维"单变量"对照：
+
+| seq | 步骤 | 作用 |
+|---|---|---|
+| 3.5 | `S3b_uniformfull`（`step3b_uniform_full`） | 与 `S3_uniform` **逐行等价、KPOINTS 与其它 INCAR 标签全同，唯一差别 `ISYM = -1`**（不按对称性约化 k 点）→ 完整网格 WAVECAR |
+| 3.6 | `S3c_offgrid`（`step3c_uniform_offgrid`） | 离网格 k 点两段式诊断（V22.9，自洽复用 S3 的电荷密度，成本约全网格 1/16） |
+| 4.5 | `S4b_wavefull`（`step4b_wave_full`） | 对完整网格跑 `amset wave` → `step4b_wave_full/wavefunction.h5` |
+
+**对照怎么做**（`S8_kappa_e` 读哪个 h5 由项目级 `step.conf` 决定，键是 `WAVEFUNCTION_FULL`）：
+
+```bash
+# 1) 打开分支（项目 tf_<材料>.yaml 里写 wavefunction_full: true）+ 提交
+autozt -tt zt-dft-cpu -p <材料> start        # S3b → (S3c) / S4b
+# 2) A 臂：WAVEFUNCTION_FULL=false（默认）→ S8 读 step4_wave（真实重叠，会去对称化）
+autozt -tt zt-dft-cpu -p <材料> -j S8_kappa_e start
+# 3) 把 A 臂的 transport.json 存档，然后切到 B 臂：
+#    project_setting/templates/step8_amset/step.conf 写 WAVEFUNCTION_FULL = true
+#    （该键已在 ke 的 SPEC 里，纯配置即可，无需改代码）→ 重跑 S8（完整网格，走 from_data）
+autozt -tt zt-dft-cpu -p <材料> -j S8_kappa_e start
+# 4) 两次的 transport.json 对比 → 即 V25 的 Si 单变量对照
+```
+
+⚠ **S3b 的项目级 step.conf 必须与 S3 同网格**（本项目写 `DK_MAX_3D = 0.08`，与 `step3_uniform` 一致）：
+否则 S3b 会用技能默认 0.06 → 34³ 被 `UNIFORM_NMAX` 护栏拦下；而且网格与 S3 不一致时 h5 点数
+与 `vasprun.xml` 推出的网格对不上，AMSET 会退回去对称化，**对照不成立**。gen 脚本末尾会与 S3 的
+KPOINTS 对照并告警。
 
 ## 3. 装配原理（★ 看懂这一节才知道怎么维护）
 
@@ -202,6 +233,7 @@ print("缺件步骤 %d/%d" % (bad, len(t["steps"])))
 | 电子段实机（Si，经本技能装配） | S1_opt/S2.1_scf/S2.15/S2.2_pbe(+plot)/**S2.3_hse(4/4)**/S2.3_hseplot/S5_dielect/S6_elastic/S7_deform(4/4)/S7.1_read 全部 OK；**S3_uniform OK（WAVECAR 24.4 MB，26³）**、S4_wave OK、S8_kappa_e 已提交（上游 4 处缺陷修复后） |
 | 晶格段实机（Si，经本技能装配） | SK1_opt/SK2_static/SK3_nac/**SK4_disp(11/11)**/**SK5_fc OK（stable, min_freq=0.000 THz）**；SK5.1_plot 与 SK6_kappa 已提交 |
 | **MACE 交叉对照（Si）** | 同材料 `kl-mace-gpu` 的 κ_L(300K)=**91.27 W/mK** vs 本技能 DFT phono3py 的 **88.8 W/mK**（差 3%）——两法在 300 K 一致；用 `KTEMP_MODE=const300` 汇总得 n 型峰值 ZT=0.162 @900 K、p 型 0.129（高温柔性差异来自"常数 κ_L 近似"，不是两法分歧） |
+| S8 预检 in-job 预跑（2026-09-18） | 在 `amset_clean` 里于 `step8_amset/` 直跑 `overlap_preflight.py --in-job` → **结论：通过（有告警），exit=0**；带窗口比较按补丁 05 跳过，弹性 Christoffel 最小特征值 47.07 正定。两条 WARN 为设计内信息（3D+非完整网格去对称化、AMSET 0.4.19 G 平移） |
 | 起跑前预检（2026-09-18） | S8_kappa_e 的提交命令调 `overlap_preflight.py` 而材料目录里没有（上游 WIP 漏声明）→ 已在技能侧补软链 + `gen_need`；SK6_kappa（自包含内联汇总）与 SK5.1_plot（脚本/依赖/目录探测均齐）预检通过 |
 | **2D 实测（真实材料 P1_Mo-MoS2_…_Mo2S3）** | DIM=2D 正确识别；张量按**面内 (xx+yy)/2** 约化（σ 2734/289.9→1512 S/m、S −234.9/−167.5→−201.2 µV/K、κ_e 面内平均 0.00637）；κ_L 用元胞口径 `kappa_xx_yy_zz`（1.721/0.846→1.284 W/m/K，zz≈0 剔除）；**元胞口径闸门 c=20.0 Å vs Lz=20.0 Å 通过**；n 型峰值 ZT=0.379 @800 K |
 
@@ -217,7 +249,8 @@ print("缺件步骤 %d/%d" % (bad, len(t["steps"])))
 | 04 | `ke-dft-cpu/step8_amset/gen_step10_amset.py` | 非极性体系 ε_static ≡ ε_inf 被当 DFPT 失效拦下（下游本会按物理口径剔除 POP） | `-j S8_kappa_e start` → `gen 完成` 并提交 AMSET 作业 |
 | 05 | `ke-dft-cpu/step8.4_amset2d/overlap_preflight.py`（在建工作） | "AMSET 实际插值带窗口"读不到时用兜底默认 11–17 去比 → 把任何窗口≠11–17 的材料（Si=2–6）拦死 gen 与 in-job | 行为级：verdict 由 `error` 变 `ok`，打印"运行日志缺失 → 跳过窗口一致性比较" |
 | 06 | `ke-dft-cpu/skill.yaml` + 本技能同一声明 | S2.155 的 `done_marker` 与脚本真实落点不一致 → 状态表长期 error | marker 改 `../step2.15_discriminant/discriminant.json`（该 json 在集群上确实存在） |
-| 07 | `ke-dft-cpu/step5_dielect/validate_dielectric.py` | 单元素非极性体系 ε_s≡ε_∞ 被误判 FAIL（与补丁 04 同一物理） | 行为级：单元素 `ok=True`+notes；双元素对照仍 `ok=False` |
+| 07 | `ke-dft-cpu/step5_dielect/validate_dielectric.py` | 单元素非极性体系 ε_s≡ε_∞ 被误判 FAIL（与补丁 04 同一物理） | 行为级：单元素 `ok=True`+notes；双元素对照仍 `ok=False`；集群实测 Si 产物 `ok=True` |
+| 08/09/10 | `validate_dielectric.py` / `decide_discriminant.py` / 两个 `skill.yaml` | 两个 `run:gen` 步的 `done_marker` 永远找不到：**步骤目录没人创建**，且校验脚本默认把 json 写进 `step5_dielect/`（不是本步目录） | 集群实测：`-j S5.1_dievalid` 与 `-j S2.155_discr` 都「已生成」并回拉 |
 
 补丁 03/04 是执行中新暴露的（不在最初提案内），已逐条向用户披露。以下两处**未修**（不影响流程推进）：
 

@@ -87,7 +87,10 @@ steps:
   # 本步用数值判据把关（NaN/ε<1/单位矩阵/缺 IONIC 块/ε_s≡ε_∞）。
   - {seq: 5.1, name: step5_dielect_validate, label: S5.1_dievalid, src: step5_dielect,
      check: plot, run: gen, done_marker: dielectric_check.json,
-     gen: "validate_dielectric.py", gen_need: [], fetch_all: true,
+     # --json 指到本步目录：脚本默认写 step5_dielect/dielectric_check.json（DFPT 步的目录），
+     # 而 autozt 在本步目录里找 done_marker -> 不指就永远 error。
+     gen: "validate_dielectric.py --json step5_dielect_validate/dielectric_check.json",
+     gen_need: [], fetch_all: true,
      needs: ["step5_dielect"]}
 
   - {seq: 6, name: step6_elastic, label: S6_elastic, src: step6_elastic,

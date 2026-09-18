@@ -73,6 +73,15 @@ def _envelope(command: str, data: Any = None, *, ok: bool = True,
     }
     if data is not None:
         out["data"] = data
+        if isinstance(data, dict) and data.get("conversation_state"):
+            # Keep the full scientific payload under data while making the next
+            # dialogue turn discoverable without schema-specific parsing.
+            out["conversation"] = {
+                key: data.get(key) for key in (
+                    "schema_version", "conversation_state", "message", "next_action",
+                    "requires_user_confirmation", "confirmation_payload", "plan_id")
+                if key in data
+            }
     if error:
         out["error"] = str(error)
     return out

@@ -46,6 +46,9 @@ older clients.
 | conf_get | read | effective step.conf of one step |
 | describe_skill | read | machine-readable skill contract (I/O, DAG, checks, corrections) |
 | probe_step | read | adaptive probe for defect-dft-cpu, generic diagnosis for other skills |
+| research_plan | read | turn a research goal into a reviewable dry-run plan |
+| preflight | read | validate result files, units, grids, validators and 2D thickness |
+| results | read | query values with units, method, validator and provenance |
 | start_step | mutate | generate inputs if needed, then submit |
 | retry_step | mutate | regenerate inputs, keep products, do not submit |
 | fetch_results | mutate | pull finished results back |
@@ -104,6 +107,26 @@ stdio 客户端启动进程后按 MCP 顺序发送 `initialize`、`tools/list`�
 模型确认计划后才把 `execute` 改为 `true`，并把 `include_retry` 明确打开。
 执行型 `cycle` 在提交动作前会再次读取同一作用域；cursor 变化就返回
 `stale_plan`，整轮不执行。
+
+### Scientific conversation contract
+
+For a goal-driven scientific request, use this sequence:
+
+```text
+research_plan → user reviews plan → preflight → inspect
+→ cycle(execute=false) → user confirms → cycle(execute=true) → results
+```
+
+The three science tools return the common `autozt/conversation/1` fields
+`conversation_state`, `message`, `next_action`, `requires_user_confirmation`, and
+`confirmation_payload`. Missing goal parameters produce `needs_user_input`; a complete
+plan produces `awaiting_confirmation`; an invalid preflight produces `preflight_review`;
+and a passing preflight produces `ready_to_execute`. The plan and preflight calls are
+read-only and never submit jobs. The short text content states the current phase and next
+action, while complete evidence remains in `structuredContent.data`.
+
+The bundled prompts `plan-2d-zt`, `run-validated-workflow`, and
+`explain-result-provenance` encode this sequence for clients that support MCP prompts.
 
 如果 MCP 客户端本身运行在 WSL 内，建议使用 AutoZT 的绝对路径，避免客户端工作目录
 改变后找不到程序：

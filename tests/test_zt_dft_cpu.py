@@ -256,6 +256,28 @@ def test_gen_step_errors_when_kappa_range_disjoint(tmp_path):
     assert not (root / "step20_zt" / "zt_summary.json").exists()
 
 
+def test_gen_records_amset_settings(tmp_path):
+    """S20_zt 要把电子段的散射机制/带隙记进产物（ZT 数字的口径可追溯）。"""
+    tr = {"doping": [-1e20, 1e20], "temperatures": [300.0, 400.0],
+          "conductivity": [[_t33(1e5, 1e5, 1e5)] * 2] * 2,
+          "seebeck": [[_t33(-200.0, -200.0, -200.0)] * 2] * 2,
+          "electronic_thermal_conductivity": [[_t33(1.0, 1.0, 1.0)] * 2] * 2}
+    kl = {"KAPPA_DONE": True, "temperatures": [200.0, 500.0],
+          "kappa_xx_yy_zz": [[50.0, 50.0, 50.0], [40.0, 40.0, 40.0]]}
+    root = tmp_path / "Si" / "zt-dft-cpu"
+    _gen_fixture(root, tr, kl)
+    (root / "step8_amset" / "settings.yaml").write_text(
+        "scattering_type: [ADP, IMP]\nbandgap: 1.0913\ninterpolation_factor: 10\n",
+        encoding="utf-8")
+    r = subprocess.run([sys.executable, "gen_step20_zt.py", "--material", "Si"],
+                       cwd=str(root), capture_output=True, text=True)
+    assert r.returncode == 0, r.stdout + r.stderr
+    d = json.loads((root / "step20_zt" / "zt_summary.json").read_text(encoding="utf-8"))
+    assert d["amset_settings"]["scattering_type"] == ["ADP", "IMP"]
+    assert d["amset_settings"]["bandgap"] == 1.0913
+    assert any("散射机制" in n for n in d["notes"])
+
+
 def test_gen_step_ok_on_overlapping_range(tmp_path):
     """温区重叠时：正常退出、写出 zt_summary.json 与 txt。"""
     tr = {"doping": [-1e20, 1e20], "temperatures": [300.0, 400.0],
