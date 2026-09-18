@@ -52,14 +52,17 @@ steps:
      gen_need: [stepconf.py, step.conf, unihamgnn_common.py, band_cal.tpl],
      fetch_all: true}
 
-+io_schema:
-  inputs: [{name: POSCAR, from: user, required: true, desc: "材料结构"}]
-  outputs: [{name: workflow_outputs, step: final, type: directory, desc: "由技能实际步骤产生的结果文件"}]
-  params: []
-  steps: []
+io_schema:
+  inputs: [{name: POSCAR, from: user, required: true, desc: "材料结构"}, {name: HAMGNN_MODEL, from: config, required: true, desc: "Uni-HamGNN 模型路径"}]
+  outputs: [{name: band_summary.json, step: S3_band, type: json, desc: "能带与带隙汇总"}, {name: predict_summary.json, step: S2_predict, type: json, desc: "哈密顿量预测摘要"}]
+  params: [{name: SOC, values: [true, false], default: true, where: step.conf, desc: "是否生成 SOC 图数据（技能模板默认 true = 同时出 non-SOC 与 SOC 两份）"}]
+  steps:
+    - {step: S1_graph, title: "Graph data", inputs: [POSCAR], outputs: [graph_data_summary.json], validator: "GRAPH_DATA_DONE"}
+    - {step: S2_predict, title: "Hamiltonian prediction", inputs: [graph_data_summary.json, HAMGNN_MODEL], outputs: [predict_summary.json], validator: "PREDICT_DONE"}
+    - {step: S3_band, title: "Band diagonalisation", inputs: [predict_summary.json], outputs: [band_summary.json], validator: "marker exists"}
 flow:
-  summary: "按技能步骤生成并校验科学计算结果"
-  stages: [{name: workflow, steps: [], produces: [workflow_outputs]}]
+  summary: "POSCAR → 图数据 → Uni-HamGNN 哈密顿量 → 能带与带隙"
+  stages: [{name: band, steps: [S1_graph, S2_predict, S3_band], produces: [band_summary.json]}]
 corrections: [node_fail, dir_missing]
 requires:
   python: [torch, torch-geometric, e3nn, pymatgen, numpy, scipy, matplotlib, yaml, natsort]

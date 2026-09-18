@@ -42,7 +42,7 @@ ISYM   = -1          # ★ 全网格：禁止 VASP 按对称性约化 k 点
 
 # ---- AMSET 关键：输出致密 DOS 与波函数 ----
 LWAVE  = .TRUE.         # amset wave 读 WAVECAR
-LCHARG = .FALSE.
+LCHARG = .TRUE.          # ★ step3c_uniform_offgrid 要读这份 CHGCAR 做非自洽
 LORBIT = 11
 NEDOS  = 5000
 LOPTICS = .FALSE.       # amset 自己算跃迁，不需要 VASP 的 LOPTICS

@@ -26,7 +26,6 @@ from concurrent.futures import ThreadPoolExecutor
 
 from autozt import i18n as _i18n  # noqa: E402
 
-# ===== 来自 05_collect.py =====
 # -*- coding: utf-8 -*-
 # 05_collect —— 远端状态采集（ssh + COLLECTOR）
 #
@@ -43,7 +42,6 @@ from autozt import i18n as _i18n  # noqa: E402
 #   L2118  sh_b64
 #   L2122  _parallel_map
 
-# ===== _dedup_segments (原 L1819-L1871) =====
 def _dedup_segments(mats):
     from autozt import _natkey
     """多段（项目配置）发现同名材料时：材料归属"其 project_setting 里 tf_*.yaml
@@ -99,7 +97,6 @@ def _dedup_segments(mats):
     out.sort(key=lambda m: _natkey(m["name"]))
     return out
 
-# ===== _queue_total (原 L1880-L1886) =====
 def _queue_total(queue_by_host):
     """把各 host 的队列统计求和（不同 host = 不同集群，作业互不重叠；同 host 已去重）。"""
     out = {}
@@ -108,7 +105,6 @@ def _queue_total(queue_by_host):
             out[k] = out.get(k, 0) + (v or 0)
     return out
 
-# ===== collect_v3_batch (原 L1889-L2043) =====
 def collect_v3_batch(cfg, segs):
     from autozt import _LOCAL_ONLY_STEP_KEYS, _load_yaml_file, _natkey, discover_local, pkg_setting_path, resolve_material_local, step_cfg
     """v3 本地模式批量采集：所有段（项目配置）先本地解析，再按 (host, work_dir)
@@ -271,7 +267,6 @@ def collect_v3_batch(cfg, segs):
                     "local": True, "materials": ms})
     return out, _queue_by_host
 
-# ===== _ssh_cmd (原 L2046-L2060) =====
 def _ssh_cmd(cfg, host, remote_args):
     """构造 ssh 命令。v3.17：ControlMaster 连接复用——首条 ssh 建连后，
     ControlPersist 窗口内（默认 120 秒）的后续 ssh 共用通道，免去重复握手，
@@ -293,13 +288,11 @@ def _ssh_cmd(cfg, host, remote_args):
                  "-o", "ControlPersist=600"]
     return ["ssh"] + opts + [host] + remote_args
 
-# ===== _ssh_cmd_pre (原 L2063-L2066) =====
 def _ssh_cmd_pre(cfg, host, pre_opts, remote_args):
     """同 _ssh_cmd，但允许在 host 前追加选项（如 ConnectTimeout）。"""
     base = _ssh_cmd(cfg, host, [])          # ["ssh", 复用选项..., host]
     return base[:-1] + pre_opts + [host] + remote_args
 
-# ===== collect (原 L2069-L2097) =====
 def _effective_remote_path_prefix(cfg, host):
     """Return the configured remote PATH prefix for an SSH host.
 
@@ -363,7 +356,6 @@ def collect(cfg, types, host="__default__"):
             print("hint: squeue failed; job state will be inferred from files only.", file=sys.stderr)
     return data
 
-# ===== run_remote (原 L2100-L2115) =====
 def run_remote(cfg, shell_line, host="__default__", use_stdin=False):
     """use_stdin=True 时整个脚本经 stdin 投递（bash -s），不受 argv 长度限制
     （gen 推送大量 base64 文件时必须用，否则 Argument list too long）。"""
@@ -381,11 +373,9 @@ def run_remote(cfg, shell_line, host="__default__", use_stdin=False):
         r = subprocess.run(cmd, capture_output=True, text=True)
     return r.returncode, (r.stdout + r.stderr).strip()
 
-# ===== sh_b64 (原 L2118-L2119) =====
 def sh_b64(cmd_text):
     return "echo %s | base64 -d | bash" % base64.b64encode(cmd_text.encode()).decode()
 
-# ===== _parallel_map (原 L2122-L2151) =====
 def _parallel_map(worker, items, nw=None, desc="批量操作"):
     """并发跑 worker(item)。AUTOZT_OP_WORKERS 控制并发数（默认 8；=1 串行定位用）。
     批量 clean/start/auto 等逐材料操作都是"每材料若干次 ssh 往返"，串行时

@@ -20,6 +20,7 @@ from collections import OrderedDict
 
 from autozt import agent_protocol as _protocol
 from autozt import agent_service as _service
+from autozt import science as _science
 
 PROTOCOL_VERSION = "2025-06-18"
 SUPPORTED_PROTOCOL_VERSIONS = {"2024-11-05", "2025-06-18"}
@@ -63,6 +64,18 @@ TOOLS = [
                                        "material": {"type": "string"},
                                        "step": {"type": "string"}},
       "required": ["material"], "additionalProperties": False}, "read", ["probe"]),
+    ("research_plan", "把热电研究目标转换为可审查的 dry-run 阶段方案；动作只作为显式执行候选，不会自动提交",
+     {"type":"object", "properties":{"goal":{"type":"string"},"dimension":{"type":"string"},
+      "material":{"type":"string"},"temperature":{"type":"array","items":{"type":"number"}},"carrier":{"type":"array","items":{"type":"number"}}}, "required":["goal"],
+      "additionalProperties":False}, "read", ["research_plan"]),
+    ("preflight", "检查结果内容、validator、单位、温度/载流子网格、二维厚度和口径（只读）",
+     {"type":"object", "properties":{"result_dir":{"type":"string"},"dimension":{"type":"string"},
+      "thickness":{"type":"number"},"temperature":{"type":"array","items":{"type":"number"}},"carrier":{"type":"array","items":{"type":"number"}}}, "required":["result_dir"],
+      "additionalProperties":False}, "read", ["preflight"]),
+    ("results", "按性质/条件查询带来源路径的结构化结果（只读）",
+     {"type":"object", "properties":{"result_dir":{"type":"string"},"property":{"type":"string"},
+      "temperature":{"type":"number"},"carrier":{"type":"number"},"direction":{"type":"string"}},
+      "required":["result_dir","property"], "additionalProperties":False}, "read", ["results"]),
     # ---- 变更（走 act 网关）----
     ("start_step", "推进材料/步骤（输入没生成先 gen 再提交）",
      {"type": "object", "properties": {"tt": {"type": "string"},
@@ -165,7 +178,7 @@ MONITOR_TOOLS = {
 WORKFLOW_TOOLS = {
     # One-shot observation/planning/execution for new LLM integrations.
     "schema", "capabilities", "list_skills", "describe_skill", "get_snapshot", "inspect",
-    "probe_step", "cycle", "apply_actions",
+    "probe_step", "cycle", "apply_actions", "research_plan", "preflight", "results",
 }
 
 TOOL_RESULT_SCHEMA = {
@@ -232,7 +245,7 @@ def _validate_args(name, args):
         unknown = sorted(set(args) - set(props))
         if unknown:
             return "unknown argument(s): %s" % ", ".join(unknown)
-    pytypes = {"string": str, "boolean": bool, "integer": int,
+    pytypes = {"string": str, "boolean": bool, "integer": int, "number": (int, float),
                "array": list, "object": dict}
     for key, value in args.items():
         spec = props.get(key) or {}
@@ -257,6 +270,12 @@ def _validate_args(name, args):
             for i, item in enumerate(value):
                 if item_spec.get("type") == "object" and not isinstance(item, dict):
                     return "argument %s[%d] must be object" % (key, i)
+                if item_spec.get("type") in pytypes and not isinstance(item, pytypes[item_spec["type"]]):
+                    if item_spec.get("type") == "number" and isinstance(item, bool):
+                        return "argument %s[%d] must be number" % (key, i)
+                    return "argument %s[%d] must be %s" % (key, i, item_spec["type"])
+                if not isinstance(item, dict):
+                    continue
                 for req in item_spec.get("required") or []:
                     if req not in item or item[req] in (None, ""):
                         return "argument %s[%d] missing %s" % (key, i, req)
@@ -596,8 +615,13 @@ def _cycle(args):
     """Observe and plan once; execute only when the caller explicitly sets execute."""
     execute = bool(args.get("execute"))
 
-    def apply(actions, dry_run):
-        result = _apply_actions({"dry_run": dry_run, "actions": actions})
+    def apply(actions, dry_run, expected_cursor=None):
+        # Use the cursor observed by agent_service.inspect/cycle.  _apply_actions
+        # performs the final CAS read immediately before the first act call.
+        apply_args = {"dry_run": dry_run, "actions": actions}
+        if not dry_run and expected_cursor:
+            apply_args["cursor"] = expected_cursor
+        result = _apply_actions(apply_args)
         structured = result.get("structuredContent") or {}
         return {
             **(structured.get("data") or {}),
@@ -701,6 +725,27 @@ def call_tool(name, args, _internal=False):
         return _propose_actions(args)
     if name == "apply_actions":
         return _apply_actions(args)
+    if name == "research_plan":
+        rc, out, err = _run(["schema", "--json"])
+        if rc != 0:
+            return _result("read", rc=rc, error=(out + err).strip())
+        payload, parse_error = _json_stdout(out)
+        if parse_error:
+            return _result("read", rc=1, error=parse_error)
+        skills = payload.get("skills", []) if isinstance(payload, dict) else []
+        return _result("read", data=_science.research_plan(
+            args.get("goal", ""), skills, dimension=args.get("dimension"),
+            temperature=args.get("temperature"), carrier=args.get("carrier"),
+            material=args.get("material")))
+    if name == "preflight":
+        return _result("read", data=_science.preflight(
+            args["result_dir"], dimension=args.get("dimension"),
+            thickness=args.get("thickness"), temperature=args.get("temperature"),
+            carrier=args.get("carrier")))
+    if name == "results":
+        return _result("read", data=_science.query_results(
+            args["result_dir"], args["property"], temperature=args.get("temperature"),
+            carrier=args.get("carrier"), direction=args.get("direction")))
 
     argv = _mat_args(args)
     json_result = False
@@ -812,13 +857,16 @@ def _tools_list():
 
 
 def handle(req):
+    if not isinstance(req, dict) or req.get("jsonrpc") not in (None, "2.0"):
+        return {"jsonrpc": "2.0", "id": req.get("id") if isinstance(req, dict) else None,
+                "error": {"code": -32600, "message": "invalid Request"}}
     method = req.get("method")
     rid = req.get("id")
     if method == "initialize":
         requested = ((req.get("params") or {}).get("protocolVersion") or "").strip()
         selected = requested if requested in SUPPORTED_PROTOCOL_VERSIONS else PROTOCOL_VERSION
         result = {"protocolVersion": selected,
-                  "capabilities": {"tools": {}, "resources": {"subscribe": False,
+                  "capabilities": {"tools": {"listChanged": False}, "resources": {"subscribe": False,
                                                                   "listChanged": False},
                                     "prompts": {}},
                   "serverInfo": {"name": "autozt", "version": SCHEMA_VERSION}}
@@ -863,6 +911,15 @@ def main(argv=None):
         except AttributeError:
             pass
     argv = list(sys.argv[1:] if argv is None else argv)
+    # Accept both `autozt mcp -c cfg` and the launcher form where options may
+    # precede the subcommand.  Keep the selected config in the environment so
+    # every delegated CLI call uses the same project state.
+    if "mcp" in argv:
+        argv.remove("mcp")
+    for i, token in enumerate(list(argv)):
+        if token in ("-c", "--config") and i + 1 < len(argv):
+            os.environ["AUTOZT_CONFIG"] = argv[i + 1]
+            break
     if "--list-tools" in argv:
         print(json.dumps(_tools_list(), ensure_ascii=False, indent=1))
         return 0
@@ -879,6 +936,11 @@ def main(argv=None):
         try:
             req = json.loads(line)
         except ValueError:
+            sys.stdout.write(json.dumps(
+                {"jsonrpc": "2.0", "id": None,
+                 "error": {"code": -32700, "message": "Parse error"}},
+                ensure_ascii=False) + "\n")
+            sys.stdout.flush()
             continue
         resp = handle(req)
         if resp is None:

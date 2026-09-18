@@ -102,14 +102,30 @@ steps:
      gen: "gen_step9_publish.py {mat}",
      gen_need: [mlff_common.py, dim_common.py, stepconf.py, step.conf]}
 
-+io_schema:
-  inputs: [{name: POSCAR, from: user, required: true, desc: "材料结构"}]
-  outputs: [{name: workflow_outputs, step: final, type: directory, desc: "由技能实际步骤产生的结果文件"}]
-  params: []
-  steps: []
+io_schema:
+  inputs:
+    - {name: POSCAR, from: user, required: true, desc: "待训练材料结构"}
+    - {name: base_model, from: config, required: true, desc: "MACE 基座模型"}
+  outputs:
+    - {name: dataset_summary.json, step: S6_data, type: json, desc: "筛选后的训练数据集摘要"}
+    - {name: validation_summary.json, step: S8_bench, type: json, desc: "验证与学习曲线摘要"}
+    - {name: publish_status.json, step: S9_pub, type: json, desc: "通过验收后的模型发布状态"}
+  params:
+    - {name: GENERATION, where: step.conf, default: 0, desc: "迭代代数"}
+    - {name: FORCE_CONTINUE, values: [true, false], default: false, where: step.conf, desc: "停机闸后的显式继续开关"}
+  steps:
+    - {step: S1_relax, title: "DFT relax", inputs: [POSCAR], outputs: [CONTCAR], validator: "pressure and force gates"}
+    - {step: S2_cell, title: "Supercell", inputs: [CONTCAR, base_model], outputs: [supercell_summary.json], validator: "marker exists"}
+    - {step: S3_calib, title: "Thermal calibration", inputs: [supercell_summary.json], outputs: [calib_summary.json], validator: "marker exists"}
+    - {step: S4_gen, title: "Generate structures", inputs: [calib_summary.json], outputs: [struct_manifest.json], validator: "manifest"}
+    - {step: S5_label, title: "DFT labeling", inputs: [struct_manifest.json], outputs: [labeled cfg-*], validator: "all required frames"}
+    - {step: S6_data, title: "Dataset build", inputs: [labeled cfg-*], outputs: [dataset_summary.json], validator: "dataset"}
+    - {step: S7_ft, title: "MACE fine-tuning", inputs: [dataset_summary.json], outputs: [finetune_summary.json], validator: "all seeds"}
+    - {step: S8_bench, title: "Benchmark", inputs: [finetune_summary.json], outputs: [validation_summary.json], validator: "benchmark and halt gate"}
+    - {step: S9_pub, title: "Publish model", inputs: [validation_summary.json], outputs: [publish_status.json], validator: "publish"}
 flow:
-  summary: "按技能步骤生成并校验科学计算结果"
-  stages: [{name: workflow, steps: [], produces: [workflow_outputs]}]
+  summary: "弛豫 → 热位移采样 → DFT 标注 → 数据集 → MACE 微调 → 验收发布"
+  stages: [{name: dataset, steps: [S1_relax, S2_cell, S3_calib, S4_gen, S5_label, S6_data], produces: [dataset_summary.json]}, {name: training, steps: [S7_ft, S8_bench, S9_pub], produces: [publish_status.json]}]
 corrections: [node_fail, dir_missing]
 requires:
   python: [mace-torch, torch, ase, phonopy, numpy, matplotlib]

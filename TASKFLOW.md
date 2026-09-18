@@ -74,7 +74,7 @@ autozt --version
 ## 2. 核心概念
 
 - **任务类型（tt）**：一类计算 = 一套步骤流水线 = 一个技能。流水线由 `skill/<技能名>/skill.yaml` **自描述**（autozt 自动发现，全局 autozt.yaml 不用再抄 steps）。
-  当前 11 个技能：
+  当前技能一览（完整清单永远以 `autozt skills` 为准，共 20 个）：
 
   | 类型 key | 中文名 | 引擎 | 版本 |
   |---|---|---|---|
@@ -87,6 +87,7 @@ autozt --version
   | `opt-mace-cpu` / `opt-mace-gpu` | 结构优化 + 形成能 | MACE | 0.1 |
   | `phonon-mace-cpu` | 声子谱（仅 2 阶） | MACE | 0.1 |
   | `mlff-mace` | 随机位移法 MLFF 训练（产出 MACE 势） | VASP(标注)+MACE | 0.1 |
+  | `zt-dft-cpu` | 热电优值 ZT 全流程（电子输运 + 晶格热导 + ZT 汇总） | VASP/DFT | 0.1 |
 
 - **project（-p）**：材料项目，如 `C20/qHPC20`。
 - **job（-j）**：项目里的一个步骤，可写步骤全名 / label / 序号，**必须配 -p**（不带 -p 时 `-j` = 对全部材料只操作该步骤）。序号是 `skill.yaml` 里的 `seq`（画图步用小数，如 3.1；带隙子步用 2.1~2.35）。
@@ -686,9 +687,57 @@ autozt -tt mlff-mace -p <材料> start               # 仅 status=pass 才发布
 
 ---
 
+### 6.11 zt-dft-cpu 热电优值 ZT 全流程（v0.1，组合技能）
+
+ZT = S²σT / (κ_e + κ_L)。本技能把 `ke-dft-cpu`（电子输运 → S/σ/κ_e）与 `kl-dft-cpu`
+（晶格热导 → κ_L）**拼成一条流水线**，再加一个汇总步算出 ZT(T, 载流子浓度)。
+
+| seq | 步骤 | label | 内容 | 判据 |
+|---|---|---|---|---|
+| 1 | `step1_opt` | S1_opt | 电子段结构优化 | `relax_injob` |
+| 2.1–2.35 | `step2_bandgap/*` | S2.1_scf…S2.3_hseplot | 电子段带隙段（PBE/HSE + 判别 + 画图），与 ke 逐字一致 | outcar/wavecar/plot |
+| 3–8 | `step3_uniform`…`step8_amset` | S3_uniform…S8_kappa_e | 密网格 / WAVECAR / 介电 / 弹性 / 形变势 / **AMSET 输运 → transport.json** | 与 ke 一致 |
+| 11–16 | `step1_std_opt`…`step6_kappa` | SK1_opt…SK6_kappa | 晶格段全链（弛豫/静态/NAC/位移/拟合/**BTE → kappa_summary.json**） | 与 kl 一致 |
+| 20 | `step20_zt` | S20_zt | 汇总：ZT(T,n) 全栅格 + 峰值 + 出图（run: gen，登录节点） | done_marker `zt_summary.json` |
+
+**装配方式（关键）**：autozt 没有技能 include/reuse 机制，`src` / `template_dir` 只在**本技能目录**下解析，
+所以本技能目录里除 `skill.yaml` / `step.conf` / `step20_zt/` 之外**全是指向上游技能目录的符号链接**
+（`step1_opt -> ../ke-dft-cpu/step1_opt`、`step6_kappa -> ../kl-dft-cpu/templates/step6_kappa` …）。
+好处：上游 gen 脚本/模板/step.conf 改动**自动跟随**，不存在副本漂移；代价：不能脱离同目录下的
+`ke-dft-cpu` / `kl-dft-cpu` 单独安装。远端仍是按内容推送，超算上落的是真文件。
+
+**全局 step.conf 纪律**：本技能 `step.conf` 只放两段都认识的键（`BANDGAP`、`FUNC`）。
+往全局层加步骤专属参数（`NWORKERS`/`METHOD`/`SOLVER`/`MESH`…）会让另一段的 gen 因“不认识的键”
+直接 `SystemExit`（ke 自己的 step.conf 顶部记着这条教训）。
+
+**三种精简模式**（两段可各自开关，关掉的段其 `needs` 被 autozt 当缺失依赖忽略）：
+
+```yaml
+# <材料>/zt-dft-cpu/project_setting/tf_<项目名>.yaml
+task_types:
+  zt-dft-cpu:
+    electronic: false     # 只跑晶格段 + 汇总（电子输运借同材料 ke 结果）
+    lattice: false        # 只跑电子段 + 汇总（κ_L 借同材料 kl 结果）
+    # 两个都 false = 只出 ZT 汇总（两段结果都由独立技能项目算好）
+```
+
+**参数**：`BANDGAP`（pbe/hse，透传电子段）、`FUNC`（两段共用泛函）、`KTEMP_MODE`（`interp` 按温度插值
+κ_L、`const300` 固定用 300 K 的 κ_L）；可选组 `bandgap_hse` / `nac` / `phonon_plot` 与上游同名同义。
+
+**产物**：`zt_summary.json`（温度×掺杂的 S/σ/κ_e/κ_L/κ_tot/PF/ZT + 峰值 + 口径说明 + 来源）、
+`zt_summary.txt`、`zt_vs_T.png`、`zt_vs_doping.png`、`zt_components.png`。
+κ_L 只取 kl 的**元胞口径** `kappa_xx_yy_zz`（与 AMSET 的 σ/κ_e 同口径，可直接相加）；2D 张量按
+面内 (xx+yy)/2 约化、3D 按对角平均；κ_L 温区外不外推（ZT 记 null）；若 kl 结果带 `Lz_ang`，还会与
+电子段胞的 c 轴比对做**元胞口径闸门**。详见 `skill/zt-dft-cpu/README.md`。
+
+```bash
+autozt -tt zt-dft-cpu -p <材料> init      # 建项目配置
+autozt -tt zt-dft-cpu -p <材料> start     # 跑（默认 24 步）
+autozt -tt zt-dft-cpu -p <材料> status
+```
 ## 7. 技能开发规范（原 SKILL_DEV.md 内容）
 
-> 本章即原独立的 `SKILL_DEV.md`，内容已并入本文。照本章写出的技能目录，放进 `skill/` 即可被 `autozt` 自动发现，**不需要修改 autozt 主程序的任何一行**。本章可以整份喂给 AI 让它生成技能（7.13 有现成提示词模板）。
+> 本章是技能开发规范的统一维护位置。符合现有步骤、生成器、判据与调度抽象的技能可被自动发现，通常不需要改核心或 MCP；超出现有抽象时须扩展执行层，不能仅靠添加 YAML 声明。模型接入契约、错误处理与验收要求见 **7.15–7.18**；7.13 的提示词应与这些要求一起使用。
 
 ### 7.1 心智模型：谁负责什么
 
@@ -766,7 +815,7 @@ skill/_common/                 公共池（没有 skill.yaml，不会被当成�
 ### 7.4 `skill.yaml` 完整字段
 
 ```yaml
-schema: 1                  # 必需。清单格式版本，当前固定 1
+schema: 2                  # 新技能使用 2；包含 io_schema / flow / corrections 自描述段
 name: kl-dft-cpu                   # 可选。类型 key，缺省 = 目录名
 desc: 晶格热导率            # 必需。状态表和帮助里显示的中文名
 version: "0.1"             # 可选。技能自身版本，autozt skills 会显示
@@ -1027,7 +1076,7 @@ autozt -tt <技能名> -p <材料> start
 
 - [ ] 依赖清单写在**步骤级** `gen_need`，每一步都列全了提交模板逻辑名（步骤级会完全替代类型级并跳过自动补推）
 - [ ] 依赖文件都在本技能目录或公共池里：技能目录里 `ls` 逐条对照；依赖公共池的确认池子有、跨技能引用确认没有
-- [ ] `skill.yaml` 的 `schema: 1`、`name`、`desc`、`steps` 齐全；新技能 `defaults.skill_subdir: true`
+- [ ] `skill.yaml` 的 `schema: 2`、`name`、`desc`、`steps` 齐全；新技能 `defaults.skill_subdir: true`；模型契约按 7.15–7.18 验收
 - [ ] 每个 `steps[].name` 与 gen 脚本创建的目录名**逐字相同**；嵌套步骤（`step2_bandgap/step2.1_static`）`src` 与目录对齐
 - [ ] 每个步骤有 `seq`、`label`（≤10 字符）、`check`、`gen`；需要 DAG 的写了 `needs`
 - [ ] 判据优先用内置的；`marker` 的 `文件名:字符串` 确认在真实输出里出现过
@@ -1064,7 +1113,8 @@ autozt -tt <技能名> -p <材料> start
   4. 一份自检清单的逐条核对结果
 
 约束：
-  - 不要修改 autozt 主程序，不要要求我改 autozt.yaml 里除 work_dir 以外的东西
+  - 优先复用现有工作流抽象；若确需扩展核心，先说明现有能力的缺口和影响范围，不通过新增 MCP 专用工具绕过执行层
+  - 使用 schema: 2，补全 io_schema / flow / corrections 与 README；按 7.15–7.18 检查声明和实际代码是否一致
   - 依赖文件要么在本技能目录（自包含），要么引用公共池 skill/_common/（gen_need 写文件名即可），
     不许跨技能目录 import。需要公共池里没有的文件时，明确告诉我「从哪个目录 cp 哪几个文件」
   - 依赖清单写在步骤级 gen_need，每一步都要列全提交模板逻辑名；模板本体放 setting/<hpc>/templates/
@@ -1092,6 +1142,139 @@ autozt -tt <技能名> -p <材料> start
 
 ---
 
+### 7.15 面向 LLM 的技能契约：声明与执行分开
+
+AutoZT 提供两条模型接入路径，它们是可选入口，不需要串联使用：
+
+```text
+支持本地 stdio MCP 的客户端 → autozt mcp ───────────┐
+能运行命令的模型或脚本 → autozt agent request - ────┤
+                                                  ↓
+                              共享 Agent 协议/服务层
+                                                  ↓
+                           普通 CLI（变更经过 autozt act）
+                                                  ↓
+                           技能生成器、判据、工作流、计算引擎
+```
+
+人仍可直接使用普通 CLI。模型也可以通过终端运行普通 CLI；是否实际使用 MCP 取决于客户端配置与工具调用记录，不能因为软件提供 MCP 就断言当前对话走了 MCP。
+
+技能作者维护三类内容：
+
+| 内容 | 职责 | 不会自动完成的事 |
+|---|---|---|
+| `steps`、生成器、模板、判据 | 生成输入、执行计算、判断完成、回收产物 | 不会自动形成完整科学说明 |
+| `io_schema`、`flow`、`corrections` | 向人和模型说明输入输出、参数、流程及纠错能力 | 不会自动生成参数校验器、结果解析器或跨技能转换器 |
+| README | 适用条件、单位、物理假设、边界、实例 | 不替代执行代码和检查器 |
+
+`autozt schema --strict` 检查声明结构和部分引用，不能证明每个参数都被代码读取、每个产物真实存在，或计算数值正确。
+
+新技能使用 `schema: 2`。下面是添加到完整 `skill.yaml` 的自描述片段，**不是可独立运行的技能**；步骤名与参数仅为示例，须替换成真实实现：
+
+```yaml
+io_schema:
+  inputs:
+    - name: POSCAR
+      from: user
+      required: true
+      type: file
+      desc: 材料初始结构；支持的维度与约束见 README
+  outputs:
+    - name: result.json
+      path: step1_calc/result.json
+      step: S1_calc
+      type: json
+      desc: 本技能结果摘要；字段、单位和有效性条件见 README
+  params:
+    - name: TEMPERATURE
+      default: 300
+      where: step1_calc/step.conf
+      desc: 温度，单位 K；类型和取值范围由生成器校验
+  steps:
+    - step: S1_calc
+      title: Calculate property
+      tool: 实际计算引擎名称
+      inputs: [POSCAR]
+      outputs: [result.json]
+flow:
+  title: 示例性质计算
+  stages:
+    - name: calculate
+      steps: [S1_calc]
+      produces: [result.json]
+corrections: []
+```
+
+填写规则：
+
+- `inputs` 写明必需/可选、来源、格式、单位和维度约束；复杂格式在 README 定义，不能只写“数据文件”。
+- `outputs` 写明真实生成路径、产生步骤和文件格式；区分远端产物、通过 `fetch_files`/`fetch_all` 回收的产物，以及只供下游使用的大文件。声明输出不等于自动回拉或解析。
+- `params` 至少列出模型需要选择的关键参数；默认值与 `CONF_SPEC`、模板保持一致。项目覆盖后的实际值应通过只读配置查询确认。
+- `io_schema.steps` 覆盖主步骤及重要可选分支；`flow.stages` 与实际 `needs` 对齐。`next_skills` 表示可衔接关系，不会自动转换、复制文件或启动下游。
+- `corrections` 使用现有注册处理器的格式与名称，参考相近技能及 `autozt/corrections.py`；没有适用处理器时可以为空，并说明人工处理方式。仅写名称不会创建纠错实现。
+- 新增参数应同步代码、模板、契约和 README；删除/改名参数或结果字段时说明兼容性变化并更新技能版本。
+
+### 7.16 新技能何时需要修改 CLI 或 MCP
+
+| 改动 | 主要修改位置 | Agent CLI / MCP |
+|---|---|---|
+| 增加文件输入、结果文件或参数，仍使用现有步骤生命周期 | 技能生成器、`step.conf`、契约、README、回拉配置 | 通常不改；模型按需读新契约 |
+| 增加步骤、可选分支或标准扇出任务 | 技能步骤定义、生成器、判据 | 通常不改；验证状态和候选动作表现 |
+| 需要新的物理完成判据 | 技能判据或公共判据 | 通常不改工具表；必要时扩展诊断码映射 |
+| 需要模型直接读取新的结构化科学结果 | 先明确结果格式、解析与查询需求 | 当前状态接口不会自动解析任意文件；必要时增加通用结果查询能力 |
+| 需要新调度机制、生命周期或现有命令不能表达的操作 | 先扩展核心执行能力及风险策略 | 再扩展共享 Agent 协议，并使 CLI/MCP 同步 |
+
+不要为每个技能都增加一个 MCP 工具，也不要把脚本内部函数逐个暴露给模型。优先把新计算实现成已有 `start/retry/fetch` 能管理的步骤；确实无法表达时再扩展接口。MCP 和 Agent CLI 共用契约，因此错误的契约会同时影响两条入口。
+
+### 7.17 错误报告与恢复契约
+
+错误处理分三个层次：
+
+1. **调用错误**：缺少参数、配置错误、子命令失败等，接入层用 `ok`、`returncode`、`error` 报告。当前并非所有内部异常都保证转换成统一响应，需要异常场景测试。
+2. **计算失败**：生成器非零退出；检查器按 7.10 返回完成标志及诊断文本；采集/报告层生成状态和已有的 `diag_code`、`suggested_action`、`action_reason`。新增判据不一定自动得到新的诊断码，应检查映射结果。
+3. **恢复动作**：建议不等于执行。只有已实现、已验证且得到授权的动作才能执行；未知错误、科学判据不通过、反复失败应返回证据供人工复核，不伪装成通用 retry。
+
+纠错模块对每个诊断提供三段式分流：`known/auto_safe`（handler 明确标记安全且自动）、
+`known/approval_required`（已有规则但需要改 INCAR/配置或提交动作）、
+`unknown/llm_review`（没有可靠规则）。`autozt diagnose --json` 和 Agent CLI 的 `evidence`
+会返回 `repair`；后者还提供有界 `llm_handoff` 证据包。LLM 只能据此提出最小修改、验证和
+重交方案；修改输入仍走 `autozt correct`/动作网关，提交仍走 `autozt start`，不会因为模型
+输出了一段命令就直接执行。自动策略还必须在调用方设置重试次数、扇出数量和资源预算。
+
+技能 README 必须说明：缺输入、错误参数、外部程序失败、计算不收敛、部分扇出失败分别如何判断；`retry` 保留什么、重生成什么；哪些操作会删除产物；哪些情况禁止自动继续。`retry` 在当前 CLI 中保留产物并重生成输入，**不提交**，需要检查后另行 `start`。
+
+每条纠错建议可附带通用修复计划字段：`changes`（目标/路径/操作/值）、`verify`（验收条件）、
+`rollback`（备份或恢复方式）、`requires_approval`（审批要求）和 `execute_via`（正式入口）。
+这些字段是声明和审计信息；只有已注册 handler 的 `apply()` 能执行输入修正，YAML 中的
+`match/repair/verify/rollback` 也只描述契约，不会把自然语言或配置直接变成执行动作。
+
+非零退出码表示失败或拒绝，不意味着完全没有副作用。批量动作可能已有前几项成功，后续失败时必须逐项报告；提交成功只表示作业已提交，不表示科学计算完成。自动纠错处理器和 Agent 的候选动作生成不是同一机制，不能把 `corrections` 声明等同于已接通自动恢复。
+
+### 7.18 开发验收：结构、语义、执行分别验证
+
+以下发现/契约命令不提交计算，可先在软件目录执行：
+
+```bash
+python3 bin/autozt skills
+python3 bin/autozt schema --strict
+python3 bin/autozt agent capabilities
+python3 bin/autozt agent contract <技能名> --full
+python3 bin/autozt mcp --list-tools
+```
+
+开发完成应提供以下证据，不将“schema 通过”写成“完整支持所有输入输出”：
+
+- **声明**：技能被发现；步骤及可选分支引用正确；主要输入、输出、参数和限制可从契约读到。
+- **语义**：逐项对照生成器、`CONF_SPEC`、模板、检查器和真实样本；检查单位、默认值、输出路径、文件格式和回拉规则。
+- **异常**：用隔离测试数据验证缺输入、坏参数、外部程序失败、截断结果、部分扇出失败，不能把失败识别成完成；未知诊断留给人工。
+- **恢复**：确认重复生成及 retry 保留已完成产物；确认没有重复提交；确认过期计划处理和批量失败报告。
+- **接入**：对同一测试状态验证 Agent CLI 和 MCP 的作用域、诊断、候选动作一致；检查返回的是状态还是实际科学结果，不混淆二者。
+- **真实计算**：在授权的测试项目上另行验证生成、提交、完成判据及结果回收。输入生成也可能连接超算或写文件，不把 `init` 当成纯查询。
+
+测试材料与计算文件按项目约定放 `/mnt/d/tf_data/work_AutoZT/`，会话临时文件放仓库 `tmp/`。本章的验收要求不授予修改生产项目或提交超算的权限。
+
+---
+
 ## 8. 工作原理（无状态）
 
 作业与步骤的对应关系来自 `squeue` 的工作目录（%Z），同名作业不混淆；scancel 后状态自动回落为文件判据，无状态残留。每次调用只 ssh 一次，同时采集所有任务类型。三台机器都已装真 SLURM，autozt 采集照常工作。
@@ -1099,6 +1282,25 @@ autozt -tt <技能名> -p <材料> start
 ---
 
 ## 9. 给大语言模型用（agent 接入）
+
+### 9.1 入口选择与服务生命周期
+
+| 入口 | 用途 | 是否需要常驻 |
+|---|---|---|
+| 普通 `autozt ...` | 人或终端 agent 调用已有命令 | 普通查询/动作执行完退出，监控命令另论 |
+| `autozt agent request -` / `autozt agent inspect` | 模型或脚本使用固定 JSON 请求/响应 | 不需要，通常一次调用一个进程 |
+| `autozt mcp` | 已配置本地 stdio MCP 的客户端自动发现和调用工具 | 客户端启动并维持连接，不需要用户另开服务窗口 |
+| `autozt agent serve` | 自定义 wrapper 连续读写 JSONL | 可选高级接口；读到 EOF 退出，不自行轮询、不保存聊天 |
+
+普通用户不需要启动 `agent serve`。MCP 与 Agent CLI 都不包含 LLM，也不主动向模型发请求。MCP 客户端负责模型交互；AutoZT 负责执行。当前 MCP 是本地标准输入/输出进程，不监听 HTTP 端口，不能直接作为云端 API 的远程 MCP 地址。
+
+MCP 进程是否随新对话重启取决于客户端；其快照缓存仅在内存中，旧快照不可用时返回 `cursor_reset`。Agent CLI 的 `snapshot` 会在配置目录写 `.tf_agent_snapshot_<hash>.json`，保存紧凑状态供跨进程比较。两者都不保存 LLM 聊天历史。动作网关把经过网关的动作、决定、参数、返回码等写到配置目录的 `.tf_agent_log.jsonl`；批准记录写 `.tf_approvals.json`。协议校验阶段就拒绝的请求不一定进入动作日志，它不是完整 MCP 请求日志。
+
+已提交的超算作业不依赖 MCP 连接存活；后续自动推进仍需 AutoZT 的监控机制运行。新使用者解压代码后还需准备 Python、安装/入口路径、自己的项目与集群配置、SSH 认证及技能所需外部程序和数据；MCP 还需在客户端登记启动命令。软件支持接口，不代表客户端已自动接入。安装见 [安装说明](docs/installation.md)，接口细节见 [MCP](docs/mcp.md) 和 [Agent CLI](docs/agent-cli.md)。
+
+审批与风险约束仍需保留。模型的 `execute=true` 表示请求执行，不能代替用户授权；普通推进和破坏性操作的审批规则不能混为一谈。当前基于环境变量、本地文件和 TTY 的网关属于操作防护，不能作为抵御拥有同账户 Shell/文件修改权限的 agent 的隔离边界；TTY 也不等于可靠的人类身份验证。
+
+### 9.2 普通 CLI 调用约定
 
 `autozt` 按"LLM 工具"设计，三个接口约定：
 

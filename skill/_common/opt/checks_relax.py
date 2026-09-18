@@ -28,6 +28,7 @@ running 之外的"还没跑" -> OUTCAR missing
 
 import os
 import re
+import sys
 import glob as _glob
 
 
@@ -124,6 +125,33 @@ def _last_external_pressure(d):
         return None
 
 
+_ZBRENT_RE = re.compile(r"ZBRENT:\s*fatal error in bracketing"
+                        r"|I REFUSE TO CONTINUE WITH THIS SICK JOB")
+
+
+def _stage_crash_kind(d):
+    """这一段是【怎么】中断的 —— 'zbrent' / 'watchdog' / ''。
+
+    为什么值得单独判：旧文案一律说"可能撞墙钟或被看门狗杀掉"。实测（Ti2S3 Z4-3-1，
+    jzzn jobid 3847708，2026-09-17）是 VASP 自己 ZBRENT 崩的，与墙钟/看门狗完全无关；
+    照旧文案去查墙钟和 queue.err 会查错方向，白耗一轮。只读各段存档 OUTCAR* 与 queue.err。
+    """
+    for p in sorted(_glob.glob(os.path.join(d, "OUTCAR*"))):
+        try:
+            if _ZBRENT_RE.search(_tail(p, 200)):
+                return "zbrent"
+        except OSError:
+            pass
+    p = os.path.join(d, "queue.err")
+    if os.path.isfile(p):
+        try:
+            if "[watchdog]" in open(p, encoding="utf-8", errors="ignore").read():
+                return "watchdog"
+        except OSError:
+            pass
+    return ""
+
+
 _STRESS_GATE_MARKERS = ("S1_STRESS_GATE.off", "S1_STRESS_GATE_OFF")
 
 
@@ -193,7 +221,12 @@ def ck_relax_injob(d, sc):
         #    阈值取脚本自身稳定判据 PRESS_TOL_KB=1.0 的两倍，给 Pulay 应力留余量。
         _exempt = _stress_gate_exempt(d)
         if _exempt is not None:
-            print("[..] 变胞应力门禁已豁免（S1_STRESS_GATE.off：%s）" % _exempt)
+            # ★ 必须写 stderr：本判据的 stdout 会被上层采集器当作【一整份 JSON】解析，
+            #   往 stdout 打任何东西都会让 json.loads 从第 1 个字符就失败
+            #   （2026-09-18 实测：jzzn 的 kl-dft-cpu 组因此整组"无材料"，
+            #    因为同目录下的豁免材料把提示打进了采集器 stdout）。
+            print("[..] 变胞应力门禁已豁免（S1_STRESS_GATE.off：%s）" % _exempt,
+                  file=sys.stderr)
         if _exempt is None and any(m for _, m, _ in _cell_stage_states(d)):
             _p = _last_external_pressure(d)
             if _p is not None and abs(_p) > _STRESS_GATE_KB:
@@ -224,8 +257,26 @@ def ck_relax_injob(d, sc):
         return False, ("%d 段全部跑完但未收敛 —— 看 OUTCAR.s* / OSZICAR.s* 定位是哪一段"
                        "开始震荡，调完 step.conf 后 autozt retry" % planned)
     if half:
-        return False, ("第 %d 段中断（有 .started 无 .done）：可能撞墙钟或被看门狗杀掉；"
-                       "重投会从 CONTCAR 续跑" % (done + 1))
+        # 是哪一段没跑完（.sN.started 且无 .sN.done），报名字比报序号有用
+        _half_tags = [os.path.basename(t)[len("INCAR."):].split("_")[0]
+                      for t, _, st in _cell_stage_states(d) if st == "started"]
+        _who = "、".join(_half_tags) if _half_tags else "第 %d 段" % (done + 1)
+        kind = _stage_crash_kind(d)
+        if kind == "zbrent":
+            return False, ("%s 段中断（有 .started 无 .done）：VASP 报 ZBRENT: fatal error in "
+                           "bracketing —— 变胞段的 CG 线搜索夹不到极小值，最常见的原因是"
+                           "【该段起点晶胞已接近平衡、没有梯度可走】（例如接手了上一次作业"
+                           "遗留的旧 CONTCAR）。旧代码会把这种上报成\"可能撞墙钟或被看门狗"
+                           "杀掉\"，方向是错的。重投即可：gen 会清掉旧阶段标记、从当前 POSCAR "
+                           "重跑整条段序（2026-09-17 起 run_relax 还有 STAGES_RUN 闸门，"
+                           "不会再用上次遗留的 OUTCAR 把第一段跳过）；若反复出现再考虑"
+                           "收紧 EDIFF 或减小 POTIM。" % _who)
+        if kind == "watchdog":
+            return False, ("%s 段中断（有 .started 无 .done）：被 run_relax 看门狗判卡死杀掉"
+                           "（queue.err 里有 [watchdog] 判定快照），重投会从 CONTCAR 续跑"
+                           % _who)
+        return False, ("%s 段中断（有 .started 无 .done）：可能撞墙钟或被看门狗杀掉；"
+                       "重投会从 CONTCAR 续跑" % _who)
     note = "已完成 %d/%d 段" % (done, planned or 1)
     if skipped:
         note += "（另有 %d 段因力判据被跳过）" % skipped

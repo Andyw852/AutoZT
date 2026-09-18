@@ -26,7 +26,6 @@ import random
 from collections import Counter, defaultdict
 from concurrent.futures import ThreadPoolExecutor
 
-# ===== 来自 17_cli.py =====
 # -*- coding: utf-8 -*-
 # 17_cli —— main() 入口与命令分发
 #
@@ -37,7 +36,6 @@ from concurrent.futures import ThreadPoolExecutor
 #   （数据簇 _dbg_t/_state_cache_*/collect_data/apply_exclude/filter_projs/
 #    filter_status/status_spec_has_scancel/_snapshot 已抽成真模块 autozt/data.py）
 
-# ===== main (原 L7078-L7453) =====
 def _dry_run_steps_for(cmd, m, jb):
     from autozt import find_step_soft
     """--dry-run：某材料在命令 cmd、步骤筛选 jb 下实际会动的步骤。

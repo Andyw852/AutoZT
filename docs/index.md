@@ -26,3 +26,7 @@ keeping every step inspectable and every input traceable.
 - [Quick start](quickstart.md)
 - [Configuring clusters](CONFIGURING.md)
 - [CLI reference](cli.md)
+- [Skills and development guidance](skills.md)
+- [Agent JSON CLI](agent-cli.md)
+- [MCP interface](mcp.md)
+- [Positioning and AI agent integration](llm-plugin.md)

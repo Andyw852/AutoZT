@@ -115,7 +115,9 @@ steps:
 
   - {seq: 8, name: step8_amset, label: S8_kappa, src: step8_amset,
      check: marker, marker: "transport.json:thermal_conductivity",
-     gen: gen_step10_amset.py, gen_need: [stepconf.py, step.conf, ke_common.py, submit_amset.tpl, vdw_radii.py, discriminant_common.py], fetch_all: true,
+     # gen_need 带上 overlap_preflight.py（住在 step8.4_amset2d/，靠 report.find_asset 的
+    #   basename 唯一兜底找到）：gen 时查维度/重叠模式，并把它复制进运行目录供作业内 --in-job。
+    gen: gen_step10_amset.py, gen_need: [stepconf.py, step.conf, ke_common.py, submit_amset.tpl, vdw_radii.py, discriminant_common.py, overlap_preflight.py], fetch_all: true,
      needs: ["step4_wave", "step5_dielect", "step6_elastic", "step7b_deform_read", "step2_bandgap/step2.2_pbe_plot", "step2_bandgap/step2.3_hse_plot"]}
 
 # --- 2 带隙段：子步嵌套进 step2_bandgap/，状态表合并成 S2_bandgap 一列 ---------
@@ -165,6 +167,12 @@ optional_steps:
                     incar_uniform_full_2d.tpl, incar_uniform_full_3d.tpl,
                     submit_std_2d.tpl, submit_std_3d.tpl],
      needs: ["step1_opt"]}
+      - {seq: 3.6, name: "step3c_uniform_offgrid", label: S3c_offgrid,
+         after: step3b_uniform_full,
+         src: step3c_uniform_offgrid, check: wavecar, gen: gen_step5c_uniform_offgrid.py,
+         gen_need: [stepconf.py, step.conf, ke_common.py, dim_common.py, check_common.py,
+                    submit_std_2d.tpl],
+     needs: ["step3b_uniform_full"]}
       - {seq: 4.5, name: "step4b_wave_full", label: S4b_wavefull,
          after: step3b_uniform_full,
          src: step4b_wave_full, check: marker, marker: "wavefunction.h5:",
@@ -278,7 +286,8 @@ optional_steps:
          src: step8.4_amset2d, check: marker, marker: "transport.json:thermal_conductivity",
          gen: gen_step14_amset2d.py,
          gen_need: [stepconf.py, step.conf, ke_common.py, submit_amset.tpl, vdw_radii.py,
-                    discriminant_common.py, amset2d_plugin.py, amset2d_pop_freq.py],
+                    discriminant_common.py, amset2d_plugin.py, amset2d_pop_freq.py,
+                    overlap_preflight.py],
          fetch_all: true,
          needs: ["step4_wave", "step5_dielect", "step6_elastic", "step7b_deform_read",
                  "step2_bandgap/step2.2_pbe_plot", "step2_bandgap/step2.3_hse_plot"]}
@@ -293,14 +302,26 @@ optional_steps:
          gen: gen_step13_output.py, gen_need: [], fetch_all: true,
          needs: ["step8_amset", "step8.1_boltztrap", "step8.2_dpt"]}
 
-+io_schema:
-  inputs: [{name: POSCAR, from: user, required: true, desc: "材料结构"}]
-  outputs: [{name: workflow_outputs, step: final, type: directory, desc: "由技能实际步骤产生的结果文件"}]
-  params: []
-  steps: []
+io_schema:
+  inputs:
+    - {name: POSCAR, from: user, required: true, desc: "材料结构"}
+  outputs:
+    - {name: transport.json, step: S8_kappa, type: json, desc: "电子热导率与输运张量"}
+    - {name: band_summary.json, step: S2.2_pbeplot, type: json, desc: "带隙与带边汇总"}
+    - {name: deformation.h5, step: S7.1_read, type: hdf5, desc: "形变势输运输入"}
+  params:
+    - {name: BANDGAP, values: [pbe, hse], default: hse, where: step.conf, desc: "PBE 或 HSE 带隙分支"}
+  steps:
+    - {step: S1_opt, title: "Relax", inputs: [POSCAR], outputs: [CONTCAR], validator: "力收敛"}
+    - {step: S2.1_scf, title: "Band-gap SCF", inputs: [CONTCAR], outputs: [OUTCAR], validator: "outcar"}
+    - {step: S3_uniform, title: "Uniform wave grid", inputs: [CONTCAR], outputs: [WAVECAR], validator: "wavecar"}
+    - {step: S5_dielect, title: "Dielectric tensor", inputs: [CONTCAR], outputs: [OUTCAR], validator: "dielectric marker"}
+    - {step: S6_elastic, title: "Elastic constants", inputs: [CONTCAR], outputs: [OUTCAR], validator: "elastic marker"}
+    - {step: S7_deform, title: "Deformation potential", inputs: [CONTCAR], outputs: [deformation.h5], validator: "all deformations"}
+    - {step: S8_kappa, title: "AMSET transport", inputs: [WAVECAR, deformation.h5], outputs: [transport.json], validator: "transport marker"}
 flow:
-  summary: "按技能步骤生成并校验科学计算结果"
-  stages: [{name: workflow, steps: [], produces: [workflow_outputs]}]
+  summary: "结构优化、带隙与散射输入 → AMSET 电子输运"
+  stages: [{name: inputs, steps: [S1_opt, S2.1_scf, S2.2_pbe, S2.3_hse], produces: [band_summary.json]}, {name: transport, steps: [S3_uniform, S5_dielect, S6_elastic, S7_deform, S8_kappa], produces: [transport.json]}]
 corrections: [node_fail, dir_missing]
 requires:
   python: [pymatgen, numpy, matplotlib, amset, BoltzTraP2]

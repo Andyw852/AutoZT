@@ -635,7 +635,7 @@ def main():
                          **norm_subs(factor, meta, thick2d)},
                         require=REQ_2D, label="2D 归一化：")
         # [FIX P48] SLURM QoS comes from step.conf, not from whichever copy of the
-        # template already sits on the cluster.  tf never overwrites an existing
+        # template already sits on the cluster.  autozt never overwrites an existing
         # gen_need asset ("材料目录已有的文件不覆盖"), and every project keeps its own
         # project_setting/templates/step6_kappa/submit_shengbte.tpl from the day it
         # was initialised -- so a project copy carrying --qos=premium pins S6_kappa
@@ -644,51 +644,27 @@ def main():
         # QOSMaxJobsPerUserLimit for 40+ min while the local template said
         # {{QOS}}).  Rewrite the RENDERED submit.sh from conf["SBATCH_QOS"], which
         # is always fresh because the gen script itself is always re-pushed.
+        #
+        # 同一段里重写"完成标记"那一行（项目级旧模板会遮蔽技能模板）。
+        #
+        # [FIX P49 2026-09-18，移植自 taskflow-v2.0] 原先这里把
+        # BTE.KappaTensorVsT_sg 也算作"完成"，理由是有条注释以为 _sg 是 ShengBTE 的
+        # RTA 名字。**物理上反了**：ShengBTE 源码（Src/ShengBTE.f90）里 _sg 由
+        # kappasg(energy, velocity) 写出，程序自己打印 "kappa in the small-grain
+        # limit" —— 那是纯谐性、完全不含三声子散射的量（最小/边界限 κ），而且在
+        # calculate_Vp 开始之前就写完了。真正的 RTA 产物是 BTE.KappaTensorVsT_RTA
+        # （unit 303，温度循环里 calculate_Vp 之后写出）；BTE.KappaTensorVsT_CONV
+        # （unit 403）是迭代自洽解。Mg4C60 7x7x7 实测（2026-09-17）100 K：
+        # _sg = 0.0782 vs _RTA = 0.4740 W/m/K，**差 6.06 倍**；而崩掉的作业留下的
+        # 恰好是完整的 _sg（8 个温度 15 分钟写完）与只有一行的 _RTA（13.7 h 后）。
+        # 因此接受 _sg 等于把"三声子段根本没跑完"判成绿色的 KAPPA_DONE ——
+        # 交付的是最小 κ 而不是热导率。这里只认 _CONV/_RTA；_sg 的存在改由模板写成
+        # kappa_summary.json 里的诊断字段（small_grain_limit_present / _rows / warning）。
         _qos = str(conf["SBATCH_QOS"] or "premium").strip()
         _sh = out / "submit.sh"
         _txt = _sh.read_text(encoding="utf-8")
         _txt = re.sub(r"(?m)^#SBATCH --qos=.*$", "#SBATCH --qos=%s" % _qos, _txt)
-        # [FIX P48] the SAME shadowing trap hits the completion marker: the
-        # template's summary block lists which tensor files count as "done", and a
-        # stale project copy of submit_shengbte.tpl only knows _CONV/_RTA.  ShengBTE's
-        # RTA product is BTE.KappaTensorVsT_sg ( _RTA is the fourphonon name), so an
-        # RTA-only run -- or a run whose iterative stage crashed, like Mg8C120 v4
-        # (CONV = 1 NaN row after 15 h, while _sg had all 8 temperatures) -- was
-        # reported KAPPA_DONE=false even though the physics was complete.  Rewrite
-        # the rendered candidate line here, where the code is always current.
-        _cand = ('cand = ["BTE.KappaTensorVsT_CONV", "BTE.KappaTensorVsT_RTA", '
-                 '"BTE.KappaTensorVsT_sg"]')
-        _txt, _ncand = re.subn(r"(?m)^cand = \[.*\]$", _cand, _txt)
-        if _ncand == 0:
-            print("[WARN] submit.sh 没有 cand = [...] 行（旧模板？）：kappa_summary 的"
-                  "完成标记可能仍只认 _CONV/_RTA，RTA-only 运行会被误判 KAPPA_DONE=false")
-        _sh.write_text(_txt, encoding="utf-8", newline="\n")
-        print("[..] SLURM QoS = %s（step.conf 的 SBATCH_QOS；模板里的旧值会被覆盖）"
-              % _qos)
-        # [FIX P48] SLURM QoS comes from step.conf, not from whichever copy of the
-        # template already sits on the cluster.  tf never overwrites an existing
-        # gen_need asset ("材料目录已有的文件不覆盖"), and every project keeps its own
-        # project_setting/templates/step6_kappa/submit_shengbte.tpl from the day it
-        # was initialised -- so a project copy carrying --qos=premium pins S6_kappa
-        # to premium's 5-jobs-per-user limit forever, no matter what the skill's
-        # template says (measured 2026-09-16: Mg4C60 kappa jobs stuck at
-        # QOSMaxJobsPerUserLimit for 40+ min while the local template said
-        # {{QOS}}).  Rewrite the RENDERED submit.sh from conf["SBATCH_QOS"], which
-        # is always fresh because the gen script itself is always re-pushed.
-        _qos = str(conf["SBATCH_QOS"] or "premium").strip()
-        _sh = out / "submit.sh"
-        _txt = _sh.read_text(encoding="utf-8")
-        _txt = re.sub(r"(?m)^#SBATCH --qos=.*$", "#SBATCH --qos=%s" % _qos, _txt)
-        # [FIX P48] the SAME shadowing trap hits the completion marker: the
-        # template's summary block lists which tensor files count as "done", and a
-        # stale project copy of submit_shengbte.tpl only knows _CONV/_RTA.  ShengBTE's
-        # RTA product is BTE.KappaTensorVsT_sg ( _RTA is the fourphonon name), so an
-        # RTA-only run -- or a run whose iterative stage crashed, like Mg8C120 v4
-        # (CONV = 1 NaN row after 15 h, while _sg had all 8 temperatures) -- was
-        # reported KAPPA_DONE=false even though the physics was complete.  Rewrite
-        # the rendered candidate line here, where the code is always current.
-        _cand = ('cand = ["BTE.KappaTensorVsT_CONV", "BTE.KappaTensorVsT_RTA", '
-                 '"BTE.KappaTensorVsT_sg"]')
+        _cand = 'cand = ["BTE.KappaTensorVsT_CONV", "BTE.KappaTensorVsT_RTA"]'
         _txt, _ncand = re.subn(r"(?m)^cand = \[.*\]$", _cand, _txt)
         if _ncand == 0:
             print("[WARN] submit.sh 没有 cand = [...] 行（旧模板？）：kappa_summary 的"

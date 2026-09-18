@@ -6,8 +6,7 @@ __cli_name__ = "autozt"
 """autozt —— taskflow v2 包（深模块化重构完成）。
 
 架构：真深模块（real deep modules，小接口 + 深实现）。
-  原 versions/v1.0/tf 是 7463 行单体脚本。v2.0 先按职责切成 _slice/ 分片做
-  单一命名空间装配，现已全部抽成真深模块（显式 import + 小接口）：
+  AutoZT 按职责拆分为多个深模块，各模块通过显式 import 和小接口协作：
 
   - bootstrap.py  配置/发现流（原 00_state+01_yamlmini+02_skills+03_projects+04_discover）
   - collect.py    远端采集（原 05_collect）
@@ -27,11 +26,9 @@ import os
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _NS = globals()
 
-# 路径常量：_PKG_ROOT = 包根（setting/ skill/ 所在），_PKG_DIR = autozt 目录，
-# _SLICE_DIR = _slice 目录（已废弃，仅保留兼容）。
+# 路径常量：_PKG_ROOT = 包根（setting/ skill/ 所在），_PKG_DIR = autozt 目录。
 _NS["_PKG_ROOT"] = os.path.normpath(os.path.dirname(_HERE))
 _NS["_PKG_DIR"] = os.path.normpath(_HERE)
-_NS["_SLICE_DIR"] = os.path.normpath(os.path.join(_HERE, "_slice"))
 
 # 导入全部真深模块。bootstrap 必须最先（report 模块级 from autozt.bootstrap
 # import REASON_MAX 依赖它；其余模块无模块级跨模块依赖，顺序无关）。

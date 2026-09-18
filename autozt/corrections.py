@@ -281,7 +281,9 @@ def suggest_for_diag(cfg, **ctx_kw):
                         "title": getattr(h, "title", ""),
                         "risk": getattr(h, "risk", "review"),
                         "reason": "handler 报错：%s" % e, "actions": [],
-                        "commands": [], "auto": False, "notes": ""})
+                        "commands": [], "auto": False, "notes": "",
+                        "changes": [], "verify": [], "rollback": [],
+                        "requires_approval": True, "execute_via": "autozt"})
             continue
         d = sug.as_dict() if hasattr(sug, "as_dict") else dict(sug or {})
         try:
@@ -290,6 +292,53 @@ def suggest_for_diag(cfg, **ctx_kw):
             d["apply_available"] = False
         res.append(d)
     return res
+
+
+def repair_classification(suggestions):
+    """Classify a diagnostic for the model-facing repair decision.
+
+    This is deliberately policy-only: it never edits files or submits jobs.
+    ``auto_safe`` means a handler explicitly marked the suggestion as automatic
+    and safe.  Input patches and all destructive operations remain review-only.
+    """
+    suggestions = list(suggestions or [])
+    if not suggestions:
+        return {"class": "unknown", "mode": "llm_review",
+                "reason": "没有命中已登记的纠错 handler"}
+    for item in suggestions:
+        if item.get("auto") and item.get("risk") == "safe":
+            return {"class": "known", "mode": "auto_safe",
+                    "handler": item.get("handler"),
+                    "reason": item.get("reason") or "handler 声明可安全自动处理"}
+    first = suggestions[0]
+    if first.get("apply_available") or first.get("risk") in ("review", "destructive"):
+        return {"class": "known", "mode": "approval_required",
+                "handler": first.get("handler"),
+                "reason": first.get("reason") or "修复会改输入或影响计算状态"}
+    return {"class": "known", "mode": "llm_review",
+            "handler": first.get("handler"),
+            "reason": "已有建议，但未声明可安全自动执行"}
+
+
+def llm_handoff(ctx_kw, suggestions):
+    """Build a bounded, deterministic packet for an unknown/reviewed failure."""
+    classification = repair_classification(suggestions)
+    return {
+        "classification": classification,
+        "evidence": {
+            "skill": ctx_kw.get("skill"), "material": ctx_kw.get("material"),
+            "step": ctx_kw.get("label") or ctx_kw.get("step"),
+            "diag_code": ctx_kw.get("diag_code") or "unknown",
+            "diag": str(ctx_kw.get("diag") or "")[:4000],
+            "log_excerpt": str(ctx_kw.get("text") or "")[-8000:],
+            "host": ctx_kw.get("host"), "job_id": ctx_kw.get("job_id"),
+        },
+        "model_task": (
+            "判断失败原因，提出最小修改方案和验证步骤；不要直接改文件或提交作业。"
+            "方案必须区分 retry、输入补丁、参数配置修改和人工检查。"
+        ),
+        "required_approval": classification.get("mode") != "auto_safe",
+    }
 
 
 # =============================================================================

@@ -1,0 +1,60 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1800" height="1180" viewBox="0 0 1800 1180">
+<defs>
+  <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto"><path d="M0,0 L10,5 L0,10 Z" fill="#314252"/></marker>
+  <style>
+    .title{font:700 34px Arial,sans-serif;fill:#1d2733}.panel{fill:#f7f9fb;stroke:#cbd5df;stroke-width:2}
+    .head{font:700 25px Arial,sans-serif;fill:#1d2733}.body{font:400 20px Arial,sans-serif;fill:#24313a}
+    .small{font:400 17px Arial,sans-serif;fill:#526171}.tiny{font:400 15px Arial,sans-serif;fill:#526171}
+    .blue{fill:#eaf1fb;stroke:#2f5fa7;stroke-width:2}.orange{fill:#fcf2e5;stroke:#b8660f;stroke-width:2}
+    .green{fill:#e9f4ef;stroke:#238266;stroke-width:2}.purple{fill:#f0ecfa;stroke:#6650a4;stroke-width:2}
+    .dark{fill:#1d2733;stroke:#1d2733;stroke-width:2}.white{fill:#fff;stroke:#cbd5df;stroke-width:2}
+    .label{font:700 18px Arial,sans-serif;fill:#fff}.lightBody{font:400 20px Arial,sans-serif;fill:#e8eef4}.lightSmall{font:400 17px Arial,sans-serif;fill:#c8d4df}.accent{font:700 19px Arial,sans-serif;fill:#238266}
+  </style>
+</defs>
+<rect width="1800" height="1180" fill="#fff"/>
+
+<!-- A: full zT workflow -->
+<text x="35" y="52" class="title">a</text><text x="75" y="52" class="title">One POSCAR to zT(n,T): a complete ZT workflow</text>
+<rect x="30" y="78" width="1740" height="300" rx="14" class="panel"/>
+<rect x="62" y="150" width="150" height="88" rx="10" class="white"/><text x="137" y="187" text-anchor="middle" class="head">POSCAR</text><text x="137" y="216" text-anchor="middle" class="small">structure</text>
+<path fill="none" d="M212 194 H250" stroke="#314252" stroke-width="3" marker-end="url(#arrow)"/>
+<rect x="255" y="135" width="210" height="118" rx="10" class="green"/><text x="360" y="174" text-anchor="middle" class="head">Dimension</text><text x="360" y="207" text-anchor="middle" class="body">0D / 2D / 3D</text><text x="360" y="234" text-anchor="middle" class="tiny">automatic branch</text>
+<path fill="none" d="M465 194 H505" stroke="#314252" stroke-width="3" marker-end="url(#arrow)"/>
+<rect x="510" y="135" width="210" height="118" rx="10" class="dark"/><text x="615" y="174" text-anchor="middle" class="label">Relaxation</text><text x="615" y="207" text-anchor="middle" class="lightBody">VASP / MACE</text><text x="615" y="234" text-anchor="middle" class="lightSmall">validated structure</text>
+<path fill="none" d="M720 164 H790" stroke="#2f5fa7" stroke-width="3" marker-end="url(#arrow)"/><path fill="none" d="M720 224 H755 V326 H790" stroke="#b8660f" stroke-width="3" marker-end="url(#arrow)"/>
+<text x="804" y="123" class="accent" fill="#2f5fa7">ELECTRONS</text><text x="804" y="280" class="accent" fill="#b8660f">PHONONS</text>
+<rect x="800" y="140" width="210" height="90" rx="10" class="blue"/><text x="905" y="176" text-anchor="middle" class="head">Bands</text><text x="905" y="207" text-anchor="middle" class="small">PBE / HSE</text>
+<rect x="1035" y="140" width="210" height="90" rx="10" class="blue"/><text x="1140" y="176" text-anchor="middle" class="head">Scattering</text><text x="1140" y="207" text-anchor="middle" class="small">dielectric · elastic</text>
+<rect x="1270" y="140" width="210" height="90" rx="10" class="blue"/><text x="1375" y="176" text-anchor="middle" class="head">Transport</text><text x="1375" y="207" text-anchor="middle" class="small">AMSET → σ,S,κe</text>
+<path fill="none" d="M1010 185 H1030 M1245 185 H1265" stroke="#2f5fa7" stroke-width="3" marker-end="url(#arrow)"/>
+<rect x="800" y="295" width="210" height="62" rx="10" class="orange"/><text x="905" y="333" text-anchor="middle" class="head">Stability</text>
+<rect x="1035" y="295" width="210" height="62" rx="10" class="orange"/><text x="1140" y="333" text-anchor="middle" class="head">Force constants</text>
+<rect x="1270" y="295" width="210" height="62" rx="10" class="orange"/><text x="1375" y="333" text-anchor="middle" class="head">κL transport</text>
+<path fill="none" d="M1010 326 H1030 M1245 326 H1265" stroke="#b8660f" stroke-width="3" marker-end="url(#arrow)"/>
+<path fill="none" d="M1485 185 H1530 M1485 326 H1530" stroke="#314252" stroke-width="3" marker-end="url(#arrow)"/>
+<rect x="1535" y="140" width="200" height="218" rx="12" fill="#fbedf1" stroke="#a3294a" stroke-width="3"/><text x="1635" y="184" text-anchor="middle" class="head" fill="#a3294a">zT(n,T)</text><text x="1635" y="230" text-anchor="middle" class="body">S²σT</text><text x="1635" y="260" text-anchor="middle" class="small">────────</text><text x="1635" y="289" text-anchor="middle" class="body">κe + κL</text><text x="1635" y="329" text-anchor="middle" class="tiny">validated outputs</text>
+
+<!-- B: 2D native -->
+<text x="35" y="430" class="title">b</text><text x="75" y="430" class="title">Native 2D workflows</text>
+<rect x="30" y="455" width="560" height="650" rx="14" class="panel"/>
+<rect x="70" y="525" width="160" height="300" fill="#fff" stroke="#8190a0" stroke-width="2" stroke-dasharray="8 6"/><ellipse cx="150" cy="665" rx="70" ry="48" fill="#f4c36a"/><circle cx="115" cy="655" r="11" fill="#3f72c4"/><circle cx="150" cy="635" r="11" fill="#d9534f"/><circle cx="185" cy="655" r="11" fill="#3f72c4"/><circle cx="135" cy="690" r="11" fill="#d9534f"/><circle cx="170" cy="690" r="11" fill="#3f72c4"/><text x="150" y="505" text-anchor="middle" class="small">vacuum</text><text x="150" y="860" text-anchor="middle" class="small">vacuum</text><text x="245" y="850" class="small">c</text><path fill="none" d="M240 520 V810" stroke="#238266" stroke-width="3" marker-end="url(#arrow)"/>
+<text x="275" y="525" class="accent">2D-aware rules</text>
+<text x="275" y="575" class="body">Vacuum axis → c</text><text x="275" y="612" class="body">Relaxation → in-plane</text><text x="275" y="649" class="body">Elastic constants → N/m</text><text x="275" y="686" class="body">Dielectric correction</text><text x="275" y="723" class="body">ZA branch → gated</text><text x="275" y="760" class="body">κL, σ, κe → × c/t</text><text x="275" y="820" class="tiny">Dimension-aware inputs,</text><text x="275" y="846" class="tiny">checks and output conventions.</text>
+<rect x="70" y="915" width="440" height="105" rx="10" class="green"/><text x="290" y="955" text-anchor="middle" class="head">Physics-aware treatment</text><text x="290" y="987" text-anchor="middle" class="small">It changes relaxation, units, stability,</text><text x="290" y="1009" text-anchor="middle" class="small">transport tensors and acceptance criteria.</text>
+
+<!-- C: AI-agent-ready workflow interface -->
+<text x="640" y="430" class="title">c</text><text x="680" y="430" class="title">AI-agent-ready scientific workflows</text>
+<rect x="635" y="455" width="1135" height="650" rx="14" class="panel"/>
+<rect x="690" y="500" width="330" height="82" rx="12" class="purple"/><text x="855" y="536" text-anchor="middle" class="head" fill="#6650a4">MCP client</text><text x="855" y="565" text-anchor="middle" class="small">Agents supporting local MCP</text>
+<rect x="1170" y="500" width="330" height="82" rx="12" class="green"/><text x="1335" y="536" text-anchor="middle" class="head" fill="#238266">Agent CLI</text><text x="1335" y="565" text-anchor="middle" class="small">JSON request · script · CI</text>
+
+<rect x="760" y="625" width="900" height="165" rx="12" class="white"/><text x="1210" y="665" text-anchor="middle" class="head">Discover skills · inspect state · request actions</text>
+<rect x="795" y="695" width="180" height="55" rx="8" class="blue"/><text x="885" y="728" text-anchor="middle" class="body">inputs / params</text><rect x="1010" y="695" width="180" height="55" rx="8" class="orange"/><text x="1100" y="728" text-anchor="middle" class="body">steps / DAG</text><rect x="1225" y="695" width="180" height="55" rx="8" class="green"/><text x="1315" y="728" text-anchor="middle" class="body">outputs / units</text><rect x="1440" y="695" width="180" height="55" rx="8" class="purple"/><text x="1530" y="728" text-anchor="middle" class="body">errors / recovery</text>
+<path fill="none" d="M855 585 V620 M1335 585 V620" stroke="#314252" stroke-width="3" marker-end="url(#arrow)"/>
+<path fill="none" d="M1210 795 V835" stroke="#314252" stroke-width="3" marker-end="url(#arrow)"/>
+<rect x="760" y="840" width="900" height="105" rx="12" class="dark"/><text x="1210" y="881" text-anchor="middle" class="label">AutoZT: verify, execute and record</text><text x="1210" y="914" text-anchor="middle" class="lightSmall">physical criteria · action gateway · state machine · recovery</text>
+<rect x="760" y="980" width="430" height="76" rx="10" class="orange"/><text x="975" y="1012" text-anchor="middle" class="head">Evidence and results</text><text x="975" y="1038" text-anchor="middle" class="tiny">diagnostics · artifacts · provenance</text>
+<rect x="1230" y="980" width="430" height="76" rx="10" class="blue"/><text x="1445" y="1012" text-anchor="middle" class="head">CPU / GPU backends</text><text x="1445" y="1038" text-anchor="middle" class="tiny">VASP · MACE · phonopy · transport tools</text>
+<path fill="none" d="M975 950 V975 M1445 950 V975" stroke="#314252" stroke-width="3" marker-end="url(#arrow)"/>
+<text x="690" y="1085" class="accent">Skill contracts evolve with the scientific workflows.</text><text x="1660" y="1085" text-anchor="end" class="tiny">Automatic progression does not require an LLM.</text>
+</svg>

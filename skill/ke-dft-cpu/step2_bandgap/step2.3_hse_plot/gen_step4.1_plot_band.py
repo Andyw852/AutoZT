@@ -48,6 +48,7 @@ agent 约定（与检查脚本一致）：
 
 import argparse
 import json
+import os
 import re
 import shutil
 import sys

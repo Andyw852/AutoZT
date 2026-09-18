@@ -29,7 +29,6 @@ from concurrent.futures import ThreadPoolExecutor
 
 from autozt.bootstrap import REASON_MAX
 
-# ===== 来自 07_render.py =====
 # -*- coding: utf-8 -*-
 # 07_render —— 状态表/详情渲染 + 材料/步骤查找
 #
@@ -51,7 +50,6 @@ from autozt.bootstrap import REASON_MAX
 #   L2802  _find_by_dotted
 #   L2816  find_step
 
-# ===== _cell_word (原 L2491-L2517) =====
 def _cell_word(s):
     """步骤第一行状态词：running / pd / error / done / waiting。
     画图步骤（plot）：completed / not started / error。"""
@@ -80,7 +78,6 @@ def _cell_word(s):
         return "blocked"   # 依赖没齐，轮不到它
     return "ready"         # TODO（输入就绪）/ PREP（未生成）：可立即启动
 
-# ===== _short_reason (原 L2525-L2530) =====
 def _short_reason(info, limit=REASON_MAX):
     from autozt import REASON_MAX
     """squeue/qstat 给的原因：去外层括号、压掉空白、截断到 limit 个字符。"""
@@ -89,7 +86,6 @@ def _short_reason(info, limit=REASON_MAX):
         r = " ".join(r[1:-1].split())
     return r[:limit]
 
-# ===== _cell_info (原 L2533-L2546) =====
 def _cell_info(s):
     """步骤第二行：running → "节点 任务号 已跑时长"；pd → "任务号 (原因)"；否则 -。"""
     if s.get("plot"):
@@ -105,7 +101,6 @@ def _cell_info(s):
     reason = _short_reason(j.get("info"))
     return "%s (%s)" % (j["id"], reason) if reason else j["id"]
 
-# ===== _group_word (原 L2549-L2565) =====
 def _group_word(ms):
     """v1.8：分组列状态词（同 group 的成员聚合，如三段式弛豫的 S1_relax 总列）。
     全 done → done；有作业 → running/pd；有 FAIL → error；否则 waiting。"""
@@ -124,7 +119,6 @@ def _group_word(ms):
         return "blocked"
     return "ready"
 
-# ===== _group_info (原 L2568-L2578) =====
 def _group_info(ms):
     """分组列第二行：有作业显示作业实况；未全完成时指明走到哪个组员。"""
     for s in ms:
@@ -137,14 +131,12 @@ def _group_info(ms):
             return s["label"]
     return "-"
 
-# ===== _step_dirname (原 L2581-L2585) =====
 def _step_dirname(s):
     """patch_auto2：步骤在超算上的目录名（basename）。dir 缺失时退回 name。
     通用取法，不依赖任何技能的命名约定。"""
     d = s.get("dir") or s.get("name") or ""
     return os.path.basename(str(d).rstrip("/")) or "-"
 
-# ===== _group_dir (原 L2588-L2598) =====
 def _group_dir(ms):
     """patch_auto2：分组列第三行——当前落在哪个子步骤（显示其超算目录名）。
     有作业的优先（和第二行的作业号对得上）；否则取第一个未完成的；
@@ -157,7 +149,6 @@ def _group_dir(ms):
             return _step_dirname(s)
     return _step_dirname(ms[-1]) if ms else "-"
 
-# ===== _sub_row_cell (原 L2601-L2614) =====
 def _sub_row_cell(ms):
     """状态表第三行：分组列显示当前子步骤目录名；单步列默认 -。
     若该列步骤依赖了被 optional_steps 关掉的步骤（_missing_deps 非空），
@@ -173,7 +164,6 @@ def _sub_row_cell(ms):
     rem = "缺" + ",".join(rems)
     return rem if base in ("", "-") else "%s（%s）" % (base, rem)
 
-# ===== render_table (原 L2617-L2730) =====
 def render_table(data):
     types = data["types"]
     # v1.3.3：多技能按类型分表——此前全局列 = 所有技能步骤的并集，
@@ -289,7 +279,6 @@ def render_table(data):
         for tt, name, lab in scl:
             print("  [%-3s] %-22s %s" % (tt, name, lab))
 
-# ===== render_detail (原 L2733-L2754) =====
 def render_detail(m):
     extra = ""
     if m.get("hpc_name"):
@@ -315,7 +304,6 @@ def render_detail(m):
             s["label"], s["name"], s["label_txt"], s["diag"], job_txt, active))
     print("Action: %s" % m["action"])
 
-# ===== find_material (原 L2760-L2783) =====
 def find_material(data, name):
     """-p 解析：精确名 > basename > 子串；跨类型命中多个时提示补 -tt。"""
     for mode in ("exact", "base", "sub"):
@@ -341,7 +329,6 @@ def find_material(data, name):
                  % (name, ", ".join(m["name"] for _, m in hits)))
     return hits[0]
 
-# ===== _step_seq_match (原 L2786-L2799) =====
 def _step_seq_match(s, n):
     from autozt import _seq_key
     """v1.8：整数 -j N 匹配逻辑步骤号 N。
@@ -358,7 +345,6 @@ def _step_seq_match(s, n):
     # 名字前缀：stepN 后面不能紧跟小数点（否则是 stepN.M 子步）
     return bool(re.match(r"step%d(?!\.\d)" % n, nm))
 
-# ===== _find_by_dotted (原 L2802-L2813) =====
 def _find_by_dotted(steps, jname):
     from autozt import _name_seq, _seq_key, step_seq
     """v1.8：-j 2.1 这类点号 token，按 seq / 名字序号精确匹配。命中返回步骤，否则 None。"""
@@ -373,7 +359,6 @@ def _find_by_dotted(steps, jname):
             return s
     return None
 
-# ===== find_step (原 L2816-L2833) =====
 def find_step(m, jname):
     steps = m["steps"]
     if jname.isdigit():
@@ -402,7 +387,6 @@ def find_step(m, jname):
              % (m["name"], jname,
                 ", ".join("%s|%s" % (s["label"], s["name"]) for s in steps)))
 
-# ===== 来自 08_assets.py =====
 # -*- coding: utf-8 -*-
 # 08_assets —— 技能资源定位 / step.conf 构建
 #
@@ -420,7 +404,6 @@ def find_step(m, jname):
 #   L3176  fill_local_dim
 #   L3213  cmd_conf
 
-# ===== _skill_asset_dirs (原 L2839-L2904) =====
 def _skill_asset_dirs(t, m, base, sname=None):
     from autozt import COMMON_POOL_DIR
     """一个技能根目录下的查找顺序（模板目录布局，v1.3）。
@@ -489,7 +472,6 @@ def _skill_asset_dirs(t, m, base, sname=None):
             uniq.append(d)
     return uniq
 
-# ===== _same_file (原 L2907-L2912) =====
 def _same_file(a, b):
     try:
         with open(a, "rb") as fa, open(b, "rb") as fb:
@@ -497,7 +479,6 @@ def _same_file(a, b):
     except OSError:
         return False
 
-# ===== find_asset (原 L2918-L2993) =====
 def find_asset(cfg, t, m, fname, sname=None):
     from autozt import _PKG_DIR, _PKG_ROOT, _SKILL_ONLY, step_cfg
     """v3 资源查找链：材料/<技能>/逻辑名（v1.6 最优先）→ project_setting/逻辑名
@@ -678,7 +659,6 @@ def _stepconf_mod(cfg, t, m):
     _STEPCONF_MOD[key] = mod
     return mod
 
-# ===== step_conf_sources (原 L3016-L3055) =====
 def step_conf_sources(cfg, t, m, sname):
     from autozt import STEP_CONF, _PKG_ROOT, _SKILL_ONLY
     """收集该步骤的 step.conf 分层来源，低优先级在前。
@@ -720,7 +700,6 @@ def step_conf_sources(cfg, t, m, sname):
                  "%s 本步" % tag)
     return out
 
-# ===== _cluster_conda_step_conf (原 L3058-L3092) =====
 def _cluster_conda_step_conf(m, hpc_name=None):
     from autozt import _load_yaml_file, pkg_setting_path
     """从集群 setting/<name>.yaml 读 conda_sh/conda_env/mace_model_dir，拼成 step.conf
@@ -758,7 +737,6 @@ def _cluster_conda_step_conf(m, hpc_name=None):
         lines.append("REFERENCES_DIR = %s" % rdir)
     return "\n".join(lines) + "\n"
 
-# ===== build_step_conf (原 L3095-L3126) =====
 def build_step_conf(cfg, t, m, sname):
     from autozt import step_cfg
     """把分层 step.conf 合并成一份带来源注释的文本。无任何来源时返回 None。"""
@@ -793,7 +771,6 @@ def build_step_conf(cfg, t, m, sname):
     header += ["#   %s %s   (%s)" % (tg, pt, nt) for tg, pt, nt in legend]
     return mod.dumps(merged, prov, header), legend
 
-# ===== _dim_mod (原 L3132-L3173) =====
 def _dim_mod(cfg, t):
     from autozt import COMMON_POOL_DIR, _DIM_MOD, _PKG_ROOT
     """按技能加载 dim_common.py（band 在技能根，ke 在 step1_opt/ 等子目录）。"""
@@ -837,7 +814,6 @@ def _dim_mod(cfg, t):
     _DIM_MOD[key] = mod
     return mod
 
-# ===== fill_local_dim (原 L3176-L3210) =====
 def fill_local_dim(cfg, data, types=None):
     """v1.9.5：dim 原本只来自远端 workflow_method.txt，也就是 gen 跑过才有。
     还没 gen 的材料改用本地 POSCAR 现算一个，结果加 * 表示是预判值
@@ -874,7 +850,6 @@ def fill_local_dim(cfg, data, types=None):
             except Exception:
                 pass
 
-# ===== cmd_conf (原 L3213-L3250) =====
 def cmd_conf(cfg, data, proj, jname, sets=None):
     from autozt import STEP_CONF
     """查看/修改某步骤的 step.conf。--set 一律写进【本步的项目文件】。"""
@@ -915,7 +890,6 @@ def cmd_conf(cfg, data, proj, jname, sets=None):
     print("\n".join(l for l in text.splitlines() if not l.startswith("#")))
     return 0
 
-# ===== 来自 10_summary.py =====
 # -*- coding: utf-8 -*-
 # 10_summary —— status / summary 命令
 #
@@ -932,7 +906,6 @@ def cmd_conf(cfg, data, proj, jname, sets=None):
 #   L3711  _summary_lines
 #   L3754  cmd_summary
 
-# ===== find_uninited (原 L3614-L3635) =====
 def find_uninited(cfg):
     from autozt import discover_local, find_ps_dir
     """project_roots 下有 POSCAR 但向上找不到 project_setting/tf_*.yaml 的材料目录
@@ -957,11 +930,9 @@ def find_uninited(cfg):
             out.append(m["name"])
     return out
 
-# ===== _mat_all_done (原 L3638-L3639) =====
 def _mat_all_done(m):
     return bool(m["steps"]) and all(s["kind"] == "OK" for s in m["steps"])
 
-# ===== apply_hide_done (原 L3642-L3654) =====
 def apply_hide_done(data):
     """v1.1 --hide-done / hide_done: true：状态表隐藏全部步骤都完成的项目。"""
     n = 0
@@ -976,7 +947,6 @@ def apply_hide_done(data):
     if n:
         print("（已隐藏 %d 个全部完成的项目；加 --show-done 显示）" % n)
 
-# ===== cmd_status (原 L3657-L3662) =====
 def cmd_status(cfg, data, mname, jname):
     if mname:
         t, m = find_material(data, mname)
@@ -995,7 +965,6 @@ def cmd_status(cfg, data, mname, jname):
     else:
         render_table(data)
 
-# ===== _step_status_word (原 L3665-L3680) =====
 def _step_status_word(s):
     """步骤状态短词（供快照 diff 用）。刻意不含动态诊断——压力值/力值等每轮
     都会波动的数字不该触发"有变化"，否则巡检每轮都被误报刷屏。"""
@@ -1013,7 +982,6 @@ def _step_status_word(s):
     return {"OK": "done", "WAIT": "wait", "TODO": "todo", "PREP": "prep",
             "SCANCEL": "scancel", "IMAG": "imaginary"}.get(kind, str(kind))
 
-# ===== _summary_snapshot (原 L3683-L3692) =====
 def _summary_snapshot(data):
     """结构化快照：type → material → step_label → 状态短词。
     供 summary --diff 做步骤级对比——能精确告诉 agent "谁从什么变到什么"。"""
@@ -1025,7 +993,6 @@ def _summary_snapshot(data):
         snap[t["key"]] = tm
     return snap
 
-# ===== _snapshot_diff (原 L3695-L3708) =====
 def _snapshot_diff(old, new):
     """返回变更列表 [(type, material, label, 旧词, 新词)]（按名字排序）。"""
     changes = []
@@ -1071,7 +1038,6 @@ def _json_changes(data, state_path):
         "unchanged": not first_run and len(diffs) == 0,
     }
 
-# ===== _summary_lines (原 L3711-L3751) =====
 def _summary_lines(data):
     """把 data 规约成 summary 的文本行（打印与 diff 共用）。"""
     lines = []
@@ -1115,7 +1081,6 @@ def _summary_lines(data):
                      % (q.get("R", 0), q.get("PD", 0), q.get("total", 0)))
     return lines
 
-# ===== cmd_summary (原 L3754-L3787) =====
 def cmd_summary(data, diff=False, state_path=None):
     """只读极简汇总（省 token）：每类型一行计数（run/pd 分开）+ FAIL 清单（含
     诊断原因）+ 全局队列。供 agent 巡检用。
@@ -1296,13 +1261,20 @@ def cmd_diagnose(cfg, data, mname, jname):
         # （handler 名 + 风险等级 + 可照抄的 tf 命令）。纯本地匹配，不连超算。
         # 库不在/加载失败都不影响 diagnose 本身——空列表即可。
         corr = []
+        repair = {"class": "unknown", "mode": "llm_review",
+                  "reason": "纠错库未提供可执行分类"}
+        handoff = None
         try:
             from autozt import suggest_for_diag
-            corr = suggest_for_diag(
-                cfg, material=m.get("name"), skill=t.get("key"),
-                step=s.get("name"), label=s.get("label"), workdir=s.get("dir"),
-                diag=s.get("diag") or "", diag_code=code,
-                host=m.get("host_eff"), job_id=(s.get("job") or {}).get("id"))
+            from autozt.corrections import repair_classification, llm_handoff
+            ctx_kw = dict(material=m.get("name"), skill=t.get("key"),
+                          step=s.get("name"), label=s.get("label"), workdir=s.get("dir"),
+                          diag=s.get("diag") or "", diag_code=code,
+                          host=m.get("host_eff"), job_id=(s.get("job") or {}).get("id"))
+            corr = suggest_for_diag(cfg, **ctx_kw)
+            repair = repair_classification(corr)
+            if repair.get("mode") == "llm_review":
+                handoff = llm_handoff(ctx_kw, corr)
         except Exception:
             corr = []
         steps.append({
@@ -1314,6 +1286,8 @@ def cmd_diagnose(cfg, data, mname, jname):
             "suggested_action": act,
             "action_reason": reason,
             "corrections": corr,
+            "repair": repair,
+            "llm_handoff": handoff,
             "job": s.get("job"),
             "dir": s.get("dir"),
         })
@@ -1361,4 +1335,3 @@ def _json_paginate(data, offset, limit):
     page = flat[offset:offset + limit] if limit is not None else flat[offset:]
     return {"materials": page, "total": len(flat), "offset": offset,
             "limit": limit}
-

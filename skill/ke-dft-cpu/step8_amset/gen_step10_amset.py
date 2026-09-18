@@ -52,6 +52,11 @@ def _disc_gate():
 
 OUTDIR_NAME = "step8_amset"
 WAVE_DIR    = "step4_wave"
+# patch_wavefunction_full（2026-09-18，V26）：可选改读全网格 h5（step4b_wave_full，
+#   ISYM=-1 写出全部 k 点）。三维"单变量"对照用：h5 与 vasprun 必须同源（都取
+#   step3b/step4b），否则 h5 点数与 vasprun 推出的网格对不上，AMSET 会退回去对称化，
+#   对照就不成立。默认 False = 仍读 step4_wave，行为与以前完全一致。
+WAVEFUNCTION_FULL = False
 READ_DIR    = "step7b_deform_read"
 DIELECT_DIR = "step5_dielect"
 # patch_ke_dag：跟上 v1.9 的目录重命名。HSE 优先，其次 PBE，最后兼容老目录。
@@ -61,7 +66,11 @@ BANDGAP_PLOT_CANDS = [
     "step4_band_plot",
 ]
 STEP_LABEL  = "S8_kappa"
-AMSET_CMD   = ('amset run >> amset.log 2>&1 && cp -f "$(ls -t transport_*.json 2>/dev/null | head -1)" transport.json && ls -l transport.json')
+# patch_overlap_preflight（V24/V25.10）：作业内先跑运行前检查 —— 运行目录里
+#   wavefunction.h5 / vasprun.xml / ../step3_uniform 都在，②③④ 三项才真正生效；
+#   不过就直接 exit 1，宁可不跑也不出不可信的数。脚本由 gen 复制进运行目录。
+AMSET_CMD   = ('python overlap_preflight.py --in-job || exit 1; '
+               'amset run >> amset.log 2>&1 && cp -f "$(ls -t transport_*.json 2>/dev/null | head -1)" transport.json && ls -l transport.json')
 # --- 输运设置（可改）---
 DOPING      = "-1e21:-1e17:5, 1e17:1e21:5"   # n 型 + p 型各 5 点（对数均布）cm^-3
 TEMPERATURES = "100:900:9"            # 100,200,...,900 K，每 100 K 一个点
@@ -78,6 +87,17 @@ REQUIRE_BANDGAP = True
 # patch_interp_factor：AMSET 的收敛判据在**插值后**的网格上，别吃默认值 5。
 #   设 None 则不写这一行（回到 AMSET 默认）。加大前先做收敛测试。
 INTERPOLATION_FACTOR = 10
+# patch_unity_overlap_3d（2026-09-17，VERIFICATION V25）：
+#   显式把 unity_overlap 写进 settings.yaml —— 以前这一行是缺的，AMSET 默认 False
+#   （真实重叠），于是所有走本步的项目都默认用"真实重叠 + 去对称化 h5"这个组合。
+#   ★ 分维处理（用户 2026-09-17 定）：
+#     - 2D：**直接写 unity_overlap: true**。二维已实测去对称化会把重叠算坏
+#       （MoS2：ADP 迁移率被抬高 10~16 倍，V23），补丁已在 8.4 落地。
+#     - 3D：**不强制**，只打 WARNING。三维受影响面已确认（Si / 225 / Al5N 都走了这条路），
+#       但"是否真算错"要等 Si 的全网格对照（V25）。Si 有 6 个等价能谷，
+#       若改用 unity 最多会把迁移率低估约 6 倍，代价比二维大得多 ——
+#       所以结论出来之前不擅自改。
+UNITY_OVERLAP_2D = True
 # NWORKERS：AMSET 的并行进程数，会写进 settings.yaml 的 nworkers。
 #   ★ 2026-09-16 新增：此前**不写 nworkers**，AMSET 取默认 -1，其源码
 #     (amset/interpolation/bandstructure.py:182) 把 -1 解释成
@@ -131,6 +151,8 @@ SPEC = {
     # 静默回默认值，用户在 step.conf 里写了等于没写）。
     # 技能侧的落点是 skill/ke-dft-cpu/step8_amset/step.conf，不是技能全局 step.conf。
     "NWORKERS": (NWORKERS, "int"),
+    # 全网格 h5 对照（三维裁定）；默认 False，既有三维项目行为不变。
+    "WAVEFUNCTION_FULL": (WAVEFUNCTION_FULL, "bool"),
 }
 # 2D 时给 settings.yaml 写 free_carrier_screening: true
 FREE_CARRIER_SCREENING_2D = True
@@ -245,8 +267,16 @@ def read_dielectric(dielect_dir: Path):
             % (eps_0[0][0], eps_0[1][1], eps_0[2][2], eps_static[0][0]))
     _coup = [1.0 / eps_inf[i][i] - 1.0 / eps_static[i][i] for i in range(3)]
     if max(abs(c) for c in _coup) < 1e-9:
-        _diele_fail("eps_static 与 eps_inf 对角项相同，Frohlich 耦合 %.3e 恒为 0 -> "
-                    "POP 散射不生效。" % max(abs(c) for c in _coup))
+        if _is_nonpolar():
+            # 单元素非极性体系（Si / Ge / 金刚石…）没有 IR 活性声子，离子介电
+            # 恒为 0 -> eps_static == eps_inf 是**物理正确**结果（不是 DFPT 失效）。
+            # POP 散射会在下游 _amset_scatterers() 里按物理口径被剔除，
+            # 所以这里不能当成"step5_dielect 产物不可用"拦下。
+            print("[WARN] 非极性体系 eps_static == eps_inf（物理正确）——"
+                  "POP 散射将在散射列表里被剔除，结果里应注明该项缺失。")
+        else:
+            _diele_fail("eps_static 与 eps_inf 对角项相同，Frohlich 耦合 %.3e 恒为 0 -> "
+                        "POP 散射不生效。" % max(abs(c) for c in _coup))
     return eps_inf, eps_static
 
 
@@ -898,6 +928,17 @@ def write_settings(out: Path, eps_inf, eps_static, gap, elastic,
               "deformation_potential: deformation.h5"]
     if INTERPOLATION_FACTOR:     # patch_interp_factor
         lines.append("interpolation_factor: %d" % int(INTERPOLATION_FACTOR))
+    # patch_unity_overlap_3d（V25）：2D 强制 unity；3D 只告警
+    if is_2d:
+        lines.append("unity_overlap: %s" % ("true" if UNITY_OVERLAP_2D else "false"))
+        lines.append("# ^ 2D：去对称化会把真实重叠算坏（V23），一律用 unity_overlap。")
+    else:
+        lines.append("# unity_overlap 未写 -> AMSET 默认 False = **真实重叠**。")
+        lines.append("# [WARN] 三维受影响面已确认（Si / 225 / Al5N 都走了'去对称化 + 真实重叠'"
+                     "这个组合），")
+        lines.append("#   但'是否真算错'待 Si 的全网格对照（VERIFICATION V25）。结论出来前不擅自改；")
+        lines.append("#   届时若确认要改，在此写 unity_overlap: true（注意 Si 有 6 个谷，"
+                     "unity 最多低估约 6 倍）。")
     # ★ 必须显式写 nworkers：不写则 AMSET 默认 -1 = 用满节点全部核，
     #   会超订 submit 模板申请的核数（见文件头 NWORKERS 处的实测记录）。
     lines.append("nworkers: %d" % int(NWORKERS))
@@ -997,10 +1038,57 @@ def _alloc_cores(cwd: Path):
     return max(1, ntasks * cpus), "%s（%d × %d）" % (src, ntasks, cpus)
 
 
+# ---------------------------------------------------------------------------
+# patch_overlap_preflight（V24 / V25.10）：重叠路径的运行前检查
+#   ① gen 时（本机）：只有生成的输入，能查的是维度/重叠模式/版本 -> 挡住 2D+真实重叠；
+#   ② 作业内：AMSET_CMD 里先跑 --in-job，h5 完整性 / S3-S3b 能带一致性 / 带窗口全查。
+# ---------------------------------------------------------------------------
+PREFLIGHT_SRC_NAME = "overlap_preflight.py"
+
+
+def _install_preflight(out):
+    """把 overlap_preflight.py 复制进运行目录（作业内 --in-job 要用）。"""
+    here = Path(__file__).resolve().parent
+    src = next((p for p in (here / PREFLIGHT_SRC_NAME, Path.cwd() / PREFLIGHT_SRC_NAME)
+                if p.is_file()), None)
+    if src is None:
+        print("[WARN] 找不到 %s —— 作业内的运行前检查会跳过（gen 时仍检查）"
+              % PREFLIGHT_SRC_NAME)
+        return False
+    import shutil
+    dst = Path(out) / PREFLIGHT_SRC_NAME
+    if src.resolve() != dst.resolve():
+        shutil.copyfile(src, dst)
+    return True
+
+
+def _preflight_gate(cwd, out, unity):
+    """gen 时的运行前检查：能读到的项当场查，读不到的（无 h5/vasprun）自动跳过。"""
+    try:
+        import overlap_preflight as _pf
+    except Exception as e:                                   # noqa: BLE001
+        print("[WARN] 运行前检查脚本不可用（%s: %s）——跳过" % (type(e).__name__, e))
+        return
+    try:
+        verdict, lines = _pf.run(cwd, out, unity)
+    except Exception as e:                                   # noqa: BLE001
+        print("[WARN] 运行前检查失败（%s: %s）——不拦截，请人工确认"
+              % (type(e).__name__, e))
+        return
+    print("[..] 重叠路径运行前检查：")
+    for _l in lines:
+        print("[..] " + _l)
+    if verdict == "error":
+        sys.exit("[ERROR] 重叠路径运行前检查未通过 —— 见上面标 ★ 的行。"
+                 "\n        这一步会产出不可信的结果，必须先修（V24/V25）。")
+    if verdict == "warn":
+        print("[WARN] 重叠路径运行前检查有告警（见上）——不拦截，请人工确认。")
+
+
 def main():
     _disc_gate()
     cwd = Path.cwd()
-    global LAYER_THICKNESS, NWORKERS
+    global LAYER_THICKNESS, NWORKERS, WAVEFUNCTION_FULL
     _conf_nworkers = None
     if (cwd / "step.conf").is_file():
         # strict=False：材料级 step.conf 是【全技能共用】的一份，含别的步骤的键
@@ -1017,6 +1105,11 @@ def main():
             # NWORKERS 允许按材料/步骤覆盖；不写（None）= 自动，见下面。
             if _p["NWORKERS"]:
                 _conf_nworkers = int(_p["NWORKERS"])
+            # 全网格 h5（三维单变量对照）：显式开关，默认 False。
+            if _p["WAVEFUNCTION_FULL"]:
+                WAVEFUNCTION_FULL = True
+                print("[..] WAVEFUNCTION_FULL=true：wavefunction.h5 ← step4b_wave_full"
+                      "（全网格，ISYM=-1），vasprun.xml ← step3b_uniform_full")
         except (KeyError, ValueError, TypeError):
             pass  # step.conf 读不成时保持出厂默认（LAYER_THICKNESS="vdw" / NWORKERS 自动）
 
@@ -1042,14 +1135,17 @@ def main():
                   "载流子输运建立在能带色散和布里渊区积分上，孤立分子两者都没有")
     out = cwd / OUTDIR_NAME
     out.mkdir(exist_ok=True)
-    link(out, cwd / WAVE_DIR / "wavefunction.h5", "wavefunction.h5")
+    _wdir = "step4b_wave_full" if WAVEFUNCTION_FULL else WAVE_DIR
+    link(out, cwd / _wdir / "wavefunction.h5", "wavefunction.h5")
     link(out, cwd / READ_DIR / _pick_deformation_h5(cwd, READ_DIR), "deformation.h5")
     # patch_amset_vasprun：amset run 还需要密网格 vasprun.xml 拿能带色散
+    _vdirs = (("step3b_uniform_full",) if WAVEFUNCTION_FULL
+              else ("step3_uniform", "step4_wave"))
     _vr = next((cwd / _d / "vasprun.xml"
-                for _d in ("step3_uniform", "step4_wave")
+                for _d in _vdirs
                 if (cwd / _d / "vasprun.xml").is_file()), None)
     if _vr is None:
-        sys.exit("[ERROR] 找不到 vasprun.xml（step3_uniform / step4_wave 没跑完？）")
+        sys.exit("[ERROR] 找不到 vasprun.xml（%s 没跑完？）" % " / ".join(_vdirs))
     link(out, _vr, "vasprun.xml")
     eps_inf, eps_static = read_dielectric(cwd / DIELECT_DIR)
     gap = read_bandgap(cwd)
@@ -1079,6 +1175,9 @@ def main():
               "ACD 声学散射需要它。")
     write_settings(out, eps_inf, eps_static, gap, elastic,
                    is_2d=is_2d, c_len=c_len)
+    # patch_overlap_preflight（V24/V25.10）：gen 时的配置闸 + 把检查脚本带进运行目录
+    _install_preflight(out)
+    _preflight_gate(cwd, out, UNITY_OVERLAP_2D if is_2d else False)
 
     # tf 把 submit_amset.tpl 与本脚本一起推到 gen 运行目录，但按原名推、不会改成
     # submit.sh；本步自己把它渲染成 out/submit.sh（维度步靠各自 gen 的 render，这里同理）。

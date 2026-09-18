@@ -150,16 +150,16 @@ io_schema:
   params:
     - {name: METHOD, values: [alm, findiff], default: alm, where: step.conf,
        desc: "位移生成方式：alm = 随机位移+压缩感知（帧数少）；findiff = phono3py 对称有限位移"}
-    - {name: FIT_ENGINE, values: [phono3py, pheasy], default: phono3py, where: step.conf,
-       desc: "力常数拟合引擎；pheasy 需要 METHOD=alm（随机位移压缩感知）"}
+    - {name: FIT_ENGINE, values: [auto, phono3py, pheasy], default: auto, where: step.conf,
+       desc: "力常数拟合引擎；auto = 按 DIM/帧数选（多为 phono3py），pheasy 需要 METHOD=alm（随机位移压缩感知）"}
     - {name: FC_CALC, values: [symfc, alm], default: symfc, where: step.conf,
        desc: "phono3py 的拟合后端：symfc（对称性约束）或 alm"}
     - {name: SOLVER, values: [phono3py, shengbte], default: phono3py, where: step.conf,
        desc: "BTE 求解器（shengbte 走 FORCE_CONSTANTS_2ND/3RD 双格式导出）"}
     - {name: BTE_METHOD, values: [rta, lbte], default: rta, where: step.conf,
        desc: "单模弛豫时间近似（快）或直接解线性化 BTE（准，内存 O(N_mode^2)）"}
-    - {name: KAPPA_MESH, default: "15 15 15", where: step.conf,
-       desc: "BTE q 网格（2D 自动把真空方向压 1）"}
+    - {name: KAPPA_MESH, default: auto, where: step.conf,
+       desc: "BTE q 网格：auto = 2D 按倒空间长度估（Q_LEN_2D/MESH_MIN，真空轴=1）、3D 用 15 15 15；也可写 auto3d 或 \"N N N\""}
     - {name: IMAG_THR, default: 0.10, where: step.conf,
        desc: "虚频闸（THz）：最小频率低于 -IMAG_THR 判结构不稳定，S6_kappa 不启动"}
     - {name: MAX_DISP, default: 500, where: step.conf,

@@ -28,6 +28,13 @@ class DirMissingCorrection(CorrectionHandler):
                      "若该步是扇出步骤（如 step5_label）：只补未完成的用 retry，"
                      "绝不 rerun/clean"],
             commands=[base, rerun],
+            changes=[{"target": "step_directory", "operation": "regenerate",
+                      "path": ctx.workdir or ""}],
+            verify=["确认目标步骤目录和输入文件已由 AutoZT 重新生成",
+                    "确认没有误删除已有产物"],
+            rollback=["rerun 会删除步骤目录，无法由 handler 自动回滚；执行前必须人工确认"],
+            requires_approval=True,
+            execute_via="autozt retry（优先）或经批准的 autozt rerun",
             notes="受保护材料（目录下有 AGENTS-PROTECTED.md）一律不许 rerun/clean。")
 
 

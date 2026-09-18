@@ -104,10 +104,10 @@ io_schema:
     - {name: FORCES_FC3, step: S2_force, type: text,
        desc: "超胞位移力数据集（phono3py 格式）；fc2/fc3.hdf5 动辄上 GB，留在超算不拉回"}
   params:
-    - {name: MACE_MODEL, default: "mace-mp:medium", where: step.conf,
-       desc: "MACE 势：内置名或本地 .model 路径（换势 = 换这一项）"}
-    - {name: DEVICE, values: [cuda, cpu], default: cuda, where: step.conf,
-       desc: "MACE 推理设备（本技能默认 GPU；CPU 版见 kl-mace-cpu）"}
+    - {name: MACE_MODEL, default: "MACE-matpes-pbe-omat-ft.model", where: step.conf,
+       desc: "MACE 势：内置名或本地 .model 路径（换势 = 换这一项）；技能默认用 Materials Project 微调势"}
+    - {name: DEVICE, values: [auto, cuda, cpu], default: auto, where: step.conf,
+       desc: "MACE 推理设备：auto = 按集群/模板解析（GPU 机器上即 cuda；S2_disp 步骤默认写死 cuda）；CPU 版见 kl-mace-cpu"}
     - {name: METHOD, values: [random, findiff], default: random, where: step.conf,
        desc: "random = hiphive MC-rattle 随机位移（默认）；findiff = 对称有限位移"}
     - {name: N_RANDOM, default: auto, where: step.conf,

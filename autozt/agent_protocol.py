@@ -185,7 +185,17 @@ def compact_contract(contract: Any) -> Any:
         out["stats"] = contract["stats"]
     missing = [key for key in ("io_schema", "flow", "corrections")
                if not contract.get(key)]
-    out["contract_status"] = {"complete": not missing, "missing": missing}
+    io_decl = contract.get("io_schema") if isinstance(contract.get("io_schema"), dict) else {}
+    outputs = io_decl.get("outputs") or []
+    normalized = any(isinstance(x, dict) and any(k in x for k in ("type", "unit", "validator", "provenance"))
+                     for x in outputs)
+    out["contract_status"] = {
+        "complete": not missing, "missing": missing,
+        "declarative_only": not normalized,
+        "input_binding": any(isinstance(x, dict) and x.get("from") for x in (io_decl.get("inputs") or [])),
+        "output_normalization": normalized,
+        "readiness": "executable_contract" if not missing and normalized else ("declared_only" if not missing else "incomplete"),
+    }
     if missing and steps:
         out["inferred"] = {"step_graph": [
             {k: step.get(k) for k in ("label", "seq", "needs", "check")
@@ -207,7 +217,16 @@ def compact_skill_list(payload: Any) -> Dict[str, Any]:
             row["coverage"] = item["stats"]
         missing = [key for key in ("io_schema", "flow", "corrections")
                    if not item.get(key)]
-        row["contract_status"] = {"complete": not missing, "missing": missing}
+        io_decl = item.get("io_schema") if isinstance(item.get("io_schema"), dict) else {}
+        normalized = any(isinstance(x, dict) and any(k in x for k in ("type", "unit", "validator", "provenance"))
+                         for x in (io_decl.get("outputs") or []))
+        row["contract_status"] = {
+            "complete": not missing, "missing": missing,
+            "declarative_only": not normalized,
+            "input_binding": any(isinstance(x, dict) and x.get("from") for x in (io_decl.get("inputs") or [])),
+            "output_normalization": normalized,
+            "readiness": "executable_contract" if not missing and normalized else ("declared_only" if not missing else "incomplete"),
+        }
         skills.append(row)
     return {"schema": payload.get("schema") if isinstance(payload, dict) else None,
             "count": len(skills), "skills": skills}

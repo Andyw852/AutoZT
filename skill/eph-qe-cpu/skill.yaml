@@ -1,0 +1,74 @@
+schema: 2
+name: eph-qe-cpu
+desc: QE–Wannier90–Perturbo 电子–声子耦合（CPU）
+version: "0.1"
+
+template_layout: per_step
+template_dir: templates
+
+defaults:
+  hpc: jzzn
+  skill_subdir: true
+
+submit_required: [submit.sh]
+fetch_files: [submit.sh, qe_env.json, scf.in, nscf.in, ph.in, qe2pert.in, pert.in,
+              scf.out, nscf.out, ph.out, qe2pert.out, pert.out, wannier.out,
+              preflight.ok, scf.ok, wannier.ok, phonon.ok, qe2pert.ok, perturbo.ok,
+              eph_summary.json, queue.out, queue.err]
+
+steps:
+  - {seq: 0, name: step0_preflight, label: S0_env, check: marker, marker: "preflight.ok:OK",
+     gen: gen_step0_preflight.py, done_marker: preflight.ok, fetch_all: true,
+     gen_need: [eph_common.py, submit_qe_test.tpl, run_preflight.py]}
+  - {seq: 1, name: step1_scf, label: S1_scf, check: marker, marker: "scf.ok:OK", needs: [step0_preflight],
+     gen: gen_step1_scf.py, done_marker: scf.ok, fetch_all: true,
+     gen_need: [eph_common.py, submit_qe_test.tpl]}
+  - {seq: 2, name: step2_wannier, label: S2_wannier, check: marker, marker: "wannier.ok:OK", needs: [step1_scf],
+     gen: gen_step2_wannier.py, done_marker: wannier.ok, fetch_all: true,
+     gen_need: [eph_common.py, submit_qe_test.tpl]}
+  - {seq: 3, name: step3_phonon, label: S3_ph, check: marker, marker: "phonon.ok:OK", needs: [step1_scf],
+     gen: gen_step3_phonon.py, done_marker: phonon.ok, fetch_all: true,
+     gen_need: [eph_common.py, submit_qe_test.tpl]}
+  - {seq: 4, name: step4_qe2pert, label: S4_qe2pert, check: marker, marker: "qe2pert.ok:OK", needs: [step2_wannier, step3_phonon],
+     gen: gen_step4_qe2pert.py, done_marker: qe2pert.ok, fetch_all: true,
+     gen_need: [eph_common.py, submit_qe_test.tpl]}
+  - {seq: 5, name: step5_perturbo, label: S5_ephmat, check: marker, marker: "perturbo.ok:OK", needs: [step4_qe2pert],
+     gen: gen_step5_perturbo.py, done_marker: perturbo.ok, fetch_all: true,
+     gen_need: [eph_common.py, submit_qe_test.tpl]}
+  - {seq: 6, name: step6_summary, label: S6_summary, check: plot, run: gen, needs: [step5_perturbo],
+     gen: gen_step6_summary.py, done_marker: eph_summary.json, fetch_all: true,
+     gen_need: [eph_common.py]}
+
+requires:
+  exe: [pw.x, ph.x, wannier90.x, pw2wannier90.x, qe2pert.x, perturbo.x]
+  notes: "Perturbo 3.0.0 must be compiled against its compatible QE build and linked with HDF5."
+
+io_schema:
+  inputs:
+    - {name: POSCAR, from: user, required: true, type: structure, desc: "VASP 5 POSCAR；当前生成器支持 3D 体相、Direct 坐标。"}
+    - {name: Si.upf, from: PSEUDO_DIR, required: true, type: UPF, desc: "与 QE 赝势及 PSEUDO_DIR 对应；Si 冒烟测试使用。"}
+  outputs:
+    - {name: si_epr.h5, step: S4_qe2pert, type: hdf5, desc: "QE/Wannier90 转换后的 Perturbo 电子–声子数据。"}
+    - {name: eph_summary.json, step: S6_summary, type: json, desc: "端到端工件与运行日志的可追溯摘要。"}
+  params:
+    - {name: QE_BIN, default: "$PATH", where: job environment, desc: "包含 pw.x、ph.x、pw2wannier90.x 的目录或 PATH。"}
+    - {name: PERTURBO_BIN, default: "$PATH", where: job environment, desc: "包含 qe2pert.x、perturbo.x 的目录或 PATH。"}
+    - {name: WANNIER_BIN, default: "$PATH", where: job environment, desc: "包含 wannier90.x 的目录或 PATH。"}
+    - {name: PSEUDO_DIR, where: job environment, desc: "UPF 赝势目录；Si 测试需要其中的 Si.upf。"}
+  steps:
+    - {step: S0_env, title: "Environment preflight", tool: shell, outputs: [qe_env.json], validator: "all required executables and Si.upf found"}
+    - {step: S1_scf, title: "QE SCF", tool: pw.x, inputs: [POSCAR], outputs: [scf.ok], validator: "JOB DONE"}
+    - {step: S2_wannier, title: "QE NSCF and Wannier", tool: "pw.x + wannier90.x + pw2wannier90.x", outputs: [wannier.ok], validator: "Wannier workflow exits zero"}
+    - {step: S3_ph, title: "DFPT phonons", tool: ph.x, outputs: [phonon.ok], validator: "2x2x2 q-grid exits zero"}
+    - {step: S4_qe2pert, title: "QE to Perturbo", tool: qe2pert.x, outputs: [si_epr.h5], validator: "si_epr.h5 exists"}
+    - {step: S5_ephmat, title: "Interpolated e-ph matrix element", tool: perturbo.x, outputs: [perturbo.ok], validator: "Perturbo ephmat exits zero"}
+    - {step: S6_summary, title: "Summarize", tool: Python, outputs: [eph_summary.json], validator: "JSON exists"}
+
+flow:
+  summary: "QE SCF → NSCF/Wannier90 与 DFPT → qe2pert HDF5 → Perturbo e-ph matrix element"
+  stages:
+    - {name: environment, steps: [S0_env], produces: [qe_env.json]}
+    - {name: QE, steps: [S1_scf, S2_wannier, S3_ph], produces: [scf.ok, wannier.ok, phonon.ok]}
+    - {name: coupling, steps: [S4_qe2pert, S5_ephmat, S6_summary], produces: [si_epr.h5, eph_summary.json]}
+  requires: {environment: "compatible QE, Wannier90, Perturbo and HDF5 installation"}
+corrections: [node_fail, dir_missing]

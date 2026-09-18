@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """workflow —— 工作流执行引擎（大深模块）。
 
-由 _slice/06_state.py + 09_submit.py + 13_advance.py + 11_actions.py 合并而来：
+工作流执行引擎：状态、提交、推进和动作处理。
 状态机 step_state/DAG/门控 + 提交 do_submit/remote_gen + 推进 auto_advance/auto_fetch
 + 动作命令 cmd_start/stop/retry/rerun/clean。四片原本互相缠绕（环1），合并成一个
 模块后环消除。对外接口（小）：step_state / do_submit / auto_advance / auto_fetch /
@@ -25,7 +25,6 @@ import subprocess
 import threading
 
 
-# ===== 来自 06_state.py =====
 
 # -*- coding: utf-8 -*-
 # 06_state —— 步骤状态机 / DAG / 技能并发门控
@@ -51,13 +50,11 @@ import threading
 #   L2420  annotate
 #   L2465  check_duplicates
 
-# ===== _scancel_path (原 L2160-L2162) =====
 def _scancel_path(m):
     from autozt import SCANCEL_MARK
     lp = m.get("lpath")
     return os.path.join(lp, SCANCEL_MARK) if lp else None
 
-# ===== _scancel_load (原 L2165-L2175) =====
 def _scancel_load(m):
     """返回 {"<tt>/<step_name>": {"jobid":..., "time":...}}；无文件/损坏 → {}。"""
     p = _scancel_path(m)
@@ -70,7 +67,6 @@ def _scancel_load(m):
     except Exception:
         return {}
 
-# ===== _scancel_save (原 L2178-L2189) =====
 def _scancel_save(m, marks):
     p = _scancel_path(m)
     if not p:
@@ -84,7 +80,6 @@ def _scancel_save(m, marks):
     except OSError:
         pass
 
-# ===== _scancel_set (原 L2192-L2197) =====
 def _scancel_set(m, step_name, jobid=None):
     """autozt stop 成功后调用：给该步骤打 scancel 标记（auto 不再自动重跑）。"""
     marks = _scancel_load(m)
@@ -92,7 +87,6 @@ def _scancel_set(m, step_name, jobid=None):
         "jobid": jobid, "time": time.strftime("%Y-%m-%d %H:%M:%S")}
     _scancel_save(m, marks)
 
-# ===== _scancel_clear (原 L2200-L2210) =====
 def _scancel_clear(m, step_name=None):
     """step_name=None 清整个材料的标记；否则只清本类型该步骤那条。"""
     marks = _scancel_load(m)
@@ -105,7 +99,6 @@ def _scancel_clear(m, step_name=None):
         del marks[key]
         _scancel_save(m, marks)
 
-# ===== step_state (原 L2213-L2239) =====
 def step_state(step, blocked):
     j = step.get("job")
     if j:
@@ -134,7 +127,6 @@ def step_state(step, blocked):
         return ("TODO", "TODO")
     return ("PREP", "PREP")
 
-# ===== _dag_needs (原 L2250-L2259) =====
 def _dag_needs(t, m, s, prev_name):
     from autozt import step_cfg
     """步骤 s 的依赖名列表。skill.yaml 没写 needs 就回退成\"上一步\"，
@@ -147,7 +139,6 @@ def _dag_needs(t, m, s, prev_name):
         dep = [dep]
     return [str(x) for x in dep]
 
-# ===== _dag_max_inflight (原 L2262-L2271) =====
 def _dag_max_inflight(cfg, m):
     from autozt import _MAX_INFLIGHT_DEFAULT
     st = (m.get("ps") or {}).get("setting") or {}
@@ -160,7 +151,6 @@ def _dag_max_inflight(cfg, m):
                 pass
     return _MAX_INFLIGHT_DEFAULT
 
-# ===== _skill_max_jobs (原 L2283-L2297) =====
 def _skill_max_jobs(cfg, t):
     from autozt import _MAX_JOBS_DEFAULT
     """返回该技能（任务类型）的并发提交上限；None = 不限。"""
@@ -178,7 +168,6 @@ def _skill_max_jobs(cfg, t):
         return None
     return v if v > 0 else None
 
-# ===== _skill_busy_jobs (原 L2300-L2310) =====
 def _skill_busy_jobs(t):
     from autozt import _BUSY_KINDS
     """该技能当前已提交（在跑/排队）的超算作业数。
@@ -192,7 +181,6 @@ def _skill_busy_jobs(t):
             n += len(fj) if fj else 1
     return n
 
-# ===== _SkillGate (原 L2313-L2349) =====
 class _SkillGate(object):
     """按技能统计「已提交作业数」并卡上限；跨材料共享、线程安全。
     auto_advance 串行、autozt start 批量并行都走它，保证同一技能不超 max_jobs。
@@ -231,7 +219,6 @@ class _SkillGate(object):
             if key in self._busy:
                 self._busy[key] = max(0, self._busy[key] - 1)
 
-# ===== _gen_step_input (原 L2352-L2368) =====
 def _gen_step_input(cfg, t, m, s):
     from autozt import log_action, step_cfg
     """只生成单步输入（不 sbatch），供达 max_jobs 上限时本地预初始化用。
@@ -251,7 +238,6 @@ def _gen_step_input(cfg, t, m, s):
     log_action(m, "gen %s（达 max_jobs 上限，先备输入待提交）" % s["label"])
     return True
 
-# ===== _pregenerate_ready (原 L2371-L2379) =====
 def _pregenerate_ready(cfg, t, m, fired=None):
     """达 max_jobs 上限时：把该材料当前就绪步骤的输入都生成好（不 sbatch），
     任务从 PREP 变 TODO（输入就绪）；等下一轮有空位时直接提交（跳过 gen）。"""
@@ -262,7 +248,6 @@ def _pregenerate_ready(cfg, t, m, fired=None):
             continue
         _gen_step_input(cfg, t, m, s)
 
-# ===== _dep_display (原 L2382-L2392) =====
 def _dep_display(m, name):
     """缺失依赖的显示名：优先材料已有步骤的 label，其次被关闭可选组的 label，
     最后 basename。"""
@@ -275,7 +260,6 @@ def _dep_display(m, name):
         return hit[1].get("label") or name
     return os.path.basename(str(name))
 
-# ===== _dag_recompute (原 L2395-L2417) =====
 def _dag_recompute(t, m):
     """按 needs 重算每个步骤的 blocked / kind，并返回就绪集（可立即启动的）。
     依赖全部 OK 才算就绪；FAIL / SCANCEL 不自动推进，交给 retry。"""
@@ -300,7 +284,6 @@ def _dag_recompute(t, m):
         prev = s["name"]
     return ready
 
-# ===== annotate (原 L2420-L2462) =====
 def annotate(data):
     from autozt import FAN_JOBIDS
     for t in data["types"]:
@@ -374,7 +357,6 @@ def _name_matches(m, want, seg=None):
     return bool(proj) and want == "%s/%s" % (proj, name)
 
 
-# ===== check_duplicates (原 L2465-L2485) =====
 def check_duplicates(data):
     """同一类型内项目名不允许重复（报错退出；跨段/跨条目聚合检查）；
     basename 重复给警告。跨类型同名允许。
@@ -427,7 +409,6 @@ def check_duplicates(data):
         sys.exit(_i18n.t("错误：", "error: ") + "\n" + "\n".join(errs))
 
 
-# ===== 来自 09_submit.py =====
 
 # -*- coding: utf-8 -*-
 # 09_submit —— 远端生成 / sbatch 提交 / scancel 取消
@@ -447,7 +428,6 @@ def check_duplicates(data):
 #   L3581  do_rerun_step
 #   L3607  tag_of
 
-# ===== _scancel_desc (原 L3253-L3266) =====
 def _scancel_desc(jobids):
     from autozt import FAN_JOBIDS
     """fixte⑫：把代表 jobid 展开成真实取消数量，用于回显。
@@ -464,7 +444,6 @@ def _scancel_desc(jobids):
         return "%d 个作业（代表 %s）" % (len(ids), " ".join(str(x) for x in jobids))
     return " ".join(str(x) for x in ids)
 
-# ===== remote_scancel (原 L3269-L3279) =====
 def remote_scancel(cfg, jobids, host="__default__"):
     from autozt import FAN_JOBIDS, run_remote
     ids = []                                  # v1.4：代表 jobid → 全部 jobid
@@ -478,7 +457,6 @@ def remote_scancel(cfg, jobids, host="__default__"):
     rc, out = run_remote(cfg, "scancel " + " ".join(jobids), host=host)
     return rc == 0, out
 
-# ===== remote_gen (原 L3282-L3366) =====
 def render_vasp_template(text, filename, step_name, profiles):
     if not re.fullmatch(r"submit_(std|gam|ncl)_(0d|2d|3d)\.tpl", filename):
         return text
@@ -865,7 +843,6 @@ def remote_gen(cfg, t, m, sname, host=None, wd=None):
                              "hpc.yaml / 类型配置 / tf.yaml 的 cores）\n" % _cores)
     return rc == 0, out
 
-# ===== remote_sbatch_fanout (原 L3372-L3433) =====
 # ===== 远端提交去重守卫（fix 重复提交 bug）=====
 # 问题：remote_sbatch / remote_sbatch_fanout 之前直接 sbatch，无原子锁 + 无实时队列检查，
 # kill_if_queued 只用快照。两个进程（agent + monitor.sh、或两台主机、或 _parallel_map 并发）
@@ -1108,7 +1085,7 @@ if __name__ == "__main__":
 
 def _sbatch_guarded(cfg, step_dir, host="__default__", jobname=None, fanout=None,
                     only=None, force=False, submit=None):
-    from autozt import run_remote
+    from autozt import run_remote, sh_b64
     """在远端 step_dir 上：目录锁 + 实时 squeue 去重 + 回执/sacct 防可见性延迟，再 sbatch。
     返回 (ok, out, 逗号分隔 jobid 或 None)。查询失败一律 fail closed（拒绝提交）。"""
     _conf = {
@@ -1187,7 +1164,6 @@ def remote_sbatch(cfg, s, jobname=None, force=False):
     return _sbatch_guarded(cfg, s["dir"], s.get("_host") or "__default__",
                            jobname=jobname, force=force, submit=s.get("submit"))
 
-# ===== kill_if_queued (原 L3462-L3476) =====
 def kill_if_queued(cfg, s, force, tag):
     j = s.get("job")
     if not j:
@@ -1204,7 +1180,6 @@ def kill_if_queued(cfg, s, force, tag):
                                  "成功" if ok else ("失败: " + out)))
     return ok
 
-# ===== do_run_gen_step (原 L3479-L3510) =====
 def do_run_gen_step(cfg, t, m, s, tag):
     from autozt import log_action, run_remote, step_cfg
     """run: gen 的步骤（v3.21 能带画图等）：只在材料目录远端执行 gen 脚本，
@@ -1239,7 +1214,6 @@ def do_run_gen_step(cfg, t, m, s, tag):
           % (tag, marker, ("：" + tail[-1]) if tail else ""))
     return False
 
-# ===== do_submit (原 L3513-L3546) =====
 def do_submit(cfg, t, m, s, force, gen_first, contcar_cp, tag, submit=True):
     from autozt import log_action, run_remote, step_cfg
     """返回 True=成功 / False=失败或被拒绝（供退出码统计）。
@@ -1500,7 +1474,6 @@ def _remote_submit_preflight(cfg, m, s, t=None):
     missing = [x for x in required if not os.path.isfile(os.path.join(dest, x))]
     return (True, "") if not missing else (False, "本地仍缺少 " + ", ".join(missing))
 
-# ===== _fanout_guard (原 L3549-L3578) =====
 def _fanout_guard(m, s, yes, action):
     """kls4：rerun / clean 会 rm -rf 整个步骤目录。扇出步骤（kl 的 S4_disp 等）
     目录里往往躺着几百个算完的位移帧，删掉就是几百个机时；而"补缺帧"用 retry
@@ -1532,7 +1505,6 @@ def _fanout_guard(m, s, yes, action):
         return False
     return True
 
-# ===== do_rerun_step (原 L3581-L3604) =====
 def do_rerun_step(cfg, t, m, s, yes, tag):
     from autozt import log_action, run_remote
     if s.get("job"):
@@ -1559,12 +1531,10 @@ def do_rerun_step(cfg, t, m, s, yes, tag):
     return do_submit(cfg, t, m, s2, force=False, gen_first=True, contcar_cp=False,
                      tag=tag, submit=False)
 
-# ===== tag_of (原 L3607-L3608) =====
 def tag_of(m, s):
     return "%s[%s|%s]" % (m["name"], m["tt"], s["label"])
 
 
-# ===== 来自 13_advance.py =====
 
 # -*- coding: utf-8 -*-
 # 13_advance —— auto_advance / auto_fetch / clean / step init
@@ -1581,7 +1551,6 @@ def tag_of(m, s):
 #   L5193  auto_fetch
 #   L5256  cmd_fetch
 
-# ===== auto_advance (原 L4776-L4885) =====
 def auto_advance(cfg, data):
     from autozt import _AUTO_CASCADE_MAX, _BUSY_KINDS, _load_yaml_file, step_cfg
     """status 时自动推进可开始的步骤（全局 tf.yaml 写 auto_advance: true 开启；
@@ -1698,7 +1667,6 @@ def auto_advance(cfg, data):
               % (len(_skipped), ", ".join(_skipped[:6])
                  + ("…" if len(_skipped) > 6 else "")))
 
-# ===== cmd_step_init (原 L4888-L4927) =====
 def cmd_step_init(cfg, data, proj, job, force):
     from autozt import find_material, find_step, log_action, run_remote, step_cfg
     """tf -p MAT -j STEP init：只生成该步骤的输入文件（gen），不提交。
@@ -1741,7 +1709,6 @@ def cmd_step_init(cfg, data, proj, job, force):
     print("%s: 输入就绪 → %s（检查后用 start 提交）" % (tag, s["dir"]))
     return 0
 
-# ===== cmd_clean (原 L4930-L5085) =====
 def cmd_clean(cfg, data, proj, job, yes, purge_config=False):
     from autozt import _load_yaml_file, _parallel_map, _yaml_type_block_remove, find_material, find_step, log_action, run_remote
     """删除生成物，回到 PREP（材料级保留 POSCAR）。
@@ -1910,7 +1877,6 @@ def cmd_clean(cfg, data, proj, job, yes, purge_config=False):
     results = _parallel_map(_clean_one, todo, desc="clean")
     return sum(r or 0 for r in results)
 
-# ===== _fetch_stamp_clear (原 L5091-L5098) =====
 def _fetch_stamp_clear(m, step_name):
     from autozt import FETCH_STAMP
     """步骤重提交/重生成后调用：清掉抓取戳记，让 auto-fetch 重拉新结果。"""
@@ -1921,7 +1887,6 @@ def _fetch_stamp_clear(m, step_name):
     except OSError:
         pass
 
-# ===== _relay_prev_across_host (原 L5101-L5142) =====
 def _relay_prev_across_host(cfg, m, s, t=None):
     from autozt import _ssh_cmd, log_action
     """per-step 跨集群数据传递：当前步骤与其依赖(needs)步骤不在同一超算时，把本地
@@ -1979,7 +1944,6 @@ def _relay_prev_across_host(cfg, m, s, t=None):
               % (m["name"], p["label"], cur_host, remote_prev))
         log_action(m, "relay %s → %s" % (p["label"], cur_host))
 
-# ===== fetch_material (原 L5145-L5190) =====
 def _fetch_receipt(cfg, m, s):
     """Completion receipt tied to source and configured transfer scope."""
     sc = next((x for x in ((m.get("_seg") or {}).get("steps_cfg") or [])
@@ -2082,7 +2046,6 @@ def fetch_material(cfg, m, only_steps=None, quiet=False, all_files=False,
         log_action(m, "fetch %d 个步骤 → %s" % (nstep, m["result_dir"]))
     return True
 
-# ===== auto_fetch (原 L5193-L5253) =====
 def auto_fetch(cfg, data):
     from autozt import FETCH_STAMP, PROV_DIR
     """status 时自动把"已完成但尚未拉回"的步骤结果保存到本地（本地模式；
@@ -2239,7 +2202,6 @@ def _common_dep_closure(cfg, t, m, need, sname=None):
     return extra
 
 
-# ===== cmd_fetch (原 L5256-L5269) =====
 def cmd_fetch(cfg, data, mname, all_files=False):
     from autozt import find_material
     fails = 0
@@ -2257,7 +2219,6 @@ def cmd_fetch(cfg, data, mname, all_files=False):
     return fails
 
 
-# ===== 来自 11_actions.py =====
 
 # -*- coding: utf-8 -*-
 # 11_actions —— start / stop / retry / rerun 命令
@@ -2282,7 +2243,6 @@ def cmd_fetch(cfg, data, mname, all_files=False):
 #   L4271  _cmd_rerun
 #   L4324  rerun_project
 
-# ===== _start_ready (原 L3790-L3861) =====
 def _start_ready(cfg, t, m, force, incl_scancel=False, gate=None):
     from autozt import _BUSY_KINDS, step_cfg
     """patch_start_dag：把一个材料当前所有就绪步骤交掉，返回失败数。
@@ -2363,6 +2323,13 @@ def _start_ready(cfg, t, m, force, incl_scancel=False, gate=None):
                   "        autozt -tt %s -p %s -j %s start -f"
                   % (m["name"], m["tt"], len(_fails), m["tt"], m["name"],
                      _fails[0].get("label") or _fails[0]["name"]))
+        # [FIX] _pf is imported locally inside the preflight helper above, so it is
+        # NOT a module global: referencing it here raised
+        # "NameError: name '_pf' is not defined" for EVERY material-level
+        # "autozt -p X start" that had no startable step (the only remaining step
+        # is FAIL, which is exactly the case this branch describes).  Import it
+        # where it is used, the way the preflight helper does.
+        from autozt import preflight as _pf
         if _pf._i18n.is_en():
             print(_pf.hint("fail_step"), file=sys.stderr)
         else:
@@ -2371,12 +2338,10 @@ def _start_ready(cfg, t, m, force, incl_scancel=False, gate=None):
                   % (m["name"], m["tt"]))
     return fails
 
-# ===== _retry_targets (原 L3864-L3866) =====
 def _retry_targets(m, retryable):
     """patch_start_dag：所有可 retry 的步骤（原来只看 active 一个）。"""
     return [s for s in m["steps"] if retryable(s)]
 
-# ===== guard_predecessors (原 L3869-L3891) =====
 def guard_predecessors(m, s, force):
     """-j 指定的步骤若前序未完成，需 -f 确认才继续。返回 True=可继续。
 
@@ -2401,7 +2366,6 @@ def guard_predecessors(m, s, force):
         return False
     return True
 
-# ===== cmd_start (原 L3894-L3973) =====
 def cmd_start(cfg, data, mname, jname, force, incl_scancel=False):
     from autozt import _parallel_map, find_material, find_step, step_cfg
     """返回失败次数（含被拒绝的操作）。
@@ -2484,7 +2448,6 @@ def cmd_start(cfg, data, mname, jname, force, incl_scancel=False):
         items, desc="start")
     return sum(r or 0 for r in results)
 
-# ===== cmd_stop (原 L3976-L4065) =====
 # ---------------------------------------------------------------------------
 # 受保护结果目录（代码层硬拦截）：材料目录存在 AGENTS-PROTECTED.md 即只读保护。
 # clean/rerun 等会删产物的命令在动手前先查这里，命中即拒绝（无论 -y/-f）。
@@ -2674,13 +2637,36 @@ def cmd_stop(cfg, data, mname, jname, yes):
               "tf -status scancel start（保留文件）或 rerun（推倒重来）")
     return 0 if ok_all else 1
 
-# ===== retry_submit (原 L4068-L4079) =====
+def _retry_archive_scheduler_logs(cfg, s, tag):
+    """归档旧尝试的调度日志，避免它把 retry 后的新输入继续判成 FAIL。"""
+    from autozt import run_remote, sh_b64
+    step_dir = s.get("dir")
+    if not step_dir:
+        return True
+    script = """cd {step} || exit 1
+mkdir -p .autozt_retry_logs
+stamp=$(date +%Y%m%dT%H%M%S)
+for f in queue.out queue.err slurm-*.out slurm-*.err; do
+  [ -f "$f" ] || continue
+  mv -- "$f" ".autozt_retry_logs/${{f}}.${{stamp}}"
+done
+""".format(step=shlex.quote(step_dir))
+    rc, out = run_remote(cfg, sh_b64(script),
+                         host=s.get("_host") or "__default__")
+    if rc != 0:
+        print("%s: 归档旧调度日志失败。%s" % (tag, out), file=sys.stderr)
+        return False
+    return True
+
+
 def retry_submit(cfg, t, m, s, force, tag):
     from autozt import step_cfg
     """v1.9：retry = 先 scancel 在跑的作业 -> 用【项目配置】重新生成输入 -> 重新提交。
     与 rerun 的区别：retry 不删除步骤目录（保留 OUTCAR/CONTCAR 等已有产物），
     只覆盖生成的输入文件；rerun 会 rm -rf 整个步骤目录。"""
     if s.get("job") and not kill_if_queued(cfg, s, True, tag):
+        return False
+    if not _retry_archive_scheduler_logs(cfg, s, tag):
         return False
     s2 = dict(s)
     s2["job"] = None
@@ -2689,7 +2675,6 @@ def retry_submit(cfg, t, m, s, force, tag):
                          "contcar_to_poscar", False),
                      tag=tag, submit=False)
 
-# ===== cmd_retry (原 L4082-L4126) =====
 def cmd_retry(cfg, data, mname, jname, force, incl_scancel=False):
     from autozt import find_material, find_step
     """incl_scancel：-status scancel 显式筛选过时，SCANCEL 步骤也可 retry
@@ -2739,7 +2724,6 @@ def cmd_retry(cfg, data, mname, jname, force, incl_scancel=False):
                     fails += 1
     return fails
 
-# ===== find_step_soft (原 L4129-L4140) =====
 def find_step_soft(m, jname):
     from autozt import _find_by_dotted, _step_seq_match
     """find_step 的宽容版：材料没有该步骤时返回 None 而不是退出。"""
@@ -2754,7 +2738,6 @@ def find_step_soft(m, jname):
             return s
     return _find_by_dotted(steps, jname)    # v1.8：-j 2.1 点号序号
 
-# ===== step_targets (原 L4143-L4153) =====
 def step_targets(data, jname):
     """跨材料定位同一步骤：返回 [(t, m, s)]，无此步骤的材料跳过。"""
     out = []
@@ -2767,7 +2750,6 @@ def step_targets(data, jname):
         sys.exit(_i18n.t("错误：", "error: ") + "没有任何材料有步骤 '%s'。" % jname)
     return out
 
-# ===== _optional_off_hit (原 L4156-L4175) =====
 def _optional_off_hit(m, jname):
     from autozt import _name_seq, _seq_key, step_seq
     """在被关闭的可选组里找 jname（label/name/seq）。返回 (flag, defs) 或 None。"""
@@ -2790,7 +2772,6 @@ def _optional_off_hit(m, jname):
                 return flag, [dict(x) for x in defs]
     return None
 
-# ===== _def_matches (原 L4178-L4188) =====
 def _def_matches(d, jname):
     from autozt import _name_seq, _seq_key, step_seq
     """可选组步骤定义是否命中 -j token（label/name/seq）。"""
@@ -2804,7 +2785,6 @@ def _def_matches(d, jname):
         sq = _name_seq(d.get("name"))
     return sq is not None and abs(sq - want) < 1e-9
 
-# ===== _fresh_step_dict (原 L4191-L4202) =====
 def _fresh_step_dict(m, sname, sc):
     """按需启用可选组时给新步骤造一个运行时状态（字段与采集器一致）。"""
     d = os.path.normpath(os.path.join(m["path"], sname))
@@ -2818,7 +2798,6 @@ def _fresh_step_dict(m, sname, sc):
         f["diag"] = "not started"
     return f
 
-# ===== enable_optional_group (原 L4205-L4255) =====
 def enable_optional_group(cfg, t, m, flag, defs, jname):
     from autozt import _seq_sort_steps, _yaml_type_block_set
     """按需启用被关闭的可选组：写入项目配置持久化 + 注入当前材料工作流。
@@ -2872,7 +2851,6 @@ def enable_optional_group(cfg, t, m, flag, defs, jname):
     matched_name = next((d.get("name") for d in defs if _def_matches(d, jname)), None)
     return find_step_soft(m, matched_name) if matched_name else None
 
-# ===== cmd_rerun (原 L4258-L4268) =====
 def cmd_rerun(cfg, data, mname, jname, yes, force=False, from_skill=False):
     """rerun = scancel -> rm -rf 步骤目录 -> 重新生成 -> 重新提交。
     from_skill=True（--from-skill）：忽略 project_setting/ 与 材料/<技能>/ 下的
@@ -2885,7 +2863,6 @@ def cmd_rerun(cfg, data, mname, jname, yes, force=False, from_skill=False):
     finally:
         _SKILL_ONLY = False
 
-# ===== _cmd_rerun (原 L4271-L4321) =====
 def _cmd_rerun(cfg, data, mname, jname, yes, force=False):
     from autozt import _parallel_map, find_material, find_step
     fails = 0
@@ -2947,7 +2924,6 @@ def _cmd_rerun(cfg, data, mname, jname, yes, force=False):
         return 0 if ok else 1
     return 0 if rerun_project(cfg, t, m, yes) else 1
 
-# ===== rerun_project (原 L4324-L4366) =====
 def rerun_project(cfg, t, m, yes):
     if _is_protected(m):
         _protect_refuse(m, "rerun")

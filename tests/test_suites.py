@@ -20,7 +20,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # 本机跑（不碰集群）的套件；名字 = tests/suite_<名字>.py
 LOCAL = ["agentgate", "session", "autodeps", "history", "skillspec",
          "correct_cli", "prov", "uniform", "supercell", "templates",
-         "ke_common", "asset_lookup", "poscar_sync"]
+         "ke_common", "asset_lookup", "poscar_sync", "io_schema", "s6_marker"]
 CLUSTER = ["dropin"]
 
 

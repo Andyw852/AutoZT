@@ -40,14 +40,16 @@ steps:
                 n_log10_PF.json, p_log10_PF.json],
      needs: [step1_features]}
 
-+io_schema:
-  inputs: [{name: POSCAR, from: user, required: true, desc: "材料结构"}]
-  outputs: [{name: workflow_outputs, step: final, type: directory, desc: "由技能实际步骤产生的结果文件"}]
+io_schema:
+  inputs: [{name: POSCAR, from: user, required: true, desc: "候选材料结构"}]
+  outputs: [{name: te_features.json, step: S1_feat, type: json, desc: "14 维快速筛选特征"}, {name: te_screen_summary.json, step: S2_pred, type: json, desc: "n/p 型 ZT_e 与功率因子预测"}]
   params: []
-  steps: []
+  steps:
+    - {step: S1_feat, title: "Cheap features", inputs: [POSCAR], outputs: [te_features.json], validator: "n_sites marker"}
+    - {step: S2_pred, title: "Surrogate prediction", inputs: [te_features.json], outputs: [te_screen_summary.json], validator: "PREDICTED marker"}
 flow:
-  summary: "按技能步骤生成并校验科学计算结果"
-  stages: [{name: workflow, steps: [], produces: [workflow_outputs]}]
+  summary: "POSCAR 特征提取 → 替代模型预测 n/p 型热电指标"
+  stages: [{name: screening, steps: [S1_feat, S2_pred], produces: [te_screen_summary.json]}]
 corrections: [node_fail, dir_missing]
 requires:
   python: [numpy]

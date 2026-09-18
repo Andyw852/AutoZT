@@ -46,12 +46,21 @@ DK_MAX_3D    = "0.06"
 #   interpolation_factor，ADP 迁移率 2188~2488）。设 >=3 让 kz 变成内插。
 #   默认 1 = 保持原行为（不动存量 2D 项目）；新项目在 project_setting 里设 3。
 VACUUM_KZ_MIN = 1
-SPEC = {"VACUUM_KZ_MIN": (VACUUM_KZ_MIN, "int")}
 # ---- 成本护栏：网格总点数上限 -------------------------------------------
 #   超了就【报错要求显式覆盖】，而不是静默降密 —— 否则将来又有人用"跳过加密"
 #   绕过，回到同一个坑。参考量级：Si(5.43Å) 0.08 → 25³ ≈ 1.6e4；
 #   Mg4C60 0.05 → 13×13×8 ≈ 1.4e3。
+#   ★ 定义必须排在 SPEC 之前（SPEC 要引用它）。
+#   （2026-09-18 修：此前 SPEC 写在前面，模块导入即 NameError 'UNIFORM_NMAX'，
+#     于是本脚本对任何新材料都直接失败 —— 全网格对照要用 S3 的旧网格才暴露出来。）
 UNIFORM_NMAX = 20000
+SPEC = {"VACUUM_KZ_MIN": (VACUUM_KZ_MIN, "int"),
+        # 密网格判据与成本护栏也可由 step.conf 覆盖（小胞/大 |b| 体系要放宽 DK_MAX）：
+        #   DK_MAX = None -> 按维度取 DK_MAX_2D / DK_MAX_3D
+        "DK_MAX": (None, "float"),
+        "DK_MAX_2D": (DK_MAX_2D, "str"),
+        "DK_MAX_3D": (DK_MAX_3D, "str"),
+        "UNIFORM_NMAX": (UNIFORM_NMAX, "int")}
 FUNC         = "inherit"              # patch_ke_dag: inherit=继承 step1
                                       # 也可写死 pbe | pbesol | pbe-d3
 MANUAL_ENCUT = None                   # None=从 POTCAR 自动；或写数值
@@ -63,6 +72,7 @@ GGA_MAP = {"pbe": "PE", "pbesol": "PS", "pbe-d3": "PE"}
 
 
 def main():
+    global DK_MAX, DK_MAX_2D, DK_MAX_3D, UNIFORM_NMAX
     cwd = Path.cwd()
     out = cwd / OUTDIR_NAME
     out.mkdir(exist_ok=True)
@@ -102,8 +112,13 @@ def main():
         # （2026-09-16 MoS2 S3_uniform 实测：FUNC 让 gen 直接 SystemExit；
         #  stepconf.load 抛的是 SystemExit=BaseException，except Exception 拦不住）。
         try:
-            _kzmin = int(stepconf.load(SPEC, OUTDIR_NAME, str(cwd),
-                                       strict=False)["VACUUM_KZ_MIN"])
+            _conf = stepconf.load(SPEC, OUTDIR_NAME, str(cwd), strict=False)
+            _kzmin = int(_conf["VACUUM_KZ_MIN"])
+            if _conf["DK_MAX"] is not None:
+                DK_MAX = _conf["DK_MAX"]
+            DK_MAX_2D = _conf["DK_MAX_2D"]
+            DK_MAX_3D = _conf["DK_MAX_3D"]
+            UNIFORM_NMAX = _conf["UNIFORM_NMAX"]
         except (KeyError, ValueError, TypeError):
             pass
     if dim == "2d" and _kzmin > 1:

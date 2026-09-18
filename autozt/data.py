@@ -1,6 +1,6 @@
 """data —— 数据采集 / 过滤 / 缓存（真实深模块）。
 
-从 _slice/17_cli.py 抽出的「数据」簇：collect_data + 过滤 + 状态缓存 + 快照。
+数据层：collect_data、过滤、状态缓存和快照。
 被 15_hpc / 16_watch / 17_cli 共同依赖——抽成真模块后环2 即破
 （15/16 依赖 data 而非 17）。跨分片依赖用函数内延迟 import 从包命名空间取。
 """
@@ -10,19 +10,16 @@ import time
 import hashlib
 import json
 
-# ===== _dbg_t (原 L6656-L6660) =====
 def _dbg_t(label, t0):
     """AUTOZT_DEBUG_TIME=1 时向 stderr 打印各阶段耗时。"""
     if os.environ.get("AUTOZT_DEBUG_TIME"):
         import time as _t
         print("[计时] %s: %.1fs" % (label, _t.time() - t0), file=sys.stderr)
 
-# ===== _state_cache_path (原 L6671-L6673) =====
 def _state_cache_path(cfg):
     return os.path.join(cfg.get("_config_dir") or os.getcwd(),
                         ".tf_state_cache.json")
 
-# ===== _state_cache_sig (原 L6676-L6691) =====
 def _state_cache_sig(cfg, types, tt, root):
     """缓存键：主配置 mtime+size + 采集范围指纹。"""
     cst = None
@@ -40,7 +37,6 @@ def _state_cache_sig(cfg, types, tt, root):
                                   t.get("local_root", ""))).encode("utf-8"))
     return (cst, tt, root, h.hexdigest())
 
-# ===== _state_cache_save (原 L6694-L6715) =====
 def _state_cache_save(cfg, data, types, tt, root):
     try:
         import tempfile as _tf
@@ -64,7 +60,6 @@ def _state_cache_save(cfg, data, types, tt, root):
     except Exception:
         pass
 
-# ===== _state_cache_load (原 L6718-L6730) =====
 def _state_cache_load(cfg, types, tt, root, ttl):
     if ttl <= 0:
         return None
@@ -79,7 +74,6 @@ def _state_cache_load(cfg, types, tt, root, ttl):
         return None
     return payload.get("data")
 
-# ===== collect_data (原 L6733-L6765) =====
 def collect_data(cfg, types):
     """按类型采集全部材料状态（远端/本地两段路径），供各命令及 watch 循环复用。"""
     from autozt import (collect, collect_v3_batch, _dedup_segments, annotate,
@@ -116,7 +110,6 @@ def collect_data(cfg, types):
     check_duplicates(data)
     return data
 
-# ===== apply_exclude (原 L6768-L6776) =====
 def apply_exclude(data, exclude):
     """-x：跳过指定项目（全名 / basename / <项目名>/<完整名>，逗号分隔）。"""
     from autozt import _name_matches
@@ -127,7 +120,6 @@ def apply_exclude(data, exclude):
         t["materials"] = [m for m in t["materials"]
                           if not any(_name_matches(m, x) for x in ex)]
 
-# ===== filter_projs (原 L6779-L6787) =====
 def filter_projs(data, projs):
     """只保留指定材料（全名 / basename / <项目名>/<完整名>）；空列表 = 不过滤。"""
     from autozt import _name_matches
@@ -138,7 +130,6 @@ def filter_projs(data, projs):
         t["materials"] = [m for m in t["materials"]
                           if any(_name_matches(m, x) for x in want)]
 
-# ===== filter_status (原 L6806-L6823) =====
 def filter_status(data, spec):
     """v1.4 -status：只保留"有步骤处于指定状态"的材料（对任意命令生效：
     status 只看它们，start/retry/rerun/stop 只操作它们）。
@@ -159,14 +150,12 @@ def filter_status(data, spec):
         t["materials"] = [m for m in t["materials"]
                           if any(s["kind"] in kinds for s in m["steps"])]
 
-# ===== status_spec_has_scancel (原 L6826-L6830) =====
 def status_spec_has_scancel(spec):
     """-status 里显式含 scancel → start/retry 放行 SCANCEL 步骤。"""
     return any(x.strip().lower() in ("scancel", "scancelled", "cancel",
                                      "cancelled", "canceled")
                for x in str(spec or "").split(","))
 
-# ===== _snapshot (原 L6833-L6839) =====
 def _snapshot(data):
     """状态指纹：材料 → 各步骤 (label, kind, 作业状态)，watch 据此判断有无变化。"""
     return json.dumps({m["name"]: [(s["label"], s["kind"],

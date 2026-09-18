@@ -37,7 +37,9 @@ _i_mcp = _bare_index('mcp')
 _i_agent = _bare_index('agent')
 if _i_mcp is not None and (_i_agent is None or _i_mcp < _i_agent):
     from autozt import mcp as _mcp_intercept
-    _sys.exit(_mcp_intercept.main(_sys.argv[_i_mcp + 1:]))
+    # Pass the complete argv so MCP can honor global options placed before the
+    # subcommand (for example `autozt -c cfg mcp`) as well as after it.
+    _sys.exit(_mcp_intercept.main(_sys.argv[1:]))
 
 # agent 子命令在主解析器之前拦截：它有自己的稳定 JSON 参数面，且支持
 # `autozt -c cfg agent snapshot` 这种把全局选项放在 agent 前面的写法。

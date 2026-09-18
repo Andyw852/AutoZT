@@ -80,7 +80,11 @@ BANDGAP_PLOT_CANDS = [
 STEP_LABEL  = "S8.4_amset2d"
 # 启动命令：先 import 插件（改写 amset 的散射注册表），再按原版入口跑 Runner。
 # 用 python -c 而不是 amset run，是因为插件必须在 Runner 读取 settings 之前生效。
-AMSET_CMD   = ('python -c "import amset2d_plugin; '
+# patch_overlap_preflight（V24/V25.10）：作业内先跑运行前检查（--in-job）——
+#   本目录里 wavefunction.h5 / vasprun.xml / ../step3_uniform 都在，四项检查全生效；
+#   不过就 exit 1。脚本由 _install_preflight 复制进运行目录。
+AMSET_CMD   = ('python overlap_preflight.py --in-job || exit 1; '
+               'python -c "import amset2d_plugin; '
                'from amset.log import initialize_amset_logger as L; L(); '
                'from amset.core.run import Runner; Runner.from_directory(\'.\').run()" '
                '>> amset.log 2>&1 && cp -f "$(ls -t transport_*.json 2>/dev/null | head -1)" '
@@ -101,6 +105,13 @@ REQUIRE_BANDGAP = True
 # patch_interp_factor：AMSET 的收敛判据在**插值后**的网格上，别吃默认值 5。
 #   设 None 则不写这一行（回到 AMSET 默认）。加大前先做收敛测试。
 INTERPOLATION_FACTOR = 10
+# patch_unity_overlap（2026-09-17，VERIFICATION V22/V23）：
+#   显式把 unity_overlap 写进 settings.yaml。**以前这一行是缺的** —— AMSET 的默认值是
+#   False（真实重叠），于是所有 2D 项目默认踩在"去对称化把重叠算坏"这个坑上。
+#   裁决结论：真实重叠必须让 h5 走 from_data（见 wavefunction_full 分支），
+#   否则 ADP 迁移率会被抬高 10~30 倍。所以在拿到全网格波函数之前，这里固定 True。
+#   要真实重叠：打开 optional_steps.wavefunction_full，并把这个常量改成 False。
+UNITY_OVERLAP = True
 # --- 弹性常数来源（amset run 的 ACD 散射需要）---
 #   MANUAL_ELASTIC 填了就用它，否则从 ELASTIC_DIR/OUTCAR 自动解析（kBar→GPa）。
 #   直接填：单个数（各向同性近似，GPa），或 6x6 列表（完整 Cij，GPa）。
@@ -1221,6 +1232,12 @@ def write_settings(out: Path, eps_inf, eps_static, gap, elastic,
               "deformation_potential: deformation.h5"]
     if INTERPOLATION_FACTOR:     # patch_interp_factor
         lines.append("interpolation_factor: %d" % int(INTERPOLATION_FACTOR))
+    # patch_unity_overlap：显式写，别用 AMSET 的默认值（默认是 False = 真实重叠，
+    # 而真实重叠要求 h5 是完整网格，否则去对称化会把重叠算坏，见 V22/V23）。
+    lines.append("unity_overlap: %s" % ("true" if UNITY_OVERLAP else "false"))
+    if not UNITY_OVERLAP:
+        lines.append("# ^ 真实重叠：**必须**让 h5 走 from_data（wavefunction_full 分支），"
+                     "否则结果不可信（见 overlap_preflight.py 的拦截）")
     # ★ 必须显式写 nworkers：不写则 AMSET 默认 -1 = 用满节点全部核，
     #   会超订提交模板申请的核数（见文件头 NWORKERS 处的说明）。
     lines.append("nworkers: %d" % int(NWORKERS))
@@ -1298,6 +1315,20 @@ def _install_plugin(out):
     if src.resolve() != dst.resolve():
         shutil.copyfile(src, dst)
     print("[OK] 二维插件就位：%s（只在本步的 amset 运行里生效）" % dst)
+
+
+def _install_preflight(out):
+    """把 overlap_preflight.py 复制进运行目录（作业内 python overlap_preflight.py --in-job）。"""
+    here = Path(__file__).resolve().parent
+    name = "overlap_preflight.py"
+    src = next((p for p in (here / name, Path.cwd() / name) if p.is_file()), None)
+    if src is None:
+        print("[WARN] 找不到 %s —— 作业内的运行前检查会跳过（gen 时仍检查）" % name)
+        return
+    dst = Path(out) / name
+    if src.resolve() != dst.resolve():
+        shutil.copyfile(src, dst)
+    print("[OK] 运行前检查脚本就位：%s" % dst)
 
 
 # ---------------------------------------------------------------------------
@@ -1378,6 +1409,7 @@ def main():
     out.mkdir(exist_ok=True)
     # 插件随本步复制到运行目录（只在那一次 amset 运行里生效，不改 AMSET 安装）
     _install_plugin(out)
+    _install_preflight(out)
     link(out, cwd / WAVE_DIR / "wavefunction.h5", "wavefunction.h5")
     link(out, cwd / READ_DIR / _pick_deformation_h5(cwd, READ_DIR), "deformation.h5")
     # patch_amset_vasprun：amset run 还需要密网格 vasprun.xml 拿能带色散
@@ -1434,6 +1466,23 @@ def main():
     text = text.replace("{{JOBNAME}}", jobname).replace("{{AMSET_CMD}}", AMSET_CMD)
     submit.write_text(text, encoding="utf-8", newline="\n")
     stepconf.apply_submit(submit, stepconf.read_submit(stepconf.CONF_NAME))
+    # ---- patch_overlap_preflight：重叠路径的运行前检查（VERIFICATION V24）----
+    # ① 版本+重叠模式 ② h5 完整性（真实重叠 + 非完整网格 -> 拦截）
+    # ③ S3/S3b 能带一致性 ④ amset wave 带窗口是否显式
+    try:
+        import overlap_preflight as _pf
+        _verdict, _lines = _pf.run(cwd, out, UNITY_OVERLAP)
+        print("[..] 重叠路径运行前检查：")
+        for _l in _lines:
+            print("[..] " + _l)
+        if _verdict == "error":
+            sys.exit("[ERROR] 重叠路径运行前检查未通过 —— 见上面标 ★ 的行。"
+                     "\n        这一步会产出不可信的结果，必须先修再提交。")
+    except SystemExit:
+        raise
+    except Exception as _e:
+        print("[WARN] 重叠运行前检查失败（%s）——不拦截，但请人工确认" % type(_e).__name__)
+
     print("[DONE] %s：settings.yaml + 软链 + %s 就绪；"
           "submit.sh 里先 import 插件再跑 Runner，产出 transport.json"
           % (OUTDIR_NAME, PLUGIN_SRC_NAME))

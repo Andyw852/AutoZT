@@ -43,6 +43,18 @@ class ZbrentCorrection(CorrectionHandler):
                       (self.retry_cmd(ctx).rsplit(" ", 1)[0] + " correct -y")
                       if ctx.material else "tf ... correct -y",
                       self.start_cmd(ctx)],
+            changes=[
+                {"target": "input_file", "path": "INCAR", "operation": "set",
+                 "values": {"AMIX": "0.1", "BMIX": "0.0001"}},
+                {"target": "input_file", "path": "INCAR", "operation": "set",
+                 "values": {"ALGO": "All", "NELM": "200"}},
+            ],
+            verify=["确认自动生成的 INCAR 备份存在",
+                    "确认修改后的输入可解析",
+                    "确认重交后 SCF 残差或电子能量继续推进"],
+            rollback=["使用 handler 生成的 INCAR 备份恢复，再通过 autozt retry/start 操作"],
+            requires_approval=True,
+            execute_via="autozt correct -y -> autozt retry -> autozt start",
             notes="若该技能已开 hang_check，SCF 空转类挂死 tf 会自动做同样的 INCAR 升级，"
                   "先看 monitor 日志 / .tf_hung.json 是否已处理过，避免重复改。")
 

@@ -1,12 +1,11 @@
 """yamlmini —— 迷你 YAML 子集解析器（真实深模块）。
 
-从 _slice/01_yamlmini.py 抽出的自洽叶子：只依赖标准库 re。
+YAML 子集解析器；只依赖标准库 re。
 对外暴露 parse()（= 原 _mini_yaml）。load_config 留在 slice 里，
 由 __init__.py 把本模块函数注入共享命名空间后按名字调用。
 """
 import re
 
-# ===== _yaml_strip_comment (原 L849-L858) =====
 def _yaml_strip_comment(line):
     sq = dq = False
     for i, ch in enumerate(line):
@@ -18,7 +17,6 @@ def _yaml_strip_comment(line):
             return line[:i]
     return line
 
-# ===== _yaml_split_top (原 L861-L880) =====
 def _yaml_split_top(s):
     """按顶层逗号切分（忽略引号/括号内的逗号）。"""
     parts, depth, sq, dq, cur = [], 0, False, False, ""
@@ -40,7 +38,6 @@ def _yaml_split_top(s):
         parts.append(cur)
     return parts
 
-# ===== _yaml_scalar (原 L883-L911) =====
 def _yaml_scalar(v):
     v = v.strip()
     if v in ("", "null", "Null", "NULL", "~"):
@@ -71,7 +68,6 @@ def _yaml_scalar(v):
         pass
     return v
 
-# ===== _flow_depth (原 L914-L929) =====
 def _flow_depth(s, depth=0):
     """统计一行结束时未闭合的 [ / { 层数；跳过引号内内容和行尾注释。"""
     q = None
@@ -89,7 +85,6 @@ def _flow_depth(s, depth=0):
             depth = max(0, depth - 1)
     return depth
 
-# ===== _mini_yaml (原 L932-L1055) =====
 def _mini_yaml(text):
     raw_lines = text.splitlines()
     blocks = {}

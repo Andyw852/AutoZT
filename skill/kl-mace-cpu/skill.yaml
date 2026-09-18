@@ -75,14 +75,24 @@ optional_steps:
          gen: "plot_phonon_band.py", check: plot, run: gen, gen_need: [],
          done_marker: phonon_band_summary.json, fetch_all: true}
 
-+io_schema:
-  inputs: [{name: POSCAR, from: user, required: true, desc: "材料结构"}]
-  outputs: [{name: workflow_outputs, step: final, type: directory, desc: "由技能实际步骤产生的结果文件"}]
-  params: []
-  steps: []
+io_schema:
+  inputs:
+    - {name: POSCAR, from: user, required: true, desc: "材料结构"}
+    - {name: MACE_MODEL, from: config, required: true, desc: "MACE 势模型路径"}
+  outputs:
+    - {name: kappa_summary.json, step: S4_kappa, type: json, desc: "晶格热导率汇总"}
+    - {name: phonon_summary.json, step: S3_fc, type: json, desc: "声子稳定性与虚频检查"}
+  params:
+    - {name: DEVICE, values: [cpu], default: cpu, where: step.conf, desc: "MACE 推理设备"}
+    - {name: SOLVER, values: [phono3py, shengbte], default: phono3py, where: step.conf, desc: "BTE 求解器"}
+  steps:
+    - {step: S1_relax, title: "MACE relax", inputs: [POSCAR, MACE_MODEL], outputs: [CONTCAR, relax_summary.json], validator: "converged marker"}
+    - {step: S2_force, title: "Displacements and forces", inputs: [CONTCAR], outputs: [forces_summary.json], validator: "FORCES_DONE"}
+    - {step: S3_fc, title: "Force constants and phonons", inputs: [forces_summary.json], outputs: [phonon_summary.json], validator: "phonon check"}
+    - {step: S4_kappa, title: "BTE thermal conductivity", inputs: [S3_fc], outputs: [kappa_summary.json], validator: "KAPPA_DONE"}
 flow:
-  summary: "按技能步骤生成并校验科学计算结果"
-  stages: [{name: workflow, steps: [], produces: [workflow_outputs]}]
+  summary: "MACE 弛豫 → 位移力 → fc2/fc3 与声子 → BTE 晶格热导率"
+  stages: [{name: force_constants, steps: [S1_relax, S2_force, S3_fc], produces: [phonon_summary.json]}, {name: bte, steps: [S4_kappa], produces: [kappa_summary.json]}]
 corrections: [node_fail, dir_missing]
 requires:
   python: [mace-torch, torch, ase, phonopy, phono3py, symfc, pheasy, spglib, numpy, h5py]

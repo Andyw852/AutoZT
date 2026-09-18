@@ -60,10 +60,13 @@ class Suggestion(object):
     """一条纠错建议（handler.suggest 的返回值）。"""
 
     __slots__ = ("handler", "title", "risk", "reason", "actions", "commands",
-                 "auto", "notes")
+                 "auto", "notes", "changes", "verify", "rollback",
+                 "requires_approval", "execute_via")
 
     def __init__(self, handler=None, title="", risk="review", reason="",
-                 actions=None, commands=None, auto=False, notes=""):
+                 actions=None, commands=None, auto=False, notes="", changes=None,
+                 verify=None, rollback=None, requires_approval=None,
+                 execute_via="autozt"):
         self.handler = handler or ""
         self.title = title or ""
         self.risk = risk if risk in RISK_ORDER else "review"
@@ -72,12 +75,23 @@ class Suggestion(object):
         self.commands = list(commands or [])  # 可直接照抄的 tf 命令
         self.auto = bool(auto)                # 是否允许无人值守执行（保守：默认 False）
         self.notes = notes or ""
+        # Generic repair-plan fields. They are descriptive unless a handler
+        # implements apply(); MCP/Agent CLI never infer an edit from prose.
+        self.changes = list(changes or [])
+        self.verify = list(verify or [])
+        self.rollback = list(rollback or [])
+        self.requires_approval = (self.risk != "safe" if requires_approval is None
+                                  else bool(requires_approval))
+        self.execute_via = execute_via or "autozt"
 
     def as_dict(self):
         return {"handler": self.handler, "title": self.title, "risk": self.risk,
                 "reason": self.reason, "actions": self.actions,
                 "commands": self.commands, "auto": self.auto,
-                "notes": self.notes}
+                "notes": self.notes, "changes": self.changes,
+                "verify": self.verify, "rollback": self.rollback,
+                "requires_approval": self.requires_approval,
+                "execute_via": self.execute_via}
 
 
 class CorrectionHandler(object):

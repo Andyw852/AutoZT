@@ -178,6 +178,16 @@ def _read_dim(cwd):
     return None
 
 
+def overlap_grade_only_real(dim):
+    """只有"真实重叠"运行、没有 unity 对照时的判级：返回 "2d" 或 "3d"。
+
+    2d：去对称化已实测会把重叠算坏（V23）-> 红，必须用 unity 重跑。
+    3d / 维度读不到（本模块其它地方一律"按 3D 处理"）：黄 —— 受影响面已确认，
+        是否真算错待 Si 全网格对照（V25）。
+    """
+    return "2d" if str(dim).lower() == "2d" else "3d"
+
+
 def _diag_avg(t33, is_2d=False):
     """张量各向同性化。
     3D: (xx+yy+zz)/3。
@@ -963,6 +973,45 @@ def main():
         print("[WARN] 画图失败（%s）——表已生成，图跳过" % type(e).__name__)
     for _l in resolve_kappa_L(cwd)[2]:                # patch_kl_auto
         print("[..] " + _l)
+
+    # ---- patch_overlap_guard：重叠比值报警（VERIFICATION V23）----------------
+    # 不依赖根因：重叠满足 |I|^2 <= 1，因此 unity 与真实重叠之间必有先验约束 ——
+    #   ADP：1 <= mu_real/mu_unity <= N_v（N_v = 带边几个 kT 内的等价能谷数）
+    #   POP：mu_real/mu_unity 接近 1（本检查取 +-20%）
+    # 超出范围就标红：该结果不可信，不得进入 zT 汇总（即使根因还没查清）。
+    # 生产默认只跑 unity_overlap，所以正常情况下这里会打印"跳过"。
+    try:
+        import overlap_ratio_guard as _org
+        _runs = _org.find_runs(cwd)
+        _u = [r for r in _runs if r["unity_overlap"] is True]
+        _r = [r for r in _runs if r["unity_overlap"] is False]
+        if _u and _r:
+            _v, _lines = _org.check_pair(_u[0], _r[0])
+            for _l in _lines:
+                print("[重叠报警] " + _l)
+            if _v == "red":
+                print("[重叠报警] ★ 标红：真实重叠超出先验范围，**不得进入 zT 汇总**。")
+                print("[重叠报警]   依据 |I|^2<=1：ADP 必落在 [1, N_v]，POP 应接近 1（见 VERIFICATION V23）。")
+            elif _v == "ok":
+                print("[重叠报警] 比值在允许范围内。")
+        elif _r and not _u:
+            # 只跑了真实重叠、没有 unity 对照 -> 按维数分档（V25）：
+            #   2D：红色（已实测会错，必须用 unity 重跑）
+            #   3D：黄色（受影响面已确认，但"是否真算错"待 Si 全网格对照）
+            if overlap_grade_only_real(dim) == "3d":
+                print("[重叠报警] **黄色**：三维 + 真实重叠（无 unity 对照）——"
+                      "受影响面已确认，是否真算错待 Si 全网格对照（VERIFICATION V25）。"
+                      "**采纳前需人工确认**。")
+            else:
+                print("[重叠报警] ★ 红色：2D + 真实重叠（无 unity 对照）——"
+                      "去对称化已实测会把重叠算坏（V23），**必须用 unity_overlap 重跑本步**，"
+                      "该结果不得进入 zT 汇总。")
+        else:
+            print("[..] 重叠报警：只找到 %d 个 unity / %d 个真实重叠运行，跳过。"
+                  % (len(_u), len(_r)))
+    except Exception as _e:
+        print("[WARN] 重叠报警检查失败（%s）——不影响主表" % type(_e).__name__)
+
     print("[DONE] %s：comparison_300K.png / .csv / summary.txt 已生成" % OUTDIR_NAME)
 
 

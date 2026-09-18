@@ -2,6 +2,8 @@
 
 `autozt agent` 是 AutoZT 的稳定 JSON 接口。它和 MCP 使用同一套技能契约、状态字段和动作网关，但不需要 MCP 客户端；人、cron、Shell、Python 脚本或只会调用命令的模型都可以使用它。
 
+技能开发规范统一维护在软件包根目录 `TASKFLOW.md` 第 7 章，尤其 7.15–7.18；入口与服务生命周期见 9.1。`io_schema` 是描述契约，不是任意科学输入输出的自动解析器。新增符合现有生命周期的技能通常无需修改本接口；新增执行语义应先扩展核心，再同步共享 Agent 协议。普通集成优先使用一次性 `request -`，`serve` 仅供需要连续 JSONL 管道的高级 wrapper。
+
 ```bash
 # 第一次接入：只读协议能力，不采集超算状态
 autozt agent capabilities

@@ -9,13 +9,11 @@
   3. 末尾多一段"全网格自检"：打印应算出的 k 点数，并与 step3_uniform 的网格对照。
 理由与判据见 skill/ke-dft-cpu/step8.4_amset2d/VERIFICATION.md V22.8。
 默认关闭（optional_steps.wavefunction_full.default = false），不影响原 S3/S4。
-"""，来源：gen_step5_uniform.py（S3_uniform），只改上述三处。
-
-在材料目录下运行，从结构优化结果接力：
-  1. POSCAR ← step1_std_opt/CONTCAR
+在材料目录下运行，从结构优化结果接力（与 gen_step5_uniform.py 同）：
+  1. POSCAR ← step1_opt/CONTCAR
   2. VASPKIT 生成密 KPOINTS（kspacing 见下）+ POTCAR
-  3. 按 2D/3D 渲染 incar_uniform_*.tpl，产出 WAVECAR 供 amset wave
-产出目录：step3_uniform/
+  3. 按 2D/3D 渲染 incar_uniform_full_*.tpl，产出**完整网格**的 WAVECAR 供 amset wave
+产出目录：step3b_uniform_full/
 """
 import os
 import sys
@@ -55,12 +53,28 @@ DK_MAX_3D    = "0.06"
 #   interpolation_factor，ADP 迁移率 2188~2488）。设 >=3 让 kz 变成内插。
 #   默认 1 = 保持原行为（不动存量 2D 项目）；新项目在 project_setting 里设 3。
 VACUUM_KZ_MIN = 1
-SPEC = {"VACUUM_KZ_MIN": (VACUUM_KZ_MIN, "int")}
+# ---- patch_match_mesh：单变量对照，网格照抄指定步骤 ---------------------
+#   用途：本步的全部意义是"与 step3_uniform 只差 ISYM"。但 step3_uniform 若是在
+#   DK_MAX 修复前生成的（3D 整段跳过，见 gen_step5_uniform 注释里的历史坑），
+#   它的网格其实是 vaspkit 的粗网格（Si：11x11x11 = 静态网格）。此时本步按
+#   默认 DK_MAX=0.06 + 2x 静态下限会被提到 34x34x34 —— 既不是单变量，又超成本护栏。
+#   写 MATCH_MESH_OF = step3_uniform 即照抄那份 KPOINTS，并跳过 DK_MAX /
+#   2x 静态下限 / 退化断言；末尾的"与 step3_uniform 网格一致"自检仍然生效。
+MATCH_MESH_OF = None
 # ---- 成本护栏：网格总点数上限 -------------------------------------------
 #   超了就【报错要求显式覆盖】，而不是静默降密 —— 否则将来又有人用"跳过加密"
 #   绕过，回到同一个坑。参考量级：Si(5.43Å) 0.08 → 25³ ≈ 1.6e4；
 #   Mg4C60 0.05 → 13×13×8 ≈ 1.4e3。
+#   ★ 定义必须排在 SPEC 之前（SPEC 要引用它）。
 UNIFORM_NMAX = 20000
+SPEC = {"VACUUM_KZ_MIN": (VACUUM_KZ_MIN, "int"),
+        # 与 step3_uniform 同一套键（报错信息一直说"可在项目里覆盖 DK_MAX"，
+        # 但此前本脚本只认 VACUUM_KZ_MIN，写了也不生效 —— 2026-09-18 补齐）
+        "DK_MAX": (None, "float"),
+        "DK_MAX_2D": (DK_MAX_2D, "str"),
+        "DK_MAX_3D": (DK_MAX_3D, "str"),
+        "UNIFORM_NMAX": (UNIFORM_NMAX, "int"),
+        "MATCH_MESH_OF": (None, "str")}
 FUNC         = "inherit"              # patch_ke_dag: inherit=继承 step1
                                       # 也可写死 pbe | pbesol | pbe-d3
 MANUAL_ENCUT = None                   # None=从 POTCAR 自动；或写数值
@@ -72,6 +86,7 @@ GGA_MAP = {"pbe": "PE", "pbesol": "PS", "pbe-d3": "PE"}
 
 
 def main():
+    global DK_MAX, DK_MAX_2D, DK_MAX_3D, UNIFORM_NMAX, MATCH_MESH_OF
     cwd = Path.cwd()
     out = cwd / OUTDIR_NAME
     out.mkdir(exist_ok=True)
@@ -111,8 +126,16 @@ def main():
         # （2026-09-16 MoS2 S3_uniform 实测：FUNC 让 gen 直接 SystemExit；
         #  stepconf.load 抛的是 SystemExit=BaseException，except Exception 拦不住）。
         try:
-            _kzmin = int(stepconf.load(SPEC, OUTDIR_NAME, str(cwd),
-                                       strict=False)["VACUUM_KZ_MIN"])
+            _conf = stepconf.load(SPEC, OUTDIR_NAME, str(cwd), strict=False)
+            _kzmin = int(_conf["VACUUM_KZ_MIN"])
+            if _conf["DK_MAX"] is not None:
+                DK_MAX = _conf["DK_MAX"]
+            DK_MAX_2D = _conf["DK_MAX_2D"]
+            DK_MAX_3D = _conf["DK_MAX_3D"]
+            UNIFORM_NMAX = _conf["UNIFORM_NMAX"]
+            # stepconf.load 返回的对象保证支持 []，但不保证有 .get()
+            # （2026-09-18 实测：.get 抛 AttributeError 直接把 gen 打断）
+            MATCH_MESH_OF = _conf["MATCH_MESH_OF"]
         except (KeyError, ValueError, TypeError):
             pass
     if dim == "2d" and _kzmin > 1:
@@ -126,6 +149,19 @@ def main():
             _kp.write_text("\n".join(_ln) + "\n")
             print("[OK] patch_vacuum_kz：真空轴 kz %d -> %d（原来只有一层时 AMSET 沿 kz 外推，"
                   "插值网格一变结果差 30-45%%）" % (_old, _kzmin))
+    # [patch_match_mesh] 单变量对照：网格照抄指定步骤（见顶部注释）。
+    #   ★ 必须放在 step.conf 读取【之后】，否则 MATCH_MESH_OF 还是模块默认 None。
+    #   ★ 放在 vacuum_kz 之后：来源网格已含正确的 kz，照抄即最终结果。
+    if MATCH_MESH_OF:
+        _src_kp = cwd / str(MATCH_MESH_OF) / "KPOINTS"
+        if not _src_kp.is_file():
+            sys.exit("[ERROR] MATCH_MESH_OF=%s，但 %s 不存在" % (MATCH_MESH_OF, _src_kp))
+        _sk = _src_kp.read_text().splitlines()
+        _mk = (out / "KPOINTS").read_text().splitlines()
+        _mk[3] = _sk[3]
+        (out / "KPOINTS").write_text("\n".join(_mk) + "\n", encoding="utf-8", newline="\n")
+        print("[OK] 单变量对照：网格照抄 %s -> %s（跳过 DK_MAX / 2x 静态下限 / 退化断言）"
+              % (MATCH_MESH_OF, _sk[3].strip()))
     # [DK_MAX] 面内笛卡尔 k 间距上限。判据是笛卡尔间距（不是分割数下限）——
     # 分割数下限对不同长度的胞给完全不同的笛卡尔间距（SS a=10.82 vs LS a=21.64，
     # 同样 N_x=8 给 0.0726 vs 0.0363），m* 拟合半径和收敛性都失真。逐轴
@@ -148,7 +184,9 @@ def main():
             2.0 * np.pi * np.cross(_c, _a) / _vol,
             2.0 * np.pi * np.cross(_a, _b) / _vol]
     _len = [float(np.linalg.norm(v)) for v in _rec]
-    _dk = float(DK_MAX) if DK_MAX else float(DK_MAX_2D if dim == "2d" else DK_MAX_3D)
+    # MATCH_MESH_OF：网格已照抄来源，跳过 DK_MAX 判据（_dk 给无穷大 -> ceil 恒为 1）
+    _dk = (1e9 if MATCH_MESH_OF
+           else (float(DK_MAX) if DK_MAX else float(DK_MAX_2D if dim == "2d" else DK_MAX_3D)))
     _axes = (0, 1) if dim == "2d" else (0, 1, 2)     # 2D 的真空轴已是 kz=1，不动
     _kpt = (out / "KPOINTS").read_text().splitlines()
     try:
@@ -173,7 +211,7 @@ def main():
             except (IndexError, ValueError):
                 _st = None
             break
-    if _st and len(_st) == 3:
+    if _st and len(_st) == 3 and not MATCH_MESH_OF:
         for i in _axes:
             _need[i] = max(_need[i], 2 * _st[i])
     if _need != _n[:3]:
@@ -185,7 +223,7 @@ def main():
         (out / "KPOINTS").write_text(
             "\n".join(_kpt) + "\n", encoding="utf-8", newline="\n")
     # ③a 断言：不许静默退化
-    if _st and len(_st) == 3:
+    if _st and len(_st) == 3 and not MATCH_MESH_OF:
         for i in _axes:
             if _need[i] <= _st[i]:
                 sys.exit("[ERROR] step3b_uniform_full 网格退化：第 %d 轴 N_uniform=%d ≤ N_static=%d。"

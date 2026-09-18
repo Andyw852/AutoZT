@@ -1,15 +1,22 @@
-# AutoZT（autozt）—— 多材料 · 多步骤 · 多超算 VASP/MACE 流水线管理器
+# AutoZT（autozt）—— 面向热电材料的自动化计算平台
 
 [![CI](https://github.com/Andyw852/AutoZT/actions/workflows/ci.yml/badge.svg)](https://github.com/Andyw852/AutoZT/actions/workflows/ci.yml) [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE) [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.XXXXXXX.svg)](https://doi.org/10.5281/zenodo.XXXXXXX)
 
-> 一句话：用一条 `autozt` 命令，在多个超算上自动跑完成百上千个材料的 VASP / MACE 多步计算，全程只读巡检、异常诊断、自动续跑。
+> 一句话：从 POSCAR 到 `zT(n,T)`，在多个超算上自动运行 VASP / MACE 热电计算，并让脚本、人工或 AI 智能体通过同一套可验证接口协作。
 
 > **v2.0 重构**：本目录是重构版——原 7463 行单体脚本已拆成 `autozt/` 包（`bin/autozt` 为入口），代码导航见 [`CONTEXT.md`](CONTEXT.md)。原始单体保留在 `versions/v1.0/tf` 作对比基准。
 
 ## 能干什么
 
+AutoZT 的三个主亮点是：
+
+- **完整 zT 工作流**：从一个 POSCAR 串起结构优化、电子输运、声子/晶格热输运，汇合得到 `zT(n,T)`。
+- **2D 原生处理**：自动识别维度并沿整条链路处理真空轴、面内弛豫、二维单位、ZA 稳定性和厚度换算。
+- **面向 AI 智能体的科研工作流接口**：模型按需发现技能、读取输入输出契约、依据状态和证据请求动作；通过 MCP 或 Agent CLI 接入，物理判据、状态机、恢复和审计由 AutoZT 执行核心负责。
+- **三步科学协作闭环**：`research_plan` 生成可审查方案，`preflight` 检查跨步骤输入，`results` 按条件返回带来源的结果；三者均只读，不绕过物理 validator。
+
 - **多材料**：一个项目根下几千个结构（如 `C20/qHPC20`、`Ag/qHPC20_Ag1C20_s0`）统一管理，逐材料多步流水线（弛豫 → 静态 → 后处理）自动推进。
-- **多技能**：技能从 `skill/*/skill.yaml` 动态发现，覆盖 VASP 能带/弹性/电热导/晶格热导/结构优化，以及 MACE 同类、声子、MLFF 训练和替代模型；新增技能不增加 MCP 工具。
+- **多技能**：技能从 `skill/*/skill.yaml` 动态发现，覆盖 VASP 能带/弹性/电热导/晶格热导/结构优化，以及 MACE 同类、声子、MLFF 训练和替代模型；遵循现有工作流抽象的新技能通常不增加 MCP 工具。
 - **多超算**：jzzn（CPU 真 SLURM）、a800（A800 GPU 真 SLURM）、3090（无 SLURM 的 fakeslurm 垫片服务器），换超算只改一个 `hpc` 名。
 - **全自动**：`auto_advance` + `autozt monitor` 后台监控，作业算完自动拉结果、自动提交下一步；挂死作业自动 `scancel`+续跑（`hang_check`）。
 - **省心巡检**：`autozt summary --diff` 无变化输出 0 字节，有变化才吐几行——适合 AI / cron 定时巡检。
@@ -124,6 +131,9 @@ bash scripts/tf-git-push.sh "你的提交说明"
 
 ## 文档
 
-- 完整手册：`TASKFLOW.md`
-- AI/监控接入规范：`AGENTS.md`
+- 完整手册：[TASKFLOW.md](TASKFLOW.md)
+- 技能开发与模型契约：[总手册第 7 章](TASKFLOW.md#7-技能开发规范原-skill_devmd-内容)，其中 7.15–7.18 说明输入输出、报错、新技能适配和验收边界。
+- 模型调用与服务生命周期：[总手册第 9 章](TASKFLOW.md#9-给大语言模型用agent-接入)；支持本地 MCP 的客户端使用 [MCP](docs/mcp.md)，终端模型/脚本使用 [Agent CLI](docs/agent-cli.md)。两条路径可独立使用，`agent serve` 仅供高级 wrapper 集成。
+- 软件定位与模型接入：[AutoZT 的定位与 AI 智能体接入](docs/llm-plugin.md)
+- AI/监控接入规范：[AGENTS.md](AGENTS.md)
 - 各技能细节：`skill/<技能>/README.md`

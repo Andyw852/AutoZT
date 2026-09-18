@@ -24,7 +24,8 @@ GGA    = {{GGA}}
 
 # ---- 精度(ISIF=3 必须收紧)----
 PREC    = Accurate
-ENCUT   = {{ENCUT}}       # 应为 POTCAR 最大 ENMAX 的 ~1.3 倍
+ENCUT   = {{ENCUT}}       # 由 encut_from_potcar(ENCUT_FACTOR) 算得，默认 1.5×max(ENMAX)
+                          # （原注释写"~1.3 倍"是过期说法，实测 390/258.689 = 1.51）
 LREAL   = .FALSE.
 LASPH   = .TRUE.
 ADDGRID = .FALSE.

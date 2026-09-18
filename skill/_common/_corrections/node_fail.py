@@ -22,7 +22,13 @@ class NodeFailCorrection(CorrectionHandler):
             reason="作业因节点故障（NODE_FAIL）或抢占退出，与输入无关，直接重交。",
             actions=["retry 重交（保留已有产物）",
                      "若同一材料连续撞 NODE_FAIL ≥3 次：换节点/换 qos/换集群，先请示"],
-            commands=[self.retry_cmd(ctx), self.start_cmd(ctx)])
+            commands=[self.retry_cmd(ctx), self.start_cmd(ctx)],
+            changes=[],
+            verify=["确认 queue.err 或作业记录显示 NODE_FAIL/抢占",
+                    "确认 retry 保留已有 OUTCAR/CONTCAR 等产物"],
+            rollback=["无需回滚输入；若重复失败，停止自动重试并人工检查节点/队列"],
+            requires_approval=False,
+            execute_via="autozt retry -> autozt start")
 
 
 HANDLER = NodeFailCorrection()

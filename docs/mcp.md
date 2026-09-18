@@ -4,6 +4,12 @@ AutoZT can expose itself as a Model Context Protocol (MCP) server so that an
 LLM-driven planner (or any MCP-capable client) can drive the workflow without bespoke
 glue code, while every dangerous action still passes through the approval gate.
 
+Skill development is maintained in the packaged `TASKFLOW.md`, chapter 7, especially
+sections 7.15–7.18. These distinguish descriptive I/O contracts from executable validation
+and explain when new skills need core or interface changes. Section 9.1 covers process
+lifetime and records. MCP support alone does not configure a client or establish a connection;
+models can alternatively use the [Agent CLI](agent-cli.md) without MCP.
+
 The stdio server negotiates MCP `2025-06-18` and keeps `2024-11-05` as a fallback for
 older clients.
 
@@ -133,6 +139,24 @@ stdio 客户端启动进程后按 MCP 顺序发送 `initialize`、`tools/list`�
   }
 }
 ```
+
+Windows 客户端也可以直接调用仓库中的 `bin/autozt.cmd` 包装器：
+
+```json
+{
+  "mcpServers": {
+    "autozt": {
+      "command": "\\\\wsl.localhost\\Ubuntu\\home\\wangchao\\software\\AutoZT\\bin\\autozt.cmd",
+      "args": ["mcp"],
+      "env": {"AUTOZT_MCP_PROFILE": "workflow"}
+    }
+  }
+}
+```
+
+不要把没有扩展名的 WSL 文件 `bin/autozt` 直接填入 Windows 的 `command`。Windows
+会把它当成普通文件并弹出“选择应用以打开 autozt”；`.cmd` 包装器会把请求转交给
+WSL 中的同一份 AutoZT。
 
 如果 MCP 客户端只负责长期巡检，使用更小的 `monitor` profile。它只暴露
 `get_snapshot` 和 `cycle` 两个工具：前者配合 cursor 做增量轮询，后者默认 dry-run，

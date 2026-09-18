@@ -112,23 +112,43 @@ CELL_CONSTRAINT_2D = "auto"
 # "single" = 旧行为：单目录 step1_PBE_opt，模板参数原样使用，不分段。
 RELAX_STAGES = "auto"          # "auto" | "single"
 
+# 变胞段（ISIF>=3）的 EDIFFG —— 2026-09-17 起改用【能量判据】。
+#   VASP 约定：EDIFFG<0 = 力判据（|F| 全小于该值才停）；EDIFFG>0 = 能量判据
+#   （相邻两步能量变化 < 该值就停，单位 eV）。
+#   为什么变胞段必须换能量判据（实测 Ti2S3 Z4-3-1，jzzn jobid 3847708）：
+#     该段起点晶胞恰好接近平衡（面内 +0.37 kB），离子力也很小，但 VASP 的 ISIF=3
+#     广义力（把晶胞自由度也算进去）判不过 -0.01，于是它一遍遍做无意义的 CG 试探：
+#     从第 3 步起【19 步内总能量只变 1e-7 eV】（完全平坦），VASP 硬撑到第 20 步，
+#     线搜索夹不到极小值，以 "ZBRENT: fatal error in bracketing" +
+#     "I REFUSE TO CONTINUE WITH THIS SICK JOB" 崩掉整个 S1（rc=1，前功尽弃）。
+#     改用能量判据后它在第 2 步就停（能量变化 < 1e-4 eV），不再空转。
+#   代价与兜底：能量判据可能在【力还没收干净】时就停，所以
+#     ① _cell_settled 额外要求末态最大力 < FORCE_TOL（见 CELL_FORCE_TOL_EV_A）；
+#     ② "晶胞到底到位没有" 一律由作业自身的稳定判据（Δ晶格 + 面内应力 + 力上限）
+#        和 S1 应力门禁去判，不再指望 VASP 单靠一个 EDIFFG 把两件事一起办了。
+#   旧证据仍然有效（段 a 必须用 -0.05 之外更紧的力判据，否则晶胞差几个 kbar）：
+#     Si 金刚石故意放大 2% 时，-0.05 末态仍有 -1.19 kB，且从 CONTCAR 重开一遍
+#     max|Δ晶格| = 0.000000 Å —— 完全幂等，多跑几遍治不了。现在的对策是
+#     CELL_FORCE_TOL_EV_A=0.01（= 旧 -0.01 的力判据本身）+ 应力判据。
+CELL_STAGE_EDIFFG = "1E-4"           # eV，正数 = 能量判据；只用于 ISIF>=3 的段
+# 变胞段末态最大力上限 (eV/Å)。2026-09-18 由 0.02 收紧回 0.01（= 原 EDIFFG=-0.01 的力判据）：
+#   位移法的力对平衡结构的残余力很敏感（pheasy 拟合要逐帧扣掉平衡帧的力），松一倍会让
+#   "力没洗干净"的晶格流到 S2/S4。Ti2S3 实测末态 max|F| = 0.0000 eV/Å，收紧不会造成麻烦。
+CELL_FORCE_TOL_EV_A = 0.01
+
 # 各阶段覆盖的 INCAR 标签。None 表示删除该标签。
-# EDIFFG 分两档（不是笔误）：
-#   段 a（ISIF=2，只动原子）保持 -0.05 做高通量粗安顿，快；后面变胞段会把力收下去。
-#   段 b/c（ISIF=3，动晶胞）必须 -0.01 —— VASP 的 EDIFFG<0 只判【力】，
-#     力一到 -0.05 就停，晶胞往往还差几个 kbar。实测（Si 金刚石，故意放大 2%）：
-#       -0.05 时末态仍有 -1.19 kB，且从 CONTCAR 重开一遍 max|Δ晶格| = 0.000000 Å
-#       —— 完全幂等，多跑几遍治不了；只有把力判据收紧，才能把应力一起带下去。
+#   段 a（ISIF=2，只动原子）保持 -0.05 力判据做高通量粗安顿，快；后面变胞段会把力收下去。
+#   段 b/c（ISIF=3，动晶胞）用能量判据，理由见上面 CELL_STAGE_EDIFFG 的注释。
 STAGE_SPEC = {
     "a": {"_desc": "固定胞，弛豫原子位置",
           "ISIF": "2", "IBRION": "2", "POTIM": "0.3",
           "EDIFFG": "-0.05", "NSW": "200", "IOPTCELL": None},
     "b": {"_desc": "放开晶胞（2D 仅面内），CG",
           "ISIF": "3", "IBRION": "2", "POTIM": "0.3",
-          "EDIFFG": "-0.01", "NSW": "200"},
+          "EDIFFG": CELL_STAGE_EDIFFG, "NSW": "200"},
     "c": {"_desc": "准牛顿收尾",
           "ISIF": "3", "IBRION": "1", "POTIM": "0.3",
-          "EDIFFG": "-0.01", "NSW": "100"},
+          "EDIFFG": CELL_STAGE_EDIFFG, "NSW": "100"},
 }
 STAGE_ORDER = ["a", "b", "c"]
 # ###################################################################
@@ -320,7 +340,8 @@ VACUUM_AXIS_POLICY = "error"
 #               —— 段间可换资源/可单独 retry 一段，代价是排三次队。
 #   "single"    不分段，模板里的 ISIF/IBRION 原样用
 STAGE_MODE = "in_job"
-STALL_MIN = 60                       # run_relax.sh 看门狗：OUTCAR 停滞几分钟判卡死（0=关）
+STALL_MIN = 180                      # run_relax.sh 看门狗：输出停滞几分钟判卡死（0=关）
+                                     # 2026-09-17 由 60 提到 180：见 CONF_SPEC 里 STALL_MINUTES 的实测依据
 
 # 「某段已收敛就跳过后续段」——注意这个开关只对【不改晶胞】的段有意义。
 #   _converged() 判的是 OUTCAR 里的 "reached required accuracy"，那是【力】判据；
@@ -343,6 +364,10 @@ PRESS_TOL_KB = 1.0                   # 变胞段稳定判据③(3D)：|external 
 #   自相矛盾（实测 Mo2S3 收敛到面内 0.161 kB = 0.47 kbar，正好卡在两种口径之间）。
 #   ★ 若某材料 h⊥/d 明显偏离 2.9（真空特别厚/层特别薄），在 step.conf 里按
 #      INPLANE_STRESS_TOL_KB = STRESS_2D_THR / (h⊥/d) 显式设。
+# 变胞段（ISIF>=3）的 ENCUT 系数：2.0×max(ENMAX)，为消除 Pulay 应力偏差。
+#   依据（2026-09-17 实测，同一几何只改 ENCUT）：390(1.51×)→507(1.96×) 各应力分量
+#   各向同性平移 +1.0 kB；507→624(2.41×) 变化 <0.02 kB。S2/S4 不受影响（Pulay 不影响力）。
+CELL_STAGE_ENCUT_FACTOR = 2.0
 INPLANE_TOL_KB = 0.2                 # 兜底值（算不出 h⊥/d 时用）
 TOL_LAYER_KB = 0.4                   # 2D 面内应力的【层内口径】阈值(kbar)，
                                      # 比 S4 的 STRESS_2D_THR=0.5 留余量
@@ -408,8 +433,17 @@ CONF_SPEC = {
     # 开了之后 S2/S4 必须跟 S1 用同一套（它们的 gen 从 S1 的 INCAR 抄这几个标签），
     # 否则取力/弛豫处在不同静电边界条件下，力常数没有意义。
     "DIPOLE_2D": (None, "str"),
-    "STALL_MINUTES": (60, "int"),        # run_relax.sh 看门狗阈值
+    # run_relax.sh 看门狗阈值。2026-09-17 由 60 提到 180：当天有 3 个材料（Mo2S3 A4-3-1、
+    #   AlN kl、AlN ke）都在段 2(b) 的 SCF 中被判"OUTCAR 与 OSZICAR 同时 60 分钟无增长"
+    #   而杀掉，但单步 EDDAV 只有 1~3 秒、节点也不同 —— 是文件系统/节点侧的瞬时停顿。
+    #   A4-3-1 提到 180 后一次跑通，所以默认值按证据放宽。
+    "STALL_MINUTES": (180, "int"),
     "INPLANE_STRESS_TOL_KB": (0.2, "float"),   # 2D 变胞稳定判据③：面内分量阈值(kB,胞口径)
+    # 变胞段（ISIF>=3）的两个数值旋钮，2026-09-17 加（Ti2S3 ZBRENT 故障的产物）：
+    #   CELL_STAGE_EDIFFG     变胞段 EDIFFG。正数 = 能量判据(eV)；负数 = 力判据(eV/Å)。
+    #   CELL_FORCE_TOL_EV_A   变胞段末态最大力上限(eV/Å)，超过则判定本遍未稳定、再跑一遍。
+    "CELL_STAGE_EDIFFG": ("1E-4", "str"),
+    "CELL_FORCE_TOL_EV_A": (0.01, "float"),
     "MOL_KPOINTS": ("gamma", "str"),     # 以下 MOL_* 由 mol_common 使用
     "MOL_ISPIN": ("auto", "str"),
     "MOL_MOMENT": ("1.0", "str"),
@@ -538,10 +572,37 @@ def apply_step_params():
             sys.exit("[ERROR] INPLANE_STRESS_TOL_KB 必须 > 0，当前 %r" % _ip)
         globals()["INPLANE_TOL_KB"] = _ipf
 
+    # ---- 变胞段数值旋钮（CELL_STAGE_EDIFFG / CELL_FORCE_TOL_EV_A）----
+    #   为什么需要按材料覆盖：能量判据的合适取值与体系的软硬有关，过松会让晶胞提前收手，
+    #   过紧又退回"力判据空转"。默认 1E-4 eV 是本批 2D 材料实测出来的。
+    g = globals()
+    _ce = STEP_PARAMS.get("CELL_STAGE_EDIFFG")
+    if _ce not in (None, ""):
+        _ces = str(_ce).strip()
+        try:
+            float(_ces)
+        except ValueError:
+            sys.exit("[ERROR] CELL_STAGE_EDIFFG=%r 不是数（正数=能量判据 eV，负数=力判据 eV/Å）"
+                     % _ce)
+        g["CELL_STAGE_EDIFFG"] = _ces
+        for _k in ("b", "c"):            # STAGE_SPEC 里存的是定义时的字符串副本，必须一起改
+            if _k in STAGE_SPEC:
+                STAGE_SPEC[_k]["EDIFFG"] = _ces
+        print("[..] step.conf 覆盖变胞段 EDIFFG = %s" % _ces)
+    _cfv = STEP_PARAMS.get("CELL_FORCE_TOL_EV_A")
+    if _cfv not in (None, ""):
+        try:
+            _cff = float(_cfv)
+        except (TypeError, ValueError):
+            sys.exit("[ERROR] CELL_FORCE_TOL_EV_A=%r 不是数" % _cfv)
+        if _cff <= 0:
+            sys.exit("[ERROR] CELL_FORCE_TOL_EV_A 必须 > 0，当前 %r" % _cfv)
+        g["CELL_FORCE_TOL_EV_A"] = _cff
+        print("[..] step.conf 覆盖变胞段力上限 = %s eV/Å" % _cff)
+
     # ---- [PATCH-UCONS] step.conf 覆盖 DFT+U 设置（按材料生效）----
     # 原来 AUTO_U / U_OVERRIDE / U_ANION_GATE 只在本文件里（五个技能共用），
     # 想给单个材料放行 U 只能改公共池，改了又会影响其它技能。
-    g = globals()
     v = STEP_PARAMS.get("AUTO_U")
     if v not in (None, ""):
         s = str(v).strip().lower()
@@ -1568,17 +1629,35 @@ _ARCHIVE="OUTCAR OSZICAR CONTCAR vasprun.xml XDATCAR"
 #   Mo2S3(A4-3-1) 段2(b) 被误判卡死（queue.err 写 "OUTCAR 已 60 分钟无增长"），
 #   而 queue.out 里 DAV 5→10 一直在收敛 —— 白杀一次 1 小时 14 分的作业。
 #   两个指纹都没动才算真挂死；这与 autozt 自己的 hang_check 判据一致。
+# 累计 CPU 时间（秒）：优先用 VASP 进程，取不到退回看门狗那个 pid。
+#   ★ 2026-09-17 加（wangchao 要求）：只看文件大小会误杀 —— 在 Lustre 上如果看门狗
+#   与作业不同节点，stat 可能读到客户端缓存的旧大小；而 VASP 真的挂死（MPI 死锁）时
+#   CPU 时间也不再增长。两者的区别只有 CPU 时间能分辨：
+#     CPU 在涨、文件不涨 → 缓存/写入延迟，不该杀；CPU 也不涨 → 真卡死，立即杀。
+_cpu_seconds () {
+    ps -eo time=,comm= 2>/dev/null | awk '$2 ~ /vasp/ { n=split($1,a,":"); s=0; for(i=1;i<=n;i++) s=s*60+a[i]; t+=s } END{ print t+0 }'
+}
+
 _watchdog () {
-    local pid="$1" last=-1 last_o=-1 now now_o stall=0
+    local pid="$1" last=-1 last_o=-1 last_cpu=-1 now now_o now_cpu stall=0
     [ "${STALL_MIN}" -le 0 ] && return 0
     while kill -0 "${pid}" 2>/dev/null; do
         sleep 60
         now=$(stat -c %s OUTCAR 2>/dev/null || echo 0)
         now_o=$(wc -l < OSZICAR 2>/dev/null || echo 0)
-        if [ "${now}" = "${last}" ] && [ "${now_o}" = "${last_o}" ]; then
+        now_cpu=$(_cpu_seconds)
+        # 三个指纹里【任一】在涨 = 活着
+        if [ "${now}" = "${last}" ] && [ "${now_o}" = "${last_o}" ] && [ "${now_cpu}" = "${last_cpu}" ]; then
             stall=$((stall + 1))
             if [ "${stall}" -ge "${STALL_MIN}" ]; then
-                echo "[run_relax][watchdog] OUTCAR(${now}B) 与 OSZICAR(${now_o} 行) 已 ${STALL_MIN} 分钟同时无增长，判定卡死，终止本段" >&2
+                {
+                    echo "[run_relax][watchdog] OUTCAR(${now}B)/OSZICAR(${now_o} 行)/CPU(${now_cpu}s) 已 ${STALL_MIN} 分钟同时无增长，判定卡死，终止本段"
+                    echo "[run_relax][watchdog] 判定快照（供事后分辨缓存延迟 vs 真死）："
+                    hostname; date
+                    ps -eo pid,ppid,stat,time,pcpu,rss,comm 2>/dev/null | head -40
+                    echo "--- df -h . ---"; df -h . 2>/dev/null | tail -2
+                    echo "--- uptime ---"; uptime
+                } >>queue.err 2>&1
                 kill -TERM "${pid}" 2>/dev/null || true
                 sleep 30
                 kill -KILL "${pid}" 2>/dev/null || true
@@ -1589,6 +1668,7 @@ _watchdog () {
         fi
         last="${now}"
         last_o="${now_o}"
+        last_cpu="${now_cpu}"
     done
 }
 
@@ -1618,6 +1698,24 @@ _last_inplane () {
     grep -o "^ *in kB .*" OUTCAR 2>/dev/null | tail -1 | awk '
         { x=$3<0?-$3:$3; y=$4<0?-$4:$4; xy=$6<0?-$6:$6;
           m=x; if (y>m) m=y; if (xy>m) m=xy; printf "%.4f", m }' || true
+}
+
+# _max_force —— OUTCAR 最后一个 TOTAL-FORCE 块里的最大力分量 (eV/Å)；取不到打印空。
+#   用途见 CELL_FORCE_TOL_EV_A：变胞段改用能量判据后，VASP 可能在力还没收干净时就停，
+#   而力不干净的晶格会原样传给 S2/S4，所以稳定判据额外要求它达标。
+_max_force () {
+    awk '/TOTAL-FORCE/ { f=1; dash=0; m=0; next }
+         f && /^-+/ { dash++; if (dash >= 2) f=0; next }
+         f && NF >= 6 { for (i=4; i<=6; i++) { v=$i; if (v<0) v=-v; if (v>m) m=v } }
+         END { if (m>0) printf "%.4f", m }' OUTCAR 2>/dev/null || true
+}
+
+# _max_force_ok —— 末态最大力是否达标（读不到就放过，不因解析失败误判"未稳定"）
+_max_force_ok () {
+    local mf; mf="$(_max_force)"
+    [ -z "${mf}" ] && return 0
+    _abs_gt "${mf}" "${FORCE_TOL}" && return 1
+    return 0
 }
 
 # _abs_gt <数值> <阈值> —— |数值| > 阈值 时返回 0（真）
@@ -1652,6 +1750,7 @@ _cell_settled () {
     else
         if [ -n "$2" ] && _abs_gt "$2" "${PRESS_TOL}"; then return 1; fi
     fi
+    if ! _max_force_ok; then return 1; fi   # 能量判据可能让 VASP 在力没洗干净时就停
     _converged
 }
 
@@ -1666,10 +1765,19 @@ _run_stage () {
         echo "[run_relax] ${desc} —— 已完成，跳过"
         return 0
     fi
-    if [ "${EARLY_EXIT}" = "1" ] && [ "${ee}" = "1" ] && _converged; then
+    # ★ STAGES_RUN 闸门（2026-09-17 实测故障，Ti2S3 Z4-3-1 / jobid 3847708）：
+    #   _converged 读的是【当前目录里的 OUTCAR】，而作业刚起来时那是【上一次作业留下的】。
+    #   于是重投时第一段被「上一段已收敛」跳过（写 .s1.skipped），后面变胞段接手的是
+    #   上一次遗留的旧 CONTCAR —— 那个晶胞往往已经在旧 ENCUT 下弛豫到位，没有梯度可走，
+    #   CG 空转十几步后 ZBRENT 崩掉。只有【本次作业内真的跑过至少一段】之后，_converged
+    #   的结论才属于本次运行，才允许用它跳过后续段。
+    if [ "${EARLY_EXIT}" = "1" ] && [ "${ee}" = "1" ] && [ "${STAGES_RUN}" = "1" ] && _converged; then
         echo "[run_relax] ${desc} —— 上一段已收敛，跳过（本段不改晶胞）"
         : > ".${tag}.skipped"      # ★ 写 .skipped 不写 .done：被跳过的段不算已完成
         return 0
+    fi
+    if [ "${EARLY_EXIT}" = "1" ] && [ "${ee}" = "1" ] && [ "${STAGES_RUN}" = "0" ]; then
+        echo "[run_relax] ${desc} —— 本次作业还没跑过任何段，不采信目录里残留的 OUTCAR（防陈旧跳过）"
     fi
     # 本段上次跑了一半被杀：CONTCAR 完好就从它接着算，不从头再来
     if [ -f ".${tag}.started" ] && _contcar_ok; then
@@ -1677,6 +1785,7 @@ _run_stage () {
         cp CONTCAR POSCAR
     fi
     : > ".${tag}.started"
+    STAGES_RUN=1        # 本段真的要跑 VASP 了：此后 _converged 读到的才是本次作业的输出
     echo "[run_relax] ${desc}"
     cp "${incar}" INCAR
 
@@ -1789,6 +1898,12 @@ def build_in_job_stages(outdir: Path):
         _f = _layer_factor(outdir / "POSCAR", _vax_bj)
         if _f and _f > 0:
             _tol_cell = TOL_LAYER_KB / _f
+            # ★ 下限 0.05 kB（wangchao 2026-09-17）：AlN/BeO 这类平面单层的 h⊥/d 可达 6，
+            #   0.4/6 = 0.067 kB 已经接近 VASP 应力的数值噪声（0.05~0.1 kB 量级），
+            #   变胞循环会在阈值附近来回振荡、永远收敛不了。设下限保证判据在可分辨范围内。
+            if _tol_cell < 0.05:
+                print("[..] 层内阈值 %.4f kB 低于数值噪声，抬到下限 0.05 kB" % _tol_cell)
+                _tol_cell = 0.05
             print("[..] 2D 层内口径换算：h⊥/d = %.3f → 面内阈值 %.4f kB（胞口径）"
                   "= %.2f kbar（层内）" % (_f, _tol_cell, _tol_cell * _f))
         else:
@@ -1801,9 +1916,25 @@ def build_in_job_stages(outdir: Path):
         print("[WARN] 未能从 submit.sh 解析 VASP 执行行 —— 跳过作业内分段，保持单段 INCAR")
         return False
 
+    # 变胞段的 ENCUT 单独提到 2.0×max(ENMAX)（2026-09-17，wangchao 定）：
+    #   Pulay 应力只影响【应力张量】，不影响固定几何下的力 —— 实测同几何下
+    #   ENCUT 390→507 每个应力分量各向同性地平移约 +1.0 kB，507→624 变化 <0.02 kB。
+    #   所以：① 用应力定晶格的变胞段（ISIF=3）必须用收敛 ENCUT（2.0×），否则晶格
+    #   是在带 ~1 kB 偏差的应力下定的；② S2/S4 是固定几何算力/静态，与 Pulay 无关，
+    #   保持原 ENCUT（省掉约 60% 的平面波成本，S4 有 166~478 帧，差别很大）。
+    #   面内应力门禁读的是 S1 的 OUTCAR，S1 改 2.0× 后自然满足。
+    try:
+        _encut_cell = str(encut_from_potcar(outdir / "POTCAR", CELL_STAGE_ENCUT_FACTOR))
+    except BaseException:                                  # noqa: BLE001
+        _encut_cell = None
     stages = []
     for k, st in enumerate(STAGE_ORDER):
         spec = {a: b for a, b in STAGE_SPEC[st].items() if not a.startswith("_")}
+        if _encut_cell:
+            _moves = (str(spec.get("ISIF") or "").startswith(("3", "4", "5", "6", "7", "8"))
+                      or str(spec.get("IOPTCELL") or "").strip() not in ("", "None"))
+            if _moves:
+                spec["ENCUT"] = _encut_cell
         if _lc_mode():
             spec.pop("IOPTCELL", None)      # 同上：LATTICE_CONSTRAINTS 模式不给老标签
         text = set_incar_tags(base,
@@ -1861,6 +1992,9 @@ def build_in_job_stages(outdir: Path):
              "CELL_PASS_MAX=%d # 变胞段最多重复几遍" % int(CELL_PASS_MAX),
              "CELL_PASS_TOL=%s # 稳定判据②：本遍晶格矢量分量最大变化 (Å)" % CELL_PASS_TOL,
              "CELL_SETTLED=1   # 无变胞段时视为无需稳定判定；进循环会置 0",
+             "FORCE_TOL=%s     # 变胞段末态最大力上限 (eV/Å)：能量判据可能在力没洗干净时就停"
+             % CELL_FORCE_TOL_EV_A,
+             "STAGES_RUN=0     # 本次作业是否真跑过至少一段（防用上次遗留的 OUTCAR 判跳过）",
              RUN_RELAX_HELPERS,
              ""]
 
@@ -1869,6 +2003,12 @@ def build_in_job_stages(outdir: Path):
         # 变胞段一律 ee=0（禁止被力判据跳过）；不改胞的段沿用 EARLY_EXIT 开关
         lines.append('_run_stage %s %s %s "%s" %s'
                      % (tag, fname, pass_flag, desc, "0" if cell_stage else "1"))
+        # ★ 每段跑完记一行 (面内应力, 末态最大力, |P|) 三元组（2026-09-18，成本为零）：
+        #   实测教训：MoS2 曾出现段 b 0.078 → 段 c 0.143 kB 的段间抖动，当时只能另花一轮去
+        #   比对两段 CONTCAR 才判定是同一几何的数值噪声。有了这行，下次直接看日志即可。
+        lines.append('echo "[run_relax] 段存档 %s: 面内max|σ|=$(_last_inplane 2>/dev/null || echo NA) kB  '
+                     'max|F|=$(_max_force 2>/dev/null || echo NA) eV/Å  |P|=$(_last_pressure 2>/dev/null || echo NA) kB"'
+                     % tag)
 
     for i in prefix:
         _emit(i, "s%d" % (i + 1), "0" if i == last_overall else "1")
@@ -1893,10 +2033,11 @@ def build_in_job_stages(outdir: Path):
         lines += ['    _dl="$(_cell_delta ".cellin.${CELL_PASS}" CONTCAR)"',
                   '    _lp="$(_last_pressure 2>/dev/null || true)"',
                   '    _ip="$(_last_inplane 2>/dev/null || true)"',
+                  '    _mf="$(_max_force 2>/dev/null || true)"',
                   # 2D 判面内分量、3D 判 external pressure（_cell_settled 里按 CELL_2D 分流）
                   '    _crit="${_lp}"; _tol="${PRESS_TOL}"; [ "${CELL_2D}" = "1" ] && { _crit="${_ip}"; _tol="${INPLANE_TOL}"; }',
                   '    _critname="|P|"; [ "${CELL_2D}" = "1" ] && _critname="面内max|σ|"',
-                  '    echo "[run_relax] 第 ${CELL_PASS} 遍：max|Δ晶格| = ${_dl} Å   |P| = ${_lp} kB   面内max|σ| = ${_ip} kB"',
+                  '    echo "[run_relax] 第 ${CELL_PASS} 遍：max|Δ晶格| = ${_dl} Å   |P| = ${_lp} kB   面内max|σ| = ${_ip} kB   max|F| = ${_mf} eV/Å (上限 ${FORCE_TOL})"',
                   '    if _cell_settled "${_dl}" "${_crit}"; then',
                   '        echo "[run_relax] 变胞段稳定（力收敛 + 晶格变化 < ${CELL_PASS_TOL} Å + ${_critname} < ${_tol} kB），共 ${CELL_PASS} 遍"',
                   "        CELL_SETTLED=1",

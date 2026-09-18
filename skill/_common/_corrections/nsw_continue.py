@@ -26,7 +26,13 @@ class NswContinueCorrection(CorrectionHandler):
             actions=["retry 续算（opt 步自动把 CONTCAR 拷成 POSCAR）",
                      "若连续 3 轮都刚好打满 NSW：考虑把 NSW 调大或放宽力判据"
                      "（改项目 step.conf，改前请示）"],
-            commands=[self.retry_cmd(ctx), self.start_cmd(ctx)])
+            commands=[self.retry_cmd(ctx), self.start_cmd(ctx)],
+            changes=[],
+            verify=["确认能量/受力仍在改善且只是达到步数上限",
+                    "确认 retry 后使用保留的 CONTCAR/中间结果续算"],
+            rollback=["无需回滚输入；若连续续算仍不收敛，转人工修改参数"],
+            requires_approval=False,
+            execute_via="autozt retry -> autozt start")
 
 
 HANDLER = NswContinueCorrection()

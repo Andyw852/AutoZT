@@ -43,14 +43,17 @@ steps:
      gen_need: [dim_common.py, stepconf.py, step.conf, kl_common.py,
                 phonon_fit_driver.py, submit_fit.tpl]}
 
-+io_schema:
+io_schema:
   inputs: [{name: POSCAR, from: user, required: true, desc: "材料结构"}]
-  outputs: [{name: workflow_outputs, step: final, type: directory, desc: "由技能实际步骤产生的结果文件"}]
-  params: []
-  steps: []
+  outputs: [{name: phonon_summary.json, step: S3_phonon, type: json, desc: "声子谱与虚频检查"}, {name: CONTCAR, step: S1_opt, type: structure, desc: "优化后结构"}]
+  params: [{name: SUPERCELL, where: step.conf, desc: "phonopy 位移超胞设置"}]
+  steps:
+    - {step: S1_opt, title: "DFT relax", inputs: [POSCAR], outputs: [CONTCAR], validator: "力收敛"}
+    - {step: S2_disp, title: "Finite displacements", inputs: [CONTCAR], outputs: [phonopy_disp.yaml], validator: "所有位移 OUTCAR 完成"}
+    - {step: S3_phonon, title: "Phonon fit", inputs: [phonopy_disp.yaml], outputs: [phonon_summary.json], validator: "phonon check"}
 flow:
-  summary: "按技能步骤生成并校验科学计算结果"
-  stages: [{name: workflow, steps: [], produces: [workflow_outputs]}]
+  summary: "DFT 结构优化 → 有限位移力 → fc2 拟合与声子谱"
+  stages: [{name: phonon, steps: [S1_opt, S2_disp, S3_phonon], produces: [phonon_summary.json]}]
 corrections: [node_fail, dir_missing]
 requires:
   python: [phonopy, numpy, spglib]

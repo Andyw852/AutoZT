@@ -56,6 +56,18 @@ export AOCL_ENABLE_INSTRUCTIONS=AVX512
 export LD_LIBRARY_PATH=/public/home/wangchao/software/aocl-gcc/5.0.0/gcc/lib_LP64:$CONDA_PREFIX/lib:$LD_LIBRARY_PATH
 unset MKL_NUM_THREADS MKL_DEBUG_CPU_TYPE I_MPI_PMI_LIBRARY
 ulimit -s unlimited
+# [FIX P49/OMP 2026-09-18，移植自 taskflow-v2.0] "第一个温度（100 K）的 RTA 写完、
+# rank 0 进入 cumulative-κ 段就 SIGSEGV（rc=139）"的根因 = **OpenMP 工作线程栈溢出**：
+# conductivity.f90 的 CumulativeTConduct 用 reduction(+:results)，而
+# results(3,3,nbands,nticks) 在 nbands=384、nticks=100（默认）时约 2.8 MB **每线程一份**；
+# ulimit -s unlimited 只管主线程，libgomp 的线程栈由 OMP_STACKSIZE 决定。
+# 实测（jzzn，1x1x1 网格 + Mg4C60 128 原子胞，每轮数十秒）：
+#   OMP=1 未设 STACKSIZE → normal exit；OMP=2/4 未设 → SIGSEGV（固定在 100 K 之后）；
+#   OMP=2/4/8 且 OMP_STACKSIZE=8M/64M/256M → 全部 normal exit；
+#   与 MPI rank 数（1/2/4/12）、q 网格（1³/2³/7³）无关；自带的 InAs 例子（nbands=6）
+#   私有副本仅约 43 KB，OMP=2 下正常，所以此前一直没暴露。
+export OMP_STACKSIZE=1G
+export GOMP_STACKSIZE=1G
 
 # ---- 退化保护：rank 数 = 1 就是串行，宁可当场失败也不要白跑一夜 ----
 #   来源（taskflow-v2.0，2026-09-16 同步）：ShengBTE 靠 MPI 按 q 点并行，写 mpirun -n 1
@@ -77,6 +89,7 @@ mpirun -n $SLURM_NTASKS \
     --mca pml ucx --mca osc ucx --mca btl ^openib,tcp \
     -x UCX_TLS=rc,sm,self -x UCX_NET_DEVICES=mlx5_0:1 -x UCX_LOG_LEVEL=error \
     -x OMP_NUM_THREADS -x OMP_PROC_BIND -x OMP_PLACES \
+    -x OMP_STACKSIZE -x GOMP_STACKSIZE \
     -x BLIS_NUM_THREADS -x AOCL_ENABLE_INSTRUCTIONS -x LD_LIBRARY_PATH \
     {{SHENGBTE_EXE}} > shengbte.log 2>&1
 _rc=$?
@@ -170,6 +183,21 @@ if f:
         d["kappa_2d_normalized_xx_yy_zz"] = [[float(v) * FACTOR for v in row]
                                             for row in d["kappa_xx_yy_zz"]]
         d["kappa_2d_normalized_inplane_xx_yy"] = [[r[1] * FACTOR, r[5] * FACTOR] for r in rows]
+if not d["KAPPA_DONE"]:
+    # [FIX P49 2026-09-18，移植自 taskflow-v2.0] 只有 small-grain limit 时不要静默失败：
+    # 记下"三声子段未完成"，让 KAPPA_DONE=false 变成**有信息**的失败，而不是看起来像
+    # "什么都没算"的空白。BTE.KappaTensorVsT_sg 是纯谐性、完全不含三声子散射的最小 κ
+    # （说明见 gen_step6_kappa.py 的 P49 注释），单独存在时**不可**当作热导率交付或引用。
+    try:
+        _sg = _read_kt("BTE.KappaTensorVsT_sg")
+    except Exception:
+        _sg = []
+    if _sg:
+        d["small_grain_limit_present"] = True
+        d["small_grain_limit_rows"] = len(_sg)
+        d["warning"] = ("只找到 BTE.KappaTensorVsT_sg = small-grain limit（纯谐性、"
+                        "无三声子散射），不是热导率；RTA(_RTA)/迭代(_CONV) 段未完成，"
+                        "不可当作 κ 引用或对外交付")
 json.dump(d, open("kappa_summary.json", "w"), ensure_ascii=False, indent=2)
 print("KAPPA_DONE" if d["KAPPA_DONE"] else "NO_KAPPA")
 PY

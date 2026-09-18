@@ -71,14 +71,17 @@ optional_steps:
                     cutoff_conv_driver.py, submit_mace_relax.tpl,
                     disps.npy, forces.npy, klmace_params.txt, workflow_method.txt]}
 
-+io_schema:
-  inputs: [{name: POSCAR, from: user, required: true, desc: "材料结构"}]
-  outputs: [{name: workflow_outputs, step: final, type: directory, desc: "由技能实际步骤产生的结果文件"}]
-  params: []
-  steps: []
+io_schema:
+  inputs: [{name: POSCAR, from: user, required: true, desc: "材料结构"}, {name: MACE_MODEL, from: config, required: true, desc: "MACE 势模型路径"}]
+  outputs: [{name: phonon_summary.json, step: S3_phonon, type: json, desc: "声子谱与虚频检查"}, {name: CONTCAR, step: S1_relax, type: structure, desc: "优化后结构"}]
+  params: [{name: DEVICE, values: [cpu], default: cpu, where: step.conf, desc: "MACE 推理设备"}]
+  steps:
+    - {step: S1_relax, title: "MACE relax", inputs: [POSCAR, MACE_MODEL], outputs: [CONTCAR], validator: "converged marker"}
+    - {step: S2_force, title: "Displacement forces", inputs: [CONTCAR, MACE_MODEL], outputs: [forces_summary.json], validator: "FORCES_DONE"}
+    - {step: S3_phonon, title: "Phonon fit", inputs: [forces_summary.json], outputs: [phonon_summary.json], validator: "PHONON_DONE"}
 flow:
-  summary: "按技能步骤生成并校验科学计算结果"
-  stages: [{name: workflow, steps: [], produces: [workflow_outputs]}]
+  summary: "MACE 弛豫 → 随机位移力 → fc2 拟合与声子谱"
+  stages: [{name: phonon, steps: [S1_relax, S2_force, S3_phonon], produces: [phonon_summary.json]}]
 corrections: [node_fail, dir_missing]
 requires:
   python: [mace-torch, torch, ase, phonopy, symfc, spglib, numpy, alm]

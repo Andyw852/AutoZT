@@ -7,7 +7,6 @@ import os
 _PKG_DIR = os.path.normpath(os.path.dirname(os.path.abspath(__file__)))
 _PKG_ROOT = os.path.normpath(os.path.dirname(_PKG_DIR))
 
-# ===== 来自 00_state.py =====
 # -*- coding: utf-8 -*-
 """00_state —— 全局常量 / 配置模板 / 可变缓存 / 标准库 import。
 
@@ -30,10 +29,8 @@ import subprocess
 import sys
 import time
 
-# ===== AUTOZT_VERSION (原 L731-L731) =====
 AUTOZT_VERSION = "1.2.0"   # 与 autozt/__init__.py 的 __version__ 保持一致（发布时两处同改）
 
-# ===== CONFIG_SEARCH (原 L735-L743) =====
 CONFIG_SEARCH = [
     "./tf.yaml", "./tf.yml", "./tf.json",
     os.path.join(_PKG_DIR, "tf.yaml"),
@@ -43,7 +40,6 @@ CONFIG_SEARCH = [
     os.path.expanduser("~/.tf.yaml"),
 ]
 
-# ===== EXAMPLE_CONFIG (原 L745-L785) =====
 EXAMPLE_CONFIG = """\
 # ===== taskflow v3 全局配置 =====
 host: jzzn                 # 默认 ssh 别名（可被项目 project_setting/hpc.yaml 的 ssh_host 覆盖）
@@ -91,7 +87,6 @@ task_types:
 # 老模式也支持：类型里写 root（= 超算目录，远端发现材料）而不写 local_root，行为同 v2.x
 """
 
-# ===== DEFAULT_PROJECT_CONFIG (原 L788-L810) =====
 DEFAULT_PROJECT_CONFIG = """\
 # 项目配置：tf_<项目名>.yaml（文件名全局唯一，禁止与其他项目重复）
 # 本文件放在项目文件夹的 project_setting/ 下；local_root 缺省 = project_setting 的父目录。
@@ -116,7 +111,6 @@ task_types:
     #   - {name: step1_PBE_opt, label: S1_opt, check: outcar_relax, gen: gen_step1_PBE_opt.py}
 """
 
-# ===== DEFAULT_HPC_SETTING (原 L812-L823) =====
 DEFAULT_HPC_SETTING = """\
 # 超算配置（创建项目时由 autozt init 复制为 project_setting/hpc.yaml，按项目改）
 name: jzzn                 # 显示在状态表 hpc 列
@@ -130,7 +124,6 @@ template_map:
   submit_ncl_3d.tpl: submit_jzzn_vaspncl_3d.tpl
 """
 
-# ===== DEFAULT_PROJECT_SETTING (原 L825-L842) =====
 DEFAULT_PROJECT_SETTING = """\
 # 项目设置（就近优先：从材料目录向上找最近的 project_setting）
 # v1.9.9：新建的技能默认【不参与自动推进】——init 只是把配置建好，
@@ -150,18 +143,14 @@ log_dir: "{matdir}/log"           # 该项目的操作日志 tf.log
 # fetch_files: [INCAR, POSCAR, POTCAR, KPOINTS, KPOINTS_OPT, kpath.json, submit.sh, OUTCAR, CONTCAR, EIGENVAL, vasprun.xml, queue.out]
 """
 
-# ===== SKILL_MANIFEST (原 L1091-L1091) =====
 SKILL_MANIFEST = "skill.yaml"
 
-# ===== SKILL_SCHEMA_MAX (原 L1092-L1092) =====
 # v1.0：schema 2 = 允许 skill.yaml 带自描述扩展段 io_schema / flow / corrections
 #（老 tf 只会忽略不认识的段，所以老技能写 schema: 1 完全不受影响）。
 SKILL_SCHEMA_MAX = 2
 
-# ===== COMMON_POOL_DIR (原 L1095-L1095) =====
 COMMON_POOL_DIR = "_common"
 
-# ===== _MANIFEST_TYPE_KEYS (原 L1098-L1101) =====
 _MANIFEST_TYPE_KEYS = ("desc", "steps", "optional_steps", "gen_need", "aux_files",
                        "gen_dir", "plot_steps", "run_steps", "dir_name",
                        "skill_subdir", "hpc", "work_dir", "root",
@@ -171,75 +160,54 @@ _MANIFEST_TYPE_KEYS = ("desc", "steps", "optional_steps", "gen_need", "aux_files
                        # 声明它即可通过 _remote_submit_preflight。
                        "submit_required")
 
-# ===== _PS_CACHE (原 L1640-L1640) =====
 _PS_CACHE = {}
 
-# ===== _WARN_WORKDIR (原 L1703-L1703) =====
 _WARN_WORKDIR = set()   # v1.11：work_dir 未显式指定时按技能去重的提示
 
-# ===== _LOCAL_ONLY_STEP_KEYS (原 L1875-L1877) =====
 _LOCAL_ONLY_STEP_KEYS = {"gen", "gen_need", "aux_files", "run", "group", "seq",
                          "contcar_to_poscar", "fetch_all", "fetch_files", "after",
                          "src"}   # v1.5 src
 
-# ===== SCANCEL_MARK (原 L2157-L2157) =====
 SCANCEL_MARK = ".tf_scancel.json"   # lpath 下的"autozt stop 取消"标记（v1.4）
 
-# ===== _MAX_INFLIGHT_DEFAULT (原 L2246-L2246) =====
 _MAX_INFLIGHT_DEFAULT = int(os.environ.get("AUTOZT_MAX_INFLIGHT", "6") or 6)
 
-# ===== _BUSY_KINDS (原 L2247-L2247) =====
 _BUSY_KINDS = ("R", "PD")   # OTHER=作业已完成/失败（job state 非 R/PD），不算并发占用
 
-# ===== _MAX_JOBS_DEFAULT (原 L2280-L2280) =====
 _MAX_JOBS_DEFAULT = os.environ.get("AUTOZT_MAX_JOBS")   # 字符串或 None
 
-# ===== REASON_MAX (原 L2522-L2522) =====
 REASON_MAX = 8      # 原因最多显示几个字符，超出直接截掉
 
-# ===== _SKILL_ONLY (原 L2915-L2915) =====
 _SKILL_ONLY = False      # v1.9：rerun --from-skill 时置 True，忽略项目侧模板覆盖
 
-# ===== STEP_CONF (原 L2996-L2996) =====
 STEP_CONF = "step.conf"
 
-# ===== _STEPCONF_MOD (原 L2997-L2997) =====
 _STEPCONF_MOD = {}
 
-# ===== _DIM_MOD (原 L3129-L3129) =====
 _DIM_MOD = {}
 
-# ===== FAN_JOBIDS (原 L3369-L3369) =====
 FAN_JOBIDS = {}   # 代表 jobid → 该扇出步骤的全部 jobid（scancel 时展开）
 
-# ===== _AUTO_CASCADE_MAX (原 L4368-L4368) =====
 _AUTO_CASCADE_MAX = max(1, int(os.environ.get("AUTOZT_AUTO_CASCADE", "8") or 8))
 
-# ===== FETCH_STAMP (原 L5088-L5088) =====
 FETCH_STAMP = ".tf_fetched"   # result_dir/<step>/ 下的"已抓取"戳记（v1.11）
 
-# ===== _MAT_DIR_CACHE (原 L5420-L5420) =====
 _MAT_DIR_CACHE = {}   # root -> [(relpath, basename, dir)]，resolve_mat_dir 扫盘缓存
 
-# ===== _RESOLVE_DISC_CACHE (原 L5438-L5438) =====
 _RESOLVE_DISC_CACHE = {}
 
-# ===== _LEVEL_ALIAS (原 L6036-L6039) =====
 _LEVEL_ALIAS = {"pbe": "pbe", "pbesol": "pbe", "gga": "pbe", "3": "pbe",
                 "step3": "pbe", "s3": "pbe",
                 "hse": "hse", "hse06": "hse", "4": "hse",
                 "step4": "hse", "s4": "hse"}
 
-# ===== _LEVEL_DESC (原 L6041-L6044) =====
 _LEVEL_DESC = {
     "pbe": "只算到 step3（PBE/PBEsol 级别；具体泛函仍由 step.conf 的 FUNC 决定，出厂 pbesol）",
     "hse": "继续算到 step4（HSE06）",
 }
 
-# ===== _LEVEL_HEADER (原 L6046-L6046) =====
 _LEVEL_HEADER = "# step.conf —— 本材料共用参数（BANDGAP 由 tf level 维护）\n\n[params]\n"
 
-# ===== USAGE (原 L6489-L6653) =====
 QUICK_USAGE = """\
 用法：autozt（短命令 pa）[-tt 技能] [-p 材料] [-j 步骤] 命令
 
@@ -500,7 +468,6 @@ USAGE = """\
   tf -p qHPC20 -j 1 clean              只删 S1_opt 步骤目录
 """
 
-# ===== STATUS_ALIAS (原 L6790-L6803) =====
 STATUS_ALIAS = {   # v1.4 -status 选项的状态词 → 内部 kind
     "done": "OK", "ok": "OK", "completed": "OK",
     "running": "R", "run": "R", "r": "R",
@@ -516,10 +483,8 @@ STATUS_ALIAS = {   # v1.4 -status 选项的状态词 → 内部 kind
     "cancelled": "SCANCEL", "canceled": "SCANCEL",
 }
 
-# ===== WATCH_PID (原 L6842-L6842) =====
 WATCH_PID = ".tf_watch.pid"     # watch 后台模式的 pid 文件名
 
-# ===== WATCH_LOG (原 L6843-L6843) =====
 WATCH_LOG = ".tf_watch.log"     # watch 后台模式的日志文件名
 
 # ===== JSON_SCHEMA（v2.0 新增，autozt json --schema 用）=====
@@ -555,7 +520,6 @@ step 对象：
   job   : {id,state,info} | null    作业信息
 """
 
-# ===== 来自 01_yamlmini.py =====
 # -*- coding: utf-8 -*-
 # 01_yamlmini —— 迷你 YAML 解析器 + load_config 配置加载
 #
@@ -573,7 +537,6 @@ step 对象：
 # 由 __init__.py 导入后把 _mini_yaml 注入共享命名空间；
 # 本文件只保留 load_config（依赖 CONFIG_SEARCH 常量）。
 
-# ===== load_config (原 L1058-L1080) =====
 def load_config(path):
     from autozt import _mini_yaml
     if path is None:
@@ -599,7 +562,6 @@ def load_config(path):
         except ValueError as e:
             sys.exit("错误：本机 python 没有 PyYAML，内置解析器又报错：%s" % e)
 
-# ===== 来自 02_skills.py =====
 # -*- coding: utf-8 -*-
 # 02_skills —— 技能发现 / skill.yaml 清单 / 技能装配
 #
@@ -619,7 +581,6 @@ def load_config(path):
 #   L1329  skill_checks_for
 #   L1346  cmd_skills
 
-# ===== skill_search_dirs (原 L1104-L1121) =====
 def skill_search_dirs(cfg):
     from autozt import _PKG_ROOT
     """技能搜索路径，靠前优先（同名技能先命中者生效）。"""
@@ -639,7 +600,6 @@ def skill_search_dirs(cfg):
             out.append(rd)
     return out
 
-# ===== _load_manifest (原 L1124-L1179) =====
 def _load_manifest(path):
     from autozt import _mini_yaml
     """解析单个 skill.yaml；返回 (key, 骨架) 或 (None, 原因)。"""
@@ -705,7 +665,6 @@ def _load_manifest(path):
     skel["_skill_checks"] = cp if (cp and os.path.isfile(cp)) else None
     return key, skel
 
-# ===== discover_skills (原 L1182-L1198) =====
 def discover_skills(cfg, verbose=False):
     """扫描所有搜索路径，返回 {key: 骨架}；靠前路径优先，同名不覆盖。"""
     found, bad = {}, []
@@ -738,7 +697,6 @@ def discover_skills(cfg, verbose=False):
         pass
     return found
 
-# ===== _merge_type (原 L1201-L1214) =====
 def _merge_type(skel, over):
     """技能骨架 + 用户覆盖。标量/列表整体覆盖，一层字典递归合并；
     用户显式写 steps 就完全接管（保留手改逃生口）。"""
@@ -754,7 +712,6 @@ def _merge_type(skel, over):
             out[k] = v
     return out
 
-# ===== apply_skills (原 L1217-L1235) =====
 def apply_skills(cfg, verbose=False):
     """把发现到的技能并进 cfg['task_types']；已有同名段作为覆盖层。
     必须在 merge_project_configs 之前调用（项目段要叠在骨架之上）。"""
@@ -775,7 +732,6 @@ def apply_skills(cfg, verbose=False):
     cfg["_skills"] = skills
     return cfg
 
-# ===== _seq_sort_steps (原 L1238-L1248) =====
 def _seq_sort_steps(steps):
     """按 seq 稳定重排步骤（seq 解析不出来的保持原相对位置，不打乱老技能）。"""
     _keyed, _last = [], -1.0
@@ -788,7 +744,6 @@ def _seq_sort_steps(steps):
         _keyed.append((_v, _i, _s))
     return [_x[2] for _x in sorted(_keyed, key=lambda _x: (_x[0], _x[1]))]
 
-# ===== expand_optional_steps (原 L1251-L1301) =====
 def expand_optional_steps(t):
     """可选步骤组展开（取代写死的 PLOT_STEP_DEFS / _inject_plot_steps）。
     optional_steps.<开关名>.{default, steps[]}；步骤里的 after 是锚点名前缀，
@@ -841,7 +796,6 @@ def expand_optional_steps(t):
         t.pop("_optional_off", None)
         t.pop("_optional_off_flat", None)
 
-# ===== _seq_key (原 L1304-L1311) =====
 def _seq_key(v):
     """把 seq / -j token 归一成可比较的数：'2'->2.0，'2.1'->2.1，非数->None。"""
     if v is None:
@@ -851,14 +805,12 @@ def _seq_key(v):
     except (TypeError, ValueError):
         return None
 
-# ===== _name_seq (原 L1314-L1318) =====
 def _name_seq(name):
     """从步骤名抽序号：step2 -> 2.0，step2.1_static -> 2.1，step1a_opt -> 1.0。
     抓 'step' 后面的数字（可带一位小数），字母后缀（a/b/c）忽略。"""
     m = re.match(r"step(\d+(?:\.\d+)?)", str(name or ""))
     return float(m.group(1)) if m else None
 
-# ===== step_seq (原 L1321-L1326) =====
 def step_seq(s):
     """步骤序号：优先清单里的 seq，缺省从 stepN 名字推。"""
     if s.get("seq") is not None:
@@ -866,7 +818,6 @@ def step_seq(s):
     m = re.match(r"step(\d+)", str(s.get("name", "")))
     return m.group(1) if m else None
 
-# ===== skill_checks_for (原 L1329-L1343) =====
 def skill_checks_for(cfg, keys):
     """收集这些技能的私有判据源码 {key: 源码}，随采集器 payload 下发。"""
     out = {}
@@ -883,7 +834,6 @@ def skill_checks_for(cfg, keys):
             sys.exit("错误：技能 %s 的判据文件 %s 读取失败（%s）。" % (k, p, e))
     return out
 
-# ===== cmd_skills (原 L1346-L1368) =====
 def cmd_skills(cfg, tt=None):
     """autozt skills —— 列出已发现的技能。"""
     skills = cfg.get("_skills") or discover_skills(cfg, verbose=True)
@@ -945,7 +895,6 @@ def _skill_spec_brief(s):
         txt += " !%d" % (len(errs) + len(warns))
     return txt
 
-# ===== 来自 03_projects.py =====
 # -*- coding: utf-8 -*-
 # 03_projects —— 项目配置扫描与合并 / 任务类型解析
 #
@@ -960,7 +909,6 @@ def _skill_spec_brief(s):
 #   L1530  get_types
 #   L1595  step_cfg
 
-# ===== scan_project_configs (原 L1371-L1412) =====
 def scan_project_configs(roots, excludes=None):
     """扫描项目根下 project_setting/tf_*.yaml。
     返回 [(配置名, 路径, 项目目录)]；配置名（tf_<名>.yaml 的 <名>）全局唯一，重复即报错。
@@ -1042,7 +990,6 @@ def scan_project_configs(roots, excludes=None):
             stack.extend(subdirs)
     return found
 
-# ===== _stepconf_param_from_file (原 L1415-L1431) =====
 def _stepconf_param_from_file(path, key):
     """极简读取 step.conf 里某 [params] 键的值（行尾 # / ! 注释剥掉）。
     找不到文件/键返回 None。只用于驱动装配阶段读 BANDGAP 这类步骤图开关，
@@ -1061,7 +1008,6 @@ def _stepconf_param_from_file(path, key):
         pass
     return None
 
-# ===== resolve_stepconf_flags (原 L1434-L1442) =====
 def resolve_stepconf_flags(seg, ps_dir):
     """把项目共用 step.conf 里的步骤图开关映射成可选步骤组的开/关，注入 seg。
     目前一条：BANDGAP = pbe|hse  ->  bandgap_hse（pbe 关掉整段 HSE）。
@@ -1072,7 +1018,6 @@ def resolve_stepconf_flags(seg, ps_dir):
         if bg is not None:
             seg["bandgap_hse"] = (bg.lower() != "pbe")
 
-# ===== merge_project_configs (原 L1445-L1489) =====
 def merge_project_configs(cfg):
     """把项目配置（project_setting/tf_*.yaml）的 task_types 合并进全局配置。
     同 key：项目配置作为该类型的一个"段"（独立 local_root，缺省字段继承全局/主定义）。
@@ -1119,7 +1064,6 @@ def merge_project_configs(cfg):
                 tt[key] = seg
     return cfg
 
-# ===== _filter_run_steps (原 L1492-L1527) =====
 def _filter_run_steps(t):
     """run_steps: 只保留指定步骤（子集，顺序不变）。
     元素写法：序号 1/2/3/4（第 N 个计算步骤；三段式弛豫时 1 = step1a/b/c
@@ -1157,7 +1101,6 @@ def _filter_run_steps(t):
     kept.sort(key=lambda s: order[id(s)])
     t["steps"] = kept
 
-# ===== get_types (原 L1530-L1592) =====
 def get_types(cfg, tt=None, root_override=None, quiet=False):
     """把配置归一化成类型列表；应用 -tt 过滤和 ROOT 覆盖。
     项目配置合并进来的同 key 段在此展开为多个类型实例（key 相同，local_root 不同）。"""
@@ -1222,7 +1165,6 @@ def get_types(cfg, tt=None, root_override=None, quiet=False):
                         t["key"], skels[0] if skels else "band", src))
     return types
 
-# ===== step_cfg (原 L1595-L1602) =====
 def step_cfg(t, sname, m=None):
     """步骤配置；v3.1 起材料可携带所属段（_seg），段配置优先于类型条目。"""
     steps = ((m or {}).get("_seg") or {}).get("steps_cfg") \
@@ -1232,7 +1174,6 @@ def step_cfg(t, sname, m=None):
             return s
     return {}
 
-# ===== 来自 04_discover.py =====
 # -*- coding: utf-8 -*-
 # 04_discover —— 本地材料与目录发现 / 解析
 #
@@ -1248,11 +1189,9 @@ def step_cfg(t, sname, m=None):
 #   L1706  resolve_material_local
 #   L1801  log_action
 
-# ===== _natkey (原 L1608-L1609) =====
 def _natkey(s):
     return [int(x) if x.isdigit() else x for x in re.split(r"(\d+)", s)]
 
-# ===== discover_local (原 L1612-L1637) =====
 def discover_local(local_root):
     """本地项目根下发现有 POSCAR 的目录（root 自身 + ≤2 层嵌套；
     project_setting/result/log 天然无 POSCAR）。
@@ -1280,7 +1219,6 @@ def discover_local(local_root):
     mats.sort(key=lambda m: _natkey(m["name"]))
     return root, mats
 
-# ===== find_ps_dir (原 L1643-L1671) =====
 def find_ps_dir(matdir, rootstop, subdir=None):
     """找最近的 project_setting/。优先级（v1.7 自包含布局）：
       1) <matdir>/<subdir>/project_setting —— 指定技能子目录时最优先
@@ -1311,7 +1249,6 @@ def find_ps_dir(matdir, rootstop, subdir=None):
                 return h
     return None
 
-# ===== _load_yaml_file (原 L1674-L1678) =====
 def _load_yaml_file(path):
     from autozt import _mini_yaml
     if not os.path.isfile(path):
@@ -1319,7 +1256,6 @@ def _load_yaml_file(path):
     with open(path, encoding="utf-8") as f:
         return _mini_yaml(f.read()) or {}
 
-# ===== load_project_settings (原 L1681-L1689) =====
 def load_project_settings(ps_dir):
     """读取 project_setting 下的 setting.yaml 和 hpc.yaml（带缓存）。"""
     if ps_dir in _PS_CACHE:
@@ -1330,7 +1266,6 @@ def load_project_settings(ps_dir):
     _PS_CACHE[ps_dir] = ps
     return ps
 
-# ===== pkg_setting_path (原 L1692-L1700) =====
 def pkg_setting_path(name):
     from autozt import _PKG_DIR, _PKG_ROOT
     """taskflow 包内 setting/<name>.yaml 的位置（兼容 versions/vX 与平铺布局）。"""
@@ -1341,7 +1276,6 @@ def pkg_setting_path(name):
             return cand
     return None
 
-# ===== resolve_material_local (原 L1706-L1798) =====
 def resolve_material_local(t, root, m):
     """给本地发现的材料补齐：project_setting、hpc、路径、远端目录、有效 host。"""
     # v1.1：skill_subdir 子目录名（band/elastic…）。v1.7：先算出来，find_ps_dir
@@ -1448,7 +1382,6 @@ def resolve_material_local(t, root, m):
         m["rpath"] = os.path.normpath(m["rpath"])
     return m
 
-# ===== log_action (原 L1801-L1813) =====
 _ACTIVE_CFG = None      # v1.0：当前会话的配置（log_action 要拿它定位 history.jsonl）
 
 

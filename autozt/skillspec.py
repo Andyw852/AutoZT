@@ -32,9 +32,12 @@ _IO_TOP_KEYS = ("inputs", "outputs", "params", "steps", "notes")
 _IO_LIST_KEYS = ("inputs", "outputs", "params")
 # name 必填；其余可选。desc 建议写（autozt schema 直接展示给人看）。
 _IO_ITEM_KEYS = {
-    "inputs": ("name", "from", "required", "desc", "type"),
-    "outputs": ("name", "path", "step", "desc", "type", "consumers"),
-    "params": ("name", "values", "default", "desc", "where"),
+    # These fields are metadata contracts. They are validated and exposed to
+    # agents, while skill-specific parsers remain explicit implementations.
+    "inputs": ("name", "from", "binding", "required", "desc", "type", "unit"),
+    "outputs": ("name", "path", "step", "desc", "type", "unit", "method",
+                 "validator", "provenance", "consumers"),
+    "params": ("name", "values", "default", "desc", "where", "type", "unit"),
 }
 # io_schema.steps[]：**按步**的 I/O 与工具（tf skill show 渲染成"技能卡片"，
 # 对应论文里的 Generator / Tool / Validator / Output 四行）。
@@ -356,10 +359,10 @@ def _validate_corrections(key, corr, handler_names):
             if not nm:
                 issues.append(_issue(_ERR, "corrections[%d] 缺少 name", i))
                 continue
-            for k in ("name", "desc", "steps", "params", "severity", "ref"):
-                pass
+            # Declarative metadata only; execution remains in a registered handler.
             for k in c:
-                if k not in ("name", "desc", "steps", "params", "severity", "ref"):
+                if k not in ("name", "desc", "steps", "params", "severity", "ref",
+                             "match", "repair", "verify", "rollback"):
                     issues.append(_issue(_WARN,
                                          "corrections[%s] 有不认识的键 '%s'", nm, k))
         else:

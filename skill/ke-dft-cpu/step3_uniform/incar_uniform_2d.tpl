@@ -29,7 +29,8 @@ ISYM   = 2
 
 # ---- AMSET 关键：输出致密 DOS 与波函数 ----
 LWAVE  = .TRUE.         # amset wave 读 WAVECAR
-LCHARG = .FALSE.
+LCHARG = .TRUE.         # 保存 CHGCAR（2D 的很小）：以后做离网格 k 点检验时
+                        # 只需一段非自洽（ICHARG=11），不必再重算自洽段
 LORBIT = 11
 NEDOS  = 5000
 LOPTICS = .FALSE.       # amset 自己算跃迁，不需要 VASP 的 LOPTICS

@@ -289,12 +289,17 @@ def check_frames_match_displacements(step4_dir, n_sample=3, tol=1e-3):
     except Exception as e:                              # noqa: BLE001
         return True, "phono3py_disp.yaml 解析失败（%s），跳过抽帧校验" % e
     sc_cart = pts @ lat
-    frames = sorted(d4.glob("disp-*"))
+    # disp-00000 是 S4 特意生成的【平衡帧】（未位移的完美超胞，拟合时用来扣残余力），
+    # 它不是 phono3py 的位移帧：位移帧是 POSCAR-00001..N <-> disps[0..N-1]。
+    # 把它算进来会让抽帧整体错位一帧，并在末尾 disp-(N) 上越界。
+    frames = [f for f in sorted(d4.glob("disp-*")) if f.name != "disp-00000"]
     if not frames or not disps:
         return True, "无帧或无位移记录，跳过抽帧校验"
     idx = sorted({0, len(frames) // 2, len(frames) - 1})[:n_sample]
     bad = []
     for k in idx:
+        if k >= len(disps):          # 目录数与位移数不一致时不要崩
+            continue
         f = frames[k]
         vp = f / "vasprun.xml"
         if not vp.is_file():

@@ -50,14 +50,17 @@ steps:
      gen: gen_step3_formation.py,
      gen_need: [stepconf.py, step.conf], fetch_all: true}
 
-+io_schema:
-  inputs: [{name: POSCAR, from: user, required: true, desc: "材料结构"}]
-  outputs: [{name: workflow_outputs, step: final, type: directory, desc: "由技能实际步骤产生的结果文件"}]
-  params: []
-  steps: []
+io_schema:
+  inputs: [{name: POSCAR, from: user, required: true, desc: "待优化结构"}, {name: MACE_MODEL, from: config, required: true, desc: "MACE 势模型路径"}]
+  outputs: [{name: energy_summary.json, step: S3_energy, type: json, desc: "总能量与形成能汇总"}, {name: CONTCAR, step: S1_relax, type: structure, desc: "优化后结构"}]
+  params: [{name: DEVICE, values: [cpu], default: cpu, where: step.conf, desc: "MACE 推理设备"}]
+  steps:
+    - {step: S1_relax, title: "MACE relax", inputs: [POSCAR, MACE_MODEL], outputs: [CONTCAR, relax_summary.json], validator: "converged marker"}
+    - {step: S2_static, title: "Static energy", inputs: [CONTCAR, MACE_MODEL], outputs: [static_summary.json], validator: "STATIC_DONE"}
+    - {step: S3_energy, title: "Formation energy", inputs: [static_summary.json], outputs: [energy_summary.json], validator: "marker exists"}
 flow:
-  summary: "按技能步骤生成并校验科学计算结果"
-  stages: [{name: workflow, steps: [], produces: [workflow_outputs]}]
+  summary: "MACE 结构弛豫 → 静态能量 → 形成能后处理"
+  stages: [{name: optimization, steps: [S1_relax, S2_static, S3_energy], produces: [energy_summary.json]}]
 corrections: [node_fail, dir_missing]
 requires:
   python: [mace-torch, torch, ase, numpy]

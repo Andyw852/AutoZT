@@ -338,3 +338,71 @@ if not getattr(C, "_amset2d_patched", False):
 
     C.scattering_worker = worker_2d
     C._amset2d_patched = True
+
+# =====================================================================
+# patch_valley_overlap（2026-09-17）—— 诊断专用：**按谷区分**的重叠
+#
+# 目的（VERIFICATION V23.5 的下一步）：把"残差来自哪里"彻底分开。
+#   同谷 |I|^2 = 1、不同谷 |I|^2 = 0，其余输入完全不变，跑一次。
+#   若结果回到单谷 Takagi（电子 205 / 空穴 1370），说明散射核与参考值都没问题、
+#   残差完全来自真实重叠的分布；若不吻合，残差来自参考模型本身。
+#
+# ★ 默认关闭，只由环境变量打开（生产绝不触发）：
+#     AMSET2D_VALLEY_OVERLAP=1
+#     AMSET2D_VALLEY_CENTERS="0.33333,0.33333,0;-0.33333,-0.33333,0"
+#
+# 实现：用缓存系数时重叠是在 C._get_overlap 里由系数内积算的，那里看不到 k 点；
+#   所以同时包装 C.calculate_rate 把当前 tbs.kpoints 存到全局，再在 C._get_overlap
+#   里按起点/终点的谷归属把跨谷通道清零。
+# =====================================================================
+if os.environ.get("AMSET2D_VALLEY_OVERLAP") == "1" and not getattr(C, "_amset2d_valley", False):
+    import numpy as _npv
+
+    _VC = []
+    for _part in os.environ.get("AMSET2D_VALLEY_CENTERS", "").split(";"):
+        _part = _part.strip()
+        if _part:
+            _VC.append(_npv.array([float(x) for x in _part.split(",")]))
+    if not _VC:
+        print("[amset2d] valley_overlap: 没给 AMSET2D_VALLEY_CENTERS，退回正常重叠", file=sys.stderr)
+    else:
+        _VAL = {"kpts": None}
+
+        def _valley_of(kf):
+            d = kf - _npv.rint(kf)
+            best, bi = 1e9, 0
+            for i, c in enumerate(_VC):
+                dd = d - c
+                dd -= _npv.rint(dd)
+                n = float(_npv.dot(dd, dd))
+                if n < best:
+                    best, bi = n, i
+            return bi
+
+        _orig_cr_v = C.calculate_rate
+
+        def _cr_v(*a, **kw):
+            try:
+                _VAL["kpts"] = a[0].kpoints
+            except Exception:
+                pass
+            return _orig_cr_v(*a, **kw)
+
+        C.calculate_rate = _cr_v
+        _orig_go_v = C._get_overlap
+
+        def _go_v(spin_coeffs, mapping, b_idx, k_idx, band_mask, kpoint_mask):
+            out = _orig_go_v(spin_coeffs, mapping, b_idx, k_idx, band_mask, kpoint_mask)
+            kp = _VAL.get("kpts")
+            if kp is not None and len(out):
+                va = _valley_of(kp[k_idx])
+                for i in range(len(out)):
+                    if _valley_of(kp[kpoint_mask[i]]) != va:
+                        out[i] = 0.0
+            return out
+
+        C._get_overlap = _go_v
+        print("[amset2d] **valley_overlap 已启用**：同谷 1、谷间 0；谷心 %s"
+              % [_npv.round(c, 4).tolist() for c in _VC], flush=True)
+    C._amset2d_valley = True
+

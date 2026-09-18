@@ -29,7 +29,9 @@ Where everything lives, so a collaborator can pick the project up without asking
 | docs/index.md, installation.md, quickstart.md, skills.md, cli.md | users |
 | docs/CONFIGURING.md | site configuration, including the four cluster-switch traps |
 | docs/mcp.md | the MCP interface (profiles, tools, resources, prompts, risk tiers) |
+| docs/llm-plugin.md | positioning: full zT workflow, native 2D handling, AI agent integration, and boundaries between existing interfaces and proposed research planning |
 | docs/agent-cli.md | the non-MCP stable JSON interface for models and scripts |
+| TASKFLOW.md, chapter 7 (especially 7.15–7.18), chapter 9.1 | maintained skill development specification, model I/O contracts, error handling, extension boundaries, validation and service lifecycle |
 | docs/I18N.md | how runtime messages are translated, and the safe migration recipe |
 | docs/ACCEPTANCE.md | acceptance checklist with evidence per item |
 | docs/EVALUATION.md | measured numbers, controlled ablation, threats to validity |

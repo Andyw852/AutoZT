@@ -90,3 +90,8 @@ setting/*.yaml
 output/
 hfeshell_tmp/
 Codex 图像*.png
+
+# 2026-09-18: 另一会话在 WSL/Windows 路径处理上的残留——目录名本身就是 Windows 路径
+    （Windows 路径残留：以 C: 开头、以及以 wsl.localhost 开头），只在 git status 里制造噪声
+C\:*
+*wsl.localhost*

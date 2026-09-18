@@ -28,7 +28,6 @@ import random
 from collections import Counter, defaultdict
 from concurrent.futures import ThreadPoolExecutor
 
-# ===== 来自 12_hang.py =====
 # -*- coding: utf-8 -*-
 # 12_hang —— 挂死作业检测与自动恢复
 #
@@ -48,7 +47,6 @@ from concurrent.futures import ThreadPoolExecutor
 #   L4596  _hung_resume
 #   L4615  auto_recover_hung
 
-# ===== _hung_cfg (原 L4373-L4381) =====
 def _hung_cfg(cfg, t, st, key, dflt):
     """挂死恢复参数取值优先级：项目 setting.yaml > 技能 task_types > 全局 tf.yaml > 默认。"""
     if st and key in st:
@@ -59,17 +57,14 @@ def _hung_cfg(cfg, t, st, key, dflt):
         return cfg[key]
     return dflt
 
-# ===== _hung_enabled (原 L4384-L4385) =====
 def _hung_enabled(cfg, t=None, st=None):
     return bool(_hung_cfg(cfg, t, st, "hang_check", True))
 
-# ===== _hung_state_path (原 L4388-L4391) =====
 def _hung_state_path(cfg):
     """挂死重试计数文件：<配置目录>/.tf_hung.json（workdir → 已恢复次数）。"""
     d = cfg.get("_config_dir") or "."
     return os.path.join(d, ".tf_hung.json")
 
-# ===== _hung_state_load (原 L4394-L4400) =====
 def _hung_state_load(cfg):
     try:
         with open(_hung_state_path(cfg), encoding="utf-8") as f:
@@ -78,7 +73,6 @@ def _hung_state_load(cfg):
     except (OSError, ValueError):
         return {}
 
-# ===== _hung_state_save (原 L4403-L4409) =====
 def _hung_state_save(cfg, state):
     try:
         os.makedirs(os.path.dirname(_hung_state_path(cfg)), exist_ok=True)
@@ -87,7 +81,6 @@ def _hung_state_save(cfg, state):
     except OSError:
         pass
 
-# ===== _hung_scan (原 L4412-L4499) =====
 def _hung_scan(cfg, host="__default__"):
     from autozt import run_remote
     '''远端一次性扫描：挂死检测 + 原因诊断合并为一次调用。
@@ -207,7 +200,6 @@ print(json.dumps(out))
     b64 = base64.b64encode(code.encode()).decode()
     return run_remote(cfg, "echo %s | base64 -d | python3" % b64, host=host)
 
-# ===== _material_of_workdir (原 L4502-L4509) =====
 def _material_of_workdir(data, wdir):
     '''按远端工作目录反查材料 dict（用于 log_action 写项目日志）。'''
     for t in data.get("types", []):
@@ -217,7 +209,6 @@ def _material_of_workdir(data, wdir):
                 return m
     return None
 
-# ===== _hung_scf_rms_trend (原 L4512-L4527) =====
 def _hung_scf_rms_trend(last3):
     '''从 OSZICAR 末尾判断 SCF 是否还在推进：返回 True=还在降（慢但活着）。
     取最后 2 个 SCF 迭代行（DAV/CGA/RMM/EDDAV/DIIS/BLK）的最后一个数值（rms），
@@ -235,7 +226,6 @@ def _hung_scf_rms_trend(last3):
         return False
     return vals[-1] < vals[-2]
 
-# ===== _hung_incar_fix (原 L4530-L4577) =====
 def _hung_incar_fix(cfg, workdir, level):
     from autozt import run_remote
     '''远端升级 INCAR 抗 SCF 空转（幂等 + 原子写 + 备份）：
@@ -286,7 +276,6 @@ print(json.dumps(changed))
         changed = []
     return rc, changed
 
-# ===== _hung_scancel_wait (原 L4580-L4593) =====
 def _hung_scancel_wait(cfg, jobid, timeout=90):
     from autozt import run_remote
     '''scancel 后轮询 squeue 直到作业消失（避免旧 VASP 进程还在写文件时我们动文件）。
@@ -303,7 +292,6 @@ def _hung_scancel_wait(cfg, jobid, timeout=90):
         _t.sleep(5)
     return False, "scancel 后 %ds 作业仍未退出" % timeout
 
-# ===== _hung_resume (原 L4596-L4612) =====
 def _hung_resume(cfg, wdir):
     from autozt import run_remote
     from autozt.workflow import _sbatch_guarded
@@ -331,7 +319,6 @@ def _hung_resume(cfg, wdir):
                     if not ln.startswith("__TF_RESULT__"))
     return (0 if ok else 1), msg
 
-# ===== auto_recover_hung (原 L4615-L4773) =====
 def auto_recover_hung(cfg, data):
     from autozt import log_action
     '''v1.11 挂死作业自动恢复（watch 每轮调用一次）。
@@ -540,7 +527,6 @@ def auto_recover_hung(cfg, data):
                        % (rec.get("jobid"), age, n + 1, maxr, cause, fix_txt, nid))
     _hung_state_save(cfg, state)
 
-# ===== 来自 14_init.py =====
 # -*- coding: utf-8 -*-
 # 14_init —— 项目初始化（init / init_skill / yaml block 编辑）
 #
@@ -558,7 +544,6 @@ def auto_recover_hung(cfg, data):
 #   L5830  _yaml_type_block_set
 #   L5878  _yaml_type_block_remove
 
-# ===== cmd_init (原 L5272-L5417) =====
 def cmd_init(cfg, types, proj, name=None, tt=None, force=False, yes=False):
     from autozt import scan_project_configs
     """初始化项目配置。
@@ -708,7 +693,6 @@ def cmd_init(cfg, types, proj, name=None, tt=None, force=False, yes=False):
         print("材料初始化就绪（新 %d 个）。tf 查看状态，autozt start 全部开始。" % done)
     return fails
 
-# ===== _scan_root_dirs (原 L5423-L5435) =====
 def _scan_root_dirs(root):
     from autozt import _MAT_DIR_CACHE
     """扫一个根下所有带 POSCAR 的目录（缓存）。批量 auto/clean 反复按名解析时，
@@ -724,7 +708,6 @@ def _scan_root_dirs(root):
     _MAT_DIR_CACHE[root] = out
     return out
 
-# ===== resolve_mat_dir (原 L5441-L5487) =====
 def resolve_mat_dir(cfg, types, tt, want, cwd=None):
     from autozt import _RESOLVE_DISC_CACHE, _name_matches, discover_local, get_types
     """按名字定位材料的本地目录，找不到返回 None。
@@ -775,14 +758,12 @@ def resolve_mat_dir(cfg, types, tt, want, cwd=None):
                 return d
     return None
 
-# ===== skill_keys (原 L5490-L5494) =====
 def skill_keys(cfg, tt=None):
     """要初始化哪些技能。给了 -tt 就只有它；否则 tf.yaml 里定义的全部技能。"""
     if tt:
         return [tt]
     return [k for k in (cfg.get("task_types") or {}) if k]
 
-# ===== _init_one (原 L5497-L5538) =====
 def _init_one(cfg, types, target, name=None, tt=None, force=False, brief=None,
               known_names=None):
     """给 target 材料目录初始化【全部技能】（或 -tt 指定的那一个）。
@@ -826,7 +807,6 @@ def _init_one(cfg, types, target, name=None, tt=None, force=False, brief=None,
               % os.path.basename(os.path.abspath(target)))
     return fails
 
-# ===== _scope_to_material (原 L5541-L5556) =====
 def _scope_to_material(content, tkey):
     """kls7-scope：skill_subdir 布局下把项目配置的发现范围锁到本材料。
 
@@ -844,7 +824,6 @@ def _scope_to_material(content, tkey):
     line = '%s  local_root: ".."   # 只发现本材料；整批管请到上级目录 autozt init\n' % m.group(1)
     return content[:m.end()] + "\n" + line + content[m.end() + 1:]
 
-# ===== _init_one_skill (原 L5559-L5792) =====
 def _init_one_skill(cfg, types, target, name=None, tt=None, force=False,
                     known_names=None):
     from autozt import DEFAULT_HPC_SETTING, DEFAULT_PROJECT_CONFIG, DEFAULT_PROJECT_SETTING, _PKG_ROOT, _load_yaml_file, _same_file, _skill_asset_dirs, pkg_setting_path, scan_project_configs
@@ -1084,7 +1063,6 @@ def _init_one_skill(cfg, types, target, name=None, tt=None, force=False,
     print("project_setting 就绪：%s（换超算改 hpc.yaml，调目录/结果改 setting.yaml）" % ps)
     return 0
 
-# ===== _yaml_type_block_ensure (原 L5795-L5827) =====
 def _yaml_type_block_ensure(path, tkey, kv_line):
     """确保项目配置 task_types.<tkey> 段内有 kv_line（如 "    skill_subdir: true"）。
     段缺失 → 追加新段；段存在且已有该键 → 不动。返回 True=有改动。"""
@@ -1119,7 +1097,6 @@ def _yaml_type_block_ensure(path, tkey, kv_line):
         f.writelines(lines)
     return True
 
-# ===== _yaml_type_block_set (原 L5830-L5875) =====
 def _yaml_type_block_set(path, tkey, key, value):
     """在项目配置 task_types.<tkey> 段内写 key: value（无则插入，有则改值），
     保留注释与其它键。返回 True=有改动。用于按需启用可选组（写 bandgap_hse: true）。"""
@@ -1167,7 +1144,6 @@ def _yaml_type_block_set(path, tkey, key, value):
         f.writelines(lines)
     return True
 
-# ===== _yaml_type_block_remove (原 L5878-L5905) =====
 def _yaml_type_block_remove(path, tkey):
     """从项目配置 task_types 下删除 tkey 段（段头到下一个两空格键/块尾）。
     返回 True=有删除。与 _yaml_type_block_ensure 对称。"""
@@ -1197,7 +1173,6 @@ def _yaml_type_block_remove(path, tkey):
         f.writelines(lines)
     return True
 
-# ===== 来自 15_hpc.py =====
 # -*- coding: utf-8 -*-
 # 15_hpc —— hpc / level / auto / adopt / migrate-subdir 命令
 #
@@ -1219,7 +1194,6 @@ def _yaml_type_block_remove(path, tkey):
 #   L6278  cmd_adopt
 #   L6391  cmd_migrate_subdir
 
-# ===== _write_hpc_yaml (原 L5908-L5923) =====
 def _write_hpc_yaml(path, d, note):
     """hpc.yaml 写出（tf 不依赖 PyYAML，手写简单结构；dict 值只到一层）。"""
     keys = [k for k in ("name", "ssh_host", "template_map") if k in d]
@@ -1237,7 +1211,6 @@ def _write_hpc_yaml(path, d, note):
     with open(path, "w", encoding="utf-8") as f:
         f.writelines(lines)
 
-# ===== cmd_hpc (原 L5926-L6013) =====
 def cmd_hpc(cfg, types, projs, cluster, tt, yes):
     from autozt import _load_yaml_file, _name_matches, discover_local, find_asset, pkg_setting_path, resolve_material_local
     """v1.7：把 -p 指定的项目（一个或多个）分配到指定超算；未指定的项目一律不动。
@@ -1328,7 +1301,6 @@ def cmd_hpc(cfg, types, projs, cluster, tt, yes):
           % (tt or "<技能>", master.get("name") or cluster))
     return 1 if fails else 0
 
-# ===== _list_pkg_clusters (原 L6016-L6025) =====
 def _list_pkg_clusters():
     from autozt import _PKG_DIR, _PKG_ROOT
     out = []
@@ -1340,7 +1312,6 @@ def _list_pkg_clusters():
                     if f.endswith(".yaml") and f != "tf_default.yaml"]
     return ", ".join(sorted(set(out))) or "（无）"
 
-# ===== _level_stepconf_path (原 L6049-L6057) =====
 def _level_stepconf_path(lpath, tkey):
     """<材料>/<技能>/project_setting/templates/step.conf（项目共用层）。"""
     if not lpath:
@@ -1351,7 +1322,6 @@ def _level_stepconf_path(lpath, tkey):
             return os.path.join(base, "templates", "step.conf")
     return None
 
-# ===== _level_write (原 L6060-L6088) =====
 def _level_write(path, level):
     from autozt import _LEVEL_HEADER
     """把 [params].BANDGAP 改成 level，其余内容与注释原样保留。"""
@@ -1383,7 +1353,6 @@ def _level_write(path, level):
         out[idx + 1:idx + 1] = [note, line]
     open(path, "w", encoding="utf-8").write("\n".join(out).rstrip() + "\n")
 
-# ===== cmd_level (原 L6091-L6132) =====
 def cmd_level(cfg, types, tt, proj, arg):
     from autozt import _LEVEL_ALIAS, _LEVEL_DESC, _stepconf_param_from_file
     """tf [-tt 技能] [-p 材料] level [pbe|hse] —— 设/查计算级别。"""
@@ -1428,7 +1397,6 @@ def cmd_level(cfg, types, tt, proj, arg):
               "删除，只是不再出现在状态表里。")
     return fails
 
-# ===== cmd_auto_project (原 L6135-L6170) =====
 def cmd_auto_project(cfg, types, proj, tt, arg):
     from autozt import _load_yaml_file
     """v1.9.9：tf [-tt X] -p 材料 auto on|off —— 改该技能项目的
@@ -1479,7 +1447,6 @@ def cmd_auto_project(cfg, types, proj, tt, arg):
         print("注意：全局 auto_advance 还是关的，本开关要配合 autozt auto on 才生效。")
     return fails
 
-# ===== _skill_local_mats (原 L6173-L6190) =====
 def _skill_local_mats(cfg, types, tt):
     from autozt import discover_local
     """patch_auto：列出该技能下本地已发现的材料名（纯本地，不连超算）。"""
@@ -1500,7 +1467,6 @@ def _skill_local_mats(cfg, types, tt):
                 names.append(mm["name"])
     return names
 
-# ===== cmd_auto_skill (原 L6193-L6210) =====
 def cmd_auto_skill(cfg, types, tt, arg):
     """patch_auto：tf -tt <技能> auto [on|off] —— 对该技能下全部材料批量
     开关项目级 auto_advance；on 时顺手把全局 tf.yaml 也打开。"""
@@ -1520,7 +1486,6 @@ def cmd_auto_skill(cfg, types, tt, arg):
     print("技能 %s：共 %d 个材料 → %s" % (tt, len(names), ", ".join(names)))
     return cmd_auto_project(cfg, types, ",".join(names), tt, arg)
 
-# ===== _proj_setting_path (原 L6213-L6220) =====
 def _proj_setting_path(lpath, tkey):
     """材料目录下该技能的 setting.yaml 路径（技能子目录优先，回落材料级）。"""
     if not lpath:
@@ -1530,7 +1495,6 @@ def _proj_setting_path(lpath, tkey):
         return a
     return os.path.join(lpath, "project_setting", "setting.yaml")
 
-# ===== _set_yaml_bool (原 L6223-L6234) =====
 def _set_yaml_bool(path, key, on):
     """就地改（或追加）一个顶层布尔行，其余内容原样保留。"""
     with open(path, encoding="utf-8") as f:
@@ -1544,7 +1508,6 @@ def _set_yaml_bool(path, key, on):
     with open(path, "w", encoding="utf-8") as f:
         f.writelines(lines)
 
-# ===== cmd_auto (原 L6237-L6275) =====
 def cmd_auto(cfg, arg):
     """v1.5 autozt auto [on|off]：一键开关自动提交（改写全局 tf.yaml 的
     auto_advance 行；没有该行则补在文件头）。无参数 = 显示当前状态。
@@ -1585,7 +1548,6 @@ def cmd_auto(cfg, arg):
         print("后台监控仍在跑（只拉结果）；停监控用 autozt monitor --stop。")
     return 0
 
-# ===== cmd_adopt (原 L6278-L6388) =====
 def cmd_adopt(cfg, types, proj, yes, dry, tt):
     from autozt import collect_data, get_types, load_config, merge_project_configs
     """v1.5：接管手工整理的技能子目录结构。适用场景：人手工把 POSCAR、
@@ -1699,7 +1661,6 @@ def cmd_adopt(cfg, types, proj, yes, dry, tt):
           "（在跑/缺配置）处理完再跑一次 tf -tt %s adopt -y。" % (tt, tt))
     return 1 if fails else 0
 
-# ===== cmd_migrate_subdir (原 L6391-L6483) =====
 def cmd_migrate_subdir(cfg, data, proj, yes, dry):
     from autozt import _mat_all_done, _name_matches, log_action, run_remote
     """v1.2：把该技能已完成材料的数据迁进技能子目录（跟着项目走的目录结构）。
@@ -1794,7 +1755,6 @@ def cmd_migrate_subdir(cfg, data, proj, yes, dry):
     print("迁移完成。tf 查看状态应仍为 done；挂 elastic：tf -tt elastic init")
     return 1 if fails else 0
 
-# ===== 来自 16_watch.py =====
 # -*- coding: utf-8 -*-
 # 16_watch —— 后台监控 watch（daemon/cron）
 #
@@ -1811,7 +1771,6 @@ def cmd_migrate_subdir(cfg, data, proj, yes, dry):
 #   L6982  _watch_cfg_sig
 #   L7013  cmd_watch
 
-# ===== _watch_files (原 L6846-L6851) =====
 def _watch_files(cfg=None):
     from autozt import WATCH_LOG, WATCH_PID
     """watch 的 pid/log 路径：v1.10 起锚定配置文件所在目录（setting/），
@@ -1820,7 +1779,6 @@ def _watch_files(cfg=None):
     base = (cfg or {}).get("_config_dir") or os.getcwd()
     return (os.path.join(base, WATCH_PID), os.path.join(base, WATCH_LOG))
 
-# ===== _watch_running_pid (原 L6854-L6867) =====
 def _watch_running_pid(cfg=None):
     from autozt import WATCH_PID
     """返回在跑的后台监控 PID（没有在跑返回 None）。先看锚定位置，再看 cwd。"""
@@ -1837,7 +1795,6 @@ def _watch_running_pid(cfg=None):
         os.remove(pidfile)
     return None, None
 
-# ===== _watch_pid_alive (原 L6870-L6875) =====
 def _watch_pid_alive(pid):
     try:
         os.kill(pid, 0)
@@ -1845,7 +1802,6 @@ def _watch_pid_alive(pid):
     except OSError:
         return False
 
-# ===== _watch_daemon (原 L6878-L6908) =====
 def _watch_daemon(a, mat_toks, root, cfg=None):
     """autozt monitor -d：把监控作为 detached 子进程放后台，日志写配置目录下。"""
     pidfile, logfile = _watch_files(cfg)
@@ -1878,7 +1834,6 @@ def _watch_daemon(a, mat_toks, root, cfg=None):
     print("日志：%s（tail -f %s 查看）" % (logfile, logfile))
     print("停止：autozt monitor --stop")
 
-# ===== _watch_stop (原 L6911-L6924) =====
 def _watch_stop(cfg=None):
     """autozt monitor --stop：按 pid 文件停止后台监控（任意目录可执行）。"""
     import signal as _sig
@@ -1894,7 +1849,6 @@ def _watch_stop(cfg=None):
     print("没有运行中的 autozt monitor。")
     return 1
 
-# ===== _watch_ensure (原 L6927-L6950) =====
 def _watch_ensure(cfg):
     """v1.10 auto_watch：任何 tf 命令顺带确保后台监控在跑（没在跑就拉起）。
     配合 autozt monitor --install 的 crontab 保活 = 零输入全自动：
@@ -1920,7 +1874,6 @@ def _watch_ensure(cfg):
     except Exception:
         pass
 
-# ===== _watch_cron (原 L6953-L6979) =====
 def _watch_cron(install):
     """autozt monitor --install/--uninstall：crontab 保活——每 10 分钟检查，
     监控死了（重启/崩溃）自动拉起。autozt monitor -d 有 pid 检查，不会重复启动。"""
@@ -1949,7 +1902,6 @@ def _watch_cron(install):
         print("已移除 crontab 保活。")
     return 0
 
-# ===== _watch_cfg_sig (原 L6982-L7010) =====
 def _watch_cfg_sig(cfg):
     """v1.8：配置签名——主配置 + project_roots 下全部 *.yaml/*.yml 的
     (路径, mtime_ns, size)（result/log/隐藏目录不扫，里面没有配置）。
@@ -1980,7 +1932,6 @@ def _watch_cfg_sig(cfg):
     sig.sort()
     return tuple(sig)
 
-# ===== cmd_watch (原 L7013-L7075) =====
 def cmd_watch(cfg, types, projs, exclude, interval, tt=None, root=None,
               overrides=None):
     from autozt import _snapshot, _state_cache_save, apply_exclude, apply_hide_done, apply_skills, auto_advance, auto_fetch, cmd_status, collect_data, fill_local_dim, filter_projs, get_types, load_config, merge_project_configs

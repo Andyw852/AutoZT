@@ -8,13 +8,34 @@ transport owns planning policy or state-shaping logic.
 
 from __future__ import annotations
 
+import inspect as _inspect
 from typing import Any, Callable, Dict, Mapping, Optional, Tuple
 
 from autozt import agent_protocol as protocol
 
 
 LoadState = Callable[[Mapping[str, Any]], Tuple[Optional[Dict[str, Any]], Optional[str], int]]
-ExecuteActions = Callable[[Any, bool], Dict[str, Any]]
+ExecuteActions = Callable[[Any, bool, Optional[str]], Dict[str, Any]]
+
+
+def _execute(execute_actions: ExecuteActions, actions: Any, dry_run: bool,
+             expected_cursor: Optional[str]) -> Dict[str, Any]:
+    """Call the mutation callback with the observed cursor.
+
+    Keep compatibility with third-party two-argument callbacks while all
+    built-in transports use the three-argument CAS-aware form.
+    """
+    try:
+        parameters = _inspect.signature(execute_actions).parameters
+        accepts_cursor = any(
+            p.kind == _inspect.Parameter.VAR_POSITIONAL
+            for p in parameters.values()
+        ) or len(parameters) >= 3
+    except (TypeError, ValueError):
+        accepts_cursor = True
+    if accepts_cursor:
+        return execute_actions(actions, dry_run, expected_cursor)
+    return execute_actions(actions, dry_run)  # type: ignore[misc]
 
 
 def _bounded_max(value: Any) -> int:
@@ -139,7 +160,8 @@ def cycle(
                 "error": "state changed before execution",
             }
             return data, "state changed before execution; collect a new plan", 1
-    execution = execute_actions(data["actions"], not execute)
+    execution = _execute(execute_actions, data["actions"], not execute,
+                         data.get("cursor"))
     failed = bool(execution.get("failed"))
     data = dict(data)
     data["execution"] = execution
@@ -168,11 +190,12 @@ def capabilities() -> Dict[str, Any]:
     the fixed agent protocol and its safety boundary.
     """
     read_commands = ["capabilities", "schema", "skills", "contract", "snapshot", "inspect",
-                     "plan", "evidence", "propose"]
+                     "plan", "evidence", "propose", "research_plan", "preflight", "results"]
     mutate_commands = ["cycle", "run", "apply"]
     commands = read_commands + mutate_commands + ["request"]
     request_ops = ["capabilities", "schema", "skills", "contract", "snapshot", "inspect",
-                   "plan", "cycle", "run", "evidence", "propose", "apply"]
+                   "plan", "cycle", "run", "evidence", "propose", "research_plan",
+                   "preflight", "results", "apply"]
     request_schema = _request_schema(request_ops)
     return {
         "schema_version": protocol.PROTOCOL_VERSION,
@@ -190,6 +213,8 @@ def capabilities() -> Dict[str, Any]:
             "steady_state": "autozt summary --diff",
         },
         "mutate": {"commands": mutate_commands, "default": "dry_run"},
+        "cursor": {"scope": "session", "restart": "cursor_reset",
+                    "usage": "pass the cursor returned by inspect/get_snapshot to cycle or apply"},
         "actions": {
             "allowed": sorted(protocol.ALLOWED_ACTIONS),
             "default": "dry_run",
@@ -209,7 +234,8 @@ def capabilities() -> Dict[str, Any]:
 def _request_schema(request_ops: Any = None) -> Dict[str, Any]:
     """Return the one JSON Schema shared by capabilities and ``schema``."""
     ops = list(request_ops or ["capabilities", "schema", "skills", "contract", "snapshot",
-                               "inspect", "plan", "cycle", "run", "evidence", "propose", "apply"])
+                               "inspect", "plan", "cycle", "run", "evidence", "propose",
+                               "research_plan", "preflight", "results", "apply"])
     return {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "title": "AutoZT agent request", "type": "object", "required": ["op"],
@@ -229,6 +255,10 @@ def _request_schema(request_ops: Any = None) -> Dict[str, Any]:
             "cursor": {"type": "string"}, "full": {"type": "boolean"},
             "skill": {"type": "string"}, "plan": {},
             "actions": {"type": "array", "maxItems": protocol.MAX_ACTIONS},
+            "goal": {"type": "string"}, "result_dir": {"type": "string"},
+            "property": {"type": "string"}, "direction": {"type": "string"},
+            "dimension": {"type": "string"}, "thickness": {"type": "number"},
+            "temperature": {}, "carrier": {},
         },
     }
 
@@ -236,7 +266,8 @@ def _request_schema(request_ops: Any = None) -> Dict[str, Any]:
 def schema() -> Dict[str, Any]:
     """Complete, model-readable protocol contract with examples and risks."""
     request_ops = ["capabilities", "schema", "skills", "contract", "snapshot", "inspect",
-                   "plan", "cycle", "run", "evidence", "propose", "apply"]
+                   "plan", "cycle", "run", "evidence", "propose", "research_plan",
+                   "preflight", "results", "apply"]
     action_schema = {
         "type": "object", "additionalProperties": False, "required": ["action"],
         "properties": {
@@ -255,6 +286,9 @@ def schema() -> Dict[str, Any]:
         "plan": {"class": "read", "state": True, "cursor": True},
         "evidence": {"class": "read", "state": True},
         "propose": {"class": "read", "state": True, "cursor": True},
+        "research_plan": {"class": "read", "state": False},
+        "preflight": {"class": "read", "state": False},
+        "results": {"class": "read", "state": False},
         "cycle": {"class": "mutate", "default": "dry_run", "execute": True},
         "run": {"class": "mutate", "default": "dry_run", "execute": True,
                 "description": "确定性 observe -> plan -> optional execute 闭环"},

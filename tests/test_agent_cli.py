@@ -165,7 +165,7 @@ def test_capabilities_and_stdin_request_are_stable(monkeypatch, tmp_path):
     assert "schema" in capabilities["data"]["read"]["commands"]
 
 
-def test_schema_is_self_describing_and_run_is_exposed():
+def test_schema_is_self_describing_and_run_is_exposed(monkeypatch):
     result, rc = A._cmd_schema(argparse.Namespace())
     assert rc == 0
     data = result["data"]

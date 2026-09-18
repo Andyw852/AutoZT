@@ -24,6 +24,7 @@ from typing import Any, Dict, Iterable, List, Mapping, Optional, Tuple
 
 from autozt import agent_protocol as _protocol
 from autozt import agent_service as _service
+from autozt import science as _science
 
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -47,12 +48,13 @@ TOOL_TO_ACTION = {
 }
 REQUEST_OPS = {
     "capabilities", "schema", "skills", "contract", "snapshot", "inspect", "plan",
-    "cycle", "run", "evidence", "propose", "apply",
+    "cycle", "run", "evidence", "propose", "apply", "research_plan", "preflight", "results",
 }
 REQUEST_FIELDS = {
     "op", "scope", "tt", "material", "status", "step", "view",
     "include_monitoring", "include_retry", "execute", "dry_run", "max_actions",
-    "cursor", "full", "skill", "plan", "actions",
+    "cursor", "full", "skill", "plan", "actions", "goal", "result_dir", "property",
+    "temperature", "carrier", "direction", "dimension", "thickness",
 }
 
 
@@ -330,6 +332,40 @@ def _cmd_evidence(args: argparse.Namespace) -> Tuple[Dict[str, Any], int]:
     return _envelope("evidence", payload), 0
 
 
+def _cmd_research_plan(args: argparse.Namespace) -> Tuple[Dict[str, Any], int]:
+    payload, error, rc = _call_json(["schema", "--json"], getattr(args, "config", None))
+    if error:
+        return _envelope("research_plan", ok=False, error=error, returncode=rc), rc
+    skills = (payload or {}).get("skills", []) if isinstance(payload, dict) else []
+    data = _science.research_plan(getattr(args, "goal", ""), skills,
+                                  dimension=getattr(args, "dimension", None),
+                                  temperature=getattr(args, "temperature", None),
+                                  carrier=getattr(args, "carrier", None),
+                                  material=getattr(args, "material", None))
+    return _envelope("research_plan", data), 0
+
+
+def _cmd_preflight(args: argparse.Namespace) -> Tuple[Dict[str, Any], int]:
+    root = getattr(args, "result_dir", None)
+    if not root:
+        return _envelope("preflight", ok=False, error="preflight requires --result-dir", returncode=2), 2
+    data = _science.preflight(root, dimension=getattr(args, "dimension", None),
+                              thickness=getattr(args, "thickness", None),
+                              temperature=getattr(args, "temperature", None),
+                              carrier=getattr(args, "carrier", None))
+    return _envelope("preflight", data), 0
+
+
+def _cmd_results(args: argparse.Namespace) -> Tuple[Dict[str, Any], int]:
+    root = getattr(args, "result_dir", None)
+    prop = getattr(args, "property", None)
+    if not root or not prop:
+        return _envelope("results", ok=False, error="results requires --result-dir and --property", returncode=2), 2
+    data = _science.query_results(root, prop, temperature=getattr(args, "temperature", None),
+                                  carrier=getattr(args, "carrier", None), direction=getattr(args, "direction", None))
+    return _envelope("results", data), 0
+
+
 def _cmd_contract(args: argparse.Namespace) -> Tuple[Dict[str, Any], int]:
     skill = getattr(args, "skill", None) or getattr(args, "tt", None)
     argv = ["schema"]
@@ -490,10 +526,28 @@ def _cmd_plan(args: argparse.Namespace) -> Tuple[Dict[str, Any], int]:
 
 
 def _execute_actions(actions: List[Dict[str, Any]], config: Optional[str],
-                     dry_run: bool = False) -> Dict[str, Any]:
+                     dry_run: bool = False,
+                     expected_cursor: Optional[str] = None,
+                     scope: Optional[Mapping[str, Any]] = None) -> Dict[str, Any]:
     """Execute only the bounded non-destructive action vocabulary through ``act``."""
     if dry_run:
         return {"results": [], "actions": actions, "dry_run": True, "failed": False}
+    if expected_cursor:
+        # The service has already rechecked once; this final read is the CAS
+        # boundary immediately before invoking the mutation gateway.
+        scoped = argparse.Namespace(config=config, tt=(scope or {}).get("tt"),
+                                    material=(scope or {}).get("material"),
+                                    status=(scope or {}).get("status"))
+        compact, read_error, rc = _status(scoped)
+        if read_error:
+            return {"results": [], "actions": actions, "failed": True,
+                    "error": read_error, "returncode": rc}
+        current = _protocol.state_cursor(compact or {})
+        if current is None or str(expected_cursor) != current:
+            return {"results": [], "actions": actions, "failed": True,
+                    "stale_plan": True, "expected_cursor": str(expected_cursor),
+                    "current_cursor": current,
+                    "error": "plan is stale; call inspect again"}
     results = []
     for action in actions:
         name = action.get("action")
@@ -525,8 +579,9 @@ def _cmd_cycle(args: argparse.Namespace) -> Tuple[Dict[str, Any], int]:
         getattr(args, "dry_run", False))
     data, error, rc = _service.cycle(
         _service_loader(args),
-        lambda actions, dry_run: _execute_actions(
-            actions, getattr(args, "config", None), dry_run),
+        lambda actions, dry_run, cursor=None: _execute_actions(
+            actions, getattr(args, "config", None), dry_run, cursor,
+            _agent_scope(args)),
         _agent_scope(args),
         view=getattr(args, "view", "attention"),
         include_monitoring=bool(getattr(args, "include_monitoring", False)),
@@ -544,8 +599,9 @@ def _cmd_run(args: argparse.Namespace) -> Tuple[Dict[str, Any], int]:
         getattr(args, "dry_run", False))
     data, error, rc = _service.run(
         _service_loader(args),
-        lambda actions, dry_run: _execute_actions(
-            actions, getattr(args, "config", None), dry_run),
+        lambda actions, dry_run, cursor=None: _execute_actions(
+            actions, getattr(args, "config", None), dry_run, cursor,
+            _agent_scope(args)),
         _agent_scope(args),
         view=getattr(args, "view", "attention"),
         include_monitoring=bool(getattr(args, "include_monitoring", False)),
@@ -591,6 +647,10 @@ def _request_args(base: argparse.Namespace, request: Mapping[str, Any]
         cursor=request.get("cursor"),
         full=bool(request.get("full", False)),
         skill=request.get("skill"),
+        goal=request.get("goal", ""), result_dir=request.get("result_dir"),
+        property=request.get("property"), temperature=request.get("temperature"),
+        carrier=request.get("carrier"), direction=request.get("direction"),
+        dimension=request.get("dimension"), thickness=request.get("thickness"),
         agent_command=str(request.get("op") or ""),
     )
 
@@ -676,6 +736,12 @@ def _dispatch_request(request: Any, base: argparse.Namespace
         return _cmd_run(child)
     if op == "evidence":
         return _cmd_evidence(child)
+    if op == "research_plan":
+        return _cmd_research_plan(child)
+    if op == "preflight":
+        return _cmd_preflight(child)
+    if op == "results":
+        return _cmd_results(child)
     if op == "propose":
         return _cmd_propose(child)
     if op == "snapshot":
@@ -769,6 +835,29 @@ def build_parser() -> argparse.ArgumentParser:
     _add_context_options(p)
     p.add_argument("--step", dest="step", help="步骤 label 或序号")
 
+    p = sub.add_parser("research_plan", help="把研究目标转换为可审查的技能/阶段方案（只读）")
+    _add_context_options(p)
+    p.add_argument("--goal", required=True, help="研究目标，例如：比较二维材料的 zT")
+    p.add_argument("--dimension", choices=("0D", "1D", "2D", "3D"))
+    p.add_argument("--temperature", nargs="*", help="目标温度网格")
+    p.add_argument("--carrier", nargs="*", help="目标载流子网格")
+
+    p = sub.add_parser("preflight", help="检查已回收结果的跨文件科学输入一致性（只读）")
+    _add_context_options(p)
+    p.add_argument("--result-dir", required=True)
+    p.add_argument("--dimension", choices=("0D", "1D", "2D", "3D"))
+    p.add_argument("--thickness", type=float)
+    p.add_argument("--temperature", nargs="*")
+    p.add_argument("--carrier", nargs="*")
+
+    p = sub.add_parser("results", help="查询带来源路径的结构化结果（只读）")
+    _add_context_options(p)
+    p.add_argument("--result-dir", required=True)
+    p.add_argument("--property", required=True)
+    p.add_argument("--temperature", type=float)
+    p.add_argument("--carrier", type=float)
+    p.add_argument("--direction")
+
     p = sub.add_parser("request", help="从 stdin 或 JSON 文件读取一个结构化请求")
     _add_context_options(p)
     p.add_argument("request", nargs="?", default="-",
@@ -841,6 +930,12 @@ def main(argv: Optional[List[str]] = None) -> int:
         result, rc = _cmd_snapshot(args)
     elif args.agent_command == "evidence":
         result, rc = _cmd_evidence(args)
+    elif args.agent_command == "research_plan":
+        result, rc = _cmd_research_plan(args)
+    elif args.agent_command == "preflight":
+        result, rc = _cmd_preflight(args)
+    elif args.agent_command == "results":
+        result, rc = _cmd_results(args)
     elif args.agent_command == "request":
         result, rc = _cmd_request(args)
     elif args.agent_command == "serve":
