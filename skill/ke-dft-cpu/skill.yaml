@@ -210,7 +210,11 @@ optional_steps:
       - {seq: 2.155, name: "step2_bandgap/step2.155_discriminant_decide", label: S2.155_discr,
          group: S2_bandgap, after: "step2_bandgap/step2.15_discriminant",
          src: step2_bandgap/step2.15_discriminant, check: plot, run: gen,
-         done_marker: discriminant.json, gen: "decide_discriminant.py",
+         # done_marker 带 ..：decide_discriminant.py 写在 step2_bandgap/step2.15_discriminant/，
+         # 而本步目录是 step2_bandgap/step2.155_discriminant_decide ->
+         # 不写 .. 永远找不到 marker、状态表长期 error（下游不读它，无实际影响）。
+         done_marker: ../step2.15_discriminant/discriminant.json,
+         gen: "decide_discriminant.py",
          gen_need: [discriminant_common.py], fetch_all: true,
      needs: ["step2_bandgap/step2.15_discriminant"]}
       - {seq: 2.2, name: "step2_bandgap/step2.2_pbe", label: S2.2_pbe,

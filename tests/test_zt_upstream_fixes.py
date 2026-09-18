@@ -14,7 +14,9 @@
 DFPT/AMSET 输入才能行为级复现，代价不划算，集群实跑已覆盖）。
 """
 import importlib.util
+import json
 import os
+import subprocess
 import sys
 
 import yaml
@@ -102,3 +104,104 @@ def test_ke_amset_nonpolar_dielectric_not_blocked():
     block = src[i: i + 260]
     assert "_is_nonpolar()" in block, \
         "eps_static 恒等于 eps_inf 的分支没有先问 _is_nonpolar()（补丁 04 被回退？）"
+
+
+# ---------------------------------------------------------------- 05 [行为]
+def _load_exec(path, name, extra_dirs=()):
+    import importlib.util
+    for d in (os.path.dirname(path),) + tuple(extra_dirs):
+        if d not in sys.path:
+            sys.path.insert(0, d)
+    spec = importlib.util.spec_from_file_location(name, path)
+    mod = importlib.util.module_from_spec(spec)
+    mod.__dict__["__file__"] = path
+    mod.__dict__["__name__"] = name
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_overlap_preflight_skips_bandwindow_when_runlog_absent(tmp_path):
+    """修复前：拿"AMSET 插值带窗口"的兜底默认 11-17 与 step4_wave 的真实窗口比 ->
+    任何窗口 != 11-17 的材料都会被拦死（Si 实测 2-6）。运行日志缺失时必须判"未知"并跳过。"""
+    p = os.path.join(ROOT, "skill", "ke-dft-cpu", "step8.4_amset2d", "overlap_preflight.py")
+    pf = _load_exec(p, "pf_pin")
+    (tmp_path / "step8_amset").mkdir()
+    (tmp_path / "step4_wave").mkdir()
+    # AMSET 运行日志故意不存在；amset wave 日志写真实窗口 2—6（em dash）
+    (tmp_path / "step4_wave" / "amset.log").write_text("Including bands 2\u20146\n",
+                                                      encoding="utf-8")
+    (tmp_path / "step8_amset" / "settings.yaml").write_text(
+        "doping: [-1e20, 1e20]\ntemperatures: [100, 300]\nscattering_type: [ADP, IMP]\n",
+        encoding="utf-8")
+    assert pf.run_band_window(tmp_path / "step8_amset") is None      # 未知，不是 (11, 17)
+    verdict, lines = pf.run(tmp_path, tmp_path / "step8_amset", False)
+    assert verdict != "error", "运行日志缺失时仍然拦下了：%s" % lines
+    assert any("运行日志缺失" in l for l in lines)
+
+
+# ---------------------------------------------------------------- 07 [行为]
+def _vd_fixture(root, symbols, eps_inf, eps_ion):
+    root.mkdir(parents=True)
+    (root / "POSCAR").write_text("\n".join([
+        "c", "1.0", "5 0 0", "0 5 0", "0 0 5", symbols, "1", "Direct", "0 0 0"]) + "\n",
+        encoding="utf-8")
+    L = [" OUTCAR fixture", "",
+         " MACROSCOPIC STATIC DIELECTRIC TENSOR (including local field effects in DFT)"]
+    for r in range(3):
+        L.append("           " + " ".join("%.6f" % eps_inf[r][c] for c in range(3)))
+    L += ["", " MACROSCOPIC STATIC DIELECTRIC TENSOR IONIC CONTRIBUTION"]
+    for r in range(3):
+        L.append("           " + " ".join("%.6f" % eps_ion[r][c] for c in range(3)))
+    (root / "OUTCAR").write_text("\n".join(L) + "\n", encoding="utf-8")
+
+
+def test_dielectric_validator_exempts_nonpolar_but_not_polar(tmp_path):
+    """ε_static ≡ ε_inf：单元素（非极性）是物理正确 -> 不判 FAIL；极性体系仍判 FAIL。"""
+    script = os.path.join(ROOT, "skill", "ke-dft-cpu", "step5_dielect",
+                          "validate_dielectric.py")
+    diag = [[13.0, 0, 0], [0, 13.0, 0], [0, 0, 13.0]]
+    zero = [[0.0] * 3] * 3
+    d1 = tmp_path / "step5_dielect_nonpolar"
+    _vd_fixture(d1, "Si", diag, zero)
+    d2 = tmp_path / "step5_dielect_polar"
+    _vd_fixture(d2, "Na Cl", diag, zero)
+    for d in (d1, d2):
+        r = subprocess.run([sys.executable, script, "--step-dir", str(d)],
+                           capture_output=True, text=True)
+        assert (d / "dielectric_check.json").is_file(), r.stderr
+    non = json.loads((d1 / "dielectric_check.json").read_text(encoding="utf-8"))
+    pol = json.loads((d2 / "dielectric_check.json").read_text(encoding="utf-8"))
+    assert non["ok"] is True and non.get("notes"), non
+    assert pol["ok"] is False and pol["reasons"], pol
+
+
+# ---------------------------------------------------------------- 06 [逻辑]
+def test_discriminant_done_marker_resolves_to_script_output():
+    """S2.155 的 done_marker 必须解析到 decide_discriminant.py 真正写出的位置。
+
+    脚本写在 step2_bandgap/step2.15_discriminant/，而该步目录是
+    step2_bandgap/step2.155_discriminant_decide —— 清单里必须用 .. 才找得到
+    （ck_plot/do_run_gen_step 都是 os.path.join(step_dir, marker)）。"""
+    sk = yaml.safe_load(open(os.path.join(ROOT, "skill", "ke-dft-cpu", "skill.yaml"),
+                             encoding="utf-8"))
+    defs = list(sk["steps"])
+    for grp in (sk.get("optional_steps") or {}).values():
+        defs += list((grp or {}).get("steps") or [])
+    step = next(s for s in defs
+                if s.get("name") == "step2_bandgap/step2.155_discriminant_decide")
+    marker = step["done_marker"]
+    resolved = os.path.normpath(
+        os.path.join("step2_bandgap/step2.155_discriminant_decide", marker))
+    expected = os.path.normpath("step2_bandgap/step2.15_discriminant/discriminant.json")
+    assert resolved == expected, \
+        "done_marker 没指到脚本真实写出的位置：%s" % resolved
+
+    # 本技能（zt-dft-cpu）里那份声明也要一致
+    zs = yaml.safe_load(open(os.path.join(ROOT, "skill", "zt-dft-cpu", "skill.yaml"),
+                             encoding="utf-8"))
+    zdefs = list(zs["steps"])
+    for grp in (zs.get("optional_steps") or {}).values():
+        zdefs += list((grp or {}).get("steps") or [])
+    zstep = next(s for s in zdefs
+                 if s.get("name") == "step2_bandgap/step2.155_discriminant_decide")
+    assert zstep["done_marker"] == marker

@@ -177,6 +177,22 @@ def born_asr_and_crosscheck(txt, ei):
         pass
     return out, warns
 
+def _is_nonpolar(step_dir):
+    """单元素体系 = 非极性：没有 IR 活性声子，eps_static ≡ eps_inf 是【物理正确】结果。
+
+    与 step8_amset 的 _is_nonpolar() 同判据（读 POSCAR 第 6 行元素名，单元素即非极性）。
+    这类体系里 Frohlich 耦合恒 0 不是 DFPT 失效的签名，不该判 FAIL。
+    """
+    for cand in (Path(step_dir) / "POSCAR", Path(step_dir).parent / "POSCAR"):
+        try:
+            syms = cand.read_text(errors="ignore").splitlines()[5].split()
+            if syms and not any(ch.isdigit() for ch in syms[0]):
+                return len(set(syms)) == 1
+        except (OSError, IndexError):
+            continue
+    return False
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--step-dir", default="step5_dielect")
@@ -217,8 +233,16 @@ def main():
                 coup = max(abs(1.0 / ei[i][i] - 1.0 / (ei[i][i] + io[i][i])) for i in range(3))
                 res["frohlich_coupling_max"] = coup
                 if coup < 1e-9:
-                    res["reasons"].append("eps_static == eps_inf，Frohlich 耦合恒 0 -> POP 静默丢失"
-                                          "（非极性体系此项可忽略，需人工确认）")
+                    if _is_nonpolar(d):
+                        # 非极性：POP 本就不适用，不是失败。记进 notes（warnings 稍后会被
+                        # 物理自洽检查整体覆盖，所以单独放 notes）。
+                        res.setdefault("notes", []).append(
+                            "非极性体系（单元素）：eps_static ≡ eps_inf 是物理正确结果，"
+                            "Frohlich 耦合恒 0 -> POP 不适用（不判 FAIL；"
+                            "与 step8_amset 的非极性处理一致）")
+                    else:
+                        res["reasons"].append("eps_static == eps_inf，Frohlich 耦合恒 0 -> POP 静默丢失"
+                                              "（非极性体系此项可忽略，需人工确认）")
     # ---- 物理自洽检查（求和规则 / 双算法交叉 / 对角性）----
     # 只有"求和规则被破坏到 1e-1"才判致命；其余进 warnings，不阻断流程 ——
     # 低对称(P1)晶胞的非对角项、宽隙体系的交叉偏差都可能是正常的。

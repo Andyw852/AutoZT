@@ -180,10 +180,10 @@ def run_band_window(out_dir, default=(BAND_LO, BAND_HI)):
     """
     p = Path(out_dir) / "amset.log"
     if not p.is_file():
-        return default
+        return None          # 首次运行必然没有 amset.log —— 必须判"未知"，不能拿默认值冒充
     m = re.search(r"Interpolating spin-(?:up|down) bands\s+(\d+)\s*[-\u2014\u2013~]\s*(\d+)",
                   p.read_text(errors="ignore"))
-    return (int(m.group(1)), int(m.group(2))) if m else default
+    return (int(m.group(1)), int(m.group(2))) if m else None
 
 
 def band_windows(log_paths):
@@ -275,10 +275,18 @@ def run(cwd, out_dir=None, unity_overlap=False):
     else:
         lines.append("  1) AMSET 版本：本机读不到（登录节点可能没装），跳过版本检查")
 
-    # 窗口优先取 AMSET 运行日志里它实际插值的带区间（读不到才用兜底 11-17）
+    # 窗口优先取 AMSET 运行日志里它实际插值的带区间。
+    # ★ 读不到（首次运行/尚未跑 amset run）时必须判【未知】并跳过窗口一致性比较 ——
+    #   拿兜底默认 11-17 去比会把任何窗口 != 11-17 的材料误拦
+    #   （2026-09-18 Si 实测：step4_wave 真实窗口 2-6，被 11-17 误判"不一致"直接拦死 gen）。
     win = run_band_window(out_dir)
-    lines.append("  3/4) 本次 AMSET 实际插值的带窗口 = %d-%d%s"
-                 % (win[0], win[1], "" if win != (BAND_LO, BAND_HI) else "（兜底默认值）"))
+    win_known = win is not None
+    if win_known:
+        lines.append("  3/4) 本次 AMSET 实际插值的带窗口 = %d-%d" % win)
+    else:
+        lines.append("  3/4) 本次 AMSET 实际插值的带窗口：**运行日志缺失**（首次运行/尚未跑）"
+                     " -> 跳过窗口一致性比较；等 amset.log 出来后再判定")
+        win = (BAND_LO, BAND_HI)      # 仅作下面 S3/S3b 比对的默认口径
     r = check_s3_vs_s3b(cwd / "step3_uniform", cwd / "step3b_uniform_full",
                         band_lo=win[0], band_hi=win[1])
     if r is None:
@@ -298,7 +306,13 @@ def run(cwd, out_dir=None, unity_overlap=False):
     logs = glob.glob(str(cwd / "step4_wave" / "amset.log")) + \
            glob.glob(str(cwd / "step4b_wave_full" / "amset.log"))
     wins = band_windows(logs)
-    if wins:
+    if wins and not win_known:
+        # AMSET 运行日志缺失 -> 无从比较，只报出 wave 侧窗口（不当成"不一致"拦下）
+        lines.append("  4) amset wave 带窗口：%s（AMSET 运行日志缺失，暂不判一致性）"
+                     % "；".join("%s = %d-%d"
+                                 % (os.path.basename(os.path.dirname(p)), lo, hi)
+                                 for p, lo, hi in wins))
+    elif wins:
         lines.append("  4) amset wave 带窗口：%s"
                      % "；".join("%s = %d-%d"
                                  % (os.path.basename(os.path.dirname(p)), lo, hi)

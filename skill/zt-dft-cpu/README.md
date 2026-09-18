@@ -215,6 +215,9 @@ print("缺件步骤 %d/%d" % (bad, len(t["steps"])))
 | 02 | `ke-dft-cpu/step3_uniform/gen_step5_uniform.py` | `DK_MAX/UNIFORM_NMAX` 不是 `step.conf` 键，护栏提示的覆盖方式无效 | `DK_MAX_3D=0.08` → 网格 34³→**26³=17576**，`gen 完成` |
 | 03 | `ke-dft-cpu/step2.3_hse_plot/gen_step4.1_plot_band.py` | 缺 `import os`（第 410 行 `os.path.join`）→ `NameError`，连带挡死 S8_amset | `-j S2.3_hseplot start` → 出 `band_summary.json` |
 | 04 | `ke-dft-cpu/step8_amset/gen_step10_amset.py` | 非极性体系 ε_static ≡ ε_inf 被当 DFPT 失效拦下（下游本会按物理口径剔除 POP） | `-j S8_kappa_e start` → `gen 完成` 并提交 AMSET 作业 |
+| 05 | `ke-dft-cpu/step8.4_amset2d/overlap_preflight.py`（在建工作） | "AMSET 实际插值带窗口"读不到时用兜底默认 11–17 去比 → 把任何窗口≠11–17 的材料（Si=2–6）拦死 gen 与 in-job | 行为级：verdict 由 `error` 变 `ok`，打印"运行日志缺失 → 跳过窗口一致性比较" |
+| 06 | `ke-dft-cpu/skill.yaml` + 本技能同一声明 | S2.155 的 `done_marker` 与脚本真实落点不一致 → 状态表长期 error | marker 改 `../step2.15_discriminant/discriminant.json`（该 json 在集群上确实存在） |
+| 07 | `ke-dft-cpu/step5_dielect/validate_dielectric.py` | 单元素非极性体系 ε_s≡ε_∞ 被误判 FAIL（与补丁 04 同一物理） | 行为级：单元素 `ok=True`+notes；双元素对照仍 `ok=False` |
 
 补丁 03/04 是执行中新暴露的（不在最初提案内），已逐条向用户披露。以下两处**未修**（不影响流程推进）：
 
