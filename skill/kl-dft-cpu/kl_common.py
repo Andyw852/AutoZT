@@ -17,7 +17,14 @@ import subprocess
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+_HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(_HERE))
+# dim_common 在集群上随 gen_need 与 kl_common.py 同目录；仓库里它在 skill/_common/opt。
+# 独立 CLI（python kl_common.py --scan-nelm …）可能在别处执行，逐级回退找它。
+for _cand in (_HERE.parent / "_common" / "opt", _HERE.parent / "_common"):
+    if (_cand / "dim_common.py").is_file():
+        sys.path.insert(0, str(_cand))
+        break
 from dim_common import (detect_dimension, force_kz1, read_poscar_cell_frac,  # noqa: E402
                         validate_poscar, resolve_tpl, VACUUM_MIN,
                         _norm, _cross, _det3)
@@ -341,6 +348,164 @@ def check_frames_match_displacements(step4_dir, n_sample=3, tol=1e-3):
                        "S5 会把两者混拟合。请清空 step4_disp 后重跑 S4。"
                        % (len(bad), len(idx), "；".join(bad[:3])))
     return True, "抽帧校验通过（%d 帧，逐原子比对 < %.0e Å）" % (len(idx), tol)
+
+
+# ==========================================================================
+# SCF 收敛门禁（2026-09-19）：NELM 截断 / 未收敛的帧不能拿去拟合
+# ==========================================================================
+# VASP 在 SCF 撞 NELM 时**照样输出力、作业正常退出**，只在 OUTCAR 留一段：
+#     The electronic self-consistency was not achieved in the given
+#     number of steps (NELM). The forces and other quantities evaluated ...
+# 这种帧力不可信，拿去拟合会让 fc2/fc3 与 κ 整体错掉，而下游所有检查都显示正常。
+# 反向的情形：静态单点正常收敛时 OUTCAR 必有且只有 1 次
+#     "aborting loop because EDIFF is reached"；计数为 0 说明电子步没正常收住，
+#     != 1（>1 通常是多离子步）也不符合 S4 单点帧的预期。
+NELM_WARNING = "number of steps (NELM)"
+EDIFF_ABORT_MARK = "aborting loop because EDIFF is reached"
+_DAV_RE = re.compile(r"^\s*DAV:\s*(\d+)", re.M)
+
+
+def scan_frame_scf(frame_dir):
+    """只读扫一帧（disp-XXXXX/）的 OUTCAR + OSZICAR，返回诊断 dict。
+
+    作废判据：
+      - OUTCAR 含 NELM 警告（"number of steps (NELM)"）→ SCF 未在 NELM 内收敛；
+      - OUTCAR 存在但 "aborting loop because EDIFF is reached" 出现次数 != 1；
+      - OUTCAR 不存在 → 帧未算完，无法核验，同样作废。
+    电子步数：OSZICAR 里 "DAV:" 行数与最后一个 DAV 序号（静态单点两者相等）；
+    以最后一个 DAV 序号为准（兼容多离子步的极端情况），同时记录行数。
+    """
+    d = Path(frame_dir)
+    row = {"frame": d.name, "dir": str(d), "has_outcar": False, "has_oszicar": False,
+           "nelm_warn": False, "n_aborting": 0, "n_dav_lines": 0, "last_dav": 0,
+           "scf_steps": 0, "ok": True, "reasons": []}
+    outcar = d / "OUTCAR"
+    if outcar.is_file():
+        row["has_outcar"] = True
+        try:
+            txt = outcar.read_text(errors="ignore")
+        except OSError as e:                                  # pragma: no cover
+            txt = ""
+            row["reasons"].append("OUTCAR 读取失败：%s" % e)
+        row["nelm_warn"] = NELM_WARNING in txt
+        row["n_aborting"] = txt.count(EDIFF_ABORT_MARK)
+    else:
+        row["reasons"].append("OUTCAR 不存在（帧未算完）")
+    osz = d / "OSZICAR"
+    if osz.is_file():
+        row["has_oszicar"] = True
+        try:
+            idx = [int(m) for m in _DAV_RE.findall(osz.read_text(errors="ignore"))]
+        except OSError:                                       # pragma: no cover
+            idx = []
+        row["n_dav_lines"] = len(idx)
+        row["last_dav"] = max(idx) if idx else 0
+    row["scf_steps"] = row["last_dav"] or row["n_dav_lines"]
+    if row["nelm_warn"]:
+        row["reasons"].append("SCF 未在 NELM 内收敛（OUTCAR 命中 NELM 警告）")
+    if row["has_outcar"] and row["n_aborting"] != 1:
+        row["reasons"].append("'aborting loop because EDIFF is reached' 出现 %d 次（应为 1）"
+                              % row["n_aborting"])
+    row["ok"] = not row["reasons"]
+    return row
+
+
+def check_outcar_scf_convergence(step4_dir, n_outliers=8):
+    """逐帧扫 OUTCAR 的 SCF 收敛门禁。返回 (ok, info)。
+
+    info 含每帧明细（frames）、作废帧（bad_frames）、电子步数分布（steps_stats）
+    与按步数排序的异常大值（step_outliers）。只读、不写盘；任何一帧作废则 ok=False。
+    """
+    d4 = Path(step4_dir)
+    frames = sorted([f for f in d4.glob("disp-*") if f.is_dir()])
+    rows = [scan_frame_scf(f) for f in frames]
+    bad = [r for r in rows if not r["ok"]]
+    steps = [r["scf_steps"] for r in rows if r["scf_steps"] > 0]
+    stats = {}
+    if steps:
+        s = sorted(steps)
+        n = len(s)
+        stats = {"n": n, "min": s[0], "max": s[-1],
+                 "mean": round(sum(s) / float(n), 1), "median": s[n // 2],
+                 "p90": s[int(round(0.9 * (n - 1)))]}
+    outliers = sorted([r for r in rows if r["scf_steps"] > 0],
+                      key=lambda r: -r["scf_steps"])[:max(1, int(n_outliers))]
+    info = {"step4_dir": str(d4), "n_frames": len(rows),
+            "n_with_outcar": sum(1 for r in rows if r["has_outcar"]),
+            "n_bad": len(bad),
+            "n_nelm": sum(1 for r in rows if r["nelm_warn"]),
+            "n_abort_ne_1": sum(1 for r in rows
+                                if r["has_outcar"] and r["n_aborting"] != 1),
+            "n_no_oszicar": sum(1 for r in rows if not r["has_oszicar"]),
+            "steps_stats": stats,
+            "step_outliers": [{"frame": r["frame"], "scf_steps": r["scf_steps"],
+                               "nelm_warn": r["nelm_warn"],
+                               "n_aborting": r["n_aborting"]} for r in outliers],
+            "bad_frames": [{"frame": r["frame"], "reasons": r["reasons"],
+                            "scf_steps": r["scf_steps"]} for r in bad],
+            "frames": rows, "ok": not bad}
+    return (not bad), info
+
+
+def format_scf_report(info, top=6):
+    """把 check_outcar_scf_convergence 的 info 格式化成一屏可读的日志/报告。"""
+    lines = []
+    st = info.get("steps_stats") or {}
+    lines.append("[SCF] %s：帧 %d（有 OUTCAR %d）｜NELM 警告 %d 帧｜"
+                 "'aborting loop'!=1 共 %d 帧｜无 OSZICAR %d 帧"
+                 % (info.get("step4_dir", "?"), info.get("n_frames", 0),
+                    info.get("n_with_outcar", 0), info.get("n_nelm", 0),
+                    info.get("n_abort_ne_1", 0), info.get("n_no_oszicar", 0)))
+    if st:
+        lines.append("[SCF] 电子步数分布：min=%s 中位=%s mean=%s p90=%s max=%s"
+                     % (st.get("min"), st.get("median"), st.get("mean"),
+                        st.get("p90"), st.get("max")))
+    if info.get("step_outliers"):
+        lines.append("[SCF] 电子步数最多：" + "，".join(
+            "%s=%s%s" % (o["frame"], o["scf_steps"],
+                         "（NELM 警告!）" if o["nelm_warn"] else "")
+            for o in info["step_outliers"][:max(1, int(top))]))
+    if info.get("bad_frames"):
+        lines.append("[SCF] 作废帧 %d 个：" % len(info["bad_frames"]))
+        for b in info["bad_frames"][:max(1, int(top)) * 4]:
+            lines.append("        %s：%s（电子步 %s）"
+                         % (b["frame"], "；".join(b["reasons"]), b["scf_steps"]))
+        if len(info["bad_frames"]) > top * 4:
+            lines.append("        … 其余 %d 帧见 scf_steps.json"
+                         % (len(info["bad_frames"]) - top * 4))
+    else:
+        lines.append("[SCF] 所有帧 SCF 正常收敛（各 1 次 aborting loop，无 NELM 警告）。")
+    return "\n".join(lines)
+
+
+def _scan_main(argv=None):
+    """只读 CLI：python kl_common.py --scan-nelm <step4_disp 目录> [--json] [--out PATH]。
+
+    退出码：0 = 全部帧 SCF 正常收敛；1 = 有帧作废（NELM / 未收敛 / OUTCAR 缺失）。
+    """
+    import argparse
+    import json as _json
+    ap = argparse.ArgumentParser(
+        prog="kl_common.py",
+        description="只读扫描 S4 各帧 OUTCAR 的 SCF 收敛情况（NELM 截断 / 未正常收住）。")
+    ap.add_argument("--scan-nelm", metavar="STEP4_DIR", required=True,
+                    help="含 disp-*/OUTCAR 的 step4_disp 目录")
+    ap.add_argument("--json", action="store_true", help="打印完整 JSON（默认打印汇总表）")
+    ap.add_argument("--out", metavar="PATH", help="把完整 JSON 另写到该文件（只写本地）")
+    args = ap.parse_args(argv)
+    ok, info = check_outcar_scf_convergence(args.scan_nelm)
+    if args.out:
+        Path(args.out).write_text(_json.dumps(info, ensure_ascii=False, indent=2),
+                                  encoding="utf-8", newline="\n")
+    if args.json:
+        print(_json.dumps(info, ensure_ascii=False, indent=2))
+    else:
+        print(format_scf_report(info))
+    return 0 if ok else 1
+
+
+if __name__ == "__main__":
+    sys.exit(_scan_main())
 
 
 DIPOLE_TAGS = ("LDIPOL", "IDIPOL", "DIPOL")

@@ -31,7 +31,8 @@
 > **铁律 0（先读文档再动手）**：每次开始新任务、新会话、或被重新唤起时，先用 read 工具读一遍本 `AGENTS.md` 核对最新版本，再动手。若系统已自动注入最新版，则以「刚读到/刚注入的内容」为准，**不得沿用旧记忆**——本文件是唯一事实来源，可能在本会话中途被更新。**执行任何 `autozt -tt <技能> ...` 操作（`retry`/`rerun`/`start`/`stop`/`conf`/`hpc` 等）前，同样先读 `skill/<技能>/README.md`（无 README 读 `skill/<技能>/METHODOLOGY.md`，都无读 `TASKFLOW.md` 该技能章节），核对步骤数/判据/模板和专属坑位后再动手——各技能不同，不得凭记忆跨技能套用。**
 
 1. **只通过 `autozt` 操作**。禁止自己拼接 `ssh`/`sbatch`/`scancel`/`rm` 来改状态。唯一例外：第 4 条的只读诊断。
-2. **破坏性操作必须先请示**：`stop`、`rerun`、`clean`、以及任何带 `-f` 或 `-y` 的命令，执行前必须向用户说明对象和后果，得到明确同意后才执行。**特别地：`mlff-mace` 的 `step5_label`（及一切昂贵的扇出步骤）只用 `retry`/`start -f`，绝不 `rerun`/`clean`**——后两者会 `rm -rf` 步骤目录，毁掉已算完的 DFT 帧。用户说"以后这类都不用问了"才算预先授权。
+2. **破坏性操作必须先请示**：`stop`、`rerun`、`clean`、以及任何带 `-f` 或 `-y` 的命令，执行前必须向用户说明对象和后果，得到明确同意后才执行。
+   **`-f`/`-y` 必须逐条单独请示**：批准"目标"（如"修 Mo2S3"）**不等于**批准具体命令里的 `-f`——不得从目标批准里推断 `-f` 的许可（2026-09-18 教训：以"修 Mo2S3"为由执行了 `start -f`）。**特别地：`mlff-mace` 的 `step5_label`（及一切昂贵的扇出步骤）只用 `retry`/`start -f`，绝不 `rerun`/`clean`**——后两者会 `rm -rf` 步骤目录，毁掉已算完的 DFT 帧。用户说"以后这类都不用问了"才算预先授权。
 3. **监控循环里自动执行的命令只有**：`autozt summary --diff`、`autozt summary`、`autozt list`、`autozt -status <状态> summary`、`autozt -tt <类型> summary`、`autozt -p X status`、`autozt skills`、`autozt auto on`、`autozt -tt <技能> auto on`、`autozt start`、`autozt -p X start`。其余一律先请示（包括 `autozt conf --set`——它会改项目配置）。**巡检严禁每轮拉 `autozt json`**——它是全量结构化数据，token 巨大，只在写工具/做批量分析时才用。
 4. **只读诊断允许直接 ssh**：`tail`/`grep` 日志文件（如 `ssh jzzn 'tail -50 <步骤目录>/slurm-*.out'`、`grep -i error OUTCAR`）。只读，绝不改文件。材料目录下的 `stepN_check_and_resubmit.py`（autozt 已随生成推送到超算）也只允许加 `--check-only` 运行——它的重投功能**严禁使用**（重投一律走 `autozt retry`/`autozt rerun`，两套重投机制并用会打架）。其 stdout 是一行 JSON，退出码 0=converged / 10=not_converged / 20=running / 30=重启超限 / 40=error，可作为深度诊断依据。**注意 3090 服务器无 SLURM**：ssh 过去看到的 squeue 是 fakeslurm 垫片，作业状态一律以 `autozt` 采集为准，别用真 SLURM 语义判读。
 5. **用退出码判成败**：`autozt` 命令退出码 0 = 成功；非 0 = 失败或被拒绝。失败时把输出原文呈给用户，不要粉饰、不要假装成功。
@@ -70,6 +71,7 @@ autozt -status error summary           # 只看有失败步骤的材料（error 
 autozt -p MAT status                   # 单材料详情（含每步诊断信息、hpc、Dim）
 autozt [-tt TT] -p MAT start           # 推进该材料：输入没生成先 gen 再提交
 autozt start                           # 推进所有材料（FAIL 的只报告不动）
+autozt [-tt TT] [-p MAT] advance       # 一次性采集、拉回已完成结果并推进就绪步骤；不改 auto_advance
 autozt monitor [-i 秒] -d              # 后台监控：自动拉结果+自动提交（restart 重做；watch 为旧名，仍可用）
 autozt [-tt TT] -p MAT [-j STEP] stop     # 取消作业（破坏性，先请示）
 autozt [-tt TT] -p MAT [-j STEP] retry    # 保留产物重生成输入，不提交；检查后 start（fanout 只补未完成子目录）
@@ -84,6 +86,11 @@ autozt [-tt TT] -p MAT -j STEP conf    # 查看该步骤 step.conf 合并后的�
 autozt -p A,B hpc <集群>               # 换项目跑哪台超算（jzzn/a800/3090；改配置，先请示）
 autozt auto [on|off]                   # 一键开关全局 auto_advance（改全局配置，先请示）
 ```
+
+`advance` 是模型或人工显式调用的一次性动作：本轮采集、拉回已完成结果并推进就绪步骤，
+不会修改持久化配置，也不会隐式开启挂死作业恢复。`auto on` 是长期配置开关，会写入
+`auto_advance` 并在本轮触发一次推进；后台 `monitor`/`auto_watch` 负责持续运行。两者不要
+在 agent 协议中混用。
 > **改核数（含为缓解排队降核）的正确流程**（铁律 9，必须先请示）：
 > 1. 改提交模板 `setting/<hpc>/templates/submit_*.tpl` 的 `--ntasks-per-node`，及 `defects_common.build_job` 的 NCORE/KPAR（或项目级 `project_setting/templates/` 覆盖，优先级最高）；
 > 2. `autozt -p MAT -j STEP retry` —— 重新生成输入（保留 OUTCAR/CONTCAR，不删除产物）；
@@ -176,7 +183,7 @@ autozt auto [on|off]                   # 一键开关全局 auto_advance（改�
      - 有 `FAIL 材料 步骤` 行 → 单点诊断（`autozt -p X status` 或 ssh tail 该步日志），按第五节决策。
      - 有 `变更:` 段 → 这是唯一的"谁变了"来源，直接据此汇报进展。`todo→PD(Priority)`、`PD(Priority)→R`、`R→done` 都是正常推进，一句话带过即可；**不要**为它们再跑 list/squeue。
      - `队列(全部作业): R=X PD=Y` 里 `PD` 远大于 `R` → 集群排队积压，正常等待，提一次即可，别每轮重复。
-2. 需要推进：`autozt auto on`（DAG 自动推进，按依赖找就绪步骤，S0 FAIL 不会阻塞 S3/S4；用 `-tt <技能> auto on` 限定技能）。`autozt start` 是顺序推进（只推 active 步骤，遇 FAIL 会卡住），仅用于显式推某材料/某步：`autozt -p X start`。只有这两类命令会提交作业，其余巡检步骤全只读。
+2. 需要推进：持续监控使用 `autozt auto on`（DAG 自动推进，按依赖找就绪步骤，S0 FAIL 不会阻塞 S3/S4；用 `-tt <技能> auto on` 限定技能）；一次性显式推进使用 `autozt advance`。`autozt start` 是顺序推进（只推 active 步骤，遇 FAIL 会卡住），仅用于显式推某材料/某步：`autozt -p X start`。只有这些明确的推进命令会提交作业，其余巡检步骤全只读。
 3. 需要请示的操作 → 发汇报模板并等待回复；用户回"执行/同意/好"才执行。
 
 **深查纪律**：只有 ① 出现新 `FAIL`、② 某材料从 `run` 掉回 `wait`、③ 排队原因从 `Priority` 变成 `QOS*`/`Dependency` 之类，才深挖单点。其余"有变化"用 `变更:` 段现成的信息直接汇报，不深查、不复读。

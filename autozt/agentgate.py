@@ -12,7 +12,7 @@
      config/help/diagnose/session，以及任何带 `--dry-run` 的调用）：直接放行；
    - `mutate`（start/retry/fetch/init/adopt/level/hpc/auto/conf --set/correct/
      monitor…）：放行（本来就是 agent 该干的事）；
-   - `destructive`（stop/rerun/clean/migrate-subdir/`correct -y`，以及任何带
+   - `destructive`（stop/rerun/clean/migrate-subdir/push/`correct -y`，以及任何带
      `-f`/`--force`/`-y`/`--yes`/`--purge-config` 的调用）：**必须人工批准**。
      人工在**交互终端**里跑一次 `autozt approve <同一条命令>`（非 TTY 直接拒绝——
      agent 没法自己批准自己）；批准按"命令签名"记账，默认 15 分钟、一次用完即销。
@@ -56,10 +56,10 @@ AGENT_READ_CMDS = {
     "history", "prove", "probe", "config", "help", "diagnose", "session",
 }
 AGENT_MUTATE_CMDS = {
-    "start", "retry", "fetch", "init", "adopt", "level", "hpc", "auto",
-    "conf", "correct", "monitor", "watch", "restart", "push", "migrate-subdir",
+    "start", "retry", "fetch", "advance", "init", "adopt", "level", "hpc", "auto",
+    "conf", "correct", "monitor", "watch", "restart",
 }
-AGENT_DESTRUCTIVE_CMDS = {"stop", "rerun", "clean", "migrate-subdir"}
+AGENT_DESTRUCTIVE_CMDS = {"stop", "rerun", "clean", "migrate-subdir", "push"}
 AGENT_DESTRUCTIVE_FLAGS = {"-f", "--force", "-y", "--yes", "--purge-config"}
 
 # 取值型选项：扫"命令词"时要跳过它们后面的值（autozt act -p Si stop → stop 才是命令）
@@ -172,6 +172,10 @@ def agent_classify(cmd, argv=()):
             flags.add(x.split("=", 1)[0])
     if "--dry-run" in flags:
         return "read", ["--dry-run 排练：只打印将影响的对象，无副作用"]
+    if cmd == "migrate-subdir":
+        return "destructive", ["会迁移/重排技能目录和配置，可能改变项目路径"]
+    if cmd == "push":
+        return "destructive", ["会向远端 Git 仓库写入提交，属于外部不可逆副作用"]
     if cmd in AGENT_DESTRUCTIVE_CMDS:
         return "destructive", ["%s 会取消作业 / 删除已算产物" % cmd]
     hit = sorted(flags & AGENT_DESTRUCTIVE_FLAGS)
@@ -183,7 +187,10 @@ def agent_classify(cmd, argv=()):
         return "mutate", ["%s 会生成输入/推进状态" % cmd]
     if cmd in AGENT_READ_CMDS:
         return "read", ["只读命令"]
-    return "mutate", ["未知命令，按非破坏性动作记账放行"]
+    # Fail closed: a newly added CLI command must be classified explicitly
+    # before an agent can run it.  This keeps future destructive commands from
+    # silently inheriting the mutate/allow policy.
+    return "destructive", ["未登记命令，默认按破坏性动作处理，需人工批准"]
 
 
 def agent_signature(cmd, argv):
@@ -355,9 +362,9 @@ AGENT_RISK_CN = {"read": "只读", "mutate": "推进", "destructive": "破坏性
 AGENT_POLICY_ROWS = [
     ("read", "list summary status json dir skills skill schema history prove "
              "probe config help diagnose session / 任何 --dry-run", "放行"),
-    ("mutate", "start retry fetch init adopt level hpc auto conf --set correct "
-               "monitor restart push", "放行（记账）"),
-    ("destructive", "stop rerun clean migrate-subdir / 任何 -f -y --purge-config",
+    ("mutate", "start retry fetch advance init adopt level hpc auto conf --set "
+               "correct monitor restart", "放行（记账）"),
+    ("destructive", "stop rerun clean migrate-subdir push / 未登记命令 / 任何 -f -y --yes --purge-config",
      "需人工批准令牌"),
 ]
 

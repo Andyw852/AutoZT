@@ -36,15 +36,9 @@ SNAPSHOT_VERSION = "1"
 SNAPSHOT_LIMIT = 20
 ALLOWED_ACTIONS = {
     "start_step": "start",
-    "retry_step": "retry",
-    "fetch_results": "fetch",
-    "advance_ready": "advance",
-}
-TOOL_TO_ACTION = {
-    "start_step": "start_step",
-    "retry_step": "retry_step",
-    "fetch_results": "fetch_results",
-    "advance_ready": "advance_ready",
+    "prepare_step": "retry",
+    "sync_results": "fetch",
+    "run_ready_steps": "advance",
 }
 REQUEST_OPS = {
     "capabilities", "schema", "skills", "contract", "snapshot", "inspect", "plan",
@@ -299,7 +293,6 @@ def _normalise_actions(plan: Any) -> Tuple[Optional[List[Dict[str, Any]]], Optio
         if not isinstance(raw, dict):
             return None, "action[%d] must be an object" % index
         action = raw.get("action") or raw.get("tool")
-        action = TOOL_TO_ACTION.get(action, action)
         if action not in ALLOWED_ACTIONS:
             return None, "action[%d] is destructive or unsupported: %s" % (index, action)
         if raw.get("requires_approval") or raw.get("requires_human_review"):
@@ -308,7 +301,7 @@ def _normalise_actions(plan: Any) -> Tuple[Optional[List[Dict[str, Any]]], Optio
         for key in ("tt", "material", "step"):
             if raw.get(key) not in (None, ""):
                 item[key] = str(raw[key])
-        if action != "advance_ready" and not item.get("material"):
+        if action != "run_ready_steps" and not item.get("material"):
             return None, "action[%d] requires material" % index
         out.append(item)
     return out, None
@@ -570,9 +563,9 @@ def _execute_actions(actions: List[Dict[str, Any]], config: Optional[str],
             argv += ["-p", str(action["material"])]
         if action.get("step"):
             argv += ["-j", str(action["step"])]
-        verb = {"start_step": "start", "retry_step": "retry",
-                "fetch_results": "fetch"}.get(name)
-        argv += (["auto", "on"] if name == "advance_ready" else [verb])
+        verb = {"start_step": "start", "prepare_step": "retry",
+                "sync_results": "fetch"}.get(name)
+        argv += (["advance"] if name == "run_ready_steps" else [verb])
         rc, out, err = _run(argv, config)
         text = ((out or "") + (("\n" + err) if err.strip() else "")).strip()
         results.append({"action": name, "arguments": action, "ok": rc == 0,

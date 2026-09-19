@@ -12,18 +12,12 @@ import hashlib
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Set
 
 
-ACTION_ALIASES = {
-    "start": "start_step",
-    "retry": "retry_step",
-    "fetch": "fetch_results",
-    "advance": "advance_ready",
-}
 # Shared by the JSON CLI, MCP capabilities document, and the service layer.
 # The MCP transport has its own result envelope version; this is the model-facing
 # contract version that callers should negotiate and cache.
-PROTOCOL_VERSION = "agent/4"
+PROTOCOL_VERSION = "agent/6"
 ALLOWED_ACTIONS = {
-    "start_step", "retry_step", "fetch_results", "advance_ready",
+    "start_step", "prepare_step", "sync_results", "run_ready_steps",
 }
 MAX_ACTIONS = 20
 
@@ -313,8 +307,8 @@ def proposals(compact: Mapping[str, Any], include_monitoring: bool = False,
     except (TypeError, ValueError):
         limit = MAX_ACTIONS
     proposals: List[Dict[str, Any]] = []
-    tool_for = {"retry": "retry_step", "start": "start_step", "rerun": "rerun_step"}
-    risk_for = {"retry_step": "mutate", "start_step": "mutate", "rerun_step": "destructive"}
+    tool_for = {"retry": "prepare_step", "start": "start_step", "rerun": "rebuild_step"}
+    risk_for = {"prepare_step": "mutate", "start_step": "mutate", "rebuild_step": "destructive"}
     for task_type in compact.get("types") or []:
         tt = task_type.get("key")
         for material in task_type.get("materials") or []:
@@ -357,10 +351,10 @@ def executable_actions(items: Iterable[Mapping[str, Any]], max_actions: int = MA
     seen = set()
     for item in items:
         tool = item.get("tool") or item.get("action")
-        action = ACTION_ALIASES.get(tool, tool)
+        action = tool
         if action not in ALLOWED_ACTIONS:
             continue
-        if action == "retry_step" and not include_retry:
+        if action == "prepare_step" and not include_retry:
             continue
         if item.get("requires_approval") or item.get("requires_human_review"):
             continue
@@ -368,7 +362,7 @@ def executable_actions(items: Iterable[Mapping[str, Any]], max_actions: int = MA
         for key in ("tt", "material", "step"):
             if item.get(key) not in (None, ""):
                 row[key] = str(item[key])
-        if action != "advance_ready" and not row.get("material"):
+        if action != "run_ready_steps" and not row.get("material"):
             continue
         key = tuple(sorted(row.items()))
         if key not in seen:

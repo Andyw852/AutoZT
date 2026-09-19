@@ -1634,8 +1634,26 @@ _ARCHIVE="OUTCAR OSZICAR CONTCAR vasprun.xml XDATCAR"
 #   与作业不同节点，stat 可能读到客户端缓存的旧大小；而 VASP 真的挂死（MPI 死锁）时
 #   CPU 时间也不再增长。两者的区别只有 CPU 时间能分辨：
 #     CPU 在涨、文件不涨 → 缓存/写入延迟，不该杀；CPU 也不涨 → 真卡死，立即杀。
+#   ★ 2026-09-19 修正（wangchao 指出：Mo2S3 15h 挂死看门狗未触发，是独立 bug）：
+#   旧实现 `ps -eo time=,comm=` 统计的是【整台节点】所有 vasp —— 共享节点上别人的 vasp
+#   （甚至本用户别的作业）CPU 一直在涨，`now_cpu` 每次都比上次大，stall 永远被重置，
+#   看门狗形同虚设。实测 cu57 当时并发跑着 wangxu 的多个 *_opt 作业与本用户 Si S4b(3850633)。
+#   改成从本段 mpirun 的 PID 出发、只累计它【子孙进程】的 CPU 时间。
 _cpu_seconds () {
-    ps -eo time=,comm= 2>/dev/null | awk '$2 ~ /vasp/ { n=split($1,a,":"); s=0; for(i=1;i<=n;i++) s=s*60+a[i]; t+=s } END{ print t+0 }'
+    local root="$1" queue tree k p
+    if [ -n "$root" ] && command -v pgrep >/dev/null 2>&1; then
+        queue="$root"; tree="$root"
+        while [ -n "$queue" ]; do
+            p="${queue%% *}"
+            if [ "${queue#* }" = "$queue" ]; then queue=""; else queue="${queue#* }"; fi
+            k=$(pgrep -P "$p" 2>/dev/null | tr '\n' ' ')
+            if [ -n "$k" ]; then tree="$tree $k"; queue="$queue $k"; fi
+        done
+        ps -o time=,comm= -p "$(echo $tree | tr ' ' ',')" 2>/dev/null | awk '$2 ~ /vasp/ { n=split($1,a,":"); s=0; for(i=1;i<=n;i++) s=s*60+a[i]; t+=s } END{ print t+0 }'
+    else
+        # 兜底：pgrep 不可用时退回本用户范围（仍不等价于全节点）
+        ps -u "$(id -u)" -o time=,comm= 2>/dev/null | awk '$2 ~ /vasp/ { n=split($1,a,":"); s=0; for(i=1;i<=n;i++) s=s*60+a[i]; t+=s } END{ print t+0 }'
+    fi
 }
 
 _watchdog () {
@@ -1645,7 +1663,7 @@ _watchdog () {
         sleep 60
         now=$(stat -c %s OUTCAR 2>/dev/null || echo 0)
         now_o=$(wc -l < OSZICAR 2>/dev/null || echo 0)
-        now_cpu=$(_cpu_seconds)
+        now_cpu=$(_cpu_seconds "${pid}")
         # 三个指纹里【任一】在涨 = 活着
         if [ "${now}" = "${last}" ] && [ "${now_o}" = "${last_o}" ] && [ "${now_cpu}" = "${last_cpu}" ]; then
             stall=$((stall + 1))
@@ -1871,6 +1889,71 @@ def _layer_factor(poscar, vac_axis=2):
         return None
 
 
+def _load_thickness2d(outdir=None):
+    """import 公共池的 thickness_2d 模块；outdir 用来兜住 tf 的推送位置。
+
+    tf 把 gen_need 里的模块平铺推到 gen 运行目录（= 技能目录 ≈ outdir.parent），
+    本地开发时 relax_common.py 却在 skill/_common/opt/ 下 —— 两种布局都试：
+      · outdir 的上一级（技能目录，tf 推送位置）；
+      · outdir 的上上级（材料根，S6 作业 cwd 里的 ".."）；
+      · 本文件同目录（skill/_common/opt）与上一级（skill/_common）。
+    找不到会抛 ImportError，由调用方按 best-effort 处理。"""
+    cands = []
+    if outdir is not None:
+        _od = Path(outdir).resolve()
+        cands += [_od.parent, _od.parent.parent]
+    _here = Path(__file__).resolve().parent
+    cands += [_here, _here.parent]
+    for _c in cands:
+        if str(_c) not in sys.path:
+            sys.path.insert(0, str(_c))
+    import thickness_2d
+    return thickness_2d
+
+
+def write_material_thickness(outdir, dim, vac_axis, tol=0.05):
+    """S1 gen 把 2D 层厚口径写到【材料根目录】的 thickness_2d.json（best-effort）。
+
+    材料级契约与"按技能链比较"的语义见 skill/_common/thickness_2d.write_material_level：
+      · 材料根 = 技能目录的上一级；技能目录 = outdir.parent
+        （gen 在 <材料>/<技能>/ 下运行，outdir = <材料>/<技能>/<步骤目录>）；
+      · source = "<技能>:<步骤目录>"（如 kl-dft-cpu:step1_std_opt），后续 S6 用弛豫
+        后的结构覆盖同一链的数值（按链比较，见 write_material_level）；
+      · kl / ke 两条链之间只比对，差 > tol 只 WARN、不覆盖。
+
+    **sanity check**：只有技能目录名像技能名（小写-小写…），且材料根能 glob 到
+    "*/*/step*" 或本身有 POSCAR 时才写，避免路径猜错把文件写到别处。
+
+    只在 2D 下做。任何异常只 print [WARN]，绝不让 gen 失败；异常文本原样打印
+    （本项目被静默吞过一次，这里不留静默洞）。"""
+    if str(dim) != "2d":
+        return
+    cwd = Path(outdir).parent                  # 技能目录，如 <mat>/kl-dft-cpu
+    matdir = cwd.parent                        # 材料根，如 <mat>
+    try:
+        # 技能名形如 kl-dft-cpu / ke-dft-cpu / opt-mace-cpu / mlff-mace
+        if not re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)+", cwd.name):
+            print("[..] 跳过材料级 thickness_2d.json：%s 不像技能目录（名 %r）"
+                  % (cwd, cwd.name))
+            return
+        if not (bool(list(matdir.glob("*/*/step*"))) or (matdir / "POSCAR").is_file()):
+            print("[..] 跳过材料级 thickness_2d.json：%s 不像材料根"
+                  "（既无 POSCAR，也 glob 不到 */*/step*）" % matdir)
+            return
+        t2d = _load_thickness2d(outdir)
+        geo = t2d.slab_geometry_from_poscar(outdir / "POSCAR", int(vac_axis or 2))
+        meta = dict(geo)
+        meta.update({
+            "dim": "2d",
+            "vac_axis": int(vac_axis if vac_axis is not None else 2),
+            "poscar": "%s/%s/POSCAR" % (cwd.name, Path(outdir).name),
+            "source": "%s:%s" % (cwd.name, Path(outdir).name),
+        })
+        print(t2d.write_material_level(matdir, meta, tol=tol))
+    except Exception as exc:                   # noqa: BLE001 —— best-effort，绝不中断 gen
+        print("[WARN] 材料级 thickness_2d.json 写入跳过：%s" % exc)
+
+
 def build_in_job_stages(outdir: Path):
     """把 outdir/INCAR 按 STAGE_SPEC 拆成 INCAR.s1_<段> …，生成 run_relax.sh，
        并把 submit.sh 里的 VASP 执行行换成 `bash run_relax.sh`。
@@ -1909,6 +1992,12 @@ def build_in_job_stages(outdir: Path):
         else:
             print("[WARN] 算不出 h⊥/d（thickness_2d 不可用？）→ 面内阈值用配置值 %.4f kB，"
                   "可能与 S4 的层内口径门禁不一致" % _tol_cell)
+
+    # ---- S1 gen：把 2D 层厚口径写到【材料根目录】的 thickness_2d.json（best-effort）----
+    #   放在这里而不是 main() 末尾：此处刚算过维度/真空轴（_dim_bj/_vax_bj）和层几何，
+    #   直接复用；且即使后面 extract_vasp_cmd 失败提前 return，材料级留档也已落盘。
+    #   失败只在函数内打 WARN，绝不影响分段/提交。
+    write_material_thickness(outdir, _dim_bj, _vax_bj)
     base = (outdir / "INCAR").read_text(encoding="utf-8")
     submit_path = outdir / "submit.sh"
     vasp_cmd = extract_vasp_cmd(submit_path.read_text(encoding="utf-8"))

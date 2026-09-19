@@ -27,6 +27,22 @@ _PROPERTY_UNITS = {"zt": "1", "seebeck": "uV/K", "sigma": "S/m",
 _ROW_KEYS = {"zt": "ZT", "seebeck": "seebeck_uV/K", "sigma": "sigma_S/m",
              "kappa_e": "kappa_e_W/mK", "kappa_l": "kappa_L_W/mK", "pf": "PF_W/mK2"}
 
+# Common Chinese/English intents accepted by the planning surface.  Keep this
+# table here (rather than in the MCP transport) so CLI, MCP and future clients
+# make the same skill choice.
+_SKILL_INTENTS = (
+    (("声子", "phonon", "phonon spectrum"), ("phonon-dft-cpu", "phonon-mace-cpu", "phonon-mace-gpu")),
+    (("晶格热导", "晶格导热", "lattice thermal", "kappa_l", "热导率"),
+     ("kl-dft-cpu", "kl-mace-cpu", "kl-mace-gpu")),
+    (("电子热导", "电子输运", "electronic transport", "kappa_e", "seebeck", "迁移率"),
+     ("ke-dft-cpu",)),
+    (("缺陷", "defect", "formation energy", "形成能"), ("defect-dft-cpu",)),
+    (("弹性", "elastic", "elastic constant", "弹性常数"), ("elastic-dft-cpu",)),
+    (("能带", "band structure", "bandgap", "带隙"), ("band-dft-cpu",)),
+    (("优化", "结构优化", "relax", "optimize"),
+     ("opt-dft-cpu", "opt-mace-cpu", "opt-mace-gpu")),
+)
+
 
 def _plan_id(goal: str, *, dimension: Optional[str], temperature: Iterable[Any],
              carrier: Iterable[Any], material: Optional[str], skills: Iterable[str]) -> str:
@@ -157,11 +173,30 @@ def research_plan(goal: str, skills: Iterable[Dict[str, Any]], *, dimension: Opt
     low = text.lower()
     wants_zt = any(k in low for k in ("zt", "热电", "thermoelectric", "thermoelectricity"))
     selected: List[str] = []
-    for candidate in ("zt-dft-cpu", "ke-dft-cpu", "kl-dft-cpu"):
-        if candidate in available and (candidate == "zt-dft-cpu" or wants_zt):
-            selected.append(candidate)
+    if wants_zt:
+        for candidate in ("zt-dft-cpu", "ke-dft-cpu", "kl-dft-cpu"):
+            if candidate in available:
+                selected.append(candidate)
     if not selected and wants_zt:
         selected = [x for x in ("ke-dft-cpu", "kl-dft-cpu") if x in available]
+
+    # An explicit skill name in the user's request takes precedence over fuzzy
+    # intent matching (useful for less common skills such as fc-fit/eph-qe).
+    if not selected:
+        for candidate in available:
+            if candidate.lower() in low:
+                selected = [candidate]
+                break
+
+    # Non-zT requests still deserve a concrete, reviewable plan.  Prefer the
+    # first available implementation in each intent group (DFT first, then
+    # MACE variants) and never invent a skill absent from the discovered list.
+    if not selected and not wants_zt:
+        for needles, candidates in _SKILL_INTENTS:
+            if any(needle in low for needle in needles):
+                selected = [candidate for candidate in candidates if candidate in available]
+                if selected:
+                    break
 
     temps, carriers = _as_list(temperature), _as_list(carrier)
     gaps: List[Dict[str, str]] = []
@@ -175,11 +210,14 @@ def research_plan(goal: str, skills: Iterable[Dict[str, Any]], *, dimension: Opt
         gaps.append({"code": "missing_temperature_grid", "message": "请提供目标温度网格，避免跨步骤温度不一致。"})
     if wants_zt and not carriers:
         gaps.append({"code": "missing_carrier_grid", "message": "请提供载流子浓度/化学势网格，才能定义 zT(n,T)。"})
+    if text and not wants_zt and not selected:
+        gaps.append({"code": "no_matching_skill",
+                     "message": "未识别到匹配技能，请说明要计算的性质或直接提供技能名。"})
     if dimension == "2D" and not material:
         gaps.append({"code": "missing_material", "message": "二维工作流需要材料名，便于绑定 POSCAR 和 thickness_2d.json。"})
 
     stages: List[Dict[str, Any]] = []
-    if selected:
+    if wants_zt and selected:
         stages = [
             {"id": "structure", "stage": "structure", "skills": selected[:1],
              "requires": ["POSCAR"], "produces": ["CONTCAR", "workflow_method.txt"],
@@ -197,6 +235,12 @@ def research_plan(goal: str, skills: Iterable[Dict[str, Any]], *, dimension: Opt
              "produces": ["zt_summary.json", "zt_summary.txt"],
              "validator": "ZT_DONE、温度/载流子/单位和二维厚度口径一致"},
         ]
+    elif selected:
+        stages = [{
+            "id": "workflow", "stage": "workflow", "skills": selected,
+            "requires": ["POSCAR"], "produces": ["结果文件"],
+            "validator": "技能判据通过并生成声明的结果产物",
+        }]
 
     primary = "zt-dft-cpu" if "zt-dft-cpu" in selected else (selected[0] if selected else None)
     actions = []
@@ -206,12 +250,17 @@ def research_plan(goal: str, skills: Iterable[Dict[str, Any]], *, dimension: Opt
              "risk": "local_project_setup", "execute": "explicit_only"},
             {"action": "start_workflow", "command": ["autozt", "-tt", primary, "-p", material, "start"],
              "risk": "may_submit_hpc_jobs", "execute": "explicit_only"},
-            {"action": "advance_ready", "command": ["autozt", "-tt", primary, "-p", material, "auto", "on"],
+            {"action": "run_ready_steps", "command": ["autozt", "-tt", primary, "-p", material, "advance"],
              "risk": "may_submit_ready_jobs", "execute": "explicit_only"},
         ]
     plan_id = _plan_id(text, dimension=dimension, temperature=temps, carrier=carriers,
                        material=material, skills=selected)
-    plan_summary = ("二维材料热电 zT 工作流" if dimension == "2D" else "热电 zT 工作流")
+    if wants_zt:
+        plan_summary = ("二维材料热电 zT 工作流" if dimension == "2D" else "热电 zT 工作流")
+    elif selected:
+        plan_summary = "%s 工作流" % selected[0]
+    else:
+        plan_summary = "待识别的材料计算工作流"
     conversation = _conversation(
         state="needs_user_input" if gaps else "awaiting_confirmation",
         message=("研究计划缺少必要输入：" + "；".join(item["message"] for item in gaps)
@@ -230,8 +279,8 @@ def research_plan(goal: str, skills: Iterable[Dict[str, Any]], *, dimension: Opt
                                      selected_skills=selected, material=material,
                                      plan_id=plan_id, will_submit_jobs=bool(actions)),
         "action_surface": {
-            "mcp_safe_actions": [a for a in actions if a.get("action") == "advance_ready"],
-            "cli_only_actions": [a for a in actions if a.get("action") != "advance_ready"],
+            "mcp_safe_actions": [a for a in actions if a.get("action") == "run_ready_steps"],
+            "cli_only_actions": [a for a in actions if a.get("action") != "run_ready_steps"],
             "note": "research_plan 只展示候选；MCP 执行仍需 cycle/apply_actions，CLI-only 动作需普通 CLI/人工确认。",
         },
         "goal": text, "selected_skills": selected, "available_skills": available, "material": material,

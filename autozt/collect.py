@@ -371,7 +371,11 @@ def run_remote(cfg, shell_line, host="__default__", use_stdin=False):
         cmd = (_ssh_cmd(cfg, host, [shell_line])
                if host else ["bash", "-c", shell_line])
         r = subprocess.run(cmd, capture_output=True, text=True)
-    return r.returncode, (r.stdout + r.stderr).strip()
+    # Some subprocess implementations (notably Windows text pipes after a
+    # decode failure) expose one stream as None.  Remote diagnostics should
+    # preserve the return code and report whatever stream is available rather
+    # than raising a secondary TypeError while handling the original failure.
+    return r.returncode, ((r.stdout or "") + (r.stderr or "")).strip()
 
 def sh_b64(cmd_text):
     return "echo %s | base64 -d | bash" % base64.b64encode(cmd_text.encode()).decode()

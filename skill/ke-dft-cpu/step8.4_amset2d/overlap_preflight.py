@@ -135,6 +135,38 @@ def elastic_min_christoffel(elastic):
     return float(ev.ravel()[n]), dirs[idx[0]] if ev.ndim > 1 else dirs[0]
 
 
+def inplane_eig_ratio(elastic):
+    """二维**面内** Christoffel 特征值的 (最小/绝对最大) 比；异常返回 None。
+
+    只看面内方向（q 的 z=0），因为二维 ADP/POP 的面内散射由面内 2x2 子块决定。
+    ★ 典型错位：张量仍是 VASP 打印顺序 (XX YY ZZ XY YZ ZX)、没重排成标准 Voigt
+    (XX YY ZZ YZ XZ XY) —— 面内剪切 C66 槽里放的是接近 0 的 C_zxzx，比值 << 1e-2。
+    实测：SS 旧 settings 的 C66 槽 0.557 / C44 槽 56.337 -> 比值约 1e-2（拦下）；
+    重排后 C66=56.337 -> 正常。
+    """
+    try:
+        import numpy as np
+        from pymatgen.core.tensors import Tensor
+        from amset.scattering.elastic import (get_christoffel_tensors,
+                                              solve_christoffel_equation)
+    except Exception:
+        return None
+    try:
+        C = np.array(Tensor.from_voigt(np.array(elastic, dtype=float)))
+    except Exception:
+        return None
+    ang = np.linspace(0.0, np.pi, 9)[:-1]
+    q = np.array([[np.cos(a), np.sin(a), 0.0] for a in ang])
+    try:
+        # ★ 只取**面内 2x2 子块**（与 2D 插件一致）：slab 的面外剪切 C44 本来就小，
+        #   把它算进来会把所有二维材料都误判。
+        g = get_christoffel_tensors(C, q)[:, :2, :2]
+        ev = np.linalg.eigvalsh(g)
+    except Exception:
+        return None
+    return float(ev.min() / (np.abs(ev).max() + 1e-30))
+
+
 def _parse_vasprun(p):
     t = Path(p).read_text(errors="ignore")
     i = t.find('name="kpointlist"')
@@ -214,15 +246,26 @@ def run(cwd, out_dir=None, unity_overlap=False):
     cwd, out_dir = base, out
     two_d = is_2d_run(cwd, out_dir)
     lines, err, warn = [], False, False
+    # step.conf 显式覆盖 UNITY_OVERLAP 时，gen 会在 settings.yaml 里写
+    # AZ_OVERLAP_CONTROLLED=1 —— 表示这是一次**受控对照**（同一份 settings 只翻重叠开关）：
+    # ⓪/② 由"拦截"降为"告警"，且结果只用于算比值、不作生产结果。
+    _st = Path(out_dir) / "settings.yaml"
+    controlled = bool(_st.is_file() and "AZ_OVERLAP_CONTROLLED=1" in _st.read_text(errors="ignore"))
 
     # ---- ⓪ 二维必须 unity_overlap（不需要任何波函数数据，gen 时即生效）----
     lines.append("  0) 维度：%s；unity_overlap = %s"
                  % ("2D" if two_d else "3D/未知", unity_overlap))
     if two_d and unity_overlap is not True:
-        err = True
-        lines.append("     ★ 拦截：二维必须写 unity_overlap: true（AMSET 默认 false = 真实重叠）。"
-                     "二维走真实重叠会被去对称化算坏（MoS2 实测 ADP 抬高 10~16 倍，V23/V25.10）；"
-                     "这一条不依赖 h5，任何 2D 项目都要先改对再提交。")
+        if controlled:
+            warn = True
+            lines.append("     [WARN] 二维 + 真实重叠：本次是**受控对照**（step.conf 显式覆盖"
+                         " UNITY_OVERLAP，settings 里有 AZ_OVERLAP_CONTROLLED=1）—— 放行，"
+                         "结果只用于算比值，**不作生产结果**。")
+        else:
+            err = True
+            lines.append("     ★ 拦截：二维必须写 unity_overlap: true（AMSET 默认 false = 真实重叠）。"
+                         "二维走真实重叠会被去对称化算坏（MoS2 实测 ADP 抬高 10~16 倍，V23/V25.10）；"
+                         "这一条不依赖 h5，任何 2D 项目都要先改对再提交。")
 
     h5s = [out_dir / "wavefunction.h5", cwd / "step4_wave" / "wavefunction.h5",
            cwd / "step4b_wave_full" / "wavefunction.h5"]
@@ -244,11 +287,17 @@ def run(cwd, out_dir=None, unity_overlap=False):
                         "完整网格，走 from_data（不去对称化）" if complete
                         else "非完整网格 -> AMSET 会去对称化",
                         info["ng"], info["nb"]))
-        if not complete and not unity_overlap and two_d:
+        if not complete and not unity_overlap and two_d and controlled:
+            warn = True
+            lines.append("     [WARN] 2D + 真实重叠 + 非完整网格：受控对照放行（只用于算比值，"
+                         "不作生产结果）。")
+        elif not complete and not unity_overlap and two_d:
             err = True
             lines.append("     ★ 拦截：2D + unity_overlap=false（真实重叠）+ 非完整网格。"
                          "改用 unity_overlap: true（二维默认），或打开 wavefunction_full 分支"
                          "（S3b 用 ISYM=-1 出全网格波函数）。见 VERIFICATION V22/V23。")
+            lines.append("     补充（V33）：非完整网格的去对称化在**时间反演 x 旋转复合**下有子空间错误"
+                         "（MoS2 实测 100% 的 TRxR 格点错），所以 ISYM=-1 全网格是首选。")
         elif not complete and not unity_overlap:
             warn = True
             lines.append("     [WARN] 3D + 真实重叠 + 非完整网格 -> AMSET 会对系数去对称化，"
@@ -256,6 +305,11 @@ def run(cwd, out_dir=None, unity_overlap=False):
                          "ADP/overall 只差 3~9%、IMP 逐机制高 1.3~1.7 倍 -> 结论值可用，逐机制值需注明。"
                          "当前 BLOCK_3D_REAL_OVERLAP=%s -> 只告警不拦。"
                          % BLOCK_3D_REAL_OVERLAP)
+            lines.append("     ★ 2026-09-19 补充（VERIFICATION V33）：MoS2 二维偏差的**主因**已定位到"
+                         "去对称化的 **时间反演 x 旋转复合分支** —— 非完整网格里约 44% 的 TRxR 格点，"
+                         "其系数子空间与直接 DFT 不符（100% 错），纯 TR 与非 TR 基本正确。"
+                         "**凡空间群非中心对称（必须用时间反演补满网格）的材料，真实重叠 + 非完整网格"
+                         "都不可信**；首选 S3b 用 ISYM=-1 出全网格波函数（走 from_data）。")
 
     ver = None
     try:
@@ -354,14 +408,21 @@ def run(cwd, out_dir=None, unity_overlap=False):
                 lines.append("  5) 弹性张量：装备缺 pymatgen/amset 或格式异常，跳过")
             else:
                 val, d = me
-                lines.append("  5) 弹性张量：Christoffel 最小特征值 = %.4f（方向 %s）"
-                             % (val, d))
-                if val <= 0:
+                _r2 = inplane_eig_ratio(_el) if two_d else None
+                lines.append("  5) 弹性张量：Christoffel 最小特征值 = %.4f（方向 %s）%s"
+                             % (val, d, "" if _r2 is None else "；面内特征值比 = %.4f" % _r2))
+                if two_d and _r2 is not None and (_r2 <= 0 or _r2 < 1e-2):
                     err = True
-                    lines.append("     ★ 拦截：弹性张量非正定 -> AMSET 的形变势因子用负的 "
-                                 "Christoffel 特征值，ADP 迁移率直接算废（Mo2S3 C44=-40.16 -> "
-                                 "电子 6946；CrS2 C44=-0.52 -> 空穴 2e4 或 0，见 VERIFICATION §九）。"
-                                 "先查 S6 弹性/slab 归一化（面内 2x2 张量或面外剪切除零）再重生成。")
+                    lines.append("     ★ 拦截（**面内**不可信）：二维面内 Christoffel 特征值比 = %.4f"
+                                 "（<=0 或 <1e-2）—— 要么张量仍是 VASP 打印顺序没重排（C44/C66 互换；"
+                                 "实测 SS 旧 settings C66 槽 0.557 / C44 槽 56.337），要么面内本身非正定。"
+                                 "用当前 gen（gen_step10/gen_step14）重新生成 settings 后再跑。" % _r2)
+                elif val <= 0:
+                    warn = True
+                    lines.append("     [WARN] 最小 Christoffel 特征值为负 —— 多为**面外**剪切（二维 slab "
+                                 "的真空伪影），不是面内问题。gen 现已对二维面外剪切置零（原值记在 "
+                                 "2d_correction.json 的 elastic_outofplane_shear_zeroed）；"
+                                 "旧 settings 请 retry 重生成，或走 step8.4_amset2d 插件（面内 2x2）。")
 
     return ("error" if err else ("warn" if warn else "ok")), lines
 

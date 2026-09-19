@@ -4,7 +4,7 @@
 设计三条硬约束（决定了"新技能仍然方便"和"agent 不能乱来"）：
   1. **只调 CLI，不 import 内部函数**：门禁/审计/档案只有一份事实来源，不可能与命令行漂移。
   2. **工具是通用动词，不认识任何具体技能**：技能清单/步骤清单都从 skill.yaml 动态读，
-     所以加新技能 = 加目录，MCP 侧零改动、工具数量恒定（上限 21，超了就说明有人按技能加工具）。
+     所以加新技能 = 加目录，MCP 侧零改动；工具表保持固定的通用动作面，不按技能扩张。
   3. **风险在协议边界收口**：只读工具直连 CLI；变更/破坏性工具一律走 autozt act
      （风险分级 + 人工批准 + 审计日志），approve 只从真 TTY 生效，agent 无法自我批准。
 
@@ -82,18 +82,18 @@ TOOLS = [
                                        "material": {"type": "string"},
                                        "step": {"type": "string"}},
       "required": ["material"]}, "mutate", ["start"]),
-    ("retry_step", "保留产物重新生成输入并重交（不删产物）",
+    ("prepare_step", "准备或更新本步骤输入，保留已有产物，不提交；检查后再调用 start_step",
      {"type": "object", "properties": {"tt": {"type": "string"},
                                        "material": {"type": "string"},
                                        "step": {"type": "string"}},
       "required": ["material"]}, "mutate", ["retry"]),
-    ("fetch_results", "强制把已完成步骤的结果拉回本地",
+    ("sync_results", "把已完成步骤的结果拉回本地",
      {"type": "object", "properties": {"tt": {"type": "string"},
                                        "material": {"type": "string"}},
       "required": ["material"]}, "mutate", ["fetch"]),
-    ("advance_ready", "按依赖图推进所有就绪步骤（等价于 autozt auto on）",
+    ("run_ready_steps", "采集已完成结果并一次性提交当前就绪步骤；不改配置或隐式恢复挂死作业",
      {"type": "object", "properties": {"tt": {"type": "string"}}},
-     "mutate", ["auto", "on"]),
+     "mutate", ["advance"]),
     ("inspect", "一次返回关注状态、失败诊断和确定性候选动作（只读）",
      {"type": "object", "properties": {"tt": {"type": "string"},
                                            "material": {"type": "string"},
@@ -105,12 +105,12 @@ TOOLS = [
                                                            "minimum": 1, "maximum": 20}},
       "additionalProperties": False}, "read", ["inspect"]),
     # ---- 破坏性（走 act 网关，默认拒绝，需人工 approve）----
-    ("stop_step", "取消该步骤的作业（破坏性）",
+    ("cancel_step", "取消该步骤的作业（破坏性）",
      {"type": "object", "properties": {"tt": {"type": "string"},
                                        "material": {"type": "string"},
                                        "step": {"type": "string"}},
       "required": ["material"]}, "destructive", ["stop"]),
-    ("rerun_step", "删目录重新生成（破坏性：会删除该步全部产物）",
+    ("rebuild_step", "删目录重新生成（破坏性：会删除该步全部产物）",
      {"type": "object", "properties": {"tt": {"type": "string"},
                                        "material": {"type": "string"},
                                        "step": {"type": "string"}},
@@ -155,7 +155,7 @@ TOOLS = [
          "actions": {"type": "array", "minItems": 1, "maxItems": 20,
                      "items": {"type": "object", "properties": {
                          "action": {"type": "string", "enum": [
-                             "start_step", "retry_step", "fetch_results", "advance_ready"]},
+                             "start_step", "prepare_step", "sync_results", "run_ready_steps"]},
                          "tt": {"type": "string"}, "material": {"type": "string"},
                          "step": {"type": "string"}},
                          "required": ["action"], "additionalProperties": False}}},
@@ -664,13 +664,13 @@ def _mcp_load_compact(scope):
 
 
 def _apply_actions(args):
-    allowed = {"start_step", "retry_step", "fetch_results", "advance_ready"}
+    allowed = {"start_step", "prepare_step", "sync_results", "run_ready_steps"}
     actions = args.get("actions") or []
     for i, action in enumerate(actions):
         if action.get("action") not in allowed:
             return _result("mutate", rc=1,
                            error="action[%d] is destructive or unsupported" % i)
-        if action.get("action") != "advance_ready" and not action.get("material"):
+        if action.get("action") != "run_ready_steps" and not action.get("material"):
             return _result("mutate", rc=1,
                            error="action[%d] requires material" % i)
     expected = args.get("cursor")
@@ -1074,7 +1074,7 @@ def _resource_read(uri):
     mime = "text/markdown" if p.endswith(".md") else "application/yaml"
     return {"contents": [{"uri": uri, "mimeType": mime, "text": text[:200000]}]}
 
-# ---- MCP prompts：两个"照做就不会踩坑"的现成提词 ----
+# ---- MCP prompts：面向常见工作流的现成提词 ----
 PROMPTS = (
     {"name": "triage-failures",
      "description": "Look at failing steps and decide what to do, using the tool table",
@@ -1083,8 +1083,8 @@ PROMPTS = (
      "description": "Check generated inputs before submitting a step",
      "arguments": [{"name": "material", "description": "material name", "required": True},
                    {"name": "step", "description": "step label", "required": False}]},
-    {"name": "plan-2d-zt",
-     "description": "先收集二维 zT 目标和网格，再生成可审查研究计划",
+    {"name": "compute-zt",
+     "description": "Plan and run a validated zT(n, T) calculation for 2D or 3D materials",
      "arguments": []},
     {"name": "run-validated-workflow",
      "description": "按 plan、preflight、dry-run、确认、执行、结果的顺序调用 AutoZT",
@@ -1118,11 +1118,11 @@ def _prompt_get(name, args=None):
                 "remote directory, and work_dir source before selecting start_step; "
                 "execute only after the plan is explicit and its cursor is current."
                 % (mat, step))
-    elif name == "plan-2d-zt":
-        text = ("先向用户确认材料名、二维厚度契约、目标温度网格和载流子网格。"
-                "调用 research_plan 只生成方案；若状态为 awaiting_confirmation，"
-                "展示 plan_summary、plan_steps 和 confirmation_payload，等待用户确认，"
-                "再调用 preflight/inspect/cycle。research_plan 不会提交作业。")
+    elif name == "compute-zt":
+        text = ("先确认材料、维度（2D 要确认厚度契约）、温度网格和载流子网格。"
+                "严格按 research_plan → preflight → inspect → cycle(execute=false) → "
+                "用户确认 → cycle(execute=true) → results 执行；research_plan、preflight "
+                "和 dry-run 不提交作业，所有执行动作都必须经过 autozt act。")
     elif name == "run-validated-workflow":
         text = ("严格按 research_plan → preflight → inspect → cycle(execute=false) → "
                 "用户确认 → cycle(execute=true) → results 执行。所有执行动作都必须经过 "

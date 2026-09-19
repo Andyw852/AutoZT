@@ -1,7 +1,7 @@
 """MCP 接口测试（不需要集群）：工具表、协议握手、风险分级、网关拒绝。
 
 MCP 是 AutoZT 对外给 agent 用的唯一入口，所以这层必须锁死：
-  1. 工具是通用动词，数量封顶 21（不许按技能加工具）；
+  1. 工具是通用动词，保持固定通用工具面（不许按技能加工具）；
   2. 危险动作必须在协议边界被拒绝并给出批准命令（agent 不能自我批准）；
   3. 只读调用不触发任何提交。
 """
@@ -34,6 +34,12 @@ def test_every_tool_has_schema():
     for name, desc, schema, risk, verb in M.TOOLS:
         assert schema.get("type") == "object", name
         assert desc and verb, name
+
+
+def test_prepare_step_description_matches_no_submit_semantics():
+    retry = next(item for item in M.TOOLS if item[0] == "prepare_step")
+    assert "不提交" in retry[1]
+    assert "start_step" in retry[1]
 
 
 def test_initialize_and_tools_list():
@@ -108,7 +114,7 @@ def test_handle_serves_resource_methods():
 def test_prompts_list_and_get():
     items = M._prompts_list()
     assert {p["name"] for p in items} == {
-        "triage-failures", "review-before-submit", "plan-2d-zt",
+        "triage-failures", "review-before-submit", "compute-zt",
         "run-validated-workflow", "explain-result-provenance"}
     got = M._prompt_get("review-before-submit", {"material": "Si_demo", "step": "S1_opt"})
     assert "Si_demo" in got["messages"][0]["content"]["text"]
@@ -174,6 +180,7 @@ def test_default_profile_is_workflow_sized():
         names = {item["name"] for item in M._tools_list()}
         assert len(names) == 12
         assert "inspect" in names and "cycle" in names
+        assert "cancel_step" not in names and "rebuild_step" not in names
         assert "stop_step" not in names and "rerun_step" not in names
     finally:
         if old is not None:
@@ -189,10 +196,10 @@ def test_workflow_profile_exposes_one_shot_control_loop(monkeypatch):
         names = [x["name"] for x in M._tools_list()]
         assert "inspect" in names and "cycle" in names
         got = M.call_tool("inspect", {})
-        assert got["structuredContent"]["data"]["actions"][0]["action"] == "retry_step"
+        assert got["structuredContent"]["data"]["actions"][0]["action"] == "prepare_step"
         policy = got["structuredContent"]["data"]["policy"]
-        assert "retry_step" in policy["allowed_actions"]
-        assert "retry_step" not in policy["cycle_default_actions"]
+        assert "prepare_step" in policy["allowed_actions"]
+        assert "prepare_step" not in policy["cycle_default_actions"]
         assert policy["retry"]["opt_in"] == "include_retry"
         cycle = M.call_tool("cycle", {"execute": False})
         assert cycle["structuredContent"]["data"]["mode"] == "dry_run"
@@ -244,7 +251,7 @@ def test_capabilities_tool_returns_fixed_agent_contract():
     got = M.call_tool("capabilities", {})
     assert not got["isError"]
     data = got["structuredContent"]["data"]
-    assert data["schema_version"] == "agent/4"
+    assert data["schema_version"] == "agent/6"
     assert "request_schema" in M.call_tool("schema", {})["structuredContent"]["data"]
     assert "mcp-stdio" in data["transport"]
     assert data["actions"]["default"] == "dry_run"
@@ -387,7 +394,7 @@ def test_tool_validation_rejects_unknown_and_destructive_batch_actions():
             os.environ.pop("AUTOZT_MCP_PROFILE", None)
         else:
             os.environ["AUTOZT_MCP_PROFILE"] = old
-    bad = M.call_tool("apply_actions", {"actions": [{"action": "rerun_step"}]})
+    bad = M.call_tool("apply_actions", {"actions": [{"action": "rebuild_step"}]})
     assert bad["isError"] and "destructive" in bad["structuredContent"]["error"]
 
 
@@ -460,7 +467,7 @@ def test_propose_actions_is_advisory(monkeypatch=None):
         got = M.call_tool("propose_actions", {})
         assert not got["isError"]
         proposal = got["structuredContent"]["data"]["proposals"][0]
-        assert proposal["tool"] == "retry_step"
+        assert proposal["tool"] == "prepare_step"
         assert proposal["requires_approval"] is False
     finally:
         M._run = old_run
@@ -495,10 +502,28 @@ def test_propose_actions_is_bounded(monkeypatch=None):
 
 def test_apply_actions_dry_run_is_side_effect_free():
     got = M.call_tool("apply_actions", {"dry_run": True, "actions": [
-        {"action": "retry_step", "tt": "demo", "material": "Si_demo", "step": "S1_opt"}
+        {"action": "prepare_step", "tt": "demo", "material": "Si_demo", "step": "S1_opt"}
     ]})
     assert not got["isError"]
     assert got["structuredContent"]["data"]["dry_run"] is True
+
+
+def test_run_ready_steps_calls_one_shot_cli(monkeypatch):
+    old_run = M._run
+    old_profile = os.environ.get("AUTOZT_MCP_PROFILE")
+    seen = []
+    os.environ["AUTOZT_MCP_PROFILE"] = "full"
+    monkeypatch.setattr(M, "_run", lambda argv, timeout=1800: seen.append(argv) or (0, "{}", ""))
+    try:
+        got = M.call_tool("run_ready_steps", {"tt": "demo"})
+        assert not got["isError"]
+        assert seen == [["act", "-tt", "demo", "advance"]]
+    finally:
+        M._run = old_run
+        if old_profile is None:
+            os.environ.pop("AUTOZT_MCP_PROFILE", None)
+        else:
+            os.environ["AUTOZT_MCP_PROFILE"] = old_profile
 
 
 def test_apply_actions_rejects_stale_cursor(monkeypatch):

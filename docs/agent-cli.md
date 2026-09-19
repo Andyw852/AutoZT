@@ -68,12 +68,12 @@ autozt agent contract -tt band-dft-cpu
 {
   "actions": [
     {"action": "start_step", "tt": "band-dft-cpu", "material": "C24/qHPC24", "step": "S1_opt"},
-    {"action": "advance_ready", "tt": "band-dft-cpu"}
+    {"action": "run_ready_steps", "tt": "band-dft-cpu"}
   ]
 }
 ```
 
-CLI 会拒绝 `stop`、`rerun`、`clean`、`-f`、`-y` 以及标记为需要人工复核的建议。允许的动作逐条交给 `autozt act`，因此仍会进入 `.tf_agent_log.jsonl` 审计；`--dry-run` 不执行任何远端动作。
+CLI 会拒绝 `cancel_step`、`rebuild_step`、`clean_material`、`-f`、`-y` 以及标记为需要人工复核的建议。允许的动作逐条交给 `autozt act`，因此仍会进入 `.tf_agent_log.jsonl` 审计；`run_ready_steps` 执行一次性的 `autozt advance`，不会打开持久化 `auto_advance`，也不会隐式恢复挂死作业；`--dry-run` 不执行任何远端动作。
 
 `inspect`、`plan`、`cycle` 是高层入口。它们读取同一个只读状态快照，先使用 AutoZT
 已有的诊断码和依赖规则生成动作，再把需要人工判断的 FAIL 单独留在

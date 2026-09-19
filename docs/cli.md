@@ -14,13 +14,14 @@ autozt --help 输出（自动生成）
     
     计算：
       start              生成缺失输入并提交
+      advance            一次性拉回结果并推进就绪步骤，不修改 auto_advance
       stop               取消作业并阻止自动重跑
       retry              保留产物重新生成输入，不提交；检查后 start
       rerun              删除旧步骤并重新生成，不提交；检查后 start
       clean              删除产物，不重新生成
     
     管理：
-      auto on|off        开关自动推进；-tt/-p 限定范围
+      auto on|off        持久化开关自动推进；-tt/-p 限定范围
       auto resume        恢复指定项目取消步骤，必须配 -tt 和 -p
       monitor [-d]       持续监控；--stop 停止，--restart 重启
       conf [--set ...]   查看或修改步骤配置

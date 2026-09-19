@@ -29,6 +29,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import kl_common as kc
 from dim_common import require_dim  # noqa: E402
 import stepconf
+import incar_bench  # noqa: E402 取力 INCAR 基准对照（隔离 side-car，见 incar_bench.py）
 
 OUTDIR = "step4_disp"
 STEP   = "step4_disp"
@@ -71,6 +72,14 @@ SPEC = {
     "MC_DMIN_SCALE": (0.75,    "float"), # MC d_min = 最近邻 × 此系数
     "MC_NITER":     (10,       "int"),   # MC 迭代数
     "MC_SEED":      (2025,     "int"),
+    # INCAR_BENCH（2026-09-18，wangchao 要求）：取力 INCAR 基准对照。
+    #   on 时除正常生成生产 disp-* 外，额外在 step4_disp/bench/<variant>/disp-XXXXX
+    #   生成少数几帧（同一批位移，直接 copy 生产 POSCAR），比较 LREAL×ADDGRID 与
+    #   ENCUT 变体的力一致性，定下生产取力 INCAR。默认 off，不改变现有材料行为。
+    #   隔离：bench/ 不在生产 fanout（"disp-*" 非递归）与 S5 帧校验范围内。
+    #   分析：python incar_bench.py analyze（或 submit/analyze 见 incar_bench.py）。
+    "INCAR_BENCH":  ("off",    "str"),   # off | on
+    "INCAR_BENCH_FRAMES": (2,  "int"),   # 每变体取生产前几帧（默认 2）
 }
 
 
@@ -414,6 +423,23 @@ def main():
         kc.write_submit(submit_tpl, d / "submit.sh",
                         {"JOBNAME": "%s-kl-dft-cpu-S4-%s" % (cwd.name, num)})
         stepconf.apply_submit(d / "submit.sh", conf.submit)
+
+    # ---- INCAR_BENCH：取力 INCAR 基准对照（默认 off；隔离 side-car）----
+    #   bench/ 不在生产 fanout（"disp-*" 非递归）与 S5 帧校验范围内，故它不会被
+    #   autozt 当生产帧提交/统计；用独立命令 python incar_bench.py submit/analyze。
+    if incar_bench.enabled(conf["INCAR_BENCH"]):
+        try:
+            _bp = incar_bench.generate(out, conf=conf, dim=dim,
+                                       n_frames=int(conf["INCAR_BENCH_FRAMES"] or 2))
+        except Exception as _e:                         # noqa: BLE001
+            _bp = None
+            print("[WARN] INCAR_BENCH 生成失败（%s）—— 生产位移帧不受影响" % _e)
+        if _bp is not None:
+            print("[..] INCAR_BENCH：bench 帧不随生产 fanout 提交；登录节点跑 "
+                  "python incar_bench.py submit 提交、python incar_bench.py analyze "
+                  "出对照表（判据 |dF|_rms/|F|_rms < 1%%；绝对 "
+                  "max|dF| < 0.5 meV/A 可用 --threshold 选）。")
+
     print("[DONE] %s：%d 个位移子目录 + 平衡帧 disp-00000 就绪，"
           "tf 各自提交（fanout disp-*）" % (OUTDIR, len(poscars)))
 

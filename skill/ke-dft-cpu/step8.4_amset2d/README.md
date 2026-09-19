@@ -102,7 +102,22 @@ python test_kernels.py          # 需要 amset + pymatgen 环境（如 conda ams
   - **代价**：全网格分支的 k 点数 ×对称操作数（MoS₂ 16 倍），h5 85 MB → 1.3 GB。
   - **残差（未解释清）**：电子仍是单谷参考的 1.2~1.4 倍、ADP 比值 2.52 略超 N_v=2。
     在解释清楚前，真实重叠的**绝对值仍不宜直接写进论文**。
-  - **检查与报警**（V24 / V25.10）：
+  - **检查与报警**（V24 / V25.10 / V26，2026-09-18 更新）：
+    ① 运行前检查 `overlap_preflight.py`（`step8_amset` / `step8.4_amset2d` 的作业里都会先跑，不过就 `exit 1`、不出数）：
+       ⓪ **2D 且 `unity_overlap != true` -> 拦截**；但若 `step.conf` **显式**写 `UNITY_OVERLAP = false`（受控对照），
+          gen 会在 settings 里写 `AZ_OVERLAP_CONTROLLED=1`，此时降为**告警放行**（结果只作对照、不作生产）。
+       ① AMSET 版本 + 重叠模式；
+       ② h5 完整性：k 点数 == 网格乘积（= `from_data`、不去对称化）；真实重叠 + 非完整网格：
+          **2D 拦截 / 3D 告警**（Si 全网格对照已完成：ADP/overall 只差 3~9%、IMP 逐机制 1.3~1.7x，见 VERIFICATION V26）；
+       ③ S3 vs S3b：NBANDS + 本征值一致性（<1 meV，窗口取运行日志实际值）；
+       ④ `amset wave` 带窗口必须等于 AMSET 实际插值的窗口；
+       ⑤ 弹性张量：**面内** Christoffel 特征值比 `<=0` 或 `<1e-2` -> **拦截**（多为 VASP 顺序未重排、C44/C66 互换）；
+          **仅面外**为负 -> **告警**（二维 slab 真空伪影；gen 会把**负的**面外剪切清掉，原值记进
+          `2d_correction.json` 的 `elastic_outofplane_shear_zeroed`）。
+    ② `use_projections: true` 的运行**不适用**比值报警：投影重叠不满足 `|I|^2<=1`（实测比值可 0.71/0.41），guard 遇到它直接跳过。
+    ③ 8.3 自动算比值（`overlap_ratio_guard.py`，2026-09-19 分级）：ADP **`<1` 红 / `[1, N_v]` 绿 / `>N_v` 黄（要求人工确认）**；
+       **N_ch（按谷区分实测，同谷=1/谷间=0）只作解释打印，不再当放行阈值**（SS 实测 N_ch 电子 ~23、空穴 ~250，见 V29）；材料目录放 `valley_ratio.json`（`{"n_ch": 3.13}`）会被读到并打印。
+       **POP 只记录、不参与红黄**（真实重叠也压低谷内通道，±20% 会误红）。实测：SS 修正弹性顺序后面内 1.06 -> 绿；MoS₂ 2.52 > N_v=2 -> 黄（人工确认）。
     ① 运行前检查 `overlap_preflight.py`：⓪ **2D 且 `unity_overlap != true` → 直接拦截**
     （这条不读波函数，gen 时即生效，正是能挡住原始 bug 的那条）；① AMSET 版本 + 重叠模式；
     ② h5 完整性（k 点数 == 网格乘积 = `from_data`；真实重叠 + 非完整网格：**2D 拦截、
@@ -114,8 +129,7 @@ python test_kernels.py          # 需要 amset + pymatgen 环境（如 conda ams
     gen 时就是实效的；`step8_amset` / `step8.4_amset2d` 的作业里再跑一次
     `--in-job` 才开算，检查不过就**不出数**。
     ③ 8.3 输出里自动算 `overlap_ratio_guard.py` 的比值，ADP 分级
-    **[1, N_v] 绿 / (N_v, 2N_v] 黄（人工确认）/ > 2N_v 红（拦截、不得进 zT 汇总）**，
-    POP 另按 1 ± 20%。
+    **[1, N_v] 绿 / >N_v 黄（人工确认）/ <1 红（拦截、不得进 zT 汇总）**，POP 只记录。
   - **现象**：2×2 实验（输入与集群 run 逐字一致）显示，真实重叠把 ADP 迁移率整体抬高
     **电子 ×10.6、空穴 ×15.1**，而插值因子 4→10 只值 ×1.06~1.11。
     同输入下 `unity_overlap: true` 给 99.3 cm²/Vs（与 Takagi/2 参考 102 一致），

@@ -111,6 +111,27 @@ def main():
         sys.exit("[ERROR] %s\n        请清空 step4_disp 的 disp-*/POSCAR-*/phono3py_disp.yaml/SPOSCAR "
                  "后重跑 S4（或 -j S4_disp rerun）。" % _note)
 
+    # ---- SCF 收敛门禁（2026-09-19，wangchao 要求）：NELM 截断/未收敛的帧不能拟合 ----
+    #   VASP 撞 NELM 时照样输出力、作业正常退出，只在 OUTCAR 留一段
+    #   "number of steps (NELM) ... forces ... might not be reliable"；这种帧拿去拟合
+    #   会让 fc2/fc3 与 κ 整体错掉，而下游所有检查都显示正常 —— 正是要拦的静默错误。
+    #   反向：静态单点正常收敛时 OUTCAR 必有且只有 1 次 "aborting loop because EDIFF is reached"。
+    _scf_ok, _scf = kc.check_outcar_scf_convergence(disp)
+    print(kc.format_scf_report(_scf))
+    (out / "scf_steps.json").write_text(
+        json.dumps(_scf, ensure_ascii=False, indent=2), encoding="utf-8", newline="\n")
+    if not _scf_ok:
+        _bad = "、".join(b["frame"] for b in _scf["bad_frames"][:20])
+        _more = "（共 %d 帧）" % _scf["n_bad"] if _scf["n_bad"] > 20 else ""
+        sys.exit(
+            "[ERROR] S4 有 %d/%d 帧 SCF 未正常收敛（NELM 截断 / 无 aborting loop / 帧未算完），"
+            "力不可信，拒绝拟合：\n        作废帧：%s%s\n"
+            "        这些帧的力是电子步没收敛的结果，拟合 fc2/fc3 会整体错掉而下游检查正常。\n"
+            "        处理：对作废帧调 INCAR（提高 NELM / 换 ALGO / 调 AMIX,BMIX）后 "
+            "autozt -tt kl-dft-cpu -p <材料> -j S4_disp retry 只补这些帧；\n"
+            "        每帧电子步数见 %s。"
+            % (_scf["n_bad"], _scf["n_frames"], _bad, _more, out / "scf_steps.json"))
+
     params = kc.read_kl_params(disp / kc.KL_PARAMS)
     method = (params.get("METHOD") or "alm").lower()
     supercell = params.get("SUPERCELL") or ""

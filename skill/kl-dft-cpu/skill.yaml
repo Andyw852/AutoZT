@@ -69,7 +69,10 @@ steps:
 
   - {seq: 4, name: step4_disp, label: S4_disp, check: outcar, fanout: "disp-*",
      gen: gen_step4_disp.py,
+     # incar_bench.py：INCAR_BENCH=on 时的隔离对照 side-car（生成 bench/ 帧 + 分析报告），
+     #   必须随 gen 推送（gen_step4_disp import 它）。
      gen_need: [dim_common.py, stepconf.py, step.conf, kl_common.py, lattice_kappa.py,
+                incar_bench.py,
                 check_common.py, step2_check_and_resubmit.py,
                 thickness_2d.py, vdw_radii.py,
                 incar_force_2d.tpl, incar_force_3d.tpl,
@@ -154,8 +157,8 @@ io_schema:
        desc: "力常数拟合引擎；auto = 按 DIM/帧数选（多为 phono3py），pheasy 需要 METHOD=alm（随机位移压缩感知）"}
     - {name: FC_CALC, values: [symfc, alm], default: symfc, where: step.conf,
        desc: "phono3py 的拟合后端：symfc（对称性约束）或 alm"}
-    - {name: SOLVER, values: [phono3py, shengbte], default: phono3py, where: step.conf,
-       desc: "BTE 求解器（shengbte 走 FORCE_CONSTANTS_2ND/3RD 双格式导出）"}
+    - {name: SOLVER, values: [phono3py, shengbte, fourphonon], default: phono3py, where: step.conf,
+       desc: "BTE 求解器；shengbte/fourphonon 走 FORCE_CONSTANTS_2ND/3RD 双格式导出，fourphonon 用 GPU 多卡 RTA"}
     - {name: BTE_METHOD, values: [rta, lbte], default: rta, where: step.conf,
        desc: "单模弛豫时间近似（快）或直接解线性化 BTE（准，内存 O(N_mode^2)）"}
     - {name: KAPPA_MESH, default: auto, where: step.conf,
@@ -166,6 +169,10 @@ io_schema:
        desc: "位移帧数硬闸：超过就报错停步（防超胞设太大白烧机时）"}
     - {name: OVERSAMPLE, default: 3, where: step.conf,
        desc: "随机位移过采样系数（帧数 = ALM 自由力常数个数 × 它）"}
+    - {name: INCAR_BENCH, values: ["off", "on"], default: "off", where: step.conf,
+       desc: "取力 INCAR 基准对照：on 时在 step4_disp/bench/<variant>/disp-* 额外生成 ≤8 变体 × INCAR_BENCH_FRAMES 帧（同一批位移），比较 {LREAL=.FALSE./Auto}×{ADDGRID 不加/.TRUE.} 与 ENCUT 1.5×/2.0× 的力；判据 max|ΔF| < 0.5 meV/Å。bench/ 隔离于生产 fanout 与 S5 帧校验，默认 off 不改变现有行为"}
+    - {name: INCAR_BENCH_FRAMES, default: 2, where: step.conf,
+       desc: "取力 INCAR 对照每个变体取生产前几帧（默认 2）"}
   steps:
     - {step: S1_opt, title: "Relax structure",
        tool: "VASP (vasp_std) · relax_common 三段式",

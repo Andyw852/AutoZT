@@ -45,7 +45,7 @@ def _dry_run_steps_for(cmd, m, jb):
         return [s] if s is not None else []
     if cmd == "retry":
         return [s for s in m["steps"] if s["kind"] == "FAIL"]
-    if cmd == "start":
+    if cmd in ("start", "advance"):
         ready = m.get("actives")
         if ready is None:
             ready = [m.get("active")] if m.get("active") is not None else []
@@ -109,7 +109,7 @@ def main():
             _stream.reconfigure(encoding="utf-8", errors="replace")
         except AttributeError:
             pass
-    from autozt import EXAMPLE_CONFIG, JSON_SCHEMA, AUTOZT_VERSION, USAGE, USAGE_EN, _PKG_ROOT, _add_diag_codes, _json_changes, _json_errors_only, _json_paginate, _dbg_t, _state_cache_load, _state_cache_save, _summary_json, _watch_cron, _watch_daemon, _watch_ensure, _watch_stop, apply_exclude, apply_hide_done, apply_skills, auto_advance, auto_fetch, auto_recover_hung, cmd_adopt, cmd_auto, cmd_auto_project, cmd_auto_skill, cmd_clean, cmd_conf, cmd_diagnose, cmd_fetch, cmd_hpc, cmd_init, cmd_level, cmd_migrate_subdir, cmd_rerun, cmd_retry, cmd_skills, cmd_start, cmd_status, cmd_step_init, cmd_stop, cmd_summary, cmd_watch, collect_data, fill_local_dim, filter_status, find_material, find_step, find_uninited, get_types, load_config, merge_project_configs, render_table, status_spec_has_scancel, cmd_schema, cmd_skill_show, cmd_correct, cmd_correct_usage, cmd_history, history_record, cmd_prove, set_active_cfg, cmd_act, cmd_approve, agent_direct_gate, agent_audit, cmd_session
+    from autozt import EXAMPLE_CONFIG, JSON_SCHEMA, AUTOZT_VERSION, USAGE, USAGE_EN, _PKG_ROOT, _add_diag_codes, _json_changes, _json_errors_only, _json_paginate, _dbg_t, _state_cache_load, _state_cache_save, _summary_json, _watch_cron, _watch_daemon, _watch_ensure, _watch_stop, apply_exclude, apply_hide_done, apply_skills, auto_advance, auto_fetch, auto_recover_hung, cmd_adopt, cmd_auto, cmd_auto_project, cmd_auto_skill, cmd_clean, cmd_conf, cmd_diagnose, cmd_fetch, cmd_hpc, cmd_init, cmd_level, cmd_migrate_subdir, cmd_rerun, cmd_retry, cmd_skills, cmd_start, cmd_status, cmd_step_init, cmd_stop, cmd_summary, cmd_watch, collect_data, fill_local_dim, filter_projs, filter_status, find_material, find_step, find_uninited, get_types, load_config, merge_project_configs, render_table, status_spec_has_scancel, cmd_schema, cmd_skill_show, cmd_correct, cmd_correct_usage, cmd_history, history_record, cmd_prove, set_active_cfg, cmd_act, cmd_approve, agent_direct_gate, agent_audit, cmd_session
     if "--help-all" in sys.argv[1:]:
         # 英文帮助：AUTOZT_LANG=en 或命令行 --lang en
         _lang = (os.environ.get('AUTOZT_LANG') or '').lower()
@@ -181,7 +181,7 @@ def main():
                    help="list/summary 强制跳过本地状态缓存，重新 ssh 采集")
     p.add_argument("-y", "--yes", action="store_true")
     p.add_argument("--dry-run", dest="dry", action="store_true",
-                   help="只打印将影响的对象/计划，不执行（start/stop/retry/rerun/clean/fetch/adopt/migrate-subdir）")
+                   help="只打印将影响的对象/计划，不执行（advance/start/stop/retry/rerun/clean/fetch/adopt/migrate-subdir）")
     p.add_argument("--json", dest="json_out", action="store_true",
                    help="list/summary/status/dir 以 JSON 输出（机器可读）")
     p.add_argument("--schema", dest="schema", action="store_true",
@@ -221,7 +221,7 @@ def main():
         print(JSON_SCHEMA)
         return
 
-    commands = {"status", "list", "summary", "start", "stop", "retry", "rerun",
+    commands = {"status", "list", "summary", "advance", "start", "stop", "retry", "rerun",
                 "json", "config", "dir", "fetch", "init", "clean", "watch", "mcp",
                 "monitor", "restart", "help", "auto", "adopt", "migrate-subdir",
                 "hpc", "skills", "conf", "level", "diagnose", "probe", "push",
@@ -493,7 +493,7 @@ def main():
     # 按命令语义打印【真实】目标：retry=FAIL 步，start=就绪步，stop=有作业步，
     # fetch=已完成可拉回步；rerun/clean 无 -j 时是整材料级（不再笼统"全部步骤"）。
     _eff_cmd = "clean" if (a.clean or cmd == "clean") else cmd
-    if a.dry and _eff_cmd in ("start", "stop", "retry", "rerun", "clean",
+    if a.dry and _eff_cmd in ("advance", "start", "stop", "retry", "rerun", "clean",
                               "fetch"):
         print("【dry-run】命令 '%s' 将影响以下对象（未执行任何变更、未提交作业）："
               % _eff_cmd)
@@ -572,6 +572,26 @@ def main():
         _sp = a.proj or (_sargs[0] if _sargs else None)
         sys.exit(cmd_session(cfg, data, _sp, job=jobs[0], out=a.out,
                              since=a.since, json_out=a.json_out))
+    if cmd == "advance":
+        # 一次性推进：采集并回传已完成结果，然后推进就绪步骤；不改写
+        # 全局 auto_advance 配置。与 `auto on`（持久化开关）严格区分。
+        # Respect an explicit material scope.  `auto on` persists scope through
+        # project settings; one-shot advance must filter the collected snapshot
+        # directly so it cannot advance unrelated materials.
+        if projs:
+            filter_projs(data, projs)
+        _t1 = _time.time()
+        auto_fetch(cfg, data)
+        _dbg_t("advance：auto-fetch 拉回", _t1)
+        _t1 = _time.time()
+        auto_advance(cfg, data, force=True)
+        _dbg_t("advance：一次性推进", _t1)
+        if a.hide_done or (cfg.get("hide_done") and not a.show_done):
+            apply_hide_done(data)
+        for pj in (projs or [None]):
+            for jb in jobs:
+                cmd_status(cfg, data, pj, jb)
+        return
     if cmd == "summary":   # 只读极简汇总；不 auto_fetch/auto_advance（绝不提交）
         if a.hide_done or (cfg.get("hide_done") and not a.show_done):
             apply_hide_done(data)

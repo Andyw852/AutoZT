@@ -128,14 +128,29 @@ def slab_geometry(lat, frac, species=None, vac_axis=2, mode="vdw", fallback_r=No
     }
 
 
+def _source_chain(source):
+    """取 source 的【技能链】标识 = 第一个 ":" 之前的部分。
+
+    例：'kl-dft-cpu:step1_std_opt' / 'kl-dft-cpu:step6_kappa' -> 'kl-dft-cpu'。
+    没有 ":" 的老文件原样返回（空 source 得到 ""）。见 write_material_level。"""
+    return str(source or "").split(":", 1)[0].strip()
+
+
 def write_material_level(matdir, meta, tol=0.05):
     """把层厚口径写到【材料根目录】的 thickness_2d.json —— kl / ke 共用契约。
 
     规则（文档 P0-2(b)）：谁先跑谁写；后跑的一方读它、并用自己弛豫好的结构重算
-    对照，差值 > tol（默认 0.05 Å）就告警。
-      - 目标不存在 / 已存在但来源就是自己（source 以 "kl-dft-cpu" 开头）→ 覆盖写。
-      - 已存在且来自别的来源（如 ke 的 AMSET）→ 只校验不回写，冲突则告警，
-        保持"先写入者生效"，避免两条链互相覆盖。
+    对照，差值 > tol（默认 0.05 Å）就告警。但"谁"按【技能链】判定，不按单个步骤：
+
+      - 同一链（source 的 ":" 之前相同）→ 覆盖更新。例如 kl-dft-cpu:step1_std_opt
+        与 kl-dft-cpu:step6_kappa 同属 kl-dft-cpu 链：S1 用的是输入（未弛豫）结构，
+        S6 用的是弛豫后的结构，后者才是该链最终用于 κ 归一化的口径。若按整条 source
+        严格相等判断，S6 会被当成"别的来源"而永远不许更新，材料级文件就冻结在 S1
+        的粗值上 —— 这是本次改成按链比较的理由。
+      - 不同链（如 kl-dft-cpu 与 ke-dft-cpu）→ 只校验不回写，保持"先写入者生效"，
+        避免两条链互相覆盖；|Δd| > tol 才 WARN（zT 里 d 约不掉）。
+      - 老文件缺 source / source 不含 ":" 时链标识为 ""，与同为 "" 的新写法视为同链。
+
     返回一行可打印的状态说明；任何异常由调用方吞掉（这是 best-effort 契约，不该
     让作业失败）。
     """
@@ -149,8 +164,9 @@ def write_material_level(matdir, meta, tol=0.05):
             old = json.loads(p.read_text(encoding="utf-8"))
         except Exception:
             old = None
-    # 先写入者生效：已存在且来源【不是自己】时只校验不回写（避免两条链互相覆盖）。
-    same_writer = old is not None and str(old.get("source", "")) == src
+    # 先写入者生效：已存在且来源【不属于同一条链】时只校验不回写（避免两条链互相覆盖）。
+    same_writer = (old is not None
+                   and _source_chain(old.get("source", "")) == _source_chain(src))
     if old is not None and not same_writer:
         d_old, d_new = old.get("thickness_d_A"), meta.get("thickness_d_A")
         if d_old and d_new and abs(float(d_old) - float(d_new)) > float(tol):
@@ -162,7 +178,7 @@ def write_material_level(matdir, meta, tol=0.05):
         return ("[..] 材料级 thickness_2d.json 已存在（%s，d=%.3f Å），与本次计算一致，"
                 "不覆盖。" % (old.get("source"), float(old.get("thickness_d_A") or 0.0)))
     p.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8", newline="\n")
-    _what = "覆盖更新（同一来源重跑）" if same_writer else "新建"
+    _what = "覆盖更新（同一技能链重跑/后续步骤）" if same_writer else "新建"
     return "[OK] 材料级 thickness_2d.json %s %s（source=%s, d=%.3f Å）" % (
         _what,
         p, meta.get("source"), float(meta.get("thickness_d_A") or 0.0))

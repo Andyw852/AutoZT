@@ -123,7 +123,7 @@ Agent：调用 cycle(execute=true)，动作经 autozt act，返回 job、集群�
 MCP 的 `content[0].text` 也会返回一行短摘要，便于只读取文本的客户端；完整证据仍在
 `structuredContent.data`。CLI 则在同一 JSON envelope 中增加 `conversation`，因此 MCP 和
 `autozt agent` 可以互换，模型不需要为两种传输重新学习流程。推荐同时加载
-`plan-2d-zt`、`run-validated-workflow` 和 `explain-result-provenance` 三个 MCP prompt。
+`compute-zt`、`run-validated-workflow` 和 `explain-result-provenance` 三个 MCP prompt。
 
 ## 技能如何被模型发现和使用
 

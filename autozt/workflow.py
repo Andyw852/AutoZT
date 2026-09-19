@@ -1551,19 +1551,21 @@ def tag_of(m, s):
 #   L5193  auto_fetch
 #   L5256  cmd_fetch
 
-def auto_advance(cfg, data):
+def auto_advance(cfg, data, force=False):
     from autozt import _AUTO_CASCADE_MAX, _BUSY_KINDS, _load_yaml_file, step_cfg
     """status 时自动推进可开始的步骤（全局 tf.yaml 写 auto_advance: true 开启；
     项目 setting.yaml 里 auto_advance: false 可单独关闭）。
     只推进 TODO/PREP（输入就绪/未生成）的活跃步骤；error 不自动重试；
-    v1.4：SCANCEL（autozt stop 打了标记的）同样不推进，须显式 start/retry/rerun。"""
-    if not cfg.get("auto_advance"):
+    v1.4：SCANCEL（autozt stop 打了标记的）同样不推进，须显式 start/retry/rerun。
+    force=True 仅用于显式的一次性 advance，不写配置；项目级 auto_advance=false
+    仍然尊重。"""
+    if not force and not cfg.get("auto_advance"):
         return
     # fixte⑬：磁盘复核 —— watch 是长驻进程，内存里的 cfg 可能是启动时的旧值
     # （热重载失败会被 except 吞掉，进程继续按旧配置提交作业）。这里每轮直接
     # 读一次 tf.yaml：磁盘上关着就立刻返回，绝不提交。
     _cp = cfg.get("_config_path")
-    if _cp and os.path.isfile(_cp):
+    if not force and _cp and os.path.isfile(_cp):
         try:
             if (_load_yaml_file(_cp) or {}).get("auto_advance") is False:
                 return

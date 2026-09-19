@@ -65,9 +65,9 @@ than a refusal (the verb is absent from the tool table, and the dispatcher doubl
 | rule-driven steps (no LLM in the loop) | hundreds of materials x many steps: deterministic, no token cost, every decision traceable to a physical criterion |
 | MCP-driven agent on top | triage of failures, review of generated inputs, decisions about what to retry |
 
-The interface in autozt/mcp.py is deliberately generic (21 verbs, capped at 21) plus
+The interface in autozt/mcp.py is deliberately generic (24 fixed tools in the full profile) plus
 read-only resources, so a planner can act without the tool itself becoming an agent.
-New clients can select the workflow profile (9 tools) and use `inspect`/`cycle` for a
+New clients can select the workflow profile (12 tools) and use `inspect`/`cycle` for a
 single-call observe-plan boundary; the compatibility compact profile remains 7 tools,
 and long-running monitors can use the 2-tool monitor profile.
 
@@ -83,7 +83,7 @@ and long-running monitors can use the 2-tool monitor profile.
 
 ### Read-only profile (added after the first pass)
 
-    tools exposed              12 of 21 (default full profile; compact + read-only exposes 6)
+    tools exposed              12 of 24 (workflow profile; compact + read-only exposes 6)
     hazardous call refused     True
     read-only task still ok    True   (list_skills used as the representative task)
 

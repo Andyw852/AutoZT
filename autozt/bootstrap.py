@@ -219,6 +219,7 @@ QUICK_USAGE = """\
 
 计算：
   start              生成缺失输入并提交
+  advance            一次性拉回已完成结果并推进就绪步骤（不改 auto_advance）
   stop               取消作业并阻止自动重跑
   retry              保留产物重新生成输入，不提交；检查后 start
   rerun              删除旧步骤并重新生成，不提交；检查后 start
@@ -310,6 +311,7 @@ USAGE = """\
             用本命令查看；--verify 重算 sha256 校验"输入有没有被改过"。
             整体开关：tf.yaml 的 provenance: false 或环境变量 AUTOZT_PROVENANCE=0。
   start     开始/提交：输入没生成先 gen 再 sbatch。无 -p = 一键推进全部材料。
+  advance   一次性采集、拉回已完成结果并推进就绪步骤；不写入 auto_advance 配置。
             init/retry/rerun 只生成不提交；status/auto/monitor 开自动推进时也会提交
   stop      取消作业。无 -p = 一键停止全部作业（有确认）；-p = 该材料全部作业；-p -job = 指定步骤。
             取消的步骤打 scancel 标记：状态列显示 scancel，auto_advance
@@ -1469,6 +1471,7 @@ Inspect (read-only, never submits or fetches)
 
 Advance (changes cluster state; agent sessions need approval, see act/approve)
   start [-f]              advance one material: generate inputs if needed, then submit
+  advance                 fetch completed results and advance ready steps once; no config change
   retry                   regenerate inputs, keep products, do not submit
   rerun                   delete step dir and regenerate (destructive)
   stop                    cancel the step's job (destructive)
@@ -1488,8 +1491,8 @@ Reproducibility
 
 Agent interface (Model Context Protocol, stdio JSON-RPC)
   mcp                     MCP server: initialize / tools/list / tools/call
-  mcp --list-tools        print the tool table (21 generic verbs, risk-tagged;
-                          AUTOZT_MCP_PROFILE=compact exposes 7, workflow 9,
+  mcp --list-tools        print the tool table (24 generic tools in full mode, risk-tagged;
+                          AUTOZT_MCP_PROFILE=compact exposes 7, workflow 12,
                           monitor 2 LLM-facing tools)
   mcp --call NAME JSON    call one tool directly (testing)
 

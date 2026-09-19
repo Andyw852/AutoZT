@@ -12,6 +12,7 @@ PROG = os.path.join(ROOT, "bin", "autozt")
 sys.path.insert(0, ROOT)
 
 from autozt import agent_cli as A  # noqa: E402
+from autozt import agentgate as G  # noqa: E402
 
 
 def _args(tmp_path, **extra):
@@ -32,12 +33,12 @@ def _state(kind="R"):
 
 def test_plan_rejects_destructive_and_accepts_proposals():
     actions, error = A._normalise_actions({"proposals": [{
-        "tool": "retry_step", "tt": "demo", "material": "Si_demo", "step": "S1_opt"
+        "tool": "prepare_step", "tt": "demo", "material": "Si_demo", "step": "S1_opt"
     }]})
     assert error is None
-    assert actions == [{"action": "retry_step", "tt": "demo", "material": "Si_demo",
+    assert actions == [{"action": "prepare_step", "tt": "demo", "material": "Si_demo",
                         "step": "S1_opt"}]
-    actions, error = A._normalise_actions({"actions": [{"action": "rerun_step",
+    actions, error = A._normalise_actions({"actions": [{"action": "rebuild_step",
                                                          "material": "Si_demo"}]})
     assert actions is None
     assert "destructive" in error
@@ -106,7 +107,7 @@ def test_inspect_and_cycle_are_one_shot_and_dry_by_default(monkeypatch, tmp_path
     inspect_args = _args(tmp_path, view="attention", include_monitoring=False, max_actions=20)
     inspected, rc = A._cmd_inspect(inspect_args)
     assert rc == 0
-    assert inspected["data"]["actions"][0]["action"] == "retry_step"
+    assert inspected["data"]["actions"][0]["action"] == "prepare_step"
     cycle_args = _args(tmp_path, view="attention", include_monitoring=False,
                        max_actions=20, execute=False, dry_run=True,
                        agent_command="cycle", include_retry=False)
@@ -167,11 +168,31 @@ def test_service_cycle_rechecks_state_before_execute():
     assert executed == []
 
 
+def test_run_ready_steps_uses_one_shot_advance_command(monkeypatch, tmp_path):
+    seen = []
+    monkeypatch.setattr(A, "_run", lambda argv, config=None: seen.append(argv) or (0, "", ""))
+    result = A._execute_actions(
+        [{"action": "run_ready_steps", "tt": "demo"}],
+        str(tmp_path / "tf.yaml"), False, None, {"tt": "demo"})
+    assert result["failed"] is False
+    assert seen == [["act", "-tt", "demo", "advance"]]
+
+
+def test_gateway_policy_lists_advance_and_fails_closed():
+    policy = G.render_agent_policy()
+    assert "advance" in policy
+    assert G.agent_classify("migrate-subdir", ["migrate-subdir"])[0] == "destructive"
+    assert "迁移/重排技能目录" in G.agent_classify(
+        "migrate-subdir", ["migrate-subdir"])[1][0]
+    assert G.agent_classify("push", ["push"])[0] == "destructive"
+    assert G.agent_classify("future_command", ["future_command"])[0] == "destructive"
+
+
 def test_capabilities_and_stdin_request_are_stable(monkeypatch, tmp_path):
     args = _args(tmp_path)
     capabilities, rc = A._cmd_capabilities(args)
     assert rc == 0
-    assert capabilities["data"]["schema_version"] == "agent/4"
+    assert capabilities["data"]["schema_version"] == "agent/6"
     assert "propose" in capabilities["data"]["read"]["commands"]
     assert capabilities["data"]["request"]["schema"]["properties"]["op"]["enum"][-1] == "apply"
     assert capabilities["data"]["entrypoints"]["jsonl"] == "autozt agent serve"
@@ -182,7 +203,7 @@ def test_schema_is_self_describing_and_run_is_exposed(monkeypatch):
     result, rc = A._cmd_schema(argparse.Namespace())
     assert rc == 0
     data = result["data"]
-    assert data["schema_version"] == "agent/4"
+    assert data["schema_version"] == "agent/6"
     assert data["operations"]["run"]["default"] == "dry_run"
     assert "run" in data["request_schema"]["properties"]["op"]["enum"]
     monkeypatch.setattr(sys, "stdin", io.StringIO('{"op":"capabilities"}'))

@@ -1,0 +1,71 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1800" height="1160" viewBox="0 0 1800 1160">
+  <defs>
+    <marker id="arrow" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto">
+      <path d="M0,0 L12,6 L0,12 Z" fill="#334455"/>
+    </marker>
+    <style>
+      .title{font:700 38px Arial,Helvetica,sans-serif;fill:#1d2a36}
+      .subtitle{font:400 20px Arial,Helvetica,sans-serif;fill:#586978}
+      .cardTitle{font:700 25px Arial,Helvetica,sans-serif;fill:#1d2a36}
+      .cardBody{font:400 20px Arial,Helvetica,sans-serif;fill:#263745}
+      .small{font:400 17px Arial,Helvetica,sans-serif;fill:#5a6a78}
+      .tiny{font:400 15px Arial,Helvetica,sans-serif;fill:#6b7985}
+      .whiteTitle{font:700 30px Arial,Helvetica,sans-serif;fill:#fff}
+      .whiteBody{font:400 18px Arial,Helvetica,sans-serif;fill:#e9f0f5}
+      .tag{font:700 16px Arial,Helvetica,sans-serif;letter-spacing:1px}
+    </style>
+  </defs>
+  <rect width="1800" height="1160" fill="#ffffff"/>
+  <text x="60" y="62" class="title">AutoZT: an automated thermoelectric workflow engine</text>
+  <text x="60" y="98" class="subtitle">From one POSCAR to S, σ, κe, κL and zT(n,T), with native 2D/3D treatment and AI-agent access</text>
+  <path d="M900 420 C900 350 900 300 900 250" fill="none" stroke="#2f6fa9" stroke-width="5" marker-end="url(#arrow)"/>
+  <path d="M730 575 C610 600 520 650 420 700" fill="none" stroke="#238267" stroke-width="5" marker-end="url(#arrow)"/>
+  <path d="M1070 575 C1190 600 1280 650 1380 700" fill="none" stroke="#7051a4" stroke-width="5" marker-end="url(#arrow)"/>
+  <path d="M900 700 V1010" fill="none" stroke="#334455" stroke-width="5" marker-end="url(#arrow)"/>
+
+  <rect x="430" y="135" width="940" height="275" rx="22" fill="#eef4fb" stroke="#2f6fa9" stroke-width="3"/>
+  <circle cx="480" cy="188" r="24" fill="#2f6fa9"/><text x="480" y="194" text-anchor="middle" font-size="20" font-weight="700" fill="#fff">1</text>
+  <text x="525" y="195" class="tag" fill="#2f6fa9">COMPLETE zT WORKFLOW</text>
+  <text x="525" y="235" class="cardTitle">All thermoelectric ingredients are computed and combined</text>
+  <text x="525" y="274" class="cardBody">POSCAR → relaxation → electronic transport + lattice transport</text>
+  <text x="525" y="308" class="cardBody">S, σ, κe, κL  →  zT(n,T)  =  S²σT / (κe + κL)</text>
+  <rect x="525" y="335" width="245" height="43" rx="10" fill="#fff" stroke="#9cb9d5" stroke-width="2"/><text x="647" y="363" text-anchor="middle" class="small">temperature × carrier grid</text>
+  <rect x="795" y="335" width="245" height="43" rx="10" fill="#fff" stroke="#9cb9d5" stroke-width="2"/><text x="917" y="363" text-anchor="middle" class="small">JSON + plots + peak zT</text>
+  <rect x="1065" y="335" width="245" height="43" rx="10" fill="#fff" stroke="#9cb9d5" stroke-width="2"/><text x="1187" y="363" text-anchor="middle" class="small">checks and provenance</text>
+
+  <rect x="60" y="470" width="610" height="410" rx="22" fill="#edf7f3" stroke="#238267" stroke-width="3"/>
+  <circle cx="110" cy="523" r="24" fill="#238267"/><text x="110" y="529" text-anchor="middle" font-size="20" font-weight="700" fill="#fff">2</text>
+  <text x="155" y="530" class="tag" fill="#238267">NATIVE 2D / 3D TREATMENT</text>
+  <text x="110" y="580" class="cardTitle">Dimension-aware physics and units</text>
+  <rect x="110" y="610" width="105" height="45" rx="10" fill="#238267"/><text x="162" y="640" text-anchor="middle" font-size="20" font-weight="700" fill="#fff">2D</text>
+  <rect x="230" y="610" width="105" height="45" rx="10" fill="#fff" stroke="#238267" stroke-width="2"/><text x="282" y="640" text-anchor="middle" font-size="20" font-weight="700" fill="#238267">3D</text>
+  <text x="110" y="704" class="cardBody">• detect dimension and vacuum axis</text>
+  <text x="110" y="741" class="cardBody">• relax and reduce tensors with the right geometry</text>
+  <text x="110" y="778" class="cardBody">• apply thickness and unit normalization for 2D</text>
+  <text x="110" y="815" class="cardBody">• keep electronic and lattice transport consistent</text>
+  <text x="110" y="850" class="tiny">The same workflow handles both dimensional regimes.</text>
+
+  <rect x="700" y="455" width="400" height="250" rx="34" fill="#1d2a36" stroke="#1d2a36" stroke-width="3"/>
+  <text x="900" y="540" text-anchor="middle" class="whiteTitle">AutoZT</text>
+  <text x="900" y="582" text-anchor="middle" class="whiteBody">thermoelectric workflow engine</text>
+  <line x1="810" y1="610" x2="990" y2="610" stroke="#8ca1b2" stroke-width="2"/>
+  <text x="900" y="645" text-anchor="middle" class="whiteBody">skills · DAG · validators</text>
+  <text x="900" y="676" text-anchor="middle" class="whiteBody">execution · recovery · provenance</text>
+
+  <rect x="1130" y="470" width="610" height="410" rx="22" fill="#f2eef9" stroke="#7051a4" stroke-width="3"/>
+  <circle cx="1180" cy="523" r="24" fill="#7051a4"/><text x="1180" y="529" text-anchor="middle" font-size="20" font-weight="700" fill="#fff">3</text>
+  <text x="1225" y="530" class="tag" fill="#7051a4">AI-AGENT SCIENTIFIC INTERFACE</text>
+  <text x="1180" y="580" class="cardTitle">Standard access for models and scripts</text>
+  <rect x="1180" y="610" width="190" height="48" rx="10" fill="#7051a4"/><text x="1275" y="641" text-anchor="middle" font-size="20" font-weight="700" fill="#fff">MCP</text>
+  <rect x="1390" y="610" width="190" height="48" rx="10" fill="#fff" stroke="#7051a4" stroke-width="2"/><text x="1485" y="641" text-anchor="middle" font-size="20" font-weight="700" fill="#7051a4">Agent CLI</text>
+  <text x="1180" y="704" class="cardBody">• discover skills and input/output contracts</text>
+  <text x="1180" y="741" class="cardBody">• inspect state, evidence and diagnostics</text>
+  <text x="1180" y="778" class="cardBody">• request validated actions through one interface</text>
+  <text x="1180" y="815" class="cardBody">• record actions, results and provenance</text>
+  <text x="1180" y="850" class="tiny">The model proposes; AutoZT checks and executes.</text>
+
+  <rect x="385" y="975" width="1030" height="105" rx="22" fill="#f7f9fb" stroke="#334455" stroke-width="3"/>
+  <text x="900" y="1018" text-anchor="middle" class="cardTitle">Reproducible scientific output</text>
+  <text x="900" y="1052" text-anchor="middle" class="small">zt_summary.json · zT(T,n) plots · validation status · source paths · provenance</text>
+  <text x="60" y="1128" class="tiny">Figure 1. AutoZT combines a complete zT workflow, dimension-aware 2D/3D treatment, and a standard interface for AI agents.</text>
+</svg>

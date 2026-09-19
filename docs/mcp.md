@@ -24,8 +24,8 @@ older clients.
 2. Tools are generic verbs, never per-skill commands. `skill.yaml` is the skill
    contract: its `io_schema`, `flow`, `corrections`, and step definitions are exposed
    by `describe_skill`; the README is available as an MCP resource. Adding or changing
-   a skill therefore does not change the MCP tool surface. The table is capped at 21
-   entries on purpose.
+   a skill therefore does not change the MCP tool surface. The table is a fixed
+   generic action surface and is not expanded per skill.
 3. Risk is enforced at the protocol boundary. Read-only tools use AutoZT's explicit
    `list`/`summary`/diagnostic collectors; mutating and
    destructive tools are routed through the action gateway, so an agent session receives
@@ -50,12 +50,12 @@ older clients.
 | preflight | read | validate result files, units, grids, validators and 2D thickness |
 | results | read | query values with units, method, validator and provenance |
 | start_step | mutate | generate inputs if needed, then submit |
-| retry_step | mutate | regenerate inputs, keep products, do not submit |
-| fetch_results | mutate | pull finished results back |
-| advance_ready | mutate | advance all dependency-ready steps for one skill or all skills |
+| prepare_step | mutate | prepare or regenerate inputs, keep products, do not submit |
+| sync_results | mutate | pull finished results back |
+| run_ready_steps | mutate | one-shot fetch and submit dependency-ready steps; does not change `auto_advance` |
 | inspect | read | one call: scoped attention state + deterministic actions |
-| stop_step | destructive | cancel the job of a step |
-| rerun_step | destructive | delete the step directory and regenerate |
+| cancel_step | destructive | cancel the job of a step |
+| rebuild_step | destructive | delete the step directory and regenerate |
 | clean_material | destructive | delete generated files, back to PREP |
 | cycle | mutate | one dry-run or explicitly executed safe cycle |
 | get_snapshot | read | compact state; cursor returns only changes |
@@ -80,7 +80,7 @@ inspect → (model reviews only if needed) → cycle(execute=false) → cycle(ex
 
 `inspect` 一次返回 attention 状态、稳定诊断码、候选动作和可执行动作；模型不需要先分别调用
 状态、提案和动作工具。`cycle` 默认 dry-run，只有显式传 `execute=true` 才会把
-`start_step`、`fetch_results`、`advance_ready` 交给 `autozt act`；`retry_step` 还需要显式
+`start_step`、`sync_results`、`run_ready_steps` 交给 `autozt act`；`prepare_step` 还需要显式
 传 `include_retry=true`。`stop`、
 `rerun`、`clean`、配置修改和其它高风险操作仍留在普通 CLI/人工审批路径。
 
@@ -125,7 +125,7 @@ and a passing preflight produces `ready_to_execute`. The plan and preflight call
 read-only and never submit jobs. The short text content states the current phase and next
 action, while complete evidence remains in `structuredContent.data`.
 
-The bundled prompts `plan-2d-zt`, `run-validated-workflow`, and
+The bundled prompts `compute-zt`, `run-validated-workflow`, and
 `explain-result-provenance` encode this sequence for clients that support MCP prompts.
 
 `research_plan` also returns a `review_card`. A UI can render its `title`, numbered `steps`,
@@ -260,8 +260,8 @@ list_skills → describe_skill → get_snapshot → probe_step
 ```
 
 The compact profile is an interface-size optimization, not a permission bypass. Read-only
-tools remain read-only, and `apply_actions` accepts only `start_step`, `retry_step`,
-`fetch_results`, and `advance_ready`; `stop`, `rerun`, `clean`, and force flags are
+tools remain read-only, and `apply_actions` accepts only `start_step`, `prepare_step`,
+`sync_results`, and `run_ready_steps`; `cancel_step`, `rebuild_step`, `clean_material`, and force flags are
 rejected before they reach the CLI.
 
 In compact mode, large results are carried once in MCP `structuredContent`; the text
@@ -281,6 +281,11 @@ anything. The model can inspect the evidence, then pass selected candidates to
 `apply_actions`. The batch stops at the first failed action and returns per-action
 structured results.
 
+`run_ready_steps` maps to the one-shot CLI command `autozt advance`. It collects once,
+fetches completed results, and submits dependency-ready work without writing the
+persistent `auto_advance` setting or implicitly recovering hung jobs. `autozt auto on`
+remains the separate persistent automatic-advancement switch.
+
 `inspect`, `propose_actions`, and `get_snapshot` return the same scoped state `cursor`.
 When the model passes that cursor to `apply_actions`, the server re-collects the scoped
 state before executing. A changed cursor returns `stale_plan` and executes nothing, so a
@@ -292,7 +297,7 @@ Typical split calls are therefore:
 
 ```json
 {"name":"propose_actions","arguments":{"tt":"band-dft-cpu","status":"error"}}
-{"name":"apply_actions","arguments":{"tt":"band-dft-cpu","cursor":"<cursor-from-propose_actions>","actions":[{"action":"retry_step","material":"C24/qHPC24","step":"S1_opt"}]}}
+{"name":"apply_actions","arguments":{"tt":"band-dft-cpu","cursor":"<cursor-from-propose_actions>","actions":[{"action":"prepare_step","material":"C24/qHPC24","step":"S1_opt"}]}}
 ```
 
 ## Why This Boundary
@@ -339,6 +344,24 @@ The MCP server does not hard-code a list of skills or steps. A model first calls
 uses the material-scoped state and action tools. This keeps the interface stable as
 skills are revised or new ones are added.
 
+## Naming conventions
+
+The public model vocabulary follows common Kubernetes, Slurm, and workflow-engine
+verbs: `list`/`get`/`describe`/`inspect` for reads, `start`/`prepare`/`sync`/`run`
+for recoverable workflow changes, and `apply` for an explicitly selected batch.
+The public action vocabulary uses a verb plus an object so the effect is visible in
+`tools/list`: `start_step`, `prepare_step`, `sync_results`, and `run_ready_steps`.
+Destructive actions use `cancel_step`, `rebuild_step`, and `clean_material`.
+These names are the only supported protocol names; clients must not rely on historical
+aliases. The protocol version is incremented when this vocabulary changes.
+
+`read` means that the call only observes state. `mutate` means that it changes project
+or remote-job state but keeps the existing calculation products where possible, such as
+preparing inputs, starting a step, synchronizing results, or running ready steps once.
+`destructive` means that it can cancel a job or delete/overwrite generated products.
+The action gateway records both classes, but destructive actions require a separate
+human approval token; this is a risk label, not a command name.
+
 ## CLI counterpart
 
 MCP is an optional transport, not the workflow engine. The same model-facing loop is
@@ -364,7 +387,7 @@ autozt agent serve                 # 常驻 JSONL：一行请求对应一行 JSO
 `autozt agent` emits one stable JSON envelope per invocation and stores its snapshot on
 disk, so the cursor survives a process restart. It reuses the same skill schema, state
 normalisation and `autozt act` gateway as MCP. Plans only accept `start_step`,
-`retry_step`, `fetch_results` and `advance_ready`; destructive operations remain outside
+`prepare_step`, `sync_results` and `run_ready_steps`; destructive operations remain outside
 the automatic plan interface and require the normal human approval path.
 
 ## Token behaviour

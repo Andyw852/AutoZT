@@ -24,8 +24,9 @@ def test_research_plan_requires_grids_for_zt():
     assert len(ready["action_surface"]["cli_only_actions"]) == 2
     assert ready["execution"]["submits_jobs"] is False
     assert {a["action"] for a in ready["actions"]} == {
-        "init_project", "start_workflow", "advance_ready"
+        "init_project", "start_workflow", "run_ready_steps"
     }
+    assert ready["actions"][-1]["command"][-1] == "advance"
 
 
 def test_preflight_reports_cross_workflow_inputs(tmp_path):
@@ -52,3 +53,32 @@ def test_results_keep_source_and_apply_context_filter(tmp_path):
     assert got["results"][0]["unit"] == "1"
     assert "validator" in got["results"][0]
     assert "provenance" in got["results"][0]
+
+
+def test_research_plan_selects_non_zt_skills():
+    skills = [{"name": name} for name in (
+        "opt-dft-cpu", "phonon-dft-cpu", "kl-dft-cpu", "elastic-dft-cpu",
+        "defect-dft-cpu", "band-dft-cpu")]
+    cases = {
+        "帮我优化Si结构": "opt-dft-cpu",
+        "计算Si声子谱": "phonon-dft-cpu",
+        "计算Si晶格热导率": "kl-dft-cpu",
+        "计算Si缺陷形成能": "defect-dft-cpu",
+        "计算Si弹性常数": "elastic-dft-cpu",
+        "计算Si能带": "band-dft-cpu",
+    }
+    for goal, expected in cases.items():
+        got = research_plan(goal, skills, material="Si", dimension="3D")
+        assert got["status"] == "ready", (goal, got)
+        assert got["selected_skills"] == [expected], (goal, got)
+        assert got["actions"][1]["command"] == [
+            "autozt", "-tt", expected, "-p", "Si", "start"
+        ]
+
+
+def test_research_plan_does_not_claim_unknown_goal_is_ready():
+    got = research_plan("帮我做一个未知的计算", [{"name": "opt-dft-cpu"}], material="Si")
+    assert got["status"] == "needs_input"
+    assert got["next_action"] == "provide_inputs"
+    assert "no_matching_skill" in {item["code"] for item in got["gaps"]}
+    assert got["actions"] == []

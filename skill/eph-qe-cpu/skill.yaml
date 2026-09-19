@@ -9,32 +9,36 @@ template_dir: templates
 defaults:
   hpc: jzzn
   skill_subdir: true
+  # AutoZT's generic hang scanner fingerprints OUTCAR/OSZICAR. QE phonon
+  # jobs write ph.out and dyn/dvscf files instead, so the generic recovery
+  # would cancel a healthy long DFPT run after seeing a zero fingerprint.
+  hang_check: false
 
 submit_required: [submit.sh]
 fetch_files: [submit.sh, qe_env.json, scf.in, nscf.in, ph.in, qe2pert.in, pert.in,
               scf.out, nscf.out, ph.out, qe2pert.out, pert.out, wannier.out,
               preflight.ok, scf.ok, wannier.ok, phonon.ok, qe2pert.ok, perturbo.ok,
-              eph_summary.json, queue.out, queue.err]
+              eph_summary.json, eph_parameters.json, queue.out, queue.err]
 
 steps:
   - {seq: 0, name: step0_preflight, label: S0_env, check: marker, marker: "preflight.ok:OK",
      gen: gen_step0_preflight.py, done_marker: preflight.ok, fetch_all: true,
-     gen_need: [eph_common.py, submit_qe_test.tpl, run_preflight.py]}
+     gen_need: [eph_common.py, stepconf.py, step.conf, submit_qe_test.tpl, run_preflight.py]}
   - {seq: 1, name: step1_scf, label: S1_scf, check: marker, marker: "scf.ok:OK", needs: [step0_preflight],
      gen: gen_step1_scf.py, done_marker: scf.ok, fetch_all: true,
-     gen_need: [eph_common.py, submit_qe_test.tpl]}
+     gen_need: [eph_common.py, stepconf.py, step.conf, submit_qe_test.tpl]}
   - {seq: 2, name: step2_wannier, label: S2_wannier, check: marker, marker: "wannier.ok:OK", needs: [step1_scf],
      gen: gen_step2_wannier.py, done_marker: wannier.ok, fetch_all: true,
-     gen_need: [eph_common.py, submit_qe_test.tpl]}
+     gen_need: [eph_common.py, stepconf.py, step.conf, submit_qe_test.tpl]}
   - {seq: 3, name: step3_phonon, label: S3_ph, check: marker, marker: "phonon.ok:OK", needs: [step1_scf],
      gen: gen_step3_phonon.py, done_marker: phonon.ok, fetch_all: true,
-     gen_need: [eph_common.py, submit_qe_test.tpl]}
+     gen_need: [eph_common.py, stepconf.py, step.conf, submit_qe_test.tpl]}
   - {seq: 4, name: step4_qe2pert, label: S4_qe2pert, check: marker, marker: "qe2pert.ok:OK", needs: [step2_wannier, step3_phonon],
      gen: gen_step4_qe2pert.py, done_marker: qe2pert.ok, fetch_all: true,
-     gen_need: [eph_common.py, submit_qe_test.tpl]}
+     gen_need: [eph_common.py, stepconf.py, step.conf, submit_qe_test.tpl]}
   - {seq: 5, name: step5_perturbo, label: S5_ephmat, check: marker, marker: "perturbo.ok:OK", needs: [step4_qe2pert],
      gen: gen_step5_perturbo.py, done_marker: perturbo.ok, fetch_all: true,
-     gen_need: [eph_common.py, submit_qe_test.tpl]}
+     gen_need: [eph_common.py, stepconf.py, step.conf, submit_qe_test.tpl]}
   - {seq: 6, name: step6_summary, label: S6_summary, check: plot, run: gen, needs: [step5_perturbo],
      gen: gen_step6_summary.py, done_marker: eph_summary.json, fetch_all: true,
      gen_need: [eph_common.py]}
@@ -55,11 +59,39 @@ io_schema:
     - {name: PERTURBO_BIN, default: "$PATH", where: job environment, desc: "包含 qe2pert.x、perturbo.x 的目录或 PATH。"}
     - {name: WANNIER_BIN, default: "$PATH", where: job environment, desc: "包含 wannier90.x 的目录或 PATH。"}
     - {name: PSEUDO_DIR, where: job environment, desc: "UPF 赝势目录；Si 测试需要其中的 Si.upf。"}
+    - {name: ECUTWFC, default: 40.0, where: step.conf, desc: "QE 波函数截断能 (Ry)；官方 epr9=40。"}
+    - {name: ECUTRHO, default: 320.0, where: step.conf, desc: "QE 电荷密度截断能 (Ry)。"}
+    - {name: SCF_CONV_THR, default: 1.0e-10, where: step.conf, desc: "QE SCF 收敛阈值；官方 epr9=1e-15。"}
+    - {name: NSCF_CONV_THR, default: 1.0e-10, where: step.conf, desc: "QE NSCF 收敛阈值；官方 epr9=3e-12。"}
+    - {name: TR2_PH, default: 1.0e-14, where: step.conf, desc: "QE DFPT 收敛阈值；官方 epr9=1e-17。"}
+    - {name: SCF_KGRID, default: "4 4 4", where: step.conf, desc: "SCF 自动 k 网格。"}
+    - {name: NSCF_KGRID, default: "4 4 4", where: step.conf, desc: "NSCF/Wannier90 显式 k 网格。"}
+    - {name: PH_QGRID, default: "2 2 2", where: step.conf, desc: "DFPT q 网格。"}
+    - {name: PH_KGRID, default: "4 4 4", where: step.conf, desc: "DFPT 内层电子 k 网格。"}
+    - {name: Q2PERT_KGRID, default: "4 4 4", where: step.conf, desc: "qe2pert 读取的 DFT k 网格。"}
+    - {name: NUM_BANDS, default: 16, where: step.conf, desc: "QE/Wannier 电子带数；可升到 24/32 做能窗收敛。"}
+    - {name: NUM_WANN, default: 8, where: step.conf, desc: "Wannier 函数数。"}
+    - {name: DIS_NUM_ITER, default: 500, where: step.conf, desc: "Wannier 解缠最大迭代次数。"}
+    - {name: DIS_WIN_MIN, default: -100.0, where: step.conf, desc: "Wannier 外能窗下界 (eV)。"}
+    - {name: DIS_WIN_MAX, default: 17.2, where: step.conf, desc: "Wannier 外能窗上界 (eV)。"}
+    - {name: DIS_FROZ_MIN, default: -100.0, where: step.conf, desc: "Wannier 冻结窗下界 (eV)。"}
+    - {name: DIS_FROZ_MAX, default: 9.0, where: step.conf, desc: "Wannier 冻结窗上界 (eV)。"}
+    - {name: WANNIER_NUM_ITER, default: 10000, where: step.conf, desc: "Wannier 最大最小化迭代。"}
+    - {name: OCCUPATIONS, default: fixed, where: step.conf, desc: "QE occupations；固定为官方 Si，smearing 用于展宽扫描。"}
+    - {name: SMEARING, default: gauss, where: step.conf, desc: "QE 展宽类型。"}
+    - {name: DEGAUSS, default: 0.02, where: step.conf, desc: "QE 电子展宽 (Ry)，仅 OCCUPATIONS 非 fixed 时生效。"}
+    - {name: PERT_LIST_MODE, values: [gamma, grid, official], default: gamma, where: step.conf, desc: "Perturbo k/q 点：单 Gamma、均匀网格或官方 epr9 随机 25 点。"}
+    - {name: PERT_KGRID, default: "1 1 1", where: step.conf, desc: "Perturbo k 网格（PERT_LIST_MODE=grid）。"}
+    - {name: PERT_QGRID, default: "1 1 1", where: step.conf, desc: "Perturbo q 网格（PERT_LIST_MODE=grid）。"}
+    - {name: PERT_BAND_MIN, default: 1, where: step.conf, desc: "Perturbo ephmat 起始带。"}
+    - {name: PERT_BAND_MAX, default: 1, where: step.conf, desc: "Perturbo ephmat 终止带。"}
+    - {name: PHFREQ_CUTOFF, default: 1.0, where: step.conf, desc: "Perturbo 声子频率 cutoff (meV)。"}
+    - {name: PERT_DELTA_SMEAR, default: 10.0, where: step.conf, desc: "Perturbo delta 函数展宽 (meV)，用于展宽敏感性扫描。"}
   steps:
     - {step: S0_env, title: "Environment preflight", tool: shell, outputs: [qe_env.json], validator: "all required executables and Si.upf found"}
     - {step: S1_scf, title: "QE SCF", tool: pw.x, inputs: [POSCAR], outputs: [scf.ok], validator: "JOB DONE"}
     - {step: S2_wannier, title: "QE NSCF and Wannier", tool: "pw.x + wannier90.x + pw2wannier90.x", outputs: [wannier.ok], validator: "Wannier workflow exits zero"}
-    - {step: S3_ph, title: "DFPT phonons", tool: ph.x, outputs: [phonon.ok], validator: "2x2x2 q-grid exits zero"}
+    - {step: S3_ph, title: "DFPT phonons", tool: ph.x, outputs: [phonon.ok], validator: "configured PH_QGRID exits zero and save/si.dyn0 matches it"}
     - {step: S4_qe2pert, title: "QE to Perturbo", tool: qe2pert.x, outputs: [si_epr.h5], validator: "si_epr.h5 exists"}
     - {step: S5_ephmat, title: "Interpolated e-ph matrix element", tool: perturbo.x, outputs: [perturbo.ok], validator: "Perturbo ephmat exits zero"}
     - {step: S6_summary, title: "Summarize", tool: Python, outputs: [eph_summary.json], validator: "JSON exists"}

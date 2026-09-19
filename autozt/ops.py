@@ -403,6 +403,15 @@ def auto_recover_hung(cfg, data):
         wd = rec.get("wd")
         if not wd:
             continue
+        # 技能可以声明自己的进度指纹是否适用于通用挂死恢复。VASP
+        # 使用 OUTCAR/OSZICAR；QE/DFPT 等技能可能只更新 ph.out、dyn
+        # 或其它工件，不能因 VASP 指纹为零而取消正常作业。
+        _m_for_hang = _material_of_workdir(data, wd)
+        _tt_for_hang = (_m_for_hang or {}).get("tt")
+        _tc_for_hang = ((cfg.get("task_types") or {}).get(_tt_for_hang)
+                        if _tt_for_hang else None) or {}
+        if _tc_for_hang.get("hang_check") is False:
+            continue
         st = state.setdefault(wd, {})
         if not isinstance(st, dict):        # 旧格式 {wd: int} 迁移
             st = state[wd] = {"recovered": st if isinstance(st, int) else 0}
@@ -412,7 +421,7 @@ def auto_recover_hung(cfg, data):
             continue
         if not rec.get("running"):
             # sacct 补的 NODE_FAIL（已离开队列）：直接走恢复（无需指纹）
-            m = _material_of_workdir(data, wd)
+            m = _m_for_hang
             mst = (m.get("ps") or {}).get("setting") if m else None
             maxr = int(_hung_cfg(cfg, None, mst, "hang_max_retries", 2))
             n = st.get("recovered", 0)
@@ -459,7 +468,7 @@ def auto_recover_hung(cfg, data):
         if _hung_scf_rms_trend(rec.get("last3")):
             st["unchanged"] = 0
             continue
-        m = _material_of_workdir(data, wd)
+        m = _m_for_hang
         mst = (m.get("ps") or {}).get("setting") if m else None
         maxr = int(_hung_cfg(cfg, None, mst, "hang_max_retries", 2))
         n = st.get("recovered", 0)

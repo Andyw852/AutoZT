@@ -752,6 +752,32 @@ def apply_2d_corrections(cwd: Path, elastic):
     else:
         print("[OK] 2D 弹性常数重标度：c=%.3f Å / t=%.3f Å -> ×%.3f"
               % (c_len, t, factor))
+    # patch_2d_zero_outofplane_shear（2026-09-18，用户批准）：
+    #   二维 slab 的**面外剪切**是真空伪影（CrS2 C44=-0.52、SS 未重排时 C66 槽 0.56、
+    #   Mo2S3 C44=-40.2）→ AMSET 的 Christoffel 特征值可为负/极小，形变势因子 deform²/c
+    #   被污染（实测 ADP 空穴 2e4 或 0）。二维弹性文献的标准做法是只报面内 C11/C12/C66，
+    #   ★ 只置零**负值**（正的即使很小也保留：面内 q 上 C44/C55=0 会让该分支特征值为 0，
+    #   AMSET 的 factor 可能出现 0/0 -> NaN）。面内块完全不动；每个被置零的原值都打印。
+    zeroed = []
+    if new_elastic is not None:
+        _M = [list(map(float, r)) for r in new_elastic]
+        _seen = set()
+        for _i in (3, 4):                      # 标准 Voigt 索引：3=YZ, 4=XZ
+            for _j in range(6):
+                for _a, _b in ((_i, _j), (_j, _i)):
+                    if (_a, _b) in _seen:
+                        continue
+                    _seen.add((_a, _b))
+                    _v = _M[_a][_b]
+                    if _v < 0.0:                     # 只清负的（正的小剪切保留，避免 0/0）
+                        zeroed.append("C%d%d=%.4f" % (_a + 1, _b + 1, _v))
+                        _M[_a][_b] = 0.0
+        new_elastic = _M
+        if zeroed:
+            print("[OK] 2D 面外**负**剪切置零（真空伪影；面内 C11/C12/C22/C66 不动；"
+                  "正的剪切保留以免 0/0）：%s" % "、".join(zeroed))
+        else:
+            print("[..] 2D 面外剪切没有负值，无需置零（正的保留）")
     # patch_2d_thickness：把全部依据落盘，写论文直接引用
     t_info["thickness_used_A"] = round(t, 4)
     write_2d_record(cwd / OUTDIR_NAME, {
@@ -762,6 +788,11 @@ def apply_2d_corrections(cwd: Path, elastic):
         "elastic_constant_rescaled_GPa": new_elastic,
         "elastic_constant_convention": "standard Voigt (XX YY ZZ YZ XZ XY)，"
                                        "已由 read_elastic 从 VASP 的 (XX YY ZZ XY YZ ZX) 重排",
+        "elastic_outofplane_shear_zeroed": zeroed,
+        "elastic_outofplane_note": ("二维只用面内 2x2；面外剪切（YZ/XZ 行列）已置零，"
+                                    "原值见 elastic_outofplane_shear_zeroed。"
+                                    "★ 标准 step8_amset 路径对二维是近似；准确的二维处理请走 "
+                                    "step8.4_amset2d 插件（面内 2x2 Christoffel）。"),
         "areal_density_factor_cm": c_len * 1e-8,
         "areal_density_note": "n_2D [cm^-2] = n_3D [cm^-3] x cell_c [cm]",
         "free_carrier_screening": bool(FREE_CARRIER_SCREENING_2D),
@@ -947,6 +978,8 @@ def write_settings(out: Path, eps_inf, eps_static, gap, elastic,
         else:
             lines.append("# ^ step.conf 显式覆盖 UNITY_OVERLAP=%s（受控对照：同一份 settings 只翻这一项）。"
                          % UNITY_OVERLAP)
+            # 让 overlap_preflight 知道这是"显式放行的受控对照"（否则 2D + real 会被 ⓪ 拦下）。
+            lines.append("# AZ_OVERLAP_CONTROLLED=1")
     else:
         # ★ 必须**显式写 false**：AMSET 默认本就是 False（真实重叠），但只有写出来，
         #   8.3 的 overlap_ratio_guard 才能把这次运行识别为"真实重叠"并给三维标黄；

@@ -38,6 +38,11 @@ SPEC = {
     "FUNC":        ("pbesol", "str"),  # 全局 step.conf 带入，本步不用
     "SOLVER":       ("phono3py", "str"),  # phono3py | shengbte（= 热导率计算软件）
     "BTE_METHOD":   ("rta",     "str"),   # phono3py 路：rta(--br) | lbte(--lbte)
+    # phono3py 的单节点并行（2026-09-18 实测）：本环境的 phono3py 是 **OpenMP-only**
+    #   —— C 扩展只链 libgomp，包内 0 处 mpi4py/MPI，所以不能 mpirun（那会跑 N 份全量
+    #   进程互相覆盖输出）。唯一有效并行 = 1 进程 × N 个 OMP 线程，N 建议 = 节点物理核数
+    #   （jzzn 192 逻辑核 = 96 物理核）。改这一个键即可调；0/空回落 96。
+    "P3PY_OMP_THREADS": (96,    "int"),
     "MESH_OVERRIDE": (None,     "str"),   # 空=用 step4 写入 kl_params 的 MESH
     # q 网格收敛扫描（P1-1）：""=只跑一套 | auto=三档(N/1.25N/1.5625N) | "a b c; d e f"
     #   判据：相邻档 300K 面内 κ 变化 < 5%（写进 kappa_summary.json 的 mesh_convergence）
@@ -589,13 +594,22 @@ def main():
         # （运行时 source {{CONDA_SH}} 报 No such file）。kl-dft 的 phono3py 环境是
         # atomate2_p_a（见 skill.yaml 的 conda 字段），与 MACE 技能的 mace_cpu 不同，
         # 故 CONDA_ENV 固定 atomate2_p_a、CONDA_SH 用集群 conda.sh（与 S5_fc 模板一致）。
+        # 并行布局（2026-09-18 标定）：本环境 phono3py 是 OpenMP-only（C 扩展只链
+        # libgomp，无 mpi4py/MPI），单节点只能是「1 进程 × N 个 OMP 线程」：
+        #   --ntasks=1 --cpus-per-task=N，OMP_NUM_THREADS=N（见 submit_p3py.tpl 文件头）。
+        _p3_threads = int(conf["P3PY_OMP_THREADS"] or 96)
+        print("[..] phono3py 布局：1 进程 x %d OMP 线程（OpenMP-only，不能用 mpirun）"
+              % _p3_threads)
         kc.write_submit(tpl, out / "submit.sh",
                         {"JOBNAME": kc.new_jobname(cwd, "S6kappa"),
                          "CONDA_SH": (conf["CONDA_SH"]
                                       or "/public/home/wangchao/miniconda3/etc/profile.d/conda.sh"),
                          "CONDA_ENV": "atomate2_p_a",
+                         "CPUS_PER_TASK": str(_p3_threads),
+                         "QOS": str(conf["SBATCH_QOS"] or "premium"),
                          "P3PY_CMD": cmd},
-                        require=REQ_2D, label="2D 归一化：")
+                        require=REQ_2D + ("--ntasks=1",),
+                        label="phono3py 提交模板：")
     elif solver == "shengbte":
         prepare_shengbte(cwd, out, sbd, conf, mesh, use_nac)
         tpl = kc.resolve_submit(here, "3d", "submit_shengbte")

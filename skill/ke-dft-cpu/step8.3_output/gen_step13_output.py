@@ -974,11 +974,12 @@ def main():
     for _l in resolve_kappa_L(cwd)[2]:                # patch_kl_auto
         print("[..] " + _l)
 
-    # ---- patch_overlap_guard：重叠比值报警（VERIFICATION V23）----------------
+    # ---- patch_overlap_guard：重叠比值报警（VERIFICATION V23 / V27）----------------
     # 不依赖根因：重叠满足 |I|^2 <= 1，因此 unity 与真实重叠之间必有先验约束 ——
-    #   ADP：1 <= mu_real/mu_unity <= N_v（N_v = 带边几个 kT 内的等价能谷数）
-    #   POP：mu_real/mu_unity 接近 1（本检查取 +-20%）
-    # 超出范围就标红：该结果不可信，不得进入 zT 汇总（即使根因还没查清）。
+    #   ADP：绿区 [1, N_v]（N_v = 带边几个 kT 内的等价能谷数）
+    #        ratio < 1     -> 红（与 |I|^2<=1 矛盾；拦截，不得进 zT）
+    #        ratio > N_v   -> 黄（放行但要求人工确认；实测 N_ch 仅作解释，不作放行阈值）
+    #   POP：只记录比值，不参与红/黄（真实重叠也压低谷内通道，期望本就不该贴近 1）
     # 生产默认只跑 unity_overlap，所以正常情况下这里会打印"跳过"。
     try:
         import overlap_ratio_guard as _org
@@ -986,14 +987,31 @@ def main():
         _u = [r for r in _runs if r["unity_overlap"] is True]
         _r = [r for r in _runs if r["unity_overlap"] is False]
         if _u and _r:
-            _v, _lines = _org.check_pair(_u[0], _r[0])
+            # V27：valley_ratio.json（{"n_ch": ...}）里的 N_ch 现在只作**解释打印**，
+            # 不再当放行阈值（SS 实测 N_ch=23.3 太大，用它放行等于没有红线）。
+            _nch = None
+            for _cand in (Path(cwd) / "valley_ratio.json",
+                          Path(_u[0]["dir"]) / "valley_ratio.json",
+                          Path(_r[0]["dir"]) / "valley_ratio.json"):
+                try:
+                    if _cand.is_file():
+                        _nch = float(json.loads(_cand.read_text())["n_ch"])
+                        break
+                except Exception:
+                    _nch = None
+            if _nch:
+                print("[重叠报警] 读到按谷区分实测 N_ch=%.2f（valley_ratio.json，仅作解释）" % _nch)
+            # nv 显式传 2（文档默认；不传会落到 check_pair 的兜底 4.0）
+            _v, _lines = _org.check_pair(_u[0], _r[0], nv=2.0, valley_ratio=_nch)
             for _l in _lines:
                 print("[重叠报警] " + _l)
             if _v == "red":
-                print("[重叠报警] ★ 标红：真实重叠超出先验范围，**不得进入 zT 汇总**。")
-                print("[重叠报警]   依据 |I|^2<=1：ADP 必落在 [1, N_v]，POP 应接近 1（见 VERIFICATION V23）。")
+                print("[重叠报警] ★ 标红：ADP 比值 < 1，与 |I|^2<=1 矛盾，**不得进入 zT 汇总**。")
+            elif _v == "yellow":
+                print("[重叠报警] **黄色**：ADP 比值超出 N_v，**要求人工确认**后再采纳"
+                      "（实测 N_ch 仅作解释，不自动放行）。")
             elif _v == "ok":
-                print("[重叠报警] 比值在允许范围内。")
+                print("[重叠报警] ADP 比值在 [1, N_v] 内。")
         elif _r and not _u:
             # 只跑了真实重叠、没有 unity 对照 -> 按维数分档（V25）：
             #   2D：红色（已实测会错，必须用 unity 重跑）
