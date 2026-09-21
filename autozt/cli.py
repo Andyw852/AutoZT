@@ -260,12 +260,17 @@ def main():
     if cmd == "config":
         print(EXAMPLE_CONFIG)
         return
+    from autozt.bootstrap import canonical_skill_name
+    a.tt = canonical_skill_name(a.tt)
     if cmd == "probe":   # 只读探测：delegate 到 scripts/probe_jobs.py（不采集/不提交/不改文件）
         import subprocess as _sp
         _probe = os.path.join(_PKG_ROOT, "scripts", "probe_jobs.py")
         _mats = [m.strip() for m in (a.proj or "").split(",") if m.strip()] + mat_toks
         if not _mats:
             sys.exit(_i18n.t("错误：", "error: ") + "probe 需要 -p 材料名（如 tf -tt defect-dft-cpu -p Sn2Sb2Te5 probe）。")
+        _probe_cfg, _ = load_config(a.config)
+        merge_project_configs(apply_skills(_probe_cfg, verbose=True))
+        reject_config_conflict_targets(",".join(_mats), a.tt)
         _argv = [sys.executable, _probe, "-p", ",".join(_mats)]
         if a.job:
             _argv += ["-j", a.job]
@@ -293,11 +298,11 @@ def main():
     _gate = agent_direct_gate(cfg, cmd, sys.argv[1:])   # agent 会话直接调用 → 审计
     if _gate is not None:
         sys.exit(_gate)
-    if cmd == "monitor" and a.proj:
-        from autozt.bootstrap import scan_project_configs
-        _roots = cfg.get("project_roots") or [t.get("local_root") for t in (cfg.get("task_types") or {}).values() if isinstance(t, dict) and t.get("local_root")]
-        scan_project_configs(_roots, cfg.get("project_root_excludes"))
-        reject_config_conflict_targets(a.proj, a.tt)
+    cfg = apply_skills(cfg, verbose=True)
+    cfg = merge_project_configs(cfg)
+    reject_config_conflict_targets(a.proj, a.tt)
+    if cmd == "monitor":
+        reject_config_conflict_targets(",".join(mat_toks), a.tt)
     if cmd == "monitor":   # 控制类操作不采集状态，提前短路
         if a.install:
             sys.exit(_watch_cron(True))
@@ -312,7 +317,6 @@ def main():
         if a.daemon:
             _watch_daemon(a, mat_toks, root, cfg)
             return
-    cfg = apply_skills(cfg, verbose=True)   # v1.2：先装配 skill/*/skill.yaml
     if cmd == "skills":
         return cmd_skills(cfg, tt=a.tt)
     if cmd == "schema":   # v1.0：看技能自描述（纯本地、不采集、不提交）
@@ -329,8 +333,6 @@ def main():
     if cmd == "session" and not (a.proj or mat_toks):
         # 缺材料名不必采集（省一次 ssh）：直接给用法
         sys.exit(cmd_session(cfg, None, None))
-    cfg = merge_project_configs(cfg)
-    reject_config_conflict_targets(a.proj, a.tt)
     if cmd == "history" and not a.hist_write:
         # v1.0：直接读 history.jsonl（不采集、不连超算、不提交）。
         # 记录是自动的——任何一次真正采集都会追加；--write 时才先采集一轮再读。

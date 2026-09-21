@@ -714,13 +714,94 @@ def _merge_type(skel, over):
             out[k] = v
     return out
 
+# Only historically verified renames belong here; never guess a replacement skill.
+SKILL_ALIASES = {
+    "opt-mace-cpu": "opt-mlff-cpu", "opt-mace-gpu": "opt-mlff-gpu",
+    "kl-mace-cpu": "kl-mlff-cpu", "kl-mace-gpu": "kl-mlff-gpu",
+    "phonon-mace-cpu": "phonon-mlff-cpu", "phonon-mace-gpu": "phonon-mlff-gpu",
+    "mlff-mace": "mlff",
+}
+_SKILL_MIGRATIONS = set()
+_SKILL_WARNED = False
+_CONFIG_SKILL_ERRORS = {}
+
+
+def canonical_skill_name(key):
+    return SKILL_ALIASES.get(key, key)
+
+
+def _normalize_skill_types(raw, source):
+    out = {}
+    for old, value in (raw or {}).items():
+        key = canonical_skill_name(old)
+        if key in out:
+            raise ValueError("旧名和新名同时定义 %s，不能自动选择覆盖层" % key)
+        seg = dict(value or {})
+        if key != old:
+            _SKILL_MIGRATIONS.add((source, old, key))
+            seg["_legacy_skill"] = old
+            # Preserve physical task directories, including remote-only results.
+            seg.setdefault("dir_name", old)
+        out[key] = seg
+    return out
+
+
+def _warn_skill_configs():
+    global _SKILL_WARNED
+    if _SKILL_WARNED or not (_SKILL_MIGRATIONS or _CONFIG_SKILL_ERRORS):
+        return
+    lines = []
+    if _SKILL_MIGRATIONS:
+        lines.append("提示：旧技能名已在内存映射（未修改项目文件；物理目录不会自动迁移）：")
+        lines.extend("  %s: %s → %s" % item for item in sorted(_SKILL_MIGRATIONS))
+    if _CONFIG_SKILL_ERRORS:
+        lines.append("警告：以下项目技能配置不可安全使用，已屏蔽所属材料的所有技能；其它材料继续：")
+        lines.extend("  %s: %s" % item for item in sorted(_CONFIG_SKILL_ERRORS.items()))
+    print("\n".join(lines), file=sys.stderr)
+    _SKILL_WARNED = True
+
+
+def _block_skill_project(name, path, pc, reason):
+    owner = os.path.realpath(os.path.dirname(os.path.dirname(path)))
+    proj_dir = owner
+    if os.path.isfile(os.path.join(os.path.dirname(owner), "POSCAR")):
+        owner = os.path.dirname(owner)
+    aliases = set()
+    for seg in (pc.get("task_types") or {}).values():
+        lr = (seg or {}).get("local_root")
+        lr = os.path.realpath(os.path.join(proj_dir, os.path.expanduser(str(lr)))) if lr else (
+            os.path.dirname(owner) if os.path.isfile(os.path.join(owner, "POSCAR")) else owner)
+        for m in discover_local(owner, _include_blocked=True)[1]:
+            aliases.add(name + "/" + os.path.relpath(m["lpath"], lr))
+    block = (owner, set(), name, aliases)
+    if block not in _CONFIG_BLOCKS:
+        _CONFIG_BLOCKS.append(block)
+        _RESOLVE_DISC_CACHE.clear()
+    _CONFIG_SKILL_ERRORS[path] = reason
+
+
+def _legacy_layout_error(seg, base):
+    old = (seg.get("_legacy_skill") or base.get("_legacy_skill") or
+           next((legacy for legacy, new in SKILL_ALIASES.items()
+                 if legacy != "mlff-mace" and str(seg.get("dir_name") or base.get("dir_name") or "") == legacy), None))
+    if old and old != "mlff-mace" and any(
+            "_mlff_" in s.get("name", "") for s in base.get("steps") or []):
+        return ("%s → %s：旧 step*_mace_* 与新 step*_mlff_* 目录不兼容；"
+                "请人工核实并迁移本地/远端步骤、模板和配置后改用新名，禁止直接重算。"
+                % (old, canonical_skill_name(old)))
+    return None
+
+
 def apply_skills(cfg, verbose=False):
     """把发现到的技能并进 cfg['task_types']；已有同名段作为覆盖层。
     必须在 merge_project_configs 之前调用（项目段要叠在骨架之上）。"""
     skills = discover_skills(cfg, verbose=verbose)
-    white = cfg.get("enabled_skills")
-    black = set(cfg.get("disabled_skills") or [])
-    tt = dict(cfg.get("task_types") or {})
+    white = [canonical_skill_name(k) for k in cfg.get("enabled_skills") or []]
+    black = {canonical_skill_name(k) for k in cfg.get("disabled_skills") or []}
+    try:
+        tt = _normalize_skill_types(cfg.get("task_types"), cfg.get("_config_path") or "主配置")
+    except ValueError as e:
+        sys.exit("错误：主配置技能别名冲突：%s" % e)
     for key, skel in skills.items():
         if white and key not in white:
             continue
@@ -918,7 +999,10 @@ _CONFIG_WARNED = False
 
 
 def reset_config_conflicts():
-    global _CONFIG_WARNED
+    global _CONFIG_WARNED, _SKILL_WARNED
+    _SKILL_MIGRATIONS.clear()
+    _CONFIG_SKILL_ERRORS.clear()
+    _SKILL_WARNED = False
     _CONFIG_CONFLICTS.clear()
     _CONFIG_BLOCKS.clear()
     _CONFIG_WARNED = False
@@ -938,7 +1022,7 @@ def _register_config_conflicts(conflicts):
             pc = {}
             try:
                 pc = _load_yaml_file(path)
-                keys = set((pc.get("task_types") or {}).keys())
+                keys = {canonical_skill_name(k) for k in (pc.get("task_types") or {})}
             except (Exception, SystemExit):
                 pc = {}
                 keys = set()  # 不能识别类型时保守屏蔽所有类型。
@@ -968,6 +1052,7 @@ def _register_config_conflicts(conflicts):
 
 
 def config_material_blocked(path, tt=None):
+    tt = canonical_skill_name(tt)
     rp = os.path.realpath(os.path.expanduser(str(path)))
     return any((not tt or not keys or tt in keys)
                and (rp == owner or rp.startswith(owner + os.sep))
@@ -976,6 +1061,7 @@ def config_material_blocked(path, tt=None):
 
 def reject_config_conflict_targets(projs, tt=None):
     """在采集、状态过滤和任何本地写入之前拒绝显式目标。"""
+    tt = canonical_skill_name(tt)
     for want in (x.strip() for x in (projs or "").split(",") if x.strip()):
         for owner, keys, name, aliases in _CONFIG_BLOCKS:
             if tt and keys and tt not in keys:
@@ -986,6 +1072,11 @@ def reject_config_conflict_targets(projs, tt=None):
                     (os.path.isabs(want) and os.path.realpath(want) == p)
                     or (not os.path.isabs(want) and (p == want or p.endswith(os.sep + want)))
                     for p in candidates):
+                reason = next((v for p, v in _CONFIG_SKILL_ERRORS.items()
+                               if os.path.dirname(os.path.dirname(p)) == owner
+                               or os.path.dirname(os.path.dirname(p)).startswith(owner + os.sep)), None)
+                if reason:
+                    sys.exit("错误：材料 %s 命中技能配置安全屏蔽：%s" % (want, reason))
                 sys.exit("错误：材料 %s 命中同名配置冲突，已屏蔽；请先人工消除冲突（例如重命名一份配置或移入 _archive；本命令不自动处理）。" % want)
 
 
@@ -1113,6 +1204,7 @@ def merge_project_configs(cfg):
                  if isinstance(t, dict) and t.get("local_root")]
     found = scan_project_configs(roots, cfg.get("project_root_excludes"))
     if not found:
+        _warn_skill_configs()
         return cfg
     tt = cfg.setdefault("task_types", {})
     for name, path, proj_dir in found:
@@ -1120,7 +1212,24 @@ def merge_project_configs(cfg):
             pc = _load_yaml_file(path)
         except OSError as e:
             sys.exit("错误：项目配置 %s 读取失败：%s" % (path, e))
-        for key, seg in (pc.get("task_types") or {}).items():
+        try:
+            project_types = _normalize_skill_types(pc.get("task_types"), path)
+            problems = []
+            for key, seg in project_types.items():
+                base = tt.get(key) or {}
+                if seg.get("steps") is None and base.get("steps") is None:
+                    old = seg.get("_legacy_skill")
+                    problems.append(("%s → %s，目标技能不可用" % (old, key)) if old else
+                                    "未知技能 %s：没有可继承的 steps；请核实技能名/安装，不自动猜测替代技能" % key)
+                problem = _legacy_layout_error(seg, base)
+                if problem:
+                    problems.append(problem)
+            if problems:
+                raise ValueError("；".join(problems))
+        except ValueError as e:
+            _block_skill_project(name, path, pc, str(e))
+            continue
+        for key, seg in project_types.items():
             seg = dict(seg or {})
             seg["_base_dir"] = os.path.dirname(path)
             lr = seg.get("local_root")
@@ -1147,6 +1256,7 @@ def merge_project_configs(cfg):
                 tt[key].setdefault("_segments", []).append(seg)
             else:
                 tt[key] = seg
+    _warn_skill_configs()
     return cfg
 
 def _filter_run_steps(t):
@@ -1189,6 +1299,7 @@ def _filter_run_steps(t):
 def get_types(cfg, tt=None, root_override=None, quiet=False):
     """把配置归一化成类型列表；应用 -tt 过滤和 ROOT 覆盖。
     项目配置合并进来的同 key 段在此展开为多个类型实例（key 相同，local_root 不同）。"""
+    tt = canonical_skill_name(tt)
     raw = cfg.get("task_types")
     types = []
     if raw:
@@ -1204,6 +1315,12 @@ def get_types(cfg, tt=None, root_override=None, quiet=False):
             # 主定义自身无 local_root/root 时只作骨架（发现交给各段；
             # 暂时没有段也不报错——比如刚 init 一个新项目之前）
             if t.get("local_root") or t.get("root"):
+                # Apply -tt before legacy-layout validation: an unrelated legacy
+                # type must not abort a command targeting a normal sibling.
+                if not tt or str(k) == str(tt):
+                    problem = _legacy_layout_error(t, t)
+                    if problem:
+                        sys.exit("错误：主配置存量技能目录不能安全使用：%s" % problem)
                 types.append(t)
     else:
         t = {k: cfg[k] for k in ("root", "steps", "gen_dir", "materials", "desc")
@@ -1241,13 +1358,11 @@ def get_types(cfg, tt=None, root_override=None, quiet=False):
             skels = [k for k, tc in (cfg.get("task_types") or {}).items()
                      if tc and tc.get("steps")]
             src = t.get("_from") or "project_setting/tf_*.yaml"
-            sys.exit("错误：类型 %s 在全局 tf.yaml 里没有对应定义（继承不到 steps）。\n"
-                     "来源文件：%s\n"
-                     "通常是该文件的类型名和全局 tf.yaml 不一致（如 bd 改名 band 后没同步）。\n"
-                     "全局可用的类型名：%s。修正命令：\n"
-                     "  sed -i 's/^  %s:/  %s:/' %s"
-                     % (t["key"], src, ", ".join(skels) or "（无）",
-                        t["key"], skels[0] if skels else "band", src))
+            alias = SKILL_ALIASES.get(t["key"])
+            hint = ("明确旧名映射：%s → %s；请核实目标技能及存量目录迁移。" % (t["key"], alias)
+                    if alias else "请核实该技能的名称、安装和 steps 定义；不自动猜测替代技能。")
+            sys.exit("错误：类型 %s 继承不到 steps。来源文件：%s\n%s\n可用类型：%s"
+                     % (t["key"], src, hint, ", ".join(skels) or "（无）"))
     return types
 
 def step_cfg(t, sname, m=None):

@@ -761,7 +761,7 @@ def resolve_mat_dir(cfg, types, tt, want, cwd=None):
         if r in seen or not os.path.isdir(r):
             continue
         seen.add(r)
-        if os.path.basename(r) == want and os.path.isfile(
+        if os.path.basename(r) == want and not config_material_blocked(r, tt) and os.path.isfile(
                 os.path.join(r, "POSCAR")):
             return r
         for rel, base, d in _scan_root_dirs(r):
@@ -844,7 +844,7 @@ def _init_one_skill(cfg, types, target, name=None, tt=None, force=False,
     （不再每个材料全树重扫），新建成功后同步加入该集合。"""
     from autozt.bootstrap import config_material_blocked, _CONFIG_CONFLICTS
     if config_material_blocked(target, tt):
-        sys.exit("错误：目标材料的同名配置冲突，已屏蔽初始化。")
+        sys.exit("错误：目标材料存在配置安全屏蔽（同名冲突或技能不可用），已拒绝初始化。")
     cands = [x for x in types if x.get("local_root")]
     if tt:   # v1.9.4：锁定到该技能，否则总是拿到排在最前面的 band
         cands = [x for x in cands if x.get("key") == tt]
@@ -1236,6 +1236,8 @@ def cmd_hpc(cfg, types, projs, cluster, tt, yes):
                                          （v1.6 私有配置，优先级最高）
     集群主配置 = 包内 setting/<集群名>.yaml（照 jzzn.yaml 建）；其 template_map
     指向的模板文件须能被找到（skill/<技能>/、project_setting/ 或 <技能>/）。"""
+    from autozt.bootstrap import reject_config_conflict_targets
+    reject_config_conflict_targets(",".join(projs or []), tt)
     if not cluster:
         print(_i18n.t("错误：", "error: ") + "缺集群名。用法：autozt -p 项目[,项目...] [-tt 技能] hpc <集群名>")
         return 1
@@ -1328,6 +1330,27 @@ def _list_pkg_clusters():
                     if f.endswith(".yaml") and f != "tf_default.yaml"]
     return ", ".join(sorted(set(out))) or "（无）"
 
+def _physical_skill_key(types, tkey, lpath):
+    """Resolve a segment's physical directory, not its canonical display key."""
+    if not lpath:
+        return tkey
+    rp = os.path.realpath(lpath)
+    matches = []
+    for t in types or []:
+        if t.get("key") != tkey:
+            continue
+        owner = (os.path.dirname(os.path.dirname(t["_from"])) if t.get("_from")
+                 else t.get("local_root"))
+        if not owner:
+            continue
+        owner = os.path.realpath(owner)
+        if os.path.isfile(os.path.join(os.path.dirname(owner), "POSCAR")):
+            owner = os.path.dirname(owner)
+        if rp == owner or rp.startswith(owner + os.sep):
+            matches.append((len(owner), str(t.get("dir_name") or tkey)))
+    return max(matches)[1] if matches else tkey
+
+
 def _level_stepconf_path(lpath, tkey):
     """<材料>/<技能>/project_setting/templates/step.conf（项目共用层）。"""
     if not lpath:
@@ -1393,7 +1416,7 @@ def cmd_level(cfg, types, tt, proj, arg):
                             if level else "  当前级别："))
         for w in names:
             lp = resolve_mat_dir(cfg, types, k, w)
-            scp = _level_stepconf_path(lp, k)
+            scp = _level_stepconf_path(lp, _physical_skill_key(types, k, lp))
             if not scp:
                 print("  %-28s 还没 init（先 tf -tt %s -p %s init）" % (w, k, w))
                 fails += 1
@@ -1423,7 +1446,7 @@ def cmd_auto_project(cfg, types, proj, tt, arg):
         for w in wants:
             for k in keys:
                 lp = resolve_mat_dir(cfg, types, k, w)
-                f = _proj_setting_path(lp, k) if lp else None
+                f = _proj_setting_path(lp, _physical_skill_key(types, k, lp)) if lp else None
                 cur = (_load_yaml_file(f).get("auto_advance")
                        if f and os.path.isfile(f) else None)
                 print("  %-14s %-9s %s" % (w, k, "（无配置）" if not f or
@@ -1442,7 +1465,7 @@ def cmd_auto_project(cfg, types, proj, tt, arg):
     for w in wants:
         for k in keys:
             lp = resolve_mat_dir(cfg, types, k, w)
-            f = _proj_setting_path(lp, k) if lp else None
+            f = _proj_setting_path(lp, _physical_skill_key(types, k, lp)) if lp else None
             if not f or not os.path.isfile(f):
                 print("  %s[%s]：还没有 project_setting，先 tf -tt %s -p %s init"
                       % (w, k, k, w))
