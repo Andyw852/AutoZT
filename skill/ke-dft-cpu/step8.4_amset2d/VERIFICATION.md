@@ -2963,5 +2963,19 @@ S7 10 个作业 3864418–3864427 全部 COMPLETED、ExitCode 0:0（独立 sacct
 
 **离线验证**：`tests/test_nspin_norm_fix.py` 11 项全过（纯逻辑 decide 四情形 + 版本解析；合成 h5 的 0.4.19 双自旋修/幂等、单自旋不变、0.5.1 不变；闸门 2.4465 vs 4.8808 拒绝、4.89 vs 4.8808 通过）。日志 `tmp/nspin-fix-review/tests.log`。**未在真实 h5/远端上端到端跑 S7.1_read**（本轮边界）。
 
+## V43. CrSe2_hex 磁性结论 + PBE 带隙口径 + S8.4 全网格提交（2026-09-22）
+
+**CrSe2_hex 为非磁；ISPIN=2 只触发了 AMSET 的减半问题，修复后结果等价。**
+- 逐原子与总磁矩 ≈ 0（多组独立 SCF：弛豫/静态、400/3176/6348 k 点；deform 与 ionrelax 全部 0.0000 μB）。
+- 所谓 0.3 eV 自旋劈裂只出现在最高空带 band 18（比 CBM 高 7.11 eV，离带边 0.91 Å⁻¹），band 1–17 的 |E_up−E_dn| ≤ 1.6e-3 eV，且随 k 加密增大 → 收敛噪声，不是磁性。
+- 带边 VBM/CBM 的 up/down 完全简并。**故修复 ×2 后 ISPIN=2 与 ISPIN=1 等价，不需要重算**；jap 另外 5 个 2D 项目重算时顺带确认即可。
+
+**PBE 带隙 0.75 eV，高温结果需谨慎解读。**
+- CrSe2_hex 项目 `BANDGAP = pbe`（未启用 HSE 分支）；S8.4 取带隙走 `step2.2_pbe_plot`（0.7542 eV），与 MoS2 当时的跑法一致；状态表里的“缺 S2.3_hseplot”是 HSE 分支未启用所致，不是缺产物。
+- PBE 通常低估带隙。**T > 600 K 时本征激发/双极效应可能影响 S 与 κ_e**；验收以 300 K 为准，论文高温段数值须注明“PBE 带隙，高温下偏保守”。
+
+**S8.4_amset2d 已提交**（2026-09-22，jobid 3867317）：`amset2d` 组由 `start -j S8.4_amset2d` 按需自动启用；采用**全网格**输入——`wavefunction.h5 -> step4b_wave_full/wavefunction.h5`（1,614,948,096 B ≈ 1.61 GB）、`vasprun.xml -> step3b_uniform_full/vasprun.xml`、`deformation.h5 -> step7b_deform_read/deformation_vac.h5`（修复后的真空口径 h5）。待跑完后做四项验收（本征 ADP+POP 迁移率量级、POP τ 亚皮秒、IMP 分列、sacct MaxRSS ≈47 GB）并取 300 K / 600 K 的 S、σ。
+
+
 
 
