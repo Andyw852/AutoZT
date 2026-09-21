@@ -301,6 +301,15 @@ def _as_dict(edge):
         edge["kpoint_index"] = [int(x) for x in np.atleast_1d(_ki)]
     return edge
 
+# [nspin_norm_fix 2026-09-21] AMSET<0.5.1 的 calculate_deformation_potentials
+# 把 norm += strain_loc 写在自旋循环内，ISPIN=2 时 D 被除以自旋道数 2。
+# 在 load 之前原地把 core h5 乘回自旋道数；band_edges 的 E1_xx/yy/iso 读的
+# 就是这份 h5，因此自动变成修正后的正确值。幂等（attrs 已标记则不重复乘）。
+import amset
+import nspin_norm_fix
+_fixed, _reason = nspin_norm_fix.fix_h5("deformation.h5", amset.__version__)
+print("[nspin_norm_fix] core deformation.h5: fixed=%s reason=%s (amset %s)"
+      % (_fixed, _reason, amset.__version__))
 dp, kpoints, structure = load_deformation_potentials("deformation.h5")
 bulk = parse_calculation("undeformed")
 bs = bulk["bandstructure"]
@@ -936,41 +945,80 @@ kpts = np.array([k.frac_coords for k in bulk["bandstructure"].kpoints])
 write_deformation_potentials(dp, kpts, bulk_struct, filename=h5_out)
 print("[OK] 写出 %s（真空参考，AMSET 原版算法与符号约定）" % h5_out)
 
-# 自检：新 h5（真空口径）与 core 版 h5 在带边的 D 必须**不同**——相同就说明参考
-# 替换没生效（静默退回 core 口径，是本补丁最危险的失败模式）。两者都用 band_edges
-# 里那套 (band,k) 索引，读的是同一批形变目录，可比。
-# 另一条更强的内部自检：D_vac - D_core = d(E_core - E_vac)/dε，**与能带无关**，
-# 所以电子与空穴的差值必须相同。旧版（clamped 且空穴芯势 D 为负）这条不成立：
-# 空穴 1.435-0.263=1.172 vs 电子 6.595-4.897=1.698 —— AMSET 对 D 取了绝对值，
-# 把空穴芯势口径的**负号**吃掉了。这正说明"事后往 h5 上加 Δ"的做法对空穴会错，
-# 而"替换参考能级"（本实现）天然避开该坑。ionrelax 口径下两者都是 2.087（一致）。
+# [nspin_norm_fix 2026-09-21] 与 core h5 同一处 AMSET<0.5.1 自旋减半缺陷：
+# 写出后原地把 vac h5 也乘回自旋道数，再进下面的硬闸门。幂等。
+import amset
+sys.path.insert(0, str(Path.cwd().resolve().parent))
+import nspin_norm_fix
+_fixed, _reason = nspin_norm_fix.fix_h5(h5_out, amset.__version__)
+print("[nspin_norm_fix] vac %s: fixed=%s reason=%s (amset %s)"
+      % (h5_out, _fixed, _reason, amset.__version__))
+
+# ==========================================================================
+# [nspin_norm_fix 硬闸门 2026-09-21] 为 AMSET<0.5.1 的「ISPIN=2 形变势减半」
+# 缺口加的防线：AMSET 0.4.19 把 norm += strain_loc 写在自旋循环内，D 被除以
+# 自旋道数 2（上游 0.5.1 已修）。本步已在写 h5 后用 nspin_norm_fix.fix_h5
+# 把 vac h5 原地乘回自旋道数；这里读回修正后的 h5 与 band_edges.json：
+#   * 保留「vac h5 必须与 core h5 不同」（参考能级替换生效）的检查；
+#   * 按每个 hit 的 spin 选 deformation_potentials_<spin> dataset（绝不硬编码
+#     _up），逐 hit 把 D_xx/D_yy 与 band_edges 的 E1_vac_xx/yy 对比；
+#   * 相对差 > 5% 即打印错误并 SystemExit(1)，让本步 FAIL，绝不把减半的带边 D
+#     交给 S8.2/S8.4 静默使用。
+# ==========================================================================
 import h5py
 be = json.load(open(be_json))
 core_h5 = str(Path(dfm) / "deformation.h5")
-with h5py.File(h5_out, "r") as fh:
-    up = np.array(fh["deformation_potentials_up"])
-with h5py.File(core_h5, "r") as fh:
-    up_core = np.array(fh["deformation_potentials_up"])
-print("[check] 带边 D_xx：core h5 vs 真空 h5（同一批形变目录，ionrelax 优先）")
+
+
+def _load_dp(path):
+    with h5py.File(path, "r") as fh:
+        return {k: np.array(fh[k]) for k in fh.keys()
+                if k.startswith("deformation_potentials_")}
+
+
+vac_dp = _load_dp(h5_out)
+core_dp = _load_dp(core_h5)
+print("[check] 带边 D：core h5 vs 真空 h5（同一批形变目录，ionrelax 优先）")
 _any_diff = False
 _shifts = {}
+_gate_bad = []
 for car in ("electron", "hole"):
     hits = (be.get(car) or {}).get("hits") or []
     if not hits:
         continue
-    b, k = int(hits[0]["band_h5"]), int(hits[0]["k_h5"])
-    dv, dc = float(up[b, k, 0, 0]), float(up_core[b, k, 0, 0])
-    _shifts[car] = dv - dc
-    if abs(dv - dc) > 1e-6:
-        _any_diff = True
-    print("   %-8s D_xx: core=%8.4f  真空=%8.4f  比=%.2f"
-          % (car, dc, dv, (dv / dc) if dc else float("nan")))
-    # 两份 h5 现在都读 ionrelax，与 band_edges.json 同一套数据 → 应该对得上
-    # （带边 k/带索引一致时差几个百分点以内；差很多说明哪一边读错了构型）。
-    _be = be[car].get("E1_vac_xx_eV")
-    if _be:
-        print("            [对照] band_edges.json（同口径 ionrelax）E1_vac=%s → 偏差 %+.1f%%"
-              % (_be, 100.0 * (dv - float(_be)) / float(_be)))
+    be_xx = (be.get(car) or {}).get("E1_vac_xx_eV")
+    be_yy = (be.get(car) or {}).get("E1_vac_yy_eV")
+    if be_xx is None:
+        raise SystemExit("[nspin_norm_fix] %s 缺 E1_vac_xx_eV，闸门无法判定" % car)
+    for _hit in hits:
+        ds = "deformation_potentials_%s" % _hit.get("spin")
+        if ds not in vac_dp or ds not in core_dp:
+            raise SystemExit("[nspin_norm_fix] %s hit spin=%r 在 h5 找不到 dataset %s"
+                             % (car, _hit.get("spin"), ds))
+        b, k = int(_hit["band_h5"]), int(_hit["k_h5"])
+        dv_xx = float(vac_dp[ds][b, k, 0, 0])
+        dc_xx = float(core_dp[ds][b, k, 0, 0])
+        dv_yy = float(vac_dp[ds][b, k, 1, 1])
+        _shifts.setdefault(car, dv_xx - dc_xx)
+        if abs(dv_xx - dc_xx) > 1e-6:
+            _any_diff = True
+        print("   %-8s spin=%-5s band=%d k=%d  D_xx: core=%8.4f 真空=%8.4f 比=%.2f"
+              % (car, _hit.get("spin"), b, k, dc_xx, dv_xx,
+                 (dv_xx / dc_xx) if dc_xx else float("nan")))
+        if not nspin_norm_fix.gate_ok(dv_xx, float(be_xx)):
+            _gate_bad.append("%s spin=%s D_xx=%.4f vs E1_vac_xx=%.4f (%.1f%%)"
+                             % (car, _hit.get("spin"), dv_xx, float(be_xx),
+                                100.0 * nspin_norm_fix.relative_diff(dv_xx, float(be_xx))))
+        if be_yy is not None and not nspin_norm_fix.gate_ok(dv_yy, float(be_yy)):
+            _gate_bad.append("%s spin=%s D_yy=%.4f vs E1_vac_yy=%.4f (%.1f%%)"
+                             % (car, _hit.get("spin"), dv_yy, float(be_yy),
+                                100.0 * nspin_norm_fix.relative_diff(dv_yy, float(be_yy))))
+if _gate_bad:
+    print("[GATE-FAIL] 真空口径带边 D 与 band_edges.json E1_vac 相对差 > 5%：")
+    for _m in _gate_bad:
+        print("   %s" % _m)
+    raise SystemExit("[nspin_norm_fix] 硬闸门 FAIL：vac h5 的带边 D 与 band_edges "
+                     "E1_vac 不一致，疑似 AMSET<0.5.1 自旋减半缺口未修 / 修正未生效。")
 if not _any_diff:
     raise RuntimeError("真空口径 h5 与 core h5 完全相同 —— 参考能级替换没生效"
                        "（检查 parse_calculation 的 reference 是否被改掉）")

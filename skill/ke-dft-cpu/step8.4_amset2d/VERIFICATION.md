@@ -2944,4 +2944,24 @@ S7 10 个作业 3864418–3864427 全部 COMPLETED、ExitCode 0:0（独立 sacct
 
 **影响**：所有 ISPIN=2 材料的两份 h5 减半，AMSET 迁移率 μ∝1/D² 偏高约 4 倍；2D DPT（S8.2）默认读 band_edges 的 E1_vac_iso，不受影响；S8_kappa/S8.4 用 h5，受影响。MoS2 当时 0.3% 一致很可能因其为 ISPIN=1（待确认）。修复候选：包装/修正两处 AMSET 调用、后处理 h5 乘自旋道数、或升级 AMSET；均需对已用减半 D 跑过的 ISPIN=2 材料重算。**未改动 gen、未重算、未提交作业。** 两个只读子代理独立复核一致（手算 handcalc.json、代码审计 code-audit.md）：**上游 AMSET 0.5.1 已修复该 norm 缺陷**（`norm += strain_loc` 移出自旋循环）；WARNING 来自 `amset/tools/deformation.py` 的 `reciprocal_lattice_match`，只是告警、不改数组，效果是部分对称等价应变被丢弃。`band_edges.json` 的 `E1_xx/yy/iso` 读自已减半的 core h5，也需乘回 2×。**本地 h5 自旋道数实测影响范围**：受影响（ISPIN=2，有 _up/_down）＝ CrS2_hex / CrS2_ortho / CrSe2_hex / CrSe2_ortho / LS / SS 这 6 个 jzz/jap 2D 项目；不受影响（单自旋道）＝ MoS2 / Zn3O2 / Si 与三维合金 Sn2Sb2Te5 / Pb2Bi2Te5 / Pb2Sb2Te5 / Sn2Bi2Te5。故这 6 个 2D 材料已跑过的 S8/S8.4 AMSET 结果需按 2×D 修正或重算（μ 会 ÷4）。详见 `tmp/s7-diag/DIAGNOSIS.md`。
 
+## V42. 方案 B 落地：ISPIN=2 形变势自旋减半修复 + GL 应变修正（2026-09-22，隔离 worktree）
+
+范围：只在 `tmp/nspin-fix-worktree/` 的 `skill/`、`tests/` 副本上做；未改主树、未提交、未跑真实 autozt/远端作业、未碰任何项目数据。baseline 见 `tmp/nspin-fix-review/baseline/`，补丁 `tmp/nspin-fix-review/patch.diff`。
+
+**1. 带边偏离 K 点的影响可忽略，本轮不改 K 网格。** 现网格 46×46×3 上离 K 点最近的格点是 (15/46, 15/46, 0)，与 K=(1/3,1/3,0) 的能量差量级约 **1e-5 eV**，远小于形变势/带边能量的数值精度与 5% 判据容差；因此**保持 46×46×3，不加密 K 网格**。若将来要把带边误差压到 1e-5 eV 以下，需重跑 S3/S7 全链，另立任务。
+
+**2. 根因（承接 V41）：AMSET 0.4.19 在 ISPIN=2 时形变势减半。** `amset/deformation/potentials.py::calculate_deformation_potentials` 把 `norm += strain_loc` 写在 `for spin, spin_deform in deform.items():` 循环**体内**，自旋极化的两份道把同一应变条目的 norm 累加两次，`deformation_potentials[spin] /= norm` 于是把每份 D 除以 2。**上游 AMSET 0.5.1 已把 norm 累加移出自旋循环（修复）。** 判据是 INCAR 的 ISPIN=2（哪怕磁矩 ≈0，两份自旋道就在那里）。实测 CrSe2_hex：`deformation_vac.h5` 的 E1_vac=2.4465 eV，`band_edges.json` 独立路径 E1_vac=4.8808 eV，差 ≈−49.9%。
+
+**3. 本轮采用方案 B（不改 AMSET 安装）：**
+   * 两份 h5（core `deformation.h5`、vac `deformation_vac.h5`）都 ×自旋道数：`gen_step9b_deform_read.py` 在 `load_deformation_potentials` **之前**修 core、在 `write_deformation_potentials` **之后**修 vac；
+   * 幂等标记：`nspin_norm_fix.fix_h5` 在 h5 attrs 写 `nspin_norm_fixed` / `nspin_norm_fix_version` / `nspin_norm_fix_reason`（修复时另写 `nspin_norm_fix_factor`），二次调用直接 `already-marked`，绝不重复乘；
+   * 版本闸门：`decide(amset_version, nspin, marked)` 只对 `amset<0.5.1` 且 `nspin==2` 修；`>=0.5.1` 或单自旋道一律跳过；
+   * 硬自检（硬闸门）：`_vac_code` 读回修正后的 vac h5，按每个 hit 的 `spin` 选 `deformation_potentials_<spin>` dataset（不硬编码 `_up`），逐 hit 比较 `D_xx`/`D_yy` 与 `band_edges.json` 的 `E1_vac_xx/yy`，相对差 >5% 即 `SystemExit(1)` 让本步 FAIL。保留「vac h5 必须与 core h5 不同」与 `D_vac−D_core` 载流子一致性告警。
+   * GL 应变修正：`ke_common.resolve_strain_pairs` 的 `strain_mag` 由工程应变 `|F_diag−1|`（实测 0.00501256）改为 **Green–Lagrange 对角元 `|E_diag|`（实测 0.005）**。该函数被 `gen_step9_deform.py` 用于挑 ionrelax 目录（不用 `_sm`），故不改 DFT 输入；GL 修正使 `band_edges.json` 的 `E1_vac` 与 AMSET/DPT 的张量应变口径一致（4.8808→≈4.893，与 h5 修正后的 2×2.4465=4.893 对齐）。
+
+**4. 升级 AMSET 到 0.5.1 另立为待办，本轮不做。** 0.5.1 改了 API（`extract_bands`/`write_deformation_potentials`/settings 键等），可能牵动 S7.1/S8/S8.4 全链，需在**单独的环境升级项目**里做完整回归（至少覆盖 MoS2 单自旋与 CrSe2_hex 双自旋），不混进本轮 h5 补丁。方案 B 是 <0.5.1 的长期兼容兜底；升级到 0.5.1 后版本闸门自动跳过（幂等标记保护已有结果）。
+
+**离线验证**：`tests/test_nspin_norm_fix.py` 11 项全过（纯逻辑 decide 四情形 + 版本解析；合成 h5 的 0.4.19 双自旋修/幂等、单自旋不变、0.5.1 不变；闸门 2.4465 vs 4.8808 拒绝、4.89 vs 4.8808 通过）。日志 `tmp/nspin-fix-review/tests.log`。**未在真实 h5/远端上端到端跑 S7.1_read**（本轮边界）。
+
+
 

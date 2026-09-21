@@ -124,7 +124,7 @@ def resolve_strain_pairs(out):
     形变梯度 F = (und_lat⁻¹ · def_lat)ᵀ（列矢量约定，与 amset calculate_deformation
     一致）；Green-Lagrange 应变 E = (FᵀF - I)/2；对角元最大者即主形变轴。
     返回 (pairs, strain_mag)：pairs={"xx":[plus,minus],"yy":[plus,minus]}（目录名），
-    strain_mag={"xx":γxx,"yy":γyy}（工程应变）。反解不完整返回 (None, None)。
+    strain_mag={"xx":γxx,"yy":γyy}（Green–Lagrange 对角元）。反解不完整返回 (None, None)。
     gen_step9_deform.py 建 ionrelax/ 与 step7b 找 ionrelax/ 必须走这一个函数，
     否则两边各自反解会错位（gen 建 01/02、step7b 翻 03/04，静默降级）。"""
     import glob
@@ -146,10 +146,10 @@ def resolve_strain_pairs(out):
         sign = 0 if val > 0 else 1
         if idx == 0:
             pairs["xx"][sign] = os.path.basename(d)
-            strain_mag["xx"] = abs(F[idx, idx] - 1.0)
+            strain_mag["xx"] = abs(val)
         elif idx == 1:
             pairs["yy"][sign] = os.path.basename(d)
-            strain_mag["yy"] = abs(F[idx, idx] - 1.0)
+            strain_mag["yy"] = abs(val)
     if None in pairs["xx"] or None in pairs["yy"]:
         return None, None
     return pairs, strain_mag

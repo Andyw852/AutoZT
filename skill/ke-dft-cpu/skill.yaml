@@ -113,7 +113,9 @@ steps:
      # —— 2026-09-16 MoS2 实测直接 AttributeError: resolve_strain_pairs。
      # 现在 ke_common.py **只有技能根目录一份**（原来三份同名拷贝，谁最后 gen
      # 谁说了算），凡是 import 它的步骤都在 gen_need 里声明（S3/S4/S5/S7/S7.1/S8/S8.4）。
-     gen: gen_step9b_deform_read.py, gen_need: [ke_common.py], fetch_all: true,
+     # nspin_norm_fix.py（2026-09-21）：AMSET<0.5.1 + ISPIN=2 时两份 h5 的形变势
+     # 被自旋道数除，gen_step9b 在 load/write h5 前后调它乘回自旋道数。
+     gen: gen_step9b_deform_read.py, gen_need: [ke_common.py, nspin_norm_fix.py], fetch_all: true,
      needs: ["step7_deform"]}
 
   - {seq: 8, name: step8_amset, label: S8_kappa, src: step8_amset,
