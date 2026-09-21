@@ -93,6 +93,7 @@ AMSET_CMD   = ('python overlap_preflight.py --in-job || exit 1; '
 DOPING      = "-1e21:-1e17:5, 1e17:1e21:5"   # n 型 + p 型各 5 点（对数均布）cm^-3
 TEMPERATURES = "100:900:9"            # 100,200,...,900 K，每 100 K 一个点
 SCATTERING  = ["ADP", "IMP", "POP"]   # 形变势声学 + 电离杂质 + 极性光学 "ADP", "IMP", "POP"
+_ALLOWED_SCATTERING = {"ADP", "IMP", "POP", "PIE"}   # step.conf SCATTERING 允许的机制
 MANUAL_BANDGAP = None                 # None=自动读；或写数值(eV) 覆盖 scissor
 # patch_dielec_assert：介电产物必须通过物理性硬断言，否则直接停步（不静默往下传）。
 #   检查项：eps_inf 存在 / 对角项 >= 1 / 不是单位矩阵（DFPT 初值签名）/
@@ -168,6 +169,9 @@ SPEC = {
     #   实测 factor=10 + nworkers=24 在共享节点上 MaxRSS 292 GB 被 OOM 杀。
     #   项目里按需降到 4（已校准口径：与 factor 10 差 6-11%，见 V23）。
     "INTERPOLATION_FACTOR": (INTERPOLATION_FACTOR, "int"),
+    # 散射类型覆盖（2026-09-22 用户批准）：逗号/空格分隔，如 `SCATTERING = ADP,POP` 用于严格本征对照；
+    # 空串 = 出厂 ["ADP","IMP","POP"] 行为不变。
+    "SCATTERING": ("", "str"),
 }
 # --- amset2d 插件相关（可改）---
 PLUGIN_SRC_NAME = "amset2d_plugin.py"   # 与本脚本同目录，运行时复制到 OUTDIR_NAME
@@ -1394,7 +1398,7 @@ def main():
     _disc_gate()
     cwd = Path.cwd()
     global LAYER_THICKNESS, NWORKERS, UNITY_OVERLAP, WAVEFUNCTION_FULL
-    global INTERPOLATION_FACTOR
+    global INTERPOLATION_FACTOR, SCATTERING
     _conf_nworkers = None
     if (cwd / "step.conf").is_file():
         # strict=False：材料级 step.conf 是【全技能共用】的一份，含别的步骤的键
@@ -1429,6 +1433,24 @@ def main():
                 print("[..] UNITY_OVERLAP=false（step.conf 覆盖）：真实重叠（需全网格 h5）")
             elif _uo != "auto":
                 print("[WARN] UNITY_OVERLAP=%r 不认识（只认 auto/true/false），按 auto 处理" % _uo)
+            # patch_scattering（2026-09-22 用户批准）：step.conf 覆盖散射类型。
+            #   逗号/空格分隔，如 SCATTERING = ADP,POP 用于"严格本征"对照；
+            #   空串 = 出厂 [ADP, IMP, POP] 行为不变；含不认识机制则整项忽略并告警。
+            _sc_raw = _p["SCATTERING"]
+            if isinstance(_sc_raw, (list, tuple)):
+                _sc_list = [str(x).strip().upper() for x in _sc_raw if str(x).strip()]
+            else:
+                _sc = str(_sc_raw or "").strip()
+                _sc_list = ([x.strip().upper() for x in _sc.replace(",", " ").split() if x.strip()]
+                            if _sc else [])
+            if _sc_list:
+                _bad = [x for x in _sc_list if x not in _ALLOWED_SCATTERING]
+                if _bad:
+                    print("[WARN] SCATTERING 含不认识的机制 %s（允许 %s），本项忽略，保持出厂 %s"
+                          % (_bad, sorted(_ALLOWED_SCATTERING), SCATTERING), file=sys.stderr)
+                elif _sc_list != SCATTERING:
+                    print("[OK] SCATTERING = %s（step.conf 覆盖，出厂 %s）" % (_sc_list, SCATTERING))
+                    SCATTERING = _sc_list
         except (KeyError, ValueError, TypeError):
             pass  # step.conf 读不成时保持出厂默认（LAYER_THICKNESS="vdw" / NWORKERS 自动）
 
