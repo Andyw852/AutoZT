@@ -30,6 +30,12 @@ KSPACING     = "0.03"
 DK_MAX       = 0.05                   # 与 step3_uniform 同口径：面内笛卡尔 k 间距上限，
                                       # 保证 step7 与 step3 的网格一致（否则 band 截断差 1，
                                       # amset run 报 band 数不匹配——LS 2×11 vs 6×41 实锤）
+# [patch_vacuum_kz] 与 step3_uniform 同口径：把真空方向 kz 提到该层数。
+#   kc.vaspkit_kpoints(..., dim="2d") 内部会把真空轴压回 1；只有 1 层 kz 时
+#   AMSET 沿 kz 外推，插值网格一变结果差 30-45%（V8）。step3_uniform 有这个
+#   patch，step7 此前漏了 —— 于是同一材料的 S3(47×47×3) 与 S7(15×15×1) 网格
+#   不一致，形变势 h5 比波函数网格粗 3 倍/轴。默认 1 = 不动（与旧行为一致）。
+VACUUM_KZ_MIN = 1
 FUNC         = "inherit"      # patch_ke_dag: inherit=继承 step1
 # 注意：本步必须和 step3_uniform 同泛函，否则形变势里会掺进泛函差异
 MANUAL_ENCUT = None
@@ -120,6 +126,28 @@ def run_amset_deform_create(out: Path):
           % (len(poscars), len(poscars) + 1))
 
 
+# patch_stale_grid（2026-09-21）：ck_deform 只查 OUTCAR 收尾标志 + ionrelax/OUTCAR，
+#   **不比对 KPOINTS**。于是改了网格之后，旧网格算完的子目录仍被判"已完成"，
+#   不进 fan_todo；而 remote_sbatch_fanout 只提交 fan_todo -> retry 只补没完成的，
+#   结果是一个形变势里混着两套 k 网格。这里在覆盖 KPOINTS 之前，把旧产物改名归档
+#   （不删除），使 ck_deform 判不通过、子目录自然进入 fan_todo 被重算。
+#   目录里的输入（POSCAR/POTCAR/INCAR）不在归档集合内，绝不触碰。
+STALE_OUTPUTS = (
+    "OUTCAR", "OSZICAR", "vasprun.xml", "CONTCAR", "CHGCAR", "CHG", "EIGENVAL",
+    "DOSCAR", "PROCAR", "WAVECAR", "IBZKPT", "REPORT", "PCDAT", "XDATCAR",
+    "LOCPOT", "ELFCAR", "OUTCAR.stale-grid",
+)
+
+
+def _grid_tag(kpts_text):
+    """从 KPOINTS 文本里取网格标签（vaspkit 写法的第四行 3 个整数），用于归档后缀。"""
+    for _ln in (kpts_text or "").splitlines():
+        _p = _ln.split()
+        if len(_p) == 3 and all(x.isdigit() for x in _p):
+            return "x".join(_p)
+    return "old"
+
+
 # === patch_kpts_align：形变势要求所有构型共用同一套 k 点 ===
 def _reference_kpoints(out, dim, vac_axis, n_sub):
     """只在 undeformed/ 生成一次 KPOINTS 作为基准，返回其路径（失败返回 None）。
@@ -133,9 +161,81 @@ def _reference_kpoints(out, dim, vac_axis, n_sub):
         print("[WARN] 没有 undeformed/POSCAR —— 退回逐目录生成 KPOINTS，"
               "各形变的 k 网格可能不一致，形变势会失真")
         return None
+    # patch_stale_grid_undeformed（2026-09-21）：undeformed/ 的 KPOINTS 就是基准本体，
+    #   紧接着的 vaspkit_kpoints 会【直接覆盖】它；而调用点的循环走到 d=undeformed 时
+    #   _same=True 会跳过归档 —— 旧网格的 OUTCAR 于是留存、ck_deform 仍判"已完成"，
+    #   fan_todo 少一个（9 而非 10）。所以必须在覆盖【之前】抓下旧内容，事后比对归档。
+    _und_kp = und / "KPOINTS"
+    try:
+        _und_kp_old = (_und_kp.read_text(encoding="utf-8", errors="ignore")
+                       if _und_kp.is_file() else None)
+    except OSError:
+        _und_kp_old = None
     kc.vaspkit_kpoints(und, KSCHEME, KSPACING, VASPKIT_EXE, dim, vac_axis)
+    # [patch_vacuum_kz] 与 step3_uniform 同口径：把真空方向 kz 提到 VACUUM_KZ_MIN。
+    #   必须在 vaspkit_kpoints 之后（它会把 2D 真空轴强制压回 1）。
+    _kzmin = int(VACUUM_KZ_MIN)
+    #   ★ _reference_kpoints 是模块级函数，拿不到 main() 里的 cwd；
+    #     项目目录 = out 的父目录（out = cwd/OUTDIR_NAME）。
+    _proj = out.parent
+    _kzc = (_proj / "step.conf")
+    if _kzc.is_file():
+        try:
+            _conf = stepconf.load({"VACUUM_KZ_MIN": (VACUUM_KZ_MIN, "int")},
+                                  OUTDIR_NAME, str(_proj), strict=False)
+            _kzmin = int(_conf["VACUUM_KZ_MIN"])
+        except (KeyError, ValueError, TypeError):
+            pass
+    # [patch_vacuum_kz_warn] 2026-09-20：覆盖是【按步骤名】合并的，S3 写了
+    #   VACUUM_KZ_MIN 不等于 S7 也有（MoS2 实测：S3/S3b=3，S7 缺 step.conf -> 静默退回 1）。
+    #   静默退回正是本问题的成因，所以这里显式告警：若 S3/S3b 的网格 kz 已 >1 而本步
+    #   仍解析到 1，说明缺 templates/step7_deform/step.conf —— 提示去补，而不是闷头算。
+    if dim == "2d" and _kzmin <= 1:
+        for _cand in ("step3_uniform", "step3b_uniform_full"):
+            _ck = _proj / _cand / "KPOINTS"
+            try:
+                _cz = int(_ck.read_text().splitlines()[3].split()[vac_axis])
+            except (OSError, IndexError, ValueError):
+                continue
+            if _cz > 1:
+                print("[WARN] patch_vacuum_kz：%s 的 %s 已是 kz=%d，但本步解析到 kz=1 —— "
+                      "多半缺 project_setting/templates/%s/step.conf 里的 VACUUM_KZ_MIN=%d。"
+                      "两条命令补：autozt -p <MAT> -j S3_uniform conf --set params.VACUUM_KZ_MIN=%d "
+                      "（S3b 同理）与 -j S7_deform。否则 S7 与 S3 网格不一致。"
+                      % (OUTDIR_NAME, _cand, _cz, OUTDIR_NAME, _cz, _cz))
+                break
+    if dim == "2d" and _kzmin > 1:
+        _kp = und / "KPOINTS"
+        _ln = _kp.read_text().splitlines()
+        _n = [int(x) for x in _ln[3].split()[:3]]
+        if _n[vac_axis] < _kzmin:
+            _old = _n[vac_axis]
+            _n[vac_axis] = _kzmin
+            _ln[3] = " %d %d %d" % (_n[0], _n[1], _n[2])
+            _kp.write_text("\n".join(_ln) + "\n")
+            print("[OK] patch_vacuum_kz：真空轴 kz %d -> %d（原来只有一层时 AMSET 沿 kz 外推，"
+                  "插值网格一变结果差 30-45%%，且 step7 会与 step3 网格不一致）"
+                  % (_old, _kzmin))
     # [DK_MAX] 与 step3_uniform 同口径加密：面内笛卡尔间距上限，逐轴 max。
     # 否则 step7(undeformed 网格) 与 step3 网格不同 → band 截断差 → amset 报错。
+    #
+    # 2026-09-20 修正：去掉原来的「六方胞豁免」（_ratio >= 1.5 才加密）。
+    #   那条豁免与 step3_uniform 其实【不一致】—— gen_step5_uniform.py 对所有
+    #   周期性方向都套 DK_MAX（无 hex 豁免），六方胞照样加密。豁免的后果是
+    #   同一材料的 S3 与 S7 网格差 3 倍/轴（MoS2: S3=47×47×3 vs S7=15×15×1；
+    #   CrSe2_hex: 46 vs 15），形变势 h5 比波函数网格粗，ADP 插值误差可达
+    #   几十个百分点（谷内 |dD|/D0 实测 p90≈38%，见 tmp/amset2d/paper/）。
+    #   现在与 step3_uniform 完全同口径：逐轴 max(vaspkit, ceil(|b_i|/DK_MAX))，
+    #   对【面内两轴】生效；2D 的真空轴已在上面 patch_vacuum_kz 定好，不动 kz。
+    #
+    #   ★★ 2026-09-20 二次修正：范围必须保持 dim == "2d" ★★
+    #   原代码是 `if DK_MAX and dim == "2d"`，3D 分支【故意不加密】——
+    #   gen_step5_uniform.py(S3) 对 3D 用 DK_MAX_3D=0.06 且带 2x 静态下限，
+    #   逐轴收紧到 ~24x24x24；S7 若也照做，会把 3D 的形变势单点成本抬 27 倍，
+    #   且与既有 3D 项目（225 合金等）已跑的 S7 口径不一致 —— 用户明确要求
+    #   「改动绝不能破坏 3D 的 S7」。A/B 夹具实测：去掉这个 guard 会让
+    #   cubic 3D 从 8x8x8 变 24x24x24（DIFF）。所以这里恢复 dim == "2d"。
+    #   3D 的 S7 网格维持原行为（vaspkit 原样），不随本次二维修复改变。
     if DK_MAX and dim == "2d":
         import numpy as np
         _ln = (und / "POSCAR").read_text().splitlines()
@@ -144,25 +244,45 @@ def _reference_kpoints(out, dim, vac_axis, n_sub):
         _b = np.array([float(x) for x in _ln[3].split()[:3]]) * _s
         _c = np.array([float(x) for x in _ln[4].split()[:3]]) * _s
         _vol = abs(float(np.dot(_a, np.cross(_b, _c))))
-        _b1 = 2.0 * np.pi * np.cross(_b, _c) / _vol
-        _b2 = 2.0 * np.pi * np.cross(_c, _a) / _vol
-        _len = [float(np.linalg.norm(_b1)), float(np.linalg.norm(_b2))]
-        _ratio = (max(_len) / min(_len)) if min(_len) > 0 else 1.0
-        if _ratio >= 1.5:      # 各向异性胞才加密（六方 |b1|≈|b2| 豁免，与 step3 一致）
-            _kpt = (und / "KPOINTS").read_text().splitlines()
-            try:
-                _nx, _ny, _nz = (int(x) for x in _kpt[3].split())
-            except (IndexError, ValueError):
-                _nx = _ny = _nz = 1
-            _need = [int(np.ceil(_len[i] / float(DK_MAX))) for i in (0, 1)]
-            _mx, _my = max(_nx, _need[0]), max(_ny, _need[1])
-            if (_mx, _my) != (_nx, _ny):
-                print("[WARN] undeformed 面内分割 %dx%d 间距 %.3f/%.3f > DK_MAX=%.3f，"
-                      "按轴提到 %dx%d（与 step3 一致）"
-                      % (_nx, _ny, _len[0] / _nx, _len[1] / _ny, float(DK_MAX), _mx, _my))
-                _kpt[3] = "  %d  %d  %d" % (_mx, _my, _nz)
-                (und / "KPOINTS").write_text(
-                    "\n".join(_kpt) + "\n", encoding="utf-8", newline="\n")
+        _rec = [2.0 * np.pi * np.cross(_b, _c) / _vol,
+                2.0 * np.pi * np.cross(_c, _a) / _vol,
+                2.0 * np.pi * np.cross(_a, _b) / _vol]
+        _len = [float(np.linalg.norm(v)) for v in _rec]
+        _axes = (0, 1) if dim == "2d" else (0, 1, 2)   # 2D 真空轴已定，不动
+        _kpt = (und / "KPOINTS").read_text().splitlines()
+        try:
+            _n = [int(x) for x in _kpt[3].split()]
+        except (IndexError, ValueError):
+            _n = [1, 1, 1]
+        while len(_n) < 3:
+            _n.append(1)
+        _need = list(_n[:3])
+        for i in _axes:
+            _need[i] = max(_n[i], int(np.ceil(_len[i] / float(DK_MAX))))
+        if _need != _n[:3]:
+            print("[WARN] undeformed 网格 %dx%dx%d（笛卡尔间距 %.3f/%.3f Å⁻¹）不满足 "
+                  "DK_MAX=%.3f，按轴提到 %dx%dx%d（与 step3_uniform 同口径）"
+                  % (_n[0], _n[1], _n[2], _len[0] / _n[0], _len[1] / _n[1],
+                     float(DK_MAX), _need[0], _need[1], _need[2]))
+            _kpt[3] = "  %d  %d  %d" % (_need[0], _need[1], _need[2])
+            (und / "KPOINTS").write_text(
+                "\n".join(_kpt) + "\n", encoding="utf-8", newline="\n")
+    # patch_stale_grid_undeformed：基准网格变了 -> undeformed/ 的 OUTCAR 是旧网格产物。
+    #   归档旧产物（改名，不删除），使 ck_deform 判不通过、该子目录进入 fan_todo。
+    try:
+        _und_kp_new = (und / "KPOINTS").read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        _und_kp_new = None
+    if _und_kp_old is not None and _und_kp_new is not None and _und_kp_old != _und_kp_new:
+        _tag = _grid_tag(_und_kp_old)
+        _moved = []
+        for _nm in STALE_OUTPUTS:
+            _f = und / _nm
+            if _f.is_file():
+                _f.rename(und / (_nm + ".stale-grid-" + _tag))
+                _moved.append(_nm)
+        print("[..] undeformed: KPOINTS %s -> %s，归档旧产物 %d 个（*.stale-grid-%s）"
+              % (_tag, _grid_tag(_und_kp_new), len(_moved), _tag))
     kpts = und / "KPOINTS"
     if not kpts.is_file():
         print("[WARN] undeformed/KPOINTS 生成失败 —— 退回逐目录生成")
@@ -314,6 +434,24 @@ def main():
                 except OSError:
                     _same = (_dst.resolve() == Path(ref_kpts).resolve())
             if not _same:
+                # patch_stale_grid：网格变了 -> 该子目录的 OUTCAR 是旧网格的产物。
+                # 归档旧产物（改名，不删除），让 ck_deform 判不通过而进入 fan_todo。
+                if _dst.is_file():
+                    try:
+                        _old = _dst.read_text(encoding="utf-8", errors="ignore")
+                        _new = Path(ref_kpts).read_text(encoding="utf-8", errors="ignore")
+                    except OSError:
+                        _old, _new = None, None
+                    if _old is not None and _old != _new:
+                        _tag = _grid_tag(_old)
+                        _moved = []
+                        for _nm in STALE_OUTPUTS:
+                            _f = d / _nm
+                            if _f.is_file():
+                                _f.rename(d / (_nm + ".stale-grid-" + _tag))
+                                _moved.append(_nm)
+                        print("[..] %s: KPOINTS %s -> %s，归档旧产物 %d 个（*.stale-grid-%s）"
+                              % (d.name, _tag, _grid_tag(_new), len(_moved), _tag))
                 shutil.copy2(str(ref_kpts), str(_dst))
         else:
             kc.vaspkit_kpoints(d, KSCHEME, KSPACING, VASPKIT_EXE, dim, vac_axis)
@@ -367,11 +505,55 @@ def main():
                 _ir_dirs = {_pairs["xx"][0], _pairs["xx"][1],
                             _pairs["yy"][0], _pairs["yy"][1]}
         if _ir_dirs:
+            # patch_ionrelax_idempotent（2026-09-20）：ionrelax 已经算完的目录**不要重建**。
+            # _build_ionrelax 会清空 ionrelax/ 下除 POSCAR/KPOINTS/POTCAR 之外的全部文件
+            # （含 OUTCAR / LOCPOT / vasprun.xml / CONTCAR），所以 retry 只为"补新增的
+            # 面内分量"而重建时，会顺带毁掉已完成的旧分量（实测 CrSe2_hex：补 deform-09
+            # 的 xy 弛豫会把 deform-01..04 的 ionrelax 结果全删掉）。
+            _built, _skipped = [], []
             for _name in sorted(_ir_dirs):
+                _irp = out / _name / "ionrelax"
+                # 判据与 autozt 的 ck_deform 一致：**必须**在 OUTCAR 末尾看到 VASP 收尾
+                # 横幅 "General timing and accounting informations" 才算完成。
+                # 只判"文件存在"会把中途挂掉/被杀的 ionrelax 误当完成而跳过（用户
+                # 2026-09-20 指出）——挂掉的 OUTCAR/vasprun 也是存在的。
+                _done = False
+                _oc = _irp / "OUTCAR"
+                if _oc.is_file() and (_irp / "vasprun.xml").is_file():
+                    try:
+                        _done = ("General timing and accounting informations"
+                                 in _oc.read_text(errors="ignore")[-400000:])
+                    except OSError:
+                        _done = False
+                # patch_ionrelax_grid（2026-09-20）：**网格也必须一致**。
+                #   只判 VASP 横幅会在「升级网格后重跑」时静默保留旧网格的 ionrelax ——
+                #   实测 CrSe2_hex：deform-01..04 的 ionrelax 是 15x15x1，升到 46x46x3 后
+                #   主单点被刷新、ionrelax 却被跳过，形变势 E1 与其余量混口径。
+                #   判据：把 ionrelax/KPOINTS 第 4 行与基准网格（undeformed/KPOINTS 第 4 行）
+                #   逐轴比；不一致 -> 视为需重建（旧结果本就该作废）。
+                if _done:
+                    try:
+                        # 修正（2026-09-21）：此处原写 und，但 main() 里没有这个局部名
+                        #   （und 只存在于 _reference_kpoints / run_amset_deform_create）。
+                        #   只要有 ionrelax 已跑完，这条 NameError 会让 gen 在归档之后、
+                        #   建 ionrelax/ 之前整个崩掉，retry 报 exit=1。
+                        _ref_ln = ((out / "undeformed" / "KPOINTS").read_text()
+                                   .splitlines()[3].split()[:3])
+                        _ir_ln = (_irp / "KPOINTS").read_text().splitlines()[3].split()[:3]
+                        if [int(x) for x in _ir_ln] != [int(x) for x in _ref_ln]:
+                            print("[IONRELAX] %s：ionrelax 网格 %s 与基准 %s 不一致，重建。"
+                                  % (_name, "x".join(_ir_ln), "x".join(_ref_ln)))
+                            _done = False
+                    except (OSError, IndexError, ValueError):
+                        _done = False   # 读不出就保守重建，不赌
+                if _done:
+                    _skipped.append(_name)
+                    continue
                 _build_ionrelax(out / _name, encut, _subs, submit_body)
-            print("[IONRELAX] 已生成 %d 个 ionrelax/（**全部面内分量**：%s 弛豫），"
-                  "E1/形变势用离子弛豫构型"
-                  % (len(_ir_dirs), ", ".join(sorted(_ir_dirs))))
+                _built.append(_name)
+            print("[IONRELAX] 生成 %d 个 ionrelax/（%s）；已存在结果、跳过重建的 %d 个（%s）"
+                  % (len(_built), ", ".join(_built) or "无",
+                     len(_skipped), ", ".join(_skipped) or "无"))
         else:
             print("[WARN] 认不出面内分量，跳过 ionrelax/（形变势退回刚性单点口径）")
 
