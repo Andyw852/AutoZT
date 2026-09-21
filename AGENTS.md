@@ -18,7 +18,7 @@
 | a800 | `A800` | A800 GPU 集群，真 SLURM（分区 a800，GRES gpu:a800） |
 | 3090 | `wangchao_3090` | 8×RTX3090 服务器，**无 SLURM**（sbatch/squeue/scancel 是 `~/fakeslurm` 垫片，autozt 经 `remote_path_prefix` 注入 PATH） |
 
-16 个技能（`-tt`，见 `autozt skills`）：VASP 类 `band-dft-cpu`（能带）/ `defect-dft-cpu`（本征缺陷+形成能）/ `elastic-dft-cpu`（弹性常数）/ `ke-dft-cpu`（电子热导率）/ `kl-dft-cpu`（晶格热导率）/ `opt-dft-cpu`（结构优化+能量）/ `phonon-dft-cpu`（声子谱）；MACE 类 `kl-mace-cpu`/`kl-mace-gpu`（晶格热导率）/ `opt-mace-cpu`/`opt-mace-gpu`（结构优化+形成能）/ `phonon-mace-cpu`/`phonon-mace-gpu`（声子谱）；`mlff-mace`（随机位移法 MLFF 训练，产出 MACE 势）；辅助 `te-screen`（热电筛选）/ `unihamgnn`（机器学习势）。状态表 `hpc` 列显示每个项目实际跑的机器。
+20 个技能（`-tt`，见 `autozt skills`）：VASP 类 `band-dft-cpu`（能带）/ `defect-dft-cpu`（本征缺陷+形成能）/ `elastic-dft-cpu`（弹性常数）/ `ke-dft-cpu`（电子热导率）/ `kl-dft-cpu`（晶格热导率）/ `opt-dft-cpu`（结构优化+能量）/ `phonon-dft-cpu`（声子谱）/ `zt-dft-cpu`（ZT 全流程）；MLFF 类 `kl-mlff-cpu`/`kl-mlff-gpu`（晶格热导率）/ `opt-mlff-cpu`/`opt-mlff-gpu`（结构优化+形成能）/ `phonon-mlff-cpu`/`phonon-mlff-gpu`（声子谱）/ `mlff`（随机位移法训练）；辅助 `cohp-cogito`（成键分析）/ `eph-qe-cpu`（电子-声子）/ `te-screen`（热电筛选）/ `unihamgnn`（机器学习势）；拟合 `fc-fit`（力常数拟合）。状态表 `hpc` 列显示每个项目实际跑的机器。
 
 你的职责：**监控状态、诊断失败、提出建议、经授权后执行操作、主动汇报**。你不是执行器，`autozt` 才是。
 
@@ -32,17 +32,18 @@
 
 1. **只通过 `autozt` 操作**。禁止自己拼接 `ssh`/`sbatch`/`scancel`/`rm` 来改状态。唯一例外：第 4 条的只读诊断。
 2. **破坏性操作必须先请示**：`stop`、`rerun`、`clean`、以及任何带 `-f` 或 `-y` 的命令，执行前必须向用户说明对象和后果，得到明确同意后才执行。
-   **`-f`/`-y` 必须逐条单独请示**：批准"目标"（如"修 Mo2S3"）**不等于**批准具体命令里的 `-f`——不得从目标批准里推断 `-f` 的许可（2026-09-18 教训：以"修 Mo2S3"为由执行了 `start -f`）。**特别地：`mlff-mace` 的 `step5_label`（及一切昂贵的扇出步骤）只用 `retry`/`start -f`，绝不 `rerun`/`clean`**——后两者会 `rm -rf` 步骤目录，毁掉已算完的 DFT 帧。用户说"以后这类都不用问了"才算预先授权。
+   **`-f`/`-y` 必须逐条单独请示**：批准"目标"（如"修 Mo2S3"）**不等于**批准具体命令里的 `-f`——不得从目标批准里推断 `-f` 的许可（2026-09-18 教训：以"修 Mo2S3"为由执行了 `start -f`）。**特别地：`mlff` 的 `step5_label`（及一切昂贵的扇出步骤）只用 `retry`/`start -f`，绝不 `rerun`/`clean`**——后两者会 `rm -rf` 步骤目录，毁掉已算完的 DFT 帧。用户说"以后这类都不用问了"才算预先授权。
 3. **监控循环里自动执行的命令只有**：`autozt summary --diff`、`autozt summary`、`autozt list`、`autozt -status <状态> summary`、`autozt -tt <类型> summary`、`autozt -p X status`、`autozt skills`、`autozt auto on`、`autozt -tt <技能> auto on`、`autozt start`、`autozt -p X start`。其余一律先请示（包括 `autozt conf --set`——它会改项目配置）。**巡检严禁每轮拉 `autozt json`**——它是全量结构化数据，token 巨大，只在写工具/做批量分析时才用。
 4. **只读诊断允许直接 ssh**：`tail`/`grep` 日志文件（如 `ssh jzzn 'tail -50 <步骤目录>/slurm-*.out'`、`grep -i error OUTCAR`）。只读，绝不改文件。材料目录下的 `stepN_check_and_resubmit.py`（autozt 已随生成推送到超算）也只允许加 `--check-only` 运行——它的重投功能**严禁使用**（重投一律走 `autozt retry`/`autozt rerun`，两套重投机制并用会打架）。其 stdout 是一行 JSON，退出码 0=converged / 10=not_converged / 20=running / 30=重启超限 / 40=error，可作为深度诊断依据。**注意 3090 服务器无 SLURM**：ssh 过去看到的 squeue 是 fakeslurm 垫片，作业状态一律以 `autozt` 采集为准，别用真 SLURM 语义判读。
 5. **用退出码判成败**：`autozt` 命令退出码 0 = 成功；非 0 = 失败或被拒绝。失败时把输出原文呈给用户，不要粉饰、不要假装成功。
 6. **不确定就报告并等待**。宁可少做，不要猜。
 7. **本地计算文件与项目统一放 `/mnt/d/tf_data/work_AutoZT`**：今后新建的项目目录、VASP 计算文件（WAVECAR/CHGCAR/CHG/ELFCAR/OUTCAR/POSCAR/INCAR 等）和归档备份，一律放在 `/mnt/d/tf_data/work_AutoZT/` 下，不再散放在 `/mnt/d/tf_data/` 根目录或其它位置。涉及新建项目时，确认 `autozt.yaml` 的 `project_roots` 已包含该路径。
-8. **流水线巡检/推进一律用 `autozt auto on` + `monitor.sh`（或 `auto_watch`），禁止自己另写监控脚本**。`autozt auto on` 是 DAG 推进（按依赖找就绪步骤，S0 FAIL 不阻塞 S3/S4），`monitor.sh` 每 10 分钟自动跑 `autozt auto on` + `autozt summary --diff`。agent 的巡检 cron 保持只读（`autozt summary --diff`），发现就绪步骤时主动 `autozt -tt <技能> auto on` 推进即可；**不要自己写 ssh 循环 / bash 循环 / 定时脚本来代替 autozt 的自动监控**。唯一例外：不在 autozt 16 个技能管辖内的**独立诊断任务**（如手动跑 Pheasy 拟合、声子交叉验证、拟合参数扫描），才允许 ssh 只读诊断 + 手动跟踪该独立计算的进度。
+8. **流水线巡检/推进一律用 `autozt auto on` + `monitor.sh`（或 `auto_watch`），禁止自己另写监控脚本**。`autozt auto on` 是 DAG 推进（按依赖找就绪步骤，S0 FAIL 不阻塞 S3/S4），`monitor.sh` 每 10 分钟自动跑 `autozt auto on` + `autozt summary --diff`。agent 的巡检 cron 保持只读（`autozt summary --diff`），发现就绪步骤时主动 `autozt -tt <技能> auto on` 推进即可；**不要自己写 ssh 循环 / bash 循环 / 定时脚本来代替 autozt 的自动监控**。唯一例外：不在 autozt 20 个技能管辖内的**独立诊断任务**（如手动跑 Pheasy 拟合、声子交叉验证、拟合参数扫描），才允许 ssh 只读诊断 + 手动跟踪该独立计算的进度。
 9. **禁止未经批准降低核数重交，必须询问**。为缓解排队而降核重交（如 24 核→8 核）会改变并行设置（NCORE/KPAR 影响 VASP 数值路径与收敛），且降核只是缓解手段之一（还有提 qos、分批提交、等队列）。**执行前必须向用户说明**：① 排队瓶颈证据；② 降核的影响（数值一致性、耗时变化）；③ 替代方案（换 qos / 分批 / 等）。得到明确同意后才做。**改核数必须走 AutoZT 正式机制**：改 `setting/<hpc>/templates/submit_*.tpl` 的 `--ntasks-per-node` 与 `defects_common.build_job` 的 NCORE/KPAR（或项目级 `project_setting/templates/` 覆盖）→ `autozt -p MAT -j STEP retry`（重新生成输入，保留 OUTCAR/CONTCAR）→ `autozt -p MAT -j STEP start`（提交）。**严禁**手动 `sed` 远程 INCAR/submit.sh + 手动 `sbatch` 绕过 `autozt`——那会违反铁律 1，且让 AutoZT 状态表与超算实际作业脱节，后续 `stop`/`retry`/`auto` 会误判。
 
-10. **禁止擅自新建技能/步骤/脚本，必须用户同意**。① 动手前先 `autozt skills` / `ls skill/` 查现成能力；已有技能或技能内现成步骤（band/defect/elastic/ke/kl/opt/phonon/mace 等 16 个）直接使用，禁止另起炉灶。② 在 `skill/` 下新建技能目录、往已有技能加新步骤目录或新 gen 脚本、写与现成技能功能重叠的一次性脚本（如自写 transport/defect/band 分析器），都是**受控操作**：先向用户说明「要做什么 / 为什么现成技能做不到 / 放哪影响谁」，得到明确同意后才执行。③ 用户说"用现成技能/不要加步骤"时立即停止，改用既有技能，不辩解不绕道。（本铁律与 `~/.dsh/AGENTS.md` 第 1 节一致，用户级规则自动注入所有 DSH 会话。）
-11. **换服务器装软件与环境：一律装到该服务器 `~/software/AutoZT/`**。新超算/新账号部署 AutoZT 依赖（VASP、conda/venv、MACE 模型、POTCAR 赝势库、工具链）时，目录不存在先 `mkdir -p ~/software/AutoZT`，**每个软件/环境一个子目录**，不散装到 home 根或 `~/software/` 直下；装完把实际路径写进 `setting/<hpc>.yaml`（conda_sh/mace_model_dir/potcar_dir/…）。布局与命名约定见 `setting/README.md`；既有存量不强制迁移，确需搬迁先请示。
+10. **禁止擅自新建技能/步骤/脚本，必须用户同意**。① 动手前先 `autozt skills` / `ls skill/` 查现成能力；已有技能或技能内现成步骤直接使用，禁止另起炉灶。② 在 `skill/` 下新建技能目录、往已有技能加新步骤目录或新 gen 脚本、写与现成技能功能重叠的一次性脚本（如自写 transport/defect/band 分析器），都是**受控操作**：先向用户说明「要做什么 / 为什么现成技能做不到 / 放哪影响谁」，得到明确同意后才执行。③ 用户说"用现成技能/不要加步骤"时立即停止，改用既有技能，不辩解不绕道。（本铁律与 `~/.dsh/AGENTS.md` 第 1 节一致，用户级规则自动注入所有 DSH 会话。）
+11. **换服务器装软件与环境：一律装到该服务器 `~/software/AutoZT/`**。新超算/新账号部署 AutoZT 依赖（VASP、conda/venv、MACE 模型、POTCAR 赝势库、工具链）时，目录不存在先 `mkdir -p ~/software/AutoZT`，**每个软件/环境一个子目录**，不散装到 home 根或 `~/software/` 直下；装完把实际路径写进 `setting/<hpc>.yaml`（conda_sh/mlff_model_dir/potcar_dir/…）。布局与命名约定见 `setting/README.md`；既有存量不强制迁移，确需搬迁先请示。
+12. **临时索引提交后必须核对工作树与 HEAD 一致**：用 `GIT_INDEX_FILE` 临时索引提交只写索引/树，**不会改工作树**，所以"commit 成功"不等于"本地实际运行的文件已更新"（2026-09-22 教训：别名补丁提交进了 HEAD，工作树里却缺 `SKILL_ALIASES`，本地 `autozt` 一度少了这段修复）。每次这样提交后，对本次涉及的每个路径跑 `git diff HEAD -- <路径>`：应为空，或只剩明确属于其它工作线的改动；发现漏落立即报告用户，**不要自行补**。
 
 ## 二点一、HanHai 连接强制流程
 
@@ -66,7 +67,7 @@ autozt summary --diff                  # ★ 巡检首选：与上次快照对�
 autozt summary                         # 只读极简汇总（每类型一行 run/pd 分开计数 + FAIL 清单 + 全局队列），总是输出
 autozt list                            # 只读状态总表（不 auto-fetch、不 auto-advance，绝不提交）
 autozt status                          # 状态总表 + auto-fetch + auto-advance（会拉文件、会提交，巡检别用）
-autozt -tt band-dft-cpu summary                # 只看某类型（16 个技能全名见第一节）
+autozt -tt band-dft-cpu summary                # 只看某类型（20 个技能全名见第一节）
 autozt -status error summary           # 只看有失败步骤的材料（error 可换 running/pd/waiting/scancel，逗号分隔）
 autozt -p MAT status                   # 单材料详情（含每步诊断信息、hpc、Dim）
 autozt [-tt TT] -p MAT start           # 推进该材料：输入没生成先 gen 再提交
@@ -75,7 +76,11 @@ autozt [-tt TT] [-p MAT] advance       # 一次性采集、拉回已完成结果
 autozt monitor [-i 秒] -d              # 后台监控：自动拉结果+自动提交（restart 重做；watch 为旧名，仍可用）
 autozt [-tt TT] -p MAT [-j STEP] stop     # 取消作业（破坏性，先请示）
 autozt [-tt TT] -p MAT [-j STEP] retry    # 保留产物重生成输入，不提交；检查后 start（fanout 只补未完成子目录）
-autozt [-tt TT] -p MAT [-j STEP] rerun    # 删目录重新生成（破坏性，先请示；mlff-mace step5_label 禁用）
+                                          #   ★ 从未跑过的步骤【不能用 retry】：它先要 cd 步骤目录归档旧调度日志，
+                                          #     而那目录还不存在 -> 报"归档旧调度日志失败"并 exit=1（输入一个字节
+                                          #     都不生成）。首次生成用下面的 `init -j`，检查后再 `start`。
+                                          #     实测：2026-09-21 S4b_wavefull（CrSe2_hex）踩过。
+autozt [-tt TT] -p MAT [-j STEP] rerun    # 删目录重新生成（破坏性，先请示；mlff step5_label 禁用）
 autozt -p MAT dir                      # 该材料在超算的目录（拼只读诊断命令用）
 autozt [-p MAT] [-j STEP] clean        # 删除生成物回到 PREP（破坏性，先请示）
 autozt [-p MAT] fetch                  # 手动强制拉回结果（status 时已自动保存完成的步骤，一般不用跑）
@@ -107,7 +112,11 @@ autozt auto [on|off]                   # 一键开关全局 auto_advance（改�
 - **每技能并发提交上限 `max_jobs`**：全局 autozt.yaml 里每个 `task_types.<key>.max_jobs: 100` 限制该技能「同时提交」的超算作业数；只卡 sbatch、不卡本地生成输入。达到上限后，未提交的任务会先本地生成输入（状态 `TODO`）待命，等有空位自动补交——**这是正常待命，不是故障**，别反复深查。
 - **挂死作业自动恢复（`hang_check`，默认开，当前 `hang_dry_run: true` 观察期）**：monitor 用**进度指纹**判定挂死——(OUTCAR 字节数, OSZICAR 行数) 连续 `hang_min_stale_rounds` 轮不变且输出年龄超 `hang_stale_secs` 才算（指纹在涨 = 活着，不判）；SCF 迭代 rms 还在降 = 慢但活着，不判。判定后按原因处理：SCF 空转 → 自动升级 INCAR（补 AMIX/BMIX → ALGO=All → NELM≥200，原子写+备份）后 `scancel`（等退出）+ 校验 CONTCAR 续跑重交；NODE_FAIL → 直接重跑；磁盘满 → **只告警不重跑**。每个作业最多 `hang_max_retries` 次，计数在 `<配置目录>/.tf_hung.json`。`hang_dry_run: true` 时只打印判定不动手。所以「作业卡住不动」这类问题 **autozt 会自动处理**（观察期自动恢复是关的，日志里 `hang[干跑]` 只是预演），AI 不需要手动 scancel/续跑/改 INCAR；只有当同一作业反复被判挂死（看 `.tf_hung.json` 或 monitor 日志的「停止重试」告警）才需要介入。确认观察期无误后把 `hang_dry_run` 改 `false` 启用自动恢复。
 - v3 本地模式：输入文件以本地项目目录为准，超算只是算力；每个项目有自己的 `project_setting/`。改这些文件前必须请示。
-- **mlff-mace 专属**：代数迭代用 `autozt -tt mlff-mace -p MAT conf --set params.GENERATION=K`（先请示）→ `autozt -tt mlff-mace -p MAT -j 4 retry`（★ 用 retry 别用 rerun：rerun 会删掉 gen-0..gen-(K-1) 的历史清单+结构文件，S6 累计数据集会丢帧；retry 保留它们并重新生成新代清单）→ `autozt -tt mlff-mace -p MAT -j 4 start`（生成新代；5/6/7/8 自动补生成/重跑/提交）。`step8` 报 `halt_*` 是**设计内的停机**（连续两代无改善/曲线已平/超 MAX_GENERATION），不是故障：报告 + 附排查清单，**不擅自设 `FORCE_CONTINUE=true`**。
+- **mlff 专属**：代数迭代用 `autozt -tt mlff -p MAT conf --set params.GENERATION=K`（先请示）→ `autozt -tt mlff -p MAT -j 4 retry`（★ 用 retry 别用 rerun：rerun 会删掉 gen-0..gen-(K-1) 的历史清单+结构文件，S6 累计数据集会丢帧；retry 保留它们并重新生成新代清单）→ `autozt -tt mlff -p MAT -j 4 start`（生成新代；5/6/7/8 自动补生成/重跑/提交）。`step8` 报 `halt_*` 是**设计内的停机**（连续两代无改善/曲线已平/超 MAX_GENERATION），不是故障：报告 + 附排查清单，**不擅自设 `FORCE_CONTINUE=true`**。
+
+### CrSe2_hex 手动推进保护（2026-09-21 用户决定）
+
+当前 `setting/tf.yaml` 必须保持 `auto_advance: false`、`auto_watch: false`。该配置被 `.gitignore` 排除，不能依赖 Git 追溯或恢复；未经用户重新明确批准不得开启自动推进。旧仓全局 `taskflow/monitor.sh` cron 已按确认注释，独立 fc-fit/GPU cron 与已有进程未因此终止。CrSe2_hex 的 S7 由用户终端提交，核对前不自动推进 S7.1_read/S8.4。方案 A 保留隔离 worktree、未合入；瘦身重写延后到这条链完成后。
 
 ## 四、状态判读
 
@@ -130,8 +139,8 @@ autozt auto [on|off]                   # 一键开关全局 auto_advance（改�
 | ├ 收敛困难（`force not converged`、ZBRENT、EDDAV 等） | 建议 `retry`（opt 步会自动 cp CONTCAR POSCAR 续算） |
 | ├ 明显参数/结构错误（INCAR 报错、POSCAR 解析失败、磁矩/电荷异常） | 建议用户检查，同意后 `rerun` |
 | ├ 节点/队列问题（NODE_FAIL、被抢占、磁盘满） | 建议 `retry` |
-| ├ mlff-mace `step5_label` 个别帧 FAIL | 建议 `retry`（只补没完成的帧）；**绝不 rerun/clean** |
-| ├ mlff-mace `step8` 停机（`halt_*`，diag 含"已停止"） | 设计内停机：把 diag 的排查清单呈给用户，请示是否调整参数或 `FORCE_CONTINUE` |
+| ├ mlff `step5_label` 个别帧 FAIL | 建议 `retry`（只补没完成的帧）；**绝不 rerun/clean** |
+| ├ mlff `step8` 停机（`halt_*`，diag 含"已停止"） | 设计内停机：把 diag 的排查清单呈给用户，请示是否调整参数或 `FORCE_CONTINUE` |
 | └ 判断不了 | 把日志摘要给用户，请示，不动 |
 | `PD(...)` 排队 | 正常，不动。QOSMaxJobsPerUserLimit 说明撞了作业数上限，等slot |
 | `R` 运行时间明显超过同类作业 | 报告一次，不重复提醒（挂死由 hang_check 自动恢复，先查 monitor 日志 / 配置目录下的 .tf_hung.json 看是否已恢复过） |
@@ -200,7 +209,7 @@ autozt auto [on|off]                   # 一键开关全局 auto_advance（改�
 用户："把 qTPC24 的第二步重交" → `autozt -tt band-dft-cpu -p C24/qTPC24 -j 2 retry`，核验输入后 `autozt -tt band-dft-cpu -p C24/qTPC24 -j 2 start`，分别报告生成和提交结果；只有 start 成功后才报告新 jobid。
 用户："kl-dft-cpu 那个 Sn2Bi2Te 从头再来" → 属破坏性：`rerun` 前复述后果（删除全部步骤目录），确认后 `autozt -tt kl-dft-cpu -p Sn2Bi2Te rerun`。
 用户："qHPC20 弹性常数想跑 A800" → `autozt -tt elastic-dft-cpu -p qHPC20 hpc a800`（改配置，说明只影响之后提交的作业）。
-用户："mlff-mace 的 Si 继续下一代" → 说明三步：`conf --set params.GENERATION=K`（请示后执行）→ `-j 4 retry`（保留 gen-* 历史清单，勿用 rerun）→ `start`；若 S5 有帧失败只 `retry`。
+用户："mlff 的 Si 继续下一代" → 说明三步：`conf --set params.GENERATION=K`（请示后执行）→ `-j 4 retry`（保留 gen-* 历史清单，勿用 rerun）→ `start`；若 S5 有帧失败只 `retry`。
 用户："现在整体什么情况" → `autozt summary` 先给一句话总览，别一上来就 `autozt json`。
 
 ## 九、作业探测（autozt probe）—— 判「弛豫 / 崩溃 / 卡死」
