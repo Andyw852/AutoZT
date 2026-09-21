@@ -247,8 +247,14 @@ def run(cwd, out_dir=None, unity_overlap=False):
     two_d = is_2d_run(cwd, out_dir)
     lines, err, warn = [], False, False
     # step.conf 显式覆盖 UNITY_OVERLAP 时，gen 会在 settings.yaml 里写
-    # AZ_OVERLAP_CONTROLLED=1 —— 表示这是一次**受控对照**（同一份 settings 只翻重叠开关）：
-    # ⓪/② 由"拦截"降为"告警"，且结果只用于算比值、不作生产结果。
+    # AZ_OVERLAP_CONTROLLED=1 —— ⓪/② 由"拦截"降为"告警"。
+    # ★ 2026-09-20 澄清（用户）：这个标记只是**放行开关**，不改变结果的物理性质。
+    #   若 h5 是**完整网格（走 from_data）**，这次 run 就是**生产数据**，不是"只能算比值的对照"；
+    #   "受控对照"的定位只适用于**不完整 h5** 的真实重叠。⓪ 在 h5 检查之前执行、拿不到完整性，
+    #   所以这里措辞偏保守——看到"不作生产结果"那句时，先看 ② 的 h5 是否完整：
+    #   完整网格 + from_data 的真实重叠 = 可信生产数据（V23 的残差已解释：谷内通道也被压低，
+    #   实测均值约 0.9，且 N_ch=3.13 > ADP 比值 2.52）。
+    #   TODO（不急）：把 ⓪/② 的放行判据改成"完整网格即放行"，不再借用 AZ_OVERLAP_CONTROLLED。
     _st = Path(out_dir) / "settings.yaml"
     controlled = bool(_st.is_file() and "AZ_OVERLAP_CONTROLLED=1" in _st.read_text(errors="ignore"))
 

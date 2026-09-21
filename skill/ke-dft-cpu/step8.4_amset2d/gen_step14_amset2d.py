@@ -111,7 +111,15 @@ INTERPOLATION_FACTOR = 10
 #   裁决结论：真实重叠必须让 h5 走 from_data（见 wavefunction_full 分支），
 #   否则 ADP 迁移率会被抬高 10~30 倍。所以在拿到全网格波函数之前，这里固定 True。
 #   要真实重叠：打开 optional_steps.wavefunction_full，并把这个常量改成 False。
+#   也可由 step.conf 覆盖：UNITY_OVERLAP = true/false（见 SPEC / main 的 conf 块）。
 UNITY_OVERLAP = True
+# patch_wavefunction_full（2026-09-20，二维版；照搬 gen_step10_amset.py 的三维逻辑）：
+#   可选改读**全网格** h5（step4b_wave_full，ISYM=-1 写出全部 k 点），让 AMSET 走
+#   from_data、跳过去对称化（TR×R bug 见 VERIFICATION V33/V37）。打开方式：项目
+#   project_setting 里写 wavefunction_full: true 或本步 step.conf 写 WAVEFUNCTION_FULL = true。
+#   h5 与 vasprun 必须同源（都取 step3b/step4b），否则 h5 点数与 vasprun 网格对不上。
+#   默认 False = 仍读 step4_wave，二维既有行为完全不变。
+WAVEFUNCTION_FULL = False
 # --- 弹性常数来源（amset run 的 ACD 散射需要）---
 #   MANUAL_ELASTIC 填了就用它，否则从 ELASTIC_DIR/OUTCAR 自动解析（kBar→GPa）。
 #   直接填：单个数（各向同性近似，GPa），或 6x6 列表（完整 Cij，GPa）。
@@ -151,6 +159,15 @@ SPEC = {
     "LAYER_THICKNESS": (LAYER_THICKNESS, "str"),
     # NWORKERS 必须在 SPEC 里声明，否则 step.conf 里写了会被判成"不认识的键"。
     "NWORKERS": (NWORKERS, "int"),
+    # 全网格 h5 分支（二维真实重叠的唯一干净路径）；默认 False，既有二维项目行为不变。
+    "WAVEFUNCTION_FULL": (WAVEFUNCTION_FULL, "bool"),
+    # unity_overlap 覆盖（受控对照/真实重叠用）：auto/true/false；默认 auto = 现行行为。
+    "UNITY_OVERLAP": ("auto", "str"),
+    # 插值因子覆盖（2026-09-20）：AMSET 收敛判据在插值后的网格上。
+    #   稠密网格 ~ (factor*nk)^2*nkz，内存/耗时按此平方级增长 ——
+    #   实测 factor=10 + nworkers=24 在共享节点上 MaxRSS 292 GB 被 OOM 杀。
+    #   项目里按需降到 4（已校准口径：与 factor 10 差 6-11%，见 V23）。
+    "INTERPOLATION_FACTOR": (INTERPOLATION_FACTOR, "int"),
 }
 # --- amset2d 插件相关（可改）---
 PLUGIN_SRC_NAME = "amset2d_plugin.py"   # 与本脚本同目录，运行时复制到 OUTDIR_NAME
@@ -1238,6 +1255,10 @@ def write_settings(out: Path, eps_inf, eps_static, gap, elastic,
     if not UNITY_OVERLAP:
         lines.append("# ^ 真实重叠：**必须**让 h5 走 from_data（wavefunction_full 分支），"
                      "否则结果不可信（见 overlap_preflight.py 的拦截）")
+        # patch_overlap_controlled（2026-09-20，照搬 gen_step10_amset.py L982）：
+        #   step.conf 显式写 UNITY_OVERLAP=false 时，让 overlap_preflight 知道这是
+        #   "显式放行的受控对照"，把 ⓪ 的拦截降为告警——否则全网格真实重叠也无法跑。
+        lines.append("# AZ_OVERLAP_CONTROLLED=1")
     # ★ 必须显式写 nworkers：不写则 AMSET 默认 -1 = 用满节点全部核，
     #   会超订提交模板申请的核数（见文件头 NWORKERS 处的说明）。
     lines.append("nworkers: %d" % int(NWORKERS))
@@ -1372,7 +1393,8 @@ def _alloc_cores(cwd: Path):
 def main():
     _disc_gate()
     cwd = Path.cwd()
-    global LAYER_THICKNESS, NWORKERS
+    global LAYER_THICKNESS, NWORKERS, UNITY_OVERLAP, WAVEFUNCTION_FULL
+    global INTERPOLATION_FACTOR
     _conf_nworkers = None
     if (cwd / "step.conf").is_file():
         # strict=False：材料级 step.conf 是【全技能共用】的一份，含别的步骤的键
@@ -1385,6 +1407,28 @@ def main():
                 LAYER_THICKNESS = _p["LAYER_THICKNESS"]
             if _p["NWORKERS"]:
                 _conf_nworkers = int(_p["NWORKERS"])
+            # patch_interp_factor 覆盖（2026-09-20）：与 NWORKERS 同款，缺省沿用常量。
+            if _p["INTERPOLATION_FACTOR"]:
+                _conf_interp = int(_p["INTERPOLATION_FACTOR"])
+                if _conf_interp != INTERPOLATION_FACTOR:
+                    print("[OK] INTERPOLATION_FACTOR = %d（step.conf 覆盖，出厂 %d）"
+                          % (_conf_interp, INTERPOLATION_FACTOR))
+                INTERPOLATION_FACTOR = _conf_interp
+            # 全网格 h5 分支：显式开关，默认 False。
+            if _p["WAVEFUNCTION_FULL"]:
+                WAVEFUNCTION_FULL = True
+                print("[..] WAVEFUNCTION_FULL=true：wavefunction.h5 <- step4b_wave_full"
+                      "（全网格，ISYM=-1），vasprun.xml <- step3b_uniform_full")
+            # unity_overlap 显式覆盖：auto/true/false
+            _uo = str(_p["UNITY_OVERLAP"]).strip().lower()
+            if _uo in ("true", "1", "yes", "on"):
+                UNITY_OVERLAP = True
+                print("[..] UNITY_OVERLAP=true（step.conf 覆盖）：强制 unity_overlap: true")
+            elif _uo in ("false", "0", "no", "off"):
+                UNITY_OVERLAP = False
+                print("[..] UNITY_OVERLAP=false（step.conf 覆盖）：真实重叠（需全网格 h5）")
+            elif _uo != "auto":
+                print("[WARN] UNITY_OVERLAP=%r 不认识（只认 auto/true/false），按 auto 处理" % _uo)
         except (KeyError, ValueError, TypeError):
             pass  # step.conf 读不成时保持出厂默认（LAYER_THICKNESS="vdw" / NWORKERS 自动）
 
@@ -1410,14 +1454,18 @@ def main():
     # 插件随本步复制到运行目录（只在那一次 amset 运行里生效，不改 AMSET 安装）
     _install_plugin(out)
     _install_preflight(out)
-    link(out, cwd / WAVE_DIR / "wavefunction.h5", "wavefunction.h5")
+    _wdir = "step4b_wave_full" if WAVEFUNCTION_FULL else WAVE_DIR
+    link(out, cwd / _wdir / "wavefunction.h5", "wavefunction.h5")
     link(out, cwd / READ_DIR / _pick_deformation_h5(cwd, READ_DIR), "deformation.h5")
     # patch_amset_vasprun：amset run 还需要密网格 vasprun.xml 拿能带色散
+    # 全网格分支时 vasprun 必须同源（step3b_uniform_full）。
+    _vdirs = (("step3b_uniform_full",) if WAVEFUNCTION_FULL
+              else ("step3_uniform", "step4_wave"))
     _vr = next((cwd / _d / "vasprun.xml"
-                for _d in ("step3_uniform", "step4_wave")
+                for _d in _vdirs
                 if (cwd / _d / "vasprun.xml").is_file()), None)
     if _vr is None:
-        sys.exit("[ERROR] 找不到 vasprun.xml（step3_uniform / step4_wave 没跑完？）")
+        sys.exit("[ERROR] 找不到 vasprun.xml（%s 没跑完？）" % " / ".join(_vdirs))
     link(out, _vr, "vasprun.xml")
     eps_inf, eps_static = read_dielectric(cwd / DIELECT_DIR)
     gap = read_bandgap(cwd)
