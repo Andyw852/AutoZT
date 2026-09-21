@@ -103,6 +103,8 @@ def normalize_monitor_command(command, positional, restart=False):
 
 
 def main():
+    from autozt.bootstrap import reset_config_conflicts, reject_config_conflict_targets, filter_config_conflicts
+    reset_config_conflicts()
     # JSON/MCP/agent callers and Windows consoles must see the same UTF-8 text.
     for _stream in (sys.stdout, sys.stderr):
         try:
@@ -291,6 +293,11 @@ def main():
     _gate = agent_direct_gate(cfg, cmd, sys.argv[1:])   # agent 会话直接调用 → 审计
     if _gate is not None:
         sys.exit(_gate)
+    if cmd == "monitor" and a.proj:
+        from autozt.bootstrap import scan_project_configs
+        _roots = cfg.get("project_roots") or [t.get("local_root") for t in (cfg.get("task_types") or {}).values() if isinstance(t, dict) and t.get("local_root")]
+        scan_project_configs(_roots, cfg.get("project_root_excludes"))
+        reject_config_conflict_targets(a.proj, a.tt)
     if cmd == "monitor":   # 控制类操作不采集状态，提前短路
         if a.install:
             sys.exit(_watch_cron(True))
@@ -322,6 +329,8 @@ def main():
     if cmd == "session" and not (a.proj or mat_toks):
         # 缺材料名不必采集（省一次 ssh）：直接给用法
         sys.exit(cmd_session(cfg, None, None))
+    cfg = merge_project_configs(cfg)
+    reject_config_conflict_targets(a.proj, a.tt)
     if cmd == "history" and not a.hist_write:
         # v1.0：直接读 history.jsonl（不采集、不连超算、不提交）。
         # 记录是自动的——任何一次真正采集都会追加；--write 时才先采集一轮再读。
@@ -329,7 +338,6 @@ def main():
                              proj=a.proj or (mat_toks[0] if mat_toks else None),
                              tt=a.tt, since=a.since, last_n=a.last_n or 40,
                              json_out=a.json_out))
-    cfg = merge_project_configs(cfg)   # v3.1：合并项目配置 project_setting/tf_*.yaml
     if a.host is not None:
         cfg["host"] = a.host or None
     if a.user:
@@ -450,6 +458,7 @@ def main():
             pass
     _dbg_t("状态采集（ssh+远端扫描）", _t0)
 
+    filter_config_conflicts(data)   # 包含旧缓存；必须先于状态过滤/动作分派
     apply_exclude(data, a.exclude)   # v3.11：-x 跳过指定项目
 
     incl_sc = status_spec_has_scancel(a.status_f)   # v1.4

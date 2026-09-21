@@ -72,7 +72,8 @@ def _state_cache_load(cfg, types, tt, root, ttl):
         return None
     if time.time() - float(payload.get("ts") or 0) > ttl:
         return None
-    return payload.get("data")
+    from autozt.bootstrap import filter_config_conflicts
+    return filter_config_conflicts(payload.get("data") or {})
 
 def collect_data(cfg, types):
     """按类型采集全部材料状态（远端/本地两段路径），供各命令及 watch 循环复用。"""
@@ -97,7 +98,8 @@ def collect_data(cfg, types):
                                                      + te["materials"])
             else:
                 data_types.append(te)
-    data = annotate({"host": cfg.get("host") or "local", "types": data_types})
+    from autozt.bootstrap import filter_config_conflicts
+    data = annotate(filter_config_conflicts({"host": cfg.get("host") or "local", "types": data_types}))
     if queue_by_host:
         data["queue"] = _queue_total(queue_by_host)
     local_by_key = {t["key"]: t for t in types}

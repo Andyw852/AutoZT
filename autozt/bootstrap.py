@@ -911,16 +911,113 @@ def _skill_spec_brief(s):
 #   L1530  get_types
 #   L1595  step_cfg
 
+# 命令级安全状态：重复扫描只能扩大屏蔽集，不会重新选中某个副本。
+_CONFIG_CONFLICTS = {}
+_CONFIG_BLOCKS = []
+_CONFIG_WARNED = False
+
+
+def reset_config_conflicts():
+    global _CONFIG_WARNED
+    _CONFIG_CONFLICTS.clear()
+    _CONFIG_BLOCKS.clear()
+    _CONFIG_WARNED = False
+    _RESOLVE_DISC_CACHE.clear()
+
+
+def _register_config_conflicts(conflicts):
+    global _CONFIG_WARNED
+    for name, paths in sorted(conflicts.items()):
+        old = _CONFIG_CONFLICTS.setdefault(name, set())
+        for path in sorted(set(paths) - old):
+            owner = os.path.dirname(os.path.dirname(path))
+            # 技能子目录的配置属于父材料；体系级配置只屏蔽本体系子树，
+            # 绝不能按 local_root=".." 屏蔽它的正常 sibling。
+            if os.path.isfile(os.path.join(os.path.dirname(owner), "POSCAR")):
+                owner = os.path.dirname(owner)
+            pc = {}
+            try:
+                pc = _load_yaml_file(path)
+                keys = set((pc.get("task_types") or {}).keys())
+            except (Exception, SystemExit):
+                pc = {}
+                keys = set()  # 不能识别类型时保守屏蔽所有类型。
+            aliases = set()
+            for seg in (pc.get("task_types") or {}).values() if isinstance(pc, dict) else []:
+                lr = (seg or {}).get("local_root")
+                proj_dir = os.path.dirname(os.path.dirname(path))
+                if lr:
+                    lr = os.path.realpath(os.path.join(proj_dir, os.path.expanduser(str(lr))))
+                elif os.path.isfile(os.path.join(proj_dir, "POSCAR")):
+                    lr = os.path.dirname(proj_dir)
+                elif os.path.isfile(os.path.join(os.path.dirname(proj_dir), "POSCAR")):
+                    lr = os.path.dirname(os.path.dirname(proj_dir))
+                else:
+                    lr = proj_dir
+                for m in discover_local(owner, _include_blocked=True)[1]:
+                    aliases.add(name + "/" + os.path.relpath(m["lpath"], lr))
+            _CONFIG_BLOCKS.append((owner, keys, name, aliases))
+        old.update(paths)
+    if _CONFIG_CONFLICTS and not _CONFIG_WARNED:
+        lines = ["警告：同名项目配置冲突，以下配置及所属材料已屏蔽（不选择任何副本）："]
+        for name, paths in sorted(_CONFIG_CONFLICTS.items()):
+            lines.append("  tf_%s.yaml:" % name)
+            lines.extend("    " + p for p in sorted(paths))
+        print("\n".join(lines), file=sys.stderr)
+        _CONFIG_WARNED = True
+
+
+def config_material_blocked(path, tt=None):
+    rp = os.path.realpath(os.path.expanduser(str(path)))
+    return any((not tt or not keys or tt in keys)
+               and (rp == owner or rp.startswith(owner + os.sep))
+               for owner, keys, _name, _aliases in _CONFIG_BLOCKS)
+
+
+def reject_config_conflict_targets(projs, tt=None):
+    """在采集、状态过滤和任何本地写入之前拒绝显式目标。"""
+    for want in (x.strip() for x in (projs or "").split(",") if x.strip()):
+        for owner, keys, name, aliases in _CONFIG_BLOCKS:
+            if tt and keys and tt not in keys:
+                continue
+            # basename、完整相对材料名、绝对材料路径；体系配置也覆盖其材料。
+            candidates = [owner] + [m["lpath"] for m in discover_local(owner, _include_blocked=True)[1]]
+            if want == name or want in aliases or any(
+                    (os.path.isabs(want) and os.path.realpath(want) == p)
+                    or (not os.path.isabs(want) and (p == want or p.endswith(os.sep + want)))
+                    for p in candidates):
+                sys.exit("错误：材料 %s 命中同名配置冲突，已屏蔽；请先人工消除冲突（例如重命名一份配置或移入 _archive；本命令不自动处理）。" % want)
+
+
+def filter_config_conflicts(data):
+    """缓存/远端旧模式的最后一道防线；无本地路径时按名称保守判断。"""
+    for t in data.get("types", []):
+        kept = []
+        for m in t.get("materials", []):
+            if m.get("lpath"):
+                blocked = config_material_blocked(m["lpath"], t.get("key"))
+            else:
+                try:
+                    reject_config_conflict_targets(m.get("name"), t.get("key"))
+                    blocked = False
+                except SystemExit:
+                    blocked = True
+            if not blocked:
+                kept.append(m)
+        t["materials"] = kept
+    return data
+
+
 def scan_project_configs(roots, excludes=None):
     """扫描项目根下 project_setting/tf_*.yaml。
-    返回 [(配置名, 路径, 项目目录)]；配置名（tf_<名>.yaml 的 <名>）全局唯一，重复即报错。
+    返回 [(配置名, 路径, 项目目录)]；配置名（tf_<名>.yaml 的 <名>）同 realpath 去重，不同文件同名全部屏蔽。
     v-perf：单次 scandir 遍历（只下探目录、不枚举文件），深度≤6，跳过
     result/log/隐藏目录——比旧实现 7 个 glob（各遍历整棵树）更快，且不枚举
     数据文件（os.walk 在 WSL DrvFS 等慢盘上枚举文件极慢）。
     excludes（可选）：不参与发现的目录子树，绝对路径 / 路径前缀 / glob 都可（tf.yaml 的
     project_root_excludes）。用途：某个根下混着【别的仓正在用】的项目时，把那一层排掉，
     避免本仓误推进/误 fetch 它们。"""
-    seen, found = {}, []
+    seen = {}
     # 排除项在进栈/下探两处都判：即使 project_setting 挂在更深一层也不会被发现。
     _EXCL = [os.path.realpath(os.path.expanduser(str(x))) for x in (excludes or []) if str(x).strip()]
 
@@ -941,8 +1038,7 @@ def scan_project_configs(roots, excludes=None):
     def _is_archive(p):
         return any(m in p for m in _ARCHIVE_MARK)
 
-    for r in roots:
-        r = os.path.realpath(os.path.expanduser(str(r)))
+    for r in sorted({os.path.realpath(os.path.expanduser(str(r))) for r in roots}):
         if not os.path.isdir(r):
             print("警告：project_roots 里的 %s 不存在，跳过。" % r, file=sys.stderr)
             continue
@@ -969,28 +1065,15 @@ def scan_project_configs(roots, excludes=None):
                             and not _is_archive(e.path) \
                             and not _excluded(e.path):     # 排除项也不下探
                         subdirs.append(e.path)
-            for ps in ps_entries:
+            for ps in sorted(ps_entries):
                 for p in sorted(glob.glob(os.path.join(ps, "tf_*.yaml"))):
                     name = os.path.basename(p)[len("tf_"):-len(".yaml")]
-                    if name in seen and seen[name] != p:
-                        # [FIX-重复配置] 同名冲突不直接退出：归档/备份副本忽略（保留活跃的），
-                        # 其余警告取先扫到的。真正的活跃同名仍是数据问题，但不再阻塞流程。
-                        if _is_archive(p) and not _is_archive(seen[name]):
-                            print("警告：配置名 tf_%s.yaml 重复，忽略归档副本：%s"
-                                  % (name, p), file=sys.stderr)
-                            continue
-                        if _is_archive(seen[name]) and not _is_archive(p):
-                            print("警告：配置名 tf_%s.yaml 重复，忽略归档副本：%s"
-                                  % (name, seen[name]), file=sys.stderr)
-                        else:
-                            print("警告：配置名 tf_%s.yaml 重复，取第一个：\n  %s\n  %s"
-                                  % (name, seen[name], p), file=sys.stderr)
-                        seen[name] = p
-                        found = [(n2, p2, d2) for n2, p2, d2 in found if n2 != name]
-                    seen[name] = p
-                    found.append((name, p, os.path.dirname(os.path.dirname(p))))
-            stack.extend(subdirs)
-    return found
+                    rp = os.path.realpath(p)
+                    seen.setdefault(name, set()).add(rp)
+            stack.extend(sorted(subdirs, reverse=True))
+    _register_config_conflicts({n: sorted(ps) for n, ps in seen.items() if len(ps) > 1})
+    return [(n, next(iter(ps)), os.path.dirname(os.path.dirname(next(iter(ps)))))
+            for n, ps in sorted(seen.items()) if len(ps) == 1 and n not in _CONFIG_CONFLICTS]
 
 def _stepconf_param_from_file(path, key):
     """极简读取 step.conf 里某 [params] 键的值（行尾 # / ! 注释剥掉）。
@@ -1194,7 +1277,7 @@ def step_cfg(t, sname, m=None):
 def _natkey(s):
     return [int(x) if x.isdigit() else x for x in re.split(r"(\d+)", s)]
 
-def discover_local(local_root):
+def discover_local(local_root, tt=None, _include_blocked=False):
     """本地项目根下发现有 POSCAR 的目录（root 自身 + ≤2 层嵌套；
     project_setting/result/log 天然无 POSCAR）。
     v1.1：root 自身也算——"一材料一项目"（local_root 直指材料目录，
@@ -1218,6 +1301,8 @@ def discover_local(local_root):
                     and not _under_picked(d)):
                 mats.append({"name": os.path.relpath(d, root), "lpath": d})
                 picked.append(os.path.realpath(d))
+    if not _include_blocked:
+        mats = [m for m in mats if not config_material_blocked(m["lpath"], tt)]
     mats.sort(key=lambda m: _natkey(m["name"]))
     return root, mats
 

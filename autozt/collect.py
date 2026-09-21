@@ -113,7 +113,7 @@ def collect_v3_batch(cfg, segs):
     返回按段组织的类型条目列表（保持段顺序，_dedup_segments 归属判定依赖它）。"""
     resolved = []
     for t in segs:
-        root, mats = discover_local(t["local_root"])
+        root, mats = discover_local(t["local_root"], tt=t["key"])
         for m in mats:
             resolve_material_local(t, root, m)
         steps = []

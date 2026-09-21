@@ -724,6 +724,8 @@ def resolve_mat_dir(cfg, types, tt, want, cwd=None):
     project_setting 后 local_root 也跟着没了，只能靠扫盘自举回来。
     批量 -p 时同一 local_root 的 discover_local 结果做进程内缓存，避免
     M 材料 × T 类型 重复扫盘。"""
+    from autozt.bootstrap import reject_config_conflict_targets, config_material_blocked
+    reject_config_conflict_targets(want, tt)
     tries = [types or []]
     if tt:
         try:
@@ -734,18 +736,18 @@ def resolve_mat_dir(cfg, types, tt, want, cwd=None):
         for t0 in tlist:
             if not t0.get("local_root"):
                 continue
-            _key = os.path.realpath(os.path.expanduser(t0["local_root"]))
+            _key = (os.path.realpath(os.path.expanduser(t0["local_root"])), tt or t0.get("key"))
             mats = _RESOLVE_DISC_CACHE.get(_key)
             if mats is None:
                 try:
-                    _r, mats = discover_local(t0["local_root"])
+                    _r, mats = discover_local(t0["local_root"], tt=tt or t0.get("key"))
                 except Exception:
                     _RESOLVE_DISC_CACHE[_key] = []   # 发现失败也缓存空，避免重试
                     continue
                 _RESOLVE_DISC_CACHE[_key] = mats
             for m in mats:
                 # v3.21：也接受 <项目名>/<完整名>（跨项目重名材料的限定形式）
-                if _name_matches(m, want, t0):
+                if not config_material_blocked(m["lpath"], tt) and _name_matches(m, want, t0):
                     return m["lpath"]
     roots = [cwd or os.getcwd()]
     for r in (cfg.get("project_roots") or []):
@@ -763,7 +765,7 @@ def resolve_mat_dir(cfg, types, tt, want, cwd=None):
                 os.path.join(r, "POSCAR")):
             return r
         for rel, base, d in _scan_root_dirs(r):
-            if rel == want or base == want:
+            if (rel == want or base == want) and not config_material_blocked(d, tt):
                 return d
     return None
 
@@ -840,6 +842,9 @@ def _init_one_skill(cfg, types, target, name=None, tt=None, force=False,
     hpc.yaml + 映射模板）。已存在的文件不覆盖；项目配置名全局唯一，重复即报错。
     known_names：批量 init 预扫好的 {项目名: tf_*.yaml 路径}，传入则查重 O(1)
     （不再每个材料全树重扫），新建成功后同步加入该集合。"""
+    from autozt.bootstrap import config_material_blocked, _CONFIG_CONFLICTS
+    if config_material_blocked(target, tt):
+        sys.exit("错误：目标材料的同名配置冲突，已屏蔽初始化。")
     cands = [x for x in types if x.get("local_root")]
     if tt:   # v1.9.4：锁定到该技能，否则总是拿到排在最前面的 band
         cands = [x for x in cands if x.get("key") == tt]
@@ -869,11 +874,13 @@ def _init_one_skill(cfg, types, target, name=None, tt=None, force=False,
             if (t and t.get("skill_subdir")) else None)
     ps = (os.path.join(target, _sub, "project_setting") if _sub
           else os.path.join(target, "project_setting"))
-    os.makedirs(ps, exist_ok=True)
     # 项目配置 tf_<项目名>.yaml（命名全局唯一，禁止重复）
     pname = name or re.sub(r"\W+", "_", os.path.basename(os.path.abspath(target)))
     if _sub and tkey and not pname.endswith("_" + str(tkey)):
         pname = "%s_%s" % (pname, tkey)   # v1.7：技能级配置名带技能后缀
+    if pname in _CONFIG_CONFLICTS:
+        sys.exit("错误：配置名 tf_%s.yaml 已因冲突屏蔽，不允许新建或覆盖。" % pname)
+    os.makedirs(ps, exist_ok=True)
     f0 = os.path.join(ps, "tf_%s.yaml" % pname)
     if os.path.exists(f0):
         # v1.2：配置已存在且带了 -tt——缺该类型段就追加（已有项目挂新技能，
@@ -1250,7 +1257,7 @@ def cmd_hpc(cfg, types, projs, cluster, tt, yes):
         root = t.get("local_root")
         if not root:
             continue
-        _r, mats = discover_local(root)
+        _r, mats = discover_local(root, tt=t.get("key"))
         for m in mats:
             # 同一材料可能被多个配置段重复发现（主流程靠 _dedup_segments
             # 去重，这里自查）：hpc.yaml 按 材料+技能 写，一份就够
@@ -1467,7 +1474,7 @@ def _skill_local_mats(cfg, types, tt):
         if not lr:
             continue
         try:
-            _r, mats = discover_local(lr)
+            _r, mats = discover_local(lr, tt=tt or t0.get("key"))
         except Exception:   # noqa: BLE001
             continue
         for mm in mats:
