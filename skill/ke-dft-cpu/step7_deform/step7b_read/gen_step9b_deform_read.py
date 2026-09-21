@@ -13,6 +13,17 @@ import subprocess
 import sys
 from pathlib import Path
 
+# patch_inplane_kc（2026-09-20）：_inplane_dirs() 用 kc.read_lattice_matrix 判"面内/面外"，
+# 但本生成器顶部从未 import ke_common —— 旧代码只在生成出来的 payload 里 import 了它。
+# 于是判面内/面外**永远**抛 NameError -> except 把它当成"全部面内" -> 二维项目里
+# "面内 ionrelax + 面外 clamped" 被误判成 mixed 口径而被**硬拦**（实测 CrSe2_hex：
+# deform-01..04 有 ionrelax、05..09 是面外 clamped，本可放行）。
+# 与 gen_step9_deform.py 的写法一致，补上 ke_common 导入。
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, os.getcwd())
+import ke_common as kc  # noqa: E402
+
 # =========================== 可改参数区 ===========================
 # [SKILL_REV] 版本戳：写进 band_edges.json，与 gen_step12_dpt.py 交叉校验一致。
 _SKILL_REV = "2026-09-16-deform-ref-vacuum"
@@ -261,9 +272,34 @@ import ke_common
 outdir = sys.argv[1]
 
 def _as_dict(edge):
-    return edge if isinstance(edge, dict) else {
+    edge = edge if isinstance(edge, dict) else {
         "energy": edge.energy, "band_index": edge.band_index,
         "kpoint_index": edge.kpoint_index}
+    edge = dict(edge)
+    # [PATCH-BANDIDX] pymatgen 的 BandStructure.get_cbm/get_vbm 对**非自旋极化**
+    #   体系把 band_index 返回成普通 list（只有 AMSET 自己的 Bandstructure 才是
+    #   {Spin: [band_idx]}）。两种都归一成 {Spin: [band_idx]}，自旋键取自
+    #   deformation.h5 的实际自旋道（与 ib / dp 的键同一套），否则下面的
+    #   ib[spin.name] / dp[spin] 会 KeyError 或被静默错取。
+    #   实测：2026-09-21 Mg4C60_relax3 S7.1_read 报
+    #   AttributeError: 'list' object has no attribute 'items'。
+    _bi = edge.get("band_index")
+    if not isinstance(_bi, dict):
+        _spins = list(dp.keys())
+        if not _spins:
+            raise RuntimeError("deformation.h5 里没有任何自旋道，无法归一 band_index")
+        edge["band_index"] = {_spins[0]: [int(b) for b in np.atleast_1d(_bi)]}
+    # [PATCH-BANDIDX] kpoint_index 同理摊平成一维 list（下面按 list 用：
+    #   ki[0] 与 for k_idx in e["kpoint_index"]）。
+    _ki = edge.get("kpoint_index")
+    if isinstance(_ki, dict):
+        _flat = []
+        for _v in _ki.values():
+            _flat.extend(int(x) for x in np.atleast_1d(_v))
+        edge["kpoint_index"] = _flat
+    elif _ki is not None:
+        edge["kpoint_index"] = [int(x) for x in np.atleast_1d(_ki)]
+    return edge
 
 dp, kpoints, structure = load_deformation_potentials("deformation.h5")
 bulk = parse_calculation("undeformed")
@@ -279,10 +315,33 @@ for _sp, _d in dp.items():
             "band 轴与 h5 不一致（h5=%d, ibands[%s]=%d）：检查 deform read 的 "
             "-e/energy_cutoff" % (_d.shape[0], _sp.name, len(ib[_sp.name])))
 
+# [PATCH-METAL] pymatgen 对金属/半金属的 get_cbm/get_vbm 返回 energy=None、
+#   band_index=[]（bs.is_metal() 为真）；而带边形变势 E1/ADP 的前提就是"有带边"。
+#   这里显式判定并给出可读结论，而不是让下游 float(None) 抛一个看不懂的
+#   TypeError，也不是静默写一份 n_hits=0 的 band_edges.json（后者会被 step8.2
+#   当成正常产物继续用）。实测：2026-09-21 Mg4C60_relax3（PBE gap=-0.114 eV、
+#   HSE gap=-0.124 eV，两级别都判金属）。
+def _is_metal(obj):
+    f = getattr(obj, "is_metal", None)
+    try:
+        return bool(f()) if callable(f) else False
+    except Exception:
+        return False
+
+if _is_metal(bs):
+    raise RuntimeError(
+        "体系为金属（pymatgen is_metal=True，undeformed bandstructure 无 VBM/CBM）："
+        "带边形变势 E1 / ADP 对金属不适用 —— 本步不产出 band_edges.json，"
+        "也不应继续 S8.2_dpt。若材料确实有隙，先查 step2 的带隙判别是否被"
+        "零权重路径点或费米面穿过污染。")
+
 out = {}
 for carrier, edge in (("electron", bs.get_cbm()), ("hole", bs.get_vbm())):
     e = _as_dict(edge)
     ene = e["energy"]
+    if ene is None:
+        raise RuntimeError(
+            "%s 带边能量为 None（无带边可定义）—— 带边形变势 E1/ADP 不适用" % carrier)
     hits = []
     for spin, bidxs in e["band_index"].items():
         for b_global in bidxs:

@@ -2794,6 +2794,71 @@ slab cell（c=34.88 Å 含大真空）里 spglib 给的平移无法用原点平�
 与 mos2_s84 同一 settings / plugin / 2d_correction，只把 h5 换成全网格（`fullwave/wavefunction.h5`），
 run 已启动（对照实验）。分机制文献对照草稿在 `tmp/amset2d/paper/lit_compare.md`。
 
+## V37. 匹配对照（同 plugin，只换 h5）：去对称化把**所有机制**都抬高（2026-09-19）
+
+为做论文的 MoS2 分机制文献对照，建了匹配对照 `tmp/amset2d/mos2c_{desym,full}_f04[_all]`
+（**同一份 plugin / 2d_correction / settings**，factor 4，300 K，|n|=1e17，只有 h5 不同：
+desym = `mos2_wave/wavefunction.h5`（不可约）；full = `fullwave/wavefunction.h5`（全网格））：
+
+| 机制 | 全网格 电子/空穴 | 去对称化 电子/空穴 | 抬高 |
+|---|---|---|---|
+| ADP | **230.6 / 1003.7** | 956.3 / 7869.0 | 4.1 / 7.8 |
+| POP | **1968.7 / 1509.9** | 4543.1 / 3249.2 | 2.3 / 2.2 |
+| IMP | 133.2 / 131.6 | 205.1 / 192.3 | 1.5 / 1.5 |
+| 本征(ADP+POP) | **206.4 / 602.9** | 790.0 / 2299.6 | — |
+| overall | **52.7 / 68.6** | 125.0 / 121.4 | 2.4 / 1.8 |
+
+**结论**：
+1. 去对称化（TR×R bug）**把所有机制都抬高**、ADP 最严重（4–8x）→ 论文的 MoS2 全机制参考
+   （`mos2_s84`、集群 `result/step8.4_amset2d`）**必须换成 ISYM=-1 全网格 h5 重跑**。
+2. 干净全网格值与文献对照**成立**：ADP 电子 230.6 对上 Takagi(183–205)；本征电子 206 落在文献
+   127–410；由 mu_POP 反推 **tau_POP ≈ 0.5 ps（亚皮秒）**，对上 Sohier 2016 的 "under the picosecond"。
+   详见 `tmp/amset2d/paper/lit_compare.md`。
+3. 论文数字清单（标注 desym/受污染）：`tmp/amset2d/paper/number_inventory.md`。
+4. **严谨本征值**（率层面，全网格 factor 4，`tmp/amset2d/mos2c_full_f04_intr`，`scattering_type: [ADP, POP]`）：
+   电子 **152.8**、空穴 **531.4** cm2/Vs；含 IMP（`[ADP,IMP,POP]`）52.7/68.6，IMP 惩罚 2.90x/7.75x。
+   逐机制 Matthiessen 估计（206.4/602.9）**高估 ~35%/13%**，不可用。
+5. **factor-10 全网格确认运行反复被会话中断杀掉**（`mos2_full84/run5.log` 停在 "Initializing POP scattering"，无进程、无报错）。重跑命令见 `mos2_full84`（约 25–50 min）。factor 4 与 10 的差别按 V23 只有 ~6–11%，文献对照结论不变。
+
+## V38. CrSe2_hex 的 S7 (B') 归档落地 + ionrelax 归档盲区（2026-09-21）
+
+**背景**：S7_deform 的 10 个形变子目录此前用 `15×15×1` KPOINTS（113 个不可约 k 点），与 S3 的
+`46×46×3`（400 个）口径不一致。`ck_deform` 只查 OUTCAR 是否算完（末尾是否有
+"General timing and accounting informations"），**不比对 KPOINTS**，所以旧产物被判"已完成"而永不重算。
+方案 (B')：不删旧数据，只在 gen 里把各目录 KPOINTS 对齐到基准网格，并把旧输出改名为
+`*.stale-grid-<旧网格标签>`，使 `ck_deform` 自然判失败、`fan_todo` 回满。
+
+**落地结果**（CrSe2_hex，`retry -j S7_deform`，exit=0）：
+- 10 个目录（`undeformed` + `deform-01..09`）**各归档 14 个** `*.stale-grid-15x15x1`，顶层共 **140** 个；
+  顶层残留 `OUTCAR = 0`；KPOINTS 全部为 `46 46 3`；`autozt list` 恢复 `S7_deform 0/10 完成`。
+- gen 新增 `STALE_OUTPUTS`（17 个输出名）与 `_grid_tag()`。**归档点必须在 `_reference_kpoints`
+  覆盖 `undeformed/KPOINTS` 之前**：`undeformed` 的 KPOINTS 就是基准 KPOINTS 本身，覆盖后再比会得到
+  `same`，该目录不归档、`fan_todo` 只有 9（原稿即此处有缺陷）。
+- 顺带修掉既有的 `NameError`：`patch_ionrelax_grid` 块误用 `_reference_kpoints` 的局部名 `und`
+  （gen 第 529 行），不修则 gen 在归档完成之后必崩。
+- 模板 `incar_deform_2d.tpl` 用 `ISYM = 0`（时间反演半网格，**故意不开点群**）：各目录 IBZ 必须逐 k
+  一一对应，后续逐 k 有限差分才对得上。
+
+**★ ionrelax 子目录不受 (B') 的归档保护（本次实测，2026-09-21）**：
+`_build_ionrelax` 会把 `deform-0N/ionrelax/` 里除 `POSCAR/KPOINTS/POTCAR` 外的文件**直接删除**；
+而 `STALE_OUTPUTS` 的归档只作用于步骤**顶层**目录。实测：
+
+| 项 | 数量 |
+|---|---|
+| `ionrelax/` 目录（面内分量 xx±/yy±/xy） | 5 |
+| `ionrelax/` 内 `*.stale-grid-*` 归档副本 | **0** |
+| `ionrelax/` 内旧 `OUTCAR` / `CONTCAR` | **0 / 0（已被删除，未归档）** |
+| 重建的 `INCAR.relax` + `INCAR.static` | 10（5 目录 × 2 段） |
+
+本次不影响正确性（那些是旧 `15×15×1` 网格的结果，本来就要重算），但**若将来想拿旧弛豫坐标作为
+relax 起点省时间，必须先改 `_build_ionrelax`：把删除改成与顶层同款的归档重命名**。
+
+**成本实测锚点**（供同类 2D 形变步估算）：旧 `15×15×1`/113 k 单点耗时 **118 s**；
+`S3b`（`46×46×3`/`ISYM=-1`/6348 k）总耗时约 **1.9 h**。两者线性外推一致 →
+`46×46×3`/`ISYM=0`（约 3174 k）单点约 **55 min**。10 个刚性单点合计约 **79× S3** 机时
+（扇出并行，墙钟约等于单目录）。ionrelax 的 relax 段（`IBRION=2`、`NSW=60`）耗时未定，
+监控阈值：离子步 > 15 或单目录墙钟 > 4 h 即停下报告。
+
 ## 复现命令（本地）
 
 
@@ -2828,3 +2893,55 @@ python step8.3_output/overlap_ratio_guard.py <unity 运行目录> <real 运行�
 # 受控对照（同一套输入只切 unity_overlap）：生产 settings 版
 bash tmp/amset2d/crit2_run.sh
 ```
+
+## V39. CrSe2_hex S7 只读诊断与 relax 保留候选（2026-09-21 22:42 CST）
+
+范围：jzzn `/public/home/wangchao/Fullerene_Network/work/jzz/jap/CrSe2_hex/ke-dft-cpu/step7_deform`，仅 ssh 只读 sacct/现有日志。未提交、取消、推进或改远端；未修改主树 generator。
+
+22:41:53 sacct 快照：
+
+| jobid | 目录 | 状态 | 单目录作业墙钟 |
+|---|---|---|---|
+|3864418|deform-01|COMPLETED|01:23:39|
+|3864419|deform-02|COMPLETED|01:19:12|
+|3864420|deform-03|RUNNING|01:33:06|
+|3864421|deform-04|COMPLETED|01:27:12|
+|3864422|deform-05|COMPLETED|00:46:32|
+|3864423|deform-06|COMPLETED|00:39:08|
+|3864424|deform-07|COMPLETED|00:39:46|
+|3864425|deform-08|COMPLETED|00:40:55|
+|3864426|deform-09|RUNNING|01:22:45|
+|3864427|undeformed|COMPLETED|00:41:16|
+
+- 10 个根目录 OUTCAR 均有 General timing，但这只能证明 clamped 静态完成；5 个 ionrelax 为 01/02/03/04/09。01/02/04 当前静态 OUTCAR 也有 timing；03/09 最终快照刚转入静态（INCAR IBRION=-1、NSW=0），尚未完成。不能以根目录 10/10 timing 判全链完成。
+- **deform-02 relax 离子步数不可确认**。queue.out 第56行 `1 F= -.17968362E+02` 属根 clamped 静态；submit.sh 两段 ionrelax 都经 `2>&1 | tail -20`，留下的是 IEEE warning/FORTRAN STOP 尾部，未留下 relax F= 或收敛行。ionrelax/OSZICAR 与 OUTCAR 已被 static 覆盖（当前静态 1 步、7 电子迭代，Elapsed=426.479s），不得当 relax。目录中没有 OUTCAR.relax/OSZICAR.relax 等备份；根 stale-grid-15x15x1 是旧 clamped 数据，不是本次 relax。
+- 01/04 同样无法恢复完整 relax 步数。中间只读快照捕获 03 在 IBRION=2 时 OSZICAR 完成1离子步、OUTCAR 进入2(1)；09 在 IBRION=2 时到2(6)并出现 `reached required accuracy`，即该次 relax 收敛于第2离子步。03 后来已转 static，但因覆盖未保留最终步数。
+- 阈值沿用 V38：**>15 离子步或单目录墙钟 >4h 只报告，不取消**。5 个作业墙钟均未超4h；09可确认2步未超15，03曾观测第2步；01/02/04的最终步数未知，不能声称五者都通过步数阈值。
+- 候选最小 diff：`tmp/s7-relax-retention/retention.patch`（未应用），relax stdout 经 tee 保存 `vasp.relax.log`，static 前复制 OUTCAR/OSZICAR/CONTCAR/vasprun.xml 的 `.relax` 副本并检查 relax 管道退出码。`git apply --check` exit=0（初稿 hunk 行数有误，已修正）。不是 retry 历史归档修复，现有清理逻辑仍会删副本；未做运行验证。
+- 截止快照 8完成+2运行，不推进 S7.1_read。全部完成后交父会话按用户授权推进；本会话不执行。
+- “四项核对”必须从现有文档/旧报告找出处，不能自行补定义或宣称通过：可定位 V3/T1 真空不变性、V4/T2 形变势归一化、V13附近 T3 90度旋转测试（原文第538行）、METHODOLOGY §5.1 的 T4 分机制文献对照；`tmp/amset2d/paper/number_inventory.md` 第58行还记载旧 MoS2 OOM 后四项无新数。若用户指的是另一组四项，需父会话结合上下文确认，不把这些不同材料旧结论冒充本次验收。
+
+## V40. CrSe2_hex S7.1_read 新结果核对（2026-09-21 23:20 CST，只读；四项为候选）
+
+S7 10 个作业 3864418–3864427 全部 COMPLETED、ExitCode 0:0（独立 sacct 复核）；用户授权的 `start -j S7.1_read`（无 -f）exit=0，远端已生成并拉回 `step7b_deform_read`。鲜度：`deformation.h5` 23:08、`band_edges.json` 23:09、`deformation_vac.h5` 23:10，均晚于最后作业 22:56:36 完成；23:04 快照的 2026-08-30 旧结果已被本次替代。
+
+| 候选核对项 | 结论 |
+|---|---|
+| 网格/输入一致 | S3、10 个 S7 根、5 个 ionrelax 均 Gamma `46 46 3`；但 `deform_read.log` 有 reciprocal lattice 与 k-lattice 类别不一致 WARNING，未证明逐 k 映射完全正确 |
+| 5 个 ionrelax 来源 | `deform_geometry_folders` 及 core/vac 两日志一致确认 01/02/03/04/09 用 ionrelax，05–08 clamped |
+| vac/core 与独立路径 | `D_vac−D_core` 电子/空穴同 +0.8149（相对差 0%）通过；但真空 h5 Dxx 电子 2.4465 vs `band_edges` 4.8808、空穴 1.4665 vs 2.9257，均 **−49.9%**，独立路径不一致，整项不能判通过 |
+| ±斜率/offset | 现有产物无单侧 D+/D−/拟合 offset 字段，按不重算原则无法核验；窗口 CV 0.0005/0.0008 只证明窗口稳定 |
+
+结论：**四项候选不能判全部通过**，其中 vac h5 与 band_edges 约二倍差异为未解决问题；`validity: UNKNOWN: no discriminant.json`。未修改计算数据、未重算、未推进 S8.4。证据详见 `tmp/s7-relax-retention/read-verification.md`。
+
+## V41. CrSe2_hex −49.9% 根因：AMSET 0.4.19 自旋归一化缺陷（2026-09-21，只读诊断）
+
+**根因**：`amset/deformation/potentials.py` 的 `calculate_deformation_potentials()` 中 `norm += strain_loc` 写在 `for spin, spin_deform in deform.items():` 循环体内（远端 amset_clean 0.4.19 源码 168–170 行）。对 ISPIN=2 体系，`norm` 每个应变条目累加两次，最终 `deformation_potentials[spin] /= norm` 把 D 除以「2×自旋道数」，**D 整体减半**。CrSe2_hex 的 S7 INCAR `ISPIN=2`，故 `deformation.h5` 与 `deformation_vac.h5` 都减半。
+
+**判定哪边对**：`band_edges.json` 的 `E1_vac_xx/yy`（原始本征值 + LOCPOT 真空中心差分）正确；h5 约为其一半。手算（electron band12 @ k=15/46）：ΔE/(2ε)=−7.7499、dvac=−2.8694 → E1_vac=4.8805（band_edges 4.8808，h5 2.4465）；hole band11：E1_vac=2.9255（band_edges 2.9257，h5 1.4665）。独立复算 AMSET 单侧绝对值平均口径 = 4.8931/2.9331，仍是 h5 的两倍。**核心 h5 同样减半**：band12 手算 3.2633 vs h5 1.6317，band11 手算 1.3033 vs h5 0.6517。
+
+**排除项**：因子不是 ε vs 2ε（POSCAR 实测 Green-Lagrange=±0.005000）、不是中心差分 vs 单侧、不是工程/张量应变、不是 K 点不在 46×46×3 网格（h5 k 索引 5218 恰为带边 k）、也不是 “different class of lattices” 警告（仅两条形变时对称化只剩 2 条，仍复现同一 2.4465）。`delta xx=2.86969` 是 dE_vac/dε；`+0.8149` 是减半后两 h5 之差（真值约 1.63）。
+
+**影响**：所有 ISPIN=2 材料的两份 h5 减半，AMSET 迁移率 μ∝1/D² 偏高约 4 倍；2D DPT（S8.2）默认读 band_edges 的 E1_vac_iso，不受影响；S8_kappa/S8.4 用 h5，受影响。MoS2 当时 0.3% 一致很可能因其为 ISPIN=1（待确认）。修复候选：包装/修正两处 AMSET 调用、后处理 h5 乘自旋道数、或升级 AMSET；均需对已用减半 D 跑过的 ISPIN=2 材料重算。**未改动 gen、未重算、未提交作业。** 两个只读子代理独立复核一致（手算 handcalc.json、代码审计 code-audit.md）：**上游 AMSET 0.5.1 已修复该 norm 缺陷**（`norm += strain_loc` 移出自旋循环）；WARNING 来自 `amset/tools/deformation.py` 的 `reciprocal_lattice_match`，只是告警、不改数组，效果是部分对称等价应变被丢弃。`band_edges.json` 的 `E1_xx/yy/iso` 读自已减半的 core h5，也需乘回 2×。**本地 h5 自旋道数实测影响范围**：受影响（ISPIN=2，有 _up/_down）＝ CrS2_hex / CrS2_ortho / CrSe2_hex / CrSe2_ortho / LS / SS 这 6 个 jzz/jap 2D 项目；不受影响（单自旋道）＝ MoS2 / Zn3O2 / Si 与三维合金 Sn2Sb2Te5 / Pb2Bi2Te5 / Pb2Sb2Te5 / Sn2Bi2Te5。故这 6 个 2D 材料已跑过的 S8/S8.4 AMSET 结果需按 2×D 修正或重算（μ 会 ÷4）。详见 `tmp/s7-diag/DIAGNOSIS.md`。
+
+
