@@ -1277,6 +1277,8 @@ _STEP_OUTPUT_NAMES = ("OUTCAR", "OSZICAR", "vasprun.xml", "CONTCAR", "CHG",
 def _step_input_name_ok(name):
     """判断远端步骤目录里的一个文件是否算"输入"（统一规则，与技能无关）。"""
     b = os.path.basename(name)
+    if ".stale-" in b:  # Archived outputs are never generated inputs.
+        return False
     if b.startswith(_STEP_OUTPUT_NAMES):
         return False
     if b.endswith((".err", ".log", ".out")) and b != "queue.out":
@@ -1298,7 +1300,7 @@ def _discover_step_inputs(cfg, host, step_dir, subdir=None):
     from autozt import _ssh_cmd
     root = os.path.join(step_dir, str(subdir)) if subdir else step_dir
     remote = ("cd %s 2>/dev/null || exit 0; find . -maxdepth 2 -type f "
-              "-size -40M -printf '%%P\\n' 2>/dev/null | head -300" % shlex.quote(root))
+              "! -name '*.stale-*' -size -40M -printf '%%P\\n' 2>/dev/null | head -300" % shlex.quote(root))
     try:
         p = subprocess.run(_ssh_cmd(cfg, host, [remote]), capture_output=True,
                            text=True, timeout=240)
@@ -1420,6 +1422,8 @@ def _remote_submit_preflight(cfg, m, s, t=None):
         # 技能显式声明的清单优先级最高（cohp-cogito / fc-fit 这种"必须带上游产物"
         # 的步骤用它精确表达需求）。
         required = tuple(str(x) for x in declared)
+    elif s.get("fanout"):
+        required = ()  # Each child has its own generated input manifest.
     else:
         # 统一默认：按远端步骤目录里**实际已经存在的文件**要求（只读 find）。
         # 这样 VASP、MACE、纯 Python/MPI 步骤走的是同一条逻辑，谁都不用自报清单。
@@ -1438,13 +1442,22 @@ def _remote_submit_preflight(cfg, m, s, t=None):
     # 这些子目录的输入文件，避免把已完成帧的大型 OUTCAR/vasprun.xml 全部拉回。
     if s.get("fanout"):
         names = list(s.get("fan_todo") or s.get("subs") or [])
+        per_child = {}
+        for name in names:
+            if declared:
+                per_child[name] = required
+            else:
+                per_child[name] = _discover_step_inputs(cfg, host, s["dir"], name)
+                if not per_child[name]:
+                    per_child[name] = (("POSCAR", "submit.sh") if is_mace else
+                                       ("INCAR", "POSCAR", "KPOINTS", "submit.sh"))
         missing = []
         for name in names:
-            for item in required:
+            for item in per_child[name]:
                 if not os.path.isfile(os.path.join(dest, name, item)):
                     missing.append("%s/%s" % (name, item))
         if missing:
-            paths = [os.path.join(name, item) for name in names for item in required]
+            paths = [os.path.join(name, item) for name in names for item in per_child[name]]
             remote = ("cd %s || exit 1; tar --ignore-failed-read -cf - %s"
                       % (shlex.quote(s["dir"]),
                          " ".join(shlex.quote(path) for path in paths)))
@@ -1459,7 +1472,7 @@ def _remote_submit_preflight(cfg, m, s, t=None):
             rc1 = p1.wait()
             if rc1 != 0 or p2.returncode != 0:
                 return False, "扇出输入回拉失败：%s" % (p2.stderr or err).strip()
-        missing = ["%s/%s" % (name, item) for name in names for item in required
+        missing = ["%s/%s" % (name, item) for name in names for item in per_child[name]
                    if not os.path.isfile(os.path.join(dest, name, item))]
         return (True, "") if not missing else (False, "本地仍缺少 " + ", ".join(missing[:12]))
 
