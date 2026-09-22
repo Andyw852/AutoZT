@@ -3915,3 +3915,35 @@ AMSET `transport.json` 的 `mobility[mech]`/`conductivity`/`seebeck` 形状是
    `step3_uniform` 也要按同一 K-Spacing 重算，或 deform 改用与 uniform 相同的网格）；
 3. 顺带复查 CrSe2_ortho（唯一"看似正常"的新结果）是否也存在同类隐患；
 4. **V49/V57 中 CrSe2_ortho 的数值对比作废**（索引轴错误），需以上表为准重写。
+
+### V74. 第 166 轮：V73 回归的**进一步排查**（仍未定位根因，但排除若干假设）
+
+针对 CrS2_ortho 重算后 **ADP 率=0**（`amset.log` 迁移率表 `ADP = inf`）逐项排查：
+
+| 假设 | 检查结果 | 结论 |
+|---|---|---|
+| h5 形变势有 NaN/全零 | 两材料 h5 均 `nan=0`、`zero_frac=0.000`、`mean≈1.65` | ❌ 排除 |
+| h5 的 k 网格与带结构不一致导致无法映射 | preflight 显示**两材料**的 deformation h5 都是"非完整网格 → 会去对称化"；`Desymmetrizing`/`go wrong` 在两份日志里**都出现 0 次** | ❌ 不是差异源 |
+| 能带数不匹配 | CrSe2_ortho: h5 `带=7` ↔ 窗口 `9-15`(7)；CrS2_ortho: h5 `带=6` ↔ 窗口 `10-15`(6) | ❌ **两者各自自洽** |
+| `scattering_type`/`deformation_potential`/`interpolation_factor` 设置不同 | 两者 settings 基本一致（都是 `[ADP,IMP,POP]` / `deformation.h5` / IF=10 / unity） | ❌ 排除 |
+
+**仍未定位**。剩余主要差异：
+
+| | CrSe2_ortho（ADP 正常）| CrS2_ortho（ADP=0）|
+|---|---|---|
+| `step8_amset/settings.yaml` 的 `elastic_constant` | 见其自身 | 含 `-0.419`、若干 `-0`（Christoffel 最小特征值 **−0.419**）|
+| Christoffel 最小特征值（preflight）| −2.1044 | **−0.4190** |
+| 面内特征值比 | 0.3566 | 0.3697 |
+| bandgap | 0.76 | 0.9448 |
+
+**新怀疑（待验）**：ADP（声学形变势）强度依赖**弹性张量给出的声速**。CrS2_ortho 的
+弹性张量含负特征值（preflight 已就此告警，并称 gen 会把**面外剪切**置零）。若 AMSET 在
+计算声速时得到 0/虚数，声学散射率可为 0 → **ADP 迁移率 = inf**。
+但 CrSe2_ortho 的负特征值**更负**却正常，故此假设**同样未证实**。
+
+**下一步（不擅自做）**：
+1. 在 jzzn 上用一个**只读的小脚本**复算两材料 ADP 率（或直接对比 AMSET 计算声速时的中间量），
+   定位是"声速=0"还是"形变势插值=0"；
+2. 若确认是弹性张量非正定导致，则属**输入/口径问题**（而非本轮重算代码问题），
+   需与 V21/V23 的"二维弹性张量真空伪影"结论一起评估；
+3. **在定位前，CrS2_ortho 的 S8 结论标为"不可用"**；其 S7/S7.1_read 的 h5 本身已验证正确（V72）。
