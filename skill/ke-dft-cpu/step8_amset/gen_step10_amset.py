@@ -756,9 +756,13 @@ def apply_2d_corrections(cwd: Path, elastic):
     #   二维 slab 的**面外剪切**是真空伪影（CrS2 C44=-0.52、SS 未重排时 C66 槽 0.56、
     #   Mo2S3 C44=-40.2）→ AMSET 的 Christoffel 特征值可为负/极小，形变势因子 deform²/c
     #   被污染（实测 ADP 空穴 2e4 或 0）。二维弹性文献的标准做法是只报面内 C11/C12/C66，
-    #   ★ 只置零**负值**（正的即使很小也保留：面内 q 上 C44/C55=0 会让该分支特征值为 0，
-    #   AMSET 的 factor 可能出现 0/0 -> NaN）。面内块完全不动；每个被置零的原值都打印。
+    #   ★ 2026-09-22 修正（VERIFICATION V76/V77）：**原实现把负值置零，但 0 同样让该分支
+    #   特征值为 0** —— 实测 CrS2_ortho 的面外 C44/C55 由 -0.51 置零后，Christoffel 特征值
+    #   出现 0（面内方向 (1,0,0) 就有），声速=0 → 声学形变势(ADP)散射率=0 → ADP 迁移率=inf，
+    #   最终 overall/conductivity 一起塌成 ~0。故改为**取绝对值**（保留原量级、保证非零），
+    #   并设一个相对面内对角的最小下限，避免"很小但仍接近奇异"。面内块完全不动。
     zeroed = []
+    zeroed_floor = []
     if new_elastic is not None:
         _M = [list(map(float, r)) for r in new_elastic]
         _seen = set()
@@ -769,15 +773,23 @@ def apply_2d_corrections(cwd: Path, elastic):
                         continue
                     _seen.add((_a, _b))
                     _v = _M[_a][_b]
-                    if _v < 0.0:                     # 只清负的（正的小剪切保留，避免 0/0）
-                        zeroed.append("C%d%d=%.4f" % (_a + 1, _b + 1, _v))
-                        _M[_a][_b] = 0.0
+                    if _v < 0.0:                     # 负的面外剪切=真空伪影，取绝对值保非零
+                        _diag = max(abs(_M[_k][_k]) for _k in range(6)) or 1.0
+                        _floor = 1e-3 * _diag
+                        _new = max(abs(_v), _floor)
+                        zeroed.append("C%d%d=%.4f->%.4f" % (_a + 1, _b + 1, _v, _new))
+                        if abs(_v) < _floor:
+                            zeroed_floor.append("C%d%d" % (_a + 1, _b + 1))
+                        _M[_a][_b] = _new
         new_elastic = _M
         if zeroed:
-            print("[OK] 2D 面外**负**剪切置零（真空伪影；面内 C11/C12/C22/C66 不动；"
-                  "正的剪切保留以免 0/0）：%s" % "、".join(zeroed))
+            print("[OK] 2D 面外**负**剪切取绝对值（真空伪影；面内 C11/C12/C22/C66 不动；"
+                  "取绝对值而非置零，保证 Christoffel 非奇异、声速非零）：%s"
+                  % "、".join(zeroed))
+            if zeroed_floor:
+                print("[..] 其中 %s 太小，已抬到面内对角的 1e-3 下限" % "、".join(zeroed_floor))
         else:
-            print("[..] 2D 面外剪切没有负值，无需置零（正的保留）")
+            print("[..] 2D 面外剪切没有负值，无需处理（正的保留）")
     # patch_2d_thickness：把全部依据落盘，写论文直接引用
     t_info["thickness_used_A"] = round(t, 4)
     write_2d_record(cwd / OUTDIR_NAME, {
