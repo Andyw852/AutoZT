@@ -9,6 +9,12 @@
 **S1（结构优化）这一环已修好并验证**；P0-1（BHH 真施加）、P0-2（厚度归一化）、
 P0-3（LASSO 设置）**尚未在完整链路上跑通**。下一步分两条线（见第 5 节）。
 
+> ⚠️ **未解决风险（2026-09-21，显眼）**：`phonon-mlff-cpu/gpu` 的 ZA 判定目前是**错的**
+> —— `skill/_common/mlff/klmlff_common.py` 的 `inplane_qdirs`/`za_check_2d` 与 kl 链同源 bug
+> （真空轴当原胞下标 + 60° 面内基第二方向取错 + 无本征矢量判据），**尚未修**。在修好前，
+> 那条链路（phonon-mlff-*/phonon_fit_driver）出的任何 ZA 结论、以及据此判定的 2D κ 都**不能用**。
+> 修法与可照抄的实现、验证数字见 **§28.1 / §28.2**；给改该文件会话的 commit note 见 **§28.2**。
+
 ---
 
 ## 1. S1 当前流程（已实现 + 待补）
@@ -750,17 +756,20 @@ d(Mo–S)=2.407 Å）；远端工作目录 `/public/home/wangchao/Fullerene_Netw
 
 | # | 静默错误 | 门禁（谁拦、拦在哪） | 状态 |
 |---|---|---|---|
-| 1 | 2D 的旋转不变性（BHH）从未真正施加 | S5 强制 `FIT_ENGINE=pheasy`（2D 自动），并要求拟合日志出现 `Imposing rotational invariance and equilibrium conditions`；ns_harm 自由度必须减少 | 代码已改，**未端到端验证**（线 A S5 是验证点） |
-| 2 | κ 厚度归一化（ShengBTE 路线漏掉；层跨周期边界算错） | S6 三处 `write_submit(require=("kappa_2d_normalized",))`（模板渲染必须出现该字面量，防项目级模板遮蔽）；`thickness_2d.py` 为单一真源（`h⊥=V/|a_i×a_j|`、`d=zspan+两端 vdW`） | 代码已改，**未端到端验证**（S6 是验证点） |
+| 1 | 2D 的旋转不变性（BHH）从未真正施加 | S5 强制 `FIT_ENGINE=pheasy`（2D 自动），并要求拟合日志出现 `Imposing rotational invariance and equilibrium conditions`；ns_harm 自由度必须减少 | **机制已验证**：fc-fit 预演亲眼看到 `[OK] RASR=BHH imposed in the null-space construction step (-c)`（§20.8）；**真实数据待两套 390/520 对照**（S5 → §21） |
+| 2 | κ 厚度归一化（ShengBTE 路线漏掉；层跨周期边界算错） | S6 三处 `write_submit(require=("kappa_2d_normalized",))`（模板渲染必须出现该字面量，防项目级模板遮蔽）；`thickness_2d.py` 为单一真源（`h⊥=V/|a_i×a_j|`、`d=zspan+两端 vdW`） | 归一化代码已改；**材料级 `thickness_2d.json` 已由 S1 写出**（`write_material_thickness`，含同链覆盖/跨链 WARN 测试，§16）；**S6 端到端待跑** |
 | 3 | 面内晶格根本没弛豫过 | `ALLOW_2D_FIXED_CELL=False` + 2D 必须声明 IOPTCELL/LATTICE_CONSTRAINTS（否则硬 `sys.exit`）；变胞段 `ee=0` 禁止被力判据跳过；末态面内应力门禁；`RELAX_CELL_UNCONVERGED` 由判据读取 | **已生产验证**（8 材料全部面内 ≤0.114 kB；Ti₂S₃ 修好后 0.0438） |
 | 4 | 应力里混 ~1 kB Pulay 偏差 | 变胞段 `CELL_STAGE_ENCUT_FACTOR=2.0`（只对 ISIF≥3 段）；末态应力门禁兜底 | **已实测标定 + 生产生效**（AlN 800=2.0×400、MoS₂ 520=2.0×258.7） |
 | 5 | 用 \|P\| 判收敛被 σzz 掩盖真实面内应力 | 2D 改判**面内分量** `max(\|σxx\|,\|σyy\|,\|σxy\|)`，阈值走层内口径 `max(TOL_LAYER/(h⊥/d), 0.05)` | **已生产验证**（旧结构 P=−7.93 而面内 −11.97/−10.62） |
 | 6 | S4 按 fanout 续算把**旧结构**的帧当已完成 | `check_existing_matches_input()`：`phono3py_disp.yaml` 单胞 vs 当前输入 > 1e-3 Å 即拒绝并提示 rerun；`check_frames_match_displacements()`：逐帧逐原子校验（含周期回绕），gen_step4/5 硬退出 | **已实战拦截**（Mo₂S₃ Z4-3-1 差 0.1263 Å 被拦下，避免"旧力配旧位移"混拟合） |
-| 7 | 筛选材料里混着悬挂原子、计量比对不上的结构 | **四判据结构体检**（① 最近邻 < 0.7×共价半径和 ② CN=1 悬挂 ③ 计量比 vs 材料名 ④ z 跨度 vs 层数）→ 详见 §13.4-A | **未实现**（参考实现 `tmp/_health8.py`；已拦下 AlN/Zn₅O₃/BeO） |
+| 7 | 筛选材料里混着悬挂原子、计量比对不上的结构 | **四判据结构体检**（① 最近邻 < 0.7×共价半径和 ② CN=1 悬挂 ③ 计量比 vs 材料名 ④ z 跨度 vs 层数）→ 详见 §13.4-A | **仍未实现**（参考实现 `tmp/_health8.py`）；已手工拦下 AlN / Zn₅O₃ / BeO，三结构已挂起待 jzz 核对来源 |
 | 8 | 作业刚起来时用**上一次遗留的 OUTCAR**判"首段已收敛"，首段被跳过、变胞段接手旧 CONTCAR → CG 空转 → ZBRENT 崩 | `STAGES_RUN` 闸门：本次作业真跑过至少一段后，才允许用 `_converged` 跳过后段 | **已生产验证**（Ti₂S₃ 日志出现"不采信目录里残留的 OUTCAR"，随后段 a 真跑） |
 | 9 | 技能判据（checker）把提示打到 stdout → 采集器 JSON 解析失败 → **整组材料"无材料"，巡检静默失效** | 约定：checker 里任何 print 必须 `file=sys.stderr`；已在 `ck_relax_injob` 落地并注明理由 | **已修复并恢复**（`kl-dft-cpu: 15 材料 done/err/wait` 恢复可见） |
 | 10 | 项目级模板副本过期 → 新功能被静默吃掉（少 `{{DIPOLE_LINE}}`/`{{FORCE_*}}`/归一化钩子） | `report.stale_template_note()` 在 gen 阶段比对占位符集合并列出缺失项；`enforce_incar_tags()`/`write_submit(require=)` 兜底 | gen 阶段**已生效**（本轮多次触发）；**init 阶段检查未实现** |
 | 11 | **SCF 未收敛（撞 NELM）却照样输出力** —— VASP 只在 OUTCAR 留一行警告，作业正常退出、力照出 | §19 的 S5 门禁：逐帧扫 OUTCAR，含 `number of steps (NELM)` 或 `aborting loop because EDIFF is reached` 计数 != 1 → 该帧作废；任一帧作废即拒绝拟合并列出帧名；电子步数写进 `scf_steps.json` | **已落地并复核**（真实坏帧：MoS₂ bench 的 520 eV 帧被精确作废；P1 已算的 165 帧全部通过） |
+
+
+**状态复核（2026-09-20）**：第 1 行 BHH 的**机制**已在 fc-fit 预演中验证 ——`[pheasy] … -c --rasr BHH` → `Imposing rotational invariance and equilibrium conditions.` →`[OK] RASR=BHH imposed in the null-space construction step (-c)`（§20.8）；**真实数据上的检验**待两套 390/520 对照。第 2 行的厚度归一化：代码已改，且**材料级 `thickness_2d.json` 已由 S1 写出**（含同链覆盖 / 跨链 WARN 的测试，§16），端到端待 S6。第 7 行**结构体检四判据仍未实现**；AlN / Zn₅O₃ / BeO 已手工拦下并挂起，等 jzz 核对来源。（本表另新增第 11 行：SCF 撞 NELM 的门禁，见 §19。）
 
 **可复用的一类判据（本轮两次起作用）**：
 - **结构指纹**：把"当前结构"与"历史产物所依据的结构"做逐分量比对（S4 的 disp yaml 校验、种子指纹方案 §9.5）；
@@ -804,6 +813,13 @@ d(Mo–S)=2.407 Å）；远端工作目录 `/public/home/wangchao/Fullerene_Netw
    可以从产物验证、失败无外部副作用的任务；一旦涉及 sbatch/autozt 等**外部状态变更**，失败时「到底做了什么」是不确定的
    （2026-09-19 实测：两个子代理一个无消息失败、一个跑很久零产出，事后只能靠「没有变体、没有作业、没有 tmp 残留」反证没重复提交）。
 
+4. **每条状态变更命令之后，都要有一次「它真的做了吗」的验证 —— 返回码 0 不等于做对了。**
+   本会话同一根因的三种形态：① `rerun` 要交互确认（非交互调用 `EOFError`，但同一条命令串里的 `start`
+   照样执行，误提交了 3849199）；② `incar_bench.py submit` 无队列感知（只判「有 submit.sh 且无 OUTCAR」，
+   会重复提交 pending 帧）；③ `init` 在**已完成**步骤上 **no-op**（打印「该步骤已完成，无需操作」）→
+   配置改了但 `fit_config.json` 没重新生成，提交的作业仍用旧数据集（我当时据此**推断**作业会用旧数据集，后来靠产物核对发现推断是错的 —— 见 §20.11 的更正）。
+   **可操作的落法**：改配置后先**读远端产物确认它真的变了**（如 `fit_config.json` 里的数据集路径与时间戳），
+   再提交作业。下次换个命令，同样的坑还会以新形式出现 —— 所以规矩锚在「验证」上，而不是「记住某个命令的脾气」。
 ### 15.3 INCAR_BENCH 落地（两个并行子代理完成，父会话独立复核）
 
 - 新增 `skill/kl-dft-cpu/incar_bench.py`（698 行）：6 变体（4×LREAL×ADDGRID + ENCUT 1.5×/2.0×）、
@@ -1291,4 +1307,1231 @@ autozt -tt kl-dft-cpu -p MoS2_kltest -j S4_disp start
 **本轮状态（写本节时）**：390 套 13 个作业（3854404–3854416）**仍在排队**（产物 0）；
 520 套仍是 **4 个半成品**（`General timing` 计数 0，未收尾）；账号下队列压在 **47 个作业**（含其它会话）——
 jzzn 极度拥挤，两套帧都还没出结果。**下一步完全取决于队列**，拟合方案已全部就绪。
+
+
+### 20.8 等待期间的两次预演（2026-09-20，均未产生新作业）
+
+#### ① fc-fit 流程预演（用 bench 的 2 帧假数据集）—— 全部通过
+
+- 假数据集 `_dryrun_fcfit_FAKE/`：`SPOSCAR` + `phono3py_disp.yaml` + `disp-00000/00001/00002`（两帧取自
+  `bench/lreal_false_noaddgrid` 的完整 2 帧；**`disp-00000` 是拿一张位移帧冒充的 → 纯 plumbing 测试，物理无意义**，
+  这也是它 `max|F_eq| = 1.6042 eV/A` 偏大的原因）。
+- **绝对路径 `FIT_INPUT_DIR` 能解析**（`prep` 打印 `dataset source: …_dryrun_fcfit (vasprun)`）；
+- **平衡帧被正确识别**：`[OK] equilibrium residual subtracted from disp-00000/vasprun.xml`；
+- 数据集归一化 ✓：`2 frames x 75 atoms, RMS displacement 0.0170 A`；
+- **★ BHH 门禁确实会打 OK**（P0-1 机制确认可用）：
+  `[pheasy] symmetry constraints: pheasy --dim 5 5 1 … -c --rasr BHH`
+  → `Imposing rotational invariance and equilibrium conditions.`
+  → **`[OK] RASR=BHH imposed in the null-space construction step (-c)`**
+- **★ 顺带发现一个真坑**：默认 `FIT_ENGINE=phono3py` 在 vasprun 数据集上直接报
+  `[ERROR] no forces available for the phono3py engine` → **两套对照必须显式 `FIT_ENGINE=pheasy`**
+  （已设好，并保留 `PHEASY_FIT_METHOD=OLS` / `PHEASY_RASR=BHH`）。
+- 配置已复位：`FIT_INPUT_DIR` 回 `auto`；引擎三项保留（与第 2 阶段计划一致）。
+
+#### ② ZA 指数已并入 fc-fit 产物（`skill/fc-fit/fc_plot_phonon.py`，+205 行）
+
+- 新增字段：`za_exponent_q1/q2`、`za_minfreq_q1/q2_THz`、`za_ok`（两方向都 1.7<p<2.3）、`za_is_2d`、
+  `za_vacuum_axis`、`za_qdir_q1/q2`、`za_qmax`、`za_n_qpoints`、`za_p_range`、`za_note`；
+- 实现**逐字搬自** `kl_fc_backends.za_power_law` / `_inplane_qdirs`（函数体经 ast 逐字比对一致，kl 侧未改）；
+- `skill/fc-fit/skill.yaml` 的 S2_plot `gen_need` 加 `dim_common.py`；README 的产物说明同步；
+- 测试：构造 2D 体系 p1=**1.9969** / p2=**1.8630**（`za_ok=True`）；真实 fc2（Mg₂C₆₀，3D）p≈1.0/1.31
+  （`za_is_2d=false`，note 注明该判据仅对 2D 有意义）；不稳定 2D → `None` + note，绘图步不失败；
+  `suite_io_schema` / `suite_skillspec` / `suite_asset_lookup` 全过。
+- **遗留**：仓库里**还没有真实的 2D fc2**，2D 路径用构造体系冒烟 —— **两套对照跑完即为首次真实检验**。
+
+（另：假数据集 `_dryrun_fcfit_FAKE/` 与 `fc-fit/step1_fit/` 的预演产物保留在原处，作为流程证据；不参与生产拟合。）
+
+
+### 20.9 fc-fit 两处加固（2026-09-20，子代理 e88a9399 做，父会话复核）
+
+**① gen 阶段提前拦「vasprun 数据集 + phono3py 引擎」**（`gen_step1_fit.py` L369–395，在 `resolve_dataset` 之后）：
+`sig == "vasprun" and engine == "phono3py"` → 直接 `sys.exit`，错误信息给出可复制的
+`conf --set params.FIT_ENGINE=pheasy`（并提示 hiphive / 指到 YAML 或 `FORCES_FC3` 数据集）。
+只拦这一个组合 —— `phono3py_params.yaml` / `phono3py_disp+FORCES_FC3` / `.npy` / `.pkl` 布局优先级更高，不受影响。
+
+**② ZA 汇总带上拟合质量**（`fc_plot_phonon.py`）：
+- 新字段：`za_r2_q1/q2`、`za_log_resid_rms_q1/q2`、`za_margin_q1/q2`（p 到 1.7/2.3 的余量）、
+  `za_needs_review`、`za_margin_min=0.20`、`za_r2_min=0.98`；
+- 复核逻辑：**仅 2D**，`margin < 0.20` 或 `R² < 0.98` → `za_needs_review=True`，`za_note` 追加
+  「建议人工复核，不要仅凭 za_ok 下结论」，并额外打 `[WARN]`；`za_ok` 保留但语义写明为「机器粗判」；
+- ★ 阈值取 **0.20**（不是我建议的 0.15）是有依据的：动机场景 p2=1.863 的 margin 是 **0.163**，取 0.15 会**漏掉这个场景**；
+- `za_power_law` 由 2 元组改为 3 元组（多了 `fit={"r2","log_resid_rms"}`）—— 仓库内只有本文件消费它，kl 侧是独立副本未动。
+
+**验证**：`tmp/_kltest_fcfit_engine_guard.py`（3 例：vasprun+phono3py 提前报错且不写 fit_config、vasprun+pheasy 通过、yaml+phono3py 不误伤）
+与 `tmp/_kltest_za_summary.py`（A 构造 2D：p=1.997/1.863、R²=0.999999/0.993104、margin 0.297/0.163 → `za_ok=True` 但 `za_needs_review=True`；
+B 真实 fc2(3D) 不提示；C 不稳定 → p=None；**D 合成低 R²（p=2.0、margin=0.3、R²=0.9588）单路触发复核**）
+均 ALL PASS；`suite_io_schema`/`suite_skillspec`/`suite_asset_lookup` 全过。
+
+**遗留**：① 阈值 0.20 为按动机场景自定，可一行调整；② `fc_common.poscar_lattice_lengths` 读缺失 POSCAR 会 `FileNotFoundError`
+（既有隐患，本次未改）：守卫生效后 phono3py+vasprun 能干净报错，但 **pheasy/hiphive 配「无 POSCAR 的 vasprun 目录」仍会崩在那里**。
+
+
+### 20.10 ★ 第 2 阶段开跑（2026-09-20）
+
+#### 两套帧已全部完成并通过门禁
+
+| 套 | 产物 | §19 收敛扫描 |
+|---|---|---|
+| 390（生产口径 390/1E-8） | **13/13** `vasprun.xml` + 13/13 `General timing` | **`--scan-nelm` exit 0** ✓ |
+| 520（520/1E-7） | **13/13** `vasprun.xml` + 13/13 `General timing` | **`--scan-nelm` exit 0** ✓ |
+
+→ **26 帧全部 SCF 收敛**，没有 NELM 截断帧 —— 这是 §19 那道门禁**第一次用在真实数据上**（此前只在假帧与 bench 坏帧上验证过）。
+
+#### 390 拟合已提交
+
+```bash
+autozt -tt fc-fit -p MoS2_kltest -j S1_fit conf --set params.FIT_INPUT_DIR=<…/kl-dft-cpu/step4_disp>
+autozt -tt fc-fit -p MoS2_kltest -j S1_fit init      # gen：fit_config.json + submit.sh + driver ready
+autozt -tt fc-fit -p MoS2_kltest -j S1_fit start     # → jobid 3856220
+```
+参数：`FIT_ENGINE=pheasy`、`PHEASY_FIT_METHOD=OLS`、`PHEASY_RASR=BHH`（`-c` 步的 BHH 门禁会自动校验）。
+
+#### 后续（390 跑完后立即做）
+
+1. **核实产物是新的**：§20.8 的预演曾在同一个 `fc-fit/step1_fit/` 里跑过（假数据集），
+   确认 `fc2.hdf5` / `phonon_summary.json` 的时间戳**晚于本次作业开始**，否则说明读到旧产物 → 删掉重跑；
+2. 把 390 的 `step1_fit/` 另存为 `step1_fit_encut390/`；
+3. `conf --set params.FIT_INPUT_DIR=<…/bench/encut_2.0x_ediiff1e7_full12>` → `init` → `start` 跑 520 拟合，另存 `step1_fit_encut520/`；
+4. 四项对比（§20.3）：**ZA 指数 p**（`za_exponent_q1/q2`，两个面内方向，注意 `za_needs_review`）→ **Γ 点光学模频率** →
+   **整条谱频率 RMS 偏差（相对 %）** → κ；判据 **频率 < 1% 且 |Δp| < 0.05 → 390 够用**；
+5. 结论写 §21，再定 jzz 那 166 帧的口径（390/1e-8 vs 520/1e-7，成本实测 2.1×）。
+
+
+### 20.11 390 拟合结果 + 一个操作失误（2026-09-20）
+> **⚠️ 更正（2026-09-20 晚，产物核对后）**：上面对 jobid 3856228 的判断**是错的** —— 它**拟合的是 520 那套**。
+> 证据：`fit_config.json` 的 `dataset_dir_abs` 指向 `…/bench/encut_2.0x_ediiff1e7_full12`（mtime 16:39:35）、
+> `fc_dataset.json` 同指、产物时间戳 16:40–16:42，且指标与 390 副本**确实不同**（`lsmr_itn` 4024 vs 4037、
+> `min_frequency_THz` −2.179e−07 vs −1.944e−07、`fc2.hdf5` 60009 vs 60062 B；`free_ifcs` 两边都是 2304 ✓）。
+> 错误在于：由「`init` 打印了 no-op」**推断**"作业会用旧数据集"，**没有核对产物就下结论**。
+> 这正是 §15.2 第 4 条要防的事。另：`init` 在已完成步骤上打印 no-op 而配置最终仍被更新 —— **机制未查明**，留档备查。
+
+### 20.12 520 拟合结果与两套首轮对比（2026-09-20）
+
+**520 拟合**（jobid 3856228，`pheasy` + `OLS` + `RASR=BHH`）：`stable=true`、无虚频、`free_ifcs=2304`；
+产物已另存 `fc-fit/step1_fit_encut520/`（含 `fit_config.json`，其 `dataset_dir_abs` 指向 520 目录 —— 作为"这份是 520"的凭证）。
+
+| 指标 | 390（`step1_fit_encut390/`） | 520（`step1_fit_encut520/`） | 判读 |
+|---|---|---|---|
+| `pheasy_free_ifcs` | **2304** | **2304** | **一致 ✓** —— 同超胞/同截断/同对称性，只有力的数值不同，没有别的变量混入 |
+| `pheasy_lsmr_itn` | 4037 | 4024 | 相近（差 0.3%），两套数据信噪水平相当 |
+| `worst_force_correlation` | 1.0 | 1.0 | 都很干净 |
+| `stable` / 虚频 | true / false | true / false | 两套都稳定 |
+| `min_frequency_THz` | −1.944e−07 | −2.179e−07 | 都是数值零 |
+| `fc2.hdf5` 字节 | 60062 | 60009 | 不同 → 两套 FC 确实不一样（待比频率差多少） |
+
+**下一步**：按 §20.3/§20.10 做四项物理量对比（**ZA 指数 p → Γ 点光学模 → 谱频率 RMS → κ**），
+判据 **频率相对偏差 < 1% 且 |Δp| < 0.05 → 390 够用**；结论写 §21，再定 jzz 那 166 帧的口径。
+
+
+**390 拟合（jobid 3856220）成功**：
+
+- `fit_metrics.json`：`pheasy_method=OLS`、**`pheasy_worst_force_correlation = 1.0`**、
+  `pheasy_lsmr_istop=1`（求解收敛）、`pheasy_free_ifcs=2304`、`pheasy_cv_warning=false`；
+- `phonon_summary.json`：`FIT_DONE=true`、`engine=pheasy`、`n_frames=12`、`natom_super=75`、
+  **`stable=true`**、`imaginary_frequency=false`、`min_frequency_THz=-1.9e-07`（无虚频，数值零）；
+- 日志有 **`[OK] RASR=BHH imposed in the null-space construction step (-c)`**
+  → **P0-1 在真实数据上验证通过**（此前只在预演里验过机制）；
+- 产物另存 `fc-fit/step1_fit_encut390/`（**56 MB**：`fc2.hdf5=60062`、`fc3.hdf5=3332518`、
+  `FORCE_CONSTANTS=1344386` 及 `_2ND/_3RD`、`band-dft-cpu.yaml`、`cs.pkl`、`dataset_*.npy` —— 已逐一核对大小）。
+
+**★ 操作失误（已定性，待修）**：`conf --set params.FIT_INPUT_DIR=<520 目录>` 之后我跑的是 **`init`**；
+由于该步已完成，autozt 报「该步骤已完成，无需操作」→ **`fit_config.json` 未重新生成** → 于是 `start` 提交的
+**jobid 3856228 其实在重拟合 390 那套**（无害的重复；390 产物已完整另存）。
+
+**改配置后的正确动作是 `retry`（保留产物重生成输入），不是 `init`** —— 这是本会话同类坑第三次出现：
+① `rerun` 需交互确认（非交互调用 EOFError，但同串的 `start` 照样执行）；② `incar_bench.py submit` 无队列感知
+（会重交 pending 帧）；③ 本次 `init` 在已完成步骤上 no-op（配置改了但输入没重生成）。
+
+**处置**：等 3856228 结束后 → `retry` → `start`，那才是真正的 520 拟合；随后另存 `step1_fit_encut520/`，
+再做四项对比（§20.3/§20.10）。
+
+
+### 20.13 ★ 两份 fit_config.json 逐字段比对（回答「gen 到底重算了没」）
+
+比对结果（各 **48 键**）：值不同的只有 **3 个** ——
+
+| 键 | 390 | 520 | 判读 |
+|---|---|---|---|
+| `dataset_dir` / `dataset_dir_abs` | `…/step4_disp` | `…/bench/encut_2.0x_ediiff1e7_full12` | 预期之内（两套本来就是不同目录） |
+| **`dim`** | **`2d`** | **`3d`** | ✗ 真差异，见下 |
+
+- **`dim` 不同恰好证明 gen 确实重算了**（否则该字段也会与 390 相同）→ 此前"`init` no-op 导致配置未更新"的担心可以排除；
+  其余 45 键（`supercell`/`supercell_matrix`/`pheasy_c2_cutoff`/`pheasy_c3_cutoff`/`fc3_cutoff`/`pheasy_tol` 等）**逐字段相同** ✓，
+  与"两套同超胞、同截断、只有力的数值不同"一致（`free_ifcs` 两边都是 2304 也印证）。
+- **`dim=3d` 的根因**：520 数据集目录 `bench/encut_2.0x_ediiff1e7_full12/` **没有 `POSCAR`**
+  （§20.5 我只放了 `SPOSCAR` + `phono3py_disp.yaml`）→ `dim_common.detect_dimension(POSCAR)` 回退 → 判 3d。
+  **影响面**：fc-fit 里 `dim` 主要管 NAC 判据与 ZA 的 2D 闸门（`za_is_2d`）；**是否影响拟合出的 FC 正在从代码确认**
+  （若影响 → 520 那套需补 `POSCAR` 后重拟合，便宜；若不影响 → 现有两套 FC 仍可比，ZA 用显式 `vac_axis=2` 自行计算）。
+- **已处理**：把 `POSCAR` 补进 520 数据集目录（消除将来 gen 的同类回退）。
+
+
+---
+
+## 21. ★ MoS₂ 390 vs 520 四项对比结论（2026-09-20）
+
+证据：`tmp/mos2_fc_compare/MoS2_encut390_vs_520_report.md`、`analysis.json`（父会话已逐值复核吻合）。
+前置核实：两份 `band-dft-cpu.yaml` 的 q 路径**完全一致**（nq=459），POSCAR/SPOSCAR 逐字节相同；
+子代理用 phonopy 复现生产 band yaml（max|Δω|=1.1e-6 THz）自校验通过。
+
+### 21.1 判据结果：**390 够用 ✓（余量约 30 倍）**
+
+| 项 | 390 | 520 | 差 |
+|---|---|---|---|
+| Γ 点光学模（6 个） | 8.529–14.165 THz | 8.532–14.169 THz | 全部 \|相对\| **< 0.034%**，390 系统性略低 |
+| 整条谱（459 q × 9 支） | — | — | 相对 RMS **0.0334%**、max 相对 0.1124%、全局 0.0300% |
+| fc2 相对 Frobenius 差 | — | — | 0.0679% |
+| ZA 指数 p（Γ-M） | 1.18630 | 1.18625 | **Δp = 4.9e-5** |
+
+→ 判据 **频率 < 1%**（实测 0.03%，**约 30 倍余量**）且 **|Δp| < 0.05**（实测 4.9e-5）**通过**；
+⇒ **ENCUT 用 390（成本 ×1）即可，不必付 2.1×** —— 这就是 jzz 那 166 帧的 ENCUT 结论。
+
+### 21.2 ★ 但"第二重验证"未成立：ZA 不是二次色散（与 ENCUT 无关）
+
+- Γ-M (1,0,0)：两套 p ≈ **1.186**；**qmax 0.05→0.02→0.01 时 p = 1.186 → 1.043 → 1.011** ⇒ **ω∝q（线性）**；
+  R² ≈ 0.9945（高，说明不是噪声）；到 [1.7,2.3] 的余量为**负**（界外）；
+- Γ-K (1,1,0)：两套**都出现虚频**（wmin 390 = −0.02453、520 = −0.02555 THz）；
+- 方向扫描：θ=0 p≈1.077；30 p≈1.186；60/90/120 虚频；150 p≈1.112 → **θ=30 与 150 本应等价却不同**
+  ⇒ FC 有**小的六方对称破缺**。
+
+**含义（重要）**：期望的"BHH 让 ZA 恢复二次色散"**在真实数据上没有实现**，而两套一致 ⇒ 根源在 **FC 拟合环节**，
+与 ENCUT 无关。线索：pheasy 内部报 **Amm2 (38) / 4 ops**，而 spglib 对同一结构判 **P-6m2 (187) / 12 ops**；
+`RASR=BHH` 确实执行了（日志有 `[OK] RASR=BHH imposed … (-c)`）。
+⇒ **若 κ 依赖近 Γ 的二次 ZA 贡献，问题不在 ENCUT** —— **建议在投 jzz 那 166 帧的 S4 机时之前先把这一项查清**，
+否则 κ 的绝对值不可信（这是 P0-1"BHH 生效"在真实数据上的第一次检验，结果是**部分成立**：约束执行了，但 ZA 未被保护）。
+
+### 21.3 附带查明：`dim` 不影响 FC（520 无需重拟合）
+
+代码证据：`gen_step1_fit.py:64` 注释「auto | 2d | 3d (**NAC verdict only**)」；`fc_fit_driver.py` 读 `cfg["dim"]` 的
+唯一位置是 `_stability_gate`（L1712-1713 取 `is2d`、L1759 选 no-NAC/NAC）+ 写 summary；`pheasy --dim`（L1056/L1103）
+与 `_pheasy_supercell_order` 用的是 `cfg["supercell"]="5 5 1"`；两目录均无 `BORN` → 恒走 no-NAC。
+⇒ **`dim` 只影响 NAC 判据与 summary 的 `is_2d`，不影响拟合出的 FC** ⇒ 520 那套**不需要**为 `dim` 重拟合 ✓。
+（`POSCAR` 已补进 520 数据集目录，消除将来 gen 的同类回退。）
+
+### 21.4 ★ 发现一个必须修的代码 bug：S2_plot 的 ZA 方向选错
+
+`fc_plot_phonon._dim_and_axis` 从 `POSCAR` 取 vacuum axis=2，但 **`fit_config` 的原胞把真空映射到第 0 矢量**
+→ `_inplane_qdirs(ph, 2)` 实际取到 (1,0,0)=**真空方向** + (0,1,0)=Γ-M。**实测生产 `_za_summary`**：
+`za_exponent_q1=None`、`q2=1.186`、`za_ok=false`；520 因 `dim=3d` 还把 `za_needs_review=false` —— **掩盖掉问题**。
+⇒ **修法**：按 `fit_config` 的 `primitive_matrix` 判定真空在原胞的哪个矢量（或直接用 `primitive_matrix=None` 的单胞），
+不要从 POSCAR 取 `vac_axis`。**修好前 `phonon_band_summary.json` 的 `za_*` 字段不可信**。
+
+### 21.5 κ：按指示未跑
+
+前三项通过（约 30 倍余量），故**若只需确认，可用最粗网格 + 300 K 跑一次**；但**在 §21.2 查清之前，
+κ 的绝对值不宜作为结论**（近 Γ 的 ZA 线性化会直接改变 κ 的 q→0 贡献）。
+
+### 21.6 下一步（新工作，非本目标范围）
+
+1. **查 ZA 线性化的根因**（首选线索：pheasy 的 Amm2/P-6m2 对称性判断分歧；也可试 `FC_CALC=alm`/`symfc` 或
+   `FIT_ENGINE=phono3py` 做交叉对照，以及检查 3D 周期 slab + 应力/超胞层面对 Born-Huang 的影响）；
+2. **修 §21.4 的 ZA 方向 bug**；
+3. 查清后再定 jzz 那 166 帧的 S4 机时（ENCUT 已定 390）；
+4. 结构体检四判据（§14 第 7 行）仍未实现。
+
+
+---
+
+## 22. 2026-09-20：ZA 一项先按「怀疑测量」处理（wangchao 判断，采纳）
+
+**判断**：§21.2 的 p≈1.186 是在**取错 q 方向**上测出来的（§21.4 的真空轴 bug）→ **还不够格作为"ZA 线性化"的证据**。
+反证很有力：Γ 点光学模与文献吻合（实测 8.53–14.17 THz vs 文献 E″≈8.6 / E′≈11.5 / A₁′≈12.1 / A₂″≈14.1）——
+若 fc2 真坏到让 ZA 线性化，光学模不会这么准。⇒ 更可能是「**fc2 基本正确、ZA 测错了**」。
+
+**三步 + 条件分支（已交子代理 `5d208689`）**：
+
+1. **修方向 bug**：真空轴改由 `fit_config.json` 的 `primitive_matrix` 定位（不再从 POSCAR 取 `vac_axis`）；
+2. **改用本征矢量识别 ZA 支**：小 q 处逐支算本征矢量，取**面外分量占比最大**的那一支（旧"最低支"结果并列输出）；
+   对称性略有破缺时"最低支"可能已不是 ZA 甚至混合 —— 这个判据比"最低支"稳健得多，写进代码；
+3. **重测 p**（两套 × qmax 0.05/0.02/0.01）：p→2 则假警报解除、该项通过；仍 <1.5 则进第 4 步；
+4. （条件）**查对称性**：S1 POSCAR 的 a/b/夹角**全精度**打印 + **spglib 在 symprec 1e-5/1e-4/1e-3/1e-2 各跑一次**看空间群在哪翻转，
+   与 pheasy 内部报的 **Amm2 (38)/4 ops**（spglib 默认应为 P-6m2 (187)/12 ops）对照；若是**数值微畸变** →
+   建议进 S4 前用 spglib **对称化（refine cell）**，而不是去调 pheasy 容差。
+   （12 ops→4 ops 意味着独立力常数大幅增多、允许六方破缺 → 与 θ=30°/150° 不等价、Γ-K 小虚频一致；
+   2304 个自由度对如此高对称的体系本就偏多。Γ-K 那个 −0.025 THz 很小，对称性修好前不单独追。）
+
+**自校验要求**：用构造的最小 2D 体系（已知二次 ZA）验证**新判据能给出 p≈2** —— 否则新判据本身不可信。
+
+**同时确认的边界（wangchao）**：
+
+- **ENCUT 差分结论仍成立**：它是**两套之间的差分**，两套处理完全一致，故 ZA 绝对值有疑不影响它（频率 0.033%、|Δp| 4.9e-5、余量 30 倍 → **390 够用**）；
+- 但按 §16.1 的纪律**不得直接外推到 jzz 那批 80 原子超胞** —— 不需要重做整条链，
+  **只需在一个 jzz 材料上跑 2 帧的 390 vs 520 力对照**（成本很低），即可把差分结论落到真实规模；
+- **κ 继续不跑**（ZA 没搞清楚前，近 Γ 的 ZA 行为直接决定低频贡献，κ 绝对值无意义）；
+- **jzz 的 S4 机时先不投**；
+- **结构体检四判据排上**，并把**对称性检查（空间群操作数是否与预期相符）作为第五条**并进去。
+
+
+---
+
+## 23. ★ ZA 一项结论：假警报解除（ZA 是二次的）+ 撞出一个生产链路的同类 bug（2026-09-20）
+
+### 23.1 修正测量后：ZA 二次 ✓、两套一致 ✓（父会话已逐值核对）
+
+| 套 | qmax | p(Γ-M) | p(Γ-K) | R²(M/K) | 面外占比（首点/窗口最小） |
+|---|---|---|---|---|---|
+| 390 | 0.05 | **1.99307** | 1.98012 | 0.999996 / 0.999964 | 0.99991/0.98758（M）、0.99973/0.96559（K） |
+| 390 | 0.02 | 1.99888 | 1.99671 | ≈1.0 | — |
+| 390 | 0.01 | **1.99971** | 1.99917 | 1.000000 | — |
+| 520 | 0.05 | 1.99307 | 1.98014 | 同量级 | 同量级 |
+| 520 | 0.01 | 1.99972 | 1.99917 | 1.000000 | — |
+
+Δp(390−520)@0.05：Γ-M = 0.0、Γ-K = −2e-5 ≪ 0.05；**qmax→0 时 p→2.000**，支号恒 0、无混合 ⇒ **ZA 是二次色散**。
+⇒ **"ZA 线性化"是假警报**，本项**通过**；**ENCUT 差分结论不受影响**（未重做拟合：390 够用、余量 30 倍）。
+**自校验**：构造的已知二次 ZA 体系在新判据下 p = **1.9969 / 1.9907**（R²≈0.99999）；
+旧"最低支"因 z/面内支号交叉给 1.8630 ⇒ **新判据可信**。
+
+### 23.2 根因：数值微畸变 + 对称性识别容差（不是物理）
+
+- S1 弛豫后 POSCAR（两套逐字节相同，md5 `bbcb9d6d…`）：a=**3.140197057514**、b=**3.140189175214**
+  （差 **7.88e-6 Å**，相对 2.51e-6）、γ=**120.000083034652°**（偏 **8.30e-5°**）、α=β=90°；
+- spglib：**symprec=1e-5 → Amm2 (#38) 4 ops**（超胞 100 ops）；**≥1e-4 → P-6m2 (#187) 12 ops**（超胞 300 ops）；
+  pheasy 日志与 `pcell.symops` = Amm2/4 ops，与 1e-5 一致；
+- **★ 一处前提更正**：spglib 自带默认**也是 1e-5** ⇒ "默认容差应给 P-6m2/12 ops"**不成立**（P-6m2 需 ≥1e-4）；
+- 同一条 fc2：1e-5 → p=1.186（线性）；1e-4 → p=1.993（二次）。**手工把晶格度量对称化成精确六方**
+  （a=b=3.140193116364、γ=120）后**连 1e-5 都立即 P-6m2 且 p=1.993** ⇒ **畸变在几何上，不在拟合里**。
+
+### 23.3 ★★ 待批准 A：生产链路存在**完全相同**的方向 bug（优先级最高）
+
+`skill/kl-dft-cpu/kl_fc_backends.py:434` 的 `_inplane_qdirs(ph, vac_axis=2)`（以及 L466 的调用、`_za_check`）
+**与本次修掉的 bug 一模一样**（把 Cartesian 真空轴当原胞下标）—— 而**这是 kl 链 S5 的 ZA 门禁**：
+⇒ **此前该门禁的"ZA 通过/不通过"判定都是在错误方向上量的**，需修 + 复核历史结论。
+（本次未改：子代理的任务约束是"不碰 kl-dft-cpu"。）
+
+### 23.4 待批准 B：进 S4 前**对称化结构**（做成体检第五条）
+
+既然畸变在几何上 ⇒ 应在**进 S4 之前用 spglib 对称化 / refine cell**（拉平 a,b、锁 γ=120°），
+让 pheasy 的对称约束与 phonopy 的最近像平均都看到真实六方。这正好是**结构体检第五条**
+（"空间群操作数是否与预期相符"）的自然落点。
+（另：`fc_plot_phonon.main()` 的能带图仍用默认 symprec=1e-5 → 只有**在流水线层先对称化 POSCAR** 才能彻底一致。）
+
+### 23.5 其余遗留
+
+- 520 的 `fit_config.json` `dim=3d` → `za_is_2d=False` 会**跳过 review 闸门**（`POSCAR` 已补进该目录，下次 gen 即判 2d）；
+- `skill/fc-fit/README.md:295-329` 仍描述旧字段/旧判据（本次约束只许改 `.py`）；
+- 方向选取的**二次修正**已修 ✓：生产原胞面内基是 60°（非 identity 的 120°），旧规则会给出两个 Γ-M，
+  新增 `_k_sum_sign` 后得到真正的 Γ-M(330°) 与 Γ-K(0°)。
+
+
+---
+
+## 24. 2026-09-20：A/B 已批准并分派（wangchao 决定）
+
+### 24.1 A（修 kl 链同一方向 bug）—— 子代理 `b5256953`
+
+把 fc-fit 的修正**原样搬到** `skill/kl-dft-cpu/kl_fc_backends.py`（`_inplane_qdirs` L434 / 调用 L466 / `_za_check`）：
+① 按 `primitive_matrix` 定位真空矢量（`_vacuum_axis_in_primitive`）；
+② 非正交原胞的第二面内方向取 `e_i + s·e_j`（`_k_sum_sign`，否则生产原胞 60° 面内基会给出两个 Γ-M）；
+③ ZA 支改**本征矢量面外占比**识别（`za_power_law_eig`，面外 ≥0.5 的最低频支），不再取"最低支"；
+④ 质量字段与 fc-fit 对齐（R²/对数残差/余量/`za_needs_review`/面外占比/支号与混合说明）；
+⑤ 对称性审计（symprec 1e-5 vs 1e-4 不一致时用 1e-4 克隆）一并搬。
+**并复核历史结论**：列出此前经该门禁判过 ZA 的材料（搜 `za_exponent` / S5 产物），全部标注「不可信（测量方向错）」。
+**待办已记**：两侧现为各自副本，长期应合并到 `skill/_common/`，否则下次修要修两遍。
+
+### 24.2 B（结构对称化 = 体检第五条）—— 子代理 `a8b71919`
+
+- **判据（按 wangchao 指定）**：spglib 在 **symprec=1e-5 与 1e-4 给出的空间群不一致** ⇒ 存在**数值微畸变** ⇒ 触发对称化建议。
+  **不要固定某个容差当判据** —— 两容差对比更能发现问题；
+- **三项确认（任一不过不许静默通过）**：
+  ① 原子数与化学计量比**不变**；
+  ② **对称化前后单点能量差在数值噪声以内** —— "只是拉平了微畸变"的最直接验证；
+     若流水线内无法直接复用已有单点，就写成**显式的、可被 autozt 步骤调用的检查**并在文档写明成本（2 个单点）；
+  ③ **真空轴是否被移动** —— `refine_cell` 可能改变晶格矢量取向甚至原胞选取；若真空轴换了矢量必须明确报出，
+     下游所有认 `vac_axis` 的代码都要跟着走；
+- **落位**：S1 之后、S4 之前 ⇒ 等于链路里插了一次结构变更 ⇒ **对称化前后结构都要留档**，
+  provenance/日志写明"何时、因何触发、畸变量、三项确认结果"；
+- **对称化后重新检查面内残余应力**（拉平 a、b 会引入一点应力，量级应很小 7.88e-6 Å 级，但既然有门禁就让它过一遍）；
+- 默认**不改变现有行为**（体检只告警；对称化用显式开关），开关登记进 `step.conf`/`skill.yaml` 说明。
+
+### 24.3 接下来的顺序（wangchao 定）
+
+1. **A**：修 kl 方向 bug + 复核历史结论；
+2. **B**：对称化做成体检第五条（含三项确认）；
+3. **用新代码重刷 MoS₂ 两套的 `za_*` 字段**（fc2 未变、只改了测量；归档里的旧数必须重生成，否则留错数）——
+   排在 B 之后，因为对称化会再次改变 ZA；
+4. **在一个 jzz 材料上跑 2 帧 390 vs 520 力对照**，把 ENCUT 差分结论落到真实规模（§16.1 的纪律）；
+5. 这四项完成后再谈 jzz 的 S4 机时。**κ 继续不跑**。
+
+---
+
+## 25. 2026-09-20：B（结构对称化 = 体检第五条）已落地 —— 引擎 + 开关（子代理 `a8b71919`）
+
+### 25.1 交付物
+
+| 文件 | 改动 |
+|---|---|
+| `skill/_common/opt/symmetry_audit.py` | **新增**（自包含引擎 + CLI）：双容差空间群审计、spglib.refine_cell 对称化、三项确认、留档、能量/面内应力 OUTCAR 解析。顶层仅标准库，numpy/spglib 懒加载。 |
+| `skill/_common/opt/relax_common.py` | 新增 `import symmetry_audit`（触发公共池自动补推）；`CONF_SPEC` 加 `SYMMETRY_AUDIT/SYMMETRY_SYMMETRIZE/SYMMETRY_AUDIT_SYMPREC/SYMMETRY_ENERGY_TOL_MEV`；`apply_step_params` 落值校验；`symmetry_health_check()` 在 S1 gen 写 POSCAR 后审计（默认只告警）。 |
+| `skill/_common/README.md` | 新增 symmetry_audit 接口/开关/三项确认/成本说明。 |
+| `tests/suite_symmetry_audit.py` | **新增**自测（构造已知微畸变 + MoS2 实测数字 + 确认①护栏 + 能量/应力解析 + 留档）。 |
+| `tests/suite_autodeps.py` | 依赖闭包预期加入 `symmetry_audit.py`（否则自动补推漏推）。 |
+| `tests/test_suites.py` | LOCAL 登记新套件。 |
+
+### 25.2 关键事实
+
+- **判据**：symprec=1e-5 与 1e-4 空间群不一致 => 数值微畸变。MoS2 真实 S1 POSCAR 实测
+  a=3.140197057514 / b=3.140189175214 / gamma=120.000083034652°；1e-5 -> Amm2(#38)/4 ops，
+  1e-4 -> P-6m2(#187)/12 ops。对称化后（symprec=1e-4）a=b=3.140193116364、gamma=120，
+  两个容差都给 P-6m2，**真空轴 c(下标2) 未移动、中心未移、3 原子计量比不变**。
+- **三项确认实现状态**：① 纯几何，已实测（含"低容差 refine 把 3 原子变 6 原子被 ① 拦下"的负对照）；
+  ③ 纯几何，已实测；② 只提供解析对比与显式 pending 状态，**需真跑 2 个单点**（成本见 25.3）。
+  能量未提供时默认拒绝静默通过（`--allow-energy-pending` 才能继续，且 `fit_for_use=false`）。
+- **开关**：`SYMMETRY_AUDIT` 默认 `warn`（off/warn/error）；`SYMMETRY_SYMMETRIZE` 默认 `off`；
+  `SYMMETRY_AUDIT_SYMPREC` 默认 `1e-4`；`SYMMETRY_ENERGY_TOL_MEV` 默认 `1.0`。默认不修改结构，
+  只在 S1 gen 打印一行审计结论；对称化必须显式 `--mode symmetrize`（CLI）或后续步骤 gen 调用。
+- **落位**：逻辑位置 S1 之后、S4 之前；留档 `<结构同目录>/symmetry_audit/{POSCAR.before,
+  POSCAR.symmetrized, symmetry_audit.json, symmetry_audit.log}`，并把触发时间/畸变量/确认结果/
+  应力复检并入 `provenance.json`；就地对称化另存 `POSCAR.pre_symmetry`。
+
+### 25.3 遗留（需上层/其它会话接手）
+
+1. **kl-dft-cpu S2/S4 gen 的接线未做** —— ✅ 已于 2026-09-20 完成，见 **§26**。（原文如下）约束禁止本子代理改 `skill/kl-dft-cpu/*`。建议在 S1 之后、
+   进 S4 前的那个 gen（`gen_step2_static.py` 或 `gen_step4_disp.py`）读 S1 的 POSCAR 后调用
+   `symmetry_audit.py --mode symmetrize --inplace --allow-energy-pending`（或在 step.conf 设
+   `SYMMETRY_SYMMETRIZE=on` 后由该 gen 消费），并把 `symmetry_audit.py` 纳入该步 `gen_need`。
+2. **能量确认（2 个单点）与对称化后应力复检（1 个单点）未跑**：需要在上述接入点跑对称化前后各一个
+   单点（可复用 S2 静态自洽结果），把 OUTCAR 传给 `--energy-before/--energy-after` 与
+   `--stress-before/--stress-after`。这是"只是拉平了微畸变"的最后一道实证。
+3. **`symmetry_health_check` 审计的是 S1 的输入结构**，S1 弛豫后的微畸变仍要在下一步显式对称化时审计。
+
+### 25.4 证据
+
+- `python3 tests/suite_symmetry_audit.py`（需 spglib）**ALL PASS**；system python3 无 spglib 时 SKIP=exit 0。
+- `python3 tests/suite_io_schema.py` / `suite_skillspec.py` / `suite_asset_lookup.py` / `suite_autodeps.py` 全 exit 0。
+- 真实 MoS2 审计/对称化命令输出见 `tmp/mos2_fc_compare/encut390/symmetry_audit.json`（子代理运行产物）。
+
+---
+
+# 26. 2026-09-20：B 接线落地 —— kl-dft-cpu S2/S3/S4 gen 接上结构体检第五条
+
+> 完成 §25.3 遗留 1。默认行为不变；对称化必须显式开，且必须过确认②。
+
+## 26.1 改动
+
+| 文件 | 改动 |
+|---|---|
+| `skill/kl-dft-cpu/kl_common.py` | 新增 `SYMMETRY_SPEC`（9 个键）、`symmetry_gate(poscar, conf)`、`_cget/_switch_on`。 |
+| `gen_step2_static.py` / `gen_step3_nac.py` / `gen_step4_disp.py` | `SPEC.update(kc.SYMMETRY_SPEC)`；在 `relay_poscar` 之后调用 `kc.symmetry_gate(out/"POSCAR", conf)`。 |
+| `skill/kl-dft-cpu/skill.yaml` | S2/S3/S4 的 `gen_need` 加 `symmetry_audit.py`。 |
+| `templates/step2_static|step3_nac|step4_disp/step.conf` | 注释块说明 8 个 SYMMETRY 键（默认不写 = warn/off）。 |
+| `skill/kl-dft-cpu/README.md` | 「关键开关」加一条。 |
+
+顺序：`gen_step4_disp.py` 里 gate 在 L310，`build_displacements`/`check_existing_matches_input` 在 L359/L270
+—— 指纹比对用的是**对称化后的** POSCAR，一致。
+
+## 26.2 语义（★ 确认② 必须显式给）
+
+- `SYMMETRY_AUDIT=warn`（默认）：只审计打印，结构不动。`off` 全跳过；`error` 检出微畸变即 gen 失败。
+- `SYMMETRY_SYMMETRIZE=off`（默认）：**绝不改结构**（现有行为不变）。
+- `SYMMETRY_SYMMETRIZE=on`：
+  - 给了 `SYMMETRY_ENERGY_BEFORE/AFTER`（两个单点 OUTCAR 路径）**且**差值 < `SYMMETRY_ENERGY_TOL_MEV`
+    → 就地对称化，`fit_for_use=true`；
+  - 差值超阈值 → `symmetry_audit` 抛 SystemExit（确认② fail），**不静默通过**；
+  - 没给能量 → gen 失败，**不动本步 POSCAR**，只把候选写到 `stepN/symmetry_audit/POSCAR.symmetrized`，
+    提示补两个单点后 retry；要强行先出结构可设 `SYMMETRY_ALLOW_PENDING=true`（标 `fit_for_use=false`）。
+- 开关只能写进**该步**的 `step.conf`（`templates/<step>/step.conf`）—— 写进全局 `templates/step.conf` 会漏进
+  别的步骤触发「本脚本不认识的键」（project 模板头部已警告）。
+
+## 26.3 验证
+
+- 端到端（`atomate2_p_a` python + 真实 MoS₂ S1 CONTCAR，`tmp/_symgate_e2e/run.py`）：off / warn / error /
+  on-无能量 / on-pending / on-能量 pass / on-能量 fail 七种组合行为全部符合 26.2；on-无能量时
+  `sha(POSCAR)` 不变、候选存在。
+- `python3 -m py_compile` 四个 py 全过；`suite_autodeps` / `suite_skillspec` / `suite_io_schema` /
+  `test_suites` 全 exit 0；`suite_symmetry_audit` 本机无 spglib → SKIP(exit 0)。
+
+## 26.4 仍欠
+
+- 对称化前后两个单点（确认②的实证）与对称化后应力复检仍**未跑**（§25.3 遗留 2）。
+- 旧结构上的 S4 `retry` + `SYMMETRY_SYMMETRIZE=on` 会被 S4 的 disp 指纹拦下（disp yaml 属于未对称化
+  结构）—— 设计内的安全行为，需 `rerun`（破坏性，先请示）或保持 off。
+
+---
+
+# 27. 2026-09-20：A（kl 链 ZA 方向 bug）完成并验收 —— 子代理 `b5256953`
+
+## 27.1 改动（隔离）
+只改 `skill/kl-dft-cpu/kl_fc_backends.py`（+361/−35，mtime 23:04）。其余 `skill/fc-fit/*`、
+`skill/_common/opt/*`、`skill/_common/mlff/*`、`gen_step5_fc.py` 的 mtime 均早于 23:00，未被 A 触碰
+（工作区其它 dirty 是别的会话遗留）。
+
+把 fc-fit 的修复原样搬来：`_k_sum_sign`（60° 面内基给 Γ-K，不再第二个 Γ-M）、`_inplane_qdirs` 改用原胞
+下标、`_vacuum_axis_in_primitive`（Cartesian 真空轴→原胞基矢下标）、`_eig_out_of_plane`/`za_power_law_eig`
+（本征矢量面外占比 ≥0.5 的最低频支识别 ZA）、`_cell_symmetry`/`_relaxed_symprec`/`_clone_phonopy`
+（symprec 1e-5 vs 1e-4 不一致时用 1e-4 克隆）、`_za_check` 重写（新字段嵌在 `phonon_summary.json` 的
+`za_exponent` 下，向后兼容 `mode/qmax/p_range/dirs/p/min_freq/ok/note`）。附带同源修复：
+`_stability_gate` 的 `band_path_2d` 也改传原胞下标（原来把 Cartesian vax 当原胞下标，2D 能带路径画错）。
+
+调用方核对：`za_power_law` 由 2-tuple 变 3-tuple，仓库内唯一生产调用方（L721）已同步；fc-fit 侧本就是
+3-tuple；mlff 是独立副本未动。`za_exponent` 无外部消费者（仅 mlff 另产一份）。
+
+## 27.2 验收（本会话独立复跑）
+- `/home/wangchao/miniconda3/envs/atomate2_p_a/bin/python tmp/_kltest_za_kl.py` → **EXIT=0 / ALL PASS**。
+- 真实 MoS₂ fc2（`tmp/mos2_fc_compare/encut390`）：vac 轴 cartesian=2→primitive=0，dirs=[(0,1,0),(0,1,-1)]；
+  kl 的 p 与 fc-fit `_za_summary` **逐位相同**：qmax=0.05 → 1.9930749384721134 / 1.9801186415609848；
+  qmax=0.01 → 1.9997130 / 1.9991729（收敛 2.000）。symprec Amm2(#38)/4 → P-6m2(#187)/12。
+- `ast.parse` OK；`suite_io_schema` / `suite_skillspec` / `suite_asset_lookup` / `suite_autodeps` /
+  `test_suites` 全 exit 0。
+
+## 27.3 历史材料复核（jzzn work 只读）
+- 全库 grep `za_exponent`（所有 `*kl-dft-cpu*/*.json`、每个 `step5_fc/queue.{out,err}`）→ **0 命中**：
+  jzzn 上没有任何一份 kl S5 产物记录过 ZA 判定，**没有"旧错误 za 数"要覆盖**（§24.3 item 3 的归档事实据此修正）。
+- 唯一跑到 S5 的 2D 材料 `P1_Mo-MoS2_Z4-3-1_Z4-3-1_Mo2S3`：`phonon_summary.json`（mtime 08-30）早于门禁，
+  无 `za_exponent`。若当时旧门禁真跑过同一条 fc2，会得 q1=None / q2=1.186 → `ok=False`，把真实二次 ZA
+  误判为不合格、误挡 S6。其余 S5 均 3D（门禁按设计 None）；另有 10 个 kl-dft-cpu 材料无 step5_fc。
+
+## 27.4 遗留
+1. **第三份副本**：`skill/_common/mlff/klmlff_common.py` 的 `inplane_qdirs`/`za_check_2d`（L397/L431）
+   同样是无条件 `e_i+e_j`、无 vac 映射、无本征矢量判据，被 `phonon-mlff-cpu/gpu` 调用。按约束未改，
+   已在 TODO 点名 —— 待 wangchao 决定是否同步修（该文件正被另一会话的 mace→mlff 重命名改动）。
+2. mesh 最小频率仍用默认 symprec=1e-5（只 ZA 拟合用了 1e-4 克隆），与改前一致。
+3. `band_path_2d` 修复改变了 2D 的 S5 能带路径（更正确但属行为变更），重跑材料时可对比。
+
+---
+
+# 28. 2026-09-21：A/B 收尾 —— 第三副本风险、三副本合并待办、band_path_2d 行为变更、B 单点排期、Item 4 方案
+
+## 28.1 ⚠️ 短期风险（显眼）：phonon-mlff-cpu/gpu 的 ZA 判定现在是错的
+
+- **文件**：`skill/_common/mlff/klmlff_common.py` —— `inplane_qdirs`（约 L397）、`za_check_2d`（约 L431）。
+- **同源 bug 三件套**：① 把 Cartesian 真空轴当原胞基矢下标；② 60° 生产原胞的第二面内方向取成
+  `e_i+e_j`（变成第二个 Γ-M，而不是 Γ-K）；③ 无本征矢量面外占比判据，取"全局最低支"。
+- **调用方**：`skill/phonon-mlff-cpu/phonon_fit_driver.py`、`skill/phonon-mlff-gpu/phonon_fit_driver.py`
+  （`za_check_2d(ph, uc.cell, vac_axis or 2)`），产出的 `phonon_band_summary.json.phonon...za_exponent` 不可信。
+- **结论**：**在修好前，MLFF 那条链路的 ZA 结论、以及据它判定的 2D κ 一律不能用**（哪怕数值看着正常）。
+
+## 28.2 给 mace→mlff 会话的 commit note（第三副本修复）
+
+> 该文件正被 mace→mlff 重命名的会话改动，本会话**不碰**；请由该会话应用。仓库里没找到该会话
+> 专属 commit plan 文件（只有 `tmp/zt_commit_state_*.md` 的先例），故写在此处，请转达/摘入其计划。
+
+- **改哪**：`klmlff_common.py` 的 `inplane_qdirs` / `za_check_2d`。
+- **怎么改**（照抄已验收的 kl 侧）：`skill/kl-dft-cpu/kl_fc_backends.py` 的
+  `_k_sum_sign`(L460)、`_inplane_qdirs`(L473)、`_vacuum_axis_in_primitive`(L503)、
+  `_eig_out_of_plane`(L521)、`za_power_law_eig`(L536)、`_cell_symmetry`(L592)、
+  `_relaxed_symprec`(L602)、`_clone_phonopy`(L617)、`_za_check`(L626)；fc-fit 有同名实现。
+- **怎么验证**：用同一个 MoS₂ fc2（`tmp/mos2_fc_compare/encut390`，md5 `acfd37b238bad6d25c1541848e42e8bc`）
+  跑，期望 vac 轴 cartesian=2→primitive=0，dirs=`[(0,1,0),(0,1,-1)]`，
+  qmax=0.05 → p=`(1.9930749384721134, 1.9801186415609848)`，qmax=0.01 → `(1.9997130, 1.9991729)`。
+  可直接复用 `tmp/_kltest_za_kl.py`。
+- **commit 建议**：`fix(mlff): 同步 kl 的 ZA 方向/本征矢量修复（第三副本）`。
+
+## 28.3 正式待办：三副本合并到 `_common/`（不是旁注）
+
+ZA 2D 判定现有 **3 份独立实现**：`skill/fc-fit/fc_plot_phonon.py`、`skill/kl-dft-cpu/kl_fc_backends.py`、
+`skill/_common/mlff/klmlff_common.py`。**本次修一个 bug 要改三处，下次还会是三处。**
+正式列为待办：把 `_k_sum_sign/_inplane_qdirs/_vacuum_axis_in_primitive/_eig_out_of_plane/
+za_power_law_eig/_cell_symmetry/_clone_phonopy` 收敛到公共模块（如 `skill/_common/za_2d.py`），
+三处改 import。**属新增公共模块 → 需 wangchao 批准后再做。**
+
+## 28.4 band_path_2d 行为变更（2D S5 能带路径）
+
+`kl_fc_backends._stability_gate` 现在先把 Cartesian 真空轴映射成原胞基矢下标再调 `band_path_2d`。
+→ 2D 的 S5 `band-dft-cpu.yaml` **路径变了**（更正确）。**此前用旧路径出过的 2D 能带图都要重画**；
+对比新旧图时若路径不一致，原因在此。目前只有 `P1_Mo-MoS2_Z4-3-1_Z4-3-1_Mo2S3` 走到过 S5，影响面小。
+
+## 28.5 B 的三个单点：四个候选中无微畸变 → 建议放在 MoS₂ 上做
+
+实测四个候选 S1 结构（`symmetry_audit`，symprec 1e-5 vs 1e-4）：
+
+| 材料 | 原胞 | 超胞 | 1e-5 | 1e-4 | 微畸变 |
+|---|---|---|---|---|---|
+| Mo₂S₃ A4-3-1 | 20 | **120** | P1(#1) 1 op | P1(#1) 1 op | 无 |
+| Mo₃S₄ Z3-2-1 | 14 | 56 | Pm(#6) 2 ops | Pm(#6) 2 ops | 无 |
+| Mo₂S₃ Z4-3-1 | 10 | 80 | Pm(#6) 2 ops | Pm(#6) 2 ops | 无 |
+| Ti₂S₃ Z4-3-1 | 10 | 80 | Pm(#6) 2 ops | Pm(#6) 2 ops | 无 |
+
+→ **对这四个材料，B 的对称化门是 no-op（不触发），确认②本就无从触发。** wangchao 2026-09-21 决定：
+**B 的三个单点（①对称化前 ②对称化后 ③对称化后应力）一并取消**，不再单独占机时。B 的门禁逻辑
+已有构造体系自测 + 真实 MoS₂ 审计/对称化证据（§25）；真要在生产上演示，等某个材料确实弛豫出
+微畸变时再说。
+
+## 28.6 Item 4（jzz 2 帧 × ENCUT 390/520 力对照）—— **已取消**（wangchao 2026-09-21）
+
+理由：测出来只是两个内部数字，**没有外部参照可比**；而 MoS₂ 上已有「频率相对偏差 0.033% vs
+判据 1%」即 ~30 倍余量的结论。再花机时做同量级内部差分，收益不足。
+
+### 28.6.1 ★ 已知限制（据此取消 Item 4，必须记住）
+
+> **「ENCUT=390 够用」这一结论的依据是 MoS₂ 上的差分，超胞 75 原子；外推到 120 原子级别的超胞
+> 未经验证。** 将来若有材料在 ~120+ 原子超胞上给出接近判据的力/频率差分，须重新评估 ENCUT。
+> 旁证（不再据此下新结论）：MoS₂ 上 EDIFF 1e-8 vs 1e-7 的力差 <0.004 meV/Å。
+
+以下为取消前的候选与选帧记录（**留档，不再执行**）：
+
+- **候选超胞规模**见 28.5 表。Z4-3-1 虽有 166 个 `disp-*`，但**属旧结构**（有 `README_OLD_STRUCTURE.md`），不可用。
+- **机制**：`incar_bench.py` 的 `_production_frames` 只 glob `disp-*` 且取"前 N 帧"，四个候选都没有 `disp-*`
+  （只有 `POSCAR-*`）→ 需加 `--frame-list`（指定帧号）并允许从 `POSCAR-*` 取帧。属本会话自己的工具的扩展。
+- **选帧**（同批位移，按 max|u|）：
+  - A4-3-1：小 = POSCAR-00374（0.04676 Å）／大 = POSCAR-00200（0.08583 Å）
+  - Ti₂S₃：小 = POSCAR-00157（0.04408 Å）／大 = POSCAR-00118（0.08475 Å）
+- **EDIFF**：建议四条腿统一 `EDIFF=1E-8` + `NELM=300` 做纯 ENCUT 对照；若 520 仍打满 NELM，
+  退到 MoS₂ 口径（520@1E-7，390 也补 1E-7），报告中写明该前提（MoS₂ 实测 1e-8 vs 1e-7 力差 <0.004 meV/Å）。
+
+---
+
+# 29. 2026-09-21：结构体检四条落地 + MoS₂ 推到 S6（S5/S5.1 完成；S6 暴露「网格轴序」bug）
+
+## 29.1 结构体检四条（S1 gen，默认 warn）—— 已落地
+
+- **新增** `skill/_common/opt/structure_health.py`（368 行）：① 最近邻 < 0.7×共价半径和
+  ② 周期镜像 CN≤1 悬挂 ③ 命名 vs 计量比 ④ z 跨度 vs 层数。顶层只标准库、numpy 懒加载，
+  异常只跳过、绝不阻断 gen。
+- **标定**：CN 截断 = **1.0×共价半径和**，且**必须算周期镜像**（MoS₂ 3 原子胞：不算镜像会把一个 S
+  的 3 个 Mo 邻居错算成 CN=1、误报悬挂；算镜像后 Mo=6 / S=3）。
+  实测：AlN[d8] / Zn5O3[d32] / BeO[d4] **全部被拦**；四个候选 + 两套 MoS₂ **全部通过**；
+  MoS₂ 坏种子（Mo、S 同面内位，d=1.570 Å）被 ① 抓（比值 0.61）。
+- **测试** `tests/suite_structure_health.py` ALL PASS（构造坏/好结构 + 真实材料护栏）；
+  已登记 `tests/test_suites.py` LOCAL、`tests/suite_autodeps.py` 依赖闭包。
+- **接入** `relax_common.py`：CONF_SPEC 加 `STRUCTURE_HEALTH`(off|warn|error，默认 warn)、
+  S1 gen 在 `symmetry_health_check` 之后调用 `structure_health_check(outdir/"POSCAR", material_name=outdir.parent.name)`，
+  落档 `step1_std_opt/structure_health.json`。**默认只告警，不改行为。**
+
+## 29.2 MoS₂ S5_fc 完成 + A 的 ZA 修复在生产链路验证
+
+- jobid **3856363 COMPLETED**（1:51；pheasy LASSO 拟合仅 23 s）。SCF 门禁 13/13 帧干净。
+- **生产 ZA：p(q1,q2)=[1.993, 1.980]**（本征矢量判据；symprec 1e-5→Amm2/1e-4→P-6m2，ZA 用 1e-4 克隆）
+  —— 与 fc-fit `MoS2_ZA_refix_report.md` 逐位一致。pheasy rel_err 0.195%，RASR(BHH) applied，stable。
+- ★ **发现并修**：S5_fc 作业目录缺 `kl_common.py`/`dim_common.py`（`gen_step5_fc.py` 只拷
+  `kl_fc_backends.py`），导致 `band-dft-cpu.yaml` 出图段 `No module named 'kl_common'` 静默跳过。
+  已在 `gen_step5_fc.py` 里额外拷这两个文件。
+
+## 29.3 MoS₂ S5.1 完成，暴露并修掉「第二处轴序 bug」
+
+- 首跑（3856364）路径 = **Γ-X-S-Y-Γ（rectangular）—— 错的**。原胞基矢被 `primitive_matrix`
+  重排：a1=(0,0,-25)（真空）、a2/a3=面内（60° 对称相关）；而 `gen_step5.1_plot_phonon._dim_axis`
+  返回的是 **Cartesian 轴 2** 并直接传给 `band_path_2d` → 用"25 Å 真空基矢 + 一个面内基矢"判成 rectangular。
+- **修**：`kl_common` 新增 `vacuum_axis_in_primitive(cell, cart_axis)`（单一真源）；
+  S5.1 先映射再调用；`kl_fc_backends._vacuum_axis_in_primitive` 改为委托它。
+  另加**路径指纹 sidecar** `band_<tag>.path`：路径变了就丢缓存重算（否则断点续画会把错误路径的谱缓存下去）。
+- 重跑（3856366）**COMPLETED**：**hexagonal，Γ-M-K-Γ，kz=0**。Γ 光学支
+  8.554 / 8.571 / 11.572 / 11.576 / 12.156 / 14.150 THz —— 与 fc-fit 390 套（8.529–14.165）在 0.3% 内，
+  与单层 MoS₂ 文献一致。数据 `tmp/mos2_s51/band_nonac.dat`。
+- ⚠️ 正路径下 `band_nonac` 最低 **−0.055 THz**（S5.1 的 IMAG_TOL=−0.05 标「含虚频」；S5 的 −0.10
+  判据仍 stable）。待查：Γ 附近插值振铃 vs 残余应力软模。
+
+## 29.4 ★ MoS₂ S6 失败 —— 「网格轴序」bug（与 29.3 同源，**尚未修**）
+
+- jobid 3856365 COMPLETED 但产物 **NO_KAPPA**：三次 phono3py 全报
+  `RuntimeError: Grid symmetry is broken. If grid symmetry is uncertain, try automatic mesh generation using a scalar value.`
+- **根因**：`kl_params` 的 `MESH=88 88 1` 是 **POSCAR(Cartesian) 轴序**；phono3py 的 `--mesh`
+  是 **原胞基矢轴序**。原胞重排后 a1=真空、a2/a3=面内（60°，对称相关）；`88 88 1` 把 88 给
+  a1/a2、1 给 a3 → 两个**面内**轴网格不等 → 破缺。正确应为 `1 88 88`。
+- **修法（未做）**：`gen_step6_kappa` 把 mesh 从 POSCAR 轴序映射到原胞基矢轴序（最稳：直接按原胞
+  基矢长度 + `Q_LEN_2D` 在基矢序里重算，vacuum 轴=1）。
+- 副作用确认：`thickness_2d.json` 已在材料级生成（`../thickness_2d.json`，d=6.718 Å，source=step6_kappa）——
+  P0-2 的「S1 写、S6 读」链路至少落档位置对上了。
+
+## 29.5 下轮待办（按序）
+
+1. **修 S6 网格轴序 → 重跑 S6**：RTA 三档（88/110/138）+ **只最粗档 300 K 的 LBTE 对照**
+   （当前 `COMPARE_LBTE=auto` 不跑 LBTE；且 `on` 是跑最细档，需改成最粗档+仅 300 K）。
+2. S6 后与文献比 **κ×d**（避开厚度口径差异）。
+3. 结构体检：跑一次真实 S1 gen 端到端确认（默认 warn）。
+4. ZA/band 多副本合并（本轮已先收敛 `vacuum_axis_in_primitive` 到 `kl_common`）。
+5. `gen_step6_kappa` 的 `write_material_level('..')` 路径、init 阶段模板占位符检查。
+
+---
+
+# 30. 2026-09-21：S6 网格轴序修复 + LBTE(最粗档/300K) + 厚度路径修正；MoS₂ κ 初见
+
+## 30.1 本轮修复
+
+- **S6 网格轴序**（§29.4 的失败根因）：`gen_step6_kappa` 新增 `_mesh_prim_remap` / `_prim_lattice`；
+  2D 时把 **POSCAR 轴序**的网格重排成**原胞基矢轴序**。MoS₂ 实测 `88 88 1 -> 1 88 88`。
+  重生成的 submit.sh 三条 RTA 为 `--mesh 1 88 88 / 1 110 110 / 1 138 138`。
+- **LBTE 对照 = 最粗档 + 仅 300 K**（wangchao 指定）：`build_phono3py_cmd` 加 `ts_override`；
+  `plan` 追加 `(mesh_list[0], lbte)` 且 `ts_override={'lbte':'300'}`。MoS₂ 项目
+  `step6_kappa/step.conf` 设 `COMPARE_LBTE = on`。submit.sh 已确认
+  `phono3py-load ... --lbte --mesh 1 88 88 --ts="300"`。
+- **KAPPA_DONE 容错**：主口径（RTA）各档齐全即成功；LBTE 腿缺失只告警，不再把整步拖成 NO_KAPPA。
+- **`thickness_2d.json` 路径**：S6 的 `_MAT_LEVEL` 从 `'..'`（技能目录）改成 `'../..'`（材料根），
+  与 S1 的 `write_material_thickness`（`outdir.parent.parent`）对齐；source 同属 kl-dft-cpu 链 → S6 覆盖 S1 粗值。
+
+## 30.2 MoS₂ S6 运行中（jobid 3856367，cu03，premium 2 天）
+
+- RTA `1 88 88`（01:14）与 `1 110 110`（01:19）已出；`1 138 138` 在跑；之后 LBTE(`1 88 88`, 300 K)。
+- **300 K 面内 κ（原始含真空口径）**：88 -> xx=20.88 / yy=21.97 / **inplane=21.43**；
+  110 -> **21.33** W/m/K；相邻档差 **0.44% < 5%** → 网格收敛判据通过（待 138 确认）。
+- 归一化因子 `h⊥/d = 25/6.718 = 3.72` → **面内 κ(归一) ≈ 79.7 W/m/K @300 K**（待 extract 正式落 kappa_summary.json）。
+- **κ×d = 原始 κ × h⊥ ≈ 21.43 × 25 = 536 W/m/K·Å**（避开厚度口径差异；与单层 MoS₂ 文献量级一致，待正式对照）。
+
+## 30.3 P2-3 Janus 偶极修正：**已实现**（不是只剩注释）
+
+`relax_common.decide_dipole_2d`（L1405，auto 用 `slab_is_asymmetric` 判面外镜面/两端元素不同）
++ `dipole_lines` + `DIPOLE_2D` 开关；S1 渲染时决定，S2/S4 用 `kl_common.dipole_line_from_incar`
+原样继承（S1/S2/S4 同一静电边界条件）。**唯一缺的是在真实 Janus 材料上端到端跑一遍**（当前链上没有 Janus 材料）。
+
+## 30.4 2D k 路径：seekpath / kz 段问题已解决
+
+`gen_step5.1_plot_phonon._band_path`：2D 走 `kl_common.band_path_2d`（kz 固定 0 的二维表），
+**只有 3D 才用 seekpath**；2D 的回退路径也是 kz=0 的 Γ-M-K-Γ。S5.1 实测日志 `hexagonal Γ-M-K-Γ`，
+侧车指纹 `band_nonac.path = {"source":"2d-hexagonal",...}`。`kl_fc_backends._stability_gate` 同。
+
+## 30.5 下轮
+
+1. 等 S6 完成（RTA 138 + LBTE）→ 读 `kappa_summary.json`（归一化 κ / `rta_over_full` / `mesh_convergence`）。
+2. 与文献比 **κ×d**（单层 MoS₂ 300 K 参考 ~80–110 W/m/K，κ×d ~500–680 W/m/K·Å）。
+3. **ZA 三副本合并到 `_common/`**（fc-fit / kl-dft-cpu / mlff；先建共享模块，mlff 那份由对方会话迁移）。
+4. init 阶段模板占位符检查。
+
+---
+
+# 31. 2026-09-21：ZA 2D 判定三副本合并（完成两份）+ MoS₂ RTA κ 收敛
+
+## 31.1 ZA 2D 判定的单一真源：`skill/_common/za_2d.py`（新）
+
+- **新建** `skill/_common/za_2d.py`（221 行）：`ZA_P_RANGE/ZA_ZFRAC_MIN/ZA_MARGIN_MIN/ZA_R2_MIN/
+  ZA_SYMPREC_DEFAULT/ZA_SYMPREC_RELAX` + `za_power_law / k_sum_sign / inplane_qdirs /
+  vacuum_axis_in_primitive / eig_out_of_plane / za_power_law_eig / cell_symmetry /
+  relaxed_symprec / clone_phonopy`。
+- **两个消费者已迁移**（本地重复实现删除、改为别名 import）：
+  `skill/kl-dft-cpu/kl_fc_backends.py`（-约 200 行）、`skill/fc-fit/fc_plot_phonon.py`（-约 200 行）。
+  `_za_check` / `_za_summary` 两个**输出 schema 不同**的包装仍留在各自文件（字段名不一样，不该强行统一）。
+- **gen_need**：kl `S5_fc` 与 fc-fit `S2_plot` 各加 `za_2d.py`；`find_asset` 实测两者都解析到
+  `skill/_common/za_2d.py`。`tests/suite_autodeps.py` 新增第 6 节常驻校验。
+- **验证**：`tmp/_kltest_za_kl.py` **ALL PASS**（同一 MoS₂ fc2 上 kl 的 p 与 fc-fit 的 `_za_summary`
+  仍逐位一致：1.9930749384721134 / 1.9801186415609848）；`suite_structure_health` /
+  `suite_io_schema` / `suite_skillspec` / `suite_asset_lookup` / `suite_autodeps` 全绿。
+- **第三副本 `skill/_common/mlff/klmlff_common.py` 仍未迁移**（该文件正被 mace→mlff 会话改，
+  按约定不碰）。共享模块已就绪，对方只需 `from za_2d import ...` 删本地实现即可（§28.2 的 note 仍有效）。
+
+## 31.2 MoS₂ S6 —— RTA 三档完成且收敛（jobid 3856367）
+
+| mesh（原胞基矢序） | 300 K 面内 κ（原始含真空口径）W/m/K |
+|---|---|
+| `1 88 88` | 21.425 |
+| `1 110 110` | 21.332 |
+| `1 138 138` | **21.427**（主口径=最细档 RTA） |
+
+- 相邻档相对变化 **-0.44% / +0.45%**，`max_rel_change_pct ≈ 0.45% < 5%` → **网格收敛判据通过**。
+- zz 分量 = 0.000（真空方向，符合 2D 预期）。
+- **归一化**：`h⊥/d = 25/6.718 = 3.721` → 面内 **κ(归一) = 79.7 W/m/K @300 K**；
+  **κ×d = κ_原始 × h⊥ = 21.427 × 25 = 535.7 W/m/K·Å**（这个量避开层厚口径差异）。
+- **与文献量级一致**：单层 1H-MoS₂（PBE, RTA）文献 300 K 通常 κ ≈ 80–110 W/m/K、
+  κ×d ≈ 500–650 W/m/K·Å。本值在合理区间偏下沿 —— 与 RTA 低估（正规过程主导）的预期一致，
+  正在跑的 **LBTE(最粗档, 300 K)** 会给出该低估的量级。
+- `kappa_summary.json` 要等 LBTE 腿跑完由 extract 统一写出（含 `rta_over_full` / `mesh_convergence` /
+  `kappa_2d_normalized_*`）。LBTE 在 19 分钟时仍在跑。
+
+## 31.3 下轮
+
+1. 等 LBTE 腿 → `kappa_summary.json` → 记录 `rta_over_full`，完成**与文献的 κ×d 正式对照**。
+2. mlff 第三副本迁移（等对方会话；note 已备）。
+3. init 阶段模板占位符检查。
+4. jzz S4（最后）。
+
+---
+
+# 32. 2026-09-21：init 模板检查暂缓（会话冲突）+ MoS₂ κ 文献对照（RTA）
+
+## 32.1 init 阶段模板占位符检查：**暂缓**（避免与在途会话冲突）
+
+- `autozt/ops.py` 正被另一会话改动（mtime 09-21 00:23）；init 的模板复制逻辑在
+  `_init_one_skill`（约 L838 起）里，现在动它会撞车。
+- **设计（等 ops.py 稳定后做）**：`_init_one_skill` 复制模板后，对每个"项目级已存在"的模板
+  与其技能模板比对 `{{占位符}}` 集合；项目副本缺了技能模板里有的占位符 → WARN
+  （提示"项目级副本可能是技能模板的旧拷贝；gen 阶段虽会被 `require=`/`render_tpl` 拦下，
+  但那时前序作业多已提交"）。这是与该条需求最贴合、且不引入新 schema 的实现。
+
+## 32.2 MoS₂ κ（RTA）与文献量级
+
+- **面内 κ(归一) = 79.7 W/m/K @300 K；κ×d = 535.7 W/m/K·Å**；三档网格相邻变化 ≤0.45%（收敛）。
+- 文献（**量级**；本次网络抓取被阻断，确切数值引用待补）：单层 1H-MoS₂ 第一性原理 300 K 常见
+  κ ≈ 80–110 W/m/K、κ×d ≈ 500–680 W/m/K·Å。检索到的代表工作：
+  "Thermal conductivity and phonon linewidths of monolayer MoS2 from first principles"
+  （APL 103, 253103, 2013）等。
+- 本值落在合理区间**偏下沿**，与 RTA 低估（2D 正规过程主导）的预期一致；等 LBTE 腿跑完用
+  `rta_over_full` 量化。
+
+## 32.3 LBTE 状态（jobid 3856367）
+
+- 已跑 >44 min：碰撞矩阵建完（shape `(1,1,1981,9,3,1981,9,3)`）、简并平均、对称化完成，
+  正在 `scipy.linalg.lapack.dsyev` 对角化（53487 维 × 96 OMP 线程）。
+- RTA 的三个 `kappa-m*.hdf5` 已就绪 → 本步的科学结果（κ(RTA) 与网格收敛）不受 LBTE 影响；
+  `kappa_summary.json`（含 `rta_over_full`）要等 LBTE 结束由 extract 统一写。
+
+---
+
+# 33. 2026-09-21：init 阶段模板占位符漂移检查（item 2.4）—— 已实现
+
+- `autozt/ops.py`：新增 `_PH_RE` + `_template_drift(src, dst)`（返回 src 里有、dst 里缺的
+  `{{占位符}}` 集合；读失败返回空集，绝不拦 init）；在 `_init_one_skill` 复制 `templates/` 的
+  循环里，**"项目级模板已存在且未覆盖"** 的分支加比对，缺则打印：
+  `[WARN] 项目模板 X 缺占位符 ... —— 可能是技能模板的旧拷贝；gen 阶段才会被 render_tpl/require
+  拦下（那时前序作业多已提交）。用出厂版刷新：init -f。`
+- 只新增、不改动既有行，故与该文件上另一会话的在途改动不冲突（编辑前已核对 `_init_one_skill` 当前文本）。
+- **测试**：新增 `tests/suite_template_drift.py`（4 断言：旧拷贝缺 3 个全报出 / 一致无漂移 /
+  多出占位符不算漂移 / 读不到源文件返回空集），**ALL PASS**，已登记进 `tests/test_suites.py` LOCAL。
+- 回归：`test_suites` RC=0、`suite_autodeps` / `suite_asset_lookup` / `suite_template_drift` 全绿。
+
+---
+
+# 34. 2026-09-21：提交清单 / 会话隔离（worktree）操作卡 + 两处仓库卫生问题
+
+## 34.1 本会话（2D kl 修复）的 path-scoped 提交清单
+
+**新增（untracked）**
+- `skill/_common/opt/symmetry_audit.py`（结构体检第五条，子代理 B）
+- `skill/_common/opt/structure_health.py`（结构体检四条，本会话）
+- `skill/_common/za_2d.py`（ZA 2D 判定单一真源，三副本合并）
+- `tests/suite_symmetry_audit.py` / `tests/suite_structure_health.py` / `tests/suite_template_drift.py`
+
+**修改（本会话相关）**
+- `skill/_common/opt/relax_common.py`（S1 接体检四条 + 第五条）
+- `skill/kl-dft-cpu/{kl_common.py, kl_fc_backends.py, gen_step2_static.py, gen_step3_nac.py,
+  gen_step4_disp.py, gen_step5.1_plot_phonon.py, gen_step5_fc.py, gen_step6_kappa.py,
+  skill.yaml, README.md, templates/step2_static|step3_nac|step4_disp/step.conf}`
+- `skill/fc-fit/{fc_plot_phonon.py, gen_step1_fit.py, skill.yaml, README.md, templates/step1_fit/step.conf}`
+- `tests/{suite_autodeps.py, test_suites.py}`、`autozt/ops.py`、`docs/HANDOVER-2D-kl-20260917.md`
+
+> ⚠️ `autozt/ops.py` 里**混着另一会话的改动**（该文件在 09-21 00:23 被改过）。本会话只加了
+> `_PH_RE` + `_template_drift()` 与 `_init_one_skill` 里一处 5 行的 WARN 分支（见 §33）。
+> 提交时要么整文件提交（会把对方改动一起带上），要么 `git add -p` 只挑本会话的 hunk。
+
+## 34.2 会话隔离（worktree）操作卡 —— 落实"多会话分区"
+
+**问题**：多个会话在 `~/software/AutoZT` 同一工作区并行改文件，`git status` 里混成一团，
+path-scoped commit 也难免带上别人的在途改动（`ops.py` 就是例子）。
+
+**做法（每个新会话一个 worktree，未提交改动互不可见）**：
+```bash
+cd ~/software/AutoZT
+git worktree add ../AutoZT-wt-<会话名> -b wt-<会话名> master
+cd ../AutoZT-wt-<会话名>            # 从这里启动该会话的 agent
+# ... 干活、在自己的分支上提交 ...
+git worktree list                   # 查看所有 worktree
+git worktree remove ../AutoZT-wt-<会话名>   # 收工（先确保已提交/丢弃改动）
+```
+**注意**：
+- worktree 共享同一个 `.git`（分支/提交互通），但**工作目录独立** → 未提交改动不再互相污染。
+- `setting/`、项目数据根（`/mnt/d/tf_data/...`）是机器级资源：worktree 里若缺 `setting/tf.yaml`，
+  用软链指过去（`ln -s ~/software/AutoZT/setting setting`），别复制一份（会漂）。
+- 已有会话正在主工作区跑、且改动未提交 → **现在不要**把它们搬进 worktree；本条从**下一个新会话**生效。
+- 本仓库现有 `docs/dev/DEV-ISOLATION.md` 讲的是另一套（AutoZT-v1.0/v2.0 副本）方案，**已作废**，勿混淆。
+
+## 34.3 两处仓库卫生问题（顺手记下，非本会话引入）
+
+1. **`autozt/ops.py` 多会话混改**：见 34.1 的警告。
+2. **过期项目配置卡住 `merge_project_configs`**：`/mnt/d/tf_data/work_AutoZT/Mg2C60_kl_c75_c40/
+   materials/project_setting/tf_Mg2C60_kl_c75_c40.yaml` 里有 `kl-dft-cpu:` 段，但全局
+   `setting/tf.yaml` 没有该类型定义 → 继承报错（报错信息自己给了 `sed` 修法）。它会让
+   需要 `merge_project_configs` 的进程内操作失败（CLI 的 init 不受影响）。
+
+---
+
+# 35. 2026-09-21：SCALEBROAD 在本步无法验证（仅 shengbte/fourphonon 生效）
+
+- `SCALEBROAD`（step.conf）**只写进 ShengBTE / fourphonon 的 CONTROL**（字段
+  `kappa_scalebroad`，见 `gen_step6_kappa.py:497` 与 `lattice_kappa.py`）；
+  **phono3py 路径根本不读它**。
+- MoS₂ 的 S6 用 `SOLVER=phono3py`（RTA 三档 + LBTE 最粗档），所以"SCALEBROAD 在 2D 上
+  是否可控（1.0 vs 0.1）"这一项**本轮无法验证**。要验需另起一个 `SOLVER=shengbte`
+  （或 fourphonon）的 S6，在最粗档网格上跑 `SCALEBROAD=1.0` 与 `0.1` 两次对照。
+  **记为已知未验项。**
+- 同批"2D 未验项"的现状：`MESH_SCAN` 三档 **已验**（收敛 ≤0.45%）；RTA/LBTE 对照 **进行中**；
+  2D 归一化（P0-2）**已验**；2D k 路径 `kz=0` **已验**；Janus 偶极修正**代码已实现**（缺真实
+  Janus 材料端到端）。
+
+---
+
+# 36. 2026-09-21：LBTE(1 88 88, 300 K) 的实测代价 —— 超过 1.5 h 仍在对角化
+
+- MoS₂ 的 LBTE 用的是 **最粗 RTA 档 `1 88 88`** → 1981 个不可约 q 点 →
+  碰撞矩阵 `(1981×9×3)² ≈ 2.9e9` 元素、实对称约 **23 GB**。
+  `scipy.linalg.lapack.dsyev` 于 **01:33:31** 开始对角化，到 **02:42**（**69 min**）仍在跑。
+- **结论（供以后定默认值参考）**：88×88 的 LBTE 在本机（96 OMP 线程）属"能跑但重"。
+  日常 RTA-vs-LBTE 对照建议用**专门的更粗网格**（如 32×32，不可约 ~300 点，碰撞矩阵小 ~40×），
+  而不是"最粗 RTA 档"。当前实现取 `mesh_list[0]`，对 88 档偏贵 —— 若以后 2D 的
+  `Q_LEN_2D` 默认更大，这个腿会越来越贵，届时应在 step.conf 给 LBTE 单独的 mesh。
+- 未改代码：本轮只是记录代价与建议（用户指定的就是"最粗网格 + 300 K"，照做）。
+- **补充观测（03:08）**：cu03 空闲内存 ~506 GB（未换页），但 **load 仅 13**（96 个 OMP 线程里
+  只有 ~13 个在有效工作）→ dsyev 受内存带宽限制、并行效率低，这正是它慢的原因。
+  到 03:08 已对角化 ~95 min，仍未出结果。
+- **活性实测（06:44，`sstat -j 3856367.batch`）**：`AveCPU = 1-03:29:31`（**27.5 CPU-h**）、
+  `MaxRSS = 22.6 GB`、`NTasks = 1`、`MaxVMSize = 228 GB`。即进程确实在算，但
+  **有效并行只有 ~5 个线程**（27.5 CPU-h ÷ 5.5 h wall）—— scipy/OpenBLAS 的 `dsyev`
+  在多线程下扩展极差。这是 88×88 LBTE 慢的真正原因；粗估总时长 10–16 h。
+
+
+---
+
+# 37. 2026-09-22：S5.1 `band_nonac` −0.055 THz 定性 —— Amm2 微畸变致 FC 六方破缺（非插值毛刺）
+
+## 37.1 两条腿结论不一致
+
+- S5.1 生产输出（`step5_phonon_plot/phonon_plot_summary.json`，路径 `2d-hexagonal` Γ-M-K-Γ，93 点）：
+  `nonac` min_freq = **−0.0554 THz**（`imaginary: true`）；`nac` min_freq = −0.0294 THz（false）。
+- 同一材料的 S5 门禁（`step5_fc/phonon_summary.json`）却报 `stable: true`、`min_frequency_THz = −6.5e-8`。
+  两条腿的差异在 37.6-1 有解释（mesh 语义），但**先要判 −0.055 本身是真是假**。
+
+## 37.2 逐点定位：是真的，不是出图毛刺
+
+- 读生产 `band_nonac.dat`/`.yaml`：全局最小在 **q = (0, 1/30, 1/30)**（原胞约化坐标，kz=0）
+  = **−0.055377 THz**，最低支（ZA）。负频只有 **3/93** 个路径点，全在 **K→Γ 收尾**
+  （t = 0.10K / 0.067K / 0.033K）；Γ 点三支声学严格 0（RASR 生效），Γ→M 一路为正。
+- 用同一 `step5_fc/phono3py/fc2.hdf5` 直接 `run_qpoints([0,1/30,1/30])` → **−0.055377**，
+  与路径文件逐位一致 ⇒ **FC 里真有这个软模**，与画图/插值无关。
+
+## 37.3 方向依赖（关键证据）
+
+同一 fc2、无 NAC，密集扫描 ZA（THz）：
+
+| 方向 | frac 0.005 | 0.01 | 0.02 | 0.05 | 0.1 |
+|---|---|---|---|---|---|
+| Γ→K（(1,1) 向）| −0.0044 | −0.0088 | −0.0175 | −0.0407 | **−0.0554** |
+| Γ→M（b₂ 向）| +0.0012 | +0.0027 | +0.0074 | +0.0380 | +0.1451 |
+
+- 同 |q| 对比：沿轴 `(0,0,0.02)`（|q| = 0.0462 Å⁻¹）ZA = **+0.025**；
+  沿 Γ-K 向 `(0,0.01155,0.01155)`（同 |q|）ZA ≈ **−0.029**。
+- Γ→K 的 ZA 极小 = **−0.0566 THz @ frac 0.09**（q ≈ (0,0.03,0.03)）。
+- ⇒ 六方体系固定 |q| 上 ZA **本应各向同性**；实测"轴向正、对角线负"= **FC 的六方破缺很大**，
+  远非 1e-6 量级的几何微畸变可比 ⇒ **破缺是被拟合放大的**，不是几何本身。
+
+## 37.4 根因验证：同一 FC 投影到 P-6m2 后虚频消失 ★
+
+同一 `fc2.hdf5`，只改 phonopy `symprec` 并做 `symmetrize_force_constants()`：
+
+| symprec | 空间群（超胞 ops）| Γ→K ZA @frac0.1 | Γ→M ZA @frac0.1 |
+|---|---|---|---|
+| 1e-5 | **Amm2**（100）| **−0.0554（虚）** | +0.1451 |
+| 1e-4 + 对称化 | **P-6m2**（300）| **+0.0654（实）** | +0.1438 |
+
+- 对称化后 Γ→K 全部转正（+0.0002@0.005 → +0.0654@0.1），Γ→M 几乎不变。
+- Γ-M 与 Γ-K 在 P-6m2（D3h）下**本来就不等价**（0° 与 30° 不在同一 orbit），两者数值不同是允许的；
+  关键是 **Γ→K 不再有虚频**。
+- ⇒ **结论**：「S1 弛豫后 a≠b（差 7.88e-6 Å）→ symprec 1e-5 只认 Amm2（4 原胞 ops）→
+  FC 拟合被限制在 Amm2 不变子空间 → 六方对称破缺 → ZA 沿 Γ-K 变虚」。
+  **这正是 §23.2 微畸变 + §24.2/§25 B（结构对称化）要修的问题，本次首次给出量化收益。**
+  与 §23.1 自洽：同一 fc2 在 1e-5 下 p=1.186（线性）、1e-4 下 p=1.993（二次）。
+
+## 37.5 对 κ 的实际影响：有限
+
+- S6 用**原胞基矢序** `1 88 88` Γ 中心网格（7744 点）。用 fc2 直接算：
+  **19/7744 个 q 点最低支为虚**，最小 **−0.0546 THz**，集中在 q_red=(0, m/88, n/88) 近 Γ（m,n ≤ 3）。
+- phono3py 3.24 的 `Cutoff frequency: 0.01`（THz）把这些 |ω|<0.01 的模式从 κ 求和里排除；
+  **日志里没有任何 imaginary 警告**（phono3py 在 conductivity 模式不报）。
+- 影响面 = 0.25% 的 q 点 × 9 支里 1 支 ⇒ **对 κ 很小**，与三档网格相邻变化 ≤0.45%、
+  与文献量级一致的事实相符。**但近 Γ 的 ZA 贡献确实被截断**，κ 绝对精度不宜再往下抠。
+
+## 37.6 两个代码问题（本次只记录，未改）
+
+1. **S5 虚频门禁的 mesh 比名字粗得多（真 bug）**：`kl_fc_backends.py:655` 用
+   `ph.run_mesh(mesh=60.0)`。phonopy 2.47 里 **float mesh 是面间距语义**
+   `N_i = max(1, nint(60/d_i))`（并强制 Γ 中心）；本体系实测 `mesh_numbers = [2, 22, 22]`
+   （真空轴 2、面内各 22），**不是 60×60**。面内最近 q = |b|/22 = **0.105 Å⁻¹**，
+   而软模在 0.133 Å⁻¹ ⇒ **门禁压根没采到**（所以 S5_fc 报 −6.5e-8）。门禁有效密度比预期弱约 3 倍。
+   - 佐因：该作业的 band 腿因 `No module named 'kl_common'` 崩了（`queue.out:183`），
+     代码把 `min(mf_mesh, band_min)` 里的 band 失败当作"出图、不影响判据"→ **这条注释是误导的**，
+     因为 mesh 兜底很粗。`gen_step5_fc.py` 已修（拷 kl_common，§29.2），但**兜底路径隐患仍在**。
+   - 建议改：面内用显式整数网格（真空轴置 1）；band 失败由"跳过"改为 **WARN + 打印真实 mesh 数**。
+2. **同一物理量三套阈值**：S5 门禁 `IMAG_THR = 0.10`（step.conf，会挡 S6）；
+   S5.1 画图 `IMAG_TOL = -0.05`（硬编码，只标图）；`lattice_kappa.py:215` 又用 `imag_thr = 0.5`。
+   MoS₂ 的 −0.055 恰卡在 0.05 与 0.10 之间 ⇒ 三处给出"S5 稳定 / S5.1 有虚频 / κ 正常"，
+   读者会困惑。建议 S5.1 标注阈值改读 step.conf 的 `IMAG_THR`（或注释说明三者用途）。
+   **待用户定，本次未改。**
+- 本次全部为 **ssh 只读诊断 + 用现成 `fc2.hdf5` 直接复算**，未改任何生产文件。
+
+## 37.7 建议（需用户点头）
+
+- **对称化重跑 MoS₂ 最能验证 B 端到端**：打开 S1 的 `SYMMETRY_SYMMETRIZE` → 重生成 S4/S5/S5.1
+  → 预期 `band_nonac` 无虚频（37.4 已用"事后投影"证明）。代价：MoS₂ 拟合只是 12 帧
+  （pheasy 23 s）、S4 重跑 13 帧；S6 是否重跑待定。
+- **jzz 那批 166 帧在对称化之前不宜投** —— 37.4 给了这条建议量化依据。
+- 该结论也让 §31.2 的 κ 结论**更稳**：κ 的三档收敛与文献量级不受这个 0.055 THz 软模影响。
+
+
+---
+
+# 38. 2026-09-22：ZA 三副本合并收尾（mlff 第三份）+ `test_suites` 空跑更正
+
+## 38.1 mlff 第三副本已迁移，并在真实 MoS₂ FC 上验证
+
+- 文件：`skill/_common/mlff/klmlff_common.py`（此前是"坏的那份"）：
+  · 顶层加 `from za_2d import (...)`，并把 `_common/`（上一级）也放进 `sys.path`，
+    仓库内直接 import 与作业目录平铺两种情形都能解析；
+  · 本地 `inplane_qdirs` / `za_power_law` 实现删除，改为委托 `za_2d`（去掉重复实现）；
+  · `za_check_2d` 重写为编排层，修三处（与 kl-dft-cpu 的 `_za_check` 同源）：
+    ① **方向**：vac_axis 按 Cartesian 语义先映射到【原胞基矢】下标（旧版当 cell 行下标，
+       非正交原胞上会取到"真空方向 + Γ-M"）；
+    ② **ZA 支**：改由本征矢量面外占比 ≥ `ZA_ZFRAC_MIN` 的最低频支识别（旧版一律取最低支）；
+    ③ **数值微畸变**：symprec 1e-5 与 1e-4 空间群不一致时用 1e-4 的克隆拟合（旧版无此步骤，
+       会被假线性化成 p≈1.2）。
+  · **schema 与旧版兼容**（qmax/p_range/dirs/p/min_freq/ok/note，失败带 error），
+    `skill/phonon-mlff-cpu/phonon_fit_driver.py:167` 的 `kmc.za_check_2d(ph, uc.cell, vac_axis or 2)`
+    **无需改动**。
+- **端到端验证**（jzzn `atomate2_p_a`，用现成 MoS₂ `step5_fc/phono3py/fc2.hdf5`）：
+  `za_check_2d(ph, ph.unitcell.cell, 2)` → `p = [1.99346, 1.97995]`、
+  `p_lowest = [1.99346, 1.97995]`、`ok = True`、`za_symprec = 1e-4`、`relaxed = True`、
+  `zfrac_min = [0.988, 0.966]`、`dirs = [[0,1,0], [0,1,-1]]`；
+  与 kl 生产 / fc-fit 的 `[1.993, 1.980]` **逐位一致**；默认 symprec 下的假线性
+  `[1.739, 1.474]` 也如实并列在 `za_exponent_default_q1/q2`。
+- **gen_need**：6 个 mlff 技能（kl/opt/phonon × cpu/gpu）共 **19 处** gen_need 各加 `za_2d.py`。
+  `tests/suite_autodeps.py` §6 扩到 **8 条**解析断言（新增 6 个 mlff），**ALL PASS**。
+- **协作风控（重要）**：`klmlff_common.py` 目前仍是**未跟踪文件**，属另一会话 mace→mlff
+  重命名（索引里 AM/AD 未提交，该目录最后改动 09-20 20:10；当时活跃的是 eph-qe-cpu 会话）。
+  本次只动 ZA 段、未动其它逻辑；若该会话回来补写，请以本段为准保留 ZA 迁移。
+
+## 38.2 ★ 更正：`tests/test_suites.py` 直接 `python3` 跑是**空操作**
+
+- 该文件是 **pytest 模块**（只有 `@pytest.mark.parametrize`，没有 `__main__`）：
+  `python3 tests/test_suites.py` 什么都不做、退出码 0 ⇒ 本文件前面几节里记的
+  "**`test_suites` RC=0 全绿**"是**空跑**（各 `suite_*.py` 单独直接跑是真的，结论不受影响）。
+- **正确跑法**：`python3 -m pytest tests/test_suites.py -q`（本机 18 个套件）。
+  2026-09-22 实跑：**18 passed，EXIT=0**（含 `symmetry_audit` / `structure_health` /
+  `template_drift` 三个新增套件）。
+- 遗留：`TASKFLOW.md` 等文档里"直接跑 `test_suites.py`"的说法应改成 pytest 调用。**待用户定。**
+
+## 38.3 LBTE 现状（写本节时）
+
+- 3856367 已 `1-02:30`（wall `2-00:00:00`，2026-09-23 01:12 到期），仍在
+  `scipy.linalg.lapack.dsyev`；`kappa-m18888.lbte.hdf5` 仍未生成。
+
+## 38.4 确认：2D k 路径的 "seekpath 带 kz 段" 已解决，但 mlff 调用点仍传错基
+
+- **seekpath 的 kz 段问题：已解决（两条链）**。2D 分支一律走本地路径表，不调 seekpath：
+  · kl：`kl_fc_backends.py:687-700`（is2d → `band_path_2d`，否则 `auto_band_structure`）、
+    `gen_step5.1_plot_phonon.py:202`（`band_path_2d`）；
+  · mlff：`phonon-mlff-cpu/phonon_fit_driver.py:142`、`phonon-mlff-gpu/...:68`（is2d → `band_path_2d`）。
+  即"seekpath 是 3D 工具、会给出 Γ-A 这类 kz 段"这一条**不会发生在 2D 分支里**。
+- **★ 但 mlff 的调用点仍传错基（已确认，未改）**：kl 侧已改成
+  `band_path_2d(ph.primitive.cell, 101, _prim_vax)`（`kl_fc_backends.py:693`、
+  `gen_step5.1_plot_phonon.py:202`），而 mlff 两处仍传 **`uc.cell` + Cartesian `vac_axis`**：
+  `phonon-mlff-cpu/phonon_fit_driver.py:142`、`phonon-mlff-gpu/phonon_fit_driver.py:68`
+  （`kmc.band_path_2d(uc.cell, 101, vac_axis or 2)`）。
+  `band_path_2d` 内部按 **cell 行下标**取面内两矢量，且 q 点是在**原胞倒格基**里解释的
+  ⇒ 若 MACE 链的 `primitive_matrix` 重排了原胞基矢（生产 MoS₂ 就把真空放在第 0 基矢），
+  同一处"下标基"bug 仍在。
+- **修法（与 kl 完全相同，2 行/处）**：
+  ```python
+  _vax_prim = kmc.vacuum_axis_in_primitive(ph, vac_axis or 2)
+  _paths, _labels, _lat = kmc.band_path_2d(ph.primitive.cell, 101, _vax_prim)
+  ```
+  需在 `klmlff_common` 里补一个 `vacuum_axis_in_primitive` 别名（`za_2d` 已有实现）。
+- **本次未改的原因**：这两个 driver 属另一会话 mace→mlff 重命名的**在途 staged 文件**
+  （`git status` = `AM`），改它会与该会话的在途改动撞车。**已记录，等该会话收工或用户点头再做。**
+
+
+---
+
+# 39. 2026-09-22：P0-2 厚度契约现状核实（逻辑已验证；线上数据没走到材料根）
+
+## 39.1 `_MAT_LEVEL` 就地验证（模拟目录树；源码用 AST 取真实字面量，不重写）
+
+- 正例：在 `<mat>/MoS2_kltest/kl-dft-cpu/step6_kappa/` 下执行 `_MAT_LEVEL`
+  → 写到 **`<mat>/thickness_2d.json`（材料根）**；技能目录与 cwd **都不写**。
+- 负对照：技能目录名不含 `-`（regex 不匹配）→ 打印"材料根识别失败"、**不写**。
+- 跨链契约（`skill/_common/thickness_2d.py`，四例全对）：
+  kl S1 新建 → kl S6 **同链覆盖** → ke 异链 Δd=0.082 > 0.05 **WARN 且不覆盖** →
+  ke 异链 Δd=0.002 < 0.05 "与本次计算一致，不覆盖"。
+
+## 39.2 ★ 但线上 MoS₂ 的 S6 用的是**旧代码**，所以 P0-2 端到端仍未达成
+
+- 线上 `step6_kappa/submit.sh`（mtime 09-21 01:12）里是
+  `write_material_level('..', THICK2D)` + `path.insert(0, abspath('..'))`
+  ⇒ 材料根被识别成**技能目录**（旧行为）。
+- jzzn 实测：`thickness_2d.json` 只有两份，**都在 `kl-dft-cpu/` 下**
+  （`kl-dft-cpu/step6_kappa/` 与 `kl-dft-cpu/`）；**`<mat>/thickness_2d.json` 不存在**。
+- ⇒ `gen_step6_kappa.py` 的 `'../..'` 修复（在 01:11/01:12 之后落地）**没有进入这条已跑的作业**；
+  P0-2 的"材料根契约"在本材料上**尚未端到端跑通**——与需求里"P0-2 至今没有端到端验证过"一致。
+  补法：S6 `retry`（重新生成输入，保留产物）后重跑，或等该材料下次 S6。**需用户点头。**
+  （本节的模拟只证明"修好后的逻辑对"，不等于线上数据已符合契约。）
+
+## 39.3 顺带查清：线上 `kappa_summary.json` 是"修复前"的陈旧产物
+
+- 磁盘上 `kappa_summary.json`（mtime 09-21 00:55）报 `KAPPA_DONE: false`、`runs: []`，
+  且找的是 `kappa-m88881.hdf5`（**旧轴序** `88 88 1`），而实际文件是 `kappa-m18888.rta.hdf5`。
+- 但**运行中的** `submit.sh`（01:12）**是自洽的**：`--mesh 1 88 88`、
+  PLAN 里 `kappa-m18888.rta.hdf5`、`PRIMARY='1 138 138|rta'`，且 `KAPPA_DONE` 已改成
+  **只看主口径（RTA）各档是否齐全**（第 158 行 `_missing_primary`；LBTE 缺失只 WARN）。
+- ⇒ 只要作业能跑到收尾的 extract，`kappa_summary.json` 会被覆盖成正确版本（含
+  `kappa_2d_normalized_*`）；**若 LBTE 被墙钟杀掉、脚本没走到 extract，就停在 00:55 那份陈旧文件**。
+- **未手动跑 extract**：那会写作业目录，并可能让 autozt 把 S6 误判为 done（作业其实还在跑），
+  违反"状态动作走 autozt / 不碰生产文件"。
+
+## 39.4 由此得到的 P0-2 结论（写进已知限制）
+
+> **P0-2 的"材料根 thickness_2d.json"契约：代码逻辑已单元级验证通过（39.1），
+> 但截止 2026-09-22，没有任何**真实材料**完成过端到端（线上 MoS₂ 的 S6 早于修复、
+> 只写到了技能目录）。下次任何材料跑 S6 时须核实 `<mat>/thickness_2d.json` 出现。**
+
+## 39.5 P2-3（Janus 偶极）现状复核：**不是"只是注释"，已实现**
+
+- 目标里写"Janus 的偶极修正（P2-3）仍然只是注释"**已过时**。实测代码：
+  · `relax_common.decide_dipole_2d(poscar, dim, mode, vac_axis)`（L1405，`auto|on|off`，
+    非 2D 恒 off，`auto` 走 `slab_is_asymmetric` 判"有无面外镜面 + 上下元素是否一致"）；
+  · `relax_common.dipole_lines()`（L1420）产出 `LDIPOL/IDIPOL/DIPOL/ISYM` 行 + provenance 注释；
+  · S1 接入（L2549-2563）；S2/S4 经 `kl_common.dipole_line_from_incar` 从上一段 INCAR 抄同一套
+    （`gen_step2_static.py:66`、`gen_step4_disp.py:389`）；`step.conf` 有 `DIPOLE_2D` 开关。
+- **仍缺的只有"真实 Janus 材料端到端"**（当前批次没有不对称 2D 结构，`auto` 一律判 off）。
+- 一处**潜在限制（未改）**：`dipole_lines()` 把 `IDIPOL = 3`、`DIPOL = 0.5 0.5 0.5` 写死为
+  Cartesian z 方向；`decide_dipole_2d` 收了 `vac_axis` 但没传进去。本流水线的 2D 结构都是 z 真空，
+  暂无影响；若将来出现 x/y 真空的 slab，需要按 `vac_axis` 生成 `IDIPOL=1/2` 与对应的 `DIPOL`。
+
+
+---
+
+# 40. 2026-09-22：κ 自身的六方破缺证据（κ_xx ≠ κ_yy）—— 独立佐证 §37
+
+- 直接读三个 RTA hdf5（**独立于**此前的提取脚本/汇总，jzzn `atomate2_p_a` + h5py）：
+
+| mesh（原胞序）| κ_xx | κ_yy | κ_zz | 面内平均 | 归一化(×3.7215) | 相邻档变化 |
+|---|---|---|---|---|---|---|
+| 1 88 88   | 20.8815 | 21.9676 | 0.0000 | 21.4246 | 79.7316 | — |
+| 1 110 110 | 20.6585 | 22.0055 | 0.0000 | 21.3320 | 79.3870 | **−0.432%** |
+| 1 138 138 | 20.7814 | 22.0723 | 0.0000 | 21.4269 | 79.7402 | **+0.445%** |
+
+- 与 §31.2 记录逐位一致（21.425 / 21.332 / 21.427）⇒ 头号结论**复核通过**。
+- ★ **六方体系里 κ_xx 必须等于 κ_yy**；实测差 **5.07% / 6.31% / 6.02%**（三档一致）。
+  这与 §37 的"FC 拟合被约束在 Amm2（4 原胞 ops）、六方对称破缺"**完全吻合**，
+  且是**独立于声子谱的第二组证据**（同一个根因同时污染 ZA 分支与 κ 张量）。
+- 面内平均仍稳定（相邻 ≤0.45%）⇒ §31.2 的"网格收敛 + 文献量级"结论**不受影响**；
+  各向异性在 xx/yy 上近似反对称，抹平后平均值变化不大，所以 κ ≈ 21.43、归一化 79.7 W/m/K
+  不会量级改变。
+- ★ **含义（给对称化重跑一个可验收指标）**：B（`SYMMETRY_SYMMETRIZE`）应同时把
+  κ_xx 拉回 κ_yy。重跑后**判据**：κ_xx 与 κ_yy 的相对差进入数值噪声（<1%），同时
+  `band_nonac` 不再有虚频。这两条一起过，才算把微畸变这条根因真正闭环。
+- 附注：κ_zz = 0.0000（真空方向，符合 2D 预期）；§31.2 的 zz=0.000 复核通过。
+
+
+---
+
+# 41. 2026-09-22：仓库并发现状量化 + worktree 卡片补全（"流程/仓库"项）
+
+## 41.1 现状（`git status --porcelain`，2026-09-22）
+
+- **43 个未跟踪、79 个已跟踪改动**（不含 `tmp/`）。至少 3 条工作线共用一个检出：
+  - **本会话（2D kl 修复）**：`skill/_common/opt/structure_health.py`、
+    `skill/_common/opt/symmetry_audit.py`、`skill/_common/za_2d.py`、
+    `tests/suite_structure_health.py`、`tests/suite_symmetry_audit.py`、
+    `tests/suite_template_drift.py` —— **6 个新文件仍全部 untracked，一个都没提交**；另有若干修改。
+  - **另一会话（mace→mlff 重命名，在途）**：`skill/_common/mlff/*`、
+    `skill/{opt,kl,phonon}-mlff-{cpu,gpu}/*`、`skill/mlff/*`、`**/templates/**`、
+    `test/test_klmlff_regression.py` 等；git 索引里呈 `AM/AD`（该会话最后动过 09-20 20:10）。
+  - **其它产物/下载**：`docs/*.docx` 与 `docs/software-overview.*`（文档构建）、
+    `docs/build_comparison_doc.py`、`AutoZT-审查报告-20260920.md`、
+    `perturbo-examples-light/`（**298 MB**，eph-qe 线）、`.workbuddy/`（20 K，工具状态）。
+- **疑似垃圾**：`%SystemDrive%/ProgramData/Microsoft/Windows/`（**992 K，空目录树**；
+  Windows 环境变量 `%SystemDrive%` 没展开留下的）。**本次未删**（删除需用户确认）。
+
+## 41.2 worktree 卡片补全（读了 `.gitignore` 后的实测清单）
+
+除 `git worktree add ../AutoZT-wt-<name> -b wt-<name> master` 外，还要：
+
+- **软链 `setting/`**：`.gitignore` 第 2 行就是 `setting/`（另有 `setting/*.yaml`）
+  ⇒ 集群名/work_dir/提交模板/POTCAR 路径等本地配置**不会**进 worktree；
+  必须 `ln -s ../AutoZT/setting`（否则 autozt 找不到集群配置）。
+- **`tmp/` 也是 gitignore**（第 55 行）⇒ 每个 worktree 有独立 tmp，互不污染，符合预期。
+- 全局配置**不在** `autozt.yaml`（该文件不存在），而在 **`setting/tf.yaml`** ⇒ 随 `setting/` 软链一起过来。
+- **关键前提**：worktree 起在 `master` 上，**不含任何未提交改动**。本会话的 6 个新文件与全部修复
+  在提交前都不会出现 ⇒ 这个方案要真正可用，**必须先按 §34.1 的 path-scoped 清单提交/分支化**。
+- 仍只适用于**新会话**：**不要把正在跑作业的会话搬过去**。
+
+## 41.3 待用户定
+
+1. 是否允许清理 `%SystemDrive%/`（已确认是空目录树，992 K）。
+2. 是否按 §34.1 清单做 path-scoped 提交，好让 worktree/其他会话拿到本会话的修复。
+
+
+---
+
+# 42. 2026-09-22：对称化重跑 MoS₂ 的可执行预案（供一句话批准）
+
+## 42.1 机制（本次读代码确认，不是推测）
+
+- 对称化钩子 = `skill/kl-dft-cpu/kl_common.py:894 symmetry_gate(poscar, conf)`，
+  由 **S2_static / S3_nac / S4_disp** 的 gen 在 relay S1 的 CONTCAR 之后调用
+  （`gen_step2_static.py:46`、`gen_step3_nac.py:81`、`gen_step4_disp.py:310`）。
+  最先跑到的 **S2 就会就地改 POSCAR**，S3/S4 继承。
+- 触发条件：双容差空间群不一致（微畸变）**且** `SYMMETRY_SYMMETRIZE=on`（默认 off）。
+- ★ **确认②（能量）是硬闸**：未提供 `SYMMETRY_ENERGY_BEFORE/AFTER` 时，它**只写候选**
+  `symmetry_audit/POSCAR.symmetrized` 然后 `sys.exit(ERROR)`，**不静默通过**。
+  只有两条路：给两个单点 OUTCAR，或 `SYMMETRY_ALLOW_PENDING=true`（结果标 `fit_for_use=false`）。
+
+## 42.2 命令序列
+
+```
+# ① 改项目配置（需批准；conf --set 属改配置）
+autozt -tt kl-dft-cpu -p MoS2_kltest conf --set SYMMETRY_SYMMETRIZE=on
+# ② 生成 + 提交 S2（retry/start 本身不需额外批准）
+autozt -tt kl-dft-cpu -p MoS2_kltest -j S2_static retry
+autozt -tt kl-dft-cpu -p MoS2_kltest -j S2_static start   # 预期：报"确认② 未给"并停，留下候选结构
+# ③ 二选一
+#    (a) 对【当前 POSCAR】与【symmetry_audit/POSCAR.symmetrized】各跑一个单点，把两个 OUTCAR
+#        写进 S2 的 SYMMETRY_ENERGY_BEFORE / SYMMETRY_ENERGY_AFTER，再 retry；（严格，+2 单点）
+#    (b) 设 SYMMETRY_ALLOW_PENDING=true（无能量证据，fit_for_use=false，仅作验证）
+# ④ 再 retry + start S2 → 就地对称化；随后 S3、S4
+# ⑤ S5_fc retry + start → 看 ZA p 与 symprec 审计
+# ⑥ S5.1（run: gen 画图）→ 看 band_nonac 是否还有虚频
+# ⑦ S6：建议先设 COMPARE_LBTE=off（否则又排一条 ~2 天的 LBTE），只跑三档 RTA
+```
+
+- 成本：S2/S3 各 1 个静态；S4 13 帧（3 原子胞，很快；**若 S4 指纹门禁接受旧帧则更省**）；
+  S5 pheasy 23 s；S6 三档 RTA。**总机时远小于当前这条 S6 的 LBTE**（后者 30 h 仍在 dsyev）。
+- 额外：走 (a) 还要 **2 个单点**。
+
+## 42.3 验收判据（§40 给的两条 + 一条附）
+
+1. `step5_phonon_plot/phonon_plot_summary.json`：`nonac.min_freq_THz ≥ 0`（或 ≥ −0.005），`imaginary: false`；
+2. S6 RTA 300 K：**κ_xx 与 κ_yy 相对差 < 1%**（当前 5–6%）；
+3. 附带：`symmetry_audit.json` 在 **symprec=1e-5 就应看到 P-6m2（12 原胞 ops）**。
+
+## 42.4 需您点头的三点
+
+- ① 改项目配置 `SYMMETRY_SYMMETRIZE=on`；
+- ② 走 (a) 严格版（+2 单点）还是 (b) `ALLOW_PENDING` 快版（`fit_for_use=false`）；
+- ③ 是否顺带把 S6 的 `COMPARE_LBTE` 关掉，以免再排 2 天。
+
+---
+
+# 43. 2026-09-22：对称化重跑 MoS₂ 已启动（用户批准；**进行中**）
+
+## 43.1 已执行的受控操作（逐条留档）
+
+- `stop -y` 取消 **3856367**（已跑 ~34 h 的 LBTE；用户明确批准）；autozt 打了 scancel 标记，
+  **不会自动重跑**。RTA 三个 hdf5 完好。
+- `conf --set`（都落到 project_setting 的**本步** step.conf，来源显示 `<-[4]`）：
+  · step2_static / step3_nac / step4_disp：`SYMMETRY_SYMMETRIZE=on` + `SYMMETRY_ALLOW_PENDING=true`
+    （用户选 **(b)**：无能量证据、标 `fit_for_use=false`；严格版 (a) 因流水线没有产生"对称化后单点"的
+    步骤（鸡生蛋）而不可执行，已在问答里说明）；
+  · step6_kappa：`COMPARE_LBTE=off`（只跑三档 RTA，避免再排 ~2 天 LBTE）。
+- `retry`：S2_static / S3_nac / S4_disp（重新生成输入；S4 仍是 **12 位移 + 平衡帧 = 13**）。
+- `start`（均**不带 -f**，成功）：S2_static=**3878969**、S4_disp=**3879222..3879234**（13 帧）、
+  S3_nac=**3879235**。提交时全部 `PD(Priority)`——集群又排队。
+
+## 43.2 对称化已确认生效（S2 与 S3 各留档一份）
+
+- `step{2,3}/symmetry_audit/symmetry_audit.log`：
+  `2026-09-22T11:49:30  symprec=1e-5 与 1e-4 空间群不一致 -> 数值微畸变  used_symprec=0.0001
+   c1=True c2=pending c3=True  fit_for_use=False`
+- 三项确认：**c1** 化学计量比 Mo1S2 前后不变（3 原子）；**c2** 能量 pending（走 ALLOW_PENDING）；
+  **c3** 真空轴未移动（仍是 Cartesian c 轴，真空 21.8823 Å，`axis_moved=false`）。
+- `POSCAR` 已就地替换、`POSCAR.pre_symmetry` 留底；晶格 a 从 `3.1401970575` →
+  **`3.140193116364`** —— 与 §23.2 手工对称化得到的精确值**逐位一致**，证明引擎行为正确。
+
+## 43.3 下一步（接手者照做）
+
+1. 等 S2/S3/S4 跑完（`autozt -tt kl-dft-cpu -p MoS2_kltest status`）。
+2. **S5_fc `retry`+`start`** → 判据：ZA `p≈2`，且 symprec 审计在 **1e-5** 就报 P-6m2（12 原胞 ops）。
+3. S5.1 画图（run: gen）→ 判据：`band_nonac` 的 `min_freq ≥ 0`、`imaginary:false`。
+4. **S6 `retry`+`start`**（COMPARE_LBTE=off）→ 三档 RTA → 判据：**κ_xx 与 κ_yy 相对差 < 1%**
+   （当前 5–6%）；同时核实**材料根 `<mat>/thickness_2d.json` 出现**（= §39 的 P0-2 端到端）。
+5. 上面全过后才谈 **③ jzz S4**。
+
+## 43.4 ★ 两个坑（接手者必读）
+
+1. **不要在 S5 重拟合前跑 `autozt -p MoS2_kltest start`**：`status` 显示 `S6_kappa scancel`、
+   `Action: start S6_kappa`，此时 start 会用**旧的 S5 FC** 去跑 S6，白费机时。
+2. **`autozt` 每次调用刷出 ~25 条 `旧技能名 mace→mlff … 配置不可安全使用，已屏蔽所属材料的所有技能`
+   警告**（见 §44）——本次命令全部靠 grep 过滤。它不只是噪声：**这些材料的技能被 autozt 屏蔽了**。
+
+
+
+
+
+
+
+
+
+
+
 

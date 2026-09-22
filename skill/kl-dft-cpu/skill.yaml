@@ -65,6 +65,7 @@ steps:
      # provenance_common.py（v1.0）：公共池的 provenance 补写器，gen 脚本可选调用
      gen_need: [dim_common.py, stepconf.py, step.conf, kl_common.py,
                 check_common.py, step2_check_and_resubmit.py, provenance_common.py,
+                symmetry_audit.py,
                 incar_2d.tpl, incar_3d.tpl, submit_std_2d.tpl, submit_std_3d.tpl]}
 
   - {seq: 4, name: step4_disp, label: S4_disp, check: outcar, fanout: "disp-*",
@@ -72,7 +73,7 @@ steps:
      # incar_bench.py：INCAR_BENCH=on 时的隔离对照 side-car（生成 bench/ 帧 + 分析报告），
      #   必须随 gen 推送（gen_step4_disp import 它）。
      gen_need: [dim_common.py, stepconf.py, step.conf, kl_common.py, lattice_kappa.py,
-                incar_bench.py,
+                incar_bench.py, symmetry_audit.py,
                 check_common.py, step2_check_and_resubmit.py,
                 thickness_2d.py, vdw_radii.py,
                 incar_force_2d.tpl, incar_force_3d.tpl,
@@ -83,7 +84,7 @@ steps:
   - {seq: 5, name: step5_fc, label: S5_fc, check: phonon,
      gen: gen_step5_fc.py, fetch_all: true,
      gen_need: [dim_common.py, stepconf.py, step.conf, kl_common.py, lattice_kappa.py,
-                kl_fc_backends.py, submit_fit_p3py.tpl, submit_fit_pheasy.tpl]}
+                kl_fc_backends.py, za_2d.py, submit_fit_p3py.tpl, submit_fit_pheasy.tpl]}
 
   - {seq: 6, name: step6_kappa, needs: [step5_fc], label: S6_kappa, check: marker,
      marker: 'kappa_summary.json:"KAPPA_DONE": true',
@@ -103,7 +104,7 @@ optional_steps:
          check: marker, marker: "OUTCAR:MACROSCOPIC STATIC DIELECTRIC TENSOR",
          gen: gen_step3_nac.py,
          gen_need: [dim_common.py, stepconf.py, step.conf, kl_common.py,
-                    check_common.py, step2_check_and_resubmit.py,
+                    check_common.py, step2_check_and_resubmit.py, symmetry_audit.py,
                     incar_2d.tpl, incar_3d.tpl, submit_std_2d.tpl, submit_std_3d.tpl]}
 
   # S5.1 声子谱：数据(band_*.yaml/.dat) + 图(band_*.png，含 0-10 THz 低频放大图)。
@@ -126,7 +127,10 @@ optional_steps:
       - {seq: 5.1, name: step5_phonon_plot, label: S5.1_plot, after: step5_fc,
          gen: "gen_step5.1_plot_phonon.py", check: plot,
          # 步骤声明 gen_need 会【完全替代】类型级依赖，所以 step.conf/stepconf.py 要写上
-         gen_need: [step.conf, stepconf.py, submit_plot.tpl],
+         # 作业在材料根跑 gen_step5.1_plot_phonon.py --work，脚本里 import kl_common
+         # （_dim_axis/_band_path 要用 band_path_2d），kl_common 又 import dim_common ——
+         # 这两个必须随 gen 推到材料根，否则作业报 No module named 'kl_common'（2026-09-21）。
+         gen_need: [step.conf, stepconf.py, submit_plot.tpl, kl_common.py, dim_common.py],
          done_marker: phonon_plot_summary.json, fetch_all: true}
 
 requires:

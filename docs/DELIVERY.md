@@ -11,7 +11,7 @@ Where everything lives, so a collaborator can pick the project up without asking
 | skill/ | 18 skills, each a directory with skill.yaml plus generation scripts and templates |
 | setting/ | cluster templates (setting/template-cluster.yaml) and per-cluster configuration |
 | scripts/ | safety_metrics.py, i18n_report.py, check_site_specific.py and helpers |
-| tests/ | pytest suites (smoke, mcp, safety metrics, preflight checks, i18n) plus suite_*.py end-to-end scripts driven by test_suites.py |
+| tests/ | pytest suites (smoke, mcp, safety metrics, preflight checks, i18n) plus suite_*.py end-to-end scripts driven by `pytest tests/test_suites.py` (running the module directly with `python3` is a no-op) |
 
 ## How to run it
 

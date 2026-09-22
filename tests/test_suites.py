@@ -8,6 +8,12 @@
 （套件实际叫 tests/suite_<名字>.py），于是"测试全过"是假的——什么都没跑。
 现在直接按 suite_*.py 枚举，并显式维护两张清单。
 没有 pytest 时也可以直接跑：for t in tests/suite_*.py; do python3 $t || echo FAIL $t; done
+
+★ 2026-09-22 教训：**不要直接 `python3 tests/test_suites.py`** —— 本模块只有
+@pytest.mark.parametrize 用例、没有 __main__，直接跑什么都不做却退出 0，会被误当成"全绿"
+（本仓库前面几处"test_suites RC=0"就是这么来的）。正确跑法：
+    python3 -m pytest tests/test_suites.py -q            # 本机套件
+    python3 -m pytest tests/test_suites.py -q -m cluster # 端到端（需集群）
 """
 import glob
 import os
@@ -20,7 +26,8 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # 本机跑（不碰集群）的套件；名字 = tests/suite_<名字>.py
 LOCAL = ["agentgate", "session", "autodeps", "history", "skillspec",
          "correct_cli", "prov", "uniform", "supercell", "templates",
-         "ke_common", "asset_lookup", "poscar_sync", "io_schema", "s6_marker"]
+         "ke_common", "asset_lookup", "poscar_sync", "io_schema", "s6_marker",
+         "symmetry_audit", "structure_health", "template_drift"]
 CLUSTER = ["dropin"]
 
 

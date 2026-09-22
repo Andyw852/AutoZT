@@ -611,6 +611,26 @@ _HS_2D = {
 }
 
 
+def vacuum_axis_in_primitive(cell, cart_axis):
+    """把 Cartesian 真空轴映射成【原胞基矢】下标（面外分量占比最大的基矢）。
+
+    primitive_matrix 可以任意排列原胞基矢（生产 MoS₂ 的 a1=(0,0,-25)，真空在第 0 基矢）。
+    band_path_2d / ZA 方向判据索引的都是"原胞基矢"，把 POSCAR 的 Cartesian 下标直接传进去
+    会取错方向 —— 这是 kl 链方向 bug 的根源。cart_axis=None 退化为"最长基矢即真空"。
+    单一真源：kl_fc_backends._vacuum_axis_in_primitive 与
+    gen_step5.1_plot_phonon._band_path 都调它（2026-09-21）。
+    """
+    import numpy as np
+    C = np.asarray(cell, float)
+    norms = np.linalg.norm(C, axis=1)
+    if cart_axis is None:
+        return int(np.argmax(norms))
+    vhat = np.zeros(3, float)
+    vhat[int(cart_axis)] = 1.0
+    frac = np.abs(C @ vhat) / np.maximum(norms, 1e-300)
+    return int(np.argmax(frac))
+
+
 def classify_2d_lattice(cell, vac_axis=2, tol=0.02):
     """按面内两个原胞矢量判 2D 布拉维格子。cell 是 3×3（行=晶格矢量）。
 
@@ -831,6 +851,142 @@ def relay_poscar(prev_contcar, dst_poscar, label="上一步"):
         sys.exit("[ERROR] %s 的 CONTCAR 残缺（%s）：%s" % (label, bad, prev_contcar))
     shutil.copyfile(prev_contcar, dst_poscar)
     print("[OK] POSCAR ← %s" % prev_contcar)
+
+
+# ---------------------------------------------------------------------------
+# 结构体检第五条（B，2026-09-20）：S1 弛豫结构的数值微畸变审计 + spglib 对称化
+# ---------------------------------------------------------------------------
+#   S2/S3/S4 的 gen 都从 S1 的 CONTCAR 接力原胞；relay 之后调用 symmetry_gate。
+#   * 默认只审计告警（SYMMETRY_AUDIT=warn）；spglib 不可用则静默跳过，不阻断 gen。
+#   * SYMMETRY_SYMMETRIZE=off（默认）时【绝不】改写结构 —— 默认不改变现有行为。
+#   * 对称化必须过三项确认，其中②要求对称化前后各一个单点能量
+#     （SYMMETRY_ENERGY_BEFORE/AFTER 给 OUTCAR 路径）；缺省即拒绝静默通过。
+#   开关写在【本步的】step.conf（templates/<step>/step.conf），不要写进全局
+#   templates/step.conf（会漏进别的步骤，触发"本脚本不认识的键"）。
+SYMMETRY_SPEC = {
+    "SYMMETRY_AUDIT":          ("warn", "str"),   # off | warn | error
+    "SYMMETRY_SYMMETRIZE":     ("off",  "str"),   # off | on（on 才改写结构）
+    "SYMMETRY_AUDIT_SYMPREC":  (1e-4,   "float"),
+    "SYMMETRY_ENERGY_TOL_MEV": (1.0,    "float"),
+    "SYMMETRY_ENERGY_BEFORE":  (None,   "str"),   # 对称化前单点 OUTCAR 路径
+    "SYMMETRY_ENERGY_AFTER":   (None,   "str"),   # 对称化后单点 OUTCAR 路径
+    "SYMMETRY_STRESS_BEFORE":  (None,   "str"),
+    "SYMMETRY_STRESS_AFTER":   (None,   "str"),
+    "SYMMETRY_ALLOW_PENDING":  (False,  "bool"),  # true=无能量也先对称化(标 fit_for_use=false)
+}
+
+
+def _cget(conf, key, default=None):
+    """从 StepConf / dict / None 里安全取一个键（None 或缺失返回 default）。"""
+    if conf is None:
+        return default
+    try:
+        v = conf[key]
+    except (KeyError, TypeError):
+        return default
+    return default if v is None else v
+
+
+def _switch_on(value):
+    return str(value).strip().lower() in ("on", "true", "1", "yes")
+
+
+def symmetry_gate(poscar, conf=None):
+    """结构体检第五条：审计（可选对称化）relay 过来的原胞 POSCAR。
+
+    返回审计结果 dict；关闭/不可用时 None。默认只在检出数值微畸变时告警，
+    绝不改结构；SYMMETRY_SYMMETRIZE=on 才调用 spglib.refine_cell 就地对称化，
+    且确认②（能量）未提供时拒绝静默通过（除非 SYMMETRY_ALLOW_PENDING=true）。
+    """
+    mode = str(_cget(conf, "SYMMETRY_AUDIT", "warn")).strip().lower()
+    if mode in ("off", "false", "0", "none", ""):
+        return None
+    try:
+        import symmetry_audit as SA
+    except Exception as exc:                      # noqa: BLE001
+        print("[..] 结构体检第五条跳过：symmetry_audit.py 不可用（%s）" % exc)
+        return None
+    if not SA.spglib_available():
+        print("[..] 结构体检第五条跳过：spglib 不可用"
+              "（gen 需在 phono3py/atomate2_p_a 环境里跑）")
+        return None
+
+    poscar = Path(poscar)
+    if not poscar.is_file():
+        print("[..] 结构体检第五条跳过：%s 不存在" % poscar)
+        return None
+    symprec = float(_cget(conf, "SYMMETRY_AUDIT_SYMPREC", 1e-4) or 1e-4)
+    try:
+        aud = SA.audit_structure_file(poscar, symprec=symprec)
+    except Exception as exc:                      # noqa: BLE001
+        print("[..] 结构体检第五条跳过（审计失败）：%s" % exc)
+        return None
+    if not aud.get("available"):
+        print("[..] 结构体检第五条跳过：%s" % aud.get("reason"))
+        return aud
+
+    print(SA.format_audit_report(aud, tag="S4前"))
+    sg = aud["spacegroup"]
+    if not aud["micro_distortion"]:
+        print("[..] 结构体检第五条：两容差空间群一致（%s #%s，%d ops），无需对称化"
+              % (sg[-1]["international"], sg[-1]["number"], sg[-1]["n_ops"]))
+        return aud
+
+    print("[WARN] 结构体检第五条：检出数值微畸变 —— symprec=%g -> %s(#%s)/%d ops，"
+          "symprec=%g -> %s(#%s)/%d ops（ZA 被线性化的几何根因之一）"
+          % (sg[0]["symprec"], sg[0]["international"], sg[0]["number"], sg[0]["n_ops"],
+             sg[-1]["symprec"], sg[-1]["international"], sg[-1]["number"], sg[-1]["n_ops"]))
+
+    if not _switch_on(_cget(conf, "SYMMETRY_SYMMETRIZE", "off")):
+        msg = ("进 S4 前建议对称化：python symmetry_audit.py --poscar %s "
+               "--mode symmetrize --inplace（或在本步 step.conf 设 "
+               "SYMMETRY_SYMMETRIZE=on）" % poscar)
+        if mode == "error":
+            sys.exit("[ERROR] 结构体检第五条：数值微畸变（SYMMETRY_AUDIT=error）。" + msg)
+        print("[WARN] " + msg)
+        return aud
+
+    # ---- 对称化：确认②（能量）必须显式提供，否则拒绝静默通过 ----
+    allow_pending = bool(_cget(conf, "SYMMETRY_ALLOW_PENDING", False))
+    en_before = _cget(conf, "SYMMETRY_ENERGY_BEFORE")
+    en_after = _cget(conf, "SYMMETRY_ENERGY_AFTER")
+    if not allow_pending and (en_before is None or en_after is None):
+        # 只把【候选】对称化结构留档（不改本步 POSCAR），停下来要单点能量 ——
+        # 避免 gen 失败时留下一个"未确认"的结构被下游静默用掉。
+        cand = poscar.parent / "symmetry_audit" / "POSCAR.symmetrized"
+        try:
+            SA.symmetrize_structure_file(
+                poscar, inplace=False, symprec=symprec,
+                allow_energy_pending=True, write_prov=False,
+                source_note="kl-dft-cpu %s (candidate, energy pending)"
+                            % poscar.parent.name)
+        except Exception as exc:                  # noqa: BLE001
+            sys.exit("[ERROR] 结构体检第五条：对称化失败（%s）" % exc)
+        sys.exit("[ERROR] 结构体检第五条：检出数值微畸变，但确认②（单点能量）还没给 —— "
+                 "已把【候选】对称化结构写到 %s（本步 POSCAR 未改）。\n"
+                 "        请对【对称化前/后】各跑一个单点，再把两个 OUTCAR 路径写进本步 "
+                 "step.conf 的 SYMMETRY_ENERGY_BEFORE / SYMMETRY_ENERGY_AFTER，然后 retry。\n"
+                 "        确实要先出结构再补单点，可设 SYMMETRY_ALLOW_PENDING=true"
+                 "（结果标 fit_for_use=false）。" % cand)
+    res = SA.symmetrize_structure_file(
+        poscar,
+        inplace=True,
+        symprec=symprec,
+        energy_before=en_before,
+        energy_after=en_after,
+        energy_tol_mev_per_atom=float(_cget(conf, "SYMMETRY_ENERGY_TOL_MEV", 1.0) or 1.0),
+        stress_before=_cget(conf, "SYMMETRY_STRESS_BEFORE"),
+        stress_after=_cget(conf, "SYMMETRY_STRESS_AFTER"),
+        allow_energy_pending=allow_pending,
+        source_note="kl-dft-cpu %s" % poscar.parent.name,
+    )
+    if res.get("triggered"):
+        c2 = (res.get("confirmations") or {}).get("c2_energy", {}).get("status")
+        print("[OK] 结构体检第五条：已对称化（used_symprec=%g，能量确认=%s，"
+              "fit_for_use=%s），原结构备份 %s.pre_symmetry"
+              % (res.get("used_symprec", symprec), c2,
+                 res.get("fit_for_use"), poscar.name))
+    return res
 
 
 def find_prev_dir(cwd, candidates):

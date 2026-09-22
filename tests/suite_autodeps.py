@@ -52,21 +52,32 @@ sib = _py_sibling_imports(relax) if relax else {}
 check("看出它 import 了 method_select", "method_select" in sib)
 check("也看得到 dim_common/mol_common/stepconf",
       {"dim_common", "mol_common", "stepconf"} <= set(sib), ",".join(sorted(sib)))
+check("也看得到 symmetry_audit（结构体检第五条，2026-09-20）",
+      "symmetry_audit" in sib)
+check("也看得到 structure_health（结构体检四条，2026-09-21）",
+      "structure_health" in sib)
 
 section("2. 补全：清单漏写时自动补上")
 need = ["relax_common.py", "mol_common.py", "dim_common.py", "stepconf.py",
         "check_common.py"]
 extra = _common_dep_closure(CFG, T, _m(), need, "step1_std_opt")
-check("漏写的 method_select.py 被补上", extra == ["method_select.py"], str(extra))
+# 2026-09-20/21：relax_common 新增 import symmetry_audit（第五条）+ structure_health（四条），
+# 自动补推的闭包随之多两项 —— 这正是本套件要覆盖的"公共池加文件别忘清单"。
+check("漏写的 method_select.py/symmetry_audit.py/structure_health.py 被补上",
+      set(extra) == {"method_select.py", "symmetry_audit.py", "structure_health.py"},
+      str(extra))
 
 section("3. 幂等与优先级")
 check("清单已声明时不重复",
-      _common_dep_closure(CFG, T, _m(), need + ["method_select.py"],
+      _common_dep_closure(CFG, T, _m(),
+                          need + ["method_select.py", "symmetry_audit.py",
+                                  "structure_health.py"],
                           "step1_std_opt") == [])
 only = _common_dep_closure(CFG, T, _m(), ["relax_common.py"], "step1_std_opt")
 check("只写 relax_common 时补齐全部同目录依赖",
       set(only) == {"dim_common.py", "method_select.py", "mol_common.py",
-                    "stepconf.py"}, str(sorted(only)))
+                    "stepconf.py", "symmetry_audit.py", "structure_health.py"},
+      str(sorted(only)))
 check("技能目录里已有的同名文件不补（技能优先）",
       "check_common.py" not in only)
 
@@ -135,6 +146,24 @@ del os.environ["AUTOZT_COMMON_AUTODEPS"]
 check("AUTOZT_COMMON_AUTODEPS=0 时不补推（开关有效）",
       not os.path.isfile(os.path.join(work2, "method_select.py")))
 shutil.rmtree(tmp, ignore_errors=True)
+
+section("6. ZA 2D 共享模块（三副本合并）")
+# 低层 ZA 判定收敛到 _common/za_2d.py；kl 的 S5_fc、fc-fit 的 S2_plot、以及全部 6 个
+# mlff 技能（kl/opt/phonon × cpu/gpu，2026-09-22 第三副本迁移）都要能解析到它，
+# 否则首次上机就是 ModuleNotFoundError（公共池文件没推到生成目录）。
+for _tt, _sd, _step in (("kl-dft-cpu", "skill/kl-dft-cpu", "step5_fc"),
+                        ("fc-fit", "skill/fc-fit", "step2_phonon_plot"),
+                        ("kl-mlff-cpu", "skill/kl-mlff-cpu", "step3_fc"),
+                        ("kl-mlff-gpu", "skill/kl-mlff-gpu", "step3_fc"),
+                        ("opt-mlff-cpu", "skill/opt-mlff-cpu", "step1_mlff_relax"),
+                        ("opt-mlff-gpu", "skill/opt-mlff-gpu", "step1_mlff_relax"),
+                        ("phonon-mlff-cpu", "skill/phonon-mlff-cpu", "step3_phonon"),
+                        ("phonon-mlff-gpu", "skill/phonon-mlff-gpu", "step3_phonon")):
+    _Tz = {"key": _tt, "skill_dir": _sd, "steps": [{"name": _step}],
+           "template_layout": "per_step"}
+    _az = find_asset(CFG, _Tz, _m(), "za_2d.py", _step)
+    check("%s/%s 解析到 _common/za_2d.py" % (_tt, _step),
+          bool(_az) and "_common" in _az, _az or "None")
 
 print()
 if FAILED:

@@ -54,7 +54,9 @@ artifact that carries the evidence, so a reviewer can re-run it.
     tests/test_safety_metrics.py   4
     tests/test_preflight_checks.py 6
     tests/test_i18n.py             6
-    tests/test_suites.py           drives the ten end-to-end suites (cluster ones tagged)
+    tests/test_suites.py           run via `python3 -m pytest tests/test_suites.py`; drives the
+                                  local end-to-end suites (cluster ones tagged). Running the
+                                  file directly with `python3` is a NO-OP.
 
 ## 7. Measured numbers
 

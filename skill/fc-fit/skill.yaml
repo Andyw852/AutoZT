@@ -7,7 +7,7 @@
 # templates/step5_fc/step.conf), turned into a standalone skill and extended
 # with a third engine.  It does NOT generate displacements and never runs VASP:
 # it consumes an existing displacement+force dataset produced by another skill
-# (kl-dft-cpu step4_disp, kl-mace-*/phonon-* step2_disp_force, phonon-dft-cpu
+# (kl-dft-cpu step4_disp, kl-mlff-*/phonon-* step2_disp_force, phonon-dft-cpu
 # step2_disp) or placed in a directory by hand.
 #
 # Pipeline:
@@ -20,6 +20,7 @@
 #                       band-dft-cpu.yaml, phonon_summary.json, fc_fit_summary.json
 #            judge: check "phonon" -> stable | imaginary frequency | tool error
 #   S2_plot  login node, run: gen, optional: phonon band figures from fc2.hdf5
+#            + the ZA bending-branch exponent p in phonon_band_summary.json
 #
 # Engines (FIT_ENGINE in step1_fit/step.conf):
 #   phono3py  phono3py + symfc/alm least squares.
@@ -80,7 +81,9 @@ optional_steps:
     default: true
     steps:
       - {seq: 2, name: step2_phonon_plot, label: S2_plot, after: step1_fit,
-         gen: "fc_plot_phonon.py", check: plot, run: gen, gen_need: [],
+         gen: "fc_plot_phonon.py", check: plot, run: gen,
+         # za_2d.py（2026-09-21）：S2_plot 用公共池的 ZA 2D 判定（_za_summary 调 za_2d）
+         gen_need: [dim_common.py, za_2d.py],
          done_marker: phonon_band_summary.json, fetch_all: true}
 
 requires:

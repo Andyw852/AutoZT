@@ -66,10 +66,15 @@ SPEC = {
     # ShengBTE 靠 MPI 按 q 点并行，mpirun -n 1 = 串行（实测 11.8 h 零产物）。
     # 正确布局 = 一个 MPI rank 占一个 NUMA 域：
     #     NTASKS = TOTAL_CORES / CORES_PER_NUMA，CPUS_PER_TASK = CORES_PER_NUMA
-    # jzzn：192 核 = 24 个 NUMA 域 x 8 核（**不是 16**）-> 取 96 核即 12 rank x 8 线程。
-    # 换集群只改这两个数，模板不用动。SHENGBTE_NTASKS 留 "auto" 即按上面公式算。
+    # jzzn 计算节点（cpu192）实测：192 核 = 2 socket x 96，**8 个 NUMA 节点 x 24 核**
+    #   （lscpu / numactl -H；早先误记为 24 NUMA x 8 核）。mpirun 的 --map-by numa 是
+    #   "1 rank 占 1 个 NUMA 节点"：rank 数 > NUMA 节点数时会循环复用同一节点、把多个
+    #   rank 绑到同一组核上 —— 实测 24 rank 时 3 rank 挤 8 核，每线程只拿到 33% 的核，
+    #   整作业只用 64/192 核（其余 128 核闲置）。故 CORES_PER_NUMA 必须是**真实每 NUMA
+    #   核数 24**：192 核 -> 8 rank x 24 线程；96 核 -> 4 rank x 24 线程。
+    #   换集群只改这两个数，模板不用动。SHENGBTE_NTASKS 留 "auto" 即按上面公式算。
     "SHENGBTE_TOTAL_CORES":    (96,     "int"),
-    "SHENGBTE_CORES_PER_NUMA": (8,      "int"),
+    "SHENGBTE_CORES_PER_NUMA": (24,     "int"),
     "SHENGBTE_NTASKS":         ("auto", "str"),
     # SLURM QoS：默认 premium（每用户 5 个并发作业）。jzzn 上 premium 槽位常被本账号
     # 其它技能占满，S6_kappa 会以 QOSMaxJobsPerUserLimit 排队等很久；regular 允许
@@ -78,6 +83,11 @@ SPEC = {
     "FOURPHONON_EXE": ("", "str"),          # fourphonon(multi-GPU) 可执行文件绝对路径
     "FOURPHONON_NGPU": (4, "int"),          # fourphonon 用几张 GPU(rank=卡)
     "FOURPHONON_CPUS_PER_GPU": (8, "int"),  # 每 GPU 配几个 CPU 核(cpus-per-task+OMP)
+    # ★ 安全闸：FourPhonon v1.3 **GPU** 版对 phonopy/ShengBTE 格式 fc2 有官方 OpenACC
+    #   数值 bug（κ 错 67~71×，只有 espresso 路径正确、官方未修）；本技能喂的正是
+    #   phonopy 格式，故 SOLVER=fourphonon 默认**拒绝**。确知风险仍要跑（对照/复现 bug）
+    #   时显式置 true。详见 skill/kl-dft-cpu/README.md 的「fourphonon」节。
+    "ALLOW_FOURPHONON_GPU_PHONOPY": (False, "bool"),
     # 集群 conda.sh（tf 从 setting/<集群>.yaml 的 conda_sh 注入 step.conf，切集群自动跟着走）
     "CONDA_SH": ("", "str"),
     # 2D κ 厚度归一化：phono3py 用含真空的原胞体积做分母，2D 面内 κ 被胞高稀释，
@@ -147,17 +157,25 @@ def two_d_norm_factor(poscar, vac_axis, mode):
 _MAT_LEVEL = [
     "if THICK2D:\n",
     "    try:\n",
-    "        import glob as _g, os as _os, sys as _s\n",
-    "        if _g.glob(_os.path.join('..', 'step*')):\n",
-    # 关键：作业 cwd 是 <材料>/<技能>/<步骤>，thickness_2d.py 被 gen_need 推到
-    # <材料>/<技能>/（= '..'），不在 cwd 里。不把 '..' 加进 sys.path 就会
-    # ModuleNotFoundError 被 except 吞成一条 [WARN] —— 实测 2026-09-16 Mo2S3
-    # 试跑就是这么静默失败的（材料级 thickness_2d.json 一直没生成）。
-    "            _s.path.insert(0, _os.path.abspath('..'))\n",
+    "        import glob as _g, os as _os, re as _re, sys as _s\n",
+    # ★ 材料根 = 技能目录的上一级（与 S1 的 write_material_thickness 完全对齐）：
+    #   作业 cwd = <材料>/<技能>/<步骤>；'..' = 技能目录，'../..' = 材料根。
+    #   老代码把 '..'（技能目录）当材料根，写到 <材料>/<技能>/thickness_2d.json，
+    #   与 S1 写到 <材料>/thickness_2d.json 不一致（ke-dft-cpu 的 AMSET 步读材料根，
+    #   会读不到 kl 链的层厚 → zT 里 d 约不掉）。2026-09-21 修。
+    "        _skill = _os.path.abspath('..')\n",
+    "        _mat = _os.path.dirname(_skill)\n",
+    "        if (_re.fullmatch(r'[a-z0-9]+(?:-[a-z0-9]+)+', _os.path.basename(_skill))\n",
+    "                and (_os.path.isfile(_os.path.join(_mat, 'POSCAR'))\n",
+    "                     or _g.glob(_os.path.join(_mat, '*', '*', 'step*')))):\n",
+    # thickness_2d.py 被 gen_need 推到 <材料>/<技能>/（= '..'），不在 cwd 里，
+    # 必须把技能目录加进 sys.path，否则 ModuleNotFoundError 被 except 吞成 [WARN]。
+    "            _s.path.insert(0, _skill)\n",
     "            from thickness_2d import write_material_level\n",
-    "            print(write_material_level('..', THICK2D))\n",
+    "            print(write_material_level(_mat, THICK2D))\n",
     "        else:\n",
-    "            print('[..] 父目录里没识别出步骤目录，跳过材料级 thickness_2d.json')\n",
+    "            print('[..] 材料根识别失败（skill=%s mat=%s），跳过材料级 thickness_2d.json'\n",
+    "                  % (_skill, _mat))\n",
     "    except Exception as _e:\n",
     "        print('[WARN] 材料级 thickness_2d.json 写入跳过: %s' % _e)\n",
 ]
@@ -274,13 +292,74 @@ def build_extract(factor, meta, thick2d=None, plan=None, primary=None):
         "    if _rb and _ra / _rb < 0.9:",
         "        d.setdefault('warnings', []).append(",
         "            'RTA/LBTE = %.3f，RTA 明显低估，生产值建议用 lbte' % (_ra / _rb))",
-        "d['KAPPA_DONE'] = bool(runs) and not missing and (not PLAN or len(runs) == len(PLAN))",
+        "# 成功判据：主口径（PRIMARY 的 method，通常是 RTA）的各档网格齐全即可；",
+        "#   对照腿（LBTE）缺失只告警、不判失败 —— 否则 LBTE 太重/超时会把整步拖成 NO_KAPPA。",
+        "_pmethod = PRIMARY.split('|')[1]",
+        "_need_files = {p['file'] for p in PLAN if p['method'] == _pmethod}",
+        "_missing_primary = [f for f in missing if f in _need_files]",
+        "d['KAPPA_DONE'] = bool(runs) and prim is not None and not _missing_primary",
+        "if missing and d['KAPPA_DONE']:",
+        "    d.setdefault('warnings', []).append(",
+        "        '对照运行缺失（%s）：主口径 %s 仍有效，但该项未验证' % (', '.join(missing), _pmethod))",
         "json.dump(d, open('kappa_summary.json','w'), ensure_ascii=False, indent=2)",
         "for _e in d.get('errors', []): print('  ' + _e)",
         "for _w in d.get('warnings', []): print('[WARN] ' + _w)",
         "print('KAPPA_DONE' if d['KAPPA_DONE'] else 'NO_KAPPA')",
     ]
     return "python - <<'PY'\n" + "\n".join(body) + "\nPY"
+
+
+def _prim_lattice(out):
+    """从 step6 目录的 phono3py_disp.yaml 读原胞晶格（3x3 行主序）；失败返回 None。"""
+    p = Path(out) / "phono3py_disp.yaml"
+    if not p.is_file():
+        return None
+    try:
+        import yaml
+        d = yaml.safe_load(p.read_text(encoding="utf-8"))
+        return d["primitive_cell"]["lattice"]
+    except Exception:                              # noqa: BLE001
+        return None
+
+
+def _mesh_prim_remap(mesh_str, poscar_lat, prim_lat, cart_vac_axis):
+    """把 [POSCAR/Cartesian 轴序] 的网格串重排成 [原胞基矢轴序]（phono3py --mesh 的口径）。
+
+    primitive_matrix 会重排原胞基矢（生产 MoS₂：真空从 Cartesian c 变成原胞基矢 0）。
+    phono3py 的 --mesh 索引的是原胞基矢 —— 不重排就会出现"两个面内对称相关轴网格不等"
+    （88 88 1 把 88 给真空基矢 a1 与面内 a2、1 给面内 a3），phono3py 直接
+    `Grid symmetry is broken`（2026-09-21 MoS₂ 实测）。
+    规则：原胞真空基矢恒 1；其余原胞基矢取"与它最平行的 POSCAR 非真空轴"的网格值。
+    """
+    import numpy as np
+    vals = [int(x) for x in str(mesh_str).split()]
+    if len(vals) != 3:
+        return mesh_str
+    P = np.asarray(prim_lat, float)
+    L = np.asarray(poscar_lat, float)
+    prim_vac = kc.vacuum_axis_in_primitive(P, cart_vac_axis)
+    out = [1, 1, 1]
+    used = set()
+    if cart_vac_axis is not None:
+        used.add(int(cart_vac_axis))
+    for i in range(3):
+        if i == prim_vac:
+            out[i] = 1
+            continue
+        best_j, best_cos = None, -1.0
+        for j in range(3):
+            if j in used:
+                continue
+            den = float(np.linalg.norm(P[i]) * np.linalg.norm(L[j]))
+            c = abs(float(np.dot(P[i], L[j])) / den) if den else 0.0
+            if c > best_cos:
+                best_cos, best_j = c, j
+        if best_j is None:
+            best_j = min(range(3),
+                         key=lambda j: abs(float(np.linalg.norm(P[i]) - np.linalg.norm(L[j]))))
+        out[i] = vals[best_j]
+        used.add(best_j)
+    return " ".join(str(x) for x in out)
 
 
 def meshes(conf, params, dim, vac_axis):
@@ -347,7 +426,7 @@ def norm_subs(factor, meta, thick2d=None):
             "KAPPA_2D_THICK2D": json.dumps(thick2d or {}, ensure_ascii=False)}
 
 
-def build_phono3py_cmd(plan, ts, isotope, use_nac, extract, tagged=False):
+def build_phono3py_cmd(plan, ts, isotope, use_nac, extract, tagged=False, ts_override=None):
     """按 plan=[(mesh, method)] 依次跑 phono3py，最后一次收尾做 extract。
 
     tagged=True（同一网格既跑 RTA 又跑 LBTE 时）：每跑完一次就把主 kappa 文件改名成
@@ -360,11 +439,13 @@ def build_phono3py_cmd(plan, ts, isotope, use_nac, extract, tagged=False):
         _digits = "".join(str(_mesh).split())
         _flag = "--lbte" if str(_method).lower() == "lbte" else "--br"
         _nac = "" if use_nac else " --nonac"
+        # 逐方法温度覆盖：LBTE 对照只跑 300 K（见调用处），其余走 ts。
+        _ts = (ts_override or {}).get(str(_method).lower(), ts)
         # fc2/fc3 已在 step5_fc 拟好并拷到本目录，phono3py-load 默认读 cwd 的
         # fc2.hdf5/fc3.hdf5（--no-read-fc2/--no-read-fc3 关闭），不会再从 disp.yaml 重拟。
         steps.append('phono3py-load phono3py_disp.yaml %s --mesh %s --ts="%s"%s%s '
                      '2>&1 | tee phono3py_kappa.log'
-                     % (_flag, _mesh, ts, " --isotope" if isotope else "", _nac))
+                     % (_flag, _mesh, _ts, " --isotope" if isotope else "", _nac))
         if tagged:
             steps.append('[ -f "kappa-m%s.hdf5" ] && mv "kappa-m%s.hdf5" '
                          '"kappa-m%s.%s.hdf5" || true'
@@ -504,6 +585,21 @@ def main():
     vac_ax = vac_axis if vac_axis is not None else 2
     # MESH_OVERRIDE / kl_params 的 MESH 也过 mesh_str：3D 被误写成 "N N 1" 时自动纠正。
     mesh_list = meshes(conf, params, dim, vac_ax)
+    # ★ phono3py --mesh 是【原胞基矢轴序】，而 meshes() 产出的是 POSCAR/Cartesian 轴序。
+    #   primitive_matrix 重排基矢后必须重排网格，否则 phono3py 报 Grid symmetry is broken
+    #   （2026-09-21 MoS₂ S6 实测）。见 _mesh_prim_remap。
+    if dim == "2d":
+        try:
+            _pl = kc.read_poscar_cell_frac(out / "POSCAR")[0]
+            _prl = _prim_lattice(out)
+            if _pl and _prl:
+                _before = list(mesh_list)
+                mesh_list = [_mesh_prim_remap(m, _pl, _prl, vac_ax) for m in mesh_list]
+                if mesh_list != _before:
+                    print("[..] q 网格按原胞基矢重排（POSCAR 序 -> 原胞序）：%s -> %s"
+                          % (_before, mesh_list))
+        except Exception as _e:                    # noqa: BLE001
+            print("[WARN] q 网格原胞重排失败（%s），按原样使用" % _e)
     mesh = mesh_list[-1]
     if solver != "phono3py" and len(mesh_list) > 1:
         sys.exit("[ERROR] MESH_SCAN 多套网格只有 phono3py 支持（shengbte/fourphonon 单套）；"
@@ -527,11 +623,17 @@ def main():
         if dim == "2d":
             print("[WARN] 2D 的正规过程可能让 RTA 低估 κ（文档结论），但本步默认不做 LBTE "
                   "对照：实测 LBTE 比 RTA 贵 1~2 个数量级（稠密碰撞矩阵对角化）。\n"
-                  "       需要对照就在 step.conf 里设 COMPARE_LBTE = on（只跑最细那档网格）。")
+                  "       需要对照就在 step.conf 里设 COMPARE_LBTE = on（只跑最粗那档网格 + 仅 300 K）。")
     plan = [(m, bte_primary) for m in mesh_list]
+    ts_override = None
     if compare_lbte and solver == "phono3py":
-        # 对照跑在最细那档网格上（同一网格两种解法 → 文件名会撞，见 build_phono3py_cmd）
-        plan.append((mesh_list[-1], "lbte" if bte_primary == "rta" else "rta"))
+        # 对照跑在【最粗那档】网格上、且【只跑 300 K】（wangchao 2026-09-21）：
+        #   LBTE 的碰撞矩阵按 (nq·nb)² 稠密、逐温度对角化，比同网格 RTA 贵 1~2 个数量级；
+        #   "RTA 是否低估"只需一个温度点 + 最省的那档网格就够。
+        #   （同一档网格既跑 RTA 又跑 LBTE → 输出文件名会撞，tagged 改名，见 build_phono3py_cmd）
+        _other = "lbte" if bte_primary == "rta" else "rta"
+        plan.append((mesh_list[0], _other))
+        ts_override = {_other: "300"}
     tagged = len({m for m, _ in plan}) != len(plan)
     primary = "%s|%s" % (mesh_list[-1], bte_primary)
     # P1-1/P1-2 的代价必须显式可见：一次 κ 求解很贵，"默认开了个对照"不该是惊喜。
@@ -584,7 +686,7 @@ def main():
         cmd = build_phono3py_cmd(
             plan, ts, conf["ISOTOPE"], use_nac,
             build_extract(factor, meta, thick2d, extract_plan(plan, tagged), primary),
-            tagged=tagged)
+            tagged=tagged, ts_override=ts_override)
         print("[..] BTE 方法=%s%s" % (bte_primary,
               ("；另跑 %d 次（%s 对照，P1-2）" % (len(plan) - len(mesh_list),
                "lbte" if bte_primary == "rta" else "rta"))
@@ -615,7 +717,7 @@ def main():
         tpl = kc.resolve_submit(here, "3d", "submit_shengbte")
         # MPI/OMP 布局：一个 rank 一个 NUMA 域。rank=1 会退化成串行（ShengBTE 靠
         # MPI 按 q 点并行），所以这里必须显式算出来，不能沿用模板里的常量。
-        _cpus_per_numa = int(conf["SHENGBTE_CORES_PER_NUMA"] or 8)
+        _cpus_per_numa = int(conf["SHENGBTE_CORES_PER_NUMA"] or 24)
         _total = int(conf["SHENGBTE_TOTAL_CORES"] or 96)
         _nt_raw = str(conf["SHENGBTE_NTASKS"] or "auto").strip()
         if _nt_raw and _nt_raw.lower() != "auto":
@@ -647,7 +749,7 @@ def main():
                          "CPUS_PER_TASK": str(_cpus_per_numa),
                          "QOS": str(conf["SBATCH_QOS"] or "premium"),
                          **norm_subs(factor, meta, thick2d)},
-                        require=REQ_2D, label="2D 归一化：")
+                        require=REQ_2D + ("--map-by numa",), label="2D 归一化：")
         # [FIX P48] SLURM QoS comes from step.conf, not from whichever copy of the
         # template already sits on the cluster.  autozt never overwrites an existing
         # gen_need asset ("材料目录已有的文件不覆盖"), and every project keeps its own
@@ -694,6 +796,15 @@ def main():
             sys.exit("[ERROR] SOLVER=fourphonon 但 step.conf 没填 FOURPHONON_EXE"
                      "（multi-GPU 版绝对路径）。见 README「fourphonon」节。")
         ngpu = int(conf["FOURPHONON_NGPU"] or 4)
+
+        if not bool(conf["ALLOW_FOURPHONON_GPU_PHONOPY"]):
+            sys.exit("[ERROR] SOLVER=fourphonon 已停用：FourPhonon v1.3 **GPU** 版对"
+                     " phonopy/ShengBTE 格式 fc2 有官方 OpenACC 数值 bug（κ 错 67~71×，"
+                     "只有 espresso 路径正确、官方未修），本技能喂的正是该格式，结果不可信。\n"
+                     "         确知风险仍要跑（做对照 / 复现 bug）：把 step.conf 的"
+                     " ALLOW_FOURPHONON_GPU_PHONOPY 设为 true。见 README「fourphonon」节。")
+        print("[WARN] SOLVER=fourphonon：GPU 版对 phonopy fc2 有已知数值 bug（κ 错 67~71×），"
+              "本次结果只能用于对照 / 复现，不可当真值。")
         prepare_fourphonon(cwd, out, sbd, conf, mesh, use_nac, ngpu)
         tpl = kc.resolve_submit(here, "3d", "submit_fourphonon")
         kc.write_submit(tpl, out / "submit.sh",
@@ -702,7 +813,7 @@ def main():
                          "FOURPHONON_NGPU": str(ngpu),
                          "FOURPHONON_CPUS_PER_GPU": str(conf["FOURPHONON_CPUS_PER_GPU"] or 8),
                          **norm_subs(factor, meta, thick2d)},
-                        require=REQ_2D, label="2D 归一化：")
+                        require=REQ_2D + ("--map-by numa",), label="2D 归一化：")
     else:
         sys.exit("[ERROR] SOLVER 只允许 phono3py / shengbte / fourphonon")
     stepconf.apply_submit(out / "submit.sh", conf.submit)

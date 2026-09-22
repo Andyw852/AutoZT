@@ -27,6 +27,8 @@ SPEC = {
     "ENCUT_FACTOR": (1.5,   "float"),
     "VASPKIT_EXE": ("vaspkit", "str"),
 }
+# 结构体检第五条（B）：SYMMETRY_AUDIT/SYMMETRIZE 等键（见 kl_common.SYMMETRY_SPEC）
+SPEC.update(kc.SYMMETRY_SPEC)
 
 
 def main():
@@ -39,6 +41,9 @@ def main():
     if prev is None:
         sys.exit("[ERROR] 找不到 step1_std_opt 的结构")
     kc.relay_poscar(prev / "CONTCAR", out / "POSCAR", "step1_std_opt")
+    # 结构体检第五条（B，2026-09-20）：S1 弛豫后的数值微畸变审计 + 可选对称化
+    # （默认 SYMMETRY_AUDIT=warn 只告警、SYMMETRY_SYMMETRIZE=off 不改结构）
+    kc.symmetry_gate(out / "POSCAR", conf)
 
     meth = kc.read_method(prev / kc.METHOD_FILE)
     dim = (meth.get("DIM", "").lower() or kc.resolve_dim(out / "POSCAR")[0])

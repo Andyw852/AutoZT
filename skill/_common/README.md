@@ -143,6 +143,63 @@ R.run(
 其中 `workflow_method.txt` 的 `FUNC/GGA/IVDW/DIM/MAG` 供 step2+ 继承。
 失败一律 `sys.exit("[ERROR] ...")`，autozt 只显示最后一行。
 
+### symmetry_audit（结构体检第五条：数值微畸变审计 + spglib 对称化，2026-09-20）
+
+背景（MoS2 线 A 实证）：S1 弛豫后的原胞常有数值微畸变 a=3.140197057514、
+b=3.140189175214 Å（差 7.88e-6 Å）、gamma=120.000083034652°。后果：spglib 在
+symprec=1e-5 只给 Amm2 (#38)/4 ops（pheasy 沿用该判断），symprec>=1e-4 才给真正的
+P-6m2 (#187)/12 ops；对称操作少 2/3 -> 独立力常数大增 -> 允许六方破缺 -> ZA 线性化。
+把晶格拉平 a=b、锁 gamma=120 后连 1e-5 都立即 P-6m2。
+
+**判据（wangchao 指定）**：symprec=1e-5 与 1e-4 给出的空间群不一致 => 数值微畸变
+=> 触发对称化建议。不固定单一容差当判据。
+
+引擎：`skill/_common/opt/symmetry_audit.py`。顶层只依赖标准库；numpy/spglib 懒加载，
+缺了只让审计"不可用"，绝不让 import 失败。relax_common.py 静态 import 它，
+因此公共池依赖自动补推（`suite_autodeps`）会把它带到超算。
+
+```bash
+# 只审计（默认，退出码 0；--strict-exit 时检出畸变退出 2）
+python3 symmetry_audit.py --poscar POSCAR
+# 审计 + 对称化 + 三项确认 + 留档（对称化默认只有显式调用才发生）
+python3 symmetry_audit.py --poscar POSCAR --mode symmetrize \
+    --out POSCAR_sym --archive-dir symmetry_audit \
+    --energy-before OUTCAR.before --energy-after OUTCAR.after
+# 就地对称化（原结构备份 POSCAR.pre_symmetry）
+python3 symmetry_audit.py --poscar POSCAR --mode symmetrize --inplace --allow-energy-pending
+# 单独做两个单点的能量对比（可复用 S2/S4 已有的 OUTCAR）
+python3 symmetry_audit.py --mode energy-check --energy-before OUTCAR.a --energy-after OUTCAR.b --natoms 3
+```
+
+**三项确认（任一不过就报错/告警，绝不静默通过）**：
+
+| # | 确认 | 实现 | 成本 |
+|---|---|---|---|
+| ① | 原子数与化学计量比不变 | 纯几何（逐元素计数比对；refine_cell 换原胞时能立刻抓到，实测 symprec=1e-5 把 MoS2 3 原子变 6 原子） | 0 |
+| ② | 对称化前后单点能量差在数值噪声以内 | 解析对比 `energy(sigma->0)`；未提供时状态=`pending`，默认拒绝静默通过（需 `--allow-energy-pending`） | **2 个单点** |
+| ③ | 真空轴是否被移动 | 前后真空轴下标 + 真空中心分数位移；换矢量即报 `ok=False` | 0 |
+
+另外对称化后**重新检查面内残余应力**（`--stress-before/--stress-after`，阈值 `--stress-tol-kb`，
+取 S1 判据的胞口径 0.2 kB）—— 拉平 a/b 会引入一点应力，量级应很小但要过一遍门禁；
+缺对称化后的单点时为 `pending`（成本 1 个单点）。
+
+**落位与留档**：逻辑位置 = **S1 之后、S4 之前**（等于链路里插了一次结构变更）。
+留档目录默认 `<结构同目录>/symmetry_audit/`，含 `POSCAR.before`、`POSCAR.symmetrized`、
+`symmetry_audit.json`、`symmetry_audit.log`，并把 `何时/因何触发/畸变量/三项确认结果/应力复检`
+合并进 `provenance.json`（best-effort，失败不阻断）。就地对称化另存 `POSCAR.pre_symmetry`。
+
+**开关（step.conf `[params]`，登记在 `relax_common.CONF_SPEC`）**：
+
+| 键 | 默认 | 含义 |
+|---|---|---|
+| `SYMMETRY_AUDIT` | `warn` | `off` / `warn`（只告警）/ `error`（检出畸变即 gen 失败）；S1 gen 审计**输入**结构 |
+| `SYMMETRY_SYMMETRIZE` | `off` | `off` / `on`；对称化默认关，必须显式触发（CLI `--mode symmetrize` 或此开关） |
+| `SYMMETRY_AUDIT_SYMPREC` | `1e-4` | 对称化容差（取两容差里识别出高对称的那个） |
+| `SYMMETRY_ENERGY_TOL_MEV` | `1.0` | 能量确认阈值 meV/atom |
+
+默认行为不变：S1 gen 只打印一行审计结论（微畸变时 `[WARN]`），不修改结构；对称化只有
+显式 `--mode symmetrize`（或后续步骤的 gen 调用）才发生。
+
 ## 等价性验证
 
 `relax_common` 是从 `skill/band-dft-cpu/gen_step1_PBE_opt.py` 抽出来的，抽的过程

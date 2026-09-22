@@ -216,6 +216,15 @@ def main():
     #   不会自动进到发往计算节点的 step 目录；作业里要 `python kl_fc_backends.py`，
     #   必须显式拷过去（否则计算节点报 No such file）。
     shutil.copyfile(here / "kl_fc_backends.py", out / "kl_fc_backends.py")
+    # kl_fc_backends 的 band_path_2d / 出图段是【懒】import kl_common（kl_common 又 import dim_common）。
+    # 不把这两个也拷过去，2D 的 band-dft-cpu.yaml 会静默跳过（2026-09-21 实测：
+    # "No module named 'kl_common'" —— 只影响出图、不影响 ZA/虚频判据，但那样 band_path_2d 的
+    # 2D 路径修复就没被真正执行）。作业目录 = out，所以直接拷到 out。
+    # za_2d.py：kl_fc_backends 现在【模块级】import za_2d（三副本合并后），
+    # 作业目录少了它会在 import 阶段直接 ModuleNotFoundError。
+    for _dep in ("kl_common.py", "dim_common.py", "za_2d.py"):
+        if (here / _dep).is_file():
+            shutil.copyfile(here / _dep, out / _dep)
     if engine == "pheasy":
         # GPU 拟合（PHEASY_BIN=pheasy-gpu）走独立模板 submit_fit_pheasy_gpu（--gres + 降核）。
         # 纯 CPU 集群（jzzn/hanhai25）没有该模板 → gen 期即报错，不排进队才失败（G2）。

@@ -40,6 +40,14 @@ from dim_common import (AXIS_NAMES, adaptive_parallel_tags,  # noqa: E402
                         detect_dimension, force_kz1,
                         resolve_tpl, validate_poscar)
 import stepconf  # noqa: E402
+try:                       # 结构体检第五条：数值微畸变审计 + 对称化（公共池同目录）
+    import symmetry_audit  # noqa: E402
+except Exception:          # noqa: BLE001 —— 审计不可用绝不阻断 gen
+    symmetry_audit = None
+try:                       # 结构体检四条：重叠 / 悬挂 / 计量比 / 层厚（公共池同目录）
+    import structure_health  # noqa: E402
+except Exception:          # noqa: BLE001 —— 体检不可用绝不阻断 gen
+    structure_health = None
 
 # =====================================================================
 #                           用户配置区
@@ -371,6 +379,24 @@ CELL_STAGE_ENCUT_FACTOR = 2.0
 INPLANE_TOL_KB = 0.2                 # 兜底值（算不出 h⊥/d 时用）
 TOL_LAYER_KB = 0.4                   # 2D 面内应力的【层内口径】阈值(kbar)，
                                      # 比 S4 的 STRESS_2D_THR=0.5 留余量
+
+# ---- 结构体检第五条：数值微畸变审计（2026-09-20；step.conf 可覆盖）----
+#   背景：S1 弛豫后常有 a/b 差 ~8e-6 A、gamma 偏 120 度 ~8e-5 度的数值微畸变，
+#   使 spglib 在 symprec=1e-5 只给 Amm2(#38)/4 ops、>=1e-4 才给 P-6m2(#187)/12 ops，
+#   对称操作少 2/3 -> pheasy 允许六方破缺 -> ZA 被算成线性。
+#   判据（wangchao 指定）：symprec=1e-5 与 1e-4 空间群不一致 => 触发对称化建议。
+#   SYMMETRY_AUDIT:  off | warn | error   （S1 gen 审计输入结构；warn 只告警）
+#   SYMMETRY_SYMMETRIZE: off | on         （对称化默认关，用 symmetry_audit.py 显式触发）
+#   巡检/对称化引擎：skill/_common/opt/symmetry_audit.py（CLI + 可被 gen/check 调用）
+SYMMETRY_AUDIT = "warn"              # off | warn | error
+SYMMETRY_SYMMETRIZE = "off"          # off | on
+SYMMETRY_AUDIT_SYMPREC = 1e-4        # 对称化容差：取两容差中识别出高对称的那个
+SYMMETRY_ENERGY_TOL_MEV = 1.0        # 能量确认阈值 meV/atom（2 个单点）
+# 结构体检【四条】（2026-09-21，wangchao）：最近邻重叠 / CN=1 悬挂 / 命名 vs 计量比 / z 跨度 vs 层数。
+#   off | warn | error；默认 warn（只告警，不阻断 gen）。引擎见 skill/_common/opt/structure_health.py。
+#   为什么要有：AlN(Al5N)、Zn5O3、BeO 这几个坏种子此前是【手工】拦下的；不落成代码，
+#   下一批材料进来没人拦（判定口径与标定见 tests/suite_structure_health.py）。
+STRUCTURE_HEALTH = "warn"            # off | warn | error
 # 变胞段【多遍循环】参数 —— 把"手动 cp CONTCAR POSCAR 重跑直到零应力"固化成自动流程。
 #   为什么必须多遍：① VASP 的 EDIFFG<0 只判【力】不判【应力】，单遍跑完晶胞常差几个 kbar；
 #                  ② 体积/形状一变，平面波基组的 G 矢量集合就变了（Pulay 应力），
@@ -472,6 +498,20 @@ CONF_SPEC = {
     "MU": (None, "elemmap"), "GUEST_ELEMENT": (None, "str"),
     "MU_GUEST": (None, "float"), "HOST_ENERGY": (None, "float"),
     "HOST_DIR": (None, "str"), "HOST_FORMULA": (None, "elemmap"),
+    # ---- 结构体检第五条：数值微畸变审计 / 对称化（2026-09-20）----
+    #   SYMMETRY_AUDIT        off | warn | error（默认 warn：只告警，不阻断）
+    #   SYMMETRY_SYMMETRIZE   off | on       （默认 off：对称化必须显式开）
+    #   SYMMETRY_AUDIT_SYMPREC   对称化容差（默认 1e-4）
+    #   SYMMETRY_ENERGY_TOL_MEV  能量确认阈值 meV/atom（默认 1.0）
+    #   引擎见公共池 skill/_common/opt/symmetry_audit.py。
+    "SYMMETRY_AUDIT": ("warn", "str"),
+    "SYMMETRY_SYMMETRIZE": ("off", "str"),
+    "SYMMETRY_AUDIT_SYMPREC": (1e-4, "float"),
+    "SYMMETRY_ENERGY_TOL_MEV": (1.0, "float"),
+    # ---- 结构体检四条：最近邻重叠 / CN 悬挂 / 命名计量比 / 层厚（2026-09-21）----
+    #   STRUCTURE_HEALTH  off | warn | error（默认 warn：只告警，不阻断）
+    #   引擎见公共池 skill/_common/opt/structure_health.py。
+    "STRUCTURE_HEALTH": ("warn", "str"),
 }
 
 STEP_PARAMS = {}      # step.conf [params] 的解析结果（resolve_func 里填）
@@ -657,6 +697,55 @@ def apply_step_params():
     if v:
         g["MAGMOM_OVERRIDE"] = {k: float(x) for k, x in dict(v).items()}
         print("[..] step.conf 覆盖 MAGMOM_OVERRIDE = %s" % g["MAGMOM_OVERRIDE"])
+
+    # ---- 结构体检第五条：数值微畸变审计 / 对称化 开关（2026-09-20）----
+    _sa = STEP_PARAMS.get("SYMMETRY_AUDIT")
+    if _sa is not None:
+        _sas = str(_sa).strip().lower()
+        if _sas not in ("off", "false", "0", "none", "warn", "error"):
+            sys.exit("[ERROR] step.conf 的 SYMMETRY_AUDIT=%r 非法，"
+                     "只允许 off / warn / error" % _sa)
+        g["SYMMETRY_AUDIT"] = "off" if _sas in ("false", "0", "none") else _sas
+        if g["SYMMETRY_AUDIT"] != "warn":
+            print("[..] step.conf 覆盖 SYMMETRY_AUDIT = %s" % g["SYMMETRY_AUDIT"])
+    _ss = STEP_PARAMS.get("SYMMETRY_SYMMETRIZE")
+    if _ss is not None:
+        _sss = str(_ss).strip().lower()
+        if _sss not in ("off", "false", "0", "on", "true", "1", "yes"):
+            sys.exit("[ERROR] step.conf 的 SYMMETRY_SYMMETRIZE=%r 非法，"
+                     "只允许 off / on" % _ss)
+        g["SYMMETRY_SYMMETRIZE"] = "off" if _sss in ("false", "0", "off") else "on"
+        if g["SYMMETRY_SYMMETRIZE"] == "on":
+            print("[..] step.conf 覆盖 SYMMETRY_SYMMETRIZE = on")
+    _sp = STEP_PARAMS.get("SYMMETRY_AUDIT_SYMPREC")
+    if _sp not in (None, ""):
+        try:
+            _spf = float(_sp)
+        except (TypeError, ValueError):
+            sys.exit("[ERROR] SYMMETRY_AUDIT_SYMPREC=%r 不是数" % _sp)
+        if _spf <= 0:
+            sys.exit("[ERROR] SYMMETRY_AUDIT_SYMPREC 必须 > 0，当前 %r" % _sp)
+        g["SYMMETRY_AUDIT_SYMPREC"] = _spf
+    _se = STEP_PARAMS.get("SYMMETRY_ENERGY_TOL_MEV")
+    if _se not in (None, ""):
+        try:
+            _sef = float(_se)
+        except (TypeError, ValueError):
+            sys.exit("[ERROR] SYMMETRY_ENERGY_TOL_MEV=%r 不是数" % _se)
+        if _sef <= 0:
+            sys.exit("[ERROR] SYMMETRY_ENERGY_TOL_MEV 必须 > 0，当前 %r" % _se)
+        g["SYMMETRY_ENERGY_TOL_MEV"] = _sef
+
+    # ---- 结构体检四条开关（2026-09-21）----
+    _sh = STEP_PARAMS.get("STRUCTURE_HEALTH")
+    if _sh is not None:
+        _shs = str(_sh).strip().lower()
+        if _shs not in ("off", "false", "0", "none", "warn", "error"):
+            sys.exit("[ERROR] step.conf 的 STRUCTURE_HEALTH=%r 非法，"
+                     "只允许 off / warn / error" % _sh)
+        g["STRUCTURE_HEALTH"] = "off" if _shs in ("false", "0", "none") else _shs
+        if g["STRUCTURE_HEALTH"] != "warn":
+            print("[..] step.conf 覆盖 STRUCTURE_HEALTH = %s" % g["STRUCTURE_HEALTH"])
 
 
 # step.conf 可覆盖的晶胞键 -> 合法值集合
@@ -1931,7 +2020,7 @@ def write_material_thickness(outdir, dim, vac_axis, tol=0.05):
     cwd = Path(outdir).parent                  # 技能目录，如 <mat>/kl-dft-cpu
     matdir = cwd.parent                        # 材料根，如 <mat>
     try:
-        # 技能名形如 kl-dft-cpu / ke-dft-cpu / opt-mace-cpu / mlff-mace
+        # 技能名形如 kl-dft-cpu / ke-dft-cpu / opt-mlff-cpu / mlff
         if not re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)+", cwd.name):
             print("[..] 跳过材料级 thickness_2d.json：%s 不像技能目录（名 %r）"
                   % (cwd, cwd.name))
@@ -1952,6 +2041,83 @@ def write_material_thickness(outdir, dim, vac_axis, tol=0.05):
         print(t2d.write_material_level(matdir, meta, tol=tol))
     except Exception as exc:                   # noqa: BLE001 —— best-effort，绝不中断 gen
         print("[WARN] 材料级 thickness_2d.json 写入跳过：%s" % exc)
+
+
+def symmetry_health_check(poscar_path):
+    """结构体检第五条：双容差空间群审计 + 可选对称化（默认只告警，不改行为）。
+
+    审计【本次 gen 的结构】。弛豫后的微畸变要在进 S4 前用同一引擎
+    （symmetry_audit.py --mode symmetrize）复核并把对称化结构写回去。
+    返回审计 dict（关闭/不可用时 None）。任何异常都不阻断 gen。"""
+    mode = str(globals().get("SYMMETRY_AUDIT") or "warn").strip().lower()
+    if mode in ("off", "false", "0", "none", ""):
+        return None
+    if symmetry_audit is None:
+        print("[..] 结构体检第五条跳过：symmetry_audit.py 不可用")
+        return None
+    symprec = float(globals().get("SYMMETRY_AUDIT_SYMPREC") or 1e-4)
+    try:
+        res = symmetry_audit.audit_structure_file(poscar_path, symprec=symprec)
+    except Exception as exc:                   # noqa: BLE001
+        print("[..] 结构体检第五条跳过（审计失败）：%s" % exc)
+        return None
+    if not res.get("available"):
+        print("[..] 结构体检第五条跳过：%s" % res.get("reason"))
+        return None
+    sg = res["spacegroup"]
+    if res["micro_distortion"]:
+        print("[WARN] 结构体检第五条：检出数值微畸变 —— symprec=1e-5 -> %s (#%s)/%d ops，"
+              "1e-4 -> %s (#%s)/%d ops；建议进 S4 前用 symmetry_audit.py --mode symmetrize 对称化"
+              % (sg[0]["international"], sg[0]["number"], sg[0]["n_ops"],
+                 sg[-1]["international"], sg[-1]["number"], sg[-1]["n_ops"]))
+    else:
+        print("[..] 结构体检第五条：空间群一致（%s #%s，%d ops），无微畸变"
+              % (sg[-1]["international"], sg[-1]["number"], sg[-1]["n_ops"]))
+    try:
+        import json as _json
+        (Path(poscar_path).parent / "symmetry_audit.json").write_text(
+            _json.dumps(res, ensure_ascii=False, indent=2), encoding="utf-8")
+    except OSError:
+        pass
+    if res["micro_distortion"] and mode == "error":
+        sys.exit("[ERROR] 结构体检第五条：结构存在数值微畸变（SYMMETRY_AUDIT=error）。"
+                 "先跑 symmetry_audit.py --mode symmetrize，或在 step.conf 设 "
+                 "SYMMETRY_AUDIT=warn 继续。")
+    return res
+
+
+def structure_health_check(poscar_path, material_name=None):
+    """结构体检【四条】：最近邻重叠 / CN=1 悬挂 / 命名 vs 计量比 / z 跨度 vs 层数。
+
+    默认只告警（STRUCTURE_HEALTH=warn），不改结构、不阻断 gen；引擎不可用或异常一律跳过。
+    返回结果 dict（关闭/不可用时 None）。
+    """
+    mode = str(globals().get("STRUCTURE_HEALTH") or "warn").strip().lower()
+    if mode in ("off", "false", "0", "none", ""):
+        return None
+    if structure_health is None:
+        print("[..] 结构体检四条跳过：structure_health.py 不可用")
+        return None
+    try:
+        res = structure_health.check_structure_file(poscar_path,
+                                                    material_name=material_name)
+    except Exception as exc:                   # noqa: BLE001
+        print("[..] 结构体检四条跳过（体检失败）：%s" % exc)
+        return None
+    if not res.get("available"):
+        print("[..] 结构体检四条跳过：%s" % res.get("reason"))
+        return None
+    print(structure_health.format_report(res))
+    try:
+        import json as _json
+        (Path(poscar_path).parent / "structure_health.json").write_text(
+            _json.dumps(res, ensure_ascii=False, indent=2), encoding="utf-8")
+    except OSError:
+        pass
+    if not res.get("ok") and mode == "error":
+        sys.exit("[ERROR] 结构体检四条未过（STRUCTURE_HEALTH=error）：%s"
+                 % "；".join(res.get("flags", [])))
+    return res
 
 
 def build_in_job_stages(outdir: Path):
@@ -2323,6 +2489,11 @@ def main():
     poscar_text = src_poscar.read_text(encoding="utf-8-sig")
     (outdir / "POSCAR").write_text(poscar_text, encoding="utf-8", newline="\n")
     print("[OK] POSCAR")
+
+    # 结构体检第五条（2026-09-20）：双容差空间群审计；默认只告警，不改行为。
+    symmetry_health_check(outdir / "POSCAR")
+    # 结构体检四条（2026-09-21）：最近邻重叠 / CN 悬挂 / 命名计量比 / 层厚；默认只告警。
+    structure_health_check(outdir / "POSCAR", material_name=outdir.parent.name)
 
     # [UPSTREAM-FROM-MLFF] retry 语义：gen 时清掉上次作业的阶段标记。.sN.done 只表示
     # 「跑过」、不表示「收敛过」——上次 FAIL 后重投若不清理，run_relax.sh 会把所有段

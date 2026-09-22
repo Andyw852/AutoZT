@@ -194,7 +194,12 @@ def _band_path(ph):
     if dim == "2d":
         import kl_common as kc
         try:
-            paths, labels, lat = kc.band_path_2d(ph.primitive.cell, NPOINTS, vax)
+            # ★ vax 是 POSCAR 的 Cartesian 真空轴；primitive_matrix 常把真空换到别的原胞基矢
+            #   （生产 MoS₂：a1=(0,0,-25)，真空=基矢 0），必须映射成原胞基矢下标 ——
+            #   否则 band_path_2d 会拿"25 Å 真空基矢 + 一个面内基矢"判成 rectangular、
+            #   把六方路径画成 Γ-X-S-Y-Γ（2026-09-21 真实数据实测）。
+            vax_prim = kc.vacuum_axis_in_primitive(ph.primitive.cell, vax)
+            paths, labels, lat = kc.band_path_2d(ph.primitive.cell, NPOINTS, vax_prim)
             bands, connections = get_band_qpoints_and_path_connections(paths, npoints=NPOINTS)
             print("[..] 2D 高对称路径：%s 格子，kz=0：%s"
                   % (lat, "-".join(l.replace("$\\Gamma$", "Γ") for l in labels)))
@@ -254,18 +259,39 @@ def _plot(tag):
     """tag='nac' | 'nonac'：画声子谱（全频段 + 0..LOWF_MAX 放大）+ 数据表。"""
     import matplotlib
     matplotlib.use("Agg")
-    bs = _cached_band(tag)
-    src = "cache(band_%s.yaml)" % tag
+    # 先按【当前代码】定路径，并写一个路径指纹 sidecar：vax→原胞基矢的修复会改变路径
+    # （2026-09-21 实测：MoS₂ 未修前画成 Γ-X-S-Y-Γ，修复后才是 Γ-M-K-Γ），旧 band_*.yaml
+    # 必须失效重算，否则断点续画会把错误路径的谱一直缓存下去。
+    ph = _build_phonopy()
+    _set_nac(ph, tag == "nac")
+    bands, conn, labels, src = _band_path(ph)
+    fp = json.dumps({"source": src, "labels": labels}, ensure_ascii=False, sort_keys=True)
+    side = Path("band_%s.path" % tag)
+    bs = None
+    if side.is_file():
+        try:
+            if side.read_text(encoding="utf-8").strip() == fp:
+                bs = _cached_band(tag)
+        except OSError:
+            bs = None
     if bs is not None:
-        print("[..] 复用已算好的 %s（跳过 band structure 重算）" % src)
+        print("[..] 复用已算好的 band_%s.yaml（路径指纹一致：%s）" % (tag, src))
     else:
-        ph = _build_phonopy()
-        _set_nac(ph, tag == "nac")
-        bands, conn, labels, src = _band_path(ph)
+        if side.is_file():
+            old_fp = "?"
+            try:
+                old_fp = json.loads(side.read_text(encoding="utf-8")).get("source", "?")
+            except Exception:                              # noqa: BLE001
+                pass
+            print("[..] 路径指纹变化（旧 %s → 新 %s）：丢弃缓存重算" % (old_fp, src))
         ph.run_band_structure(bands, path_connections=conn, labels=labels,
                               with_eigenvectors=False)
         # 先落盘谱数据：即使后面绘图阶段被打断，数据也已保住
         ph.write_yaml_band_structure(filename="band_%s.yaml" % tag)
+        try:
+            side.write_text(fp, encoding="utf-8")
+        except OSError:
+            pass
         bs = ph.get_band_structure_dict()
         plt = ph.plot_band_structure()
         plt.savefig("band_%s.png" % tag, dpi=200, bbox_inches="tight")
