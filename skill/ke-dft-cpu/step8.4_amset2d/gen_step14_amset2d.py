@@ -121,6 +121,11 @@ UNITY_OVERLAP = True
 #   h5 与 vasprun 必须同源（都取 step3b/step4b），否则 h5 点数与 vasprun 网格对不上。
 #   默认 False = 仍读 step4_wave，二维既有行为完全不变。
 WAVEFUNCTION_FULL = False
+# patch_write_mesh（2026-09-22 用户批准）：把 AMSET 的 write_mesh 写进 settings.yaml，
+#   产出 mesh_<mesh>.h5（每机制每 k 点散射率 + 能带/速度/DOS 元数据），供
+#   postprocess_intrinsic.py 做"IMP 置零后严格本征"重积分。默认 False = 行为不变。
+#   打开方式：本步 step.conf 写 WRITE_MESH = true（或项目 project_setting）。
+WRITE_MESH = False
 # --- 弹性常数来源（amset run 的 ACD 散射需要）---
 #   MANUAL_ELASTIC 填了就用它，否则从 ELASTIC_DIR/OUTCAR 自动解析（kBar→GPa）。
 #   直接填：单个数（各向同性近似，GPa），或 6x6 列表（完整 Cij，GPa）。
@@ -172,6 +177,9 @@ SPEC = {
     # 散射类型覆盖（2026-09-22 用户批准）：逗号/空格分隔，如 `SCATTERING = ADP,POP` 用于严格本征对照；
     # 空串 = 出厂 ["ADP","IMP","POP"] 行为不变。
     "SCATTERING": ("", "str"),
+    # write_mesh 开关（2026-09-22 用户批准）：true = settings.yaml 写 write_mesh: true，
+    # 产出 mesh_*.h5 供 postprocess_intrinsic.py 重积分；默认 False，行为不变。
+    "WRITE_MESH": (WRITE_MESH, "bool"),
 }
 # --- amset2d 插件相关（可改）---
 PLUGIN_SRC_NAME = "amset2d_plugin.py"   # 与本脚本同目录，运行时复制到 OUTDIR_NAME
@@ -1263,6 +1271,12 @@ def write_settings(out: Path, eps_inf, eps_static, gap, elastic,
         #   step.conf 显式写 UNITY_OVERLAP=false 时，让 overlap_preflight 知道这是
         #   "显式放行的受控对照"，把 ⓪ 的拦截降为告警——否则全网格真实重叠也无法跑。
         lines.append("# AZ_OVERLAP_CONTROLLED=1")
+    # patch_write_mesh：显式落盘开关。true 时 AMSET 额外写 mesh_<mesh>.h5，
+    #   里面是每机制每（不可约）k 点的散射率 + 能带/速度/DOS 元数据；
+    #   postprocess_intrinsic.py 读它把 IMP 置零后用 AMSET 自己的输运积分重算本征 μ/S/σ。
+    #   注意：AMSET 0.4.19/0.5.1 的 write_mesh 对自旋极化体系有 key bug（down 写成
+    #   <name>_up_down），postprocess_intrinsic.py 已自带修正读取，勿用 amset.io.load_mesh。
+    lines.append("write_mesh: %s" % ("true" if WRITE_MESH else "false"))
     # ★ 必须显式写 nworkers：不写则 AMSET 默认 -1 = 用满节点全部核，
     #   会超订提交模板申请的核数（见文件头 NWORKERS 处的说明）。
     lines.append("nworkers: %d" % int(NWORKERS))
@@ -1342,6 +1356,26 @@ def _install_plugin(out):
     print("[OK] 二维插件就位：%s（只在本步的 amset 运行里生效）" % dst)
 
 
+def _install_postprocess(out):
+    """把 postprocess_intrinsic.py 复制进运行目录。
+
+    跑完本步后，在运行目录里直接：
+        python postprocess_intrinsic.py --check-reproduce
+    即可从 mesh_*.h5 严格重算本征（剔除 IMP）μ/S/σ，写 intrinsic_transport.json。
+    """
+    here = Path(__file__).resolve().parent
+    name = "postprocess_intrinsic.py"
+    src = next((p for p in (here / name, Path.cwd() / name) if p.is_file()), None)
+    if src is None:
+        print("[WARN] 找不到 %s —— 本征后处理脚本不会随交互式运行落盘"
+              "（gen_need 里要有它）" % name)
+        return
+    dst = Path(out) / name
+    if src.resolve() != dst.resolve():
+        shutil.copyfile(src, dst)
+    print("[OK] 本征后处理脚本就位：%s" % dst)
+
+
 def _install_preflight(out):
     """把 overlap_preflight.py 复制进运行目录（作业内 python overlap_preflight.py --in-job）。"""
     here = Path(__file__).resolve().parent
@@ -1398,7 +1432,7 @@ def main():
     _disc_gate()
     cwd = Path.cwd()
     global LAYER_THICKNESS, NWORKERS, UNITY_OVERLAP, WAVEFUNCTION_FULL
-    global INTERPOLATION_FACTOR, SCATTERING
+    global INTERPOLATION_FACTOR, SCATTERING, WRITE_MESH
     _conf_nworkers = None
     if (cwd / "step.conf").is_file():
         # strict=False：材料级 step.conf 是【全技能共用】的一份，含别的步骤的键
@@ -1451,6 +1485,12 @@ def main():
                 elif _sc_list != SCATTERING:
                     print("[OK] SCATTERING = %s（step.conf 覆盖，出厂 %s）" % (_sc_list, SCATTERING))
                     SCATTERING = _sc_list
+            # patch_write_mesh：step.conf WRITE_MESH = true -> 落 mesh.h5，
+            #   供 postprocess_intrinsic.py 重算严格本征迁移率。
+            if _p["WRITE_MESH"]:
+                WRITE_MESH = True
+                print("[..] WRITE_MESH=true（step.conf 覆盖）：settings.yaml 写 "
+                      "write_mesh: true，产出 mesh_*.h5")
         except (KeyError, ValueError, TypeError):
             pass  # step.conf 读不成时保持出厂默认（LAYER_THICKNESS="vdw" / NWORKERS 自动）
 
@@ -1476,6 +1516,7 @@ def main():
     # 插件随本步复制到运行目录（只在那一次 amset 运行里生效，不改 AMSET 安装）
     _install_plugin(out)
     _install_preflight(out)
+    _install_postprocess(out)
     _wdir = "step4b_wave_full" if WAVEFUNCTION_FULL else WAVE_DIR
     link(out, cwd / _wdir / "wavefunction.h5", "wavefunction.h5")
     link(out, cwd / READ_DIR / _pick_deformation_h5(cwd, READ_DIR), "deformation.h5")

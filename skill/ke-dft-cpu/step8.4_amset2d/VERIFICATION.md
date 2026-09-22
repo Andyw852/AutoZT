@@ -2976,6 +2976,13 @@ S7 10 个作业 3864418–3864427 全部 COMPLETED、ExitCode 0:0（独立 sacct
 
 **S8.4_amset2d 已提交**（2026-09-22，jobid 3867317）：`amset2d` 组由 `start -j S8.4_amset2d` 按需自动启用；采用**全网格**输入——`wavefunction.h5 -> step4b_wave_full/wavefunction.h5`（1,614,948,096 B ≈ 1.61 GB）、`vasprun.xml -> step3b_uniform_full/vasprun.xml`、`deformation.h5 -> step7b_deform_read/deformation_vac.h5`（修复后的真空口径 h5）。待跑完后做四项验收（本征 ADP+POP 迁移率量级、POP τ 亚皮秒、IMP 分列、sacct MaxRSS ≈47 GB）并取 300 K / 600 K 的 S、σ。
 
+## V44. AMSET 上游 `write_mesh` 在自旋极化体系下的 down 通道命名 bug（2026-09-22）
+
+发现（子代理研究；**0.4.19 与 0.5.1 都中**）：`amset/deformation/io.py::write_mesh` 的循环里改写了 key，导致自旋极化体系把 down 通道存成 `<name>_up_down`（如 `energies_up_down`、`scattering_rates_up_down`），而 `amset.io.load_mesh` 又按错命名解析。**后果：ISPIN=2 体系不能用 `amset.io.load_mesh` 读 `mesh_*.h5`。**
+
+新增的 `skill/ke-dft-cpu/step8.4_amset2d/postprocess_intrinsic.py`（严格本征后处理，`WRITE_MESH` 开关默认关）自带修正读取（按实际键名），已在本地金标准 A/B 验证「置零 IMP == 单独跑 `[ADP,POP]`」。影响面仅 `write_mesh` 路径（S8.4 打开 `write_mesh` 时）；不打开 `write_mesh` 的常规 S8.4 不受影响。**处置：不改 AMSET 安装，记于此；升级 0.5.1 的待办中一并复验上游是否已修。**
+
+
 
 
 
