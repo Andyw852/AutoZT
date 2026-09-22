@@ -131,6 +131,9 @@ WAVEFUNCTION_FULL = False
 #   产出 mesh_<mesh>.h5（每机制每 k 点散射率 + 能带/速度/DOS 元数据），供
 #   postprocess_intrinsic.py 做"IMP 置零后严格本征"重积分。默认 False = 行为不变。
 #   打开方式：本步 step.conf 写 WRITE_MESH = true（或项目 project_setting）。
+#   ★ true 时作业链尾部【自动】接 postprocess_intrinsic.py --check-reproduce
+#     （patch_intrinsic_auto，2026-09-22）——不再需要人工补跑，跑完即有
+#     intrinsic_transport.json；复现检查不过则整步失败，不产出不可信本征数。
 WRITE_MESH = False
 # --- 弹性常数来源（amset run 的 ACD 散射需要）---
 #   MANUAL_ELASTIC 填了就用它，否则从 ELASTIC_DIR/OUTCAR 自动解析（kBar→GPa）。
@@ -1366,9 +1369,10 @@ def _install_plugin(out):
 def _install_postprocess(out):
     """把 postprocess_intrinsic.py 复制进运行目录。
 
-    跑完本步后，在运行目录里直接：
+    WRITE_MESH=true 时，作业链尾部会自动执行
         python postprocess_intrinsic.py --check-reproduce
-    即可从 mesh_*.h5 严格重算本征（剔除 IMP）μ/S/σ，写 intrinsic_transport.json。
+    从 mesh_*.h5 严格重算本征（剔除 IMP）μ/S/σ，写 intrinsic_transport.json。
+    本函数只负责把脚本放到位；人工重跑/换 --drop 时也可直接调用。
     """
     here = Path(__file__).resolve().parent
     name = "postprocess_intrinsic.py"
@@ -1581,7 +1585,16 @@ def main():
     jobname = ("%s-ke-dft-cpu-%s" % (cwd.name, STEP_LABEL)) if not _HAS_KC \
         else kc.new_jobname(cwd, STEP_LABEL)
     text = tpl.read_text(encoding="utf-8")
-    text = text.replace("{{JOBNAME}}", jobname).replace("{{AMSET_CMD}}", AMSET_CMD).replace("{{AMSET_ENV}}", AMSET_ENV_NAME)
+    # patch_intrinsic_auto（2026-09-22）：WRITE_MESH=true 时把 strict intrinsic 后处理
+    # 自动接进作业链——否则 mesh.h5 白写、本征结果永远要人工补跑一次（用户指出
+    # 「不是切换环境就自动对」）。--check-reproduce 是硬门：重积分必须复现原
+    # transport.json，复现不了直接失败，绝不静默产出不可信的本征数。
+    _acmd = AMSET_CMD
+    if WRITE_MESH:
+        _acmd = _acmd + " && python postprocess_intrinsic.py --check-reproduce"
+    text = (text.replace("{{JOBNAME}}", jobname)
+                .replace("{{AMSET_CMD}}", _acmd)
+                .replace("{{AMSET_ENV}}", AMSET_ENV_NAME))
     if "{{AMSET_ENV}}" in text:
         sys.exit("[ERROR] submit_amset.tpl 的 {{AMSET_ENV}} 未填充（step.conf 缺 AMSET_ENV？）")
     submit.write_text(text, encoding="utf-8", newline="\n")
