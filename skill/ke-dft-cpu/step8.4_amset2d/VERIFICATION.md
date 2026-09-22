@@ -3114,3 +3114,28 @@ if "_up" in key or "_down" in key:
 **判定**：目标里"5 个材料的 S8/S8.4"——**S8 已在跑（CrSe2_ortho 3884993）**，
 **S8.4 需先做上述启用**。属配置类前置，未擅自改动，待用户指示。
 
+
+### V48. 第 10 轮：`nspin_norm_fix` 版本门真值表实测（本地，无依赖）
+
+`skill/ke-dft-cpu/nspin_norm_fix.py` 的 `version_lt` / `decide` 逐项实测：
+
+| 版本 | nspin | 已标记 | decide 结果 | 期望 |
+|---|---|---|---|---|
+| 0.4.19 | 2 | 否 | `(True, 'amset<0.5.1 & nspin=2')` | ✅ 修 ×2 |
+| 0.4.19 | 2 | 是 | `(False, 'already-marked')` | ✅ 幂等 |
+| 0.4.19 | 1 | 否 | `(False, 'nspin=1')` | ✅ 非自旋极化不修 |
+| **0.5.1** | 2 | 否 | `(False, 'amset>=0.5.1')` | ✅ **不修，原生已对** |
+| 0.5.1 | 2 | 是 | `(False, 'already-marked')` | ✅ |
+| 0.5.1 | 1 | 否 | `(False, 'amset>=0.5.1')` | ✅ |
+
+`version_lt` 五例全对（含 `0.5.0<0.5.1`、`0.5.2>0.5.1`、相等）。
+
+**与实机观测吻合**：CrSe2_hex（0.4.19）h5 属性 `nspin_norm_fix_factor=2`；
+CrSe2_ortho（0.5.1）h5 属性 `nspin_norm_fixed='skipped'` / `reason='amset>=0.5.1'`，
+且形变势 ×2.024 **由 0.5.1 原生得出**（非本地补丁）。故两版结果一致、口径统一。
+
+**附注**：jzzn 上的 `/public/home/wangchao/software/AutoZT` **不是本仓库的副本**
+（无 `.git`、无 `skill/`），与作业无关——gen 运行时是把所需脚本（含
+`nspin_norm_fix.py`、`ke_common.py`）按 `gen_need` **随作业推送**到步骤目录，
+因此本地仓库才是唯一事实来源，远端无需 checkout。
+
