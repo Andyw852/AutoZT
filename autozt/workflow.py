@@ -2401,9 +2401,11 @@ def cmd_start(cfg, data, mname, jname, force, incl_scancel=False):
             if not guard_predecessors(m, s, force):
                 continue
             if s["kind"] == "FAIL" and not force:
-                print("%s[%s|%s]: FAIL 状态，建议 retry/rerun（start 需 -f）。"
-                      % (m["name"], m["tt"], s["label"]))
-                continue
+                # 方案A（瘦身版）：有有效重生成标记且额度未超时免 -f 放行。
+                if not regen_allow_without_force(cfg, t, m, s):
+                    print("%s[%s|%s]: FAIL 状态，建议 retry/rerun（start 需 -f）。"
+                          % (m["name"], m["tt"], s["label"]))
+                    continue
             sc = step_cfg(t, s["name"], m)
             _is_gen = sc.get("run") == "gen"
             if not _is_gen and not gate.try_acquire(m["tt"]):
@@ -2443,10 +2445,12 @@ def cmd_start(cfg, data, mname, jname, force, incl_scancel=False):
             if not guard_predecessors(m, s, force):
                 return 1
             if s["kind"] == "FAIL" and not force:
-                print("%s: 步骤 %s 处于 FAIL，建议用 retry（保留文件）或 "
-                      "rerun（推倒重来）；确定要 start 请加 -f。"
-                      % (m["name"], s["label"]))
-                return 1
+                # 方案A（瘦身版）：有有效重生成标记且额度未超时免 -f 放行。
+                if not regen_allow_without_force(cfg, t, m, s):
+                    print("%s: 步骤 %s 处于 FAIL，建议用 retry（保留文件）或 "
+                          "rerun（推倒重来）；确定要 start 请加 -f。"
+                          % (m["name"], s["label"]))
+                    return 1
             ok = do_submit(cfg, t, m, s, force, gen_first=False,
                            contcar_cp=step_cfg(t, s["name"], m).get(
                                "contcar_to_poscar", False),
@@ -2674,21 +2678,171 @@ done
     return True
 
 
+# ---------------------------------------------------------------------------
+# 方案A（瘦身版）：retry 重新生成输入后写"重生成标记"；cmd_start 的 FAIL 分支在
+# ①标记存在 ②标记指纹==当前输入指纹 ③同材料同类型同步骤 24h 放行<2 次 全满足时
+# 允许不带 -f 提交，放行写审计；任何读取/SSH/写盘失败一律不豁免（fail-closed）。
+# ---------------------------------------------------------------------------
+REGEN_MARK = ".tf_regen_marker.json"    # lpath 下，键 = tt/step
+REGEN_AUDIT = ".tf_regen_audit.jsonl"   # lpath 下，放行审计（一行一次）
+REGEN_INPUTS = ("INCAR", "POSCAR", "KPOINTS", "submit.sh")
+REGEN_MAX_GRANTS = 2
+REGEN_WINDOW_SECS = 24 * 3600
+
+def _regen_key(m, s):
+    return "%s/%s" % (m.get("tt"), s.get("name"))
+
+def _regen_path(m, name):
+    return os.path.join(m["lpath"], name) if m.get("lpath") else None
+
+def _regen_input_fingerprint(cfg, m, s):
+    """步骤远端目录里关键输入（REGEN_INPUTS 中存在者）的稳定 sha256 聚合指纹。
+    目录不可读/无关键输入/SSH 失败 → (None, [])。"""
+    from autozt import run_remote, sh_b64
+    if not s.get("dir"):
+        return None, []
+    names = list(REGEN_INPUTS)
+    script = ("cd %s 2>/dev/null || exit 0\n"
+              "for f in %s; do [ -f \"$f\" ] && sha256sum -- \"$f\"; done\n"
+              % (shlex.quote(s["dir"]), " ".join(shlex.quote(n) for n in names)))
+    try:
+        rc, out = run_remote(cfg, sh_b64(script),
+                             host=s.get("_host") or m.get("host_eff") or "__default__")
+    except Exception as exc:                       # noqa: BLE001
+        print("警告：重生成指纹计算失败（按不豁免处理）：%s" % exc, file=sys.stderr)
+        return None, []
+    pairs = []
+    for ln in ((out or "") if rc == 0 else "").splitlines():
+        p = ln.strip().split()
+        if len(p) >= 2 and p[-1] in names:
+            pairs.append((p[-1], p[0]))
+    if not pairs:
+        return None, []
+    pairs.sort()
+    agg = hashlib.sha256("".join("%s:%s\n" % (n, h) for n, h in pairs)
+                         .encode("utf-8")).hexdigest()
+    return agg, [n for n, _ in pairs]
+
+def _regen_marker_load(m):
+    p = _regen_path(m, REGEN_MARK)
+    try:
+        with open(p, encoding="utf-8", errors="replace") as f:
+            d = json.load(f)
+        return d if isinstance(d, dict) else {}
+    except Exception:                              # noqa: BLE001
+        return {}
+
+def _regen_marker_save(m, marks):
+    p = _regen_path(m, REGEN_MARK)
+    if not p:
+        return False
+    try:
+        with open(p + ".tmp", "w", encoding="utf-8") as f:
+            json.dump(marks, f, ensure_ascii=False, indent=1)
+            f.flush(); os.fsync(f.fileno())
+        os.replace(p + ".tmp", p)
+        return True
+    except OSError as exc:
+        print("警告：写重生成标记失败：%s" % exc, file=sys.stderr)
+        return False
+
+def _regen_marker_write(cfg, t, m, s, tag=""):
+    """retry 生成成功后写标记（best-effort，失败不改 retry 语义）。"""
+    from autozt import step_cfg
+    if step_cfg(t, s["name"], m).get("run") == "gen":
+        return False   # 画图/读取步不生成输入
+    fp, files = _regen_input_fingerprint(cfg, m, s)
+    if not fp:
+        print("警告：%s 关键输入指纹不可用，未写重生成标记（start 免 -f 不可用）。"
+              % (tag or tag_of(m, s)), file=sys.stderr)
+        return False
+    key = _regen_key(m, s)
+    marks = _regen_marker_load(m)
+    marks[key] = {
+        "version": 1, "time": time.strftime("%Y-%m-%d %H:%M:%S"), "ts": time.time(),
+        "fingerprint": fp, "files": files, "material": m.get("name"),
+        "tt": m.get("tt"), "step": s.get("name"), "label": s.get("label"),
+        # 24h 放行额度跨 retry 保留（防"retry 重置额度"）
+        "grants": list((marks.get(key) or {}).get("grants") or [])}
+    ok = _regen_marker_save(m, marks)
+    if ok:
+        print("%s: 已写重生成标记（指纹 %s…，文件 %s）。"
+              % (tag or tag_of(m, s), fp[:12], ",".join(files)))
+    return ok
+
+def _regen_audit_append(m, entry):
+    p = _regen_path(m, REGEN_AUDIT)
+    if not p:
+        return False
+    try:
+        with open(p, "a", encoding="utf-8") as f:
+            f.write(json.dumps(entry, ensure_ascii=False, sort_keys=True) + "\n")
+            f.flush(); os.fsync(f.fileno())
+        return True
+    except OSError as exc:
+        print("警告：写重生成放行审计失败：%s" % exc, file=sys.stderr)
+        return False
+
+def regen_allow_without_force(cfg, t, m, s):
+    """cmd_start FAIL 分支豁免检查；三条全满足才允许不带 -f 提交并写审计。"""
+    tag = tag_of(m, s)
+    key = _regen_key(m, s)
+    marks = _regen_marker_load(m)
+    ent = marks.get(key)
+    if not isinstance(ent, dict):
+        print("%s: 无重生成标记，FAIL 不豁免（需 -f）。" % tag)
+        return False
+    fp, _files = _regen_input_fingerprint(cfg, m, s)
+    if not fp:
+        print("%s: 当前关键输入指纹不可用，FAIL 不豁免（需 -f）。" % tag)
+        return False
+    if fp != ent.get("fingerprint"):
+        print("%s: 输入指纹与重生成标记不符（标记 %s… 当前 %s…），FAIL 不豁免（需 -f）。"
+              % (tag, str(ent.get("fingerprint"))[:12], fp[:12]))
+        return False
+    now = time.time()
+    grants = [float(x) for x in (ent.get("grants") or [])
+              if isinstance(x, (int, float)) and now - float(x) < REGEN_WINDOW_SECS]
+    if len(grants) >= REGEN_MAX_GRANTS:
+        print("%s: 24h 内已放行 %d 次（上限 %d），FAIL 不豁免（需 -f）。"
+              % (tag, len(grants), REGEN_MAX_GRANTS))
+        return False
+    grants.append(now)
+    ent = dict(ent); ent["grants"] = grants
+    marks[key] = ent
+    if not _regen_marker_save(m, marks):
+        print("%s: 放行状态写盘失败，FAIL 不豁免（需 -f）。" % tag)
+        return False
+    if not _regen_audit_append(m, {
+            "time": time.strftime("%Y-%m-%d %H:%M:%S"), "ts": now,
+            "material": m.get("name"), "tt": m.get("tt"), "step": s.get("name"),
+            "label": s.get("label"), "fingerprint": fp, "n": len(grants)}):
+        print("%s: 放行审计写入失败，FAIL 不豁免（需 -f）。" % tag)
+        return False
+    print("%s: 命中重生成标记（指纹一致，24h 内第 %d/%d 次放行），允许不带 -f 提交。"
+          % (tag, len(grants), REGEN_MAX_GRANTS))
+    return True
+
+
 def retry_submit(cfg, t, m, s, force, tag):
     from autozt import step_cfg
     """v1.9：retry = 先 scancel 在跑的作业 -> 用【项目配置】重新生成输入 -> 重新提交。
     与 rerun 的区别：retry 不删除步骤目录（保留 OUTCAR/CONTCAR 等已有产物），
-    只覆盖生成的输入文件；rerun 会 rm -rf 整个步骤目录。"""
+    只覆盖生成的输入文件；rerun 会 rm -rf 整个步骤目录。
+    方案A（瘦身版）：生成成功后写"重生成标记"，供 start 的 FAIL 分支免 -f 豁免。"""
     if s.get("job") and not kill_if_queued(cfg, s, True, tag):
         return False
     if not _retry_archive_scheduler_logs(cfg, s, tag):
         return False
     s2 = dict(s)
     s2["job"] = None
-    return do_submit(cfg, t, m, s2, force, gen_first=True,
-                     contcar_cp=step_cfg(t, s["name"], m).get(
-                         "contcar_to_poscar", False),
-                     tag=tag, submit=False)
+    ok = do_submit(cfg, t, m, s2, force, gen_first=True,
+                   contcar_cp=step_cfg(t, s["name"], m).get(
+                       "contcar_to_poscar", False),
+                   tag=tag, submit=False)
+    if ok:
+        _regen_marker_write(cfg, t, m, s, tag)
+    return ok
 
 def cmd_retry(cfg, data, mname, jname, force, incl_scancel=False):
     from autozt import find_material, find_step
