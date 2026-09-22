@@ -265,12 +265,14 @@ def check_existing_matches_input(out):
             % (dmax, n_disp, out, out, out, out))
 
 
-def _dataset_matches_poscar(out, tol=1e-8):
-    """现有 phono3py_disp.yaml 的单胞与当前（对称化后）POSCAR 是否【已经一致】。
+def _dataset_matches(out, reps, tol=1e-8):
+    """现有 phono3py_disp.yaml 是否【已经】对应当前输入：单胞 == POSCAR **且** 超胞 == 配置的 reps。
 
-    ★ 为什么需要它：S4 每次 gen 都从 S1 重取 CONTCAR（未对称化）再就地对称化，所以即使
-      现有数据集**已经**是对称化胞算出来的，symmetry_gate 仍会报 triggered；若无条件隔离，
-      会把刚算完的有效帧白白挪走（并可能撞名嵌套）。只有真的不一致才隔离。
+    ★ 只比单胞不够（2026-09-22 实测）：把 FC3_CUTOFF_PAIR 从空改成 4.0 会让**自动超胞**从
+      5×5×1 缩到 4×4×1，而单胞一模一样 ⇒ 旧的 4×4×1 数据集被"幂等跳过"继续沿用，
+      连显式 SUPERCELL="5 5 1" 都失效。必须把 supercell_matrix 也比进来。
+    ★ 反过来：S4 每次 gen 都从 S1 重取未对称化 CONTCAR 再就地对称化，symmetry_gate 必然报
+      triggered，所以不能用"gate 触发"当隔离依据，只能用"数据集与当前输入不符"。
     """
     y = out / "phono3py_disp.yaml"
     if not y.is_file():
@@ -278,7 +280,17 @@ def _dataset_matches_poscar(out, tol=1e-8):
     old, new = _disp_yaml_cell(y), _poscar_cell(out / "POSCAR")
     if old is None or new is None:
         return False
-    return max(abs(old[i][j] - new[i][j]) for i in range(3) for j in range(3)) <= tol
+    if max(abs(old[i][j] - new[i][j]) for i in range(3) for j in range(3)) > tol:
+        return False
+    try:
+        import yaml
+        _d = yaml.safe_load(y.read_text(encoding="utf-8"))
+        sm = [[int(x) for x in row] for row in _d["supercell_matrix"]]
+    except Exception:                                # noqa: BLE001
+        return False
+    _r = np.array(reps, dtype=int)
+    want = (_r.reshape(3, 3) if _r.size == 9 else np.diag(_r)).tolist()
+    return sm == [[int(x) for x in row] for row in want]
 
 
 def _quarantine_stale_dataset(out):
@@ -320,8 +332,13 @@ def build_displacements(out, reps, method, conf):
     """幂等：已有位移就跳过；否则先算帧数过闸，再落盘。"""
     check_existing_matches_input(out)
     if (out / "phono3py_disp.yaml").is_file() and glob.glob(str(out / "POSCAR-*")):
-        print("[..] 已有位移超胞，跳过生成（幂等）")
-        return
+        if _dataset_matches(out, reps):
+            print("[..] 已有位移超胞，跳过生成（幂等）")
+            return
+        if _quarantine_stale_dataset(out):
+            print("[WARN] 已有位移数据集与当前输入/配置不一致（单胞/点群/超胞系数变了）："
+                  "已非破坏地移到 %s，本步按当前配置重新生成"
+                  % (out / "symmetry_audit" / "pre_symmetry_dataset"))
     ph3 = make_ph3(out, reps)
     info = {"method": method, "n_atoms_sc": len(ph3.supercell)}
 
@@ -360,13 +377,7 @@ def main():
     # （默认 SYMMETRY_AUDIT=warn 只告警、SYMMETRY_SYMMETRIZE=off 不改结构）
     _sg = kc.symmetry_gate(out / "POSCAR", conf)
     # ★ 对称化一旦真的发生，已有的位移数据集属于【旧对称性】，必须换掉（见 _quarantine_stale_dataset）
-    if isinstance(_sg, dict) and _sg.get("triggered"):
-        if _dataset_matches_poscar(out):
-            print("[..] 对称化已生效：现有位移数据集与对称化胞一致（差 ≤1e-8 Å），保留不重建")
-        elif _quarantine_stale_dataset(out):
-            print("[WARN] 对称化改变了点群：旧位移数据集已移到 %s\n"
-                  "       （非删除，可回溯）—— 本步将按对称化后的胞重新生成位移。"
-                  % (out / "symmetry_audit" / "pre_symmetry_dataset"))
+    # 隔离/重建的判断统一放在 build_displacements（要同时看单胞与超胞矩阵，见 _dataset_matches）
 
     meth = kc.read_method(prev / kc.METHOD_FILE)
     dim = (meth.get("DIM", "").lower() or kc.resolve_dim(out / "POSCAR")[0])
