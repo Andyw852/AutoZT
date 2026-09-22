@@ -84,12 +84,14 @@ steps:
   - {seq: 5, name: step5_fc, label: S5_fc, check: phonon,
      gen: gen_step5_fc.py, fetch_all: true,
      gen_need: [dim_common.py, stepconf.py, step.conf, kl_common.py, lattice_kappa.py,
-                kl_fc_backends.py, za_2d.py, submit_fit_p3py.tpl, submit_fit_pheasy.tpl]}
+                kl_fc_backends.py, za_2d.py, imag_policy.py,
+                submit_fit_p3py.tpl, submit_fit_pheasy.tpl]}
 
   - {seq: 6, name: step6_kappa, needs: [step5_fc], label: S6_kappa, check: marker,
      marker: 'kappa_summary.json:"KAPPA_DONE": true',
      gen: gen_step6_kappa.py, fetch_all: true,
      gen_need: [dim_common.py, stepconf.py, step.conf, kl_common.py, lattice_kappa.py,
+                imag_policy.py, za_2d.py,
                 thickness_2d.py, vdw_radii.py,
                 submit_p3py.tpl, submit_shengbte.tpl, submit_fourphonon.tpl]}
 
@@ -130,7 +132,8 @@ optional_steps:
          # 作业在材料根跑 gen_step5.1_plot_phonon.py --work，脚本里 import kl_common
          # （_dim_axis/_band_path 要用 band_path_2d），kl_common 又 import dim_common ——
          # 这两个必须随 gen 推到材料根，否则作业报 No module named 'kl_common'（2026-09-21）。
-         gen_need: [step.conf, stepconf.py, submit_plot.tpl, kl_common.py, dim_common.py],
+         gen_need: [step.conf, stepconf.py, submit_plot.tpl, kl_common.py, dim_common.py,
+                    za_2d.py, imag_policy.py],
          done_marker: phonon_plot_summary.json, fetch_all: true}
 
 requires:
@@ -167,8 +170,12 @@ io_schema:
        desc: "单模弛豫时间近似（快）或直接解线性化 BTE（准，内存 O(N_mode^2)）"}
     - {name: KAPPA_MESH, default: auto, where: step.conf,
        desc: "BTE q 网格：auto = 2D 按倒空间长度估（Q_LEN_2D/MESH_MIN，真空轴=1）、3D 用 15 15 15；也可写 auto3d 或 \"N N N\""}
-    - {name: IMAG_THR, default: 0.10, where: step.conf,
-       desc: "虚频闸（THz）：最小频率低于 -IMAG_THR 判结构不稳定，S6_kappa 不启动"}
+    - {name: IMAG_THR, default: 0.15, where: step.conf,
+       desc: "近 Γ 声学支上限(THz)=5 cm^-1：近 Γ 声学支虚频 ≤ 它 → warn（S6 放行）；> 它 → fail。语义已从'全局阈值'改为'近 Γ 声学支上限'（imag_policy，Petretto 2018）"}
+    - {name: IMAG_THR_STRICT, default: 0.05, where: step.conf,
+       desc: "数值噪声底(THz)：|ν| ≤ 它 → noise 不计入；也是近 Γ 区外与光学支的上限（超过即 fail）"}
+    - {name: IMAG_QGAMMA, default: 0.05, where: step.conf,
+       desc: "近 Γ 区半径（分数坐标，严格小于；Petretto 2018 的 0<|q|<0.05 窗口）"}
     - {name: MAX_DISP, default: 500, where: step.conf,
        desc: "位移帧数硬闸：超过就报错停步（防超胞设太大白烧机时）"}
     - {name: OVERSAMPLE, default: 3, where: step.conf,

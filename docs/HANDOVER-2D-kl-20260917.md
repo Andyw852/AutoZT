@@ -2524,6 +2524,163 @@ autozt -tt kl-dft-cpu -p MoS2_kltest -j S2_static start   # 预期：报"确认�
 2. **`autozt` 每次调用刷出 ~25 条 `旧技能名 mace→mlff … 配置不可安全使用，已屏蔽所属材料的所有技能`
    警告**（见 §44）——本次命令全部靠 grep 过滤。它不只是噪声：**这些材料的技能被 autozt 屏蔽了**。
 
+---
+
+# 44. 2026-09-22：本会话 24 路径已提交（临时索引）+ 共享索引的副作用与正确处理
+
+## 44.1 提交结果
+
+- commit **`5a75e78`**（parent `dea7cfa`），**正好 24 个文件**，用
+  `GIT_INDEX_FILE=/tmp/... git read-tree HEAD → git add <24> → git commit`（用户明确授权"临时索引只提交我的 24 路径"）。
+- 覆盖：3 个新公共池模块（symmetry_audit / structure_health / za_2d）、3 个新测试套件、
+  relax_common、kl-dft-cpu 的 9 个文件、fc-fit 2 个、tests 2 个、docs 4 个。
+- **排除**（属别会话在途工作）：`autozt/ops.py`（混着别的改动）、全部 mlff/mace 重命名文件、
+  `docs/*.docx`、`perturbo-examples-light/`、`.workbuddy/`、`AutoZT-审查报告-*.md`。
+
+## 44.2 ★ 临时索引提交的副作用（铁律 12 之外的新教训）
+
+- 临时索引提交会**移动 HEAD**，而**共享的真实索引**（别会话的 108 个暂存条目）树仍基于旧 HEAD
+  ⇒ 提交后 `git diff --cached` 会把本次 24 个路径显示成**"暂存回退/删除"**（实测 108→132）。
+  **若不处理，别会话一旦 git commit 就会把我的改动回退掉。**
+- **正确处理（已执行）**：`git reset -q HEAD -- <本次 24 路径>` —— 只把索引里这 24 个条目对齐到新 HEAD，
+  **不动工作树、不动别会话的 108 个条目**；修完 `git diff --cached` 回到 108。
+- 验证（铁律 12 要求）：
+  · `git diff HEAD -- <24 路径>` → **空**（工作树与 HEAD 完全一致；6 个新文件的工作树 blob
+    与 HEAD blob 同为 `d5a8914…`）；
+  · `git status --porcelain -- <24 路径>` → **空**（干净）；
+  · 别会话索引完好：`git diff --cached --name-only | grep -c mlff` = **108**。
+- ⇒ **给以后用临时索引的会话**：提交后**必须**在真实索引上对本批路径做一次
+  `git reset HEAD -- <paths>`，否则会把"暂存回退"留在共享索引里，坑下一个提交的人。
+
+## 44.3 当前仓库状态
+
+- 未跟踪 **42 → 36**（6 个新文件转为已跟踪）；未提交改动共 208 条（绝大多数是别会话的）。
+
+---
+
+# 46. 2026-09-22：虚频判据统一（imag_policy）—— 用户指定任务
+
+## 46.1 规则、参数与依据
+
+- **新模块** `skill/_common/imag_policy.py`：`classify_imag(freqs, qpoints_frac, is2d, vac_axis, cfg)`。
+- **判据**（原文见模块 docstring + `templates/step5_fc/step.conf` 注释）：
+  近 Γ 区 `|q|_frac < IMAG_QGAMMA`（严格小于；`|q|_frac` = 分数坐标**去掉真空轴分量**后的欧氏范数）；
+  声学支 = 每个 q 点的前 3 支；负频按 |ν| 归为 noise / near_gamma_acoustic(warn) /
+  near_gamma_large(fail) / off_gamma(fail) / optical(fail)，整体取最坏一档。
+- **依据**：Petretto et al., Sci. Data 5, 180065 (2018)（0<|q|<0.05 窗口、5 cm⁻¹ 失稳标记）；
+  Lin, Poncé, Marzari, npj Comput. Mater. 8, 236 (2022)（远离 Γ 的虚频是真失稳特征）。
+- **实现要点（对 spec 的一处必要澄清）**：函数**不重排**每个 q 点的频率，声学支一律取
+  **下标 < 3**。原因：负值一旦排序必然落到最前，会把"虚频光学模"误判成声学支 ——
+  spec 里"近 Γ 光学支 −0.06 → fail"这条**只有这么做才能成立**。
+- **参数**：`IMAG_THR=0.15`（语义已从"全局阈值"改为"**近 Γ 声学支上限**"）、
+  `IMAG_THR_STRICT=0.05`、`IMAG_QGAMMA=0.05`；`ZA_QMAX` 同为分数坐标但含义是"拟合取样上限"，
+  **未合并**（step.conf 注释已写明两者关系）。
+- **返回字段**：verdict / imag_class / min_freq_THz / min_freq_cm1 / q_at_min_frac /
+  q_norm_at_min / branch_at_min / n_neg_qpoints / thresholds / policy_version。
+
+## 46.2 单一裁判（S5）+ 其余位置只读
+
+- **S5**（`kl_fc_backends._stability_gate`）：把 `[1,60,60]` 网格 + 2D 路径上的频率**合并**后调
+  `classify_imag`；`phonon_summary.json` 写入第一条全部字段 + `stability_verdict` + `imag_policy_refs`。
+  `stability_verdict = combine(imag verdict, ZA verdict)`，排序 pass < warn < needs_review < fail；
+  **只有 fail 挡 S6**（warn / needs_review 放行，保持历史行为）。
+- **S5.1** `gen_step5.1_plot_phonon.py`：删 `IMAG_TOL`；图注读 S5 结论
+  （near_gamma_acoustic → "近Γ声学支软化 (…)"；fail → "含虚频"；noise/none 不标）；
+  summary 缺失 → 用同一函数 + S5 的 step.conf 现算并打 WARN。
+- **`lattice_kappa.py`**：删 `imag_thr=0.5`（连 DEFAULT_CONFIG 键与文档行），改读 S5 结论；
+  缺失时用同一函数对本步 band 频率现算（source 标 `recomputed_band_only`）。
+- **mlff 两个 `phonon_fit_driver.py`**：删硬编码 `-0.10`，改调 `classify_imag`，字段与 S5 对齐。
+- 日志一律**同时打印 THz 与 cm⁻¹**。
+- **`gen_need`**：kl 的 S5_fc / S5.1 / S6 + 6 个 mlff 技能都加了 `imag_policy.py`
+  （否则作业报 ModuleNotFoundError）。
+- **kappa 透传**：`gen_step6_kappa.build_extract` 读 `../step5_fc/phonon_summary.json`，
+  把 stability_verdict / imag_class / min_freq_THz / min_freq_cm1 / q_at_min_frac / n_neg_qpoints /
+  imag_policy_version 写进 `kappa_summary.json`；warn 时加 `warn_note`
+  （phono3py 排除负频模 → κ 可能低估近 Γ ZA；并给出收敛检查建议：真空层/面内超胞/残余应力/k 网格）。
+
+## 46.3 单测与回归
+
+- 新增 `tests/test_imag_policy.py`（真实 MoS₂ 快照 + 6 组合成 + `|q|_frac` 边界 + 3D +
+  "单一裁判"源码守卫）：**ALL PASS**。
+- 真实数据：min **−0.055377 THz @ (0, 1/30, 1/30)**，`|q|_frac = 0.04714 < 0.05`
+  → **warn / near_gamma_acoustic** ✓（与 spec 给的值逐位一致）。
+- 注册进 `tests/test_suites.py`（新增 `LOCAL_PYTEST` 列表）：
+  `python3 -m pytest tests/test_suites.py -q` → **19 项全过**。
+- 连带修了一个回归：`suite_io_schema` 要求 skill.yaml 的 `IMAG_THR` 声明默认值与 step.conf 一致
+  （0.10 → 0.15），并补声明 `IMAG_THR_STRICT` / `IMAG_QGAMMA`。
+
+## 46.4 ★ 项目级/材料级 step.conf 显式覆盖清单（**只列不改**，spec 要求）
+
+- **kl-dft-cpu / step5_fc 显式 `IMAG_THR = 0.10`**（会覆盖新默认 0.15）：
+  `test_kl/MoS2_kltest`、`test_kl/BAs_kltest`、`test_kl/LiCoO2_kltest`、`test_kl/Si_kltest`、
+  `test/BAs`、`test/LiCoO2`、
+  `test_TE/P1/` 8 个材料（Al-AlN、Be-BeO、Mo-MoS2_A4-3-1、Mo-MoS2_Z3-2-1、Mo-MoS2_Z4-3-1、
+  Mo-MoS2_Z4-3-1_vac10、Ti-TiS2、Zn-ZnO）、
+  `work_AutoZT/Mg2C60_c75_c45/{lasso,lasso_m12,ols,ols_m12}`、
+  `work_AutoZT/Mg2C60_kl_c75_c40/{lasso,ols}`、`work_AutoZT/Si`、`test/tf_test/Si`、
+  `2D_ZT/taskflow-public-fix`（技能树副本，非项目）。
+- 其它技能同样写 0.10：`phonon-dft-cpu/step3_phonon`、`kl-mlff-{cpu,gpu}/step3_fc`、
+  `fc-fit/step1_fit`（`test_kl/MoS2_kltest/fc-fit`、`work_AutoZT/Si/fc-fit`）。
+- **未修改任何一处。** 注意：**MoS2_kltest 的 kl-dft-cpu 项目副本仍是 0.10** ⇒ 对称化链的 S5
+  会用 0.10 而不是新默认 0.15。**是否刷新项目副本需用户决定。**
+
+## 46.5 已有材料只读重判（`scripts/rejudge_imag_policy.py`，只读）
+
+跑法（jzzn，`atomate2_p_a`）：`PYTHONPATH=/tmp/imag_rejudge python -u rejudge_imag_policy.py \\
+  --root /public/home/wangchao/Fullerene_Network/work --pattern '<mat>/kl-dft-cpu/step5_fc/phono3py/fc2.hdf5' --mesh-n 60`
+（脚本对每个 fc2 建 Phonopy → 跑 `[1,60,60]` 网格 + 2D 路径 101 点 → `classify_imag` → 与旧
+`phonon_summary.json` 对照。**只读，不改任何文件、不提交作业**。）
+
+| 材料 | 旧（stable / min THz） | 新（verdict / imag_class / min） | 变化 |
+|---|---|---|---|
+| `MoS2_kltest`（2D）| True / −6.51e−8 | **fail / off_gamma / −0.0566** | **是**（见下） |
+| `P1_Mo-MoS2_Z4-3-1_Z4-3-1_Mo2S3`（2D）| True / **−0.0722** | warn / near_gamma_acoustic / −0.0722 | 判读从"无虚频"变为"近 Γ 声学软化(warn)"；**stable 仍为 True**（warn 放行）⇒ 不挡 S6 |
+| `BAs_kltest` / `Si_kltest` / `Si_diamond` / `Si`（3D）| True / ~±3e−7 | pass / noise 或 none | 无实质变化 |
+
+- **用户提到的 P1 旧值 −0.085 与实测不符**：该材料 `phonon_summary.json` 记的是
+  `min_frequency_THz = −0.0721712448`（`min_freq_nac = −0.2448` 但判据用无 NAC）。已按实测列。
+- ⚠️ **重判脚本的口径坑（已修）**：最初用 31 点/段 → P1_Mo2S3 的 min 变成 ~0（**漏掉 −0.0722**）；
+  改成 **101 点/段**（与 S5 一致）后复现 −0.0722。说明"路径点数"会直接改变重判结论，脚本已注明。
+
+### ★ 46.5.1 需要用户决策的一处边界敏感性（重要）
+
+按 spec 规则，**S5 的合并集**（`[1,60,60]` 网格 + 101 点 2D 路径）给 MoS₂ 的结论是
+**fail / off_gamma**，而 **spec 的期望是 warn / near_gamma_acoustic**。逐条拆开看：
+
+- 18 个负频条目：**5 个 `near_gamma_acoustic`**（最深 `−0.0566 @ |q|=0.0424`，即 (0,1/30,1/30) 附近）、
+  12 个 `noise`、**1 个 `off_gamma`**。
+- 那个唯一的 off_γ 条目是 `ν = −0.0503 @ q=(0,0.03667,0.03667)，|q|=0.0519` —— 它就是**同一条近 Γ 软模**
+  往外延续的点，只是 |q| **比 0.05 大了 3.8%**；按"近 Γ 区外 + |ν| > IMAG_THR_STRICT"被判 fail，
+  并按"最坏一档"把整体升格为 fail。
+- 也就是说：**fail/warn 的差别只由"同一条软模落在窗口内还是窗口外"决定**，物理上并不区分。
+
+可选处置（**都需要您定，我没有擅自改**）：
+1. 给"近 Γ 声学支"加一个**grace 因子**（例如 `|q| < IMAG_QGAMMA × 1.2`）—— 新增一个参数；
+2. 把 off_γ/光学支的 fail 阈值从 `IMAG_THR_STRICT(0.05)` 改为 `IMAG_THR(0.15)`；
+3. 接受 fail（最严），但那样对称化前的 MoS₂ 会挡住 S6；
+4. **先跑对称化后的 S5 再看**：§37/§40 已证明对称化会让这条 ZA 软模消失 ⇒ 新版 S5 很可能直接 pass，
+   这个边界问题对**下一步不影响**，只影响"对旧数据的重判"。
+- 另外注意：**MoS2_kltest 的项目级 step.conf 仍写 `IMAG_THR = 0.10`**（§46.4），
+  对称化链的 S5 会读 0.10 而不是新默认 0.15。
+
+---
+
+# 45. 2026-09-22：本轮遇到的 bug 全部落到代码（防新料复发）
+
+| # | bug | 影响面 | 修复（文件） | 验证 |
+|---|---|---|---|---|
+| 1 | S5 虚频门禁用 `run_mesh(mesh=60.0)`；phonopy 把 float 当**面间距长度** → 实测 `[2,22,22]`、面内最近 q 仅 0.105 Å⁻¹，漏近 Γ 软模 | **kl 全链每个材料的 S5** | `kl_fc_backends._min_freq`：改显式整数网格（真空轴 1、面内 60、Γ 中心）+ 加 `is2d` 守卫（3D 不许设 1）；band 失败由"跳过"改 **WARN + 打印真实 mesh 数** | MoS₂ fc2：`-6.5e-8 → -0.055377`（4 个负频 q 点）；pytest 18 passed |
+| 2 | fanout 步 `retry` 后"关键输入指纹不可用" → 未写重生成标记 → `start` 被迫 `-f` | **所有技能的扇出步**（kl/ke/band 的 S4_disp、mlff step5_label…） | `autozt/workflow._regen_input_fingerprint`：fanout 步改扫 `s["fanout"]` 子目录的同名文件并聚合；解析改 `basename`；fanout 模式加安全字符白名单（防拼进 shell）；marker 的 `files` 去重成 `pat/基名` | 本地伪 fanout 目录：非 fanout 复现 `fp=None` → fanout 得指纹、可重复、改一文件即变；危险模式退回且**未执行注入**；远端真实 S4 目录 52 文件可哈希 |
+| 3 | mlff 链有**同一个 float-mesh bug**，且 2D 路径传错基（`uc.cell` + Cartesian 下标，应传 `ph.primitive.cell` + 原胞基矢下标） | **以后所有 2D mlff 材料**（kl/opt/phonon-mlff） | `klmlff_common` 新增 `vacuum_axis_in_primitive` / `imag_mesh_numbers` / `band_path_2d_prim`；两个 `phonon_fit_driver` 先判维度再建网格，改用新 helper | MoS₂ fc2：`imag_mesh_numbers` → `[1,60,60]`、min **−0.055377**；`band_path_2d_prim` → **六方 Γ-M-K-Γ、原胞基矢索引**（`vax_prim=0`，正是旧调用会错的场景） |
+| 4 | 同一物理量**三套阈值**：S5 `IMAG_THR=0.10` / S5.1 硬编码 `-0.05` / `lattice_kappa` `0.5` | 结论自相矛盾（S5 stable vs S5.1 imaginary） | **未改**：这是**科学口径**选择，改哪边都会改变判读（统一到 −0.10 会掩盖 −0.05 级软模）。**需用户给值** | — |
+| 5 | 临时索引提交把共享索引变成"暂存回退"（108→132） | 别会话一提交就回退本会话改动 | `git reset HEAD -- <24 路径>`（index-only，见 §44.2） | `git diff HEAD` 空、`git status` 干净、别会话 108 完好 |
+
+- **协作风控**：#2 改的 `autozt/workflow.py` 与 #3 改的两个 `phonon_fit_driver.py` 都带**别会话未提交改动**
+  （workflow.py 是编码/注释类改动；driver 是 mace→mlff 重命名在途）。本次一律**定点 edit**，未碰它们的改动；
+  若对方会话回写覆盖，请以本表为准重新套用这两个补丁。
+- **回归**：`python3 -m pytest tests/test_suites.py -q` → **18 passed**；`suite_io_schema` / `suite_skillspec` /
+  `suite_autodeps` 全 PASS（在 #1 与 #3 改动之后跑的）。
+
 
 
 

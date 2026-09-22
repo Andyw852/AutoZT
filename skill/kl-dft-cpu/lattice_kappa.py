@@ -212,7 +212,8 @@ DEFAULTS: Dict[str, Any] = {
     "findiff_fc3_cutoff_pair": 5.0,
 
     # ── 声子谱 ──────────────────────────────────────────────────────────────
-    "imag_thr":    0.5,          # 虚频阈值 (THz)
+    # 虚频阈值不再放在这里（2026-09-22）：统一走 skill/_common/imag_policy.py，
+    #   S5 是唯一裁判；本引擎只读 S5 的 phonon_summary.json，缺失时用同一函数现算。
     "band_npoints": 101,         # 每段 q 点数
     "nac_factor":  14.399652,    # VASP NAC 单位因子 (eV·Å)
 
@@ -1249,9 +1250,46 @@ def _save_band_png_matplotlib(seg_d, seg_f, tick_pos, tick_lab, png_path, title)
     fig.tight_layout(); fig.savefig(str(png_path), dpi=150); plt.close(fig)
 
 
+def _s5_imag_for_stability(band_dir, seg_f, bsobj, C):
+    """取虚频结论：优先读 S5 的 phonon_summary.json（唯一裁判），否则用同一函数现算。
+
+    返回 (dict, source)。现算只用本步已算好的 band 频率（本步确实重建了 FC），
+    不额外跑 mesh —— 口径与 S5 的"mesh+路径合并"略有差异，source 里会写明。
+    """
+    import imag_policy
+    cands = []
+    for base in (Path.cwd(), Path(band_dir), Path(band_dir).parent):
+        cands += [base / "step5_fc" / "phonon_summary.json",
+                  base.parent / "step5_fc" / "phonon_summary.json",
+                  base / "phonon_summary.json"]
+    seen = set()
+    for c in cands:
+        if str(c) in seen:
+            continue
+        seen.add(str(c))
+        try:
+            if c.is_file():
+                d = json.loads(c.read_text(encoding="utf-8"))
+                if d.get("stability_verdict"):
+                    return d, "s5_summary:%s" % c
+        except Exception:                          # noqa: BLE001
+            continue
+    freqs = [[float(x) for x in row] for f in seg_f for row in np.asarray(f)]
+    _q = getattr(bsobj, "qpoints", None)
+    qpts = ([[float(x) for x in q] for seg in _q for q in seg]
+            if _q is not None else [])
+    is2d = (str(C.get("dim") or "").lower().startswith("2")
+            or C.get("is_2d") is True)
+    r = imag_policy.classify_imag(freqs, qpts, is2d, None, None)
+    logging.warning("未找到 S5 的 phonon_summary.json，用 imag_policy 现算（仅 band 频率）："
+                    "verdict=%s class=%s min=%.4f THz",
+                    r["verdict"], r["imag_class"], r["min_freq_THz"] or 0.0)
+    return {"stability_verdict": r["verdict"], "imag_class": r["imag_class"],
+            "min_freq_THz": r["min_freq_THz"], "verdict": r["verdict"]}, "recomputed_band_only"
+
+
 def compute_band_and_check(phonon, band_dir, C, nac_vasprun=None):
     import plotly.graph_objects as go
-    imag_thr = C["imag_thr"]
     # nac_applied：NAC 是否真正成功读取并施加（默认关；仅 nac_vasprun 存在且读取
     #   成功时为 True）。图题/BORN 文件据此产出，避免读取失败仍误标 "(with NAC)"。
     nac_applied = False
@@ -1352,11 +1390,25 @@ def compute_band_and_check(phonon, band_dir, C, nac_vasprun=None):
         except Exception as e:
             logging.warning("BORN 文件导出失败: %s", e)
 
-    has_imaginary = fmin < -imag_thr
-    if has_imaginary:
-        logging.warning("存在显著虚频（最低 %.3f THz，阈值 -%.1f）", fmin, imag_thr)
-    else:
-        logging.info("无显著虚频（最低 %.3f THz），结构稳定。", fmin)
+    # ---- 虚频判定：统一走 imag_policy（唯一真源），本引擎不再自带 0.5 THz 阈值 ----
+    try:
+        _imd, _src = _s5_imag_for_stability(band_dir, seg_f, bsobj, C)
+        has_imaginary = (str(_imd.get("stability_verdict")) == "fail")
+        logging.info("虚频结论（%s）：stability_verdict=%s imag_class=%s min=%.4f THz",
+                     _src, _imd.get("stability_verdict"), _imd.get("imag_class"),
+                     _imd.get("min_freq_THz") or 0.0)
+        result.update({"stability_verdict": _imd.get("stability_verdict"),
+                       "imag_class": _imd.get("imag_class"),
+                       "min_freq_THz": _imd.get("min_freq_THz"),
+                       "imag_policy_source": _src})
+        if has_imaginary:
+            logging.warning("imag_policy= fail（%s），结构动力学不稳定", _imd.get("imag_class"))
+        else:
+            logging.info("imag_policy= %s，结构稳定（判定口径见 imag_policy）",
+                         _imd.get("stability_verdict"))
+    except Exception as e:                         # noqa: BLE001
+        logging.warning("imag_policy 调用失败（退回 fmin<0 判据）：%s", e)
+        has_imaginary = fmin < 0.0
     result.update({"stable": (not has_imaginary), "fmin": fmin, "fmax": fmax})
     return result
 
@@ -1390,7 +1442,10 @@ def compute_band_and_check(phonon, band_dir, C, nac_vasprun=None):
 # nac               bool     本次请求是否做 NAC 修正
 # nac_applied       bool     NAC 是否真正成功读取并施加（默认关；读取失败会退回无 NAC）
 # relaxed           bool     本次是否完成结构优化（流程固化为 true）
-# stable            bool     声子谱无显著虚频（|imag| < imag_thr）
+# stable            bool     imag_policy.stability_verdict != "fail"（唯一真源；不再是本引擎自带的 0.5 THz）
+# stability_verdict str      pass / warn / needs_review / fail（来自 S5 或 imag_policy 现算）
+# imag_class        str      none / noise / near_gamma_acoustic / near_gamma_large / off_gamma / optical
+# imag_policy_source str     "s5_summary:<path>" 或 "recomputed_band_only"
 # fmin / fmax       float    声子频率范围 (THz)
 # phonon_band       str      交互式声子谱 HTML 路径
 # phonon_band_png   str      声子色散谱 PNG 路径（phonon_band.png）

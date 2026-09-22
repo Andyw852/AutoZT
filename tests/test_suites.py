@@ -29,6 +29,8 @@ LOCAL = ["agentgate", "session", "autodeps", "history", "skillspec",
          "ke_common", "asset_lookup", "poscar_sync", "io_schema", "s6_marker",
          "symmetry_audit", "structure_health", "template_drift"]
 CLUSTER = ["dropin"]
+# 独立的 pytest 测试模块（不是 suite_*.py 形式），也要纳入回归
+LOCAL_PYTEST = ["test_imag_policy"]
 
 
 # 干净克隆里没有 tmp/（gitignore），依赖本机测试配置的套件自动跳过
@@ -63,6 +65,17 @@ def test_local_suite(name):
     if need and not os.path.exists(os.path.join(ROOT, need)):
         pytest.skip("clean clone: %s is not shipped" % need)
     assert _run(name) == 0, "suite %s failed" % name
+
+
+@pytest.mark.parametrize("name", LOCAL_PYTEST)
+def test_local_pytest_module(name):
+    p = os.path.join(ROOT, "tests", "%s.py" % name)
+    if not os.path.isfile(p):
+        pytest.skip("pytest module %s 不存在" % name)
+    r = subprocess.run([sys.executable, "-m", "pytest", p, "-q", "-p", "no:cacheprovider"],
+                       capture_output=True, text=True, cwd=ROOT, timeout=1800)
+    print(((r.stdout or "") + (r.stderr or ""))[-1200:])
+    assert r.returncode == 0, "pytest module %s failed" % name
 
 
 @pytest.mark.cluster

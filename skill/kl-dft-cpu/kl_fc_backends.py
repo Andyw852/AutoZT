@@ -56,6 +56,8 @@ from za_2d import (ZA_P_RANGE, ZA_ZFRAC_MIN, ZA_MARGIN_MIN, ZA_R2_MIN,
                    cell_symmetry as _cell_symmetry,
                    relaxed_symprec as _relaxed_symprec,
                    clone_phonopy as _clone_phonopy)
+# 虚频判据唯一真源（2026-09-22）：S5 是唯一裁判，其余位置只读它的结论。
+import imag_policy
 
 
 # ==========================================================================
@@ -731,11 +733,34 @@ def _stability_gate(cfg, out):
         print("[WARN] band-dft-cpu.yaml 生成失败：%s —— ZA 判据退回【上面那套 q-mesh】的最小值；"
               "该网格若被降级（见'虚频门禁网格'行）可能漏掉近 Γ 软模" % e)
 
-    # 判据：2D 或拿不到 NAC → 用无 NAC；3D 有 NAC → 用 NAC
-    if is2d or mf_nac is None:
-        mf_used, nac_used = mf_nonac, False
-    else:
-        mf_used, nac_used = mf_nac, True
+    # ---- 单一裁判（2026-09-22）：把 [IMAG_MESH_N]^3 网格 + 2D 路径上的频率合并，
+    #      交给 imag_policy.classify_imag。阈值语义见 skill/_common/imag_policy.py。
+    #      2D 默认用无 NAC 的频率（3D 库仑核的 NAC 在严格 2D 近 Γ 会产生虚假虚频，
+    #      与 step6 KAPPA_NAC=auto 一致）；NAC 的 mesh 最小值只留作对照。
+    all_freqs, all_qpts = [], []
+    try:
+        _md = ph_nonac.get_mesh_dict()
+        all_freqs += [[float(x) for x in row] for row in _md["frequencies"]]
+        all_qpts += [[float(x) for x in q] for q in _md["qpoints"]]
+    except Exception as e:                          # noqa: BLE001
+        print("[WARN] imag_policy：mesh 频率取用失败：%s" % e)
+    try:
+        _bs = ph_nonac.get_band_structure_dict()
+        all_freqs += [[float(x) for x in f]
+                      for seg in (_bs.get("frequencies") or []) for f in seg]
+        all_qpts += [[float(x) for x in q]
+                     for seg in (_bs.get("qpoints") or []) for q in seg]
+    except Exception as e:                          # noqa: BLE001
+        print("[WARN] imag_policy：band 频率取用失败：%s" % e)
+    try:
+        _vaxp = _vacuum_axis_in_primitive(ph_nonac, vax) if is2d else None
+    except Exception:                               # noqa: BLE001
+        _vaxp = None
+    if not all_freqs:
+        return _err("imag_policy：mesh/band 都没有取到频率（无法判定虚频）")
+    imag = imag_policy.classify_imag(all_freqs, all_qpts, is2d, _vaxp, cfg)
+    mf_used = imag["min_freq_THz"] if imag.get("min_freq_THz") is not None else mf_nonac
+    nac_used = False
 
     # P2-2：2D 还要查 ZA 弯曲支是不是二次色散（只看最小频率不够 —— 线性化时频率全正）
     za = None
@@ -744,26 +769,38 @@ def _stability_gate(cfg, out):
         if za is not None and "error" in za:
             print("[WARN] ZA 二次性检查没跑成（不拦，但 κ 的 ZA 部分未经验证）：%s" % za["error"])
 
-    thr = float(cfg.get("IMAG_THR", 0.10))
-    za_ok = (za is None) or za.get("ok") or ("error" in za)
-    stable = (mf_used >= -thr) and za_ok
-    parts = ["min_freq(no-NAC)=%.3f" % mf_nonac]
+    # 最终 stability_verdict = imag verdict 与 ZA 结论中更坏者（pass<warn<needs_review<fail）
+    _za_v = imag_policy.za_verdict(za)
+    stability_verdict = imag_policy.combine_verdict(imag["verdict"], _za_v)
+    stable = imag_policy.is_stable(stability_verdict)
+    _thr = imag["thresholds"]["IMAG_THR"]
+    parts = ["min_freq(no-NAC mesh)=%.4f THz (%.2f cm-1)"
+             % (mf_nonac, mf_nonac * imag_policy.THZ_TO_CM1)]
     if mf_nac is not None:
-        parts.append("min_freq(NAC)=%.3f" % mf_nac)
-    parts.append("判据用%s=%.3f THz(阈值 -%.2f)" % ("无NAC" if not nac_used else "NAC", mf_used, thr))
+        parts.append("min_freq(NAC mesh)=%.4f THz" % mf_nac)
+    parts.append("imag_policy=%s/%s，合并集 min=%.4f THz (%.2f cm-1)，策略 %s"
+                 % (imag["verdict"], imag["imag_class"], mf_used,
+                    mf_used * imag_policy.THZ_TO_CM1, imag["policy_version"]))
+    if is2d:
+        parts.append("ZA verdict=%s" % _za_v)
     if za is not None and "error" not in za:
         parts.append(za["note"])
-    if stable:
-        note = "；".join(parts) + " → 无明显虚频，稳定"
-    elif mf_used < -thr:
-        note = "；".join(parts) + " → 存在虚频(imaginary frequency)，动力学不稳定"
+    if stability_verdict == "pass":
+        note = "；".join(parts) + " → 无实质虚频，稳定"
+    elif stability_verdict == "warn":
+        note = "；".join(parts) + (" → 近 Γ 声学支软化（|ν|=%.4f THz，≤ IMAG_THR=%.2f）；"
+                                   "warn 放行 S6，但 κ 可能低估近 Γ ZA 贡献" % (abs(mf_used), _thr))
+    elif stability_verdict == "needs_review":
+        note = "；".join(parts) + " → ZA 弯曲支需人工复核（放行，行为不变）"
     else:
-        note = "；".join(parts) + " → ZA 弯曲支非二次色散，2D 的 κ 不可信"
+        note = "；".join(parts) + (" → 存在虚频（%s，|ν|=%.4f THz）；动力学不稳定，S6 不启动"
+                                   % (imag["imag_class"], abs(mf_used)))
     return {"tool_ok": True, "stable": stable, "min_freq": mf_used,
             "min_freq_nonac": mf_nonac, "min_freq_nac": mf_nac, "nac_used": nac_used,
-            "is_2d": is2d, "za_exponent": za,
+            "is_2d": is2d, "za_exponent": za, "imag": imag, "za_verdict": _za_v,
+            "stability_verdict": stability_verdict,
             "status": ("stable" if stable else
-                       ("imaginary" if mf_used < -thr else "za_not_quadratic")),
+                       ("imaginary" if imag["verdict"] == "fail" else "za_not_quadratic")),
             "note": note}
 
 
@@ -793,9 +830,25 @@ def cmd_post(cfg):
                      _fm.get("fc2max"), _fm.get("fc3max"), _fm.get("rasr_applied")))
         except Exception as _e:
             print("[WARN] fit_metrics.json 解析失败：%s" % _e)
+    _im = g.get("imag") or {}
     (out / "phonon_summary.json").write_text(json.dumps(
         {"stable": bool(stable), "status": g["status"], **_fm,
-         "imaginary_frequency": bool(tool_ok and not stable),
+         "imaginary_frequency": bool(tool_ok and g.get("stability_verdict") == "fail"),
+         # ---- imag_policy（虚频判据唯一真源）：第一条的全部字段 ----
+         "stability_verdict": g.get("stability_verdict"),
+         "verdict": _im.get("verdict"),
+         "imag_class": _im.get("imag_class"),
+         "min_freq_THz": _im.get("min_freq_THz"),
+         "min_freq_cm1": _im.get("min_freq_cm1"),
+         "q_at_min_frac": _im.get("q_at_min_frac"),
+         "q_norm_at_min": _im.get("q_norm_at_min"),
+         "branch_at_min": _im.get("branch_at_min"),
+         "n_neg_qpoints": _im.get("n_neg_qpoints"),
+         "thresholds": _im.get("thresholds"),
+         "policy_version": _im.get("policy_version"),
+         "imag_policy_refs": list(imag_policy.POLICY_REFS),
+         "za_verdict": g.get("za_verdict"),
+         # ---- 历史字段（保留：下游/对照仍在读，勿删）----
          "min_frequency_THz": g["min_freq"],
          "min_freq_nonac_THz": g["min_freq_nonac"],
          "min_freq_nac_THz": g["min_freq_nac"],
@@ -804,8 +857,8 @@ def cmd_post(cfg):
          "pheasy_method": cfg.get("PHEASY_FIT_METHOD"),
          "shengbte_export": sb_ok, "tool_ok": tool_ok, "note": g["note"]},
         ensure_ascii=False, indent=2), encoding="utf-8", newline="\n")
-    print("[DONE] post：phonon_summary.json 就绪，status=%s stable=%s"
-          % (g["status"], str(stable).lower()))
+    print("[DONE] post：phonon_summary.json 就绪，status=%s stable=%s stability_verdict=%s"
+          % (g["status"], str(stable).lower(), g.get("stability_verdict")))
     # 区分两种"不通过"：
     #   工具错误(tool_ok=False，mesh 没算成) → 作业失败退出，tf 标 error，提醒去查日志；
     #   真有虚频(status=imaginary) → 正常退出，marker 不满足，S6 被合理挡住(非 error)。

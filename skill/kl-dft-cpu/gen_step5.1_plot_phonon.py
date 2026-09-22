@@ -29,6 +29,7 @@ import sys
 from pathlib import Path
 
 import numpy as np   # 画低频放大图/写数据表用（原来本文件没导入 numpy）
+import imag_policy  # 虚频判据唯一真源（阈值常量与 THz→cm-1；gen_need 会带过来）
 
 OUT_NAME = "step5_phonon_plot"       # 步骤目录名，必须与 skill.yaml 的 name 一致
 FCSUB    = "phono3py"                # S5 拟合产物子目录
@@ -36,7 +37,11 @@ NPOINTS  = int(os.environ.get("KAPPA_PLOT_NPOINTS", "31"))
 # 每段路径采样点。128 原子胞在集群登录节点上算一条完整 band structure 要几分钟
 # （jzzn 实测 101 点/段 > 400 s，超过 tf 给 gen 的预算，步骤会被判失败），
 # 31 点/段足够看清色散与软模，也留出余量；要更细就设 KAPPA_PLOT_NPOINTS=101。
-IMAG_TOL = -0.05                     # THz，低于此判虚频（容数值噪声）
+# ★ 虚频判据不再在本步自行判定（2026-09-22）：唯一裁判是 S5，结论写在
+#   ../step5_fc/phonon_summary.json 的 stability_verdict / imag_class / min_freq_THz。
+#   本步只用它决定【图注文案】；summary 缺失时才用同一函数 imag_policy.classify_imag
+#   配合 S5 的 step.conf 现算（并打 WARN）。阈值语义见 skill/_common/imag_policy.py。
+S5_SUMMARY = "phonon_summary.json"
 LOWF_MAX = 10.0                      # 低频放大图的上限（THz）：声学支/软模区
 NL = chr(10)                         # 行尾常量（避免字符串里的 \n 被工具链吃掉）
 
@@ -183,6 +188,108 @@ def _dim_axis():
     return dim, ax
 
 
+def _read_s5_imag():
+    """读 S5 唯一裁判的结论（<step5_fc>/phonon_summary.json）；缺失/未写入返回 None。"""
+    f = FCDIR.parent / S5_SUMMARY
+    if not f.is_file():
+        return None
+    try:
+        d = json.loads(f.read_text(encoding="utf-8"))
+    except Exception:                              # noqa: BLE001
+        return None
+    return d if d.get("stability_verdict") else None
+
+
+def _imag_annotation(verdict, imag_class, min_thz):
+    """图注文案（规则见 skill/_common/imag_policy.py）。
+
+    near_gamma_acoustic → "近Γ声学支软化 (−x.xxx THz)"；fail → "含虚频"；noise/none 不标。
+    """
+    if imag_class == "near_gamma_acoustic":
+        try:
+            return "近Γ声学支软化 (%.4f THz)" % float(min_thz)
+        except (TypeError, ValueError):
+            return "近Γ声学支软化"
+    if str(verdict) == "fail":
+        return "含虚频"
+    return ""
+
+
+def _s5_conf():
+    """从 S5 的 step.conf 取三个 imag 阈值；读不到返回 None（→ imag_policy 默认值）。"""
+    conf = {}
+    for cand in (FCDIR.parent / "step.conf", Path.cwd() / "step.conf"):
+        if not cand.is_file():
+            continue
+        try:
+            for ln in cand.read_text(encoding="utf-8", errors="replace").splitlines():
+                ln = ln.split("#", 1)[0].strip()
+                if "=" not in ln:
+                    continue
+                k, v = [x.strip() for x in ln.split("=", 1)]
+                if k in ("IMAG_THR", "IMAG_THR_STRICT", "IMAG_QGAMMA"):
+                    try:
+                        conf[k] = float(v.strip().strip('"').strip("'"))
+                    except ValueError:
+                        pass
+        except OSError:
+            pass
+    return conf or None
+
+
+def _imag_fallback(ph):
+    """phonon_summary.json 缺失时现算：与 S5 同一函数 + 同一套 conf（打 WARN）。"""
+    import imag_policy
+    print("[WARN] 找不到 S5 的 %s —— 用 imag_policy 现算（与 S5 同一判据）"
+          % (FCDIR.parent / S5_SUMMARY))
+    dim, vax = _dim_axis()
+    is2d = str(dim).lower().startswith("2")
+    vaxp, freqs, qpts = None, [], []
+    try:
+        if is2d:
+            import kl_common as kc
+            vaxp = kc.vacuum_axis_in_primitive(ph.primitive.cell, vax)
+            mesh = [60, 60, 60]
+            mesh[int(vaxp)] = 1
+            ph.run_mesh(mesh=mesh, with_eigenvectors=False, is_mesh_symmetry=True,
+                        is_gamma_center=True)
+        else:
+            ph.run_mesh(mesh=60.0, with_eigenvectors=False, is_mesh_symmetry=True)
+        md = ph.get_mesh_dict()
+        freqs += [[float(x) for x in row] for row in md["frequencies"]]
+        qpts += [[float(x) for x in q] for q in md["qpoints"]]
+    except Exception as e:                         # noqa: BLE001
+        print("[WARN] 现算 mesh 失败：%s" % e)
+    try:
+        bsd = ph.get_band_structure_dict()
+        freqs += [[float(x) for x in f]
+                  for seg in (bsd.get("frequencies") or []) for f in seg]
+        qpts += [[float(x) for x in q]
+                 for seg in (bsd.get("qpoints") or []) for q in seg]
+    except Exception as e:                         # noqa: BLE001
+        print("[WARN] 现算 band 失败：%s" % e)
+    r = imag_policy.classify_imag(freqs, qpts, is2d, vaxp, _s5_conf())
+    print("[WARN] 现算结论：verdict=%s imag_class=%s min=%.4f THz (%.2f cm-1)"
+          % (r["verdict"], r["imag_class"], r["min_freq_THz"] or 0.0,
+             r["min_freq_cm1"] or 0.0))
+    return {"stability_verdict": r["verdict"], "imag_class": r["imag_class"],
+            "min_freq_THz": r["min_freq_THz"], "verdict": r["verdict"]}
+
+
+_S5_IMAG_CACHE = None
+
+
+def _s5_imag(ph):
+    """S5 的虚频结论（读 summary；缺失则现算一次并缓存）。"""
+    global _S5_IMAG_CACHE
+    if _S5_IMAG_CACHE is None:
+        _S5_IMAG_CACHE = _read_s5_imag() or _imag_fallback(ph)
+        print("[..] 虚频结论（S5 唯一裁判）：stability_verdict=%s imag_class=%s min=%.4f THz"
+              % (_S5_IMAG_CACHE.get("stability_verdict"), _S5_IMAG_CACHE.get("imag_class"),
+                 _S5_IMAG_CACHE.get("min_freq_THz") or 0.0))
+    return _S5_IMAG_CACHE
+
+
 def _band_path(ph):
     """高对称路径：2D 走 kz=0 的二维路径表；3D 优先 seekpath，失败退回六方通用路径。
 
@@ -303,22 +410,30 @@ def _plot(tag):
           "frequencies": [np.asarray(fr, float) for fr in bs["frequencies"]],
           "labels": bs.get("labels") or []}
     fmin = float(min(fr.min() for fr in bs["frequencies"]))
+    # 虚频结论来自 S5（唯一裁判）；本步只据此写图注，不再自己判阈值
+    _im = _s5_imag(ph)
+    _annot = _imag_annotation(_im.get("stability_verdict"), _im.get("imag_class"),
+                              _im.get("min_freq_THz"))
     # 数据文件：距离-频率表，便于复算/画自己的图（不只留 phonopy 的 yaml）
     ndata = _dump_band_data(bs, tag)
     # 低频放大图（0..LOWF_MAX THz）：声学支与软模/虚频一眼可见
-    low = _draw_band(bs, tag, fmin, LOWF_MAX, "_lowfreq")
+    low = _draw_band(bs, tag, fmin, LOWF_MAX, "_lowfreq", _annot)
     # 全频段图：走缓存时（上一次被超时打断）phonopy 那张没画出来，这里补上
     if not Path("band_%s.png" % tag).is_file():
-        _draw_band(bs, tag, fmin, None, "")
+        _draw_band(bs, tag, fmin, None, "", _annot)
     print("[OK] band_%s.png / band_%s.yaml / band_%s.dat / %s  路径=%s  "
-          "最低频率=%.3f THz%s"
-          % (tag, tag, tag, low, src, fmin,
-             "  ⚠️含虚频" if fmin < IMAG_TOL else ""))
+          "最低频率=%.3f THz (%.2f cm-1)%s"
+          % (tag, tag, tag, low, src, fmin, fmin * imag_policy.THZ_TO_CM1,
+             ("  ⚠️" + _annot) if _annot else ""))
     return {"tag": tag, "nac": tag == "nac", "png": "band_%s.png" % tag,
             "yaml": "band_%s.yaml" % tag, "dat": "band_%s.dat" % tag,
             "lowfreq_png": low, "n_band_rows": ndata,
             "min_freq_THz": round(fmin, 4),
-            "imaginary": fmin < IMAG_TOL, "path_source": src}
+            "stability_verdict": _im.get("stability_verdict"),
+            "imag_class": _im.get("imag_class"),
+            "s5_min_freq_THz": _im.get("min_freq_THz"),
+            "imaginary": str(_im.get("stability_verdict")) == "fail",
+            "path_source": src}
 
 
 def _dump_band_data(bs, tag):
@@ -336,7 +451,7 @@ def _dump_band_data(bs, tag):
     return n
 
 
-def _draw_band(bs, tag, fmin, ymax, suffix):
+def _draw_band(bs, tag, fmin, ymax, suffix, annot=""):
     """画一张声子谱：ymax=None → 全频段；ymax=LOWF_MAX → 0..10 THz 放大图。
 
     整条谱的上限 40+ THz 会把声学支压成一条线，软模/虚频看不见，所以低频那张
@@ -356,14 +471,11 @@ def _draw_band(bs, tag, fmin, ymax, suffix):
         fmax = float(max(fr.max() for fr in bs["frequencies"]))
         ax.set_ylim(min(-1.0, fmin - 3.0), fmax + 3.0)
         ax.set_title("Phonon dispersion (%s%s)"
-                     % (tag, ", imaginary modes present" if fmin < IMAG_TOL else ""),
-                     fontsize=10)
+                     % (tag, (", " + annot) if annot else ""), fontsize=10)
     else:                                  # 0..ymax THz 放大
         ax.set_ylim(min(-1.0, fmin - 0.5), float(ymax))
         ax.set_title("Phonon dispersion (low frequency <= %g THz, %s%s)"
-                     % (ymax, tag,
-                        ", imaginary modes present" if fmin < IMAG_TOL else ""),
-                     fontsize=10)
+                     % (ymax, tag, (", " + annot) if annot else ""), fontsize=10)
     ax.set_xlim(0.0, float(np.asarray(bs["distances"][-1], float)[-1]))
     labels = bs.get("labels") or []
     if labels:
