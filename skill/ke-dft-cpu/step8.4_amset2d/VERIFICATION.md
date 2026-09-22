@@ -3181,3 +3181,36 @@ CrSe2_hex 的"无磁性"结论（V43）在此得到跨材料佐证。
 **③ 已确认新 S8 消费的是新输入**：`step8_amset/deformation.h5 -> ../step7b_deform_read/deformation_vac.h5`，
 两者 attrs 均为 `nspin_norm_fixed='skipped'` / `reason='amset>=0.5.1'`，k 点 2116。
 
+
+### V50. 第 13 轮：**更正 V7** —— MoS₂ 确有独立 ke-dft-cpu 流水线；其 S7 也是 mixed 口径（2026-09-22）
+
+**更正**：V7 记「本机/jzzn/3090 都没有 MoS2 的 ke-dft-cpu DFT 产物」**已过时/有误**。
+实际存在 `/mnt/d/tf_data/MoS2/ke-dft-cpu`（用户 2026-09-16 建），且是**配置最全**的项目：
+`amset2d: true` + `wavefunction_full: true`（含 S3b/S4b 全网格分支）。
+
+其 autozt 状态（`Dir: /public/home/wangchao/Fullerene_Network/work/MoS2/ke-dft-cpu`，
+注意**不在 jzz/jap 下**，HPC=jzzn）：
+
+| 步骤 | 状态 |
+|---|---|
+| S1/S2/S3/S3b/S3c/S4/S4b/S5/S6 | OK |
+| S7_deform | OK 10/10（但口径 mixed，见下） |
+| S7.1_read | OK（**09-16/17 跑的，早于 mixed 检查上线，未经拦截**） |
+| **S8_kappa** | **PREP（从未跑过）** |
+| S8.4_amset2d | OK finished（09-20，**pre-fix gen**：无 mesh.h5、无 intrinsic_transport.json） |
+
+**口径缺陷与其它 3 个材料同型**：面内集 {01,02,03,04,09} 里 deform-01~04 是 ionrelax、
+**deform-09 是 --fixed--**（mismatch）。deform-01~04/ionrelax 已于 09-16 算完（OUTCAR 完整、
+`aborting loop` + General timing 正常收尾），故**只需补 deform-09** —— 属**非破坏性 `retry`**，
+比用户原先批准的"破坏性重跑"更轻。
+
+**已执行**（2026-09-22 21:2x）：`retry S7_deform` → 生成 `deform-09/ionrelax`（5 文件）→
+`start` → 提交 3885579–3885588。**口径现已齐**：01~04 + 09 全部 ionrelax，05~08 fixed。
+
+**ISPIN 说明**：MoS2 的 `deformation.h5` 只有 `deformation_potentials_up`（无 `_down`），
+即 **ISPIN=1**，故 ISPIN=2 的 ×2 减半 bug **不适用于 MoS2**；其 D 量级 1.79/1.92 eV 属正常范围。
+MoS2 的问题**纯粹是口径不一致**，与自旋归一化无关。
+
+**后续链**：S7_deform 完 → `S7.1_read`（0.5.1 重跑，过 mixed 检查）→ `S8_kappa`（首次跑，
+PREP 需 gen）→ `S8.4`（需补 `WRITE_MESH=true` 才能出 mesh.h5 + strict intrinsic）。
+
