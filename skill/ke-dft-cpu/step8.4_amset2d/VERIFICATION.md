@@ -3024,3 +3024,30 @@ if "_up" in key or "_down" in key:
 升级不会引入也不会消除它。单元测试 `test_postprocess_intrinsic.py` 的
 `read_mesh_h5` 用例（在 amset051 环境实跑）已覆盖此场景。
 
+
+### V45. 「OK 却是错的」：5 个 ISPIN=2 材料的 S8 结果全部失效（2026-09-22 第 8 轮，只读实测）
+
+**核心风险**：autozt 状态表的 `OK` **只看产物文件是否存在**，无法感知"输入已变"。
+本轮逐一开 h5 核对属性，发现 5 个目标材料的 `deformation.h5` **全部未打 ×2 修复标记**，
+而它们的 `step8_amset/transport*.json` 却比 h5 新 → **状态表全是 OK，科学结论却全是错的**。
+
+| 材料 | deformation.h5 | 修复标记 | S8 transport.json | 判定 |
+|---|---|---|---|---|
+| CrSe2_hex | 09-22 01:50 | ✅ FIXED(factor=2) | 09-18 01:28 | S8 旧于修复 → 须重跑 |
+| CrS2_hex | 08-26 00:35 | ❌ `attrs={}` | （缺） | 缺 S8 + 被别名屏蔽 |
+| CrS2_ortho | 08-27 15:58 | ❌ `attrs={}` | 08-27 19:27 | 失效 |
+| CrSe2_ortho | 08-30 02:29 | ❌ `attrs={}` | 09-18 01:30 | 失效 |
+| LS | 09-01 00:05 | ❌ `attrs={}` | 09-19 14:55 | 失效 |
+| SS | 08-29 21:16 | ❌ `attrs={}` | 08-30 15:33 | 失效 |
+
+实测值（CrSe2_ortho）：`deformation_potentials_up/down` mean ≈ **0.7333**（即被 0.4.19 缺陷减半后的值），
+`attrs={}` 证明 `nspin_norm_fix` **从未跑过**。对照 CrSe2_hex 的 h5：
+`attrs={'nspin_norm_fixed': True, 'nspin_norm_fix_factor': 2, 'nspin_norm_fix_reason': 'amset<0.5.1 & nspin=2', 'nspin_norm_fix_version': '0.4.19'}`。
+
+**结论**：5 个材料的重算**不是"锦上添花"，是必须**——旧 S8 的形变势偏小一半，
+迁移率/电导率量级直接错。**判据不能只看 autozt 的 OK，必须核对 h5 的 `nspin_norm_fixed` 属性。**
+
+**执行顺序（每个材料）**：`S7_deform` 补 ionrelax → `retry S7.1_read`（重跑 deform read，
+在 0.5.1 下原生正确且不留标记位）→ `retry`+`start S8_kappa`。
+仅 `S7_deform` 完成**不会**自动让 S8 失效/重跑——autozt 仍显示 OK，**必须显式 retry S7.1_read/S8**。
+
