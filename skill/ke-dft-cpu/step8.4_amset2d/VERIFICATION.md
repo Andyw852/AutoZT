@@ -3796,3 +3796,24 @@ python3 -B bin/autozt -tt ke-dft-cpu -p <MAT> -j S8_kappa start
   失败可见、回拉、无数据丢失）。**仅剩真实 `mesh.h5` 的数值复现确认**。
 - 各材料原有 S8/S8.4 结果：**4 个因 k 网格过时失效**（V56），**1 个已完成重算**（CrSe2_ortho）。
 - 累计 VERIFICATION 记录：**V44.1 – V69**；代码提交 3 次（`2c42c6c`/`ed4ad3f`/`f4a7eb9`）。
+
+### V70. 第 69 轮：**更正巡检判据**——别用 OUTCAR 的 `aborting loop` 判 stage（2026-09-22）
+
+**我踩的坑**：先前用 `grep "aborting loop" <dir>/OUTCAR` 当作"static 段收敛"的判据，
+于是把 CrS2_ortho 的 `deform-09` 误报成 `static=1`（其实它还在 relax）。
+
+**为什么错**：`aborting loop because EDIFF is reached` 在 **relax 段的 OUTCAR 里也会出现**
+（每个电子自洽步收敛都写一行）。它**区分不了** relax 段与 static 段。
+
+**可靠的判据（修正后）**：
+
+| 想判什么 | 正确判据 |
+|---|---|
+| relax 段离子收敛 | `<dir>/ionrelax/OUTCAR.relax` **存在**且含 `reached required accuracy` |
+| static 段跑完 | `<dir>/ionrelax/OUTCAR` 末尾含 `General timing and accounting informations` |
+| 该目录是否已建 ionrelax | `-d <dir>/ionrelax`（真为口径检查所用，见 V43） |
+| **作业是否真在推进** | 文件 **mtime 是否持续更新**（比大小更可靠；新离子步会让 OUTCAR 大小短暂停滞） |
+| 作业是否还在跑 | **`sacct`**（`squeue` 的瞬时计数会漏，本轮实测 CrS2_ortho 计数一度为 0 而作业仍在 RUNNING） |
+
+**本次实测（用新判据）**：`deform-09` 的 `OUTCAR` mtime = 当前时刻、`DAV` 回到 1（新离子步）、
+`OSZICAR` 在增长 → **正常推进**，非卡死、非失败。
