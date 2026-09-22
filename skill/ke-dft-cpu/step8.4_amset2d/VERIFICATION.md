@@ -3538,3 +3538,37 @@ CrS2_ortho 2.91 / MoS2 3.13 Å）是**原子芯**范围；AMSET 的 `LAYER_THICK
 **注意**：LS/SS/CrSe2_ortho/CrS2_ortho 的 POSCAR 用 **Cartesian** 坐标，MoS2 用 **Direct**；
 写解析脚本时若统一按分数坐标处理会得到 >c 的荒谬层厚（本轮踩过）。
 
+
+### V62. 第 32 轮：--check-reproduce 硬门**双向实机验证完毕**（2026-09-22）
+
+此前只验过"无 mesh 时报错"这类**失败前置**，--check-reproduce 的
+**PASS 分支**（重积分能复现 → 写本征结果）从未跑过。本轮用**桩替换重型依赖**
+（build_amset_data / read_mesh_h5 / apply_mesh_metadata / inject_mesh_rates /
+integrate / amset.core.transport.solve_boltzman_transport_equation），
+在 jzzn amset051 环境实跑 PP.main([dir, "--check-reproduce"])：
+
+**① PASS 场景**（重积分与原始 transport.json **完全一致**）：
+```
+[..] amset=0.5.1  mechanisms=[IMP, ADP, POP]  spins=[1]  n_full=5
+[..] 复现检查：max|diff|=0.000e+00 -> PASS
+[OK] 本征口径：剔除 [IMP]，保留 [ADP, POP]
+[DONE] 本征输运已写出：.../intrinsic_transport.json
+```
+→ **正常写出本征结果**，且剔除机制正确（只剔 IMP）。
+
+**② FAIL 场景**（令重积分比原结果差 50%）：
+```
+[..] 复现检查：max|diff|=5.000e+00 -> FAIL
+SystemExit: [ERROR] 重积分无法复现原 transport.json —— mesh/settings/vasprun 不同源，勿信本征结果。
+intrinsic_transport.json 是否生成: False
+```
+→ **抛 SystemExit 且一个字节都不写**。
+
+**结论**：该门是**真硬门**——要么产出**可追溯可信**的本征结果，要么**失败且不留产物**，
+不存在"静默写出不可信本征数"的路径。这与本会话反复出现的主题一致：
+**最危险的失败模式是"不报错但结果错"，而这个门恰好把它堵死了。**
+
+**测试脚本**放在远端 /tmp/pptest/t_gate.py（临时目录，本地无 amset 故未入库）。
+本轮把 WRITE_MESH 自动接链（2c42c6c）、read_mesh_h5 自旋修正（V44.1）、门双路径（V62）
+三块拼齐，**代码侧的 strict intrinsic 链路已无未验证环节**；剩下的验证只能等
+**真实 mesh.h5** 出现（首个 WRITE_MESH=true 的 S8.4 作业）。
