@@ -3243,3 +3243,33 @@ PREP 需 gen）→ `S8.4`（需补 `WRITE_MESH=true` 才能出 mesh.h5 + strict 
 + `interpolation_factor: 10`，且无 `write_mesh`。故其 S8.4 若要出 strict intrinsic，
 需加 `WRITE_MESH=true` 并重跑；且 0.5.1 在真实重叠路径上的行为差异（V21）需用户知情后再决定。
 
+
+### V52. 第 16 轮：SS 的 S7_deform FAIL 根因 = 节点 OpenMPI 会话目录故障（非物理问题）
+
+SS 的 S7_deform 状态为 `FAIL 9/10 完成；未完成 deform-06`。逐层诊断：
+
+**① 现象**：`deform-06` 只有 `.stale-grid-3x11x1` 旧产物 + 新输入（09-22 18:26），
+**无新 `OUTCAR`**；其余 8 个分量都产出了新 OUTCAR。作业 3884094 已退出队列。
+
+**② 根因**（`queue-3884094.err` 原文）：
+```
+A call to mkdir was unable to create the desired directory:
+  Directory: /tmp/ompi.cu26.1243/pid.1003465
+  Error:     No such file or directory
+...
+orte_session_dir failed
+```
+→ **计算节点 cu26 上 OpenMPI 无法创建会话目录**（节点本地 `/tmp` 抖动）。
+属**基础设施瞬时故障**，与输入/物理/口径无关。
+
+**③ 处置**：按 AGENTS 决策表"节点/队列问题 → retry"。
+`retry S7_deform` + `start` → **只提交 1 个作业（3885676）**，即 fanout **精确只补
+未完成的 deform-06**，不重算其余 9 个（实证 fanout 的增量补交确实生效）。
+
+**④ 排查要点（写进套路）**：扇出步骤报 `N/M 完成；未完成 <分量>` 时，
+先看该分量的 `queue-<jobid>.err`：
+- MPI/会话目录类（`orte_session_dir`、`/tmp/ompi`）→ 节点故障 → `retry`；
+- `ZBRENT`/力不收敛 → 收敛问题；
+- `.stale-grid-*` 同名文件存在但无新 OUTCAR → 网格已变且作业未成功。
+**勿把节点故障误判为口径/物理问题**。
+
