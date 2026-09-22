@@ -3650,3 +3650,23 @@ postprocess_intrinsic.py: 26445 B（已就位）
 重新推送（远端材料目录里的脚本是旧的）。所以 CrSe2_hex / MoS2 下次 `retry S8.4` 时
 才会带上"失败可见"的新链。**若直接 `start` 而不 `retry`，跑的仍是旧 submit.sh**（状态 OK 时
 `start` 也不会重投），这也是 V55 已记的"必须 retry 才能重投"的另一层理由。
+
+### V65. 第 37 轮：V64 修复的**安全性核查**——`rm -f transport.json` 不会丢原始产物（2026-09-22）
+
+**担心**：V64 在链首加了 `rm -f transport.json`。若 AMSET 段失败，会不会把上一次的
+有效结果删掉？
+
+**实测（CrSe2_ortho 的 S8 运行目录）**：
+```
+  -rw-r--r-- 133039  09-22 20:24  transport.json          <- gen 从 raw 复制来的"别名"
+  -rw-r--r-- 133039  09-22 20:24  transport_47x47x7.json  <- AMSET 自己写的原始输出
+```
+两者**并存**。链尾的 `cp -f "$(ls -t transport_*.json | head -1)" transport.json` 只是把
+最新 raw **复制**成 `transport.json`；`rm -f transport.json` **只删这个副本**，
+AMSET 的原始 `transport_<grid>.json` **原样保留**。
+
+**结论：无数据丢失。** 即使 AMSET 段失败、`transport.json` 未生成，上一次的原始结果
+（`transport_<grid>.json`）仍在目录里，可人工取用或对比。
+
+**这同时解释了为什么该改动是干净的解**：判据只看 `transport.json`（别名），
+而真相源（raw）不受影响——把"是否成功"的语义挂在**别名**上，正是最小侵入的做法。
