@@ -3572,3 +3572,49 @@ intrinsic_transport.json 是否生成: False
 本轮把 WRITE_MESH 自动接链（2c42c6c）、read_mesh_h5 自旋修正（V44.1）、门双路径（V62）
 三块拼齐，**代码侧的 strict intrinsic 链路已无未验证环节**；剩下的验证只能等
 **真实 mesh.h5** 出现（首个 WRITE_MESH=true 的 S8.4 作业）。
+
+### V63. 第 33 轮：**发现一个真实盲区**——后处理失败会被 autozt 显示为 OK（2026-09-22）
+
+**背景**：本会话把"WRITE_MESH=true 时作业链尾部自动跑 `postprocess_intrinsic.py
+--check-reproduce`"接进了 S8.4（提交 2c42c6c），并验证了该门的 PASS/FAIL 双路径（V62）。
+但**门的失败能否被 autozt 看见**是另一回事——本轮核查后发现：**看不见**。
+
+**代码路径**（`autozt/_collector_remote.py`）：
+```python
+elif j and j.get("state") in ("R", "PD", "CG", "CF"):
+    f["done"] = False, "job " + j["state"]      # 作业在跑/排队
+...
+elif f["exists"] or sc.get("check") == "relax_skip":
+    ck = CHECKERS.get(sc.get("check", ...))
+    f["done"], f["diag"] = ck(d, sc)            # 否则只看文件判据
+```
+而 S8.4 的判据是 `check: marker` / `marker: "transport.json:thermal_conductivity"`，
+`ck_marker` 实现（`_collector_remote.py:324`）**只做"文件存在 + 子串命中"**：
+```python
+def ck_marker(d, cfg):
+    fn, text = cfg["marker"].split(":", 1)
+    if not os.path.isfile(os.path.join(d, fn)):      return False, fn + " missing"
+    if text not in tail_text(...):                   return False, fn + " incomplete"
+    return True, "finished"
+```
+
+**结论（盲区）**：作业链是 `AMSET → 写 transport.json → postprocess_intrinsic.py --check-reproduce`。
+若 AMSET 成功（`transport.json` 已含 `thermal_conductivity`）而**后处理失败**（`SystemExit`），
+作业以非零码退出——但 autozt 的判据**只认文件**，且失败态 `F` **不在** `("R","PD","CG","CF")` 里，
+于是走到 `ck_marker` → **判定 `finished`（OK）**。
+
+**后果**：正好是目标最关心的那一步（"strict intrinsic 后处理被套用"）**失败了却显示成功**，
+且本征产物 `intrinsic_transport.json` 缺失也不会被察觉。
+
+**可选修法（均未执行，待定）**：
+1. **调整提交链顺序**：`AMSET → postprocess（用 transport_*.json）→ 最后才 cp 成 transport.json`。
+   这样后处理失败时 `transport.json` 不生成，`ck_marker` 自然判 not-done。
+   风险：若目录里残留**上次**的 `transport.json`，仍可能掩盖；需先删旧文件。
+2. **项目级 steps 覆盖**：给用 WRITE_MESH 的两个项目（CrSe2_hex / MoS2）在 tf yaml 里
+   覆写 S8.4 的 `marker` 为 `intrinsic_transport.json:autozt.intrinsic_transport`。
+   代价：要写完整步骤定义；且仅覆盖这两个项目。
+3. **改 autozt 判据**：让 `ck_marker` 支持多文件 spec，或让收集器把作业的**非零退出码**计入判定。
+   影响面最大（跨技能），应单独提。
+
+**倾向 (1)**：改动最小、只影响 ke 的 S8.4 链，且**不需要动 autozt 本体**；但需处理"旧 transport.json 残留"。
+**注**：这是 autozt 层面的行为，不是 ke 代码 bug；按铁律 10 不擅自改 autozt 判据逻辑，先记录待定。
