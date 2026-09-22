@@ -3817,3 +3817,29 @@ python3 -B bin/autozt -tt ke-dft-cpu -p <MAT> -j S8_kappa start
 
 **本次实测（用新判据）**：`deform-09` 的 `OUTCAR` mtime = 当前时刻、`DAV` 回到 1（新离子步）、
 `OSZICAR` 在增长 → **正常推进**，非卡死、非失败。
+
+### V71. 第 75 轮：**再次更正判据** —— relax 段也会写 `General timing`（2026-09-22）
+
+V70 里我给的"static 跑完 = OUTCAR 末尾含 `General timing and accounting informations`"
+**同样有缺陷**：**relax 段结束时 VASP 也会写这段**。于是单看 OUTCAR 会把"relax 刚结束、
+static 正在跑"误判成 static 已完成（本轮 `deform-09` 就出现过：一次读到 `static_done=1`，
+稍后再读变 `0` —— 因为 static 开启后覆盖了 OUTCAR）。
+
+**正确的两段判据（最终版）**：
+
+| 阶段 | 判据 |
+|---|---|
+| relax 段已跑完且离子收敛 | `ionrelax/OUTCAR.relax` **存在** 且含 `reached required accuracy` |
+| static 段已跑完 | `ionrelax/OUTCAR.relax` **存在**（说明 relax 已完成、OUTCAR 已被 static 覆盖）**且** `OUTCAR` 含 `General timing and accounting informations` |
+| 目录是否属于 ionrelax 口径 | `-d <dir>/ionrelax` |
+| 作业是否在推进 | 文件 **mtime** 更新（`vasp.relax.log` 比 OUTCAR 灵敏）|
+| 作业是否还在跑 | **`sacct`**（`squeue` 会漏）|
+
+**本轮实测（用最终判据）**：
+```
+01:rl=1,st=1  02:rl=1,st=1  03:rl=1,st=1  04:rl=1,st=1
+05:.  06:.  07:.  08:.
+09:rl=1,st=0     <- relax 已收敛（2 个离子步），static 正在跑
+```
+即 **CrS2_ortho 的 4 个面内分量已两段完成，只剩 09 的 static**。
+（更早几轮我把 09 报成"仍在 relax"是判据粗糙所致；relax 其实已经收敛。）
