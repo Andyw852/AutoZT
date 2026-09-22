@@ -3670,3 +3670,26 @@ AMSET 的原始 `transport_<grid>.json` **原样保留**。
 
 **这同时解释了为什么该改动是干净的解**：判据只看 `transport.json`（别名），
 而真相源（raw）不受影响——把"是否成功"的语义挂在**别名**上，正是最小侵入的做法。
+
+### V66. 第 39 轮：确认本征产物会**回拉到本地**（`fetch_all` 语义，2026-09-22）
+
+代码侧链路已闭环（V44.1–V65），但还差最后一环：**新产物 `intrinsic_transport.json`
+（以及 `mesh_*.h5`）会不会被 autozt 拉回本地**？
+
+`autozt/workflow.py:2037`：
+```python
+if sc2.get("fetch_all") or all_files:   # 整目录拉回
+    remote = "cd %s && tar -cf - ." % shlex.quote(s["dir"])
+```
+S8.4 的步骤定义里有 **`fetch_all: true`**，即**整个步骤目录打包拉回**，
+不受 `fetch_files` 白名单限制。
+
+**结论**：`intrinsic_transport.json` 与 `mesh_*.h5` **会自动回拉到**
+`<材料>/ke-dft-cpu/result/step8.4_amset2d/`，无需人工补拉。
+（注意 `mesh_*.h5` 体积可观——这是"整目录拉回"的既有行为，非新增代价。）
+
+**至此 strict intrinsic 的端到端链路在代码/配置侧全部打通并验证**：
+`WRITE_MESH` → settings 写 `write_mesh: true` → AMSET 落 `mesh_*.h5` →
+`postprocess_intrinsic.py --check-reproduce`（硬门）→ `intrinsic_transport.json` →
+**失败则 transport.json 不生成（失败可见，V63/V64）** → `fetch_all` 回拉本地。
+**唯一剩下的**：真实 `mesh.h5` 出现后跑一次，确认数值可复现（PASS 分支已在 V62 桩测过）。
