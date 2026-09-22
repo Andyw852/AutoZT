@@ -3740,3 +3740,59 @@ rates down shape: (3, 2, 2, 2, 3)
 **至此 strict intrinsic 后处理的所有代码路径均已实测**：单自旋（V62）、双自旋（本轮）、
 上游 bug 键名（V44.1）、失败前置（V46）、硬门双向（V62）、失败可见与回拉（V63/V64/V66）。
 **唯一剩下的**仍是真实 `mesh.h5` 的数值复现确认。
+
+## V69. **会话交接总表**（2026-09-22 深夜，第 46 轮）
+
+### 一、目标完成度
+
+| 目标项 | 状态 |
+|---|---|
+| MoS₂ 的 S7 重跑 | ✅ 已投（病因=**k 网格过时** 15×15×1→47×47×1，V51/V67）；**无需破坏性 rerun**，非破坏性 retry 已够 |
+| CrS2_hex S8/S8.4 | ⛔ 被 kl-mace→kl-mlff 别名**材料级屏蔽**；**他线正在做迁移**（V54）|
+| CrS2_ortho S8/S8.4 | 🔄 S7 重算 9/10 完成（网格 15×15×1→48×48×1 + 口径），剩 deform-09 |
+| CrSe2_ortho S8 | ✅ **完成且数值已核验**（V49，V57 更正口径）|
+| LS S8 | 🔄 S7 补 deform-09（**只缺口径**，网格本已正确，V56）|
+| SS S8 | 🔄 S7 重算（网格 3×11×1→12×41×1 + 口径）；deform-06 因**节点 OpenMPI 故障**重投（V52）|
+| CrSe2_hex 基准 3867317 | 🔄 R ~20h26m，`inelastic 84%` |
+| 2D S8.4 读 write_mesh + strict intrinsic | ✅ **代码/配置侧全部打通并实测**（V44.1/46/53/62/63/64/65/66/67/68）|
+
+### 二、本会话的**代码改动**（都已提交）
+
+| 提交 | 内容 |
+|---|---|
+| `2c42c6c` | S8.4：`WRITE_MESH=true` 时**自动接** strict intrinsic 后处理 |
+| `ed4ad3f` | `ke_common`：`AMSET_ENV` 缺失时**不再静默回退** 0.4.19（防形变势无声减半）|
+| `f4a7eb9` | S8.4：**V63 盲区修复** —— `transport.json` 改到后处理**之后**才写（失败可见）|
+
+**磁盘级改动（不在 Git）**：CrSe2_hex / MoS2 的 `step8.4_amset2d/step.conf` 加 `WRITE_MESH=true`；
+CrS2_* 的 hpc/setting 切回 jzzn（留 `.bak3090`）；12 个 jap 项目 `submit_amset.tpl` 改 `{{AMSET_ENV}}`。
+
+### 三、**待用户决定**（不阻塞当前作业）
+
+1. **MoS2 的 S8.4 重叠模式**：现状 `UNITY_OVERLAP=false`（真实重叠，动机=绕开去对称化）；
+   V21 实测 **DFT 地面真值只验证过单位重叠路径**（单位重叠：0.4.19 与 0.5.1 一致、与参考吻合；
+   真实重叠：0.5.1 漂移约 3 倍）。**建议改 `UNITY_OVERLAP=true`**（V58）。
+2. **「HSP」含义**：ke 代码/文档/配置里**查无此词**，需用户澄清。
+3. **V63 修法**：已按方案 (1)（调链顺序）实现并验证；若用户倾向方案 (2)/(3) 可再议。
+
+### 四、**下一步命令**（材料各自的链）
+
+```
+# 任一材料 S7_deform 完成后（用 sacct 确认 COMPLETED，别只看 squeue）：
+python3 -B bin/autozt -tt ke-dft-cpu -p <MAT> -j S7.1_read retry   # 0.5.1 重跑形变势
+python3 -B bin/autozt -tt ke-dft-cpu -p <MAT> -j S7.1_read start
+python3 -B bin/autozt -tt ke-dft-cpu -p <MAT> -j S8_kappa retry    # 若 S8 从未跑过用 init
+python3 -B bin/autozt -tt ke-dft-cpu -p <MAT> -j S8_kappa start
+
+# 基线 3867317 结束后做 (c) 对比轮：
+#   1) 临时把 CrSe2_hex 根 step.conf 的 BANDGAP 从 hse 改回 pbe（否则 PBE vs HSE 混合对比）
+#   2) retry + start S8.4_amset2d（0.5.1 + PBE + write_mesh + 真实重叠）
+#   3) python3 tmp/compare_s84.py <3867317的transport.json> <新transport.json>  # >20% 即停
+```
+
+### 五、**验证状态**
+
+- strict intrinsic 后处理：**所有代码路径已实测**（单/双自旋、bug 键名、失败前置、硬门双向、
+  失败可见、回拉、无数据丢失）。**仅剩真实 `mesh.h5` 的数值复现确认**。
+- 各材料原有 S8/S8.4 结果：**4 个因 k 网格过时失效**（V56），**1 个已完成重算**（CrSe2_ortho）。
+- 累计 VERIFICATION 记录：**V44.1 – V69**；代码提交 3 次（`2c42c6c`/`ed4ad3f`/`f4a7eb9`）。
