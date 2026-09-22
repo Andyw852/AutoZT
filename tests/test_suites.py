@@ -27,7 +27,8 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 LOCAL = ["agentgate", "session", "autodeps", "history", "skillspec",
          "correct_cli", "prov", "uniform", "supercell", "templates",
          "ke_common", "asset_lookup", "poscar_sync", "io_schema", "s6_marker",
-         "symmetry_audit", "structure_health", "template_drift", "stepconf"]
+         "symmetry_audit", "structure_health", "template_drift", "stepconf",
+         "step_contract"]
 CLUSTER = ["dropin"]
 # 独立的 pytest 测试模块（不是 suite_*.py 形式），也要纳入回归
 LOCAL_PYTEST = ["test_imag_policy"]
