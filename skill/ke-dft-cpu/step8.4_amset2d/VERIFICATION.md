@@ -3337,3 +3337,33 @@ if old and old != "mlff-mace" and any("_mlff_" in s["name"] for s in base["steps
 但**属 kl 技能的状态迁移，不属 ke 的技能边界**，按铁律 10 不擅自新建/重命名他人技能目录，
 故仅记录并报告，等用户指示。
 
+
+### V55. 第 22 轮：(c)/(d) 两轮的**配置已就位**与执行判据（2026-09-22）
+
+**CrSe2_hex 的 S8.4 配置已为 (c)/(d) 轮准备好**（磁盘级 `project_setting/templates/step8.4_amset2d/step.conf`）：
+```
+[params]
+INTERPOLATION_FACTOR = 4      # 与 V23 的 292GB OOM 教训一致（factor=10 会爆）
+NWORKERS = 12
+UNITY_OVERLAP = false         # 真实重叠（V21 风险路径，正是 (c) 要验的）
+WAVEFUNCTION_FULL = true      # 读 step4b_wave_full（6348 k 点）
+WRITE_MESH = true             # 新增：出 mesh.h5 + 自动 strict intrinsic 后处理
+```
+
+**正在跑的 `3867317`（基准）是修复前的产物**，实测其运行目录：
+- `settings.yaml` 只有 `interpolation_factor: 4` / `unity_overlap: false`，**无 `write_mesh`**；
+- 无 `mesh*.h5`、无 `postprocess_intrinsic.py`、无 `intrinsic_transport.json`。
+
+即 3867317 只能提供 **0.4.19 + 真实重叠**的 `transport.json` 作为 (c) 的对照基线，
+**不能**提供本征结果——本征结果必须由配置好的新一轮产出。
+
+**执行顺序（待 3867317 结束）**：
+1. **(c) 对比轮**：`retry` + `start S8.4_amset2d`（0.5.1 + PBE + write_mesh + 真实重叠）。
+   与 3867317 的 `transport.json` 逐项比 `overall/ADP/IMP/POP` 迁移率与 σ/S；
+   **>20% 漂移 ⇒ 停止并报告**（V21 已预警真实重叠路径上 0.5.1 会显著抬高 mobility，
+   这是**判据**不是意外）。同时该轮会自然产出 `intrinsic_transport.json`（strict，剔除 IMP）。
+2. **(d) 最终轮**：HSE 带隙 + `write_mesh` + strict intrinsic（若 (c) 通过）。
+
+**注意**：`S8.4` 的 `retry` 会重生成 `settings.yaml/submit.sh`；因 3867317 结束后该步骤状态会变
+`OK`，**必须走 `retry` 才能重投**（直接 `start` 不会重跑已 OK 的步骤）。
+
