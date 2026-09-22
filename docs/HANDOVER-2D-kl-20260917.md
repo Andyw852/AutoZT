@@ -2725,6 +2725,32 @@ autozt -tt kl-dft-cpu -p MoS2_kltest -j S2_static start   # 预期：报"确认�
 
 ---
 
+# 46.8 ★★ 对称化重跑的关键 bug（2026-09-22 实测）：S4 幂等复用了【旧对称性】数据集
+
+- **现象**：S5_fc 跑完（jobid 3881710）后 `imag_policy=warn/near_gamma_acoustic`、`stable=true`，
+  但 ZA 审计**仍报 Amm2(4 ops) 微畸变**、`min_freq=−0.0566` 与**未对称化**那次一模一样。
+- **逐步核查**：
+  · `step4_disp/POSCAR` = 3.1401931163640890（**已对称化**），`POSCAR.pre_symmetry` = 3.1401970575143987；
+  · 但 `step4_disp/phono3py_disp.yaml` 的 unit cell = **3.14019706（未对称化）**，
+    `disp-00001/POSCAR` = 15.7009852875719940 = 5 × 3.14019706（未对称化超胞）；
+  · S5 从 `phono3py_disp.yaml` 建对象 ⇒ 拟合仍在 Amm2 下进行。
+- **根因（两个机制叠加）**：
+  1. `check_existing_matches_input` 的结构指纹容差是 **1e-3 Å**（超过才报错），而对称化的
+     几何差只有 **~4e-6 Å** ⇒ 不触发；
+  2. `build_displacements` 见到 `phono3py_disp.yaml + POSCAR-*` 就 **"幂等跳过"** ⇒
+     旧 SPOSCAR / 旧 disp-* 整套沿用。
+  ⇒ 对称化改了 POSCAR，但**没改数据集**，S5 仍在旧点群下拟合 —— 对称化白做，且一声不响。
+- **修复（非破坏）**：`gen_step4_disp.py` 新增 `_quarantine_stale_dataset(out)`；`main()` 接住
+  `symmetry_gate` 的返回值，当 `triggered=True` 时把旧数据集
+  (`phono3py_disp.yaml` / `SPOSCAR` / `disp_plan.json` / `POSCAR-*` / `disp-*`)
+  **移动**（不是删除）到 `step4_disp/symmetry_audit/pre_symmetry_dataset/`，迫使本步按对称化胞重新生成。
+- **因此**：这条链必须**再跑一次 S4（retry+start）→ S5（retry+start）**，对称化才会真正生效。
+  之前那次 S5（3881710）的结论对"未对称化结构"有效（warn/stable，不挡 S6），
+  但**没有**验证 §37/§40 预期的"虚频消失、κ_xx=κ_yy"。
+- **同类教训**（与 §46.7 同源）：**结构性变更必须让下游数据集失效**，不能只靠几何容差。
+
+---
+
 # 45. 2026-09-22：本轮遇到的 bug 全部落到代码（防新料复发）
 
 | # | bug | 影响面 | 修复（文件） | 验证 |

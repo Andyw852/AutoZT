@@ -265,6 +265,41 @@ def check_existing_matches_input(out):
             % (dmax, n_disp, out, out, out, out))
 
 
+def _quarantine_stale_dataset(out):
+    """对称化后：把【旧对称性】的位移数据集**非破坏地**移到 symmetry_audit/pre_symmetry_dataset/。
+
+    ★ 为什么必须动（2026-09-22 实测 MoS₂ 踩到）：
+      symmetry_gate 把 POSCAR 就地对称化（a 变 4e-6 Å）后，点群从 Amm2(4 ops) 变 P-6m2(12 ops)；
+      但这个几何差**逃得过** check_existing_matches_input 的 1e-3 容差，而 build_displacements 见到
+      phono3py_disp.yaml + POSCAR-* 又"幂等跳过" ⇒ S4 整套沿用旧数据集 ⇒ S5 仍在旧点群下拟合，
+      对称化白做（本步 POSCAR 已对称化，但 SPOSCAR/disp-*/phono3py_disp.yaml 还是旧的）。
+      处置：只**移动**（不删除，可回溯），让本步重新生成；fanout 的 disp-* 也一起移，
+      否则 "只补缺失子目录" 仍会沿用旧帧。
+    返回是否真的移动了东西。
+    """
+    import shutil as _sh
+    dst = out / "symmetry_audit" / "pre_symmetry_dataset"
+    try:
+        dst.mkdir(parents=True, exist_ok=True)
+    except OSError as e:
+        print("[WARN] 无法建 %s（%s），跳过隔离" % (dst, e))
+        return False
+    moved = False
+    names = ["phono3py_disp.yaml", "SPOSCAR", "disp_plan.json"]
+    names += sorted(p.name for p in out.glob("POSCAR-*"))
+    names += sorted(p.name for p in out.glob("disp-*"))
+    for n in names:
+        src = out / n
+        if not src.exists():
+            continue
+        try:
+            _sh.move(str(src), str(dst / n))
+            moved = True
+        except OSError as e:
+            print("[WARN] 移动旧数据集 %s 失败：%s" % (n, e))
+    return moved
+
+
 def build_displacements(out, reps, method, conf):
     """幂等：已有位移就跳过；否则先算帧数过闸，再落盘。"""
     check_existing_matches_input(out)
@@ -307,7 +342,13 @@ def main():
     kc.relay_poscar(prev / "CONTCAR", out / "POSCAR", "step1_std_opt")
     # 结构体检第五条（B，2026-09-20）：S1 弛豫后的数值微畸变审计 + 可选对称化
     # （默认 SYMMETRY_AUDIT=warn 只告警、SYMMETRY_SYMMETRIZE=off 不改结构）
-    kc.symmetry_gate(out / "POSCAR", conf)
+    _sg = kc.symmetry_gate(out / "POSCAR", conf)
+    # ★ 对称化一旦真的发生，已有的位移数据集属于【旧对称性】，必须换掉（见 _quarantine_stale_dataset）
+    if isinstance(_sg, dict) and _sg.get("triggered"):
+        if _quarantine_stale_dataset(out):
+            print("[WARN] 对称化改变了点群：旧位移数据集已移到 %s\n"
+                  "       （非删除，可回溯）—— 本步将按对称化后的胞重新生成位移。"
+                  % (out / "symmetry_audit" / "pre_symmetry_dataset"))
 
     meth = kc.read_method(prev / kc.METHOD_FILE)
     dim = (meth.get("DIM", "").lower() or kc.resolve_dim(out / "POSCAR")[0])
