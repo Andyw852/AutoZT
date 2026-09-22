@@ -177,6 +177,25 @@ def main():
           "imag_policy" in m_cpu and "imag_policy" in m_gpu)
     check("S5（kl_fc_backends）调用 classify_imag", "classify_imag" in kfb)
 
+    print("[8. §四/§五 字段与透传守卫]")
+    # §四：S5 写进 phonon_summary.json 的字段必须覆盖 spec 第一条全部 + stability_verdict + imag_policy_refs
+    for _k in ("verdict", "imag_class", "min_freq_THz", "min_freq_cm1", "q_at_min_frac",
+               "q_norm_at_min", "branch_at_min", "n_neg_qpoints", "thresholds",
+               "policy_version", "stability_verdict", "imag_policy_refs"):
+        check('phonon_summary.json 写 "%s"' % _k, ('"%s"' % _k) in kfb)
+    check("S5 日志含 cm-1（THz 与 cm-1 同打）", "cm-1" in kfb)
+    # §五：kappa_summary.json 透传 + warn_note + 收敛检查建议
+    g6 = _src("skill/kl-dft-cpu/gen_step6_kappa.py")
+    for _k in ("stability_verdict", "imag_class", "min_freq_THz", "warn_note"):
+        check("kappa_summary 透传 %s" % _k, _k in g6)
+    check("warn_note 给出收敛检查建议（真空层/超胞/应力/k 网格 + Lin 2022）",
+          ("真空层厚度" in g6) and ("Lin et al. 2022" in g6), "")
+    check("mlff 两个 driver 调用 classify_imag",
+          ("classify_imag" in m_cpu) and ("classify_imag" in m_gpu))
+    # §四：S5.1 mlff 之外，S6 的 lattice_kappa 也不再自带阈值
+    check("S5.1 图注用 _imag_annotation",
+          "_imag_annotation" in s51 and "近Γ声学支软化" in s51)
+
     print()
     if FAILED:
         print("FAILED: %d 项 -> %s" % (len(FAILED), ", ".join(FAILED)))
