@@ -89,11 +89,18 @@ STEP_LABEL  = "S8.4_amset2d"
 # patch_overlap_preflight（V24/V25.10）：作业内先跑运行前检查（--in-job）——
 #   本目录里 wavefunction.h5 / vasprun.xml / ../step3_uniform 都在，四项检查全生效；
 #   不过就 exit 1。脚本由 _install_preflight 复制进运行目录。
-AMSET_CMD   = ('python overlap_preflight.py --in-job || exit 1; '
+# patch_v63（2026-09-22）：把「落成 transport.json」从链中间挪到链尾（见 render 处），
+#   并先 `rm -f transport.json` 删旧产物。原因：autozt 的 marker 判据只查
+#   transport.json 存在+子串，若后处理失败而 transport.json 已生成，该步会被判成
+#   finished(OK)，把失败隐藏掉（VERIFICATION V63）。
+AMSET_CMD   = ('rm -f transport.json; '
+               'python overlap_preflight.py --in-job || exit 1; '
                'python -c "import amset2d_plugin; '
                'from amset.log import initialize_amset_logger as L; L(); '
                'from amset.core.run import Runner; Runner.from_directory(\'.\').run()" '
-               '>> amset.log 2>&1 && cp -f "$(ls -t transport_*.json 2>/dev/null | head -1)" '
+               '>> amset.log 2>&1')
+# 链尾（patch_v63）：位于可选的后处理之后，后处理失败则不会生成 transport.json。
+AMSET_TAIL  = (' && cp -f "$(ls -t transport_*.json 2>/dev/null | head -1)" '
                'transport.json && ls -l transport.json')
 # --- 输运设置（可改）---
 DOPING      = "-1e21:-1e17:5, 1e17:1e21:5"   # n 型 + p 型各 5 点（对数均布）cm^-3
@@ -1589,9 +1596,16 @@ def main():
     # 自动接进作业链——否则 mesh.h5 白写、本征结果永远要人工补跑一次（用户指出
     # 「不是切换环境就自动对」）。--check-reproduce 是硬门：重积分必须复现原
     # transport.json，复现不了直接失败，绝不静默产出不可信的本征数。
+    # patch_v63（2026-09-22）：把「落成 transport.json」挪到后处理**之后**。
+    #   原顺序 AMSET -> cp transport.json -> postprocess：postprocess 一旦失败，
+    #   transport.json 已存在，autozt 判据（marker: transport.json:...）会把该步
+    #   判成 finished(OK)，**后处理失败被隐藏**（VERIFICATION V63）。
+    #   新顺序 AMSET -> postprocess -> cp transport.json：失败则 transport.json
+    #   不生成，判据自然 not-done，失败可见。链首的 rm -f 清掉上次残留。
     _acmd = AMSET_CMD
     if WRITE_MESH:
         _acmd = _acmd + " && python postprocess_intrinsic.py --check-reproduce"
+    _acmd = _acmd + AMSET_TAIL
     text = (text.replace("{{JOBNAME}}", jobname)
                 .replace("{{AMSET_CMD}}", _acmd)
                 .replace("{{AMSET_ENV}}", AMSET_ENV_NAME))
