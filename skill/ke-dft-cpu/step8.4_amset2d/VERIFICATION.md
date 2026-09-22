@@ -4105,3 +4105,25 @@ Christoffel 特征值**全非零** → 声速有限 → ADP 正常。
    故**不应期望完全一致**）。
 
 **注**：`CONDA_SH` 指向 3090 路径的告警是**已知虚警**（模板 `if/else` 会兜底到 jzzn 路径）。
+
+### V80. 第 172 轮：🎯 **MoS2 走通 S7→S7.1_read→S8**（S8 首次提交，jobid 3886078）
+
+**S7 完成情况**：10 个作业全 **COMPLETED**（ExitCode `0:0`），单点全部产出，
+**面内集 `{01,02,03,04,09}` 口径一致**（均 ionrelax；05–08 面外，无 ionrelax）——符合 V43 判据。
+
+**S7.1_read**：`retry`+`start` 成功，生成 `deformation.h5` 并回拉；**新 h5 验证正确**：
+
+| 项 | 值 | 判定 |
+|---|---|---|
+| attrs | `nspin_norm_fixed=skipped`, `reason=amset>=0.5.1` | ✅ 0.5.1 原生 |
+| 自旋通道 | **只有 `deformation_potentials_up`** | ✅ **ISPIN=1**（MoS2 非自旋极化，故无 down、无需 ×2 修复）|
+| k 点数 | **2209**（47×47；**旧为 225 = 15×15**）| ✅ **新网格已生效**（V67 的进一步确认）|
+| 量级 | `deformation.h5` 1.78674 / `deformation_vac.h5` 1.91726 | ✅ 正常（非减半值）|
+
+**S8_kappa（首次）**：`start` 自动 gen + 提交 → **jobid 3886078**（PD）。
+其 `settings.yaml` 口径健康：`scattering_type=[ADP,IMP,POP]`、`deformation_potential=deformation.h5`、
+`unity_overlap=true`；**弹性对角 `[214.46, 214.46, 1.85, 2.455, 2.455, 82.56]`（C44/C55 非零）**、
+`elastic_outofplane_shear_zeroed=[]` —— 即 MoS2 **本就不触发 V76 的置零问题**，ADP 应正常。
+
+**下一步**：S8 跑完 → **S8.4**（`WRITE_MESH=true` 已配置，V53）→ 届时产出 `mesh.h5` +
+`intrinsic_transport.json`，是**首个真正验证 strict intrinsic 端的真实作业**（此前只有桩测）。
