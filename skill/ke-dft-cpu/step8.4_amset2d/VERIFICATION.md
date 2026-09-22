@@ -3051,3 +3051,41 @@ if "_up" in key or "_down" in key:
 在 0.5.1 下原生正确且不留标记位）→ `retry`+`start S8_kappa`。
 仅 `S7_deform` 完成**不会**自动让 S8 失效/重跑——autozt 仍显示 OK，**必须显式 retry S7.1_read/S8**。
 
+
+### V46. 第 9 轮：strict intrinsic 后处理的实机验证 + CrSe2_ortho 首条全链走通（2026-09-22）
+
+**① `read_mesh_h5` / `split_mesh_key` 实机验证**（jzzn amset051 环境，构造与 AMSET
+`write_mesh` 真实输出同形的 h5：bug 键名 `*_up`/`*_up_down` + ir 映射 + 多机制 rates）：
+
+| 检查项 | 结果 |
+|---|---|
+| `split_mesh_key("energies_up")` | `('energies','up')` ✅ |
+| `split_mesh_key("energies_up_down")` | `('energies','down')` ✅ **（修正上游 bug 的关键）** |
+| `split_mesh_key("scattering_rates_up_down")` | `('scattering_rates','down')` ✅ |
+| `read_mesh_h5` down 通道取值 | 取到 ×2 的那份数据集 ✅ |
+| `expand_ir_to_full` | 3 ir → 5 full ✅ |
+| 无 mesh 时报错 | `FileNotFoundError`，**不静默产出** ✅ |
+| `--check-reproduce` 失败路径 | 抛 `SystemExit` 且**不写文件** ✅（硬门） |
+
+**② CrSe2_ortho 是首个走完整链的材料**（可作为其余材料与 CrS2_* 的流程模板）：
+`S7_deform`（补 ionrelax → **OK 10/10**）→ `retry S7.1_read`（`amset deform read` @0.5.1，
+**形变势 mean 0.7333 → 1.4834 = ×2.024**，attrs 记 `nspin_norm_fixed:'skipped'` /
+`reason:'amset>=0.5.1'`）→ `retry`+`start S8_kappa`（**3884993**）。
+其 S8.4 前置检查实机确认 `AMSET 版本 = 0.5.1`、`unity_overlap = True`
+（走 V21 判定的稳定单位重叠路径，非 CrSe2_hex 那种真实重叠风险路径）。
+
+**③ 模板一致性核查**：12 个 jap 项目的 `step4_wave`/`step8_amset` `submit_amset.tpl`
+均已改为 `{{AMSET_ENV}}`（硬编码 `amset_clean` = 0 处）。**例外且为有意**：
+`CrSe2_hex/.../step8.4_amset2d/submit_amset.tpl` 硬写 `conda activate amset051`
+（文件头注明"本文件仅用于 CrSe2 的 S8.4 对比轮/最终轮，全局 setting 不动，留到 (e) 审"），
+因不含 `{{AMSET_ENV}}` 占位符，gen 的残留 guard 不会误报。
+
+**④ 两条虚警已排除**（勿再当故障）：① VASP 的 `FORTRAN STOP` + `ieee_*` 是**正常退出横幅**，
+判据看 `OUTCAR` 是否含 `reached required accuracy`；② `CONDA_SH` 指向 3090 路径的告警，
+模板 `if [ -d /home/wangchaoyue852/miniconda3 ]` 的 `else` 分支在 jzzn 上正确兜底。
+另：`autozt` 曾因 `/mnt/d`（WSL 9p）瞬时故障抛 `OSError: Bad address`，重跑即恢复，非代码问题。
+
+**⑤ 禁止用进度条日志做健康判据**：`amset.log`/`queue.out` 里 `inelastic: N%` 这类进度条
+单行极长，读一次会淹没上下文。健康判据改用**文件 mtime + 大小单调增长**，
+或只 `grep -vE "│|├|%\|"` 取非进度条行。
+
