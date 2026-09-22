@@ -348,9 +348,16 @@ def _quarantine_stale_dataset(out):
     返回是否真的移动了东西。
     """
     import shutil as _sh
-    dst = out / "symmetry_audit" / "pre_symmetry_dataset"
+    import time as _time
+    # ★ 目的目录必须**每次隔离一个新的时间戳子目录**：旧版一直往同一个 pre_symmetry_dataset/
+    #   里 move，与上次的同名目录撞名 → shutil.move 把源搬进目标里面（嵌套）或报错留下半搬状态；
+    #   残留的 disp-* 只被新一轮覆盖了 POSCAR、旧 CONTCAR 还在 ⇒ S5 的"抽帧一致性"闸判
+    #   "力与位移不对应"（2026-09-22 实测）。
+    _base = out / "symmetry_audit" / "pre_symmetry_dataset"
+    dst = _base / (_time.strftime("%Y%m%d-%H%M%S")
+                   + "-%03d" % (int(_time.time() * 1000) % 1000))
     try:
-        dst.mkdir(parents=True, exist_ok=True)
+        dst.mkdir(parents=True, exist_ok=False)
     except OSError as e:
         print("[WARN] 无法建 %s（%s），跳过隔离" % (dst, e))
         return False
