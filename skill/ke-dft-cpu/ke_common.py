@@ -308,6 +308,26 @@ def new_jobname(cwd: Path, step_label: str):
     return "%s-ke-dft-cpu-%s" % (cwd.name, step_label)
 
 
+def amset_env_name(cwd=None, fallback="amset_clean"):
+    """AMSET 运行环境名：读 step.conf 的 [params] AMSET_ENV。
+
+    AMSET_ENV 由 autozt 从 setting/<集群>.yaml 的 amset_env 注入 step.conf
+    （autozt/report.py，标签 [cluster:<hpc>]），项目级 step.conf 可覆盖。
+    gen 的 cwd 是材料目录、step.conf 就在那儿；缺失或解析失败时回退
+    fallback（本地直跑 / 旧项目）。用于渲染 submit_amset.tpl 的 {{AMSET_ENV}}。
+    """
+    try:
+        import stepconf as _sc
+        base = Path(cwd) if cwd else Path(".")
+        txt = (base / _sc.CONF_NAME).read_text(encoding="utf-8-sig")
+        for k, v, _t in _sc.parse(txt, _sc.CONF_NAME).get("params", []):
+            if k.upper() == "AMSET_ENV" and v:
+                return v
+    except Exception:
+        pass
+    return fallback
+
+
 def patch_submit_jobname(submit: Path, jobname: str):
     text = submit.read_text(encoding="utf-8")
     text = text.replace("{{JOBNAME}}", jobname)

@@ -334,5 +334,5 @@ flow:
 corrections: [node_fail, dir_missing]
 requires:
   python: [pymatgen, numpy, matplotlib, amset, BoltzTraP2]
-  conda: amset_clean
+  conda: amset051
   exe: [vasp_std, vaspkit]

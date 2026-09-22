@@ -838,12 +838,13 @@ def expand_spec(spec, log):
 def read_pop_frequency(dielect_dir):
     """用 AMSET 官方 phonon-frequency 命令计算有效 POP 频率。"""
     import subprocess
+    _amset = kc.amset_env_name() if _HAS_KC else "amset_clean"
     commands = [["amset", "phonon-frequency", "-o", "OUTCAR", "-v", "vasprun.xml"]]
     # 远端 gen 由 taskflow 的 Python 直接执行，非交互 shell 未必加载 conda；
-    # 使用配置约定的 amset_clean 作为无 shell 的兜底，避免误报“缺少 POP”。
-    commands.append(["/opt/miniconda3/bin/conda", "run", "--no-capture-output", "-n", "amset_clean",
+    # 用 step.conf 的 AMSET_ENV（kc.amset_env_name()）作无 shell 兜底，避免误报“缺少 POP”。
+    commands.append(["/opt/miniconda3/bin/conda", "run", "--no-capture-output", "-n", _amset,
                      "amset", "phonon-frequency", "-o", "OUTCAR", "-v", "vasprun.xml"])
-    commands.append(["conda", "run", "--no-capture-output", "-n", "amset_clean",
+    commands.append(["conda", "run", "--no-capture-output", "-n", _amset,
                      "amset", "phonon-frequency", "-o", "OUTCAR", "-v", "vasprun.xml"])
     for command in commands:
         try:
@@ -1251,7 +1252,12 @@ def main():
     jobname = ("%s-ke-dft-cpu-%s" % (cwd.name, STEP_LABEL)) if not _HAS_KC \
         else kc.new_jobname(cwd, STEP_LABEL)
     text = tpl.read_text(encoding="utf-8")
-    text = text.replace("{{JOBNAME}}", jobname).replace("{{AMSET_CMD}}", AMSET_CMD)
+    _amset_env = kc.amset_env_name(cwd) if _HAS_KC else "amset_clean"
+    text = (text.replace("{{JOBNAME}}", jobname)
+                .replace("{{AMSET_CMD}}", AMSET_CMD)
+                .replace("{{AMSET_ENV}}", _amset_env))
+    if "{{AMSET_ENV}}" in text:
+        sys.exit("[ERROR] submit_amset.tpl 的 {{AMSET_ENV}} 未填充（step.conf 缺 AMSET_ENV？）")
     submit.write_text(text, encoding="utf-8", newline="\n")
     stepconf.apply_submit(submit, stepconf.read_submit(stepconf.CONF_NAME))
     print("[DONE] %s：settings.yaml + 软链就绪，提交后 amset run 产出 transport.json"

@@ -57,7 +57,7 @@ def _amset_env_src():
         pass
     if _os.path.isdir("/home/wangchaoyue852/miniconda3"):
         return "source /home/wangchaoyue852/miniconda3/etc/profile.d/conda.sh && conda activate amset"
-    return "source /public/home/wangchao/miniconda3/etc/profile.d/conda.sh && conda activate amset_clean"
+    return "source /public/home/wangchao/miniconda3/etc/profile.d/conda.sh && conda activate amset051"  # 2026-09-22 全局切 0.5.1
 AMSET_ENV_SRC = _amset_env_src()
 DEFORM_GLOB  = "*deform*"      # 与 skill.yaml 的 fanout 一致
                                # （同时匹配 deform-NNN 和 undeformed，两者都要交）

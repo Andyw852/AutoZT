@@ -65,7 +65,12 @@ def main():
     text = tpl.read_text(encoding="utf-8")
     jobname = ("%s-ke-dft-cpu-%s" % (cwd.name, STEP_LABEL)) if not _HAS_KC \
         else kc.new_jobname(cwd, STEP_LABEL)
-    text = text.replace("{{JOBNAME}}", jobname).replace("{{AMSET_CMD}}", AMSET_CMD)
+    _amset_env = kc.amset_env_name(cwd) if _HAS_KC else "amset_clean"
+    text = (text.replace("{{JOBNAME}}", jobname)
+                .replace("{{AMSET_CMD}}", AMSET_CMD)
+                .replace("{{AMSET_ENV}}", _amset_env))
+    if "{{AMSET_ENV}}" in text:
+        sys.exit("[ERROR] submit_amset.tpl 的 {{AMSET_ENV}} 未填充（step.conf 缺 AMSET_ENV？）")
     submit.write_text(text, encoding="utf-8", newline="\n")
     stepconf.apply_submit(submit, stepconf.read_submit(stepconf.CONF_NAME))
     print("[OK] submit.sh 填好 amset 命令")

@@ -15,7 +15,7 @@ if [ -z "$M" ] || [ -z "$NEWD" ]; then echo "用法: $0 <材料> <DFPT目录> [-
 [ -f "$NEWD/OUTCAR" ] || { echo "[ERROR] $NEWD/OUTCAR 不存在"; exit 1; }
 
 source /public/home/wangchao/miniconda3/etc/profile.d/conda.sh
-conda activate amset_clean >/dev/null 2>&1
+conda activate amset051 >/dev/null 2>&1
 
 echo "===== $M ====="
 # ---- 0) 先用数值校验器把关新 DFPT 产物（NaN/单位矩阵/求和规则等）----

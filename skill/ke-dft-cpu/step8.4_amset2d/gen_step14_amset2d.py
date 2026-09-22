@@ -42,6 +42,12 @@ try:
 except Exception:
     _HAS_KC = False
 
+# === AMSET 环境名（2026-09-22，全局切 0.5.1）：由 step.conf 的 AMSET_ENV 驱动 ===
+# tf 从 setting/<集群>.yaml 的 amset_env 注入 step.conf，项目级可覆盖；
+# 缺失时 kc.amset_env_name() 内部兜底 amset_clean（本地直跑 / 旧项目）。
+AMSET_ENV_NAME = kc.amset_env_name() if _HAS_KC else "amset_clean"
+
+
 # =========================== 可改参数区 ===========================
 # ---------- 体系判别阻断（step2.15_discriminant）----------
 # False = 默认拦截 SEMIMETAL/METAL@PBE（这套半导体框架不适用）。
@@ -876,11 +882,10 @@ def read_pop_frequency_2d(dielect_dir):
     # 用**绝对路径**调 helper：cwd 必须是 step5_dielect（OUTCAR/vasprun.xml 在那儿），
     # 而 helper 自己躺在 gen 脚本目录里。
     script = ("%s '%s'" % (helper.name, str(Path(dielect_dir))))
-    amset_env_name = os.environ.get("AMSET_ENV", "amset_clean")  # 读环境变量，无则兜底 amset_clean
     commands = [["python", str(helper), "OUTCAR", "vasprun.xml"],
                 ["/opt/miniconda3/bin/conda", "run", "--no-capture-output",
-                 "-n", amset_env_name, "python", str(helper), "OUTCAR", "vasprun.xml"],
-                ["conda", "run", "--no-capture-output", "-n", amset_env_name,
+                 "-n", AMSET_ENV_NAME, "python", str(helper), "OUTCAR", "vasprun.xml"],
+                ["conda", "run", "--no-capture-output", "-n", AMSET_ENV_NAME,
                  "python", str(helper), "OUTCAR", "vasprun.xml"]]
     err_tail = ""
     for command in commands:
@@ -1097,7 +1102,7 @@ def read_pop_frequency_3d(dielect_dir):
     read_pop_frequency_2d() 的 Γ 点面内极性模频率。
     """
     import subprocess
-    amset_env_name = os.environ.get("AMSET_ENV", "amset_clean")  # 读 AMSET_ENV，无则兜底 amset_clean
+    amset_env_name = AMSET_ENV_NAME  # 由 step.conf 的 AMSET_ENV 驱动（见文件顶部 helper）
     commands = [["amset", "phonon-frequency", "-o", "OUTCAR", "-v", "vasprun.xml"]]
     # 远端 gen 由 taskflow 的 Python 直接执行，非交互 shell 未必加载 conda；
     # 用 AMSET_ENV（集群 yaml 注入）指定的环境作为无 shell 的兜底，避免误报“缺少 POP”。
@@ -1576,7 +1581,9 @@ def main():
     jobname = ("%s-ke-dft-cpu-%s" % (cwd.name, STEP_LABEL)) if not _HAS_KC \
         else kc.new_jobname(cwd, STEP_LABEL)
     text = tpl.read_text(encoding="utf-8")
-    text = text.replace("{{JOBNAME}}", jobname).replace("{{AMSET_CMD}}", AMSET_CMD)
+    text = text.replace("{{JOBNAME}}", jobname).replace("{{AMSET_CMD}}", AMSET_CMD).replace("{{AMSET_ENV}}", AMSET_ENV_NAME)
+    if "{{AMSET_ENV}}" in text:
+        sys.exit("[ERROR] submit_amset.tpl 的 {{AMSET_ENV}} 未填充（step.conf 缺 AMSET_ENV？）")
     submit.write_text(text, encoding="utf-8", newline="\n")
     stepconf.apply_submit(submit, stepconf.read_submit(stepconf.CONF_NAME))
     # ---- patch_overlap_preflight：重叠路径的运行前检查（VERIFICATION V24）----
