@@ -3843,3 +3843,27 @@ static 正在跑"误判成 static 已完成（本轮 `deform-09` 就出现过：
 ```
 即 **CrS2_ortho 的 4 个面内分量已两段完成，只剩 09 的 static**。
 （更早几轮我把 09 报成"仍在 relax"是判据粗糙所致；relax 其实已经收敛。）
+
+### V72. 第 86 轮：**CrS2_ortho 走通 S7→S7.1_read**，新 h5 验证正确（2026-09-22 23:09）
+
+**里程碑**：CrS2_ortho 的 S7_deform 状态 **OK 10/10**（deform-09 于 23:0x COMPLETED，
+sacct ExitCode 0:0），随后 retry+start S7.1_read **成功且未触发 mixed 口径报错**
+（证明 V56/V71 判断的面内口径已齐）。
+
+**新 deformation.h5 实测（jzzn amset051）**：
+
+| 文件 | attrs | up mean | down mean | k 点数 |
+|---|---|---|---|---|
+| deformation.h5 | nspin_norm_fixed=skipped, reason=amset>=0.5.1, version=0.5.1 | 1.51867 | 1.51866 | **2304** |
+| deformation_vac.h5 | 同上 | 1.65377 | 1.65376 | **2304** |
+
+**四项都正确**：
+1. **0.5.1 原生**（skipped，非本地补丁）——与 CrSe2_ortho（V49）同一模式；
+2. **up/down 简并**（差 1e-5）——ISPIN=2 无磁体系的必须结果；
+3. **k 点 225 → 2304**（×10）——**旧的 stale 网格（15×15×1）已彻底换掉**，
+   这正是 V56 判定"4 个材料旧结果失效"的直接证据；
+4. 形变势量级 1.5–1.65 eV，落在正常范围（非减半值 ~0.7）。
+
+**至此两个材料走通全链**：CrSe2_ortho（V49）、**CrS2_ortho（本轮）**。
+两者互相印证：0.5.1 原生 + 无磁性 + 新网格 → h5 正确。
+下一步 S8_kappa 已 retry+start（用新 h5 重算输运）。
