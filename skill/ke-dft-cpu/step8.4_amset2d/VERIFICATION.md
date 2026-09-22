@@ -2986,3 +2986,41 @@ S7 10 个作业 3864418–3864427 全部 COMPLETED、ExitCode 0:0（独立 sacct
 
 
 
+
+### V44.1 上游复验结论（2026-09-22 第 5 轮，只读源码 + 实机 A/B）—— **0.5.1 仍未修**
+
+V44 留的待办「升级 0.5.1 后复验上游是否已修」已执行，结论：**未修，且两版同源**。
+
+**① 源码（jzzn `envs/amset051`，amset 0.5.1，`inspect.getsource`）**：
+
+```python
+# amset/io.py::write_mesh —— key 在【内层 for】里被改写
+for key, value in mesh_data.items():
+    if isinstance(value, dict):
+        for spin, spin_value in value.items():
+            key = f"{key}_{spin.name}"     # ← 第一次 "energies_up"；第二次变 "energies_up_down"
+            add_data(key, spin_value)
+```
+
+```python
+# amset/io.py::load_mesh —— split("_")[-1] 解析，"energies_up_down" -> down
+if "_up" in key or "_down" in key:
+    spin = str_to_spin[key.split("_")[-1]]
+    key = key.replace(f"_{spin.name}", "")   # "energies_up_down" -> "energies_up"（错！应为 energies）
+```
+
+**② 实机 A/B**：构造与 write_mesh 真实输出同形的 h5（`energies_up`=`energies_up_down`=7），
+分别用官方 `amset.io.load_mesh` 与本步 `read_mesh_h5` 读：
+
+| | AMSET 官方 load_mesh | postprocess_intrinsic.read_mesh_h5 |
+|---|---|---|
+| 顶层键 | `energies`, **`energies_up`（伪键）**, `scattering_rates`, **`scattering_rates_up`（伪键）** | `energies`, `scattering_rates` ✅ |
+| up 通道 | `energies['1']` | ✅ |
+| **down 通道** | **错位/丢失** | **正确归位 = 7.0** ✅ |
+
+**③ 处置**：维持「**不要用 `amset.io.load_mesh` 读 ISPIN=2 的 mesh.h5**」；
+`postprocess_intrinsic.py` 自带修正读取是**必需**的，不是可选优化。
+两版 `io.py` 逐字节相同（md5 `9c5015dd…`），故该 bug **与 0.4.19→0.5.1 升级无关**，
+升级不会引入也不会消除它。单元测试 `test_postprocess_intrinsic.py` 的
+`read_mesh_h5` 用例（在 amset051 环境实跑）已覆盖此场景。
+
