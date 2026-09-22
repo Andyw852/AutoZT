@@ -325,6 +325,12 @@ def amset_env_name(cwd=None, fallback="amset_clean"):
                 return v
     except Exception:
         pass
+    # 2026-09-22（全局切 0.5.1）：绝不能再"静默"回退——旧默认 amset_clean 是 0.4.19，
+    # 静默回退会让形变势又被减半且毫无提示。这里强制打印醒目警告，并回报实际用的环境名。
+    import sys as _sys
+    print("[WARN] step.conf 里没读到 AMSET_ENV，回退到 %r —— 若这不是本集群的 AMSET 环境，"
+          "本步结果会口径错误（0.4.19 的 ISPIN=2 形变势会减半）。请在 step.conf 写 "
+          "AMSET_ENV=<集群环境名>。" % fallback, file=_sys.stderr)
     return fallback
 
 
