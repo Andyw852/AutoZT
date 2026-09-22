@@ -108,16 +108,32 @@ def main():
     check("区外 -0.06 → fail", r4["verdict"] == "fail")
     check("区外 -0.06 → off_gamma", r4["imag_class"] == "off_gamma", r4["imag_class"])
 
-    print("[5. |q|_frac 边界：恰好 0.05 按【区外】处理]")
+    print("[5. |q|_frac 边界 + grace 带（IMAG_QGAMMA_GRACE=1.2，用户 2026-09-22 批准）]")
     qb = [0.0, 0.05, 0.0]
     nb = ip.q_norm_frac(qb, True, _MOS2_VAC)
-    check("|q|_frac(0.05) >= 0.05（严格小于才算近 Γ）", nb >= 0.05, nb)
+    check("|q|_frac(0.05) >= 0.05", nb >= 0.05, nb)
     rb = _cls(_acoustic(-0.20), qb)
-    check("边界 -0.20 → off_gamma（不是 near_gamma_large）",
-          rb["imag_class"] == "off_gamma", rb["imag_class"])
+    check("|q|=0.05 落在 grace 带内 → near_gamma_large（不再 off_gamma）",
+          rb["imag_class"] == "near_gamma_large" and rb["verdict"] == "fail", rb["imag_class"])
     rb2 = _cls(_acoustic(-0.20), [0.0, 0.049, 0.0])
-    check("略小于边界 0.049 → near_gamma_large",
-          rb2["imag_class"] == "near_gamma_large", rb2["imag_class"])
+    check("|q|=0.049 → near_gamma_large", rb2["imag_class"] == "near_gamma_large",
+          rb2["imag_class"])
+    # 真实 MoS₂ 的边界点：ν=−0.0503 @ q=(0, 0.03667, 0.03667)，|q|=0.0519（只超 Petretto 窗口 3.8%）
+    _qreal = [0.0, 0.0366667, 0.0366667]
+    _nreal = ip.q_norm_frac(_qreal, True, _MOS2_VAC)
+    check("真实边界点 |q|≈0.0519", abs(_nreal - 0.0518513) < 1e-4, round(_nreal, 5))
+    rr = _cls(_acoustic(-0.0503), _qreal)
+    check("真实边界点 → near_gamma_acoustic / warn（grace 生效）",
+          rr["imag_class"] == "near_gamma_acoustic" and rr["verdict"] == "warn",
+          "%s/%s" % (rr["verdict"], rr["imag_class"]))
+    r0 = ip.classify_imag([_acoustic(-0.0503)], [_qreal], True, _MOS2_VAC,
+                          {"IMAG_QGAMMA_GRACE": 1.0})
+    check("grace=1.0 → 同一点退回 off_gamma / fail",
+          r0["imag_class"] == "off_gamma" and r0["verdict"] == "fail",
+          "%s/%s" % (r0["verdict"], r0["imag_class"]))
+    rb3 = _cls(_acoustic(-0.06), [0.0, 0.065, 0.0])
+    check("|q|=0.065（grace 带外）→ off_gamma / fail",
+          rb3["imag_class"] == "off_gamma" and rb3["verdict"] == "fail", rb3["imag_class"])
 
     print("[6. 3D 输入：位置规则相同、不触发 ZA]")
     r6 = ip.classify_imag([_acoustic(-0.06)], [[0.02, 0.02, 0.02]], False, None)

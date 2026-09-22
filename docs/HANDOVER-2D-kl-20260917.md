@@ -2663,6 +2663,46 @@ autozt -tt kl-dft-cpu -p MoS2_kltest -j S2_static start   # 预期：报"确认�
 - 另外注意：**MoS2_kltest 的项目级 step.conf 仍写 `IMAG_THR = 0.10`**（§46.4），
   对称化链的 S5 会读 0.10 而不是新默认 0.15。
 
+### ★ 46.5.2 新增证据（2026-09-22，本轮）：对称化后过新策略 = pass
+
+用同一份 fc2 做两个版本、同一套合并集（`[1,60,60]` 网格 + 101 点 2D 路径）：
+
+| fc2 版本 | verdict / imag_class | min (THz) | 负频条目 |
+|---|---|---|---|
+| 原始（symprec 1e-5，Amm2）| **fail / off_gamma** | −0.05663 | 18（12 noise + 5 near_gamma_acoustic + 1 off_gamma）|
+| **对称化投影**（symprec 1e-4 + `symmetrize_force_constants`）| **pass / noise** | **−0.0000** | 3（全是 ~0 噪声）|
+
+- ⇒ **边界敏感性只影响"对旧（未对称化）数据的重判"**；对称化链的 S5 预期**直接 pass**，
+  不会被 46.5.1 的 off_γ 边界问题挡住 S6。
+- （说明：这个"对称化投影"是 §37 的事后近似——对已拟合的 fc2 做对称性投影；真实 S5 是拿对称化
+  结构**重新拟合**，结论应更干净。两者一致指向 pass。）
+
+---
+
+# 46.6 用户批准的 grace 因子（2026-09-22）—— 边界敏感性已消除
+
+- **决策（用户选定）**：给近 Γ **声学支**加 grace ——
+  **有效窗口 = `IMAG_QGAMMA × IMAG_QGAMMA_GRACE`（默认 1.2）**；新增参数 `IMAG_QGAMMA_GRACE`
+  （`1.0` = 退回 §二 的严格 Petretto 口径，无需改代码）。**光学支不受影响**。
+  `thresholds` 里同时给出 `IMAG_QGAMMA`、`IMAG_QGAMMA_GRACE`、`IMAG_QGAMMA_EFFECTIVE` 三个值。
+- **动机**（§46.5.1 记录）：未对称化 MoS₂ 的 ZA 软模在 |q|∈(0,0.061) 为负；101 点路径上有一个点落在
+  **|q|=0.0519（ν=−0.0503，仅超 Petretto 窗口 3.8%）**，严格口径把它升格 `off_gamma` → 整体 fail。
+- **影响（对真实 fc2 重跑，同一合并集 `[1,60,60]` + 101 点路径）**：
+
+| 材料 | grace=1.0（严格）| **grace=1.2（现行）** |
+|---|---|---|
+| `MoS2_kltest` | fail / off_gamma | **warn / near_gamma_acoustic**（min −0.0566）|
+| `P1_Mo-MoS2_Z4-3-1_Z4-3-1_Mo2S3` | warn / near_gamma_acoustic | warn / near_gamma_acoustic（min −0.0722）|
+
+- ⇒ §46.5.1 的"MoS₂ = fail"与 §46.5 表里的 fail 行**已被本节取代**；现在两个 2D 材料都是 **warn**
+  （S6 放行），与 spec §六 的期望一致。
+- ⚠️ **对 spec §六 的一处有意偏离**：`|q|_frac 恰为 0.05` 现在落在 grace 带内（`0.05 < 1.2×0.05`）
+  ⇒ 该点的声学升格被抑制：ν=−0.06 → `near_gamma_acoustic(warn)` 而不是 `off_gamma(fail)`。
+  单测已按此更新，并新增三条：真实边界点 `|q|=0.0519 → warn`；`IMAG_QGAMMA_GRACE=1.0 → off_gamma/fail`；
+  `|q|=0.065（带外）→ off_gamma/fail`。
+- `templates/step5_fc/step.conf` 与 `skill.yaml` 已声明该参数（`suite_io_schema` 通过）；
+  回归 `python3 -m pytest tests/test_suites.py -q` → **19 项全过**。
+
 ---
 
 # 45. 2026-09-22：本轮遇到的 bug 全部落到代码（防新料复发）

@@ -18,7 +18,12 @@ S5 是唯一调用方/唯一裁判，其余位置读 S5 的结论。
 
 ## 判据
 
-**近 Γ 区**：`|q|_frac < IMAG_QGAMMA`（**严格小于**）。
+**近 Γ 区**：`|q|_frac < IMAG_QGAMMA`（**严格小于**；Petretto 窗口）。
+★ **声学支的"有效近 Γ 窗口"= `IMAG_QGAMMA × IMAG_QGAMMA_GRACE`**（默认 1.2，用户 2026-09-22 批准）：
+  目的是让**同一条近 Γ 软模**跨越 0.05 边界时**不再被升格为 fail**。
+  实测背景：未对称化 MoS₂ 的 ZA 软模在 |q|∈(0,0.061) 为负，101 点路径上一个点落在
+  |q|=0.0519（ν=−0.0503）—— 只比窗口大 3.8%，却因"区外 + |ν|>STRICT"把整体从 warn 升成 fail。
+  `IMAG_QGAMMA_GRACE=1.0` 即退回 §二 的原始严格口径。
 `|q|_frac` 的定义 = 分数坐标向量**去掉真空轴分量**后的欧氏范数（3D 用全部三个分量）。
 依据：Petretto et al., Sci. Data 5, 180065 (2018) 用 `0 < |q| < 0.05` 的窗口做声子失稳标记。
 
@@ -56,6 +61,7 @@ DEFAULTS = {
     "IMAG_THR": 0.15,          # 近 Γ 声学支上限 (THz) = 5 cm^-1（Petretto 2018）
     "IMAG_THR_STRICT": 0.05,   # 噪声底；近 Γ 区外与光学支的上限 (THz)
     "IMAG_QGAMMA": 0.05,       # 近 Γ 半径（分数坐标，Petretto 2018）
+    "IMAG_QGAMMA_GRACE": 1.2,  # 声学支有效近 Γ 窗口 = IMAG_QGAMMA × 它（1.0 = 退回严格口径）
 }
 
 POLICY_REFS = [
@@ -127,6 +133,8 @@ def classify_imag(freqs, qpoints_frac, is2d, vac_axis, cfg=None):
     thr = _get(cfg, "IMAG_THR")
     strict = _get(cfg, "IMAG_THR_STRICT")
     qg = _get(cfg, "IMAG_QGAMMA")
+    grace = _get(cfg, "IMAG_QGAMMA_GRACE") or 1.0
+    qg_eff = qg * grace             # 声学支的有效近 Γ 半径（grace=1.0 时等于 Petretto 窗口）
     freqs = list(freqs or [])
     qpts = list(qpoints_frac or [])
 
@@ -145,7 +153,9 @@ def classify_imag(freqs, qpoints_frac, is2d, vac_axis, cfg=None):
             continue
         qf = qpts[qi] if qi < len(qpts) else None
         qnorm = q_norm_frac(qf, is2d, vac_axis)
-        near = (qnorm is not None and qnorm < qg)
+        # 声学支用带 grace 的有效窗口；光学支不受影响（见上方 docstring）
+        near = (qnorm is not None and qnorm < qg_eff)
+        near_strict = (qnorm is not None and qnorm < qg)
         if any(x < 0.0 for x in fr):
             n_neg_q += 1
         for bi, nu in enumerate(fr):
@@ -178,10 +188,16 @@ def classify_imag(freqs, qpoints_frac, is2d, vac_axis, cfg=None):
         "q_norm_at_min": (gmin[3] if gmin else None),
         "branch_at_min": (gmin[2] if gmin else None),
         "n_neg_qpoints": n_neg_q,
-        "thresholds": {"IMAG_THR": thr, "IMAG_THR_STRICT": strict, "IMAG_QGAMMA": qg,
-                       "near_gamma": "|q|_frac < IMAG_QGAMMA（严格小于）",
+        "thresholds": {"IMAG_THR": thr, "IMAG_THR_STRICT": strict,
+                       "IMAG_QGAMMA": qg, "IMAG_QGAMMA_GRACE": grace,
+                       "IMAG_QGAMMA_EFFECTIVE": qg_eff,
+                       "near_gamma": ("声学支：|q|_frac < IMAG_QGAMMA × IMAG_QGAMMA_GRACE（=%.4g）；"
+                                      "Petretto 严格窗口 = |q|_frac < IMAG_QGAMMA（=%.4g）"
+                                      % (qg_eff, qg)),
                        "q_norm_def": "分数坐标去掉真空轴分量后的欧氏范数（3D 用三分量）",
                        "IMAG_THR_semantics": "近 Γ 声学支上限（不是全局阈值）",
+                       "IMAG_QGAMMA_GRACE_semantics": ("用户 2026-09-22 批准：同一条近 Γ 软模跨 0.05 "
+                                                       "边界时不被升格为 fail；1.0 = 严格口径"),
                        "refs": list(POLICY_REFS)},
         "policy_version": POLICY_VERSION,
     }

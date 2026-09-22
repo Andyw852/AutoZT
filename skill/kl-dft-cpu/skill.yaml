@@ -176,6 +176,8 @@ io_schema:
        desc: "数值噪声底(THz)：|ν| ≤ 它 → noise 不计入；也是近 Γ 区外与光学支的上限（超过即 fail）"}
     - {name: IMAG_QGAMMA, default: 0.05, where: step.conf,
        desc: "近 Γ 区半径（分数坐标，严格小于；Petretto 2018 的 0<|q|<0.05 窗口）"}
+    - {name: IMAG_QGAMMA_GRACE, default: 1.2, where: step.conf,
+       desc: "声学支有效近 Γ 窗口 = IMAG_QGAMMA×它（2026-09-22 用户批准：同一条软模跨 0.05 边界不升格为 fail）；1.0 = 严格口径"}
     - {name: MAX_DISP, default: 500, where: step.conf,
        desc: "位移帧数硬闸：超过就报错停步（防超胞设太大白烧机时）"}
     - {name: OVERSAMPLE, default: 3, where: step.conf,
