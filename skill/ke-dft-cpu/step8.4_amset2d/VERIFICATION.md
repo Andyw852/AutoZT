@@ -3273,3 +3273,33 @@ orte_session_dir failed
 - `.stale-grid-*` 同名文件存在但无新 OUTCAR → 网格已变且作业未成功。
 **勿把节点故障误判为口径/物理问题**。
 
+
+### V53. 第 17 轮：MoS2 的 S8.4 已启用 `WRITE_MESH = true`（重叠模式未动，待用户定）
+
+按目标「2D 的 S8.4 读 write_mesh，正确性依赖 strict intrinsic 后处理被套用」的要求，
+给 MoS2 的项目配置加上：
+
+```
+# /mnt/d/tf_data/MoS2/ke-dft-cpu/project_setting/templates/step8.4_amset2d/step.conf
+[params]
+WAVEFUNCTION_FULL = true
+UNITY_OVERLAP = false
+WRITE_MESH = true        # <- 本轮新增
+```
+
+**验证**（`autozt -tt ke-dft-cpu -p MoS2 -j S8.4_amset2d conf` 合并结果，来源标记 `[3]`
+= 项目级 step.conf）：
+```
+WAVEFUNCTION_FULL = true
+UNITY_OVERLAP     = false
+WRITE_MESH        = true
+```
+
+**边界（未越权）**：**只加了 `WRITE_MESH`，重叠模式 `UNITY_OVERLAP` 保持原值未动**。
+原因：切换重叠模式会改变物理结果（V21 已证真实重叠路径上 0.5.1 与 0.4.19 差异显著），
+属需要用户判断的取舍；而 `WRITE_MESH` 只是"多写一个 mesh 文件 + 自动跑后处理"，
+不改变 `transport.json` 本身，是纯粹增量且可逆的（已留 `.bak_nomw` 备份）。
+
+**待办**：MoS2 的 S8.4 要真正产出本征结果，需在 S7→S7.1_read→S8 链跑完之后
+`retry S8.4_amset2d` + `start`（现在 S8.4 仍是 09-20 的旧结果，无 mesh.h5）。
+
