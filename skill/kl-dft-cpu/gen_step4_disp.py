@@ -265,12 +265,16 @@ def check_existing_matches_input(out):
             % (dmax, n_disp, out, out, out, out))
 
 
-def _dataset_matches(out, reps, tol=1e-8):
-    """现有 phono3py_disp.yaml 是否【已经】对应当前输入：单胞 == POSCAR **且** 超胞 == 配置的 reps。
+def _dataset_matches(out, reps, method=None, conf=None, tol=1e-8):
+    """现有数据集是否【已经】对应当前输入 —— 四重比对：
+      ① 单胞 == POSCAR（tol 1e-8）  ② 超胞矩阵 == 配置的 reps
+      ③ 方法 == 当前 METHOD（alm / findiff 不能混用）
+      ④ disp_plan.json 里的过采样 / 位移幅度 / ALM 截断 / findiff 对截断 == 当前 conf
 
-    ★ 只比单胞不够（2026-09-22 实测）：把 FC3_CUTOFF_PAIR 从空改成 4.0 会让**自动超胞**从
-      5×5×1 缩到 4×4×1，而单胞一模一样 ⇒ 旧的 4×4×1 数据集被"幂等跳过"继续沿用，
-      连显式 SUPERCELL="5 5 1" 都失效。必须把 supercell_matrix 也比进来。
+    ★ 为什么必须四重：**任何一种"配置变了但结构指纹没变"的情形，都会被"幂等跳过"静默沿用**。
+      2026-09-22 就踩了两次：先是对称化只改 POSCAR（点群变了、几何只差 4e-6 Å，逃过 1e-3 容差），
+      后是把 FC3_CUTOFF_PAIR 从空改成 4.0 让自动超胞从 5×5×1 缩到 4×4×1（连显式
+      SUPERCELL="5 5 1" 都失效）。只用"单胞"当指纹远远不够。
     ★ 反过来：S4 每次 gen 都从 S1 重取未对称化 CONTCAR 再就地对称化，symmetry_gate 必然报
       triggered，所以不能用"gate 触发"当隔离依据，只能用"数据集与当前输入不符"。
     """
@@ -290,7 +294,45 @@ def _dataset_matches(out, reps, tol=1e-8):
         return False
     _r = np.array(reps, dtype=int)
     want = (_r.reshape(3, 3) if _r.size == 9 else np.diag(_r)).tolist()
-    return sm == [[int(x) for x in row] for row in want]
+    if sm != [[int(x) for x in row] for row in want]:
+        return False
+
+    # ---- ③④ 方法 / 过采样 / 位移幅度 / 截断（disp_plan.json 留档）----
+    if method is not None:
+        pf = out / "disp_plan.json"
+        if not pf.is_file():
+            return False
+        try:
+            import json as _json
+            pl = _json.loads(pf.read_text(encoding="utf-8"))
+        except Exception:                            # noqa: BLE001
+            return False
+        if str(pl.get("method", "")) != str(method):
+            return False
+        if conf is not None:
+            for _k, _cfgkey in (("oversample", "OVERSAMPLE"),
+                                ("fd_distance", "FD_DISTANCE"),
+                                ("alm_cut2", "ALM_CUT2"),
+                                ("alm_cut3", "ALM_CUT3"),
+                                ("fc3_cutoff_pair", "FC3_CUTOFF_PAIR")):
+                _old, _new = pl.get(_k), conf.get(_cfgkey)
+                if _old is None:                     # 老 plan 没这个字段：不据此强制重建
+                    continue
+                if _new is None:
+                    return False
+                try:
+                    if _k in ("oversample",):
+                        if int(_old) != int(_new):
+                            return False
+                    elif _k in ("alm_cut2", "alm_cut3", "fc3_cutoff_pair"):
+                        if abs(float(_old) - float(_new)) > 1e-12:
+                            return False
+                    else:
+                        if abs(float(_old) - float(_new)) > 1e-12:
+                            return False
+                except (TypeError, ValueError):
+                    return False
+    return True
 
 
 def _quarantine_stale_dataset(out):
@@ -332,7 +374,7 @@ def build_displacements(out, reps, method, conf):
     """幂等：已有位移就跳过；否则先算帧数过闸，再落盘。"""
     check_existing_matches_input(out)
     if (out / "phono3py_disp.yaml").is_file() and glob.glob(str(out / "POSCAR-*")):
-        if _dataset_matches(out, reps):
+        if _dataset_matches(out, reps, method, conf):
             print("[..] 已有位移超胞，跳过生成（幂等）")
             return
         if _quarantine_stale_dataset(out):
@@ -357,6 +399,10 @@ def build_displacements(out, reps, method, conf):
     if not nums:
         sys.exit("[ERROR] 没有产出 POSCAR-* 位移超胞")
     info["n_disp"] = len(nums)
+    # 留档"影响数据集内容"的全部配置，供 _dataset_matches 做四重比对（2026-09-22）
+    info.update(fd_distance=float(conf["FD_DISTANCE"]),
+                alm_cut2=conf.get("ALM_CUT2"), alm_cut3=conf.get("ALM_CUT3"),
+                fc3_cutoff_pair=conf.get("FC3_CUTOFF_PAIR"))
     (out / "disp_plan.json").write_text(
         json.dumps(info, ensure_ascii=False, indent=2), encoding="utf-8")
     print("[OK] 位移生成完毕：%d 帧（%s）" % (len(nums), method))
