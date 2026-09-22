@@ -2705,6 +2705,26 @@ autozt -tt kl-dft-cpu -p MoS2_kltest -j S2_static start   # 预期：报"确认�
 
 ---
 
+# 46.7 跑 S5 时踩到的两个部署/声明 bug（已修）
+
+1. **CONF_SPEC 漏声明新参数**：第一次 `retry` 直接报
+   `[ERROR] step.conf 的 [params] 里有本脚本不认识的键：IMAG_QGAMMA, IMAG_QGAMMA_GRACE, IMAG_THR_STRICT`。
+   只改 `templates/step5_fc/step.conf` 与 `skill.yaml` 不够 —— `gen_step5_fc.py` 自己有
+   `CONF_SPEC` 白名单。已补三个键，并把 `IMAG_THR` 默认同步为 0.15。
+2. ★ **显式拷贝清单漏文件（同类 bug 第二次）**：`gen_step5_fc.py` 里有一份
+   `for _dep in ("kl_common.py", "dim_common.py", "za_2d.py")` 的**显式拷贝清单** —— 注释写明
+   "gen_need 只保证 gen 本地能用到它，**不会自动进到发往计算节点的 step 目录**"。
+   结果：公共池把 `imag_policy.py` 推到了**技能目录** `<mat>/kl-dft-cpu/imag_policy.py`，
+   而作业目录 `step5_fc/` 没有它 ⇒ 作业在 `import imag_policy` 阶段就挂。
+   首次提交的 3881577 即因此失败（秒退，无副作用）。
+   修：清单加 `imag_policy.py` → retry+start → jobid **3881710**，远端部署核对通过
+   （`step5_fc/imag_policy.py` 已就位）。
+   - 2026-09-21 已经因为**同一份清单**漏了 `kl_common.py` 出过一次事，这次是第二次。
+   - **建议（未做，属结构性改法，需用户同意）**：把该清单改成"拷贝 gen_need 里所有 `.py`"
+     或直接从 gen_need 读取，避免每次加依赖都漏。
+
+---
+
 # 45. 2026-09-22：本轮遇到的 bug 全部落到代码（防新料复发）
 
 | # | bug | 影响面 | 修复（文件） | 验证 |

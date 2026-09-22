@@ -59,7 +59,12 @@ SPEC = {
     # —— 导出 & 虚频闸 ——
     "EXPORT_SHENGBTE": (True, "bool"),   # 任一拟合器都产出 shengbte 力常数
     "BAND_POINTS":     (51,   "int"),
-    "IMAG_THR":        (0.10, "float"),  # 虚频阈值(THz)
+    # —— 虚频闸（唯一真源 skill/_common/imag_policy.py，2026-09-22）——
+    #   IMAG_THR 语义已从"全局阈值"变为"**近 Γ 声学支上限**"。
+    "IMAG_THR":        (0.15, "float"),  # 近 Γ 声学支上限(THz)=5 cm^-1（Petretto 2018）
+    "IMAG_THR_STRICT": (0.05, "float"),  # 噪声底；近 Γ 区外与光学支的上限(THz)
+    "IMAG_QGAMMA":     (0.05, "float"),  # 近 Γ 半径（分数坐标，Petretto 2018）
+    "IMAG_QGAMMA_GRACE": (1.2, "float"), # 声学支有效近 Γ 窗口 = IMAG_QGAMMA×它（1.0=严格）
     # P2-2：2D 的 ZA 弯曲支二次性检查（ω ∝ q^p，要求 1.7<p<2.3）。
     #   auto = 2D 打开；只看最小频率不够 —— ZA 线性化时频率全是正的，照样过虚频闸门，
     #   但 κ 会整体错掉。检查结果写进 phonon_summary.json 的 za_exponent。
@@ -222,7 +227,9 @@ def main():
     # 2D 路径修复就没被真正执行）。作业目录 = out，所以直接拷到 out。
     # za_2d.py：kl_fc_backends 现在【模块级】import za_2d（三副本合并后），
     # 作业目录少了它会在 import 阶段直接 ModuleNotFoundError。
-    for _dep in ("kl_common.py", "dim_common.py", "za_2d.py"):
+    # imag_policy.py：kl_fc_backends 模块级 import imag_policy（2026-09-22 虚频判据统一）；
+    #   公共池只会把它推到技能目录，作业目录（out）必须显式拷，否则作业 import 阶段就挂。
+    for _dep in ("kl_common.py", "dim_common.py", "za_2d.py", "imag_policy.py"):
         if (here / _dep).is_file():
             shutil.copyfile(here / _dep, out / _dep)
     if engine == "pheasy":
