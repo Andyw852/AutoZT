@@ -3214,3 +3214,32 @@ MoS2 的问题**纯粹是口径不一致**，与自旋归一化无关。
 **后续链**：S7_deform 完 → `S7.1_read`（0.5.1 重跑，过 mixed 检查）→ `S8_kappa`（首次跑，
 PREP 需 gen）→ `S8.4`（需补 `WRITE_MESH=true` 才能出 mesh.h5 + strict intrinsic）。
 
+
+### V51. 第 15 轮：MoS2 的 S7 真正病因是**过时 k 网格**（15×15×1 → 47×47×1），非仅口径（2026-09-22）
+
+执行 `retry S7_deform` 后核查发现：**MoS2 整个 S7 都需重算**，原因不是（也不只是）ionrelax 口径，
+而是 **k 网格过时**。
+
+| | 旧（stale） | 新 |
+|---|---|---|
+| KPOINTS | 15×15×1 | **47×47×1**（K-Spacing 0.030，Γ 心）|
+| deform-01 的 NKPTS | 113 | 待算 |
+| 受影响目录 | **deform-01 ~ deform-09 全部**，每目录 **14 个** `.stale-grid-15x15x1` 文件 | 重新生成 |
+
+**关键澄清（避免误判为数据丢失）**：`[PATCH-STALE-GRID]` 把旧产物**改名保留**为
+`OUTCAR.stale-grid-15x15x1` / `LOCPOT.stale-grid-15x15x1` / `CONTCAR.stale-grid-15x15x1` 等
+（**14 个/目录**），**一个字节都没删**，只是不再被当作有效产物复用，并重新生成输入。
+故本次 10 作业的扇出**正确且必要**。
+
+**这印证了用户原始目标里"MoS₂ 的 S7（要重跑）"的说法**——不是误报；
+同时说明**非破坏性 `retry` 已足够**（旧的 15×15×1 结果仍留档可查），
+无需`rerun`级别的删除。
+
+**与其它 3 个材料的区别**：LS/SS/CrSe2_ortho 的问题是**面内 ionrelax 口径 mixed**（补 deform-09 即可，
+只重算 1~5 个分量）；**MoS2 是 k 网格整体过时**（9 个分量全要重算）。
+两者都会触发"10 作业"扇出，但成因不同，排查时要区分。
+
+**附带**：MoS2 的 S8.4 是 `env=amset_clean`（0.4.19）+ `unity_overlap: false`（真实重叠）
++ `interpolation_factor: 10`，且无 `write_mesh`。故其 S8.4 若要出 strict intrinsic，
+需加 `WRITE_MESH=true` 并重跑；且 0.5.1 在真实重叠路径上的行为差异（V21）需用户知情后再决定。
+
