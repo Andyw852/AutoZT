@@ -3513,3 +3513,28 @@ ls <step7_deform>/deform-*/ | grep -c stale-grid
 3. 同节点共置（本例 LS + 基线都在 cu06，各 24 核）不足以判定竞争异常——
    **未经证实的性能归因不得当作结论**（本轮已自我更正）。
 
+
+### V61. 第 30 轮：核实 `LAYER_THICKNESS=6.73` 非复制粘贴错误（LS/SS 同层结构）
+
+审计发现 **LS 与 SS 的 `step8_amset/step.conf` 都写 `LAYER_THICKNESS = 6.73`**，
+数值完全相同，初看似复制粘贴。
+
+**核实结论：正确，不是错误。** 两者的 POSCAR 注释与晶格表明它们是**同一层结构**的不同横向周期：
+
+| 材料 | 描述 | 原子数 | a (Å) | b (Å) | c (Å) |
+|---|---|---|---|---|---|
+| **LS** | CrS2/CrSe2 lateral superlattice, **long period** | 24 (Cr8 S8 Se8) | 21.64 | 3.12 | 20.00 |
+| **SS** | CrS2/CrSe2 lateral superlattice, **short period** | 12 (Cr4 S4 Se4) | 10.82 | 3.12 | 20.00 |
+
+两者 **b、c 完全相同**、化学组成同为 CrS2/CrSe2 层，只是**横向超胞周期**不同（a=21.64 vs 10.82）。
+二维层厚是**层本身**的属性，与横向周期无关，故两者同为 6.73 Å 是**正确且应当一致**的。
+
+**顺带澄清材料身份**（对后续判据有用）：LS/SS 不是两种不同材料，而是
+**CrS2/CrSe2 横向超晶格的"长周期 / 短周期"两个模型**——这解释了它们脚本参数高度一致。
+
+**另附**：用 POSCAR 反算的原子 z 跨度（LS 3.23 / SS 3.23 / CrSe2_ortho 3.11 /
+CrS2_ortho 2.91 / MoS2 3.13 Å）是**原子芯**范围；AMSET 的 `LAYER_THICKNESS`
+（6.73）是包含原子半径的**有效层厚**，两者概念不同，不可直接比对。
+**注意**：LS/SS/CrSe2_ortho/CrS2_ortho 的 POSCAR 用 **Cartesian** 坐标，MoS2 用 **Direct**；
+写解析脚本时若统一按分数坐标处理会得到 >c 的荒谬层厚（本轮踩过）。
+
