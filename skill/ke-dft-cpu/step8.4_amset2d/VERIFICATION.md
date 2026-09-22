@@ -3303,3 +3303,37 @@ WRITE_MESH        = true
 **待办**：MoS2 的 S8.4 要真正产出本征结果，需在 S7→S7.1_read→S8 链跑完之后
 `retry S8.4_amset2d` + `start`（现在 S8.4 仍是 09-20 的旧结果，无 mesh.h5）。
 
+
+### V54. 第 20 轮：CrS2_hex 被屏蔽的**精确触发条件**与最小解封路径（2026-09-22，只读诊断）
+
+**现象**：`autozt -tt ke-dft-cpu -p CrS2_hex <任何子命令>` 一律 `sys.exit`：
+```
+错误：材料 CrS2_hex 命中技能配置安全屏蔽：kl-mace-cpu → kl-mlff-cpu：
+旧 step*_mace_* 与新 step*_mlff_* 目录不兼容；请人工核实并迁移本地/远端步骤、模板和配置后改用新名，禁止直接重算。
+```
+
+**精确触发条件**（`autozt/bootstrap.py::_legacy_layout_error`，不是查磁盘目录！）：
+```python
+old = seg/_legacy_skill 或 base["_legacy_skill"]，或 SKILL_ALIASES 里 dir_name == legacy 名
+if old and old != "mlff-mace" and any("_mlff_" in s["name"] for s in base["steps"]):
+    return 屏蔽
+```
+即：**只要项目的 `dir_name` 仍是被别名替换的旧名（`kl-mace-cpu`），且新技能步骤名含 `_mlff_`，
+就屏蔽整个材料**——与磁盘上是否真有 `step*_mace_*` 目录无关。屏蔽是**材料级**的，
+故 `ke-dft-cpu` 也被连坐。
+
+**实测 CrS2_hex 的实况**（本轮只读核查）：
+- `/mnt/d/tf_data/jzz/jap/CrS2_hex/kl-mace-cpu/` 下 **没有任何 `step*_mace_*` 顶层目录**
+  （只有 POSCAR / POSCAR_raw / log / project_setting / result）；
+- `result/` 里仅一个 `step1_mace_relax`（产物只有一个弛豫步，**未跑完 kl 全流程**）；
+- `project_setting/tf_CrS2_hex_kl-mace-cpu.yaml` 的 task_types 键仍是 **`kl-mace-cpu`**。
+
+**最小解封路径**（属 kl 工作线，需用户/kl 负责人决定，本轮未执行）：
+1. 目录改名 `kl-mace-cpu/` → `kl-mlff-cpu/`（或归档；AGENTS 允许 `_archive`）；
+2. `project_setting/tf_CrS2_hex_kl-mace-cpu.yaml` → 文件名与 task_types 键都改 `kl-mlff-cpu`；
+3. `result/step1_mace_relax` → 按新命名（`step*_mlff_*`）改名或重跑。
+
+**因为该 kl 项目只跑到 step1_mace_relax、未产出 kl 结果**，迁移成本很低；
+但**属 kl 技能的状态迁移，不属 ke 的技能边界**，按铁律 10 不擅自新建/重命名他人技能目录，
+故仅记录并报告，等用户指示。
+
