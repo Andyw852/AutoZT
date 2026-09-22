@@ -3708,3 +3708,35 @@ V51 判定 MoS2 的 S7 病因是**过时 k 网格**（15×15×1 → 47×47×1）
 **结论**：MoS2 的 S7 重算**真的换到了新网格**（k 点从 113 增到 1105），
 且旧结果原样留档。这从"作业实际算的是什么"层面（OUTCAR 的 NKPTS）
 确证了 V51 的诊断与 retry 的有效性 —— 不是只看输入文件就下结论。
+
+### V68. 第 44 轮：**双自旋（ISPIN=2）路径实测**——补上最后一块测试缺口（2026-09-22）
+
+**缺口**：V62 的门测试只用了**单自旋**（`spins=[1]`），而这 5 个材料都是 ISPIN=2，
+其 `mesh.h5` 会同时含 up/down 两套散射率。**双自旋路径此前从未实测过。**
+
+**本轮实测**（jzzn amset051，构造与 AMSET `write_mesh` 真实输出同形的**双自旋** h5，
+含 bug 键名 `*_up` / `*_up_down`）：
+
+```
+解析出的 spins: [1, -1]                        <- read_mesh_h5 正确识别 up/down
+rates up   shape: (3, 2, 2, 2, 3)              <- (nmech,nD,nT,nB,nk_ir)
+rates down shape: (3, 2, 2, 2, 3)
+
+注入后:
+  1   shape=(3, 2, 2, 2, 5)                    <- 展开到全网格 nk_full=5
+  -1  shape=(3, 2, 2, 2, 5)
+期望 (nmech,nD,nT,nB,nk_full) = (3, 2, 2, 2, 5)
+
+双自旋均展开到全网格: True
+两自旋机制行数一致: True
+置零 IMP 后 dropped=[IMP] kept=[ADP, POP]
+  1   IMP 行全零: True
+  -1  IMP 行全零: True
+```
+
+**结论**：`read_mesh_h5`（修 bug 键名）+ `inject_mesh_rates`（各自旋独立展开到全网格）
++ `zero_mechanisms`（**对两个自旋都正确置零**）在 ISPIN=2 下全部正确。
+
+**至此 strict intrinsic 后处理的所有代码路径均已实测**：单自旋（V62）、双自旋（本轮）、
+上游 bug 键名（V44.1）、失败前置（V46）、硬门双向（V62）、失败可见与回拉（V63/V64/V66）。
+**唯一剩下的**仍是真实 `mesh.h5` 的数值复现确认。
