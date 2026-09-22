@@ -265,6 +265,22 @@ def check_existing_matches_input(out):
             % (dmax, n_disp, out, out, out, out))
 
 
+def _dataset_matches_poscar(out, tol=1e-8):
+    """现有 phono3py_disp.yaml 的单胞与当前（对称化后）POSCAR 是否【已经一致】。
+
+    ★ 为什么需要它：S4 每次 gen 都从 S1 重取 CONTCAR（未对称化）再就地对称化，所以即使
+      现有数据集**已经**是对称化胞算出来的，symmetry_gate 仍会报 triggered；若无条件隔离，
+      会把刚算完的有效帧白白挪走（并可能撞名嵌套）。只有真的不一致才隔离。
+    """
+    y = out / "phono3py_disp.yaml"
+    if not y.is_file():
+        return False
+    old, new = _disp_yaml_cell(y), _poscar_cell(out / "POSCAR")
+    if old is None or new is None:
+        return False
+    return max(abs(old[i][j] - new[i][j]) for i in range(3) for j in range(3)) <= tol
+
+
 def _quarantine_stale_dataset(out):
     """对称化后：把【旧对称性】的位移数据集**非破坏地**移到 symmetry_audit/pre_symmetry_dataset/。
 
@@ -345,7 +361,9 @@ def main():
     _sg = kc.symmetry_gate(out / "POSCAR", conf)
     # ★ 对称化一旦真的发生，已有的位移数据集属于【旧对称性】，必须换掉（见 _quarantine_stale_dataset）
     if isinstance(_sg, dict) and _sg.get("triggered"):
-        if _quarantine_stale_dataset(out):
+        if _dataset_matches_poscar(out):
+            print("[..] 对称化已生效：现有位移数据集与对称化胞一致（差 ≤1e-8 Å），保留不重建")
+        elif _quarantine_stale_dataset(out):
             print("[WARN] 对称化改变了点群：旧位移数据集已移到 %s\n"
                   "       （非删除，可回溯）—— 本步将按对称化后的胞重新生成位移。"
                   % (out / "symmetry_audit" / "pre_symmetry_dataset"))
