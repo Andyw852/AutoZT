@@ -244,6 +244,41 @@ class StepConf(object):
     def __getitem__(self, k):
         return self.params[k]
 
+    # ---- dict 只读协议（2026-09-22）--------------------------------------
+    # StepConf 原来只实现了 __getitem__。下游那些"通用比对/留档"代码习惯性
+    # 按 dict 用（conf.get("ALM_CUT2") 之类），于是 gen_step4_disp.py 在
+    # S4 生成位移数据集时直接
+    #     AttributeError: 'StepConf' object has no attribute 'get'
+    # —— 崩在写完 POSCAR-*/phono3py_disp.yaml 之后、写 disp_plan.json 之前，
+    # 留下一套没有留档的半成品数据集（幂等检查随后也认不出它）。
+    # 只补一个调用点不解决问题（同类写法会继续踩），所以这里把 StepConf
+    # 补成**只读 dict**：get/keys/values/items/copy/in/iter/len 全部可用，
+    # 写入仍需先构造 dict（本类没有 __setitem__）。
+    # 值语义不变：params 的键就是 SPEC 里的键（大写）。
+    def get(self, k, default=None):
+        return self.params.get(k, default)
+
+    def keys(self):
+        return self.params.keys()
+
+    def values(self):
+        return self.params.values()
+
+    def items(self):
+        return self.params.items()
+
+    def copy(self):
+        return dict(self.params)
+
+    def __contains__(self, k):
+        return k in self.params
+
+    def __iter__(self):
+        return iter(self.params)
+
+    def __len__(self):
+        return len(self.params)
+
     def section(self, name):
         """任意节的原始行：[(key, value|None), ...]"""
         return [(k, v) for k, v, _ in self._m.get(name.lower(), [])]

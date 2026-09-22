@@ -315,10 +315,12 @@ def _dataset_matches(out, reps, method=None, conf=None, tol=1e-8):
                                 ("alm_cut2", "ALM_CUT2"),
                                 ("alm_cut3", "ALM_CUT3"),
                                 ("fc3_cutoff_pair", "FC3_CUTOFF_PAIR")):
-                _old, _new = pl.get(_k), conf.get(_cfgkey)
-                if _old is None:                     # 老 plan 没这个字段：不据此强制重建
+                if _k not in pl:                     # 老 plan 没这个字段：不据此强制重建
                     continue
-                if _new is None:
+                _old, _new = pl.get(_k), conf.get(_cfgkey)
+                if _old is None and _new is None:    # 两边都是"不截断"：一致
+                    continue
+                if _old is None or _new is None:     # 一边有截断、一边没有 => 配置变了
                     return False
                 try:
                     if _k in ("oversample",):
