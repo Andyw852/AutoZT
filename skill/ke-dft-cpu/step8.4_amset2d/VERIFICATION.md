@@ -3618,3 +3618,35 @@ def ck_marker(d, cfg):
 
 **倾向 (1)**：改动最小、只影响 ke 的 S8.4 链，且**不需要动 autozt 本体**；但需处理"旧 transport.json 残留"。
 **注**：这是 autozt 层面的行为，不是 ke 代码 bug；按铁律 10 不擅自改 autozt 判据逻辑，先记录待定。
+
+### V64. 第 34 轮：V63 盲区**已修复并端到端验证**（2026-09-22）
+
+**修复**（提交 f4a7eb9，`gen_step14_amset2d.py`，仅影响 `WRITE_MESH=true` 的链）：
+1. `AMSET_CMD` 链首加 `rm -f transport.json`，清掉上次残留；
+2. 把 `cp transport_*.json transport.json` 拆成 `AMSET_TAIL` 移到链尾，顺序变为
+   `AMSET -> [postprocess --check-reproduce] -> cp transport.json`。
+   后处理失败则 `transport.json` 不生成 → `ck_marker` 判 not-done → **失败可见**。
+
+**端到端验证**（jzzn `/tmp/s84gen_v63`，用**本地** gen（md5 `a6c95723…`，与仓库一致）
+对 MoS2 的真实步骤目录做真 gen；注意**必须先推送本地 gen** —— 远端材料目录里的
+`gen_step14_amset2d.py` 是上次推送的旧版，直接拿它测会得到旧链（本轮踩过））：
+
+```
+[..] WRITE_MESH=true（step.conf 覆盖）：settings.yaml 写 write_mesh: true，产出 mesh_*.h5
+settings.yaml: 31: write_mesh: true
+
+submit.sh 的 AMSET_CMD:
+  rm -f transport.json; python overlap_preflight.py --in-job || exit 1;
+  python -c "... Runner.from_directory('.').run()" >> amset.log 2>&1
+  && python postprocess_intrinsic.py --check-reproduce
+  && cp -f "$(ls -t transport_*.json ... | head -1)" transport.json && ls -l transport.json
+
+postprocess_intrinsic.py: 26445 B（已就位）
+```
+
+三处均正确：**链首 `rm -f`** ✓、**postprocess 在 `cp` 之前** ✓、**后处理脚本已随 gen 复制** ✓。
+
+**重要运维含义**：该修复**只在下一次 `retry S8.4` 重新生成时生效** —— 因为 gen 需要
+重新推送（远端材料目录里的脚本是旧的）。所以 CrSe2_hex / MoS2 下次 `retry S8.4` 时
+才会带上"失败可见"的新链。**若直接 `start` 而不 `retry`，跑的仍是旧 submit.sh**（状态 OK 时
+`start` 也不会重投），这也是 V55 已记的"必须 retry 才能重投"的另一层理由。
