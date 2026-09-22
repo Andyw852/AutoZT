@@ -876,10 +876,11 @@ def read_pop_frequency_2d(dielect_dir):
     # 用**绝对路径**调 helper：cwd 必须是 step5_dielect（OUTCAR/vasprun.xml 在那儿），
     # 而 helper 自己躺在 gen 脚本目录里。
     script = ("%s '%s'" % (helper.name, str(Path(dielect_dir))))
+    amset_env_name = os.environ.get("AMSET_ENV", "amset_clean")  # 读环境变量，无则兜底 amset_clean
     commands = [["python", str(helper), "OUTCAR", "vasprun.xml"],
                 ["/opt/miniconda3/bin/conda", "run", "--no-capture-output",
-                 "-n", "amset_clean", "python", str(helper), "OUTCAR", "vasprun.xml"],
-                ["conda", "run", "--no-capture-output", "-n", "amset_clean",
+                 "-n", amset_env_name, "python", str(helper), "OUTCAR", "vasprun.xml"],
+                ["conda", "run", "--no-capture-output", "-n", amset_env_name,
                  "python", str(helper), "OUTCAR", "vasprun.xml"]]
     err_tail = ""
     for command in commands:
@@ -1096,12 +1097,13 @@ def read_pop_frequency_3d(dielect_dir):
     read_pop_frequency_2d() 的 Γ 点面内极性模频率。
     """
     import subprocess
+    amset_env_name = os.environ.get("AMSET_ENV", "amset_clean")  # 读 AMSET_ENV，无则兜底 amset_clean
     commands = [["amset", "phonon-frequency", "-o", "OUTCAR", "-v", "vasprun.xml"]]
     # 远端 gen 由 taskflow 的 Python 直接执行，非交互 shell 未必加载 conda；
-    # 使用配置约定的 amset_clean 作为无 shell 的兜底，避免误报“缺少 POP”。
-    commands.append(["/opt/miniconda3/bin/conda", "run", "--no-capture-output", "-n", "amset_clean",
+    # 用 AMSET_ENV（集群 yaml 注入）指定的环境作为无 shell 的兜底，避免误报“缺少 POP”。
+    commands.append(["/opt/miniconda3/bin/conda", "run", "--no-capture-output", "-n", amset_env_name,
                      "amset", "phonon-frequency", "-o", "OUTCAR", "-v", "vasprun.xml"])
-    commands.append(["conda", "run", "--no-capture-output", "-n", "amset_clean",
+    commands.append(["conda", "run", "--no-capture-output", "-n", amset_env_name,
                      "amset", "phonon-frequency", "-o", "OUTCAR", "-v", "vasprun.xml"])
     for command in commands:
         try:

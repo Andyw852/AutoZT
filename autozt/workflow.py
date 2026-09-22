@@ -966,7 +966,13 @@ def main():
         if only:
             keep = set(only)
             subs = [p for p in subs if os.path.basename(p) in keep]
-        targets = [_norm(p) for p in subs]
+        if not subs and not only:
+            # fanout 声明但无匹配子目录（如 2D HSE 按设计不切片）→ 回退单目录提交，
+            # 避免静默 0 提交（历史 bug：打印 jobid=None 却当成功）。only 指定仍不匹配时保持 no-op（retry 语义）。
+            fanout = ""
+            targets = [step_dir]
+        else:
+            targets = [_norm(p) for p in subs]
     else:
         targets = [step_dir]
 
