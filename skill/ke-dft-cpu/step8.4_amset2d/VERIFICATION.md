@@ -3089,3 +3089,28 @@ if "_up" in key or "_down" in key:
 单行极长，读一次会淹没上下文。健康判据改用**文件 mtime + 大小单调增长**，
 或只 `grep -vE "│|├|%\|"` 取非进度条行。
 
+
+### V47. 第 10 轮：5 个材料的 S8.4 **尚未启用**（跑 S8.4 的前置条件，非代码问题）
+
+核对 6 个 jap 材料的 `project_setting/tf_<材料>_ke-dft-cpu.yaml`：
+
+| 材料 | `amset2d` | `wavefunction_full` | `templates/step8.4_amset2d/` |
+|---|---|---|---|
+| CrSe2_hex | ✅ true | ✅ true | ✅ step.conf + submit_amset.tpl |
+| CrS2_hex / CrS2_ortho / CrSe2_ortho / LS / SS | ❌ 未写 | ❌ 未写 | ❌ 无 |
+
+`skill/ke-dft-cpu/skill.yaml` 里 `optional_steps.amset2d` 默认 `default: false`，
+**不显式打开就不会出现在 DAG 里**。故这 5 个材料目前**只有 S8（step8_amset），没有 S8.4**。
+
+**要跑 S8.4，每个材料需要**（按 CrSe2_hex 的既有做法）：
+1. `tf_<材料>_ke-dft-cpu.yaml` 的 `ke-dft-cpu:` 段加 `amset2d: true`；
+   （`wavefunction_full: true` 仅当要用全网格 h5 真实重叠路线时才开——CrSe2_hex 因
+   ISYM=-1 + 6348 k 点走真实重叠才需要；普通材料用默认单位重叠即可，见 V21/V46。）
+2. 建 `templates/step8.4_amset2d/` 并放 `step.conf`（至少 `WRITE_MESH = true` 才会产
+   `mesh_*.h5` 并自动跑 `postprocess_intrinsic.py --check-reproduce`）；
+3. 若集群模板的 AMSET 环境不适用于该集群，再放项目级 `submit_amset.tpl`。
+   全局 `setting/jzzn.yaml` 已切 `amset_env: amset051`，jzzn 上可不放项目级模板。
+
+**判定**：目标里"5 个材料的 S8/S8.4"——**S8 已在跑（CrSe2_ortho 3884993）**，
+**S8.4 需先做上述启用**。属配置类前置，未擅自改动，待用户指示。
+
