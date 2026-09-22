@@ -356,7 +356,7 @@ optional_steps:
 
 requires:
   python: [pymatgen, numpy, matplotlib, amset, BoltzTraP2, phonopy, phono3py, spglib]
-  conda: amset_clean
+  conda: amset051
   exe: [vasp_std, vaspkit, phono3py]
 
 # =============================================================================
