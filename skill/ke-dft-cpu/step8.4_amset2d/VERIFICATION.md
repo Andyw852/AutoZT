@@ -3455,3 +3455,32 @@ ls <step7_deform>/deform-*/ | grep -c stale-grid
 **结论**：我维持倾向 **(B)**，但把理由从"稳定"升级为"**V21 的 DFT 地面真值只验证过单位重叠路径**"。
 因涉及物理口径且 MoS2 现状有明确动机，仍**等用户确认**再动。
 
+
+### V59. 第 27 轮：7 个材料的项目级 step.conf **全量审计**（2026-09-22）
+
+| 材料 | 项目级 step.conf 关键项 |
+|---|---|
+| **MoS2** | 根:`BANDGAP=pbe, FUNC=auto`；`step3_uniform/step3b/step8.4` 有配置；**S8.4: WAVEFUNCTION_FULL=true / UNITY_OVERLAP=false / WRITE_MESH=true** |
+| CrS2_hex | 仅根:`BANDGAP=pbe, FUNC=pbe`（**无 S8.4 配置**）|
+| CrS2_ortho | 仅根:`BANDGAP=pbe, FUNC=pbe`（**无 S8.4 配置**）|
+| **CrSe2_hex** | 根:`BANDGAP=hse` ← **2026-09-22 用户批准改（原 pbe）**；`FUNC=pbe`；`step7b_deform_read: AMSET_ENV=amset051`；**S8.4: IF=4 / NW=12 / UNITY_OVERLAP=false / WAVEFUNCTION_FULL=true / WRITE_MESH=true** |
+| CrSe2_ortho | 仅根:`BANDGAP=pbe, FUNC=pbe` |
+| **LS** | 根 + `step8_amset: LAYER_THICKNESS=6.73, UNITY_OVERLAP=auto` |
+| **SS** | 根 + `step8_amset: LAYER_THICKNESS=6.73` |
+
+**两处值得注意**：
+
+1. **CrSe2_hex 的 `BANDGAP` 已是 `hse`**（注释："2026-09-22 用户批准：改用 HSE 带隙做剪刀修正（原 pbe）"）。
+   而基准 `3867317` 启动时用的是 **pbe**。因此：
+   - **方案 (d)（HSE 最终轮）的配置已就位**，直接 `retry+start S8.4` 即走 HSE；
+   - **方案 (c)（0.5.1+PBE 对比轮）不能直接 retry** —— 现在配置是 HSE，
+     必须**临时把根 `step.conf` 的 `BANDGAP` 改回 `pbe`**，跑完 (c) 后再改回 `hse`。
+     否则 (c) 会变成"0.4.19+PBE vs 0.5.1+HSE"的混合对比，引入带隙口径差异，>20% 判据失去意义。
+   - **执行 (c) 前必须先确认这一条**。
+
+2. **5 个目标材料没有任何 `step8.4_amset2d/step.conf`**，与 V47 结论一致（S8.4 未启用）。
+   且 LS/SS 只在 **`step8_amset`（三维 S8）**里配了 `LAYER_THICKNESS=6.73`（二维归一化因子），
+   说明它们的 S8 走的是带层厚修正的口径；LS 还显式写了 `UNITY_OVERLAP=auto`（由 gen 解析为模块常量）。
+
+**结论**：配置层无遗漏错误，但 **(c) 轮前需临时切回 PBE** 是新增的必要前置，已记入 V55 的计划。
+
