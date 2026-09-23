@@ -519,6 +519,13 @@ def main():
         d = out / ("disp-%s" % num)
         d.mkdir(exist_ok=True)
         if (d / "INCAR").is_file() and (d / "POSCAR").is_file():
+            # ★ 帧已存在时不重渲染 INCAR，但**项目级 [incar] 覆盖必须重新施加**：
+            #   否则 `conf --set incar.*`（例如抬 NELM 救未收敛帧）之后的 retry 是
+            #   空操作 —— 老 INCAR 原样保留，作业照样失败（wangchao review 一.1）。
+            _ic = stepconf.apply_incar_file(d / "INCAR")
+            if _ic:
+                print("[..] %s：按 step.conf [incar] 更新 %d 项（%s）"
+                      % (d.name, len(_ic), ", ".join(str(x[1]) for x in _ic[:6])))
             continue
         shutil.copyfile(pos, d / "POSCAR")
         kc.vaspkit_kpoints(d, conf["KSCHEME"], conf["KSPACING"], conf["VASPKIT_EXE"], dim, vac_axis)
@@ -550,6 +557,14 @@ def main():
             kc.enforce_incar_tags(d / "INCAR", {"LDIPOL": ".TRUE.", "IDIPOL": "3",
                                                 "ISYM": "0"},
                                   label="step4 偶极 %s：" % num)
+        # ★ 最后落一遍项目级 [incar]/[incar.final]/[incar.delete] 覆盖。ke-dft-cpu 一直
+        #   这么做（7 处），kl 链以前一处都没有 ⇒ `conf --set incar.*` 被静默忽略
+        #   （wangchao review 一.1）。当前 kl 各步 step.conf 只有 [params]，故此处今天
+        #   是空操作（不碰文件），仅在真正写了 [incar] 时才生效。
+        _ic = stepconf.apply_incar_file(d / "INCAR")
+        if _ic:
+            print("[..] %s：step.conf [incar] 覆盖 %d 项（%s）"
+                  % (d.name, len(_ic), ", ".join(str(x[1]) for x in _ic[:6])))
         kc.write_submit(submit_tpl, d / "submit.sh",
                         {"JOBNAME": "%s-kl-dft-cpu-S4-%s" % (cwd.name, num)})
         stepconf.apply_submit(d / "submit.sh", conf.submit)
