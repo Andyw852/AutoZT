@@ -1196,7 +1196,11 @@ def remote_sbatch_fanout(cfg, s, jobname=None, force=False):
     #   于是对一个已算完的扇出步执行 retry 会把【全部】子目录原样重算（WS₂ S4 实测：13 帧
     #   里有 6 帧 SCF 未收住，retry 会重算 13 帧、6 帧照样失败，纯烧机时）。
     #   现在：远端确有子目录却无事可做 → 拒绝提交；真要整批重算请用 rerun（破坏性，先请示）。
-    if "fan_todo" in s and not s.get("fan_todo"):
+    # 判据收紧（wangchao review 二.be009cf）：**只有** "键存在且等于 []（空列表）"才拒交；
+    # 键不存在、或值为 None（非 collector 产生的旧输入/单测）一律走下面的"提交全部"。
+    # 不变量（_collector_remote.py:604）：fan_todo 由采集每次**无条件**写入，且是内存态列表
+    # ⇒ 不存在"rerun 后残留旧 []"；[]  ⟺ 每个子目录都已完成、或已有在跑作业。
+    if isinstance(s.get("fan_todo"), list) and "fan_todo" in s and not s["fan_todo"]:
         _rc1, _o1 = run_remote(cfg, sh_b64(
             "cd %s 2>/dev/null && ls -d %s 2>/dev/null | wc -l || echo 0"
             % (shlex.quote(s["dir"]), pat)),
