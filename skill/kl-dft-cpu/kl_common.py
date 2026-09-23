@@ -726,6 +726,39 @@ def band_path_2d(cell, npoints=101, vac_axis=2):
     return paths, labels, lat
 
 
+def _hex_or_ortho(lat):
+    """晶格是否"正交 或 2D 六方"—— 这两种情形下实空间周期口径 N·|a_i| 已足够。
+
+    正交：三轴两两垂直（此时倒空间式与实空间式恒等）。
+    2D 六方：|a1|≈|a2|、夹角 60°/120°，且 a3 同时垂直 a1/a2。
+    其余（单斜/三斜等斜方晶格）改用倒空间口径 —— 见 auto_mesh（wangchao review 一.4）。
+    """
+    import numpy as np
+    L = np.asarray(lat, float)
+    n = np.linalg.norm(L, axis=1)
+    if min(n) <= 1e-9:
+        return True
+    c01 = float(np.dot(L[0], L[1]) / (n[0] * n[1]))
+    c02 = float(np.dot(L[0], L[2]) / (n[0] * n[2]))
+    c12 = float(np.dot(L[1], L[2]) / (n[1] * n[2]))
+    ortho = abs(c01) < 0.02 and abs(c02) < 0.02 and abs(c12) < 0.02
+    hex2d = (abs(n[0] - n[1]) / max(n[0], n[1]) < 0.01
+             and abs(abs(c01) - 0.5) < 0.02
+             and abs(c02) < 0.02 and abs(c12) < 0.02)
+    return bool(ortho or hex2d)
+
+
+def _recip_norm(lat, i):
+    """倒格矢 |b_i| = 2π|a_j × a_k| / |a1·(a2×a3)|（无 2π 因子取 1 亦可，见调用处）。"""
+    import numpy as np
+    L = np.asarray(lat, float)
+    j, k = [x for x in range(3) if x != i]
+    vol = abs(float(np.dot(L[0], np.cross(L[1], L[2]))))
+    if vol <= 1e-12:
+        return 0.0
+    return 2.0 * math.pi * float(np.linalg.norm(np.cross(L[j], L[k]))) / vol
+
+
 def auto_mesh(spec, dim, vac_axis, poscar, q_len, nmin=20, dflt3d="15 15 15"):
     """q 网格：显式值照用；auto/空 时按"倒空间长度"估算（P1-1）。
 
@@ -746,15 +779,26 @@ def auto_mesh(spec, dim, vac_axis, poscar, q_len, nmin=20, dflt3d="15 15 15"):
     lat, _ = read_poscar_cell_frac(poscar)
     ax = vac_axis if vac_axis is not None else 2
     m = []
+    # ★ 口径（wangchao review 一.4）：Q_LEN 的物理含义是**实空间 Born–von Kármán 周期**
+    #   下界（N·|a_i| ≥ Q_LEN），对正交/2D 六方已足够；但斜方（单斜/三斜）晶格下
+    #   "实空间周期"与"倒空间采样密度"不成比例，改用倒空间口径：
+    #     |b_i| / N_i ≤ 2π / Q_LEN   ⇒   N_i ≥ Q_LEN·|b_i| / 2π
+    #   （正交时两式恒等；2D 六方若改用后者会让 WS₂ 从 88 变 ~101，故按 review 保持旧式。）
+    _use_recip = not _hex_or_ortho(lat)
     for i in range(3):
         if dim == "2d" and i == ax:
             m.append(1)
             continue
         li = max(_norm(lat[i]), 1e-6)
-        m.append(max(int(nmin), int(math.ceil(float(q_len) / li))))
+        if _use_recip:
+            bi = _recip_norm(lat, i)
+            m.append(max(int(nmin), int(math.ceil(float(q_len) * bi / (2.0 * math.pi)))))
+        else:
+            m.append(max(int(nmin), int(math.ceil(float(q_len) / li))))
+    _how = "斜方→倒空间口径 N_i≥Q_LEN·|b_i|/2π" if _use_recip else "正交/六方→实空间口径 N_i≥Q_LEN/|a_i|"
     return (" ".join(str(x) for x in m),
-            "（auto：Q_LEN=%.0f Å，|a|=%.2f/%.2f/%.2f Å，下限 %d）"
-            % (float(q_len), _norm(lat[0]), _norm(lat[1]), _norm(lat[2]), int(nmin)))
+            "（auto：Q_LEN=%.0f Å，|a|=%.2f/%.2f/%.2f Å，下限 %d，%s）"
+            % (float(q_len), _norm(lat[0]), _norm(lat[1]), _norm(lat[2]), int(nmin), _how))
 
 
 def write_kl_params(path, **kv):
