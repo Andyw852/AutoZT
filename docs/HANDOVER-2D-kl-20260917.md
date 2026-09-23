@@ -2,7 +2,7 @@
 
 > 写于 2026-09-17，上一会话 context 用满。仓库 `~/software/AutoZT`（包 `autozt`），
 > 集群 jzzn（ssh 别名 `jzzn`），项目根 `/mnt/d/tf_data/test_TE/P1`，
-> 远端工作根 `/public/home/wangchao/Fullerene_Network/work`。
+> 远端工作根 `/public/home/.../Fullerene_Network/work`。
 
 ## 0. 一句话现状
 
@@ -145,7 +145,7 @@ P0-3（LASSO 设置）**尚未在完整链路上跑通**。下一步分两条线
 4. S1 通过且线 A 验证完成后，再批量推 S2→S6；S4 的 INCAR 按 bench 结论定。
 
 **低优先级**：Mn₂In₂Se₅（jzzn `/public/home/wangch/Mn2In2Se5/fix`，**账号是 wangch 不是
-wangchao**，手写 phono3py+symfc、**3D 体材料**，按 |P| 判）与 225 相四合金（hanhai25、
+user**，手写 phono3py+symfc、**3D 体材料**，按 |P| 判）与 225 相四合金（hanhai25、
 走 **ke 链**）—— 都是 3D，与真空/厚度无关，只需查当时变胞段有没有被跳过。
 
 ---
@@ -153,7 +153,7 @@ wangchao**，手写 phono3py+symfc、**3D 体材料**，按 |P| 判）与 225 �
 ## 6. 归档与产物路径
 
 - **旧结构归档**（S4 力数据，2×2 上排的命根子）：
-  `/public/home/wangchao/Fullerene_Network/work/_archive_pre_relax_20260917/`（1.1 GB）
+  `/public/home/.../Fullerene_Network/work/_archive_pre_relax_20260917/`（1.1 GB）
   - `P1_Mo-MoS2_Z4-3-1_kl_step4_disp/`：132 MB，**166 帧含全部 vasprun.xml** +
     `phono3py_disp.yaml`(1 MB，含旧超胞与位移) + 旧 `phonon_summary.json`/`fit_config.json`
   - 另外 6 个材料的 `*_essentials/`（`phono3py_disp.yaml` + `kl_params.txt` + 旧 SPOSCAR）
@@ -537,7 +537,7 @@ pymatgen 对比**材料根种子 POSCAR** 与当前 S1 CONTCAR（同为 Al10N2 =
 - 本轮 3 个文件**已留在暂存区**，执行下面一条即可落库：
 
 ```bash
-cd /home/wangchao/software/AutoZT
+cd ~/software/AutoZT
 git commit -m "fix(2D-kl): S1 变胞段 ZBRENT 根因修复（STAGES_RUN 闸门）+ 能量判据 EDIFFG=1E-4 + 末端力上限 0.01；checker stdout 改 stderr"
 ```
 
@@ -662,7 +662,7 @@ git commit -m "fix(2D-kl): S1 变胞段 ZBRENT 根因修复（STAGES_RUN 闸门�
    取消，再用 **`rerun -y`** 正确重建（远端种子 a=3.16 Å 已核验），重新提交 **3849203**。
    ★ 教训：**`rerun` 与 `start` 必须分两条命令、分别确认返回值**，不能串在一个 shell 里。
 
-### 13.2 tol_cell 结论的正确措辞（wangchao 修正）
+### 13.2 tol_cell 结论的正确措辞（user 修正）
 
 正确表述：**"阈值对结构正常的材料是合适的，没有证据表明它低于噪声底"**，
 **而不是"不需要下限"**。
@@ -676,7 +676,7 @@ git commit -m "fix(2D-kl): S1 变胞段 ZBRENT 根因修复（STAGES_RUN 闸门�
 
 ### 13.3 本会话已完成（可提交）
 
-1. **`.gitignore` 兜底**（wangchao 单独一条提交，**已 `git add`**）：忽略另一会话留下的
+1. **`.gitignore` 兜底**（user 单独一条提交，**已 `git add`**）：忽略另一会话留下的
    Windows 路径垃圾目录，模式 `C\:*` 与 `*wsl.localhost*`（后者绕开了 gitignore 的
    反斜杠转义坑），`git status` 残留 **0**；注释里被吃掉的字符已修好。
 2. **每段三元组日志**：`relax_common.py` 的 `run_relax.sh` 生成器在每段跑完后追加一行
@@ -736,7 +736,7 @@ git commit -m "fix(2D-kl): S1 变胞段 ZBRENT 根因修复（STAGES_RUN 闸门�
 - 已知分工：本会话=2D kl/S1 + 线 A；会话 B=`autozt/*`(agent/MCP)、`ke-dft-cpu/step3*/step8*`、
   `gen_step6_kappa.py`(P49)、`submit_shengbte.tpl`；会话 C=`eph-qe-cpu/`、`zt-dft-cpu/`。
 
-### 13.5 ★ 工作方式（wangchao 定的规矩，下一会话必须遵守）
+### 13.5 ★ 工作方式（user 定的规矩，下一会话必须遵守）
 
 **每完成一个步骤的验收，立刻把结论追加进交接文档，不要攒到最后。** 验收表（§5）就是天然的
 检查点，一步一记，交接文档就永远是最新的。本会话已经出现过"上下文见底、来不及写交接"的险情；
@@ -751,7 +751,7 @@ git commit -m "fix(2D-kl): S1 变胞段 ZBRENT 根因修复（STAGES_RUN 闸门�
 | S3_nac / S4_disp / S5_fc / S5.1_plot / S6_kappa | 未开始（S4 前须先做 13.4-C 两项） |
 
 材料：`/mnt/d/tf_data/test_kl/MoS2_kltest`（1H-MoS₂ 单层，a=3.16 Å、25 Å 真空、
-d(Mo–S)=2.407 Å）；远端工作目录 `/public/home/wangchao/Fullerene_Network/work/MoS2_kltest`。
+d(Mo–S)=2.407 Å）；远端工作目录 `/public/home/.../Fullerene_Network/work/MoS2_kltest`。
 
 
 ---
@@ -794,7 +794,7 @@ d(Mo–S)=2.407 Å）；远端工作目录 `/public/home/wangchao/Fullerene_Netw
 
 ## 15. 2026-09-19：INCAR_BENCH 落地、S4 生成、两笔待处理
 
-### 15.1 ★ 遗留不一致：`gen_step6_kappa.py` 的 `write_material_level('..')`（wangchao 要求记一笔）
+### 15.1 ★ 遗留不一致：`gen_step6_kappa.py` 的 `write_material_level('..')`（user 要求记一笔）
 
 现状（两处写同一契约、**位置不同**）：
 - **S1（已改好）**：`relax_common.write_material_thickness()` 写**材料根** `<mat>/thickness_2d.json`
@@ -808,7 +808,7 @@ d(Mo–S)=2.407 Å）；远端工作目录 `/public/home/wangchao/Fullerene_Netw
 ② **直接删掉那段 `_MAT_LEVEL`**，并在注释里写明"S1（step1_std_opt）已承担材料级写入职责"。
 无论选哪个，**不要再出现第二个写入位置** —— 这次排查已经为"同一契约两个位置"多花过时间。
 
-### 15.2 ★ 新操作规矩（wangchao 2026-09-18 定，已进 AGENTS.md 铁律 2/3）
+### 15.2 ★ 新操作规矩（user 2026-09-18 定，已进 AGENTS.md 铁律 2/3）
 
 1. **`-f`/`-y` 必须逐条单独请示**：批准"目标"（如"修 Mo2S3"）**不等于**批准具体命令里的 `-f`。
    教训来源：本会话曾以"MoS₂ 的 S1 重判"为由执行 `start -f`。
@@ -848,16 +848,16 @@ d(Mo–S)=2.407 Å）；远端工作目录 `/public/home/wangchao/Fullerene_Netw
 - bench 12 个作业已提交：**jobid 3850864–3850875**（encut_1.5x 3850864/65、encut_2.0x 3866/67、
   lreal_auto_addgrid 3868/69、lreal_auto_noaddgrid 3870/71、lreal_false_addgrid 3872/73、
   lreal_false_noaddgrid 3874/75）。
-- **生产 S4 扇出未提交**（wangchao 明确"等 bench 报告看过 max|ΔF| 与耗时再定"）。
+- **生产 S4 扇出未提交**（user 明确"等 bench 报告看过 max|ΔF| 与耗时再定"）。
 
-### 15.5 ★ 复现性对照要看节点（wangchao 提醒，待做）
+### 15.5 ★ 复现性对照要看节点（user 提醒，待做）
 
 `encut_1.5x` 与 `lreal_false_addgrid` 的 INCAR 物理设置相同、是两次独立运行 —— 但报告里**不记节点名**。
 若两次落在不同节点，差值里混入节点间差异，不能当"同输入复现性噪声底"。跑完后先取节点：
 
 ```bash
 # ★ 2026-09-19 实测：jzzn 上 `scontrol show job` 的 NodeList 是 (null)，取节点要用 squeue 的 %N：
-ssh jzzn "squeue -u wangchao -h -o '%i %T %M %N' | grep -E '3850864|3850872'"
+ssh jzzn "squeue -u user -h -o '%i %T %M %N' | grep -E '3850864|3850872'"
 # 已实测：3850864 在 cu14、3850865 在 cu18 —— 同一变体的两帧就已落在不同节点，
 # 所以复现性对照那一对（3850864 vs 3850872）大概率也不同节点，需同节点对照才能定噪声底。
 ```
@@ -870,12 +870,12 @@ ssh jzzn "squeue -u wangchao -h -o '%i %T %M %N' | grep -E '3850864|3850872'"
 ### 15.6 下一步（等 bench 报告）
 
 1. 取节点 → `python incar_bench.py analyze --dir step4_disp`（登录节点，已批准）→ 看 max|ΔF| 与耗时；
-2. 据报告定生产 INCAR（是否保留 ADDGRID、ENCUT 用 390 还是 520）→ 报给 wangchao 决定是否提交生产扇出；
+2. 据报告定生产 INCAR（是否保留 ADDGRID、ENCUT 用 390 还是 520）→ 报给 user 决定是否提交生产扇出；
 3. 生产 S4 只有 12 帧，若批准，提交后按 §5 验收表继续（S5 第一道门 = pheasy
    `Imposing rotational invariance and equilibrium conditions`）。
 
 
-### 16. 2026-09-19：bench 报告要看什么 + 两条纪律（wangchao 定）
+### 16. 2026-09-19：bench 报告要看什么 + 两条纪律（user 定）
 
 #### 16.1 ★ MoS₂ 的 bench 结论**不得外推**（重要）
 
@@ -886,7 +886,7 @@ VASP 手册建议 ≥30 原子用实空间投影主要是**为大体系**考虑�
 **生产口径的最终选择必须在真实规模的超胞上重做** —— 即推进到 jzz 那批、在 **~80 原子超胞 × 166 帧**
 （Mo₂S₃ Z4-3-1）的条件下再跑一次 bench。**不得用 MoS₂ 的结论去套 166 帧的体系。**
 
-#### 16.2 bench 报告必须包含的四项（wangchao 要求）
+#### 16.2 bench 报告必须包含的四项（user 要求）
 
 1. **复现性对照那一对（`encut_1.5x` 与 `lreal_false_addgrid`）的节点名 + 两者 |ΔF|**：
    若它自身就接近 0.5 meV/Å，说明阈值没有区分度，需要重新定；两次不同节点则该差值里混了
@@ -1147,7 +1147,7 @@ python skill/kl-dft-cpu/kl_common.py --scan-nelm <step4_disp 目录> [--json] [-
 
 ### 19.4 P1 全批回溯扫描统计（jzzn，2026-09-19，只读）
 
-扫描对象：`/public/home/wangchao/Fullerene_Network/work/P1_*/kl-dft-cpu/step4_disp`。
+扫描对象：`/public/home/.../Fullerene_Network/work/P1_*/kl-dft-cpu/step4_disp`。
 
 | 材料 | disp-* 帧目录 | 有 OUTCAR | NELM 警告 | aborting!=1 | 缺 OUTCAR | 电子步 min/中位/mean/p90/max |
 |---|---|---|---|---|---|---|
@@ -1200,7 +1200,7 @@ python skill/kl-dft-cpu/kl_common.py --scan-nelm <step4_disp 目录> [--json] [-
   `--scan-nelm --json`，退出码 1（有坏帧）/ 0（全好）——PASS。
 - `ast.parse`：`kl_common.py`、`gen_step5_fc.py` 均 OK。
 - `python3 tests/suite_io_schema.py`、`python3 tests/suite_skillspec.py`：全部通过。
-- `tests/test_zt_upstream_fixes.py`（用 `/home/wangchao/miniconda3/envs/multiqc_env/bin/python -m pytest`）：
+- `tests/test_zt_upstream_fixes.py`（用 `~/miniconda3/envs/multiqc_env/bin/python -m pytest`）：
   **8 passed**（含 `test_kl_frame_check_skips_equilibrium_frame`，证明新增导入回退未破坏原逻辑）。
 - 本文件已 `git add`、**未 commit**。
 
@@ -1218,7 +1218,7 @@ python skill/kl-dft-cpu/kl_common.py --scan-nelm <step4_disp 目录> [--json] [-
 两者都被用户明确禁止，且会毁掉那 165 帧。
 
 **关键核实结论：这一帧根本不需要补。** 归档数据集
-`/public/home/wangchao/Fullerene_Network/work/_archive_pre_relax_20260917/P1_Mo-MoS2_Z4-3-1_kl_step4_disp`
+`/public/home/.../Fullerene_Network/work/_archive_pre_relax_20260917/P1_Mo-MoS2_Z4-3-1_kl_step4_disp`
 **166 个 `disp-*` / 166 个 OUTCAR，`disp-00001` 完整**（OUTCAR、vasprun.xml、CONTCAR、CHGCAR、WAVECAR 全在），
 并带 `phono3py_disp.yaml` / `alm.in` / `SPOSCAR` / `POSCAR-00001..00165`。而该数据集的用途正是
 "**归档完整性 + 2×2 诊断的上排（走 fc-fit，用归档那份）**" → **该项已满足，无需任何 retry/rerun**。
@@ -1251,10 +1251,10 @@ python skill/kl-dft-cpu/kl_common.py --scan-nelm <step4_disp 目录> [--json] [-
    这是 **P0-1 那道门第一次在文献基准上被真正验证**。若 BHH 在 MoS₂ 上让 `rel_err` 明显上升，
    那它是**继 Mg₂C₆₀ 之后的第二个样本**，需要单独分析；
 3. 比较（按重要性）：**ZA 指数 p**（两个面内方向）→ **Γ 点光学模频率** → **整条谱频率 RMS 偏差（相对 %）** → κ；
-4. 判据（wangchao 给定）：**频率相对偏差 < 1% 且 |Δp| < 0.05 → 390 够用**；
+4. 判据（user 给定）：**频率相对偏差 < 1% 且 |Δp| < 0.05 → 390 够用**；
 5. 结论写 §21（或并入本节），再据此定 **jzz 那 166 帧的口径**（390/1e-8 vs 520/1e-7，成本实测 2.1×）。
 
-### 20.4 本轮的三个操作细节（wangchao 要求记录）
+### 20.4 本轮的三个操作细节（user 要求记录）
 
 - **平衡帧口径**：两套必须**各自扣自己口径的平衡帧**（pheasy 逐帧扣平衡帧力）；生产 `disp-00000` 已核实为 `SPOSCAR`（零位移）；
 - **子代理规矩**：涉及作业提交/状态变更的机械工作**自己做**（已写入 §15.2 第 3 条）；子代理只做只读分析/写代码/跑测试；
@@ -1305,8 +1305,8 @@ autozt -tt kl-dft-cpu -p MoS2_kltest -j S4_disp start
 
 - `FIT_INPUT_DIR` 取值：`auto | path`（**技能目录相对或绝对路径**，`gen_step1_fit.py:54`）。
 - **两套都显式给绝对路径**，避免 `auto` 自动搜索在 `step4_disp/bench/` 附近产生歧义：
-  - 390：`/public/home/wangchao/Fullerene_Network/work/MoS2_kltest/kl-dft-cpu/step4_disp`
-  - 520：`/public/home/wangchao/Fullerene_Network/work/MoS2_kltest/kl-dft-cpu/step4_disp/bench/encut_2.0x_ediiff1e7_full12`
+  - 390：`/public/home/.../Fullerene_Network/work/MoS2_kltest/kl-dft-cpu/step4_disp`
+  - 520：`/public/home/.../Fullerene_Network/work/MoS2_kltest/kl-dft-cpu/step4_disp/bench/encut_2.0x_ediiff1e7_full12`
     （已备好 `SPOSCAR` + `phono3py_disp.yaml` + `disp-00000`，见 §20.5）
 - 参数：`FIT_ENGINE=pheasy`、`PHEASY_FIT_METHOD=OLS`、`PHEASY_RASR=BHH`；另跑一份默认 `RFE` 作对照。
 - 输出目录硬编码 `step1_fit`（§20.5）→ 两套串行跑、各自另存为 `step1_fit_encut390/`、`step1_fit_encut520/`。
@@ -1538,7 +1538,7 @@ autozt -tt fc-fit -p MoS2_kltest -j S1_fit start     # → jobid 3856220
 
 ---
 
-## 22. 2026-09-20：ZA 一项先按「怀疑测量」处理（wangchao 判断，采纳）
+## 22. 2026-09-20：ZA 一项先按「怀疑测量」处理（user 判断，采纳）
 
 **判断**：§21.2 的 p≈1.186 是在**取错 q 方向**上测出来的（§21.4 的真空轴 bug）→ **还不够格作为"ZA 线性化"的证据**。
 反证很有力：Γ 点光学模与文献吻合（实测 8.53–14.17 THz vs 文献 E″≈8.6 / E′≈11.5 / A₁′≈12.1 / A₂″≈14.1）——
@@ -1558,7 +1558,7 @@ autozt -tt fc-fit -p MoS2_kltest -j S1_fit start     # → jobid 3856220
 
 **自校验要求**：用构造的最小 2D 体系（已知二次 ZA）验证**新判据能给出 p≈2** —— 否则新判据本身不可信。
 
-**同时确认的边界（wangchao）**：
+**同时确认的边界（user）**：
 
 - **ENCUT 差分结论仍成立**：它是**两套之间的差分**，两套处理完全一致，故 ZA 绝对值有疑不影响它（频率 0.033%、|Δp| 4.9e-5、余量 30 倍 → **390 够用**）；
 - 但按 §16.1 的纪律**不得直接外推到 jzz 那批 80 原子超胞** —— 不需要重做整条链，
@@ -1621,7 +1621,7 @@ autozt -tt fc-fit -p MoS2_kltest -j S1_fit start     # → jobid 3856220
 
 ---
 
-## 24. 2026-09-20：A/B 已批准并分派（wangchao 决定）
+## 24. 2026-09-20：A/B 已批准并分派（user 决定）
 
 ### 24.1 A（修 kl 链同一方向 bug）—— 子代理 `b5256953`
 
@@ -1636,7 +1636,7 @@ autozt -tt fc-fit -p MoS2_kltest -j S1_fit start     # → jobid 3856220
 
 ### 24.2 B（结构对称化 = 体检第五条）—— 子代理 `a8b71919`
 
-- **判据（按 wangchao 指定）**：spglib 在 **symprec=1e-5 与 1e-4 给出的空间群不一致** ⇒ 存在**数值微畸变** ⇒ 触发对称化建议。
+- **判据（按 user 指定）**：spglib 在 **symprec=1e-5 与 1e-4 给出的空间群不一致** ⇒ 存在**数值微畸变** ⇒ 触发对称化建议。
   **不要固定某个容差当判据** —— 两容差对比更能发现问题；
 - **三项确认（任一不过不许静默通过）**：
   ① 原子数与化学计量比**不变**；
@@ -1649,7 +1649,7 @@ autozt -tt fc-fit -p MoS2_kltest -j S1_fit start     # → jobid 3856220
 - **对称化后重新检查面内残余应力**（拉平 a、b 会引入一点应力，量级应很小 7.88e-6 Å 级，但既然有门禁就让它过一遍）；
 - 默认**不改变现有行为**（体检只告警；对称化用显式开关），开关登记进 `step.conf`/`skill.yaml` 说明。
 
-### 24.3 接下来的顺序（wangchao 定）
+### 24.3 接下来的顺序（user 定）
 
 1. **A**：修 kl 方向 bug + 复核历史结论；
 2. **B**：对称化做成体检第五条（含三项确认）；
@@ -1772,7 +1772,7 @@ autozt -tt fc-fit -p MoS2_kltest -j S1_fit start     # → jobid 3856220
 3-tuple；mlff 是独立副本未动。`za_exponent` 无外部消费者（仅 mlff 另产一份）。
 
 ## 27.2 验收（本会话独立复跑）
-- `/home/wangchao/miniconda3/envs/atomate2_p_a/bin/python tmp/_kltest_za_kl.py` → **EXIT=0 / ALL PASS**。
+- `~/miniconda3/envs/atomate2_p_a/bin/python tmp/_kltest_za_kl.py` → **EXIT=0 / ALL PASS**。
 - 真实 MoS₂ fc2（`tmp/mos2_fc_compare/encut390`）：vac 轴 cartesian=2→primitive=0，dirs=[(0,1,0),(0,1,-1)]；
   kl 的 p 与 fc-fit `_za_summary` **逐位相同**：qmax=0.05 → 1.9930749384721134 / 1.9801186415609848；
   qmax=0.01 → 1.9997130 / 1.9991729（收敛 2.000）。symprec Amm2(#38)/4 → P-6m2(#187)/12。
@@ -1789,7 +1789,7 @@ autozt -tt fc-fit -p MoS2_kltest -j S1_fit start     # → jobid 3856220
 ## 27.4 遗留
 1. **第三份副本**：`skill/_common/mlff/klmlff_common.py` 的 `inplane_qdirs`/`za_check_2d`（L397/L431）
    同样是无条件 `e_i+e_j`、无 vac 映射、无本征矢量判据，被 `phonon-mlff-cpu/gpu` 调用。按约束未改，
-   已在 TODO 点名 —— 待 wangchao 决定是否同步修（该文件正被另一会话的 mace→mlff 重命名改动）。
+   已在 TODO 点名 —— 待 user 决定是否同步修（该文件正被另一会话的 mace→mlff 重命名改动）。
 2. mesh 最小频率仍用默认 symprec=1e-5（只 ZA 拟合用了 1e-4 克隆），与改前一致。
 3. `band_path_2d` 修复改变了 2D 的 S5 能带路径（更正确但属行为变更），重跑材料时可对比。
 
@@ -1831,7 +1831,7 @@ ZA 2D 判定现有 **3 份独立实现**：`skill/fc-fit/fc_plot_phonon.py`、`s
 `skill/_common/mlff/klmlff_common.py`。**本次修一个 bug 要改三处，下次还会是三处。**
 正式列为待办：把 `_k_sum_sign/_inplane_qdirs/_vacuum_axis_in_primitive/_eig_out_of_plane/
 za_power_law_eig/_cell_symmetry/_clone_phonopy` 收敛到公共模块（如 `skill/_common/za_2d.py`），
-三处改 import。**属新增公共模块 → 需 wangchao 批准后再做。**
+三处改 import。**属新增公共模块 → 需 user 批准后再做。**
 
 ## 28.4 band_path_2d 行为变更（2D S5 能带路径）
 
@@ -1850,12 +1850,12 @@ za_power_law_eig/_cell_symmetry/_clone_phonopy` 收敛到公共模块（如 `ski
 | Mo₂S₃ Z4-3-1 | 10 | 80 | Pm(#6) 2 ops | Pm(#6) 2 ops | 无 |
 | Ti₂S₃ Z4-3-1 | 10 | 80 | Pm(#6) 2 ops | Pm(#6) 2 ops | 无 |
 
-→ **对这四个材料，B 的对称化门是 no-op（不触发），确认②本就无从触发。** wangchao 2026-09-21 决定：
+→ **对这四个材料，B 的对称化门是 no-op（不触发），确认②本就无从触发。** user 2026-09-21 决定：
 **B 的三个单点（①对称化前 ②对称化后 ③对称化后应力）一并取消**，不再单独占机时。B 的门禁逻辑
 已有构造体系自测 + 真实 MoS₂ 审计/对称化证据（§25）；真要在生产上演示，等某个材料确实弛豫出
 微畸变时再说。
 
-## 28.6 Item 4（jzz 2 帧 × ENCUT 390/520 力对照）—— **已取消**（wangchao 2026-09-21）
+## 28.6 Item 4（jzz 2 帧 × ENCUT 390/520 力对照）—— **已取消**（user 2026-09-21）
 
 理由：测出来只是两个内部数字，**没有外部参照可比**；而 MoS₂ 上已有「频率相对偏差 0.033% vs
 判据 1%」即 ~30 倍余量的结论。再花机时做同量级内部差分，收益不足。
@@ -1949,7 +1949,7 @@ za_power_law_eig/_cell_symmetry/_clone_phonopy` 收敛到公共模块（如 `ski
 - **S6 网格轴序**（§29.4 的失败根因）：`gen_step6_kappa` 新增 `_mesh_prim_remap` / `_prim_lattice`；
   2D 时把 **POSCAR 轴序**的网格重排成**原胞基矢轴序**。MoS₂ 实测 `88 88 1 -> 1 88 88`。
   重生成的 submit.sh 三条 RTA 为 `--mesh 1 88 88 / 1 110 110 / 1 138 138`。
-- **LBTE 对照 = 最粗档 + 仅 300 K**（wangchao 指定）：`build_phono3py_cmd` 加 `ts_override`；
+- **LBTE 对照 = 最粗档 + 仅 300 K**（user 指定）：`build_phono3py_cmd` 加 `ts_override`；
   `plan` 追加 `(mesh_list[0], lbte)` 且 `ts_override={'lbte':'300'}`。MoS₂ 项目
   `step6_kappa/step.conf` 设 `COMPARE_LBTE = on`。submit.sh 已确认
   `phono3py-load ... --lbte --mesh 1 88 88 --ts="300"`。
@@ -2637,7 +2637,7 @@ autozt -tt kl-dft-cpu -p MoS2_kltest -j S2_static start   # 预期：报"确认�
 ## 46.5 已有材料只读重判（`scripts/rejudge_imag_policy.py`，只读）
 
 跑法（jzzn，`atomate2_p_a`）：`PYTHONPATH=/tmp/imag_rejudge python -u rejudge_imag_policy.py \\
-  --root /public/home/wangchao/Fullerene_Network/work --pattern '<mat>/kl-dft-cpu/step5_fc/phono3py/fc2.hdf5' --mesh-n 60`
+  --root /public/home/.../Fullerene_Network/work --pattern '<mat>/kl-dft-cpu/step5_fc/phono3py/fc2.hdf5' --mesh-n 60`
 （脚本对每个 fc2 建 Phonopy → 跑 `[1,60,60]` 网格 + 2D 路径 101 点 → `classify_imag` → 与旧
 `phonon_summary.json` 对照。**只读，不改任何文件、不提交作业**。）
 

@@ -93,7 +93,7 @@ def _write_submit(outdir):
             "QOS": str(conf["SBATCH_QOS"] or "premium"),
             "NTASKS": str(int(conf["PLOT_CORES"] or 16)),
             "CONDA_SH": str(conf["CONDA_SH"]
-                            or "/public/home/wangchao/miniconda3/etc/"
+                            or "/public/home/.../miniconda3/etc/"
                                "profile.d/conda.sh"),
             "CONDA_ENV": str(conf["CONDA_ENV"] or "atomate2_p_a"),
             # 作业的 cwd 是【步骤目录】，而本脚本在它的上一级（材料技能目录），

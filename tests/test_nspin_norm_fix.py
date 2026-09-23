@@ -3,7 +3,7 @@
 
 跑法（worktree 根目录）：
     PYTHONPATH=skill/ke-dft-cpu \
-      /home/wangchao/miniconda3/envs/atomate2_p_a/bin/python \
+      ~/miniconda3/envs/atomate2_p_a/bin/python \
       -m unittest tests.test_nspin_norm_fix -v
 
 h5 集成部分只造临时合成 h5（deformation_potentials_up/down 全 1.0），

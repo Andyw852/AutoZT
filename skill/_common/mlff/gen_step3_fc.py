@@ -127,7 +127,7 @@ except Exception:
 # pheasy 拟合（FIT_SOFTWARE=pheasy）：从 phono3py_params.yaml 抽出随机位移+力 →
 # 写 POSCAR/SPOSCAR/dataset_disps.npy/dataset_forces.npy → 四步 pheasy CLI
 # (-s cluster space / -c 对称约束 / -d 位移矩阵 / -f 拟合) → fc2.hdf5/fc3.hdf5。
-# 对照 wangchao 的通用 pheasy 脚本：float64、LASSO 走 celer + --std。
+# 对照 user 的通用 pheasy 脚本：float64、LASSO 走 celer + --std。
 # 参数：拟合方法(OLS|LASSO|RFE|RFE_TSQR) 三阶截断(Å) RASR(none|BHH|BH|H)
 #   RASR 由 gen 按 DIM 解析后传进来（2D→BHH，3D→none），只挂 -c 步并校验施加日志。
 _PHEASY_FIT = r'''import os, re, sys, subprocess

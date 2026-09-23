@@ -109,8 +109,8 @@ def _auto_detect_band_summary():
     """按材料名自动探测 band_summary.json（band 技能在 joint_research_project 下）。"""
     material = os.path.basename(os.path.dirname(os.path.abspath(os.getcwd())))
     cands = [
-        "/public/home/wangchao/joint_research_project/huang/%s/POSCAR_B/band/step4_band_plot/band_summary.json" % material,
-        "/public/home/wangchao/joint_research_project/huang/%s/POSCAR_B/band/step3_band_plot/band_summary.json" % material,
+        "/public/home/.../joint_research_project/huang/%s/POSCAR_B/band/step4_band_plot/band_summary.json" % material,
+        "/public/home/.../joint_research_project/huang/%s/POSCAR_B/band/step3_band_plot/band_summary.json" % material,
     ]
     for c in cands:
         if os.path.exists(c):

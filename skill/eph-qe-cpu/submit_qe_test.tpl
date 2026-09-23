@@ -23,10 +23,10 @@ export LD_LIBRARY_PATH=$MKLROOT/lib/intel64:$LD_LIBRARY_PATH
 export LD_PRELOAD=$MKLROOT/lib/intel64/libmkl_rt.so${LD_PRELOAD:+:$LD_PRELOAD}
 export MKL_NUM_THREADS=1
 export MKL_DYNAMIC=FALSE
-export QE_BIN=/public/home/wangchao/software/AutoZT/qe-7.3-perturbo/bin
+export QE_BIN=/public/home/.../software/AutoZT/qe-7.3-perturbo/bin
 export WANNIER_BIN=/public/software/wannier/3.1.0/bin
-export PERTURBO_BIN=/public/home/wangchao/software/AutoZT/qe-7.3-perturbo/perturbo/bin
-export PSEUDO_DIR=/public/home/wangchao/software/AutoZT/pseudo
+export PERTURBO_BIN=/public/home/.../software/AutoZT/qe-7.3-perturbo/perturbo/bin
+export PSEUDO_DIR=/public/home/.../software/AutoZT/pseudo
 export OMP_NUM_THREADS=1
 export OMP_STACKSIZE=1G
 # Avoid node-specific OpenFabrics initialization failures for single-node QE.

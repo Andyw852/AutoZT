@@ -17,7 +17,7 @@ cd "$(cd "$(dirname "$0")" && pwd)" || exit 1
 
 # ★ 修复：cron 环境 PATH 极简（/usr/bin:/bin），不含 ~/.local/bin，
 #   导致裸调 tf 报 "No such file or directory"。显式补上，让 tf 软链可被找到。
-export PATH="/home/wangchao/.local/bin:$PATH"
+export PATH="~/.local/bin:$PATH"
 
 # =============================================================================
 # ★ 与 taskflow-v2.0 的隔离开关（2026-09-17 加）
@@ -30,12 +30,12 @@ export PATH="/home/wangchao/.local/bin:$PATH"
 # =============================================================================
 if [ "${AUTOZT_MONITOR_SHARED:-0}" = "1" ]; then
 (
-    # ★ 2026-09-17 修正：原来这里硬编码 cd 到 /home/wangchao/software/taskflow-v2.0，
+    # ★ 2026-09-17 修正：原来这里硬编码 cd 到 ~/software/taskflow-v2.0，
     #   而 v2.0 里只有 bin/tf、没有 bin/autozt → 每轮 python3 报 "can't open file"
     #   静默失败，ke-dft-cpu 的这两个材料实际从没被这一块推进过。
     #   改成指向【本脚本所在仓库】。
     cd "$(cd "$(dirname "$0")" && pwd)" || exit 1
-    /home/wangchao/bin/hanhai25-connect >> tmp/ke_auto_monitor.log 2>&1 || exit 1
+    ~/bin/hanhai25-connect >> tmp/ke_auto_monitor.log 2>&1 || exit 1
     AUTOZT_OP_WORKERS=8 timeout 600 python3 bin/autozt -tt ke-dft-cpu -p Mg4C60,Mg4C60_monolayer auto on >> tmp/ke_auto_monitor.log 2>&1
     timeout 600 python3 bin/autozt -tt ke-dft-cpu -p Mg4C60,Mg4C60_monolayer summary --diff
 )

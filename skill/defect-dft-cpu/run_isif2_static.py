@@ -43,7 +43,7 @@ def main():
         "LMAXMIX = 4", "MAGMOM = %d*0" % (ncomp * natoms), ""])
     open(os.path.join(outdir, "INCAR"), "w").write(incar)
     open(os.path.join(outdir, "KPOINTS"), "w").write("Auto mesh (supercell)\n0\nGamma\n2 2 2\n0 0 0\n")
-    D.assemble_potcar(order, conf.get("POTCAR_DIR", "/public/home/wangchao/software/vasp_pseudopotentials"),
+    D.assemble_potcar(order, conf.get("POTCAR_DIR", "/public/home/.../software/vasp_pseudopotentials"),
                       out_path=os.path.join(outdir, "POTCAR"))
     D.render_submit(D.find_submit_tpl(soc), os.path.join(outdir, "submit.sh"), "static_super")
     print("[OK] ISIF=2 静态超胞就绪: %s" % outdir)

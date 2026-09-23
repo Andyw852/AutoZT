@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """skillspec —— 技能自描述扩展段（io_schema / flow / corrections）的规范、校验与渲染。
 
-为什么有这个模块（2026-09-14 与 wangchao 讨论的"加技能友好"改造）：
+为什么有这个模块（2026-09-14 与 user 讨论的"加技能友好"改造）：
   老 skill.yaml 只描述"怎么跑"（steps / gen_need / templates），不描述
     · 这个技能**吃什么、吐什么、有哪些旋钮** —— 建议 1.3 io_schema
     · 这个技能**整条流程在干什么、产物能喂给谁** —— 建议 1.2 flow

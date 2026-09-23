@@ -36,9 +36,9 @@ def ref_energy(outcar):
 
 def main():
     conf = D.load_stepconf()
-    refdir = Path(conf.get("REFERENCES_DIR", "/public/home/wangchao/convex_hull_refs"))
-    potdir = conf.get("POTCAR_DIR", "/public/home/wangchao/software/vasp_pseudopotentials")
-    user = conf.get("USER", os.environ.get("USER", "wangchao"))
+    refdir = Path(conf.get("REFERENCES_DIR", "/public/home/.../convex_hull_refs"))
+    potdir = conf.get("POTCAR_DIR", "/public/home/.../software/vasp_pseudopotentials")
+    user = conf.get("USER", os.environ.get("USER", "user"))
     posdir = refdir / "convex_hull_references"
     os.makedirs(STEP, exist_ok=True)
 

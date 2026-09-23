@@ -1,13 +1,13 @@
 # -*- coding: utf-8 -*-
 """自测：结构体检第五条 —— 数值微畸变审计 + spglib 对称化（symmetry_audit.py）。
 
-判据（wangchao 指定）：symprec=1e-5 与 1e-4 给出的空间群不一致 => 数值微畸变。
+判据（user 指定）：symprec=1e-5 与 1e-4 给出的空间群不一致 => 数值微畸变。
 本套件用**构造的已知微畸变结构**与 MoS2 实测数字做断言；需要 spglib+numpy，
 缺了自动跳过（exit 0，不误报失败）。
 
 跑法（建议用装了 spglib 的 python；system python3 会 SKIP）：
     python3 tests/suite_symmetry_audit.py
-    /home/wangchao/miniconda3/envs/atomate2_p_a/bin/python tests/suite_symmetry_audit.py
+    ~/miniconda3/envs/atomate2_p_a/bin/python tests/suite_symmetry_audit.py
 """
 import math
 import os

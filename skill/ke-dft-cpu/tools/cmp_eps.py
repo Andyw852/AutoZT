@@ -13,10 +13,10 @@ def grab(txt):
 print("%-12s %-22s %-22s %s" % ("材料", "生产 9x9x1 eps_inf(xx,zz)", "新 9x9x2 eps_inf(xx,zz)", "变化"))
 print("-" * 88)
 for m in ["Pb2Sb2Te5", "Sn2Sb2Te5", "Pb2Bi2Te5", "Sn2Bi2Te5"]:
-    old = Path("/public/home/wangchao/ke_work/%s/ke-dft-cpu/step5_dielect_soc_dfpt/OUTCAR" % m)
-    new = Path("/public/home/wangchao/ke_work/%s/ke-dft-cpu/soc_dfpt_v2/OUTCAR" % m)
+    old = Path("/public/home/.../ke_work/%s/ke-dft-cpu/step5_dielect_soc_dfpt/OUTCAR" % m)
+    new = Path("/public/home/.../ke_work/%s/ke-dft-cpu/soc_dfpt_v2/OUTCAR" % m)
     if m == "Pb2Sb2Te5":
-        new = Path("/public/home/wangchao/ke_work/%s/ke-dft-cpu/kconv_soc_dfpt/9x9x2/OUTCAR" % m)
+        new = Path("/public/home/.../ke_work/%s/ke-dft-cpu/kconv_soc_dfpt/9x9x2/OUTCAR" % m)
     a = grab(old.read_text(errors="ignore"))
     b = grab(new.read_text(errors="ignore")) if new.is_file() else None
     if not a or not b:

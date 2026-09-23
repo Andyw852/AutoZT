@@ -5,7 +5,7 @@
 
 ## 0. 当前状态（生成时刻）
 
-- 仓库：`/home/wangchao/software/AutoZT`，HEAD `7e2f7ff`（master，ahead 5）
+- 仓库：`~/software/AutoZT`，HEAD `7e2f7ff`（master，ahead 5）
 - 未提交：**44 个已跟踪文件被修改 + 10 个未跟踪**（含另一个会话正在开发的
   `skill/eph-qe-cpu/`、`skill/zt-dft-cpu/`、`docs/figures/fig1_autozt_positioning_plugin.svg`）
 - ⚠️ **另一个会话此刻仍在同一工作区写代码**（01:25 建 eph-qe-cpu、01:37 改 TASKFLOW.md、
@@ -25,7 +25,7 @@
 ## 2. 可直接执行的命令（逐批）
 
 ```bash
-cd /home/wangchao/software/AutoZT
+cd ~/software/AutoZT
 
 # 批次 0（清理；两个文件已移到 tmp/_archive_20260918/，这里只把删除记进版本库）
 git add -u hfeshell_tmp skill/kl-dft-cpu/templates/step6_kappa

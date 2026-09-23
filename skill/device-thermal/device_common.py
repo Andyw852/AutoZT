@@ -40,26 +40,78 @@ def find_upstream(cwd, skill="kl-dft-cpu", step="step6_kappa",
 
 
 def read_kappa(path, T):
-    """读 kl-dft-cpu 的 kappa_summary.json，取最接近 T 的 κ 张量。"""
+    """读上游 kappa_summary.json，取最接近 T 的 κ 张量。
+
+    ★ 2D 口径（关键）：phono3py/ShengBTE 算出的 κ 是【含真空的胞值】κ_cell（体积里
+    带真空）。器件 FVM 用的是真实层厚 d（thickness_2d.json），面内热导 = κ×d，所以
+    必须换成物理 2D 值 κ_2D = κ_cell × h⊥/d。若直接用 κ_cell，面内热导被低估
+    h⊥/d 倍——单层 MoS2（h⊥≈20 Å、d≈6.7 Å）约 3×，实测 dT 会算高 ~50%。
+    上游 kl-dft-cpu / kl-mlff 把这一档写在 `kappa_2d_normalized_xx_yy_zz` 里，本函数
+    优先取它；缺失时退到 `kappa_2d_norm_factor` 现场归一化；再缺就原样用并警告。
+    返回 dict 的 `kappa_key` / `note` 说明实际采用了哪一档。
+    """
     with open(path, encoding="utf-8") as f:
         js = json.load(f)
     Ts = list(js.get("temperatures") or [])
-    Ks = js.get("kappa_xx_yy_zz") or []
-    if not Ts or not Ks:
+    if not Ts:
         return None
+    dim = str(js.get("dim") or "").lower()
     i = int(np.argmin([abs(float(t) - T) for t in Ts]))
-    row = [float(x) for x in Ks[i]]
-    return {"inplane": 0.5 * (row[0] + row[1]),
-            "cross": (row[2] if row[2] > 0 else None),
-            "T": float(Ts[i]), "tensor": row, "source": path}
+    kn = js.get("kappa_2d_normalized_xx_yy_zz") or []
+    if kn:
+        i = min(i, len(kn) - 1)
+        row = [float(x) for x in kn[i]]
+        key = "kappa_2d_normalized_xx_yy_zz"
+        note = "2D 物理值 κ_2D = κ_cell × h⊥/d（与 thickness_2d.json 的 d 配套）"
+    else:
+        kr = js.get("kappa_xx_yy_zz") or []
+        if not kr:
+            return None
+        i = min(i, len(kr) - 1)
+        row = [float(x) for x in kr[i]]
+        key = "kappa_xx_yy_zz"
+        fac = js.get("kappa_2d_norm_factor")
+        if dim == "2d" and fac and abs(float(fac) - 1.0) > 1e-9:
+            row = [v * float(fac) for v in row]
+            key = "kappa_xx_yy_zz × kappa_2d_norm_factor"
+            note = ("2D：文件缺 kappa_2d_normalized_*，用 kappa_2d_norm_factor=%.4g 现场归一化"
+                    % float(fac))
+        elif dim == "2d":
+            note = ("⚠️ 2D 材料，但文件既无 kappa_2d_normalized_* 也无 kappa_2d_norm_factor："
+                    "当前是含真空的胞值，面内热导可能被低估 h⊥/d 倍（单层可达 ~3×）；"
+                    "请重跑上游 kl 步补上归一化字段。")
+        else:
+            note = "3D 材料，κ 可直接用（无 2D 归一化）"
+    inplane = 0.5 * (row[0] + row[1])
+    # 跨面 κ 可用性：真空胞的 zz 是【数值零】（真实 2D 产物实测 4.6e-30），
+    # 不能用 >0 当判据——否则 ky 被设成 1e-30，沟道跨面热阻炸到 1e19 m2K/W
+    # （氧化层的 ~1e26 倍），器件近似绝热、dT 直接失控。
+    cross, cross_note = float(row[2]), None
+    if not (cross > 1e-6):
+        cross, cross_note = None, "跨面 κ 数值为零/过小，保留材料库值"
+    elif dim == "2d" and cross < 1e-3 * max(inplane, 1e-30):
+        cross_note = ("2D 跨面 κ=%.3g 远小于面内 %.3g，判定为真空残留，保留材料库值"
+                      % (float(row[2]), inplane))
+        cross = None
+    return {"inplane": inplane, "cross": cross,
+            "T": float(Ts[i]), "tensor": row, "source": path,
+            "kappa_key": key, "note": note, "cross_note": cross_note}
 
 
 def read_thickness(cwd, skill="kl-dft-cpu"):
-    """读上游 2D 有效厚度 thickness_d_A（Å）-> m。"""
+    """读上游 2D 有效厚度 thickness_d_A（Å）-> m。
+
+    查找顺序：<材料>/<skill>/{step6_kappa, step4_disp, step4_kappa}/（各含 result/ 副本），
+    最后兜底 <材料>/thickness_2d.json（kl/ke 共用契约的材料级文件）。
+    step4_kappa 对应 kl-mlff-* 那条链（它的 κ 步就叫 step4_kappa）。
+    """
     matdir = os.path.dirname(os.path.abspath(cwd))
-    for step in ("step6_kappa", "step4_disp",
-                 "result/step6_kappa", "result/step4_disp"):
-        p = os.path.join(matdir, skill, step, "thickness_2d.json")
+    cands = [os.path.join(matdir, skill, step, "thickness_2d.json")
+             for step in ("step6_kappa", "step4_disp", "step4_kappa",
+                          "result/step6_kappa", "result/step4_disp",
+                          "result/step4_kappa")]
+    cands.append(os.path.join(matdir, "thickness_2d.json"))   # 材料级兜底
+    for p in cands:
         if os.path.isfile(p):
             with open(p, encoding="utf-8") as f:
                 js = json.load(f)

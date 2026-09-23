@@ -142,11 +142,11 @@ without pretending that a descriptive plan is already an executable job submissi
 {
   "mcpServers": {
     "autozt": {
-      "command": "/home/wangchao/software/AutoZT/bin/autozt",
+      "command": "~/software/AutoZT/bin/autozt",
       "args": ["mcp"],
       "env": {
         "AUTOZT_MCP_PROFILE": "workflow",
-        "AUTOZT_CONFIG": "/home/wangchao/software/AutoZT/setting/tf.yaml"
+        "AUTOZT_CONFIG": "~/software/AutoZT/setting/tf.yaml"
       }
     }
   }
@@ -163,7 +163,7 @@ without pretending that a descriptive plan is already an executable job submissi
       "command": "wsl.exe",
       "args": [
         "-d", "Ubuntu", "--", "bash", "-lc",
-        "export AUTOZT_MCP_PROFILE=workflow AUTOZT_CONFIG=/home/wangchao/software/AutoZT/setting/tf.yaml; exec /home/wangchao/software/AutoZT/bin/autozt mcp"
+        "export AUTOZT_MCP_PROFILE=workflow AUTOZT_CONFIG=~/software/AutoZT/setting/tf.yaml; exec ~/software/AutoZT/bin/autozt mcp"
       ]
     }
   }
@@ -176,7 +176,7 @@ Windows 客户端也可以直接调用仓库中的 `bin/autozt.cmd` 包装器：
 {
   "mcpServers": {
     "autozt": {
-      "command": "\\\\wsl.localhost\\Ubuntu\\home\\wangchao\\software\\AutoZT\\bin\\autozt.cmd",
+      "command": "\\\\wsl.localhost\\Ubuntu\\home\\user\\software\\AutoZT\\bin\\autozt.cmd",
       "args": ["mcp"],
       "env": {"AUTOZT_MCP_PROFILE": "workflow"}
     }

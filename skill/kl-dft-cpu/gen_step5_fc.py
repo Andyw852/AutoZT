@@ -106,7 +106,7 @@ def main():
     if not list(disp.glob("disp-*/vasprun.xml")):
         sys.exit("[ERROR] %s 下无 disp-*/vasprun.xml，位移单点还没算完" % disp)
 
-    # ---- 抽帧校验（2026-09-17，wangchao 要求）：力必须与位移对应 ----
+    # ---- 抽帧校验（2026-09-17，user 要求）：力必须与位移对应 ----
     #   S4 是 fanout，retry 只补缺失帧；若 S1 换过结构而旧 disp-* 残留，会出现
     #   "旧结构的力 + 新位移"的静默错配。这里抽 3 帧把 vasprun.xml 的坐标与
     #   "phono3py_disp.yaml 的超胞 + 位移"逐原子比对（周期回绕后 < 1e-3 Å）。
@@ -116,7 +116,7 @@ def main():
         sys.exit("[ERROR] %s\n        请清空 step4_disp 的 disp-*/POSCAR-*/phono3py_disp.yaml/SPOSCAR "
                  "后重跑 S4（或 -j S4_disp rerun）。" % _note)
 
-    # ---- SCF 收敛门禁（2026-09-19，wangchao 要求）：NELM 截断/未收敛的帧不能拟合 ----
+    # ---- SCF 收敛门禁（2026-09-19，user 要求）：NELM 截断/未收敛的帧不能拟合 ----
     #   VASP 撞 NELM 时照样输出力、作业正常退出，只在 OUTCAR 留一段
     #   "number of steps (NELM) ... forces ... might not be reliable"；这种帧拿去拟合
     #   会让 fc2/fc3 与 κ 整体错掉，而下游所有检查都显示正常 —— 正是要拦的静默错误。

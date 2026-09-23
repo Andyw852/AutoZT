@@ -54,13 +54,17 @@ VACUUM_KZ_MIN = 1
 #   （2026-09-18 修：此前 SPEC 写在前面，模块导入即 NameError 'UNIFORM_NMAX'，
 #     于是本脚本对任何新材料都直接失败 —— 全网格对照要用 S3 的旧网格才暴露出来。）
 UNIFORM_NMAX = 20000
+# ---- [KALIGN-2026-09-23] 3D 高对称点对齐（2D 恒为 6 的倍数，不受此键影响）----
+#   off（默认，不动存量 3D 项目）| even（菱面体/立方/四方）| 6（六方 3D）
+KALIGN_3D = "off"
 SPEC = {"VACUUM_KZ_MIN": (VACUUM_KZ_MIN, "int"),
         # 密网格判据与成本护栏也可由 step.conf 覆盖（小胞/大 |b| 体系要放宽 DK_MAX）：
         #   DK_MAX = None -> 按维度取 DK_MAX_2D / DK_MAX_3D
         "DK_MAX": (None, "float"),
         "DK_MAX_2D": (DK_MAX_2D, "str"),
         "DK_MAX_3D": (DK_MAX_3D, "str"),
-        "UNIFORM_NMAX": (UNIFORM_NMAX, "int")}
+        "UNIFORM_NMAX": (UNIFORM_NMAX, "int"),
+        "KALIGN_3D": (KALIGN_3D, "str")}
 FUNC         = "inherit"              # patch_ke_dag: inherit=继承 step1
                                       # 也可写死 pbe | pbesol | pbe-d3
 MANUAL_ENCUT = None                   # None=从 POTCAR 自动；或写数值
@@ -72,7 +76,7 @@ GGA_MAP = {"pbe": "PE", "pbesol": "PS", "pbe-d3": "PE"}
 
 
 def main():
-    global DK_MAX, DK_MAX_2D, DK_MAX_3D, UNIFORM_NMAX
+    global DK_MAX, DK_MAX_2D, DK_MAX_3D, UNIFORM_NMAX, KALIGN_3D
     cwd = Path.cwd()
     out = cwd / OUTDIR_NAME
     out.mkdir(exist_ok=True)
@@ -119,6 +123,7 @@ def main():
             DK_MAX_2D = _conf["DK_MAX_2D"]
             DK_MAX_3D = _conf["DK_MAX_3D"]
             UNIFORM_NMAX = _conf["UNIFORM_NMAX"]
+            KALIGN_3D = _conf["KALIGN_3D"]
         except (KeyError, ValueError, TypeError):
             pass
     if dim == "2d" and _kzmin > 1:
@@ -186,14 +191,8 @@ def main():
     #    Γ 心网格上，面内 N 必须被 3（K）或 2（X/M）整除。取 6 的倍数一并覆盖。否则带边
     #    锚在离网的非极值点，方向分解 m* 拟合会静默给出错误轻质量（CrSe2 46×46 实测 0.52
     #    vs 真值 1.03；46 不被 3 整除）。只向上取整、不放松。
-    if dim == "2d":
-        _al = [_need[i] for i in _axes]
-        _al2 = [int(np.ceil(n / 6.0)) * 6 for n in _al]
-        if _al2 != _al:
-            print("[WARN] 2D 高对称点对齐：面内分割 %s -> %s（取 6 的倍数，保证 K/M 在网格上）"
-                  % (_al, _al2))
-            for _j, _i in enumerate(_axes):
-                _need[_i] = _al2[_j]
+    #    实现统一在 ke_common.align_kgrid（S3 / S3b / S7 共用，改一处三处同步）。
+    _need = kc.align_kgrid(_need, dim, _axes, KALIGN_3D, label="S3_uniform")
     if _need != _n[:3]:
         print("[WARN] 网格 %dx%dx%d（笛卡尔间距 %.3f/%.3f/%.3f Å⁻¹）不满足 DK_MAX=%.3f"
               "（含 2x 静态下限），按轴提到 %dx%dx%d"

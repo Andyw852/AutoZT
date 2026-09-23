@@ -269,7 +269,7 @@ def _vasprun_basis_positions(path):
 def check_frames_match_displacements(step4_dir, n_sample=3, tol=1e-3):
     """抽几帧：vasprun.xml 的坐标必须等于 phono3py_disp.yaml 的「超胞 + 位移」。
 
-    为什么需要（2026-09-17，wangchao 要求）：S4 是 fanout，retry 只补缺失帧；若 S1 换了
+    为什么需要（2026-09-17，user 要求）：S4 是 fanout，retry 只补缺失帧；若 S1 换了
     结构而旧 disp-* 残留，就会出现"旧结构的力 + 新位移"的静默错配 —— 检查晶格能拦住
     大部分，但同胞不同位移（换过 rattle 种子/帧数）仍可能漏过，所以这里**逐原子比对坐标**。
     返回 (ok, note)。

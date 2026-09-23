@@ -1460,7 +1460,7 @@ def _remote_submit_preflight(cfg, m, s, t=None):
             print(_pf.hint("partition"), file=sys.stderr)
     # 提交模板的环境自检：模板里的 conda 环境/conda.sh 路径必须存在于目标集群。
     # 实测教训（2026-09-15 fc-fit 切 3090）：模板激活的是 atomate2_p_a 与
-    # /public/home/wangchao/... （源集群的），激活静默失败后脚本照跑，prep 侥幸
+    # /public/home/.../... （源集群的），激活静默失败后脚本照跑，prep 侥幸
     # 成功、fit 一行输出都没有就退出——最难查的一类"静默死亡"。
     _acts = _pf.parse_conda_activations(_so3 or "")
     if _acts:

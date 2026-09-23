@@ -163,7 +163,7 @@ def resolve_spec(name, info, conf):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--potcar-dir", default="/public/home/wangchao/software/vasp_pseudopotentials")
+    ap.add_argument("--potcar-dir", default="/public/home/.../software/vasp_pseudopotentials")
     ap.add_argument("--submit", action="store_true", help="生成后立即 sbatch")
     ap.add_argument("--refdir", default="convex_hull_references")
     ap.add_argument("--only", default="", help="只处理这些相（逗号分隔），默认全部")

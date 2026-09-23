@@ -33,7 +33,7 @@ CONV_HISTORY = "convergence_history.json"
 
 # conda 环境缺省值：留空。站点路径（如 conda_sh/venv 位置）一律由
 # setting/<集群>.yaml 的 conda_sh/conda_env 注入 step.conf，禁止在这里写死
-# （此前硬编码 /public/home/wangchao 导致换集群静默用错路径，报错只说文件不存在
+# （此前硬编码 /public/home/... 导致换集群静默用错路径，报错只说文件不存在
 # 不说"没配 CONDA_ENV"）。
 DEFAULT_CONDA_SH = ""
 DEFAULT_CONDA_ENV = ""

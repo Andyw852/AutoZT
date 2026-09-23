@@ -9,7 +9,7 @@ description = "Multi-material, multi-step, multi-cluster orchestration for VASP/
 readme = "README.en.md"
 requires-python = ">=3.9"
 license = { file = "LICENSE" }
-authors = [{ name = "wangchao" }]
+authors = [{ name = "user" }]
 keywords = ["phonons", "force constants", "VASP", "MACE", "high-throughput", "workflow", "thermal-conductivity"]
 classifiers = [
   "Development Status :: 4 - Beta",

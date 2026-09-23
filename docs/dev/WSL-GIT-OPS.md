@@ -1,6 +1,6 @@
 # WSL + dsh web 稳定性 + Git 提交 运维备忘
 
-> 本机（WSL2 / wangchao@DESKTOP-3B6UKIT）的 dsh web 托管与 git 提交关键配置、踩坑记录。改配置或遇到卡顿/提交失败时先查这里。
+> 本机（WSL2 / user@DESKTOP-3B6UKIT）的 dsh web 托管与 git 提交关键配置、踩坑记录。改配置或遇到卡顿/提交失败时先查这里。
 
 ## 1. dsh web 由 systemd 托管（崩溃自愈）
 
@@ -15,7 +15,7 @@
 
 ## 2. WSL 资源配置
 
-- 文件：`C:\Users\wangchao\.wslconfig`
+- 文件：`C:\Users\user\.wslconfig`
 - 值：`memory=56GB`、`processors=12`、`autoMemoryReclaim=gradual`、`swap=12GB`
 - 改完必须 `wsl --shutdown` 重启才生效
 - 注意：56GB 让 Windows 只剩 8GB，页面文件需系统托管兜底

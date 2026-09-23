@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """自测：结构体检四判据（structure_health.py）。
 
-判据（wangchao 2026-09-21 列）：
+判据（user 2026-09-21 列）：
   ① 最近邻 < 0.7×共价半径和  ② CN≤1 悬挂  ③ 命名 vs 计量比  ④ z 跨度 vs 层数。
 第五条（双容差空间群）在 suite_symmetry_audit.py。
 
@@ -9,7 +9,7 @@
 
 跑法：
     python3 tests/suite_structure_health.py
-    /home/wangchao/miniconda3/envs/atomate2_p_a/bin/python tests/suite_structure_health.py
+    ~/miniconda3/envs/atomate2_p_a/bin/python tests/suite_structure_health.py
 """
 import math
 import os

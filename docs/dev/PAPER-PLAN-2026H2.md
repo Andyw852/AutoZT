@@ -203,7 +203,7 @@ LLM 只在异常路径介入且可被替换。**2D/3D 验证材料集已建好�
 
 ## 9. 已定 / 待定
 
-**已定（wangchao 2026-09-22）**
+**已定（user 2026-09-22）**
 
 1. **两篇**：Paper 1 = AutoZT 平台（本文，leading first author）；**Paper 2 = 富勒烯那批（2926 材料）单独成篇**，见 §10。
 2. **目标期刊 = *npj Computational Materials***（定为首选；备选只在桌拒/转投时启用）。

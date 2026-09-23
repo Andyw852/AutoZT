@@ -90,8 +90,8 @@ step4_kappa 的 `SOLVER` 支持 `phono3py`（默认）与 `shengbte`（三声子
   - `FIT_SOFTWARE=phono3py`（symfc/alm）：只出 hdf5 → fc_fit_driver 用 hiphive
     从 fc2/fc3.hdf5 转 ShengBTE 格式（格式已验证：Si RTA κ 与 phono3py 一致）。
 - **运行**：`SOLVER=shengbte` + step4 step.conf 填 `SHENGBTE_EXE`（按集群绝对路径）：
-  - jzzn = `/public/home/wangchao/software/sousaw-shengbte-aocl/ShengBTE`（CPU/AOCL）
-  - 3090 = `/home/wangchaoyue852/software/AutoZT/shengbte-gpu/ShengBTE`（GPU fork，~4.6x）
+  - jzzn = `/public/home/.../software/sousaw-shengbte-aocl/ShengBTE`（CPU/AOCL）
+  - 3090 = `/home/user_3090/software/AutoZT/shengbte-gpu/ShengBTE`（GPU fork，~4.6x）
 - **3090 GPU 注意**：ShengBTE GPU 用 2020 CUDA fork（phonopy fc2 输入已验证正确）。
   FourPhonon v1.3 官方 OpenACC GPU 版对 phonopy fc2 有 bug（κ 错 67-71x）勿用；
   但它的 CPU 版（`fourphonon-v13/bin_cpu`）是完整超集（含四声子）。

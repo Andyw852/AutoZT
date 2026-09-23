@@ -18,7 +18,7 @@ from dim_common import detect_dimension  # noqa: E402
 
 METHOD_FILE = "workflow_method.txt"
 
-DEFAULT_CONDA_SH = "/public/home/wangchao/miniconda3/etc/profile.d/conda.sh"
+DEFAULT_CONDA_SH = "/public/home/.../miniconda3/etc/profile.d/conda.sh"
 DEFAULT_CONDA_ENV = "hamgnn"
 
 # ---------------------------------------------------------------------------

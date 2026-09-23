@@ -3,7 +3,7 @@ title: "AutoZT: multi-cluster orchestration for high-throughput phonon and force
 message: "If you use AutoZT in your research, please cite it as below."
 type: software
 authors:
-  - family-names: "wangchao"
+  - family-names: "user"
     given-names: ""
 version: 1.0.0
 date-released: "2026-09-15"

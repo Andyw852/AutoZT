@@ -126,9 +126,9 @@ except Exception as exc:                                    # noqa: BLE001
     print("  SKIP 读测试配置失败：%s" % exc)
 if cfg:
     cfg.setdefault("_config_path", os.path.join(ROOT, "tmp", "tf_jzzn_si_all.yaml"))
-    d3090 = ("/home/wangchaoyue852/taskflow/work/tf_smoke/Si_unihamgnn/"
+    d3090 = ("/home/user_3090/taskflow/work/tf_smoke/Si_unihamgnn/"
              "unihamgnn/step1_graph_data")
-    got = autozt._discover_step_inputs(cfg, "wangchao_3090", d3090)
+    got = autozt._discover_step_inputs(cfg, "user_3090", d3090)
     if not got:
         print("  SKIP 远端测试材料已清理（%s 不存在）——远端相关断言跳过" % d3090)
         REMOTE_OK = False
@@ -142,7 +142,7 @@ if cfg:
            "发现清单含 gen 写的 yaml（技能无需自报）")
         ck(not any(x.startswith(("OUTCAR", "vasprun")) for x in got),
            "清单里没有输出文件")
-    got2 = autozt._discover_step_inputs(cfg, "wangchao_3090", "/nonexistent/xyz")
+    got2 = autozt._discover_step_inputs(cfg, "user_3090", "/nonexistent/xyz")
     ck(got2 == (), "远端目录不存在 → 空清单（调用方兜底，不阻断提交）")
 
 print("== C. 真实提交前检查（unihamgnn 已删掉自报清单）==")
@@ -150,8 +150,8 @@ if cfg:
     tt_cfg = (cfg.get("task_types") or {}).get("unihamgnn") or {}
     ck(not tt_cfg.get("submit_required"),
        "unihamgnn 配置里已无 submit_required（改由统一发现兜住）")
-    mat = {"tt": "unihamgnn", "name": "Si_unihamgnn", "host_eff": "wangchao_3090",
-           "result_dir": ("/home/wangchao/tf_smoke_all/Si_unihamgnn/unihamgnn/result")}
+    mat = {"tt": "unihamgnn", "name": "Si_unihamgnn", "host_eff": "user_3090",
+           "result_dir": ("~/tf_smoke_all/Si_unihamgnn/unihamgnn/result")}
     step = {"name": "step1_graph_data", "dir": d3090}
     if not REMOTE_OK:
         print("  SKIP 远端测试材料已清理——真实提交前检查的端到端断言跳过")

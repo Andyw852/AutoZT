@@ -84,7 +84,7 @@ OUTCAR 的 VASP 顺序对角是 `[C11, C22, C33, C66, C44, C55]`，例如 Sn2Sb2
 
 > 附带发现：这四个合金**当前**的 `step8_amset/settings.yaml` 已经是重排后的正确顺序
 > （与本地 OUTCAR 逐元素最大偏差 0.0005 GPa；若是原始顺序会差 22 GPa），且集群上
-> `/public/home/wangchao/ke_work/<合金>/ke-dft-cpu/gen_step10_amset.py` 里也已带 `order = (0,1,2,4,5,3)`
+> `/public/home/.../ke_work/<合金>/ke-dft-cpu/gen_step10_amset.py` 里也已带 `order = (0,1,2,4,5,3)`
 > —— 说明这条已经在现场单独修过并重跑过（transport.json 时间戳 9/15 22:17）。
 > 但**仓库里的 gen_step10 之前没有这个重排**，所以其它三维材料（以及以后新跑的项目）
 > 仍会踩坑；本次把修复正式落到技能里。
@@ -764,7 +764,7 @@ MoS2 这次的 uniform 步用了 kz = 3，但**这不足以支持"kz ≥ 3 已�
 | python | 3.10.21 | 3.10.19 | ≈ |
 
 pymatgen 差 9 个月（Vasprun 解析/对称性判断可能有差异）。处理顺序：
-1. 先用 conda-forge 造一个 pymatgen=2022.11.7 的等价环境（本机 /home/wangchao/miniconda3
+1. 先用 conda-forge 造一个 pymatgen=2022.11.7 的等价环境（本机 ~/miniconda3
    可用；pip 源上 2022.11.7 没有 cp310 wheel，sdist 本地编译失败，故走 conda-forge）；
 2. 造不出来就用 conda-pack 打包集群 amset_clean 拉回本地（两边同为 Linux x86_64）；
 3. **判据（若最终仍靠对比把关）**：同一套输入、interpolation_factor=10，本地 vs 集群
@@ -2896,7 +2896,7 @@ bash tmp/amset2d/crit2_run.sh
 
 ## V39. CrSe2_hex S7 只读诊断与 relax 保留候选（2026-09-21 22:42 CST）
 
-范围：jzzn `/public/home/wangchao/Fullerene_Network/work/jzz/jap/CrSe2_hex/ke-dft-cpu/step7_deform`，仅 ssh 只读 sacct/现有日志。未提交、取消、推进或改远端；未修改主树 generator。
+范围：jzzn `/public/home/.../Fullerene_Network/work/jzz/jap/CrSe2_hex/ke-dft-cpu/step7_deform`，仅 ssh 只读 sacct/现有日志。未提交、取消、推进或改远端；未修改主树 generator。
 
 22:41:53 sacct 快照：
 
@@ -3082,7 +3082,7 @@ if "_up" in key or "_down" in key:
 
 **④ 两条虚警已排除**（勿再当故障）：① VASP 的 `FORTRAN STOP` + `ieee_*` 是**正常退出横幅**，
 判据看 `OUTCAR` 是否含 `reached required accuracy`；② `CONDA_SH` 指向 3090 路径的告警，
-模板 `if [ -d /home/wangchaoyue852/miniconda3 ]` 的 `else` 分支在 jzzn 上正确兜底。
+模板 `if [ -d /home/user_3090/miniconda3 ]` 的 `else` 分支在 jzzn 上正确兜底。
 另：`autozt` 曾因 `/mnt/d`（WSL 9p）瞬时故障抛 `OSError: Bad address`，重跑即恢复，非代码问题。
 
 **⑤ 禁止用进度条日志做健康判据**：`amset.log`/`queue.out` 里 `inelastic: N%` 这类进度条
@@ -3134,7 +3134,7 @@ if "_up" in key or "_down" in key:
 CrSe2_ortho（0.5.1）h5 属性 `nspin_norm_fixed='skipped'` / `reason='amset>=0.5.1'`，
 且形变势 ×2.024 **由 0.5.1 原生得出**（非本地补丁）。故两版结果一致、口径统一。
 
-**附注**：jzzn 上的 `/public/home/wangchao/software/AutoZT` **不是本仓库的副本**
+**附注**：jzzn 上的 `/public/home/.../software/AutoZT` **不是本仓库的副本**
 （无 `.git`、无 `skill/`），与作业无关——gen 运行时是把所需脚本（含
 `nspin_norm_fix.py`、`ke_common.py`）按 `gen_need` **随作业推送**到步骤目录，
 因此本地仓库才是唯一事实来源，远端无需 checkout。
@@ -3188,7 +3188,7 @@ CrSe2_hex 的"无磁性"结论（V43）在此得到跨材料佐证。
 实际存在 `/mnt/d/tf_data/MoS2/ke-dft-cpu`（用户 2026-09-16 建），且是**配置最全**的项目：
 `amset2d: true` + `wavefunction_full: true`（含 S3b/S4b 全网格分支）。
 
-其 autozt 状态（`Dir: /public/home/wangchao/Fullerene_Network/work/MoS2/ke-dft-cpu`，
+其 autozt 状态（`Dir: /public/home/.../Fullerene_Network/work/MoS2/ke-dft-cpu`，
 注意**不在 jzz/jap 下**，HPC=jzzn）：
 
 | 步骤 | 状态 |
@@ -4206,8 +4206,8 @@ CrS2_ortho / CrSe2_ortho 的 S8 已完成、无模式争议（走 unity 默认�
 弹性对角 `[158.9, 162.401, -2.4042, **1.4978, 0.5765**, 58.3566]` —— 面外剪切 C44/C55
 **均为正**，本材料不触发 V76 的置零/取绝对值处理；旧 S8（08-30 备份）ADP=1967、overall=45.44
 （有限）也证明面外 C33=-2.4042 在实践中不致命。
-注：提交时的 `CONDA_SH` 指向 3090 路径告警为**已知虚警**（`submit.sh` 的 `if [ -d /home/wangchaoyue852/miniconda3 ]`
-在 jzzn 不成立，走 else 分支 `source /public/home/wangchao/miniconda3/...`，已逐行核对）。
+注：提交时的 `CONDA_SH` 指向 3090 路径告警为**已知虚警**（`submit.sh` 的 `if [ -d /home/user_3090/miniconda3 ]`
+在 jzzn 不成立，走 else 分支 `source /public/home/.../miniconda3/...`，已逐行核对）。
 
 **SS S8.4 已启用（本轮只做配置，未提交）**：
 - `project_setting/tf_SS_ke-dft-cpu.yaml` 加 `amset2d: true`（备份 `.bak_preamset2d`）；

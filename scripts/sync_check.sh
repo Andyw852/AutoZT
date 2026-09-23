@@ -11,7 +11,7 @@
 # 退出码: 0=完全对齐；1=有差异（内容级，排除 __pycache__/运行时缓存）
 set -uo pipefail
 
-ORIG="${1:-/home/wangchao/software/taskflow-v2.0}"
+ORIG="${1:-~/software/taskflow-v2.0}"
 V2="$(cd "$(dirname "$0")/.." && pwd)"
 
 EXC='__pycache__|\.pyc$|\.tf_(state_cache|hung|summary|watch)'

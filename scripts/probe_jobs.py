@@ -76,7 +76,7 @@ def read_nsw(d):
 # squeue 全名（不截断）
 sq = {}
 try:
-    for line in subprocess.run(["squeue", "-u", os.environ.get("USER", "wangchao"),
+    for line in subprocess.run(["squeue", "-u", os.environ.get("USER", "user"),
                                 "-h", "-o", "%i %j %T"],
                                capture_output=True, text=True).stdout.splitlines():
         t = line.split()
@@ -179,7 +179,7 @@ def main():
     ap.add_argument("-p", "--projects", required=True, help="材料名，逗号分隔")
     ap.add_argument("-j", "--job", default="step2_defects", help="步骤名/label，默认 step2_defects")
     ap.add_argument("--host", default="jzzn", help="超算 ssh 别名，默认 jzzn")
-    ap.add_argument("--work-dir", default="/public/home/wangchao/defect_work",
+    ap.add_argument("--work-dir", default="/public/home/.../defect_work",
                     help="超算工作根目录")
     ap.add_argument("--raw", action="store_true", help="只打印远端原始数据")
     args = ap.parse_args()

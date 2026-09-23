@@ -73,6 +73,51 @@ def vaspkit_kpoints(outdir: Path, kscheme="2", kspacing="0.03",
         print("[%s] 2D KPOINTS 真空方向细分：%s" % ("OK" if changed else "..", note))
 
 
+# --------------------------------------------------------------------------
+# [KALIGN-2026-09-23] Γ 心网格的高对称点对齐 —— S3 / S3b / S7 的唯一实现
+#   Γ 心网格点 = n_i/N_i。带边高对称点要落在网格上：
+#     六方 K=(1/3,1/3)            → 面内 N % 3 == 0
+#     正方/矩形 X、M=(1/2,…)      → N % 2 == 0
+#     菱面体 L/F/Z、立方 X/L 等   → N % 2 == 0（3D 的 K/H 类 1/3 点另需 3）
+#   2D：面内取 6 的倍数一并覆盖（与 9-23 S3 修复同口径）。
+#   3D：默认 off（不动存量 3D 项目：225 合金等已跑的 S3/S7 网格）；
+#       even = 偶数（菱面体/立方/四方够用），6 = 六方 3D（a、b 取 6 的倍数，c 取偶数）。
+#   只向上取整，不放松密度。前提：KSCHEME=2（Γ 心）；MP 偶数网格不含 Γ/K，本函数无意义。
+#   局限：只保证高对称点。Q 谷等一般 k 点带边不在此列（见 step3c_uniform_offgrid）。
+# --------------------------------------------------------------------------
+def align_kgrid(need, dim, axes, align3d="off", label="", quiet=False):
+    """返回对齐后的新网格 list；有改动时打印 [WARN]。need 不被原地修改。"""
+    out = list(need)
+    if dim == "2d":
+        mult = 6
+    else:
+        mode = str(align3d or "off").strip().lower()
+        mult = {"off": 1, "none": 1, "even": 2, "2": 2, "6": 6}.get(mode)
+        if mult is None:
+            raise SystemExit("[ERROR] KALIGN_3D=%r 不认识（off | even | 6）" % align3d)
+    if mult <= 1:
+        return out
+    for i in axes:
+        # 六方 3D（KALIGN_3D=6）：K/H 的 1/3 只在 a、b 面内；c 轴 A=(0,0,1/2) 只需偶数。
+        #   约定 c 为第 3 个晶格矢量（与 pymatgen/vaspkit 六方标准胞一致）。
+        m = 2 if (dim != "2d" and mult == 6 and i == 2) else mult
+        out[i] = int(-(-int(out[i]) // m) * m)
+    if out != list(need) and not quiet:
+        print("[WARN] %s高对称点对齐（Γ 心，%s 取 %d 的倍数）：%s -> %s"
+              % (label + " " if label else "", dim.upper(), mult,
+                 "x".join(str(x) for x in need), "x".join(str(x) for x in out)))
+    return out
+
+
+def read_kpoints_mesh(kpoints: Path):
+    """读 Γ/MP 自动网格 KPOINTS 第 4 行的 3 个分割数；读不到返回 None。"""
+    try:
+        v = [int(x) for x in Path(kpoints).read_text(errors="ignore").splitlines()[3].split()[:3]]
+        return v if len(v) == 3 else None
+    except (OSError, IndexError, ValueError):
+        return None
+
+
 def vaspkit_potcar(outdir: Path, exe="vaspkit"):
     if (outdir / "POTCAR").exists():
         print("[OK] POTCAR 已存在，跳过")

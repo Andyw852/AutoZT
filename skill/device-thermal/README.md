@@ -117,7 +117,7 @@
 - 上游技能目录名；MLFF 路线可改 `kl-mlff-gpu` / `kl-mlff-cpu`。
 
 **`UPSTREAM_STEP`** · 字符串 · 默认 `step6_kappa`
-- `kappa_summary.json` 所在的步骤目录名。
+- `kappa_summary.json` 所在的步骤目录名；MLFF 路线为 `step4_kappa`。
 
 **`TBC_OVERRIDE`** · float · 单位 **W/m²K** · 默认空
 - 覆盖界面热导 G。空 → 查库里的 `沟道材料|氧化层材料` 键（没有则用 `default`）。
@@ -221,18 +221,48 @@
 
 ---
 
-### 3.6 上游输入（`kl-dft-cpu`，**可选**）
+### 3.6 上游输入（**可选**，两条链都支持）
 
-**`kappa_summary.json`**
-- `temperatures`: [K] 温度列表；
-- `kappa_xx_yy_zz`: [[κxx, κyy, κzz], ...] 每条对应一个温度。
-- S2 取最接近 `T_AMB` 的一行：面内 κ = 0.5(κxx+κyy) 覆盖 κx；κzz > 0 时覆盖 κy。
+支持两条上游 κ 链，用 `UPSTREAM_SKILL` / `UPSTREAM_STEP` 指定：
+
+| 上游链 | `UPSTREAM_SKILL` | `UPSTREAM_STEP` | κ 步目录名 |
+|---|---|---|---|
+| DFT（VASP→phono3py/ShengBTE） | `kl-dft-cpu`（默认） | `step6_kappa`（默认） | `step6_kappa` |
+| MLFF（MACE→phono3py，本地/3090） | `kl-mlff-gpu` / `kl-mlff-cpu` | `step4_kappa` | `step4_kappa` |
+
+**`kappa_summary.json`**（必须读**顶层**字段）
+- `temperatures`: [K] 温度列表；S2 取最接近 `T_AMB` 的一行。
+- ★ **2D 材料必须用归一化值**。phono3py/ShengBTE 给出的 κ 是**含真空的胞值** `κ_cell`
+  （体积里带真空）；而器件 FVM 用真实层厚 d 做面内导热（面内热导 = κ×d），所以要用
+  物理值 `κ_2D = κ_cell × h⊥/d`，即上游的 `kappa_2d_normalized_xx_yy_zz`。
+  直接拿 `kappa_xx_yy_zz` 会把面内热导低估 h⊥/d 倍——单层 MoS2（h⊥≈20 Å、d≈6.7 Å）
+  约 **3×**，实测 dT 高 **51%**（9.82 K vs 6.49 K）。
+- 取用优先级：`kappa_2d_normalized_xx_yy_zz` → 若无则用 `kappa_2d_norm_factor` 现场相乘
+  → 两者都无且 `dim=="2d"` 时**原样使用并打 ⚠️ 警告**。实际采用哪一档记在
+  `thermal_props.json` 的 `channel.kappa_key` / `channel.kappa_note`。
+- 面内 κ = 0.5(κxx+κyy) 覆盖 κx。**跨面 κy**：只有 κzz > 1e-6 且（2D 时）≥ 面内值的 0.1%
+  才采用；真实 2D 产物的 κzz 是**数值零**（实测 ~1e-30），会被判为真空残留、保留材料库值。
+  若不筛，ky≈1e-30 会让沟道跨面热阻炸到 1e19 m²K/W（近似绝热），实测 dT 高估 **18.7 倍**。
+  被拒原因记在 `channel.ky_source`，S2 打印 `跨面 κ:` 一行。
+- ⚠️ 顶层缺 `temperatures`/`kappa_xx_yy_zz` 时（例如旧版 kl-mlff 只把它们写在 `runs[i]`
+  里），S2 会**回退材料库并在 `source` 标 `database`**——用的是文献值而非你的计算结果。
+  跑完 S2 务必看打印里的 `[upstream:...]` / `[database]` 标记和 `κ 口径:` 一行。
 
 **`thickness_2d.json`**
 - `thickness_d_A`（Å，也接受 `thickness_A` / `effective_thickness_A`）→ S2 转成 m 覆盖沟道厚度。
 
-**查找链**（相对材料目录）：`<材料>/<skill>/<step>/` → `<材料>/<skill>/result/<step>/` → `<材料>/<skill>/`。
+**查找链**
+- `kappa_summary.json`：`<材料>/<skill>/<step>/` → `<材料>/<skill>/result/<step>/` → `<材料>/<skill>/`。
+- `thickness_2d.json`：`<材料>/<skill>/{step6_kappa,step4_disp,step4_kappa}/`（含 `result/` 副本）
+  → 兜底 `<材料>/thickness_2d.json`（kl/ke 共用契约的材料级文件）。
+
 两个文件都**可选**：缺失时 auto 模式回退材料库并打 warning；`KAPPA_SOURCE=literature` 时根本不查。
+
+> ⚠️ **`kappa_summary.json` 必须读顶层字段。** kl-mlff 旧版只把 `temperatures` / `kappa_xx_yy_zz`
+> 写在 `runs[i]` 里，顶层只有 `kappa_300K_xx_yy_zz`——那种文件会让 S2 **静默回退材料库**
+> （`source` 显示 `database`，用的是文献值而非你的计算结果）。跑完 S2 务必看打印里的
+> `[upstream:...]` / `[database]` 标记。该问题已在 `_common/mlff/gen_step4_kappa.py` 修正
+> （顶层补齐 + 同时输出 `thickness_2d.json`）。
 
 ---
 

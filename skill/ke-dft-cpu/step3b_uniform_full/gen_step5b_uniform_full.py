@@ -67,6 +67,9 @@ MATCH_MESH_OF = None
 #   Mg4C60 0.05 → 13×13×8 ≈ 1.4e3。
 #   ★ 定义必须排在 SPEC 之前（SPEC 要引用它）。
 UNIFORM_NMAX = 20000
+# ---- [KALIGN-2026-09-23] 3D 高对称点对齐（2D 恒为 6 的倍数，不受此键影响）----
+#   off（默认，不动存量 3D 项目）| even（菱面体/立方/四方）| 6（六方 3D）
+KALIGN_3D = "off"
 SPEC = {"VACUUM_KZ_MIN": (VACUUM_KZ_MIN, "int"),
         # 与 step3_uniform 同一套键（报错信息一直说"可在项目里覆盖 DK_MAX"，
         # 但此前本脚本只认 VACUUM_KZ_MIN，写了也不生效 —— 2026-09-18 补齐）
@@ -74,7 +77,8 @@ SPEC = {"VACUUM_KZ_MIN": (VACUUM_KZ_MIN, "int"),
         "DK_MAX_2D": (DK_MAX_2D, "str"),
         "DK_MAX_3D": (DK_MAX_3D, "str"),
         "UNIFORM_NMAX": (UNIFORM_NMAX, "int"),
-        "MATCH_MESH_OF": (None, "str")}
+        "MATCH_MESH_OF": (None, "str"),
+        "KALIGN_3D": (KALIGN_3D, "str")}
 FUNC         = "inherit"              # patch_ke_dag: inherit=继承 step1
                                       # 也可写死 pbe | pbesol | pbe-d3
 MANUAL_ENCUT = None                   # None=从 POTCAR 自动；或写数值
@@ -86,7 +90,7 @@ GGA_MAP = {"pbe": "PE", "pbesol": "PS", "pbe-d3": "PE"}
 
 
 def main():
-    global DK_MAX, DK_MAX_2D, DK_MAX_3D, UNIFORM_NMAX, MATCH_MESH_OF
+    global DK_MAX, DK_MAX_2D, DK_MAX_3D, UNIFORM_NMAX, KALIGN_3D, MATCH_MESH_OF
     cwd = Path.cwd()
     out = cwd / OUTDIR_NAME
     out.mkdir(exist_ok=True)
@@ -133,6 +137,7 @@ def main():
             DK_MAX_2D = _conf["DK_MAX_2D"]
             DK_MAX_3D = _conf["DK_MAX_3D"]
             UNIFORM_NMAX = _conf["UNIFORM_NMAX"]
+            KALIGN_3D = _conf["KALIGN_3D"]
             # stepconf.load 返回的对象保证支持 []，但不保证有 .get()
             # （2026-09-18 实测：.get 抛 AttributeError 直接把 gen 打断）
             MATCH_MESH_OF = _conf["MATCH_MESH_OF"]
@@ -214,6 +219,11 @@ def main():
     if _st and len(_st) == 3 and not MATCH_MESH_OF:
         for i in _axes:
             _need[i] = max(_need[i], 2 * _st[i])
+    # [KALIGN-2026-09-23] 高对称点对齐，与 step3_uniform 同一实现（ke_common.align_kgrid）。
+    #   此前本步漏了这段 → CrSe2_hex S3=48×48、S3b=46×46，"只差 ISYM"的前提被破坏。
+    #   MATCH_MESH_OF 时网格是照抄的，不再改动。
+    if not MATCH_MESH_OF:
+        _need = kc.align_kgrid(_need, dim, _axes, KALIGN_3D, label="S3b_uniformfull")
     if _need != _n[:3]:
         print("[WARN] 网格 %dx%dx%d（笛卡尔间距 %.3f/%.3f/%.3f Å⁻¹）不满足 DK_MAX=%.3f"
               "（含 2x 静态下限），按轴提到 %dx%dx%d"

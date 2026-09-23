@@ -19,9 +19,9 @@
 
 | 组件 | 路径 |
 |---|---|
-| HamGNN 仓库 | /home/wangchaoyue852/software/Uni-HamGNN/HamGNN（已 setup.py 装进 ML 环境）|
-| 通用模型 | /home/wangchaoyue852/software/Uni-HamGNN/uni-hamgnn_2_1.pkl（927 MB）|
-| DFT_DATA19 | /home/wangchaoyue852/software/Uni-HamGNN/DFT_DATA19（取自 OpenMX 4.0 GPU 包）|
+| HamGNN 仓库 | /home/user_3090/software/Uni-HamGNN/HamGNN（已 setup.py 装进 ML 环境）|
+| 通用模型 | /home/user_3090/software/Uni-HamGNN/uni-hamgnn_2_1.pkl（927 MB）|
+| DFT_DATA19 | /home/user_3090/software/Uni-HamGNN/DFT_DATA19（取自 OpenMX 4.0 GPU 包）|
 | Python 环境 | conda ML（Python 3.9，torch 1.11 / torch-geometric 2.0.4 / e3nn 0.5.0 / pymatgen）|
 | openmx_postprocess / read_openmx | HamGNN/DFT_interfaces/openmx/openmx_postprocess/（GNU 编译）|
 | 编译工具链 | conda openmx_build（gcc/gfortran 14 + OpenMPI + GSL + MKL）|
@@ -37,7 +37,7 @@
 | 键 | 说明 |
 |---|---|
 | HAMGNN_DIR / UNI_MODEL / DFT_DATA | 见上表路径 |
-| CONDA_SH / CONDA_ENV | 3090 = /home/wangchaoyue852/miniconda3/... + ML |
+| CONDA_SH / CONDA_ENV | 3090 = /home/user_3090/miniconda3/... + ML |
 | SOC | true（默认）= 通用 SOC 模型（non-SOC + SOC 两份 graph_data）|
 | NAO_MAX | OpenMX 最大轨道数 14/19/26（默认 26）|
 | NPROC | ★ 3090 上固定 1：多进程 openmx_postprocess 卡在 MPI 收尾不退出 |

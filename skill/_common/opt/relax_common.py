@@ -384,7 +384,7 @@ TOL_LAYER_KB = 0.4                   # 2D 面内应力的【层内口径】阈�
 #   背景：S1 弛豫后常有 a/b 差 ~8e-6 A、gamma 偏 120 度 ~8e-5 度的数值微畸变，
 #   使 spglib 在 symprec=1e-5 只给 Amm2(#38)/4 ops、>=1e-4 才给 P-6m2(#187)/12 ops，
 #   对称操作少 2/3 -> pheasy 允许六方破缺 -> ZA 被算成线性。
-#   判据（wangchao 指定）：symprec=1e-5 与 1e-4 空间群不一致 => 触发对称化建议。
+#   判据（user 指定）：symprec=1e-5 与 1e-4 空间群不一致 => 触发对称化建议。
 #   SYMMETRY_AUDIT:  off | warn | error   （S1 gen 审计输入结构；warn 只告警）
 #   SYMMETRY_SYMMETRIZE: off | on         （对称化默认关，用 symmetry_audit.py 显式触发）
 #   巡检/对称化引擎：skill/_common/opt/symmetry_audit.py（CLI + 可被 gen/check 调用）
@@ -392,7 +392,7 @@ SYMMETRY_AUDIT = "warn"              # off | warn | error
 SYMMETRY_SYMMETRIZE = "off"          # off | on
 SYMMETRY_AUDIT_SYMPREC = 1e-4        # 对称化容差：取两容差中识别出高对称的那个
 SYMMETRY_ENERGY_TOL_MEV = 1.0        # 能量确认阈值 meV/atom（2 个单点）
-# 结构体检【四条】（2026-09-21，wangchao）：最近邻重叠 / CN=1 悬挂 / 命名 vs 计量比 / z 跨度 vs 层数。
+# 结构体检【四条】（2026-09-21，user）：最近邻重叠 / CN=1 悬挂 / 命名 vs 计量比 / z 跨度 vs 层数。
 #   off | warn | error；默认 warn（只告警，不阻断 gen）。引擎见 skill/_common/opt/structure_health.py。
 #   为什么要有：AlN(Al5N)、Zn5O3、BeO 这几个坏种子此前是【手工】拦下的；不落成代码，
 #   下一批材料进来没人拦（判定口径与标定见 tests/suite_structure_health.py）。
@@ -1719,11 +1719,11 @@ _ARCHIVE="OUTCAR OSZICAR CONTCAR vasprun.xml XDATCAR"
 #   而 queue.out 里 DAV 5→10 一直在收敛 —— 白杀一次 1 小时 14 分的作业。
 #   两个指纹都没动才算真挂死；这与 autozt 自己的 hang_check 判据一致。
 # 累计 CPU 时间（秒）：优先用 VASP 进程，取不到退回看门狗那个 pid。
-#   ★ 2026-09-17 加（wangchao 要求）：只看文件大小会误杀 —— 在 Lustre 上如果看门狗
+#   ★ 2026-09-17 加（user 要求）：只看文件大小会误杀 —— 在 Lustre 上如果看门狗
 #   与作业不同节点，stat 可能读到客户端缓存的旧大小；而 VASP 真的挂死（MPI 死锁）时
 #   CPU 时间也不再增长。两者的区别只有 CPU 时间能分辨：
 #     CPU 在涨、文件不涨 → 缓存/写入延迟，不该杀；CPU 也不涨 → 真卡死，立即杀。
-#   ★ 2026-09-19 修正（wangchao 指出：Mo2S3 15h 挂死看门狗未触发，是独立 bug）：
+#   ★ 2026-09-19 修正（user 指出：Mo2S3 15h 挂死看门狗未触发，是独立 bug）：
 #   旧实现 `ps -eo time=,comm=` 统计的是【整台节点】所有 vasp —— 共享节点上别人的 vasp
 #   （甚至本用户别的作业）CPU 一直在涨，`now_cpu` 每次都比上次大，stall 永远被重置，
 #   看门狗形同虚设。实测 cu57 当时并发跑着 wangxu 的多个 *_opt 作业与本用户 Si S4b(3850633)。
@@ -2147,7 +2147,7 @@ def build_in_job_stages(outdir: Path):
         _f = _layer_factor(outdir / "POSCAR", _vax_bj)
         if _f and _f > 0:
             _tol_cell = TOL_LAYER_KB / _f
-            # ★ 下限 0.05 kB（wangchao 2026-09-17）：AlN/BeO 这类平面单层的 h⊥/d 可达 6，
+            # ★ 下限 0.05 kB（user 2026-09-17）：AlN/BeO 这类平面单层的 h⊥/d 可达 6，
             #   0.4/6 = 0.067 kB 已经接近 VASP 应力的数值噪声（0.05~0.1 kB 量级），
             #   变胞循环会在阈值附近来回振荡、永远收敛不了。设下限保证判据在可分辨范围内。
             if _tol_cell < 0.05:
@@ -2171,7 +2171,7 @@ def build_in_job_stages(outdir: Path):
         print("[WARN] 未能从 submit.sh 解析 VASP 执行行 —— 跳过作业内分段，保持单段 INCAR")
         return False
 
-    # 变胞段的 ENCUT 单独提到 2.0×max(ENMAX)（2026-09-17，wangchao 定）：
+    # 变胞段的 ENCUT 单独提到 2.0×max(ENMAX)（2026-09-17，user 定）：
     #   Pulay 应力只影响【应力张量】，不影响固定几何下的力 —— 实测同几何下
     #   ENCUT 390→507 每个应力分量各向同性地平移约 +1.0 kB，507→624 变化 <0.02 kB。
     #   所以：① 用应力定晶格的变胞段（ISIF=3）必须用收敛 ENCUT（2.0×），否则晶格

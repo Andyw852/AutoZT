@@ -64,11 +64,16 @@ def main():
                 if k["cross"]:
                     ch["ky_W_mK"] = k["cross"]
                 ch["source"] = "upstream:" + up
+                ch["kappa_key"] = k.get("kappa_key")
+                ch["kappa_note"] = k.get("note")
+                ch["ky_source"] = ("upstream 跨面张量" if k["cross"]
+                                   else "材料库值（%s）" % (k.get("cross_note") or "上游无有效跨面值"))
                 th, thp = DC.read_thickness(cwd, up_skill)
                 if th:
                     ch["thickness_m"] = th
                     ch["thickness_source"] = thp
-                upstream_info = {"file": up, "T_K": k["T"], "tensor": k["tensor"]}
+                upstream_info = {"file": up, "T_K": k["T"], "tensor": k["tensor"],
+                                 "kappa_key": k.get("kappa_key"), "note": k.get("note")}
         else:
             print("[warn] KAPPA_SOURCE=%s 但未找到上游 %s/%s 产物，改用材料库"
                   % (src, up_skill, up_step))
@@ -103,6 +108,10 @@ def main():
           % (ch_name, ch["kx_W_mK"], ch["ky_W_mK"], ch["thickness_m"] * 1e9, ch["source"]))
     print("    oxide %s: k=%.4g W/mK t=%.1f nm ; TBC=%.4g MW/m2K  [%s]"
           % (ox_name, ox["kx_W_mK"], ox["thickness_m"] * 1e9, tbc / 1e6, tbc_ref))
+    if ch.get("kappa_note"):
+        print("    κ 口径: %s" % ch["kappa_note"])
+    if ch.get("ky_source"):
+        print("    跨面 κ: %s" % ch["ky_source"])
 
 
 if __name__ == "__main__":

@@ -107,7 +107,7 @@
 | defect-dft-cpu | templates/step.conf（技能级） | SUPERCELL | 3 3 1 | - | - |
 | elastic-dft-cpu | templates/step.conf（技能级） | FUNC | pbesol | - | - |
 | fc-fit | templates/step1_fit/step.conf（步骤级） | CONDA_ENV | atomate2_p_a | - | - |
-| fc-fit | templates/step1_fit/step.conf（步骤级） | CONDA_SH | /public/home/wangchao/miniconda3/etc/profile.d/conda.sh | - | - |
+| fc-fit | templates/step1_fit/step.conf（步骤级） | CONDA_SH | /public/home/.../miniconda3/etc/profile.d/conda.sh | - | - |
 | fc-fit | templates/step1_fit/step.conf（步骤级） | COORDS | cartesian | - | - |
 | fc-fit | templates/step1_fit/step.conf（步骤级） | DIM | auto | - | - |
 | fc-fit | templates/step1_fit/step.conf（步骤级） | ENABLE_FC | 3 | - | - |
@@ -557,17 +557,17 @@
 | phonon-mlff-gpu | gen_step2_disp_phonon.py | CONDA_SH | kc.DEFAULT_CONDA_SH | str | SPEC 内建默认 |
 | phonon-mlff-gpu | gen_step2_disp_phonon.py | MACE_MODEL_DIR | - | str | SPEC 内建默认 |
 | unihamgnn | templates/step.conf（技能级） | CONDA_ENV | ML | - | - |
-| unihamgnn | templates/step.conf（技能级） | CONDA_SH | /home/wangchaoyue852/miniconda3/etc/profile.d/conda.sh | - | - |
+| unihamgnn | templates/step.conf（技能级） | CONDA_SH | /home/user_3090/miniconda3/etc/profile.d/conda.sh | - | - |
 | unihamgnn | templates/step.conf（技能级） | DEVICE | cpu | - | predict 设备 cpu/cuda（3090 纯 CPU 跑） |
-| unihamgnn | templates/step.conf（技能级） | DFT_DATA | /home/wangchaoyue852/software/Uni-HamGNN/DFT_DATA19 | - | - |
+| unihamgnn | templates/step.conf（技能级） | DFT_DATA | /home/user_3090/software/Uni-HamGNN/DFT_DATA19 | - | - |
 | unihamgnn | templates/step.conf（技能级） | DIMENSION | auto | - | auto / 2d / 3d |
 | unihamgnn | templates/step.conf（技能级） | ELECTRONIC_TEMP | 300.0 | - | K |
 | unihamgnn | templates/step.conf（技能级） | ENERGY_CUTOFF | 200.0 | - | Ry |
-| unihamgnn | templates/step.conf（技能级） | HAMGNN_DIR | /home/wangchaoyue852/software/Uni-HamGNN/HamGNN | - | - |
+| unihamgnn | templates/step.conf（技能级） | HAMGNN_DIR | /home/user_3090/software/Uni-HamGNN/HamGNN | - | - |
 | unihamgnn | templates/step.conf（技能级） | KGRID | 5 5 5 | - | - |
 | unihamgnn | templates/step.conf（技能级） | MAX_SCF_ITER | 300 | - | - |
-| unihamgnn | templates/step.conf（技能级） | MKL_LIB | /home/wangchaoyue852/miniconda3/pkgs/mkl-2025.3.1-h0e700b2_10/lib | - | - |
-| unihamgnn | templates/step.conf（技能级） | MPIRUN | /home/wangchaoyue852/miniconda3/envs/openmx_build/bin/mpirun | - | - |
+| unihamgnn | templates/step.conf（技能级） | MKL_LIB | /home/user_3090/miniconda3/pkgs/mkl-2025.3.1-h0e700b2_10/lib | - | - |
+| unihamgnn | templates/step.conf（技能级） | MPIRUN | /home/user_3090/miniconda3/envs/openmx_build/bin/mpirun | - | - |
 | unihamgnn | templates/step.conf（技能级） | NAO_MAX | 26 | - | OpenMX 最大轨道数：14 / 19 / 26 |
 | unihamgnn | templates/step.conf（技能级） | NK | 120 | - | band_cal 能带路径 k 点数 |
 | unihamgnn | templates/step.conf（技能级） | NPROC | 1 | - | - |
@@ -576,7 +576,7 @@
 | unihamgnn | templates/step.conf（技能级） | READ_OPENMX | (空) | - | - |
 | unihamgnn | templates/step.conf（技能级） | SCF_CRITERION | 1.0e-7 | - | Hartree |
 | unihamgnn | templates/step.conf（技能级） | SOC | true | - | 通用 SOC 模型：true = 生成 non-SOC + SOC 两份 graph_data |
-| unihamgnn | templates/step.conf（技能级） | UNI_MODEL | /home/wangchaoyue852/software/Uni-HamGNN/uni-hamgnn_2_1.pkl | - | - |
+| unihamgnn | templates/step.conf（技能级） | UNI_MODEL | /home/user_3090/software/Uni-HamGNN/uni-hamgnn_2_1.pkl | - | - |
 | unihamgnn | templates/step.conf（技能级） | XC | GGA-PBE | - | - |
 | zt-dft-cpu | step.conf（技能级） | BANDGAP | hse | - | - |
 | zt-dft-cpu | step.conf（技能级） | FUNC | pbesol | - | - |

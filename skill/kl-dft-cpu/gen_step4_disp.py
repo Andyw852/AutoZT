@@ -72,7 +72,7 @@ SPEC = {
     "MC_DMIN_SCALE": (0.75,    "float"), # MC d_min = 最近邻 × 此系数
     "MC_NITER":     (10,       "int"),   # MC 迭代数
     "MC_SEED":      (2025,     "int"),
-    # INCAR_BENCH（2026-09-18，wangchao 要求）：取力 INCAR 基准对照。
+    # INCAR_BENCH（2026-09-18，user 要求）：取力 INCAR 基准对照。
     #   on 时除正常生成生产 disp-* 外，额外在 step4_disp/bench/<variant>/disp-XXXXX
     #   生成少数几帧（同一批位移，直接 copy 生产 POSCAR），比较 LREAL×ADDGRID 与
     #   ENCUT 变体的力一致性，定下生产取力 INCAR。默认 off，不改变现有材料行为。
@@ -233,7 +233,7 @@ def _disp_yaml_cell(path):
 
 
 def check_existing_matches_input(out):
-    """结构指纹校验（2026-09-17，wangchao 要求）：已有的位移/力数据必须属于【当前输入结构】。
+    """结构指纹校验（2026-09-17，user 要求）：已有的位移/力数据必须属于【当前输入结构】。
 
     为什么必须拦：retry 对 fanout 步骤**只补缺失的子目录**，已有 disp-* 一律不动；而
     build_displacements 见到 phono3py_disp.yaml + POSCAR-* 就"幂等跳过"。于是 S1 换了

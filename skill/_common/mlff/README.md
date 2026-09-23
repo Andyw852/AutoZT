@@ -105,9 +105,9 @@ autozt -tt kl-mlff-gpu -p <材料> -j 3 conf --set params.FIT_SOFTWARE=pheasy pa
 ```yaml
 task_types:
   kl-mlff-gpu:
-    work_dir: /public/home/wangchao/Fullerene_Network/work
+    work_dir: /public/home/.../Fullerene_Network/work
   kl-mlff-cpu:
-    work_dir: /public/home/wangchao/Fullerene_Network/work
+    work_dir: /public/home/.../Fullerene_Network/work
 ```
 
 ## 出虚频了怎么办

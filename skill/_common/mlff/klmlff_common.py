@@ -40,7 +40,7 @@ KL_PARAMS = "klmlff_params.txt"       # 跨步共享：DIM/SUPERCELL/FC2_SUPERCE
 
 # conda 环境缺省值（仅作最后兜底：正常路径下 CONDA_SH/CONDA_ENV 由集群默认注入
 # setting/<hpc>.yaml，或 step.conf 显式给出——见 _common/mlff/README.md「换超算」）。
-DEFAULT_CONDA_SH = "/public/home/wangchao/miniconda3/etc/profile.d/conda.sh"
+DEFAULT_CONDA_SH = "/public/home/.../miniconda3/etc/profile.d/conda.sh"
 DEFAULT_CONDA_ENV = "mace"
 
 

@@ -2,15 +2,15 @@
 # push_model.sh —— 把本目录的 .model 一次性推到超算的模型库目录。
 #
 #   bash push_model.sh [ssh别名] [远端目录] [只推某个文件]
-#   bash push_model.sh jzzn /public/home/wangchao/software/mlff_models
-#   bash push_model.sh jzzn /public/home/wangchao/software/mlff_models my.model
+#   bash push_model.sh jzzn /public/home/.../software/mlff_models
+#   bash push_model.sh jzzn /public/home/.../software/mlff_models my.model
 #
 # 推完把远端目录填进 kl-mlff-gpu 的全局 step.conf：
 #   tf -tt kl-mlff-gpu -p <材料> conf --set params.MACE_MODEL_DIR=<远端目录>
 set -euo pipefail
 
 HOST="${1:-jzzn}"
-DEST="${2:-/public/home/wangchao/software/mlff_models}"
+DEST="${2:-/public/home/.../software/mlff_models}"
 ONLY="${3:-}"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 

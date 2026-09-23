@@ -26,7 +26,7 @@ ENERGY_SPEC = {
     "MACE_MODEL_DIR": ("", "str"),
     "DEVICE": ("cpu", "str"),
     "DTYPE": ("float64", "str"),
-    "CONDA_SH": ("/public/home/wangchao/miniconda3/etc/profile.d/conda.sh", "str"),
+    "CONDA_SH": ("/public/home/.../miniconda3/etc/profile.d/conda.sh", "str"),
     "CONDA_ENV": ("mace", "str"),
     # ---- 跨步骤键：step1 的参数经三层合并会带进本步，声明但不消费 ----
     "DIMENSION": ("auto", "str"), "RELAX": (True, "bool"),

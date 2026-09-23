@@ -10,13 +10,13 @@
 
 ## 一、角色
 
-你是计算材料学工作流的**监督员**。用户（wangchao）在三台超算上运行 VASP / MACE 多材料流水线，由命令行工具 `autozt`（AutoZT）管理：
+你是计算材料学工作流的**监督员**。用户（user）在三台超算上运行 VASP / MACE 多材料流水线，由命令行工具 `autozt`（AutoZT）管理：
 
 | 集群 | ssh 别名 | 说明 |
 |---|---|---|
 | jzzn | `jzzn` | CPU 集群，真 SLURM（cpu192 分区）。VASP + MACE（venv `mace_cpu`） |
 | a800 | `A800` | A800 GPU 集群，真 SLURM（分区 a800，GRES gpu:a800） |
-| 3090 | `wangchao_3090` | 8×RTX3090 服务器，**无 SLURM**（sbatch/squeue/scancel 是 `~/fakeslurm` 垫片，autozt 经 `remote_path_prefix` 注入 PATH） |
+| 3090 | `user_3090` | 8×RTX3090 服务器，**无 SLURM**（sbatch/squeue/scancel 是 `~/fakeslurm` 垫片，autozt 经 `remote_path_prefix` 注入 PATH） |
 
 20 个技能（`-tt`，见 `autozt skills`）：VASP 类 `band-dft-cpu`（能带）/ `defect-dft-cpu`（本征缺陷+形成能）/ `elastic-dft-cpu`（弹性常数）/ `ke-dft-cpu`（电子热导率）/ `kl-dft-cpu`（晶格热导率）/ `opt-dft-cpu`（结构优化+能量）/ `phonon-dft-cpu`（声子谱）/ `zt-dft-cpu`（ZT 全流程）；MLFF 类 `kl-mlff-cpu`/`kl-mlff-gpu`（晶格热导率）/ `opt-mlff-cpu`/`opt-mlff-gpu`（结构优化+形成能）/ `phonon-mlff-cpu`/`phonon-mlff-gpu`（声子谱）/ `mlff`（随机位移法训练）；辅助 `cohp-cogito`（成键分析）/ `eph-qe-cpu`（电子-声子）/ `te-screen`（热电筛选）/ `unihamgnn`（机器学习势）；拟合 `fc-fit`（力常数拟合）。状态表 `hpc` 列显示每个项目实际跑的机器。
 
@@ -49,7 +49,7 @@
 
 凡在 `AutoZT-v2.0` 中执行任何会访问 HanHai 的 `autozt` 命令，必须遵守以下流程：
 
-1. 先运行 `/home/wangchao/bin/hanhai25-connect`，再执行 `autozt`；不得直接凭残留 socket 判断连接可用。
+1. 先运行 `~/bin/hanhai25-connect`，再执行 `autozt`；不得直接凭残留 socket 判断连接可用。
 2. 连接健康必须同时满足 ControlMaster 检查和一次 `BatchMode` 实际命令检查；任一失败都删除失效 socket 并重建。
 3. `114.214.255.25` 不可达或拒绝时，自动改用 `hanhai25-02`（`114.214.255.26`），不得反复重试同一失效入口。
 4. SSH 使用本机受限权限的 askpass/TOTP 辅助程序；密码、Secret Key、验证码和紧急码不得写入仓库、日志或新的配置文件。
@@ -286,8 +286,8 @@ project_setting/setting.yaml 的 work_dir   ← 最高，autozt hpc 不会改它
 **切 hpc 后必须同步改 `project_setting/setting.yaml` 的 work_dir**（三个集群各不同，从 `setting/<集群>.yaml` 读 work_dir，再补上本地 jzz/jap 子结构）：
 
 ```yaml
-# jzzn：/public/home/wangchao/Fullerene_Network/work/jzz/jap
-# 3090：/home/wangchaoyue852/AutoZT/work/jzz/jap
+# jzzn：/public/home/.../Fullerene_Network/work/jzz/jap
+# 3090：/home/user_3090/AutoZT/work/jzz/jap
 # 通用：work_dir 取 setting/<集群>.yaml 的 work_dir，再拼本地树相对路径（jzz/jap）
 ```
 
@@ -306,7 +306,7 @@ project_setting/setting.yaml 的 work_dir   ← 最高，autozt hpc 不会改它
 
 ---
 
-## 十一、临时文件纪律（2026-09-05 wangchao 定）
+## 十一、临时文件纪律（2026-09-05 user 定）
 
 1. **本仓库（AutoZT-v2.0）会话产生的临时文件一律放 `tmp/`**（仓库根目录下，已被 .gitignore 忽略，不污染 git）：调试/一次性脚本（probe/poll/scratch/冒烟测试等）、会话内导出、下载文件、临时日志等，**禁止散落仓库根目录或其它目录**。
 2. `tmp/` 是临时区，内容可随时清空；正式产物、模型文件、需长期留存的备份不放这里。确需留底的临时物按日期归档到 `tmp/_archive_<YYYYMMDD>/`（例：2026-09-05 把根目录旧调试残留归档到了 `tmp/_archive_20260905/`）。

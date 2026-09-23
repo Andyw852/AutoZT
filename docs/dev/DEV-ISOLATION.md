@@ -16,7 +16,7 @@
 
 | 项 | 值 |
 |---|---|
-| 复制来源 | `/home/wangchao/software/AutoZT-v2.0` |
+| 复制来源 | `~/software/AutoZT-v2.0` |
 | 复制时间 | 2026-09-14 |
 | 上游提交 | `56fc99f`（feat(fc-fit): add the fc-fit skill） |
 | 复制方式 | `rsync -a`（保留当时工作区 91 个未提交改动，原样带过来） |

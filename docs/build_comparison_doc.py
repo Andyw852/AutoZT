@@ -6,7 +6,7 @@ from docx.enum.table import WD_TABLE_ALIGNMENT, WD_CELL_VERTICAL_ALIGNMENT
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 
-OUT = r'\\wsl.localhost\Ubuntu\home\wangchao\software\AutoZT\docs\AutoZT_workflow_software_comparison.docx'
+OUT = r'\\wsl.localhost\Ubuntu\home\user\software\AutoZT\docs\AutoZT_workflow_software_comparison.docx'
 
 def shade(cell, fill):
     tcPr = cell._tc.get_or_add_tcPr()

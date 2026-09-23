@@ -61,9 +61,9 @@ def _amset_env_src():
             return "source %s && conda activate %s" % (_sh, _env)
     except Exception:
         pass
-    if _os.path.isdir("/home/wangchaoyue852/miniconda3"):
-        return "source /home/wangchaoyue852/miniconda3/etc/profile.d/conda.sh && conda activate amset"
-    return "source /public/home/wangchao/miniconda3/etc/profile.d/conda.sh && conda activate amset051"  # 2026-09-22 全局切 0.5.1
+    if _os.path.isdir("/home/user_3090/miniconda3"):
+        return "source /home/user_3090/miniconda3/etc/profile.d/conda.sh && conda activate amset"
+    return "source /public/home/.../miniconda3/etc/profile.d/conda.sh && conda activate amset051"  # 2026-09-22 全局切 0.5.1
 AMSET_ENV_SRC = _amset_env_src()
 # =================================================================
 

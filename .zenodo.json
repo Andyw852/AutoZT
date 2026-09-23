@@ -3,7 +3,7 @@
   "description": "AutoZT drives multi-step VASP and MACE pipelines for phonon and force-constant calculations across several HPC clusters, with criterion-driven step advancement, provenance tracking, reproducible session export, an approval gate for agent-driven actions and a drop-in interface for new skills.",
   "license": "MIT",
   "upload_type": "software",
-  "creators": [{"name": "wangchao"}],
+  "creators": [{"name": "user"}],
   "keywords": ["phonons", "force constants", "high-throughput", "VASP", "MACE", "workflow"],
   "access_right": "open"
 }

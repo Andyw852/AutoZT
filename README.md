@@ -92,7 +92,7 @@ printf '%s\n%s\n' '{"op":"capabilities"}' '{"op":"snapshot"}' | autozt agent ser
 |---|---|---|---|
 | jzzn | `jzzn` | CPU，真 SLURM（cpu192） | VASP 各技能 + MACE CPU 类 |
 | a800 | `A800` | A800 GPU，真 SLURM | GPU 类技能 |
-| 3090 | `wangchao_3090` | 8×RTX3090，无 SLURM（fakeslurm 垫片） | MACE GPU 类（注意：垫片无排队，需靠 max_jobs 节流） |
+| 3090 | `user_3090` | 8×RTX3090，无 SLURM（fakeslurm 垫片） | MACE GPU 类（注意：垫片无排队，需靠 max_jobs 节流） |
 
 ## 技能清单
 

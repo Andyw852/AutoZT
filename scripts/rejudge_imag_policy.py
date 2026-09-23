@@ -9,7 +9,7 @@ S5 产物按新规则重判，列出结论发生变化的材料。**本脚本只
 za_2d.py 需在 PYTHONPATH 或同目录。
 
 用法：
-    python3 rejudge_imag_policy.py --root /public/home/wangchao/Fullerene_Network/work \
+    python3 rejudge_imag_policy.py --root /public/home/.../Fullerene_Network/work \
         [--pattern '**/kl-dft-cpu/step5_fc/phono3py/fc2.hdf5'] [--json out.json]
 """
 import argparse
@@ -78,7 +78,7 @@ def _samples(ph, is2d, vaxp, mesh_n):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--root", default="/public/home/wangchao/Fullerene_Network/work")
+    ap.add_argument("--root", default="/public/home/.../Fullerene_Network/work")
     ap.add_argument("--pattern", default="**/kl-dft-cpu/step5_fc/phono3py/fc2.hdf5")
     ap.add_argument("--mesh-n", type=int, default=60)
     ap.add_argument("--json", default=None)

@@ -39,7 +39,7 @@ def setup():
               "w", encoding="utf-8") as f:
         json.dump({"step": "S1_opt", "ts": "2026-09-14T10:00:00",
                    "inputs": {"INCAR": {"sha256": "ab" * 32, "bytes": 120}},
-                   "runner": {"actor": "wangchao"}}, f, ensure_ascii=False)
+                   "runner": {"actor": "user"}}, f, ensure_ascii=False)
     evs = [
         {"ts": "2026-09-14T10:00:01", "mat": MAT, "skill": "opt-dft-cpu",
          "step": "S1_opt", "ev": "action", "act": "init", "note": "init S1_opt",
@@ -70,10 +70,10 @@ def mkm():
             "steps": [
                 {"name": "S1_opt", "label": "S1_opt", "kind": "OK", "diag": "",
                  "job": {"id": "3838838", "state": "COMPLETED"},
-                 "dir": "/public/home/wangchao/tf_smoke/Si_sess/opt-dft-cpu/step1_std_opt"},
+                 "dir": "/public/home/.../tf_smoke/Si_sess/opt-dft-cpu/step1_std_opt"},
                 {"name": "S2_static", "label": "S2_static", "kind": "PREP",
                  "diag": "", "job": None,
-                 "dir": "/public/home/wangchao/tf_smoke/Si_sess/opt-dft-cpu/step2_static"}]}
+                 "dir": "/public/home/.../tf_smoke/Si_sess/opt-dft-cpu/step2_static"}]}
 
 
 def mkdata():

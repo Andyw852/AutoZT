@@ -43,7 +43,7 @@ CONFIG_SEARCH = [
 EXAMPLE_CONFIG = """\
 # ===== taskflow v3 全局配置 =====
 host: jzzn                 # 默认 ssh 别名（可被项目 project_setting/hpc.yaml 的 ssh_host 覆盖）
-# user: wangchao           # squeue 查询用户，缺省 = 远端当前用户
+# user: user           # squeue 查询用户，缺省 = 远端当前用户
 
 # 项目根列表：tf 扫描每个根下的 project_setting/tf_*.yaml（含一层子目录，
 # 如 C20/project_setting/tf_C20.yaml）。配置跟着项目走，加新项目 = 在项目里

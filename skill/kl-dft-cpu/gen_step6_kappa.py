@@ -643,7 +643,7 @@ def main():
     plan = [(m, bte_primary) for m in mesh_list]
     ts_override = None
     if compare_lbte and solver == "phono3py":
-        # 对照跑在【最粗那档】网格上、且【只跑 300 K】（wangchao 2026-09-21）：
+        # 对照跑在【最粗那档】网格上、且【只跑 300 K】（user 2026-09-21）：
         #   LBTE 的碰撞矩阵按 (nq·nb)² 稠密、逐温度对角化，比同网格 RTA 贵 1~2 个数量级；
         #   "RTA 是否低估"只需一个温度点 + 最省的那档网格就够。
         #   （同一档网格既跑 RTA 又跑 LBTE → 输出文件名会撞，tagged 改名，见 build_phono3py_cmd）
@@ -721,7 +721,7 @@ def main():
         kc.write_submit(tpl, out / "submit.sh",
                         {"JOBNAME": kc.new_jobname(cwd, "S6kappa"),
                          "CONDA_SH": (conf["CONDA_SH"]
-                                      or "/public/home/wangchao/miniconda3/etc/profile.d/conda.sh"),
+                                      or "/public/home/.../miniconda3/etc/profile.d/conda.sh"),
                          "CONDA_ENV": "atomate2_p_a",
                          "CPUS_PER_TASK": str(_p3_threads),
                          "QOS": str(conf["SBATCH_QOS"] or "premium"),

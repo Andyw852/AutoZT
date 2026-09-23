@@ -151,7 +151,7 @@ symprec=1e-5 只给 Amm2 (#38)/4 ops（pheasy 沿用该判断），symprec>=1e-4
 P-6m2 (#187)/12 ops；对称操作少 2/3 -> 独立力常数大增 -> 允许六方破缺 -> ZA 线性化。
 把晶格拉平 a=b、锁 gamma=120 后连 1e-5 都立即 P-6m2。
 
-**判据（wangchao 指定）**：symprec=1e-5 与 1e-4 给出的空间群不一致 => 数值微畸变
+**判据（user 指定）**：symprec=1e-5 与 1e-4 给出的空间群不一致 => 数值微畸变
 => 触发对称化建议。不固定单一容差当判据。
 
 引擎：`skill/_common/opt/symmetry_audit.py`。顶层只依赖标准库；numpy/spglib 懒加载，

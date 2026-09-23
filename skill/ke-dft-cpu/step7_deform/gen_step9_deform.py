@@ -55,9 +55,9 @@ def _amset_env_src():
             return "source %s && conda activate %s" % (_sh, _env)
     except Exception:
         pass
-    if _os.path.isdir("/home/wangchaoyue852/miniconda3"):
-        return "source /home/wangchaoyue852/miniconda3/etc/profile.d/conda.sh && conda activate amset"
-    return "source /public/home/wangchao/miniconda3/etc/profile.d/conda.sh && conda activate amset051"  # 2026-09-22 全局切 0.5.1
+    if _os.path.isdir("/home/user_3090/miniconda3"):
+        return "source /home/user_3090/miniconda3/etc/profile.d/conda.sh && conda activate amset"
+    return "source /public/home/.../miniconda3/etc/profile.d/conda.sh && conda activate amset051"  # 2026-09-22 全局切 0.5.1
 AMSET_ENV_SRC = _amset_env_src()
 DEFORM_GLOB  = "*deform*"      # 与 skill.yaml 的 fanout 一致
                                # （同时匹配 deform-NNN 和 undeformed，两者都要交）
@@ -259,6 +259,28 @@ def _reference_kpoints(out, dim, vac_axis, n_sub):
         _need = list(_n[:3])
         for i in _axes:
             _need[i] = max(_n[i], int(np.ceil(_len[i] / float(DK_MAX))))
+        # [KALIGN-2026-09-23] 高对称点对齐：必须与 step3_uniform 同一实现，否则
+        #   S3=48×48 vs S7=46×46（CrSe2_hex）→ 形变势网格与波函数网格不一致，
+        #   且 K 不在 S7 网格上。只在本 2D 分支调用，3D S7 行为不变（用户硬约束）。
+        _need = kc.align_kgrid(_need, dim, _axes, label="S7_deform")
+        # 面内网格以 step3_uniform 为唯一真源：两步用同一 CONTCAR，面内应逐轴相同。
+        #   本脚本的 DK_MAX 是写死常量、不读项目 step.conf；项目若放宽了 S3 的
+        #   DK_MAX_2D（如 0.06 → 42×42），S7 自算仍是 48 —— 所以有 S3 网格时直接照抄，
+        #   自算值只作为 S3 缺失时的回落。kz 另由 patch_vacuum_kz 管，不动。
+        _s3 = kc.read_kpoints_mesh(out.parent / "step3_uniform" / "KPOINTS")
+        if _s3:
+            _cp = [_s3[i] for i in _axes]
+            if _cp != [_need[i] for i in _axes]:
+                print("[..] S7 undeformed 面内网格：自算 %s -> 照抄 step3_uniform %s"
+                      % ("x".join(str(_need[i]) for i in _axes), "x".join(str(x) for x in _cp)))
+            for _j, _i in enumerate(_axes):
+                _need[_i] = _cp[_j]
+            if kc.align_kgrid(_need, dim, _axes, quiet=True) != _need:
+                print("[WARN] step3_uniform 面内网格 %s 未对齐高对称点（旧版 S3 生成？）"
+                      "—— 建议先 rerun step3_uniform，再重生成本步" % "x".join(str(x) for x in _cp))
+        else:
+            print("[WARN] 找不到 step3_uniform/KPOINTS，S7 面内网格按 DK_MAX=%.3f 自算 %s"
+                  % (float(DK_MAX), "x".join(str(_need[i]) for i in _axes)))
         if _need != _n[:3]:
             print("[WARN] undeformed 网格 %dx%dx%d（笛卡尔间距 %.3f/%.3f Å⁻¹）不满足 "
                   "DK_MAX=%.3f，按轴提到 %dx%dx%d（与 step3_uniform 同口径）"

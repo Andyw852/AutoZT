@@ -1,9 +1,9 @@
 {
   "_comment": "器件热仿真材料库。2D 材料 kappa_inplane/cross 单位 W/mK；厚度为单层有效厚度。rho_cp 为体积热容 J/m3K。数据为文献量级，供 KAPPA_SOURCE=literature 兜底；上游 kl-dft-cpu 有实测时优先用实测（KAPPA_SOURCE=auto）。",
   "materials": {
-    "MoS2": {"kind": "2d", "kappa_inplane_W_mK": 20.8, "kappa_cross_W_mK": 4.5,
+    "MoS2": {"kind": "2d", "kappa_inplane_W_mK": 63.7, "kappa_cross_W_mK": 4.5,
              "thickness_m": 6.7177e-10, "rho_cp_J_m3K": 2.53e6,
-             "note": "kappa_inplane 取 AutoZT kl-dft-cpu MoS2 RTA raw 300K(20.8)；文献单层 suspended ~83 W/mK (PRB 87,115418)，差异来自 RTA/LBTE+厚度口径；厚度取 kl thickness_d_A=6.7177"},
+             "note": "kappa_inplane 取 AutoZT kl-dft-cpu MoS2 RTA 300K 的【2D 物理值】= 含真空胞值 20.88 × h⊥/d(2.973) = 62.1~63.7 W/mK，与本表 thickness_m=6.7177 Å 配套。2026-09-23 修正：原先填的 20.8 是含真空的胞值，与物理厚度不配套，会把面内热导低估 2.97 倍。文献单层 suspended ~83 W/mK (PRB 87,115418)"},
     "WS2": {"kind": "2d", "kappa_inplane_W_mK": 32.0, "kappa_cross_W_mK": 4.0,
             "thickness_m": 6.5e-10, "rho_cp_J_m3K": 2.5e6, "note": "literature order"},
     "MoSe2": {"kind": "2d", "kappa_inplane_W_mK": 15.0, "kappa_cross_W_mK": 3.5,

@@ -256,7 +256,7 @@ SUBMIT_DEFAULTS = {
 # 渲染后覆盖这三个 Slurm 参数；None = 不改，保持模板原值。
 # ntasks_per_node 主机自适应：3090 GPU（1 rank 绑 1 卡）→ 1；jzzn CPU → 24。
 import os as _os
-_NTASKS_DEFAULT = (1 if _os.path.isdir("/home/wangchaoyue852")
+_NTASKS_DEFAULT = (1 if _os.path.isdir("/home/user_3090")
                    else 24)
 SUBMIT_OVERRIDE = {
     "nodes":           None,
