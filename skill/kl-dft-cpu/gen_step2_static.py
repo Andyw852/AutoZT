@@ -53,6 +53,15 @@ def main():
     func = conf["FUNC"]
     if func in (None, "", "auto"):
         func = meth.get("FUNC", "pbe-d3").lower()
+    # ★ 泛函一致性硬检查（wangchao review 二）：本步泛函必须与 S1 记录在
+    #   workflow_method.txt 里的 FUNC 相同 —— 泛函不同就不在同一步势能面上，
+    #   S2_static 的产物会带上不匹配的力/应力，且完全静默。
+    _rec_func = str(meth.get("FUNC") or "").strip().lower()
+    if _rec_func and func != _rec_func:
+        sys.exit("[ERROR] S2_static 的泛函与 step1 不一致：本步 FUNC=%s，workflow_method.txt "
+                 "记 FUNC=%s。\n        两者必须相同（同一势能面）；拒绝生成。\n"
+                 "        处置：把本步 FUNC 置 auto（推荐，自动继承），或先核对 S1 的泛函。"
+                 % (func, _rec_func))
     print("[..] 维度=%s  泛函=%s（继承 step1）" % (dim.upper(), func))
 
     kc.vaspkit_kpoints(out, conf["KSCHEME"], conf["KSPACING"],
