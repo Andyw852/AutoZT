@@ -528,13 +528,22 @@ def main():
         d = out / ("disp-%s" % num)
         d.mkdir(exist_ok=True)
         if (d / "INCAR").is_file() and (d / "POSCAR").is_file():
-            # ★ 帧已存在时不重渲染 INCAR，但**项目级 [incar] 覆盖必须重新施加**：
-            #   否则 `conf --set incar.*`（例如抬 NELM 救未收敛帧）之后的 retry 是
-            #   空操作 —— 老 INCAR 原样保留，作业照样失败（wangchao review 一.1）。
-            _ic = stepconf.apply_incar_file(d / "INCAR")
-            if _ic:
-                print("[..] %s：按 step.conf [incar] 更新 %d 项（%s）"
-                      % (d.name, len(_ic), ", ".join(str(x[1]) for x in _ic[:6])))
+            # ★ 已算完的帧**不要动 INCAR**（wangchao review 二.be31ab5）：重写 INCAR 会让
+            #   INCAR 与 OUTCAR 记的参数对不上。只对"还要重算"的帧施加项目级 [incar] 覆盖 ——
+            #   这正是 \`conf --set incar.*\` 之后 retry 的目标帧，覆盖也只有对它们才有意义。
+            _outcar = d / "OUTCAR"
+            _done = False
+            if _outcar.is_file():
+                try:
+                    _done = "General timing and accounting informations" in \
+                        _outcar.read_text(errors="ignore")[-400000:]
+                except OSError:
+                    _done = False
+            if not _done:
+                _ic = stepconf.apply_incar_file(d / "INCAR")
+                if _ic:
+                    print("[..] %s：待重算帧，按 step.conf [incar] 更新 %d 项（%s）"
+                          % (d.name, len(_ic), ", ".join(str(x[1]) for x in _ic[:6])))
             continue
         shutil.copyfile(pos, d / "POSCAR")
         kc.vaspkit_kpoints(d, conf["KSCHEME"], conf["KSPACING"], conf["VASPKIT_EXE"], dim, vac_axis)
