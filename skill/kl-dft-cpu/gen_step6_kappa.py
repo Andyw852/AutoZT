@@ -424,6 +424,35 @@ def meshes(conf, params, dim, vac_axis):
     return [kc.mesh_str(s.split(), dim, ax) for s in scan.split(";") if s.strip()]
 
 
+def _hex_sixfold(mesh_str, poscar_lat, vac_axis):
+    """六方晶格：面内网格取 6 的倍数，让 Γ/K/M 都落在网格上（wangchao review 一.3）。
+
+    87 = 3×29 能落到 K 却落不到 M；109/136 连 K 都不在网格上。K 点需 3 的倍数、
+    M 点需偶数 ⇒ 取 6 的倍数。只对六方（|a|≈|b| 且夹角 120°/60°）生效，其余原样返回；
+    真空轴不动。取 ceil 而不是四舍五入：不把"锚点网格"变粗。
+    """
+    import math as _m
+    import numpy as np
+    vals = [int(x) for x in str(mesh_str).split()]
+    if len(vals) != 3 or vac_axis is None:
+        return mesh_str
+    if min(vals) != 1:            # 只有 2D 口径（含 1 的网格）才取整，3D 网格原样返回
+        return mesh_str
+    L = np.asarray(poscar_lat, float)
+    a, b = float(np.linalg.norm(L[0])), float(np.linalg.norm(L[1]))
+    if a <= 0 or b <= 0 or abs(a - b) / max(a, b) > 0.01:
+        return mesh_str
+    cosg = float(np.dot(L[0], L[1]) / (a * b))
+    if abs(abs(cosg) - 0.5) > 0.02:
+        return mesh_str
+    out = list(vals)
+    for i in range(3):
+        if i == int(vac_axis):
+            continue
+        out[i] = int(_m.ceil(vals[i] / 6.0)) * 6
+    return " ".join(str(x) for x in out)
+
+
 def extract_plan(plan, tagged):
     """PLAN：extract 要读哪几个 kappa 文件、分别是哪档网格/哪种解法。
     tagged=True 时文件名是 kappa-m<digits>.<method>.hdf5（见 build_phono3py_cmd）。"""
@@ -619,6 +648,19 @@ def main():
     # ★ 留存"POSCAR/Cartesian 轴序"的原始网格：ShengBTE/FourPhonon 的晶胞是 S5 导出的
     #   ph3.unitcell（真空仍在第 3 基矢），必须按 POSCAR 轴序写 ngrid。
     #   下面的 _mesh_prim_remap 只服务 phono3py --mesh（wangchao review 一.1）。
+    # ★ 六方晶格：面内网格取 6 的倍数（Γ/K/M 都落网格；wangchao review 一.3）。
+    #   必须放在 remap 之前、且作用在 POSCAR 序上 —— 这样 phono3py 与 ShengBTE 两路
+    #   拿到的是同一组取整后的面内值。
+    if dim == "2d":
+        try:
+            _pl0 = kc.read_poscar_cell_frac(out / "POSCAR")[0]
+            if _pl0:
+                _b4 = list(mesh_list)
+                mesh_list = [_hex_sixfold(m, _pl0, vac_ax) for m in mesh_list]
+                if mesh_list != _b4:
+                    print("[..] 六方晶格：面内网格取 6 的倍数 %s -> %s" % (_b4, mesh_list))
+        except Exception as _e:                    # noqa: BLE001
+            print("[WARN] 六方网格取整失败（%s），按原样使用" % _e)
     mesh_poscar = list(mesh_list)
     # ★ phono3py --mesh 是【原胞基矢轴序】，而 meshes() 产出的是 POSCAR/Cartesian 轴序。
     #   primitive_matrix 重排基矢后必须重排网格，否则 phono3py 报 Grid symmetry is broken
