@@ -513,6 +513,21 @@ def prepare_shengbte(cwd, out, sb_src, conf, mesh, use_nac):
          "kappa_t_step": conf["T_STEP"], "kappa_scalebroad": conf["SCALEBROAD"],
          "kappa_isotope": conf["ISOTOPE"],
          "kappa_convergence": bool(conf["KAPPA_CONVERGENCE"])}
+    # ★ 2D 轴序自检（wangchao review 一.1）：含 1 的网格里，ngrid=1 的那个轴必须是
+    #   CONTROL 的 lattvec 中的真空轴（最长基矢）。若把 phono3py 原胞序的 "1 87 87"
+    #   写进 ShengBTE，就变成"面内取 1 个点、真空取 87 个点"——κ 整体错且不报错。
+    _gm = [int(x) for x in str(mesh).split()]
+    if len(_gm) == 3 and min(_gm) == 1:
+        import numpy as np
+        _norms = np.linalg.norm(np.asarray(atoms.get_cell(), float), axis=1)
+        _vac = int(np.argmax(_norms))
+        if _gm[_vac] != 1:
+            sys.exit("[ERROR] ShengBTE 网格轴序错误：2D 真空轴是 %d（|a|=%.2f Å），"
+                     "但 ngrid=%s 在该轴取了 %d 个点（应为 1）。\n"
+                     "        原因：把 phono3py 的原胞基矢轴序网格用到了 ShengBTE。"
+                     "\n        处置：核对 meshes() 的输出未被 _mesh_prim_remap 串轴序。"
+                     % (_vac, _norms[_vac], _gm, _gm[_vac]))
+        print("[..] ShengBTE 网格 %s：真空轴=%d 且 ngrid=1 ✓" % (_gm, _vac))
     lk._write_shengbte_control(C, atoms, sc, out / "CONTROL", use_nac)
     print("[OK] ShengBTE 输入就绪：FORCE_CONSTANTS_2ND/3RD（拷自 S5）+ CONTROL")
     if use_nac:
@@ -601,6 +616,10 @@ def main():
     vac_ax = vac_axis if vac_axis is not None else 2
     # MESH_OVERRIDE / kl_params 的 MESH 也过 mesh_str：3D 被误写成 "N N 1" 时自动纠正。
     mesh_list = meshes(conf, params, dim, vac_ax)
+    # ★ 留存"POSCAR/Cartesian 轴序"的原始网格：ShengBTE/FourPhonon 的晶胞是 S5 导出的
+    #   ph3.unitcell（真空仍在第 3 基矢），必须按 POSCAR 轴序写 ngrid。
+    #   下面的 _mesh_prim_remap 只服务 phono3py --mesh（wangchao review 一.1）。
+    mesh_poscar = list(mesh_list)
     # ★ phono3py --mesh 是【原胞基矢轴序】，而 meshes() 产出的是 POSCAR/Cartesian 轴序。
     #   primitive_matrix 重排基矢后必须重排网格，否则 phono3py 报 Grid symmetry is broken
     #   （2026-09-21 MoS₂ S6 实测）。见 _mesh_prim_remap。
@@ -616,7 +635,8 @@ def main():
                           % (_before, mesh_list))
         except Exception as _e:                    # noqa: BLE001
             print("[WARN] q 网格原胞重排失败（%s），按原样使用" % _e)
-    mesh = mesh_list[-1]
+    mesh = mesh_list[-1]          # phono3py：原胞基矢轴序
+    mesh_sb = mesh_poscar[-1]     # ShengBTE/FourPhonon：POSCAR 轴序（不可用重排后的）
     if solver != "phono3py" and len(mesh_list) > 1:
         sys.exit("[ERROR] MESH_SCAN 多套网格只有 phono3py 支持（shengbte/fourphonon 单套）；"
                  "当前 SOLVER=%s，请把 MESH_SCAN 留空或只写一套。" % solver)
@@ -729,7 +749,7 @@ def main():
                         require=REQ_2D + ("--ntasks=1",),
                         label="phono3py 提交模板：")
     elif solver == "shengbte":
-        prepare_shengbte(cwd, out, sbd, conf, mesh, use_nac)
+        prepare_shengbte(cwd, out, sbd, conf, mesh_sb, use_nac)
         tpl = kc.resolve_submit(here, "3d", "submit_shengbte")
         # MPI/OMP 布局：一个 rank 一个 NUMA 域。rank=1 会退化成串行（ShengBTE 靠
         # MPI 按 q 点并行），所以这里必须显式算出来，不能沿用模板里的常量。
@@ -821,7 +841,7 @@ def main():
                      " ALLOW_FOURPHONON_GPU_PHONOPY 设为 true。见 README「fourphonon」节。")
         print("[WARN] SOLVER=fourphonon：GPU 版对 phonopy fc2 有已知数值 bug（κ 错 67~71×），"
               "本次结果只能用于对照 / 复现，不可当真值。")
-        prepare_fourphonon(cwd, out, sbd, conf, mesh, use_nac, ngpu)
+        prepare_fourphonon(cwd, out, sbd, conf, mesh_sb, use_nac, ngpu)
         tpl = kc.resolve_submit(here, "3d", "submit_fourphonon")
         kc.write_submit(tpl, out / "submit.sh",
                         {"JOBNAME": kc.new_jobname(cwd, "S6kappa"),
