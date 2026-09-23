@@ -441,6 +441,15 @@ def main():
                 why="晶格热导需要声子群速度和布里渊区积分，孤立分子只有分立振动模式")
     func = conf["FUNC"] if conf["FUNC"] not in (None, "", "auto") \
         else meth.get("FUNC", "pbe-d3").lower()
+    # ★ 泛函一致性硬检查（2026-09-23 wangchao review 二.1）：S4 取力用的泛函必须与 S1
+    #   记录在 workflow_method.txt 里的 FUNC 相同 —— 同一步势能面才有可比的力。不一致时
+    #   平衡帧会带残余净力、fc2 里出假软模，且完全静默（模板曾写死 pbesol 短路 auto）。
+    _rec_func = str(meth.get("FUNC") or "").strip().lower()
+    if _rec_func and func != _rec_func:
+        sys.exit("[ERROR] S4 的泛函与 step1 不一致：本步 FUNC=%s，workflow_method.txt 记 "
+                 "FUNC=%s。\n        两者必须相同（同一势能面）；拒绝生成。\n"
+                 "        处置：本材料 S4 的 FUNC 置 auto（推荐，自动继承），或先核对 S1 的泛函。"
+                 % (func, _rec_func))
     method = str(conf["METHOD"]).lower()
     if method not in ("findiff", "alm"):
         sys.exit("[ERROR] METHOD 只允许 findiff / alm")
