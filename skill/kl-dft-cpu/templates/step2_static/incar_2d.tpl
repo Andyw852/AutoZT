@@ -23,3 +23,5 @@ LCHARG = .TRUE.
 LORBIT = 11
 NCORE  = 4
 KPAR   = 1
+
+AMIN    = 0.01          # 2D 长真空层必加，否则电子步收敛极慢（与 S1/S4 的 2D 模板一致；review 六）
