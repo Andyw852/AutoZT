@@ -363,9 +363,17 @@ def check_frames_match_displacements(step4_dir, n_sample=3, tol=1e-3):
 NELM_WARNING = "number of steps (NELM)"
 EDIFF_ABORT_MARK = "aborting loop because EDIFF is reached"
 _DAV_RE = re.compile(r"^\s*DAV:\s*(\d+)", re.M)
+# SCF 行第 3 个字段是 dE（eV）：<DAV|RMM|CG|EDDAV>: n E dE deps ncg rms [rms(c)]
+_DE_RE = re.compile(r"^\s*(?:DAV|RMM|CG|EDDAV):\s*\d+\s+\S+\s+(\S+)", re.M)
+# 撞 NELM 但能量已经收敛的帧，力其实可用（2026-09-23 wangchao review II.2：
+# "撞了 NELM 但 |dE| 已经 <1e-6 eV 的帧，力其实可用，可以分级处理，不要一律作废"）。
+# 实测 WS₂ 6 帧：末步 dE ≈ ±(0.6~1.0)e-9 eV（EDIFF=1E-8 下已低一个量级），离子步末行
+# d E ~1e-31；它们没能触发 abort 只因 VASP 的第二判据 d eps(≈1.01e-8) 比 EDIFF 高一丁点。
+# 阈值可用 AUTOZT_SCF_DE_OK（eV）覆盖。
+SCF_DE_OK_EV = float(os.environ.get("AUTOZT_SCF_DE_OK", "1e-6"))
 
 
-def scan_frame_scf(frame_dir):
+def scan_frame_scf(frame_dir, de_ok_ev=SCF_DE_OK_EV):
     """只读扫一帧（disp-XXXXX/）的 OUTCAR + OSZICAR，返回诊断 dict。
 
     作废判据：
@@ -378,7 +386,8 @@ def scan_frame_scf(frame_dir):
     d = Path(frame_dir)
     row = {"frame": d.name, "dir": str(d), "has_outcar": False, "has_oszicar": False,
            "nelm_warn": False, "n_aborting": 0, "n_dav_lines": 0, "last_dav": 0,
-           "scf_steps": 0, "ok": True, "reasons": []}
+           "scf_steps": 0, "dE_last": None, "nelm_converged": False,
+           "ok": True, "reasons": []}
     outcar = d / "OUTCAR"
     if outcar.is_file():
         row["has_outcar"] = True
@@ -395,15 +404,24 @@ def scan_frame_scf(frame_dir):
     if osz.is_file():
         row["has_oszicar"] = True
         try:
-            idx = [int(m) for m in _DAV_RE.findall(osz.read_text(errors="ignore"))]
-        except OSError:                                       # pragma: no cover
+            _txt = osz.read_text(errors="ignore")
+            idx = [int(m) for m in _DAV_RE.findall(_txt)]
+            _de = _DE_RE.findall(_txt)
+            row["dE_last"] = float(_de[-1]) if _de else None
+        except (OSError, ValueError):                         # pragma: no cover
             idx = []
         row["n_dav_lines"] = len(idx)
         row["last_dav"] = max(idx) if idx else 0
     row["scf_steps"] = row["last_dav"] or row["n_dav_lines"]
-    if row["nelm_warn"]:
-        row["reasons"].append("SCF 未在 NELM 内收敛（OUTCAR 命中 NELM 警告）")
-    if row["has_outcar"] and row["n_aborting"] != 1:
+    # 分级：撞 NELM 但末步 |dE| 已收敛 ⇒ 力可用，放行（只留痕，不作废）。
+    row["nelm_converged"] = bool(
+        row["nelm_warn"] and row["dE_last"] is not None
+        and abs(row["dE_last"]) <= de_ok_ev)
+    if row["nelm_warn"] and not row["nelm_converged"]:
+        row["reasons"].append(
+            "SCF 未在 NELM 内收敛（NELM 警告；末步 dE=%s eV，超过容差 %g）"
+            % (row["dE_last"], de_ok_ev))
+    if row["has_outcar"] and row["n_aborting"] != 1 and not row["nelm_converged"]:
         row["reasons"].append("'aborting loop because EDIFF is reached' 出现 %d 次（应为 1）"
                               % row["n_aborting"])
     row["ok"] = not row["reasons"]
@@ -434,12 +452,15 @@ def check_outcar_scf_convergence(step4_dir, n_outliers=8):
             "n_with_outcar": sum(1 for r in rows if r["has_outcar"]),
             "n_bad": len(bad),
             "n_nelm": sum(1 for r in rows if r["nelm_warn"]),
+            "n_nelm_converged": sum(1 for r in rows if r["nelm_converged"]),
             "n_abort_ne_1": sum(1 for r in rows
                                 if r["has_outcar"] and r["n_aborting"] != 1),
             "n_no_oszicar": sum(1 for r in rows if not r["has_oszicar"]),
             "steps_stats": stats,
             "step_outliers": [{"frame": r["frame"], "scf_steps": r["scf_steps"],
                                "nelm_warn": r["nelm_warn"],
+                               "nelm_converged": r["nelm_converged"],
+                               "dE_last": r["dE_last"],
                                "n_aborting": r["n_aborting"]} for r in outliers],
             "bad_frames": [{"frame": r["frame"], "reasons": r["reasons"],
                             "scf_steps": r["scf_steps"]} for r in bad],
@@ -465,6 +486,10 @@ def format_scf_report(info, top=6):
             "%s=%s%s" % (o["frame"], o["scf_steps"],
                          "（NELM 警告!）" if o["nelm_warn"] else "")
             for o in info["step_outliers"][:max(1, int(top))]))
+    if info.get("n_nelm_converged"):
+        lines.append("[SCF] 其中 %d 帧撞 NELM 但末步 |dE| 已 ≤ %.0e eV —— 能量已收敛、力可用，"
+                     "按放行处理（只留痕不作废；见 wangchao review II.2）。"
+                     % (info["n_nelm_converged"], SCF_DE_OK_EV))
     if info.get("bad_frames"):
         lines.append("[SCF] 作废帧 %d 个：" % len(info["bad_frames"]))
         for b in info["bad_frames"][:max(1, int(top)) * 4]:
@@ -474,7 +499,11 @@ def format_scf_report(info, top=6):
             lines.append("        … 其余 %d 帧见 scf_steps.json"
                          % (len(info["bad_frames"]) - top * 4))
     else:
-        lines.append("[SCF] 所有帧 SCF 正常收敛（各 1 次 aborting loop，无 NELM 警告）。")
+        if info.get("n_nelm_converged"):
+            lines.append("[SCF] 无作废帧：%d 帧撞 NELM 但 |dE| 已收敛（分级放行），"
+                         "其余帧各 1 次 aborting loop。" % info["n_nelm_converged"])
+        else:
+            lines.append("[SCF] 所有帧 SCF 正常收敛（各 1 次 aborting loop，无 NELM 警告）。")
     return "\n".join(lines)
 
 
