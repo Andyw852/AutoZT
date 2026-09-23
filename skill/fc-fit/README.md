@@ -27,6 +27,7 @@ S1_fit   (submitted job, compute node)
          post  ShengBTE export (optional) + imaginary-frequency gate
                                          -> phonon_summary.json, fc_fit_summary.json
 S2_plot  (login node, optional)  phonon band figures from fc2.hdf5
+                                 + ZA bending-branch exponent p
 ~~~
 
 ## Quick start
@@ -43,9 +44,9 @@ autozt -tt fc-fit -p <material> status                    # collect and inspect
 The gen step locates the dataset automatically. It searches `step4_disp`,
 `step2_disp_force`, `step2_disp`, `step3_disp` in the skill directory, then the
 sibling skills' step directories (`../kl-dft-cpu/step4_disp`,
-`../kl-mace-cpu/step2_disp_force`, `../kl-mace-gpu/step2_disp_force`,
-`../phonon-dft-cpu/step2_disp`, `../phonon-mace-cpu/step2_disp_force`,
-`../phonon-mace-gpu/step2_disp_force`) and then every sibling skill directory
+`../kl-mlff-cpu/step2_disp_force`, `../kl-mlff-gpu/step2_disp_force`,
+`../phonon-dft-cpu/step2_disp`, `../phonon-mlff-cpu/step2_disp_force`,
+`../phonon-mlff-gpu/step2_disp_force`) and then every sibling skill directory
 whose step starts with `step*disp*` or `step*force*`, so a producer that does
 not exist yet is found without editing anything. Point it somewhere else explicitly:
 
@@ -291,6 +292,42 @@ predicting the forces of that many frames from the *fitted* force constants.
 That number is engine independent and is the quickest way to tell a good fit
 from a bad one; for a decent dataset it is well under 1 per cent relative.
 
+The optional S2_plot step writes `phonon_band_plot/phonon_band_summary.json`
+together with the two PNGs.  Besides the min/max frequencies it carries the ZA
+bending-branch exponent fitted along the two inequivalent in-plane directions of
+the cell - the same `za_power_law` fit and direction rule `kl-dft-cpu` uses:
+
+* `za_exponent_q1`, `za_exponent_q2` - log-log least-squares exponent p of the
+  lowest branch over q in (0, `za_qmax`]; `za_minfreq_q1_THz` /
+  `za_minfreq_q2_THz` are the corresponding lowest frequencies;
+* `za_qdir_q1` / `za_qdir_q2` - the reduced-coordinate directions, e.g.
+  (1,0,0) and (1,1,0) for a hexagonal cell, plus `za_qmax`, `za_n_qpoints` and
+  `za_p_range` recording the fit settings;
+* `za_ok` - the **coarse machine verdict**: true when both directions satisfy
+  1.7 < p < 2.3, the un-stressed 2D Born-Huang/Huang quadratic ZA branch.  It is
+  a one-bit decision and must not be read on its own when a direction is close
+  to a bound or the fit is noisy - use the fields below;
+* `za_r2_q1` / `za_r2_q2` and `za_log_resid_rms_q1` / `za_log_resid_rms_q2` -
+  the goodness of each log-log fit: R^2 and the RMS residual in log space.  A low
+  R^2 (or a large residual) means the fitted p is uncertain whatever its value;
+* `za_margin_q1` / `za_margin_q2` - `min(p - 1.7, 2.3 - p)`, how far each p sits
+  from the nearer criterion bound.  A small margin means the verdict can flip on
+  a tiny change of dataset or q-window;
+* `za_needs_review` - true when some direction has `za_margin_qX < za_margin_min`
+  (default 0.20) **or** `za_r2_qX < za_r2_min` (default 0.98); the two thresholds
+  are recorded in the summary as `za_margin_min` / `za_r2_min`.  When true,
+  `za_note` explicitly says 建议人工复核，不要仅凭 za_ok 下结论 (manual review, do
+  not decide from `za_ok` alone) and the script prints a `[WARN]` line;
+* `za_is_2d` / `za_vacuum_axis` - the dimension and vacuum axis, taken from the
+  `dim` S1_fit already resolved and from the same `dim_common.detect_dimension`
+  the fit gen uses; `za_note` explains the verdict.
+
+The criterion is meaningful only for a 2D layer: for a 3D cell `za_is_2d` is
+false, the exponents are informational, `za_ok` should not be read as a
+stability verdict and no review is flagged.  A direction with no positive
+frequency (a linearised or imaginary ZA branch) gets `null` for its exponent plus
+a `za_note` saying so - it never aborts the plot step.
+
 The engines also report their own quality numbers, which the driver scrapes out
 of the log into `fit_metrics.json` and copies into both summaries:
 `hiphive_backend`, `hiphive_parameters`, `hiphive_design_matrix`,
@@ -349,7 +386,7 @@ available and the driver acts on it (see the pheasy section).
 | Marker | `phonon_summary.json` | `phonon_summary.json` (+ `fc_fit_summary.json`) |
 | Next step | kappa from the BTE solver | none - hand the artifacts to whoever needs them |
 
-Nothing here replaces the kl skills: `kl-dft-cpu` / `kl-mace-*` still own the
+Nothing here replaces the kl skills: `kl-dft-cpu` / `kl-mlff-*` still own the
 end-to-end thermal-conductivity workflow. `fc-fit` is for fitting force
 constants on their own - from a dataset another skill produced, from a
 hand-assembled dataset, or as a sandbox for comparing engines on the same data.

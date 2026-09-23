@@ -516,7 +516,10 @@ def main(argv=None):
         sig0, seeb0, kap0, mob0 = solve_boltzman_transport_equation(
             ad, calculate_mobility=not ad.is_metal, separate_mobility=True,
             progress_bar=False)
-        tf = sorted(glob.glob(str(run_dir / "transport*.json")))
+        # 多个 transport*.json 时取**最新**（与 find_mesh 同口径）：retry/重跑时目录里
+        # 可能残留上一次的 transport_<旧网格>.json，按字典序可能取到旧文件 -> 复现假 FAIL。
+        tf = sorted(glob.glob(str(run_dir / "transport*.json")),
+                    key=os.path.getmtime, reverse=True)
         reproduce = {"transport_json": os.path.basename(tf[0]) if tf else None}
         if tf:
             j = json.load(open(tf[0]))

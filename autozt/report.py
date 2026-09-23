@@ -702,7 +702,7 @@ def step_conf_sources(cfg, t, m, sname):
 
 def _cluster_conda_step_conf(m, hpc_name=None):
     from autozt import _load_yaml_file, pkg_setting_path
-    """从集群 setting/<name>.yaml 读 conda_sh/conda_env/mace_model_dir，拼成 step.conf
+    """从集群 setting/<name>.yaml 读 conda_sh/conda_env/mlff_model_dir，拼成 step.conf
     片段（最低优先级；仅 MACE 技能调用，因为只有它们的 gen 脚本声明 CONDA_SH/CONDA_ENV/
     MACE_MODEL_DIR）。切超算 = 改 hpc.yaml 的 name，这些键自动跟着集群走；项目
     project_setting/templates/step.conf 可覆盖（优先级更高）。hpc_name 供步骤级超算
@@ -716,7 +716,7 @@ def _cluster_conda_step_conf(m, hpc_name=None):
     hpc = _load_yaml_file(p) or {}
     sh = hpc.get("conda_sh")
     env = hpc.get("conda_env")
-    mdir = hpc.get("mace_model_dir")
+    mdir = hpc.get("mlff_model_dir")
     aenv = hpc.get("amset_env")   # amset 专用环境名（如 amset / amset_clean）
     pdir = hpc.get("potcar_dir")          # VASP POTCAR 库根目录（VASP 技能）
     rdir = hpc.get("references_dir")      # 凸包参考相共享目录（defect 技能）

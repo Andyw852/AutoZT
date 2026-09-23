@@ -226,7 +226,8 @@ def fetch_provenance_dir(cfg, m, quiet=True):
         cmd1 = (_ssh_cmd(cfg, host, [remote]) if host else ["bash", "-c", remote])
         p1 = _sp.Popen(cmd1, stdout=_sp.PIPE, stderr=_sp.DEVNULL)
         p2 = _sp.run(["tar", "xf", "-", "-C", dest], stdin=p1.stdout,
-                     capture_output=True, text=True)
+                     capture_output=True, text=True, encoding="utf-8",
+                     errors="replace")
         p1.stdout.close()
         rc1 = p1.wait()
         if rc1 != 0 or p2.returncode != 0:

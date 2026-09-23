@@ -71,7 +71,7 @@ autozt 会把 `S20_zt` 里指向它的 `needs` 当**缺失依赖忽略**（`work
 task_types:
   zt-dft-cpu:
     electronic: false     # 电子输运已由独立 ke-dft-cpu 项目算过 → 只补晶格段
-    lattice: false        # 晶格热导已由独立 kl-dft-cpu / kl-mace-* 算过 → 只补电子段
+    lattice: false        # 晶格热导已由独立 kl-dft-cpu / kl-mlff-* 算过 → 只补电子段
 ```
 
 另有一个**默认关闭**的 `wavefunction_full` 组（打开后 24 → 27 步，见下面「全网格对照分支」）。
@@ -196,8 +196,8 @@ print("缺件步骤 %d/%d" % (bad, len(t["steps"])))
    （避免步骤被判完成、下游拿到全 null 的表）；临时可用 `KTEMP_MODE=const300` 固定取 κ_L(300K)。
 7. **兄弟技能兜底读取**：`S20_zt` 优先读本技能的 `step8_amset/transport.json` 与 `step6_kappa/kappa_summary.json`；
    找不到时再去**兄弟技能目录**找：`../ke-dft-cpu/step8_amset/transport.json`（电子段）、
-   `../kl-dft-cpu/step6_kappa`、`../kl-mace-cpu|gpu/step4_kappa`（晶格段）—— 前提是同材料各技能用同一个 `work_dir`。
-   kl-mace 的**老格式**只写 `kappa_300K_xx_yy_zz`（无惰温数组）：本步会降级成"单温度点"并打 `★` 提示，
+   `../kl-dft-cpu/step6_kappa`、`../kl-mlff-cpu|gpu/step4_kappa`（晶格段）—— 前提是同材料各技能用同一个 `work_dir`。
+   kl-mlff 的**老格式**只写 `kappa_300K_xx_yy_zz`（无惰温数组）：本步会降级成"单温度点"并打 `★` 提示，
    此时 `interp` 模式只有 300 K 能算 ZT，要全温曲线请用 `KTEMP_MODE=const300`；
    产物里 `sources.kappa_src` 会写明实际来源。
 9. **S8 依赖一个上游漏声明的脚本**：`submit_amset.tpl` 的 `{{AMSET_CMD}}` 里写着
@@ -232,10 +232,44 @@ print("缺件步骤 %d/%d" % (bad, len(t["steps"])))
 | **3D 实跑（Si，autozt 全链路）** | `S20_zt` 在 jzzn 登录节点生成并回拉：`zt_summary.json` 43 KB + 3 张图；n 型峰值 ZT=0.394 @800 K/1e20，p 型 0.301 |
 | 电子段实机（Si，经本技能装配） | S1_opt/S2.1_scf/S2.15/S2.2_pbe(+plot)/**S2.3_hse(4/4)**/S2.3_hseplot/S5_dielect/S6_elastic/S7_deform(4/4)/S7.1_read 全部 OK；**S3_uniform OK（WAVECAR 24.4 MB，26³）**、S4_wave OK、S8_kappa_e 已提交（上游 4 处缺陷修复后） |
 | 晶格段实机（Si，经本技能装配） | SK1_opt/SK2_static/SK3_nac/**SK4_disp(11/11)**/**SK5_fc OK（stable, min_freq=0.000 THz）**；SK5.1_plot 与 SK6_kappa 已提交 |
-| **MACE 交叉对照（Si）** | 同材料 `kl-mace-gpu` 的 κ_L(300K)=**91.27 W/mK** vs 本技能 DFT phono3py 的 **88.8 W/mK**（差 3%）——两法在 300 K 一致；用 `KTEMP_MODE=const300` 汇总得 n 型峰值 ZT=0.162 @900 K、p 型 0.129（高温柔性差异来自"常数 κ_L 近似"，不是两法分歧） |
+| **MACE 交叉对照（Si）** | 同材料 `kl-mlff-gpu` 的 κ_L(300K)=**91.27 W/mK** vs 本技能 DFT phono3py 的 **88.8 W/mK**（差 3%）——两法在 300 K 一致；用 `KTEMP_MODE=const300` 汇总得 n 型峰值 ZT=0.162 @900 K、p 型 0.129（高温柔性差异来自"常数 κ_L 近似"，不是两法分歧） |
 | S8 预检 in-job 预跑（2026-09-18） | 在 `amset_clean` 里于 `step8_amset/` 直跑 `overlap_preflight.py --in-job` → **结论：通过（有告警），exit=0**；带窗口比较按补丁 05 跳过，弹性 Christoffel 最小特征值 47.07 正定。两条 WARN 为设计内信息（3D+非完整网格去对称化、AMSET 0.4.19 G 平移） |
 | 起跑前预检（2026-09-18） | S8_kappa_e 的提交命令调 `overlap_preflight.py` 而材料目录里没有（上游 WIP 漏声明）→ 已在技能侧补软链 + `gen_need`；SK6_kappa（自包含内联汇总）与 SK5.1_plot（脚本/依赖/目录探测均齐）预检通过 |
 | **2D 实测（真实材料 P1_Mo-MoS2_…_Mo2S3）** | DIM=2D 正确识别；张量按**面内 (xx+yy)/2** 约化（σ 2734/289.9→1512 S/m、S −234.9/−167.5→−201.2 µV/K、κ_e 面内平均 0.00637）；κ_L 用元胞口径 `kappa_xx_yy_zz`（1.721/0.846→1.284 W/m/K，zz≈0 剔除）；**元胞口径闸门 c=20.0 Å vs Lz=20.0 Å 通过**；n 型峰值 ZT=0.379 @800 K |
+
+### 6.1 全网格对照（`wavefunction_full`）A/B 实跑结论（2026-09-21）
+
+**A 臂**（默认，`step4_wave` 去对称化 h5）——已完成并归档：
+
+- 集群产物 `result/step20_zt/`：`zt_summary.json` 43 KB + `zt_summary.txt` + 3 张图；峰 **n 型 0.3163 @800 K/1e21**、**p 型 0.2386 @800 K/1e20**；
+  `sources` = 本技能 `step8_amset/transport.json` + `step6_kappa/kappa_summary.json`；
+  `amset_settings = {scattering_type:[ADP,IMP], bandgap:1.0913, interpolation_factor:10}`。
+- 归档（sha256 前 12 位）：`tmp/zt_arm_archive/A_step4_wave_transport.json` = `edb0023a9432`、
+  `A_zt_summary.json` = `3c06c55c4515`、`kappa_summary_selfcomputed.json` = `3d915e8aa7e8`。
+- 复核：当前 `result/step20_zt/zt_summary.json` 与归档逐字段比对，**值差异 0 处**（仅多出
+  `amset_settings.doping/temperatures` 两个 provenance 字段）。
+
+**B 臂**（`WAVEFUNCTION_FULL = true` → `step4b_wave_full` 的 26³ 全网格 h5）——**端到端未完成**：
+
+- 两次提交：`3850661` NODE_FAIL；`3852782` 跑满 24 h 后
+  `CANCELLED AT 2026-09-20T16:51:19 DUE TO TIME LIMIT`，`transport.json` 未更新（仍是 A 臂文件）。
+- 成本实测（AMSET 0.4.19，24 核，`qos=regular` = 1 天硬顶）：日志 `Interpolating spin-up bands 2-6`；
+  band 1 = 25 min、band 2 = 2 h41、band 3 = **7 h41**、band 4 到 42% 时已 4 h35，**band 5/6 未开始**。
+  单带耗时随带序显著上升 → 24 h 内不可能完成；按此斜率即使 `qos=premium`（2 天）也不够。
+- 并行参数已专项核对，**无低垂果实**：`NCORE=1`、`PRECFOCK=Fast` 已是最优；
+  `KPAR=8` 在 96 核 / `NBANDS=324` 约束下已是合法上限（KPAR 层并行饱和）。
+- ★ 操作提醒：项目 `templates/step8_amset/step.conf` 里的 `WAVEFUNCTION_FULL = true` 目前**仍停在 B 臂设置**；
+  今后若要让 S8 回到 A 臂（去对称化）路线，需先把它翻回 `false`。
+
+**科学裁定沿用 V26，不由本次端到端产出**（`skill/ke-dft-cpu/step8.4_amset2d/VERIFICATION.md` §11，2026-09-18）：
+
+> 三维裁定（Si 全网格对照）已完成：同一 vasprun / settings / nworkers，只切 h5 ——
+> ADP **1.01 / 0.92**、overall **1.02 / 0.97**、IMP **0.58 / 0.77**；重复跑**逐位相同**。
+> 结论：三维真实重叠可用（不必改 unity）。
+
+**结论**：`wavefunction_full` 分支的**装配与单变量开关**已端到端验证到"能产出全网格 h5 并让 S8 走
+`from_data`"（S3b/S3c/S4b 全 OK、日志 0 次 `Desymmetrizing`）；**B 臂的 ZT 数值未由本技能端到端产出**，
+其裁定引用 V26。若要补齐，需先把 AMSET 这一段搬上更长墙钟的 qos 或做插值规模 benchmark，两者都要先请示。
 
 ## 7. 实跑中暴露并已修复的上游缺陷（2026-09-18，补丁在 `tmp/zt_upstream_patches_20260918/`）
 

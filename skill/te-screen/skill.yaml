@@ -11,7 +11,7 @@
 #
 # 特征与模型与 matexplore/scripts/train_surrogate.py 同源，训练数据为 JARVIS dft_2d
 # (1103 二维材料)。模型只依赖 numpy + 元素属性表，跨机器可复现。
-# 深层验证(T1 MACE 弛豫 / T2 DFT 电子输运)由 opt-mace-gpu / band-dft-cpu /
+# 深层验证(T1 MACE 弛豫 / T2 DFT 电子输运)由 opt-mlff-gpu / band-dft-cpu /
 # ke-dft-cpu 承接；晶格热导率(kl-*)本轮跳过。
 # =============================================================================
 schema: 2

@@ -352,11 +352,76 @@ def ck_phonon(d, cfg):
         return True, "stable (%s)" % mfs, False
     return False, "imaginary frequency (%s)" % mfs, True   # 完成但有虚频
 
+def empty_fanout_ok(d, marker, require_empty=True):
+    """Opt-in empty fanout: exact neutral-only manifest and unchanged inputs."""
+    import hashlib, configparser
+    try:
+        with open(os.path.join(d, marker), encoding="utf-8") as stream:
+            data = json.load(stream)
+        import glob as manifest_glob
+        jobs = data.get("jobs")
+        if data.get("schema") != 1 or not isinstance(jobs, list):
+            return False
+        if data.get("status") != ("generated" if jobs else "neutral_only"):
+            return False
+        if require_empty and jobs:
+            return False
+        actual = sorted(os.path.basename(p) for p in manifest_glob.glob(os.path.join(d, "def-*")) if os.path.isdir(p))
+        if sorted(jobs) != actual:
+            return False
+        inputs = data.get("input_files", {})
+        if not {"step.conf", "step2_defects/defects_manifest.json"}.issubset(inputs):
+            return False
+        root = os.path.dirname(d)
+        if not jobs:
+            import configparser
+            conf = configparser.ConfigParser(inline_comment_prefixes=("#",))
+            conf.read(os.path.join(root, "step.conf"))
+            if conf.get("params", "CHARGE_MODE", fallback="window").strip().lower() != "window":
+                return False
+            if conf.getint("params", "QMIN", fallback=-2) != 0 or conf.getint("params", "QMAX", fallback=2) != 0:
+                return False
+        with open(os.path.join(root, "step2_defects/defects_manifest.json"), encoding="utf-8") as stream:
+            neutral = json.load(stream)
+        if not neutral:
+            return False
+        for item in neutral:
+            for name in ("CONTCAR", "OUTCAR"):
+                if "step2_defects/%s/%s" % (item["dir"], name) not in inputs:
+                    return False
+        for path, digest in inputs.items():
+            if os.path.isabs(path) or ".." in path.split("/"):
+                return False
+            with open(os.path.join(root, path), "rb") as stream:
+                if hashlib.sha256(stream.read()).hexdigest() != digest:
+                    return False
+        return True
+    except (OSError, ValueError, TypeError, KeyError, configparser.Error):
+        return False
+
 def ck_plot(d, sc):
     """画图步骤：done_marker（默认 band_summary.json）或任一 .png 存在即完成。"""
     marker = sc.get("done_marker") or "band_summary.json"
     if os.path.isfile(os.path.join(d, marker)):
+        if sc.get("strict_done_marker"):
+            import hashlib
+            try:
+                with open(os.path.join(d, marker), encoding="utf-8") as stream:
+                    data = json.load(stream)
+                inputs = data.get("input_files")
+                if data.get("status") != "done" or not isinstance(inputs, dict) or not inputs:
+                    return False, "invalid completion marker"
+                for path, digest in inputs.items():
+                    if os.path.isabs(path) or ".." in path.split("/"):
+                        return False, "invalid marker input path"
+                    with open(os.path.join(os.path.dirname(d), path), "rb") as stream:
+                        if hashlib.sha256(stream.read()).hexdigest() != digest:
+                            return False, "stale completion marker: " + path
+            except (OSError, ValueError, TypeError, AttributeError):
+                return False, "invalid completion marker"
         return True, marker
+    if sc.get("strict_done_marker"):
+        return False, "required marker missing: " + marker
     pngs = glob.glob(os.path.join(d, "*.png"))
     if pngs:
         return True, os.path.basename(pngs[0])
@@ -533,6 +598,7 @@ def collect_type(t, jobs_by_dir):
                         todo.append(os.path.basename(p))
                 n = len(subs)
                 f["fanout"] = str(sc["fanout"])   # 回填 glob，本地提交要用
+                f["empty_fanout_manifest"] = sc.get("empty_fanout_manifest")
                 f["subs"] = [os.path.basename(p) for p in subs]
                 f["fan_jobids"] = [x["id"] for x in fj]
                 f["fan_todo"] = todo          # 没作业也没完成 → 待提交/失败
@@ -543,7 +609,9 @@ def collect_type(t, jobs_by_dir):
                                       for p in subs)
                 f["has_slurm_out"] = any((glob.glob(os.path.join(p, "slurm-*.out")) or glob.glob(os.path.join(p, "queue.out")))
                                          for p in subs)
-                if fj:
+                if sc.get("empty_fanout_manifest") and not empty_fanout_ok(d, sc["empty_fanout_manifest"], require_empty=False):
+                    f["done"], f["diag"] = False, "fanout manifest missing/stale or unexpected children"
+                elif fj:
                     # fixte⑫：CG/CF = 正在取消/收尾，不能混进 R，否则 scancel 刚
                     # 发出、作业还在 CG 时会被显示成"正在运行"，start 被拦下，
                     # 看起来像取消失败。
@@ -556,6 +624,9 @@ def collect_type(t, jobs_by_dir):
                     f["job"]["state"] = "R" if nr else ("PD" if npd else "CG")
                     f["done"] = False
                     f["diag"] = ""     # 进度已在 label 里（R@3/5 2R 0PD），不重复
+                elif not n and sc.get("empty_fanout_manifest"):
+                    f["done"] = empty_fanout_ok(d, sc["empty_fanout_manifest"])
+                    f["diag"] = "neutral-only (S2 reused)" if f["done"] else "empty fanout manifest missing/stale"
                 elif not n:
                     # fanout 声明但无子目录 → 回退单目录判据（未切片/旧单目录产物）
                     if f["exists"]:
@@ -637,7 +708,8 @@ def main():
     jobs, squeue_err = [], None
     def run_squeue(fmt):
         return subprocess.run(["squeue", "-u", user, "-h", "-o", fmt],
-                              capture_output=True, text=True, timeout=60)
+                              capture_output=True, text=True, encoding="utf-8",
+                              errors="replace", timeout=60)
     try:
         r = run_squeue("%i|%j|%T|%M|%D|%R|%Z")
         if r.returncode != 0:

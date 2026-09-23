@@ -34,11 +34,11 @@ STEP = "step1_fit"
 AUTO_DIRS = (
     "step4_disp", "step2_disp_force", "step2_disp", "step3_disp",
     "../kl-dft-cpu/step4_disp",
-    "../kl-mace-cpu/step2_disp_force",
-    "../kl-mace-gpu/step2_disp_force",
+    "../kl-mlff-cpu/step2_disp_force",
+    "../kl-mlff-gpu/step2_disp_force",
     "../phonon-dft-cpu/step2_disp",
-    "../phonon-mace-cpu/step2_disp_force",
-    "../phonon-mace-gpu/step2_disp_force",
+    "../phonon-mlff-cpu/step2_disp_force",
+    "../phonon-mlff-gpu/step2_disp_force",
     ".", "..", "../..",
 )
 
@@ -259,7 +259,7 @@ def resolve_dim(param, dataset_dir, material_dir):
     if mode in ("2d", "3d"):
         return mode
     for base in (dataset_dir, material_dir):
-        for f in ("kl_params.txt", "workflow_method.txt", "klmace_params.txt"):
+        for f in ("kl_params.txt", "workflow_method.txt", "klmlff_params.txt"):
             p = Path(base) / f if base else None
             if p and p.is_file():
                 for ln in p.read_text(errors="ignore").splitlines():
@@ -365,6 +365,35 @@ def main():
         sys.exit("[ERROR] COORDS must be cartesian or fractional")
 
     src, sig = resolve_dataset(cwd, out, conf["FIT_INPUT_DIR"])
+
+    # Fail fast on the one dataset/engine combination that cannot work: a
+    # disp-*/vasprun.xml layout has neither forces embedded in a phono3py YAML
+    # nor a FORCES_FC3 file, so the phono3py engine would only discover it at
+    # fit time ("no forces available for the phono3py engine").  Guard exactly
+    # this layout: a phono3py_params.yaml / phono3py_disp.yaml + FORCES_FC3 /
+    # npy / pkl dataset still goes through untouched.
+    if sig == "vasprun" and engine == "phono3py":
+        sys.exit(
+            "[ERROR] FIT_ENGINE=phono3py cannot use a disp-*/vasprun.xml "
+            "dataset (%s).\n"
+            "        phono3py needs the forces either embedded in a phono3py "
+            "YAML\n"
+            "        (phono3py_params.yaml / phono3py_disp.yaml) or in a "
+            "FORCES_FC3 file,\n"
+            "        and this layout carries neither -- the fit would abort "
+            "later with\n"
+            "        'no forces available for the phono3py engine'.\n"
+            "        Use a regression engine (it reads the vasprun forces):\n"
+            "          tf -tt fc-fit -p <material> -j step1_fit conf "
+            "--set params.FIT_ENGINE=pheasy\n"
+            "          tf -tt fc-fit -p <material> -j step1_fit conf "
+            "--set params.FIT_ENGINE=hiphive\n"
+            "        or point FIT_INPUT_DIR at a dataset whose YAML embeds the "
+            "forces\n"
+            "        / that ships FORCES_FC3:\n"
+            "          tf -tt fc-fit -p <material> -j step1_fit conf "
+            "--set params.FIT_INPUT_DIR=<yaml-or-FORCES_FC3 dataset>\n"
+            "        (dataset: %s)" % (src, src))
 
     # Random-displacement (type-2) datasets are required by the regression
     # engines; finite-difference datasets only carry enough information for the

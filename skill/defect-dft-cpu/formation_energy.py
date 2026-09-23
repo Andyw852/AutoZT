@@ -15,7 +15,8 @@ formation_energy_results.json 与 P/N 结论（这是本技能真正的最终产
   自由载流子用 Fermi-Dirac 积分 F_{1/2}（窄带隙简并，Boltzmann 失准）：
     n0 = Nc·F_{1/2}((E_F−E_gap)/kT)   p0 = Nv·F_{1/2}((−E_F)/kT)
     Nc/Nv = 2(2π m* kT/h²)^{3/2}，由有效质量 mstar_e/mstar_h 算（或直接给 Nc/Nv）
-  P(D,q) = exp(−β(E_f0(D,q)+q·E_F)) / Σ_q' exp(−β(...))   (softmax 防溢出)
+  P(D,q) = exp(−β(E_f0(D,q)+q·E_F)) / (1 + Σ_q' exp(−β(...)))
+  分母的 1 为无缺陷位点；冻结总浓度后才用电荷态条件 softmax。
 
 输入 energies.json（第0步凸包 + 势对齐产出）：
   { "mu": {"Sn":..,"Sb":..,"Te":..},   # 化学势 eV/原子（凸包稳定性窗口内一点）
@@ -99,11 +100,40 @@ def load_ref(path="energies.json"):
     if not os.path.exists(path):
         raise SystemExit("[错误] 找不到 %s —— 先做第0步凸包拿化学势，再跑本脚本" % path)
     r = json.load(open(path, encoding="utf-8"))
-    need = ["mu", "E_gap"]
-    for k in need:
-        if k not in r:
-            raise SystemExit("[错误] energies.json 缺 %s（化学势 / 带隙）" % k)
+    if not isinstance(r.get("mu"), dict) or not r["mu"]:
+        raise SystemExit("[错误] energies.json 缺有效 mu（化学势）")
+    if r.get("E_gap") is None and not r.get("is_metal"):
+        raise SystemExit("[错误] energies.json 缺 E_gap（半导体）；金属请设 is_metal=true")
     return r
+
+def _aggregate_types(conc, name_type):
+    """把逐位点 conc 汇总为按缺陷名/按缺陷大类，用于回答"哪种最可能生成"。
+
+    conc: [{"defect","nsites"...,"conc_cm3","Ef_min","m"}]（同一 name 可能对应多个
+    不等价位点目录）。按 name 汇总后 nsites=位点目录数、m_total=等价位点总数。
+    """
+    agg = {}
+    for c in conc:
+        agg.setdefault(c["defect"], []).append(c)
+    by_name = []
+    for nm, cs in agg.items():
+        by_name.append({"name": nm, "type": name_type.get(nm, "?"),
+                        "nsites": len(cs), "m_total": sum(x["m"] for x in cs),
+                        "Ef_min": round(min(x["Ef_min"] for x in cs), 5),
+                        "conc_cm3": sum(x["conc_cm3"] for x in cs)})
+    by_name.sort(key=lambda x: -x["conc_cm3"])
+    agg2 = {}
+    for x in by_name:
+        d = agg2.setdefault(x["type"], {"type": x["type"], "nsites": 0, "m_total": 0,
+                                        "Ef_min": 1e9, "conc_cm3": 0.0, "names": []})
+        d["nsites"] += x["nsites"]; d["m_total"] += x["m_total"]
+        d["Ef_min"] = min(d["Ef_min"], x["Ef_min"])
+        d["conc_cm3"] += x["conc_cm3"]; d["names"].append(x["name"])
+    by_type = sorted(agg2.values(), key=lambda x: -x["conc_cm3"])
+    for d in by_type:
+        d["Ef_min"] = round(d["Ef_min"], 5)
+    return by_name, by_type
+
 
 def parse_q(dirname):
     """从 'def-001_v_Te_q+1' 提取电荷态 q；不匹配返回 None。"""
@@ -121,6 +151,36 @@ def softmax_charge(Ef0, qs, Ef, beta):
     exps = [math.exp(-beta*(v - m)) for v in vals]
     z = sum(exps)
     return [x/z for x in exps]
+
+def site_probabilities(Ef0, charges, Ef, beta):
+    """互斥电荷态 + 无缺陷位点（能量0）；稳定配分，ΣP<=1。"""
+    vals = [e + q * Ef for e, q in zip(Ef0, charges)]
+    minimum = min([0.0] + vals)
+    weights = [math.exp(-beta * (v - minimum)) for v in vals]
+    z = math.exp(beta * minimum) + sum(weights)
+    return [w / z for w in weights]
+
+
+def defect_concentrations(allEf0, Ef, beta, vol_cm3, frozen_tot=None):
+    """求根和报告共享同一占据模型；冻结浓度按唯一 base 标识。"""
+    conc = []
+    for base, name, charges, ef0, mD in allEf0:
+        sd = mD / vol_cm3
+        if frozen_tot is None:
+            cq = [sd * p for p in site_probabilities(ef0, charges, Ef, beta)]
+        else:
+            cq = [frozen_tot[base] * p for p in softmax_charge(ef0, charges, Ef, beta)]
+        total = sum(cq)
+        energies = [e + q * Ef for e, q in zip(ef0, charges)]
+        k = min(range(len(energies)), key=lambda i: energies[i])
+        conc.append({"defect": name, "base": base, "conc_cm3": total,
+                     "charge_concentrations_cm3": {qs(q): c for q, c in zip(charges, cq)},
+                     "q_avg": sum(q * c for q, c in zip(charges, cq)) / total if total else 0.0,
+                     "ionized_cm3": sum(abs(q) * c for q, c in zip(charges, cq)),
+                     "saturated": total >= 0.5 * sd, "site_density": sd,
+                     "m": mD, "Ef_min": energies[k], "q_stable": charges[k]})
+    return sorted(conc, key=lambda c: -c["conc_cm3"])
+
 
 def makov_payne(q, vol, eps):
     if q == 0 or eps <= 0:
@@ -217,12 +277,14 @@ def vbm_cbm_from_eigenval(path):
                 cbm = e if cbm is None or e < cbm else cbm
     return vbm, cbm
 
-def site_multiplicity(bulk_st, name, disp=None):
+def site_multiplicity(bulk_st, name, disp=None, meta=None):
     """位点多重度 m_D：该缺陷位点在超胞内的等价位点数。
 
-    按 (物种, z层) 分组：层状 P-3m1 中同物种不同 z 层不等价（Te 分 2d/2d/1a，
-    atoms.count 会把 Te 45 当成 15 的 3 倍）。用 disp 里的 z（如 v_Te(z=0.217)）
-    定位缺陷所在层，数该 (物种, z层) 的原子数。没有 disp 时退回物种总数（Te 高估 ~3x）。"""
+    优先用 S2 manifest 里由 defects_common.symmetry_orbits()（spglib 空间群轨道）
+    算好的 meta['site_count']，任意结构正确。没有 meta 时退回旧的 (物种,z) 层状
+    近似（只对 A2B2Te5 类高对称层状结构正确，别的一般会偏大 -> 高估浓度）。"""
+    if meta and meta.get("site_count"):
+        return int(meta["site_count"])
     atoms = bulk_st["atoms"]
     coords = bulk_st["coords"]
     if "_i" in name:
@@ -258,10 +320,13 @@ def load_defects(summary_json="step4_analysis/formation_energy_summary.json",
     E_bulk = summ.get("E_bulk")
     if E_bulk is None:
         raise SystemExit("[错误] summary 缺 E_bulk（step1_bulk 未完成？）")
+    if not os.path.exists(manifest_json):
+        raise SystemExit("[错误] 缺少缺陷 manifest: %s" % manifest_json)
     manifest = {}
-    if os.path.exists(manifest_json):
-        for it in json.load(open(manifest_json, encoding="utf-8")):
-            manifest[it["dir"]] = it
+    for it in json.load(open(manifest_json, encoding="utf-8")):
+        if it["dir"] in manifest:
+            raise SystemExit("[错误] manifest 重复目录: %s" % it["dir"])
+        manifest[it["dir"]] = it
     # 汇总：{dir: {"name", "counts", "E_neutral", "charged": {q: E}}}
     defects = {}
     raw = summ.get("defects", {})
@@ -270,7 +335,14 @@ def load_defects(summary_json="step4_analysis/formation_energy_summary.json",
         base = d
         if q is not None:
             base = d[:d.rfind("_q")]
-        e = en.get("step2_defects") or en.get("step3_charged")
+        if base not in manifest or not isinstance(manifest[base].get("counts"), dict):
+            raise SystemExit("[错误] manifest 缺 %s 的 counts" % base)
+        counts = manifest[base]["counts"]
+        if any(isinstance(n, bool) or not isinstance(n, int) or n < 0 for n in counts.values()):
+            raise SystemExit("[错误] %s counts 必须为非负整数" % base)
+        e = en.get("step2_defects")
+        if e is None:
+            e = en.get("step3_charged")
         if q is None:
             defects.setdefault(base, {}).setdefault("E_neutral", e)
         else:
@@ -289,26 +361,35 @@ def analyze(ref=None):
         bulk_counts[a] = bulk_counts.get(a, 0) + 1
     vol = lattice_volume(bulk_poscar)
     eps = float(ref.get("epsilon", 0.0) or 0.0)
-    E_gap = float(ref["E_gap"])
-    E_VBM = ref.get("VBM_bulk_abs") if ref.get("VBM_bulk_abs") is not None else ref.get("VBM")
-    if E_VBM is None:
-        raise SystemExit("[错误] energies.json 缺 VBM_bulk_abs —— 需先跑 extract_band_refs（从 step1_bulk EIGENVAL 提取）。"
-                         "静默默认 0 会把 E_f 平移 q×6.76 eV，禁止。")
-    E_VBM = float(E_VBM)
+    is_metal = (bool(ref.get("is_metal")) or ref.get("E_gap") is None
+                or float(ref.get("E_gap", 0.0) or 0.0) <= 0.0)
+    E_gap = 0.0 if is_metal else float(ref["E_gap"])
+    if is_metal:
+        # 仅支持中性金属缺陷；不把绝对金属费米能同时加到截距和斜率。
+        if any(q != 0 for d in defects.values() for q in d.get("charged", {})):
+            raise SystemExit("[错误] 金属非零 q 缺陷的电子参考/修正约定未受支持；请仅使用中性缺陷")
+        E_VBM = 0.0
+    else:
+        E_VBM = ref.get("VBM_bulk_abs") if ref.get("VBM_bulk_abs") is not None else ref.get("VBM")
+        if E_VBM is None:
+            raise SystemExit("[错误] energies.json 缺 VBM_bulk_abs —— 需先跑 extract_band_refs（从 step1_bulk EIGENVAL 提取）。"
+                             "静默默认 0 会把 E_f 平移 q×6.76 eV，禁止。")
+        E_VBM = float(E_VBM)
     bulk_outcar = "step1_bulk/OUTCAR"
     mu_vertices = ref.get("mu_vertices") or [{"mu": ref["mu"]}]
 
     results = {"step": "formation_energy", "status": "done",
                "E_bulk": E_bulk, "volume_AA3": round(vol, 3),
                "epsilon": eps, "E_gap": E_gap, "E_VBM": E_VBM,
+               "is_metal": is_metal,
                "defects": {}}
 
     # ---- 顶点无关的缺陷数据（Eq/dV/corr/dn/mD 只算一次） ----
     base_data = []
     for base, d in sorted(defects.items()):
-        info = manifest.get(base, {})
+        info = manifest[base]
         name = info.get("name", base)
-        counts = info.get("counts", {})
+        counts = info["counts"]
         E0 = d.get("E_neutral")
         if E0 is None:
             continue
@@ -325,10 +406,13 @@ def analyze(ref=None):
         for q in q_all:
             Eq[q] = E0 if q == 0 else d["charged"][q]
             corr[q] = makov_payne(q, vol, eps)
-        mD = site_multiplicity(bulk_st, name, info.get("disp"))
+        mD = site_multiplicity(bulk_st, name, info.get("disp"), info.get("meta"))
         base_data.append((base, name, counts, dn, q_all, Eq, dV, corr, mD))
 
-    # ---- 遍历所有化学势顶点（沿 Te-rich -> Te-poor） ----
+    name_type = {}
+    for it in manifest.values():
+        name_type[it.get("name", it["dir"])] = it.get("meta", {}).get("type", "?")
+    # ---- 遍历所有化学势顶点（各极端化学势下的稳定性） ----
     vol_cm3 = vol * 1e-24
     vertex_results = []
     for vi, vinfo in enumerate(mu_vertices):
@@ -336,7 +420,12 @@ def analyze(ref=None):
         allEf0 = []
         defects_vi = {}
         for base, name, counts, dn, q_all, Eq, dV, corr, mD in base_data:
-            chempot = sum(dn.get(el, 0) * mu.get(el, 0.0) for el in dn)
+            required = set(dn)
+            if (not isinstance(mu, dict) or any(el not in mu for el in required)
+                    or any(not isinstance(mu[el], (int, float)) or not math.isfinite(mu[el])
+                           for el in required)):
+                raise SystemExit("[错误] 顶点%d 缺少有效化学势（需要 %s）" % (vi, sorted(required)))
+            chempot = sum(dn[el] * mu[el] for el in required)
             Ef0 = {}
             for q in q_all:
                 Ef0[q] = Eq[q] - E_bulk - chempot + corr[q] + q * (E_VBM + dV[q])
@@ -350,40 +439,45 @@ def analyze(ref=None):
                                 "Ef0": {qs(q): round(v, 5) for q, v in Ef0.items()},
                                 "transitions": trans}
             allEf0.append((base, name, sorted(q_all), [Ef0[q] for q in sorted(q_all)], mD))
-        ef, dominant, carrier, n0, p0 = solve_ef(allEf0, ref, vol_cm3)
-        # 在自洽 E_F 处按浓度排序（下包络 + 位点多重度）——不是 q=0 排序！
-        # c(D) = (m_D/V)·Σ_q 1/(1+exp[E_f(D,q;E_F^sc)/kT])（饱和护栏，不发散）
         T_ = float(ref.get("T", 300.0))
-        beta_ = 1.0 / (KB * T_)
-        conc = []
-        for _b, _n, qs_, ef0, mD in allEf0:
-            sd = mD / vol_cm3
-            c_total = 0.0; q_avg = 0.0; ionized = 0.0
-            for i in range(len(qs_)):
-                x = (ef0[i] + qs_[i] * ef) * beta_
-                cq = 0.0 if x > 100.0 else sd / (1.0 + math.exp(x))
-                c_total += cq
-                q_avg += qs_[i] * cq
-                ionized += abs(qs_[i]) * cq
-            q_avg = q_avg / c_total if c_total > 0 else 0.0
-            # 饱和条目(浓度≥0.5×位点密度=稀释失效)不参与数值排名
-            saturated = c_total >= 0.5 * sd
-            conc.append({"defect": _n, "conc_cm3": c_total, "q_avg": q_avg,
-                         "ionized_cm3": ionized, "saturated": saturated,
-                         "site_density": sd})
-        conc.sort(key=lambda x: -x["conc_cm3"])
-        top6 = [{"defect": c["defect"],
-                 "conc": ("≥%.1e(稀释失效)" % c["site_density"]) if c["saturated"]
-                         else ("%.1e" % c["conc_cm3"]),
-                 "q_avg": round(c["q_avg"], 2),
-                 "ionized_cm3": c["ionized_cm3"]} for c in conc[:6]]
+        if not math.isfinite(T_) or T_ <= 0:
+            raise SystemExit("[错误] T 必须为有限正温度")
+        if is_metal:
+            ef = 0.0  # 中性金属参考；E_F_metal 不进入形成能
+            conc = defect_concentrations(allEf0, ef, 1.0 / (KB * T_), vol_cm3)
+            carrier, n0, p0 = "metal", 0.0, 0.0
+        else:
+            ef, _, carrier, n0, p0, conc = solve_ef(allEf0, ref, vol_cm3, return_concentrations=True)
+        dominant = conc[0]["defect"] if conc else None
+        dominant_base = conc[0]["base"] if conc else None
+        dom_ef = round(conc[0]["Ef_min"], 5) if conc else None
+        top6 = [{"defect": c["defect"], "base": c["base"],
+                 "q_stable": c["q_stable"], "Ef_eV": round(c["Ef_min"], 5),
+                 "conc": "%.1e%s" % (c["conc_cm3"], "(稀释失效)" if c["saturated"] else ""),
+                 "conc_cm3": c["conc_cm3"], "site_density": c["site_density"],
+                 "saturated": c["saturated"], "m": c["m"],
+                 "q_avg": round(c["q_avg"], 2), "ionized_cm3": c["ionized_cm3"]}
+                for c in conc[:6]]
+        by_name, by_type = _aggregate_types(conc, name_type)
+        tsum = {"by_name": by_name, "by_type": by_type,
+                "dominant_name": by_name[0]["name"] if by_name else None,
+                "dominant_type": by_type[0]["type"] if by_type else None}
         vertex_results.append({"vertex": vi, "mu": mu, "E_F_eq": round(ef, 5),
-                               "dominant_defect": dominant, "carrier_type": carrier,
-                               "n0_cm3": n0, "p0_cm3": p0, "top_concentration": top6})
+                               "dominant_defect": dominant, "dominant_base": dominant_base,
+                               "concentrations": conc, "carrier_type": carrier,
+                               "n0_cm3": n0, "p0_cm3": p0,
+                               "dominant_ef_eV": dom_ef, "top_concentration": top6,
+                               "type_summary": tsum})
         if vi == 0:
             results["defects"] = defects_vi
             results["E_F_eq"] = round(ef, 5)
             results["dominant_defect"] = dominant
+            results["dominant_base"] = dominant_base
+            results["concentrations"] = conc
+            results["dominant_ef_eV"] = dom_ef
+            results["dominant_type"] = tsum["dominant_type"]
+            results["dominant_name"] = tsum["dominant_name"]
+            results["type_summary"] = tsum
             results["carrier_type"] = carrier
             results["carrier_density_cm3"] = {"n0": round(n0, 4), "p0": round(p0, 4)}
 
@@ -393,15 +487,22 @@ def analyze(ref=None):
     json.dump(results, open(out, "w"), indent=2, ensure_ascii=False)
     print("[OK] 形成能/转变能级 -> %s" % out)
     for v in vertex_results:
-        print("   顶点%d: E_F=%.3f eV  %s  (n0=%.2e, p0=%.2e cm^-3)  主导=%s"
-              % (v["vertex"], v["E_F_eq"], v["carrier_type"], v["n0_cm3"], v["p0_cm3"], v["dominant_defect"]))
+        if is_metal:
+            print("   顶点%d: E_F=%.3f eV  metal  主导=%s (E_f=%s eV)"
+                  % (v["vertex"], v["E_F_eq"], v["dominant_defect"], v.get("dominant_ef_eV")))
+        else:
+            print("   顶点%d: E_F=%.3f eV  %s  (n0=%.2e, p0=%.2e cm^-3)  主导=%s"
+                  % (v["vertex"], v["E_F_eq"], v["carrier_type"], v["n0_cm3"], v["p0_cm3"], v["dominant_defect"]))
+        for b in v.get("type_summary", {}).get("by_type", []):
+            print("       类型 %-10s 位点目录=%d 等价位点=%d  E_f_min=%+.3f eV  总浓度=%.2e cm^-3"
+                  % (b["type"], b["nsites"], b["m_total"], b["Ef_min"], b["conc_cm3"]))
     return results
-def solve_ef(allEf0, ref, vol_cm3):
+def solve_ef(allEf0, ref, vol_cm3, return_concentrations=False):
     """自洽费米能级 + 判型：饱和浓度 + 载流子比较（支持两温度冻结）。
 
-    浓度用 Fermi-Dirac 位点占据饱和形式（数值护栏）：
-      c(D,q) = (m_D/V) / (1 + exp(E_f(D,q;E_F)/kT))
-    E_f>>kT 退回指数式；E_f<0 饱和到位点密度（不发散）。
+    浓度用互斥电荷态配分（含无缺陷位点）：
+      c(D,q) = (m_D/V) exp(-βE_fq) / (1 + Σ_q exp(-βE_fq))
+    同一 base 的所有电荷态总浓度不超过其位点密度；不同 base 未作共享位点竞争。
 
     两温度（ref 含 T_growth，Du et al.）：
       1) 生长温度解 E_F，冻结每个缺陷种类的总浓度 [D]_total = Σ_q c(D,q)；
@@ -411,6 +512,8 @@ def solve_ef(allEf0, ref, vol_cm3):
     E_gap = float(ref["E_gap"])
     T = float(ref.get("T", 300.0))
     T_g = ref.get("T_growth")
+    if not math.isfinite(T) or T <= 0 or (T_g is not None and (not math.isfinite(float(T_g)) or float(T_g) <= 0)):
+        raise SystemExit("[错误] T/T_growth 必须为有限正温度")
     kT = KB * T
     beta = 1.0 / kT
     Nc = float(ref.get("Nc", eff_dos(ref.get("mstar_e", 0.2), T)))
@@ -420,28 +523,11 @@ def solve_ef(allEf0, ref, vol_cm3):
     lo, hi = -0.5, E_gap + 0.5
 
     def defect_charge(Ef, beta_defect, frozen_tot=None):
-        """缺陷对电荷中性方程的贡献 Σ q·c(D,q)。frozen_tot 给定时按 300K 再分配。"""
-        tot = 0.0
-        for _b, _n, qs_, ef0, mD in allEf0:
-            sd = mD / vol_cm3
-            if frozen_tot is not None:
-                w = [math.exp(-(ef0[i] + qs_[i] * Ef) * beta) for i in range(len(qs_))]
-                z = sum(w)
-                if z > 0:
-                    for i in range(len(qs_)):
-                        tot += qs_[i] * frozen_tot[_n] * w[i] / z
-                continue
-            for i in range(len(qs_)):
-                ef_dq = ef0[i] + qs_[i] * Ef
-                if ef_dq < 0 and not disorder_warned[0]:
-                    disorder_warned[0] = True
-                    print("[警告] 形成能<0（%s q=%+d E_f=%.3f eV）——稀释近似失效，可能为本征无序信号"
-                          % (_n, qs_[i], ef_dq))
-                x = ef_dq * beta_defect
-                # 数值稳定：x 大时 exp 溢出，c≈0（高形成能缺陷浓度可忽略）
-                c = 0.0 if x > 100.0 else sd / (1.0 + math.exp(x))
-                tot += qs_[i] * c
-        return tot
+        conc = defect_concentrations(allEf0, Ef, beta_defect, vol_cm3, frozen_tot)
+        if any(c["Ef_min"] < 0 for c in conc) and not disorder_warned[0]:
+            disorder_warned[0] = True
+            print("[警告] 形成能<0 —— 稀释近似失效；位点饱和模型不描述缺陷间相互作用")
+        return sum(c["q_avg"] * c["conc_cm3"] for c in conc)
 
     def q_total(Ef, beta_carrier, beta_defect, frozen_tot=None):
         n0 = Nc * fd_half((Ef - E_gap) * beta_carrier)
@@ -457,26 +543,23 @@ def solve_ef(allEf0, ref, vol_cm3):
             q = qfunc(ef)
             if abs(q) < best[0]:
                 best = (abs(q), ef)
-            if q * prev_q <= 0:
+            if prev_q == 0:
+                return prev_ef
+            if q == 0:
+                return ef
+            if q * prev_q < 0:
                 ef_root = prev_ef + (ef - prev_ef) * abs(prev_q) / (abs(prev_q) + abs(q))
                 best = (0.0, ef_root)
                 break
             prev_ef, prev_q = ef, q
         return best[1]
 
-    if T_g:
+    d_total = None
+    if T_g is not None:
         beta_g = 1.0 / (KB * float(T_g))
         ef_tg = solve_root(lambda Ef: q_total(Ef, beta_g, beta_g))
-        # 1) 生长温度冻结每个缺陷种类的总浓度 [D]_total = Σ_q c(D,q)
-        d_total = {}
-        for _b, _n, qs_, ef0, mD in allEf0:
-            sd = mD / vol_cm3
-            tot_d = 0.0
-            for i in range(len(qs_)):
-                ef_dq = ef0[i] + qs_[i] * ef_tg
-                tot_d += sd / (1.0 + math.exp(ef_dq * beta_g))
-            d_total[_n] = tot_d
-        # 2) 300K 重解：总浓度冻结，电荷态按 300K 玻尔兹曼再分配
+        growth_conc = defect_concentrations(allEf0, ef_tg, beta_g, vol_cm3)
+        d_total = {c["base"]: c["conc_cm3"] for c in growth_conc}
         ef_eq = solve_root(lambda Ef: q_total(Ef, beta, beta, frozen_tot=d_total))
         print("[两温度] T_g=%.0fK 冻结 [D]_total，%.0fK 重解 E_F=%.3f eV" % (float(T_g), T, ef_eq))
     else:
@@ -490,15 +573,12 @@ def solve_ef(allEf0, ref, vol_cm3):
         carrier = "n 型"
     else:
         carrier = "本征"
-    dom_name, dom_q, dom_min = None, 0, float("inf")
-    for _b, name, qs_, ef0, _mD in allEf0:
-        for i in range(len(qs_)):
-            ef_min = ef0[i] + qs_[i] * ef_eq
-            if ef_min < dom_min:
-                dom_min = ef_min
-                dom_name, dom_q = name, qs_[i]
-    dom_desc = "%s(q=%+d, E_f=%.3f eV)" % (dom_name, dom_q, dom_min) if dom_name else "(无)"
-    return ef_eq, dom_desc, carrier, n0_eq, p0_eq
+    conc = defect_concentrations(allEf0, ef_eq, beta, vol_cm3, d_total)
+    dominant = conc[0] if conc else None
+    dom_desc = ("%s[%s](q=%+d, E_f=%.3f eV)" %
+                (dominant["defect"], dominant["base"], dominant["q_stable"], dominant["Ef_min"])) if dominant else "(无)"
+    result = (ef_eq, dom_desc, carrier, n0_eq, p0_eq)
+    return result + (conc,) if return_concentrations else result
 
 
 
@@ -516,7 +596,9 @@ def verify_identity(ref=None):
         bulk_counts[a] = bulk_counts.get(a, 0) + 1
     # 空缺陷：成分与 bulk 相同(Δn=0)，q=0，无 chempot/corr/VBM 项
     dn = {el: 0 for el in bulk_counts}
-    E_f_empty = E_bulk - E_bulk - sum(dn.get(el, 0) * ref["mu"].get(el, 0.0) for el in dn)
+    if any(el not in ref.get("mu", {}) for el in dn):
+        raise SystemExit("[错误] 空缺陷自检也需要完整的元素化学势")
+    E_f_empty = E_bulk - E_bulk - sum(dn[el] * ref["mu"][el] for el in dn)
     print("[自检] 空缺陷 E_f(Δn=0, q=0) = %+.6f eV（应严格为 0）" % E_f_empty)
     return E_f_empty
 

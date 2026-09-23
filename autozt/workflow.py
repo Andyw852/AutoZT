@@ -61,7 +61,7 @@ def _scancel_load(m):
     if not p or not os.path.isfile(p):
         return {}
     try:
-        with open(p) as f:
+        with open(p, encoding="utf-8", errors="replace") as f:
             d = json.load(f)
         return d if isinstance(d, dict) else {}
     except Exception:
@@ -73,7 +73,7 @@ def _scancel_save(m, marks):
         return
     try:
         if marks:
-            with open(p, "w") as f:
+            with open(p, "w", encoding="utf-8") as f:
                 json.dump(marks, f, ensure_ascii=False, indent=1)
         elif os.path.isfile(p):
             os.remove(p)
@@ -501,7 +501,7 @@ def render_vasp_template(text, filename, step_name, profiles):
 # ===== 统一核数：cores 归一化（v1.0 P0 统一化）=====
 # 动机：以前"改核数"要分别改 setting/<hpc>/templates/submit_*.tpl 的 --ntasks-per-node、
 # defects_common.build_job 的 NCORE/KPAR，还要知道**每个技能用的模板叫什么名字**
-# （defect 用 submit_ncl_3d.tpl + incar_defect.tpl，mlff-mace 用 step1_relax/ 下的那份…），
+# （defect 用 submit_ncl_3d.tpl + incar_defect.tpl，mlff 用 step1_relax/ 下的那份…），
 # 漏一处就出现"4 个 MPI 进程 + INCAR NCORE=6"这种自相矛盾的输入。
 # 现在：tf.yaml / 项目 setting.yaml / 类型配置里写一个 cores: N，gen 结束后由这段
 # 远端小程序**按文件模式**统一归一化（不认技能、不认模板名）：
@@ -822,7 +822,7 @@ def remote_gen(cfg, t, m, sname, host=None, wd=None):
         if _i18n.is_en():
             print("hint: provenance recording failed; the generation itself is unaffected.", file=sys.stderr)
     # 统一核数：gen 跑完后按文件模式把 submit/INCAR 归一到 cores 指定的核数
-    # （不认技能、不认模板名——defect 的 submit_ncl_3d.tpl / mlff-mace 的
+    # （不认技能、不认模板名——defect 的 submit_ncl_3d.tpl / mlff 的
     #  step1_relax/ 子目录模板一样管到）。cores 没配就完全不动，保持出厂行为。
     _cores = resolve_cores(cfg, t, m, sname)
     # 以步骤目录为归一化根（远端目录名 = 步骤名；不存在时小程序自己退回材料目录）。
@@ -861,7 +861,8 @@ def _norm(p):
 
 def _sh(cmd, timeout=60):
     try:
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        r = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8",
+                           errors="replace", timeout=timeout)
         return r.returncode, (r.stdout or ""), (r.stderr or "")
     except Exception as e:
         return -1, "", str(e)
@@ -924,6 +925,53 @@ def _squeue_jobs(user):
         return ("name", jobs)
     return (None, None)
 
+def empty_fanout_ok(d, marker, require_empty=True):
+    """Opt-in empty fanout: exact neutral-only manifest and unchanged inputs."""
+    import hashlib, configparser
+    try:
+        with open(os.path.join(d, marker), encoding="utf-8") as stream:
+            data = json.load(stream)
+        import glob as manifest_glob
+        jobs = data.get("jobs")
+        if data.get("schema") != 1 or not isinstance(jobs, list):
+            return False
+        if data.get("status") != ("generated" if jobs else "neutral_only"):
+            return False
+        if require_empty and jobs:
+            return False
+        actual = sorted(os.path.basename(p) for p in manifest_glob.glob(os.path.join(d, "def-*")) if os.path.isdir(p))
+        if sorted(jobs) != actual:
+            return False
+        inputs = data.get("input_files", {})
+        if not {"step.conf", "step2_defects/defects_manifest.json"}.issubset(inputs):
+            return False
+        root = os.path.dirname(d)
+        if not jobs:
+            import configparser
+            conf = configparser.ConfigParser(inline_comment_prefixes=("#",))
+            conf.read(os.path.join(root, "step.conf"))
+            if conf.get("params", "CHARGE_MODE", fallback="window").strip().lower() != "window":
+                return False
+            if conf.getint("params", "QMIN", fallback=-2) != 0 or conf.getint("params", "QMAX", fallback=2) != 0:
+                return False
+        with open(os.path.join(root, "step2_defects/defects_manifest.json"), encoding="utf-8") as stream:
+            neutral = json.load(stream)
+        if not neutral:
+            return False
+        for item in neutral:
+            for name in ("CONTCAR", "OUTCAR"):
+                if "step2_defects/%s/%s" % (item["dir"], name) not in inputs:
+                    return False
+        for path, digest in inputs.items():
+            if os.path.isabs(path) or ".." in path.split("/"):
+                return False
+            with open(os.path.join(root, path), "rb") as stream:
+                if hashlib.sha256(stream.read()).hexdigest() != digest:
+                    return False
+        return True
+    except (OSError, ValueError, TypeError, KeyError, configparser.Error):
+        return False
+
 def _set_jobname(path, name, insert):
     try:
         with open(path, encoding="utf-8") as f:
@@ -961,11 +1009,16 @@ def main():
                         if c != submit]
 
     if fanout:
+        if cfg.get("empty_fanout_manifest") and not empty_fanout_ok(step_dir, cfg["empty_fanout_manifest"], require_empty=False):
+            _emit(False, [], "fanout manifest missing/stale or unexpected children")
         subs = sorted(p for p in _glob.glob(os.path.join(step_dir, fanout))
                       if os.path.isdir(p))
         if only:
             keep = set(only)
             subs = [p for p in subs if os.path.basename(p) in keep]
+        if not subs and cfg.get("empty_fanout_manifest"):
+            ok = empty_fanout_ok(step_dir, cfg["empty_fanout_manifest"])
+            _emit(ok, [], "neutral-only (S2 reused)" if ok else "empty fanout manifest missing/stale")
         if not subs and not only:
             # fanout 声明但无匹配子目录（如 2D HSE 按设计不切片）→ 回退单目录提交，
             # 避免静默 0 提交（历史 bug：打印 jobid=None 却当成功）。only 指定仍不匹配时保持 no-op（retry 语义）。
@@ -1090,7 +1143,7 @@ if __name__ == "__main__":
 
 
 def _sbatch_guarded(cfg, step_dir, host="__default__", jobname=None, fanout=None,
-                    only=None, force=False, submit=None):
+                    only=None, force=False, submit=None, empty_fanout_manifest=None):
     from autozt import run_remote, sh_b64
     """在远端 step_dir 上：目录锁 + 实时 squeue 去重 + 回执/sacct 防可见性延迟，再 sbatch。
     返回 (ok, out, 逗号分隔 jobid 或 None)。查询失败一律 fail closed（拒绝提交）。"""
@@ -1098,6 +1151,7 @@ def _sbatch_guarded(cfg, step_dir, host="__default__", jobname=None, fanout=None
         "dir": step_dir,
         "jobname": jobname or "",
         "fanout": fanout or "",
+        "empty_fanout_manifest": empty_fanout_manifest,
         "only": list(only or []),
         "force": bool(force),
         "submit": submit or "submit.sh",
@@ -1161,7 +1215,8 @@ def remote_sbatch_fanout(cfg, s, jobname=None, force=False):
                     % (_n, _cap, _n + 1), None)
     return _sbatch_guarded(cfg, s["dir"], s.get("_host") or "__default__",
                            jobname=jobname, fanout=pat, only=only, force=force,
-                           submit=s.get("submit"))
+                           submit=s.get("submit"),
+                           empty_fanout_manifest=s.get("empty_fanout_manifest"))
 
 
 def remote_sbatch(cfg, s, jobname=None, force=False):
@@ -1262,6 +1317,13 @@ def do_submit(cfg, t, m, s, force, gen_first, contcar_cp, tag, submit=True):
             return False
     jobname = "%s-%s-%s" % (m["name"].split("/")[-1], m["tt"], s["label"])
     ok, out, jid = remote_sbatch(cfg, s, jobname=jobname, force=force)
+    if ok and jid is None and s.get("empty_fanout_manifest"):
+        print("%s: neutral-only manifest validated; reused S2, no scheduler job submitted." % tag)
+        s["done"], s["exists"] = True, True
+        _fetch_stamp_clear(m, s["name"])
+        _scancel_clear(m, s["name"])
+        log_action(m, "%s neutral-only; no job submitted" % s["label"])
+        return True
     print("%s: %s" % (tag, _i18n.t("已提交 %s (jobid=%s)", "submitted %s (jobid=%s)") % (jobname, jid) if ok
                             else (_i18n.t("提交失败。", "submit failed. ") + out)))
     if ok:
@@ -1309,7 +1371,8 @@ def _discover_step_inputs(cfg, host, step_dir, subdir=None):
               "! -name '*.stale-*' -size -40M -printf '%%P\\n' 2>/dev/null | head -300" % shlex.quote(root))
     try:
         p = subprocess.run(_ssh_cmd(cfg, host, [remote]), capture_output=True,
-                           text=True, timeout=240)
+                           text=True, encoding="utf-8", errors="replace",
+                           timeout=240)
     except Exception as exc:                    # noqa: BLE001
         print("警告：远端输入清单发现失败（按默认清单继续）：%s" % exc, file=sys.stderr)
         if _i18n.is_en():
@@ -1336,7 +1399,7 @@ def _remote_submit_preflight(cfg, m, s, t=None):
     connector = (str(cfg.get("hanhai_connect") or "") if "hanhai" in host.lower() else "")
     if connector and os.path.isfile(connector):
         p = subprocess.run([connector], capture_output=True, text=True,
-                           timeout=30)
+                           encoding="utf-8", errors="replace", timeout=30)
         if p.returncode != 0:
             return False, (p.stderr or p.stdout or "hanhai25-connect 失败").strip()
     # 目标集群与提交模板自洽性：模板里的 --partition 必须能在该集群落地。
@@ -1472,7 +1535,8 @@ def _remote_submit_preflight(cfg, m, s, t=None):
             os.makedirs(dest, exist_ok=True)
             p1 = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             p2 = subprocess.run(["tar", "xf", "-", "-C", dest], stdin=p1.stdout,
-                                 capture_output=True, text=True)
+                                 capture_output=True, text=True, encoding="utf-8",
+                                 errors="replace")
             p1.stdout.close()
             err = p1.stderr.read().decode(errors="replace") if p1.stderr else ""
             rc1 = p1.wait()
@@ -1983,7 +2047,8 @@ def _fetch_receipt_valid(cfg, m, s):
         return False
     from autozt import FETCH_STAMP
     try:
-        with open(os.path.join(m["result_dir"], s["name"], FETCH_STAMP)) as f:
+        with open(os.path.join(m["result_dir"], s["name"], FETCH_STAMP),
+                  encoding="utf-8", errors="replace") as f:
             return json.load(f) == _fetch_receipt(cfg, m, s)
     except (OSError, ValueError, TypeError):
         return False
@@ -1998,7 +2063,7 @@ def _fetch_receipt_write(cfg, m, s):
         os.makedirs(dest, exist_ok=True)
         import tempfile
         with tempfile.NamedTemporaryFile(mode="w", dir=dest, prefix=".tf_fetch-",
-                                         delete=False) as f:
+                                         encoding="utf-8", delete=False) as f:
             json.dump(_fetch_receipt(cfg, m, s), f, sort_keys=True)
             tmp = f.name
         os.replace(tmp, os.path.join(dest, FETCH_STAMP))
@@ -2043,7 +2108,8 @@ def fetch_material(cfg, m, only_steps=None, quiet=False, all_files=False,
         p1 = subprocess.Popen(cmd1, stdout=subprocess.PIPE,
                               stderr=subprocess.DEVNULL)
         p2 = subprocess.run(["tar", "xf", "-", "-C", dest], stdin=p1.stdout,
-                            capture_output=True, text=True)
+                            capture_output=True, text=True, encoding="utf-8",
+                            errors="replace")
         p1.stdout.close()
         rc1 = p1.wait()
         if rc1 != 0 or p2.returncode != 0:
@@ -2701,16 +2767,41 @@ def _regen_key(m, s):
 def _regen_path(m, name):
     return os.path.join(m["lpath"], name) if m.get("lpath") else None
 
+_FANOUT_SAFE = re.compile(r"^[A-Za-z0-9_*?./\[\]-]+$")
+
+
 def _regen_input_fingerprint(cfg, m, s):
     """步骤远端目录里关键输入（REGEN_INPUTS 中存在者）的稳定 sha256 聚合指纹。
-    目录不可读/无关键输入/SSH 失败 → (None, [])。"""
+    目录不可读/无关键输入/SSH 失败 → (None, [])。
+
+    ★ fanout 步（s["fanout"] 如 disp-*）的输入在**子目录**里，顶层一个 REGEN_INPUTS 都没有：
+    只扫顶层必然得到"指纹不可用"，于是每次 retry 后 start 都要人工 -f
+    （2026-09-22 MoS₂ S4_disp 实测：retry 报"关键输入指纹不可用，未写重生成标记"）。
+    这里对 fanout 步改成扫每个子目录的同名文件，聚合成同一个指纹。
+    fanout 模式来自 skill.yaml（可信），但仍只允许安全字符，防止拼进 shell。
+    """
     from autozt import run_remote, sh_b64
     if not s.get("dir"):
         return None, []
     names = list(REGEN_INPUTS)
-    script = ("cd %s 2>/dev/null || exit 0\n"
-              "for f in %s; do [ -f \"$f\" ] && sha256sum -- \"$f\"; done\n"
-              % (shlex.quote(s["dir"]), " ".join(shlex.quote(n) for n in names)))
+    pat = str(s.get("fanout") or "").strip()
+    if pat and not _FANOUT_SAFE.match(pat):
+        print("警告：fanout 模式 %r 含不安全字符，重生成指纹退回顶层扫描" % pat,
+              file=sys.stderr)
+        pat = ""
+    if pat:
+        inner = ("  for f in %s; do [ -f \"$d/$f\" ] && sha256sum -- \"$d/$f\"; done\n"
+                 % " ".join(shlex.quote(n) for n in names))
+        script = ("cd %s 2>/dev/null || exit 0\n"
+                  "for d in %s; do\n"
+                  "  [ -d \"$d\" ] || continue\n"
+                  "%s"
+                  "done\n"
+                  % (shlex.quote(s["dir"]), pat, inner))
+    else:
+        script = ("cd %s 2>/dev/null || exit 0\n"
+                  "for f in %s; do [ -f \"$f\" ] && sha256sum -- \"$f\"; done\n"
+                  % (shlex.quote(s["dir"]), " ".join(shlex.quote(n) for n in names)))
     try:
         rc, out = run_remote(cfg, sh_b64(script),
                              host=s.get("_host") or m.get("host_eff") or "__default__")
@@ -2720,13 +2811,20 @@ def _regen_input_fingerprint(cfg, m, s):
     pairs = []
     for ln in ((out or "") if rc == 0 else "").splitlines():
         p = ln.strip().split()
-        if len(p) >= 2 and p[-1] in names:
+        if len(p) >= 2 and os.path.basename(p[-1]) in names:
             pairs.append((p[-1], p[0]))
     if not pairs:
         return None, []
     pairs.sort()
     agg = hashlib.sha256("".join("%s:%s\n" % (n, h) for n, h in pairs)
                          .encode("utf-8")).hexdigest()
+    if pat:                     # fanout：文件可能成百上千，marker 的 files 只用于显示
+        shown = []
+        for n, _ in pairs:
+            b = os.path.basename(n)
+            if b not in shown:
+                shown.append(b)
+        return agg, ["%s/%s" % (pat, b) for b in shown]
     return agg, [n for n, _ in pairs]
 
 def _regen_marker_load(m):

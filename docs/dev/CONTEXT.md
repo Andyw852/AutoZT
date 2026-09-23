@@ -207,10 +207,10 @@ python3 -c "import autozt"    # 装配成功 = 8 个深模块就位
   `POTCAR_DIR` / `REFERENCES_DIR`（原版有，v2.0 拷贝时漏了）。后果：`setting/jzzn.yaml`
   把这两个 VASP 键注入所有技能 step.conf，MACE 生成脚本白名单不认识 → `retry` gen 报
   「不认识的键」、整批 30 个材料 retry 失败。已补回，与原版逐字节一致。
-- **其余待核对差异**（diff -rq 得出，均不影响 opt-mace-cpu）：
+- **其余待核对差异**（diff -rq 得出，均不影响 opt-mlff-cpu）：
   `skill/ke-dft-cpu/step3_uniform/gen_step5_uniform.py`、
   `skill/ke-dft-cpu/step7_deform/step7b_read/gen_step9b_deform_read.py`、
-  `skill/mlff-mace/benchmark.py`、`setting/hanhai25.yaml` 及其 templates。
+  `skill/mlff/benchmark.py`、`setting/hanhai25.yaml` 及其 templates。
 - **已解决**：全量 `rsync -ac --delete` 把 v2.0 的 skill/ + setting/ 与原版内容级对齐，
   上述差异全部消除；新增 `scripts/sync_check.sh` 持续审计（见 §10）。
 

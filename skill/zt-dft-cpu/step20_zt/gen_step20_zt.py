@@ -33,8 +33,8 @@ AMSET_DIR = "step8_amset"
 KL_DIR = "step6_kappa"
 # 兄弟技能兜底（同一材料目录下、同一 work_dir）：(技能子目录, 步骤目录)
 KL_SIBLINGS = (("kl-dft-cpu", "step6_kappa"),
-               ("kl-mace-cpu", "step4_kappa"),
-               ("kl-mace-gpu", "step4_kappa"))
+               ("kl-mlff-cpu", "step4_kappa"),
+               ("kl-mlff-gpu", "step4_kappa"))
 # 电子段同理：若本技能的 S8_kappa_e 没跑（例如电子输运已由独立的 ke-dft-cpu
 # 项目算过），允许读同级 ke-dft-cpu 目录的 transport.json —— 来源会写进产物。
 AMSET_SIBLINGS = (("ke-dft-cpu", "step8_amset"),

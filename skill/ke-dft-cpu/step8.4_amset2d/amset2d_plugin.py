@@ -32,10 +32,12 @@ import numpy as np
 
 import amset
 import amset.scattering.calculate as C
-from amset.constants import angstrom_to_bohr as A2B, boltzmann_au, coulomb_to_au, m_to_bohr
+from amset.constants import (angstrom_to_bohr as A2B, boltzmann_au,
+                            coulomb_to_au, ev_to_hartree, m_to_bohr, s_to_au)
 from amset.electronic_structure.fd import fd
 from amset.scattering.inelastic import PolarOpticalScattering
 from amset.scattering.elastic import (
+    AbstractElasticScattering as _ABS_ELASTIC,
     AcousticDeformationPotentialScattering as _ADP,
     IonizedImpurityScattering as _IMP,
     PiezoelectricScattering as _PIE,
@@ -209,6 +211,70 @@ class AcousticDeformation2D(_ADP):
         return f[None, None] * np.ones(self.fermi_levels.shape + norm_q_sq.shape)
 
 
+# ---------------- ODP（实验性，默认惰性） ----------------
+# 非极性光学声子形变势（Einstein 模）。物理耦合（标准、无歧义）：
+#     |g(q)|^2 = hbar * D^2 / (2 * M_eff * omega)        （short-range，q 无关）
+#   D      = dE_edge/du，u 为【未权重位移范数】sqrt(sum_i |u_i|^2)，单位 eV/Å
+#   M_eff  = sum_i m_i |u_hat_i|^2（amu），u_hat 为同一范数下的单位位移图样
+#   omega  = Γ 点该光学模频率（THz）
+# 提取途径：step5_dielect 的 DFPT Γ 本征矢 + step7_deform 的 relaxed−clamped
+# 带边差，脚本 tmp/odp/extract_odp.py；量级评估 tmp/odp/odp_mobility.py。
+#
+# 实现走 AMSET 的 **elastic** 框架（弹性近似：忽略发射/吸收能量位移，取 2N+1），
+# 因此不需要给 inelastic 路径打"每机制 ħω"补丁。
+# ★ 默认惰性：只有 mechanisms_2d 含 "ODP" 且 scattering_type 含 ODP 时才生效；
+#   否则与本机制相关的一切都不改变。
+# ★ 常数从 2d_correction.json 读，【不能】放 settings.yaml —— AMSET 的 settings
+#   校验会拒绝未知 key（实测 "Unrecognised setting: odp_frequency"）。
+# ★ 绝对归一化标定见 tmp/odp/CALIBRATION.md（_ODP_NORM 为标定旋钮，端到端实跑钉死）。
+_AMU_TO_ME = 1822.888486209
+_BOHR_TO_ANG = 0.529177210903
+# 端到端标定（2026-09-23，本地 amset 0.5.1 实跑 CrS2_ortho，见 tmp/odp/CALIBRATION.md）：
+#   AMSET ODP-only 空穴 8226 cm2/Vs，解析物理 ODP 10681 -> norm = sqrt(8226/10681) = 0.88。
+#   （只对空穴有意义：本类只支持单一 D/M/ω，无法逐带给 D。）
+_ODP_NORM = 0.88
+_ODP_KEYS = ("odp_frequency_THz", "odp_deformation_potential_eV_A",
+             "odp_mode_mass_amu")
+
+
+def _odp_cfg():
+    """从 2d_correction.json 取 ODP 常数；缺项直接报清楚错（不静默）。"""
+    miss = [k for k in _ODP_KEYS if k not in _REC]
+    if miss:
+        raise KeyError("amset2d：mechanisms_2d 含 ODP，但 2d_correction.json 缺 %s"
+                       % ", ".join(miss))
+    return dict(frequency_THz=float(_REC[_ODP_KEYS[0]]),
+                D_eV_A=float(_REC[_ODP_KEYS[1]]),
+                M_amu=float(_REC[_ODP_KEYS[2]]))
+
+
+class OpticalDeformation2D(_ABS_ELASTIC):
+    """非极性光学声子形变势（弹性近似）。"""
+
+    name = "ODP"
+    required_properties = ()          # 常数走 _odp_cfg()，不进 settings 校验
+
+    def __init__(self, properties, doping, temperatures, nbands):
+        super().__init__(properties, doping, temperatures, nbands)
+        cfg = _odp_cfg()
+        self.odp = cfg
+        self.omega = cfg["frequency_THz"] * 1e12 * 2 * np.pi / s_to_au
+        d_au = cfg["D_eV_A"] * ev_to_hartree / _BOHR_TO_ANG
+        m_au = cfg["M_amu"] * _AMU_TO_ME
+        self._prefactor = s_to_au * self.omega / 2.0
+        self._coupling = _ODP_NORM * d_au ** 2 / (m_au * self.omega ** 2)
+        kt = np.asarray(temperatures, float)[None, :] * boltzmann_au
+        self.n_op = 1.0 / (np.exp(self.omega / kt) - 1.0)
+
+    def prefactor(self, spin, b_idx):
+        return ((2 * self.n_op + 1) * self._prefactor
+                * np.ones((len(self.doping), len(self.temperatures))))
+
+    def factor(self, unit_q, norm_q_sq, spin, band_idx, kpoint, velocity):
+        shape = (len(self.doping), len(self.temperatures))
+        return self._coupling * np.ones(shape + norm_q_sq.shape)
+
+
 # ---------------- POP ----------------
 class PolarOptical2D(PolarOpticalScattering):
     """二维 Fröhlich：F = 2πc·[1/ε̃∞(q) − 1/ε̃0(q)]/q，ε(q) 为张量 Keldysh 形式。
@@ -303,7 +369,9 @@ class Piezoelectric2D(_PIE):
 # ---------------- 注册 ----------------
 _CLASSES = {"ADP": AcousticDeformation2D, "POP": PolarOptical2D,
             "IMP": IonizedImpurity2D, "PIE": Piezoelectric2D}
-_ACTIVE = [k for k in ("ADP", "POP", "IMP", "PIE") if k in _MECHS]
+if "ODP" in _MECHS:          # 实验性：只有 mechanisms_2d 显式含 ODP 才注册
+    _CLASSES["ODP"] = OpticalDeformation2D
+_ACTIVE = [k for k in ("ADP", "POP", "IMP", "PIE", "ODP") if k in _MECHS]
 for _k in _ACTIVE:
     C._scattering_mechanisms[_k] = _CLASSES[_k]
 if "ADP" in _MECHS:

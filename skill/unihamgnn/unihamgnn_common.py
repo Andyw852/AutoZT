@@ -5,7 +5,7 @@
 节点系统 python 也跑得动；重活（torch / HamGNN / OpenMX）一律在 conda 环境里由
 submit.sh 调用的驱动脚本干。
 
-与 _common/mace/klmace_common.py 同一思路，按 Uni-HamGNN 的接口裁剪。
+与 _common/mlff/klmlff_common.py 同一思路，按 Uni-HamGNN 的接口裁剪。
 """
 import os
 import re

@@ -38,13 +38,13 @@ fix_*.py
 apply_fixes.py
 taskflow_bandgap_unify.patch
 
-# ---- MACE 模型文件（体积大，用 skill/*/templates/mace/push_model.sh 单独推集群）----
+# ---- MACE 模型文件（体积大，用 skill/*/templates/mlff/push_model.sh 单独推集群）----
 *.model
 
 # ---- 本地临时目录 ----
 .fix_bak/
 work/
-tmp_mace_mu/
+tmp_mlff_mu/
 
 # ---- 软著文档 / 输出数据（本地保留，不进仓库）----
 rz/

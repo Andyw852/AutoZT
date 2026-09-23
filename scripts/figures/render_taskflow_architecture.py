@@ -303,10 +303,10 @@ def draw_engine(d, x, y, w, h):
     mace_h = 5.3 * mm
     text(d, cat_x + 2.5 * mm, mace_y + 1.6 * mm, "MACE", size=3.7, fill="teal", bold=True)
     mace = [
-        ("opt-mace", "CPU / GPU"),
-        ("kl-mace", "CPU / GPU"),
-        ("phonon-mace", "dispersion"),
-        ("mlff-mace", "MLFF training"),
+        ("opt-mlff", "CPU / GPU"),
+        ("kl-mlff", "CPU / GPU"),
+        ("phonon-mlff", "dispersion"),
+        ("mlff", "MLFF training"),
     ]
     mace_w = (usable_w - 4 * box_gap) / 5
     for i, (title_value, subtitle) in enumerate(mace):
@@ -423,9 +423,9 @@ def draw_terminal(d, x, y, w, h):
 
     tx = x + 4.3 * mm
     yy = y + h - 15.0 * mm
-    yy = terminal_group(d, tx, yy, 1, "initialize a project", ["tf -tt opt-mace-cpu -p MAT init"])
+    yy = terminal_group(d, tx, yy, 1, "initialize a project", ["tf -tt opt-mlff-cpu -p MAT init"])
     yy -= 2.0 * mm
-    yy = terminal_group(d, tx, yy, 2, "start or advance", ["tf -tt opt-mace-cpu -p MAT start", "autozt start"])
+    yy = terminal_group(d, tx, yy, 2, "start or advance", ["tf -tt opt-mlff-cpu -p MAT start", "autozt start"])
     yy -= 2.0 * mm
     yy = terminal_group(
         d,

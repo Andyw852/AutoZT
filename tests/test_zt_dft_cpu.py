@@ -189,7 +189,7 @@ def test_load_kappa_requires_fields(tmp_path):
 
 
 def test_load_kappa_accepts_single_temperature_fallback(tmp_path):
-    """kl-mace-* 老格式只有 kappa_300K_xx_yy_zz：降级成单温度点并打标。"""
+    """kl-mlff-* 老格式只有 kappa_300K_xx_yy_zz：降级成单温度点并打标。"""
     p = _write_json(tmp_path / "macelike.json",
                     {"KAPPA_DONE": True, "kappa_300K_xx_yy_zz": [110.0, 90.0, 5.0]})
     k = zc.load_kappa(p)

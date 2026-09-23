@@ -9,7 +9,7 @@
       都比电子链更严），复用只是给一个更接近极小点的起始结构、省离子步数，不是跳过 S1。
 
 用法：
-    python3 reuse_structure.py <材料名> [目标技能]   # 默认 kl-dft-cpu；可传 kl-mace-cpu / kl-mace-gpu
+    python3 reuse_structure.py <材料名> [目标技能]   # 默认 kl-dft-cpu；可传 kl-mlff-cpu / kl-mlff-gpu
     python3 reuse_structure.py                      # 用当前目录反推材料（材料目录或 kl 技能子目录）
 
 候选源（按优先级，遍历 _SKILLS × _STEP1_CANDS，存在且非空即命中）：
@@ -70,7 +70,7 @@ def main():
             return 2
     else:
         cwd = Path.cwd().resolve()
-        mat = cwd.parent if cwd.name in ("kl-dft-cpu", "kl-mace-cpu", "kl-mace-gpu") else cwd
+        mat = cwd.parent if cwd.name in ("kl-dft-cpu", "kl-mlff-cpu", "kl-mlff-gpu") else cwd
 
     src, skill = find_relaxed(mat)
     if src is None:

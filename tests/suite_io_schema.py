@@ -5,13 +5,13 @@
     schema 2 的 io_schema.params 是"技能自带机器可读参数说明"，论文/审稿人会拿它当
     接口文档看。声明一旦和 step.conf / SPEC 的真实默认值漂移（历史上 kl-dft-cpu 的
     KAPPA_MESH 声明 15 15 15 实际 auto、FIT_ENGINE 声明 phono3py 实际 auto、
-    kl-mace-gpu 的 MACE_MODEL/DEVICE、unihamgnn 的 SOC、cohp 的 DENSIFY 都漂过），
+    kl-mlff-gpu 的 MACE_MODEL/DEVICE、unihamgnn 的 SOC、cohp 的 DENSIFY 都漂过），
     说明就是错的，比没有更糟。本套件把它变成 CI 级别的硬闸。
 
 实际默认值的取法（"用户不写 step.conf 时拿到什么"）：
     1) skill/<技能>/templates/*/step.conf 与 templates/step.conf 里该键的**全部**出现处；
        只要**任意一处**等于声明值即算通过（同一键在不同步骤可以各不相同，例如
-    kl-mace-gpu 的 DEVICE 在 step2 是 cuda、在技能级是 auto —— 声明写技能级默认值）；
+    kl-mlff-gpu 的 DEVICE 在 step2 是 cuda、在技能级是 auto —— 声明写技能级默认值）；
     2) step.conf 里没有该键时，退回该技能 .py 里 SPEC 形式的 "KEY": (default, "type")。
     两处都找不到 → 记为"无法核对"（不算失败，但会打印，便于人工补）。
     数值按 float 值比较（0.1 == 0.10，0.002 == 2e-3）。

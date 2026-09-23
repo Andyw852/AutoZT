@@ -17,10 +17,10 @@ def main():
     if src is None:
         raise SystemExit("[错误] 找不到 step1_bulk/CONTCAR —— 先跑完 step1 再 gen step2")
     sc = D.parse_poscar(src)
-    defects = D.enumerate_defects(sc)
+    defects = D.enumerate_defects(sc, conf)
     os.makedirs(STEP, exist_ok=True)
     manifest = []
-    for i, (suffix, disp, struct) in enumerate(defects):
+    for i, (suffix, disp, struct, meta) in enumerate(defects):
         ddir = "def-%03d_%s" % (i, suffix)
         D.build_job(os.path.join(STEP, ddir), struct, conf, {
             "SYSTEM": "defect-dft-cpu step2 %s" % disp,
@@ -31,11 +31,13 @@ def main():
         for a in struct["atoms"]:
             if a not in order:
                 order.append(a)
-        manifest.append({"dir": ddir, "name": suffix, "disp": disp,
+        manifest.append({"dir": ddir, "name": suffix, "disp": disp, "meta": meta,
                          "counts": {a: struct["atoms"].count(a) for a in order}})
     with open(os.path.join(STEP, "defects_manifest.json"), "w") as f:
         json.dump(manifest, f, indent=2, ensure_ascii=False)
-    print("[OK] 生成 %s/ 下 %d 个缺陷子目录（def-*）" % (STEP, len(defects)))
+    from collections import Counter
+    print("[OK] 生成 %s/ 下 %d 个缺陷子目录（def-*）: %s"
+          % (STEP, len(defects), dict(Counter(m.get("type") for *_r, m in defects))))
 
 if __name__ == "__main__":
     main()

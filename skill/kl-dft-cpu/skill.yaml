@@ -170,9 +170,9 @@ io_schema:
        desc: "单模弛豫时间近似（快）或直接解线性化 BTE（准，内存 O(N_mode^2)）"}
     - {name: KAPPA_MESH, default: auto, where: step.conf,
        desc: "BTE q 网格：auto = 2D 按倒空间长度估（Q_LEN_2D/MESH_MIN，真空轴=1）、3D 用 15 15 15；也可写 auto3d 或 \"N N N\""}
-    - {name: IMAG_THR, default: 0.15, where: step.conf,
+    - {name: IMAG_THR, default: 0.10, where: step.conf,
        desc: "近 Γ 声学支上限(THz)=5 cm^-1：近 Γ 声学支虚频 ≤ 它 → warn（S6 放行）；> 它 → fail。语义已从'全局阈值'改为'近 Γ 声学支上限'（imag_policy，Petretto 2018）"}
-    - {name: IMAG_THR_STRICT, default: 0.05, where: step.conf,
+    - {name: IMAG_THR_STRICT, default: 0.10, where: step.conf,
        desc: "数值噪声底(THz)：|ν| ≤ 它 → noise 不计入；也是近 Γ 区外与光学支的上限（超过即 fail）"}
     - {name: IMAG_QGAMMA, default: 0.05, where: step.conf,
        desc: "近 Γ 区半径（分数坐标，严格小于；Petretto 2018 的 0<|q|<0.05 窗口）"}

@@ -3,7 +3,7 @@
 """统一化机制自测（v1.0）：cores 归一化 + 提交前输入清单发现。
 
 A. cores：submit.sh/INCAR 一律按 cores 改，与技能、模板名无关（defect 的
-   submit_ncl_3d.tpl、mlff-mace 的 step1_relax/ 那份模板同样管到）
+   submit_ncl_3d.tpl、mlff 的 step1_relax/ 那份模板同样管到）
 B. 清单：按远端步骤目录里实际存在的文件要求，技能不必自报 submit_required
 """
 import os
@@ -58,7 +58,7 @@ with open(os.path.join(nest, "submit.sh"), "w", encoding="utf-8") as f:
 with open(os.path.join(nest, "INCAR.s1"), "w", encoding="utf-8") as f:
     f.write("NCORE = 12\nKPAR = 2\n")
 # 单进程多线程型（MACE 那种只用 cpus-per-task）
-mac = os.path.join(d, "step2_mace")
+mac = os.path.join(d, "step2_mlff")
 os.makedirs(mac)
 with open(os.path.join(mac, "submit.sh"), "w", encoding="utf-8") as f:
     f.write("#!/bin/bash\n#SBATCH --cpus-per-task=8\n#SBATCH --gres=gpu:1\n")
@@ -77,7 +77,7 @@ ck("#SBATCH --ntasks-per-node=4" in read(os.path.join(nest, "submit.sh")),
 ck("NCORE = 4" in read(os.path.join(nest, "INCAR.s1")),
    "子目录 INCAR.s1（分阶段 INCAR）也归一")
 
-p = normalize(d, 4, "step2_mace")
+p = normalize(d, 4, "step2_mlff")
 ck("#SBATCH --cpus-per-task=4" in read(os.path.join(mac, "submit.sh")),
    "单进程多线程型（只有 cpus-per-task）改 cpus-per-task 8→4")
 

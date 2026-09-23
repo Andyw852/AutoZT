@@ -2,7 +2,7 @@
 
 > 本文是 AutoZT 的**总文档**：用户手册 + 技能总览 + 技能开发规范。
 > 配套文件：`AGENTS.md`（给 LLM/agent 的操作规范）。原独立文档 SKILL_DEV.md（技能开发规范）、
-> skill_prompt_mlff-mace.md（mlff-mace 设计提示词）、使用说明.md（step.conf 开发记录）的内容均已并入本文
+> skill_prompt_mlff.md（mlff 设计提示词）、使用说明.md（step.conf 开发记录）的内容均已并入本文
 > （分别见第 7 章、§6.9、§5.3），不再单独保留。
 
 **当前版本 1.0**（版本号自 1.0 起重新计数，与 `autozt -V` 一致；文中不再逐条标注历史版本号）。
@@ -15,7 +15,7 @@ VASP/DFT 与 MACE/MLFF 多材料·多步骤·**多任务类型**流水线管理�
 |---|---|---|
 | 0 | 适用范围与能力边界 | 所有人 |
 | 1–5 | 安装、核心概念、命令、状态、配置 | 所有用户 |
-| 6 | 16 个技能逐一说明（含 mlff-mace）；**6.10 各技能提交规范**（★ 提交前先读） | 用户 / agent |
+| 6 | 20 个技能逐一说明（含 mlff）；**6.10 各技能提交规范**（★ 提交前先读） | 用户 / agent |
 | 7 | 技能开发规范（原 SKILL_DEV.md 内容） | 技能作者 / AI |
 | 8–11 | 工作原理、agent 接入、目录结构、文档清单 | 所有人 |
 
@@ -25,9 +25,9 @@ VASP/DFT 与 MACE/MLFF 多材料·多步骤·**多任务类型**流水线管理�
 
 **覆盖范围（能做什么）**
 
-- 16 个技能、多类引擎：**VASP/DFT**（能带、弹性常数、电子热导率、晶格热导率、结构优化+能量、缺陷形成能）＋ **MACE/MLFF**（晶格热导率、结构优化+形成能、声子谱、随机位移法 MLFF 训练）＋ **替代模型**（热电快速筛选、Uni-HamGNN 能带）。
-- 多材料 × 多步骤 × 多任务类型编排：`needs` 显式 DAG 依赖、扇出步骤（fanout，一步下 N 个并行作业）、可选步骤组、断点续跑、跨技能共用结果（如 kl-mace 接 kl-dft-cpu 的 BORN）。
-- 跨技能结构复用：autozt 的 gen 一律从**材料根 POSCAR** 取初始结构（技能子目录里的 POSCAR 不被使用），所以复用 = 把其它链已优化的 CONTCAR 复制成材料根 POSCAR（覆盖前备份 POSCAR_raw）。kl-dft-cpu 的 `reuse_structure.py` 自动做（ke → opt → band → elastic 顺序找候选）；手动等价于 `cp <材料>/ke-dft-cpu/result/step1_opt/CONTCAR <材料>/POSCAR`。复用只给各技能 S1 更好的起始点（省离子步、更稳），**不跳过 S1 的重新优化**；材料根 POSCAR 是所有技能共用的初始结构，覆盖影响所有未跑 S1 的技能。详见 `skill/kl-dft-cpu/README.md`、`skill/kl-mace-cpu/README.md`。
+- 20 个技能、多类引擎：**VASP/DFT**（能带、弹性常数、电子热导率、晶格热导率、结构优化+能量、缺陷形成能）＋ **MACE/MLFF**（晶格热导率、结构优化+形成能、声子谱、随机位移法 MLFF 训练）＋ **替代模型**（热电快速筛选、Uni-HamGNN 能带）。
+- 多材料 × 多步骤 × 多任务类型编排：`needs` 显式 DAG 依赖、扇出步骤（fanout，一步下 N 个并行作业）、可选步骤组、断点续跑、跨技能共用结果（如 kl-mlff 接 kl-dft-cpu 的 BORN）。
+- 跨技能结构复用：autozt 的 gen 一律从**材料根 POSCAR** 取初始结构（技能子目录里的 POSCAR 不被使用），所以复用 = 把其它链已优化的 CONTCAR 复制成材料根 POSCAR（覆盖前备份 POSCAR_raw）。kl-dft-cpu 的 `reuse_structure.py` 自动做（ke → opt → band → elastic 顺序找候选）；手动等价于 `cp <材料>/ke-dft-cpu/result/step1_opt/CONTCAR <材料>/POSCAR`。复用只给各技能 S1 更好的起始点（省离子步、更稳），**不跳过 S1 的重新优化**；材料根 POSCAR 是所有技能共用的初始结构，覆盖影响所有未跑 S1 的技能。详见 `skill/kl-dft-cpu/README.md`、`skill/kl-mlff-cpu/README.md`。
 - 三种运行环境：真 SLURM（jzzn cpu192 / a800 GPU 分区）、无 SLURM 服务器（3090，fakeslurm 垫片），一台项目用 `autozt hpc` 切换。
 - 自动化：auto_fetch / auto_advance / auto_watch（零输入全自动）、retry / rerun / stop / clean、内置判据自动判成败、0D/2D/3D 维度自动判定。
 - 技能开发：`skill/<名>/skill.yaml` 自描述，放进 `skill/` 即被自动发现，不改 autozt 主程序（见第 7 章）。
@@ -35,14 +35,14 @@ VASP/DFT 与 MACE/MLFF 多材料·多步骤·**多任务类型**流水线管理�
 **不在范围内（不能做什么）**
 
 - **不提供计算引擎**：不内置 VASP/MACE/phono3py/AMSET 等，全部依赖外部程序；autozt 本身是单文件 Python、零第三方依赖（PyYAML 可选）。
-- **需要外部许可 / 资产**：VASP 需商业许可（DFT 类技能）；MACE 类技能需要一个**预先训练好的 `.model` 势文件**（`MACE_MODEL`，autozt 不负责训练它——唯一例外是 mlff-mace 本身产出势）。
+- **需要外部许可 / 资产**：VASP 需商业许可（DFT 类技能）；MACE 类技能需要一个**预先训练好的 `.model` 势文件**（`MACE_MODEL`，autozt 不负责训练它——唯一例外是 mlff 本身产出势）。
 - **物理覆盖面有限**：目前只有上述 11 类。**没有**光学性质、磁性专项、分子动力学（MD）、NEB 过渡态、自旋轨道耦合（SOC）等技能。
-- **MACE 的原理性缺失**：MACE 势给不出 Born 有效电荷和 ε∞（势里无电荷响应）——极性材料算晶格热导率需从 kl-dft-cpu 的 DFPT 接 `NAC_BORN`；`phonon-mace-cpu` 只算 2 阶力常数（fc2），不产 fc3 / κ。
+- **MACE 的原理性缺失**：MACE 势给不出 Born 有效电荷和 ε∞（势里无电荷响应）——极性材料算晶格热导率需从 kl-dft-cpu 的 DFPT 接 `NAC_BORN`；`phonon-mlff-cpu` 只算 2 阶力常数（fc2），不产 fc3 / κ。
 - **0D 分子支持有限**：只有 band-dft-cpu step1 开了 `MOL_BRANCH`；弹性 / 热导 / 形变势对分子无定义，未开 0D 的技能会明确报错。
-- **只算形成能、不算凸包**：opt-dft / opt-mace 产出 `E_form`（凸包上方能量 E_hull 的原料），凸包比对需用 pymatgen / MP API 离线另做。
-- **mlff-mace 只产出势**：只做「随机位移法训练 + 验收」产出一个验证过的 `.model`，不做 κ 生产计算、fc3 生产拟合、生产 MD（fc3/κ 可信度由下游 kl-mace-* 背书）。
+- **只算形成能、不算凸包**：opt-dft / opt-mlff 产出 `E_form`（凸包上方能量 E_hull 的原料），凸包比对需用 pymatgen / MP API 离线另做。
+- **mlff 只产出势**：只做「随机位移法训练 + 验收」产出一个验证过的 `.model`，不做 κ 生产计算、fc3 生产拟合、生产 MD（fc3/κ 可信度由下游 kl-mlff-* 背书）。
 - **单用户本地驱动**：调度入口在本地（WSL），集群侧只是算力；不是集群资源管理器（依赖 SLURM 或 fakeslurm 垫片）。Windows 原生不支持（需 WSL）。
-- **网络假设**：mlff-mace 要求集群有 `REPLAY_XYZ` 基座（集群无外网时拿不到就报错退出，不降级）。
+- **网络假设**：mlff 要求集群有 `REPLAY_XYZ` 基座（集群无外网时拿不到就报错退出，不降级）。
 
 **成熟度与未验证项**
 
@@ -50,9 +50,9 @@ VASP/DFT 与 MACE/MLFF 多材料·多步骤·**多任务类型**流水线管理�
 |---|---|
 | 1.3 / 1.2 | band-dft-cpu / elastic-dft-cpu（最成熟） |
 | 0.2 | kl-dft-cpu |
-| 0.1 | ke-dft-cpu、opt-dft-cpu、kl-mace-cpu/gpu、opt-mace-cpu/gpu、phonon-mace-cpu、mlff-mace |
+| 0.1 | ke-dft-cpu、opt-dft-cpu、kl-mlff-cpu/gpu、opt-mlff-cpu/gpu、phonon-mlff-cpu、mlff |
 
-- mlff-mace 的 GPU 路径（a800/3090 `submit_mace.tpl` + CONDA_ENV）**已预留、未实测**（jzzn 登录节点无 GPU 分区，DEVICE=auto 恒落 CPU）。
+- mlff 的 GPU 路径（a800/3090 `submit_mlff.tpl` + CONDA_ENV）**已预留、未实测**（jzzn 登录节点无 GPU 分区，DEVICE=auto 恒落 CPU）。
 - 各技能 / 各超算的实时状态以 `autozt summary` 与 `skill/<名>/README.md` 为准。
 
 ---
@@ -83,10 +83,10 @@ autozt --version
   | `ke-dft-cpu` | 电子热导率（AMSET） | VASP/DFT | 0.1 |
   | `kl-dft-cpu` | 晶格热导率（第三阶力常数+BTE） | VASP/DFT | 0.2 |
   | `opt-dft-cpu` | 结构优化 + 能量/形成能 | VASP/DFT | 0.1 |
-  | `kl-mace-cpu` / `kl-mace-gpu` | 晶格热导率 | MACE | 0.1 |
-  | `opt-mace-cpu` / `opt-mace-gpu` | 结构优化 + 形成能 | MACE | 0.1 |
-  | `phonon-mace-cpu` | 声子谱（仅 2 阶） | MACE | 0.1 |
-  | `mlff-mace` | 随机位移法 MLFF 训练（产出 MACE 势） | VASP(标注)+MACE | 0.1 |
+  | `kl-mlff-cpu` / `kl-mlff-gpu` | 晶格热导率 | MACE | 0.1 |
+  | `opt-mlff-cpu` / `opt-mlff-gpu` | 结构优化 + 形成能 | MACE | 0.1 |
+  | `phonon-mlff-cpu` | 声子谱（仅 2 阶） | MACE | 0.1 |
+  | `mlff` | 随机位移法 MLFF 训练（产出 MACE 势） | VASP(标注)+MACE | 0.1 |
   | `zt-dft-cpu` | 热电优值 ZT 全流程（电子输运 + 晶格热导 + ZT 汇总） | VASP/DFT | 0.1 |
 
 - **project（-p）**：材料项目，如 `C20/qHPC20`。
@@ -94,7 +94,7 @@ autozt --version
 - **命名规则**：同一类型下项目名不允许重复（启动即报错）；不同类型下允许同名。`-p` 不带 `-tt` 时跨类型解析，唯一即用，重名会提示补 `-tt`。
 - **本地模式（v3）**：输入文件（POSCAR 等）以本地项目目录为准，超算只做计算服务，目录树 = `work_dir + 项目相对路径`。类型配置写 `local_root` 即启用；只写 `root` 则是 v2 远端模式，两者可混用。
 - **多超算**：`setting/<hpc>.yaml` + `setting/<hpc>/templates/` 定义一台超算；状态表 `hpc` 列显示每项目实际用的机器，`autozt hpc` 切换（见 5.4）。
-- **公共池 `skill/_common/`**：多个技能共用的引擎与模板（`relax_common.py`、`dim_common.py`、`stepconf.py`、`_common/mace/` 等），技能目录里没有的文件回落到池子里取（见 7.2）。
+- **公共池 `skill/_common/`**：多个技能共用的引擎与模板（`relax_common.py`、`dim_common.py`、`stepconf.py`、`_common/mlff/` 等），技能目录里没有的文件回落到池子里取（见 7.2）。
 
 ---
 
@@ -163,8 +163,8 @@ autozt [-tt TT] -p MAT -j STEP conf    查看/修改该步骤的 step.conf（分
                                   不带 --set = 打印合并结果 + 各层来源；
                                   --set 节.键=值 写进本材料 project_setting/templates/<步骤>/step.conf
                                   （键名不带点 = 写入 [params] 节；值留空 = 删键）。
-                                  例：autozt -tt kl-mace-cpu -p X -j 2 conf
-                                      autozt -tt kl-mace-cpu -p X -j 2 conf --set params.METHOD=random
+                                  例：autozt -tt kl-mlff-cpu -p X -j 2 conf
+                                      autozt -tt kl-mlff-cpu -p X -j 2 conf --set params.METHOD=random
                                       autozt -tt opt-dft-cpu -p X -j 3 conf --set MU="C:-9.0 Li:-1.9"
 autozt auto [on|off]                 开关全局 auto_advance（动目录/恢复备份前先 off）
 autozt -tt TT -p MAT auto on|off      只改指定项目的技能开关；on 会立即推进就绪步骤
@@ -310,8 +310,8 @@ skill 出厂默认（skill/<技能>/templates/step.conf）
 autozt 推送时先在本地把各层合并成**一份**带 `# <- [N]` 来源注释的文件再推，超算上只有一份、零回落逻辑。查看/修改：
 
 ```bash
-autozt -tt kl-mace-cpu -p <材料> -j 2 conf                    # 看合并后的最终值 + 各层来源
-autozt -tt kl-mace-cpu -p <材料> -j 2 conf --set params.METHOD=random
+autozt -tt kl-mlff-cpu -p <材料> -j 2 conf                    # 看合并后的最终值 + 各层来源
+autozt -tt kl-mlff-cpu -p <材料> -j 2 conf --set params.METHOD=random
 autozt -tt opt-dft-cpu  -p <材料> -j 3 conf --set MU="C:-9.0 Li:-1.9"
 ```
 
@@ -333,7 +333,7 @@ INCAR 生效顺序固定：`上一步继承 → [incar] → 脚本自动计算 �
 
 ```bash
 autozt -tt opt-dft-cpu -p X -j 1 conf --set submit.ntasks_per_node=12   # VASP 类(MPI)
-autozt -tt kl-mace-cpu -p X -j 2 conf --set submit.cpus_per_task=12  # MACE 类(torch线程)
+autozt -tt kl-mlff-cpu -p X -j 2 conf --set submit.cpus_per_task=12  # MACE 类(torch线程)
 # 改完重新 gen：autozt -p X -j N init -f 只生成不提交，检查后再 start
 ```
 
@@ -353,7 +353,7 @@ autozt -tt kl-mace-cpu -p X -j 2 conf --set submit.cpus_per_task=12  # MACE 类(
 | `3090` | `wangchao_3090` | 8×RTX3090 | 真 SLURM 24.05.8（分区 cpu192 默认 + gpu 6 卡） | conda `mace-gpu`；VASP 6.6.0 GPU 版（OpenACC，`~/software/vasp.6.6.0/bin/{vasp_std,gam,ncl}`，NVIDIA HPC-SDK 24.11 环境） | `/home/wangchaoyue852/AutoZT/work` |
 
 - **切换**：`autozt -p qHPC20,qHPC24 hpc a800`（材料级）/ `autozt -tt elastic-dft-cpu -p qHPC20 hpc a800`（技能级）。只动 `-p` 指定的项目；只影响之后提交的作业。
-- **接入一台新超算（两步）**：① 照 `setting/jzzn.yaml` 建 `setting/<名>.yaml`（name/ssh_host/模板映射/集群默认 work_dir 与 conda 环境）；② 把提交模板放到 `setting/<名>/templates/`（逻辑名即文件名，如 `submit_std_2d.tpl`、`submit_mace.tpl`、`<步骤名>/submit_std_2d.tpl` 变体）。`#SBATCH --job-name` 必须写成 `{{JOBNAME}}` 占位符。
+- **接入一台新超算（两步）**：① 照 `setting/jzzn.yaml` 建 `setting/<名>.yaml`（name/ssh_host/模板映射/集群默认 work_dir 与 conda 环境）；② 把提交模板放到 `setting/<名>/templates/`（逻辑名即文件名，如 `submit_std_2d.tpl`、`submit_mlff.tpl`、`<步骤名>/submit_std_2d.tpl` 变体）。`#SBATCH --job-name` 必须写成 `{{JOBNAME}}` 占位符。
 - 旧版散在 skill 里的 `submit_jzzn_*.tpl` 已移到 `setting/.migrated/submit_backup/` 备份；现有项目各自的 `project_setting/templates/` 副本不受影响（优先级最高）。
 
 #### 5.4.1 每步可指定超算（v1.12）
@@ -435,6 +435,7 @@ _AMSET_ENV_SRC = "source %s && conda activate %s" % (CONDA_SH, AMSET_ENV)
 - 2D/3D/0D 自动判定；0D（分子）支持到 step1（`MOL_BRANCH=True`，`incar_0d.tpl`），step3/4 对分子无定义、不该跑。
 - `aux_files` 随 gen 推送 4 个 `stepN_check_and_resubmit.py`（agent 诊断用）：只允许加 `--check-only` 运行（退出码 0=converged / 10=not_converged / 20=running / 30=重启超限 / 40=error），**重投一律用 autozt retry/rerun**。
 - 已全量迁移到 `skill_subdir` 布局（`材料/band-dft-cpu/`）；旧平铺目录用 `migrate-subdir` 迁移，手工搬乱了的用 `adopt` 接管（历史迁移，新项目无需关心）。
+- 默认目录契约：一个材料目录只保留一份根目录 `POSCAR`，多个技能共享它；每个技能在 `材料/<技能>/` 下保存自己的 `project_setting/`、`result/` 和 `log/`，远端步骤也使用同一技能层级。只有用户在 `setting.yaml` 中显式写入 `result_dir` 或 `log_dir` 时，才覆盖该默认布局。
 - 参数（step.conf）：`FUNC=pbesol|pbe|pbe-d3|auto`、`KSPACING`、`BANDGAP`、`MOL_*`（0D）、`STALL_MINUTES` 等。
 
 ### 6.2 elastic-dft-cpu 弹性常数（v1.2）
@@ -491,7 +492,7 @@ _AMSET_ENV_SRC = "source %s && conda activate %s" % (CONDA_SH, AMSET_ENV)
 |---|---|---|---|---|
 | 1 | `step1_std_opt` | S1_opt | 结构优化（relax_common，standard 胞） | `relax_injob` |
 | 2 | `step2_static` | S2_static | 静态自洽 | `outcar` |
-| 3 | `step3_nac` | S3_nac | DFPT 计算 Born 有效电荷/介电常数（**产出 BORN**，kl-mace 接 NAC 用） | OUTCAR 判据 |
+| 3 | `step3_nac` | S3_nac | DFPT 计算 Born 有效电荷/介电常数（**产出 BORN**，kl-mlff 接 NAC 用） | OUTCAR 判据 |
 | 4 | `step4_disp` | S4_disp | 有限位移（thirdorder，**fanout** `disp-*`） | `outcar` |
 | 5 | `step5_fc` | S5_fc | 拟合 fc2/fc3 → 声子谱 + 虚频闸（登录节点） | `phonon` |
 | 5.1 | `step5_phonon_plot` | S5.1_plot | 声子谱画图 | plot |
@@ -528,64 +529,64 @@ autozt -tt opt-dft-cpu -p <材料> -j 3 conf --set GUEST_ELEMENT=Li
 
 参考化学势 μ_i 取**同一参考态**（如石墨 C、bcc Li）用同一套设置单独算每原子总能填进来；不填也不报错（`E_per_atom` 照常输出）。最严格的判据是凸包上方能量（E_hull），本技能只算形成能（E_hull 的原料），凸包比对用 pymatgen/MP API 离线做。
 
-### 6.6 kl-mace-cpu / kl-mace-gpu 晶格热导率（MACE，4 步）
+### 6.6 kl-mlff-cpu / kl-mlff-gpu 晶格热导率（MACE，4 步）
 
-**MACE 势取代 VASP 算力**：没有 VASP/POTCAR/KPOINTS/ENCUT，没有位移扇出（N 个位移在一个作业里循环算完）。引擎（`mace_relax.py` / `mace_forces.py` / `mace_model.py` / `klmace_common.py`）在公共池 `skill/_common/mace/`，CPU/GPU 两版共用；技能目录里只有 `skill.yaml` + `templates/`，两版差异全在模板（队列、`DEVICE`、超胞默认值）。
+**MACE 势取代 VASP 算力**：没有 VASP/POTCAR/KPOINTS/ENCUT，没有位移扇出（N 个位移在一个作业里循环算完）。引擎（`mlff_relax.py` / `mlff_forces.py` / `mlff_model.py` / `klmlff_common.py`）在公共池 `skill/_common/mlff/`，CPU/GPU 两版共用；技能目录里只有 `skill.yaml` + `templates/`，两版差异全在模板（队列、`DEVICE`、超胞默认值）。
 
 | 步骤 | label | 内容 | 判据 |
 |---|---|---|---|
-| `step1_mace_relax` | S1_relax | MACE 弛豫原胞（ASE + FrechetCellFilter + FixSymmetry），登录节点 | `relax_summary.json` 的 `"converged": true` |
+| `step1_mlff_relax` | S1_relax | MACE 弛豫原胞（ASE + FrechetCellFilter + FixSymmetry），登录节点 | `relax_summary.json` 的 `"converged": true` |
 | `step2_disp_force` | S2_force | 位移生成 + **一个作业算完全部力**，计算节点 ×1 | `forces_summary.json` 的 `FORCES_DONE` |
 | `step3_fc` | S3_fc | 拟合 fc2/fc3 → 声子谱 → 虚频闸，登录节点 | `phonon_summary.json` 的 `"stable": true` |
 | `step4_kappa` | S4_kappa | phono3py BTE → 晶格热导率（**两版都跑 CPU 队列**） | `kappa_summary.json` 的 `KAPPA_DONE` |
 
-**三件必须知道的事**（详见 `skill/_common/mace/README.md`）：
+**三件必须知道的事**（详见 `skill/_common/mlff/README.md`）：
 
 1. **结构一定要用同一个势重弛豫**——力常数是在势自身的能量极小点上做泰勒展开；在 DFT 极小点直接取 MACE 力，残余力混进二阶力常数，Γ 点声学支直接假虚频。`RESIDUAL_TOL`（默认 2e-3 eV/Å）就是这道闸；S2 还会再测未位移超胞的残余力并扣掉。
-2. **MACE 给不出 Born 有效电荷和 ε∞**（势里没有电荷响应，原理性缺失）——极性材料不加 NAC 会缺 LO-TO 劈裂、高温 κ 偏。用 `kl-dft-cpu` 跑过 DFPT 的接 BORN：`autozt -tt kl-mace-cpu -p <材料> -j step3_fc conf --set params.NAC_BORN=/public/home/.../kl-dft-cpu/step3_nac/BORN`。
+2. **MACE 给不出 Born 有效电荷和 ε∞**（势里没有电荷响应，原理性缺失）——极性材料不加 NAC 会缺 LO-TO 劈裂、高温 κ 偏。用 `kl-dft-cpu` 跑过 DFPT 的接 BORN：`autozt -tt kl-mlff-cpu -p <材料> -j step3_fc conf --set params.NAC_BORN=/public/home/.../kl-dft-cpu/step3_nac/BORN`。
 3. **`DTYPE` 必须 float64**——float32 的力误差（~1e-3 eV/Å）足以在声学支上造出假虚频。
 
-关键参数（step.conf）：`MACE_MODEL` / `MACE_MODEL_DIR` / `DEVICE` / `CONDA_ENV`（jzzn 上是 venv，写路径即按 venv 激活）、`METHOD=random`（默认 MC-rattle 随机位移）/ `findiff`（有限位移）、`N_RANDOM=auto`（按 ALM 数出的自由力常数反推帧数）、`FC2_SUPERCELL`、`MIN_SC_LEN`、`KAPPA_MESH`、`CKPT`（断点续算）、`ALM_CUT3`、`FIT_SOFTWARE=phono3py`/`pheasy`。GPU 版跑 `opt-mace-gpu` 同款 GPU 机器（`autozt hpc` 切）。
+关键参数（step.conf）：`MACE_MODEL` / `MACE_MODEL_DIR` / `DEVICE` / `CONDA_ENV`（jzzn 上是 venv，写路径即按 venv 激活）、`METHOD=random`（默认 MC-rattle 随机位移）/ `findiff`（有限位移）、`N_RANDOM=auto`（按 ALM 数出的自由力常数反推帧数）、`FC2_SUPERCELL`、`MIN_SC_LEN`、`KAPPA_MESH`、`CKPT`（断点续算）、`ALM_CUT3`、`FIT_SOFTWARE=phono3py`/`pheasy`。GPU 版跑 `opt-mlff-gpu` 同款 GPU 机器（`autozt hpc` 切）。
 
 **pheasy 拟合软件选择**（S3_fc 当 `FIT_SOFTWARE=pheasy` 时）：`PHEASY_BIN=pheasy`（CPU 版，默认）| `pheasy-gpu`（GPU 版，走 `pheasy_gpu` 模块 + CUDA 后端），配合 `PHEASY_METHOD`（OLS / LASSO / RFE / RFE_TSQR）。两者都在 `~/software/` 下（`pheasy` / `pheasy-gpu`），CLI 参数一致、GPU 版只是把重活稠密线性代数搬到 GPU（`PHEASY_USE_GPU` 控制，缺省 auto）。示例：
 ```bash
-autozt -tt kl-mace-gpu -p <材料> -j 3 conf --set params.FIT_SOFTWARE=pheasy params.PHEASY_BIN=pheasy-gpu
+autozt -tt kl-mlff-gpu -p <材料> -j 3 conf --set params.FIT_SOFTWARE=pheasy params.PHEASY_BIN=pheasy-gpu
 ```
 
-### 6.7 opt-mace-cpu / opt-mace-gpu 结构优化 + 形成能（MACE，3 步）
+### 6.7 opt-mlff-cpu / opt-mlff-gpu 结构优化 + 形成能（MACE，3 步）
 
-与 opt-dft-cpu 同一套三步骨架，但力全由 MACE 势给出。两技能步骤一致，唯一差别是计算资源：`opt-mace-cpu` 跑 jzzn cpu192 分区（venv `mace_cpu`，`DEVICE=cpu`）；`opt-mace-gpu` 默认 3090 GPU 服务器（conda `mace-gpu`，`DEVICE=cuda`）。
+与 opt-dft-cpu 同一套三步骨架，但力全由 MACE 势给出。两技能步骤一致，唯一差别是计算资源：`opt-mlff-cpu` 跑 jzzn cpu192 分区（venv `mace_cpu`，`DEVICE=cpu`）；`opt-mlff-gpu` 默认 3090 GPU 服务器（conda `mace-gpu`，`DEVICE=cuda`）。
 
 | 步骤 | label | 内容 | 判据 |
 |---|---|---|---|
-| `step1_mace_relax` | S1_relax | MACE 弛豫（ASE + FrechetCellFilter + FixSymmetry），计算节点作业（submit 模式） | `relax_summary.json` 的 `"converged": true` |
-| `step2_mace_static` | S2_static | MACE 静态单点：读 S1 CONTCAR 取总能 E_tot | `static_summary.json` 的 `"STATIC_DONE": true` |
+| `step1_mlff_relax` | S1_relax | MACE 弛豫（ASE + FrechetCellFilter + FixSymmetry），计算节点作业（submit 模式） | `relax_summary.json` 的 `"converged": true` |
+| `step2_mlff_static` | S2_static | MACE 静态单点：读 S1 CONTCAR 取总能 E_tot | `static_summary.json` 的 `"STATIC_DONE": true` |
 | `step3_formation` | S3_energy | 形成能后处理（登录节点）：E_form = E_tot − Σ n_i·μ_i | `energy_summary.json` |
 
 参数（step.conf）：`MACE_MODEL` / `MACE_MODEL_DIR` / `DEVICE` / `DTYPE` / `CONDA_ENV`、`MU`（如 `C:-9.1757 Mg:-1.5070`）、`FMAX`（出厂默认 1e-3 eV/Å；C60/C120 大体系别用 1e-4，会拖到几小时）、`RELAX_CELL`（发散体系可设 false 锁晶格）。
 
-**参考化学势可以本地算**：`scripts/mace_mu/` 提供固化脚本（38 个金属小胞，本地 CPU 几分钟，不走排队）：
+**参考化学势可以本地算**：`scripts/mlff_mu/` 提供固化脚本（38 个金属小胞，本地 CPU 几分钟，不走排队）：
 
 ```bash
-bash scripts/mace_mu/setup_local.sh   # 第一次：建 venv（torch CPU + mace-torch + ase）
-bash scripts/mace_mu/run_mu.sh        # 产出 results.json + 一行 MU= 可直接粘进 step.conf
+bash scripts/mlff_mu/setup_local.sh   # 第一次：建 venv（torch CPU + mace-torch + ase）
+bash scripts/mlff_mu/run_mu.sh        # 产出 results.json + 一行 MU= 可直接粘进 step.conf
 ```
 
 **形成能参考态提醒**：C 用石墨、Mg 用 hcp。富勒烯笼本身比亚稳态石墨高能（曲率应变罚：C60 ≈ +0.4 eV/atom，笼越小越贵），所以这类材料的 E_form 全为正。若要单独看"插层是否有利"，用同一笼的差值 `E_form(CₙMgₘ) − E_form(Cₙ)`，会自动抵消笼的曲率罚——需另建纯笼（Mg=0）材料跑一遍拿 E(Cₙ)。
 
-### 6.8 phonon-mace-cpu 声子谱（MACE，仅 2 阶，3 步）
+### 6.8 phonon-mlff-cpu 声子谱（MACE，仅 2 阶，3 步）
 
-从 klmace 拆出：只算声子，不碰 fc3 / BTE。
+从 klmlff 拆出：只算声子，不碰 fc3 / BTE。
 
 | 步骤 | label | 内容 | 判据 |
 |---|---|---|---|
-| `step1_mace_relax` | S1_relax | MACE 弛豫（同 klmace） | `relax_summary.json` 的 `"converged": true` |
+| `step1_mlff_relax` | S1_relax | MACE 弛豫（同 klmlff） | `relax_summary.json` 的 `"converged": true` |
 | `step2_disp_force` | S2_force | 随机位移（帧数由 ALM 2 阶自由力常数反推，振幅 0.01 Å）+ MACE 取力 | `forces_summary.json` 的 `FORCES_DONE` |
 | `step3_phonon` | S3_phonon | symfc 拟合 fc2 → q-mesh 虚频闸 + band-dft-cpu.yaml | `phonon_summary.json` 的 `"PHONON_DONE": true` |
 
-### 6.9 mlff-mace 随机位移法 MLFF 训练（v0.1，★ 新技能）
+### 6.9 mlff 随机位移法 MLFF 训练（v0.1，★ 新技能）
 
-**只做一件事：产出一个经过验证的 MACE 势函数权重文件**（`<MACE_MODEL_DIR>/<材料>_ft.model` + `model_card.json` + `results_<材料>.txt` + 一行可直接填进 kl-mace/phonon-mace 的 `MACE_MODEL` 值）。不做 κ 生产计算、fc3 生产拟合、生产 MD。完整细节见 `skill/mlff-mace/README.md`（出处：autoplex phonon workflow，JCP 153,044104(2020) / Nat. Commun. 16,7666(2025)；数值冲突以 README 为准）。
+**只做一件事：产出一个经过验证的 MACE 势函数权重文件**（`<MACE_MODEL_DIR>/<材料>_ft.model` + `model_card.json` + `results_<材料>.txt` + 一行可直接填进 kl-mlff/phonon-mlff 的 `MACE_MODEL` 值）。不做 κ 生产计算、fc3 生产拟合、生产 MD。完整细节见 `skill/mlff/README.md`（出处：autoplex phonon workflow，JCP 153,044104(2020) / Nat. Commun. 16,7666(2025)；数值冲突以 README 为准）。
 
 核心论断：用 phonopy 单原子位移超胞 + 同一原胞生成的一组**随机位移（rattle）超胞**建训练库，**全程不需要分子动力学**。
 
@@ -608,12 +609,12 @@ bash scripts/mace_mu/run_mu.sh        # 产出 results.json + 一行 MU= 可直�
 **代数迭代（AutoZT 是 DAG，代数用 step.conf 的 GENERATION 表达）**：
 
 ```bash
-autozt -tt mlff-mace -p <材料> conf --set params.GENERATION=1
-autozt -tt mlff-mace -p <材料> -j 4 rerun    # 只删 step4 结构清单重生成（安全）
-autozt -tt mlff-mace -p <材料> start         # 判据检测到「代数不一致」→ 5/6/7/8 自动补生成/重跑/提交
+autozt -tt mlff -p <材料> conf --set params.GENERATION=1
+autozt -tt mlff -p <材料> -j 4 rerun    # 只删 step4 结构清单重生成（安全）
+autozt -tt mlff -p <材料> start         # 判据检测到「代数不一致」→ 5/6/7/8 自动补生成/重跑/提交
 ```
 
-**验收闸（step8，10 条，写入 validation_summary.json）**：① 声子谱 RMSE < 0.2 THz（主收敛闸，autoplex 判据）；② imagmodes(pot)==imagmodes(dft)（3D 阈 −0.1 THz）；②b（仅 2D）ZA 支 |q|<0.05|b| 内最低频率 ≥ −0.05 THz；③ 平衡结构残余力 < 1e-3 eV/Å 且空间群不变（**必须用微调后势自身重弛豫再取力**）；④ ASR 违反 < 1e-3 eV/Å²；⑤ 测试集力 RMSE < 40 meV/Å；⑥ 能量 RMSE < 3 meV/atom；⑦ 弛豫晶格常数偏差 < 1%；⑧ EOS/模量偏差 < 5%（3D 体模量 / 2D 面内二维模量）；⑨ committee σ_F 外推率 < 5%；⑩ 模式 Grüneisen γ MAE < 0.3（验收唯一的三阶敏感量，但**fc3 与 κ 的最终可信度由下游 kl-mace-* 背书，本技能不替它背书**）。
+**验收闸（step8，10 条，写入 validation_summary.json）**：① 声子谱 RMSE < 0.2 THz（主收敛闸，autoplex 判据）；② imagmodes(pot)==imagmodes(dft)（3D 阈 −0.1 THz）；②b（仅 2D）ZA 支 |q|<0.05|b| 内最低频率 ≥ −0.05 THz；③ 平衡结构残余力 < 1e-3 eV/Å 且空间群不变（**必须用微调后势自身重弛豫再取力**）；④ ASR 违反 < 1e-3 eV/Å²；⑤ 测试集力 RMSE < 40 meV/Å；⑥ 能量 RMSE < 3 meV/atom；⑦ 弛豫晶格常数偏差 < 1%；⑧ EOS/模量偏差 < 5%（3D 体模量 / 2D 面内二维模量）；⑨ committee σ_F 外推率 < 5%；⑩ 模式 Grüneisen γ MAE < 0.3（验收唯一的三阶敏感量，但**fc3 与 κ 的最终可信度由下游 kl-mlff-* 背书，本技能不替它背书**）。
 
 **停机规则（硬性生效）**：Δ_K = rmse(K−1) − rmse(K) < IMPROVE_MIN(0.02 THz) 且主闸未过 → 本代 stagnant；**连续两代 stagnant → halt_stagnant FAIL**；学习曲线已平且主闸未过 → halt_not_data_limited（附六条排查清单）。`GENERATION > MAX_GENERATION` 硬停；停机后 gen 拒绝推进，除非显式 `FORCE_CONTINUE=true`。无论哪种停机都**保留全部数据和最后一代模型**，model_card 如实写 `"converged": false`。
 
@@ -621,7 +622,7 @@ autozt -tt mlff-mace -p <材料> start         # 判据检测到「代数不一�
 
 **与 autoplex 默认值的重要差异**（全表见 README §1）：① 基准超胞 = 训练超胞（不烧 min_length=20 大胞，代价是 commensurate q 分辨率较粗）；② `REF_DISP=0.1 Å`（= autoplex 默认；实测 0.01 Å 的位移力被 rattle 帧淹没约 1000 倍，微调后光学支软 27%、声子 RMSE 2.8 THz——CALIB_FC2 标定仍用 0.01 Å）；③ 微调超参取 autoplex `_mace_hypers.py` 默认（lr=1e-3、EPOCHS=1500+patience 早停+SWA、loss=huber、batch=10、stress_weight=1.0，multihead 需 `--force_mh_ft_lr`）；④ `FORCE_LIMIT=40.0 eV/Å`（= autoplex force_max，0.1 会把大幅度 rattle 帧全滤掉）；⑤ 默认 `E0S_MODE=estimated`（基座 E0 与目标泛函零点差 ~8 eV/atom，直接塞 DFT 孤立原子能量会训不动）。
 
-**环境与现状**：jzzn 登录节点无外网、无 GPU 分区（DEVICE=auto 恒落 CPU，EPOCHS=1500 上限 + PATIENCE=100 早停在 CPU 上单 seed 约 1~3 小时）；GPU 路径（a800/3090 的 `submit_mace.tpl` + CONDA_ENV）已预留、未实测。实测记录：Si 金刚石原胞 → 超胞 4×4×4（128 原子，r_max=6.0 Å 读自基座），第 0 代 25 帧（18 rattle + 3 displ + 3 static + 1 iso）×12 核，S1~S6 通过，S7 4-seed 微调进行中（截至本文更新）。
+**环境与现状**：jzzn 登录节点无外网、无 GPU 分区（DEVICE=auto 恒落 CPU，EPOCHS=1500 上限 + PATIENCE=100 早停在 CPU 上单 seed 约 1~3 小时）；GPU 路径（a800/3090 的 `submit_mlff.tpl` + CONDA_ENV）已预留、未实测。实测记录：Si 金刚石原胞 → 超胞 4×4×4（128 原子，r_max=6.0 Å 读自基座），第 0 代 25 帧（18 rattle + 3 displ + 3 static + 1 iso）×12 核，S1~S6 通过，S7 4-seed 微调进行中（截至本文更新）。
 
 ### 6.10 各技能提交规范（★ 提交前先读这一节）
 
@@ -629,7 +630,7 @@ autozt -tt mlff-mace -p <材料> start         # 判据检测到「代数不一�
 > 命令序列、每步资源规格、预计耗时、必须遵守的定则。**换材料/换机器重跑时照这里执行，
 > 别凭记忆**。下列技能按实操深度排序；未写到的技能先照 6.x 总览 + `skill/<技能>/README.md`。
 
-#### 6.10.1 mlff-mace 随机位移法 MLFF 训练（Si 全流程实操验证）
+#### 6.10.1 mlff 随机位移法 MLFF 训练（Si 全流程实操验证）
 
 **目标**：产出一个通过全部验收闸的 MACE 势权重（`<MACE_MODEL_DIR>/<材料>_ft.model`）。
 
@@ -648,20 +649,20 @@ autozt -tt mlff-mace -p <材料> start         # 判据检测到「代数不一�
 ```bash
 # 0. 建材料 + 检查
 mkdir -p <材料> && cd <材料> && cp <POSCAR> POSCAR
-autozt -tt mlff-mace -p <材料> init                # 生成 project_setting/
+autozt -tt mlff -p <材料> init                # 生成 project_setting/
 # 1. 三步启动（每步 start 推进，看 status）
-autozt -tt mlff-mace -p <材料> start               # S1 弛豫（VASP 12 核）
-autozt -tt mlff-mace -p <材料> start               # S2 超胞 + S3 标定（登录节点）
-autozt -tt mlff-mace -p <材料> start               # S4 生成本代构型清单
+autozt -tt mlff -p <材料> start               # S1 弛豫（VASP 12 核）
+autozt -tt mlff -p <材料> start               # S2 超胞 + S3 标定（登录节点）
+autozt -tt mlff -p <材料> start               # S4 生成本代构型清单
 # 2. DFT 标注（S5，最贵，fanout）
-autozt -tt mlff-mace -p <材料> -j 5 start -f       # 提交所有 cfg-* 帧
+autozt -tt mlff -p <材料> -j 5 start -f       # 提交所有 cfg-* 帧
 # 3. 数据集 + 训练（S6/S7）
-autozt -tt mlff-mace -p <材料> -j 6 start          # 建数据集
-printf 'step7_finetune\ny\n' | autozt -tt mlff-mace -p <材料> -j 7 rerun   # 生成 N_COMMITTEE 个 seed
+autozt -tt mlff -p <材料> -j 6 start          # 建数据集
+printf 'step7_finetune\ny\n' | autozt -tt mlff -p <材料> -j 7 rerun   # 生成 N_COMMITTEE 个 seed
 # 4. 验收（S8）
-autozt -tt mlff-mace -p <材料> -j 8 retry && autozt -tt mlff-mace -p <材料> -j 8 start
+autozt -tt mlff -p <材料> -j 8 retry && autozt -tt mlff -p <材料> -j 8 start
 # 5. 通过后发布（S9）
-autozt -tt mlff-mace -p <材料> start               # 仅 status=pass 才发布
+autozt -tt mlff -p <材料> start               # 仅 status=pass 才发布
 ```
 
 **每步资源规格（3090 实测）**：
@@ -677,7 +678,7 @@ autozt -tt mlff-mace -p <材料> start               # 仅 status=pass 才发布
 
 1. **step5_label 只用 `retry` / `start -f`，绝不 `rerun` / `clean`**（会 `rm -rf` 毁掉已算完的 DFT 帧）。
 2. **换代用 `conf --set params.GENERATION=K` → `-j 4 retry` → `start`**（retry 保留 gen-* 历史，rerun 会丢 S6 累计帧）。
-3. **改训练超参后必须确认 recipe 指纹生效**（`mace_finetune.py` 的 `recipe` 含 lr/epochs/loss/权重/batch/huber_delta/force_mh_ft_lr/patience；改了配置看 `finetune_summary.json` 的 recipe 是否变了，变了才会重训）。
+3. **改训练超参后必须确认 recipe 指纹生效**（`mlff_finetune.py` 的 `recipe` 含 lr/epochs/loss/权重/batch/huber_delta/force_mh_ft_lr/patience；改了配置看 `finetune_summary.json` 的 recipe 是否变了，变了才会重训）。
 4. **重训后先确认是早停停下的**（train.log 末段有 Early stopping），不是撞 epoch 上限——否则指标无意义。
 5. **GPU 分卡**：`N_GPU=0`（auto）= N_COMMITTEE 张卡，seed s → `(s-1) % N_GPU`；多 seed 并行前提是各卡空闲，看 `nvidia-smi`。
 6. **验收看三处**：声子谱 RMSE（主闸）、4 seed B0 一致性（#8a，通过率 <100% 判 FAIL）、pt_head 末段 std（应 <30，说明训练稳定）。
@@ -782,7 +783,7 @@ skill/<技能名>/
 skill/_common/                 公共池（没有 skill.yaml，不会被当成技能）
 ├── dim_common.py  stepconf.py  check_common.py  mol_common.py  relax_common.py
 ├── templates/incar_0d.tpl     0D 共用模板
-├── mace/                      kl-mace-gpu / kl-mace-cpu 共用引擎
+├── mace/                      kl-mlff-gpu / kl-mlff-cpu 共用引擎
 └── opt/                       结构优化公共件
 ```
 
@@ -808,7 +809,7 @@ skill/_common/                 公共池（没有 skill.yaml，不会被当成�
 
 只放**实际用得到**的文件（全程 `vasp_std` 就不放 `submit_ncl_*.tpl`；纯 3D 技能不放 `incar_2d.tpl`），不用的模板放进来只会让 `autozt init` 报无意义的警告。
 
-**提交模板只写逻辑名**（`submit_std_2d.tpl`、`submit_std_3d.tpl`、`submit_mace.tpl`、`submit_amset.tpl`…），实际文件放在 `setting/<hpc>/templates/`（逻辑名即文件名，按超算分文件夹；`<步骤名>/` 子目录放该步骤变体）。技能目录**不写死** `submit_jzzn_*`，换超算不用改技能。
+**提交模板只写逻辑名**（`submit_std_2d.tpl`、`submit_std_3d.tpl`、`submit_mlff.tpl`、`submit_amset.tpl`…），实际文件放在 `setting/<hpc>/templates/`（逻辑名即文件名，按超算分文件夹；`<步骤名>/` 子目录放该步骤变体）。技能目录**不写死** `submit_jzzn_*`，换超算不用改技能。
 
 **依赖清单写在每个步骤上**（步骤级 `gen_need`），不要写在类型顶层——每一步只推送自己真正需要的文件。⚠️ **步骤级 `gen_need` 会完全替代类型级清单，并且跳过提交模板的自动补推**：每一步都必须把提交模板逻辑名列全，漏写时老材料靠远端残留文件掩盖，新材料（空目录）会直接报「找不到模板」。
 
@@ -882,7 +883,7 @@ requires:                  # 可选。人读为主
 | `eigenval` | EIGENVAL 存在；有 KPOINTS_OPT 时还要有 vasprun.xml | — |
 | `marker` | **通用判据**：`marker: "文件名:要找的字符串"` | `marker`（必填） |
 | `plot` | `done_marker` 指定的文件存在，或目录里有任意 `.png` | `done_marker` |
-| `phonon` | 公共池私有判据：声子谱/虚频闸（kl-mace step3） | — |
+| `phonon` | 公共池私有判据：声子谱/虚频闸（kl-mlff step3） | — |
 
 **先用 `marker`**。绝大多数「某文件里出现某行就算完」的需求都不用写代码：
 
@@ -940,7 +941,7 @@ requires:                  # 可选。人读为主
 
   类型支持 `str` / `int` / `float` / `bool` / `words` / `elemmap`。**`[params]` 里没在 CONF_SPEC 声明过的键会直接报错**；公共池里所有读 step.conf 的模块必须共用一份 `CONF_SPEC`、只解析一次（`relax_common.load_step_params()` 存进 `STEP_PARAMS`，其它模块从那里取）。step.conf 里写了 `STEP=` 时，`stepconf.load` 会校验它与本步名一致。
 
-**模板逻辑名机制**（换超算不用改技能）：技能里只写**逻辑名** `submit_std_2d.tpl`、`submit_std_3d.tpl`、`submit_mace.tpl` 等；实际文件在 `setting/<集群>/templates/`（逻辑名即文件名）。模板里的 `{{JOBNAME}}` 由 gen 脚本替换。
+**模板逻辑名机制**（换超算不用改技能）：技能里只写**逻辑名** `submit_std_2d.tpl`、`submit_std_3d.tpl`、`submit_mlff.tpl` 等；实际文件在 `setting/<集群>/templates/`（逻辑名即文件名）。模板里的 `{{JOBNAME}}` 由 gen 脚本替换。
 
 **`run: gen` 的步骤**（后处理/画图）：同样在登录节点跑，但 autozt **不提交 SLURM**，跑完就按 `check: plot` + `done_marker` 判完成。所以这类脚本要自己算完并写出产物文件，且不能太重（登录节点跑得动）。
 
@@ -966,7 +967,7 @@ optional_steps:
 
 ### 7.9 扇出步骤 `fanout`：一步下面 N 个并行作业
 
-有些计算天然是「同一步骤、N 份独立输入、各跑各的」——形变势的 13 个应变、phono3py 的 N 个位移、mlff-mace 的 DFT 标注帧（`cfg-*`）与多 seed 微调（`seed-*`）。autozt 默认「一步 = 一个目录 = 一次 sbatch」，这类步骤用 `fanout` 声明：
+有些计算天然是「同一步骤、N 份独立输入、各跑各的」——形变势的 13 个应变、phono3py 的 N 个位移、mlff 的 DFT 标注帧（`cfg-*`）与多 seed 微调（`seed-*`）。autozt 默认「一步 = 一个目录 = 一次 sbatch」，这类步骤用 `fanout` 声明：
 
 ```yaml
 - {seq: 7, name: step7_deform, label: S7_deform, check: outcar,
@@ -990,7 +991,7 @@ gen 脚本负责在步骤目录下造出这些子目录，**每个子目录一�
 - 子目录名要能被 glob 稳定匹配，且不要和别的东西撞（`deform-*` 而不是 `*`）
 - gen 脚本要**幂等**：重跑时已有子目录不要清空已算好的结果
 - `fetch_all: true` 会把整个步骤目录（含全部子目录）拉回本地，产物多的步骤建议改用 `fetch_files` 只拉汇总产物
-- **昂贵的扇出步骤定操作定则**（如 mlff-mace 的 step5_label）：只用 `retry`/`start -f`，**绝不用 `rerun`/`clean`**——后两者会毁掉已算完的子作业产物
+- **昂贵的扇出步骤定操作定则**（如 mlff 的 step5_label）：只用 `retry`/`start -f`，**绝不用 `rerun`/`clean`**——后两者会毁掉已算完的子作业产物
 
 ### 7.10 `checks.py` 判据插件契约
 
@@ -1023,7 +1024,7 @@ CHECKERS = {"kappa_conv": ck_kappa_conv}    # ← 必须有这一行
 2. **只能用标准库**。不能 `import numpy`、不能 `import pymatgen`。
 3. **不能有顶层副作用**：除了 `def` 和 `CHECKERS = {...}`，不要有 print、文件读写、`import` 之外的语句。
 4. **不要写 `import os` 等**——采集器已经在全局命名空间提供了：`os` `re` `json` `glob` `subprocess`，以及 `tail_text(path, nbytes=1000000)`（读文件尾部）、`read_oszicar_ionic(d)`（OSZICAR 离子步能量）、`relax_diagnose(d, cfg)`（弛豫空转诊断）。写了 `import os` 也不报错，但没必要。
-5. **判据要能在 1 秒内返回**。它对每个材料的每个步骤都要跑一遍，不能扫全文件、不能起子进程算东西。**数值重活留给作业脚本算完写 json，判据只读 json**（mlff-mace 的 benchmark 就是这么分工的）。
+5. **判据要能在 1 秒内返回**。它对每个材料的每个步骤都要跑一遍，不能扫全文件、不能起子进程算东西。**数值重活留给作业脚本算完写 json，判据只读 json**（mlff 的 benchmark 就是这么分工的）。
 6. **判据名不能和内置判据重名**（`outcar`/`marker`/`plot`/…），重名 autozt 会直接报错退出。
 7. 判据参数从 `sc` 取（`sc.get("kappa_rtol", 0.01)`），参数写在 `skill.yaml` 那条 step 上，autozt 会自动透传到远端。
 
@@ -1334,10 +1335,10 @@ MCP 进程是否随新对话重启取决于客户端；其快照缓存仅在内�
 │   └── .migrated/              #   旧提交模板备份（稳定后可删）
 ├── skill/                      # 任务技能脚本
 │   ├── band-dft-cpu/  elastic-dft-cpu/  ke-dft-cpu/  kl-dft-cpu/  opt-dft-cpu/   # VASP 类
-│   ├── kl-mace-cpu/  kl-mace-gpu/  opt-mace-cpu/  opt-mace-gpu/  phonon-mace-cpu/  # MACE 类
-│   ├── mlff-mace/              #   MLFF 训练（随机位移法产出 MACE 势）
+│   ├── kl-mlff-cpu/  kl-mlff-gpu/  opt-mlff-cpu/  opt-mlff-gpu/  phonon-mlff-cpu/  # MACE 类
+│   ├── mlff/              #   MLFF 训练（随机位移法产出 MACE 势）
 │   └── _common/                #   公共池（relax_common/dim_common/stepconf/… + mace/ + opt/）
-├── scripts/mace_mu/            # 本地算参考化学势 μ 的固化脚本（形成能用）
+├── scripts/mlff_mu/            # 本地算参考化学势 μ 的固化脚本（形成能用）
 ├── TASKFLOW.md                 # 本文件（用户手册 + 技能总览 + 开发规范）
 └── AGENTS.md                   # 智能体操作规范（只放这里，项目文件夹不放）
 ~/.local/bin/autozt -> ~/software/AutoZT/versions/v1.0/tf   # 软链接 = 当前生效版本
@@ -1409,4 +1410,4 @@ autozt push "改了什么的简述"           # 等价：tfpush "..." 或 bash s
 | `TASKFLOW.md`（本文件） | 总文档：用户手册 + 技能总览 + 技能开发规范 | 改功能/技能时同步 |
 | `AGENTS.md` | LLM/agent 操作规范（角色、铁律、监控、汇报） | 与本文第 9 节呼应 |
 | `skill/<技能>/README.md` | 各技能细节（流水线、参数、局限） | 技能改代码时同步 |
-| `scripts/mace_mu/README.md` | 参考化学势计算脚本 | 换 MACE 模型后 μ 需重算 |
+| `scripts/mlff_mu/README.md` | 参考化学势计算脚本 | 换 MACE 模型后 μ 需重算 |

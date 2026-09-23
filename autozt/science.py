@@ -31,16 +31,16 @@ _ROW_KEYS = {"zt": "ZT", "seebeck": "seebeck_uV/K", "sigma": "sigma_S/m",
 # table here (rather than in the MCP transport) so CLI, MCP and future clients
 # make the same skill choice.
 _SKILL_INTENTS = (
-    (("声子", "phonon", "phonon spectrum"), ("phonon-dft-cpu", "phonon-mace-cpu", "phonon-mace-gpu")),
+    (("声子", "phonon", "phonon spectrum"), ("phonon-dft-cpu", "phonon-mlff-cpu", "phonon-mlff-gpu")),
     (("晶格热导", "晶格导热", "lattice thermal", "kappa_l", "热导率"),
-     ("kl-dft-cpu", "kl-mace-cpu", "kl-mace-gpu")),
+     ("kl-dft-cpu", "kl-mlff-cpu", "kl-mlff-gpu")),
     (("电子热导", "电子输运", "electronic transport", "kappa_e", "seebeck", "迁移率"),
      ("ke-dft-cpu",)),
     (("缺陷", "defect", "formation energy", "形成能"), ("defect-dft-cpu",)),
     (("弹性", "elastic", "elastic constant", "弹性常数"), ("elastic-dft-cpu",)),
     (("能带", "band structure", "bandgap", "带隙"), ("band-dft-cpu",)),
     (("优化", "结构优化", "relax", "optimize"),
-     ("opt-dft-cpu", "opt-mace-cpu", "opt-mace-gpu")),
+     ("opt-dft-cpu", "opt-mlff-cpu", "opt-mlff-gpu")),
 )
 
 

@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AutoZT software and workflow overview</title>
+  <style>
+    :root { --ink:#1f2937; --muted:#5b6575; --line:#d9e0e8; --header:#123b5d; --band:#f4f7fa; --accent:#d97b29; }
+    * { box-sizing:border-box; }
+    body { margin:0; padding:36px; color:var(--ink); background:#fff; font-family:Arial,Helvetica,sans-serif; }
+    .sheet { max-width:1500px; margin:auto; }
+    h1 { margin:0 0 7px; font-size:28px; letter-spacing:.2px; color:var(--header); }
+    .subtitle { margin:0 0 22px; color:var(--muted); font-size:13px; }
+    table { width:100%; border-collapse:collapse; table-layout:fixed; font-size:13px; line-height:1.35; border-top:1.5px solid #111; border-bottom:1.5px solid #111; }
+    col.domain { width:15%; } col.skill { width:18%; } col.function { width:31%; } col.packages { width:26%; } col.hw { width:10%; }
+    th { padding:10px 12px; text-align:left; color:#111; background:#fff; font-weight:700; border-bottom:1px solid #111; }
+    td { padding:9px 12px; vertical-align:top; border:0; }
+    td.domain { font-weight:700; color:#111; }
+    code { font-family:ui-monospace,SFMono-Regular,Consolas,monospace; color:#8a3f13; font-size:12px; }
+    .note { margin-top:14px; color:#4b5563; font-size:12px; }
+    @media print { body { padding:0; } .sheet { max-width:none; } h1 { font-size:20px; } table { font-size:10px; } td,th { padding:6px 7px; } }
+  </style>
+</head>
+<body>
+  <main class="sheet">
+    <h1>Table 1 | AutoZT software and workflow overview</h1>
+    <p class="subtitle">Current production skills and supported execution targets in the AutoZT repository</p>
+    <table>
+      <colgroup><col class="domain"><col class="skill"><col class="function"><col class="packages"><col class="hw"></colgroup>
+      <thead><tr><th>Domain</th><th>Skill</th><th>Main function</th><th>Main packages / engines</th><th>Execution</th></tr></thead>
+      <tbody>
+        <tr><td class="domain">Structure</td><td><code>opt-dft-cpu</code></td><td>DFT structure optimisation and total energy / formation energy</td><td>VASP</td><td>CPU</td></tr>
+        <tr><td class="domain">Structure</td><td><code>opt-mlff-cpu</code></td><td>MACE structure optimisation and formation energy</td><td>MACE, ASE</td><td>CPU</td></tr>
+        <tr><td class="domain">Structure</td><td><code>opt-mlff-gpu</code></td><td>MACE structure optimisation and formation energy</td><td>MACE, ASE</td><td>GPU</td></tr>
+        <tr><td class="domain">Electrons</td><td><code>band-dft-cpu</code></td><td>PBE/HSE band structures and k-path generation</td><td>VASP, VASPKIT, SeeK-path</td><td>CPU</td></tr>
+        <tr><td class="domain">Electrons</td><td><code>ke-dft-cpu</code></td><td>Electronic transport: conductivity, Seebeck coefficient and electronic thermal conductivity</td><td>AMSET, BoltzTraP2, CRTA check</td><td>CPU</td></tr>
+        <tr><td class="domain">Electrons</td><td><code>unihamgnn</code></td><td>ML Hamiltonian generation and band calculation</td><td>Uni-HamGNN</td><td>CPU / GPU</td></tr>
+        <tr><td class="domain">Electrons</td><td><code>cohp-cogito</code></td><td>Chemical-bonding and COHP/ICOHP analysis</td><td>COGITO, VASP</td><td>CPU</td></tr>
+        <tr><td class="domain">Electrons</td><td><code>eph-qe-cpu</code></td><td>Electron–phonon coupling and transport workflow</td><td>Quantum ESPRESSO, Perturbo</td><td>CPU</td></tr>
+        <tr><td class="domain">Defects &amp; mechanics</td><td><code>defect-dft-cpu</code></td><td>Point defects, charge states and formation energies</td><td>VASP</td><td>CPU</td></tr>
+        <tr><td class="domain">Defects &amp; mechanics</td><td><code>elastic-dft-cpu</code></td><td>Elastic constants and mechanical response</td><td>VASP</td><td>CPU</td></tr>
+        <tr><td class="domain">Phonons</td><td><code>phonon-dft-cpu</code></td><td>Harmonic phonons and dynamical stability</td><td>VASP, Phonopy</td><td>CPU</td></tr>
+        <tr><td class="domain">Phonons</td><td><code>phonon-mlff-cpu</code></td><td>MACE phonon spectrum and stability screening</td><td>MACE, Phonopy</td><td>CPU</td></tr>
+        <tr><td class="domain">Phonons</td><td><code>phonon-mlff-gpu</code></td><td>GPU-accelerated MACE phonon spectrum and stability screening</td><td>MACE, Phonopy</td><td>GPU</td></tr>
+        <tr><td class="domain">Force constants</td><td><code>fc-fit</code></td><td>Harmonic / anharmonic force-constant fitting</td><td>Phono3py, hiPhive, symfc, ALM</td><td>CPU / local</td></tr>
+        <tr><td class="domain">Thermal transport</td><td><code>kl-dft-cpu</code></td><td>Lattice thermal conductivity from DFT forces</td><td>Phono3py, ShengBTE, VASP</td><td>CPU</td></tr>
+        <tr><td class="domain">Thermal transport</td><td><code>kl-mlff-cpu</code></td><td>Lattice thermal conductivity from MACE forces</td><td>MACE, Phono3py</td><td>CPU</td></tr>
+        <tr><td class="domain">Thermal transport</td><td><code>kl-mlff-gpu</code></td><td>GPU-accelerated MACE force evaluation for lattice thermal conductivity</td><td>MACE, Phono3py</td><td>GPU</td></tr>
+        <tr><td class="domain">ML potentials</td><td><code>mlff</code></td><td>Random-displacement MLFF training and MACE potential generation</td><td>MACE, VASP</td><td>CPU / GPU</td></tr>
+        <tr><td class="domain">Thermoelectrics</td><td><code>te-screen</code></td><td>Fast surrogate screening of thermoelectric performance</td><td>Python</td><td>Local</td></tr>
+        <tr><td class="domain">Thermoelectrics</td><td><code>zt-dft-cpu</code></td><td>End-to-end DFT thermoelectric figure of merit <i>ZT</i> workflow</td><td>VASP, AMSET, BoltzTraP2, Phono3py</td><td>CPU</td></tr>
+      </tbody>
+    </table>
+    <div class="note"><strong>Notes:</strong> The table lists the 20 current production skills in <code>skill/</code>; <code>_common</code> and <code>_template</code> are internal support directories and are excluded. CPU/GPU indicates the supported execution target. The shared structure stack is pymatgen, ASE, spglib and SeeK-path. Older labels such as <code>opt-mlip</code>, <code>phonon-mlip</code>, <code>kl-mlip</code>, <code>mlff-mlip</code> and <code>zt</code> map to the corresponding entries above.</div>
+  </main>
+</body>
+</html>

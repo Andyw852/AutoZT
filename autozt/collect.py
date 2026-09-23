@@ -337,7 +337,8 @@ def collect(cfg, types, host="__default__"):
     cmd = (_ssh_cmd_pre(cfg, host, ["-o", "ConnectTimeout=60"], ["timeout", "170"] + args)
            if host else args)
     try:
-        r = subprocess.run(cmd, input=COLLECTOR, capture_output=True, text=True, timeout=180)
+        r = subprocess.run(cmd, input=COLLECTOR, capture_output=True, text=True,
+                           encoding="utf-8", errors="replace", timeout=180)
     except FileNotFoundError:
         sys.exit("错误：找不到 ssh 命令。")
     except subprocess.TimeoutExpired:
@@ -366,11 +367,13 @@ def run_remote(cfg, shell_line, host="__default__", use_stdin=False):
         shell_line = "export PATH=\"%s:$PATH\"; %s" % (_pp, shell_line)
     if use_stdin:
         cmd = (_ssh_cmd(cfg, host, ["timeout 600 bash -s"]) if host else ["bash", "-s"])
-        r = subprocess.run(cmd, input=shell_line, capture_output=True, text=True)
+        r = subprocess.run(cmd, input=shell_line, capture_output=True, text=True,
+                           encoding="utf-8", errors="replace")
     else:
         cmd = (_ssh_cmd(cfg, host, [shell_line])
                if host else ["bash", "-c", shell_line])
-        r = subprocess.run(cmd, capture_output=True, text=True)
+        r = subprocess.run(cmd, capture_output=True, text=True,
+                           encoding="utf-8", errors="replace")
     # Some subprocess implementations (notably Windows text pipes after a
     # decode failure) expose one stream as None.  Remote diagnostics should
     # preserve the return code and report whatever stream is available rather

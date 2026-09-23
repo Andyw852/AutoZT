@@ -34,8 +34,8 @@ S5 是唯一调用方/唯一裁判，其余位置读 S5 的结论。
 
 对每个负频 `(q, 支)` 取 `|ν|`，按以下顺序归类：
 
-1. `|ν| ≤ IMAG_THR_STRICT`（0.05 THz）                       → `noise`（不计入，verdict 仍是 pass）
-2. 近 Γ 区、声学支、`|ν| ≤ IMAG_THR`（0.15 THz）            → `near_gamma_acoustic` → **warn**
+1. `|ν| ≤ IMAG_THR_STRICT`（0.10 THz）                      → `noise`（不计入，verdict 仍是 pass）
+2. 近 Γ 区、声学支、`|ν| ≤ IMAG_THR`（0.10 THz）            → `near_gamma_acoustic` → **warn**
 3. 近 Γ 区、声学支、`|ν| > IMAG_THR`                        → `near_gamma_large` → **fail**
 4. 近 Γ 区外 或 光学支，且 `|ν| > IMAG_THR_STRICT`          → `off_gamma` / `optical` → **fail**
 
@@ -43,9 +43,10 @@ S5 是唯一调用方/唯一裁判，其余位置读 S5 的结论。
 
 ## 阈值依据
 
-- **IMAG_THR = 0.15 THz = 5 cm⁻¹**：对齐 Petretto 2018 的失稳标记阈值。
-  （语义已从"全局阈值"改为"**近 Γ 声学支上限**"。）
-- **IMAG_THR_STRICT = 0.05 THz**：数值噪声底；也是**近 Γ 区外与光学支**的上限。
+- **IMAG_THR = 0.10 THz（≈3.34 cm⁻¹）**：2026-09-22 用户决定，统一四处旧阈值到 0.10（< −0.10 判不稳定）。
+  （不再取 Petretto 的 5 cm⁻¹；语义是"**近 Γ 声学支上限**"，不是全局阈值。）
+- **IMAG_THR_STRICT = 0.10 THz**：2026-09-22 用户决定与 IMAG_THR 统一到 0.10；数值噪声底，也是**近 Γ 区外与光学支**的上限。
+  ⚠️ 两者同为 0.10 后，`near_gamma_acoustic`（warn）档实际不再触发：`|ν| ≤ 0.10` 先被归为 noise；`> 0.10` 归为 near_gamma_large / off_gamma / optical（fail）。
   近 Γ 区外比 MP 的入库标注更严 —— 本函数是**拦 S6 的门禁**，不是入库标注。
   Lin, Poncé, Marzari, npj Comput. Mater. 8, 236 (2022) 把远离 Γ 的虚频视为真失稳特征。
 - **IMAG_QGAMMA = 0.05**（分数坐标）：Petretto 2018 的近 Γ 窗口半径。
@@ -58,8 +59,8 @@ POLICY_VERSION = "imag_policy/1.0"
 THZ_TO_CM1 = 33.35641                      # 1 THz = 33.35641 cm^-1
 
 DEFAULTS = {
-    "IMAG_THR": 0.15,          # 近 Γ 声学支上限 (THz) = 5 cm^-1（Petretto 2018）
-    "IMAG_THR_STRICT": 0.05,   # 噪声底；近 Γ 区外与光学支的上限 (THz)
+    "IMAG_THR": 0.10,          # 近 Γ 声学支上限 (THz)；2026-09-22 用户决定：统一到 0.10（< −0.10 判不稳定）
+    "IMAG_THR_STRICT": 0.10,   # 噪声底；2026-09-22 用户决定：与 IMAG_THR 一起统一到 0.10（< −0.10 判不稳定）
     "IMAG_QGAMMA": 0.05,       # 近 Γ 半径（分数坐标，Petretto 2018）
     "IMAG_QGAMMA_GRACE": 1.2,  # 声学支有效近 Γ 窗口 = IMAG_QGAMMA × 它（1.0 = 退回严格口径）
 }

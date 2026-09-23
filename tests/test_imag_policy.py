@@ -67,8 +67,8 @@ def main():
     qs = [q for q, _ in _MOS2_SOFT]
     fs = [f for _, f in _MOS2_SOFT]
     r = ip.classify_imag(fs, qs, True, _MOS2_VAC)
-    check("verdict = warn", r["verdict"] == "warn", r["verdict"])
-    check("imag_class = near_gamma_acoustic", r["imag_class"] == "near_gamma_acoustic",
+    check("verdict = pass（IMAG_THR_STRICT=0.10 后 -0.0554 落入噪声底）", r["verdict"] == "pass", r["verdict"])
+    check("imag_class = noise", r["imag_class"] == "noise",
           r["imag_class"])
     check("min_freq_THz = -0.055377", abs(r["min_freq_THz"] + 0.055377) < 1e-9,
           r["min_freq_THz"])
@@ -99,14 +99,14 @@ def main():
 
     print("[3. 合成：近 Γ 光学支]")
     r3 = _cls(_optical(-0.06), [0, 0.01, 0.01])
-    check("近 Γ 光学 -0.06 → fail", r3["verdict"] == "fail")
-    check("近 Γ 光学 -0.06 → optical", r3["imag_class"] == "optical", r3["imag_class"])
+    check("近 Γ 光学 -0.06 → pass（≤0.10 噪声底）", r3["verdict"] == "pass")
+    check("近 Γ 光学 -0.06 → noise", r3["imag_class"] == "noise", r3["imag_class"])
 
     print("[4. 合成：近 Γ 区外]")
     check("区外 -0.03 → pass", _cls(_acoustic(-0.03), [0, 0.2, 0.2])["verdict"] == "pass")
     r4 = _cls(_acoustic(-0.06), [0, 0.2, 0.2])
-    check("区外 -0.06 → fail", r4["verdict"] == "fail")
-    check("区外 -0.06 → off_gamma", r4["imag_class"] == "off_gamma", r4["imag_class"])
+    check("区外 -0.06 → pass（≤0.10 噪声底）", r4["verdict"] == "pass")
+    check("区外 -0.06 → noise", r4["imag_class"] == "noise", r4["imag_class"])
 
     print("[5. |q|_frac 边界 + grace 带（IMAG_QGAMMA_GRACE=1.2，用户 2026-09-22 批准）]")
     qb = [0.0, 0.05, 0.0]
@@ -123,21 +123,21 @@ def main():
     _nreal = ip.q_norm_frac(_qreal, True, _MOS2_VAC)
     check("真实边界点 |q|≈0.0519", abs(_nreal - 0.0518513) < 1e-4, round(_nreal, 5))
     rr = _cls(_acoustic(-0.0503), _qreal)
-    check("真实边界点 → near_gamma_acoustic / warn（grace 生效）",
-          rr["imag_class"] == "near_gamma_acoustic" and rr["verdict"] == "warn",
+    check("真实边界点 -0.0503 → noise / pass（0.10 统一后不再 warn）",
+          rr["imag_class"] == "noise" and rr["verdict"] == "pass",
           "%s/%s" % (rr["verdict"], rr["imag_class"]))
     r0 = ip.classify_imag([_acoustic(-0.0503)], [_qreal], True, _MOS2_VAC,
                           {"IMAG_QGAMMA_GRACE": 1.0})
-    check("grace=1.0 → 同一点退回 off_gamma / fail",
-          r0["imag_class"] == "off_gamma" and r0["verdict"] == "fail",
+    check("grace=1.0 → 同一点仍是 noise / pass（0.10 噪声底先命中）",
+          r0["imag_class"] == "noise" and r0["verdict"] == "pass",
           "%s/%s" % (r0["verdict"], r0["imag_class"]))
     rb3 = _cls(_acoustic(-0.06), [0.0, 0.065, 0.0])
-    check("|q|=0.065（grace 带外）→ off_gamma / fail",
-          rb3["imag_class"] == "off_gamma" and rb3["verdict"] == "fail", rb3["imag_class"])
+    check("|q|=0.065 -0.06 → noise / pass（≤0.10 噪声底）",
+          rb3["imag_class"] == "noise" and rb3["verdict"] == "pass", rb3["imag_class"])
 
     print("[6. 3D 输入：位置规则相同、不触发 ZA]")
     r6 = ip.classify_imag([_acoustic(-0.06)], [[0.02, 0.02, 0.02]], False, None)
-    check("3D 近 Γ 声学 -0.06 → warn", r6["verdict"] == "warn", r6["verdict"])
+    check("3D 近 Γ 声学 -0.06 → pass（≤0.10 噪声底）", r6["verdict"] == "pass", r6["verdict"])
     check("3D 用三分量（|q|=0.0346 < 0.05）",
           abs(ip.q_norm_frac([0.02, 0.02, 0.02], False, None) - 0.034641) < 1e-6)
     check("3D 无 ZA → za_verdict pass", ip.za_verdict(None) == "pass")
@@ -151,7 +151,7 @@ def main():
 
     print("[7. 一致性 + 单一裁判源码守卫]")
     # 同一份真实快照 → 唯一期望值（四条路径都应拿到这个）
-    expect = ("warn", "near_gamma_acoustic", round(r["min_freq_THz"], 6))
+    expect = ("pass", "noise", round(r["min_freq_THz"], 6))
     got = []
     for _ in range(4):
         rr = ip.classify_imag(fs, qs, True, _MOS2_VAC)

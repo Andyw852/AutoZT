@@ -36,15 +36,15 @@ autozt --version
 vi ~/software/AutoZT/setting/tf.yaml
 
 # 3. 初始化一个材料项目（生成 project_setting）
-cd 你的材料根目录 && autozt -tt opt-mace-cpu init
+cd 你的材料根目录 && autozt -tt opt-mlff-cpu init
 
 # 4. 开跑 + 后台监控
 autozt auto on                      # 开全局自动推进
-autozt -tt opt-mace-cpu monitor -d    # 后台监控：自动拉结果 + 自动提交下一步
+autozt -tt opt-mlff-cpu monitor -d    # 后台监控：自动拉结果 + 自动提交下一步
 
 # 5. 巡检
 autozt summary --diff               # 首选巡检：无变化 0 字节
-autozt -tt opt-mace-cpu summary     # 只看某技能
+autozt -tt opt-mlff-cpu summary     # 只看某技能
 
 # 给模型或脚本的稳定 JSON 接口（不需要 MCP）
 autozt agent capabilities
@@ -100,7 +100,7 @@ printf '%s\n%s\n' '{"op":"capabilities"}' '{"op":"snapshot"}' | autozt agent ser
 对应的 `skill/<技能>/skill.yaml`，包括输入、输出、步骤依赖、参数和纠错策略。MCP
 只暴露通用动词，不为技能或步骤单独增加工具。
 
-## 大规模实战（2926 材料 · opt-mace-cpu · jzzn）
+## 大规模实战（2926 材料 · opt-mlff-cpu · jzzn）
 
 一次跑完 2926 个金属掺杂富勒烯结构（38 金属 × 各笼型 × 各位点）的 MACE 结构优化 + 形成能，经验记录如下，供新项目参考：
 
@@ -109,7 +109,7 @@ printf '%s\n%s\n' '{"op":"capabilities"}' '{"op":"snapshot"}' | autozt agent ser
 - **共享 project_setting（体系级布局）**：几千材料时用一份 `project_setting`（`local_root` 指向项目根），避免每材料一份配置把扫描拖慢；对应地 `autozt` 已修复共享布局下 `-p <材料>` 定位。
 - **大体系采集自动分块**：`autozt` 会按 `AUTOZT_COLLECT_CHUNK`（默认 500）把同组材料分块 ssh 采集，避免 "Argument list too long"。
 - **2D 结构真空轴规范**：工作流要求 2D 结构真空沿 c 轴（第 3 个晶格矢量），生成结构时注意；已算过的若真空在别的轴，需旋转晶格（保持笛卡尔坐标）再重跑。
-- **形成能参考化学势 μ**：`scripts/mace_mu/` 提供本地算 38 金属单质每原子能量的固化脚本（`setup_local.sh` + `run_mu.sh`），产出 `MU = ...` 单行填进 step3 配置。
+- **形成能参考化学势 μ**：`scripts/mlff_mu/` 提供本地算 38 金属单质每原子能量的固化脚本（`setup_local.sh` + `run_mu.sh`），产出 `MU = ...` 单行填进 step3 配置。
 
 ## 关键修复记录（本仓库已含）
 

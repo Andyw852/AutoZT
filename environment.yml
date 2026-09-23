@@ -9,7 +9,7 @@
 #   真正需要 Python 科学栈的是「各技能」在超算端跑的计算脚本，按技能分环境（见文末注释）。
 #
 # 本文件给出 MACE/MLFF 类技能的主环境（skill.yaml 里的 conda: mace）：
-#   kl-mace-cpu / kl-mace-gpu / phonon-mace-cpu / mlff-mace 共用。
+#   kl-mlff-cpu / kl-mlff-gpu / phonon-mlff-cpu / mlff 共用。
 # CPU/GPU 只差 torch 那几行：CPU 换 cpuonly + pytorch，GPU 按显卡选 cudatoolkit 版本，
 # 环境名照项目现状（jzzn=venv mace_cpu/torch CPU、3090=conda mace-gpu、a800=conda mace/cu128）。
 
@@ -32,7 +32,7 @@ dependencies:
   - matplotlib
   # ---- 声子 / 力常数 ----
   - phonopy
-  - phono3py                   # 同时提供 phono3py 命令行（kl-mace 的 exe 依赖）
+  - phono3py                   # 同时提供 phono3py 命令行（kl-mlff 的 exe 依赖）
   - symfc
   - alm
 
@@ -53,11 +53,11 @@ dependencies:
 #                                  从 jzzn conda-pack 迁移（见 skill/ke-dft-cpu/HSE_NOTES.md）
 #   kl-dft-cpu        -> conda atomate2_p_a: phonopy phono3py numpy spglib
 #   elastic-dft-cpu   -> 超算登录节点 pip install --user pymatgen matplotlib
-#   opt-mace-cpu      -> jzzn venv ~/venvs/mace_cpu: torch(cpu)+mace-torch+ase+numpy
-#   opt-mace-gpu      -> 3090 conda mace-gpu:      torch(cuda)+mace-torch+ase+numpy
+#   opt-mlff-cpu      -> jzzn venv ~/venvs/mace_cpu: torch(cpu)+mace-torch+ase+numpy
+#   opt-mlff-gpu      -> 3090 conda mace-gpu:      torch(cuda)+mace-torch+ase+numpy
 #
 # 非 Python 外部程序（conda 装不了，需自备 / 有许可）：
-#   VASP 6.x（vasp_std）  商业许可；band/elastic/ke/kl/opt-dft 及 mlff-mace 标注用
-#   vaspkit               ke-dft-cpu / kl-dft-cpu / mlff-mace 依赖
-#   phono3py 命令行        kl-dft-cpu / kl-mace 依赖（conda 装 phono3py 已含）
+#   VASP 6.x（vasp_std）  商业许可；band/elastic/ke/kl/opt-dft 及 mlff 标注用
+#   vaspkit               ke-dft-cpu / kl-dft-cpu / mlff 依赖
+#   phono3py 命令行        kl-dft-cpu / kl-mlff 依赖（conda 装 phono3py 已含）
 # =====================================================================

@@ -55,7 +55,7 @@ than a refusal (the verb is absent from the tool table, and the dispatcher doubl
 |---|---|
 | input generation, 18 skills | 16/18 (cohp-cogito and fc-fit require upstream products, by design) |
 | real submissions of the first computable step | 15/15 finished OK |
-| VASP 4-core projection | converged for band / elastic / ke / kl / phonon / opt and mlff-mace |
+| VASP 4-core projection | converged for band / elastic / ke / kl / phonon / opt and mlff |
 | force-constant fitting (fc-fit, hiphive, Si, 10 frames x 250 atoms) | fc2.hdf5, fc3.hdf5, ShengBTE export written; phonon verdict stable (min_freq ~ 0 THz) |
 
 ## 4. Cost of the two operating modes

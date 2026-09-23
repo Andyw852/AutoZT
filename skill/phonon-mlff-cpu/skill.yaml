@@ -1,0 +1,88 @@
+# =============================================================================
+# skill/phonon-mlff-cpu/skill.yaml —— MACE 声子谱（仅 2 阶力常数，无 3 阶、无热导率）
+#
+# 从 kl-mlff-cpu 拆出：只算声子，不碰 fc3 / BTE。
+#   S1_relax   MACE 弛豫（同 kl-mlff-cpu）
+#   S2_force   随机位移（帧数由 ALM 2 阶自由力常数反推，振幅 0.01 Å）+ MACE 取力
+#   S3_phonon  symfc 拟合 fc2 → q-mesh 虚频闸 + band-dft-cpu.yaml → phonon_summary.json
+#
+# 引擎在 skill/phonon-mlff-cpu/ 与 _common/mlff/（mlff_relax.py / mlff_model.py /
+# klmlff_common.py / submit_mlff_relax.tpl 共用）。
+# =============================================================================
+schema: 2
+name: phonon-mlff-cpu
+desc: 声子谱(MACE/CPU)
+version: "0.1"
+
+template_layout: per_step
+template_dir: templates
+
+defaults:
+  hpc: jzzn
+  skill_subdir: true
+
+fetch_files: [POSCAR, CONTCAR, SPOSCAR, workflow_method.txt, relax_summary.json,
+              forces_summary.json, phonon_summary.json, band-dft-cpu.yaml, submit.sh,
+              mlff_relax.log, mlff_forces.log, phonon.log, queue.out, queue.err,
+              phonon_band_full.png, phonon_band_lowfreq.png, phonon_band_summary.json,
+              disps.npy, forces.npy, phonopy_disp.yaml, klmlff_params.txt, step.conf,
+              fc2.hdf5, force_constants.hdf5, FORCE_CONSTANTS, relax.traj,
+              cutoff_conv_summary.json, cutoff_conv_quality.json, band-cut*.yaml]
+
+steps:
+  - {seq: 1, name: step1_mlff_relax, label: S1_relax,
+     check: marker, marker: 'relax_summary.json:"converged": true',
+     gen: gen_step1_mlff_relax.py,
+     gen_need: [dim_common.py, stepconf.py, step.conf, klmlff_common.py, za_2d.py, imag_policy.py,
+                mlff_model.py, mlff_relax.py, submit_mlff_relax.tpl]}
+
+  - {seq: 2, name: step2_disp_force, label: S2_force,
+     check: marker, marker: "forces_summary.json:FORCES_DONE",
+     gen: gen_step2_disp_phonon.py,
+     gen_need: [dim_common.py, stepconf.py, step.conf, klmlff_common.py, za_2d.py, imag_policy.py,
+                mlff_model.py, mc_rattle.py, mlff_forces_phonon.py,
+                submit_mlff_relax.tpl]}
+
+  - {seq: 3, name: step3_phonon, label: S3_phonon,
+     check: marker, marker: 'phonon_summary.json:"PHONON_DONE": true',
+     gen: gen_step3_phonon.py,
+     gen_need: [dim_common.py, stepconf.py, step.conf, klmlff_common.py, za_2d.py, imag_policy.py,
+                phonon_fit_driver.py, submit_mlff_relax.tpl]}
+
+# S4 声子谱绘图（登录节点 run: gen，不提交作业）：读 step3_phonon/band-dft-cpu.yaml 画
+#   全范围 + 0~10 THz 低频放大两张（共享脚本 _common/mlff/plot_phonon_band.py）。
+optional_steps:
+  phonon_plot:
+    default: true
+    steps:
+      - {seq: 4, name: phonon_band_plot, label: S4_plot, after: step3_phonon,
+         gen: "plot_phonon_band.py", check: plot, run: gen, gen_need: [],
+         done_marker: phonon_band_summary.json, fetch_all: true}
+
+  # FC_CUTOFF 收敛性检查（default: false，不自动跑；autozt start -j 按需启用）。
+  # 对每个 cutoff 重拟合 fc2 + mesh(60) + band，写 cutoff_conv_summary.json。
+  cutoff_conv:
+    default: false
+    steps:
+      - {seq: 5, name: step4_cutoff_conv, label: S5_conv, after: step3_phonon,
+         check: marker, marker: 'cutoff_conv_summary.json:"CUTOFF_CONV_DONE": true',
+         gen: gen_step4_cutoff_conv.py,
+         gen_need: [dim_common.py, stepconf.py, step.conf, klmlff_common.py, za_2d.py, imag_policy.py,
+                    cutoff_conv_driver.py, submit_mlff_relax.tpl,
+                    disps.npy, forces.npy, klmlff_params.txt, workflow_method.txt]}
+
+io_schema:
+  inputs: [{name: POSCAR, from: user, required: true, desc: "材料结构"}, {name: MACE_MODEL, from: config, required: true, desc: "MACE 势模型路径"}]
+  outputs: [{name: phonon_summary.json, step: S3_phonon, type: json, desc: "声子谱与虚频检查"}, {name: CONTCAR, step: S1_relax, type: structure, desc: "优化后结构"}]
+  params: [{name: DEVICE, values: [cpu], default: cpu, where: step.conf, desc: "MACE 推理设备"}]
+  steps:
+    - {step: S1_relax, title: "MACE relax", inputs: [POSCAR, MACE_MODEL], outputs: [CONTCAR], validator: "converged marker"}
+    - {step: S2_force, title: "Displacement forces", inputs: [CONTCAR, MACE_MODEL], outputs: [forces_summary.json], validator: "FORCES_DONE"}
+    - {step: S3_phonon, title: "Phonon fit", inputs: [forces_summary.json], outputs: [phonon_summary.json], validator: "PHONON_DONE"}
+flow:
+  summary: "MACE 弛豫 → 随机位移力 → fc2 拟合与声子谱"
+  stages: [{name: phonon, steps: [S1_relax, S2_force, S3_phonon], produces: [phonon_summary.json]}]
+corrections: [node_fail, dir_missing]
+requires:
+  python: [mace-torch, torch, ase, phonopy, symfc, spglib, numpy, alm]
+  conda: mace

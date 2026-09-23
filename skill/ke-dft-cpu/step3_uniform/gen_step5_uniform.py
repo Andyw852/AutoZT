@@ -182,6 +182,18 @@ def main():
     if _st and len(_st) == 3:
         for i in _axes:
             _need[i] = max(_need[i], 2 * _st[i])
+    # ③ 高对称点对齐（2D）：带边高对称点（六方 K=(1/3,1/3)、正方 X/M=(1/2,…)）要落在
+    #    Γ 心网格上，面内 N 必须被 3（K）或 2（X/M）整除。取 6 的倍数一并覆盖。否则带边
+    #    锚在离网的非极值点，方向分解 m* 拟合会静默给出错误轻质量（CrSe2 46×46 实测 0.52
+    #    vs 真值 1.03；46 不被 3 整除）。只向上取整、不放松。
+    if dim == "2d":
+        _al = [_need[i] for i in _axes]
+        _al2 = [int(np.ceil(n / 6.0)) * 6 for n in _al]
+        if _al2 != _al:
+            print("[WARN] 2D 高对称点对齐：面内分割 %s -> %s（取 6 的倍数，保证 K/M 在网格上）"
+                  % (_al, _al2))
+            for _j, _i in enumerate(_axes):
+                _need[_i] = _al2[_j]
     if _need != _n[:3]:
         print("[WARN] 网格 %dx%dx%d（笛卡尔间距 %.3f/%.3f/%.3f Å⁻¹）不满足 DK_MAX=%.3f"
               "（含 2x 静态下限），按轴提到 %dx%dx%d"

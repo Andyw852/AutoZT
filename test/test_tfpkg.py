@@ -19,6 +19,47 @@ os.chdir(_ROOT)
 import autozt
 
 
+def test_skill_subdir_is_the_default_local_result_boundary():
+    """每个技能共享材料根 POSCAR，但默认隔离各自的 result/log。"""
+    from pathlib import Path
+
+    with tempfile.TemporaryDirectory() as folder:
+        material = Path(folder) / "Si"
+        material.mkdir()
+        (material / "POSCAR").write_text("Si\n1\n1 0 0\n0 1 0\n0 0 1\n1\nDirect\n0 0 0\n",
+                                           encoding="utf-8")
+        t = {"key": "kl-dft-cpu", "skill_subdir": True,
+             "work_dir": str(Path(folder) / "remote"), "hpc": "jzzn"}
+        found_root, mats = autozt.discover_local(str(Path(folder)))
+        assert found_root == str(Path(folder).resolve())
+        autozt.resolve_material_local(t, found_root, mats[0])
+        assert os.path.normpath(mats[0]["result_dir"]) == os.path.normpath(str(material / "kl-dft-cpu" / "result"))
+        assert os.path.normpath(mats[0]["log_dir"]) == os.path.normpath(str(material / "kl-dft-cpu" / "log"))
+        assert mats[0]["rpath"].endswith("/Si/kl-dft-cpu") or mats[0]["rpath"].endswith("\\Si\\kl-dft-cpu")
+
+
+def test_skill_subdir_respects_explicit_result_and_log_dirs():
+    """用户显式配置的目录是有意覆盖，不能被默认布局重写。"""
+    from pathlib import Path
+
+    with tempfile.TemporaryDirectory() as folder:
+        material = Path(folder) / "Si"
+        material.mkdir()
+        (material / "POSCAR").write_text("Si\n1\n1 0 0\n0 1 0\n0 0 1\n1\nDirect\n0 0 0\n",
+                                           encoding="utf-8")
+        ps = material / "kl-dft-cpu" / "project_setting"
+        ps.mkdir(parents=True)
+        (ps / "setting.yaml").write_text(
+            'result_dir: "{matdir}/shared-results"\nlog_dir: "{matdir}/shared-log"\n',
+            encoding="utf-8")
+        t = {"key": "kl-dft-cpu", "skill_subdir": True,
+             "work_dir": str(Path(folder) / "remote"), "hpc": "jzzn"}
+        found_root, mats = autozt.discover_local(str(Path(folder)))
+        autozt.resolve_material_local(t, found_root, mats[0])
+        assert os.path.normpath(mats[0]["result_dir"]) == os.path.normpath(str(material / "shared-results"))
+        assert os.path.normpath(mats[0]["log_dir"]) == os.path.normpath(str(material / "shared-log"))
+
+
 def test_vasp_selection_uses_cluster_profiles():
     from autozt.workflow import render_vasp_template
     profiles = {
@@ -105,7 +146,7 @@ def test_auto_resume_scopes_cancelled_steps():
         setting.write_text("auto_advance: false\n", encoding="utf-8")
         material = {"lpath": folder, "tt": "ke-dft-cpu"}
         marks = {"ke-dft-cpu/step5": {"jobid": "1"},
-                 "phonon-mace-cpu/step2": {"jobid": "2"}}
+                 "phonon-mlff-cpu/step2": {"jobid": "2"}}
         workflow._scancel_save(material, marks)
         with patch.object(ops, "skill_keys", return_value=["ke-dft-cpu"]), \
              patch.object(ops, "resolve_mat_dir", return_value=folder), \
@@ -113,14 +154,14 @@ def test_auto_resume_scopes_cancelled_steps():
             assert ops.cmd_auto_project({"auto_advance": True}, [], "Mg4C60", "ke-dft-cpu", "on") == 0
             assert workflow._scancel_load(material) == marks
             assert ops.cmd_auto_project({"auto_advance": True}, [], "Mg4C60", "ke-dft-cpu", "resume") == 0
-            assert workflow._scancel_load(material) == {"phonon-mace-cpu/step2": {"jobid": "2"}}
+            assert workflow._scancel_load(material) == {"phonon-mlff-cpu/step2": {"jobid": "2"}}
 
 
 # ---------- 构造合成 data ----------
 def _mk_data():
     return {
         "types": [{
-            "key": "opt-mace-cpu",
+            "key": "opt-mlff-cpu",
             "root": "/tmp/root",
             "materials": [
                 {"name": "Si", "path": "/tmp/root/Si", "steps": [
@@ -173,16 +214,16 @@ def test_load_config_real():
 def test_discover_skills():
     skills = autozt.discover_skills({})
     assert len(skills) >= 15, "应发现 15+ 技能，实际 %d" % len(skills)
-    for k in ("opt-mace-cpu", "band-dft-cpu", "mlff-mace"):
+    for k in ("opt-mlff-cpu", "band-dft-cpu", "mlff"):
         assert k in skills, "缺少技能 %s" % k
-    assert isinstance(skills["opt-mace-cpu"].get("steps"), list)
+    assert isinstance(skills["opt-mlff-cpu"].get("steps"), list)
 
 
 def test_apply_skills():
     cfg = {}
     autozt.apply_skills(cfg)
     assert "task_types" in cfg
-    assert "opt-mace-cpu" in cfg["task_types"]
+    assert "opt-mlff-cpu" in cfg["task_types"]
     assert "_skills" in cfg
 
 
@@ -208,14 +249,14 @@ def test_step_status_word():
 
 def test_summary_lines():
     lines = autozt._summary_lines(_mk_data())
-    assert any("opt-mace-cpu: 2 材料 done=0 run=1 pd=0 err=1" in l for l in lines)
+    assert any("opt-mlff-cpu: 2 材料 done=0 run=1 pd=0 err=1" in l for l in lines)
     assert any("FAIL Ge step1 force not converged" in l for l in lines)
     assert any("队列(全部作业): R=1 PD=0 共 1" in l for l in lines)
 
 
 def test_summary_json():
     j = autozt._summary_json(_mk_data())
-    assert j["types"][0]["key"] == "opt-mace-cpu"
+    assert j["types"][0]["key"] == "opt-mlff-cpu"
     assert j["types"][0]["materials"] == 2
     assert j["types"][0]["counts"] == {"done": 0, "run": 1, "pd": 0, "err": 1, "scancel": 0, "wait": 0}
     assert j["types"][0]["fails"][0]["material"] == "Ge"
@@ -289,11 +330,11 @@ def test_cli_dry_run():
 def test_cli_diagnose():
     # 沙盒：一键结构化诊断（只读、不提交）
     sand = os.path.join(_ROOT, "test", "sandbox", "tf.yaml")
-    rc, out, err = _run("python3 bin/autozt -c %s -tt opt-mace-cpu -p Si diagnose" % sand)
+    rc, out, err = _run("python3 bin/autozt -c %s -tt opt-mlff-cpu -p Si diagnose" % sand)
     assert rc == 0, "rc=%d err=%s" % (rc, err)
     d = json.loads(out)
     assert d["material"] == "Si"
-    assert d["type"] == "opt-mace-cpu"
+    assert d["type"] == "opt-mlff-cpu"
     assert "steps" in d and "hpc" in d
 
 
@@ -399,7 +440,7 @@ def test_diagnose():
     # cmd_diagnose：默认输出 FAIL 步，结构化带 diag_code + suggested_action
     d = autozt.cmd_diagnose({}, _mk_data(), "Ge", None)
     assert d["material"] == "Ge"
-    assert d["type"] == "opt-mace-cpu"
+    assert d["type"] == "opt-mlff-cpu"
     assert len(d["steps"]) == 1
     s = d["steps"][0]
     assert s["label"] == "step1"
@@ -427,7 +468,7 @@ def test_json_paginate():
     assert out["offset"] == 0 and out["limit"] == 10
     names = [m["name"] for m in out["materials"]]
     assert names == ["Ge", "Si"]                        # 按 (type,name) 排序
-    assert out["materials"][0]["type"] == "opt-mace-cpu"
+    assert out["materials"][0]["type"] == "opt-mlff-cpu"
     # limit=1 只取 1 个
     assert len(autozt._json_paginate(_mk_data(), 0, 1)["materials"]) == 1
     # offset=1 跳过第 1 个
@@ -447,7 +488,7 @@ def test_json_changes():
         r2 = autozt._json_changes(d2, path)
         assert r2["first_run"] is False and r2["count"] == 1
         c = r2["changes"][0]
-        assert (c["type"], c["material"], c["step"]) == ("opt-mace-cpu", "Ge", "step1")
+        assert (c["type"], c["material"], c["step"]) == ("opt-mlff-cpu", "Ge", "step1")
         assert c["old"] == "FAIL" and c["new"] == "done"
         # 同数据再跑 → unchanged
         r3 = autozt._json_changes(d2, path)

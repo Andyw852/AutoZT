@@ -327,7 +327,7 @@ def _result(risk, rc=0, data=None, error=None, text=None):
         rendered = text
     elif data is not None and _science_text(data):
         rendered = _science_text(data)
-    elif data is not None and profile in ("compact", "monitor", "workflow", "agent"):
+    elif data is not None and profile != "full":
         # Modern MCP clients consume structuredContent directly. Avoid sending the same
         # potentially large snapshot twice in the model-facing text channel.
         brief = {k: payload[k] for k in ("ok", "risk", "returncode", "schema_version")}
@@ -636,6 +636,12 @@ def _cycle(args):
         # Use the cursor observed by agent_service.inspect/cycle.  _apply_actions
         # performs the final CAS read immediately before the first act call.
         apply_args = {"dry_run": dry_run, "actions": actions}
+        # The CAS check must reload the same scoped state that produced the
+        # plan.  Without this, scoped cycles compare a scoped cursor against
+        # the global state and always report a stale plan.
+        apply_args.update({key: args[key] for key in
+                           ("tt", "material", "step", "status")
+                           if args.get(key) not in (None, "")})
         if not dry_run and expected_cursor:
             apply_args["cursor"] = expected_cursor
         result = _apply_actions(apply_args)
@@ -844,13 +850,19 @@ def _profile_tool_names():
     # Keep the default model-facing surface small.  The complete compatibility
     # surface remains available explicitly with AUTOZT_MCP_PROFILE=full.
     profile = (os.environ.get("AUTOZT_MCP_PROFILE") or "workflow").strip().lower()
+    if profile in ("readonly", "read-only", "ro"):
+        return {item[0] for item in TOOLS if item[3] == "read"}
     if profile == "compact":
         return COMPACT_TOOLS
     if profile == "monitor":
         return MONITOR_TOOLS
     if profile in ("workflow", "agent"):
         return WORKFLOW_TOOLS
-    return {item[0] for item in TOOLS}
+    if profile == "full":
+        return {item[0] for item in TOOLS}
+    # A typo in a security-sensitive setting must never grant the full
+    # compatibility surface.  Fail closed to the smallest useful profile.
+    return COMPACT_TOOLS
 
 
 def _tools_list():

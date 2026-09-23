@@ -1,0 +1,163 @@
+# =============================================================================
+# skill/device-thermal/skill.yaml —— 器件级传热仿真（2D 材料 / FET 自热）
+#
+# 目的：把材料级热学结果（kl-dft-cpu 的 kappa 张量 + 厚度）与界面热导、器件几何、
+#       焦耳热源组装成真实器件的稳态/瞬态温度场，输出热点温升 dT、有效热阻 R_th、
+#       温度分布图。这是"从材料筛选走向真实器件模拟"的最后一环。
+#
+# 四步都是 run: gen（登录节点秒级，纯 numpy，不提交 SLURM、不占 GPU）：
+#   S1_spec   读 step.conf -> 器件几何/热源/边界 device_spec.json
+#   S2_props  上游 kl-dft-cpu 实测 kappa + 厚度 + 材料库兜底 + 界面 TBC -> thermal_props.json
+#   S3_solve  二维各向异性有限体积稳态 + 瞬态 -> device_thermal_summary.json + T_field.json
+#   S4_report 温度场图 + 汇总 -> device_report.json (+ device_thermal_Tmap.png)
+#
+# 可选 GPU 扩展（optional_steps.gpu_tbc，默认关）：S5_tbc 生成 GPUMD NEMD 界面 TBC
+#   输入并给运行脚本（3090 已编译 GPUMD）；S6_tbc_post 从 T(z) 剖面提 G。
+#   通用：任意界面结构/元素、任意传输轴(x/y/z)、任意 GPUMD 势。
+#   热流 q 由源/漏恒温器的累积传能直接给出（compute 输出最后两列），不依赖文献 kappa。
+#   弹道 BTE（OpenBTE/JAX-BTE）仍需另行安装，见 GPU-TBC-RECIPE.md。
+# =============================================================================
+schema: 2
+name: device-thermal
+desc: 器件级传热仿真(2D材料/FET)
+version: "0.1"
+
+template_layout: shared
+
+defaults:
+  hpc: jzzn
+  skill_subdir: true
+
+fetch_files: [device_spec.json, thermal_props.json, device_thermal_summary.json,
+              T_field.json, device_report.json, device_thermal_Tmap.png,
+              tbc_inputs.json, tbc_result.json]
+
+steps:
+  - {seq: 1, name: step1_device_spec, label: S1_spec, check: marker,
+     marker: 'device_spec.json:"DEVICE_SPEC"', run: gen, done_marker: device_spec.json,
+     gen: gen_step1_device_spec.py,
+     gen_need: [stepconf.py, step.conf, device_common.py, device_materials.json]}
+
+  - {seq: 2, name: step2_props, label: S2_props, check: marker,
+     marker: 'thermal_props.json:"PROPS_DONE"', run: gen, done_marker: thermal_props.json,
+     gen: gen_step2_props.py, needs: [step1_device_spec],
+     gen_need: [stepconf.py, step.conf, device_common.py, device_materials.json]}
+
+  - {seq: 3, name: step3_solve, label: S3_solve, check: marker,
+     marker: 'device_thermal_summary.json:"SOLVE_DONE"', run: gen,
+     done_marker: device_thermal_summary.json,
+     gen: gen_step3_solve.py, needs: [step2_props],
+     gen_need: [stepconf.py, step.conf, device_common.py, device_materials.json]}
+
+  - {seq: 4, name: step4_report, label: S4_report, check: marker,
+     marker: 'device_report.json:"REPORT_DONE"', run: gen, done_marker: device_report.json,
+     gen: gen_step4_report.py, needs: [step3_solve],
+     gen_need: [stepconf.py, step.conf, device_common.py, device_materials.json]}
+
+# ===== 可选 GPU 步（默认关）：需要材料/超算具备 GPU + GPUMD =====
+optional_steps:
+  gpu_tbc:
+    default: false
+    desc: "GPUMD NEMD 界面热导（GPU/3090）；需用户提供界面结构 extxyz，且先建好 GPUMD"
+    steps:
+      - {seq: 5, name: step5_tbc, label: S5_tbc, after: step4_report, hpc: "3090",
+         gen: gen_step5_tbc.py, check: marker, run: gen,
+         gen_need: [stepconf.py, step.conf, tbc_interface.xyz],
+         marker: 'tbc_inputs.json:"TBC_INPUTS_DONE"', done_marker: tbc_inputs.json}
+      - {seq: 6, name: step6_tbc_post, label: S6_tbc_post, after: step5_tbc,
+         needs: [step5_tbc], hpc: "3090",
+         gen: gen_step6_tbc_post.py, check: marker, run: gen, gen_need: [stepconf.py, step.conf],
+         marker: 'tbc_result.json:"TBC_POST_DONE"', done_marker: tbc_result.json}
+
+io_schema:
+  inputs:
+    - {name: kappa_summary.json, from: "skill:kl-dft-cpu", required: false,
+       desc: "上游材料级晶格热导率（面内 kappa 张量）；缺省时回退 device_materials.json 文献值"}
+    - {name: thickness_2d.json, from: "skill:kl-dft-cpu", required: false,
+       desc: "2D 材料有效厚度 thickness_d_A（Å）；缺省时用材料库厚度"}
+    - {name: device_materials.json, from: "skill:device-thermal", required: true,
+       desc: "内置材料/界面热导库（kappa、rho_cp、TBC）"}
+  outputs:
+    - {name: device_spec.json, step: S1_spec, type: json, desc: "器件几何/热源/边界规格"}
+    - {name: thermal_props.json, step: S2_props, type: json, desc: "各层 kappa/厚度/热容 + 界面 TBC（含来源）"}
+    - {name: device_thermal_summary.json, step: S3_solve, type: json, desc: "稳态热点 dT、R_th、温度剖面、瞬态 tau"}
+    - {name: T_field.json, step: S3_solve, type: json, desc: "二维温度场 T(x,y) 与坐标"}
+    - {name: device_report.json, step: S4_report, type: json, desc: "器件热仿真汇总报告"}
+    - {name: tbc_inputs.json, step: S5_tbc, type: json, desc: "(可选GPU) GPUMD NEMD 输入清单与几何"}
+    - {name: tbc_result.json, step: S6_tbc_post, type: json, desc: "(可选GPU) 界面热导 G 与质量标记"}
+  params:
+    - {name: CHANNEL_MATERIAL, values: [MoS2, WS2, MoSe2, WSe2, graphene, hBN], default: MoS2, where: step.conf, desc: "沟道材料（材料库键）"}
+    - {name: OXIDE_MATERIAL, values: [SiO2, Al2O3, HfO2, hBN], default: SiO2, where: step.conf, desc: "栅介质/氧化层材料"}
+    - {name: SUBSTRATE_MATERIAL, values: [Si, SiC, Al2O3, Au, Cu], default: Si, where: step.conf, desc: "底部热沉材料"}
+    - {name: CHANNEL_THICKNESS, default: null, where: step.conf, desc: "可选：显式覆盖沟道厚度 (m)；空=用上游 thickness_d_A 或材料库"}
+    - {name: TBC_OVERRIDE, default: null, where: step.conf, desc: "可选：显式覆盖界面热导 G (W/m^2K)；接 GPU/MD 或实验值，空=查材料库"}
+    - {name: OXIDE_THICKNESS, default: 3e-7, where: step.conf, desc: "氧化层厚度 (m)"}
+    - {name: L_CHANNEL, default: 2e-7, where: step.conf, desc: "沟道长度 (m)"}
+    - {name: W_DEVICE, default: 1e-6, where: step.conf, desc: "器件宽度 (m)，折算总功率"}
+    - {name: Q_JOULE, default: 1e8, where: step.conf, desc: "焦耳功率密度 (W/m^2)"}
+    - {name: T_AMB, default: 300.0, where: step.conf, desc: "热沉温度 (K)"}
+    - {name: CONTACT_BC, values: [sink, insulator], default: sink, where: step.conf, desc: "金属接触边界：恒温/绝热"}
+    - {name: KAPPA_SOURCE, values: [auto, upstream, literature], default: auto, where: step.conf, desc: "kappa 取上游实测还是文献库"}
+    - {name: UPSTREAM_SKILL, values: [kl-dft-cpu, kl-mlff-gpu], default: kl-dft-cpu, where: step.conf, desc: "上游技能目录"}
+    - {name: N_GRID_X, default: 41, where: step.conf, desc: "沿沟道网格数"}
+    - {name: N_GRID_SUB, default: 60, where: step.conf, desc: "氧化层 y 网格数"}
+    - {name: DO_TRANSIENT, values: [true, false], default: true, where: step.conf, desc: "是否算瞬态升温"}
+    - {name: TBC_STRUCTURE, default: tbc_interface.xyz, where: step.conf, desc: "(可选GPU) 界面结构 extxyz；放技能目录或 project_setting/skill_dir/ 随 gen_need 推送，也可给 GPU 主机绝对路径"}
+    - {name: TBC_NEP_MODEL, default: "", where: step.conf, desc: "(可选GPU) 任意 GPUMD 势文件路径（GPU 主机本地）"}
+    - {name: TBC_GPUMD_BIN, default: "", where: step.conf, desc: "(可选GPU) gpumd 可执行文件路径"}
+    - {name: TBC_CUDA_VISIBLE_DEVICES, default: "", where: step.conf, desc: "(可选GPU) 指定 GPU（建议用 UUID，避开故障卡）"}
+    - {name: TBC_AXIS, values: [x, y, z], default: z, where: step.conf, desc: "(可选GPU) 传输/堆叠方向"}
+    - {name: TBC_PBC, default: "", where: step.conf, desc: "(可选GPU) 覆盖 pbc（如 'T T F'）；空=沿用结构文件"}
+    - {name: TBC_INTERFACE_COORD, default: null, where: step.conf, desc: "(可选GPU) 界面坐标(A)；空=按元素组分突变自动判定"}
+    - {name: TBC_INTERFACE_Z, default: null, where: step.conf, desc: "(可选GPU) 旧名，等价 TBC_INTERFACE_COORD（仅 z）"}
+    - {name: TBC_SOURCE_SIDE, values: [high, low], default: high, where: step.conf, desc: "(可选GPU) 源组在坐标高/低侧"}
+    - {name: TBC_SOURCE_THICKNESS, default: 5.0, where: step.conf, desc: "(可选GPU) 源组厚度(A)"}
+    - {name: TBC_SINK_THICKNESS, default: 8.0, where: step.conf, desc: "(可选GPU) 漏组厚度(A)"}
+    - {name: TBC_VACUUM_GAP_A, default: 4.0, where: step.conf, desc: "(可选GPU) 判真空的间隙阈值(A)"}
+    - {name: TBC_T, default: 300.0, where: step.conf, desc: "(可选GPU) 平均温度(K)"}
+    - {name: TBC_DELTA_T, default: 40.0, where: step.conf, desc: "(可选GPU) 半温差：源=T+dT，漏=T-dT"}
+    - {name: TBC_COUPLE, default: 100.0, where: step.conf, desc: "(可选GPU) 恒温器耦合强度"}
+    - {name: TBC_THERMOSTAT, values: [heat_lan, heat_nhc, heat_bdp], default: heat_lan, where: step.conf, desc: "(可选GPU) 源漏恒温器方法"}
+    - {name: TBC_TIME_STEP, default: 1.0, where: step.conf, desc: "(可选GPU) 时间步(fs)"}
+    - {name: TBC_SEED, default: 0, where: step.conf, desc: "(可选GPU) 随机种子；0=不固定"}
+    - {name: TBC_BIN_WIDTH, default: 2.0, where: step.conf, desc: "(可选GPU) T(z) 剖面 bin 宽(A)"}
+    - {name: TBC_EQUIL_STEPS, default: 20000, where: step.conf, desc: "(可选GPU) NVT 平衡步数"}
+    - {name: TBC_BURN_STEPS, default: 100000, where: step.conf, desc: "(可选GPU) heat_* 烧入步数（释放初始应变）"}
+    - {name: TBC_RUN_STEPS, default: 200000, where: step.conf, desc: "(可选GPU) 测量段步数"}
+    - {name: TBC_SAMPLE_INTERVAL, default: 10, where: step.conf, desc: "(可选GPU) compute 采样间隔"}
+    - {name: TBC_OUTPUT_INTERVAL, default: 100, where: step.conf, desc: "(可选GPU) compute 输出间隔"}
+    - {name: TBC_THERMO_INTERVAL, default: 1000, where: step.conf, desc: "(可选GPU) dump_thermo 间隔"}
+    - {name: TBC_FIT_MARGIN_A, default: 2.0, where: step.conf, desc: "(可选GPU) 体区拟合余量(A)"}
+    - {name: TBC_MIN_BINS, default: 3, where: step.conf, desc: "(可选GPU) 体区拟合最少 bin 数"}
+    - {name: TBC_STEADY_TOL, default: 0.2, where: step.conf, desc: "(可选GPU) 源/漏热流自洽容差"}
+    - {name: TBC_MIN_WINDOW_FRAC, default: 0.2, where: step.conf, desc: "(可选GPU) 稳态窗口最短占比"}
+    - {name: TBC_DT_TOL, default: 0.3, where: step.conf, desc: "(可选GPU) dT_i 外推相对误差容差"}
+    - {name: TBC_MARGIN_TOL, default: 1.5, where: step.conf, desc: "(可选GPU) G 对拟合余量敏感度 max/min 上限"}
+    - {name: TBC_KAPPA_A_W_mK, default: null, where: step.conf, desc: "(可选GPU) 可选，仅交叉核对"}
+    - {name: TBC_KAPPA_B_W_mK, default: null, where: step.conf, desc: "(可选GPU) 可选，仅交叉核对"}
+  steps:
+    - {step: S1_spec, title: "Device spec", inputs: ["step.conf"], outputs: [device_spec.json], validator: "DEVICE_SPEC marker"}
+    - {step: S2_props, title: "Thermal properties + TBC", inputs: [device_spec.json, kappa_summary.json], outputs: [thermal_props.json], validator: "PROPS_DONE marker"}
+    - {step: S3_solve, title: "FVM steady/transient solve", inputs: [thermal_props.json], outputs: [device_thermal_summary.json, T_field.json], validator: "SOLVE_DONE marker"}
+    - {step: S4_report, title: "Report + T map", inputs: [device_thermal_summary.json, T_field.json], outputs: [device_report.json], validator: "REPORT_DONE marker"}
+    - {step: S5_tbc, title: "(GPU) GPUMD NEMD deck", inputs: ["step.conf", "interface extxyz"], outputs: [tbc_inputs.json], validator: "TBC_INPUTS_DONE marker"}
+    - {step: S6_tbc_post, title: "(GPU) interface G", inputs: [tbc_inputs.json, "compute.out", "compute_chunk.out"], outputs: [tbc_result.json], validator: "TBC_POST_DONE marker"}
+
+flow:
+  summary: "器件几何 + 上游 kappa + 界面 TBC -> 二维各向异性 FVM -> 器件热点 dT / R_th / 温度场"
+  stages:
+    - {name: spec, steps: [S1_spec], produces: [device_spec.json], desc: "固化器件几何、热源、边界"}
+    - {name: props, steps: [S2_props], produces: [thermal_props.json], desc: "取上游实测 kappa + 数据库 TBC"}
+    - {name: solve, steps: [S3_solve], produces: [device_thermal_summary.json, T_field.json], desc: "稳态 + 瞬态传热求解"}
+    - {name: report, steps: [S4_report], produces: [device_report.json], desc: "温度场图与汇总"}
+    - {name: gpu_tbc, steps: [S5_tbc, S6_tbc_post], produces: [tbc_inputs.json, tbc_result.json], desc: "(可选GPU) GPUMD NEMD 界面热导"}
+  next_skills:
+    - {skill: kl-dft-cpu, via: kappa_summary.json, desc: "上游：材料级晶格热导率与 2D 厚度"}
+    - {skill: te-screen, via: POSCAR, desc: "筛选出的候选材料可直接进本技能做器件热评估"}
+  requires:
+    kappa_summary.json: "可选（KAPPA_SOURCE=auto 时优先用；缺失回退材料库）"
+
+corrections: [node_fail, dir_missing]
+
+requires:
+  python: [numpy]

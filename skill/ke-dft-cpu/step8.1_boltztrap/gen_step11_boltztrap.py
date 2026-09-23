@@ -72,13 +72,13 @@ DPT_DIR    = "step8.2_dpt"
 #            NORM_2D 因子 —— 全流程只有一个 t，σ/κ_e/κ_L 的口径不可能错开。
 #   None   = 不自动读，只用下面手填的值。
 KAPPA_L_SOURCE = "auto"
-# 多链探测：kl-dft-cpu → kl-mace-cpu → kl-mace-gpu（sibling 子目录，取第一个有结果的）。
+# 多链探测：kl-dft-cpu → kl-mlff-cpu → kl-mlff-gpu（sibling 子目录，取第一个有结果的）。
 KL_CHAIN_DIRS  = {
     "kl-dft-cpu":  ("step6_kappa", "step6_kappa_shengbte"),
-    "kl-mace-cpu": ("step4_kappa",),
-    "kl-mace-gpu": ("step4_kappa",),
+    "kl-mlff-cpu": ("step4_kappa",),
+    "kl-mlff-gpu": ("step4_kappa",),
 }
-KL_CHAIN_ORDER = ("kl-dft-cpu", "kl-mace-cpu", "kl-mace-gpu")
+KL_CHAIN_ORDER = ("kl-dft-cpu", "kl-mlff-cpu", "kl-mlff-gpu")
 KL_ROOT        = None   # None=按 KL_CHAIN_ORDER 探测 sibling；填路径=只找该目录（配 KL_KAPPA_DIRS）
 KL_KAPPA_DIRS  = ("step6_kappa", "step6_kappa_shengbte")   # 仅 KL_ROOT 手填时用
 # 手填值（W/mK，元胞口径，即 phono3py 原样）。非 None 时**优先于** auto。
@@ -472,7 +472,7 @@ def _resolve_kappa_L(cwd, T, ninfo):
 
     src, root = _find_kl_kappa(cwd)
     if src is None:
-        return None, None, ["# kappa_L 未找到：sibling kl-dft-cpu/kl-mace-cpu/kl-mace-gpu 下都没有 kappa_summary.json",
+        return None, None, ["# kappa_L 未找到：sibling kl-dft-cpu/kl-mlff-cpu/kl-mlff-gpu 下都没有 kappa_summary.json",
                             "#   kl 链跑完了吗？或用 KL_ROOT 显式指定 kl 的材料目录"]
     try:
         j = json.loads(src.read_text(encoding="utf-8"))

@@ -1,11 +1,12 @@
 # =============================================================================
 # skill/defect-dft-cpu/skill.yaml —— 缺陷形成能 + P/N 型技能（schema 1）
 # 流程（修正版方法论，见 README.md）：
-#   S0_refs   凸包参考相(5 元素相 + 4 二元相) PBE-D3+SOC 弛豫 [run:gen, 4 材料共享]
-#   S1_bulk   完美超胞(3x3x1) PBE-D3+SOC 弛豫 + LOCPOT（静电势参考）[与 S0 并行]
-#   S2_def    本征缺陷枚举(空位/反位/互占位对/间隙) 中性弛豫  [fanout]
-#   S3_chg    各缺陷带电态单点(NELECT±q, LVHAR)          [fanout]
-#   S4_anlys  凸包出化学势 -> 形成能/转变能级/P-N（run:gen，登录节点）
+#   S0_refs   凸包参考相(扫描 <REFERENCES_DIR>/convex_hull_references/*/POSCAR) 弛豫
+#             [run:gen, 多材料共享；ENCUT/SOC 与 step.conf 同口径]
+#   S1_bulk   完美超胞(SUPERCELL) 弛豫 + LOCPOT（静电势参考）[与 S0 并行]
+#   S2_def    本征缺陷枚举(空位/反位/互占位对/间隙，类型与元素可配) 中性弛豫  [fanout]
+#   S3_chg    非零带电态弛豫；显式 vertical 为垂直单点；q=0 复用 S2 [fanout]
+#   S4_anlys  凸包出化学势 -> 形成能/转变能级（半导体 P/N；金属给 E_f 排序）（run:gen）
 # =============================================================================
 schema: 2
 name: defect-dft-cpu
@@ -21,7 +22,7 @@ defaults:
 
 # 提交模板逻辑名由 tf 从 setting/<hpc>/templates/ 推到材料目录
 gen_need: [defects_common.py, gen_references.py, formation_energy.py, convex_hull.py,
-           extract_band_refs.py, step.conf, incar_defect.tpl,
+           extract_band_refs.py, step.conf, references.conf, incar_defect.tpl,
            submit_std_3d.tpl, submit_ncl_3d.tpl]
 aux_files: []
 
@@ -33,10 +34,10 @@ steps:
   - {seq: 2, name: step2_defects, label: S2_def, check: outcar,
      gen: gen_step2_defects.py, fanout: "def-*", contcar_to_poscar: true}
   - {seq: 3, name: step3_charged, label: S3_chg, check: outcar,
-     gen: gen_step3_charged.py, fanout: "def-*"}
+     gen: gen_step3_charged.py, fanout: "def-*", empty_fanout_manifest: charged_manifest.json}
   - {seq: 4, name: step4_analysis, label: S4_anlys, check: plot, run: gen,
      gen: gen_step4_analysis.py, needs: [step0_references, step3_charged],
-     done_marker: formation_energy_summary.json, fetch_all: true}
+     done_marker: analysis_complete.json, strict_done_marker: true, fetch_all: true}
 
 io_schema:
   inputs:
@@ -44,20 +45,21 @@ io_schema:
     - {name: defect_config, from: config, required: false, desc: "缺陷与电荷态配置（step.conf）"}
   outputs:
     - {name: references_energy.json, step: S0_refs, type: json, desc: "参考相能量"}
-    - {name: formation_energy_summary.json, step: S4_anlys, type: json, desc: "缺陷形成能、转变能级和 P/N 判断"}
+    - {name: formation_energy_results.json, step: S4_anlys, type: json, desc: "最终形成能与能量解释；垂直能量不可视作热力学结论"}
+    - {name: analysis_complete.json, step: S4_anlys, type: json, desc: "全部分析成功后的输入/结果指纹"}
   params: []
   steps:
     - {step: S0_refs, title: "Reference phases", outputs: [references_energy.json], validator: "marker 文件存在"}
     - {step: S1_bulk, title: "Relax bulk", inputs: [POSCAR], outputs: [CONTCAR, LOCPOT], validator: "OUTCAR 完成"}
     - {step: S2_def, title: "Relax defects", inputs: [CONTCAR], outputs: ["def-*"], validator: "所有缺陷扇出 OUTCAR 完成"}
     - {step: S3_chg, title: "Charged defects", inputs: ["def-*"], outputs: ["def-* charged outputs"], validator: "所有电荷态完成"}
-    - {step: S4_anlys, title: "Formation energy analysis", inputs: [references_energy.json], outputs: [formation_energy_summary.json], validator: "marker 文件存在"}
+    - {step: S4_anlys, title: "Formation energy analysis", inputs: [references_energy.json], outputs: [formation_energy_results.json, analysis_complete.json], validator: "成功 marker 及输入/结果指纹一致"}
 flow:
   summary: "参考相与体相弛豫 → 缺陷中性/带电态扇出 → 形成能与 P/N 分析"
   stages:
     - {name: 参考与体相, steps: [S0_refs, S1_bulk], produces: [references_energy.json, CONTCAR]}
     - {name: 缺陷计算, steps: [S2_def, S3_chg], produces: ["def-* outputs"]}
-    - {name: 分析, steps: [S4_anlys], produces: [formation_energy_summary.json]}
+    - {name: 分析, steps: [S4_anlys], produces: [formation_energy_results.json, analysis_complete.json]}
   next_skills: [{skill: ke-dft-cpu, via: CONTCAR, desc: "缺陷结构可继续电子输运"}]
   requires: {POSCAR: "材料目录根必须有 POSCAR"}
 corrections: [node_fail, nsw_continue, zbrent, dir_missing]

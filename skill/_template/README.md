@@ -63,7 +63,7 @@ python3 bin/autozt schema my-skill               # ③ 看它的自描述（吃�
 | 画图/后处理步 | `skill/band-dft-cpu/gen_step3.1_plot_band.py`、`skill/opt-dft-cpu/gen_step3_energy.py` |
 | 判据（自定义完成判据） | `skill/_common/checks_relax.py`、`skill/*/checks.py` |
 | 可选步骤组 | `skill/band-dft-cpu/skill.yaml` 的 `optional_steps` |
-| 扇出步骤（一堆子目录） | `skill/mlff-mace/`、`skill/defect-dft-cpu/` |
+| 扇出步骤（一堆子目录） | `skill/mlff/`、`skill/defect-dft-cpu/` |
 
 ## 4. 自描述三段（v1.0 新增，为什么值得写）
 

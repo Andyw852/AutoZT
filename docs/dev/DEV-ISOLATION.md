@@ -77,7 +77,7 @@ python3 tmp/test_v1_correct_cli.py   # autozt correct / autozt diagnose 接入�
 python3 tmp/test_v1_prov.py          # provenance：真跑一遍 gen（本地 bash 模式）+ autozt prove
 # 只读命令冒烟（都不 ssh）：
 python3 bin/autozt skills ; python3 bin/autozt skill ; python3 bin/autozt schema --strict
-python3 bin/autozt skill show kl-mace-gpu        # 技能卡片（论文图 2）
+python3 bin/autozt skill show kl-mlff-gpu        # 技能卡片（论文图 2）
 # 本地沙盒主路径（tmp/tf_smoke.yaml 只指向仓库自带 test/tf_test，不碰真集群）：
 python3 bin/autozt -c tmp/tf_smoke.yaml list
 python3 bin/autozt -c tmp/tf_smoke.yaml history

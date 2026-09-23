@@ -1043,7 +1043,7 @@ def _reconcile_gpu_env(env, method, cfg):
 
 def cmd_fit_pheasy(cfg, out):
     """Four pheasy CLI steps: cluster space / symmetry constraints / sensing
-    matrix / fit.  Mirrors templates in kl-dft-cpu and _common/mace."""
+    matrix / fit.  Mirrors templates in kl-dft-cpu and _common/mlff."""
     method = str(cfg.get("pheasy_method") or "RFE").upper()
     if method not in PHEASY_METHODS:
         sys.exit("[ERROR] PHEASY_FIT_METHOD must be one of %s"

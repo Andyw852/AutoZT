@@ -16,7 +16,7 @@
   竞争相稳定：Σ_i n_i(相)·Δμ_i ≤ ΔH_f(相)
 三元体系消去一个变量 → 2D 凸多边形顶点枚举。
 """
-import sys, os, json
+import sys, os, json, math
 from pathlib import Path
 
 TOL = 1e-7
@@ -28,7 +28,14 @@ def load_phases(path="phases.json"):
 
 def formation_energy(formula, E, elements):
     """ΔH_f = E(相) − Σ_i n_i·E_i(元素相每原子)。"""
-    return E - sum(n * elements.get(el, 0.0) for el, n in formula.items())
+    if not formula or any(not isinstance(n, (int, float)) or not math.isfinite(n) or n < 0 for n in formula.values()) or sum(formula.values()) <= 0:
+        raise SystemExit("[错误] 相成分必须包含有限非负计数且总数为正")
+    missing = set(formula) - set(elements)
+    if missing:
+        raise SystemExit("[错误] 缺少元素参考能: %s" % sorted(missing))
+    if not math.isfinite(E) or any(not math.isfinite(elements[el]) for el in formula):
+        raise SystemExit("[错误] 相能量/元素参考能必须有限")
+    return E - sum(n * elements[el] for el, n in formula.items())
 
 def solve_2x2(a1, b1, c1, a2, b2, c2):
     """解 a1*x+b1*y=c1, a2*x+b2*y=c2；无解返回 None。"""
@@ -39,79 +46,172 @@ def solve_2x2(a1, b1, c1, a2, b2, c2):
     y = (a1*c2 - a2*c1) / det
     return x, y
 
-def convex_hull_window(target, elements, phases):
-    """三元化学势窗口：返回 (顶点列表[(x,y,Δμdict)], 约束列表)。"""
+def _solve_linear(A, b):
+    """高斯消元解 A x = b（A 为 m x m）。无唯一解返回 None。"""
+    m = len(b)
+    M = [list(A[i]) + [b[i]] for i in range(m)]
+    for col in range(m):
+        piv = None
+        for r in range(col, m):
+            if abs(M[r][col]) > 1e-12:
+                piv = r
+                break
+        if piv is None:
+            return None
+        M[col], M[piv] = M[piv], M[col]
+        pv = M[col][col]
+        for j in range(col, m + 1):
+            M[col][j] /= pv
+        for r in range(m):
+            if r != col and abs(M[r][col]) > 1e-15:
+                fac = M[r][col]
+                for j in range(col, m + 1):
+                    M[r][j] -= fac * M[col][j]
+    return [M[i][m] for i in range(m)]
+
+
+def energy_above_hull(target, elements, phases):
+    """目标相的标准"凸包以上能量"（每原子，eV/atom，恒 ≥0）：=0 稳定，>0 亚稳。
+
+    在成分空间构造凸包（顶点 = 元素相 ΔH=0 与各竞争相），用单纯形枚举求目标成分处的
+    凸包能量。数据不足/退化时返回 None。用于在窗口为空时判断"数据有误"还是"目标亚稳"。
+    """
     els = list(elements.keys())
-    if len(els) != 3:
-        raise SystemExit("[错误] 当前只支持三元体系（%d 元），二元/四元暂未实现" % len(els))
-    A, B, C = els[0], els[1], els[2]
-    nA, nB, nC = (target["formula"].get(A, 0), target["formula"].get(B, 0),
-                  target["formula"].get(C, 0))
-    if nC == 0:
-        raise SystemExit("[错误] 第三个元素在目标中原子数为 0，请调整元素顺序")
-    dH_target = formation_energy(target["formula"], target["E"], elements)
-    # 约束 (α, β, γ): α*x + β*y ≤ γ，x=Δμ_A, y=Δμ_B
-    cons = []
-    # Δμ_A ≤ 0, Δμ_B ≤ 0
-    cons.append(("A≤0", 1.0, 0.0, 0.0))
-    cons.append(("B≤0", 0.0, 1.0, 0.0))
-    # Δμ_C ≤ 0  =>  nA*x + nB*y ≥ dH_target  =>  -nA*x - nB*y ≤ -dH_target
-    cons.append(("C≤0", -nA, -nB, -dH_target))
-    # 竞争相:  a*x + b*y + c*Δμ_C ≤ dH_phase
-    #   Δμ_C = (dH_target - nA*x - nB*y)/nC
-    #   => (a - c*nA/nC)*x + (b - c*nB/nC)*y ≤ dH_phase - c*dH_target/nC
+    N = len(els)
+    if N == 0:
+        return None
+    pts = []
+    for i in range(N):
+        x = [0.0] * N
+        x[i] = 1.0
+        pts.append((x, 0.0))
     for ph in phases:
-        fa, fb, fc = (ph["formula"].get(A, 0), ph["formula"].get(B, 0),
-                      ph["formula"].get(C, 0))
-        dH = formation_energy(ph["formula"], ph["E"], elements)
-        alpha = fa - fc*nA/nC
-        beta = fb - fc*nB/nC
-        gamma = dH - fc*dH_target/nC
-        cons.append((ph.get("name", "phase"), alpha, beta, gamma))
-    # 顶点枚举：两两约束边界求交，检查可行性（去重：三条约束交于一点时避免重复计入）
-    verts = []
-    seen = set()
-    for i in range(len(cons)):
-        for j in range(i+1, len(cons)):
-            _, a1, b1, c1 = cons[i]
-            _, a2, b2, c2 = cons[j]
-            sol = solve_2x2(a1, b1, c1, a2, b2, c2)
+        cnt = [float(ph["formula"].get(e, 0)) for e in els]
+        tot = sum(cnt)
+        if tot <= 0:
+            continue
+        dH = formation_energy(ph["formula"], ph["E"], elements) / tot
+        pts.append(([c / tot for c in cnt], dH))
+    tcnt = [float(target["formula"].get(e, 0)) for e in els]
+    ttot = sum(tcnt)
+    if ttot <= 0 or len(pts) < N:
+        return None
+    xt = [c / ttot for c in tcnt]
+    dHt = formation_energy(target["formula"], target["E"], elements) / ttot
+    import itertools
+    best = None
+    for combo in itertools.combinations(range(len(pts)), N):
+        # 解 Σ_p λ_p x_p = x_t（N 个分量、N 个未知量；Σλ=1 自动成立）
+        A = [[pts[idx][0][i] for idx in combo] for i in range(N)]
+        lam = _solve_linear(A, xt)
+        if lam is None:
+            continue
+        if any(l < -TOL for l in lam):
+            continue
+        val = sum(lam[k] * pts[combo[k]][1] for k in range(N))
+        if best is None or val < best:
+            best = val
+    if best is None:
+        return None
+    # 标准约定：目标在其它相凸包之上时为正，落在/低于凸包时为 0
+    return max(0.0, dHt - best)
+
+
+def convex_hull_window(target, elements, phases):
+    """通用 N 元（N>=1）化学势稳定性窗口。返回 (顶点列表, dH_target)。
+
+    约束：dmu_i <= 0；sum_i n_i(target)*dmu_i = dH_target（主元元素消去）；
+    每个竞争相 sum_i n_i(phase)*dmu_i <= dH(phase)。在 N-1 维自由变量空间枚举顶点。
+    二元（Mg-C）、三元（A2B2Te5）、四元都走同一套。
+    """
+    els = list(elements.keys())
+    N = len(els)
+    if N == 0:
+        raise SystemExit("[错误] elements 为空")
+    n_t = [target["formula"].get(e, 0) for e in els]
+    dH_target = formation_energy(target["formula"], target["E"], elements)
+    piv = None
+    for i in range(N - 1, -1, -1):
+        if n_t[i] > 0:
+            piv = i
+            break
+    if piv is None:
+        raise SystemExit("[错误] 目标化合物成分全为 0")
+    free = [i for i in range(N) if i != piv]
+    npv = n_t[piv]
+    raw = []
+    for i in range(N):
+        a = [0.0] * N
+        a[i] = 1.0
+        raw.append((els[i] + "<=0", a, 0.0))
+    for ph in phases:
+        a = [float(ph["formula"].get(e, 0)) for e in els]
+        raw.append((ph.get("name", "phase"), a,
+                    formation_energy(ph["formula"], ph["E"], elements)))
+    red = []
+    for nm, a, g in raw:
+        A = [a[i] - a[piv] * n_t[i] / npv for i in free]
+        G = g - a[piv] * dH_target / npv
+        red.append((nm, A, G))
+    d = len(free)
+    verts, seen = [], set()
+    if d == 0:
+        # 无自由变量仍必须满足元素上界和所有竞争相约束。
+        verts = [[]] if all(0.0 <= G + TOL for _, _, G in red) else []
+    else:
+        from itertools import combinations
+        for combo in combinations(range(len(red)), d):
+            sol = _solve_linear([red[c][1] for c in combo], [red[c][2] for c in combo])
             if sol is None:
                 continue
-            x, y = sol
-            if all(a*x + b*y <= c + TOL for _, a, b, c in cons):
-                key = (round(x, 6), round(y, 6))
+            if all(sum(A[i] * sol[i] for i in range(d)) <= G + TOL for _, A, G in red):
+                key = tuple(round(x, 6) for x in sol)
                 if key not in seen:
                     seen.add(key)
-                    verts.append((x, y))
-    if len(verts) < 2:
-        raise SystemExit("[错误] 凸包窗口为空（%d 个顶点）—— 检查相总能是否有误" % len(verts))
-    degenerate_line = (len(verts) == 2)  # 同系化合物 ΔH_f≈0，稳定区退化成线段是物理正确情形
-    # 按重心角排序成凸多边形
-    cx = sum(v[0] for v in verts)/len(verts)
-    cy = sum(v[1] for v in verts)/len(verts)
-    import math
-    verts = sorted(verts, key=lambda v: math.atan2(v[1]-cy, v[0]-cx))
-    # 每个顶点回代 Δμ_C，得到完整 Δμ dict
+                    verts.append(sol)
+    if not verts:
+        eah = energy_above_hull(target, elements, phases)
+        if eah is not None and eah > 1e-3:
+            raise SystemExit(
+                "[错误] 凸包窗口为空：目标相比元素相/竞争相的凸包高 %.3f eV/atom（亚稳相），"
+                "不存在同时满足平衡与竞争相稳定的化学势窗口。\n"
+                "       处理：① 先核对相总能与成分；② 若确为亚稳相，把 energies.json 的 "
+                "\"mu\" 手动设为一组物理化学势（例如 C 取石墨、Mg 取石墨+Mg2C3 共存点），"
+                "不要写 mu_vertices；形成能脚本会直接采用该 mu。" % eah)
+        raise SystemExit("[错误] 凸包窗口为空（%d 个顶点）—— 检查相总能/成分是否有误" % len(verts))
+    if d == 2:
+        import math
+        cx = sum(v[0] for v in verts) / len(verts)
+        cy = sum(v[1] for v in verts) / len(verts)
+        verts = sorted(verts, key=lambda v: math.atan2(v[1] - cy, v[0] - cx))
+    elif d == 1:
+        verts = sorted(verts, key=lambda v: v[0])
     out = []
-    for x, y in verts:
-        dC = (dH_target - nA*x - nB*y)/nC
-        dmu = {A: x, B: y, C: dC}
-        mu = {el: elements[el] + dmu[el] for el in els}
-        out.append({"dmu": {el: round(v, 6) for el, v in dmu.items()},
-                    "mu": {el: round(v, 6) for el, v in mu.items()}})
+    for sol in verts:
+        dmu = {}
+        for k, i in enumerate(free):
+            dmu[els[i]] = sol[k]
+        dmu[els[piv]] = (dH_target - sum(n_t[i] * dmu[els[i]] for i in free)) / npv
+        mu = {e: elements[e] + dmu[e] for e in els}
+        out.append({"dmu": {e: round(v, 6) for e, v in dmu.items()},
+                    "mu": {e: round(v, 6) for e, v in mu.items()}})
     return out, dH_target
 
 def main():
     ph = load_phases()
     verts, dH_target = convex_hull_window(ph["target"], ph["elements"], ph["phases"])
     els = list(ph["elements"].keys())
+    eah = energy_above_hull(ph["target"], ph["elements"], ph["phases"])
     print("[OK] 目标化合物 ΔH_f = %.4f eV/式量" % dH_target)
+    if eah is not None:
+        print("     目标相 energy above hull = %+.4f eV/atom%s"
+              % (eah, "（亚稳）" if eah > 0.001 else "（稳定）"))
     print("     化学势窗口（%d 个顶点，μ 为绝对值 eV/原子）:" % len(verts))
     for k, v in enumerate(verts):
         mu = "  ".join("%s=%.4f" % (el, v["mu"][el]) for el in els)
         print("       顶点%d: %s" % (k, mu))
     json.dump({"target": ph["target"]["formula"], "dH_f": round(dH_target, 6),
+               "energy_above_hull": (round(eah, 6) if eah is not None else None),
                "window_vertices": verts},
               open("chemical_potential_window.json", "w"), indent=2, ensure_ascii=False)
     print("     窗口已写 chemical_potential_window.json")
@@ -180,8 +280,10 @@ def build_phases_from_references(ref_json="references_energy.json",
         delta = E_super * (n_prim / n_super) - E_per_fu
     els = set(formula)
     elements = {el: v for el, v in ref["elements"].items() if el in els}
+    src_phases = dict(ref.get("binaries") or {})
+    src_phases.update(ref.get("phases") or {})
     phases = [{"name": n, "formula": i["formula"], "E": i["E_per_fu"]}
-              for n, i in ref["binaries"].items() if set(i["formula"]).issubset(els)]
+              for n, i in src_phases.items() if set(i["formula"]).issubset(els)]
     return {"target": {"formula": formula, "E": E_per_fu, "energy_source": src,
                        "delta_eV_fu": delta},
             "elements": elements, "phases": phases}
@@ -198,8 +300,9 @@ def run_from_references():
         raise SystemExit("[错误] 找不到 references_energy.json（step0 参考相未完成）")
     ph = build_phases_from_references(ref_json=ref_json)
     verts, dH_target = convex_hull_window(ph["target"], ph["elements"], ph["phases"])
-    degenerate_line = (len(verts) == 2)
     els = list(ph["elements"].keys())
+    eah = energy_above_hull(ph["target"], ph["elements"], ph["phases"])
+    degenerate_line = (len(verts) < len(els))
     print("[OK] %s ΔH_f = %.4f eV/式量，化学势窗口 %d 个顶点"
           % ("".join("%s%d" % (e, ph["target"]["formula"].get(e, 0)) for e in els),
              dH_target, len(verts)))
@@ -210,14 +313,18 @@ def run_from_references():
         print("     δ = E_super/9 - E_target_prim = %+.4f eV/fu   [%s]" % (delta, flag))
     for k, v in enumerate(verts):
         print("   顶点%d: %s" % (k, "  ".join("%s=%.4f" % (el, v["mu"][el]) for el in els)))
+    if eah is not None:
+        print("   目标相 energy above hull = %+.4f eV/atom%s"
+              % (eah, "（亚稳）" if eah > 0.001 else "（稳定）"))
     json.dump({"target": ph["target"]["formula"], "dH_f": round(dH_target, 6),
+               "energy_above_hull": (round(eah, 6) if eah is not None else None),
                "window_vertices": verts},
               open("chemical_potential_window.json", "w"), indent=2, ensure_ascii=False)
-    # 取 Te 最富的顶点（min Δμ_Te = μ_Te 最接近元素 Te）作为默认化学势
-    # 实际形成能应在多个极端化学势下算（Te 富/Te 贫），这里默认取第一个顶点，用户可改
+    # 默认化学势取顶点 0（某元素最富的一端）；形成能脚本会遍历全部顶点，
+    # 因此默认取哪个不影响最终报告，只是 results['mu'] 的入口值。
     ref = json.load(open("energies.json", encoding="utf-8")) if os.path.exists("energies.json") else {}
     ref["mu"] = verts[0]["mu"]
-    ref["mu_vertices"] = verts   # 全部顶点，供形成能脚本遍历（沿 Te-rich → Te-poor 报告 p/n 变化）
+    ref["mu_vertices"] = verts   # 全部顶点，供形成能脚本遍历各极端化学势
     ref["degenerate_line"] = degenerate_line
     json.dump(ref, open("energies.json", "w"), indent=2, ensure_ascii=False)
     print("     已写 energies.json（mu 取顶点0 + 全部 %d 个顶点 mu_vertices%s）"

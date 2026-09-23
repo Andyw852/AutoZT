@@ -1,35 +1,16 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""defect-dft-cpu step3：对 step2 各缺陷的中性弛豫结构做带电态单点（fanout: def-*）。"""
-import sys, os, json, shutil
+"""S3: charged relaxation by default; CHARGED_GEOMETRY=vertical opts into fixed-ion energies."""
+import sys, os, json, shutil, hashlib, uuid
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import defects_common as D
 
 STEP = "step3_charged"
 
-def charge_states(name):
-    """各缺陷族的电荷态清单。反位按价电子数定施主/受主（Te=6 > Sb/Bi=5 > Pb/Sn=4）：
-    X 占 Y 位，X 价电子比 Y 多 → 施主(正电荷态)，少 → 受主(负电荷态)。"""
-    if "pair" in name:
-        return [0]
-    if "_i_" in name:
-        return [0, -1, -2] if name.startswith("Te") else [0, 1, 2]  # Te间隙受主, 阳离子间隙施主
-    if name.startswith("v_Te"):
-        return [0, 1, 2]                       # Te 空位：施主（缺阴离子）
-    if name.startswith("v_"):
-        return [0, -1, -2]                     # 阳离子空位：受主
-    if name.endswith("_Te"):
-        # 阳离子占 Te 位：受主（Sb/Bi 少 1 电子 → 0/-1；Pb/Sn 少 2 → 0/-1/-2）
-        return [0, -1] if name.startswith(("Sb_", "Bi_")) else [0, -1, -2]
-    if name.startswith("Te_"):
-        # Te 占阳离子位：施主（对 Sb/Bi 多 1 → 0/+1；对 Pb/Sn 多 2 → 0/+1/+2）
-        return [0, 1] if name.endswith(("_Sb", "_Bi")) else [0, 1, 2]
-    if name.endswith(("_Pb", "_Sn")):
-        return [0, 1]                          # Sb/Bi(5) 占 Pb/Sn(4)：施主
-    if name.endswith(("_Sb", "_Bi")):
-        return [0, -1]                         # Pb/Sn(4) 占 Sb/Bi(5)：受主
-    return [0]
+# 电荷态清单改用 defects_common.charge_states（通用）：
+# charge_states() 原先写死 Te/Sb/Bi/Pb/Sn 的价电子规则，已删除。
+# 现在由 step.conf 的 CHARGE_MODE / QMIN / QMAX 决定（默认 window -2..+2）。
 
 def nelect_neutral(order, counts, potcar_path):
     """由 POTCAR ZVAL 求中性态总电子数。"""
@@ -39,27 +20,44 @@ def nelect_neutral(order, counts, potcar_path):
     return int(round(sum(z * counts[el] for z, el in zip(zvals, order))))
 
 def main():
+    os.makedirs(STEP, exist_ok=True)
+    old_manifest = Path(STEP) / "charged_manifest.json"
+    if old_manifest.exists():
+        old_manifest.rename(old_manifest.with_name(old_manifest.name + ".previous-" + uuid.uuid4().hex))
     conf = D.load_stepconf()
     if not os.path.isdir("step2_defects"):
         raise SystemExit("[错误] 找不到 step2_defects/ —— 先跑完 step2")
     # 中性态 NELECT 从 step2 任一 POTCAR 算
-    manifest = json.load(open("step2_defects/defects_manifest.json"))
+    manifest = json.loads(Path("step2_defects/defects_manifest.json").read_text(encoding="utf-8"))
     os.makedirs(STEP, exist_ok=True)
+    mode = str(conf.get("CHARGED_GEOMETRY", "relax")).strip().lower()
+    if mode not in ("vertical", "relax"):
+        raise SystemExit("[错误] CHARGED_GEOMETRY 必须为 vertical 或 relax")
+    nsw = int(conf.get("CHARGED_NSW", "60")) if mode == "relax" else 0
+    if mode == "relax" and nsw <= 0:
+        raise SystemExit("[错误] CHARGED_NSW 必须 > 0")
+    if not manifest:
+        raise SystemExit("[错误] 中性缺陷 manifest 为空")
+    jobs = []
     n_jobs = 0
     for item in manifest:
         ddir = item["dir"]
         src = None
-        for cand in ["step2_defects/%s/CONTCAR" % ddir, "step2_defects/%s/POSCAR" % ddir]:
+        for cand in ["step2_defects/%s/CONTCAR" % ddir]:
             if os.path.exists(cand):
                 src = cand; break
         if src is None:
-            print("[跳过] %s 缺 CONTCAR" % ddir); continue
+            raise SystemExit("[错误] %s 缺中性弛豫 CONTCAR" % ddir)
         struct = D.parse_poscar(src)
         order = [a for a in dict.fromkeys(struct["atoms"])]
         counts = {a: struct["atoms"].count(a) for a in order}
+        species = sorted(set(struct["atoms"]))
+        charges = [q for q in D.charge_states(item["name"], conf, species) if q != 0]
+        if not charges:
+            continue  # q=0 的弛豫能量来自 S2，不重复提交 VASP
         pot = "step2_defects/%s/POTCAR" % ddir
         n0 = nelect_neutral(order, counts, pot)
-        for q in charge_states(item["name"]):
+        for q in charges:
             qdir = "%s_q%+d" % (ddir, q)
             ne = n0 - q          # q=+1 -> 去一个电子 -> NELECT-1
             outdir = os.path.join(STEP, qdir)
@@ -70,11 +68,15 @@ def main():
                 icharg = "ICHARG = 1"
             # 奇数电子数带电态：seed 磁矩打破自旋对称（否则被算成非磁闭壳）
             natoms = len(struct["atoms"])
-            magmom = D.spin_seed_magmom(natoms) if (ne % 2 != 0) else "%d*0" % (3 * natoms)
+            soc = str(conf.get("SOC", "1")).strip().lower() not in ("0", "false", "no", "off")
+            ncomp = 3 if soc else 1
+            magmom = (D.spin_seed_magmom(natoms, ncomp=ncomp) if (ne % 2 != 0)
+                      else "%d*0" % (ncomp * natoms))
             D.build_job(outdir, struct, conf, {
                 "SYSTEM": "defect-dft-cpu step3 %s q=%+d" % (item["disp"], q),
-                "IBRION": "-1", "ISIF": "0", "NSW": "0",
-                "EDIFFG_LINE": "",
+                "IBRION": "2" if mode == "relax" else "-1",
+                "ISIF": "2", "NSW": str(nsw),
+                "EDIFFG_LINE": ("EDIFFG = %s" % conf.get("CHARGED_EDIFFG", "-0.02")) if mode == "relax" else "",
                 "LVHAR_LINE": "LVHAR = .TRUE." if conf.get("LVHAR_CHARGED", "1") == "1" else "",
                 "NELECT_LINE": "NELECT = %d" % ne,
                 "ICHARG_LINE": icharg,
@@ -83,7 +85,22 @@ def main():
             }, qdir)
             if icharg == "ICHARG = 1":
                 shutil.copy(chg_src, os.path.join(outdir, "CHGCAR"))
+            jobs.append(qdir)
             n_jobs += 1
+    unexpected = {p.name for p in Path(STEP).glob("def-*") if p.is_dir()} - set(jobs)
+    if unexpected:
+        raise SystemExit("[错误] S3 存在旧/非本次电荷态目录，需人工检查（未删除）: " + ", ".join(sorted(unexpected)))
+    if not jobs and (str(conf.get("CHARGE_MODE", "window")).strip().lower() != "window"
+                     or int(conf.get("QMIN", "-2")) != 0 or int(conf.get("QMAX", "2")) != 0):
+        raise SystemExit("[错误] 无带电任务时须显式设置 CHARGE_MODE=window QMIN=QMAX=0")
+    inputs = ["step.conf", "step2_defects/defects_manifest.json"]
+    for item in manifest:
+        inputs.extend("step2_defects/%s/%s" % (item["dir"], name) for name in ("CONTCAR", "OUTCAR"))
+    fingerprints = {p: hashlib.sha256(Path(p).read_bytes()).hexdigest() for p in inputs}
+    with open(os.path.join(STEP, "charged_manifest.json"), "w", encoding="utf-8") as f:
+        json.dump({"schema": 1, "status": "neutral_only" if not jobs else "generated",
+                   "jobs": jobs, "geometry": mode, "neutral_source": "step2_defects",
+                   "input_files": fingerprints}, f, indent=2)
     print("[OK] 生成 %s/ 下 %d 个带电态子目录" % (STEP, n_jobs))
 
 if __name__ == "__main__":

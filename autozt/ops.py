@@ -99,7 +99,8 @@ now = time.time()
 out = []
 try:
     r = subprocess.run(["squeue", "-u", u, "-h", "-o", "%i|%Z|%T"],
-                       capture_output=True, text=True, timeout=60)
+                       capture_output=True, text=True, encoding="utf-8",
+                       errors="replace", timeout=60)
     for ln in r.stdout.splitlines():
         p = ln.split("|")
         if len(p) < 3 or p[2] != "RUNNING":
@@ -181,7 +182,8 @@ except Exception:
 try:
     r2 = subprocess.run(["sacct", "-u", u, "-n", "-P", "-X",
                          "-o", "JobID,State,WorkDir", "--starttime", "now-3600"],
-                        capture_output=True, text=True, timeout=60)
+                        capture_output=True, text=True, encoding="utf-8",
+                        errors="replace", timeout=60)
     for ln in r2.stdout.splitlines():
         p = ln.split("|")
         if len(p) < 3 or "NODE_FAIL" not in p[1].upper() or not p[2].strip():
@@ -835,6 +837,24 @@ def _scope_to_material(content, tkey):
     line = '%s  local_root: ".."   # 只发现本材料；整批管请到上级目录 autozt init\n' % m.group(1)
     return content[:m.end()] + "\n" + line + content[m.end() + 1:]
 
+# 模板占位符漂移检查（2026-09-21）：项目级模板若缺了技能模板里的 {{占位符}}，
+#   说明它是技能模板的【旧拷贝】。gen 阶段 render_tpl/write_submit 虽然能拦，
+#   但那时（多步链路里）前序作业往往已经提交。init 时先 WARN 出来，代价为零。
+_PH_RE = re.compile(r"{{([A-Za-z_][A-Za-z0-9_]*)}}")
+
+
+def _template_drift(src_path, dst_path):
+    """返回 src 里有、dst 里缺的 {{占位符}} 集合；空集=无漂移。读失败返回空集（不拦 init）。"""
+    try:
+        with open(src_path, encoding="utf-8", errors="ignore") as fh:
+            s = set(_PH_RE.findall(fh.read()))
+        with open(dst_path, encoding="utf-8", errors="ignore") as fh:
+            d = set(_PH_RE.findall(fh.read()))
+    except OSError:
+        return set()
+    return s - d
+
+
 def _init_one_skill(cfg, types, target, name=None, tt=None, force=False,
                     known_names=None):
     from autozt import DEFAULT_HPC_SETTING, DEFAULT_PROJECT_CONFIG, DEFAULT_PROJECT_SETTING, _PKG_ROOT, _load_yaml_file, _same_file, _skill_asset_dirs, pkg_setting_path, scan_project_configs
@@ -1050,6 +1070,13 @@ def _init_one_skill(cfg, types, target, name=None, tt=None, force=False,
                     continue
                 if os.path.exists(_d):
                     if not force:
+                        _miss = _template_drift(_s, _d)
+                        if _miss:
+                            print("  [WARN] 项目模板 %s 缺占位符 %s —— 可能是技能模板的旧拷贝；"
+                                  "gen 阶段才会被 render_tpl/require 拦下（那时前序作业多已提交）。"
+                                  "用出厂版刷新：init -f。"
+                                  % (os.path.relpath(_d, os.path.dirname(ps) or "."),
+                                     ", ".join(sorted(_miss))))
                         continue
                     if _same_file(_s, _d):
                         continue
@@ -1922,7 +1949,8 @@ def _watch_cron(install):
         print("系统没有 crontab 命令。手动保活方案：")
         print("  每 10 分钟执行一次：%s monitor -d" % os.path.realpath(sys.argv[0]))
         return 1
-    cur = subprocess.run(["crontab", "-l"], capture_output=True, text=True)
+    cur = subprocess.run(["crontab", "-l"], capture_output=True, text=True,
+                         encoding="utf-8", errors="replace")
     old = [] if cur.returncode else [l for l in cur.stdout.splitlines()
                                      if marker not in l]
     if install:
@@ -1930,7 +1958,8 @@ def _watch_cron(install):
         old.append("*/10 * * * * %s monitor -d >/dev/null 2>&1  %s"
                    % (exe, marker))
     r = subprocess.run(["crontab", "-"], input="\n".join(old) + "\n",
-                       text=True, capture_output=True)
+                       text=True, encoding="utf-8", errors="replace",
+                       capture_output=True)
     if r.returncode:
         print("写入 crontab 失败：%s" % (r.stderr or "").strip())
         return 1

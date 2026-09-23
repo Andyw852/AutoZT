@@ -12,20 +12,25 @@
 #     写 mpirun -n 1 = 单进程 = **串行**。日志会自报
 #     "running on 1 MPI process(es)"，然后长时间停在
 #     "about to obtain the spectrum" 一个产物都不出（实测 11.8 h 零产物）。
-#     正确做法 = **一个 MPI rank 占一个 NUMA 域**：
-#         ntasks-per-node = 总核数 / 每个 NUMA 域的核数
-#         cpus-per-task   = 每个 NUMA 域的核数
-#     jzzn 实测：96 核 -> 12 rank x 8 线程，谱计算 230 秒完成。
+#     正确做法 = **一个 MPI rank 占一个 NUMA 节点**，且 **rank 数必须 ≤ NUMA 节点数**：
+#         ntasks-per-node = 总核数 / 每个 NUMA 节点的核数
+#         cpus-per-task   = 每个 NUMA 节点的核数
+#     jzzn 计算节点实测：192 核 = 2 socket x 96 = **8 个 NUMA 节点 x 24 核**。
+#         192 核 -> 8 rank x 24 线程；96 核 -> 4 rank x 24 线程。
+#     ★ rank 数 > NUMA 节点数时 OpenMPI 会**循环复用**节点并把多个 rank 绑到同一组核上：
+#       实测 24 rank x 8 线程时每个 NUMA 节点塞进 3 个 rank、24 个线程挤在 8 个核上，
+#       每线程只拿到 33% 的核，整作业只用 64/192 核（用 srun --overlap 进作业读
+#       /proc/<pid>/status 的 Cpus_allowed_list 可复现：并集只有 64 个 CPU）。
+#       所以 CORES_PER_NUMA 必须填**真实每 NUMA 核数 24**（不是 8）。
 #
 # 坑 2：OpenMPI 4.x 下 --map-by numa:PE=N 与任何 --bind-to ... 是**冲突写法**：
 #       · 配 --bind-to core -> "would result in binding more processes than cpus"
 #       · 配 --bind-to numa -> "a conflicting binding policy was specified"
 #       · 干脆不给        -> 报 "no binding need be specified"（它自带的默认就是对的）
-#     而且 PE 不能超过 NUMA 域内的核数。**jzzn 的 NUMA 域是 8 核**
-#     （192 核 = 24 域 x 8，不是 16！），写 PE=16 会报
+#     而且 PE 不能超过 NUMA 节点内的核数（jzzn = 24），写大了会报
 #         "a directive was also given to map to an object level that has less cpus"
 #     并 8 秒退出。所以这里用**裸 --map-by numa**：不带 PE、不带 --bind-to，
-#     让 OpenMPI 自己把 rank 铺到各 NUMA 域上，这是最稳的写法。
+#     让 OpenMPI 按 Slurm 给每个 task 的核集把 rank 铺到各 NUMA 节点上。
 #
 # 换集群时只需改 step.conf 的 SHENGBTE_TOTAL_CORES / SHENGBTE_CORES_PER_NUMA，
 # 不用动本模板。

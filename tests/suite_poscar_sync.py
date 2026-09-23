@@ -43,7 +43,8 @@ def tmpdir(prefix):
 
 def run(cmd, cwd):
     return subprocess.run(["bash", "-c", cmd], cwd=cwd,
-                          capture_output=True, text=True)
+                          capture_output=True, text=True, encoding="utf-8",
+                          errors="replace")
 
 
 POS = ("Mo S\n1.0\n  3.0 0.0 0.0\n -1.5 2.6 0.0\n 0.0 0.0 20.0\n"

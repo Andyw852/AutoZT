@@ -74,15 +74,18 @@ def _session_git(root):
     out = {}
     try:
         r = _sp.run(["git", "-C", root, "rev-parse", "--short", "HEAD"],
-                    capture_output=True, text=True, timeout=5)
+                    capture_output=True, text=True, encoding="utf-8",
+                    errors="replace", timeout=5)
         if r.returncode == 0:
             out["rev"] = r.stdout.strip()
         r = _sp.run(["git", "-C", root, "rev-parse", "--abbrev-ref", "HEAD"],
-                    capture_output=True, text=True, timeout=5)
+                    capture_output=True, text=True, encoding="utf-8",
+                    errors="replace", timeout=5)
         if r.returncode == 0:
             out["branch"] = r.stdout.strip()
         r = _sp.run(["git", "-C", root, "status", "--porcelain"],
-                    capture_output=True, text=True, timeout=15)
+                    capture_output=True, text=True, encoding="utf-8",
+                    errors="replace", timeout=15)
         if r.returncode == 0:
             out["dirty_files"] = len([x for x in r.stdout.splitlines() if x.strip()])
     except (OSError, _sp.SubprocessError):

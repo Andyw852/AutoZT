@@ -25,7 +25,9 @@ OUTDIR_NAME = "step4_wave"
 UNIFORM_DIR = "step3_uniform"
 STEP_LABEL  = "S4_wave"
 # amset wave 命令（--planewave-cutoff 可按体系加大；见 amset 文档）
-AMSET_CMD   = "amset wave >> amset.log 2>&1 && ls -l wavefunction.h5"
+# patch_v63_port2（2026-09-23）：链首 rm -f wavefunction.h5 —— 判据是 marker(wavefunction.h5:)，
+#   只看“文件在 + 含子串”；若 amset wave 失败而旧 h5 还在，整步会被判 OK、失败被隐藏（同 V63）。
+AMSET_CMD   = "rm -f wavefunction.h5; amset wave >> amset.log 2>&1 && ls -l wavefunction.h5"
 LINK_FILES  = ["vasprun.xml", "WAVECAR"]   # 从 uniform 步软链过来
 # =================================================================
 

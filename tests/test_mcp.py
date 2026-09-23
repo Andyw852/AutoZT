@@ -316,6 +316,37 @@ def test_high_level_cycle_can_execute_hidden_primitives(monkeypatch):
             os.environ["AUTOZT_MCP_PROFILE"] = old_profile
 
 
+def test_scoped_cycle_preserves_scope_for_cas_check(monkeypatch):
+    old_profile = os.environ.get("AUTOZT_MCP_PROFILE")
+    old_run = M._run
+    calls = []
+    os.environ["AUTOZT_MCP_PROFILE"] = "monitor"
+    raw = _fake_status_json("TODO", "", "start")
+
+    def fake_run(argv, timeout=1800):
+        calls.append(argv)
+        if argv and argv[0] == "act":
+            return 0, "started", ""
+        return 0, raw, ""
+
+    M._run = fake_run
+    try:
+        got = M.call_tool("cycle", {
+            "tt": "demo", "material": "Si_demo", "execute": True,
+        })
+        assert not got["isError"]
+        assert got["structuredContent"]["data"]["execution"]["failed"] is False
+        status_calls = [argv for argv in calls if argv and argv[0] != "act"]
+        assert status_calls
+        assert all("-tt" in argv and "-p" in argv for argv in status_calls)
+    finally:
+        M._run = old_run
+        if old_profile is None:
+            os.environ.pop("AUTOZT_MCP_PROFILE", None)
+        else:
+            os.environ["AUTOZT_MCP_PROFILE"] = old_profile
+
+
 def test_profile_hides_direct_calls_to_unlisted_tools():
     old = os.environ.get("AUTOZT_MCP_PROFILE")
     os.environ["AUTOZT_MCP_PROFILE"] = "workflow"
@@ -323,6 +354,24 @@ def test_profile_hides_direct_calls_to_unlisted_tools():
         got = M.call_tool("get_status", {"material": "Si_demo"})
         assert got["isError"]
         assert "not exposed" in got["structuredContent"]["error"]
+    finally:
+        if old is None:
+            os.environ.pop("AUTOZT_MCP_PROFILE", None)
+        else:
+            os.environ["AUTOZT_MCP_PROFILE"] = old
+
+
+def test_unknown_profile_fails_closed_and_readonly_alias_is_read_only():
+    old = os.environ.get("AUTOZT_MCP_PROFILE")
+    try:
+        os.environ["AUTOZT_MCP_PROFILE"] = "workflwo"
+        names = {item["name"] for item in M._tools_list()}
+        assert names == M.COMPACT_TOOLS
+        os.environ["AUTOZT_MCP_PROFILE"] = "readonly"
+        names = {item["name"] for item in M._tools_list()}
+        assert names
+        assert all(name in {item[0] for item in M.TOOLS if item[3] == "read"}
+                   for name in names)
     finally:
         if old is None:
             os.environ.pop("AUTOZT_MCP_PROFILE", None)

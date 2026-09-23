@@ -69,7 +69,7 @@ export PHEASY_ASR_SPARSE_THR=1e-10
 export PHEASY_ASR_COL_BLOCK=5000
 # 零空间秩判据：施加 RASR(BHH/BH/H) 时约束直接写进零空间，秩容差决定"哪些方向被当成约束"
 #   —— 放宽会漏约束、收紧会吃掉真实自由度。1e-6 与 MACE 链
-#   (_common/mace/gen_step3_fc.py) 取同一个值，两条链的 2D 行为才对得上。
+#   (_common/mlff/gen_step3_fc.py) 取同一个值，两条链的 2D 行为才对得上。
 export PHEASY_NS_RANK_TOL=1e-6
 export OPENBLAS_NUM_THREADS=${NCPU_BLAS}
 export OMP_NUM_THREADS=${NCPU_BLAS}

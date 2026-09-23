@@ -6,7 +6,7 @@ scripts, convergence criteria and default cluster. AutoZT ships 20 skills:
 | Family | Skills |
 |---|---|
 | VASP (CPU) | band-dft-cpu, defect-dft-cpu, elastic-dft-cpu, ke-dft-cpu, kl-dft-cpu, opt-dft-cpu, phonon-dft-cpu, zt-dft-cpu |
-| MACE | kl-mace-cpu, kl-mace-gpu, opt-mace-cpu, opt-mace-gpu, phonon-mace-cpu, phonon-mace-gpu, mlff-mace |
+| MACE | kl-mlff-cpu, kl-mlff-gpu, opt-mlff-cpu, opt-mlff-gpu, phonon-mlff-cpu, phonon-mlff-gpu, mlff |
 | Auxiliary | cohp-cogito (COHP/ICOHP bonding analysis), eph-qe-cpu (Quantum ESPRESSO electron-phonon), te-screen (thermoelectric surrogate screening), unihamgnn (graph data generation) |
 | Fitting | fc-fit (phono3py / pheasy / hiphive force-constant fitting) |
 

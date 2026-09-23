@@ -132,6 +132,10 @@ DEFAULT_PROJECT_SETTING = """\
 # 手动 autozt start / retry / rerun 不受本开关影响，随时可以单独跑。
 auto_advance: false
 # 路径占位符：{matdir}=材料目录 {mat}=材料名 {root}=本地项目根
+# 默认布局：POSCAR 只放在 {matdir}/；每个技能在 {matdir}/{技能名}/ 下保存
+# project_setting、result 和 log。技能启用 skill_subdir 后，AutoZT 会把下面
+# 的材料级默认路径自动解析为该技能自己的子目录；只有显式改写 result_dir/log_dir
+# 才会使用用户指定的位置。
 base_dir: "{matdir}"
 result_dir: "{matdir}/result"     # autozt fetch 回拉目的地（每步一个子目录）
 log_dir: "{matdir}/log"           # 该项目的操作日志 tf.log
@@ -1560,7 +1564,7 @@ def resolve_material_local(t, root, m):
                   % (_wk, m["work_dir_eff"] or "(无)"), file=sys.stderr)
     # v1.3：skill_subdir 开启时 result/log 默认进技能子目录；setting.yaml 里
     # 仍是 init 模板默认值（{matdir}/result）的视为"未定制"一并升级，
-    # 定制过路径的尊重原值（elastic init 后不用再手改 setting）
+    # 定制过路径的尊重原值（用户明确指定的跨目录布局不能被隐式改写）。
     rd, ld = st.get("result_dir"), st.get("log_dir")
     if m["_subdir"]:
         if not rd or rd == "{matdir}/result":
@@ -1701,7 +1705,7 @@ Safety gate (agent sessions only)
   approve COMMAND...      human approval for a pending action (requires a real TTY)
 
 Common options
-  -tt SKILL               skill key (e.g. kl-mace-gpu, band-dft-cpu); see 'autozt skills'
+  -tt SKILL               skill key (e.g. kl-mlff-gpu, band-dft-cpu); see 'autozt skills'
   -p MATERIAL             material name (or unique basename)
   -j STEP                 step label (S1_opt) or index (1..4)
   -c CONFIG               configuration file (default: ~/.config/autozt/tf.yaml)

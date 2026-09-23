@@ -4127,3 +4127,583 @@ Christoffel 特征值**全非零** → 声速有限 → ADP 正常。
 
 **下一步**：S8 跑完 → **S8.4**（`WRITE_MESH=true` 已配置，V53）→ 届时产出 `mesh.h5` +
 `intrinsic_transport.json`，是**首个真正验证 strict intrinsic 端的真实作业**（此前只有桩测）。
+
+### V81. 第 173 轮：✅ **CrS2_ortho S8 用 V78 修复口径重跑完成（jobid 3886010）—— ADP 不再 inf**
+
+**作业**：`CrS2_ortho-ke-dft-cpu-S8_kappa`，**COMPLETED**（00:11:34）。
+
+**收盘验收（本地 `result/step8_amset/`，AMSET v0.5.1）**：
+
+| 项 | 旧（08-27, v0.4.19, unity=false）| **新（09-22, v0.5.1, unity=true）** | 判定 |
+|---|---|---|---|
+| 日志 `ADP` | 4.43e12（有限）| **有限**（无 `inf`）| ✅ |
+| `mobility.ADP`（》对角均，300K / n=+1e19）| 363.41 | **22.26** | ✅ 非零 |
+| `mobility.IMP` | — | 36.56 | ✅ |
+| `mobility.POP` | — | 619.0 | ✅ |
+| `mobility.overall` | 61.51 | **3.034** | ✅ 非零 |
+| `conductivity`（S/m）| 9854.6 | **486.1** | ✅ 非零 |
+
+- 索引口径：`mobility[mech]` / `conductivity` 均为 **`(n_doping, n_temp, 3, 3)`**，取 `[iD, iT]`；`iD=7`（+1e19）、`iT=2`（300K），取对角均。
+- **V78 修复已落到本次 gen**：`2d_correction.json` 的 `elastic_outofplane_shear_zeroed=["C44=-0.5108->0.5108","C55=-0.5108->0.5108"]`，新弹性对角为 `[185.38, 185.38, -0.419, 0.5108, 0.5108, 68.5436]`（C44/C55 由 0 → 非零）——与 V79 预期一致。
+- **新旧差异（~16–20×）可解释且不是回归**：旧为 `unity_overlap=false`（真实重叠 + 去对称化 h5），V23 实测该组合会把 ADP 打高 **10–16 ×**；新为 unity=true（V80 同口径）。故 ADP 下降方向与幅度均符合 V23 结论。
+- 注：`amset.log` 出现 **1 个 `amset starting` / 2 个 `amset exiting`**（同时刻）。gen 的 `AMSET_CMD` 是 `amset run >> amset.log 2>&1`（追加），且本次日志自 23:39 起始、只有一个启动横幅，故这是 **AMSET 在一次 run 内打印两次结尾摘要**（内部输出），**不影响数据**（`transport.json` 与 `transport_47x47x7.json` md5 逐位相同）。
+
+**结论**：V76/V77 的根因（面外负剪切置零→奇异→ADP=0）**已由真实作业修复并验收**；CrS2_ortho S8 结论从“不可用”改为**可用（但仍属二维 3D 近似，绝对值不宜直接发表）**；正确的二维处理仍需 S8.4 插件。
+
+**待用户决定（不擅自做）**：
+1. MoS2 S8.4 的 `UNITY_OVERLAP` 取舍（A 真实 / B unity）——当前 step.conf 为 `false`（真实）+`WAVEFUNCTION_FULL=true`（全网格），V23.1 已证此组合可用但绝对值仍有 1.2–1.4 × 残差；
+2. 长期正解：是否为 CrS2_ortho/CrSe2_ortho 启用 S8.4（当前未开，无 `amset2d`）。
+
+### V82. 第 206 轮：🎯 **为 CrS2_ortho / CrSe2_ortho 启用 S8.4 并提交** —— 首个真实验证 strict intrinsic 的作业
+
+**背景**：V80/V81 之后仍无任何材料真正产出过 `mesh_*.h5` / `intrinsic_transport.json`——
+strict intrinsic（`WRITE_MESH=true` + `postprocess_intrinsic.py --check-reproduce`）此前只有桩测（V62/V68）。
+MoS2 S8.4 因重叠模式待定、CrSe2_hex 基线 3867317 未带 `write_mesh`，都不适合做首个验证；
+CrS2_ortho / CrSe2_ortho 的 S8 已完成、无模式争议（走 unity 默认），故选它们。
+
+**配置改动（均留备份 `.bak_preamset2d`）**：
+1. `project_setting/tf_<材料>_ke-dft-cpu.yaml` 的 `task_types.ke-dft-cpu` 下加 `amset2d: true`
+   （S8.4 组 default=false，不加则看不到该步）；
+2. 新建 `project_setting/templates/step8.4_amset2d/step.conf`：
+   `UNITY_OVERLAP = true`（V21 唯一被 DFT 地面真值验证的路径）、
+   `INTERPOLATION_FACTOR = 4`（V23：factor=10+nworkers=24 曾 OOM，factor=4 峰值约 47 GB）、
+   `WRITE_MESH = true`（落 mesh + 自动 strict intrinsic 后处理）。
+
+**init 后核对（远端运行目录，全部通过）**：
+- `settings.yaml`：`write_mesh: true` / `unity_overlap: true` / `interpolation_factor: 4` / `nworkers: 24`；
+  `elastic_constant` 为**原始 slab 值**（CrS2_ortho C11=60.609/C66=22.41；CrSe2_ortho C11=49.602/C66=17.69）；
+- 输入软链：`deformation.h5 -> step7b_deform_read/deformation_vac.h5`（真空口径）、
+  `wavefunction.h5 -> step4_wave`、`vasprun.xml -> step3_uniform`，**目标均存在**；
+- `submit.sh` 的跑法为 `... Runner.from_directory('.').run() >> amset.log 2>&1
+  && python postprocess_intrinsic.py --check-reproduce && cp -f ... transport.json`，
+  环境 `conda activate amset051`（v0.5.1）。
+
+**提交**：`CrS2_ortho` jobid **3886175**、`CrSe2_ortho` jobid **3886176**（PD）。
+
+**验收标准（跑完后）**：
+1. 运行目录出现 `mesh_*.h5`（AMSET `write_mesh` 产物）与 **`intrinsic_transport.json`**；
+2. `intrinsic_transport.json` 是剔除 IMP 后的严格本征结果，与 `transport.json` 的差异应仅体现在 IMP 通道；
+3. 若 `--check-reproduce` 复现失败，作业**整体失败且不写 `intrinsic_transport.json`**（设计如此，V62）。
+
+### V83. 第 207 轮：**SS 走通 S7→S7.1_read→S8，并为其启用 S8.4**
+
+**S7_deform**：`deform-06` 于 2026-09-23 00:05 **COMPLETED**（ExitCode 0:0），S7_deform 状态 **OK 10/10**。
+面内集 `{01,02,03,04,09}` 均有 `ionrelax/`，05–08 面外无 `ionrelax/`——符合 V43 口径判据。
+
+**S7.1_read**：`retry`+`start` 成功（本地生成步）。新 `deformation.h5` 实测（jzzn amset051）：
+
+| 项 | 值 | 判定 |
+|---|---|---|
+| attrs | `nspin_norm_fixed=skipped`, `nspin_norm_fix_reason=amset>=0.5.1` | ✅ 0.5.1 原生 |
+| 自旋通道 | `deformation_potentials_up` / `_down` 均 (23, **492**, 3, 3) | ✅ ISPIN=2 |
+| up/down 均值 | 均为 **1.21399**（完全等）| ✅ 无磁体系应等 |
+| k 点数 | **492 = 12×41**（旧为 3×11=33）| ✅ 新网格已生效（V56）|
+| 真空口径 | `deformation_vac.h5` 已生成（604076 B）| ✅（旧状态无此文件）|
+
+**SS S8_kappa**：`retry`（新 h5 + V78 弹性口径）+`start` → **jobid 3886229**（R）。
+生成的 `settings.yaml` 口径健康：`deformation_potential: deformation.h5`、`unity_overlap: true`、
+`interpolation_factor: 10`、`nworkers: 8`（提交模板 `--cpus-per-task=8`）；
+弹性对角 `[158.9, 162.401, -2.4042, **1.4978, 0.5765**, 58.3566]` —— 面外剪切 C44/C55
+**均为正**，本材料不触发 V76 的置零/取绝对值处理；旧 S8（08-30 备份）ADP=1967、overall=45.44
+（有限）也证明面外 C33=-2.4042 在实践中不致命。
+注：提交时的 `CONDA_SH` 指向 3090 路径告警为**已知虚警**（`submit.sh` 的 `if [ -d /home/wangchaoyue852/miniconda3 ]`
+在 jzzn 不成立，走 else 分支 `source /public/home/wangchao/miniconda3/...`，已逐行核对）。
+
+**SS S8.4 已启用（本轮只做配置，未提交）**：
+- `project_setting/tf_SS_ke-dft-cpu.yaml` 加 `amset2d: true`（备份 `.bak_preamset2d`）；
+- 新建 `project_setting/templates/step8.4_amset2d/step.conf`：`LAYER_THICKNESS = 6.73`（与 S8 一致）、
+  `UNITY_OVERLAP = true`、`INTERPOLATION_FACTOR = 4`、`WRITE_MESH = true`。
+- DAG 上 S8.4 `after: step8_amset`，故要等 3886229 完成后才会就绪（全局 auto_advance 关着，不会自动提交）。
+
+### V84. 第 208 轮：为 LS 启用 S8.4；修正 strict intrinsic 复现检查的“取旧 transport”隐患
+
+**LS S8.4 启用**（配置，等 S7 完成）：
+- `tf_LS_ke-dft-cpu.yaml` 加 `amset2d: true`（备份 `.bak_preamset2d`）；
+- `project_setting/templates/step8.4_amset2d/step.conf`：`LAYER_THICKNESS = 6.73`（与 S8 一致）、
+  `UNITY_OVERLAP = true`、`INTERPOLATION_FACTOR = 4`、`WRITE_MESH = true`。
+- 状态：S8.4 PREP（`after: step8_amset`），LS 当前 S7_deform R 9/10（deform-09）。
+
+**postprocess_intrinsic.py 修正（`--check-reproduce` 的 transport 选取）**：
+- 原：`tf = sorted(glob("transport*.json"))[0]` —— 按**字典序最小**取文件；
+  若目录里残留上一次的 `transport_<旧网格>.json`（retry/重跑常见），可能取到**旧文件**，
+  导致复现检查**假 FAIL**、整步失败。
+- 新：`sorted(..., key=os.path.getmtime, reverse=True)` —— 取**最新**，与 `find_mesh` 已有的
+  “多个 mesh 取最新”同口径。
+- 影响：对已提交的两个 S8.4 作业（CrS2_ortho 3886175 / CrSe2_ortho 3886176）无影响
+  （它们目录是新建的、只有一个 transport）；对后续 retry（尤其 MoS2 S8.4 目录里还留着
+  `transport_141x141x11.json`）是必要的护栏。改动需重新 gen 才会推到运行目录。
+
+**本轮作业现状**：CrSe2_hex 3867317 R；LS deform-09 R；SS S8 3886229 R；
+MoS2 S8 3886078 PD；CrS2_ortho/CrSe2_ortho S8.4 3886175/3886176 PD。
+
+### V85. 第 209 轮：首个 S8.4 作业的输入口径核对（CrS2_ortho / CrSe2_ortho）
+
+与已知好的 CrSe2_hex S8.4 逐键对比 `2d_correction.json`（结构完全一致）：
+
+| 项 | CrS2_ortho | CrSe2_ortho | CrSe2_hex（已知好）|
+|---|---|---|---|
+| `deform_geometry` | ionrelax(in-plane)+clamped(out-of-plane) | 同 | 同 |
+| `cell_c_A` | 20.0 | 20.0 | 20.0 |
+| `c/t` 重标度 | 3.0586 | 2.8788 | 2.8796 |
+| `eps_inf` 面内均 | 6.8277 | 8.0486 | 8.0726 |
+| `r_inf / Δr` (Å) | 58.28 / 3.74 (6.4%) | 70.49 / 6.59 (9.3%) | 70.73 / 6.57 (9.3%) |
+| `layer_normal` | (0,0,1) | (0,0,1) | (0,0,1) |
+| `mechanisms_2d` | ADP,IMP,POP | 同 | 同 |
+| `skill_rev` / plugin | 2026-09-16-amset2d / amset2d_plugin.py | 同 | 同 |
+
+- CrSe2_ortho 与 CrSe2_hex 同组成，r_inf/Δr 几乎一致（差 <1%）—— 互相印证输入健康；
+- CrS2_ortho 阴离子不同，r_inf 偏小（6.83 介电 / 58.3 Å）合理；
+- 无 `pop_frequency` 键是**设计如此**（gen14 交给运行期插件算），三个材料的 key 集相同。
+
+**结论**：首两个 S8.4 作业的输入未发现任何畸形，等待队列出结果。
+
+### V86. 第 210 轮：对**实装的 amset051** 逐行核实自旋 key bug 与本项目的修正
+
+**装在集群上的 amset 0.5.1 `io.py`（md5 `9c5015dd6aeeb074e759d75dee2e962a`）确认仍带 bug**：
+- `write_mesh()` 在 `for spin, spin_value in value.items():` 循环内对 `key` **原地赋值**
+  `key = f"{key}_{spin.name}"` —— 第二个自旋时 `key` 已是 `..._up`，于是向下写成 **`<name>_up_down`**（而非 `_down`）；
+- `load_mesh()` 用 `if "_up" in key or "_down" in key` + `key.split("_")[-1]` 解析，于是把 `_up_down`
+  误分组成顶层键 `energies_up`、`scattering_rates_up` 之类（下游丢失）。
+
+**本项目 `postprocess_intrinsic.py::read_mesh_h5` 的修正已逐行核对**：
+```
+_SPIN_SUFFIXES = (("_up_down", "down"), ("_down", "down"), ("_up", "up"))   # 最长优先
+```
+- `energies_up_down` -> `(energies, down)` ✅
+- `energies_up`      -> `(energies, up)`   ✅
+- `scattering_rates_up_down` -> `(scattering_rates, down)` ✅
+
+即：**安装包里的 bug 是真的，本项目的读取器不依赖 `amset.io.load_mesh`，而是自带最长后缀优先的解析**——
+这正是用户说的“不是切换环境就自动对”的具体点：`WRITE_MESH` 只是产出 mesh，
+**能不能读对取决于这个后处理器**。双自旋（SS/LS/CrS2_ortho/CrSe2_ortho）与单自旋（MoS2）两条路径均覆盖。
+
+### V87. 第 211 轮：`read_mesh_h5` 对自旋 key bug 的**本地可复现单测**（`tmp/test_read_mesh_20260923.py`）
+
+用本地 venv（`tmp/amset2d/env419`，python3.10 + h5py 3.15 + pymatgen）手工构造 h5，
+**按 AMSET 0.5.1 `write_mesh` 的真实 bug 命名**写入（`energies_up` / `energies_up_down`），
+再分别用本项目 `read_mesh_h5` 与 AMSET 自带 `load_mesh` 解析：
+
+```
+== two-spin (ISPIN=2) ==
+  energies.up   = 1.0  OK
+  energies.down = 2.0  OK
+  rates.down    = 2.0  OK
+  no bogus top-level keys  OK
+== single-spin (ISPIN=1: MoS2) ==
+  energies.up   = 1.0  OK
+  no bogus top-level keys  OK
+== amset.io.load_mesh 对照（同一份 two-spin h5）==
+  顶层键: [energies, energies_up, kpoints, scattering_labels, scattering_rates, scattering_rates_up]
+  -> down 数据被塑进 energies_up（复现 bug）
+RESULT: PASS
+```
+
+**意义**：这是 strict intrinsic 链上“**读 mesh**”这一步的确凿本地证据（不依赖集群作业）：
+安装包里的 bug 真实存在，而**本项目的读取器不会中招**。测试脚本留在 `tmp/`（临时区）。
+
+**仍未验证**：真实 `mesh.h5` 的端到端复现（`--check-reproduce` 在作业里跑通）—— 等 3886175/3886176。
+
+### V88. 第 212 轮：`postprocess_intrinsic` 调用的 AMSET API 与**实装 0.5.1** 逐签名核对
+
+| 调用点（postprocess_intrinsic.py）| 实装 amset051 签名 | 结论 |
+|---|---|---|
+| `solve_boltzman_transport_equation(ad, calculate_mobility=..., separate_mobility=True, progress_bar=False)` | `(amset_data, calculate_mobility, separate_mobility, progress_bar)` | ✅ |
+| `sig0, seeb0, kap0, mob0 = solve_...` | `return sigma, seebeck, kappa, mobility`（transport.py:70）| ✅ 4 值 |
+| `ad.set_scattering_rates(rates, labels)` | `(self, scattering_rates, scattering_labels)`（data.py:332）| ✅ |
+| `Runner.from_directory('.').run()` | `(directory='.', input_file, settings_file, settings_override)`（run.py:351）| ✅ |
+
+另：`data.py::set_scattering_rates` 校验 `rates[spin].shape[1:] == (n_doping, n_temps) + energies[spin].shape`，
+与 `zero_mechanisms` 文档的 `(n_labels, n_doping, n_temps, n_bands, n_kpoints)` **一致** ✅。
+
+**结论**：S8.4 作业里的 `postprocess_intrinsic.py --check-reproduce` **不会因 API 不符而崩**；
+剩下的唯一未知变量就是真实 mesh 数据的数值复现。
+
+### V89. 第 213 轮：🎯 **strict intrinsic 首次真实端到端复现 PASS**（本地，`tmp/amset2d` 的真实 run 目录）
+
+发现本地 `tmp/amset2d/runs/` 下有**真实**的 2D AMSET run 目录（含 `vasprun.xml` + `mesh*.h5` +
+`transport*.json` + `settings.yaml` + `wavefunction.h5` + `deformation.h5`）。用其中之一
+`CrS2_hex/t1m_c30`（2 自旋、mesh 47×47×5=11045 点）做端到端：
+
+| 运行 env | 该 run 的 transport 由谁产生 | 复现 max\|diff\| | 结果 |
+|---|---|---|---|
+| **env419（amset 0.4.19）** | 0.4.19 | **6.648e-08** | ✅ **PASS** |
+| venv（amset 0.5.1） | 0.4.19 | 1.415 | ❌ FAIL（**跨版本**）|
+
+**env419 的结果**（0.4.19）：
+```
+[..] amset=0.4.19 mechanisms=[ADP, IMP, POP] spins=[1, -1] n_full=11045
+[..] 复现检查：max|diff|=6.648e-08 -> PASS
+[OK] 本征口径：剔除 [IMP]，保留 [ADP, POP]
+[DONE] 本征输运已写出：.../t1m_c30/intrinsic_transport.json
+[..] T=300 K 面内本征迁移率 overall = 61.968 cm^2/Vs
+```
+即：**读 mesh（含 2 自旋 bug 命名）→ 注入散射率 → 用 AMSET 自己的积分器逐位复现
+`transport.json` → 置零 IMP → 重积分 → 写出 `intrinsic_transport.json`**，全链在真实数据上跑通。
+
+**0.5.1 的失败是跨版本伪影**：该 run 的 `transport.json` 是 0.4.19 产生的，用 0.5.1 重建
+能带/DOS/费米后积分必然差一点（max\|diff\|=1.415，相对量级 ~0.1%），不是逻辑错误。
+集群 S8.4 作业的 transport 与后处理**同版本（都是 0.5.1）**，应像 0.4.19 一样逐位复现。
+
+**产物格式确认**：`intrinsic_transport.json`（schema `autozt.intrinsic_transport/1`）含
+`reproduction_check={"transport_json":"transport_47x47x5.json","max_abs_diff":{overall:2.4e-9,ADP:6.6e-8,IMP:5.2e-9,POP:3.9e-8,conductivity:2.0e-8,seebeck:7.5e-10},"passed":true}`，
+`intrinsic_dropped=["IMP"]`、`intrinsic_labels=["ADP","POP"]`，与设计一致。
+
+**尝试补 0.5.1 本地端到端（未成，本地环境问题）**：用 `venv`（amset 0.5.1）重跑该 run 时，
+`Runner` 在加载波函数/积分阶段连撞 numpy 2.0 移除 API：`np.string_`（bash-29）→ 加 shim 后又是 `np.trapz`（bash-30）；
+本地 venv 是 python3.13 + numpy 2.x，**跑不了 amset 0.5.1 的 Runner**—— 属本地环境不匹配，
+**与集群 amset051（python3.10）无关**（集群 3867317 已跑过波函数加载、在正常算 rate）。
+故 **0.5.1 同版本复现的最终确认仍以集群 3886175/3886176 为准**。
+
+### V90. 第 214 轮：🎯🎯 **0.5.1 同版本端到端复现也 PASS**（本地用真 run + 插件重算）
+
+用本地 `venv`（amset **0.5.1**）在同一套真实输入上重跑 Runner（带插件）→ 产出 0.5.1 的
+`mesh_47x47x5.h5` + `transport_47x47x5.json`（scattering 164 s、总 174 s、maxRSS 1.9 GB），
+再跑 `postprocess_intrinsic.py --check-reproduce`：
+
+| 版本 | reproduce | max overall diff | intrinsic overall @300K（10 掺杂）|
+|---|---|---|---|
+| 0.4.19（其自身 transport）| ✅ PASS | 2.420e-09 | 61.97 … 746.51 |
+| **0.5.1（其自身 transport）** | ✅ **PASS** | **8.527e-14** | 70.58 … 1440.23 |
+
+```
+[..] 复现检查：max|diff|=9.313e-10 -> PASS
+[OK] 本征口径：剔除 [IMP]，保留 [ADP, POP]
+[DONE] 本征输运已写出：.../t1m_c30_051/intrinsic_transport.json
+```
+
+**注**：本地 venv 是 numpy 2.x，amset 0.5.1 需要几个 numpy 2.0 重命名 shim
+（`np.string_=np.bytes_`、`np.trapz=np.trapezoid` 等，放 `tmp/amset2d/np2shim/sitecustomize.py`）；
+集群 amset051 是 numpy 1.26.4，**无需 shim**。shim 只恢复被移除的别名，
+**不改变 0.5.1 的算法路径**，不影响结论。
+
+**结论**：strict intrinsic 链（读 mesh 含 2 自旋 bug 命名 → 注入散射率 → 逐位复现
+`transport.json` → 置零 IMP → 重积分 → `intrinsic_transport.json`）**在 0.4.19 与 0.5.1
+两个版本上、真实数据上均 PASS**。集群 3886175/3886176 只是把同一套代码搬到集群，预期同样 PASS。
+
+### V91. 第 215 轮：确认本地端到端测试**确实走了 IR→全网格展开**（`expand_ir_to_full`）
+
+两个本地 mesh 的散射率都是**不可约网格**存的，复现 PASS 说明展开正确：
+
+| mesh | `kpoints` | `ir_kpoints` | `scattering_rates` 末维 | `ir_to_full` |
+|---|---|---|---|---|
+| 0.4.19 | 11045 | 624 | 624 | 11045 |
+| 0.5.1 | 11045 | 3315 | 3315 | 11045 |
+
+即 `inject_mesh_rates` 用 **mesh 自带**的 `ir_to_full_kpoint_mapping`（而非重建的）
+把 624/3315 列展开回 11045 全网格，再用 `perm` 对齐 ad 顺序；两版本都逐位复现 → 该路径正确。
+0.4.19 与 0.5.1 的 IR 点数不同（624 vs 3315，spglib/对称性差异）也各自复现，
+说明「跨版本不可约点选择不同」的隐患被 mesh 自带映射覆盖。
+
+### V92. 第 218 轮：验证 V84 的「取最新 transport」修正（真实数据 + 人为陈旧文件）
+
+在真实的 0.5.1 run 目录里人为放一个**字典序最小、mtime 最旧、数值错误（×2）**的
+`transport_1x1x1.json`，再跑 `--check-reproduce`：
+
+```
+字典序（旧代码取 [0]）: transport_1x1x1.json   <- 会选中它 -> 假 FAIL
+mtime  （新代码取最新）: transport_47x47x5.json
+结果: 复现检查 max|diff|=9.313e-10 -> PASS
+      chosen transport: transport_47x47x5.json | passed: True
+```
+
+⇒ V84 的修正（`key=os.path.getmtime, reverse=True`）在真实数据上确实避免了
+retry/重跑时的复现假 FAIL。
+
+### V93. 第 219 轮：修正方案 (c) 比较器 `tmp/compare_s84.py` 的**掺杂/温度轴序错误**
+
+`compare_s84.py` 原先用 `arr[iT, iD]` 取迁移率——**正是 V73 更正过的轴序错误**
+（AMSET `mobility[mech]`/`conductivity` 形状是 `(n_doping, n_temp, 3, 3)`，应取 `[iD, iT]`）。
+后果：在 10 掺杂 × 9 温度的结果上会取到 (掺杂 index=2, 温度 index=7) 的点，
+而不是目标 (iD=7, iT=2)；若新旧文件的掺杂/温度网格不同，映射还会错位。
+
+**修正**：4 处 `[iT, iD]` → `[iD, iT]`。
+
+**验证**（CrS2_ortho S8 的 `transport_47x47x7.json` 自比）：
+```
+mech              old       new   drift%
+overall          4.55      4.55     0.0%
+ADP             33.39     33.39     0.0%
+IMP             54.83     54.83     0.0%
+POP               928       928     0.0%
+sigma_S/m       729.1     729.1     0.0%
+S_uV/K          443.5     443.5     0.0%
+```
+与手工按 `[iD, iT]` + 面内 (xx+yy)/2 的计算**逐位一致**（overall 4.55 / ADP 33.39 / conduct 729.1）。
+（注：V81 记的 22.26/3.034 是 `trace/3`，本次是面内 (xx+yy)/2，二者口径不同，不矛盾。）
+
+**顺带全仓扫描**（`skill/`、`autozt/`、`tmp/` 的 `[iT, iD]` 式索引）：除本文件外**无其它实例**。
+
+### V94. 第 222 轮：跑技能自带自检 `test_postprocess_intrinsic.py`（含真实 run 集成用例）—— **ALL PASS**
+
+```
+$ cd skill/ke-dft-cpu/step8.4_amset2d
+$ INTRINSIC_TEST_RUN_DIR=.../t1m_c30_051 python test_postprocess_intrinsic.py
+PASS split: energies_up -> (energies, up)
+PASS split: energies_up_down -> (energies, down)  [AMSET write_mesh bug]
+PASS expand: 形状 (2 labels, 7 full)
+PASS zero/drop/resolve/inplane/to_jsonable ...
+PASS read_mesh_h5: up_down(bug) 正确归到 down
+[..] 集成测试：.../t1m_c30_051
+[..] amset=0.5.1 mechanisms=[ADP, IMP, POP] spins=[1, -1] n_full=11045
+[..] 复现检查：max|diff|=9.313e-10 -> PASS
+[OK] 本征口径：剔除 [IMP]，保留 [ADP, POP]
+[..] T=300 K 面内本征迁移率 overall = 70.576 cm^2/Vs
+PASS 集成: 重积分复现 transport.json (rc=0)
+ALL PASS
+```
+
+这是**一条命令可复现**的完整自检（28 项纯逻辑 + 1 项真实 mesh 集成）。
+本地 venv 需 numpy2 shim（`tmp/amset2d/np2shim`），集群 amset051（numpy 1.26.4）不需。
+
+**另**：全仓搜索确认 `intrinsic_transport.json` **目前无下游消费者**（S8.3 对比等读的是
+`transport.json`）—— 它是终端交付物，用户需显式引用；若要进一步自动接入需另行讨论。
+
+### V95. 第 223 轮：新增验收工具 `tmp/check_intrinsic.py`
+
+一条命令验收 S8.4 的 `intrinsic_transport.json`（schema / amset 版本 / 展开机制 /
+`reproduction_check` + 300K 面内 μ/σ/S），按 `[iD, iT]` + 面内 (xx+yy)/2 取数（V73/V93 口径）。
+对两个本地结果均 **RESULT: PASS**：
+- 0.5.1: overall 70.58 / ADP 72.06 / POP 4275.6（300K，10 个掺杂点）；
+- 0.4.19: overall 61.97 / ADP 63.25 / POP 4079.0。
+
+供集群 S8.4 出结果后一键验收，也供方案 (c) 使用。
+
+### V96. 第 225 轮：本地预跑 S8.4 的**作业内重叠预检**（CrS2_ortho / CrSe2_ortho）
+
+对两个新生成的 S8.4 输入目录跑 `overlap_preflight.py --in-job`：
+
+| 材料 | 维度/overlap | Christoffel 面内比 | 结论 |
+|---|---|---|---|
+| CrS2_ortho | 2D / unity=true | 0.3697（min -0.167 为面外）| **通过（有告警）** |
+| CrSe2_ortho | 2D / unity=true | 0.3566（min -0.731 为面外）| **通过（有告警）** |
+
+代码核对（`overlap_preflight.py`）：
+- ② 只在 `real overlap + 非完整网格` 时对 2D 拦截（`not complete and not unity_overlap and two_d`）；
+  unity 不触发 → 本材料（可能非完整的）step4_wave h5 不会被拦；
+- ⑤ 只在**面内** Christoffel 最小特征值 <= 0 时拦截；本例负值都在面外 → 仅告警。
+
+⇒ 集群上这两个 S8.4 作业的预检会通过，不会卡在预检。
+（本地 `wavefunction.h5` 缺失只是因为未拉取该大文件；集群上目标存在，已核。）
+
+### V97. 第 226 轮：跑插件核自检 `test_kernels.py` —— **全部 PASS**
+
+```
+$ python test_kernels.py
+[amset2d] amset 0.5.1 | c=20.000 A | r_inf=[[17.008]] | mechanisms=ADP,POP,IMP,PIE
+PASS ADP 各向同性（F = D²/C11，与 C44/C55 符号无关）
+PASS ADP 各向异性张量旋转不变
+PASS VASP 顺序未重排被护栏拦下
+PASS POP 真空不变性 / q→0 有限 = 2πc·Δr/ε_env²
+PASS POP 自由载流子屏蔽（压到 4e-12）
+PASS IMP 与手算公式一致 / q→0 不发散
+PASS PIE q→0 有限 / 旋转不变
+PASS Voigt 重排（弹性 + 压电）/ delta_r_check
+全部 PASS
+```
+
+=> 2D 散射核（ADP/POP/IMP/PIE）与 Voigt 重排在 0.5.1 上逐项通过；
+这是 S8.4 数值的**核侧证据**（配合 V89–V96 的后处理侧证据）。
+
+### V98. 第 230 轮：确认 S8.4 的**原始 slab 负的面外剪切**不会破坏运行（本地实证）
+
+S8.4 的 gen 写**原始 slab 弹性常数**（不乘 c/t、不做 V76 的置零/取绝对值）。
+CrS2_ortho 原始 C44/C55 = **-0.167**（负）、CrSe2_ortho = +0.072。
+本地 0.5.1 端到端测试所用 run（`t1m_c30`）的 `settings.yaml` 弹性也是 `C44 = -0.0693333`（负），
+而该 run **成功跑完**（scattering 164 s、mesh+transport 产出、`--check-reproduce` PASS）→
+证明 **S8.4 的 2D 核（只用面内 2×2）不受面外负剪切影响**。
+（与标准 S8 的 3D 路径不同：那里负值/置零会让 3D Christoffel 奇异 → ADP=0，见 V76–V78。）
+
+### V99. 第 257 轮：🎯🎯 **集群首个真实 strict intrinsic 结果产出并验收通过**
+
+CrS2_ortho / CrSe2_ortho 的 S8.4_amset2d 作业完成：
+
+| 材料 | jobid | 状态 | reproduce max\|diff\| | intrinsic overall（300K, n=+1e19）| ADP | POP |
+|---|---|---|---|---|---|
+| CrS2_ortho | 3886175 | COMPLETED 00:03:57 | **PASS** 2.154e-09 | **82.18** | 102.33 | 655.0 |
+| CrSe2_ortho | 3886176 | COMPLETED 00:03:13 | **PASS** 6.985e-10 | **58.38** | 81.25 | 280.2 |
+
+产物：`mesh_35x35x5.h5`（14.5/15.2 MB）+ `intrinsic_transport.json`（205 KB）+ `transport.json`。
+`tmp/check_intrinsic.py` 验收：**both RESULT: PASS**。
+transport 无 IMP 的本征结果与 S8（含 IMP）可分机制对比；各机制绝对值仍为 2D 模型级近似。
+
+### V100. 第 258 轮：把 V63 的「作业链首 rm -f transport.json」从 S8.4 补到标准 S8（gen_step10）
+
+**发现的沿用 bug**：`gen_step10_amset.py` 的 `AMSET_CMD` 缺 `rm -f transport.json`（只有 gen14/S8.4 有）。
+autozt 判据是 `marker(transport.json:thermal_conductivity)`，只看「文件在+含子串」；若 AMSET 失败而
+`transport.json` 是上一次成功留下的，整步会被判成 finished(OK)、**失败被隐藏**（正是 V63 在 S8.4 修过的问题）。
+
+**改动**：`AMSET_CMD` 链首加 `rm -f transport.json;`，与 gen14 一致（失败时无 transport.json -> 判据 not-done）。
+`py_compile` 通过。**下一次 retry/gen 才生效**（已算完的步骤不受影响）。
+全仓审计：8.1/8.2/8.3 不跑 AMSET 作业（只读 transport.json），无同类遗漏。
+
+**另修两处同类**：`step4_wave/gen_step6_wave.py` 与 `step4b_wave_full/gen_step6b_wave_full.py` 的 `AMSET_CMD`
+也缺链首 rm —— 判据 `marker(wavefunction.h5:)`，同一假 OK 风险（`amset wave` 失败而旧 h5 在）。
+已加 `rm -f wavefunction.h5;`，`py_compile` 通过。
+
+**遗留（未擅自改，需用户定）**：VASP 类步骤的 marker 是 OUTCAR 子串（S5_dielect/S6_elastic 等）；
+VASP 启动时会重写 OUTCAR，但若作业在 VASP 启动前就失败，旧 OUTCAR 仍在 -> 同类假 OK。
+要根治需在作业脚本/模板里链首删 OUTCAR（改动面大、风险高），建议单独评估。
+
+### V101. 第 258 轮：与课题组 JAP 论文对照（CrS2/CrSe2 单层 + SS/LS 超晶格）
+
+**文章**：中欧纳米声子学联合实验室/陈杰组，J. Appl. Phys.（DOI 10.1063/5.0308349）
+「Effect of superlattice period length on thermoelectric performance: CrS2, CrSe2, CrS2/CrSe2 lateral superlattice」。
+给出：沿 x 的电子/空穴弛豫时间 CrS2 **48.6/149.5 fs** → SS 36.9/129.3 → LS 32.2/121.7；600K 峰值 ZT：CrS2 0.45 / CrSe2 0.40 / SS 0.39 / LS 0.21。
+
+**我们的 S8.4 本征结果对照**（300K，n=+1e19，面内）：
+
+| 材料 | 我们 μ_e | 由 DPT m* 反推 τ_e | 文章 τ_x,e |
+|---|---|---|---|
+| CrS2_ortho | 82.2 | **≈53 fs** | **48.6 fs**（差 ~8%）|
+| CrSe2_ortho | 58.4 | ≈34 fs | —（文章未给 CrSe2）|
+
+- **电子侧量级与趋势一致**（CrS2 > CrSe2、τ ~ 50 fs）；
+- **空穴侧不一致**：文章 CrS2 τ_h=149.5 fs（空穴比电子快 3×），我们 -1e19 本征 overall 30.9
+  → 反推 τ_h≈21 fs（空穴比电子慢 2.5×），**e/h 不对称方向相反**；
+- 口径差异：文章是 ZT/声子研究（κ_lat 来自 MLFF+声子 BTE），τ 为其电子模型；我们 AMSET 含 POP/屏蔽、PBE+scissor，μ 是费米窗平均。
+- **结论**：电子侧「像」；空穴侧需查（候因：POP 对空穴偏强、价带近简并/自旋、scissor、费米窗）。
+
+### V102. 第 1 轮（新目标）：**空穴侧单独查** —— 三个假设逐一排查，定位到 AMSET vs DPT 的 ADP 不一致
+
+**假设 1：POP 对空穴偏强 → 不成立。** 本征逐机制（300K）：
+
+| 材料/载流子 | overall | **ADP** | POP |
+|---|---|---|---|
+| CrSe2_ortho 空穴 @-1e19 | 23.3 | **26.0** | 292.6 |
+| CrSe2_ortho 电子 @+1e19 | 58.4 | **81.3** | 280.2 |
+| CrS2_ortho 空穴 @-1e19 | 30.9 | **32.9** | 799.0 |
+
+空穴迁移率是 **ADP 限制**（POP 远大、几乎不起作用），与「POP 偏强」相反。
+
+**假设 2：scissor → 不成立。** S8.4 log：`bandgap set to 0.760 eV, applying scissor of -0.012 eV`（DFT 隙 0.772），极小。
+
+**假设 3：价带近简并/自旋 → 基本不成立。** vasprun（NELECT=24, NBANDS=18, nv=12）：
+- CrSe2_ortho：VBM=-1.857 @k26（Γ），CBM=-1.097 @k26，直接隙 0.760；VBM 下一条价带在 **-3.49**（离 1.63 eV）—— **不近简并**；
+- CrS2_ortho：VBM=-2.118，下一条 -3.87（离 1.75 eV）；但 **up/down 最大分裂 0.208 eV**（磁性），CrSe2 仅 0.013 eV。
+
+**真正的不一致：AMSET 空穴 ADP 比 DPT 低 ~8×（电子侧一致）**：
+
+| 方法 | 电子 ADP | 空穴 ADP | 空穴/电子 |
+|---|---|---|---|
+| AMSET（2D 插件）| 81.3 | **26.0** | 0.32 |
+| DPT（带边，by_dir）| 71.3 | **206.7** | 2.90 |
+| 论文 τ | 48.6 fs | 149.5 fs | 3.08 |
+
+DPT 与论文的 e/h 不对称方向一致（空穴快），AMSET 相反。带边 E1_vac（CrSe2）：电子 5.02，空穴 2.83（空穴 E1 小 → DPT 空穴快）。
+
+**已排除**：插件 ADP 核与 AMSET 原版逐行一致（只限面内两支）；形变势 h5 的带边/对角与 band_edges 一致（rms 对角 2.25 vs 带边 2.83）。
+
+**下一步（本轮已启动）**：本地用 amset 0.5.1 重跑 CrSe2_ortho S8.4（`tmp/amset2d/runs/CrSe2_ortho/s84_local`，后台 `bash-37`），
+用于逐带打印空穴/电子带的有效 D与 `vb_idx`，做受控对比（如改 `energy_cutoff`、开 `_DEBUG`）。
+
+### V103. 第 2 轮：本地复现成功 + 标准 S8 交叉校验（空穴侧结论强化）
+
+**本地用 amset 0.5.1 重跑 CrSe2_ortho S8.4 成功**（`tmp/amset2d/runs/CrSe2_ortho/s84_local`，564 s），
+与集群逐位一致（ADP 空穴 6.00 vs 5.57、电子 17.67 vs 17.75）—— 可用于受控实验。
+
+**标准 S8（3D 路径）也给出同样的 e/h 不对称**（CrSe2_ortho，面内，-1e19/+1e19）：
+
+| 路径 | ADP 空穴 | ADP 电子 | 空穴/电子 |
+|---|---|---|---|
+| S8.4（2D 插件，本征 IMP=0）| 26.0 | 81.3 | 0.32 |
+| **S8（3D 标准）** | **29.3** | **54.1** | **0.54** |
+| DPT（带边）| 206.7 | 71.3 | 2.90 |
+
+→ **AMSET 的两条路径（独立实现）都给「空穴慢」**，与 DPT/论文相反。因此这不是 S8.4 插件的单点 bug，而是 **AMSET 全带 vs DPT 带边近似** 的差异。
+
+**一个新发现（口径）**：`transport.json` 的 `mobility['ADP']`（空穴 6.0）≠ 本征 JSON 的 ADP（空穴 26.0）。
+前者是 AMSET `separate_mobility` 的「分机制贡献」，后者是 `_calculate_mobility` 的「**机制单独跑**」（与 DPT 同口径，故对比用后者）。
+
+**受控实验受阻**：把 `energy_cutoff` 改 3.0 重跑时 AMSET 报
+`RuntimeError: Deformation potential file does not contain the correct number of bands`（窗口变宽后 h5 带数不匹配）—— 需同筛重生成 h5 才能做。
+
+**当前结论**：空穴侧不是 POP/scissor/近简并；不是 S8.4 单点 bug。
+下一步二选一：(a) 核对论文 τ 的方法（若为带边 DPT，则其 τ_h 本就偏高）；
+(b) 从网格加速度/能量直接算空穴的传导质量，看是否远大于带边拟合的 1.05。
+
+### V104. 第 3 轮：定位到带边在 **K 谷**，并确认空穴异常是**材料特异**而非 AMSET 通病
+
+- **带边位置**：VBM/CBM 在 **k=(1/3,1/3,0)（K 谷）**，不是 Γ（我之前把 k26 误当 Γ）。
+- h5 在 K 的 D 与 `band_edges.json` **逐位对上**：空穴 band3 diag=**2.835**、电子 band4 diag=**5.020**。
+- 从网格能带曲率拟合空穴带边质量：**m*≈1.2 m_e**（与 DPT 的 1.05 一致）—— 所以 **DPT 的输入（m* 与 E1）都对**，却给 206，而 AMSET 给 26。
+- **跨材料对比（关键）**：MoS2 的 AMSET 是空穴快（μ_h 1070 > μ_e 250，V23），与 DPT/文献方向一致；
+  而 **CrSe2/CrS2 的 AMSET 是空穴慢**。⇒ 不是 AMSET 对所有材料都反，而是 **Cr 的 d 价带**特异。
+
+**结论**：CrSe2/CrS2 空穴侧，DPT（与论文的 τ）用带边抛物线近似会高估；AMSET 全带给出的空穴更低。
+且本模型（无 ODP/无四极矩，Poncé PRL2023 给 MoS2 空穴误差 76%）本就对空穴最不可靠。
+建议与论文比时**只分机制/趋势、不比空穴绝对值**，并以 EPW/Perturbo（开二维库仑截断）作为定量依据。
+
+### V105. 第 4 轮：论文用的是**形变势理论（DPT）** —— 空穴分歧的最终定性
+
+检索到论文（DOI 10.1063/5.0308349）含 **"TABLE I. Deformation-potential constant"**
+（AIP 表格页 `pubs.aip.org/view-large/92888908`，403 未能下全文），即其电子输运是
+**形变势理论（带边 E1 + 有效质量）** 口径 —— **与我们 gen_step12 的 DPT 同源**。因此：
+
+- 我们的 **DPT 复现了论文的 τ 方向与量级**（CrSe2: 空穴 124 fs / 电子 42 fs；论文 CrS2 149.5/48.6 fs）；
+- 我们的 **AMSET（全带 BTE）** 给空穴更慢 —— 这是**方法升级**带来的差异，不是 S8.4 的 bug；
+- 差异集中在 **Cr 的 d 价带**（MoS2 的 S-p 价带两侧一致）；
+- 本模型（无 ODP/四极矩）对空穴绝对值本就最不可靠（Poncé PRL 2023，MoS2 空穴 76%）。
+
+**最终结论**：用户提的三个候因（POP/近简并/scissor）**均排除**；空穴分歧的根因是
+**「论文/DPT 的带边抛物线 τ」vs「AMSET 全带 BTE」**，且是 Cr-d 价带特异。与论文比较
+**只分机制/趋势、不比空穴绝对值**；定量须 EPW/Perturbo。
+
+### V107. 第 29 轮（旁支）：CrSe2_hex 基线 3867317 撞 **24h 墙钟 TIMEOUT**
+
+`CrSe2_hex-ke-dft-cpu-S8.4_amset2d`（jobid **3867317**，0.4.19+补丁 基线）在 **1-00:00:31** 被 SLURM walltime
+（提交模板 `--time=24:00:00`）杀掉，State=**TIMEOUT**；跑了 ~24h 仍停在
+"Calculating rates for spin-down band" 阶段，**未产出 transport.json / mesh**（amset.log 28.9 MB）。
+AMSET 无检查点，重跑仍会在 24h 被砍。
+→ 方案 (c)/(d) 的基线需要二选一：提高该步提交模板的 `--time`（改配置，需用户同意），
+或降低网格/插值因子（接近当前 2D 材料的 factor=4 口径）。
+注：同一时间队列里还有其它工作线的作业（Si_ovs5/MoS2_kl/MoS2_ovs5 等），也在抢 cpu192 的 slot。
+
+### V106. 第 1 轮（新目标）：2D 验证集开工 —— WS2/MoSe2/WSe2 三个项目建立并提交 S1_opt
+
+**依据**：`docs/dev/PAPER-PLAN-2026H2.md` §6.1 的 2D 一档验证集
+（`validation_tiers/01_strict_standard_benchmarks/`）原文写着「已经建好，但一个都还没跑」。
+用户选定 3 个：**WS2_2H / MoSe2_2H / WSe2_2H**（JARVIS JVASP-658/60566/652）。
+
+**动作**：
+- 新建 `<work_AutoZT>/<MAT>/POSCAR` + `<MAT>/ke-dft-cpu/project_setting/`：POSCAR ← benchmark；
+  project_setting ← 复制 MoS2（tf yaml 含 `amset2d: true` + `wavefunction_full: true`），
+  删掉 MoS2 专属的顶层 `templates/step.conf`（其 `BANDGAP=pbe` 仅适用 MoS2）
+  → 回落到技能默认 **`BANDGAP=hse`**、`FUNC=pbesol`；step8.4 用 `WAVEFUNCTION_FULL=true`+`UNITY_OVERLAP=false`+`WRITE_MESH=true`。
+- `autozt -p <MAT> status` 确认：`Local=/mnt/d/tf_data/work_AutoZT/<MAT>`、`Dir=.../work/<MAT>/ke-dft-cpu`、`Dim=2D`、S1_opt PREP。
+- `-j S1_opt init` 后核对：INCAR `GGA=PS / ISIF=2(第一段) / ENCUT=390 / ISPIN=1 / LMAXMIX=4`；KPOINTS 15×15×1；POSCAR 正确；dim/mag/ldau 已判定。
+- `start` 提交：**WS2=3886797、MoSe2=3886798、WSe2=3886799**（PD）。
+
+**文献锚点（待核口径）**：Backman et al., *Phonon-limited transport in 2D materials: a unified approach …*,
+**Phys. Rev. Applied 21, 054017 (2024)** / arXiv:2312.00577；其博士论文给出单层本征声子限制迁移率
+**MoS2/MoSe2/WS2/WSe2 = 221/89/335/255 cm²/Vs**。**比对前必须从原文核对载流子/方向/温度**。
+
+**意义**：这是用户要求的「2D S8.4 读 write_mesh + strict intrinsic 后处理」在**集群真实作业**上的首次端到端落地，与本地 V89/V90/V94 的预测一致。
+
+### V108. 第 38 轮：SS S8.4 完成（第 3 个真实 strict intrinsic）+ 3 个 TMD 链大幅推进
+
+**SS S8.4（jobid 3886800）COMPLETED 08:13**：`queue.out`：`复现检查 max|diff|=2.910e-11 -> PASS`；
+`T=300 K 面内本征迁移率 overall = 5.221 cm^2/Vs`；产物 `mesh_17x59x9.h5`（43.6 MB）+ `intrinsic_transport.json`（173 KB）。
+这是继 CrS2_ortho / CrSe2_ortho 后的**第 3 个真实 strict intrinsic**。
+
+**3 个 TMD**（会话间隔 ~6.5h 期间已跑）：S1_opt、S2.1_scf、S3_uniform、S3b_uniformfull、S5_dielect、S6_elastic、**S7_deform 10/10** 全 **OK**；
+已推进提交：WS2 S2.15/S2.2/S3c/S4_wave/S4b（3890406、3890412-15）；MoSe2（3890809-14）；WSe2（3890883-87）；S5.1_dievalid 已本地生成。
+待：S2.15/S2.2/S2.3_hse 完 → S7.1_read → S8/S8.4。
+
+### V109. 第 40 轮：CrSe2_hex S8.4 完成（第 4 个真实 strict intrinsic）+ MoS2 S8.4 状态
+
+**CrSe2_hex S8.4（jobid 3890404，非我提交，疑似用户/监控重投）COMPLETED 1:47:50**：
+- `queue.out`：`复现检查 max|diff|=5.894e-10 -> PASS`；`T=300 K 面内本征迁移率 overall = 7.125 cm^2/Vs`；
+- 产物：`mesh_85x85x11.h5`（211 MB）+ `intrinsic_transport.json`（205 KB）；
+- **本次重投用的口径**：`unity_overlap: true`、`interpolation_factor: 4`、`write_mesh: true`、`bandgap: 1.1189`
+  —— 与原 3867317（if=4、unity=false、无 write_mesh；24h TIMEOUT）不同，网格也从 141×141×11 降到 85×85×11。
+这是第 4 个真实 strict intrinsic（前 3：CrS2_ortho / CrSe2_ortho / SS）。
+
+**MoS2 S8.4 状态（用户询问）**：
+- 远端输入已于 **03:17 重新生成**（settings.yaml / submit.sh / 2d_correction.json / 插件 / 后处理 / symlink 全部新；
+  `vasprun.xml -> step3b_uniform_full` 全网格、`deformation.h5 -> deformation_vac.h5`）；
+- **但未提交**：`.tf_job_receipt` 仍是 09-20 的旧记录（3856221），队列无 MoS2 S8.4 作业
+  → 上次 `start` 调用在「gen 完成 → 提交」之间被中断，只落了 gen、没落 submit；
+- 当前配置：`unity_overlap: false`（真实重叠）、`WAVEFUNCTION_FULL=true`（全网格）、`write_mesh: true`、
+  **`interpolation_factor: 10`**；旧产物 transport.json（09-17）是 stale；
+- **待用户定**：(1) 重叠模式（false=真实+全网格 / true=unity）；(2) IF=10 的 OOM 风险（其它 2D 用 IF=4，
+  README 记录 IF=10+nworkers=24 曾 OOM 292 GB）。

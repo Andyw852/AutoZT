@@ -62,6 +62,32 @@ python test_kernels.py          # 需要 amset + pymatgen 环境（如 conda ams
 没有这两行说明插件没生效（子进程尤其要看第二行 -- ADP 是以 reference 传给 spawn
 子进程的，插件没被导入就会**静默**退回原版）。
 
+## strict intrinsic（`WRITE_MESH`）—— 剔除 IMP 的严格本征结果
+
+S8.4 默认产出的 `transport.json` **含电离杂质（IMP）**，是「掺杂后」的迁移率，不是本征值。
+要在项目里拿到剔除 IMP 的严格本征结果，在 `project_setting/templates/step8.4_amset2d/step.conf` 写：
+
+```ini
+[params]
+WRITE_MESH = true
+```
+
+gen（`patch_write_mesh` + `patch_intrinsic_auto`）会：
+
+1. 在 `settings.yaml` 写 `write_mesh: true` → AMSET 落 `mesh_*.h5`（每机制每 k 点散射率 + 能带/速度/DOS 元数据）；
+2. 作业链尾部**自动**接 `python postprocess_intrinsic.py --check-reproduce` → 产出 `intrinsic_transport.json`。
+
+`postprocess_intrinsic.py` 做三件事：
+
+- 用 **mesh 自带**的 `ir_to_full_kpoint_mapping` 把不可约点散射率展开到全网格；`read_mesh_h5` 自己解析
+  AMSET `write_mesh` 的**自旋 key bug**（down 被写成 `<name>_up_down`），不依赖 `amset.io.load_mesh`；
+- `--check-reproduce`：**先用全部机制重积分**，与 `transport.json` 逐位对比（容差 1e-6）。**不通过就整步失败、
+  不写 `intrinsic_transport.json`**，防止 mesh/settings/vasprun 不同源时静默出错；
+- 置零（默认）IMP 后重积分，写 `intrinsic_transport.json`（schema `autozt.intrinsic_transport/1`）。
+
+**注意**：`WRITE_MESH` 只负责产出 mesh；**正确性取决于这个后处理被套用**——直接换 AMSET 环境不会自动对。
+0.4.19 与 0.5.1 在真实 2 自旋 / 不可约网格数据上的端到端复现均 PASS（见 `VERIFICATION.md` V89/V90/V91）。
+
 ## 已知局限（写论文要写进方法学）
 
 - **"去掉 ZA 支"只对有水平镜面（σh）的材料成立**：翘曲结构（硅烯、锗烯）与 Janus

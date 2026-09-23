@@ -272,6 +272,65 @@ def get_effective_mass(cwd, carrier, is_2d):
         q2n, den = q2[nz], de_use[nz]
         if len(q2n) < 3:
             return None, "带边面内点太少（网格太粗）"
+
+        # [GUARD-2026-09-23] 方向分解 fit 只在带边锚在【真高对称点】上才可靠。
+        # 径向（偶次）fit 吸收不了线性梯度：六方胞带边在 K=(1/3,1/3)，若网格 N 不是
+        # 3 的倍数则 K 离网，锚落在离网非极值点，「最轻两支」把梯度方向当曲率，
+        # 静默给出错误轻质量（CrSe2 46×46 实测 0.52 vs 真值 1.03）。
+        _b1 = float(np.linalg.norm(recip[0]))
+        _b2 = float(np.linalg.norm(recip[1]))
+        _ang = float(np.degrees(np.arccos(max(-1.0, min(1.0,
+            float(np.dot(recip[0], recip[1])) / (_b1 * _b2))))))
+        _hex = (abs(_b1 - _b2) < 0.05 * max(_b1, _b2)
+                and (abs(_ang - 60.0) < 5.0 or abs(_ang - 120.0) < 5.0))
+        _kf = np.asarray(kfrac[k0], float) % 1.0
+        _at_hs = bool(np.all(np.abs(_kf[:2] * 6.0 - np.round(_kf[:2] * 6.0)) < 0.01))
+        if _hex and not _at_hs:
+            return None, ("六方胞带边锚在非高对称点 k_frac=%s（K 离网：step3_uniform 的 N 不是"
+                          " 3 的倍数）——请按 DK_MAX 规则用 N 为 6 的倍数重新生成 step3_uniform，"
+                          "或手填 MANUAL" % np.round(_kf, 4))
+        _use_dird = _at_hs
+
+        # [PATCH-2026-09-23] 方向分解 + q^4 外推（依据 tmp/odp/TASK3b_mass_rootcause.md）。
+        # 旧做法（下面保留作回退）按半径 0.10->0.50 逐步放宽到"够 3 个点"的 R，再拟合
+        # 单一各向同性曲率 C。粗网格下（step3_uniform KSPACING 0.030 -> 15x15x1，
+        # 最近邻 0.159 rad/A）会一直吃到 0.276 rad/A 的点（dE 约 0.25 eV，带隙的 27%），
+        # 那里能带已明显变平；且把不同方向混进同一个 C，会被重的离轴方向拉高 m*。
+        # CrS2/CrSe2 实测偏重 28-37%（论文 0.94/0.96 对 技能 1.285/1.3015）。
+        # 新做法：按方向分组，每组用 E = c1 q^2 + c2 q^4 外推到 q->0 取 c1，
+        # 最轻的两个方向的几何均值即态密度质量 m_d（DPT 各向同性口径下 m*=m_d）。
+        kxy = dk_use[nz]
+        _R = np.sqrt(q2n)
+        _ang = np.degrees(np.arctan2(kxy[:, 1], kxy[:, 0]))
+        # 只保留带边最近几壳层：R > 4*r_nn 的点已在非抛物区，会把 q^4 外推截距拉低。
+        _rnz = _R[_R > 1e-6]
+        _keep = (_R <= 4.0 * float(_rnz.min())) if len(_rnz) else np.ones(len(_R), bool)
+        _Rf, _angf, _denf = _R[_keep], _ang[_keep], den[_keep]
+        _grp = {}
+        for _i in range(len(_Rf)):
+            _grp.setdefault(int(round(_angf[_i] / 5.0)), []).append(_i)
+        _dirs, _dirs2 = [], []
+        for _idx in _grp.values():
+            _idx = np.array(_idx)
+            if len(_idx) >= 2:
+                _c1 = float(np.polyfit(_Rf[_idx] ** 2, _denf[_idx] / _Rf[_idx] ** 2, 1)[1])
+            else:
+                _c1 = float(_denf[_idx[0]] / _Rf[_idx[0]] ** 2)
+            if abs(_c1) < 1e-9:
+                continue
+            _rec = (float(3.80998 / abs(_c1)), len(_idx),
+                    float(_angf[_idx[0]]), float(_Rf[_idx].max()))
+            _dirs.append(_rec)
+            if len(_idx) >= 2:
+                _dirs2.append(_rec)
+        _pool = sorted(_dirs2 if len(_dirs2) >= 2 else _dirs)
+        if _use_dird and len(_pool) >= 2:
+            _m1, _m2 = _pool[0][0], _pool[1][0]
+            _mres = float(np.sqrt(_m1 * _m2))
+            return round(_mres, 4), (
+                "带边方向分解+q^4外推(%s, %d方向, 最轻两支 %.4f/%.4f, 全组 %.4f..%.4f, spin=%d)" % (
+                    "面内" if is_2d else "3D", len(_pool), _m1, _m2,
+                    _pool[0][0], _pool[-1][0], isp))
         # 先按半径逐步放宽找邻域；仍不够就退回"最近的若干点"，保证能拟合
         sel, Rused = None, None
         for R in (0.10, 0.15, 0.20, 0.30, 0.40, 0.50):

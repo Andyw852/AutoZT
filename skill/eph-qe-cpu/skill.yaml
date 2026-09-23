@@ -1,7 +1,7 @@
 schema: 2
 name: eph-qe-cpu
 desc: QE–Wannier90–Perturbo 电子–声子耦合（CPU）
-version: "0.1"
+version: "0.2"
 
 template_layout: per_step
 template_dir: templates
@@ -18,7 +18,8 @@ submit_required: [submit.sh]
 fetch_files: [submit.sh, qe_env.json, scf.in, nscf.in, ph.in, qe2pert.in, pert.in,
               scf.out, nscf.out, ph.out, qe2pert.out, pert.out, wannier.out,
               preflight.ok, scf.ok, wannier.ok, phonon.ok, qe2pert.ok, perturbo.ok,
-              eph_summary.json, eph_parameters.json, queue.out, queue.err]
+              eph_summary.json, eph_parameters.json, eph.h5, ephmat,
+              ephmat.yml, queue.out, queue.err]
 
 steps:
   - {seq: 0, name: step0_preflight, label: S0_env, check: marker, marker: "preflight.ok:OK",
@@ -49,16 +50,22 @@ requires:
 
 io_schema:
   inputs:
-    - {name: POSCAR, from: user, required: true, type: structure, desc: "VASP 5 POSCAR；当前生成器支持 3D 体相、Direct 坐标。"}
-    - {name: Si.upf, from: PSEUDO_DIR, required: true, type: UPF, desc: "与 QE 赝势及 PSEUDO_DIR 对应；Si 冒烟测试使用。"}
+    - {name: POSCAR, from: user, required: true, type: structure, desc: "VASP 5 体相 POSCAR；支持多元素、Direct/Cartesian 和 Selective dynamics。"}
+    - {name: PSEUDO_FILES, from: PSEUDO_DIR, required: true, type: UPF, desc: "step.conf 中按元素映射的 UPF 文件，例如 C:C.upf Si:Si.upf。"}
   outputs:
-    - {name: si_epr.h5, step: S4_qe2pert, type: hdf5, desc: "QE/Wannier90 转换后的 Perturbo 电子–声子数据。"}
+    - {name: eph.h5, step: S4_qe2pert, type: hdf5, desc: "QE/Wannier90 转换后的稳定命名 Perturbo 电子–声子数据。"}
+    - {name: ephmat, step: S5_ephmat, type: binary, desc: "Perturbo 生成的电子–声子矩阵元。"}
+    - {name: ephmat.yml, step: S5_ephmat, type: yaml, desc: "Perturbo 电子–声子矩阵元摘要。"}
     - {name: eph_summary.json, step: S6_summary, type: json, desc: "端到端工件与运行日志的可追溯摘要。"}
   params:
     - {name: QE_BIN, default: "$PATH", where: job environment, desc: "包含 pw.x、ph.x、pw2wannier90.x 的目录或 PATH。"}
     - {name: PERTURBO_BIN, default: "$PATH", where: job environment, desc: "包含 qe2pert.x、perturbo.x 的目录或 PATH。"}
     - {name: WANNIER_BIN, default: "$PATH", where: job environment, desc: "包含 wannier90.x 的目录或 PATH。"}
-    - {name: PSEUDO_DIR, where: job environment, desc: "UPF 赝势目录；Si 测试需要其中的 Si.upf。"}
+    - {name: PSEUDO_DIR, where: job environment, desc: "包含项目 manifest 所列 UPF 文件的目录。"}
+    - {name: QE_PREFIX, default: auto, where: step.conf, desc: "QE/Wannier90/Perturbo 前缀；auto 对 Si2 保留 si，其他结构按化学式生成。"}
+    - {name: PSEUDO_FILES, default: auto, where: step.conf, desc: "Element:file 映射；auto 使用 Element.upf，生产计算建议显式指定。"}
+    - {name: ATOMIC_MASSES, default: auto, where: step.conf, desc: "Element:mass 映射；auto 使用标准原子质量，同位素计算必须显式指定。"}
+    - {name: WANNIER_PROJECTIONS, default: auto, where: step.conf, desc: "Element:projection 映射；Si2 auto 为 Si:sp3，其他体系需显式给出合理投影。"}
     - {name: ECUTWFC, default: 40.0, where: step.conf, desc: "QE 波函数截断能 (Ry)；官方 epr9=40。"}
     - {name: ECUTRHO, default: 320.0, where: step.conf, desc: "QE 电荷密度截断能 (Ry)。"}
     - {name: SCF_CONV_THR, default: 1.0e-10, where: step.conf, desc: "QE SCF 收敛阈值；官方 epr9=1e-15。"}
@@ -68,9 +75,14 @@ io_schema:
     - {name: NSCF_KGRID, default: "4 4 4", where: step.conf, desc: "NSCF/Wannier90 显式 k 网格。"}
     - {name: PH_QGRID, default: "2 2 2", where: step.conf, desc: "DFPT q 网格。"}
     - {name: PH_KGRID, default: "4 4 4", where: step.conf, desc: "DFPT 内层电子 k 网格。"}
-    - {name: Q2PERT_KGRID, default: "4 4 4", where: step.conf, desc: "qe2pert 读取的 DFT k 网格。"}
+    - {name: Q2PERT_KGRID, default: "4 4 4", where: step.conf, desc: "qe2pert 读取的 DFT k 网格，必须与 NSCF_KGRID 一致。"}
+    - {name: PH_SEARCH_SYM, default: "false", where: step.conf, desc: "ph.x 的 q 点对称性搜索开关。"}
+    - {name: PH_EPSIL, default: true, where: step.conf, desc: "ph.x 是否计算介电响应；极性体系需结合 NAC 设置验证。"}
+    - {name: PH_LQDIR, default: true, where: step.conf, desc: "ph.x 是否按 q 目录写出 DFPT 数据。"}
     - {name: NUM_BANDS, default: 16, where: step.conf, desc: "QE/Wannier 电子带数；可升到 24/32 做能窗收敛。"}
     - {name: NUM_WANN, default: 8, where: step.conf, desc: "Wannier 函数数。"}
+    - {name: DFT_BAND_MIN, default: 1, where: step.conf, desc: "qe2pert 使用的 DFT 起始带。"}
+    - {name: DFT_BAND_MAX, default: 0, where: step.conf, desc: "qe2pert 使用的 DFT 终止带；0 表示 NUM_BANDS。"}
     - {name: DIS_NUM_ITER, default: 500, where: step.conf, desc: "Wannier 解缠最大迭代次数。"}
     - {name: DIS_WIN_MIN, default: -100.0, where: step.conf, desc: "Wannier 外能窗下界 (eV)。"}
     - {name: DIS_WIN_MAX, default: 17.2, where: step.conf, desc: "Wannier 外能窗上界 (eV)。"}
@@ -88,11 +100,11 @@ io_schema:
     - {name: PHFREQ_CUTOFF, default: 1.0, where: step.conf, desc: "Perturbo 声子频率 cutoff (meV)。"}
     - {name: PERT_DELTA_SMEAR, default: 10.0, where: step.conf, desc: "Perturbo delta 函数展宽 (meV)，用于展宽敏感性扫描。"}
   steps:
-    - {step: S0_env, title: "Environment preflight", tool: shell, outputs: [qe_env.json], validator: "all required executables and Si.upf found"}
+    - {step: S0_env, title: "Environment preflight", tool: shell, outputs: [qe_env.json], validator: "all required executables and manifest-listed UPF files found"}
     - {step: S1_scf, title: "QE SCF", tool: pw.x, inputs: [POSCAR], outputs: [scf.ok], validator: "JOB DONE"}
     - {step: S2_wannier, title: "QE NSCF and Wannier", tool: "pw.x + wannier90.x + pw2wannier90.x", outputs: [wannier.ok], validator: "Wannier workflow exits zero"}
-    - {step: S3_ph, title: "DFPT phonons", tool: ph.x, outputs: [phonon.ok], validator: "configured PH_QGRID exits zero and save/si.dyn0 matches it"}
-    - {step: S4_qe2pert, title: "QE to Perturbo", tool: qe2pert.x, outputs: [si_epr.h5], validator: "si_epr.h5 exists"}
+    - {step: S3_ph, title: "DFPT phonons", tool: ph.x, outputs: [phonon.ok], validator: "configured PH_QGRID exits zero and save/<prefix>.dyn0 matches it"}
+    - {step: S4_qe2pert, title: "QE to Perturbo", tool: qe2pert.x, outputs: [eph.h5], validator: "stable eph.h5 alias exists"}
     - {step: S5_ephmat, title: "Interpolated e-ph matrix element", tool: perturbo.x, outputs: [perturbo.ok], validator: "Perturbo ephmat exits zero"}
     - {step: S6_summary, title: "Summarize", tool: Python, outputs: [eph_summary.json], validator: "JSON exists"}
 
@@ -101,6 +113,6 @@ flow:
   stages:
     - {name: environment, steps: [S0_env], produces: [qe_env.json]}
     - {name: QE, steps: [S1_scf, S2_wannier, S3_ph], produces: [scf.ok, wannier.ok, phonon.ok]}
-    - {name: coupling, steps: [S4_qe2pert, S5_ephmat, S6_summary], produces: [si_epr.h5, eph_summary.json]}
+    - {name: coupling, steps: [S4_qe2pert, S5_ephmat, S6_summary], produces: [eph.h5, ephmat, ephmat.yml, eph_summary.json]}
   requires: {environment: "compatible QE, Wannier90, Perturbo and HDF5 installation"}
 corrections: [node_fail, dir_missing]

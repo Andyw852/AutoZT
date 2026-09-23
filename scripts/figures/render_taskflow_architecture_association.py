@@ -93,10 +93,10 @@ def draw_engine(d, x, y, w, h):
     mace_h = 5.3 * mm
     base.text(d, cat_x + 2.5 * mm, mace_y + 1.6 * mm, "MACE", size=3.7, fill="teal", bold=True)
     mace = [
-        ("opt-mace", "CPU / GPU"),
-        ("kl-mace", "CPU / GPU"),
-        ("phonon-mace", "dispersion"),
-        ("mlff-mace", "MLFF training"),
+        ("opt-mlff", "CPU / GPU"),
+        ("kl-mlff", "CPU / GPU"),
+        ("phonon-mlff", "dispersion"),
+        ("mlff", "MLFF training"),
     ]
     mace_w = (usable_w - 4 * box_gap) / 5
     for i, (title_value, subtitle) in enumerate(mace):

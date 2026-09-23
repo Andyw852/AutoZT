@@ -75,7 +75,12 @@ STEP_LABEL  = "S8_kappa"
 # patch_overlap_preflight（V24/V25.10）：作业内先跑运行前检查 —— 运行目录里
 #   wavefunction.h5 / vasprun.xml / ../step3_uniform 都在，②③④ 三项才真正生效；
 #   不过就直接 exit 1，宁可不跑也不出不可信的数。脚本由 gen 复制进运行目录。
-AMSET_CMD   = ('python overlap_preflight.py --in-job || exit 1; '
+# patch_v63_port（2026-09-23）：把 V63 的“作业链首 rm -f transport.json”从 S8.4 补到标准 S8。
+#   原因：autozt 判据是 marker(transport.json:thermal_conductivity)，只看“文件在 + 含子串”。
+#   若 AMSET 失败而 transport.json 是上一次成功留下的，整步会被判成 finished(OK)、失败被隐藏。
+#   链首 rm 掉旧文件，则失败时 transport.json 不存在 -> 判据自然 not-done，失败可见。
+AMSET_CMD   = ('rm -f transport.json; '
+               'python overlap_preflight.py --in-job || exit 1; '
                'amset run >> amset.log 2>&1 && cp -f "$(ls -t transport_*.json 2>/dev/null | head -1)" transport.json && ls -l transport.json')
 # --- 输运设置（可改）---
 DOPING      = "-1e21:-1e17:5, 1e17:1e21:5"   # n 型 + p 型各 5 点（对数均布）cm^-3
@@ -801,8 +806,10 @@ def apply_2d_corrections(cwd: Path, elastic):
         "elastic_constant_convention": "standard Voigt (XX YY ZZ YZ XZ XY)，"
                                        "已由 read_elastic 从 VASP 的 (XX YY ZZ XY YZ ZX) 重排",
         "elastic_outofplane_shear_zeroed": zeroed,
-        "elastic_outofplane_note": ("二维只用面内 2x2；面外剪切（YZ/XZ 行列）已置零，"
-                                    "原值见 elastic_outofplane_shear_zeroed。"
+        "elastic_outofplane_note": ("二维只用面内 2x2；面外**负**剪切（YZ/XZ 行列）"
+                                    "取绝对值并抬到 1e-3×面内对角下限"
+                                    "（V76/V77/V78：置零会让 Christoffel 奇异、声速 0、ADP=0），"
+                                    "原值->新值见 elastic_outofplane_shear_zeroed。"
                                     "★ 标准 step8_amset 路径对二维是近似；准确的二维处理请走 "
                                     "step8.4_amset2d 插件（面内 2x2 Christoffel）。"),
         "areal_density_factor_cm": c_len * 1e-8,

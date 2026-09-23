@@ -139,7 +139,7 @@ def load_kappa(path):
     raw = j.get("kappa_xx_yy_zz")
     single_T = False
     if not temps or not raw or len(temps) != len(raw):
-        # kl-mace-* 的老格式只写 300 K 单值（kappa_300K_xx_yy_zz），没有惰温数组。
+        # kl-mlff-* 的老格式只写 300 K 单值（kappa_300K_xx_yy_zz），没有惰温数组。
         # 这里降级成"单温度点"网格并打标：interp 模式下就只剩 300 K 可算，
         # 想要全 T 曲线请用 KTEMP_MODE=const300（本技能文档里写明的那条路）。
         k300 = j.get("kappa_300K_xx_yy_zz")
@@ -199,7 +199,7 @@ def build_grid(tr, kl, is_2d=False, ktemp_mode="interp", const_T=300.0):
     notes.append("κ_L 用元胞口径 kappa_xx_yy_zz（与 AMSET 的 σ/κ_e 同口径；"
                  "不用 kappa_2d_normalized_*）")
     if kl.get("single_T_fallback"):
-        notes.append("★ κ_L 来源只有 300 K 单值（kl-mace-* 老格式，无惰温数组）："
+        notes.append("★ κ_L 来源只有 300 K 单值（kl-mlff-* 老格式，无惰温数组）："
                      "interp 模式下只有 300 K 能算 ZT；要全温曲线请用 KTEMP_MODE=const300。")
     notes.append("横坐标 doping 是 AMSET 的【输入掺杂网格】（名义 cm^-3，负=n 型）——"
                  "transport.json 没有自洽载流子浓度字段；要真实 n 请用 "

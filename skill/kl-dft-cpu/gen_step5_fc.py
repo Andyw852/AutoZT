@@ -61,8 +61,8 @@ SPEC = {
     "BAND_POINTS":     (51,   "int"),
     # —— 虚频闸（唯一真源 skill/_common/imag_policy.py，2026-09-22）——
     #   IMAG_THR 语义已从"全局阈值"变为"**近 Γ 声学支上限**"。
-    "IMAG_THR":        (0.15, "float"),  # 近 Γ 声学支上限(THz)=5 cm^-1（Petretto 2018）
-    "IMAG_THR_STRICT": (0.05, "float"),  # 噪声底；近 Γ 区外与光学支的上限(THz)
+    "IMAG_THR":        (0.10, "float"),  # 近 Γ 声学支上限(THz)；2026-09-22 用户统一到 0.10
+    "IMAG_THR_STRICT": (0.10, "float"),  # 噪声底；2026-09-22 用户统一到 0.10（< −0.10 判不稳定）
     "IMAG_QGAMMA":     (0.05, "float"),  # 近 Γ 半径（分数坐标，Petretto 2018）
     "IMAG_QGAMMA_GRACE": (1.2, "float"), # 声学支有效近 Γ 窗口 = IMAG_QGAMMA×它（1.0=严格）
     # P2-2：2D 的 ZA 弯曲支二次性检查（ω ∝ q^p，要求 1.7<p<2.3）。

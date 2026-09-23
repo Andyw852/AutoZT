@@ -46,7 +46,7 @@ run_mpi() {
 run_perturbo_omp() {
   # The tested jzzn qe2pert binary can segfault in its OpenMP zdotc path.
   # Keep the four-core allocation for QE, but run Perturbo serially for the
-  # small Si smoke test; larger production runs need a separately validated
+  # small smoke test; larger production runs need a separately validated
   # threaded Perturbo build.
   local shim_dir="${TMPDIR:-/tmp}/eph-qe-zdotc-${USER:-user}"
   mkdir -p "$shim_dir"

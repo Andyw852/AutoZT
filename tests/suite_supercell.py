@@ -33,14 +33,14 @@ def raises(fn, *a, **kw):
     return False
 
 
-# klmace_common / kl_common 会 import 同目录的公共模块（gen 时会一起推到超算）
-for _d in ("skill/_common/mace", "skill/_common/opt", "skill/phonon-dft-cpu"):
+# klmlff_common / kl_common 会 import 同目录的公共模块（gen 时会一起推到超算）
+for _d in ("skill/_common/mlff", "skill/_common/opt", "skill/phonon-dft-cpu"):
     sys.path.insert(0, os.path.join(ROOT, _d))
 
-kc = load("kc_mace", os.path.join(ROOT, "skill", "_common", "mace", "klmace_common.py"))
+kc = load("kc_mlff", os.path.join(ROOT, "skill", "_common", "mlff", "klmlff_common.py"))
 kp = load("kc_phonon", os.path.join(ROOT, "skill", "phonon-dft-cpu", "kl_common.py"))
 
-for tag, m in (("mace.klmace_common", kc), ("phonon.kl_common", kp)):
+for tag, m in (("mlff.klmlff_common", kc), ("phonon.kl_common", kp)):
     print("== %s ==" % tag)
     ck(m.parse_reps("3 3 3", "3d") == [3, 3, 3], "对角：'3 3 3' → [3,3,3]")
     ck(m.dim_str([3, 3, 3]) == "3 3 3", "对角回写：'3 3 3'")

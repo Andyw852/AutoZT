@@ -1,0 +1,359 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""gen_step5_tbc.py -- (可选, GPU) 生成 GPUMD NEMD 界面热导输入（通用版）.
+
+特点（相对旧版的关键修复）：
+  * 热流由源/漏恒温器的累积传能直接给出（compute ... temperature 的最后两列），
+    后处理不再依赖文献 kappa。
+  * 通用：任意 extxyz 结构/元素、任意传输轴(x/y/z)、任意 GPUMD 势、pbc 可沿用结构文件。
+  * deck 含 平衡 -> 烧入(heat_*) -> 测量 三段，测量段单独累积恒温器传能。
+
+读 step.conf / 环境：
+  TBC_STRUCTURE / TBC_NEP_MODEL / TBC_GPUMD_BIN / TBC_CUDA_VISIBLE_DEVICES
+  TBC_AXIS (x|y|z) / TBC_PBC / TBC_INTERFACE_COORD / TBC_INTERFACE_Z(旧名)
+  TBC_SOURCE_THICKNESS / TBC_SINK_THICKNESS / TBC_SOURCE_SIDE(high|low) / TBC_VACUUM_GAP_A
+  TBC_T / TBC_DELTA_T / TBC_COUPLE / TBC_THERMOSTAT(heat_lan|heat_nhc|heat_bdp)
+  TBC_TIME_STEP / TBC_SEED / TBC_BIN_WIDTH
+  TBC_EQUIL_STEPS / TBC_BURN_STEPS / TBC_RUN_STEPS
+  TBC_SAMPLE_INTERVAL / TBC_OUTPUT_INTERVAL / TBC_THERMO_INTERVAL
+  TBC_KAPPA_A_W_mK / TBC_KAPPA_B_W_mK  (可选，仅后处理交叉核对)
+产物: step5_tbc/{model.xyz, potential.txt, run.in, run_gpumd.sh, tbc_inputs.json}
+"""
+import json
+import math
+import os
+import re
+import shutil
+import sys
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)
+import stepconf  # noqa: E402
+
+STEP = "step5_tbc"
+OUTDIR = STEP
+
+SPEC = {
+    "TBC_STRUCTURE": ("", "str"),
+    "TBC_NEP_MODEL": ("", "str"),
+    "TBC_GPUMD_BIN": ("", "str"),
+    "TBC_CUDA_VISIBLE_DEVICES": ("", "str"),
+    "TBC_AXIS": ("z", "str"),
+    "TBC_PBC": ("", "str"),
+    "TBC_INTERFACE_COORD": (None, "float"),
+    "TBC_INTERFACE_Z": (None, "float"),
+    "TBC_SOURCE_THICKNESS": (5.0, "float"),
+    "TBC_SINK_THICKNESS": (8.0, "float"),
+    "TBC_SOURCE_SIDE": ("high", "str"),
+    "TBC_VACUUM_GAP_A": (4.0, "float"),
+    "TBC_T": (300.0, "float"),
+    "TBC_DELTA_T": (40.0, "float"),
+    "TBC_COUPLE": (100.0, "float"),
+    "TBC_THERMOSTAT": ("heat_lan", "str"),
+    "TBC_TIME_STEP": (1.0, "float"),
+    "TBC_SEED": (0, "int"),
+    "TBC_BIN_WIDTH": (2.0, "float"),
+    "TBC_EQUIL_STEPS": (20000, "int"),
+    "TBC_BURN_STEPS": (100000, "int"),
+    "TBC_RUN_STEPS": (200000, "int"),
+    "TBC_SAMPLE_INTERVAL": (10, "int"),
+    "TBC_OUTPUT_INTERVAL": (100, "int"),
+    "TBC_THERMO_INTERVAL": (1000, "int"),
+    "TBC_KAPPA_A_W_mK": (None, "float"),
+    "TBC_KAPPA_B_W_mK": (None, "float"),
+}
+AXES = {"x": 0, "y": 1, "z": 2}
+
+
+def parse_extxyz(path):
+    with open(path, encoding="utf-8", errors="replace") as fh:
+        lines = fh.read().splitlines()
+    if len(lines) < 3:
+        raise SystemExit("[ERROR] 结构文件内容不足: %s" % path)
+    n = int(lines[0].split()[0])
+    comment = lines[1]
+    m = re.search(r'[Ll]attice\s*=\s*"([^"]+)"', comment)
+    if not m:
+        raise SystemExit('[ERROR] extxyz 第二行缺少 Lattice="...": %s' % path)
+    lat = [float(x) for x in m.group(1).split()]
+    if len(lat) != 9:
+        raise SystemExit("[ERROR] Lattice 需要 9 个数（3x3 行主序）")
+    mp = re.search(r'pbc\s*=\s*"([^"]+)"', comment)
+    pbc = mp.group(1).strip() if mp else None
+    mprop = re.search(r'[Pp]roperties\s*=\s*"?([A-Za-z0-9_:]+)"?', comment)
+    props = mprop.group(1) if mprop else "species:S:1:pos:R:3"
+    toks = re.findall(r'([A-Za-z_]+):([A-Za-z]):(\d+)', props)
+    if not toks:
+        toks = [("species", "S", "1"), ("pos", "R", "3")]
+    layout, off = [], 0
+    for name, typ, cnt in toks:
+        layout.append((name, typ, int(cnt), off))
+        off += int(cnt)
+    col = {name: (typ, cnt, o) for name, typ, cnt, o in layout}
+    if "species" not in col or "pos" not in col:
+        raise SystemExit("[ERROR] extxyz Properties 需要含 species 与 pos: %s" % props)
+    sym, pos = [], []
+    for ln in lines[2:2 + n]:
+        p = ln.split()
+        st, sc, so = col["species"]
+        pt, pc, po = col["pos"]
+        sym.append(p[so])
+        pos.append(tuple(float(p[po + k]) for k in range(3)))
+    if len(sym) != n:
+        raise SystemExit("[ERROR] 原子数不符：声明 %d，实读 %d" % (n, len(sym)))
+    return lat, pbc, sym, pos, props
+
+
+def potential_elements(path):
+    with open(path, encoding="utf-8", errors="replace") as fh:
+        head = fh.readline().split()
+    if head and head[0].lower().startswith("nep") and len(head) > 2:
+        return set(head[2:])
+    return None
+
+
+def cross_area(lat, axis):
+    a = lat[0:3]
+    b = lat[3:6]
+    c = lat[6:9]
+
+    def cross(u, v):
+        return (u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0])
+
+    def norm(u):
+        return math.sqrt(u[0] ** 2 + u[1] ** 2 + u[2] ** 2)
+
+    if axis == 0:
+        return norm(cross(b, c))
+    if axis == 1:
+        return norm(cross(c, a))
+    return norm(cross(a, b))
+
+
+def kappa_defaults(cwd, conf):
+    ka, kb = conf["TBC_KAPPA_A_W_mK"], conf["TBC_KAPPA_B_W_mK"]
+    p = os.path.join(cwd, "step2_props", "thermal_props.json")
+    if (ka is None or kb is None) and os.path.isfile(p):
+        with open(p, encoding="utf-8") as fh:
+            d = json.load(fh)
+        if ka is None:
+            ka = d.get("channel", {}).get("ky_W_mK")
+        if kb is None:
+            kb = d.get("oxide", {}).get("kx_W_mK")
+    return ka, kb
+
+
+def auto_interface_by_composition(coords, species):
+    """按元素组分沿轴的突变位置定界面；无法判定返回 None。
+    适用于两岸元素组成不同的异质界面（Si/Ge、MoS2/SiO2 ...）。"""
+    uniq = sorted(set(species))
+    if len(uniq) < 2:
+        return None
+    idx = {s: i for i, s in enumerate(uniq)}
+    order = sorted(range(len(coords)), key=lambda i: coords[i])
+    m = max(1, len(order) // 4)
+    flo = sum(idx[species[i]] for i in order[:m]) / m
+    fhi = sum(idx[species[i]] for i in order[-m:]) / m
+    if abs(fhi - flo) < 0.5:
+        return None
+    lo, hi = coords[order[0]], coords[order[-1]]
+    width = 0.5
+    nb = max(2, int((hi - lo) / width) + 1)
+    sums = [0.0] * nb
+    cnts = [0] * nb
+    for i, cc in enumerate(coords):
+        b = min(nb - 1, int((cc - lo) / width))
+        sums[b] += idx[species[i]]
+        cnts[b] += 1
+    vals = [(sums[b] / cnts[b]) if cnts[b] else None for b in range(nb)]
+    sm = []
+    for b in range(nb):
+        win = [vals[j] for j in range(max(0, b - 1), min(nb, b + 2)) if vals[j] is not None]
+        sm.append(sum(win) / len(win) if win else None)
+    best = None
+    for b in range(nb - 1):
+        if sm[b] is None or sm[b + 1] is None:
+            continue
+        j = abs(sm[b + 1] - sm[b])
+        if best is None or j > best[0]:
+            best = (j, b)
+    if best is None or best[0] < 0.2 * abs(fhi - flo):
+        return None
+    b0 = best[1]
+    split = lo + (b0 + 1) * width
+    below = [c for c in coords if c < split]
+    above = [c for c in coords if c >= split]
+    if below and above:
+        return 0.5 * (max(below) + min(above))   # 界面键中心
+    return lo + (b0 + 0.5) * width
+
+
+def detect_interface(coords, vacuum_gap):
+    zs = sorted(coords)
+    gaps = [(zs[i + 1] - zs[i], 0.5 * (zs[i] + zs[i + 1])) for i in range(len(zs) - 1)]
+    cand = [g for g in gaps if g[0] <= vacuum_gap]
+    if cand:
+        return max(cand)[1]
+    return 0.5 * (zs[0] + zs[-1])
+
+
+def main():
+    conf = stepconf.load(SPEC, STEP, strict=False)
+    cwd = os.getcwd()
+    outdir = os.path.join(cwd, OUTDIR)
+    os.makedirs(outdir, exist_ok=True)
+
+    struct = (conf["TBC_STRUCTURE"] or "").strip()
+    if not struct:
+        sys.exit("[ERROR] 未提供 TBC_STRUCTURE（界面结构 extxyz）。见 GPU-TBC-RECIPE.md。")
+    spath = struct if os.path.isabs(struct) else os.path.join(cwd, struct)
+    if not os.path.isfile(spath):
+        sys.exit("[ERROR] 找不到界面结构: %s" % spath)
+    pot = os.path.expanduser((conf["TBC_NEP_MODEL"] or "").strip())
+    if not pot or not os.path.isfile(pot):
+        sys.exit("[ERROR] 找不到势文件 TBC_NEP_MODEL=%r" % pot)
+    gbin = os.path.expanduser((conf["TBC_GPUMD_BIN"] or "").strip())
+    if not gbin or not os.path.isfile(gbin):
+        sys.exit("[ERROR] 找不到 gpumd 可执行文件 TBC_GPUMD_BIN=%r" % gbin)
+
+    axis_name = (conf["TBC_AXIS"] or "z").strip().lower()
+    if axis_name not in AXES:
+        sys.exit("[ERROR] TBC_AXIS 只能是 x/y/z，收到 %r" % axis_name)
+    ax = AXES[axis_name]
+
+    lat, pbc_in, sym, pos, props = parse_extxyz(spath)
+    els = potential_elements(pot)
+    if els is not None:
+        missing = sorted(set(sym) - els)
+        if missing:
+            sys.exit("[ERROR] 势不含元素 %s（势元素表: %s）" % (missing, sorted(els)[:15]))
+    n = len(sym)
+    coord = [p[ax] for p in pos]
+    cmin, cmax = min(coord), max(coord)
+    span = cmax - cmin
+    if span < 20.0:
+        sys.exit("[ERROR] %s 向太薄（%.1f A），NEMD 需足够长度" % (axis_name, span))
+
+    area = cross_area(lat, ax)
+    vac_gap = float(conf["TBC_VACUUM_GAP_A"])
+    cif = conf["TBC_INTERFACE_COORD"]
+    if cif is None:
+        cif = conf["TBC_INTERFACE_Z"]
+    if cif is None:
+        cif = auto_interface_by_composition(coord, sym)
+        if cif is not None:
+            auto = "composition"
+        else:
+            cif = detect_interface(coord, vac_gap)
+            auto = "gap"
+    else:
+        auto = "explicit"
+    cif = float(cif)
+
+    src_th = float(conf["TBC_SOURCE_THICKNESS"])
+    snk_th = float(conf["TBC_SINK_THICKNESS"])
+    side = (conf["TBC_SOURCE_SIDE"] or "high").strip().lower()
+    if side not in ("high", "low"):
+        sys.exit("[ERROR] TBC_SOURCE_SIDE 只能是 high/low")
+    groups = []
+    for cc in coord:
+        hi = cc >= (cmax - src_th)
+        lo = cc <= (cmin + snk_th)
+        if hi and cc > cif:
+            groups.append(1 if side == "high" else 2)
+        elif lo and cc < cif:
+            groups.append(2 if side == "high" else 1)
+        else:
+            groups.append(0)
+    ns, nk = groups.count(1), groups.count(2)
+    if ns == 0 or nk == 0:
+        sys.exit("[ERROR] 源/漏组为空（src=%d sink=%d）；请调 TBC_SOURCE/SINK_THICKNESS、"
+                 "TBC_INTERFACE_COORD 或 TBC_SOURCE_SIDE" % (ns, nk))
+
+    pbc = (conf["TBC_PBC"] or "").strip() or (pbc_in if pbc_in else "T T T")
+
+    mp = os.path.join(outdir, "model.xyz")
+    with open(mp, "w", encoding="utf-8") as fh:
+        fh.write("%d\n" % n)
+        fh.write('pbc="%s" Lattice="%s" Properties=species:S:1:pos:R:3:group:I:1\n'
+                 % (pbc, " ".join("%.6f" % v for v in lat)))
+        for s, (x, y, zz), g in zip(sym, pos, groups):
+            fh.write("%-3s %12.6f %12.6f %12.6f %d\n" % (s, x, y, zz, g))
+    shutil.copyfile(pot, os.path.join(outdir, "potential.txt"))
+
+    T = float(conf["TBC_T"])
+    dT = float(conf["TBC_DELTA_T"])
+    coup = float(conf["TBC_COUPLE"])
+    dt = float(conf["TBC_TIME_STEP"])
+    binw = float(conf["TBC_BIN_WIDTH"])
+    neq = int(conf["TBC_EQUIL_STEPS"])
+    nburn = int(conf["TBC_BURN_STEPS"])
+    nrun = int(conf["TBC_RUN_STEPS"])
+    si = int(conf["TBC_SAMPLE_INTERVAL"])
+    oi = int(conf["TBC_OUTPUT_INTERVAL"])
+    ti = int(conf["TBC_THERMO_INTERVAL"])
+    seed = int(conf["TBC_SEED"])
+    thermo = (conf["TBC_THERMOSTAT"] or "heat_lan").strip().lower()
+    if thermo not in ("heat_lan", "heat_nhc", "heat_bdp"):
+        sys.exit("[ERROR] TBC_THERMOSTAT 只能是 heat_lan/heat_nhc/heat_bdp")
+
+    L = []
+    L.append("potential potential.txt")
+    L.append("velocity %g%s" % (T, (" seed %d" % seed) if seed else ""))
+    L.append("time_step %g" % dt)
+    if neq > 0:
+        L.append("ensemble nvt_nhc %g %g %g" % (T, T, coup))
+        L.append("dump_thermo %d" % ti)
+        L.append("run %d" % neq)
+    L.append("ensemble %s %g %g %g 1 2" % (thermo, T, coup, dT))
+    L.append("compute_chunk %d %d bin/1d %s lower %g temperature density/number"
+             % (si, oi, axis_name, binw))
+    L.append("dump_thermo %d" % ti)
+    if nburn > 0:
+        L.append("run %d" % nburn)
+    L.append("compute 0 %d %d temperature" % (si, oi))
+    L.append("dump_thermo %d" % ti)
+    L.append("run %d" % nrun)
+    with open(os.path.join(outdir, "run.in"), "w", encoding="utf-8") as fh:
+        fh.write("\n".join(L) + "\n")
+
+    dev = (conf["TBC_CUDA_VISIBLE_DEVICES"] or "").strip()
+    with open(os.path.join(outdir, "run_gpumd.sh"), "w", encoding="utf-8") as fh:
+        fh.write("#!/bin/bash\n# 由 gen_step5_tbc.py 生成：运行 GPUMD NEMD\n")
+        fh.write("set -e\ncd \"$(dirname \"$0\")\"\n")
+        if dev:
+            fh.write("export CUDA_VISIBLE_DEVICES=\"%s\"\n" % dev)
+        fh.write("GPUMD=\"%s\"\n" % gbin)
+        fh.write("[ -x \"$GPUMD\" ] || { echo \"gpumd 不可执行: $GPUMD\" >&2; exit 1; }\n")
+        fh.write("echo \"GPU env: $CUDA_VISIBLE_DEVICES\"\n")
+        fh.write("nvidia-smi --query-gpu=index,memory.used --format=csv,noheader 2>/dev/null | head -1 || true\n")
+        fh.write("\"$GPUMD\" > gpumd.log 2>&1\n")
+        fh.write("echo \"GPUMD done. 输出: compute.out compute_chunk.out thermo.out (见 gpumd.log)\"\n")
+    os.chmod(os.path.join(outdir, "run_gpumd.sh"), 0o755)
+
+    ka, kb = kappa_defaults(cwd, conf)
+    meta = {"TBC_INPUTS_DONE": True, "n_atoms": n, "axis": axis_name,
+            "interface_auto": auto, "interface_coord_A": cif,
+            "coord_min_A": cmin, "coord_max_A": cmax,
+            "n_source": ns, "n_sink": nk,
+            "source_side": side, "source_thickness_A": src_th, "sink_thickness_A": snk_th,
+            "vacuum_gap_A": vac_gap, "bin_width_A": binw, "area_A2": area, "pbc": pbc,
+            "T_K": T, "delta_T_K": dT, "couple": coup, "thermostat": thermo,
+            "time_step_fs": dt, "seed": seed,
+            "sample_interval": si, "output_interval": oi, "thermo_interval": ti,
+            "equil_steps": neq, "burn_steps": nburn, "run_steps": nrun,
+            "kappa_a_W_mK": ka, "kappa_b_W_mK": kb,
+            "structure": spath, "potential": pot, "gpumd_bin": gbin,
+            "cuda_visible_devices": dev, "properties_in": props}
+    with open(os.path.join(outdir, "tbc_inputs.json"), "w", encoding="utf-8") as fh:
+        json.dump(meta, fh, ensure_ascii=False, indent=2)
+
+    print("[OK] %s  (%d atoms; axis=%s; src=%d sink=%d; interface %s=%.2f A, mode=%s)"
+          % (os.path.join(outdir, "tbc_inputs.json"), n, axis_name, ns, nk,
+             axis_name, cif, auto))
+    print("    area=%.1f A^2 ; pbc=%s ; thermostat=%s" % (area, pbc, thermo))
+    print("    run: bash %s" % os.path.join(OUTDIR, "run_gpumd.sh"))
+
+
+if __name__ == "__main__":
+    main()

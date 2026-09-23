@@ -6,9 +6,11 @@
 symprec 审计」逻辑此前在三个文件里各写了一份：
   · skill/fc-fit/fc_plot_phonon.py
   · skill/kl-dft-cpu/kl_fc_backends.py
-  · skill/_common/mlff/klmlff_common.py   ← 仍是坏的（未迁移，见下）
-修一个 bug 要改三处，故收敛到这里。两个已修的文件改为 import 本模块；
-mlff 那份由拥有它的会话迁移（TODO）。
+  · skill/_common/mlff/klmlff_common.py
+修一个 bug 要改三处，故收敛到这里。三份现已**全部**改为 import 本模块：
+mlff 第三份于 2026-09-22 迁移完成（HANDOVER §38），本模块是 ZA 判定的**唯一真源**。
+（2026-09-22 复验：真实 MoS₂ fc2 md5 acfd37b2… → vac(2)→prim(0)、dirs=[(0,1,0),(0,1,-1)]、
+ qmax=0.05 p=(1.9930749384721, 1.9801186415610)，与 §28.2 验收数字逐位一致。）
 
 关键判据（为什么这些函数长这样）：
   · ZA 弯曲支在无应力 2D 必须 ω ∝ q²（Born-Huang 旋转不变 + Huang 零应力）；

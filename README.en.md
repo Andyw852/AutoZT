@@ -46,7 +46,7 @@ The command is autozt; a two-letter entry point pa is installed as well and is
 exactly the same program:
 
     pa status
-    pa -tt kl-mace-gpu -p Si_demo start
+    pa -tt kl-mlff-gpu -p Si_demo start
     pa mcp --list-tools
     AUTOZT_MCP_PROFILE=compact pa mcp   # compact tool surface for an LLM client
     pa agent snapshot                    # stable JSON, no MCP client required

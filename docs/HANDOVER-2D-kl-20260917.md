@@ -9,11 +9,18 @@
 **S1（结构优化）这一环已修好并验证**；P0-1（BHH 真施加）、P0-2（厚度归一化）、
 P0-3（LASSO 设置）**尚未在完整链路上跑通**。下一步分两条线（见第 5 节）。
 
-> ⚠️ **未解决风险（2026-09-21，显眼）**：`phonon-mlff-cpu/gpu` 的 ZA 判定目前是**错的**
-> —— `skill/_common/mlff/klmlff_common.py` 的 `inplane_qdirs`/`za_check_2d` 与 kl 链同源 bug
-> （真空轴当原胞下标 + 60° 面内基第二方向取错 + 无本征矢量判据），**尚未修**。在修好前，
-> 那条链路（phonon-mlff-*/phonon_fit_driver）出的任何 ZA 结论、以及据此判定的 2D κ 都**不能用**。
-> 修法与可照抄的实现、验证数字见 **§28.1 / §28.2**；给改该文件会话的 commit note 见 **§28.2**。
+> ✅ **原 ZA 风险已解除（2026-09-22）**：`phonon-mlff-cpu/gpu` 的 ZA 判定（第三副本）**已迁移到
+> 公共池 `skill/_common/za_2d.py` 并验证通过**，见 **§38**。2026-09-21 的 ⚠️ 警告作废（§28.1 只作历史记录）。
+> **2026-09-22 本次会话独立复验**（真实 MoS₂ fc2 `acfd37b238bad6d25c1541848e42e8bc`）：
+> `vac(cart=2)→prim=0`；`dirs=[(0,1,0),(0,1,-1)]`；`za_check_2d` → `p=(1.9930749384721, 1.9801186415610)`
+> （qmax=0.05，本征矢量判据，symprec 1e-4 克隆），与 §28.2 验收数字**逐位一致**；
+> `imag_mesh_numbers→[1,60,60]`（vax_prim=0）；`band_path_2d_prim→hexagonal Γ-M-K-Γ`；
+> 同网格最低频 **−0.0539 THz**（与 §45 的 −0.055377 同源）。三条 helper 全部正确。
+>
+> **当前真正未闭的口子**（2026-09-22 晚）：① P0-2 厚度归一化**端到端**——代码/逻辑已验证，但
+> 线上 MoS₂ 的 `kappa_summary.json` 仍是修复前的陈旧产物（§39.2/§39.3），需重跑 S6 才闭环；
+> ② MoS₂ 对称化链卡在 S5，对称化后重拟合**比未对称化更差**（§46.9 / §47），待**用户决策**；
+> ③ 同一虚频量三套阈值（S5 0.10 / S5.1 −0.05 / lattice_kappa 0.5）待**用户给值**（§45 第 4 项）。
 
 ---
 
@@ -1792,6 +1799,9 @@ autozt -tt fc-fit -p MoS2_kltest -j S1_fit start     # → jobid 3856220
 
 ## 28.1 ⚠️ 短期风险（显眼）：phonon-mlff-cpu/gpu 的 ZA 判定现在是错的
 
+> ✅ **2026-09-22 已解决**：第三副本已迁移到 `_common/za_2d.py` 并在真实 MoS₂ fc2 上复验通过，见 **§38**。
+> 下面的描述是写下本条时的状态，**不要再据此判断现状**。
+
 - **文件**：`skill/_common/mlff/klmlff_common.py` —— `inplane_qdirs`（约 L397）、`za_check_2d`（约 L431）。
 - **同源 bug 三件套**：① 把 Cartesian 真空轴当原胞基矢下标；② 60° 生产原胞的第二面内方向取成
   `e_i+e_j`（变成第二个 Γ-M，而不是 Γ-K）；③ 无本征矢量面外占比判据，取"全局最低支"。
@@ -2901,4 +2911,156 @@ autozt -tt kl-dft-cpu -p MoS2_kltest -j S2_static start   # 预期：报"确认�
   （此前隔离目录因撞名出现嵌套，886 项，**非破坏、无数据丢失**。）
 - **下一步**：等 214 帧跑完 → @S5_fc retry+start@ → 比 @min_freq_THz / imag_policy / rel_err /
   pheasy_free_ifcs@，再决定方向 2/3。
+
+
+---
+
+# 49. 2026-09-22：findiff 对比取消（用户决定）+ 现状
+
+- 用户指示"取消这个 findiff"：@autozt -tt kl-dft-cpu -p MoS2_kltest -j S4_disp stop -y@
+  → **scancel 214 个作业成功**（代表 3884265），队列已无 S4_disp。
+- 配置回退：@METHOD=alm@、@FC3_CUTOFF_PAIR=空@（回到变更前口径）；@SYMMETRY_SYMMETRIZE=on@ 保持。
+- **S4 磁盘状态**：findiff 数据集（214 个 disp 目录，**0 帧计算**）仍在；要恢复成 alm 口径需
+  @retry@（只重新生成输入，不占 VASP）。旧的有效帧在 @symmetry_audit/pre_symmetry_dataset/@（含撞名嵌套，非破坏）。
+- 未做的零机时核对（findiff 4.0 vs 6.0 的一阶超胞 md5）**不再需要**。
+
+---
+
+# 50. 2026-09-22/23：S4 数据集错配根因 + 完整 alm 重跑 + 两个代码修复
+
+## 50.1 根因：S4 的 13 帧算的不是 yaml 描述的那套结构
+
+- **现象**：@S5_fc@ 的抽帧闸报 @S4 帧一致性：抽帧校验失败（3/3 帧）@。
+- **实测（13 帧全查）**：@CONTCAR == vasprun.xml 的 initialpos@ 逐位一致（2–4e-9 Å）⇒ 帧是**静态**、
+  力与结构干净配对；但结构本身是**有限位移型**（每帧 1–2 个原子、位移 0.03 Å；含成对帧），
+  而 @phono3py_disp.yaml@ 记的是 **alm rattle**（每帧 225 个分量全非零、max 0.06 Å）——**两套东西**。
+- **时间线**：17:57 的 findiff 数据集写了 @disp-*/POSCAR@；19:50–19:52 的"对称化 + METHOD=alm 重生成"
+  写了 @POSCAR-*@ 与 yaml，**但没有刷新已存在的 @disp-*/POSCAR@**（当时四重比对尚未上线）；
+  19:56 提交后 VASP 就按**旧 POSCAR** 算完了。
+- **教训**：@CONTCAR == vasprun.initialpos@ 只能证明"静态、力与结构配对"，**不能**证明"yaml 与结构一致"。
+  后者由 @kl_common.check_frames_match_displacements()@ 负责，它拦对了。
+
+## 50.2 位移重建（用户批准的 CONTCAR 方案，已执行并验证）
+
+- 位移定义为 @CONTCAR − SPOSCAR@，最小像回绕，笛卡尔 Å；逐帧晶格与 yaml 超胞差 0.00e+00。
+- 落地方式：**只替换 yaml 的 @dataset.displacements@ 文本块**（912→912 行），前 368 行
+  （space_group / primitive_matrix / supercell / unit_cell）逐字节不变，零 schema 风险。
+- 自校验：重载 max|Δ|=4.9e-17；@SPOSCAR + Δ@ 对 vasprun 位置最大回绕偏差 9.0e-08 Å；
+  @check_frames_match_displacements()@ → @ok=True 抽帧校验通过（3 帧）@。
+
+## 50.3 但最终决定：不救这套 findiff 数据，重跑完整 alm 集
+
+- 用户指示"老老实实重跑一套完整的 alm 随机位移集（13 帧 VASP），这次要确定没问题"。
+- 旧数据集**非破坏**隔离到 @step4_disp/symmetry_audit/manual_quarantine_20260922-224318/@
+  （30 项：13 个 @disp-*@、12 个 @POSCAR-*@、yaml/SPOSCAR/disp_plan.json）；
+  alm 版 POSCAR-* 另存 @symmetry_audit/alm_dataset_unused_20260922/@。
+- **提交前六项校验（这次的关键）**：
+  1. @disp_plan.json@ 五个留档键齐全（method/oversample/fd_distance/alm_cut2/alm_cut3/fc3_cutoff_pair）；
+  2. yaml 12 帧 × 75 原子，**225 个分量全非零**（真 rattle，max|Δr|=0.0644 Å）；
+  3. @supercell_matrix = [[5,0,0],[0,5,0],[0,0,1]]@，晶格 = 5× 单胞；
+  4. **@disp-N/POSCAR@ 与 @POSCAR-N@ 逐字节一致**（上次正是栽在这一步）；
+  5. @disp-00000/POSCAR == SPOSCAR@（平衡帧）；
+  6. @yaml(SPOSCAR + disp)@ vs 各 @POSCAR-NNNNN@ 偏差 1.07e-14 Å。
+- 提交 13 帧：jobid **3885775–3885787**。
+
+## 50.4 顺带修掉的两个真 bug（已提交 @8014cfb@）
+
+- **@StepConf@ 缺 dict 协议**：@skills/_common/opt/stepconf.py@ 原来只有 @__getitem__@，而 @gen_step4_disp.py@
+  写 @disp_plan.json@ 留档时用 @conf.get("ALM_CUT2")@ → @AttributeError@，**崩在 @write_supercells()@ 之后、
+  写 disp_plan 之前**，留下一套"没有留档"的半成品数据集（幂等检查随后也认不出它）。
+  修法不是补单个调用点，而是把 @StepConf@ 补成**只读 dict**：@get/keys/values/items/copy/__contains__/__iter__/__len__@
+  （写入仍被拒绝）。@skill/mlff/stepconf.py@ 同步（该文件属于另一条未提交的重命名工作线，未纳入本次提交）。
+- **@_dataset_matches@ 的 None 语义**：原来 @if _old is None: continue@ 把"plan 记着不截断"与
+  "plan 根本没这个键"混为一谈 ⇒ **@ALM_CUT2@ 从空改成 4.0 这类变化不会被拦**，旧数据集被静默沿用。
+  改为按 @_k not in pl@ 判老 plan；@None ↔ 有值@ 一律视为不一致。
+- 回归：新增 @tests/suite_stepconf.py@（22 条断言：dict 协议 12 条 + 两份 StepConf 一致 + 四重比对 None 语义 8 条），
+  注册进 @tests/test_suites.py@ 的 LOCAL；@python3 -m pytest tests/test_suites.py -q@ → **20 passed**；
+  铁律 12 已核（@git diff HEAD -- <4 路径>@ 为空）。
+
+## 50.5 重跑的 13 帧：10 帧完成，2 帧卡死（**并更正卡死诊断**）
+
+- 完成的 10 个位移帧 + 平衡帧，三查全部通过：① @CONTCAR@ vs @vasprun.initialpos@ max **1.25e-07 Å**；
+  ② 抽帧闸 **ok**；③ @CONTCAR − SPOSCAR@ vs yaml 位移 max **9.77e-14 Å**。
+- @disp-00003@ / @disp-00009@ 卡死（100 min / 10 min 无写入）。**上一轮我误判为 SCF 电荷晃动**，已更正：
+  - 6 个**正常完成**的帧同样在 @DAV 48–49@、@ncg=1785@、@dE≈−0.7~−1.0e-8@ 收敛 ⇒ **DAV 49 是 @EDIFF=1E-8@ 的正常收敛点**，
+    @−0.99535E-08@ 不是哨兵；这两帧的 **SCF 已经收敛**。
+  - 真正卡的位置是**收敛之后的写盘阶段**：OUTCAR 无 @TOTAL-FORCE@；@OSZICAR/CONTCAR/DOSCAR/EIGENVAL/PCDAT/XDATCAR@
+    **全部 0 字节**；@vasprun.xml@ 停在 40960 B（4096 的整倍，缓冲区边界）；@queue.out@ 最后一行**写到一半**
+    （缺 @rms(c)@ 列、stdout 未 flush）⇒ 进程卡在写操作上。
+  - 排除磁盘/配额：@/public@ 用 36%（剩 519 TB），本项目 556 MB。计算类型确认 @NSW=0, IBRION=-1@、@LWAVE=LCHARG=.FALSE.@。
+  - ⇒ **改 INCAR（ALGO=All + AMIX/BMIX）不适用**（SCF 没问题）；若再现，应查**节点/文件系统**
+    （@ps -o stat,wchan@、落在哪台节点），不要再动 INCAR。
+  - 无抢救可能：@TOTAL-FORCE@ 块不存在 ⇒ 只能重算。
+- @retry@ **原生就 scancel 了这 2 个卡死作业**（@retry … scancel 2 个作业（代表 3885778）成功@）——
+  不需要手动 @stop@。@start@ 只补了 2 帧：jobid **3886753 / 3886754**（现 PD）。
+  重交后数据集本体未被重建（yaml/SPOSCAR/plan/POSCAR-* 的 mtime 仍是 22:50）。
+- **结局（2026-09-23 02:5x，已解决）**：两帧在新节点上**从头跑完**（@disp-00003@→cu45、@disp-00009@→cu50，
+  均 @DAV 50@ 收敛并写出 @TOTAL-FORCE@ + @General timing@）；@tmp/s4_postcheck.py@ 三查总判定 **PASS**
+  （12 个位移帧 + 平衡帧全部完成，待补 0：① 1.25e-07 Å、② 抽帧闸 ok、③ 9.77e-14 Å）。
+  ⇒ **同一 INCAR 换节点即通过**，坐实上次是节点/文件系统层面的写盘卡顿，**INCAR 不需要改**
+  （目标里"若仍卡就改 ALGO/AMIX/BMIX"的分支被证据否掉）。
+
+## 50.6 本轮新增工具与留档位置
+
+- @tmp/s4_postcheck.py@：**S4 收尾三查合一**（① CONTCAR vs vasprun；② @kl_common.check_frames_match_displacements()@；
+  ③ CONTCAR−SPOSCAR vs yaml 位移），13 帧齐了跑一条命令出 PASS/FAIL。
+- 隔离/留档：@symmetry_audit/manual_quarantine_20260922-224318/@（findiff 数据集）、
+  @symmetry_audit/alm_dataset_unused_20260922/@（alm 版 POSCAR-*）、
+  @symmetry_audit/pre_symmetry_dataset/@（崩溃那次的半套输出）、
+  @step5_fc.bak-20260922-2232/@（旧 S5 拟合产物，min=−0.1233 THz 那次）。
+
+## 50.7 待办
+
+1. 已完成：S4 13 帧齐 + 三查 **PASS**（2026-09-23 02:5x）。下一步 = **向用户请示后**跑
+   @S5_fc retry + start@（@METHOD=alm@ + @FIT_ENGINE=pheasy@，12 帧 + 平衡帧），
+   并报 @pheasy_relative_error / rmse / free_ifcs@ 与近 Γ 声学支行为。
+2. @skill/_common/step_contract.py@（参数契约闸）**尚未接入** kl 链的 S1→S6，保护未生效；
+   已先补 @tests/suite_step_contract.py@（30 条断言，覆盖 A/B/C 全部判据，提交 @dd27c5d@；本机 21 套件全绿）。
+   ⚠️ **接线必须排在 S5 跑完之后**：该闸是 fail-closed，而当前 @step4_disp@ 没有 @.step_contract.json@，
+   此刻接线会让 S5 的 gen 直接拒绝运行 —— 正好把在等的 S4→S5 交接卡死。
+3. 项目级 @IMAG_THR=0.10@ 覆盖（MoS2_kltest 等）**故意未改**（用户选择保留 0.10）。
+4. @skill/mlff/stepconf.py@ 的 @StepConf.get@ 补丁在工作树中，随另一条 mace→mlff 重命名工作线落地。
+
+---
+
+# 51. 2026-09-23：S4 全部重算完成 + S5 结果（仍 fail，但这次是"干净数据"的 fail）
+
+## 51.1 S4：13 帧齐 + 三查 PASS
+
+- 卡死的 2 帧（@disp-00003@/@disp-00009@）在**新节点**（cu45/cu50）上从头跑完（均 @DAV 50@），
+  同一 INCAR 换节点即通过 ⇒ 上次是**节点/文件系统写盘卡顿**，**INCAR 无需修改**（改 ALGO/AMIX/BMIX 的分支被否掉）。
+- @tmp/s4_postcheck.py@ 三查总判定 **PASS**（12 位移帧 + 平衡帧，待补 0）：① @CONTCAR@ vs @vasprun.initialpos@ max **1.25e-07 Å**；
+  ② 抽帧闸 ok；③ @CONTCAR−SPOSCAR@ vs yaml 位移 max **9.77e-14 Å**。
+- 平衡帧 @disp-00000@：@max|F|=0.002859@、@rms|F|=0.002329@ eV/Å，相对 SPOSCAR 位移 7.1e-14 Å。
+
+## 51.2 S5（jobid 3890812，2026-09-23 11:20→11:32）：仍然 fail
+
+- **判定**：@stability_verdict=fail@、@imag_class=near_gamma_large@、@stable=false@、@status=imaginary@。
+- **软模**：@min_freq = −0.12328 THz = −4.112 cm⁻¹@，@q=(0.045, 0, 0)@，@branch_at_min=0@（声学支），@n_neg_qpoints=29@；
+  NAC 网格更低 @−0.14323 THz@（@nac_used_for_verdict=false@）；@za_verdict=pass@（p=1.993/1.980）。
+- **拟合质量好**：@pheasy_relative_error=0.579%@、@pheasy_rmse=0.00214 eV/Å@、@worst_force_correlation=1.0@、
+  @pheasy_free_ifcs=795@、@rasr_applied=true@ ⇒ 软模**不是拟合失败/过拟合的产物**。
+- **数据可信性已核实**：@queue.out@ 记 @平衡帧 max|F_eq|=0.0029@（与我方独立实测 0.002859 一致）、
+  @收 12 个 vasprun.xml（方法=alm，拟合器=pheasy）@；中间产物 @dataset_*.npy / force_matrix.pkl / disp_matrix.pkl /
+  cs.pkl / phi.npz / phono3py/fc2.hdf5 / fc3.hdf5 / BORN@ 全是 **11:31 新写**，@phonon_summary.json@ 11:32
+  ⇒ **没有复用 16:28 的旧产物**。
+
+## 51.3 为什么数值与旧基线几乎逐位相同（不是缓存）
+
+alm 的 MC-rattle 是**确定性**的（同 seed、同参数）：两次生成都是 @rattle_std=0.005477 / disp_rms=0.02935@，
+所以重算得到的是**同一套随机位移结构**，结果自然一致（差异只在第 8~9 位有效数字，属节点数值噪声）。
+⇒ **旧的 fail 不是数据集错配造成的假象，它可复现。**
+
+## 51.4 物理解读（可检验的假说）
+
+极小值在 @|q|=0.045@（**不是 Γ**），对应实空间波长 ≈ @1/0.045@ ≈ 22 个单胞 ≈ **69 Å**，而超胞只有
+5×5×1（**15.7 Å**）—— 近 Γ 段是从小超胞**外推**出来的。"非 Γ 处的下凹"典型是**有限超胞/力常数截断的外推伪影**，
+而非真晶格失稳（真失稳通常落在 Γ 或某个明确的嵌套 q）。判定只差 23%：阈值 @IMAG_THR=0.10@（项目层 = 代码默认），实测 0.12328。
+
+## 51.5 待用户定方向（S6 未启动，按规矩 fail 不放行）
+
+- (A) **收紧科学**：超胞 5×5×1 → 8×8×1 重做，直接检验"近 Γ 外推伪影"假说（需重算一批 VASP 帧）；
+- (B) **收敛性检验**：@FC3_CUTOFF@ / NAC / 网格密度 / 拟合器（symfc↔pheasy）对近 Γ 极小值的影响；
+- (C) **改判据口径**：@IMAG_THR@ 0.10→0.15 ⇒ @warn@ ⇒ 放行 S6（会改变判据口径，需用户明确同意）；
+- (D) 接受 fail 收尾，把结论固化进交接文档。
 

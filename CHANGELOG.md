@@ -71,7 +71,7 @@ First public release, derived from the taskflow code base (v1.0 refactor).
 - Supercell specification accepts both diagonal notation ("4 4 4") and a general 3x3
   integer matrix ("2 1 0 -1 2 0 0 0 1", phonopy/phono3py --dim semantics).
 - 18 skills covering VASP (band, elastic, defect, ke, kl, opt, phonon), MACE
-  (kl/opt/phonon CPU and GPU, mlff-mace), plus te-screen and unihamgnn.
+  (kl/opt/phonon CPU and GPU, mlff), plus te-screen and unihamgnn.
 - Drop-in skill interface with autozt schema --strict validation.
 
 ### Fixed

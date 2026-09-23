@@ -1,0 +1,101 @@
+# =============================================================================
+# skill/device-thermal-fem/skill.yaml —— 器件级传热 FEM 独立复核
+#
+# 目的：用一套独立的 FEM 实现（scikit-fem）复算 device-thermal 的器件传热，
+#       交叉验证其数值结果，并把"换引擎"做成可插拔（comsol 接口已留）。
+#       现有 device-thermal 是手写两层 2D FVM；同一份代码无法自证，本技能提供
+#       第二个独立实现与三类独立判据：
+#         - 侧壁绝热极限对比解析 1D 严格解（后端自检）
+#         - 源功率审计（实际注入 vs 名义 Q*L，防单元重复计数）
+#         - 与 FVM 的 dT 及中轴温度剖面逐点比对
+#
+# 三步均为 run: gen（CPU，秒级~十几秒）：
+#   S1_fem_model  读 device-thermal 的 device_spec/thermal_props -> fem_model.json
+#   S2_fem_solve  按 FEM_BACKEND 求解 -> fem_summary.json + T_field_fem.json
+#   S3_fem_verify 四类检查 -> fem_verification.json（带 verdict 与 findings）
+#
+# 后端契约：solve(model, workdir, opts) -> dict，见 backend_skfem.py。
+#   skfem  : 开源，pip install scikit-fem；本仓库实测与解析 1D 差 0.07%
+#   comsol : 商业软件，需 COMSOL 安装 + license（接口已留，见 backend_comsol.py）
+# =============================================================================
+schema: 2
+name: device-thermal-fem
+desc: 器件级传热FEM独立复核(scikit-fem/COMSOL可插拔)
+version: "0.1"
+
+template_layout: shared
+
+defaults:
+  hpc: jzzn
+  skill_subdir: true
+
+fetch_files: [fem_model.json, fem_summary.json, T_field_fem.json, fem_verification.json]
+
+steps:
+  - {seq: 1, name: step1_fem_model, label: S1_fem_model, check: marker,
+     marker: 'fem_model.json:"FEM_MODEL_DONE"', run: gen, done_marker: fem_model.json,
+     gen: gen_step1_fem_model.py,
+     gen_need: [stepconf.py, step.conf, fem_common.py, backend_skfem.py, backend_comsol.py]}
+
+  - {seq: 2, name: step2_fem_solve, label: S2_fem_solve, check: marker,
+     marker: 'fem_summary.json:"FEM_SOLVE_DONE"', run: gen, done_marker: fem_summary.json,
+     gen: gen_step2_fem_solve.py, needs: [step1_fem_model],
+     gen_need: [stepconf.py, step.conf, fem_common.py, backend_skfem.py, backend_comsol.py]}
+
+  - {seq: 3, name: step3_fem_verify, label: S3_fem_verify, check: marker,
+     marker: 'fem_verification.json:"FEM_VERIFY_DONE"', run: gen,
+     done_marker: fem_verification.json, gen: gen_step3_fem_verify.py,
+     needs: [step2_fem_solve],
+     gen_need: [stepconf.py, step.conf, fem_common.py, backend_skfem.py, backend_comsol.py]}
+
+io_schema:
+  inputs:
+    - {name: device_spec.json, from: "skill:device-thermal", required: true,
+       desc: "device-thermal 的器件几何/热源/边界规格（本技能复用，不重定义）"}
+    - {name: thermal_props.json, from: "skill:device-thermal", required: true,
+       desc: "device-thermal 的各层 kappa/厚度/热容 + 界面 TBC"}
+    - {name: device_thermal_summary.json, from: "skill:device-thermal", required: false,
+       desc: "device-thermal 的 FVM 结果；有则逐点交叉验证，无则只做解析/自洽检查"}
+  outputs:
+    - {name: fem_model.json, step: S1_fem_model, type: json, desc: "与后端无关的 FEM 模型（几何/分层/界面/源/边界/解析参考）"}
+    - {name: fem_summary.json, step: S2_fem_solve, type: json, desc: "FEM 求解结果（dT、源功率审计、中轴剖面、1D 自检）"}
+    - {name: T_field_fem.json, step: S2_fem_solve, type: json, desc: "FEM 中轴温度剖面与网格信息"}
+    - {name: fem_verification.json, step: S3_fem_verify, type: json, desc: "交叉验证结论（verdict + 四类检查 + findings）"}
+  params:
+    - {name: FEM_BACKEND, values: [skfem, comsol], default: skfem, where: step.conf, desc: "求解后端：skfem(开源)/comsol(需授权)"}
+    - {name: FEM_FROM_DEVICE_THERMAL_DIR, default: null, where: step.conf, desc: "可选：显式指定 device-thermal 产物目录"}
+    - {name: FEM_INTERFACE_LAYER_FRAC, default: 1e-3, where: step.conf, desc: "界面等效薄层厚度/氧化层厚度"}
+    - {name: FEM_NX, default: 60, where: step.conf, desc: "沿沟道 x 单元数"}
+    - {name: FEM_N_CHANNEL, default: 8, where: step.conf, desc: "沟道层 y 单元数"}
+    - {name: FEM_N_INTERFACE, default: 4, where: step.conf, desc: "界面薄层 y 单元数"}
+    - {name: FEM_N_OXIDE, default: 200, where: step.conf, desc: "氧化层 y 单元数"}
+    - {name: FEM_DO_1D_CHECK, values: [true, false], default: true, where: step.conf, desc: "是否额外做侧壁绝热解析 1D 自检"}
+    - {name: FEM_MESH_CHECK, values: [true, false], default: true, where: step.conf, desc: "是否做网格收敛扫描"}
+    - {name: FEM_1D_TOL, default: 0.01, where: step.conf, desc: "后端 vs 解析 1D 允许相对差"}
+    - {name: FEM_POWER_TOL, default: 0.02, where: step.conf, desc: "源功率审计允许相对差"}
+    - {name: FEM_FVM_TOL, default: 0.05, where: step.conf, desc: "与 device-thermal FVM 允许相对差"}
+    - {name: FEM_MESH_TOL, default: 0.01, where: step.conf, desc: "网格收敛允许相对差"}
+    - {name: COMSOL_BIN, default: "", where: step.conf, desc: "(COMSOL后端) comsol/comsolbatch 可执行路径"}
+    - {name: COMSOL_LICENSE_FILE, default: "", where: step.conf, desc: "(COMSOL后端) license.dat 路径；也可用 LMCOMSOL_LICENSE_FILE 环境变量"}
+    - {name: COMSOL_CORES, default: 4, where: step.conf, desc: "(COMSOL后端) 并行核数"}
+  steps:
+    - {step: S1_fem_model, title: "FEM model build", inputs: [device_spec.json, thermal_props.json], outputs: [fem_model.json], validator: "FEM_MODEL_DONE marker"}
+    - {step: S2_fem_solve, title: "FEM solve (pluggable backend)", inputs: [fem_model.json], outputs: [fem_summary.json, T_field_fem.json], validator: "FEM_SOLVE_DONE marker"}
+    - {step: S3_fem_verify, title: "Cross-validation vs analytic 1D and FVM", inputs: [fem_summary.json, device_thermal_summary.json], outputs: [fem_verification.json], validator: "FEM_VERIFY_DONE marker"}
+
+flow:
+  summary: "复用 device-thermal 的器件定义 -> 独立 FEM 求解 -> 与解析 1D / 二维 FVM 交叉验证"
+  stages:
+    - {name: model, steps: [S1_fem_model], produces: [fem_model.json], desc: "装配与后端无关的 FEM 模型"}
+    - {name: solve, steps: [S2_fem_solve], produces: [fem_summary.json, T_field_fem.json], desc: "按 FEM_BACKEND 求解"}
+    - {name: verify, steps: [S3_fem_verify], produces: [fem_verification.json], desc: "四类交叉验证与结论"}
+  next_skills:
+    - {skill: device-thermal, via: thermal_props.json, desc: "上游：本技能复核它的 S3_solve 结果"}
+  requires:
+    device_spec.json: "必需；来自 device-thermal S1_spec"
+    thermal_props.json: "必需；来自 device-thermal S2_props"
+
+corrections: [node_fail, dir_missing]
+
+requires:
+  python: [numpy, scikit-fem]

@@ -40,6 +40,9 @@ import json
 import hashlib
 import datetime
 import subprocess
+import threading
+
+_AUDIT_WRITE_LOCK = threading.Lock()
 
 # 审计与批准落盘位置（都在**配置目录**里，和 history.jsonl / .tf_hung.json 同级）
 AGENT_LOG_NAME = ".tf_agent_log.jsonl"
@@ -249,9 +252,16 @@ def agent_audit(cfg, actor, cmd, argv, risk, decision, why=None,
     try:
         path = agent_log_path(cfg)
         os.makedirs(os.path.dirname(path), exist_ok=True)
-        with open(path, "a", encoding="utf-8") as f:
-            f.write(json.dumps(rec, ensure_ascii=False) + "\n")
-    except OSError as _e:                       # noqa: BLE001
+        line = (json.dumps(rec, ensure_ascii=False) + "\n").encode("utf-8")
+        # One append write prevents interleaving records between threads in
+        # this process; the reader remains tolerant of pre-existing torn rows.
+        with _AUDIT_WRITE_LOCK:
+            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+            try:
+                os.write(fd, line)
+            finally:
+                os.close(fd)
+    except Exception as _e:                     # noqa: BLE001
         print("警告：审计日志写不进去（忽略）：%s" % _e, file=sys.stderr)
     return rec
 
@@ -265,7 +275,7 @@ def agent_log_load(cfg, proj=None, since=None, risk=None, limit=None):
     wants = {x.strip() for x in str(proj or "").split(",") if x.strip()}
     since = str(since or "").strip().replace(" ", "T")
     try:
-        with open(path, encoding="utf-8") as f:
+        with open(path, encoding="utf-8", errors="replace") as f:
             for line in f:
                 line = line.strip()
                 if not line:
