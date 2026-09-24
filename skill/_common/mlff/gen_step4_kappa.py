@@ -597,9 +597,14 @@ def main():
             " --nac" if use_nac else " --nonac",
             " --mfp" if mfp_on else "")
 
-    def _wgp(m):
-        """--wgp 前缀：只要网格 + NAC 开关，写出 ir_grid_points.yaml（不可约格点编号）。"""
-        return '%s --mesh %s%s' % (yaml, m, " --nac" if use_nac else " --nonac")
+    def _wgp(m, extra_s=""):
+        """--wgp 前缀：网格 + NAC 开关 + EXTRA_ARGS。
+
+        EXTRA_ARGS 里的 --nosym/--pa 等会改变对称性或原胞，从而改变不可约格点集合；
+        --wgp 必须与正式计算同参，否则分块编号与实际算的格点对不上。
+        """
+        return '%s --mesh %s%s%s' % (yaml, m,
+                                     " --nac" if use_nac else " --nonac", extra_s)
 
     lines = []
     for mi, m in enumerate(ms):
@@ -610,17 +615,25 @@ def main():
             # ① --wgp 拿到不可约格点编号；失败即停（否则后面 --gp 无点可算）
             lines.append('phono3py-load %s --wgp > %s_wgp.log 2>&1 '
                          '|| { echo "[gp] mesh %s: --wgp 失败"; exit 1; }'
-                         % (_wgp(m), tag, m))
+                         % (_wgp(m, extra_s), tag, m))
             # ② 把编号均分成 <=GP_SPLIT 份，每份一行（--gp 接编号列表，不是第 i/n 份）
             lines.append(_GP_SPLIT_PY.replace("__GP_SPLIT__", str(gp)))
             lines.append('[ -s gp_chunks.txt ] || { echo "[gp] mesh %s: 格点分块文件缺失/为空，'
                          '中止"; exit 1; }' % m)
+            # 每块只分到 总核数/GP_SPLIT 个线程：N 个进程同时跑时若都继承模板的
+            # OMP_NUM_THREADS（整节点），总线程就是核数的 N 倍——可能完全不加速甚至更慢。
+            # 总核数优先取实际分配（ntasks*cpus_per_task），退回 SLURM_CPUS_ON_NODE/nproc。
+            lines.append('_omp_total=$(( ${SLURM_NTASKS:-1} * ${SLURM_CPUS_PER_TASK:-0} ))')
+            lines.append('[ "$_omp_total" -ge 1 ] || _omp_total="${SLURM_CPUS_ON_NODE:-0}"')
+            lines.append('[ "$_omp_total" -ge 1 ] || _omp_total="$(nproc 2>/dev/null || echo 1)"')
+            lines.append('_omp=$(( _omp_total / %d )); [ "$_omp" -ge 1 ] || _omp=1' % gp)
             # ③ 每份一个后台 --write-gamma；任一份失败就停，不用缺 γ 的数据汇总
             lines.append('_pids=""; _n=0')
             lines.append('while IFS= read -r _gps; do')
             lines.append('  _n=$((_n+1))')
-            lines.append('  phono3py-load %s --gp="$_gps" --write-gamma%s '
-                         '> %s_$_n.log 2>&1 &' % (_base(m), extra_s, tag))
+            lines.append('  OMP_NUM_THREADS=$_omp phono3py-load %s '
+                         '--gp="$_gps" --write-gamma%s > %s_$_n.log 2>&1 &'
+                         % (_base(m), extra_s, tag))
             lines.append('  _pids="$_pids $!"')
             lines.append('done < gp_chunks.txt')
             lines.append('_fail=0; for _p in $_pids; do wait "$_p" || _fail=1; done')
