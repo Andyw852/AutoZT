@@ -228,6 +228,12 @@ def main():
         if missing:
             sys.exit("[ERROR] 势不含元素 %s（势元素表: %s）" % (missing, sorted(els)[:15]))
     n = len(sym)
+    # 坐标系对齐：compute_chunk ... lower 的 bin 坐标以盒子原点为 0 算，而 cif/cmin/cmax
+    # 直接取输入坐标。输入结构若没 wrap 到 [0, L)，两套坐标会错位（bin 剖面 vs 界面/源漏）。
+    # 这里逐轴 wrap 到 [0, L)（按正交盒子对角元；非正交盒子请先自行 wrap 或用显式
+    # TBC_INTERFACE_COORD 给 wrap 后的坐标）。注意显式 TBC_INTERFACE_Z/COORD 也应给 wrap 后的值。
+    _lens = [lat[0], lat[4], lat[8]]
+    pos = [tuple(p[i] % _lens[i] for i in range(3)) for p in pos]
     coord = [p[ax] for p in pos]
     cmin, cmax = min(coord), max(coord)
     span = cmax - cmin
@@ -271,6 +277,16 @@ def main():
                  "TBC_INTERFACE_COORD 或 TBC_SOURCE_SIDE" % (ns, nk))
 
     pbc = (conf["TBC_PBC"] or "").strip() or (pbc_in if pbc_in else "T T T")
+    # 硬伤修复：沿传输轴若为周期性边界，源(高端)与漏(低端)隔着周期边界直接相邻，
+    # 大量热流不经过界面直接从源流到漏（短路）→ q 被高估、G 虚高；"源/漏热流自洽"
+    # 判据抓不到它（能量依然守恒）。只有界面本身是真空层(auto=="gap")时才可能打断
+    # 这条短路；材料异质结(auto=="composition"/"explicit")在 pbc=T 下必然短路。
+    _pbc_parts = pbc.split()
+    _pbc_axis = _pbc_parts[ax].upper() if len(_pbc_parts) == 3 else "T"
+    if _pbc_axis == "T" and auto != "gap":
+        sys.exit("[ERROR] 沿 %s 轴 pbc=T 且界面非真空层(mode=%s)：源/漏隔着周期边界直接"
+                 "相邻，热流不经界面短路，q/G 会被高估。请把 TBC_PBC 该轴设为 F（并在两端"
+                 "加 fix 冻结原子），或改用含真空层的结构。" % (axis_name, auto))
 
     mp = os.path.join(outdir, "model.xyz")
     with open(mp, "w", encoding="utf-8") as fh:
@@ -305,13 +321,19 @@ def main():
         L.append("ensemble nvt_nhc %g %g %g" % (T, T, coup))
         L.append("dump_thermo %d" % ti)
         L.append("run %d" % neq)
+    # 烧入段：heat_* 恒温器建立温差（暂态，不测量；compute_* 留到测量段再声明）
     L.append("ensemble %s %g %g %g 1 2" % (thermo, T, coup, dT))
-    L.append("compute_chunk %d %d bin/1d %s lower %g temperature density/number"
-             % (si, oi, axis_name, binw))
     L.append("dump_thermo %d" % ti)
     if nburn > 0:
         L.append("run %d" % nburn)
+    # 测量段：GPUMD 每个 run 结束都会清掉 ensemble 与 compute 动作
+    # （Integrate::finalize 的 ensemble_.reset()、Measure::post_run 的 actions_.clear()），
+    # 所以必须重新声明 ensemble + 两个 compute 再 run；否则测量段会报
+    # "An ensemble must be specified before each run." 或写不出 compute.out / compute_chunk.out。
+    L.append("ensemble %s %g %g %g 1 2" % (thermo, T, coup, dT))
     L.append("compute 0 %d %d temperature" % (si, oi))
+    L.append("compute_chunk %d %d bin/1d %s lower %g temperature density/number"
+             % (si, oi, axis_name, binw))
     L.append("dump_thermo %d" % ti)
     L.append("run %d" % nrun)
     with open(os.path.join(outdir, "run.in"), "w", encoding="utf-8") as fh:

@@ -51,18 +51,33 @@ def fit(xs, ys):
     return a, my - a * mx
 
 
-def fit_stats(xs, ys, a, b, x0):
-    """最小二乘拟合的斜率标准误与 x0 处预测值标准误；点数不足返回 (None, None)。"""
+def fit_stats(xs, ys, a, b, x0, n_blocks=5):
+    """最小二乘拟合的斜率标准误与 x0 处预测值标准误；用**块平均**估计。
+
+    相邻 bin 的 T 是空间相关的，把它们当独立点会用残差公式严重低估 ΔT_i 的误差；
+    这里把按 x 排序的点切成 n_blocks 块、每块单独拟合，用各块斜率/预测值的离散度
+    除以 sqrt(n_blocks) 作为标准误。点数不足返回 (None, None)。"""
     n = len(xs)
     if n <= 2:
         return None, None
-    resid = [y - (a * x + b) for x, y in zip(xs, ys)]
-    s2 = sum(r * r for r in resid) / (n - 2)
-    mx = sum(xs) / n
-    sxx = sum((x - mx) ** 2 for x in xs)
-    if sxx <= 0:
+    order = sorted(range(n), key=lambda i: xs[i])
+    xs_s = [xs[i] for i in order]
+    ys_s = [ys[i] for i in order]
+    blk_slopes, blk_preds = [], []
+    for ib in range(n_blocks):
+        lo = ib * n // n_blocks
+        hi = (ib + 1) * n // n_blocks
+        if hi - lo < 2:
+            continue
+        ab, bb = fit(xs_s[lo:hi], ys_s[lo:hi])
+        blk_slopes.append(ab)
+        blk_preds.append(ab * x0 + bb)
+    m = len(blk_slopes)
+    if m < 2:
         return None, None
-    return (s2 / sxx) ** 0.5, (s2 * (1.0 / n + (x0 - mx) ** 2 / sxx)) ** 0.5
+    se_slope = (sum((s - a) ** 2 for s in blk_slopes) / (m - 1)) ** 0.5 / (m ** 0.5)
+    se_pred = (sum((p - (a * x0 + b)) ** 2 for p in blk_preds) / (m - 1)) ** 0.5 / (m ** 0.5)
+    return se_slope, se_pred
 
 
 def read_compute(path):
@@ -78,7 +93,8 @@ def read_compute(path):
     return rows
 
 
-def read_profile(path):
+def read_profile(path, start_block=0):
+    """读逐 bin 温度剖面；start_block 起只平均稳态窗口内的 block（与 q 的时间窗对齐）。"""
     blocks, cur = [], {}
     with open(path, encoding="utf-8", errors="replace") as fh:
         for ln in fh:
@@ -100,23 +116,30 @@ def read_profile(path):
         blocks.append(cur)
     if not blocks:
         sys.exit("[ERROR] compute_chunk.out 无有效数据（NEMD 是否已运行？）")
+    sel = blocks[start_block:]
     out = {}
     for cid in sorted(blocks[0]):
-        cs = [b[cid][0] for b in blocks if cid in b]
-        ts = [b[cid][1] for b in blocks if cid in b]
-        ns = [b[cid][2] for b in blocks if cid in b]
+        cs = [b[cid][0] for b in sel if cid in b]
+        ts = [b[cid][1] for b in sel if cid in b]
+        ns = [b[cid][2] for b in sel if cid in b]
         if ts:
             out[cid] = (sum(cs) / len(cs), sum(ts) / len(ts), sum(ns) / len(ns))
-    return out, len(blocks)
+    return out, len(sel)
 
 
 def best_steady_window(Es, Ek, minlen, tol):
     """在 [k,n) 后缀里找源/漏热流自洽的窗口；优先返回**最长**的可接受窗口。
-    找不到可接受窗口时返回最自洽的那个（供 quality=poor 报告）。"""
+    找不到可接受窗口时返回最自洽的那个（供 quality=poor 报告）。
+    k 从 n//3 起（至少丢掉前 1/3 暂态）：源/漏热流自洽在 Langevin 恒温器下太容易满足，
+    单凭它不足以证明到了稳态。"""
     n = len(Es)
     best_any = None
     best_ok = None
-    for k in range(0, max(1, n - minlen + 1)):
+    k_start = n // 3
+    k_hi = max(0, n - minlen)
+    if k_start > k_hi:
+        k_start = k_hi
+    for k in range(k_start, k_hi + 1):
         xs = list(range(k, n))
         aS, _ = fit(xs, Es[k:])
         aK, _ = fit(xs, Ek[k:])
@@ -167,7 +190,7 @@ def main():
     qsnk = (qK / dt_fs) * EV_PER_FS_TO_W / (area * A2_TO_M2)
     q = 0.5 * (qsrc + qsnk)
 
-    prof, nblocks = read_profile(prof_p)
+    prof, nblocks = read_profile(prof_p, start_block=k)   # 与 q 的稳态窗口对齐
     minbins = int(conf["TBC_MIN_BINS"])
     reasons = []
 
