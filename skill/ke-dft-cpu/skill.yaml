@@ -294,7 +294,7 @@ optional_steps:
          after: step8_amset,
          src: step8.4_amset2d, check: marker, marker: "transport.json:thermal_conductivity",
          gen: gen_step14_amset2d.py,
-         gen_need: [stepconf.py, step.conf, ke_common.py, submit_amset.tpl, vdw_radii.py,
+         gen_need: [stepconf.py, step.conf, ke_common.py, dim_common.py, submit_amset.tpl, vdw_radii.py,
                     discriminant_common.py, amset2d_plugin.py, amset2d_pop_freq.py,
                     overlap_preflight.py, postprocess_intrinsic.py],
          fetch_all: true,

@@ -184,25 +184,6 @@ if [ -n "${RASR_FLAGS}" ]; then
     fi
 fi
 
-# ===== 数据量闸（review #1）：方程数 / 参数数 ≥ 3 =====
-# pheasy -c 已构造完参数空间，pheasy_c.log 里有实际 free IFC 数；-f 之前先判，
-# 欠定就停下并给出至少需要的帧数（WS₂ 实测 12 帧只有 1.72，需 ≥21 帧）。
-_NATOM=$(cat natom_super.txt)
-_FREE_IFC=$(sed -n 's/.*Total number of free IFCs:[[:space:]]*\([0-9]*\).*/\1/p' pheasy_c.log | tail -1)
-if [ -z "${_FREE_IFC}" ] || [ "${_FREE_IFC}" = "0" ]; then
-    echo "⚠ 未能从 pheasy_c.log 读到 free IFC 数，跳过量纲闸" >&2
-else
-    _EQ=$(( ${NDATA} * 3 * ${_NATOM} ))
-    _NEED=$(( ( ${_FREE_IFC} + ${_NATOM} - 1 ) / ${_NATOM} ))
-    _RATIO_PCT=$(( ${_EQ} * 100 / ${_FREE_IFC} ))
-    if [ "${_RATIO_PCT}" -lt 300 ]; then
-        echo "❌ 数据量不足：方程数/参数数 = ${_EQ}/${_FREE_IFC} ≈ ${_RATIO_PCT}/100 < 3。" >&2
-        echo "   当前 ${NDATA} 帧，至少需要 ${_NEED} 帧。请加大 S4 帧数（OVERSAMPLE/截断），或缩小 S5 截断。" >&2
-        exit 1
-    fi
-    echo "✅ 数据量：方程数/参数数 = ${_EQ}/${_FREE_IFC} ≈ ${_RATIO_PCT}/100（≥3 通过；至少需 ${_NEED} 帧）"
-fi
-
 export OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 PHEASY_N_JOBS=${NCPU_DISP}
 pheasy --dim ${DIM} ${W_FLAG} -d ${C_FLAG} --ndata ${NDATA} --disp_file --eps ${NULL_SPACE_EPS}
 

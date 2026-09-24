@@ -266,15 +266,16 @@ def _reference_kpoints(out, dim, vac_axis, n_sub):
         # 面内网格以 step3_uniform 为唯一真源：两步用同一 CONTCAR，面内应逐轴相同。
         #   本脚本的 DK_MAX 是写死常量、不读项目 step.conf；项目若放宽了 S3 的
         #   DK_MAX_2D（如 0.06 → 42×42），S7 自算仍是 48 —— 所以有 S3 网格时直接照抄，
-        #   自算值只作为 S3 缺失时的回落。kz 另由 patch_vacuum_kz 管，不动。
+        #   自算值只作为 S3 缺失时的回落。kz 也一并照抄 S3（见下），不再由本步管。
         _s3 = kc.read_kpoints_mesh(out.parent / "step3_uniform" / "KPOINTS")
         if _s3:
             _cp = [_s3[i] for i in _axes]
             if _cp != [_need[i] for i in _axes]:
                 print("[..] S7 undeformed 面内网格：自算 %s -> 照抄 step3_uniform %s"
                       % ("x".join(str(_need[i]) for i in _axes), "x".join(str(x) for x in _cp)))
-            for _j, _i in enumerate(_axes):
-                _need[_i] = _cp[_j]
+            # [2026-09-24] kz 也一并照抄：三个分量与 step3_uniform 完全一致，
+            #   不再由本步 VACUUM_KZ_MIN 决定（根除 S3=3 / S7=1 的轴序不一致）。
+            _need = list(_s3)
             if kc.align_kgrid(_need, dim, _axes, quiet=True) != _need:
                 print("[WARN] step3_uniform 面内网格 %s 未对齐高对称点（旧版 S3 生成？）"
                       "—— 建议先 rerun step3_uniform，再重生成本步" % "x".join(str(x) for x in _cp))

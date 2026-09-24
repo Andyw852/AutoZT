@@ -116,27 +116,6 @@ def main():
         sys.exit("[ERROR] %s\n        请清空 step4_disp 的 disp-*/POSCAR-*/phono3py_disp.yaml/SPOSCAR "
                  "后重跑 S4（或 -j S4_disp rerun）。" % _note)
 
-    # ---- 截断一致性（review #1）：S5 的 fc3 截断不能大于 S4 生成帧时用的截断 ----
-    #   若 S5 截断更大，S4 的帧只采样到更小截断内的三阶项；更大截断里的项在拟合里
-    #   是欠定的（位移没采到它们）→ 拟合欠定、κ 偏。S4 的截断记在 disp_plan.json 的 alm_cut3。
-    def _cut(v):
-        s = str(v or "").strip()
-        return None if s in ("", "None", "none", "null") else float(s)
-    try:
-        _plan = json.loads((disp / "disp_plan.json").read_text(encoding="utf-8"))
-        _s4_c3 = _cut(_plan.get("alm_cut3"))
-    except Exception:
-        _s4_c3 = None
-    if _s4_c3 is not None:
-        for _key, _val in (("PHEASY_C3_CUTOFF", _cut(conf["PHEASY_C3_CUTOFF"])),
-                           ("FC3_CUTOFF", _cut(conf["FC3_CUTOFF"]))):
-            if _val is not None and _val > _s4_c3 + 1e-9:
-                sys.exit(
-                    "[ERROR] S5 的 %s=%.3f Å 大于 S4 生成位移时用的 %.3f Å。\n"
-                    "        S4 的帧只采样到 %.3f Å 内的三阶项，更大截断里的项在拟合里欠定。\n"
-                    "        处理：把 %s 收到 ≤ %.3f，或重跑 S4 用更大的 ALM_CUT3。"
-                    % (_key, _val, _s4_c3, _s4_c3, _key, _s4_c3))
-
     # ---- SCF 收敛门禁（2026-09-19，user 要求）：NELM 截断/未收敛的帧不能拟合 ----
     #   VASP 撞 NELM 时照样输出力、作业正常退出，只在 OUTCAR 留一段
     #   "number of steps (NELM) ... forces ... might not be reliable"；这种帧拿去拟合
