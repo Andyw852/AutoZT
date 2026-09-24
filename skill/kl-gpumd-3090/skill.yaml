@@ -1,0 +1,62 @@
+# =============================================================================
+# skill/kl-gpumd-3090/skill.yaml —— 晶格热导率（GPUMD MD 版：HNEMD + Green-Kubo）
+#
+# 与 kl-dft-cpu / kl-mace-* 的 IFC+BTE 路线并列：本技能**不经过力常数截断**，
+# 用 NEP（GPUMD v5.6，3090 机 ~/gpumd/src 已编译）+ MD 直接算 κ。
+# 适用场景：ωτ≲1 / κ_RTA 掉到 κ_sg 以下的玻璃型强非谐材料（如 Mg4C60 笼状网络）。
+#
+#   S1_struct  结构/数据准备：POSCAR + VASP OUTCAR→extxyz（能量+力+virial），train/test 切分
+#   S2_nep     NEP 微调（fine_tune 基座 nep89_20250409）/ 从头训练 → nep.txt
+#   S3_kappa   GPUMD MD-κ：NVT 平衡 → HNEMD（κ_xx/yy/zz 分三次驱动）+ EMD 对照 → κ(T)
+#   S4_plot    画 κ(T) + 与 IFC κ / κ_sg 对比（登录节点，不提交作业）
+#
+# 物理前提（README 里有完整判据）：势必须先在**同一势的极小点**上弛豫；
+# 非谐精度必须用 Φ³ 与 pheasy 已确定区(≤3 Å) 对比验证，不能只看力 RMSE。
+# =============================================================================
+schema: 1
+name: kl-gpumd-3090
+desc: 晶格热导率(GPUMD/MD:NEP+HNEMD)
+version: "0.1"
+
+template_layout: per_step
+template_dir: templates
+
+defaults:
+  hpc: "3090"
+  skill_subdir: true
+
+fetch_files: [POSCAR, CONTCAR, workflow_method.txt, klgpumd_params.txt,
+              struct_summary.json, nep_summary.json, kappa_summary.json,
+              compare_summary.json, train.xyz, test.xyz, nep.txt, nep.in,
+              train.log, gpumd.log, kappa.out, hac.out, thermo.out,
+              submit.sh, queue.out, queue.err, kappa_T.png]
+
+steps:
+  - {seq: 1, name: step1_struct, label: S1_struct,
+     check: marker, marker: 'struct_summary.json:"STRUCT_DONE": true',
+     run: gen,
+     gen: gen_step1_struct.py,
+     gen_need: [dim_common.py, stepconf.py, step.conf, gpumd_common.py]}
+
+  - {seq: 2, name: step2_nep, label: S2_nep,
+     check: marker, marker: 'nep_summary.json:"NEP_DONE": true',
+     hpc: "3090",
+     gen: gen_step2_nep.py,
+     gen_need: [dim_common.py, stepconf.py, step.conf, gpumd_common.py,
+                vasp_to_xyz.py, nep_train.py, submit_nep.tpl]}
+
+  - {seq: 3, name: step3_kappa, label: S3_kappa,
+     check: marker, marker: 'kappa_summary.json:"KAPPA_DONE": true',
+     hpc: "3090",
+     gen: gen_step3_kappa.py,
+     gen_need: [dim_common.py, stepconf.py, step.conf, gpumd_common.py,
+                gpumd_kappa.py, submit_gpumd.tpl]}
+
+optional_steps:
+  kappa_plot:
+    default: true
+    steps:
+      - {seq: 4, name: kappa_plot, label: S4_plot, after: step3_kappa,
+         hpc: "3090", run: gen, gen: plot_kappa.py, check: plot,
+         gen_need: [stepconf.py, step.conf, gpumd_common.py],
+         done_marker: compare_summary.json, fetch_all: true}

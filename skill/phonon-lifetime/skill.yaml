@@ -1,0 +1,89 @@
+# =============================================================================
+# skill/phonon-lifetime/skill.yaml —— 声子寿命 / 线宽（三声子，phono3py）
+#
+# 物理：三声子（最低阶微扰 / RTA）声子自能虚部 gamma -> 寿命
+#       tau[ps] = 1/(2*2*pi*gamma_total[THz])，gamma_total = gamma + gamma_isotope
+#       （phono3py 官方约定；kappa 亦用此总和线宽，故默认含同位素）
+# 数据：直接读上游 kl-dft-cpu / kl-mlff-* 的 kappa-m*.hdf5（内含 gamma），
+#       或从 fc2/fc3 现跑 phono3py --br。
+# 产出：lifetime_summary.json + 逐模/逐温 CSV + tau-f / tau-周期 / omega*tau 图。
+#
+# 定位：这是【下游分析技能】，不重复造 kl-dft-cpu 的 DFT 链——它消费 kl 已算好的
+#       力常数/声子自能，把原本只用于算 kappa 的 gamma 显式变成“声子寿命”。
+#       MD 声子电流关联函数（dynasor，论文里有限温度那套）不在此技能范围。
+# =============================================================================
+schema: 2
+name: phonon-lifetime
+desc: 声子寿命与线宽(三声子/Phono3py)
+version: "0.1"
+
+template_layout: shared
+template_dir: templates
+
+defaults:
+  hpc: jzzn
+  skill_subdir: true
+
+fetch_files: [lifetime_summary.json, lifetime_data.csv, lifetime_T.csv,
+              lifetime_vs_frequency.png, lifetime_vs_period.png, ioffe_regel.png,
+              lifetime_vs_T.png, lifetime_vs_q.png, phono3py_lifetime.log]
+
+steps:
+  - {seq: 1, name: step1_lifetime, label: S1_lifetime, check: marker,
+     marker: 'lifetime_summary.json:"LIFETIME_DONE": true',
+     run: gen, done_marker: lifetime_summary.json,
+     gen: gen_step1_lifetime.py,
+     gen_need: [stepconf.py, step.conf, lifetime_common.py, lifetime_plots.py]}
+
+io_schema:
+  inputs:
+    - {name: "kappa-m*.hdf5", from: "skill:kl-dft-cpu", required: false,
+       desc: "上游 phono3py RTA 产物（frequency/gamma/qpoint/kappa），首选数据源"}
+    - {name: gamma-m*.hdf5, from: "skill:kl-dft-cpu", required: false,
+       desc: "phono3py --write-gamma 产物，同样可用"}
+    - {name: fc2.hdf5, from: "skill:kl-dft-cpu", required: false,
+       desc: "无 kappa hdf5 时：二阶力常数（配 fc3+phono3py_disp.yaml 可现跑）"}
+    - {name: fc3.hdf5, from: "skill:kl-dft-cpu", required: false, desc: "三阶力常数"}
+    - {name: phono3py_disp.yaml, from: "skill:kl-dft-cpu", required: false,
+       desc: "phono3py 超胞/原胞/位移定义"}
+  outputs:
+    - {name: lifetime_summary.json, step: S1_lifetime, type: json,
+       desc: "各温度 tau 汇总（全/声学/光学）、omega*tau、过阻尼比例、数据源与约定"}
+    - {name: lifetime_data.csv, step: S1_lifetime, type: table,
+       desc: "逐模：T,gp,q,band,f,gamma,gamma_iso,gamma_total,tau,tau_anh,omega*tau,period,|v|,mfp,acoustic"}
+    - {name: lifetime_T.csv, step: S1_lifetime, type: table, desc: "逐温度中位寿命汇总"}
+    - {name: lifetime_vs_frequency.png, step: S1_lifetime, type: image, desc: "tau vs 频率"}
+    - {name: lifetime_vs_period.png, step: S1_lifetime, type: image,
+       desc: "tau vs 振动周期（含 tau=T_period 参考线，对应论文图 2e）"}
+    - {name: ioffe_regel.png, step: S1_lifetime, type: image, desc: "omega*tau vs 频率（Ioffe-Regel）"}
+    - {name: lifetime_vs_T.png, step: S1_lifetime, type: image, desc: "中位寿命 vs 温度"}
+    - {name: lifetime_vs_q.png, step: S1_lifetime, type: image,
+       desc: "（可选）沿 Q_DIRECTION 的逐支寿命"}
+  params:
+    - {name: SOURCE, values: [auto, kappa_hdf5, upstream, fc], default: auto, where: step.conf,
+       desc: "数据源策略；auto=先找上游 kappa hdf5，再找 fc"}
+    - {name: KAPPA_HDF5, default: "", where: step.conf,
+       desc: "显式指定 kappa/gamma hdf5 路径（最高优先级）"}
+    - {name: UPSTREAM_SKILL, default: kl-dft-cpu, where: step.conf, desc: "上游技能目录名"}
+    - {name: UPSTREAM_STEP, default: step6_kappa, where: step.conf, desc: "上游产物所在步骤"}
+    - {name: TEMPERATURES, default: "", where: step.conf, desc: "要分析的温度列表（空格/逗号），空=全部"}
+    - {name: FOCUS_T, default: 300.0, where: step.conf, desc: "重点温度（沿 q 图 / 对照报告用）"}
+    - {name: IMAG_THR, default: 0.10, where: step.conf, desc: "低于该频率(THz)的模视为数值零模，排除"}
+    - {name: ACOUSTIC_FMAX, default: "", where: step.conf, desc: "声学支频率上限(THz)；空=自动"}
+    - {name: OMEGA_TAU_THR, default: 1.0, where: step.conf, desc: "过阻尼/强散射判据阈值 omega*tau<该值 计为过阻尼"}
+    - {name: FMAX_PLOT, default: 20.0, where: step.conf, desc: "出图频率上限(THz)"}
+    - {name: Q_DIRECTION, default: "", where: step.conf, desc: "如 '0 0 1'，沿该方向出 tau-q 图；空=不出"}
+    - {name: MAKE_PLOT, values: [true, false], default: true, where: step.conf, desc: "是否出图"}
+    - {name: INCLUDE_ISOTOPE, values: [true, false], default: true, where: step.conf,
+       desc: "寿命是否含同位素散射 gamma_isotope（true 与 phono3py kappa 一致；false 只留三声子）"}
+    - {name: RUN_PHONO3PY, values: [true, false], default: false, where: step.conf,
+       desc: "无 hdf5 时是否从 fc2/fc3 现跑 phono3py --br 生成 gamma"}
+flow:
+  summary: "读上游 phono3py 声子自能 gamma(+gamma_iso) -> tau=1/(2*2*pi*gamma_tot) -> 寿命/线宽/过阻尼分析"
+  stages: [{name: lifetime, steps: [S1_lifetime], produces: [lifetime_summary.json]}]
+  next_skills: [device-thermal, device-zt]
+corrections: [node_fail, dir_missing]
+requires:
+  python: [numpy, h5py]
+  conda: atomate2_p_a
+  exe: []
