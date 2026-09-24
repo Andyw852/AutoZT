@@ -6,10 +6,11 @@
   1) SOURCE=kappa_hdf5 或 KAPPA_HDF5 指定：直接读 phono3py 的 kappa-m*.hdf5/gamma-m*.hdf5；
   2) SOURCE=auto：在材料目录树里找上游 kl-dft-cpu（或指定技能）的 kappa hdf5；
   3) 找不到 hdf5 但找到 fc2.hdf5+fc3.hdf5+phono3py_disp.yaml：
-       RUN_PHONO3PY=true 时现跑 phono3py --br 生成 gamma；否则给出明确指引。
+       RUN_PHONO3PY=true 时现跑 phono3py --br --isotope 生成 gamma；否则给出明确指引。
 
 核心物理：tau[ps] = 1/(2*2*pi*gamma_total[THz])，
-          gamma_total = gamma_anh + gamma_isotope（phono3py 官方约定，见 lifetime_common）。
+          gamma_total = gamma_anh + gamma_isotope + gamma_bd（见 lifetime_common）。
+统计量按不可约网格 weight 加权；声学支默认取最低 3 条支、不加频率窗。
 产出：lifetime_summary.json（marker LIFETIME_DONE）、lifetime_data.csv、lifetime_T.csv、
       lifetime_vs_frequency.png / lifetime_vs_period.png / ioffe_regel.png /
       lifetime_vs_T.png（可选 lifetime_vs_q.png）。
@@ -114,7 +115,7 @@ SPEC = {
     "TEMPERATURES":    ("", "str"),            # 逗号/空格分隔；空=全部
     "FOCUS_T":         ("300", "float"),
     "IMAG_THR":        ("0.10", "float"),      # THz，低于此频率的模排除
-    "ACOUSTIC_FMAX":   ("", "str"),            # THz；空=自动
+    "ACOUSTIC_FMAX":   ("", "str"),            # THz；空=只用最低 3 条支，不加频率窗
     "OMEGA_TAU_THR":   ("1.0", "float"),       # 过阻尼判据阈值
     "FMAX_PLOT":       ("20.0", "float"),
     "MAX_PLOT_T":      ("8", "int"),
@@ -122,6 +123,7 @@ SPEC = {
     "Q_DIRECTION_LABEL": ("", "str"),
     "MAKE_PLOT":       ("true", "bool"),
     "INCLUDE_ISOTOPE": ("true", "bool"),       # 寿命含同位素散射（与 phono3py kappa 一致）
+    "CSV_ALL_TEMPERATURES": ("false", "bool"), # 逐模 CSV 是否写全部温度（默认只写 FOCUS_T）
     # ---- 可选：现跑 phono3py ----
     "RUN_PHONO3PY":    ("false", "bool"),
     "PHONO3PY_MESH":   ("15 15 15", "str"),
@@ -132,6 +134,10 @@ SPEC = {
     "CONDA_SH":        ("", "str"),
     "CONDA_ENV":       ("", "str"),
 }
+
+
+def _warn(msg):
+    print("[warn] " + msg, flush=True)
 
 
 def _parse_nums(s):
@@ -150,6 +156,27 @@ def _has_gamma(p):
     return LC.hdf5_has_gamma(p)
 
 
+def _fmt(v, spec="%.6g"):
+    """CSV 单元格式化：None/NaN -> 空串（旧版直接 % 到 None 会崩）。"""
+    if v is None:
+        return ""
+    try:
+        fv = float(v)
+    except (TypeError, ValueError):
+        return str(v)
+    if not np.isfinite(fv):
+        return ""
+    return spec % fv
+
+
+def _local_hdf5_candidates(outdir, cwd):
+    files = []
+    for d in (outdir, cwd):
+        for pat in ("kappa-m*.hdf5", "gamma-m*.hdf5", "kappa*.hdf5", "*.hdf5"):
+            files.extend(sorted(Path(d).glob(pat)))
+    return files
+
+
 def _resolve_dataset(conf, cwd, outdir):
     """-> (kind, payload)  kind in {kappa_hdf5, fc}。"""
     explicit = conf["KAPPA_HDF5"]
@@ -163,39 +190,69 @@ def _resolve_dataset(conf, cwd, outdir):
             sys.exit("[ERROR] %s 里没有 gamma/frequency 数据集，不是 phono3py kappa/gamma hdf5" % p)
         return "kappa_hdf5", p
 
-    # 本技能目录 / 步骤目录里已有的 hdf5
-    for d in (outdir, cwd):
-        for pat in ("kappa-m*.hdf5", "gamma-m*.hdf5", "kappa*.hdf5", "*.hdf5"):
-            for h in sorted(Path(d).glob(pat)):
-                if _has_gamma(h):
-                    return "kappa_hdf5", h
+    # 本技能目录 / 步骤目录里已有的 hdf5（多候选时选主文件，绝不按字符串序取第一个）
+    picked, _ignored = LC.select_kappa_hdf5(_local_hdf5_candidates(outdir, cwd),
+                                            log=lambda m: print(m, flush=True),
+                                            note="[local] ")
+    if picked is not None and LC.is_main_hdf5(picked):
+        return "kappa_hdf5", picked
 
+    # 本地只有 --gp 单点文件时不急着用：先看看上游有没有多 q 点主文件，
+    # 都没有再退回本地那个单点文件（旧版会直接拿本地单点文件去读，然后报缺 qpoint）。
     src = str(conf["SOURCE"] or "auto").lower()
     if src in ("auto", "upstream", "kappa_hdf5"):
-        up = LC.find_kappa_hdf5(cwd, conf["UPSTREAM_SKILL"], conf["UPSTREAM_STEP"])
-        if up:
+        up = LC.find_kappa_hdf5(cwd, conf["UPSTREAM_SKILL"], conf["UPSTREAM_STEP"],
+                                log=lambda m: print(m, flush=True))
+        if up is not None:
             return "kappa_hdf5", up
+    if picked is not None:
+        return "kappa_hdf5", picked
     fc = LC.find_fc_dataset(cwd, conf["UPSTREAM_SKILL"], conf["UPSTREAM_STEP"])
     if fc:
         return "fc", fc
     return None, None
 
 
+def _phono3py_cmd(conf, mesh, ts):
+    """生成 phono3py --br 命令字符串（单独成函数便于回归测试）。
+
+    含同位素时加 --isotope；NAC 不在这里加——phono3py-load 没有 --nac 选项
+    （只有 --nonac），它会在目录里发现 BORN 时自动启用 NAC，所以由调用方负责
+    把 BORN 拷进来（见 _run_phono3py）。
+    """
+    exe = str(conf["PHONO3PY_CMD"] or "phono3py-load")
+    parts = [exe, "phono3py_disp.yaml", "--mesh", str(mesh), "--br",
+             "--ts=\"%s\"" % str(ts)]
+    if conf["INCLUDE_ISOTOPE"]:
+        parts.append("--isotope")
+    return " ".join(parts)
+
+
 def _run_phono3py(conf, cwd, outdir, fc):
     """从 fc 数据集现跑 phono3py --br，返回生成的 hdf5 路径。"""
-    base, fc2, fc3, disp = fc
+    outdir = Path(outdir)
+    base = Path(fc[0])
+    fc2, fc3, disp = (Path(fc[1]), Path(fc[2]), Path(fc[3]))
     for f in (fc2, fc3, disp):
         shutil.copyfile(str(f), str(outdir / f.name))
+    born = Path(base) / "BORN"
+    if born.is_file():
+        shutil.copyfile(str(born), str(outdir / "BORN"))
+        print("[..] 检测到 BORN，已拷入；phono3py-load 会自动启用 NAC（极性材料 LO 支依赖它）",
+              flush=True)
+    else:
+        _warn("fc 目录没有 BORN：极性材料（如 225 相）的 LO 支会算错；非极性材料可忽略。")
     mesh = str(conf["PHONO3PY_MESH"] or "15 15 15")
     ts = str(conf["PHONO3PY_TS"] or "300")
-    exe = str(conf["PHONO3PY_CMD"] or "phono3py-load")
-    cmd = ("%s phono3py_disp.yaml --mesh %s --br --ts=\"%s\" "
-           "2>&1 | tee phono3py_lifetime.log" % (exe, mesh, ts))
+    if not conf["INCLUDE_ISOTOPE"]:
+        _warn("INCLUDE_ISOTOPE=false：现跑 phono3py 不加 --isotope，寿命不含同位素散射")
+    cmd = _phono3py_cmd(conf, mesh, ts)
+    print("[..] 现跑 phono3py：%s" % cmd, flush=True)
+    cmd = cmd + " 2>&1 | tee phono3py_lifetime.log"
     py = sys.executable
     bindir = os.path.dirname(py)
     env_prefix = ("export PATH=%s:$PATH; " % bindir) if bindir else ""
     full = "cd %s && %s( %s )" % (str(outdir), env_prefix, cmd)
-    print("[..] 现跑 phono3py：%s" % cmd, flush=True)
     try:
         rc = subprocess.run(["bash", "-lc", full],
                             timeout=int(conf["PHONO3PY_TIMEOUT"])).returncode
@@ -203,10 +260,10 @@ def _run_phono3py(conf, cwd, outdir, fc):
         sys.exit("[ERROR] phono3py 超过 PHONO3PY_TIMEOUT=%ss 未完成" % conf["PHONO3PY_TIMEOUT"])
     if rc != 0:
         sys.exit("[ERROR] phono3py 退出码 %d，见 %s/phono3py_lifetime.log" % (rc, outdir))
-    for pat in ("kappa-m*.hdf5", "gamma-m*.hdf5", "*.hdf5"):
-        for h in sorted(Path(outdir).glob(pat)):
-            if _has_gamma(h):
-                return h
+    picked, _ = LC.select_kappa_hdf5(sorted(Path(outdir).glob("*.hdf5")),
+                                     log=lambda m: print(m, flush=True), note="[phono3py run] ")
+    if picked is not None:
+        return picked
     sys.exit("[ERROR] phono3py 跑完但没找到含 gamma 的 hdf5")
 
 
@@ -219,6 +276,20 @@ def _iter_grid_kappa(data, focus_T):
     i = int(np.argmin(np.abs(np.asarray(temps) - float(focus_T))))
     row = np.asarray(kappa)[i]
     return {"T_K": float(temps[i]), "kappa_xx_yy_zz": [float(x) for x in row[:6]]}
+
+
+def _src_kind(h5, cwd):
+    """区分数据源：本技能目录内的本地文件 / 上游技能目录 / 外部显式路径。
+
+    0.1 只用 startswith(cwd.parent)，把本技能 outdir 里的本地 hdf5 也标成 upstream。
+    """
+    hp = Path(h5).resolve()
+    cwd_r = Path(cwd).resolve()
+    if hp.parent == cwd_r or cwd_r in hp.parents:
+        return "local_hdf5"
+    if str(hp).startswith(str(cwd_r.parent)):
+        return "upstream_hdf5"
+    return "kappa_hdf5"
 
 
 def main():
@@ -244,28 +315,52 @@ def main():
         src_kind = "phono3py_run"
     else:
         h5 = Path(payload)
-        src_kind = "upstream_hdf5" if str(h5).startswith(str(cwd.parent)) else "kappa_hdf5"
+        src_kind = _src_kind(h5, cwd)
 
     data = LC.read_kappa_hdf5(h5)
     temperatures = data["temperatures"]
     frequencies = data["frequency"]
     gamma = data["gamma"]
     gamma_iso = data.get("gamma_isotope")
-    if not conf["INCLUDE_ISOTOPE"]:
+    if conf["INCLUDE_ISOTOPE"]:
+        if gamma_iso is None or not np.any(np.asarray(gamma_iso) > 0):
+            _warn("INCLUDE_ISOTOPE=true，但数据里没有 gamma_isotope（或全为 0）："
+                  "寿命只含三声子散射；若上游跑 phono3py 时没加 --isotope，需要重跑上游。")
+    else:
         print("[..] INCLUDE_ISOTOPE=false：只用三声子 gamma，寿命会偏长", flush=True)
         gamma_iso = None
-    # 总和线宽：phono3py 的 kappa/mode_kappa 用的就是 gamma + gamma_isotope，
-    # 只取 gamma 会系统性高估寿命（Si 300K 中位约 +19%）。
-    gsum = LC.effective_gamma(gamma, gamma_iso)
+
     qpoints = data.get("qpoints")
     weights = data.get("weights")
     if qpoints is None or weights is None:
         sys.exit("[ERROR] %s 缺 qpoint/weight 数据集" % h5)
 
-    tmap = LC.pick_temperature_indices(temperatures, _parse_nums(conf["TEMPERATURES"]))
+    tmap = LC.pick_temperature_indices(temperatures, _parse_nums(conf["TEMPERATURES"]),
+                                       log=_warn)
     t_indices = sorted(tmap.values(), key=lambda i: temperatures[i])
+
+    # 总和线宽 = gamma_anh + gamma_isotope (+ gamma_bd)。边界散射是否计入，由 hdf5
+    # 里 kappa 的重建误差决定：1e6 Å 是 phono3py 的“关”占位，硬加会污染低温寿命。
+    g_base = LC.effective_gamma(gamma, gamma_iso)
+    bd_mfp = data.get("boundary_mfp")
+    bd_mfp = float(np.asarray(bd_mfp).ravel()[0]) if bd_mfp is not None else None
+    g_bd = LC.boundary_gamma(data.get("group_velocity"), bd_mfp)
+    bd_use, bd_info = LC.decide_boundary_gamma(data, g_base, g_bd, t_indices=t_indices)
+    g_bd_use = g_bd if bd_use else None
+    gsum = (g_base + g_bd_use) if g_bd_use is not None else g_base
+    if bd_info.get("boundary_mfp_ang") is not None:
+        print("[..] boundary_mfp=%.6g Å：%s；kappa 重建误差 %s -> %s"
+              % (bd_info["boundary_mfp_ang"],
+                 "计入边界散射 gamma_bd=|v|/(4*pi*L)" if bd_use else "不计入（视为关/占位）",
+                 ("%.2e" % bd_info["err_no_boundary"]) if bd_info["err_no_boundary"] is not None else "n/a",
+                 ("%.2e" % bd_info["err_with_boundary"]) if bd_info["err_with_boundary"] is not None else "n/a"),
+              flush=True)
     focus = float(conf["FOCUS_T"])
     focus_idx = int(np.argmin(np.abs(np.asarray(temperatures) - focus)))
+    if abs(float(temperatures[focus_idx]) - focus) > 1.0:
+        _warn("FOCUS_T=%.6g K 不在可用温度里，改用最近的 %.6g K（可用：%s）"
+              % (focus, temperatures[focus_idx],
+                 ", ".join("%g" % t for t in temperatures)))
 
     ac_fmax = conf["ACOUSTIC_FMAX"]
     ac_fmax = float(ac_fmax) if str(ac_fmax).strip() else None
@@ -275,34 +370,47 @@ def main():
     per_T = [LC.summarize_temperature(frequencies, gamma, temperatures, ti,
                                       acoustic_fmax=ac_fmax, imag_thr=imag_thr,
                                       omega_tau_threshold=omega_thr,
-                                      gamma_isotope=gamma_iso)
+                                      gamma_isotope=gamma_iso, gamma_extra=g_bd_use,
+                                      weights=weights)
              for ti in t_indices]
 
-    # ---- 逐模 CSV ----
+    # ---- 逐模 CSV（默认只写 FOCUS_T；大胞密网格 × 全部温度会写出上千万行）----
     csv_mode = outdir / "lifetime_data.csv"
+    csv_t = t_indices if conf["CSV_ALL_TEMPERATURES"] else [focus_idx]
     LC.write_mode_csv(str(csv_mode), temperatures, frequencies, gamma, qpoints, weights,
                       group_velocity=data.get("group_velocity"), acoustic_fmax=ac_fmax,
-                      imag_thr=imag_thr, t_indices=t_indices, gamma_isotope=gamma_iso)
+                      imag_thr=imag_thr, t_indices=csv_t, gamma_isotope=gamma_iso,
+                      gamma_extra=g_bd_use)
 
     # ---- 每温度汇总 CSV ----
     csv_T = outdir / "lifetime_T.csv"
     with open(csv_T, "w", encoding="utf-8", newline="") as fh:
         import csv as _csv
         w = _csv.writer(fh)
-        w.writerow(["T_K", "n_all", "tau_median_all_ps", "tau_median_all_anharm_ps",
-                    "tau_median_acoustic_ps", "tau_median_optical_ps",
-                    "omega_tau_median_acoustic", "overdamped_frac_acoustic",
-                    "acoustic_fmax_THz"])
+        w.writerow(["T_K", "n_all", "n_all_weighted", "tau_median_all_ps",
+                    "tau_median_all_anharm_ps", "tau_median_acoustic_ps",
+                    "tau_median_optical_ps", "omega_tau_median_acoustic",
+                    "overdamped_frac_acoustic", "acoustic_fmax_THz"])
         for d in per_T:
             a = d["acoustic"]
             w.writerow(["%.4f" % d["T_K"], d["all"].get("n_modes"),
-                        "%.6g" % d["all"].get("tau_median_ps", float("nan")),
-                        "%.6g" % d["all"].get("tau_median_anharmonic_ps", float("nan")),
-                        "%.6g" % a.get("tau_median_ps", float("nan")),
-                        "%.6g" % d["optical"].get("tau_median_ps", float("nan")),
-                        "%.6g" % a.get("omega_tau_median", float("nan")),
-                        "%.6g" % a.get("overdamped_frac", float("nan")),
-                        "%.4f" % d["acoustic_fmax_THz"]])
+                        _fmt(d["all"].get("n_modes_weighted"), "%.0f"),
+                        _fmt(d["all"].get("tau_median_ps")),
+                        _fmt(d["all"].get("tau_median_anharmonic_ps")),
+                        _fmt(a.get("tau_median_ps")),
+                        _fmt(d["optical"].get("tau_median_ps")),
+                        _fmt(a.get("omega_tau_median")),
+                        _fmt(a.get("overdamped_frac")),
+                        _fmt(d["acoustic_fmax_THz"], "%.4f")])
+
+    # ---- κ 重建自检（gamma 口径对不对，用上游存的 kappa 兜底验证）----
+    kappa_check = LC.kappa_reconstruction_error(data, gsum, t_indices=t_indices)
+    if kappa_check:
+        print("[..] κ 重建自检：最大相对误差 %.2e（%d 个温度）"
+              % (kappa_check["max_rel_err"], kappa_check["n_temperature"]), flush=True)
+    if kappa_check and kappa_check["max_rel_err"] > 1e-3:
+        _warn("κ 重建最大相对误差达 %.2e：上游 kappa 与 gamma 的口径可能不一致"
+              "（例如它开了边界散射而我们没计入）" % kappa_check["max_rel_err"])
 
     # ---- 图 ----
     plots = []
@@ -322,10 +430,17 @@ def main():
                 plots.append(os.path.basename(fn))
         qdir = _parse_direction(conf["Q_DIRECTION"])
         if qdir and qpoints is not None:
+            rotations = None
+            yp = LC.find_phonopy_yaml(h5, cwd, conf["UPSTREAM_SKILL"], conf["UPSTREAM_STEP"])
+            if yp is not None:
+                rotations = LC.symmetry_rotations_from_yaml(yp)
+            if rotations is None:
+                _warn("没找到可用的晶体对称操作（缺 phono3py.yaml / pyyaml / spglib）："
+                      "沿 q 图只取几何上落在该方向的不可约点，等价方向会漏。")
             fn = LP.plot_lifetime_vs_q(str(outdir), temperatures, frequencies, gsum,
                                        qpoints, qdir, [focus_idx],
                                        direction_label=str(conf["Q_DIRECTION_LABEL"] or ""),
-                                       imag_thr=imag_thr)
+                                       imag_thr=imag_thr, rotations=rotations)
             if fn:
                 plots.append(os.path.basename(fn))
     elif conf["MAKE_PLOT"] and not LP.HAVE_MPL:
@@ -342,19 +457,25 @@ def main():
             "n_bands": int(frequencies.shape[1]),
         },
         "tau_convention": "tau_ps = 1/(2*2*pi*gamma_total_THz), gamma_total = "
-                          "gamma_anh + gamma_isotope  [phono3py kaccum/kdeplot + "
-                          "conductivity/base.py:_get_main_diagonal]",
+                          "gamma_anh + gamma_isotope + gamma_bd  [phono3py kaccum/kdeplot + "
+                          "conductivity/base.py:_get_main_diagonal / _get_boundary_scattering]",
         "tau_factor": LC.TAU_FACTOR,
         "isotope_included": bool(gamma_iso is not None and np.any(np.asarray(gamma_iso) > 0)),
-        "boundary_mfp_ang": (float(np.asarray(data["boundary_mfp"]).ravel()[0])
-                             if data.get("boundary_mfp") is not None else None),
+        "boundary_mfp_ang": bd_mfp,
+        "boundary_gamma_included": bd_use,
+        "boundary_decision": bd_info,
+        "weights_applied": bool(per_T and per_T[0].get("weights_applied")),
+        "acoustic_definition": ("lowest 3 branches by band index"
+                               + (", f<=%.4g THz" % ac_fmax if ac_fmax is not None else "")),
         "temperatures_all_K": [float(x) for x in temperatures],
         "temperatures_analyzed_K": [float(temperatures[i]) for i in t_indices],
+        "csv_temperatures_K": [float(temperatures[i]) for i in csv_t],
         "focus_T_K": float(temperatures[focus_idx]),
         "imag_thr_THz": imag_thr,
         "omega_tau_threshold": omega_thr,
         "per_temperature": per_T,
         "kappa_from_hdf5": _iter_grid_kappa(data, focus),
+        "kappa_reconstruction": kappa_check,
         "plots": plots,
         "files": {
             "per_mode_csv": os.path.basename(csv_mode),
@@ -369,8 +490,8 @@ def main():
     f = foc["acoustic"] if foc else {}
     print("[DONE] %s：%d 个温度，%d 个模；%.0fK 声学支 tau_median=%s ps，omega*tau_median=%s"
           % (OUTDIR, len(per_T), frequencies.size, foc["T_K"] if foc else float("nan"),
-             ("%.3g" % f.get("tau_median_ps")) if f.get("tau_median_ps") else "n/a",
-             ("%.3g" % f.get("omega_tau_median")) if f.get("omega_tau_median") else "n/a"))
+             ("%.3g" % f["tau_median_ps"]) if f.get("tau_median_ps") else "n/a",
+             ("%.3g" % f["omega_tau_median"]) if f.get("omega_tau_median") else "n/a"))
 
 
 if __name__ == "__main__":

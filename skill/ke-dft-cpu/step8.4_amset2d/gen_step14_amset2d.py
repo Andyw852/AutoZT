@@ -196,6 +196,9 @@ SPEC = {
     # write_mesh 开关（2026-09-22 用户批准）：true = settings.yaml 写 write_mesh: true，
     # 产出 mesh_*.h5 供 postprocess_intrinsic.py 重积分；默认 False，行为不变。
     "WRITE_MESH": (WRITE_MESH, "bool"),
+    # 掺杂/温度范围覆盖（B4/B5 缩减设置用）：默认顶部 DOPING/TEMPERATURES；step.conf 可覆盖。
+    "DOPING": (DOPING, "str"),
+    "TEMPERATURES": (TEMPERATURES, "str"),
 }
 # --- amset2d 插件相关（可改）---
 PLUGIN_SRC_NAME = "amset2d_plugin.py"   # 与本脚本同目录，运行时复制到 OUTDIR_NAME
@@ -1450,7 +1453,7 @@ def main():
     _disc_gate()
     cwd = Path.cwd()
     global LAYER_THICKNESS, NWORKERS, UNITY_OVERLAP, WAVEFUNCTION_FULL
-    global INTERPOLATION_FACTOR, SCATTERING, WRITE_MESH
+    global INTERPOLATION_FACTOR, SCATTERING, WRITE_MESH, DOPING, TEMPERATURES
     _conf_nworkers = None
     if (cwd / "step.conf").is_file():
         # strict=False：材料级 step.conf 是【全技能共用】的一份，含别的步骤的键
@@ -1509,6 +1512,17 @@ def main():
                 WRITE_MESH = True
                 print("[..] WRITE_MESH=true（step.conf 覆盖）：settings.yaml 写 "
                       "write_mesh: true，产出 mesh_*.h5")
+            # patch_doping_override（B4/B5 缩减设置）：step.conf 可覆盖掺杂/温度范围
+            if _p["DOPING"]:
+                _d = str(_p["DOPING"])
+                if _d != DOPING:
+                    print("[OK] DOPING = %s（step.conf 覆盖，出厂 %s）" % (_d, DOPING))
+                DOPING = _d
+            if _p["TEMPERATURES"]:
+                _t = str(_p["TEMPERATURES"])
+                if _t != TEMPERATURES:
+                    print("[OK] TEMPERATURES = %s（step.conf 覆盖，出厂 %s）" % (_t, TEMPERATURES))
+                TEMPERATURES = _t
         except (KeyError, ValueError, TypeError):
             pass  # step.conf 读不成时保持出厂默认（LAYER_THICKNESS="vdw" / NWORKERS 自动）
 

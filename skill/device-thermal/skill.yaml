@@ -102,7 +102,7 @@ io_schema:
     - {name: N_GRID_X, default: 41, where: step.conf, desc: "沿沟道网格数"}
     - {name: N_GRID_SUB, default: 60, where: step.conf, desc: "氧化层 y 网格数"}
     - {name: DO_TRANSIENT, values: [true, false], default: true, where: step.conf, desc: "是否算瞬态升温"}
-    - {name: TBC_STRUCTURE, default: tbc_interface.xyz, where: step.conf, desc: "(可选GPU) 界面结构 extxyz；放技能目录或 project_setting/skill_dir/ 随 gen_need 推送，也可给 GPU 主机绝对路径"}
+    - {name: TBC_STRUCTURE, default: "", where: step.conf, desc: "(可选GPU) 界面结构 extxyz 路径（必填）；可放技能目录/project_setting/skill_dir/ 随 gen_need 推送，也可给 GPU 主机绝对路径"}
     - {name: TBC_NEP_MODEL, default: "", where: step.conf, desc: "(可选GPU) 任意 GPUMD 势文件路径（GPU 主机本地）"}
     - {name: TBC_GPUMD_BIN, default: "", where: step.conf, desc: "(可选GPU) gpumd 可执行文件路径"}
     - {name: TBC_CUDA_VISIBLE_DEVICES, default: "", where: step.conf, desc: "(可选GPU) 指定 GPU（建议用 UUID，避开故障卡）"}
