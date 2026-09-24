@@ -57,7 +57,7 @@ PLOT_SPEC = {
     "SBATCH_QOS": ("regular", "str"),
     "PLOT_CORES": (16, "int"),          # 该作业要几个核（画图/建动力学矩阵是 CPU）
     "CONDA_SH": ("", "str"),            # 由集群配置注入
-    "CONDA_ENV": ("atomate2_p_a", "str"),
+    "CONDA_ENV": ("", "str"),           # 由集群配置注入；留空让"读不到就报错"真正生效
 }
 STEP = "step5_phonon_plot"
 
