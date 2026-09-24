@@ -66,3 +66,33 @@ def test_duplicate_n_is_not_extrapolated(tmp_path):
     mc = _run(tmp_path, ["1 90 90", "90 90 1", "138 138 1"])
     assert "kappa_inf_extrap_300K_inplane" not in mc
     assert "extrap_error" in mc
+
+
+def _run_with(tmp_path, meshes, k300s):
+    plan = []
+    for m, k300 in zip(meshes, k300s):
+        K = np.zeros((len(T), 6))
+        K[:, 0] = K[:, 1] = k300 * 300.0 / T
+        K[:, 2] = 0.01
+        with h5py.File(tmp_path / ("kappa-m%s.hdf5" % "".join(m.split())), "w") as h:
+            h["temperature"] = T
+            h["kappa"] = K
+        plan.append((m, "rta"))
+    script = g6.build_extract(1.0, {}, None, g6.extract_plan(plan, False),
+                              meshes[-1] + "|rta")
+    (tmp_path / "x.sh").write_text(script, encoding="utf-8")
+    r = subprocess.run(["bash", "x.sh"], cwd=tmp_path, capture_output=True, text=True,
+                       env=dict(os.environ, PATH=os.path.dirname(sys.executable)
+                                + os.pathsep + os.environ.get("PATH", "")))
+    assert "KAPPA_DONE" in r.stdout, r.stdout + r.stderr
+    d = json.loads((tmp_path / "kappa_summary.json").read_text(encoding="utf-8"))
+    return d["mesh_convergence"]["rta"]
+
+
+def test_non_monotonic_is_not_extrapolated(tmp_path):
+    # 三档 κ = [90, 97, 95] 不单调：1/N 外推不适用，应 skip
+    meshes = ["90 90 1", "114 114 1", "138 138 1"]
+    mc = _run_with(tmp_path, meshes, [90.0, 97.0, 95.0])
+    assert "kappa_inf_extrap_300K_inplane" not in mc
+    assert "extrap_skipped" in mc
+

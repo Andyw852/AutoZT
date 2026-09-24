@@ -46,6 +46,13 @@ SPEC = {
     "PHEASY_FIT_METHOD": ("auto", "str"), # auto | LASSO | RFE | OLS（OLS 最吃内存）
     "PHEASY_C3_CUTOFF":  ("5.2", "str"), # pheasy fc3 截断 Å；None=不截断
     "PHEASY_ENABLE_FC":  (3,     "int"), # 2|3|4（热导率需 ≥3）
+    # ---- 三阶截断扫描（2026-09-24 user 定）：S4 记的候选截断逐个拟合 ----
+    "CUT3_SCAN":          ("auto", "str"),   # auto|on|off：候选 ≥2 且 auto 时逐个拟合
+    "CUT3_BOOTSTRAP":     (10,     "int"),   # 对帧有放回重抽样次数（0=不做稳定性）
+    "CUT3_STABILITY_THR": (0.3,    "float"), # 逐壳层 Φ³ 的 σ/|mean| 判"能确定"的阈值
+    "CUT3_CV_1SE_MULT":   (1.0,    "float"), # 1-SE 规则里的 SE 倍数
+    "CUT3_PICK":          ("smallest", "str"), # smallest|largest（见 kl_common.select_cutoff）
+    "CUT3_KAPPA_TOL_PCT": (5.0,    "float"), # κ 平台判据：相邻变化上限(%)（S6 用）
     # 旋转不变性/平衡条件（RASR）：auto = 2D 用 BHH、3D 不加（文献结论：对体材料可忽略，
     #   对 2D 是硬要求——不加则 ZA 近 Γ 线性化甚至出虚频）。BHH | BH | H | none 可强制。
     #   ★ 必须施加在 pheasy 的 -c（零空间构造）步；-f 步读的是 ns_*.npz，--rasr 在 -f 上无效。
@@ -116,6 +123,26 @@ def main():
         sys.exit("[ERROR] %s\n        请清空 step4_disp 的 disp-*/POSCAR-*/phono3py_disp.yaml/SPOSCAR "
                  "后重跑 S4（或 -j S4_disp rerun）。" % _note)
 
+    # ---- 截断候选 / 扫描开关（review #1 + 2026-09-24）：读 S4 记的候选截断 ----
+    #   S5 的 fc3 截断不得大于 S4 生成帧时用的截断（否则更大截断里的三阶项欠定）；
+    #   候选截断是 S4 按壳层中点算好、一次按【最大候选】生成帧的，故都不超。闸门在
+    #   engine 解析之后逐档核（见"截断扫描"段）。
+    def _cut(v):
+        s = str(v or "").strip()
+        return None if s in ("", "None", "none", "null") else float(s)
+    _plan, _plan_cands, _s4_c3 = {}, [], None
+    try:
+        _plan = json.loads((disp / "disp_plan.json").read_text(encoding="utf-8"))
+        _plan_cands = [float(x) for x in (_plan.get("cut3_candidates") or [])]
+        _s4_c3 = _cut(_plan.get("alm_cut3"))
+    except Exception:
+        _plan, _plan_cands, _s4_c3 = {}, [], None
+    _scan_on = (str(conf["CUT3_SCAN"]).lower() in ("auto", "on", "true", "1", "yes")
+                and len(_plan_cands) >= 2)
+    print("[..] S4 截断候选=%s（S4 生成用最大截断=%s）；CUT3_SCAN=%s → %s"
+          % (_plan_cands or "无", _s4_c3, conf["CUT3_SCAN"],
+             "逐候选扫描" if _scan_on else "单截断"))
+
     # ---- SCF 收敛门禁（2026-09-19，user 要求）：NELM 截断/未收敛的帧不能拟合 ----
     #   VASP 撞 NELM 时照样输出力、作业正常退出，只在 OUTCAR 留一段
     #   "number of steps (NELM) ... forces ... might not be reliable"；这种帧拿去拟合
@@ -169,6 +196,24 @@ def main():
     if str(conf["FC_CALC"]).lower() not in ("symfc", "alm"):
         sys.exit("[ERROR] FC_CALC 只允许 symfc / alm")
 
+    # ---- S5 实际拟合的截断列表 + 不超过 S4 生成截断的硬闸 ----
+    if _scan_on:
+        cut3_list = sorted(_plan_cands)
+        print("[..] 截断扫描：S5 将逐个拟合 %s（共 %d 档），作业内对每档算 CV/稳定性"
+              % (cut3_list, len(cut3_list)))
+    else:
+        _one = (_cut(conf["PHEASY_C3_CUTOFF"]) if engine == "pheasy"
+                else _cut(conf["FC3_CUTOFF"]))
+        cut3_list = [] if _one is None else [_one]
+    if _s4_c3 is not None:
+        for _val in cut3_list:
+            if _val > _s4_c3 + 1e-9:
+                sys.exit(
+                    "[ERROR] S5 的 fc3 截断 %.3f Å 大于 S4 生成位移时用的 %.3f Å。\n"
+                    "        S4 的帧只采样到 %.3f Å 内的三阶项，更大截断里的项在拟合里欠定。\n"
+                    "        处理：把截断收到 ≤ %.3f，或重跑 S4 用更大的 ALM_CUT3。"
+                    % (_val, _s4_c3, _s4_c3, _s4_c3))
+
     # ---- RASR（旋转不变性 + 零应力平衡条件）----
     # 2D 的 ZA 弯曲支 ω∝q² 由 Born-Huang 旋转不变性保证；不加时近 Γ 会线性化、
     #   常常还带小虚频，虚频闸可能过（频率全为正）但 κ 是错的，所以默认 2D 必加。
@@ -211,6 +256,14 @@ def main():
         "IMAG_THR": float(conf["IMAG_THR"]),
         "ZA_CHECK": str(conf["ZA_CHECK"]),
         "ZA_QMAX": float(conf["ZA_QMAX"]),
+        # ---- 三阶截断扫描 ----
+        "CUT3_SCAN": bool(_scan_on),
+        "CUT3_CANDIDATES": [float(x) for x in cut3_list],
+        "CUT3_BOOTSTRAP": int(conf["CUT3_BOOTSTRAP"]),
+        "CUT3_STABILITY_THR": float(conf["CUT3_STABILITY_THR"]),
+        "CUT3_CV_1SE_MULT": float(conf["CUT3_CV_1SE_MULT"]),
+        "CUT3_PICK": str(conf["CUT3_PICK"]),
+        "CUT3_KAPPA_TOL_PCT": float(conf["CUT3_KAPPA_TOL_PCT"]),
     }
     (out / "fit_config.json").write_text(
         json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8", newline="\n")
@@ -254,6 +307,8 @@ def main():
                 "PHEASY_BIN": p_bin,
                 "RASR": rasr,
                 "C3_CUTOFF": cfg["PHEASY_C3_CUTOFF"],
+                "CUT3_CANDIDATES": " ".join("%.2f" % x for x in cut3_list),
+                "CUT3_BOOTSTRAP": str(cfg["CUT3_BOOTSTRAP"]),
                 "NULL_SPACE_EPS": str(cfg["NULL_SPACE_EPS"])}
     else:
         tpl = kc.resolve_submit(here, dim or "3d", "submit_fit_p3py")

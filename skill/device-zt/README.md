@@ -140,6 +140,21 @@ S2 的每个扫描点都带 `within_limit` = (dT <= DT_LIMIT_K) and (T_channel_m
    且 S 塌到 3.8 µV/K、ZT 归零——不要用它做 ZT 演示。
 5. **单层材料、两层结构**（沟道 + 氧化层），与 device-thermal 同。
 6. **σ/S/κe 未含温度以外的影响**（无栅压、无量子限域修正）。
+7. **上游必须在同一台超算的同一材料目录**（真 autozt 实测约束）：`find_upstream` 以
+   `dirname(cwd)` 作材料目录，而三个 gen 步骤是在**超算上**执行的（autozt 无本机执行模式，
+   `setting/*.yaml` 全部有 `ssh_host`），所以必须存在
+
+       <超算 work_dir>/<材料>/ke-dft-cpu/step8_amset/transport.json
+       <超算 work_dir>/<材料>/kl-dft-cpu/step6_kappa/kappa_summary.json
+
+   跨集群、或只在本地 `result/` 留有回拉结果时，S1 会报
+   `[ERROR] 找不到 ke 的 transport.json`。真实材料（ke+kl 都跑在同一集群）天然满足；
+   本技能**不**回退到本地 `result/`。
+
+   ★ 已在真实材料 `device_zt_mos2` 上走通完整 CLI 链路
+   （`init` → `-j S1_elec init` → `start` → `start`），三步全 `OK`，
+   且与手工基线数值逐项一致（dT=21.377059 K、ZT=0.0242778）。
+   记录见 `tmp/device_zt_e2e/VALIDATION.md` §8.4。
 
 ---
 
@@ -171,9 +186,13 @@ S2 的每个扫描点都带 `within_limit` = (dT <= DT_LIMIT_K) and (T_channel_m
 
 **两个关键结论**：
 
-1. **默认掺杂从 1e21 改到 1e20 后 ZT 从 2.8e-5 提到 0.0243（547 倍）**——重掺把 S 压到
+1. **默认掺杂从 1e21 改到 1e20 后 ZT 从 2.8e-5 提到 0.0243（约 876 倍）**——重掺把 S 压到
    几 µV/K，ZT 必然归零；1e20 才是 S 与 σ 的折中。掺杂扫描（10 档全报）显示
-   n 型峰在 1e20、p 型峰在 1e19，正是 MoS2 众所周知的电子/空穴不对称。
+   **p 型峰在 1e20（ZT 0.02226）、n 型峰在 1e19（ZT 0.00946）**。
+
+   > **符号约定（2026 更正）**：`transport.json` 的 doping **负 = n 型电子、正 = p 型空穴**，
+   > 与 `ke-dft-cpu/step8_amset/gen_step10_amset.py` 及 `step8.1_boltztrap` 一致
+   > （负掺杂的 S 为负、迁移率也符合电子/空穴各自的物理）。早期文档把两者写反了，已更正。
 2. **P_max 与 V_max_safe 不是同一个点**：P_max 在 0.5 V，但那里 dT 会远超 100 K；
    真正可用的是 **0.2 V**。只看 P_max 会给出会把器件烧掉的设计。
 
@@ -188,3 +207,26 @@ S2 的每个扫描点都带 `within_limit` = (dT <= DT_LIMIT_K) and (T_channel_m
 | V_max_safe | 0.3 V（↑） | 更凉 → 可承受更高偏压 ✓ |
 
 > 一致性校核：I 比 = 0.589，Q 比 = 0.589² × (135.1/138.5) = 0.3385 ✓ 与实测完全吻合。
+---
+
+## 8. 回归用例（`tests/device_zt/`）
+
+两个**真实上游数据**的端到端用例，含上游、产物、期望值与说明：
+
+```bash
+python3 tests/device_zt/run_cases.py          # 跑全部
+python3 tests/device_zt/run_cases.py -v Si_3D # 只跑 3D，逐项打印
+```
+
+| 用例 | 维度 | dT_peak | 器件 ZT | V_max_safe |
+|---|---|---|---|---|
+| `MoS2_2D` | 2D（默认参数） | 21.3771 K | 0.0242778 | 0.20 V |
+| `Si_3D` | 3D（+CHANNEL_THICKNESS/SIGMA_T_CONV_M=100 nm） | 2.6734 K | 0.0091542 | 0.50 V |
+
+运行器刻意复刻 autozt 在超算上的运行方式：`find_asset` 解析 gen_need → 平铺 → **清空
+PYTHONPATH** 原地跑三个 gen → 与期望值逐项比对（相对容差 1e-6）。两用例也各自通过了
+**真实 autozt CLI**（`init` → `-j S1_elec init` → `start` → `start`，三步全 `OK`）。
+
+**技能输入/输出/结果文件/分析的完整说明见 `tests/device_zt/README.md`**（含 8 条可手工复算的
+校核公式、Wiedemann–Franz 同口径要求、以及两个用例的物理判读）。
+

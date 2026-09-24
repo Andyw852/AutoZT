@@ -77,6 +77,28 @@ autozt -tt kl-dft-cpu -p <材料> -j step6_kappa conf --set params.KAPPA_MESH="2
   （before/symmetrized/json/log），就地对称化另存 `POSCAR.pre_symmetry`。依赖公共池 `symmetry_audit.py`
   （spglib 在 `atomate2_p_a` 环境里有，生成目录下 spglib 不可用时自动跳过、不阻断 gen）。
 
+## 三阶截断自动选择（2026-09-24，S4/S5/S6 联动）
+
+κ 偏低的一个根因是三阶截断没人验证。现在按「候选 → 判据 → 选择」自动定：
+- **S4**（`step4_disp/step.conf` 的 `CUT3_CANDIDATES=auto`）：按原胞相邻壳层的**中点**生成
+  候选截断（不落在壳层距离上；两壳间距 < `CUT3_MIN_GAP` 的跳过，避免 WS₂ 6.34/6.36 Å
+  这种双壳）。S4 按**最大候选**估帧、定超胞，候选列表记进 `disp_plan.json`。
+- **S5**（`step5_fc/step.conf` 的 `CUT3_SCAN=auto`）：对每档各拟合一次，每档再做
+  `CUT3_BOOTSTRAP` 次帧 bootstrap，逐壳层统计 Φ³ 的 σ/|mean|（判据②），并从 bootstrap
+  相对误差分布估 CV 标准误（判据①；pheasy 不打印 fold-SE，故用 bootstrap 代理）。
+  产物 `step5_fc/phono3py/cut3_<c>/{fc2,fc3}.hdf5` + `step5_fc/cutoff_scan.json`。
+- **S6**（`step6_kappa/step.conf` 的 `CUT3_KAPPA_SCAN=auto`）：对每档各跑一次完整 κ，
+  按三判据自动选截断，写 `step5_fc/cutoff_selection.json`，并把选中档的 κ 提到
+  `kappa_summary.json`（附 `cutoff_selection`）。
+
+三判据：① CV 误差 ≤ min + 1·SE（`CUT3_CV_1SE_MULT`）；② 候选 ≤ 数据能确定的最大截断
+（`CUT3_STABILITY_THR` 判最外可确定壳层）；③ 相邻档 300 K 面内 κ 变化 ≤ max(5%,
+两误差平方和根)（`CUT3_KAPPA_TOL_PCT`）。三判据都满足取**最小**截断
+（`CUT3_PICK=smallest`，总则）；κ 到能确定边界还在变 → 报最大可确定档并注明
+「更长程三阶相互作用当前数据无法确定」，不硬撑更大截断。`CUT3_PICK=largest` 是
+Mg8C120 口径（平就取能确定范围内最大）。方程数/参数数 < 3 的档标 `insufficient`，先补帧。
+
+本地单测：`python3 tests/suite_kl_cut3.py`（壳层/候选/判据/选择，不碰集群）。
 ## 环境（务必核对）
 phono3py / alm 都在 conda 环境 `atomate2_p_a`。以下三处的环境路径要一致（按你集群改）：
 - `kl_common.py` 的 `PHONO3PY_ENV_SRC`

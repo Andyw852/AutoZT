@@ -417,6 +417,42 @@ def integrate(ad, labels, separate_labels=()):
 # =====================================================================
 # 输出
 # =====================================================================
+def _doping_marks(run_dir, doping_cm3, temperatures_K, seebeck_inplane_uV_K):
+    """返回 {doping_index: [标记...]}：每原胞>0.05 -> "超出刚带近似"；S 符号与载流子类型不一致 -> "sign_anomaly"。"""
+    marks = {}
+    c_len_cm = area_cm2 = threshold = None
+    corr = Path(run_dir) / "2d_correction.json"
+    if corr.is_file():
+        try:
+            d = json.load(open(corr, encoding="utf-8"))
+            c_len_cm = d.get("areal_density_factor_cm")
+            area_cm2 = d.get("inplane_cell_area_cm2")
+            threshold = d.get("carrier_per_cell_threshold", 0.05)
+        except (OSError, ValueError, TypeError):
+            pass
+    if 300.0 in temperatures_K:
+        iT = temperatures_K.index(300.0)
+    elif temperatures_K:
+        iT = len(temperatures_K) // 2
+    else:
+        iT = 0
+    for i, n3 in enumerate(doping_cm3):
+        m = []
+        if c_len_cm and area_cm2 and threshold:
+            per_cell = abs(float(n3)) * float(c_len_cm) * float(area_cm2)
+            if per_cell > float(threshold):
+                m.append("超出刚带近似")
+        try:
+            S = float(seebeck_inplane_uV_K[i][iT])
+        except (IndexError, TypeError, ValueError):
+            S = 0.0
+        if (float(n3) < 0 and S > 0) or (float(n3) > 0 and S < 0):
+            m.append("sign_anomaly")
+        if m:
+            marks[str(i)] = m
+    return marks
+
+
 def build_result(run_dir, mesh_file, amset_version, settings, all_labels,
                  dropped, kept, transport, doping_cm3, temperatures,
                  reproduce=None, extra_notes=()):
@@ -446,6 +482,9 @@ def build_result(run_dir, mesh_file, amset_version, settings, all_labels,
             "conductivity_inplane_S_m": to_jsonable(
                 inplane_average(transport["conductivity_S_m"])),
         },
+        "doping_marks": _doping_marks(
+            run_dir, doping_cm3, temperatures,
+            inplane_average(transport["seebeck_uV_K"])),
     }
     if reproduce is not None:
         result["reproduction_check"] = reproduce

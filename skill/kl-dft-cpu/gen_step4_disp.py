@@ -67,7 +67,17 @@ SPEC = {
     "FD_DISTANCE":  (0.03,     "float"), # findiff 位移幅度(Å)
     "OVERSAMPLE":   (3,        "int"),   # alm 过采样系数（超定 3 倍）
     "ALM_CUT2":     (None,     "float"), # alm 二阶截断(Å)；空=不截断
-    "ALM_CUT3":     (6.0,      "float"), # alm 三阶截断(Å)
+    "ALM_CUT3":     (6.0,      "float"), # alm 三阶截断(Å)；CUT3_CANDIDATES=off 时用它
+    # ---- 三阶截断扫描（2026-09-24 user 定）：候选截断取【相邻壳层中点】，S5 逐个拟合、
+    #   S6 逐个算 κ，按三判据（CV 1-SE / 逐壳层 Φ³ bootstrap 稳定性 / κ 到平台）选最小可行。
+    #   auto = 从结构枚举壳层自动生成；off/none = 不扫描（单截断）；也可显式 "3.6 4.2 4.8"。
+    #   生成帧数按【最大候选截断】估 —— 一次把所有候选需要的帧都生成（小截断是子集）。
+    "CUT3_CANDIDATES":     ("auto", "str"),
+    "CUT3_MAX":            (7.0,    "float"), # auto 枚举壳层的最大半径(Å)
+    "CUT3_MIN_SHELLS":     (2,      "int"),   # 候选至少含几个壳层（跳过最近邻中点）
+    "CUT3_GAP_TOL":        (0.05,   "float"), # 壳层聚类容差（防 6.34/6.36 夹缝）
+    "CUT3_MIN_GAP":        (0.05,   "float"), # 相邻壳层间距 < 它则跳过该中点
+    "CUT3_MAX_CANDIDATES": (12,     "int"),   # 候选上限，控制 S5 拟合次数
     "DISP_RMS":     (0.03,     "float"), # MC-rattle 目标位移模长 RMS(Å)
     "MC_DMIN_SCALE": (0.75,    "float"), # MC d_min = 最近邻 × 此系数
     "MC_NITER":     (10,       "int"),   # MC 迭代数
@@ -139,8 +149,11 @@ def gate(n, conf, method, extra=""):
 # ==========================================================================
 # alm 分支：ALM 定帧数 + hiPhive MC-rattle 生成位移
 # ==========================================================================
-def plan_alm(out, ph3, conf):
-    """ALM suggest → nfree → N = max(10, ceil(Σnfree/(3·N_sc))×OVERSAMPLE)。返回 (N, nfree, atoms)。"""
+def plan_alm(out, ph3, conf, cut3=None):
+    """ALM suggest → nfree → N = max(10, ceil(Σnfree/(3·N_sc))×OVERSAMPLE)。返回 (N, nfree, atoms)。
+
+    cut3：生成用的三阶截断（截断扫描时 = 最大候选，一次生成全部候选所需的帧）。
+    """
     import lattice_kappa as lk
     from ase import Atoms
     from phonopy.interface.vasp import write_vasp
@@ -151,7 +164,8 @@ def plan_alm(out, ph3, conf):
                   cell=sc.cell, pbc=True)
     n_sc = len(atoms)
 
-    orders, cuts = [2, 3], [conf["ALM_CUT2"], conf["ALM_CUT3"]]
+    _cut3 = conf["ALM_CUT3"] if cut3 is None else cut3
+    orders, cuts = [2, 3], [conf["ALM_CUT2"], _cut3]
     # kl10: 优先用 ALM Python API 取 nfree —— ALM 的命令行可执行文件要单独
     # cmake 编译，pip 装的 Python 包并不产出它（PATH 里的 alm 只是坏入口脚本）。
     # API 拿不到（没装 alm 包等）才回落到"写 alm.in + 跑 alm + 解析日志"的老路。
@@ -169,9 +183,15 @@ def plan_alm(out, ph3, conf):
                      "        未安装就禁止推进 step4。请先安装 ALM（cmake 编译 + Python 绑定\n"
                      "        from alm import ALM），再重跑 S4_disp。"
                      % (_e, _e2))
-    n = int(lk.estimate_n_struct(nfree, n_sc, int(conf["OVERSAMPLE"])))
-    detail = "  [自由参数 %s / DOF=3×%d=%d × OVERSAMPLE=%d]" % (
-        nfree, n_sc, 3 * n_sc, int(conf["OVERSAMPLE"]))
+    # ★ pheasy 实际自由 IFC 数约为 ALM 估计的 ~2 倍（WS₂: 1573/798≈1.97）——
+    #   ALM 只估"对称无关的独立项"，pheasy 零空间构造还含更多项。不放大则 S4 帧数
+    #   会让 S5 的"方程数/参数数"<3（WS₂ 12 帧只有 1.72），拟合欠定、κ 偏低。
+    #   （真正的硬闸在 S5 的 submit_fit_pheasy.tpl：读了 pheasy -c 的实际 free IFC 数再判。）
+    _coef = 2.0
+    nfree_adj = {k: int(v * _coef) for k, v in nfree.items()}
+    n = int(lk.estimate_n_struct(nfree_adj, n_sc, int(conf["OVERSAMPLE"])))
+    detail = "  [截断=%.2f Å 自由参数 %s（×%.1f→%s）/ DOF=3×%d=%d × OVERSAMPLE=%d]" % (
+        float(_cut3), nfree, _coef, nfree_adj, n_sc, 3 * n_sc, int(conf["OVERSAMPLE"]))
     return n, nfree, atoms, detail
 
 
@@ -265,7 +285,7 @@ def check_existing_matches_input(out):
             % (dmax, n_disp, out, out, out, out))
 
 
-def _dataset_matches(out, reps, method=None, conf=None, tol=1e-8):
+def _dataset_matches(out, reps, method=None, conf=None, tol=1e-8, expect=None):
     """现有数据集是否【已经】对应当前输入 —— 四重比对：
       ① 单胞 == POSCAR（tol 1e-8）  ② 超胞矩阵 == 配置的 reps
       ③ 方法 == 当前 METHOD（alm / findiff 不能混用）
@@ -298,6 +318,9 @@ def _dataset_matches(out, reps, method=None, conf=None, tol=1e-8):
         return False
 
     # ---- ③④ 方法 / 过采样 / 位移幅度 / 截断（disp_plan.json 留档）----
+    #   expect（可选）= {"cut3": 生成用有效三阶截断, "cands": 候选列表}，由 main 按
+    #   CUT3_CANDIDATES 算好传入。有它就用【最大候选】当有效截断比 —— 否则 auto 时
+    #   conf 的 ALM_CUT3=6.0 与 plan 记的 6.6 不等，会每次误判"配置变了"而反复重建。
     if method is not None:
         pf = out / "disp_plan.json"
         if not pf.is_file():
@@ -309,31 +332,39 @@ def _dataset_matches(out, reps, method=None, conf=None, tol=1e-8):
             return False
         if str(pl.get("method", "")) != str(method):
             return False
+        _want = {}
         if conf is not None:
-            for _k, _cfgkey in (("oversample", "OVERSAMPLE"),
-                                ("fd_distance", "FD_DISTANCE"),
-                                ("alm_cut2", "ALM_CUT2"),
-                                ("alm_cut3", "ALM_CUT3"),
-                                ("fc3_cutoff_pair", "FC3_CUTOFF_PAIR")):
-                if _k not in pl:                     # 老 plan 没这个字段：不据此强制重建
-                    continue
-                _old, _new = pl.get(_k), conf.get(_cfgkey)
-                if _old is None and _new is None:    # 两边都是"不截断"：一致
-                    continue
-                if _old is None or _new is None:     # 一边有截断、一边没有 => 配置变了
+            _want["oversample"] = conf.get("OVERSAMPLE")
+            _want["fd_distance"] = conf.get("FD_DISTANCE")
+            _want["alm_cut2"] = conf.get("ALM_CUT2")
+        _cutkey = "alm_cut3" if method == "alm" else "fc3_cutoff_pair"
+        if expect is not None:
+            _want[_cutkey] = expect.get("cut3")
+            _want["cut3_candidates"] = [round(float(x), 2)
+                                        for x in (expect.get("cands") or [])]
+        elif conf is not None:
+            _want[_cutkey] = (conf.get("ALM_CUT3") if method == "alm"
+                              else conf.get("FC3_CUTOFF_PAIR"))
+        for _k, _new in _want.items():
+            if _k not in pl:                         # 老 plan 没这个字段：不据此强制重建
+                continue
+            _old = pl.get(_k)
+            if _k == "cut3_candidates":
+                if [round(float(x), 2) for x in (_old or [])] != list(_new or []):
                     return False
-                try:
-                    if _k in ("oversample",):
-                        if int(_old) != int(_new):
-                            return False
-                    elif _k in ("alm_cut2", "alm_cut3", "fc3_cutoff_pair"):
-                        if abs(float(_old) - float(_new)) > 1e-12:
-                            return False
-                    else:
-                        if abs(float(_old) - float(_new)) > 1e-12:
-                            return False
-                except (TypeError, ValueError):
+                continue
+            if _old is None and _new is None:        # 两边都是"不截断"：一致
+                continue
+            if _old is None or _new is None:         # 一边有截断、一边没有 => 配置变了
+                return False
+            try:
+                if _k == "oversample":
+                    if int(_old) != int(_new):
+                        return False
+                elif abs(float(_old) - float(_new)) > 1e-12:
                     return False
+            except (TypeError, ValueError):
+                return False
     return True
 
 
@@ -379,11 +410,14 @@ def _quarantine_stale_dataset(out):
     return moved
 
 
-def build_displacements(out, reps, method, conf):
-    """幂等：已有位移就跳过；否则先算帧数过闸，再落盘。"""
+def build_displacements(out, reps, method, conf, s4plan=None):
+    """幂等：已有位移就跳过；否则先算帧数过闸，再落盘。
+
+    s4plan = {"cut3": 生成用有效三阶截断, "cands": 候选列表, "shells": 壳层}（可空）。
+    """
     check_existing_matches_input(out)
     if (out / "phono3py_disp.yaml").is_file() and glob.glob(str(out / "POSCAR-*")):
-        if _dataset_matches(out, reps, method, conf):
+        if _dataset_matches(out, reps, method, conf, expect=s4plan):
             print("[..] 已有位移超胞，跳过生成（幂等）")
             return
         if _quarantine_stale_dataset(out):
@@ -393,12 +427,13 @@ def build_displacements(out, reps, method, conf):
     ph3 = make_ph3(out, reps)
     info = {"method": method, "n_atoms_sc": len(ph3.supercell)}
 
+    _eff_cut3 = (s4plan or {}).get("cut3")
     if method == "findiff":
-        n = count_findiff_frames(ph3, float(conf["FD_DISTANCE"]),
-                                 conf["FC3_CUTOFF_PAIR"])
-        gate(n, conf, method, "  [对称有限位移，cutoff_pair=%s]" % conf["FC3_CUTOFF_PAIR"])
+        _pair = conf["FC3_CUTOFF_PAIR"] if _eff_cut3 is None else _eff_cut3
+        n = count_findiff_frames(ph3, float(conf["FD_DISTANCE"]), _pair)
+        gate(n, conf, method, "  [对称有限位移，cutoff_pair=%s]" % _pair)
     else:
-        n, nfree, atoms, detail = plan_alm(out, ph3, conf)
+        n, nfree, atoms, detail = plan_alm(out, ph3, conf, cut3=_eff_cut3)
         gate(n, conf, method, detail)
         std, rms = make_mc_rattle_dataset(ph3, atoms, n, conf)
         info.update(nfree=nfree, oversample=int(conf["OVERSAMPLE"]),
@@ -410,8 +445,12 @@ def build_displacements(out, reps, method, conf):
     info["n_disp"] = len(nums)
     # 留档"影响数据集内容"的全部配置，供 _dataset_matches 做四重比对（2026-09-22）
     info.update(fd_distance=float(conf["FD_DISTANCE"]),
-                alm_cut2=conf.get("ALM_CUT2"), alm_cut3=conf.get("ALM_CUT3"),
-                fc3_cutoff_pair=conf.get("FC3_CUTOFF_PAIR"))
+                alm_cut2=conf.get("ALM_CUT2"),
+                alm_cut3=(_eff_cut3 if method == "alm" else conf.get("ALM_CUT3")),
+                fc3_cutoff_pair=(_eff_cut3 if method == "findiff"
+                                 else conf.get("FC3_CUTOFF_PAIR")),
+                cut3_candidates=[float(x) for x in ((s4plan or {}).get("cands") or [])],
+                cut3_shells=[float(x) for x in ((s4plan or {}).get("shells") or [])])
     (out / "disp_plan.json").write_text(
         json.dumps(info, ensure_ascii=False, indent=2), encoding="utf-8")
     print("[OK] 位移生成完毕：%d 帧（%s）" % (len(nums), method))
@@ -454,10 +493,25 @@ def main():
     if method not in ("findiff", "alm"):
         sys.exit("[ERROR] METHOD 只允许 findiff / alm")
 
+    # ---- 三阶截断候选（2026-09-24 user 定）：取相邻壳层中点；生成按最大候选估帧 ----
+    _cands, _shells, _cnote = kc.resolve_cut3_candidates(
+        out / "POSCAR", conf["CUT3_CANDIDATES"],
+        cut3_max=float(conf["CUT3_MAX"]), tol=float(conf["CUT3_GAP_TOL"]),
+        min_shells=int(conf["CUT3_MIN_SHELLS"]), min_gap=float(conf["CUT3_MIN_GAP"]),
+        max_candidates=int(conf["CUT3_MAX_CANDIDATES"]))
+    print("[..] 三阶截断候选：" + _cnote)
+    if method == "alm":
+        _conf_cut3 = conf["ALM_CUT3"]
+    else:
+        _conf_cut3 = conf["FC3_CUTOFF_PAIR"]
     # 三阶截断半径（alm 的 ALM_CUT3 / findiff 的 FC3_CUTOFF_PAIR）用于超胞内切球判据：
     # 截断半径必须 ≤ 超胞安全截断（0.5×内切球直径 − margin），否则周期镜像污染力常数。
-    cut3 = conf["ALM_CUT3"] if method == "alm" else conf["FC3_CUTOFF_PAIR"]
+    cut3 = max(_cands) if _cands else _conf_cut3
     cut3_label = "ALM_CUT3" if method == "alm" else "FC3_CUTOFF_PAIR"
+    if _cands:
+        print("[..] 生成按最大候选截断 %.2f Å 估帧/定超胞；候选 %s 记入 disp_plan.json 供 S5 逐个拟合"
+              % (cut3, _cands))
+    _s4plan = {"cut3": cut3, "cands": _cands, "shells": _shells}
     if dim == "2d":
         # P1-5：真空隙 ≤ 层厚 → 最近镜像跨真空（Born-Huang 的 r_ij 错）；截断 ≥ 真空隙
         #   → 跨真空三体簇。两件都是硬错误，放在生成位移之前拦。
@@ -490,7 +544,7 @@ def main():
     kc.write_kl_params(out / kc.KL_PARAMS, DIM=dim.upper(), SUPERCELL=kc.dim_str(reps),
                        MESH=mesh, METHOD=method, FUNC=func)
 
-    build_displacements(out, reps, method, conf)
+    build_displacements(out, reps, method, conf, _s4plan)
 
     poscars = sorted(glob.glob(str(out / "POSCAR-*")))
     if not poscars:

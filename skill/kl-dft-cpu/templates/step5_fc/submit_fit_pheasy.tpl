@@ -1,7 +1,7 @@
 #!/bin/bash
 # S5_fc 拟合作业模板（FIT_ENGINE=pheasy）。移植自用户 pheasy 拟合脚本，去掉 VCA/内存监控/
 # 尾部自动提交 κ；输入准备(prep)与收尾(collect/post)交给 kl_fc_backends.py。
-# 占位符：{{JOBNAME}} {{DIM}} {{FIT_METHOD}} {{ENABLE_FC}} {{C3_CUTOFF}} {{NULL_SPACE_EPS}} {{RASR}}
+# 占位符：{{JOBNAME}} {{DIM}} {{FIT_METHOD}} {{ENABLE_FC}} {{C3_CUTOFF}} {{CUT3_CANDIDATES}} {{CUT3_BOOTSTRAP}} {{NULL_SPACE_EPS}} {{RASR}}
 # 资源（cpus_per_task/qos）建议按体系用 step.conf 的 [submit] 段覆盖；pheasy 较吃核与内存。
 #SBATCH --partition=cpu192
 #SBATCH --job-name={{JOBNAME}}
@@ -27,6 +27,8 @@ DIM="{{DIM}}"                 # 超胞对角三整数
 FIT_METHOD="{{FIT_METHOD}}"   # LASSO | RFE | OLS
 ENABLE_FC={{ENABLE_FC}}       # 2|3|4
 C3_CUTOFF="{{C3_CUTOFF}}"     # fc3 截断 Å，None=不截断
+CUT3_CANDIDATES="{{CUT3_CANDIDATES}}"   # S4 记的三阶截断候选（空格分隔；空=单截断老路）
+CUT3_BOOTSTRAP={{CUT3_BOOTSTRAP}}       # 每档帧 bootstrap 次数（只重跑 -d/-f；-c 复用）
 NULL_SPACE_EPS={{NULL_SPACE_EPS}}
 # RASR = 旋转不变性(Born-Huang) + 平衡条件(Huang, 零应力)。gen 按 DIM 注入：
 #   2D→BHH（必加，否则 ZA 近 Γ 线性化/出虚频），3D→none（文献结论：对体材料可忽略）。
@@ -133,6 +135,13 @@ NDATA=$(cat ndata_total.txt)
 export PHEASY_CV_GROUP_SIZE=$(( 3 * $(cat natom_super.txt) ))
 echo "ndata=${NDATA}  CV_GROUP_SIZE=${PHEASY_CV_GROUP_SIZE}"
 
+# ===== 三阶截断扫描（2026-09-24 user 定）：候选≥2 时逐档拟合 + 逐壳层稳定性 =====
+#   nominal 截断（PHEASY_C3_CUTOFF）的 fc2/fc3 + pheasy_{c,f}.log 由 scan_pheasy
+#   留在 cwd，下面 collect/metrics/post 原样复用。
+if [ -n "${CUT3_CANDIDATES}" ]; then
+    echo "【截断扫描】候选=${CUT3_CANDIDATES} bootstrap=${CUT3_BOOTSTRAP}"
+    python kl_fc_backends.py scan_pheasy fit_config.json
+else
 # ===== 参数拼装 =====
 C_FLAG=""
 [ "${C3_CUTOFF}" != "None" ] && [ "${C3_CUTOFF}" != "none" ] && [ -n "${C3_CUTOFF}" ] \
@@ -184,6 +193,25 @@ if [ -n "${RASR_FLAGS}" ]; then
     fi
 fi
 
+# ===== 数据量闸（review #1）：方程数 / 参数数 ≥ 3 =====
+# pheasy -c 已构造完参数空间，pheasy_c.log 里有实际 free IFC 数；-f 之前先判，
+# 欠定就停下并给出至少需要的帧数（WS₂ 实测 12 帧只有 1.72，需 ≥21 帧）。
+_NATOM=$(cat natom_super.txt)
+_FREE_IFC=$(sed -n 's/.*Total number of free IFCs:[[:space:]]*\([0-9]*\).*/\1/p' pheasy_c.log | tail -1)
+if [ -z "${_FREE_IFC}" ] || [ "${_FREE_IFC}" = "0" ]; then
+    echo "⚠ 未能从 pheasy_c.log 读到 free IFC 数，跳过量纲闸" >&2
+else
+    _EQ=$(( ${NDATA} * 3 * ${_NATOM} ))
+    _NEED=$(( ( ${_FREE_IFC} + ${_NATOM} - 1 ) / ${_NATOM} ))
+    _RATIO_PCT=$(( ${_EQ} * 100 / ${_FREE_IFC} ))
+    if [ "${_RATIO_PCT}" -lt 300 ]; then
+        echo "❌ 数据量不足：方程数/参数数 = ${_EQ}/${_FREE_IFC} ≈ ${_RATIO_PCT}/100 < 3。" >&2
+        echo "   当前 ${NDATA} 帧，至少需要 ${_NEED} 帧。请加大 S4 帧数（OVERSAMPLE/截断），或缩小 S5 截断。" >&2
+        exit 1
+    fi
+    echo "✅ 数据量：方程数/参数数 = ${_EQ}/${_FREE_IFC} ≈ ${_RATIO_PCT}/100（≥3 通过；至少需 ${_NEED} 帧）"
+fi
+
 export OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 PHEASY_N_JOBS=${NCPU_DISP}
 pheasy --dim ${DIM} ${W_FLAG} -d ${C_FLAG} --ndata ${NDATA} --disp_file --eps ${NULL_SPACE_EPS}
 
@@ -199,6 +227,7 @@ sync
 [ ! -f fc2.hdf5 ] && echo "❌ 缺 fc2.hdf5" && exit 1
 [ "${FIT_ORDER}" -ge 3 ] && [ ! -f fc3.hdf5 ] && echo "❌ 缺 fc3.hdf5" && exit 1
 ls -lh fc2.hdf5 fc3.hdf5 2>/dev/null
+fi  # CUT3_CANDIDATES 分支
 
 # ===== 收尾：搬产物 + shengbte 导出 + 虚频闸 =====
 python kl_fc_backends.py collect_pheasy fit_config.json
