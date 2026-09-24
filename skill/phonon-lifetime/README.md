@@ -27,10 +27,16 @@ phono3py 的 gamma 单位是 **THz（普通频率）**，内部按角频 2*pi*ga
 
     tau[ps] = 1 / (2 * 2*pi * gamma_total[THz])  =  1 / (4*pi*gamma_total)
 
-其中 **gamma_total = gamma_anh + gamma_isotope**：phono3py 计算 κ 时，碰撞矩阵
-对角元用的就是这个总和（conductivity/base.py 的 _get_main_diagonal），
+其中 **gamma_total = gamma_anh + gamma_isotope + gamma_bd**：phono3py 计算 κ 时，
+碰撞矩阵对角元用的就是这个总和（conductivity/base.py 的 _get_main_diagonal），
 所以 hdf5 里的 κ 含同位素散射。只取 gamma_anh 会把寿命系统性算长
 （Si 300 K 全模中位 +19%，光学支 +24%）。用 INCLUDE_ISOTOPE 控制（默认 true）。
+边界散射 gamma_bd = |v|/(4*pi*L) 只在**上游确实开了**边界散射时叠加——由 hdf5 里
+κ 的重建误差自动判定（见 §5）；phono3py 默认的 boundary_mfp=1e6 Å 只是“关”的占位。
+
+统计量一律按**不可约网格权重 weight** 加权（中位数/P10/P90/均值/过阻尼比例）：
+kappa-m*.hdf5 里的 qpoint 只是不可约点，按点等权会让高对称点过度代表
+（Si 15³ 只有 120 个不可约点、权重 1~48：等权中位 3.53 ps，加权 3.39 ps）。
 
 这与 phono3py **官方后处理工具逐位一致**：
 
@@ -71,9 +77,11 @@ lifetime_summary.json 的 tau_convention 字段。
     autozt -tt phonon-lifetime -p <材料> -j S1_lifetime conf --set params.Q_DIRECTION="0 0 1"
     # 只看三声子（不含同位素）寿命
     autozt -tt phonon-lifetime -p <材料> -j S1_lifetime conf --set params.INCLUDE_ISOTOPE=false
-    # 没有 kappa hdf5、但有 fc2/fc3：现跑 phono3py
+    # 没有 kappa hdf5、但有 fc2/fc3：现跑 phono3py（自动带 --isotope；有 BORN 自动启用 NAC）
     autozt -tt phonon-lifetime -p <材料> -j S1_lifetime conf --set params.RUN_PHONO3PY=true
     autozt -tt phonon-lifetime -p <材料> -j S1_lifetime conf --set params.PHONO3PY_MESH="7 7 7"
+    # 逐模 CSV 默认只写 FOCUS_T；要全温度再打开（大胞密网格会写出上千万行）
+    autozt -tt phonon-lifetime -p <材料> -j S1_lifetime conf --set params.CSV_ALL_TEMPERATURES=true
 
 ### 数据源解析顺序（SOURCE=auto）
 
@@ -96,40 +104,71 @@ lifetime_summary.json 的 tau_convention 字段。
 | lifetime_vs_T.png | 中位寿命 vs 温度 |
 | lifetime_vs_q.png | （可选，设 Q_DIRECTION）沿该方向的逐支寿命 |
 
-## 5. 验证（2026-09-24，含修正后复测）
+## 5. 验证（2026-09-25，修 B1–B9 后重测）
 
 真实数据自测（Si，上游 kl-dft-cpu 的 kappa-m151515.hdf5，15³ 网格、4×4×4 超胞、ALM）：
 
-* **寿命因子用 phono3py 自己的 κ 反推验证**：用
-  mode_kappa = gv_by_gv * cv / (2*(gamma+gamma_iso)) * (get_unit_to_WmK()/V)
-  重建，与 hdf5 里的 kappa/mode_kappa **逐模吻合到 1e-6（99.3% 的模）**，
-  且 kappa=Σmode_kappa/N 精确成立 → 证明 tau=1/(4*pi*gamma_total) 就是 phono3py 的约定；
-* 群速度量级自洽：近 Gamma 处 LA 的 |v|≈86 THz·Å ≈ 8600 m/s，与 Si 纵声速一致；
-* 300 K（含同位素）全模中位 tau=3.53 ps、声学 12.9 ps、光学 2.17 ps；
-  不含同位素则 4.35/13.9/2.87 ps（同位素使光学支 −24%，与 ω² 标度一致）；
-* 随温度单调下降（100 K 全模中位 9.88 ps）；
-* 同一数据源 κ(300 K)=88.8 W/mK；
-* RUN_PHONO3PY=true 从 fc2/fc3 现跑 3³ 网格也走通（自动生成 kappa-m333.hdf5）。
+* **τ 因子与 κ 自洽（自检）**：按 mode_kappa = gv_by_gv * cv / (2*gamma_total) *
+  kappa_unit_conversion、kappa = Σmode_kappa / Πmesh 重建，与 hdf5 里存的 kappa
+  **最大相对误差 7.3e-6**（8 个温度）。这条自检写进 summary 的 kappa_reconstruction；
+  口径不对（例如上游开了边界散射而我们没计入）会立刻报出来。
+* **边界散射自动判定**：boundary_mfp=1e6 Å 时，“不计入”误差 7.3e-6、“计入”6.1e-2 →
+  自动判定不计入。phono3py 自己打印的 Boundary mean free path (millimeter): 1000.000
+  也证实 1e6 Å 只是默认占位。
+* 300 K（含同位素、按权重）：全模中位 tau=**3.39 ps**、声学 **12.2 ps**、光学 **2.31 ps**，
+  P10–P90 = 1.64–20.0 ps；纯三声子中位 4.22 ps。
+* τ 近似 1/T：100→800 K 全模加权中位 9.88 / 4.97 / 3.39 / 2.64 / 2.19 / 1.89 / 1.63 / 1.46 ps。
+* 声学支 = 最低 3 条支（不加频率窗）：Si 的 LA 到 11.76 THz 仍算声学，不再被旧版
+  自动算出的 8.5 THz 频率窗误判进光学组。
+* 沿 [001]：用 spglib 对称操作把不可约楔子 (x,0,0) 映射回目标线，取到 Γ→X **8 个点**
+  （不给对称操作只剩 Γ ——旧版出的就是这种空图）。
+* 同一数据源 κ(300 K)=88.8 W/mK；RUN_PHONO3PY=true 从 fc2/fc3 现跑 3³ 也走通，
+  命令带 --isotope，κ 重建误差 2.0e-8（fc 目录有 BORN 时自动拷入启用 NAC）。
 
-回归测试：tests/test_phonon_lifetime.py（12 条，含约定比对、同位素、gen 端到端）：
+回归测试：tests/test_phonon_lifetime.py（**30 条**：phono3py 约定比对、加权统计、
+选主文件、对称方向、边界散射判定、fc 命令构造、gen 端到端）：
 
     python -m pytest tests/test_phonon_lifetime.py -q
 
-## 6. 修正记录（2026-09-24，首版测试后）
+## 6. 修正记录
 
-* **漏了同位素散射**：首版只用 gamma，寿命偏长。现默认用 gamma+gamma_isotope
-  （与 phono3py κ 一致），并在 summary/CSV 同时保留纯三声子值，加开关 INCLUDE_ISOTOPE。
+### 2026-09-25（B1–B9；外部审计用合成 hdf5 复现后修）
+
+* **B1 按字符串序选文件**：find_kappa_hdf5 原用 sorted()[-1]，κ-m999 会盖过 κ-m151515。
+  现按“多 q 点主文件 → mesh 乘积 → q 点数 → 文件名惩罚(-g0/mfp/gp)”排序，
+  多候选时打印选了谁、忽略了谁；跨目录也优先主文件。
+* **B2 本地目录取排序第一个**：改用同一套选主文件逻辑，新增 is_main_hdf5；
+  本地只有 -g0 单点文件时不再挡掉上游主文件（都没有才退回单点文件）。
+* **B3 空分组崩溃**：lifetime_T.csv / 出图遇 None 写空串（_fmt），不再 TypeError。
+* **B4 统计量没乘权重**：中位数/P10/P90/均值/过阻尼比例全部按不可约 weight 加权；
+  整数权重时展开到全网格再取分位数（与“展开后中位数”严格一致）；新增
+  n_modes_weighted / weights_applied。
+* **B5 声学支划分**：默认只取最低 3 条支、**不加频率窗**；只有显式给 ACOUSTIC_FMAX
+  才叠加频率窗。
+* **B6 沿 q 方向取点**：用 spglib 从 phono3py.yaml 的 primitive_cell 求对称操作，
+  把不可约点的等价像映射到目标线；缺 yaml/pyyaml/spglib 时降级为几何取点并告警。
+  同时修了“按量化格点取点会漏掉非格点 t”的问题。
+* **B7 fc 路线缺同位素/NAC**：INCLUDE_ISOTOPE=true 时现跑命令加 --isotope；
+  fc 目录有 BORN 时自动拷入（phono3py-load 没有 --nac 选项，靠 BORN 自动开 NAC）。
+* **B8 边界散射**：新增 gamma_bd = |v|/(4*pi*L)，是否计入由 κ 重建误差自动判定；
+  summary 记录 boundary_mfp_ang / boundary_gamma_included / boundary_decision。
+* **B9 温度静默就近**：请求温度或 FOCUS_T 不在列表时告警，不再悄悄取最近值。
+* 小项：src_kind 不再把本地文件标成 upstream；上游缺 gamma_isotope 时告警；
+  逐模 CSV 默认只写 FOCUS_T（CSV_ALL_TEMPERATURES=false）。
+
+### 2026-09-24（首版测试后）
+
+* **漏了同位素散射**：首版只用 gamma，寿命偏长。现默认 gamma+gamma_isotope。
 * **逐模 mfp 用错群速度**：首版对 q 点内 6 条支的 |v| 取平均再乘各支 tau，
-  导致 mfp/v 列错误。现改为逐模自己的 |v|。
+  现改为逐模自己的 |v|。
 
 ## 7. 局限
 
 1. 只做**三声子（最低阶微扰 / RTA）**；四声子、电子-声子寿命不在内。
-2. 边界散射：hdf5 的 boundary_mfp 若为有限值，phono3py 的 κ 会含边界散射；
-   本技能默认只叠加 gamma_isotope（Si 这组 boundary_mfp=1e6 Å，可忽略），
-   未把边界散射折进 tau。
-3. 声学支用“最低 3 条支 + 频率窗口”近似；交叉点处与“真声学支”会有少量错分。
-4. ACOUSTIC_FMAX 留空时自动取“最低 3 支正频模中位频率 ×2”，2D 材料建议显式给值。
+2. 边界散射只在“上游确实开了”时计入（由 κ 重建误差判定）；RTA 也不是全 BTE。
+3. 声学/光学按**支编号**分组（默认最低 3 条支），因此两组频率范围在支交叉处会重叠
+   （Si 声学支最高 11.76 THz 略高于光学支最低 10.42 THz，属正常，不是错分）。
+4. 沿 q 图依赖 phono3py.yaml / pyyaml / spglib 求对称操作；缺了会降级成几何取点并告警。
 5. 不含 MD 声子电流关联函数（dynasor）那条有限温度路线。
 6. RUN_PHONO3PY=true 在登录节点同步跑，大胞/密网格请改用上游 kl 的 S6 产物。
 
@@ -138,8 +177,8 @@ lifetime_summary.json 的 tau_convention 字段。
     skill/phonon-lifetime/
     ├── skill.yaml                 # 技能定义（1 步 run: gen）
     ├── templates/step.conf        # 全部参数默认值（shared 布局）
-    ├── gen_step1_lifetime.py      # 驱动：定位数据源 -> 读 gamma(+iso) -> tau -> CSV/图/JSON
-    ├── lifetime_common.py         # 物理约定 + 读取 + 汇总（无 matplotlib 依赖）
+    ├── gen_step1_lifetime.py      # 驱动：定位数据源 -> 读 gamma(+iso,+bd) -> tau -> CSV/图/JSON
+    ├── lifetime_common.py         # 物理约定 + 读取 + 选文件 + 对称方向 + 加权统计（无 matplotlib）
     ├── lifetime_plots.py          # 出图（无 matplotlib 时自动跳过）
     └── README.md
-    tests/test_phonon_lifetime.py  # 12 条回归（约定 + 同位素 + 端到端）
+    tests/test_phonon_lifetime.py  # 30 条回归（约定 + 加权 + 选文件 + 方向 + κ 自检 + 端到端）
