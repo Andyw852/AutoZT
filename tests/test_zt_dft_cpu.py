@@ -312,7 +312,9 @@ def _expand(electronic, lattice=True):
     seg = {"steps_cfg": t.get("steps"), "skill_dir": t.get("skill_dir"),
            "template_dir": t.get("template_dir"),
            "template_layout": t.get("template_layout")}
-    m = {"name": "X", "hpc_name": "jzzn", "_seg": seg, "template_map": {}, "ps": {}}
+    # 干净克隆里没有 setting/jzzn/（集群配置是 gitignored 的）→ 落到脱敏示例 setting/example/
+    _hpc = "jzzn" if os.path.isdir(os.path.join("setting", "jzzn")) else "example"
+    m = {"name": "X", "hpc_name": _hpc, "_seg": seg, "template_map": {}, "ps": {}}
     return cfg, t, m
 
 

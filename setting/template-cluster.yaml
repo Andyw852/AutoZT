@@ -1,0 +1,22 @@
+# =====================================================================
+# AutoZT 集群配置模板 —— 复制成 setting/<集群名>.yaml 后按注释填写
+# 不填就跑不了任何真计算；仓库里不包含任何个人路径/账号信息。
+# =====================================================================
+name: mycluster              # 集群名（表里 hpc 列 / -tt <技能> hpc mycluster 用它）
+ssh_host: mycluster          # ~/.ssh/config 里的别名（能 ssh 上去即可）
+work_dir: /scratch/$USER/autozt        # 远端项目根（材料目录建在它下面）
+remote_path_prefix: ""       # 可选：远端 PATH 前缀（指定跑 gen 脚本的 python，如带 numpy/pymatgen 的那个）
+# ---- 各技能 gen 脚本用的环境（按需）----
+conda_sh: ""                 # 例如 /opt/conda/etc/profile.d/conda.sh
+conda_env: ""                # 例如 mace
+amset_env: ""                # 例如 amset
+# ---- VASP ----
+vasp:
+  standard:                  # profile 名：submit 模板里用哪个由 setting/<集群>/templates 决定
+    cell_constraint: none     # none | ioptcell_tag（后者用于 2D 优化专用编译版）
+    std: /path/to/vasp_std
+    gam: /path/to/vasp_gam
+    ncl: /path/to/vasp_ncl
+# ---- 赝势与模型（请自行准备，勿随代码分发）----
+potcar_dir: /path/to/potpaw_PBE
+mlff_model_dir: /path/to/mlff_models

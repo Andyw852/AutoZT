@@ -121,11 +121,20 @@ def test_poscar_push():
     d5 = tmpdir("b1b")
     with open(os.path.join(d5, "POSCAR"), "wb") as fh:
         fh.write(new)
-    os.chmod(d5, 0o500)                              # 目录只读 → 推送必然失败
-    r = run(push_cmd(old), d5)
-    os.chmod(d5, 0o700)
-    ok(r.returncode != 0 and "校验失败" in (r.stdout + r.stderr),
-       "推送失败：gen 直接报错退出，不会带着旧结构继续跑")
+    _ro = False
+    try:
+        os.chmod(d5, 0o500)                          # 目录只读 → 推送必然失败
+        _ro = not os.access(os.path.join(d5, "POSCAR"), os.W_OK)
+    finally:
+        os.chmod(d5, 0o700)
+    if not _ro:
+        print("  ~ 跳过：目录只读未生效（root 或 WSL/NTFS 上 chmod 无效），无法测推送失败分支")
+    else:
+        os.chmod(d5, 0o500)
+        r = run(push_cmd(old), d5)
+        os.chmod(d5, 0o700)
+        ok(r.returncode != 0 and "校验失败" in (r.stdout + r.stderr),
+           "推送失败：gen 直接报错退出，不会带着旧结构继续跑")
 
 
 def main():

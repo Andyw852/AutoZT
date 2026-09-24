@@ -1,4 +1,7 @@
 import json
+import os
+
+import pytest
 
 from autozt.science import preflight, query_results, research_plan
 
@@ -30,6 +33,8 @@ def test_research_plan_requires_grids_for_zt():
 
 
 def test_preflight_reports_cross_workflow_inputs(tmp_path):
+    if not os.path.isdir("tmp/_zt_offline"):
+        pytest.skip("缺 tmp/_zt_offline 样例数据（gitignored）")
     sample = "tmp/_zt_offline/Si/zt-dft-cpu/step20_zt"
     got = preflight(sample, dimension="3D", temperature=[300], carrier=[1e18])
     assert got["status"] == "review"

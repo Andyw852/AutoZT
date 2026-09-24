@@ -100,6 +100,10 @@ def approvals():
         return (json.load(f) or {}).get("approvals") or []
 
 
+if not os.path.isfile(os.path.join(ROOT, "test", "tf_test", "Si", "POSCAR")):
+    print("SKIP: 缺 test/tf_test/Si/POSCAR（gitignored 测试数据），跳过 agentgate 套件")
+    sys.exit(0)
+
 print("[0] 沙盒准备")
 setup()
 ok(os.path.isfile(CFG), "假配置就绪：tmp/_agentgate_test/tf.yaml")

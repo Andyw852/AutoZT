@@ -1,5 +1,7 @@
 # ---- 配置 / 密钥（本地专属，不进仓库）----
-setting/
+# 用 setting/* 而不是 setting/：排除整个目录后，git 无法用 ! 重新纳入其中的文件
+#   （原写法让下面的 !setting/template-cluster.yaml 永远不生效）
+setting/*
 setting/.tf_watch.log
 
 # ---- Python 缓存 ----
@@ -86,6 +88,7 @@ POTCAR.*
 # ---- 站点配置：模板照发，真实配置不发 ----
 setting/*.yaml
 !setting/template-cluster.yaml
+!setting/example/
 # ---- 开发期临时物与配图 ----
 output/
 hfeshell_tmp/
