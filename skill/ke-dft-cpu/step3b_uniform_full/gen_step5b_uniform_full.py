@@ -121,6 +121,8 @@ def main():
     kc.write_method(out / kc.METHOD_FILE, dim, "uniform 密网格自洽",
                     func=_func)
 
+    # [patch_stale_grid-2026-09-23] 覆盖 KPOINTS 之前先抓旧网格，末尾与新网格比对后归档旧产物
+    _old_mesh = kc.read_kpoints_mesh(out / "KPOINTS")
     kc.vaspkit_kpoints(out, KSCHEME, KSPACING, VASPKIT_EXE, dim, vac_axis)
     # [patch_vacuum_kz] 把真空方向 kz 提到 VACUUM_KZ_MIN（默认 1 = 不动）
     _kzmin = int(VACUUM_KZ_MIN)
@@ -248,6 +250,12 @@ def main():
                  % (_need[0], _need[1], _need[2], _tot, UNIFORM_NMAX))
     print("[OK] 密网格 %dx%dx%d（%d 点，IBZ 会按对称性约化；DK_MAX=%.3f）"
           % (_need[0], _need[1], _need[2], _tot, _dk))
+    # [patch_stale_grid-2026-09-23] 网格变了 -> 归档旧网格产物，使 ck_wavecar 判不通过、重新进队
+    _n_arch, _arch_tag = kc.archive_stale_grid(out, _old_mesh, _need)
+    if _n_arch:
+        print("[..] patch_stale_grid：网格 %s -> %s，归档旧产物 %d 个（*.stale-grid-%s）"
+              % ("x".join(str(x) for x in _old_mesh[:3]),
+                 "x".join(str(x) for x in _need[:3]), _n_arch, _arch_tag))
     # ---- [patch_full_grid] 全网格诊断步的额外自检 --------------------------
     _nfull = _need[0] * _need[1] * _need[2]
     print("[OK] ISYM = -1（全网格模板）：VASP 将计算全部 %d 个 k 点，"

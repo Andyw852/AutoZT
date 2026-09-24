@@ -1190,6 +1190,33 @@ def remote_sbatch_fanout(cfg, s, jobname=None, force=False):
     """
     pat = str(s.get("fanout"))
     only = s.get("fan_todo") or None
+    # ★ 空 fan_todo 的正确语义是"无需处理"，不是"提交全部"（2026-09-23 user review 一.2）。
+    #   _collector_remote 只在"某子目录既无作业、又已完成"时才不把它放进 todo ⇒ todo==[]
+    #   等于"所有子目录都判定完成"。旧代码 `or None` 落到下面的"fan_todo 为空→提交全部"，
+    #   于是对一个已算完的扇出步执行 retry 会把【全部】子目录原样重算（WS₂ S4 实测：13 帧
+    #   里有 6 帧 SCF 未收住，retry 会重算 13 帧、6 帧照样失败，纯烧机时）。
+    #   现在：远端确有子目录却无事可做 → 拒绝提交；真要整批重算请用 rerun（破坏性，先请示）。
+    # 判据收紧（user review 二.be009cf）：**只有** "键存在且等于 []（空列表）"才拒交；
+    # 键不存在、或值为 None（非 collector 产生的旧输入/单测）一律走下面的"提交全部"。
+    # 不变量（_collector_remote.py:604）：fan_todo 由采集每次**无条件**写入，且是内存态列表
+    # ⇒ 不存在"rerun 后残留旧 []"；[]  ⟺ 每个子目录都已完成、或已有在跑作业。
+    if isinstance(s.get("fan_todo"), list) and "fan_todo" in s and not s["fan_todo"]:
+        _rc1, _o1 = run_remote(cfg, sh_b64(
+            "cd %s 2>/dev/null && ls -d %s 2>/dev/null | wc -l || echo 0"
+            % (shlex.quote(s["dir"]), pat)),
+            host=s.get("_host") or "__default__")
+        try:
+            _n_all = int((_o1 or "0").strip().splitlines()[-1])
+        except (ValueError, IndexError):
+            _n_all = 0
+        if _n_all > 0:
+            return (False,
+                    "扇出步骤的待补清单为空（fan_todo=[]）：远端 %d 个子目录都已判定完成，"
+                    "无需重算，已拒绝提交。\n"
+                    "  · 若有帧其实不合格（如 SCF 撞 NELM），说明本步完成判据太粗 —— "
+                    "先修判据（fanout checker 改用 SCF 收敛判据）再 retry；\n"
+                    "  · 确实要整批重算：tf -tt <技能> -p <材料> -j <步> rerun（破坏性，先请示）。"
+                    % _n_all, None)
     # patch_fanout_cap：扇出是"每个子目录各 sbatch 一次"的无上限循环，而
     # max_inflight 只数步骤、不数子目录 —— kl 的 findiff 三阶位移动辄上千个，
     # auto_advance 会一口气全交出去，占满作业配额把别的技能一起堵死。

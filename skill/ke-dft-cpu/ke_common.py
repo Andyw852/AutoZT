@@ -118,6 +118,40 @@ def read_kpoints_mesh(kpoints: Path):
         return None
 
 
+# --------------------------------------------------------------------------
+# [patch_stale_grid-2026-09-23] 网格变了 -> 归档旧产物（S3 / S3b 用）
+#   ck_wavecar 只查 WAVECAR 存不存在、够不够大，**不比对网格**。所以改了网格之后，
+#   旧网格算完的目录仍被判「已完成」，auto/start 不会重算 —— 输入是新网格、产物是旧网格，
+#   下游静默用错。这里在【新 KPOINTS 已就绪且全部护栏通过之后】把旧产物改名归档
+#   （不删除），使 ck_wavecar 判不通过、步骤重新进队。
+#   输入（KPOINTS/INCAR/POSCAR/POTCAR/submit.sh）不在归档集合内，绝不触碰。
+#   （S7 的 gen 里有一份等价实现 patch_stale_grid，因 fanout 要逐子目录归档而未合并。）
+# --------------------------------------------------------------------------
+STALE_GRID_OUTPUTS = (
+    "OUTCAR", "OSZICAR", "vasprun.xml", "CONTCAR", "CHGCAR", "CHG", "EIGENVAL",
+    "DOSCAR", "PROCAR", "WAVECAR", "IBZKPT", "REPORT", "PCDAT", "XDATCAR",
+    "LOCPOT", "ELFCAR",
+)
+
+
+def archive_stale_grid(outdir, old_mesh, new_mesh):
+    """旧网格 != 新网格 时把旧产物改名 *.stale-grid-<旧>；返回 (归档数, 旧标签)。
+
+    old_mesh 为 None（首次生成 / 读不到）或与 new_mesh 相同 -> 不动，返回 (0, None)。
+    """
+    if not old_mesh or list(old_mesh[:3]) == list(new_mesh[:3]):
+        return 0, None
+    _tag = "x".join(str(x) for x in old_mesh[:3])
+    _out = Path(outdir)
+    _n = 0
+    for _nm in STALE_GRID_OUTPUTS:
+        _f = _out / _nm
+        if _f.is_file():
+            _f.rename(_out / (_nm + ".stale-grid-" + _tag))
+            _n += 1
+    return _n, _tag
+
+
 def vaspkit_potcar(outdir: Path, exe="vaspkit"):
     if (outdir / "POTCAR").exists():
         print("[OK] POTCAR 已存在，跳过")

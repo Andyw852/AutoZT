@@ -45,10 +45,10 @@ echo "===================================="
 # py_compile + pyflakes（改动的 .py 全过才继续；这次的 kl-dft-cpu NameError 它两秒就能拦下）
 mapfile -t _py < <(git status --porcelain | sed 's/^...//; s/.* -> //' | grep '\.py$' || true)
 if [ ${#_py[@]} -gt 0 ]; then
-  for f in "${_py[@]}"; do python3 -m py_compile "$f" || { echo "❌ py_compile 失败: $f"; exit 1; }; done
+  for f in "${_py[@]}"; do [ -f "$f" ] || continue; python3 -m py_compile "$f" || { echo "❌ py_compile 失败: $f"; exit 1; }; done
   echo "py_compile 通过（${#_py[@]} 个 .py）"
   if command -v pyflakes >/dev/null 2>&1; then
-    pyflakes "${_py[@]}" || { echo "❌ pyflakes 报告问题（NameError/未定义名类）"; exit 1; }
+    for f in "${_py[@]}"; do [ -f "$f" ] || continue; pyflakes "$f" || { echo "❌ pyflakes 报告问题（NameError/未定义名类）: $f"; exit 1; }; done
     echo "pyflakes 通过"
   fi
 fi

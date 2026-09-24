@@ -1,0 +1,70 @@
+# =============================================================================
+# skill/device-zt/skill.yaml —— 器件级电-热自洽 ZT 仿真（焦耳自热闭环）
+#
+# 定位：device-thermal 的传热能力再往前一节——把 ke-dft-cpu 的电子输运
+#       （sigma / Seebeck / kappa_e）接进器件，让"电流 -> 焦耳热 -> 温升 ->
+#       电学与热学物性随温度变化 -> 焦耳热变化"自己迭代到自洽。
+#
+# 三步都是 run: gen（登录节点秒级，纯 numpy，不提交 SLURM、不占 GPU）：
+#   S1_elec     读 ke 的 transport.json（面电导口径 G_s = sigma*h_perp）-> elec_props.json
+#   S2_selftrap 焦耳自热 <-> sigma(T)/S(T)/k_e(T) 自洽迭代（复用 device_common 的 FVM）
+#               -> device_zt_solution.json + T_field.json（含 I-V / P-V 扫描）
+#   S3_report   汇总器件报告 -> device_zt_report.json
+#
+# ★ 复用而非复制：传热 FVM 与热物性组装都在公共池 skill/_common/thermal/device_common.py
+#   （技能目录里没有第二份实现；find_asset 按 <技能>/ 优先、_common/*/ 兜底解析）。
+# ★ 口径：ke 的 sigma/kappa_e 是【含真空超胞口径】（BoltzTraP 步自述"仍按超胞体积
+#   口径"，与 amset 一致）；器件用面电导 sigma*h_perp，与"物理层厚口径 sigma_2D*d"
+#   数值等价，故电阻/焦耳热/ZT 都与该口径无关。
+# =============================================================================
+schema: 2
+name: device-zt
+desc: 器件级电-热自洽ZT仿真(焦耳自热闭环)
+version: "0.1"
+
+template_layout: shared
+
+defaults:
+  hpc: jzzn
+  skill_subdir: true
+
+fetch_files: [elec_props.json, device_zt_solution.json, T_field.json, device_zt_report.json]
+
+steps:
+  - {seq: 1, name: step1_elec, label: S1_elec, check: marker,
+     marker: 'elec_props.json:"ELEC_DONE"', run: gen, done_marker: elec_props.json,
+     gen: gen_step1_elec.py,
+     gen_need: [stepconf.py, step.conf, device_common.py, device_materials.json, zt_common.py]}
+
+  - {seq: 2, name: step2_selftrap, label: S2_selftrap, check: marker,
+     marker: 'device_zt_solution.json:"ZT_SOLVE_DONE"', run: gen,
+     done_marker: device_zt_solution.json,
+     gen: gen_step2_selftrap.py, needs: [step1_elec],
+     gen_need: [stepconf.py, step.conf, device_common.py, device_materials.json, zt_common.py]}
+
+  - {seq: 3, name: step3_report, label: S3_report, check: marker,
+     marker: 'device_zt_report.json:"ZT_REPORT_DONE"', run: gen,
+     done_marker: device_zt_report.json,
+     gen: gen_step3_report.py, needs: [step2_selftrap],
+     gen_need: [stepconf.py, step.conf]}
+
+io_schema:
+  inputs:
+    - {name: transport.json, from: "skill:ke-dft-cpu", required: false,
+       desc: "电子输运（sigma/Seebeck/kappa_e 张量，10 掺杂 x 9 温度）；缺时 S1 直接报错"}
+    - {name: 2d_correction.json, from: "skill:ke-dft-cpu", required: false,
+       desc: "2D 超胞高 cell_c_A；面电导口径厚度 t_conv 取自它"}
+    - {name: kappa_summary.json, from: "skill:kl-dft-cpu", required: false,
+       desc: "晶格热导率（面内 kappa 张量）；缺省时回退 device_materials.json"}
+    - {name: thickness_2d.json, from: "skill:kl-dft-cpu", required: false,
+       desc: "2D 材料有效厚度 thickness_d_A（A）；缺省时用材料库厚度"}
+    - {name: device_materials.json, from: "skill:device-zt", required: true,
+       desc: "内置材料/界面热导库（公共池 skill/_common/thermal/）"}
+  outputs:
+    - {name: elec_props.json, step: S1_elec, type: json, desc: "电学输入：随 T 的 sigma/S/kappa_e + 面电导口径"}
+    - {name: device_zt_solution.json, step: S2_selftrap, type: json, desc: "自洽解：T_eff/Q/I/P/dT + I-V 扫描"}
+    - {name: T_field.json, step: S2_selftrap, type: json, desc: "二维温度场 T(x,y)"}
+    - {name: device_zt_report.json, step: S3_report, type: json, desc: "器件电-热汇总报告"}
+  params:
+    - {name: CHANNEL_MATERIAL, values: [MoS2, WS2, MoSe2, WSe2, graphene, hBN], default: MoS2, where: step.conf, desc: "沟道材料（材料库键）"}
+    - {name: OXIDE_MATERIAL, values: [SiO2, Al2O3, HfO2, hBN], default: SiO2, where: step.conf, desc: "栅介质/氧化层材料"}

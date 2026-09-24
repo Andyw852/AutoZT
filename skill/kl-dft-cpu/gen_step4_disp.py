@@ -441,6 +441,15 @@ def main():
                 why="晶格热导需要声子群速度和布里渊区积分，孤立分子只有分立振动模式")
     func = conf["FUNC"] if conf["FUNC"] not in (None, "", "auto") \
         else meth.get("FUNC", "pbe-d3").lower()
+    # ★ 泛函一致性硬检查（2026-09-23 user review 二.1）：S4 取力用的泛函必须与 S1
+    #   记录在 workflow_method.txt 里的 FUNC 相同 —— 同一步势能面才有可比的力。不一致时
+    #   平衡帧会带残余净力、fc2 里出假软模，且完全静默（模板曾写死 pbesol 短路 auto）。
+    _rec_func = str(meth.get("FUNC") or "").strip().lower()
+    if _rec_func and func != _rec_func:
+        sys.exit("[ERROR] S4 的泛函与 step1 不一致：本步 FUNC=%s，workflow_method.txt 记 "
+                 "FUNC=%s。\n        两者必须相同（同一势能面）；拒绝生成。\n"
+                 "        处置：本材料 S4 的 FUNC 置 auto（推荐，自动继承），或先核对 S1 的泛函。"
+                 % (func, _rec_func))
     method = str(conf["METHOD"]).lower()
     if method not in ("findiff", "alm"):
         sys.exit("[ERROR] METHOD 只允许 findiff / alm")
@@ -519,6 +528,22 @@ def main():
         d = out / ("disp-%s" % num)
         d.mkdir(exist_ok=True)
         if (d / "INCAR").is_file() and (d / "POSCAR").is_file():
+            # ★ 已算完的帧**不要动 INCAR**（user review 二.be31ab5）：重写 INCAR 会让
+            #   INCAR 与 OUTCAR 记的参数对不上。只对"还要重算"的帧施加项目级 [incar] 覆盖 ——
+            #   这正是 \`conf --set incar.*\` 之后 retry 的目标帧，覆盖也只有对它们才有意义。
+            _outcar = d / "OUTCAR"
+            _done = False
+            if _outcar.is_file():
+                try:
+                    _done = "General timing and accounting informations" in \
+                        _outcar.read_text(errors="ignore")[-400000:]
+                except OSError:
+                    _done = False
+            if not _done:
+                _ic = stepconf.apply_incar_file(d / "INCAR")
+                if _ic:
+                    print("[..] %s：待重算帧，按 step.conf [incar] 更新 %d 项（%s）"
+                          % (d.name, len(_ic), ", ".join(str(x[1]) for x in _ic[:6])))
             continue
         shutil.copyfile(pos, d / "POSCAR")
         kc.vaspkit_kpoints(d, conf["KSCHEME"], conf["KSPACING"], conf["VASPKIT_EXE"], dim, vac_axis)
@@ -550,6 +575,14 @@ def main():
             kc.enforce_incar_tags(d / "INCAR", {"LDIPOL": ".TRUE.", "IDIPOL": "3",
                                                 "ISYM": "0"},
                                   label="step4 偶极 %s：" % num)
+        # ★ 最后落一遍项目级 [incar]/[incar.final]/[incar.delete] 覆盖。ke-dft-cpu 一直
+        #   这么做（7 处），kl 链以前一处都没有 ⇒ `conf --set incar.*` 被静默忽略
+        #   （user review 一.1）。当前 kl 各步 step.conf 只有 [params]，故此处今天
+        #   是空操作（不碰文件），仅在真正写了 [incar] 时才生效。
+        _ic = stepconf.apply_incar_file(d / "INCAR")
+        if _ic:
+            print("[..] %s：step.conf [incar] 覆盖 %d 项（%s）"
+                  % (d.name, len(_ic), ", ".join(str(x[1]) for x in _ic[:6])))
         kc.write_submit(submit_tpl, d / "submit.sh",
                         {"JOBNAME": "%s-kl-dft-cpu-S4-%s" % (cwd.name, num)})
         stepconf.apply_submit(d / "submit.sh", conf.submit)

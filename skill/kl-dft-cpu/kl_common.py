@@ -363,9 +363,23 @@ def check_frames_match_displacements(step4_dir, n_sample=3, tol=1e-3):
 NELM_WARNING = "number of steps (NELM)"
 EDIFF_ABORT_MARK = "aborting loop because EDIFF is reached"
 _DAV_RE = re.compile(r"^\s*DAV:\s*(\d+)", re.M)
+# SCF 行字段：<DAV|RMM|CG|EDDAV>: n E dE deps ncg rms [rms(c)]
+_DE_RE = re.compile(r"^\s*(?:DAV|RMM|CG|EDDAV):\s*\d+\s+\S+\s+(\S+)", re.M)
+_DEPS_RE = re.compile(r"^\s*(?:DAV|RMM|CG|EDDAV):\s*\d+\s+\S+\s+\S+\s+(\S+)", re.M)
+# 本帧 INCAR 的 EDIFF —— 判据用它，而不是写死阈值
+_EDIFF_RE = re.compile(r"^\s*EDIFF\s*=\s*([0-9.eEdD+-]+)", re.M)
+# 撞 NELM 但**确实已收敛**的帧，力可用（user review II.2；口径 2026-09-23 收紧）：
+#   最后 SCF_DE_MIN_STEPS(5) 个电子步的 |dE| 全部 ≤ EDIFF，且末步 d_eps ≤ 10×EDIFF。
+# ★ 只看末步有风险 —— 振荡的 SCF 可能恰好在某一步落到很小的 dE，所以要求"连续 5 步都达标"。
+# 实测 WS₂ 6 帧：末 5 步 dE ≈ ±(0.6~1.0)e-9（EDIFF=1E-8 全达标），d_eps≈1.01e-8 ≤ 10×EDIFF；
+# 它们没能触发 abort 只因 VASP 的第二判据 d_eps 比 EDIFF 高一丁点。
+# 读不到 EDIFF 时回落到 SCF_DE_OK_EV（AUTOZT_SCF_DE_OK 可覆盖）并跳过 d_eps 判据。
+SCF_DE_OK_EV = float(os.environ.get("AUTOZT_SCF_DE_OK", "1e-6"))
+SCF_DEPS_FACTOR = 10.0
+SCF_DE_MIN_STEPS = 5
 
 
-def scan_frame_scf(frame_dir):
+def scan_frame_scf(frame_dir, de_ok_ev=SCF_DE_OK_EV):
     """只读扫一帧（disp-XXXXX/）的 OUTCAR + OSZICAR，返回诊断 dict。
 
     作废判据：
@@ -378,7 +392,9 @@ def scan_frame_scf(frame_dir):
     d = Path(frame_dir)
     row = {"frame": d.name, "dir": str(d), "has_outcar": False, "has_oszicar": False,
            "nelm_warn": False, "n_aborting": 0, "n_dav_lines": 0, "last_dav": 0,
-           "scf_steps": 0, "ok": True, "reasons": []}
+           "scf_steps": 0, "dE_last": None, "dE_last5": [], "deps_last": None,
+           "ediff": None, "nelm_converged": False,
+           "ok": True, "reasons": []}
     outcar = d / "OUTCAR"
     if outcar.is_file():
         row["has_outcar"] = True
@@ -395,15 +411,43 @@ def scan_frame_scf(frame_dir):
     if osz.is_file():
         row["has_oszicar"] = True
         try:
-            idx = [int(m) for m in _DAV_RE.findall(osz.read_text(errors="ignore"))]
-        except OSError:                                       # pragma: no cover
+            _txt = osz.read_text(errors="ignore")
+            idx = [int(m) for m in _DAV_RE.findall(_txt)]
+            _de = [float(x) for x in _DE_RE.findall(_txt)]
+            _deps = [float(x) for x in _DEPS_RE.findall(_txt)]
+            row["dE_last"] = _de[-1] if _de else None
+            row["dE_last5"] = _de[-int(SCF_DE_MIN_STEPS):]
+            row["deps_last"] = _deps[-1] if _deps else None
+            _inc = d / "INCAR"
+            if _inc.is_file():
+                _m = _EDIFF_RE.search(_inc.read_text(errors="ignore"))
+                if _m:
+                    row["ediff"] = float(_m.group(1).replace("D", "E").replace("d", "e"))
+        except (OSError, ValueError):                         # pragma: no cover
             idx = []
         row["n_dav_lines"] = len(idx)
         row["last_dav"] = max(idx) if idx else 0
     row["scf_steps"] = row["last_dav"] or row["n_dav_lines"]
-    if row["nelm_warn"]:
-        row["reasons"].append("SCF 未在 NELM 内收敛（OUTCAR 命中 NELM 警告）")
-    if row["has_outcar"] and row["n_aborting"] != 1:
+    # 分级：撞 NELM 但"连续 5 步 |dE| ≤ EDIFF 且 d_eps ≤ 10×EDIFF" ⇒ 力可用，放行只留痕。
+    if row["ediff"] is not None:
+        _tol = row["ediff"]
+        _ok_de = (len(row["dE_last5"]) >= int(SCF_DE_MIN_STEPS)
+                  and all(abs(x) <= _tol for x in row["dE_last5"]))
+        _ok_deps = (row["deps_last"] is not None
+                    and abs(row["deps_last"]) <= SCF_DEPS_FACTOR * _tol)
+        _crit = "末 %d 步 |dE| ≤ EDIFF=%g 且 d_eps ≤ %g×EDIFF" % (
+            SCF_DE_MIN_STEPS, _tol, SCF_DEPS_FACTOR)
+    else:                                    # 读不到 EDIFF：回落旧阈值，跳过 d_eps 判据
+        _tol = de_ok_ev
+        _ok_de = (row["dE_last"] is not None and abs(row["dE_last"]) <= _tol)
+        _ok_deps = True
+        _crit = "末步 |dE| ≤ %g（未读到 EDIFF，回落阈值；未查 d_eps）" % _tol
+    row["nelm_converged"] = bool(row["nelm_warn"] and _ok_de and _ok_deps)
+    if row["nelm_warn"] and not row["nelm_converged"]:
+        row["reasons"].append(
+            "SCF 未在 NELM 内收敛（NELM 警告；不满足 %s；实测末 5 步 dE=%s、d_eps=%s）"
+            % (_crit, row["dE_last5"], row["deps_last"]))
+    if row["has_outcar"] and row["n_aborting"] != 1 and not row["nelm_converged"]:
         row["reasons"].append("'aborting loop because EDIFF is reached' 出现 %d 次（应为 1）"
                               % row["n_aborting"])
     row["ok"] = not row["reasons"]
@@ -434,12 +478,15 @@ def check_outcar_scf_convergence(step4_dir, n_outliers=8):
             "n_with_outcar": sum(1 for r in rows if r["has_outcar"]),
             "n_bad": len(bad),
             "n_nelm": sum(1 for r in rows if r["nelm_warn"]),
+            "n_nelm_converged": sum(1 for r in rows if r["nelm_converged"]),
             "n_abort_ne_1": sum(1 for r in rows
                                 if r["has_outcar"] and r["n_aborting"] != 1),
             "n_no_oszicar": sum(1 for r in rows if not r["has_oszicar"]),
             "steps_stats": stats,
             "step_outliers": [{"frame": r["frame"], "scf_steps": r["scf_steps"],
                                "nelm_warn": r["nelm_warn"],
+                               "nelm_converged": r["nelm_converged"],
+                               "dE_last": r["dE_last"],
                                "n_aborting": r["n_aborting"]} for r in outliers],
             "bad_frames": [{"frame": r["frame"], "reasons": r["reasons"],
                             "scf_steps": r["scf_steps"]} for r in bad],
@@ -465,6 +512,10 @@ def format_scf_report(info, top=6):
             "%s=%s%s" % (o["frame"], o["scf_steps"],
                          "（NELM 警告!）" if o["nelm_warn"] else "")
             for o in info["step_outliers"][:max(1, int(top))]))
+    if info.get("n_nelm_converged"):
+        lines.append("[SCF] 其中 %d 帧撞 NELM 但末步 |dE| 已 ≤ %.0e eV —— 能量已收敛、力可用，"
+                     "按放行处理（只留痕不作废；见 user review II.2）。"
+                     % (info["n_nelm_converged"], SCF_DE_OK_EV))
     if info.get("bad_frames"):
         lines.append("[SCF] 作废帧 %d 个：" % len(info["bad_frames"]))
         for b in info["bad_frames"][:max(1, int(top)) * 4]:
@@ -474,7 +525,11 @@ def format_scf_report(info, top=6):
             lines.append("        … 其余 %d 帧见 scf_steps.json"
                          % (len(info["bad_frames"]) - top * 4))
     else:
-        lines.append("[SCF] 所有帧 SCF 正常收敛（各 1 次 aborting loop，无 NELM 警告）。")
+        if info.get("n_nelm_converged"):
+            lines.append("[SCF] 无作废帧：%d 帧撞 NELM 但 |dE| 已收敛（分级放行），"
+                         "其余帧各 1 次 aborting loop。" % info["n_nelm_converged"])
+        else:
+            lines.append("[SCF] 所有帧 SCF 正常收敛（各 1 次 aborting loop，无 NELM 警告）。")
     return "\n".join(lines)
 
 
@@ -671,6 +726,39 @@ def band_path_2d(cell, npoints=101, vac_axis=2):
     return paths, labels, lat
 
 
+def _hex_or_ortho(lat):
+    """晶格是否"正交 或 2D 六方"—— 这两种情形下实空间周期口径 N·|a_i| 已足够。
+
+    正交：三轴两两垂直（此时倒空间式与实空间式恒等）。
+    2D 六方：|a1|≈|a2|、夹角 60°/120°，且 a3 同时垂直 a1/a2。
+    其余（单斜/三斜等斜方晶格）改用倒空间口径 —— 见 auto_mesh（user review 一.4）。
+    """
+    import numpy as np
+    L = np.asarray(lat, float)
+    n = np.linalg.norm(L, axis=1)
+    if min(n) <= 1e-9:
+        return True
+    c01 = float(np.dot(L[0], L[1]) / (n[0] * n[1]))
+    c02 = float(np.dot(L[0], L[2]) / (n[0] * n[2]))
+    c12 = float(np.dot(L[1], L[2]) / (n[1] * n[2]))
+    ortho = abs(c01) < 0.02 and abs(c02) < 0.02 and abs(c12) < 0.02
+    hex2d = (abs(n[0] - n[1]) / max(n[0], n[1]) < 0.01
+             and abs(abs(c01) - 0.5) < 0.02
+             and abs(c02) < 0.02 and abs(c12) < 0.02)
+    return bool(ortho or hex2d)
+
+
+def _recip_norm(lat, i):
+    """倒格矢 |b_i| = 2π|a_j × a_k| / |a1·(a2×a3)|（无 2π 因子取 1 亦可，见调用处）。"""
+    import numpy as np
+    L = np.asarray(lat, float)
+    j, k = [x for x in range(3) if x != i]
+    vol = abs(float(np.dot(L[0], np.cross(L[1], L[2]))))
+    if vol <= 1e-12:
+        return 0.0
+    return 2.0 * math.pi * float(np.linalg.norm(np.cross(L[j], L[k]))) / vol
+
+
 def auto_mesh(spec, dim, vac_axis, poscar, q_len, nmin=20, dflt3d="15 15 15"):
     """q 网格：显式值照用；auto/空 时按"倒空间长度"估算（P1-1）。
 
@@ -691,15 +779,26 @@ def auto_mesh(spec, dim, vac_axis, poscar, q_len, nmin=20, dflt3d="15 15 15"):
     lat, _ = read_poscar_cell_frac(poscar)
     ax = vac_axis if vac_axis is not None else 2
     m = []
+    # ★ 口径（user review 一.4）：Q_LEN 的物理含义是**实空间 Born–von Kármán 周期**
+    #   下界（N·|a_i| ≥ Q_LEN），对正交/2D 六方已足够；但斜方（单斜/三斜）晶格下
+    #   "实空间周期"与"倒空间采样密度"不成比例，改用倒空间口径：
+    #     |b_i| / N_i ≤ 2π / Q_LEN   ⇒   N_i ≥ Q_LEN·|b_i| / 2π
+    #   （正交时两式恒等；2D 六方若改用后者会让 WS₂ 从 88 变 ~101，故按 review 保持旧式。）
+    _use_recip = not _hex_or_ortho(lat)
     for i in range(3):
         if dim == "2d" and i == ax:
             m.append(1)
             continue
         li = max(_norm(lat[i]), 1e-6)
-        m.append(max(int(nmin), int(math.ceil(float(q_len) / li))))
+        if _use_recip:
+            bi = _recip_norm(lat, i)
+            m.append(max(int(nmin), int(math.ceil(float(q_len) * bi / (2.0 * math.pi)))))
+        else:
+            m.append(max(int(nmin), int(math.ceil(float(q_len) / li))))
+    _how = "斜方→倒空间口径 N_i≥Q_LEN·|b_i|/2π" if _use_recip else "正交/六方→实空间口径 N_i≥Q_LEN/|a_i|"
     return (" ".join(str(x) for x in m),
-            "（auto：Q_LEN=%.0f Å，|a|=%.2f/%.2f/%.2f Å，下限 %d）"
-            % (float(q_len), _norm(lat[0]), _norm(lat[1]), _norm(lat[2]), int(nmin)))
+            "（auto：Q_LEN=%.0f Å，|a|=%.2f/%.2f/%.2f Å，下限 %d，%s）"
+            % (float(q_len), _norm(lat[0]), _norm(lat[1]), _norm(lat[2]), int(nmin), _how))
 
 
 def write_kl_params(path, **kv):

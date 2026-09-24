@@ -287,6 +287,33 @@ def build_extract(factor, meta, thick2d=None, plan=None, primary=None):
         "        'meshes': [r['mesh'] for r in _rs], 'kappa300_inplane': _kv,",
         "        'rel_change_pct': _rel, 'max_rel_change_pct': (max(_rel) if _rel else None),",
         "        'converged_5pct': bool(_rel) and max(_rel) < 5.0}",
+        "    # ---- 外推（user review 一.2）----",
+        "    # 误差按 A/N 衰减：用 kappa(N) = kappa_inf - A/N 对参与档最小二乘外推，报 kappa_inf",
+        "    # 与最细档相对 kappa_inf 的偏差。理由：相邻档差 5% 意味着剩余误差约 4 倍(~20%)，",
+        "    # 2D 的 ZA 支在 Gamma 附近收敛最慢，只看 5% 会过早判收敛。",
+        "    _out = {}",
+        "    try:",
+        "        import numpy as _np",
+        "        _n = _np.array([1.0 / float(r['mesh'].split()[0]) for r in _rs])",
+        "        _y = _np.array([float(r['kappa_inplane_300K']) for r in _rs])",
+        "        if len(_n) >= 3:",
+        "            _A = _np.vstack([_np.ones_like(_n), -_n]).T",
+        "            _coef, *_ = _np.linalg.lstsq(_A, _y, rcond=None)",
+        "            _kinf = float(_coef[0])",
+        "            _dev = (abs(_y[-1] - _kinf) / abs(_kinf) * 100.0",
+        "                    if abs(_kinf) > 1e-12 else None)",
+        "            _out = {'kappa_inf_extrap_300K_inplane': _kinf,",
+        "                    'finest_dev_from_kappa_inf_pct': _dev,",
+        "                    'converged_extrap_3pct': bool(_dev is not None and _dev < 3.0)}",
+        "    except Exception as _e:",
+        "        _out = {'extrap_error': str(_e)}",
+        "    d['mesh_convergence'][_m].update(_out)",
+        "    if (d['mesh_convergence'][_m].get('converged_5pct')",
+        "            and _out.get('converged_extrap_3pct') is False):",
+        "        d.setdefault('warnings', []).append(",
+        "            '%s 相邻档 5%% 判据通过，但外推后最细档仍偏离 kappa_inf %.1f%%（>=3%%）：'",
+        "            '2D 的 ZA 支收敛慢，建议再加密一档网格'",
+        "            % (_m, _out.get('finest_dev_from_kappa_inf_pct') or 0.0))",
         "    if _rel and max(_rel) >= 5.0:",
         "        d.setdefault('warnings', []).append(",
         "            '%s 网格还没收敛：相邻档 300K 面内 κ 变化 %.1f%% ≥ 5%%，请继续加密网格'",
@@ -424,6 +451,35 @@ def meshes(conf, params, dim, vac_axis):
     return [kc.mesh_str(s.split(), dim, ax) for s in scan.split(";") if s.strip()]
 
 
+def _hex_sixfold(mesh_str, poscar_lat, vac_axis):
+    """六方晶格：面内网格取 6 的倍数，让 Γ/K/M 都落在网格上（user review 一.3）。
+
+    87 = 3×29 能落到 K 却落不到 M；109/136 连 K 都不在网格上。K 点需 3 的倍数、
+    M 点需偶数 ⇒ 取 6 的倍数。只对六方（|a|≈|b| 且夹角 120°/60°）生效，其余原样返回；
+    真空轴不动。取 ceil 而不是四舍五入：不把"锚点网格"变粗。
+    """
+    import math as _m
+    import numpy as np
+    vals = [int(x) for x in str(mesh_str).split()]
+    if len(vals) != 3 or vac_axis is None:
+        return mesh_str
+    if min(vals) != 1:            # 只有 2D 口径（含 1 的网格）才取整，3D 网格原样返回
+        return mesh_str
+    L = np.asarray(poscar_lat, float)
+    a, b = float(np.linalg.norm(L[0])), float(np.linalg.norm(L[1]))
+    if a <= 0 or b <= 0 or abs(a - b) / max(a, b) > 0.01:
+        return mesh_str
+    cosg = float(np.dot(L[0], L[1]) / (a * b))
+    if abs(abs(cosg) - 0.5) > 0.02:
+        return mesh_str
+    out = list(vals)
+    for i in range(3):
+        if i == int(vac_axis):
+            continue
+        out[i] = int(_m.ceil(vals[i] / 6.0)) * 6
+    return " ".join(str(x) for x in out)
+
+
 def extract_plan(plan, tagged):
     """PLAN：extract 要读哪几个 kappa 文件、分别是哪档网格/哪种解法。
     tagged=True 时文件名是 kappa-m<digits>.<method>.hdf5（见 build_phono3py_cmd）。"""
@@ -513,6 +569,21 @@ def prepare_shengbte(cwd, out, sb_src, conf, mesh, use_nac):
          "kappa_t_step": conf["T_STEP"], "kappa_scalebroad": conf["SCALEBROAD"],
          "kappa_isotope": conf["ISOTOPE"],
          "kappa_convergence": bool(conf["KAPPA_CONVERGENCE"])}
+    # ★ 2D 轴序自检（user review 一.1）：含 1 的网格里，ngrid=1 的那个轴必须是
+    #   CONTROL 的 lattvec 中的真空轴（最长基矢）。若把 phono3py 原胞序的 "1 87 87"
+    #   写进 ShengBTE，就变成"面内取 1 个点、真空取 87 个点"——κ 整体错且不报错。
+    _gm = [int(x) for x in str(mesh).split()]
+    if len(_gm) == 3 and min(_gm) == 1:
+        import numpy as np
+        _norms = np.linalg.norm(np.asarray(atoms.get_cell(), float), axis=1)
+        _vac = int(np.argmax(_norms))
+        if _gm[_vac] != 1:
+            sys.exit("[ERROR] ShengBTE 网格轴序错误：2D 真空轴是 %d（|a|=%.2f Å），"
+                     "但 ngrid=%s 在该轴取了 %d 个点（应为 1）。\n"
+                     "        原因：把 phono3py 的原胞基矢轴序网格用到了 ShengBTE。"
+                     "\n        处置：核对 meshes() 的输出未被 _mesh_prim_remap 串轴序。"
+                     % (_vac, _norms[_vac], _gm, _gm[_vac]))
+        print("[..] ShengBTE 网格 %s：真空轴=%d 且 ngrid=1 ✓" % (_gm, _vac))
     lk._write_shengbte_control(C, atoms, sc, out / "CONTROL", use_nac)
     print("[OK] ShengBTE 输入就绪：FORCE_CONSTANTS_2ND/3RD（拷自 S5）+ CONTROL")
     if use_nac:
@@ -601,6 +672,23 @@ def main():
     vac_ax = vac_axis if vac_axis is not None else 2
     # MESH_OVERRIDE / kl_params 的 MESH 也过 mesh_str：3D 被误写成 "N N 1" 时自动纠正。
     mesh_list = meshes(conf, params, dim, vac_ax)
+    # ★ 留存"POSCAR/Cartesian 轴序"的原始网格：ShengBTE/FourPhonon 的晶胞是 S5 导出的
+    #   ph3.unitcell（真空仍在第 3 基矢），必须按 POSCAR 轴序写 ngrid。
+    #   下面的 _mesh_prim_remap 只服务 phono3py --mesh（user review 一.1）。
+    # ★ 六方晶格：面内网格取 6 的倍数（Γ/K/M 都落网格；user review 一.3）。
+    #   必须放在 remap 之前、且作用在 POSCAR 序上 —— 这样 phono3py 与 ShengBTE 两路
+    #   拿到的是同一组取整后的面内值。
+    if dim == "2d":
+        try:
+            _pl0 = kc.read_poscar_cell_frac(out / "POSCAR")[0]
+            if _pl0:
+                _b4 = list(mesh_list)
+                mesh_list = [_hex_sixfold(m, _pl0, vac_ax) for m in mesh_list]
+                if mesh_list != _b4:
+                    print("[..] 六方晶格：面内网格取 6 的倍数 %s -> %s" % (_b4, mesh_list))
+        except Exception as _e:                    # noqa: BLE001
+            print("[WARN] 六方网格取整失败（%s），按原样使用" % _e)
+    mesh_poscar = list(mesh_list)
     # ★ phono3py --mesh 是【原胞基矢轴序】，而 meshes() 产出的是 POSCAR/Cartesian 轴序。
     #   primitive_matrix 重排基矢后必须重排网格，否则 phono3py 报 Grid symmetry is broken
     #   （2026-09-21 MoS₂ S6 实测）。见 _mesh_prim_remap。
@@ -616,7 +704,8 @@ def main():
                           % (_before, mesh_list))
         except Exception as _e:                    # noqa: BLE001
             print("[WARN] q 网格原胞重排失败（%s），按原样使用" % _e)
-    mesh = mesh_list[-1]
+    mesh = mesh_list[-1]          # phono3py：原胞基矢轴序
+    mesh_sb = mesh_poscar[-1]     # ShengBTE/FourPhonon：POSCAR 轴序（不可用重排后的）
     if solver != "phono3py" and len(mesh_list) > 1:
         sys.exit("[ERROR] MESH_SCAN 多套网格只有 phono3py 支持（shengbte/fourphonon 单套）；"
                  "当前 SOLVER=%s，请把 MESH_SCAN 留空或只写一套。" % solver)
@@ -729,7 +818,7 @@ def main():
                         require=REQ_2D + ("--ntasks=1",),
                         label="phono3py 提交模板：")
     elif solver == "shengbte":
-        prepare_shengbte(cwd, out, sbd, conf, mesh, use_nac)
+        prepare_shengbte(cwd, out, sbd, conf, mesh_sb, use_nac)
         tpl = kc.resolve_submit(here, "3d", "submit_shengbte")
         # MPI/OMP 布局：一个 rank 一个 NUMA 域。rank=1 会退化成串行（ShengBTE 靠
         # MPI 按 q 点并行），所以这里必须显式算出来，不能沿用模板里的常量。
@@ -821,7 +910,7 @@ def main():
                      " ALLOW_FOURPHONON_GPU_PHONOPY 设为 true。见 README「fourphonon」节。")
         print("[WARN] SOLVER=fourphonon：GPU 版对 phonopy fc2 有已知数值 bug（κ 错 67~71×），"
               "本次结果只能用于对照 / 复现，不可当真值。")
-        prepare_fourphonon(cwd, out, sbd, conf, mesh, use_nac, ngpu)
+        prepare_fourphonon(cwd, out, sbd, conf, mesh_sb, use_nac, ngpu)
         tpl = kc.resolve_submit(here, "3d", "submit_fourphonon")
         kc.write_submit(tpl, out / "submit.sh",
                         {"JOBNAME": kc.new_jobname(cwd, "S6kappa"),
