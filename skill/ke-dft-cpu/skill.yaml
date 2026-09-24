@@ -244,7 +244,7 @@ optional_steps:
     steps:
       - {seq: 2.3, name: "step2_bandgap/step2.3_hse", label: S2.3_hse,
          group: S2_bandgap, after: "step2_bandgap/step2.2_pbe",
-         src: step2_bandgap/step2.3_hse, check: outcar, gen: "gen_step4_HSE.py --kpath-slice all/4", hpc: jzzn, fanout: "*p*of*",
+         src: step2_bandgap/step2.3_hse, check: outcar, gen: "gen_step4_HSE.py --kpath-slice all/4", fanout: "*p*of*",
          gen_need: [stepconf.py, step.conf, dim_common.py, check_common.py, step4_check_and_resubmit.py,
                     incar_2d.tpl, incar_3d.tpl, submit_std_2d.tpl, submit_std_3d.tpl,
                     submit_ncl_2d.tpl, submit_ncl_3d.tpl],
