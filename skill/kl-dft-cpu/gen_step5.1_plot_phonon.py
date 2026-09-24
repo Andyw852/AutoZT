@@ -89,13 +89,17 @@ def _write_submit(outdir):
                          "cwd/templates/step5_phonon_plot、脚本同级）"}, 40)
     print("[..] 模板：%s" % tpl)
     text = tpl.read_text(encoding="utf-8")
+    # ★ 不兜底个人路径/写死环境名（review 三）：集群的 conda_sh/conda_env 由
+    #   setting/<集群>.yaml 经 step.conf 注入；读不到就报错，让用户去填。
+    if not str(conf["CONDA_SH"] or "").strip():
+        sys.exit("[ERROR] 未配置 CONDA_SH —— 请在 setting/<集群>.yaml 填 conda_sh（conda.sh 绝对路径）")
+    if not str(conf["CONDA_ENV"] or "").strip():
+        sys.exit("[ERROR] 未配置 CONDA_ENV —— 请在 setting/<集群>.yaml 填 conda_env（phono3py 所在环境名）")
     subs = {"JOBNAME": "S51plot",
             "QOS": str(conf["SBATCH_QOS"] or "premium"),
             "NTASKS": str(int(conf["PLOT_CORES"] or 16)),
-            "CONDA_SH": str(conf["CONDA_SH"]
-                            or "/public/home/.../miniconda3/etc/"
-                               "profile.d/conda.sh"),
-            "CONDA_ENV": str(conf["CONDA_ENV"] or "atomate2_p_a"),
+            "CONDA_SH": str(conf["CONDA_SH"]),
+            "CONDA_ENV": str(conf["CONDA_ENV"]),
             # 作业的 cwd 是【步骤目录】，而本脚本在它的上一级（材料技能目录），
             # 所以必须写绝对路径——否则作业里 "can't open file" 直接失败。
             "PLOT_CMD": "python -u %s --work" % Path(__file__).resolve()}
