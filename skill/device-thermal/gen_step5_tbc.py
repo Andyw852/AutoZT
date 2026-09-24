@@ -145,47 +145,41 @@ def kappa_defaults(cwd, conf):
 
 def auto_interface_by_composition(coords, species):
     """按元素组分沿轴的突变位置定界面；无法判定返回 None。
-    适用于两岸元素组成不同的异质界面（Si/Ge、MoS2/SiO2 ...）。"""
+
+    用**原子窗**扫描，而不是固定 0.5 A bin + 正负 1 bin 平滑：当层间距 2~3.5 A 时，
+    固定 bin 之间会出现整段空 bin，平滑后梯度被抹平，界面找不到（旧实现的失效区，
+    恰好是二维材料/vdW 叠层的典型 3 A 层间距）。原子窗只看排序后连续的若干原子，
+    与层间距无关。返回下层末原子与上层首原子的中点（界面键中心）。
+    """
     uniq = sorted(set(species))
     if len(uniq) < 2:
         return None
     idx = {s: i for i, s in enumerate(uniq)}
     order = sorted(range(len(coords)), key=lambda i: coords[i])
-    m = max(1, len(order) // 4)
-    flo = sum(idx[species[i]] for i in order[:m]) / m
-    fhi = sum(idx[species[i]] for i in order[-m:]) / m
+    n = len(order)
+    m = max(1, n // 4)
+    c = [coords[i] for i in order]
+    sidx = [idx[species[i]] for i in order]
+    flo = sum(sidx[:m]) / m
+    fhi = sum(sidx[-m:]) / m
     if abs(fhi - flo) < 0.5:
         return None
-    lo, hi = coords[order[0]], coords[order[-1]]
-    width = 0.5
-    nb = max(2, int((hi - lo) / width) + 1)
-    sums = [0.0] * nb
-    cnts = [0] * nb
-    for i, cc in enumerate(coords):
-        b = min(nb - 1, int((cc - lo) / width))
-        sums[b] += idx[species[i]]
-        cnts[b] += 1
-    vals = [(sums[b] / cnts[b]) if cnts[b] else None for b in range(nb)]
-    sm = []
-    for b in range(nb):
-        win = [vals[j] for j in range(max(0, b - 1), min(nb, b + 2)) if vals[j] is not None]
-        sm.append(sum(win) / len(win) if win else None)
+    w = max(3, n // 20)               # 原子窗宽
+    if 2 * w >= n:
+        w = max(1, n // 4)
     best = None
-    for b in range(nb - 1):
-        if sm[b] is None or sm[b + 1] is None:
-            continue
-        j = abs(sm[b + 1] - sm[b])
+    for i in range(w, n - w + 1):
+        left = sum(sidx[i - w:i]) / w
+        right = sum(sidx[i:i + w]) / w
+        j = abs(right - left)
         if best is None or j > best[0]:
-            best = (j, b)
+            best = (j, i)
     if best is None or best[0] < 0.2 * abs(fhi - flo):
         return None
-    b0 = best[1]
-    split = lo + (b0 + 1) * width
-    below = [c for c in coords if c < split]
-    above = [c for c in coords if c >= split]
-    if below and above:
-        return 0.5 * (max(below) + min(above))   # 界面键中心
-    return lo + (b0 + 0.5) * width
+    i = best[1]
+    if i <= 0 or i >= n:
+        return None
+    return 0.5 * (c[i - 1] + c[i])    # 界面键中心
 
 
 def detect_interface(coords, vacuum_gap):
@@ -252,6 +246,9 @@ def main():
         else:
             cif = detect_interface(coord, vac_gap)
             auto = "gap"
+            print("[warn] 组分法判不出界面，回退最大间隙法（interface=%.2f A）：这只对"
+                  "含真空层、且两侧同元素的堆叠可靠；共格异质界面请显式给 "
+                  "TBC_INTERFACE_COORD。" % float(cif))
     else:
         auto = "explicit"
     cif = float(cif)
@@ -276,7 +273,12 @@ def main():
         sys.exit("[ERROR] 源/漏组为空（src=%d sink=%d）；请调 TBC_SOURCE/SINK_THICKNESS、"
                  "TBC_INTERFACE_COORD 或 TBC_SOURCE_SIDE" % (ns, nk))
 
-    pbc = (conf["TBC_PBC"] or "").strip() or (pbc_in if pbc_in else "T T T")
+    _pbc_explicit = (conf["TBC_PBC"] or "").strip()
+    if not _pbc_explicit and not pbc_in:
+        sys.exit("[ERROR] 结构文件没有 pbc、TBC_PBC 也未给：不能默认 T T T（沿传输轴"
+                 "周期会让源/漏隔着周期边界直接相邻，热流短路）。请显式设 "
+                 "TBC_PBC='T T F'（传输轴取 F）或写进结构第二行。")
+    pbc = _pbc_explicit or pbc_in
     # 硬伤修复：沿传输轴若为周期性边界，源(高端)与漏(低端)隔着周期边界直接相邻，
     # 大量热流不经过界面直接从源流到漏（短路）→ q 被高估、G 虚高；"源/漏热流自洽"
     # 判据抓不到它（能量依然守恒）。只有界面本身是真空层(auto=="gap")时才可能打断

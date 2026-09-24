@@ -114,4 +114,31 @@ class Regression(unittest.TestCase):
             self.assertEqual(line.split('=',1)[1].split('#')[0].strip(),'')
         self.assertEqual(k.meshes({'MESH_SCAN':'','MESH_OVERRIDE':'15 15 15'}, {}, '2d',0),['1 15 15'])
 
+    def test_gp_split_uses_wgp_and_grid_point_lists(self):
+        """GP_SPLIT 不是 --gp <i> <N>：必须 --wgp 列出不可约格点、分成 N 份
+        逐份 --gp="<编号列表>" --write-gamma，最后 --read-gamma 不带 --gp 汇总。"""
+        src = self.cwd/'step3_fc'; src.mkdir()
+        for f in ('fc2.hdf5','fc3.hdf5','POSCAR','phono3py_disp.yaml'):
+            (src/f).write_text('fixture')
+        (src/'klmlff_params.txt').write_text('DIM=3d\nMESH=5 5 5\n')
+        conf = {name: spec[0] for name,spec in k.SPEC.items()}
+        conf.update(GP_SPLIT=4, SOLVER='phono3py', MESH_SCAN='', MESH_OVERRIDE='5 5 5')
+        class Conf(dict): submit = {}
+        captured={}
+        with patch.object(k.stepconf,'load',return_value=Conf(conf)), \
+             patch.object(k.kc,'read_kl_params',return_value={'MESH':'5 5 5'}), \
+             patch.object(k.kc,'resolve_dim',return_value=('3d',None)), \
+             patch.object(k.kc,'resolve_submit',return_value='unused'), \
+             patch.object(k.kc,'write_submit',side_effect=lambda *a:captured.update(a[2])), \
+             patch.object(k.stepconf,'apply_submit'):
+            k.main()
+        cmd = captured['P3PY_CMD']
+        self.assertIn('--wgp', cmd)
+        self.assertIn('--gp="$_gps" --write-gamma', cmd)
+        self.assertIn('_n = 4', cmd)                 # GP_SPLIT 填进分块脚本
+        self.assertIn('[ -s gp_chunks.txt ]', cmd)   # 分块失败不静默往下汇总
+        self.assertNotIn('--gp 0 4', cmd)
+        read_line = next(l for l in cmd.splitlines() if '--read-gamma' in l)
+        self.assertNotIn('--gp', read_line)          # 汇总步不带 --gp
+
 if __name__ == '__main__': unittest.main()

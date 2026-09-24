@@ -1,0 +1,261 @@
+{
+  "ZT_REPORT_DONE": true,
+  "device_name": "device",
+  "geometry": {
+    "channel_material": "Si",
+    "oxide_material": "SiO2",
+    "substrate_material": "Si",
+    "contact_bc": "sink",
+    "L_channel_m": 2e-07,
+    "W_device_m": 1e-06,
+    "T_amb_K": 300.0
+  },
+  "electrical": {
+    "V_bias_V": 0.1,
+    "I_A": 0.0091903868436778,
+    "P_W": 0.00091903868436778,
+    "P_per_width_W_m": 919.03868436778,
+    "P_max_W": 0.022573043166572312,
+    "V_at_P_max_V": 0.5,
+    "R_electrical_ohm": 10.880934796427145,
+    "R_channel_ohm": 10.880934796427145,
+    "R_contact_ohm": 0.0,
+    "contact_share": 0.0,
+    "P_channel_W": 0.00091903868436778,
+    "P_contact_W": 0.0,
+    "sheet_conductance_S": 0.0183807736873556,
+    "sigma_S_m": 183807.73687355602,
+    "seebeck_V_K": 0.00012191704347034949
+  },
+  "thermal": {
+    "Q_joule_W_m2": 4595193421.838901,
+    "dT_peak_K": 2.5476226138696916,
+    "T_eff_final_K": 301.68564693363595,
+    "T_channel_mean_K": 301.6988629419408,
+    "T_channel_max_K": 302.5476226138697,
+    "kappa_lattice_W_mK": 88.8094130094791,
+    "kappa_e_W_mK": 1.3002054414265969,
+    "kappa_total_W_mK": 90.1096184509057,
+    "electronic_share": 0.0144291526673702,
+    "R_th_eff_m2K_per_W": 5.544103109483879e-10,
+    "tbc_W_m2K": 10000000.0,
+    "tbc_source": "generic vdW interface order-of-magnitude default"
+  },
+  "zt": {
+    "zt_material": 0.009146946318697726,
+    "doping_scan": {
+      "T_K": 300.0,
+      "kappa_lattice_W_mK": 88.8094130094791,
+      "note": "近似：kappa_L 取当前器件值、视为与掺杂无关；ZT 与电导口径无关",
+      "rows": [
+        {
+          "doping_cm3": -9.999999999999999e+20,
+          "seebeck_uV_K": -32.829284825789,
+          "sigma_S_m": 2548582.5326194772,
+          "PF_W_mK2": 0.00274676526014359,
+          "kappa_e_2D_W_mK": 16.85493346996254,
+          "kappa_total_W_mK": 105.66434647944163,
+          "zt_estimate": 0.007798558411596315
+        },
+        {
+          "doping_cm3": -9.999999999999998e+19,
+          "seebeck_uV_K": -193.13102570889026,
+          "sigma_S_m": 332046.3925108852,
+          "PF_W_mK2": 0.012385195328112691,
+          "kappa_e_2D_W_mK": 2.4899041990079427,
+          "kappa_total_W_mK": 91.29931720848704,
+          "zt_estimate": 0.04069645548333208
+        },
+        {
+          "doping_cm3": -9.999999999999998e+18,
+          "seebeck_uV_K": -390.37565093796593,
+          "sigma_S_m": 39558.92053309342,
+          "PF_W_mK2": 0.0060285084649567494,
+          "kappa_e_2D_W_mK": 0.3092031140182173,
+          "kappa_total_W_mK": 89.11861612349732,
+          "zt_estimate": 0.020293768217639275
+        },
+        {
+          "doping_cm3": -1e+18,
+          "seebeck_uV_K": -584.3810503619982,
+          "sigma_S_m": 7228.432609792977,
+          "PF_W_mK2": 0.0024685184972650393,
+          "kappa_e_2D_W_mK": 0.05088535466287103,
+          "kappa_total_W_mK": 88.86029836414197,
+          "zt_estimate": 0.008333930482033472
+        },
+        {
+          "doping_cm3": -9.999999999999998e+16,
+          "seebeck_uV_K": -752.7762998972332,
+          "sigma_S_m": 1314.706128660685,
+          "PF_W_mK2": 0.0007450073586524324,
+          "kappa_e_2D_W_mK": 0.008626286945710729,
+          "kappa_total_W_mK": 88.81803929642481,
+          "zt_estimate": 0.0025164055564186084
+        },
+        {
+          "doping_cm3": 9.999999999999998e+16,
+          "seebeck_uV_K": 701.885720784226,
+          "sigma_S_m": 2289.9179795937353,
+          "PF_W_mK2": 0.0011281133571180665,
+          "kappa_e_2D_W_mK": 0.01061869546793165,
+          "kappa_total_W_mK": 88.82003170494703,
+          "zt_estimate": 0.0038103342302293966
+        },
+        {
+          "doping_cm3": 1e+18,
+          "seebeck_uV_K": 522.1899511189176,
+          "sigma_S_m": 8176.620332400164,
+          "PF_W_mK2": 0.0022296200068189333,
+          "kappa_e_2D_W_mK": 0.0441970076408123,
+          "kappa_total_W_mK": 88.85361001711992,
+          "zt_estimate": 0.0075279552729124
+        },
+        {
+          "doping_cm3": 9.999999999999998e+18,
+          "seebeck_uV_K": 324.1981530057154,
+          "sigma_S_m": 33164.53171405326,
+          "PF_W_mK2": 0.0034857396136711797,
+          "kappa_e_2D_W_mK": 0.19908259611492707,
+          "kappa_total_W_mK": 89.00849560559404,
+          "zt_estimate": 0.011748562617382692
+        },
+        {
+          "doping_cm3": 9.999999999999998e+19,
+          "seebeck_uV_K": 121.22449467571221,
+          "sigma_S_m": 183943.82973357837,
+          "PF_W_mK2": 0.0027031241288226764,
+          "kappa_e_2D_W_mK": 1.2910975098843442,
+          "kappa_total_W_mK": 90.10051051936344,
+          "zt_estimate": 0.009000362306188319
+        },
+        {
+          "doping_cm3": 9.999999999999999e+20,
+          "seebeck_uV_K": 61.185093793270525,
+          "sigma_S_m": 1032965.6942643942,
+          "PF_W_mK2": 0.0038670265931830244,
+          "kappa_e_2D_W_mK": 7.167958900769456,
+          "kappa_total_W_mK": 95.97737191024856,
+          "zt_estimate": 0.012087307194030698
+        }
+      ],
+      "best_doping_cm3": -9.999999999999998e+19,
+      "best_zt_estimate": 0.04069645548333208
+    }
+  },
+  "limits": {
+    "dt_limit_K": 100.0,
+    "T_limit_K": 450.0,
+    "within_limit": true,
+    "V_max_safe_V": 0.5,
+    "note": "超限不代表算错：只是工作点超出热/可靠性预算；V_max_safe 是扫描内仍满足判据的最大偏压"
+  },
+  "consistency": {
+    "converged": true,
+    "iterations": 7,
+    "sor_iterations": 3068,
+    "sigma_convention": "override(step.conf SIGMA_T_CONV_M)",
+    "sigma_convention_source": "step.conf",
+    "kappa_source_mode": "auto"
+  },
+  "iv_sweep": [
+    {
+      "V_V": 0.0,
+      "I_A": 0.0,
+      "P_W": 0.0,
+      "P_per_width_W_m": 0.0,
+      "Q_joule_W_m2": 0.0,
+      "dT_peak_K": 1.7053025658242404e-13,
+      "T_eff_K": 300.0,
+      "T_channel_max_K": 300.00000000000017,
+      "sigma_S_m": 183943.82973357837,
+      "zt_material": 0.009000362306188319,
+      "converged": true,
+      "within_limit": true
+    },
+    {
+      "V_V": 0.1,
+      "I_A": 0.0091903868436778,
+      "P_W": 0.00091903868436778,
+      "P_per_width_W_m": 919.03868436778,
+      "Q_joule_W_m2": 4595193421.838901,
+      "dT_peak_K": 2.5476226138696916,
+      "T_eff_K": 301.68564693363595,
+      "T_channel_max_K": 302.5476226138697,
+      "sigma_S_m": 183807.73687355602,
+      "zt_material": 0.009146946318697726,
+      "converged": true,
+      "within_limit": true
+    },
+    {
+      "V_V": 0.2,
+      "I_A": 0.01833976245485246,
+      "P_W": 0.0036679524909704925,
+      "P_per_width_W_m": 3667.952490970493,
+      "Q_joule_W_m2": 18339762454.852463,
+      "dT_peak_K": 10.16466159960072,
+      "T_eff_K": 306.76530051003886,
+      "T_channel_max_K": 310.1646615996007,
+      "sigma_S_m": 183397.62454852462,
+      "zt_material": 0.009597719775775365,
+      "converged": true,
+      "within_limit": true
+    },
+    {
+      "V_V": 0.30000000000000004,
+      "I_A": 0.027407822936919582,
+      "P_W": 0.008222346881075876,
+      "P_per_width_W_m": 8222.346881075877,
+      "Q_joule_W_m2": 41111734405.37938,
+      "dT_peak_K": 22.774393250813205,
+      "T_eff_K": 315.17298269443916,
+      "T_channel_max_K": 322.7743932508132,
+      "sigma_S_m": 182718.81957946386,
+      "zt_material": 0.010374004027120163,
+      "converged": true,
+      "within_limit": true
+    },
+    {
+      "V_V": 0.4,
+      "I_A": 0.036355728795363126,
+      "P_W": 0.01454229151814525,
+      "P_per_width_W_m": 14542.29151814525,
+      "Q_joule_W_m2": 72711457590.72626,
+      "dT_peak_K": 40.251642921428015,
+      "T_eff_K": 326.81800302410875,
+      "T_channel_max_K": 340.251642921428,
+      "sigma_S_m": 181778.64397681566,
+      "zt_material": 0.011512429756353804,
+      "converged": true,
+      "within_limit": true
+    },
+    {
+      "V_V": 0.5,
+      "I_A": 0.045146086333144625,
+      "P_W": 0.022573043166572312,
+      "P_per_width_W_m": 22573.04316657231,
+      "Q_joule_W_m2": 112865215832.86157,
+      "dT_peak_K": 62.42458189527326,
+      "T_eff_K": 341.61059278358005,
+      "T_channel_max_K": 362.42458189527326,
+      "sigma_S_m": 180584.34533257852,
+      "zt_material": 0.013066918694922929,
+      "converged": true,
+      "within_limit": true
+    }
+  ],
+  "upstream": {
+    "kappa": {
+      "file": "~/software/AutoZT/tmp/dt_fix/zt_Si_3D/Si_3D/kl-dft-cpu/step6_kappa/kappa_summary.json",
+      "T_K": 300.0,
+      "tensor": [
+        88.80941300947907,
+        88.80941300947914,
+        88.80941300947914
+      ],
+      "kappa_key": "kappa_xx_yy_zz",
+      "note": "3D 材料，κ 可直接用（无 2D 归一化）"
+    },
+    "elec": "~/software/AutoZT/tmp/dt_fix/zt_Si_3D/Si_3D/device-zt/step1_elec/elec_props.json"
+  }
+}

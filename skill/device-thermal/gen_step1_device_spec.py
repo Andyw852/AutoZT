@@ -10,6 +10,7 @@ import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import device_common as DC  # noqa: E402
 import stepconf  # noqa: E402
 
 OUTDIR = "step1_device_spec"
@@ -67,6 +68,9 @@ def main():
         "sor_tol": conf["SOR_TOL"],
         "sor_maxit": conf["SOR_MAXIT"],
     }
+    # 早报错：Q_JOULE<0、L_CHANNEL<=0、CONTACT_BC 拼错都在这里挡下，
+    # 而不是等 S3 求解时崩或静默改语义。
+    DC.validate_device_inputs(spec)
     p = os.path.join(out, "device_spec.json")
     with open(p, "w", encoding="utf-8") as f:
         json.dump(spec, f, ensure_ascii=False, indent=2)

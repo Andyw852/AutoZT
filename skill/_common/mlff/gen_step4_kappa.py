@@ -65,9 +65,11 @@ SPEC = {
     "SHENGBTE_TOTAL_CORES":    (96,     "int"),
     "SHENGBTE_CORES_PER_NUMA": (24,     "int"),
     "SHENGBTE_NTASKS":         ("auto", "str"),
-    # phono3py 网格点并行（--gp/--write-gamma/--read-gamma）：>=2 时把 q 网格均分 N 份，
-    #   N 个 --write-gamma 作业并行算散射率，再 --read-gamma 收拢出 κ。单机多核白拿的加速，
-    #   BTE 网格加密后尤其值得（DFT 路线同样适用）。=0/1 关闭，走单作业。
+    # phono3py 网格点并行：>=2 时先 --wgp 写出 ir_grid_points.yaml，把其中**不可约格点
+    #   编号**均分成 N 份，每份用 --gp="编号列表" + --write-gamma 并行算散射率，最后用
+    #   --read-gamma（不带 --gp）汇总出 κ。单机多核白拿的加速，BTE 网格加密后尤其值得。
+    #   ★ --gp 接的是「网格点编号列表」，不是「第 i/n 份」：写成 --gp i N 只会算编号 i、N
+    #     两个格点（编号越界还会直接报错），κ/γ 静默不完整。=0/1 关闭，走单作业。
     "GP_SPLIT": (0, "int"),
     # MFP 累积 κ 诊断：加 --mfp 让 phono3py 写 kappa-mfp.hdf5，extract 把「累积 κ vs 声子
     #   自由程」与 50%/90% 累积处的 MFP 收进 kappa_summary.json —— 审稿人常问的热输运尺度。
@@ -453,6 +455,29 @@ def build_shengbte_submit(cwd, out, src, conf, params, dim, vac_axis=2,
     stepconf.apply_submit(out / "submit.sh", conf.submit)
     print("[DONE] %s：submit.sh 就绪（ShengBTE RTA），跑完写 kappa_summary.json" % OUTDIR)
 
+# 计算节点上用：--wgp 写出 ir_grid_points.yaml（不可约格点编号 + 权重）。phono3py 的
+#   --gp 接的是「网格点编号列表」而不是分块参数，所以先把编号均分成 <=GP_SPLIT 份、
+#   每份一行写进 gp_chunks.txt，shell 再逐行 --gp="<该行>" 起并行 --write-gamma；
+#   汇总步 --read-gamma 不带 --gp（不带 --gp 时读全部不可约格点的 gamma）。
+_GP_SPLIT_PY = r'''python - <<'PY'
+import re
+_text = open("ir_grid_points.yaml", encoding="utf-8").read()
+_gps = [int(x) for x in re.findall(r"-\s*grid_point:\s*(\d+)", _text)]
+_n = __GP_SPLIT__
+_groups = [[] for _ in range(max(1, _n))]
+for _k, _g in enumerate(_gps):
+    _groups[_k % _n].append(_g)
+_groups = [_g for _g in _groups if _g]
+if not _groups:
+    raise SystemExit("[gp] ir_grid_points.yaml 里没解析到不可约格点，--gp 无点可算")
+with open("gp_chunks.txt", "w", encoding="utf-8") as _f:
+    for _g in _groups:
+        _f.write(" ".join(str(x) for x in _g) + "\n")
+print("[gp] %d ir grid points -> %d chunk(s), sizes=%s"
+      % (len(_gps), len(_groups), [len(_g) for _g in _groups]))
+PY'''
+
+
 def main():
     cwd = Path.cwd()
     out = cwd / OUTDIR
@@ -558,8 +583,8 @@ def main():
 
     gp = int(conf["GP_SPLIT"] or 0)
     if gp >= 2:
-        print("[..] GP_SPLIT=%d：每套网格拆 %d 个 --write-gamma 并行作业，再 --read-gamma 收拢"
-              % (gp, gp))
+        print("[..] GP_SPLIT=%d：每套网格先 --wgp 列不可约格点，均分 %d 份并行 --write-gamma，"
+              "再 --read-gamma 汇总" % (gp, gp))
     mfp_on = bool(conf["MFP_CUMULATIVE"])
     if mfp_on:
         print("[..] MFP_CUMULATIVE：加 --mfp，extract 收累积 κ vs 自由程诊断")
@@ -572,24 +597,43 @@ def main():
             " --nac" if use_nac else " --nonac",
             " --mfp" if mfp_on else "")
 
+    def _wgp(m):
+        """--wgp 前缀：只要网格 + NAC 开关，写出 ir_grid_points.yaml（不可约格点编号）。"""
+        return '%s --mesh %s%s' % (yaml, m, " --nac" if use_nac else " --nonac")
+
     lines = []
-    for m in ms:
+    for mi, m in enumerate(ms):
         extra = str(conf["EXTRA_ARGS"] or "").strip()
+        extra_s = (" " + extra) if extra else ""
         if gp >= 2:
-            # 网格点并行：N 份 gamma 作业并行（各自日志），wait 齐后 --read-gamma 收拢。
-            # 单份失败会被 collect 的缺 gamma 文件暴露，整链 fail fast。
-            for i in range(gp):
-                lines.append('phono3py-load %s --gp %d %d --write-gamma%s '
-                             '> kappa_gp_%d_%d.log 2>&1 &'
-                             % (_base(m), i, gp, (" " + extra) if extra else "", i, gp))
-            lines.append('wait')
-            lines.append('echo "[gp] mesh %s: %d gamma chunks done, collecting..."' % (m, gp))
-            lines.append('phono3py-load %s --gp 0 %d --read-gamma%s 2>&1 '
-                         '| tee -a phono3py_kappa.log'
-                         % (_base(m), gp, (" " + extra) if extra else ""))
+            tag = "kappa_gp_%d" % mi      # 用网格序号命名日志，多套网格不互相覆盖
+            # ① --wgp 拿到不可约格点编号；失败即停（否则后面 --gp 无点可算）
+            lines.append('phono3py-load %s --wgp > %s_wgp.log 2>&1 '
+                         '|| { echo "[gp] mesh %s: --wgp 失败"; exit 1; }'
+                         % (_wgp(m), tag, m))
+            # ② 把编号均分成 <=GP_SPLIT 份，每份一行（--gp 接编号列表，不是第 i/n 份）
+            lines.append(_GP_SPLIT_PY.replace("__GP_SPLIT__", str(gp)))
+            lines.append('[ -s gp_chunks.txt ] || { echo "[gp] mesh %s: 格点分块文件缺失/为空，'
+                         '中止"; exit 1; }' % m)
+            # ③ 每份一个后台 --write-gamma；任一份失败就停，不用缺 γ 的数据汇总
+            lines.append('_pids=""; _n=0')
+            lines.append('while IFS= read -r _gps; do')
+            lines.append('  _n=$((_n+1))')
+            lines.append('  phono3py-load %s --gp="$_gps" --write-gamma%s '
+                         '> %s_$_n.log 2>&1 &' % (_base(m), extra_s, tag))
+            lines.append('  _pids="$_pids $!"')
+            lines.append('done < gp_chunks.txt')
+            lines.append('_fail=0; for _p in $_pids; do wait "$_p" || _fail=1; done')
+            lines.append('if [ $_fail -ne 0 ]; then echo "[gp] mesh %s: 有 --write-gamma '
+                         '分块失败，停止汇总（不用缺 γ 的结果出 κ）"; exit 1; fi' % m)
+            lines.append('rm -f gp_chunks.txt')
+            lines.append('echo "[gp] mesh %s: gamma chunks done, collecting..."' % m)
+            # ④ 汇总：--read-gamma 不带 --gp → 读全部不可约格点的 γ
+            lines.append('phono3py-load %s --read-gamma%s 2>&1 | tee -a phono3py_kappa.log'
+                         % (_base(m), extra_s))
         else:
             lines.append('phono3py-load %s %s 2>&1 | tee -a phono3py_kappa.log'
-                         % (_base(m), (" " + extra) if extra else ""))
+                         % (_base(m), extra_s))
     cmd = "\n".join(lines) + "\n" + build_extract(factor, meta)
 
     here = Path(__file__).resolve().parent

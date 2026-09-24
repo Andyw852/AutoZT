@@ -1,0 +1,142 @@
+{
+  "cell_c_A": 34.879,
+  "layer_normal": [
+    -0.0,
+    0.0,
+    1.0
+  ],
+  "layer_thickness": {
+    "source_file": "step3_uniform/CONTCAR",
+    "z_span_A": 3.1201,
+    "top_species": "S",
+    "top_vdw_radius_A": 1.8,
+    "bottom_species": "S",
+    "bottom_vdw_radius_A": 1.8,
+    "vdw_radii_source": "Bondi 1964 / Alvarez 2013",
+    "thickness_A": 6.7201,
+    "method": "vdw",
+    "thickness_used_A": 6.7201
+  },
+  "elastic_rescale_factor_c_over_t": 5.1903,
+  "elastic_constant_raw_GPa": [
+    [
+      41.319,
+      9.505,
+      0.064,
+      -0.0,
+      -0.0,
+      -0.0
+    ],
+    [
+      9.505,
+      41.319,
+      0.064,
+      -0.0,
+      0.0,
+      0.0
+    ],
+    [
+      0.064,
+      0.064,
+      0.357,
+      -0.0,
+      0.0,
+      -0.0
+    ],
+    [
+      -0.0,
+      -0.0,
+      -0.0,
+      0.473,
+      -0.0,
+      0.0
+    ],
+    [
+      -0.0,
+      0.0,
+      0.0,
+      -0.0,
+      0.473,
+      0.0
+    ],
+    [
+      -0.0,
+      0.0,
+      -0.0,
+      0.0,
+      0.0,
+      15.907
+    ]
+  ],
+  "elastic_constant_rescaled_GPa": null,
+  "elastic_constant_convention": "standard Voigt (XX YY ZZ YZ XZ XY)，已由 read_elastic 从 VASP 的 (XX YY ZZ XY YZ ZX) 重排",
+  "elastic_constant_note": "插件用原始 slab 值（= C_2D/c），不乘 c/t；c/t 只用于 σ/κ 的厚度归一化（见 elastic_rescale_factor_c_over_t）",
+  "eps_inf_slab": [
+    [
+      3.426845,
+      0.0,
+      0.0
+    ],
+    [
+      -0.0,
+      3.426845,
+      -0.0
+    ],
+    [
+      0.0,
+      -0.0,
+      1.171692
+    ]
+  ],
+  "eps_static_slab": [
+    [
+      3.462241,
+      0.0,
+      0.0
+    ],
+    [
+      -0.0,
+      3.462241,
+      -0.0
+    ],
+    [
+      0.0,
+      -0.0,
+      1.171861
+    ]
+  ],
+  "r_inf_delta_r_check": {
+    "available": true,
+    "eps_inf_inplane_mean": 3.4268,
+    "eps_static_inplane_mean": 3.4622,
+    "r_inf_A": 42.323,
+    "r_0_A": 42.9403,
+    "delta_r_A": 0.6173,
+    "delta_r_over_r_inf": 0.01459,
+    "definition": "r = c*(eps_slab,inplane - 1)/2 (Angstrom); Delta r = r0 - r_inf = c*(eps0-eps_inf)/2",
+    "anchors": {
+      "MoS2": {
+        "r_inf_A": 46.5,
+        "delta_r_A": 0.53
+      },
+      "h-BN": {
+        "r_inf_A": 7.64,
+        "delta_r_A": 2.84
+      }
+    }
+  },
+  "eps_env": 1.0,
+  "imp_distance_A": 0.0,
+  "pop_lo_dispersion": true,
+  "mechanisms_2d": [
+    "ADP",
+    "IMP",
+    "POP"
+  ],
+  "areal_density_factor_cm": 3.4879004000000003e-07,
+  "areal_density_note": "n_2D [cm^-2] = n_3D [cm^-3] x cell_c [cm]",
+  "free_carrier_screening": true,
+  "skill_rev": "2026-09-16-amset2d",
+  "plugin": "amset2d_plugin.py",
+  "limitation": "单一有效极性模、偶极近似（无四极矩、无面外偶极/Janus 耦合）；屏蔽用局域场 + 二维 Thomas–Fermi。模型级近似，适合筛选与趋势；要发表的绝对值建议用 EPW/Perturbo 对照。"
+}
