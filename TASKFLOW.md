@@ -349,7 +349,7 @@ autozt -tt kl-mlff-cpu -p X -j 2 conf --set submit.cpus_per_task=12  # MACE 类(
 | name | ssh 别名 | 硬件 | 调度 | 环境 | work_dir（集群默认） |
 |---|---|---|---|---|---|
 | `jzzn` | `jzzn` | CPU 集群（cpu192 分区） | 真 SLURM | VASP 6.4.x；MACE 走 venv `~/venvs/mace_cpu`（torch 2.7.1+cpu） | `/public/home/.../Fullerene_Network/work` |
-| `a800` | `A800` | 4 节点 × 8×A800-SXM4-80GB，每节点 128 CPU | 真 SLURM（分区 a800，GRES gpu:a800） | VASP 6.4.3 GPU 版；conda `mace`（mace 0.3.16+torch cu128+phono3py+symfc+pheasy 单环境） | `/fs0/home/wangcch/work`（/fs0 已 97% 满，注意） |
+| `a800` | `A800` | 4 节点 × 8×A800-SXM4-80GB，每节点 128 CPU | 真 SLURM（分区 a800，GRES gpu:a800） | VASP 6.4.3 GPU 版；conda `mace`（mace 0.3.16+torch cu128+phono3py+symfc+pheasy 单环境） | `~/work`（/fs0 已 97% 满，注意） |
 | `3090` | `user_3090` | 8×RTX3090 | 真 SLURM 24.05.8（分区 cpu192 默认 + gpu 6 卡） | conda `mace-gpu`；VASP 6.6.0 GPU 版（OpenACC，`~/software/vasp.6.6.0/bin/{vasp_std,gam,ncl}`，NVIDIA HPC-SDK 24.11 环境） | `/home/user_3090/AutoZT/work` |
 
 - **切换**：`autozt -p qHPC20,qHPC24 hpc a800`（材料级）/ `autozt -tt elastic-dft-cpu -p qHPC20 hpc a800`（技能级）。只动 `-p` 指定的项目；只影响之后提交的作业。

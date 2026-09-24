@@ -55,8 +55,8 @@ VACUUM_KZ_MIN = 1
 #     于是本脚本对任何新材料都直接失败 —— 全网格对照要用 S3 的旧网格才暴露出来。）
 UNIFORM_NMAX = 20000
 # ---- [KALIGN-2026-09-23] 3D 高对称点对齐（2D 恒为 6 的倍数，不受此键影响）----
-#   off（默认，不动存量 3D 项目）| even（菱面体/立方/四方）| 6（六方 3D）
-KALIGN_3D = "off"
+#   even（默认，立方/四方/菱面体带边常落 L/X 偶数点）| off（不动存量 3D 项目）| 6（六方 3D）
+KALIGN_3D = "even"
 SPEC = {"VACUUM_KZ_MIN": (VACUUM_KZ_MIN, "int"),
         # 密网格判据与成本护栏也可由 step.conf 覆盖（小胞/大 |b| 体系要放宽 DK_MAX）：
         #   DK_MAX = None -> 按维度取 DK_MAX_2D / DK_MAX_3D

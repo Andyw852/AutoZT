@@ -24,6 +24,7 @@
 """
 import glob
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -352,6 +353,231 @@ def cmd_collect_pheasy(cfg):
         except Exception as e:
             print("[WARN] pheasy fc 复读/导出 ShengBTE 失败（phono3py 路不受影响）：%s" % e)
     print("[DONE] collect_pheasy 完成")
+
+
+# ==========================================================================
+# scan_pheasy：三阶截断扫描（S4 记的候选逐个拟合 + 帧 bootstrap 逐壳层稳定性）
+# ★ 这里的 pheasy 命令行与 templates/step5_fc/submit_fit_pheasy.tpl 是同一套语义；
+#   改模板的参数拼装（FIT_FLAGS/-c/-d/-f）时必须同步改 _pheasy_fit_flag_list。
+# ==========================================================================
+def _pheasy_fit_flag_list(cfg):
+    order = int(cfg.get("PHEASY_ENABLE_FC") or 3)
+    method = str(cfg.get("PHEASY_FIT_METHOD") or "LASSO").upper()
+    flags = ["--full_ifc", "-l", ("LASSO" if method == "RFE" else method), "--hdf5"]
+    if method == "LASSO":
+        mm = "0" if order == 2 else "-5"
+        flags += ["--mu_min", "-8", "--mu_max", mm, "--std", "--alpha_auto",
+                  "--alpha_decades", "4.0", "--max_iter", "100000", "--cv", "5",
+                  "--nmu", "40", "--tol", "0.00001"]
+    elif method == "RFE":
+        flags += ["--mu_min", "-8", "--mu_max", "-5", "--max_iter", "1000",
+                  "--cv", "5", "--nmu", "5", "--tol", "0.001"]
+    return flags
+
+
+def _pheasy_cmd(cfg, stage, cutoff, ndata):
+    dim = str(cfg.get("SUPERCELL") or "1 1 1")
+    order = int(cfg.get("PHEASY_ENABLE_FC") or 3)
+    eps = str(cfg.get("NULL_SPACE_EPS", 0.001))
+    base = [str(os.environ.get("PHEASY_BIN") or "pheasy"), "--dim", dim,
+            "-w", str(order)]
+    c3 = [] if cutoff is None else ["--c3", "%.4f" % float(cutoff)]
+    if stage == "s":
+        return base + ["-s"] + c3 + ["--eps", eps]
+    if stage == "c":
+        r = str(cfg.get("PHEASY_RASR") or "none")
+        rasr = [] if r in ("", "none", "None") else ["--rasr", r]
+        return base + ["-c"] + c3 + ["--eps", eps] + rasr
+    if stage == "d":
+        return base + ["-d"] + c3 + ["--ndata", str(ndata), "--disp_file",
+                       "--eps", eps]
+    return base + ["-f"] + c3 + ["--ndata", str(ndata), "--eps", eps] \
+        + _pheasy_fit_flag_list(cfg)
+
+
+def _run_pheasy(args, log, env):
+    with open(log, "w", encoding="utf-8") as fh:
+        return subprocess.run(args, stdout=fh, stderr=subprocess.STDOUT,
+                              env=env).returncode
+
+
+def _read_last(pattern, path):
+    try:
+        t = Path(path).read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        return None
+    m = re.findall(pattern, t)
+    return m[-1] if m else None
+
+
+def cmd_scan_pheasy(cfg):
+    """对 S4 记的候选截断逐个拟合；每档做 B 次帧 bootstrap，按壳层统计 |Φ³| 的
+    σ/|mean|（判据②），并从 bootstrap 相对误差分布估 CV 标准误（判据①）。
+    nominal 截断的 fc2/fc3 与 pheasy 日志留在 cwd（供模板后续 collect/post）。
+    """
+    import pickle
+    import numpy as np
+    from ase.io import read as _ase_read
+    from phono3py.file_IO import read_fc3_from_hdf5
+    import kl_common as kc
+
+    out = Path.cwd()
+    cands = [float(x) for x in (cfg.get("CUT3_CANDIDATES") or [])]
+    if not cands:
+        print("[..] CUT3_CANDIDATES 为空，跳过扫描")
+        return
+    boot = int(cfg.get("CUT3_BOOTSTRAP") or 0)
+    thr = float(cfg.get("CUT3_STABILITY_THR") or 0.3)
+    with open("disp_matrix.pkl", "rb") as fh:
+        d0 = np.asarray(pickle.load(fh))
+    with open("force_matrix.pkl", "rb") as fh:
+        f0 = np.asarray(pickle.load(fh))
+    ndata = len(d0)
+    natom = None
+    if (out / "natom_super.txt").is_file():
+        try:
+            natom = int((out / "natom_super.txt").read_text().strip())
+        except ValueError:
+            natom = None
+    sc = _ase_read("SPOSCAR")
+    cell = np.asarray(sc.cell)
+    frac = np.asarray(sc.get_scaled_positions())
+    if natom is None:
+        natom = len(sc)          # natom_super.txt 缺失时用 SPOSCAR 兜底
+        print("[WARN] 缺 natom_super.txt，用 SPOSCAR 原子数 %d 兜底" % natom)
+    shell_dist, tri = kc.fc3_shell_index(cell, frac, tol=0.05,
+                                         r_max=max(cands) + 1.0)
+    bins = kc.fc3_shell_bins(tri, len(shell_dist))
+    env = dict(os.environ)
+    if str(cfg.get("PHEASY_FIT_METHOD") or "").upper() == "RFE":
+        env["PHEASY_USE_RFE"] = "1"
+    env.setdefault("PHEASY_LASSO_DEBIAS", "1")
+    _nb = str(int(cfg.get("NCPU_FIT_BLAS") or 8))
+    env["OPENBLAS_NUM_THREADS"] = _nb
+    env["OMP_NUM_THREADS"] = _nb
+    env["MKL_NUM_THREADS"] = _nb
+    rng = np.random.default_rng(20250924)
+
+    def _dump_scan():
+        (out / "cutoff_scan.json").write_text(json.dumps(
+            {"candidates": cands, "bootstrap": boot, "stability_thr": thr,
+             "cv_se_source": "bootstrap 相对误差分布的标准差（pheasy 不打印 fold-SE）",
+             "records": records,
+             "note": "S5 只出判据①②；判据③(κ)与最终选截断在 S6 的 cutoff_selection 里。"},
+            ensure_ascii=False, indent=2), encoding="utf-8")
+
+    records = []
+    for c in cands:
+        tag = ("%.2f" % c).replace(".", "p")
+        cdir = out / P3PY_SUB / ("cut3_%s" % tag)
+        cdir.mkdir(parents=True, exist_ok=True)
+        clog = "pheasy_c_%s.log" % tag
+        flog = "pheasy_f_%s.log" % tag
+        if _run_pheasy(_pheasy_cmd(cfg, "s", c, ndata),
+                       "pheasy_s_%s.log" % tag, env) != 0:
+            sys.exit("[ERROR] pheasy -s (c3=%.2f) 失败，见 pheasy_s_%s.log" % (c, tag))
+        if _run_pheasy(_pheasy_cmd(cfg, "c", c, ndata), clog, env) != 0:
+            sys.exit("[ERROR] pheasy -c (c3=%.2f) 失败，见 %s" % (c, clog))
+        free = _read_last(r"Total number of free IFCs:\s*(\d+)", clog)
+        free = int(free) if free is not None else None
+        ratio = (ndata * 3 * natom / free) if (free and natom) else None
+        rec = {"cut": c, "free_ifcs": free, "natom_super": natom, "ndata": ndata,
+               "ratio": ratio, "cv_err": None, "cv_se": None,
+               "cv_se_source": None, "shells": shell_dist, "shell_stats": [],
+               "stable_upper_cut": None,
+               "fc_dir": str(cdir.relative_to(out))}
+        if ratio is not None and ratio < 3.0:
+            rec["insufficient"] = True
+            print("[WARN] c3=%.2f Å 方程/参数=%.2f < 3，标记 insufficient（补帧后重跑）"
+                  % (c, ratio))
+            records.append(rec)
+            _dump_scan()
+            continue
+        if _run_pheasy(_pheasy_cmd(cfg, "d", c, ndata),
+                       "pheasy_d_%s.log" % tag, env) != 0:
+            sys.exit("[ERROR] pheasy -d (c3=%.2f) 失败" % c)
+        if _run_pheasy(_pheasy_cmd(cfg, "f", c, ndata), flog, env) != 0:
+            sys.exit("[ERROR] pheasy -f (c3=%.2f) 失败，见 %s" % (c, flog))
+        _re0 = _read_last(r"Relative error:\s*([\d.eE+-]+)", flog)
+        rec["cv_err"] = float(_re0) if _re0 is not None else None
+        shutil.copy("fc2.hdf5", cdir / "fc2.hdf5")
+        if (out / "fc3.hdf5").is_file():
+            shutil.copy("fc3.hdf5", cdir / "fc3.hdf5")
+        rels = [rec["cv_err"]] if rec["cv_err"] is not None else []
+        per_means = []
+        for b in range(boot):
+            idx = rng.integers(0, ndata, size=ndata)
+            with open("disp_matrix.pkl", "wb") as fh:
+                pickle.dump(d0[idx], fh)
+            with open("force_matrix.pkl", "wb") as fh:
+                pickle.dump(f0[idx], fh)
+            ok = True
+            for stage in ("d", "f"):
+                _lg = ("pheasy_d_%s_b%02d.log" % (tag, b) if stage == "d"
+                       else "pheasy_f_%s_b%02d.log" % (tag, b))
+                if _run_pheasy(_pheasy_cmd(cfg, stage, c, ndata), _lg, env) != 0:
+                    print("[WARN] c3=%.2f bootstrap #%d -%s 失败，跳过该样本"
+                          % (c, b, stage))
+                    ok = False
+                    break
+            if not ok:
+                continue
+            rr = _read_last(r"Relative error:\s*([\d.eE+-]+)",
+                            "pheasy_f_%s_b%02d.log" % (tag, b))
+            if rr is not None:
+                rels.append(float(rr))
+            try:
+                per_means.append(kc.fc3_shell_means(
+                    read_fc3_from_hdf5(filename="fc3.hdf5"), bins))
+            except Exception as e:                       # noqa: BLE001
+                print("[WARN] 读 bootstrap fc3 失败：%s" % e)
+        with open("disp_matrix.pkl", "wb") as fh:
+            pickle.dump(d0, fh)
+        with open("force_matrix.pkl", "wb") as fh:
+            pickle.dump(f0, fh)
+        if per_means:
+            stats, upper = kc.fc3_shell_stats_from_means(
+                shell_dist, per_means, stability_thr=thr)
+            rec["shell_stats"] = stats
+            rec["stable_upper_cut"] = upper
+        if len(rels) >= 2:
+            rec["cv_se"] = float(np.std(rels, ddof=1))
+            rec["cv_se_source"] = "bootstrap"
+        elif rec["cv_err"] is not None:
+            rec["cv_se"] = 0.0
+            rec["cv_se_source"] = "none"
+        records.append(rec)
+        print("[..] c3=%.2f Å: 方程/参数=%s CV_err=%s CV_se=%s 稳定性上限=%s"
+              % (c, ("%.2f" % ratio) if ratio else "?", rec["cv_err"],
+                 ("%.3g" % rec["cv_se"]) if rec["cv_se"] is not None else "?",
+                 rec["stable_upper_cut"]))
+
+    # nominal 截断：PHEASY_C3_CUTOFF 若在候选里，否则第一个可用档
+    try:
+        want = float(str(cfg.get("PHEASY_C3_CUTOFF")))
+    except (TypeError, ValueError):
+        want = None
+    usable = [r for r in records if not r.get("insufficient")]
+    if not usable:
+        _dump_scan()
+        sys.exit("[ERROR] 所有候选截断都数据量不足（方程/参数 < 3）：当前 %d 帧。\n"
+                 "        请加大 S4 帧数（OVERSAMPLE/最大候选截断）后重跑 S4/S5。详见 cutoff_scan.json"
+                 % ndata)
+    nom = next((r for r in usable
+                if want is not None and abs(r["cut"] - want) < 1e-9), None)
+    if nom is None and usable:
+        nom = usable[0]
+    if nom is not None:
+        tag = ("%.2f" % nom["cut"]).replace(".", "p")
+        for fn in ("fc2.hdf5", "fc3.hdf5"):
+            src = out / P3PY_SUB / ("cut3_%s" % tag) / fn
+            if src.is_file():
+                shutil.copy(src, fn)
+        shutil.copy("pheasy_c_%s.log" % tag, "pheasy_c.log")
+        shutil.copy("pheasy_f_%s.log" % tag, "pheasy_f.log")
+        print("[..] nominal 截断 = %.2f Å（后续 collect/post 用它）" % nom["cut"])
+    _dump_scan()
+    print("[DONE] scan_pheasy：cutoff_scan.json 就绪（%d 档）" % len(records))
 
 
 # ==========================================================================
@@ -868,7 +1094,8 @@ def cmd_post(cfg):
 
 # ==========================================================================
 CMDS = {"prep": cmd_prep, "fit_phono3py": cmd_fit_phono3py,
-        "collect_pheasy": cmd_collect_pheasy, "post": cmd_post}
+        "collect_pheasy": cmd_collect_pheasy, "scan_pheasy": cmd_scan_pheasy,
+        "post": cmd_post}
 
 
 def main():

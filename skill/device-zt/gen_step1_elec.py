@@ -23,7 +23,7 @@ SPEC = {
     "DEVICE_NAME": ("device", "str"),
     "KE_UPSTREAM_SKILL": ("ke-dft-cpu", "str"),
     "KE_UPSTREAM_STEP": ("", "str"),        # 空 = 自动依次找 step8_amset / step8.4_amset2d / step8.1_boltztrap
-    "DOPING_CM3": (1e20, "float"),          # signed；负= p 型。按就近选 transport 里的掺杂曲线
+    "DOPING_CM3": (1e20, "float"),          # signed；负=n型电子、正=p型空穴（与 ke/step8_amset 一致）
     "T_REF": (300.0, "float"),              # 参考温度（仅用于报告；自洽用 T_eff）
     "INPLANE_MODE": ("avg", "str"),         # avg=(xx+yy)/2 | xx
     "SIGMA_T_CONV_M": (None, "float"),      # 可选：显式覆盖面电导口径厚度(m)。空=自动按胞口径

@@ -68,8 +68,8 @@ MATCH_MESH_OF = None
 #   ★ 定义必须排在 SPEC 之前（SPEC 要引用它）。
 UNIFORM_NMAX = 20000
 # ---- [KALIGN-2026-09-23] 3D 高对称点对齐（2D 恒为 6 的倍数，不受此键影响）----
-#   off（默认，不动存量 3D 项目）| even（菱面体/立方/四方）| 6（六方 3D）
-KALIGN_3D = "off"
+#   even（默认，立方/四方/菱面体带边常落 L/X 偶数点）| off（不动存量 3D 项目）| 6（六方 3D）
+KALIGN_3D = "even"
 SPEC = {"VACUUM_KZ_MIN": (VACUUM_KZ_MIN, "int"),
         # 与 step3_uniform 同一套键（报错信息一直说"可在项目里覆盖 DK_MAX"，
         # 但此前本脚本只认 VACUUM_KZ_MIN，写了也不生效 —— 2026-09-18 补齐）

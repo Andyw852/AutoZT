@@ -72,6 +72,353 @@ def resolve_dim(poscar, dimension="auto", vacuum_min=VACUUM_MIN):
     return dim, (axis if dim == "2d" else None)
 
 
+
+# ==========================================================================
+# 三阶截断候选（壳层中点）与截断自动选择
+# --------------------------------------------------------------------------
+# 2026-09-24 user 定的流程：截断取在【相邻壳层的中点】，不落在壳层距离上；候选逐个过
+# 三判据（① CV 误差 1-SE、② 逐壳层 Φ³ 的 bootstrap 稳定性、③ κ 随截断到平台），
+# 取同时满足的最小截断。本段只放【纯算法】（不依赖 phono3py），S4 生成候选、S5 算稳定性、
+# S6 选截断都调它，便于单测。
+# ==========================================================================
+def _min_image_shifts(cell, r_max):
+    """覆盖 r_max 所需的周期镜像平移（每方向 -k..k）。纯标准库回退用。"""
+    import itertools
+    vol = abs(_det3(cell))
+    ks = []
+    for i in range(3):
+        j, k = (i + 1) % 3, (i + 2) % 3
+        area = _norm(_cross(cell[j], cell[k]))
+        perp = vol / area if area > 1e-12 else r_max
+        ks.append(max(1, int(math.ceil(r_max / max(perp, 1e-6)))))
+    out = [(0, 0, 0)]
+    for s in itertools.product(*[range(-k, k + 1) for k in ks]):
+        if any(s):
+            out.append(tuple(s))
+    return out
+
+
+def neighbor_shells(poscar, r_max=7.0, tol=0.05, max_atoms=600):
+    """把 r_max 内的原子对距离聚类成壳层，返回 (shell_distances, n_atoms)。
+
+    优先 ASE neighbor_list（自动处理周期镜像）；没有 ase/失败时回退纯标准库最小镜像。
+    tol 内的距离并成一个壳层 —— WS₂ 第 8/9 壳层只差 0.02 Å，必须并成一个，否则候选
+    截断的中点会落在 6.34 与 6.36 之间（结构一畸变壳层就跨过截断，κ 无规律跳动）。
+    """
+    ds, natom = [], 0
+    try:
+        from ase.io import read as _ase_read
+        from ase.neighborlist import neighbor_list as _nl
+        atoms = _ase_read(str(poscar))
+        if 0 < len(atoms) <= max_atoms:
+            _i, _j, _d = _nl("ijd", atoms, r_max)
+            ds = [float(x) for x in _d]
+            natom = len(atoms)
+    except Exception:                                # noqa: BLE001
+        ds = []
+    if not ds:
+        lat, frac = read_poscar_cell_frac(poscar)
+        natom = len(frac)
+        if natom > max_atoms:
+            raise RuntimeError("原胞 %d 原子 > %d，壳层枚举过大" % (natom, max_atoms))
+        shifts = _min_image_shifts(lat, r_max)
+        for i in range(natom):
+            ri = frac[i]
+            for j in range(natom):
+                for s in shifts:
+                    p = [frac[j][k] + s[k] - ri[k] for k in range(3)]
+                    cart = [sum(p[k] * lat[k][m] for k in range(3)) for m in range(3)]
+                    d = math.sqrt(sum(x * x for x in cart))
+                    if 1e-6 < d < r_max:
+                        ds.append(d)
+    ds.sort()
+    shells = []
+    for x in ds:
+        if not shells or x - shells[-1][-1] > tol:
+            shells.append([x])
+        else:
+            shells[-1].append(x)
+    return [round(sum(s) / len(s), 4) for s in shells], natom
+
+
+def cut3_candidates(poscar, r_max=7.0, tol=0.05, min_shells=2, min_gap=0.05,
+                    max_candidates=12):
+    """候选三阶截断 = 相邻壳层的中点（要求截止至少含 min_shells 个壳层）。
+
+    - min_shells=2：跳过"只含最近邻壳层"的最小中点（WS₂ 的 2.8 就不要，从 3.6 起）。
+    - 相邻壳层间距 < min_gap 的中点跳过 —— 防截断落在夹缝里（WS₂ 6.34/6.36）。
+    - 升序去重；候选数 > max_candidates 时只保留最小的一批（控制 S5 拟合次数）。
+    返回 (candidates, shells, note)。
+    """
+    shells, natom = neighbor_shells(poscar, r_max=r_max, tol=tol)
+    cands = []
+    for k in range(int(min_shells), len(shells)):
+        a, b = shells[k - 1], shells[k]
+        if (b - a) < float(min_gap):
+            continue
+        c = round((a + b) / 2.0, 2)
+        if not cands or abs(c - cands[-1]) > 1e-9:
+            cands.append(c)
+    note = "壳层 %s（%d 个，最近邻 %.2f Å）→ 候选截断 %s" % (
+        ["%.2f" % x for x in shells], len(shells),
+        (shells[0] if shells else float("nan")), cands)
+    if len(cands) > int(max_candidates):
+        note += "；候选 %d 个 > %d，只保留最小的 %d 个" % (
+            len(cands), int(max_candidates), int(max_candidates))
+        cands = cands[:int(max_candidates)]
+    return cands, shells, note
+
+
+def resolve_cut3_candidates(poscar, spec, cut3_max=7.0, tol=0.05, min_shells=2,
+                            min_gap=0.05, max_candidates=12):
+    """解析 step.conf 的 CUT3_CANDIDATES：auto | off | "3.6 4.2 4.8"。
+
+    返回 (candidates, shells, note)：off/none/空 → ([], [], "...")；auto → 枚举；
+    显式列表 → 原样（升序数值，仍返回空 shells）。
+    """
+    s = "auto" if spec is None else str(spec).strip()   # 显式清空("")=关闭，不静默变 auto
+    low = s.lower()
+    if low in ("", "off", "none", "false", "no", "0"):
+        return [], [], "CUT3_CANDIDATES=%s：不做截断扫描（单截断）" % (s or "off")
+    if low == "auto":
+        cands, shells, note = cut3_candidates(
+            poscar, r_max=cut3_max, tol=tol, min_shells=min_shells,
+            min_gap=min_gap, max_candidates=max_candidates)
+        return cands, shells, "auto：" + note
+    vals = []
+    for tok in s.replace(",", " ").replace(";", " ").split():
+        try:
+            vals.append(round(float(tok), 2))
+        except ValueError:
+            sys.exit("[ERROR] CUT3_CANDIDATES=%r 非 auto/off 也不是数字列表" % s)
+    vals = sorted(set(vals))
+    return vals, [], "显式列表：候选截断 %s" % vals
+
+
+def select_cutoff(records, kappa_tol_pct=5.0, se_mult=1.0, stability_thr=0.3,
+                  pick="smallest"):
+    """按三判据自动选最小可行截断。records 是每个候选截断一条 dict：
+
+        cut               截断 (Å)
+        ratio             方程数/参数数（<3 = 数据不足 → 不参与）
+        cv_err            交叉验证误差（判据①）
+        cv_se             cv_err 的标准误（1-SE 规则用；缺省 0）
+        stable_upper_cut  数据能确定的最大截断 (Å)：只用 σ/|mean| < stability_thr 的壳层
+                          （判据②；该截断 ≤ 它才算"数据能确定"）
+        kappa             300 K 面内 κ
+        kappa_err         κ 的 bootstrap 误差棒（判据③；缺省 0）
+
+    pick：三判据都满足的截断有多个时，"smallest"（默认，总则：取最小）或
+          "largest"（Mg8C120 口径：平的就取能确定范围里最大的那个）。
+
+    返回 (chosen_cut, report)：chosen_cut 为 None 表示无可用截断。report 给出
+    每个截断是否 data_ok / stable_ok / cv_ok / plateau_ok 与最终判定依据。
+    """
+    recs = []
+    for r in records:
+        d = dict(r)
+        d["cut"] = float(d.get("cut"))
+        d["ratio"] = float(d.get("ratio") or 0.0)
+        d["cv_err"] = (None if d.get("cv_err") is None else float(d["cv_err"]))
+        d["cv_se"] = float(d.get("cv_se") or 0.0)
+        d["stable_upper_cut"] = (None if d.get("stable_upper_cut") is None
+                                 else float(d["stable_upper_cut"]))
+        d["kappa"] = (None if d.get("kappa") is None else float(d["kappa"]))
+        d["kappa_err"] = float(d.get("kappa_err") or 0.0)
+        recs.append(d)
+    recs.sort(key=lambda r: r["cut"])
+    for r in recs:
+        r["data_ok"] = r["ratio"] >= 3.0
+        r["stable_ok"] = (r["stable_upper_cut"] is not None
+                          and r["cut"] <= r["stable_upper_cut"] + 1e-9)
+    usable = [r for r in recs if r["data_ok"] and r["stable_ok"]]
+
+    # 判据①：CV 误差在 min+se_mult*SE 之内的截断集合
+    cv_ok = set()
+    _cv = [r["cv_err"] for r in usable if r["cv_err"] is not None]
+    if _cv and len(_cv) >= 1:
+        _cmin = min(_cv)
+        _rec = next(r for r in usable if r["cv_err"] == _cmin)
+        _thr = _cmin + float(se_mult) * float(_rec["cv_se"])
+        cv_ok = {r["cut"] for r in usable
+                 if r["cv_err"] is not None and r["cv_err"] <= _thr + 1e-15}
+    else:
+        # 没有 CV 数据：判据①视为全部可用截断都通过（只靠②③，并在报告中标注）
+        cv_ok = {r["cut"] for r in usable}
+
+    # 判据③：从某截断起到最外侧，相邻 Δκ ≤ max(5%·|κ|, 两误差的平方和根) 视为平台。
+    # ★ 最外侧可用截断**没有更大的可比对象**，不算"平台证据" —— 那正是 user 说的
+    #   "κ 到能确定的边界还在变"，必须判 not_converged 而不是假称收敛。
+    plateau = set()
+    for i, r in enumerate(usable):
+        pairs = list(zip(usable[i:], usable[i + 1:]))
+        if not pairs:
+            continue
+        ok = True
+        for a, b in pairs:
+            ka, kb = a["kappa"], b["kappa"]
+            if ka is None or kb is None:
+                continue
+            tol = max(float(kappa_tol_pct) / 100.0 * abs(ka),
+                      math.hypot(a["kappa_err"], b["kappa_err"]))
+            if abs(kb - ka) > tol + 1e-15:
+                ok = False
+                break
+        if ok:
+            plateau.add(r["cut"])
+
+    for r in recs:
+        r["cv_ok"] = r["cut"] in cv_ok
+        r["plateau_ok"] = r["cut"] in plateau
+
+    inter = sorted(cv_ok & plateau)
+    if inter:
+        if str(pick).lower() == "largest":
+            # Mg8C120 口径：κ 平就取【能确定范围内】最大的截断 —— 条件是"倒数第二个
+            # 可用截断也在平台上"（说明趋势一路平到能确定的边界），否则退回 plateau 起点。
+            if len(usable) >= 2 and usable[-2]["cut"] in plateau:
+                chosen = usable[-1]["cut"]
+            else:
+                chosen = inter[-1]
+        else:
+            chosen = inter[0]      # 总则：取满足三判据的最小截断
+        status = "ok"
+    elif usable:
+        chosen, status = usable[-1]["cut"], "not_converged"
+    else:
+        chosen, status = None, "no_usable_cutoff"
+    report = {
+        "status": status,
+        "criteria": {"cv_1se": "cv_err <= min(cv_err) + %g*SE" % float(se_mult),
+                     "stability": "sigma/|mean| < %g" % float(stability_thr),
+                     "plateau": "相邻 Δκ <= max(%g%%, sqrt(err_i^2+err_j^2))"
+                                % float(kappa_tol_pct)},
+        "records": [
+            {"cut": r["cut"], "ratio": r["ratio"], "cv_err": r["cv_err"],
+             "cv_se": r["cv_se"], "stable_upper_cut": r["stable_upper_cut"],
+             "kappa": r["kappa"], "kappa_err": r["kappa_err"],
+             "data_ok": r["data_ok"], "stable_ok": r["stable_ok"],
+             "cv_ok": r["cv_ok"], "plateau_ok": r["plateau_ok"]}
+            for r in recs],
+        "chosen_cut": chosen,
+        "pick": str(pick).lower(),
+        "reason": ("三判据同时满足的最小截断 = %.2f Å" % chosen if status == "ok"
+                   else ("κ 在数据能确定的范围内（≤ %.2f Å）仍未到平台，"
+                         "报能确定范围内最大截断的 κ；更长程三阶项当前数据无法确定"
+                         % (usable[-1]["cut"] if usable else float("nan"))
+                         if status == "not_converged"
+                         else "没有数据量/稳定性达标的截断：需补帧或加大位移")),
+    }
+    return chosen, report
+
+def fc3_shell_index(cell, frac, tol=0.05, r_max=None):
+    """构造壳层索引：返回 (shell_dist, tri)。
+
+    shell_dist = 超胞原子对距离聚类后的壳层代表距离（升序，Å）。
+    tri[i,j,k] = 三体 (i,j,k) 所属壳层索引（= 三条原子对壳层里的最大者；自身对记 -1，
+    含重复索引的 (i,i,j) 取 (i,j) 的壳层；只有 (i,i,i) 才为 -1）。
+    """
+    import numpy as np
+    cell = np.asarray(cell, dtype=float)
+    frac = np.asarray(frac, dtype=float)
+    n = len(frac)
+    if r_max is None:
+        r_max = 12.0
+    shifts = np.array(_min_image_shifts(cell, max(1.0, min(float(r_max), 20.0))),
+                      dtype=float)
+    D = np.full((n, n), np.inf)
+    for shift in shifts:
+        df = frac[None, :, :] + shift[None, None, :] - frac[:, None, :]
+        cart = df @ cell
+        D = np.minimum(D, np.sqrt((cart ** 2).sum(-1)))
+    np.fill_diagonal(D, 0.0)
+    iu = np.triu_indices(n, k=1)
+    ds = np.sort(D[iu])
+    ds = ds[ds < float(r_max)]
+    shell_edges = []
+    for x in ds:
+        if not shell_edges or x - shell_edges[-1][-1] > tol:
+            shell_edges.append([x])
+        else:
+            shell_edges[-1].append(x)
+    shell_dist = [float(np.mean(s)) for s in shell_edges]
+    if not shell_dist:
+        return [], np.full((n, n, n), -1, dtype=int)
+    idx = np.clip(np.searchsorted(shell_dist, D), 0, len(shell_dist) - 1)
+    idx = np.where(D < 1e-9, -1, idx)
+    a = idx[:, :, None]
+    b = idx[:, None, :]
+    c = np.transpose(idx, (1, 0))[None, :, :]
+    tri = np.maximum(np.maximum(a, b), c)
+    return shell_dist, tri
+
+
+def fc3_shell_bins(tri, nshell):
+    """预计算每个壳层的扁平线性索引（大超胞流式统计用）。"""
+    import numpy as np
+    flat = np.asarray(tri).reshape(-1)
+    return [np.nonzero(flat == s)[0] for s in range(int(nshell))]
+
+
+def fc3_shell_means(fc3, bins):
+    """对一份 fc3 求各壳层的 |Φ³| 均值（配合 fc3_shell_bins 流式使用）。"""
+    import numpy as np
+    F3 = np.asarray(fc3, dtype=float)
+    Fn = np.sqrt((F3 ** 2).sum(axis=(3, 4, 5))).reshape(-1)
+    return [float(Fn[b].mean()) if len(b) else 0.0 for b in bins]
+
+
+def fc3_shell_stats(shell_dist, tri, fc3_iter, stability_thr=0.3, tol=0.05):
+    """对一个【可迭代】的 fc3 序列按壳层统计 |Φ³| 离散度（流式，每次只驻留一份）。
+
+    fc3_iter 里每项是超胞 fc3 ndarray (N,N,N,3,3,3)。返回 (stats, stable_upper_cut)。
+    """
+    import numpy as np
+    if not shell_dist:
+        return [], float("inf")
+    bins = fc3_shell_bins(tri, len(shell_dist))
+    per_shell_mean = [fc3_shell_means(F3, bins) for F3 in fc3_iter]
+    return fc3_shell_stats_from_means(shell_dist, per_shell_mean,
+                                      stability_thr=stability_thr, tol=tol)
+
+
+def fc3_shell_stats_from_means(shell_dist, per_shell_mean, stability_thr=0.3,
+                               tol=0.05):
+    """由【每次拟合的逐壳层 |Φ³| 均值】序列算 stats 与 stable_upper_cut。"""
+    import numpy as np
+    if not shell_dist:
+        return [], float("inf")
+    ns = len(shell_dist)
+    arr = np.asarray(per_shell_mean, dtype=float)
+    stats = []
+    for s in range(ns):
+        col = arr[:, s] if arr.size else np.zeros(1)
+        mu = float(col.mean())
+        sd = float(col.std(ddof=1)) if len(col) > 1 else 0.0
+        stats.append({"shell": round(shell_dist[s], 4), "mean_abs": mu,
+                      "std_abs": sd, "rel_std": (sd / abs(mu) if mu else None)})
+    last_ok = -1
+    for s, st in enumerate(stats):
+        r = st["rel_std"]
+        if r is not None and r < stability_thr:
+            last_ok = s
+        else:
+            break
+    if last_ok < 0:
+        upper = shell_dist[0] - tol        # 连最近邻壳层都不稳：几乎无可用截断
+    elif last_ok >= ns - 1:
+        upper = shell_dist[-1] + tol
+    else:
+        upper = 0.5 * (shell_dist[last_ok] + shell_dist[last_ok + 1])
+    return stats, float(upper)
+
+
+def fc3_shell_stability(cell, frac, fc3_list, tol=0.05, stability_thr=0.3,
+                        r_max=None):
+    """fc3_shell_index + fc3_shell_stats 的便捷封装（fc3_list 直接给数组列表）。"""
+    shell_dist, tri = fc3_shell_index(cell, frac, tol=tol, r_max=r_max)
+    return fc3_shell_stats(shell_dist, tri, fc3_list,
+                           stability_thr=stability_thr, tol=tol)
 GGA_MAP = {"pbe": "PE", "pbesol": "PS", "pbe-d3": "PE"}
 VDW_MAP = {"pbe": None, "pbesol": None, "pbe-d3": "12"}
 

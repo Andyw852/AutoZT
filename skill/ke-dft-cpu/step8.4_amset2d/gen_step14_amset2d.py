@@ -103,7 +103,7 @@ AMSET_CMD   = ('rm -f transport.json; '
 AMSET_TAIL  = (' && cp -f "$(ls -t transport_*.json 2>/dev/null | head -1)" '
                'transport.json && ls -l transport.json')
 # --- 输运设置（可改）---
-DOPING      = "-1e21:-1e17:5, 1e17:1e21:5"   # n 型 + p 型各 5 点（对数均布）cm^-3
+DOPING      = "-1e14:-1e11:5, 1e11:1e14:5"   # n 型 + p 型各 5 点（对数均布）cm^-2 面密度；gen 里按 c 折算成体浓度
 TEMPERATURES = "100:900:9"            # 100,200,...,900 K，每 100 K 一个点
 SCATTERING  = ["ADP", "IMP", "POP"]   # 形变势声学 + 电离杂质 + 极性光学 "ADP", "IMP", "POP"
 _ALLOWED_SCATTERING = {"ADP", "IMP", "POP", "PIE"}   # step.conf SCATTERING 允许的机制
@@ -681,6 +681,29 @@ def get_slab_geometry(cwd: Path):
     return None, None
 
 
+_CELL_AREA_CM2 = None   # 2D 原胞面内面积（cm²），apply_2d_corrections 里设
+
+
+def _inplane_area_cm2(cwd: Path):
+    """读 POSCAR 的面内面积 |a×b|（cm²）。用于面密度→每原胞载流子数换算。"""
+    for d in STRUCT_CANDS:
+        for fn in ("CONTCAR", "POSCAR"):
+            p = cwd / d / fn
+            if not p.is_file():
+                continue
+            try:
+                ln = p.read_text(encoding="utf-8-sig", errors="ignore").splitlines()
+                scale = float(ln[1].split()[0])
+                a = [float(x) * scale for x in ln[2].split()[:3]]
+                b = [float(x) * scale for x in ln[3].split()[:3]]
+                axb = (a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2], a[0]*b[1]-a[1]*b[0])
+                area_A2 = (axb[0]**2 + axb[1]**2 + axb[2]**2) ** 0.5
+                return area_A2 * 1e-16   # Å² -> cm²
+            except (OSError, IndexError, ValueError):
+                continue
+    return None
+
+
 def rescale_elastic_2d(elastic, factor):
     """把弹性常数整体乘 factor（= c/t）。标量和 6x6 都支持。"""
     if elastic is None:
@@ -691,7 +714,7 @@ def rescale_elastic_2d(elastic, factor):
 
 
 def _doping_endpoints(spec):
-    """从 DOPING 串里抠出出现过的浓度数值（cm^-3），用于打印面浓度换算。"""
+    """从 DOPING 串里抠出出现过的面密度数值（cm^-2），用于打印面密度/体浓度/每原胞换算。"""
     vals = []
     for tok in re.split(r"[,\s]+", str(spec)):
         if not tok:
@@ -962,6 +985,8 @@ def apply_2d_corrections(cwd: Path, elastic, eps_inf=None, eps_static=None):
         sys.exit("[ERROR] TWO_D_MODE=%r 无效，只允许 auto / on / off" % TWO_D_MODE)
 
     c_len, span = get_slab_geometry(cwd)
+    global _CELL_AREA_CM2
+    _CELL_AREA_CM2 = _inplane_area_cm2(cwd)
     if c_len is None:
         print("[WARN] 2D 体系但读不到结构，弹性常数未做 c/t 修正——"
               "结果的绝对值不可用。请手填 MANUAL_ELASTIC。")
@@ -1065,6 +1090,8 @@ def apply_2d_corrections(cwd: Path, elastic, eps_inf=None, eps_static=None):
         "mechanisms_2d": mechanisms,
         "areal_density_factor_cm": c_len * 1e-8,
         "areal_density_note": "n_2D [cm^-2] = n_3D [cm^-3] x cell_c [cm]",
+        "inplane_cell_area_cm2": _CELL_AREA_CM2,
+        "carrier_per_cell_threshold": 0.05,
         "free_carrier_screening": bool(FREE_CARRIER_SCREENING_2D),
         "skill_rev": _SKILL_REV,
         "plugin": PLUGIN_SRC_NAME,
@@ -1252,13 +1279,24 @@ def write_settings(out: Path, eps_inf, eps_static, gap, elastic,
             % ("vacuum" if (str(DEFORM_REF).lower() in ("auto", "vacuum")
                            and (Path.cwd() / READ_DIR / "deformation_vac.h5").is_file())
                else "core"),
-            "# 4) 下面的 doping 是体浓度 cm^-3；面浓度 n_2D = n_3D × c",
+            "# 4) 下面的 doping 是体浓度 cm^-3；面密度在 DOPING 里按 cm^-2 定义，gen 按 c 折算",
         ]
         if c_len:
-            lines.append("#    本体系 c = %.4f Å = %.4e cm" % (c_len, c_len * 1e-8))
+            _ccm = c_len * 1e-8   # c 轴长度（cm），体浓度按含真空的 slab 体积折算
+            _acm = _CELL_AREA_CM2
+            lines.append("#    本体系 c = %.4f Å = %.4e cm" % (c_len, _ccm))
+            if _acm:
+                lines.append("#    原胞面内面积 = %.4e cm²；每原胞载流子数 = 面密度 × 面内面积" % _acm)
+            lines.append("#    面密度(cm^-2) -> 体浓度(cm^-3, 按 c 折算) -> 每原胞载流子数")
             for v in _doping_endpoints(DOPING):
-                lines.append("#      %.3e cm^-3  ->  %.3e cm^-2"
-                             % (v, v * c_len * 1e-8))
+                _bulk = v / _ccm
+                if _acm:
+                    _cell = v * _acm
+                    _mark = "  [超出刚带近似]" if _cell > 0.05 else ""
+                    _cell_s = "%.3g" % _cell
+                else:
+                    _cell_s, _mark = "?", ""
+                lines.append("#      %+.3e  ->  %+.3e  ->  %s%s" % (v, _bulk, _cell_s, _mark))
         lines += [
             "# 【局限】单一有效极性模；偶极近似（无四极矩；Poncé PRL 2023 给 MoS2 室温",
             "#   Hall 迁移率误差：电子 23%、空穴 76%）；",
@@ -1267,7 +1305,8 @@ def write_settings(out: Path, eps_inf, eps_static, gap, elastic,
             "#   要发表的绝对值建议用 EPW / Perturbo（开二维库仑截断）对照。",
             "# ========================",
         ]
-    _dop = expand_spec(DOPING, log=True)        # doping 对数均布
+    _dop_areal = expand_spec(DOPING, log=True)   # 面密度 cm^-2
+    _dop = [v / (c_len * 1e-8) for v in _dop_areal] if c_len else _dop_areal  # 体浓度 cm^-3
     _tmp = expand_spec(TEMPERATURES, log=False)  # 温度线性
     lines += ["# deform_geometry: %s（形变势构型口径；ionrelax=离子弛豫、与 TOTAL ELASTIC"
               " MODULI 同源；clamped=离子固定，跨项目 ADP 不可直接比；mixed=两者混用）"
@@ -1543,6 +1582,12 @@ def main():
         NWORKERS = NWORKERS_FALLBACK
         print("[WARN] 推不出提交分配（%s）—— NWORKERS 兜底 %d" % (_src, NWORKERS))
     _guard_dim_2d(cwd)
+    # [guard-2026-09-25] 2D + 真实重叠 + 非全网格 h5 = 已知算坏的组合（V23：去对称化
+    #   h5 的真实重叠把 ADP 抬高 10~16 倍）。真实重叠必须走 S3b 全网格 h5（WAVEFUNCTION_FULL=true）。
+    if UNITY_OVERLAP is False and not WAVEFUNCTION_FULL:
+        sys.exit("[ERROR] UNITY_OVERLAP=false 必须搭配 WAVEFUNCTION_FULL=true：2D 真实重叠只能用 "
+                 "S3b 全网格 h5（去对称化 h5 的真实重叠会把 ADP 抬高 10~16 倍，V23 已知算坏）。"
+                 "请在 step.conf 补 WAVEFUNCTION_FULL=true，或改回 UNITY_OVERLAP=true。")
     out = cwd / OUTDIR_NAME
     out.mkdir(exist_ok=True)
     # 插件随本步复制到运行目录（只在那一次 amset 运行里生效，不改 AMSET 安装）

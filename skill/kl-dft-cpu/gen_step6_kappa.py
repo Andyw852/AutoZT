@@ -96,6 +96,12 @@ SPEC = {
     "KAPPA_2D_THICKNESS": ("vdw",  "str"),
     # 2D NAC 覆盖：auto=2D默认不用3D-NAC(LO-TO在2D应趋零)/3D随BORN；on=强制用；off=强制不用
     "KAPPA_NAC":          ("auto", "str"),
+    # ---- 三阶截断自动选择（2026-09-24 user 定）----
+    "CUT3_KAPPA_SCAN":    ("auto", "str"),   # auto=有 S5 cutoff_scan.json（≥2 档）就逐档跑 κ
+    "CUT3_KAPPA_TOL_PCT": (5.0,    "float"), # 判据③：相邻档 300K 面内 κ 变化上限(%)
+    "CUT3_CV_1SE_MULT":   (1.0,    "float"), # 判据①：1-SE 规则的 SE 倍数
+    "CUT3_STABILITY_THR": (0.3,    "float"), # 判据②：逐壳层 σ/|mean| 阈值
+    "CUT3_PICK":          ("smallest", "str"),  # smallest=取最小可行 | largest=平的取最大
 }
 
 # 层厚/归一化口径全部下沉到 skill/_common/thickness_2d.py（vdw 半径表在
@@ -299,16 +305,24 @@ def build_extract(factor, meta, thick2d=None, plan=None, primary=None):
         "        #   （合成数据实测：真值 kappa_inf=100，旧写法给 45.9、偏差 103%）。",
         "        _n = _np.array([1.0 / float(max(int(x) for x in r['mesh'].split())) for r in _rs])",
         "        _y = _np.array([float(r['kappa_inplane_300K']) for r in _rs])",
+        "        _dy = _np.diff(_y)",
+        "        _mono = bool(len(_dy)) and (bool(_np.all(_dy > 0)) or bool(_np.all(_dy < 0)))",
         "        if len(set(_n.tolist())) < len(_n):",
         "            _out = {'extrap_error': '参与外推的网格面内 N 有重复（%s），不外推'",
         "                    % [r['mesh'] for r in _rs]}",
+        "        elif len(_n) >= 3 and not _mono:",
+        "            _out = {'extrap_skipped': 'kappa 随网格不单调，1/N 外推不适用'}",
+        "            d.setdefault('warnings', []).append(",
+        "                '%s 各档 300K 面内 kappa 随网格不单调 %s：未做 1/N 外推，请加密或检查网格' % (_m, _y.round(3).tolist()))",
         "        elif len(_n) >= 3:",
         "            _A = _np.vstack([_np.ones_like(_n), -_n]).T",
         "            _coef, *_ = _np.linalg.lstsq(_A, _y, rcond=None)",
         "            _kinf = float(_coef[0])",
         "            _dev = (abs(_y[-1] - _kinf) / abs(_kinf) * 100.0",
         "                    if abs(_kinf) > 1e-12 else None)",
+        "            _res = _y - _A @ _coef",
         "            _out = {'kappa_inf_extrap_300K_inplane': _kinf,",
+        "                    'extrap_residual_rms': float(_np.sqrt(_np.mean(_res ** 2))),",
         "                    'finest_dev_from_kappa_inf_pct': _dev,",
         "                    'converged_extrap_3pct': bool(_dev is not None and _dev < 3.0)}",
         "    except Exception as _e:",
@@ -531,6 +545,109 @@ def build_phono3py_cmd(plan, ts, isotope, use_nac, extract, tagged=False, ts_ove
     return "\n".join(steps + [extract])
 
 
+def _cut3_scan_records(fcd):
+    """读 step5_fc/cutoff_scan.json，返回可跑 κ 的候选记录（insufficient 档跳过）。"""
+    p = Path(fcd) / "cutoff_scan.json"
+    if not p.is_file():
+        return []
+    try:
+        scan = json.loads(p.read_text(encoding="utf-8"))
+    except Exception:
+        return []
+    out = []
+    for r in scan.get("records", []):
+        if r.get("insufficient") or r.get("cut") is None:
+            continue
+        out.append(r)
+    out.sort(key=lambda r: float(r["cut"]))
+    return out
+
+
+def build_cutoff_select(kappa_tol_pct=5.0, se_mult=1.0, stability_thr=0.3,
+                        pick="smallest"):
+    """生成"按判据①②③选截断"的收尾片段：读各 cut3_<tag>/kappa_summary.json 的 κ，
+    合并 step5_fc/cutoff_scan.json 的 CV/稳定性，写 cutoff_selection.json，并把选中
+    截断的 κ 提到顶层 kappa_summary.json（附 cutoff_selection 供下游追溯）。"""
+    body = [
+        "import json, os",
+        "import kl_common as kc",
+        "_scan = json.load(open('../step5_fc/cutoff_scan.json', encoding='utf-8'))",
+        "_rows = {round(float(r['cut']), 3): r for r in _scan.get('records', [])}",
+        "_recs = []",
+        "for _c in _scan.get('candidates', []):",
+        "    _c = float(_c)",
+        "    _tag = ('%.2f' % _c).replace('.', 'p')",
+        "    _r = _rows.get(round(_c, 3), {})",
+        "    _e = {'cut': _c, 'ratio': _r.get('ratio'),",
+        "          'cv_err': _r.get('cv_err'), 'cv_se': _r.get('cv_se'),",
+        "          'stable_upper_cut': _r.get('stable_upper_cut')}",
+        "    _f = 'cut3_%s/kappa_summary.json' % _tag",
+        "    _k = None",
+        "    _rel = 0.0",
+        "    if os.path.isfile(_f):",
+        "        _s = json.load(open(_f, encoding='utf-8'))",
+        "        _k = _s.get('kappa_inplane_300K', _s.get('kappa_xx_yy_zz'))",
+        "        for _st in (_r.get('shell_stats') or []):",
+        "            if (_st.get('rel_std') and _st.get('shell') is not None",
+        "                    and _st['shell'] <= _c):",
+        "                _rel = max(_rel, float(_st['rel_std']))",
+        "    _e['kappa_err_rel'] = _rel",
+        "    _e['kappa'] = _k",
+        "    _e['kappa_err'] = (abs(_k) * _rel) if _k is not None else None",
+        "    _recs.append(_e)",
+        ("_chosen, _rep = kc.select_cutoff(_recs, kappa_tol_pct=%r, se_mult=%r, "
+         "stability_thr=%r, pick=%r)"
+         % (float(kappa_tol_pct), float(se_mult), float(stability_thr), str(pick))),
+        "_rep['kappa_err_source'] = 'fc3 逐壳层 σ/|mean| 上界传播（粗；每档只跑 1 次 κ）'",
+        "json.dump(_rep, open('../step5_fc/cutoff_selection.json', 'w'),",
+        "          ensure_ascii=False, indent=2)",
+        "_scan['selection'] = _rep",
+        "json.dump(_scan, open('../step5_fc/cutoff_scan.json', 'w'),",
+        "          ensure_ascii=False, indent=2)",
+        "print('[选截断] ' + _rep.get('reason', ''))",
+        "for _r in _rep.get('records', []):",
+        "    print('  c3=%-5.2f κ=%-10s κ_err=%-10s data=%s stable=%s cv=%s plateau=%s'",
+        "          % (_r['cut'], _r['kappa'], _r['kappa_err'], _r['data_ok'],",
+        "             _r['stable_ok'], _r['cv_ok'], _r['plateau_ok']))",
+        "if _chosen is not None:",
+        "    _tag = ('%.2f' % _chosen).replace('.', 'p')",
+        "    _s = json.load(open('cut3_%s/kappa_summary.json' % _tag, encoding='utf-8'))",
+        "    _s['cutoff_selection'] = _rep",
+        "    _s['chosen_cutoff_A'] = _chosen",
+        "    json.dump(_s, open('kappa_summary.json', 'w'), ensure_ascii=False, indent=2)",
+        "    print('KAPPA_DONE' if _s.get('KAPPA_DONE') else 'NO_KAPPA')",
+        "else:",
+        "    print('NO_KAPPA')",
+    ]
+    return "python - <<'PY2'\n" + "\n".join(body) + "\nPY2"
+
+
+def build_cutoff_scan_cmd(cut3_list, plan, ts, isotope, use_nac, factor, meta,
+                          thick2d, primary, tagged, ts_override,
+                          kappa_tol_pct=5.0, se_mult=1.0, stability_thr=0.3,
+                          pick="smallest"):
+    """截断扫描版 BTE：保持 cwd=step6 目录（extract 的 '../step5_fc/...' 相对路径不变），
+    逐档换 fc2/fc3 跑一次完整 κ，把 kappa_summary.json 收进 cut3_<tag>/，最后选截断。"""
+    inner = build_phono3py_cmd(
+        plan, ts, isotope, use_nac,
+        build_extract(factor, meta, thick2d, extract_plan(plan, tagged), primary),
+        tagged=tagged, ts_override=ts_override)
+    lines = []
+    for c in cut3_list:
+        ct = "%.2f" % float(c)
+        tag = ct.replace(".", "p")
+        lines.append('echo "===== 三阶截断 c3=%s Å (cut3_%s) ====="' % (ct, tag))
+        lines.append('mkdir -p "cut3_%s"' % tag)
+        lines.append('cp "../step5_fc/phono3py/cut3_%s/fc2.hdf5" fc2.hdf5' % tag)
+        lines.append('cp "../step5_fc/phono3py/cut3_%s/fc3.hdf5" fc3.hdf5' % tag)
+        lines.append('rm -f kappa-m*.hdf5 kappa_summary.json')
+        lines.append(inner)
+        lines.append('mv kappa_summary.json "cut3_%s/kappa_summary.json"' % tag)
+    lines.append(build_cutoff_select(kappa_tol_pct=kappa_tol_pct, se_mult=se_mult,
+                                     stability_thr=stability_thr, pick=pick))
+    return "\n".join(lines)
+
+
 def _unused_build_phono3py_cmd(mesh, ts, isotope, use_nac, extract, bte="rta"):
     method = "--lbte" if str(bte).lower() == "lbte" else "--br"
     # NAC：有 nac_params/BORN 就默认启用；无 --nac 开关（会被当 --nac-method），要关才 --nonac。
@@ -545,7 +662,7 @@ def _unused_build_phono3py_cmd(mesh, ts, isotope, use_nac, extract, bte="rta"):
     return "%s 2>&1 | tee phono3py_kappa.log\n%s" % (p3, extract)
 
 
-def prepare_shengbte(cwd, out, sb_src, conf, mesh, use_nac):
+def prepare_shengbte(cwd, out, sb_src, conf, mesh, use_nac, cart_vac_axis=None):
     """S5 已把 FORCE_CONSTANTS_2ND/3RD 导到 step5_fc/shengbte/；这里拷进 step6，
     再按本步运行参数（T/mesh/scalebroad/NAC）写 CONTROL。CONTROL 依赖运行参数，
     故归 S6 生成，不在 S5 固化。"""
@@ -576,13 +693,14 @@ def prepare_shengbte(cwd, out, sb_src, conf, mesh, use_nac):
          "kappa_isotope": conf["ISOTOPE"],
          "kappa_convergence": bool(conf["KAPPA_CONVERGENCE"])}
     # ★ 2D 轴序自检（user review 一.1）：含 1 的网格里，ngrid=1 的那个轴必须是
-    #   CONTROL 的 lattvec 中的真空轴（最长基矢）。若把 phono3py 原胞序的 "1 87 87"
+    #   CONTROL 的 lattvec 中的真空轴（由 Cartesian 真空方向映射，见下）。若把 phono3py 原胞序的 "1 87 87"
     #   写进 ShengBTE，就变成"面内取 1 个点、真空取 87 个点"——κ 整体错且不报错。
     _gm = [int(x) for x in str(mesh).split()]
     if len(_gm) == 3 and min(_gm) == 1:
         import numpy as np
-        _norms = np.linalg.norm(np.asarray(atoms.get_cell(), float), axis=1)
-        _vac = int(np.argmax(_norms))
+        _cell = np.asarray(atoms.get_cell(), float)
+        _norms = np.linalg.norm(_cell, axis=1)
+        _vac = kc.vacuum_axis_in_primitive(_cell, cart_vac_axis)
         if _gm[_vac] != 1:
             sys.exit("[ERROR] ShengBTE 网格轴序错误：2D 真空轴是 %d（|a|=%.2f Å），"
                      "但 ngrid=%s 在该轴取了 %d 个点（应为 1）。\n"
@@ -597,13 +715,13 @@ def prepare_shengbte(cwd, out, sb_src, conf, mesh, use_nac):
               "极性材料请手动在 CONTROL 补 Born 有效电荷与介电张量。")
 
 
-def prepare_fourphonon(cwd, out, sb_src, conf, mesh, use_nac, ngpu):
+def prepare_fourphonon(cwd, out, sb_src, conf, mesh, use_nac, ngpu, cart_vac_axis=None):
     """fourphonon 输入准备 = ShengBTE 同源（FORCE_CONSTANTS_2ND/3RD 格式一致），
     复用 prepare_shengbte 后把 CONTROL 的 &flags 改成 fourphonon 3ph RTA：
       - convergence=F（RTA；fourphonon 迭代解未移植 GPU、且大胞易发散）
       - four_phonon=F（3ph only；4ph 需 fc4，S5 不产 fc4，勿开）
     运行时用 multi-GPU 提交模板（rank=GPU，acc_set_device_num 自动分卡）。"""
-    prepare_shengbte(cwd, out, sb_src, conf, mesh, use_nac)
+    prepare_shengbte(cwd, out, sb_src, conf, mesh, use_nac, cart_vac_axis=cart_vac_axis)
     ctl = out / "CONTROL"
     txt = ctl.read_text(encoding="utf-8")
     # 确保 flags 块含 four_phonon=F；convergence 强制 F（RTA）
@@ -793,7 +911,28 @@ def main():
                   "口径（被 h⊥ 稀释，数值不可直接使用）：%s" % e)
 
     here = Path(__file__).resolve().parent
-    if solver == "phono3py":
+    _scan_recs = _cut3_scan_records(fcd) if str(conf.get("CUT3_KAPPA_SCAN", "auto")).lower() \
+        not in ("off", "false", "0", "no") else []
+    if solver == "phono3py" and len(_scan_recs) >= 2:
+        # 截断扫描（2026-09-24 user 定）：S5 出了多档 fc3 → 逐档各跑一次 κ，再按三判据选。
+        # 选截断片段 import kl_common；kl_common 又 import dim_common，两个都得进 step6 目录
+        for _dep in (here / "kl_common.py",
+                     here.parent / "_common" / "opt" / "dim_common.py"):
+            try:
+                shutil.copyfile(_dep, out / _dep.name)
+            except OSError as _e:
+                print("[WARN] 拷 %s 到 step6 失败（选截断 import 会失败）：%s" % (_dep.name, _e))
+        _cut3_list = [float(r["cut"]) for r in _scan_recs]
+        print("[..] 截断扫描：对 %s 逐档各跑一次完整 κ（共 %d 次），再按判据①②③自动选截断"
+              % (", ".join("%.2f" % c for c in _cut3_list), len(_cut3_list)))
+        cmd = build_cutoff_scan_cmd(
+            _cut3_list, plan, ts, conf["ISOTOPE"], use_nac, factor, meta, thick2d,
+            primary, tagged, ts_override,
+            kappa_tol_pct=conf["CUT3_KAPPA_TOL_PCT"],
+            se_mult=conf["CUT3_CV_1SE_MULT"],
+            stability_thr=conf["CUT3_STABILITY_THR"],
+            pick=conf["CUT3_PICK"])
+    elif solver == "phono3py":
         cmd = build_phono3py_cmd(
             plan, ts, conf["ISOTOPE"], use_nac,
             build_extract(factor, meta, thick2d, extract_plan(plan, tagged), primary),
@@ -824,7 +963,7 @@ def main():
                         require=REQ_2D + ("--ntasks=1",),
                         label="phono3py 提交模板：")
     elif solver == "shengbte":
-        prepare_shengbte(cwd, out, sbd, conf, mesh_sb, use_nac)
+        prepare_shengbte(cwd, out, sbd, conf, mesh_sb, use_nac, cart_vac_axis=vac_axis)
         tpl = kc.resolve_submit(here, "3d", "submit_shengbte")
         # MPI/OMP 布局：一个 rank 一个 NUMA 域。rank=1 会退化成串行（ShengBTE 靠
         # MPI 按 q 点并行），所以这里必须显式算出来，不能沿用模板里的常量。
@@ -916,7 +1055,7 @@ def main():
                      " ALLOW_FOURPHONON_GPU_PHONOPY 设为 true。见 README「fourphonon」节。")
         print("[WARN] SOLVER=fourphonon：GPU 版对 phonopy fc2 有已知数值 bug（κ 错 67~71×），"
               "本次结果只能用于对照 / 复现，不可当真值。")
-        prepare_fourphonon(cwd, out, sbd, conf, mesh_sb, use_nac, ngpu)
+        prepare_fourphonon(cwd, out, sbd, conf, mesh_sb, use_nac, ngpu, cart_vac_axis=vac_axis)
         tpl = kc.resolve_submit(here, "3d", "submit_fourphonon")
         kc.write_submit(tpl, out / "submit.sh",
                         {"JOBNAME": kc.new_jobname(cwd, "S6kappa"),
