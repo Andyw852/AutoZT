@@ -410,7 +410,8 @@ def solve_device(spec, props, n_grid_x=41, n_grid_sub=60, do_transient=True,
                 break
         dtt = np.array(dts)
         tt = np.array(ts)
-        idx63 = int(np.argmax(dtt >= 0.632 * dtt[-1])) if dtt[-1] > 0 else 0
+        # dT 接近 0（如 Q=0）时 tau_63 无意义，给 None 而不是编一个数值。
+        idx63 = int(np.argmax(dtt >= 0.632 * dtt[-1])) if dtt[-1] > 1e-6 else None
         out["tau_fast_s"] = tau_fast
         out["tau_RC_s"] = tau_rc
         out["transient_dt0_s"] = tau_fast / 100.0
@@ -419,7 +420,7 @@ def solve_device(spec, props, n_grid_x=41, n_grid_sub=60, do_transient=True,
         out["transient_n_unconverged"] = int(unc)
         out["transient_sor_tol"] = 1e-7
         out["transient_sor_maxit"] = 20000
-        out["tau_63_s"] = float(tt[idx63])
+        out["tau_63_s"] = float(tt[idx63]) if idx63 is not None else None
         out["heating_t_s"] = tt.tolist()
         out["heating_dT_K"] = dtt.tolist()
         out["transient_dT_final_K"] = float(dtt[-1])

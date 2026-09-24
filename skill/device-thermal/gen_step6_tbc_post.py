@@ -51,33 +51,40 @@ def fit(xs, ys):
     return a, my - a * mx
 
 
-def fit_stats(xs, ys, a, b, x0, n_blocks=5):
-    """最小二乘拟合的斜率标准误与 x0 处预测值标准误；用**块平均**估计。
+def temporal_stats(blocks_sel, hot_cids, cold_cids, x0, min_pts=2, min_blocks=3):
+    """用**时间分块**估计 dT_i 的统计误差，而不是空间分块。
 
-    相邻 bin 的 T 是空间相关的，把它们当独立点会用残差公式严重低估 ΔT_i 的误差；
-    这里把按 x 排序的点切成 n_blocks 块、每块单独拟合，用各块斜率/预测值的离散度
-    除以 sqrt(n_blocks) 作为标准误。点数不足返回 (None, None)。"""
-    n = len(xs)
-    if n <= 2:
-        return None, None
-    order = sorted(range(n), key=lambda i: xs[i])
-    xs_s = [xs[i] for i in order]
-    ys_s = [ys[i] for i in order]
-    blk_slopes, blk_preds = [], []
-    for ib in range(n_blocks):
-        lo = ib * n // n_blocks
-        hi = (ib + 1) * n // n_blocks
-        if hi - lo < 2:
+    compute_chunk.out 的每个 block 是一段时间平均后的剖面；空间上相邻的 bin 高度相关，
+    把它们切块当独立样本估出来的误差既不是真实误差、点数少时还会整段失效。这里对稳态
+    窗口内的每个时间 block 单独拟合两侧、外推到界面得到 dT_i^(b) 与斜率，再取这些量的
+    标准误 std/sqrt(N)。时间块之间近似独立，这才是 ΔT_i 的正确统计量。
+    返回 (se_dT, sd_slope_hot, sd_slope_cold, n_blocks_used)；可用 block 少于 min_blocks
+    时误差返回 None（调用方必须据此判 poor，而不是跳过判据）。
+    """
+    dts, slH, slC = [], [], []
+    for blk in blocks_sel:
+        hot = [blk[c] for c in hot_cids if c in blk and blk[c][2] > 0.5]
+        cold = [blk[c] for c in cold_cids if c in blk and blk[c][2] > 0.5]
+        if len(hot) < min_pts or len(cold) < min_pts:
             continue
-        ab, bb = fit(xs_s[lo:hi], ys_s[lo:hi])
-        blk_slopes.append(ab)
-        blk_preds.append(ab * x0 + bb)
-    m = len(blk_slopes)
-    if m < 2:
-        return None, None
-    se_slope = (sum((s - a) ** 2 for s in blk_slopes) / (m - 1)) ** 0.5 / (m ** 0.5)
-    se_pred = (sum((p - (a * x0 + b)) ** 2 for p in blk_preds) / (m - 1)) ** 0.5 / (m ** 0.5)
-    return se_slope, se_pred
+        aH, bH = fit([v[0] for v in hot], [v[1] for v in hot])
+        aC, bC = fit([v[0] for v in cold], [v[1] for v in cold])
+        dts.append((aH * x0 + bH) - (aC * x0 + bC))
+        slH.append(aH)
+        slC.append(aC)
+    n = len(dts)
+    if n < min_blocks:
+        return None, None, None, n
+
+    def _se(vals):
+        m = sum(vals) / len(vals)
+        return (sum((v - m) ** 2 for v in vals) / (len(vals) - 1) / len(vals)) ** 0.5
+
+    def _sd(vals):
+        m = sum(vals) / len(vals)
+        return (sum((v - m) ** 2 for v in vals) / (len(vals) - 1)) ** 0.5
+
+    return _se(dts), _sd(slH), _sd(slC), n
 
 
 def read_compute(path):
@@ -124,7 +131,7 @@ def read_profile(path, start_block=0):
         ns = [b[cid][2] for b in sel if cid in b]
         if ts:
             out[cid] = (sum(cs) / len(cs), sum(ts) / len(ts), sum(ns) / len(ns))
-    return out, len(sel)
+    return out, sel
 
 
 def best_steady_window(Es, Ek, minlen, tol):
@@ -190,7 +197,8 @@ def main():
     qsnk = (qK / dt_fs) * EV_PER_FS_TO_W / (area * A2_TO_M2)
     q = 0.5 * (qsrc + qsnk)
 
-    prof, nblocks = read_profile(prof_p, start_block=k)   # 与 q 的稳态窗口对齐
+    prof, blocks_sel = read_profile(prof_p, start_block=k)   # 与 q 的稳态窗口对齐
+    nblocks = len(blocks_sel)
     minbins = int(conf["TBC_MIN_BINS"])
     reasons = []
 
@@ -202,11 +210,13 @@ def main():
         else:
             hlo, hhi = cmin + src_th + margin, cif - margin
             clo, chi = cif + margin, cmax - snk_th - margin
-        hot = [(v[0], v[1]) for v in prof.values() if hlo < v[0] < hhi and v[2] > 0.5]
-        cold = [(v[0], v[1]) for v in prof.values() if clo < v[0] < chi and v[2] > 0.5]
+        hot_cids = [cid for cid, v in prof.items() if hlo < v[0] < hhi and v[2] > 0.5]
+        cold_cids = [cid for cid, v in prof.items() if clo < v[0] < chi and v[2] > 0.5]
+        hot = [(prof[c][0], prof[c][1]) for c in hot_cids]
+        cold = [(prof[c][0], prof[c][1]) for c in cold_cids]
         d = {"margin": margin, "n_hot": len(hot), "n_cold": len(cold),
              "aH": 0.0, "aC": 0.0, "Th": 0.0, "Tc": 0.0, "dTi": 0.0,
-             "slH": None, "slC": None, "seH": None, "seC": None,
+             "slH": None, "slC": None, "dT_unc": None, "n_temp_blocks": 0,
              "hot": hot, "cold": cold}
         if len(hot) >= 2 and len(cold) >= 2:
             xsH = [c for c, _ in hot]
@@ -215,21 +225,20 @@ def main():
             ysC = [t for _, t in cold]
             aH, bH = fit(xsH, ysH)
             aC, bC = fit(xsC, ysC)
-            slH, seH = fit_stats(xsH, ysH, aH, bH, cif)
-            slC, seC = fit_stats(xsC, ysC, aC, bC, cif)
+            se_dT, sd_slH, sd_slC, nblk = temporal_stats(blocks_sel, hot_cids, cold_cids, cif)
             d.update(aH=aH, aC=aC, Th=aH * cif + bH, Tc=aC * cif + bC,
                      dTi=(aH * cif + bH) - (aC * cif + bC),
-                     slH=slH, slC=slC, seH=seH, seC=seC)
+                     slH=sd_slH, slC=sd_slC, dT_unc=se_dT, n_temp_blocks=nblk)
         return d
 
     m0 = float(conf["TBC_FIT_MARGIN_A"])
     ev = evaluate(m0)
     hot, cold = ev["hot"], ev["cold"]
     aH, aC, Th, Tc = ev["aH"], ev["aC"], ev["Th"], ev["Tc"]
-    slH, slC, seH, seC = ev["slH"], ev["slC"], ev["seH"], ev["seC"]
+    slH, slC = ev["slH"], ev["slC"]
     dTi = ev["dTi"]
     G = q / abs(dTi) if dTi else 0.0
-    dT_unc = ((seH or 0.0) ** 2 + (seC or 0.0) ** 2) ** 0.5 if (seH is not None and seC is not None) else None
+    dT_unc = ev.get("dT_unc")
     G_rel = (dT_unc / abs(dTi)) if (dT_unc is not None and dTi) else None
 
     # 拟合余量敏感性：真正扩散的引线 G 不该随余量变化；短/弹道引线会剧烈变化
@@ -253,7 +262,10 @@ def main():
         reasons.append("q 源漏不自洽 %.2f > %.2f" % (incons, tol))
     if dTi <= 0:
         reasons.append("dT_i<=0（热侧未更热/方向反了）")
-    if G_rel is not None and G_rel > dt_tol:
+    if G_rel is None:
+        reasons.append("稳态时间块不足以估 dT_i 误差（%d 块），无法通过 TBC_DT_TOL 判据"
+                       % int(ev.get("n_temp_blocks") or 0))
+    elif G_rel > dt_tol:
         reasons.append("dT_i 外推相对误差 %.2f > %.2f" % (G_rel, dt_tol))
     if g_ratio is not None and g_ratio > mg_tol:
         reasons.append("G 对拟合余量敏感 max/min=%.2f > %.1f（引线太短/非扩散区，G 不可靠）"

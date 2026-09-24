@@ -386,6 +386,35 @@ def _load_step5():
     return mod
 
 
+def _load_step6():
+    spec = importlib.util.spec_from_file_location("dt_g6", os.path.join(DT, "gen_step6_tbc_post.py"))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_s5_align_coords():
+    print("[s5-align-coords]")
+    g5 = _load_step5()
+    lat = [10.0, 0, 0, 0, 10.0, 0, 0, 0, 70.0]
+    # 真实 bug：非周期 z 轴上一层原子在 -0.2 A，旧实现对三轴都取模，把它挪到 +69.8 并分进源组
+    pos = [(0.3, 0.0, -0.2), (0.0, 0.0, 1.0), (0.0, 0.0, 69.8)]
+    new, isT, _warn = g5.align_coords(pos, lat, "T T F")
+    ok(isT == [True, True, False], "pbc='T T F' 解析为 [T,T,F]")
+    zs = [round(p[2], 6) for p in new]
+    ok(min(zs) == 0.0, "非周期 z 轴平移后最小值为 0（旧版取模把 -0.2 挪到 +69.8）")
+    ok(zs == [0.0, 1.2, 70.0], "非周期 z 轴整体平移、保持相对构型 z=%s" % zs)
+    ok(all(abs(n[0] - p[0]) < 1e-12 and abs(n[1] - p[1]) < 1e-12
+           for n, p in zip(new, pos)), "非周期轴平移不改变周期轴坐标")
+    new2, _i2, _w2 = g5.align_coords([(-0.5, 0.0, 1.0)], lat, "T T F")
+    approx(new2[0][0], 9.5, 0, "周期 x 轴仍 wrap: -0.5 -> 9.5", atol=1e-12)
+    new3, isT3, _w3 = g5.align_coords([(-0.5, 11.0, -1.0)], lat, "T T T")
+    ok(all(isT3), "pbc='T T T' 解析为全周期")
+    approx(new3[0][0], 9.5, 0, "x wrap", atol=1e-12)
+    approx(new3[0][1], 1.0, 0, "y wrap", atol=1e-12)
+    approx(new3[0][2], 69.0, 0, "z wrap", atol=1e-12)
+
+
 def test_interface_detection():
     print("[interface-detection]")
     g5 = _load_step5()
@@ -472,6 +501,84 @@ def test_s6_regression():
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+def test_s6_temporal_stats():
+    print("[s6-temporal-stats]")
+    g6 = _load_step6()
+    # 只有 2 个时间块：误差必须返回 None（调用方据此判 poor，而不是跳过 TBC_DT_TOL）
+    blocks2 = [{0: (0.0, 300.0, 10.0), 1: (1.0, 301.0, 10.0)},
+               {0: (0.0, 300.0, 10.0), 1: (1.0, 301.0, 10.0)}]
+    se, _h, _c, n = g6.temporal_stats(blocks2, [0, 1], [0, 1], 0.5)
+    ok(se is None and n == 2, "时间块 < min_blocks 时误差返回 None（旧版空间分块会整段失效）")
+    # 6 个时间块，每块斜率有噪声：时间分块应给出 >0 的 dT_i 标准误
+    blocks6 = []
+    for b in range(6):
+        d = float(0.3 * (b - 2.5))
+        blocks6.append({0: (0.0, 300.0 + d, 10.0), 1: (1.0, 346.0 + d, 10.0),
+                        2: (2.0, 388.0, 10.0), 3: (3.0, 434.0, 10.0)})
+    se6, sdH, sdC, n6 = g6.temporal_stats(blocks6, [0, 1], [2, 3], 1.5)
+    ok(n6 == 6 and se6 is not None and se6 > 0.0, "时间分块给出 dT_i 标准误 se=%.4g" % (se6 or -1))
+    ok(sdH is not None and sdC is not None, "同时给出两侧斜率的时间离散度")
+
+
+def test_s6_noise_is_poor():
+    print("[s6-noise-poor]")
+    EV = 1.602176634e-4
+    A2 = 1e-20
+    dt_fs, area, slope = 1000.0, 100.0, 0.5
+    rng = np.random.default_rng(20260925)
+    tmp = tempfile.mkdtemp(prefix="dt_s6n_")
+    try:
+        shutil.copyfile(os.path.join(DT, "gen_step6_tbc_post.py"),
+                        os.path.join(tmp, "gen_step6_tbc_post.py"))
+        shutil.copyfile(os.path.join(OPT, "stepconf.py"), os.path.join(tmp, "stepconf.py"))
+        with open(os.path.join(tmp, "step.conf"), "w", encoding="utf-8") as fh:
+            fh.write("[params]\n")
+        s5 = os.path.join(tmp, "step5_tbc")
+        os.makedirs(s5)
+        # 源/漏各 30 A 厚 -> 拟合窗约 16 A，bin 宽 4 A -> 每侧只有 4 个 bin（用户场景）
+        meta = {"axis": "z", "interface_coord_A": 50.0, "coord_min_A": 0.0,
+                "coord_max_A": 100.0, "source_thickness_A": 30.0,
+                "sink_thickness_A": 30.0, "source_side": "high", "area_A2": area,
+                "time_step_fs": 1.0, "sample_interval": 10, "output_interval": 100}
+        json.dump(meta, open(os.path.join(s5, "tbc_inputs.json"), "w"))
+        with open(os.path.join(s5, "compute.out"), "w") as fh:
+            for i in range(120):
+                if i < 40:
+                    fh.write("%.10f %.10f\n" % (2.0 * i, -0.2 * i))
+                else:
+                    fh.write("%.10f %.10f\n" % (2.0 * 40 + slope * (i - 40),
+                                                -0.2 * 40 - slope * (i - 40)))
+        with open(os.path.join(s5, "compute_chunk.out"), "w") as fh:
+            for b in range(120):
+                for cid in range(50):
+                    z = 4.0 * cid + 1.0
+                    if 12.0 < z < 48.0:
+                        t = 0.625 * z + 273.75
+                    elif 52.0 < z < 88.0:
+                        t = 0.125 * z + 308.75
+                    else:
+                        t = 300.0
+                    if b >= 40 and (12.0 < z < 48.0 or 52.0 < z < 88.0):
+                        t += float(rng.normal(0.0, 8.0))
+                    fh.write("%d %.6f 10.0 %.6f\n" % (cid, z, t))
+        r = subprocess.run([sys.executable, "gen_step6_tbc_post.py"],
+                           cwd=tmp, capture_output=True, text=True)
+        ok(r.returncode == 0, "S6 少 bin + 大噪声数据运行 rc=0")
+        if r.returncode != 0:
+            print(r.stdout[-600:])
+            print(r.stderr[-600:])
+            return
+        out = json.load(open(os.path.join(tmp, "step6_tbc_post/tbc_result.json")))
+        unc = out.get("dT_interface_uncertainty_K")
+        grel = out.get("G_relative_uncertainty")
+        ok(out["quality"] == "poor",
+           "少 bin + 大噪声判 poor（旧版空间分块误差为 None 会跳过判据误判 good）")
+        ok(unc is None or grel is None or grel > 0.3,
+           "误差判据生效 dT_unc=%r G_rel=%r" % (unc, grel))
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 def main():
     print("=" * 62)
     print("suite_device_thermal  (%s)" % ROOT)
@@ -479,7 +586,8 @@ def main():
     for fn in (test_validation, test_energy_conservation, test_analytic_1d_insulator,
                test_x_convergence, test_y_convergence, test_anisotropic_oxide,
                test_fem_crosscheck, test_param_flow, test_kappa_source_modes,
-               test_thickness_scaling, test_interface_detection, test_s6_regression):
+               test_thickness_scaling, test_s5_align_coords, test_interface_detection,
+               test_s6_regression, test_s6_temporal_stats, test_s6_noise_is_poor):
         try:
             fn()
         except Exception as exc:  # noqa: BLE001
