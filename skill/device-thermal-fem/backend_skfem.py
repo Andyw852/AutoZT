@@ -91,10 +91,13 @@ def solve(model, workdir=None, opts=None):
     at = max(1e-6 * H, 1e-18)
     D = nd[np.where(np.abs(m.p[1] - H) < at)[0]]
     if sink:
+        # 金属接触只搭在沟道上（y < t_ch）——氧化层侧壁是绝热的。旧实现把 x=0/L
+        # 的整列节点（含 300 nm 氧化层）都钉成 T_amb，等于给氧化层侧壁加了热沉。
+        ch_nodes = m.p[1] < tch - 1e-18
         D = np.unique(np.concatenate([
             D,
-            nd[np.where(np.abs(m.p[0] - 0.0) < at)[0]],
-            nd[np.where(np.abs(m.p[0] - L) < at)[0]]]))
+            nd[np.where((np.abs(m.p[0] - 0.0) < at) & ch_nodes)[0]],
+            nd[np.where((np.abs(m.p[0] - L) < at) & ch_nodes)[0]]]))
     T = sk_solve(*condense(A, b, x=np.full(basis.N, Tamb), D=D))
 
     pv = m.p[:, m.t]

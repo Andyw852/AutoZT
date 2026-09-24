@@ -43,6 +43,17 @@ def find_artifacts(cwd, skill="device-thermal", override=None):
     return _first(spec_c), _first(prop_c)
 
 
+def _contact_is_sink(value):
+    """与 device_common.contact_bc_is_dirichlet 同一套取值；拼错直接报错。"""
+    v = str(value or "").strip().lower()
+    if v in ("sink", "fixed", "contact"):
+        return True
+    if v in ("insulator", "adiabatic", "neumann"):
+        return False
+    raise SystemExit("[ERROR] CONTACT_BC 只能是 sink/insulator"
+                     "（也接受 fixed/contact/adiabatic/neumann），收到 %r" % value)
+
+
 def build_model(spec, props, backend="skfem", mesh=None):
     """把 device-thermal 的 spec+props 组装成与后端无关的 FEM 模型 dict。"""
     ch, ox = props["channel"], props["oxide"]
@@ -70,7 +81,7 @@ def build_model(spec, props, backend="skfem", mesh=None):
         "Q_W_m2": float(spec["Q_joule_W_m2"]),
         "T_amb_K": float(spec["T_amb_K"]),
         "contact_bc": str(spec["contact_bc"]),
-        "sink": str(spec["contact_bc"]).lower() in ("sink", "fixed", "contact"),
+        "sink": _contact_is_sink(spec["contact_bc"]),
         "W_device_m": float(spec["W_device_m"]),
         "backend": backend,
         "mesh": mesh,
@@ -81,8 +92,9 @@ def build_model(spec, props, backend="skfem", mesh=None):
 
 def _r_series(model, t_ch_eff, t_ox_eff):
     ch, ox = model["layers"][0], model["layers"][1]
+    # 氧化层是各向异性（hBN）时必须用跨面 ky；用面内 kx 会把 R_th 低估上百倍。
     return (t_ch_eff / ch["ky_W_mK"] + 1.0 / model["interface_G_W_m2K"]
-            + t_ox_eff / ox["kx_W_mK"])
+            + t_ox_eff / ox["ky_W_mK"])
 
 
 def analytic_1d(model):
@@ -112,12 +124,13 @@ def analytic_1d_profile(model, y):
     d = model["mesh"]["interface_layer_m"]
     ch, ox = model["layers"][0], model["layers"][1]
     G = model["interface_G_W_m2K"]
-    t0 = Q * (g["t_oxide_m"] - d) / ox["kx_W_mK"] + Q / G + Q * tch / (2.0 * ch["ky_W_mK"])
+    t0 = (Q * (g["t_oxide_m"] - d) / ox["ky_W_mK"] + Q / G
+          + Q * tch / (2.0 * ch["ky_W_mK"]))
     if y <= tch:
         return t0 - Q * y * y / (2.0 * tch * ch["ky_W_mK"])
     if y <= tch + d:
         return t0 - Q * tch / (2.0 * ch["ky_W_mK"]) - Q * (y - tch) / (d * G)
-    return t0 - Q * tch / (2.0 * ch["ky_W_mK"]) - Q / G - Q * (y - tch - d) / ox["kx_W_mK"]
+    return t0 - Q * tch / (2.0 * ch["ky_W_mK"]) - Q / G - Q * (y - tch - d) / ox["ky_W_mK"]
 
 
 def nominal_power_W_per_m(model):

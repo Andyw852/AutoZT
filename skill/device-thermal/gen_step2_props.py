@@ -1,6 +1,11 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""gen_step2_props.py -- 汇总材料热物性：上游 kl-dft-cpu 实测 kappa + 材料库兜底 + TBC。
+"""gen_step2_props.py -- 汇总材料热物性：上游 kl 实测 kappa + 材料库兜底 + TBC。
+
+本步的参数（材料/厚度/TBC/来源）优先读本步自己的 step.conf，没设才回退 S1
+固化在 device_spec.json 里的值——这样在 S2_props 上 conf --set 才真正生效，
+同时沿用 S1 的默认。热物性组装统一走公共池 device_common.resolve_thermal_props，
+不再本地抄一份（旧版本地副本漏了警告分支、且 upstream 模式静默回退材料库）。
 
 产出 step2_props/thermal_props.json（判据 marker: "PROPS_DONE"）。
 """
@@ -15,26 +20,24 @@ import stepconf  # noqa: E402
 OUTDIR = "step2_props"
 STEP = "step2_props"
 PREV_SPEC = "step1_device_spec"
+# 只有下面这几个键允许在 S2 上覆盖；材料/温度/几何由 S1 拥有，直接读 device_spec.json。
 SPEC = {
-    "KAPPA_SOURCE": ("auto", "str"),
-    "UPSTREAM_SKILL": ("kl-dft-cpu", "str"),
-    "UPSTREAM_STEP": ("step6_kappa", "str"),
+    "CHANNEL_THICKNESS": (None, "float"),
+    "OXIDE_THICKNESS": (None, "float"),
+    "TBC_OVERRIDE": (None, "float"),
+    "KAPPA_SOURCE": (None, "str"),
+    "UPSTREAM_SKILL": (None, "str"),
+    "UPSTREAM_STEP": (None, "str"),
 }
 
 
-def _layer(db, name, thickness_override=None):
-    m = (db.get("materials") or {}).get(name)
-    if not m:
-        raise SystemExit("[ERROR] 材料库没有 %s；可用：%s"
-                         % (name, ", ".join(sorted(db.get("materials") or {}))))
-    t = float(m["thickness_m"]) if m.get("thickness_m") else None
-    if thickness_override:
-        t = float(thickness_override)
-    return {"material": name, "kind": m.get("kind"),
-            "kx_W_mK": float(m["kappa_inplane_W_mK"]),
-            "ky_W_mK": float(m["kappa_cross_W_mK"]),
-            "thickness_m": t, "rho_cp_J_m3K": float(m["rho_cp_J_m3K"]),
-            "note": m.get("note", ""), "source": "database"}
+def _p(conf, ckey, spec, skey, default=None):
+    """本步 step.conf 显式值 > S1 固化值 > 代码默认。"""
+    v = conf.get(ckey)
+    if v is not None:
+        return v
+    v = spec.get(skey) if skey else None
+    return default if v is None else v
 
 
 def main():
@@ -45,59 +48,27 @@ def main():
         sys.exit("[ERROR] 找不到 %s，先跑 %s" % (sp, PREV_SPEC))
     with open(sp, encoding="utf-8") as f:
         spec = json.load(f)
-    db = DC.load_materials()
-    T = float(spec["T_amb_K"])
-    ch_name, ox_name = spec["channel_material"], spec["oxide_material"]
-    src = str(conf["KAPPA_SOURCE"] or "auto").lower()
-    up_skill = conf["UPSTREAM_SKILL"] or "kl-dft-cpu"
-    up_step = conf["UPSTREAM_STEP"] or "step6_kappa"
 
-    ch = _layer(db, ch_name)
-    ox = _layer(db, ox_name)
-    upstream_info = None
-    if src in ("auto", "upstream", "dft"):
-        up = DC.find_upstream(cwd, up_skill, up_step)
-        if up:
-            k = DC.read_kappa(up, T)
-            if k:
-                ch["kx_W_mK"] = k["inplane"]
-                if k["cross"]:
-                    ch["ky_W_mK"] = k["cross"]
-                ch["source"] = "upstream:" + up
-                ch["kappa_key"] = k.get("kappa_key")
-                ch["kappa_note"] = k.get("note")
-                ch["ky_source"] = ("upstream 跨面张量" if k["cross"]
-                                   else "材料库值（%s）" % (k.get("cross_note") or "上游无有效跨面值"))
-                th, thp = DC.read_thickness(cwd, up_skill)
-                if th:
-                    ch["thickness_m"] = th
-                    ch["thickness_source"] = thp
-                upstream_info = {"file": up, "T_K": k["T"], "tensor": k["tensor"],
-                                 "kappa_key": k.get("kappa_key"), "note": k.get("note")}
-        else:
-            print("[warn] KAPPA_SOURCE=%s 但未找到上游 %s/%s 产物，改用材料库"
-                  % (src, up_skill, up_step))
-    elif src != "literature":
-        raise SystemExit("[ERROR] KAPPA_SOURCE 只能是 auto/upstream/literature，收到 %r" % src)
+    ch_name = spec.get("channel_material") or "MoS2"
+    ox_name = spec.get("oxide_material") or "SiO2"
+    T = float(spec.get("T_amb_K", 300.0))
+    ch_thick = _p(conf, "CHANNEL_THICKNESS", spec, "channel_thickness_m")
+    ox_thick = _p(conf, "OXIDE_THICKNESS", spec, "oxide_thickness_m")
+    tbc_override = _p(conf, "TBC_OVERRIDE", spec, "tbc_override_W_m2K")
+    ksrc = _p(conf, "KAPPA_SOURCE", spec, "kappa_source", "auto")
+    up_skill = _p(conf, "UPSTREAM_SKILL", spec, "upstream_skill", "kl-dft-cpu")
+    up_step = _p(conf, "UPSTREAM_STEP", spec, "upstream_step", "step6_kappa")
 
-    if spec.get("channel_thickness_m"):
-        ch["thickness_m"] = float(spec["channel_thickness_m"])
-        ch["thickness_source"] = "step.conf CHANNEL_THICKNESS"
-    if ch.get("thickness_m") is None:
-        sys.exit("[ERROR] 沟道 %s 厚度未知：请设 params.CHANNEL_THICKNESS，"
-                 "或让上游 kl-dft-cpu 产出 thickness_2d.json" % ch_name)
-    if ox.get("thickness_m") is None:
-        ox["thickness_m"] = float(spec["oxide_thickness_m"])
-        ox["thickness_source"] = "step.conf OXIDE_THICKNESS"
+    ch, ox, tbc, tbc_ref, upstream_info, src = DC.resolve_thermal_props(
+        cwd, ch_name, ox_name, T,
+        up_skill=up_skill, up_step=up_step, kappa_source=ksrc,
+        thickness_override=ch_thick, tbc_override=tbc_override,
+        oxide_thickness=ox_thick)
 
-    tbc, tbc_ref = DC.resolve_tbc(db, ch_name, ox_name)
-    if spec.get("tbc_override_W_m2K"):
-        tbc = float(spec["tbc_override_W_m2K"])
-        tbc_ref = "step.conf TBC_OVERRIDE (e.g. GPUMD/MD or experiment)"
     props = {"PROPS_DONE": True, "T_amb_K": T, "channel": ch, "oxide": ox,
              "tbc_W_m2K": tbc, "tbc_ref": tbc_ref,
              "upstream": upstream_info, "kappa_source": src,
-             "substrate_material": spec["substrate_material"]}
+             "substrate_material": spec.get("substrate_material")}
     out = os.path.join(cwd, OUTDIR)
     os.makedirs(out, exist_ok=True)
     p = os.path.join(out, "thermal_props.json")
@@ -106,13 +77,17 @@ def main():
     print("[OK] %s" % p)
     print("    channel %s: kx=%.4g ky=%.4g W/mK t=%.3f nm  [%s]"
           % (ch_name, ch["kx_W_mK"], ch["ky_W_mK"], ch["thickness_m"] * 1e9, ch["source"]))
-    print("    oxide %s: k=%.4g W/mK t=%.1f nm ; TBC=%.4g MW/m2K  [%s]"
-          % (ox_name, ox["kx_W_mK"], ox["thickness_m"] * 1e9, tbc / 1e6, tbc_ref))
+    print("    oxide %s: kx=%.4g ky=%.4g W/mK t=%.1f nm ; TBC=%.4g MW/m2K  [%s]"
+          % (ox_name, ox["kx_W_mK"], ox["ky_W_mK"], ox["thickness_m"] * 1e9,
+             tbc / 1e6, tbc_ref))
     if ch.get("kappa_note"):
         print("    κ 口径: %s" % ch["kappa_note"])
     if ch.get("ky_source"):
         print("    跨面 κ: %s" % ch["ky_source"])
+    if ch.get("kx_scale_note"):
+        print("    厚度换算: %s" % ch["kx_scale_note"])
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

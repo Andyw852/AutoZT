@@ -16,13 +16,16 @@ OUTDIR = "step3_solve"
 STEP = "step3_solve"
 PREV_SPEC = "step1_device_spec"
 PREV_PROPS = "step2_props"
+# 默认 None = 不覆盖，回退 S1 固化在 device_spec.json 里的值。技能共享模板里
+# 也不带这些键的默认值，否则 conf 永远非 None，_pick 的回退分支形同虚设
+# （README 3.4 说 S3 没显式设置时回退 S1，旧实现做不到）。
 SPEC = {
-    "N_GRID_X": (41, "int"),
-    "N_GRID_SUB": (60, "int"),
-    "DO_TRANSIENT": (True, "bool"),
-    "SOR_OMEGA": (1.7, "float"),
-    "SOR_TOL": (1e-10, "float"),
-    "SOR_MAXIT": (200000, "int"),
+    "N_GRID_X": (None, "int"),
+    "N_GRID_SUB": (None, "int"),
+    "DO_TRANSIENT": (None, "bool"),
+    "SOR_OMEGA": (None, "float"),
+    "SOR_TOL": (None, "float"),
+    "SOR_MAXIT": (None, "int"),
 }
 
 
@@ -55,15 +58,19 @@ def main():
     with open(os.path.join(out, "device_thermal_summary.json"), "w", encoding="utf-8") as f:
         json.dump(summary, f, ensure_ascii=False, indent=2)
     Nx, Ny = summary["Nx"], summary["Ny"]
-    x_nm = [i * (spec["L_channel_m"] / max(1, Nx - 1)) * 1e9 for i in range(Nx)]
+    # x 坐标由求解器给出（单元中心：(i+0.5)*L/Nx），与 FVM 离散保持一致。
+    x_nm = summary.get("x_nm") or [i * (spec["L_channel_m"] / max(1, Nx - 1)) * 1e9
+                                   for i in range(Nx)]
     with open(os.path.join(out, "T_field.json"), "w", encoding="utf-8") as f:
         json.dump({"Nx": Nx, "Ny": Ny, "x_nm": x_nm, "y_nm": summary["y_nm"],
                    "T_K": [[float(T[i, j]) for j in range(Ny)] for i in range(Nx)],
                    "layer_of": [int(x) for x in lay]}, f, ensure_ascii=False, indent=2)
     print("[OK] %s/device_thermal_summary.json (+ T_field.json)" % OUTDIR)
-    print("    dT_peak=%.4f K (FVM) vs %.4f K (1D net, ratio %.3f) ; SOR %d it ; unknowns=%d"
+    ratio = summary.get("dT_ratio_FVM_over_1D")
+    print("    dT_peak=%.4f K (FVM) vs %.4f K (1D net, ratio %s) ; SOR %d it ; unknowns=%d"
           % (summary["dT_peak_K"], summary["dT_peak_1D_network_K"],
-             summary["dT_ratio_FVM_over_1D"], summary["sor_iterations"], summary["unknowns"]))
+             ("%.3f" % ratio) if ratio is not None else "n/a",
+             summary["sor_iterations"], summary["unknowns"]))
     print("    power=%.3f uW @ Q=%.3g W/m2 ; R_th_eff=%.4g m2K/W ; contact=%s"
           % (summary["power_uW"], spec["Q_joule_W_m2"],
              summary["R_th_eff_m2K_per_W"], summary["contact_bc"]))
@@ -71,6 +78,9 @@ def main():
         print("    transient tau_fast=%.4g s tau_RC=%.4g s tau_63=%.4g s (dt0=%.3g s, n=%d)"
               % (summary["tau_fast_s"], summary["tau_RC_s"], summary["tau_63_s"],
                  summary["transient_dt0_s"], summary["transient_nsteps"]))
+        if summary.get("transient_n_unconverged"):
+            print("    [warn] 瞬态 %d/%d 步内层 SOR 未收敛（见 summary.transient_n_unconverged）"
+                  % (summary["transient_n_unconverged"], summary["transient_nsteps"]))
 
 
 if __name__ == "__main__":
