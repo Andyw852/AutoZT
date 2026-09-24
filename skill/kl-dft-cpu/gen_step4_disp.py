@@ -169,9 +169,15 @@ def plan_alm(out, ph3, conf):
                      "        未安装就禁止推进 step4。请先安装 ALM（cmake 编译 + Python 绑定\n"
                      "        from alm import ALM），再重跑 S4_disp。"
                      % (_e, _e2))
-    n = int(lk.estimate_n_struct(nfree, n_sc, int(conf["OVERSAMPLE"])))
-    detail = "  [自由参数 %s / DOF=3×%d=%d × OVERSAMPLE=%d]" % (
-        nfree, n_sc, 3 * n_sc, int(conf["OVERSAMPLE"]))
+    # ★ pheasy 实际自由 IFC 数约为 ALM 估计的 ~2 倍（WS₂: 1573/798≈1.97）——
+    #   ALM 只估"对称无关的独立项"，pheasy 零空间构造还含更多项。不放大则 S4 帧数
+    #   会让 S5 的"方程数/参数数"<3（WS₂ 12 帧只有 1.72），拟合欠定、κ 偏低。
+    #   （真正的硬闸在 S5 的 submit_fit_pheasy.tpl：读了 pheasy -c 的实际 free IFC 数再判。）
+    _coef = 2.0
+    nfree_adj = {k: int(v * _coef) for k, v in nfree.items()}
+    n = int(lk.estimate_n_struct(nfree_adj, n_sc, int(conf["OVERSAMPLE"])))
+    detail = "  [自由参数 %s（×%.1f→%s）/ DOF=3×%d=%d × OVERSAMPLE=%d]" % (
+        nfree, _coef, nfree_adj, n_sc, 3 * n_sc, int(conf["OVERSAMPLE"]))
     return n, nfree, atoms, detail
 
 
