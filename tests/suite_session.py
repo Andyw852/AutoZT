@@ -70,10 +70,10 @@ def mkm():
             "steps": [
                 {"name": "S1_opt", "label": "S1_opt", "kind": "OK", "diag": "",
                  "job": {"id": "3838838", "state": "COMPLETED"},
-                 "dir": "/public/home/.../tf_smoke/Si_sess/opt-dft-cpu/step1_std_opt"},
+                 "dir": "/public/home/<user>/tf_smoke/Si_sess/opt-dft-cpu/step1_std_opt"},
                 {"name": "S2_static", "label": "S2_static", "kind": "PREP",
                  "diag": "", "job": None,
-                 "dir": "/public/home/.../tf_smoke/Si_sess/opt-dft-cpu/step2_static"}]}
+                 "dir": "/public/home/<user>/tf_smoke/Si_sess/opt-dft-cpu/step2_static"}]}
 
 
 def mkdata():

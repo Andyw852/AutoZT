@@ -22,14 +22,14 @@ ls skill/kl-mlff-gpu/templates/mlff/
 #   my-finetuned-C60.model
 
 # 一次性推到超算（本目录的 push_model.sh 就干这个）
-bash skill/kl-mlff-gpu/templates/mlff/push_model.sh jzzn /public/home/.../software/mlff_models
+bash skill/kl-mlff-gpu/templates/mlff/push_model.sh jzzn /public/home/<user>/software/mlff_models
 ```
 
 然后在 step.conf 里指名字（路径由 `MACE_MODEL_DIR` 提供）：
 
 ```
 autozt -tt kl-mlff-gpu -p <材料> conf --set params.MACE_MODEL=mace-mpa-0-medium.model
-autozt -tt kl-mlff-gpu -p <材料> conf --set params.MACE_MODEL_DIR=/public/home/.../software/mlff_models
+autozt -tt kl-mlff-gpu -p <材料> conf --set params.MACE_MODEL_DIR=/public/home/<user>/software/mlff_models
 ```
 
 `MACE_MODEL_DIR` 一般写进全局 `templates/step.conf` 一次就够，不用每个材料设。

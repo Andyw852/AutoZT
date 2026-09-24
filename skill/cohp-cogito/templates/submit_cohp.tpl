@@ -29,7 +29,7 @@
 cd $SLURM_SUBMIT_DIR || exit 1
 
 # --- conda 环境（非交互 shell 必须先 source conda.sh）-----------------
-source /public/home/.../miniconda3/etc/profile.d/conda.sh
+source /public/home/<user>/miniconda3/etc/profile.d/conda.sh
 conda activate atomate2_p_a
 
 # 防止 BLAS 线程与 SLURM 分配打架；COGITO 本身单核为主

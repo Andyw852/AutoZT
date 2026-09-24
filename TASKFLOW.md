@@ -240,7 +240,7 @@ skill/<技能>/skill.yaml  <  全局 autozt.yaml 的 task_types.<key>  <  项目
 ```yaml
 # ~/software/AutoZT/setting/tf.yaml（全局，实际现状）
 host: jzzn                            # 默认 ssh 别名（项目 hpc.yaml 可覆盖）
-remote_path_prefix: /home/user_3090/software/pybin    # 只注入 python/python3/vaspkit 软链（供 gen 脚本用 numpy/pymatgen/vaspkit）；sbatch 走各机器真 SLURM
+remote_path_prefix: /home/<user>/software/pybin    # 只注入 python/python3/vaspkit 软链（供 gen 脚本用 numpy/pymatgen/vaspkit）；sbatch 走各机器真 SLURM
 project_roots:                        # 项目根列表：扫描其下 project_setting/tf_*.yaml（含一层子目录）
   - /mnt/d/tf_data
   - ~/software/AutoZT/tf_test
@@ -249,9 +249,9 @@ auto_advance: true                    # status/monitor 时自动提交可开始�
 auto_watch: false                     # 设为 true = 任何 autozt 命令顺带拉起后台监控
 task_types:                           # 只写与 skill.yaml 不同的站点字段（work_dir 必须配）
   band-dft-cpu:
-    work_dir: /public/home/.../Fullerene_Network/work
+    work_dir: /public/home/<user>/Fullerene_Network/work
     max_jobs: 100                     # 本技能同时提交的作业上限（只卡 sbatch）
-  elastic-dft-cpu: {work_dir: /public/home/.../Fullerene_Network/work, max_jobs: 100}
+  elastic-dft-cpu: {work_dir: /public/home/<user>/Fullerene_Network/work, max_jobs: 100}
   ...
 ```
 
@@ -272,7 +272,7 @@ task_types:                           # 只写与 skill.yaml 不同的站点字�
   base_dir: "{matdir}"              # 项目基准目录
   result_dir: "{matdir}/result"     # fetch 拉回位置（result/<step>/）
   log_dir: "{matdir}/log"           # autozt 操作日志 autozt.log
-  work_dir: /public/home/...        # 可覆盖类型的超算工作根
+  work_dir: /public/home/<user>        # 可覆盖类型的超算工作根
   fetch_files: [INCAR, POSCAR, POTCAR, KPOINTS, KPOINTS_OPT, kpath.json, submit.sh, OUTCAR, CONTCAR, EIGENVAL, vasprun.xml, queue.out]
   ```
   `fetch_files` 可扩展——不同体系要留的输出不同，往里加文件名即可。
@@ -348,9 +348,9 @@ autozt -tt kl-mlff-cpu -p X -j 2 conf --set submit.cpus_per_task=12  # MACE 类(
 
 | name | ssh 别名 | 硬件 | 调度 | 环境 | work_dir（集群默认） |
 |---|---|---|---|---|---|
-| `jzzn` | `jzzn` | CPU 集群（cpu192 分区） | 真 SLURM | VASP 6.4.x；MACE 走 venv `~/venvs/mace_cpu`（torch 2.7.1+cpu） | `/public/home/.../Fullerene_Network/work` |
+| `jzzn` | `jzzn` | CPU 集群（cpu192 分区） | 真 SLURM | VASP 6.4.x；MACE 走 venv `~/venvs/mace_cpu`（torch 2.7.1+cpu） | `/public/home/<user>/Fullerene_Network/work` |
 | `a800` | `A800` | 4 节点 × 8×A800-SXM4-80GB，每节点 128 CPU | 真 SLURM（分区 a800，GRES gpu:a800） | VASP 6.4.3 GPU 版；conda `mace`（mace 0.3.16+torch cu128+phono3py+symfc+pheasy 单环境） | `~/work`（/fs0 已 97% 满，注意） |
-| `3090` | `user_3090` | 8×RTX3090 | 真 SLURM 24.05.8（分区 cpu192 默认 + gpu 6 卡） | conda `mace-gpu`；VASP 6.6.0 GPU 版（OpenACC，`~/software/vasp.6.6.0/bin/{vasp_std,gam,ncl}`，NVIDIA HPC-SDK 24.11 环境） | `/home/user_3090/AutoZT/work` |
+| `3090` | `user_3090` | 8×RTX3090 | 真 SLURM 24.05.8（分区 cpu192 默认 + gpu 6 卡） | conda `mace-gpu`；VASP 6.6.0 GPU 版（OpenACC，`~/software/vasp.6.6.0/bin/{vasp_std,gam,ncl}`，NVIDIA HPC-SDK 24.11 环境） | `/home/<user>/AutoZT/work` |
 
 - **切换**：`autozt -p qHPC20,qHPC24 hpc a800`（材料级）/ `autozt -tt elastic-dft-cpu -p qHPC20 hpc a800`（技能级）。只动 `-p` 指定的项目；只影响之后提交的作业。
 - **接入一台新超算（两步）**：① 照 `setting/jzzn.yaml` 建 `setting/<名>.yaml`（name/ssh_host/模板映射/集群默认 work_dir 与 conda 环境）；② 把提交模板放到 `setting/<名>/templates/`（逻辑名即文件名，如 `submit_std_2d.tpl`、`submit_mlff.tpl`、`<步骤名>/submit_std_2d.tpl` 变体）。`#SBATCH --job-name` 必须写成 `{{JOBNAME}}` 占位符。
@@ -543,7 +543,7 @@ autozt -tt opt-dft-cpu -p <材料> -j 3 conf --set GUEST_ELEMENT=Li
 **三件必须知道的事**（详见 `skill/_common/mlff/README.md`）：
 
 1. **结构一定要用同一个势重弛豫**——力常数是在势自身的能量极小点上做泰勒展开；在 DFT 极小点直接取 MACE 力，残余力混进二阶力常数，Γ 点声学支直接假虚频。`RESIDUAL_TOL`（默认 2e-3 eV/Å）就是这道闸；S2 还会再测未位移超胞的残余力并扣掉。
-2. **MACE 给不出 Born 有效电荷和 ε∞**（势里没有电荷响应，原理性缺失）——极性材料不加 NAC 会缺 LO-TO 劈裂、高温 κ 偏。用 `kl-dft-cpu` 跑过 DFPT 的接 BORN：`autozt -tt kl-mlff-cpu -p <材料> -j step3_fc conf --set params.NAC_BORN=/public/home/.../kl-dft-cpu/step3_nac/BORN`。
+2. **MACE 给不出 Born 有效电荷和 ε∞**（势里没有电荷响应，原理性缺失）——极性材料不加 NAC 会缺 LO-TO 劈裂、高温 κ 偏。用 `kl-dft-cpu` 跑过 DFPT 的接 BORN：`autozt -tt kl-mlff-cpu -p <材料> -j step3_fc conf --set params.NAC_BORN=/public/home/<user>/kl-dft-cpu/step3_nac/BORN`。
 3. **`DTYPE` 必须 float64**——float32 的力误差（~1e-3 eV/Å）足以在声学支上造出假虚频。
 
 关键参数（step.conf）：`MACE_MODEL` / `MACE_MODEL_DIR` / `DEVICE` / `CONDA_ENV`（jzzn 上是 venv，写路径即按 venv 激活）、`METHOD=random`（默认 MC-rattle 随机位移）/ `findiff`（有限位移）、`N_RANDOM=auto`（按 ALM 数出的自由力常数反推帧数）、`FC2_SUPERCELL`、`MIN_SC_LEN`、`KAPPA_MESH`、`CKPT`（断点续算）、`ALM_CUT3`、`FIT_SOFTWARE=phono3py`/`pheasy`。GPU 版跑 `opt-mlff-gpu` 同款 GPU 机器（`autozt hpc` 切）。
@@ -1037,7 +1037,7 @@ CHECKERS = {"kappa_conv": ck_kappa_conv}    # ← 必须有这一行
 ```yaml
 task_types:
   kl-dft-cpu:
-    work_dir: /public/home/xxx/work     # 超算工作根，这个必须用户配
+    work_dir: /public/home/<user>/work     # 超算工作根，这个必须用户配
     # hpc: a800                         # 覆盖清单里的默认集群
     # plot_steps: false                 # 关掉可选步骤组
     # run_steps: [1, 2]                 # 只跑部分步骤

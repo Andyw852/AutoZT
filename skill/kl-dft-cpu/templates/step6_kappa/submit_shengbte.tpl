@@ -46,7 +46,7 @@
 module purge
 module load gcc/14.1
 module load openmpi/4.0.1
-source /public/home/.../miniconda3/etc/profile.d/conda.sh
+source /public/home/<user>/miniconda3/etc/profile.d/conda.sh
 conda activate atomate2_p_a
 cd $SLURM_SUBMIT_DIR
 
@@ -58,7 +58,7 @@ export OMP_NUM_THREADS=$SLURM_CPUS_PER_TASK
 export OMP_PROC_BIND=close OMP_PLACES=cores OMP_NESTED=FALSE
 export BLIS_NUM_THREADS=$OMP_NUM_THREADS
 export AOCL_ENABLE_INSTRUCTIONS=AVX512
-export LD_LIBRARY_PATH=/public/home/.../software/aocl-gcc/5.0.0/gcc/lib_LP64:$CONDA_PREFIX/lib:$LD_LIBRARY_PATH
+export LD_LIBRARY_PATH=/public/home/<user>/software/aocl-gcc/5.0.0/gcc/lib_LP64:$CONDA_PREFIX/lib:$LD_LIBRARY_PATH
 unset MKL_NUM_THREADS MKL_DEBUG_CPU_TYPE I_MPI_PMI_LIBRARY
 ulimit -s unlimited
 # [FIX P49/OMP 2026-09-18，移植自 taskflow-v2.0] "第一个温度（100 K）的 RTA 写完、

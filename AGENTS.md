@@ -281,13 +281,13 @@ project_setting/setting.yaml 的 work_dir   ← 最高，autozt hpc 不会改它
   > 技能默认
 ```
 
-**`autozt hpc` 只改 hpc.yaml，不改 project_setting/setting.yaml。** 材料第一次在某集群创建时，setting.yaml 里会写死那个集群的 work_dir；之后切 hpc，work_dir 仍取 setting.yaml 的旧值 → 远端路径错 → `mkdir /home/xxx: Permission denied` 或 `gen 脚本找不到`。
+**`autozt hpc` 只改 hpc.yaml，不改 project_setting/setting.yaml。** 材料第一次在某集群创建时，setting.yaml 里会写死那个集群的 work_dir；之后切 hpc，work_dir 仍取 setting.yaml 的旧值 → 远端路径错 → `mkdir /home/<user>: Permission denied` 或 `gen 脚本找不到`。
 
 **切 hpc 后必须同步改 `project_setting/setting.yaml` 的 work_dir**（三个集群各不同，从 `setting/<集群>.yaml` 读 work_dir，再补上本地 jzz/jap 子结构）：
 
 ```yaml
-# jzzn：/public/home/.../Fullerene_Network/work/jzz/jap
-# 3090：/home/user_3090/AutoZT/work/jzz/jap
+# jzzn：/public/home/<user>/Fullerene_Network/work/jzz/jap
+# 3090：/home/<user>/AutoZT/work/jzz/jap
 # 通用：work_dir 取 setting/<集群>.yaml 的 work_dir，再拼本地树相对路径（jzz/jap）
 ```
 

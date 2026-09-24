@@ -116,16 +116,16 @@ phono3py / alm 都在 conda 环境 `atomate2_p_a`。以下三处的环境路径�
   phono3py 拟合命令挪到计算节点（改成 submit 步）。
 
 ### ShengBTE 可执行文件（按集群，2026-09 实测）
-- **jzzn（CPU 版）**：`/public/home/.../software/sousaw-shengbte-aocl/ShengBTE`
+- **jzzn（CPU 版）**：`/public/home/<user>/software/sousaw-shengbte-aocl/ShengBTE`
   （官方 2024 内核 + AOCL，提交模板 submit_shengbte.tpl 已配套 module gcc/14.1 + openmpi/4.0.1 + aocl-gcc）。
-- **3090（GPU 版）**：`/home/user_3090/software/AutoZT/shengbte-gpu/ShengBTE`
+- **3090（GPU 版）**：`/home/<user>/software/AutoZT/shengbte-gpu/ShengBTE`
   —— 即 **2020 HPC Asia 论文 CUDA fork**（仓库 buaa-hipo/ShengBTE-Multiplatform，克隆在
   `~/software/AutoZT/shengbte-gpu/`，含 Src-gpu 源码）。已修复其 dGamma 未清零 bug，**phonopy fc2
   输入数值与官方 CPU 一致**（15³ RTA 8 温度点一致到 4~6 位有效数字），RTX3090 实测 ~4.6× 加速。
   运行需 `~/software/AutoZT/shengbte-gpu/run_env.sh` 设 NVHPC/OpenMPI/CUDA12.4/spglib/OpenBLAS 环境，
   经 SLURM 提交：`sbatch gpu 分区 + --gres=gpu:N + NVHPC mpirun -n N`（每 rank 自动 cudaSetDevice(rank%8)）。
   ⚠️ 该 fork 基于 2019 官方内核，仅三声子；数值与 jzzn 2024 CPU 版可能有个位数 % 级差异（2026-09 Si 实测 <0.1%）。
-- **3090（官方 v1.3 CPU，可选）**：`/home/user_3090/software/AutoZT/fourphonon-v13/bin_cpu`
+- **3090（官方 v1.3 CPU，可选）**：`/home/<user>/software/AutoZT/fourphonon-v13/bin_cpu`
   （FourPhonon 官方主线 v1.3，ShengBTE 超集含四声子；GPU 版 ShengBTE_gpu 对 phonopy fc2 输入存在
   官方 OpenACC bug——κ 错 67~71×，尚未修复，勿用于 phonopy 数据）。
 

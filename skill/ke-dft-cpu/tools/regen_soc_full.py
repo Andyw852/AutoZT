@@ -8,8 +8,8 @@ def pair(a, b):
     return b - a, (b - a) / abs(a) * 100.0
 
 MATS = ["Pb2Bi2Te5", "Pb2Sb2Te5", "Sn2Bi2Te5", "Sn2Sb2Te5"]
-BASE = "/public/home/.../ke_work/%s/ke-dft-cpu/step8_amset/transport.json"
-SOCP = "/public/home/.../ke_soc_20260910/%s/ke-dft-cpu/step8_amset/transport.json"
+BASE = "/public/home/<user>/ke_work/%s/ke-dft-cpu/step8_amset/transport.json"
+SOCP = "/public/home/<user>/ke_soc_20260910/%s/ke-dft-cpu/step8_amset/transport.json"
 KEYS = ["mobility", "conductivity", "seebeck", "kappa_e", "PF"]
 SRC = {"mobility": ("mobility", "overall"), "conductivity": ("conductivity",),
        "seebeck": ("seebeck",), "kappa_e": ("electronic_thermal_conductivity",)}

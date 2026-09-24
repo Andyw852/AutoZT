@@ -15,7 +15,7 @@ phono3py）**并列的第三条路线**：不经过力常数截断，用 NEP 势
 ```bash
 tf -tt kl-gpumd-3090 -p <材料> init
 tf -tt kl-gpumd-3090 -p <材料> -j step1_struct conf --set \
-   params.DATA_DIR=/home/user_3090/Data/Mg4C60_rattle
+   params.DATA_DIR=/home/<user>/Data/Mg4C60_rattle
 tf -tt kl-gpumd-3090 -p <材料> -j step2_nep conf --set \
    params.PRETRAINED_NEP=nep89_20250409.txt \
    params.PRETRAINED_RESTART=nep89_20250409.restart
@@ -65,7 +65,7 @@ run 2000000                         # 生产
    `PRETRAINED_NEP` 留空做从头训练（数据量不大时精度会差一些）。
    架构键（`version/zbl/cutoff/n_max/basis_size/l_max/neuron`）**必须与基座一致、不可改**。
 3. **训练数据**：VASP OUTCAR 目录（每个构型一个 `POSCAR-*/OUTCAR`）。Mg4C60 的 312 个
-   MC-rattle 构型在 jzzn 的 `/public/home/.../joint_research_project/hyl/Mg4C60/new2/new2/new_mcrattle_structures`，
+   MC-rattle 构型在 jzzn 的 `/public/home/<user>/joint_research_project/hyl/Mg4C60/new2/new2/new_mcrattle_structures`，
    每个 OUTCAR 只有 ~0.65 MB（**不要拷 CHGCAR/WAVECAR**）→ 一次拷到 3090 机再改 `DATA_DIR`。
 4. **环境**：`CONDA_ENV=wc` 里要有 `ase`（读 OUTCAR 与建 xyz）、`matplotlib`（S4 画图）。
 

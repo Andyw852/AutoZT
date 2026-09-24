@@ -53,7 +53,7 @@ rm skill/kl-mlff-gpu/*.py                          # 删掉 = 回到共用
 
 ```
 autozt -tt kl-mlff-cpu -p <材料> -j step3_fc conf --set \
-   params.NAC_BORN=/public/home/.../<材料>/kl-dft-cpu/step3_nac/BORN
+   params.NAC_BORN=/public/home/<user>/<材料>/kl-dft-cpu/step3_nac/BORN
 ```
 
 两边的原胞要是同一个设定（原子顺序、晶格取向）。MACE 弛豫后的晶格常数和 DFT 不完全
@@ -105,9 +105,9 @@ autozt -tt kl-mlff-gpu -p <材料> -j 3 conf --set params.FIT_SOFTWARE=pheasy pa
 ```yaml
 task_types:
   kl-mlff-gpu:
-    work_dir: /public/home/.../Fullerene_Network/work
+    work_dir: /public/home/<user>/Fullerene_Network/work
   kl-mlff-cpu:
-    work_dir: /public/home/.../Fullerene_Network/work
+    work_dir: /public/home/<user>/Fullerene_Network/work
 ```
 
 ## 出虚频了怎么办

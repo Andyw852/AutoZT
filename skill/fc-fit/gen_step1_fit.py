@@ -127,7 +127,7 @@ SPEC = {
     "IMAG_THR": (0.10, "float"),             # imaginary-frequency threshold (THz)
     "FIT_RMSE_FRAMES": (0, "int"),           # 0 = off; else frames used for the residual
     # ---- environment ----
-    "CONDA_SH": ("/public/home/.../miniconda3/etc/profile.d/conda.sh", "str"),
+    "CONDA_SH": ("/public/home/<user>/miniconda3/etc/profile.d/conda.sh", "str"),
     "CONDA_ENV": ("atomate2_p_a", "str"),
 }
 

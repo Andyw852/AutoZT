@@ -10,7 +10,7 @@
 #SBATCH --error=queue.err
 #SBATCH --qos=premium
 cd $SLURM_SUBMIT_DIR
-source /public/home/.../miniconda3/etc/profile.d/conda.sh
+source /public/home/<user>/miniconda3/etc/profile.d/conda.sh
 conda activate atomate2_p_a
 
 NCPU=${SLURM_CPUS_PER_TASK:-48}

@@ -165,11 +165,11 @@ MCP 本地 stdio 配置示例：
 {
   "mcpServers": {
     "autozt": {
-      "command": "/home/user/AutoZT/bin/autozt",
+      "command": "/home/<user>/AutoZT/bin/autozt",
       "args": ["mcp"],
       "env": {
         "AUTOZT_MCP_PROFILE": "workflow",
-        "AUTOZT_CONFIG": "/home/user/AutoZT/setting/tf.yaml"
+        "AUTOZT_CONFIG": "/home/<user>/AutoZT/setting/tf.yaml"
       }
     }
   }

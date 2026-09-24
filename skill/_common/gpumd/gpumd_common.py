@@ -13,7 +13,7 @@ from pathlib import Path
 
 PARAMS_JSON = "gpumd_params.json"
 METHOD_FILE = "workflow_method.txt"
-DEFAULT_CONDA_SH = "/home/user_3090/miniconda3/etc/profile.d/conda.sh"
+DEFAULT_CONDA_SH = "/home/<user>/miniconda3/etc/profile.d/conda.sh"
 DEFAULT_CONDA_ENV = "wc"
 
 

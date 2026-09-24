@@ -2,7 +2,7 @@
 
 > 写于 2026-09-17，上一会话 context 用满。仓库 `~/software/AutoZT`（包 `autozt`），
 > 集群 jzzn（ssh 别名 `jzzn`），项目根 `/mnt/d/tf_data/test_TE/P1`，
-> 远端工作根 `/public/home/.../Fullerene_Network/work`。
+> 远端工作根 `/public/home/<user>/Fullerene_Network/work`。
 
 ## 0. 一句话现状
 
@@ -144,7 +144,7 @@ P0-3（LASSO 设置）**尚未在完整链路上跑通**。下一步分两条线
 3. 定下真空厚度后，对需要的材料重做 S1。
 4. S1 通过且线 A 验证完成后，再批量推 S2→S6；S4 的 INCAR 按 bench 结论定。
 
-**低优先级**：Mn₂In₂Se₅（jzzn `/public/home/wangch/Mn2In2Se5/fix`，**账号是 wangch 不是
+**低优先级**：Mn₂In₂Se₅（jzzn `/public/home/<user>/Mn2In2Se5/fix`，**账号是 wangch 不是
 user**，手写 phono3py+symfc、**3D 体材料**，按 |P| 判）与 225 相四合金（hanhai25、
 走 **ke 链**）—— 都是 3D，与真空/厚度无关，只需查当时变胞段有没有被跳过。
 
@@ -153,7 +153,7 @@ user**，手写 phono3py+symfc、**3D 体材料**，按 |P| 判）与 225 相四
 ## 6. 归档与产物路径
 
 - **旧结构归档**（S4 力数据，2×2 上排的命根子）：
-  `/public/home/.../Fullerene_Network/work/_archive_pre_relax_20260917/`（1.1 GB）
+  `/public/home/<user>/Fullerene_Network/work/_archive_pre_relax_20260917/`（1.1 GB）
   - `P1_Mo-MoS2_Z4-3-1_kl_step4_disp/`：132 MB，**166 帧含全部 vasprun.xml** +
     `phono3py_disp.yaml`(1 MB，含旧超胞与位移) + 旧 `phonon_summary.json`/`fit_config.json`
   - 另外 6 个材料的 `*_essentials/`（`phono3py_disp.yaml` + `kl_params.txt` + 旧 SPOSCAR）
@@ -751,7 +751,7 @@ git commit -m "fix(2D-kl): S1 变胞段 ZBRENT 根因修复（STAGES_RUN 闸门�
 | S3_nac / S4_disp / S5_fc / S5.1_plot / S6_kappa | 未开始（S4 前须先做 13.4-C 两项） |
 
 材料：`/mnt/d/tf_data/test_kl/MoS2_kltest`（1H-MoS₂ 单层，a=3.16 Å、25 Å 真空、
-d(Mo–S)=2.407 Å）；远端工作目录 `/public/home/.../Fullerene_Network/work/MoS2_kltest`。
+d(Mo–S)=2.407 Å）；远端工作目录 `/public/home/<user>/Fullerene_Network/work/MoS2_kltest`。
 
 
 ---
@@ -1147,7 +1147,7 @@ python skill/kl-dft-cpu/kl_common.py --scan-nelm <step4_disp 目录> [--json] [-
 
 ### 19.4 P1 全批回溯扫描统计（jzzn，2026-09-19，只读）
 
-扫描对象：`/public/home/.../Fullerene_Network/work/P1_*/kl-dft-cpu/step4_disp`。
+扫描对象：`/public/home/<user>/Fullerene_Network/work/P1_*/kl-dft-cpu/step4_disp`。
 
 | 材料 | disp-* 帧目录 | 有 OUTCAR | NELM 警告 | aborting!=1 | 缺 OUTCAR | 电子步 min/中位/mean/p90/max |
 |---|---|---|---|---|---|---|
@@ -1218,7 +1218,7 @@ python skill/kl-dft-cpu/kl_common.py --scan-nelm <step4_disp 目录> [--json] [-
 两者都被用户明确禁止，且会毁掉那 165 帧。
 
 **关键核实结论：这一帧根本不需要补。** 归档数据集
-`/public/home/.../Fullerene_Network/work/_archive_pre_relax_20260917/P1_Mo-MoS2_Z4-3-1_kl_step4_disp`
+`/public/home/<user>/Fullerene_Network/work/_archive_pre_relax_20260917/P1_Mo-MoS2_Z4-3-1_kl_step4_disp`
 **166 个 `disp-*` / 166 个 OUTCAR，`disp-00001` 完整**（OUTCAR、vasprun.xml、CONTCAR、CHGCAR、WAVECAR 全在），
 并带 `phono3py_disp.yaml` / `alm.in` / `SPOSCAR` / `POSCAR-00001..00165`。而该数据集的用途正是
 "**归档完整性 + 2×2 诊断的上排（走 fc-fit，用归档那份）**" → **该项已满足，无需任何 retry/rerun**。
@@ -1305,8 +1305,8 @@ autozt -tt kl-dft-cpu -p MoS2_kltest -j S4_disp start
 
 - `FIT_INPUT_DIR` 取值：`auto | path`（**技能目录相对或绝对路径**，`gen_step1_fit.py:54`）。
 - **两套都显式给绝对路径**，避免 `auto` 自动搜索在 `step4_disp/bench/` 附近产生歧义：
-  - 390：`/public/home/.../Fullerene_Network/work/MoS2_kltest/kl-dft-cpu/step4_disp`
-  - 520：`/public/home/.../Fullerene_Network/work/MoS2_kltest/kl-dft-cpu/step4_disp/bench/encut_2.0x_ediiff1e7_full12`
+  - 390：`/public/home/<user>/Fullerene_Network/work/MoS2_kltest/kl-dft-cpu/step4_disp`
+  - 520：`/public/home/<user>/Fullerene_Network/work/MoS2_kltest/kl-dft-cpu/step4_disp/bench/encut_2.0x_ediiff1e7_full12`
     （已备好 `SPOSCAR` + `phono3py_disp.yaml` + `disp-00000`，见 §20.5）
 - 参数：`FIT_ENGINE=pheasy`、`PHEASY_FIT_METHOD=OLS`、`PHEASY_RASR=BHH`；另跑一份默认 `RFE` 作对照。
 - 输出目录硬编码 `step1_fit`（§20.5）→ 两套串行跑、各自另存为 `step1_fit_encut390/`、`step1_fit_encut520/`。
@@ -2637,7 +2637,7 @@ autozt -tt kl-dft-cpu -p MoS2_kltest -j S2_static start   # 预期：报"确认�
 ## 46.5 已有材料只读重判（`scripts/rejudge_imag_policy.py`，只读）
 
 跑法（jzzn，`atomate2_p_a`）：`PYTHONPATH=/tmp/imag_rejudge python -u rejudge_imag_policy.py \\
-  --root /public/home/.../Fullerene_Network/work --pattern '<mat>/kl-dft-cpu/step5_fc/phono3py/fc2.hdf5' --mesh-n 60`
+  --root /public/home/<user>/Fullerene_Network/work --pattern '<mat>/kl-dft-cpu/step5_fc/phono3py/fc2.hdf5' --mesh-n 60`
 （脚本对每个 fc2 建 Phonopy → 跑 `[1,60,60]` 网格 + 2D 路径 101 点 → `classify_imag` → 与旧
 `phonon_summary.json` 对照。**只读，不改任何文件、不提交作业**。）
 

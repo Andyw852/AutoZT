@@ -17,8 +17,8 @@ OUTDIR = "step3_kappa"
 STEP = "step3_kappa"
 
 SPEC = {
-    "GPUMD_BIN": ("/home/user_3090/gpumd/src/gpumd", "str"),
-    "NEP_BIN": ("/home/user_3090/gpumd/src/nep", "str"),
+    "GPUMD_BIN": ("/home/<user>/gpumd/src/gpumd", "str"),
+    "NEP_BIN": ("/home/<user>/gpumd/src/nep", "str"),
     "CONDA_SH": (gc.DEFAULT_CONDA_SH, "str"),
     "CONDA_ENV": (gc.DEFAULT_CONDA_ENV, "str"),
     # --- MD 协议 ---

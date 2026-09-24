@@ -2,7 +2,7 @@
 
 fixture 取自真实踩坑现场：
   · kl-mlff-gpu S3（3090 上跑通）：cpu192 / 24 核
-  · fc-fit S1（切到 3090 后静默死亡）：cpu192 / 48 核 + atomate2_p_a + /public/home/...
+  · fc-fit S1（切到 3090 后静默死亡）：cpu192 / 48 核 + atomate2_p_a + /public/home/<user>
 """
 import os
 import sys
@@ -19,7 +19,7 @@ OK_SUBMIT = """#!/bin/bash
 #SBATCH --cpus-per-task=24
 #SBATCH --qos=regular
 cd $SLURM_SUBMIT_DIR
-source /home/user_3090/miniconda3/etc/profile.d/conda.sh
+source /home/<user>/miniconda3/etc/profile.d/conda.sh
 conda activate mace-gpu
 python fc_fit_driver.py 2>&1 | tee -a fc_build.log
 """
@@ -33,7 +33,7 @@ cd $SLURM_SUBMIT_DIR
 if [ -n "atomate2_p_a" ] && [ -x "atomate2_p_a/bin/python" ]; then
     source "atomate2_p_a/bin/activate"
 else
-    source /public/home/.../miniconda3/etc/profile.d/conda.sh
+    source /public/home/<user>/miniconda3/etc/profile.d/conda.sh
     conda activate atomate2_p_a
 fi
 python fc_fit_driver.py fit fit_config.json
@@ -63,7 +63,7 @@ def test_partition_check_messages():
 def test_conda_activations_extracted_from_both_branches():
     acts = pf.parse_conda_activations(BAD_SUBMIT)
     assert ("env", "atomate2_p_a") in acts
-    assert ("sh", "/public/home/.../miniconda3/etc/profile.d/conda.sh") in acts
+    assert ("sh", "/public/home/<user>/miniconda3/etc/profile.d/conda.sh") in acts
     assert acts == pf.parse_conda_activations(BAD_SUBMIT)  # 幂等、无重复
 
 
@@ -81,6 +81,6 @@ def test_good_template_produces_no_warnings():
     assert pf.check_resources(res, 24) is None
     assert pf.check_partition(res, "", ["cpu192"]) is not None  # 未声明分区时给提示（不阻断）
     acts = pf.parse_conda_activations(OK_SUBMIT)
-    assert acts == [("sh", "/home/user_3090/miniconda3/etc/profile.d/conda.sh"),
+    assert acts == [("sh", "/home/<user>/miniconda3/etc/profile.d/conda.sh"),
                     ("env", "mace-gpu")]
     assert pf.missing_activations(acts, "OK-0\nOK-1") == []

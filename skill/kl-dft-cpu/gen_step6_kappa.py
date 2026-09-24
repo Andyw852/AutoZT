@@ -955,7 +955,7 @@ def main():
         kc.write_submit(tpl, out / "submit.sh",
                         {"JOBNAME": kc.new_jobname(cwd, "S6kappa"),
                          "CONDA_SH": (conf["CONDA_SH"]
-                                      or "/public/home/.../miniconda3/etc/profile.d/conda.sh"),
+                                      or "/public/home/<user>/miniconda3/etc/profile.d/conda.sh"),
                          "CONDA_ENV": "atomate2_p_a",
                          "CPUS_PER_TASK": str(_p3_threads),
                          "QOS": str(conf["SBATCH_QOS"] or "premium"),

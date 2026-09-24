@@ -9,7 +9,7 @@
 #SBATCH --error=queue.err
 #SBATCH --qos=regular
 cd $SLURM_SUBMIT_DIR
-source /public/home/.../miniconda3/etc/profile.d/conda.sh
+source /public/home/<user>/miniconda3/etc/profile.d/conda.sh
 conda activate atomate2_p_a
 NCPU=8
 export OMP_NUM_THREADS=$NCPU
