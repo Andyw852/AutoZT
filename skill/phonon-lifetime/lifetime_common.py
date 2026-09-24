@@ -10,18 +10,19 @@ phono3py 的 kappa-m*.hdf5 / gamma-m*.hdf5 里的 gamma 是声子自能的虚部
 
     tau[ps] = 1 / (2 * 2 * pi * gamma_total[THz])
 
-其中 gamma_total = gamma_anh + gamma_isotope（phono3py 的 kappa 用的就是总和，
-见 conductivity/base.py:_get_main_diagonal；只取 gamma 会把寿命算长）。
-即 tau = 1/(4*pi*gamma_total)。三处官方实现均为该式：
-  * phono3py/scripts/phono3py_kdeplot.py:  tau = 1/g/(2*2*pi)
-  * phono3py/other/kaccum.py:              mfp = v/(2*2*pi*g)（mfp = v*tau）
-  * phono3py/conductivity/base.py:         get_unit_to_WmK() 里的 1/(2*pi)
-    （注释 "2pi comes from definition of lifetime"），配合 RTA 的 /(g*2)。
+其中 gamma_total = gamma_anh + gamma_isotope (+ 边界散射 gamma_bd)，
+phono3py 的 kappa 用的就是 gamma + gamma_isotope（conductivity/base.py:
+_get_main_diagonal）；只取 gamma 会把寿命算长。即 tau = 1/(4*pi*gamma_total)。
+1 THz = 1/ps，故 tau 直接以 ps 计。
 
-注意 1 THz = 1e12/s = 1/ps，所以上式的 tau 直接以 ps 计。
+统计量必须按不可约网格权重加权
+------------------------------
+kappa-m*.hdf5 里的 qpoint 只是不可约点，weight 是它在全网格里的星数。
+若按点等权统计，高对称点被过度代表（Si 15x15x15：120 个不可约点，权重 1~48），
+中位数/P10/P90/过阻尼比例都会静默偏掉。本模块所有汇总统计都支持 weights。
 
 寿命与“振动周期”的比较（论文 Kim et al. Nature 2021 图 2e 的判据）
----------------------------------------------------------------
+------------------------------------------------------------------
 声子周期 T_period[ps] = 1/f[THz]；无量纲 omega*tau = 2*pi*f*tau。
 omega*tau ~ 1（或 tau ~ T_period）表示强散射/近过阻尼，声子在完成一个振荡
 前就失去了相干性（Ioffe-Regel 判据）。
@@ -30,6 +31,7 @@ from __future__ import annotations
 
 import csv
 import json
+import re
 from pathlib import Path
 
 import numpy as np
@@ -39,7 +41,8 @@ TAU_FACTOR = 2.0 * 2.0 * np.pi
 
 # 判据默认阈值
 DEFAULT_IMAG_THR = 0.10        # THz，低于此频率视为数值虚频/声学近零模，排除
-DEFAULT_ACOUSTIC_FMAX = 2.0    # THz，声学支分析的频率上限兜底
+# 保留常量仅供外部引用；0.2 起 acoustic_mask 默认不再用频率窗（见其 docstring）
+DEFAULT_ACOUSTIC_FMAX = 2.0    # THz
 
 
 # ---------------------------------------------------------------------------
@@ -70,20 +73,118 @@ def _iter_candidate_dirs(cwd, skill, step):
     return seen
 
 
-def find_kappa_hdf5(cwd, skill="kl-dft-cpu", step="step6_kappa"):
+def _hdf5_info(path):
+    """读一个 hdf5 的元信息（打不开/不是 phono3py 文件返回 has_gamma=False）。"""
+    info = {"has_gamma": False, "n_gp": 0, "n_band": 0, "mesh": [], "has_qw": False,
+            "gamma_ndim": 0, "has_mode_kappa": False, "has_boundary": False,
+            "boundary_mfp": None, "datasets": []}
+    try:
+        import h5py
+
+        with h5py.File(path, "r") as f:
+            info["datasets"] = sorted(f.keys())
+            info["has_gamma"] = ("gamma" in f) and ("frequency" in f)
+            if "frequency" in f:
+                shp = f["frequency"].shape
+                if len(shp) == 2:
+                    info["n_gp"], info["n_band"] = int(shp[0]), int(shp[1])
+            info["gamma_ndim"] = int(f["gamma"].ndim) if "gamma" in f else 0
+            info["has_qw"] = ("qpoint" in f) and ("weight" in f)
+            info["has_mode_kappa"] = "mode_kappa" in f
+            if "mesh" in f:
+                info["mesh"] = [int(x) for x in np.asarray(f["mesh"][()]).ravel().tolist()]
+            if "boundary_mfp" in f:
+                info["has_boundary"] = True
+                try:
+                    info["boundary_mfp"] = float(np.asarray(f["boundary_mfp"][()]).ravel()[0])
+                except Exception:
+                    info["boundary_mfp"] = None
+    except Exception:
+        pass
+    return info
+
+
+def hdf5_has_gamma(path):
+    return bool(_hdf5_info(path)["has_gamma"])
+
+
+_NAME_PENALTY = (
+    (re.compile(r"-g[0-9]+\.hdf5$"), 4),     # --write-gamma --gp 的单点文件
+    (re.compile(r"mfp"), 2),                  # 累积 mfp / kappa-mfp
+    (re.compile(r"(-|_)gp(-|_|\.|$)"), 1),   # 单网格点输出
+)
+
+
+def _file_penalty(path):
+    name = Path(path).name.lower()
+    return sum(pen for rx, pen in _NAME_PENALTY if rx.search(name))
+
+
+def select_kappa_hdf5(paths, log=None, note=""):
+    """从候选 hdf5 里选主文件，返回 (Path|None, [被忽略的候选 Path])。
+
+    0.1 用 sorted()[-1]（字符串序）选文件，kappa-m999 会盖过 kappa-m151515。
+    这里改成按物理量排序：
+      1) 只保留含 gamma+frequency 的；
+      2) 优先多 q 点主文件（gamma 三维、n_qpoint>1），单点/多套网格分别降级；
+      3) 再比 mesh 乘积、q 点数、是否带 qpoint/weight/mode_kappa；
+      4) 文件名里带 -g0 / mfp / gp 的额外降级。
+    有多个候选时通过 log 输出“选了谁、忽略了谁”，绝不静默换网格。
+    """
+    cands = []
+    for p in dict.fromkeys(Path(x) for x in paths):
+        info = _hdf5_info(p)
+        if info["has_gamma"]:
+            cands.append((Path(p), info))
+    if not cands:
+        return None, []
+
+    def key(item):
+        p, info = item
+        multi = 1 if (info["gamma_ndim"] >= 3 and info["n_gp"] > 1) else 0
+        mesh_prod = int(np.prod(info["mesh"])) if info["mesh"] else 0
+        return (multi, -_file_penalty(p), mesh_prod, info["n_gp"],
+                1 if info["has_qw"] else 0, 1 if info["has_mode_kappa"] else 0)
+
+    cands.sort(key=key, reverse=True)
+    best, ignored = cands[0], cands[1:]
+    if ignored and log:
+        log("[warn] %s发现 %d 个含 gamma 的 hdf5，选 %s (mesh=%s, n_qpoint=%d)；忽略 %s"
+            % (note, len(cands), best[0].name,
+               "x".join(str(x) for x in best[1]["mesh"]) or "?",
+               best[1]["n_gp"],
+               ", ".join("%s(n_qpoint=%d)" % (q.name, i["n_gp"]) for q, i in ignored[:8])))
+    return best[0], [q for q, _ in ignored]
+
+
+def is_main_hdf5(path):
+    """该 hdf5 是否是“多 q 点主文件”（而非 --write-gamma --gp 的单点/单条输出）。"""
+    info = _hdf5_info(path)
+    return bool(info["has_gamma"] and info["gamma_ndim"] >= 3 and info["n_gp"] > 1)
+
+
+def find_kappa_hdf5(cwd, skill="kl-dft-cpu", step="step6_kappa", log=None):
     """在材料目录树里找 phono3py 的 kappa/gamma hdf5（含 gamma 数据集）。
 
-    优先级：kappa-m*.hdf5 > gamma-m*.hdf5 > kappa*.hdf5 > *.hdf5（含 gamma）。
+    逐个候选目录找；同一目录里用 select_kappa_hdf5 选主文件（不按字符串序）。
     返回 Path 或 None。
     """
+    fallback = None
     for d in _iter_candidate_dirs(Path(cwd), skill, step):
         if not d.is_dir():
             continue
+        files = []
         for pat in ("kappa-m*.hdf5", "gamma-m*.hdf5", "kappa*.hdf5", "*.hdf5"):
-            hits = sorted(d.glob(pat))
-            if hits and hdf5_has_gamma(hits[-1]):
-                return hits[-1]
-    return None
+            files.extend(sorted(d.glob(pat)))
+        best, _ = select_kappa_hdf5(files, log=log, note="[%s] " % d)
+        if best is None:
+            continue
+        if is_main_hdf5(best):
+            return best
+        # 只有 --gp 单点文件时先记住，继续看有没有别处的多 q 点主文件
+        if fallback is None:
+            fallback = best
+    return fallback
 
 
 def find_fc_dataset(cwd, skill="kl-dft-cpu", step="step6_kappa"):
@@ -104,14 +205,57 @@ def find_fc_dataset(cwd, skill="kl-dft-cpu", step="step6_kappa"):
     return None
 
 
-def hdf5_has_gamma(path):
-    try:
-        import h5py
+# ---------------------------------------------------------------------------
+# 对称操作（沿 q 方向取样要用；缺 yaml/pyyaml/spglib 时优雅降级）
+# ---------------------------------------------------------------------------
+_YAML_CANDIDATES = ("phono3py.yaml", "phono3py_disp.yaml", "phono3py_params.yaml")
 
-        with h5py.File(path, "r") as f:
-            return "gamma" in f and "frequency" in f
+
+def find_phonopy_yaml(h5path=None, cwd=None, skill="kl-dft-cpu", step="step6_kappa"):
+    """找 hdf5 旁边的 phono3py/phonopy yaml（含 primitive_cell，可求对称操作）。"""
+    dirs = []
+    if h5path is not None:
+        dirs.append(Path(h5path).resolve().parent)
+    if cwd is not None:
+        cwd = Path(cwd).resolve()
+        dirs.extend([d for d in _iter_candidate_dirs(cwd, skill, step) if d.is_dir()])
+        dirs.extend([cwd / "phono3py", cwd.parent / "phono3py"])
+    for d in dirs:
+        for name in _YAML_CANDIDATES:
+            p = d / name
+            if p.is_file():
+                return p
+    return None
+
+
+def symmetry_rotations_from_yaml(path):
+    """从 yaml 的 primitive_cell 用 spglib 求分数坐标下的对称操作 (n,3,3)。
+
+    缺 pyyaml 或 spglib、或解析失败时返回 None（调用方据此降级）。
+    """
+    try:
+        import yaml
+        import spglib
     except Exception:
-        return False
+        return None
+    try:
+        doc = yaml.safe_load(Path(path).read_text(encoding="utf-8")) or {}
+        pc = doc.get("primitive_cell") or {}
+        lat = np.asarray(pc.get("lattice"), dtype=float)
+        points = pc.get("points") or []
+        pos = np.asarray([p["coordinates"] for p in points], dtype=float)
+        if lat.shape != (3, 3) or pos.ndim != 2 or pos.shape[0] == 0:
+            return None
+        syms = [str(p.get("symbol")) for p in points]
+        uniq = {s: i + 1 for i, s in enumerate(sorted(set(syms)))}
+        nums = [uniq[s] for s in syms]
+        sym = spglib.get_symmetry((lat, pos, nums))
+        if not sym:
+            return None
+        rot = np.asarray(sym["rotations"], dtype=float)
+        return rot if rot.ndim == 3 and rot.shape[1:] == (3, 3) else None
+    except Exception:
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -165,6 +309,26 @@ def effective_gamma(gamma, gamma_isotope=None):
     return g + gi
 
 
+def boundary_gamma(group_velocity, boundary_mfp_ang):
+    """边界散射线宽 gamma_bd[THz] = |v|/(4*pi*L)。
+
+    与 phono3py conductivity/base.py:_get_boundary_scattering 同源：那里
+    g_bd = |v|/(2*2*pi*L)（单位换算略去），对应 tau_bd = L/|v|。
+    上游若用 EXTRA_ARGS 打开 --boundary-mfp，hdf5 里的 kappa 就含边界散射，
+    寿命必须一并计入才能和 kappa 对上。L<=0/非有限时返回 None。
+    """
+    if group_velocity is None or boundary_mfp_ang is None:
+        return None
+    L = float(boundary_mfp_ang)
+    if not np.isfinite(L) or L <= 0:
+        return None
+    v = np.asarray(group_velocity, dtype=float)
+    if v.ndim != 3:
+        return None
+    vnorm = np.sqrt((v ** 2).sum(axis=-1))
+    return vnorm / (4.0 * np.pi * L)
+
+
 def gamma_to_tau_ps(gamma_thz):
     """gamma[THz] -> tau[ps]（phono3py 约定，见模块 docstring）。gamma<=0 -> +inf。"""
     g = np.asarray(gamma_thz, dtype=float)
@@ -188,11 +352,110 @@ def mean_free_path_ang(group_velocity, gamma_thz):
     return np.where(np.isfinite(tau), vnorm * tau, 0.0)
 
 
+def reconstruct_kappa(gv_by_gv, heat_capacity, gamma_total, kappa_unit_conversion, mesh=None):
+    """按 RTA 逐模重建 kappa（自检用；不参与本技能产出）。
+
+    mode_kappa = gv_by_gv * cv / (2*gamma_total) * kappa_unit_conversion
+    kappa = mode_kappa.sum(axis=(0,1)) / prod(mesh)
+    其中 gv_by_gv(n_gp,n_band,6) 已是 Voigt 六分量、且已带不可约网格权重。
+    """
+    gv2 = np.asarray(gv_by_gv, dtype=float)
+    cv = np.asarray(heat_capacity, dtype=float)
+    gt = np.asarray(gamma_total, dtype=float)
+    if gv2.ndim != 3 or cv.ndim != 2 or gt.shape != cv.shape or gv2.shape[:2] != cv.shape:
+        return None
+    uc = float(kappa_unit_conversion)
+    safe = np.where(gt > 0, gt, 1.0)
+    mk = gv2 * cv[..., None] / (2.0 * safe[..., None]) * uc
+    mk = np.where(gt[..., None] > 0, mk, 0.0)
+    if mesh is None:
+        n = gt.shape[0]
+    elif np.isscalar(mesh):
+        n = int(mesh)
+    else:
+        arr = np.asarray(mesh, dtype=float).ravel()
+        n = int(np.prod(arr)) if arr.size else gt.shape[0]
+    if n <= 0:
+        n = gt.shape[0]
+    return mk.sum(axis=(0, 1)) / float(n)
+
+
+def kappa_reconstruction_error(data, gamma_total, t_indices=None):
+    """把重建 kappa 与 hdf5 里存的 kappa 对比，返回 dict 或 None。
+
+    自检项：能对上说明 gamma/权重/边界散射口径与上游一致；对不上就该怀疑
+    统计口径（例如上游开了边界散射而我们没计入）。
+    """
+    need = ("gv_by_gv", "heat_capacity", "kappa", "kappa_unit_conversion")
+    if any(k not in data for k in need):
+        return None
+    gt = np.asarray(gamma_total, dtype=float)
+    if gt.ndim == 2:
+        gt = gt[None, ...]
+    kappa = np.asarray(data["kappa"], dtype=float)
+    temps = np.asarray(data.get("temperatures", []), dtype=float)
+    mesh = data.get("mesh")
+    sel = list(range(gt.shape[0])) if t_indices is None else list(t_indices)
+    per_T, errs = {}, []
+    for ti in sel:
+        if ti >= gt.shape[0] or ti >= kappa.shape[0] or ti >= len(temps):
+            continue
+        k = reconstruct_kappa(data["gv_by_gv"], np.asarray(data["heat_capacity"], dtype=float)[ti],
+                              gt[ti], data["kappa_unit_conversion"], mesh=mesh)
+        if k is None:
+            return None
+        ref = kappa[ti]
+        # 以张量量级为分母（避免被 ~1e-14 的数值零分量放大相对误差）
+        scale = max(float(np.max(np.abs(ref))), 0.0) if ref.size else 0.0
+        denom = max(scale, 1e-12)
+        e = float(np.max(np.abs(k - ref)) / denom)
+        errs.append(e)
+        per_T["%.4f" % float(temps[ti])] = e
+    if not errs:
+        return None
+    return {"max_rel_err": max(errs), "n_temperature": len(errs), "rel_err_per_T": per_T}
+
+
+def decide_boundary_gamma(data, gamma_total, g_bd, t_indices=None, sentinel_ang=1e5):
+    """决定要不要把边界散射线宽 gamma_bd 计入寿命（返回 (use, info)）。
+
+    phono3py 的 hdf5 常把 boundary_mfp 存成 1e6 Å（等价于“关”）。上游若真用
+    EXTRA_ARGS --boundary-mfp 打开了边界散射，hdf5 里的 kappa 就含它，此时计入
+    gamma_bd 会明显降低 kappa 重建误差；若只是默认占位，计入反而让误差变大。
+    因此能比对 kappa 就用重建误差决定，比不了再回退到阈值 L < sentinel_ang。
+    """
+    info = {"method": "kappa_reconstruction", "err_no_boundary": None,
+            "err_with_boundary": None, "boundary_mfp_ang": None}
+    mfp = data.get("boundary_mfp")
+    if mfp is not None:
+        try:
+            info["boundary_mfp_ang"] = float(np.asarray(mfp).ravel()[0])
+        except Exception:
+            info["boundary_mfp_ang"] = None
+    if g_bd is None:
+        info["method"] = "no_group_velocity"
+        return False, info
+    err_no = kappa_reconstruction_error(data, gamma_total, t_indices)
+    err_bd = kappa_reconstruction_error(data, gamma_total + g_bd, t_indices)
+    if err_no and err_bd:
+        info["err_no_boundary"] = err_no["max_rel_err"]
+        info["err_with_boundary"] = err_bd["max_rel_err"]
+        return bool(err_bd["max_rel_err"] < err_no["max_rel_err"]), info
+    info["method"] = "mfp_threshold"
+    L = info["boundary_mfp_ang"]
+    return bool(L is not None and np.isfinite(L) and 0 < L < sentinel_ang), info
+
+
 # ---------------------------------------------------------------------------
 # 温度 / 声学支选择
 # ---------------------------------------------------------------------------
-def pick_temperature_indices(temperatures, wanted=None):
-    """给定温度数组，返回 {T: index}。wanted 为空取全部；否则取最接近的索引（去重）。"""
+def pick_temperature_indices(temperatures, wanted=None, tol=1.0, log=None):
+    """给定温度数组，返回 {T: index}。
+
+    wanted 为空取全部；否则取最接近的索引（去重）。请求温度与实际可用温度
+    相差超过 tol 时通过 log 输出警告（0.1 曾静默取最近温度，1000K 也能悄悄
+    退化成 800K）。
+    """
     temperatures = np.asarray(temperatures, dtype=float)
     if not wanted:
         return {float(t): i for i, t in enumerate(temperatures)}
@@ -200,18 +463,21 @@ def pick_temperature_indices(temperatures, wanted=None):
     for t in wanted:
         i = int(np.argmin(np.abs(temperatures - float(t))))
         chosen[float(temperatures[i])] = i
+        if log and abs(float(temperatures[i]) - float(t)) > tol:
+            log("请求的温度 %.4g K 不在可用列表里，改用最近的 %.4g K" % (t, temperatures[i]))
     return chosen
 
 
 def acoustic_mask(frequencies, gamma, acoustic_fmax=None, imag_thr=DEFAULT_IMAG_THR):
-    """声学支掩码。
+    """声学支掩码：默认取最低 3 条支（index 0/1/2），不加频率窗口。
 
-    简单且稳健：最低 3 条支（index 0/1/2）视为声学支，再叠加频率窗口。
-    2D/含真空材料真空方向有近零支，仍落在最低 3 条里。若 acoustic_fmax 为空，
-    用“最低 3 条支中正频模的中位频率 * 2”兜底。
-    返回 (mask, fmax_used)。
+    0.1 用“最低 3 支中位频率 x2”自动定频率上限，会把 X 点附近约 12 THz 的 LA
+    归进光学组（Si 15x15x15 自动算出约 8.5 THz），声学/光学中位数因此失真。
+    现在只有显式给出 acoustic_fmax 时才叠加频率窗（2D/含真空材料可用它剔除
+    混在最低 3 支里的真空零模）。单原子胞（n_band<=3）没有光学支，光学组为空。
+    返回 (mask, fmax_used)；fmax_used=None 表示未用频率窗。
     """
-    f = np.asarray(frequencies, dtype=float)   # (n_gp, n_band)
+    f = np.asarray(frequencies, dtype=float)
     g = np.asarray(gamma, dtype=float)
     n_band = f.shape[1]
     n_ac = min(3, n_band)
@@ -219,79 +485,155 @@ def acoustic_mask(frequencies, gamma, acoustic_fmax=None, imag_thr=DEFAULT_IMAG_
     branch[:, :n_ac] = True
     good = (f > imag_thr) & (g > 0)
     if acoustic_fmax is None:
-        vals = f[branch & good]
-        fmax = float(np.median(vals) * 2.0) if vals.size else DEFAULT_ACOUSTIC_FMAX
-        fmax = max(fmax, DEFAULT_ACOUSTIC_FMAX)
-    else:
-        fmax = float(acoustic_fmax)
+        return branch & good, None
+    fmax = float(acoustic_fmax)
     return branch & good & (f <= fmax), fmax
+
+
+# ---------------------------------------------------------------------------
+# 加权统计
+# ---------------------------------------------------------------------------
+def _weights_for(weights, shape):
+    """把 (n_gp,) 的不可约权重广播成 shape；不可用（None/形状不符/非正）返回 None。"""
+    if weights is None:
+        return None
+    w = np.asarray(weights, dtype=float)
+    if w.ndim == 1:
+        if w.size != shape[0]:
+            return None
+        w = np.broadcast_to(w[:, None], shape).astype(float)
+    elif w.shape != shape:
+        return None
+    if w.size == 0 or not np.all(np.isfinite(w)) or w.sum() <= 0:
+        return None
+    return w
+
+
+_WEIGHT_EXPAND_CAP = 4_000_000
+
+
+def _expand_by_weight(values, weights):
+    """整数权重时把样本展开成等权样本（这样中位数/P10/P90 与“展开到全网格”
+    的定义严格一致）；权重非整数或展开过大时返回 None。"""
+    if weights is None:
+        return None
+    w = np.asarray(weights, dtype=float)
+    wr = np.round(w)
+    if not np.allclose(w, wr, atol=1e-9):
+        return None
+    total = int(wr.sum())
+    if total <= 0 or total > _WEIGHT_EXPAND_CAP:
+        return None
+    return np.repeat(np.asarray(values, dtype=float), wr.astype(np.int64))
+
+
+def _quantile(values, q, weights=None):
+    v = np.asarray(values, dtype=float)
+    v = v[np.isfinite(v)]
+    if v.size == 0:
+        return None
+    if weights is not None:
+        w = np.asarray(weights, dtype=float)
+        rep = _expand_by_weight(v, w[np.isfinite(np.asarray(values, dtype=float))])
+        if rep is not None and rep.size:
+            return float(np.percentile(rep, q))
+        order = np.argsort(v)
+        vs, ws = v[order], np.asarray(weights, dtype=float)[np.isfinite(np.asarray(values, dtype=float))][order]
+        cw = np.cumsum(ws)
+        if cw[-1] > 0:
+            idx = int(np.searchsorted(cw, q / 100.0 * cw[-1], side="left"))
+            return float(vs[min(idx, vs.size - 1)])
+    return float(np.percentile(v, q))
+
+
+def _mean(values, weights=None):
+    v = np.asarray(values, dtype=float)
+    v = v[np.isfinite(v)]
+    if v.size == 0:
+        return None
+    if weights is not None:
+        w = np.asarray(weights, dtype=float)
+        w = w[np.isfinite(np.asarray(values, dtype=float))]
+        if w.size == v.size and w.sum() > 0:
+            return float(np.average(v, weights=w))
+    return float(np.mean(v))
+
+
+def _stats(tau, omega_tau, weights=None):
+    tau = np.asarray(tau, dtype=float)
+    tau = tau[np.isfinite(tau)]
+    if tau.size == 0:
+        return {"n_modes": 0, "n_modes_weighted": 0.0}
+    ot = np.asarray(omega_tau, dtype=float)
+    ot = ot[np.isfinite(ot)]
+    return {
+        "n_modes": int(tau.size),
+        "n_modes_weighted": (float(np.sum(weights)) if weights is not None else float(tau.size)),
+        "tau_median_ps": _quantile(tau, 50, weights),
+        "tau_mean_ps": _mean(tau, weights),
+        "tau_p10_ps": _quantile(tau, 10, weights),
+        "tau_p90_ps": _quantile(tau, 90, weights),
+        "omega_tau_median": (_quantile(ot, 50, weights) if ot.size else None),
+    }
 
 
 # ---------------------------------------------------------------------------
 # 汇总
 # ---------------------------------------------------------------------------
-def _stats(tau, omega_tau):
-    tau = np.asarray(tau, dtype=float)
-    tau = tau[np.isfinite(tau)]
-    if tau.size == 0:
-        return {"n_modes": 0}
-    ot = np.asarray(omega_tau, dtype=float)
-    ot = ot[np.isfinite(ot)]
-    return {
-        "n_modes": int(tau.size),
-        "tau_median_ps": float(np.median(tau)),
-        "tau_mean_ps": float(np.mean(tau)),
-        "tau_p10_ps": float(np.percentile(tau, 10)),
-        "tau_p90_ps": float(np.percentile(tau, 90)),
-        "omega_tau_median": float(np.median(ot)) if ot.size else None,
-    }
-
-
 def summarize_temperature(frequencies, gamma, temperatures, t_index,
                           acoustic_fmax=None, imag_thr=DEFAULT_IMAG_THR,
-                          omega_tau_threshold=1.0, gamma_isotope=None):
+                          omega_tau_threshold=1.0, gamma_isotope=None,
+                          gamma_extra=None, weights=None):
     """对单个温度汇总：全体 / 声学 / 光学 分组的 tau、omega*tau 与过阻尼比例。
 
-    gamma_isotope 非空时，tau 取总和线宽 (gamma + gamma_isotope)，与 phono3py 的
-    kappa 一致；同时给出只看三声子（anharmonic）的 tau_median_anharmonic_ps。
+    参数
+      gamma_isotope : (n_gp,n_band) 或 (nT,n_gp,n_band)；叠加到三声子线宽上。
+      gamma_extra   : 额外的线宽项（如边界散射 gamma_bd），同样叠加。
+      weights       : (n_gp,) 不可约网格权重；给出时所有统计量按权重加权。
     """
     f = np.asarray(frequencies, dtype=float)
     g_anh = np.asarray(gamma[t_index], dtype=float)
     g = effective_gamma(g_anh, gamma_isotope)
+    extra = None
+    if gamma_extra is not None:
+        extra = np.asarray(gamma_extra, dtype=float)
+        if extra.shape[-2:] == g.shape[-2:] and extra.ndim <= g.ndim:
+            g = g + extra
+        else:
+            extra = None
     tau = gamma_to_tau_ps(g)
     tau_anh = gamma_to_tau_ps(g_anh)
     omega_tau = 2.0 * np.pi * f * tau
     isotope = bool(gamma_isotope is not None and np.any(np.asarray(gamma_isotope) > 0))
+    w_all = _weights_for(weights, g.shape)
 
     good = (f > imag_thr) & (g > 0)
     ac_mask, fmax = acoustic_mask(f, g, acoustic_fmax, imag_thr)
     opt_mask = good & ~ac_mask
 
     def pack(mask):
-        d = _stats(tau[mask], omega_tau[mask])
-        if mask.sum():
-            finite = np.isfinite(omega_tau[mask])
-            d["overdamped_frac"] = float(np.mean(omega_tau[mask][finite] < omega_tau_threshold)) \
-                if finite.any() else None
-            d["f_min_THz"] = float(f[mask].min())
-            d["f_max_THz"] = float(f[mask].max())
-            ta = tau_anh[mask]
-            ta = ta[np.isfinite(ta)]
-            d["tau_median_anharmonic_ps"] = float(np.median(ta)) if ta.size else None
-        else:
-            d["overdamped_frac"] = None
-            d["f_min_THz"] = None
-            d["f_max_THz"] = None
-            d["tau_median_anharmonic_ps"] = None
+        sel = mask & np.isfinite(tau) & np.isfinite(omega_tau)
+        if not sel.any():
+            return {"n_modes": 0, "n_modes_weighted": 0.0, "overdamped_frac": None,
+                    "f_min_THz": None, "f_max_THz": None,
+                    "tau_median_anharmonic_ps": None}
+        w = w_all[sel] if w_all is not None else None
+        d = _stats(tau[sel], omega_tau[sel], w)
+        d["overdamped_frac"] = _mean((omega_tau[sel] < omega_tau_threshold).astype(float), w)
+        d["f_min_THz"] = float(f[sel].min())
+        d["f_max_THz"] = float(f[sel].max())
+        d["tau_median_anharmonic_ps"] = _quantile(tau_anh[sel], 50, w)
         return d
 
     return {
         "T_K": float(temperatures[t_index]),
         "isotope_included": isotope,
+        "boundary_included": bool(extra is not None and np.any(extra > 0)),
+        "weights_applied": w_all is not None,
         "all": pack(good),
         "acoustic": pack(ac_mask),
         "optical": pack(opt_mask),
-        "acoustic_fmax_THz": float(fmax),
+        "acoustic_fmax_THz": (float(fmax) if fmax is not None else None),
         "omega_tau_threshold": float(omega_tau_threshold),
     }
 
@@ -299,32 +641,50 @@ def summarize_temperature(frequencies, gamma, temperatures, t_index,
 # ---------------------------------------------------------------------------
 # 沿指定 q 方向取样（论文 Γ-A 那类“寿命 vs q”）
 # ---------------------------------------------------------------------------
-def select_direction_qpoints(qpoints, direction, n_points=21, tol=0.06):
-    """从网格 q 点里挑出最接近 t*direction (t∈[0,1]) 的点。
+def select_direction_qpoints(qpoints, direction, n_points=21, tol=0.06, rotations=None):
+    """从（不可约）网格 q 点里挑出落在 Γ -> direction 线上的点，返回 [(t, gp), ...]。
 
-    返回 list[(t, gp_index)]，按 t 升序，已对 t 去重。
+    hdf5 存的是不可约点，等价方向的代表点未必几何上在这条线上（Si 15^3 的
+    不可约楔子存 (x,0,0)，直接找 [001] 只会命中 Γ）。给了 rotations（分数坐标
+    下的对称操作，见 symmetry_rotations_from_yaml）时，把每个不可约点用
+    inv(R).T 映射一圈，命中目标线的像也算——τ 在对称操作下不变，物理上等价。
+    t 为该线上的约化坐标（0=Γ，0.5=该方向第一布里渊区边界），升序去重。
+    n_points 只作上限（结果多于 n_points+1 个时按 t 均匀抽稀），不再量化 t。
     """
     q = np.asarray(qpoints, dtype=float)
     d = np.asarray(direction, dtype=float)
     nrm = np.linalg.norm(d)
-    d = d / nrm if nrm else d
-    qq = q - np.round(q)          # 映射到 [-0.5, 0.5)
-    dist = np.linalg.norm(qq - np.outer(qq @ d, d), axis=1)
-    proj = qq @ d
-    picked, used = [], set()
-    for k in range(n_points + 1):
-        t = k / float(n_points)
-        mask = (dist < tol) & (np.abs(proj - t) < 0.5 / n_points)
-        idx = np.where(mask)[0]
-        if idx.size == 0:
-            continue
-        j = int(idx[int(np.argmin(np.abs(proj[idx] - t)))])
-        key = round(float(t), 6)
-        if key in used:
-            continue
-        used.add(key)
-        picked.append((float(t), j))
-    picked.sort()
+    if nrm == 0 or q.size == 0:
+        return []
+    d = d / nrm
+    qq = q - np.round(q)
+    rinv_t = None
+    if rotations is not None:
+        rot = np.asarray(rotations, dtype=float)
+        if rot.ndim == 3 and rot.shape[1:] == (3, 3) and rot.shape[0]:
+            try:
+                rinv_t = np.array([np.linalg.inv(r).T for r in rot])
+            except np.linalg.LinAlgError:
+                rinv_t = None
+    found = {}
+    for i in range(qq.shape[0]):
+        qi = qq[i]
+        imgs = qi[None, :] if rinv_t is None else (rinv_t @ qi)
+        imgs = imgs - np.round(imgs)
+        dist = np.linalg.norm(imgs - np.outer(imgs @ d, d), axis=1)
+        proj = imgs @ d
+        ok = (dist < tol) & (proj >= -1e-9) & (proj <= 0.5 + tol)
+        for tt in proj[ok]:
+            if tt < 0:
+                continue
+            # 按实际 t 去重（不是按 n_points 量化后的格点），否则不在格点上的
+            # t（如 1/15 的奇数倍）会在与邻居竞争时被丢掉
+            key = round(float(tt), 6)
+            found.setdefault(key, (float(tt), int(i)))
+    picked = sorted(found.values())
+    if n_points and len(picked) > int(n_points) + 1:
+        idx = np.linspace(0, len(picked) - 1, int(n_points) + 1).round().astype(int)
+        picked = [picked[j] for j in dict.fromkeys(idx.tolist())]
     return picked
 
 
@@ -333,15 +693,17 @@ def select_direction_qpoints(qpoints, direction, n_points=21, tol=0.06):
 # ---------------------------------------------------------------------------
 def write_mode_csv(path, temperatures, frequencies, gamma, qpoints, weights,
                    group_velocity=None, acoustic_fmax=None,
-                   imag_thr=DEFAULT_IMAG_THR, t_indices=None, gamma_isotope=None):
+                   imag_thr=DEFAULT_IMAG_THR, t_indices=None, gamma_isotope=None,
+                   gamma_extra=None):
     """逐模写 CSV。
 
-    tau_ps 用总和线宽 (gamma + gamma_isotope)，与 phono3py 的 kappa 一致；
-    tau_anh_ps 只用三声子 gamma。mfp 用逐模群速度（不是 q 点平均）。
+    tau_ps 用总和线宽（gamma + gamma_isotope + gamma_extra），与 phono3py 的 kappa
+    一致；tau_anh_ps 只用三声子 gamma。mfp 用逐模群速度（不是 q 点平均）。
     """
     f = np.asarray(frequencies, dtype=float)
     g_all = np.asarray(gamma, dtype=float)
     gi_all = None if gamma_isotope is None else np.asarray(gamma_isotope, dtype=float)
+    ge_all = None if gamma_extra is None else np.asarray(gamma_extra, dtype=float)
     q = np.asarray(qpoints, dtype=float)
     w = np.asarray(weights, dtype=float)
     gv = None if group_velocity is None else np.asarray(group_velocity, dtype=float)
@@ -349,21 +711,28 @@ def write_mode_csv(path, temperatures, frequencies, gamma, qpoints, weights,
     if t_indices is None:
         t_indices = range(len(temperatures))
 
+    def _at(arr, ti):
+        if arr is None:
+            return None
+        if arr.ndim == 2:
+            return arr
+        return arr[ti]
+
     with open(path, "w", newline="", encoding="utf-8") as fh:
         csvw = csv.writer(fh)
         csvw.writerow(["T_K", "gp", "qx", "qy", "qz", "weight", "band",
-                       "f_THz", "gamma_THz", "gamma_iso_THz", "gamma_total_THz",
-                       "tau_ps", "tau_anh_ps", "omega_tau", "period_ps",
-                       "v_THzA", "mfp_A", "acoustic"])
+                       "f_THz", "gamma_THz", "gamma_iso_THz", "gamma_bd_THz",
+                       "gamma_total_THz", "tau_ps", "tau_anh_ps", "omega_tau",
+                       "period_ps", "v_THzA", "mfp_A", "acoustic"])
         for ti in t_indices:
             g_anh = g_all[ti]
-            if gi_all is None:
-                gi = None
-            elif gi_all.ndim == 2:
-                gi = gi_all
-            else:
-                gi = gi_all[ti]
+            gi = _at(gi_all, ti)
+            ge = _at(ge_all, ti)
             g = effective_gamma(g_anh, gi)
+            if ge is not None and ge.shape == g.shape:
+                g = g + ge
+            else:
+                ge = None
             tau = gamma_to_tau_ps(g)
             tau_anh = gamma_to_tau_ps(g_anh)
             omega_tau = 2.0 * np.pi * f * tau
@@ -371,7 +740,6 @@ def write_mode_csv(path, temperatures, frequencies, gamma, qpoints, weights,
             for gp in range(n_gp):
                 vnorm_b = None
                 if gv is not None and gv.ndim == 3:
-                    # 逐条支的群速度模，不能对支取平均（旧版 bug：mfp 用 q 点平均 v）
                     vnorm_b = np.sqrt((gv[gp, :, :] ** 2).sum(axis=-1))
                 for b in range(n_band):
                     period = 1.0 / f[gp, b] if f[gp, b] > 0 else 0.0
@@ -383,6 +751,7 @@ def write_mode_csv(path, temperatures, frequencies, gamma, qpoints, weights,
                         "%.6f" % w[gp], b,
                         "%.6f" % f[gp, b], "%.6e" % g_anh[gp, b],
                         "%.6e" % (float(gi[gp, b]) if gi is not None else 0.0),
+                        "%.6e" % (float(ge[gp, b]) if ge is not None else 0.0),
                         "%.6e" % g[gp, b],
                         ("%.6g" % tau[gp, b]) if np.isfinite(tau[gp, b]) else "inf",
                         ("%.6g" % tau_anh[gp, b]) if np.isfinite(tau_anh[gp, b]) else "inf",
@@ -413,9 +782,11 @@ def _json_default(o):
 
 __all__ = [
     "TAU_FACTOR", "DEFAULT_IMAG_THR", "DEFAULT_ACOUSTIC_FMAX",
-    "find_kappa_hdf5", "find_fc_dataset", "hdf5_has_gamma",
-    "read_kappa_hdf5", "effective_gamma", "gamma_to_tau_ps", "tau_to_gamma_thz",
-    "mean_free_path_ang",
+    "find_kappa_hdf5", "find_fc_dataset", "find_phonopy_yaml", "hdf5_has_gamma",
+    "select_kappa_hdf5", "is_main_hdf5", "symmetry_rotations_from_yaml",
+    "read_kappa_hdf5", "effective_gamma", "boundary_gamma",
+    "gamma_to_tau_ps", "tau_to_gamma_thz", "mean_free_path_ang",
+    "reconstruct_kappa", "kappa_reconstruction_error", "decide_boundary_gamma",
     "pick_temperature_indices", "acoustic_mask", "summarize_temperature",
     "select_direction_qpoints", "write_mode_csv", "dump_json",
 ]

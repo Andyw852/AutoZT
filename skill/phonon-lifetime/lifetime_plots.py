@@ -126,6 +126,7 @@ def plot_lifetime_T(outdir, per_temperature):
     fig, ax = plt.subplots(figsize=(6.6, 5.0))
     for key, field, color in series:
         ys = [d.get(key, {}).get(field) for d in per_temperature]
+        ys = [np.nan if y is None else y for y in ys]   # 空分组不能让 matplotlib 收到 None
         ax.plot(Ts, ys, "o-", color=color, label=key)
     ax.set_yscale("log")
     ax.set_xlabel("temperature (K)")
@@ -137,11 +138,16 @@ def plot_lifetime_T(outdir, per_temperature):
 
 
 def plot_lifetime_vs_q(outdir, temperatures, frequencies, gamma, qpoints,
-                       direction, t_indices, direction_label="", imag_thr=LC.DEFAULT_IMAG_THR):
-    """沿指定 q 方向的逐支寿命（论文 Γ-A 图 2e 的 DFT 版）。"""
+                       direction, t_indices, direction_label="",
+                       imag_thr=LC.DEFAULT_IMAG_THR, rotations=None):
+    """沿指定 q 方向的逐支寿命（论文 Γ-A 图 2e 的 DFT 版）。
+
+    rotations（分数坐标下的对称操作）给了才能把不可约点的等价方向映射回目标线上。
+    """
     if not _ensure():
         return None
-    picked = LC.select_direction_qpoints(qpoints, direction, n_points=30)
+    picked = LC.select_direction_qpoints(qpoints, direction, n_points=30,
+                                         rotations=rotations)
     if not picked:
         return None
     f = np.asarray(frequencies, dtype=float)

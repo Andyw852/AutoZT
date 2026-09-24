@@ -122,7 +122,8 @@ class Regression(unittest.TestCase):
             (src/f).write_text('fixture')
         (src/'klmlff_params.txt').write_text('DIM=3d\nMESH=5 5 5\n')
         conf = {name: spec[0] for name,spec in k.SPEC.items()}
-        conf.update(GP_SPLIT=4, SOLVER='phono3py', MESH_SCAN='', MESH_OVERRIDE='5 5 5')
+        conf.update(GP_SPLIT=4, SOLVER='phono3py', MESH_SCAN='', MESH_OVERRIDE='5 5 5',
+                    EXTRA_ARGS='--nosym')
         class Conf(dict): submit = {}
         captured={}
         with patch.object(k.stepconf,'load',return_value=Conf(conf)), \
@@ -140,5 +141,11 @@ class Regression(unittest.TestCase):
         self.assertNotIn('--gp 0 4', cmd)
         read_line = next(l for l in cmd.splitlines() if '--read-gamma' in l)
         self.assertNotIn('--gp', read_line)          # 汇总步不带 --gp
+        # EXTRA_ARGS 必须进 --wgp（--nosym/--pa 会改变不可约格点集合）
+        wgp_line = next(l for l in cmd.splitlines() if '--wgp' in l)
+        self.assertIn('--nosym', wgp_line)
+        # 每块限线程：N 个进程不能各用满整节点
+        self.assertIn('_omp_total=', cmd)
+        self.assertIn('OMP_NUM_THREADS=$_omp phono3py-load', cmd)
 
 if __name__ == '__main__': unittest.main()

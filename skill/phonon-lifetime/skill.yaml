@@ -2,8 +2,11 @@
 # skill/phonon-lifetime/skill.yaml —— 声子寿命 / 线宽（三声子，phono3py）
 #
 # 物理：三声子（最低阶微扰 / RTA）声子自能虚部 gamma -> 寿命
-#       tau[ps] = 1/(2*2*pi*gamma_total[THz])，gamma_total = gamma + gamma_isotope
-#       （phono3py 官方约定；kappa 亦用此总和线宽，故默认含同位素）
+#       tau[ps] = 1/(2*2*pi*gamma_total[THz])，
+#       gamma_total = gamma_anh + gamma_isotope + gamma_bd
+#       （phono3py 官方约定；kappa 亦用此总和线宽，故默认含同位素/边界散射）
+# 统计：所有中位数/P10/P90/均值/过阻尼比例按不可约网格 weight 加权（0.2 起）；
+#       声学支 = 最低 3 条支，默认不加频率窗（0.2 起）。
 # 数据：直接读上游 kl-dft-cpu / kl-mlff-* 的 kappa-m*.hdf5（内含 gamma），
 #       或从 fc2/fc3 现跑 phono3py --br。
 # 产出：lifetime_summary.json + 逐模/逐温 CSV + tau-f / tau-周期 / omega*tau 图。
@@ -15,7 +18,7 @@
 schema: 2
 name: phonon-lifetime
 desc: 声子寿命与线宽(三声子/Phono3py)
-version: "0.1"
+version: "0.2"
 
 template_layout: shared
 template_dir: templates
@@ -69,13 +72,16 @@ io_schema:
     - {name: TEMPERATURES, default: "", where: step.conf, desc: "要分析的温度列表（空格/逗号），空=全部"}
     - {name: FOCUS_T, default: 300.0, where: step.conf, desc: "重点温度（沿 q 图 / 对照报告用）"}
     - {name: IMAG_THR, default: 0.10, where: step.conf, desc: "低于该频率(THz)的模视为数值零模，排除"}
-    - {name: ACOUSTIC_FMAX, default: "", where: step.conf, desc: "声学支频率上限(THz)；空=自动"}
+    - {name: ACOUSTIC_FMAX, default: "", where: step.conf,
+       desc: "声学支频率上限(THz)；空=只用最低 3 条支（推荐；给值才叠加频率窗）"}
     - {name: OMEGA_TAU_THR, default: 1.0, where: step.conf, desc: "过阻尼/强散射判据阈值 omega*tau<该值 计为过阻尼"}
     - {name: FMAX_PLOT, default: 20.0, where: step.conf, desc: "出图频率上限(THz)"}
     - {name: Q_DIRECTION, default: "", where: step.conf, desc: "如 '0 0 1'，沿该方向出 tau-q 图；空=不出"}
     - {name: MAKE_PLOT, values: [true, false], default: true, where: step.conf, desc: "是否出图"}
     - {name: INCLUDE_ISOTOPE, values: [true, false], default: true, where: step.conf,
        desc: "寿命是否含同位素散射 gamma_isotope（true 与 phono3py kappa 一致；false 只留三声子）"}
+    - {name: CSV_ALL_TEMPERATURES, values: [true, false], default: false, where: step.conf,
+       desc: "逐模 CSV 是否写全部温度；默认 false 只写 FOCUS_T（大胞密网格避免上千万行）"}
     - {name: RUN_PHONO3PY, values: [true, false], default: false, where: step.conf,
        desc: "无 hdf5 时是否从 fc2/fc3 现跑 phono3py --br 生成 gamma"}
 flow:

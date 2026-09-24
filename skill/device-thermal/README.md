@@ -18,7 +18,7 @@
 覆盖材料：MoS2 / WS2 / MoSe2 / WSe2 / graphene / hBN 作沟道；SiO2 / Al2O3 / HfO2 / hBN 作栅介质。
 
 **不覆盖**：需要弹道/波动效应（沟道尺度 ≲ 声子平均自由程）、非傅里叶、强非线性材料的场景，
-那需要 S6_bte（OpenBTE/JAX-BTE，尚未安装）。
+那需要 弹道 BTE（OpenBTE/JAX-BTE，尚未安装，且不属于本技能步骤）。
 
 ---
 
@@ -64,11 +64,11 @@
 **`OXIDE_MATERIAL`** · 字符串 · 默认 `SiO2`
 - 栅介质/氧化层材料键，决定其 kx/ky/厚度/ρc_p。
 - 可取：`SiO2` `Al2O3` `HfO2` `hBN` `SiC` 等。
-- 影响：氧化层热阻 t/kx 是 R_th 的一项；其热容主导慢模态 τ_RC。
+- 影响：氧化层热阻 t/ky（跨面；hBN 等各向异性材料必须用 ky）是 R_th 的一项；其热容主导慢模态 τ_RC。
 
 **`OXIDE_THICKNESS`** · float · 单位 **m** · 默认 `300e-9`
-- **仅当**材料库该材料的 `thickness_m` 为 null 时才使用（S2 里的兜底）。材料库已带厚度时此参数无效。
-- 影响：直接进 R_th（t/kx）与 C_total（→ τ_RC）。
+- **显式值一律覆盖材料库厚度**（含 hBN 库里的 0.34 nm 层厚）；只在键为空且库厚度也为空时才报错。
+- 影响：直接进 R_th（t/ky）与 C_total（→ τ_RC）。
 - 例：`--set params.OXIDE_THICKNESS=90e-9`（90 nm 栅氧）。
 
 **`SUBSTRATE_MATERIAL`** · 字符串 · 默认 `Si`
@@ -76,7 +76,7 @@
 - 想按衬底材料建热阻，需改 `device_common.solve_device`（属于改技能源码，先请示）。
 
 **`L_CHANNEL`** · float · 单位 **m** · 默认 `200e-9`
-- 沟道长度（沿 x，源漏方向），决定计算域长度与网格 dx = L/(N_GRID_X−1)，默认 dx = 5 nm。
+- 沟道长度（沿 x，源漏方向），决定计算域长度与网格 dx = L/N_GRID_X（单元中心，壁面在 0/L 外半格），默认 dx ≈ 4.88 nm。
 - 影响：与 Q 一起定总功率 power_uW = Q·L·W；也影响 x 方向的温度分布与接触散热相对权重。
 
 **`W_DEVICE`** · float · 单位 **m** · 默认 `1e-6`
@@ -101,15 +101,18 @@
 **`CONTACT_BC`** · `sink` | `insulator` · 默认 `sink`
 - `sink`：左右金属接触为恒温（Dirichlet = T_AMB）→ 散热好、ΔT 低，对应良好接触。
 - `insulator`：左右接触绝热（Neumann）→ 热量只能走底部，ΔT 高，是**最坏上限**。
-- 代码里 `sink`/`fixed`/`contact` 都判为恒温，其余按绝热处理。
+- 代码里 `sink`/`fixed`/`contact` 判为恒温，`insulator`/`adiabatic`/`neumann` 判为绝热；**其它值直接报错**（防止拼错静默改语义）。
 - 建议：同一器件两个都算，给 ΔT 的上下限。例：`--set params.CONTACT_BC=insulator`。
 
 ### 3.3 物性来源与界面（S2 读）
 
 **`KAPPA_SOURCE`** · `auto` | `upstream` | `literature` · 默认 `auto`
-- `auto`/`upstream`/`dft`：优先用上游 `kl-dft-cpu` 实测 κ（面内 = 0.5(κxx+κyy)，跨面取 κzz）与上游厚度；
-  找不到就打 warning 回退材料库。
+- `upstream`/`dft`：**必须**用上游 `kl-dft-cpu` 实测 κ（面内 = 0.5(κxx+κyy)，跨面取 κzz）与上游厚度；
+  找不到或读不出**直接报错退出**（不静默回退材料库，避免把库值当 DFT 结果引用）。
+- `auto`：优先上游；缺失/读不出才打 warning 回退材料库。
 - `literature`：完全用材料库，不去找上游（复现文献口径时用）。
+- 上游 summary 支持三种形态：顶层 `kappa_2d_normalized_*`、只有 `kappa_2d_norm_factor`（现场归一化）、
+  只有 `runs[]`（取 RTA/含归一化的那次运行）。
 - 其它值：S2 直接报错。
 - 例：`-j S2_props conf --set params.KAPPA_SOURCE=literature`。
 
@@ -128,9 +131,9 @@
 ### 3.4 数值求解（S3 读）与绘图（S4 读）
 
 **`N_GRID_X`** · int · 默认 `41`
-- 沿沟道 x 的节点数；dx = L_CHANNEL/(N_GRID_X−1)。默认 200 nm / 40 = 5 nm。
+- 沿沟道 x 的**单元数**；dx = L_CHANNEL/N_GRID_X（单元中心格式，注入功率严格 = Q·L）。默认 200 nm / 41 ≈ 4.88 nm。
 - 影响：温度场 x 方向分辨率与迭代耗时（未知数 = N_GRID_X × (2 + N_GRID_SUB)）。
-- 网格收敛证据见第 10 节（n_sub 15/30/60/120 → 19.294/19.714/19.934/20.046 K）。
+- 网格收敛证据见第 10 节（Nx 21/41/81/161；n_sub 15/30/60/120）。
 
 **`N_GRID_SUB`** · int · 默认 `60`
 - 氧化层 y 方向格数；氧化层 dy = t_oxide/N_GRID_SUB（默认 300 nm / 60 = 5 nm）。
@@ -166,7 +169,7 @@
 
 | 参数 | 默认 | 说明 |
 |---|---|---|
-| `TBC_STRUCTURE` | `tbc_interface.xyz` | 界面结构 extxyz（第二行须含 `Lattice=...`）。放技能目录或该材料的 `project_setting/skill_dir/`，随 S5 的 gen_need 推到 GPU 主机；也可直接给 GPU 主机上的绝对路径。传输轴跨度须 ≥ 20 Å |
+| `TBC_STRUCTURE` | 无（必填） | 界面结构 extxyz（第二行须含 `Lattice=...`）。放技能目录或该材料的 `project_setting/skill_dir/`，随 S5 的 gen_need 推到 GPU 主机；也可直接给 GPU 主机上的绝对路径。传输轴跨度须 ≥ 20 Å |
 | `TBC_NEP_MODEL` | 无（必填） | GPUMD 势文件在 **GPU 主机**上的路径（支持 `~`）。NEP 会自动核对结构元素是否都在势的元素表里 |
 | `TBC_GPUMD_BIN` | 无（必填） | `gpumd` 可执行文件在 GPU 主机上的路径 |
 | `TBC_CUDA_VISIBLE_DEVICES` | 空 | 指定显卡，写进 `run_gpumd.sh`。**强烈建议用 UUID**（3090 的 GPU4 故障会让数字索引错位） |
@@ -280,7 +283,7 @@
 
 - **14 种材料**：MoS2、WS2、MoSe2、WSe2、graphene、hBN、SiO2、Si、SiC、Al2O3、HfO2、Au、Cu、Al
 - **8 组界面 TBC**：`tbc_W_m2K.<"A|B">` = `{G: W/m²K, ref: 出处}`；7 个材料对 + `default` 兜底
-- 来源：MoS2 面内 κ = 20.8 W/mK 取本仓库 `kl-dft-cpu` 实测（RTA raw, 300 K）；
+- 来源：MoS2 面内 κ = 63.7 W/mK 取本仓库 `kl-dft-cpu` 实测的 **2D 物理值**（含真空胞值 20.88 × h⊥/d 2.973）；
   MoS2/SiO2 G = 14 MW/m²K 取 Yalon et al., Nano Lett. 17, 3429 (2017)。**文献值只作量级兜底**。
 
 ---
@@ -296,7 +299,7 @@
 ### 3.9 参数优先级与交互（最容易踩的 6 条）
 
 1. **沟道厚度**：`CHANNEL_THICKNESS` > 上游 `thickness_2d.json` > 材料库 `thickness_m`；都没有 → S2 报错。
-2. **沟道 κ**：上游 `kappa_summary.json`（`KAPPA_SOURCE=auto/upstream`）> 材料库。
+2. **沟道 κ**：上游 `kappa_summary.json`（`auto` 优先、缺失回退；`upstream/dft` 缺失直接报错）> 材料库。
 3. **ρc_p 永远来自材料库**（上游不提供热容）。
 4. **界面 G**：`TBC_OVERRIDE` > 库里的材料对 > `default`。
 5. **`T_AMB` 同时决定边界温度和上游 κ 的取值温度**，改之前想清楚。
@@ -311,7 +314,7 @@
 |---|---|---|
 | S1 | `step1_device_spec/device_spec.json` | 固化后的几何/热源/边界 |
 | S2 | `step2_props/thermal_props.json` | channel/oxide 的 kx/ky/厚度/ρc_p + `tbc_W_m2K` + 各自 source |
-| S3 | `step3_solve/device_thermal_summary.json` | **dT_peak_K**、**R_th_eff_m2K_per_W**、`dT_peak_1D_network_K`、`sor_iterations`、`T_profile_mid_K`、瞬态 `tau_fast_s`/`tau_RC_s`/`tau_63_s`/`heating_t_s`/`heating_dT_K` |
+| S3 | `step3_solve/device_thermal_summary.json` | **dT_peak_K**、`R_th_eff_m2K_per_W`（解析 1D 串联网络）、`R_th_2D_m2K_per_W`/`G_eff_2D_W_m2K`（2D 解 dT/Q）、`energy_balance_rel`、`P_side_W_per_m`、`sor_iterations`、`T_profile_mid_K`、瞬态 `tau_fast_s`/`tau_RC_s`/`tau_63_s`/`heating_t_s`/`heating_dT_K` |
 | S3 | `step3_solve/T_field.json` | 二维温度场 `T[Nx][Ny]` + `x_nm`/`y_nm` |
 | S4 | `step4_report/device_report.json` | 汇总报告 |
 | S4 | `step4_report/device_thermal_Tmap.png` | 温度场图（无 matplotlib 则跳过，仍出 JSON） |
@@ -391,7 +394,7 @@ autozt -tt device-thermal -p MoS2 -j S1_spec conf
 
 ## 8. 材料库与数据来源
 
-- 默认 MoS2 面内 κ = 20.8 W/mK，取自 AutoZT `kl-dft-cpu` 实测（RTA raw, 300 K）。
+- 默认 MoS2 面内 κ = 63.7 W/mK（2D 物理值），取自 AutoZT `kl-dft-cpu` 实测（RTA 300 K 含真空胞值 20.88 按 h⊥/d=2.973 归一化）。
 - 默认 MoS2/SiO2 TBC = 14 MW/m²K，取自 Yalon et al., Nano Lett. 17, 3429 (2017)。
 - **文献值只作量级兜底**；正式投稿请用上游实测 κ，并在文中注明口径。
 
@@ -403,9 +406,11 @@ autozt -tt device-thermal -p MoS2 -j S1_spec conf
 
 - **S5_tbc**（GPU）：通用生成 GPUMD NEMD 输入 —— 任意 extxyz 结构/元素、任意传输轴 x/y/z、
   任意 GPUMD 势；界面按元素组分突变自动判定；deck 为「平衡 → 烧入 → 测量」三段。
+  **注意：S5 只生成 deck、不在 autozt 里跑 GPUMD**；需在 GPU 主机手动 `bash step5_tbc/run_gpumd.sh`
+  得到 compute.out/compute_chunk.out 后才能跑 S6。
 - **S6_tbc_post**（GPU）：热流 q **直接来自源/漏恒温器的累积传能**（不依赖文献 κ），
   自动挑最长稳态窗口 + 两侧体区外推得 ΔT_i，输出 G 与 `quality` 标记。
-- **S6_bte**（未安装）：OpenBTE / JAX-BTE 弹道修正。
+- **弹道 BTE**（未安装，且不是本技能步骤）：OpenBTE / JAX-BTE 弹道修正。
 
 ```bash
 # 回灌 GPU 算出的 G
@@ -417,23 +422,32 @@ autozt -tt device-thermal -p <材料> start
 
 ---
 
-## 10. 验证证据（2026-09-23）
+## 10. 验证证据
 
-- **求解器交叉验证**：本技能红黑 SOR 与独立 scipy spsolve 原型同一输入下 dT_peak 均为 19.93406 K，
-  相对差 **1.19e-10**；与 1D 解析热阻串联一致到机器精度。
-  ⚠️ 该交叉验证**只覆盖求解器，不覆盖源项口径**——两套实现共用同一源项约定，所以它没能发现下面的 bug。
-- **网格收敛**（n_sub=15/30/60/120）：19.294 / 19.714 / 19.934 / 20.046 K，单调收敛。
-- **源项修正（2026-09-23）**：独立 FEM 复核（技能 `device-thermal-fem`）发现 S3 源项
-  `q[:, lay == 0] = Q*dx` 给沟道**每个**单元各加一份，而沟道离散为 2 层，
-  实际注入功率达名义 `Q*L` 的 **2.05 倍**，dT 偏高 **2.018 倍**。
-  已修正为按单元厚度分摊 `q[:, lay == 0] = Q*dx*dy[lay == 0]/t_channel`。
-  **修正后**：FVM dT_peak = **9.8177 K** vs 独立 FEM 9.7307 K（差 0.89%），FEM 侧四类检查全 PASS。
-- **端到端**（真实 MoS2 上游 κ=21.43 W/mK、厚度 6.7177 Å）：FVM dT_peak = **9.8177 K**
-  （修正前 19.6355 K，即偏高 2 倍）vs 1D 网络 28.5864 K（ratio 0.343）；SOR 4295 次迭代；四步 wall ≈ 18 s。
-- **参数覆盖**：`CHANNEL_THICKNESS=1e-9`、`TBC_OVERRIDE=2.5e7` 均生效且 source 正确标注。
-- **autozt 集成**：`schema --strict` ✓（io_schema 入/出/参 3/7/49、flow ✓、0 问题）；py_compile OK。
-- **GPU 端到端**：新版 S5 生成 deck → 3090 GPU5 跑 320000 步（485 s）→ S6 出结果。
-  注意该 Si/Ge 例子的 G **未收敛**（两种子 0.92 / 2.21 GW/m²K，均被判 `quality=poor`）。
+自动化回归：python3 tests/suite_device_thermal.py（54 项，全过）与
+python3 tests/suite_device_zt.py（device-zt 两用例，全过）；两者已注册进
+tests/test_suites.py 的 pytest 参数化清单。
+
+- **能量守恒**：FVM 稳态注入功率 = 底面流出 + 侧面流出，相对残差 < 1e-8（`energy_balance_rel`）。
+- **绝热极限对精确 1D**：侧壁绝热时 FVM dT 与解析式 Q·(t_ch/(2κy) + 1/G + t_ox/κy,ox)
+  一致到 < 1e-3（实测相对差 ~4e-9）。
+- **x 网格收敛**（Nx=21/41/81/161）：7.9083 / 7.8919 / 7.8875 / 7.8864 K，单调；
+  Richardson 外推与 Nx=161 相对差 4e-5。
+- **y 网格收敛**（n_sub=15/30/60/120）：7.9037 / 7.8943 / 7.8919 / 7.8912 K。
+- **与独立 FEM 交叉验证**（`device-thermal-fem`，scikit-fem）：sink 相对差 0.12%、
+  insulator 0.075%（侧壁修复前约 0.89%）。
+- **侧壁边界修复**：恒温接触只搭在沟道行，氧化层侧壁绝热。旧实现把整列（含 300 nm
+  氧化层）都钉成 T_amb，相当于给氧化层侧壁凭空加了热沉；修复后默认算例 dT 从
+  6.487 K 升到 7.892 K，2D 修正比才有物理意义。
+- **各向异性氧化层**：hBN 等的 R_pp 用跨面 κy（旧版误用面内 κx）。
+- **κ·t 换算**：设 `CHANNEL_THICKNESS` 时，2D 材料面内 κ 按 κ·t 不变换算。
+- **参数流向**：S2 上设 `TBC_OVERRIDE`/`CHANNEL_THICKNESS` 生效；S3 未设网格时回退
+  S1 的 `device_spec.json`；`KAPPA_SOURCE=upstream/dft` 缺上游直接报错。
+- **2026-09-23 旧记录**：求解器与 scipy spsolve 原型一致到 1.19e-10（只覆盖求解器、
+  不覆盖源项口径）；源项已按单元厚度分摊修正。相关绝对值已被上面的侧壁/网格修复更新。
+- **GPU 端到端**：新版 S5 生成 deck -> 3090 GPU5 跑 320000 步（485 s）-> S6 出结果；
+  该 Si/Ge 短引线体系的 G 未收敛（两种子 0.92 / 2.21 GW/m2K，均判 poor），链路与判据正常。
+
 
 完整记录：`tmp/device_thermal_e2e/VALIDATION.md`。
 
