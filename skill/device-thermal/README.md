@@ -26,9 +26,9 @@
 
 | 部分 | 环境 | 规模 | 实测 |
 |---|---|---|---|
-| S1–S4 器件求解 | CPU 登录节点，**纯 numpy，不依赖 scipy** | 未知数 41×62 ≈ 2542 | 四步端到端 **wall ≈ 18 s**（含瞬态 2000 步） |
+| S1–S4 器件求解 | CPU 登录节点，**纯 numpy，不依赖 scipy** | 未知数 41×62 ≈ 2542 | 四步端到端 **wall ≈ 21 s**（本机实测 20.6 s；含瞬态 62 步） |
 | S1 / S2 / S4 单步 | 同上 | JSON 读写 | < 0.1 s |
-| S3 稳态 | 同上 | 红黑 SOR 到 1e-10 | 4443 次迭代 |
+| S3 稳态 | 同上 | 红黑 SOR 到 1e-10 | 6192 次迭代 |
 | **S5/S6（可选 GPU）** | GPU 主机 + GPUMD | 原子数 × 步数 | 1280 原子 × 320000 步 ≈ **485 s**（3090） |
 
 **结论**：器件部分几乎不耗算力（登录节点秒级、不排队）；只有想用 MD 第一性拿界面热导时才需要 GPU，
@@ -150,7 +150,7 @@
 - 太接近 2 → 振荡/发散；太小 → 迭代次数暴涨。
 
 **`SOR_TOL`** · float · 单位 **K** · 默认 `1e-10`
-- 收敛判据：最大网格更新量 < tol。对本问题很严（默认网格 4443 次迭代）。
+- 收敛判据：最大网格更新量 < tol。对本问题很严（默认网格 6192 次迭代）。
 - 快速试算可放宽到 `1e-8`（dT 变化远小于 1e-6 K）。
 
 **`SOR_MAXIT`** · int · 默认 `200000`
@@ -179,7 +179,7 @@
 | 参数 | 默认 | 说明 |
 |---|---|---|
 | `TBC_AXIS` | `z` | 传输/堆叠方向 `x`/`y`/`z`。分组、`compute_chunk` 的 bin 方向、界面判定都按它走 |
-| `TBC_PBC` | 空 | 覆盖 pbc（如 `T T F`）；空 = 沿用结构文件。写法为 3 个 T/F 字母 |
+| `TBC_PBC` | 空 | 覆盖 pbc（如 `T T F`）；空 = 沿用结构文件。**结构也没有 pbc 时直接报错**（不默认 T T T）。沿传输轴为 `T` 时源/漏隔着周期边界短路，S5 会报错，须设 `F`（两端留真空/对称布置除外） |
 | `TBC_INTERFACE_COORD` | 空 | 界面沿 `TBC_AXIS` 的坐标（Å）。空 = 按元素组分沿轴突变自动判定（取界面键中心）。共格界面且需严格比较时建议显式给值 |
 | `TBC_SOURCE_THICKNESS` | `5.0` | 源恒温器区厚度（Å），从坐标一端算起 |
 | `TBC_SINK_THICKNESS` | `8.0` | 漏恒温器区厚度（Å），从另一端算起。太薄控温不稳，太厚会吃掉本就不长的体区 |
@@ -216,8 +216,8 @@
 | `TBC_FIT_MARGIN_A` | `2.0` | 拟合体区时离界面与恒温器各留的余量（Å）。S6 会额外在 1/2/4 Å 上各算一次做敏感性检查 |
 | `TBC_MIN_BINS` | `3` | 每侧最少拟合 bin 数，不够直接判 poor |
 | `TBC_STEADY_TOL` | `0.2` | 源/漏热流相对差容差，超了判 poor（未达稳态） |
-| `TBC_MIN_WINDOW_FRAC` | `0.2` | 稳态窗口最短占比；S6 在后缀里找最长的自洽窗口 |
-| `TBC_DT_TOL` | `0.3` | ΔT_i 外推相对误差容差，超了判 poor |
+| `TBC_MIN_WINDOW_FRAC` | `0.2` | 稳态窗口最短占比；S6 **丢掉前 1/3 暂态**后，在剩余后缀里找最长的自洽窗口 |
+| `TBC_DT_TOL` | `0.3` | ΔT_i 相对误差容差；误差由稳态窗口**时间分块+自相关修正**估计，超限或估不出（时间块<3）都判 poor |
 | `TBC_MARGIN_TOL` | `1.5` | G 对拟合余量敏感度 max/min 上限，超了判 poor（引线太短/非扩散区） |
 | `TBC_KAPPA_A_W_mK` | 空 | 可选，给出材料 A 的 κ 做交叉核对（`kappa_crosscheck`） |
 | `TBC_KAPPA_B_W_mK` | 空 | 同上，材料 B。两者**不参与 quality 判据** |
@@ -283,7 +283,7 @@
 
 - **14 种材料**：MoS2、WS2、MoSe2、WSe2、graphene、hBN、SiO2、Si、SiC、Al2O3、HfO2、Au、Cu、Al
 - **8 组界面 TBC**：`tbc_W_m2K.<"A|B">` = `{G: W/m²K, ref: 出处}`；7 个材料对 + `default` 兜底
-- 来源：MoS2 面内 κ = 63.7 W/mK 取本仓库 `kl-dft-cpu` 实测的 **2D 物理值**（含真空胞值 20.88 × h⊥/d 2.973）；
+- 来源：MoS2 面内 κ = 63.7 W/mK 取本仓库 `kl-dft-cpu` 实测的 **2D 物理值**（含真空胞值 21.425 × h⊥/d 2.973164）；
   MoS2/SiO2 G = 14 MW/m²K 取 Yalon et al., Nano Lett. 17, 3429 (2017)。**文献值只作量级兜底**。
 
 ---
@@ -394,7 +394,7 @@ autozt -tt device-thermal -p MoS2 -j S1_spec conf
 
 ## 8. 材料库与数据来源
 
-- 默认 MoS2 面内 κ = 63.7 W/mK（2D 物理值），取自 AutoZT `kl-dft-cpu` 实测（RTA 300 K 含真空胞值 20.88 按 h⊥/d=2.973 归一化）。
+- 默认 MoS2 面内 κ = 63.7 W/mK（2D 物理值），取自 AutoZT `kl-dft-cpu` 实测（RTA 300 K 含真空胞值 21.425 按 h⊥/d=2.973164 归一化）。
 - 默认 MoS2/SiO2 TBC = 14 MW/m²K，取自 Yalon et al., Nano Lett. 17, 3429 (2017)。
 - **文献值只作量级兜底**；正式投稿请用上游实测 κ，并在文中注明口径。
 
@@ -408,8 +408,9 @@ autozt -tt device-thermal -p MoS2 -j S1_spec conf
   任意 GPUMD 势；界面按元素组分突变自动判定；deck 为「平衡 → 烧入 → 测量」三段。
   **注意：S5 只生成 deck、不在 autozt 里跑 GPUMD**；需在 GPU 主机手动 `bash step5_tbc/run_gpumd.sh`
   得到 compute.out/compute_chunk.out 后才能跑 S6。
-- **S6_tbc_post**（GPU）：热流 q **直接来自源/漏恒温器的累积传能**（不依赖文献 κ），
-  自动挑最长稳态窗口 + 两侧体区外推得 ΔT_i，输出 G 与 `quality` 标记。
+- **S6_tbc_post**（GPU）：热流 q **直接来自源/漏恒温器的累积传能**（不依赖文献 κ）；
+  丢掉前 1/3 暂态后挑最长自洽窗口（T(z) 剖面与 q 同窗），两侧体区外推得 ΔT_i，输出 G 与
+  `quality` 标记；误差由稳态窗口的时间分块 + 自相关修正估计（空间分块已废弃）。
 - **弹道 BTE**（未安装，且不是本技能步骤）：OpenBTE / JAX-BTE 弹道修正。
 
 ```bash
@@ -424,7 +425,7 @@ autozt -tt device-thermal -p <材料> start
 
 ## 10. 验证证据
 
-自动化回归：python3 tests/suite_device_thermal.py（54 项，全过）与
+自动化回归：python3 tests/suite_device_thermal.py（80 项，全过）与
 python3 tests/suite_device_zt.py（device-zt 两用例，全过）；两者已注册进
 tests/test_suites.py 的 pytest 参数化清单。
 
@@ -445,8 +446,16 @@ tests/test_suites.py 的 pytest 参数化清单。
   S1 的 `device_spec.json`；`KAPPA_SOURCE=upstream/dft` 缺上游直接报错。
 - **2026-09-23 旧记录**：求解器与 scipy spsolve 原型一致到 1.19e-10（只覆盖求解器、
   不覆盖源项口径）；源项已按单元厚度分摊修正。相关绝对值已被上面的侧壁/网格修复更新。
-- **GPU 端到端**：新版 S5 生成 deck -> 3090 GPU5 跑 320000 步（485 s）-> S6 出结果；
-  该 Si/Ge 短引线体系的 G 未收敛（两种子 0.92 / 2.21 GW/m2K，均判 poor），链路与判据正常。
+- **S5 坐标对齐**：只对周期轴 wrap；非周期轴（通常是带真空的传输轴）改为整轴平移使最小值为 0。
+  旧实现对三轴都取模，会把 -0.2 A 这类弛豫后常见的负坐标挪到盒子另一端，还会分错源/漏组。
+  晶格存在非对角分量且启用周期轴时直接报错，不静默按对角元 wrap。
+- **S6 误差估计**：dT_i 误差由稳态窗口的**时间分块 + 自相关修正**估计。compute_chunk 每块约
+  1 ps，而温度涨落的相关时间有几十 ps，相邻块不独立，直接 std/sqrt(N) 会低估（相关时间 20 块
+  时约 8 倍）。现同时用积分自相关时间（N_eff=N/2tau）与 8~10 个超级块的批均值，取较大者（保守）。
+  空间分块已废弃；可用时间块 < 3 时误差记 None 并判 poor。
+- **GPU 端到端（结论作废，待重跑）**：0.92 / 2.21 GW/m2K 与“链路与判据正常”是用**旧 deck** 跑的；
+  旧 deck 的 `compute_chunk` 只在烧入段生效，剖面本身不对。需用新 deck 在 3090 重跑 2~3 个种子后
+  再下结论；届时 `n_blocks_averaged` 应接近测量段行数减去丢掉的前 1/3。
 
 
 完整记录：`tmp/device_thermal_e2e/VALIDATION.md`。

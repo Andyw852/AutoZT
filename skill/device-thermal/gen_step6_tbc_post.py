@@ -51,17 +51,49 @@ def fit(xs, ys):
     return a, my - a * mx
 
 
-def temporal_stats(blocks_sel, hot_cids, cold_cids, x0, min_pts=2, min_blocks=3):
-    """用**时间分块**估计 dT_i 的统计误差，而不是空间分块。
+def _tau_int(x):
+    """积分自相关时间 tau_int = 1/2 + sum_k rho_k（单位 = 样本，即时间块）。
 
-    compute_chunk.out 的每个 block 是一段时间平均后的剖面；空间上相邻的 bin 高度相关，
-    把它们切块当独立样本估出来的误差既不是真实误差、点数少时还会整段失效。这里对稳态
-    窗口内的每个时间 block 单独拟合两侧、外推到界面得到 dT_i^(b) 与斜率，再取这些量的
-    标准误 std/sqrt(N)。时间块之间近似独立，这才是 ΔT_i 的正确统计量。
+    Sokal 截断：累加到首个非正的自相关为止。独立样本 -> 0.5；相关越长越大。
+    """
+    n = len(x)
+    if n < 3:
+        return 0.5
+    m = sum(x) / n
+    var = sum((v - m) ** 2 for v in x)
+    if var <= 0.0:
+        return 0.5
+    s = 0.5
+    for k in range(1, n):
+        c = sum((x[i] - m) * (x[i + k] - m) for i in range(n - k)) / var
+        if c <= 0.0:
+            break
+        s += c
+    return max(0.5, s)
+
+
+def _std(vals):
+    n = len(vals)
+    if n < 2:
+        return 0.0
+    m = sum(vals) / n
+    return (sum((v - m) ** 2 for v in vals) / (n - 1)) ** 0.5
+
+
+def temporal_stats(blocks_sel, hot_cids, cold_cids, x0, min_pts=2, min_blocks=3,
+                   n_super=8):
+    """用**时间分块 + 自相关修正**估计 dT_i 的统计误差，而不是空间分块。
+
+    compute_chunk 每个 block 约 si*oi（默认 1 ps），而温度涨落的相关时间常有几~几十 ps，
+    相邻 block 并不独立：直接 std/sqrt(N) 会显著低估误差（相关时间 20 块时可低估 ~8 倍），
+    让 TBC_DT_TOL 偏向放行。这里给两种估计并取较大者（保守）：
+      (a) 自相关修正：有效样本数 N_eff = N/(2*tau_int)，se = std/sqrt(N_eff)；
+      (b) 批均值：把稳态窗口合并成 n_super 个首尾相接的超级块（每块远长于相关时间），
+          对合并后的超级块剖面重新拟合并取 std/sqrt(n_super)。
     返回 (se_dT, sd_slope_hot, sd_slope_cold, n_blocks_used)；可用 block 少于 min_blocks
     时误差返回 None（调用方必须据此判 poor，而不是跳过判据）。
     """
-    dts, slH, slC = [], [], []
+    dts, slH, slC, used = [], [], [], []
     for blk in blocks_sel:
         hot = [blk[c] for c in hot_cids if c in blk and blk[c][2] > 0.5]
         cold = [blk[c] for c in cold_cids if c in blk and blk[c][2] > 0.5]
@@ -72,19 +104,46 @@ def temporal_stats(blocks_sel, hot_cids, cold_cids, x0, min_pts=2, min_blocks=3)
         dts.append((aH * x0 + bH) - (aC * x0 + bC))
         slH.append(aH)
         slC.append(aC)
+        used.append(blk)
     n = len(dts)
     if n < min_blocks:
         return None, None, None, n
 
-    def _se(vals):
-        m = sum(vals) / len(vals)
-        return (sum((v - m) ** 2 for v in vals) / (len(vals) - 1) / len(vals)) ** 0.5
+    sd = _std(dts)
+    tau = _tau_int(dts)
+    n_eff = max(1.0, n / (2.0 * tau))
+    se_auto = sd / (n_eff ** 0.5)
 
-    def _sd(vals):
-        m = sum(vals) / len(vals)
-        return (sum((v - m) ** 2 for v in vals) / (len(vals) - 1)) ** 0.5
+    se_batch = 0.0
+    ns = max(1, min(int(n_super), n // max(1, min_pts)))
+    if ns >= 2:
+        size = n // ns
+        super_dts = []
+        for g in range(ns):
+            lo = g * size
+            hi = n if g == ns - 1 else (g + 1) * size
+            merged = {}
+            for blk in used[lo:hi]:
+                for cid, (c, t, cnt) in blk.items():
+                    e = merged.get(cid)
+                    if e is None:
+                        merged[cid] = [c, t * cnt, cnt]
+                    else:
+                        e[1] += t * cnt
+                        e[2] += cnt
+            hot = [(v[0], v[1] / v[2]) for cid, v in merged.items()
+                   if cid in hot_cids and v[2] > 0.5]
+            cold = [(v[0], v[1] / v[2]) for cid, v in merged.items()
+                    if cid in cold_cids and v[2] > 0.5]
+            if len(hot) < min_pts or len(cold) < min_pts:
+                continue
+            aH, bH = fit([v[0] for v in hot], [v[1] for v in hot])
+            aC, bC = fit([v[0] for v in cold], [v[1] for v in cold])
+            super_dts.append((aH * x0 + bH) - (aC * x0 + bC))
+        if len(super_dts) >= 2:
+            se_batch = _std(super_dts) / (len(super_dts) ** 0.5)
 
-    return _se(dts), _sd(slH), _sd(slC), n
+    return max(se_auto, se_batch), _std(slH), _std(slC), n
 
 
 def read_compute(path):

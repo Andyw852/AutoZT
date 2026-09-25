@@ -44,10 +44,39 @@ DEFAULT_IMAG_THR = 0.10        # THz，低于此频率视为数值虚频/声学�
 # 保留常量仅供外部引用；0.2 起 acoustic_mask 默认不再用频率窗（见其 docstring）
 DEFAULT_ACOUSTIC_FMAX = 2.0    # THz
 
+# phono3py 的 --boundary-mfp/--bmfp 与 hdf5 里的 boundary_mfp 单位都是**微米**
+# （help 原文 "Boundary mean free path in micrometer"；默认 1e6 µm = 10 mm，即“关”），
+# 而群速度是 THz·Å（1 THz·Å = 100 m/s），所以算 gamma_bd 时 L 要乘 1e4 换成 Å。
+MICRON_TO_ANGSTROM = 1.0e4
+
 
 # ---------------------------------------------------------------------------
 # 数据集定位
 # ---------------------------------------------------------------------------
+# 上游技能 -> κ / fc 产物所在步骤目录（各技能步骤编号不同：
+# kl-dft-cpu 是 step6_kappa / step5_fc，kl-mlff-* 是 step4_kappa / step3_fc）。
+# 0.2 之前写死 step6_kappa，接 kl-mlff-* 时直接报“找不到数据源”。
+_UPSTREAM_STEPS = {
+    "kl-dft-cpu": {"kappa": ("step6_kappa",), "fc": ("step5_fc",)},
+    "kl-mlff-cpu": {"kappa": ("step4_kappa",), "fc": ("step3_fc",)},
+    "kl-mlff-gpu": {"kappa": ("step4_kappa",), "fc": ("step3_fc",)},
+    "kl-mlff-3090": {"kappa": ("step4_kappa",), "fc": ("step3_fc",)},
+}
+_KAPPA_STEP_NAMES = ("step6_kappa", "step4_kappa", "step5_kappa")
+_FC_STEP_NAMES = ("step5_fc", "step3_fc")
+
+
+def upstream_steps(skill, step=None, kind="kappa"):
+    """按上游技能给出候选步骤目录名：显式 step 优先，再技能映射，最后通用兜底。"""
+    known = _UPSTREAM_STEPS.get(str(skill or ""), {})
+    common = _KAPPA_STEP_NAMES if kind == "kappa" else _FC_STEP_NAMES
+    out = []
+    for s in (step,) + tuple(known.get(kind, ())) + tuple(common):
+        if s and str(s) not in out:
+            out.append(str(s))
+    return out
+
+
 def _iter_candidate_dirs(cwd, skill, step):
     """给出可能存放上游技能产物的目录（由近及远）。
 
@@ -89,7 +118,8 @@ def _hdf5_info(path):
                 if len(shp) == 2:
                     info["n_gp"], info["n_band"] = int(shp[0]), int(shp[1])
             info["gamma_ndim"] = int(f["gamma"].ndim) if "gamma" in f else 0
-            info["has_qw"] = ("qpoint" in f) and ("weight" in f)
+            info["has_qw"] = ((("qpoint" in f) or ("qpoints" in f))
+                              and (("weight" in f) or ("weights" in f)))
             info["has_mode_kappa"] = "mode_kappa" in f
             if "mesh" in f:
                 info["mesh"] = [int(x) for x in np.asarray(f["mesh"][()]).ravel().tolist()]
@@ -108,11 +138,20 @@ def hdf5_has_gamma(path):
     return bool(_hdf5_info(path)["has_gamma"])
 
 
+# 展宽(smearing)法写的 kappa-m*-s<σ>.hdf5；四面体法（默认 --br）没有 -s 后缀
+_SMEARING_RX = re.compile(r"-s[0-9]")
+
 _NAME_PENALTY = (
     (re.compile(r"-g[0-9]+\.hdf5$"), 4),     # --write-gamma --gp 的单点文件
     (re.compile(r"mfp"), 2),                  # 累积 mfp / kappa-mfp
     (re.compile(r"(-|_)gp(-|_|\.|$)"), 1),   # 单网格点输出
+    (_SMEARING_RX, 1),                        # 展宽法输出 -> 同 mesh 优先四面体法
 )
+
+
+def _is_smearing_file(path):
+    """该文件是否来自 phono3py 展宽(smearing)法（四面体法无 -s 后缀）。"""
+    return bool(_SMEARING_RX.search(Path(path).name.lower()))
 
 
 def _file_penalty(path):
@@ -148,6 +187,9 @@ def select_kappa_hdf5(paths, log=None, note=""):
 
     cands.sort(key=key, reverse=True)
     best, ignored = cands[0], cands[1:]
+    if log and _is_smearing_file(best[0]):
+        log("[warn] %s选中的 %s 是展宽(smearing)法输出；同 mesh 若还有四面体法主文件，"
+            "应优先用后者（默认 --br 是四面体法）" % (note, best[0].name))
     if ignored and log:
         log("[warn] %s发现 %d 个含 gamma 的 hdf5，选 %s (mesh=%s, n_qpoint=%d)；忽略 %s"
             % (note, len(cands), best[0].name,
@@ -170,38 +212,55 @@ def find_kappa_hdf5(cwd, skill="kl-dft-cpu", step="step6_kappa", log=None):
     返回 Path 或 None。
     """
     fallback = None
-    for d in _iter_candidate_dirs(Path(cwd), skill, step):
-        if not d.is_dir():
+    seen = set()
+    for st in upstream_steps(skill, step, "kappa"):
+        for d in _iter_candidate_dirs(Path(cwd), skill, st):
+            if not d.is_dir() or str(d) in seen:
+                continue
+            seen.add(str(d))
+            files = []
+            for pat in ("kappa-m*.hdf5", "gamma-m*.hdf5", "kappa*.hdf5", "*.hdf5"):
+                files.extend(sorted(d.glob(pat)))
+            best, _ = select_kappa_hdf5(files, log=log, note="[%s] " % d)
+            if best is None:
+                continue
+            if is_main_hdf5(best):
+                return best
+            # 只有 --gp 单点文件时先记住，继续看有没有别处的多 q 点主文件
+            if fallback is None:
+                fallback = best
+    if fallback is not None:
+        return fallback
+    # 兜底：在上游技能目录下递归找主文件（步骤目录名与预期不符时）
+    for base in (Path(cwd), Path(cwd).parent, Path(cwd).parent.parent):
+        sk = base / skill
+        if not sk.is_dir():
             continue
-        files = []
-        for pat in ("kappa-m*.hdf5", "gamma-m*.hdf5", "kappa*.hdf5", "*.hdf5"):
-            files.extend(sorted(d.glob(pat)))
-        best, _ = select_kappa_hdf5(files, log=log, note="[%s] " % d)
-        if best is None:
-            continue
-        if is_main_hdf5(best):
-            return best
-        # 只有 --gp 单点文件时先记住，继续看有没有别处的多 q 点主文件
-        if fallback is None:
-            fallback = best
-    return fallback
+        hits = sorted(sk.rglob("kappa-m*.hdf5"))
+        if hits:
+            best, _ = select_kappa_hdf5(hits, log=log, note="[rglob %s] " % sk)
+            if best is not None:
+                return best
+    return None
 
 
 def find_fc_dataset(cwd, skill="kl-dft-cpu", step="step6_kappa"):
     """找 phono3py 力常数数据集（fc2.hdf5 + fc3.hdf5 + phono3py_disp.yaml）。
 
+    步骤目录名同样按上游技能展开（kl-mlff-* 的 fc 在 step3_fc）。
     返回 (dir, fc2, fc3, disp_yaml) 或 None。
     """
-    for d in _iter_candidate_dirs(Path(cwd), skill, step):
-        if not d.is_dir():
-            continue
-        for sub in (".", "phono3py"):
-            base = d / sub
-            fc2 = base / "fc2.hdf5"
-            fc3 = base / "fc3.hdf5"
-            disp = base / "phono3py_disp.yaml"
-            if fc2.is_file() and fc3.is_file() and disp.is_file():
-                return base, fc2, fc3, disp
+    for st in upstream_steps(skill, step, "fc"):
+        for d in _iter_candidate_dirs(Path(cwd), skill, st):
+            if not d.is_dir():
+                continue
+            for sub in (".", "phono3py"):
+                base = d / sub
+                fc2 = base / "fc2.hdf5"
+                fc3 = base / "fc3.hdf5"
+                disp = base / "phono3py_disp.yaml"
+                if fc2.is_file() and fc3.is_file() and disp.is_file():
+                    return base, fc2, fc3, disp
     return None
 
 
@@ -218,9 +277,15 @@ def find_phonopy_yaml(h5path=None, cwd=None, skill="kl-dft-cpu", step="step6_kap
         dirs.append(Path(h5path).resolve().parent)
     if cwd is not None:
         cwd = Path(cwd).resolve()
-        dirs.extend([d for d in _iter_candidate_dirs(cwd, skill, step) if d.is_dir()])
+        for st in upstream_steps(skill, step, "kappa"):
+            dirs.extend([d for d in _iter_candidate_dirs(cwd, skill, st) if d.is_dir()])
         dirs.extend([cwd / "phono3py", cwd.parent / "phono3py"])
+    seen, uniq = set(), []
     for d in dirs:
+        if str(d) not in seen:
+            seen.add(str(d))
+            uniq.append(d)
+    for d in uniq:
         for name in _YAML_CANDIDATES:
             p = d / name
             if p.is_file():
@@ -274,12 +339,16 @@ def read_kappa_hdf5(path):
 
     out = {}
     with h5py.File(path, "r") as f:
-        for key in ("temperature", "frequency", "gamma", "gamma_isotope", "qpoint",
-                    "weight", "mesh", "group_velocity", "gv_by_gv", "heat_capacity",
+        for key in ("temperature", "frequency", "gamma", "gamma_isotope", "qpoint", "qpoints",
+                    "weight", "weights", "mesh", "group_velocity", "gv_by_gv", "heat_capacity",
                     "kappa", "mode_kappa", "grid_point", "kappa_unit_conversion",
                     "boundary_mfp", "version"):
             if key in f:
                 out[key] = f[key][()]
+        # 不同 phono3py 版本用单/复数两种拼写
+        for plural, singular in (("qpoints", "qpoint"), ("weights", "weight")):
+            if plural in out and singular not in out:
+                out[singular] = out.pop(plural)
     out["_file"] = str(path)
     if "temperature" in out:
         out["temperatures"] = np.asarray(out.pop("temperature"), dtype=float)
@@ -309,24 +378,30 @@ def effective_gamma(gamma, gamma_isotope=None):
     return g + gi
 
 
-def boundary_gamma(group_velocity, boundary_mfp_ang):
-    """边界散射线宽 gamma_bd[THz] = |v|/(4*pi*L)。
+def boundary_gamma(group_velocity, boundary_mfp_um):
+    """边界散射线宽 gamma_bd[THz] = |v|/(4*pi*L)，L 由**微米**换成 Å。
 
     与 phono3py conductivity/base.py:_get_boundary_scattering 同源：那里
-    g_bd = |v|/(2*2*pi*L)（单位换算略去），对应 tau_bd = L/|v|。
-    上游若用 EXTRA_ARGS 打开 --boundary-mfp，hdf5 里的 kappa 就含边界散射，
-    寿命必须一并计入才能和 kappa 对上。L<=0/非有限时返回 None。
+    g_bd = |v|/(2*2*pi*L)，对应 tau_bd = L/|v|。上游若用 EXTRA_ARGS
+    --boundary-mfp/--bmfp 打开边界散射，hdf5 里的 kappa 就含它，寿命必须一并计入
+    才能和 kappa 对上。
+
+    ⚠️ 单位：phono3py 的 boundary_mfp 是**微米**（help: "Boundary mean free path in
+    micrometer"），群速度是 THz·Å，所以必须先 L[µm]*1e4 -> L[Å]。0.2 版本漏了这一步，
+    gamma_bd 偏大 1e4 倍（0.1 µm 时算出 ~5 THz 的荒唐线宽），于是“计入边界散射”反而
+    让 kappa 重建误差变大，自动判定就会静默地不计入——B8 等于没修。
+    L<=0/非有限时返回 None。
     """
-    if group_velocity is None or boundary_mfp_ang is None:
+    if group_velocity is None or boundary_mfp_um is None:
         return None
-    L = float(boundary_mfp_ang)
-    if not np.isfinite(L) or L <= 0:
+    L_um = float(boundary_mfp_um)
+    if not np.isfinite(L_um) or L_um <= 0:
         return None
     v = np.asarray(group_velocity, dtype=float)
     if v.ndim != 3:
         return None
     vnorm = np.sqrt((v ** 2).sum(axis=-1))
-    return vnorm / (4.0 * np.pi * L)
+    return vnorm / (4.0 * np.pi * L_um * MICRON_TO_ANGSTROM)
 
 
 def gamma_to_tau_ps(gamma_thz):
@@ -416,24 +491,35 @@ def kappa_reconstruction_error(data, gamma_total, t_indices=None):
     return {"max_rel_err": max(errs), "n_temperature": len(errs), "rel_err_per_T": per_T}
 
 
-def decide_boundary_gamma(data, gamma_total, g_bd, t_indices=None, sentinel_ang=1e5):
+def decide_boundary_gamma(data, gamma_total, g_bd, t_indices=None, sentinel_um=1e6):
     """决定要不要把边界散射线宽 gamma_bd 计入寿命（返回 (use, info)）。
 
-    phono3py 的 hdf5 常把 boundary_mfp 存成 1e6 Å（等价于“关”）。上游若真用
-    EXTRA_ARGS --boundary-mfp 打开了边界散射，hdf5 里的 kappa 就含它，此时计入
-    gamma_bd 会明显降低 kappa 重建误差；若只是默认占位，计入反而让误差变大。
-    因此能比对 kappa 就用重建误差决定，比不了再回退到阈值 L < sentinel_ang。
+    phono3py 的 hdf5 总是写 boundary_mfp，默认 1e6 µm 就是“关”（它自己的默认值，
+    单位微米）。上游若真用 --boundary-mfp 打开了边界散射，hdf5 里的 kappa 就含它，
+    此时计入 gamma_bd 会明显降低 kappa 重建误差；若只是默认占位，计入反而让误差变大。
+
+    判定顺序：L >= sentinel_um 直接当“关”；否则能比对 kappa 就用重建误差决定，
+    比不了再回退到阈值 L < sentinel_um。
     """
     info = {"method": "kappa_reconstruction", "err_no_boundary": None,
-            "err_with_boundary": None, "boundary_mfp_ang": None}
+            "err_with_boundary": None, "boundary_mfp_um": None,
+            "gamma_bd_median_THz": None}
     mfp = data.get("boundary_mfp")
     if mfp is not None:
         try:
-            info["boundary_mfp_ang"] = float(np.asarray(mfp).ravel()[0])
+            info["boundary_mfp_um"] = float(np.asarray(mfp).ravel()[0])
         except Exception:
-            info["boundary_mfp_ang"] = None
+            info["boundary_mfp_um"] = None
+    if g_bd is not None:
+        gb = np.asarray(g_bd, dtype=float)
+        if gb.size:
+            info["gamma_bd_median_THz"] = float(np.median(gb))
     if g_bd is None:
         info["method"] = "no_group_velocity"
+        return False, info
+    L = info["boundary_mfp_um"]
+    if L is not None and np.isfinite(L) and L >= sentinel_um:
+        info["method"] = "mfp_sentinel"
         return False, info
     err_no = kappa_reconstruction_error(data, gamma_total, t_indices)
     err_bd = kappa_reconstruction_error(data, gamma_total + g_bd, t_indices)
@@ -442,8 +528,7 @@ def decide_boundary_gamma(data, gamma_total, g_bd, t_indices=None, sentinel_ang=
         info["err_with_boundary"] = err_bd["max_rel_err"]
         return bool(err_bd["max_rel_err"] < err_no["max_rel_err"]), info
     info["method"] = "mfp_threshold"
-    L = info["boundary_mfp_ang"]
-    return bool(L is not None and np.isfinite(L) and 0 < L < sentinel_ang), info
+    return bool(L is not None and np.isfinite(L) and 0 < L < sentinel_um), info
 
 
 # ---------------------------------------------------------------------------
@@ -641,15 +726,21 @@ def summarize_temperature(frequencies, gamma, temperatures, t_index,
 # ---------------------------------------------------------------------------
 # 沿指定 q 方向取样（论文 Γ-A 那类“寿命 vs q”）
 # ---------------------------------------------------------------------------
-def select_direction_qpoints(qpoints, direction, n_points=21, tol=0.06, rotations=None):
+def select_direction_qpoints(qpoints, direction, n_points=21, tol=1e-5, rotations=None):
     """从（不可约）网格 q 点里挑出落在 Γ -> direction 线上的点，返回 [(t, gp), ...]。
 
     hdf5 存的是不可约点，等价方向的代表点未必几何上在这条线上（Si 15^3 的
     不可约楔子存 (x,0,0)，直接找 [001] 只会命中 Γ）。给了 rotations（分数坐标
     下的对称操作，见 symmetry_rotations_from_yaml）时，把每个不可约点用
-    inv(R).T 映射一圈，命中目标线的像也算——τ 在对称操作下不变，物理上等价。
-    t 为该线上的约化坐标（0=Γ，0.5=该方向第一布里渊区边界），升序去重。
-    n_points 只作上限（结果多于 n_points+1 个时按 t 均匀抽稀），不再量化 t。
+    inv(R).T 映射一圈，命中目标线的像也算——τ 在对称操作下不变；另外把时间反演
+    τ(q)=τ(-q) 的像（-imgs）也放进候选，没有反演中心的材料不可约楔里可能只存 -q。
+    t 为该线上的约化坐标（0=Γ，0.5=该方向第一布里渊区边界），升序去重；同一个 t
+    只保留离目标线最近的那个点（不是先遇到的那个）。
+
+    ⚠️ 容差 tol 默认 1e-5（分数坐标）：网格点是精确有理数，31^3 的格点间距才
+    1/31≈0.032，旧默认 0.06 会把紧贴目标线的离线点也当成线上的点（实测 31^3
+    会整列取错）。方向与网格点不共线时会只剩 Γ，这是刻意的。
+    n_points 只作上限（结果多于 n_points+1 个时按 t 均匀抽稀）。
     """
     q = np.asarray(qpoints, dtype=float)
     d = np.asarray(direction, dtype=float)
@@ -666,22 +757,26 @@ def select_direction_qpoints(qpoints, direction, n_points=21, tol=0.06, rotation
                 rinv_t = np.array([np.linalg.inv(r).T for r in rot])
             except np.linalg.LinAlgError:
                 rinv_t = None
+    tol = max(float(tol), 0.0)
     found = {}
     for i in range(qq.shape[0]):
         qi = qq[i]
         imgs = qi[None, :] if rinv_t is None else (rinv_t @ qi)
         imgs = imgs - np.round(imgs)
-        dist = np.linalg.norm(imgs - np.outer(imgs @ d, d), axis=1)
+        imgs = np.concatenate([imgs, -imgs], axis=0)       # 时间反演 -q
         proj = imgs @ d
-        ok = (dist < tol) & (proj >= -1e-9) & (proj <= 0.5 + tol)
-        for tt in proj[ok]:
-            if tt < 0:
+        dist = np.linalg.norm(imgs - np.outer(proj, d), axis=1)
+        for k in np.where((dist <= tol) & (proj >= -tol) & (proj <= 0.5 + tol))[0]:
+            tt = float(proj[k])
+            if tt < 0.0:
                 continue
             # 按实际 t 去重（不是按 n_points 量化后的格点），否则不在格点上的
-            # t（如 1/15 的奇数倍）会在与邻居竞争时被丢掉
-            key = round(float(tt), 6)
-            found.setdefault(key, (float(tt), int(i)))
-    picked = sorted(found.values())
+            # t（如 1/15 的奇数倍）会在与邻居竞争时被丢掉；同一 t 取最近的
+            key = round(tt, 6)
+            prev = found.get(key)
+            if prev is None or dist[k] < prev[2]:
+                found[key] = (tt, int(i), float(dist[k]))
+    picked = [(t, i) for t, i, _ in sorted(found.values())]
     if n_points and len(picked) > int(n_points) + 1:
         idx = np.linspace(0, len(picked) - 1, int(n_points) + 1).round().astype(int)
         picked = [picked[j] for j in dict.fromkeys(idx.tolist())]
@@ -783,7 +878,7 @@ def _json_default(o):
 __all__ = [
     "TAU_FACTOR", "DEFAULT_IMAG_THR", "DEFAULT_ACOUSTIC_FMAX",
     "find_kappa_hdf5", "find_fc_dataset", "find_phonopy_yaml", "hdf5_has_gamma",
-    "select_kappa_hdf5", "is_main_hdf5", "symmetry_rotations_from_yaml",
+    "select_kappa_hdf5", "is_main_hdf5", "upstream_steps", "symmetry_rotations_from_yaml",
     "read_kappa_hdf5", "effective_gamma", "boundary_gamma",
     "gamma_to_tau_ps", "tau_to_gamma_thz", "mean_free_path_ang",
     "reconstruct_kappa", "kappa_reconstruction_error", "decide_boundary_gamma",

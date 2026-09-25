@@ -10,7 +10,9 @@
   5. KAPPA_SOURCE 三取值 × 上游四形态（normalized / factor / 都没有 / runs[]）；
   6. 非法输入（Q<0、L<=0、Nx=1、CONTACT_BC/KAPPA_SOURCE 拼错、Q=0）；
   7. S5 界面检测（层间距 0.7~3.5 A × x/y/z × 元素序）与无 pbc；
-  8. S6 用合成数据回归，并确认稳态窗口丢掉初始暂态。
+  8. S5 deck 契约：每个 run 前有 ensemble、测量段重声明 compute/compute_chunk、
+     沿传输轴 pbc=T 被拒（review 硬伤 #1/#2）；
+  9. S6 用合成数据回归，确认稳态窗口丢掉初始暂态、时间分块误差生效。
 
 运行: python3 tests/suite_device_thermal.py   （rc=0 全过）
 """
@@ -413,6 +415,124 @@ def test_s5_align_coords():
     approx(new3[0][0], 9.5, 0, "x wrap", atol=1e-12)
     approx(new3[0][1], 1.0, 0, "y wrap", atol=1e-12)
     approx(new3[0][2], 69.0, 0, "z wrap", atol=1e-12)
+    # 非正交盒子（六方晶格）必须报错，不能静默按对角元 wrap
+    lat_hex = [3.16, 0.0, 0.0, -1.58, 2.737, 0.0, 0.0, 0.0, 30.0]
+    try:
+        g5.align_coords([(0.0, 0.0, 1.0)], lat_hex, "T T F")
+        ok(False, "非正交盒子应报错")
+    except SystemExit:
+        ok(True, "非正交盒子（六方晶格）报错，不会静默算错")
+
+
+def _write_s5_fixture(d, pbc="T T F", nA=10, nB=10, spacing=2.0):
+    """写一个 S5 能跑通的合成体系：两层 Si/Ge 沿 z，晶格 10x10x60。"""
+    xyz = os.path.join(d, "sige_interface.xyz")
+    n = nA + nB
+    lat = [10.0, 0.0, 0.0, 0.0, 10.0, 0.0, 0.0, 0.0, 60.0]
+    zbase = (nA - 1) * spacing + spacing
+    with open(xyz, "w", encoding="utf-8") as fh:
+        fh.write("%d\n" % n)
+        attr = 'Lattice="%s"' % " ".join("%g" % v for v in lat)
+        if pbc:
+            attr += ' pbc="%s"' % pbc
+        fh.write("%s Properties=species:S:1:pos:R:3\n" % attr)
+        for i in range(nA):
+            fh.write("Si 0 0 %.6f\n" % (i * spacing))
+        for i in range(nB):
+            fh.write("Ge 0 0 %.6f\n" % (zbase + i * spacing))
+    pot = os.path.join(d, "nep.txt")
+    with open(pot, "w", encoding="utf-8") as fh:
+        fh.write("nep4 2 Si Ge\n")
+    gbin = os.path.join(d, "gpumd")
+    with open(gbin, "w", encoding="utf-8") as fh:
+        fh.write("#!/bin/sh\necho fake gpumd\n")
+    os.chmod(gbin, 0o755)
+    return {"TBC_STRUCTURE": os.path.basename(xyz), "TBC_NEP_MODEL": pot,
+            "TBC_GPUMD_BIN": gbin, "TBC_AXIS": "z", "TBC_EQUIL_STEPS": "100",
+            "TBC_BURN_STEPS": "200", "TBC_RUN_STEPS": "300", "TBC_SEED": "7"}
+
+
+def _copy_s5_assets(dest):
+    shutil.copyfile(os.path.join(DT, "gen_step5_tbc.py"),
+                    os.path.join(dest, "gen_step5_tbc.py"))
+    shutil.copyfile(os.path.join(OPT, "stepconf.py"),
+                    os.path.join(dest, "stepconf.py"))
+
+
+def _runin(path):
+    with open(path, encoding="utf-8") as fh:
+        return [ln.strip() for ln in fh if ln.strip()]
+
+
+def test_s5_deck_contract():
+    """回归 review 硬伤 #1/#2：每个 run 前必须有 ensemble；沿传输轴 pbc=T 必须被拒。
+
+    GPUMD 每跑完一个 run 会 ensemble_.reset() 且 actions_.clear()，所以测量段的 run 前
+    必须重新声明 ensemble + compute/compute_chunk；沿轴 pbc=T 时源/漏隔着周期边界直接
+    相邻、热流短路，S5 必须报错而不是默认 T T T。
+    """
+    print("[s5-deck]")
+    tmp = tempfile.mkdtemp(prefix="dt_deck_")
+    try:
+        _copy_s5_assets(tmp)
+        conf = _write_s5_fixture(tmp, pbc="T T F")
+        conf["TBC_PBC"] = "T T F"
+        _write_conf(tmp, conf)
+        r = _run_gen(tmp, "gen_step5_tbc.py")
+        ok(r.returncode == 0, "S5 生成 deck rc=0（pbc=T T F）")
+        if r.returncode != 0:
+            print(r.stdout[-800:])
+            print(r.stderr[-800:])
+            return
+        lines = _runin(os.path.join(tmp, "step5_tbc", "run.in"))
+        runs = [i for i, l in enumerate(lines) if l.startswith("run ")]
+        ens = [i for i, l in enumerate(lines) if l.startswith("ensemble ")]
+        ok(len(runs) == 3 and len(ens) == 3, "deck 三段：3 个 run 各有一个 ensemble")
+        missing = [j for j, i in enumerate(runs)
+                   if not any(e < i and (j == 0 or e > runs[j - 1]) for e in ens)]
+        ok(not missing, "每个 run 前都重新声明了 ensemble（否则 GPUMD 报 must be specified）")
+        before_final = [e for e in ens if e < runs[-1]]
+        seg = lines[before_final[-1] + 1:runs[-1]] if before_final else []
+        ok(any(l.startswith("compute ") for l in seg),
+           "测量段重新声明 compute（否则 compute.out 不生成）")
+        ok(any(l.startswith("compute_chunk ") for l in seg),
+           "测量段重新声明 compute_chunk（剖面与测量段同窗）")
+        ok(not any(l.startswith("run ") for l in seg),
+           "compute/compute_chunk 紧跟最后的 run，测量段不混入烧入段")
+        meta = json.load(open(os.path.join(tmp, "step5_tbc", "tbc_inputs.json")))
+        ok(meta["pbc"] == "T T F" and meta["n_source"] > 0 and meta["n_sink"] > 0,
+           "tbc_inputs.json 记录 pbc/源漏计数")
+        xyz2 = _runin(os.path.join(tmp, "step5_tbc", "model.xyz"))
+        ok("group:I:1" in xyz2[1], "model.xyz 写出 group 列")
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+    # 硬伤 #2：沿传输轴 pbc=T -> 报错（源/漏隔着周期边界短路）
+    tmp = tempfile.mkdtemp(prefix="dt_deck_pbcT_")
+    try:
+        _copy_s5_assets(tmp)
+        conf = _write_s5_fixture(tmp, pbc="T T T")
+        conf["TBC_PBC"] = "T T T"
+        _write_conf(tmp, conf)
+        r = _run_gen(tmp, "gen_step5_tbc.py")
+        out = (r.stdout or "") + (r.stderr or "")
+        ok(r.returncode != 0 and "短路" in out,
+           "沿传输轴 pbc=T 被拒并说明热流短路")
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+    # 无 pbc 且未给 TBC_PBC -> 不得静默默认 T T T
+    tmp = tempfile.mkdtemp(prefix="dt_deck_nopbc_")
+    try:
+        _copy_s5_assets(tmp)
+        conf = _write_s5_fixture(tmp, pbc="")
+        _write_conf(tmp, conf)
+        r = _run_gen(tmp, "gen_step5_tbc.py")
+        out = (r.stdout or "") + (r.stderr or "")
+        ok(r.returncode != 0 and "TBC_PBC" in out,
+           "结构无 pbc 且未给 TBC_PBC 时报错（不默认 T T T）")
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
 
 
 def test_interface_detection():
@@ -532,7 +652,7 @@ def test_s6_noise_is_poor():
                         os.path.join(tmp, "gen_step6_tbc_post.py"))
         shutil.copyfile(os.path.join(OPT, "stepconf.py"), os.path.join(tmp, "stepconf.py"))
         with open(os.path.join(tmp, "step.conf"), "w", encoding="utf-8") as fh:
-            fh.write("[params]\n")
+            fh.write("[params]\nTBC_DT_TOL = 0.05\n")
         s5 = os.path.join(tmp, "step5_tbc")
         os.makedirs(s5)
         # 源/漏各 30 A 厚 -> 拟合窗约 16 A，bin 宽 4 A -> 每侧只有 4 个 bin（用户场景）
@@ -573,10 +693,44 @@ def test_s6_noise_is_poor():
         grel = out.get("G_relative_uncertainty")
         ok(out["quality"] == "poor",
            "少 bin + 大噪声判 poor（旧版空间分块误差为 None 会跳过判据误判 good）")
-        ok(unc is None or grel is None or grel > 0.3,
+        ok(grel is not None and grel > 0.05,
            "误差判据生效 dT_unc=%r G_rel=%r" % (unc, grel))
+        ok(any("误差" in r for r in out.get("quality_reasons", [])),
+           "poor 原因含 dT_i 误差超限: %s" % out.get("quality_reasons"))
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_s6_correlated_error():
+    print("[s6-correlated-error]")
+    g6 = _load_step6()
+    # compute_chunk 每块 1 ps，但 MD 温度涨落的相关时间有几十 ps：用 AR(1) 生成时间相关
+    # 噪声，检查时间分块修正后的误差是否接近 20 个种子间 dT_i 的真实离散度（旧法低估 ~8x）
+    N, tau_c, sig, nseed = 300, 20.0, 0.3, 20
+    rho = float(np.exp(-1.0 / tau_c))
+    naive, corr, means = [], [], []
+    for seed in range(nseed):
+        rng = np.random.default_rng(9000 + seed)
+        state = float(rng.normal(0.0, sig))
+        d = np.empty(N)
+        for b in range(N):
+            state = rho * state + float(np.sqrt(1.0 - rho * rho) * rng.normal(0.0, sig))
+            d[b] = state
+        blocks = []
+        for b in range(N):
+            db = float(d[b])
+            blocks.append({0: (0.0, db, 10.0), 1: (1.0, 1.0 + db, 10.0),
+                           2: (2.0, 1.0, 10.0), 3: (3.0, 1.5, 10.0)})
+        se, _h, _c, n = g6.temporal_stats(blocks, [0, 1], [2, 3], 2.0)
+        naive.append(float(np.std(d, ddof=1) / np.sqrt(N)))
+        corr.append(se)
+        means.append(2.0 - 1.0 + float(np.mean(d)))
+    emp = float(np.std(means, ddof=1))
+    naive_m, corr_m = float(np.mean(naive)), float(np.mean(corr))
+    ok(corr_m > 3.0 * naive_m,
+       "自相关修正把误差从 %.4g 提到 %.4g（>3x，旧法低估）" % (naive_m, corr_m))
+    ok(0.4 * emp <= corr_m <= 3.0 * emp,
+       "修正后误差 %.4g 与真实 %.4g 同量级" % (corr_m, emp))
 
 
 def main():
@@ -586,8 +740,10 @@ def main():
     for fn in (test_validation, test_energy_conservation, test_analytic_1d_insulator,
                test_x_convergence, test_y_convergence, test_anisotropic_oxide,
                test_fem_crosscheck, test_param_flow, test_kappa_source_modes,
-               test_thickness_scaling, test_s5_align_coords, test_interface_detection,
-               test_s6_regression, test_s6_temporal_stats, test_s6_noise_is_poor):
+               test_thickness_scaling, test_s5_align_coords, test_s5_deck_contract,
+               test_interface_detection,
+               test_s6_regression, test_s6_temporal_stats, test_s6_noise_is_poor,
+               test_s6_correlated_error):
         try:
             fn()
         except Exception as exc:  # noqa: BLE001
