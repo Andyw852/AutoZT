@@ -65,8 +65,24 @@ if [ "${AUTOZT_PUSH_YES:-0}" != "1" ]; then
 fi
 
 # 1) 本地真实版提交（留在本地分支，永不推到远端）
-if [ ${#PATHS[@]} -gt 0 ]; then git add -- "${PATHS[@]}"; else git add -A; fi
-git commit -m "$MSG（本地真实版）" >/dev/null 2>&1 || echo "(本地无变更可提交，直接用当前树快照)"
+if [ ${#PATHS[@]} -gt 0 ]; then
+  git add -- "${PATHS[@]}"
+  if git diff --cached --quiet -- "${PATHS[@]}"; then
+    echo "(指定路径无变更，直接用当前树快照)"
+  else
+    # 只提交 -p 列出的路径：别的会话已 git add 的文件不会被捎带进来
+    git commit -m "$MSG（本地真实版）" -- "${PATHS[@]}" \
+      || { echo "✗ 本地提交失败（hook/冲突等），已中止，未推送"; exit 1; }
+  fi
+else
+  git add -A
+  if git diff --cached --quiet; then
+    echo "(本地无变更可提交，直接用当前树快照)"
+  else
+    git commit -m "$MSG（本地真实版）" \
+      || { echo "✗ 本地提交失败（hook/冲突等），已中止，未推送"; exit 1; }
+  fi
+fi
 
 # 2) 临时 worktree：基于远端最新，取真实版内容 + 脱敏 + 提交
 git fetch origin --quiet

@@ -1,6 +1,6 @@
 # WSL + dsh web 稳定性 + Git 提交 运维备忘
 
-> 本机（WSL2 / user@DESKTOP-3B6UKIT）的 dsh web 托管与 git 提交关键配置、踩坑记录。改配置或遇到卡顿/提交失败时先查这里。
+> 本机（WSL2 / user@MYPC）的 dsh web 托管与 git 提交关键配置、踩坑记录。改配置或遇到卡顿/提交失败时先查这里。
 
 ## 1. dsh web 由 systemd 托管（崩溃自愈）
 
