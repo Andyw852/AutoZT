@@ -418,15 +418,18 @@ def confirmations(before, after, energy_before=None, energy_after=None,
     vi_b = vacuum_info(before["lattice"], before["frac"])
     vi_a = vacuum_info(after["lattice"], after["frac"])
     axis_moved = (vi_b["axis"] != vi_a["axis"])
-    # 真空中心分数位移（只在同轴时才有意义）
+    # 真空中心分数位移（只在同轴时才有意义）。真空方向的【整体平移】在 PBC 下物理
+    # 等价（真空隙不变、只是 slab 在胞内换了个位置），故中心位移只记录、不判失败；
+    # 真正要拦的是真空轴被改（axis_moved）——refine_cell 可能重定向晶格矢量。
     dcenter = None
     if not axis_moved:
         d = abs(vi_a["center_frac"] - vi_b["center_frac"])
         dcenter = min(d, 1.0 - d)
-    c3_ok = (not axis_moved) and (dcenter is None or dcenter <= vac_center_tol)
+    c3_ok = (not axis_moved)
     c3 = {"ok": bool(c3_ok), "axis_moved": bool(axis_moved),
           "before": vi_b, "after": vi_a,
-          "center_shift_frac": dcenter, "center_tol": vac_center_tol}
+          "center_shift_frac": dcenter, "center_tol": vac_center_tol,
+          "center_shift_note": "真空方向平移不计入判据（PBC 下物理等价）"}
 
     en_b = _as_energy(energy_before)
     en_a = _as_energy(energy_after)

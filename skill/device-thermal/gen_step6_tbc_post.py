@@ -90,8 +90,9 @@ def temporal_stats(blocks_sel, hot_cids, cold_cids, x0, min_pts=2, min_blocks=3,
       (a) 自相关修正：有效样本数 N_eff = N/(2*tau_int)，se = std/sqrt(N_eff)；
       (b) 批均值：把稳态窗口合并成 n_super 个首尾相接的超级块（每块远长于相关时间），
           对合并后的超级块剖面重新拟合并取 std/sqrt(n_super)。
-    返回 (se_dT, sd_slope_hot, sd_slope_cold, n_blocks_used)；可用 block 少于 min_blocks
-    时误差返回 None（调用方必须据此判 poor，而不是跳过判据）。
+    返回 dict：se_dT / sd_slope_hot / sd_slope_cold / n_blocks / tau_int_blocks /
+    n_eff / superblock_len / n_super。可用 block 少于 min_blocks 时 se_dT 为 None
+    （调用方必须据此判 poor，而不是跳过判据）。
     """
     dts, slH, slC, used = [], [], [], []
     for blk in blocks_sel:
@@ -107,7 +108,9 @@ def temporal_stats(blocks_sel, hot_cids, cold_cids, x0, min_pts=2, min_blocks=3,
         used.append(blk)
     n = len(dts)
     if n < min_blocks:
-        return None, None, None, n
+        return {"se_dT": None, "sd_slope_hot": None, "sd_slope_cold": None,
+                "n_blocks": n, "tau_int_blocks": None, "n_eff": None,
+                "superblock_len": None, "n_super": 0}
 
     sd = _std(dts)
     tau = _tau_int(dts)
@@ -115,6 +118,7 @@ def temporal_stats(blocks_sel, hot_cids, cold_cids, x0, min_pts=2, min_blocks=3,
     se_auto = sd / (n_eff ** 0.5)
 
     se_batch = 0.0
+    size, n_super_ok = None, 0
     ns = max(1, min(int(n_super), n // max(1, min_pts)))
     if ns >= 2:
         size = n // ns
@@ -142,8 +146,32 @@ def temporal_stats(blocks_sel, hot_cids, cold_cids, x0, min_pts=2, min_blocks=3,
             super_dts.append((aH * x0 + bH) - (aC * x0 + bC))
         if len(super_dts) >= 2:
             se_batch = _std(super_dts) / (len(super_dts) ** 0.5)
+            n_super_ok = len(super_dts)
 
-    return max(se_auto, se_batch), _std(slH), _std(slC), n
+    return {"se_dT": max(se_auto, se_batch), "sd_slope_hot": _std(slH),
+            "sd_slope_cold": _std(slC), "n_blocks": n,
+            "tau_int_blocks": tau, "n_eff": n_eff,
+            "superblock_len": size, "n_super": n_super_ok}
+
+
+def error_reliability_reasons(tau_int, n_eff, superblock_len,
+                              min_neff=8.0, sb_factor=5.0):
+    """误差估计本身是否可信（与 TBC_DT_TOL 独立）。
+
+    * n_eff < min_neff：自相关修正后可用的独立样本太少，se 不可信；
+    * superblock_len < sb_factor*tau_int：超级块之间仍相关，批均值也低估。
+    只读 temporal_stats 的返回字段，便于单测。注意 _tau_int 在 N/tau 很小时会**低估**
+    （实测 tau=60、N=200 时估到 ~17），n_eff 判据可能漏；超级块判据对低估更稳健，两者同用。
+    """
+    rs = []
+    if n_eff is not None and n_eff < min_neff:
+        rs.append("有效独立样本 n_eff=%.1f < %g（tau_int=%.1f 块）"
+                  % (n_eff, min_neff, tau_int if tau_int is not None else -1.0))
+    if superblock_len is not None and tau_int is not None \
+            and superblock_len < sb_factor * tau_int:
+        rs.append("超级块长度 %d < %g*tau_int=%.1f，批均值仍相关"
+                  % (superblock_len, sb_factor, sb_factor * tau_int))
+    return rs
 
 
 def read_compute(path):
@@ -289,6 +317,7 @@ def main():
         d = {"margin": margin, "n_hot": len(hot), "n_cold": len(cold),
              "aH": 0.0, "aC": 0.0, "Th": 0.0, "Tc": 0.0, "dTi": 0.0,
              "slH": None, "slC": None, "dT_unc": None, "n_temp_blocks": 0,
+             "tau_int_blocks": None, "n_eff": None, "superblock_len": None,
              "hot": hot, "cold": cold}
         if len(hot) >= 2 and len(cold) >= 2:
             xsH = [c for c, _ in hot]
@@ -297,10 +326,13 @@ def main():
             ysC = [t for _, t in cold]
             aH, bH = fit(xsH, ysH)
             aC, bC = fit(xsC, ysC)
-            se_dT, sd_slH, sd_slC, nblk = temporal_stats(blocks_sel, hot_cids, cold_cids, cif)
+            st = temporal_stats(blocks_sel, hot_cids, cold_cids, cif)
             d.update(aH=aH, aC=aC, Th=aH * cif + bH, Tc=aC * cif + bC,
                      dTi=(aH * cif + bH) - (aC * cif + bC),
-                     slH=sd_slH, slC=sd_slC, dT_unc=se_dT, n_temp_blocks=nblk)
+                     slH=st["sd_slope_hot"], slC=st["sd_slope_cold"],
+                     dT_unc=st["se_dT"], n_temp_blocks=st["n_blocks"],
+                     tau_int_blocks=st["tau_int_blocks"], n_eff=st["n_eff"],
+                     superblock_len=st["superblock_len"])
         return d
 
     m0 = float(conf["TBC_FIT_MARGIN_A"])
@@ -339,6 +371,9 @@ def main():
                        % int(ev.get("n_temp_blocks") or 0))
     elif G_rel > dt_tol:
         reasons.append("dT_i 外推相对误差 %.2f > %.2f" % (G_rel, dt_tol))
+    if G_rel is not None:
+        reasons.extend(error_reliability_reasons(
+            ev.get("tau_int_blocks"), ev.get("n_eff"), ev.get("superblock_len")))
     if g_ratio is not None and g_ratio > mg_tol:
         reasons.append("G 对拟合余量敏感 max/min=%.2f > %.1f（引线太短/非扩散区，G 不可靠）"
                        % (g_ratio, mg_tol))
@@ -365,6 +400,8 @@ def main():
            "slope_hot_K_per_A": aH, "slope_cold_K_per_A": aC,
            "slope_hot_std_K_per_A": slH, "slope_cold_std_K_per_A": slC,
            "dT_interface_uncertainty_K": dT_unc, "G_relative_uncertainty": G_rel,
+           "tau_int_blocks": ev.get("tau_int_blocks"), "n_eff": ev.get("n_eff"),
+           "superblock_len": ev.get("superblock_len"), "seed": meta.get("seed"),
            "G_margin_scan": scan, "G_margin_ratio": g_ratio,
            "source_side": side, "interface_coord_A": cif, "area_A2": area,
            "n_bins_hot": len(hot), "n_bins_cold": len(cold), "n_blocks_averaged": nblocks,

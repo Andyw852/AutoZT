@@ -30,7 +30,7 @@ defaults:
 
 fetch_files: [device_spec.json, thermal_props.json, device_thermal_summary.json,
               T_field.json, device_report.json, device_thermal_Tmap.png,
-              tbc_inputs.json, tbc_result.json]
+              tbc_inputs.json, run_done.json, tbc_result.json]
 
 steps:
   - {seq: 1, name: step1_device_spec, label: S1_spec, check: marker,
@@ -64,8 +64,13 @@ optional_steps:
          gen: gen_step5_tbc.py, check: marker, run: gen,
          gen_need: [stepconf.py, step.conf],
          marker: 'tbc_inputs.json:"TBC_INPUTS_DONE"', done_marker: tbc_inputs.json}
-      - {seq: 6, name: step6_tbc_post, label: S6_tbc_post, after: step5_tbc,
+      - {seq: 5.1, name: step5b_run, label: S5b_tbc_run, after: step5_tbc,
          needs: [step5_tbc], hpc: "3090",
+         gen: gen_step5b_tbc_run.py, check: marker, run: gen,
+         gen_need: [stepconf.py, step.conf],
+         marker: 'run_done.json:"TBC_RUN_DONE"', done_marker: run_done.json}
+      - {seq: 6, name: step6_tbc_post, label: S6_tbc_post, after: step5b_run,
+         needs: [step5b_run], hpc: "3090",
          gen: gen_step6_tbc_post.py, check: marker, run: gen, gen_need: [stepconf.py, step.conf],
          marker: 'tbc_result.json:"TBC_POST_DONE"', done_marker: tbc_result.json}
 
@@ -84,6 +89,7 @@ io_schema:
     - {name: T_field.json, step: S3_solve, type: json, desc: "二维温度场 T(x,y) 与坐标"}
     - {name: device_report.json, step: S4_report, type: json, desc: "器件热仿真汇总报告"}
     - {name: tbc_inputs.json, step: S5_tbc, type: json, desc: "(可选GPU) GPUMD NEMD 输入清单与几何"}
+    - {name: run_done.json, step: S5b_tbc_run, type: json, desc: "(可选GPU) NEMD 完成标记：compute_chunk.out 块数 >= 理论块数"}
     - {name: tbc_result.json, step: S6_tbc_post, type: json, desc: "(可选GPU) 界面热导 G 与质量标记"}
   params:
     - {name: CHANNEL_MATERIAL, values: [MoS2, WS2, MoSe2, WSe2, graphene, hBN], default: MoS2, where: step.conf, desc: "沟道材料（材料库键）"}
@@ -119,6 +125,7 @@ io_schema:
     - {name: TBC_COUPLE, default: 100.0, where: step.conf, desc: "(可选GPU) 恒温器耦合强度"}
     - {name: TBC_THERMOSTAT, values: [heat_lan, heat_nhc, heat_bdp], default: heat_lan, where: step.conf, desc: "(可选GPU) 源漏恒温器方法"}
     - {name: TBC_TIME_STEP, default: 1.0, where: step.conf, desc: "(可选GPU) 时间步(fs)"}
+    - {name: TBC_RUN_TIMEOUT_S, default: 0, where: step.conf, desc: "(可选GPU) S5b 跑 GPUMD 的超时秒数；0=不限时"}
     - {name: TBC_SEED, default: 20260923, where: step.conf, desc: "(可选GPU) 随机种子；0=不固定（默认固定以便复现）"}
     - {name: TBC_BIN_WIDTH, default: 2.0, where: step.conf, desc: "(可选GPU) T(z) 剖面 bin 宽(A)"}
     - {name: TBC_EQUIL_STEPS, default: 20000, where: step.conf, desc: "(可选GPU) NVT 平衡步数"}
@@ -141,6 +148,7 @@ io_schema:
     - {step: S3_solve, title: "FVM steady/transient solve", inputs: [thermal_props.json], outputs: [device_thermal_summary.json, T_field.json], validator: "SOLVE_DONE marker"}
     - {step: S4_report, title: "Report + T map", inputs: [device_thermal_summary.json, T_field.json], outputs: [device_report.json], validator: "REPORT_DONE marker"}
     - {step: S5_tbc, title: "(GPU) GPUMD NEMD deck", inputs: ["step.conf", "interface extxyz"], outputs: [tbc_inputs.json], validator: "TBC_INPUTS_DONE marker"}
+    - {step: S5b_tbc_run, title: "(GPU) run NEMD + block-count gate", inputs: [tbc_inputs.json, run_gpumd.sh], outputs: [run_done.json], validator: "TBC_RUN_DONE marker (compute_chunk.out blocks >= run_steps/output_interval)"}
     - {step: S6_tbc_post, title: "(GPU) interface G", inputs: [tbc_inputs.json, "compute.out", "compute_chunk.out"], outputs: [tbc_result.json], validator: "TBC_POST_DONE marker"}
 
 flow:
@@ -150,7 +158,7 @@ flow:
     - {name: props, steps: [S2_props], produces: [thermal_props.json], desc: "取上游实测 kappa + 数据库 TBC"}
     - {name: solve, steps: [S3_solve], produces: [device_thermal_summary.json, T_field.json], desc: "稳态 + 瞬态传热求解"}
     - {name: report, steps: [S4_report], produces: [device_report.json], desc: "温度场图与汇总"}
-    - {name: gpu_tbc, steps: [S5_tbc, S6_tbc_post], produces: [tbc_inputs.json, tbc_result.json], desc: "(可选GPU) GPUMD NEMD 界面热导"}
+    - {name: gpu_tbc, steps: [S5_tbc, S5b_tbc_run, S6_tbc_post], produces: [tbc_inputs.json, run_done.json, tbc_result.json], desc: "(可选GPU) GPUMD NEMD 界面热导"}
   next_skills:
     - {skill: kl-dft-cpu, via: kappa_summary.json, desc: "上游：材料级晶格热导率与 2D 厚度"}
     - {skill: te-screen, via: POSCAR, desc: "筛选出的候选材料可直接进本技能做器件热评估"}

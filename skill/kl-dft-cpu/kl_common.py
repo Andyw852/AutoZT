@@ -1303,22 +1303,23 @@ def relay_poscar(prev_contcar, dst_poscar, label="上一步"):
 # 结构体检第五条（B，2026-09-20）：S1 弛豫结构的数值微畸变审计 + spglib 对称化
 # ---------------------------------------------------------------------------
 #   S2/S3/S4 的 gen 都从 S1 的 CONTCAR 接力原胞；relay 之后调用 symmetry_gate。
-#   * 默认只审计告警（SYMMETRY_AUDIT=warn）；spglib 不可用则静默跳过，不阻断 gen。
-#   * SYMMETRY_SYMMETRIZE=off（默认）时【绝不】改写结构 —— 默认不改变现有行为。
-#   * 对称化必须过三项确认，其中②要求对称化前后各一个单点能量
-#     （SYMMETRY_ENERGY_BEFORE/AFTER 给 OUTCAR 路径）；缺省即拒绝静默通过。
+#   * 默认审计并【对称化】数值微畸变（SYMMETRY_AUDIT=warn + SYMMETRY_SYMMETRIZE=on）；
+#     spglib 不可用则静默跳过，不阻断 gen。
+#   * 微畸变（symprec=1e-5 与 1e-4 空间群不一致）能量差远低于容差，默认免单点直接
+#     对称化（SYMMETRY_ALLOW_PENDING=true，结果标 fit_for_use=false）。要严格确认就把
+#     SYMMETRY_ALLOW_PENDING=false 并给 SYMMETRY_ENERGY_BEFORE/AFTER 两个单点 OUTCAR。
 #   开关写在【本步的】step.conf（templates/<step>/step.conf），不要写进全局
 #   templates/step.conf（会漏进别的步骤，触发"本脚本不认识的键"）。
 SYMMETRY_SPEC = {
     "SYMMETRY_AUDIT":          ("warn", "str"),   # off | warn | error
-    "SYMMETRY_SYMMETRIZE":     ("off",  "str"),   # off | on（on 才改写结构）
+    "SYMMETRY_SYMMETRIZE":     ("on",   "str"),   # on=检出数值微畸变即对称化（2D ZA 假软模根因）
     "SYMMETRY_AUDIT_SYMPREC":  (1e-4,   "float"),
     "SYMMETRY_ENERGY_TOL_MEV": (1.0,    "float"),
     "SYMMETRY_ENERGY_BEFORE":  (None,   "str"),   # 对称化前单点 OUTCAR 路径
     "SYMMETRY_ENERGY_AFTER":   (None,   "str"),   # 对称化后单点 OUTCAR 路径
     "SYMMETRY_STRESS_BEFORE":  (None,   "str"),
     "SYMMETRY_STRESS_AFTER":   (None,   "str"),
-    "SYMMETRY_ALLOW_PENDING":  (False,  "bool"),  # true=无能量也先对称化(标 fit_for_use=false)
+    "SYMMETRY_ALLOW_PENDING":  (True,   "bool"),  # 微畸变能量差远低于容差，默认免单点直接对称化(标 fit_for_use=false)
 }
 
 
@@ -1340,9 +1341,10 @@ def _switch_on(value):
 def symmetry_gate(poscar, conf=None):
     """结构体检第五条：审计（可选对称化）relay 过来的原胞 POSCAR。
 
-    返回审计结果 dict；关闭/不可用时 None。默认只在检出数值微畸变时告警，
-    绝不改结构；SYMMETRY_SYMMETRIZE=on 才调用 spglib.refine_cell 就地对称化，
-    且确认②（能量）未提供时拒绝静默通过（除非 SYMMETRY_ALLOW_PENDING=true）。
+    返回审计结果 dict；关闭/不可用时 None。默认检出数值微畸变即用 spglib.refine_cell
+    就地对称化（SYMMETRY_SYMMETRIZE=on）；微畸变能量差远低于容差，默认免单点直接
+    对称化并标 fit_for_use=false（SYMMETRY_ALLOW_PENDING=true），要严格确认②（能量）
+    就设 SYMMETRY_ALLOW_PENDING=false 并给 SYMMETRY_ENERGY_BEFORE/AFTER。
     """
     mode = str(_cget(conf, "SYMMETRY_AUDIT", "warn")).strip().lower()
     if mode in ("off", "false", "0", "none", ""):
@@ -1383,7 +1385,7 @@ def symmetry_gate(poscar, conf=None):
           % (sg[0]["symprec"], sg[0]["international"], sg[0]["number"], sg[0]["n_ops"],
              sg[-1]["symprec"], sg[-1]["international"], sg[-1]["number"], sg[-1]["n_ops"]))
 
-    if not _switch_on(_cget(conf, "SYMMETRY_SYMMETRIZE", "off")):
+    if not _switch_on(_cget(conf, "SYMMETRY_SYMMETRIZE", "on")):
         msg = ("进 S4 前建议对称化：python symmetry_audit.py --poscar %s "
                "--mode symmetrize --inplace（或在本步 step.conf 设 "
                "SYMMETRY_SYMMETRIZE=on）" % poscar)
@@ -1393,7 +1395,7 @@ def symmetry_gate(poscar, conf=None):
         return aud
 
     # ---- 对称化：确认②（能量）必须显式提供，否则拒绝静默通过 ----
-    allow_pending = bool(_cget(conf, "SYMMETRY_ALLOW_PENDING", False))
+    allow_pending = bool(_cget(conf, "SYMMETRY_ALLOW_PENDING", True))
     en_before = _cget(conf, "SYMMETRY_ENERGY_BEFORE")
     en_after = _cget(conf, "SYMMETRY_ENERGY_AFTER")
     if not allow_pending and (en_before is None or en_after is None):

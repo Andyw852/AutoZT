@@ -22,10 +22,18 @@ while [ $# -gt 0 ]; do
     -p|--path) [ $# -gt 1 ] || { echo "缺 -p 参数"; exit 1; }; PATHS+=("$2"); shift 2;;
     --dry-run) DRY=1; shift;;
     --yes) AUTOZT_PUSH_YES=1; shift;;
-    *) MSG="$1"; shift;;
+    -h|--help) sed -n '2,8p' "$SELF"; exit 0;;
+    -*) echo "✗ 未知选项: $1"; exit 1;;
+    *)
+      # 提交信息只允许一个位置参数；多个多半是信息没加引号被拆成了多个词
+      [ -z "$MSG" ] || { echo "✗ 位置参数多于一个: 已有 '$MSG'，又见 '$1'；提交信息请用引号括起"; exit 1; }
+      MSG="$1"; shift;;
   esac
 done
-[ -n "$MSG" ] || MSG="update"
+[ -n "$MSG" ] || {
+  echo "✗ 缺少提交信息。用法: scripts/tf-git-push.sh [-p <路径> ...] [--dry-run] [--yes] \"提交信息\""
+  exit 1
+}
 
 # 词表优先级：仓库内 setting/git-sanitize.conf 优先
 #   （与远端脱敏线一致；实测 ~/.config 旧词表会把已脱敏内容二次改写，造出大量伪差异）

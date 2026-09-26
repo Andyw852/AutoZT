@@ -69,13 +69,13 @@ autozt -tt kl-dft-cpu -p <材料> -j step6_kappa conf --set params.KAPPA_MESH="2
 - **SUPERCELL / MIN_SC_LEN**（step4_disp）：显式超胞或按最小胞长自动。2D 真空方向恒压 1。
 - **SYMMETRY_AUDIT / SYMMETRY_SYMMETRIZE**（step2_static / step3_nac / step4_disp）：结构体检
   第五条（2026-09-20）。gen 接力 S1 的 CONTCAR 后审计「symprec=1e-5 与 1e-4 给出的空间群是否
-  一致」——不一致 = 数值微畸变（ZA 弯曲支被线性化的几何根因）。默认 `SYMMETRY_AUDIT=warn` 只告警、
-  `SYMMETRY_SYMMETRIZE=off` **绝不改结构**（现有行为不变）。要对称化就把 `SYMMETRY_SYMMETRIZE=on`
-  写进**该步**的 step.conf：此时必须给对称化前后各一个单点 OUTCAR（`SYMMETRY_ENERGY_BEFORE/AFTER`）
-  过确认②，否则 gen 拒绝静默通过、只把候选结构写到 `symmetry_audit/POSCAR.symmetrized`；
-  `SYMMETRY_ALLOW_PENDING=true` 可先出结构但标 `fit_for_use=false`。留档在 `stepN/symmetry_audit/`
-  （before/symmetrized/json/log），就地对称化另存 `POSCAR.pre_symmetry`。依赖公共池 `symmetry_audit.py`
-  （spglib 在 `atomate2_p_a` 环境里有，生成目录下 spglib 不可用时自动跳过、不阻断 gen）。
+  一致」——不一致 = 数值微畸变（ZA 弯曲支被线性化的几何根因）。默认 `SYMMETRY_AUDIT=warn` +
+  `SYMMETRY_SYMMETRIZE=on`：**检出微畸变即就地对称化**（spglib `refine_cell`）。微畸变能量差
+  远低于容差，默认 `SYMMETRY_ALLOW_PENDING=true` 免单点直接对称化并标 `fit_for_use=false`；
+  要严格确认②（能量）就把 `SYMMETRY_ALLOW_PENDING=false` 并给 `SYMMETRY_ENERGY_BEFORE/AFTER`
+  两个单点 OUTCAR。留档在 `stepN/symmetry_audit/`（before/symmetrized/json/log），就地对称化
+  另存 `POSCAR.pre_symmetry`。依赖公共池 `symmetry_audit.py`（spglib 在 `atomate2_p_a` 环境里有，
+  生成目录下 spglib 不可用时自动跳过、不阻断 gen）。
 
 ## 三阶截断自动选择（2026-09-24，S4/S5/S6 联动）
 

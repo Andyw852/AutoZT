@@ -195,7 +195,7 @@
 | `TBC_COUPLE` | `100.0` | 恒温器耦合强度，越大越强行把区域拉到目标温度 |
 | `TBC_THERMOSTAT` | `heat_lan` | `heat_lan` / `heat_nhc` / `heat_bdp`。本技能的热流累积方案用 `heat_lan` |
 | `TBC_TIME_STEP` | `1.0` | MD 时间步（fs）。须保证能量守恒，轻元素/高温可能要更小 |
-| `TBC_SEED` | `0` | 0 = 不固定随机初速（不可复现）；非 0 → `velocity T seed <seed>`，同种子可复现 |
+| `TBC_SEED` | `20260923` | 非 0 → `velocity T seed <seed>`，同种子可复现；0 = 不固定。**做多种子统计时必须每次改不同值**，否则多次运行结果完全相同；S6 把实际用的 seed 记进 `tbc_result.json` |
 | `TBC_BIN_WIDTH` | `2.0` | T(轴) 剖面 bin 宽（Å），直接决定两侧各有多少拟合点 |
 
 **三段积分（平衡 → 烧入 → 测量）**
@@ -208,6 +208,7 @@
 | `TBC_SAMPLE_INTERVAL` | `10` | compute 采样间隔 |
 | `TBC_OUTPUT_INTERVAL` | `100` | compute 输出间隔。**每行时间 = 两者相乘 × TBC_TIME_STEP**（默认 10×100×1 = 1000 fs/行） |
 | `TBC_THERMO_INTERVAL` | `1000` | `dump_thermo` 间隔 |
+| `TBC_RUN_TIMEOUT_S` | `0` | S5b 跑 GPUMD 的超时秒数；0=不限时。超时即判 S5b 失败，不写完成标记 |
 
 **S6 后处理与质量判据**
 
@@ -304,7 +305,7 @@
 4. **界面 G**：`TBC_OVERRIDE` > 库里的材料对 > `default`。
 5. **`T_AMB` 同时决定边界温度和上游 κ 的取值温度**，改之前想清楚。
 6. **按步骤设参数**：几何/热源/来源 → `-j S1_spec`；物性/界面 → `-j S2_props`；网格/SOR → `-j S3_solve`；
-   绘图 → `-j S4_report`；GPU → `-j S5_tbc` / `-j S6_tbc_post`。S3 的数值参数若自身没设，会回退 S1 固化的值。
+   绘图 → `-j S4_report`；GPU → `-j S5_tbc` / `-j S5b_tbc_run` / `-j S6_tbc_post`。S3 的数值参数若自身没设，会回退 S1 固化的值。
 
 ---
 
@@ -319,7 +320,8 @@
 | S4 | `step4_report/device_report.json` | 汇总报告 |
 | S4 | `step4_report/device_thermal_Tmap.png` | 温度场图（无 matplotlib 则跳过，仍出 JSON） |
 | **S5**（可选） | `step5_tbc/{model.xyz, potential.txt, run.in, run_gpumd.sh, tbc_inputs.json}` | NEMD deck；跑出 `compute.out`/`compute_chunk.out`/`thermo.out` |
-| **S6**（可选） | `step6_tbc_post/tbc_result.json` | `G_W_m2K`、`R_interface_m2K_W`、`q_W_m2`、`dT_interface_K`、`quality`、`quality_reasons` |
+| **S5b**（可选） | `step5b_run/run_done.json` | GPUMD NEMD 运行步；完成判据 = `compute_chunk.out` 块数 ≥ `TBC_RUN_STEPS // TBC_OUTPUT_INTERVAL`（不是“文件存在”） |
+| **S6**（可选） | `step6_tbc_post/tbc_result.json` | `G_W_m2K`、`R_interface_m2K_W`、`q_W_m2`、`dT_interface_K`、`quality`、`quality_reasons`、`tau_int_blocks`、`n_eff`、`superblock_len`、`seed` |
 
 autozt 回拉清单（`fetch_files`）：上述 8 个 JSON/PNG。
 
@@ -406,8 +408,9 @@ autozt -tt device-thermal -p MoS2 -j S1_spec conf
 
 - **S5_tbc**（GPU）：通用生成 GPUMD NEMD 输入 —— 任意 extxyz 结构/元素、任意传输轴 x/y/z、
   任意 GPUMD 势；界面按元素组分突变自动判定；deck 为「平衡 → 烧入 → 测量」三段。
-  **注意：S5 只生成 deck、不在 autozt 里跑 GPUMD**；需在 GPU 主机手动 `bash step5_tbc/run_gpumd.sh`
-  得到 compute.out/compute_chunk.out 后才能跑 S6。
+- **S5b_tbc_run**（GPU）：在 GPU 主机执行 `step5_tbc/run_gpumd.sh`（若 `compute_chunk.out`
+  块数已达标则跳过，幂等）。**完成标记只看块数 ≥ `TBC_RUN_STEPS // TBC_OUTPUT_INTERVAL`**，
+  半截文件/崩溃残留不会被判 done；超时/退出码非 0 直接失败，`TBC_RUN_TIMEOUT_S=0` 表示不限时。
 - **S6_tbc_post**（GPU）：热流 q **直接来自源/漏恒温器的累积传能**（不依赖文献 κ）；
   丢掉前 1/3 暂态后挑最长自洽窗口（T(z) 剖面与 q 同窗），两侧体区外推得 ΔT_i，输出 G 与
   `quality` 标记；误差由稳态窗口的时间分块 + 自相关修正估计（空间分块已废弃）。
@@ -455,7 +458,9 @@ tests/test_suites.py 的 pytest 参数化清单。
   空间分块已废弃；可用时间块 < 3 时误差记 None 并判 poor。
 - **GPU 端到端（结论作废，待重跑）**：0.92 / 2.21 GW/m2K 与“链路与判据正常”是用**旧 deck** 跑的；
   旧 deck 的 `compute_chunk` 只在烧入段生效，剖面本身不对。需用新 deck 在 3090 重跑 2~3 个种子后
-  再下结论；届时 `n_blocks_averaged` 应接近测量段行数减去丢掉的前 1/3。
+  再下结论；届时 `n_blocks_averaged` 应接近测量段行数减去丢掉的前 1/3。**S5b 已加上**：以后
+  `autozt -j S5b_tbc_run` 会在 GPU 主机跑 GPUMD，块数达标才写 `run_done.json`、才放行 S6；
+  做多种子时务必每次改不同的 `TBC_SEED`（默认 20260923 固定，不改会得到完全一样的结果）。
 
 
 完整记录：`tmp/device_thermal_e2e/VALIDATION.md`。
