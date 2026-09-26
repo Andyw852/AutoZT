@@ -4744,3 +4744,118 @@ AMSET 无检查点，重跑仍会在 24h 被砍。
   **`interpolation_factor: 10`**；旧产物 transport.json（09-17）是 stale；
 - **待用户定**：(1) 重叠模式（false=真实+全网格 / true=unity）；(2) IF=10 的 OOM 风险（其它 2D 用 IF=4，
   README 记录 IF=10+nworkers=24 曾 OOM 292 GB）。
+  → **已于 2026-09-26 定案，见文末 V100+ 节：改为真实重叠 + 全网格为出厂默认。**
+
+---
+
+# ★★ V100+：去对称化被证伪 + 2D 默认翻转（2026-09-26，用户决定）
+
+> 本节推翻 V22/V23 时期的因果判断。证据链全文：`~/software/AutoZT/tmp/amset2d/DESYM_FINDINGS.md`、
+> 上游 issue 草稿 `upstream_issue_tr_tau.md`、复现脚本 `desym_truth_any.py` / `desym_tsigntest.py` /
+> `desym_fixtau.py` / `mesh_formula_check.py`。
+
+## V100 判据：逐点真值裁决（去对称化结果 vs ISYM=-1 全网格 DFT 真值）
+
+对每个全网格 k 点算 |<ψ_desym | ψ_true>|（>0.99 记"正确"）。
+配对：MoS₂ 用本地同一条 47 网格的 `mos2_wave/wavefunction.h5`（416 IBZ 点）与
+`fullwave/wavefunction.h5`（6627 全网格点），走**与 `from_coefficients` 完全相同**的
+`expand_kpoints` → `desymmetrize_coefficients`。
+
+| | **Si（3D，有反演）** | **MoS₂（2D，无反演）** |
+|---|---|---|
+| 同 k 点基线（不作任何变换） | 89.3% | **100%** |
+| 去对称化后总体 | **97.7%** | **38.9%** |
+| 非 TR 路径 | 97.7% | 68.7% |
+| **TR 路径** | **无此类操作（TR 操作数 = 0）** | **5.2%** |
+| 24 个操作里全错的 | **0 / 48** | **15 / 24** |
+
+- 对的点是**精确对**（0.9999）；错的点中位数 overlap **0.000** —— 非黑即白，不是数值误差。
+- **同一脚本跑 Si 不劣于基线** ⇒ 脚本有效，问题确实在无反演体系。V26 的结论复现。
+- 简并干扰用重叠矩阵**奇异值（子空间）**判据处理；两次独立 VASP 计算造成的同 k 点差异
+  （Si 89.3%）正是"必须与基线比、而非要求绝对 100%"的原因。
+
+## V101 根因：TR 分支的 τ 被反号两次（已用"改一行"证明）
+
+```python
+# symmetry.py:186-189 建 TR 操作时已经取负
+rotations = np.concatenate([rotations, -rotations])
+translations = np.concatenate([translations, -translations])
+# common.py:123-124 又取负一次
+if tr:
+    tau = -tau
+```
+
+⇒ TR 路径的相位 `exp(-2πi(R·G+R·k)·τ)` 实际用了 `+τ`。
+
+| | 现状 | 只抵消这一次反号 |
+|---|---|---|
+| 总体 | 38.9% | **67.0%** |
+| TR 路径 | **5.2%** | **65.2%** |
+
+单操作：op13 `0.000→0.999`、op17 `0.000→1.000`、op16 `0.000→0.950`、op23 `0.312→0.950`。
+
+**残余**：4 个**非 TR** 操作（op 5/8/10/11）仍全错，与 τ 无关。线索：
+`maps_to_self(R^T, τ)` 对 12 个非 TR 操作**完美预测**通过/失败（8 通过全 True、4 失败全 False），
+疑与 `symmetry.py:182` 的 `rotations.transpose((0,2,1))`（转置 R 却不动 τ）有关，**未定论**。
+
+**Si 免疫的原因**：有反演时 −R 已在点群内，`np.unique(rotations)` 把 TR 折叠掉，`is_tr` 全为 False。
+
+## V102 失败操作分类（用户要求）
+
+| 类别 | 个数 | 结果 |
+|---|---|---|
+| **TR 操作（R→−R，k→−k）** | 12（除 op22，其 R=−I、τ=0） | **11 个全 0%** |
+| 非 TR 操作 | 12 | **4 个全 0%**（op 5/8/10/11） |
+
+## V103 网格层面的独立缺陷
+
+`step4_wave/wavefunction.h5` 停留在 **1/47 网格**（09-16），而 `step3_uniform` 已在 **09-24 重跑成 48 网格**。
+**K=(1/3,1/3,0) 根本不在 47 网格上**（步长 1/47，1/3 不可表示）。
+⇒ 过去所有"去对称化 + 真实重叠"的 MoS₂ 数字，既用了错变换、又没采到 K。
+**这就是 V17 里那个 ×10.6 异常的来源。**
+
+## V104 决定：2D 默认翻转（用户 2026-09-26）
+
+**旧逻辑（V22/V23）**："2D 必须 unity_overlap: true，因为真实重叠会被去对称化算坏。"
+**新逻辑**：因果反了 ——
+
+- **unity 才是错的那一个**：全网格真实重叠实测 K→K′ 的 |I|² ≈ **0.25**（unity 当作 1），
+  小 q 才 ≈1 ⇒ unity 把谷间/大 q 散射算强了，**迁移率系统性偏低**；
+- **去对称化确实坏**，但那是它本身就坏，修法是改走全网格 `from_data`，不是退回 unity。
+
+**新默认**（`gen_step14_amset2d.py`）：`UNITY_OVERLAP = False` + `WAVEFUNCTION_FULL = True`
+（S3b ISYM=-1 → S4b → 真实重叠）。unity 保留为**快速筛选**，preflight 自动打印
+"偏低、仅数量级；Seebeck 基本可用；DPT 不受影响"。
+
+**防护**：`UNITY_OVERLAP=false and not WAVEFUNCTION_FULL → sys.exit`（原有）；
+**新增** "全网格 h5 不存在"闸门（原来只挡 vasprun）。`WAVEFUNCTION_FULL` 的 SPEC 由 `bool` 改
+`auto/true/false` —— 原 bool 类型**关不掉**（写 false 是 falsy）。
+
+## V105 旧结果标注（用户 2026-09-26 决定）
+
+| 结果来源 | 迁移率 / σ / κ_e / zT | Seebeck | DPT |
+|---|---|---|---|
+| **unity**（CrSe₂/CrS₂/SS/LS 等生产数） | **偏低，只能看数量级**（谷间散射被高估） | **基本可用** | **不受影响** |
+| **去对称化 + 真实重叠**（V17 等） | **作废** | **作废** | 不受影响 |
+
+候选材料之间的**排序也不能完全当真**；重要候选必须用新默认重算。
+已落盘：`/mnt/d/tf_data/jzz/jap/ke-dft-cpu_vs_literature.md` §6、
+`work_AutoZT/{MoSe2,WS2,WSe2}/ke-dft-cpu/RESULTS_CAVEAT_2026-09-26.md`。
+
+## V106 ★ 非中心对称的 3D 材料同样在风险内（结构性证据，未做真值裁决）
+
+| 材料 | 空间群 | 操作数 | TR 操作数 | 判定 |
+|---|---|---|---|---|
+| Si | Fd-3m | 48 | **0** | 安全 |
+| **GaAs** | **F-43m** | 48 | **24** | **高风险** |
+| MoS₂ | P-6m2 | 24 | 12 | 已证坏 |
+
+机制在共享代码里、与材料无关 ⇒ **GaAs/GaN 及一切非中心对称 3D 材料都可疑**。
+**3D 批量开跑前建议先补一次 ISYM=-1 全网格的 GaAs 真值裁决。**
+
+### 被撤回的判据（记录以免重蹈）
+
+曾用"同一 k 点不同 (op,rep) 路径必须给出同一态"（免真值）判定，GaAs 得 100% 不一致、
+最差 0.198，看似证明；**但 Si 对照也是 100% 不一致（142/142，最差 0.000）**，而 Si 对真值是 97.7% 正确的。
+⇒ 判据无效（未做简并子空间比较），**GaAs 结论已撤回**。
+

@@ -119,21 +119,39 @@ REQUIRE_BANDGAP = True
 # patch_interp_factor：AMSET 的收敛判据在**插值后**的网格上，别吃默认值 5。
 #   设 None 则不写这一行（回到 AMSET 默认）。加大前先做收敛测试。
 INTERPOLATION_FACTOR = 10
-# patch_unity_overlap（2026-09-17，VERIFICATION V22/V23）：
-#   显式把 unity_overlap 写进 settings.yaml。**以前这一行是缺的** —— AMSET 的默认值是
-#   False（真实重叠），于是所有 2D 项目默认踩在"去对称化把重叠算坏"这个坑上。
-#   裁决结论：真实重叠必须让 h5 走 from_data（见 wavefunction_full 分支），
-#   否则 ADP 迁移率会被抬高 10~30 倍。所以在拿到全网格波函数之前，这里固定 True。
-#   要真实重叠：打开 optional_steps.wavefunction_full，并把这个常量改成 False。
-#   也可由 step.conf 覆盖：UNITY_OVERLAP = true/false（见 SPEC / main 的 conf 块）。
-UNITY_OVERLAP = True
-# patch_wavefunction_full（2026-09-20，二维版；照搬 gen_step10_amset.py 的三维逻辑）：
-#   可选改读**全网格** h5（step4b_wave_full，ISYM=-1 写出全部 k 点），让 AMSET 走
-#   from_data、跳过去对称化（TR×R bug 见 VERIFICATION V33/V37）。打开方式：项目
-#   project_setting 里写 wavefunction_full: true 或本步 step.conf 写 WAVEFUNCTION_FULL = true。
+# patch_mesh_min（2026-09-26 用户批准）：按**最终插值网格**控制 factor。
+#   官方 AMSET Si 算例 2x2 对照（tmp/amset2d/si_matrix/RESULT.md）：最终网格 = f(粗网格, factor)，
+#   同样 factor=10：官方 18^3 粗网格 -> 61^3；我们 11^3 -> 41^3。所以"factor=10"在不同
+#   材料/粗网格下不是同一个采样密度，只调 factor 不能收敛。
+#   MESH_MIN 给**面内**每方向下限、MESH_MIN_KZ 给 kz 下限（2D 建议 3：<3 时 kz 不内插），
+#   gen 自动反算满足下限的**最小** factor，并把最终网格写进日志与 out/interpolation_info.json。
+#   ★ 公式已逐案验证（tmp/amset2d/mesh_formula_check.py，6/6 全对）：
+#       equiv = BoltzTraP2.sphere.get_equivalences(atoms, magmom, nk*factor)
+#       mesh  = 2*max|equiv| + 1        （amset/interpolation/bandstructure.py:104-111）
+#   ★ 2D 是 48x48x3 这类各向异性网格，面内与 kz 必须分开看；代价 ~ mesh^2 * nkz。
+#   None = 不干预（沿用 INTERPOLATION_FACTOR）。
+MESH_MIN = None          # 面内每方向下限；建议 100（收敛测试待做，见 RESULT.md）
+MESH_MIN_KZ = None       # kz 方向下限；2D 建议 3
+MESH_MIN_FMAX = 60       # 自动选 factor 的上限
+# patch_unity_overlap（2026-09-17 V22/V23；2026-09-26 用户决定：出厂值翻转为 False）：
+#   显式把 unity_overlap 写进 settings.yaml。
+#   ★ 2026-09-26 结论翻转（证据链：tmp/amset2d/DESYM_FINDINGS.md、upstream_issue_tr_tau.md）：
+#     (1) unity 把谷间/大 q 散射当成完全耦合，实测 K→K' 真实 |I|^2 ≈ 0.25，
+#         故 unity 的迁移率**系统性偏低**（只能看数量级；Seebeck 基本可用，DPT 不受影响）。
+#     (2) 去对称化在**无反演**体系上大面积失效：同一脚本对照，Si 97.7% vs MoS2 38.9%，
+#         TR（R→−R）路径只有 5.2%，24 个操作里 15 个全错。根因是 TR 分支 τ 被反号两次
+#         （symmetry.py:187-188 已 -translations，common.py:123-124 又 -tau）。
+#   故 2D 出厂改为 **真实重叠 + 全网格 h5**（WAVEFUNCTION_FULL 同时置 True）。
+#   unity 保留为**快速筛选**：step.conf 写 UNITY_OVERLAP = true 回到旧行为，
+#   preflight 会打印"结果偏低、仅数量级"的标注。
+UNITY_OVERLAP = False
+# patch_wavefunction_full（2026-09-20 二维版；2026-09-26 用户决定：出厂置 True）：
+#   读**全网格** h5（step4b_wave_full，ISYM=-1 写出全部 k 点），让 AMSET 走
+#   from_data、跳过去对称化。这是 2D 真实重叠的唯一干净路径，现为出厂默认。
+#   要退回旧的去对称化路径：step.conf 写 WAVEFUNCTION_FULL = false（结果不可信，
+#   仅供受控对照，preflight 会降级为告警）。
 #   h5 与 vasprun 必须同源（都取 step3b/step4b），否则 h5 点数与 vasprun 网格对不上。
-#   默认 False = 仍读 step4_wave，二维既有行为完全不变。
-WAVEFUNCTION_FULL = False
+WAVEFUNCTION_FULL = True
 # patch_write_mesh（2026-09-22 用户批准）：把 AMSET 的 write_mesh 写进 settings.yaml，
 #   产出 mesh_<mesh>.h5（每机制每 k 点散射率 + 能带/速度/DOS 元数据），供
 #   postprocess_intrinsic.py 做"IMP 置零后严格本征"重积分。默认 False = 行为不变。
@@ -181,8 +199,9 @@ SPEC = {
     "LAYER_THICKNESS": (LAYER_THICKNESS, "str"),
     # NWORKERS 必须在 SPEC 里声明，否则 step.conf 里写了会被判成"不认识的键"。
     "NWORKERS": (NWORKERS, "int"),
-    # 全网格 h5 分支（二维真实重叠的唯一干净路径）；默认 False，既有二维项目行为不变。
-    "WAVEFUNCTION_FULL": (WAVEFUNCTION_FULL, "bool"),
+    # 全网格 h5 分支（二维真实重叠的唯一干净路径）。2026-09-26 起出厂 True；
+    #   用 auto/true/false 以便 step.conf 能显式关掉（bool 类型关不掉）。
+    "WAVEFUNCTION_FULL": ("auto", "str"),
     # unity_overlap 覆盖（受控对照/真实重叠用）：auto/true/false；默认 auto = 现行行为。
     "UNITY_OVERLAP": ("auto", "str"),
     # 插值因子覆盖（2026-09-20）：AMSET 收敛判据在插值后的网格上。
@@ -190,6 +209,10 @@ SPEC = {
     #   实测 factor=10 + nworkers=24 在共享节点上 MaxRSS 292 GB 被 OOM 杀。
     #   项目里按需降到 4（已校准口径：与 factor 10 差 6-11%，见 V23）。
     "INTERPOLATION_FACTOR": (INTERPOLATION_FACTOR, "int"),
+    # patch_mesh_min：最终插值网格下限（None/0 = 不干预）。见文件头说明。
+    "MESH_MIN": (MESH_MIN, "int"),
+    "MESH_MIN_KZ": (MESH_MIN_KZ, "int"),
+    "MESH_MIN_FMAX": (MESH_MIN_FMAX, "int"),
     # 散射类型覆盖（2026-09-22 用户批准）：逗号/空格分隔，如 `SCATTERING = ADP,POP` 用于严格本征对照；
     # 空串 = 出厂 ["ADP","IMP","POP"] 行为不变。
     "SCATTERING": ("", "str"),
@@ -1324,12 +1347,13 @@ def write_settings(out: Path, eps_inf, eps_static, gap, elastic,
     # 而真实重叠要求 h5 是完整网格，否则去对称化会把重叠算坏，见 V22/V23）。
     lines.append("unity_overlap: %s" % ("true" if UNITY_OVERLAP else "false"))
     if not UNITY_OVERLAP:
-        lines.append("# ^ 真实重叠：**必须**让 h5 走 from_data（wavefunction_full 分支），"
+        lines.append("# ^ 真实重叠：**必须**让 h5 走 from_data（WAVEFUNCTION_FULL=true 全网格），"
                      "否则结果不可信（见 overlap_preflight.py 的拦截）")
-        # patch_overlap_controlled（2026-09-20，照搬 gen_step10_amset.py L982）：
-        #   step.conf 显式写 UNITY_OVERLAP=false 时，让 overlap_preflight 知道这是
-        #   "显式放行的受控对照"，把 ⓪ 的拦截降为告警——否则全网格真实重叠也无法跑。
-        lines.append("# AZ_OVERLAP_CONTROLLED=1")
+        if not WAVEFUNCTION_FULL:
+            # patch_overlap_controlled（2026-09-20）：只有在**故意**退回旧去对称化路径时，
+            #   才把这次标成"受控对照"，让 overlap_preflight 把拦截降为告警。
+            #   2026-09-26：出厂已是真实重叠 + 全网格，故正常路径不再打这个标记。
+            lines.append("# AZ_OVERLAP_CONTROLLED=1")
     # patch_write_mesh：显式落盘开关。true 时 AMSET 额外写 mesh_<mesh>.h5，
     #   里面是每机制每（不可约）k 点的散射率 + 能带/速度/DOS 元数据；
     #   postprocess_intrinsic.py 读它把 IMP 置零后用 AMSET 自己的输运积分重算本征 μ/S/σ。
@@ -1488,6 +1512,67 @@ def _alloc_cores(cwd: Path):
     return max(1, ntasks * cpus), "%s（%d × %d）" % (src, ntasks, cpus)
 
 
+def _interp_mesh(structure, nk, factor, magmom=None):
+    """复现 AMSET 的最终插值网格（amset/interpolation/bandstructure.py:104-111）。
+    与 tmp/amset2d/mesh_formula_check.py 一致：官方 Si 61/77/105、我们 Si 41/51/69 全部命中。"""
+    import numpy as np
+    from pymatgen.io.ase import AseAtomsAdaptor
+    from BoltzTraP2 import sphere
+    atoms = AseAtomsAdaptor.get_atoms(structure)
+    equiv = np.vstack(sphere.get_equivalences(atoms, magmom, int(round(nk * factor))))
+    return (2 * np.max(np.abs(equiv), axis=0) + 1).astype(int)
+
+
+def apply_mesh_min(vasprun_path, out):
+    """patch_mesh_min：按最终插值网格下限反算 INTERPOLATION_FACTOR（模块级全局）。
+    返回 (factor, mesh) 或 None。"""
+    global INTERPOLATION_FACTOR
+    lo, lo_z = MESH_MIN, MESH_MIN_KZ
+    if not lo and not lo_z:
+        return None
+    try:
+        import json as _json
+        import numpy as np
+        from pymatgen.io.vasp.outputs import Vasprun
+        vr = Vasprun(str(vasprun_path), parse_dos=False, parse_eigen=False)
+        nk = len(vr.actual_kpoints)
+        st = vr.final_structure
+    except Exception as e:
+        print("[WARN] patch_mesh_min：读不到 vasprun（%s），跳过网格下限" % e)
+        return None
+    need = [int(lo or 0), int(lo or 0), int(lo_z or 0)]
+    f0 = int(INTERPOLATION_FACTOR)
+    f, mesh = f0, _interp_mesh(st, nk, f0)
+    while not all(int(mesh[i]) >= need[i] for i in range(3)) and f < MESH_MIN_FMAX:
+        f = min(int(MESH_MIN_FMAX), int(np.ceil(f * 1.15)) + 1)
+        mesh = _interp_mesh(st, nk, f)
+    okm = all(int(mesh[i]) >= need[i] for i in range(3))
+    info = {"nk": int(nk), "mesh_min": lo, "mesh_min_kz": lo_z,
+            "factor_factory": f0, "factor_used": int(f), "fmax": MESH_MIN_FMAX,
+            "mesh": [int(x) for x in mesh], "satisfied": bool(okm)}
+    try:
+        (out / "interpolation_info.json").write_text(
+            _json.dumps(info, ensure_ascii=False, indent=2))
+    except Exception:
+        pass
+    if int(f) != f0:
+        INTERPOLATION_FACTOR = int(f)
+    if okm:
+        print("[OK] 最终插值网格 %s（factor %d -> %d，下限 面内%s / kz%s，nk=%d）"
+              % ("x".join(map(str, mesh)), f0, int(f), lo, lo_z, nk))
+    else:
+        print("[WARN] 达到 MESH_MIN_FMAX=%d 仍未满足网格下限 %s（需要 %s）。\n"
+              "       ★ 处理顺序（2026-09-26 精算，见 tmp/amset2d/si_matrix/RESULT.md）：\n"
+              "         1) 先提高 MESH_MIN_FMAX 并**降低 nworkers** —— 最终网格一样大时，\n"
+              "            AMSET 的插值/拟合成本几乎相同（11^3x155 = 8680 个 equivalence，\n"
+              "            17^3x51 = 8415，几乎相等），所以加 factor 不比加密粗网格贵；\n"
+              "            但**内存是硬约束**（V23：factor=10 + 24 workers 曾 MaxRSS 292 GB 被 OOM）。\n"
+              "         2) 只有在内存也不够时才考虑加密 S3 的 K 间距 —— 那会让 SCF 贵 3~13 倍。\n"
+              "         3) 二维还要单独看 kz：MESH_MIN_KZ 通常设 3（<3 时 kz 不内插、AMSET 沿 kz 外推）。"
+              % (MESH_MIN_FMAX, "x".join(map(str, mesh)), need))
+    return int(f), [int(x) for x in mesh]
+
+
 def main():
     _disc_gate()
     cwd = Path.cwd()
@@ -1512,11 +1597,18 @@ def main():
                     print("[OK] INTERPOLATION_FACTOR = %d（step.conf 覆盖，出厂 %d）"
                           % (_conf_interp, INTERPOLATION_FACTOR))
                 INTERPOLATION_FACTOR = _conf_interp
-            # 全网格 h5 分支：显式开关，默认 False。
-            if _p["WAVEFUNCTION_FULL"]:
+            # 全网格 h5 分支：出厂 True，可显式关掉。
+            _wf = str(_p["WAVEFUNCTION_FULL"]).strip().lower()
+            if _wf in ("true", "1", "yes", "on"):
                 WAVEFUNCTION_FULL = True
                 print("[..] WAVEFUNCTION_FULL=true：wavefunction.h5 <- step4b_wave_full"
                       "（全网格，ISYM=-1），vasprun.xml <- step3b_uniform_full")
+            elif _wf in ("false", "0", "no", "off"):
+                WAVEFUNCTION_FULL = False
+                print("[WARN] WAVEFUNCTION_FULL=false（step.conf 覆盖）：退回**去对称化**路径 ——"
+                      " 2D 结果不可信，只作受控对照")
+            elif _wf != "auto":
+                print("[WARN] WAVEFUNCTION_FULL=%r 不认识（只认 auto/true/false），按 auto 处理" % _wf)
             # unity_overlap 显式覆盖：auto/true/false
             _uo = str(_p["UNITY_OVERLAP"]).strip().lower()
             if _uo in ("true", "1", "yes", "on"):
@@ -1527,6 +1619,20 @@ def main():
                 print("[..] UNITY_OVERLAP=false（step.conf 覆盖）：真实重叠（需全网格 h5）")
             elif _uo != "auto":
                 print("[WARN] UNITY_OVERLAP=%r 不认识（只认 auto/true/false），按 auto 处理" % _uo)
+            # patch_mesh_min：最终插值网格下限（step.conf 覆盖；0/None = 不干预）
+            global MESH_MIN, MESH_MIN_KZ, MESH_MIN_FMAX
+            for _k in ("MESH_MIN", "MESH_MIN_KZ", "MESH_MIN_FMAX"):
+                _v = _p[_k]
+                if _v:
+                    if _k == "MESH_MIN":
+                        MESH_MIN = int(_v)
+                    elif _k == "MESH_MIN_KZ":
+                        MESH_MIN_KZ = int(_v)
+                    else:
+                        MESH_MIN_FMAX = int(_v)
+            if MESH_MIN or MESH_MIN_KZ:
+                print("[..] MESH_MIN=%s MESH_MIN_KZ=%s MESH_MIN_FMAX=%s（step.conf 覆盖）"
+                      % (MESH_MIN, MESH_MIN_KZ, MESH_MIN_FMAX))
             # patch_scattering（2026-09-22 用户批准）：step.conf 覆盖散射类型。
             #   逗号/空格分隔，如 SCATTERING = ADP,POP 用于"严格本征"对照；
             #   空串 = 出厂 [ADP, IMP, POP] 行为不变；含不认识机制则整项忽略并告警。
@@ -1582,12 +1688,17 @@ def main():
         NWORKERS = NWORKERS_FALLBACK
         print("[WARN] 推不出提交分配（%s）—— NWORKERS 兜底 %d" % (_src, NWORKERS))
     _guard_dim_2d(cwd)
-    # [guard-2026-09-25] 2D + 真实重叠 + 非全网格 h5 = 已知算坏的组合（V23：去对称化
-    #   h5 的真实重叠把 ADP 抬高 10~16 倍）。真实重叠必须走 S3b 全网格 h5（WAVEFUNCTION_FULL=true）。
+    # [guard-2026-09-25 / 强化 2026-09-26] 2D + 真实重叠 + 非全网格 h5 = 已知算坏的组合。
+    #   2026-09-26 起这是**出厂默认路径**（UNITY_OVERLAP=False + WAVEFUNCTION_FULL=True），
+    #   所以这道闸门在默认配置下也必须是"通过"；一旦有人把 WAVEFUNCTION_FULL 关掉就报错。
+    #   证据：去对称化在无反演体系上 38.9% 的 k 点全错（TR 路径 5.2%），Si 对照 97.7%
+    #   —— tmp/amset2d/DESYM_FINDINGS.md、upstream_issue_tr_tau.md。
     if UNITY_OVERLAP is False and not WAVEFUNCTION_FULL:
-        sys.exit("[ERROR] UNITY_OVERLAP=false 必须搭配 WAVEFUNCTION_FULL=true：2D 真实重叠只能用 "
-                 "S3b 全网格 h5（去对称化 h5 的真实重叠会把 ADP 抬高 10~16 倍，V23 已知算坏）。"
-                 "请在 step.conf 补 WAVEFUNCTION_FULL=true，或改回 UNITY_OVERLAP=true。")
+        sys.exit("[ERROR] UNITY_OVERLAP=false（2D 出厂默认）必须搭配 WAVEFUNCTION_FULL=true："
+                 "2D 真实重叠只能用 S3b 全网格 h5（ISYM=-1，让 AMSET 走 from_data 跳过去对称化）。"
+                 "去对称化在无反演体系上 38.9% 的 k 点全错（TR 路径 5.2%）。"
+                 "请在 step.conf 补 WAVEFUNCTION_FULL=true，或显式改回 UNITY_OVERLAP=true"
+                 "（快速筛选，迁移率偏低）。")
     out = cwd / OUTDIR_NAME
     out.mkdir(exist_ok=True)
     # 插件随本步复制到运行目录（只在那一次 amset 运行里生效，不改 AMSET 安装）
@@ -1595,6 +1706,18 @@ def main():
     _install_preflight(out)
     _install_postprocess(out)
     _wdir = "step4b_wave_full" if WAVEFUNCTION_FULL else WAVE_DIR
+    # [guard-2026-09-26] 真实重叠（2D 出厂默认）要求全网格 h5 真的在。
+    #   只检查 WAVEFUNCTION_FULL 这个标志不够 —— 分支没打开时标志仍是 True，
+    #   但 step4b_wave_full/wavefunction.h5 根本不存在，link 会留下断链，
+    #   AMSET 报错信息很难定位。这里提前给出可操作的指引。
+    if not (cwd / _wdir / "wavefunction.h5").is_file():
+        sys.exit("[ERROR] 2D 真实重叠需要全网格波函数，但 %s/wavefunction.h5 不存在。\n"
+                 "        这通常是 wavefunction_full 分支没打开（S3b_uniform_full / S4b_wavefull 未跑）。\n"
+                 "        处理：在 project_setting 里打开 optional_steps.wavefunction_full: true，\n"
+                 "             然后 autozt -tt ke-dft-cpu -p <材料> -j S3b_uniformfull start，\n"
+                 "             跑完再 autozt ... -j S4b_wavefull start。\n"
+                 "        临时退回快速筛选：step.conf 写 UNITY_OVERLAP = true"
+                 "（迁移率偏低，仅看数量级）。" % _wdir)
     link(out, cwd / _wdir / "wavefunction.h5", "wavefunction.h5")
     link(out, cwd / READ_DIR / _pick_deformation_h5(cwd, READ_DIR), "deformation.h5")
     # patch_amset_vasprun：amset run 还需要密网格 vasprun.xml 拿能带色散
@@ -1637,6 +1760,8 @@ def main():
     if "PIE" in SCATTERING and piezo is None:
         print("[WARN] settings 要 PIE 但没有压电张量——本次退化为不含 PIE 的散射集"
               "（step6_elastic 的 DFPT 需 LEPSILON + IBRION=6）")
+    # patch_mesh_min：按最终插值网格下限反算 INTERPOLATION_FACTOR（必须在 write_settings 之前）。
+    apply_mesh_min(_vr, out)
     write_settings(out, eps_inf, eps_static, gap, elastic,
                    is_2d=is_2d, c_len=c_len, piezo=piezo)
 

@@ -78,6 +78,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from dim_common import require_dim, resolve_dim, resolve_tpl  # noqa: E402
 import stepconf  # noqa: E402
+import ke_common  # noqa: E402  ← 只用它的 vaspkit_kpoints（规范实现，别自己写 vaspkit 调用）
 
 # ============================== 配置 ==============================
 STEP3_DIR  = "step2_bandgap/step2.2_pbe"   # 源目录
@@ -90,6 +91,17 @@ METHOD_FILE = "workflow_method.txt"
 KPOPT_FILE  = "KPOINTS_OPT"
 IBZKPT_FILE = "IBZKPT"
 KPATH_FILE  = "kpath.json"
+
+# ---- HSE 自洽网格：KSPACING_HSE（2026-09-27 补回，含硬校验）----
+# 默认 None = 原样继承 step2.2_pbe 的 KPOINTS（ke 全流程口径，AMSET 输运也用这个网格）。
+# 给数值（Å⁻¹，如 0.06）= 本步拷完 KPOINTS 之后用 VASPKIT 按该 kspacing 重生成自洽网格；
+# KPOINTS_OPT 的能带路径点不受影响。
+# 材料目录 step.conf 写：  [params]   KSPACING_HSE = 0.06
+KSPACING_HSE = None
+KSCHEME_HSE  = "2"        # 2 = Gamma-centered（与 step2.1_static / step3_uniform 一致）
+VASPKIT_EXE  = "vaspkit"  # 与 ke_common / 其它步骤同一约定
+# 本脚本认的 step.conf [params] 键（strict=False：其余键是别的步骤的，忽略）
+SPEC = {"KSPACING_HSE": (KSPACING_HSE, "str")}
 
 SUBMIT_TPL_NCL = "submit_ncl"   # SOC   -> vasp_ncl（按维度取 submit_ncl_2d/3d.tpl，回退 submit_ncl.tpl）
 SUBMIT_TPL_STD = "submit_std"   # 无SOC -> vasp_std（同上）
@@ -739,6 +751,84 @@ def slice_bounds(n_total, n_parts):
     return [round(j * n_total / n_parts) for j in range(n_parts + 1)]
 
 
+# ---------------------------------------------------------------------------
+# HSE 自洽网格（KSPACING_HSE）
+# ---------------------------------------------------------------------------
+def resolve_kspacing_hse(cwd="."):
+    """从 step.conf 读 KSPACING_HSE；返回数值或 None（None = 不改写自洽网格）。
+
+    用 stepconf.load(strict=False)：材料级 step.conf 是【全技能共用】的一份，含别的
+    步骤的键；strict=True 会被 FUNC 之类的键打死（2026-09-16 MoS2 S3_uniform 实测）。
+    """
+    global KSPACING_HSE
+    p = Path(cwd) / stepconf.CONF_NAME
+    if not p.is_file():
+        return KSPACING_HSE
+    conf = stepconf.load(SPEC, None, str(cwd), strict=False)
+    raw = conf["KSPACING_HSE"]
+    if raw in (None, ""):
+        return KSPACING_HSE
+    try:
+        val = float(raw)
+    except (TypeError, ValueError):
+        raise SystemExit("[ERROR] KSPACING_HSE=%r 不是数字（应为倒空间 k 间距 Å⁻¹，如 0.06）"
+                         % (raw,))
+    if not val > 0:
+        raise SystemExit("[ERROR] KSPACING_HSE 必须 > 0，当前 %r" % (raw,))
+    KSPACING_HSE = val
+    print("[..] step.conf KSPACING_HSE=%s → HSE 自洽网格改用该 kspacing" % val, file=sys.stderr)
+    return KSPACING_HSE
+
+
+def assert_kpoints_mesh(kp):
+    """硬校验：自动网格 KPOINTS 的第 4 行必须是三个正整数（VASP 的 N1 N2 N3）。
+
+    ★ 这道闸是 2026-09-06 事故的直接对策。当时有人把
+        K-Spacing Value to Generate K-Mesh: 0.0600
+        0
+        Gamma
+        0.0  0.0  0.0          ← 手写出来的"网格"行
+      当成合法输入。前三行跟 VASPKIT 的输出表头一模一样，所以看起来"对"；但
+      "K-Spacing Value ..." 那句是【VASPKIT 的输出注释】，不是 VASP 的输入语法。
+      VASP 实际只读 第2行(0=自动网格) / 第3行(Gamma) / 第4行(整数网格)：
+      第 4 行是 0.0 0.0 0.0 ⇒ 读出 0x0x0 ⇒ 倒数格矢 Infinity/NaN ⇒
+      OUTCAR 停在 "Length of vectors NaN"、SCF 从未开始；4 个材料的作业在
+      2026-09-06 15:30:45 被批量取消。
+      结论：宁可让 gen 当场失败，也绝不把这种文件交给 VASP。
+    """
+    lines = Path(kp).read_text(encoding="utf-8-sig").splitlines()
+    if len(lines) < 4:
+        raise SystemExit("[ERROR] %s 只有 %d 行、缺少网格行 —— 拒绝提交"
+                         "（VASP 会读到 NaN 网格）" % (kp, len(lines)))
+    mesh = lines[3].split()
+    if len(mesh) != 3 or not all(m.isdigit() and int(m) > 0 for m in mesh):
+        raise SystemExit("[ERROR] %s 第 4 行不是合法整数 k 网格（读到 %r）。\n"
+                         "        VASP 拿它当 N1 N2 N3；非正整数会读成 0x0x0 并产生 NaN。\n"
+                         "        请检查 VASPKIT 是否可用、输出是否被截断。"
+                         % (kp, lines[3].strip()))
+    print("[OK] HSE 自洽网格 = %s" % " ".join(mesh))
+    return [int(m) for m in mesh]
+
+
+def rewrite_kspacing(out_dir, dim="3d"):
+    """按 KSPACING_HSE 重生成自洽网格 KPOINTS（只动 KPOINTS，KPOINTS_OPT 不动）。
+
+    返回 (changed, note)。KSPACING_HSE 为 None 时什么都不做（保持继承 step3）。
+    ★ 一律交给 VASPKIT 生成，不要手写：见 assert_kpoints_mesh 里的事故说明。
+    """
+    if not KSPACING_HSE:
+        return False, "KSPACING_HSE 未配置（None）—— 原样继承 %s/KPOINTS" % STEP3_DIR
+    kp = Path(out_dir) / "KPOINTS"
+    if not kp.is_file():
+        return False, "KPOINTS 不存在，跳过 KSPACING_HSE 改写"
+    ke_common.vaspkit_kpoints(Path(out_dir), kscheme=KSCHEME_HSE,
+                              kspacing="%.4f" % KSPACING_HSE,
+                              exe=VASPKIT_EXE, dim=dim, vac_axis=None)
+    mesh = assert_kpoints_mesh(kp)
+    return True, ("KPOINTS 重生成：KSPACING_HSE=%.4f → %s（%s）"
+                  % (KSPACING_HSE, " ".join(str(m) for m in mesh), dim.upper()))
+
+
 def write_kpoints_opt(out_dir, header, coord_subset, tag):
     hdr0 = (header[0].strip() or "k-path for band-dft-cpu structure") + tag
     hdr2 = header[2].strip() if len(header) > 2 and header[2].strip() else "Reciprocal"
@@ -792,6 +882,14 @@ def build_step4_dir(out_dir, args, ctx, part=None):
         else:
             shutil.copyfile(src, dst)
         log.append(name)
+
+    # --- HSE 自洽网格：KSPACING_HSE 显式覆盖（默认关闭，即继承 step2.2_pbe）---
+    _ks_changed, _ks_note = rewrite_kspacing(out_dir, ctx.get("dim", "3d"))
+    log.append(_ks_note)
+    if _ks_changed:
+        warn.append("KSPACING_HSE 改了自洽网格，但 WAVECAR 是从 %s 按旧网格拷来的；"
+                    "VASP 会因 k 点不匹配重新初始化波函数（能跑，但 SCF 会慢）"
+                    % STEP3_DIR)
 
     # --- WAVECAR：拷贝（保护 step3 源）---
     # ★ 安全约束：本步 LWAVE=.TRUE. 会让 VASP 写自己的 WAVECAR。若此时用符号链接
@@ -1135,6 +1233,7 @@ def main():
         print("[..] 2D 体系跳过切片（忽略 --kpath-slice=%s）" % slice_spec, file=sys.stderr)
         slice_spec = None
     parts = parse_slice(slice_spec, len(coords))
+    resolve_kspacing_hse(Path.cwd())   # step.conf 的 KSPACING_HSE（默认 None = 不改网格）
     results = []
     for part in parts:
         out_dir = STEP4_DIR if part is None else os.path.join(STEP4_DIR, "p%dof%d" % (part[0], part[1]))
