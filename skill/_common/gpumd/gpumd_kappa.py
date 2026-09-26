@@ -40,14 +40,32 @@ def write_xyz_in(path, atoms):
     Path(path).write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
+def relax_lines(p):
+    """可选：MD 之前先在该势的极小点上弛豫（含变胞）。
+    GPUMD v5.6 语法：minimize fire <力容差> <步数> <box_change> <hydrostatic_strain>。
+    box_change=1 变胞；hydrostatic_strain=0 为全胞（各向异性），1 为静水压。"""
+    if not int(p.get("RELAX_ENABLED") or 0):
+        return []
+    return ["minimize fire %g %d %d %d" % (float(p.get("RELAX_TOL", 1e-3)),
+                                           int(p.get("RELAX_STEPS", 5000)),
+                                           int(p.get("RELAX_BOX_CHANGE", 1)),
+                                           int(p.get("RELAX_HYDROSTATIC", 0)))]
+
+
+def t_final(p, T):
+    """T_FINAL 留空或缺省 = 与 T_LIST 相同（恒温）。
+    SPEC 里 T_FINAL 默认是空串，StepConf 会给成 '' 或 None，直接 float('') 会崩。"""
+    v = p.get("T_FINAL")
+    return float(v) if v not in (None, "") else float(T)
+
+
 def run_in_hnemd(p, T, direction):
     fe = float(p["DRIVING_FORCE"])
     vec = {"x": (fe, 0.0, 0.0), "y": (0.0, fe, 0.0), "z": (0.0, 0.0, fe)}[direction]
-    return "\n".join([
-        "potential nep.txt",
+    return "\n".join(["potential nep.txt"] + relax_lines(p) + [
         "velocity %g" % T,
         "time_step %g" % float(p.get("TIME_STEP", 1.0)),
-        "ensemble nvt_ber %g %g %g" % (T, float(p.get("T_FINAL", T)),
+        "ensemble nvt_ber %g %g %g" % (T, t_final(p, T),
                                              float(p.get("T_COUP", 100))),
         "dump_thermo 1000",
         "run %d" % int(p.get("EQUIL_STEPS", 200000)),
@@ -57,11 +75,10 @@ def run_in_hnemd(p, T, direction):
 
 
 def run_in_emd(p, T):
-    return "\n".join([
-        "potential nep.txt",
+    return "\n".join(["potential nep.txt"] + relax_lines(p) + [
         "velocity %g" % T,
         "time_step %g" % float(p.get("TIME_STEP", 1.0)),
-        "ensemble nvt_ber %g %g %g" % (T, float(p.get("T_FINAL", T)),
+        "ensemble nvt_ber %g %g %g" % (T, t_final(p, T),
                                              float(p.get("T_COUP", 100))),
         "dump_thermo 1000",
         "run %d" % int(p.get("EQUIL_STEPS", 200000)),
@@ -76,11 +93,10 @@ def run_in_shc(p, T, direction):
     """谱热流（SHC / Green-Kubo 谱分解）：先 NVT 平衡，再 NVE + compute_shc。
     compute_shc <采样间隔 1-50> <Nc 100-1000> <方向 0/1/2=x/y/z> <num_omega> <max_omega(THz)>。
     产物 shc.out：ω(THz) shc_i shc_o（谱 κ(ω)）。"""
-    return "\n".join([
-        "potential nep.txt",
+    return "\n".join(["potential nep.txt"] + relax_lines(p) + [
         "velocity %g" % T,
         "time_step %g" % float(p.get("TIME_STEP", 1.0)),
-        "ensemble nvt_ber %g %g %g" % (T, float(p.get("T_FINAL", T)),
+        "ensemble nvt_ber %g %g %g" % (T, t_final(p, T),
                                              float(p.get("T_COUP", 100))),
         "dump_thermo 1000",
         "run %d" % int(p.get("EQUIL_STEPS", 200000)),

@@ -53,18 +53,32 @@ time_step 1
 ensemble nvt_nhc 300 300 100      # 平衡
 dump_thermo 1000
 run 20000                         # TBC_EQUIL_STEPS
-ensemble heat_lan 300 100 40 1 2  # 源=T+40 漏=T-40（TBC_THERMOSTAT/TBC_DELTA_T）
-compute_chunk 10 100 bin/1d z lower 2 temperature density/number
+ensemble heat_lan 300 100 40 1 2  # 烧入：源=T+40 漏=T-40（TBC_THERMOSTAT/TBC_DELTA_T）
 dump_thermo 1000
-run 100000                        # TBC_BURN_STEPS（烧入，释放初始应变，强烈建议 >0）
+run 100000                        # TBC_BURN_STEPS（暂态，不测量）
+ensemble heat_lan 300 100 40 1 2  # 测量段必须**重新**声明 ensemble
 compute 0 10 100 temperature      # 输出各组 T + 源/漏恒温器累积传能
+compute_chunk 10 100 bin/1d z lower 2 temperature density/number
 dump_thermo 1000
 run 200000                        # TBC_RUN_STEPS（测量段）
 ```
 
+- ★ **每个 `run` 前都要有自己的 `ensemble` 和 `compute*`**：
+  - `Measure::finalize()`（每个 run 结束调用）会 `properties.clear()`：`compute` / `compute_chunk`
+    只对紧接着的那一个 run 生效。只声明一次时 `compute_chunk.out` 只有它那一段（如烧入段）
+    的剖面，与测量段的 q 不同窗 —— 实测本机 GPUMD 源码即如此。
+  - 用户核对的 GPUMD **v5.8** 里 `Integrate::finalize()` 还会 `ensemble_.reset()`：测量段 run
+    前没有 `ensemble` 会直接报 `An ensemble must be specified before each run.`（`run.cu`），
+    后面根本跑不到。（本机 3090 的旧构建不报这个错，但不能依赖。）
+  技能脚本已把 `ensemble + compute + compute_chunk` 都写进测量段（`tests/suite_device_thermal.py`
+  的 `[s5-deck]` 回归测试守着这两点）。
 - `ensemble heat_* <T> <T_coup> <delta_T> <src> <sink>`：源/漏温度分别为 T+delta_T / T-delta_T。
 - `compute_chunk ... bin/1d <axis> lower <d> temperature`：逐 bin 温度 -> compute_chunk.out。
-- model.xyz 第二行：`pbc="..." Lattice="..." Properties=species:S:1:pos:R:3:group:I:1`（pbc 沿用结构文件，可用 TBC_PBC 覆盖）。
+- model.xyz 第二行：`pbc="..." Lattice="..." Properties=species:S:1:pos:R:3:group:I:1`。
+  - pbc 优先用 `TBC_PBC`，否则沿用结构文件的 pbc；**两者都没有时直接报错，不再默认 `T T T`**。
+  - ★ 沿传输轴 `pbc=T` 时源(高端)/漏(低端)隔着周期边界直接相邻，热流不经界面短路、q 被高估
+    （"源/漏热流自洽"判据抓不到它，因为能量两边仍守恒）。技能在 `pbc[传输轴]=T` 且界面非真空层
+    时直接报错；正确做法：传输轴设 `F`，或结构两端留真空/改用对称布置。
 
 ## 4. 热流为什么不用 kappa（关键修复）
 
@@ -80,7 +94,11 @@ GPUMD 的 `compute <group> <s> <o> temperature` 会输出各组温度，**并在
 
 ## 5. 后处理（gen_step6_tbc_post.py）
 
-1. 自动挑选**最长的**源/漏热流自洽窗口（后缀搜索，`TBC_STEADY_TOL` 容差、`TBC_MIN_WINDOW_FRAC` 最短占比）。
+1. 先丢掉前 1/3 暂态，再在剩余后缀里挑**最长**的源/漏热流自洽窗口（`TBC_STEADY_TOL` 容差、
+   `TBC_MIN_WINDOW_FRAC` 最短占比）；温度剖面只平均窗口内的 block，保证 T(z) 与 q 同窗。
+   dT_i 的统计误差用**时间分块**算（每个时间 block 单独拟合、外推，取各 dT_i 的
+   std/sqrt(N)），不再把空间上高度相关的相邻 bin 当独立样本。可用 block 少于 3 个时
+   误差记 None，调用方必须据此判 `poor`，而不是跳过 `TBC_DT_TOL` 判据。
 2. 对界面两侧体区（各剔除源/漏恒温器区与 `TBC_FIT_MARGIN_A` 余量）线性拟合 T(z)。
 3. dT_i = 两侧外推到界面坐标的温差；**G = q / dT_i**。
 4. 输出 `quality`：`good` 要求源/漏热流自洽、两侧 bin 数够、dT_i>0；否则 `poor`。
@@ -91,7 +109,8 @@ S6 输出 `quality`（good/poor）+ `quality_reasons`，判据：
 
 - `q_consistency`（源/漏热流相对差）≤ `TBC_STEADY_TOL`（默认 0.2）
 - 两侧 bin 数 ≥ `TBC_MIN_BINS`，且 `dT_i > 0`
-- **dT_i 外推相对误差** ≤ `TBC_DT_TOL`（默认 0.3）——由两侧拟合的预测标准误合成
+- **dT_i 外推相对误差** ≤ `TBC_DT_TOL`（默认 0.3）——由稳态窗口内各时间 block 的
+  dT_i 离散度给出（时间块不足时误差为 None，直接判 poor）
 - **G 对拟合余量的敏感度** max/min ≤ `TBC_MARGIN_TOL`（默认 1.5）——对 1/2/4 A 余量各算一次
 
 局限：
@@ -113,6 +132,19 @@ S6 输出 `quality`（good/poor）+ `quality_reasons`，判据：
 - q 两侧自洽 0.3%；但 dT_i 在两次独立种子间为 15.4 K 与 6.4 K（Si 引线非线性），
   G 分别为 924 与 2209 MW/m2K，都被新版判据判为 poor。
 - 结论：**链路与判据都工作正常；该短引线体系的 G 未收敛**。细节见 tmp/device_thermal_e2e/。
+- ⚠️ 这次 3090 实跑用的是**旧 deck**（测量段 run 前没有重新声明 ensemble/compute，
+  `compute_chunk` 只声明在烧入段），结论要按 GPUMD 版本分开看：
+  - `Measure::finalize()` 每个 run 后 `properties.clear()`，**新旧版本一致**：`compute` /
+    `compute_chunk` 只对紧接着的一个 run 生效。旧 deck 因此 q 取自测量段、T(z) 取自烧入段，
+    两者不同窗 —— **924 / 2209 MW/m²K 这两个 G 作废**。
+  - 2026-09-17 合入的两个提交 `17d06ad3`（run 前没有 ensemble 就报错）和 `329d05ea`
+    （每个 run 后 `Integrate::finalize()` 清空 ensemble）之后，旧 deck 会在**测量段直接报错**、
+    跑不到底；09-17 之前（含 3090 上的 v5.6、本机 `59fe812`）`Integrate::finalize()` 只重置
+    fixed_group/move_group/deform，ensemble 会沿用到下一个 run，所以旧 deck 能跑完。
+  - 新 deck 在每个 run 前重新声明 ensemble，新旧版本都能跑（以后升级 GPUMD 时必需）。
+  现行脚本已把 `ensemble + compute + compute_chunk` 都写进测量段（见第 3 节）。结论：需用
+  新 deck 在 3090 重跑 2~3 个种子后再谈 G；届时 `n_blocks_averaged` 应接近测量段行数减去
+  丢掉的前 1/3。
 
 ## 8. 弹道 BTE（未安装）
 

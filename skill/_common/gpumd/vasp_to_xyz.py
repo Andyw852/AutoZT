@@ -49,6 +49,26 @@ def main():
     ap.add_argument("--use-virial", type=int, default=0)
     args = ap.parse_args()
     p = gc.load_params(args.step_dir)
+    if int(p.get("PRETRAINED_ONLY") or 0):
+        # 只用预训练势：不读任何 OUTCAR，直接把材料 POSCAR 当 MD 参考结构。
+        import numpy as np
+        from ase.io import read
+        ref_poscar = Path(args.step_dir, "reference_POSCAR")
+        if not ref_poscar.is_file():
+            sys.exit("[ERROR] PRETRAINED_ONLY=1 但缺 reference_POSCAR")
+        atoms = read(str(ref_poscar))
+        lat = np.asarray(atoms.cell.array, dtype=float)
+        zeros = np.zeros((len(atoms), 3))
+        Path(args.step_dir, "structure_reference.xyz").write_text(
+            gc.extxyz_frame(lat, atoms.get_chemical_symbols(),
+                            atoms.get_positions(), zeros, 0.0, None, "reference"))
+        gc.write_summary(args.step_dir, "xyz_summary.json",
+                         dict(XYZ_DONE=True, pretrained_only=True, n_frames=1,
+                              n_train=0, n_test=0, natoms=len(atoms),
+                              reference=str(ref_poscar)))
+        print("[xyz] PRETRAINED_ONLY：以 %s 作 MD 参考结构（%d 原子）"
+              % (ref_poscar, len(atoms)))
+        return
     import numpy as np
     data_dir = p["DATA_DIR"]
     pattern = p.get("DATA_GLOB", "POSCAR-*/OUTCAR")

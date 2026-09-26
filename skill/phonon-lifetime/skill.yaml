@@ -18,7 +18,7 @@
 schema: 2
 name: phonon-lifetime
 desc: 声子寿命与线宽(三声子/Phono3py)
-version: "0.2"
+version: "0.3"
 
 template_layout: shared
 template_dir: templates
@@ -68,7 +68,8 @@ io_schema:
     - {name: KAPPA_HDF5, default: "", where: step.conf,
        desc: "显式指定 kappa/gamma hdf5 路径（最高优先级）"}
     - {name: UPSTREAM_SKILL, default: kl-dft-cpu, where: step.conf, desc: "上游技能目录名"}
-    - {name: UPSTREAM_STEP, default: step6_kappa, where: step.conf, desc: "上游产物所在步骤"}
+    - {name: UPSTREAM_STEP, default: step6_kappa, where: step.conf,
+       desc: "上游产物所在步骤；kl-mlff-* 会自动改试 step4_kappa/step3_fc，不必手改"}
     - {name: TEMPERATURES, default: "", where: step.conf, desc: "要分析的温度列表（空格/逗号），空=全部"}
     - {name: FOCUS_T, default: 300.0, where: step.conf, desc: "重点温度（沿 q 图 / 对照报告用）"}
     - {name: IMAG_THR, default: 0.10, where: step.conf, desc: "低于该频率(THz)的模视为数值零模，排除"}

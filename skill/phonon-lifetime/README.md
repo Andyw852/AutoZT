@@ -32,7 +32,8 @@ phono3py 的 gamma 单位是 **THz（普通频率）**，内部按角频 2*pi*ga
 所以 hdf5 里的 κ 含同位素散射。只取 gamma_anh 会把寿命系统性算长
 （Si 300 K 全模中位 +19%，光学支 +24%）。用 INCLUDE_ISOTOPE 控制（默认 true）。
 边界散射 gamma_bd = |v|/(4*pi*L) 只在**上游确实开了**边界散射时叠加——由 hdf5 里
-κ 的重建误差自动判定（见 §5）；phono3py 默认的 boundary_mfp=1e6 Å 只是“关”的占位。
+κ 的重建误差自动判定（见 §5）；phono3py 默认的 boundary_mfp=1e6 **µm** 只是“关”的占位。
+注意 L 的单位是微米（help 原文 "Boundary mean free path in micrometer"），换算式见 §6。
 
 统计量一律按**不可约网格权重 weight** 加权（中位数/P10/P90/均值/过阻尼比例）：
 kappa-m*.hdf5 里的 qpoint 只是不可约点，按点等权会让高对称点过度代表
@@ -87,7 +88,8 @@ lifetime_summary.json 的 tau_convention 字段。
 
 1. KAPPA_HDF5 显式路径；
 2. 技能/步骤目录里已有的 kappa-m*.hdf5 / gamma-m*.hdf5；
-3. 材料目录树里上游技能（默认 kl-dft-cpu / step6_kappa）的 kappa hdf5；
+3. 材料目录树里上游技能（默认 kl-dft-cpu / step6_kappa；kl-mlff-* 自动改试 step4_kappa，
+   对不上再 rglob 兜底）的 kappa hdf5；
 4. 上游 fc2.hdf5 + fc3.hdf5 + phono3py_disp.yaml → RUN_PHONO3PY=true 时现跑
    phono3py-load ... --br；否则报错并给出三种解决指引。
 
@@ -95,7 +97,7 @@ lifetime_summary.json 的 tau_convention 字段。
 
 | 文件 | 内容 |
 |---|---|
-| lifetime_summary.json | marker LIFETIME_DONE；各温度全/声学/光学分组的 tau 中位/均值/P10/P90（含同位素）、只看三声子的 tau_median_anharmonic_ps、omega*tau 中位、过阻尼比例；数据源、mesh、约定、isotope_included、boundary_mfp |
+| lifetime_summary.json | marker LIFETIME_DONE；各温度全/声学/光学分组的 tau 中位/均值/P10/P90（含同位素）、只看三声子的 tau_median_anharmonic_ps、omega*tau 中位、过阻尼比例；数据源、mesh、约定、isotope_included、boundary_mfp_um / boundary_gamma_included / boundary_decision |
 | lifetime_data.csv | 逐模：T,gp,q,band,f,gamma_anh,gamma_iso,gamma_total,tau,tau_anh,omega_tau,period,逐模 v,mfp,acoustic |
 | lifetime_T.csv | 逐温度汇总一行（含 tau_median_all_anharm_ps） |
 | lifetime_vs_frequency.png | tau vs 频率（多温度） |
@@ -104,7 +106,7 @@ lifetime_summary.json 的 tau_convention 字段。
 | lifetime_vs_T.png | 中位寿命 vs 温度 |
 | lifetime_vs_q.png | （可选，设 Q_DIRECTION）沿该方向的逐支寿命 |
 
-## 5. 验证（2026-09-25，修 B1–B9 后重测）
+## 5. 验证（2026-09-25，修 B1–B9 与 C1–C5 后重测）
 
 真实数据自测（Si，上游 kl-dft-cpu 的 kappa-m151515.hdf5，15³ 网格、4×4×4 超胞、ALM）：
 
@@ -112,9 +114,10 @@ lifetime_summary.json 的 tau_convention 字段。
   kappa_unit_conversion、kappa = Σmode_kappa / Πmesh 重建，与 hdf5 里存的 kappa
   **最大相对误差 7.3e-6**（8 个温度）。这条自检写进 summary 的 kappa_reconstruction；
   口径不对（例如上游开了边界散射而我们没计入）会立刻报出来。
-* **边界散射自动判定**：boundary_mfp=1e6 Å 时，“不计入”误差 7.3e-6、“计入”6.1e-2 →
-  自动判定不计入。phono3py 自己打印的 Boundary mean free path (millimeter): 1000.000
-  也证实 1e6 Å 只是默认占位。
+* **边界散射自动判定（单位微米，已修）**：默认 boundary_mfp=1e6 µm 直接判定“关”
+  （phono3py 自己的日志也打印 Boundary mean free path (millimeter): 1000.000）。
+  上游真开边界散射时才用 κ 重建误差判定：实测 '--bmfp 0.1'（100 nm）时“不计入”误差
+  1.91e-01、“计入”**2.02e-16**（γ_bd 中位 5.15e-4 THz），声学 τ_median 14.4 → 13.2 ps。
 * 300 K（含同位素、按权重）：全模中位 tau=**3.39 ps**、声学 **12.2 ps**、光学 **2.31 ps**，
   P10–P90 = 1.64–20.0 ps；纯三声子中位 4.22 ps。
 * τ 近似 1/T：100→800 K 全模加权中位 9.88 / 4.97 / 3.39 / 2.64 / 2.19 / 1.89 / 1.63 / 1.46 ps。
@@ -125,14 +128,37 @@ lifetime_summary.json 的 tau_convention 字段。
 * 同一数据源 κ(300 K)=88.8 W/mK；RUN_PHONO3PY=true 从 fc2/fc3 现跑 3³ 也走通，
   命令带 --isotope，κ 重建误差 2.0e-8（fc 目录有 BORN 时自动拷入启用 NAC）。
 
-回归测试：tests/test_phonon_lifetime.py（**30 条**：phono3py 约定比对、加权统计、
+回归测试：tests/test_phonon_lifetime.py（**38 条**：phono3py 约定比对、加权统计、
 选主文件、对称方向、边界散射判定、fc 命令构造、gen 端到端）：
 
     python -m pytest tests/test_phonon_lifetime.py -q
 
 ## 6. 修正记录
 
-### 2026-09-25（B1–B9；外部审计用合成 hdf5 复现后修）
+### 2026-09-25（C1–C5；第二轮外部审计逐条对照后修）
+
+* **C1 边界散射单位错了 1e4 倍（严重，B8 实质没修好）**：phono3py 的
+  --boundary-mfp/--bmfp 与 hdf5 里的 boundary_mfp 单位都是**微米**
+  （help 原文 "Boundary mean free path in micrometer"；默认 1e6 µm），而群速度是
+  THz·Å，所以正确的是 γ_bd = |v|/(4π·L[µm]·1e4)。旧代码按 Å 算，γ_bd 偏大 1e4 倍：
+  上游真开 '--bmfp 0.1'（100 nm）时会算出 ~5 THz 的荒唐线宽，计入后 κ 重建误差反而
+  变大，“自动判定”就选了“不计入”——边界散射被静默丢掉，还被自动判定掩盖。
+  现在：L >= 1e6 µm 直接判定“关”（phono3py 默认占位），真开了才用 κ 重建误差判。
+  真跑验证（Si 3³、'--bmfp 0.1'）：不计入误差 1.91e-01、计入 2.02e-16。
+* **C2 密网格混入离线点**：select_direction_qpoints 容差原是固定 0.06（分数坐标），
+  31³ 格点间距 1/31≈0.032 比它还小，紧贴目标线的离线点会被当成线上点（实测整列取错）。
+  现容差默认 1e-5，且同一个 t 只保留离目标线**最近**的候选。
+* **C3 缺时间反演**：等价点原来只靠空间群旋转，没有 q→−q。没有反演中心的材料，
+  不可约楔里若只存 −q 就会漏点（实测只剩 Γ）；现把 −imgs 也放进候选（τ(q)=τ(−q)）。
+* **C4 接 kl-mlff 找不到上游**：UPSTREAM_STEP 写死 step6_kappa，而 kl-mlff-* 的 κ 在
+  step4_kappa、fc2/fc3 在 step3_fc。现按 UPSTREAM_SKILL 自动展开候选步骤名，
+  对不上再在上游技能目录下 rglob 兜底。
+* **C5a 展宽法文件**：kappa-m*-s<σ>.hdf5（smearing）与四面体法主文件同分时先后不定；
+  现给 -s 文件降级，并在选中它时告警。
+* 仍未做：除 Si 外没有真跑过别的材料；过阻尼比例需要强非谐体系
+  （MnIn2Se4 / 225 相）验证一次，集群上还没跑过。
+
+### 2026-09-25（B1–B9；首轮外部审计用合成 hdf5 复现后修）
 
 * **B1 按字符串序选文件**：find_kappa_hdf5 原用 sorted()[-1]，κ-m999 会盖过 κ-m151515。
   现按“多 q 点主文件 → mesh 乘积 → q 点数 → 文件名惩罚(-g0/mfp/gp)”排序，
@@ -151,7 +177,8 @@ lifetime_summary.json 的 tau_convention 字段。
 * **B7 fc 路线缺同位素/NAC**：INCLUDE_ISOTOPE=true 时现跑命令加 --isotope；
   fc 目录有 BORN 时自动拷入（phono3py-load 没有 --nac 选项，靠 BORN 自动开 NAC）。
 * **B8 边界散射**：新增 gamma_bd = |v|/(4*pi*L)，是否计入由 κ 重建误差自动判定；
-  summary 记录 boundary_mfp_ang / boundary_gamma_included / boundary_decision。
+  summary 记录 boundary_mfp_um / boundary_gamma_included / boundary_decision
+  （单位与判定在 C1 修正，见上）。
 * **B9 温度静默就近**：请求温度或 FOCUS_T 不在列表时告警，不再悄悄取最近值。
 * 小项：src_kind 不再把本地文件标成 upstream；上游缺 gamma_isotope 时告警；
   逐模 CSV 默认只写 FOCUS_T（CSV_ALL_TEMPERATURES=false）。
@@ -165,12 +192,18 @@ lifetime_summary.json 的 tau_convention 字段。
 ## 7. 局限
 
 1. 只做**三声子（最低阶微扰 / RTA）**；四声子、电子-声子寿命不在内。
-2. 边界散射只在“上游确实开了”时计入（由 κ 重建误差判定）；RTA 也不是全 BTE。
+2. 边界散射只在“上游确实开了”时计入：默认 1e6 µm 直接判为关，其余由 κ 重建误差判定；
+   RTA 也不是全 BTE。L 的单位是微米，换算见 §6 的 C1。
 3. 声学/光学按**支编号**分组（默认最低 3 条支），因此两组频率范围在支交叉处会重叠
    （Si 声学支最高 11.76 THz 略高于光学支最低 10.42 THz，属正常，不是错分）。
-4. 沿 q 图依赖 phono3py.yaml / pyyaml / spglib 求对称操作；缺了会降级成几何取点并告警。
-5. 不含 MD 声子电流关联函数（dynasor）那条有限温度路线。
-6. RUN_PHONO3PY=true 在登录节点同步跑，大胞/密网格请改用上游 kl 的 S6 产物。
+4. 沿 q 图只取**精确落在**目标线上的网格点（容差 1e-5，分数坐标）；方向与网格点不共线
+   时只剩 Γ。对称操作依赖 phono3py.yaml / pyyaml / spglib，缺了会降级成几何取点并告警。
+5. 同一 mesh 若同时有四面体法与展宽法文件，优先四面体法（-s 降级）并告警；本技能不重算，
+   只是选文件。
+6. 不含 MD 声子电流关联函数（dynasor）那条有限温度路线。
+7. RUN_PHONO3PY=true 在登录节点同步跑，大胞/密网格请改用上游 kl 的 S6 产物。
+8. 除 Si 外还没有真跑过别的材料；过阻尼比例（omega*tau<1）只在合成数据上验证过，
+   真实强非谐体系（MnIn2Se4 / 225 相）与集群环境都还没跑。
 
 ## 8. 文件
 
@@ -181,4 +214,4 @@ lifetime_summary.json 的 tau_convention 字段。
     ├── lifetime_common.py         # 物理约定 + 读取 + 选文件 + 对称方向 + 加权统计（无 matplotlib）
     ├── lifetime_plots.py          # 出图（无 matplotlib 时自动跳过）
     └── README.md
-    tests/test_phonon_lifetime.py  # 30 条回归（约定 + 加权 + 选文件 + 方向 + κ 自检 + 端到端）
+    tests/test_phonon_lifetime.py  # 38 条回归（约定 + 加权 + 选文件 + 方向 + κ 自检 + 端到端）

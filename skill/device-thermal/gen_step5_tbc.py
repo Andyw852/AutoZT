@@ -199,11 +199,22 @@ def align_coords(pos, lat, pbc):
     取模会把它挪到盒子另一端，既错位又可能被分进错误的源/漏组（真实案例：底层
     Ge 在 z=-0.2、pbc="T T F"，旧实现把它挪到 z=+69.8 并分进了源组）。这里改为
     整轴平移，使该轴最小值为 0，保持原子间相对构型不变。
+    仅支持正交盒子（周期轴 wrap 按晶格对角元算）；只要存在周期轴且晶格有非对角分量
+    就报错，避免静默按对角元 wrap 算错。
     返回 (new_pos, per_axis_is_periodic, warn_msgs)。
     """
     lens = [lat[0], lat[4], lat[8]]
     parts = pbc.split() if pbc else []
     is_T = [(len(parts) == 3 and parts[i].upper() == "T") for i in range(3)]
+    if any(is_T):
+        diag = max(abs(lat[0]), abs(lat[4]), abs(lat[8]), 1e-12)
+        off = max(abs(lat[1]), abs(lat[2]), abs(lat[3]),
+                  abs(lat[5]), abs(lat[6]), abs(lat[7]))
+        if off > 1e-6 * diag:
+            raise SystemExit(
+                "[ERROR] 晶格非正交（非对角分量最大 %.4g A）：周期轴 wrap 只按对角元算，"
+                "非正交盒子会静默算错。请先把结构转换/旋转到正交盒子，或自行 wrap 后把 "
+                "pbc 设为全 F 交给本步只做整体平移。" % off)
     new = [[float(p[i]) for i in range(3)] for p in pos]
     for i in range(3):
         if is_T[i]:

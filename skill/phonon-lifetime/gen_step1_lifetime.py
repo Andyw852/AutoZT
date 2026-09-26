@@ -340,7 +340,7 @@ def main():
     t_indices = sorted(tmap.values(), key=lambda i: temperatures[i])
 
     # 总和线宽 = gamma_anh + gamma_isotope (+ gamma_bd)。边界散射是否计入，由 hdf5
-    # 里 kappa 的重建误差决定：1e6 Å 是 phono3py 的“关”占位，硬加会污染低温寿命。
+    # 里 kappa 的重建误差决定；phono3py 默认 boundary_mfp=1e6 µm 就是“关”（单位微米）。
     g_base = LC.effective_gamma(gamma, gamma_iso)
     bd_mfp = data.get("boundary_mfp")
     bd_mfp = float(np.asarray(bd_mfp).ravel()[0]) if bd_mfp is not None else None
@@ -348,10 +348,18 @@ def main():
     bd_use, bd_info = LC.decide_boundary_gamma(data, g_base, g_bd, t_indices=t_indices)
     g_bd_use = g_bd if bd_use else None
     gsum = (g_base + g_bd_use) if g_bd_use is not None else g_base
-    if bd_info.get("boundary_mfp_ang") is not None:
-        print("[..] boundary_mfp=%.6g Å：%s；kappa 重建误差 %s -> %s"
-              % (bd_info["boundary_mfp_ang"],
-                 "计入边界散射 gamma_bd=|v|/(4*pi*L)" if bd_use else "不计入（视为关/占位）",
+    if bd_info.get("boundary_mfp_um") is not None:
+        _g = bd_info.get("gamma_bd_median_THz")
+        if bd_use:
+            bd_note = "计入边界散射 gamma_bd=|v|/(4*pi*L)"
+            if _g is not None:
+                bd_note += "，gamma_bd 中位=%.3g THz" % _g
+        elif bd_info.get("method") == "mfp_sentinel":
+            bd_note = "不计入（phono3py 默认 1e6 µm，视为关）"
+        else:
+            bd_note = "不计入（计入后 kappa 误差更大）"
+        print("[..] boundary_mfp=%.6g µm：%s；kappa 重建误差 %s -> %s"
+              % (bd_info["boundary_mfp_um"], bd_note,
                  ("%.2e" % bd_info["err_no_boundary"]) if bd_info["err_no_boundary"] is not None else "n/a",
                  ("%.2e" % bd_info["err_with_boundary"]) if bd_info["err_with_boundary"] is not None else "n/a"),
               flush=True)
@@ -461,7 +469,7 @@ def main():
                           "conductivity/base.py:_get_main_diagonal / _get_boundary_scattering]",
         "tau_factor": LC.TAU_FACTOR,
         "isotope_included": bool(gamma_iso is not None and np.any(np.asarray(gamma_iso) > 0)),
-        "boundary_mfp_ang": bd_mfp,
+        "boundary_mfp_um": bd_mfp,
         "boundary_gamma_included": bd_use,
         "boundary_decision": bd_info,
         "weights_applied": bool(per_T and per_T[0].get("weights_applied")),

@@ -379,8 +379,8 @@ def _pheasy_cmd(cfg, stage, cutoff, ndata):
     dim = str(cfg.get("SUPERCELL") or "1 1 1")
     order = int(cfg.get("PHEASY_ENABLE_FC") or 3)
     eps = str(cfg.get("NULL_SPACE_EPS", 0.001))
-    base = [str(os.environ.get("PHEASY_BIN") or "pheasy"), "--dim", dim,
-            "-w", str(order)]
+    base = [str(os.environ.get("PHEASY_BIN") or "pheasy"), "--dim"] + dim.split() \
+            + ["-w", str(order)]
     c3 = [] if cutoff is None else ["--c3", "%.4f" % float(cutoff)]
     if stage == "s":
         return base + ["-s"] + c3 + ["--eps", eps]
