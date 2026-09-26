@@ -135,6 +135,19 @@ lifetime_summary.json 的 tau_convention 字段。
 
 ## 6. 修正记录
 
+### 2026-09-26（0.4：2D κ 自动归一化）
+
+* summary 的 `kappa_from_hdf5` 旧版直接吐 hdf5 的 raw κ（分母是含真空的胞体积），
+  2D 材料会被当成文献值误用（MoS2：raw 27.9 vs 层内 103.9 W/mK）。
+* 现在自动判定 2D（上游 summary 的 `dim`，或 q 网格恰有一轴为 1；`DIM` 可强制），
+  输出 `kappa_2d_inplane_avg`（及逐温度、xx/yy 分量）= κ_raw × h⊥/d，并注明 d 与来源。
+* 因子来源：优先上游 `kappa_summary.json` 的 `kappa_2d_norm_factor`（与 kl 报告严格同源）；
+  读不到才用 `skill/_common/thickness_2d.slab_geometry`（kl/ke 共用的唯一真源）从
+  phono3py yaml 的 primitive_cell 现算（`KAPPA_2D_THICKNESS`：vdw | 固定 Å | cell）；
+  两路都有时互相对照，差 >1% 告警。两路都没有则只报 raw 并告警“不能直接对文献”。
+* 寿命 tau 与厚度无关，本改动不影响任何寿命数值。
+* 测试里 Si 参考数据路径改为读环境变量 `AUTOZT_SI_REF`（不再写死本机路径）。
+
 ### 2026-09-25（C1–C5；第二轮外部审计逐条对照后修）
 
 * **C1 边界散射单位错了 1e4 倍（严重，B8 实质没修好）**：phono3py 的

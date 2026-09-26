@@ -917,7 +917,7 @@ def main():
         # 截断扫描（2026-09-24 user 定）：S5 出了多档 fc3 → 逐档各跑一次 κ，再按三判据选。
         # 选截断片段 import kl_common；kl_common 又 import dim_common，两个都得进 step6 目录
         for _dep in (here / "kl_common.py",
-                     here.parent / "_common" / "opt" / "dim_common.py"):
+                     here / "dim_common.py"):
             try:
                 shutil.copyfile(_dep, out / _dep.name)
             except OSError as _e:
@@ -941,6 +941,10 @@ def main():
               ("；另跑 %d 次（%s 对照，P1-2）" % (len(plan) - len(mesh_list),
                "lbte" if bte_primary == "rta" else "rta"))
               if len(plan) > len(mesh_list) else ""))
+
+    if solver == "phono3py":
+        # ★ 2026-09-26 修：截断扫描分支（上面 if）此前只 build cmd 不落 submit.sh，
+        #   导致静默沿用旧的网格扫描脚本。submit.sh 渲染抽到两个 phono3py 分支共用。
         tpl = kc.resolve_submit(here, "3d", "submit_p3py")   # 单节点，无 2D/3D 之分
         # submit_p3py.tpl 的 {{CONDA_SH}}/{{CONDA_ENV}} 必须补传，否则残留字面占位符
         # （运行时 source {{CONDA_SH}} 报 No such file）。kl-dft 的 phono3py 环境是

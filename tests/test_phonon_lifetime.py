@@ -26,7 +26,8 @@ sys.path.insert(0, str(OPT))
 LC = pytest.importorskip("lifetime_common")
 
 # 真实 Si 参考数据（本机有才跑，集群 CI 没有就 skip）
-SI_REF = Path("/mnt/d/tf_data/work_AutoZT/Si/kl-dft-cpu/result/step6_kappa")
+# 设 AUTOZT_SI_REF=<Si 的 kl-dft-cpu/result/step6_kappa 目录> 才跑；不设则 skip（不写死本机路径）
+SI_REF = Path(os.environ.get("AUTOZT_SI_REF", "/nonexistent/AUTOZT_SI_REF"))
 
 
 # ---------------------------------------------------------------------------
@@ -717,3 +718,128 @@ def test_real_si_kappa_reconstruction_and_linewidth():
     sel = (f2 > 0.1) & (gt2 > 0) & np.isfinite(tau)
     rep = np.repeat(tau[sel], w2[sel].astype(int))
     assert s["all"]["tau_median_ps"] == pytest.approx(float(np.median(rep)))
+
+
+# ---------------------------------------------------------------------------
+# 2D κ 归一化（κ_raw 含真空 -> κ_2d = κ_raw × h⊥/d；因子优先读上游 summary）
+# ---------------------------------------------------------------------------
+_MOS2_YAML = """primitive_cell:
+  lattice:
+  - [ 3.1600000000000,  0.0000000000000,  0.0000000000000 ]
+  - [ -1.5800000000000, 2.7366403500000,  0.0000000000000 ]
+  - [ 0.0000000000000,  0.0000000000000, 25.0000000000000 ]
+  points:
+  - symbol: Mo
+    coordinates: [ 0.3333333333333, 0.6666666666667, 0.5000000000000 ]
+  - symbol: S
+    coordinates: [ 0.6666666666667, 0.3333333333333, 0.5624000000000 ]
+  - symbol: S
+    coordinates: [ 0.6666666666667, 0.3333333333333, 0.4376000000000 ]
+"""
+
+
+def _write_2d_upstream(d, with_summary=True, with_yaml=True, factor=3.7215, d_A=6.7177):
+    d.mkdir(parents=True, exist_ok=True)
+    _write_fake_hdf5(d / "kappa-m881.hdf5", mesh=(8, 8, 1))
+    if with_summary:
+        (d / "kappa_summary.json").write_text(json.dumps(
+            {"KAPPA_DONE": True, "dim": "2d", "kappa_2d_norm_factor": factor,
+             "thickness_d_ang": d_A, "h_perp_A": 25.0,
+             "thickness_convention": "span 3.12 + vdW(S 1.80 + S 1.80)"}), encoding="utf-8")
+    if with_yaml:
+        (d / "phono3py.yaml").write_text(_MOS2_YAML, encoding="utf-8")
+
+
+def test_vacuum_axis_from_mesh():
+    assert LC.vacuum_axis_from_mesh([138, 138, 1]) == 2
+    assert LC.vacuum_axis_from_mesh([1, 40, 40]) == 0
+    assert LC.vacuum_axis_from_mesh([15, 15, 15]) is None
+    assert LC.vacuum_axis_from_mesh([1, 1, 40]) is None          # 1D，不当 2D
+
+
+def test_two_d_uses_upstream_factor(tmp_path):
+    d = tmp_path / "step6_kappa"
+    _write_2d_upstream(d)
+    n = LC.two_d_normalization(d / "kappa-m881.hdf5", [8, 8, 1],
+                               yaml_path=d / "phono3py.yaml")
+    assert n["dim"] == "2d" and n["source"] == "upstream_kappa_summary"
+    assert n["factor"] == pytest.approx(3.7215)
+    assert n["thickness_d_A"] == pytest.approx(6.7177)
+    if n["check"] is not None:                                   # 有 pyyaml 时两路对照
+        assert n["check"]["rel_diff"] < 0.05
+
+
+def test_two_d_falls_back_to_slab_geometry(tmp_path):
+    pytest.importorskip("yaml")
+    d = tmp_path / "step6_kappa"
+    _write_2d_upstream(d, with_summary=False)
+    n = LC.two_d_normalization(d / "kappa-m881.hdf5", [8, 8, 1],
+                               yaml_path=d / "phono3py.yaml")
+    assert n["dim"] == "2d" and n["source"].startswith("slab_geometry")
+    # 与 kl 同一真源：span(3.12) + 2×r_vdW(S)
+    assert n["h_perp_A"] == pytest.approx(25.0, abs=1e-3)
+    assert n["factor"] == pytest.approx(25.0 / n["thickness_d_A"], rel=1e-4)
+    assert 5.5 < n["thickness_d_A"] < 7.5
+
+
+def test_two_d_fixed_thickness_mode(tmp_path):
+    pytest.importorskip("yaml")
+    d = tmp_path / "step6_kappa"
+    _write_2d_upstream(d, with_summary=False)
+    n = LC.two_d_normalization(d / "kappa-m881.hdf5", [8, 8, 1], thickness_mode="6.15",
+                               yaml_path=d / "phono3py.yaml")
+    assert n["factor"] == pytest.approx(25.0 / 6.15, rel=1e-4)
+
+
+def test_two_d_respects_explicit_3d_and_upstream_3d(tmp_path):
+    d = tmp_path / "step6_kappa"
+    _write_2d_upstream(d)
+    assert LC.two_d_normalization(d / "kappa-m881.hdf5", [8, 8, 1], dim="3d")["dim"] == "3d"
+    (d / "kappa_summary.json").write_text(json.dumps({"dim": "3d"}), encoding="utf-8")
+    assert LC.two_d_normalization(d / "kappa-m881.hdf5", [8, 8, 1])["dim"] == "3d"
+
+
+def test_two_d_without_any_factor_warns(tmp_path):
+    d = tmp_path / "step6_kappa"
+    _write_2d_upstream(d, with_summary=False, with_yaml=False)
+    msgs = []
+    n = LC.two_d_normalization(d / "kappa-m881.hdf5", [8, 8, 1], log=msgs.append)
+    assert n["dim"] == "2d" and n["factor"] is None
+    assert any("不能直接对文献" in m for m in msgs)
+
+
+def test_kappa_block_2d_inplane():
+    data = {"temperatures": np.array([100.0, 300.0]),
+            "kappa": np.array([[30.0, 30.0, 0.0, 0, 0, 0], [27.93, 27.93, 1e-9, 0, 0, 0]])}
+    norm = {"dim": "2d", "factor": 3.7215, "vac_axis": 2, "thickness_d_A": 6.7177,
+            "source": "upstream_kappa_summary"}
+    k = LC.kappa_block(data, 300, norm)
+    assert k["kappa_raw_inplane_avg"] == pytest.approx(27.93)
+    assert k["kappa_2d_inplane_avg"] == pytest.approx(27.93 * 3.7215)   # = 103.94
+    assert set(k["kappa_2d_inplane"]) == {"xx", "yy"}                   # zz 不报
+    assert k["kappa_2d_inplane_avg_vs_T"]["100.0000"] == pytest.approx(30.0 * 3.7215)
+    k3 = LC.kappa_block(data, 300, {"dim": "3d"})
+    assert "kappa_2d_inplane_avg" not in k3 and k3["dim"] == "3d"
+
+
+def test_gen_2d_end_to_end_reports_normalized_kappa(tmp_path):
+    up = tmp_path / "Si" / "kl-dft-cpu" / "result" / "step6_kappa"
+    skill = _make_project(tmp_path, with_hdf5=False, upstream_dir=up)
+    _write_2d_upstream(up)
+    r = _run_gen(skill)
+    assert r.returncode == 0, r.stdout + r.stderr
+    js = json.loads((skill / "step1_lifetime" / "lifetime_summary.json").read_text(encoding="utf-8"))
+    assert js["dim"] == "2d"
+    kb = js["kappa_from_hdf5"]
+    assert kb["kappa_2d_norm_factor"] == pytest.approx(3.7215)
+    assert kb["kappa_2d_inplane_avg"] == pytest.approx(10.0 * 3.7215)
+    assert "κ_2d" in r.stdout
+
+
+def test_gen_3d_has_no_2d_block(tmp_path):
+    skill = _make_project(tmp_path)
+    r = _run_gen(skill)
+    assert r.returncode == 0, r.stdout + r.stderr
+    js = json.loads((skill / "step1_lifetime" / "lifetime_summary.json").read_text(encoding="utf-8"))
+    assert js["dim"] == "3d"
+    assert "kappa_2d_inplane_avg" not in js["kappa_from_hdf5"]

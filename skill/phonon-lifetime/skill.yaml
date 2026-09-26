@@ -18,7 +18,7 @@
 schema: 2
 name: phonon-lifetime
 desc: 声子寿命与线宽(三声子/Phono3py)
-version: "0.3"
+version: "0.4"
 
 template_layout: shared
 template_dir: templates
@@ -36,7 +36,8 @@ steps:
      marker: 'lifetime_summary.json:"LIFETIME_DONE": true',
      run: gen, done_marker: lifetime_summary.json,
      gen: gen_step1_lifetime.py,
-     gen_need: [stepconf.py, step.conf, lifetime_common.py, lifetime_plots.py]}
+     gen_need: [stepconf.py, step.conf, lifetime_common.py, lifetime_plots.py,
+                thickness_2d.py, vdw_radii.py]}
 
 io_schema:
   inputs:

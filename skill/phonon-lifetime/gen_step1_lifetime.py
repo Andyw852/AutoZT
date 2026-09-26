@@ -15,7 +15,6 @@
       lifetime_vs_frequency.png / lifetime_vs_period.png / ioffe_regel.png /
       lifetime_vs_T.png（可选 lifetime_vs_q.png）。
 """
-import json
 import os
 import re
 import shutil
@@ -124,6 +123,9 @@ SPEC = {
     "MAKE_PLOT":       ("true", "bool"),
     "INCLUDE_ISOTOPE": ("true", "bool"),       # 寿命含同位素散射（与 phono3py kappa 一致）
     "CSV_ALL_TEMPERATURES": ("false", "bool"), # 逐模 CSV 是否写全部温度（默认只写 FOCUS_T）
+    # ---- 2D κ 归一化（只影响报告的 κ，不影响寿命）----
+    "DIM":             ("auto", "str"),        # auto | 2d | 3d
+    "KAPPA_2D_THICKNESS": ("vdw", "str"),      # 无上游因子时现算用：vdw | 固定数值 Å | cell
     # ---- 可选：现跑 phono3py ----
     "RUN_PHONO3PY":    ("false", "bool"),
     "PHONO3PY_MESH":   ("15 15 15", "str"),
@@ -265,17 +267,6 @@ def _run_phono3py(conf, cwd, outdir, fc):
     if picked is not None:
         return picked
     sys.exit("[ERROR] phono3py 跑完但没找到含 gamma 的 hdf5")
-
-
-def _iter_grid_kappa(data, focus_T):
-    """若 hdf5 里有 kappa，返回最接近 focus_T 的对角张量。"""
-    kappa = data.get("kappa")
-    temps = data.get("temperatures")
-    if kappa is None or temps is None or len(temps) == 0:
-        return None
-    i = int(np.argmin(np.abs(np.asarray(temps) - float(focus_T))))
-    row = np.asarray(kappa)[i]
-    return {"T_K": float(temps[i]), "kappa_xx_yy_zz": [float(x) for x in row[:6]]}
 
 
 def _src_kind(h5, cwd):
@@ -454,6 +445,26 @@ def main():
     elif conf["MAKE_PLOT"] and not LP.HAVE_MPL:
         print("[warn] 无 matplotlib，跳过出图（JSON/CSV 照常产出）")
 
+    # ---- κ 报告：raw + 2D 归一化（寿命与厚度无关，这里只管 κ 口径）----
+    norm2d = LC.two_d_normalization(
+        h5, data.get("mesh"), dim=str(conf["DIM"] or "auto"),
+        thickness_mode=str(conf["KAPPA_2D_THICKNESS"] or "vdw"),
+        yaml_path=LC.find_phonopy_yaml(h5, cwd, conf["UPSTREAM_SKILL"], conf["UPSTREAM_STEP"]),
+        log=_warn)
+    kblock = LC.kappa_block(data, focus, norm2d)
+    if kblock and norm2d["dim"] == "2d":
+        if kblock.get("kappa_2d_inplane_avg") is not None:
+            print("[..] 2D：κ_raw(面内平均)=%.4g -> κ_2d=%.4g W/mK @%.0fK"
+                  "（×h⊥/d=%.4f，d=%s Å，来源 %s）"
+                  % (kblock["kappa_raw_inplane_avg"], kblock["kappa_2d_inplane_avg"],
+                     kblock["T_K"], norm2d["factor"],
+                     ("%.4g" % float(norm2d["thickness_d_A"]))
+                     if norm2d.get("thickness_d_A") is not None else "?",
+                     norm2d["source"]), flush=True)
+        else:
+            _warn("2D 材料只拿到 raw κ=%.4g W/mK（含真空层），不能直接对文献"
+                  % kblock["kappa_raw_inplane_avg"])
+
     summary = {
         "LIFETIME_DONE": True,
         "step": STEP,
@@ -482,7 +493,9 @@ def main():
         "imag_thr_THz": imag_thr,
         "omega_tau_threshold": omega_thr,
         "per_temperature": per_T,
-        "kappa_from_hdf5": _iter_grid_kappa(data, focus),
+        "kappa_from_hdf5": kblock,
+        "dim": norm2d["dim"],
+        "kappa_2d_normalization": norm2d,
         "kappa_reconstruction": kappa_check,
         "plots": plots,
         "files": {

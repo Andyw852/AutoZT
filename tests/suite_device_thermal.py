@@ -630,17 +630,24 @@ def test_s6_temporal_stats():
     # 只有 2 个时间块：误差必须返回 None（调用方据此判 poor，而不是跳过 TBC_DT_TOL）
     blocks2 = [{0: (0.0, 300.0, 10.0), 1: (1.0, 301.0, 10.0)},
                {0: (0.0, 300.0, 10.0), 1: (1.0, 301.0, 10.0)}]
-    se, _h, _c, n = g6.temporal_stats(blocks2, [0, 1], [0, 1], 0.5)
-    ok(se is None and n == 2, "时间块 < min_blocks 时误差返回 None（旧版空间分块会整段失效）")
+    st2 = g6.temporal_stats(blocks2, [0, 1], [0, 1], 0.5)
+    ok(st2["se_dT"] is None and st2["n_blocks"] == 2,
+       "时间块 < min_blocks 时误差返回 None（旧版空间分块会整段失效）")
     # 6 个时间块，每块斜率有噪声：时间分块应给出 >0 的 dT_i 标准误
     blocks6 = []
     for b in range(6):
         d = float(0.3 * (b - 2.5))
         blocks6.append({0: (0.0, 300.0 + d, 10.0), 1: (1.0, 346.0 + d, 10.0),
                         2: (2.0, 388.0, 10.0), 3: (3.0, 434.0, 10.0)})
-    se6, sdH, sdC, n6 = g6.temporal_stats(blocks6, [0, 1], [2, 3], 1.5)
-    ok(n6 == 6 and se6 is not None and se6 > 0.0, "时间分块给出 dT_i 标准误 se=%.4g" % (se6 or -1))
-    ok(sdH is not None and sdC is not None, "同时给出两侧斜率的时间离散度")
+    st6 = g6.temporal_stats(blocks6, [0, 1], [2, 3], 1.5)
+    ok(st6["n_blocks"] == 6 and st6["se_dT"] is not None and st6["se_dT"] > 0.0,
+       "时间分块给出 dT_i 标准误 se=%.4g" % (st6["se_dT"] or -1))
+    ok(st6["sd_slope_hot"] is not None and st6["sd_slope_cold"] is not None,
+       "同时给出两侧斜率的时间离散度")
+    ok(st6["tau_int_blocks"] is not None and st6["n_eff"] is not None
+       and st6["superblock_len"] is not None,
+       "报告 tau_int/n_eff/超级块长度: tau=%.3g n_eff=%.3g sb=%s"
+       % (st6["tau_int_blocks"], st6["n_eff"], st6["superblock_len"]))
 
 
 def test_s6_noise_is_poor():
@@ -724,9 +731,9 @@ def test_s6_correlated_error():
             db = float(d[b])
             blocks.append({0: (0.0, db, 10.0), 1: (1.0, 1.0 + db, 10.0),
                            2: (2.0, 1.0, 10.0), 3: (3.0, 1.5, 10.0)})
-        se, _h, _c, n = g6.temporal_stats(blocks, [0, 1], [2, 3], 2.0)
+        st = g6.temporal_stats(blocks, [0, 1], [2, 3], 2.0)
         naive.append(float(np.std(d, ddof=1) / np.sqrt(N)))
-        corr.append(se)
+        corr.append(st["se_dT"])
         means.append(2.0 - 1.0 + float(np.mean(d)))
     emp = float(np.std(means, ddof=1))
     naive_m, corr_m = float(np.mean(naive)), float(np.mean(corr))
@@ -734,6 +741,94 @@ def test_s6_correlated_error():
        "自相关修正把误差从 %.4g 提到 %.4g（>3x，旧法低估）" % (naive_m, corr_m))
     ok(0.4 * emp <= corr_m <= 3.0 * emp,
        "修正后误差 %.4g 与真实 %.4g 同量级" % (corr_m, emp))
+
+
+def test_s6_tau60_poor():
+    print("[s6-tau60-poor]")
+    g6 = _load_step6()
+    # 回归：窗口 200 块、相关时间 tau_c=60 块（真实 MD 的暖态场景）。旧实现只报误差、
+    # 不判可信度，20 个种子全判 good。新判据（n_eff<8 或 超级块<5*tau_int）必须全部拦下。
+    # 注意 _tau_int 在 N/tau≈3 时会低估（实测 tau=60 -> ~17），但超级块判据 25<5*tau_int
+    # 对 tau_int>5 都成立，所以仍能全部判 poor。
+    N, tau_c, sig, nseed = 200, 60.0, 0.3, 20
+    rho = float(np.exp(-1.0 / tau_c))
+    bad, neffs, sb_hit = 0, [], 0
+    for seed in range(nseed):
+        rng = np.random.default_rng(500 + seed)
+        state = float(rng.normal(0.0, sig))
+        blocks = []
+        for b in range(N):
+            state = rho * state + float(np.sqrt(1.0 - rho * rho) * rng.normal(0.0, sig))
+            db = state
+            blocks.append({0: (0.0, db, 10.0), 1: (1.0, 1.0 + db, 10.0),
+                           2: (2.0, 1.0, 10.0), 3: (3.0, 1.5, 10.0)})
+        st = g6.temporal_stats(blocks, [0, 1], [2, 3], 2.0)
+        rs = g6.error_reliability_reasons(st["tau_int_blocks"], st["n_eff"],
+                                          st["superblock_len"])
+        neffs.append(st["n_eff"])
+        if any("超级块" in r for r in rs):
+            sb_hit += 1
+        if rs:
+            bad += 1
+    ok(bad == nseed,
+       "tau=60/窗口 200：%d/%d 个种子被判误差不可信（旧实现全判 good），n_eff max=%.1f"
+       % (bad, nseed, max(neffs)))
+    ok(sb_hit == nseed, "超级块判据稳健拦下 %d/%d（tau 低估也能抓）" % (sb_hit, nseed))
+
+
+def test_s5b_block_gate():
+    print("[s5b-block-gate]")
+    # S5b 的完成判据是 compute_chunk.out 块数 >= run_steps//output_interval，
+    # 不是"文件存在"：假 runner 退出 0 但不补数据时必须失败且不写标记。
+    tmp = tempfile.mkdtemp(prefix="dt_s5b_")
+    try:
+        shutil.copyfile(os.path.join(DT, "gen_step5b_tbc_run.py"),
+                        os.path.join(tmp, "gen_step5b_tbc_run.py"))
+        shutil.copyfile(os.path.join(OPT, "stepconf.py"), os.path.join(tmp, "stepconf.py"))
+        with open(os.path.join(tmp, "step.conf"), "w") as fh:
+            fh.write("[params]\n")
+        s5 = os.path.join(tmp, "step5_tbc")
+        os.makedirs(s5)
+        with open(os.path.join(s5, "tbc_inputs.json"), "w") as fh:
+            json.dump({"run_steps": 300, "output_interval": 100, "seed": 7}, fh)
+
+        def write_blocks(n):
+            with open(os.path.join(s5, "compute_chunk.out"), "w") as fh:
+                for b in range(n):
+                    for cid in range(3):
+                        fh.write("%d %.3f 10.0 %.3f\n" % (cid, cid * 1.0, 300.0 + cid))
+
+        marker = os.path.join(tmp, "step5b_run/run_done.json")
+        # 1) 2 块 < 理论 3 块，runner 只 exit 0 不补数据 -> 非 0 退出且不写标记
+        write_blocks(2)
+        with open(os.path.join(s5, "run_gpumd.sh"), "w") as fh:
+            fh.write("#!/bin/bash\nexit 0\n")
+        r = subprocess.run([sys.executable, "gen_step5b_tbc_run.py"], cwd=tmp,
+                           capture_output=True, text=True)
+        ok(r.returncode != 0, "S5b 块数不足且 runner 没补数据 -> 非 0 退出")
+        ok(not os.path.exists(marker), "S5b 未达标不写完成标记（判据不是文件存在）")
+        # 2) runner 把数据补到 3 块 -> 成功并记录 blocks/expected/seed
+        with open(os.path.join(s5, "run_gpumd.sh"), "w") as fh:
+            fh.write("#!/bin/bash\ncd \"$(dirname \"$0\")\"\n"
+                     "echo \"0 0.0 10.0 300.0\" >> compute_chunk.out\n"
+                     "echo \"1 1.0 10.0 301.0\" >> compute_chunk.out\n"
+                     "echo \"2 2.0 10.0 302.0\" >> compute_chunk.out\n")
+        r = subprocess.run([sys.executable, "gen_step5b_tbc_run.py"], cwd=tmp,
+                           capture_output=True, text=True)
+        ok(r.returncode == 0, "S5b runner 补齐到理论块数 -> 成功（stderr=%s）"
+           % r.stderr.strip()[-120:])
+        rd = json.load(open(marker))
+        ok(rd.get("TBC_RUN_DONE") is True and rd.get("blocks") == 3
+           and rd.get("expected_blocks") == 3,
+           "S5b 标记 blocks=%r expected=%r" % (rd.get("blocks"), rd.get("expected_blocks")))
+        # 3) 已满足块数则跳过 runner（runner 写成会报错的 -> 仍成功，幂等）
+        with open(os.path.join(s5, "run_gpumd.sh"), "w") as fh:
+            fh.write("#!/bin/bash\nexit 9\n")
+        r = subprocess.run([sys.executable, "gen_step5b_tbc_run.py"], cwd=tmp,
+                           capture_output=True, text=True)
+        ok(r.returncode == 0, "S5b 已满足块数则跳过 runner（幂等）")
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
 
 
 def main():
@@ -746,7 +841,7 @@ def main():
                test_thickness_scaling, test_s5_align_coords, test_s5_deck_contract,
                test_interface_detection,
                test_s6_regression, test_s6_temporal_stats, test_s6_noise_is_poor,
-               test_s6_correlated_error):
+               test_s6_correlated_error, test_s6_tau60_poor, test_s5b_block_gate):
         try:
             fn()
         except Exception as exc:  # noqa: BLE001

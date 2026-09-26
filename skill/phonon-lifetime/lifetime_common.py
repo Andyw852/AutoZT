@@ -324,6 +324,210 @@ def symmetry_rotations_from_yaml(path):
 
 
 # ---------------------------------------------------------------------------
+# 2D κ 归一化（κ_raw 用含真空的胞体积做分母 -> 层内 κ = κ_raw × h⊥/d）
+# ---------------------------------------------------------------------------
+# 真源是 skill/_common/thickness_2d.slab_geometry（kl/ke 两条链共用）。本技能不自己
+# 定义厚度：优先读上游 kappa_summary.json 里已经落地的 kappa_2d_norm_factor，
+# 读不到才用同一个 slab_geometry 从 phono3py yaml 的 primitive_cell 现算。
+# 寿命 tau 与厚度无关，这里只影响报告里的 κ 口径。
+
+def _import_thickness_2d():
+    """import thickness_2d（gen_need 推到步骤目录；仓库内退到 skill/_common）。"""
+    try:
+        import thickness_2d as T2D   # noqa: N811
+        return T2D
+    except ImportError:
+        pass
+    import sys as _sys
+    common = Path(__file__).resolve().parent.parent / "_common"
+    if (common / "thickness_2d.py").is_file():
+        _sys.path.insert(0, str(common))
+        try:
+            import thickness_2d as T2D   # noqa: N811
+            return T2D
+        except ImportError:
+            return None
+    return None
+
+
+def load_upstream_kappa_summary(h5path):
+    """找与 hdf5 同目录（或上一级）的 kappa_summary.json；返回 (dict, Path) 或 (None, None)。"""
+    if h5path is None:
+        return None, None
+    d = Path(h5path).resolve().parent
+    for cand in (d / "kappa_summary.json", d.parent / "kappa_summary.json"):
+        if cand.is_file():
+            try:
+                return json.loads(cand.read_text(encoding="utf-8")), cand
+            except Exception:
+                continue
+    return None, None
+
+
+def vacuum_axis_from_mesh(mesh):
+    """q 网格恰有一个方向为 1 -> 该方向是真空轴（2D 的 phono3py 网格约定），否则 None。"""
+    if mesh is None:
+        return None
+    m = [int(x) for x in np.asarray(mesh).ravel().tolist()]
+    if len(m) != 3:
+        return None
+    ones = [i for i, x in enumerate(m) if x == 1]
+    return ones[0] if len(ones) == 1 else None
+
+
+def _cell_from_yaml(path):
+    """phono3py/phonopy yaml 的 primitive_cell -> (lattice, frac, species)；失败返回 None。"""
+    try:
+        import yaml
+    except Exception:
+        return None
+    try:
+        doc = yaml.safe_load(Path(path).read_text(encoding="utf-8")) or {}
+        pc = doc.get("primitive_cell") or doc.get("unit_cell") or {}
+        lat = np.asarray(pc.get("lattice"), dtype=float)
+        pts = pc.get("points") or []
+        frac = np.asarray([p["coordinates"] for p in pts], dtype=float)
+        sp = [str(p.get("symbol")) for p in pts]
+        if lat.shape != (3, 3) or frac.ndim != 2 or frac.shape[0] == 0:
+            return None
+        return lat, frac, sp
+    except Exception:
+        return None
+
+
+def two_d_normalization(h5path, mesh, dim="auto", thickness_mode="vdw",
+                        yaml_path=None, log=None, tol=0.01):
+    """决定 2D 归一化因子 h⊥/d，返回 dict。
+
+    dim: auto（看上游 summary 的 dim，再看 q 网格是否有一轴为 1）| 2d | 3d
+    结果字段：dim, factor(None=无法归一/3D), source, thickness_d_A, h_perp_A,
+             thickness_convention, vac_axis, summary_file, check（两路因子对照）
+    """
+    def _log(m):
+        if log:
+            log(m)
+
+    out = {"dim": "3d", "factor": None, "source": None, "thickness_d_A": None,
+           "h_perp_A": None, "thickness_convention": None, "vac_axis": None,
+           "summary_file": None, "check": None}
+    dim = str(dim or "auto").strip().lower()
+    summ, spath = load_upstream_kappa_summary(h5path)
+    if spath is not None:
+        out["summary_file"] = str(spath)
+    s_dim = str((summ or {}).get("dim", "")).strip().lower()
+    vac = vacuum_axis_from_mesh(mesh)
+
+    if dim == "3d":
+        return out
+    is_2d = (dim == "2d") or (s_dim == "2d") or (dim == "auto" and not s_dim and vac is not None)
+    if dim == "auto" and s_dim == "3d":
+        is_2d = False
+    if not is_2d:
+        return out
+    out["dim"] = "2d"
+    out["vac_axis"] = vac if vac is not None else 2
+
+    # 1) 上游 summary 已落地的因子（与 kl 报告的 κ_2d 严格同源）
+    up_factor = None
+    if summ is not None and summ.get("kappa_2d_norm_factor") is not None:
+        try:
+            up_factor = float(summ["kappa_2d_norm_factor"])
+        except (TypeError, ValueError):
+            up_factor = None
+    if up_factor is not None and up_factor > 0:
+        out.update(factor=up_factor, source="upstream_kappa_summary",
+                   thickness_d_A=summ.get("thickness_d_ang", summ.get("thickness_d_A")),
+                   h_perp_A=summ.get("h_perp_A"),
+                   thickness_convention=summ.get("thickness_convention"))
+        if out["thickness_d_A"] is None:
+            # 材料级 thickness_2d.json（kl/ke 共用契约）
+            for cand in (Path(h5path).resolve().parents[i] / "thickness_2d.json"
+                         for i in range(min(5, len(Path(h5path).resolve().parents)))):
+                if cand.is_file():
+                    try:
+                        out["thickness_d_A"] = json.loads(
+                            cand.read_text(encoding="utf-8")).get("thickness_d_A")
+                    except Exception:
+                        pass
+                    if out["thickness_d_A"] is not None:
+                        break
+
+    # 2) 用同一 slab_geometry 从 yaml 现算（无上游因子时作主值，有时作对照）
+    geo = None
+    T2D = _import_thickness_2d()
+    cell = _cell_from_yaml(yaml_path) if yaml_path is not None else None
+    if T2D is not None and cell is not None:
+        lat, frac, sp = cell
+        try:
+            geo = T2D.slab_geometry(lat, frac, sp, vac_axis=out["vac_axis"],
+                                    mode=thickness_mode)
+        except Exception as e:           # pragma: no cover
+            _log("2D 层厚现算失败：%s" % e)
+            geo = None
+    if geo is not None:
+        g_factor = float(geo["kappa_2d_norm_factor"])
+        if out["factor"] is None:
+            out.update(factor=g_factor, source="slab_geometry(%s)" % Path(yaml_path).name,
+                       thickness_d_A=geo["thickness_d_A"], h_perp_A=geo["h_perp_A"],
+                       thickness_convention=geo["thickness_convention"])
+        else:
+            rel = abs(g_factor - out["factor"]) / out["factor"]
+            out["check"] = {"factor_from_yaml": g_factor, "rel_diff": rel,
+                            "convention_yaml": geo["thickness_convention"]}
+            if out["h_perp_A"] is None:
+                out["h_perp_A"] = geo["h_perp_A"]
+            if rel > tol:
+                _log("2D 归一化因子：上游 %.4f vs yaml 现算 %.4f（相差 %.1f%%）。沿用上游值；"
+                     "多半是上游 KAPPA_2D_THICKNESS 口径与本步 %r 不同"
+                     % (out["factor"], g_factor, 100 * rel, thickness_mode))
+    if out["factor"] is None:
+        _log("判定为 2D，但既没有上游 kappa_summary.json 的 kappa_2d_norm_factor，"
+             "也无法从 yaml 现算（缺 phono3py yaml / pyyaml / thickness_2d.py）：只报 raw κ，"
+             "raw κ 含真空层，不能直接对文献")
+    return out
+
+
+def kappa_block(data, focus_T, norm=None):
+    """κ 报告：raw（含真空胞体积）+ 2D 归一化（若可）。Voigt 顺序 xx,yy,zz,yz,xz,xy。"""
+    kappa = data.get("kappa")
+    temps = data.get("temperatures")
+    if kappa is None or temps is None or len(temps) == 0:
+        return None
+    K = np.asarray(kappa, dtype=float)
+    T = np.asarray(temps, dtype=float)
+    i = int(np.argmin(np.abs(T - float(focus_T))))
+    row = K[i]
+    out = {"T_K": float(T[i]),
+           "kappa_raw_voigt_xx_yy_zz_yz_xz_xy": [float(x) for x in row[:6]],
+           "basis": "raw: phono3py 用含真空的胞体积做分母"}
+    norm = norm or {}
+    if norm.get("dim") == "2d":
+        ax = int(norm.get("vac_axis") if norm.get("vac_axis") is not None else 2)
+        inplane = [k for k in range(3) if k != ax]
+        out["dim"] = "2d"
+        out["kappa_raw_inplane_avg"] = float(np.mean([row[k] for k in inplane]))
+        f = norm.get("factor")
+        if f:
+            out["kappa_2d_norm_factor"] = float(f)
+            out["thickness_d_A"] = norm.get("thickness_d_A")
+            out["h_perp_A"] = norm.get("h_perp_A")
+            out["thickness_convention"] = norm.get("thickness_convention")
+            out["factor_source"] = norm.get("source")
+            out["kappa_2d_inplane"] = {("xx", "yy", "zz")[k]: float(row[k] * f) for k in inplane}
+            out["kappa_2d_inplane_avg"] = float(np.mean([row[k] for k in inplane]) * f)
+            out["kappa_2d_inplane_avg_vs_T"] = {
+                "%.4f" % T[j]: float(np.mean([K[j][k] for k in inplane]) * f)
+                for j in range(len(T))}
+            out["note"] = ("与文献对比用 kappa_2d_inplane*（κ_raw×h⊥/d）；d 的取法文献不统一，"
+                           "对比时注明 d")
+        else:
+            out["note"] = "2D 但缺归一化因子：raw κ 含真空层，不能直接对文献"
+    else:
+        out["dim"] = norm.get("dim", "3d")
+    return out
+
+
+# ---------------------------------------------------------------------------
 # 读取与转换
 # ---------------------------------------------------------------------------
 def read_kappa_hdf5(path):
@@ -884,4 +1088,6 @@ __all__ = [
     "reconstruct_kappa", "kappa_reconstruction_error", "decide_boundary_gamma",
     "pick_temperature_indices", "acoustic_mask", "summarize_temperature",
     "select_direction_qpoints", "write_mode_csv", "dump_json",
+    "load_upstream_kappa_summary", "vacuum_axis_from_mesh", "two_d_normalization",
+    "kappa_block",
 ]
