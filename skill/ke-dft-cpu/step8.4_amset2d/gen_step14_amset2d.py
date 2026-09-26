@@ -145,13 +145,16 @@ MESH_MIN_FMAX = 60       # 自动选 factor 的上限
 #   unity 保留为**快速筛选**：step.conf 写 UNITY_OVERLAP = true 回到旧行为，
 #   preflight 会打印"结果偏低、仅数量级"的标注。
 UNITY_OVERLAP = False
-# patch_wavefunction_full（2026-09-20 二维版；2026-09-26 用户决定：出厂置 True）：
-#   读**全网格** h5（step4b_wave_full，ISYM=-1 写出全部 k 点），让 AMSET 走
-#   from_data、跳过去对称化。这是 2D 真实重叠的唯一干净路径，现为出厂默认。
-#   要退回旧的去对称化路径：step.conf 写 WAVEFUNCTION_FULL = false（结果不可信，
-#   仅供受控对照，preflight 会降级为告警）。
+# patch_wavefunction_full（2026-09-20；2026-09-26 **用户决定：判据从「维度」改成「有无反演中心」**）：
+#   读**全网格** h5（step4b_wave_full，ISYM=-1），让 AMSET 走 from_data、跳过去对称化。
+#   机制（见 tmp/amset2d/DESYM_FINDINGS.md）：有反演时 −R 已被点群吸收（TR 操作数=0），
+#   去对称化不会走到出错的 TR 分支 —— 实测 Si(有反演) 97.7% vs MoS2/MoSe2(无反演) 38.9%/68.4%。
+#   ⇒ 无 反演 + 真实重叠：**必须**全网格；有 反演 + 真实重叠：普通 IBZ 即可（省计算量）。
+#   None = auto（由 _apply_inversion_rule() 按结构决定）。
+#   要强制：step.conf 写 WAVEFUNCTION_FULL = true/false（显式优先，preflight 会据此告警/拦截）。
 #   h5 与 vasprun 必须同源（都取 step3b/step4b），否则 h5 点数与 vasprun 网格对不上。
-WAVEFUNCTION_FULL = True
+WAVEFUNCTION_FULL = None
+_WF_EXPLICIT = None
 # patch_write_mesh（2026-09-22 用户批准）：把 AMSET 的 write_mesh 写进 settings.yaml，
 #   产出 mesh_<mesh>.h5（每机制每 k 点散射率 + 能带/速度/DOS 元数据），供
 #   postprocess_intrinsic.py 做"IMP 置零后严格本征"重积分。默认 False = 行为不变。
@@ -1573,6 +1576,65 @@ def apply_mesh_min(vasprun_path, out):
     return int(f), [int(x) for x in mesh]
 
 
+def _has_inversion(structure):
+    """spglib(经 pymatgen)判断结构是否含反演操作。返回 True/False/None（判不出来）。"""
+    try:
+        import numpy as np
+        from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
+        ds = SpacegroupAnalyzer(structure).get_symmetry_dataset()
+        if not ds:
+            return None
+        return bool(any(np.allclose(np.asarray(R), -np.eye(3), atol=1e-5)
+                        for R in ds["rotations"]))
+    except Exception:
+        return None
+
+
+def _apply_inversion_rule(cwd):
+    """patch_inversion_rule：按有无反演中心决定是否走全网格（详见文件头 WAVEFUNCTION_FULL 处）。
+
+    无 反演 + 真实重叠 -> 必须全网格；有 反演 + 真实重叠 -> 普通 IBZ 即可。
+    step.conf 显式指定时以显式为准（已知坏组合交给下面的闸门报错）。
+    """
+    global WAVEFUNCTION_FULL
+    st = None
+    for _d in STRUCT_CANDS:
+        for _n in ("CONTCAR", "POSCAR"):
+            _p = cwd / _d / _n
+            if _p.is_file():
+                try:
+                    from pymatgen.core import Structure
+                    st = Structure.from_file(str(_p))
+                    break
+                except Exception:
+                    st = None
+        if st is not None:
+            break
+    inv = _has_inversion(st) if st is not None else None
+    if inv is None:
+        if WAVEFUNCTION_FULL is None:
+            WAVEFUNCTION_FULL = True
+            print("[WARN] 反演中心判据：取不到结构或 spglib 失败 —— 保守按**无反演**处理（走全网格）")
+        else:
+            print("[WARN] 反演中心判据：判不出来，沿用 WAVEFUNCTION_FULL=%s" % WAVEFUNCTION_FULL)
+        return
+    if _WF_EXPLICIT is not None:
+        WAVEFUNCTION_FULL = _WF_EXPLICIT
+        print("[..] WAVEFUNCTION_FULL 由 step.conf 显式指定 = %s，跳过反演中心自动判断"
+              % _WF_EXPLICIT)
+        return
+    if UNITY_OVERLAP:
+        WAVEFUNCTION_FULL = False
+        print("[..] unity 重叠（快速筛选，仅数量级）-> 不需要全网格")
+    elif inv:
+        WAVEFUNCTION_FULL = False
+        print("[OK] 检出**反演中心** + 真实重叠 -> 普通 IBZ 路径即可（不启用全网格，省计算量）")
+    else:
+        WAVEFUNCTION_FULL = True
+        print("[OK] 检出**无反演中心** + 真实重叠 -> 自动启用 WAVEFUNCTION_FULL"
+              "（全网格 S3b+S4b；需已打开 wavefunction_full 分支）")
+
+
 def main():
     _disc_gate()
     cwd = Path.cwd()
@@ -1597,16 +1659,16 @@ def main():
                     print("[OK] INTERPOLATION_FACTOR = %d（step.conf 覆盖，出厂 %d）"
                           % (_conf_interp, INTERPOLATION_FACTOR))
                 INTERPOLATION_FACTOR = _conf_interp
-            # 全网格 h5 分支：出厂 True，可显式关掉。
+            # 全网格 h5 分支：出厂 auto —— 由 _apply_inversion_rule() 按有无反演中心决定。
+            global _WF_EXPLICIT
             _wf = str(_p["WAVEFUNCTION_FULL"]).strip().lower()
             if _wf in ("true", "1", "yes", "on"):
-                WAVEFUNCTION_FULL = True
-                print("[..] WAVEFUNCTION_FULL=true：wavefunction.h5 <- step4b_wave_full"
-                      "（全网格，ISYM=-1），vasprun.xml <- step3b_uniform_full")
+                _WF_EXPLICIT = True
+                print("[..] WAVEFUNCTION_FULL=true（step.conf 显式）：强制全网格")
             elif _wf in ("false", "0", "no", "off"):
-                WAVEFUNCTION_FULL = False
-                print("[WARN] WAVEFUNCTION_FULL=false（step.conf 覆盖）：退回**去对称化**路径 ——"
-                      " 2D 结果不可信，只作受控对照")
+                _WF_EXPLICIT = False
+                print("[WARN] WAVEFUNCTION_FULL=false（step.conf 显式）：退回**去对称化**路径 ——"
+                      " 无反演体系的 2D 结果不可信，只作受控对照")
             elif _wf != "auto":
                 print("[WARN] WAVEFUNCTION_FULL=%r 不认识（只认 auto/true/false），按 auto 处理" % _wf)
             # unity_overlap 显式覆盖：auto/true/false
@@ -1688,7 +1750,9 @@ def main():
         NWORKERS = NWORKERS_FALLBACK
         print("[WARN] 推不出提交分配（%s）—— NWORKERS 兜底 %d" % (_src, NWORKERS))
     _guard_dim_2d(cwd)
-    # [guard-2026-09-25 / 强化 2026-09-26] 2D + 真实重叠 + 非全网格 h5 = 已知算坏的组合。
+    # patch_inversion_rule：把 WAVEFUNCTION_FULL 从 auto 解析成 True/False（必须在闸门与 _wdir 之前）。
+    _apply_inversion_rule(cwd)
+    # [guard-2026-09-25 / 强化 2026-09-26] 真实重叠 + 无反演 + 非全网格 h5 = 已知算坏的组合。
     #   2026-09-26 起这是**出厂默认路径**（UNITY_OVERLAP=False + WAVEFUNCTION_FULL=True），
     #   所以这道闸门在默认配置下也必须是"通过"；一旦有人把 WAVEFUNCTION_FULL 关掉就报错。
     #   证据：去对称化在无反演体系上 38.9% 的 k 点全错（TR 路径 5.2%），Si 对照 97.7%
