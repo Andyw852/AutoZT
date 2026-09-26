@@ -148,7 +148,7 @@ io_schema:
     - {step: S3_solve, title: "FVM steady/transient solve", inputs: [thermal_props.json], outputs: [device_thermal_summary.json, T_field.json], validator: "SOLVE_DONE marker"}
     - {step: S4_report, title: "Report + T map", inputs: [device_thermal_summary.json, T_field.json], outputs: [device_report.json], validator: "REPORT_DONE marker"}
     - {step: S5_tbc, title: "(GPU) GPUMD NEMD deck", inputs: ["step.conf", "interface extxyz"], outputs: [tbc_inputs.json], validator: "TBC_INPUTS_DONE marker"}
-    - {step: S5b_tbc_run, title: "(GPU) run NEMD + block-count gate", inputs: [tbc_inputs.json, run_gpumd.sh], outputs: [run_done.json], validator: "TBC_RUN_DONE marker (compute_chunk.out blocks >= run_steps/output_interval)"}
+    - {step: S5b_tbc_run, title: "(GPU) run NEMD + block-count gate", inputs: [tbc_inputs.json, run_gpumd.sh], outputs: [run_done.json], validator: "TBC_RUN_DONE marker (compute_chunk.out blocks >= run_steps/(sample_interval*output_interval))"}
     - {step: S6_tbc_post, title: "(GPU) interface G", inputs: [tbc_inputs.json, "compute.out", "compute_chunk.out"], outputs: [tbc_result.json], validator: "TBC_POST_DONE marker"}
 
 flow:

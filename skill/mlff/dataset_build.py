@@ -41,6 +41,8 @@ def parse_args():
     p.add_argument("--energy-limit", type=float, default=0.005)
     p.add_argument("--force-limit", type=float, default=0.1)
     p.add_argument("--kspacing-tol", type=float, default=0.20)
+    # ★ 2026-09-26 user 要求：k 点间距超容差 → FAIL（默认关 = 只 WARN，兼容旧行为）
+    p.add_argument("--kspacing-tol-block", action="store_true")
     p.add_argument("--pre-xyz", default="")             # extend：逗号分隔
     p.add_argument("--fps-seed", type=int, default=42)
     p.add_argument("--vol-factors", default="0.97,1.00,1.03")
@@ -296,6 +298,7 @@ def main():
     from collections import Counter as _Counter
     manifests = sorted((cwd / a.step4_dir).glob("gen-*/struct_manifest.json"))
     frames = []
+    frame_fp = []                   # ★ 逐帧 DFT 设置指纹（id, config_type, fp, Δk, note）
     vasp_versions = _Counter()      # 逐帧 VASP 版本（fingerprint 不含版本项，见 outcar_vasp_version）
     for mp in manifests:
         man = json.loads(mp.read_text())
@@ -326,6 +329,20 @@ def main():
                 "atoms": atoms, "filtered": False,
                 "source": "step5_label",
             })
+            # ★ 逐帧 DFT 设置指纹（2026-09-26，user 要求）：S5_label 自己产的帧此前
+            #   【从不校验】（旧注释只是"假设本数据集所有 DFT 帧共用 step5 的生成设置"）。
+            #   这里逐帧从 cfgdir 的 INCAR/POTCAR/KPOINTS + 该帧超胞晶格算指纹与
+            #   胞不变 k 点间距 Δk，循环后统一做"帧间唯一 + 与 step1 参考一致"判定。
+            #   Δk 必须用 kdelta_density()（胞不变量）：超胞帧与原胞参考只有它可比。
+            try:
+                _fi = ds.read_incar(cfgdir / "INCAR")
+                _ffp, _ = ds.dft_fingerprint(
+                    _fi, cfgdir / "POTCAR", atoms.cell.tolist(), cfgdir / "KPOINTS",
+                    mc.read_kv(cwd / a.step1_dir / mc.METHOD_FILE).get("FUNC", "?"))
+                _fdk, _fdkn = ds.kdelta_density(cfgdir / "KPOINTS", atoms.cell.tolist())
+            except Exception as _e:                      # noqa: BLE001
+                _ffp, _fdk, _fdkn = None, 0.0, "取不到（%s）" % _e
+            frame_fp.append((ent["id"], ent.get("config_type"), _ffp, _fdk, _fdkn))
     if not frames:
         sys.exit("[ERROR] step5_label 里一帧算完的 OUTCAR 都没有 —— 先让 S5 跑完。")
     if len(vasp_versions) > 1:
@@ -340,6 +357,82 @@ def main():
     fp, ksp = ds.dft_fingerprint(incar, cwd / a.step1_dir / "POTCAR",
                                  prim_lat, cwd / a.step1_dir / "KPOINTS",
                                  method.get("FUNC", "?"))
+
+    # ---- ★ 帧间 DFT 设置一致性（2026-09-26，user 要求）----
+    #   此前：S5_label 自己产的帧【从不校验】—— 指纹只从 step1_relax 算一次，而且只用于
+    #   筛 PRE_XYZ_FILES。于是"某些帧被换了网格/INCAR"，甚至"整批 Γ-only"都能静默进
+    #   训练集（2026-09 那个 243 原子 Γ-only 数据集就是这么来的：实测 Γ-only ≡ 原胞
+    #   3×3×3，参考构型 max|F|=0.103 eV/Å，而 6×6×6 是 1e-4 —— 差 1000 倍）。
+    #   iso 帧故意只有自身元素的 POTCAR（见 gen_step5_label.build_potcar_for_frame），
+    #   其指纹天然与 step1 不同，故只对非 iso 帧做这两道判定。
+    _bulk_fp = [t for t in frame_fp if t[1] != "iso"]
+    if len(_bulk_fp) < len(frame_fp):
+        print("[..] 指纹校验跳过 %d 个 iso 帧（单元素 POTCAR，天然与 step1 不同）"
+              % (len(frame_fp) - len(_bulk_fp)))
+    _groups = {}
+    for _fid, _ct, _ffp, _fdk, _fdkn in _bulk_fp:
+        _groups.setdefault(_ffp, []).append((_fid, _fdk, _fdkn))
+    if len(_groups) > 1:
+        print("[ERROR] S5_label 各帧的 DFT 设置指纹不唯一（共 %d 组）：" % len(_groups))
+        for _g, _mem in sorted(_groups.items(), key=lambda kv: -len(kv[1])):
+            print("          %d 帧，如 %s" % (len(_mem), ", ".join(m[0] for m in _mem[:4])))
+            print("            指纹：%s" % ((_g or "(取不到)")[:200]))
+        sys.exit(
+            "[ERROR] 同一代里混了不止一种 DFT 设置（INCAR/POTCAR）—— 训练集内部不自洽，\n"
+            "        混训会带系统误差。\n"
+            "        处置：确认 step5_label 的 INCAR/POTCAR 是同一套后 retry 本步；\n"
+            "        若中途改过生成设置，请 rerun S5_label 让全部帧用同一套设置重算。")
+    _dks = [m[1] for _mem in _groups.values() for m in _mem if m[1] > 0]
+    _kmax = max(_dks) if _dks else 0.0
+    if _dks and min(_dks) > 0 and (_kmax / min(_dks) - 1.0) > a.kspacing_tol:
+        _msg = ("S5_label 帧之间的 k 点间距 Δk 不一致：%.5f–%.5f 1/Å（相对差 %.0f%% > %.0f%%）"
+                % (min(_dks), _kmax, (_kmax / min(_dks) - 1.0) * 100, a.kspacing_tol * 100))
+        if a.kspacing_tol_block:
+            sys.exit("[ERROR] %s\n        处置：统一 KPOINTS_GRID 后 rerun S5_label。"
+                     "（KSPACING_TOL_BLOCK=false 可降级为 WARN，不推荐）" % _msg)
+        print("[WARN] %s（KSPACING_TOL_BLOCK=false，放行）" % _msg)
+
+    if _bulk_fp and _bulk_fp[0][2] is not None:
+        _ref_dk, _ref_note = ds.kdelta_density(cwd / a.step1_dir / "KPOINTS", prim_lat)
+        _blk = a.kspacing_tol_block
+        if _ref_dk > 0 and _bulk_fp[0][3] > 0:
+            print("[..] k 点间距：S5 帧 Δk=%.5f 1/Å vs step1 参考 Δk=%.5f 1/Å（比值 %.2f）"
+                  % (_bulk_fp[0][3], _ref_dk, _bulk_fp[0][3] / _ref_dk))
+        # ① k 点间距（胞不变量 Δk）：默认 WARN，KSPACING_TOL_BLOCK=on → FAIL
+        if _bulk_fp[0][2] == fp:
+            _ok, _msg = ds.check_fingerprint(
+                _bulk_fp[0][2], _bulk_fp[0][3], fp, _ref_dk,
+                kspacing_tol=a.kspacing_tol, kblock=_blk)
+            if not _ok:
+                sys.exit(
+                    "[ERROR] S5_label 帧与 step1 参考的 k 点间距不一致：%s\n"
+                    "        这条闸堵的就是「Γ-only 数据集静默进训练」：超胞 Γ-only ≡ 原胞"
+                    " 3×3×3，\n"
+                    "        实测参考构型 max|F| 会从 1e-4 涨到 0.103 eV/Å。\n"
+                    "        处置：核对 step5_label 的 KPOINTS_GRID 后 rerun S5_label；\n"
+                    "        确认要放行就把 KSPACING_TOL_BLOCK 设回 false。" % _msg)
+            print("[OK] S5_label 帧 k 点间距 vs step1 参考：%s" % _msg)
+        # ② INCAR/POTCAR 键级差异。★ ISMEAR/SIGMA 属【设计内合法差异】，不参与判定：
+        #    step1 模板固定 ISMEAR=0，而 step5 走 decide_ismear(gap)（金属 → 1/0.2），
+        #    拿它们当"不一致"会误杀所有金属体系的合法数据（2026-09-26 排查）。
+        #    其余键不一致：默认 WARN，KSPACING_TOL_BLOCK=on → FAIL。
+        _pa = dict(x.split("=", 1) for x in _bulk_fp[0][2].split("|") if "=" in x)
+        _pb = dict(x.split("=", 1) for x in fp.split("|") if "=" in x)
+        _diff = sorted(k for k in _pa if _pb.get(k) != _pa[k])
+        _IGN = {"ISMEAR", "SIGMA"}
+        _hard = [k for k in _diff if k not in _IGN]
+        if _diff:
+            print("[..] S5 帧 vs step1 参考的键差异：%s%s"
+                  % (", ".join(_diff),
+                     "（ISMEAR/SIGMA 为设计内合法差异，不判）" if set(_diff) & _IGN else ""))
+        if _hard:
+            _m2 = ("S5_label 帧与 step1 参考的 DFT 设置不一致，键 %s：帧 %s vs 参考 %s"
+                   % (", ".join(_hard), {k: _pa[k] for k in _hard},
+                      {k: _pb.get(k) for k in _hard}))
+            if _blk:
+                sys.exit("[ERROR] %s\n        处置：核对生成设置；确认要放行就把 "
+                         "KSPACING_TOL_BLOCK 设回 false。" % _m2)
+            print("[WARN] %s（KSPACING_TOL_BLOCK=false，放行）" % _m2)
 
     # ---- extend：并入 PRE_XYZ_FILES ----
     pre_paths = [x.strip() for x in (a.pre_xyz or "").split(",") if x.strip()]

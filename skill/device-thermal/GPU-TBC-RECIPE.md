@@ -41,7 +41,7 @@ GPUMD NEMD 算界面热导 G，再用 TBC_OVERRIDE 回灌器件模型（S2_props
 3. 设 `TBC_NEP_MODEL / TBC_GPUMD_BIN / TBC_CUDA_VISIBLE_DEVICES`，必要时设
    `TBC_AXIS / TBC_INTERFACE_COORD / TBC_SOURCE|SINK_THICKNESS / TBC_*_STEPS`。
 4. 生成输入：S5_tbc -> `step5_tbc/{model.xyz, potential.txt, run.in, run_gpumd.sh, tbc_inputs.json}`。
-5. 运行：S5b_tbc_run 在 GPU 主机执行 `step5_tbc/run_gpumd.sh`（等价于手动 `bash step5_tbc/run_gpumd.sh`）。完成判据 = `compute_chunk.out` 块数 >= `TBC_RUN_STEPS // TBC_OUTPUT_INTERVAL`；达标才写 `step5b_run/run_done.json` 并放行 S6。
+5. 运行：S5b_tbc_run 在 GPU 主机执行 `step5_tbc/run_gpumd.sh`（等价于手动 `bash step5_tbc/run_gpumd.sh`）。完成判据 = `compute_chunk.out` 块数 >= `TBC_RUN_STEPS // (TBC_SAMPLE_INTERVAL * TBC_OUTPUT_INTERVAL)`；达标才写 `step5b_run/run_done.json` 并放行 S6。
 6. 提取 G：S6_tbc_post -> `step6_tbc_post/tbc_result.json`（G / dT_i / q / quality）。
 7. 回灌：`autozt -tt device-thermal -p <材料> -j S2_props conf --set params.TBC_OVERRIDE=<G>` -> start。
 

@@ -63,6 +63,9 @@ SPEC = {
     #   Huang 条件是零应力条件；有外应力时 ZA 出现线性项、压制二次项，κ 不可信。
     "STRESS_2D_THR": (0.5,     "float"),
     "MAX_DISP":     (500,      "int"),   # ★ 位移帧数硬闸：超过就报错停步
+    # ★ 帧间一致性硬闸（2026-09-26，user 要求）：已有 disp-* 必须与当前计划同胞同网格。
+    #   off = 只跳过本闸（排查用，不推荐）。
+    "FRAME_GATE":   ("on",     "str"),
     "FC3_CUTOFF_PAIR": (None,  "float"), # findiff 三阶对距离上限(Å)；空=全对称集
     "FD_DISTANCE":  (0.03,     "float"), # findiff 位移幅度(Å)
     "OVERSAMPLE":   (3,        "int"),   # alm 过采样系数（超定 3 倍）
@@ -410,6 +413,102 @@ def _quarantine_stale_dataset(out):
     return moved
 
 
+def _kpoints_mesh_line(path):
+    """读 KPOINTS 的自动网格行（第 4 行）；非自动网格 / 读失败返回 None。"""
+    try:
+        ln = Path(path).read_text(encoding="utf-8", errors="ignore").splitlines()
+        if len(ln) >= 4 and ln[1].strip().startswith("0"):
+            return " ".join(ln[3].split()[:3])
+    except OSError:
+        return None
+    return None
+
+
+def check_frame_consistency(out, tol=1e-3):
+    """★ 帧间一致性硬闸（2026-09-26，user 要求）：已有的 disp-* 必须【同胞同网格】。
+
+    ★ 为什么必须拦（2026-09-24 MoS2 实测）：
+      本文件已有的 check_existing_matches_input / _dataset_matches 都是【计划级】校验 ——
+      只看 phono3py_disp.yaml（单胞 + 超胞矩阵）与 disp_plan.json（方法/截断/过采样）。
+      而 build_displacements 见到"计划匹配"就【幂等跳过】，retry 对 fanout 又【只补缺失
+      子目录】。于是"计划中途变过、只重生成了一部分帧"时，同一个 step4_disp/ 里会留下
+      两种超胞（两套力）：
+        MoS2_kltest 实测 228 帧 = 188 帧 4x4x1（48 原子，KPOINTS 3 3 1）
+                                +  40 帧 5x5x1（75 原子，KPOINTS 2 2 1）
+      S5 把这两批当同一批数据拟合 → fc2/fc3 直接报废，而且一声不响。
+      同一 KSPACING 落在 VASPKIT 取整边界时，也同样会对不同帧给出不同网格。
+
+    本闸在扇出【之前】逐个已有 disp-* 比对：
+      ① POSCAR 超胞晶格（基准 = SPOSCAR；读不到就退化为「已有帧的多数派晶格」，
+         这样即使 SPOSCAR 没被拉回来（离线/半途）也不会静默跳过）
+      ② KPOINTS 网格行（基准 = 数据集里第一条；全体必须唯一）
+    任一不一致 → sys.exit：不写任何新帧、不扇出。
+    """
+    entries = [(d.name, _poscar_cell(d / "POSCAR"))
+               for d in sorted(out.glob("disp-*")) if d.is_dir()]
+    ref, ref_src = _poscar_cell(out / "SPOSCAR"), "SPOSCAR"
+    if ref is None and entries:
+        _votes = {}
+        for _n, _c in entries:
+            if _c is None:
+                continue
+            _key = tuple(round(x, 4) for _row in _c for x in _row)
+            _votes.setdefault(_key, [0, _c])
+            _votes[_key][0] += 1
+        if _votes:
+            _best = max(_votes.values(), key=lambda kv: kv[0])
+            ref, ref_src = _best[1], "多数派帧（%d/%d）" % (_best[0], len(entries))
+    if ref is None:
+        print("[WARN] 帧间一致性闸跳过：既读不到 %s/SPOSCAR，也读不到任何 disp-*/POSCAR"
+              % out.name)
+        return
+    bad_cell, mesh_groups, mesh_ref, n_seen = [], {}, None, 0
+    for d in sorted(out.glob("disp-*")):
+        if not d.is_dir():
+            continue
+        n_seen += 1
+        cell = _poscar_cell(d / "POSCAR")
+        if cell is None:
+            bad_cell.append((d.name, "读不到 POSCAR 晶格"))
+        else:
+            dmax = max(abs(cell[i][j] - ref[i][j]) for i in range(3) for j in range(3))
+            if dmax > tol:
+                bad_cell.append((d.name, "与基准(%s)差 %.4f A（> %.0e）"
+                                 % (ref_src, dmax, tol)))
+        mesh = _kpoints_mesh_line(d / "KPOINTS")
+        if mesh is None:
+            continue
+        mesh_groups.setdefault(mesh, []).append(d.name)
+        if mesh_ref is None:
+            mesh_ref = mesh
+    if bad_cell:
+        print("[ERROR] 帧间一致性闸：以下已有帧的超胞与当前计划不一致（共 %d 帧）："
+              % len(bad_cell))
+        for _n, _w in bad_cell[:8]:
+            print("          %s：%s" % (_n, _w))
+        if len(bad_cell) > 8:
+            print("          ... 另有 %d 帧" % (len(bad_cell) - 8))
+        sys.exit(
+            "[ERROR] 混合超胞 = 混合数据集：S5 会把不同胞的力当同一批数据拟合，fc2/fc3 报废。\n"
+            "        成因：计划中途变过（SUPERCELL / MIN_SC_LEN / FC3_CUTOFF_PAIR），"
+            "而 retry 只补缺失帧、不动已有帧。\n"
+            "        处置：确认已归档后清空本步产物再重跑：\n"
+            "          rm -rf %s/disp-* %s/POSCAR-* %s/phono3py_disp.yaml %s/SPOSCAR\n"
+            "        或直接 autozt -tt kl-dft-cpu -p <材料> -j S4_disp rerun（推倒重来）。\n"
+            "        想先跳过本闸排查：conf --set params.FRAME_GATE=off（不推荐）。"
+            % (out, out, out, out))
+    if len(mesh_groups) > 1:
+        print("[ERROR] 帧间一致性闸：已有帧的 KPOINTS 网格不唯一（共 %d 种）：" % len(mesh_groups))
+        for _m, _names in sorted(mesh_groups.items(), key=lambda kv: -len(kv[1])):
+            print("          [%s] %d 帧，如 %s" % (_m, len(_names), ", ".join(_names[:4])))
+        sys.exit(
+            "[ERROR] 同一个 step4_disp 里出现多种 k 网格 = 各帧的 k 点系统误差不同，\n"
+            "        这个差会原样进 fc2/fc3（2026-09 那批虚频的同一类成因）。\n"
+            "        成因：同一个 KSPACING 落在 VASPKIT 取整边界上，不同帧落到不同的整数网格。\n"
+            "        处置：同上（清空本步产物 → retry / rerun），并把 KSPACING 调离取整边界。")
+    print("[OK] 帧间一致性闸：%d 个已有帧同胞同网格（mesh=[%s]）" % (n_seen, mesh_ref))
+
+
 def build_displacements(out, reps, method, conf, s4plan=None):
     """幂等：已有位移就跳过；否则先算帧数过闸，再落盘。
 
@@ -565,6 +664,10 @@ def main():
     if not sposcar.is_file():
         from phonopy.interface.vasp import write_vasp as _write_vasp
         _write_vasp(str(sposcar), make_ph3(out, reps).supercell, direct=True)
+    # ★ 帧间一致性硬闸（2026-09-26，user 要求）：扇出之前，已有 disp-* 必须同胞同网格。
+    #   放在此处：此时 SPOSCAR 已确保存在，可作为晶格基准。
+    if str(conf.get("FRAME_GATE", "on")).strip().lower() not in ("off", "0", "false", "no"):
+        check_frame_consistency(out)
     frames = [("00000", str(sposcar))]
     frames += [(os.path.basename(p).split("-", 1)[1], p) for p in poscars]
 

@@ -320,7 +320,7 @@
 | S4 | `step4_report/device_report.json` | 汇总报告 |
 | S4 | `step4_report/device_thermal_Tmap.png` | 温度场图（无 matplotlib 则跳过，仍出 JSON） |
 | **S5**（可选） | `step5_tbc/{model.xyz, potential.txt, run.in, run_gpumd.sh, tbc_inputs.json}` | NEMD deck；跑出 `compute.out`/`compute_chunk.out`/`thermo.out` |
-| **S5b**（可选） | `step5b_run/run_done.json` | GPUMD NEMD 运行步；完成判据 = `compute_chunk.out` 块数 ≥ `TBC_RUN_STEPS // TBC_OUTPUT_INTERVAL`（不是“文件存在”） |
+| **S5b**（可选） | `step5b_run/run_done.json` | GPUMD NEMD 运行步；完成判据 = `compute_chunk.out` 块数 ≥ `TBC_RUN_STEPS // (TBC_SAMPLE_INTERVAL * TBC_OUTPUT_INTERVAL)`（不是“文件存在”） |
 | **S6**（可选） | `step6_tbc_post/tbc_result.json` | `G_W_m2K`、`R_interface_m2K_W`、`q_W_m2`、`dT_interface_K`、`quality`、`quality_reasons`、`tau_int_blocks`、`n_eff`、`superblock_len`、`seed` |
 
 autozt 回拉清单（`fetch_files`）：上述 8 个 JSON/PNG。
@@ -409,7 +409,7 @@ autozt -tt device-thermal -p MoS2 -j S1_spec conf
 - **S5_tbc**（GPU）：通用生成 GPUMD NEMD 输入 —— 任意 extxyz 结构/元素、任意传输轴 x/y/z、
   任意 GPUMD 势；界面按元素组分突变自动判定；deck 为「平衡 → 烧入 → 测量」三段。
 - **S5b_tbc_run**（GPU）：在 GPU 主机执行 `step5_tbc/run_gpumd.sh`（若 `compute_chunk.out`
-  块数已达标则跳过，幂等）。**完成标记只看块数 ≥ `TBC_RUN_STEPS // TBC_OUTPUT_INTERVAL`**，
+  块数已达标则跳过，幂等）。**完成标记只看块数 ≥ `TBC_RUN_STEPS // (TBC_SAMPLE_INTERVAL * TBC_OUTPUT_INTERVAL)`**，
   半截文件/崩溃残留不会被判 done；超时/退出码非 0 直接失败，`TBC_RUN_TIMEOUT_S=0` 表示不限时。
 - **S6_tbc_post**（GPU）：热流 q **直接来自源/漏恒温器的累积传能**（不依赖文献 κ）；
   丢掉前 1/3 暂态后挑最长自洽窗口（T(z) 剖面与 q 同窗），两侧体区外推得 ΔT_i，输出 G 与
