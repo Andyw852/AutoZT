@@ -168,6 +168,26 @@ def potcar_element_syms(potcar_text):
     return out
 
 
+def _supercell_min_span(poscar_path):
+    """超胞三个晶格矢量长度里、排除真空轴后的最小值（Å）。读不到返回 None。
+
+    2D 判据：最长的那条 > 2x 次长 → 视为真空轴并排除（真空通常 >= 15 Å，而面内
+    两方向同量级）。否则取三者最小值。这个量用来判断"超胞是不是已经大到
+    Γ-only ≡ 原胞 m×m×m 采样"。
+    """
+    try:
+        ln = [x for x in Path(poscar_path).read_text(errors="ignore").splitlines()
+              if x.strip()]
+        sc = float(ln[1].split()[0])
+        vecs = [[float(x) * sc for x in ln[2 + i].split()[:3]] for i in range(3)]
+    except Exception:                                    # noqa: BLE001
+        return None
+    lens = sorted((sum(v[j] ** 2 for j in range(3))) ** 0.5 for v in vecs)
+    if lens[2] > 2.0 * lens[1]:
+        return lens[1]                                   # 排掉真空轴
+    return lens[0]
+
+
 def main():
     cwd = Path.cwd()
     out = cwd / OUTDIR
@@ -202,17 +222,41 @@ def main():
     print("[..] ENCUT=%d（%s）  ISMEAR=%s SIGMA=%s（%s）  ISPIN=%s（%s）  LMAXMIX=%d"
           % (encut, encut_note, ismear, sigma, sm_note, ispin, ispin_note, lmaxmix))
 
-    # [FIX-F2] 金属 + Γ-only 守卫：ISMEAR=1 说明 step1 判定为金属/半金属。
-    # 金属的费米面对 k 点采样极敏感，~100 原子超胞只取 Γ 点会让力带上系统误差，
-    # 而这个误差会原样进 fc2/fc3。半导体 Γ-only 没问题，金属必须显式给网格。
-    if str(ismear).strip() == "1" and not (cv["KPOINTS_GRID"] or "").strip():
+    # [FIX-F2] Γ-only 守卫（2026-09-26 扩展，user 要求）。
+    #   原版只拦金属（ISMEAR=1），注释还写着"半导体 Γ-only 没问题" —— 这句是错的：
+    #   超胞 Γ-only **等价于只在原胞 m×m×m 采样**（3x3x3 超胞 → 原胞 3x3x3），
+    #   对半导体同样是严重的 k 点欠采样。2026-09 实测：243 原子 / 3x3x3 超胞的
+    #   Γ-only 数据集，参考构型 max|F| = 0.103 eV/Å，而同构型 6x6x6 只要 1.0e-4
+    #   —— 差 1000 倍，且这个误差会原样进训练标签。
+    #   故触发条件扩展为：【金属】或【超胞非真空最小跨度 >= KPOINTS_GRID_MIN_SPAN】。
+    #   显式写 KPOINTS_GRID（含 '1 1 1'）即视为已知情，一律放行。
+    _kgrid = str(cv["KPOINTS_GRID"] or "").strip()
+    _span, _span_src = None, ""
+    for _ent in man["frames"]:
+        if _ent.get("config_type") == "iso":
+            continue
+        _p = cwd / STEP4 / ("gen-%d" % _ent["gen"]) / _ent["file"]
+        if _p.is_file():
+            _span, _span_src = _supercell_min_span(_p), _ent["id"]
+            break
+    _span_thr = float(cv.get("KPOINTS_GRID_MIN_SPAN", 10.0) or 0.0)
+    _why = None
+    if not _kgrid:
+        if str(ismear).strip() == "1":
+            _why = "step1 判定本体系为金属/半金属（%s）" % sm_note
+        elif _span is not None and _span_thr > 0 and _span >= _span_thr:
+            _why = ("超胞非真空最小跨度 %.2f Å >= %.1f Å（%s）—— 大超胞 Γ-only "
+                    "等价于只在原胞 m×m×m 采样" % (_span, _span_thr, _span_src))
+    if _why:
         sys.exit(
-            "[ERROR] step1 判定本体系为金属（%s），但 KPOINTS_GRID 为空 = Γ-only。\n"
-            "        金属超胞单点只取 Γ 点，力会有系统误差并原样进 fc2/fc3。\n"
-            "        请显式设网格再重跑，例如：\n"
+            "[ERROR] %s，但 KPOINTS_GRID 为空 = Γ-only。\n"
+            "        超胞单点只取 Γ 点会让力带上 k 点系统误差并原样进训练标签：\n"
+            "        实测 3x3x3 超胞（243 原子）Γ-only 的参考构型 max|F| = 0.103 eV/Å，\n"
+            "        而同构型 6x6x6 只要 1.0e-4。请显式给网格再重跑，例如：\n"
             "          tf -tt mlff -p <材料> -j 5 conf --set params.KPOINTS_GRID='2 2 2'\n"
-            "        （2D 体系真空方向恒为 1，如 '2 2 1'）\n"
-            "        确认要用 Γ-only 就把 KPOINTS_GRID 显式写成 '1 1 1'。" % sm_note)
+            "        选网格的原则：超胞 m 倍 x 网格 N ≡ 原胞 mN。要匹配原胞 6x6x6 的\n"
+            "        3x3x3 超胞就写 '2 2 2'；2D 真空方向恒为 1，如 '2 2 1'。\n"
+            "        确认要 Γ-only 就把 KPOINTS_GRID 显式写成 '1 1 1'。" % _why)
 
     # LDAU 从 step1 INCAR 原样继承（与弛豫完全一致）
     ldau = {k: incar1[k] for k in

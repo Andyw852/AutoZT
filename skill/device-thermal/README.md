@@ -320,7 +320,7 @@
 | S4 | `step4_report/device_report.json` | 汇总报告 |
 | S4 | `step4_report/device_thermal_Tmap.png` | 温度场图（无 matplotlib 则跳过，仍出 JSON） |
 | **S5**（可选） | `step5_tbc/{model.xyz, potential.txt, run.in, run_gpumd.sh, tbc_inputs.json}` | NEMD deck；跑出 `compute.out`/`compute_chunk.out`/`thermo.out` |
-| **S5b**（可选） | `step5b_run/run_done.json` | GPUMD NEMD 运行步；完成判据 = `compute_chunk.out` 块数 ≥ `TBC_RUN_STEPS // TBC_OUTPUT_INTERVAL`（不是“文件存在”） |
+| **S5b**（可选） | `step5b_run/run_done.json` | GPUMD NEMD 运行步；完成判据 = `compute_chunk.out` 块数 ≥ `TBC_RUN_STEPS // (TBC_SAMPLE_INTERVAL * TBC_OUTPUT_INTERVAL)`（不是“文件存在”） |
 | **S6**（可选） | `step6_tbc_post/tbc_result.json` | `G_W_m2K`、`R_interface_m2K_W`、`q_W_m2`、`dT_interface_K`、`quality`、`quality_reasons`、`tau_int_blocks`、`n_eff`、`superblock_len`、`seed` |
 
 autozt 回拉清单（`fetch_files`）：上述 8 个 JSON/PNG。
@@ -406,10 +406,15 @@ autozt -tt device-thermal -p MoS2 -j S1_spec conf
 
 用来给界面 TBC 提供第一性来源，再把 G 通过 `TBC_OVERRIDE` 灌回 S2：
 
+> **如何打开**：在项目配置 `project_setting/tf_<材料>_device-thermal.yaml` 的
+> `task_types.device-thermal:` 下加 `gpu_tbc: true`（**类型顶层**）。
+> `conf --set optional.gpu_tbc=true` 无效——它只写进本步 `step.conf` 的 `[optional]` 段，
+> 而开关读的是类型顶层 `t["gpu_tbc"]`（`autozt/bootstrap.py::expand_optional_steps`）。
+
 - **S5_tbc**（GPU）：通用生成 GPUMD NEMD 输入 —— 任意 extxyz 结构/元素、任意传输轴 x/y/z、
   任意 GPUMD 势；界面按元素组分突变自动判定；deck 为「平衡 → 烧入 → 测量」三段。
 - **S5b_tbc_run**（GPU）：在 GPU 主机执行 `step5_tbc/run_gpumd.sh`（若 `compute_chunk.out`
-  块数已达标则跳过，幂等）。**完成标记只看块数 ≥ `TBC_RUN_STEPS // TBC_OUTPUT_INTERVAL`**，
+  块数已达标则跳过，幂等）。**完成标记只看块数 ≥ `TBC_RUN_STEPS // (TBC_SAMPLE_INTERVAL * TBC_OUTPUT_INTERVAL)`**，
   半截文件/崩溃残留不会被判 done；超时/退出码非 0 直接失败，`TBC_RUN_TIMEOUT_S=0` 表示不限时。
 - **S6_tbc_post**（GPU）：热流 q **直接来自源/漏恒温器的累积传能**（不依赖文献 κ）；
   丢掉前 1/3 暂态后挑最长自洽窗口（T(z) 剖面与 q 同窗），两侧体区外推得 ΔT_i，输出 G 与
@@ -428,7 +433,7 @@ autozt -tt device-thermal -p <材料> start
 
 ## 10. 验证证据
 
-自动化回归：python3 tests/suite_device_thermal.py（80 项，全过）与
+自动化回归：python3 tests/suite_device_thermal.py（93 项，全过）与
 python3 tests/suite_device_zt.py（device-zt 两用例，全过）；两者已注册进
 tests/test_suites.py 的 pytest 参数化清单。
 
@@ -456,11 +461,23 @@ tests/test_suites.py 的 pytest 参数化清单。
   1 ps，而温度涨落的相关时间有几十 ps，相邻块不独立，直接 std/sqrt(N) 会低估（相关时间 20 块
   时约 8 倍）。现同时用积分自相关时间（N_eff=N/2tau）与 8~10 个超级块的批均值，取较大者（保守）。
   空间分块已废弃；可用时间块 < 3 时误差记 None 并判 poor。
-- **GPU 端到端（结论作废，待重跑）**：0.92 / 2.21 GW/m2K 与“链路与判据正常”是用**旧 deck** 跑的；
-  旧 deck 的 `compute_chunk` 只在烧入段生效，剖面本身不对。需用新 deck 在 3090 重跑 2~3 个种子后
-  再下结论；届时 `n_blocks_averaged` 应接近测量段行数减去丢掉的前 1/3。**S5b 已加上**：以后
-  `autozt -j S5b_tbc_run` 会在 GPU 主机跑 GPUMD，块数达标才写 `run_done.json`、才放行 S6；
-  做多种子时务必每次改不同的 `TBC_SEED`（默认 20260923 固定，不改会得到完全一样的结果）。
+- **GPU 端到端（2026-09-26 新 deck 三种子，3090 GPU5）**：Si/Ge(001) 1280 原子，
+  320000 步（20000 平衡 + 100000 烧入 + 200000 测量），`TBC_SEED` = 20260923/24/25：
+
+  | seed | q (W/m²) | 源/漏自洽 | dT_i (K) | G (MW/m²K) | n_eff | quality |
+  |---|---|---|---|---|---|---|
+  | 20260923 | 1.516e10 | 1.1% | 31.9 ± 5.6 | 475 | 29.0 | good |
+  | 20260924 | 1.515e10 | 1.9% | 34.5 ± 2.8 | 439 | 72.3 | good |
+  | 20260925 | 1.526e10 | 1.5% | 34.5 ± 5.6 | 443 | 18.5 | poor |
+
+  q 三种子一致到 0.4%，G = 452 ± 20 MW/m²K（±4.4%），`n_blocks_averaged`=134
+  （= 测量段 200 行减掉前 1/3），与预期一致；G 的余量敏感度 max/min 1.37~1.43，均 < 1.5。
+  seed 20260925 被判 poor **只因**其 `tau_int`=3.6 块、超级块 16 < 5·tau_int=18.2
+  （批均值仍相关）——这是新的误差可信度判据在起作用，不是链路故障。**旧的 0.92 / 2.21 GW/m²K
+  作废**：旧 deck 的 `compute_chunk` 只在烧入段生效，q 与 T(z) 不同窗。**本体系 G 仍未收敛**
+  （引线仅 27 Å，弹道区），绝对 G 不可引用，仅证明链路与判据正确。
+  **S5b 已加上**：`autozt -j S5b_tbc_run` 会在 GPU 主机跑 GPUMD，块数达标才写 `run_done.json`
+  并放行 S6；做多种子时务必每次改不同的 `TBC_SEED`（默认 20260923 固定，不改结果完全一样）。
 
 
 完整记录：`tmp/device_thermal_e2e/VALIDATION.md`。

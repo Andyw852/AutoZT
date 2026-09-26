@@ -790,7 +790,8 @@ def test_s5b_block_gate():
         s5 = os.path.join(tmp, "step5_tbc")
         os.makedirs(s5)
         with open(os.path.join(s5, "tbc_inputs.json"), "w") as fh:
-            json.dump({"run_steps": 300, "output_interval": 100, "seed": 7}, fh)
+            json.dump({"run_steps": 3000, "sample_interval": 10,
+                       "output_interval": 100, "seed": 7}, fh)
 
         def write_blocks(n):
             with open(os.path.join(s5, "compute_chunk.out"), "w") as fh:

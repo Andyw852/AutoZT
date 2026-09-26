@@ -9,7 +9,9 @@
 
 完成判据（不要只看文件在不在）：
     compute_chunk.out 的块数 >= 测量段理论块数
-    理论块数 = TBC_RUN_STEPS // TBC_OUTPUT_INTERVAL
+    理论块数 = TBC_RUN_STEPS // (TBC_SAMPLE_INTERVAL * TBC_OUTPUT_INTERVAL)
+      （GPUMD compute_chunk 每 sample_interval 步采一次、每 output_interval 个样本输出一次，
+        所以每 si*oi 步出一块；2026-09-26 smoke 实测：20000 步 / (10*100) = 20 块）
     块数 = 剖面文件里第一列（bin 编号）为 0 的行数：每个 block 从 bin 0 开始。
 
 读 step5_tbc/tbc_inputs.json（S5 产物）；产物 step5b_run/run_done.json
@@ -69,14 +71,16 @@ def main():
     with open(meta_p, encoding="utf-8") as fh:
         meta = json.load(fh)
     nrun = int(meta.get("run_steps") or 0)
+    si = int(meta.get("sample_interval") or 0)
     oi = int(meta.get("output_interval") or 0)
-    if nrun <= 0 or oi <= 0:
-        sys.exit("[ERROR] tbc_inputs.json 缺 run_steps/output_interval（无法定理论块数）")
-    expected = max(1, nrun // oi)
+    if nrun <= 0 or si <= 0 or oi <= 0:
+        sys.exit("[ERROR] tbc_inputs.json 缺 run_steps/sample_interval/output_interval"
+                 "（无法定理论块数）")
+    expected = max(1, nrun // (si * oi))
     prof = os.path.join(S5DIR, "compute_chunk.out")
     nblk = count_blocks(prof) if os.path.exists(prof) else 0
-    print("[S5b] 理论块数=%d（run_steps=%d / output_interval=%d），现有=%d"
-          % (expected, nrun, oi, nblk))
+    print("[S5b] 理论块数=%d（run_steps=%d / (sample=%d * output=%d)），现有=%d"
+          % (expected, nrun, si, oi, nblk))
 
     if nblk < expected:
         runner = os.path.join(S5DIR, "run_gpumd.sh")
@@ -99,7 +103,7 @@ def main():
                  "不写完成标记（可重跑本步或检查 %s/gpumd.log）" % (nblk, expected, S5DIR))
 
     write_marker(blocks=nblk, expected_blocks=expected, run_steps=nrun,
-                 output_interval=oi, seed=meta.get("seed"),
+                 sample_interval=si, output_interval=oi, seed=meta.get("seed"),
                  structure=meta.get("structure"), note="块数达标")
 
 

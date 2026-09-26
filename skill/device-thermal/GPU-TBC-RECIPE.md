@@ -32,8 +32,13 @@ GPUMD NEMD 算界面热导 G，再用 TBC_OVERRIDE 回灌器件模型（S2_props
 
 ## 2. 用法
 
-1. 打开可选组（改项目配置，需先请示）：
-   `autozt -tt device-thermal -p <材料> conf --set optional.gpu_tbc=true`
+1. 打开可选组（改项目配置，需先请示）：在项目配置 `project_setting/tf_<材料>_device-thermal.yaml`
+   的 `task_types.device-thermal:` 下加一行 `gpu_tbc: true`（**类型顶层**，不是 `optional:` 子段）。
+   ⚠️ **不要用** `autozt -tt device-thermal -p <材料> conf --set optional.gpu_tbc=true`：
+   `conf --set` 只把键写进**本步 step.conf**（变成 `[optional] gpu_tbc = true`），而可选组开关读的是
+   类型顶层的 `t["gpu_tbc"]`（`autozt/bootstrap.py` 的 `expand_optional_steps`），写 step.conf
+   **不会**展开 S5/S5b/S6（2026-09-26 实测确认：加 `gpu_tbc: true` 后状态表从 4 列变 7 列，
+   而 `conf --set optional.gpu_tbc=true` 后仍是 4 列）。
 2. 放界面结构：把 extxyz 放到该材料的 `project_setting/skill_dir/`（随 project_setting
    同步到远端），再把 `TBC_STRUCTURE` 写成该文件名；或直接把 `TBC_STRUCTURE` 写成 GPU
    主机上的绝对路径。**结构文件不在 `gen_need` 里**（属用户数据，不进 per-gen 推送）；
@@ -41,7 +46,7 @@ GPUMD NEMD 算界面热导 G，再用 TBC_OVERRIDE 回灌器件模型（S2_props
 3. 设 `TBC_NEP_MODEL / TBC_GPUMD_BIN / TBC_CUDA_VISIBLE_DEVICES`，必要时设
    `TBC_AXIS / TBC_INTERFACE_COORD / TBC_SOURCE|SINK_THICKNESS / TBC_*_STEPS`。
 4. 生成输入：S5_tbc -> `step5_tbc/{model.xyz, potential.txt, run.in, run_gpumd.sh, tbc_inputs.json}`。
-5. 运行：S5b_tbc_run 在 GPU 主机执行 `step5_tbc/run_gpumd.sh`（等价于手动 `bash step5_tbc/run_gpumd.sh`）。完成判据 = `compute_chunk.out` 块数 >= `TBC_RUN_STEPS // TBC_OUTPUT_INTERVAL`；达标才写 `step5b_run/run_done.json` 并放行 S6。
+5. 运行：S5b_tbc_run 在 GPU 主机执行 `step5_tbc/run_gpumd.sh`（等价于手动 `bash step5_tbc/run_gpumd.sh`）。完成判据 = `compute_chunk.out` 块数 >= `TBC_RUN_STEPS // (TBC_SAMPLE_INTERVAL * TBC_OUTPUT_INTERVAL)`；达标才写 `step5b_run/run_done.json` 并放行 S6。
 6. 提取 G：S6_tbc_post -> `step6_tbc_post/tbc_result.json`（G / dT_i / q / quality）。
 7. 回灌：`autozt -tt device-thermal -p <材料> -j S2_props conf --set params.TBC_OVERRIDE=<G>` -> start。
 
@@ -120,7 +125,7 @@ S6 输出 `quality`（good/poor）+ `quality_reasons`，判据：
 局限：
 
 1. **引线长度**：体区只有几 nm 时处于弹道区，"体斜率"不是傅里叶梯度，两线外推失效；
-   G 会随拟合余量显著变化（Si/Ge 例子里两次种子得 0.92 与 2.21 GW/m2K，都被判 poor）。
+   G 对拟合余量仍敏感（Si/Ge 三种子 439/443/475 MW/m2K，余量敏感度 max/min 1.37~1.43）。
    拿到收敛 G 必须**加长引线**到出现真正线性中段，并多种子平均。
 2. **界面位置约定**：自动判定取界面键中心；改变位置会让 dT_i 变化 ~(slope_A-slope_B)*dz，
    需要严格比较时显式给 `TBC_INTERFACE_COORD`。
@@ -128,27 +133,33 @@ S6 输出 `quality`（good/poor）+ `quality_reasons`，判据：
 4. **通用势未针对界面验证**（NEP89 是 89 元素通用势），定量前建议用专用势或做收敛测试。
 5. `kappa_crosscheck` 仅在扩散极限有意义，短引线偏离 1 属预期，不参与 quality。
 
-## 7. 3090 端到端验证（2026-09-23）
+## 7. 3090 端到端验证（2026-09-26，新 deck 三种子）
 
-- 体系：共格 Si/Ge(001)，1280 原子，22.18 x 22.18 x 55.4 A，源=顶 8 A(Si)，漏=底 8 A(Ge)。
-- 新版 S5 在 3090 生成 deck（自动定界面 z=27.03 A，源/漏各 192 原子）-> GPU5 跑 GPUMD
-  （20000 平衡 + 100000 烧入 + 200000 测量 = 320000 步，485 s，exit 0）-> S6 出结果。
-- q 两侧自洽 0.3%；但 dT_i 在两次独立种子间为 15.4 K 与 6.4 K（Si 引线非线性），
-  G 分别为 924 与 2209 MW/m2K，都被新版判据判为 poor。
-- 结论：**链路与判据都工作正常；该短引线体系的 G 未收敛**。细节见 tmp/device_thermal_e2e/。
-- ⚠️ 这次 3090 实跑用的是**旧 deck**（测量段 run 前没有重新声明 ensemble/compute，
-  `compute_chunk` 只声明在烧入段），结论要按 GPUMD 版本分开看：
-  - `Measure::finalize()` 每个 run 后 `properties.clear()`，**新旧版本一致**：`compute` /
-    `compute_chunk` 只对紧接着的一个 run 生效。旧 deck 因此 q 取自测量段、T(z) 取自烧入段，
-    两者不同窗 —— **924 / 2209 MW/m²K 这两个 G 作废**。
-  - 2026-09-17 合入的两个提交 `17d06ad3`（run 前没有 ensemble 就报错）和 `329d05ea`
-    （每个 run 后 `Integrate::finalize()` 清空 ensemble）之后，旧 deck 会在**测量段直接报错**、
-    跑不到底；09-17 之前（含 3090 上的 v5.6、本机 `59fe812`）`Integrate::finalize()` 只重置
-    fixed_group/move_group/deform，ensemble 会沿用到下一个 run，所以旧 deck 能跑完。
-  - 新 deck 在每个 run 前重新声明 ensemble，新旧版本都能跑（以后升级 GPUMD 时必需）。
-  现行脚本已把 `ensemble + compute + compute_chunk` 都写进测量段（见第 3 节）。结论：需用
-  新 deck 在 3090 重跑 2~3 个种子后再谈 G；届时 `n_blocks_averaged` 应接近测量段行数减去
-  丢掉的前 1/3。
+- 体系：共格 Si/Ge(001)，1280 原子，22.18 x 22.18 x 55.4 A，源=顶 8 A(Si)，漏=底 8 A(Ge)；
+  界面自动定在 z=27.03 A（键中心），源/漏各 192 原子，面积 491.9 A²。
+- 流程：S5 生成 deck -> S5b 在 3090 GPU5（UUID `GPU-377470de-…`）跑 GPUMD
+  320000 步（20000 平衡 + 100000 烧入 + 200000 测量）-> S6 出 G。三个种子
+  `TBC_SEED`=20260923/24/25，远端目录 `/data/user_3090/AutoZT_tbc_v3/seed_<seed>`。
+
+| seed | q (W/m²) | 自洽度 | dT_i (K) | G (MW/m²K) | tau_int | n_eff | 余量敏感 | quality |
+|---|---|---|---|---|---|---|---|---|
+| 20260923 | 1.516e10 | 1.1% | 31.9 ± 5.6 | 475 | 2.3 | 29.0 | 1.43 | good |
+| 20260924 | 1.515e10 | 1.9% | 34.5 ± 2.8 | 439 | 0.9 | 72.3 | 1.37 | good |
+| 20260925 | 1.526e10 | 1.5% | 34.5 ± 5.6 | 443 | 3.6 | 18.5 | 1.41 | poor |
+
+- q 三种子一致到 0.4%，G = 452 ± 20 MW/m²K（±4.4%），`n_blocks_averaged`=134
+  （测量段 200 行丢前 1/3），符合预期。
+- seed 20260925 判 poor 的唯一原因是 `tau_int`=3.6 块、超级块 16 < 5·tau_int=18.2
+  （批均值仍相关）——新的误差可信度判据在起作用，不是链路故障。
+- 结论：**链路、S5b 块数门控与质量/误差判据都工作正常；该短引线体系的 G 未收敛**，
+  绝对 G 不可引用（引线 27 A 仍在弹道区，需加长引线 + 多种子平均）。
+- ⚠️ **历史结论作废**：2026-09-23 那次 0.92 / 2.21 GW/m²K 用的是**旧 deck**
+  （测量段 run 前没有重新声明 ensemble/compute，`compute_chunk` 只声明在烧入段）。
+  `Measure::finalize()` 每个 run 后 `properties.clear()`（新旧版本一致），旧 deck 因此
+  q 取自测量段、T(z) 取自烧入段，两者不同窗 —— 那两个 G 作废。
+  现行脚本已把 `ensemble + compute + compute_chunk` 都写进测量段（见第 3 节）；
+  2026-09-17 之后的 GPUMD（`17d06ad3`/`329d05ea`）旧 deck 会在测量段直接报错跑不到底，
+  新 deck 在每个 run 前重新声明 ensemble，新旧版本都能跑。
 
 ## 8. 弹道 BTE（未安装）
 

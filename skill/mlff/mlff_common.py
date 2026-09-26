@@ -274,6 +274,8 @@ SHARED_PARAM_SPEC = {
     "ENERGY_LIMIT": (0.005, "float"),        # eV/atom，离群过滤
     "FORCE_LIMIT": (40.0, "float"),          # eV/Å（=autoplex force_max 默认值，源码为准）
     "KSPACING_TOL": (0.20, "float"),
+    # false（默认）= k 点间距超容差只 WARN；true = 升级为 FAIL（2026-09-26，user 要求）
+    "KSPACING_TOL_BLOCK": (False, "bool"),
     # --- 微调 ---
     "MACE_MODEL": (None, "str"),             # 基座 .model 文件名/路径/基座名
     "MACE_MODEL_DIR": ("", "str"),   # 站点路径：由 setting/<集群>.yaml mlff_model_dir 注入，勿写死
@@ -307,6 +309,9 @@ SHARED_PARAM_SPEC = {
     "N_GPU": (0, "int"),   # GPU 微调时分卡的卡数：0=auto（=N_COMMITTEE 张，按 seed 均摊）；>0 显式卡数
     # --- 单点（step5）---
     "KPOINTS_GRID": (None, "str"),           # 空 = Γ-only；"2 2 2" 显式网格
+    # ★ 2026-09-26 user 要求：KPOINTS_GRID 为空且超胞非真空最小跨度 >= 本值 → S5 报错
+    #   （原守卫只拦金属；实测半导体大超胞 Γ-only 同样致命）。0 = 关掉这条判据。
+    "KPOINTS_GRID_MIN_SPAN": (10.0, "float"),
     "EDIFF": (1e-7, "float"),
     "ALGO": ("Normal", "str"),
     "NCORE": (4, "int"),

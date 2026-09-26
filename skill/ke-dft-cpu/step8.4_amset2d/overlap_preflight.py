@@ -258,20 +258,25 @@ def run(cwd, out_dir=None, unity_overlap=False):
     _st = Path(out_dir) / "settings.yaml"
     controlled = bool(_st.is_file() and "AZ_OVERLAP_CONTROLLED=1" in _st.read_text(errors="ignore"))
 
-    # ---- ⓪ 二维必须 unity_overlap（不需要任何波函数数据，gen 时即生效）----
+    # ---- ⓪ 二维默认 = 全网格 + 真实重叠（2026-09-26 用户决定，结论翻转）----
+    #   旧逻辑（2026-09-17 V22/V23）要求"2D 必须 unity_overlap: true"，理由是真实重叠
+    #   会被去对称化算坏。新证据把因果关系倒过来了：
+    #     · unity 才是错的那一个 —— 它把谷间/大 q 散射当成完全耦合，实测 K→K' 真实
+    #       |I|^2 ≈ 0.25，于是迁移率系统性**偏低**（只能看数量级，Seebeck 基本可用）；
+    #     · 去对称化确实坏，但那是因为它本身就坏（无反演体系 38.9% 的 k 点错，
+    #       TR 路径 5.2%；Si 对照 97.7%）—— 修法是改走全网格 from_data，而不是退回 unity。
+    #   证据：tmp/amset2d/DESYM_FINDINGS.md、upstream_issue_tr_tau.md。
     lines.append("  0) 维度：%s；unity_overlap = %s"
                  % ("2D" if two_d else "3D/未知", unity_overlap))
-    if two_d and unity_overlap is not True:
-        if controlled:
-            warn = True
-            lines.append("     [WARN] 二维 + 真实重叠：本次是**受控对照**（step.conf 显式覆盖"
-                         " UNITY_OVERLAP，settings 里有 AZ_OVERLAP_CONTROLLED=1）—— 放行，"
-                         "结果只用于算比值，**不作生产结果**。")
-        else:
-            err = True
-            lines.append("     ★ 拦截：二维必须写 unity_overlap: true（AMSET 默认 false = 真实重叠）。"
-                         "二维走真实重叠会被去对称化算坏（MoS2 实测 ADP 抬高 10~16 倍，V23/V25.10）；"
-                         "这一条不依赖 h5，任何 2D 项目都要先改对再提交。")
+    if two_d and unity_overlap is True:
+        warn = True
+        lines.append("     [WARN] 二维 unity_overlap=true：**仅作快速筛选**。"
+                     "unity 把谷间/大 q 散射当成完全耦合（K->K' 真实 |I|^2≈0.25，"
+                     "全网格实测），迁移率系统性**偏低**，只能看数量级；Seebeck 基本可用，"
+                     "形变势(DPT)不受影响。正式结果请用 UNITY_OVERLAP=false + "
+                     "WAVEFUNCTION_FULL=true（S3b ISYM=-1 -> S4b 全网格 -> 真实重叠）。")
+    elif two_d:
+        lines.append("     二维真实重叠：正确路径（要求全网格 h5，见下面第 2 项核对）。")
 
     h5s = [out_dir / "wavefunction.h5", cwd / "step4_wave" / "wavefunction.h5",
            cwd / "step4b_wave_full" / "wavefunction.h5"]
@@ -299,11 +304,15 @@ def run(cwd, out_dir=None, unity_overlap=False):
                          "不作生产结果）。")
         elif not complete and not unity_overlap and two_d:
             err = True
-            lines.append("     ★ 拦截：2D + unity_overlap=false（真实重叠）+ 非完整网格。"
-                         "改用 unity_overlap: true（二维默认），或打开 wavefunction_full 分支"
-                         "（S3b 用 ISYM=-1 出全网格波函数）。见 VERIFICATION V22/V23。")
-            lines.append("     补充（V33）：非完整网格的去对称化在**时间反演 x 旋转复合**下有子空间错误"
-                         "（MoS2 实测 100% 的 TRxR 格点错），所以 ISYM=-1 全网格是首选。")
+            lines.append("     ★ 拦截：2D + 真实重叠 + **非完整网格**。真实重叠只有走完整网格的 "
+                         "from_data 才对；非完整网格会触发 AMSET 的去对称化，"
+                         "而它在本体系上会大面积算错。")
+            lines.append("     正确做法：打开 wavefunction_full 分支（S3b 用 ISYM=-1 出全网格 "
+                         "WAVECAR -> S4b 出全网格 wavefunction.h5）。")
+            lines.append("     2026-09-26 量化（tmp/amset2d/DESYM_FINDINGS.md）：逐点真值裁决下 "
+                         "MoS2 只有 38.9% 的 k 点正确，TR（R->-R）路径 5.2%，24 个操作里 15 个全错；"
+                         "同一脚本 Si 对照 97.7%（Si 有反演，TR 被点群吸收、无此类操作）。"
+                         "根因是 TR 分支 tau 被反号两次（symmetry.py:187-188 + common.py:123-124）。")
         elif not complete and not unity_overlap:
             warn = True
             lines.append("     [WARN] 3D + 真实重叠 + 非完整网格 -> AMSET 会对系数去对称化，"

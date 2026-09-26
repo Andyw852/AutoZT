@@ -253,13 +253,67 @@ def dft_fingerprint(incar_vals, potcar, lattice, kpoints, func):
     return "|".join(parts), ks
 
 
-def check_fingerprint(fp_a, ks_a, fp_b, ks_b, kspacing_tol=0.20):
-    """比较两份指纹。返回 (ok, 诊断文本)。k 密度超容差 WARN 不阻断；其余不一致 FAIL。"""
+def kdelta_density(kpoints_path, lattice):
+    """★ 胞不变量：等效 k 点间距 Δk = 2π · max_i(|b_i| / N_i)（Å⁻¹，取最粗方向）。
+
+    ★ 与上面 kspacing_density() 的分工（2026-09-26 修正，务必分清）：
+      kspacing_density = 2π / min_i(N_i·|b_i|) —— **不是胞不变量**：它 ∝ 胞长/N，
+        同一个"等效采样"在 m 倍超胞上会放大 m² 倍；实测 Si 原胞 11×11×11 得 1.803，
+        而它对应 VASPKIT 命令里的 0.030（量纲/标定都对不上 VASPKIT）。
+        ⇒ 只可用于【同一种胞】内部的相对比较；历史指纹字符串沿用旧值，勿改。
+      kdelta_density   = 2π·|b_i|/N_i —— **胞不变量**：m 倍超胞配 N/m 网格，给出与
+        原胞配 N 网格完全相同的 Δk。⇒ 只有它能用来比【原胞参考 vs 超胞帧】。
+    返回 (dk, note)；dk 单位 Å⁻¹，越大 = k 采样越粗。
+    """
+    import math as _m
+    nums = [1, 1, 1]
+    try:
+        p = Path(kpoints_path)
+        if p.is_file():
+            _ln = p.read_text(errors="ignore").splitlines()
+            if len(_ln) >= 4 and _ln[1].strip().startswith("0"):
+                nums = [int(x) for x in _ln[3].split()[:3]]
+    except (ValueError, IndexError, OSError):
+        pass
+    try:
+        import dim_common
+        _inv, _nm = dim_common._inv3, dim_common._norm
+    except Exception:                                    # noqa: BLE001
+        def _inv(m):
+            return [[1, 0, 0], [0, 1, 0], [0, 0, 1]]
+
+        def _nm(v):
+            return (sum(x * x for x in v)) ** 0.5
+    try:
+        _a = _inv(lattice)
+    except Exception:                                    # noqa: BLE001
+        return 0.0, "晶格读数失败"
+    _rec = [_nm([_a[i][j] for j in range(3)]) for i in range(3)]
+    dk = 2.0 * _m.pi * max(_rec[i] / max(nums[i], 1) for i in range(3))
+    return dk, "网格 %d %d %d" % tuple(nums)
+
+
+def check_fingerprint(fp_a, ks_a, fp_b, ks_b, kspacing_tol=0.20, kblock=False):
+    """比较两份指纹。返回 (ok, 诊断文本)。
+
+    k 密度超容差：默认只 WARN（返回 True，兼容旧行为）；
+      kblock=True（= step.conf 的 KSPACING_TOL_BLOCK）时升级为 FAIL（返回 False）。
+    其余指纹键不一致一律 FAIL。
+
+    ★ ks_* 语义（2026-09-26 修正）：请传 kdelta_density() 的【胞不变量】Δk。
+      不要传 kspacing_density()：后者 ∝ 胞长/N，在 m 倍超胞上放大 m² 倍，拿它比
+      【原胞参考 vs 超胞帧】会把本来正确的数据判成不一致。
+    """
     if fp_a == fp_b:
         msg = "指纹一致"
-        if abs(ks_a - ks_b) / max(min(ks_a, ks_b), 1e-12) > kspacing_tol:
-            msg += "；k 点密度 %.3f vs %.3f 1/Å 超容差 %.0f%%（WARN，不阻断）" % (
-                ks_a, ks_b, kspacing_tol * 100)
+        if min(ks_a, ks_b) > 0:
+            _rel = abs(ks_a - ks_b) / max(min(ks_a, ks_b), 1e-12)
+            if _rel > kspacing_tol:
+                msg += ("；k 点间距 Δk %.5f vs %.5f 1/Å 超容差 %.0f%%（%s）"
+                        % (ks_a, ks_b, kspacing_tol * 100,
+                           "FAIL：KSPACING_TOL_BLOCK=on" if kblock else "WARN，不阻断"))
+                if kblock:
+                    return False, msg
         return True, msg
     pa, pb = dict(p.split("=", 1) for p in fp_a.split("|") if "=" in p), \
              dict(p.split("=", 1) for p in fp_b.split("|") if "=" in p)

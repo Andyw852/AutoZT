@@ -68,13 +68,18 @@ def main():
     if dim == "0d":
         sys.exit("[ERROR] 0D 体系不支持。")
 
+    # ★ 2026-09-26 user 要求：KSPACING_TOL_BLOCK=on 时，k 点间距超容差在 dataset_build
+    #   里直接 FAIL（不再只 WARN）。默认 false = 保持旧行为，向后兼容。
+    _kblock = ""
+    if str(cv.get("KSPACING_TOL_BLOCK", False)).strip().lower() in ("1", "true", "yes", "on"):
+        _kblock = "--kspacing-tol-block "
     rc = mc.run_py("dataset_build.py",
                    "--gen %d --outdir %s/gen-%d --dim %s "
                    "--energy-limit %g --force-limit %g --kspacing-tol %g "
-                   "--pre-xyz '%s' --fps-seed 42 "
+                   "%s--pre-xyz '%s' --fps-seed 42 "
                    "--vol-factors '%s' --n-per-cell %d"
                    % (gen, OUTDIR, gen, dim, cv["ENERGY_LIMIT"], cv["FORCE_LIMIT"],
-                      cv["KSPACING_TOL"], cv["PRE_XYZ_FILES"] or "",
+                      cv["KSPACING_TOL"], _kblock, cv["PRE_XYZ_FILES"] or "",
                       cv["VOL_FACTORS"], cv["N_PER_CELL"]),
                    cwd, conf=cv, logname="dataset.log")
     if rc != 0:

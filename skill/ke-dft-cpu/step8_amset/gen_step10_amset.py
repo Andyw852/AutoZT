@@ -98,6 +98,23 @@ REQUIRE_BANDGAP = True
 # patch_interp_factor：AMSET 的收敛判据在**插值后**的网格上，别吃默认值 5。
 #   设 None 则不写这一行（回到 AMSET 默认）。加大前先做收敛测试。
 INTERPOLATION_FACTOR = 10
+# patch_mesh_min（2026-09-26 用户批准）：按**最终插值网格**控制 factor。
+#   官方 AMSET Si 算例 2x2 对照（tmp/amset2d/si_matrix/RESULT.md）结论：
+#   最终插值网格 = f(输入粗网格, factor)，同样 factor=10：
+#     官方 Si（18^3 粗网格 / 195 不可约点）-> 61^3
+#     我们 Si（11^3 粗网格 /  56 不可约点）-> 41^3
+#   所以"factor=10"在不同材料/不同粗网格下**不是同一个采样密度**；
+#   只把 factor 从 10 调到 20 并不能让不同粗网格的材料收敛到同一程度。
+#   MESH_MIN 给出最终网格的**每方向下限**，gen 自动反算满足下限的**最小** factor，
+#   并把最终网格写进日志与 out/interpolation_info.json。
+#   ★ 公式已逐案验证（tmp/amset2d/mesh_formula_check.py，6/6 全对）：
+#       equiv = BoltzTraP2.sphere.get_equivalences(atoms, magmom, nk*factor)
+#       mesh  = 2*max|equiv| + 1        （amset/interpolation/bandstructure.py:104-111）
+#   ★ 代价：网格 ~ 三次方增长，内存/耗时平方级涨（V23：factor=10 + nworkers=24 曾 OOM）。
+#   None = 不干预（沿用 INTERPOLATION_FACTOR，既有行为完全不变）。
+MESH_MIN = None          # 面内每方向下限；建议 100（收敛趋势见 RESULT.md）
+MESH_MIN_KZ = None       # kz 方向下限；3D 一般不需要
+MESH_MIN_FMAX = 60       # 自动选 factor 的上限（防止把节点撑爆）
 # patch_unity_overlap_3d（2026-09-17，VERIFICATION V25）：
 #   显式把 unity_overlap 写进 settings.yaml —— 以前这一行是缺的，AMSET 默认 False
 #   （真实重叠），于是所有走本步的项目都默认用"真实重叠 + 去对称化 h5"这个组合。
@@ -166,6 +183,10 @@ SPEC = {
     "WAVEFUNCTION_FULL": (WAVEFUNCTION_FULL, "bool"),
     # unity_overlap 覆盖（受控对照用）；默认 auto = 现行行为不变。
     "UNITY_OVERLAP": (UNITY_OVERLAP, "str"),
+    # patch_mesh_min：最终插值网格下限（None/0 = 不干预）。见文件头说明。
+    "MESH_MIN": (MESH_MIN, "int"),
+    "MESH_MIN_KZ": (MESH_MIN_KZ, "int"),
+    "MESH_MIN_FMAX": (MESH_MIN_FMAX, "int"),
 }
 # 2D 时给 settings.yaml 写 free_carrier_screening: true
 FREE_CARRIER_SCREENING_2D = True
@@ -1156,6 +1177,67 @@ def _preflight_gate(cwd, out, unity):
         print("[WARN] 重叠路径运行前检查有告警（见上）——不拦截，请人工确认。")
 
 
+def _interp_mesh(structure, nk, factor, magmom=None):
+    """复现 AMSET 的最终插值网格（amset/interpolation/bandstructure.py:104-111）。
+    与 tmp/amset2d/mesh_formula_check.py 一致：官方 Si 61/77/105、我们 Si 41/51/69 全部命中。"""
+    import numpy as np
+    from pymatgen.io.ase import AseAtomsAdaptor
+    from BoltzTraP2 import sphere
+    atoms = AseAtomsAdaptor.get_atoms(structure)
+    equiv = np.vstack(sphere.get_equivalences(atoms, magmom, int(round(nk * factor))))
+    return (2 * np.max(np.abs(equiv), axis=0) + 1).astype(int)
+
+
+def apply_mesh_min(vasprun_path, out):
+    """patch_mesh_min：按最终插值网格下限反算 INTERPOLATION_FACTOR（模块级全局）。
+    返回 (factor, mesh) 或 None。"""
+    global INTERPOLATION_FACTOR
+    lo, lo_z = MESH_MIN, MESH_MIN_KZ
+    if not lo and not lo_z:
+        return None
+    try:
+        import json as _json
+        import numpy as np
+        from pymatgen.io.vasp.outputs import Vasprun
+        vr = Vasprun(str(vasprun_path), parse_dos=False, parse_eigen=False)
+        nk = len(vr.actual_kpoints)
+        st = vr.final_structure
+    except Exception as e:
+        print("[WARN] patch_mesh_min：读不到 vasprun（%s），跳过网格下限" % e)
+        return None
+    need = [int(lo or 0), int(lo or 0), int(lo_z or 0)]
+    f0 = int(INTERPOLATION_FACTOR)
+    f, mesh = f0, _interp_mesh(st, nk, f0)
+    while not all(int(mesh[i]) >= need[i] for i in range(3)) and f < MESH_MIN_FMAX:
+        f = min(int(MESH_MIN_FMAX), int(np.ceil(f * 1.15)) + 1)
+        mesh = _interp_mesh(st, nk, f)
+    okm = all(int(mesh[i]) >= need[i] for i in range(3))
+    info = {"nk": int(nk), "mesh_min": lo, "mesh_min_kz": lo_z,
+            "factor_factory": f0, "factor_used": int(f), "fmax": MESH_MIN_FMAX,
+            "mesh": [int(x) for x in mesh], "satisfied": bool(okm)}
+    try:
+        (out / "interpolation_info.json").write_text(
+            _json.dumps(info, ensure_ascii=False, indent=2))
+    except Exception:
+        pass
+    if int(f) != f0:
+        INTERPOLATION_FACTOR = int(f)
+    if okm:
+        print("[OK] 最终插值网格 %s（factor %d -> %d，下限 %s/%s，nk=%d）"
+              % ("x".join(map(str, mesh)), f0, int(f), lo, lo_z, nk))
+    else:
+        print("[WARN] 达到 MESH_MIN_FMAX=%d 仍未满足网格下限 %s（需要 %s）。\n"
+              "       ★ 处理顺序（2026-09-26 精算，见 tmp/amset2d/si_matrix/RESULT.md）：\n"
+              "         1) 先提高 MESH_MIN_FMAX 并**降低 nworkers** —— 最终网格一样大时，\n"
+              "            AMSET 的插值/拟合成本几乎相同（11^3x155 = 8680 个 equivalence，\n"
+              "            17^3x51 = 8415，几乎相等），所以加 factor 不比加密粗网格贵；\n"
+              "            但**内存是硬约束**（V23：factor=10 + 24 workers 曾 MaxRSS 292 GB 被 OOM）。\n"
+              "         2) 只有在内存也不够时才考虑加密 S3 的 K 间距 —— 那会让 SCF 贵 3~13 倍\n"
+              "            （11^3 + f155 -> 1.0x SCF；17^3 + f51 -> 3.7x；22^3 + f28 -> 8.0x）。"
+              % (MESH_MIN_FMAX, "x".join(map(str, mesh)), need))
+    return int(f), [int(x) for x in mesh]
+
+
 def main():
     _disc_gate()
     cwd = Path.cwd()
@@ -1191,6 +1273,20 @@ def main():
                 print("[..] UNITY_OVERLAP=false（step.conf 覆盖）：强制真实重叠")
             elif _uo != "auto":
                 print("[WARN] UNITY_OVERLAP=%r 不认识（只认 auto/true/false），按 auto 处理" % _uo)
+            # patch_mesh_min：最终插值网格下限（step.conf 覆盖；0/None = 不干预）
+            global MESH_MIN, MESH_MIN_KZ, MESH_MIN_FMAX
+            for _k in ("MESH_MIN", "MESH_MIN_KZ", "MESH_MIN_FMAX"):
+                _v = _p[_k]
+                if _v:
+                    if _k == "MESH_MIN":
+                        MESH_MIN = int(_v)
+                    elif _k == "MESH_MIN_KZ":
+                        MESH_MIN_KZ = int(_v)
+                    else:
+                        MESH_MIN_FMAX = int(_v)
+            if MESH_MIN or MESH_MIN_KZ:
+                print("[..] MESH_MIN=%s MESH_MIN_KZ=%s MESH_MIN_FMAX=%s（step.conf 覆盖）"
+                      % (MESH_MIN, MESH_MIN_KZ, MESH_MIN_FMAX))
         except (KeyError, ValueError, TypeError):
             pass  # step.conf 读不成时保持出厂默认（LAYER_THICKNESS="vdw" / NWORKERS 自动）
 
@@ -1254,6 +1350,8 @@ def main():
     if elastic is None:
         print("[WARN] 没读到弹性常数——step6_elastic 没算完，或手填 MANUAL_ELASTIC。"
               "ACD 声学散射需要它。")
+    # patch_mesh_min：按最终插值网格下限反算 INTERPOLATION_FACTOR（必须在 write_settings 之前）。
+    apply_mesh_min(_vr, out)
     write_settings(out, eps_inf, eps_static, gap, elastic,
                    is_2d=is_2d, c_len=c_len)
     # patch_overlap_preflight（V24/V25.10）：gen 时的配置闸 + 把检查脚本带进运行目录
