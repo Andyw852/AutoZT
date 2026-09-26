@@ -188,8 +188,8 @@ def main():
     if p_method in ("AUTO", ""):
         p_method = "LASSO" if dim == "2d" else "RFE"
         print("[..] PHEASY_FIT_METHOD=auto → %s（DIM=%s）" % (p_method, dim or "?"))
-    if p_method not in ("LASSO", "RFE", "OLS"):
-        sys.exit("[ERROR] PHEASY_FIT_METHOD 只允许 auto / LASSO / RFE / OLS")
+    if p_method not in ("LASSO", "RFE", "OLS", "RFE-OLS-TSQR"):
+        sys.exit("[ERROR] PHEASY_FIT_METHOD 只允许 auto / LASSO / RFE / OLS / RFE-OLS-TSQR")
     p_bin = str(conf["PHEASY_BIN"] or "pheasy").lower()
     if p_bin not in ("pheasy", "pheasy-gpu"):
         sys.exit("[ERROR] PHEASY_BIN 只允许 pheasy / pheasy-gpu")

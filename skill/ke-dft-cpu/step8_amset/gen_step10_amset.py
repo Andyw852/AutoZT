@@ -52,11 +52,17 @@ def _disc_gate():
 
 OUTDIR_NAME = "step8_amset"
 WAVE_DIR    = "step4_wave"
-# patch_wavefunction_full（2026-09-18，V26）：可选改读全网格 h5（step4b_wave_full，
-#   ISYM=-1 写出全部 k 点）。三维"单变量"对照用：h5 与 vasprun 必须同源（都取
-#   step3b/step4b），否则 h5 点数与 vasprun 推出的网格对不上，AMSET 会退回去对称化，
-#   对照就不成立。默认 False = 仍读 step4_wave，行为与以前完全一致。
-WAVEFUNCTION_FULL = False
+# patch_wavefunction_full（2026-09-18 V26；2026-09-26 **用户决定：判据从「维度/单变量对照」改成「有无反演中心」**）：
+#   读**全网格** h5（step4b_wave_full，ISYM=-1），让 AMSET 走 from_data、跳过去对称化。
+#   机制（见 tmp/amset2d/DESYM_FINDINGS.md）：有反演时 −R 已被点群吸收（TR 操作数=0），
+#   去对称化不会走到出错的 TR 分支。实测 Si(有反演, Fd-3m) 97.7% 正确；
+#   **GaAs(F-43m, 24/48 个 TR 操作)、GaN(P6_3mc, 12/24)** 等无反演体系不可信。
+#   ⇒ 无 反演 + 真实重叠：**必须**全网格；有 反演 + 真实重叠：普通 IBZ 即可（省计算量）。
+#   None = auto（由 _apply_inversion_rule() 按结构决定）。
+#   要强制：step.conf 写 WAVEFUNCTION_FULL = true/false（显式优先）。
+#   h5 与 vasprun 必须同源（都取 step3b/step4b），否则点数与网格对不上。
+WAVEFUNCTION_FULL = None
+_WF_EXPLICIT = None
 # patch_unity_overlap_override（2026-09-18，V26）：step.conf 可显式覆盖 unity_overlap，
 #   用于**受控对照**（同一份 settings 只翻这一个开关）：
 #     auto  -> 现行行为（2D 恒 true；3D 不写 = 真实重叠）
@@ -86,6 +92,11 @@ AMSET_CMD   = ('rm -f transport.json; '
 DOPING      = "-1e21:-1e17:5, 1e17:1e21:5"   # n 型 + p 型各 5 点（对数均布）cm^-3
 TEMPERATURES = "100:900:9"            # 100,200,...,900 K，每 100 K 一个点
 SCATTERING  = ["ADP", "IMP", "POP"]   # 形变势声学 + 电离杂质 + 极性光学 "ADP", "IMP", "POP"
+# patch_scattering（2026-09-27，照搬 2D 版 gen_step14 的实现）：step.conf 覆盖散射机制。
+#   逗号/空格分隔，如 SCATTERING = ADP,IMP 用于「只算弹性和电离杂质」的**快速收敛测试**
+#   （用户 D6：耗时的是 POP 这类非弹性散射，收敛测试可以先不算它）；
+#   空串 = 出厂 [ADP, IMP, POP] 行为不变；含不认识机制则整项忽略并告警。
+_ALLOWED_SCATTERING = {"ADP", "IMP", "POP", "PIE"}
 MANUAL_BANDGAP = None                 # None=自动读；或写数值(eV) 覆盖 scissor
 # patch_dielec_assert：介电产物必须通过物理性硬断言，否则直接停步（不静默往下传）。
 #   检查项：eps_inf 存在 / 对角项 >= 1 / 不是单位矩阵（DFPT 初值签名）/
@@ -179,14 +190,16 @@ SPEC = {
     # 静默回默认值，用户在 step.conf 里写了等于没写）。
     # 技能侧的落点是 skill/ke-dft-cpu/step8_amset/step.conf，不是技能全局 step.conf。
     "NWORKERS": (NWORKERS, "int"),
-    # 全网格 h5 对照（三维裁定）；默认 False，既有三维项目行为不变。
-    "WAVEFUNCTION_FULL": (WAVEFUNCTION_FULL, "bool"),
+    # 全网格 h5 分支：出厂 auto（按有无反演中心自动判断）；可显式 true/false 覆盖。
+    "WAVEFUNCTION_FULL": ("auto", "str"),
     # unity_overlap 覆盖（受控对照用）；默认 auto = 现行行为不变。
     "UNITY_OVERLAP": (UNITY_OVERLAP, "str"),
     # patch_mesh_min：最终插值网格下限（None/0 = 不干预）。见文件头说明。
     "MESH_MIN": (MESH_MIN, "int"),
     "MESH_MIN_KZ": (MESH_MIN_KZ, "int"),
     "MESH_MIN_FMAX": (MESH_MIN_FMAX, "int"),
+    # patch_scattering：散射机制覆盖（空串 = 出厂 [ADP,IMP,POP]）。
+    "SCATTERING": ("", "str"),
 }
 # 2D 时给 settings.yaml 写 free_carrier_screening: true
 FREE_CARRIER_SCREENING_2D = True
@@ -1238,6 +1251,74 @@ def apply_mesh_min(vasprun_path, out):
     return int(f), [int(x) for x in mesh]
 
 
+def _has_inversion(structure):
+    """spglib(经 pymatgen)判断结构是否含反演操作。返回 True/False/None（判不出来）。"""
+    try:
+        import numpy as np
+        from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
+        ds = SpacegroupAnalyzer(structure).get_symmetry_dataset()
+        if not ds:
+            return None
+        return bool(any(np.allclose(np.asarray(R), -np.eye(3), atol=1e-5)
+                        for R in ds["rotations"]))
+    except Exception:
+        return None
+
+
+def _apply_inversion_rule(cwd):
+    """patch_inversion_rule：按有无反演中心决定是否走全网格（详见文件头 WAVEFUNCTION_FULL 处）。
+
+    无 反演 + 真实重叠 -> 必须全网格；有 反演 + 真实重叠 -> 普通 IBZ 即可。
+    unity（本步对 2D 的默认）不需要全网格。
+    step.conf 显式指定 WAVEFUNCTION_FULL 时以显式为准。
+    """
+    global WAVEFUNCTION_FULL
+    _dim = (read_dim(cwd) or "").lower()
+    _2d = (_dim == "2d")
+    _uo_ov = None if UNITY_OVERLAP == "auto" else (UNITY_OVERLAP == "true")
+    if _2d and _uo_ov is None:
+        _val = UNITY_OVERLAP_2D          # 2D 默认 unity（快速筛选）
+    elif _uo_ov is None:
+        _val = False                     # 3D 默认：真实重叠（AMSET 默认 false）
+    else:
+        _val = _uo_ov
+    st = None
+    for _d in STRUCT_CANDS:
+        for _n in ("CONTCAR", "POSCAR"):
+            _p = cwd / _d / _n
+            if _p.is_file():
+                try:
+                    from pymatgen.core import Structure
+                    st = Structure.from_file(str(_p))
+                    break
+                except Exception:
+                    st = None
+        if st is not None:
+            break
+    inv = _has_inversion(st) if st is not None else None
+    if inv is None:
+        if WAVEFUNCTION_FULL is None:
+            WAVEFUNCTION_FULL = False
+            print("[WARN] 反演中心判据：取不到结构或 spglib 失败 —— 沿用旧行为（读 step4_wave）；"
+                  "若该体系无反演中心，请显式写 WAVEFUNCTION_FULL = true")
+        return
+    if _WF_EXPLICIT is not None:
+        WAVEFUNCTION_FULL = _WF_EXPLICIT
+        print("[..] WAVEFUNCTION_FULL 由 step.conf 显式指定 = %s，跳过反演中心自动判断"
+              % _WF_EXPLICIT)
+        return
+    if _val:                      # _val = unity_overlap 的取值：True 表示 unity
+        WAVEFUNCTION_FULL = False
+        print("[..] unity 重叠（快速筛选，仅数量级）-> 不需要全网格")
+    elif inv:
+        WAVEFUNCTION_FULL = False
+        print("[OK] 检出**反演中心** + 真实重叠 -> 普通 IBZ 路径即可（不启用全网格，省计算量）")
+    else:
+        WAVEFUNCTION_FULL = True
+        print("[OK] 检出**无反演中心** + 真实重叠 -> 自动启用 WAVEFUNCTION_FULL"
+              "（全网格 S3b+S4b；需已打开 wavefunction_full 分支）")
+
+
 def main():
     _disc_gate()
     cwd = Path.cwd()
@@ -1258,11 +1339,17 @@ def main():
             # NWORKERS 允许按材料/步骤覆盖；不写（None）= 自动，见下面。
             if _p["NWORKERS"]:
                 _conf_nworkers = int(_p["NWORKERS"])
-            # 全网格 h5（三维单变量对照）：显式开关，默认 False。
-            if _p["WAVEFUNCTION_FULL"]:
-                WAVEFUNCTION_FULL = True
-                print("[..] WAVEFUNCTION_FULL=true：wavefunction.h5 ← step4b_wave_full"
-                      "（全网格，ISYM=-1），vasprun.xml ← step3b_uniform_full")
+            # 全网格 h5：出厂 auto（由 _apply_inversion_rule 按有无反演中心决定）。
+            global _WF_EXPLICIT
+            _wf = str(_p["WAVEFUNCTION_FULL"]).strip().lower()
+            if _wf in ("true", "1", "yes", "on"):
+                _WF_EXPLICIT = True
+                print("[..] WAVEFUNCTION_FULL=true（step.conf 显式）：强制全网格")
+            elif _wf in ("false", "0", "no", "off"):
+                _WF_EXPLICIT = False
+                print("[..] WAVEFUNCTION_FULL=false（step.conf 显式）：读 step4_wave（去对称化）")
+            elif _wf != "auto":
+                print("[WARN] WAVEFUNCTION_FULL=%r 不认识（只认 auto/true/false），按 auto 处理" % _wf)
             # unity_overlap 显式覆盖（受控对照）：auto/true/false
             _uo = str(_p["UNITY_OVERLAP"]).strip().lower()
             if _uo in ("true", "1", "yes", "on"):
@@ -1273,6 +1360,24 @@ def main():
                 print("[..] UNITY_OVERLAP=false（step.conf 覆盖）：强制真实重叠")
             elif _uo != "auto":
                 print("[WARN] UNITY_OVERLAP=%r 不认识（只认 auto/true/false），按 auto 处理" % _uo)
+            # patch_scattering（2026-09-27，照搬 2D 版）：step.conf 覆盖散射机制。
+            #   空串 = 出厂 [ADP,IMP,POP]；含不认识机制则整项忽略并告警。
+            global SCATTERING
+            _sc_raw = _p["SCATTERING"]
+            if isinstance(_sc_raw, (list, tuple)):
+                _sc_list = [str(x).strip().upper() for x in _sc_raw if str(x).strip()]
+            else:
+                _sc = str(_sc_raw or "").strip()
+                _sc_list = ([x.strip().upper() for x in _sc.replace(",", " ").split() if x.strip()]
+                            if _sc else [])
+            if _sc_list:
+                _bad = [x for x in _sc_list if x not in _ALLOWED_SCATTERING]
+                if _bad:
+                    print("[WARN] SCATTERING 含不认识的机制 %s（允许 %s），本项忽略，保持出厂 %s"
+                          % (_bad, sorted(_ALLOWED_SCATTERING), SCATTERING), file=sys.stderr)
+                elif _sc_list != SCATTERING:
+                    print("[OK] SCATTERING = %s（step.conf 覆盖，出厂 %s）" % (_sc_list, SCATTERING))
+                    SCATTERING = _sc_list
             # patch_mesh_min：最终插值网格下限（step.conf 覆盖；0/None = 不干预）
             global MESH_MIN, MESH_MIN_KZ, MESH_MIN_FMAX
             for _k in ("MESH_MIN", "MESH_MIN_KZ", "MESH_MIN_FMAX"):
@@ -1312,6 +1417,8 @@ def main():
                   "载流子输运建立在能带色散和布里渊区积分上，孤立分子两者都没有")
     out = cwd / OUTDIR_NAME
     out.mkdir(exist_ok=True)
+    # patch_inversion_rule：把 WAVEFUNCTION_FULL 从 auto 解析成 True/False（必须在 _wdir 之前）。
+    _apply_inversion_rule(cwd)
     _wdir = "step4b_wave_full" if WAVEFUNCTION_FULL else WAVE_DIR
     link(out, cwd / _wdir / "wavefunction.h5", "wavefunction.h5")
     link(out, cwd / READ_DIR / _pick_deformation_h5(cwd, READ_DIR), "deformation.h5")

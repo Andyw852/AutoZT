@@ -51,7 +51,7 @@ if [ "${FIT_METHOD}" = "RFE" ] || [ "${FIT_METHOD}" = "OLS" ]; then
 else
     NCPU_LOKY=1; NCPU_FIT_BLAS=${NCPU}
 fi
-[[ "${FIT_METHOD}" =~ ^(LASSO|RFE|OLS)$ ]] || { echo "❌ FIT_METHOD 非法: ${FIT_METHOD}"; exit 1; }
+[[ "${FIT_METHOD}" =~ ^(LASSO|RFE|OLS|RFE-OLS-TSQR)$ ]] || { echo "❌ FIT_METHOD 非法: ${FIT_METHOD}"; exit 1; }
 [[ "${ENABLE_FC}" =~ ^[234]$ ]] || { echo "❌ ENABLE_FC 非法: ${ENABLE_FC}"; exit 1; }
 
 # ===== 输入准备：vasprun → FORCES_FC3 → POSCAR/SPOSCAR/dataset_*.npy =====
@@ -99,6 +99,9 @@ elif [ "${FIT_METHOD}" = "OLS" ]; then
     # 不放大，可以保留。
     export PHEASY_OLS_MAXITER=500 PHEASY_OLS_RIDGE=0 PHEASY_OLS_ATOL=1e-6 PHEASY_OLS_BTOL=1e-6
     echo "OLS 启用：两级 matvec, MKL ILP64（内存较高）"
+elif [ "${FIT_METHOD}" = "RFE-OLS-TSQR" ]; then
+    export MKL_INTERFACE_LAYER=ILP64 PHEASY_RFE_MKL=1 PHEASY_USE_RFE_TSQR=1
+    echo "RFE-OLS-TSQR 启用（稀疏 TSQR-OLS，用户 2026-09-26 指定）"
 else
     python -c "from celer import Lasso" 2>/dev/null || { echo "❌ LASSO 需 celer，禁止提交"; exit 1; }
 fi
