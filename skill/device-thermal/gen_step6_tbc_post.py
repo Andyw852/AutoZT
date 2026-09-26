@@ -147,21 +147,29 @@ def temporal_stats(blocks_sel, hot_cids, cold_cids, x0, min_pts=2, min_blocks=3,
 
 
 def read_compute(path):
-    rows = []
+    """读 compute.out（最后两列 = 源/漏恒温器累积传能）。列数不一致直接报错，防错位。"""
+    rows, ncol = [], None
     with open(path, encoding="utf-8", errors="replace") as fh:
         for ln in fh:
             p = ln.split()
-            if len(p) >= 2:
-                try:
-                    rows.append([float(v) for v in p])
-                except ValueError:
-                    pass
+            if len(p) < 2:
+                continue
+            try:
+                vals = [float(v) for v in p]
+            except ValueError:
+                continue
+            if ncol is None:
+                ncol = len(vals)
+            elif len(vals) != ncol:
+                sys.exit("[ERROR] %s 列数不一致：首行 %d 列，本行 %d 列；"
+                         "GPUMD compute 输出列数应固定" % (path, ncol, len(vals)))
+            rows.append(vals)
     return rows
 
 
 def read_profile(path, start_block=0):
     """读逐 bin 温度剖面；start_block 起只平均稳态窗口内的 block（与 q 的时间窗对齐）。"""
-    blocks, cur = [], {}
+    blocks, cur, ncol = [], {}, None
     with open(path, encoding="utf-8", errors="replace") as fh:
         for ln in fh:
             p = ln.split()
@@ -174,6 +182,11 @@ def read_profile(path, start_block=0):
                 t = float(p[3])
             except ValueError:
                 continue
+            if ncol is None:
+                ncol = len(p)
+            elif len(p) != ncol:
+                sys.exit("[ERROR] %s 列数不一致：首行 %d 列，本行 %d 列；"
+                         "按 cid/coord/count/T 固定列序解析" % (path, ncol, len(p)))
             if cid == 0 and cur:
                 blocks.append(cur)
                 cur = {}

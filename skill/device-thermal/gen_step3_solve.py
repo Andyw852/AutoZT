@@ -59,7 +59,7 @@ def main():
         json.dump(summary, f, ensure_ascii=False, indent=2)
     Nx, Ny = summary["Nx"], summary["Ny"]
     # x 坐标由求解器给出（单元中心：(i+0.5)*L/Nx），与 FVM 离散保持一致。
-    x_nm = summary.get("x_nm") or [i * (spec["L_channel_m"] / max(1, Nx - 1)) * 1e9
+    x_nm = summary.get("x_nm") or [(i + 0.5) * (spec["L_channel_m"] / Nx) * 1e9
                                    for i in range(Nx)]
     with open(os.path.join(out, "T_field.json"), "w", encoding="utf-8") as f:
         json.dump({"Nx": Nx, "Ny": Ny, "x_nm": x_nm, "y_nm": summary["y_nm"],

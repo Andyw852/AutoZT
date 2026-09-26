@@ -98,7 +98,7 @@
 - 影响：改它同时改边界温度和取用的 κ。例如上游算了 200/300/400 K，设 350 会取 400 K 那行。
 - 例：`--set params.T_AMB=350`。
 
-**`CONTACT_BC`** · `sink` | `insulator` · 默认 `sink`
+**`CONTACT_BC`** · `sink`(`fixed`/`contact`) | `insulator`(`adiabatic`/`neumann`) · 默认 `sink`
 - `sink`：左右金属接触为恒温（Dirichlet = T_AMB）→ 散热好、ΔT 低，对应良好接触。
 - `insulator`：左右接触绝热（Neumann）→ 热量只能走底部，ΔT 高，是**最坏上限**。
 - 代码里 `sink`/`fixed`/`contact` 判为恒温，`insulator`/`adiabatic`/`neumann` 判为绝热；**其它值直接报错**（防止拼错静默改语义）。
@@ -106,7 +106,7 @@
 
 ### 3.3 物性来源与界面（S2 读）
 
-**`KAPPA_SOURCE`** · `auto` | `upstream` | `literature` · 默认 `auto`
+**`KAPPA_SOURCE`** · `auto` | `upstream`(`dft`) | `literature` · 默认 `auto`
 - `upstream`/`dft`：**必须**用上游 `kl-dft-cpu` 实测 κ（面内 = 0.5(κxx+κyy)，跨面取 κzz）与上游厚度；
   找不到或读不出**直接报错退出**（不静默回退材料库，避免把库值当 DFT 结果引用）。
 - `auto`：优先上游；缺失/读不出才打 warning 回退材料库。
@@ -169,7 +169,7 @@
 
 | 参数 | 默认 | 说明 |
 |---|---|---|
-| `TBC_STRUCTURE` | 无（必填） | 界面结构 extxyz（第二行须含 `Lattice=...`）。放技能目录或该材料的 `project_setting/skill_dir/`，随 S5 的 gen_need 推到 GPU 主机；也可直接给 GPU 主机上的绝对路径。传输轴跨度须 ≥ 20 Å |
+| `TBC_STRUCTURE` | 无（必填） | 界面结构 extxyz（第二行须含 `Lattice=...`）。给 GPU 主机绝对路径，或放材料的 `project_setting/skill_dir/` 并写文件名；**不在 gen_need 里**（缺文件会让 S5 的 gen 直接失败）。传输轴跨度须 ≥ 20 Å |
 | `TBC_NEP_MODEL` | 无（必填） | GPUMD 势文件在 **GPU 主机**上的路径（支持 `~`）。NEP 会自动核对结构元素是否都在势的元素表里 |
 | `TBC_GPUMD_BIN` | 无（必填） | `gpumd` 可执行文件在 GPU 主机上的路径 |
 | `TBC_CUDA_VISIBLE_DEVICES` | 空 | 指定显卡，写进 `run_gpumd.sh`。**强烈建议用 UUID**（3090 的 GPU4 故障会让数字索引错位） |

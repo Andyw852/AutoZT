@@ -34,9 +34,10 @@ GPUMD NEMD 算界面热导 G，再用 TBC_OVERRIDE 回灌器件模型（S2_props
 
 1. 打开可选组（改项目配置，需先请示）：
    `autozt -tt device-thermal -p <材料> conf --set optional.gpu_tbc=true`
-2. 放界面结构：把 extxyz 命名为 `tbc_interface.xyz`，放在**技能目录**
-   `skill/device-thermal/` 或该材料的 `project_setting/skill_dir/`（S5 的 gen_need 会推送到
-   GPU 主机）；也可把 `TBC_STRUCTURE` 直接写成 GPU 主机上的绝对路径。
+2. 放界面结构：把 extxyz 放到该材料的 `project_setting/skill_dir/`（随 project_setting
+   同步到远端），再把 `TBC_STRUCTURE` 写成该文件名；或直接把 `TBC_STRUCTURE` 写成 GPU
+   主机上的绝对路径。**结构文件不在 `gen_need` 里**（属用户数据，不进 per-gen 推送）；
+   缺文件时 S5 会报“找不到界面结构”，而不是含糊的 gen_need 报错。
 3. 设 `TBC_NEP_MODEL / TBC_GPUMD_BIN / TBC_CUDA_VISIBLE_DEVICES`，必要时设
    `TBC_AXIS / TBC_INTERFACE_COORD / TBC_SOURCE|SINK_THICKNESS / TBC_*_STEPS`。
 4. 生成输入：S5_tbc -> `step5_tbc/{model.xyz, potential.txt, run.in, run_gpumd.sh, tbc_inputs.json}`。
@@ -48,7 +49,7 @@ GPUMD NEMD 算界面热导 G，再用 TBC_OVERRIDE 回灌器件模型（S2_props
 
 ```
 potential potential.txt
-velocity 300 seed 20260923        # TBC_SEED=0 时不写 seed
+velocity 300 seed 20260923        # TBC_SEED 默认 20260923；设 0 则不写 seed（不可复现）
 time_step 1
 ensemble nvt_nhc 300 300 100      # 平衡
 dump_thermo 1000
@@ -96,9 +97,11 @@ GPUMD 的 `compute <group> <s> <o> temperature` 会输出各组温度，**并在
 
 1. 先丢掉前 1/3 暂态，再在剩余后缀里挑**最长**的源/漏热流自洽窗口（`TBC_STEADY_TOL` 容差、
    `TBC_MIN_WINDOW_FRAC` 最短占比）；温度剖面只平均窗口内的 block，保证 T(z) 与 q 同窗。
-   dT_i 的统计误差用**时间分块**算（每个时间 block 单独拟合、外推，取各 dT_i 的
-   std/sqrt(N)），不再把空间上高度相关的相邻 bin 当独立样本。可用 block 少于 3 个时
-   误差记 None，调用方必须据此判 `poor`，而不是跳过 `TBC_DT_TOL` 判据。
+   dT_i 的统计误差用**时间分块 + 自相关修正**：compute_chunk 每块约 1 ps，而温度涨落
+   的相关时间有几十 ps，相邻块不独立，直接 std/sqrt(N) 会低估（相关时间 20 块时约 8 倍）。
+   现同时用积分自相关时间（N_eff=N/2tau）与 8~10 个超级块的批均值，取较大者（保守）；
+   不再把空间上高度相关的相邻 bin 当独立样本。可用时间块少于 3 个时误差记 None，
+   调用方必须据此判 `poor`，而不是跳过 `TBC_DT_TOL` 判据。
 2. 对界面两侧体区（各剔除源/漏恒温器区与 `TBC_FIT_MARGIN_A` 余量）线性拟合 T(z)。
 3. dT_i = 两侧外推到界面坐标的温差；**G = q / dT_i**。
 4. 输出 `quality`：`good` 要求源/漏热流自洽、两侧 bin 数够、dT_i>0；否则 `poor`。
@@ -109,8 +112,9 @@ S6 输出 `quality`（good/poor）+ `quality_reasons`，判据：
 
 - `q_consistency`（源/漏热流相对差）≤ `TBC_STEADY_TOL`（默认 0.2）
 - 两侧 bin 数 ≥ `TBC_MIN_BINS`，且 `dT_i > 0`
-- **dT_i 外推相对误差** ≤ `TBC_DT_TOL`（默认 0.3）——由稳态窗口内各时间 block 的
-  dT_i 离散度给出（时间块不足时误差为 None，直接判 poor）
+- **dT_i 相对误差** ≤ `TBC_DT_TOL`（默认 0.3）——由稳态窗口内各时间 block 的 dT_i
+  做**自相关修正**（N_eff=N/2tau）+ 超级块批均值给出，取较大者（时间块不足时误差为
+  None，直接判 poor）
 - **G 对拟合余量的敏感度** max/min ≤ `TBC_MARGIN_TOL`（默认 1.5）——对 1/2/4 A 余量各算一次
 
 局限：

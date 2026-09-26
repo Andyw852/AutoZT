@@ -415,13 +415,16 @@ def test_s5_align_coords():
     approx(new3[0][0], 9.5, 0, "x wrap", atol=1e-12)
     approx(new3[0][1], 1.0, 0, "y wrap", atol=1e-12)
     approx(new3[0][2], 69.0, 0, "z wrap", atol=1e-12)
-    # 非正交盒子（六方晶格）必须报错，不能静默按对角元 wrap
+    # 非正交盒子（六方晶格）：改用分数坐标 wrap，周期轴分数坐标落在 [0,1)
     lat_hex = [3.16, 0.0, 0.0, -1.58, 2.737, 0.0, 0.0, 0.0, 30.0]
-    try:
-        g5.align_coords([(0.0, 0.0, 1.0)], lat_hex, "T T F")
-        ok(False, "非正交盒子应报错")
-    except SystemExit:
-        ok(True, "非正交盒子（六方晶格）报错，不会静默算错")
+    out_hex, isT_hex, _w = g5.align_coords([(3.5, 1.0, 5.0), (0.0, 0.0, -0.2)],
+                                           lat_hex, "T T F")
+    inv = g5._inv3(lat_hex)
+    fr = [g5._row_times_mat3(c, inv) for c in out_hex]
+    ok(isT_hex == [True, True, False], "六方胞 pbc='T T F' 解析正确")
+    ok(all(-1e-9 <= q[0] < 1 + 1e-9 and -1e-9 <= q[1] < 1 + 1e-9 for q in fr),
+       "六方胞按分数坐标 wrap，周期轴分数坐标在 [0,1)")
+    ok(abs(min(c[2] for c in out_hex)) < 1e-9, "非正交胞非周期 z 轴最小 Cartesian 归零")
 
 
 def _write_s5_fixture(d, pbc="T T F", nA=10, nB=10, spacing=2.0):
