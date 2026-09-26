@@ -62,7 +62,7 @@ optional_steps:
     steps:
       - {seq: 5, name: step5_tbc, label: S5_tbc, after: step4_report, hpc: "3090",
          gen: gen_step5_tbc.py, check: marker, run: gen,
-         gen_need: [stepconf.py, step.conf, tbc_interface.xyz],
+         gen_need: [stepconf.py, step.conf],
          marker: 'tbc_inputs.json:"TBC_INPUTS_DONE"', done_marker: tbc_inputs.json}
       - {seq: 6, name: step6_tbc_post, label: S6_tbc_post, after: step5_tbc,
          needs: [step5_tbc], hpc: "3090",
@@ -96,13 +96,13 @@ io_schema:
     - {name: W_DEVICE, default: 1e-6, where: step.conf, desc: "器件宽度 (m)，折算总功率"}
     - {name: Q_JOULE, default: 1e8, where: step.conf, desc: "焦耳功率密度 (W/m^2)"}
     - {name: T_AMB, default: 300.0, where: step.conf, desc: "热沉温度 (K)"}
-    - {name: CONTACT_BC, values: [sink, insulator], default: sink, where: step.conf, desc: "金属接触边界：恒温/绝热"}
-    - {name: KAPPA_SOURCE, values: [auto, upstream, literature], default: auto, where: step.conf, desc: "kappa 取上游实测还是文献库"}
+    - {name: CONTACT_BC, values: [sink, fixed, contact, insulator, adiabatic, neumann], default: sink, where: step.conf, desc: "金属接触边界：恒温(sink/fixed/contact)/绝热(insulator/adiabatic/neumann)"}
+    - {name: KAPPA_SOURCE, values: [auto, upstream, dft, literature], default: auto, where: step.conf, desc: "kappa 取上游实测(dft=upstream)还是文献库"}
     - {name: UPSTREAM_SKILL, values: [kl-dft-cpu, kl-mlff-gpu], default: kl-dft-cpu, where: step.conf, desc: "上游技能目录"}
     - {name: N_GRID_X, default: 41, where: step.conf, desc: "沿沟道网格数"}
     - {name: N_GRID_SUB, default: 60, where: step.conf, desc: "氧化层 y 网格数"}
     - {name: DO_TRANSIENT, values: [true, false], default: true, where: step.conf, desc: "是否算瞬态升温"}
-    - {name: TBC_STRUCTURE, default: "", where: step.conf, desc: "(可选GPU) 界面结构 extxyz 路径（必填）；可放技能目录/project_setting/skill_dir/ 随 gen_need 推送，也可给 GPU 主机绝对路径"}
+    - {name: TBC_STRUCTURE, default: "", where: step.conf, desc: "(可选GPU) 界面结构 extxyz 路径（必填）；给 GPU 主机绝对路径，或放材料的 project_setting/skill_dir/ 并写文件名。不进 gen_need（缺该文件会让 gen 直接失败）"}
     - {name: TBC_NEP_MODEL, default: "", where: step.conf, desc: "(可选GPU) 任意 GPUMD 势文件路径（GPU 主机本地）"}
     - {name: TBC_GPUMD_BIN, default: "", where: step.conf, desc: "(可选GPU) gpumd 可执行文件路径"}
     - {name: TBC_CUDA_VISIBLE_DEVICES, default: "", where: step.conf, desc: "(可选GPU) 指定 GPU（建议用 UUID，避开故障卡）"}
@@ -119,7 +119,7 @@ io_schema:
     - {name: TBC_COUPLE, default: 100.0, where: step.conf, desc: "(可选GPU) 恒温器耦合强度"}
     - {name: TBC_THERMOSTAT, values: [heat_lan, heat_nhc, heat_bdp], default: heat_lan, where: step.conf, desc: "(可选GPU) 源漏恒温器方法"}
     - {name: TBC_TIME_STEP, default: 1.0, where: step.conf, desc: "(可选GPU) 时间步(fs)"}
-    - {name: TBC_SEED, default: 0, where: step.conf, desc: "(可选GPU) 随机种子；0=不固定"}
+    - {name: TBC_SEED, default: 20260923, where: step.conf, desc: "(可选GPU) 随机种子；0=不固定（默认固定以便复现）"}
     - {name: TBC_BIN_WIDTH, default: 2.0, where: step.conf, desc: "(可选GPU) T(z) 剖面 bin 宽(A)"}
     - {name: TBC_EQUIL_STEPS, default: 20000, where: step.conf, desc: "(可选GPU) NVT 平衡步数"}
     - {name: TBC_BURN_STEPS, default: 100000, where: step.conf, desc: "(可选GPU) heat_* 烧入步数（释放初始应变）"}

@@ -51,7 +51,7 @@ SPEC = {
     "TBC_COUPLE": (100.0, "float"),
     "TBC_THERMOSTAT": ("heat_lan", "str"),
     "TBC_TIME_STEP": (1.0, "float"),
-    "TBC_SEED": (0, "int"),
+    "TBC_SEED": (20260923, "int"),
     "TBC_BIN_WIDTH": (2.0, "float"),
     "TBC_EQUIL_STEPS": (20000, "int"),
     "TBC_BURN_STEPS": (100000, "int"),
@@ -191,47 +191,68 @@ def detect_interface(coords, vacuum_gap):
     return 0.5 * (zs[0] + zs[-1])
 
 
+def _inv3(m):
+    """3x3 行主序矩阵求逆（返回行主序逆矩阵）。"""
+    a, b, c, d, e, f, g, h, i = m
+    A = e * i - f * h
+    B = c * h - b * i
+    C = b * f - c * e
+    D = f * g - d * i
+    E = a * i - c * g
+    F = c * d - a * f
+    G = d * h - e * g
+    H = b * g - a * h
+    I = a * e - b * d
+    det = a * A + b * D + c * G
+    if abs(det) < 1e-30:
+        raise SystemExit("[ERROR] 晶格矩阵奇异，无法求分数坐标")
+    return [A / det, B / det, C / det,
+            D / det, E / det, F / det,
+            G / det, H / det, I / det]
+
+
+def _row_times_mat3(v, m):
+    """行向量 v 乘 3x3 行主序矩阵 m（v @ m）。"""
+    x, y, z = v
+    return (x * m[0] + y * m[3] + z * m[6],
+            x * m[1] + y * m[4] + z * m[7],
+            x * m[2] + y * m[5] + z * m[8])
+
+
 def align_coords(pos, lat, pbc):
     """把原子坐标对齐到 compute_chunk 的 bin 坐标系（原点为盒子原点）。
 
-    周期轴：wrap 到 [0, L)。
-    非周期轴：**不取模**。弛豫后的结构在非周期方向常有微小负坐标（如 -0.2 A），
-    取模会把它挪到盒子另一端，既错位又可能被分进错误的源/漏组（真实案例：底层
-    Ge 在 z=-0.2、pbc="T T F"，旧实现把它挪到 z=+69.8 并分进了源组）。这里改为
-    整轴平移，使该轴最小值为 0，保持原子间相对构型不变。
-    仅支持正交盒子（周期轴 wrap 按晶格对角元算）；只要存在周期轴且晶格有非对角分量
-    就报错，避免静默按对角元 wrap 算错。
+    用**分数坐标**做周期 wrap：f = r @ L^-1，周期轴 wrap 到 [0, 1) 再转回笛卡尔，
+    对任意晶格（含六方）都正确。旧实现直接对晶格**对角元**取模，非正交盒子会静默算错。
+    非周期轴**不取模**（弛豫后常有 -0.2 A 这类微小负坐标，取模会把它挪到盒子另一端、
+    还会分错源/漏组），改为在分数空间平移使该轴最小值为 0，保持相对构型。
     返回 (new_pos, per_axis_is_periodic, warn_msgs)。
     """
-    lens = [lat[0], lat[4], lat[8]]
+    L = lat
+    Linv = _inv3(L)
     parts = pbc.split() if pbc else []
     is_T = [(len(parts) == 3 and parts[i].upper() == "T") for i in range(3)]
-    if any(is_T):
-        diag = max(abs(lat[0]), abs(lat[4]), abs(lat[8]), 1e-12)
-        off = max(abs(lat[1]), abs(lat[2]), abs(lat[3]),
-                  abs(lat[5]), abs(lat[6]), abs(lat[7]))
-        if off > 1e-6 * diag:
-            raise SystemExit(
-                "[ERROR] 晶格非正交（非对角分量最大 %.4g A）：周期轴 wrap 只按对角元算，"
-                "非正交盒子会静默算错。请先把结构转换/旋转到正交盒子，或自行 wrap 后把 "
-                "pbc 设为全 F 交给本步只做整体平移。" % off)
-    new = [[float(p[i]) for i in range(3)] for p in pos]
+    fr = [list(_row_times_mat3((float(p[0]), float(p[1]), float(p[2])), Linv))
+          for p in pos]
     for i in range(3):
         if is_T[i]:
-            for q in new:
-                q[i] = q[i] % lens[i]
-    warn = []
+            for q in fr:
+                q[i] = q[i] % 1.0
     for i in range(3):
         if not is_T[i]:
-            mn = min(q[i] for q in new)
-            for q in new:
+            mn = min(q[i] for q in fr)
+            for q in fr:
                 q[i] -= mn
-            mx = max(q[i] for q in new)
-            if lens[i] > 0 and mx > lens[i] + 0.5:
-                warn.append("[warn] %s 轴非周期，平移后跨度 %.2f A > 盒长 %.2f A；"
+    cart = [_row_times_mat3(tuple(q), L) for q in fr]
+    warn = []
+    for i in range(3):
+        if not is_T[i] and abs(L[3 * i + i]) > 0:
+            mx = max(c[i] for c in cart)
+            if mx > abs(L[3 * i + i]) + 0.5:
+                warn.append("[warn] %s 轴非周期，平移后最大坐标 %.2f A > 盒长 %.2f A；"
                             "compute_chunk 的 bin 可能不覆盖全部原子，建议把结构放进盒内"
-                            % ("xyz"[i], mx, lens[i]))
-    return [tuple(q) for q in new], is_T, warn
+                            % ("xyz"[i], mx, abs(L[3 * i + i])))
+    return cart, is_T, warn
 
 
 def main():
@@ -278,7 +299,6 @@ def main():
     pos, _pbc_T, _align_warn = align_coords(pos, lat, pbc)
     for _w in _align_warn:
         print(_w)
-    _lens = [lat[0], lat[4], lat[8]]
     coord = [p[ax] for p in pos]
     cmin, cmax = min(coord), max(coord)
     span = cmax - cmin
