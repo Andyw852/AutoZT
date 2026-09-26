@@ -96,6 +96,35 @@ except ValueError:
 
 ok(P.to_jsonable(np.array([[1.5, 2.5]])) == [[1.5, 2.5]], "to_jsonable")
 
+# ---------------- _doping_marks：numpy 数组 temperatures 的兼容性 ----------------
+# 回归（2026-09-26）：ad.temperatures 是 numpy.ndarray，旧代码直接调 .index() 会
+# 报 AttributeError（ndarray 没有 .index）。这里用 numpy 数组直传，确认不会崩。
+import json as _json
+import tempfile as _tempfile
+_dm_dir = _tempfile.mkdtemp(prefix="doping_marks_test_")
+_doping_arr = np.array([-1.003469e19, 1.003469e19])
+_temps_arr = np.array([300.0])          # numpy 数组（回归点）
+_temps_list = [300.0]                    # list 也应照常工作
+_S_ok = np.array([[-306.7], [331.7]])    # n 型 S<0、p 型 S>0 -> 无误标
+_S_bad = np.array([[306.7], [-331.7]])   # 反号 -> sign_anomaly
+
+# 无 2d_correction.json：只测 S 符号，且 numpy 数组 temperatures 不崩
+_m_ok = P._doping_marks(_dm_dir, _doping_arr, _temps_arr, _S_ok)
+ok(_m_ok == {}, "_doping_marks: numpy temperatures + 正确符号 -> 无标记（不崩）")
+_m_bad = P._doping_marks(_dm_dir, _doping_arr, _temps_list, _S_bad)
+ok(_m_bad.get("0") == ["sign_anomaly"] and _m_bad.get("1") == ["sign_anomaly"],
+   "_doping_marks: list temperatures + 反号 -> sign_anomaly")
+
+# 有 2d_correction.json：高掺杂触发「超出刚带近似」标记
+with open(os.path.join(_dm_dir, "2d_correction.json"), "w", encoding="utf-8") as _f:
+    _json.dump({"areal_density_factor_cm": 3.4879004e-07,
+                "inplane_cell_area_cm2": 8.524118625e-16,
+                "carrier_per_cell_threshold": 0.05}, _f)
+_high = np.array([-1e21, 1e21])
+_m_high = P._doping_marks(_dm_dir, _high, _temps_arr, _S_ok)
+ok(_m_high.get("0") == ["超出刚带近似"] and _m_high.get("1") == ["超出刚带近似"],
+   "_doping_marks: 1e21 每原胞>0.05 -> 超出刚带近似")
+
 # ---------------- 可选：真实 mesh.h5 的 key 解析 ----------------
 try:
     import h5py  # noqa: F401
