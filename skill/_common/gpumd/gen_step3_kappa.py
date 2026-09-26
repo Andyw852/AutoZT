@@ -31,6 +31,12 @@ SPEC = {
     "OUTPUT_INTERVAL": (1000, "int"),
     "DRIVING_FORCE": (0.00001, "float"),
     "CELL_REPLICATE": ("1 1 1", "str"),
+    # --- 可选：MD 之前先在该势的极小点上弛豫（含变胞），解决"DFT 构型不在势极小点" ---
+    "RELAX_ENABLED": (0, "int"),
+    "RELAX_TOL": (0.001, "float"),
+    "RELAX_STEPS": (5000, "int"),
+    "RELAX_BOX_CHANGE": (1, "int"),
+    "RELAX_HYDROSTATIC": (0, "int"),
     "EMD_ENABLED": (True, "bool"),
     "EMD_SAMPLE": (10, "int"),
     "EMD_CORR_STEPS": (100000, "int"),

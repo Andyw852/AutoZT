@@ -28,6 +28,9 @@ SPEC = {
     # --- 微调基座（GPUMD 自带 nep89_20250409；两个文件都要）---
     "PRETRAINED_NEP": ("", "str"),
     "PRETRAINED_RESTART": ("", "str"),
+    # 1 = 只用预训练势、完全不训练：跳过 OUTCAR→xyz 与 nep 训练，
+    #     直接把 PRETRAINED_NEP 落成 nep.txt，并用材料 POSCAR 作 MD 参考结构。
+    "PRETRAINED_ONLY": (0, "int"),
     # --- 架构：微调时**必须**与基座一致（不可改）---
     "NEP_VERSION": (4, "int"),
     "NEP_ZBL": (2, "int"),
@@ -60,17 +63,25 @@ def main():
     out = cwd / OUTDIR
     out.mkdir(exist_ok=True)
     conf = stepconf.load(SPEC, STEP)
-    # 上一步的 POSCAR/参数为缺省（只做兜底，DATA_DIR 等仍以本步 step.conf 为准）
+    # 上一步的参数作兜底：本步 step.conf 未显式设置的键（取值仍等于 SPEC 默认）才继承。
+    # ★ StepConf 是**只读 dict**（没有 setdefault/__setitem__，见 stepconf.py 注释），
+    #   所以这里显式合并——原写法 conf.setdefault(...) 会 AttributeError，从未真正跑过。
     prev = cwd / "step1_struct" / gc.PARAMS_JSON
+    params = dict(conf)
     if prev.is_file():
         base = gc.load_params(cwd / "step1_struct")
-        for k, v in base.items():
-            conf.setdefault(k, v)
-    params = dict(conf)
+        for key, (default, _typ) in SPEC.items():
+            if key in base and default is not None and params.get(key) == default:
+                params[key] = base[key]
     params["ELEMENTS"] = [x for x in str(conf["ELEMENTS"]).split() if x]
     for key in ("CUTOFF", "N_MAX", "BASIS_SIZE", "L_MAX"):
         params[key] = [int(x) for x in str(conf[key]).split()]
     gc.save_params(out, params)
+    if int(conf.get("PRETRAINED_ONLY") or 0):
+        ref = cwd / "step1_struct" / "POSCAR"
+        if not ref.is_file():
+            sys.exit("[ERROR] PRETRAINED_ONLY=1 需要 step1_struct/POSCAR，缺 %s" % ref)
+        shutil.copyfile(str(ref), str(out / "reference_POSCAR"))
     here = Path(__file__).resolve().parent
     for f in ("vasp_to_xyz.py", "nep_train.py", "gpumd_common.py"):
         if not (here / f).is_file():
@@ -85,8 +96,10 @@ def main():
                      "CONDA_ENV": conf["CONDA_ENV"] or gc.DEFAULT_CONDA_ENV,
                      "NEP_CMD": cmd, "LOG": "train.log"})
     stepconf.apply_submit(out / "submit.sh", conf.submit)
-    print("[DONE] %s：submit.sh 就绪（微调基座=%s）"
-          % (OUTDIR, conf["PRETRAINED_NEP"] or "无（从头训练）"))
+    mode = ("仅预训练、不训练" if int(conf.get("PRETRAINED_ONLY") or 0)
+            else ("微调基座=%s" % conf["PRETRAINED_NEP"] if conf["PRETRAINED_NEP"]
+                  else "无（从头训练）"))
+    print("[DONE] %s：submit.sh 就绪（%s）" % (OUTDIR, mode))
 
 
 if __name__ == "__main__":

@@ -25,6 +25,8 @@ SPEC = {
     "CONDA_ENV": (gc.DEFAULT_CONDA_ENV, "str"),
     "DATA_DIR": ("", "str"),
     "DATA_GLOB": ("POSCAR-*/OUTCAR", "str"),
+    # 1 = 必须能找到训练数据（微调 / 从头训练）；0 = 允许没有（PRETRAINED_ONLY=1 路线）。
+    "REQUIRE_TRAINING_DATA": (1, "int"),
     "TRAIN_FRAC": (0.9, "float"),
     "SPLIT_SEED": (20260925, "int"),
     "ELEMENTS": ("Mg C", "str"),
@@ -48,8 +50,12 @@ def main():
     if data_dir:
         n_outcar = len(glob.glob(os.path.join(data_dir, conf["DATA_GLOB"])))
         if n_outcar == 0:
-            sys.exit("[ERROR] %s 下没找到 %s（数据还没从 jzzn 拷过来？）"
-                     % (data_dir, conf["DATA_GLOB"]))
+            if int(conf.get("REQUIRE_TRAINING_DATA", 1) or 0):
+                sys.exit("[ERROR] %s 下没找到 %s（数据还没从 jzzn 拷过来？）"
+                         % (data_dir, conf["DATA_GLOB"]))
+            print("[WARN] %s 下没找到 %s；REQUIRE_TRAINING_DATA=0 继续"
+                  "（PRETRAINED_ONLY 路线不需要训练数据）"
+                  % (data_dir, conf["DATA_GLOB"]))
     for k in ("GPUMD_BIN", "NEP_BIN"):
         if not os.access(conf[k], os.X_OK):
             sys.exit("[ERROR] %s=%s 不存在或不可执行" % (k, conf[k]))

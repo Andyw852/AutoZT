@@ -7,6 +7,7 @@ cutoff/n_max/basis_size/l_max/neuron）必须与基座一致、不可改（GPUMD
 """
 import argparse
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -66,6 +67,18 @@ def main():
     ap.add_argument("--summary-only", action="store_true")
     args = ap.parse_args()
     p = gc.load_params(args.step_dir)
+    if int(p.get("PRETRAINED_ONLY") or 0):
+        # 只用预训练势、完全不训练：直接把基座 .txt 落成 nep.txt。
+        src = p.get("PRETRAINED_NEP") or ""
+        if not src or not os.path.isfile(src):
+            sys.exit("[ERROR] PRETRAINED_ONLY=1 需要存在的 PRETRAINED_NEP，当前=%r" % src)
+        shutil.copyfile(src, str(Path(args.step_dir, "nep.txt")))
+        gc.write_summary(args.step_dir, "nep_summary.json",
+                         dict(NEP_DONE=True, fine_tune=False, pretrained_only=True,
+                              pretrained_nep=src, model="nep.txt",
+                              rmse_energy=None, rmse_force=None, reason=None))
+        print("[nep] PRETRAINED_ONLY：直接把 %s 落成 nep.txt（不训练）" % src)
+        return
     nep_bin = p["NEP_BIN"]
     if not args.summary_only:
         text = build_nep_in(p)
