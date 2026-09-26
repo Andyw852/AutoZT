@@ -75,6 +75,40 @@ STEP_LABEL   = "S3_uniform"
 GGA_MAP = {"pbe": "PE", "pbesol": "PS", "pbe-d3": "PE"}
 
 
+def _kpoint_reduction_factor(poscar):
+    """估计 ISYM=2 下 k 点的约化因子 = 晶格点群阶数（**已含反演**，不再乘 2）。
+
+    纯 numpy（与 ke_common 的"不碰 pymatgen"约定一致）：**数值**枚举所有元素 ∈ {-1,0,1}
+    且 |det|=1 的整数矩阵，统计满足 R·G·Rᵀ = G（G 为度规张量）的个数，即晶格点群阶数。
+    ★ 2026-09-27 用户更正：**不要 ×2**。晶格点群本来就包含反演，而时间反演在 k 空间里的
+    作用恰好等价于反演（k → −k），再乘 2 属重复计数。于是立方晶格约化因子最多 48、
+    六方最多 24（此前乘 2 得到 96/48，把 GaAs 34³ 的不可约点数估成 409，实际约 1000）。
+    本函数数的是**晶格**点群，而晶体的点群只会更低（GaAs 是 Td 24、GaN 是 C6v 12），
+    所以结果仍是**偏宽松的下限**（不可约点数被低估 = 护栏偏松，不会误报）。
+    之所以不用"晶系 if 链"：POSCAR 常是**原胞**设置
+    （Si 的 fcc 原胞是 60/60/60、六方常是 γ=60°），按常规胞约定判会判错。
+    只用于成本护栏的量级估计；判不出来返回 1.0（退化为按总点数判，安全侧）。
+    """
+    try:
+        import itertools
+        import numpy as np
+        lat = kc.read_lattice_matrix(poscar)
+        if lat is None:
+            return 1.0
+        G = np.asarray(lat, float)
+        G = G @ G.T
+        order = 0
+        for flat in itertools.product((-1, 0, 1), repeat=9):
+            R = np.array(flat, dtype=float).reshape(3, 3)
+            if abs(round(np.linalg.det(R))) != 1:
+                continue
+            if np.allclose(R @ G @ R.T, G, atol=1e-3):
+                order += 1
+        return float(order) if order else 1.0
+    except Exception:
+        return 1.0
+
+
 def main():
     global DK_MAX, DK_MAX_2D, DK_MAX_3D, UNIFORM_NMAX, KALIGN_3D
     cwd = Path.cwd()
@@ -210,15 +244,23 @@ def main():
                 sys.exit("[ERROR] step3_uniform 网格退化：第 %d 轴 N_uniform=%d ≤ N_static=%d。"
                          "\n        'uniform 密网格' 必须比静态更密。请调小 DK_MAX_2D/DK_MAX_3D、"
                          "显式设 DK_MAX，或检查静态网格是否过粗。" % (i + 1, _need[i], _st[i]))
-    # ③b 成本护栏：超预算就报错要求显式覆盖，不静默降密
+    # ③b 成本护栏：超预算就报错要求显式覆盖，不静默降密。
+    #   ★ 2026-09-27 用户指出：本步用 **ISYM = 2**，VASP 只算**不可约** k 点，
+    #   直接拿总点数 _tot 去比上限会把成本高估几十倍（GaAs 34^3 总 39304 点，
+    #   但 ISYM=2 下 54 秒就跑完）。所以这里按**不可约点数估计值**判。
+    #   对照：step3b_uniform_full 用 ISYM=-1，必须按**总点数**判（那边不改）。
     _tot = _need[0] * _need[1] * _need[2]
-    if _tot > int(UNIFORM_NMAX):
-        sys.exit("[ERROR] step3_uniform 网格 %dx%dx%d = %d 点，超过 UNIFORM_NMAX=%s。"
+    _red = _kpoint_reduction_factor(cwd / "POSCAR")
+    _ibz = int(_tot / _red) if _red and _red > 1 else _tot
+    if _ibz > int(UNIFORM_NMAX):
+        sys.exit("[ERROR] step3_uniform 网格 %dx%dx%d = %d 点（估计不可约 %d，约化因子 %.1f），"
+                 "超过 UNIFORM_NMAX=%s。"
                  "\n        这是成本护栏：请显式把 UNIFORM_NMAX 调到你确认可承受的值，"
                  "或在项目里覆盖 DK_MAX —— 不要用'跳过加密'绕过。"
-                 % (_need[0], _need[1], _need[2], _tot, UNIFORM_NMAX))
-    print("[OK] 密网格 %dx%dx%d（%d 点，IBZ 会按对称性约化；DK_MAX=%.3f）"
-          % (_need[0], _need[1], _need[2], _tot, _dk))
+                 % (_need[0], _need[1], _need[2], _tot, _ibz, _red or 1.0, UNIFORM_NMAX))
+    print("[OK] 密网格 %dx%dx%d（总 %d 点；按晶格对称性估计不可约约 %d 点，"
+          "约化因子 %.1f；DK_MAX=%.3f）"
+          % (_need[0], _need[1], _need[2], _tot, _ibz, _red or 1.0, _dk))
     # [patch_stale_grid-2026-09-23] 网格变了 -> 归档旧网格产物，使 ck_wavecar 判不通过、重新进队
     _n_arch, _arch_tag = kc.archive_stale_grid(out, _old_mesh, _need)
     if _n_arch:
