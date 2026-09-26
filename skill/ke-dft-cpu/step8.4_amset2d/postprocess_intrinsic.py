@@ -430,10 +430,13 @@ def _doping_marks(run_dir, doping_cm3, temperatures_K, seebeck_inplane_uV_K):
             threshold = d.get("carrier_per_cell_threshold", 0.05)
         except (OSError, ValueError, TypeError):
             pass
-    if 300.0 in temperatures_K:
-        iT = temperatures_K.index(300.0)
-    elif temperatures_K:
-        iT = len(temperatures_K) // 2
+    # temperatures_K 可能是 numpy.ndarray（ad.temperatures 直传）或 list，
+    # 统一转 list 再取索引，避免 ndarray 没有 .index() 报错。
+    t_list = list(np.asarray(temperatures_K, dtype=float))
+    if 300.0 in t_list:
+        iT = t_list.index(300.0)
+    elif t_list:
+        iT = len(t_list) // 2
     else:
         iT = 0
     for i, n3 in enumerate(doping_cm3):
