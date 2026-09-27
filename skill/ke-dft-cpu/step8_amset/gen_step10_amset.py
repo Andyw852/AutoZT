@@ -123,9 +123,18 @@ INTERPOLATION_FACTOR = 10
 #       mesh  = 2*max|equiv| + 1        （amset/interpolation/bandstructure.py:104-111）
 #   ★ 代价：网格 ~ 三次方增长，内存/耗时平方级涨（V23：factor=10 + nworkers=24 曾 OOM）。
 #   None = 不干预（沿用 INTERPOLATION_FACTOR，既有行为完全不变）。
-MESH_MIN = None          # 面内每方向下限；建议 100（收敛趋势见 RESULT.md）
+# ★ 2026-09-27 用户指示：**默认启用最终网格控制**（3D 每方向约 100 个点）。
+MESH_MIN = 100           # 每方向下限（默认启用；None/0 = 不干预）
 MESH_MIN_KZ = None       # kz 方向下限；3D 一般不需要
 MESH_MIN_FMAX = 60       # 自动选 factor 的上限（防止把节点撑爆）
+# ★ 2026-09-27 用户指示：加最终网格的**上限**，超了自动把 factor 降下来。
+#   背景：最终网格 ≈ f(h5 里的 k 点数 × factor)，而**全网格 h5 的 k 点数比 IBZ 大几十倍**
+#   （GaAs：39304 vs 1059），同样 f=10 一个给 361^3 = 4700 万、一个给 109^3 = 130 万。
+#   全网格臂（job 3911732）实测跑满 15:50 后 OOM：
+#     ArrayMemoryError: Unable to allocate 236. GiB (39303, 403392) complex128
+#   有了上限，走全网格时 factor 会自动变小，不会再撑爆内存。
+#   None = 不设上限（回到旧行为）。实现见 apply_mesh_min()。
+MESH_MAX = 200
 # patch_unity_overlap_3d（2026-09-17，VERIFICATION V25）：
 #   显式把 unity_overlap 写进 settings.yaml —— 以前这一行是缺的，AMSET 默认 False
 #   （真实重叠），于是所有走本步的项目都默认用"真实重叠 + 去对称化 h5"这个组合。
@@ -198,6 +207,8 @@ SPEC = {
     "MESH_MIN": (MESH_MIN, "int"),
     "MESH_MIN_KZ": (MESH_MIN_KZ, "int"),
     "MESH_MIN_FMAX": (MESH_MIN_FMAX, "int"),
+    # ★ 2026-09-27：最终网格每方向上限（超了自动降 factor）。None = 不设上限。
+    "MESH_MAX": (MESH_MAX, "int"),
     # patch_scattering：散射机制覆盖（空串 = 出厂 [ADP,IMP,POP]）。
     "SCATTERING": ("", "str"),
 }
@@ -467,6 +478,37 @@ def read_elastic(cwd: Path):
     print("[OK] 弹性常数：来源顺序 %s 已重排为标准 Voigt (XX YY ZZ YZ XZ XY)"
           "——不重排会把面内剪切 C66(XY) 与 C_zxzx 互换" % (" ".join(src),))
     return [[round(v, 3) for v in r] for r in mat]
+
+
+def _warn_small_pbe_gap(cwd, thresh=0.3):
+    """patch_small_gap_warn（2026-09-27 用户指示）：PBE/PBEsol 带隙 < 0.3 eV 时告警
+    "介电常数 ε∞ 与 POP 散射不可靠"。
+
+    原因：DFPT/独立粒子在小带隙下会**系统性高估** ε∞（带隙越小越严重），而 ε∞ 直接进
+    POP 的前因子，ε∞ 高估 -> POP 散射被放大 -> 迁移率偏差。
+    实测 GaAs（2026-09-27）：PBEsol 直接隙 0.4175 eV（实验 1.42 eV），DFPT ε∞=17.96
+    （实验 10.9），导致 POP 迁移率被放大 ~2.70 倍、总迁移率 ~2.45 倍。
+    建议用 HSE + LCALCEPS（有限电场法，支持杂化泛函）重算 ε∞；小胞（如 GaAs 2 原子）代价可接受。
+    只告警、不改任何设置、不拦步。
+    """
+    try:
+        import json as _json
+        _p = cwd / "step2_bandgap" / "step2.2_pbe_plot" / "band_summary.json"
+        if not _p.is_file():
+            return None
+        _g = _json.loads(_p.read_text(encoding="utf-8")).get("gap_eV")
+        _g = None if _g is None else float(_g)
+    except Exception:
+        return None
+    if _g is not None and _g < float(thresh):
+        print("[WARN] ★ PBE/PBEsol 带隙只有 %.4f eV（< %.2f eV）—— **介电常数 eps_inf 与 "
+              "POP 散射不可靠**。\n"
+              "       DFT（DFPT/独立粒子）在小带隙下系统性**高估** eps_inf，而 eps_inf 直接进 POP\n"
+              "       的前因子 -> POP 散射被放大、迁移率偏差。实测 GaAs：PBEsol 直接隙 0.4175 eV\n"
+              "       （实验 1.42），eps_inf=17.96（实验 10.9）-> POP x2.70、总迁移率 x2.45。\n"
+              "       建议：用 HSE + LCALCEPS（有限电场法，支持杂化泛函）重算 eps_inf 再喂 AMSET；\n"
+              "       或在论文里显式标注 eps_inf 的 DFT 口径与偏差。" % (_g, float(thresh)))
+    return _g
 
 
 def read_bandgap(cwd: Path):
@@ -1206,7 +1248,7 @@ def apply_mesh_min(vasprun_path, out):
     返回 (factor, mesh) 或 None。"""
     global INTERPOLATION_FACTOR
     lo, lo_z = MESH_MIN, MESH_MIN_KZ
-    if not lo and not lo_z:
+    if not lo and not lo_z and not MESH_MAX:
         return None
     try:
         import json as _json
@@ -1221,13 +1263,27 @@ def apply_mesh_min(vasprun_path, out):
     need = [int(lo or 0), int(lo or 0), int(lo_z or 0)]
     f0 = int(INTERPOLATION_FACTOR)
     f, mesh = f0, _interp_mesh(st, nk, f0)
+    # ★ 先处理上限：网格超 MESH_MAX 就把 factor 降下来。
+    #   全网格 h5 的 k 点数大，同样 factor 会给更大的网格；不降就可能 OOM
+    #   （实测 GaAs 全网格 f=10 -> 361^3 = 4700 万点，跑满 15:50 后要 236 GiB 失败）。
+    #   利用 mesh ∝ (nk*f)^(1/3)：目标 nkpt = nk*f*(cap/mesh_max)^3，再取整、至少 1。
+    _capped = False
+    if MESH_MAX:
+        _cap = int(MESH_MAX)
+        while max(int(x) for x in mesh) > _cap and f > 1:
+            _ratio = float(_cap) / max(int(x) for x in mesh)
+            _nf = int(np.floor(f * _ratio ** 3))
+            f = max(1, min(_nf, f - 1))
+            mesh = _interp_mesh(st, nk, f)
+            _capped = True
     while not all(int(mesh[i]) >= need[i] for i in range(3)) and f < MESH_MIN_FMAX:
         f = min(int(MESH_MIN_FMAX), int(np.ceil(f * 1.15)) + 1)
         mesh = _interp_mesh(st, nk, f)
     okm = all(int(mesh[i]) >= need[i] for i in range(3))
-    info = {"nk": int(nk), "mesh_min": lo, "mesh_min_kz": lo_z,
+    info = {"nk": int(nk), "mesh_min": lo, "mesh_min_kz": lo_z, "mesh_max": MESH_MAX,
             "factor_factory": f0, "factor_used": int(f), "fmax": MESH_MIN_FMAX,
-            "mesh": [int(x) for x in mesh], "satisfied": bool(okm)}
+            "mesh": [int(x) for x in mesh], "satisfied": bool(okm),
+            "capped": bool(_capped)}
     try:
         (out / "interpolation_info.json").write_text(
             _json.dumps(info, ensure_ascii=False, indent=2))
@@ -1236,8 +1292,9 @@ def apply_mesh_min(vasprun_path, out):
     if int(f) != f0:
         INTERPOLATION_FACTOR = int(f)
     if okm:
-        print("[OK] 最终插值网格 %s（factor %d -> %d，下限 %s/%s，nk=%d）"
-              % ("x".join(map(str, mesh)), f0, int(f), lo, lo_z, nk))
+        print("[OK] 最终插值网格 %s（factor %d -> %d，下限 %s/%s，上限 %s，nk=%d%s）"
+              % ("x".join(map(str, mesh)), f0, int(f), lo, lo_z, MESH_MAX, nk,
+                 "，**因上限自动降 factor**" if _capped else ""))
     else:
         print("[WARN] 达到 MESH_MIN_FMAX=%d 仍未满足网格下限 %s（需要 %s）。\n"
               "       ★ 处理顺序（2026-09-26 精算，见 tmp/amset2d/si_matrix/RESULT.md）：\n"
@@ -1251,18 +1308,39 @@ def apply_mesh_min(vasprun_path, out):
     return int(f), [int(x) for x in mesh]
 
 
-def _has_inversion(structure):
-    """spglib(经 pymatgen)判断结构是否含反演操作。返回 True/False/None（判不出来）。"""
+def _symmetry_flags(structure):
+    """返回 (has_inversion, max_tau)：是否含反演操作、以及**非整数分数平移**的最大绝对值。
+
+    判不出来返回 (None, None)。
+
+    ★ 2026-09-27（用户指示）：去对称化 bug 的**真正触发条件是"存在 τ≠0 的对称操作"**，
+    不是"没有反演中心"。实测（tmp/amset2d/tau_probe.py，spglib）：
+        GaAs  F-43m  24 ops  |tau|max=0.0000  τ≠0 操作 0  -> 去对称化正确（逐带 cos=1.0000）
+        Si    Fd-3m  48 ops  |tau|max=0.2500  τ≠0 操作 24 -> 但有反演，TR 被折叠 -> 正确 97.7%
+        GaN   P6_3mc 12 ops  |tau|max=0.5000  τ≠0 操作 11 -> 无反演 + τ≠0 -> 危险
+        MoS2  P-6m2  12 ops  |tau|max=0.3036  τ≠0 操作 11 -> 同网格真值裁决：坏（逐带 cos 中位 0.16）
+    注意 P-6m2 **本身是简单空间群**（存在让全部 τ=0 的原点），只是所给 slab 的原点不在
+    高对称原子上，于是对称操作带上了分数平移。
+    """
     try:
         import numpy as np
         from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
         ds = SpacegroupAnalyzer(structure).get_symmetry_dataset()
         if not ds:
-            return None
-        return bool(any(np.allclose(np.asarray(R), -np.eye(3), atol=1e-5)
-                        for R in ds["rotations"]))
+            return None, None
+        rots = np.asarray(ds["rotations"], float)
+        taus = np.asarray(ds["translations"], float)
+        inv = bool(any(np.allclose(R, -np.eye(3), atol=1e-5) for R in rots))
+        tn = taus - np.rint(taus)          # 只关心非整数平移（0 与 1 等价）
+        max_tau = float(np.abs(tn).max()) if tn.size else 0.0
+        return inv, max_tau
     except Exception:
-        return None
+        return None, None
+
+
+def _has_inversion(structure):
+    """兼容旧接口：只取反演位。返回 True/False/None。"""
+    return _symmetry_flags(structure)[0]
 
 
 def _apply_inversion_rule(cwd):
@@ -1295,7 +1373,7 @@ def _apply_inversion_rule(cwd):
                     st = None
         if st is not None:
             break
-    inv = _has_inversion(st) if st is not None else None
+    inv, max_tau = _symmetry_flags(st) if st is not None else (None, None)
     if inv is None:
         if WAVEFUNCTION_FULL is None:
             WAVEFUNCTION_FULL = False
@@ -1307,16 +1385,28 @@ def _apply_inversion_rule(cwd):
         print("[..] WAVEFUNCTION_FULL 由 step.conf 显式指定 = %s，跳过反演中心自动判断"
               % _WF_EXPLICIT)
         return
+    _TAU_TOL = 1e-4
+    _tau_nz = (max_tau is not None) and (max_tau > _TAU_TOL)
     if _val:                      # _val = unity_overlap 的取值：True 表示 unity
         WAVEFUNCTION_FULL = False
         print("[..] unity 重叠（快速筛选，仅数量级）-> 不需要全网格")
     elif inv:
         WAVEFUNCTION_FULL = False
         print("[OK] 检出**反演中心** + 真实重叠 -> 普通 IBZ 路径即可（不启用全网格，省计算量）")
+    elif not _tau_nz:
+        # ★ 2026-09-27：无反演中心，但**全部对称操作的分数平移都是 0**
+        #   （简单空间群 + 原点恰在高对称原子上）—— 去对称化 bug 只出在 τ 的处理上，
+        #   τ≡0 时它不可见。GaAs 同网格真值裁决：逐带 cos=1.0000、与全网格数值等同。
+        #   所以这里不必付全网格的代价。
+        WAVEFUNCTION_FULL = False
+        print("[OK] 无反演中心，但全部对称操作 |tau|=0.00（简单空间群）-> 去对称化不受 τ bug "
+              "影响，走普通 IBZ 路径（省一次全网格）")
     else:
         WAVEFUNCTION_FULL = True
-        print("[OK] 检出**无反演中心** + 真实重叠 -> 自动启用 WAVEFUNCTION_FULL"
-              "（全网格 S3b+S4b；需已打开 wavefunction_full 分支）")
+        print("[OK] 检出**无反演中心**且存在 τ≠0 的对称操作（|tau|max=%.4f）-> 自动启用 "
+              "WAVEFUNCTION_FULL（全网格 S3b+S4b；需已打开 wavefunction_full 分支）\n"
+              "      注：若该空间群本身是简单空间群（如 P-6m2），把原点平移到高对称原子"
+              "（如 Mo）上可以让 τ 全变 0、从而免掉全网格（待实测验证）。" % max_tau)
 
 
 def main():
@@ -1378,20 +1468,22 @@ def main():
                 elif _sc_list != SCATTERING:
                     print("[OK] SCATTERING = %s（step.conf 覆盖，出厂 %s）" % (_sc_list, SCATTERING))
                     SCATTERING = _sc_list
-            # patch_mesh_min：最终插值网格下限（step.conf 覆盖；0/None = 不干预）
-            global MESH_MIN, MESH_MIN_KZ, MESH_MIN_FMAX
-            for _k in ("MESH_MIN", "MESH_MIN_KZ", "MESH_MIN_FMAX"):
+            # patch_mesh_min：最终插值网格下限/上限（step.conf 覆盖；0/None = 不干预）
+            global MESH_MIN, MESH_MIN_KZ, MESH_MIN_FMAX, MESH_MAX
+            for _k in ("MESH_MIN", "MESH_MIN_KZ", "MESH_MIN_FMAX", "MESH_MAX"):
                 _v = _p[_k]
                 if _v:
                     if _k == "MESH_MIN":
                         MESH_MIN = int(_v)
                     elif _k == "MESH_MIN_KZ":
                         MESH_MIN_KZ = int(_v)
+                    elif _k == "MESH_MAX":
+                        MESH_MAX = int(_v)
                     else:
                         MESH_MIN_FMAX = int(_v)
-            if MESH_MIN or MESH_MIN_KZ:
-                print("[..] MESH_MIN=%s MESH_MIN_KZ=%s MESH_MIN_FMAX=%s（step.conf 覆盖）"
-                      % (MESH_MIN, MESH_MIN_KZ, MESH_MIN_FMAX))
+            if MESH_MIN or MESH_MIN_KZ or MESH_MAX:
+                print("[..] MESH_MIN=%s MESH_MIN_KZ=%s MESH_MIN_FMAX=%s MESH_MAX=%s（step.conf 覆盖）"
+                      % (MESH_MIN, MESH_MIN_KZ, MESH_MIN_FMAX, MESH_MAX))
         except (KeyError, ValueError, TypeError):
             pass  # step.conf 读不成时保持出厂默认（LAYER_THICKNESS="vdw" / NWORKERS 自动）
 
@@ -1433,6 +1525,7 @@ def main():
     link(out, _vr, "vasprun.xml")
     eps_inf, eps_static = read_dielectric(cwd / DIELECT_DIR)
     gap = read_bandgap(cwd)
+    _warn_small_pbe_gap(cwd)
     elastic = read_elastic(cwd)
     # patch_2d_amset：2D 时重标度弹性常数并记下 c，供面浓度换算
     is_2d, elastic, c_len = apply_2d_corrections(cwd, elastic)

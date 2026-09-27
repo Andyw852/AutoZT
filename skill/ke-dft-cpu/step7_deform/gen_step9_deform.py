@@ -236,7 +236,24 @@ def _reference_kpoints(out, dim, vac_axis, n_sub):
     #   「改动绝不能破坏 3D 的 S7」。A/B 夹具实测：去掉这个 guard 会让
     #   cubic 3D 从 8x8x8 变 24x24x24（DIFF）。所以这里恢复 dim == "2d"。
     #   3D 的 S7 网格维持原行为（vaspkit 原样），不随本次二维修复改变。
-    if DK_MAX and dim == "2d":
+    # ★ [patch_s7_dense_3d] 2026-09-27：3D 的 S7 是否也加密，改为**可选**（默认不变）。
+    #   理由：3D 默认不加密有真实代价 —— Si 的 S7 只有 11^3（vaspkit KSPACING=0.03），
+    #   实际 DK_eff=|b|/11=0.182 = DK_MAX 的 3.6 倍；11^3 Γ 心网格里 X 点与导带谷
+    #   (≈0.85ΓX) 都不在格上 -> deformation.h5 只有 1331 个 k 点，谷点形变势只能取
+    #   最近格点，实测 Si 电子 E1=0.08 eV（应在 ~9 eV 量级）。
+    #   但加密会改变存量 3D 项目的 S7 口径（成本约 27x），所以**必须显式开启**：
+    #   在本步 step.conf 写 DK_MAX_3D = 0.06（或别的值）即对 3D 也走"逐轴
+    #   max(vaspkit, ceil(|b_i|/DK)) + 照抄 step3_uniform 网格"。不写 = 保持原行为。
+    _dk3 = None
+    try:
+        if (out.parent / "step.conf").is_file():
+            _dk3 = stepconf.load({"DK_MAX_3D": (None, "float")}, OUTDIR_NAME,
+                                 str(out.parent), strict=False)["DK_MAX_3D"]
+            _dk3 = None if _dk3 is None else float(_dk3)
+    except (KeyError, ValueError, TypeError):
+        _dk3 = None
+    _dk_use = _dk3 if (dim == "3d" and _dk3) else float(DK_MAX)
+    if DK_MAX and (dim == "2d" or (dim == "3d" and _dk3)):
         import numpy as np
         _ln = (und / "POSCAR").read_text().splitlines()
         _s = float(_ln[1].split()[0])
@@ -258,7 +275,7 @@ def _reference_kpoints(out, dim, vac_axis, n_sub):
             _n.append(1)
         _need = list(_n[:3])
         for i in _axes:
-            _need[i] = max(_n[i], int(np.ceil(_len[i] / float(DK_MAX))))
+            _need[i] = max(_n[i], int(np.ceil(_len[i] / _dk_use)))
         # [KALIGN-2026-09-23] 高对称点对齐：必须与 step3_uniform 同一实现，否则
         #   S3=48×48 vs S7=46×46（CrSe2_hex）→ 形变势网格与波函数网格不一致，
         #   且 K 不在 S7 网格上。只在本 2D 分支调用，3D S7 行为不变（用户硬约束）。
@@ -281,12 +298,12 @@ def _reference_kpoints(out, dim, vac_axis, n_sub):
                       "—— 建议先 rerun step3_uniform，再重生成本步" % "x".join(str(x) for x in _cp))
         else:
             print("[WARN] 找不到 step3_uniform/KPOINTS，S7 面内网格按 DK_MAX=%.3f 自算 %s"
-                  % (float(DK_MAX), "x".join(str(_need[i]) for i in _axes)))
+                  % (_dk_use, "x".join(str(_need[i]) for i in _axes)))
         if _need != _n[:3]:
             print("[WARN] undeformed 网格 %dx%dx%d（笛卡尔间距 %.3f/%.3f Å⁻¹）不满足 "
                   "DK_MAX=%.3f，按轴提到 %dx%dx%d（与 step3_uniform 同口径）"
                   % (_n[0], _n[1], _n[2], _len[0] / _n[0], _len[1] / _n[1],
-                     float(DK_MAX), _need[0], _need[1], _need[2]))
+                     _dk_use, _need[0], _need[1], _need[2]))
             _kpt[3] = "  %d  %d  %d" % (_need[0], _need[1], _need[2])
             (und / "KPOINTS").write_text(
                 "\n".join(_kpt) + "\n", encoding="utf-8", newline="\n")

@@ -57,6 +57,18 @@ UNIFORM_NMAX = 20000
 # ---- [KALIGN-2026-09-23] 3D 高对称点对齐（2D 恒为 6 的倍数，不受此键影响）----
 #   even（默认，立方/四方/菱面体带边常落 L/X 偶数点）| off（不动存量 3D 项目）| 6（六方 3D）
 KALIGN_3D = "even"
+# ---- [patch_align_origin] 2026-09-27 用户指示（依据 VERIFICATION V109）---------
+#   简单空间群（symmorphic）若所给原点不在高对称位置，对称操作会带上分数平移 τ，
+#   从而触发 AMSET 去对称化的 τ bug：
+#       MoS2 P-6m2  |tau|max=0.3036 -> desym 逐带 cos 中位 0.128 / 0.16（坏）
+#       原点平移到 Mo |tau|max=0.0000 -> desym 逐带 cos 中位 1.0000（精确）
+#   所以这里把 POSCAR 的原点平移到"让全部 τ 变 0"的位置（解 (I-R)s = ±τ 再复核），
+#   之后即可走 IBZ、**免掉一次全网格**。只有真正的非简单空间群
+#   （P6_3mc、Fd-3m、Pnma 等解不出来的）才仍需全网格。
+#   放在 S3 是因为 S4/S8 都从 S3 接力（S8 的 STRUCT_CANDS 第一个就是 step3_uniform），
+#   天然同口径；物理量（能量/能带/形变势）不受影响，变的是系数的 G 相位。
+#   1 = 自动（默认）| 0 = 关闭（存量项目想保持原样时用）。
+ALIGN_ORIGIN = 1
 SPEC = {"VACUUM_KZ_MIN": (VACUUM_KZ_MIN, "int"),
         # 密网格判据与成本护栏也可由 step.conf 覆盖（小胞/大 |b| 体系要放宽 DK_MAX）：
         #   DK_MAX = None -> 按维度取 DK_MAX_2D / DK_MAX_3D
@@ -64,7 +76,8 @@ SPEC = {"VACUUM_KZ_MIN": (VACUUM_KZ_MIN, "int"),
         "DK_MAX_2D": (DK_MAX_2D, "str"),
         "DK_MAX_3D": (DK_MAX_3D, "str"),
         "UNIFORM_NMAX": (UNIFORM_NMAX, "int"),
-        "KALIGN_3D": (KALIGN_3D, "str")}
+        "KALIGN_3D": (KALIGN_3D, "str"),
+        "ALIGN_ORIGIN": (ALIGN_ORIGIN, "int")}
 FUNC         = "inherit"              # patch_ke_dag: inherit=继承 step1
                                       # 也可写死 pbe | pbesol | pbe-d3
 MANUAL_ENCUT = None                   # None=从 POTCAR 自动；或写数值
@@ -110,7 +123,7 @@ def _kpoint_reduction_factor(poscar):
 
 
 def main():
-    global DK_MAX, DK_MAX_2D, DK_MAX_3D, UNIFORM_NMAX, KALIGN_3D
+    global DK_MAX, DK_MAX_2D, DK_MAX_3D, UNIFORM_NMAX, KALIGN_3D, ALIGN_ORIGIN
     cwd = Path.cwd()
     out = cwd / OUTDIR_NAME
     out.mkdir(exist_ok=True)
@@ -119,6 +132,16 @@ def main():
     if prev is None:
         sys.exit("[ERROR] 找不到含 CONTCAR 的上一步目录：%s" % PREV_CANDS)
     kc.relay_poscar(prev / "CONTCAR", out / "POSCAR", "step1_opt")
+    if ALIGN_ORIGIN:
+        _ao = kc.align_origin(out / "POSCAR")
+        if _ao is None:
+            print("[..] patch_align_origin：不需要（|tau| 已为 0）或判不出来，结构未改动")
+        elif _ao[1] is None:
+            print("[WARN] patch_align_origin：存在 τ≠0（|tau|max=%.4f）但**找不到让 τ 全为 0 "
+                  "的原点**（多半是非简单空间群）-> 结构未改动；该体系仍需走全网格。" % _ao[0])
+        else:
+            print("[OK] patch_align_origin：|tau|max %.4f -> %.4f（平移 %s）—— 去对称化的 τ bug "
+                  "不再触发，可走 IBZ 免掉一次全网格。" % (_ao[0], _ao[1], _ao[2]))
     _func, _subs = kc.resolve_func(prev, FUNC, OUTDIR_NAME)
 
     dim = kc.read_method_dim(prev / kc.METHOD_FILE)
@@ -160,6 +183,7 @@ def main():
             DK_MAX_3D = _conf["DK_MAX_3D"]
             UNIFORM_NMAX = _conf["UNIFORM_NMAX"]
             KALIGN_3D = _conf["KALIGN_3D"]
+            ALIGN_ORIGIN = int(_conf["ALIGN_ORIGIN"])
         except (KeyError, ValueError, TypeError):
             pass
     if dim == "2d" and _kzmin > 1:

@@ -374,6 +374,80 @@ def relay_poscar(prev_contcar: Path, dst_poscar: Path, label="上一步"):
     print("[OK] POSCAR ← %s" % prev_contcar)
 
 
+def _sym_ops_max_tau(structure, atol=1e-4):
+    """spglib 取 (rotations, translations)，返回 (max|tau|, rots, taus)；取不到返回 (None,None,None)。"""
+    try:
+        import numpy as np
+        import spglib
+        ds = spglib.get_symmetry_dataset(
+            (structure.lattice.matrix, structure.frac_coords, [x.Z for x in structure.species]),
+            symprec=atol)
+        if ds is None:
+            return None, None, None
+        g = (lambda k: ds[k]) if isinstance(ds, dict) else (lambda k: getattr(ds, k))
+        rots = np.asarray(g("rotations"), float)
+        taus = np.asarray(g("translations"), float)
+        tn = taus - np.rint(taus)
+        return (float(np.abs(tn).max()) if tn.size else 0.0), rots, tn
+    except Exception:
+        return None, None, None
+
+
+def align_origin(poscar, atol=1e-4):
+    """把晶体原点平移到"让全部对称操作的分数平移 tau 都变 0"的位置。
+
+    ★ 2026-09-27 用户指示，依据 VERIFICATION V109：
+    AMSET 的去对称化 bug 只出在**分数平移 tau** 的处理上。简单空间群若所给原点不在
+    高对称位置，symmetry ops 就带上分数平移，bug 触发：
+        MoS2 P-6m2  |tau|max=0.3036 -> desym 逐带 cos 中位 0.128 / 0.16（坏）
+        原点平移到 Mo  |tau|max=0.0000 -> desym 逐带 cos 中位 1.0000（精确）
+    于是**只有真正的非简单空间群**（如 Pnma 的 SnSe）才必须走全网格。
+
+    做法：spglib 取 (R, tau)，解最小二乘 (I-R)s = ±tau 得候选平移量，再**逐候选复核**
+    （平移后重跑 spglib，要求 |tau|max < atol）；只有复核通过才改写 POSCAR。
+    任何异常或复核失败都**原样不动**（安全侧）。
+
+    ⚠ 物理量（能量/能带/形变势）不受影响；变的是平面波系数的 G 相位，因此
+    **整条链必须同口径** —— 放在 S3 改 POSCAR，S4/S8 都从 S3 接力，天然一致，
+    且 S8 的 STRUCT_CANDS 第一个就是 step3_uniform。
+
+    Returns:
+        (max_tau_before, max_tau_after, shift) —— 未平移返回 None。
+    """
+    try:
+        import numpy as np
+        from pymatgen.core import Structure
+        from pymatgen.io.vasp.inputs import Poscar
+        if not Path(poscar).is_file():
+            return None
+        st = Structure.from_file(str(poscar))
+        before, rots, taus = _sym_ops_max_tau(st, atol)
+        if before is None or before < atol or rots is None:
+            return None                      # 不需要平移（或判不出来 -> 不动）
+        # 候选：最小二乘解 (I-R)s = ±tau，以及"最重原子搬到原点"
+        cands = []
+        A = np.vstack([np.eye(3) - R for R in rots])
+        for sgn in (+1.0, -1.0):
+            b = np.concatenate([sgn * t for t in taus])
+            try:
+                s, *_ = np.linalg.lstsq(A, b, rcond=None)
+                cands.append(-s)
+            except Exception:
+                pass
+        _zs = [x.Z for x in st.species]
+        cands.append(np.asarray(st.frac_coords[int(np.argmax(_zs))], float))
+        for cand in cands:
+            st2 = st.copy()
+            st2.translate_sites(range(len(st2)), -cand, frac_coords=True, to_unit_cell=True)
+            after, _, _ = _sym_ops_max_tau(st2, atol)
+            if after is not None and after < atol:
+                Poscar(st2, sort_structure=False).write_file(str(poscar))
+                return (before, after, [round(float(x), 6) for x in cand])
+        return (before, None, None)          # 复核失败
+    except Exception:
+        return None
+
+
 def find_prev_dir(cwd: Path, candidates):
     """按顺序找第一个存在且有 CONTCAR 的目录名。"""
     for name in candidates:
