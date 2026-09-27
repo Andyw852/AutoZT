@@ -28,11 +28,7 @@ _SECTION = re.compile(r"^\[([A-Za-z0-9_.\-]+)\]$")
 # 驱动层保留键：写在 [params] 里、供 tf 决定步骤图（如 BANDGAP=pbe|hse 增删
 # 整段 HSE），gen 脚本本身不消费。校验白名单时无条件放行，避免各 gen 脚本
 # 都误报"不认识的键"。新增工作流级开关往这里加即可。
-#   FUNC：技能共用 templates/step.conf 提供（每个步骤的合并 conf 里都有），但画图类
-#     步骤（step5_phonon_plot）的 SPEC 不需要它 —— 缺这一项会让 stepconf.load 抛
-#     "不认识的键 FUNC"，S5.1_plot 的 gen 永远失败（2026-09-27 实测 Si_ovs20_hh）。
-RESERVED_PARAMS = frozenset({"BANDGAP", "FUNC", "CONDA_SH", "CONDA_ENV", "MACE_MODEL_DIR",
-                             "AMSET_ENV", "POTCAR_DIR", "REFERENCES_DIR"})
+RESERVED_PARAMS = frozenset({"BANDGAP", "CONDA_SH", "CONDA_ENV", "MACE_MODEL_DIR", "AMSET_ENV", "POTCAR_DIR", "REFERENCES_DIR"})
 
 
 def _strip(line):

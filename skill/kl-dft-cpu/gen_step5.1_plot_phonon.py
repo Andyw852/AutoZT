@@ -88,7 +88,10 @@ def _write_submit(outdir):
             _cwd = os.getcwd()
             os.chdir(str(_cp.parent))       # stepconf.load 读的是 ./step.conf
             try:
-                conf = stepconf.load(PLOT_SPEC, STEP)
+                # strict=False：材料级 step.conf 是全技能共用的一份（含 FUNC 等别的
+                #   步骤的键），只认 PLOT_SPEC 这几个键的脚本必须放宽，否则
+                #   stepconf.load 抛"不认识的键 FUNC"（2026-09-27 实测 S5.1_plot 永远失败）。
+                conf = stepconf.load(PLOT_SPEC, STEP, strict=False)
             finally:
                 os.chdir(_cwd)
             print("[..] step.conf ← %s" % _cp)
