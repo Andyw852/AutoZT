@@ -129,6 +129,20 @@ def _write_submit(outdir):
     for k, v in subs.items():
         text = text.replace("{{%s}}" % k, str(v))
     (outdir / "submit.sh").write_text(text, encoding="utf-8", newline=NL)
+    # ★ 2026-09-27：把 step.conf 的 [submit] 段（partition / qos / cpus_per_task / time …）
+    #   覆盖到渲染结果上。原来这一步**从不调用** apply_submit —— 于是集群/项目给的 qos 与
+    #   分区永远不生效，渲染出来恒是模板里写死的 cpu192/regular；在 hanhai25 上
+    #   sbatch 直接报 "invalid partition specified: cpu192"（实测 Si_ovs20_hh）。
+    #   与 S5_fc/S6_kappa 的 gen 保持同一套出口。
+    _sub = getattr(conf, "submit", None)
+    if _sub:
+        try:
+            import stepconf
+            _ch = stepconf.apply_submit(outdir / "submit.sh", _sub)
+            if _ch:
+                print("[..] [submit] 覆盖 → %s" % ", ".join(_ch))
+        except BaseException as e:      # noqa: BLE001
+            print("[WARN] apply_submit 失败（submit.sh 里的集群默认值可能不适用）：%s" % e)
     print("[OK] submit.sh 已写出（%s 核, qos=%s）→ 由 autozt 提交到计算节点"
           % (subs["NTASKS"], subs["QOS"]))
 
