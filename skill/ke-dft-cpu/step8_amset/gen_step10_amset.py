@@ -168,6 +168,12 @@ UNITY_OVERLAP_2D = True
 #     自动模式会跟着走，不用再手动同步两个数。
 NWORKERS = None
 NWORKERS_FALLBACK = 24      # 提交模板里读不到 SLURM 分配（--ntasks/--cpus）时的兜底
+# ★ 2026-09-27 用户指示：NWORKERS 的出厂默认值改成 **4**，不再"自动按分配核数"。
+#   实测（Si 输入、官方 doping、f=10、117³，只变 nworkers）：
+#     nw = 1/2/8/12/16/23 -> ADP 1394.48（逐位相同）
+#     nw = 24（= jzzn 模板 --ntasks-per-node，恰好等于节点核数）-> 曾报 1610.6（+15.5%）
+#   在查清之前统一用验证过的 4。要按分配核数请显式在 step.conf 写 NWORKERS = <int>。
+NWORKERS_DEFAULT = 4
 # --- 弹性常数来源（amset run 的 ACD 散射需要）---
 #   MANUAL_ELASTIC 填了就用它，否则从 ELASTIC_DIR/OUTCAR 自动解析（kBar→GPa）。
 #   直接填：单个数（各向同性近似，GPa），或 6x6 列表（完整 Cij，GPa）。
@@ -480,14 +486,16 @@ def read_elastic(cwd: Path):
     return [[round(v, 3) for v in r] for r in mat]
 
 
-def _warn_small_pbe_gap(cwd, thresh=0.3):
+def _warn_small_pbe_gap(cwd, thresh=0.5):
     """patch_small_gap_warn（2026-09-27 用户指示）：PBE/PBEsol 带隙 < 0.3 eV 时告警
     "介电常数 ε∞ 与 POP 散射不可靠"。
 
     原因：DFPT/独立粒子在小带隙下会**系统性高估** ε∞（带隙越小越严重），而 ε∞ 直接进
     POP 的前因子，ε∞ 高估 -> POP 散射被放大 -> 迁移率偏差。
     实测 GaAs（2026-09-27）：PBEsol 直接隙 0.4175 eV（实验 1.42 eV），DFPT ε∞=17.96
-    （实验 10.9），导致 POP 迁移率被放大 ~2.70 倍、总迁移率 ~2.45 倍。
+    （实验 10.9）。★ 方向（2026-09-27 用户更正）：Fröhlich 耦合正比于 (1/eps_inf - 1/eps_0)，
+    eps_inf 偏大 ⇒ 耦合变**弱** ⇒ POP 散射变**少** ⇒ μ_POP 与总迁移率被**高估**（约 2.70 / 2.45 倍）；
+    eps_0 偏大还会让 IMP 屏蔽变强、μ_IMP 也偏高。此前写成"被放大/低估"是方向错了。
     建议用 HSE + LCALCEPS（有限电场法，支持杂化泛函）重算 ε∞；小胞（如 GaAs 2 原子）代价可接受。
     只告警、不改任何设置、不拦步。
     """
@@ -500,14 +508,34 @@ def _warn_small_pbe_gap(cwd, thresh=0.3):
         _g = None if _g is None else float(_g)
     except Exception:
         return None
-    if _g is not None and _g < float(thresh):
+    _hse = None
+    try:
+        _ph = cwd / "step2_bandgap" / "step2.3_hse_plot" / "band_summary.json"
+        if _ph.is_file():
+            _h = _json.loads(_ph.read_text(encoding="utf-8")).get("gap_eV")
+            _hse = None if _h is None else float(_h)
+    except Exception:
+        _hse = None
+    # ★ 2026-09-27 用户更正：判据原来是固定的 0.3 eV，对 GaAs（PBE 0.4175 eV）不触发，
+    #   但它恰恰是 eps_inf 出问题的材料。改成 "PBE 带隙 < thresh x HSE 带隙"（thresh=0.5）：
+    #   GaAs 0.4175 对 HSE ≈1.4 只有 30% -> 触发。读不到 HSE 时退回 0.3 eV 绝对阈值。
+    if _hse is not None and _hse > 0 and _g is not None:
+        _bad = _g < float(thresh) * _hse
+        _why = ("%.4f eV = HSE 带隙 %.4f eV 的 %.0f%%（阈值 %.0f%%）"
+                % (_g, _hse, 100.0 * _g / _hse, 100.0 * float(thresh)))
+    else:
+        _bad = _g is not None and _g < 0.3
+        _why = "%.4f eV（< 0.3 eV 绝对阈值；未读到 HSE 带隙）" % (_g or 0.0)
+    if _bad:
         print("[WARN] ★ PBE/PBEsol 带隙只有 %.4f eV（< %.2f eV）—— **介电常数 eps_inf 与 "
               "POP 散射不可靠**。\n"
-              "       DFT（DFPT/独立粒子）在小带隙下系统性**高估** eps_inf，而 eps_inf 直接进 POP\n"
-              "       的前因子 -> POP 散射被放大、迁移率偏差。实测 GaAs：PBEsol 直接隙 0.4175 eV\n"
-              "       （实验 1.42），eps_inf=17.96（实验 10.9）-> POP x2.70、总迁移率 x2.45。\n"
+              "       ★ 方向（2026-09-27 用户更正）：Fröhlich 耦合正比于 (1/eps_inf - 1/eps_0)，\n"
+              "       eps_inf 偏大 -> 耦合变**弱** -> POP 散射变少 -> mu_POP 与总迁移率被**高估**；\n"
+              "       eps_0 偏大还会让 IMP 屏蔽变强、mu_IMP 也偏高。\n"
+              "       实测 GaAs：PBEsol 直接隙 0.4175 eV（HSE/实验 ~1.4），eps_inf=17.96（实验 10.9）\n"
+              "       -> POP 耦合约减到 1/2.7，即 mu_POP 约被**高估** 2.7 倍。\n"
               "       建议：用 HSE + LCALCEPS（有限电场法，支持杂化泛函）重算 eps_inf 再喂 AMSET；\n"
-              "       或在论文里显式标注 eps_inf 的 DFT 口径与偏差。" % (_g, float(thresh)))
+              "       或在论文里显式标注 eps_inf 的 DFT 口径与偏差。" % _why)
     return _g
 
 
@@ -1499,6 +1527,12 @@ def main():
                   % (NWORKERS, _alloc, _src), file=sys.stderr)
         else:
             print("[..] NWORKERS = %d（step.conf 指定）" % NWORKERS)
+    elif NWORKERS_DEFAULT:
+        # ★ 2026-09-27 用户指示：不再自动取"分配核数"（jzzn 上那是 24，正是病态值）。
+        NWORKERS = int(NWORKERS_DEFAULT)
+        print("[OK] NWORKERS = %d（★ 2026-09-27 起的出厂默认值，不再自动取分配核数；"
+              "本次分配 %d 核。要按分配核数请写 step.conf: NWORKERS = %d）"
+              % (NWORKERS, _alloc or -1, _alloc or -1))
     elif _alloc:
         NWORKERS = _alloc
         print("[OK] NWORKERS = %d（自动按提交分配：%s）" % (NWORKERS, _src))

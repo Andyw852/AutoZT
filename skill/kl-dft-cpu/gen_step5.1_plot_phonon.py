@@ -125,7 +125,13 @@ def _write_submit(outdir):
             "QOS": str(conf["SBATCH_QOS"] or "premium"),
             "NTASKS": str(int(conf["PLOT_CORES"] or 16)),
             "CONDA_SH": str(conf["CONDA_SH"]),
-            "CONDA_ENV": str(conf["CONDA_ENV"]),
+            # kl 技能的环境是 atomate2_p_a，【不是】集群级 conda_env（四个集群都把它
+            #   指向 MACE venv：/public/.../venvs/mace_cpu、mace、mace-gpu…）。原来透传
+            #   conf["CONDA_ENV"] 会让作业去 conda activate 一个 venv 路径 →
+            #   "EnvironmentLocationNotFound: Not a conda environment"（实测 hanhai25
+            #   2026-09-27；只是 base 环境恰好有 phono3py 才没炸）。与 S6_kappa 的
+            #   phono3py 分支同一处理；环境名见 skill.yaml 的 requires.conda。
+            "CONDA_ENV": "atomate2_p_a",
             # 作业的 cwd 是【步骤目录】，而本脚本在它的上一级（材料技能目录），
             # 所以必须写绝对路径——否则作业里 "can't open file" 直接失败。
             "PLOT_CMD": "python -u %s --work" % Path(__file__).resolve()}

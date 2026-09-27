@@ -25,6 +25,8 @@ SIGMA   = 0.05
 IBRION  = -1
 NSW     = 0
 ISYM    = 0
+# 偶极修正由 gen 从 S1 的 INCAR 继承（未开 LDIPOL 时就是一行注释）
+{{DIPOLE_LINE}}
 
 LWAVE   = .FALSE.
 LCHARG  = .FALSE.

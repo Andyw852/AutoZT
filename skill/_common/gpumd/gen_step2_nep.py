@@ -77,6 +77,52 @@ def main():
     for key in ("CUTOFF", "N_MAX", "BASIS_SIZE", "L_MAX"):
         params[key] = [int(x) for x in str(conf[key]).split()]
     gc.save_params(out, params)
+    # Optional thermal-refit route: a preceding AutoZT dataset step already merged
+    # the frozen legacy split (46/5) with the labeled thermal pilot (40/10).
+    # Copy those exact files into this job instead of re-splitting OUTCARs.
+    dataset_dir = cwd / "step1_thermal_dataset"
+    dataset_summary = dataset_dir / "dataset_summary.json"
+    use_prebuilt = False
+    if dataset_summary.is_file():
+        ds = gc.read_json(dataset_summary) if hasattr(gc, "read_json") else None
+        if ds is None:
+            import json
+            ds = json.loads(dataset_summary.read_text(encoding="utf-8"))
+        if not ds.get("DATASET_DONE") or not (dataset_dir / "train.xyz").is_file() \
+                or not (dataset_dir / "test.xyz").is_file():
+            sys.exit("[ERROR] step1_thermal_dataset 存在但数据集不完整")
+        shutil.copy2(dataset_dir / "train.xyz", out / "train.xyz")
+        shutil.copy2(dataset_dir / "test.xyz", out / "test.xyz")
+        # The first legacy train frame is the zero-displacement reference used by
+        # the original data split; retain it for the downstream GPUMD MD step.
+        with (out / "train.xyz").open(encoding="utf-8") as fh:
+            first_lines = [fh.readline()]
+            try:
+                nat = int(first_lines[0].strip())
+            except ValueError:
+                sys.exit("[ERROR] train.xyz 首帧原子数行无效")
+            first_lines.extend(fh.readline() for _ in range(nat + 1))
+        if len(first_lines) != nat + 2 or any(not x for x in first_lines):
+            sys.exit("[ERROR] train.xyz 首帧不完整")
+        (out / "structure_reference.xyz").write_text(
+            "".join(first_lines), encoding="utf-8")
+        use_prebuilt = True
+    # AutoZT pushes these project assets into the skill root through gen_need.
+    # Fine-tune requires the matching foundation .txt and .restart side by side.
+    for key in ("PRETRAINED_NEP", "PRETRAINED_RESTART"):
+        value = str(params.get(key) or "").strip()
+        if not value:
+            continue
+        src = Path(value)
+        if not src.is_file() and not src.is_absolute():
+            src = cwd / src
+        if not src.is_file() and not Path(value).is_absolute():
+            src = dataset_dir / Path(value).name
+        if not src.is_file():
+            sys.exit("[ERROR] %s 指向的微调基座文件未推送/不存在：%s" % (key, value))
+        shutil.copy2(src, out / src.name)
+        params[key] = src.name
+    gc.save_params(out, params)
     if int(conf.get("PRETRAINED_ONLY") or 0):
         ref = cwd / "step1_struct" / "POSCAR"
         if not ref.is_file():
@@ -87,8 +133,13 @@ def main():
         if not (here / f).is_file():
             sys.exit("[ERROR] 缺 %s（gen_need 里漏了？）" % f)
         shutil.copyfile(str(here / f), str(out / f))
-    cmd = "python vasp_to_xyz.py --step-dir . --use-virial %d && python nep_train.py --step-dir ."
-    cmd = cmd % int(conf["USE_VIRIAL"] or 0)
+    if use_prebuilt:
+        cmd = "python nep_train.py --step-dir ."
+        # Reference structure for later GPUMD MD is the lowest-energy DFT frame
+        # already placed first in the legacy train.xyz.
+    else:
+        cmd = "python vasp_to_xyz.py --step-dir . --use-virial %d && python nep_train.py --step-dir ."
+        cmd = cmd % int(conf["USE_VIRIAL"] or 0)
     tpl = gc.resolve_submit(here, "submit_nep")
     gc.write_submit(tpl, out / "submit.sh",
                     {"JOBNAME": gc.new_jobname(cwd, "S2nep"),

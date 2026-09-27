@@ -282,7 +282,8 @@ def main():
     # 作业目录少了它会在 import 阶段直接 ModuleNotFoundError。
     # imag_policy.py：kl_fc_backends 模块级 import imag_policy（2026-09-22 虚频判据统一）；
     #   公共池只会把它推到技能目录，作业目录（out）必须显式拷，否则作业 import 阶段就挂。
-    for _dep in ("kl_common.py", "dim_common.py", "za_2d.py", "imag_policy.py"):
+    for _dep in ("kl_common.py", "dim_common.py", "za_2d.py", "imag_policy.py",
+                 "phonon_stability.py"):
         if (here / _dep).is_file():
             shutil.copyfile(here / _dep, out / _dep)
     if engine == "pheasy":

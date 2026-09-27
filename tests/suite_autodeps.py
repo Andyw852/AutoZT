@@ -152,6 +152,7 @@ section("6. ZA 2D 共享模块（三副本合并）")
 # mlff 技能（kl/opt/phonon × cpu/gpu，2026-09-22 第三副本迁移）都要能解析到它，
 # 否则首次上机就是 ModuleNotFoundError（公共池文件没推到生成目录）。
 for _tt, _sd, _step in (("kl-dft-cpu", "skill/kl-dft-cpu", "step5_fc"),
+                        ("phonon-dft-cpu", "skill/phonon-dft-cpu", "step3_phonon"),
                         ("fc-fit", "skill/fc-fit", "step2_phonon_plot"),
                         ("kl-mlff-cpu", "skill/kl-mlff-cpu", "step3_fc"),
                         ("kl-mlff-gpu", "skill/kl-mlff-gpu", "step3_fc"),
@@ -164,6 +165,16 @@ for _tt, _sd, _step in (("kl-dft-cpu", "skill/kl-dft-cpu", "step5_fc"),
     _az = find_asset(CFG, _Tz, _m(), "za_2d.py", _step)
     check("%s/%s 解析到 _common/za_2d.py" % (_tt, _step),
           bool(_az) and "_common" in _az, _az or "None")
+
+# 编排单一真源（2026-09-27）：phonon_stability.py 把「网格/采样/ZA/判定」收成一份，
+# kl-dft-cpu S5_fc 与 phonon-dft-cpu S3_phonon 都必须能解析到它（漏推 = 上机 ModuleNotFoundError）。
+for _tt, _sd, _step in (("kl-dft-cpu", "skill/kl-dft-cpu", "step5_fc"),
+                        ("phonon-dft-cpu", "skill/phonon-dft-cpu", "step3_phonon")):
+    _Tz = {"key": _tt, "skill_dir": _sd, "steps": [{"name": _step}],
+           "template_layout": "per_step"}
+    _ps = find_asset(CFG, _Tz, _m(), "phonon_stability.py", _step)
+    check("%s/%s 解析到 _common/phonon_stability.py" % (_tt, _step),
+          bool(_ps) and "_common" in _ps, _ps or "None")
 
 print()
 if FAILED:

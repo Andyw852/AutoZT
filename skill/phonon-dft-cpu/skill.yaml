@@ -7,7 +7,11 @@
 #               2026-09-27 与 kl-dft-cpu S4_disp 对齐（只保留 2 阶）：
 #               取力精度 FORCE_*、结构对称化审计、结构指纹/幂等隔离、帧间一致性闸、
 #               偶极继承、2D 真空隙/残余应力门禁。
+#   S2_nac     [可选步组 nac，默认开] 原胞 LEPSILON DFPT → ε∞ + Born 有效电荷
+#               给极性绝缘体的 Γ 点 LO-TO 劈裂；金属/无极性/严格 2D 可在项目配置写 nac: false
 #   S3_phonon  phonopy 收力 → fc2 拟合 → 声子谱（band-dft-cpu.yaml + phonon_summary.json）
+#               有 S2_nac 产物则 band-dft-cpu.yaml 含 NAC（LO-TO 劈裂），另留 band_noNAC.yaml 对照；
+#               虚频判据仍用【无 NAC】频率（避免 3D-NAC 方案在 2D 近 Γ 的伪虚频污染门禁）。
 #               虚频判据统一走 skill/_common/imag_policy.py（mesh + 2D band 合并唯一裁判），
 #               2D 增加 ZA 弯曲支二次性检查（za_2d.py）；gen 期做抽帧一致性 + SCF 收敛门禁。
 # =============================================================================
@@ -28,6 +32,7 @@ fetch_files: [POSCAR, CONTCAR, INCAR, KPOINTS, POTCAR, submit.sh, OUTCAR,
               vasprun.xml, workflow_method.txt, kl_params.txt, disp_plan.json,
               phonopy_disp.yaml, band-dft-cpu.yaml, phonon_summary.json,
               scf_steps.json, phonon_fit.log, fc2.hdf5, FORCE_CONSTANTS,
+              BORN, band_noNAC.yaml,
               phonon_band_full.png, phonon_band_lowfreq.png,
               phonon_band_summary.json, band_qpath.txt,
               queue.out, queue.err]
@@ -35,8 +40,11 @@ fetch_files: [POSCAR, CONTCAR, INCAR, KPOINTS, POTCAR, submit.sh, OUTCAR,
 steps:
   - {seq: 1, name: step1_std_opt, label: S1_opt, check: relax_injob,
      gen: gen_step1_std_opt.py, contcar_to_poscar: true,
+     # thickness_2d/vdw_radii（2026-09-27 补齐，对齐 kl-dft-cpu S1）：2D 变胞稳定性判据
+     #   要按【层内口径】换算（tol_cell = 0.4 kbar /(h⊥/d)），relax_common 靠这两个模块
+     #   现算 h⊥/d；缺了只打 WARN 走兜底 —— 正是 kl 修过的 2D 假稳定根因。
      gen_need: [relax_common.py, method_select.py, mol_common.py, incar_0d.tpl, submit_std_0d.tpl, dim_common.py, stepconf.py, step.conf,
-                check_common.py, step1_check_and_resubmit.py,
+                check_common.py, step1_check_and_resubmit.py, thickness_2d.py, vdw_radii.py,
                 incar_2d.tpl, incar_3d.tpl, submit_std_2d.tpl, submit_std_3d.tpl]}
 
   - {seq: 2, name: step2_disp, label: S2_disp, check: outcar, fanout: "disp-*",
@@ -50,7 +58,7 @@ steps:
   - {seq: 3, name: step3_phonon, label: S3_phonon, check: phonon,
      gen: gen_step3_phonon.py, fetch_all: true,
      gen_need: [dim_common.py, stepconf.py, step.conf, kl_common.py,
-                imag_policy.py, za_2d.py,
+                imag_policy.py, za_2d.py, phonon_stability.py,
                 phonon_fit_driver.py, submit_fit.tpl]}
 
 # 绘图步（可选步组 phonon_plot，默认开；登录节点 run: gen，不提交作业）。
@@ -58,6 +66,21 @@ steps:
 #   band-dft-cpu.yaml，出全频段 + 0-10 THz 低频放大两张图 + phonon_band_summary.json）。
 #   2026-09-27 新增：phonon-dft-cpu 原来只写 band-dft-cpu.yaml、没有成图产物。
 optional_steps:
+  # NAC 介电/Born（默认开）：原胞 LEPSILON DFPT，供 S3 的 LO-TO 劈裂。
+  #   金属无 LO-TO、DFPT 介电发散；严格 2D 的 3D-NAC 方案是近似 —— 这两类在项目配置写
+  #   nac: false（autozt 就不再注入本步），S3 自动退回无 NAC 出谱。
+  nac:
+    default: true
+    steps:
+      - {seq: 1.5, name: step2_nac, label: S2_nac, after: step1_std_opt,
+         check: marker, marker: "OUTCAR:MACROSCOPIC STATIC DIELECTRIC TENSOR",
+         gen: gen_step2_nac.py,
+         gen_need: [dim_common.py, stepconf.py, step.conf, kl_common.py,
+                    symmetry_audit.py, check_common.py, step2_check_and_resubmit.py,
+                    incar_2d.tpl, incar_3d.tpl,
+                    submit_std_2d.tpl, submit_std_3d.tpl]}
+
+  # 声子谱绘图步（默认开；登录节点 run: gen，不提交作业）。
   phonon_plot:
     default: true
     steps:
@@ -67,7 +90,7 @@ optional_steps:
 
 io_schema:
   inputs: [{name: POSCAR, from: user, required: true, desc: "材料结构"}]
-  outputs: [{name: phonon_summary.json, step: S3_phonon, type: json, desc: "声子谱与虚频检查"}, {name: CONTCAR, step: S1_opt, type: structure, desc: "优化后结构"}]
+  outputs: [{name: phonon_summary.json, step: S3_phonon, type: json, desc: "声子谱与虚频检查"}, {name: CONTCAR, step: S1_opt, type: structure, desc: "优化后结构"}, {name: BORN, step: S2_nac, type: text, desc: "介电张量 + Born 有效电荷（LO-TO 劈裂）；关掉 nac 步组时没有"}]
   params:
     - {name: SUPERCELL, where: step.conf, desc: "phonopy 位移超胞设置"}
     - {name: FD_DISTANCE, default: 0.01, where: step.conf, desc: "2 阶有限位移幅度(Å)"}
@@ -86,13 +109,18 @@ io_schema:
     - {name: FRAME_GATE, default: "on", where: step.conf, desc: "已有位移帧的同胞同网格一致性硬闸"}
   steps:
     - {step: S1_opt, title: "DFT relax", inputs: [POSCAR], outputs: [CONTCAR], validator: "力收敛"}
+    - {step: S2_nac, title: "NAC / DFPT dielectric", inputs: [CONTCAR], outputs: [BORN], validator: "OUTCAR 含 MACROSCOPIC STATIC DIELECTRIC TENSOR"}
     - {step: S2_disp, title: "Finite displacements", inputs: [CONTCAR], outputs: [phonopy_disp.yaml], validator: "所有位移 OUTCAR 完成"}
     - {step: S3_phonon, title: "Phonon fit", inputs: [phonopy_disp.yaml], outputs: [phonon_summary.json], validator: "phonon check"}
 flow:
   summary: "DFT 结构优化 → 有限位移力 → fc2 拟合与声子谱"
-  stages: [{name: phonon, steps: [S1_opt, S2_disp, S3_phonon], produces: [phonon_summary.json]}]
+  stages: [{name: reference, steps: [S2_nac], produces: [BORN], desc: "可选步组 nac（默认开）：DFPT 介电/Born，供 LO-TO 劈裂"}, {name: phonon, steps: [S1_opt, S2_disp, S3_phonon], produces: [phonon_summary.json]}]
 corrections: [node_fail, dir_missing]
 requires:
-  python: [phonopy, numpy, spglib]
+  # seekpath：3D 的 ph.auto_band_structure 需要它生成高对称路径；
+  # matplotlib：绘图步 phonon_band_plot（plot_phonon_band.py）需要；
+  # ase：2D 的 thickness_2d 层内口径换算需要。
+  python: [phonopy, numpy, spglib, seekpath, matplotlib, ase]
   conda: atomate2_p_a
-  exe: [vasp_std, vaspkit, phonopy]
+  # phonopy-vasp-born：从 S2_nac 的 vasprun.xml 生成 BORN（S3 作业里调用）。
+  exe: [vasp_std, vaspkit, phonopy, phonopy-vasp-born]

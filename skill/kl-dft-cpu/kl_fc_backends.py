@@ -59,6 +59,7 @@ from za_2d import (ZA_P_RANGE, ZA_ZFRAC_MIN, ZA_MARGIN_MIN, ZA_R2_MIN,
                    clone_phonopy as _clone_phonopy)
 # 虚频判据唯一真源（2026-09-22）：S5 是唯一裁判，其余位置只读它的结论。
 import imag_policy
+import phonon_stability  # 公共池：网格/采样/ZA/判定编排唯一真源（2026-09-27）
 
 
 # ==========================================================================
@@ -700,185 +701,10 @@ def _parse_min_freq(band_yaml):
 
 
 def _za_check(cfg, ph, cart_vac_axis, is2d):
-    """P2-2：2D 的 ZA 二次性闸门。返回写进 phonon_summary.json 的 dict（3D → None）。
-
-    ★ 与 skill/fc-fit/fc_plot_phonon.py 的 _za_summary 同一套判据（同一 bug 的两份
-    副本，见文件顶部 TODO）：
-      * vac 轴映射：Cartesian 真空轴先映射成 原胞基矢 下标（_vacuum_axis_in_primitive），
-        否则生产原胞（真空在第 0 基矢）会量到"真空方向 + Γ-M"；
-      * 面内第二方向：非正交原胞用 _k_sum_sign 取 e_i + s*e_j，否则 60° 生产原胞给出
-        两个 Γ-M；
-      * ZA 支识别：本征矢量面外占比 >= ZA_ZFRAC_MIN 的"最低频支"（旧代码取全局最低支）；
-      * 质量字段：za_r2_* / za_log_resid_rms_* / za_margin_* / za_needs_review / 支号 /
-        面外占比 / 混合说明；旧最低支结果并列保留但不作为判据；
-      * 对称性审计：symprec 1e-5 与 1e-4 空间群不一致时，用 1e-4 的克隆做 ZA 拟合，
-        默认构造的 p 记录在 za_exponent_default_qX 供对照。
-    """
-    mode = str(cfg.get("ZA_CHECK", "auto")).strip().lower()
-    if mode in ("off", "false", "0", "no") or (not is2d and mode not in ("on", "true", "1", "yes")):
-        return None
-    p_lo, p_hi = ZA_P_RANGE
-    qmax = float(cfg.get("ZA_QMAX", 0.05))
-    res = {
-        "mode": mode, "qmax": qmax, "p_range": [p_lo, p_hi], "is_2d": bool(is2d),
-        "vacuum_axis_cartesian": (None if cart_vac_axis is None else int(cart_vac_axis)),
-        "vacuum_axis_in_primitive": None,
-        "dirs": [], "p": [], "min_freq": [], "p_lowest": [],
-        "za_r2_q1": None, "za_r2_q2": None,
-        "za_log_resid_rms_q1": None, "za_log_resid_rms_q2": None,
-        "za_margin_q1": None, "za_margin_q2": None,
-        "za_margin_min": ZA_MARGIN_MIN, "za_r2_min": ZA_R2_MIN,
-        "za_needs_review": None,
-        "za_branch_index_q1": None, "za_branch_index_q2": None,
-        "za_zfrac_q1": None, "za_zfrac_q2": None,
-        "za_zfrac_min_q1": None, "za_zfrac_min_q2": None,
-        "za_branch_note_q1": "", "za_branch_note_q2": "",
-        "za_lowest_exponent_q1": None, "za_lowest_exponent_q2": None,
-        "za_lowest_r2_q1": None, "za_lowest_r2_q2": None,
-        "za_lowest_log_resid_rms_q1": None, "za_lowest_log_resid_rms_q2": None,
-        "za_symprec": ZA_SYMPREC_DEFAULT, "za_symprec_relax": ZA_SYMPREC_RELAX,
-        "za_spacegroup_default": None, "za_spacegroup_relax": None,
-        "za_symmetry_relaxed": None,
-        "za_exponent_default_q1": None, "za_exponent_default_q2": None,
-        "ok": False, "note": "",
-    }
-    # ★ 方向 bug 修复：Cartesian 真空轴 → 原胞基矢下标
-    try:
-        ax = _vacuum_axis_in_primitive(ph, cart_vac_axis)
-    except Exception as e:
-        res["error"] = "真空轴 → 原胞基矢映射失败：%s" % e
-        return res
-    res["vacuum_axis_in_primitive"] = int(ax)
-    try:
-        qdirs = _inplane_qdirs(ph, ax)
-    except Exception as e:
-        res["error"] = "面内方向选择失败：%s" % e
-        return res
-    res["dirs"] = [list(d) for d in qdirs]
-
-    # --- 对称性审计（数值微畸变使默认 symprec 低估空间群 → ZA 假线性）---
-    notes = []
-    res["za_spacegroup_default"] = _cell_symmetry(ph, ZA_SYMPREC_DEFAULT)
-    res["za_spacegroup_relax"] = _cell_symmetry(ph, ZA_SYMPREC_RELAX)
-    relaxed = _relaxed_symprec(ph, ZA_SYMPREC_RELAX)
-    ph_za = ph
-    if relaxed is not None:
-        try:
-            ph_za = _clone_phonopy(ph, relaxed)
-            res["za_symprec"] = relaxed
-        except Exception as e:
-            relaxed = None
-            notes.append("无法按 symprec=%.0e 重建 phonopy（%s）" % (ZA_SYMPREC_RELAX, e))
-    res["za_symmetry_relaxed"] = bool(ph_za is not ph)
-    if ph_za is not ph:
-        notes.append(
-            "phonopy 默认 symprec=%.0e 看到 %s，而 symprec=%.0e 看到 %s：原胞只是数值上"
-            "微畸变，ZA 拟合改用放宽容差（默认构造的 p 见 za_exponent_default_q1/q2）"
-            % (ZA_SYMPREC_DEFAULT, res["za_spacegroup_default"],
-               ZA_SYMPREC_RELAX, res["za_spacegroup_relax"]))
-
-    had_nac = getattr(ph, "nac_params", None)
-    tags = ("q1", "q2")
-    ps, wmins, fits = [], [], []
-    try:
-        ph.nac_params = None
-        try:
-            ph_za.nac_params = None
-        except Exception:
-            pass
-        for i, d in enumerate(qdirs):
-            eig = None
-            try:
-                eig = za_power_law_eig(ph_za, qdir=d, qmax=qmax, n=12,
-                                       cart_vac_axis=cart_vac_axis)
-            except Exception as e:
-                notes.append("qdir %s 本征矢量 ZA 拟合失败：%s" % (list(d), e))
-            try:
-                lp, lw, lf = za_power_law(ph_za, qdir=d, qmax=qmax, n=12)
-            except Exception as e:
-                lp, lw, lf = None, None, None
-                notes.append("qdir %s 最低支拟合失败：%s" % (list(d), e))
-            if eig is not None:
-                p, wmin, fit, extra = eig
-                res["za_branch_index_%s" % tags[i]] = extra["branch_index"]
-                res["za_zfrac_%s" % tags[i]] = extra["zfrac_first"]
-                res["za_zfrac_min_%s" % tags[i]] = extra["zfrac_min"]
-                res["za_branch_note_%s" % tags[i]] = extra["note"]
-                if extra["note"]:
-                    notes.append("%s %s" % (tags[i], extra["note"]))
-            else:
-                # 无本征矢量（假 phonopy）→ 退回最低支
-                p, wmin, fit = lp, lw, lf
-            ps.append(p)
-            wmins.append(wmin)
-            fits.append(fit)
-            res["p_lowest"].append(lp)
-            res["za_lowest_exponent_%s" % tags[i]] = lp
-            res["za_lowest_r2_%s" % tags[i]] = lf["r2"] if lf else None
-            res["za_lowest_log_resid_rms_%s" % tags[i]] = (
-                lf["log_resid_rms"] if lf else None)
-            if ph_za is not ph:
-                dflt = None
-                try:
-                    dflt = za_power_law_eig(ph, qdir=d, qmax=qmax, n=12,
-                                            cart_vac_axis=cart_vac_axis)
-                except Exception:
-                    dflt = None
-                res["za_exponent_default_%s" % tags[i]] = (
-                    dflt[0] if dflt is not None else None)
-            if p is None and wmin is not None:
-                notes.append("qdir %s 无正频（omega_min=%.4f THz）" % (list(d), wmin))
-    finally:
-        try:
-            ph.nac_params = had_nac
-        except Exception:
-            pass
-    if ph_za is ph:
-        res["za_exponent_default_q1"] = ps[0]
-        res["za_exponent_default_q2"] = ps[1]
-    res["p"] = list(ps)
-    res["min_freq"] = list(wmins)
-    res["za_r2_q1"], res["za_r2_q2"] = [(f["r2"] if f else None) for f in fits]
-    res["za_log_resid_rms_q1"], res["za_log_resid_rms_q2"] = [
-        (f["log_resid_rms"] if f else None) for f in fits]
-    margins = [None if p is None else float(min(p - p_lo, p_hi - p)) for p in ps]
-    res["za_margin_q1"], res["za_margin_q2"] = margins
-    res["ok"] = bool(all(p is not None and p_lo < p < p_hi for p in ps))
-    pstr = ["%.3f" % p if p is not None else "None" for p in ps]
-    lowstr = ["%.3f" % p if p is not None else "None" for p in res["p_lowest"]]
-
-    # 人工复核提示：p 贴近判据边界、或 log-log 拟合太脏时，粗判 ok 可能骗人
-    review = False
-    if is2d:
-        for tag, p, fit, m in zip(tags, ps, fits, margins):
-            if p is None or m is None:
-                continue
-            if m < ZA_MARGIN_MIN:
-                review = True
-                notes.append("%s p=%.3f 距 [%.1f, %.1f] 判据边界仅 %.3f（< %.2f）"
-                             % (tag, p, p_lo, p_hi, m, ZA_MARGIN_MIN))
-            r2 = fit.get("r2") if fit else None
-            if r2 is not None and r2 < ZA_R2_MIN:
-                review = True
-                notes.append("%s log-log 拟合噪声过大（R2=%.4f < %.2f，log 残差 RMS=%.4f），"
-                             "p 不可信" % (tag, r2, ZA_R2_MIN, fit.get("log_resid_rms")))
-    res["za_needs_review"] = bool(review)
-    if res["ok"]:
-        notes.append("两个面内方向都有 %.1f < p < %.1f" % (p_lo, p_hi))
-    else:
-        notes.append("弯曲支在每个面内方向都不是二次色散")
-    if review:
-        notes.append("建议人工复核，不要仅凭 ok 下结论")
-    if not res["ok"]:
-        notes.append("弯曲支被线性化/有虚频时 2D 的 κ 会整体失真，S6 不启动。先查 pheasy 的 "
-                     "RASR 是否真在 -c 步施加了 BHH"
-                     "（pheasy_c.log 里的 Imposing rotational invariance and equilibrium conditions）、"
-                     "结构是否还有残余面内应力。")
-    res["note"] = ("ZA 指数 p(q1,q2)=%s（新判据=本征矢量面外占比≥%.1f 的最低频支，"
-                   "vac 轴原胞下标=%s/笛卡尔=%s）；旧最低支 p=%s；%s"
-                   % (pstr, ZA_ZFRAC_MIN, res["vacuum_axis_in_primitive"],
-                      res["vacuum_axis_cartesian"], lowstr, "；".join(notes)))
-    return res
+    """P2-2：2D ZA 二次性闸门。**实现已抽到公共池 skill/_common/phonon_stability.py**
+    （2026-09-27，消除 kl / phonon-dft / fc-fit 三份副本）。本函数只保留入口名，
+    行为与旧实现逐字段一致：返回写进 phonon_summary.json 的 dict（3D/关闭 → None）。"""
+    return phonon_stability.za_check(cfg, ph, cart_vac_axis, is2d)
 
 
 def _stability_gate(cfg, out):
@@ -938,16 +764,11 @@ def _stability_gate(cfg, out):
         #   本体系实测 mesh=60.0 → [2,22,22]，面内最近 q 只有 0.105 Å⁻¹，会漏掉近 Γ 的软模
         #   （MoS₂ 的 ZA 软模在 0.133 Å⁻¹：门禁因此报 -6.5e-8，而 S5.1 的路径报 -0.055；
         #   2026-09-22 用 fc2 直接复算查实）。改显式整数网格：真空轴 1、面内 IMAG_MESH_N。
-        mesh = None
-        vax_prim = None
-        if is2d:                      # ★ 3D 绝不能把某轴设成 1（会只采一个 k 点）
-            try:
-                vax_prim = _vacuum_axis_in_primitive(ph, vax)
-                mesh = [IMAG_MESH_N, IMAG_MESH_N, IMAG_MESH_N]
-                mesh[int(vax_prim)] = 1
-            except Exception as _e:
-                print("[WARN] 虚频门禁：真空轴 → 原胞基矢映射失败（%s）" % _e)
-                mesh = None
+        try:
+            mesh, vax_prim = phonon_stability.mesh_numbers(ph, is2d, vax, IMAG_MESH_N)
+        except Exception as _e:
+            print("[WARN] 虚频门禁：真空轴 → 原胞基矢映射失败（%s）" % _e)
+            mesh, vax_prim = None, None
         if mesh is None:
             if is2d:
                 print("[WARN] 虚频门禁：退回面间距网格 mesh=60.0（面内仅 ~22，可能漏掉近 Γ 软模）")
@@ -1000,27 +821,14 @@ def _stability_gate(cfg, out):
     #      交给 imag_policy.classify_imag。阈值语义见 skill/_common/imag_policy.py。
     #      2D 默认用无 NAC 的频率（3D 库仑核的 NAC 在严格 2D 近 Γ 会产生虚假虚频，
     #      与 step6 KAPPA_NAC=auto 一致）；NAC 的 mesh 最小值只留作对照。
-    all_freqs, all_qpts = [], []
-    try:
-        _md = ph_nonac.get_mesh_dict()
-        all_freqs += [[float(x) for x in row] for row in _md["frequencies"]]
-        all_qpts += [[float(x) for x in q] for q in _md["qpoints"]]
-    except Exception as e:                          # noqa: BLE001
-        print("[WARN] imag_policy：mesh 频率取用失败：%s" % e)
-    try:
-        _bs = ph_nonac.get_band_structure_dict()
-        all_freqs += [[float(x) for x in f]
-                      for seg in (_bs.get("frequencies") or []) for f in seg]
-        all_qpts += [[float(x) for x in q]
-                     for seg in (_bs.get("qpoints") or []) for q in seg]
-    except Exception as e:                          # noqa: BLE001
-        print("[WARN] imag_policy：band 频率取用失败：%s" % e)
-    try:
-        _vaxp = _vacuum_axis_in_primitive(ph_nonac, vax) if is2d else None
-    except Exception:                               # noqa: BLE001
-        _vaxp = None
+    all_freqs, all_qpts = phonon_stability.imag_samples(ph_nonac)
     if not all_freqs:
         return _err("imag_policy：mesh/band 都没有取到频率（无法判定虚频）")
+    try:
+        _vaxp = (phonon_stability.vacuum_axis_in_primitive(ph_nonac, vax)
+                 if is2d else None)
+    except Exception:                               # noqa: BLE001
+        _vaxp = None
     imag = imag_policy.classify_imag(all_freqs, all_qpts, is2d, _vaxp, cfg)
     mf_used = imag["min_freq_THz"] if imag.get("min_freq_THz") is not None else mf_nonac
     nac_used = False
@@ -1033,9 +841,8 @@ def _stability_gate(cfg, out):
             print("[WARN] ZA 二次性检查没跑成（不拦，但 κ 的 ZA 部分未经验证）：%s" % za["error"])
 
     # 最终 stability_verdict = imag verdict 与 ZA 结论中更坏者（pass<warn<needs_review<fail）
+    stability_verdict, stable = phonon_stability.finalize(imag, za)
     _za_v = imag_policy.za_verdict(za)
-    stability_verdict = imag_policy.combine_verdict(imag["verdict"], _za_v)
-    stable = imag_policy.is_stable(stability_verdict)
     _thr = imag["thresholds"]["IMAG_THR"]
     parts = ["min_freq(no-NAC mesh)=%.4f THz (%.2f cm-1)"
              % (mf_nonac, mf_nonac * imag_policy.THZ_TO_CM1)]

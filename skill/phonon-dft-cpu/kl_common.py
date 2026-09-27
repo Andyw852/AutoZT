@@ -580,14 +580,26 @@ def check_frames_match_displacements(step4_dir, n_sample=3, tol=1e-3,
             continue
         # 期望坐标 = 超胞 + 该帧位移（displacements[k] 是 {atom: 序号, displacement: 笛卡尔} 列表）
         exp = sc_cart.copy()
-        # 位移有两种记录格式（2026-09-17 实测）：
-        #   ① [[dx,dy,dz], ...] —— 按原子序，每原子一个矢量（kleq/rattle 的 type-2 dataset）
-        #   ② [{"atom": i, "displacement": [...]}, ...] —— 只列被位移的原子
+        # 位移记录格式（三种，按来源）：
+        #   ① dict {"atom": i, "displacement": [...]} —— phonopy phonopy_disp.yaml（每帧一条）
+        #   ② [{"atom": i, "displacement": [...]}, ...] —— phono3py 一帧列多个被位移原子
+        #   ③ [[dx,dy,dz], ...] —— 按原子序的整帧位移（kleq/rattle type-2 dataset）
+        # ★ 2026-09-27 修：phonopy 的 phonopy_disp.yaml 是格式①，旧代码 rec[0] 直接 KeyError。
         rec = disps[k]
-        if rec and isinstance(rec[0], dict):
-            for it in rec:
+        entries = None
+        if isinstance(rec, dict):
+            entries = [rec]
+        elif rec and isinstance(rec[0], dict):
+            entries = list(rec)
+        if entries is not None:
+            for it in entries:
                 try:
-                    exp[int(it["atom"])] += np.array(it["displacement"], dtype=float)
+                    # ★ phonopy/phono3py 的 yaml 里 atom 是【1-based】（实测 phonopy 2.47：
+                    #   atom:1 对应 0-based 下标 0）；旧代码当 0-based 会整帧错位，
+                    #   真实数据上让本闸误报失败。这里减 1 并做边界保护。
+                    _a = int(it["atom"]) - 1
+                    if 0 <= _a < len(exp):
+                        exp[_a] += np.array(it["displacement"], dtype=float)
                 except Exception:                       # noqa: BLE001
                     pass
         else:

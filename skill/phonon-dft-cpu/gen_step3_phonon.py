@@ -100,7 +100,8 @@ def main():
     shutil.copyfile(str(here / "phonon_fit_driver.py"), str(out / "phonon_fit_driver.py"))
     # 作业里的驱动 import kl_common / za_2d / imag_policy（kl_common 又 import dim_common）。
     # gen_need 只保证 gen 本地能用到，不会自动进到发往计算节点的 step 目录，必须显式拷。
-    for _dep in ("kl_common.py", "dim_common.py", "za_2d.py", "imag_policy.py"):
+    for _dep in ("kl_common.py", "dim_common.py", "za_2d.py", "imag_policy.py",
+                 "phonon_stability.py"):
         if (here / _dep).is_file():
             shutil.copyfile(str(here / _dep), str(out / _dep))
         else:

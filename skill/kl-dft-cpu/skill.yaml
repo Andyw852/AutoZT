@@ -90,7 +90,7 @@ steps:
      #   2026-09-27：曾把它加进 gen_need，导致 jzzn/hanhai25 等所有非 GPU 集群的 S5
      #   gen 直接失败（"project_setting/skill_dir 里缺少 …"），已回退。
      gen_need: [dim_common.py, stepconf.py, step.conf, kl_common.py, lattice_kappa.py,
-                kl_fc_backends.py, za_2d.py, imag_policy.py,
+                kl_fc_backends.py, za_2d.py, imag_policy.py, phonon_stability.py,
                 submit_fit_p3py.tpl, submit_fit_pheasy.tpl]}
 
   - {seq: 6, name: step6_kappa, needs: [step5_fc], label: S6_kappa, check: marker,

@@ -1,0 +1,75 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""Prepare an AutoZT 3090 job that samples thermal structures with the seed NEP."""
+import shlex
+import shutil
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import gpumd_common as gc
+import stepconf
+
+STEP = "step1_thermal_sample"
+OUTDIR = STEP
+SPEC = {
+    "GPUMD_BIN": ("/home/wangchaoyue852/gpumd/src/gpumd", "str"),
+    "NEP_BIN": ("/home/wangchaoyue852/gpumd/src/nep", "str"),
+    "CONDA_SH": (gc.DEFAULT_CONDA_SH, "str"),
+    "CONDA_ENV": (gc.DEFAULT_CONDA_ENV, "str"),
+    "SEED_NEP": ("nep_Mn2In2Se5_gen1000.txt", "str"),
+    "TEMPERATURES": ("300,500,650,800", "str"),
+    "COUNTS": ("13,12,12,13", "str"),
+    "EQUIL_STEPS": (30000, "int"),
+    "PRODUCTION_STEPS": (100000, "int"),
+    "SAMPLE_INTERVAL": (5000, "int"),
+    "TIME_STEP_FS": (1.0, "float"),
+    "TAU_FS": (100.0, "float"),
+}
+
+
+def main():
+    cwd = Path.cwd()
+    out = cwd / OUTDIR
+    out.mkdir(exist_ok=True)
+    conf = stepconf.load(SPEC, STEP)
+    poscar = cwd / "POSCAR"
+    seed = cwd / str(conf["SEED_NEP"])
+    if not poscar.is_file() or not seed.is_file():
+        sys.exit("[ERROR] 缺材料 POSCAR 或采样势 %s" % seed.name)
+    shutil.copy2(poscar, out / "POSCAR")
+    shutil.copy2(seed, out / seed.name)
+    helper = Path(__file__).with_name("thermal_md_sampler.py")
+    if not helper.is_file():
+        sys.exit("[ERROR] gen_need 缺 thermal_md_sampler.py")
+    shutil.copy2(helper, out / helper.name)
+    gc.save_params(out, dict(conf))
+    args = [
+        "python thermal_md_sampler.py",
+        "--poscar POSCAR",
+        "--potential %s" % shlex.quote(seed.name),
+        "--gpumd %s" % shlex.quote(str(conf["GPUMD_BIN"])),
+        "--outdir sampled",
+        "--temperatures %s" % shlex.quote(str(conf["TEMPERATURES"])),
+        "--counts %s" % shlex.quote(str(conf["COUNTS"])),
+        "--equil-steps %s" % int(conf["EQUIL_STEPS"]),
+        "--production-steps %s" % int(conf["PRODUCTION_STEPS"]),
+        "--sample-interval %s" % int(conf["SAMPLE_INTERVAL"]),
+        "--time-step-fs %s" % float(conf["TIME_STEP_FS"]),
+        "--tau-fs %s" % float(conf["TAU_FS"]),
+    ]
+    cmd = " ".join(args) + " && cp sampled/thermal_manifest.json thermal_manifest.json"
+    tpl = gc.resolve_submit(Path(__file__).resolve().parent, "submit_gpumd")
+    gc.write_submit(tpl, out / "submit.sh", {
+        "JOBNAME": gc.new_jobname(cwd, "Tsample"),
+        "CONDA_SH": conf["CONDA_SH"] or gc.DEFAULT_CONDA_SH,
+        "CONDA_ENV": conf["CONDA_ENV"] or gc.DEFAULT_CONDA_ENV,
+        "GPUMD_CMD": cmd,
+        "LOG": "sampler.log",
+    })
+    stepconf.apply_submit(out / "submit.sh", conf.submit)
+    print("[DONE] %s：50 帧热态采样作业输入已生成" % OUTDIR)
+
+
+if __name__ == "__main__":
+    main()

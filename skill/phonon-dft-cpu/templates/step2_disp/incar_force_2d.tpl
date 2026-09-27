@@ -26,6 +26,8 @@ SIGMA   = 0.05
 IBRION  = -1
 NSW     = 0
 ISYM    = 0
+# 偶极修正由 gen 从 S1 的 INCAR 继承（三步必须同一静电边界条件，否则力不对应同一势能面）
+{{DIPOLE_LINE}}
 
 LWAVE   = .FALSE.
 LCHARG  = .FALSE.

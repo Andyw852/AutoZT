@@ -176,6 +176,13 @@ def main():
     check("mlff 两个 driver 都引用 imag_policy",
           "imag_policy" in m_cpu and "imag_policy" in m_gpu)
     check("S5（kl_fc_backends）调用 classify_imag", "classify_imag" in kfb)
+    # phonon-dft-cpu S3（2026-09-27 补守卫）：旧版用本地 -IMAG_THR 阈值 + 20³ mesh，
+    # 现改走公共池 phonon_stability（编排）+ imag_policy（分类）。
+    pd = _src("skill/phonon-dft-cpu/phonon_fit_driver.py")
+    check("phonon-dft-cpu driver 引用 phonon_stability",
+          "phonon_stability" in pd)
+    check("phonon-dft-cpu driver 引用 imag_policy", "imag_policy" in pd)
+    check("phonon-dft-cpu driver 不再本地判 -imag_thr 阈值", "-imag_thr" not in pd)
 
     print("[8. §四/§五 字段与透传守卫]")
     # §四：S5 写进 phonon_summary.json 的字段必须覆盖 spec 第一条全部 + stability_verdict + imag_policy_refs

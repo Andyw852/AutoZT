@@ -250,7 +250,7 @@ def _reference_kpoints(out, dim, vac_axis, n_sub):
             _dk3 = stepconf.load({"DK_MAX_3D": (None, "float")}, OUTDIR_NAME,
                                  str(out.parent), strict=False)["DK_MAX_3D"]
             _dk3 = None if _dk3 is None else float(_dk3)
-    except (KeyError, ValueError, TypeError):
+    except (KeyError, ValueError, TypeError, SystemExit):
         _dk3 = None
     _dk_use = _dk3 if (dim == "3d" and _dk3) else float(DK_MAX)
     if DK_MAX and (dim == "2d" or (dim == "3d" and _dk3)):

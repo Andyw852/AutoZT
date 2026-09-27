@@ -99,6 +99,25 @@ def main():
     if prev is None:
         sys.exit("[ERROR] 找不到含 CONTCAR 的上一步目录：%s" % PREV_CANDS)
     kc.relay_poscar(prev / "CONTCAR", out / "POSCAR", "step1_opt")
+    # ★ 2026-09-27 用户指示：S3b 也必须对齐原点 —— 它同样是 relay S1 的 CONTCAR，
+    #   若 S3 调了而 S3b 没调，同网格对照（S3 的 IBZ h5 vs S3b 的所有网格 h5）时
+    #   系数的 G 相位就对不上。align_origin 确定性，重复调用不改结果。
+    try:
+        _ao_on = 1
+        if (out.parent / "step.conf").is_file():
+            _ao_on = int(stepconf.load({"ALIGN_ORIGIN": (1, "int")}, OUTDIR_NAME,
+                                       str(out.parent), strict=False)["ALIGN_ORIGIN"])
+    except (KeyError, ValueError, TypeError, SystemExit):
+        _ao_on = 1
+    if _ao_on:
+        _ao = kc.align_origin(out / "POSCAR")
+        if _ao is None:
+            print("[..] patch_align_origin(S3b)：无平移（|tau| 已为 0 或无解）")
+        elif _ao[1] is None:
+            print("[WARN] patch_align_origin(S3b)：存在 τ≠0 且无解 -> 结构未改动（仍需全网格）")
+        else:
+            print("[OK] patch_align_origin(S3b)：|tau|max %.4f -> %.4f（平移 %s）"
+                  % (_ao[0], _ao[1], _ao[2]))
     _func, _subs = kc.resolve_func(prev, FUNC, OUTDIR_NAME)
 
     dim = kc.read_method_dim(prev / kc.METHOD_FILE)
