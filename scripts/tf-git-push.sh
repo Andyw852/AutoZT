@@ -47,6 +47,19 @@ done
 git remote get-url origin >/dev/null 2>&1 || { echo "无 origin 远程"; exit 1; }
 CUR="$(git symbolic-ref --short HEAD 2>/dev/null || echo master)"
 
+# 自动挑一个可用的 GitHub SSH 端点：github.com:22 -> github.com:443 -> ssh.github.com:443
+# （单个 IP 抽风时不再整体失败；外部已设 GIT_SSH_COMMAND 则尊重之）
+if [ -z "${GIT_SSH_COMMAND:-}" ]; then
+  for ep in "github.com:22" "github.com:443" "ssh.github.com:443"; do
+    h="${ep%%:*}"; p="${ep##*:}"
+    if timeout 6 bash -c "cat < /dev/null > /dev/tcp/$h/$p" 2>/dev/null; then
+      export GIT_SSH_COMMAND="ssh -o HostName=$h -o Port=$p -o ConnectTimeout=10"
+      echo "GitHub SSH 端点: $h:$p"
+      break
+    fi
+  done
+fi
+
 if ! grep -q 'ssh.github.com' "$HOME/.ssh/config" 2>/dev/null; then
   printf '\nHost github.com\n    HostName ssh.github.com\n    Port 443\n    User git\n    ConnectTimeout 10\n    ServerAliveInterval 30\n    ServerAliveCountMax 2\n' >> "$HOME/.ssh/config" 2>/dev/null || true
   echo "已配置 github SSH 走 443"

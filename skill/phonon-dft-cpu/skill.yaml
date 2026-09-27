@@ -28,6 +28,8 @@ fetch_files: [POSCAR, CONTCAR, INCAR, KPOINTS, POTCAR, submit.sh, OUTCAR,
               vasprun.xml, workflow_method.txt, kl_params.txt, disp_plan.json,
               phonopy_disp.yaml, band-dft-cpu.yaml, phonon_summary.json,
               scf_steps.json, phonon_fit.log, fc2.hdf5, FORCE_CONSTANTS,
+              phonon_band_full.png, phonon_band_lowfreq.png,
+              phonon_band_summary.json, band_qpath.txt,
               queue.out, queue.err]
 
 steps:
@@ -50,6 +52,18 @@ steps:
      gen_need: [dim_common.py, stepconf.py, step.conf, kl_common.py,
                 imag_policy.py, za_2d.py,
                 phonon_fit_driver.py, submit_fit.tpl]}
+
+# 绘图步（可选步组 phonon_plot，默认开；登录节点 run: gen，不提交作业）。
+#   复用公共池 skill/_common/mlff/plot_phonon_band.py（通用脚本：读 step3_phonon/
+#   band-dft-cpu.yaml，出全频段 + 0-10 THz 低频放大两张图 + phonon_band_summary.json）。
+#   2026-09-27 新增：phonon-dft-cpu 原来只写 band-dft-cpu.yaml、没有成图产物。
+optional_steps:
+  phonon_plot:
+    default: true
+    steps:
+      - {seq: 3.1, name: phonon_band_plot, label: S3.1_plot, after: step3_phonon,
+         gen: "plot_phonon_band.py", check: plot, run: gen, gen_need: [],
+         done_marker: phonon_band_summary.json, fetch_all: true}
 
 io_schema:
   inputs: [{name: POSCAR, from: user, required: true, desc: "材料结构"}]
