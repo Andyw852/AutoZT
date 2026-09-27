@@ -62,18 +62,41 @@ PLOT_SPEC = {
 STEP = "step5_phonon_plot"
 
 
+def _find_step_conf():
+    """找 tf 推来的合并 step.conf。
+
+    2026-09-27 修：本步的 gen 在【步骤目录】里跑（cwd=step5_phonon_plot/），而 tf 把合并后的
+    step.conf 放在【材料技能目录】（gen 脚本同级）。原来只看 cwd/step.conf，必然读不到 →
+    CONDA_SH/CONDA_ENV 取默认空值 → gen 直接 exit("[ERROR] 未配置 CONDA_SH") →
+    S5.1_plot 永远 FAIL（实测 Si_ovs20_hh @ hanhai25，2026-09-27）。
+    """
+    here = Path(__file__).resolve().parent
+    for c in (Path("step.conf"), here / "step.conf", here.parent / "step.conf",
+              Path("step5_phonon_plot") / "step.conf", Path("..") / "step.conf"):
+        if c.is_file():
+            return c
+    return None
+
+
 def _write_submit(outdir):
     """gen 模式：只写 submit.sh（作业脚本），谱的计算交给计算节点上的 --work。"""
     conf = {k: v[0] for k, v in PLOT_SPEC.items()}
-    if Path("step.conf").is_file():
+    _cp = _find_step_conf()
+    if _cp is not None:
         try:
             import stepconf
-            conf = stepconf.load(PLOT_SPEC, STEP)
+            _cwd = os.getcwd()
+            os.chdir(str(_cp.parent))       # stepconf.load 读的是 ./step.conf
+            try:
+                conf = stepconf.load(PLOT_SPEC, STEP)
+            finally:
+                os.chdir(_cwd)
+            print("[..] step.conf ← %s" % _cp)
         except BaseException as e:   # stepconf 用 sys.exit("[ERROR] ...") 报错
             print("[..] step.conf 读取失败（%s），用默认值" % e)
     else:
-        print("[..] cwd 没有 step.conf（gen_need 未带上），用默认值：qos=%s cores=%s"
-              % (conf["SBATCH_QOS"], conf["PLOT_CORES"]))
+        print("[..] 找不到 step.conf（cwd / 脚本同级 / 上一级 / step5_phonon_plot 都试过），"
+              "用默认值：qos=%s cores=%s" % (conf["SBATCH_QOS"], conf["PLOT_CORES"]))
     here = Path(__file__).resolve().parent
     tpl = None
     for cand in (Path.cwd() / "submit_plot.tpl",

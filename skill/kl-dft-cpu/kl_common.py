@@ -201,8 +201,10 @@ def select_cutoff(records, kappa_tol_pct=5.0, se_mult=1.0, stability_thr=0.3,
 
         cut               截断 (Å)
         ratio             方程数/参数数（<3 = 数据不足 → 不参与）
-        cv_err            交叉验证误差（判据①）
-        cv_se             cv_err 的标准误（1-SE 规则用；缺省 0）
+        train_rel_err     拟合残差（★in-sample，**不是**交叉验证）：pheasy -f 在【全部帧】
+                          上的 Relative error；判据①的输入
+        train_rel_se      该残差在帧 bootstrap 重抽样下的标准误（1-SE 用；缺省 0）
+        err_kind          "in-sample"（默认，判据①不具否决权）| "held-out"（真留出 CV）
         stable_upper_cut  数据能确定的最大截断 (Å)：只用 σ/|mean| < stability_thr 的壳层
                           （判据②；该截断 ≤ 它才算"数据能确定"）
         kappa             300 K 面内 κ
@@ -212,15 +214,18 @@ def select_cutoff(records, kappa_tol_pct=5.0, se_mult=1.0, stability_thr=0.3,
           "largest"（Mg8C120 口径：平的就取能确定范围里最大的那个）。
 
     返回 (chosen_cut, report)：chosen_cut 为 None 表示无可用截断。report 给出
-    每个截断是否 data_ok / stable_ok / cv_ok / plateau_ok 与最终判定依据。
+    每个截断是否 data_ok / stable_ok / err_ok / plateau_ok 与最终判定依据。
+    report["err_gate_applied"]=False 表示 err_kind 不是 held-out → 判据①只展示、不筛选。
     """
     recs = []
     for r in records:
         d = dict(r)
         d["cut"] = float(d.get("cut"))
         d["ratio"] = float(d.get("ratio") or 0.0)
-        d["cv_err"] = (None if d.get("cv_err") is None else float(d["cv_err"]))
-        d["cv_se"] = float(d.get("cv_se") or 0.0)
+        d["train_rel_err"] = (None if d.get("train_rel_err") is None
+                              else float(d["train_rel_err"]))
+        d["train_rel_se"] = float(d.get("train_rel_se") or 0.0)
+        d["err_kind"] = str(d.get("err_kind") or "in-sample")
         d["stable_upper_cut"] = (None if d.get("stable_upper_cut") is None
                                  else float(d["stable_upper_cut"]))
         d["kappa"] = (None if d.get("kappa") is None else float(d["kappa"]))
@@ -233,18 +238,28 @@ def select_cutoff(records, kappa_tol_pct=5.0, se_mult=1.0, stability_thr=0.3,
                           and r["cut"] <= r["stable_upper_cut"] + 1e-9)
     usable = [r for r in recs if r["data_ok"] and r["stable_ok"]]
 
-    # 判据①：CV 误差在 min+se_mult*SE 之内的截断集合
-    cv_ok = set()
-    _cv = [r["cv_err"] for r in usable if r["cv_err"] is not None]
-    if _cv and len(_cv) >= 1:
-        _cmin = min(_cv)
-        _rec = next(r for r in usable if r["cv_err"] == _cmin)
-        _thr = _cmin + float(se_mult) * float(_rec["cv_se"])
-        cv_ok = {r["cut"] for r in usable
-                 if r["cv_err"] is not None and r["cv_err"] <= _thr + 1e-15}
+    # 判据①（残差 1-SE）：**只在误差是真·留出(CV)误差时才具否决权**。
+    #   ★ 2026-09-27 修：该字段旧名 cv_err，但值来自 pheasy -f 在【全部帧】上的
+    #     Relative error —— 是 in-sample 训练残差，会随参数增多单调下降；拿它做
+    #     "≤ min+SE"的否决会系统性偏向大截断（长程噪声项）。故 err_kind != "held-out"
+    #     时判据①只展示、不参与筛选（err_gate_applied=False）。
+    err_gate = bool(usable) and all(
+        str(r.get("err_kind") or "in-sample").lower() == "held-out" for r in usable)
+    if not usable:
+        err_ok = set()
+    elif not err_gate:
+        err_ok = {r["cut"] for r in usable}
     else:
-        # 没有 CV 数据：判据①视为全部可用截断都通过（只靠②③，并在报告中标注）
-        cv_ok = {r["cut"] for r in usable}
+        _e = [r["train_rel_err"] for r in usable if r["train_rel_err"] is not None]
+        if _e:
+            _emin = min(_e)
+            _rec = next(r for r in usable if r["train_rel_err"] == _emin)
+            _thr = _emin + float(se_mult) * float(_rec["train_rel_se"])
+            err_ok = {r["cut"] for r in usable
+                      if r["train_rel_err"] is not None
+                      and r["train_rel_err"] <= _thr + 1e-15}
+        else:
+            err_ok = {r["cut"] for r in usable}
 
     # 判据③：从某截断起到最外侧，相邻 Δκ ≤ max(5%·|κ|, 两误差的平方和根) 视为平台。
     # ★ 最外侧可用截断**没有更大的可比对象**，不算"平台证据" —— 那正是 user 说的
@@ -268,10 +283,10 @@ def select_cutoff(records, kappa_tol_pct=5.0, se_mult=1.0, stability_thr=0.3,
             plateau.add(r["cut"])
 
     for r in recs:
-        r["cv_ok"] = r["cut"] in cv_ok
+        r["err_ok"] = r["cut"] in err_ok
         r["plateau_ok"] = r["cut"] in plateau
 
-    inter = sorted(cv_ok & plateau)
+    inter = sorted(err_ok & plateau)
     if inter:
         if str(pick).lower() == "largest":
             # Mg8C120 口径：κ 平就取【能确定范围内】最大的截断 —— 条件是"倒数第二个
@@ -289,20 +304,27 @@ def select_cutoff(records, kappa_tol_pct=5.0, se_mult=1.0, stability_thr=0.3,
         chosen, status = None, "no_usable_cutoff"
     report = {
         "status": status,
-        "criteria": {"cv_1se": "cv_err <= min(cv_err) + %g*SE" % float(se_mult),
+        "err_gate_applied": err_gate,
+        "criteria": {"rel_err_1se": ("train_rel_err <= min(train_rel_err) + %g*SE"
+                                     "（err_kind=held-out 时才启用）" % float(se_mult)),
                      "stability": "sigma/|mean| < %g" % float(stability_thr),
                      "plateau": "相邻 Δκ <= max(%g%%, sqrt(err_i^2+err_j^2))"
                                 % float(kappa_tol_pct)},
         "records": [
-            {"cut": r["cut"], "ratio": r["ratio"], "cv_err": r["cv_err"],
-             "cv_se": r["cv_se"], "stable_upper_cut": r["stable_upper_cut"],
+            {"cut": r["cut"], "ratio": r["ratio"],
+             "train_rel_err": r["train_rel_err"], "train_rel_se": r["train_rel_se"],
+             "err_kind": r["err_kind"],
+             "stable_upper_cut": r["stable_upper_cut"],
              "kappa": r["kappa"], "kappa_err": r["kappa_err"],
              "data_ok": r["data_ok"], "stable_ok": r["stable_ok"],
-             "cv_ok": r["cv_ok"], "plateau_ok": r["plateau_ok"]}
+             "err_ok": r["err_ok"], "plateau_ok": r["plateau_ok"]}
             for r in recs],
         "chosen_cut": chosen,
         "pick": str(pick).lower(),
-        "reason": ("三判据同时满足的最小截断 = %.2f Å" % chosen if status == "ok"
+        "reason": ("判据②③同时满足的最小截断 = %.2f Å%s" % (
+                       chosen,
+                       "" if err_gate else "（判据①为 in-sample 残差，已跳过否决）")
+                   if status == "ok"
                    else ("κ 在数据能确定的范围内（≤ %.2f Å）仍未到平台，"
                          "报能确定范围内最大截断的 κ；更长程三阶项当前数据无法确定"
                          % (usable[-1]["cut"] if usable else float("nan"))

@@ -6,6 +6,7 @@
   1. neighbor_shells / cut3_candidates：壳层枚举 + 相邻壳层中点（不落在壳层距离上）
   2. resolve_cut3_candidates：auto / off / 显式列表 三种写法
   3. select_cutoff：三判据都满足取最小、平的时候 largest 口径、κ 未收敛、无可用截断
+  3b. 判据①的 err_kind 门：in-sample 残差不否决、held-out 才否决
   4. fc3_shell_stability：逐壳层 Φ³ 离散度 + stable_upper_cut
 不碰集群、不依赖 phono3py。
 """
@@ -86,9 +87,30 @@ def test_resolve():
         check("显式列表按序", c_list == [4.8, 5.3, 5.9], str(c_list))
 
 
-def _rec(cut, kappa, cv=0.10, se=0.01, upper=6.5, ratio=5.0):
-    return {"cut": cut, "ratio": ratio, "cv_err": cv, "cv_se": se,
+def _rec(cut, kappa, cv=0.10, se=0.01, upper=6.5, ratio=5.0,
+         err_kind="in-sample"):
+    """cv → train_rel_err（pheasy 的 in-sample 相对误差）；err_kind 决定判据①是否具否决权。"""
+    return {"cut": cut, "ratio": ratio, "train_rel_err": cv, "train_rel_se": se,
+            "err_kind": err_kind,
             "stable_upper_cut": upper, "kappa": kappa, "kappa_err": 0.05 * abs(kappa)}
+
+
+def test_err_gate():
+    print("[3b] 判据① err_kind：in-sample 不否决 / held-out 否决")
+    recs = [_rec(4.8, 10.0, cv=0.030), _rec(5.3, 10.1, cv=0.012),
+            _rec(5.9, 10.2, cv=0.010)]
+    c_in, r_in = kc.select_cutoff(recs, kappa_tol_pct=5.0, pick="smallest")
+    check("err_kind=in-sample → 判据①跳过、仍取最小 4.8",
+          abs(c_in - 4.8) < 1e-9 and r_in.get("err_gate_applied") is False,
+          str((c_in, r_in.get("err_gate_applied"))))
+    recs_h = [dict(r, err_kind="held-out") for r in recs]
+    c_h, r_h = kc.select_cutoff(recs_h, kappa_tol_pct=5.0, pick="smallest")
+    check("err_kind=held-out → 判据①启用、4.8 被否决 → 取 5.3",
+          abs(c_h - 5.3) < 1e-9 and r_h.get("err_gate_applied") is True,
+          str((c_h, r_h.get("err_gate_applied"))))
+    for _r in r_h.get("records", []):
+        if abs(_r["cut"] - 4.8) < 1e-9:
+            check("报告里 err_ok=False 标出被否决档", _r["err_ok"] is False, str(_r))
 
 
 def test_select():
@@ -137,6 +159,7 @@ def main():
     test_shells_and_candidates()
     test_resolve()
     test_select()
+    test_err_gate()
     test_fc3_stability()
     print("\nsuite_kl_cut3: %s（%d 项）" % ("ALL PASS" if not FAIL else "FAIL", N))
     return 1 if FAIL else 0

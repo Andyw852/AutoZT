@@ -461,7 +461,11 @@ def cmd_scan_pheasy(cfg):
     def _dump_scan():
         (out / "cutoff_scan.json").write_text(json.dumps(
             {"candidates": cands, "bootstrap": boot, "stability_thr": thr,
-             "cv_se_source": "bootstrap 相对误差分布的标准差（pheasy 不打印 fold-SE）",
+             "err_kind": "in-sample",
+             "err_kind_note": ("train_rel_err 是 pheasy -f 在【全部帧】上打印的 Relative "
+                               "error，属 in-sample 训练残差（会随参数增多而下降）；"
+                               "pheasy 没有留出预测接口，故 S5 不做真·按帧留出 CV。"
+                               "select_cutoff 在 err_kind!=held-out 时不拿判据①做否决。"),
              "records": records,
              "note": "S5 只出判据①②；判据③(κ)与最终选截断在 S6 的 cutoff_selection 里。"},
             ensure_ascii=False, indent=2), encoding="utf-8")
@@ -482,8 +486,9 @@ def cmd_scan_pheasy(cfg):
         free = int(free) if free is not None else None
         ratio = (ndata * 3 * natom / free) if (free and natom) else None
         rec = {"cut": c, "free_ifcs": free, "natom_super": natom, "ndata": ndata,
-               "ratio": ratio, "cv_err": None, "cv_se": None,
-               "cv_se_source": None, "shells": shell_dist, "shell_stats": [],
+               "ratio": ratio, "train_rel_err": None, "train_rel_se": None,
+               "err_kind": "in-sample", "err_se_source": None,
+               "shells": shell_dist, "shell_stats": [],
                "stable_upper_cut": None,
                "fc_dir": str(cdir.relative_to(out))}
         if ratio is not None and ratio < 3.0:
@@ -499,11 +504,11 @@ def cmd_scan_pheasy(cfg):
         if _run_pheasy(_pheasy_cmd(cfg, "f", c, ndata), flog, env) != 0:
             sys.exit("[ERROR] pheasy -f (c3=%.2f) 失败，见 %s" % (c, flog))
         _re0 = _read_last(r"Relative error:\s*([\d.eE+-]+)", flog)
-        rec["cv_err"] = float(_re0) if _re0 is not None else None
+        rec["train_rel_err"] = float(_re0) if _re0 is not None else None
         shutil.copy("fc2.hdf5", cdir / "fc2.hdf5")
         if (out / "fc3.hdf5").is_file():
             shutil.copy("fc3.hdf5", cdir / "fc3.hdf5")
-        rels = [rec["cv_err"]] if rec["cv_err"] is not None else []
+        rels = [rec["train_rel_err"]] if rec["train_rel_err"] is not None else []
         per_means = []
         for b in range(boot):
             idx = rng.integers(0, ndata, size=ndata)
@@ -541,18 +546,21 @@ def cmd_scan_pheasy(cfg):
             rec["shell_stats"] = stats
             rec["stable_upper_cut"] = upper
         if len(rels) >= 2:
-            rec["cv_se"] = float(np.std(rels, ddof=1))
-            rec["cv_se_source"] = "bootstrap"
-        elif rec["cv_err"] is not None:
-            rec["cv_se"] = 0.0
-            rec["cv_se_source"] = "none"
+            rec["train_rel_se"] = float(np.std(rels, ddof=1))
+            rec["err_se_source"] = "bootstrap"
+        elif rec["train_rel_err"] is not None:
+            rec["train_rel_se"] = 0.0
+            rec["err_se_source"] = "none"
         records.append(rec)
-        print("[..] c3=%.2f Å: 方程/参数=%s CV_err=%s CV_se=%s 稳定性上限=%s"
-              % (c, ("%.2f" % ratio) if ratio else "?", rec["cv_err"],
-                 ("%.3g" % rec["cv_se"]) if rec["cv_se"] is not None else "?",
+        print("[..] c3=%.2f Å: 方程/参数=%s train_err=%s(±%s) 稳定性上限=%s"
+              % (c, ("%.2f" % ratio) if ratio else "?", rec["train_rel_err"],
+                 ("%.3g" % rec["train_rel_se"]) if rec["train_rel_se"] is not None else "?",
                  rec["stable_upper_cut"]))
 
-    # nominal 截断：PHEASY_C3_CUTOFF 若在候选里，否则第一个可用档
+    # nominal 截断：PHEASY_C3_CUTOFF 吸附到【最近的候选】，未指定则取最小可用档。
+    #   ★ 2026-09-27 修：原先要求 PHEASY_C3_CUTOFF 与候选【精确相等】才生效，否则静默
+    #     回落 smallest。实测（Si_ovs20_hh）：用户设 5（不在候选 [4.18,4.97,5.68,6.29]
+    #     内）→ 静默落 4.18 → κ 偏低 6.6%（124.4 vs 132.6 W/mK）。现在吸附并打 WARN。
     try:
         want = float(str(cfg.get("PHEASY_C3_CUTOFF")))
     except (TypeError, ValueError):
@@ -563,10 +571,23 @@ def cmd_scan_pheasy(cfg):
         sys.exit("[ERROR] 所有候选截断都数据量不足（方程/参数 < 3）：当前 %d 帧。\n"
                  "        请加大 S4 帧数（OVERSAMPLE/最大候选截断）后重跑 S4/S5。详见 cutoff_scan.json"
                  % ndata)
-    nom = next((r for r in usable
-                if want is not None and abs(r["cut"] - want) < 1e-9), None)
+    nom = None
+    if want is not None and usable:
+        nom = min(usable, key=lambda r: abs(r["cut"] - want))
+        if abs(nom["cut"] - want) > 1e-9:
+            _lo, _hi = usable[0]["cut"], usable[-1]["cut"]
+            print("[WARN] PHEASY_C3_CUTOFF=%.4f 不在候选 %s 内 → 吸附到最近候选 %.2f Å"
+                  "（差 %+.4f Å）"
+                  % (want, [r["cut"] for r in usable], nom["cut"], nom["cut"] - want))
+            if want < _lo - 1e-9 or want > _hi + 1e-9:
+                print("[WARN] 该值还落在候选区间 [%.2f, %.2f] 之外——候选上界由 S4 的 "
+                      "ALM_CUT3 决定，请核对 PHEASY_C3_CUTOFF 是否写错。" % (_lo, _hi))
+        else:
+            print("[..] nominal 截断 = %.2f Å（PHEASY_C3_CUTOFF 命中候选）" % nom["cut"])
     if nom is None and usable:
         nom = usable[0]
+        print("[..] nominal 截断 = %.2f Å（未指定 PHEASY_C3_CUTOFF → 取最小可用档）"
+              % nom["cut"])
     if nom is not None:
         tag = ("%.2f" % nom["cut"]).replace(".", "p")
         for fn in ("fc2.hdf5", "fc3.hdf5"):
@@ -577,6 +598,22 @@ def cmd_scan_pheasy(cfg):
         shutil.copy("pheasy_f_%s.log" % tag, "pheasy_f.log")
         print("[..] nominal 截断 = %.2f Å（后续 collect/post 用它）" % nom["cut"])
     _dump_scan()
+    # 逐档导出 ShengBTE 力常数（EXPORT_SHENGBTE 时）——S6 的 shengbte 路要每一档的
+    #   FORCE_CONSTANTS_2ND/3RD 才能真正逐档跑 κ（原来只导 nominal 一档，导致
+    #   "S6 逐档跑 κ 选截断" 对 shengbte 是死代码）。目录 shengbte_cut3_<tag>/。
+    if str(cfg.get("EXPORT_SHENGBTE", "true")).lower() in ("true", "1", "yes"):
+        _ok = 0
+        for r in usable:
+            _tag = ("%.2f" % r["cut"]).replace(".", "p")
+            try:
+                _fc2, _fc3 = _read_full_fc(out / P3PY_SUB / ("cut3_%s" % _tag))
+                if _export_shengbte(out, _fc2, _fc3,
+                                    subdir="%s_cut3_%s" % (SB_SUB, _tag)):
+                    _ok += 1
+            except Exception as e:                       # noqa: BLE001
+                print("[WARN] c3=%.2f 的 ShengBTE 逐档导出失败：%s" % (r["cut"], e))
+        print("[..] ShengBTE 逐档导出：%d/%d 档完成（S6 扫描选截断用）"
+              % (_ok, len(usable)))
     print("[DONE] scan_pheasy：cutoff_scan.json 就绪（%d 档）" % len(records))
 
 
@@ -592,7 +629,7 @@ def _read_full_fc(p3dir):
     return fc2, fc3
 
 
-def _export_shengbte(out, fc2, fc3):
+def _export_shengbte(out, fc2, fc3, subdir=None):
     """给定 full fc2/fc3 数组 → hiphive → shengbte/FORCE_CONSTANTS_2ND + _3RD + POSCAR。
     CONTROL 不在此写：它依赖 S6 的运行参数（T/mesh/scalebroad/NAC），由 S6 生成。"""
     import numpy as np
@@ -604,8 +641,8 @@ def _export_shengbte(out, fc2, fc3):
         print("[WARN] 无 hiphive，跳过 ShengBTE 力常数导出（phono3py 侧不受影响）：%s" % e)
         return False
 
-    sbdir = out / SB_SUB
-    sbdir.mkdir(exist_ok=True)
+    sbdir = out / (subdir or SB_SUB)
+    sbdir.mkdir(parents=True, exist_ok=True)
 
     uc = read_vasp(str(out / "POSCAR"))
     sc = read_vasp(str(out / "SPOSCAR"))

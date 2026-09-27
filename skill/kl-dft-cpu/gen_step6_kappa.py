@@ -563,10 +563,10 @@ def _cut3_scan_records(fcd):
     return out
 
 
-def build_cutoff_select(kappa_tol_pct=5.0, se_mult=1.0, stability_thr=0.3,
-                        pick="smallest"):
-    """生成"按判据①②③选截断"的收尾片段：读各 cut3_<tag>/kappa_summary.json 的 κ，
-    合并 step5_fc/cutoff_scan.json 的 CV/稳定性，写 cutoff_selection.json，并把选中
+def _cutoff_select_src(kappa_tol_pct=5.0, se_mult=1.0, stability_thr=0.3,
+                       pick="smallest"):
+    """生成"按判据②③选截断"的收尾片段源码（行列表）：读各 cut3_<tag>/kappa_summary.json 的 κ，
+    合并 step5_fc/cutoff_scan.json 的残差/稳定性，写 cutoff_selection.json，并把选中
     截断的 κ 提到顶层 kappa_summary.json（附 cutoff_selection 供下游追溯）。"""
     body = [
         "import json, os",
@@ -579,14 +579,26 @@ def build_cutoff_select(kappa_tol_pct=5.0, se_mult=1.0, stability_thr=0.3,
         "    _tag = ('%.2f' % _c).replace('.', 'p')",
         "    _r = _rows.get(round(_c, 3), {})",
         "    _e = {'cut': _c, 'ratio': _r.get('ratio'),",
-        "          'cv_err': _r.get('cv_err'), 'cv_se': _r.get('cv_se'),",
+        "          'train_rel_err': _r.get('train_rel_err'),",
+        "          'train_rel_se': _r.get('train_rel_se'),",
+        "          'err_kind': _r.get('err_kind'),",
         "          'stable_upper_cut': _r.get('stable_upper_cut')}",
         "    _f = 'cut3_%s/kappa_summary.json' % _tag",
         "    _k = None",
         "    _rel = 0.0",
         "    if os.path.isfile(_f):",
         "        _s = json.load(open(_f, encoding='utf-8'))",
-        "        _k = _s.get('kappa_inplane_300K', _s.get('kappa_xx_yy_zz'))",
+        "        _k = _s.get('kappa_inplane_300K')",
+        "        if _k is None:",
+        "            # shengbte 的 kappa_summary.json: kappa_xx_yy_zz 是每温度一行的表,",
+        "            #   temperatures 给温度轴; 取最接近 300 K 的行做面内平均。",
+        "            _kk = _s.get('kappa_xx_yy_zz') or []",
+        "            _tt = _s.get('temperatures') or []",
+        "            if _kk:",
+        "                _i = (min(range(len(_tt)), key=lambda j: abs(float(_tt[j]) - 300.0))",
+        "                      if _tt else 0)",
+        "                _row = [float(x) for x in _kk[_i]]",
+        "                _k = sum(_row) / len(_row) if _row else None",
         "        for _st in (_r.get('shell_stats') or []):",
         "            if (_st.get('rel_std') and _st.get('shell') is not None",
         "                    and _st['shell'] <= _c):",
@@ -608,7 +620,7 @@ def build_cutoff_select(kappa_tol_pct=5.0, se_mult=1.0, stability_thr=0.3,
         "for _r in _rep.get('records', []):",
         "    print('  c3=%-5.2f κ=%-10s κ_err=%-10s data=%s stable=%s cv=%s plateau=%s'",
         "          % (_r['cut'], _r['kappa'], _r['kappa_err'], _r['data_ok'],",
-        "             _r['stable_ok'], _r['cv_ok'], _r['plateau_ok']))",
+        "             _r['stable_ok'], _r['err_ok'], _r['plateau_ok']))",
         "if _chosen is not None:",
         "    _tag = ('%.2f' % _chosen).replace('.', 'p')",
         "    _s = json.load(open('cut3_%s/kappa_summary.json' % _tag, encoding='utf-8'))",
@@ -619,7 +631,18 @@ def build_cutoff_select(kappa_tol_pct=5.0, se_mult=1.0, stability_thr=0.3,
         "else:",
         "    print('NO_KAPPA')",
     ]
-    return "python - <<'PY2'\n" + "\n".join(body) + "\nPY2"
+    return body
+
+
+def build_cutoff_select(kappa_tol_pct=5.0, se_mult=1.0, stability_thr=0.3,
+                        pick="smallest"):
+    """把选截断片段包成可直接塞进 submit.sh 的 heredoc 命令（phono3py 路用）。"""
+    return ("python - <<'PY2'\n"
+            + "\n".join(_cutoff_select_src(kappa_tol_pct=kappa_tol_pct,
+                                           se_mult=se_mult,
+                                           stability_thr=stability_thr,
+                                           pick=pick))
+            + "\nPY2")
 
 
 def build_cutoff_scan_cmd(cut3_list, plan, ts, isotope, use_nac, factor, meta,
@@ -967,6 +990,35 @@ def main():
                         require=REQ_2D + ("--ntasks=1",),
                         label="phono3py 提交模板：")
     elif solver == "shengbte":
+        # ---- 三阶截断扫描（2026-09-27 补）：S5 已逐档导出 shengbte_cut3_<tag>/ 时，
+        #   让 submit.sh 逐档【重入自身】各跑一次完整 κ，再按判据②③选截断。
+        #   逐档力常数不全 → 退回单档并 WARN（不再静默假装支持扫描）。
+        _sb_tags = []
+        if str(conf["CUT3_KAPPA_SCAN"]).lower() not in ("off", "false", "0", "no") \
+                and len(_scan_recs) >= 2:
+            for _r in _scan_recs:
+                _t = ("%.2f" % float(_r["cut"])).replace(".", "p")
+                if (fcd / ("shengbte_cut3_%s" % _t) / "FORCE_CONSTANTS_3RD").is_file():
+                    _sb_tags.append(_t)
+        if len(_sb_tags) >= 2:
+            for _dep in (here / "kl_common.py", here / "dim_common.py"):
+                try:
+                    shutil.copyfile(_dep, out / _dep.name)
+                except OSError as _e:
+                    print("[WARN] 拷 %s 到 step6 失败（选截断 import 会失败）：%s"
+                          % (_dep.name, _e))
+            (out / "cut3_select.py").write_text(
+                "\n".join(_cutoff_select_src(
+                    kappa_tol_pct=conf["CUT3_KAPPA_TOL_PCT"],
+                    se_mult=conf["CUT3_CV_1SE_MULT"],
+                    stability_thr=conf["CUT3_STABILITY_THR"],
+                    pick=conf["CUT3_PICK"])) + "\n", encoding="utf-8")
+            print("[..] ShengBTE 截断扫描：对 %s 逐档各跑一次完整 κ（共 %d 次），"
+                  "再按判据②③自动选截断" % (", ".join(_sb_tags), len(_sb_tags)))
+        elif len(_scan_recs) >= 2:
+            print("[WARN] 有 %d 档候选，但 step5_fc/shengbte_cut3_* 逐档力常数不全 → "
+                  "ShengBTE 只跑 nominal 一档。请用 EXPORT_SHENGBTE=true 重跑 S5_fc "
+                  "生成逐档导出。" % len(_scan_recs))
         prepare_shengbte(cwd, out, sbd, conf, mesh_sb, use_nac, cart_vac_axis=vac_axis)
         tpl = kc.resolve_submit(here, "3d", "submit_shengbte")
         # MPI/OMP 布局：一个 rank 一个 NUMA 域。rank=1 会退化成串行（ShengBTE 靠
@@ -1002,8 +1054,11 @@ def main():
                          "NTASKS": str(_ntasks),
                          "CPUS_PER_TASK": str(_cpus_per_numa),
                          "QOS": str(conf["SBATCH_QOS"] or "premium"),
+                         "CUT3_TAGS": " ".join(_sb_tags),
                          **norm_subs(factor, meta, thick2d)},
-                        require=REQ_2D + ("--map-by numa",), label="2D 归一化：")
+                        require=REQ_2D + ("--map-by numa",)
+                        + (("CUT3_TAGS=",) if len(_sb_tags) >= 2 else ()),
+                        label="2D 归一化：")
         # [FIX P48] SLURM QoS comes from step.conf, not from whichever copy of the
         # template already sits on the cluster.  autozt never overwrites an existing
         # gen_need asset ("材料目录已有的文件不覆盖"), and every project keeps its own

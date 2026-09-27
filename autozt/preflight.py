@@ -96,15 +96,32 @@ def parse_conda_activations(text):
     return out
 
 
+# conda env 存在的几个常见根。2026-09-27 修：原来只探 $HOME/miniconda3/envs/<env>，
+#   把 $HOME/.conda/envs/<env>（conda create 的默认位置之一）与绝对 venv 路径全判成
+#   "不存在" —— 例如 hanhai25 的 atomate2_p_a 就在 ~/.conda/envs，导致持续误报。
+_CONDA_ENV_ROOTS = ("$HOME/miniconda3/envs", "$HOME/.conda/envs",
+                    "$HOME/anaconda3/envs", "/opt/miniconda3/envs")
+
+
 def conda_probe_command(acts):
-    """给远端的存在性探测命令（conda env 用 $HOME/miniconda3/envs/<env> 判定）。"""
+    """给远端的存在性探测命令。
+
+    conda env 名：依次探 _CONDA_ENV_ROOTS 下的 <env>；
+    目标是绝对路径或 ~ 开头（venv）：直接按路径判定。
+    """
     parts = []
     for i, (kind, target) in enumerate(acts):
         if kind == "sh":
-            parts.append("test -f %s && echo OK-%d || echo MISS-%d" % (target, i, i))
+            parts.append("if [ -f %s ]; then echo OK-%d; else echo MISS-%d; fi"
+                         % (target, i, i))
+        elif str(target).startswith(("/", "~")):
+            parts.append("if [ -e %s ]; then echo OK-%d; else echo MISS-%d; fi"
+                         % (target, i, i))
         else:
-            parts.append("ls -d \"$HOME\"/miniconda3/envs/%s >/dev/null 2>&1 && echo OK-%d"
-                         " || echo MISS-%d" % (target, i, i))
+            _tests = " || ".join('[ -d "%s/%s" ]' % (r, target)
+                                 for r in _CONDA_ENV_ROOTS)
+            parts.append("if %s; then echo OK-%d; else echo MISS-%d; fi"
+                         % (_tests, i, i))
     return " ; ".join(parts)
 
 

@@ -2,6 +2,9 @@
 # ShengBTE BTE 提交模板（step6_kappa, SOLVER=shengbte）。占位符 {{JOBNAME}} {{SHENGBTE_EXE}}
 #   {{KAPPA_2D_FACTOR}} {{KAPPA_2D_META}} {{KAPPA_2D_THICK2D}}（2D 厚度归一化，3D 时 FACTOR=1.0）
 #   {{NTASKS}} {{CPUS_PER_TASK}} {{QOS}} —— 由 gen_step6_kappa.py 按集群 NUMA 拓扑与
+#   {{CUT3_TAGS}} —— 空格分隔的截断 tag 列表（如 "4p18 4p97"）。非空时本脚本会【逐档
+#     重入自身】各跑一次完整 κ，产物收进 cut3_<tag>/，最后 python cut3_select.py 按
+#     判据②③选截断并把选中的 κ 提到顶层 kappa_summary.json。空串 = 单档，行为与旧版一致。
 #   step.conf 的 SBATCH_QOS 算好填入（2026-09-16 从 taskflow-v2.0 同步；见下"并行布局"）
 # 输入 CONTROL + FORCE_CONSTANTS_2ND/3RD 已由 gen_step6 备好（力常数拷自 S5_fc/shengbte/）。
 #
@@ -49,6 +52,29 @@ module load openmpi/4.0.1
 source /public/home/.../miniconda3/etc/profile.d/conda.sh
 conda activate atomate2_p_a
 cd $SLURM_SUBMIT_DIR
+
+# ===== 三阶截断扫描（2026-09-27 新增）=====
+#   {{CUT3_TAGS}} 为空 = 单档（旧行为）；非空 = 逐档重入本脚本。
+#   每档：拷 step5_fc/shengbte_cut3_<tag>/ 的力常数进来 → 重入跑一次 → 产物挪进 cut3_<tag>/
+#   重入用 CUT3_INNER 标记防递归；内层仍走下面同一套输入检查与 mpirun 布局。
+CUT3_TAGS="{{CUT3_TAGS}}"
+if [ -n "$CUT3_TAGS" ] && [ -z "$CUT3_INNER" ]; then
+    echo "[shengbte] 截断扫描档位: $CUT3_TAGS"
+    for _t in $CUT3_TAGS; do
+        echo "===== 三阶截断 tag=$_t ====="
+        rm -f FORCE_CONSTANTS_2ND FORCE_CONSTANTS_3RD
+        cp "../step5_fc/shengbte_cut3_$_t/FORCE_CONSTANTS_2ND" . || exit 1
+        cp "../step5_fc/shengbte_cut3_$_t/FORCE_CONSTANTS_3RD" . || exit 1
+        CUT3_INNER="$_t" bash "$0" || { echo "[shengbte] 档 $_t 失败" >&2; exit 1; }
+        mkdir -p "cut3_$_t"
+        for _f in BTE.* kappa_summary.json shengbte.log thickness_2d.json; do
+            [ -f "$_f" ] && mv "$_f" "cut3_$_t/"
+        done
+        echo "[shengbte] 档 $_t 产物 → cut3_$_t/"
+    done
+    python cut3_select.py
+    exit $?
+fi
 
 for f in CONTROL FORCE_CONSTANTS_2ND FORCE_CONSTANTS_3RD; do
     [ ! -f "$f" ] && echo "缺 $f" >&2 && exit 1

@@ -4,12 +4,17 @@
 # 物理链：
 #   S1_opt     结构优化（复用 kl-dft-cpu 同一 gen_step1_std_opt.py）
 #   S2_disp    phonopy 2 阶对称有限位移 + 超胞单点取力（扇出 disp-*）
+#               2026-09-27 与 kl-dft-cpu S4_disp 对齐（只保留 2 阶）：
+#               取力精度 FORCE_*、结构对称化审计、结构指纹/幂等隔离、帧间一致性闸、
+#               偶极继承、2D 真空隙/残余应力门禁。
 #   S3_phonon  phonopy 收力 → fc2 拟合 → 声子谱（band-dft-cpu.yaml + phonon_summary.json）
+#               虚频判据统一走 skill/_common/imag_policy.py（mesh + 2D band 合并唯一裁判），
+#               2D 增加 ZA 弯曲支二次性检查（za_2d.py）；gen 期做抽帧一致性 + SCF 收敛门禁。
 # =============================================================================
 schema: 2
 name: phonon-dft-cpu
 desc: 声子谱(DFT/CPU)
-version: "0.1"
+version: "0.2"
 checks: ../_common/checks_relax.py   # 公共池私有判据 relax_injob
 
 template_layout: per_step
@@ -20,8 +25,9 @@ defaults:
   skill_subdir: true
 
 fetch_files: [POSCAR, CONTCAR, INCAR, KPOINTS, POTCAR, submit.sh, OUTCAR,
-              vasprun.xml, workflow_method.txt, kl_params.txt,
+              vasprun.xml, workflow_method.txt, kl_params.txt, disp_plan.json,
               phonopy_disp.yaml, band-dft-cpu.yaml, phonon_summary.json,
+              scf_steps.json, phonon_fit.log, fc2.hdf5, FORCE_CONSTANTS,
               queue.out, queue.err]
 
 steps:
@@ -34,6 +40,7 @@ steps:
   - {seq: 2, name: step2_disp, label: S2_disp, check: outcar, fanout: "disp-*",
      gen: gen_step2_disp.py,
      gen_need: [dim_common.py, stepconf.py, step.conf, kl_common.py,
+                symmetry_audit.py, thickness_2d.py, vdw_radii.py,
                 check_common.py, step2_check_and_resubmit.py,
                 incar_force_2d.tpl, incar_force_3d.tpl,
                 submit_std_2d.tpl, submit_std_3d.tpl]}
@@ -41,12 +48,28 @@ steps:
   - {seq: 3, name: step3_phonon, label: S3_phonon, check: phonon,
      gen: gen_step3_phonon.py, fetch_all: true,
      gen_need: [dim_common.py, stepconf.py, step.conf, kl_common.py,
+                imag_policy.py, za_2d.py,
                 phonon_fit_driver.py, submit_fit.tpl]}
 
 io_schema:
   inputs: [{name: POSCAR, from: user, required: true, desc: "材料结构"}]
   outputs: [{name: phonon_summary.json, step: S3_phonon, type: json, desc: "声子谱与虚频检查"}, {name: CONTCAR, step: S1_opt, type: structure, desc: "优化后结构"}]
-  params: [{name: SUPERCELL, where: step.conf, desc: "phonopy 位移超胞设置"}]
+  params:
+    - {name: SUPERCELL, where: step.conf, desc: "phonopy 位移超胞设置"}
+    - {name: FD_DISTANCE, default: 0.01, where: step.conf, desc: "2 阶有限位移幅度(Å)"}
+    - {name: FORCE_PREC, default: Accurate, where: step.conf, desc: "取力 INCAR 的 PREC（phonopy 官方示例用 Accurate）"}
+    - {name: FORCE_EDIFF, default: "1E-8", where: step.conf, desc: "取力 INCAR 的 EDIFF"}
+    - {name: FORCE_LREAL, default: ".FALSE.", where: step.conf, desc: "取力 LREAL；.FALSE.=倒空间投影无格点噪声"}
+    - {name: MAX_DISP, default: 200, where: step.conf, desc: "位移帧数硬闸：超过就报错停步"}
+    - {name: IMAG_THR, default: 0.10, where: step.conf, desc: "近 Γ 声学支上限(THz)；|ν|> 它判不稳定（imag_policy）"}
+    - {name: IMAG_THR_STRICT, default: 0.10, where: step.conf, desc: "数值噪声底(THz)，也是区外/光学支上限（imag_policy）"}
+    - {name: IMAG_QGAMMA, default: 0.05, where: step.conf, desc: "近 Γ 区半径（分数坐标，Petretto 2018；严格小于）"}
+    - {name: IMAG_QGAMMA_GRACE, default: 1.2, where: step.conf, desc: "声学支有效近 Γ 窗口 = IMAG_QGAMMA×它"}
+    - {name: ZA_CHECK, default: auto, where: step.conf, desc: "2D 的 ZA 弯曲支二次性检查：auto/on/off"}
+    - {name: ZA_QMAX, default: 0.05, where: step.conf, desc: "ZA 幂律拟合取样上限（分数坐标）"}
+    - {name: BAND_POINTS, default: 51, where: step.conf, desc: "每段高对称路径点数"}
+    - {name: STRESS_2D_THR, default: 0.5, where: step.conf, desc: "2D 残余面内应力门禁（层内口径 kbar）；0=关"}
+    - {name: FRAME_GATE, default: "on", where: step.conf, desc: "已有位移帧的同胞同网格一致性硬闸"}
   steps:
     - {step: S1_opt, title: "DFT relax", inputs: [POSCAR], outputs: [CONTCAR], validator: "力收敛"}
     - {step: S2_disp, title: "Finite displacements", inputs: [CONTCAR], outputs: [phonopy_disp.yaml], validator: "所有位移 OUTCAR 完成"}

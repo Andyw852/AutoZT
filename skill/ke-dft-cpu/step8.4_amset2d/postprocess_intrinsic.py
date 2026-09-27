@@ -252,23 +252,48 @@ def build_amset_data(run_dir, nworkers=None, progress_bar=False):
     return ad, s, amset.__version__
 
 
-def coordinate_lookup(query_kpts, all_kpts, decimals=6):
-    """在 all_kpts 里按（四舍五入后的）分数坐标查找 query_kpts 的下标。
+def coordinate_lookup(query_kpts, all_kpts, decimals=6, tol=1e-5):
+    """在 all_kpts 里查找 query_kpts 的下标（分数坐标，按周期性等价）。
 
     用于不依赖不可约 k 点选择顺序地核对能量、以及在不同 AMSET/spglib 版本
     下建立 k 点排列。找不到（或出现重复匹配）时抛错。
+
+    ★ 2026-09-27 修（2D 后处理崩溃）：原实现只做"四舍五入后元组精确相等"，
+    跨 AMSET/spglib 版本或 float32 存储时会因为末位差异（如 0.333333 vs
+    0.33333333、-1e-9 vs 1e-9）**一个都匹配不上**而抛错。现在改为两级：
+      1) 快路径：四舍五入元组精确匹配（与原行为一致）；
+      2) 慢路径：**最小镜像最近邻 + 容差 tol**，唯一命中才接受。
+    容差内命中多于一个仍然报错（不静默取第一个）——真正重复的网格不该被猜。
     """
     q = np.round(np.asarray(query_kpts, float), decimals)
     a = np.round(np.asarray(all_kpts, float), decimals)
     index = {}
     for i, row in enumerate(a):
         index.setdefault(tuple(row), []).append(i)
+
+    a_raw = np.asarray(all_kpts, float)
+    q_raw = np.asarray(query_kpts, float)
     out = []
-    for row in q:
+    for qi in range(len(q)):
+        row = q[qi]
         hits = index.get(tuple(row), [])
-        if len(hits) != 1:
+        if len(hits) == 1:
+            out.append(hits[0])
+            continue
+        if len(hits) > 1:
             raise ValueError("k 点查找失败：%s 在重建网格里命中 %d 个" % (row, len(hits)))
-        out.append(hits[0])
+        # 慢路径：最小镜像最近邻（分数坐标周期性，d -= rint(d)）
+        d = a_raw - q_raw[qi]
+        d -= np.rint(d)
+        dist = np.linalg.norm(d, axis=1)
+        m = int(np.argmin(dist))
+        near = np.where(dist <= tol)[0]
+        if dist[m] > tol:
+            raise ValueError("k 点查找失败：%s 在重建网格里找不到"
+                             "（最近距离 %.3g > tol %.3g）" % (row, dist[m], tol))
+        if len(near) != 1:
+            raise ValueError("k 点查找失败：%s 在容差 %g 内命中 %d 个" % (row, tol, len(near)))
+        out.append(m)
     return np.asarray(out, dtype=int)
 
 

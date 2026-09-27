@@ -317,7 +317,7 @@ def run(cwd, out_dir=None, unity_overlap=False):
             warn = True
             lines.append("     [WARN] 3D + 真实重叠 + 非完整网格 -> AMSET 会对系数去对称化，"
                          "二维实测 ADP 被抬高 10~30 倍（V23）；三维 Si 全网格对照（V26）："
-                         "ADP/overall 只差 3~9%、IMP 逐机制高 1.3~1.7 倍 -> 结论值可用，逐机制值需注明。"
+                         "ADP/overall 只差 3~9%%、IMP 逐机制高 1.3~1.7 倍 -> 结论值可用，逐机制值需注明。"
                          "当前 BLOCK_3D_REAL_OVERLAP=%s -> 只告警不拦。"
                          % BLOCK_3D_REAL_OVERLAP)
             lines.append("     ★ 2026-09-19 补充（VERIFICATION V33）：MoS2 二维偏差的**主因**已定位到"
@@ -325,6 +325,13 @@ def run(cwd, out_dir=None, unity_overlap=False):
                          "其系数子空间与直接 DFT 不符（100% 错），纯 TR 与非 TR 基本正确。"
                          "**凡空间群非中心对称（必须用时间反演补满网格）的材料，真实重叠 + 非完整网格"
                          "都不可信**；首选 S3b 用 ISYM=-1 出全网格波函数（走 from_data）。")
+            lines.append("     ★ 2026-09-27 更正（VERIFICATION V107）：上面「38.9% / TR 5.2%」"
+                         "这两个数**已撤回** —— 那次真值裁决拿的 IBZ h5 是旧 47 网格、全网格 h5 是 "
+                         "48x48x3，两套网格只有 3 个 k 点能配对，比值不可用。"
+                         "而 GaAs（无反演、F-43m）的**同网格**真值裁决显示去对称化与全网格数值等同"
+                         "（逐带 cos=1.0000、|coef|^2 谱差 1e-6），因为 GaAs 48 个操作 |tau| 全为 0，"
+                         "而 bug 只在平移 tau 的处理上。⇒ 触发条件是**存在 tau != 0 的非简单操作**，"
+                         "不是「没有反演中心」。2D 的真值裁决仍待做（需同网格 IBZ h5）。")
 
     ver = None
     try:

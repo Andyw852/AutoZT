@@ -349,6 +349,81 @@ def apply_pheasy_order(cfg, out):
                               indent=2), encoding="utf-8", newline="\n")
     return applied
 
+def apply_pheasy_fc_order(cfg, out):
+    """Permute pheasy's fitted force constants back to the dataset atom order.
+
+    pheasy rebuilds the supercell from POSCAR + SUPERCELL in its own atom order
+    (recorded as `pheasy_atom_order.permutation`) and writes fc2/fc3/fc4.hdf5 in
+    that order.  Every downstream consumer that rebuilds the supercell from
+    POSCAR + SUPERCELL (phono3py-loaded YAML, ShengBTE, hiphive, the phonon
+    gate) expects the *dataset* order, so leaving pheasy's order here silently
+    scrambles the force constants: the training residual stays ~1% and the
+    phonon gate can even pass, while kappa is off by tens of percent
+    (Mn2In2Se5 3x3x1: kappa_xx 1.503 vs 1.150).  This rewrites the hdf5 files
+    in place and restores SPOSCAR to the dataset order saved by cmd_fit_pheasy.
+    Idempotent: each file's post-permutation md5 is recorded in
+    .pheasy_fc_reordered.json, so a fresh fit is re-permuted while a skipped fit
+    is not permuted twice.
+    """
+    import hashlib
+    import h5py
+    perm = _recorded_pheasy_perm(out)
+    if perm is None:
+        return False
+    inv = np.argsort(perm)
+    sig = hashlib.md5(np.asarray(inv, dtype="<i8").tobytes()).hexdigest()[:12]
+    marker = out / ".pheasy_fc_reordered.json"
+    state = {}
+    if marker.is_file():
+        try:
+            state = json.loads(marker.read_text(encoding="utf-8"))
+        except Exception:
+            state = {}
+
+    def _md5(path):
+        h = hashlib.md5()
+        with h5py.File(str(path), "r") as fh:
+            for k in sorted(fh.keys()):
+                if k == "version":
+                    continue
+                h.update(np.ascontiguousarray(fh[k][()]).tobytes())
+        return h.hexdigest()[:12]
+
+    changed = False
+    for name, keys in (("fc2.hdf5", ("fc2", "force_constants")),
+                       ("fc3.hdf5", ("fc3", "force_constants_third")),
+                       ("fc4.hdf5", ("fc4", "force_constants_fourth"))):
+        p = out / name
+        if not p.is_file():
+            continue
+        cur = _md5(p)
+        old = state.get(name) or {}
+        if old.get("post_md5") == cur and old.get("sigma_md5") == sig:
+            continue
+        with h5py.File(str(p), "r+") as fh:
+            key = next((k for k in keys if k in fh), None)
+            if key is None:
+                continue
+            a = np.asarray(fh[key])
+            if a.ndim == 0 or a.shape[0] != len(inv):
+                continue
+            nax = a.ndim // 2
+            o = np.take(a, inv, axis=0)
+            for ax in range(1, nax):
+                o = np.take(o, inv, axis=ax)
+            fh[key][...] = o
+        state[name] = {"sigma_md5": sig, "post_md5": _md5(p)}
+        changed = True
+        print("[fc-order] %s -> dataset order (%d/%d atoms moved)"
+              % (name, int((inv != np.arange(len(inv))).sum()), len(inv)), flush=True)
+    marker.write_text(json.dumps(state, indent=2, sort_keys=True), encoding="utf-8")
+    # pheasy overwrote SPOSCAR with its own order; put the dataset's back.
+    ds = out / "SPOSCAR.dataset"
+    if ds.is_file():
+        shutil.copyfile(str(ds), str(out / "SPOSCAR"))
+    return changed
+
+
 def _phonopy_unitcell(path):
     """Unit cell in the form phonopy 2.x accepts.
 
@@ -1152,6 +1227,11 @@ def cmd_fit_pheasy(cfg, out):
     fit_step = "%s -f --ndata %d %s" % (base, len(disps), " ".join(fit_flags))
     disp_step = "%s -d --ndata %d --disp_file" % (base, len(disps))
 
+    # pheasy's cluster-space step rewrites SPOSCAR in its own atom order; keep
+    # the dataset's copy so apply_pheasy_fc_order can restore it after the fit.
+    if (out / "SPOSCAR").is_file():
+        shutil.copyfile(str(out / "SPOSCAR"), str(out / "SPOSCAR.dataset"))
+
     run_steps = (("cluster space", "setup", base + " -s"),
                  ("symmetry constraints", "setup", base + " -c" + rasr_flag),
                  ("displacement matrix", "displacement", disp_step))
@@ -1186,6 +1266,9 @@ def cmd_fit_pheasy(cfg, out):
     rc, log_txt = _run_streaming(fit_step, env)
     if rc != 0:
         sys.exit("[ERROR] pheasy fit failed (rc=%d)" % rc)
+    # Bring fc2/fc3 (+ SPOSCAR) back to the dataset atom order before anything
+    # downstream reads them.
+    apply_pheasy_fc_order(cfg, out)
 
     # pheasy checks the per-configuration force correlation itself and warns
     # when it drops.  Interpret it carefully:
@@ -1226,6 +1309,19 @@ def cmd_fit_pheasy(cfg, out):
               "only, or cutoffs too small); widen PHEASY_C2_CUTOFF / "
               "PHEASY_C3_CUTOFF or fit fc3 as well if it matters" % mort, flush=True)
     _write_fit_metrics(out, metrics)
+
+    # Relative-error hard gate: an atom-order mismatch (~0.10) or a too-tight
+    # cutoff (~0.05) lands here first.  The old code only parsed the number into
+    # metrics and never failed on it, so a scrambled fit could pass the phonon
+    # gate (kappa then silently off by tens of percent).
+    rel = metrics.get("pheasy_relative_error")
+    _rel_thr = float(cfg.get("fit_rel_err_fail") or 0.02)
+    if rel is not None and _rel_thr > 0 and rel > _rel_thr:
+        print("[FAIL] pheasy relative error %.4f > %.4f -- the fitted constants do "
+              "not reproduce the training forces; check the supercell atom order and "
+              "the C2/C3 cutoffs before trusting kappa"
+              % (rel, _rel_thr), flush=True)
+        (out / ".fit_gate_fail").write_text("pheasy relative error %.4f\n" % rel)
 
     # LASSO alpha on the grid boundary is a red flag: the selection is bogus.
     if method in ("LASSO", "ALASSO"):
@@ -1567,7 +1663,11 @@ def _export_shengbte(cfg, out):
     engine = str(cfg.get("engine") or "").strip().lower()
     n2, n3 = out / "FORCE_CONSTANTS_2ND", out / "FORCE_CONSTANTS_3RD"
     enable = int(cfg.get("enable_fc") or 3)
-    native_ok = (engine == "pheasy" and n2.is_file() and
+    # Native text is written in pheasy's internal atom order; once
+    # apply_pheasy_fc_order has put the hdf5 into the dataset order the native
+    # text is stale, so force the hiphive re-export from the corrected hdf5.
+    _reordered = (out / ".pheasy_fc_reordered.json").is_file()
+    native_ok = (engine == "pheasy" and not _reordered and n2.is_file() and
                  (enable < 3 or n3.is_file()))
     if native_ok:
         shutil.copyfile(str(n2), str(f2))
@@ -1786,14 +1886,9 @@ def _fit_rmse(cfg, out):
         disps, forces = _load_dataset(out)
         if len(disps) == 0:
             return {}
-        # A pheasy run leaves both SPOSCAR and fc2.hdf5 in pheasy's own atom
-        # order, while dataset_*.npy stays in the dataset's order.  Put the
-        # arrays into pheasy's order as well, otherwise this check compares
-        # forces atom by atom across two different orderings.
-        if str(cfg.get("engine") or "").lower() == "pheasy":
-            perm = _recorded_pheasy_perm(out)
-            if perm is not None:
-                disps, forces = disps[:, perm, :], forces[:, perm, :]
+        # apply_pheasy_fc_order (called in cmd_fit_pheasy) already normalises
+        # fc2/fc3.hdf5 and SPOSCAR back to the dataset atom order, so
+        # dataset_*.npy, SPOSCAR and the force constants share one order.
         idx = np.linspace(0, len(disps) - 1, min(n, len(disps))).round().astype(int)
         sc = _read_poscar(out / "SPOSCAR")
         fc2 = _read_fc2_any(out)
