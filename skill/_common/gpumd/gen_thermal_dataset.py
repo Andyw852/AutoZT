@@ -16,7 +16,9 @@ SPEC = {
     "GPUMD_BIN": ("/home/wangchaoyue852/gpumd/src/gpumd", "str"),
     "NEP_BIN": ("/home/wangchaoyue852/gpumd/src/nep", "str"),
     "SAMPLE_STEP": ("step1_thermal_sample", "str"),
+    "SAMPLE_SUBDIR": ("sampled", "str"),
     "LABEL_STEP": ("step1_thermal_label", "str"),
+    "LABEL_OFFSET": (0, "int"),
     "OLD_TRAIN": ("train_old.xyz", "str"),
     "OLD_TEST": ("test_old.xyz", "str"),
     "FOUNDATION_NEP": ("nep89_20250409.txt", "str"),
@@ -128,10 +130,11 @@ def _read_static_outcar(path, natoms):
 
 def main():
     cwd = Path.cwd()
-    out = cwd / OUTDIR
+    conf = stepconf.load(SPEC, None)
+    step_name = str(conf["STEP"] or STEP)
+    out = cwd / step_name
     out.mkdir(exist_ok=True)
-    conf = stepconf.load(SPEC, STEP)
-    sample_dir = cwd / str(conf["SAMPLE_STEP"]) / "sampled"
+    sample_dir = cwd / str(conf["SAMPLE_STEP"]) / str(conf["SAMPLE_SUBDIR"])
     label_dir = cwd / str(conf["LABEL_STEP"])
     manifest_path = sample_dir / "thermal_manifest.json"
     if not manifest_path.is_file():
@@ -159,8 +162,9 @@ def main():
     train_extra, test_extra = [], []
     force_sq, nforce = 0.0, 0
     label_input_hashes = None
+    offset = int(conf["LABEL_OFFSET"])
     for i, ent in enumerate(entries, 1):
-        cfg = label_dir / ("cfg-%03d" % i)
+        cfg = label_dir / ("cfg-%03d" % (offset + i))
         hashes = {name: hashlib.sha256((cfg / name).read_bytes()).hexdigest()
                   for name in ("INCAR", "KPOINTS", "POTCAR")}
         if label_input_hashes is None:
@@ -224,11 +228,12 @@ def main():
                               for f in foundation_files},
         "dft_input_sha256": label_input_hashes,
         "temperatures_K": manifest["temperatures_K"],
-        "split": "old 46/5 + thermal 40/10; validation held out by temperature",
+        "split": ("base %d/%d + thermal %d/%d; validation stratified by temperature"
+                  % (old_ntr, old_nte, len(train_extra), len(test_extra))),
     }
     gc.write_summary(out, "dataset_summary.json", summary)
-    print("[DONE] 数据集：train=%d (旧%d+热态%d), test=%d (旧%d+热态%d)"
-          % (ntr, old_ntr, len(train_extra), nte, old_nte, len(test_extra)))
+    print("[DONE] %s：train=%d (基准%d+新增%d), test=%d (基准%d+新增%d)"
+          % (step_name, ntr, old_ntr, len(train_extra), nte, old_nte, len(test_extra)))
 
 
 if __name__ == "__main__":

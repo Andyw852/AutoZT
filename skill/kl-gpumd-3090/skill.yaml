@@ -78,6 +78,27 @@ optional_steps:
          gen: gen_thermal_dataset.py,
          gen_need: [gpumd_common.py, stepconf.py, step.conf, train_old.xyz, test_old.xyz,
                     nep89_20250409.txt, nep89_20250409.restart], fetch_all: true}
+      - {seq: 1.4, name: step1_thermal_sample_b2, label: S1.4_thermal_sample_b2,
+         after: step1_struct, check: marker,
+         marker: 'thermal_manifest.json:"total": 50', hpc: "3090",
+         needs: [step1_thermal_dataset],
+         gen: gen_thermal_sample.py,
+         gen_need: [gpumd_common.py, stepconf.py, step.conf, thermal_md_sampler.py,
+                    submit_gpumd.tpl, nep_Mn2In2Se5_gen1000.txt,
+                    train_batch1.xyz, test_batch1.xyz], fetch_all: true}
+      - {seq: 1.5, name: step1_thermal_label_b2, label: S1.5_thermal_DFT_b2,
+         after: step1_thermal_sample_b2, check: outcar, fanout: "cfg-*",
+         hpc: jzzn, needs: [step1_thermal_sample_b2], gen: gen_thermal_label.py,
+         gen_need: [stepconf.py, step.conf, submit_std_3d.tpl, INCAR_thermal_source,
+                    KPOINTS_thermal_source, POTCAR_thermal_source]}
+      - {seq: 1.6, name: step1_thermal_dataset_b2, label: S1.6_dataset_b2,
+         after: step1_thermal_label_b2, check: marker,
+         marker: 'dataset_summary.json:"DATASET_DONE": true', run: gen,
+         done_marker: dataset_summary.json, hpc: jzzn,
+         needs: [step1_thermal_sample_b2, step1_thermal_label_b2],
+         gen: gen_thermal_dataset.py,
+         gen_need: [gpumd_common.py, stepconf.py, step.conf, train_batch1.xyz, test_batch1.xyz,
+                    nep89_20250409.txt, nep89_20250409.restart], fetch_all: true}
   kappa_plot:
     default: true
     steps:

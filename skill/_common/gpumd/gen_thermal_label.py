@@ -20,7 +20,11 @@ SPEC = {
     "KPOINTS_SOURCE": ("KPOINTS_thermal_source", "str"),
     "POTCAR_SOURCE": ("POTCAR_thermal_source", "str"),
     "SAMPLE_STEP": ("step1_thermal_sample", "str"),
+    "SAMPLE_SUBDIR": ("sampled", "str"),
     "EXPECTED_FRAMES": (50, "int"),
+    "EXPECTED_TRAIN": (40, "int"),
+    "EXPECTED_VALIDATION": (10, "int"),
+    "LABEL_OFFSET": (0, "int"),
 }
 
 
@@ -53,10 +57,11 @@ def poscar_species(path):
 
 def main():
     cwd = Path.cwd()
-    out = cwd / OUTDIR
+    conf = stepconf.load(SPEC, None)
+    step_name = str(conf["STEP"] or STEP)
+    out = cwd / step_name
     out.mkdir(exist_ok=True)
-    conf = stepconf.load(SPEC, STEP)
-    sample = cwd / str(conf["SAMPLE_STEP"]) / "sampled"
+    sample = cwd / str(conf["SAMPLE_STEP"]) / str(conf["SAMPLE_SUBDIR"])
     mp = sample / "thermal_manifest.json"
     if not mp.is_file():
         sys.exit("[ERROR] 缺少采样清单 %s（先完成热态 MD）" % mp)
@@ -67,8 +72,11 @@ def main():
                  (len(entries), int(conf["EXPECTED_FRAMES"])))
     train_n = sum(x.get("split") == "train" for x in entries)
     val_n = sum(x.get("split") == "validation" for x in entries)
-    if (train_n, val_n) != (40, 10):
-        sys.exit("[ERROR] train/validation=%d/%d，期望 40/10" % (train_n, val_n))
+    expected_train = int(conf["EXPECTED_TRAIN"])
+    expected_validation = int(conf["EXPECTED_VALIDATION"])
+    if (train_n, val_n) != (expected_train, expected_validation):
+        sys.exit("[ERROR] train/validation=%d/%d，期望 %d/%d"
+                 % (train_n, val_n, expected_train, expected_validation))
     sources = [Path(str(conf[k])) for k in
                ("INCAR_SOURCE", "KPOINTS_SOURCE", "POTCAR_SOURCE")]
     if not all(x.is_file() for x in sources):
@@ -90,7 +98,9 @@ def main():
     template_text = template.read_text(encoding="utf-8")
 
     n_new = n_kept = 0
-    for serial, ent in enumerate(entries, 1):
+    offset = int(conf["LABEL_OFFSET"])
+    for i, ent in enumerate(entries, 1):
+        serial = offset + i
         source_poscar = sample / ent["file"]
         if not source_poscar.is_file():
             sys.exit("[ERROR] 采样结构缺失：%s" % source_poscar)
@@ -135,7 +145,7 @@ def main():
         stepconf.apply_submit(cfg / "submit.sh", conf.submit)
         n_new += 1
     print("[DONE] %s：结构标签检查完成，保留已完成 %d 帧，新建/补全 %d 帧输入"
-          % (OUTDIR, n_kept, n_new))
+          % (step_name, n_kept, n_new))
 
 
 if __name__ == "__main__":

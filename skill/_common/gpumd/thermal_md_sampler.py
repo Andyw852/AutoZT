@@ -43,6 +43,51 @@ def stratified_validation_indices(counts, n_validation=10):
     return result
 
 
+def periodic_rms_displacement(a, b):
+    """Periodic RMS positional difference after removing rigid translation."""
+    import numpy as np
+    from ase.geometry import find_mic
+    if len(a) != len(b) or a.get_chemical_symbols() != b.get_chemical_symbols():
+        return float("inf")
+    if not (a.pbc.all() and b.pbc.all()):
+        return float("inf")
+    if not np.allclose(a.cell.array, b.cell.array, atol=1e-5, rtol=0):
+        return float("inf")
+    delta, _ = find_mic(a.positions - b.positions, a.cell, pbc=True)
+    delta -= delta.mean(axis=0)
+    delta, _ = find_mic(delta, a.cell, pbc=True)
+    return float(np.sqrt(np.mean(np.sum(delta * delta, axis=1))))
+
+
+def select_novel_frames(candidates, references, count, threshold):
+    """Choose spaced, non-near-duplicate frames; return indices and audit stats."""
+    if not candidates:
+        return [], {"candidate_count": 0, "rejected_near_duplicate": 0,
+                    "minimum_nearest_rms_A": None}
+    preferred = [round(i * (len(candidates) - 1) / max(count - 1, 1))
+                 for i in range(count)]
+    order = list(dict.fromkeys(preferred + list(range(len(candidates)))))
+    selected, rejected, nearest_values = [], 0, []
+    pool = list(references)
+    for idx in order:
+        frame = candidates[idx]
+        distances = [periodic_rms_displacement(frame, ref) for ref in pool]
+        nearest = min(distances) if distances else float("inf")
+        nearest_values.append(nearest)
+        if nearest < threshold:
+            rejected += 1
+            continue
+        selected.append((idx, frame))
+        pool.append(frame)
+        if len(selected) == count:
+            break
+    return selected, {
+        "candidate_count": len(candidates),
+        "rejected_near_duplicate": rejected,
+        "minimum_nearest_rms_A": min(nearest_values) if nearest_values else None,
+    }
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--poscar", required=True)
@@ -56,6 +101,8 @@ def main():
     ap.add_argument("--sample-interval", type=int, default=5000)
     ap.add_argument("--time-step-fs", type=float, default=1.0)
     ap.add_argument("--tau-fs", type=float, default=100.0)
+    ap.add_argument("--reference-xyz", action="append", default=[])
+    ap.add_argument("--dedup-rmsd", type=float, default=0.05)
     args = ap.parse_args()
 
     temps = [float(x.strip()) for x in args.temperatures.split(",") if x.strip()]
@@ -87,6 +134,12 @@ def main():
         sys.exit("[ERROR] 找不到采样 NEP 势：%s" % potential)
 
     candidate_records = []
+    reference_frames = []
+    for ref_path in args.reference_xyz:
+        path = Path(ref_path).resolve()
+        if not path.is_file():
+            sys.exit("[ERROR] reference XYZ missing: %s" % path)
+        reference_frames.extend(read(str(path), index=":", format="extxyz"))
     for T, need in zip(temps, counts):
         case = root / ("T%g" % T)
         case.mkdir()
@@ -112,24 +165,30 @@ def main():
         frames = read(str(case / "trajectory.xyz"), index=":", format="extxyz")
         if len(frames) < need:
             sys.exit("[ERROR] T=%g K 只有 %d 帧，目标 %d" % (T, len(frames), need))
-        if need == 1:
-            selected = [frames[len(frames) // 2]]
-        else:
-            idx = [round(i * (len(frames) - 1) / (need - 1)) for i in range(need)]
-            selected = [frames[i] for i in idx]
-        for j, frame in enumerate(selected):
-            candidate_records.append((T, j, frame))
+        selected, stats = select_novel_frames(
+            frames, reference_frames + [x[2] for x in candidate_records],
+            need, args.dedup_rmsd)
+        if len(selected) < need:
+            sys.exit("[ERROR] T=%g K novel frames %d/%d; increase candidates; old data untouched"
+                     % (T, len(selected), need))
+        for j, (source_idx, frame) in enumerate(selected):
+            candidate_records.append((T, j, frame, source_idx, stats))
 
     frame_dir = root / "frames"
     frame_dir.mkdir()
-    manifest = {"schema": 1, "sampler": "GPUMD+NEP", "proposal_only": True,
+    manifest = {"schema": 2, "sampler": "GPUMD+NEP", "proposal_only": True,
                 "temperatures_K": temps, "counts": counts, "total": 50,
                 "train": 40, "validation": 10, "natoms": len(atoms),
-                "reference_poscar_md5": poscar_md5, "frames": []}
+                "reference_poscar_md5": poscar_md5,
+                "dedup": {"method": "periodic MIC RMS displacement, translation removed",
+                          "threshold_A": args.dedup_rmsd,
+                          "reference_xyz": [Path(x).name for x in args.reference_xyz],
+                          "reference_frames": len(reference_frames)},
+                "frames": []}
     # Hold out exactly 10 frames, proportionally stratified by temperature.
     val_indices = stratified_validation_indices(counts, 10)
     serial = 0
-    for candidate_idx, (T, j, frame) in enumerate(candidate_records):
+    for candidate_idx, (T, j, frame, source_idx, stats) in enumerate(candidate_records):
         # candidate_records is ordered by temperature and local frame index.
         # Determine stratum index from the cumulative configured counts.
         stratum = 0
@@ -143,7 +202,8 @@ def main():
         write(str(frame_dir / name), frame, format="vasp", direct=True, vasp5=True, sort=False)
         manifest["frames"].append({"id": name, "file": str(Path("frames") / name),
                                    "temperature_K": T, "split": split,
-                                   "source_frame_index": j})
+                                   "source_frame_index": source_idx,
+                                   "dedup_stats": stats})
     if sum(x["split"] == "validation" for x in manifest["frames"]) != 10:
         sys.exit("[ERROR] 50 帧的分层 train/validation 划分不是 40/10")
     (root / "thermal_manifest.json").write_text(

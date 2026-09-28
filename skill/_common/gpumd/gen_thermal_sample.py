@@ -26,14 +26,19 @@ SPEC = {
     "TIME_STEP_FS": (1.0, "float"),
     "TAU_FS": (100.0, "float"),
     "GPU_DEVICE": (1, "int"),
+    "SAMPLE_SUBDIR": ("sampled", "str"),
+    "REFERENCE_TRAIN": ("", "str"),
+    "REFERENCE_TEST": ("", "str"),
+    "DEDUP_RMSD": (0.05, "float"),
 }
 
 
 def main():
     cwd = Path.cwd()
-    out = cwd / OUTDIR
+    conf = stepconf.load(SPEC, None)
+    step_name = str(conf["STEP"] or STEP)
+    out = cwd / step_name
     out.mkdir(exist_ok=True)
-    conf = stepconf.load(SPEC, STEP)
     poscar = cwd / "POSCAR"
     seed = cwd / str(conf["SEED_NEP"])
     if not poscar.is_file() or not seed.is_file():
@@ -44,13 +49,26 @@ def main():
     if not helper.is_file():
         sys.exit("[ERROR] gen_need 缺 thermal_md_sampler.py")
     shutil.copy2(helper, out / helper.name)
+    reference_files = []
+    for key in ("REFERENCE_TRAIN", "REFERENCE_TEST"):
+        value = str(conf[key] or "").strip()
+        if not value:
+            continue
+        source = Path(value)
+        if not source.is_absolute():
+            source = cwd / source
+        if not source.is_file():
+            sys.exit("[ERROR] 去重参考数据不存在：%s" % source)
+        target = out / source.name
+        shutil.copy2(source, target)
+        reference_files.append(target.name)
     gc.save_params(out, dict(conf))
     args = [
         "python thermal_md_sampler.py",
         "--poscar POSCAR",
         "--potential %s" % shlex.quote(seed.name),
         "--gpumd %s" % shlex.quote(str(conf["GPUMD_BIN"])),
-        "--outdir sampled",
+        "--outdir %s" % shlex.quote(str(conf["SAMPLE_SUBDIR"])),
         "--temperatures %s" % shlex.quote(str(conf["TEMPERATURES"])),
         "--counts %s" % shlex.quote(str(conf["COUNTS"])),
         "--equil-steps %s" % int(conf["EQUIL_STEPS"]),
@@ -58,8 +76,12 @@ def main():
         "--sample-interval %s" % int(conf["SAMPLE_INTERVAL"]),
         "--time-step-fs %s" % float(conf["TIME_STEP_FS"]),
         "--tau-fs %s" % float(conf["TAU_FS"]),
+        "--dedup-rmsd %s" % float(conf["DEDUP_RMSD"]),
     ]
-    cmd = " ".join(args) + " && cp sampled/thermal_manifest.json thermal_manifest.json"
+    for ref_name in reference_files:
+        args.append("--reference-xyz %s" % shlex.quote(ref_name))
+    sample_subdir = shlex.quote(str(conf["SAMPLE_SUBDIR"]))
+    cmd = " ".join(args) + " && cp %s/thermal_manifest.json thermal_manifest.json" % sample_subdir
     tpl = gc.resolve_submit(Path(__file__).resolve().parent, "submit_gpumd")
     gc.write_submit(tpl, out / "submit.sh", {
         "JOBNAME": gc.new_jobname(cwd, "Tsample"),
@@ -79,7 +101,7 @@ def main():
     submit_text = submit_text.replace(
         omp_line, omp_line + "\nexport CUDA_VISIBLE_DEVICES=%d" % int(conf["GPU_DEVICE"]), 1)
     submit.write_text(submit_text, encoding="utf-8", newline="\n")
-    print("[DONE] %s：50 帧热态采样作业输入已生成" % OUTDIR)
+    print("[DONE] %s：50 帧热态采样作业输入已生成" % step_name)
 
 
 if __name__ == "__main__":

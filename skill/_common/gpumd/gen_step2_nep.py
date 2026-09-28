@@ -23,6 +23,7 @@ SPEC = {
     "CONDA_ENV": (gc.DEFAULT_CONDA_ENV, "str"),
     "DATA_DIR": ("", "str"),
     "DATA_GLOB": ("POSCAR-*/OUTCAR", "str"),
+    "DATASET_STEP": ("step1_thermal_dataset", "str"),
     "TRAIN_FRAC": (0.9, "float"),
     "SPLIT_SEED": (20260925, "int"),
     # --- 微调基座（GPUMD 自带 nep89_20250409；两个文件都要）---
@@ -80,7 +81,7 @@ def main():
     # Optional thermal-refit route: a preceding AutoZT dataset step already merged
     # the frozen legacy split (46/5) with the labeled thermal pilot (40/10).
     # Copy those exact files into this job instead of re-splitting OUTCARs.
-    dataset_dir = cwd / "step1_thermal_dataset"
+    dataset_dir = cwd / str(conf["DATASET_STEP"])
     dataset_summary = dataset_dir / "dataset_summary.json"
     use_prebuilt = False
     if dataset_summary.is_file():
@@ -90,7 +91,7 @@ def main():
             ds = json.loads(dataset_summary.read_text(encoding="utf-8"))
         if not ds.get("DATASET_DONE") or not (dataset_dir / "train.xyz").is_file() \
                 or not (dataset_dir / "test.xyz").is_file():
-            sys.exit("[ERROR] step1_thermal_dataset 存在但数据集不完整")
+            sys.exit("[ERROR] %s 存在但数据集不完整" % dataset_dir.name)
         shutil.copy2(dataset_dir / "train.xyz", out / "train.xyz")
         shutil.copy2(dataset_dir / "test.xyz", out / "test.xyz")
         # The first legacy train frame is the zero-displacement reference used by

@@ -63,6 +63,28 @@ class ThermalNEPPipelineTests(unittest.TestCase):
         self.assertEqual(indices[0], {3, 6, 9})
         self.assertEqual(indices[3], {3, 6, 9})
 
+    def test_periodic_dedup_ignores_translation_and_rejects_near_duplicates(self):
+        import numpy as np
+        from ase import Atoms
+        base = Atoms("Mn2", positions=[[0.2, 0.3, 0.4], [1.1, 1.2, 1.3]],
+                     cell=[10, 10, 10], pbc=True)
+        shifted = base.copy()
+        shifted.positions += [9.7, 0.0, 0.0]
+        near = base.copy()
+        near.positions[1, 0] += 0.01
+        novel1 = base.copy()
+        novel1.positions[1, 0] += 0.4
+        novel2 = base.copy()
+        novel2.positions[1, 1] += 0.5
+        self.assertLess(thermal_md_sampler.periodic_rms_displacement(base, shifted), 1e-8)
+        self.assertLess(thermal_md_sampler.periodic_rms_displacement(base, near), 0.05)
+        self.assertGreater(thermal_md_sampler.periodic_rms_displacement(base, novel1), 0.05)
+        chosen, stats = thermal_md_sampler.select_novel_frames(
+            [base, near, novel1, novel2], [base], 2, 0.05)
+        self.assertEqual([i for i, _ in chosen], [3, 2])
+        self.assertEqual(stats["candidate_count"], 4)
+        self.assertGreaterEqual(stats["rejected_near_duplicate"], 1)
+
     def test_sample_generator_prepares_job_without_running_md(self):
         with tempfile.TemporaryDirectory(dir=TMP_ROOT) as temp:
             root = Path(temp)
