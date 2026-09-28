@@ -1652,6 +1652,24 @@ def _install_fermi_check(out):
         shutil.copyfile(src, dst)
     print("[OK] 费米能级窗口检查脚本就位：%s" % dst)
 
+def _install_symmetry_deps(out):
+    """把 ke_common.py / dim_common.py 复制进运行目录（作业内的 overlap_preflight.py 要用）。
+
+    patch_symmetry_gate（2026-09-28 用户批准，第二批 (a)）：作业内的 preflight 现在调
+    ke_common.symmetry_gate() 判"是否需要全网格"。运行目录默认只带 amset 相关脚本，
+    ke_common/dim_common 留在 gen 目录里；不复制的话 preflight 只能退回它的内置最小实现 ——
+    结果一样，但裁决就不再是"唯一来源"了（而这次统一的目的正是这个）。
+    """
+    here = Path(__file__).resolve().parent
+    for name in ("ke_common.py", "dim_common.py"):
+        src = next((p for p in (here / name, Path.cwd() / name) if p.is_file()), None)
+        if src is None:
+            print("[WARN] 找不到 %s —— 作业内 preflight 会退回内置判据（口径可能走散）" % name)
+            continue
+        dst = Path(out) / name
+        if src.resolve() != dst.resolve():
+            shutil.copyfile(src, dst)
+
 
 def _install_preflight(out):
     """把 overlap_preflight.py 复制进运行目录（作业内 python overlap_preflight.py --in-job）。"""
@@ -2051,6 +2069,7 @@ def main():
     _install_preflight(out)
     _install_postprocess(out)
     _install_fermi_check(out)   # patch_fermi_window（2026-09-28 用户批准）
+    _install_symmetry_deps(out)  # patch_symmetry_gate：preflight 的判据来源
     _wdir = "step4b_wave_full" if WAVEFUNCTION_FULL else WAVE_DIR
     # [guard-2026-09-26] 真实重叠（2D 出厂默认）要求全网格 h5 真的在。
     #   只检查 WAVEFUNCTION_FULL 这个标志不够 —— 分支没打开时标志仍是 True，

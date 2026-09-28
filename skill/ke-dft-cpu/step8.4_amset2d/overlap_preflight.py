@@ -234,6 +234,65 @@ def band_windows(log_paths):
     return out
 
 
+# ---------------------------------------------------------------------------
+# patch_symmetry_gate（2026-09-28 用户批准，第二批 (a)）：统一判据
+#   去对称化 bug 的触发条件是"存在 τ≠0 的对称操作"，不是"没有反演中心"。
+#   本文件此前只按"h5 是否完整网格"一刀切，会把**原点已对齐**的 2D 体系
+#   （τ≡0，走 IBZ 完全正确，见 V109/V111）一并拦下 —— 那是会误拦正常计算的。
+#   现在先问判据：needs_full_grid=False -> 放行（降为告警）；True/判不出来 -> 维持拦截。
+#   判据**唯一来源**是 ke_common.symmetry_gate()（gen 会把 ke_common.py 复制进运行目录）；
+#   万一带不进来，退回下面这份等价最小实现并在输出里注明，绝不静默换裁决。
+# ---------------------------------------------------------------------------
+def _structure_verdict(cwd):
+    """返回 (needs_full_grid, reason)。读不到结构/判据不可用时保守返回 True。"""
+    st = None
+    for d in ("step3_uniform", "step1_opt", "step1_std_opt", "step7_deform"):
+        for n in ("POSCAR", "CONTCAR"):
+            p = Path(cwd) / d / n
+            if p.is_file():
+                try:
+                    from pymatgen.core import Structure
+                    st = Structure.from_file(str(p))
+                except Exception:                                   # noqa: BLE001
+                    st = None
+                if st is not None:
+                    break
+        if st is not None:
+            break
+    if st is None:
+        return True, "读不到结构 -> 保守按需要全网格"
+    try:
+        import ke_common as _kc
+        g = _kc.symmetry_gate(st)
+        return bool(g["needs_full_grid"]), "%s [ke_common]" % g["reason"]
+    except Exception:                                               # noqa: BLE001
+        pass
+    return _fallback_verdict(st)
+
+
+def _fallback_verdict(st):
+    """ke_common 不在时的等价最小实现（与 ke_common.symmetry_gate 同口径）。"""
+    try:
+        import numpy as np
+        import spglib
+        ds = spglib.get_symmetry_dataset(
+            (st.lattice.matrix, st.frac_coords, [x.Z for x in st.species]), symprec=1e-4)
+        if ds is None:
+            return True, "spglib 失败 -> 保守按需要全网格 [fallback]"
+        g = (lambda k: ds[k]) if isinstance(ds, dict) else (lambda k: getattr(ds, k))
+        rots = np.asarray(g("rotations"), float)
+        taus = np.asarray(g("translations"), float)
+        tn = taus - np.rint(taus)
+        max_tau = float(np.abs(tn).max()) if tn.size else 0.0
+        inv = bool(any(np.allclose(R, -np.eye(3), atol=1e-5) for R in rots))
+        if inv:
+            return False, "有反演中心 -> IBZ 即可 [fallback]"
+        if max_tau <= 1e-4:
+            return False, "无反演但全部 |tau|<=1e-4（原点已对齐/简单空间群）-> IBZ 即可 [fallback]"
+        return True, "无反演且存在 τ≠0（|tau|max=%.4f）-> 必须全网格 [fallback]" % max_tau
+    except Exception as e:                                          # noqa: BLE001
+        return True, "判据不可用（%s）-> 保守按需要全网格" % type(e).__name__
+
 def run(cwd, out_dir=None, unity_overlap=False):
     two_d = False
     _passed = Path(cwd)
@@ -303,16 +362,27 @@ def run(cwd, out_dir=None, unity_overlap=False):
             lines.append("     [WARN] 2D + 真实重叠 + 非完整网格：受控对照放行（只用于算比值，"
                          "不作生产结果）。")
         elif not complete and not unity_overlap and two_d:
-            err = True
-            lines.append("     ★ 拦截：2D + 真实重叠 + **非完整网格**。真实重叠只有走完整网格的 "
-                         "from_data 才对；非完整网格会触发 AMSET 的去对称化，"
-                         "而它在本体系上会大面积算错。")
-            lines.append("     正确做法：打开 wavefunction_full 分支（S3b 用 ISYM=-1 出全网格 "
-                         "WAVECAR -> S4b 出全网格 wavefunction.h5）。")
-            lines.append("     2026-09-26 量化（tmp/amset2d/DESYM_FINDINGS.md）：逐点真值裁决下 "
-                         "MoS2 只有 38.9% 的 k 点正确，TR（R->-R）路径 5.2%，24 个操作里 15 个全错；"
-                         "同一脚本 Si 对照 97.7%（Si 有反演，TR 被点群吸收、无此类操作）。"
-                         "根因是 TR 分支 tau 被反号两次（symmetry.py:187-188 + common.py:123-124）。")
+            # ★ 2026-09-28 用户批准（第二批 (a)）：先问**统一判据**，别一刀切。
+            _need_full, _why = _structure_verdict(cwd)
+            if not _need_full:
+                warn = True
+                lines.append("     [WARN] 2D + 真实重叠 + 非完整网格，但**判据说可以走 IBZ**：%s" % _why)
+                lines.append("     依据 V109/V111：τ≡0（原点已对齐，S3 的 align_origin 做过）时去对称化"
+                             "不触发 τ 分支 —— 实测逐带 cos 中位 1.0000，与全网格数值等同。")
+                lines.append("     注意：本次仍是非完整网格，若这个结构之后被改动（原点平移、加原子），"
+                             "判据会变，别把结论当成永久豁免。")
+            else:
+                err = True
+                lines.append("     ★ 拦截：2D + 真实重叠 + **非完整网格**，且判据说必须全网格：%s" % _why)
+                lines.append("     真实重叠只有走完整网格的 from_data 才对；非完整网格会触发 AMSET 的"
+                             "去对称化，而它在这类体系上会大面积算错。")
+                lines.append("     正确做法：打开 wavefunction_full 分支（S3b 用 ISYM=-1 出全网格 "
+                             "WAVECAR -> S4b 出全网格 wavefunction.h5）。")
+                lines.append("     若该空间群本身是**简单空间群**（如 TMD 的 P-6m2），可以先让 S3 的 "
+                             "align_origin 把原点对到高对称原子上再重跑本步（V109/V111）——"
+                             "那时判据会放行，不必付全网格的代价。")
+                lines.append("     注：DESYM_FINDINGS 里「MoS2 38.9% / TR 5.2%」两个数已撤回（V107），"
+                             "现在的裁决依据只有「存在 τ≠0 的对称操作」这一条。")
         elif not complete and not unity_overlap:
             warn = True
             lines.append("     [WARN] 3D + 真实重叠 + 非完整网格 -> AMSET 会对系数去对称化，"
