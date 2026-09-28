@@ -62,6 +62,22 @@ SPEC = {
     "FIT_ENGINE": ("phono3py", "str"),       # phono3py | pheasy | hiphive
     "ENABLE_FC": (3, "int"),                 # 2 | 3 (highest order to fit)
     "DIM": ("auto", "str"),                  # auto | 2d | 3d (NAC verdict only)
+    # ---- shell / third-order cutoff determination (ported from kl-dft-cpu
+    #      S4/S5, 2026-09-24 user 流程) ----
+    # Candidates are the midpoints between adjacent neighbour shells of the
+    # unit cell (never on a shell distance).  With CUT3_SCAN on and >= 2
+    # candidates the pheasy engine refits each candidate, does a frame
+    # bootstrap and reports, per shell, the scatter of |Phi^3| -- i.e. how far
+    # the data can actually determine the fc3 (stable_upper_cut).  See
+    # fc_fit_driver._shell_scan_pheasy and cutoff_scan.json.
+    "CUT3_CANDIDATES": ("auto", "str"),      # auto | off | "3.6 4.2 4.8 ..."
+    "CUT3_MAX": (7.0, "float"),              # largest radius scanned for shells (A)
+    "CUT3_MIN_SHELLS": (2, "int"),           # skip the nearest-shell-only midpoint
+    "CUT3_GAP_TOL": (0.05, "float"),         # shell clustering tolerance (A)
+    "CUT3_MIN_GAP": (0.05, "float"),         # skip a midpoint in a split double shell
+    "CUT3_SCAN": ("off", "str"),             # off | auto/on: refit each candidate
+    "CUT3_BOOTSTRAP": (10, "int"),           # frame bootstrap per candidate (0 = off)
+    "CUT3_STABILITY_THR": (0.3, "float"),    # sigma/|mean| below this = "determined"
     # ---- phono3py ----
     "FC_CALC": ("symfc", "str"),             # symfc | alm
     "FC3_CUTOFF": ("", "str"),               # fc3 cutoff in A; empty = no cutoff
