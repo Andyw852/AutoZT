@@ -456,6 +456,52 @@ def main():
     p_nmu, p_tol, p_max_iter, p_mu_max = pheasy_grid(conf, p_method, enable)
     dim = resolve_dim(conf["DIM"], src, src.parent)
 
+    # ---- shell / third-order cutoff candidates (ported from kl-dft-cpu S4/S5) ----
+    #   Cheap and engine independent: enumerate the neighbour shells of the unit
+    #   cell and take the midpoints between adjacent shells as cutoff candidates.
+    #   The compute-node driver then decides (pheasy: refit + frame bootstrap)
+    #   how far the data can determine the fc3.  A failure here degrades to "no
+    #   candidates" -- it must never block a fit that would otherwise run.
+    _pos = src / "POSCAR"
+    if not _pos.is_file():
+        _pos = src / "SPOSCAR"
+    _cands, _shells, _cnote = [], [], "no POSCAR/SPOSCAR in the dataset"
+    try:
+        _cands, _shells, _cnote = fc.resolve_cut3_candidates(
+            _pos, conf["CUT3_CANDIDATES"], cut3_max=float(conf["CUT3_MAX"]),
+            tol=float(conf["CUT3_GAP_TOL"]), min_shells=int(conf["CUT3_MIN_SHELLS"]),
+            min_gap=float(conf["CUT3_MIN_GAP"]))
+    except Exception as _e:                              # noqa: BLE001
+        _cnote = "shell enumeration failed: %s" % _e
+    print("[..] 壳层/截断候选：%s" % _cnote)
+    _safe = None
+    try:
+        _sc_cell, _ = fc.read_poscar_cell_frac(src / "SPOSCAR")
+        _safe = fc.supercell_safe_cutoff(_sc_cell)
+    except Exception:
+        _safe = None
+    if _safe is not None:
+        _over = [c for c in _cands if c > _safe + 1e-9]
+        if _over:
+            print("[WARN] 候选截断 %s 超过超胞安全截断 %.2f Å（周期镜像会重复计数），"
+                  "已剔除" % (_over, _safe))
+        _cands = [c for c in _cands if c <= _safe + 1e-9]
+        print("[..] 超胞安全截断 = %.2f Å → 有效候选 %s" % (_safe, _cands))
+    _scan_req = str(conf["CUT3_SCAN"] or "off").strip().lower()
+    if _scan_req not in ("off", "none", "false", "no", "0", "auto", "on", "true",
+                         "1", "yes"):
+        sys.exit("[ERROR] CUT3_SCAN 只允许 off 或 auto/on，收到 %r" % conf["CUT3_SCAN"])
+    # The scan measures the |Phi^3| spread across refits, so it only means
+    # something when fc3 is actually fitted (ENABLE_FC=3) and there are >= 2
+    # candidates.
+    _scan = (_scan_req in ("auto", "on", "true", "1", "yes")
+             and len(_cands) >= 2 and enable >= 3)
+    print("[..] CUT3_SCAN=%s（候选 %d 档）→ %s"
+          % (conf["CUT3_SCAN"], len(_cands), "逐档扫描" if _scan else "单截断"))
+    if _scan and engine != "pheasy":
+        print("[..] 拟合器=%s：本步只做单档壳层报告；逐档 refit + bootstrap 仅 pheasy 有"
+              % engine)
+
     cfg = {
         "engine": engine,
         "dataset_dir": os.path.relpath(str(src), str(out)),
@@ -469,6 +515,13 @@ def main():
         "subtract_equilibrium": bool(conf["SUBTRACT_EQUILIBRIUM"]),
         "equilibrium_forces_npy": str(conf["EQUILIBRIUM_FORCES_NPY"] or ""),
         "coords": coords,
+        # shell / third-order cutoff determination
+        "cut3_candidates": [float(x) for x in _cands],
+        "cut3_shells": [float(x) for x in _shells],
+        "cut3_scan": bool(_scan),
+        "cut3_bootstrap": int(conf["CUT3_BOOTSTRAP"] or 0),
+        "cut3_stability_thr": float(conf["CUT3_STABILITY_THR"] or 0.3),
+        "cut3_safe_cutoff": (None if _safe is None else float(_safe)),
         # phono3py
         "fc_calc": fc_calc,
         "fc3_cutoff": str(conf["FC3_CUTOFF"] or ""),

@@ -393,6 +393,52 @@ def _sym_ops_max_tau(structure, atol=1e-4):
         return None, None, None
 
 
+# ---- 统一判据（2026-09-28 用户批准，第二批 (a)）-------------------------------
+#   去对称化 bug 的触发条件是"存在 τ≠0 的对称操作"，**不是**"没有反演中心"。
+#   这条判据此前散在 4 处各写一份（S3 gen 的提示、S8.4 gen 的闸门、S8 gen 的闸门、
+#   overlap_preflight 的 ②），阈值与口径容易走散。这里给唯一口径，各处都调它。
+TAU_TOL = 1e-4
+
+
+def symmetry_gate(structure, atol=TAU_TOL):
+    """去对称化路径的统一裁决。返回 dict：
+
+        has_inversion   : bool|None   —— 是否含反演操作
+        max_tau         : float|None  —— 非整数分数平移的最大绝对值
+        tau_ops         : int|None    —— |tau|>atol 的操作数
+        needs_full_grid : bool        —— 是否需要 S3b/S4b 全网格（WAVEFUNCTION_FULL）
+        reason          : str         —— 一句话理由（可直接打印）
+
+    裁决（依据 VERIFICATION V107 / V109 / V111）：
+      · 有反演                -> TR 已并入点群，去对称化不走 τ 分支 -> IBZ 即可；
+      · 无反演但全部 |tau|=0  -> 简单空间群、或原点已对齐（S3 的 align_origin）-> IBZ 即可；
+      · 无反演且存在 τ≠0      -> AMSET 的去对称化会大面积算错 -> **必须全网格**；
+      · 结构 / spglib 判不出来 -> 保守按"需要全网格"。
+    """
+    import numpy as np
+    if structure is None:
+        return {"has_inversion": None, "max_tau": None, "tau_ops": None,
+                "needs_full_grid": True, "reason": "取不到结构 -> 保守按需要全网格"}
+    max_tau, rots, tn = _sym_ops_max_tau(structure, atol)
+    if max_tau is None or rots is None:
+        return {"has_inversion": None, "max_tau": None, "tau_ops": None,
+                "needs_full_grid": True, "reason": "spglib 取对称操作失败 -> 保守按需要全网格"}
+    inv = bool(any(np.allclose(R, -np.eye(3), atol=1e-5) for R in rots))
+    tau_ops = int(np.sum(np.any(np.abs(tn) > atol, axis=1))) if tn is not None and len(tn) else 0
+    out = {"has_inversion": inv, "max_tau": float(max_tau), "tau_ops": tau_ops}
+    if inv:
+        out.update(needs_full_grid=False,
+                   reason="有反演中心（TR 已被点群吸收）-> IBZ 即可")
+    elif tau_ops == 0:
+        out.update(needs_full_grid=False,
+                   reason="无反演但全部 |tau|<=%.0e（简单空间群或原点已对齐）-> IBZ 即可" % atol)
+    else:
+        out.update(needs_full_grid=True,
+                   reason="无反演且存在 %d 个 τ≠0 的对称操作（|tau|max=%.4f）-> 必须全网格"
+                          % (tau_ops, max_tau))
+    return out
+
+
 def _slab_center_span(fz, h_perp=None, vac_min=5.0):
     """沿 c 的分数坐标 -> (层心, 跨度, 是否 slab)。按最大空隙切开，跨周期边界也对。
 

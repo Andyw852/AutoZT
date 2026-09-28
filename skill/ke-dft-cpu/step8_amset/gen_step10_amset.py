@@ -1542,20 +1542,15 @@ def _symmetry_flags(structure):
     注意 P-6m2 **本身是简单空间群**（存在让全部 τ=0 的原点），只是所给 slab 的原点不在
     高对称原子上，于是对称操作带上了分数平移。
     """
-    try:
-        import numpy as np
-        from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
-        ds = SpacegroupAnalyzer(structure).get_symmetry_dataset()
-        if not ds:
-            return None, None
-        rots = np.asarray(ds["rotations"], float)
-        taus = np.asarray(ds["translations"], float)
-        inv = bool(any(np.allclose(R, -np.eye(3), atol=1e-5) for R in rots))
-        tn = taus - np.rint(taus)          # 只关心非整数平移（0 与 1 等价）
-        max_tau = float(np.abs(tn).max()) if tn.size else 0.0
-        return inv, max_tau
-    except Exception:
+    # ★ 2026-09-28（第二批 (a)，用户批准）：**判据统一到 ke_common.symmetry_gate()**。
+    #   去对称化 bug 的触发条件是"存在 τ≠0 的对称操作"，不是"没有反演中心"；
+    #   这条口径此前在 S3 gen / S8.4 gen / S8 gen / overlap_preflight 各写一份，容易走散。
+    #   本函数保留为兼容包装：判不出来（结构 None / spglib 失败）返回 (None, None)，
+    #   调用方一律按"保守 = 需要全网格"处理。
+    if not _HAS_KC:
         return None, None
+    _g = kc.symmetry_gate(structure)
+    return _g["has_inversion"], _g["max_tau"]
 
 
 def _has_inversion(structure):

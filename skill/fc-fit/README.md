@@ -267,6 +267,8 @@ step1_fit/
   FORCE_CONSTANTS          fc2 in phonopy text format (hiphive path)
   shengbte/FORCE_CONSTANTS_2ND _3RD POSCAR    for ShengBTE / fourphonon
   band-dft-cpu.yaml        phonopy band structure of the fit
+  cutoff_scan.json         shell / cutoff determination (see below)
+  cutoff_scan/cut3_<c>/    per-candidate fc2/fc3 + pheasy logs (scan mode)
   fc_dataset.json          dataset audit (frames, atoms, RMS displacement,
                            supercell, frozen atom order, ...)
   fit_metrics.json         engine-reported fit quality (RMSE, correlation, ...)
@@ -335,6 +337,44 @@ of the log into `fit_metrics.json` and copies into both summaries:
 `pheasy_free_ifcs`. pheasy's correlation is the fastest warning sign
 available and the driver acts on it (see the pheasy section).
 
+## Shell / third-order cutoff determination
+
+Ported from `kl-dft-cpu` S4/S5 (2026-09-24 user 流程). Setting the fc3 cutoff by
+hand is guesswork; instead the skill enumerates the neighbour shells of the unit
+cell and takes the **midpoints between adjacent shells** as candidate cutoffs
+(never on a shell distance), then lets the fit decide how far the data can
+actually determine the fc3.
+
+* The gen always enumerates the shells and stores the candidates in
+  `fit_config.json` (it prints them). Candidates beyond the supercell safe
+  cutoff (`0.5 x` the shortest cell height, minus 0.1 A) are dropped with a
+  `[WARN]` - a larger cutoff makes periodic images double-count.
+* `CUT3_CANDIDATES = auto | off | "3.6 4.2 4.8 ..."` chooses them;
+  `CUT3_MAX`, `CUT3_MIN_SHELLS`, `CUT3_GAP_TOL`, `CUT3_MIN_GAP` tune the
+  enumeration (see `fc_common.neighbor_shells` / `cut3_candidates`).
+* `CUT3_SCAN = off` by default. Set it to `auto`/`on` to run the determination:
+
+  * **pheasy** (the full port): every candidate is refitted (`-s -c -d -f`) and
+    then refit `CUT3_BOOTSTRAP` times on bootstrap-resampled frames. For each
+    shell of the supercell the driver records the mean |Phi^3| and its scatter
+    across the bootstrap fits; walking outwards while `sigma/|mean| <
+    CUT3_STABILITY_THR` gives **`stable_upper_cut`**, the largest cutoff the
+    data can determine. A candidate is usable when `cut <= stable_upper_cut`;
+    `recommended_cut` is the largest usable candidate. Each candidate's
+    `fc2.hdf5` / `fc3.hdf5` and pheasy logs land in `cutoff_scan/cut3_<c>/`.
+  * **phono3py / hiphive**: a single-fit report - the per-shell mean |Phi^3| of
+    the nominal fit. No bootstrap, so `stable_upper_cut` stays `null`; use it
+    to see which shell the nominal cutoff falls between, not as a verdict.
+
+  The result is `cutoff_scan.json` (`mode`, `shells`, `candidates`, `records`
+  with `shell_stats` / `stable_upper_cut`, `recommended_cut`, `note`).
+* The final cutoff choice is deliberately left to the caller: `fc-fit` never
+  computes kappa, so it cannot apply the kl S6 plateau criterion. The
+  `stable_upper_cut` is the data-side bound; a downstream kappa step decides
+  between the usable candidates (kl's `select_cutoff`).
+
+`tests/suite_fcfit_shell.py` covers the algorithms without touching a cluster.
+
 ## Physics notes and pitfalls
 
 * **Supercell vs cutoff.** A cutoff larger than half the smallest supercell
@@ -382,7 +422,8 @@ available and the driver acts on it (see the pheasy section).
 | Input | hard-wired to its own `step4_disp` | any dataset, `FIT_INPUT_DIR` or auto-search |
 | Engines | phono3py, pheasy | phono3py, pheasy, **hiphive** |
 | pheasy logic | inside the submit template | inside `fc_fit_driver.py` (testable, cluster independent) |
-| Output | `step5_fc/phono3py/fc2.hdf5` (+ shengbte/) | `step1_fit/fc2.hdf5` (+ shengbte/) |
+| Shell/cutoff determination | S4 candidates + S5 scan + S6 kappa selection | candidates + S5-equivalent scan ported; **no** S6 (no kappa step) |
+| Output | `step5_fc/phono3py/fc2.hdf5` (+ shengbte/) | `step1_fit/fc2.hdf5` (+ shengbte/, cutoff_scan.json) |
 | Marker | `phonon_summary.json` | `phonon_summary.json` (+ `fc_fit_summary.json`) |
 | Next step | kappa from the BTE solver | none - hand the artifacts to whoever needs them |
 

@@ -49,6 +49,7 @@ and records RMSE / relative RMSE in fc_fit_summary.json.
 """
 import glob
 import json
+import math
 import os
 import pickle
 import re
@@ -791,6 +792,310 @@ def _load_dataset(out):
 
 
 # ==========================================================================
+# Shell / third-order cutoff determination (ported from kl-dft-cpu S5_fc)
+# --------------------------------------------------------------------------
+# The candidate cutoffs come from the gen (midpoints between adjacent neighbour
+# shells of the unit cell); here the fit decides how far the data can actually
+# determine the fc3.  For pheasy every candidate is refitted and a frame
+# bootstrap gives, per shell, the scatter of |Phi^3| -- the outermost shell
+# whose sigma/|mean| is below the threshold fixes stable_upper_cut.  The other
+# engines get a single-fit per-shell report (no statistics).
+# ==========================================================================
+def _min_image_shifts(cell, r_max):
+    """Periodic image shifts (-k..k per axis) needed to cover r_max."""
+    import itertools
+    cell = np.asarray(cell, float)
+    vol = abs(np.linalg.det(cell))
+    ks = []
+    for i in range(3):
+        j, k = (i + 1) % 3, (i + 2) % 3
+        area = float(np.linalg.norm(np.cross(cell[j], cell[k])))
+        perp = vol / area if area > 1e-12 else r_max
+        ks.append(max(1, int(math.ceil(float(r_max) / max(perp, 1e-6)))))
+    out = [(0, 0, 0)]
+    for s in itertools.product(*[range(-k, k + 1) for k in ks]):
+        if any(s):
+            out.append(tuple(s))
+    return out
+
+
+def fc3_shell_index(cell, frac, tol=0.05, r_max=None):
+    """Return (shell_dist, tri) for a supercell fc3.
+
+    shell_dist is the sorted list of clustered atom-pair distances; tri[i,j,k]
+    is the shell of the triplet (i,j,k) = the largest of its three pair shells
+    (a self pair is -1)."""
+    cell = np.asarray(cell, float)
+    frac = np.asarray(frac, float)
+    n = len(frac)
+    if r_max is None:
+        r_max = 12.0
+    shifts = np.array(_min_image_shifts(cell, max(1.0, min(float(r_max), 20.0))),
+                      dtype=float)
+    D = np.full((n, n), np.inf)
+    for shift in shifts:
+        df = frac[None, :, :] + shift[None, None, :] - frac[:, None, :]
+        cart = df @ cell
+        D = np.minimum(D, np.sqrt((cart ** 2).sum(-1)))
+    np.fill_diagonal(D, 0.0)
+    iu = np.triu_indices(n, k=1)
+    ds = np.sort(D[iu])
+    ds = ds[ds < float(r_max)]
+    shell_edges = []
+    for x in ds:
+        if not shell_edges or x - shell_edges[-1][-1] > tol:
+            shell_edges.append([x])
+        else:
+            shell_edges[-1].append(x)
+    shell_dist = [float(np.mean(s)) for s in shell_edges]
+    if not shell_dist:
+        return [], np.full((n, n, n), -1, dtype=int)
+    idx = np.clip(np.searchsorted(shell_dist, D), 0, len(shell_dist) - 1)
+    idx = np.where(D < 1e-9, -1, idx)
+    a = idx[:, :, None]
+    b = idx[:, None, :]
+    c = np.transpose(idx, (1, 0))[None, :, :]
+    tri = np.maximum(np.maximum(a, b), c)
+    return shell_dist, tri
+
+
+def fc3_shell_bins(tri, nshell):
+    """Per-shell flat indices (streamed so one fc3 stays resident at a time)."""
+    flat = np.asarray(tri).reshape(-1)
+    return [np.nonzero(flat == s)[0] for s in range(int(nshell))]
+
+
+def fc3_shell_means(fc3, bins):
+    """Per-shell mean |Phi^3| of one force-constant array."""
+    F3 = np.asarray(fc3, dtype=float)
+    Fn = np.sqrt((F3 ** 2).sum(axis=(3, 4, 5))).reshape(-1)
+    return [float(Fn[b].mean()) if len(b) else 0.0 for b in bins]
+
+
+def fc3_shell_stats_from_means(shell_dist, per_shell_mean, stability_thr=0.3,
+                               tol=0.05):
+    """Per-shell sigma/|mean| and the largest cutoff the data can determine."""
+    if not shell_dist:
+        return [], float("inf")
+    ns = len(shell_dist)
+    arr = np.asarray(per_shell_mean, dtype=float)
+    stats = []
+    for s in range(ns):
+        col = arr[:, s] if arr.size else np.zeros(1)
+        mu = float(col.mean())
+        sd = float(col.std(ddof=1)) if len(col) > 1 else 0.0
+        stats.append({"shell": round(shell_dist[s], 4), "mean_abs": mu,
+                      "std_abs": sd, "rel_std": (sd / abs(mu) if mu else None)})
+    last_ok = -1
+    for s, st in enumerate(stats):
+        r = st["rel_std"]
+        if r is not None and r < stability_thr:
+            last_ok = s
+        else:
+            break
+    if last_ok < 0:
+        upper = shell_dist[0] - tol              # even the nearest shell is unstable
+    elif last_ok >= ns - 1:
+        upper = shell_dist[-1] + tol
+    else:
+        upper = 0.5 * (shell_dist[last_ok] + shell_dist[last_ok + 1])
+    return stats, float(upper)
+
+
+def _shell_cell_frac(out):
+    from ase.io import read as _ase_read
+    p = Path(out) / "SPOSCAR"
+    if not p.is_file():
+        p = Path(out) / "POSCAR"
+    a = _ase_read(str(p))
+    return np.asarray(a.cell, float), np.asarray(a.get_scaled_positions(), float)
+
+
+def _recommend_cut(records):
+    """Largest candidate inside its own stable_upper_cut (no kappa step here)."""
+    ok = [r for r in records
+          if r.get("stable_upper_cut") is not None
+          and r.get("cut") is not None
+          and r["cut"] <= r["stable_upper_cut"] + 1e-9]
+    return max(r["cut"] for r in ok) if ok else None
+
+
+def _write_cutoff_scan(out, payload):
+    p = Path(out) / "cutoff_scan.json"
+    p.write_text(json.dumps(payload, ensure_ascii=False, indent=2),
+                 encoding="utf-8", newline="\n")
+    print("[OK] cutoff_scan.json（%d 档，mode=%s）" % (len(payload.get("records") or []),
+                                                       payload.get("mode")), flush=True)
+
+
+def _pheasy_scan(cfg, out, cands, base_for, rasr_flag, fit_flags, make_env):
+    """Refit every candidate cutoff; frame-bootstrap the per-shell |Phi^3|.
+
+    Runs in the step directory, in pheasy's own atom order (SPOSCAR as pheasy
+    wrote it).  The fitted fc2/fc3 of the last candidate are overwritten by the
+    nominal fit that cmd_fit_pheasy runs afterwards."""
+    boot = int(cfg.get("cut3_bootstrap") or 0)
+    thr = float(cfg.get("cut3_stability_thr") or 0.3)
+    scan_dir = Path(out) / "cutoff_scan"
+    scan_dir.mkdir(exist_ok=True)
+    with open(Path(out) / "disp_matrix.pkl", "rb") as fh:
+        d0 = np.asarray(pickle.load(fh))
+    with open(Path(out) / "force_matrix.pkl", "rb") as fh:
+        f0 = np.asarray(pickle.load(fh))
+    nd = len(d0)
+    rng = np.random.default_rng(int(cfg.get("pheasy_seed") or 20250924))
+
+    def _run(label, phase, cmd, logfile=None):
+        env = make_env(phase)
+        r = subprocess.run(cmd, shell=True, capture_output=True, text=True, env=env)
+        txt = (r.stdout or "") + (r.stderr or "")
+        (Path(out) / logfile).write_text(txt, encoding="utf-8") if logfile else None
+        sys.stdout.write(txt)
+        sys.stdout.flush()
+        if r.returncode != 0:
+            sys.exit("[ERROR] pheasy %s failed (rc=%d): %s" % (label, r.returncode, cmd))
+        if label == "symmetry constraints" and rasr_flag:
+            if not re.search(r"Imposing rotational invariance"
+                             r"|Imposing equilibrium conditions", txt):
+                sys.exit("[ERROR] RASR=%s requested but pheasy -c never logged "
+                         "imposing it" % cfg.get("pheasy_rasr"))
+        return txt
+
+    def _fit_stages(c3v, tag):
+        base = base_for(c3v)
+        _run("cluster space", "setup", base + " -s", "pheasy_s_%s.log" % tag)
+        _run("symmetry constraints", "setup", base + " -c" + rasr_flag,
+             "pheasy_c_%s.log" % tag)
+        _run("displacement matrix", "displacement",
+             "%s -d --ndata %d --disp_file" % (base, nd), "pheasy_d_%s.log" % tag)
+        rc, txt = _run_streaming("%s -f --ndata %d %s" % (base, nd, " ".join(fit_flags)),
+                                 make_env("fit"))
+        (Path(out) / ("pheasy_f_%s.log" % tag)).write_text(txt, encoding="utf-8")
+        if rc != 0:
+            sys.exit("[ERROR] pheasy -f (c3=%.2f) failed" % c3v)
+        return txt
+
+    records, shell_dist, bins = [], None, None
+    for c in cands:
+        tag = ("%.2f" % c).replace(".", "p")
+        cdir = scan_dir / ("cut3_%s" % tag)
+        cdir.mkdir(parents=True, exist_ok=True)
+        fit_txt = _fit_stages(c, tag)
+        if bins is None:
+            # Build the shell index now: the fit (and therefore fc3) is in
+            # pheasy's atom order, which is what SPOSCAR holds at this point.
+            cell, frac = _shell_cell_frac(out)
+            shell_dist, tri = fc3_shell_index(cell, frac, tol=0.05,
+                                              r_max=max(cands) + 1.0)
+            bins = fc3_shell_bins(tri, len(shell_dist))
+        rec = {"cut": float(c), "natom_super": int(len(frac)), "ndata": int(nd),
+               "shell_stats": [], "stable_upper_cut": None,
+               "dir": str(cdir.relative_to(out))}
+        m = _pheasy_metrics(fit_txt)
+        rec["train_rel_err"] = m.get("pheasy_relative_error")
+        rec["free_ifcs"] = m.get("pheasy_free_ifcs")
+        if (Path(out) / "fc2.hdf5").is_file():
+            shutil.copyfile(str(Path(out) / "fc2.hdf5"), str(cdir / "fc2.hdf5"))
+        if (Path(out) / "fc3.hdf5").is_file():
+            shutil.copyfile(str(Path(out) / "fc3.hdf5"), str(cdir / "fc3.hdf5"))
+        rels = [rec["train_rel_err"]] if rec["train_rel_err"] is not None else []
+        # Only the bootstrap refits feed the stability statistics: with
+        # CUT3_BOOTSTRAP=0 there is one fit per candidate and no spread to
+        # measure, so stable_upper_cut must stay None (mirrors kl's S5 scan,
+        # where the nominal fit is deliberately not counted as a sample).
+        per_means = []
+        for b in range(boot):
+            idx = rng.integers(0, nd, size=nd)
+            with open(Path(out) / "disp_matrix.pkl", "wb") as fh:
+                pickle.dump(d0[idx], fh)
+            with open(Path(out) / "force_matrix.pkl", "wb") as fh:
+                pickle.dump(f0[idx], fh)
+            base = base_for(c)
+            _run("displacement matrix", "displacement",
+                 "%s -d --ndata %d --disp_file" % (base, nd),
+                 "pheasy_d_%s_b%02d.log" % (tag, b))
+            rc, txt = _run_streaming("%s -f --ndata %d %s"
+                                     % (base, nd, " ".join(fit_flags)), make_env("fit"))
+            (Path(out) / ("pheasy_f_%s_b%02d.log" % (tag, b))).write_text(
+                txt, encoding="utf-8")
+            if rc != 0:
+                print("[WARN] bootstrap #%d c3=%.2f -f failed; sample skipped"
+                      % (b, c), flush=True)
+                continue
+            mm = _pheasy_metrics(txt)
+            if mm.get("pheasy_relative_error") is not None:
+                rels.append(mm["pheasy_relative_error"])
+            try:
+                fc3 = _read_fc3_any(out)
+                if fc3 is not None:
+                    per_means.append(fc3_shell_means(fc3, bins))
+            except Exception as e:                       # noqa: BLE001
+                print("[WARN] reading bootstrap fc3 failed: %s" % e, flush=True)
+        with open(Path(out) / "disp_matrix.pkl", "wb") as fh:
+            pickle.dump(d0, fh)
+        with open(Path(out) / "force_matrix.pkl", "wb") as fh:
+            pickle.dump(f0, fh)
+        if per_means:
+            stats, upper = fc3_shell_stats_from_means(shell_dist, per_means,
+                                                      stability_thr=thr)
+            rec["shell_stats"] = stats
+            rec["stable_upper_cut"] = upper
+        if len(rels) >= 2:
+            rec["train_rel_se"] = float(np.std(rels, ddof=1))
+        elif rels:
+            rec["train_rel_se"] = 0.0
+        records.append(rec)
+        print("[..] c3=%.2f A: shells=%d, stable_upper_cut=%s"
+              % (c, len(shell_dist or []), rec["stable_upper_cut"]), flush=True)
+        _write_cutoff_scan(out, _scan_payload(cands, shell_dist, boot, thr, records))
+    return records
+
+
+def _scan_payload(cands, shell_dist, boot, thr, records):
+    return {"mode": "scan", "candidates": [float(x) for x in cands],
+            "shells": [float(x) for x in (shell_dist or [])],
+            "bootstrap": int(boot), "stability_thr": float(thr),
+            "recommended_cut": _recommend_cut(records),
+            "records": records,
+            "note": ("pheasy per-candidate refit + frame bootstrap: a candidate is "
+                     "usable when cut <= its own stable_upper_cut (outermost shell "
+                     "with sigma/|mean| < stability_thr).  The final cutoff choice "
+                     "belongs to a downstream kappa step.")}
+
+
+def _shell_single_report(cfg, out):
+    """Per-shell report from the nominal fit (no bootstrap) for non-pheasy runs."""
+    cands = [float(x) for x in (cfg.get("cut3_candidates") or [])]
+    if not cands or (Path(out) / "cutoff_scan.json").is_file():
+        return
+    try:
+        fc3 = _read_fc3_any(out)
+        if fc3 is None:
+            return
+        cell, frac = _shell_cell_frac(out)
+        shell_dist, tri = fc3_shell_index(cell, frac, tol=0.05,
+                                          r_max=max(cands) + 1.0)
+        bins = fc3_shell_bins(tri, len(shell_dist))
+        means = fc3_shell_means(fc3, bins)
+    except Exception as e:                               # noqa: BLE001
+        print("[..] shell report skipped: %s" % e, flush=True)
+        return
+    stats = [{"shell": round(shell_dist[s], 4), "mean_abs": means[s],
+              "std_abs": None, "rel_std": None} for s in range(len(shell_dist))]
+    payload = {"mode": "single", "candidates": [float(x) for x in cands],
+               "shells": [float(x) for x in shell_dist],
+               "bootstrap": 0,
+               "stability_thr": float(cfg.get("cut3_stability_thr") or 0.3),
+               "recommended_cut": None,
+               "records": [{"cut": None, "natom_super": int(len(frac)),
+                            "shell_stats": stats, "stable_upper_cut": None}],
+               "note": ("nominal-fit shell report: per-shell mean|Phi^3| only.  "
+                        "stable_upper_cut needs the pheasy refit + bootstrap scan "
+                        "(set CUT3_SCAN=auto).")}
+    _write_cutoff_scan(out, payload)
+
+
+# ==========================================================================
 # fit: phono3py + symfc / alm
 # ==========================================================================
 def _load_ph3(out):
@@ -1160,12 +1465,6 @@ def cmd_fit_pheasy(cfg, out):
 
     c2 = _as_float_or_none(cfg.get("pheasy_c2_cutoff"))
     c3 = _as_float_or_none(cfg.get("pheasy_c3_cutoff"))
-    flags = []
-    if c2 is not None:
-        flags += ["--c2", str(c2)]
-    if c3 is not None and enable >= 3:
-        flags += ["--c3", str(c3)]
-    cflag = " ".join(flags)
     wflag = "-w %d" % enable
 
     natom_super = len(_read_poscar(out / "SPOSCAR"))
@@ -1175,7 +1474,16 @@ def cmd_fit_pheasy(cfg, out):
     except Exception:
         ncpu = int(os.environ.get("SLURM_CPUS_PER_TASK") or 4)
 
-    base = "%s --dim %s %s %s --eps %s" % (binary, dim, wflag, cflag, eps)
+    def base_for(c3v):
+        """pheasy command prefix for one fc3 cutoff (the scan refits each)."""
+        flags = []
+        if c2 is not None:
+            flags += ["--c2", str(c2)]
+        if c3v is not None and enable >= 3:
+            flags += ["--c3", str(c3v)]
+        return "%s --dim %s %s %s --eps %s" % (binary, dim, wflag, " ".join(flags), eps)
+
+    base = base_for(c3)
 
     # fit step: -l LASSO for RFE is deliberate -- the RFE strategy itself is
     # selected through PHEASY_USE_RFE in the environment
@@ -1226,6 +1534,30 @@ def cmd_fit_pheasy(cfg, out):
                       "--tol", str(float(cfg.get("pheasy_tol") or 1e-5))]
     fit_step = "%s -f --ndata %d %s" % (base, len(disps), " ".join(fit_flags))
     disp_step = "%s -d --ndata %d --disp_file" % (base, len(disps))
+
+    # ---- third-order cutoff scan (ported from kl-dft-cpu S5_fc) ----
+    #   Refit every candidate cutoff and frame-bootstrap it BEFORE the nominal
+    #   fit, so the nominal fit overwrites the last candidate's fc2/fc3 in cwd.
+    #   cutoff_scan.json carries the per-shell |Phi^3| scatter and
+    #   stable_upper_cut (= the largest cutoff the data can determine).
+    _cands = [float(x) for x in (cfg.get("cut3_candidates") or [])]
+    _scan_on = bool(cfg.get("cut3_scan")) and len(_cands) >= 2 and enable >= 3
+    if _scan_on:
+        def _make_env(phase):
+            e = _pheasy_env(
+                method, phase, ncpu, natom_super, tuning, ols_ridge, ols_maxiter,
+                cv_max_iter=(str(cfg.get("pheasy_cv_max_iter") or "").strip() or None),
+                cv_tol=(str(cfg.get("pheasy_cv_tol") or "").strip() or None))
+            if phase == "fit":
+                _apply_cv_knobs(e, cfg)
+                _reconcile_gpu_env(e, method, cfg)
+            return e
+        print("[..] 三阶截断扫描：候选 %s，bootstrap=%d"
+              % (_cands, int(cfg.get("cut3_bootstrap") or 0)), flush=True)
+        _pheasy_scan(cfg, out, _cands, base_for, rasr_flag, fit_flags, _make_env)
+    elif cfg.get("cut3_candidates"):
+        print("[..] 单截断拟合（CUT3_SCAN=%s，候选 %d 档）"
+              % (cfg.get("cut3_scan"), len(_cands)), flush=True)
 
     # pheasy's cluster-space step rewrites SPOSCAR in its own atom order; keep
     # the dataset's copy so apply_pheasy_fc_order can restore it after the fit.
@@ -1942,6 +2274,10 @@ def cmd_post(cfg, out):
             cfg[k] = ds[src_key]
     sb_ok = _export_shengbte(cfg, out)
     rmse = _fit_rmse(cfg, out)
+    # Shell report: the pheasy scan already wrote the fuller cutoff_scan.json;
+    # for phono3py / hiphive this records the per-shell mean |Phi^3| of the
+    # nominal fit (no bootstrap -- stable_upper_cut needs the pheasy refits).
+    _shell_single_report(cfg, out)
     g = _stability_gate(cfg, out)
     stable, tool_ok = g["stable"], g["tool_ok"]
     print("[%s] %s" % ("OK" if stable else "FAIL", g["note"]), flush=True)

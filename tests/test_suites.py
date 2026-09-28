@@ -27,6 +27,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 LOCAL = ["agentgate", "session", "autodeps", "history", "skillspec",
          "correct_cli", "prov", "uniform", "supercell", "templates",
          "ke_common", "asset_lookup", "poscar_sync", "io_schema", "s6_marker",
+         "fcfit_shell",
          "symmetry_audit", "structure_health", "template_drift", "stepconf",
          "step_contract", "device_thermal", "device_zt"]
 CLUSTER = ["dropin"]
