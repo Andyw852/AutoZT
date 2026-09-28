@@ -6,6 +6,7 @@
 cutoff/n_max/basis_size/l_max/neuron）必须与基座一致、不可改（GPUMD 官方文档）。
 """
 import argparse
+import math
 import os
 import shutil
 import subprocess
@@ -54,6 +55,16 @@ def build_nep_in(p):
                       ("LAMBDA_V", 0), ("BATCH", 5000), ("POPULATION", 50),
                       ("GENERATION", 5000)):
         lines.append("%s %s" % (key.lower(), p.get(key, dflt)))
+    # Blank preserves GPUMD's native default; zero explicitly disables L2.
+    lambda2 = p.get("LAMBDA_2")
+    if lambda2 is not None and str(lambda2).strip():
+        try:
+            value = float(lambda2)
+        except (TypeError, ValueError):
+            raise ValueError("LAMBDA_2 must be a finite non-negative number")
+        if not math.isfinite(value) or value < 0:
+            raise ValueError("LAMBDA_2 must be a finite non-negative number")
+        lines.append("lambda_2 %s" % value)
     # nep 不接受 train/test 文件参数：它在工作目录里固定读 train.xyz（test.xyz 可选）。
     lines.append("save_potential %s %s %s"
                  % (p.get("SAVE_EVERY", 1000), p.get("SAVE_START", 0),

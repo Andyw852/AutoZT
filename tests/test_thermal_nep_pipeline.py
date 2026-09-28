@@ -197,15 +197,30 @@ class ThermalNEPPipelineTests(unittest.TestCase):
             (root / "step.conf").write_text(
                 "[params]\nNEP_BIN=/fake/nep\nPRETRAINED_NEP=nep89_20250409.txt\n"
                 "PRETRAINED_RESTART=nep89_20250409.restart\nELEMENTS=Mn In Se\n"
-                "GENERATION=1000\nBATCH=1\n")
+                "GENERATION=1000\nBATCH=1\nLAMBDA_2=0.01\n")
             run = self.run_script(root / "gen_step2_nep.py", root)
             self.assertEqual(run.returncode, 0, run.stderr + run.stdout)
             out = root / "step2_nep"
             self.assertEqual((out / "train.xyz").read_text(), frame)
             self.assertTrue((out / "nep89_20250409.txt").is_file())
             self.assertTrue((out / "nep89_20250409.restart").is_file())
+            self.assertEqual(json.loads((out / "gpumd_params.json").read_text())["LAMBDA_2"], "0.01")
             self.assertIn("python nep_train.py --step-dir .", (out / "submit.sh").read_text())
             self.assertNotIn("vasp_to_xyz.py", (out / "submit.sh").read_text())
+
+
+class NepRegularizationTests(unittest.TestCase):
+    def test_optional_l2_and_invalid_values(self):
+        import nep_train
+        base = {"ELEMENTS": ["Mn", "In", "Se"]}
+        for value in (None, "", " "):
+            self.assertNotIn("lambda_2", nep_train.build_nep_in(dict(base, LAMBDA_2=value)))
+        for value in (0, "0.01"):
+            self.assertIn("lambda_2 %s\n" % float(value),
+                          nep_train.build_nep_in(dict(base, LAMBDA_2=value)))
+        for value in (-1, "nan", "inf", "invalid"):
+            with self.assertRaises(ValueError):
+                nep_train.build_nep_in(dict(base, LAMBDA_2=value))
 
 
 if __name__ == "__main__":

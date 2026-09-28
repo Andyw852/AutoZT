@@ -152,6 +152,250 @@ def archive_stale_grid(outdir, old_mesh, new_mesh):
     return _n, _tag
 
 
+# --------------------------------------------------------------------------
+# [patch_stale_input-2026-09-28] 输入变了 -> 旧产物归档；上游重算 -> 下游完成标记失效
+#   patch_stale_grid 只管"网格变了"。但 S3 的 POSCAR 也会变（align_origin 平移原点、
+#   step1 重弛豫），INCAR 也会变（step.conf 的 [incar]）—— 旧 WAVECAR 还在，ck_wavecar
+#   照样判完成，下游静默用旧波函数（MoS₂ 09-27 的 IBZ h5 就是这样"半新半旧"的）。
+#   另外 autozt 的完成判据只看各步**自己**的 marker：S3 重算了，S4 的 wavefunction.h5
+#   还在 -> S4 仍判完成，S8 继续用旧 h5。这里给两件事各一个工具：
+#     snapshot_inputs / inputs_changed   —— gen 开头拍快照、结尾比对（按内容语义比，
+#                                          注释/空白/键顺序不算变化）；
+#     invalidate_downstream              —— 上游确实要重算时，把下游的完成标记改名
+#                                          *.stale-upstream-<上游>-<时间>（不删除）。
+# --------------------------------------------------------------------------
+STALE_INPUT_FILES = ("POSCAR", "INCAR", "KPOINTS")
+
+
+def _poscar_key(text):
+    """POSCAR -> (晶格 9 数, 元素行, 个数行, 坐标)，数值四舍五入到 1e-6（忽略注释行）。"""
+    ln = [x for x in text.splitlines()]
+    try:
+        s = float(ln[1].split()[0])
+        lat = tuple(round(float(v) * s, 6) for r in ln[2:5] for v in r.split()[:3])
+        i = 5
+        species = ()
+        if not ln[i].split()[0].lstrip("-").replace(".", "").isdigit():
+            species = tuple(ln[i].split())
+            i += 1
+        counts = tuple(int(x) for x in ln[i].split())
+        i += 1
+        if ln[i].strip()[:1] in ("S", "s"):
+            i += 1
+        mode = ln[i].strip()[:1].upper()
+        n = sum(counts)
+        xyz = tuple(round(float(v), 6) for r in ln[i + 1:i + 1 + n] for v in r.split()[:3])
+        return (lat, species, counts, mode, xyz)
+    except (IndexError, ValueError):
+        return text.strip()
+
+
+# 只影响并行/性能/标签、不影响物理结果的 INCAR 键：换宿主机（GPU/CPU）时它们会变，不能算"输入变了"
+_INCAR_NONPHYS = {"SYSTEM", "NCORE", "NPAR", "KPAR", "NSIM", "LPLANE", "LSCALU", "NBLOCK",
+                  "KBLOCK", "NWRITE"}
+
+
+def _input_key(name, text):
+    if name == "INCAR":
+        return tuple(sorted((k, " ".join(v.split())) for k, v in parse_incar(text).items()
+                            if k not in _INCAR_NONPHYS))
+    if name == "POSCAR":
+        return _poscar_key(text)
+    if name == "KPOINTS":
+        return tuple(" ".join(x.split()) for x in text.splitlines()[1:4])
+    return text
+
+
+def snapshot_inputs(outdir, names=STALE_INPUT_FILES):
+    """gen 开头调：记下已有输入的语义快照（没有的文件记 None）。"""
+    snap = {}
+    for n in names:
+        p = Path(outdir) / n
+        snap[n] = _input_key(n, p.read_text(errors="ignore")) if p.is_file() else None
+    return snap
+
+
+def inputs_changed(outdir, snap):
+    """gen 结尾调：与快照相比语义变了的输入名列表（原来就没有的文件不算变化）。"""
+    out = []
+    for n, old in (snap or {}).items():
+        if old is None:
+            continue
+        p = Path(outdir) / n
+        new = _input_key(n, p.read_text(errors="ignore")) if p.is_file() else None
+        if new != old:
+            out.append(n)
+    return out
+
+
+def archive_stale_outputs(outdir, tag):
+    """把 STALE_GRID_OUTPUTS 里存在的旧产物改名 *.<tag>；返回归档个数。"""
+    _out = Path(outdir)
+    n = 0
+    for nm in STALE_GRID_OUTPUTS:
+        f = _out / nm
+        if f.is_file():
+            f.rename(_out / (nm + "." + tag))
+            n += 1
+    return n
+
+
+def finalize_stale_inputs(cwd, outdir, step, snap, n_grid_archived=0):
+    """S3/S3b gen 末尾调：输入语义变了 -> 归档旧产物；归档过（网格或输入）-> 下游失效。
+
+    返回 (变了的输入, 归档个数, 失效的下游)。
+    """
+    import time as _t
+    changed = inputs_changed(outdir, snap)
+    n = 0
+    if changed:
+        n = archive_stale_outputs(outdir, "stale-input-" + _t.strftime("%Y%m%d%H%M%S"))
+        if n:
+            print("[..] patch_stale_input：%s 变了（%s）-> 归档旧产物 %d 个，本步会重算"
+                  % (step, "/".join(changed), n))
+    down = []
+    if n or n_grid_archived:
+        down = invalidate_downstream(cwd, step, "输入变了：%s" % ("/".join(changed) or "网格"))
+    return changed, n, down
+
+
+# 下游关系（与 skill.yaml 的 needs 对应）。mode="link"：下游靠软链引用上游产物
+# （S4 链 S3 的 WAVECAR/vasprun；S8/S8.4 链 S4/S4b 的 h5 与 S3/S3b 的 vasprun）——
+# 只有软链确实指向这个上游时才失效；mode="always"：下游直接读上游目录，一律失效。
+DOWNSTREAM = {
+    "step3_uniform": [("step4_wave", "link"), ("step8_amset", "link"),
+                      ("step8.4_amset2d", "link"), ("step8.1_boltztrap", "always"),
+                      ("step8.2_dpt", "always")],
+    "step3b_uniform_full": [("step4b_wave_full", "link"), ("step8_amset", "link"),
+                            ("step8.4_amset2d", "link")],
+    "step4_wave": [("step8_amset", "link"), ("step8.4_amset2d", "link")],
+    "step4b_wave_full": [("step8_amset", "link"), ("step8.4_amset2d", "link")],
+    "step8_amset": [("step8.3_output", "always")],
+    "step8.1_boltztrap": [("step8.3_output", "always")],
+    "step8.2_dpt": [("step8.1_boltztrap", "always"), ("step8.3_output", "always")],
+}
+DONE_MARKERS = {
+    "step4_wave": ("wavefunction.h5",),
+    "step4b_wave_full": ("wavefunction.h5",),
+    "step8_amset": ("transport.json",),
+    "step8.4_amset2d": ("transport.json", "intrinsic_transport.json"),
+    "step8.1_boltztrap": ("boltztrap_crta.json",),
+    "step8.2_dpt": ("dpt_result.json",),
+    "step8.3_output": ("comparison_300K.png",),
+}
+
+
+def _links_into(d, upstream_dir):
+    """d 里有没有软链指向 upstream_dir（解析后比较）。"""
+    try:
+        up = Path(upstream_dir).resolve()
+        for f in Path(d).iterdir():
+            if f.is_symlink():
+                try:
+                    tgt = f.resolve()
+                except OSError:
+                    continue
+                if up == tgt.parent or up in tgt.parents:
+                    return True
+    except OSError:
+        pass
+    return False
+
+
+def invalidate_downstream(cwd, step, reason, _seen=None):
+    """上游 step 要重算：把下游完成标记改名 *.stale-upstream-<step>-<时间>，递归传递。
+
+    返回 [(下游步骤, 改名的文件), ...]。只改名不删除；下游目录不存在/没有标记时什么都不做。
+    """
+    import time as _t
+    cwd = Path(cwd)
+    seen = _seen if _seen is not None else set()
+    done = []
+    tag = "stale-upstream-%s-%s" % (step.replace("/", "_"), _t.strftime("%Y%m%d%H%M%S"))
+    for down, mode in DOWNSTREAM.get(step, ()):
+        if down in seen:
+            continue
+        d = cwd / down
+        if not d.is_dir():
+            continue
+        if mode == "link" and not _links_into(d, cwd / step):
+            continue
+        seen.add(down)
+        hit = False
+        for m in DONE_MARKERS.get(down, ()):
+            f = d / m
+            if f.is_file() or f.is_symlink():
+                f.rename(d / (m + "." + tag))
+                done.append((down, m))
+                hit = True
+        if hit:
+            print("[WARN] 上游 %s 重算（%s）-> 下游 %s 的完成标记已归档（*.%s），会重新排队"
+                  % (step, reason, down, tag))
+        done += invalidate_downstream(cwd, down, "上游 %s 失效" % step, seen)
+    return done
+
+
+# --------------------------------------------------------------------------
+# [patch_mem_guard-2026-09-28] AMSET 作业级内存粗估（第 6 项）
+#   AMSET 自报的 max memory 只统计主进程（memory_profiler include_children=False），作业级
+#   （sacct MaxRSS，含全部 worker）是它的 2–4 倍；jzzn 的 Slurm 又不按内存调度（V113 §1-2）。
+#   标定只有两个点（都是 nworkers=24，作业级 MaxRSS / 最终插值网格点数）：
+#     GaAs S8 3D IBZ 109³ = 1.30M 点 -> 150.9 GiB  => 116 GiB / 百万点（上界）
+#     MoS₂ S8.4 unity f=61 263×263×21 = 1.45M 点 -> 91.1 GiB  => 62.8 GiB / 百万点（下界）
+#   带数、谷结构不同会让系数在两者之间移动，所以给**区间**，不给单值；nworkers 越少越省。
+# --------------------------------------------------------------------------
+MEM_GIB_PER_MPT = (62.8, 116.1)
+MEM_CAL_NOTE = ("标定：MoS₂ S8.4 1.45M 点 91.1 GiB / GaAs S8 1.30M 点 150.9 GiB"
+                "（作业级 MaxRSS，nworkers=24，V113）")
+
+
+def estimate_amset_mem_gib(mesh):
+    """最终插值网格 -> (下界, 上界) GiB。"""
+    pts = 1.0
+    for x in mesh:
+        pts *= int(x)
+    return (MEM_GIB_PER_MPT[0] * pts / 1e6, MEM_GIB_PER_MPT[1] * pts / 1e6)
+
+
+def mem_guard(mesh, warn_gib=300, limit_gib=None, label=""):
+    """打印内存粗估；返回 (lo, hi, level)，level ∈ ok/warn/error。
+
+    warn：上界 > warn_gib（建议独占节点 / 降 nworkers / 降 MESH_MAX）；
+    error：给了 limit_gib 且**下界**都超过它（肯定放不下）。
+    """
+    lo, hi = estimate_amset_mem_gib(mesh)
+    msg = ("[..] %s内存粗估：最终网格 %s -> 作业级约 %.0f–%.0f GiB（%s）"
+           % (label + " " if label else "", "x".join(str(int(x)) for x in mesh), lo, hi,
+              MEM_CAL_NOTE))
+    print(msg)
+    if limit_gib and lo > float(limit_gib):
+        print("[ERROR] 内存粗估下界 %.0f GiB 已超过 MEM_LIMIT_GIB=%s —— 放不下。"
+              "处理：降 MESH_MAX / 显式降 INTERPOLATION_FACTOR / 降 nworkers。" % (lo, limit_gib))
+        return lo, hi, "error"
+    if warn_gib and hi > float(warn_gib):
+        print("[WARN] 内存粗估上界 %.0f GiB > MEM_WARN_GIB=%s。jzzn 的 Slurm 不按内存调度，"
+              "与别的作业同节点会 OOM：建议独占节点（step.conf 写 MEM_AUTO_EXCLUSIVE = true "
+              "自动加 #SBATCH --exclusive）、或降 nworkers / MESH_MAX。" % (hi, warn_gib))
+        return lo, hi, "warn"
+    return lo, hi, "ok"
+
+
+def add_exclusive(submit_path):
+    """在 submit.sh 的最后一个 #SBATCH 行后补 #SBATCH --exclusive（已有则不动）。返回是否改动。"""
+    p = Path(submit_path)
+    if not p.is_file():
+        return False
+    lines = p.read_text(encoding="utf-8").splitlines()
+    if any(re.match(r"^#SBATCH\s+--exclusive\b", x) for x in lines):
+        return False
+    idx = [i for i, x in enumerate(lines) if x.startswith("#SBATCH")]
+    if not idx:
+        return False
+    lines.insert(idx[-1] + 1, "#SBATCH --exclusive")
+    p.write_text("\n".join(lines) + "\n", encoding="utf-8", newline="\n")
+    return True
+
+
 def vaspkit_potcar(outdir: Path, exe="vaspkit"):
     if (outdir / "POTCAR").exists():
         print("[OK] POTCAR 已存在，跳过")
@@ -407,6 +651,122 @@ TAU_TOL = 1e-4
 # 逐操作判据的容差。与 TAU_TOL 同量级：好操作（经 POSCAR 往返）偏差 <= 4e-6，
 # 坏操作 >= 0.02，中间 3 个数量级空档，见 op_phase_exact 的说明。
 OP_TOL = 1e-4
+# ---- [patch_symprec_unify] 判据与 AMSET 用**同一套**对称操作（V115 §4）----------------
+#   AMSET 去对称化走 WavefunctionOverlapCalculator.from_file -> from_coefficients，
+#   **不传 symprec**，所以恒用 defaults["symprec"] = 0.01 Å（与 settings.yaml 里的
+#   symprec 无关），操作来自 pymatgen SpacegroupAnalyzer(结构, symprec=0.01)
+#   （dataset 为 None 时退 angle_tolerance=-1），结构取自 wavefunction.h5（= S3 的结构）。
+#   旧判据用 spglib 直接取、容差 1e-4 —— 对略有畸变的结构两边可能取到不同的操作集。
+#   现在判据按 AMSET 的取法取操作；另外记下 1e-4 严格容差下的操作数（strict_ops）作诊断。
+AMSET_SYMPREC = 0.01
+# ---- [patch_desym_fix] AMSET 去对称化相位补丁的开关（V115 §5）----------------------------
+#   补丁本体：step8.4_amset2d/amset_desym_fix.py（运行时替换 desymmetrize_coefficients 的
+#   相位因子）。开了以后，任何结构、任何原点 IBZ 都精确（模型检验 12/12，见 test_desym_fix.py）。
+#   ★ 验证期默认关：MoS₂（S4b 全网格同框自洽检验，tools/desym_fix_validate.py）与 GaN
+#     两项真实数据验证都通过后，把 DESYM_FIX_DEFAULT 改成 True。
+#   取值优先级：step.conf 的 DESYM_FIX（on/off）> gen 时的环境变量 AZ_DESYM_FIX > 本常量。
+DESYM_FIX_DEFAULT = False
+DESYM_FIX_ENV = "AZ_DESYM_FIX"
+DESYM_FIX_PLUGIN = "amset_desym_fix.py"
+_ON = ("1", "true", "on", "yes")
+_OFF = ("0", "false", "off", "no")
+
+
+def desym_fix_setting(conf_value=None):
+    """返回 (是否开启去对称化相位补丁, 来源说明)。conf_value = step.conf 的 DESYM_FIX 原值。"""
+    v = "" if conf_value is None else str(conf_value).strip().lower()
+    if v in _ON:
+        return True, "step.conf DESYM_FIX=%s" % conf_value
+    if v in _OFF:
+        return False, "step.conf DESYM_FIX=%s" % conf_value
+    if v not in ("", "auto", "none", "default"):
+        print("[WARN] DESYM_FIX=%r 不认识（只认 auto/on/off），按 auto 处理" % conf_value)
+    e = os.environ.get(DESYM_FIX_ENV, "").strip().lower()
+    if e in _ON:
+        return True, "环境变量 %s=%s" % (DESYM_FIX_ENV, e)
+    if e in _OFF:
+        return False, "环境变量 %s=%s" % (DESYM_FIX_ENV, e)
+    return bool(DESYM_FIX_DEFAULT), ("出厂默认 DESYM_FIX_DEFAULT=%s（验证期默认关）"
+                                     % DESYM_FIX_DEFAULT)
+
+
+def desym_fix_cmd_prefix(on):
+    """拼进 AMSET 作业命令最前面的环境变量（插件运行时只认环境变量）。"""
+    return ("export %s=1; " % DESYM_FIX_ENV) if on else ("unset %s; " % DESYM_FIX_ENV)
+
+
+def incar_is_ncl(incar):
+    """INCAR 里 LSORBIT 或 LNONCOLLINEAR 为真 -> 非共线（SOC）。读不到返回 False。"""
+    p = Path(incar)
+    if not p.is_file():
+        return False
+    d = parse_incar(p.read_text(encoding="utf-8", errors="ignore"))
+    for k in ("LSORBIT", "LNONCOLLINEAR"):
+        if str(d.get(k, "")).upper().lstrip(".").startswith("T"):
+            return True
+    return False
+
+
+def detect_ncl(cwd, dirs=("step3_uniform", "step3b_uniform_full")):
+    """波函数来源步骤（S3/S3b）是不是 SOC 计算。"""
+    return any(incar_is_ncl(Path(cwd) / d / "INCAR") for d in dirs)
+
+
+def _dataset_getter(ds):
+    return (lambda k: ds[k]) if isinstance(ds, dict) else (lambda k: getattr(ds, k))
+
+
+def amset_symmetry_dataset(structure, symprec=AMSET_SYMPREC):
+    """按 AMSET get_reciprocal_point_group_operations 的取法拿 spglib dataset 的
+    (rotations, translations)（实空间分数坐标）。取不到返回 (None, None, 说明)。"""
+    import numpy as np
+    try:
+        from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
+        sga = SpacegroupAnalyzer(structure, symprec=symprec)
+        ds = sga.get_symmetry_dataset()
+        src = "pymatgen SGA(symprec=%g)" % symprec
+        if ds is None:
+            sga = SpacegroupAnalyzer(structure, symprec=symprec, angle_tolerance=-1)
+            ds = sga.get_symmetry_dataset()
+            src += " angle_tolerance=-1"
+    except ImportError:
+        import spglib
+        cell = (structure.lattice.matrix, structure.frac_coords,
+                [x.Z for x in structure.species])
+        ds = spglib.get_symmetry_dataset(cell, symprec=symprec, angle_tolerance=5)
+        src = "spglib(symprec=%g)" % symprec
+        if ds is None:
+            ds = spglib.get_symmetry_dataset(cell, symprec=symprec, angle_tolerance=-1)
+            src += " angle_tolerance=-1"
+    if ds is None:
+        return None, None, "dataset 为 None"
+    g = _dataset_getter(ds)
+    return np.asarray(g("rotations"), float), np.asarray(g("translations"), float), src
+
+
+def amset_symmetry_ops(structure, symprec=AMSET_SYMPREC):
+    """AMSET 去对称化**实际使用**的操作集 [(R_real, tau_real, is_tr), ...] 与来源说明。
+
+    装了 amset（作业内）就直接调它的 get_reciprocal_point_group_operations；
+    否则（登录节点）按同样的取法复刻（amset_op_set）。两条路的结果在 12 个构型上逐一相同
+    （test_symmetry_gate.test_ops_match_amset）。取不到返回 (None, 说明)。
+    """
+    try:
+        from amset.electronic_structure.symmetry import \
+            get_reciprocal_point_group_operations as _gpo
+        import numpy as np
+        rots, taus, trs = _gpo(structure, symprec=symprec, time_reversal=True)
+        ops = []
+        for r, t, tr in zip(np.asarray(rots, float), np.asarray(taus, float), trs):
+            tr = bool(tr)
+            ops.append(((-r if tr else r).T, (-t if tr else t), tr))
+        return ops, "amset.get_reciprocal_point_group_operations(symprec=%g)" % symprec
+    except ImportError:
+        pass
+    rots, taus, src = amset_symmetry_dataset(structure, symprec)
+    if rots is None:
+        return None, src
+    return amset_op_set(rots, taus), src + " + amset_op_set"
 
 
 def amset_op_set(rots, taus):
@@ -446,64 +806,104 @@ def op_phase_exact(R, tau, is_tr, atol=OP_TOL):
     return bool(np.allclose(v - np.rint(v), 0.0, atol=atol))
 
 
-def symmetry_gate(structure, atol=TAU_TOL):
+def symmetry_gate(structure, atol=TAU_TOL, symprec=AMSET_SYMPREC, desym_fix=False,
+                  ncl=False):
     """去对称化路径的统一裁决（逐操作精确判据）。返回 dict：
 
         has_inversion   : bool|None   —— 是否含反演操作
         max_tau         : float|None  —— 非整数分数平移的最大绝对值
         tau_ops         : int|None    —— |tau|>atol 的对称操作数（供打印，不参与裁决）
-        total_ops       : int|None    —— AMSET 实际操作集大小
-        bad_ops         : int|None    —— 其中**原公式会算错**的操作数
+        total_ops       : int|None    —— AMSET 实际操作集大小（按 AMSET 的 symprec 取）
+        bad_ops         : int|None    —— 其中**原公式会算错**的操作数（与补丁开没开无关，照打）
+        tr_ops          : int|None    —— 操作集里的时间反演操作数（有反演时为 0）
+        strict_ops      : int|None    —— symprec=1e-4 时 spglib 的操作数（诊断：与 AMSET 不同就提示）
         needs_full_grid : bool        —— 是否需要 S3b/S4b 全网格（WAVEFUNCTION_FULL）
+        needs_full_grid_original : bool —— 不开相位补丁时的裁决（对照用）
+        desym_fix / ncl / symprec / op_source
         reason          : str
 
-    裁决：bad_ops > 0 -> 必须全网格；== 0 -> IBZ 精确（任何空间群、任何原点）。
-    结构 / spglib 判不出来时保守按"需要全网格"。
+    裁决：
+      · ncl（SOC）且操作集里有 TR 操作 -> 必须全网格（AMSET 的 ncl 分支对 TR 操作不取共轭、
+        不乘 iσ_y，与相位无关、补丁也不修它 —— 从源码读出，未经数值验证）；
+      · bad_ops == 0 -> IBZ 精确（任何空间群、任何原点）；
+      · bad_ops > 0 且 desym_fix（amset_desym_fix 补丁生效）-> IBZ 精确（模型检验 12/12）；
+      · bad_ops > 0 且未开补丁 -> 必须全网格。
+    结构 / 对称性判不出来时保守按"需要全网格"。
     """
     import numpy as np
+    out = {"has_inversion": None, "max_tau": None, "tau_ops": None, "total_ops": None,
+           "bad_ops": None, "tr_ops": None, "strict_ops": None, "needs_full_grid": True,
+           "needs_full_grid_original": True, "desym_fix": bool(desym_fix),
+           "ncl": bool(ncl), "symprec": symprec, "op_source": None}
     if structure is None:
-        return {"has_inversion": None, "max_tau": None, "tau_ops": None, "total_ops": None,
-                "bad_ops": None, "needs_full_grid": True,
-                "reason": "取不到结构 -> 保守按需要全网格"}
-    max_tau, rots, tn = _sym_ops_max_tau(structure, atol)
-    if max_tau is None or rots is None:
-        return {"has_inversion": None, "max_tau": None, "tau_ops": None, "total_ops": None,
-                "bad_ops": None, "needs_full_grid": True,
-                "reason": "spglib 取对称操作失败 -> 保守按需要全网格"}
-    # 需要**原始** tau（_sym_ops_max_tau 只回传了非整数部分 tn），重新取一次
-    import spglib
-    ds = spglib.get_symmetry_dataset(
-        (structure.lattice.matrix, structure.frac_coords, [x.Z for x in structure.species]),
-        symprec=atol)
-    g = (lambda k: ds[k]) if isinstance(ds, dict) else (lambda k: getattr(ds, k))
-    rots_raw = np.asarray(g("rotations"), float)
-    taus_raw = np.asarray(g("translations"), float)
-    inv = bool(any(np.allclose(R, -np.eye(3), atol=1e-5) for R in rots_raw))
-    tau_ops = (int(np.sum(np.any(np.abs(tn) > atol, axis=1)))
-               if tn is not None and len(tn) else 0)
-    ops = amset_op_set(rots_raw, taus_raw)
+        out["reason"] = "取不到结构 -> 保守按需要全网格"
+        return out
+    try:
+        rots_raw, taus_raw, _src = amset_symmetry_dataset(structure, symprec)
+        ops, op_src = amset_symmetry_ops(structure, symprec)
+    except Exception as e:                                   # noqa: BLE001
+        rots_raw, ops, op_src = None, None, "%s: %s" % (type(e).__name__, e)
+    if rots_raw is None or ops is None:
+        out["reason"] = "取对称操作失败（%s）-> 保守按需要全网格" % op_src
+        return out
+    tn = taus_raw - np.rint(taus_raw)
+    out["op_source"] = op_src
+    out["has_inversion"] = bool(any(np.allclose(R, -np.eye(3), atol=1e-5) for R in rots_raw))
+    out["max_tau"] = float(np.abs(tn).max()) if tn.size else 0.0
+    out["tau_ops"] = int(np.sum(np.any(np.abs(tn) > atol, axis=1))) if len(tn) else 0
+    out["total_ops"] = len(ops)
     bad = [i for i, (R, tau, tr) in enumerate(ops) if not op_phase_exact(R, tau, tr, OP_TOL)]
-    out = {"has_inversion": inv, "max_tau": float(max_tau), "tau_ops": tau_ops,
-           "total_ops": len(ops), "bad_ops": len(bad)}
-    if bad:
-        _tr_n = sum(1 for i in bad if ops[i][2])
-        out.update(needs_full_grid=True,
-                   reason=("AMSET 原公式会在 %d/%d 个操作上算错（其中 TR 分支 %d 个）"
-                           "-> 必须全网格；或先把原点平移后复核"
-                           % (len(bad), len(ops), _tr_n)))
+    out["bad_ops"] = len(bad)
+    out["tr_ops"] = int(sum(1 for _R, _t, tr in ops if tr))
+    _strict = _sym_ops_max_tau(structure, 1e-4)[1]
+    out["strict_ops"] = None if _strict is None else int(len(_strict))
+    _note = ""
+    if out["strict_ops"] is not None and out["strict_ops"] != len(rots_raw):
+        _note = ("；注意：AMSET 的 symprec=%g 认出 %d 个空间群操作，严格容差 1e-4 只有 %d 个"
+                 "（结构只是近似对称，去对称化用的是近似操作）"
+                 % (symprec, len(rots_raw), out["strict_ops"]))
+    _tr_bad = sum(1 for i in bad if ops[i][2])
+    out["needs_full_grid_original"] = bool(bad) or (bool(ncl) and out["tr_ops"] > 0)
+    if ncl and out["tr_ops"]:
+        out.update(needs_full_grid=True, reason=(
+            "SOC（非共线）且操作集含 %d 个时间反演操作：AMSET 的 ncl 去对称化对 TR 操作"
+            "不取共轭、不乘 iσ_y（与相位补丁无关）-> 必须全网格；原公式另有 %d/%d 个操作相位错"
+            % (out["tr_ops"], len(bad), len(ops)) + _note))
+    elif not bad:
+        out.update(needs_full_grid=False, reason=(
+            "AMSET 原公式在全部 %d 个操作上精确（逐操作条件 (R±I)τ≡0 全满足）-> IBZ 即可"
+            % len(ops) + ("；SOC 分支未经实数据验证" if ncl else "") + _note))
+    elif desym_fix:
+        out.update(needs_full_grid=False, reason=(
+            "AMSET 原公式会在 %d/%d 个操作上算错（其中 TR 分支 %d 个），但 DESYM_FIX 已开"
+            "（amset_desym_fix 相位补丁）-> IBZ 精确"
+            % (len(bad), len(ops), _tr_bad)
+            + ("；★ SOC 分支同一相位因子、未经实数据验证" if ncl else "") + _note))
     else:
-        out.update(needs_full_grid=False,
-                   reason=("AMSET 原公式在全部 %d 个操作上精确（逐操作条件 (R±I)τ≡0 全满足）"
-                           "-> IBZ 即可" % len(ops)))
+        out.update(needs_full_grid=True, reason=(
+            "AMSET 原公式会在 %d/%d 个操作上算错（其中 TR 分支 %d 个）"
+            "-> 必须全网格；或先把原点平移后复核，或开 DESYM_FIX（相位补丁）"
+            % (len(bad), len(ops), _tr_bad) + _note))
     return out
 
 
-def write_full_grid_marker(poscar, outdir=None):
+def gate_log_line(g):
+    """判据的一行摘要（gen / preflight 的日志统一用它，补丁开没开都打 bad_ops/total_ops）。"""
+    if not g or g.get("bad_ops") is None:
+        return "对称性判据：%s" % (g or {}).get("reason", "不可用")
+    return ("对称性判据：bad_ops=%s/%s，TR 操作 %s，|tau|max=%.4f，DESYM_FIX=%s%s -> %s（%s）"
+            % (g["bad_ops"], g["total_ops"], g.get("tr_ops"), g.get("max_tau") or 0.0,
+               "on" if g.get("desym_fix") else "off", "，SOC" if g.get("ncl") else "",
+               "需要全网格" if g["needs_full_grid"] else "IBZ 即可", g["reason"]))
+
+
+def write_full_grid_marker(poscar, outdir=None, desym_fix=False, ncl=False):
     """算对称性判据并把结论落盘到 <outdir>/full_grid_needed.json；成功返回判据 dict，否则 None。
 
     S3（step3_uniform）用它把结论**提前**写下来，下游（S8/S8.4 的 gen、overlap_preflight）
     与事后追查都读同一份，不必各自重判。落的是**判据结论**，不是"分支开没开"：
     gen 在集群上跑，读不到项目里的 optional_steps.wavefunction_full（那个键不上集群）。
+    needs_full_grid_original 是不开相位补丁时的结论（S8 gen 时会按当时的 DESYM_FIX 重判）。
     """
     try:
         import json
@@ -511,15 +911,22 @@ def write_full_grid_marker(poscar, outdir=None):
         p = Path(poscar)
         if not p.is_file():
             return None
-        g = symmetry_gate(Structure.from_file(str(p)))
+        g = symmetry_gate(Structure.from_file(str(p)), desym_fix=desym_fix, ncl=ncl)
         out = Path(outdir) if outdir else p.parent
         (out / "full_grid_needed.json").write_text(
             json.dumps({"needs_full_grid": bool(g["needs_full_grid"]),
+                        "needs_full_grid_original": bool(g["needs_full_grid_original"]),
                         "bad_ops": g["bad_ops"],
                         "total_ops": g["total_ops"],
+                        "tr_ops": g["tr_ops"],
                         "has_inversion": g["has_inversion"],
                         "max_tau": g["max_tau"],
                         "tau_ops": g["tau_ops"],
+                        "strict_ops": g["strict_ops"],
+                        "desym_fix": g["desym_fix"],
+                        "ncl": g["ncl"],
+                        "symprec": g["symprec"],
+                        "op_source": g["op_source"],
                         "reason": g["reason"],
                         "poscar": str(p)},
                        ensure_ascii=False, indent=2) + "\n",

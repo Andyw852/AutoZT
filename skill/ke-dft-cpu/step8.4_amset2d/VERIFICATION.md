@@ -5430,3 +5430,185 @@ Fd-3m 混为一谈）。它走 IBZ 靠的是 **τ≡0**，不是反演 —— �
 ### 第二批仍欠
 
 - 2D 默认 factor 按**目标最终网格（面内 ~263）**确定 + 内存估算。
+
+---
+
+## V115（2026-09-28）：去对称化相位 —— 逐操作判据定案 + 补丁 `amset_desym_fix` + symprec 口径统一
+
+> 本节**只含不需要 VASP 的部分**（推导、源码核对、模型检验、接线与自测）。真实数据验证
+> （MoS₂ 同框自洽、GaN S4b）见 §6：MoS₂ 已跑（修正式 0.998845，未达 0.999 阈值 → 补丁**仍默认关**），GaN 待 S4b。
+
+### 1. 出错位置与推导（AMSET 0.4.19 / 0.5.1 逐字节相同，已 diff）
+
+`amset/wavefunction/common.py::desymmetrize_coefficients` 第 126 行：
+
+    factor = np.exp(-1j * 2 * np.pi * np.dot(rot_gpoints + rot_kpoint, tau))
+
+AMSET 在倒空间用的旋转是 `M = Rᵀ`（spglib 实空间分数坐标 `{R|τ}` 的转置，
+`symmetry.py::get_reciprocal_point_group_operations`）。把 `k` 映到 `Mk` 的实空间操作是
+`{R|τ}⁻¹ = {R⁻¹ | −R⁻¹τ}`，于是平面波系数的正确变换为
+
+    非 TR： c_{Mk}(MG)       = c_k(G) · exp(+2πi (k+G)·τ)
+    TR   ： c_{−Rᵀk}(−RᵀG)   = conj[ c_k(G) · exp(+2πi (k+G)·τ) ]   （代码里 `if tr: tau = -tau` 之后的 τ）
+
+原式等价于 `exp(−2πi (k+G)·Rτ)`，与正确值只差与 G 有关的相位
+
+    非 TR：exp(2πi G·(R+I)τ)        TR：exp(2πi G·(R−I)τ)
+
+（与 k 有关的部分是每个 k 的整体相位，不影响 |⟨ψ|ψ'⟩|）。所以
+**原式精确 ⇔ 非 TR：(R+I)τ ≡ 0，TR：(R−I)τ ≡ 0（mod 1）** —— 即 `ke_common.op_phase_exact`。
+一行修法：`factor = np.exp(+1j * 2 * np.pi * np.dot(gpoints + kpoint, tau))`（未旋转的 k+G）。
+
+### 2. 逐操作判据的容差 OP_TOL = 1e-4（实测依据）
+
+POSCAR 往返（pymatgen 8 位有效数字）后「好」操作偏差 ≤ **4e-6**；「坏」操作最小偏差
+**0.02**（GaN 任意平移）～ **0.5**（Si 原点在反演中心），中间 3 个数量级空档。
+1e-6 会把往返后的正常 GaN 误判成 13/24 坏（测试里抓到过）。
+
+### 3. AMSET 实际用的操作集（判据必须照抄）
+
+- `get_reciprocal_point_group_operations`：`SpacegroupAnalyzer(结构, symprec)`，dataset 为 None 时退
+  `angle_tolerance=-1`；取 `Rᵀ` 与 `−Rᵀ`（平移 ±τ）拼接，**按旋转去重、保留先出现者**（有反演时
+  TR 副本全被去掉，`tr_ops = 0`）。
+- ★ **symprec 口径**：`WavefunctionOverlapCalculator.from_file → from_coefficients` **不传 symprec**，
+  所以去对称化**恒用 `defaults["symprec"] = 0.01 Å`**，与 settings.yaml 里写的 symprec 无关；
+  结构取自 `wavefunction.h5`（= S3 的结构）。
+- 旧判据用 `spglib(symprec=1e-4)` 直接取 —— 对只在 0.01 Å 量级对称的结构，两边操作集可能不同。
+  **现在 `ke_common.symmetry_gate` 按 AMSET 的取法取（装了 amset 就直接调它的函数；登录节点按同法复刻）**，
+  12 个构型上两条路逐操作相同（`test_symmetry_gate.test_ops_match_amset`）；另记 `strict_ops`
+  （1e-4 下的操作数），与 AMSET 的不一样时在 reason 里提示"结构只是近似对称"。
+
+### 4. 模型检验（本地，**不需要 VASP**；`step8.4_amset2d/test_desym_fix.py`）
+
+真值与被测公式无关：每个原子两个球对称高斯 s 轨道、跳跃只依赖（元素对, 距离）的紧束缚哈密顿量，
+**在每个全网格 k 点上直接对角化**得到系数（约定 I 的 Bloch 和，`c_{k+b}(G)=c_k(G+b)` 与 VASP 一致）。
+流程与实数据检验**完全相同**（`tools/desym_fix_validate.validate`）：spglib IBZ → 整份传给
+AMSET 的 `expand_kpoints` → AMSET 原函数 / 补丁函数展开 → 与真值比（简并带用子空间投影）。
+
+| 构型 | 坏操作/总数 | 原式最小 \|cos\| | **修正式最小 \|cos\|** | 原式出错 k / 全网格（预测坏 k） | 归因 |
+|---|---|---|---|---|---|
+| GaN 标准原点 | 0/24 | 1.000000 | **1.00000000** | 0/48 (0) | ✓ |
+| GaN 原点在 Ga 上 | 6/24 | 0.016322 | **1.00000000** | 7/48 (7) | ✓ |
+| GaN 任意平移 | 15/24 | 0.018401 | **1.00000000** | 25/48 (25) | ✓ |
+| MoS₂ 对齐后 | 0/24 | 1.000000 | **1.00000000** | 0/36 (0) | ✓ |
+| MoS₂ 对齐前 | 12/24 | 0.011922 | **1.00000000** | 12/36 (12) | ✓ |
+| Si 原点在原子 | 0/48 | 1.000000 | **1.00000000** | 0/64 (0) | ✓ |
+| Si 原点在反演中心 | 24/48 | 0.051627 | **1.00000000** | 11/64 (11) | ✓ |
+| Si 任意平移 | 28/48 | 0.041738 | **1.00000000** | 17/64 (17) | ✓ |
+| hcp 标准原点 | 0/24 | 1.000000 | **1.00000000** | 0/48 (0) | ✓ |
+| hcp 任意平移（有反演） | 8/24 | 0.034885 | **1.00000000** | 13/48 (13) | ✓ |
+| 闪锌矿 标准原点 | 0/48 | 1.000000 | **1.00000000** | 0/64 (0) | ✓ |
+| 闪锌矿 任意平移 | 37/48 | 0.020247 | **1.00000000** | 25/64 (25) | ✓ |
+
+⇒ 修正式 12/12 精确；原式**出错的 k 点与"由坏操作映射过去的 k 点"逐点相同**（两个方向都没有例外），
+坏操作数与 `ke_common.symmetry_gate` 的 `bad_ops` 12/12 一致 —— 逐操作判据在 AMSET 真代码上再核一遍。
+（网格用 4³/6×6×1/4×4×3 足够：测的是每个操作的相位，不是收敛。）
+
+### 5. 补丁与接线（验证期默认关）
+
+- **插件** `step8.4_amset2d/amset_desym_fix.py`：逐行拷贝 `desymmetrize_coefficients`、只改 factor 一行，
+  **同时替换** `amset.wavefunction.common` 与 `amset.interpolation.wavefunction` 两处名字（后者是
+  `from ... import` 进来的，只换一处不生效）。开关 = 环境变量 `AZ_DESYM_FIX`（未设 = 不打补丁 = 原行为）。
+  版本护栏：原函数里找不到原式那一行就**抛异常停跑**（开了补丁判据会放行 IBZ，挂不上就是静默算错）。
+  运行时在 amset.log 里打 `original-formula-inexact ops a/b (used c/d, affecting e/f k-points)`。
+- **SOC（非共线）**：同一相位因子，**未经实数据验证**（注释 + 运行时 ★ 日志）。另外从源码看
+  AMSET 的 ncl 分支对 TR 操作**既不取共轭也不乘 iσ_y**（第 145 行只对非 ncl 取共轭）—— 与本补丁无关、
+  也不修它；所以 **SOC + 操作集含 TR（无反演）一律要求全网格**（`symmetry_gate(ncl=True)`），
+  有反演（`tr_ops=0`）时补丁开着可走 IBZ 但注明未验证。
+- **开关链**：step.conf `DESYM_FIX = auto|on|off` > gen 时环境变量 `AZ_DESYM_FIX` >
+  `ke_common.DESYM_FIX_DEFAULT`（现为 False）。gen 在 AMSET 命令最前面拼 `export/unset AZ_DESYM_FIX`，
+  并在 settings.yaml 落 `# AZ_DESYM_FIX=0/1` 与 `# desym_gate: …`（判据摘要）。
+- **判据联动**：补丁开着时 gate / preflight **直接放行 IBZ**，但日志照打 `bad_ops/total_ops`；
+  preflight 新增 D 项：DESYM_FIX 开着而运行目录里没有插件 -> **拦截**。
+- **3D S8** 从 `amset run` 改成与 2D 相同的 `python -c` 入口（`amset run` 不带参数时就是
+  `initialize_amset_logger()` + `Runner.from_directory('.').run()`，见 `amset/tools/run.py`），
+  日志初始化与 `>> amset.log 2>&1` 照抄 2D，`fermi_window_check` / 归档读到的 amset.log 不变。
+- **gen_need**：ke 的 S8 / S8.4、zt 的 S8 都加 `amset_desym_fix.py`（S8 另补 `dim_common.py`）；
+  `skill/zt-dft-cpu/amset_desym_fix.py` 软链到本目录（同 fermi_window_check）。
+
+### 6. 真实数据验证（**已跑 MoS₂ 2026-09-28**；GaN 待 S4b）
+
+**MoS₂（第三种设计：只用一份 S4b 全网格 h5，同框自洽）**
+
+    cd <work>/MoS2/ke-dft-cpu
+    python <AutoZT>/skill/ke-dft-cpu/tools/desym_fix_validate.py \
+        --h5 step4b_wave_full/wavefunction.h5 --vasprun step4b_wave_full/vasprun.xml
+
+- IBZ：`spglib.get_ir_reciprocal_mesh`，同一结构（h5 里的，**对齐前**，首原子
+  [0.1518, 0.5447, 0.1066]、bad_ops = 15/24）、网格从 h5 推（应为 48×48×3）、Γ 心、开时间反演、symprec 0.01；
+  **整份** IBZ 列表一次传给 `expand_kpoints`（逐点传只得到平凡轨道 —— 第二次实现的错），分块调
+  `desymmetrize_coefficients`（原式/修正式各一遍），与同一份全网格系数比；简并（<1 meV）用子空间投影。
+- **判据**：修正式 6912 点 × 各带最小值 ≥ **0.999**；原式报出错比例，并核对出错 k 点是否**全部**来自那
+  15 个坏操作（`bad_but_not_predicted` 必须 = 0）。脚本写 `desym_fix_validation.json`，退出码 0 = 通过。
+- 带窗口：默认按 `amset wave` 的同一规则（`get_ibands(energy_cutoff)`）从 vasprun 取能量；当时若用了
+  `-b`，加 `--amset-bands lo:hi` 对齐。
+
+| 项 | 结果 |
+|---|---|
+| 修正式最小分数（要求 ≥ 0.999） | **0.998845**（未达 0.999，见下注） |
+| 原式出错 k 点比例 | **61.6%**（4256/6912） |
+| 出错 k 点全部来自 15 个坏操作 | **否**（4226/4256 归因，30 个未归因 ≈ 0.4%） |
+
+> **注（2026-09-28 实测）**：修正式 6912 点 × 7 带最小 0.998845，81 点（1.2%）< 0.999 —— 未达阈值；
+> 但原式 61.6% → 修正式 1.2% 是 ~50× 下降，且 `test_desym_fix.py` 解析真值修正式 = 1.00000000。
+> 已排除三个伪因：h5 系数是 **complex128**（非 float32 存储精度）；gpoints 在 12 个旋转下**严格闭合**
+> （0 缺口）；公式本身模型精确（`test_desym_fix.py` = 1.00000000）。~0.1% 残差（各带最低 0.9988–0.9998
+> 紧聚）判断为 **VASP 数值波函数在对称相关 k 点间并非精确对称**（数值对角化 / FFT 网格带来的 ~0.1% 地板），
+> 非公式误差；原式 30 个未归因点同为此地板（好操作点被 0.999 误标）。公式修正**正确**；实数据 0.999
+> 门槛对 VASP 数据偏严，建议实数据门槛放宽到 ~0.99（模型检验仍 1-1e-8）。
+
+**GaN（第二项，S4b 出来后）**：同一命令。标准原点的 GaN 原式 0/24 错 —— 若 S3b 用的是对齐/标准原点，
+该对照只能验证"无坏操作时两式相同"；要判别就需要 bad_ops>0 的结构（S3b 的 `full_grid_needed.json`
+里看 bad_ops）。
+
+**默认打开的条件**：MoS₂ 与 GaN 两项都通过 → `ke_common.DESYM_FIX_DEFAULT = True`，并向 AMSET 上游提
+issue/PR，附 §1 推导、`test_desym_fix.py`（模型检验）、§6 实数据结果。
+
+### 7. S3b 与全网格分支
+
+- 3D 的 S3b 默认网格改为 S3 的**每方向一半**（`FULL_GRID_3D_SCALE = 0.5`，再做高对称点对齐；
+  =1 恢复旧行为；2D 不变）。有意更粗，所以跳过 2× 静态下限与"必须比静态密"断言。
+- 补丁上线后任何结构都可走 IBZ，S3b/S4b 分支与"项目里手动开 wavefunction_full"都不再需要。
+
+### 8. ★ 本轮顺带查出的"静默失效"（会静默算错，已修，**影响面需回查**）
+
+| # | 位置 | 现象 | 影响 |
+|---|---|---|---|
+| a | `step8_amset/gen_step10_amset.py` main() | `EPS_INF_OVERRIDE` 赋值**没声明 global** —— 落在局部变量，`_apply_eps_inf_override()` 读到的仍是 None | **3D 的 step.conf ε∞ 覆盖从来没生效**（GaAs "用 HSE ε∞ 重跑 S8" 若在本补丁前 gen，结果与不覆盖相同；看 settings.yaml 的 high_frequency_dielectric 即可确认） |
+| b | `step8.4_amset2d/gen_step14_amset2d.py` SPEC | `"INTERPOLATION_FACTOR"` 这一行丢了 —— `_p[...]` 抛 KeyError 被 except 吞掉 | **它之后的全部 step.conf 覆盖静默失效**：WAVEFUNCTION_FULL / UNITY_OVERLAP / MESH_* / SCATTERING / WRITE_MESH / DOPING / TEMPERATURES。请在集群那份 AutoZT 上 `grep '"INTERPOLATION_FACTOR"' gen_step14_amset2d.py` 核对：缺失的话，从丢失之日起所有 S8.4 的 settings.yaml 都是出厂值 |
+| c | S8 / S8.4 的 `_apply_inversion_rule` 与 S8.4 闸门 | 仍按旧规则"有反演或 τ≡0 就 IBZ"（只从 symmetry_gate 取了 has_inversion/max_tau）| Si 原点在反演中心之类（有反演、τ≠0、原式 24/48 错）被放行 IBZ = **静默算错**；GaN 标准原点被要求全网格 = 白算。现在直接用 `needs_full_grid` |
+| d | S8 / S8.4 的 MESH_* 覆盖 | `if _v:` —— step.conf 写 0（注释说"0 = 不干预"）被当成没写 | 关不掉出厂下限 |
+| e | S8.4 `_DEFORM_GEOM` | 没有模块级初值 | `step7b/band_edges.json` 不在时 NameError |
+
+防回归：`test_gen_conf_wiring.py`（静态检查：取的键都在 SPEC 里、函数里给模块常量赋值必须先 global），
+在**旧代码**上跑会报出 a、b 两处。回查已有项目：`tools/regate_projects.py <work 根> --glob '*/ke-dft-cpu'`
+—— 逐个 S8/S8.4 运行目录给出 OK / ★ WRONG（IBZ + 真实重叠 + 有坏操作 + 没打补丁）。
+
+**2026-09-28 回查结果**（集群 `Fullerene_Network/work` 27 项目 + `ke_work` 4 项目，共 18 个 S8/S8.4
+运行目录）：**★ WRONG 2 个** = `Mo2S3`（1/4 坏操作）、`P1_Mo-MoS2_Z4-3-1_Mo2S3`（2/8 坏操作），
+二者本就是 V9 里输入不可信（面内 C66 = −13.7 GPa）的材料；其余全部 OK（unity 重叠 / 全网格 h5 /
+0 坏操作）。GaN 尚无 S8 目录（在 S3b），Mg₄C₆₀ 系列也未到 S8。
+
+### 9. 其它同批改动
+
+- **scissor 带隙覆盖通道**（S8 / S8.4）：step.conf `BANDGAP_OVERRIDE = <eV>` + `BANDGAP_NOTE`（如 PBE0）；
+  优先级 step.conf > MANUAL_BANDGAP > band_summary.json > setting.yaml；来源写进 settings.yaml
+  `# bandgap_source:`，默认读 HSE06 时也会提示"HSE06 不适用就用覆盖"。
+- **2D ε∞ 覆盖**：`EPS_INF_OVERRIDE` + **必填** `EPS_INF_OVERRIDE_BASIS = layer | slab`（不给就停，
+  两种口径差 c/t 倍）。S8.4 在 slab 口径上改 `eps_inf_slab`（插件的 r∞ 用它）、ε₀ 按离子部分搬移、
+  settings.yaml 用同一换算的单层值；标量只改面内。前后值落 `2d_correction.json` 的 `eps_inf_override`。
+- **2D 默认目标网格**：S8.4 `MESH_MIN = 263`（V112 验证配置）、`MESH_MIN_FMAX = 150`。
+- **内存粗估**：`ke_common.mem_guard` 按最终插值网格给作业级区间（62.8–116 GiB/百万点，V113 两点标定），
+  上界 > `MEM_WARN_GIB`（300）告警；`MEM_LIMIT_GIB` 给了且下界都超 -> 停；`MEM_AUTO_EXCLUSIVE = true`
+  时自动加 `#SBATCH --exclusive`（默认不改提交行为）。
+- **上游变了下游不失效**：S3/S3b gen 开头拍输入快照（POSCAR/INCAR/KPOINTS，按语义比，并行键不算），
+  变了就归档旧产物；归档过（网格或输入）则 `invalidate_downstream` 把 S4/S4b/S8/S8.4/S8.1/S8.2 的完成标记
+  改名 `*.stale-upstream-<步骤>-<时间>`（只对软链确实指向该上游的下游生效，递归传递）。S4/S4b 重新生成时同理。
+
+### 10. 自测（本地全过）
+
+`test_desym_fix.py`（3：12 构型模型检验 / 真 h5 走 CLI / 开关）、`test_symmetry_gate.py`（11）、
+`test_preflight_symmetry_verdict.py`（7）、`test_gen_desym_wiring.py`（9：S8/S8.4 的逐操作裁决、命令、
+插件缺失拒绝、ε∞/带隙覆盖、2D 目标网格）、`test_gen_conf_wiring.py`（2）、`test_stale_and_mem.py`（6）、
+`test_align_origin_slab.py`（FAILS=0）；S8 / S8.4 gen 在合成材料目录里端到端跑通（submit.sh / settings.yaml
+标记见 §5）。环境：amset 0.5.1、spglib 2.4、pymatgen（本地 venv）。

@@ -243,7 +243,21 @@ def band_windows(log_paths):
 #   判据**唯一来源**是 ke_common.symmetry_gate()（gen 会把 ke_common.py 复制进运行目录）；
 #   万一带不进来，退回下面这份等价最小实现并在输出里注明，绝不静默换裁决。
 # ---------------------------------------------------------------------------
-def _structure_verdict(cwd):
+def desym_fix_active(out_dir=None):
+    """patch_desym_fix：本次是否打相位补丁。作业内以环境变量 AZ_DESYM_FIX 为准
+    （submit.sh 在命令最前面 export/unset）；没有环境变量时读 gen 写进 settings.yaml 的
+    `# AZ_DESYM_FIX=1` 注释（gen 时调用走这条）。"""
+    v = os.environ.get("AZ_DESYM_FIX")
+    if v is not None and v.strip() != "":
+        return v.strip().lower() in ("1", "true", "on", "yes")
+    if out_dir is not None:
+        st = Path(out_dir) / "settings.yaml"
+        if st.is_file():
+            return "# AZ_DESYM_FIX=1" in st.read_text(errors="ignore")
+    return False
+
+
+def _structure_verdict(cwd, desym_fix=False):
     """返回 (needs_full_grid, reason)。读不到结构/判据不可用时保守返回 True。"""
     st = None
     for d in ("step3_uniform", "step1_opt", "step1_std_opt", "step7_deform"):
@@ -263,24 +277,29 @@ def _structure_verdict(cwd):
         return True, "读不到结构 -> 保守按需要全网格"
     try:
         import ke_common as _kc
-        g = _kc.symmetry_gate(st)
-        return bool(g["needs_full_grid"]), "%s [ke_common]" % g["reason"]
+        g = _kc.symmetry_gate(st, desym_fix=desym_fix, ncl=_kc.detect_ncl(cwd))
+        return bool(g["needs_full_grid"]), "%s [ke_common]" % _kc.gate_log_line(g)
     except Exception:                                               # noqa: BLE001
         pass
-    return _fallback_verdict(st)
+    return _fallback_verdict(st, desym_fix=desym_fix)
 
 
-def _fallback_verdict(st):
+def _fallback_verdict(st, desym_fix=False):
     """ke_common 不在时的等价最小实现（**与 ke_common 的新判据同口径**，2026-09-28）。
 
     非 TR 操作 (R+I)τ≡0、TR 操作 (R−I)τ≡0（mod 1，容差 1e-4）。
     旧的"有反演/τ=0 就放行"两个方向都错，这里不再重复那个错。
+    操作集按 AMSET 的取法：symprec=0.01（去对称化恒用这个值），dataset 为 None 时退
+    angle_tolerance=-1（patch_symprec_unify，V115）。desym_fix=True 时照数坏操作、但放行。
+    （SOC 判不出来 —— fallback 只在 ke_common 带不进运行目录时用，SOC 路径目前也不存在。）
     """
     try:
         import numpy as np
         import spglib
-        ds = spglib.get_symmetry_dataset(
-            (st.lattice.matrix, st.frac_coords, [x.Z for x in st.species]), symprec=1e-4)
+        cell = (st.lattice.matrix, st.frac_coords, [x.Z for x in st.species])
+        ds = spglib.get_symmetry_dataset(cell, symprec=0.01, angle_tolerance=5)
+        if ds is None:
+            ds = spglib.get_symmetry_dataset(cell, symprec=0.01, angle_tolerance=-1)
         if ds is None:
             return True, "spglib 失败 -> 保守按需要全网格 [fallback]"
         g = (lambda k: ds[k]) if isinstance(ds, dict) else (lambda k: getattr(ds, k))
@@ -301,13 +320,17 @@ def _fallback_verdict(st):
             v = (R - I) @ t if tr else (R + I) @ t
             if not np.allclose(v - np.rint(v), 0.0, atol=1e-4):
                 bad += 1
+        if bad and desym_fix:
+            return False, ("原公式会在 %d/%d 个操作上算错，但 DESYM_FIX 已开（相位补丁）"
+                           "-> IBZ 精确 [fallback]" % (bad, len(first)))
         if bad:
             return True, "原公式会在 %d/%d 个操作上算错 -> 必须全网格 [fallback]" % (bad, len(first))
         return False, "原公式在全部 %d 个操作上精确 -> IBZ 即可 [fallback]" % len(first)
     except Exception as e:                                          # noqa: BLE001
         return True, "判据不可用（%s）-> 保守按需要全网格" % type(e).__name__
 
-def run(cwd, out_dir=None, unity_overlap=False):
+def run(cwd, out_dir=None, unity_overlap=False, desym_fix=None):
+    """desym_fix=None：自己判断（环境变量 AZ_DESYM_FIX > settings.yaml 的 # AZ_DESYM_FIX=1）。"""
     two_d = False
     _passed = Path(cwd)
     base, out = resolve_layout(_passed)
@@ -319,6 +342,16 @@ def run(cwd, out_dir=None, unity_overlap=False):
     cwd, out_dir = base, out
     two_d = is_2d_run(cwd, out_dir)
     lines, err, warn = [], False, False
+    # ---- patch_desym_fix（V115）：相位补丁开关 + 插件在不在 ----
+    if desym_fix is None:
+        desym_fix = desym_fix_active(out_dir)
+    _plugin = Path(out_dir) / "amset_desym_fix.py"
+    lines.append("  D) 去对称化相位补丁 DESYM_FIX = %s；运行目录里插件 %s"
+                 % ("on" if desym_fix else "off", "在" if _plugin.is_file() else "不在"))
+    if desym_fix and not _plugin.is_file():
+        err = True
+        lines.append("     ★ 拦截：DESYM_FIX 开着（判据会放行 IBZ），但运行目录里没有 amset_desym_fix.py"
+                     " —— 补丁挂不上就是静默算错。重新 gen 本步（gen_need 要带上它）。")
     # step.conf 显式覆盖 UNITY_OVERLAP 时，gen 会在 settings.yaml 里写
     # AZ_OVERLAP_CONTROLLED=1 —— ⓪/② 由"拦截"降为"告警"。
     # ★ 2026-09-20 澄清（用户）：这个标记只是**放行开关**，不改变结果的物理性质。
@@ -377,7 +410,7 @@ def run(cwd, out_dir=None, unity_overlap=False):
                          "不作生产结果）。")
         elif not complete and not unity_overlap and two_d:
             # ★ 2026-09-28 用户批准（第二批 (a)）：先问**统一判据**，别一刀切。
-            _need_full, _why = _structure_verdict(cwd)
+            _need_full, _why = _structure_verdict(cwd, desym_fix=desym_fix)
             if not _need_full:
                 warn = True
                 lines.append("     [WARN] 2D + 真实重叠 + 非完整网格，但**判据说可以走 IBZ**：%s" % _why)
@@ -399,6 +432,10 @@ def run(cwd, out_dir=None, unity_overlap=False):
                              "现在的裁决依据只有「存在 τ≠0 的对称操作」这一条。")
         elif not complete and not unity_overlap:
             warn = True
+            # ★ 2026-09-28（V115）：先给出逐操作判据（补丁开没开都打 bad_ops/total_ops），
+            #   下面的历史说明保留作背景。3D 仍只告警（BLOCK_3D_REAL_OVERLAP），裁决在 gen 里做。
+            _need_full3, _why3 = _structure_verdict(cwd, desym_fix=desym_fix)
+            lines.append("     判据：%s -> %s" % (_why3, "需要全网格" if _need_full3 else "IBZ 即可"))
             lines.append("     [WARN] 3D + 真实重叠 + 非完整网格 -> AMSET 会对系数去对称化，"
                          "二维实测 ADP 被抬高 10~30 倍（V23）；三维 Si 全网格对照（V26）："
                          "ADP/overall 只差 3~9%%、IMP 逐机制高 1.3~1.7 倍 -> 结论值可用，逐机制值需注明。"

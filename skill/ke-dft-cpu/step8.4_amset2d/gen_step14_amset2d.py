@@ -32,9 +32,9 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 # [SKILL_REV] 版本戳：写进 settings.yaml 头，便于从结果反查跑的是哪份 skill 副本。
-_SKILL_REV = "2026-09-16-amset2d"
+_SKILL_REV = "2026-09-28-desym-fix"   # V115
 # 复制来源（gen_step10_amset.py 的 _SKILL_REV），用于人工比对两份文件是否同步
-_SOURCE_GEN_REV = "2026-09-16-voigt-reorder"
+_SOURCE_GEN_REV = "2026-09-28-desym-fix"
 import stepconf  # noqa: E402
 try:
     import ke_common as kc
@@ -93,12 +93,19 @@ STEP_LABEL  = "S8.4_amset2d"
 #   并先 `rm -f transport.json` 删旧产物。原因：autozt 的 marker 判据只查
 #   transport.json 存在+子串，若后处理失败而 transport.json 已生成，该步会被判成
 #   finished(OK)，把失败隐藏掉（VERIFICATION V63）。
+# patch_desym_fix（2026-09-28 用户批准，V115）：@AMSET_PLUGINS@ 在渲染时替换成
+#   "import amset_desym_fix; "（插件装进运行目录时）或空串；命令最前面再拼
+#   export/unset AZ_DESYM_FIX（ke_common.desym_fix_cmd_prefix）。插件在 AZ_DESYM_FIX
+#   未设时什么都不做（AMSET 原公式），所以默认关时行为与改动前完全一样。
 AMSET_CMD   = ('rm -f transport.json; '
                'python overlap_preflight.py --in-job || exit 1; '
-               'python -c "import amset2d_plugin; '
+               'python -c "import amset2d_plugin; @AMSET_PLUGINS@'
                'from amset.log import initialize_amset_logger as L; L(); '
                'from amset.core.run import Runner; Runner.from_directory(\'.\').run()" '
                '>> amset.log 2>&1')
+DESYM_FIX = "auto"        # auto/on/off，见 ke_common.desym_fix_setting
+_DESYM_FIX_ON = False
+_GATE_SUMMARY = None
 # 链尾（patch_v63）：位于可选的后处理之后，后处理失败则不会生成 transport.json。
 AMSET_TAIL  = (' && cp -f "$(ls -t transport_*.json 2>/dev/null | head -1)" '
                'transport.json && ls -l transport.json')
@@ -108,6 +115,27 @@ TEMPERATURES = "100:900:9"            # 100,200,...,900 K，每 100 K 一个点
 SCATTERING  = ["ADP", "IMP", "POP"]   # 形变势声学 + 电离杂质 + 极性光学 "ADP", "IMP", "POP"
 _ALLOWED_SCATTERING = {"ADP", "IMP", "POP", "PIE"}   # step.conf SCATTERING 允许的机制
 MANUAL_BANDGAP = None                 # None=自动读；或写数值(eV) 覆盖 scissor
+# ★ patch_bandgap_override（2026-09-28）：scissor 带隙的 step.conf 覆盖通道（与 gen_step10 同款）。
+#   BANDGAP_OVERRIDE = <eV>、BANDGAP_NOTE = <来源说明>；优先级
+#   step.conf BANDGAP_OVERRIDE > MANUAL_BANDGAP > band_summary.json > setting.yaml。
+BANDGAP_OVERRIDE = None
+BANDGAP_NOTE = ""
+_BANDGAP_SRC = None
+# ★ patch_eps_inf_override_2d（2026-09-28）：2D 的 ε∞ 覆盖。PBE 下小带隙体系 ε∞ 偏大 ->
+#   POP 偏弱、迁移率偏高。与 3D 一样按"离子部分不变"搬 ε₀，但 2D 必须说清**口径**：
+#     EPS_INF_OVERRIDE       = 15.2            # 标量 = 面内 xx=yy（zz 不动）；或 3 个对角值
+#     EPS_INF_OVERRIDE_BASIS = layer | slab    # ★ 2D 必填，不给就停（两种口径差 c/t 倍）
+#   layer = 单层本征值（已扣真空，与 settings.yaml 里的 high_frequency_dielectric 同口径，
+#           文献/HSE 单层值通常是这个）；slab = 本项目超胞（含真空，与 DFPT OUTCAR 同口径）。
+#   两者换算 ε_layer − 1 = (c/t)(ε_slab − 1)（与 _dielectric_2d_inplane 同一个公式），
+#   插件的 r∞ = c(ε_slab,∥ − 1)/2 用 slab 值，所以 layer 输入会先换成 slab 再往下传。
+#   覆盖前后的值、口径、c/t 都落盘到 2d_correction.json 的 eps_inf_override。
+EPS_INF_OVERRIDE = None
+EPS_INF_OVERRIDE_BASIS = ""
+_EPS_OV_LAYER = None      # (eps_inf_layer, eps_static_layer)：覆盖后 settings.yaml 用的 3×3
+# 形变势构型口径（apply_2d_corrections 从 step7b/band_edges.json 读）。★ 2026-09-28：原来没有
+#   模块级初值 —— band_edges.json 不在时 apply_2d_corrections 直接 NameError。
+_DEFORM_GEOM = None
 # patch_dielec_assert：介电产物必须通过物理性硬断言，否则直接停步（不静默往下传）。
 #   检查项：eps_inf 存在 / 对角项 >= 1 / 不是单位矩阵（DFPT 初值签名）/
 #   有 IONIC CONTRIBUTION 块（否则 Frohlich 耦合恒为 0、POP 静默丢失）。
@@ -138,15 +166,29 @@ INTERPOLATION_FACTOR_EXPLICIT = False
 #   ★ 2D 是 48x48x3 这类各向异性网格，面内与 kz 必须分开看；代价 ~ mesh^2 * nkz。
 #   None = 不干预（沿用 INTERPOLATION_FACTOR）。
 # ★ 2026-09-27 用户指示：默认启用最终网格控制（面内约 100、kz ≥ 3）。
-MESH_MIN = 100           # 面内每方向下限（默认启用；None/0 = 不干预）
+# ★ 2026-09-28（第二批 (b)，V112/V115）：2D 默认 factor 改按**目标最终网格**定 ——
+#   面内下限从 100 提到 **263**（V112 端到端验证过的配置：MoS₂ IBZ 434 点 f=61 与
+#   全网格 6912 点 f=4 都给 263×263×21）。原来 IBZ 输入下默认只有约 100，低于验证过的网格。
+#   MESH_MIN_FMAX 相应放到 150（MoS₂ IBZ 要 f≈61；f=120 约 329 面内）。
+#   代价：MoS₂ f=61 作业级 MaxRSS 91 GiB（V113）—— gen 会按 ke_common.estimate_amset_mem_gib
+#   打内存粗估并在超阈值时告警（MEM_WARN_GIB / MEM_LIMIT_GIB）。
+#   要回到旧行为：step.conf 写 MESH_MIN = 100。
+MESH_MIN = 263           # 面内每方向下限（默认启用；None/0 = 不干预）
 MESH_MIN_KZ = 3          # kz 方向下限；2D 建议 3（<3 时 kz 不内插、AMSET 沿 kz 外推）
-MESH_MIN_FMAX = 60       # 自动选 factor 的上限
+MESH_MIN_FMAX = 150      # 自动选 factor 的上限
 # ★ 2026-09-27 用户指示：加最终网格**上限**，超了自动把 factor 降下来。
 #   最终网格 ≈ f(h5 里的 k 点数 × factor)，而**全网格 h5 的 k 点数比 IBZ 大十几倍**
 #   （MoS2：6912 = 48x48x3 vs 416），同样 factor 会给更大的网格。上限保证走全网格时
 #   factor 自动变小，不会撑爆内存（3D GaAs 全网格 f=10 -> 361^3 已实测 OOM 236 GiB）。
 #   None = 不设上限。实现见 apply_mesh_min()。
 MESH_MAX = 400
+# ★ patch_mem_guard（2026-09-28，第 6 项）：按最终插值网格给作业级内存粗估（ke_common.mem_guard，
+#   区间按 V113 两个实测点标定）。上界 > MEM_WARN_GIB 告警；给了 MEM_LIMIT_GIB 且**下界**都超 -> 停。
+#   MEM_AUTO_EXCLUSIVE = true：超 MEM_WARN_GIB 时自动给 submit.sh 加 #SBATCH --exclusive
+#   （jzzn 的 Slurm 不按内存调度，大作业现在靠手动独占；默认 false 不改提交行为）。
+MEM_WARN_GIB = 300
+MEM_LIMIT_GIB = None
+MEM_AUTO_EXCLUSIVE = False
 # patch_unity_overlap（2026-09-17 V22/V23；2026-09-26 用户决定：出厂值翻转为 False）：
 #   显式把 unity_overlap 写进 settings.yaml。
 #   ★ 2026-09-26 结论翻转（证据链：tmp/amset2d/DESYM_FINDINGS.md、upstream_issue_tr_tau.md）：
@@ -232,6 +274,12 @@ SPEC = {
     #   实测 factor=10 + nworkers=24 在共享节点上 MaxRSS 292 GB 被 OOM 杀。
     #   项目里按需降到 4（已校准口径：与 factor 10 差 6-11%，见 V23）。
     # ★ 2026-09-28 用户指正：SPEC 默认给 None —— 「step.conf 里有没有这个键」才是判据，
+    #   （哪怕写的是 10 也算显式）。
+    # ★ 2026-09-28 修：这一行曾在整理时丢了 —— main() 里 _p["INTERPOLATION_FACTOR"] 于是抛
+    #   KeyError，被 except 吞掉，**它之后的全部 step.conf 覆盖**（WAVEFUNCTION_FULL /
+    #   UNITY_OVERLAP / MESH_* / SCATTERING / WRITE_MESH / DOPING / TEMPERATURES）静默失效。
+    #   test_gen_conf_wiring.py 防回归。
+    "INTERPOLATION_FACTOR": (None, "int"),
     # patch_mesh_min：最终插值网格下限（None/0 = 不干预）。见文件头说明。
     "MESH_MIN": (MESH_MIN, "int"),
     "MESH_MIN_KZ": (MESH_MIN_KZ, "int"),
@@ -247,6 +295,18 @@ SPEC = {
     # 掺杂/温度范围覆盖（B4/B5 缩减设置用）：默认顶部 DOPING/TEMPERATURES；step.conf 可覆盖。
     "DOPING": (DOPING, "str"),
     "TEMPERATURES": (TEMPERATURES, "str"),
+    # patch_mem_guard：内存粗估阈值（GiB）与自动独占开关。
+    "MEM_WARN_GIB": (MEM_WARN_GIB, "int"),
+    "MEM_LIMIT_GIB": (None, "int"),
+    "MEM_AUTO_EXCLUSIVE": (MEM_AUTO_EXCLUSIVE, "bool"),
+    # patch_desym_fix：去对称化相位补丁开关 auto/on/off。
+    "DESYM_FIX": (DESYM_FIX, "str"),
+    # patch_bandgap_override：scissor 带隙覆盖（eV）与来源说明。
+    "BANDGAP_OVERRIDE": (None, "float"),
+    "BANDGAP_NOTE": ("", "str"),
+    # patch_eps_inf_override_2d：ε∞ 覆盖与口径（layer/slab，2D 必填）。
+    "EPS_INF_OVERRIDE": (None, "str"),
+    "EPS_INF_OVERRIDE_BASIS": ("", "str"),
 }
 # --- amset2d 插件相关（可改）---
 PLUGIN_SRC_NAME = "amset2d_plugin.py"   # 与本脚本同目录，运行时复制到 OUTDIR_NAME
@@ -550,9 +610,40 @@ def _warn_small_pbe_gap(cwd, thresh=0.5):
     return _g
 
 
+def _bandgap_from_override(cwd: Path):
+    """patch_bandgap_override（与 gen_step10 同款）：step.conf BANDGAP_OVERRIDE / MANUAL_BANDGAP。"""
+    for val, src in ((BANDGAP_OVERRIDE, "step.conf BANDGAP_OVERRIDE"),
+                     (MANUAL_BANDGAP, "脚本常量 MANUAL_BANDGAP")):
+        if val is None:
+            continue
+        g = float(val)
+        if not g > 0:
+            sys.exit("[ERROR] %s = %r：带隙覆盖值必须 > 0 eV（金属请把 REQUIRE_BANDGAP 设为 False，"
+                     "不要用 0 覆盖）" % (src, val))
+        if BANDGAP_NOTE:
+            src += "（%s）" % BANDGAP_NOTE
+        _ref = []
+        for _c in BANDGAP_PLOT_CANDS:
+            _p = cwd / _c / "band_summary.json"
+            if _p.is_file():
+                try:
+                    import json as _j
+                    _ref.append("%s=%.4f" % (_c.split("/")[-1],
+                                             float(_j.loads(_p.read_text()).get("gap_eV"))))
+                except Exception:                                  # noqa: BLE001
+                    pass
+        print("[OK] 带隙 %.4f eV（%s）—— 不读 band_summary.json%s"
+              % (g, src, ("；对照 " + "，".join(_ref)) if _ref else ""))
+        return g, src
+    return None, None
+
+
 def read_bandgap(cwd: Path):
-    if MANUAL_BANDGAP is not None:
-        return float(MANUAL_BANDGAP)
+    global _BANDGAP_SRC
+    _g, _src = _bandgap_from_override(cwd)
+    if _g is not None:
+        _BANDGAP_SRC = _src
+        return _g
     import json
     bs = None
     for _c in BANDGAP_PLOT_CANDS:
@@ -572,16 +663,25 @@ def read_bandgap(cwd: Path):
                         print("[WARN] band_summary 判为金属（gap=%.4f eV）——不写 bandgap"
                               % _g)
                         return None
-                    print("[OK] 带隙 %.4f eV（键 %s）" % (_g, k))
+                    _fn = "HSE06" if "hse" in bs.parent.name else "PBE/PBEsol"
+                    _BANDGAP_SRC = "%s/band_summary.json（%s）" % (bs.parent.name, _fn)
+                    print("[OK] 带隙 %.4f eV（键 %s，%s）" % (_g, k, _fn))
+                    if _fn == "HSE06":
+                        print("[..] scissor 带隙取自 HSE06。若该材料 HSE06 不适用（如 C60 网络要用 "
+                              "PBE0），在 step.conf 写 BANDGAP_OVERRIDE = <eV>（可配 BANDGAP_NOTE）。")
                     return _g
-        except Exception:
-            pass
+        except Exception as _e:
+            # ★ 不静默（与 gen_step10 同款）：失败会退回 setting.yaml 的另一个来源。
+            print("[WARN] 解析 %s 失败（%s: %s）—— 将回退到项目 setting.yaml 的 bandgap，"
+                  "两者可能不是同一个数，请核对。" % (bs, type(_e).__name__, _e), file=sys.stderr)
     # 退回项目配置
     for cand in (cwd / "project_setting" / "setting.yaml",):
         if cand.is_file():
             for ln in cand.read_text(errors="ignore").splitlines():
                 m = re.match(r"\s*bandgap\s*:\s*([\d.]+)", ln)
                 if m:
+                    _BANDGAP_SRC = "project_setting/setting.yaml bandgap"
+                    print("[OK] 带隙 %s eV（%s）" % (m.group(1), _BANDGAP_SRC))
                     return float(m.group(1))
     return None
 
@@ -1154,6 +1254,64 @@ def read_pop_frequency_2d(dielect_dir):
     return None
 
 
+def _parse_eps_override(val):
+    """'15.2' -> [15.2, 15.2, None]（标量 = 面内，zz 不动）；'a,b,c' -> [a, b, c]。"""
+    v = [float(x) for x in str(val).replace(",", " ").replace(";", " ").split()]
+    if len(v) == 1:
+        return [v[0], v[0], None]
+    if len(v) == 3:
+        return v
+    sys.exit("[ERROR] EPS_INF_OVERRIDE 只能是 1 个（面内标量）或 3 个（对角）数，收到 %r" % (val,))
+
+
+def _apply_eps_inf_override_2d(inf33, stat33, c_over_t):
+    """patch_eps_inf_override_2d：在**slab 口径**上覆盖 ε∞ 对角元，离子部分 (ε₀−ε∞) 原样保留。
+
+    返回 (inf33_new, stat33_new, 记录 dict|None)；同时把覆盖后的 layer 口径 3×3 放进
+    _EPS_OV_LAYER，供 main() 写 settings.yaml（与 _dielectric_2d_inplane 同一换算）。
+    """
+    global _EPS_OV_LAYER
+    _EPS_OV_LAYER = None
+    if EPS_INF_OVERRIDE is None or str(EPS_INF_OVERRIDE).strip() == "":
+        return inf33, stat33, None
+    basis = str(EPS_INF_OVERRIDE_BASIS or "").strip().lower()
+    if basis not in ("layer", "slab"):
+        sys.exit("[ERROR] 2D 给了 EPS_INF_OVERRIDE=%s，但 EPS_INF_OVERRIDE_BASIS=%r —— 必须写 "
+                 "layer（单层本征值，已扣真空）或 slab（本超胞含真空，与 DFPT OUTCAR 同口径）。"
+                 "两种口径差 c/t=%.3f 倍，不许猜。" % (EPS_INF_OVERRIDE, EPS_INF_OVERRIDE_BASIS,
+                                                   c_over_t))
+    if inf33 is None:
+        sys.exit("[ERROR] EPS_INF_OVERRIDE：读不到原始 ε∞ 张量，无法按离子部分搬移 ε₀")
+    f = float(c_over_t)
+    want = _parse_eps_override(EPS_INF_OVERRIDE)
+    new_inf = [list(map(float, r)) for r in inf33]
+    stat = [list(map(float, r)) for r in (stat33 if stat33 is not None else inf33)]
+    for i in range(3):
+        if want[i] is None:
+            continue
+        v = float(want[i])
+        if v < 1.0:
+            sys.exit("[ERROR] EPS_INF_OVERRIDE 第 %d 个值 %.4f < 1，非物理" % (i + 1, v))
+        new_inf[i][i] = (1.0 + (v - 1.0) / f) if basis == "layer" else v
+    new_stat = [[new_inf[i][j] + (stat[i][j] - float(inf33[i][j])) for j in range(3)]
+                for i in range(3)]
+    corr = lambda m: [[((1 if i == j else 0) + f * (m[i][j] - (1 if i == j else 0)))  # noqa: E731
+                       for j in range(3)] for i in range(3)]
+    _EPS_OV_LAYER = (corr(new_inf), corr(new_stat))
+    diag = lambda m: [round(m[i][i], 4) for i in range(3)]                          # noqa: E731
+    rec = {"input": str(EPS_INF_OVERRIDE), "basis": basis, "c_over_t": round(f, 4),
+           "eps_inf_slab_before": diag(inf33), "eps_inf_slab_after": diag(new_inf),
+           "eps_static_slab_after": diag(new_stat),
+           "eps_inf_layer_after": diag(_EPS_OV_LAYER[0]),
+           "eps_static_layer_after": diag(_EPS_OV_LAYER[1]),
+           "rule": "eps0_new = eps_inf_new + (eps0 - eps_inf)（离子部分不变）；"
+                   "layer−1 = (c/t)(slab−1)；标量只改面内 xx/yy"}
+    print("[..] EPS_INF_OVERRIDE（%s 口径 %s）：ε∞ slab %s -> %s；layer -> %s；ε₀ 按离子部分搬移"
+          % (basis, EPS_INF_OVERRIDE, rec["eps_inf_slab_before"], rec["eps_inf_slab_after"],
+             rec["eps_inf_layer_after"]))
+    return new_inf, new_stat, rec
+
+
 def apply_2d_corrections(cwd: Path, elastic, eps_inf=None, eps_static=None):
     """二维几何/弹性/介电参数落盘。
 
@@ -1228,6 +1386,8 @@ def apply_2d_corrections(cwd: Path, elastic, eps_inf=None, eps_static=None):
 
     # 插件需要的**原始 slab** 介电张量：完整 3×3（含非对角，斜方/单斜要用），不扣真空
     inf33, stat33 = _slab_tensors(cwd / DIELECT_DIR, eps_inf, eps_static)
+    # patch_eps_inf_override_2d：覆盖在 slab 口径上做（插件的 r∞ 用 slab 值），layer 输入先换算
+    inf33, stat33, _eps_ov = _apply_eps_inf_override_2d(inf33, stat33, factor)
     layer_normal = _layer_normal(cwd)
     mechanisms = _mechanisms_2d(cwd)
     # 先把 Γ 点声子信息拿到：pop_frequency 与 Δr 交叉核对都在同一个 helper 的 JSON 里，
@@ -1271,6 +1431,7 @@ def apply_2d_corrections(cwd: Path, elastic, eps_inf=None, eps_static=None):
                                  "c/t 只用于 σ/κ 的厚度归一化（见 elastic_rescale_factor_c_over_t）",
         "eps_inf_slab": inf33,
         "eps_static_slab": stat33,
+        "eps_inf_override": _eps_ov,
         "r_inf_delta_r_check": r_check,
         "deform_geometry": _DEFORM_GEOM,
         "eps_env": float(EPS_ENV),
@@ -1547,8 +1708,13 @@ def write_settings(out: Path, eps_inf, eps_static, gap, elastic,
         eps_static = eps_inf
     if eps_static is not None:
         lines.append("static_dielectric: %s" % eps_static)
+    if _EPS_OV_LAYER is not None:                          # patch_eps_inf_override_2d
+        lines.append("# eps_inf_override: %s（口径 %s；详见 2d_correction.json 的 eps_inf_override）"
+                     % (EPS_INF_OVERRIDE, EPS_INF_OVERRIDE_BASIS))
     if gap is not None:
         lines.append("bandgap: %s" % gap)
+        if _BANDGAP_SRC:                                   # patch_bandgap_override
+            lines.append("# bandgap_source: %s" % _BANDGAP_SRC)
     if elastic is not None:
         if isinstance(elastic, (int, float)):
             lines.append("elastic_constant: %s" % elastic)   # 各向同性标量
@@ -1567,6 +1733,11 @@ def write_settings(out: Path, eps_inf, eps_static, gap, elastic,
             lines.append("  - [%s]" % ", ".join("%g" % v for v in row))
     if is_2d and FREE_CARRIER_SCREENING_2D:
         lines.append("free_carrier_screening: true")
+    # patch_desym_fix：记下本次是否打相位补丁与判据摘要（gen 时的 preflight 读这一行；
+    #   作业内以 submit.sh 里 export 的 AZ_DESYM_FIX 为准）。
+    lines.append("# AZ_DESYM_FIX=%d" % (1 if _DESYM_FIX_ON else 0))
+    if _GATE_SUMMARY:
+        lines.append("# desym_gate: %s" % _GATE_SUMMARY)
     (out / "settings.yaml").write_text("\n".join(lines) + "\n",
                                        encoding="utf-8", newline="\n")
     ela = ("标量%s" % elastic if isinstance(elastic, (int, float))
@@ -1651,6 +1822,30 @@ def _install_fermi_check(out):
     if src.resolve() != dst.resolve():
         shutil.copyfile(src, dst)
     print("[OK] 费米能级窗口检查脚本就位：%s" % dst)
+
+def _install_desym_fix(out):
+    """patch_desym_fix：把 amset_desym_fix.py 复制进运行目录（python -c 里 import 它）。
+
+    与 gen_step10 的同名函数相同。DESYM_FIX 开着却找不到插件 -> 直接退出（判据此时放行 IBZ，
+    补丁挂不上就是静默算错）；关着找不到 -> 不 import，行为与改动前一样。
+    """
+    name = kc.DESYM_FIX_PLUGIN if _HAS_KC else "amset_desym_fix.py"
+    here = Path(__file__).resolve().parent
+    src = next((p for p in (here / name, Path.cwd() / name) if p.is_file()), None)
+    dst = Path(out) / name
+    if src is None:
+        if _DESYM_FIX_ON:
+            sys.exit("[ERROR] DESYM_FIX 已开，但找不到 %s（gen_need 里要有它）—— 补丁挂不上，"
+                     "判据却会放行 IBZ，结果会静默算错。" % name)
+        if dst.is_file():
+            dst.unlink()
+        print("[WARN] 找不到 %s —— 本次 AMSET 不挂相位补丁（DESYM_FIX 关，行为不变）" % name)
+        return False
+    if src.resolve() != dst.resolve():
+        shutil.copyfile(src, dst)
+    print("[OK] 去对称化相位补丁就位：%s（DESYM_FIX=%s）" % (dst, "on" if _DESYM_FIX_ON else "off"))
+    return True
+
 
 def _install_symmetry_deps(out):
     """把 ke_common.py / dim_common.py 复制进运行目录（作业内的 overlap_preflight.py 要用）。
@@ -1850,7 +2045,45 @@ def _apply_inversion_rule(cwd):
     无 反演 + 真实重叠 -> 必须全网格；有 反演 + 真实重叠 -> 普通 IBZ 即可。
     step.conf 显式指定时以显式为准（已知坏组合交给下面的闸门报错）。
     """
-    global WAVEFUNCTION_FULL
+    # ★ patch_per_op_rule（2026-09-28，V115）：旧规则"有反演 / τ≡0 -> IBZ"两个方向都错
+    #   （Si 原点在反演中心被放行 = 静默算错；GaN 标准原点被拦 = 多算一次全网格）。
+    #   现在直接用 ke_common.symmetry_gate 的逐操作裁决，并联动 DESYM_FIX / SOC。
+    global WAVEFUNCTION_FULL, _GATE_SUMMARY
+    _g = _gate_for(cwd)
+    if _g is None or _g.get("bad_ops") is None:
+        if WAVEFUNCTION_FULL is None:
+            WAVEFUNCTION_FULL = True
+            print("[WARN] 对称性判据：取不到结构或对称操作 —— 保守走全网格")
+        else:
+            print("[WARN] 对称性判据：判不出来，沿用 WAVEFUNCTION_FULL=%s" % WAVEFUNCTION_FULL)
+        return
+    if _WF_EXPLICIT is not None:
+        WAVEFUNCTION_FULL = _WF_EXPLICIT
+        print("[..] WAVEFUNCTION_FULL 由 step.conf 显式指定 = %s，跳过自动判断" % _WF_EXPLICIT)
+        return
+    if UNITY_OVERLAP:
+        WAVEFUNCTION_FULL = False
+        print("[..] unity 重叠（快速筛选，仅数量级）-> 不需要全网格")
+    elif not _g["needs_full_grid"]:
+        WAVEFUNCTION_FULL = False
+        print("[OK] 真实重叠 + IBZ：%s" % _g["reason"])
+    else:
+        WAVEFUNCTION_FULL = True
+        print("[OK] 真实重叠 -> 自动启用 WAVEFUNCTION_FULL（全网格 S3b+S4b；需已打开 "
+              "wavefunction_full 分支）：%s\n"
+              "      替代办法：S3 的 align_origin 把原点对到高对称原子（TMD 的 P-6m2 可让坏操作归零），"
+              "或验证通过后开 DESYM_FIX（相位补丁）。" % _g["reason"])
+
+
+_GATE_CACHE = {}
+
+
+def _gate_for(cwd):
+    """读 STRUCT_CANDS 里的结构跑 ke_common.symmetry_gate（带 DESYM_FIX / SOC），结果缓存。"""
+    global _GATE_SUMMARY
+    key = (str(cwd), _DESYM_FIX_ON)
+    if key in _GATE_CACHE:
+        return _GATE_CACHE[key]
     st = None
     for _d in STRUCT_CANDS:
         for _n in ("CONTCAR", "POSCAR"):
@@ -1864,39 +2097,13 @@ def _apply_inversion_rule(cwd):
                     st = None
         if st is not None:
             break
-    inv, max_tau = _symmetry_flags(st) if st is not None else (None, None)
-    if inv is None:
-        if WAVEFUNCTION_FULL is None:
-            WAVEFUNCTION_FULL = True
-            print("[WARN] 反演中心判据：取不到结构或 spglib 失败 —— 保守按**无反演**处理（走全网格）")
-        else:
-            print("[WARN] 反演中心判据：判不出来，沿用 WAVEFUNCTION_FULL=%s" % WAVEFUNCTION_FULL)
-        return
-    if _WF_EXPLICIT is not None:
-        WAVEFUNCTION_FULL = _WF_EXPLICIT
-        print("[..] WAVEFUNCTION_FULL 由 step.conf 显式指定 = %s，跳过反演中心自动判断"
-              % _WF_EXPLICIT)
-        return
-    _TAU_TOL = 1e-4
-    _tau_nz = (max_tau is not None) and (max_tau > _TAU_TOL)
-    if UNITY_OVERLAP:
-        WAVEFUNCTION_FULL = False
-        print("[..] unity 重叠（快速筛选，仅数量级）-> 不需要全网格")
-    elif inv:
-        WAVEFUNCTION_FULL = False
-        print("[OK] 检出**反演中心** + 真实重叠 -> 普通 IBZ 路径即可（不启用全网格，省计算量）")
-    elif not _tau_nz:
-        # ★ 2026-09-27：无反演中心但全部操作 |tau|=0（简单空间群 + 原点恰在高对称原子）
-        #   -> bug 出在 τ 的处理上，τ≡0 时不可见 -> 不必付全网格代价。
-        WAVEFUNCTION_FULL = False
-        print("[OK] 无反演中心，但全部对称操作 |tau|=0.00（简单空间群）-> 去对称化不受 τ bug "
-              "影响，走普通 IBZ 路径（省一次全网格）")
-    else:
-        WAVEFUNCTION_FULL = True
-        print("[OK] 检出**无反演中心**且存在 τ≠0 的对称操作（|tau|max=%.4f）-> 自动启用 "
-              "WAVEFUNCTION_FULL（全网格 S3b+S4b；需已打开 wavefunction_full 分支）\n"
-              "      注：若该空间群本身是简单空间群（本技能的 TMD 就是 P-6m2），把原点平移到"
-              "高对称原子（如 Mo）上可让 τ 全变 0、从而免掉全网格（待实测验证）。" % max_tau)
+    g = (kc.symmetry_gate(st, desym_fix=_DESYM_FIX_ON, ncl=kc.detect_ncl(cwd))
+         if (st is not None and _HAS_KC) else None)
+    _GATE_SUMMARY = kc.gate_log_line(g) if (_HAS_KC and g is not None) else None
+    if _GATE_SUMMARY:
+        print("[..] " + _GATE_SUMMARY)       # 补丁开没开都打 bad_ops/total_ops
+    _GATE_CACHE[key] = g
+    return g
 
 
 def main():
@@ -1904,6 +2111,9 @@ def main():
     cwd = Path.cwd()
     global LAYER_THICKNESS, NWORKERS, UNITY_OVERLAP, WAVEFUNCTION_FULL
     global INTERPOLATION_FACTOR, INTERPOLATION_FACTOR_EXPLICIT, SCATTERING, WRITE_MESH, DOPING, TEMPERATURES
+    global DESYM_FIX, _DESYM_FIX_ON, BANDGAP_OVERRIDE, BANDGAP_NOTE
+    global EPS_INF_OVERRIDE, EPS_INF_OVERRIDE_BASIS
+    global MEM_WARN_GIB, MEM_LIMIT_GIB, MEM_AUTO_EXCLUSIVE
     _conf_nworkers = None
     if (cwd / "step.conf").is_file():
         # strict=False：材料级 step.conf 是【全技能共用】的一份，含别的步骤的键
@@ -1948,9 +2158,11 @@ def main():
                 print("[WARN] UNITY_OVERLAP=%r 不认识（只认 auto/true/false），按 auto 处理" % _uo)
             # patch_mesh_min：最终插值网格下限（step.conf 覆盖；0/None = 不干预）
             global MESH_MIN, MESH_MIN_KZ, MESH_MIN_FMAX, MESH_MAX
+            # ★ 2026-09-28：原来是 `if _v:` —— step.conf 写 0（注释说的"0 = 不干预"）会被当成
+            #   "没写"而忽略，出厂下限照样生效。改成 is not None，0 才真的关掉。
             for _k in ("MESH_MIN", "MESH_MIN_KZ", "MESH_MIN_FMAX", "MESH_MAX"):
                 _v = _p[_k]
-                if _v:
+                if _v is not None:
                     if _k == "MESH_MIN":
                         MESH_MIN = int(_v)
                     elif _k == "MESH_MIN_KZ":
@@ -1997,8 +2209,37 @@ def main():
                 if _t != TEMPERATURES:
                     print("[OK] TEMPERATURES = %s（step.conf 覆盖，出厂 %s）" % (_t, TEMPERATURES))
                 TEMPERATURES = _t
-        except (KeyError, ValueError, TypeError):
-            pass  # step.conf 读不成时保持出厂默认（LAYER_THICKNESS="vdw" / NWORKERS 自动）
+            # patch_desym_fix / patch_bandgap_override / patch_eps_inf_override_2d
+            if _p["DESYM_FIX"]:
+                DESYM_FIX = str(_p["DESYM_FIX"])
+            if _p["BANDGAP_OVERRIDE"] is not None:
+                BANDGAP_OVERRIDE = float(_p["BANDGAP_OVERRIDE"])
+                print("[..] BANDGAP_OVERRIDE = %.4f eV（step.conf 覆盖）" % BANDGAP_OVERRIDE)
+            if _p["BANDGAP_NOTE"]:
+                BANDGAP_NOTE = str(_p["BANDGAP_NOTE"])
+            if _p["EPS_INF_OVERRIDE"]:
+                EPS_INF_OVERRIDE = str(_p["EPS_INF_OVERRIDE"])
+                print("[..] EPS_INF_OVERRIDE = %s（step.conf 覆盖）" % EPS_INF_OVERRIDE)
+            if _p["EPS_INF_OVERRIDE_BASIS"]:
+                EPS_INF_OVERRIDE_BASIS = str(_p["EPS_INF_OVERRIDE_BASIS"])
+            # patch_mem_guard：内存粗估阈值 / 自动独占
+            if _p["MEM_WARN_GIB"]:
+                MEM_WARN_GIB = int(_p["MEM_WARN_GIB"])
+            if _p["MEM_LIMIT_GIB"]:
+                MEM_LIMIT_GIB = int(_p["MEM_LIMIT_GIB"])
+            if _p["MEM_AUTO_EXCLUSIVE"]:
+                MEM_AUTO_EXCLUSIVE = True
+        except (KeyError, ValueError, TypeError) as _e:
+            # ★ 不再静默：以前这里 pass —— SPEC 漏一个键（INTERPOLATION_FACTOR）就让它之后的
+            #   全部覆盖一起失效，而日志里什么都看不到。
+            print("[WARN] 读 step.conf 覆盖时出错（%s: %s）—— 出错之后的覆盖项未生效，"
+                  "按出厂默认继续；请修 step.conf 或本脚本 SPEC。" % (type(_e).__name__, _e),
+                  file=sys.stderr)
+
+    # ---- patch_desym_fix：相位补丁开关（必须在 _apply_inversion_rule 之前）----
+    if _HAS_KC:
+        _DESYM_FIX_ON, _dsrc = kc.desym_fix_setting(DESYM_FIX)
+        print("[..] DESYM_FIX = %s（%s）" % ("on" if _DESYM_FIX_ON else "off", _dsrc))
 
     # ---- NWORKERS：默认自动 = 本次提交实际分配到的核数 ----
     _alloc, _src = _alloc_cores(cwd)
@@ -2035,33 +2276,19 @@ def main():
         #   48 网格同网格复核同样通过。所以这里先查结构的 τ：
         #     τ≡0  -> 放行走 IBZ（省掉 S3b 全网格）；
         #     τ≠0  -> 维持原来的硬拦截（必须 WAVEFUNCTION_FULL=true）。
-        _gst = None
-        for _d in ("step3_uniform", "step1_opt", "step1_std_opt"):
-            for _n in ("POSCAR", "CONTCAR"):
-                _p = cwd / _d / _n
-                if _p.is_file():
-                    try:
-                        from pymatgen.core import Structure as _St
-                        _gst = _St.from_file(str(_p))
-                    except Exception:
-                        _gst = None
-                    if _gst is not None:
-                        break
-            if _gst is not None:
-                break
-        _inv, _mtau = _symmetry_flags(_gst) if _gst is not None else (None, None)
-        if (_mtau is not None) and (_mtau <= 1e-4):
-            print("[OK] 2D + 真实重叠 + **IBZ**：结构对称操作 |tau|max=%.4f（原点已对齐）-> "
-                  "去对称化不会触发 τ bug，放行（省掉 S3b 全网格）。见 V109/V111。" % _mtau)
+        # ★ 2026-09-28（V115）：闸门也换成逐操作判据（原来只看 |tau|max<=1e-4）：
+        #   GaN 标准原点 τ≠0 但 0/24 坏操作 -> 现在放行；Si 原点在反演中心 τ≠0 且 24/48 坏 ->
+        #   照旧拦；DESYM_FIX 开着 -> 放行（bad_ops 照打）。
+        _g = _gate_for(cwd)
+        if _g is not None and _g.get("bad_ops") is not None and not _g["needs_full_grid"]:
+            print("[OK] 2D + 真实重叠 + **IBZ**：%s" % _g["reason"])
         else:
-            sys.exit("[ERROR] UNITY_OVERLAP=false 且 WAVEFUNCTION_FULL=false，但结构存在 τ≠0 的"
-                     "对称操作（|tau|max=%s）：2D 真实重叠只能用 S3b 全网格 h5（ISYM=-1，走 "
-                     "from_data 跳过去对称化）。去对称化在「无反演 + τ≠0」的体系上大面积算错。"
-                     "处理：① step.conf 补 WAVEFUNCTION_FULL=true；或 ② 先让 S3 的 align_origin "
-                     "把原点对齐（VERIFICATION V109/V111）；或 ③ 显式改回 UNITY_OVERLAP=true"
+            sys.exit("[ERROR] UNITY_OVERLAP=false 且 WAVEFUNCTION_FULL=false，但判据说必须全网格：%s\n"
+                     "        处理：① step.conf 补 WAVEFUNCTION_FULL=true（S3b ISYM=-1 全网格，走 "
+                     "from_data）；② 先让 S3 的 align_origin 把原点对齐（V109/V111）；"
+                     "③ 验证通过后开 DESYM_FIX（相位补丁）；④ 显式改回 UNITY_OVERLAP=true"
                      "（快速筛选，迁移率偏低）。"
-                     % ("None（结构或 spglib 判不出来，保守拦截）" if _mtau is None
-                        else "%.4f" % _mtau))
+                     % ((_g or {}).get("reason") or "结构或对称操作判不出来，保守拦截"))
     out = cwd / OUTDIR_NAME
     out.mkdir(exist_ok=True)
     # 插件随本步复制到运行目录（只在那一次 amset 运行里生效，不改 AMSET 安装）
@@ -2070,6 +2297,7 @@ def main():
     _install_postprocess(out)
     _install_fermi_check(out)   # patch_fermi_window（2026-09-28 用户批准）
     _install_symmetry_deps(out)  # patch_symmetry_gate：preflight 的判据来源
+    _has_fix = _install_desym_fix(out)   # patch_desym_fix
     _wdir = "step4b_wave_full" if WAVEFUNCTION_FULL else WAVE_DIR
     # [guard-2026-09-26] 真实重叠（2D 出厂默认）要求全网格 h5 真的在。
     #   只检查 WAVEFUNCTION_FULL 这个标志不够 —— 分支没打开时标志仍是 True，
@@ -2113,6 +2341,13 @@ def main():
     if is_2d and c_len and TWO_D_DIELECTRIC_VACUUM:  # patch_2d_dielec
         eps_inf, eps_static = _dielectric_2d_inplane(
             cwd / DIELECT_DIR, out, eps_inf, eps_static)
+    # patch_eps_inf_override_2d：覆盖已在 apply_2d_corrections 里按 slab 口径做完（插件读的
+    #   2d_correction.json 已是覆盖后的值）；settings.yaml 用同一换算得到的单层值。
+    if EPS_INF_OVERRIDE is not None and str(EPS_INF_OVERRIDE).strip():
+        if _EPS_OV_LAYER is None or not TWO_D_DIELECTRIC_VACUUM:
+            sys.exit("[ERROR] EPS_INF_OVERRIDE 没能应用（2D 几何/层厚不全，或 "
+                     "TWO_D_DIELECTRIC_VACUUM=False）—— 不静默忽略，请先修上面的 WARN。")
+        eps_inf, eps_static = _EPS_OV_LAYER
     if gap is None:
         _msg = ("没读到带隙——settings.yaml 将不写 bandgap，AMSET 会退回 "
                 "step3_uniform 的裸 DFT(PBE) 带隙。PBE 带隙偏小会让 300 K 双极导通"
@@ -2136,7 +2371,7 @@ def main():
         print("[WARN] settings 要 PIE 但没有压电张量——本次退化为不含 PIE 的散射集"
               "（step6_elastic 的 DFPT 需 LEPSILON + IBRION=6）")
     # patch_mesh_min：按最终插值网格下限反算 INTERPOLATION_FACTOR（必须在 write_settings 之前）。
-    apply_mesh_min(_vr, out)
+    _fm = apply_mesh_min(_vr, out)
     write_settings(out, eps_inf, eps_static, gap, elastic,
                    is_2d=is_2d, c_len=c_len, piezo=piezo)
 
@@ -2169,6 +2404,10 @@ def main():
     #   autozt marker 判据会把失败隐藏（V63 的教训）。
     _acmd = _acmd + " && python fermi_window_check.py"
     _acmd = _acmd + AMSET_TAIL
+    # patch_desym_fix：插件在运行目录里就 import；开关用环境变量传进作业（preflight 也读它）
+    _acmd = _acmd.replace("@AMSET_PLUGINS@", "import amset_desym_fix; " if _has_fix else "")
+    if _HAS_KC:
+        _acmd = kc.desym_fix_cmd_prefix(_DESYM_FIX_ON) + _acmd
     text = (text.replace("{{JOBNAME}}", jobname)
                 .replace("{{AMSET_CMD}}", _acmd)
                 .replace("{{AMSET_ENV}}", AMSET_ENV_NAME))
@@ -2176,12 +2415,21 @@ def main():
         sys.exit("[ERROR] submit_amset.tpl 的 {{AMSET_ENV}} 未填充（step.conf 缺 AMSET_ENV？）")
     submit.write_text(text, encoding="utf-8", newline="\n")
     stepconf.apply_submit(submit, stepconf.read_submit(stepconf.CONF_NAME))
+    # patch_mem_guard：最终网格 -> 作业级内存粗估（区间）；可选自动独占节点
+    if _HAS_KC and _fm:
+        _lo, _hi, _lvl = kc.mem_guard(_fm[1], MEM_WARN_GIB, MEM_LIMIT_GIB, label=STEP_LABEL)
+        if _lvl == "error":
+            sys.exit("[ERROR] 内存粗估超过 MEM_LIMIT_GIB —— 见上一行，未提交。")
+        if _lvl == "warn" and MEM_AUTO_EXCLUSIVE and kc.add_exclusive(submit):
+            print("[OK] MEM_AUTO_EXCLUSIVE：submit.sh 已加 #SBATCH --exclusive")
+    elif _HAS_KC:
+        print("[..] 内存粗估跳过：没有最终网格信息（MESH_MIN/MESH_MAX 都关了或读不到 vasprun）")
     # ---- patch_overlap_preflight：重叠路径的运行前检查（VERIFICATION V24）----
     # ① 版本+重叠模式 ② h5 完整性（真实重叠 + 非完整网格 -> 拦截）
     # ③ S3/S3b 能带一致性 ④ amset wave 带窗口是否显式
     try:
         import overlap_preflight as _pf
-        _verdict, _lines = _pf.run(cwd, out, UNITY_OVERLAP)
+        _verdict, _lines = _pf.run(cwd, out, UNITY_OVERLAP, desym_fix=_DESYM_FIX_ON)
         print("[..] 重叠路径运行前检查：")
         for _l in _lines:
             print("[..] " + _l)

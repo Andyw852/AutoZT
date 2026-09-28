@@ -208,6 +208,15 @@ kz>=3 的网格收敛测试完成前，仍建议用同 c（20 Å）的跨体系�
 | 二维压电核的具体表达式 | 部分文献（Kaasbjerg 2013 的物理结论；公式原文未核到）；D'Souza 未含长程压电（只说低温重要） |
 | ZA 支不耦合 | **有条件**：仅对存在 σh 的材料成立（见 5.1） |
 
+## 5.3 波函数去对称化的相位（V115，2026-09-28）
+
+AMSET 用 IBZ 波函数时要把系数按对称操作展开到全网格。其相位因子只在满足
+非 TR：(R+I)τ ≡ 0、TR：(R−I)τ ≡ 0（mod 1）的操作上精确（逐操作判据，`ke_common.op_phase_exact`）；
+不满足时真实重叠被算坏（与有无反演中心无关）。三种合法做法：① 全网格波函数（ISYM=-1，AMSET 走
+from_data）；② S3 的 `align_origin` 把原点移到让坏操作归零的位置（简单空间群可行）；③ 相位补丁
+`amset_desym_fix`（`DESYM_FIX=on`，任何结构都精确；实数据验证通过前默认关）。判据与 AMSET 用同一套
+操作（symprec 0.01 Å）。推导、模型检验与接线见 `step8.4_amset2d/VERIFICATION.md` V115。
+
 ## 6. skill_rev 防呆
 
 step8.x 的 `_SKILL_REV` 写进 comparison_summary.txt。改脚本即提交 GitHub 并 bump，

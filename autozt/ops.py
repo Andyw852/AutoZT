@@ -409,6 +409,12 @@ def auto_recover_hung(cfg, data):
         # 使用 OUTCAR/OSZICAR；QE/DFPT 等技能可能只更新 ph.out、dyn
         # 或其它工件，不能因 VASP 指纹为零而取消正常作业。
         _m_for_hang = _material_of_workdir(data, wd)
+        # _hung_scan enumerates every RUNNING job for the SSH user on a host.
+        # Only act on workdirs belonging to materials in this AutoZT invocation;
+        # otherwise a project-scoped monitor can scancel or rewrite another
+        # project's (or an unmanaged user's) job on the shared cluster.
+        if _m_for_hang is None:
+            continue
         _tt_for_hang = (_m_for_hang or {}).get("tt")
         _tc_for_hang = ((cfg.get("task_types") or {}).get(_tt_for_hang)
                         if _tt_for_hang else None) or {}

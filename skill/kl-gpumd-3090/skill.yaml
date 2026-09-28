@@ -28,7 +28,9 @@ defaults:
 fetch_files: [POSCAR, CONTCAR, workflow_method.txt, klgpumd_params.txt,
               struct_summary.json, nep_summary.json, kappa_summary.json,
               compare_summary.json, train.xyz, test.xyz, nep.txt, nep.in,
-              train.log, gpumd.log, kappa.out, hac.out, thermo.out,
+              train.log, loss.out, force_train.out, force_test.out,
+              energy_train.out, energy_test.out, nep.restart,
+              gpumd.log, kappa.out, hac.out, thermo.out,
               submit.sh, queue.out, queue.err, kappa_T.png]
 
 steps:

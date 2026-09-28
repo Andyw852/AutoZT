@@ -42,6 +42,7 @@ SPEC = {
     "NEURON": (80, "int"),
     # --- 可调 ---
     "LAMBDA_1": (0.0, "float"),
+    "LAMBDA_2": ("", "str"),  # blank: preserve GPUMD default
     "LAMBDA_E": (1.0, "float"),
     "LAMBDA_F": (1.0, "float"),
     "LAMBDA_V": (0.0, "float"),

@@ -77,6 +77,41 @@ class PreflightVerdictTests(unittest.TestCase):
             self.assertEqual(need, expect, "%s: %s" % (name, why))
             self.assertIn("fallback", why)
 
+    # ---- patch_desym_fix（V115）----
+    def test_desym_fix_releases_but_logs_counts(self):
+        st = shifted(si_on_atom(), [-.125, -.125, -.125])
+        need, why = pf._structure_verdict(_material_dir(st), desym_fix=True)
+        self.assertFalse(need, why)
+        self.assertIn("bad_ops=24/48", why)
+        need, why = pf._fallback_verdict(st, desym_fix=True)
+        self.assertFalse(need, why)
+
+    def test_desym_fix_active_env_and_settings(self):
+        import os
+        d = Path(tempfile.mkdtemp())
+        old = os.environ.pop("AZ_DESYM_FIX", None)
+        try:
+            self.assertFalse(pf.desym_fix_active(d))
+            (d / "settings.yaml").write_text("doping: [1e18]\n# AZ_DESYM_FIX=1\n")
+            self.assertTrue(pf.desym_fix_active(d))
+            os.environ["AZ_DESYM_FIX"] = "0"                 # 作业内环境变量优先
+            self.assertFalse(pf.desym_fix_active(d))
+        finally:
+            os.environ.pop("AZ_DESYM_FIX", None)
+            if old is not None:
+                os.environ["AZ_DESYM_FIX"] = old
+
+    def test_run_blocks_when_fix_on_but_plugin_missing(self):
+        base = _material_dir(gan_std())
+        out = base / "step8_amset"
+        out.mkdir()
+        (out / "settings.yaml").write_text("unity_overlap: false\n# AZ_DESYM_FIX=1\n")
+        verdict, lines = pf.run(out, out, False, desym_fix=True)
+        self.assertEqual(verdict, "error", "\n".join(lines))
+        (out / "amset_desym_fix.py").write_text("# stub\n")
+        verdict, lines = pf.run(out, out, False, desym_fix=True)
+        self.assertNotEqual(verdict, "error", "\n".join(lines))
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

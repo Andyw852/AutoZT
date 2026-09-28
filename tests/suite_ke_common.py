@@ -60,11 +60,16 @@ def test_gen_need_declared():
         steps += (grp or {}).get("steps") or []
     need = {}
     for s in steps:
-        need[str(s.get("gen") or "").strip()] = [str(x) for x in (s.get("gen_need") or [])]
+        # gen 字段可能带参数（如 "gen_step4_HSE.py --kpath-slice all/4"）—— 按第一个词建索引
+        _g = str(s.get("gen") or "").strip().split()
+        if _g:
+            need[_g[0]] = [str(x) for x in (s.get("gen_need") or [])]
     users = []
     for root, _d, files in os.walk(sk):
         for fn in files:
-            if fn.endswith(".py"):
+            # 只查 gen 脚本（gen_*.py）：测试、tools/ 与运行目录里的辅助脚本（overlap_preflight 等）
+            # 不是 skill.yaml 的 gen，按"步骤没声明"报它们是误报（2026-09-28 修）。
+            if fn.endswith(".py") and fn.startswith("gen_"):
                 if "import ke_common" in open(os.path.join(root, fn), errors="ignore").read():
                     users.append(os.path.relpath(os.path.join(root, fn), sk))
     ok(bool(users), "找到 %d 个 import ke_common 的脚本" % len(users))

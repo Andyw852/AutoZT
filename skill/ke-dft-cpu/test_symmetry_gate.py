@@ -123,6 +123,86 @@ class SymmetryGateTests(unittest.TestCase):
     def test_marker_returns_none_on_bad_input(self):
         self.assertIsNone(kc.write_full_grid_marker(Path("/nonexistent/POSCAR")))
 
+    # ---- [patch_desym_fix] 相位补丁开关与判据联动 --------------------------------------
+    def test_desym_fix_releases_ibz_but_keeps_counts(self):
+        """补丁开了：放行 IBZ，但 bad_ops/total_ops 照算照打（日志要能看到）。"""
+        for name, st, bad, need in CASES:
+            g = kc.symmetry_gate(st, desym_fix=True)
+            self.assertFalse(g["needs_full_grid"], "%s: %s" % (name, g))
+            self.assertEqual(g["needs_full_grid_original"], need, "%s: %s" % (name, g))
+            self.assertEqual(g["bad_ops"], bad, "%s: %s" % (name, g))
+            self.assertIn("bad_ops=%d/" % bad, kc.gate_log_line(g))
+
+    def test_soc_with_tr_ops_always_full_grid(self):
+        """SOC + 无反演（有 TR 操作）：ncl 分支不处理 TR -> 补丁开了也要全网格。"""
+        g = kc.symmetry_gate(gan_std(), desym_fix=True, ncl=True)
+        self.assertGreater(g["tr_ops"], 0, g)
+        self.assertTrue(g["needs_full_grid"], g)
+        # 有反演（TR 副本被去重，tr_ops=0）的 SOC 体系：补丁开了可以走 IBZ，但注明未验证
+        g = kc.symmetry_gate(shifted(si_on_atom(), [-.125] * 3), desym_fix=True, ncl=True)
+        self.assertEqual(g["tr_ops"], 0, g)
+        self.assertFalse(g["needs_full_grid"], g)
+        self.assertIn("未经实数据验证", g["reason"])
+
+    def test_desym_fix_setting_priority(self):
+        import os
+        old = os.environ.pop(kc.DESYM_FIX_ENV, None)
+        try:
+            self.assertEqual(kc.desym_fix_setting(None)[0], kc.DESYM_FIX_DEFAULT)
+            os.environ[kc.DESYM_FIX_ENV] = "1"
+            self.assertTrue(kc.desym_fix_setting(None)[0])
+            self.assertTrue(kc.desym_fix_setting("auto")[0])
+            self.assertFalse(kc.desym_fix_setting("off")[0])      # step.conf 显式优先
+            os.environ.pop(kc.DESYM_FIX_ENV)
+            self.assertTrue(kc.desym_fix_setting("on")[0])
+        finally:
+            os.environ.pop(kc.DESYM_FIX_ENV, None)
+            if old is not None:
+                os.environ[kc.DESYM_FIX_ENV] = old
+        self.assertIn("export AZ_DESYM_FIX=1", kc.desym_fix_cmd_prefix(True))
+        self.assertIn("unset AZ_DESYM_FIX", kc.desym_fix_cmd_prefix(False))
+
+    def test_incar_ncl_detection(self):
+        d = Path(tempfile.mkdtemp())
+        (d / "step3_uniform").mkdir()
+        (d / "step3_uniform" / "INCAR").write_text("ISYM = 2\nLSORBIT = .TRUE.\n")
+        self.assertTrue(kc.detect_ncl(d))
+        (d / "step3_uniform" / "INCAR").write_text("ISYM = 2\n# LSORBIT = .TRUE.\n")
+        self.assertFalse(kc.detect_ncl(d))
+
+    # ---- [patch_symprec_unify] 判据的操作集 == AMSET 的操作集 ------------------------------
+    def test_ops_match_amset(self):
+        """复刻路径（登录节点没装 amset）与 AMSET 自己的 get_reciprocal_point_group_operations
+        必须逐操作相同；没装 amset 时跳过。"""
+        try:
+            from amset.electronic_structure.symmetry import \
+                get_reciprocal_point_group_operations as gpo
+        except ImportError:
+            self.skipTest("没装 amset")
+        for name, st, _bad, _need in CASES:
+            rots, taus, _src = kc.amset_symmetry_dataset(st)
+            mine = kc.amset_op_set(rots, taus)
+            r, t, tr = gpo(st, symprec=kc.AMSET_SYMPREC, time_reversal=True)
+            theirs = [((-a if b3 else a).T, (-b2 if b3 else b2), bool(b3))
+                      for a, b2, b3 in zip(np.asarray(r, float), np.asarray(t, float), tr)]
+            key = lambda o: (o[2], tuple(np.round(o[0], 6).ravel()))   # noqa: E731
+            A = sorted(mine, key=key)
+            B = sorted(theirs, key=key)
+            self.assertEqual(len(A), len(B), name)
+            for (Ra, ta, fa), (Rb, tb, fb) in zip(A, B):
+                self.assertEqual(fa, fb, name)
+                self.assertTrue(np.allclose(Ra, Rb), name)
+                self.assertTrue(np.allclose(ta, tb, atol=1e-8), name)
+
+    def test_strict_ops_diagnostic(self):
+        """近似对称结构：AMSET(0.01) 认出的操作比严格容差多 -> reason 里要提示。"""
+        st = gan_std()
+        st.translate_sites([0], [0.001, 0.0, 0.0], frac_coords=True)   # ~3 mÅ 畸变
+        g = kc.symmetry_gate(st)
+        self.assertIsNotNone(g["strict_ops"])
+        self.assertLess(g["strict_ops"], 12, g)
+        self.assertIn("严格容差", g["reason"])
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

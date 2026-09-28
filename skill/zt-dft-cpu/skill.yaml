@@ -170,8 +170,12 @@ optional_steps:
      # fermi_window_check.py（2026-09-28）：同款问题，而且**更隐蔽** —— ke 的 2026-09-28
      # 把费米能级窗口自检挂在作业链**末尾**（AMSET 跑完之后），漏推这个文件会让作业白跑
      # 几个小时才失败。同样显式声明 + 根目录软链。
-     gen_need: [stepconf.py, step.conf, ke_common.py, submit_amset.tpl, vdw_radii.py, discriminant_common.py,
-                overlap_preflight.py, fermi_window_check.py],
+     # amset_desym_fix.py（V115，2026-09-28）：ke 的 S8 现在用 python -c 入口 import 这个插件
+     # （AZ_DESYM_FIX 未设时不打补丁 = 原行为）。同 fermi_window_check：显式声明 + 根目录软链，
+     # 否则 zt 的 S8 找不到它。dim_common.py：ke_common 顶层 import 它，gen 会一起复制进运行目录。
+     gen_need: [stepconf.py, step.conf, ke_common.py, dim_common.py, submit_amset.tpl, vdw_radii.py,
+                discriminant_common.py, overlap_preflight.py, fermi_window_check.py,
+                amset_desym_fix.py],
          fetch_all: true,
          needs: ["step4_wave", "step5_dielect", "step6_elastic", "step7b_deform_read",
                  "step2_bandgap/step2.2_pbe_plot", "step2_bandgap/step2.3_hse_plot"]}

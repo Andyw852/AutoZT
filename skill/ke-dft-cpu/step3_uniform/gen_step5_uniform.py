@@ -127,6 +127,8 @@ def main():
     cwd = Path.cwd()
     out = cwd / OUTDIR_NAME
     out.mkdir(exist_ok=True)
+    # [patch_stale_input-2026-09-28] 覆盖输入之前拍快照；末尾比对（见 kc.finalize_stale_inputs）
+    _snap = kc.snapshot_inputs(out)
 
     prev = kc.find_prev_dir(cwd, PREV_CANDS)
     if prev is None:
@@ -149,16 +151,8 @@ def main():
     #   ★ 落的是**判据结论**，不是"分支开没开"：本 gen 在集群上跑，读不到项目里的
     #     `optional_steps.wavefunction_full`（那个键在 project_setting/tf_*.yaml 里、
     #     不随 gen 推上集群）。消费方拿这个文件跟自己的分支开关对一下即可。
-    _g = kc.write_full_grid_marker(out / "POSCAR", out)
-    if _g is None:
-        print("[WARN] 对称性判据算不出来 —— 未落 full_grid_needed.json，下游各自保守判断。")
-    elif _g["needs_full_grid"]:
-        print("[WARN] 对称性判据：%s" % _g["reason"])
-        print("[WARN]   -> 本步之后若要用真实重叠（UNITY_OVERLAP=false，2D 出厂即此），"
-              "必须在项目配置里打开 optional_steps.wavefunction_full: true"
-              "（S3b 全网格 + S4b 全网格 h5）；否则 S8/S8.4 会被 preflight 拦下。")
-    else:
-        print("[OK] 对称性判据：%s" % _g["reason"])
+    #   ★ 2026-09-28（V115）：判据的实际调用挪到本函数末尾（INCAR 定稿之后），
+    #     以便带上 SOC（LSORBIT）与 DESYM_FIX（环境变量/出厂默认）—— 见 _write_gate_marker。
     _func, _subs = kc.resolve_func(prev, FUNC, OUTDIR_NAME)
 
     dim = kc.read_method_dim(prev / kc.METHOD_FILE)
@@ -201,8 +195,10 @@ def main():
             UNIFORM_NMAX = _conf["UNIFORM_NMAX"]
             KALIGN_3D = _conf["KALIGN_3D"]
             ALIGN_ORIGIN = int(_conf["ALIGN_ORIGIN"])
-        except (KeyError, ValueError, TypeError):
-            pass
+        except (KeyError, ValueError, TypeError) as _e:
+            # ★ 2026-09-28：不再静默（一个键出错会让它之后的覆盖全部失效，见 test_gen_conf_wiring）
+            print("[WARN] 读 step.conf 覆盖时出错（%s: %s）—— 出错之后的覆盖项未生效"
+                  % (type(_e).__name__, _e), file=sys.stderr)
     if dim == "2d" and _kzmin > 1:
         _kp = out / "KPOINTS"
         _ln = _kp.read_text().splitlines()
@@ -337,7 +333,35 @@ def main():
     kc.patch_submit_jobname(submit, kc.new_jobname(cwd, STEP_LABEL))
     stepconf.apply_submit(submit, stepconf.read_submit(stepconf.CONF_NAME, used_incar=True))
 
+    _write_gate_marker(out)
+    # [patch_stale_input] 输入（POSCAR/INCAR/KPOINTS）语义变了 -> 归档旧产物；
+    #   归档过（网格或输入）-> 下游 S4/S8/S8.4/S8.1/S8.2 的完成标记一并失效、重新排队。
+    kc.finalize_stale_inputs(cwd, out, OUTDIR_NAME, _snap, _n_arch)
+
     print("[DONE] %s：INCAR/KPOINTS/POTCAR/POSCAR 就绪，可提交" % OUTDIR_NAME)
+
+
+def _write_gate_marker(out):
+    """patch_symmetry_gate（第二批 (a)）+ V115：算判据、落 full_grid_needed.json、早期提示。
+
+    去对称化相位 bug 的触发条件是逐操作的 (R±I)τ≢0（不是"没有反演中心"）。结论落盘给
+    下游（S8/S8.4 的 gen 与 overlap_preflight）和事后追查用。★ 落的是**判据结论**，不是
+    "分支开没开"：本 gen 在集群上跑，读不到项目里的 optional_steps.wavefunction_full。
+    DESYM_FIX 在这里只能按环境变量/出厂默认取（S3 没有这个键）；S8 gen 时会按当时的设置重判。
+    """
+    _fix, _src = kc.desym_fix_setting(None)
+    _g = kc.write_full_grid_marker(out / "POSCAR", out, desym_fix=_fix,
+                                   ncl=kc.incar_is_ncl(out / "INCAR"))
+    if _g is None:
+        print("[WARN] 对称性判据算不出来 —— 未落 full_grid_needed.json，下游各自保守判断。")
+    elif _g["needs_full_grid"]:
+        print("[WARN] " + kc.gate_log_line(_g))
+        print("[WARN]   -> 本步之后若要用真实重叠（UNITY_OVERLAP=false，2D 出厂即此），"
+              "必须在项目配置里打开 optional_steps.wavefunction_full: true"
+              "（S3b 全网格 + S4b 全网格 h5）；否则 S8/S8.4 会被 preflight 拦下。"
+              "（相位补丁 DESYM_FIX 验证通过并打开后，这一步就不再需要。）")
+    else:
+        print("[OK] " + kc.gate_log_line(_g))
 
 
 if __name__ == "__main__":

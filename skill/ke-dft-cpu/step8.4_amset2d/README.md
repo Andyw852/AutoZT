@@ -36,6 +36,9 @@ slab 弹性常数（`C_2D/c`）即可，不要再乘 c/t。推导与各机制的
 | `gen_step14_amset2d.py` | 登录节点 gen：写 settings.yaml + 2d_correction.json + submit.sh，复制插件 |
 | `amset2d_plugin.py` | 运行期插件：把 ADP/POP/IMP/PIE 四类换成二维核（同名注册表替换，不改 AMSET 安装） |
 | `amset2d_pop_freq.py` | 取 Gamma 点**面内极性模**有效频率（AMSET 自带口径会把面外 ZO 模算进去） |
+| `amset_desym_fix.py` | 运行期插件（S8 与 S8.4 共用）：修 AMSET 去对称化的相位因子（V115）；环境变量 `AZ_DESYM_FIX` 未设时不打补丁 |
+| `test_desym_fix.py` | 相位补丁的模型检验（紧束缚真值，12 构型；需要 amset） |
+| `test_gen_desym_wiring.py` | S8/S8.4 gen 的逐操作判据、命令、覆盖通道接线自检 |
 | `test_kernels.py` | 四类核的自检（旋转不变、极限行为、护栏），`python test_kernels.py` 应全 PASS |
 | `example_2d_correction.json` | 自检用的最小 2d_correction.json 示例 |
 | `VERIFICATION.md` | 在真实 2D 数据上做的端到端验证记录（T1/T2 + 三材料对比） |
@@ -90,6 +93,15 @@ gen（`patch_write_mesh` + `patch_intrinsic_auto`）会：
 
 ## 已知局限（写论文要写进方法学）
 
+- **（2026-09-28 汇总，第 9–13 项）未验证 / 模型局限**：
+  - 插值不确定度：MoS₂ 在验证过的 263×263×21 网格上空穴仍有 **8–10%** 的插值不确定度（V112）；
+    出生产结果前做 factor 收敛 f = 61 / 90 / 120（f=120 约 195 GB，gen 的内存粗估会告警，先确认节点内存）。
+  - 2D POP 偏弱（μ_POP 约 1.9e4）**未验证**；kz=3 对照没做。
+  - DPT 拟合有效质量的窗口随网格变（换网格要重看 m*）。
+  - **没有 SOC 路径**（Bi₂Te₃ / PbTe / SnSe 这类都需要）。相位补丁的 SOC 分支用同一因子、未测；
+    且 AMSET 的 ncl 去对称化对 TR 操作不取共轭、不乘 iσ_y —— SOC + 无反演一律要求全网格（V115 §5）。
+  - AMSET 不含非极性光学声子与谷间散射（见下条），Si 空穴、MoS₂ 迁移率偏高；PBEsol 有效质量偏轻，
+    GaAs 迁移率偏高。写进方法学即可，不是流程 bug。
 - **"去掉 ZA 支"只对有水平镜面（σh）的材料成立**：翘曲结构（硅烯、锗烯）与 Janus
   结构存在一阶 ZA 耦合，对它们是模型遗漏（ZA 是二次色散，形变势模型也处理不了）。
 - **缺非极性光学声子（光学形变势 ODP）**：AMSET 实现的机制只有

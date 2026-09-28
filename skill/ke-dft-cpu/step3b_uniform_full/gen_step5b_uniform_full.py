@@ -70,7 +70,17 @@ UNIFORM_NMAX = 20000
 # ---- [KALIGN-2026-09-23] 3D 高对称点对齐（2D 恒为 6 的倍数，不受此键影响）----
 #   even（默认，立方/四方/菱面体带边常落 L/X 偶数点）| off（不动存量 3D 项目）| 6（六方 3D）
 KALIGN_3D = "even"
+# ---- [patch_full_grid_3d_scale-2026-09-28] 3D 全网格默认每方向减半（第 7 项）----------
+#   3D 的 S3b 原来与 S3 用同一套 DK_MAX，网格等于 S3（GaAs 34³ = 39304 点、ISYM=-1 全算），
+#   比 AMSET 官方算例密约 7 倍；而全网格 h5 的 k 点数又会把最终插值网格推大、逼 MESH_MAX
+#   降 factor（V113：GaAs 全网格 OOM 236 GiB）。AMSET 靠插值补密度，输入网格不必这么密。
+#   ⇒ 3D 默认 N_S3b = align(ceil(N_S3 × 0.5))（S3 的 KPOINTS 读不到时用本步自己算的网格），
+#     跳过"2x 静态下限"与"必须比静态密"的断言（本来就有意更粗）；高对称点对齐照做。
+#   2D 不受影响（V112 验证的就是与 S3 相同的 48×48×3）。1 = 旧行为（与 S3 同网格）。
+#   MATCH_MESH_OF 优先（单变量对照）。
+FULL_GRID_3D_SCALE = 0.5
 SPEC = {"VACUUM_KZ_MIN": (VACUUM_KZ_MIN, "int"),
+        "FULL_GRID_3D_SCALE": (FULL_GRID_3D_SCALE, "float"),
         # 与 step3_uniform 同一套键（报错信息一直说"可在项目里覆盖 DK_MAX"，
         # 但此前本脚本只认 VACUUM_KZ_MIN，写了也不生效 —— 2026-09-18 补齐）
         "DK_MAX": (None, "float"),
@@ -91,9 +101,11 @@ GGA_MAP = {"pbe": "PE", "pbesol": "PS", "pbe-d3": "PE"}
 
 def main():
     global DK_MAX, DK_MAX_2D, DK_MAX_3D, UNIFORM_NMAX, KALIGN_3D, MATCH_MESH_OF
+    global FULL_GRID_3D_SCALE
     cwd = Path.cwd()
     out = cwd / OUTDIR_NAME
     out.mkdir(exist_ok=True)
+    _snap = kc.snapshot_inputs(out)      # [patch_stale_input] 末尾比对
 
     prev = kc.find_prev_dir(cwd, PREV_CANDS)
     if prev is None:
@@ -160,8 +172,12 @@ def main():
             # stepconf.load 返回的对象保证支持 []，但不保证有 .get()
             # （2026-09-18 实测：.get 抛 AttributeError 直接把 gen 打断）
             MATCH_MESH_OF = _conf["MATCH_MESH_OF"]
-        except (KeyError, ValueError, TypeError):
-            pass
+            if _conf["FULL_GRID_3D_SCALE"] is not None:
+                FULL_GRID_3D_SCALE = float(_conf["FULL_GRID_3D_SCALE"])
+        except (KeyError, ValueError, TypeError) as _e:
+            # ★ 2026-09-28：不再静默（一个键出错会让它之后的覆盖全部失效，见 test_gen_conf_wiring）
+            print("[WARN] 读 step.conf 覆盖时出错（%s: %s）—— 出错之后的覆盖项未生效"
+                  % (type(_e).__name__, _e), file=sys.stderr)
     if dim == "2d" and _kzmin > 1:
         _kp = out / "KPOINTS"
         _ln = _kp.read_text().splitlines()
@@ -240,7 +256,8 @@ def main():
     #   它防的是"意外退化"，不是给本步定精度用。显式写了 DK 就说明密度是有意选的，
     #   应以显式值为准 —— 与"显式 INTERPOLATION_FACTOR 不被自动改"同一原则。
     #   下面的退化断言（每轴必须严格比静态密）与成本护栏**都保留**。
-    if _st and len(_st) == 3 and not MATCH_MESH_OF:
+    _scaled = (dim == "3d" and not MATCH_MESH_OF and 0 < float(FULL_GRID_3D_SCALE) < 1.0)
+    if _st and len(_st) == 3 and not MATCH_MESH_OF and not _scaled:
         _dk_exp = (DK_MAX is not None) or (str(DK_MAX_3D).strip() != "0.06")
         if _dk_exp:
             print("[..] 显式 DK（DK_MAX=%s / DK_MAX_3D=%s）-> **跳过 2x 静态下限兜底**"
@@ -248,6 +265,16 @@ def main():
         else:
             for i in _axes:
                 _need[i] = max(_need[i], 2 * _st[i])
+    # [patch_full_grid_3d_scale] 3D：以 S3 的网格为基准每方向乘 FULL_GRID_3D_SCALE（默认减半）
+    if _scaled:
+        _base = kc.read_kpoints_mesh(cwd / "step3_uniform" / "KPOINTS") or list(_need)
+        _half = [max(1, int(np.ceil(int(_base[i]) * float(FULL_GRID_3D_SCALE)))) for i in range(3)]
+        print("[OK] 3D 全网格按 FULL_GRID_3D_SCALE=%g 取 %s -> %s（基准：%s；AMSET 靠插值补密度，"
+              "输入网格不必与 S3 一样密；=1 恢复旧行为）"
+              % (float(FULL_GRID_3D_SCALE), "x".join(map(str, _base)), "x".join(map(str, _half)),
+                 "step3_uniform/KPOINTS" if (cwd / "step3_uniform" / "KPOINTS").is_file()
+                 else "本步按 DK_MAX 算出的网格"))
+        _need = _half
     # [KALIGN-2026-09-23] 高对称点对齐，与 step3_uniform 同一实现（ke_common.align_kgrid）。
     #   此前本步漏了这段 → CrSe2_hex S3=48×48、S3b=46×46，"只差 ISYM"的前提被破坏。
     #   MATCH_MESH_OF 时网格是照抄的，不再改动。
@@ -261,8 +288,8 @@ def main():
         _kpt[3] = "  %d  %d  %d" % (_need[0], _need[1], _need[2])
         (out / "KPOINTS").write_text(
             "\n".join(_kpt) + "\n", encoding="utf-8", newline="\n")
-    # ③a 断言：不许静默退化
-    if _st and len(_st) == 3 and not MATCH_MESH_OF:
+    # ③a 断言：不许静默退化（3D 按比例缩的网格是有意更粗，不适用）
+    if _st and len(_st) == 3 and not MATCH_MESH_OF and not _scaled:
         for i in _axes:
             if _need[i] <= _st[i]:
                 sys.exit("[ERROR] step3b_uniform_full 网格退化：第 %d 轴 N_uniform=%d ≤ N_static=%d。"
@@ -293,7 +320,12 @@ def main():
             _rn = [int(x) for x in _ref.read_text(errors="ignore").splitlines()[3].split()][:3]
         except (IndexError, ValueError):
             _rn = None
-        if _rn and list(_need[:3]) != list(_rn):
+        if _rn and list(_need[:3]) != list(_rn) and _scaled:
+            print("[OK] 3D 全网格 %s 比 step3_uniform 的 %s 粗（FULL_GRID_3D_SCALE=%g，有意为之）；"
+                  "preflight 的 S3/S3b 能带一致性检查在两网格的公共 k 点上照做。"
+                  % ("x".join(map(str, _need[:3])), "x".join(map(str, _rn)),
+                     float(FULL_GRID_3D_SCALE)))
+        elif _rn and list(_need[:3]) != list(_rn):
             print("[WARN] " + "=" * 60)
             print("[WARN] 本步网格 %dx%dx%d 与 step3_uniform 的 %dx%dx%d **不一致**！"
                   % (_need[0], _need[1], _need[2], _rn[0], _rn[1], _rn[2]))
@@ -332,6 +364,9 @@ def main():
     submit.write_text(submit_tpl.read_text(encoding="utf-8"), encoding="utf-8", newline="\n")
     kc.patch_submit_jobname(submit, kc.new_jobname(cwd, STEP_LABEL))
     stepconf.apply_submit(submit, stepconf.read_submit(stepconf.CONF_NAME, used_incar=True))
+
+    # [patch_stale_input] 输入语义变了 -> 归档旧产物；归档过 -> 下游 S4b/S8/S8.4 失效
+    kc.finalize_stale_inputs(cwd, out, OUTDIR_NAME, _snap, _n_arch)
 
     print("[DONE] %s：INCAR/KPOINTS/POTCAR/POSCAR 就绪，可提交" % OUTDIR_NAME)
 
