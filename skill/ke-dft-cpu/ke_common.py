@@ -393,49 +393,108 @@ def _sym_ops_max_tau(structure, atol=1e-4):
         return None, None, None
 
 
-# ---- 统一判据（2026-09-28 用户批准，第二批 (a)）-------------------------------
-#   去对称化 bug 的触发条件是"存在 τ≠0 的对称操作"，**不是**"没有反演中心"。
-#   这条判据此前散在 4 处各写一份（S3 gen 的提示、S8.4 gen 的闸门、S8 gen 的闸门、
-#   overlap_preflight 的 ②），阈值与口径容易走散。这里给唯一口径，各处都调它。
+# ---- 统一判据（2026-09-28 用户推导 + 12 构型独立实测；第二批 (a) 的**修正版**）------
+#   ★ 旧规则（"有反演，或 τ≡0，就可走 IBZ"）**两个方向都错**：
+#     · 太保守：GaN P6_3mc 标准原点（6_3 轴过原点）原公式 0/24 错，本可走 IBZ，
+#       旧规则却要求全网格 —— 正在排队的 S3b/S4b 其实不必要；
+#     · 太危险：原点落在**反演中心**的 Si（Fd-3m）有反演，旧规则放行 IBZ，
+#       而原公式 24/48 个操作算错 —— **静默算错**。
+#   正确判据是**逐操作**的（R、τ 为 spglib 实空间分数坐标）：
+#       非时间反演操作：(R + I)·τ ≡ 0 (mod 1)
+#       时间反演操作  ：(R − I)·τ ≡ 0 (mod 1)
+#   推导与逐操作实测见 tmp/amset_desym_phase_check.py（12 构型判据与实测 100% 吻合）。
 TAU_TOL = 1e-4
+# 逐操作判据的容差。与 TAU_TOL 同量级：好操作（经 POSCAR 往返）偏差 <= 4e-6，
+# 坏操作 >= 0.02，中间 3 个数量级空档，见 op_phase_exact 的说明。
+OP_TOL = 1e-4
+
+
+def amset_op_set(rots, taus):
+    """按 AMSET 的**实际用法**拼操作集：R^T 与 −R^T（平移 ±τ）拼接，按旋转去重、保留先出现者。
+
+    （AMSET symmetry.py 就是这么做的；有反演时 TR 副本在去重时被丢掉。）
+    返回 [(R_real, tau_real, is_tr), ...]：R_real/tau_real 是**该操作真实的实空间** (R, τ)。
+    """
+    import numpy as np
+    RT = np.transpose(np.asarray(rots, float), (0, 2, 1))
+    rots_a = np.concatenate([RT, -RT])
+    taus_a = np.concatenate([np.asarray(taus, float), -np.asarray(taus, float)])
+    _half = len(rots_a) // 2
+    is_tr = np.array([False] * _half + [True] * _half)
+    _, first = np.unique(rots_a.reshape(len(rots_a), -1), axis=0, return_index=True)
+    first = np.sort(first)
+    ops = []
+    for i in first:
+        rot, tau, tr = rots_a[i], taus_a[i], bool(is_tr[i])
+        ops.append(((-rot if tr else rot).T, (-tau if tr else tau), tr))
+    return ops
+
+
+def op_phase_exact(R, tau, is_tr, atol=OP_TOL):
+    """AMSET 原公式在该操作上是否**精确**的充要条件（用户 2026-09-28 推导）。
+
+    容差 `OP_TOL = 1e-4` 是实测选出来的：
+      · 「好」操作经过 POSCAR 往返（pymatgen 写 8 位有效数字）后偏差 <= 4e-6；
+      · 「坏」操作的最小偏差是 **0.02**（GaN 平移构型）到 0.5（Si 反演中心构型）。
+    两者之间有 3 个数量级的空档，1e-4 既能吸收坐标精度噪声，又远低于任何真实违规。
+    （一开始用 1e-6 会把往返后的正常结构误判成 13/24 坏 —— 测试里抓到的。）
+    """
+    import numpy as np
+    I = np.eye(3)
+    v = (np.asarray(R, float) - I) @ np.asarray(tau, float) if is_tr \
+        else (np.asarray(R, float) + I) @ np.asarray(tau, float)
+    return bool(np.allclose(v - np.rint(v), 0.0, atol=atol))
 
 
 def symmetry_gate(structure, atol=TAU_TOL):
-    """去对称化路径的统一裁决。返回 dict：
+    """去对称化路径的统一裁决（逐操作精确判据）。返回 dict：
 
         has_inversion   : bool|None   —— 是否含反演操作
         max_tau         : float|None  —— 非整数分数平移的最大绝对值
-        tau_ops         : int|None    —— |tau|>atol 的操作数
+        tau_ops         : int|None    —— |tau|>atol 的对称操作数（供打印，不参与裁决）
+        total_ops       : int|None    —— AMSET 实际操作集大小
+        bad_ops         : int|None    —— 其中**原公式会算错**的操作数
         needs_full_grid : bool        —— 是否需要 S3b/S4b 全网格（WAVEFUNCTION_FULL）
-        reason          : str         —— 一句话理由（可直接打印）
+        reason          : str
 
-    裁决（依据 VERIFICATION V107 / V109 / V111）：
-      · 有反演                -> TR 已并入点群，去对称化不走 τ 分支 -> IBZ 即可；
-      · 无反演但全部 |tau|=0  -> 简单空间群、或原点已对齐（S3 的 align_origin）-> IBZ 即可；
-      · 无反演且存在 τ≠0      -> AMSET 的去对称化会大面积算错 -> **必须全网格**；
-      · 结构 / spglib 判不出来 -> 保守按"需要全网格"。
+    裁决：bad_ops > 0 -> 必须全网格；== 0 -> IBZ 精确（任何空间群、任何原点）。
+    结构 / spglib 判不出来时保守按"需要全网格"。
     """
     import numpy as np
     if structure is None:
-        return {"has_inversion": None, "max_tau": None, "tau_ops": None,
-                "needs_full_grid": True, "reason": "取不到结构 -> 保守按需要全网格"}
+        return {"has_inversion": None, "max_tau": None, "tau_ops": None, "total_ops": None,
+                "bad_ops": None, "needs_full_grid": True,
+                "reason": "取不到结构 -> 保守按需要全网格"}
     max_tau, rots, tn = _sym_ops_max_tau(structure, atol)
     if max_tau is None or rots is None:
-        return {"has_inversion": None, "max_tau": None, "tau_ops": None,
-                "needs_full_grid": True, "reason": "spglib 取对称操作失败 -> 保守按需要全网格"}
-    inv = bool(any(np.allclose(R, -np.eye(3), atol=1e-5) for R in rots))
-    tau_ops = int(np.sum(np.any(np.abs(tn) > atol, axis=1))) if tn is not None and len(tn) else 0
-    out = {"has_inversion": inv, "max_tau": float(max_tau), "tau_ops": tau_ops}
-    if inv:
-        out.update(needs_full_grid=False,
-                   reason="有反演中心（TR 已被点群吸收）-> IBZ 即可")
-    elif tau_ops == 0:
-        out.update(needs_full_grid=False,
-                   reason="无反演但全部 |tau|<=%.0e（简单空间群或原点已对齐）-> IBZ 即可" % atol)
-    else:
+        return {"has_inversion": None, "max_tau": None, "tau_ops": None, "total_ops": None,
+                "bad_ops": None, "needs_full_grid": True,
+                "reason": "spglib 取对称操作失败 -> 保守按需要全网格"}
+    # 需要**原始** tau（_sym_ops_max_tau 只回传了非整数部分 tn），重新取一次
+    import spglib
+    ds = spglib.get_symmetry_dataset(
+        (structure.lattice.matrix, structure.frac_coords, [x.Z for x in structure.species]),
+        symprec=atol)
+    g = (lambda k: ds[k]) if isinstance(ds, dict) else (lambda k: getattr(ds, k))
+    rots_raw = np.asarray(g("rotations"), float)
+    taus_raw = np.asarray(g("translations"), float)
+    inv = bool(any(np.allclose(R, -np.eye(3), atol=1e-5) for R in rots_raw))
+    tau_ops = (int(np.sum(np.any(np.abs(tn) > atol, axis=1)))
+               if tn is not None and len(tn) else 0)
+    ops = amset_op_set(rots_raw, taus_raw)
+    bad = [i for i, (R, tau, tr) in enumerate(ops) if not op_phase_exact(R, tau, tr, OP_TOL)]
+    out = {"has_inversion": inv, "max_tau": float(max_tau), "tau_ops": tau_ops,
+           "total_ops": len(ops), "bad_ops": len(bad)}
+    if bad:
+        _tr_n = sum(1 for i in bad if ops[i][2])
         out.update(needs_full_grid=True,
-                   reason="无反演且存在 %d 个 τ≠0 的对称操作（|tau|max=%.4f）-> 必须全网格"
-                          % (tau_ops, max_tau))
+                   reason=("AMSET 原公式会在 %d/%d 个操作上算错（其中 TR 分支 %d 个）"
+                           "-> 必须全网格；或先把原点平移后复核"
+                           % (len(bad), len(ops), _tr_n)))
+    else:
+        out.update(needs_full_grid=False,
+                   reason=("AMSET 原公式在全部 %d 个操作上精确（逐操作条件 (R±I)τ≡0 全满足）"
+                           "-> IBZ 即可" % len(ops)))
     return out
 
 
@@ -456,6 +515,8 @@ def write_full_grid_marker(poscar, outdir=None):
         out = Path(outdir) if outdir else p.parent
         (out / "full_grid_needed.json").write_text(
             json.dumps({"needs_full_grid": bool(g["needs_full_grid"]),
+                        "bad_ops": g["bad_ops"],
+                        "total_ops": g["total_ops"],
                         "has_inversion": g["has_inversion"],
                         "max_tau": g["max_tau"],
                         "tau_ops": g["tau_ops"],

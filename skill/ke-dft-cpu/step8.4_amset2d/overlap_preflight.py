@@ -271,7 +271,11 @@ def _structure_verdict(cwd):
 
 
 def _fallback_verdict(st):
-    """ke_common 不在时的等价最小实现（与 ke_common.symmetry_gate 同口径）。"""
+    """ke_common 不在时的等价最小实现（**与 ke_common 的新判据同口径**，2026-09-28）。
+
+    非 TR 操作 (R+I)τ≡0、TR 操作 (R−I)τ≡0（mod 1，容差 1e-4）。
+    旧的"有反演/τ=0 就放行"两个方向都错，这里不再重复那个错。
+    """
     try:
         import numpy as np
         import spglib
@@ -282,14 +286,24 @@ def _fallback_verdict(st):
         g = (lambda k: ds[k]) if isinstance(ds, dict) else (lambda k: getattr(ds, k))
         rots = np.asarray(g("rotations"), float)
         taus = np.asarray(g("translations"), float)
-        tn = taus - np.rint(taus)
-        max_tau = float(np.abs(tn).max()) if tn.size else 0.0
-        inv = bool(any(np.allclose(R, -np.eye(3), atol=1e-5) for R in rots))
-        if inv:
-            return False, "有反演中心 -> IBZ 即可 [fallback]"
-        if max_tau <= 1e-4:
-            return False, "无反演但全部 |tau|<=1e-4（原点已对齐/简单空间群）-> IBZ 即可 [fallback]"
-        return True, "无反演且存在 τ≠0（|tau|max=%.4f）-> 必须全网格 [fallback]" % max_tau
+        RT = np.transpose(rots, (0, 2, 1))
+        rots_a = np.concatenate([RT, -RT])
+        taus_a = np.concatenate([taus, -taus])
+        half = len(rots_a) // 2
+        is_tr = np.array([False] * half + [True] * half)
+        _, first = np.unique(rots_a.reshape(len(rots_a), -1), axis=0, return_index=True)
+        I = np.eye(3)
+        bad = 0
+        for i in np.sort(first):
+            rot, tau, tr = rots_a[i], taus_a[i], bool(is_tr[i])
+            R = (-rot if tr else rot).T
+            t = -tau if tr else tau
+            v = (R - I) @ t if tr else (R + I) @ t
+            if not np.allclose(v - np.rint(v), 0.0, atol=1e-4):
+                bad += 1
+        if bad:
+            return True, "原公式会在 %d/%d 个操作上算错 -> 必须全网格 [fallback]" % (bad, len(first))
+        return False, "原公式在全部 %d 个操作上精确 -> IBZ 即可 [fallback]" % len(first)
     except Exception as e:                                          # noqa: BLE001
         return True, "判据不可用（%s）-> 保守按需要全网格" % type(e).__name__
 

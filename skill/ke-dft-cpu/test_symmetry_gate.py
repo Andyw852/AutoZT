@@ -1,111 +1,124 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""test_symmetry_gate.py —— ke_common.symmetry_gate 的自检（用真实结构，只读）。
+"""test_symmetry_gate.py —— ke_common.symmetry_gate 的自检（**不依赖任何本地数据**）。
 
 用法：python test_symmetry_gate.py     退出码 0 = 全部 PASS。
-覆盖第二批 (a) 要统一的那条判据：
-  · GaAs F-43m  ：有反演、|tau|=0        -> IBZ 即可
-  · Si   Fd-3m  ：有反演、|tau|=0.25     -> IBZ 即可（TR 被点群吸收）
-  · GaN  P6_3mc ：无反演、|tau|=0.5      -> **必须全网格**（非简单空间群，平移对不齐）
-  · MoS2 P-6m2 原点已对齐：无反演、|tau|≈0 -> IBZ 即可（V109/V111）
-  · 判不出来（structure=None）          -> 保守按需要全网格
+
+★ 2026-09-28 换判据：旧规则"有反演或 τ≡0 就可走 IBZ"两个方向都错（见 V115）。
+新判据是**逐操作**的：非 TR 操作要 (R+I)τ≡0，TR 操作要 (R−I)τ≡0（mod 1）。
+下面的期望值全部来自独立检验 tmp/amset_desym_phase_check.py 的逐操作实测
+（模型势直接对角化 + 与 AMSET 去对称化结果比较），12 个构型 100% 吻合。
+
+注意：结构**在测试里构造**，不读 /mnt/d 下的任何文件（那些路径会被推到公开仓库）。
 """
+import json
 import sys
+import tempfile
 import unittest
 from pathlib import Path
+
+import numpy as np
+from pymatgen.core import Lattice, Structure
 
 _ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(_ROOT))
 sys.path.insert(0, str(_ROOT.parent / "_common" / "opt"))
 import ke_common as kc
 
-STRUCTS = {
-    "GaAs": "/mnt/d/tf_data/work_AutoZT/GaAs/ke-dft-cpu/result/step3_uniform/POSCAR",
-    "Si": "/mnt/d/tf_data/work_AutoZT/Si_ke34/ke-dft-cpu/result/step3_uniform/POSCAR",
-    "GaN": "/mnt/d/tf_data/work_AutoZT/GaN/ke-dft-cpu/result/step3_uniform/POSCAR",
-    "MoS2": "/mnt/d/tf_data/work_AutoZT/MoS2/ke-dft-cpu/result/step3_uniform/POSCAR",
-}
+
+def shifted(st, s):
+    x = st.copy()
+    x.translate_sites(range(len(x)), s, frac_coords=True)
+    return x
 
 
-def _load(name):
-    from pymatgen.core import Structure
-    return Structure.from_file(STRUCTS[name])
+def gan_std():
+    """GaN P6_3mc，6_3 轴过原点（标准设置）—— 原公式 0/24 错，IBZ 精确。"""
+    return Structure(Lattice.hexagonal(3.19, 5.19), ["Ga", "Ga", "N", "N"],
+                     [[1/3, 2/3, 0], [2/3, 1/3, .5], [1/3, 2/3, .377], [2/3, 1/3, .877]])
+
+
+def mos2_aligned():
+    return Structure(Lattice.hexagonal(3.19, 12.0), ["Mo", "S", "S"],
+                     [[0, 0, .5], [1/3, 2/3, .63], [1/3, 2/3, .37]])
+
+
+def si_on_atom():
+    return Structure(Lattice([[0, 2.715, 2.715], [2.715, 0, 2.715], [2.715, 2.715, 0]]),
+                     ["Si", "Si"], [[0, 0, 0], [.25, .25, .25]])
+
+
+def hcp_std():
+    return Structure(Lattice.hexagonal(3.21, 5.21), ["Mg", "Mg"],
+                     [[1/3, 2/3, .25], [2/3, 1/3, .75]])
+
+
+def zincblende_std():
+    return Structure(Lattice([[0, 2.825, 2.825], [2.825, 0, 2.825], [2.825, 2.825, 0]]),
+                     ["Ga", "N"], [[0, 0, 0], [.25, .25, .25]])
+
+
+# (名字, 结构, bad_ops 期望, needs_full_grid 期望) —— bad_ops 来自独立实测
+CASES = [
+    ("GaN 标准原点",       gan_std(),                          0,  False),
+    ("GaN 原点在 Ga 上",   shifted(gan_std(), [-1/3, -2/3, 0]), 6,  True),
+    ("GaN 任意平移",       shifted(gan_std(), [.13, .07, .2]), 15,  True),
+    ("MoS2 对齐后",        mos2_aligned(),                     0,  False),
+    ("MoS2 对齐前",        shifted(mos2_aligned(), [.1, .2, 0]), 12, True),
+    ("Si 原点在原子",      si_on_atom(),                       0,  False),
+    # ★ 关键回归：有反演的 Si，原点落在反演中心时**原公式错 24/48**，旧规则却放行 IBZ
+    ("Si 原点在反演中心",  shifted(si_on_atom(), [-.125] * 3), 24,  True),
+    ("Si 任意平移",        shifted(si_on_atom(), [.11, .05, .19]), 28, True),
+    ("hcp 标准原点",       hcp_std(),                          0,  False),
+    # ★ 关键回归：有反演但任意平移 -> 错 8/24，旧规则同样会放行
+    ("hcp 任意平移(有反演)", shifted(hcp_std(), [.12, .31, .07]), 8, True),
+    ("闪锌矿 标准原点",    zincblende_std(),                   0,  False),
+    ("闪锌矿 任意平移",    shifted(zincblende_std(), [.11, .05, .19]), 37, True),
+]
 
 
 class SymmetryGateTests(unittest.TestCase):
-    def _gate(self, name):
-        p = Path(STRUCTS[name])
-        if not p.is_file():
-            self.skipTest("缺 %s" % p)
-        return kc.symmetry_gate(_load(name))
+    def test_ground_truth_table(self):
+        """12 个构型的 bad_ops 必须与独立检验逐一对上。"""
+        for name, st, bad, need in CASES:
+            g = kc.symmetry_gate(st)
+            self.assertEqual(g["bad_ops"], bad, "%s: %s" % (name, g))
+            self.assertEqual(g["needs_full_grid"], need, "%s: %s" % (name, g))
 
     def test_none_structure_is_conservative(self):
         g = kc.symmetry_gate(None)
         self.assertTrue(g["needs_full_grid"])
-        self.assertIsNone(g["max_tau"])
-
-    def test_gaas_no_inversion_but_tau_zero_ibz_ok(self):
-        """闪锌矿 F-43m **没有**反演中心，但全部 |tau|=0 -> 去对称化照样对，IBZ 即可。"""
-        g = self._gate("GaAs")
-        self.assertFalse(g["has_inversion"], g)
-        self.assertFalse(g["needs_full_grid"], g)
-        self.assertEqual(g["tau_ops"], 0, g)
-
-    def test_si_inversion_ibz_ok(self):
-        g = self._gate("Si")
-        self.assertTrue(g["has_inversion"], g)
-        self.assertFalse(g["needs_full_grid"], g)
-        self.assertGreater(g["max_tau"], 0.1, g)      # Fd-3m 有 τ≠0，但有反演 -> 仍可 IBZ
-
-    def test_gan_requires_full_grid(self):
-        g = self._gate("GaN")
-        self.assertFalse(g["has_inversion"], g)
-        self.assertTrue(g["needs_full_grid"], g)
-        self.assertGreater(g["tau_ops"], 0, g)
-
-    def test_mos2_aligned_ibz_ok(self):
-        g = self._gate("MoS2")
-        if g["max_tau"] > kc.TAU_TOL:
-            self.skipTest("该 MoS2 POSCAR 尚未对齐原点（|tau|max=%.4f）" % g["max_tau"])
-        self.assertFalse(g["has_inversion"], g)
-        self.assertFalse(g["needs_full_grid"], g)
-
-    def test_translation_flips_the_verdict(self):
-        """GaAs（无反演、τ≡0）人为平移 0.13 -> τ≠0 -> 判据翻成"必须全网格"。
-
-        这就是 MoS2 的处境：P-6m2 本身是简单空间群，只是所给原点不在高对称原子上；
-        S3 的 align_origin 把原点对回去之后，同一个结构又回到 IBZ 可用态（V109/V111）。
-        """
-        p = Path(STRUCTS["GaAs"])
-        if not p.is_file():
-            self.skipTest("缺 %s" % p)
-        st = _load("GaAs")
-        if kc.symmetry_gate(st)["needs_full_grid"]:
-            self.skipTest("起点不是 IBZ 可用态")
-        st2 = st.copy()
-        st2.translate_sites(list(range(len(st2))), [0.13, 0.07, 0.05], frac_coords=True)
-        g2 = kc.symmetry_gate(st2)
-        self.assertTrue(g2["needs_full_grid"], g2)
-        self.assertFalse(g2["has_inversion"], g2)
+        self.assertIsNone(g["bad_ops"])
+    
+    def test_op_phase_exact_helper(self):
+        I = np.eye(3)
+        # 非 TR：R = -I 时 (R+I)=0 -> 对任意 tau 都满足
+        self.assertTrue(kc.op_phase_exact(-I, np.array([0.3, 0.0, 0.0]), False))
+        # 非 TR：R = I 时 (R+I)=2I -> tau=0.3 给出 0.6 mod 1 -> 不满足
+        self.assertFalse(kc.op_phase_exact(I, np.array([0.3, 0.0, 0.0]), False))
+        self.assertTrue(kc.op_phase_exact(I, np.array([0.5, 0.0, 0.0]), False))
+        # TR：R = I 时 (R-I)=0 -> 恒满足
+        self.assertTrue(kc.op_phase_exact(I, np.array([0.137, 0.2, 0.31]), True))
+        # TR：R = -I 时 (R-I)=-2I -> tau=0.3 -> -0.6 mod 1 不满足
+        self.assertFalse(kc.op_phase_exact(-I, np.array([0.3, 0.0, 0.0]), True))
 
     def test_write_full_grid_marker(self):
         """S3 用它落 full_grid_needed.json —— 键与结论都要对。"""
-        import json
-        import tempfile
-        for name, expect in (("GaAs", False), ("GaN", True)):
-            p = Path(STRUCTS[name])
-            if not p.is_file():
-                continue
+        for name, st, bad, need in (("GaN标准", gan_std(), 0, False),
+                                    ("GaN平移", shifted(gan_std(), [.13, .07, .2]), 15, True)):
             d = Path(tempfile.mkdtemp())
+            from pymatgen.io.vasp.inputs import Poscar
+            p = d / "POSCAR"
+            Poscar(st).write_file(str(p))
             g = kc.write_full_grid_marker(p, d)
             self.assertIsNotNone(g, name)
-            self.assertEqual(g["needs_full_grid"], expect, g)
+            self.assertEqual(g["needs_full_grid"], need, g)
             f = d / "full_grid_needed.json"
             self.assertTrue(f.is_file(), name)
             j = json.loads(f.read_text(encoding="utf-8"))
-            self.assertEqual(j["needs_full_grid"], expect, j)
+            self.assertEqual(j["needs_full_grid"], need, j)
+            self.assertEqual(j["bad_ops"], bad, j)
             self.assertIn("reason", j)
-            self.assertEqual(j["tau_ops"], g["tau_ops"])
 
     def test_marker_returns_none_on_bad_input(self):
         self.assertIsNone(kc.write_full_grid_marker(Path("/nonexistent/POSCAR")))

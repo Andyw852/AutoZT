@@ -4,18 +4,18 @@
 
 用法：python test_preflight_symmetry_verdict.py     退出码 0 = 全部 PASS。
 
-背景（2026-09-28 第二批 (a)）：preflight 的 ② 原本只按"h5 是否完整网格"一刀切，
-会把**原点已对齐**（τ≡0）的 2D 体系也拦下 —— 那种情况走 IBZ 是正确的（V109/V111）。
-现在它调 ke_common.symmetry_gate()；本测试固定这条接线：
-  · GaAs（无反演、τ≡0）-> 放行；
-  · GaN （无反演、τ=0.5）-> 拦截；
-  · 读不到结构        -> 保守拦截；
-  · 退回实现 _fallback_verdict 与 ke_common 结论一致。
+背景：preflight 的 ② 原本只按"h5 是否完整网格"一刀切，会把原点已对齐（或本来就精确）
+的体系也拦下；现在它调 ke_common.symmetry_gate()。本测试固定这条接线，**结构在测试里
+构造**（不读 /mnt/d 下的任何文件）。
 """
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+
+import numpy as np
+from pymatgen.core import Lattice, Structure
+from pymatgen.io.vasp.inputs import Poscar
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent
@@ -24,26 +24,42 @@ for _p in (str(HERE), str(ROOT), str(ROOT.parent / "_common" / "opt")):
         sys.path.insert(0, _p)
 import overlap_preflight as pf
 
-RES = {
-    "GaAs": "/mnt/d/tf_data/work_AutoZT/GaAs/ke-dft-cpu/result",
-    "GaN": "/mnt/d/tf_data/work_AutoZT/GaN/ke-dft-cpu/result",
-}
+
+def shifted(st, s):
+    x = st.copy()
+    x.translate_sites(range(len(x)), s, frac_coords=True)
+    return x
+
+
+def gan_std():
+    return Structure(Lattice.hexagonal(3.19, 5.19), ["Ga", "Ga", "N", "N"],
+                     [[1/3, 2/3, 0], [2/3, 1/3, .5], [1/3, 2/3, .377], [2/3, 1/3, .877]])
+
+
+def si_on_atom():
+    return Structure(Lattice([[0, 2.715, 2.715], [2.715, 0, 2.715], [2.715, 2.715, 0]]),
+                     ["Si", "Si"], [[0, 0, 0], [.25, .25, .25]])
+
+
+def _material_dir(st):
+    """把结构写成 <tmp>/step3_uniform/POSCAR，返回材料目录。"""
+    d = Path(tempfile.mkdtemp())
+    (d / "step3_uniform").mkdir(parents=True)
+    Poscar(st).write_file(str(d / "step3_uniform" / "POSCAR"))
+    return d
 
 
 class PreflightVerdictTests(unittest.TestCase):
-    def _verdict(self, name):
-        d = Path(RES[name])
-        if not d.is_dir():
-            self.skipTest("缺 %s" % d)
-        return pf._structure_verdict(d)
-
-    def test_gaas_tau_zero_released(self):
-        need, why = self._verdict("GaAs")
+    def test_gan_std_released_via_ke_common(self):
+        """GaN 标准原点：原公式 0/24 错 -> 放行，且**确实走 ke_common**。"""
+        need, why = pf._structure_verdict(_material_dir(gan_std()))
         self.assertFalse(need, why)
-        self.assertIn("ke_common", why)          # 走的是唯一来源，不是 fallback
+        self.assertIn("ke_common", why)
 
-    def test_gan_requires_full_grid(self):
-        need, why = self._verdict("GaN")
+    def test_si_at_inversion_centre_requires_full_grid(self):
+        """★ 关键：有反演但原点在反演中心的 Si 原公式错 24/48 —— 必须拦。"""
+        st = shifted(si_on_atom(), [-.125, -.125, -.125])
+        need, why = pf._structure_verdict(_material_dir(st))
         self.assertTrue(need, why)
         self.assertIn("ke_common", why)
 
@@ -54,12 +70,9 @@ class PreflightVerdictTests(unittest.TestCase):
         self.assertIn("读不到结构", why)
 
     def test_fallback_matches_ke_common(self):
-        from pymatgen.core import Structure
-        for name, expect in (("GaAs", False), ("GaN", True)):
-            p = Path(RES[name]) / "step3_uniform" / "POSCAR"
-            if not p.is_file():
-                continue
-            st = Structure.from_file(str(p))
+        cases = [("GaN std", gan_std(), False),
+                 ("Si inv centre", shifted(si_on_atom(), [-.125] * 3), True)]
+        for name, st, expect in cases:
             need, why = pf._fallback_verdict(st)
             self.assertEqual(need, expect, "%s: %s" % (name, why))
             self.assertIn("fallback", why)
