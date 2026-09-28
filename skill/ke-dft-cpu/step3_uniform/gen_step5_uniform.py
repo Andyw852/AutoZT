@@ -142,6 +142,23 @@ def main():
         else:
             print("[OK] patch_align_origin：|tau|max %.4f -> %.4f（平移 %s）—— 去对称化的 τ bug "
                   "不再触发，可走 IBZ 免掉一次全网格。" % (_ao[0], _ao[1], _ao[2]))
+    # ---- patch_symmetry_gate（2026-09-28 用户批准，第二批 (a)）：早期提示 + 落标记 ----
+    #   去对称化 bug 的触发条件是"存在 τ≠0 的对称操作"，不是"没有反演中心"。
+    #   在 S3 就把结论算出来落盘到 full_grid_needed.json，下游（S8/S8.4 的 gen 与
+    #   overlap_preflight）与事后追查都用同一份结论，不再各自重判。
+    #   ★ 落的是**判据结论**，不是"分支开没开"：本 gen 在集群上跑，读不到项目里的
+    #     `optional_steps.wavefunction_full`（那个键在 project_setting/tf_*.yaml 里、
+    #     不随 gen 推上集群）。消费方拿这个文件跟自己的分支开关对一下即可。
+    _g = kc.write_full_grid_marker(out / "POSCAR", out)
+    if _g is None:
+        print("[WARN] 对称性判据算不出来 —— 未落 full_grid_needed.json，下游各自保守判断。")
+    elif _g["needs_full_grid"]:
+        print("[WARN] 对称性判据：%s" % _g["reason"])
+        print("[WARN]   -> 本步之后若要用真实重叠（UNITY_OVERLAP=false，2D 出厂即此），"
+              "必须在项目配置里打开 optional_steps.wavefunction_full: true"
+              "（S3b 全网格 + S4b 全网格 h5）；否则 S8/S8.4 会被 preflight 拦下。")
+    else:
+        print("[OK] 对称性判据：%s" % _g["reason"])
     _func, _subs = kc.resolve_func(prev, FUNC, OUTDIR_NAME)
 
     dim = kc.read_method_dim(prev / kc.METHOD_FILE)

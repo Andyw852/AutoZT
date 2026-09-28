@@ -439,6 +439,35 @@ def symmetry_gate(structure, atol=TAU_TOL):
     return out
 
 
+def write_full_grid_marker(poscar, outdir=None):
+    """算对称性判据并把结论落盘到 <outdir>/full_grid_needed.json；成功返回判据 dict，否则 None。
+
+    S3（step3_uniform）用它把结论**提前**写下来，下游（S8/S8.4 的 gen、overlap_preflight）
+    与事后追查都读同一份，不必各自重判。落的是**判据结论**，不是"分支开没开"：
+    gen 在集群上跑，读不到项目里的 optional_steps.wavefunction_full（那个键不上集群）。
+    """
+    try:
+        import json
+        from pymatgen.core import Structure
+        p = Path(poscar)
+        if not p.is_file():
+            return None
+        g = symmetry_gate(Structure.from_file(str(p)))
+        out = Path(outdir) if outdir else p.parent
+        (out / "full_grid_needed.json").write_text(
+            json.dumps({"needs_full_grid": bool(g["needs_full_grid"]),
+                        "has_inversion": g["has_inversion"],
+                        "max_tau": g["max_tau"],
+                        "tau_ops": g["tau_ops"],
+                        "reason": g["reason"],
+                        "poscar": str(p)},
+                       ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8")
+        return g
+    except Exception:
+        return None
+
+
 def _slab_center_span(fz, h_perp=None, vac_min=5.0):
     """沿 c 的分数坐标 -> (层心, 跨度, 是否 slab)。按最大空隙切开，跨周期边界也对。
 

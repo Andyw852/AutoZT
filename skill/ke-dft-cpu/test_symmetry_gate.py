@@ -88,6 +88,28 @@ class SymmetryGateTests(unittest.TestCase):
         self.assertTrue(g2["needs_full_grid"], g2)
         self.assertFalse(g2["has_inversion"], g2)
 
+    def test_write_full_grid_marker(self):
+        """S3 用它落 full_grid_needed.json —— 键与结论都要对。"""
+        import json
+        import tempfile
+        for name, expect in (("GaAs", False), ("GaN", True)):
+            p = Path(STRUCTS[name])
+            if not p.is_file():
+                continue
+            d = Path(tempfile.mkdtemp())
+            g = kc.write_full_grid_marker(p, d)
+            self.assertIsNotNone(g, name)
+            self.assertEqual(g["needs_full_grid"], expect, g)
+            f = d / "full_grid_needed.json"
+            self.assertTrue(f.is_file(), name)
+            j = json.loads(f.read_text(encoding="utf-8"))
+            self.assertEqual(j["needs_full_grid"], expect, j)
+            self.assertIn("reason", j)
+            self.assertEqual(j["tau_ops"], g["tau_ops"])
+
+    def test_marker_returns_none_on_bad_input(self):
+        self.assertIsNone(kc.write_full_grid_marker(Path("/nonexistent/POSCAR")))
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

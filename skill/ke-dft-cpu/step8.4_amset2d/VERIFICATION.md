@@ -5379,3 +5379,54 @@ AMSET 要跑完几个小时才因为找不到文件而失败，更糟。已补�
 - `skill/zt-dft-cpu/fermi_window_check.py`（新软链）
 - `tests/test_fanout_stale_state.py`（新，5 例，**单独列出**）
 
+
+---
+
+## V114（2026-09-28）：第二批 (a) —— 对称性判据统一到唯一来源
+
+### 唯一口径
+
+`ke_common.symmetry_gate(structure)` + `ke_common.TAU_TOL = 1e-4`：
+返回 `{has_inversion, max_tau, tau_ops, needs_full_grid, reason}`。裁决三档 ——
+
+| 情形 | 结论 |
+|---|---|
+| 有反演中心 | **IBZ 即可**（TR 已被点群吸收） |
+| 无反演但全部 \|τ\|=0（简单空间群 / 原点已 `align_origin`） | **IBZ 即可** |
+| 无反演且存在 τ≠0 | **必须全网格**（S3b+S4b，`WAVEFUNCTION_FULL=true`） |
+| 结构/spglib 判不出来 | 保守按"需要全网格" |
+
+★ 记录一处**物理更正**：GaAs 是闪锌矿 **F-43m，没有反演中心**（此前把它与有反演的 Si
+Fd-3m 混为一谈）。它走 IBZ 靠的是 **τ≡0**，不是反演 —— 这恰好说明判据为何不能写成"有无反演"。
+
+### 接线（本轮完成）
+
+- `step8.4_amset2d/gen_step14_amset2d.py`、`step8_amset/gen_step10_amset.py`：
+  `_symmetry_flags()` 变成**薄包装**，转调 `kc.symmetry_gate()`（调用点未动）。
+  实测两者对 GaAs/Si/GaN 返回完全一致：`(False,0.00) / (True,0.25) / (False,0.50)`。
+- `step8.4_amset2d/overlap_preflight.py`：② 分支**不再一刀切**。此前它对
+  "2D + 真实重叠 + 非完整网格"直接 `err=True` 拦截 —— 会把**原点已对齐（τ≡0）**的体系
+  也挡下，而那正是 V109/V111 证明可以走 IBZ 的情形（这也是为什么 MoS₂ 的 IBZ 臂此前
+  只能在 `tmp/v1_bench/` 手工跑通、走作业链会被 preflight 拦住）。现将结构读出来问判据：
+  `needs_full_grid=False` → 降为告警放行；`True`/判不出来 → 维持拦截。
+  判据来源优先 `ke_common.symmetry_gate`（gen 现在会把 `ke_common.py`/`dim_common.py`
+  复制进运行目录），带不进来时退回文件内同口径最小实现并在输出注明 `[fallback]`。
+- `step3_uniform/gen_step5_uniform.py`：`align_origin` 之后调 `kc.write_full_grid_marker()`，
+  把结论落盘 `step3_uniform/full_grid_needed.json`，`needs_full_grid=True` 时提前告警
+  "要真实重叠就得开 wavefunction_full 分支"。**落的是判据结论、不是分支开关**：
+  gen 在集群上跑，读不到项目里的 `optional_steps.wavefunction_full`（该键不上集群）。
+
+### 自测（全过）
+
+- `skill/ke-dft-cpu/test_symmetry_gate.py`（8 例）：GaAs/Si → IBZ；GaN → 必须全网格；
+  `None` → 保守；**平移翻转**用例（τ≡0 → 平移 0.13 → 需要全网格）；`write_full_grid_marker`
+  的 json 键与结论、坏输入返回 None。
+- `step8.4_amset2d/test_preflight_symmetry_verdict.py`（4 例）：GaAs 放行且**确实走 ke_common
+  （不是 fallback）**、GaN 拦截、读不到结构保守、fallback 与 ke_common 结论一致。
+- 其余：carrier guard 9、fermi window 9、postprocess ALL PASS、kernels PASS、
+  align_origin FAILS=0、fanout 5；suites asset_lookup / skillspec / template_drift /
+  symmetry_audit / uniform 全 PASS。
+
+### 第二批仍欠
+
+- 2D 默认 factor 按**目标最终网格（面内 ~263）**确定 + 内存估算。
