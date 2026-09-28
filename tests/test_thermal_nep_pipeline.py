@@ -64,7 +64,6 @@ class ThermalNEPPipelineTests(unittest.TestCase):
         self.assertEqual(indices[3], {3, 6, 9})
 
     def test_periodic_dedup_ignores_translation_and_rejects_near_duplicates(self):
-        import numpy as np
         from ase import Atoms
         base = Atoms("Mn2", positions=[[0.2, 0.3, 0.4], [1.1, 1.2, 1.3]],
                      cell=[10, 10, 10], pbc=True)
@@ -104,6 +103,33 @@ class ThermalNEPPipelineTests(unittest.TestCase):
             self.assertIn("thermal_md_sampler.py", submit)
             self.assertIn("--production-steps 100000", submit)
             self.assertTrue((root / "step1_thermal_sample" / "seed.txt").is_file())
+
+    def test_batch_sample_generator_keeps_output_separate_and_passes_dedup_references(self):
+        with tempfile.TemporaryDirectory(dir=TMP_ROOT) as temp:
+            root = Path(temp)
+            for name in ("gen_thermal_sample.py", "thermal_md_sampler.py",
+                         "gpumd_common.py", "stepconf.py", "submit_gpumd.tpl"):
+                src = (STEPCONF if name == "stepconf.py" else
+                       (KL_TEMPLATES / name if name == "submit_gpumd.tpl" else GPUMD / name))
+                shutil.copy2(src, root / name)
+            (root / "POSCAR").write_text(fake_poscar())
+            (root / "seed.txt").write_text("nep4 3 Mn In Se\n")
+            (root / "train_batch1.xyz").write_text("reference train\n")
+            (root / "test_batch1.xyz").write_text("reference test\n")
+            (root / "step.conf").write_text(
+                "[params]\nSTEP=step1_thermal_sample_b2\nGPUMD_BIN=/fake/gpumd\n"
+                "SEED_NEP=seed.txt\nSAMPLE_SUBDIR=sampled_b2\n"
+                "REFERENCE_TRAIN=train_batch1.xyz\nREFERENCE_TEST=test_batch1.xyz\n")
+            run = self.run_script(root / "gen_thermal_sample.py", root)
+            self.assertEqual(run.returncode, 0, run.stderr + run.stdout)
+            out = root / "step1_thermal_sample_b2"
+            submit = (out / "submit.sh").read_text(encoding="utf-8")
+            self.assertIn("--outdir sampled_b2", submit)
+            self.assertIn("--reference-xyz train_batch1.xyz", submit)
+            self.assertIn("--reference-xyz test_batch1.xyz", submit)
+            self.assertTrue((out / "train_batch1.xyz").is_file())
+            self.assertTrue((out / "test_batch1.xyz").is_file())
+            self.assertFalse((root / "step1_thermal_sample").exists())
 
     def test_dft_label_generator_writes_50_inputs_and_refuses_stale_force_labels(self):
         with tempfile.TemporaryDirectory(dir=TMP_ROOT) as temp:
