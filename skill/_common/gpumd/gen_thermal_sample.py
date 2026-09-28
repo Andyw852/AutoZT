@@ -25,6 +25,7 @@ SPEC = {
     "SAMPLE_INTERVAL": (5000, "int"),
     "TIME_STEP_FS": (1.0, "float"),
     "TAU_FS": (100.0, "float"),
+    "GPU_DEVICE": (1, "int"),
 }
 
 
@@ -68,6 +69,16 @@ def main():
         "LOG": "sampler.log",
     })
     stepconf.apply_submit(out / "submit.sh", conf.submit)
+    # fakeslurm pins jobs to logical GPU 0, which maps to the host's faulty
+    # physical GPU 4 on this node. Pin this sampling job to healthy GPU 1.
+    submit = out / "submit.sh"
+    submit_text = submit.read_text(encoding="utf-8")
+    omp_line = "export OMP_NUM_THREADS=${SLURM_CPUS_PER_TASK:-8}"
+    if omp_line not in submit_text:
+        sys.exit("[ERROR] submit_gpumd.tpl 缺 OMP_NUM_THREADS 行，无法设置健康 GPU")
+    submit_text = submit_text.replace(
+        omp_line, omp_line + "\nexport CUDA_VISIBLE_DEVICES=%d" % int(conf["GPU_DEVICE"]), 1)
+    submit.write_text(submit_text, encoding="utf-8", newline="\n")
     print("[DONE] %s：50 帧热态采样作业输入已生成" % OUTDIR)
 
 

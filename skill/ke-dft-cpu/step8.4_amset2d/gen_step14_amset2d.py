@@ -119,6 +119,13 @@ REQUIRE_BANDGAP = True
 # patch_interp_factor：AMSET 的收敛判据在**插值后**的网格上，别吃默认值 5。
 #   设 None 则不写这一行（回到 AMSET 默认）。加大前先做收敛测试。
 INTERPOLATION_FACTOR = 10
+# ★ 2026-09-28 用户指示：**显式给了 factor 就不许被自动改**。
+#   起因：本轮端到端对照里 f=61 被 MESH_MAX 悄悄降到 13，只看 settings.yaml 才发现，
+#   差点让对照白跑。规则：
+#     · step.conf 显式写了 INTERPOLATION_FACTOR（≠出厂 10）-> MESH_MIN/MESH_MAX 不再自动调，
+#       超界直接**报错**并给出建议值；
+#     · 用出厂默认值时才允许自动调（现行行为不变）。
+INTERPOLATION_FACTOR_EXPLICIT = False
 # patch_mesh_min（2026-09-26 用户批准）：按**最终插值网格**控制 factor。
 #   官方 AMSET Si 算例 2x2 对照（tmp/amset2d/si_matrix/RESULT.md）：最终网格 = f(粗网格, factor)，
 #   同样 factor=10：官方 18^3 粗网格 -> 61^3；我们 11^3 -> 41^3。所以"factor=10"在不同
@@ -204,12 +211,12 @@ LAYER_THICKNESS = "vdw"
 #   与 gen_step10_amset.py 的同名逻辑保持同步（改一处请改两处）。
 NWORKERS = None
 NWORKERS_FALLBACK = 24      # 提交模板里读不到 SLURM 分配（--ntasks/--cpus）时的兜底
-# ★ 2026-09-27 用户指示：NWORKERS 的出厂默认值改成 **4**，不再"自动按分配核数"。
-#   实测（Si 输入、官方 doping、f=10、117³，只变 nworkers）：
-#     nw = 1/2/8/12/16/23 -> ADP 1394.48（逐位相同）
-#     nw = 24（= jzzn 模板 --ntasks-per-node，恰好等于节点核数）-> 曾报 1610.6（+15.5%）
-#   在查清之前统一用验证过的 4。要按分配核数请显式在 step.conf 写 NWORKERS = <int>。
-NWORKERS_DEFAULT = 4
+# ★ 2026-09-27：**nworkers 不影响数值**。同一套掺杂/温度，nw = 1/2/8/12/16/23/24(×2)
+#   共 8 次运行，ADP@-1.99e14 全部 **1394.48**、ADP@-1e18 全部 **1379.31**、
+#   overall 全部 **1241.19**，逐位相同。早期"nw=24 偏高 15.5%（1610.6）"已被撤回 ——
+#   那次用的是**另一套掺杂与温度**（10 点 doping / 9 个 T），且中途被中止，两边不可比。
+#   所以保持"默认按提交分配核数"（NWORKERS = None = 用 _alloc）。
+NWORKERS_DEFAULT = None
 STEP = "step8_amset"
 SPEC = {
     "LAYER_THICKNESS": (LAYER_THICKNESS, "str"),
@@ -224,7 +231,7 @@ SPEC = {
     #   稠密网格 ~ (factor*nk)^2*nkz，内存/耗时按此平方级增长 ——
     #   实测 factor=10 + nworkers=24 在共享节点上 MaxRSS 292 GB 被 OOM 杀。
     #   项目里按需降到 4（已校准口径：与 factor 10 差 6-11%，见 V23）。
-    "INTERPOLATION_FACTOR": (INTERPOLATION_FACTOR, "int"),
+    # ★ 2026-09-28 用户指正：SPEC 默认给 None —— 「step.conf 里有没有这个键」才是判据，
     # patch_mesh_min：最终插值网格下限（None/0 = 不干预）。见文件头说明。
     "MESH_MIN": (MESH_MIN, "int"),
     "MESH_MIN_KZ": (MESH_MIN_KZ, "int"),
@@ -617,6 +624,25 @@ except ImportError:
     print("[WARN] 没找到 _common/vdw_radii.py，用内置最小表")
 
 
+def _unwrap_periodic(zs, period):
+    """[patch_slab_unwrap] 沿真空方向把被周期边界劈开的层"接回来"。
+
+    按最大空隙切开：空隙上沿以下的原子 +period。层本来就连续时原样返回（仅取模）。
+    原来直接 max(z)-min(z)：层若跨 z=0/1 边界（例如 S3 的 align_origin 把 σh
+    镜面放到 z=0），跨度会读成 ≈c，层厚与 h⊥/t 归一化全错。
+    """
+    if not zs or not period:
+        return list(zs)
+    w = [z % period for z in zs]
+    s = sorted(w)
+    gaps = [s[i + 1] - s[i] for i in range(len(s) - 1)] + [s[0] + period - s[-1]]
+    i = max(range(len(gaps)), key=gaps.__getitem__)
+    if i == len(s) - 1:                 # 最大空隙本来就跨边界 -> 层连续
+        return w
+    cut = s[i + 1]                      # 最大空隙上沿 = 层底
+    return [z + period if z < cut - 1e-9 else z for z in w]
+
+
 def _read_poscar_species_z(path: Path):
     """返回 [(元素符号, z 坐标 Å), ...] 和 c 轴长度。解析失败返回 (None, None)。"""
     try:
@@ -671,6 +697,8 @@ def vdw_thickness(cwd: Path):
             az, c_len = _read_poscar_species_z(p)
             if not az:
                 continue
+            _uz = _unwrap_periodic([z for _s, z in az], c_len)
+            az = [(sp, z) for (sp, _z0), z in zip(az, _uz)]
             top = max(az, key=lambda x: x[1])
             bot = min(az, key=lambda x: x[1])
             miss = [s for s in (top[0], bot[0]) if s not in VDW_RADII]
@@ -756,6 +784,7 @@ def _read_poscar_cz(path: Path):
             zs.append(z * c_len if direct else z)
         if not zs:
             return c_len, None
+        zs = _unwrap_periodic(zs, c_len)
         return c_len, max(zs) - min(zs)
     except Exception as e:                              # noqa: BLE001
         print("[WARN] 解析 %s 失败（%s），无法自动定 2D 几何" % (path, e))
@@ -1614,6 +1643,24 @@ def apply_mesh_min(vasprun_path, out):
     need = [int(lo or 0), int(lo or 0), int(lo_z or 0)]
     f0 = int(INTERPOLATION_FACTOR)
     f, mesh = f0, _interp_mesh(st, nk, f0)
+    # ★ 2026-09-28：显式给了 factor 就不许自动改 —— 超界时报错并给建议值。
+    if INTERPOLATION_FACTOR_EXPLICIT:
+        _okmin = all(int(mesh[i]) >= need[i] for i in range(3))
+        _okmax = (not MESH_MAX) or (max(int(x) for x in mesh) <= int(MESH_MAX))
+        if not (_okmin and _okmax):
+            _sug = None
+            for _f in range(1, max(int(MESH_MIN_FMAX), 200) + 1):
+                _m = _interp_mesh(st, nk, _f)
+                if all(int(_m[i]) >= need[i] for i in range(3)) and \
+                   ((not MESH_MAX) or max(int(x) for x in _m) <= int(MESH_MAX)):
+                    _sug = (int(_f), [int(x) for x in _m]); break
+            sys.exit("[ERROR] step.conf 显式写了 INTERPOLATION_FACTOR=" + str(f0)
+                     + "，但按它算出的最终网格 " + "x".join(map(str, mesh))
+                     + " 超出允许范围（MESH_MIN=" + str(need) + "，MESH_MAX=" + str(MESH_MAX) + "）。\n"
+                     "        显式给的 factor **不会被自动调整**（2026-09-28 教训：f=61 曾被 MESH_MAX 悄悄降到 13）。\n"
+                     "        " + ("建议 factor = %d（网格 %s）" % _sug if _sug else
+                              "在 f<=%d 内找不到同时满足上下限的 factor" % max(int(MESH_MIN_FMAX), 200)) + "\n"
+                     "        处理：① 显式改成建议值；② 调整 MESH_MIN/MESH_MAX；③ 删掉 step.conf 里的 INTERPOLATION_FACTOR 让它自动调。")
     # ★ 先处理上限：网格超 MESH_MAX 就把 factor 降下来（全网格 h5 的 k 点数大，
     #   同样 factor 会给更大网格）。利用 mesh ∝ (nk*f)^(1/3)：
     #   目标 nkpt = nk*f*(cap/mesh_max)^3，取整、至少 1。
@@ -1750,7 +1797,7 @@ def main():
     _disc_gate()
     cwd = Path.cwd()
     global LAYER_THICKNESS, NWORKERS, UNITY_OVERLAP, WAVEFUNCTION_FULL
-    global INTERPOLATION_FACTOR, SCATTERING, WRITE_MESH, DOPING, TEMPERATURES
+    global INTERPOLATION_FACTOR, INTERPOLATION_FACTOR_EXPLICIT, SCATTERING, WRITE_MESH, DOPING, TEMPERATURES
     _conf_nworkers = None
     if (cwd / "step.conf").is_file():
         # strict=False：材料级 step.conf 是【全技能共用】的一份，含别的步骤的键
@@ -1764,7 +1811,8 @@ def main():
             if _p["NWORKERS"]:
                 _conf_nworkers = int(_p["NWORKERS"])
             # patch_interp_factor 覆盖（2026-09-20）：与 NWORKERS 同款，缺省沿用常量。
-            if _p["INTERPOLATION_FACTOR"]:
+            if _p["INTERPOLATION_FACTOR"] is not None:      # ★ 有键 = 显式（哪怕是 10）
+                INTERPOLATION_FACTOR_EXPLICIT = True
                 _conf_interp = int(_p["INTERPOLATION_FACTOR"])
                 if _conf_interp != INTERPOLATION_FACTOR:
                     print("[OK] INTERPOLATION_FACTOR = %d（step.conf 覆盖，出厂 %d）"
@@ -1857,11 +1905,8 @@ def main():
         else:
             print("[..] NWORKERS = %d（step.conf 指定）" % NWORKERS)
     elif NWORKERS_DEFAULT:
-        # ★ 2026-09-27 用户指示：不再自动取"分配核数"（jzzn 上那是 24，正是病态值）。
         NWORKERS = int(NWORKERS_DEFAULT)
-        print("[OK] NWORKERS = %d（★ 2026-09-27 起的出厂默认值，不再自动取分配核数；"
-              "本次分配 %d 核。要按分配核数请写 step.conf: NWORKERS = %d）"
-              % (NWORKERS, _alloc or -1, _alloc or -1))
+        print("[OK] NWORKERS = %d（step.conf/NWORKERS_DEFAULT 指定）" % NWORKERS)
     elif _alloc:
         NWORKERS = _alloc
         print("[OK] NWORKERS = %d（自动按提交分配：%s）" % (NWORKERS, _src))
@@ -1877,11 +1922,40 @@ def main():
     #   证据：去对称化在无反演体系上 38.9% 的 k 点全错（TR 路径 5.2%），Si 对照 97.7%
     #   —— tmp/amset2d/DESYM_FINDINGS.md、upstream_issue_tr_tau.md。
     if UNITY_OVERLAP is False and not WAVEFUNCTION_FULL:
-        sys.exit("[ERROR] UNITY_OVERLAP=false（2D 出厂默认）必须搭配 WAVEFUNCTION_FULL=true："
-                 "2D 真实重叠只能用 S3b 全网格 h5（ISYM=-1，让 AMSET 走 from_data 跳过去对称化）。"
-                 "去对称化在无反演体系上 38.9% 的 k 点全错（TR 路径 5.2%）。"
-                 "请在 step.conf 补 WAVEFUNCTION_FULL=true，或显式改回 UNITY_OVERLAP=true"
-                 "（快速筛选，迁移率偏低）。")
+        # ★ 2026-09-27 用户指示（依据 VERIFICATION V109/V111）：
+        #   **原点对齐后（全部对称操作 τ ≡ 0）走 IBZ + 真实重叠是正确的** ——
+        #   去对称化 bug 只出在 τ 的处理上，τ≡0 时不可见。
+        #   实测 MoS₂（原点对齐到 Mo）：逐带 cos 中位 0.128 -> **1.0000**，与全网格数值等同；
+        #   48 网格同网格复核同样通过。所以这里先查结构的 τ：
+        #     τ≡0  -> 放行走 IBZ（省掉 S3b 全网格）；
+        #     τ≠0  -> 维持原来的硬拦截（必须 WAVEFUNCTION_FULL=true）。
+        _gst = None
+        for _d in ("step3_uniform", "step1_opt", "step1_std_opt"):
+            for _n in ("POSCAR", "CONTCAR"):
+                _p = cwd / _d / _n
+                if _p.is_file():
+                    try:
+                        from pymatgen.core import Structure as _St
+                        _gst = _St.from_file(str(_p))
+                    except Exception:
+                        _gst = None
+                    if _gst is not None:
+                        break
+            if _gst is not None:
+                break
+        _inv, _mtau = _symmetry_flags(_gst) if _gst is not None else (None, None)
+        if (_mtau is not None) and (_mtau <= 1e-4):
+            print("[OK] 2D + 真实重叠 + **IBZ**：结构对称操作 |tau|max=%.4f（原点已对齐）-> "
+                  "去对称化不会触发 τ bug，放行（省掉 S3b 全网格）。见 V109/V111。" % _mtau)
+        else:
+            sys.exit("[ERROR] UNITY_OVERLAP=false 且 WAVEFUNCTION_FULL=false，但结构存在 τ≠0 的"
+                     "对称操作（|tau|max=%s）：2D 真实重叠只能用 S3b 全网格 h5（ISYM=-1，走 "
+                     "from_data 跳过去对称化）。去对称化在「无反演 + τ≠0」的体系上大面积算错。"
+                     "处理：① step.conf 补 WAVEFUNCTION_FULL=true；或 ② 先让 S3 的 align_origin "
+                     "把原点对齐（VERIFICATION V109/V111）；或 ③ 显式改回 UNITY_OVERLAP=true"
+                     "（快速筛选，迁移率偏低）。"
+                     % ("None（结构或 spglib 判不出来，保守拦截）" if _mtau is None
+                        else "%.4f" % _mtau))
     out = cwd / OUTDIR_NAME
     out.mkdir(exist_ok=True)
     # 插件随本步复制到运行目录（只在那一次 amset 运行里生效，不改 AMSET 安装）
@@ -1905,6 +1979,15 @@ def main():
     link(out, cwd / READ_DIR / _pick_deformation_h5(cwd, READ_DIR), "deformation.h5")
     # patch_amset_vasprun：amset run 还需要密网格 vasprun.xml 拿能带色散
     # 全网格分支时 vasprun 必须同源（step3b_uniform_full）。
+    # ★ 2026-09-27 修（MoS2 端到端实验暴露）：IBZ 分支也必须优先用 step3b_uniform_full
+    #   的 vasprun。AMSET 的 Interpolator 拿 vasprun 的 k 点 + 带能喂 BoltzTraP2 做
+    #   Fourier 拟合，只有 h5 的系数才走去对称化。若 vasprun 用 step3_uniform（ISYM=2，
+    #   434 个不可约 k 点、且不是均匀网格），拟合出的能带是错的 —— 实测 S8.4 因此算出
+    #   荒谬的 p 型费米能级 -153.9 eV（远在 DOS 窗口 [-6.88, 1.51] eV 之外），
+    #   导致 dfde≈0 -> weight 全 0 -> 归一化 NaN -> np.where(cumsum<fd_tol/2) 为空 ->
+    #   ValueError: zero-size array（amset/core/data.py:275）。
+    #   改用全网格 vasprun 后，带能网格与全网格臂完全一致，唯一差别只剩系数走去对称化
+    #   还是全网格 —— 正是端到端对照要测的东西。
     _vdirs = (("step3b_uniform_full",) if WAVEFUNCTION_FULL
               else ("step3_uniform", "step4_wave"))
     _vr = next((cwd / _d / "vasprun.xml"

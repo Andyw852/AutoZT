@@ -102,13 +102,11 @@ def main():
     # ★ 2026-09-27 用户指示：S3b 也必须对齐原点 —— 它同样是 relay S1 的 CONTCAR，
     #   若 S3 调了而 S3b 没调，同网格对照（S3 的 IBZ h5 vs S3b 的所有网格 h5）时
     #   系数的 G 相位就对不上。align_origin 确定性，重复调用不改结果。
-    try:
-        _ao_on = 1
-        if (out.parent / "step.conf").is_file():
-            _ao_on = int(stepconf.load({"ALIGN_ORIGIN": (1, "int")}, OUTDIR_NAME,
-                                       str(out.parent), strict=False)["ALIGN_ORIGIN"])
-    except (KeyError, ValueError, TypeError, SystemExit):
-        _ao_on = 1
+    # ★ 2026-09-27 用户指正：不要吞 SystemExit（理由同 S7 的 DK_MAX_3D）。
+    _ao_on = 1
+    if (out.parent / "step.conf").is_file():
+        _ao_on = int(stepconf.load({"ALIGN_ORIGIN": (1, "int")}, OUTDIR_NAME,
+                                   str(out.parent), strict=False)["ALIGN_ORIGIN"])
     if _ao_on:
         _ao = kc.align_origin(out / "POSCAR")
         if _ao is None:
@@ -237,9 +235,19 @@ def main():
             except (IndexError, ValueError):
                 _st = None
             break
+    # ★ 2026-09-28 用户批准（方案二）：**显式**给了 DK_MAX / DK_MAX_3D 时跳过 2x 静态下限。
+    #   2x 下限是历史坑的兜底（当年 3D 的 S3 退化成静态网格，扫 10 个项目 8 个中招），
+    #   它防的是"意外退化"，不是给本步定精度用。显式写了 DK 就说明密度是有意选的，
+    #   应以显式值为准 —— 与"显式 INTERPOLATION_FACTOR 不被自动改"同一原则。
+    #   下面的退化断言（每轴必须严格比静态密）与成本护栏**都保留**。
     if _st and len(_st) == 3 and not MATCH_MESH_OF:
-        for i in _axes:
-            _need[i] = max(_need[i], 2 * _st[i])
+        _dk_exp = (DK_MAX is not None) or (str(DK_MAX_3D).strip() != "0.06")
+        if _dk_exp:
+            print("[..] 显式 DK（DK_MAX=%s / DK_MAX_3D=%s）-> **跳过 2x 静态下限兜底**"
+                  % (DK_MAX, DK_MAX_3D))
+        else:
+            for i in _axes:
+                _need[i] = max(_need[i], 2 * _st[i])
     # [KALIGN-2026-09-23] 高对称点对齐，与 step3_uniform 同一实现（ke_common.align_kgrid）。
     #   此前本步漏了这段 → CrSe2_hex S3=48×48、S3b=46×46，"只差 ISYM"的前提被破坏。
     #   MATCH_MESH_OF 时网格是照抄的，不再改动。

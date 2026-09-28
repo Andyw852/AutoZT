@@ -244,14 +244,15 @@ def _reference_kpoints(out, dim, vac_axis, n_sub):
     #   但加密会改变存量 3D 项目的 S7 口径（成本约 27x），所以**必须显式开启**：
     #   在本步 step.conf 写 DK_MAX_3D = 0.06（或别的值）即对 3D 也走"逐轴
     #   max(vaspkit, ceil(|b_i|/DK)) + 照抄 step3_uniform 网格"。不写 = 保持原行为。
+    # ★ 2026-09-27 用户指正：**不要吞 SystemExit** —— stepconf.load 在"缺文件 / STEP 不匹配 /
+    #   有不认识的键 / 数值解析失败"四种情况都会抛 SystemExit，全吞掉会让 DK_MAX_3D 写错时
+    #   静默退回 11^3、E1 又变成错值却没有任何提示。改成：**文件不存在才用默认值；
+    #   存在就让解析错误照常抛出来**。
     _dk3 = None
-    try:
-        if (out.parent / "step.conf").is_file():
-            _dk3 = stepconf.load({"DK_MAX_3D": (None, "float")}, OUTDIR_NAME,
-                                 str(out.parent), strict=False)["DK_MAX_3D"]
-            _dk3 = None if _dk3 is None else float(_dk3)
-    except (KeyError, ValueError, TypeError, SystemExit):
-        _dk3 = None
+    if (out.parent / "step.conf").is_file():
+        _dk3 = stepconf.load({"DK_MAX_3D": (None, "float")}, OUTDIR_NAME,
+                             str(out.parent), strict=False)["DK_MAX_3D"]
+        _dk3 = None if _dk3 is None else float(_dk3)
     _dk_use = _dk3 if (dim == "3d" and _dk3) else float(DK_MAX)
     if DK_MAX and (dim == "2d" or (dim == "3d" and _dk3)):
         import numpy as np

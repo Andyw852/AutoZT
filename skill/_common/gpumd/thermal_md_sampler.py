@@ -97,7 +97,9 @@ def main():
             "time_step %g" % args.time_step_fs,
             "ensemble nvt_ber %g %g %g" % (T, T, args.tau_fs / args.time_step_fs),
             "dump_thermo 1000", "run %d" % args.equil_steps,
-            "dump_xyz %d trajectory.xyz precision double" % args.sample_interval,
+            # This installed GPUMD build requires legacy: group_method group_id interval filename.
+            # A negative group method means dump the complete system.
+            "dump_xyz -1 0 %d trajectory.xyz" % args.sample_interval,
             "run %d" % args.production_steps, "",
         ])
         (case / "run.in").write_text(run_in, encoding="utf-8")

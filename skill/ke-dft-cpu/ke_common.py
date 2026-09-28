@@ -393,6 +393,23 @@ def _sym_ops_max_tau(structure, atol=1e-4):
         return None, None, None
 
 
+def _slab_center_span(fz, h_perp=None, vac_min=5.0):
+    """沿 c 的分数坐标 -> (层心, 跨度, 是否 slab)。按最大空隙切开，跨周期边界也对。
+
+    是否 slab：最大空隙 × h⊥ >= vac_min Å（h⊥ 未给时只看分数 >= 0.25）。
+    """
+    import numpy as np
+    s = np.sort(np.mod(np.asarray(fz, float), 1.0))
+    if s.size == 0:
+        return 0.5, 0.0, False
+    gaps = np.diff(np.concatenate([s, [s[0] + 1.0]]))
+    i = int(np.argmax(gaps))
+    lo = s[(i + 1) % s.size]                 # 最大空隙上沿 = 层底
+    span = 1.0 - float(gaps[i])
+    is_slab = (float(gaps[i]) * h_perp >= vac_min) if h_perp else (float(gaps[i]) >= 0.25)
+    return float((lo + span / 2.0) % 1.0), span, bool(is_slab)
+
+
 def align_origin(poscar, atol=1e-4):
     """把晶体原点平移到"让全部对称操作的分数平移 tau 都变 0"的位置。
 
@@ -406,6 +423,14 @@ def align_origin(poscar, atol=1e-4):
     做法：spglib 取 (R, tau)，解最小二乘 (I-R)s = ±tau 得候选平移量，再**逐候选复核**
     （平移后重跑 spglib，要求 |tau|max < atol）；只有复核通过才改写 POSCAR。
     任何异常或复核失败都**原样不动**（安全侧）。
+
+    ★ [patch_align_origin_slab] 2D slab 额外约束：层必须**连续且居中**。
+    有 σh（z->-z）时 s_z 只定到 mod 1/2：最小范数解可能把镜面放到 z=0，层被
+    to_unit_cell 劈成两半（上半在 z≈0、下半在 z≈0.9）。VASP 不在乎，但 S8/S8.4 的
+    层厚（vdw_thickness / _read_poscar_cz 用 max(z)-min(z)）会读成 ≈c -> 2D 归一化
+    因子 h⊥/t 错数倍，或 t>=c 直接 exit。所以对 slab：每个候选再试 s_z+1/2 和
+    "层心移到 0.5"（点群没有翻 z 的操作时 s_z 任意），复核 tau=0 后选
+    (不跨界, |层心-0.5| 最小) 的那个。3D 行为不变。
 
     ⚠ 物理量（能量/能带/形变势）不受影响；变的是平面波系数的 G 相位，因此
     **整条链必须同口径** —— 放在 S3 改 POSCAR，S4/S8 都从 S3 接力，天然一致，
@@ -436,14 +461,41 @@ def align_origin(poscar, atol=1e-4):
                 pass
         _zs = [x.Z for x in st.species]
         cands.append(np.asarray(st.frac_coords[int(np.argmax(_zs))], float))
+
+        # 2D slab：真空沿 c（本流程强制）。给每个候选补 z 方向的等价/自由平移。
+        _M = st.lattice.matrix
+        _h = abs(np.linalg.det(_M)) / max(np.linalg.norm(np.cross(_M[0], _M[1])), 1e-12)
+        zc0, span0, is_slab = _slab_center_span(st.frac_coords[:, 2], _h)
+        if is_slab:
+            ext = []
+            for c0 in cands:
+                for dz in (0.0, 0.5):
+                    c1 = np.array(c0, float); c1[2] += dz; ext.append(c1)
+                c2 = np.array(c0, float); c2[2] = zc0 - 0.5; ext.append(c2)
+            cands = ext
+
+        best = None
         for cand in cands:
             st2 = st.copy()
             st2.translate_sites(range(len(st2)), -cand, frac_coords=True, to_unit_cell=True)
             after, _, _ = _sym_ops_max_tau(st2, atol)
-            if after is not None and after < atol:
-                Poscar(st2, sort_structure=False).write_file(str(poscar))
-                return (before, after, [round(float(x), 6) for x in cand])
-        return (before, None, None)          # 复核失败
+            if after is None or after >= atol:
+                continue
+            if not is_slab:                  # 3D：第一个复核通过的就用（行为同旧版）
+                best = (0, 0.0, cand, st2, after)
+                break
+            fz = np.mod(st2.frac_coords[:, 2], 1.0)
+            wraps = int((fz.max() - fz.min()) > span0 + 1e-6)   # 层被周期边界劈开
+            zc, _sp, _ = _slab_center_span(fz, _h)
+            score = (wraps, abs(zc - 0.5))
+            if best is None or score < best[:2]:
+                best = (wraps, abs(zc - 0.5), cand, st2, after)
+        if best is None:
+            return (before, None, None)      # 复核失败
+        if is_slab and best[0]:
+            return (before, None, None)      # 所有 tau=0 的原点都会劈开层 -> 不动（安全侧）
+        Poscar(best[3], sort_structure=False).write_file(str(poscar))
+        return (before, best[4], [round(float(x), 6) for x in best[2]])
     except Exception:
         return None
 

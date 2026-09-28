@@ -98,6 +98,14 @@ SCATTERING  = ["ADP", "IMP", "POP"]   # 形变势声学 + 电离杂质 + 极性�
 #   空串 = 出厂 [ADP, IMP, POP] 行为不变；含不认识机制则整项忽略并告警。
 _ALLOWED_SCATTERING = {"ADP", "IMP", "POP", "PIE"}
 MANUAL_BANDGAP = None                 # None=自动读；或写数值(eV) 覆盖 scissor
+# ★ 2026-09-27 用户指示：手动覆盖 ε∞（标量或 3 个对角值，逗号/空格分隔）。
+#   动机：PBE/PBEsol 带隙过小会**高估** ε∞（GaAs 实测 17.96 vs 实验 10.9），
+#   而 ε∞ 直接进 POP 前因子与 IMP 屏蔽。若已用 HSE + LCALCEPS 重算出可信的 ε∞，
+#   用这个键喂给 AMSET。**ε₀ 用离子部分搬过来**：
+#       eps0_new = eps_inf_new + (eps0_PBEsol - eps_inf_PBEsol)
+#   （离子贡献 Δε = ε₀ − ε∞ 对交换关联泛函不敏感。）
+#   例：EPS_INF_OVERRIDE = 12.5    或    EPS_INF_OVERRIDE = 12.5, 12.5, 12.5
+EPS_INF_OVERRIDE = None
 # patch_dielec_assert：介电产物必须通过物理性硬断言，否则直接停步（不静默往下传）。
 #   检查项：eps_inf 存在 / 对角项 >= 1 / 不是单位矩阵（DFPT 初值签名）/
 #   有 IONIC CONTRIBUTION 块（否则 Frohlich 耦合恒为 0、POP 静默丢失）。
@@ -109,6 +117,11 @@ REQUIRE_BANDGAP = True
 # patch_interp_factor：AMSET 的收敛判据在**插值后**的网格上，别吃默认值 5。
 #   设 None 则不写这一行（回到 AMSET 默认）。加大前先做收敛测试。
 INTERPOLATION_FACTOR = 10
+# ★ 2026-09-28 用户指示：3D 也补上 step.conf 的 factor 覆盖通道（此前只有模块常量），
+#   并沿用 2D 的**显式防护**：SPEC 默认 None -> 读到 None 按非显式（允许自动调）；
+#   读到任何值（包括 10）都算显式，MESH_MIN/MESH_MAX 不再改它，超界直接报错并给建议值。
+#   用途：Si 的"对齐最终网格"IBZ/全网格对照需要两边各自显式指定 factor。
+INTERPOLATION_FACTOR_EXPLICIT = False
 # patch_mesh_min（2026-09-26 用户批准）：按**最终插值网格**控制 factor。
 #   官方 AMSET Si 算例 2x2 对照（tmp/amset2d/si_matrix/RESULT.md）结论：
 #   最终插值网格 = f(输入粗网格, factor)，同样 factor=10：
@@ -168,12 +181,12 @@ UNITY_OVERLAP_2D = True
 #     自动模式会跟着走，不用再手动同步两个数。
 NWORKERS = None
 NWORKERS_FALLBACK = 24      # 提交模板里读不到 SLURM 分配（--ntasks/--cpus）时的兜底
-# ★ 2026-09-27 用户指示：NWORKERS 的出厂默认值改成 **4**，不再"自动按分配核数"。
-#   实测（Si 输入、官方 doping、f=10、117³，只变 nworkers）：
-#     nw = 1/2/8/12/16/23 -> ADP 1394.48（逐位相同）
-#     nw = 24（= jzzn 模板 --ntasks-per-node，恰好等于节点核数）-> 曾报 1610.6（+15.5%）
-#   在查清之前统一用验证过的 4。要按分配核数请显式在 step.conf 写 NWORKERS = <int>。
-NWORKERS_DEFAULT = 4
+# ★ 2026-09-27：**nworkers 不影响数值**。同一套掺杂/温度，nw = 1/2/8/12/16/23/24(×2)
+#   共 8 次运行，ADP@-1.99e14 全部 **1394.48**、ADP@-1e18 全部 **1379.31**、
+#   overall 全部 **1241.19**，逐位相同。早期"nw=24 偏高 15.5%（1610.6）"已被撤回 ——
+#   那次用的是**另一套掺杂与温度**（10 点 doping/9 个 T），且中途被中止，两边不可比。
+#   所以这里保持"默认按提交分配核数"（NWORKERS = None = 用 _alloc）。
+NWORKERS_DEFAULT = None
 # --- 弹性常数来源（amset run 的 ACD 散射需要）---
 #   MANUAL_ELASTIC 填了就用它，否则从 ELASTIC_DIR/OUTCAR 自动解析（kBar→GPa）。
 #   直接填：单个数（各向同性近似，GPa），或 6x6 列表（完整 Cij，GPa）。
@@ -209,6 +222,8 @@ SPEC = {
     "WAVEFUNCTION_FULL": ("auto", "str"),
     # unity_overlap 覆盖（受控对照用）；默认 auto = 现行行为不变。
     "UNITY_OVERLAP": (UNITY_OVERLAP, "str"),
+    # patch_eps_inf_override：手动覆盖 ε∞（标量或 3 个对角值）。None/空 = 不覆盖。
+    "EPS_INF_OVERRIDE": (EPS_INF_OVERRIDE, "str"),
     # patch_mesh_min：最终插值网格下限（None/0 = 不干预）。见文件头说明。
     "MESH_MIN": (MESH_MIN, "int"),
     "MESH_MIN_KZ": (MESH_MIN_KZ, "int"),
@@ -216,6 +231,8 @@ SPEC = {
     # ★ 2026-09-27：最终网格每方向上限（超了自动降 factor）。None = 不设上限。
     "MESH_MAX": (MESH_MAX, "int"),
     # patch_scattering：散射机制覆盖（空串 = 出厂 [ADP,IMP,POP]）。
+    # patch_interp_factor（2026-09-28）：3D 的 factor 覆盖通道。None = 用出厂值。
+    "INTERPOLATION_FACTOR": (None, "int"),
     "SCATTERING": ("", "str"),
 }
 # 2D 时给 settings.yaml 写 free_carrier_screening: true
@@ -228,6 +245,31 @@ STRUCT_CANDS = ["step3_uniform", "step7_deform", "step1_opt", "step1_std_opt"]
 _STEP1_METHOD_CANDS = ["step1_opt", "step1_std_opt",
                        "step1c_PBE_opt", "step1b_PBE_opt", "step1a_PBE_opt"]
 # =================================================================
+
+
+def _apply_eps_inf_override(eps_inf, eps_static):
+    """patch_eps_inf_override：用 EPS_INF_OVERRIDE 覆盖 ε∞，并把离子部分搬到 ε₀。
+
+    见文件头 EPS_INF_OVERRIDE 的说明。返回 (eps_inf, eps_static)（list of list）。
+    """
+    if EPS_INF_OVERRIDE is None or str(EPS_INF_OVERRIDE).strip() == "":
+        return eps_inf, eps_static
+    import numpy as _np
+    _v = [float(x) for x in str(EPS_INF_OVERRIDE).replace(",", " ").replace(";", " ").split()]
+    if len(_v) == 1:
+        _new = _np.eye(3) * _v[0]
+    elif len(_v) == 3:
+        _new = _np.diag(_v)
+    else:
+        sys.exit("[ERROR] EPS_INF_OVERRIDE 只能是 1 个（标量）或 3 个（对角）数，收到 %r"
+                 % (EPS_INF_OVERRIDE,))
+    _oi = _np.asarray(eps_inf, float)
+    _os = _np.asarray(eps_static, float)
+    _sta = _new + (_os - _oi)
+    print("[..] EPS_INF_OVERRIDE：eps_inf %s -> %s；eps_0 按离子部分搬移 -> %s"
+          % (_np.diag(_oi).round(3).tolist(), _np.diag(_new).round(3).tolist(),
+             _np.diag(_sta).round(3).tolist()))
+    return _new.tolist(), _sta.tolist()
 
 
 def read_dielectric(dielect_dir: Path):
@@ -617,6 +659,25 @@ except ImportError:
     print("[WARN] 没找到 _common/vdw_radii.py，用内置最小表")
 
 
+def _unwrap_periodic(zs, period):
+    """[patch_slab_unwrap] 沿真空方向把被周期边界劈开的层"接回来"。
+
+    按最大空隙切开：空隙上沿以下的原子 +period。层本来就连续时原样返回（仅取模）。
+    原来直接 max(z)-min(z)：层若跨 z=0/1 边界（例如 S3 的 align_origin 把 σh
+    镜面放到 z=0），跨度会读成 ≈c，层厚与 h⊥/t 归一化全错。
+    """
+    if not zs or not period:
+        return list(zs)
+    w = [z % period for z in zs]
+    s = sorted(w)
+    gaps = [s[i + 1] - s[i] for i in range(len(s) - 1)] + [s[0] + period - s[-1]]
+    i = max(range(len(gaps)), key=gaps.__getitem__)
+    if i == len(s) - 1:                 # 最大空隙本来就跨边界 -> 层连续
+        return w
+    cut = s[i + 1]                      # 最大空隙上沿 = 层底
+    return [z + period if z < cut - 1e-9 else z for z in w]
+
+
 def _read_poscar_species_z(path: Path):
     """返回 [(元素符号, z 坐标 Å), ...] 和 c 轴长度。解析失败返回 (None, None)。"""
     try:
@@ -671,6 +732,8 @@ def vdw_thickness(cwd: Path):
             az, c_len = _read_poscar_species_z(p)
             if not az:
                 continue
+            _uz = _unwrap_periodic([z for _s, z in az], c_len)
+            az = [(sp, z) for (sp, _z0), z in zip(az, _uz)]
             top = max(az, key=lambda x: x[1])
             bot = min(az, key=lambda x: x[1])
             miss = [s for s in (top[0], bot[0]) if s not in VDW_RADII]
@@ -756,6 +819,7 @@ def _read_poscar_cz(path: Path):
             zs.append(z * c_len if direct else z)
         if not zs:
             return c_len, None
+        zs = _unwrap_periodic(zs, c_len)
         return c_len, max(zs) - min(zs)
     except Exception as e:                              # noqa: BLE001
         print("[WARN] 解析 %s 失败（%s），无法自动定 2D 几何" % (path, e))
@@ -1295,6 +1359,22 @@ def apply_mesh_min(vasprun_path, out):
     #   全网格 h5 的 k 点数大，同样 factor 会给更大的网格；不降就可能 OOM
     #   （实测 GaAs 全网格 f=10 -> 361^3 = 4700 万点，跑满 15:50 后要 236 GiB 失败）。
     #   利用 mesh ∝ (nk*f)^(1/3)：目标 nkpt = nk*f*(cap/mesh_max)^3，再取整、至少 1。
+    # ★ 2026-09-28：显式给了 factor 就不许自动改 —— 超界报错并给建议值。
+    if INTERPOLATION_FACTOR_EXPLICIT:
+        _okmin = all(int(mesh[i]) >= need[i] for i in range(3))
+        _okmax = (not MESH_MAX) or (max(int(x) for x in mesh) <= int(MESH_MAX))
+        if not (_okmin and _okmax):
+            _sug = None
+            for _f in range(1, max(int(MESH_MIN_FMAX), 200) + 1):
+                _m = _interp_mesh(st, nk, _f)
+                if all(int(_m[i]) >= need[i] for i in range(3)) and \
+                   ((not MESH_MAX) or max(int(x) for x in _m) <= int(MESH_MAX)):
+                    _sug = (int(_f), [int(x) for x in _m]); break
+            sys.exit("[ERROR] step.conf 显式写了 INTERPOLATION_FACTOR=" + str(f0)
+                     + "，但按它算出的最终网格 " + "x".join(map(str, mesh))
+                     + " 超出允许范围（MESH_MIN=" + str(need) + "，MESH_MAX=" + str(MESH_MAX) + "）。"
+                     " 显式给的 factor 不会被自动调整。处理：① 改成建议值 " + (str(_sug) if _sug else "（f<=200 内无解）")
+                     + "；② 调整 MESH_MIN/MESH_MAX；③ 删掉 step.conf 里的 INTERPOLATION_FACTOR。")
     _capped = False
     if MESH_MAX:
         _cap = int(MESH_MAX)
@@ -1441,6 +1521,7 @@ def main():
     _disc_gate()
     cwd = Path.cwd()
     global LAYER_THICKNESS, NWORKERS, WAVEFUNCTION_FULL, UNITY_OVERLAP
+    global INTERPOLATION_FACTOR, INTERPOLATION_FACTOR_EXPLICIT
     _conf_nworkers = None
     if (cwd / "step.conf").is_file():
         # strict=False：材料级 step.conf 是【全技能共用】的一份，含别的步骤的键
@@ -1481,6 +1562,12 @@ def main():
             # patch_scattering（2026-09-27，照搬 2D 版）：step.conf 覆盖散射机制。
             #   空串 = 出厂 [ADP,IMP,POP]；含不认识机制则整项忽略并告警。
             global SCATTERING
+            # patch_interp_factor：3D 的 factor 覆盖通道（SPEC 默认 None）。
+            if _p["INTERPOLATION_FACTOR"] is not None:
+                INTERPOLATION_FACTOR_EXPLICIT = True
+                INTERPOLATION_FACTOR = int(_p["INTERPOLATION_FACTOR"])
+                print("[OK] INTERPOLATION_FACTOR = %d（step.conf 显式指定；不会被 MESH_MIN/MESH_MAX 自动改）"
+                      % INTERPOLATION_FACTOR)
             _sc_raw = _p["SCATTERING"]
             if isinstance(_sc_raw, (list, tuple)):
                 _sc_list = [str(x).strip().upper() for x in _sc_raw if str(x).strip()]
@@ -1496,6 +1583,10 @@ def main():
                 elif _sc_list != SCATTERING:
                     print("[OK] SCATTERING = %s（step.conf 覆盖，出厂 %s）" % (_sc_list, SCATTERING))
                     SCATTERING = _sc_list
+            # patch_eps_inf_override：手动覆盖 ε∞（标量或 3 个对角值）
+            if _p["EPS_INF_OVERRIDE"]:
+                EPS_INF_OVERRIDE = _p["EPS_INF_OVERRIDE"]
+                print("[..] EPS_INF_OVERRIDE = %s（step.conf 覆盖）" % EPS_INF_OVERRIDE)
             # patch_mesh_min：最终插值网格下限/上限（step.conf 覆盖；0/None = 不干预）
             global MESH_MIN, MESH_MIN_KZ, MESH_MIN_FMAX, MESH_MAX
             for _k in ("MESH_MIN", "MESH_MIN_KZ", "MESH_MIN_FMAX", "MESH_MAX"):
@@ -1528,11 +1619,8 @@ def main():
         else:
             print("[..] NWORKERS = %d（step.conf 指定）" % NWORKERS)
     elif NWORKERS_DEFAULT:
-        # ★ 2026-09-27 用户指示：不再自动取"分配核数"（jzzn 上那是 24，正是病态值）。
         NWORKERS = int(NWORKERS_DEFAULT)
-        print("[OK] NWORKERS = %d（★ 2026-09-27 起的出厂默认值，不再自动取分配核数；"
-              "本次分配 %d 核。要按分配核数请写 step.conf: NWORKERS = %d）"
-              % (NWORKERS, _alloc or -1, _alloc or -1))
+        print("[OK] NWORKERS = %d（step.conf/NWORKERS_DEFAULT 指定）" % NWORKERS)
     elif _alloc:
         NWORKERS = _alloc
         print("[OK] NWORKERS = %d（自动按提交分配：%s）" % (NWORKERS, _src))
@@ -1566,6 +1654,7 @@ def main():
     if is_2d and c_len and TWO_D_DIELECTRIC_VACUUM:  # patch_2d_dielec
         eps_inf, eps_static = _dielectric_2d_inplane(
             cwd / DIELECT_DIR, out, eps_inf, eps_static)
+    eps_inf, eps_static = _apply_eps_inf_override(eps_inf, eps_static)   # patch_eps_inf_override
     if gap is None:
         _msg = ("没读到带隙——settings.yaml 将不写 bandgap，AMSET 会退回 "
                 "step3_uniform 的裸 DFT(PBE) 带隙。PBE 带隙偏小会让 300 K 双极导通"

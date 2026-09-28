@@ -79,9 +79,14 @@ def _poscar_data(path):
 
 
 def _read_static_outcar(path, natoms):
-    """Read final VASP static energy(sigma->0), cell, positions, and forces."""
+    """Read final VASP static energy(sigma->0), cell, positions, and forces.
+
+    VASP OUTCAR uses fixed-width lattice columns; adjacent negative values can
+    have no separating whitespace, so scan numeric tokens instead of split().
+    """
     import re
-    energy_pat = re.compile(r"energy\(sigma->0\)\s*=\s*([-+0-9.Ee]+)")
+    number = re.compile(r"[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[EeDd][-+]?\d+)?")
+    energy_pat = re.compile(r"energy\(sigma->0\)\s*=\s*([-+0-9.EeDd]+)")
     energy, cell, positions, forces = None, None, None, None
     lines = path.read_text(errors="ignore").splitlines()
     i = 0
@@ -90,37 +95,36 @@ def _read_static_outcar(path, natoms):
         if "energy(sigma->0)" in line:
             vals = energy_pat.findall(line)
             if vals:
-                energy = float(vals[-1])
-        if "direct lattice vectors" in line:
+                energy = float(vals[-1].replace("D", "E").replace("d", "e"))
+        if "direct lattice vectors" in line.lower():
             rows = []
             for row in lines[i + 1:i + 4]:
-                try:
-                    rows.append([float(x) for x in row.split()[:3]])
-                except ValueError:
+                vals = number.findall(row)
+                if len(vals) < 3:
                     rows = []
                     break
+                rows.append([float(x.replace("D", "E").replace("d", "e"))
+                             for x in vals[:3]])
             if len(rows) == 3:
                 cell = rows
         if "POSITION" in line and "TOTAL-FORCE" in line:
             pos, frc = [], []
             j = i + 2  # header followed by a separator line
             for row in lines[j:j + natoms]:
-                try:
-                    vals = [float(x) for x in row.split()[:6]]
-                except ValueError:
-                    vals = []
-                if len(vals) != 6:
+                vals = number.findall(row)
+                if len(vals) < 6:
                     pos, frc = [], []
                     break
-                pos.append(vals[:3])
-                frc.append(vals[3:6])
+                xyzf = [float(x.replace("D", "E").replace("d", "e"))
+                        for x in vals[:6]]
+                pos.append(xyzf[:3])
+                frc.append(xyzf[3:6])
             if len(pos) == natoms:
                 positions, forces = pos, frc
         i += 1
     if energy is None or cell is None or positions is None or forces is None:
         raise ValueError("OUTCAR misses final energy/cell/position/force block")
     return energy, cell, positions, forces
-
 
 def main():
     cwd = Path.cwd()
