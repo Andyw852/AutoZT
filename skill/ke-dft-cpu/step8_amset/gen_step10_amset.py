@@ -87,7 +87,13 @@ STEP_LABEL  = "S8_kappa"
 #   链首 rm 掉旧文件，则失败时 transport.json 不存在 -> 判据自然 not-done，失败可见。
 AMSET_CMD   = ('rm -f transport.json; '
                'python overlap_preflight.py --in-job || exit 1; '
-               'amset run >> amset.log 2>&1 && cp -f "$(ls -t transport_*.json 2>/dev/null | head -1)" transport.json && ls -l transport.json')
+               'amset run >> amset.log 2>&1 && python fermi_window_check.py && '
+               'cp -f "$(ls -t transport_*.json 2>/dev/null | head -1)" transport.json && ls -l transport.json')
+# ★ 2026-09-28 用户批准：作业链里加一道**不依赖 WRITE_MESH** 的费米能级窗口检查。
+#   读最新 transport*.json 的 fermi_levels + vasprun.xml 的 VBM/CBM，落在
+#   [VBM-2 eV, CBM+2 eV] 之外即 exit 1（金属自动跳过）。必须放在 cp 成
+#   transport.json **之前** —— 否则检查失败时 transport.json 已存在，autozt
+#   marker 判据会把失败隐藏（V63 的教训）。
 # --- 输运设置（可改）---
 DOPING      = "-1e21:-1e17:5, 1e17:1e21:5"   # n 型 + p 型各 5 点（对数均布）cm^-3
 TEMPERATURES = "100:900:9"            # 100,200,...,900 K，每 100 K 一个点
@@ -864,6 +870,87 @@ def _doping_endpoints(spec):
     return vals
 
 
+def _cell_volume_cm3(cwd):
+    """读 POSCAR/CONTCAR 的晶胞体积（cm³）；找不到或解析失败返回 None。"""
+    for d in STRUCT_CANDS:
+        for fn in ("CONTCAR", "POSCAR"):
+            p = Path(cwd) / d / fn
+            if not p.is_file():
+                continue
+            try:
+                ln = p.read_text(encoding="utf-8-sig", errors="ignore").splitlines()
+                scale = float(ln[1].split()[0])
+                a = [float(x) * scale for x in ln[2].split()[:3]]
+                b = [float(x) * scale for x in ln[3].split()[:3]]
+                c = [float(x) * scale for x in ln[4].split()[:3]]
+                bxc = (b[1] * c[2] - b[2] * c[1],
+                       b[2] * c[0] - b[0] * c[2],
+                       b[0] * c[1] - b[1] * c[0])
+                vol_a3 = abs(a[0] * bxc[0] + a[1] * bxc[1] + a[2] * bxc[2])
+                return vol_a3 * 1e-24          # Å³ -> cm³
+            except (OSError, IndexError, ValueError):
+                continue
+    return None
+
+
+def _count_atoms(cwd):
+    """读 POSCAR/CONTCAR 的原子总数；找不到/解析失败返回 None。
+
+    兼容 VASP5（第 6 行元素名 + 第 7 行数量）与 VASP4（第 6 行就是数量）。
+    """
+    for d in STRUCT_CANDS:
+        for fn in ("CONTCAR", "POSCAR"):
+            p = Path(cwd) / d / fn
+            if not p.is_file():
+                continue
+            try:
+                ln = p.read_text(encoding="utf-8-sig", errors="ignore").splitlines()
+
+                def _isint(t):
+                    try:
+                        return abs(float(t) - int(float(t))) < 1e-9
+                    except ValueError:
+                        return False
+
+                toks = ln[5].split()
+                if toks and all(_isint(t) for t in toks):
+                    return sum(int(float(t)) for t in toks)
+                return sum(int(float(t)) for t in ln[6].split())
+            except (OSError, IndexError, ValueError):
+                continue
+    return None
+
+
+def check_carriers_per_atom(doping_spec, vol_cm3, n_atoms, tag="3D"):
+    """每**原子**载流子数防护（2026-09-28 用户批准，按原子归一）。
+
+    3D 的 DOPING 是**体浓度 cm^-3**，每原胞载流子数 = |n| × V_cell，再除以原子数：
+      > 0.5  个/原子 -> 报错（这种量级只可能是单位填错）；
+      > 0.05 个/原子 -> 告警（刚带近似/非简并假设开始失效）。
+    ★ 按原子而不是按原胞（用户指正）：每原胞取决于晶胞大小，同一材料用原胞还是惯用胞
+      数字能差 4 倍（Si 原胞 2 原子 vs 惯用胞 8 原子），按原胞会误拦正常计算。
+    2D 那道防的是"面密度/体浓度混用"（2026-09-27 MoS2 事故），这道是 3D 的对称补口。
+    """
+    if not vol_cm3 or not n_atoms:
+        return
+    vals = [abs(float(v)) for v in _doping_endpoints(doping_spec)]
+    if not vals:
+        return
+    worst_cell = max(vals) * vol_cm3
+    worst = worst_cell / float(n_atoms)
+    _show = sorted(set(vals))[-2:]
+    detail = "、".join("%.3g cm^-3 -> %.3g/原子" % (v, v * vol_cm3 / float(n_atoms)) for v in _show)
+    if worst > 0.5:
+        sys.exit("[ERROR] %s 每原子载流子数 = %.4g > 0.5（%s；原胞 %d 原子，最大 %.4g/原胞）——"
+                 "每原子多得 >0.5 个额外载流子在原子数有限的体系里不可能，多半是单位/量级写错"
+                 "（3D 应为 cm^-3）。AMSET 会解出荒谬的费米能级并崩在 zero-size array。"
+                 % (tag, worst, detail, int(n_atoms), worst_cell))
+    if worst > 0.05:
+        print("[WARN] %s 每原子载流子数 = %.4g > 0.05（%s；原胞 %d 原子，最大 %.4g/原胞）："
+              "已超出刚带近似/非简并假设，迁移率绝对值仅供参考。"
+              % (tag, worst, detail, int(n_atoms), worst_cell))
+
+
 def apply_2d_corrections(cwd: Path, elastic):
     """返回 (is_2d, elastic_修正后, c_len)。3D 或判定不出时原样返回。"""
     mode = str(TWO_D_MODE).lower()
@@ -1147,6 +1234,8 @@ def write_settings(out: Path, eps_inf, eps_static, gap, elastic,
             "#   绝对值不可信。需要可发表的迁移率请用 Perturbo / EPW。",
             "# ========================",
         ]
+    # patch_carrier_guard_3d（2026-09-28 用户批准）：每**原子**载流子数防护（3D 对称补口）。
+    check_carriers_per_atom(DOPING, _cell_volume_cm3(Path.cwd()), _count_atoms(Path.cwd()), tag="3D S8")
     _dop = expand_spec(DOPING, log=True)        # doping 对数均布
     _tmp = expand_spec(TEMPERATURES, log=False)  # 温度线性
     lines += ["doping: [%s]" % ", ".join("%.6e" % v for v in _dop),
@@ -1296,6 +1385,29 @@ def _install_preflight(out):
         return False
     import shutil
     dst = Path(out) / PREFLIGHT_SRC_NAME
+    if src.resolve() != dst.resolve():
+        shutil.copyfile(src, dst)
+    return True
+
+
+FERMI_CHECK_SRC_NAME = "fermi_window_check.py"
+
+
+def _install_fermi_check(out):
+    """把 fermi_window_check.py 复制进运行目录（作业链末尾的费米能级窗口检查要用）。
+
+    ★ 2026-09-28 用户批准：这道检查**不依赖 WRITE_MESH**，S8 与 S8.4 都挂。
+    脚本本体住在 step8.4_amset2d/（与 overlap_preflight.py 同款，靠 gen_need 的
+    basename 唯一兜底找到）。
+    """
+    src = next((p for p in (Path(__file__).resolve().parent / FERMI_CHECK_SRC_NAME,
+                            Path.cwd() / FERMI_CHECK_SRC_NAME) if p.is_file()), None)
+    if src is None:
+        print("[WARN] 找不到 %s —— 作业链末尾的费米能级窗口检查会跳过"
+              % FERMI_CHECK_SRC_NAME)
+        return False
+    import shutil
+    dst = Path(out) / FERMI_CHECK_SRC_NAME
     if src.resolve() != dst.resolve():
         shutil.copyfile(src, dst)
     return True
@@ -1679,6 +1791,7 @@ def main():
                    is_2d=is_2d, c_len=c_len)
     # patch_overlap_preflight（V24/V25.10）：gen 时的配置闸 + 把检查脚本带进运行目录
     _install_preflight(out)
+    _install_fermi_check(out)   # patch_fermi_window（2026-09-28 用户批准）
     _preflight_gate(cwd, out, UNITY_OVERLAP_2D if is_2d else False)
 
     # tf 把 submit_amset.tpl 与本脚本一起推到 gen 运行目录，但按原名推、不会改成

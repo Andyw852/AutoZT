@@ -1316,6 +1316,15 @@ def do_submit(cfg, t, m, s, force, gen_first, contcar_cp, tag, submit=True):
     if gen_first or not s["has_incar"]:
         _fetch_stamp_clear(m, s["name"])
         s["done"] = False  # the collected completion belongs to the previous run
+        # ★ 2026-09-28 用户批准（扇出修复）：gen 成功后，上一轮采到的**扇出状态整体作废**。
+        #   只作废 done 是不够的 —— 提交时用的仍是 gen 之前采到的名单：
+        #     · 旧状态全部完成 -> fan_todo=[] -> 闸门拒绝提交（Si_ke34 的 S7 就是这样）；
+        #     · 旧状态部分完成 -> 只提交旧名单里的子目录，新生成的子目录被漏掉
+        #       （Si_ke34 当时旧名单里有 deform-04，新生成的没有）。
+        #   删掉这些键 = 走"提交全部"这条"首次 gen 之后"的路径（见本函数说明）。
+        if s.get("fanout"):
+            for _k in ("fan_todo", "subs", "fan_done", "fan_jobids"):
+                s.pop(_k, None)
         _relay_prev_across_host(cfg, m, s, t)   # v1.13：跨集群按 needs 回传依赖产物（含 WAVECAR）
         ok, out = remote_gen(cfg, t, m, s["name"], host=s.get("_host"), wd=s.get("_wd"))
         if not ok:
@@ -1341,6 +1350,7 @@ def do_submit(cfg, t, m, s, force, gen_first, contcar_cp, tag, submit=True):
         ok, reason = _remote_submit_preflight(cfg, m, s, t)
         if not ok:
             print("%s: 远端提交前检查失败：%s" % (tag, reason), file=sys.stderr)
+            log_action(m, "提交前检查失败 %s：%s" % (s["label"], reason))
             return False
     jobname = "%s-%s-%s" % (m["name"].split("/")[-1], m["tt"], s["label"])
     ok, out, jid = remote_sbatch(cfg, s, jobname=jobname, force=force)
@@ -1355,6 +1365,13 @@ def do_submit(cfg, t, m, s, force, gen_first, contcar_cp, tag, submit=True):
                             else (_i18n.t("提交失败。", "submit failed. ") + out)))
     if ok:
         log_action(m, "%s jobid=%s" % (tag.split(" ", 1)[0] + " " + s["label"], jid))
+    else:
+        # ★ 2026-09-28 用户建议：提交失败/被拒也落 tf.log。
+        #   否则"扇出步骤的待补清单为空"这类拒绝只在终端闪一下，事后翻 tf.log
+        #   什么都查不到（Si_ke34 S7 就是这样，只能靠推断）。
+        _why = (out or "").strip().splitlines()
+        log_action(m, "提交失败 %s：%s"
+                   % (s["label"], _why[0] if _why else "(无输出)"))
         _fetch_stamp_clear(m, s["name"])   # v1.11：重交后结果会更新，清戳记重拉
         s["done"] = False  # do not reuse completion from before submission
         _scancel_clear(m, s["name"])       # v1.4：重交成功，清 stop 标记

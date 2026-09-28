@@ -5232,8 +5232,8 @@ SPEC 的 `INTERPOLATION_FACTOR` 默认值设为 **None**（读到 None 用出厂
 
 **生产口径**：263x263x21 网格上空穴有 **8-10% 的插值不确定度** ⇒ MoS2 出生产结果前要在
 IBZ 路径上做 **f = 61 / 90 / 120** 的 factor 收敛扫描（若 f=90 与 f=120 的空穴迁移率差 <3%，
-目标网格就取 f=90 那一档）。f=120 时最终网格约 329x329x27、峰值内存约 130 GB
-（现在 66.6 GB）—— 投之前先确认 jzzn 节点内存。
+目标网格就取 f=90 那一档）。f=120 时最终网格约 329x329x27、峰值内存约 **195-200 GB**
+—— 见 V113 的内存口径更正（V112 里写的"现在 66.6 GB"没有出处，已作废）。投之前先确认 jzzn 节点内存。
 
 ### 第二批推送清单（用户指定）
 (a) 2D 的 gen 闸门、`overlap_preflight.py`、**S3 的全网格提示**都调用与 S8 的 `_symmetry_flags`
@@ -5243,4 +5243,139 @@ IBZ 路径上做 **f = 61 / 90 / 120** 的 factor 收敛扫描（若 f=90 与 f=
 
 
 
+
+
+---
+
+## V113（2026-09-28）：两道载流子防护补口 + 内存口径更正 + 扇出证据定级
+
+### 1. 内存口径：AMSET 自报的 "max memory" 不能当资源依据
+
+AMSET 日志里的 `max memory` 用 memory_profiler 测，**只统计主进程**（`include_children=False`），
+24 个 worker 的私有内存不在内。改用 **作业级 `sacct MaxRSS`**（cgroup 口径，含全部子进程）：
+
+| 作业 | 规模 | AMSET 自报 | **作业级 MaxRSS** | 倍数 |
+|---|---|---|---|---|
+| 3913365 GaAs S8（109³，IBZ，3D） | 1.30M 点 / 243 万 band-点 | 36.3 GiB | **150.9 GiB（162 GB）** | 4.15× |
+| 3914407 MoS₂ S8.4 unity f=61 | 1.45M 点（263×263×21） | 43.6 GiB | **91.1 GiB（97.8 GB）** | 2.09× |
+| 3911340 MoS₂ S3b 全网格波函数（参考） | — | — | 64.3 GiB | — |
+| 3911732 GaAs S8 全网格（OOM 那次） | — | — | 446 GiB（申请 236 GiB 失败） | — |
+
+★ **V112 里写的"现在 66.6 GB"查不到出处，作废**。它是我在没有来源的情况下写进文档的数字；
+同一次运行的权威值是上表 3914407 的 **91.1 GiB**。
+
+**按作业级重估**（以实测点数为准，网格用 BoltzTraP2 真公式算，见 `tmp/mesh_gan2.py`）：
+
+| 配置 | 最终网格 | 点数 | 作业级估算 |
+|---|---|---|---|
+| **GaN S8**（S3b 全网格 nk=4800，f=7） | 149×149×79 | 1.754M | 见下（带数换算） |
+| MoS₂ f=90 | 约 300×300×25 | 2.25M | **≈150 GB** |
+| MoS₂ f=120 | 约 329×329×27 | 2.92M | **≈195 GB** |
+
+★ **必须把带数算进去（2026-09-28 用户指正）**：GaAs 基线 150.9 GiB 对应 130 万点、**5 条带**；
+GaN 是 175 万点、**6–8 条带**，按"点数 × 带数"换算 =
+150.9 × (1.754/1.30) × (6/5 .. 8/5) = **244–326 GiB（262–350 GB）**，再加 PIE（弹性散射，几乎不增内存）。
+节点空闲约 530 GB（`FreeMem`）⇒ 放得下，但**前提是没有别的作业挤同一节点**。
+
+作业级值是 AMSET 自报的 2–4 倍，多出来的主要是 worker 进程各自的私有内存 ——
+**所以 nworkers 是控制内存的主要手段**，而不是"多申请核数"。
+
+### 2. jzzn 节点内存：Slurm **不统计/不限制**内存
+
+```
+sinfo -N -o "%N %m"        -> cu01 1（MEMORY=1，不是 MB）
+scontrol show node cu01    -> RealMemory=1  CfgTRES=cpu=192,mem=1M  FreeMem=530950
+scontrol show config       -> DefMemPerNode=UNLIMITED  MaxMemPerNode=UNLIMITED
+                              SelectTypeParameters=CR_CORE（内存不参与分配）
+```
+
+⇒ 节点实际空闲内存 464–575 GB（`FreeMem` 是唯一能看的数），但 **Slurm 不按内存调度**，
+`--mem` 在 jzzn 上要么被忽略、要么按 `mem=1M` 校验而拒收。**在模板里加 `--mem` 之前必须先确认**，
+否则可能把整个技能的提交打挂。替代做法：提交前的内存估算 guard + 首次运行盯 `sstat`。
+
+### 3. 载流子防护补口（2026-09-28 用户批准）
+
+**(a) 3D 对称补口** `step8_amset/gen_step10_amset.py::check_carriers_per_atom()`：
+每**原子**载流子数 = |DOPING| × V_cell / N_atom（V 用 `_cell_volume_cm3()`，N_atom 用
+`_count_atoms()`，兼容 VASP4/VASP5）；`>0.5` 报错、`>0.05` 告警。
+
+★ **口径从"每原胞"改成"每原子"（2026-09-28 用户指正）**：每原胞数取决于晶胞大小 ——
+2D C₆₀ 网络原胞约 146 Å²、60 原子，出厂上限 1e14 cm⁻² 对应 **1.46 个/原胞**（按原胞直接误拦主力体系），
+而每原子只有 0.024，完全正常；Si 用原胞（2 原子）还是惯用胞（8 原子）数字差 4 倍。
+自测 `test_carrier_guard.py`（9 例）：C₆₀ 网络不报、MoS₂ 事故值约 2893/原子 仍报错、
+Si 原胞与惯用胞结论一致（都 0.200/原子 -> 告警）、Mg₂C₆₀ 1e21 不报、1e23 报错。
+
+**(b) 费米能级窗口自检** `step8.4_amset2d/fermi_window_check.py`（S8 与 S8.4 **两条链都挂**）：
+读最新 `transport*.json` 的 `fermi_levels` + 同目录 `vasprun.xml` 的 VBM/CBM，任一费米能级落在
+`[VBM-2 eV, CBM+2 eV]` 之外即 **exit 1**；金属/零带隙/取不到带边一律跳过。
+
+- **不依赖 `WRITE_MESH`** —— 这正是原设计的缺口：`postprocess_intrinsic.py` 只在 2D + WRITE_MESH=true 时
+  才跑，默认设置下 3D 根本不跑，MoS₂ 那次单位事故走默认设置拦不住。
+- 必须放在 `cp ... transport.json` **之前**：否则检查失败时 transport.json 已存在，autozt 的 marker
+  判据会把失败隐藏（V63 的教训）。
+- ★ **必须算 scissor Δ（2026-09-28 用户指正）**：S8 默认 `REQUIRE_BANDGAP=True`，一律写 `bandgap:`，
+  AMSET 把导带整体上移 Δ = bandgap − DFT带隙（源码 `interpolation/bandstructure.py:716`
+  `scissor = bandgap - interp_bandgap`）⇒ 上限必须是 **CBM + Δ + 2 eV**，价带不上移。
+  不算 Δ 会把**跑完好几个小时的正常作业误判失败**。实测 GaAs：VBM 3.7544 / CBM 4.1720 /
+  DFT 带隙 0.4176 / bandgap 1.2735 -> Δ=0.8559、窗口 [1.7544, 7.0279]，90 个费米能级全在窗口内 ✔
+- ★ **带边不能用 pymatgen 的 `get_vbm()/get_cbm()`**：它们先调 `is_metal()`，而 `is_metal()` 依赖
+  `bs.efermi`；实测这些 step3 vasprun.xml **没有 `<efermi>` 标签**（`v.efermi is None`）-> TypeError。
+  改用本征值第 2 列（占据数）：VBM = 占据态最高能、CBM = 空态最低能。实测 GaAs 0.418 / GaN 1.901 eV，
+  与 PBE 相符。
+- 自测 `test_fermi_window_check.py` **9 例**全过，含**真实 GaAs S8 数值**（±1e21 + scissor，不误报）、
+  `scissor_delta` 三分支、Δ=0 会误杀 / Δ=1.0 放行的对照、以及 **-153.9 eV 必须失败**。
+- `postprocess_intrinsic.py` 里的 1% 核对**保留**（口径是带符号净浓度 p−n，与 AMSET 求解目标一致；
+  求解器依次尝试 1e-5/1e-4/1e-3/1e-2/0.1/1，只有退到 0.1 或 1 那两档才会触发 1% 门）。
+
+### 4. 扇出失败路径：证据定级为 **推断**
+
+`Si_ke34` S7 那次"待补清单为空"的**原始输出没有留存**（不在 `tf.log`，也不在本仓任何日志里；
+`tf.log` 只有 `2026-09-28 15:42:19 gen S7_deform（只生成输入，待 start 提交）` 与
+`15:45:29 start S7_deform jobid=3914906..09` 两条**成功**记录）。
+因此"同一次 `start` 先 gen 再提交、读到过期 `fan_todo=[]` 被拒"是**代码路径推断**（`workflow.py:1203`
+闸门 + `:1316-1327` 的 gen 分支），**不是已确认**。回归测试 `tests/test_fanout_stale_state.py`
+复现的是这个状态（5 例，含反证与"拒绝要落 tf.log"）。
+
+已按用户建议补上：**提交失败/被拒也写 `tf.log`**（`do_submit` 的 else 分支 + 提交前检查失败分支），
+下次同类事件就有原始记录可查。
+
+### 5. zt-dft-cpu 复用 ke 的 S8：漏声明 `fermi_window_check.py` 会白跑几小时（2026-09-28 用户指正）
+
+`zt-dft-cpu` 的 S8 是 `src: step8_amset` 的软链复用，但**它有自己的 skill.yaml**，
+`gen_need` 必须单独声明 —— 2026-09-18 已经因为 `overlap_preflight.py` 没声明出过一次事故
+（那次是作业一启动就秒失败，反而好查）。费米窗口自检挂在作业链**末尾**，漏声明的话
+AMSET 要跑完几个小时才因为找不到文件而失败，更糟。已补：
+
+- `skill/zt-dft-cpu/fermi_window_check.py` -> 软链 `../ke-dft-cpu/step8.4_amset2d/fermi_window_check.py`
+  （与既有的 `overlap_preflight.py` 软链同款）；
+- `skill/zt-dft-cpu/skill.yaml` 的 S8 `gen_need` 加 `fermi_window_check.py`。
+
+### 6. jzzn 资源策略与 GaN S8 投法（2026-09-28 用户决定）
+
+- **不加 `--mem`**：jzzn 内存不参与调度（`CR_CORE` + `RealMemory=1`），加了要么被忽略、要么被拒收。
+- **GaN S8 用 `--exclusive`**：第一次跑 3D 全网格路径，内存 244–326 GiB 且不确定，独占最稳。
+  已实测 `sbatch --test-only -p cpu192 --exclusive --ntasks-per-node=24` ->
+  `Job 3915209 to start ... using 192 processors on nodes cu02`（接受），且队列里没有该作业
+  （确认 `--test-only` 不会真提交）。落在**项目级模板**：
+  `GaN/ke-dft-cpu/project_setting/templates/step8_amset/submit_amset.tpl`（只有本材料用，
+  占位符与 `setting/jzzn/templates/submit_amset.tpl` 完全一致：JOBNAME/AMSET_CMD/AMSET_ENV）。
+- **显式写死 `NWORKERS = 24`**（GaN 的 step8 step.conf）：默认逻辑按"提交实际分配核数"自动设
+  nworkers，核数一涨 nworkers 跟着涨、worker 私有内存成倍增加；不要靠多申请核数来占内存。
+- 首跑的第一个小时用 `sstat` 盯内存。
+
+### 7. 推送清单（更正：其余已在远端 `975379a`）
+
+- `autozt/workflow.py`
+- `skill/ke-dft-cpu/skill.yaml`
+- `skill/ke-dft-cpu/step8_amset/gen_step10_amset.py`
+- `skill/ke-dft-cpu/step8.4_amset2d/gen_step14_amset2d.py`
+- `skill/ke-dft-cpu/step8.4_amset2d/postprocess_intrinsic.py`
+- `skill/ke-dft-cpu/step8.4_amset2d/fermi_window_check.py`（新）
+- `skill/ke-dft-cpu/step8.4_amset2d/test_fermi_window_check.py`（新，9 例）
+- `skill/ke-dft-cpu/step8.4_amset2d/test_carrier_guard.py`（新，9 例）
+- `skill/ke-dft-cpu/step8.4_amset2d/test_postprocess_intrinsic.py`（每原子口径新用例）
+- `skill/ke-dft-cpu/step8.4_amset2d/VERIFICATION.md`（V112 更正 + V113）
+- `skill/zt-dft-cpu/skill.yaml`
+- `skill/zt-dft-cpu/fermi_window_check.py`（新软链）
+- `tests/test_fanout_stale_state.py`（新，5 例，**单独列出**）
 

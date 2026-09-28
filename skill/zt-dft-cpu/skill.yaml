@@ -167,8 +167,11 @@ optional_steps:
      # 'python overlap_preflight.py --in-job || exit 1'，而 ke 自己的 S8 gen_need 没声明它
      # （在 ke 单技能里靠 basename 递归兜底能碰巧找到，本技能靠软链装配找不到）→
      # 不推这个文件，作业一起来就会秒失败。这里显式声明 + 根目录软链。
+     # fermi_window_check.py（2026-09-28）：同款问题，而且**更隐蔽** —— ke 的 2026-09-28
+     # 把费米能级窗口自检挂在作业链**末尾**（AMSET 跑完之后），漏推这个文件会让作业白跑
+     # 几个小时才失败。同样显式声明 + 根目录软链。
      gen_need: [stepconf.py, step.conf, ke_common.py, submit_amset.tpl, vdw_radii.py, discriminant_common.py,
-                overlap_preflight.py],
+                overlap_preflight.py, fermi_window_check.py],
          fetch_all: true,
          needs: ["step4_wave", "step5_dielect", "step6_elastic", "step7b_deform_read",
                  "step2_bandgap/step2.2_pbe_plot", "step2_bandgap/step2.3_hse_plot"]}

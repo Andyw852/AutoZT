@@ -122,7 +122,7 @@ steps:
      check: marker, marker: "transport.json:thermal_conductivity",
      # gen_need 带上 overlap_preflight.py（住在 step8.4_amset2d/，靠 report.find_asset 的
     #   basename 唯一兜底找到）：gen 时查维度/重叠模式，并把它复制进运行目录供作业内 --in-job。
-    gen: gen_step10_amset.py, gen_need: [stepconf.py, step.conf, ke_common.py, submit_amset.tpl, vdw_radii.py, discriminant_common.py, overlap_preflight.py], fetch_all: true,
+    gen: gen_step10_amset.py, gen_need: [stepconf.py, step.conf, ke_common.py, submit_amset.tpl, vdw_radii.py, discriminant_common.py, overlap_preflight.py, fermi_window_check.py], fetch_all: true,
      needs: ["step4_wave", "step5_dielect", "step6_elastic", "step7b_deform_read", "step2_bandgap/step2.2_pbe_plot", "step2_bandgap/step2.3_hse_plot"]}
 
 # --- 2 带隙段：子步嵌套进 step2_bandgap/，状态表合并成 S2_bandgap 一列 ---------
@@ -296,7 +296,7 @@ optional_steps:
          gen: gen_step14_amset2d.py,
          gen_need: [stepconf.py, step.conf, ke_common.py, dim_common.py, submit_amset.tpl, vdw_radii.py,
                     discriminant_common.py, amset2d_plugin.py, amset2d_pop_freq.py,
-                    overlap_preflight.py, postprocess_intrinsic.py],
+                    overlap_preflight.py, postprocess_intrinsic.py, fermi_window_check.py],
          fetch_all: true,
          needs: ["step4_wave", "step5_dielect", "step6_elastic", "step7b_deform_read",
                  "step2_bandgap/step2.2_pbe_plot", "step2_bandgap/step2.3_hse_plot"]}

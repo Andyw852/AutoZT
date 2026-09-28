@@ -852,6 +852,72 @@ def _doping_endpoints(spec):
     return vals
 
 
+def _count_atoms(cwd):
+    """读 POSCAR/CONTCAR 的原子总数；找不到/解析失败返回 None。
+
+    兼容 VASP5（第 6 行元素名、第 7 行数量）与 VASP4（第 6 行就是数量）。
+    """
+    for d in STRUCT_CANDS:
+        for fn in ("CONTCAR", "POSCAR"):
+            p = Path(cwd) / d / fn
+            if not p.is_file():
+                continue
+            try:
+                ln = p.read_text(encoding="utf-8-sig", errors="ignore").splitlines()
+                def _isint(t):
+                    try:
+                        return abs(float(t) - int(float(t))) < 1e-9
+                    except ValueError:
+                        return False
+                toks = ln[5].split()
+                if toks and all(_isint(t) for t in toks):
+                    return sum(int(float(t)) for t in toks)
+                return sum(int(float(t)) for t in ln[6].split())
+            except (OSError, IndexError, ValueError):
+                continue
+    return None
+
+
+def check_carriers_per_atom(doping_spec, per_cell_factor, n_atoms, tag="2D"):
+    """每**原子**载流子数防护（2026-09-28 用户批准，按原子归一）。
+
+    DOPING 在本技能里是**面密度 cm^-2**（gen 再按 c 折算成体浓度给 AMSET）。
+    一旦把体浓度（cm^-3）当成面密度填进来，载流子数就会离谱地大：
+    2026-09-27 MoS2 那次 DOPING=1.003469e19 cm^-2 -> 8843 载流子/原胞 ->
+    Fermi 求解 dfde≈0 -> amset calculate_fd_cutoffs 报 zero-size array。
+
+    ★ 为什么按**原子**而不是按原胞（用户指正）：每原胞载流子数取决于晶胞大小，
+      C60 网络原胞（约 146 Å²、60 原子）在出厂上限 1e14 cm^-2 下是 1.46 个/原胞，
+      按原胞会**误拦主力体系**；按原子只有 0.024 个/原子，完全正常。
+    判据：
+      >0.5  个/原子 -> 报错（这种量级只可能是单位填错）；
+      >0.05 个/原子 -> 告警（刚带近似/非简并假设开始失效）。
+    per_cell_factor = 面密度 -> 每原胞载流子数的换算因子（2D = 面内面积 cm²）。
+    """
+    if not per_cell_factor or not n_atoms:
+        return
+    vals = [abs(float(v)) for v in _doping_endpoints(doping_spec)]
+    if not vals:
+        return
+    worst_cell = max(vals) * per_cell_factor
+    worst = worst_cell / float(n_atoms)
+    _show = sorted(set(vals))[-2:]
+    detail = "、".join("%.3g cm^-2 -> %.3g/原子" % (v, v * per_cell_factor / float(n_atoms))
+                     for v in _show)
+    if worst > 0.5:
+        sys.exit(
+            "[ERROR] %s 每原子载流子数 = %.4g > 0.5（%s；原胞 %d 原子，最大 %.4g/原胞）——"
+            "DOPING 是**面密度 cm^-2**，这个量级说明填成了体浓度 cm^-3（或单位写错）。"
+            "每原子多得 >0.5 个额外载流子在原子数有限的体系里不可能，AMSET 会解出荒谬的"
+            "费米能级并崩在 zero-size array。请按 cm^-2 重填（例如 1e13 cm^-2 量级）。"
+            % (tag, worst, detail, int(n_atoms), worst_cell)
+        )
+    if worst > 0.05:
+        print("[WARN] %s 每原子载流子数 = %.4g > 0.05（%s；原胞 %d 原子，最大 %.4g/原胞）："
+              "已超出刚带近似/非简并假设，迁移率绝对值仅供参考。"
+              % (tag, worst, detail, int(n_atoms), worst_cell))
+
+
 # --------------------------------------------------------------------------
 # amset2d 插件需要的输入：层法向 / 原始 slab 介电 / 面内极性模频率 / 压电张量
 # --------------------------------------------------------------------------
@@ -1214,7 +1280,10 @@ def apply_2d_corrections(cwd: Path, elastic, eps_inf=None, eps_static=None):
         "areal_density_factor_cm": c_len * 1e-8,
         "areal_density_note": "n_2D [cm^-2] = n_3D [cm^-3] x cell_c [cm]",
         "inplane_cell_area_cm2": _CELL_AREA_CM2,
-        "carrier_per_cell_threshold": 0.05,
+        # ★ 2026-09-28 用户批准：阈值口径从"每原胞"改成"每原子"（每原胞取决于晶胞大小，
+        #   C60 网络在出厂掺杂上限下会被误拦）。postprocess_intrinsic._doping_marks 读这个键。
+        "carrier_per_atom_threshold": 0.02,
+        "num_atoms": _count_atoms(cwd),
         "free_carrier_screening": bool(FREE_CARRIER_SCREENING_2D),
         "skill_rev": _SKILL_REV,
         "plugin": PLUGIN_SRC_NAME,
@@ -1428,6 +1497,9 @@ def write_settings(out: Path, eps_inf, eps_static, gap, elastic,
             "#   要发表的绝对值建议用 EPW / Perturbo（开二维库仑截断）对照。",
             "# ========================",
         ]
+    # patch_carrier_guard（2026-09-28 用户批准）：每**原子**载流子数防护。
+    #   >0.5 报错、>0.05 告警（2026-09-27 MoS2 的 DOPING 单位事故就是这里该拦住的）。
+    check_carriers_per_atom(DOPING, _CELL_AREA_CM2, _count_atoms(Path.cwd()), tag="2D S8.4")
     _dop_areal = expand_spec(DOPING, log=True)   # 面密度 cm^-2
     _dop = [v / (c_len * 1e-8) for v in _dop_areal] if c_len else _dop_areal  # 体浓度 cm^-3
     _tmp = expand_spec(TEMPERATURES, log=False)  # 温度线性
@@ -1558,6 +1630,27 @@ def _install_postprocess(out):
     if src.resolve() != dst.resolve():
         shutil.copyfile(src, dst)
     print("[OK] 本征后处理脚本就位：%s" % dst)
+
+
+
+
+def _install_fermi_check(out):
+    """把 fermi_window_check.py 复制进运行目录（作业链末尾的费米能级窗口检查要用）。
+
+    ★ 2026-09-28 用户批准：**不依赖 WRITE_MESH** —— 2D 默认 WRITE_MESH=false，
+    只靠 postprocess 的 1% 核对拦不住单位事故，所以作业链末尾固定加这道自检。
+    脚本本体住在本目录（与 overlap_preflight.py 同款，靠 gen_need 兜底找到）。
+    """
+    here = Path(__file__).resolve().parent
+    name = "fermi_window_check.py"
+    src = next((p for p in (here / name, Path.cwd() / name) if p.is_file()), None)
+    if src is None:
+        print("[WARN] 找不到 %s —— 作业链末尾的费米能级窗口检查会跳过" % name)
+        return
+    dst = Path(out) / name
+    if src.resolve() != dst.resolve():
+        shutil.copyfile(src, dst)
+    print("[OK] 费米能级窗口检查脚本就位：%s" % dst)
 
 
 def _install_preflight(out):
@@ -1962,6 +2055,7 @@ def main():
     _install_plugin(out)
     _install_preflight(out)
     _install_postprocess(out)
+    _install_fermi_check(out)   # patch_fermi_window（2026-09-28 用户批准）
     _wdir = "step4b_wave_full" if WAVEFUNCTION_FULL else WAVE_DIR
     # [guard-2026-09-26] 真实重叠（2D 出厂默认）要求全网格 h5 真的在。
     #   只检查 WAVEFUNCTION_FULL 这个标志不够 —— 分支没打开时标志仍是 True，
@@ -2056,6 +2150,10 @@ def main():
     _acmd = AMSET_CMD
     if WRITE_MESH:
         _acmd = _acmd + " && python postprocess_intrinsic.py --check-reproduce"
+    # ★ 2026-09-28 用户批准（patch_fermi_window）：不依赖 WRITE_MESH 的费米能级窗口检查，
+    #   必须放在 cp 成 transport.json **之前** —— 否则失败时 transport.json 已存在，
+    #   autozt marker 判据会把失败隐藏（V63 的教训）。
+    _acmd = _acmd + " && python fermi_window_check.py"
     _acmd = _acmd + AMSET_TAIL
     text = (text.replace("{{JOBNAME}}", jobname)
                 .replace("{{AMSET_CMD}}", _acmd)

@@ -125,6 +125,19 @@ _m_high = P._doping_marks(_dm_dir, _high, _temps_arr, _S_ok)
 ok(_m_high.get("0") == ["超出刚带近似"] and _m_high.get("1") == ["超出刚带近似"],
    "_doping_marks: 1e21 每原胞>0.05 -> 超出刚带近似")
 
+# 每原子口径（2026-09-28 用户批准）：同样每原胞 0.297 个，60 原子体系每原子只有 0.005 -> 不标；
+# 传真实 MoS2 原胞的 3 原子 -> 0.099 个/原子 -> 标。
+with open(os.path.join(_dm_dir, "2d_correction.json"), "w", encoding="utf-8") as _f:
+    _json.dump({"areal_density_factor_cm": 3.4879004e-07,
+                "inplane_cell_area_cm2": 8.524118625e-16,
+                "carrier_per_atom_threshold": 0.02,
+                "num_atoms": 60}, _f)
+_m_atom = P._doping_marks(_dm_dir, _high, _temps_arr, _S_ok)
+ok(_m_atom == {}, "_doping_marks: 60 原子体系每原子 0.005 < 0.02 -> 不标（按原胞会误标）")
+_m_atom3 = P._doping_marks(_dm_dir, _high, _temps_arr, _S_ok, n_atoms=3)
+ok(_m_atom3.get("0") == ["超出刚带近似"] and _m_atom3.get("1") == ["超出刚带近似"],
+   "_doping_marks: n_atoms=3 时每原子 0.099 > 0.02 -> 超出刚带近似")
+
 # ---------------- 可选：真实 mesh.h5 的 key 解析 ----------------
 try:
     import h5py  # noqa: F401

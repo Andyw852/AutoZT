@@ -249,7 +249,49 @@ def build_amset_data(run_dir, nworkers=None, progress_bar=False):
     )
     ad.calculate_dos(estep=s["dos_estep"], progress_bar=progress_bar)
     ad.set_doping_and_temperatures(s["doping"], s["temperatures"])
+    # patch_carrier_guard（2026-09-28 用户批准）：已实现 vs 请求载流子浓度（>1% 报错）。
+    check_achieved_doping(ad)
     return ad, s, amset.__version__
+
+
+def check_achieved_doping(ad, tol=0.01):
+    """已实现载流子浓度 vs 请求掺杂（2026-09-28 用户批准）。
+
+    AMSET 的 AmsetData.set_doping_and_temperatures 在解每个 (掺杂, 温度) 的费米能级时，
+    会把 DOS 积分出来的**实际**电子/空穴浓度存进 ad.electron_conc / ad.hole_conc。
+    正常网格下它应与请求值一致（求解器自带 1% 收敛门）；一旦偏差 > tol，说明 DOS/网格/
+    费米求解没对上 —— 单位换算错、网格太粗、或带边被切掉，这种结果不可信，直接报错。
+    （2026-09-27 MoS2：DOPING 单位事故 -> 费米能级 -153.9 eV，远在 DOS 窗口之外。）
+    """
+    import numpy as np
+    from amset.constants import bohr_to_cm
+    doping = getattr(ad, "doping", None)
+    if doping is None:
+        return
+    doping = np.asarray(doping, float)
+    ec = np.asarray(getattr(ad, "electron_conc", []), float)
+    hc = np.asarray(getattr(ad, "hole_conc", []), float)
+    if doping.size == 0 or ec.size == 0 or hc.size == 0:
+        return
+    to_cm3 = (1.0 / bohr_to_cm) ** 3
+    temps = np.asarray(getattr(ad, "temperatures", []), float)
+    # ★ 口径：AMSET 的 Fermi 求解目标就是**带符号的净浓度** p - n（get_doping 返回
+    #   conc = vb_conc - cb_conc，负 = n 型），所以这里必须比 p-n 与 doping，
+    #   不能比"多数载流子" —— 本征区 n_i 很大时 cb_conc 本来就不等于 |doping|。
+    req = doping.copy()
+    ach = hc - ec                                          # 带符号净浓度（负 = n 型）
+    nz = req != 0
+    if not np.any(nz):
+        print("[..] 载流子浓度核对：doping 全为 0，跳过")
+        return
+    with np.errstate(divide="ignore", invalid="ignore"):
+        rel = np.abs(ach / req[:, None] - 1.0)
+    rel = np.where(nz[:, None], rel, np.nan)
+    i, j = [int(x) for x in np.unravel_index(np.nanargmax(rel), rel.shape)]
+    worst = float(rel[i, j])
+    print("[..] 载流子浓度核对：max|achieved(p-n)/requested-1| = %.3e（索引 %d，请求 %.3e cm^-3 @ %g K，实际 %.3e cm^-3）" % (worst, i, req[i] * to_cm3, float(temps[j]), ach[i, j] * to_cm3))
+    if worst > tol:
+        raise SystemExit("[ERROR] 已实现载流子浓度与请求掺杂偏差 %.2f%% > %.0f%%（索引 %d @ %g K：请求 %.3e，实际 %.3e cm^-3）——DOS/费米求解没对上，本结果不可信。常见根因：① DOPING 单位写错（2D 应为面密度 cm^-2）；② 插值网格太粗（见 settings.yaml / interpolation_info.json）；③ vasprun 与 h5 不同源（S3 与 S3b 网格不一致）；④ energy_cutoff/带隙设置把带边切掉了。" % (worst * 100, tol * 100, i, float(temps[j]), req[i] * to_cm3, ach[i, j] * to_cm3))
 
 
 def coordinate_lookup(query_kpts, all_kpts, decimals=6, tol=1e-5):
@@ -442,19 +484,31 @@ def integrate(ad, labels, separate_labels=()):
 # =====================================================================
 # 输出
 # =====================================================================
-def _doping_marks(run_dir, doping_cm3, temperatures_K, seebeck_inplane_uV_K):
-    """返回 {doping_index: [标记...]}：每原胞>0.05 -> "超出刚带近似"；S 符号与载流子类型不一致 -> "sign_anomaly"。"""
+def _doping_marks(run_dir, doping_cm3, temperatures_K, seebeck_inplane_uV_K, n_atoms=None):
+    """返回 {doping_index: [标记...]}：每**原子**超阈值 -> "超出刚带近似"；S 符号与载流子类型不一致 -> "sign_anomaly"。
+
+    ★ 2026-09-28 用户批准：阈值口径从"每原胞"改成"每**原子**"。每原胞数取决于晶胞大小，
+      C60 网络那种大原胞（约 146 A^2、60 原子）在出厂掺杂上限下会被误标为"超出刚带近似"。
+      优先读 2d_correction.json 的 carrier_per_atom_threshold（默认 0.02）；
+      只有旧键 carrier_per_cell_threshold 时按 n_atoms 折算；n_atoms 未知则退回旧的每原胞判据。
+    """
     marks = {}
-    c_len_cm = area_cm2 = threshold = None
+    c_len_cm = area_cm2 = thr_atom = thr_cell = None
     corr = Path(run_dir) / "2d_correction.json"
     if corr.is_file():
         try:
             d = json.load(open(corr, encoding="utf-8"))
             c_len_cm = d.get("areal_density_factor_cm")
             area_cm2 = d.get("inplane_cell_area_cm2")
-            threshold = d.get("carrier_per_cell_threshold", 0.05)
+            n_atoms = n_atoms or d.get("num_atoms")
+            thr_atom = d.get("carrier_per_atom_threshold")
+            thr_cell = d.get("carrier_per_cell_threshold")
         except (OSError, ValueError, TypeError):
             pass
+    if not thr_atom:
+        thr_atom = (float(thr_cell) / float(n_atoms)) if (thr_cell and n_atoms) else 0.02
+    if not thr_cell:
+        thr_cell = 0.05
     # temperatures_K 可能是 numpy.ndarray（ad.temperatures 直传）或 list，
     # 统一转 list 再取索引，避免 ndarray 没有 .index() 报错。
     t_list = list(np.asarray(temperatures_K, dtype=float))
@@ -466,9 +520,12 @@ def _doping_marks(run_dir, doping_cm3, temperatures_K, seebeck_inplane_uV_K):
         iT = 0
     for i, n3 in enumerate(doping_cm3):
         m = []
-        if c_len_cm and area_cm2 and threshold:
+        if c_len_cm and area_cm2:
             per_cell = abs(float(n3)) * float(c_len_cm) * float(area_cm2)
-            if per_cell > float(threshold):
+            if n_atoms:
+                if per_cell / float(n_atoms) > float(thr_atom):
+                    m.append("超出刚带近似")
+            elif per_cell > float(thr_cell):
                 m.append("超出刚带近似")
         try:
             S = float(seebeck_inplane_uV_K[i][iT])
@@ -483,7 +540,7 @@ def _doping_marks(run_dir, doping_cm3, temperatures_K, seebeck_inplane_uV_K):
 
 def build_result(run_dir, mesh_file, amset_version, settings, all_labels,
                  dropped, kept, transport, doping_cm3, temperatures,
-                 reproduce=None, extra_notes=()):
+                 reproduce=None, extra_notes=(), n_atoms=None):
     mob = transport.get("mobility_cm2_Vs_s", {})
     result = {
         "schema": "autozt.intrinsic_transport/1",
@@ -512,7 +569,7 @@ def build_result(run_dir, mesh_file, amset_version, settings, all_labels,
         },
         "doping_marks": _doping_marks(
             run_dir, doping_cm3, temperatures,
-            inplane_average(transport["seebeck_uV_K"])),
+            inplane_average(transport["seebeck_uV_K"]), n_atoms=n_atoms),
     }
     if reproduce is not None:
         result["reproduction_check"] = reproduce
@@ -640,6 +697,7 @@ def main(argv=None):
         dropped, kept, transport,
         doping_cm3=ad.doping * (1 / bohr_to_cm) ** 3,
         temperatures=ad.temperatures, reproduce=reproduce, extra_notes=notes,
+        n_atoms=int(ad.structure.num_sites),
     )
     out = Path(args.out)
     if not out.is_absolute():
