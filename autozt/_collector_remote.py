@@ -698,7 +698,10 @@ def main():
     _t0 = _time.time()
     args = sys.argv[1:]
     opts = dict(zip(args[::2], args[1::2]))
-    cfg = json.loads(base64.b64decode(opts["--config64"]).decode("utf-8"))
+    # 新版本地端把 payload 写在 stdin 脚本首行（_AUTOZT_CONFIG64），不占 argv；
+    # --config64 仅保留兼容。
+    _inline = globals().get("_AUTOZT_CONFIG64")
+    cfg = json.loads(base64.b64decode(_inline or opts["--config64"]).decode("utf-8"))
     _pp = cfg.get("path_prefix") or ""
     if _pp:
         os.environ["PATH"] = os.path.expandvars(_pp) + os.pathsep + os.environ.get("PATH", "")

@@ -30,17 +30,32 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PROG = os.path.join(ROOT, "bin", "autozt")
 
 # 通用动词工具表：读/写/破坏三类，与技能无关
+_PROJ = {"type": "string",
+         "description": "项目名（tf_<项目>.yaml 的 <项目>，逗号分隔）；按项目裁剪，不用列材料名"}
+
 TOOLS = [
     # ---- 只读 ----
+    ("get_progress", "首选的状态读取：读 monitor 每轮写的本地进度文件——逐材料状态、"
+     "FAIL 结构化码(class/code/action/fail_count)、since/eta、monitor 是否存活；"
+     "不采集、不连超算、秒级返回",
+     {"type": "object", "properties": {"project": _PROJ, "tt": {"type": "string"},
+                                       "material": {"type": "string"},
+                                       "status": {"type": "string"},
+                                       "limit": {"type": "integer", "minimum": 1}},
+      "additionalProperties": False}, "read", ["progress"]),
+    ("doctor", "配置预检（不连超算）：各项目 max_jobs 生效上限、调优旋钮来源、被屏蔽项目及原因、"
+     "跨项目同名材料、monitor/cron 保活、agent 网关策略",
+     {"type": "object", "properties": {"project": _PROJ, "tt": {"type": "string"}},
+      "additionalProperties": False}, "read", ["doctor"]),
     ("list_skills", "列出所有技能（skill.yaml 汇总：步骤数/默认集群/版本）",
      {"type": "object", "properties": {}}, "read", ["skills"]),
     ("list_materials", "列出材料及其步骤状态（只读，不提交、不拉文件）",
-     {"type": "object", "properties": {"tt": {"type": "string"},
+     {"type": "object", "properties": {"project": _PROJ, "tt": {"type": "string"},
                                        "status": {"type": "string"}}}, "read", ["summary"]),
     ("get_summary", "极简汇总（每类型一行计数 + FAIL 清单 + 全局队列）",
-     {"type": "object", "properties": {"tt": {"type": "string"}}}, "read", ["summary"]),
+     {"type": "object", "properties": {"project": _PROJ, "tt": {"type": "string"}}}, "read", ["summary"]),
     ("get_status", "单材料详情（含每步诊断、hpc、work_dir 来源）",
-     {"type": "object", "properties": {"tt": {"type": "string"},
+     {"type": "object", "properties": {"project": _PROJ, "tt": {"type": "string"},
                                        "material": {"type": "string"}},
       "required": ["material"]}, "read", ["status"]),
     ("capabilities", "读取固定 agent 协议、动作和风险边界（只读）",
@@ -92,10 +107,10 @@ TOOLS = [
                                        "material": {"type": "string"}},
       "required": ["material"]}, "mutate", ["fetch"]),
     ("run_ready_steps", "采集已完成结果并一次性提交当前就绪步骤；不改配置或隐式恢复挂死作业",
-     {"type": "object", "properties": {"tt": {"type": "string"}}},
+     {"type": "object", "properties": {"project": _PROJ, "tt": {"type": "string"}}},
      "mutate", ["advance"]),
     ("inspect", "一次返回关注状态、失败诊断和确定性候选动作（只读）",
-     {"type": "object", "properties": {"tt": {"type": "string"},
+     {"type": "object", "properties": {"project": _PROJ, "tt": {"type": "string"},
                                            "material": {"type": "string"},
                                            "status": {"type": "string"},
                                            "view": {"type": "string",
@@ -121,7 +136,7 @@ TOOLS = [
       "required": ["material"]}, "destructive", ["clean"]),
     # ---- 可复现性 ----
     ("cycle", "观察、规则规划，并可选执行一轮非破坏性动作",
-     {"type": "object", "properties": {"tt": {"type": "string"},
+     {"type": "object", "properties": {"project": _PROJ, "tt": {"type": "string"},
                                            "material": {"type": "string"},
                                            "status": {"type": "string"},
                                            "view": {"type": "string",
@@ -134,20 +149,20 @@ TOOLS = [
       "additionalProperties": False}, "mutate", ["cycle"]),
     # ---- LLM 高层接口：内部仍只调用上面的 CLI 能力 ----
     ("get_snapshot", "紧凑状态快照；传 cursor 时只返回变化，降低上下文开销",
-     {"type": "object", "properties": {
+     {"type": "object", "properties": {"project": _PROJ,
          "tt": {"type": "string"}, "material": {"type": "string"},
          "status": {"type": "string"}, "cursor": {"type": "string"},
          "view": {"type": "string", "enum": ["attention", "active", "all"]}},
       "additionalProperties": False}, "read", ["status"]),
     ("propose_actions", "按状态与稳定诊断码生成候选动作；只建议，不执行",
-     {"type": "object", "properties": {
+     {"type": "object", "properties": {"project": _PROJ,
          "tt": {"type": "string"}, "material": {"type": "string"},
          "status": {"type": "string"},
          "include_monitoring": {"type": "boolean"},
          "max_actions": {"type": "integer", "minimum": 1, "maximum": 20}},
       "additionalProperties": False}, "read", ["status"]),
     ("apply_actions", "批量执行已选定的非破坏性动作；破坏性动作始终拒绝",
-     {"type": "object", "properties": {
+     {"type": "object", "properties": {"project": _PROJ,
          "dry_run": {"type": "boolean"},
          "cursor": {"type": "string"},
          "tt": {"type": "string"}, "material": {"type": "string"},
@@ -173,12 +188,14 @@ COMPACT_TOOLS = {
 MONITOR_TOOLS = {
     # Smallest profile for a long-running monitor. It can observe a cursor and
     # run the already-safe cycle, while discovery and triage stay opt-in.
-    "get_snapshot", "cycle",
+    # get_progress 读本地文件（无 ssh），巡检首选。
+    "get_progress", "get_snapshot", "cycle",
 }
 WORKFLOW_TOOLS = {
     # One-shot observation/planning/execution for new LLM integrations.
-    "schema", "capabilities", "list_skills", "describe_skill", "get_snapshot", "inspect",
-    "probe_step", "cycle", "apply_actions", "research_plan", "preflight", "results",
+    "schema", "capabilities", "list_skills", "describe_skill", "get_progress", "doctor",
+    "get_snapshot", "inspect", "probe_step", "cycle", "apply_actions", "research_plan",
+    "preflight", "results",
 }
 
 TOOL_RESULT_SCHEMA = {
@@ -204,9 +221,14 @@ def _cfg_args():
     return ["-c", cfg] if cfg else []
 
 
+def _autozt_argv():
+    # 源码树有 bin/autozt 用它；pip 非 editable 安装没有 bin/，退回 python -m autozt
+    return [sys.executable, PROG] if os.path.isfile(PROG) else [sys.executable, "-m", "autozt"]
+
+
 def _run(argv, timeout=1800):
     """只通过 CLI 执行——门禁/审计/档案全部沿用命令行那一套。"""
-    cmd = [sys.executable, PROG] + _cfg_args() + argv
+    cmd = _autozt_argv() + _cfg_args() + argv
     env = dict(os.environ)
     env.setdefault("AUTOZT_ACTOR", "mcp")   # 让 act 网关认出这是 agent 会话
     try:
@@ -219,6 +241,8 @@ def _run(argv, timeout=1800):
 
 def _mat_args(a):
     out = []
+    if a.get("project"):
+        out += ["--project", str(a["project"])]
     if a.get("tt"):
         out += ["-tt", str(a["tt"])]
     if a.get("material"):
@@ -593,6 +617,32 @@ def _get_snapshot(args):
     return _result("read", data=payload)
 
 
+def _get_progress(args):
+    """读本地 .tf_progress.json（进程内，不起子进程、不采集、不连超算）。"""
+    from autozt import load_config
+    from autozt import progress as _progress
+    cfg_path = (os.environ.get("AUTOZT_CONFIG") or os.environ.get("AUTOZT_CFG") or "").strip()
+    try:
+        cfg, found = load_config(cfg_path or None)
+    except SystemExit as exc:
+        return _result("read", rc=1, error=str(exc.code))
+    cfg["_config_dir"] = os.path.dirname(os.path.abspath(found)) if found else os.getcwd()
+    doc = _progress.load_progress(cfg)
+    if doc is None:
+        return _result("read", rc=1,
+                       error="no progress file at %s yet; it is written by `autozt monitor` "
+                             "each round or by any collecting command"
+                             % _progress.progress_path(cfg))
+    view = _progress.filter_progress(doc, args.get("project"), args.get("tt"),
+                                     args.get("material"), args.get("status"))
+    view["path"] = _progress.progress_path(cfg)
+    view["liveness"] = _progress.monitor_liveness(cfg, doc)
+    if args.get("limit"):
+        view["materials_total"] = len(view["materials"])
+        view["materials"] = view["materials"][:int(args["limit"])]
+    return _result("read", data=view)
+
+
 def _propose_actions(args):
     rc, data, error = _load_state(args)
     if rc:
@@ -608,7 +658,7 @@ def _propose_actions(args):
                                     max_items=proposal_limit)
     return _result("read", data={"cursor": _protocol.state_cursor(compact),
                                  "scope": {key: args.get(key) for key in
-                                            ("tt", "material", "status")
+                                            ("project", "tt", "material", "status")
                                             if args.get(key) not in (None, "")},
                                  "counts": _state_counts(compact),
                                  "proposals": proposals,
@@ -640,7 +690,7 @@ def _cycle(args):
         # plan.  Without this, scoped cycles compare a scoped cursor against
         # the global state and always report a stale plan.
         apply_args.update({key: args[key] for key in
-                           ("tt", "material", "step", "status")
+                           ("project", "tt", "material", "step", "status")
                            if args.get(key) not in (None, "")})
         if not dry_run and expected_cursor:
             apply_args["cursor"] = expected_cursor
@@ -734,6 +784,17 @@ def call_tool(name, args, _internal=False):
     validation_error = _validate_args(name, args)
     if validation_error:
         return _result(risk, rc=1, error=validation_error)
+    if name == "get_progress":
+        return _get_progress(args)
+    if name == "doctor":
+        rc, out, err = _run(_mat_args(args) + ["doctor", "--json"])
+        parsed, parse_error = _json_stdout(out)
+        if parse_error:
+            return _result("read", rc=rc or 1,
+                           error=((out or "") + (err or "")).strip()[:4000] or parse_error)
+        # error 级发现 → 退出码 1，但报告本身完整：数据照给，isError 反映有 error 级问题
+        return _result("read", rc=rc, data=parsed,
+                       error=None if rc == 0 else "doctor reported error-level findings")
     if name == "get_snapshot":
         return _get_snapshot(args)
     if name == "capabilities":

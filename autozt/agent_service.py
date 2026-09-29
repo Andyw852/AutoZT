@@ -189,13 +189,12 @@ def capabilities() -> Dict[str, Any]:
     Skills remain data discovered from ``skill.yaml``; this document describes
     the fixed agent protocol and its safety boundary.
     """
-    read_commands = ["capabilities", "schema", "skills", "contract", "snapshot", "inspect",
-                     "plan", "evidence", "propose", "research_plan", "preflight", "results"]
+    read_commands = ["capabilities", "schema", "skills", "contract", "progress", "doctor",
+                     "snapshot", "inspect", "plan", "evidence", "propose", "research_plan",
+                     "preflight", "results"]
     mutate_commands = ["cycle", "run", "apply"]
     commands = read_commands + mutate_commands + ["request"]
-    request_ops = ["capabilities", "schema", "skills", "contract", "snapshot", "inspect",
-                   "plan", "cycle", "run", "evidence", "propose", "research_plan",
-                   "preflight", "results", "apply"]
+    request_ops = REQUEST_OPS
     request_schema = _request_schema(request_ops)
     return {
         "schema_version": protocol.PROTOCOL_VERSION,
@@ -211,7 +210,13 @@ def capabilities() -> Dict[str, Any]:
             "commands": read_commands,
             "state_source": "autozt list --json",
             "steady_state": "autozt summary --diff",
+            # 首选：读 monitor 每轮写的进度文件——不采集、不连超算、秒级返回
+            "cheap_state": "autozt agent progress（= .tf_progress.json，无 ssh）",
+            "preflight": "autozt agent doctor（配置预检：max_jobs 生效值/屏蔽项目/同名材料）",
         },
+        "scope": {"fields": ["project", "tt", "material", "status", "step"],
+                  "material_id": "materials 的 id 字段 = <项目名>/<完整名>，稳定主键，"
+                                 "material 参数与 -p 都认"},
         "mutate": {"commands": mutate_commands, "default": "dry_run"},
         "conversation": {
             "schema_version": "autozt/conversation/1",
@@ -241,11 +246,14 @@ def capabilities() -> Dict[str, Any]:
     }
 
 
+REQUEST_OPS = ["capabilities", "schema", "skills", "contract", "progress", "doctor",
+               "snapshot", "inspect", "plan", "cycle", "run", "evidence", "propose",
+               "research_plan", "preflight", "results", "apply"]
+
+
 def _request_schema(request_ops: Any = None) -> Dict[str, Any]:
     """Return the one JSON Schema shared by capabilities and ``schema``."""
-    ops = list(request_ops or ["capabilities", "schema", "skills", "contract", "snapshot",
-                               "inspect", "plan", "cycle", "run", "evidence", "propose",
-                               "research_plan", "preflight", "results", "apply"])
+    ops = list(request_ops or REQUEST_OPS)
     return {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "title": "AutoZT agent request", "type": "object", "required": ["op"],
@@ -254,7 +262,10 @@ def _request_schema(request_ops: Any = None) -> Dict[str, Any]:
             "op": {"type": "string", "enum": ops},
             "scope": {"type": "object", "additionalProperties": False,
                       "properties": {key: {"type": "string"}
-                                     for key in ("tt", "material", "status", "step")}},
+                                     for key in ("project", "tt", "material", "status",
+                                                 "step")}},
+            "project": {"type": "string"},
+            "limit": {"type": "integer", "minimum": 1},
             "view": {"type": "string", "enum": ["attention", "active", "all"]},
             "include_monitoring": {"type": "boolean"},
             "include_retry": {"type": "boolean"},
@@ -275,9 +286,7 @@ def _request_schema(request_ops: Any = None) -> Dict[str, Any]:
 
 def schema() -> Dict[str, Any]:
     """Complete, model-readable protocol contract with examples and risks."""
-    request_ops = ["capabilities", "schema", "skills", "contract", "snapshot", "inspect",
-                   "plan", "cycle", "run", "evidence", "propose", "research_plan",
-                   "preflight", "results", "apply"]
+    request_ops = REQUEST_OPS
     action_schema = {
         "type": "object", "additionalProperties": False, "required": ["action"],
         "properties": {
@@ -291,6 +300,11 @@ def schema() -> Dict[str, Any]:
         "schema": {"class": "read", "state": False},
         "skills": {"class": "read", "state": False},
         "contract": {"class": "read", "state": False},
+        "progress": {"class": "read", "state": True, "ssh": False,
+                     "description": "读 .tf_progress.json：逐材料状态、FAIL 结构化码、since/eta、"
+                                    "monitor 存活；不采集、不连超算"},
+        "doctor": {"class": "read", "state": False, "ssh": False,
+                   "description": "配置预检：max_jobs 生效值、调优旋钮来源、屏蔽项目、跨项目同名材料"},
         "snapshot": {"class": "read", "state": True, "cursor": True},
         "inspect": {"class": "read", "state": True, "cursor": True},
         "plan": {"class": "read", "state": True, "cursor": True},
@@ -340,11 +354,14 @@ def schema() -> Dict[str, Any]:
                   "views": ["attention", "active", "all"],
                   "cursor": "sha256 of the compact scoped state; stale plans are rejected"},
         "examples": {"discover": {"op": "schema"},
+                     "cheap_status": {"op": "progress", "scope": {"project": "my_project"}},
+                     "preflight_config": {"op": "doctor"},
                      "inspect_failures": {"op": "inspect", "scope": {"status": "error"}},
                      "dry_run": {"op": "run", "scope": {"tt": "band-dft-cpu"}, "execute": False},
                      "execute_safe": {"op": "run", "scope": {"material": "C24/qHPC24"},
                                       "execute": True, "include_retry": False}},
-        "token_policy": {"no_change": "Use summary --diff; do not call an LLM",
+        "token_policy": {"first_read": "progress（本地文件，无 ssh）；需要实时再 snapshot/inspect",
+                          "no_change": "Use summary --diff; do not call an LLM",
                           "polling": "Pass cursor to snapshot/get_snapshot and request only changes",
-                          "large_scope": "Use tt/material/status filters and max_actions"},
+                          "large_scope": "Use project/tt/material/status filters and max_actions"},
     }

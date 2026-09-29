@@ -153,7 +153,9 @@ def _dag_max_inflight(cfg, m):
 
 def _skill_max_jobs(cfg, t):
     from autozt import _MAX_JOBS_DEFAULT
-    """返回该技能（任务类型）的并发提交上限；None = 不限。"""
+    """返回该技能（任务类型）的全局并发提交上限；None = 不限。
+    来源：全局 tf.yaml 的 task_types.<key>.max_jobs > 全局 max_jobs > AUTOZT_MAX_JOBS。
+    项目 tf_*.yaml 里写的 max_jobs 是另一层（项目级）上限，见 _project_max_jobs。"""
     tc = (cfg.get("task_types") or {}).get(t.get("key")) or {}
     v = tc.get("max_jobs")
     if v is None:
@@ -166,46 +168,68 @@ def _skill_max_jobs(cfg, t):
         v = int(v)
     except (TypeError, ValueError):
         return None
-    # fix：项目段里写的 task_types.<key>.max_jobs 会被这里静默忽略（只读全局
-    # 主类型的值）。项目段值与生效值不一致时打一条告警，不改生效值（避免误改并发）。
-    _seg = t.get("max_jobs")
-    if _seg is not None:
-        try:
-            _seg = int(_seg)
-        except (TypeError, ValueError):
-            _seg = None
-        if _seg is not None and _seg != v:
-            print("警告：项目段 task_types.%s.max_jobs=%s 被忽略，实际生效 %s"
-                  "（来自全局 tf.yaml 主类型/全局默认）。若要项目值生效，请改全局配置。"
-                  % (t.get("key"), _seg, v), file=sys.stderr)
     return v if v > 0 else None
 
-def _skill_busy_jobs(t):
+def _project_max_jobs(m):
+    """项目级并发提交上限：材料所属项目 tf_*.yaml 段里显式写的 max_jobs；None = 不限。
+
+    以前这一层被静默忽略——项目里写 max_jobs: 16，实际按全局 100 跑。现在两层同时
+    生效：技能级（全局，跨项目共享）与项目级（只数本项目的作业），先到哪个卡哪个。"""
+    v = ((m or {}).get("_seg") or {}).get("max_jobs")
+    if v is None:
+        return None
+    try:
+        v = int(v)
+    except (TypeError, ValueError):
+        return None
+    return v if v > 0 else None
+
+def _gate_project(m):
+    """材料所属项目的标识（项目 tf_*.yaml 的真实路径）；全局段材料为 None。"""
+    return ((m or {}).get("_seg") or {}).get("_from") or None
+
+def _material_busy_jobs(m):
+    """该材料当前已提交（在跑/排队）的超算作业数（扇出步骤按子作业计）。"""
     from autozt import _BUSY_KINDS
-    """该技能当前已提交（在跑/排队）的超算作业数。
-    普通步骤 1 步 = 1 个作业；扇出步骤按 fan_jobids 里的子作业数计。"""
     n = 0
-    for m in t.get("materials") or []:
-        for s in m.get("steps") or []:
-            if s.get("kind") not in _BUSY_KINDS:
-                continue
-            fj = s.get("fan_jobids")
-            n += len(fj) if fj else 1
+    for s in (m or {}).get("steps") or []:
+        if s.get("kind") not in _BUSY_KINDS:
+            continue
+        fj = s.get("fan_jobids")
+        n += len(fj) if fj else 1
     return n
 
+def _skill_busy_jobs(t):
+    """该技能当前已提交（在跑/排队）的超算作业数。
+    普通步骤 1 步 = 1 个作业；扇出步骤按 fan_jobids 里的子作业数计。"""
+    return sum(_material_busy_jobs(m) for m in t.get("materials") or [])
+
 class _SkillGate(object):
-    """按技能统计「已提交作业数」并卡上限；跨材料共享、线程安全。
-    auto_advance 串行、autozt start 批量并行都走它，保证同一技能不超 max_jobs。
-    同 key 的多个段（v2/v3 混合、多项目）在构造时把 busy 累加在一起。"""
+    """按技能（及项目）统计「已提交作业数」并卡上限；跨材料共享、线程安全。
+    auto_advance 串行、autozt start 批量并行都走它。
+    两层上限同时生效：
+      · 技能级：全局 task_types.<key>.max_jobs，同 key 的所有项目段累加计数；
+      · 项目级：项目 tf_*.yaml 段里写的 max_jobs，只数本项目的作业。"""
     def __init__(self, cfg, data):
         import threading
         self._lk = threading.Lock()
         self._cap = {}
         self._busy = {}
+        self._pcap = {}     # (key, 项目) -> 上限
+        self._pbusy = {}    # (key, 项目) -> 已提交数
         for t in (data or {}).get("types") or []:
             key = t.get("key")
             self._cap.setdefault(key, _skill_max_jobs(cfg, t))
             self._busy[key] = self._busy.get(key, 0) + _skill_busy_jobs(t)
+            for m in t.get("materials") or []:
+                proj = _gate_project(m)
+                if proj is None:
+                    continue
+                pk = (key, proj)
+                pcap = _project_max_jobs(m)
+                if pcap is not None:
+                    self._pcap[pk] = pcap
+                self._pbusy[pk] = self._pbusy.get(pk, 0) + _material_busy_jobs(m)
 
     def cap(self, key):
         with self._lk:
@@ -215,21 +239,60 @@ class _SkillGate(object):
         with self._lk:
             return self._busy.get(key, 0)
 
-    def try_acquire(self, key):
-        """原子占一个槽：未超上限则 +1 返回 True，否则 False。"""
+    def _pkey(self, key, m):
+        proj = _gate_project(m)
+        return (key, proj) if proj is not None else None
+
+    def limit_hit(self, key, m=None):
+        """当前卡住的是哪一层：None / ("project", 已交, 上限, 项目名) / ("skill", 已交, 上限, None)。"""
         with self._lk:
-            cap = self._cap.get(key)
-            if cap is None:
-                return True
-            if self._busy.get(key, 0) >= cap:
+            return self._limit_hit_locked(key, m)
+
+    def _limit_hit_locked(self, key, m):
+        cap = self._cap.get(key)
+        if cap is not None and self._busy.get(key, 0) >= cap:
+            return ("skill", self._busy.get(key, 0), cap, None)
+        pk = self._pkey(key, m)
+        pcap = self._pcap.get(pk) if pk else None
+        if pcap is not None and self._pbusy.get(pk, 0) >= pcap:
+            name = os.path.basename(pk[1])
+            if name.startswith("tf_") and name.endswith(".yaml"):
+                name = name[3:-5]
+            return ("project", self._pbusy.get(pk, 0), pcap, name)
+        return None
+
+    def describe(self, key, m=None):
+        """达上限时给人看的原因（哪一层、已交多少、上限多少、去哪改）。"""
+        hit = self.limit_hit(key, m)
+        if hit is None:
+            return ""
+        level, busy, cap, proj = hit
+        if level == "project":
+            return ("项目 %s 的技能 %s 已提交 %d 个作业，达项目级上限 %d"
+                    "（改该项目 tf_%s.yaml 里 task_types.%s.max_jobs）"
+                    % (proj, key, busy, cap, proj, key))
+        return ("技能 %s 已提交 %d 个作业，达上限 %d"
+                "（改全局 task_types.%s.max_jobs 或 AUTOZT_MAX_JOBS）"
+                % (key, busy, cap, key))
+
+    def try_acquire(self, key, m=None):
+        """原子占一个槽：两层都未超上限则计数 +1 返回 True，否则 False。"""
+        with self._lk:
+            if self._limit_hit_locked(key, m) is not None:
                 return False
-            self._busy[key] += 1
+            self._busy[key] = self._busy.get(key, 0) + 1
+            pk = self._pkey(key, m)
+            if pk is not None:
+                self._pbusy[pk] = self._pbusy.get(pk, 0) + 1
             return True
 
-    def release(self, key):
+    def release(self, key, m=None):
         with self._lk:
             if key in self._busy:
                 self._busy[key] = max(0, self._busy[key] - 1)
+            pk = self._pkey(key, m)
+            if pk is not None and pk in self._pbusy:
+                self._pbusy[pk] = max(0, self._pbusy[pk] - 1)
 
 def _gen_step_input(cfg, t, m, s):
     from autozt import log_action, step_cfg
@@ -365,8 +428,21 @@ def _name_matches(m, want, seg=None):
     name = (m or {}).get("name") or ""
     if name == want or os.path.basename(name) == want:
         return True
+    if (m or {}).get("qualified_name") == want:
+        return True
     proj = _seg_proj_name(seg if seg is not None else ((m or {}).get("_seg") or {}))
     return bool(proj) and want == "%s/%s" % (proj, name)
+
+
+_WARNED_ONCE = set()
+
+
+def _warn_once(msg):
+    """同一进程里同一条提示只打一次（monitor 每轮都会走到这里，以前每轮刷一遍）。"""
+    if msg in _WARNED_ONCE:
+        return
+    _WARNED_ONCE.add(msg)
+    print(msg, file=sys.stderr)
 
 
 def check_duplicates(data):
@@ -386,7 +462,13 @@ def check_duplicates(data):
     projs_by = {}
     for t in data["types"]:
         for m in t["materials"]:
-            projs_by.setdefault((t["key"], m["name"]), set()).add(_proj_of_mat(m))
+            # 稳定标识：project + qualified_name（<项目名>/<完整名>）。显示名是否带
+            # 项目前缀取决于本次采集范围里有没有重名，qualified_name 不随范围变，
+            # 给 AI / 脚本当主键用，-p 也总能认。
+            _pj = _proj_of_mat(m)
+            m.setdefault("project", _pj or "")
+            m.setdefault("qualified_name", "%s/%s" % (_pj, m["name"]) if _pj else m["name"])
+            projs_by.setdefault((t["key"], m["name"]), set()).add(_pj)
     qualified = {}
     for t in data["types"]:
         for m in t["materials"]:
@@ -409,14 +491,15 @@ def check_duplicates(data):
         bcnt = Counter(os.path.basename(n) for n in names)
         bdups = sorted(b for b, c in bcnt.items() if c > 1)
         if bdups:
-            print("警告：任务类型 %s 里有重复的 basename：%s，-p 时请写完整名。"
-                  % (key, ", ".join(bdups)), file=sys.stderr)
+            _warn_once("警告：任务类型 %s 里有重复的 basename：%s，-p 时请写完整名"
+                       "（或 <项目名>/<完整名>、--project）。"
+                       % (key, ", ".join(bdups[:20]) + ("…等 %d 个" % len(bdups)
+                                                       if len(bdups) > 20 else "")))
     if qualified:
         for key in sorted(qualified):
-            print("提示：任务类型 %s 下 %d 个项目跨项目同名，材料名已加项目名前缀"
-                  "（-p 写 <项目名>/<元素>/<材料>）：%s"
-                  % (key, len(qualified[key]), ", ".join(sorted(qualified[key]))),
-                  file=sys.stderr)
+            _warn_once("提示：任务类型 %s 下 %d 个项目跨项目同名，材料名已加项目名前缀"
+                       "（-p 写 <项目名>/<元素>/<材料>）：%s"
+                       % (key, len(qualified[key]), ", ".join(sorted(qualified[key]))))
     if errs:
         sys.exit(_i18n.t("错误：", "error: ") + "\n" + "\n".join(errs))
 
@@ -1048,7 +1131,10 @@ def _set_jobname(path, name, insert):
 
 def main():
     argv = sys.argv
-    cfg = json.loads(base64.b64decode(argv[argv.index("--config64") + 1]).decode("utf-8"))
+    # 新版把配置写在脚本首行（_AUTOZT_CONFIG64），不占 argv；--config64 仅兼容旧调用。
+    _inline = globals().get("_AUTOZT_CONFIG64")
+    cfg = json.loads(base64.b64decode(
+        _inline or argv[argv.index("--config64") + 1]).decode("utf-8"))
     step_dir = _norm(cfg["dir"])
     jobname = str(cfg.get("jobname") or "")
     fanout = str(cfg.get("fanout") or "")
@@ -1219,11 +1305,14 @@ def _sbatch_guarded(cfg, step_dir, host="__default__", jobname=None, fanout=None
             "AUTOZT_SBATCH_VIS_WINDOW", str(cfg.get("sbatch_vis_window", 60))) or 60),
         "user": str(cfg.get("user") or ""),
     }
-    b64_script = base64.b64encode(_SBATCH_GUARD.encode("utf-8")).decode()
     b64_conf = base64.b64encode(
         json.dumps(_conf, ensure_ascii=False).encode("utf-8")).decode()
-    line = "echo %s | base64 -d | python3 - --config64 %s" % (b64_script, b64_conf)
-    rc, out = run_remote(cfg, line, host=host)
+    # 配置内嵌进脚本、整段经 stdin 投递（bash -s；echo 是内建命令不走 exec），
+    # 扇出子目录清单再长也不会撞单参数 128 KiB 上限（E2BIG）。
+    b64_script = base64.b64encode(
+        ("_AUTOZT_CONFIG64 = %r\n" % b64_conf + _SBATCH_GUARD).encode("utf-8")).decode()
+    line = "echo %s | base64 -d | python3 -" % b64_script
+    rc, out = run_remote(cfg, line, host=host, use_stdin=True)
     res = None
     for ln in (out or "").splitlines():
         if ln.startswith("__TF_RESULT__ "):
@@ -1360,6 +1449,10 @@ def do_run_gen_step(cfg, t, m, s, tag):
           % (tag, marker, ("：" + tail[-1]) if tail else ""))
     return False
 
+# 本进程成功 sbatch 的次数（monitor 每轮摘要用：本轮提交数 = 前后差值）
+SUBMIT_COUNTER = [0]
+
+
 def do_submit(cfg, t, m, s, force, gen_first, contcar_cp, tag, submit=True):
     from autozt import log_action, run_remote, step_cfg
     """返回 True=成功 / False=失败或被拒绝（供退出码统计）。
@@ -1422,6 +1515,7 @@ def do_submit(cfg, t, m, s, force, gen_first, contcar_cp, tag, submit=True):
     print("%s: %s" % (tag, _i18n.t("已提交 %s (jobid=%s)", "submitted %s (jobid=%s)") % (jobname, jid) if ok
                             else (_i18n.t("提交失败。", "submit failed. ") + out)))
     if ok:
+        SUBMIT_COUNTER[0] += 1
         log_action(m, "%s jobid=%s" % (tag.split(" ", 1)[0] + " " + s["label"], jid))
     else:
         # ★ 2026-09-28 用户建议：提交失败/被拒也落 tf.log。
@@ -1787,6 +1881,7 @@ def auto_advance(cfg, data, force=False):
             _done_now = []
             _cap = _dag_max_inflight(cfg, m)
             _fired = set()
+            _pfull = False   # 本材料所属项目已到项目级 max_jobs
             for _ in range(_AUTO_CASCADE_MAX):
                 _busy = sum(1 for x in m["steps"] if x["kind"] in _BUSY_KINDS)
                 _ready = [s for s in (m.get("actives") or [])
@@ -1801,16 +1896,17 @@ def auto_advance(cfg, data, force=False):
                     # patch_max_jobs：技能级并发提交上限（先于材料级 max_inflight）。
                     # 只卡「提交超算」，不卡本地生成输入：达上限时把本材料剩余
                     # 就绪步骤的输入先生成好（变 TODO），等有空位下一轮直接 sbatch。
-                    if not _is_gen and not _gate.try_acquire(t["key"]):
-                        print("auto-advance：技能 %s 已提交 %d 个作业，达上限 %d；"
-                              "其余就绪步骤先本地生成输入（不提交），等有空位自动补交"
-                              "（改 task_types.%s.max_jobs 或 AUTOZT_MAX_JOBS 调整）。"
-                              % (t["key"], _gate.busy(t["key"]),
-                                 _gate.cap(t["key"]), t["key"]))
+                    if not _is_gen and not _gate.try_acquire(t["key"], m):
+                        _hit = _gate.limit_hit(t["key"], m)
+                        print("auto-advance：%s；其余就绪步骤先本地生成输入（不提交），"
+                              "等有空位自动补交。" % _gate.describe(t["key"], m))
                         if _i18n.is_en():
                             print("hint: this skill already has its job slots taken; the remaining steps wait for a free slot.", file=sys.stderr)
                         _pregenerate_ready(cfg, t, m, _fired)
-                        _sfull = True
+                        # 技能级满了 → 本技能后续材料都不再提交；项目级满了只影响
+                        # 同项目材料（它们各自 try_acquire 时会同样被卡），不连坐别的项目。
+                        _sfull = bool(_hit and _hit[0] == "skill")
+                        _pfull = True
                         break
                     if _busy >= _cap:
                         print("auto-advance：%s[%s] 在跑 %d 个已达上限 %d，"
@@ -1827,7 +1923,7 @@ def auto_advance(cfg, data, force=False):
                                     % (m["name"], m["tt"], s["label"]))
                     if not _ok:
                         if not _is_gen:   # 提交失败：把占的槽还回去
-                            _gate.release(t["key"])
+                            _gate.release(t["key"], m)
                         continue
                     _progress = True
                     if _is_gen:
@@ -1839,7 +1935,7 @@ def auto_advance(cfg, data, force=False):
                         _done_now.append(s["name"])
                     else:
                         _busy += 1
-                if _sfull:
+                if _sfull or _pfull:
                     break
                 if not _progress:
                     break
@@ -2477,12 +2573,9 @@ def _start_ready(cfg, t, m, force, incl_scancel=False, gate=None):
         _is_gen = sc.get("run") == "gen"
         # patch_max_jobs：技能级并发提交上限（先于材料级 max_inflight）。
         # 只卡 sbatch，不卡本地生成输入：达上限时把剩余就绪步骤输入先生成好。
-        if gate is not None and not _is_gen and not gate.try_acquire(m["tt"]):
-            print("%s[%s]：技能 %s 已提交 %d 个作业，达上限 %d，未提交的任务"
-                  "先本地生成输入（不提交），等有空位自动补交（改 "
-                  "task_types.%s.max_jobs 或 AUTOZT_MAX_JOBS 调整）。"
-                  % (m["name"], m["tt"], m["tt"], gate.busy(m["tt"]),
-                     gate.cap(m["tt"]), m["tt"]))
+        if gate is not None and not _is_gen and not gate.try_acquire(m["tt"], m):
+            print("%s[%s]：%s，未提交的任务先本地生成输入（不提交），等有空位自动补交。"
+                  % (m["name"], m["tt"], gate.describe(m["tt"], m)))
             _pregenerate_ready(cfg, t, m, _fired)
             break
         if busy >= cap:
@@ -2501,7 +2594,7 @@ def _start_ready(cfg, t, m, force, incl_scancel=False, gate=None):
             busy += 1
         else:
             if gate is not None and not _is_gen:   # 提交失败：还回占的槽
-                gate.release(m["tt"])
+                gate.release(m["tt"], m)
             fails += 1
     if not fired and not fails:
         # FAIL 步骤不在 DAG 的 actives 里，-f 也救不了它（-f 只对已选中的 FAIL 生效）。
@@ -2582,19 +2675,16 @@ def cmd_start(cfg, data, mname, jname, force, incl_scancel=False):
                     continue
             sc = step_cfg(t, s["name"], m)
             _is_gen = sc.get("run") == "gen"
-            if not _is_gen and not gate.try_acquire(m["tt"]):
-                print("技能 %s 已提交 %d 个作业，达上限 %d，%s 先本地生成输入"
-                      "（不提交），等有空位自动补交（改 task_types.%s.max_jobs "
-                      "或 AUTOZT_MAX_JOBS 调整）。"
-                      % (m["tt"], gate.busy(m["tt"]), gate.cap(m["tt"]),
-                         m["name"], m["tt"]))
+            if not _is_gen and not gate.try_acquire(m["tt"], m):
+                print("%s，%s 先本地生成输入（不提交），等有空位自动补交。"
+                      % (gate.describe(m["tt"], m), m["name"]))
                 _gen_step_input(cfg, t, m, s)
                 continue
             if not do_submit(cfg, t, m, s, force, gen_first=False,
                              contcar_cp=sc.get("contcar_to_poscar", False),
                              tag="start " + tag_of(m, s)):
                 if not _is_gen:
-                    gate.release(m["tt"])
+                    gate.release(m["tt"], m)
                 fails += 1
         return fails
     if mname:

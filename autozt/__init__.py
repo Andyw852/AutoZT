@@ -43,9 +43,13 @@ from . import (  # noqa: E402
     #   agentgate   —— LLM 动作网关（风险分档 + 一次性批准令牌）+ 审计流水 autozt act（P0-1）
     #   session     —— 会话导出（操作历史 + provenance + 审计打包）autozt session export（P1-7）
     skillspec, corrections, history, prov, agentgate, session,
+    #   progress    —— 机器可读进度文件 .tf_progress.json + autozt progress
+    #   doctor      —— 配置预检 autozt doctor（max_jobs 生效值 / 屏蔽项目 / 同名材料…）
+    progress, doctor,
 )
 _MODULES = (bootstrap, collect, data, workflow, report, ops, cli, yamlmini,
-            skillspec, corrections, history, prov, agentgate, session)
+            skillspec, corrections, history, prov, agentgate, session,
+            progress, doctor)
 
 # 把各模块的名字注入包命名空间（排除 dunder 与标准库名）。
 _STDLIB_NAMES = {

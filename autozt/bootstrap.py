@@ -56,6 +56,21 @@ project_roots:
 # project_root_excludes:
 #   - /mnt/d/tf_data/work_taskflow
 
+# 调优旋钮（可选；环境变量仍可临时覆盖，优先级：环境变量 > 这里 > 默认）。
+# 写在这里 cron / monitor 保活进程也能拿到——以前只认环境变量，cron 里一漏就出事。
+# collect_chunk: 100       # 每次 ssh 采集的材料数（AUTOZT_COLLECT_CHUNK）
+# collect_workers: 6       # 并行采集组数（AUTOZT_WORKERS）
+# op_workers: 8            # 批量 start/clean 并发（AUTOZT_OP_WORKERS）
+# init_workers: 16         # 批量 init 并发（AUTOZT_INIT_WORKERS）
+# cache_ttl: 60            # list/summary 本地缓存秒数（AUTOZT_CACHE_TTL）
+
+# AI / agent 接入（可选）：
+# agent_gate: auto         # 默认：AI 会话（AUTOZT_ACTOR / 常见代理环境标记 / 非交互终端）
+#                          # 执行破坏性命令必须人工 autozt approve；off = 只认 AUTOZT_ACTOR
+# agent_env_markers: [DSH_SESSION]   # 追加：你的 AI 代理在子进程里设的环境变量名
+# max_auto_retries: 2      # 进度文件里同一步骤失败超过这么多次就不再建议自动 retry
+# monitor_table: false     # true = monitor 每次变化打完整状态表（默认只打一行 [round] 摘要+变更）
+
 # task_types：只写站点相关覆盖。技能的 steps / gen_need / aux_files 由
 # skill/<技能>/skill.yaml 自描述，tf 启动时自动发现（autozt skills 查看），
 # 这里不用再抄一遍。key 就是 -tt 用的短名，等于技能名。
@@ -68,6 +83,8 @@ task_types:
     # run_steps: [1, 2]    # 只跑部分步骤（序号 = 清单里的 seq）
     # max_jobs: 20         # 该技能「同时提交」的超算作业上限；达到后新任务本地待命，
                            # 等 watch 拉到有空位（有作业算完）再自动补交。不写 = 不限。
+                           # 项目 tf_*.yaml 里也可写 max_jobs = 该项目自己的上限，与这里
+                           # 的技能级上限同时生效（autozt doctor 列出每个项目的生效值）。
     # hang_check: true     # 挂死作业自动恢复（v1.11，默认开）：进度指纹判定挂死——(OUTCAR
                            # 字节数, OSZICAR 行数) 连续 hang_min_stale_rounds 轮不变且输出年龄
                            # 超 hang_stale_secs 才算（指纹在涨/SCF rms 在降 = 活着，不判）。
@@ -216,10 +233,19 @@ QUICK_USAGE = """\
 用法：autozt（短命令 pa）[-tt 技能] [-p 材料] [-j 步骤] 命令
 
 查看：
+  progress [--json]  读本地进度文件（monitor 每轮写）：逐材料状态/FAIL 码/ETA，
+                     不采集、不连超算、秒级（AI 巡检首选）
   summary [--diff]    只读汇总；--diff 无变化静默
   list               只读总表；--refresh 强制刷新
   status             状态详情，同时可能拉结果、自动提交
   probe              单材料作业诊断（需 -p）
+  doctor [--json]    配置预检（不连超算）：各项目 max_jobs 生效值、调优旋钮来源、
+                     被屏蔽项目、跨项目同名材料、monitor 保活、agent 网关
+
+范围：
+  --project 项目     只看/只动一个项目（tf_<项目>.yaml），采集前就裁剪，
+                     不用把几百个材料名列进 -p；可与任何命令组合
+  -p <项目名>/<完整名> 跨项目同名材料的无歧义写法（JSON 里的 id 字段）
 
 计算：
   start              生成缺失输入并提交
@@ -230,7 +256,7 @@ QUICK_USAGE = """\
   clean              删除产物，不重新生成
 
 管理：
-  auto on|off        开关自动推进；-tt/-p 限定范围
+  auto on|off        开关自动推进；-tt/-p/--project 限定范围；--dry-run 只列出会改的文件
   auto resume        恢复指定项目取消步骤，必须配 -tt 和 -p
   monitor [-d]       持续监控；--stop 停止，--restart 重启
   conf [--set ...]   查看或修改步骤配置
@@ -247,6 +273,10 @@ QUICK_USAGE = """\
   history [-p 材料]  步骤状态的时间序列（history.jsonl，采集时自动记录）
   prove -p 材料      这一步"结果怎么来的"：输入 sha256 / step.conf 参数 /
                      工具版本 / 作业号（gen 时自动落档，--verify 校验输入没被改）
+
+AI 接入（稳定 JSON，不要解析上面这些人类文本表）：
+  agent progress|doctor|inspect|cycle|request|serve …   见 docs/agent-cli.md
+  mcp                MCP stdio 服务（get_progress / doctor / inspect / cycle …），见 docs/mcp.md
 
 AI 审计（v1.0 P0-1，agent 走网关：风险分档 + 每次调用留痕）：
   act <命令>         agent 的唯一入口：autozt act -p 材料 summary / autozt act start …
@@ -296,7 +326,15 @@ USAGE = """\
             必须人工在交互终端 `autozt approve <同一条命令>` 换一次性令牌（默认 900 秒）。
             每次调用都追加 {ts,actor,cmd,risk,decision,exit_code,approved_by} 到配置
             目录的 .tf_agent_log.jsonl：`autozt act log` 看流水，`autozt act policy` 看风险分档。
-            不设 AUTOZT_ACTOR 也不用 act 时，行为与此前完全一致。
+            网关默认开启（agent_gate: auto）：AUTOZT_ACTOR、常见 AI 代理环境标记
+            （CLAUDECODE/GEMINI_CLI/CODEX_SANDBOX，tf.yaml agent_env_markers 可追加）、
+            以及【非交互终端】里的破坏性命令都要批准令牌；人在终端里敲不受影响。
+            agent_gate: off（或 AUTOZT_AGENT_GATE=off）回到只认 AUTOZT_ACTOR 的旧行为。
+  progress  读 monitor 每轮写的 .tf_progress.json（只读、不采集、不连超算）：
+            tf [--project P] [-tt T] [-p M] [-status error] progress [--json] [--limit N]
+            每材料：id（<项目名>/<完整名>）/状态/活动步骤/作业/FAIL 结构化码
+            （class/code/action/fail_count）/since/eta_s；另有每项目计数、monitor 存活。
+  doctor    配置预检（只读、不连超算）：tf [--project P] doctor [--json] [--strict]
   agent     稳定 JSON agent 接口：capabilities/inspect/plan/cycle/evidence/request/serve；
             与 MCP 共用技能契约、状态快照和 act 审计网关（不需要 MCP 客户端）。
             capabilities 协议/动作/安全边界（LLM 首次发现只调一次）；schema 完整 JSON
@@ -432,7 +470,8 @@ USAGE = """\
   材料/<技能>/hpc.yaml 再改字段（ssh_host/template_map/队列）即可，
   优先级高于材料级 hpc.yaml；材料/<技能>/ 下的同名模板也最优先被用。
   按技能限制并发提交：task_types.<key>.max_jobs: N（全局 max_jobs 兜底，
-  AUTOZT_MAX_JOBS 环境变量再兜底）。上限只卡「提交超算（sbatch）」，不卡本地
+  AUTOZT_MAX_JOBS 环境变量再兜底）；项目 tf_*.yaml 里写的 max_jobs 是该项目
+  自己的上限，与技能级同时生效（先到先卡）。上限只卡「提交超算（sbatch）」，不卡本地
   生成输入：达到上限后新任务先本地生成输入（变 TODO）待命，watch 每轮拉状态
   发现有空位（有作业算完）就自动补交；手动 autozt start 同样只卡提交不卡生成。
 
@@ -758,13 +797,33 @@ def _warn_skill_configs():
     global _SKILL_WARNED
     if _SKILL_WARNED or not (_SKILL_MIGRATIONS or _CONFIG_SKILL_ERRORS):
         return
+    # 以前每个项目配置各打一行，旧名项目一多每条命令都刷 30+ 行，真正的错误被
+    # 淹没。现在先按「旧名 → 新名」聚合计数，超过 10 个文件就不再逐行列出；
+    # 屏蔽清单超过 5 条只列前 5 条；
+    # 完整清单：AUTOZT_VERBOSE=1，或 autozt doctor（--json 给 AI）。
+    verbose = (os.environ.get("AUTOZT_VERBOSE") or "").strip() not in ("", "0")
     lines = []
     if _SKILL_MIGRATIONS:
-        lines.append("提示：旧技能名已在内存映射（未修改项目文件；物理目录不会自动迁移）：")
-        lines.extend("  %s: %s → %s" % item for item in sorted(_SKILL_MIGRATIONS))
+        by_pair = {}
+        for _src, old, new in _SKILL_MIGRATIONS:
+            by_pair[(old, new)] = by_pair.get((old, new), 0) + 1
+        lines.append("提示：%d 个配置仍用旧技能名，已在内存映射（未改文件）：%s"
+                     % (len(_SKILL_MIGRATIONS),
+                        "，".join("%s→%s ×%d" % (o, n, c)
+                                 for (o, n), c in sorted(by_pair.items()))))
+        if verbose or len(_SKILL_MIGRATIONS) <= 10:
+            lines.extend("  %s: %s → %s" % item for item in sorted(_SKILL_MIGRATIONS))
+        else:
+            lines.append("  （逐个文件：autozt doctor，或 AUTOZT_VERBOSE=1）")
     if _CONFIG_SKILL_ERRORS:
-        lines.append("警告：以下项目技能配置不可安全使用，已屏蔽所属材料的所有技能；其它材料继续：")
-        lines.extend("  %s: %s" % item for item in sorted(_CONFIG_SKILL_ERRORS.items()))
+        items = sorted(_CONFIG_SKILL_ERRORS.items())
+        lines.append("警告：%d 个项目技能配置不可安全使用，已屏蔽所属材料的所有技能；其它材料继续："
+                     % len(items))
+        shown = items if verbose else items[:5]
+        lines.extend("  %s: %s" % item for item in shown)
+        if len(shown) < len(items):
+            lines.append("  …另 %d 个（autozt doctor 看全部，或 AUTOZT_VERBOSE=1）"
+                         % (len(items) - len(shown)))
     print("\n".join(lines), file=sys.stderr)
     _SKILL_WARNED = True
 
@@ -779,8 +838,8 @@ def _block_skill_project(name, path, pc, reason):
         lr = (seg or {}).get("local_root")
         lr = os.path.realpath(os.path.join(proj_dir, os.path.expanduser(str(lr)))) if lr else (
             os.path.dirname(owner) if os.path.isfile(os.path.join(owner, "POSCAR")) else owner)
-        for m in discover_local(owner, _include_blocked=True)[1]:
-            aliases.add(name + "/" + os.path.relpath(m["lpath"], lr))
+        for lpath in _block_candidates(owner):
+            aliases.add(name + "/" + os.path.relpath(lpath, lr))
     block = (owner, set(), name, aliases)
     if block not in _CONFIG_BLOCKS:
         _CONFIG_BLOCKS.append(block)
@@ -1004,6 +1063,30 @@ def _skill_spec_brief(s):
 _CONFIG_CONFLICTS = {}
 _CONFIG_BLOCKS = []
 _CONFIG_WARNED = False
+# 被屏蔽项目下的材料路径（owner -> [lpath]）。以前每个 -p 目标 × 每个被屏蔽配置都
+# 重跑一遍无缓存的 discover_local：9p 慢盘上 295 材料 × ~30 配置，auto on 要跑
+# 近 50 分钟才写完 setting.yaml。材料清单在一次进程里不会变，缓存即可。
+_BLOCK_DISC_CACHE = {}
+
+
+def _block_candidates(owner):
+    got = _BLOCK_DISC_CACHE.get(owner)
+    if got is None:
+        try:
+            got = [m["lpath"] for m in discover_local(owner, _include_blocked=True)[1]]
+        except OSError:
+            got = []
+        # discover_local 只下探 2 层；<项目>/materials/<元素>/<材料> 这种布局的材料在
+        # 第 3 层，以前根本不在候选里（屏蔽照样生效——按目录前缀判——但报不出撞名）。
+        seen = set(got)
+        for pat in ("*/*/*/POSCAR",):
+            for pp in sorted(glob.glob(os.path.join(owner, pat))):
+                d = os.path.dirname(pp)
+                if d not in seen:
+                    seen.add(d)
+                    got.append(d)
+        _BLOCK_DISC_CACHE[owner] = got
+    return got
 
 
 def reset_config_conflicts():
@@ -1015,6 +1098,7 @@ def reset_config_conflicts():
     _CONFIG_BLOCKS.clear()
     _CONFIG_WARNED = False
     _RESOLVE_DISC_CACHE.clear()
+    _BLOCK_DISC_CACHE.clear()
 
 
 def _register_config_conflicts(conflicts):
@@ -1046,8 +1130,8 @@ def _register_config_conflicts(conflicts):
                     lr = os.path.dirname(os.path.dirname(proj_dir))
                 else:
                     lr = proj_dir
-                for m in discover_local(owner, _include_blocked=True)[1]:
-                    aliases.add(name + "/" + os.path.relpath(m["lpath"], lr))
+                for lpath in _block_candidates(owner):
+                    aliases.add(name + "/" + os.path.relpath(lpath, lr))
             _CONFIG_BLOCKS.append((owner, keys, name, aliases))
         old.update(paths)
     if _CONFIG_CONFLICTS and not _CONFIG_WARNED:
@@ -1067,25 +1151,100 @@ def config_material_blocked(path, tt=None):
                for owner, keys, _name, _aliases in _CONFIG_BLOCKS)
 
 
-def reject_config_conflict_targets(projs, tt=None):
-    """在采集、状态过滤和任何本地写入之前拒绝显式目标。"""
+def _block_reason(owner):
+    return next((v for p, v in _CONFIG_SKILL_ERRORS.items()
+                 if os.path.dirname(os.path.dirname(p)) == owner
+                 or os.path.dirname(os.path.dirname(p)).startswith(owner + os.sep)), None)
+
+
+def config_block_hits(want, tt=None):
+    """want 命中了哪些被屏蔽的项目。返回 [(强度, 项目名, 项目目录, 屏蔽原因)]：
+    强度 "exact" = 配置名 / <项目名>/<材料> / 绝对路径 / 项目目录本身，明确指向屏蔽项目；
+    强度 "suffix" = 只按 basename 或 <元素>/<材料> 这类相对后缀撞上——别的正常项目里
+    很可能也有同名材料（2026-09 实测：陈旧 pilot 项目与批量项目材料同名）。"""
     tt = canonical_skill_name(tt)
+    want = str(want or "").strip()
+    out = []
+    if not want:
+        return out
+    for owner, keys, name, aliases in _CONFIG_BLOCKS:
+        if tt and keys and tt not in keys:
+            continue
+        cands = [owner] + _block_candidates(owner)
+        if (want == name or want in aliases
+                or (os.path.isabs(want) and os.path.realpath(want) in cands)):
+            strength = "exact"
+        elif not os.path.isabs(want) and any(
+                p == want or p.endswith(os.sep + want) for p in cands):
+            strength = "suffix"
+        else:
+            continue
+        reason = _block_reason(owner) or "同名项目配置冲突（tf_%s.yaml 有多份）" % name
+        out.append((strength, name, owner, reason))
+    return out
+
+
+def config_block_message(want, hits):
+    lines = ["错误：材料 %s 命中的项目已屏蔽，未执行任何操作：" % want]
+    for _strength, name, owner, reason in hits:
+        lines.append("  · 项目 %s（%s）：%s" % (name, owner, reason))
+    lines.append("  处理：修好/重命名该项目配置，或移入 _archive，或把它加进 tf.yaml 的 "
+                 "project_root_excludes；若要的是别的项目里的同名材料，写成 "
+                 "<项目名>/<材料> 或用 --project 限定。")
+    return "\n".join(lines)
+
+
+def unblocked_target_exists(want, types, tt=None):
+    """want 能否在未屏蔽的材料里按名字/相对后缀命中（纯本地发现，结果有缓存）。"""
+    tt = canonical_skill_name(tt)
+    want = str(want or "").strip()
+    for t in types or []:
+        if tt and t.get("key") != tt:
+            continue
+        lr = t.get("local_root")
+        if not lr:
+            continue
+        key = ("unblocked", os.path.realpath(os.path.expanduser(str(lr))), t.get("key"))
+        mats = _RESOLVE_DISC_CACHE.get(key)
+        if mats is None:
+            try:
+                mats = discover_local(lr, tt=t.get("key"))[1]
+            except Exception:                  # noqa: BLE001
+                mats = []
+            _RESOLVE_DISC_CACHE[key] = mats
+        for m in mats:
+            lp = m.get("lpath") or ""
+            if (m.get("name") == want or os.path.basename(m.get("name") or "") == want
+                    or lp.endswith(os.sep + want)):
+                return True
+    return False
+
+
+def reject_config_conflict_targets(projs, tt=None, types_fn=None):
+    """在采集、状态过滤和任何本地写入之前拒绝显式目标（一次报出全部，而不是第一个）。
+
+    明确指向被屏蔽项目的目标（配置名、<项目名>/<材料>、绝对路径）一律拒绝。
+    只按 basename / 相对后缀撞上屏蔽项目的目标：给了 types_fn（返回当前类型列表）
+    且未屏蔽的项目里也有同名材料 → 放行（被屏蔽的材料进不了采集结果，后续解析
+    只会落到正常项目）；否则仍拒绝。2026-09 实测：陈旧 pilot 项目被屏蔽，与批量
+    项目材料同名，auto on 按 basename 解析直接整条命令退出——就是缺了这一步。"""
+    errors = []
+    _types = []
     for want in (x.strip() for x in (projs or "").split(",") if x.strip()):
-        for owner, keys, name, aliases in _CONFIG_BLOCKS:
-            if tt and keys and tt not in keys:
+        hits = config_block_hits(want, tt)
+        if not hits:
+            continue
+        if types_fn is not None and all(h[0] == "suffix" for h in hits):
+            if not _types:
+                try:
+                    _types = list(types_fn() or []) or [None]
+                except SystemExit:
+                    _types = [None]
+            if unblocked_target_exists(want, [t for t in _types if t], tt):
                 continue
-            # basename、完整相对材料名、绝对材料路径；体系配置也覆盖其材料。
-            candidates = [owner] + [m["lpath"] for m in discover_local(owner, _include_blocked=True)[1]]
-            if want == name or want in aliases or any(
-                    (os.path.isabs(want) and os.path.realpath(want) == p)
-                    or (not os.path.isabs(want) and (p == want or p.endswith(os.sep + want)))
-                    for p in candidates):
-                reason = next((v for p, v in _CONFIG_SKILL_ERRORS.items()
-                               if os.path.dirname(os.path.dirname(p)) == owner
-                               or os.path.dirname(os.path.dirname(p)).startswith(owner + os.sep)), None)
-                if reason:
-                    sys.exit("错误：材料 %s 命中技能配置安全屏蔽：%s" % (want, reason))
-                sys.exit("错误：材料 %s 命中同名配置冲突，已屏蔽；请先人工消除冲突（例如重命名一份配置或移入 _archive；本命令不自动处理）。" % want)
+        errors.append(config_block_message(want, hits))
+    if errors:
+        sys.exit("\n".join(errors))
 
 
 def filter_config_conflicts(data):
@@ -1095,12 +1254,8 @@ def filter_config_conflicts(data):
         for m in t.get("materials", []):
             if m.get("lpath"):
                 blocked = config_material_blocked(m["lpath"], t.get("key"))
-            else:
-                try:
-                    reject_config_conflict_targets(m.get("name"), t.get("key"))
-                    blocked = False
-                except SystemExit:
-                    blocked = True
+            else:   # 无本地路径：按名称保守判断（后缀命中也算）
+                blocked = bool(config_block_hits(m.get("name"), t.get("key")))
             if not blocked:
                 kept.append(m)
         t["materials"] = kept
@@ -1319,9 +1474,14 @@ def get_types(cfg, tt=None, root_override=None, quiet=False):
                 s2 = dict(t)
                 s2.update({k2: v for k2, v in s.items() if v is not None})
                 s2["key"] = str(k)
+                # 项目 tf_*.yaml 里显式写的 max_jobs 是项目级上限（与全局技能级
+                # 上限同时生效）；继承来的全局值不算，只认段里自己写的。
+                s2["_project_max_jobs"] = s.get("max_jobs")
                 types.append(s2)
             # 主定义自身无 local_root/root 时只作骨架（发现交给各段；
             # 暂时没有段也不报错——比如刚 init 一个新项目之前）
+            if t.get("_from"):     # 主定义本身来自项目配置（全局没有该技能骨架）
+                t["_project_max_jobs"] = t.get("max_jobs")
             if t.get("local_root") or t.get("root"):
                 # Apply -tt before legacy-layout validation: an unrelated legacy
                 # type must not abort a command targeting a normal sibling.
@@ -1600,6 +1760,37 @@ def set_active_cfg(cfg):
     global _ACTIVE_CFG
     _ACTIVE_CFG = cfg
     return cfg
+
+
+# 调优旋钮：环境变量 > tf.yaml（顶层键，或 tuning: 段里的同名键）> 默认值。
+# 以前这些只认环境变量，cron / monitor 保活最容易漏设（2026-09 实测：漏了
+# AUTOZT_COLLECT_CHUNK，大项目整组采集被跳过、材料全标 wait）。写进配置就能持久化。
+TUNING_KNOBS = {
+    # 配置键:           (环境变量,               默认值, 下限)
+    "collect_chunk":   ("AUTOZT_COLLECT_CHUNK", 100, 1),
+    "collect_workers": ("AUTOZT_WORKERS", 6, 1),
+    "op_workers":      ("AUTOZT_OP_WORKERS", 8, 1),
+    "init_workers":    ("AUTOZT_INIT_WORKERS", 16, 1),
+    "cache_ttl":       ("AUTOZT_CACHE_TTL", 60, 0),
+}
+
+
+def tuning_value(key, cfg=None, with_source=False):
+    """读一个调优旋钮的生效值；with_source=True 时返回 (值, 来源)。"""
+    env, default, lo = TUNING_KNOBS[key]
+    raw, src = os.environ.get(env), "env:" + env
+    if raw is None or not str(raw).strip():
+        c = cfg if cfg is not None else (_ACTIVE_CFG or {})
+        tun = c.get("tuning") if isinstance(c.get("tuning"), dict) else {}
+        raw = tun.get(key) if tun.get(key) is not None else c.get(key)
+        src = "config:" + key
+    if raw is None or not str(raw).strip():
+        raw, src = default, "default"
+    try:
+        val = max(lo, int(raw))
+    except (TypeError, ValueError):
+        val, src = default, "default（%r 不是整数）" % (raw,)
+    return (val, src) if with_source else val
 
 
 _ACT_RE = None

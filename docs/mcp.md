@@ -38,6 +38,8 @@ older clients.
 
 | Tool | Risk | Purpose |
 |---|---|---|
+| get_progress | read | **preferred state read**: local `.tf_progress.json` written by the monitor each round — per-material state, structured FAIL codes (`class`/`code`/`action`/`fail_count`), `since`/`eta_s`, monitor liveness; no collection, no ssh |
+| doctor | read | configuration preflight without ssh: effective `max_jobs` per project, tuning-knob sources, blocked projects, cross-project duplicate names, monitor keep-alive, agent-gate policy |
 | list_skills | read | skills and their steps, from skill.yaml |
 | list_materials | read | materials and step states |
 | get_summary | read | per-skill counters, FAIL list, global queue |
@@ -70,12 +72,22 @@ JSON envelope in `structuredContent`. Full mode also serializes that envelope in
 older clients; the compact, workflow, and monitor profiles keep only a short text pointer
 to avoid duplicating large payloads.
 
+All state tools accept `project` (the `<name>` of `tf_<name>.yaml`, comma separated) in
+addition to `tt`/`material`/`status`; scoping happens before collection. Material rows carry
+a stable `id` = `<project>/<full name>` that `material` arguments accept, so identically
+named materials in different projects never collide.
+
+Profiles: `workflow` (default) = 14 tools incl. `get_progress` and `doctor`;
+`monitor` = `get_progress`, `get_snapshot`, `cycle`; `compact` is unchanged for existing
+clients; `full` exposes everything.
+
 ## Workflow profile for new LLM integrations
 
 新接入优先使用 `AUTOZT_MCP_PROFILE=workflow`。它把一次观察、规则规划和可选执行收敛为少量稳定工具：
 
 ```text
-inspect → (model reviews only if needed) → cycle(execute=false) → cycle(execute=true)
+get_progress (cheap, no ssh) → inspect → (model reviews only if needed)
+  → cycle(execute=false) → cycle(execute=true)
 ```
 
 `inspect` 一次返回 attention 状态、稳定诊断码、候选动作和可执行动作；模型不需要先分别调用

@@ -15,37 +15,13 @@ _PKG_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _PKG_ROOT not in sys.path:
     sys.path.insert(0, _PKG_ROOT)
 
-# mcp/agent 子命令在参数解析之前拦截。只识别裸命令词，避免材料名恰好
-# 叫 mcp/agent 时误路由；两者都支持把 -c/-tt/-p 放在子命令前面。
-import sys as _sys
-_value_flags = {'-c', '--config', '-tt', '-p', '-j', '-job', '-status', '--status',
-                '-x', '--exclude', '--host', '-u', '--user'}
-def _bare_index(_name):
-    _skip = False
-    for _idx, _tok in enumerate(_sys.argv[1:]):
-        if _skip:
-            _skip = False
-            continue
-        if _tok in _value_flags:
-            _skip = True
-            continue
-        if _tok == _name:
-            return _idx + 1
-    return None
-
-_i_mcp = _bare_index('mcp')
-_i_agent = _bare_index('agent')
-if _i_mcp is not None and (_i_agent is None or _i_mcp < _i_agent):
-    from autozt import mcp as _mcp_intercept
-    # Pass the complete argv so MCP can honor global options placed before the
-    # subcommand (for example `autozt -c cfg mcp`) as well as after it.
-    _sys.exit(_mcp_intercept.main(_sys.argv[1:]))
-
-# agent 子命令在主解析器之前拦截：它有自己的稳定 JSON 参数面，且支持
-# `autozt -c cfg agent snapshot` 这种把全局选项放在 agent 前面的写法。
-if _i_agent is not None:
-    from autozt import agent_cli as _agent_intercept
-    _sys.exit(_agent_intercept.main(_sys.argv[1:]))
+# mcp/agent 子命令在参数解析之前拦截（与 pip 安装的 autozt 入口共用同一实现：
+# autozt.cli.route_subcommand）。只识别裸命令词，避免材料名恰好叫 mcp/agent 时
+# 误路由；两者都支持把 -c/-tt/-p/--project 放在子命令前面。
+from autozt.cli import route_subcommand as _route
+_rc = _route(sys.argv[1:])
+if _rc is not None:
+    sys.exit(_rc)
 
 # 英文帮助：AUTOZT_LANG=en（或 --lang en）时用 USAGE_EN，其余保持中文。
 # 放在最前面拦截，避免 argparse 的 --help 抢先输出中文。

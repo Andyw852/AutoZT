@@ -68,13 +68,14 @@ def status_kinds(spec: Any) -> Set[str]:
     return kinds
 
 
-def material_matches(name: Any, wanted: Iterable[str]) -> bool:
+def material_matches(name: Any, wanted: Iterable[str], qualified: Any = None) -> bool:
     wanted = list(wanted)
     if not wanted:
         return True
     text = str(name or "")
     base = text.rstrip("/").rsplit("/", 1)[-1]
     return any(text == item or base == item or text.endswith("/" + item)
+               or (qualified and str(qualified) == item)
                for item in wanted)
 
 
@@ -84,6 +85,7 @@ def scope_data(data: Any, args: Any = None) -> Any:
         return data
     wanted_tt = set(split_scope(_value(args, "tt")))
     wanted_mat = split_scope(_value(args, "material"))
+    wanted_proj = set(split_scope(_value(args, "project")))
     wanted_status = status_kinds(_value(args, "status"))
     out = dict(data)
     types = []
@@ -93,7 +95,10 @@ def scope_data(data: Any, args: Any = None) -> Any:
         ct = dict(task_type)
         mats = []
         for material in task_type.get("materials") or []:
-            if not material_matches(material.get("name"), wanted_mat):
+            if wanted_proj and (material.get("project") or "") not in wanted_proj:
+                continue
+            if not material_matches(material.get("name"), wanted_mat,
+                                    material.get("qualified_name")):
                 continue
             steps = material.get("steps") or []
             if wanted_status and not any(s.get("kind") in wanted_status for s in steps):
@@ -121,6 +126,9 @@ def compact_state(data: Any, args: Any = None) -> Dict[str, Any]:
         for material in task_type.get("materials") or []:
             cm: Dict[str, Any] = {
                 "name": material.get("name"),
+                # 稳定主键：<项目名>/<完整名>，不随采集范围变化；-p 与 material 参数都认。
+                "id": material.get("qualified_name") or material.get("name"),
+                "project": material.get("project") or "",
                 "hpc": material.get("hpc_name") or material.get("hpc") or "",
                 "dim": material.get("dim") or "",
                 "active": active_label(material),
@@ -130,7 +138,8 @@ def compact_state(data: Any, args: Any = None) -> Dict[str, Any]:
             for step in material.get("steps") or []:
                 cs: Dict[str, Any] = {
                     "label": step.get("label"), "kind": step.get("kind")}
-                for key in ("diag", "diag_code", "suggested_action", "action_reason"):
+                for key in ("diag", "diag_code", "diag_class", "suggested_action",
+                            "action_reason", "action_hint"):
                     if step.get(key):
                         cs[key] = step[key]
                 job = step.get("job") or {}
@@ -323,7 +332,7 @@ def proposals(compact: Mapping[str, Any], include_monitoring: bool = False,
                         "tool": tool,
                         "risk": risk,
                         "tt": tt,
-                        "material": material.get("name"),
+                        "material": material.get("id") or material.get("name"),
                         "step": step.get("label"),
                         "reason_code": step.get("diag_code") or "unknown",
                         "reason": step.get("action_reason") or step.get("diag") or "",
@@ -332,12 +341,12 @@ def proposals(compact: Mapping[str, Any], include_monitoring: bool = False,
                     })
                 elif step.get("label") == active and kind in ("TODO", "PREP", "SCANCEL"):
                     proposals.append({"tool": "start_step", "risk": "mutate", "tt": tt,
-                                      "material": material.get("name"), "step": step.get("label"),
+                                      "material": material.get("id") or material.get("name"), "step": step.get("label"),
                                       "reason_code": "ready", "reason": "active step is ready",
                                       "requires_approval": False})
                 elif include_monitoring and step.get("label") == active and kind in ("R", "PD"):
                     proposals.append({"tool": None, "risk": "read", "tt": tt,
-                                      "material": material.get("name"), "step": step.get("label"),
+                                      "material": material.get("id") or material.get("name"), "step": step.get("label"),
                                       "reason_code": "monitor", "reason": "job is running or queued"})
                 if len(proposals) >= limit:
                     return proposals

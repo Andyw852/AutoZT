@@ -178,8 +178,9 @@ def test_default_profile_is_workflow_sized():
     old = os.environ.pop("AUTOZT_MCP_PROFILE", None)
     try:
         names = {item["name"] for item in M._tools_list()}
-        assert len(names) == 12
+        assert len(names) == 14
         assert "inspect" in names and "cycle" in names
+        assert "get_progress" in names and "doctor" in names
         assert "cancel_step" not in names and "rebuild_step" not in names
         assert "stop_step" not in names and "rerun_step" not in names
     finally:
@@ -263,11 +264,11 @@ def test_workflow_profile_has_fixed_eight_tools():
     os.environ["AUTOZT_MCP_PROFILE"] = "workflow"
     try:
         names = {item["name"] for item in M._tools_list()}
-        assert len(names) == 12
+        assert len(names) == 14
         assert names == {
-            "schema", "capabilities", "list_skills", "describe_skill", "get_snapshot",
-            "inspect", "probe_step", "cycle", "apply_actions", "research_plan",
-            "preflight", "results",
+            "schema", "capabilities", "list_skills", "describe_skill", "get_progress",
+            "doctor", "get_snapshot", "inspect", "probe_step", "cycle", "apply_actions",
+            "research_plan", "preflight", "results",
         }
     finally:
         if old is None:
@@ -281,7 +282,7 @@ def test_monitor_profile_is_the_smallest_steady_state_surface():
     os.environ["AUTOZT_MCP_PROFILE"] = "monitor"
     try:
         names = {item["name"] for item in M._tools_list()}
-        assert names == {"get_snapshot", "cycle"}
+        assert names == {"get_progress", "get_snapshot", "cycle"}
     finally:
         if old is None:
             os.environ.pop("AUTOZT_MCP_PROFILE", None)

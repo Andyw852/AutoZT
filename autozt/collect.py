@@ -187,13 +187,13 @@ def collect_v3_batch(cfg, segs):
             sys.stderr.write("警告：跳过采集失败的组 host=%s wd=%s：%s\n"
                              % (host or "本地", wdir, _e))
             return ([], host or "", {})
-    _nw = int(os.environ.get("AUTOZT_WORKERS", "6") or "6")   # fixte⑦：并发可配（=1 串行定位）
-    # 大体系分块采集：同组材料太多时，单条 ssh 的 --config64 会超 argv 上限
-    # （Argument list too long）。按 AUTOZT_COLLECT_CHUNK 切成多块，每块单独 ssh
-    # （ControlMaster 复用连接，代价很小）。默认 100：比原 500 保守得多，长路径
-    # 大项目（如数百条长路径）不再需要手动设环境变量；显式设了
-    # AUTOZT_COLLECT_CHUNK 仍按给定值分块。
-    _chunk = max(1, int(os.environ.get("AUTOZT_COLLECT_CHUNK", "100") or 100))
+    from autozt import tuning_value
+    _nw = tuning_value("collect_workers", cfg)   # fixte⑦：并发可配（=1 串行定位）
+    # 大体系分块采集：每块单独 ssh（ControlMaster 复用连接，代价很小），
+    # 块越小单次越快、越不容易撞 timeout。payload 已改走 stdin（见 collect()），
+    # 不再受 argv 长度限制（E2BIG），分块只影响单次耗时与并行度。
+    # 生效值：AUTOZT_COLLECT_CHUNK > tf.yaml 的 collect_chunk > 默认 100。
+    _chunk = tuning_value("collect_chunk", cfg)
     gitems = []
     for _key, _entries in sorted(by_hw.items()):
         for _i in range(0, len(_entries), _chunk):
@@ -235,6 +235,7 @@ def collect_v3_batch(cfg, segs):
                              "gen_dir": t.get("gen_dir"),
                              "_base_dir": t.get("_base_dir"),
                              "_from": t.get("_from"),
+                             "max_jobs": t.get("_project_max_jobs"),
                              "optional_off": t.get("_optional_off"),
                              "optional_off_flat": t.get("_optional_off_flat")}
                 # v1.12：每步记自己所在集群的 host（跨集群拆分时各组 host 不同）。
@@ -334,11 +335,16 @@ def collect(cfg, types, host="__default__"):
         json.dumps({"user": cfg.get("user"), "types": types,
                     "extra_checks": extra,
                     "path_prefix": _pp}).encode()).decode()
-    args = ["python3", "-", "--config64", payload]
+    # payload 随脚本一起走 stdin（脚本首行赋值），不再作为 --config64 命令行参数：
+    # 单个 argv 参数在 Linux 上限 128 KiB（MAX_ARG_STRLEN），ssh 还会把远端命令
+    # 拼成一个字符串交给远端 shell——数百条长路径 + 技能判据源码一条就超
+    # （Argument list too long / E2BIG，整组采集被跳过）。stdin 没有这个上限。
+    args = ["python3", "-"]
+    script = "_AUTOZT_CONFIG64 = %r\n%s" % (payload, COLLECTOR)
     cmd = (_ssh_cmd_pre(cfg, host, ["-o", "ConnectTimeout=60"], ["timeout", "170"] + args)
            if host else args)
     try:
-        r = subprocess.run(cmd, input=COLLECTOR, capture_output=True, text=True,
+        r = subprocess.run(cmd, input=script, capture_output=True, text=True,
                            encoding="utf-8", errors="replace", timeout=180)
     except FileNotFoundError:
         sys.exit("错误：找不到 ssh 命令。")
@@ -385,13 +391,14 @@ def sh_b64(cmd_text):
     return "echo %s | base64 -d | bash" % base64.b64encode(cmd_text.encode()).decode()
 
 def _parallel_map(worker, items, nw=None, desc="批量操作"):
-    """并发跑 worker(item)。AUTOZT_OP_WORKERS 控制并发数（默认 8；=1 串行定位用）。
+    """并发跑 worker(item)。并发数 = AUTOZT_OP_WORKERS > tf.yaml op_workers > 8（=1 串行定位用）。
     批量 clean/start/auto 等逐材料操作都是"每材料若干次 ssh 往返"，串行时
     上百个材料就是上百次握手——并发后共享 ControlMaster 通道，提速明显。
     输出不锁序（各线程消息可能交错，但每行完整）；异常项吞掉并告警，不中断整批。"""
     import concurrent.futures as _cf
     items = list(items)
-    _nw = int(nw or os.environ.get("AUTOZT_OP_WORKERS", "8") or 8)
+    from autozt import tuning_value
+    _nw = int(nw or tuning_value("op_workers"))
     if _nw <= 1 or len(items) <= 1:
         return [worker(x) for x in items]
 

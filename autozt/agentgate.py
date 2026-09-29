@@ -23,10 +23,15 @@
    敲 tf 也会记一条（decision=direct），堵住"绕过网关就没人知道"。
 
 **边界与开关**：
-- 不设 `AUTOZT_ACTOR` 且不用 `autozt act` → 行为与本改动前**完全一致**；
-- 设了 `AUTOZT_ACTOR` → 直接调用也审计；破坏性动作是否要令牌由 `AUTOZT_AGENT_STRICT`
-  决定（缺省：设了 AUTOZT_ACTOR 就严格；`AUTOZT_AGENT_STRICT=0` 可关，给用户自己的
-  定时脚本留后门）；
+- 网关默认开启（`agent_gate: auto`，可在 tf.yaml 写或用 `AUTOZT_AGENT_GATE`）：
+  以前只有设了 `AUTOZT_ACTOR` 才算 agent 会话，AI 忘了设就直接放行（2026-09 实测）。
+  现在 agent 会话按下面顺序识别：`AUTOZT_ACTOR` → 常见 AI 代理留在子进程环境里的
+  标记（CLAUDECODE / GEMINI_CLI / CODEX_SANDBOX …，可用 tf.yaml 的
+  `agent_env_markers` 追加，如 DSH 自己的变量）→ 都没有时，**非交互终端里的破坏性
+  命令**也按 agent 处理（人在终端里敲不受影响；approve 必须在真 TTY 里做）；
+- `agent_gate: off`（或 `AUTOZT_AGENT_GATE=off`）→ 回到旧行为：只认 `AUTOZT_ACTOR`；
+- 识别为 agent → 直接调用也审计；破坏性动作是否要令牌由 `AUTOZT_AGENT_STRICT`
+  决定（缺省严格；`AUTOZT_AGENT_STRICT=0` 可关，给用户自己的定时脚本留后门）；
 - 只写配置目录下的两个文件，不碰材料目录、不碰超算、不发任何网络请求。
 
 铁律对齐：stop/rerun/clean/-f/-y 本来就要人工同意（~/.dsh/AGENTS.md 第 2 节、
@@ -52,11 +57,17 @@ AGENT_STRICT_ENV = "AUTOZT_AGENT_STRICT"
 AGENT_GATEWAY_ENV = "AUTOZT_AGENT_GATEWAY"     # 网关子进程用它避免重复记账
 AGENT_TTL_ENV = "AUTOZT_APPROVE_TTL"
 AGENT_TTL_DEFAULT = 900                    # 批准有效期（秒）
+AGENT_GATE_ENV = "AUTOZT_AGENT_GATE"       # auto（默认）/ off
+# 常见 AI 编码代理在它执行的 shell 子进程里设置的环境变量；存在即视为 agent 会话。
+# 其它代理（如 DSH）在 tf.yaml 里用 agent_env_markers: [变量名, ...] 追加。
+AGENT_ENV_MARKERS = ("CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT", "GEMINI_CLI",
+                     "CODEX_SANDBOX", "CODEX_SANDBOX_NETWORK_DISABLED")
 
 # 三档风险：read / mutate / destructive
 AGENT_READ_CMDS = {
     "list", "summary", "status", "json", "dir", "skills", "skill", "schema",
     "history", "prove", "probe", "config", "help", "diagnose", "session",
+    "progress", "doctor",
 }
 AGENT_MUTATE_CMDS = {
     "start", "retry", "fetch", "advance", "init", "adopt", "level", "hpc", "auto",
@@ -85,6 +96,38 @@ def agent_strict():
     if v is None or str(v).strip() == "":
         return True
     return str(v).strip().lower() not in ("0", "false", "no", "off", "关", "否")
+
+
+def agent_gate_policy(cfg=None):
+    """网关策略：auto（默认，AI 调用默认走网关）/ off（只认 AUTOZT_ACTOR）。"""
+    v = (os.environ.get(AGENT_GATE_ENV) or (cfg or {}).get("agent_gate") or "auto")
+    v = str(v).strip().lower()
+    if v in ("0", "false", "no", "off", "关", "否"):
+        return "off"
+    return "auto"
+
+
+def agent_detect(cfg=None):
+    """识别 agent 会话：返回 (actor, 来源)；不是 agent 会话返回 ("", None)。"""
+    actor = agent_actor()
+    if actor:
+        return actor, "env:" + AGENT_ACTOR_ENV
+    if agent_gate_policy(cfg) == "off":
+        return "", None
+    extra = (cfg or {}).get("agent_env_markers") or []
+    if isinstance(extra, str):
+        extra = [x.strip() for x in extra.split(",")]
+    for name in list(AGENT_ENV_MARKERS) + [str(x) for x in extra if str(x).strip()]:
+        if (os.environ.get(name) or "").strip():
+            return "agent:%s" % name.lower(), "env:" + name
+    return "", None
+
+
+def _stdin_isatty():
+    try:
+        return bool(sys.stdin and sys.stdin.isatty())
+    except (AttributeError, ValueError):
+        return False
 
 
 def agent_ttl():
@@ -371,7 +414,7 @@ def agent_pending_approvals(cfg):
 AGENT_RISK_CN = {"read": "只读", "mutate": "推进", "destructive": "破坏性"}
 AGENT_POLICY_ROWS = [
     ("read", "list summary status json dir skills skill schema history prove "
-             "probe config help diagnose session / 任何 --dry-run", "放行"),
+             "probe config help diagnose session progress doctor / 任何 --dry-run", "放行"),
     ("mutate", "start retry fetch advance init adopt level hpc auto conf --set "
                "correct monitor restart", "放行（记账）"),
     ("destructive", "stop rerun clean migrate-subdir push / 未登记命令 / 任何 -f -y --yes --purge-config",
@@ -411,6 +454,8 @@ def render_agent_policy():
              % AGENT_TTL_DEFAULT)
     L.append("      非交互终端（管道 / agent 子进程 / 定时任务）不能执行 autozt approve")
     L.append("      ——agent 无法自我批准。")
+    L.append("      默认网关开启（agent_gate: auto）：认 AUTOZT_ACTOR、常见 AI 代理环境标记，")
+    L.append("      以及非交互终端里的破坏性命令；tf.yaml agent_gate: off / AUTOZT_AGENT_GATE=off 关。")
     L.append("      环境变量：AUTOZT_ACTOR=名字（谁在操作）、AUTOZT_AGENT_STRICT=0（关令牌）、")
     L.append("                AUTOZT_APPROVE_TTL=秒（批准有效期）。")
     return "\n".join(L)
@@ -500,7 +545,7 @@ def cmd_act(cfg, raw_argv):
         print(render_agent_policy())
         return 0
     risk, why = agent_classify(sub, inner)
-    actor = agent_actor() or os.environ.get("USER") or "?"
+    actor = agent_detect(cfg)[0] or os.environ.get("USER") or "?"
     sig = agent_signature(sub, inner)
     approved_by = None
     prog = os.path.join(_PKG_ROOT, "bin", "autozt")
@@ -512,7 +557,9 @@ def cmd_act(cfg, raw_argv):
             print(agent_deny_message(cfg, sub, inner, sig, why, prog=prog))
             return 3
         approved_by = approver or "human"
-    child = [sys.executable, prog] + outer + inner
+    # pip 非 editable 安装时没有 bin/autozt：退回 python -m autozt（同一入口）
+    child = ([sys.executable, prog] if os.path.isfile(prog)
+             else [sys.executable, "-m", "autozt"]) + outer + inner
     env = dict(os.environ)
     env[AGENT_GATEWAY_ENV] = "act"        # 子进程不再重复记账/重复要令牌
     t0 = time.time()
@@ -583,22 +630,30 @@ def agent_direct_gate(cfg, cmd, raw_argv):
     """
     if os.environ.get(AGENT_GATEWAY_ENV) == "act":
         return None
-    actor = agent_actor()
-    if not actor:
-        return None
     if cmd in ("act", "approve"):
         return None
     inner = [str(x) for x in (raw_argv or [])]
     risk, why = agent_classify(cmd, inner)
+    actor, _src = agent_detect(cfg)
+    if not actor:
+        # 没认出是 agent：人在交互终端里敲的一律放行（行为不变）；非交互终端里的
+        # 破坏性命令默认也要批准令牌——AI 调用多半没有 TTY，不能靠它自觉设 AUTOZT_ACTOR。
+        if (risk == "destructive" and agent_gate_policy(cfg) != "off"
+                and not _stdin_isatty()):
+            actor = "non-tty"
+        else:
+            return None
     sig = agent_signature(cmd, inner)
     if risk == "destructive" and agent_strict():
         ok, approver = agent_take_approval(cfg, sig)
         if not ok:
             agent_audit(cfg, actor, cmd, inner, risk, "deny-need-approval",
                         why=why, exit_code=3, sig=sig, gateway="direct")
-            print("✗ 拒绝执行：agent 会话（AUTOZT_ACTOR=%s）直接执行破坏性命令 tf %s。\n"
+            print("✗ 拒绝执行：agent 会话（%s）直接执行破坏性命令 tf %s。\n"
                   "  请走网关：autozt act %s\n"
-                  "  人工批准：autozt approve %s"
+                  "  人工批准（必须在交互终端里）：autozt approve %s\n"
+                  "  （自己的定时脚本需要非交互执行时：AUTOZT_AGENT_STRICT=0，"
+                  "或 tf.yaml 写 agent_gate: off）"
                   % (actor, cmd, " ".join(inner), " ".join(inner)))
             return 3
         agent_audit(cfg, actor, cmd, inner, risk, "allow-direct-approved",

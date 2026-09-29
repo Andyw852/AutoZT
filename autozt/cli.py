@@ -102,15 +102,58 @@ def normalize_monitor_command(command, positional, restart=False):
     return command, positional, restart
 
 
+# 取值型选项：找裸命令词时跳过它们后面的值（-p agent 里的 agent 是材料名，不是子命令）
+_ROUTE_VALUE_FLAGS = {'-c', '--config', '-tt', '-p', '-j', '-job', '-status', '--status',
+                      '-x', '--exclude', '--host', '-u', '--user', '-proj', '--project'}
+
+
+def _bare_index(argv, name):
+    skip = False
+    for idx, tok in enumerate(argv):
+        if skip:
+            skip = False
+            continue
+        if tok in _ROUTE_VALUE_FLAGS:
+            skip = True
+            continue
+        if tok == name:
+            return idx
+    return None
+
+
+def route_subcommand(argv):
+    """agent / mcp 子命令走各自的稳定 JSON 面，在主参数解析和任何采集之前分流。
+
+    以前只有 bin/autozt 与 python -m autozt 做了这层拦截；pip 安装生成的 autozt
+    命令直接进 main()：`autozt agent ...` 报"不是命令"，`autozt mcp` 要先把全部
+    材料 ssh 采集一遍才启动。返回退出码；不是这两个子命令返回 None。"""
+    argv = list(argv)
+    i_mcp = _bare_index(argv, "mcp")
+    i_agent = _bare_index(argv, "agent")
+    if i_mcp is not None and (i_agent is None or i_mcp < i_agent):
+        from autozt import mcp as _mcp
+        return _mcp.main(argv) or 0
+    if i_agent is not None:
+        from autozt import agent_cli as _agent
+        return _agent.main(argv)
+    return None
+
+
 def main():
     from autozt.bootstrap import reset_config_conflicts, reject_config_conflict_targets, filter_config_conflicts
     reset_config_conflicts()
     # JSON/MCP/agent callers and Windows consoles must see the same UTF-8 text.
+    # line_buffering：输出重定向到文件/管道时也逐行落盘（以前块缓冲，
+    # `autozt ... > log` 只能靠文件 mtime 猜它还在不在动）。
     for _stream in (sys.stdout, sys.stderr):
         try:
-            _stream.reconfigure(encoding="utf-8", errors="replace")
-        except AttributeError:
+            _stream.reconfigure(encoding="utf-8", errors="replace", line_buffering=True)
+        except (AttributeError, ValueError):
             pass
+    _routed = route_subcommand(sys.argv[1:])
+    if _routed is not None:
+        sys.exit(_routed)
+    from autozt import cmd_doctor, cmd_progress, write_progress, _watch_running_pid, _watch_files, _seg_proj_name
     from autozt import EXAMPLE_CONFIG, JSON_SCHEMA, AUTOZT_VERSION, USAGE, USAGE_EN, _PKG_ROOT, _add_diag_codes, _json_changes, _json_errors_only, _json_paginate, _dbg_t, _state_cache_load, _state_cache_save, _summary_json, _watch_cron, _watch_daemon, _watch_ensure, _watch_stop, apply_exclude, apply_hide_done, apply_skills, auto_advance, auto_fetch, auto_recover_hung, cmd_adopt, cmd_auto, cmd_auto_project, cmd_auto_skill, cmd_clean, cmd_conf, cmd_diagnose, cmd_fetch, cmd_hpc, cmd_init, cmd_level, cmd_migrate_subdir, cmd_rerun, cmd_retry, cmd_skills, cmd_start, cmd_status, cmd_step_init, cmd_stop, cmd_summary, cmd_watch, collect_data, fill_local_dim, filter_projs, filter_status, find_material, find_step, find_uninited, get_types, load_config, merge_project_configs, render_table, status_spec_has_scancel, cmd_schema, cmd_skill_show, cmd_correct, cmd_correct_usage, cmd_history, history_record, cmd_prove, set_active_cfg, cmd_act, cmd_approve, agent_direct_gate, agent_audit, cmd_session
     if "--help-all" in sys.argv[1:]:
         # 英文帮助：AUTOZT_LANG=en 或命令行 --lang en
@@ -146,6 +189,9 @@ def main():
     p = argparse.ArgumentParser(prog="autozt")
     p.add_argument("-tt", dest="tt")
     p.add_argument("-p", dest="proj")
+    p.add_argument("-proj", "--project", dest="project", metavar="项目",
+                   help="只看/只动指定项目（tf_<项目>.yaml 的 <项目>，逗号分隔）："
+                        "采集前就按项目裁剪，不用把几百个材料名列进 -p")
     p.add_argument("-j", "-job", dest="job")
     p.add_argument("-c", "--config")
     p.add_argument("--host")
@@ -235,7 +281,10 @@ def main():
                 "act", "approve",
                 # v1.0（P1-7）：session export = 把一个材料的操作历史/provenance/
                 #                  审计打包成论文补充材料
-                "session"}
+                "session",
+                # AI 接入：progress = 读本地进度文件（不采集、不连超算）；
+                #          doctor   = 配置预检（不连超算）
+                "progress", "doctor"}
     root, cmd, pos = None, "status", []
     for tok in a.args:  # v3.14：位置参数先收集，之后按"材料名/目录"消歧
         if tok == "help":
@@ -298,11 +347,36 @@ def main():
     _gate = agent_direct_gate(cfg, cmd, sys.argv[1:])   # agent 会话直接调用 → 审计
     if _gate is not None:
         sys.exit(_gate)
+    if cmd == "progress":   # 只读本地进度文件：不装技能、不扫项目、不连超算（秒级）
+        sys.exit(cmd_progress(cfg, project=a.project, tt=a.tt,
+                              material=",".join(filter(None, [a.proj] + mat_toks)) or None,
+                              status=a.status_f, json_out=a.json_out, limit=a.limit))
+    if cmd == "monitor" and (a.stop or a.install or a.uninstall
+                             or (a.daemon and not a.restart)):
+        # 控制类操作不需要项目配置。cron 保活每 10 分钟跑一次 monitor -d：以前先
+        # 做完整的 apply_skills + merge_project_configs（9p 上 1–2 分钟、还会卡在
+        # D 状态）才去看 pid——守护明明在跑也白扫一遍。现在先看 pid。
+        if a.install:
+            sys.exit(_watch_cron(True))
+        if a.uninstall:
+            sys.exit(_watch_cron(False))
+        if a.stop:
+            sys.exit(_watch_stop(cfg))
+        _pid, _ = _watch_running_pid(cfg)
+        if _pid:
+            print("autozt monitor 已在后台运行 (PID %d)" % _pid)
+            print("日志：%s（tail -f 查看）；停止：autozt monitor --stop"
+                  % _watch_files(cfg)[1])
+            return
     cfg = apply_skills(cfg, verbose=True)
     cfg = merge_project_configs(cfg)
-    reject_config_conflict_targets(a.proj, a.tt)
+
+    def _types_for_block_check():   # 只在 basename 撞上屏蔽项目时才算（本地发现，有缓存）
+        return get_types(cfg, tt=a.tt, quiet=True)
+    reject_config_conflict_targets(a.proj, a.tt, types_fn=_types_for_block_check)
     if cmd == "monitor":
-        reject_config_conflict_targets(",".join(mat_toks), a.tt)
+        reject_config_conflict_targets(",".join(mat_toks), a.tt,
+                                       types_fn=_types_for_block_check)
     if cmd == "monitor":   # 控制类操作不采集状态，提前短路
         if a.install:
             sys.exit(_watch_cron(True))
@@ -347,6 +421,16 @@ def main():
     types = get_types(cfg, tt=a.tt,
                       root_override=None if cmd == "init" else root,
                       quiet=(cmd == "init"))
+    if a.project:   # --project：采集前按项目配置裁剪段（只采这个项目，快且不串项目）
+        _wp = {x.strip() for x in a.project.split(",") if x.strip()}
+        _avail = sorted({_seg_proj_name(t) for t in types if _seg_proj_name(t)})
+        types = [t for t in types if _seg_proj_name(t) in _wp]
+        if not types:
+            sys.exit(_i18n.t("错误：", "error: ") + "没有项目 %s%s（可用项目：%s）。"
+                     % (a.project, ("（在技能 %s 下）" % a.tt) if a.tt else "",
+                        ", ".join(_avail[:40]) or "（无）"))
+    if cmd == "doctor":   # 配置预检：纯本地，不采集、不连超算
+        sys.exit(cmd_doctor(cfg, types, json_out=a.json_out, strict=a.strict))
     if cmd not in ("watch", "monitor"):
         _watch_ensure(cfg)   # v1.10：auto_watch 时顺带确保后台监控在跑
     if cmd in ("status", "json") and not types and not a.tt:
@@ -388,11 +472,21 @@ def main():
             sys.exit(1)
         mat_toks, a.proj = [], _proj
         if _proj:       # v1.9.9：带 -p（或位置参数）就只改这些材料/技能
-            _rc = cmd_auto_project(cfg, types, _proj, a.tt, _arg)
+            _rc = cmd_auto_project(cfg, types, _proj, a.tt, _arg, dry=a.dry)
         elif a.tt:      # patch_auto：-tt 不带材料 = 该技能下全部材料
-            _rc = cmd_auto_skill(cfg, types, a.tt, _arg)
+            _rc = cmd_auto_skill(cfg, types, a.tt, _arg, dry=a.dry)
+        elif a.project:  # --project 不带 -tt：该项目挂的每个技能（types 已按项目裁剪）
+            _rc = 0
+            for _k in sorted({t["key"] for t in types}):
+                _rc |= cmd_auto_skill(cfg, types, _k, _arg, dry=a.dry)
         else:
+            if a.dry and _arg is not None:
+                print("[dry-run] 将把全局 %s 的 auto_advance 改为 %s（未写入）。"
+                      % (cfg.get("_config_path") or "tf.yaml", _arg))
+                sys.exit(0)
             _rc = cmd_auto(cfg, _arg)
+        if a.dry:       # --dry-run：只列出会改的文件，不写、不推进
+            sys.exit(_rc)
         # patch_auto_now：原实现三条路都 sys.exit，走不到下面的 status 分支，
         # 而 auto_advance() 只在 status / watch 里调用 —— 于是 auto on 只翻
         # 开关不干活，还得再手敲一次 tf。这里改成：on 且全部成功 -> 不退出，
@@ -432,11 +526,15 @@ def main():
         types = [t for t in types
                  if (not (t.get("skill_subdir") and t.get("local_root"))
                      or os.path.basename(os.path.realpath(t["local_root"])) in _want
+                     or ("%s/%s" % (_seg_proj_name(t),
+                                    os.path.basename(os.path.realpath(t["local_root"]))))
+                     in _want
                      or not os.path.isfile(os.path.join(
                          os.path.realpath(t["local_root"]), "POSCAR")))]
     # patch_state_cache：list/summary 只读命令优先读本地缓存（跳过 ssh 采集），
     # --refresh 或 AUTOZT_CACHE_TTL=0 强制刷新；会改状态的命令一律现采。
-    _ttl = int(os.environ.get("AUTOZT_CACHE_TTL", "60") or 0)
+    from autozt import tuning_value
+    _ttl = tuning_value("cache_ttl", cfg)
     _cached = None
     if cmd in ("list", "summary") and not a.refresh and _ttl > 0:
         _cached = _state_cache_load(cfg, types, a.tt, root, _ttl)
@@ -458,9 +556,19 @@ def main():
                 print("[history] 记录 %d 条状态转移" % _n_hist, file=sys.stderr)
         except Exception:
             pass
+        # 机器可读进度文件（.tf_progress.json）：AI 之后用 autozt progress /
+        # agent progress 直接读，不用再 ssh。局部采集按材料合并，不截断全量视图。
+        filter_config_conflicts(data)
+        write_progress(cfg, data, writer="cli",
+                       full_scope=not (a.tt or a.proj or a.project or root or mat_toks))
     _dbg_t("状态采集（ssh+远端扫描）", _t0)
 
     filter_config_conflicts(data)   # 包含旧缓存；必须先于状态过滤/动作分派
+    if a.project:   # 缓存命中时 types 裁剪不生效，这里再按材料的 project 字段兜底
+        _wp = {x.strip() for x in a.project.split(",") if x.strip()}
+        for _t in data["types"]:
+            _t["materials"] = [m for m in _t["materials"]
+                               if (m.get("project") or "") in _wp]
     apply_exclude(data, a.exclude)   # v3.11：-x 跳过指定项目
 
     incl_sc = status_spec_has_scancel(a.status_f)   # v1.4
@@ -518,7 +626,7 @@ def main():
         if a.user:
             _ov["user"] = a.user
         cmd_watch(cfg, types, projs, a.exclude, a.interval,
-                  tt=a.tt, root=root, overrides=_ov)
+                  tt=a.tt, root=root, overrides=_ov, project=a.project)
         return
 
     if a.clean or cmd == "clean":  # 删除生成物回到 PREP（留 POSCAR）
@@ -571,11 +679,6 @@ def main():
             _rc |= cmd_prove(cfg, data, pj, jobs[0], json_out=a.json_out,
                              verify=a.verify)
         sys.exit(_rc)
-    if cmd == "mcp":   # C 差异化：以 MCP stdio 服务暴露给上层 agent
-        from autozt import mcp as _mcp
-        return _mcp.main(sys.argv[1:] if "--list-tools" in sys.argv
-                         or "--call" in sys.argv else [])
-
     if cmd == "session":   # v1.0（P1-7）：会话导出（只读本地，打论文补充材料包）
         _sargs = list(mat_toks)
         if _sargs and _sargs[0] in ("export", "bundle"):
@@ -610,7 +713,8 @@ def main():
         if a.diff:   # 快照按过滤范围分开存，不同 -tt/-status/-x/-p 互不干扰
             import hashlib as _hashlib
             _p = ",".join(sorted(x.strip() for x in (a.proj or "").split(",") if x.strip()))
-            _scope = ",".join([a.tt or "", a.status_f or "", a.exclude or "", _p])
+            _scope = ",".join([a.tt or "", a.status_f or "", a.exclude or "", _p]
+                              + (["project=" + a.project] if a.project else []))
             _h = _hashlib.md5(_scope.encode("utf-8")).hexdigest()[:8]
             _sp = os.path.join(cfg.get("_config_dir") or os.getcwd(),
                                ".tf_summary_%s.txt" % _h)
@@ -663,7 +767,7 @@ def main():
                 _p = ",".join(sorted(x.strip() for x in
                                      (a.proj or "").split(",") if x.strip()))
                 _scope = ",".join([a.tt or "", a.status_f or "", a.exclude or "",
-                                   _p])
+                                   _p] + (["project=" + a.project] if a.project else []))
                 _h = _hashlib.md5(_scope.encode("utf-8")).hexdigest()[:8]
                 _sp = os.path.join(cfg.get("_config_dir") or os.getcwd(),
                                    ".tf_json_snapshot_%s.txt" % _h)

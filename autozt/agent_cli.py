@@ -40,12 +40,9 @@ ALLOWED_ACTIONS = {
     "sync_results": "fetch",
     "run_ready_steps": "advance",
 }
-REQUEST_OPS = {
-    "capabilities", "schema", "skills", "contract", "snapshot", "inspect", "plan",
-    "cycle", "run", "evidence", "propose", "apply", "research_plan", "preflight", "results",
-}
+REQUEST_OPS = set(_service.REQUEST_OPS)
 REQUEST_FIELDS = {
-    "op", "scope", "tt", "material", "status", "step", "view",
+    "op", "scope", "project", "tt", "material", "status", "step", "view", "limit",
     "include_monitoring", "include_retry", "execute", "dry_run", "max_actions",
     "cursor", "full", "skill", "plan", "actions", "goal", "result_dir", "property",
     "temperature", "carrier", "direction", "dimension", "thickness",
@@ -121,9 +118,17 @@ def _cfg_env(explicit: Optional[str]) -> Dict[str, str]:
     return env
 
 
+def autozt_argv() -> List[str]:
+    """调用 AutoZT CLI 的 argv 前缀。源码树里有 bin/autozt 就用它；pip 非 editable
+    安装时 bin/ 不在包里，退回 `python -m autozt`（以前直接报 cannot execute）。"""
+    if os.path.isfile(PROG):
+        return [sys.executable, PROG]
+    return [sys.executable, "-m", "autozt"]
+
+
 def _run(argv: Iterable[str], config: Optional[str], timeout: int = 1800
          ) -> Tuple[int, str, str]:
-    cmd = [sys.executable, PROG]
+    cmd = autozt_argv()
     if config:
         cmd += ["-c", os.path.abspath(os.path.expanduser(config))]
     cmd += [str(x) for x in argv]
@@ -153,6 +158,8 @@ def _cli_error(rc: int, out: str, err: str) -> str:
 
 def _context_argv(args: argparse.Namespace) -> List[str]:
     out: List[str] = []
+    if getattr(args, "project", None):
+        out += ["--project", str(args.project)]
     if getattr(args, "tt", None):
         out += ["-tt", str(args.tt)]
     if getattr(args, "material", None):
@@ -223,7 +230,9 @@ def _filter_snapshot(compact: Dict[str, Any], view: str) -> Dict[str, Any]:
 
 def _snapshot_path(args: argparse.Namespace) -> str:
     scope = "|".join([str(getattr(args, key, "") or "")
-                       for key in ("tt", "material", "status", "view")])
+                       for key in ("tt", "material", "status", "view")]
+                      + (["project=%s" % args.project] if getattr(args, "project", None)
+                         else []))
     digest = hashlib.sha256(scope.encode("utf-8")).hexdigest()[:16]
     return os.path.join(_config_dir(getattr(args, "config", None)),
                         ".tf_agent_snapshot_%s.json" % digest)
@@ -321,6 +330,51 @@ def _cmd_capabilities(args: argparse.Namespace) -> Tuple[Dict[str, Any], int]:
 def _cmd_schema(args: argparse.Namespace) -> Tuple[Dict[str, Any], int]:
     """Return the complete protocol contract without collecting cluster state."""
     return _envelope("schema", _service.schema()), 0
+
+
+def _cmd_progress(args: argparse.Namespace) -> Tuple[Dict[str, Any], int]:
+    """读本地进度文件（monitor 每轮写）：不起子进程、不采集、不连超算。"""
+    try:
+        from autozt import load_config
+        from autozt import progress as _progress
+        path = _config_path(getattr(args, "config", None))
+        cfg, found = load_config(path)
+        cfg["_config_dir"] = os.path.dirname(os.path.abspath(found)) if found else os.getcwd()
+    except SystemExit as exc:
+        return _envelope("progress", ok=False, error=str(exc.code), returncode=1), 1
+    doc = _progress.load_progress(cfg)
+    if doc is None:
+        return _envelope("progress", ok=False, returncode=1,
+                         error="no progress file at %s yet; it is written by `autozt monitor` "
+                               "each round or by any collecting command (e.g. `autozt list "
+                               "--refresh`)" % _progress.progress_path(cfg)), 1
+    view = _progress.filter_progress(doc, getattr(args, "project", None),
+                                     getattr(args, "tt", None),
+                                     getattr(args, "material", None),
+                                     getattr(args, "status", None))
+    view["path"] = _progress.progress_path(cfg)
+    view["liveness"] = _progress.monitor_liveness(cfg, doc)
+    limit = getattr(args, "limit", None)
+    if limit:
+        view["materials_total"] = len(view["materials"])
+        view["materials"] = view["materials"][:int(limit)]
+    return _envelope("progress", view), 0
+
+
+def _cmd_doctor(args: argparse.Namespace) -> Tuple[Dict[str, Any], int]:
+    argv = ["doctor", "--json"]
+    if getattr(args, "project", None):
+        argv = ["--project", str(args.project)] + argv
+    if getattr(args, "tt", None):
+        argv = ["-tt", str(args.tt)] + argv
+    rc, out, err = _run(argv, getattr(args, "config", None))
+    payload, parse_error = _parse_json_output(out, err)
+    if parse_error:
+        return _envelope("doctor", ok=False, error=_cli_error(rc, out, err) if rc else parse_error,
+                         returncode=rc or 1), rc or 1
+    # doctor 有 error 级发现时退出码 1，但报告本身是完整有效的——照样返回
+    return _envelope("doctor", payload, ok=rc == 0, returncode=rc,
+                     error=None if rc == 0 else "doctor reported error-level findings"), rc
 
 
 def _cmd_evidence(args: argparse.Namespace) -> Tuple[Dict[str, Any], int]:
@@ -448,7 +502,7 @@ def _check_plan_cursor(args: argparse.Namespace, plan: Any,
     if not isinstance(scope, dict):
         return None, "plan scope must be an object", 2
     current_args = argparse.Namespace(
-        config=getattr(args, "config", None),
+        config=getattr(args, "config", None), project=scope.get("project"),
         tt=scope.get("tt"), material=scope.get("material"),
         status=scope.get("status"))
     compact, error, rc = _status(current_args)
@@ -490,14 +544,14 @@ def _cmd_apply(args: argparse.Namespace) -> Tuple[Dict[str, Any], int]:
 
 
 def _agent_scope(args: argparse.Namespace) -> Dict[str, Any]:
-    return {key: getattr(args, key, None) for key in ("tt", "material", "status")
+    return {key: getattr(args, key, None) for key in ("project", "tt", "material", "status")
             if getattr(args, key, None) not in (None, "")}
 
 
 def _service_loader(args: argparse.Namespace):
     def load(scope: Mapping[str, Any]):
         scoped = argparse.Namespace(
-            config=getattr(args, "config", None),
+            config=getattr(args, "config", None), project=scope.get("project"),
             tt=scope.get("tt"), material=scope.get("material"),
             status=scope.get("status"))
         return _status(scoped)
@@ -538,6 +592,7 @@ def _execute_actions(actions: List[Dict[str, Any]], config: Optional[str],
         # The service has already rechecked once; this final read is the CAS
         # boundary immediately before invoking the mutation gateway.
         scoped = argparse.Namespace(config=config, tt=(scope or {}).get("tt"),
+                                    project=(scope or {}).get("project"),
                                     material=(scope or {}).get("material"),
                                     status=(scope or {}).get("status"))
         compact, read_error, rc = _status(scoped)
@@ -633,11 +688,12 @@ def _request_args(base: argparse.Namespace, request: Mapping[str, Any]
                   ) -> argparse.Namespace:
     scope = request.get("scope") if isinstance(request.get("scope"), dict) else {}
     merged = dict(scope)
-    for key in ("tt", "material", "status", "step"):
+    for key in ("project", "tt", "material", "status", "step"):
         if request.get(key) not in (None, ""):
             merged[key] = request[key]
     return argparse.Namespace(
-        config=getattr(base, "config", None),
+        config=getattr(base, "config", None), project=merged.get("project"),
+        limit=request.get("limit"),
         tt=merged.get("tt"), material=merged.get("material"),
         status=merged.get("status"), step=merged.get("step"),
         view=request.get("view", "attention"),
@@ -681,7 +737,7 @@ def _dispatch_request(request: Any, base: argparse.Namespace
         if not isinstance(scope, dict):
             return _envelope("request", ok=False,
                              error="scope must be an object", returncode=2), 2
-        bad_scope = sorted(set(scope) - {"tt", "material", "status", "step"})
+        bad_scope = sorted(set(scope) - {"project", "tt", "material", "status", "step"})
         if bad_scope:
             return _envelope("request", ok=False,
                              error="unknown scope field(s): %s" % ", ".join(bad_scope),
@@ -691,7 +747,8 @@ def _dispatch_request(request: Any, base: argparse.Namespace
                 return _envelope("request", ok=False,
                                  error="scope field %s must be string" % key,
                                  returncode=2), 2
-    for key in ("op", "tt", "material", "status", "step", "view", "cursor", "skill"):
+    for key in ("op", "project", "tt", "material", "status", "step", "view", "cursor",
+                "skill"):
         if key in request and not isinstance(request[key], str):
             return _envelope("request", ok=False,
                              error="request field %s must be string" % key,
@@ -703,6 +760,12 @@ def _dispatch_request(request: Any, base: argparse.Namespace
     if "actions" in request and not isinstance(request["actions"], list):
         return _envelope("request", ok=False,
                          error="request field actions must be array", returncode=2), 2
+    if "limit" in request and (isinstance(request["limit"], bool)
+                               or not isinstance(request["limit"], int)
+                               or request["limit"] < 1):
+        return _envelope("request", ok=False,
+                         error="request field limit must be a positive integer",
+                         returncode=2), 2
     for key in ("include_monitoring", "include_retry", "execute", "dry_run", "full"):
         if key in request and not isinstance(request[key], bool):
             return _envelope("request", ok=False,
@@ -728,6 +791,10 @@ def _dispatch_request(request: Any, base: argparse.Namespace
         return _cmd_skills(child)
     if op == "contract":
         return _cmd_contract(child)
+    if op == "progress":
+        return _cmd_progress(child)
+    if op == "doctor":
+        return _cmd_doctor(child)
     if op == "inspect":
         return _cmd_inspect(child)
     if op == "plan":
@@ -802,7 +869,9 @@ def _add_context_options(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("-tt", dest="tt", default=argparse.SUPPRESS,
                         help="技能类型")
     parser.add_argument("-p", "--material", dest="material", default=argparse.SUPPRESS,
-                        help="材料名")
+                        help="材料名或稳定 id（<项目名>/<完整名>）")
+    parser.add_argument("-proj", "--project", dest="project", default=argparse.SUPPRESS,
+                        help="只看指定项目（tf_<项目>.yaml 的 <项目>，逗号分隔）")
     parser.add_argument("-status", "--status", dest="status", default=argparse.SUPPRESS,
                         help="状态过滤，例如 error,running,pd")
     parser.add_argument("--pretty", action="store_true", default=argparse.SUPPRESS,
@@ -827,6 +896,12 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("skill", nargs="?", help="技能名；省略则输出全部契约")
     p.add_argument("--full", action="store_true",
                    help="保留生成器路径等完整契约字段；默认输出紧凑契约")
+
+    p = sub.add_parser("progress", help="读本地进度文件：逐材料状态/FAIL 码/ETA（无 ssh，秒级）")
+    _add_context_options(p)
+    p.add_argument("--limit", type=int, help="最多返回多少个材料")
+    p = sub.add_parser("doctor", help="配置预检：max_jobs 生效值/屏蔽项目/同名材料（无 ssh）")
+    _add_context_options(p)
 
     p = sub.add_parser("snapshot", help="持久化增量状态快照")
     _add_context_options(p)
@@ -914,14 +989,21 @@ def main(argv: Optional[List[str]] = None) -> int:
     raw = list(sys.argv[1:] if argv is None else argv)
     # bin/autozt passes the complete argv so options before `agent` survive.
     # Direct imports may pass only the subcommand; both forms are accepted.
-    if "agent" in raw:
-        raw.pop(raw.index("agent"))
+    # 只删裸命令词 agent（-p agent 这种取值不能删）。
+    from autozt.cli import _bare_index
+    _i = _bare_index(raw, "agent")
+    if _i is not None:
+        raw.pop(_i)
     args = parser.parse_args(raw)
     if not args.agent_command:
         parser.print_help()
         return 2
     if args.agent_command == "skills":
         result, rc = _cmd_skills(args)
+    elif args.agent_command == "progress":
+        result, rc = _cmd_progress(args)
+    elif args.agent_command == "doctor":
+        result, rc = _cmd_doctor(args)
     elif args.agent_command == "capabilities":
         result, rc = _cmd_capabilities(args)
     elif args.agent_command == "schema":

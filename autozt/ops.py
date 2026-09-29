@@ -562,7 +562,7 @@ def auto_recover_hung(cfg, data):
 #   L5878  _yaml_type_block_remove
 
 def cmd_init(cfg, types, proj, name=None, tt=None, force=False, yes=False):
-    from autozt import scan_project_configs
+    from autozt import scan_project_configs, tuning_value
     """初始化项目配置。
     -p 指定材料 → 只初始化这些材料（多个用逗号分隔，如 -p Mg2C60,Mo2S3）；
     不带 -p → 当前目录下所有项目批量初始化（cwd 下一层就是材料目录时，
@@ -613,7 +613,7 @@ def cmd_init(cfg, types, proj, name=None, tt=None, force=False, yes=False):
                                tt=tt, force=force, known_names=known_names)
         elif _targets:                      # 多材料：并行 init（与不带 -p 的批量同策略）
             import concurrent.futures as _cf
-            _nw = int(os.environ.get("AUTOZT_INIT_WORKERS", "16") or 16)
+            _nw = tuning_value("init_workers", cfg)
             _real_out = sys.stdout
             _failed = []
 
@@ -677,7 +677,7 @@ def cmd_init(cfg, types, proj, name=None, tt=None, force=False, yes=False):
     # 并行纯本地 I/O（配合上面的 O(1) 查重，整体 O(N)）。循环期间 stdout 静默
     # 以免成千上万个材料刷屏交错，进度走 stderr；失败的材料结束后串行重跑回显。
     import concurrent.futures as _cf
-    _nw = int(os.environ.get("AUTOZT_INIT_WORKERS", "16") or 16)
+    _nw = tuning_value("init_workers", cfg)
     _real_out = sys.stdout
     _failed = []
 
@@ -726,21 +726,48 @@ def _scan_root_dirs(root):
     return out
 
 def resolve_mat_dir(cfg, types, tt, want, cwd=None):
-    from autozt import _RESOLVE_DISC_CACHE, _name_matches, discover_local, get_types
     """按名字定位材料的本地目录，找不到返回 None。
     先走正常发现（local_root -> discover_local）；再扫盘兜底——clean 删光
     project_setting 后 local_root 也跟着没了，只能靠扫盘自举回来。
     批量 -p 时同一 local_root 的 discover_local 结果做进程内缓存，避免
     M 材料 × T 类型 重复扫盘。"""
-    from autozt.bootstrap import reject_config_conflict_targets, config_material_blocked
-    reject_config_conflict_targets(want, tt)
-    tries = [types or []]
-    if tt:
-        try:
-            tries.append(get_types(cfg, tt=None, quiet=True))
-        except SystemExit:
-            pass
-    for tlist in tries:
+    from autozt.bootstrap import config_block_hits, config_block_message
+    # 明确指向被屏蔽项目（配置名 / <项目名>/<材料> / 绝对路径）的目标：拒绝。
+    _exact = [h for h in config_block_hits(want, tt) if h[0] == "exact"]
+    if _exact:
+        sys.exit(config_block_message(want, _exact))
+    # 先在未屏蔽的材料里解析：被屏蔽项目里恰好有同名材料不再挡路
+    # （以前先查屏蔽、按 basename 撞上就整条命令退出）。
+    lp = _resolve_mat_dir_unblocked(cfg, types, tt, want, cwd)
+    if lp is None:
+        # 解析不到、且只在被屏蔽项目里有同名材料：说清楚是哪个项目挡住了
+        _hits = config_block_hits(want, tt)
+        if _hits:
+            sys.exit(config_block_message(want, _hits))
+    return lp
+
+
+_ALL_TYPES_CACHE = {}
+
+
+def _resolve_mat_dir_unblocked(cfg, types, tt, want, cwd=None):
+    from autozt import _RESOLVE_DISC_CACHE, _name_matches, discover_local, get_types
+    from autozt.bootstrap import config_material_blocked
+
+    def _tries():
+        yield types or []
+        if tt:
+            # 全类型列表只算一次（批量 auto on 时每个材料都会走到这里）
+            got = _ALL_TYPES_CACHE.get(id(cfg))
+            if got is None:
+                try:
+                    got = get_types(cfg, tt=None, quiet=True)
+                except SystemExit:
+                    got = []
+                _ALL_TYPES_CACHE.clear()
+                _ALL_TYPES_CACHE[id(cfg)] = got
+            yield got
+    for tlist in _tries():
         for t0 in tlist:
             if not t0.get("local_root"):
                 continue
@@ -1469,10 +1496,11 @@ def cmd_level(cfg, types, tt, proj, arg):
               "删除，只是不再出现在状态表里。")
     return fails
 
-def cmd_auto_project(cfg, types, proj, tt, arg):
+def cmd_auto_project(cfg, types, proj, tt, arg, dry=False):
     from autozt import _load_yaml_file
     """v1.9.9：tf [-tt X] -p 材料 auto on|off —— 改该技能项目的
-    project_setting/setting.yaml，不动全局 tf.yaml。"""
+    project_setting/setting.yaml，不动全局 tf.yaml。
+    dry=True（--dry-run）：只列出会改哪些文件、改成什么，不写任何文件。"""
     keys = skill_keys(cfg, tt)
     wants = [x.strip() for x in str(proj).split(",") if x.strip()]
     if arg is None:
@@ -1495,6 +1523,8 @@ def cmd_auto_project(cfg, types, proj, tt, arg):
         return 1
     on = a in ("on", "1", "true", "开", "resume")
     fails = 0
+    _changed = _same = 0
+    _done_files = set()
     for w in wants:
         for k in keys:
             lp = resolve_mat_dir(cfg, types, k, w)
@@ -1503,6 +1533,19 @@ def cmd_auto_project(cfg, types, proj, tt, arg):
                 print("  %s[%s]：还没有 project_setting，先 tf -tt %s -p %s init"
                       % (w, k, k, w))
                 fails += 1
+                continue
+            _rf = os.path.realpath(f)
+            if _rf in _done_files:      # 同一文件被别名/重复目标命中：幂等，只写一次
+                continue
+            _done_files.add(_rf)
+            _cur = (_load_yaml_file(f) or {}).get("auto_advance")
+            if (_cur is True) == on and a != "resume":
+                _same += 1              # 已是目标值：不重写文件（幂等、少碰慢盘）
+                continue
+            _changed += 1
+            if dry:
+                print("  [dry-run] %s[%s]：%s  auto_advance: %s → %s"
+                      % (w, k, f, _cur, "true" if on else "false"))
                 continue
             _set_yaml_bool(f, "auto_advance", on)
             if a == "resume":
@@ -1515,14 +1558,18 @@ def cmd_auto_project(cfg, types, proj, tt, arg):
                 print("  %s[%s]：恢复 %d 个已取消步骤，仍按依赖等待"
                       % (w, k, len(marks) - len(remaining)))
             print("  %s[%s]：auto_advance = %s" % (w, k, "true" if on else "false"))
+    print("auto %s：%s %d 个 setting.yaml，%d 个已是目标值未改动，失败 %d。"
+          % ("on" if on else "off", "将改" if dry else "改了", _changed, _same, fails))
     if not cfg.get("auto_advance"):
         print("注意：全局 auto_advance 还是关的，本开关要配合 autozt auto on 才生效。")
     return fails
 
 def _skill_local_mats(cfg, types, tt):
-    from autozt import discover_local
-    """patch_auto：列出该技能下本地已发现的材料名（纯本地，不连超算）。"""
-    names, seen = [], set()
+    from autozt import _seg_proj_name, discover_local
+    """patch_auto：列出该技能下本地已发现的材料名（纯本地，不连超算）。
+    跨项目重名的材料用 <项目名>/<完整名> 限定——以前按名字去重，第二个项目里
+    的同名材料被悄悄跳过、第一个被写两次。"""
+    found, seen = [], set()
     for t0 in (types or []):
         if tt and t0.get("key") != tt:
             continue
@@ -1533,15 +1580,20 @@ def _skill_local_mats(cfg, types, tt):
             _r, mats = discover_local(lr, tt=tt or t0.get("key"))
         except Exception:   # noqa: BLE001
             continue
+        proj = _seg_proj_name(t0)
         for mm in mats:
-            if mm["name"] not in seen:
-                seen.add(mm["name"])
-                names.append(mm["name"])
-    return names
+            rp = os.path.realpath(mm["lpath"])
+            if rp in seen:
+                continue
+            seen.add(rp)
+            found.append((mm["name"], proj))
+    counts = Counter(n for n, _p in found)
+    return [("%s/%s" % (p, n)) if counts[n] > 1 and p else n for n, p in found]
 
-def cmd_auto_skill(cfg, types, tt, arg):
+def cmd_auto_skill(cfg, types, tt, arg, dry=False):
     """patch_auto：tf -tt <技能> auto [on|off] —— 对该技能下全部材料批量
-    开关项目级 auto_advance；on 时顺手把全局 tf.yaml 也打开。"""
+    开关项目级 auto_advance；on 时顺手把全局 tf.yaml 也打开。
+    配合 --project 只动一个项目；--dry-run 只列出会改的文件。"""
     names = _skill_local_mats(cfg, types, tt)
     if not names:
         print("没有在技能 %s 下发现任何材料（检查 project_roots / local_root）。"
@@ -1553,10 +1605,15 @@ def cmd_auto_skill(cfg, types, tt, arg):
         return cmd_auto_project(cfg, types, ",".join(names), tt, None)
     if str(arg).strip().lower() in ("on", "1", "true", "开"):
         if not cfg.get("auto_advance"):
-            cmd_auto(cfg, "on")          # 先开全局，避免下面误报"全局还是关的"
-            cfg["auto_advance"] = True
-    print("技能 %s：共 %d 个材料 → %s" % (tt, len(names), ", ".join(names)))
-    return cmd_auto_project(cfg, types, ",".join(names), tt, arg)
+            if dry:
+                print("  [dry-run] 全局 %s：auto_advance → true"
+                      % (cfg.get("_config_path") or "tf.yaml"))
+            else:
+                cmd_auto(cfg, "on")      # 先开全局，避免下面误报"全局还是关的"
+                cfg["auto_advance"] = True
+    _shown = names if len(names) <= 20 else names[:20] + ["…另 %d 个" % (len(names) - 20)]
+    print("技能 %s：共 %d 个材料 → %s" % (tt, len(names), ", ".join(_shown)))
+    return cmd_auto_project(cfg, types, ",".join(names), tt, arg, dry=dry)
 
 def _proj_setting_path(lpath, tkey):
     """材料目录下该技能的 setting.yaml 路径（技能子目录优先，回落材料级）。"""
@@ -1889,6 +1946,8 @@ def _watch_daemon(a, mat_toks, root, cfg=None):
         argv += ["-tt", a.tt]
     if a.proj:
         argv += ["-p", a.proj]
+    if getattr(a, "project", None):
+        argv += ["--project", a.project]
     if a.exclude:
         argv += ["-x", a.exclude]
     if a.user:
@@ -2006,14 +2065,67 @@ def _watch_cfg_sig(cfg):
     sig.sort()
     return tuple(sig)
 
+def _filter_types_by_project(types, project):
+    """--project：只保留指定项目配置（tf_<项目>.yaml）的段。"""
+    from autozt import _seg_proj_name
+    if not project:
+        return types
+    want = {x.strip() for x in str(project).split(",") if x.strip()}
+    return [t for t in types if _seg_proj_name(t) in want]
+
+
+def _step_kinds(data):
+    return {(t.get("key"), m.get("qualified_name") or m.get("name"), s.get("label")):
+            s.get("kind")
+            for t in data.get("types") or [] for m in t.get("materials") or []
+            for s in m.get("steps") or []}
+
+
+def _round_summary(rnd, data, prev_kinds, submitted, t0):
+    """monitor 每轮一行的结构化摘要（AI 只读这一行就知道本轮发生了什么）。"""
+    import time as _time
+    kinds = _step_kinds(data)
+    counts = {}
+    for k in kinds.values():
+        counts[k] = counts.get(k, 0) + 1
+    mats = [m for t in data.get("types") or [] for m in t.get("materials") or []]
+    done = sum(1 for m in mats if m.get("steps")
+               and all(s.get("kind") == "OK" for s in m["steps"]))
+    changes = []
+    if prev_kinds is not None:
+        for key, k in kinds.items():
+            old = prev_kinds.get(key)
+            if old != k:
+                changes.append((key, old, k))
+    return {"ts": _time.strftime("%Y-%m-%dT%H:%M:%S"), "round": rnd,
+            "materials": len(mats), "materials_done": done,
+            "steps": counts, "submitted": submitted,
+            "new_ok": sum(1 for _k, o, n in changes if n == "OK" and o is not None),
+            "new_fail": sum(1 for _k, o, n in changes if n == "FAIL" and o is not None),
+            "changed": len(changes) if prev_kinds is not None else None,
+            "dur_s": round(_time.time() - t0, 1)}, changes
+
+
 def cmd_watch(cfg, types, projs, exclude, interval, tt=None, root=None,
-              overrides=None):
-    from autozt import _snapshot, _state_cache_save, apply_exclude, apply_hide_done, apply_skills, auto_advance, auto_fetch, cmd_status, collect_data, fill_local_dim, filter_projs, get_types, load_config, merge_project_configs
+              overrides=None, project=None):
+    from autozt import _snapshot, _state_cache_save, apply_exclude, apply_hide_done, apply_skills, auto_advance, auto_fetch, cmd_status, collect_data, fill_local_dim, filter_projs, get_types, load_config, merge_project_configs, write_progress
+    # history_record 以前没 import：NameError 被下面的 except 吞掉，monitor 从没记过
+    # history.jsonl（进度文件的 ETA / 失败次数都靠它）。
+    from autozt import history_record
+    from autozt import workflow as _wf
     """v3.15 监控模式：每 interval 秒重新采集 → auto-fetch → auto-advance。
     v1.8：每轮检测配置文件改动（tf.yaml / project_setting/*.yaml / 各级
     hpc.yaml），变了自动重载——改配置或换 tf 版本后不用手动重启监控。
-    状态有变化才打印总表，否则打印一行心跳。Ctrl+C 退出。"""
+
+    每轮输出一行结构化摘要 `[round] {...}`（本轮提交/新完成/新失败数、耗时），
+    再跟最多 20 条步骤级变更；完整状态总表只在 tf.yaml 写 monitor_table: true
+    时打印（以前每次变化都把全部材料详情打进日志，AI 读日志要翻几千行）。
+    每轮同时写 .tf_progress.json（autozt progress / agent progress 读它）。
+
+    单轮出错（ssh 超时、配置暂时读不了、重名检查 sys.exit…）只记日志、下一轮
+    重试，不再让整个守护进程退出（以前夜里死掉只能靠 cron 拉起）。Ctrl+C 退出。"""
     import time as _time
+    import traceback as _tb
     try:
         sys.stdout.reconfigure(line_buffering=True)  # 重定向/管道时也逐行输出
     except Exception:
@@ -2026,53 +2138,87 @@ def cmd_watch(cfg, types, projs, exclude, interval, tt=None, root=None,
           "Ctrl+C 退出。" % (interval, _banner(cfg)))
     last = None
     sig = _watch_cfg_sig(cfg)
+    full_scope = not (projs or exclude or tt or root or project)
+    rnd, prev_kinds, n_err = 0, None, 0
     try:
         while True:
-            s2 = _watch_cfg_sig(cfg)
-            if s2 != sig:   # v1.8：配置变了 → 重载（沿用 adopt 的重载路径）
-                try:
-                    c2, _ = load_config(cfg.get("_config_path"))
-                    c2["_config_dir"] = cfg["_config_dir"]
-                    c2["_config_path"] = cfg["_config_path"]
-                    for k, v in (overrides or {}).items():
-                        c2[k] = v          # 命令行 --host/-u 覆盖照旧生效
-                    c2 = apply_skills(c2)   # 重载需重装技能骨架（否则 get_types 缺 steps）
-                    c2 = merge_project_configs(c2)
-                    t2 = get_types(c2, tt=tt, root_override=root)
-                    cfg, types = c2, t2
-                    sig = _watch_cfg_sig(cfg)   # 以重载后的新配置为准重算
-                    last = None                 # 强制重印一次总表
-                    print("[%s] 检测到配置变更，已自动重载（%s）。"
-                          % (_time.strftime("%H:%M:%S"), _banner(cfg)))
-                except (SystemExit, Exception) as e:
-                    # 新配置有误：保留旧配置继续跑，文件再改动会再试
-                    print("[%s] 配置变更但重载失败（%s），沿用旧配置继续监控。"
-                          % (_time.strftime("%H:%M:%S"), e))
-                    sig = s2
-            data = collect_data(cfg, types)
-            fill_local_dim(cfg, data, types)
-            # patch_state_cache：把本轮采集结果写进本地缓存，前台 autozt list/summary
-            # 在 TTL 内直接读它，不用再 ssh 采集一遍。
-            _state_cache_save(cfg, data, types, tt, root)
-            # v1.0（W5–8）：监控每轮把状态转移记进 history.jsonl —— 后台监控在跑时
-            # 时间序列最完整（谁什么时候排队/开跑/算完/失败一清二楚）。
+            rnd += 1
+            _t0 = _time.time()
+            _sub0 = _wf.SUBMIT_COUNTER[0]
             try:
-                history_record(cfg, data)
-            except Exception:
-                pass
-            apply_exclude(data, exclude)
-            filter_projs(data, projs)
-            auto_fetch(cfg, data)
-            auto_recover_hung(cfg, data)   # v1.11: 挂死作业自动恢复（scancel+CONTCAR 续跑）
-            auto_advance(cfg, data)
-            if cfg.get("hide_done"):
-                apply_hide_done(data)   # v1.1：监控里同样支持隐藏完成项
-            snap = _snapshot(data)
-            if snap != last:
-                cmd_status(cfg, data, projs[0] if len(projs) == 1 else None, None)
-                last = snap
-            else:
-                print("[%s] 无变化" % _time.strftime("%H:%M:%S"))
+                s2 = _watch_cfg_sig(cfg)
+                if s2 != sig:   # v1.8：配置变了 → 重载（沿用 adopt 的重载路径）
+                    try:
+                        c2, _ = load_config(cfg.get("_config_path"))
+                        c2["_config_dir"] = cfg["_config_dir"]
+                        c2["_config_path"] = cfg["_config_path"]
+                        for k, v in (overrides or {}).items():
+                            c2[k] = v          # 命令行 --host/-u 覆盖照旧生效
+                        c2 = apply_skills(c2)   # 重载需重装技能骨架（否则 get_types 缺 steps）
+                        c2 = merge_project_configs(c2)
+                        t2 = _filter_types_by_project(
+                            get_types(c2, tt=tt, root_override=root), project)
+                        cfg, types = c2, t2
+                        sig = _watch_cfg_sig(cfg)   # 以重载后的新配置为准重算
+                        last = None                 # 强制重印一次总表
+                        print("[%s] 检测到配置变更，已自动重载（%s）。"
+                              % (_time.strftime("%H:%M:%S"), _banner(cfg)))
+                    except (SystemExit, Exception) as e:
+                        # 新配置有误：保留旧配置继续跑，文件再改动会再试
+                        print("[%s] 配置变更但重载失败（%s），沿用旧配置继续监控。"
+                              % (_time.strftime("%H:%M:%S"), e))
+                        sig = s2
+                data = collect_data(cfg, types)
+                fill_local_dim(cfg, data, types)
+                # patch_state_cache：把本轮采集结果写进本地缓存，前台 autozt list/summary
+                # 在 TTL 内直接读它，不用再 ssh 采集一遍。
+                _state_cache_save(cfg, data, types, tt, root)
+                # v1.0（W5–8）：监控每轮把状态转移记进 history.jsonl —— 后台监控在跑时
+                # 时间序列最完整（谁什么时候排队/开跑/算完/失败一清二楚）。
+                try:
+                    history_record(cfg, data)
+                except Exception:
+                    pass
+                apply_exclude(data, exclude)
+                filter_projs(data, projs)
+                auto_fetch(cfg, data)
+                auto_recover_hung(cfg, data)   # v1.11: 挂死作业自动恢复（scancel+CONTCAR 续跑）
+                auto_advance(cfg, data)
+                summary, changes = _round_summary(
+                    rnd, data, prev_kinds, _wf.SUBMIT_COUNTER[0] - _sub0, _t0)
+                prev_kinds = _step_kinds(data)
+                n_err = 0
+                write_progress(cfg, data, writer="monitor", full_scope=full_scope,
+                               round_info=summary,
+                               monitor={"pid": os.getpid(), "interval": interval,
+                                        "round": rnd})
+                if cfg.get("hide_done"):
+                    apply_hide_done(data)   # v1.1：监控里同样支持隐藏完成项
+                print("[round] " + json.dumps(summary, ensure_ascii=False, sort_keys=True))
+                snap = _snapshot(data)
+                if snap != last:
+                    if cfg.get("monitor_table"):
+                        cmd_status(cfg, data, projs[0] if len(projs) == 1 else None, None)
+                    else:
+                        for (_k, _mn, _lab), _o, _n in changes[:20]:
+                            print("  %s %s %s: %s → %s" % (_k, _mn, _lab, _o, _n))
+                        if len(changes) > 20:
+                            print("  … 还有 %d 项变更（autozt progress 看全部）"
+                                  % (len(changes) - 20))
+                    last = snap
+            except KeyboardInterrupt:
+                raise
+            except (SystemExit, Exception) as e:   # noqa: BLE001
+                n_err += 1
+                _msg = e.code if isinstance(e, SystemExit) else repr(e)
+                print("[%s] 第 %d 轮异常（连续 %d 次；监控继续，下一轮重试）：%s"
+                      % (_time.strftime("%H:%M:%S"), rnd, n_err, _msg))
+                if not isinstance(e, SystemExit):
+                    print("".join(_tb.format_exc().splitlines(True)[-6:]).rstrip())
+                print("[round] " + json.dumps(
+                    {"ts": _time.strftime("%Y-%m-%dT%H:%M:%S"), "round": rnd,
+                     "error": str(_msg)[:300], "consecutive_errors": n_err},
+                    ensure_ascii=False, sort_keys=True))
             _time.sleep(interval)
     except KeyboardInterrupt:
         print("\n已退出监控。")

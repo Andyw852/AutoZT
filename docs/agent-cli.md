@@ -4,6 +4,47 @@
 
 技能开发规范统一维护在软件包根目录 `TASKFLOW.md` 第 7 章，尤其 7.15–7.18；入口与服务生命周期见 9.1。`io_schema` 是描述契约，不是任意科学输入输出的自动解析器。新增符合现有生命周期的技能通常无需修改本接口；新增执行语义应先扩展核心，再同步共享 Agent 协议。普通集成优先使用一次性 `request -`，`serve` 仅供需要连续 JSONL 管道的高级 wrapper。
 
+## AI 接入速查（先读这一节）
+
+AI 只走 `autozt agent …` / `autozt mcp` 的 JSON 面，**不要解析** `summary`/`list`
+的人类文本表——它们的格式会变。推荐顺序：
+
+```bash
+# 1. 状态首选：读 monitor 每轮写的本地进度文件——不采集、不连超算、不占 ssh，秒级
+autozt agent progress                              # 全部项目
+autozt agent progress --project my_batch_295       # 一个项目，不用列 295 个材料名
+autozt agent progress --status error --limit 20    # 只看失败
+
+# 2. 批量操作前的配置预检（不连超算）：max_jobs 生效值、调优旋钮来源、被屏蔽项目、
+#    跨项目同名材料、monitor/cron 保活、agent 网关是否识别到本会话
+autozt agent doctor
+
+# 3. 需要实时状态 / 候选动作时再采集（会 ssh）
+autozt agent inspect --project my_batch_295 --status error
+```
+
+`progress` 每个材料一行，字段稳定：
+
+| 字段 | 含义 |
+|---|---|
+| `id` | `<项目名>/<完整名>`，**稳定主键**；`material` 参数与 `-p` 都认，跨项目同名也不歧义 |
+| `project` / `tt` | 所属项目（`tf_<项目>.yaml`）与技能 |
+| `state` | `done`，或活动步骤的状态（`R`/`PD`/`FAIL`/`TODO`/`PREP`/`WAIT`/…） |
+| `steps` | `{label: 状态}` |
+| `job` | 活动步骤的作业 `{id, state, info, time}` |
+| `fails[]` | `{step, code, class, action, reason, fail_count, diag}`：`class` ∈ `NOT_CONVERGED`/`INTERRUPTED`/`NODE_FAIL`/`MISSING_OUTPUT`/`RESOURCE`/`CONFIG`/`PHYSICS`/`STALE_INPUT`/`UNKNOWN`；`action` ∈ `retry`/`start`/`rerun`/`human_review`；同一步骤失败次数超过 `max_auto_retries`（默认 2）时 `action` 自动变成 `human_review` |
+| `since` / `eta_s` | 当前状态起始时刻；运行中步骤按历史同类步骤的中位耗时估算剩余秒数（样本 ≥3 才给） |
+
+文档顶层还有 `projects`（每项目×技能的材料状态计数）、`round`（monitor 上一轮摘要：
+提交/新完成/新失败数）和 `liveness`（monitor 是否在跑、文件多旧、是否过期）。
+进度文件不存在时（monitor 没跑过），任何一次真正采集（如 `autozt list --refresh`）都会写出它。
+
+`--project` / `"scope": {"project": …}` 在所有需要状态的命令上都可用，采集前就按项目裁剪。
+
+安全边界：破坏性命令（`stop`/`rerun`/`clean`/`-f`/`-y`）默认要人工批准令牌——
+不再依赖 AI 自觉设置 `AUTOZT_ACTOR`：常见 AI 代理的环境标记（`CLAUDECODE`、`GEMINI_CLI`、
+`CODEX_SANDBOX`…，tf.yaml 的 `agent_env_markers` 可追加自己的）和**非交互终端**都会被识别。
+
 ```bash
 # 第一次接入：只读协议能力，不采集超算状态
 autozt agent capabilities
@@ -43,6 +84,8 @@ autozt agent evidence -tt band-dft-cpu -p C24/qHPC24 --step S1_opt
 
 # JSON request：避免模型拼接 shell 参数
 echo '{"op":"inspect","scope":{"tt":"band-dft-cpu","status":"error"}}' |
+  autozt agent request -
+echo '{"op":"progress","scope":{"project":"my_batch_295"},"status":"error","limit":20}' |
   autozt agent request -
 
 # 常驻 JSONL：每个非空输入行对应一个 JSON 输出行
@@ -118,3 +161,9 @@ MCP 协议本身不会减少模型 token。节省来自三个地方：profile �
 对于大规模项目，`inspect`、`propose` 和 `cycle` 的候选动作也受 `max_actions` 限制（默认
 20，最大 20）；这只是模型上下文的上限，不会改变 AutoZT 的材料状态。先用 `-tt`、`-p`
 或 `-status error,running,pd` 缩小范围，再让模型读取单点证据，通常比一次发送全量状态更省。
+
+## 安装方式与入口
+
+`pip install` 生成的 `autozt` 命令、`bin/autozt` 和 `python -m autozt` 走同一个路由
+（`autozt.cli.route_subcommand`）：`agent` / `mcp` 在主参数解析和任何采集之前分流。
+非 editable 安装没有 `bin/autozt` 时，agent/MCP 调用 CLI 会自动退回 `python -m autozt`。

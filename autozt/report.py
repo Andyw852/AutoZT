@@ -304,13 +304,19 @@ def render_detail(m):
             s["label"], s["name"], s["label_txt"], s["diag"], job_txt, active))
     print("Action: %s" % m["action"])
 
+def _qualified(m):
+    return m.get("qualified_name") or m.get("name") or "?"
+
+
 def find_material(data, name):
-    """-p 解析：精确名 > basename > 子串；跨类型命中多个时提示补 -tt。"""
-    for mode in ("exact", "base", "sub"):
+    """-p 解析：精确名 > <项目名>/<完整名> > basename > 子串；跨类型命中多个时提示补 -tt。"""
+    for mode in ("exact", "qualified", "base", "sub"):
         hits = []
         for t in data["types"]:
             for m in t["materials"]:
                 if mode == "exact" and m["name"] == name:
+                    hits.append((t, m))
+                elif mode == "qualified" and m.get("qualified_name") == name:
                     hits.append((t, m))
                 elif mode == "base" and os.path.basename(m["name"]) == name:
                     hits.append((t, m))
@@ -319,14 +325,23 @@ def find_material(data, name):
         if hits:
             break
     if not hits:
+        # 只在被屏蔽项目里有同名材料时，直接说是哪个项目、为什么被屏蔽
+        from autozt.bootstrap import config_block_hits, config_block_message
+        _bh = config_block_hits(name)
+        if _bh:
+            sys.exit(config_block_message(name, _bh))
         sys.exit(_i18n.t("错误：", "error: ") + "找不到材料 '%s'。" % name)
     tts = {t["key"] for t, _ in hits}
     if len(hits) > 1:
         if len(tts) > 1:
             sys.exit(_i18n.t("错误：", "error: ") + "'%s' 同时属于多个任务类型（%s），请用 -tt 指定。"
                      % (name, "/".join(sorted(tts))))
-        sys.exit(_i18n.t("错误：", "error: ") + "'%s' 匹配到多个材料：%s，请写完整名。"
-                 % (name, ", ".join(m["name"] for _, m in hits)))
+        projs = sorted({m.get("project") or "" for _, m in hits})
+        sys.exit(_i18n.t("错误：", "error: ") + "'%s' 匹配到多个材料：%s。%s"
+                 % (name, ", ".join(_qualified(m) for _, m in hits),
+                    ("它们分属项目 %s，请写 <项目名>/<完整名>（如 %s）或加 --project。"
+                     % ("/".join(p for p in projs if p), _qualified(hits[0][1])))
+                    if len(projs) > 1 else "请写完整名。"))
     return hits[0]
 
 def _step_seq_match(s, n):
@@ -1118,18 +1133,46 @@ def cmd_summary(data, diff=False, state_path=None):
 
 
 # ===== 结构化错误码（v2.0：诊断文本 → 稳定 code，供 --json 机器判读）=====
+# 顺序即优先级：更具体的写在前面。新增 code 只追加，不改已有 code 的含义。
 _DIAG_PATTERNS = [
     ("relax_summary_missing", "relax_summary.json missing"),
     ("relax_summary_incomplete", "relax_summary.json incomplete"),
+    ("segments_exhausted", "全部跑完但未收敛"),
+    ("pressure_not_converged", "力已收敛但压强"),
     ("force_not_converged", "force not converged"),
     ("outcar_missing", "OUTCAR missing"),
+    ("outcar_incomplete", "OUTCAR incomplete"),
+    ("wavecar_missing", "WAVECAR missing"),
+    ("wavecar_missing", "WAVECAR too small"),
+    ("output_missing", "EIGENVAL missing"),
+    ("output_missing", "vasprun.xml missing"),
+    ("output_missing", "phonon_summary.json missing"),
+    ("output_missing", "phonon_summary.json invalid"),
+    ("gen_output_missing", "未生成（retry 重跑 gen）"),
+    ("inputs_changed", "内容已变"),
+    ("inputs_changed", "结构已变"),
+    ("marker_invalid", "completion marker"),
+    ("marker_invalid", "required marker missing"),
+    ("plot_failed", "no plot output"),
+    ("pressure_missing", "pressure not found"),
     ("dir_missing", "dir missing"),
     ("not_started", "not started"),
     ("node_fail", "NODE_FAIL"),
+    ("walltime", "DUE TO TIME LIMIT"),
+    ("walltime", "TIME LIMIT"),
+    ("oom", "OUT_OF_MEMORY"),
+    ("oom", "oom-kill"),
+    ("disk_full", "No space left"),
+    ("disk_full", "磁盘满"),
+    ("zbrent", "ZBRENT"),
+    ("eddav", "EDDDAV"),
+    ("eddav", "EDDAV"),
+    ("eddav", "ZHEGV"),
     ("gen_error", "gen 失败"),
     ("stepconf_unknown_params", "不认识的键"),
     ("stepconf_missing", "缺少 step.conf"),
     ("imaginary_freq", "虚频"),
+    ("imaginary_freq", "imaginary frequency"),
 ]
 _RELAX_VERDICTS = ("electronic", "oscillating", "stalled", "thrown", "nsw",
                    "progressing")
@@ -1141,6 +1184,16 @@ def _diag_code(diag):
     d = (diag or "").strip()
     if not d:
         return "none"
+    # opt 分段弛豫的"段中断（有 .started 无 .done）"——以前整段中文散文只能落到
+    # unknown/human_review，AI 不敢动；其实三种情形都已写明"重投即可"。
+    if "段中断" in d:
+        if "ZBRENT" in d:
+            return "segment_zbrent"
+        if "看门狗" in d and "卡死" in d:
+            return "segment_watchdog"
+        return "segment_interrupted"
+    if d.startswith("已完成 ") and "段" in d:     # 分段弛豫只跑完一部分段、作业已不在
+        return "segments_incomplete"
     for code, pat in _DIAG_PATTERNS:
         if pat in d:
             return code
@@ -1153,11 +1206,51 @@ def _diag_code(diag):
     return "unknown"
 
 
+# 粗分类：给 AI 一个稳定的大类（NOT_CONVERGED / INTERRUPTED / …），细节看 diag_code。
+_DIAG_CLASS = {
+    "force_not_converged": "NOT_CONVERGED", "pressure_not_converged": "NOT_CONVERGED",
+    "segments_exhausted": "NOT_CONVERGED", "segment_zbrent": "NOT_CONVERGED",
+    "zbrent": "NOT_CONVERGED", "eddav": "NOT_CONVERGED",
+    "segment_interrupted": "INTERRUPTED", "segment_watchdog": "INTERRUPTED",
+    "segments_incomplete": "INTERRUPTED",
+    "walltime": "INTERRUPTED", "node_fail": "NODE_FAIL",
+    "outcar_missing": "MISSING_OUTPUT", "outcar_incomplete": "MISSING_OUTPUT",
+    "output_missing": "MISSING_OUTPUT", "wavecar_missing": "MISSING_OUTPUT",
+    "relax_summary_missing": "MISSING_OUTPUT", "relax_summary_incomplete": "MISSING_OUTPUT",
+    "gen_output_missing": "MISSING_OUTPUT", "marker_invalid": "MISSING_OUTPUT",
+    "plot_failed": "MISSING_OUTPUT", "dir_missing": "MISSING_OUTPUT",
+    "inputs_changed": "STALE_INPUT",
+    "oom": "RESOURCE", "disk_full": "RESOURCE",
+    "gen_error": "CONFIG", "stepconf_unknown_params": "CONFIG",
+    "stepconf_missing": "CONFIG", "pressure_missing": "CONFIG",
+    "imaginary_freq": "PHYSICS",
+    "not_started": "PENDING", "job": "JOB_STATE",
+}
+
+
+def _diag_class(code):
+    if not code or code == "none":
+        return "NONE"
+    if code.startswith("relax_"):
+        return "NOT_CONVERGED" if code not in ("relax_summary_missing",
+                                               "relax_summary_incomplete") \
+            else "MISSING_OUTPUT"
+    return _DIAG_CLASS.get(code, "UNKNOWN")
+
+
 # ===== 建议动作映射（v2.0：diag_code → 确定性动作，机器化 AGENTS.md §5 决策表）=====
 # 让 AI 不必再读散文决策表：FAIL 步直接带 suggested_action + action_reason。
 # retry/start/rerun 仍是「建议」——破坏性命令(rerun/stop/clean) AI 仍须先请示。
+# suggested_action 只取 retry/start/rerun/human_review/none（agent 协议据此选动作）；
+# 调参类建议放 action_hint（如 tune_EDIFF_POTIM），它总是要人工同意的 conf --set。
 _ACTION_MAP = {
     "force_not_converged": ("retry", "收敛困难，opt 步自动 cp CONTCAR 续算"),
+    "pressure_not_converged": ("retry", "力已收敛但压强超阈，cp CONTCAR 再跑一轮"),
+    "segments_exhausted": ("human_review", "分段全部跑完仍未收敛，需先调 step.conf 再 retry"),
+    "segment_zbrent": ("retry", "变胞段 ZBRENT 中断，重投即可（反复出现再调 EDIFF/POTIM）"),
+    "segment_watchdog": ("retry", "被看门狗判卡死杀掉，重投从 CONTCAR 续跑"),
+    "segment_interrupted": ("retry", "分段中断（墙钟/看门狗），重投从 CONTCAR 续跑"),
+    "segments_incomplete": ("retry", "分段弛豫只跑完一部分、作业已不在，重投续跑剩余段"),
     "relax_summary_missing": ("retry", "收敛输出缺失，重算/续算"),
     "relax_summary_incomplete": ("retry", "收敛输出不全，重算/续算"),
     "relax_electronic": ("retry", "SCF 收敛困难，续算或升级 INCAR"),
@@ -1166,16 +1259,37 @@ _ACTION_MAP = {
     "relax_progressing": ("retry", "仍在下降被截断，续算"),
     "relax_stalled": ("human_review", "弛豫停滞，先查 hang_check 是否已处理"),
     "relax_thrown": ("human_review", "异常抛出，需看日志"),
+    "zbrent": ("retry", "ZBRENT 线搜索失败，续算；反复出现再调 EDIFF/POTIM"),
+    "eddav": ("retry", "电子步对角化失败，续算；反复出现再调 ALGO"),
     "outcar_missing": ("retry", "输出缺失，重算"),
+    "outcar_incomplete": ("retry", "OUTCAR 不完整（作业中途退出），重算"),
+    "output_missing": ("retry", "输出文件缺失/无效，重算"),
+    "wavecar_missing": ("retry", "WAVECAR 缺失或过小，重算"),
+    "gen_output_missing": ("retry", "gen 产物缺失，retry 重跑 gen"),
+    "inputs_changed": ("retry", "上游输入已变，retry 重新生成"),
+    "marker_invalid": ("retry", "完成标记缺失/过期，重跑该步"),
+    "plot_failed": ("retry", "画图步没有产出，重跑"),
+    "pressure_missing": ("human_review", "OUTCAR 里读不到压强，需看输出"),
+    "walltime": ("retry", "撞墙钟，重投续跑（反复出现需加墙钟/拆步）"),
     "dir_missing": ("rerun", "目录缺失，需重新生成（破坏性，先请示）"),
     "not_started": ("start", "未开始，推进即可"),
     "node_fail": ("retry", "节点故障，直接重交"),
+    "oom": ("human_review", "内存不足，需调资源/并行参数"),
+    "disk_full": ("human_review", "磁盘满，只告警不重跑，需清理空间"),
     "gen_error": ("human_review", "gen 脚本报错，需看脚本"),
     "stepconf_unknown_params": ("human_review", "参数配置错误，需检查 step.conf"),
     "stepconf_missing": ("human_review", "缺少 step.conf，需检查"),
     "imaginary_freq": ("human_review", "虚频，需人工判断"),
     "job": ("human_review", "作业状态异常，需看 job 信息"),
     "unknown": ("human_review", "判断不了，报告请示"),
+}
+
+# 调参提示（总是需要人工同意；AI 只能提议，不能自动执行）
+_ACTION_HINT = {
+    "segment_zbrent": "tune_EDIFF_POTIM", "zbrent": "tune_EDIFF_POTIM",
+    "eddav": "tune_ALGO", "relax_electronic": "tune_ALGO_NELM",
+    "segments_exhausted": "tune_stepconf", "walltime": "raise_walltime",
+    "oom": "tune_resources",
 }
 
 
@@ -1188,16 +1302,19 @@ def _suggested_action(diag_code):
 
 
 def _add_diag_codes(data):
-    """给每个步骤 dict 就地补 diag_code/suggested_action/action_reason 字段
-    （--json 用）。返回 data。"""
+    """给每个步骤 dict 就地补 diag_code/diag_class/suggested_action/action_reason
+    （及可选 action_hint）字段（--json 用）。返回 data。"""
     for t in data.get("types", []):
         for m in t.get("materials", []):
             for s in m.get("steps", []):
                 code = _diag_code(s.get("diag") or "")
                 s["diag_code"] = code
+                s["diag_class"] = _diag_class(code)
                 act, reason = _suggested_action(code)
                 s["suggested_action"] = act
                 s["action_reason"] = reason
+                if code in _ACTION_HINT:
+                    s["action_hint"] = _ACTION_HINT[code]
     return data
 
 
@@ -1224,8 +1341,10 @@ def _summary_json(data):
                         code = _diag_code(s.get("diag") or "")
                         act, _reason = _suggested_action(code)
                         fails.append({"material": m["name"], "step": s["label"],
+                                      "project": m.get("project") or "",
                                       "diag": s.get("diag") or "",
-                                      "code": code, "action": act})
+                                      "code": code, "class": _diag_class(code),
+                                      "action": act})
             elif any(k in ("R", "OTHER") for k in kinds):
                 cnt["run"] += 1
             elif any(k == "PD" for k in kinds):

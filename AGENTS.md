@@ -33,7 +33,7 @@
 1. **只通过 `autozt` 操作**。禁止自己拼接 `ssh`/`sbatch`/`scancel`/`rm` 来改状态。唯一例外：第 4 条的只读诊断。
 2. **破坏性操作必须先请示**：`stop`、`rerun`、`clean`、以及任何带 `-f` 或 `-y` 的命令，执行前必须向用户说明对象和后果，得到明确同意后才执行。
    **`-f`/`-y` 必须逐条单独请示**：批准"目标"（如"修 Mo2S3"）**不等于**批准具体命令里的 `-f`——不得从目标批准里推断 `-f` 的许可（2026-09-18 教训：以"修 Mo2S3"为由执行了 `start -f`）。**特别地：`mlff` 的 `step5_label`（及一切昂贵的扇出步骤）只用 `retry`/`start -f`，绝不 `rerun`/`clean`**——后两者会 `rm -rf` 步骤目录，毁掉已算完的 DFT 帧。用户说"以后这类都不用问了"才算预先授权。
-3. **监控循环里自动执行的命令只有**：`autozt summary --diff`、`autozt summary`、`autozt list`、`autozt -status <状态> summary`、`autozt -tt <类型> summary`、`autozt -p X status`、`autozt skills`、`autozt auto on`、`autozt -tt <技能> auto on`、`autozt start`、`autozt -p X start`。其余一律先请示（包括 `autozt conf --set`——它会改项目配置）。**巡检严禁每轮拉 `autozt json`**——它是全量结构化数据，token 巨大，只在写工具/做批量分析时才用。
+3. **监控循环里自动执行的命令只有**：`autozt progress`（及 `autozt agent progress`，只读本地进度文件、不连超算，**巡检首选**）、`autozt doctor`（只读配置预检）、`autozt summary --diff`、`autozt summary`、`autozt list`、`autozt -status <状态> summary`、`autozt -tt <类型> summary`、`autozt -p X status`、`autozt skills`、`autozt auto on`、`autozt -tt <技能> auto on`、`autozt start`、`autozt -p X start`。其余一律先请示（包括 `autozt conf --set`——它会改项目配置）。**巡检严禁每轮拉 `autozt json`**——它是全量结构化数据，token 巨大，只在写工具/做批量分析时才用。
 4. **只读诊断允许直接 ssh**：`tail`/`grep` 日志文件（如 `ssh jzzn 'tail -50 <步骤目录>/slurm-*.out'`、`grep -i error OUTCAR`）。只读，绝不改文件。材料目录下的 `stepN_check_and_resubmit.py`（autozt 已随生成推送到超算）也只允许加 `--check-only` 运行——它的重投功能**严禁使用**（重投一律走 `autozt retry`/`autozt rerun`，两套重投机制并用会打架）。其 stdout 是一行 JSON，退出码 0=converged / 10=not_converged / 20=running / 30=重启超限 / 40=error，可作为深度诊断依据。**注意 3090 服务器无 SLURM**：ssh 过去看到的 squeue 是 fakeslurm 垫片，作业状态一律以 `autozt` 采集为准，别用真 SLURM 语义判读。
 5. **用退出码判成败**：`autozt` 命令退出码 0 = 成功；非 0 = 失败或被拒绝。失败时把输出原文呈给用户，不要粉饰、不要假装成功。
 6. **不确定就报告并等待**。宁可少做，不要猜。
@@ -61,6 +61,13 @@
 > ⚠️ **先读技能文档**：执行任何 `autozt -tt <技能> ...` 命令前，先读 `skill/<技能>/README.md`（无 README 读 `METHODOLOGY.md`，都无读 `TASKFLOW.md` 对应章节），核对步骤与判据后再动手（铁律 0）。
 
 ```bash
+autozt agent progress [--project P]    # ★★ AI 巡检首选：读 monitor 每轮写的 .tf_progress.json（JSON）。
+                                   #   不采集、不连超算、不和 monitor 抢 ssh/9p，秒级；逐材料状态、
+                                   #   FAIL 结构化码（class/code/action/fail_count）、since/eta、monitor 存活
+autozt progress [--project P]          # 同上的人类可读版
+autozt doctor                          # 配置预检（不连超算）：各项目 max_jobs 生效值、调优旋钮来源、
+                                   #   被屏蔽项目、跨项目同名材料、monitor/cron 保活——批量操作前先跑
+autozt --project P summary             # --project：按项目裁剪（tf_<P>.yaml），不用把几百个材料名列进 -p
 autozt summary --diff                  # ★ 巡检首选：与上次快照对比，无变化输出 0 字节（静默）。
                                    #   有变化才输出：计数行 + FAIL 清单 + 全局队列 + 「变更:」步骤级清单
                                    #   （谁从什么变到什么，含排队原因）——agent 无需再跑 list/squeue 去猜
@@ -102,14 +109,14 @@ autozt auto [on|off]                   # 一键开关全局 auto_advance（改�
 > 3. `autozt -p MAT -j STEP start` —— 正式提交。
 > 严禁手动 `sed` 远程 INCAR/submit.sh + 手动 `sbatch` 绕过 `autozt`（违反铁律 1/9）。`autozt stop` 需交互确认，EOFError 即未成功，勿当成已停止。
 
-- `-p`：材料名，可写完整名（`C20/qHPC20`）或唯一 basename；跨类型重名时必须加 `-tt`。
+- `-p`：材料名，可写完整名（`C20/qHPC20`）或唯一 basename；跨类型重名时必须加 `-tt`；**跨项目重名时写 `<项目名>/<完整名>`**（= JSON 里的 `id` 字段，稳定主键，AI 一律用它），或用 `--project` 限定。
 - `-j`：步骤 label（`S1_opt`）或序号（`1`~`4`，画图步 3.1 等），必须配 `-p`。
 - 用户手改了超算上的文件 → `retry`；输入要推倒重来 → `rerun`。
 - 若全局配置开了 auto_advance，`autozt status`/`autozt monitor` 会自动提交可开始的步骤（error 不会自动重试）。`autozt list`/`autozt summary` 是纯只读，**绝不提交**——巡检优先用它俩。
 - `autozt summary` 输出格式：`<类型>: N 材料 done=D run=R pd=P err=E scancel=S wait=W`（`run`=真正在跑，`pd`=排队），下面紧跟 `FAIL <材料> <步骤> <诊断>` 行，最后一行 `队列(全部作业): R=X PD=Y 共 Z`（全局作业数，含其它技能的作业）。尊重 `-tt`/`-status`/`-x`/`--hide-done` 已施加的过滤。
 - `autozt summary --diff` 有变化时，额外多一段 `变更:`，每行 `材料 步骤: 旧 → 新`（如 `CrS2_hex S2.1_scf: todo → PD(Priority)`）——**这就是"谁变了、为什么变"**，别再去跑 `autozt list` 或 `squeue` 复读同一件事。
 - **`autozt list` / `autozt summary` 默认走本地状态缓存**：`AUTOZT_CACHE_TTL` 秒内（默认 60）直接读上次采集结果、跳过 ssh，秒开；加 `--refresh` 强制重新采集，`AUTOZT_CACHE_TTL=0` 关闭缓存。`autozt status` / `autozt start` 等会改状态的命令仍实时采集，不走缓存。
-- **每技能并发提交上限 `max_jobs`**：全局 autozt.yaml 里每个 `task_types.<key>.max_jobs: 100` 限制该技能「同时提交」的超算作业数；只卡 sbatch、不卡本地生成输入。达到上限后，未提交的任务会先本地生成输入（状态 `TODO`）待命，等有空位自动补交——**这是正常待命，不是故障**，别反复深查。
+- **每技能并发提交上限 `max_jobs`**：全局 autozt.yaml 里每个 `task_types.<key>.max_jobs: 100` 限制该技能「同时提交」的超算作业数；项目 `tf_*.yaml` 里写的 `max_jobs` 是**该项目自己的上限，同时生效**（以前被静默忽略；`autozt doctor` 列出每个项目的生效值）；只卡 sbatch、不卡本地生成输入。达到上限后，未提交的任务会先本地生成输入（状态 `TODO`）待命，等有空位自动补交——**这是正常待命，不是故障**，别反复深查。
 - **挂死作业自动恢复（`hang_check`，默认开，当前 `hang_dry_run: true` 观察期）**：monitor 用**进度指纹**判定挂死——(OUTCAR 字节数, OSZICAR 行数) 连续 `hang_min_stale_rounds` 轮不变且输出年龄超 `hang_stale_secs` 才算（指纹在涨 = 活着，不判）；SCF 迭代 rms 还在降 = 慢但活着，不判。判定后按原因处理：SCF 空转 → 自动升级 INCAR（补 AMIX/BMIX → ALGO=All → NELM≥200，原子写+备份）后 `scancel`（等退出）+ 校验 CONTCAR 续跑重交；NODE_FAIL → 直接重跑；磁盘满 → **只告警不重跑**。每个作业最多 `hang_max_retries` 次，计数在 `<配置目录>/.tf_hung.json`。`hang_dry_run: true` 时只打印判定不动手。所以「作业卡住不动」这类问题 **autozt 会自动处理**（观察期自动恢复是关的，日志里 `hang[干跑]` 只是预演），AI 不需要手动 scancel/续跑/改 INCAR；只有当同一作业反复被判挂死（看 `.tf_hung.json` 或 monitor 日志的「停止重试」告警）才需要介入。确认观察期无误后把 `hang_dry_run` 改 `false` 启用自动恢复。
 - v3 本地模式：输入文件以本地项目目录为准，超算只是算力；每个项目有自己的 `project_setting/`。改这些文件前必须请示。
 - **mlff 专属**：代数迭代用 `autozt -tt mlff -p MAT conf --set params.GENERATION=K`（先请示）→ `autozt -tt mlff -p MAT -j 4 retry`（★ 用 retry 别用 rerun：rerun 会删掉 gen-0..gen-(K-1) 的历史清单+结构文件，S6 累计数据集会丢帧；retry 保留它们并重新生成新代清单）→ `autozt -tt mlff -p MAT -j 4 start`（生成新代；5/6/7/8 自动补生成/重跑/提交）。`step8` 报 `halt_*` 是**设计内的停机**（连续两代无改善/曲线已平/超 MAX_GENERATION），不是故障：报告 + 附排查清单，**不擅自设 `FORCE_CONTINUE=true`**。
@@ -117,6 +124,15 @@ autozt auto [on|off]                   # 一键开关全局 auto_advance（改�
 ### CrSe2_hex 手动推进保护（2026-09-21 用户决定）
 
 当前 `setting/tf.yaml` 必须保持 `auto_advance: false`、`auto_watch: false`。该配置被 `.gitignore` 排除，不能依赖 Git 追溯或恢复；未经用户重新明确批准不得开启自动推进。旧仓全局 `taskflow/monitor.sh` cron 已按确认注释，独立 fit-fc-thermal/GPU cron 与已有进程未因此终止。CrSe2_hex 的 S7 由用户终端提交，核对前不自动推进 S7.1_read/S8.4。方案 A 保留隔离 worktree、未合入；瘦身重写延后到这条链完成后。
+
+### AI 接入要点（2026-09-29 起）
+
+- 只走 JSON 面：`autozt agent …`（见 `docs/agent-cli.md`）或 `autozt mcp`（见 `docs/mcp.md`）；不要解析 `summary`/`list` 的人类文本表。
+- 失败处置看 `fails[].action`：`retry` 可按铁律提议/执行；`human_review` 不动、报告；同一步骤失败超过 `max_auto_retries`（默认 2）次时已自动变成 `human_review`（对应第五节"retry 2 次仍 FAIL 停手"）。
+- 破坏性命令的审批网关**默认开启**：AI 代理环境标记（CLAUDECODE/GEMINI_CLI/CODEX_SANDBOX，`agent_env_markers` 可追加）和非交互终端都会被识别，不再依赖 AI 自觉设 `AUTOZT_ACTOR`。
+- `autozt auto on` 批量前先 `--dry-run` 看会改哪些 `setting.yaml`；已是目标值的文件不重写（幂等）。
+- 调优旋钮（`collect_chunk`/`collect_workers`/`op_workers`/`init_workers`/`cache_ttl`）写进 `tf.yaml`，cron 保活进程也能拿到；环境变量仍可临时覆盖。采集 payload 已改走 stdin，不会再 E2BIG。
+- monitor 日志每轮一行 `[round] {...}`（提交/新完成/新失败/耗时），后面最多 20 行变更；单轮异常只记日志不退出。
 
 ## 四、状态判读
 

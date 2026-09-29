@@ -16,6 +16,60 @@ This project adheres to Semantic Versioning; versions before 1.0.0 are developme
 
 ### Added
 - docs/mcp.md: the MCP interface (tool table, risk tiers, measured safety numbers).
+- AI integration (from a 295-material production run where every problem was in discovery,
+  name resolution or status retrieval, not in scheduling):
+  - `.tf_progress.json` + `autozt progress` / `autozt agent progress` / MCP `get_progress`:
+    per-material state, structured FAIL codes (`class`/`code`/`action`/`fail_count`),
+    `since`/`eta_s`, per-project counts and monitor liveness, read from a local file with
+    no collection and no ssh. Written by the monitor every round and by any collecting
+    command; partial scopes merge instead of truncating the full view.
+  - `autozt doctor` / `agent doctor` / MCP `doctor`: ssh-free configuration preflight
+    (effective `max_jobs` per project, tuning-knob sources, blocked projects, cross-project
+    duplicate names and shadowing by blocked projects, monitor/cron keep-alive, agent gate).
+  - `--project NAME` scope on every command, agent op and MCP state tool; segments are
+    pruned before collection.
+  - Stable material id `<project>/<full name>` (`qualified_name`, `id` in agent JSON),
+    accepted by `-p` and the `material` argument.
+  - `auto on --dry-run`; `auto on` skips files already at the target value.
+  - Structured diagnosis codes for segmented relaxations (`segment_zbrent`,
+    `segment_watchdog`, `segment_interrupted`, `segments_incomplete`, `segments_exhausted`),
+    pressure, walltime, OOM, disk-full, missing outputs, stale inputs, plus a coarse
+    `diag_class` and an `action_hint` for parameter tuning.
+  - Tuning knobs `collect_chunk`, `collect_workers`, `op_workers`, `init_workers`,
+    `cache_ttl` can live in tf.yaml (environment variables still override).
+
+### Changed
+- Project-level `max_jobs` in `tf_*.yaml` is now enforced as a per-project cap in addition
+  to the skill-level cap. It was previously ignored silently. **Check `autozt doctor`
+  before restarting a monitor: a project that sets `max_jobs: 16` now really runs at 16.**
+- The agent approval gate is on by default (`agent_gate: auto`): besides `AUTOZT_ACTOR`,
+  known AI-agent environment markers and non-interactive stdin make destructive commands
+  require an approval token. `agent_gate: off` / `AUTOZT_AGENT_GATE=off` restores the old
+  behaviour; `AUTOZT_AGENT_STRICT=0` still disables tokens for your own scripts.
+- Monitor output: one `[round] {json}` line per round plus at most 20 step changes; the full
+  table is printed only with `monitor_table: true`.
+- A basename that also exists in a blocked (stale) project no longer aborts the command when
+  an unblocked material with that name exists; errors now name the blocking project and
+  its reason, and list all rejected targets at once.
+- Legacy skill-name warnings are aggregated by rename pair once there are more than ten.
+
+### Fixed
+- E2BIG during collection: the collector payload is sent on stdin instead of as a
+  `--config64` argument (Linux caps one argument at 128 KiB). The sbatch guard uses the
+  same transport.
+- `autozt agent …` and `autozt mcp` did not work through the pip-installed `autozt`
+  command (`agent` was rejected; `mcp` collected all state first). All entry points now
+  share one router. Agent/MCP subprocess calls fall back to `python -m autozt` when
+  `bin/autozt` is not installed.
+- The monitor never wrote `history.jsonl` (`history_record` was not imported and the
+  NameError was swallowed).
+- A single failing monitor round (ssh timeout, `sys.exit` inside collection) no longer kills
+  the daemon; the error is logged and the next round retries.
+- `monitor -d` checks the pid file before scanning project configurations, so a cron
+  keep-alive no longer spends minutes rescanning a slow 9p mount when the daemon is alive.
+- Blocked-project conflict checks cache material discovery per project (previously
+  re-scanned for every target × blocked config) and see three-level layouts.
+- stdout is line-buffered when redirected, so `autozt … > log` shows progress.
 
 ### Fixed
 - Cluster-switch self-checks, each backed by a real failure observed in testing:
