@@ -5876,3 +5876,19 @@ S8 / S8.4 link 到未对称化的 h5 时告警（重新 gen S7.1：秒级、不�
 对称等价点间插值结果最大相对差 12×12 / 24×24 / 48×48 = 1.2% / 0.29% / 0.075%，与插值误差同量级、按 h² 下降；
 谷附近变化更陡的真实 D(k) 与系数场会更大。IMP（本应严格各向同性）同样有 0.25–1.3% -> 同一个数值地板，
 不是物理问题。报告时取面内平均 (xx+yy)/2，把 ±半差作为数值不确定度；要进一步压低只能加密 S7/S4 的 k 网格。
+
+## V123（2026-09-29）：存量项目重算的分诊 —— 不要全量重跑
+
+regate（V122）扫出：★ WRONG 2（`Mo2S3`、`P1_Mo-MoS2_Z4-3-1_Z4-3-1_Mo2S3` 的 step8_amset）、⚠ STALE-DP 10
+（GaAs、Si、Si_diamond、P1_Al-AlN_A1Z4_A-1-4_Al5N 的 S8；MoSe2、WS2、WSe2 的 S8 + S8.4，其中 MoSe2/WS2 没有
+transport.json）、OK 2（MoS₂）。全量重跑 ≈ 12 × 3 h，其中相当一部分不必：
+- **★ WRONG 两个先别重跑**：它们在 V9 里就是弹性输入不可信（面内 C66 = −13.7 GPa）的材料，ADP 本身算不对；
+  只修去对称化再重跑，结果照样不能用。先修弹性（或放弃这两个），再谈重跑。
+- **⚠ STALE-DP 按形变势整场变化分诊**（`tools/compare_deformation_h5.py`）：MoS₂ 带边 E1 iso 只变 0.2%，
+  ADP 迁移率却 ×2 —— 只看 band_edges.json 判断不了，要比较整个 D(k) 场。步骤（每个材料都不提交作业）：
+  ① 先确认 auto_advance 是关的（S7.1 重新 gen 会让 S8/S8.4/S8.2 失效，开着的话会立刻自动排 3 h 的作业）；
+  ② **retry 前**把旧 h5 备份成 `*.pre-V121`（S7.1 会原地覆盖）；③ retry S7.1（秒级）；
+  ④ `compare_deformation_h5.py 旧 新 --band-edges band_edges.json`：⟨|D|²⟩ 新/旧 偏离 1 超过 5%、或 p90 逐点
+  变化超过 10% -> 重跑；否则旧结果可保留（把 S8/S8.4 被改名的完成标记 `*.stale-upstream-*` 改回原名即可）。
+- 没有 transport.json 的（MoSe2、WS2）不存在"旧结果"，按正常流程往下跑即可。
+- 优先级：2D TMD（WSe2 S8.4）> 3D 基准（GaAs/Si）> 其它；2D 材料的 S8（unity 对照）可按需再跑。
