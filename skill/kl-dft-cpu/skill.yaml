@@ -83,6 +83,10 @@ steps:
   #   拟合/导出/虚频闸在作业里由 kl_fc_backends.py 执行。marker 仍是 phonon_summary.json。
   - {seq: 5, name: step5_fc, label: S5_fc, check: phonon,
      gen: gen_step5_fc.py, fetch_all: true,
+     # v3.x：本地暂存的 fit-fc-thermal kl_bundle/ 在提交时自动推到目标集群（存在才推）。
+     #   路径相对【材料本地目录】：<matroot>/fit-fc-thermal/result/step1_fit/kl_bundle。
+     #   gen 端检测到 kl_bundle/ 即自动进入导入模式，无需手动 scp 或改 step.conf。
+     push_paths: ["fit-fc-thermal/result/step1_fit/kl_bundle"],
      # ★ submit_fit_pheasy_gpu.tpl 【不要】写进 gen_need：它是集群专用资产，只放在
      #   setting/{a800,3090}/templates/ 下（分区/gres/conda 路径都不同，不能进技能库）。
      #   gen 期用 resolve_submit 按 _kind 解析；纯 CPU 集群缺它时给可读报错
@@ -91,6 +95,7 @@ steps:
      #   gen 直接失败（"project_setting/skill_dir 里缺少 …"），已回退。
      gen_need: [dim_common.py, stepconf.py, step.conf, kl_common.py, lattice_kappa.py,
                 kl_fc_backends.py, za_2d.py, imag_policy.py, phonon_stability.py,
+                reuse_fcfit.py,
                 submit_fit_p3py.tpl, submit_fit_pheasy.tpl]}
 
   - {seq: 6, name: step6_kappa, needs: [step5_fc], label: S6_kappa, check: marker,

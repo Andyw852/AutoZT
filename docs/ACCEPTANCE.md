@@ -34,9 +34,9 @@ artifact that carries the evidence, so a reviewer can re-run it.
 
 | Scope | Result |
 |---|---|
-| input generation, all 18 skills | 16/18 (cohp-cogito and fc-fit need upstream products, as designed) |
+| input generation, all 18 skills | 16/18 (cohp-cogito and fit-fc-thermal need upstream products, as designed) |
 | real submissions | 15/15 finished OK (VASP 4-core projections converged, MACE relaxations finished) |
-| force-constant fitting (fc-fit, hiphive, Si, 10 frames x 250 atoms) | fc2/fc3 + ShengBTE export written; phonon verdict stable (min_freq ~ 0 THz) |
+| force-constant fitting (fit-fc-thermal, hiphive, Si, 10 frames x 250 atoms) | fc2/fc3 + ShengBTE export written; phonon verdict stable (min_freq ~ 0 THz) |
 
 ## 5. Cluster-switch traps (all fixed and self-checked)
 

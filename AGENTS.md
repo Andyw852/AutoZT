@@ -18,7 +18,7 @@
 | a800 | `A800` | A800 GPU 集群，真 SLURM（分区 a800，GRES gpu:a800） |
 | 3090 | `user_3090` | 8×RTX3090 服务器，**无 SLURM**（sbatch/squeue/scancel 是 `~/fakeslurm` 垫片，autozt 经 `remote_path_prefix` 注入 PATH） |
 
-20 个技能（`-tt`，见 `autozt skills`）：VASP 类 `band-dft-cpu`（能带）/ `defect-dft-cpu`（本征缺陷+形成能）/ `elastic-dft-cpu`（弹性常数）/ `ke-dft-cpu`（电子热导率）/ `kl-dft-cpu`（晶格热导率）/ `opt-dft-cpu`（结构优化+能量）/ `phonon-dft-cpu`（声子谱）/ `zt-dft-cpu`（ZT 全流程）；MLFF 类 `kl-mlff-cpu`/`kl-mlff-gpu`（晶格热导率）/ `opt-mlff-cpu`/`opt-mlff-gpu`（结构优化+形成能）/ `phonon-mlff-cpu`/`phonon-mlff-gpu`（声子谱）/ `mlff`（随机位移法训练）；辅助 `cohp-cogito`（成键分析）/ `eph-qe-cpu`（电子-声子）/ `te-screen`（热电筛选）/ `unihamgnn`（机器学习势）；拟合 `fc-fit`（力常数拟合）。状态表 `hpc` 列显示每个项目实际跑的机器。
+20 个技能（`-tt`，见 `autozt skills`）：VASP 类 `band-dft-cpu`（能带）/ `defect-dft-cpu`（本征缺陷+形成能）/ `elastic-dft-cpu`（弹性常数）/ `ke-dft-cpu`（电子热导率）/ `kl-dft-cpu`（晶格热导率）/ `opt-dft-cpu`（结构优化+能量）/ `phonon-dft-cpu`（声子谱）/ `zt-dft-cpu`（ZT 全流程）；MLFF 类 `kl-mlff-cpu`/`kl-mlff-gpu`（晶格热导率）/ `opt-mlff-cpu`/`opt-mlff-gpu`（结构优化+形成能）/ `phonon-mlff-cpu`/`phonon-mlff-gpu`（声子谱）/ `mlff`（随机位移法训练）；辅助 `cohp-cogito`（成键分析）/ `eph-qe-cpu`（电子-声子）/ `te-screen`（热电筛选）/ `unihamgnn`（机器学习势）；拟合 `fit-fc-thermal`（力常数拟合）。状态表 `hpc` 列显示每个项目实际跑的机器。
 
 你的职责：**监控状态、诊断失败、提出建议、经授权后执行操作、主动汇报**。你不是执行器，`autozt` 才是。
 
@@ -116,7 +116,7 @@ autozt auto [on|off]                   # 一键开关全局 auto_advance（改�
 
 ### CrSe2_hex 手动推进保护（2026-09-21 用户决定）
 
-当前 `setting/tf.yaml` 必须保持 `auto_advance: false`、`auto_watch: false`。该配置被 `.gitignore` 排除，不能依赖 Git 追溯或恢复；未经用户重新明确批准不得开启自动推进。旧仓全局 `taskflow/monitor.sh` cron 已按确认注释，独立 fc-fit/GPU cron 与已有进程未因此终止。CrSe2_hex 的 S7 由用户终端提交，核对前不自动推进 S7.1_read/S8.4。方案 A 保留隔离 worktree、未合入；瘦身重写延后到这条链完成后。
+当前 `setting/tf.yaml` 必须保持 `auto_advance: false`、`auto_watch: false`。该配置被 `.gitignore` 排除，不能依赖 Git 追溯或恢复；未经用户重新明确批准不得开启自动推进。旧仓全局 `taskflow/monitor.sh` cron 已按确认注释，独立 fit-fc-thermal/GPU cron 与已有进程未因此终止。CrSe2_hex 的 S7 由用户终端提交，核对前不自动推进 S7.1_read/S8.4。方案 A 保留隔离 worktree、未合入；瘦身重写延后到这条链完成后。
 
 ## 四、状态判读
 

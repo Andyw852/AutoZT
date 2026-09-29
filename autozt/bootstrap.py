@@ -160,7 +160,7 @@ _MANIFEST_TYPE_KEYS = ("desc", "steps", "optional_steps", "gen_need", "aux_files
                        "skill_subdir", "hpc", "work_dir", "root",
                        "template_dir", "template_layout", "fetch_files",
                        # v3.24：技能自报的「提交前必须存在的输入」清单。
-                       # 不跑 VASP 的技能（如 fc-fit）没有 INCAR/KPOINTS，
+                       # 不跑 VASP 的技能（如 fit-fc-thermal）没有 INCAR/KPOINTS，
                        # 声明它即可通过 _remote_submit_preflight。
                        "submit_required")
 
@@ -724,6 +724,10 @@ SKILL_ALIASES = {
     "kl-mace-cpu": "kl-mlff-cpu", "kl-mace-gpu": "kl-mlff-gpu",
     "phonon-mace-cpu": "phonon-mlff-cpu", "phonon-mace-gpu": "phonon-mlff-gpu",
     "mlff-mace": "mlff",
+    # 2026-09-29：fc-fit 改名为 fit-fc-thermal（并加了 S2_kappa 热导率步）。
+    # 旧项目 project_setting 里的 task_types.fc-fit 走别名映射到新技能；别名机制
+    # 会保留物理目录名 dir_name=fc-fit，所以旧材料已生成的 step1_fit/ 原位可用。
+    "fc-fit": "fit-fc-thermal",
 }
 _SKILL_MIGRATIONS = set()
 _SKILL_WARNED = False

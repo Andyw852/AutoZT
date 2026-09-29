@@ -18,7 +18,7 @@
 |---|---|
 | 复制来源 | `~/software/AutoZT-v2.0` |
 | 复制时间 | 2026-09-14 |
-| 上游提交 | `56fc99f`（feat(fc-fit): add the fc-fit skill） |
+| 上游提交 | `56fc99f`（feat(fit-fc-thermal): add the fit-fc-thermal skill） |
 | 复制方式 | `rsync -a`（保留当时工作区 91 个未提交改动，原样带过来） |
 | 基线快照提交 | `baseline: 隔离快照 …`（分支 `dev-v1.0`） |
 | 排除内容 | `tmp/`（672M 临时区）、`__pycache__`、`setting/.tf_state_cache.json`、`setting/.tf_watch.log`、`setting/.tf_hung.json`、`setting/.tf_summary_*.txt`、`setting/.tf_watch.pid` |

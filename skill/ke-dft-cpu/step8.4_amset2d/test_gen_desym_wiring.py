@@ -188,6 +188,61 @@ class OverrideTests(unittest.TestCase):
         self.assertEqual(G14.MESH_MIN, 263)
         self.assertGreaterEqual(G14.MESH_MIN_FMAX, 120)
 
+    def test_2d_mesh_density_floor(self):
+        """patch_mesh_density（V118）：面内下限 = min(263, ceil(|b|/0.00865))，只降不升。"""
+        from pymatgen.core import Lattice, Structure
+        def st(a):
+            return Structure(Lattice.hexagonal(a, 20.0), ["Mo"], [[0, 0, .5]])
+        dk = G14.MESH_MIN_DK
+        self.assertAlmostEqual(dk, 0.00865)
+        self.assertEqual(G14.mesh_need_by_density(st(3.19), [263, 263, 3], dk), [263, 263, 3])  # V112 MoS2
+        self.assertEqual(G14.mesh_need_by_density(st(2.46), [263, 263, 3], dk), [263, 263, 3])  # 小晶胞不升
+        self.assertEqual(G14.mesh_need_by_density(st(16.0), [263, 263, 3], dk), [53, 53, 3])    # 大晶胞
+        self.assertEqual(G14.mesh_need_by_density(st(16.0), [263, 263, 3], 0), [263, 263, 3])   # 关掉
+        self.assertEqual(G14.mesh_need_by_density(st(16.0), [0, 0, 3], dk), [0, 0, 3])          # MESH_MIN=0
+        self.assertIn("MESH_MIN_DK", G14.SPEC)
+
+
+class FullGridWasteGuardTests(unittest.TestCase):
+    """patch_full_grid_waste（2026-09-29）：补丁默认开以后，S3b 全网格对非 SOC 材料是白算 ——
+    gen 时用同一判据拦下；SOC + TR 操作、补丁被关且有坏操作时照常放行。"""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.G5B = _load("g5b_under_test", ROOT / "step3b_uniform_full" / "gen_step5b_uniform_full.py")
+
+    def _case(self, st, desym, soc=False):
+        d = _matdir(st)
+        if soc:
+            (d / "step3_uniform" / "INCAR").write_text("LSORBIT = .TRUE.\n")
+        return self.G5B._full_grid_needed(d / "step3_uniform" / "POSCAR", d, desym)
+
+    def test_default_on_blocks_full_grid(self):
+        import os
+        old = os.environ.pop("AZ_DESYM_FIX", None)
+        try:
+            for st in (tsg.shifted(tsg.si_on_atom(), [-.125] * 3), tsg.gan_std(),
+                       tsg.shifted(tsg.mos2_aligned(), [.1, .2, 0])):
+                need, why = self._case(st, "auto")                 # 出厂默认 = 开
+                self.assertFalse(need, why)
+                self.assertIn("DESYM_FIX=on", why)
+        finally:
+            if old is not None:
+                os.environ["AZ_DESYM_FIX"] = old
+
+    def test_still_needed_cases(self):
+        need, why = self._case(tsg.shifted(tsg.si_on_atom(), [-.125] * 3), "off")
+        self.assertTrue(need, why)                                   # 补丁关 + 24/48 坏操作
+        need, why = self._case(tsg.gan_std(), "off")
+        self.assertFalse(need, why)                                  # 补丁关但 0 坏操作：也不需要
+        need, why = self._case(tsg.shifted(tsg.mos2_aligned(), [.1, .2, 0]), "on", soc=True)
+        self.assertTrue(need, why)                                   # SOC + TR 操作：补丁未验证
+
+    def test_force_key_in_spec(self):
+        self.assertIn("FULL_GRID_FORCE", self.G5B.SPEC)
+        self.assertIn("DESYM_FIX", self.G5B.SPEC)
+        self.assertFalse(self.G5B.FULL_GRID_FORCE)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

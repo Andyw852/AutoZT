@@ -79,7 +79,19 @@ KALIGN_3D = "even"
 #   2D 不受影响（V112 验证的就是与 S3 相同的 48×48×3）。1 = 旧行为（与 S3 同网格）。
 #   MATCH_MESH_OF 优先（单变量对照）。
 FULL_GRID_3D_SCALE = 0.5
+# ---- [patch_full_grid_waste-2026-09-29] 相位补丁默认开以后，全网格分支对非 SOC 材料已无生产用途 ----
+#   V115–V117：amset_desym_fix 默认开（DESYM_FIX_DEFAULT=True），任何原点的 IBZ 去对称化都精确，
+#   S8/S8.4 的 auto 判据会直接读 step4_wave（IBZ），**不再读本步的产物**。本步是 ISYM=-1 的全网格
+#   自洽（GaN 4800 k 点、MoS2 6912 k 点），项目里开着 wavefunction_full 组就会白算一遍。
+#   ⇒ gen 时先问同一个判据（ke_common.symmetry_gate，带 DESYM_FIX 与 SOC）：不需要全网格 -> 停，
+#     并说明原因；要做验证/受控对照（tools/desym_fix_validate.py 需要全网格 h5）写 FULL_GRID_FORCE = true。
+#   仍需要全网格的情形（判据照常放行本步）：SOC 且有时间反演操作（补丁的 SOC 分支未验证）；
+#     DESYM_FIX 被关掉且有坏操作。
+FULL_GRID_FORCE = False
+DESYM_FIX_CONF = "auto"   # 与 S8/S8.4 同名键；写在材料级 step.conf 时两边一致
 SPEC = {"VACUUM_KZ_MIN": (VACUUM_KZ_MIN, "int"),
+        "FULL_GRID_FORCE": (FULL_GRID_FORCE, "bool"),
+        "DESYM_FIX": (DESYM_FIX_CONF, "str"),
         "FULL_GRID_3D_SCALE": (FULL_GRID_3D_SCALE, "float"),
         # 与 step3_uniform 同一套键（报错信息一直说"可在项目里覆盖 DK_MAX"，
         # 但此前本脚本只认 VACUUM_KZ_MIN，写了也不生效 —— 2026-09-18 补齐）
@@ -99,9 +111,24 @@ STEP_LABEL   = "S3b_uniformfull"
 GGA_MAP = {"pbe": "PE", "pbesol": "PS", "pbe-d3": "PE"}
 
 
+def _full_grid_needed(poscar, cwd, desym_conf="auto"):
+    """[patch_full_grid_waste] 与 S8/S8.4 同一判据：这个结构走 IBZ 会不会算错。
+    返回 (needed, 说明)；判不出来按"需要"（保守，照常生成）。"""
+    try:
+        from pymatgen.core import Structure
+        st = Structure.from_file(str(poscar))
+    except Exception as e:                                   # noqa: BLE001
+        return True, "读不到结构（%s）-> 保守按需要全网格" % e
+    on, src = kc.desym_fix_setting(desym_conf)
+    ncl = kc.detect_ncl(cwd)
+    g = kc.symmetry_gate(st, desym_fix=on, ncl=ncl)
+    return bool(g["needs_full_grid"]), "DESYM_FIX=%s（%s）%s；%s" % (
+        "on" if on else "off", src, "；SOC" if ncl else "", g.get("reason"))
+
+
 def main():
     global DK_MAX, DK_MAX_2D, DK_MAX_3D, UNIFORM_NMAX, KALIGN_3D, MATCH_MESH_OF
-    global FULL_GRID_3D_SCALE
+    global FULL_GRID_3D_SCALE, FULL_GRID_FORCE, DESYM_FIX_CONF
     cwd = Path.cwd()
     out = cwd / OUTDIR_NAME
     out.mkdir(exist_ok=True)
@@ -174,10 +201,23 @@ def main():
             MATCH_MESH_OF = _conf["MATCH_MESH_OF"]
             if _conf["FULL_GRID_3D_SCALE"] is not None:
                 FULL_GRID_3D_SCALE = float(_conf["FULL_GRID_3D_SCALE"])
+            FULL_GRID_FORCE = bool(_conf["FULL_GRID_FORCE"])
+            DESYM_FIX_CONF = _conf["DESYM_FIX"] or "auto"
         except (KeyError, ValueError, TypeError) as _e:
             # ★ 2026-09-28：不再静默（一个键出错会让它之后的覆盖全部失效，见 test_gen_conf_wiring）
             print("[WARN] 读 step.conf 覆盖时出错（%s: %s）—— 出错之后的覆盖项未生效"
                   % (type(_e).__name__, _e), file=sys.stderr)
+    # [patch_full_grid_waste-2026-09-29] 判据说 IBZ 精确 -> 本步是白算，停在提交之前
+    _need_full, _why_full = _full_grid_needed(out / "POSCAR", cwd, DESYM_FIX_CONF)
+    if not _need_full and not FULL_GRID_FORCE:
+        sys.exit("[ERROR] step3b_uniform_full 不需要：%s\n"
+                 "        S8/S8.4 会直接读 step4_wave（IBZ），不会用本步的全网格产物 —— 提交就是白算"
+                 "（ISYM=-1 全网格自洽，比 S3 贵约一个点群阶数倍）。\n"
+                 "        处理：① 项目里关掉 wavefunction_full 组（S3b/S3c/S4b 一起不注入）；\n"
+                 "              ② 确实要全网格（desym_fix_validate 验证 / 受控对照）：step.conf 写 "
+                 "FULL_GRID_FORCE = true。" % _why_full)
+    print("[..] 全网格判据：%s -> %s" % (
+        _why_full, "需要全网格，照常生成" if _need_full else "不需要，但 FULL_GRID_FORCE=true，照常生成"))
     if dim == "2d" and _kzmin > 1:
         _kp = out / "KPOINTS"
         _ln = _kp.read_text().splitlines()

@@ -2,7 +2,7 @@
 
 fixture 取自真实踩坑现场：
   · kl-mlff-gpu S3（3090 上跑通）：cpu192 / 24 核
-  · fc-fit S1（切到 3090 后静默死亡）：cpu192 / 48 核 + atomate2_p_a + /public/home/...
+  · fit-fc-thermal S1（切到 3090 后静默死亡）：cpu192 / 48 核 + atomate2_p_a + /public/home/...
 """
 import os
 import sys

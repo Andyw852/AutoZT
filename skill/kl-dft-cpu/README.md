@@ -77,6 +77,39 @@ autozt -tt kl-dft-cpu -p <材料> -j step6_kappa conf --set params.KAPPA_MESH="2
   另存 `POSCAR.pre_symmetry`。依赖公共池 `symmetry_audit.py`（spglib 在 `atomate2_p_a` 环境里有，
   生成目录下 spglib 不可用时自动跳过、不阻断 gen）。
 
+## 复用 fit-fc-thermal 的力常数（Fit on 3090，κ 在别的集群）
+
+`kl-dft-cpu` 的 S5_fc 自己会拟一份 fc2/fc3；如果已经用 `fit-fc-thermal` 技能（例如 3090 的
+`pheasy-gpu`）拟好，可以让 S5_fc **直接导入**，不再重拟。**跨集群全自动**：
+
+1. `fit-fc-thermal` 的 S1_fit 收尾额外产出小目录 `kl_bundle/`（`fc2/fc3.hdf5` + `shengbte/`
+   + `phonon_summary.json` + `fc_dataset.json` + `POSCAR`），随 `fetch_all` 拉回本地
+   `<材料根>/fit-fc-thermal/result/step1_fit/kl_bundle/`。
+2. kl 的 `skill.yaml` 里 S5_fc 声明了 `push_paths: ["fit-fc-thermal/result/step1_fit/kl_bundle"]`；
+   tf 每次 gen 时**从本地把这份 bundle 自动推到目标集群**的步骤目录（存在才推、md5 差异、
+   stdin 投递以免 argv 超长）。切到哪台超算就推到哪台，无需手动 scp。
+3. gen 检测到目标目录里有 `kl_bundle/` 就**自动进入导入模式**：调 `reuse_fcfit.py` 装配
+   `step5_fc/phono3py/{fc2,fc3}.hdf5` + `phono3py_disp.yaml` + `kl_params.txt` + `shengbte/`
+   + 虚频闸 marker，不再提交拟合作业。**默认流程无需改任何 step.conf。**
+
+   * 想强制用本技能自己重拟（忽略 bundle）：`FC_IMPORT_DIR = off`。
+   * 想用别的力常数目录：`FC_IMPORT_DIR = <本集群上 fit-fc-thermal step1_fit 路径>`；
+     可选覆盖 `FC_IMPORT_MESH` / `FC_IMPORT_DIM` / `FC_IMPORT_FUNCTIONAL` / `FC_IMPORT_SUPERCELL`。
+
+`reuse_fcfit.py` 也可单独跑（在装好 phono3py 的环境里）：
+
+```
+python skill/kl-dft-cpu/reuse_fcfit.py --fcfit-dir <step1_fit> --out <step5_fc> \
+    --dim 3d --mesh "24 24 24"
+```
+
+注意：fc2/fc3 与原子序相关，导入前确认 fit-fc-thermal 与 kl 用**同一个 POSCAR/超胞**；本脚本
+只做布局转换，不做原子序重排（fit-fc-thermal 导出 pheasy 结果时已做 `apply_pheasy_fc_order`）。
+
+**切集群**：κ 这一步可以单独换超算（`autozt -tt kl-dft-cpu -p <材料> hpc <集群>`）。提交
+模板按集群解析 `setting/<集群>/templates/submit_p3py.tpl`；切换前删掉 `project_setting/
+templates/` 里旧的同名模板（否则旧集群的 partition/qos 会盖住），并同步 `setting.yaml` 的
+`work_dir` 与 step.conf 的 `SBATCH_QOS`（jzzn `premium|regular`，hanhai25 `qos_cpu-256c768gb`）。
 ## 三阶截断自动选择（2026-09-24，S4/S5/S6 联动）
 
 κ 偏低的一个根因是三阶截断没人验证。现在按「候选 → 判据 → 选择」自动定：

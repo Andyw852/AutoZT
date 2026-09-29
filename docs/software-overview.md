@@ -15,7 +15,7 @@
 | Phonons | `phonon-dft-cpu` | Harmonic phonons and dynamical stability | VASP, Phonopy | CPU |
 | Phonons | `phonon-mlff-cpu` | MACE phonon spectrum and stability screening | MACE, Phonopy | CPU |
 | Phonons | `phonon-mlff-gpu` | GPU-accelerated MACE phonon spectrum and stability screening | MACE, Phonopy | GPU |
-| Force constants | `fc-fit` | Harmonic / anharmonic force-constant fitting | Phono3py, hiPhive, symfc, ALM | CPU / local |
+| Force constants | `fit-fc-thermal` | Harmonic / anharmonic force-constant fitting | Phono3py, hiPhive, symfc, ALM | CPU / local |
 | Thermal transport | `kl-dft-cpu` | Lattice thermal conductivity from DFT forces | Phono3py, ShengBTE, VASP | CPU |
 | Thermal transport | `kl-mlff-cpu` | Lattice thermal conductivity from MACE forces | MACE, Phono3py | CPU |
 | Thermal transport | `kl-mlff-gpu` | GPU-accelerated MACE force evaluation for lattice thermal conductivity | MACE, Phono3py | GPU |

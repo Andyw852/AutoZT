@@ -12,7 +12,7 @@
 | defect-dft-cpu | 缺陷形成能(DFT/CPU) | 5 | S0_refs, S1_bulk, S2_def, S3_chg, S4_anlys |
 | elastic-dft-cpu | 弹性常数(DFT/CPU) | 3 | S1_opt, S2_elastic, S3_post |
 | eph-qe-cpu | QE–Wannier90–Perturbo 电子–声子耦合（CPU） | 7 | S0_env, S1_scf, S2_wannier, S3_ph, S4_qe2pert, S5_ephmat, S6_summary |
-| fc-fit | 力常数拟合 fc2/fc3 (pheasy/hiphive/phono3py) | 1 | S1_fit |
+| fit-fc-thermal | 力常数拟合 fc2/fc3 (pheasy/hiphive/phono3py) | 1 | S1_fit |
 | ke-dft-cpu | 电子热导率(DFT/CPU) | 9 | S1_opt, S3_uniform, S4_wave, S5_dielect, S5.1_dievalid, S6_elastic, S7_deform, S7.1_read, S8_kappa |
 | kl-dft-cpu | 晶格热导率(DFT/CPU) | 5 | S1_opt, S2_static, S4_disp, S5_fc, S6_kappa |
 | kl-mlff-cpu | 晶格热导率(MACE/CPU) | 4 | S1_relax, S2_force, S3_fc, S4_kappa |
@@ -49,7 +49,7 @@
 | eph-qe-cpu | DFT_BAND_MIN/MAX | 1/0 | - | step.conf | qe2pert 的 DFT 能带窗；MAX=0 表示 NUM_BANDS。 |
 | eph-qe-cpu | PH_EPSIL | true | true, false | step.conf | ph.x 介电响应开关；极性/NAC 体系需单独验证。 |
 | eph-qe-cpu | PH_LQDIR | true | true, false | step.conf | ph.x q 目录输出开关。 |
-| fc-fit | FIT_ENGINE | phono3py | phono3py, pheasy, hiphive | step.conf | 力常数拟合引擎 |
+| fit-fc-thermal | FIT_ENGINE | phono3py | phono3py, pheasy, hiphive | step.conf | 力常数拟合引擎 |
 | ke-dft-cpu | BANDGAP | hse | pbe, hse | step.conf | PBE 或 HSE 带隙分支 |
 | kl-dft-cpu | METHOD | alm | alm, findiff | step.conf | 位移生成方式：alm = 随机位移+压缩感知（帧数少）；findiff = phono3py 对称有限位移 |
 | kl-dft-cpu | FIT_ENGINE | auto | auto, phono3py, pheasy | step.conf | 力常数拟合引擎；auto = 按 DIM/帧数选（多为 phono3py），pheasy 需要 METHOD=alm（随机位移压缩感知） |
@@ -106,52 +106,52 @@
 | defect-dft-cpu | templates/step.conf（技能级） | POTCAR_VARIANT | Pb:Pb_d, Sn:Sn_d, Sb:Sb, Bi:Bi_d, Te:Te | - | - |
 | defect-dft-cpu | templates/step.conf（技能级） | SUPERCELL | 3 3 1 | - | - |
 | elastic-dft-cpu | templates/step.conf（技能级） | FUNC | pbesol | - | - |
-| fc-fit | templates/step1_fit/step.conf（步骤级） | CONDA_ENV | atomate2_p_a | - | - |
-| fc-fit | templates/step1_fit/step.conf（步骤级） | CONDA_SH | /public/home/.../miniconda3/etc/profile.d/conda.sh | - | - |
-| fc-fit | templates/step1_fit/step.conf（步骤级） | COORDS | cartesian | - | - |
-| fc-fit | templates/step1_fit/step.conf（步骤级） | DIM | auto | - | - |
-| fc-fit | templates/step1_fit/step.conf（步骤级） | ENABLE_FC | 3 | - | - |
-| fc-fit | templates/step1_fit/step.conf（步骤级） | EQUILIBRIUM_FORCES_NPY | (空) | - | - |
-| fc-fit | templates/step1_fit/step.conf（步骤级） | EXPORT_SHENGBTE | true | - | also write shengbte/FORCE_CONSTANTS_2ND / _3RD |
-| fc-fit | templates/step1_fit/step.conf（步骤级） | FC3_CUTOFF | (空) | - | fc3 cutoff in A; empty = no cutoff (slow, big) |
-| fc-fit | templates/step1_fit/step.conf（步骤级） | FC3_LOAD_GB_LIMIT | 8.0 | - | skip materialising fc3 above this (ShengBTE/RMSE) |
-| fc-fit | templates/step1_fit/step.conf（步骤级） | FC_CALC | symfc | - | symfc / alm |
-| fc-fit | templates/step1_fit/step.conf（步骤级） | FIT_ENGINE | phono3py | - | - |
-| fc-fit | templates/step1_fit/step.conf（步骤级） | FIT_INPUT_DIR | auto | - | - |
-| fc-fit | templates/step1_fit/step.conf（步骤级） | FIT_RMSE_FRAMES | 0 | - | 0 = off; else N training frames for the residual |
-| fc-fit | templates/step1_fit/step.conf（步骤级） | HIPHIVE_ALPHA | 1e-10 | - | regularisation for ridge / lasso |
-| fc-fit | templates/step1_fit/step.conf（步骤级） | HIPHIVE_CUTOFF2 | 6.0 | - | - |
-| fc-fit | templates/step1_fit/step.conf（步骤级） | HIPHIVE_CUTOFF3 | 6.0 | - | - |
-| fc-fit | templates/step1_fit/step.conf（步骤级） | HIPHIVE_ENFORCE_ASR | true | - | project Huang / Born-Huang sum rules |
-| fc-fit | templates/step1_fit/step.conf（步骤级） | HIPHIVE_FIT_METHOD | ridge | - | ols / ridge / lasso / ard / bayes |
-| fc-fit | templates/step1_fit/step.conf（步骤级） | HIPHIVE_N_CONFIGS | 0 | - | 0 = use every frame, else a subsample |
-| fc-fit | templates/step1_fit/step.conf（步骤级） | HIPHIVE_SYMPREC | 1e-5 | - | - |
-| fc-fit | templates/step1_fit/step.conf（步骤级） | IMAG_THR | 0.10 | - | min frequency below -IMAG_THR THz counts as unstable |
-| fc-fit | templates/step1_fit/step.conf（步骤级） | NULL_SPACE_EPS | 0.001 | - | - |
-| fc-fit | templates/step1_fit/step.conf（步骤级） | PHEASY_BIN | pheasy | - | pheasy / pheasy-gpu (GPU build, needs a GPU template) |
-| fc-fit | templates/step1_fit/step.conf（步骤级） | PHEASY_C2_CUTOFF | (空) | - | fc2 cutoff in A; empty = all interactions |
-| fc-fit | templates/step1_fit/step.conf（步骤级） | PHEASY_C3_CUTOFF | 6 | - | fc3 cutoff in A; empty = all interactions |
-| fc-fit | templates/step1_fit/step.conf（步骤级） | PHEASY_CV | 5 | - | - |
-| fc-fit | templates/step1_fit/step.conf（步骤级） | PHEASY_FIT_METHOD | RFE | - | OLS/LASSO/ALASSO/RFE/RFE-OLS-TSQR/RIDGE |
-| fc-fit | templates/step1_fit/step.conf（步骤级） | PHEASY_GPU_LASSO_RESIDENT | (空) | - | - |
-| fc-fit | templates/step1_fit/step.conf（步骤级） | PHEASY_LASSO_TWOLEVEL | (空) | - | - |
-| fc-fit | templates/step1_fit/step.conf（步骤级） | PHEASY_MAX_ITER | (空) | - | - |
-| fc-fit | templates/step1_fit/step.conf（步骤级） | PHEASY_MU_MAX | (空) | - | - |
-| fc-fit | templates/step1_fit/step.conf（步骤级） | PHEASY_MU_MIN | -8 | - | - |
-| fc-fit | templates/step1_fit/step.conf（步骤级） | PHEASY_NGPU | (空) | - | - |
-| fc-fit | templates/step1_fit/step.conf（步骤级） | PHEASY_NMU | (空) | - | - |
-| fc-fit | templates/step1_fit/step.conf（步骤级） | PHEASY_OLS_MAXITER | (空) | - | OLS LSMR iteration cap; empty = pheasy default 5000 |
-| fc-fit | templates/step1_fit/step.conf（步骤级） | PHEASY_OLS_RIDGE | (空) | - | OLS ridge override; empty = pheasy default |
-| fc-fit | templates/step1_fit/step.conf（步骤级） | PHEASY_RASR | BHH | - | BH / H / BHH / none (rotational sum rules) |
-| fc-fit | templates/step1_fit/step.conf（步骤级） | PHEASY_SEED | 666666 | - | - |
-| fc-fit | templates/step1_fit/step.conf（步骤级） | PHEASY_STD | false | - | --std: standardise the training data.  pheasy_fit.sh applies |
-| fc-fit | templates/step1_fit/step.conf（步骤级） | PHEASY_TOL | (空) | - | - |
-| fc-fit | templates/step1_fit/step.conf（步骤级） | PHEASY_TUNING | safe | - | safe / kl |
-| fc-fit | templates/step1_fit/step.conf（步骤级） | SUBTRACT_EQUILIBRIUM | true | - | - |
-| fc-fit | templates/step1_fit/step.conf（步骤级） | SUPERCELL | (空) | - | - |
-| fc-fit | gen_step1_fit.py | BAND_POINTS | 51 | int | SPEC 内建默认 |
-| fc-fit | gen_step1_fit.py | PHEASY_CV_MAX_ITER | - | str | SPEC 内建默认 |
-| fc-fit | gen_step1_fit.py | PHEASY_CV_TOL | - | str | SPEC 内建默认 |
+| fit-fc-thermal | templates/step1_fit/step.conf（步骤级） | CONDA_ENV | atomate2_p_a | - | - |
+| fit-fc-thermal | templates/step1_fit/step.conf（步骤级） | CONDA_SH | /public/home/.../miniconda3/etc/profile.d/conda.sh | - | - |
+| fit-fc-thermal | templates/step1_fit/step.conf（步骤级） | COORDS | cartesian | - | - |
+| fit-fc-thermal | templates/step1_fit/step.conf（步骤级） | DIM | auto | - | - |
+| fit-fc-thermal | templates/step1_fit/step.conf（步骤级） | ENABLE_FC | 3 | - | - |
+| fit-fc-thermal | templates/step1_fit/step.conf（步骤级） | EQUILIBRIUM_FORCES_NPY | (空) | - | - |
+| fit-fc-thermal | templates/step1_fit/step.conf（步骤级） | EXPORT_SHENGBTE | true | - | also write shengbte/FORCE_CONSTANTS_2ND / _3RD |
+| fit-fc-thermal | templates/step1_fit/step.conf（步骤级） | FC3_CUTOFF | (空) | - | fc3 cutoff in A; empty = no cutoff (slow, big) |
+| fit-fc-thermal | templates/step1_fit/step.conf（步骤级） | FC3_LOAD_GB_LIMIT | 8.0 | - | skip materialising fc3 above this (ShengBTE/RMSE) |
+| fit-fc-thermal | templates/step1_fit/step.conf（步骤级） | FC_CALC | symfc | - | symfc / alm |
+| fit-fc-thermal | templates/step1_fit/step.conf（步骤级） | FIT_ENGINE | phono3py | - | - |
+| fit-fc-thermal | templates/step1_fit/step.conf（步骤级） | FIT_INPUT_DIR | auto | - | - |
+| fit-fc-thermal | templates/step1_fit/step.conf（步骤级） | FIT_RMSE_FRAMES | 0 | - | 0 = off; else N training frames for the residual |
+| fit-fc-thermal | templates/step1_fit/step.conf（步骤级） | HIPHIVE_ALPHA | 1e-10 | - | regularisation for ridge / lasso |
+| fit-fc-thermal | templates/step1_fit/step.conf（步骤级） | HIPHIVE_CUTOFF2 | 6.0 | - | - |
+| fit-fc-thermal | templates/step1_fit/step.conf（步骤级） | HIPHIVE_CUTOFF3 | 6.0 | - | - |
+| fit-fc-thermal | templates/step1_fit/step.conf（步骤级） | HIPHIVE_ENFORCE_ASR | true | - | project Huang / Born-Huang sum rules |
+| fit-fc-thermal | templates/step1_fit/step.conf（步骤级） | HIPHIVE_FIT_METHOD | ridge | - | ols / ridge / lasso / ard / bayes |
+| fit-fc-thermal | templates/step1_fit/step.conf（步骤级） | HIPHIVE_N_CONFIGS | 0 | - | 0 = use every frame, else a subsample |
+| fit-fc-thermal | templates/step1_fit/step.conf（步骤级） | HIPHIVE_SYMPREC | 1e-5 | - | - |
+| fit-fc-thermal | templates/step1_fit/step.conf（步骤级） | IMAG_THR | 0.10 | - | min frequency below -IMAG_THR THz counts as unstable |
+| fit-fc-thermal | templates/step1_fit/step.conf（步骤级） | NULL_SPACE_EPS | 0.001 | - | - |
+| fit-fc-thermal | templates/step1_fit/step.conf（步骤级） | PHEASY_BIN | pheasy | - | pheasy / pheasy-gpu (GPU build, needs a GPU template) |
+| fit-fc-thermal | templates/step1_fit/step.conf（步骤级） | PHEASY_C2_CUTOFF | (空) | - | fc2 cutoff in A; empty = all interactions |
+| fit-fc-thermal | templates/step1_fit/step.conf（步骤级） | PHEASY_C3_CUTOFF | 6 | - | fc3 cutoff in A; empty = all interactions |
+| fit-fc-thermal | templates/step1_fit/step.conf（步骤级） | PHEASY_CV | 5 | - | - |
+| fit-fc-thermal | templates/step1_fit/step.conf（步骤级） | PHEASY_FIT_METHOD | RFE | - | OLS/LASSO/ALASSO/RFE/RFE-OLS-TSQR/RIDGE |
+| fit-fc-thermal | templates/step1_fit/step.conf（步骤级） | PHEASY_GPU_LASSO_RESIDENT | (空) | - | - |
+| fit-fc-thermal | templates/step1_fit/step.conf（步骤级） | PHEASY_LASSO_TWOLEVEL | (空) | - | - |
+| fit-fc-thermal | templates/step1_fit/step.conf（步骤级） | PHEASY_MAX_ITER | (空) | - | - |
+| fit-fc-thermal | templates/step1_fit/step.conf（步骤级） | PHEASY_MU_MAX | (空) | - | - |
+| fit-fc-thermal | templates/step1_fit/step.conf（步骤级） | PHEASY_MU_MIN | -8 | - | - |
+| fit-fc-thermal | templates/step1_fit/step.conf（步骤级） | PHEASY_NGPU | (空) | - | - |
+| fit-fc-thermal | templates/step1_fit/step.conf（步骤级） | PHEASY_NMU | (空) | - | - |
+| fit-fc-thermal | templates/step1_fit/step.conf（步骤级） | PHEASY_OLS_MAXITER | (空) | - | OLS LSMR iteration cap; empty = pheasy default 5000 |
+| fit-fc-thermal | templates/step1_fit/step.conf（步骤级） | PHEASY_OLS_RIDGE | (空) | - | OLS ridge override; empty = pheasy default |
+| fit-fc-thermal | templates/step1_fit/step.conf（步骤级） | PHEASY_RASR | BHH | - | BH / H / BHH / none (rotational sum rules) |
+| fit-fc-thermal | templates/step1_fit/step.conf（步骤级） | PHEASY_SEED | 666666 | - | - |
+| fit-fc-thermal | templates/step1_fit/step.conf（步骤级） | PHEASY_STD | false | - | --std: standardise the training data.  pheasy_fit.sh applies |
+| fit-fc-thermal | templates/step1_fit/step.conf（步骤级） | PHEASY_TOL | (空) | - | - |
+| fit-fc-thermal | templates/step1_fit/step.conf（步骤级） | PHEASY_TUNING | safe | - | safe / kl |
+| fit-fc-thermal | templates/step1_fit/step.conf（步骤级） | SUBTRACT_EQUILIBRIUM | true | - | - |
+| fit-fc-thermal | templates/step1_fit/step.conf（步骤级） | SUPERCELL | (空) | - | - |
+| fit-fc-thermal | gen_step1_fit.py | BAND_POINTS | 51 | int | SPEC 内建默认 |
+| fit-fc-thermal | gen_step1_fit.py | PHEASY_CV_MAX_ITER | - | str | SPEC 内建默认 |
+| fit-fc-thermal | gen_step1_fit.py | PHEASY_CV_TOL | - | str | SPEC 内建默认 |
 | ke-dft-cpu | step.conf（技能级） | BANDGAP | hse | - | - |
 | ke-dft-cpu | step.conf（技能级） | FUNC | pbesol | - | - |
 | ke-dft-cpu | step8_amset/gen_step10_amset.py | LAYER_THICKNESS | LAYER_THICKNESS | str | SPEC 内建默认 |

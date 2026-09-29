@@ -137,6 +137,33 @@ class PreflightVerdictTests(unittest.TestCase):
             verdict_u, lines_u = pf.run(out, out, True)
             self.assertNotIn("(-0.5, 0.5]", "\n".join(lines_u))
 
+    def test_patched_ibz_is_ok_not_warn(self):
+        """V118：补丁默认开以后 IBZ + 真实重叠是出厂标准路径 —— 2D/3D 都给 [OK]、不再打 WARN；
+        补丁关时：2D + 坏操作照旧拦截，3D 照旧告警（BLOCK_3D_REAL_OVERLAP=False）。"""
+        import h5py
+        mos2 = Structure(Lattice.hexagonal(3.19, 12.0), ["Mo", "S", "S"],
+                         [[.1, .2, .5], [1/3 + .1, 2/3 + .2, .63], [1/3 + .1, 2/3 + .2, .37]])
+        si = Structure(si_on_atom().lattice, ["Si", "Si"], [[-.125] * 3, [.125] * 3])
+        for st, two_d in ((mos2, True), (si, False)):
+            base = _material_dir(st)
+            out = base / "step8.4_amset2d"
+            out.mkdir()
+            (out / "settings.yaml").write_text("unity_overlap: false\n")
+            if two_d:
+                (out / "2d_correction.json").write_text("{}")
+            (out / "amset_desym_fix.py").write_text("# stub\n")
+            kp = np.array([[0, 0, 0], [.25, 0, 0], [.5, 0, 0], [.25, .25, 0]], float)   # IBZ（不完整）
+            with h5py.File(str(out / "wavefunction.h5"), "w") as f:
+                f["kpoints"] = kp
+                f["gpoints"] = np.zeros((3, 3), int)
+                f["coefficients_up"] = np.zeros((2, len(kp), 3), complex)
+            v_on, l_on = pf.run(out, out, False, desym_fix=True)
+            t_on = "\n".join(l_on)
+            self.assertIn("[OK] %s + 真实重叠 + IBZ h5 + 相位补丁" % ("2D" if two_d else "3D"), t_on)
+            self.assertEqual(v_on, "ok", t_on)
+            v_off, l_off = pf.run(out, out, False, desym_fix=False)
+            self.assertEqual(v_off, "error" if two_d else "warn", "\n".join(l_off))
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

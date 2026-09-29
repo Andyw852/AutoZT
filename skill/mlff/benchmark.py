@@ -322,7 +322,7 @@ def main():
         # 一般矩阵超胞暂未打通这个辅助脚本（freqs_on_mesh 等下游仍按对角三元组
         # 做网格/体积换算）；明确报错而不是算出一堆看似正常的错数。
         sys.exit("[ERROR] %s 目前只支持对角超胞（3 个整数），收到一般矩阵 %r；"
-                 "矩阵超胞请走 kl-mlff 的 phono3py/MC-rattle 或 fc-fit"
+                 "矩阵超胞请走 kl-mlff 的 phono3py/MC-rattle 或 fit-fc-thermal"
                  "（FIT_ENGINE=phono3py|hiphive）。" % (Path(__file__).name, reps))
     man = json.loads(Path(a.manifest).read_text(encoding="utf-8"))
     # displ/static/iso 帧只在第 0 代生成（gen_step4），后续代的 REF_FC2 / E0s 锚定 /

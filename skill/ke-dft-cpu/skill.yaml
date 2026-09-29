@@ -152,6 +152,10 @@ optional_steps:
   #   ISYM = 0 仍用时间反演、只给半个网格），VASP 就产出完整网格的 WAVECAR，
   #   amset wave 得到的 h5 便直接走 from_data。
   #
+  # ★ 2026-09-29（V118）：相位补丁 amset_desym_fix 默认开（V115–V117 验证）后，本组对非 SOC
+  #   材料**不再有生产用途**（S8/S8.4 的 auto 判据直接读 step4_wave）。S3b gen 会用同一判据
+  #   拦下不需要的全网格（要验证/对照写 FULL_GRID_FORCE = true）。仍需要它的只有：SOC + 时间
+  #   反演操作（补丁的 SOC 分支未验证）、或把 DESYM_FIX 关掉且有坏操作的结构。
   # ★ 默认关闭：这是一次性诊断/裁决用的分支，**不要**给存量材料打开 ——
   #   k 点会 x16（MoS2：416 -> 6627），WAVECAR 与 h5 同步变大（h5 约 85 MB -> 1.3 GB）。
   #   打开方式：项目 project_setting 里写 wavefunction_full: true。

@@ -181,7 +181,7 @@ def research_plan(goal: str, skills: Iterable[Dict[str, Any]], *, dimension: Opt
         selected = [x for x in ("ke-dft-cpu", "kl-dft-cpu") if x in available]
 
     # An explicit skill name in the user's request takes precedence over fuzzy
-    # intent matching (useful for less common skills such as fc-fit/eph-qe).
+    # intent matching (useful for less common skills such as fit-fc-thermal/eph-qe).
     if not selected:
         for candidate in available:
             if candidate.lower() in low:

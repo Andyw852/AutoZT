@@ -38,7 +38,7 @@ SB_SUB     = "shengbte"
 
 # --- ZA 弯曲支二次性判据参数 -------------------------------------------------
 # ★ TODO（2026-09-20）：ZA 判据现在至少有【三份】各自独立的副本：
-#     1) skill/fc-fit/fc_plot_phonon.py       (_inplane_qdirs/_k_sum_sign/
+#     1) skill/fit-fc-thermal/fc_plot_phonon.py       (_inplane_qdirs/_k_sum_sign/
 #        _vacuum_axis_in_primitive/_eig_out_of_plane/za_power_law_eig/_za_summary)
 #     2) 本文件 skill/kl-dft-cpu/kl_fc_backends.py（已与 1 对齐）
 #     3) skill/_common/mlff/klmlff_common.py  (inplane_qdirs/za_check_2d，
@@ -702,7 +702,7 @@ def _parse_min_freq(band_yaml):
 
 def _za_check(cfg, ph, cart_vac_axis, is2d):
     """P2-2：2D ZA 二次性闸门。**实现已抽到公共池 skill/_common/phonon_stability.py**
-    （2026-09-27，消除 kl / phonon-dft / fc-fit 三份副本）。本函数只保留入口名，
+    （2026-09-27，消除 kl / phonon-dft / fit-fc-thermal 三份副本）。本函数只保留入口名，
     行为与旧实现逐字段一致：返回写进 phonon_summary.json 的 dict（3D/关闭 → None）。"""
     return phonon_stability.za_check(cfg, ph, cart_vac_axis, is2d)
 

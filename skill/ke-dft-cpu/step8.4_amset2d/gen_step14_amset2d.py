@@ -176,6 +176,13 @@ INTERPOLATION_FACTOR_EXPLICIT = False
 MESH_MIN = 263           # 面内每方向下限（默认启用；None/0 = 不干预）
 MESH_MIN_KZ = 3          # kz 方向下限；2D 建议 3（<3 时 kz 不内插、AMSET 沿 kz 外推）
 MESH_MIN_FMAX = 150      # 自动选 factor 的上限
+# ★ patch_mesh_density（2026-09-29，V118）：MESH_MIN 是**格点数**，与晶胞大小无关；V112 验证的其实是
+#   MoS₂（a=3.19 Å，|b|=2.274 Å⁻¹）上的 **k 空间密度** 2.274/263 ≈ 0.00865 Å⁻¹（含 2π）。
+#   大晶胞 2D（如 C60 网络 a≈16 Å，|b|≈0.45）按 263 个点要比验证密度密 5 倍/方向，factor 撞 FMAX
+#   （BoltzTraP2 实算：12×12×3 的 S3 网格需 f≈480，封顶 150 后仍是 81×81，打 WARN）。
+#   ⇒ 面内下限取 min(MESH_MIN, ceil(|b_i| / MESH_MIN_DK))：**只会降不会升**；
+#     MoS₂ 类（a≈3.2 Å）仍是 263，a=16 Å 只要 53（插值点数约少 3.6 倍）。0/None = 旧行为（纯格点数）。
+MESH_MIN_DK = 0.00865    # Å⁻¹（含 2π）
 # ★ 2026-09-27 用户指示：加最终网格**上限**，超了自动把 factor 降下来。
 #   最终网格 ≈ f(h5 里的 k 点数 × factor)，而**全网格 h5 的 k 点数比 IBZ 大十几倍**
 #   （MoS2：6912 = 48x48x3 vs 416），同样 factor 会给更大的网格。上限保证走全网格时
@@ -284,6 +291,7 @@ SPEC = {
     "MESH_MIN": (MESH_MIN, "int"),
     "MESH_MIN_KZ": (MESH_MIN_KZ, "int"),
     "MESH_MIN_FMAX": (MESH_MIN_FMAX, "int"),
+    "MESH_MIN_DK": (MESH_MIN_DK, "float"),
     # ★ 2026-09-27：最终网格每方向上限（超了自动降 factor）。None = 不设上限。
     "MESH_MAX": (MESH_MAX, "int"),
     # 散射类型覆盖（2026-09-22 用户批准）：逗号/空格分隔，如 `SCATTERING = ADP,POP` 用于严格本征对照；
@@ -1929,6 +1937,19 @@ def _interp_mesh(structure, nk, factor, magmom=None):
     return (2 * np.max(np.abs(equiv), axis=0) + 1).astype(int)
 
 
+def mesh_need_by_density(structure, need, dk):
+    """patch_mesh_density：面内两轴的下限取 min(格点数下限, ceil(|b_i|/dk))（|b| 含 2π）。
+    dk 为 0/None 或格点数下限为 0 时原样返回。只会降不会升。"""
+    import numpy as np
+    need = list(need)
+    if not dk or not need[0]:
+        return need
+    b = structure.lattice.reciprocal_lattice.abc
+    for i in range(2):
+        need[i] = int(min(need[i], int(np.ceil(b[i] / float(dk) - 1e-9))))
+    return need
+
+
 def apply_mesh_min(vasprun_path, out):
     """patch_mesh_min：按最终插值网格下限反算 INTERPOLATION_FACTOR（模块级全局）。
     返回 (factor, mesh) 或 None。"""
@@ -1947,6 +1968,13 @@ def apply_mesh_min(vasprun_path, out):
         print("[WARN] patch_mesh_min：读不到 vasprun（%s），跳过网格下限" % e)
         return None
     need = [int(lo or 0), int(lo or 0), int(lo_z or 0)]
+    need_count = list(need)
+    need = mesh_need_by_density(st, need, MESH_MIN_DK)       # patch_mesh_density
+    if need != need_count:
+        print("[..] patch_mesh_density：面内 |b| = %.3f/%.3f Å⁻¹，按验证密度 %.5f Å⁻¹ 只需 %s"
+              "（MESH_MIN=%s 是按 MoS₂ 定的格点数；MESH_MIN_DK=0 恢复）"
+              % (st.lattice.reciprocal_lattice.abc[0], st.lattice.reciprocal_lattice.abc[1],
+                 float(MESH_MIN_DK), need[:2], lo))
     f0 = int(INTERPOLATION_FACTOR)
     f, mesh = f0, _interp_mesh(st, nk, f0)
     # ★ 2026-09-28：显式给了 factor 就不许自动改 —— 超界时报错并给建议值。
@@ -1984,6 +2012,7 @@ def apply_mesh_min(vasprun_path, out):
         mesh = _interp_mesh(st, nk, f)
     okm = all(int(mesh[i]) >= need[i] for i in range(3))
     info = {"nk": int(nk), "mesh_min": lo, "mesh_min_kz": lo_z, "mesh_max": MESH_MAX,
+            "mesh_min_dk": MESH_MIN_DK, "need": [int(x) for x in need],
             "factor_factory": f0, "factor_used": int(f), "fmax": MESH_MIN_FMAX,
             "mesh": [int(x) for x in mesh], "satisfied": bool(okm),
             "capped": bool(_capped)}
@@ -2157,7 +2186,7 @@ def main():
             elif _uo != "auto":
                 print("[WARN] UNITY_OVERLAP=%r 不认识（只认 auto/true/false），按 auto 处理" % _uo)
             # patch_mesh_min：最终插值网格下限（step.conf 覆盖；0/None = 不干预）
-            global MESH_MIN, MESH_MIN_KZ, MESH_MIN_FMAX, MESH_MAX
+            global MESH_MIN, MESH_MIN_KZ, MESH_MIN_FMAX, MESH_MAX, MESH_MIN_DK
             # ★ 2026-09-28：原来是 `if _v:` —— step.conf 写 0（注释说的"0 = 不干预"）会被当成
             #   "没写"而忽略，出厂下限照样生效。改成 is not None，0 才真的关掉。
             for _k in ("MESH_MIN", "MESH_MIN_KZ", "MESH_MIN_FMAX", "MESH_MAX"):
@@ -2171,9 +2200,12 @@ def main():
                         MESH_MAX = int(_v)
                     else:
                         MESH_MIN_FMAX = int(_v)
+            if _p["MESH_MIN_DK"] is not None:
+                MESH_MIN_DK = float(_p["MESH_MIN_DK"])
             if MESH_MIN or MESH_MIN_KZ or MESH_MAX:
-                print("[..] MESH_MIN=%s MESH_MIN_KZ=%s MESH_MIN_FMAX=%s MESH_MAX=%s（step.conf 覆盖）"
-                      % (MESH_MIN, MESH_MIN_KZ, MESH_MIN_FMAX, MESH_MAX))
+                print("[..] MESH_MIN=%s MESH_MIN_DK=%s MESH_MIN_KZ=%s MESH_MIN_FMAX=%s MESH_MAX=%s"
+                      "（出厂值或 step.conf 覆盖）"
+                      % (MESH_MIN, MESH_MIN_DK, MESH_MIN_KZ, MESH_MIN_FMAX, MESH_MAX))
             # patch_scattering（2026-09-22 用户批准）：step.conf 覆盖散射类型。
             #   逗号/空格分隔，如 SCATTERING = ADP,POP 用于"严格本征"对照；
             #   空串 = 出厂 [ADP, IMP, POP] 行为不变；含不认识机制则整项忽略并告警。
@@ -2266,6 +2298,8 @@ def main():
     # [guard-2026-09-25 / 强化 2026-09-26] 真实重叠 + 无反演 + 非全网格 h5 = 已知算坏的组合。
     #   2026-09-26 起这是**出厂默认路径**（UNITY_OVERLAP=False + WAVEFUNCTION_FULL=True），
     #   所以这道闸门在默认配置下也必须是"通过"；一旦有人把 WAVEFUNCTION_FULL 关掉就报错。
+    #   ★ 2026-09-29（V118）：DESYM_FIX 默认开后，出厂默认变成 UNITY_OVERLAP=False + **IBZ**
+    #     （auto 判据放行）；这道闸门只在补丁被关且有坏操作时才会拦。
     #   证据：去对称化在无反演体系上 38.9% 的 k 点全错（TR 路径 5.2%），Si 对照 97.7%
     #   —— tmp/amset2d/DESYM_FINDINGS.md、upstream_issue_tr_tau.md。
     if UNITY_OVERLAP is False and not WAVEFUNCTION_FULL:

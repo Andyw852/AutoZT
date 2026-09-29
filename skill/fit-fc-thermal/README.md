@@ -1,7 +1,8 @@
-# fc-fit — force-constant fitting (fc2 / fc3)
+# fit-fc-thermal — force constants (fc2/fc3) + lattice thermal conductivity (κ)
 
 Fit second- and third-order interatomic force constants from an existing
-displacement + force dataset. Three interchangeable engines:
+displacement + force dataset, then solve the three-phonon BTE for the lattice
+thermal conductivity. Three interchangeable engines:
 
 | `FIT_ENGINE` | Method | Dataset it accepts |
 |---|---|---|
@@ -14,7 +15,9 @@ force-constant-fitting branch lifted out of `kl-dft-cpu` S5_fc
 (`gen_step5_fc.py` + `kl_fc_backends.py` + `submit_fit_*.tpl` +
 `templates/step5_fc/step.conf`), decoupled from the thermal-conductivity
 pipeline so that any dataset can be fitted, and extended with a third engine
-(hiphive).
+(hiphive).  It now **closes the loop with κ**: `S2_kappa` runs the phono3py BTE on
+the fitted fc2/fc3 and writes `kappa_summary.json`, so a displacement/force dataset
+goes in and the lattice thermal conductivity comes out.
 
 ## Pipeline
 
@@ -24,8 +27,11 @@ S1_fit   (submitted job, compute node)
                                          disp_matrix.pkl (pheasy input)
                                          phono3py_*.yaml passthrough, BORN
          fit   fc2 (+ fc3) with the selected engine   -> fc2.hdf5 (+ fc3.hdf5)
-         post  ShengBTE export (optional) + imaginary-frequency gate
+         post  ShengBTE export (optional) + imaginary-frequency gate + kl_bundle
                                          -> phonon_summary.json, fc_fit_summary.json
+S2_kappa (submitted job, needs S1_fit)
+         phono3py three-phonon BTE (RTA/LBTE) on the fitted fc2/fc3
+                                         -> kappa_summary.json, kappa-m*.hdf5
 S2_plot  (login node, optional)  phonon band figures from fc2.hdf5
                                  + ZA bending-branch exponent p
 ~~~
@@ -34,11 +40,15 @@ S2_plot  (login node, optional)  phonon band figures from fc2.hdf5
 
 ~~~bash
 cd <material root>
-autozt -tt fc-fit -p <material> -j step1_fit conf          # effective parameters
-autozt -tt fc-fit -p <material> -j step1_fit \
+autozt -tt fit-fc-thermal -p <material> -j step1_fit conf          # effective parameters
+autozt -tt fit-fc-thermal -p <material> -j step1_fit \
    conf --set params.FIT_ENGINE=hiphive               # switch engine
-autozt -tt fc-fit -p <material> start                     # generate inputs + submit
-autozt -tt fc-fit -p <material> status                    # collect and inspect
+autozt -tt fit-fc-thermal -p <material> start                     # generate inputs + submit
+autozt -tt fit-fc-thermal -p <material> status                    # collect and inspect
+
+# κ 参数（BTE 网格 / 温度 / 同位素 / 解法）走 step2_kappa 的 step.conf：
+autozt -tt fit-fc-thermal -p <material> -j step2_kappa \
+   conf --set params.MESH="16 16 16"
 ~~~
 
 The gen step locates the dataset automatically. It searches `step4_disp`,
@@ -51,7 +61,7 @@ whose step starts with `step*disp*` or `step*force*`, so a producer that does
 not exist yet is found without editing anything. Point it somewhere else explicitly:
 
 ~~~bash
-autozt -tt fc-fit -p <material> -j step1_fit \
+autozt -tt fit-fc-thermal -p <material> -j step1_fit \
    conf --set params.FIT_INPUT_DIR=../<other-skill>/<step>
 ~~~
 
@@ -108,6 +118,11 @@ Layouts 4-6 do not always carry a supercell matrix (a bare `.npy`/`.pkl`
 dataset has no YAML to record one), so the gen falls back to the `POSCAR` /
 `SPOSCAR` edge ratio for `SUPERCELL`, and `prep` records the result in
 `fc_dataset.json` together with the atom order (see the pitfalls).
+
+Layouts 4-5 carry no phono3py YAML either.  For `FIT_ENGINE = phono3py`, `prep`
+now **synthesises `phono3py_params.yaml`** from the normalised displacement/force
+arrays, so a bare `.npy`/`.pkl` dataset fits with the phono3py engine too (it
+used to require the source to ship a YAML).
 
 ### Equilibrium residual forces
 
@@ -256,6 +271,14 @@ matrix and solves it.
   supercell internally, so the dataset supercell can be larger than the
   cluster-space cell. It must however be **at least twice the cutoff** in every
   direction, otherwise the periodic images alias.
+* hiphive builds its `ClusterSpace` on the **primitive cell** and needs
+  `2 * cutoff < min periodic width` there.  An acute/layered primitive (e.g. a
+  7-atom rhombohedral cell with a 3.5 A interplanar spacing) is too thin for any
+  physical cutoff and hiphive fails deep in orbit construction with a cryptic
+  `(0, N) is not in list`.  The driver now catches this up front and prints an
+  actionable error (use phono3py/pheasy, lower the cutoff, or set
+  `HIPHIVE_CELL = supercell` to use the dataset supercell as the reference -
+  the parameter count grows a lot).
 * `fc2` is written densely (small). `fc3` is written with hiphive's streaming
   writers (`write_to_phono3py`, `write_to_shengBTE`) because the dense
   `(N, N, N, 3, 3, 3)` array is N^3 * 27 * 8 bytes - already ~3.4 GB for a
@@ -266,6 +289,41 @@ matrix and solves it.
   engine re-exports through hiphive, and `FC3_LOAD_GB_LIMIT` (default 8 GB)
   skips the fc3 text when the dense `fc3.hdf5` would need more than that.
 
+## Lattice thermal conductivity (S2_kappa)
+
+`S2_kappa` takes the fc2/fc3 that `S1_fit` wrote and runs the phono3py
+three-phonon BTE (RTA by default, `BTE_METHOD = lbte` for the full solver),
+writing `kappa_summary.json`:
+
+~~~json
+{"KAPPA_DONE": true, "bte_method": "rta", "mesh": "24 24 24", "nac": false,
+ "temperatures": [100, 200, 300, ...], "kappa_xx_yy_zz": [[...], ...],
+ "kappa_300K_xx_yy_zz": [xx, yy, zz], "kappa_inplane_300K": 0.5*(xx+yy)}
+~~~
+
+* Keys live in `step2_kappa/step.conf`: `MESH`, `T_MIN/T_MAX/T_STEP`,
+  `ISOTOPE`, `NAC` (auto = on iff `S1_fit/BORN` exists), `BTE_METHOD`,
+  `P3PY_OMP_THREADS` (phono3py is OpenMP-only: 1 process x N threads, never
+  `mpirun`), `SBATCH_QOS`, `MESH_2D_VACUUM`.
+* The driver (`kappa_driver.py`) loads `phono3py_params.yaml` (or
+  `phono3py_disp.yaml` - generated on the fly from `POSCAR` +
+  `fc_dataset.json` when the fit engine produced none), sets fc2/fc3 from the
+  hdf5 and runs the BTE.  The third-order interaction is the fitted fc3; this
+  step never re-fits.
+* 2D: `MESH_2D_VACUUM = on` (default) pins the vacuum-axis mesh to 1.
+* **Cutoff chosen by kappa** (`CUT3_KAPPA_SCAN = auto`, default): when `S1_fit`
+  ran with `CUT3_SCAN = auto` (default) it refits fc3 at every candidate cutoff
+  into `cutoff_scan/cut3_<c>/`.  `S2_kappa` then runs the BTE once per candidate
+  and applies the **same three criteria as `kl-dft-cpu` S6** - residual 1-SE,
+  per-shell stability (`cut <= stable_upper_cut`) and the kappa plateau
+  (`CUT3_KAPPA_TOL_PCT`) - via `cut3_select.select_cutoff`, writing
+  `cutoff_selection.json` and promoting the chosen cutoff's kappa to the
+  top-level `kappa_summary.json` (`chosen_cutoff_A`).  `CUT3_PICK = smallest`
+  (default) takes the smallest cutoff satisfying all three; `not_converged`
+  reports the largest data-determined cutoff.  With `CUT3_SCAN = off` (or a
+  phono3py/hiphive fit, which does not write per-cut dirs yet) it falls back to
+  the nominal cutoff.
+* The compute host needs `phono3py` + `h5py` (the same env as the fit job).
 ## Artifacts
 
 ~~~text
@@ -381,7 +439,7 @@ actually determine the fc3.
 
   The result is `cutoff_scan.json` (`mode`, `shells`, `candidates`, `records`
   with `shell_stats` / `stable_upper_cut`, `recommended_cut`, `note`).
-* The final cutoff choice is deliberately left to the caller: `fc-fit` never
+* The final cutoff choice is deliberately left to the caller: `fit-fc-thermal` never
   computes kappa, so it cannot apply the kl S6 plateau criterion. The
   `stable_upper_cut` is the data-side bound; a downstream kappa step decides
   between the usable candidates (kl's `select_cutoff`).
@@ -430,18 +488,25 @@ actually determine the fc3.
 
 ## Relation to the kl skills
 
-| | `kl-dft-cpu` S5_fc | `fc-fit` S1_fit |
+| | `kl-dft-cpu` S5_fc | `fit-fc-thermal` S1_fit |
 |---|---|---|
 | Input | hard-wired to its own `step4_disp` | any dataset, `FIT_INPUT_DIR` or auto-search |
 | Engines | phono3py, pheasy | phono3py, pheasy, **hiphive** |
 | pheasy logic | inside the submit template | inside `fc_fit_driver.py` (testable, cluster independent) |
 | Shell/cutoff determination | S4 candidates + S5 scan + S6 kappa selection | candidates + S5-equivalent scan ported; **no** S6 (no kappa step) |
-| Output | `step5_fc/phono3py/fc2.hdf5` (+ shengbte/) | `step1_fit/fc2.hdf5` (+ shengbte/, cutoff_scan.json) |
+| Output | `step5_fc/phono3py/fc2.hdf5` (+ shengbte/) | `step1_fit/fc2.hdf5` (+ shengbte/, cutoff_scan.json, **kl_bundle/**) |
 | Marker | `phonon_summary.json` | `phonon_summary.json` (+ `fc_fit_summary.json`) |
-| Next step | kappa from the BTE solver | none - hand the artifacts to whoever needs them |
+| Next step | kappa from the BTE solver | kappa: `kl-dft-cpu` S5_fc auto-imports `kl_bundle/` |
+
+`fit-fc-thermal` S1_fit also writes a small `kl_bundle/` (`fc2/fc3.hdf5` + `shengbte/` +
+`phonon_summary.json` + `fc_dataset.json` + `POSCAR`; `EXPORT_KL_BUNDLE=true`). It is
+fetched locally with the rest of the step, and `kl-dft-cpu`'s S5_fc declares a
+`push_paths` entry so tf **pushes it to whichever cluster κ runs on** and the kl gen
+auto-imports it (no manual scp, no step.conf edit). "Fit on 3090, κ on jzzn/hanhai"
+is therefore the default flow.
 
 Nothing here replaces the kl skills: `kl-dft-cpu` / `kl-mlff-*` still own the
-end-to-end thermal-conductivity workflow. `fc-fit` is for fitting force
+end-to-end thermal-conductivity workflow. `fit-fc-thermal` is for fitting force
 constants on their own - from a dataset another skill produced, from a
 hand-assembled dataset, or as a sandbox for comparing engines on the same data.
 
@@ -487,6 +552,14 @@ Si 4x4x4 supercell (90 frames) on the cluster.
 | BaS 250 atoms, fc2+fc3 | pheasy OLS, c3 = 4 A (189 free IFCs) | stable, mesh min -0.000 THz, relative error 2.2 %, correlation 0.9997 |
 | 16 atoms, fc2+fc3 | pheasy LASSO (40-alpha grid) | relative error 0.46 %, correlation 1.0000 |
 | 16 atoms, fc2+fc3 | hiphive (streaming fc3 writers, `shengbte/FORCE_CONSTANTS_3RD` written) | stable, RMSE 0.14 % |
+| In2MnSe4 189 atoms (arrays only, 45 frames, 3x3x3) | phono3py + symfc, c3 = 5 A | stable, min -0.030 THz; `fc2.hdf5` 0.4 MB + `fc3.hdf5` 8.9 MB + ShengBTE + `kl_bundle/` (11 files) |
+| In2MnSe4 189 atoms (arrays only, 45 frames) | pheasy RIDGE, c3 = 5 A (1272 free IFCs) | stable, min -0.031 THz, RMSE 9.5e-4 eV/A, relative error 0.63 %, `kl_bundle/` (10 files) |
+| In2MnSe4 189 atoms | pheasy OLS, c3 = 5 A | stable, RMSE 9.5e-4 eV/A, relative error 0.63 % |
+| In2MnSe4 189 atoms | pheasy LASSO, c3 = 5 A | stable, RMSE 1.66e-3 eV/A, relative error 1.10 % |
+| In2MnSe4 189 atoms | pheasy ALASSO, c3 = 5 A | fit relative error 0.66 % but **stable=False** (significant imaginary frequency) - use RIDGE/OLS/RFE here |
+| In2MnSe4 189 atoms | pheasy RFE / RFE-OLS-TSQR, c3 = 3.5 A (CPU smoke) | both stable, relative error 0.94 % each |
+| In2MnSe4 189 atoms, phono3py fc2/fc3 | **S2_kappa** (phono3py BTE RTA, mesh 8x8x8, 200-400 K) | kappa300K in-plane 3.68, zz 1.63 W/mK -> `kappa_summary.json` KAPPA_DONE |
+| In2MnSe4 189 atoms | hiphive | not applicable: primitive min periodic width 3.51 A < 2xcutoff; driver now errors clearly (see the hiphive section) |
 | 16 atoms, fc2 | hiphive, pkl-only dataset (auto-detected, supercell deduced) | stable, mesh min -9.9e-08 THz |
 | BaS 250 atoms | plot step (optional S2_plot, login node) | both PNGs + `phonon_band_summary.json`, bands 0-21 THz |
 | Si 128 atoms, 90 frames, fc2 | pheasy OLS, c2 = 5 A, submitted through `autozt start` to jzzn | ran on cu18, gate **stable**, but 80 % fit error -- the cutoff is far too tight, see below |
@@ -500,7 +573,7 @@ non-zero instead of reporting a false verdict).
 
 ### Cluster run (jzzn, through `autozt`)
 
-A real submission, `autozt -tt fc-fit -p Si_fcfit -j step1_fit start`, on a
+A real submission, `autozt -tt fit-fc-thermal -p Si_fcfit -j step1_fit start`, on a
 2-atom Si cell / 128-atom 4x4x4 supercell / 90-frame pkl dataset on the
 shared filesystem: job `3828909` ran on `cu18` and produced
 `fc2.hdf5`, `shengbte/FORCE_CONSTANTS_2ND`, `phonon_summary.json`

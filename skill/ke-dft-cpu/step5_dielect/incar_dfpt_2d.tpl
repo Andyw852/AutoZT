@@ -90,7 +90,7 @@ KPAR   = 1
 #     内存与耗时同比例放大。这是 SOC + DFPT 绕 spinor bug 必须付的代价。
 #   申请整节点内存：--mem=0（SLURM 表示"本节点全部内存"）或 --exclusive。
 #     hanhai25 的 DefMemPerNode=UNLIMITED —— 调度器不预留内存，超订只在运行时炸。
-#   ★ 提交时限：**不必显式写 --time**。jzzn 实测复核（2026-09-15）：fc-fit 等技能
+#   ★ 提交时限：**不必显式写 --time**。jzzn 实测复核（2026-09-15）：fit-fc-thermal 等技能
 #     的模板同样没写 --time，仍拿到 Timelimit=2:00:00，长作业正常跑完；
 #     A2B2Te5 的生产 SOC DFPT 作业（无 --time）也跑满 6-8 h。默认值够用。
 #   ★ 真正要防的是另一件事：**#SBATCH 指令块必须完整有效**。

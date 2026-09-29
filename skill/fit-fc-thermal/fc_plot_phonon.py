@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""fc_plot_phonon.py -- phonon band plot for the fc-fit skill (S2_plot).
+"""fc_plot_phonon.py -- phonon band plot for the fit-fc-thermal skill (S2_plot).
 
 Login-node step (run: gen, no job submitted).  Reads the force constants fitted
 by S1_fit and draws the dispersion:
@@ -480,50 +480,72 @@ def main():
         except Exception as e:
             print("[WARN] BORN present but unusable (%s); plotting without NAC" % e)
 
-    try:
-        ph.auto_band_structure(plot=False, write_yaml=True, npoints=51,
-                               filename=str(src / "band-dft-cpu.yaml"))
-        bands = ph.get_band_structure_dict()
-    except Exception as e:
-        _emit({"status": "error", "reason": "phonopy band structure failed: %s" % e}, 40)
-
-    freqs = np.asarray(bands["frequencies"], dtype=object)
-    dists = np.asarray(bands["distances"], dtype=object)
-    labels = list(bands.get("labels") or [])
-    ticks = []
-    for i, lb in enumerate(labels):
-        if lb:
-            ticks.append((float(dists[i][0]), str(lb).replace("$", "")))
-    allf = np.concatenate([np.asarray(f, float).ravel() for f in freqs])
-    fmin, fmax = float(allf.min()), float(allf.max())
-
     outdir = root / OUTDIR
     outdir.mkdir(parents=True, exist_ok=True)
 
-    def _draw(fname, lo, hi):
-        fig, ax = plt.subplots(figsize=(6.4, 4.8))
-        for q, f in zip(dists, freqs):
-            # phonopy returns per-segment (n_qpoints, n_branches) arrays
-            q = np.asarray(q, float)
-            f = np.asarray(f, float)
-            for ib in range(f.shape[1]):
-                ax.plot(q, f[:, ib], "-", lw=1.0, color="#1f4e79")
-        ax.axhline(0.0, color="0.6", lw=0.8, ls="--")
-        for x, lb in ticks:
-            ax.axvline(x, color="0.7", lw=0.8)
-        if len(ticks) > 1:
-            ax.set_xticks([t[0] for t in ticks])
-            ax.set_xticklabels([t[1] for t in ticks])
-        ax.set_xlim(float(dists[0][0]), float(dists[-1][-1]))
-        ax.set_ylim(lo, hi)
-        ax.set_ylabel("Frequency (THz)")
-        ax.set_title("Phonon dispersion%s" % (" (NAC)" if nac else ""), fontsize=11)
-        fig.tight_layout()
-        fig.savefig(str(outdir / fname), dpi=200)
-        plt.close(fig)
+    def _draw_band(fc2_path, dst):
+        # band structure + the two figures for one set of fc2; |-> (fmin, fmax)
+        dst.mkdir(parents=True, exist_ok=True)
+        ph.force_constants = _read_fc2(fc2_path)
+        try:
+            ph.auto_band_structure(plot=False, write_yaml=True, npoints=51,
+                                   filename=str(dst / "band-dft-cpu.yaml"))
+            bd = ph.get_band_structure_dict()
+        except Exception as e:
+            _emit({"status": "error",
+                   "reason": "phonopy band structure failed: %s" % e}, 40)
+        fr = np.asarray(bd["frequencies"], dtype=object)
+        ds = np.asarray(bd["distances"], dtype=object)
+        tk = [(float(ds[i][0]), str(l).replace("$", ""))
+              for i, l in enumerate(bd.get("labels") or []) if l]
+        af = np.concatenate([np.asarray(f, float).ravel() for f in fr])
+        lo0, hi0 = float(af.min()), float(af.max())
 
-    _draw("phonon_band_full.png", fmin - FULL_PAD, fmax + FULL_PAD)
-    _draw("phonon_band_lowfreq.png", min(fmin - FULL_PAD, -1.0), LOWF_MAX)
+        def dr(fname, lo, hi):
+            fig, ax = plt.subplots(figsize=(6.4, 4.8))
+            for q, f in zip(ds, fr):
+                # phonopy returns per-segment (n_qpoints, n_branches) arrays
+                q = np.asarray(q, float)
+                f = np.asarray(f, float)
+                for ib in range(f.shape[1]):
+                    ax.plot(q, f[:, ib], "-", lw=1.0, color="#1f4e79")
+            ax.axhline(0.0, color="0.6", lw=0.8, ls="--")
+            for x, _lb in tk:
+                ax.axvline(x, color="0.7", lw=0.8)
+            if len(tk) > 1:
+                ax.set_xticks([t[0] for t in tk])
+                ax.set_xticklabels([t[1] for t in tk])
+            ax.set_xlim(float(ds[0][0]), float(ds[-1][-1]))
+            ax.set_ylim(lo, hi)
+            ax.set_ylabel("Frequency (THz)")
+            ax.set_title("Phonon dispersion%s" % (" (NAC)" if nac else ""),
+                         fontsize=11)
+            fig.tight_layout()
+            fig.savefig(str(dst / fname), dpi=200)
+            plt.close(fig)
+
+        dr("phonon_band_full.png", lo0 - FULL_PAD, hi0 + FULL_PAD)
+        dr("phonon_band_lowfreq.png", min(lo0 - FULL_PAD, -1.0), LOWF_MAX)
+        return lo0, hi0
+
+    fmin, fmax = _draw_band(fc2p, outdir)
+
+    # Per-cut phonon bands: every fc3 cutoff candidate written by the S1_fit scan
+    # (cutoff_scan/cut3_<c>/fc2.hdf5) gets its own dispersion under
+    # phonon_band_plot/cut3_<c>/, so a cutoff sweep always ships the spectra.
+    cut_bands = []
+    for _cd in sorted((src / "cutoff_scan").glob("cut3_*")):
+        if not (_cd / "fc2.hdf5").is_file():
+            continue
+        try:
+            _lo, _hi = _draw_band(_cd / "fc2.hdf5", outdir / _cd.name)
+            cut_bands.append({"cut": float(_cd.name[5:].replace("p", ".")),
+                              "dir": _cd.name, "min_frequency_THz": _lo,
+                              "max_frequency_THz": _hi})
+        except Exception as _e:  # noqa: BLE001
+            print("[WARN] per-cut band %s failed: %s" % (_cd.name, _e))
+    if cut_bands:
+        print("[OK] per-cut phonon bands: %d" % len(cut_bands), flush=True)
 
     summary = {
         "status": "ok",
@@ -534,6 +556,7 @@ def main():
         "figures": ["phonon_band_full.png", "phonon_band_lowfreq.png"],
         "band_yaml": str((src / "band-dft-cpu.yaml").relative_to(root)),
         "stable_here": bool(fmin >= -0.10),
+        "cut3_bands": cut_bands,
     }
     # ZA bending-branch exponent(s).  Strictly a 2D criterion, computed from the
     # force constants already in memory; any failure is recorded, never raised,

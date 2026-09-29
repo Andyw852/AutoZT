@@ -4,7 +4,7 @@
 
 背景：同一套「原胞基矢真空轴映射 + 60° 面内基的第二方向 + 本征矢量识别 ZA 支 +
 symprec 审计」逻辑此前在三个文件里各写了一份：
-  · skill/fc-fit/fc_plot_phonon.py
+  · skill/fit-fc-thermal/fc_plot_phonon.py
   · skill/kl-dft-cpu/kl_fc_backends.py
   · skill/_common/mlff/klmlff_common.py
 修一个 bug 要改三处，故收敛到这里。三份现已**全部**改为 import 本模块：

@@ -136,8 +136,15 @@ SPEC = {
     "HIPHIVE_SYMPREC": (1e-5, "float"),
     "HIPHIVE_ENFORCE_ASR": (True, "bool"),   # project rotational sum rules
     "HIPHIVE_N_CONFIGS": (0, "int"),         # 0 = use every frame
+    # hiphive 参考胞："" = 原胞（默认）；"supercell" = 数据集超胞。原胞最小周期
+    # 宽度 < 2*cutoff 时（尖锐/层状原胞）原胞建不起 cluster space，可设 supercell。
+    "HIPHIVE_CELL": ("", "str"),
     # ---- output / gate ----
     "EXPORT_SHENGBTE": (True, "bool"),
+    # 额外产出一份 kl_bundle/（fc2/fc3 + shengbte 力常数 + phonon_summary.json
+    # + phono3py_disp.yaml 等），供 kl-dft-cpu 的 S5_fc 跨集群直接导入（见
+    # kl skill 的 FC_IMPORT_DIR / push_paths）。体积小，默认开。
+    "EXPORT_KL_BUNDLE": (True, "bool"),
     "FC3_LOAD_GB_LIMIT": (8.0, "float"),     # skip materialising fc3 above this (ShengBTE/RMSE)
     "BAND_POINTS": (51, "int"),
     "IMAG_THR": (0.10, "float"),             # imaginary-frequency threshold (THz)
@@ -335,7 +342,7 @@ def resolve_dataset(cfg_dir, step_dir, want):
         tried.append(str(p))
     sys.exit("[ERROR] no displacement+force dataset found.  Searched:\n  %s\n"
              "        Point FIT_INPUT_DIR at the dataset directory explicitly:\n"
-             "        tf -tt fc-fit -p <material> -j step1_fit conf --set "
+             "        tf -tt fit-fc-thermal -p <material> -j step1_fit conf --set "
              "params.FIT_INPUT_DIR=../kl-dft-cpu/step4_disp"
              % "\n  ".join(tried))
 
@@ -400,14 +407,14 @@ def main():
             "later with\n"
             "        'no forces available for the phono3py engine'.\n"
             "        Use a regression engine (it reads the vasprun forces):\n"
-            "          tf -tt fc-fit -p <material> -j step1_fit conf "
+            "          tf -tt fit-fc-thermal -p <material> -j step1_fit conf "
             "--set params.FIT_ENGINE=pheasy\n"
-            "          tf -tt fc-fit -p <material> -j step1_fit conf "
+            "          tf -tt fit-fc-thermal -p <material> -j step1_fit conf "
             "--set params.FIT_ENGINE=hiphive\n"
             "        or point FIT_INPUT_DIR at a dataset whose YAML embeds the "
             "forces\n"
             "        / that ships FORCES_FC3:\n"
-            "          tf -tt fc-fit -p <material> -j step1_fit conf "
+            "          tf -tt fit-fc-thermal -p <material> -j step1_fit conf "
             "--set params.FIT_INPUT_DIR=<yaml-or-FORCES_FC3 dataset>\n"
             "        (dataset: %s)" % (src, src))
 
@@ -487,6 +494,19 @@ def main():
                   "已剔除" % (_over, _safe))
         _cands = [c for c in _cands if c <= _safe + 1e-9]
         print("[..] 超胞安全截断 = %.2f Å → 有效候选 %s" % (_safe, _cands))
+        # hiphive 的 HIPHIVE_CUTOFF2/3 同样受超胞安全截断约束（超了会被周期镜像
+        # 重复计数；即便不崩，力常数也是错的）。
+        if engine == "hiphive":
+            for _k in ("HIPHIVE_CUTOFF2", "HIPHIVE_CUTOFF3"):
+                if _k == "HIPHIVE_CUTOFF3" and enable < 3:
+                    continue
+                try:
+                    _v = float(conf[_k])
+                except (TypeError, ValueError):
+                    continue
+                if _v > _safe + 1e-9:
+                    print("[WARN] %s=%.2f > 超胞安全截断 %.2f Å：周期镜像会重复计数，"
+                          "建议降到 <= %.2f" % (_k, _v, _safe, _safe), flush=True)
     _scan_req = str(conf["CUT3_SCAN"] or "off").strip().lower()
     if _scan_req not in ("off", "none", "false", "no", "0", "auto", "on", "true",
                          "1", "yes"):
@@ -556,8 +576,10 @@ def main():
         "hiphive_symprec": float(conf["HIPHIVE_SYMPREC"]),
         "hiphive_enforce_asr": bool(conf["HIPHIVE_ENFORCE_ASR"]),
         "hiphive_n_configs": int(conf["HIPHIVE_N_CONFIGS"] or 0),
+        "hiphive_cell": str(conf["HIPHIVE_CELL"] or ""),
         # output / gate
         "export_shengbte": bool(conf["EXPORT_SHENGBTE"]),
+        "export_kl_bundle": bool(conf["EXPORT_KL_BUNDLE"]),
         "fc3_load_gb_limit": float(conf["FC3_LOAD_GB_LIMIT"] or 8.0),
         "band_points": int(conf["BAND_POINTS"]),
         "imag_thr": float(conf["IMAG_THR"]),

@@ -1,5 +1,5 @@
 # =============================================================================
-# skill/fc-fit/skill.yaml -- force-constant fitting (fc2 / fc3), engines:
+# skill/fit-fc-thermal/skill.yaml -- force-constant fitting (fc2 / fc3), engines:
 # pheasy | hiphive | phono3py.
 #
 # This skill is the force-constant-fitting branch lifted out of kl-dft-cpu S5_fc
@@ -32,12 +32,12 @@
 #             Random-displacement datasets.
 #
 # All parameters live in step.conf (stepconf.py three-layer merge):
-#   tf -tt fc-fit -p <material> -j step1_fit conf --set params.FIT_ENGINE=hiphive
+#   tf -tt fit-fc-thermal -p <material> -j step1_fit conf --set params.FIT_ENGINE=hiphive
 # =============================================================================
 schema: 2
-name: fc-fit
-desc: 力常数拟合 fc2/fc3 (pheasy/hiphive/phono3py)
-version: "0.1"
+name: fit-fc-thermal
+desc: 力常数拟合 fc2/fc3 + 晶格热导率 κ (pheasy/hiphive/phono3py → phono3py BTE)
+version: "0.2"
 
 template_layout: per_step
 template_dir: templates
@@ -51,7 +51,9 @@ defaults:
 # at submission time -- the gen writes only the recipe and the submit script,
 # and prep copies the cells on the compute node.  Declaring the real inputs is
 # what lets the submission pass the check.
-submit_required: [fit_config.json, submit.sh]
+# 每步 gen 都会先写自己的配置（S1_fit: fit_config.json；S2_kappa: kappa_config.json）
+# 再写 submit.sh；预检只认这两个名字里的 submit.sh（逐文件失败会直接让 gen 非 0 退出）。
+submit_required: [submit.sh]
 
 # Pull the key inputs/outputs back locally; S1_fit also uses fetch_all so the
 # whole step directory (hdf5, shengbte/, logs) comes home.
@@ -65,6 +67,10 @@ fetch_files: [POSCAR, SPOSCAR, phono3py_disp.yaml, phono3py_params.yaml,
               shengbte/FORCE_CONSTANTS_3RD,
               fit_config.json, fc_dataset.json, phonon_summary.json,
               fc_fit_summary.json, band-dft-cpu.yaml,
+              # 热导率（S2_kappa）：kappa_summary.json + phono3py 的 κ 网格文件
+              kappa_summary.json, kappa_config.json, cutoff_selection.json,
+              kappa-m242424.hdf5,
+              kappa-m161616.hdf5, phono3py_kappa.log,
               submit.sh, queue.out, queue.err]
 
 steps:
@@ -80,8 +86,16 @@ steps:
                 submit_fcfit_p3py.tpl, submit_fcfit_hiphive.tpl,
                 submit_fcfit_pheasy.tpl, submit_fcfit_pheasy_gpu.tpl]}
 
+  # S2_kappa：把 S1_fit 的 fc2/fc3 拿来做三声子 BTE，产出 kappa_summary.json。
+  #   marker 是 kappa_summary.json 里的 KAPPA_DONE=true（check: marker）。
+  - {seq: 2, name: step2_kappa, needs: [step1_fit], label: S2_kappa,
+     check: marker, marker: 'kappa_summary.json:"KAPPA_DONE": true',
+     gen: gen_step2_kappa.py, fetch_all: true,
+     gen_need: [stepconf.py, step.conf, fc_common.py, kappa_driver.py,
+                cut3_select.py, submit_kappa.tpl]}
+
 # Optional phonon band figures (login node, best effort).  Turn it off with
-#   tf -tt fc-fit -p <material> conf --set phonon_plot=false
+#   tf -tt fit-fc-thermal -p <material> conf --set phonon_plot=false
 optional_steps:
   phonon_plot:
     default: true
@@ -107,15 +121,22 @@ io_schema:
     - {name: fc2.hdf5, step: S1_fit, type: hdf5, desc: "二阶力常数"}
     - {name: fc3.hdf5, step: S1_fit, type: hdf5, desc: "三阶力常数（有三阶数据时）"}
     - {name: fc_fit_summary.json, step: S1_fit, type: json, desc: "拟合与虚频判据摘要"}
+    - {name: kappa_summary.json, step: S2_kappa, type: json, desc: "最终产物：晶格热导率 κ(T) 及 300K 各分量"}
   params:
     - {name: FIT_ENGINE, values: [phono3py, pheasy, hiphive], default: phono3py, where: step.conf, desc: "力常数拟合引擎"}
+    - {name: MESH, default: "24 24 24", where: step.conf, desc: "BTE q 网格（原胞基矢序）"}
+    - {name: BTE_METHOD, values: [rta, lbte], default: rta, where: step.conf, desc: "BTE 解法；rta 便宜、lbte 准但贵"}
+    - {name: ISOTOPE, default: true, where: step.conf, desc: "同位素散射"}
+    - {name: T_MIN/T_MAX/T_STEP, default: "100/800/100", where: step.conf, desc: "温度扫描 (K)"}
   steps:
     - {step: S1_fit, title: "Fit force constants", inputs: [displacement_force_dataset], outputs: [fc2.hdf5, fc3.hdf5, fc_fit_summary.json], validator: "phonon 判据且无超阈虚频"}
+    - {step: S2_kappa, title: "Lattice thermal conductivity", inputs: [fc2.hdf5, fc3.hdf5], outputs: [kappa_summary.json], validator: "kappa_summary.json 里 KAPPA_DONE 为 true"}
     - {step: S2_plot, title: "Phonon plot", inputs: [fc2.hdf5], outputs: [phonon_band_summary.json], validator: "marker 文件存在"}
 flow:
-  summary: "读取已有位移-力数据 → 拟合 fc2/fc3 → 虚频闸与声子谱"
+  summary: "读取已有位移-力数据 → 判断壳层/三阶截断 → 拟合 fc2/fc3（虚频闸）→ 三声子 BTE 输出 κ(T)"
   stages:
     - {name: 拟合, steps: [S1_fit], produces: [fc2.hdf5, fc3.hdf5]}
+    - {name: 热导率, steps: [S2_kappa], produces: [kappa_summary.json]}
     - {name: 出图, steps: [S2_plot], produces: [phonon_band_summary.json]}
   requires: {displacement_force_dataset: "需由上游技能生成或手工放置"}
 corrections: [node_fail, dir_missing]

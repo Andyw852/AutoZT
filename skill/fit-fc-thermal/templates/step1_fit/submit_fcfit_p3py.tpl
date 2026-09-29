@@ -1,12 +1,11 @@
 #!/bin/bash
-# fc-fit S1_fit job template -- FIT_ENGINE=pheasy (CPU build).
+# fit-fc-thermal S1_fit job template -- FIT_ENGINE=phono3py (symfc / alm least squares).
 # Placeholders: JOBNAME, CONDA_SH, CONDA_ENV, ENGINE.
-# pheasy is core- and memory-hungry (cluster space + sensing matrix + fit);
-# override via step1_fit/step.conf:
+# Resource overrides: put a [submit] section in step1_fit/step.conf, e.g.
 #   [submit]
-#   cpus_per_task = 96
-#   mem           = 256G
-#   time          = 48:00:00
+#   cpus_per_task = 64
+#   qos           = premium
+#   time          = 24:00:00
 #SBATCH --partition=cpu192
 #SBATCH --job-name={{JOBNAME}}
 #SBATCH --nodes=1
@@ -30,18 +29,19 @@ export OPENBLAS_NUM_THREADS=${NCPU}
 export MKL_NUM_THREADS=${NCPU}
 
 echo "[env] host=$(hostname) env=${CONDA_DEFAULT_ENV:-${VIRTUAL_ENV:-}} threads=${NCPU}"
-for _m in numpy scipy phonopy spglib h5py; do
+for _m in numpy scipy phonopy phono3py spglib h5py; do
     python -c "import ${_m}" 2>/dev/null && echo "  ok  ${_m}" \
-        || echo "  MISSING ${_m} (required by fc-fit)"
+        || echo "  MISSING ${_m} (required by FIT_ENGINE=phono3py)"
 done
-python -c "import pheasy" 2>/dev/null && echo "  ok  pheasy" \
-    || echo "  MISSING pheasy in this environment"
-python -c "from celer import Lasso" 2>/dev/null && echo "  ok  celer (LASSO/ALASSO/RFE)" \
-    || echo "  note: celer absent -- PHEASY_FIT_METHOD must be OLS/RIDGE"
+python -c "import symfc" 2>/dev/null && echo "  ok  symfc" \
+    || echo "  MISSING symfc (needed when FC_CALC=symfc: pip install symfc)"
+python -c "import hiphive" 2>/dev/null && echo "  ok  hiphive (ShengBTE export)" \
+    || echo "  note: hiphive absent -- the ShengBTE export will be skipped"
 
 set -e
-# prep also writes disp_matrix.pkl / force_matrix.pkl, which is what pheasy
-# reads through --disp_file.
+# prep: normalise the dataset -> POSCAR/SPOSCAR/dataset_*.npy/disp_matrix.pkl
 python fc_fit_driver.py prep fit_config.json
+# fit: phono3py + symfc/alm -> fc2.hdf5 (+ fc3.hdf5)
 python fc_fit_driver.py fit  fit_config.json
+# post: ShengBTE export (optional) + imaginary-frequency gate -> fc_fit_summary.json
 python fc_fit_driver.py post fit_config.json

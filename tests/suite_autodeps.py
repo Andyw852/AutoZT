@@ -148,12 +148,12 @@ check("AUTOZT_COMMON_AUTODEPS=0 时不补推（开关有效）",
 shutil.rmtree(tmp, ignore_errors=True)
 
 section("6. ZA 2D 共享模块（三副本合并）")
-# 低层 ZA 判定收敛到 _common/za_2d.py；kl 的 S5_fc、fc-fit 的 S2_plot、以及全部 6 个
+# 低层 ZA 判定收敛到 _common/za_2d.py；kl 的 S5_fc、fit-fc-thermal 的 S2_plot、以及全部 6 个
 # mlff 技能（kl/opt/phonon × cpu/gpu，2026-09-22 第三副本迁移）都要能解析到它，
 # 否则首次上机就是 ModuleNotFoundError（公共池文件没推到生成目录）。
 for _tt, _sd, _step in (("kl-dft-cpu", "skill/kl-dft-cpu", "step5_fc"),
                         ("phonon-dft-cpu", "skill/phonon-dft-cpu", "step3_phonon"),
-                        ("fc-fit", "skill/fc-fit", "step2_phonon_plot"),
+                        ("fit-fc-thermal", "skill/fit-fc-thermal", "step2_phonon_plot"),
                         ("kl-mlff-cpu", "skill/kl-mlff-cpu", "step3_fc"),
                         ("kl-mlff-gpu", "skill/kl-mlff-gpu", "step3_fc"),
                         ("opt-mlff-cpu", "skill/opt-mlff-cpu", "step1_mlff_relax"),

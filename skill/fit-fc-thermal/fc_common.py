@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""fc_common.py -- shared helpers for the fc-fit skill.
+"""fc_common.py -- shared helpers for the fit-fc-thermal skill.
 
 Deliberately tiny and dependency-free (standard library only) so the login-node
 gen script runs under a plain system python.  The heavy lifting (dataset
@@ -297,7 +297,7 @@ def supercell_safe_cutoff(cell, margin=0.1):
 # Job naming / template rendering
 # ==========================================================================
 def new_jobname(cwd, step_label):
-    return "%s-fc-fit-%s" % (Path(cwd).name, step_label)
+    return "%s-fit-fc-thermal-%s" % (Path(cwd).name, step_label)
 
 
 def _strip_doc_placeholders(text):

@@ -29,6 +29,15 @@ DISP_DIR = "step4_disp"
 
 SPEC = {
     "FUNC":        ("pbesol", "str"),   # 全局带入，本步不用
+    # —— 由 fit-fc-thermal 产物导入（跨技能复用）——
+    #   FC_IMPORT_DIR 指向【本集群上】fit-fc-thermal 的 step1_fit 目录（含 fc2/fc3.hdf5）。
+    #   非空时 gen 直接调 reuse_fcfit.assemble() 把 step5_fc/ 装配好，跳过 S4 校验与
+    #   拟合作业；phono3py 环境里顺手生成 phono3py_disp.yaml。产物齐全后本步即完成。
+    "FC_IMPORT_DIR":        ("", "str"),
+    "FC_IMPORT_SUPERCELL":  ("", "str"),   # 覆盖超胞矩阵 "n n n"（默认读 fc_dataset.json）
+    "FC_IMPORT_DIM":        ("", "str"),   # 覆盖 2d|3d（默认读 phonon_summary.json 的 is_2d）
+    "FC_IMPORT_MESH":       ("", "str"),   # kl_params 的 MESH（默认 3D "24 24 24" / 2D "24 24 1"）
+    "FC_IMPORT_FUNCTIONAL": ("", "str"),   # kl_params 的 FUNCTIONAL（默认 pbesol）
     # —— 拟合器选择 ——
     # auto：按维度选 —— 2D 用 pheasy，3D 用 phono3py（symfc 快且稳，3D 不需要旋转不变性）。
     #   ★ 限制在"必须走 pheasy"这一步，与用哪种回归方法无关：RASR 是在 pheasy 的 -c
@@ -106,6 +115,53 @@ def main():
     out.mkdir(exist_ok=True)
     conf = stepconf.load(SPEC, STEP)
     disp = cwd / DISP_DIR
+
+    # ---- fit-fc-thermal 产物导入模式（跨技能复用 fc2/fc3）----
+    #   FC_IMPORT_DIR 显式指定；或由 tf 的 push_paths 把本地暂存的 fit-fc-thermal
+    #   kl_bundle/ 推到本步骤目录后【自动】识别（见 skill.yaml 的 push_paths）。
+    #   想强制用本技能自己拟，设 FC_IMPORT_DIR = off。
+    _fcimp = str(conf.get("FC_IMPORT_DIR") or "").strip()
+    if _fcimp.lower() in ("off", "false", "0", "no", "none"):
+        _fcimp = ""
+    _bundle = cwd / "kl_bundle"
+    if not _fcimp and _bundle.is_dir() and (_bundle / "fc2.hdf5").is_file():
+        _fcimp = str(_bundle)
+        print("[..] 检测到推送来的 kl_bundle/（fit-fc-thermal 力常数）→ 自动进入导入模式"
+              "（想改为本技能自拟：FC_IMPORT_DIR = off）", flush=True)
+    if _fcimp:
+        _src = Path(_fcimp)
+        if not _src.is_absolute():
+            _src = cwd / _src
+        if not (_src / "fc2.hdf5").is_file() or not (_src / "fc3.hdf5").is_file():
+            sys.exit("[ERROR] FC_IMPORT_DIR=%s 里没有 fc2.hdf5/fc3.hdf5 —— 请指向 "
+                     "fit-fc-thermal 的 step1_fit 产物目录（已拉回/已放到本集群）。" % _src)
+        print("[..] S5_fc 导入模式：从 fit-fc-thermal 产物 %s 装配 step5_fc/（不重拟）" % _src)
+        import reuse_fcfit
+        _dim = str(conf.get("FC_IMPORT_DIM") or "").strip().lower() or None
+        _mesh = str(conf.get("FC_IMPORT_MESH") or "").strip() or None
+        _sc = str(conf.get("FC_IMPORT_SUPERCELL") or "").strip() or None
+        _func = str(conf.get("FC_IMPORT_FUNCTIONAL") or conf.get("FUNC")
+                    or "pbesol").strip()
+        try:
+            reuse_fcfit.assemble(_src, out, poscar=None, supercell=_sc, dim=_dim,
+                                 mesh=_mesh, nac=False, functional=_func)
+        except SystemExit:
+            raise
+        except Exception as _e:  # noqa: BLE001
+            sys.exit("[ERROR] 从 fit-fc-thermal 产物装配 step5_fc 失败：%s\n"
+                     "        （生成 phono3py_disp.yaml 需要 phono3py；本机 python=%s）"
+                     % (_e, sys.executable))
+        # 产物已就绪；写一个最小 submit.sh，autozt 收尾时提交的作业是 no-op。
+        (out / "submit.sh").write_text(
+            "#!/bin/bash\n"
+            "# FC_IMPORT_DIR 导入模式：step5_fc/ 已在 gen 阶段装配完成，无需计算。\n"
+            "#SBATCH --job-name=fcimport\n"
+            "#SBATCH --output=queue.out\n"
+            "#SBATCH --error=queue.err\n"
+            "echo \"[S5_fc] imported from fit-fc-thermal; nothing to compute\"\n"
+            "exit 0\n", encoding="utf-8", newline="\n")
+        print("[DONE] step5_fc 已由 fit-fc-thermal 产物装配（导入模式），无需拟合作业")
+        return
 
     # ---- 校验 step4 产物 ----
     if not (disp / "phono3py_disp.yaml").is_file():

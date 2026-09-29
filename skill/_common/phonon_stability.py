@@ -3,7 +3,7 @@
 
 ## 为什么有它
 2 阶声子的「虚频判据 + 2D ZA 二次性」此前在 kl-dft-cpu(S5_fc)、phonon-dft-cpu(S3)、
-phonon-mlff-cpu/gpu、fc-fit 各处各写一份，改一处漏一处（kl_fc_backends.py 顶部 TODO
+phonon-mlff-cpu/gpu、fit-fc-thermal 各处各写一份，改一处漏一处（kl_fc_backends.py 顶部 TODO
 早记了这事）。本模块把【编排】收成一份：网格选择 / mesh+band 采样 / imag_policy 判定 /
 ZA 二次性；阈值与分类规则仍在 _common/imag_policy.py 与 _common/za_2d.py（各自唯一真源）。
 
@@ -99,7 +99,7 @@ def finalize(imag, za):
 def za_check(cfg, ph, cart_vac_axis, is2d):
     """P2-2：2D 的 ZA 二次性闸门。返回写进 phonon_summary.json 的 dict（3D → None）。
 
-    ★ 与 skill/fc-fit/fc_plot_phonon.py 的 _za_summary 同一套判据（同一 bug 的两份
+    ★ 与 skill/fit-fc-thermal/fc_plot_phonon.py 的 _za_summary 同一套判据（同一 bug 的两份
     副本，见文件顶部 TODO）：
       * vac 轴映射：Cartesian 真空轴先映射成 原胞基矢 下标（vacuum_axis_in_primitive），
         否则生产原胞（真空在第 0 基矢）会量到"真空方向 + Γ-M"；

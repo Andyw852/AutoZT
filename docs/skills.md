@@ -8,7 +8,7 @@ scripts, convergence criteria and default cluster. AutoZT ships 20 skills:
 | VASP (CPU) | band-dft-cpu, defect-dft-cpu, elastic-dft-cpu, ke-dft-cpu, kl-dft-cpu, opt-dft-cpu, phonon-dft-cpu, zt-dft-cpu |
 | MACE | kl-mlff-cpu, kl-mlff-gpu, opt-mlff-cpu, opt-mlff-gpu, phonon-mlff-cpu, phonon-mlff-gpu, mlff |
 | Auxiliary | cohp-cogito (COHP/ICOHP bonding analysis), eph-qe-cpu (Quantum ESPRESSO electron-phonon), te-screen (thermoelectric surrogate screening), unihamgnn (graph data generation) |
-| Fitting | fc-fit (phono3py / pheasy / hiphive force-constant fitting) |
+| Fitting | fit-fc-thermal (phono3py / pheasy / hiphive force-constant fitting) |
 
 `zt-dft-cpu` is a composite skill: it declares the electron-transport steps of `ke-dft-cpu`
 and the lattice-thermal-conductivity steps of `kl-dft-cpu` by **symlinking** their step and

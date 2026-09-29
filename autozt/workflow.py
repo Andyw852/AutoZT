@@ -365,7 +365,7 @@ def check_duplicates(data):
     材料清单按轮次/集群各生成一棵项目树（如 pheasy_jzzn_r4/ 与
     pheasy_3090_all_r4/），两棵树的 materials/<元素>/<材料> 结构完全相同，而 tf 的
     材料名取自 local_root 下的相对路径、不含项目名 —— 于是所有树的材料全部同名，
-    check_duplicates 直接退出，整个技能在 tf 里不可用（实测 fc-fit：8 棵树、每棵
+    check_duplicates 直接退出，整个技能在 tf 里不可用（实测 fit-fc-thermal：8 棵树、每棵
     505 个材料，互相全部重名）。这种重名不是数据错误，只是 -p 无法区分；因此给这些
     材料加【项目名前缀】（<项目名>/<元素>/<材料>）让 -p 无歧义，而不是让整个技能
     报废。同一段内的真重复（同一棵树里被发现两次）仍然报错。"""
@@ -794,6 +794,52 @@ def remote_gen(cfg, t, m, sname, host=None, wd=None):
         else:
             return False, ("project_setting/skill_dir 里缺少 %s，"
                            "且未配置 gen_dir 兜底" % f)
+    # v3.x：可选「本地暂存 → 目标集群」推送（push_paths）。
+    #   sc.push_paths 列出相对【材料本地目录 lpath】的路径（文件或目录）；
+    #   存在才推（正常拟合时本来就没有这份暂存，缺了不报错），目录递归、保留
+    #   子目录层级，落到 <step_dir>/<basename(路径)>/ 下。整条脚本经 stdin 投递
+    #   （use_stdin=True），不受 argv 长度限制，大文件（fc3 数 MB）也能推。
+    #   用途：跨技能/跨集群搬运成果——fit-fc-thermal 在 3090 拟合出的力常数 bundle，
+    #   切到 jzzn/hanhai 提交 kl 时自动送上去，无需手动 scp。
+    for _rel in list(sc.get("push_paths") or []):
+        if not lp:
+            break
+        _src = os.path.normpath(os.path.join(lp, _rel))
+        if not os.path.exists(_src):
+            continue
+        _base = os.path.basename(_src.rstrip(os.sep)) or "pushed"
+        _dstroot = os.path.join(step_dir, _base)
+        line += "mkdir -p %s ; " % shlex.quote(_dstroot)
+        if os.path.isdir(_src):
+            for _root, _dirs, _files in os.walk(_src):
+                for _fn in _files:
+                    _full = os.path.join(_root, _fn)
+                    _sub = os.path.relpath(_full, _src)
+                    _dst = os.path.join(_dstroot, _sub)
+                    _d = os.path.dirname(_dst)
+                    with open(_full, "rb") as _fh:
+                        _data = _fh.read()
+                    if _d != _dstroot:
+                        line += "mkdir -p %s ; " % shlex.quote(_d)
+                    line += ("[ -f %s ] && [ \"$(md5sum %s 2>/dev/null | cut -d' ' -f1)\" = %s ] "
+                             "|| echo %s | base64 -d > %s ; "
+                             % (shlex.quote(_dst), shlex.quote(_dst),
+                                hashlib.md5(_data).hexdigest(),
+                                base64.b64encode(_data).decode(), shlex.quote(_dst)))
+                    prov_files[os.path.join(_base, _sub)] = {
+                        "sha256": hashlib.sha256(_data).hexdigest(),
+                        "source": _full, "origin": "push_paths"}
+        else:
+            with open(_src, "rb") as _fh:
+                _data = _fh.read()
+            line += ("[ -f %s ] && [ \"$(md5sum %s 2>/dev/null | cut -d' ' -f1)\" = %s ] "
+                     "|| echo %s | base64 -d > %s ; "
+                     % (shlex.quote(_dstroot), shlex.quote(_dstroot),
+                        hashlib.md5(_data).hexdigest(),
+                        base64.b64encode(_data).decode(), shlex.quote(_dstroot)))
+            prov_files[_base] = {"sha256": hashlib.sha256(_data).hexdigest(),
+                                "source": _src, "origin": "push_paths"}
+
     # v1.0：把本步"输入指纹"档案推到远端（<材料>/provenance/<步骤>.json，
     # 另追加一行到 provenance/history.jsonl 作时间线）。放 provenance/ 子目录是
     # 为了让每一步各留一份、互不覆盖（gen 的 cwd 是材料目录，不是步骤目录）。
@@ -1449,7 +1495,7 @@ def _remote_submit_preflight(cfg, m, s, t=None):
     # 目标集群与提交模板自洽性：模板里的 --partition 必须能在该集群落地。
     # 无 SLURM 的机器（如 3090，靠 fakeslurm 垫片）配置里没有 partition 键，
     # 此时模板若仍写死 #SBATCH --partition=cpu192（jzzn 的分区），作业只会
-    # 永远卡在 PD(PartitionConfig)——真跑 fc-fit 切集群时实测过这个坑。
+    # 永远卡在 PD(PartitionConfig)——真跑 fit-fc-thermal 切集群时实测过这个坑。
     from autozt import (_PKG_ROOT as _PKGR, _load_yaml_file as _lyf,
                             run_remote as _rrm)
     _pkg = os.path.join(_PKGR, "setting", str(m.get("hpc_name")) + ".yaml")
@@ -1485,7 +1531,7 @@ def _remote_submit_preflight(cfg, m, s, t=None):
                                                           _hint, m.get("hpc_name")),
               file=sys.stderr)
     # 资源申请自检：--cpus-per-task × --ntasks-per-node 不能超过集群声明的上限。
-    # 实测教训（2026-09-15 fc-fit 切 3090）：模板写 --cpus-per-task=48 而机器只给
+    # 实测教训（2026-09-15 fit-fc-thermal 切 3090）：模板写 --cpus-per-task=48 而机器只给
     # 24 → 作业永远 PD(PartitionConfig)，日志里一个字都不说；改成 24 立刻开跑。
     _mc = 0
     try:
@@ -1503,7 +1549,7 @@ def _remote_submit_preflight(cfg, m, s, t=None):
         if _pf._i18n.is_en():
             print(_pf.hint("partition"), file=sys.stderr)
     # 提交模板的环境自检：模板里的 conda 环境/conda.sh 路径必须存在于目标集群。
-    # 实测教训（2026-09-15 fc-fit 切 3090）：模板激活的是 atomate2_p_a 与
+    # 实测教训（2026-09-15 fit-fc-thermal 切 3090）：模板激活的是 atomate2_p_a 与
     # /public/home/.../... （源集群的），激活静默失败后脚本照跑，prep 侥幸
     # 成功、fit 一行输出都没有就退出——最难查的一类"静默死亡"。
     _acts = _pf.parse_conda_activations(_so3 or "")
@@ -1532,7 +1578,7 @@ def _remote_submit_preflight(cfg, m, s, t=None):
     declared = (((cfg.get("task_types") or {}).get(m.get("tt")) or {})
                 .get("submit_required") or (t or {}).get("submit_required"))
     if declared:
-        # 技能显式声明的清单优先级最高（cohp-cogito / fc-fit 这种"必须带上游产物"
+        # 技能显式声明的清单优先级最高（cohp-cogito / fit-fc-thermal 这种"必须带上游产物"
         # 的步骤用它精确表达需求）。
         required = tuple(str(x) for x in declared)
     elif s.get("fanout"):

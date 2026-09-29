@@ -188,6 +188,8 @@ optional_steps:
   #   S8_kappa_e 在项目 step.conf 写 WAVEFUNCTION_FULL = true 时改读它，AMSET 走
   #   from_data（不再去对称化）—— 这就是 V22.8 / V25 的"三维单变量对照"。
   #   S3c 是附带的离网格 k 点诊断（V22.9，两段式，成本约全网格 1/16）。
+  #   ★ 2026-09-29（V118）：相位补丁默认开后本组对非 SOC 材料不再有生产用途，S3b gen 会拦下
+  #     不需要的全网格（FULL_GRID_FORCE = true 放行），见 ke-dft-cpu/skill.yaml 同名组。
   #   ★ 锚点 step1_opt 在 electronic 组里，所以本组必须排在 electronic 之后。
   # ---------------------------------------------------------------------------
   wavefunction_full:

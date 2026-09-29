@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""suite_fcfit_shell -- fc-fit 的「壳层 / 三阶截断确定」单元自测。
+"""suite_fcfit_shell -- fit-fc-thermal 的「壳层 / 三阶截断确定」单元自测。
 
 覆盖（从 kl-dft-cpu 移植过来、保留同样的判据语义）：
   1. fc_common.neighbor_shells / cut3_candidates：壳层枚举 + 相邻壳层中点
@@ -21,7 +21,7 @@ import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(ROOT / "skill" / "fc-fit"))
+sys.path.insert(0, str(ROOT / "skill" / "fit-fc-thermal"))
 
 import fc_common as fc  # noqa: E402
 
@@ -199,12 +199,99 @@ def test_prep_coords_equilibrium():
     check("最近帧 <0.25 A -> 用作平衡近似", eq5 is not None,
           str(i5.get("equilibrium_source")))
 
+def test_kl_bundle_reuse():
+    print("[7] fit-fc-thermal kl_bundle + kl reuse_fcfit 布局")
+    import importlib.util
+    import fc_fit_driver as drv
+    with tempfile.TemporaryDirectory() as d:
+        src = Path(d) / "step1_fit"
+        src.mkdir()
+        for f in ("fc2.hdf5", "fc3.hdf5", "phonon_summary.json",
+                  "cutoff_scan.json", "fc_dataset.json", "phono3py_disp.yaml"):
+            (src / f).write_bytes(b"x")
+        (src / "shengbte").mkdir()
+        (src / "shengbte" / "FORCE_CONSTANTS_2ND").write_bytes(b"y")
+        drv._write_kl_bundle(src, {})
+        b = src / "kl_bundle"
+        check("kl_bundle 生成 fc2/fc3",
+              (b / "fc2.hdf5").is_file() and (b / "fc3.hdf5").is_file())
+        check("kl_bundle 带 shengbte 力常数",
+              (b / "shengbte" / "FORCE_CONSTANTS_2ND").is_file())
+        try:
+            spec = importlib.util.spec_from_file_location(
+                "reuse_fcfit", str(ROOT / "skill" / "kl-dft-cpu" / "reuse_fcfit.py"))
+            rf = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(rf)
+        except Exception as e:  # noqa: BLE001
+            print("  SKIP reuse_fcfit 导入失败：%s" % e)
+            return
+        out = Path(d) / "step5_fc"
+        rf.assemble(b, out, supercell="3 3 1", dim="3d", mesh="24 24 24")
+        check("reuse_fcfit 产出 phono3py/fc2.hdf5",
+              (out / "phono3py" / "fc2.hdf5").is_file())
+        check("reuse_fcfit 写 kl_params.txt（SUPERCELL 折叠成 3 3 1）",
+              (out / "kl_params.txt").is_file()
+              and "SUPERCELL=3 3 1" in (out / "kl_params.txt").read_text())
+        check("reuse_fcfit 复制 shengbte",
+              (out / "shengbte" / "FORCE_CONSTANTS_2ND").is_file())
+
+def test_kappa_step():
+    print("[8] step2_kappa 步骤与 κ 抽取")
+    import importlib.util
+    import numpy as np
+    base = ROOT / "skill" / "fit-fc-thermal"
+    text = (base / "skill.yaml").read_text(encoding="utf-8")
+    check("skill.yaml 有 step2_kappa 且 needs step1_fit",
+          "step2_kappa" in text and "needs: [step1_fit]" in text)
+    check("skill.yaml 声明 KAPPA_DONE marker", "KAPPA_DONE" in text)
+    for f in ("gen_step2_kappa.py", "kappa_driver.py",
+              "templates/step2_kappa/submit_kappa.tpl",
+              "templates/step2_kappa/step.conf"):
+        check("文件存在 %s" % f, (base / f).is_file())
+    spec = importlib.util.spec_from_file_location(
+        "kd", str(base / "kappa_driver.py"))
+    kd = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(kd)
+    check("κ (T,6) Voigt -> xx/yy/zz",
+          kd._flat_kappa(np.arange(6.0).reshape(1, 6)).tolist() == [[0.0, 1.0, 2.0]])
+    check("κ (T,3,3) -> 对角",
+          kd._flat_kappa(np.arange(9.0).reshape(1, 3, 3)).tolist()
+          == [[0.0, 4.0, 8.0]])
+
+def test_cut3_select():
+    print("[9] cut3_select.select_cutoff 三判据")
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        "cut3select", str(ROOT / "skill" / "fit-fc-thermal" / "cut3_select.py"))
+    cs = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(cs)
+    recs = [
+        {"cut": 3.9, "ratio": 8, "train_rel_err": 0.0062, "train_rel_se": 0.0004,
+         "err_kind": "in-sample", "stable_upper_cut": 4.5, "kappa": 3.68, "kappa_err": 0.01},
+        {"cut": 4.3, "ratio": 8, "train_rel_err": 0.0063, "train_rel_se": 0.0004,
+         "err_kind": "in-sample", "stable_upper_cut": 4.5, "kappa": 3.68, "kappa_err": 0.01},
+        {"cut": 4.9, "ratio": 8, "train_rel_err": 0.0064, "train_rel_se": 0.0004,
+         "err_kind": "in-sample", "stable_upper_cut": 4.5, "kappa": 2.0, "kappa_err": 0.01},
+    ]
+    chosen, rep = cs.select_cutoff(recs)
+    check("选截断：稳定的最小平台档 (3.9)", chosen == 3.9, str((chosen, rep.get("status"))))
+    by = {x["cut"]: x for x in rep["records"]}
+    check("超 stable_upper_cut 的档 stable_ok=False", by[4.9]["stable_ok"] is False)
+    _c2, rep2 = cs.select_cutoff([dict(recs[0], kappa=3.0), dict(recs[1], kappa=2.0)])
+    check("κ 未平台 -> not_converged", rep2["status"] == "not_converged", rep2["status"])
+    c3, rep3 = cs.select_cutoff([dict(recs[0], ratio=1.0)])
+    check("数据不足 -> no_usable_cutoff",
+          c3 is None and rep3["status"] == "no_usable_cutoff", str(rep3["status"]))
+
 def main():
     test_shells_and_candidates()
     test_resolve()
     test_safe_cutoff()
     test_fc3_shell_stability()
     test_prep_coords_equilibrium()
+    test_kl_bundle_reuse()
+    test_kappa_step()
+    test_cut3_select()
     print("\nsuite_fcfit_shell: %s（%d 项）"
           % ("ALL PASS" if not FAIL else "FAIL", N))
     return 1 if FAIL else 0

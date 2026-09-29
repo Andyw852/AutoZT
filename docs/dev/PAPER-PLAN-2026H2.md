@@ -80,7 +80,7 @@ LLM 只在异常路径介入且可被替换。**2D/3D 验证材料集已建好�
 | 2 | 物理判据门禁（静默错误拦截） | 图 2 状态机 + §14 表 | HANDOVER §14 的 11 行表，多数"已生产验证" | 表 1 行需真数据：BHH 的 390/520 对照、S6 厚度归一化端到端 |
 | 3 | LLM 只在失败路径，动作分档 + 人工令牌 | 图 1c | `EVALUATION.md`：拦截 9/9、执行 0、三档 profile；`agentgate.py` + 40 项测试 | planner 替换消融（脚本 / 不同 LLM / 人工 三种 planner）|
 | 4 | 跨异构超算 + 逐文件 provenance | 图 1a 底部 | 17/17 跨集群输入逐字节一致；`prove --verify`、`session export` 已有测试 | 规模—成本实验（材料数 × token × 墙钟 × 人工介入）|
-| 5 | MLIP 预筛 + DFT 分级 + GPU 拟合 | 图 2a | fc-fit（Si，10 帧×250 原子）产出 fc2/fc3 + ShengBTE 导出；phonon 判据稳定 | pheasy-gpu 的实测加速比（图 2 上标注的 "×?" 还没填）；有限位移 57× vs 随机位移 21× 的对照 |
+| 5 | MLIP 预筛 + DFT 分级 + GPU 拟合 | 图 2a | fit-fc-thermal（Si，10 帧×250 原子）产出 fc2/fc3 + ShengBTE 导出；phonon 判据稳定 | pheasy-gpu 的实测加速比（图 2 上标注的 "×?" 还没填）；有限位移 57× vs 随机位移 21× 的对照 |
 
 ---
 
@@ -106,7 +106,7 @@ LLM 只在异常路径介入且可被替换。**2D/3D 验证材料集已建好�
 | 安全 | 危险动作拦截 100%（9/9），执行 0，只读仍可用；compact 7 / workflow 12 / monitor 2 / full 24 工具面 | `scripts/safety_metrics.py`、`EVALUATION.md` |
 | 复现 | 跨集群 17/17 输入逐字节一致；本地输出确定性 100% | `pa -tt <技能> -p <材料> prove --verify` |
 | 技能覆盖 | 18 技能输入生成 16/18；首个可算步骤真实提交 15/15 OK | `EVALUATION.md` §3 |
-| 力常数 | fc-fit：Si 10 帧 × 250 原子 → fc2.hdf5 / fc3.hdf5 + ShengBTE 导出 | `EVALUATION.md` §3 |
+| 力常数 | fit-fc-thermal：Si 10 帧 × 250 原子 → fc2.hdf5 / fc3.hdf5 + ShengBTE 导出 | `EVALUATION.md` §3 |
 | 2D kl | 8 材料 S1 生产验证（面内 ‖σ‖ ≤ 0.114 kB）；Mo₂S₃ Z4-3-1 旧结构被拦（0.1263 Å） | HANDOVER §10.1、§14 |
 | 噪声底 | 同节点 ≈ 0；跨节点 ≈ 1e-3 meV/Å（比待分辨的口径效应小 2–3 个数量级） | HANDOVER §14 |
 | ZA 判定 | 三副本合并到 `_common/za_2d.py`，真实 MoS₂ fc2 上 p=(1.99307, 1.98012)，390/520 一致 | 本次复验 + HANDOVER §38 |
@@ -222,7 +222,7 @@ LLM 只在异常路径介入且可被替换。**2D/3D 验证材料集已建好�
 | 项 | 内容 |
 |---|---|
 | 定位 | **材料/发现类**论文（不是方法论文）：一批金属掺杂富勒烯 / 富勒烯网络的热电性能筛选与候选 |
-| 现成弹药 | 2926 个结构（38 金属 × 笼型 × 位点）的 MACE 优化 + 形成能已跑通；`fc-fit` 的 Mg₂C₆₀ 超胞力常数（OLS/LASSO/RFE 多组对照）；Mg₄C₆₀ / Mg₄C₆₀ 单层的声子链；`te-screen` 替代筛选器 |
+| 现成弹药 | 2926 个结构（38 金属 × 笼型 × 位点）的 MACE 优化 + 形成能已跑通；`fit-fc-thermal` 的 Mg₂C₆₀ 超胞力常数（OLS/LASSO/RFE 多组对照）；Mg₄C₆₀ / Mg₄C₆₀ 单层的声子链；`te-screen` 替代筛选器 |
 | 缺什么 | ① 形成能 → 稳定性漏斗的统计图（决定谁进 κ / ZT）；② 入选材料的 kl + ke 全链（DFT 级）；③ 外部锚点（实验或独立文献值） |
 | 与 Paper 1 的边界 | Paper 1 讲"平台怎么保证不出错"，Paper 2 讲"用平台发现了什么"。Paper 2 里 AutoZT 只作方法段一句话 + 补充材料引用，不抢主线 |
 | 排期 | 本学期先做"数据整理 + 漏斗图"（与 Paper 1 的 te-screen 实跑**共用同一批作业**）；Paper 1 投出后全面启动 |

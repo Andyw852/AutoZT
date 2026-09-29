@@ -1,11 +1,12 @@
 #!/bin/bash
-# fc-fit S1_fit job template -- FIT_ENGINE=hiphive (cluster space + regression).
+# fit-fc-thermal S1_fit job template -- FIT_ENGINE=pheasy (CPU build).
 # Placeholders: JOBNAME, CONDA_SH, CONDA_ENV, ENGINE.
-# hiphive builds a (large) design matrix and solves a dense least-squares
-# problem, so it wants cores and memory; override via step1_fit/step.conf:
+# pheasy is core- and memory-hungry (cluster space + sensing matrix + fit);
+# override via step1_fit/step.conf:
 #   [submit]
-#   cpus_per_task = 64
-#   mem           = 128G
+#   cpus_per_task = 96
+#   mem           = 256G
+#   time          = 48:00:00
 #SBATCH --partition=cpu192
 #SBATCH --job-name={{JOBNAME}}
 #SBATCH --nodes=1
@@ -29,14 +30,18 @@ export OPENBLAS_NUM_THREADS=${NCPU}
 export MKL_NUM_THREADS=${NCPU}
 
 echo "[env] host=$(hostname) env=${CONDA_DEFAULT_ENV:-${VIRTUAL_ENV:-}} threads=${NCPU}"
-for _m in numpy scipy phonopy spglib h5py ase hiphive sklearn; do
+for _m in numpy scipy phonopy spglib h5py; do
     python -c "import ${_m}" 2>/dev/null && echo "  ok  ${_m}" \
-        || echo "  MISSING ${_m} (required by FIT_ENGINE=hiphive)"
+        || echo "  MISSING ${_m} (required by fit-fc-thermal)"
 done
-python -c "import numba" 2>/dev/null && echo "  ok  numba (hiphive force evaluation)" \
-    || echo "  note: numba absent -- the fit-residual check will be skipped"
+python -c "import pheasy" 2>/dev/null && echo "  ok  pheasy" \
+    || echo "  MISSING pheasy in this environment"
+python -c "from celer import Lasso" 2>/dev/null && echo "  ok  celer (LASSO/ALASSO/RFE)" \
+    || echo "  note: celer absent -- PHEASY_FIT_METHOD must be OLS/RIDGE"
 
 set -e
+# prep also writes disp_matrix.pkl / force_matrix.pkl, which is what pheasy
+# reads through --disp_file.
 python fc_fit_driver.py prep fit_config.json
 python fc_fit_driver.py fit  fit_config.json
 python fc_fit_driver.py post fit_config.json

@@ -398,7 +398,7 @@ def run(cwd, out_dir=None, unity_overlap=False, desym_fix=None):
                      "形变势(DPT)不受影响。正式结果请用 UNITY_OVERLAP=false + "
                      "WAVEFUNCTION_FULL=true（S3b ISYM=-1 -> S4b 全网格 -> 真实重叠）。")
     elif two_d:
-        lines.append("     二维真实重叠：正确路径（要求全网格 h5，见下面第 2 项核对）。")
+        lines.append("     二维真实重叠：正确路径（全网格 h5，或 IBZ h5 + 判据放行/相位补丁，见下面第 2 项）。")
 
     h5s = [out_dir / "wavefunction.h5", cwd / "step4_wave" / "wavefunction.h5",
            cwd / "step4b_wave_full" / "wavefunction.h5"]
@@ -435,7 +435,11 @@ def run(cwd, out_dir=None, unity_overlap=False, desym_fix=None):
         elif not complete and not unity_overlap and two_d:
             # ★ 2026-09-28 用户批准（第二批 (a)）：先问**统一判据**，别一刀切。
             _need_full, _why = _structure_verdict(cwd, desym_fix=desym_fix)
-            if not _need_full:
+            if not _need_full and desym_fix:
+                # ★ 2026-09-29（V118）：补丁默认开以后这是**出厂标准路径**（V115–V117 验证），
+                #   不再每次打 WARN —— 天天出现的告警会让人习惯性忽略真正的告警。
+                lines.append("     [OK] 2D + 真实重叠 + IBZ h5 + 相位补丁：%s" % _why)
+            elif not _need_full:
                 warn = True
                 lines.append("     [WARN] 2D + 真实重叠 + 非完整网格，但**判据说可以走 IBZ**：%s" % _why)
                 lines.append("     依据 V109/V111：τ≡0（原点已对齐，S3 的 align_origin 做过）时去对称化"
@@ -454,6 +458,12 @@ def run(cwd, out_dir=None, unity_overlap=False, desym_fix=None):
                              "那时判据会放行，不必付全网格的代价。")
                 lines.append("     注：DESYM_FINDINGS 里「MoS2 38.9% / TR 5.2%」两个数已撤回（V107），"
                              "现在的裁决依据只有「存在 τ≠0 的对称操作」这一条。")
+        elif not complete and not unity_overlap and desym_fix and \
+                not _structure_verdict(cwd, desym_fix=desym_fix)[0]:
+            # ★ 2026-09-29（V118）：补丁默认开 -> 3D IBZ + 真实重叠是出厂标准路径，不再打 WARN
+            #   和下面那段历史说明（那是补丁出现之前的背景）。
+            lines.append("     [OK] 3D + 真实重叠 + IBZ h5 + 相位补丁：%s"
+                         % _structure_verdict(cwd, desym_fix=desym_fix)[1])
         elif not complete and not unity_overlap:
             warn = True
             # ★ 2026-09-28（V115）：先给出逐操作判据（补丁开没开都打 bad_ops/total_ops），
