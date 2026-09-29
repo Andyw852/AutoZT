@@ -25,9 +25,21 @@ STEP = "step2_kappa"
 FIT_DIR = "step1_fit"
 
 SPEC = {
-    # BTE q 网格（"24 24 24"）。2D 且 MESH_2D_VACUUM=on 时把真空轴压 1。
-    "MESH":             ("24 24 24", "str"),
+    # BTE q 网格：auto（按倒格矢长度自动匹配体系，phonopy 长度约定
+    #   n_i = round(MESH_LENGTH*|b_i|)，对称性自洽）| 一个数（长度 L，Å）|
+    #   "n n n"（显式网格，不做收敛）。2D 且 MESH_2D_VACUUM=on 时真空轴压 1。
+    "MESH":             ("auto", "str"),
+    "MESH_LENGTH":      (40.0, "float"),
     "MESH_2D_VACUUM":   ("on", "str"),
+    # q 网格收敛（仅 auto/长度网格）：L 逐次 ×MESH_CONV_FACTOR 加密，直到
+    #   MESH_CONV_T 下整个 κ 张量相邻变化 < MESH_CONV_TOL_PCT；上限
+    #   MESH_CONV_MAX_LENGTH / MESH_CONV_MAX_POINTS（总 q 点数）。off = 只跑起始网格。
+    "MESH_CONV":            ("auto", "str"),
+    "MESH_CONV_TOL_PCT":    (3.0, "float"),
+    "MESH_CONV_FACTOR":     (1.25, "float"),
+    "MESH_CONV_MAX_LENGTH": (150.0, "float"),
+    "MESH_CONV_MAX_POINTS": (64000, "int"),
+    "MESH_CONV_T":          (300.0, "float"),
     # 温度扫描 (K)
     "T_MIN":            (100.0, "float"),
     "T_MAX":            (800.0, "float"),
@@ -86,11 +98,31 @@ def _find_disp_yaml(fit_dir, out):
     return _make_disp_yaml(fit_dir, out)
 
 
-def _mesh_str(conf, fit_dir):
-    import numpy as np
-    mesh = [int(x) for x in str(conf["MESH"]).split()]
-    if len(mesh) != 3:
-        sys.exit("[ERROR] MESH 需要三个整数，得到 %r" % conf["MESH"])
+def _mesh_cfg(conf, fit_dir):
+    """Validate MESH and read is_2d; the mesh itself is resolved on the compute
+    node on phono3py's primitive cell (kappa_driver._apply_mesh), so an explicit
+    "n n n" and the 2D vacuum axis are both taken in that basis."""
+    m = str(conf["MESH"]).strip()
+    parts = m.split()
+    if m.lower() == "auto":
+        pass
+    elif len(parts) == 3:
+        try:
+            [int(x) for x in parts]
+        except ValueError:
+            sys.exit("[ERROR] MESH 需要 auto、一个长度或三个整数，得到 %r" % m)
+    elif len(parts) == 1:
+        try:
+            if float(parts[0]) <= 0:
+                raise ValueError
+        except ValueError:
+            sys.exit("[ERROR] MESH 需要 auto、一个长度或三个整数，得到 %r" % m)
+    else:
+        sys.exit("[ERROR] MESH 需要 auto、一个长度或三个整数，得到 %r" % m)
+    if float(conf["MESH_LENGTH"]) <= 0:
+        sys.exit("[ERROR] MESH_LENGTH 必须 > 0")
+    if float(conf["MESH_CONV_FACTOR"]) <= 1.0:
+        sys.exit("[ERROR] MESH_CONV_FACTOR 必须 > 1")
     is_2d = False
     ps = fit_dir / "phonon_summary.json"
     if ps.is_file():
@@ -98,16 +130,24 @@ def _mesh_str(conf, fit_dir):
             is_2d = bool(json.loads(ps.read_text(encoding="utf-8")).get("is_2d"))
         except Exception:
             is_2d = False
-    on = str(conf["MESH_2D_VACUUM"]).lower() in ("on", "true", "1", "yes", "auto")
-    if is_2d and on:
-        try:
-            lat, _ = fc.read_poscar_cell_frac(fit_dir / "POSCAR")
-            vac = int(np.argmax([np.linalg.norm(v) for v in np.asarray(lat, float)]))
-            mesh[vac] = 1
-            print("[..] 2D：真空轴 %d 的网格压 1 → %s" % (vac, mesh), flush=True)
-        except Exception as e:  # noqa: BLE001
-            print("[WARN] 2D 真空轴判定失败，MESH 原样：%s" % e, flush=True)
-    return " ".join(str(x) for x in mesh)
+    vac = str(conf["MESH_2D_VACUUM"]).lower() in ("on", "true", "1", "yes", "auto")
+    conv = str(conf["MESH_CONV"]).strip().lower() not in (
+        "off", "false", "0", "no", "none", "")
+    if len(parts) == 3 and conv:
+        print("[..] MESH 是显式网格 %r —— 不做网格收敛（要收敛改 MESH=auto）" % m,
+              flush=True)
+    return {
+        "mesh": m.lower() if m.lower() == "auto" else m,
+        "mesh_length": float(conf["MESH_LENGTH"]),
+        "is_2d": is_2d,
+        "mesh_2d_vacuum": vac,
+        "mesh_conv": "auto" if conv else "off",
+        "mesh_conv_tol_pct": float(conf["MESH_CONV_TOL_PCT"]),
+        "mesh_conv_factor": float(conf["MESH_CONV_FACTOR"]),
+        "mesh_conv_max_length": float(conf["MESH_CONV_MAX_LENGTH"]),
+        "mesh_conv_max_points": int(conf["MESH_CONV_MAX_POINTS"]),
+        "mesh_conv_t": float(conf["MESH_CONV_T"]),
+    }
 
 
 def main():
@@ -137,7 +177,7 @@ def main():
     print("[..] NAC=%s（BORN %s）" % (nac, "有" if born.is_file() else "无"), flush=True)
 
     disp_name = _find_disp_yaml(fit, out)
-    mesh = _mesh_str(conf, fit)
+    mcfg = _mesh_cfg(conf, fit)
 
     method = str(conf["BTE_METHOD"] or "rta").lower()
     if method not in ("rta", "lbte"):
@@ -183,7 +223,7 @@ def main():
         "cut3_cv_1se_mult": float(conf["CUT3_CV_1SE_MULT"]),
         "cut3_stability_thr": float(conf["CUT3_STABILITY_THR"]),
         "cut3_pick": str(conf["CUT3_PICK"]),
-        "mesh": mesh,
+        **mcfg,
         "temperatures": temps,
         "isotope": bool(conf["ISOTOPE"]),
         "nac": nac,
@@ -212,8 +252,10 @@ def main():
     fc.write_submit(tpl, out / "submit.sh", subs)
     stepconf.apply_submit(out / "submit.sh", dict(conf.submit or {}))
 
-    print("[..] BTE=%s mesh=%s T=%g..%g/%g isotope=%s"
-          % (method, mesh, t0, t1, dt, bool(conf["ISOTOPE"])))
+    print("[..] BTE=%s mesh=%s%s conv=%s T=%g..%g/%g isotope=%s 2D=%s"
+          % (method, mcfg["mesh"],
+             " (L=%g A)" % mcfg["mesh_length"] if mcfg["mesh"] == "auto" else "",
+             mcfg["mesh_conv"], t0, t1, dt, bool(conf["ISOTOPE"]), mcfg["is_2d"]))
     print("[DONE] %s: kappa_config.json + submit.sh + kappa_driver.py ready; "
           "the compute node writes kappa_summary.json (BTE done marker)."
           % OUTDIR)

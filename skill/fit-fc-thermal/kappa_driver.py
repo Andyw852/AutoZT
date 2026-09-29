@@ -10,6 +10,21 @@ the cutoff with the three criteria - residual 1-SE, per-shell stability and the
 kappa plateau - via cut3_select.select_cutoff, and promote the chosen kappa to
 the top-level kappa_summary.json (with a cutoff_selection report).  This is the
 "S1_fit determines the shells -> S2_kappa picks the cutoff by kappa" loop.
+
+q-mesh (MESH in step.conf):
+  "n n n"  explicit mesh, used as is (one BTE run);
+  auto     phonopy length convention n_i = max(1, round(L*|b_i|)) (|b_i| in 1/A,
+           no 2pi) on the phono3py PRIMITIVE cell, symmetry-consistent via
+           phono3py's own length->mesh; L = MESH_LENGTH;
+  <float>  the same with that length.
+  2D: the vacuum axis (the primitive axis with the shortest |b_i|) is pinned to 1.
+Mesh convergence (MESH_CONV=auto, only for auto/<float> meshes): the BTE is
+rerun on denser meshes (L *= MESH_CONV_FACTOR) until the whole kappa tensor at
+MESH_CONV_T changes by < MESH_CONV_TOL_PCT between two consecutive meshes, or
+MESH_CONV_MAX_LENGTH / MESH_CONV_MAX_POINTS is hit.  The denser mesh of the
+converged pair is reported; mesh_convergence.json keeps every point.  With a
+cutoff scan the scan runs at the starting mesh, then the chosen cutoff's fc is
+converged in mesh.
 """
 import json
 import sys
@@ -43,17 +58,43 @@ def _flat_kappa(kappa):
     return k
 
 
-def _summary(tc, cfg, source_fc):
+def _voigt(kappa):
+    """(n_T, 6) Voigt kappa [xx, yy, zz, yz, xz, xy] of the first sigma, or None."""
+    k = np.asarray(kappa, float)
+    if k.ndim >= 2 and k.shape[-1] == 6:
+        return k.reshape(-1, k.shape[-2], 6)[0]
+    return None
+
+
+def _tensor(v):
+    xx, yy, zz, yz, xz, xy = v
+    return np.array([[xx, xy, xz], [xy, yy, yz], [xz, yz, zz]], float)
+
+
+def _summary(tc, cfg, source_fc, mesh=None):
     T = [float(x) for x in np.asarray(tc.temperatures, float).reshape(-1)]
     raw = [[float(v) for v in row] for row in _flat_kappa(tc.kappa)]
     n = min(len(T), len(raw))
     T, raw = T[:n], raw[:n]
     j = int(np.argmin(np.abs(np.asarray(T) - 300.0)))
+    extra = {}
+    voigt = _voigt(tc.kappa)
+    if voigt is not None and len(voigt) >= n:
+        voigt = voigt[:n]
+        # The Cartesian xx/yy/zz follow the POSCAR orientation; for a cell that
+        # is not in the standard setting (e.g. a rhombohedral primitive cell)
+        # they are not the crystal axes.  The eigenvalues are.
+        extra = {
+            "kappa_voigt_xx_yy_zz_yz_xz_xy": [[float(x) for x in r] for r in voigt],
+            "kappa_principal_300K": sorted(
+                float(x) for x in np.linalg.eigvalsh(_tensor(voigt[j]))),
+            "kappa_avg_300K": float(np.trace(_tensor(voigt[j])) / 3.0),
+        }
     return {
         "KAPPA_DONE": True,
         "solver": "phono3py",
         "bte_method": str(cfg.get("bte_method") or "rta"),
-        "mesh": cfg["mesh"],
+        "mesh": mesh if mesh is not None else cfg["mesh"],
         "nac": bool(cfg.get("nac")),
         "isotope": bool(cfg.get("isotope", True)),
         "temperatures": T,
@@ -62,23 +103,169 @@ def _summary(tc, cfg, source_fc):
         "kappa_300K_xx_yy_zz": raw[j],
         "kappa_inplane_300K": 0.5 * (raw[j][0] + raw[j][1]),
         "source_fc": source_fc,
+        **extra,
     }
 
 
-def _run_bte(out, yaml_name, fc2, fc3, cfg, source_fc, write_kappa):
+def _mesh_spec(cfg):
+    """('explicit', [n,n,n]) | ('length', L) from cfg['mesh']."""
+    m = str(cfg.get("mesh") or "auto").strip().lower()
+    if m == "auto":
+        return "length", float(cfg.get("mesh_length") or 50.0)
+    parts = m.split()
+    if len(parts) == 3:
+        return "explicit", [int(x) for x in parts]
+    if len(parts) == 1:
+        return "length", float(parts[0])
+    sys.exit("[ERROR] MESH must be auto, a length or three integers, got %r"
+             % cfg.get("mesh"))
+
+
+def _vacuum_axis(ph3):
+    """Primitive axis with the shortest reciprocal vector (largest height)."""
+    rec = np.linalg.inv(np.asarray(ph3.primitive.cell, float))  # columns = b_i
+    return int(np.argmin(np.linalg.norm(rec, axis=0)))
+
+
+def _apply_mesh(ph3, spec, cfg):
+    """Set ph3.mesh_numbers from spec and return the mesh actually used."""
+    kind, val = spec
+    if kind == "explicit":
+        ph3.mesh_numbers = list(val)
+    else:
+        # phono3py turns a scalar into a symmetry-consistent mesh on the
+        # primitive cell (same convention as phonopy's mesh length).
+        ph3.mesh_numbers = float(val)
+    mesh = [int(x) for x in np.asarray(ph3.mesh_numbers).reshape(-1)[:3]]
+    if cfg.get("is_2d") and cfg.get("mesh_2d_vacuum", True):
+        vac = _vacuum_axis(ph3)
+        if mesh[vac] != 1:
+            mesh[vac] = 1
+            ph3.mesh_numbers = mesh
+            mesh = [int(x) for x in np.asarray(ph3.mesh_numbers).reshape(-1)[:3]]
+    return mesh
+
+
+def _run_bte(out, yaml_name, fc2, fc3, cfg, source_fc, write_kappa, spec=None):
     import phono3py
-    mesh = [int(x) for x in str(cfg["mesh"]).split()]
     ph3 = phono3py.load(str(out / yaml_name), produce_fc=False,
                         is_nac=bool(cfg.get("nac")), log_level=0)
     _load_fc(ph3, out, fc2, fc3, cfg.get("enable_fc"))
-    ph3.mesh_numbers = mesh
+    mesh = _apply_mesh(ph3, spec or _mesh_spec(cfg), cfg)
+    print("[..] BTE mesh %s" % mesh, flush=True)
     ph3.init_phph_interaction()
     ph3.run_thermal_conductivity(
         is_LBTE=(str(cfg.get("bte_method") or "rta").lower() == "lbte"),
         temperatures=[float(x) for x in cfg["temperatures"]],
         is_isotope=bool(cfg.get("isotope", True)),
         write_kappa=write_kappa, log_level=1)
-    return _summary(ph3.thermal_conductivity, cfg, source_fc)
+    return _summary(ph3.thermal_conductivity, cfg, source_fc,
+                    mesh=" ".join(str(x) for x in mesh))
+
+
+def _kappa_at(s, t):
+    """Voigt kappa (or xx/yy/zz) at the temperature closest to t."""
+    T = np.asarray(s["temperatures"], float)
+    j = int(np.argmin(np.abs(T - float(t))))
+    rows = s.get("kappa_voigt_xx_yy_zz_yz_xz_xy") or s["kappa_xx_yy_zz"]
+    return np.asarray(rows[j], float), float(T[j])
+
+
+def _mesh_change(prev, cur, t):
+    """max |d kappa_ij| / max |kappa_ii| between two runs (whole tensor)."""
+    a, _ = _kappa_at(prev, t)
+    b, tt = _kappa_at(cur, t)
+    scale = float(np.max(np.abs(b[:3])))
+    if scale <= 0:
+        return None, tt
+    return float(np.max(np.abs(b - a)) / scale), tt
+
+
+def _converge_mesh(out, yaml_name, fc2, fc3, cfg, source_fc, first=None):
+    """Densify the mesh until kappa stops changing.  Returns the summary of the
+    last (densest converged) mesh, with a mesh_convergence report attached.
+
+    first: optional (length, summary) already computed at the starting length
+    (reused so the cutoff scan's run is not repeated)."""
+    kind, L = _mesh_spec(cfg)
+    conv = str(cfg.get("mesh_conv") or "off").lower() not in (
+        "off", "false", "0", "no", "none", "")
+    if kind == "explicit" or not conv:
+        if first is not None:
+            return first[1]
+        return _run_bte(out, yaml_name, fc2, fc3, cfg, source_fc, True,
+                        spec=(kind, L))
+    tol = float(cfg.get("mesh_conv_tol_pct") or 3.0) / 100.0
+    fac = float(cfg.get("mesh_conv_factor") or 1.25)
+    lmax = float(cfg.get("mesh_conv_max_length") or 150.0)
+    pmax = int(cfg.get("mesh_conv_max_points") or 64000)
+    t_chk = float(cfg.get("mesh_conv_t") or 300.0)
+    if fac <= 1.0:
+        sys.exit("[ERROR] MESH_CONV_FACTOR must be > 1")
+
+    import phono3py
+    probe = phono3py.load(str(out / yaml_name), produce_fc=False, is_nac=False,
+                          log_level=0)
+
+    def _next_length(L, done_mesh):
+        """Smallest L' >= L (in factor steps) whose mesh differs from done_mesh."""
+        while L <= lmax + 1e-9:
+            m = _apply_mesh(probe, ("length", L), cfg)
+            if " ".join(map(str, m)) != done_mesh:
+                return L, m
+            L *= fac
+        return None, None
+
+    recs, prev, converged, stop = [], None, False, ""
+    if first is not None:
+        prev = first[1]
+        recs.append({"length": round(float(first[0]), 3), "mesh": prev["mesh"],
+                     "kappa_at_T": _kappa_at(prev, t_chk)[0].tolist(),
+                     "rel_change": None})
+        L = float(first[0]) * fac
+    while True:
+        L, m = _next_length(L, prev["mesh"] if prev else None)
+        if L is None:
+            stop = "MESH_CONV_MAX_LENGTH=%g reached" % lmax
+            break
+        if prev is not None and int(np.prod(m)) > pmax:
+            stop = "MESH_CONV_MAX_POINTS=%d exceeded by mesh %s" % (pmax, m)
+            break
+        print("[..] 网格收敛：L=%.1f A -> mesh %s" % (L, m), flush=True)
+        s = _run_bte(out, yaml_name, fc2, fc3, cfg, source_fc, True,
+                     spec=("length", L))
+        rel, tt = (None, t_chk) if prev is None else _mesh_change(prev, s, t_chk)
+        recs.append({"length": round(L, 3), "mesh": s["mesh"],
+                     "kappa_at_T": _kappa_at(s, t_chk)[0].tolist(),
+                     "rel_change": rel})
+        print("    mesh %-10s kappa(%gK)=%s  change=%s"
+              % (s["mesh"], tt, np.round(_kappa_at(s, t_chk)[0][:3], 4),
+                 "-" if rel is None else "%.2f%%" % (100 * rel)), flush=True)
+        prev = s
+        if rel is not None and rel < tol:
+            converged = True
+            break
+        L *= fac
+    if prev is None:
+        sys.exit("[ERROR] 起始网格长度 MESH_LENGTH 已超过 MESH_CONV_MAX_LENGTH")
+    rep = {"converged": converged, "tol_pct": 100 * tol, "check_T": t_chk,
+           "factor": fac, "stop_reason": stop or "converged",
+           "criterion": "max|d kappa_ij| / max|kappa_ii| between consecutive "
+                        "meshes (whole tensor, first sigma)",
+           "records": recs}
+    (out / "mesh_convergence.json").write_text(
+        json.dumps(rep, indent=2, ensure_ascii=False), encoding="utf-8",
+        newline="\n")
+    if not converged:
+        print("[WARN] q 网格未收敛（%s）—— 结果取最密网格 %s，见 mesh_convergence.json；"
+              "可调大 MESH_CONV_MAX_LENGTH/MESH_CONV_MAX_POINTS 或放宽 MESH_CONV_TOL_PCT"
+              % (stop, prev["mesh"]), flush=True)
+    else:
+        print("[OK] q 网格收敛：mesh %s（相邻变化 %.2f%% < %.1f%%）"
+              % (prev["mesh"], 100 * recs[-1]["rel_change"], 100 * tol), flush=True)
+    prev["mesh_converged"] = converged
+    prev["mesh_convergence"] = rep
+    return prev
 
 
 def _cut_of_tag(tag):
@@ -155,25 +342,33 @@ def main():
             sys.exit("[ERROR] 没有可用截断（数据量/稳定性不足）—— 见 cutoff_selection.json")
         tag = ("%.2f" % chosen).replace(".", "p")
         s = by_tag[tag]
+        # The scan ran at the starting mesh; now converge the mesh on the
+        # chosen cutoff's force constants (the scan point is reused).
+        s = _converge_mesh(out, yaml_name, "cut3_%s/fc2.hdf5" % tag,
+                           "cut3_%s/fc3.hdf5" % tag, cfg,
+                           "cutoff_scan/cut3_%s" % tag,
+                           first=(_mesh_spec(cfg)[1], s))
         s["cutoff_selection"] = rep
         s["chosen_cutoff_A"] = chosen
         (out / "kappa_summary.json").write_text(
             json.dumps(s, indent=2, ensure_ascii=False), encoding="utf-8",
             newline="\n")
-        print("[DONE] 选中 c3=%.2f A | 300K in-plane %.4f W/mK -> kappa_summary.json"
-              % (chosen, s["kappa_inplane_300K"]), flush=True)
+        print("[DONE] 选中 c3=%.2f A | mesh %s | 300K in-plane %.4f W/mK "
+              "-> kappa_summary.json"
+              % (chosen, s["mesh"], s["kappa_inplane_300K"]), flush=True)
         return
 
     # nominal: single cutoff
-    s = _run_bte(out, yaml_name, "fc2.hdf5", "fc3.hdf5", cfg,
-                 cfg.get("source_fc"), write_kappa=True)
+    s = _converge_mesh(out, yaml_name, "fc2.hdf5", "fc3.hdf5", cfg,
+                       cfg.get("source_fc"))
     (out / "kappa_summary.json").write_text(
         json.dumps(s, indent=2, ensure_ascii=False), encoding="utf-8",
         newline="\n")
-    print("[DONE] kappa_summary.json | 300K in-plane %.4f W/mK "
-          "(xx=%.4f yy=%.4f zz=%.4f)"
-          % (s["kappa_inplane_300K"], s["kappa_300K_xx_yy_zz"][0],
-             s["kappa_300K_xx_yy_zz"][1], s["kappa_300K_xx_yy_zz"][2]),
+    print("[DONE] kappa_summary.json | mesh %s | 300K in-plane %.4f W/mK "
+          "(xx=%.4f yy=%.4f zz=%.4f; principal %s)"
+          % (s["mesh"], s["kappa_inplane_300K"], s["kappa_300K_xx_yy_zz"][0],
+             s["kappa_300K_xx_yy_zz"][1], s["kappa_300K_xx_yy_zz"][2],
+             s.get("kappa_principal_300K")),
           flush=True)
 
 

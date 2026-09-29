@@ -287,6 +287,88 @@ def test_cut3_select():
     check("数据不足 -> no_usable_cutoff",
           c3 is None and rep3["status"] == "no_usable_cutoff", str(rep3["status"]))
 
+def test_kappa_mesh_auto():
+    print("[10] step2_kappa q 网格 auto + 收敛测试")
+    import importlib.util
+    import json
+    import types
+    import numpy as np
+    base = ROOT / "skill" / "fit-fc-thermal"
+    spec = importlib.util.spec_from_file_location(
+        "kd_mesh", str(base / "kappa_driver.py"))
+    kd = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(kd)
+    check("MESH=auto -> 长度 MESH_LENGTH",
+          kd._mesh_spec({"mesh": "auto", "mesh_length": 40}) == ("length", 40.0))
+    check("MESH=60 -> 长度 60", kd._mesh_spec({"mesh": "60"}) == ("length", 60.0))
+    check("MESH=n n n -> 显式",
+          kd._mesh_spec({"mesh": "8 8 4"}) == ("explicit", [8, 8, 4]))
+
+    # 真空轴 = 倒格矢最短的原胞轴（不是看实空间最长边）
+    class _Prim:
+        cell = np.array([[3.0, 0, 0], [0, 3.0, 0], [0, 0, 20.0]])
+    ph = types.SimpleNamespace(primitive=_Prim())
+    check("2D 真空轴取倒格矢最短轴", kd._vacuum_axis(ph) == 2)
+
+    # 整个张量判收敛（含非对角元），相对最大对角元
+    a = {"temperatures": [300.0], "kappa_voigt_xx_yy_zz_yz_xz_xy": [[2, 2, 1, 0, 0, 0]]}
+    b = {"temperatures": [300.0], "kappa_voigt_xx_yy_zz_yz_xz_xy": [[2, 2, 1, 0, 0, 0.1]]}
+    rel, _t = kd._mesh_change(a, b, 300)
+    check("收敛判据含非对角元 (0.1/2=5%)", abs(rel - 0.05) < 1e-12, str(rel))
+
+    # 模拟 BTE：κ = 1 + 1/n，逐档加密直到相邻变化 < tol，取较密那档
+    calls = []
+
+    def fake_apply(_ph3, sp, _cfg):
+        if sp[0] == "explicit":
+            return list(sp[1])
+        n = max(1, int(round(sp[1] * 0.3)))
+        return [n, n, n]
+
+    def fake_run(_out, _y, _f2, _f3, cfg, _src, _w, spec=None):
+        n = fake_apply(None, spec, cfg)[0]
+        calls.append(n)
+        k = 1.0 + 1.0 / n
+        return {"temperatures": [300.0], "mesh": "%d %d %d" % (n, n, n),
+                "kappa_xx_yy_zz": [[k, k, k]],
+                "kappa_voigt_xx_yy_zz_yz_xz_xy": [[k, k, k, 0, 0, 0]]}
+
+    fake_p3 = types.ModuleType("phono3py")
+    fake_p3.load = lambda *a, **k: object()
+    old_mod = sys.modules.get("phono3py")
+    sys.modules["phono3py"] = fake_p3
+    kd._apply_mesh, kd._run_bte = fake_apply, fake_run
+    try:
+        with tempfile.TemporaryDirectory() as td:
+            out = Path(td)
+            cfg = {"mesh": "auto", "mesh_length": 20, "mesh_conv": "auto",
+                   "mesh_conv_tol_pct": 3.0, "mesh_conv_factor": 1.25,
+                   "mesh_conv_max_length": 300, "mesh_conv_max_points": 10 ** 9,
+                   "mesh_conv_t": 300}
+            s = kd._converge_mesh(out, "y", "fc2", "fc3", cfg, "src")
+            rep = json.loads((out / "mesh_convergence.json").read_text())
+            check("网格收敛：converged 且取最后（较密）一档",
+                  s["mesh_converged"] and s["mesh"] == rep["records"][-1]["mesh"],
+                  str(rep))
+            check("网格收敛：相邻变化 < 3%",
+                  rep["records"][-1]["rel_change"] < 0.03, str(rep["records"][-1]))
+            check("网格收敛：不重复跑同一网格", len(calls) == len(set(calls)), str(calls))
+            calls.clear()
+            cfg2 = dict(cfg, mesh_conv_max_length=30)
+            s2 = kd._converge_mesh(out, "y", "fc2", "fc3", cfg2, "src")
+            check("触顶未收敛 -> mesh_converged=False",
+                  s2["mesh_converged"] is False, str(s2.get("mesh_convergence")))
+            calls.clear()
+            s3 = kd._converge_mesh(out, "y", "fc2", "fc3",
+                                   dict(cfg, mesh="8 8 8"), "src")
+            check("显式网格不做收敛（只跑一次）", len(calls) == 1 and
+                  "mesh_converged" not in s3, str(calls))
+    finally:
+        if old_mod is None:
+            sys.modules.pop("phono3py", None)
+        else:
+            sys.modules["phono3py"] = old_mod
+
 def main():
     test_shells_and_candidates()
     test_resolve()
@@ -296,6 +378,7 @@ def main():
     test_kl_bundle_reuse()
     test_kappa_step()
     test_cut3_select()
+    test_kappa_mesh_auto()
     print("\nsuite_fcfit_shell: %s（%d 项）"
           % ("ALL PASS" if not FAIL else "FAIL", N))
     return 1 if FAIL else 0

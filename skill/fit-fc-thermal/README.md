@@ -46,7 +46,9 @@ autozt -tt fit-fc-thermal -p <material> -j step1_fit \
 autozt -tt fit-fc-thermal -p <material> start                     # generate inputs + submit
 autozt -tt fit-fc-thermal -p <material> status                    # collect and inspect
 
-# κ 参数（BTE 网格 / 温度 / 同位素 / 解法）走 step2_kappa 的 step.conf：
+# κ 参数（BTE 网格 / 温度 / 同位素 / 解法）走 step2_kappa 的 step.conf。
+# 默认 MESH=auto + MESH_CONV=auto：按倒格矢自动定网格并自动做 q 网格收敛；
+# 要固定网格（不做收敛）：
 autozt -tt fit-fc-thermal -p <material> -j step2_kappa \
    conf --set params.MESH="16 16 16"
 ~~~
@@ -296,12 +298,39 @@ three-phonon BTE (RTA by default, `BTE_METHOD = lbte` for the full solver),
 writing `kappa_summary.json`:
 
 ~~~json
-{"KAPPA_DONE": true, "bte_method": "rta", "mesh": "24 24 24", "nac": false,
+{"KAPPA_DONE": true, "bte_method": "rta", "mesh": "18 18 18", "nac": false,
+ "mesh_converged": true,
  "temperatures": [100, 200, 300, ...], "kappa_xx_yy_zz": [[...], ...],
  "kappa_300K_xx_yy_zz": [xx, yy, zz], "kappa_inplane_300K": 0.5*(xx+yy)}
 ~~~
 
-* Keys live in `step2_kappa/step.conf`: `MESH`, `T_MIN/T_MAX/T_STEP`,
+* **q-mesh: automatic + converged by default.**  `MESH = auto` sizes the mesh
+  from the reciprocal lattice of phono3py's primitive cell with the phonopy
+  length convention `n_i = max(1, round(MESH_LENGTH * |b_i|))` (`|b_i|` in 1/A,
+  no 2pi; phono3py makes it symmetry-consistent), so a small cell gets a dense
+  mesh and a big cell a sparse one without editing anything.  Note it is the
+  reciprocal length that matters: a rhombohedral primitive cell with 16 A edges
+  and a 14 deg angle has `|b| = 0.29 1/A`, i.e. the density of a 3.5 A cube.
+  `MESH_CONV = auto` then reruns the BTE with `L *= MESH_CONV_FACTOR` (1.25)
+  until the whole kappa tensor at `MESH_CONV_T` (300 K) changes by less than
+  `MESH_CONV_TOL_PCT` (3 %) between two consecutive meshes, capped by
+  `MESH_CONV_MAX_LENGTH` (150 A) and `MESH_CONV_MAX_POINTS` (64000 q-points).
+  The denser mesh of the converged pair is reported; every point goes to
+  `mesh_convergence.json`, and `kappa_summary.json` carries `mesh`,
+  `mesh_converged` and `mesh_convergence`.  Hitting a cap leaves
+  `mesh_converged: false` with a warning (the densest mesh is still reported).
+  With a cutoff scan the scan runs at the starting mesh, then the chosen
+  cutoff is converged in mesh.  `MESH = "n n n"` keeps the old fixed-mesh
+  behaviour (no convergence); `MESH = 60` is a fixed starting length.
+  No single default length is safe for every material (high-kappa, light-atom
+  or low-T work needs denser meshes than a low-kappa complex cell), which is
+  why the convergence loop is on by default rather than a bigger fixed mesh.
+* `kappa_summary.json` also carries the full tensor
+  (`kappa_voigt_xx_yy_zz_yz_xz_xy`), its eigenvalues `kappa_principal_300K`
+  and `kappa_avg_300K` (trace/3): the Cartesian xx/yy/zz follow the POSCAR
+  orientation and are not the crystal axes for a non-standard cell.
+* Keys live in `step2_kappa/step.conf`: `MESH`, `MESH_LENGTH`, `MESH_CONV*`,
+  `T_MIN/T_MAX/T_STEP`,
   `ISOTOPE`, `NAC` (auto = on iff `S1_fit/BORN` exists), `BTE_METHOD`,
   `P3PY_OMP_THREADS` (phono3py is OpenMP-only: 1 process x N threads, never
   `mpirun`), `SBATCH_QOS`, `MESH_2D_VACUUM`.
@@ -310,7 +339,9 @@ writing `kappa_summary.json`:
   `fc_dataset.json` when the fit engine produced none), sets fc2/fc3 from the
   hdf5 and runs the BTE.  The third-order interaction is the fitted fc3; this
   step never re-fits.
-* 2D: `MESH_2D_VACUUM = on` (default) pins the vacuum-axis mesh to 1.
+* 2D: `MESH_2D_VACUUM = on` (default) pins the vacuum-axis mesh to 1 (the
+  primitive axis with the shortest reciprocal vector, resolved on the compute
+  node in phono3py's primitive basis).
 * **Cutoff chosen by kappa** (`CUT3_KAPPA_SCAN = auto`, default): when `S1_fit`
   ran with `CUT3_SCAN = auto` (default) it refits fc3 at every candidate cutoff
   into `cutoff_scan/cut3_<c>/`.  `S2_kappa` then runs the BTE once per candidate
@@ -320,9 +351,10 @@ writing `kappa_summary.json`:
   `cutoff_selection.json` and promoting the chosen cutoff's kappa to the
   top-level `kappa_summary.json` (`chosen_cutoff_A`).  `CUT3_PICK = smallest`
   (default) takes the smallest cutoff satisfying all three; `not_converged`
-  reports the largest data-determined cutoff.  With `CUT3_SCAN = off` (or a
-  phono3py/hiphive fit, which does not write per-cut dirs yet) it falls back to
-  the nominal cutoff.
+  reports the largest data-determined cutoff.  A phono3py fit writes per-cut
+  dirs too (no bootstrap, so only the kappa plateau discriminates).  With
+  `CUT3_SCAN = off` (or a hiphive fit, which does not write per-cut dirs yet) it
+  falls back to the nominal cutoff.
 * **Cutoff cap**: fc3 can only be trusted up to half the supercell's smallest
   periodic width (5.27 A for the 3x3x3 / 189-atom cell).  Candidates beyond it
   are dropped.  To sweep larger cutoffs, regenerate the dataset with a larger

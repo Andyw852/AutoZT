@@ -481,9 +481,10 @@ def main():
     except Exception as _e:                              # noqa: BLE001
         _cnote = "shell enumeration failed: %s" % _e
     print("[..] 壳层/截断候选：%s" % _cnote)
-    _safe = None
+    _safe, _nsc = None, 0
     try:
-        _sc_cell, _ = fc.read_poscar_cell_frac(src / "SPOSCAR")
+        _sc_cell, _sc_frac = fc.read_poscar_cell_frac(src / "SPOSCAR")
+        _nsc = len(_sc_frac)
         _safe = fc.supercell_safe_cutoff(_sc_cell)
     except Exception:
         _safe = None
@@ -522,6 +523,23 @@ def main():
                 if _v > _safe + 1e-9:
                     print("[WARN] %s=%.2f > 超胞安全截断 %.2f Å：周期镜像会重复计数，"
                           "建议降到 <= %.2f" % (_k, _v, _safe, _safe), flush=True)
+        # pheasy / phono3py 的 fc3 截断同理（空 = 不截断：phono3py 全超胞 fc3，
+        # 大超胞内存爆；pheasy 不截断同样会越过镜像）。只告警，不改用户值。
+        _c3key = {"pheasy": "PHEASY_C3_CUTOFF",
+                  "phono3py": "FC3_CUTOFF"}.get(engine)
+        if _c3key and enable >= 3:
+            _raw = str(conf[_c3key] or "").strip()
+            try:
+                _v = float(_raw) if _raw else None
+            except ValueError:
+                _v = None
+            if _v is None and _raw == "":
+                print("[WARN] %s 为空 = fc3 不截断：超胞 %d 原子时内存/耗时很大，"
+                      "建议设 <= 超胞安全截断 %.2f Å" % (_c3key, _nsc, _safe),
+                      flush=True)
+            elif _v is not None and _v > _safe + 1e-9:
+                print("[WARN] %s=%.2f > 超胞安全截断 %.2f Å：周期镜像会重复计数，"
+                      "建议降到 <= %.2f" % (_c3key, _v, _safe, _safe), flush=True)
     _scan_req = str(conf["CUT3_SCAN"] or "off").strip().lower()
     if _scan_req not in ("off", "none", "false", "no", "0", "auto", "on", "true",
                          "1", "yes"):
@@ -534,8 +552,10 @@ def main():
     print("[..] CUT3_SCAN=%s（候选 %d 档）→ %s"
           % (conf["CUT3_SCAN"], len(_cands), "逐档扫描" if _scan else "单截断"))
     if _scan and engine != "pheasy":
-        print("[..] 拟合器=%s：本步只做单档壳层报告；逐档 refit + bootstrap 仅 pheasy 有"
-              % engine)
+        print("[..] 拟合器=%s：%s" % (engine, (
+            "逐档 refit 写 cutoff_scan/cut3_<c>/（无 bootstrap，S2_kappa 只按 κ 平台选）"
+            if engine == "phono3py" else
+            "本步只做单档壳层报告；逐档 refit + bootstrap 仅 pheasy 有")))
 
     cfg = {
         "engine": engine,

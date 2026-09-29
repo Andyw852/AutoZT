@@ -69,6 +69,7 @@ fetch_files: [POSCAR, SPOSCAR, phono3py_disp.yaml, phono3py_params.yaml,
               fc_fit_summary.json, band-dft-cpu.yaml,
               # 热导率（S2_kappa）：kappa_summary.json + phono3py 的 κ 网格文件
               kappa_summary.json, kappa_config.json, cutoff_selection.json,
+              mesh_convergence.json,
               kappa-m242424.hdf5,
               kappa-m161616.hdf5, phono3py_kappa.log,
               submit.sh, queue.out, queue.err]
@@ -124,7 +125,7 @@ io_schema:
     - {name: kappa_summary.json, step: S2_kappa, type: json, desc: "最终产物：晶格热导率 κ(T) 及 300K 各分量"}
   params:
     - {name: FIT_ENGINE, values: [phono3py, pheasy, hiphive], default: phono3py, where: step.conf, desc: "力常数拟合引擎"}
-    - {name: MESH, default: "24 24 24", where: step.conf, desc: "BTE q 网格（原胞基矢序）"}
+    - {name: MESH, default: auto, where: step.conf, desc: "BTE q 网格：auto=按倒格矢自动+收敛测试（MESH_LENGTH/MESH_CONV*）| 长度 | \"n n n\" 显式"}
     - {name: BTE_METHOD, values: [rta, lbte], default: rta, where: step.conf, desc: "BTE 解法；rta 便宜、lbte 准但贵"}
     - {name: ISOTOPE, default: true, where: step.conf, desc: "同位素散射"}
     - {name: T_MIN/T_MAX/T_STEP, default: "100/800/100", where: step.conf, desc: "温度扫描 (K)"}
