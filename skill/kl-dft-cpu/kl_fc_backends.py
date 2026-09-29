@@ -203,8 +203,16 @@ def cmd_prep(cfg):
 
     # kleq：平衡帧的残余力（未完全弛豫 / egg-box 都体现在这里），逐帧扣掉。
     f_eq = _read_forces([eq_file], nsc)[0]
-    print("[..] 平衡帧 max|F_eq| = %.4f eV/Å（逐帧扣除）"
-          % float(np.linalg.norm(f_eq, axis=1).max()))
+    f_eq_max = float(np.linalg.norm(f_eq, axis=1).max())
+    print("[..] 平衡帧 max|F_eq| = %.4f eV/Å（逐帧扣除）" % f_eq_max)
+    # 残余力闸（EQ_FORCE_MAX）：扣除只修正一阶项，参考结构离能量极小太远时 fc2 本身就偏了。
+    #   0 = 关闭此闸。
+    _fmax = float(cfg.get("EQ_FORCE_MAX") or 0.0)
+    if _fmax > 0 and f_eq_max > _fmax:
+        sys.exit("[ERROR] 平衡帧残余力 max|F_eq| = %.4f eV/Å > EQ_FORCE_MAX = %.3f "
+                 "—— 参考结构没弛豫好，先重新弛豫再生成数据集（确要硬跑：调大 "
+                 "EQ_FORCE_MAX，0 = 关闭此闸）"
+                 % (f_eq_max, _fmax))
 
     n_all = len(files) + len(missing)
     if missing:
@@ -285,10 +293,35 @@ def cmd_prep(cfg):
 
 
 # ==========================================================================
-# fit_phono3py：phono3py + symfc/alm → full fc2/fc3 → phono3py/
+# fit_phono3py：phono3py + symfc/alm → full fc2 / compact fc3 → phono3py/
 # ==========================================================================
+def _expand_compact_fc3(fc3c, prim):
+    """(n_prim,N,N,3,3,3) -> (N,N,N,3,3,3) by lattice translations.
+
+    ShengBTE 导出（hiphive）需要 full fc3；phono3py-load 的 κ 是原生读 compact 的，
+    只有这条导出路径要展开。优先用 phono3py 自带的 compact_fc3_to_full_fc3，
+    老版本没有就按原子置换（atomic_permutations）手工铺开。
+    """
+    import numpy as np
+    try:
+        from phono3py.phonon3.fc3 import compact_fc3_to_full_fc3
+        return compact_fc3_to_full_fc3(prim, fc3c)
+    except ImportError:
+        pass
+    # 老 phono3py：fc3[t(s), t(j), t(k)] = fc3[s, j, k]，对超胞的每个格矢平移 t
+    # （atomic_permutations 就是这些平移）。
+    n = int(fc3c.shape[1])
+    full = np.zeros((n, n, n, 3, 3, 3), dtype="double")
+    p2s = np.asarray(prim.p2s_map, dtype="int64")
+    for t in np.asarray(prim.atomic_permutations, dtype="int64"):
+        for ip, s in enumerate(p2s):
+            full[t[s]][np.ix_(t, t)] = fc3c[ip]
+    return full
+
+
 def cmd_fit_phono3py(cfg):
     from phono3py.file_IO import write_fc2_to_hdf5, write_fc3_to_hdf5
+    import numpy as np
 
     out = Path.cwd()
     p3dir = out / P3PY_SUB
@@ -297,13 +330,18 @@ def cmd_fit_phono3py(cfg):
     ph3 = _load_ph3_with_forces(out / "phono3py_disp.yaml")
 
     print("[..] phono3py 拟合器=%s  fc3_cutoff=%s" % (calc, cutoff))
-    # full fc（is_compact_fc=False）：既给 phono3py-load κ，也便于就地喂 hiphive 导 ShengBTE。
+    # fc2 保持 full (N,N,3,3)：小，phonopy/出图/ShengBTE 都原样读它。
+    # fc3 写 compact (n_prim,N,N,3,3,3)+p2s_map：full 数组是 N/n_prim 倍大（243 原子超胞
+    #   压缩后 3.1 GB -> 0.7 MB），produce full 还需 >15 GB；phono3py-load κ 原生读
+    #   compact，只有 ShengBTE 导出要按需展开（_expand_compact_fc3）。
     ph3.produce_fc2(fc_calculator=calc, is_compact_fc=False)
+    fc2_full = np.array(ph3.fc2, copy=True)
     opts = None if cutoff in (None, "None", "none", "") else "cutoff = %s" % cutoff
-    ph3.produce_fc3(fc_calculator=calc, fc_calculator_options=opts, is_compact_fc=False)
+    ph3.produce_fc3(fc_calculator=calc, fc_calculator_options=opts, is_compact_fc=True)
+    p2s = np.asarray(ph3.primitive.p2s_map, dtype="int64")
 
-    write_fc2_to_hdf5(ph3.fc2, filename=str(p3dir / "fc2.hdf5"))   # full，无 p2s_map
-    write_fc3_to_hdf5(ph3.fc3, filename=str(p3dir / "fc3.hdf5"))
+    write_fc2_to_hdf5(fc2_full, filename=str(p3dir / "fc2.hdf5"))   # full，无 p2s_map
+    write_fc3_to_hdf5(ph3.fc3, filename=str(p3dir / "fc3.hdf5"), p2s_map=p2s)
 
     # NAC → phono3py_params.yaml（有 BORN 才写；供溯源/kappa 备选）
     born = p3dir / "BORN"
@@ -326,10 +364,11 @@ def cmd_fit_phono3py(cfg):
         if not (p3dir / f).is_file():
             sys.exit("[ERROR] phono3py 拟合未产出 %s" % f)
 
-    # ShengBTE 导出：就地用内存里的 full 数组（和 run_phono3py_fit.sh 一致，最稳）
+    # ShengBTE 导出：hiphive 要 full fc3，compact 就地展开成 full（fc3 已 compact，
+    #   只有这条导出路径需要 full 数组；大超胞展开仍可能吃内存，失败/超限时 skip 并
+    #   告警，phono3py 路不受影响）。
     if str(cfg.get("EXPORT_SHENGBTE", "true")).lower() in ("true", "1", "yes"):
-        import numpy as np
-        _export_shengbte(out, np.asarray(ph3.fc2), np.asarray(ph3.fc3))
+        _export_shengbte(out, fc2_full, _expand_compact_fc3(ph3.fc3, ph3.primitive))
     print("[DONE] fit_phono3py：phono3py/fc2.hdf5 + fc3.hdf5 就绪")
 
 

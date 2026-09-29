@@ -72,6 +72,7 @@ SPEC = {
     # —— 缺帧容错（仅随机位移 METHOD=alm 生效；findiff 必须帧帧齐全）——
     "MIN_SUCCESS_RATIO":  (0.9, "float"),  # 成功帧占比下限，低于它报错
     "MIN_SUCCESS_FRAMES": (0,   "int"),    # 成功帧绝对下限，0=不限
+    "EQ_FORCE_MAX":      (0.2, "float"),  # 平衡帧残余力上限(eV/Å)；>它报错；0=关闭
     # —— 导出 & 虚频闸 ——
     "EXPORT_SHENGBTE": (True, "bool"),   # 任一拟合器都产出 shengbte 力常数
     "BAND_POINTS":     (51,   "int"),
@@ -307,6 +308,7 @@ def main():
         "NULL_SPACE_EPS": float(conf["NULL_SPACE_EPS"]),
         "MIN_SUCCESS_RATIO": float(conf["MIN_SUCCESS_RATIO"]),
         "MIN_SUCCESS_FRAMES": int(conf["MIN_SUCCESS_FRAMES"]),
+        "EQ_FORCE_MAX": float(conf["EQ_FORCE_MAX"] or 0.0),
         "EXPORT_SHENGBTE": bool(conf["EXPORT_SHENGBTE"]),
         "BAND_POINTS": int(conf["BAND_POINTS"]),
         "IMAG_THR": float(conf["IMAG_THR"]),
