@@ -101,6 +101,46 @@ class StaleTests(unittest.TestCase):
         self.assertFalse((s8 / "transport.json").exists())
 
 
+class StaleDeformationTests(unittest.TestCase):
+    """patch_stale_dp（V122）：S7.1 重新生成 -> 软链它的 S8/S8.4 与 S8.2（DPT）失效，S8.3 递归失效；
+    没链它的（例如走 MANUAL 形变势的 S8）不动。"""
+
+    def test_s71_regen_invalidates_consumers(self):
+        d = Path(tempfile.mkdtemp())
+        s71 = d / "step7b_deform_read"
+        s71.mkdir()
+        (s71 / "deformation_vac.h5").write_text("h5")
+        (s71 / "band_edges.json").write_text("{}")
+        s84 = d / "step8.4_amset2d"
+        s84.mkdir()
+        (s84 / "deformation.h5").symlink_to(os.path.relpath(s71 / "deformation_vac.h5", s84))
+        (s84 / "transport.json").write_text("{}")
+        (s84 / "intrinsic_transport.json").write_text("{}")
+        s8 = d / "step8_amset"                              # 不链 S7.1 -> 不动
+        s8.mkdir()
+        (s8 / "transport.json").write_text("{}")
+        s82 = d / "step8.2_dpt"
+        s82.mkdir()
+        (s82 / "dpt_result.json").write_text("{}")
+        s83 = d / "step8.3_output"
+        s83.mkdir()
+        (s83 / "comparison_300K.png").write_text("png")
+        down = kc.invalidate_downstream(d, "step7b_deform_read", "test")
+        self.assertFalse((s84 / "transport.json").exists())
+        self.assertFalse((s84 / "intrinsic_transport.json").exists())
+        self.assertTrue((s8 / "transport.json").exists())
+        self.assertFalse((s82 / "dpt_result.json").exists())
+        self.assertFalse((s83 / "comparison_300K.png").exists())     # 经 S8.2 递归
+        self.assertIn(("step8.4_amset2d", "transport.json"), down)
+
+    def test_s71_gen_calls_invalidation_before_regenerating(self):
+        src = (_ROOT / "step7_deform" / "step7b_read" / "gen_step9b_deform_read.py").read_text(
+            encoding="utf-8")
+        i = src.index('kc.invalidate_downstream(cwd, OUTDIR_NAME')
+        j = src.index("amset deform read undeformed")
+        self.assertLess(i, j)
+
+
 class MemTests(unittest.TestCase):
     def test_calibration_points_inside_band(self):
         lo, hi = kc.estimate_amset_mem_gib([263, 263, 21])       # MoS2 实测 91.1 GiB

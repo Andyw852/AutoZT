@@ -12,6 +12,8 @@
             IBZ 且当次打了相位补丁
   ★ WRONG   IBZ + 真实重叠 + 原公式有坏操作 + 没打补丁 —— **静默算错**，要重算；
             全网格 h5 + 真实重叠 + 有 k 点标签不在 (-0.5, 0.5]（V117：from_data 贴错系数标签）
+  ⚠ STALE-DP 形变势 h5 没有 dp_symmetrized 标记 = S7.1 早于 V121 生成（V122：MoS2 同一批形变单点
+            新版 S7.1 重读后电子 ADP 迁移率 198 -> 406）-> 重新 gen S7.1（秒级）再重跑本步
   ?         判不出来（缺结构/缺 settings）
 另外列出 settings.yaml 里写了 EPS_INF_OVERRIDE 注释却可能没生效的旧 S8（见 V115 §8）。
 
@@ -69,7 +71,17 @@ def _run_info(run):
                 offconv = pf.n_offconvention_kpoints(f["kpoints"][()])
         except Exception:                                        # noqa: BLE001
             offconv = None
+    dp_sym = None
+    dh5 = run / "deformation.h5"
+    if dh5.exists():
+        try:
+            import h5py
+            with h5py.File(str(dh5), "r") as f:
+                dp_sym = bool(int(f.attrs.get("dp_symmetrized", 0)))
+        except Exception:                                        # noqa: BLE001
+            dp_sym = None
     return {"settings": bool(txt), "unity": unity, "h5_src": src, "offconv": offconv,
+            "dp_sym": dp_sym,
             "fix": "# AZ_DESYM_FIX=1" in txt,
             "transport": (run / "transport.json").is_file()}
 
@@ -109,6 +121,9 @@ def audit(root, pattern):
             else:
                 verdict, why = "★ WRONG", ("IBZ + 真实重叠，原公式 %d/%d 个操作算错、没打补丁 -> 静默算错"
                                           % (bad, tot))
+            # V122：判据 OK 但形变势是旧版 S7.1 生成的 -> 结果要重跑（ADP 可差一倍）
+            if verdict == "OK" and r["dp_sym"] is False:
+                verdict, why = "⚠ STALE-DP", why + "；但形变势 h5 未对称化（S7.1 早于 V121）-> 重新 gen S7.1 再重跑"
             rows.append({"material": str(mat.relative_to(root)), "run": run_name,
                          "verdict": verdict, "why": why, "h5_src": r["h5_src"],
                          "unity": r["unity"], "desym_fix": r["fix"],
@@ -132,7 +147,8 @@ def main(argv=None):
         print("%-*s  %-15s  %-8s  %s%s" % (w, r["material"], r["run"], r["verdict"], r["why"],
                                            "" if r["transport"] else "（无 transport.json）"))
     n_bad = sum(1 for r in rows if r["verdict"].startswith("★"))
-    print("\n共 %d 个运行目录，★ 静默算错 %d 个" % (len(rows), n_bad))
+    n_stale = sum(1 for r in rows if r["verdict"].startswith("⚠"))
+    print("\n共 %d 个运行目录，★ 静默算错 %d 个，⚠ 形变势过期 %d 个" % (len(rows), n_bad, n_stale))
     if a.csv:
         with open(a.csv, "w", newline="", encoding="utf-8") as f:
             wr = csv.DictWriter(f, fieldnames=list(rows[0]))

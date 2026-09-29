@@ -270,6 +270,11 @@ DOWNSTREAM = {
                             ("step8.4_amset2d", "link")],
     "step4_wave": [("step8_amset", "link"), ("step8.4_amset2d", "link")],
     "step4b_wave_full": [("step8_amset", "link"), ("step8.4_amset2d", "link")],
+    # [patch_stale_dp V122] S7.1 重新生成 = 形变势 h5 与 band_edges.json 变了：软链它的 S8/S8.4 与读
+    #   band_edges.json 的 S8.2（DPT）一并失效。MoS2 实测：同一批形变单点、新版 S7.1 重读后电子 ADP
+    #   迁移率 198 -> 406，而旧 transport.json 仍被判"完成"。
+    "step7b_deform_read": [("step8_amset", "link"), ("step8.4_amset2d", "link"),
+                           ("step8.2_dpt", "always")],
     "step8_amset": [("step8.3_output", "always")],
     "step8.1_boltztrap": [("step8.3_output", "always")],
     "step8.2_dpt": [("step8.1_boltztrap", "always"), ("step8.3_output", "always")],
