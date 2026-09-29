@@ -323,6 +323,14 @@ writing `kappa_summary.json`:
   reports the largest data-determined cutoff.  With `CUT3_SCAN = off` (or a
   phono3py/hiphive fit, which does not write per-cut dirs yet) it falls back to
   the nominal cutoff.
+* **Cutoff cap**: fc3 can only be trusted up to half the supercell's smallest
+  periodic width (5.27 A for the 3x3x3 / 189-atom cell).  Candidates beyond it
+  are dropped.  To sweep larger cutoffs, regenerate the dataset with a larger
+  supercell (4x4x4 -> ~7 A).
+* **Per-cut phonon spectra**: `S2_plot` draws the dispersion for the nominal fc2
+  and, when the fit wrote `cutoff_scan/cut3_<c>/`, one dispersion per candidate
+  too (`phonon_band_plot/cut3_<c>/`); the per-cut min/max frequencies land in
+  `phonon_band_summary.json` under `cut3_bands`.
 * The compute host needs `phono3py` + `h5py` (the same env as the fit job).
 ## Artifacts
 

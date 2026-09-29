@@ -349,6 +349,32 @@ class DesymFixModelTests(unittest.TestCase):
         self.assertGreater(rep["formulas"]["fixed"]["min_score_usable"], 1 - 1e-6, dc)
         self.assertLess(rep["formulas"]["fixed"]["min_score"], 0.5, dc)      # 原始最小值仍如实报
 
+    def test_noop_when_all_tau_zero(self):
+        """V119：全部 τ=0（原点对齐的 MoS2 等）时补丁必须**逐位**不改变去对称化结果 ——
+        对齐原点项目的生产结果开补丁前后应完全相同。τ≠0 的好操作（如 σh 的 τz=0.5）只改变每个 k 点
+        的整体相位（规范），AMSET 线性插值系数对规范敏感，网格外重叠会有插值噪声级的差异（见 V119）。"""
+        from amset.electronic_structure.symmetry import expand_kpoints
+        for zmo, expect_same in ((0.5, True), (0.25, False)):
+            st = self.tsg.mos2_aligned().copy()
+            st.translate_sites([0, 1, 2], [0, 0, zmo - 0.5], frac_coords=True)
+            mesh = [6, 6, 3]
+            k_ibz = self.V.ibz_from_mesh(st, mesh)
+            gp = gsphere(st)
+            cf, _ = tb_coeffs(st, k_ibz, gp)
+            full, rots, taus, is_tr, op_map, kp_map = expand_kpoints(
+                st, k_ibz, symprec=0.01, return_mapping=True, time_reversal=True, verbose=False)
+            F = self.V._get_formulas()
+            a = F["orig"]({Spin.up: cf}, gp, k_ibz, st, rots, taus, is_tr, op_map, kp_map, pbar=False)
+            b = F["fixed"]({Spin.up: cf}, gp, k_ibz, st, rots, taus, is_tr, op_map, kp_map, pbar=False)
+            import ke_common as kc
+            self.assertEqual(kc.symmetry_gate(st)["bad_ops"], 0)          # 两种都是 0 坏操作
+            same = np.array_equal(a[Spin.up], b[Spin.up])
+            self.assertEqual(same, expect_same, "z_Mo=%s |tau|max=%.3f" % (zmo, np.abs(taus).max()))
+            # 不论哪种，逐点 |cos| 都相同（只差整体相位）
+            na = np.linalg.norm(a[Spin.up], axis=-1)
+            ov = np.abs(np.sum(np.conj(a[Spin.up]) * b[Spin.up], axis=-1)) / (na * na)
+            self.assertGreater(ov.min(), 1 - 1e-9)
+
     def test_plugin_switch(self):
         """AZ_DESYM_FIX 未设 -> apply() 不动 AMSET；设了 -> 两个模块都被替换。"""
         import os

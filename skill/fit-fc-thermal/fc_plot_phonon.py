@@ -526,9 +526,9 @@ def main():
 
         dr("phonon_band_full.png", lo0 - FULL_PAD, hi0 + FULL_PAD)
         dr("phonon_band_lowfreq.png", min(lo0 - FULL_PAD, -1.0), LOWF_MAX)
-        return lo0, hi0
+        return lo0, hi0, max(len(s) for s in ds)
 
-    fmin, fmax = _draw_band(fc2p, outdir)
+    fmin, fmax, _nq = _draw_band(fc2p, outdir)
 
     # Per-cut phonon bands: every fc3 cutoff candidate written by the S1_fit scan
     # (cutoff_scan/cut3_<c>/fc2.hdf5) gets its own dispersion under
@@ -538,7 +538,7 @@ def main():
         if not (_cd / "fc2.hdf5").is_file():
             continue
         try:
-            _lo, _hi = _draw_band(_cd / "fc2.hdf5", outdir / _cd.name)
+            _lo, _hi, _nq2 = _draw_band(_cd / "fc2.hdf5", outdir / _cd.name)
             cut_bands.append({"cut": float(_cd.name[5:].replace("p", ".")),
                               "dir": _cd.name, "min_frequency_THz": _lo,
                               "max_frequency_THz": _hi})
@@ -552,7 +552,7 @@ def main():
         "min_frequency_THz": fmin,
         "max_frequency_THz": fmax,
         "nac": nac,
-        "n_qpoints": int(len(allf) // max(len(freqs[0][0]), 1)),
+        "n_qpoints": int(_nq),
         "figures": ["phonon_band_full.png", "phonon_band_lowfreq.png"],
         "band_yaml": str((src / "band-dft-cpu.yaml").relative_to(root)),
         "stable_here": bool(fmin >= -0.10),

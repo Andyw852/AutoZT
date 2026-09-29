@@ -493,6 +493,21 @@ def main():
             print("[WARN] 候选截断 %s 超过超胞安全截断 %.2f Å（周期镜像会重复计数），"
                   "已剔除" % (_over, _safe))
         _cands = [c for c in _cands if c <= _safe + 1e-9]
+        # 补齐「安全上限」候选：可能存在壳层落在最后一个中点候选之上、但在安全
+        # 截断之内（例 In2MnSe4：5.10 Å 壳层，安全上限 5.165 Å，而它到下一壳层
+        # 5.41 的中点 5.258 Å 已越界）——只取中点会把这条壳层整条漏掉。
+        # 仅在 CUT3_CANDIDATES=auto 时自动补，显式列表按用户给的跑。
+        if str(conf["CUT3_CANDIDATES"]).strip().lower() == "auto" \
+                and _shells:
+            _top = max([c for c in _cands], default=0.0)
+            _skipped = [s for s in _shells
+                        if _top + 1e-9 < s <= _safe + 1e-9]
+            _extra = float(int(_safe * 100)) / 100.0   # 2 位小数，仍 < safe
+            if _skipped and _extra > _top + 1e-9:
+                _cands = sorted(set(_cands + [_extra]))
+                print("[..] 补齐安全上限候选 %.2f Å（含安全范围内被中点方案漏掉的"
+                      "壳层 %s）" % (_extra,
+                                 ", ".join("%.2f" % s for s in _skipped)))
         print("[..] 超胞安全截断 = %.2f Å → 有效候选 %s" % (_safe, _cands))
         # hiphive 的 HIPHIVE_CUTOFF2/3 同样受超胞安全截断约束（超了会被周期镜像
         # 重复计数；即便不崩，力常数也是错的）。

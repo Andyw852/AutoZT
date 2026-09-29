@@ -257,6 +257,10 @@ def test_kappa_step():
     check("κ (T,3,3) -> 对角",
           kd._flat_kappa(np.arange(9.0).reshape(1, 3, 3)).tolist()
           == [[0.0, 4.0, 8.0]])
+    check("phono3py 逐档扫描函数存在（_phono3py_scan）",
+          "_phono3py_scan" in (base / "fc_fit_driver.py").read_text(encoding="utf-8"))
+    check("每档拟合都出声子谱（fc_plot_phonon 有 cut3_bands）",
+          "cut3_bands" in (base / "fc_plot_phonon.py").read_text(encoding="utf-8"))
 
 def test_cut3_select():
     print("[9] cut3_select.select_cutoff 三判据")
