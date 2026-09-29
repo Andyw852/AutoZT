@@ -230,6 +230,9 @@ WRITE_MESH = False
 #   MANUAL_ELASTIC 填了就用它，否则从 ELASTIC_DIR/OUTCAR 自动解析（kBar→GPa）。
 #   直接填：单个数（各向同性近似，GPa），或 6x6 列表（完整 Cij，GPa）。
 MANUAL_ELASTIC = None
+# patch_tensor_symmetry（2026-09-29，V120）：从 OUTCAR 读的弹性张量按晶体点群对称化（Neumann 原理），
+#   见 ke_common.symmetrize_elastic_for。MANUAL_ELASTIC（显式给定）不动。step.conf 写 false 关掉。
+SYMMETRIZE_ELASTIC = True
 ELASTIC_DIR = "step6_elastic"
 # patch_deform_ref：形变势参考口径（2D 默认真空）。step7b 写出 deformation_vac.h5 就用它，
 # 否则退回 deformation.h5（AMSET 芯态对齐）。实测 CrS2：3.53 -> 5.86 eV，μ 差 2.76 倍。
@@ -315,6 +318,7 @@ SPEC = {
     # patch_eps_inf_override_2d：ε∞ 覆盖与口径（layer/slab，2D 必填）。
     "EPS_INF_OVERRIDE": (None, "str"),
     "EPS_INF_OVERRIDE_BASIS": ("", "str"),
+    "SYMMETRIZE_ELASTIC": (True, "bool"),
 }
 # --- amset2d 插件相关（可改）---
 PLUGIN_SRC_NAME = "amset2d_plugin.py"   # 与本脚本同目录，运行时复制到 OUTDIR_NAME
@@ -2141,7 +2145,7 @@ def main():
     global LAYER_THICKNESS, NWORKERS, UNITY_OVERLAP, WAVEFUNCTION_FULL
     global INTERPOLATION_FACTOR, INTERPOLATION_FACTOR_EXPLICIT, SCATTERING, WRITE_MESH, DOPING, TEMPERATURES
     global DESYM_FIX, _DESYM_FIX_ON, BANDGAP_OVERRIDE, BANDGAP_NOTE
-    global EPS_INF_OVERRIDE, EPS_INF_OVERRIDE_BASIS
+    global EPS_INF_OVERRIDE, EPS_INF_OVERRIDE_BASIS, SYMMETRIZE_ELASTIC
     global MEM_WARN_GIB, MEM_LIMIT_GIB, MEM_AUTO_EXCLUSIVE
     _conf_nworkers = None
     if (cwd / "step.conf").is_file():
@@ -2254,6 +2258,7 @@ def main():
                 print("[..] EPS_INF_OVERRIDE = %s（step.conf 覆盖）" % EPS_INF_OVERRIDE)
             if _p["EPS_INF_OVERRIDE_BASIS"]:
                 EPS_INF_OVERRIDE_BASIS = str(_p["EPS_INF_OVERRIDE_BASIS"])
+            SYMMETRIZE_ELASTIC = bool(_p["SYMMETRIZE_ELASTIC"])
             # patch_mem_guard：内存粗估阈值 / 自动独占
             if _p["MEM_WARN_GIB"]:
                 MEM_WARN_GIB = int(_p["MEM_WARN_GIB"])
@@ -2370,6 +2375,12 @@ def main():
     gap = read_bandgap(cwd)
     _warn_small_pbe_gap(cwd)
     elastic = read_elastic(cwd)
+    # patch_tensor_symmetry（V120）：弹性张量对点群取平均；介电张量只诊断
+    if _HAS_KC:
+        if MANUAL_ELASTIC is None:
+            elastic = kc.symmetrize_elastic_for(cwd, elastic, (ELASTIC_DIR,) + tuple(STRUCT_CANDS),
+                                                enabled=SYMMETRIZE_ELASTIC)
+        kc.report_dielectric_symmetry(cwd, eps_inf, eps_static, (DIELECT_DIR,) + tuple(STRUCT_CANDS))
     # patch_2d_amset：落盘二维修正依据（原始 slab 介电/层法向/机制），弹性保持原始 slab 值
     is_2d, elastic, c_len = apply_2d_corrections(cwd, elastic, eps_inf, eps_static)
     if is_2d and c_len and TWO_D_DIELECTRIC_VACUUM:  # patch_2d_dielec

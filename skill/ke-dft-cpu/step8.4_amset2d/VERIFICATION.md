@@ -5778,3 +5778,37 @@ ADP n 206.9/189.2 vs 206.2/188.4；σ n 3313/3333 vs 3296/3307）。新默认路
 旧运行时 DOPING/TEMPERATURES/SCATTERING/MESH_* 等覆盖可能没生效）。区分办法（不提交作业）：看本次 gen 日志
 `对称性判据：... |tau|max=` —— 0.000 则只能是 (b)，对比两次 `settings.yaml` 找出差项；非 0 则 (a)/(b) 都可能，
 仍建议对比 `settings.yaml`。
+
+## V120（2026-09-29）：MoS₂ 单层基准的复核 —— 面内各向异性是真问题（已修），其余差异是模型/口径
+
+**真问题：D3h 单层的 ADP 迁移率 xx/yy 差 9–10%**（n 206.9/189.2，p 1095/995）。六方晶体面内任何二阶张量
+都必须各向同性（Neumann 原理），这不是物理结果。定位：
+- n、p 同比例偏（都是 xx 大 9–10%）-> 更像两者**共用**的输入；形变势对导带、价带各不相同，弹性张量是共用的；
+- IMP 主导的总迁移率 xx/yy 只差 0.6%（20.61/20.73）-> 插值网格、波函数重叠带来的各向异性很小；
+- 2D 插件的 ADP 核（`_inplane` / `_inplane_modes`）用 AMSET 给的笛卡尔 q̂ 取 x、y 分量、2×2 Christoffel ->
+  输入对称时严格各向同性，方向处理无误；
+- `read_elastic` 读 `TOTAL ELASTIC MODULI`（含离子弛豫贡献），此前**没有任何对称化**；VASP IBRION=6 的离子
+  贡献在六方胞上常见几个百分点的 C11≠C22 / C66≠(C11−C12)/2；
+- 形变势：`amset deform create` 未带 `-s`，12 个应变全算，ε_xx 与 ε_yy 各自独立计算；
+  `get_symmetrized_strain_mapping` 只补**没算过**的旋转等价应变，差异不会被完全平均掉。
+修（S8 / S8.4 同）：从 OUTCAR 读的弹性张量先对点群所有操作取平均（`ke_common.symmetrize_elastic_for`，
+pymatgen `Tensor.fit_to_structure`，结构取 step6_elastic/POSCAR 所在坐标系）；对称输入不变（单测：带 9% 噪声
+的六方张量 -> C11=C22、C66=(C11−C12)/2、C16=0，再对称化不变）；改动 > 2% 打 WARN（上游欠收敛）。
+`MANUAL_ELASTIC` 不动；`SYMMETRIZE_ELASTIC = false` 关掉。介电张量只诊断（2D 路径会重读 OUTCAR）。
+**用户侧核对（不提交作业）**：① S8.4 运行目录 settings.yaml 的 elastic_constant：C11 vs C22、C66 vs (C11−C12)/2；
+② step7b_deform_read/band_edges.json 的 E1_vac_xx_eV vs E1_vac_yy_eV（形变势是否也不对称）。若 ① 偏差
+≈ 迁移率的 9–10%，重新 gen + 跑 S8.4 后 xx/yy 应一致；若主要是 ②，需另行对形变势做对称化（本补丁未做）。
+
+**其余差异属模型/口径，不是代码错误**（文献对照表需要改口径）：
+- **带隙**：1.825 eV 是 DFT（GGA 类）KS 带隙，文献 ~1.9 eV 是**光学（激子）**带隙；单层 MoS₂ 准粒子带隙
+  ~2.4–2.7 eV（GW），激子结合能 ~0.5 eV。两者接近是巧合，应标"KS 带隙 vs 光学带隙，定义不同"。
+  对 300 K 输运无影响（带隙远大于双极阈值）。
+- **电子迁移率**：198 是**只含 ADP** 的 AMSET 值；Kaasbjerg 2012 的 ~410 是**全声子**（声学 + 光学、谷内 + 谷间）
+  第一性原理 e-ph 结果；形变势也不是同一个量 —— 本技能 E1 是 Bardeen–Shockley 口径（带边相对真空能级随
+  均匀应变的移动，离子弛豫构型，8.52 eV），Kaasbjerg 的 ~2.4–4.5 eV 是 e-ph 矩阵元里的声学耦合常数。
+  两者不能直接比，"E1 偏大所以迁移率偏低"这一归因不成立。Radisavljevic 2011 的 ~200 是器件（非本征）值，
+  且之后被指出因栅电容耦合被高估，不宜作本征基准。
+- **空穴迁移率 1045 偏高**：AMSET 没有非极性光学声子（ODP）与谷间（K–Γ、K–K'）散射，只含 ADP 时是**上限**；
+  空穴在单层 MoS₂ 里受 K–Γ 谷间与同极光学声子（A1'）散射影响大。另外未开 SOC（K 点价带 ~150 meV 劈裂）。
+  这是已知模型局限（V115 第三类），不是代码错误；要发表需 EPW/Perturbo 对照。
+- 晶格常数、C_2D 与文献一致；Seebeck 与掺杂相关，同量级。

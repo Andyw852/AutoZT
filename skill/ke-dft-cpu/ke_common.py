@@ -805,6 +805,97 @@ def op_phase_exact(R, tau, is_tr, atol=OP_TOL):
     return bool(np.allclose(v - np.rint(v), 0.0, atol=atol))
 
 
+# ---- [patch_tensor_symmetry-2026-09-29] 物理张量按晶体点群对称化（Neumann 原理，V120）----------
+#   2026-09-29 MoS₂ 单层（D3h）生产结果：ADP 迁移率 xx/yy 差 9–10%（n 206.9/189.2、p 1095/995），
+#   而六方晶体面内任何二阶张量都必须各向同性。n、p 同比例偏 -> 更像两者共用的输入（弹性张量）
+#   带着数值噪声；IMP 主导的总迁移率 xx/yy 只差 0.6% -> 网格/重叠不是主因。
+#   VASP IBRION=6 的 TOTAL ELASTIC MODULI（含离子弛豫贡献）在六方胞上常见几个百分点的 C11≠C22。
+#   ⇒ 读进来的弹性张量先对点群所有操作取平均（pymatgen Tensor.fit_to_structure）：对称的输入
+#     不变，带噪声的输入投影到物理允许的子空间；改动 > TENSOR_SYM_WARN 时告警（上游步欠收敛）。
+TENSOR_SYM_WARN = 0.02
+
+
+def tensor_structure(cwd, dirs):
+    """张量所在笛卡尔坐标系对应的结构（优先产出该张量的步骤目录里的 POSCAR）。"""
+    from pymatgen.core import Structure
+    for d in dirs:
+        for n in ("POSCAR", "CONTCAR"):
+            p = Path(cwd) / d / n
+            if p.is_file():
+                try:
+                    return Structure.from_file(str(p)), "%s/%s" % (d, n)
+                except Exception:                              # noqa: BLE001
+                    pass
+    return None, None
+
+
+def symmetrize_elastic_voigt(C, structure, symprec=AMSET_SYMPREC):
+    """6x6 标准 Voigt 弹性张量对晶体点群取平均。返回 (C_sym, info)；失败返回 (C, {"error": ...})。"""
+    import numpy as np
+    try:
+        from pymatgen.analysis.elasticity.elastic import ElasticTensor
+        C0 = np.asarray(C, float)
+        Cs = np.asarray(ElasticTensor.from_voigt(C0).fit_to_structure(structure, symprec=symprec).voigt,
+                        float)
+    except Exception as e:                                     # noqa: BLE001
+        return C, {"error": "%s: %s" % (type(e).__name__, e)}
+    scale = float(np.abs(C0).max()) or 1.0
+    info = {"max_rel_change": float(np.abs(Cs - C0).max() / scale),
+            "C11": float(C0[0, 0]), "C22": float(C0[1, 1]), "C66": float(C0[5, 5]),
+            "C11_sym": float(Cs[0, 0]), "C22_sym": float(Cs[1, 1]), "C66_sym": float(Cs[5, 5])}
+    return [[round(float(v), 3) for v in r] for r in Cs], info
+
+
+def rank2_asymmetry(T, structure, symprec=AMSET_SYMPREC):
+    """3x3 张量（介电等）偏离点群对称的程度：对称化前后最大相对差。只诊断，不改值。"""
+    import numpy as np
+    try:
+        from pymatgen.core.tensors import Tensor
+        T0 = np.asarray(T, float)
+        Ts = np.asarray(Tensor(T0).fit_to_structure(structure, symprec=symprec), float)
+    except Exception:                                          # noqa: BLE001
+        return None
+    return float(np.abs(Ts - T0).max() / (float(np.abs(T0).max()) or 1.0))
+
+
+def symmetrize_elastic_for(cwd, elastic, dirs, enabled=True):
+    """gen 用：读进来的弹性张量（6x6）按点群对称化并打印改动；标量/None/关掉时原样返回。"""
+    import numpy as np
+    if not enabled or elastic is None or np.ndim(elastic) != 2:
+        return elastic
+    st, src = tensor_structure(cwd, dirs)
+    if st is None:
+        print("[WARN] patch_tensor_symmetry：取不到结构，弹性张量未对称化")
+        return elastic
+    Cs, info = symmetrize_elastic_voigt(elastic, st)
+    if "error" in info:
+        print("[WARN] patch_tensor_symmetry：对称化失败（%s），弹性张量原样使用" % info["error"])
+        return elastic
+    msg = ("弹性张量按点群对称化（结构 %s）：最大相对改动 %.1f%%；C11/C22 %.2f/%.2f -> %.2f/%.2f，"
+           "C66 %.2f -> %.2f GPa" % (src, 100 * info["max_rel_change"], info["C11"], info["C22"],
+                                    info["C11_sym"], info["C22_sym"], info["C66"], info["C66_sym"]))
+    if info["max_rel_change"] > TENSOR_SYM_WARN:
+        print("[WARN] " + msg + " —— 原始张量明显破坏晶体对称（step6_elastic 欠收敛？），"
+              "未对称化时会造成本应各向同性方向上的迁移率差异")
+    else:
+        print("[OK] " + msg)
+    return Cs
+
+
+def report_dielectric_symmetry(cwd, eps_inf, eps_static, dirs):
+    """介电张量偏离点群对称的诊断（只报告：2D 路径会重新读 OUTCAR，这里改值传不过去）。"""
+    st, src = tensor_structure(cwd, dirs)
+    if st is None:
+        return
+    for name, T in (("ε∞", eps_inf), ("ε₀", eps_static)):
+        if T is None:
+            continue
+        a = rank2_asymmetry(T, st)
+        if a is not None and a > TENSOR_SYM_WARN:
+            print("[WARN] patch_tensor_symmetry：%s 偏离点群对称 %.1f%%（结构 %s）—— step5_dielect 欠收敛？"
+                  % (name, 100 * a, src))
+
+
 def symmetry_gate(structure, atol=TAU_TOL, symprec=AMSET_SYMPREC, desym_fix=False,
                   ncl=False):
     """去对称化路径的统一裁决（逐操作精确判据）。返回 dict：

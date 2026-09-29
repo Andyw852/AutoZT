@@ -235,6 +235,9 @@ NWORKERS_DEFAULT = None
 #   MANUAL_ELASTIC 填了就用它，否则从 ELASTIC_DIR/OUTCAR 自动解析（kBar→GPa）。
 #   直接填：单个数（各向同性近似，GPa），或 6x6 列表（完整 Cij，GPa）。
 MANUAL_ELASTIC = None
+# patch_tensor_symmetry（2026-09-29，V120）：从 OUTCAR 读的弹性张量按晶体点群对称化（Neumann 原理），
+#   见 ke_common.symmetrize_elastic_for。MANUAL_ELASTIC（显式给定）不动。step.conf 写 false 关掉。
+SYMMETRIZE_ELASTIC = True
 ELASTIC_DIR = "step6_elastic"
 # patch_deform_ref（2026-09-16）：形变势参考口径。step7b 若已写出
 # deformation_vac.h5（真空静电势零点，二维文献通行做法），2D 默认用它；
@@ -269,6 +272,7 @@ SPEC = {
     # patch_eps_inf_override：手动覆盖 ε∞（标量或 3 个对角值）。None/空 = 不覆盖。
     "EPS_INF_OVERRIDE": (EPS_INF_OVERRIDE, "str"),
     "EPS_INF_OVERRIDE_BASIS": ("", "str"),      # 2D 必填：layer | slab
+    "SYMMETRIZE_ELASTIC": (True, "bool"),
     # patch_mesh_min：最终插值网格下限（None/0 = 不干预）。见文件头说明。
     "MESH_MIN": (MESH_MIN, "int"),
     "MESH_MIN_KZ": (MESH_MIN_KZ, "int"),
@@ -1788,7 +1792,7 @@ def main():
     # ★ 2026-09-28 修：EPS_INF_OVERRIDE 原来**没有声明 global** —— main() 里的赋值只落在局部变量，
     #   _apply_eps_inf_override() 读到的仍是模块级 None，step.conf 的 ε∞ 覆盖**静默失效**
     #   （GaAs 用 HSE ε∞ 重跑 S8 会跑出与覆盖前相同的数）。test_gen_conf_wiring.py 防回归。
-    global EPS_INF_OVERRIDE, EPS_INF_OVERRIDE_BASIS, DESYM_FIX, _DESYM_FIX_ON
+    global EPS_INF_OVERRIDE, EPS_INF_OVERRIDE_BASIS, DESYM_FIX, _DESYM_FIX_ON, SYMMETRIZE_ELASTIC
     global BANDGAP_OVERRIDE, BANDGAP_NOTE
     global MEM_WARN_GIB, MEM_LIMIT_GIB, MEM_AUTO_EXCLUSIVE
     _conf_nworkers = None
@@ -1858,6 +1862,7 @@ def main():
                 print("[..] EPS_INF_OVERRIDE = %s（step.conf 覆盖）" % EPS_INF_OVERRIDE)
             if _p["EPS_INF_OVERRIDE_BASIS"]:
                 EPS_INF_OVERRIDE_BASIS = str(_p["EPS_INF_OVERRIDE_BASIS"])
+            SYMMETRIZE_ELASTIC = bool(_p["SYMMETRIZE_ELASTIC"])
             # patch_mesh_min：最终插值网格下限/上限（step.conf 覆盖；0/None = 不干预）
             global MESH_MIN, MESH_MIN_KZ, MESH_MIN_FMAX, MESH_MAX
             # ★ 2026-09-28：原来是 `if _v:` —— step.conf 写 0（注释说的"0 = 不干预"）会被当成
@@ -1946,6 +1951,12 @@ def main():
     gap = read_bandgap(cwd)
     _warn_small_pbe_gap(cwd)
     elastic = read_elastic(cwd)
+    # patch_tensor_symmetry（V120）：弹性张量对点群取平均；介电张量只诊断
+    if _HAS_KC:
+        if MANUAL_ELASTIC is None:
+            elastic = kc.symmetrize_elastic_for(cwd, elastic, (ELASTIC_DIR,) + tuple(STRUCT_CANDS),
+                                                enabled=SYMMETRIZE_ELASTIC)
+        kc.report_dielectric_symmetry(cwd, eps_inf, eps_static, (DIELECT_DIR,) + tuple(STRUCT_CANDS))
     # patch_2d_amset：2D 时重标度弹性常数并记下 c，供面浓度换算
     is_2d, elastic, c_len = apply_2d_corrections(cwd, elastic)
     if is_2d and c_len and TWO_D_DIELECTRIC_VACUUM:  # patch_2d_dielec

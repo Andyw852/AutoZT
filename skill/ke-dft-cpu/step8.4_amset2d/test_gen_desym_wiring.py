@@ -203,6 +203,53 @@ class OverrideTests(unittest.TestCase):
         self.assertIn("MESH_MIN_DK", G14.SPEC)
 
 
+class TensorSymmetryTests(unittest.TestCase):
+    """patch_tensor_symmetry（V120）：六方 MoS2 的弹性张量带 9% C11/C22 噪声 -> 对称化后 C11=C22、
+    C66=(C11-C12)/2、C16=0；对称输入不变；MANUAL_ELASTIC 不动；两个 gen 都在 read_elastic 之后调用。"""
+
+    def _hex_dir(self):
+        from pymatgen.core import Lattice, Structure
+        st = Structure(Lattice.hexagonal(3.178, 34.879), ["Mo", "S", "S"],
+                       [[0, 0, .5], [1/3, 2/3, .545], [1/3, 2/3, .455]])
+        d = Path(tempfile.mkdtemp())
+        (d / "step6_elastic").mkdir()
+        Poscar(st).write_file(str(d / "step6_elastic" / "POSCAR"))
+        return d, st
+
+    def test_noisy_hexagonal_elastic_is_projected(self):
+        import numpy as np
+        import ke_common as kc
+        d, st = self._hex_dir()
+        C = np.zeros((6, 6))
+        C[0, 0], C[1, 1], C[0, 1] = 45.0, 45.0 * 0.91, 11.0
+        C[1, 0] = C[0, 1]
+        C[5, 5], C[2, 2], C[3, 3], C[4, 4] = 17.8, 0.3, 0.05, 0.05
+        Cs = np.asarray(kc.symmetrize_elastic_for(d, C.tolist(), ("step6_elastic",)))
+        self.assertAlmostEqual(Cs[0, 0], Cs[1, 1], places=3)
+        self.assertAlmostEqual(Cs[5, 5], (Cs[0, 0] - Cs[0, 1]) / 2, places=3)
+        again = np.asarray(kc.symmetrize_elastic_for(d, Cs.tolist(), ("step6_elastic",)))
+        self.assertTrue(np.allclose(again, Cs, atol=2e-3))                 # 对称输入不变
+        off = kc.symmetrize_elastic_for(d, C.tolist(), ("step6_elastic",), enabled=False)
+        self.assertEqual(off, C.tolist())                                   # 开关
+        self.assertEqual(kc.symmetrize_elastic_for(d, 120.0, ("step6_elastic",)), 120.0)  # 标量不动
+
+    def test_dielectric_asymmetry_diagnostic(self):
+        import ke_common as kc
+        _d, st = self._hex_dir()
+        self.assertLess(kc.rank2_asymmetry([[4, 0, 0], [0, 4, 0], [0, 0, 1.5]], st), 1e-9)
+        self.assertGreater(kc.rank2_asymmetry([[4, 0, 0], [0, 3.6, 0], [0, 0, 1.5]], st), 0.04)
+
+    def test_gens_call_symmetrize_after_read_elastic(self):
+        for mod in (G10, G14):
+            src = Path(mod.__file__).read_text(encoding="utf-8")
+            i = src.index("    elastic = read_elastic(cwd)")
+            j = src.index("kc.symmetrize_elastic_for(", i)
+            self.assertLess(j - i, 600, mod.__name__)
+            self.assertIn("if MANUAL_ELASTIC is None:", src[i:j])
+            self.assertIn("SYMMETRIZE_ELASTIC", mod.SPEC)
+            self.assertTrue(mod.SYMMETRIZE_ELASTIC)
+
+
 class FullGridWasteGuardTests(unittest.TestCase):
     """patch_full_grid_waste（2026-09-29）：补丁默认开以后，S3b 全网格对非 SOC 材料是白算 ——
     gen 时用同一判据拦下；SOC + TR 操作、补丁被关且有坏操作时照常放行。"""
