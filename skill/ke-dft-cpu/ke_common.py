@@ -882,6 +882,16 @@ def symmetrize_elastic_for(cwd, elastic, dirs, enabled=True):
     return Cs
 
 
+def deformation_h5_symmetrized(path):
+    """V121：形变势 h5 是否已按点群对称化（dp_symmetrize 打的 attrs）。读不了返回 None（不告警）。"""
+    try:
+        import h5py
+        with h5py.File(str(path), "r") as f:
+            return bool(int(f.attrs.get("dp_symmetrized", 0)))
+    except Exception:                                          # noqa: BLE001
+        return None
+
+
 def report_dielectric_symmetry(cwd, eps_inf, eps_static, dirs):
     """介电张量偏离点群对称的诊断（只报告：2D 路径会重新读 OUTCAR，这里改值传不过去）。"""
     st, src = tensor_structure(cwd, dirs)

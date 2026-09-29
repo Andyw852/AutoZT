@@ -310,6 +310,10 @@ import nspin_norm_fix
 _fixed, _reason = nspin_norm_fix.fix_h5("deformation.h5", amset.__version__)
 print("[nspin_norm_fix] core deformation.h5: fixed=%s reason=%s (amset %s)"
       % (_fixed, _reason, amset.__version__))
+# [patch_dp_symmetrize V121] D(k) 场按 Laue 群对称化（ε_xx/ε_yy 各自独立有限差分的噪声，
+#   MoS2 带边 E1 xx/yy 差 4–6%）。原地改、幂等；带边 E1_xx/yy 随之对称。见 dp_symmetrize.py。
+import dp_symmetrize
+print("[dp_symmetrize] core deformation.h5: %s" % dp_symmetrize.symmetrize_h5("deformation.h5"))
 dp, kpoints, structure = load_deformation_potentials("deformation.h5")
 bulk = parse_calculation("undeformed")
 bs = bulk["bandstructure"]
@@ -636,9 +640,16 @@ try:
                     if "不平坦" not in str(_se):
                         raise
         if carrier in out and vac.get("xx") is not None and vac.get("yy") is not None:
-            out[carrier]["E1_vac_xx_eV"] = vac["xx"]
-            out[carrier]["E1_vac_yy_eV"] = vac["yy"]
-            out[carrier]["E1_vac_iso_eV"] = round((vac["xx"] + vac["yy"]) / 2, 4)
+            # [patch_dp_symmetrize V121] 六方/四方/立方 -> xx=yy（取平均）；原始值另存 *_raw_eV
+            _sx, _sy = dp_symmetrize.symmetrize_inplane_pair(vac["xx"], vac["yy"], structure)
+            out[carrier]["E1_vac_xx_raw_eV"] = vac["xx"]
+            out[carrier]["E1_vac_yy_raw_eV"] = vac["yy"]
+            out[carrier]["E1_vac_xx_eV"] = round(_sx, 4)
+            out[carrier]["E1_vac_yy_eV"] = round(_sy, 4)
+            out[carrier]["E1_vac_iso_eV"] = round((_sx + _sy) / 2, 4)
+            if abs(_sx - vac["xx"]) > 1e-4:
+                print("[dp_symmetrize] %s E1_vac xx/yy %.4f/%.4f -> %.4f/%.4f（点群投影）"
+                      % (carrier, vac["xx"], vac["yy"], _sx, _sy))
             if edge_flip:       # [C6]
                 out[carrier]["edge_flip"] = edge_flip
             if vac_scan:        # [C7]
@@ -953,6 +964,9 @@ import nspin_norm_fix
 _fixed, _reason = nspin_norm_fix.fix_h5(h5_out, amset.__version__)
 print("[nspin_norm_fix] vac %s: fixed=%s reason=%s (amset %s)"
       % (h5_out, _fixed, _reason, amset.__version__))
+# [patch_dp_symmetrize V121] 与 core h5 同一处理；下面的闸门与已对称化的 band_edges E1_vac 比
+import dp_symmetrize
+print("[dp_symmetrize] vac %s: %s" % (h5_out, dp_symmetrize.symmetrize_h5(h5_out)))
 
 # ==========================================================================
 # [nspin_norm_fix 硬闸门 2026-09-21] 为 AMSET<0.5.1 的「ISPIN=2 形变势减半」

@@ -1938,6 +1938,10 @@ def main():
     _wdir = "step4b_wave_full" if WAVEFUNCTION_FULL else WAVE_DIR
     link(out, cwd / _wdir / "wavefunction.h5", "wavefunction.h5")
     link(out, cwd / READ_DIR / _pick_deformation_h5(cwd, READ_DIR), "deformation.h5")
+    if _HAS_KC and kc.deformation_h5_symmetrized(out / "deformation.h5") is False:   # patch_dp_symmetrize
+        print("[WARN] 形变势 h5 未按点群对称化（step7b_deform_read 在 V121 之前生成）—— 六方等体系会出现"
+              "本应各向同性方向上的迁移率差异（MoS2 实测 xx/yy 差 9–10%）。处理：重新 gen step7b_deform_read"
+              "（秒级、不提交作业），再重新生成本步。")
     # patch_amset_vasprun：amset run 还需要密网格 vasprun.xml 拿能带色散
     _vdirs = (("step3b_uniform_full",) if WAVEFUNCTION_FULL
               else ("step3_uniform", "step4_wave"))

@@ -234,3 +234,43 @@ def test_gen_steps_marker_lands_in_their_own_step_dir():
         st = next(s for s in defs if s.get("name") == "step5_dielect_validate")
         assert "--json step5_dielect_validate/dielectric_check.json" in st["gen"], \
             "%s 的 S5.1 gen 没把 json 指到本步目录：%s" % (skill, st["gen"])
+
+
+def _steps_by_name(skill_yaml):
+    """skill.yaml 里全部步骤（含可选组），按 name 索引。"""
+    d = yaml.safe_load(open(skill_yaml, encoding="utf-8"))
+    out = {}
+
+    def walk(x):
+        if isinstance(x, dict):
+            if "name" in x and "gen" in x:
+                out[str(x["name"])] = x
+            for v in x.values():
+                walk(v)
+        elif isinstance(x, list):
+            for v in x:
+                walk(v)
+    walk(d)
+    return out
+
+
+def test_zt_gen_need_covers_ke_for_shared_steps():
+    """[结构] zt 复用 ke 的步骤（同名 + 同一个 gen 脚本）时，zt 的 gen_need 必须覆盖 ke 的 ——
+    ke 给 gen_need 加了模块、zt 忘了跟，zt 那一步就会 ImportError。
+    2026-09-29（V121 复核）实例：ke S7.1 自 2026-09-21 起 import nspin_norm_fix，zt 一直没声明。"""
+    ke = _steps_by_name(os.path.join(ROOT, "skill", "ke-dft-cpu", "skill.yaml"))
+    zt = _steps_by_name(os.path.join(ROOT, "skill", "zt-dft-cpu", "skill.yaml"))
+    missing = {}
+    for name, zs in zt.items():
+        ks = ke.get(name)
+        if not ks or ks.get("gen") != zs.get("gen"):
+            continue
+        lack = set(ks.get("gen_need") or []) - set(zs.get("gen_need") or [])
+        # 模板按维度/集群映射，zt 可以换名；只要求 .py 模块跟上
+        lack = {f for f in lack if f.endswith(".py")}
+        if lack:
+            missing[name] = sorted(lack)
+    assert not missing, "zt 复用 ke 的步骤漏了 gen_need 模块：%s" % missing
+    zroot = os.path.join(ROOT, "skill", "zt-dft-cpu")
+    for f in ("nspin_norm_fix.py", "dp_symmetrize.py"):
+        assert os.path.exists(os.path.join(zroot, f)), "zt 根目录缺软链 %s" % f

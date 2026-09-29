@@ -5812,3 +5812,39 @@ pymatgen `Tensor.fit_to_structure`，结构取 step6_elastic/POSCAR 所在坐标
   空穴在单层 MoS₂ 里受 K–Γ 谷间与同极光学声子（A1'）散射影响大。另外未开 SOC（K 点价带 ~150 meV 劈裂）。
   这是已知模型局限（V115 第三类），不是代码错误；要发表需 EPW/Perturbo 对照。
 - 晶格常数、C_2D 与文献一致；Seebeck 与掺杂相关，同量级。
+
+## V121（2026-09-29）：形变势场 D(k) 按 Laue 群对称化（V120 对 MoS₂ 定位错了，更正）
+
+**更正 V120**：用户侧核对显示 MoS₂ 的弹性张量**本来就严格对称**（OUTCAR TOTAL ELASTIC MODULI：C11 = C22 =
+41.319 GPa，C66 = (C11−C12)/2，VASP 已内部对称化），V120 的弹性对称化对 MoS₂ 是 no-op（保留：VASP 没对称化
+的情形仍有用）。介电也对称（ε_xx = ε_yy = 3.427）。**不对称的是形变势**：band_edges.json 电子 E1_vac xx/yy =
+8.69/8.35（差 4.0%），空穴 2.41/2.55（差 5.9%）；K 点有 C3，面内必须 D_xx = D_yy、D_xy = 0。
+V120 里"n、p 同比例偏 -> 共用输入（弹性）"的推断不成立；而且电子 D_xx > D_yy 却 μ_xx > μ_yy，与"μ ∝ 1/D²"
+的朴素方向相反 —— 说明起作用的是**整个谷内的 D(k) 场**（AMSET 逐 k 插值），不只带边一个点。
+
+**来源**：`amset deform create` 不带 -s，12 个应变（6 分量 × ±）各自独立有限差分（离子弛豫构型），数值噪声
+使对称等价分量不再相等；`get_symmetrized_strain_mapping` 只补**没算过**的旋转等价应变，差异不会被平均掉。
+
+**修（dp_symmetrize.py）**：应变 ε 下 ΔE_n(k) = D_n(k):ε 在对称操作 s 下不变 => D(s k) = s D(k) sᵀ。
+对 Laue 群（点群 × {±1}，时间反演给 D(−k) = D(k)）取平均 D_sym(k) = (1/|G|) Σ_r rᵀ D(r k) r（投影、幂等）。
+AMSET h5 里存的是带符号张量（abs 在算散射率时才取），所以旋转平均合法。接入 S7.1 两段嵌入脚本：
+core h5 在 nspin 修正之后、算带边 E1 之前对称化；真空扫描得到的 E1_vac xx/yy 按保 z 轴的点群子群投影
+（六方/四方/立方取平均，正交不变；原始值另存 `E1_vac_xx_raw_eV/_yy_raw_eV`）；deformation_vac.h5 在
+nspin 修正之后、硬闸门之前对称化。h5 原地修改、保留已有 attrs，打 `dp_symmetrized=1` 后重复调用跳过。
+S8 / S8.4 link 到未对称化的 h5 时告警（重新 gen S7.1：秒级、不提交作业）。
+
+**检验（`test_dp_symmetrize.py`，6 项全过）**：
+- **约定**：紧束缚模型对晶格施加 6 个应变分量做有限差分，得到物理上满足 D(r k) = r D(k) rᵀ 的场；对称化
+  改动 2D MoS₂ 1.1e-10、3D GaN 3.9e-10，故意写错的约定改动 0.22 / 0.31 —— 约定正确且能被区分
+  （有限差分 δ 取 1e-5：±0.5% 时能移 ~0.1 eV 远大于某些带间距，按能量排序的带会交叉，模型 D 失效）；
+- 注入 4% xx/yy 噪声 -> K 点 xx = yy、xy = 0（1e-16），幂等；h5 原地、保留 attrs、重复调用跳过；
+  (xx, yy) 投影：六方 8.69/8.35 -> 8.52/8.52，正交不变；S7.1 两段嵌入脚本可编译、调用顺序正确。
+
+**顺带修的 zt 漏声明**（新测试 `test_zt_gen_need_covers_ke_for_shared_steps`：zt 复用 ke 的步骤，gen_need 的
+.py 模块必须覆盖 ke；在改动前的 skill.yaml 上抓出两处）：
+- S7.1 漏 `nspin_norm_fix.py`（ke 自 2026-09-21 起 import 它）-> zt 的 S7.1 必 ImportError；已补 + 根目录软链；
+- S2.3 HSE 漏 `ke_common.py`（gen 顶层 import）-> 之前能跑只因 S3 碰巧先推了它；已补。
+
+**用户侧**：MoS₂ 重新 gen step7b_deform_read（秒级）-> band_edges.json 应显示 E1_vac xx = yy（电子 ≈8.52、
+空穴 ≈2.48，iso 不变）-> 重新生成并提交 S8.4 -> 预期 ADP 迁移率 xx/yy 一致到插值噪声级别（<1%）。若仍差
+几个百分点，说明还有别的来源，需要继续查。

@@ -156,7 +156,9 @@ optional_steps:
       - {seq: 7.1, name: step7b_deform_read, label: S7.1_read,
          src: step7_deform/step7b_read,
          check: plot, run: gen, done_marker: deformation.h5,
-         gen: gen_step9b_deform_read.py, gen_need: [ke_common.py], fetch_all: true,
+         # nspin_norm_fix.py（2026-09-21 起 ke 的 S7.1 嵌入脚本 import 它，zt 一直漏声明 -> S7.1 必
+         #   ImportError，2026-09-29 V121 复核时发现）与 dp_symmetrize.py（V121）：显式声明 + 根目录软链。
+         gen: gen_step9b_deform_read.py, gen_need: [ke_common.py, nspin_norm_fix.py, dp_symmetrize.py], fetch_all: true,
          needs: ["step7_deform"]}
 
       - {seq: 8, name: step8_amset, label: S8_kappa_e,
@@ -328,7 +330,9 @@ optional_steps:
          group: S2_bandgap, after: "step2_bandgap/step2.2_pbe",
          src: step2_bandgap/step2.3_hse,
          check: outcar, gen: "gen_step4_HSE.py --kpath-slice all/4", fanout: "*p*of*",
-         gen_need: [stepconf.py, step.conf, dim_common.py, check_common.py, step4_check_and_resubmit.py,
+         # ke_common.py：gen_step4_HSE.py 顶层 import 它（vaspkit_kpoints），ke 已声明、zt 漏了 ——
+         #   之前能跑只是因为 S3 碰巧先把它推进了材料目录（2026-09-29 gen_need 对齐测试发现）。
+         gen_need: [stepconf.py, step.conf, dim_common.py, ke_common.py, check_common.py, step4_check_and_resubmit.py,
                     incar_2d.tpl, incar_3d.tpl, submit_std_2d.tpl, submit_std_3d.tpl,
                     submit_ncl_2d.tpl, submit_ncl_3d.tpl],
          needs: ["step2_bandgap/step2.2_pbe"]}
