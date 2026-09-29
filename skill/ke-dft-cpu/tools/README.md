@@ -24,7 +24,7 @@ ke 技能原本只覆盖到「生成 settings.yaml 并提交 amset」。当需�
 | apply_new_dielectric.sh | 编排：数值校验 -> 提取 -> 更新 -> 提交（四道闸门）|
 | cmp_diel.py / cmp_eps.py | 新旧介电张量对比 |
 | cmp_csv.py / cmp_keyed.py | CSV 逐值比对 / 按键对齐比对 |
-| desym_fix_validate.py | V115：用同一份全网格 h5 检验去对称化相位公式（原式/修正式；判据见 VERIFICATION V115 §6）|
+| desym_fix_validate.py | V115/V116：用同一份全网格 h5 检验去对称化相位公式（原式/修正式）。实数据用**对照组判据**（坏操作点 vs 好操作点 = AMSET 原生路径）；`--shift t1 t2 t3` 平移原点造坏操作 + 查平移不变性（标准原点 GaN 必须用它）。判据见 VERIFICATION V115 §6、V116 |
 | regate_projects.py | V115：用逐操作判据回查已有项目的 S8/S8.4 是否"IBZ + 真实重叠 + 有坏操作 + 没打补丁"（静默算错）|
 
 注意：DFPT 产物的**数值校验器**不在这里，它是技能正式步骤的一部分，

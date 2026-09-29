@@ -7,10 +7,12 @@ HNEMD 约定（GPUMD v5.6 文档）：compute_hnemd <输出间隔> <Fe_x> <Fe_y>
 对角元因此需要三次运行：x 驱动取 κ_xx、y 驱动取 κ_yy、z 驱动取 κ_zz。
 """
 import argparse
+import math
 import os
 import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -70,6 +72,7 @@ def run_in_hnemd(p, T, direction):
         "dump_thermo 1000",
         "run %d" % int(p.get("EQUIL_STEPS", 200000)),
         "compute_hnemd %d %g %g %g" % (int(p.get("OUTPUT_INTERVAL", 1000)), *vec),
+        "dump_thermo 1000",
         "run %d" % int(p.get("PROD_STEPS", 2000000)),
     ]) + "\n"
 
@@ -85,6 +88,7 @@ def run_in_emd(p, T):
         "compute_hac %d %d %d" % (int(p.get("EMD_SAMPLE", 10)),
                                   int(p.get("EMD_CORR_STEPS", 100000)),
                                   int(p.get("EMD_OUTPUT", 100))),
+        "dump_thermo 1000",
         "run %d" % int(p.get("EMD_PROD_STEPS", 2000000)),
     ]) + "\n"
 
@@ -101,6 +105,7 @@ def run_in_shc(p, T, direction):
         "dump_thermo 1000",
         "run %d" % int(p.get("EQUIL_STEPS", 200000)),
         "ensemble nve",
+        "dump_thermo 1000",
         "compute_shc %d %d %d %d %g" % (int(p.get("SHC_SAMPLE", 10)),
                                         int(p.get("SHC_NC", 200)),
                                         {"x": 0, "y": 1, "z": 2}[direction],
@@ -110,9 +115,52 @@ def run_in_shc(p, T, direction):
     ]) + "\n"
 
 
+def run_in_nve(p, T, refinement=1):
+    """Dump only the NVE segment; dt/2 run has the same physical duration."""
+    dt = float(p.get("TIME_STEP", 1.0)) / refinement
+    interval = int(p.get("NVE_OUTPUT_INTERVAL", 100)) * refinement
+    return "\n".join(["potential nep.txt"] + relax_lines(p) + [
+        "velocity %g" % T, "time_step %g" % dt,
+        "ensemble nvt_ber %g %g %g" % (T, T, float(p.get("T_COUP", 100)) * refinement),
+        "run %d" % (int(p.get("EQUIL_STEPS", 200000)) * refinement),
+        "ensemble nve", "dump_thermo %d" % interval,
+        "run %d" % (int(p["NVE_STEPS"]) * refinement),
+    ]) + "\n"
+
+
+def nve_metrics(path, natoms, dt_fs, interval, expected_rows):
+    """GPUMD thermo columns 2/3 are total kinetic/potential energies (eV)."""
+    import numpy as np
+    a = np.loadtxt(path, ndmin=2)
+    if expected_rows < 10 or a.shape[0] != expected_rows or a.shape[1] < 3:
+        raise ValueError("incomplete NVE thermo output")
+    if natoms <= 0 or dt_fs <= 0 or interval <= 0 or not np.isfinite(a).all():
+        raise ValueError("invalid NVE values")
+    kinetic = float(a[:, 1].mean()) / natoms
+    if kinetic <= 0 or float(a[:, 0].min()) <= 0:
+        raise ValueError("nonpositive kinetic energy or temperature")
+    energy = (a[:, 1] + a[:, 2]) / natoms
+    time = np.arange(len(a)) * dt_fs * interval / 1000.0
+    centered = time - time.mean()
+    slope = float(np.dot(centered, energy - energy.mean()) / np.dot(centered, centered))
+    return dict(samples=len(a), observed_duration_ps=float(time[-1]),
+                energy_drift_eV_atom_ps=slope,
+                drift_fraction_of_kinetic=abs(slope) * float(time[-1]) / kinetic,
+                energy_span_fraction_of_kinetic=float(np.ptp(energy)) / kinetic,
+                mean_temperature_K=float(a[:, 0].mean()),
+                min_temperature_K=float(a[:, 0].min()),
+                max_temperature_K=float(a[:, 0].max()))
+
+
 def run_case(step_dir, p, case_dir, run_in, label):
     d = Path(step_dir, case_dir)
     d.mkdir(parents=True, exist_ok=True)
+    previous = [d / name for name in ("thermo.out", "kappa.out", "hac.out", "shc.out", "gpumd.log", "run.in")
+                if (d / name).is_file()]
+    if previous:
+        archive = Path(tempfile.mkdtemp(prefix="previous_run_", dir=str(d)))
+        for path in previous:
+            shutil.move(str(path), str(archive / path.name))
     shutil.copyfile(str(Path(step_dir, "nep.txt")), str(d / "nep.txt"))
     shutil.copyfile(str(Path(step_dir, "model.xyz")), str(d / "model.xyz"))
     (d / "run.in").write_text(run_in, encoding="utf-8")
@@ -133,6 +181,30 @@ def parse_emd(d):
     return gc.parse_emd(str(f))
 
 
+def incomplete_hnemd_results(out, temperatures):
+    """Require finite results for every requested temperature and direction.
+
+    This checks execution completeness, not physical convergence or accuracy.
+    """
+    missing = []
+    for temperature in temperatures:
+        key = "%g" % float(temperature)
+        results = out.get("temperatures", {}).get(key, {})
+        for direction in ("x", "y", "z"):
+            result = results.get(direction, {})
+            try:
+                valid = (not result.get("error")
+                         and math.isfinite(float(result["kappa"]))
+                         and math.isfinite(float(result["stderr"]))
+                         and float(result["stderr"]) >= 0
+                         and int(result["n_samples"]) > 1)
+            except (KeyError, TypeError, ValueError, OverflowError):
+                valid = False
+            if not valid:
+                missing.append("T%s_%s" % (key, direction))
+    return missing
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--step-dir", default=".")
@@ -140,10 +212,41 @@ def main():
     args = ap.parse_args()
     p = gc.load_params(args.step_dir)
     if not args.summary_only:
+        gc.write_summary(args.step_dir, "kappa_summary.json", dict(
+            KAPPA_DONE=False, reason="current calculation not completed"))
         from ase.io import read  # noqa: F401  (提前暴露 ase 缺失)
         atoms = build_cell(args.step_dir, p)
         write_xyz_in(Path(args.step_dir, "model.xyz"), atoms)
         out = dict(temperatures={})
+        if int(p.get("NVE_STEPS", 0)) > 0:
+            checks = {}
+            for T in [float(x) for x in p.get("T_LIST", [300])]:
+                for refinement in (1, 2):
+                    label = "T%g_nve_dt%s" % (T, refinement)
+                    d, rc = run_case(args.step_dir, p, label,
+                                     run_in_nve(p, T, refinement), label)
+                    try:
+                        if rc != 0:
+                            raise ValueError("GPUMD rc=%d" % rc)
+                        result = nve_metrics(d / "thermo.out", len(atoms),
+                            float(p.get("TIME_STEP", 1.0)) / refinement,
+                            int(p.get("NVE_OUTPUT_INTERVAL", 100)) * refinement,
+                            int(p["NVE_STEPS"]) // int(p.get("NVE_OUTPUT_INTERVAL", 100)))
+                        result["time_step_fs"] = float(p.get("TIME_STEP", 1.0)) / refinement
+                        result["max_drift_fraction"] = float(p.get("NVE_MAX_DRIFT_FRACTION", 0.01))
+                        result["max_span_fraction"] = float(p.get("NVE_MAX_SPAN_FRACTION", 0.05))
+                        result["passed"] = (
+                            result["drift_fraction_of_kinetic"] <= float(p.get("NVE_MAX_DRIFT_FRACTION", 0.01))
+                            and result["energy_span_fraction_of_kinetic"] <= float(p.get("NVE_MAX_SPAN_FRACTION", 0.05)))
+                    except (OSError, ValueError) as exc:
+                        result = dict(passed=False, error=str(exc))
+                    checks[label] = result
+                    gc.write_summary(args.step_dir, "nve_summary.json", dict(
+                        cases=checks, physical_accuracy_validated=False))
+                    if not result["passed"]:
+                        gc.write_summary(args.step_dir, "kappa_summary.json", dict(
+                            KAPPA_DONE=False, reason="NVE preflight failed", nve_case=label))
+                        sys.exit("[ERROR] NVE preflight failed: %s" % label)
         for T in [float(x) for x in p.get("T_LIST", [300])]:
             kk = {}
             for direction in ("x", "y", "z"):
@@ -196,13 +299,14 @@ def main():
                 if "kappa" in v:
                     v["kappa_quantum_corrected"] = v["kappa"] * qc
             out["temperatures"]["%g" % T] = kk
-        out["KAPPA_DONE"] = any(
-            "kappa" in out["temperatures"][t].get(ax, {})
-            for t in out["temperatures"] for ax in ("x", "y", "z"))
+        requested = p.get("T_LIST", [300])
+        out["incomplete_hnemd_cases"] = incomplete_hnemd_results(out, requested)
+        out["KAPPA_DONE"] = bool(requested) and not out["incomplete_hnemd_cases"]
         out["cell_atoms"] = int(len(atoms))
         gc.write_summary(args.step_dir, "kappa_summary.json", out)
         if not out["KAPPA_DONE"]:
-            sys.exit("[ERROR] 没有任何 HNEMD κ 成功，检查 gpumd.log/run.in 语法")
+            sys.exit("[ERROR] HNEMD 结果不完整或非有限值：%s" %
+                     ", ".join(out["incomplete_hnemd_cases"]))
     else:
         print("[summary-only] kappa_summary.json 由主流程写出，这里只做存在性检查")
         if not Path(args.step_dir, "kappa_summary.json").is_file():

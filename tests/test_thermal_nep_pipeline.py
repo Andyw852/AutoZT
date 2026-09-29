@@ -47,6 +47,68 @@ def sample_manifest(root):
 
 
 class ThermalNEPPipelineTests(unittest.TestCase):
+    def test_failed_nve_prevents_hnemd_and_invalidates_previous_success(self):
+        from unittest.mock import patch
+        from types import ModuleType
+        import gpumd_kappa
+        fake_io = ModuleType("ase.io")
+        fake_io.read = lambda *args: None
+        with tempfile.TemporaryDirectory(dir=TMP_ROOT) as tmp:
+            summary = Path(tmp) / "kappa_summary.json"
+            summary.write_text('{"KAPPA_DONE": true}')
+            params = dict(T_LIST=[300, 800], NVE_STEPS=1000,
+                          NVE_OUTPUT_INTERVAL=100, TIME_STEP=0.5)
+            with patch.dict(sys.modules, {"ase.io": fake_io}), \
+                 patch.object(sys, "argv", ["gpumd_kappa.py", "--step-dir", tmp]), \
+                 patch.object(gpumd_kappa.gc, "load_params", return_value=params), \
+                 patch.object(gpumd_kappa, "build_cell", return_value=[None]*10), \
+                 patch.object(gpumd_kappa, "write_xyz_in"), \
+                 patch.object(gpumd_kappa, "run_case", return_value=(Path(tmp), 1)) as run:
+                with self.assertRaises(SystemExit):
+                    gpumd_kappa.main()
+            self.assertEqual(run.call_count, 1)
+            self.assertIn("nve", run.call_args.args[2])
+            self.assertFalse(json.loads(summary.read_text())["KAPPA_DONE"])
+            diagnostic = json.loads((Path(tmp)/"nve_summary.json").read_text())
+            self.assertFalse(diagnostic["cases"]["T300_nve_dt1"]["passed"])
+
+    def test_nve_energy_drift_units_and_rejects_stale_or_invalid_data(self):
+        import numpy as np
+        from gpumd_kappa import nve_metrics
+        with tempfile.TemporaryDirectory(dir=TMP_ROOT) as tmp:
+            path = Path(tmp) / "thermo.out"
+            data = np.zeros((20, 3))
+            data[:, 0] = 300
+            data[:, 1] = 2.0
+            # Ten atoms, 0.1 ps sampling; drift = 0.01 eV/atom/ps.
+            data[:, 2] = -100 + np.arange(20) * 0.01
+            np.savetxt(path, data)
+            result = nve_metrics(path, 10, 1.0, 100, 20)
+            self.assertAlmostEqual(result["energy_drift_eV_atom_ps"], 0.01)
+            self.assertAlmostEqual(result["drift_fraction_of_kinetic"], 0.095)
+            with self.assertRaises(ValueError):
+                nve_metrics(path, 10, 1.0, 100, 19)
+            data[5, 2] = np.nan
+            np.savetxt(path, data)
+            with self.assertRaises(ValueError):
+                nve_metrics(path, 10, 1.0, 100, 20)
+
+    def test_hnemd_requires_all_requested_temperatures_and_directions(self):
+        from gpumd_kappa import incomplete_hnemd_results
+        import copy
+        good = {"kappa": 0.5, "stderr": 0.03, "n_samples": 100}
+        out = {"temperatures": {"300": {axis: dict(good) for axis in "xyz"}}}
+        self.assertEqual(incomplete_hnemd_results(out, [300]), [])
+        self.assertEqual(incomplete_hnemd_results(out, [300, 800]),
+                         ["T800_x", "T800_y", "T800_z"])
+        for bad in ({"error": "rc=1"}, {},
+                    dict(good, kappa=float("nan")),
+                    dict(good, stderr=float("inf")),
+                    dict(good, n_samples=1)):
+            partial = copy.deepcopy(out)
+            partial["temperatures"]["300"]["z"] = bad
+            self.assertEqual(incomplete_hnemd_results(partial, [300]), ["T300_z"])
+
     def setUp(self):
         TMP_ROOT.mkdir(exist_ok=True)
 

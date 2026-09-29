@@ -175,6 +175,91 @@ class DesymFixModelTests(unittest.TestCase):
         self.assertEqual(j["ops"]["bad_ops"], 12, j)
         self.assertEqual(j["ke_common_gate"]["bad_ops"], 12, j)
 
+    # ---- V116：对照组判据 / 原点平移 ------------------------------------------------
+    @staticmethod
+    def _noisy(cf, eps, seed=1, sigma=0.0):
+        """每个 (带, k) 态独立加相对幅度 eps 的复高斯噪声 —— 模拟 VASP 波函数在对称相关
+        k 点间"不精确对称"的数值地板（与公式无关、与原点无关）。sigma>0：各态幅度按
+        对数正态抽（异质地板，只有一部分点掉到 0.999 以下，像 MoS2 实测的 1.2%）。"""
+        rng = np.random.default_rng(seed)
+        n = rng.normal(size=cf.shape) + 1j * rng.normal(size=cf.shape)
+        n *= np.linalg.norm(cf, axis=-1, keepdims=True) / np.linalg.norm(n, axis=-1, keepdims=True)
+        if sigma:
+            eps = eps * np.exp(sigma * rng.normal(size=cf.shape[:2]))[..., None]
+        return cf + eps * n
+
+    def test_control_criterion_on_noisy_model(self):
+        """带数值地板的数据：严格判据必然 FAIL；对照组判据应 PASS（修正式在坏操作点 ≈ 好操作点），
+        而**同一判据套在原式上必须 FAIL**。2D（均匀地板 1-|cos|~2e-3，全部点 < 0.999）与
+        3D（异质地板，约一半点 < 0.999）各一例。
+        （2026-09-29 本地扫描：两种结构 × 4 种地板 × 10 个种子，修正式 80/80 PASS、原式 80/80 FAIL。）"""
+        cases = [("MoS2 2D", self.tsg.shifted(self.tsg.mos2_aligned(), [.1, .2, 0]), [12, 12, 1],
+                  dict(eps=0.045)),
+                 ("Si 3D", self.tsg.shifted(self.tsg.si_on_atom(), [-.125] * 3), [6, 6, 6],
+                  dict(eps=0.015, sigma=0.6))]
+        for name, st, mesh, nz in cases:
+            with self.subTest(name=name):
+                kp = full_mesh(mesh)
+                gp = gsphere(st)
+                cf, en = tb_coeffs(st, kp, gp)
+                rep = self.V.validate({Spin.up: self._noisy(cf, **nz)}, gp, kp, st,
+                                      energies={Spin.up: en}, mesh=mesh, verbose=False)
+                fx, og, ctl = rep["formulas"]["fixed"], rep["formulas"]["orig"], rep["control"]
+                msg = "%s: %s" % (name, {k: rep[k] for k in ("control", "verdict_strict")})
+                self.assertLess(fx["min_score"], 0.999, msg)        # 地板确实模拟出来了
+                self.assertFalse(rep["verdict_strict"], msg)
+                self.assertGreaterEqual(fx["by_class"]["good"]["n"], self.V.CONTROL_MIN_N, msg)
+                self.assertGreater(fx["by_class"]["bad"]["n"], 0, msg)
+                self.assertTrue(ctl["ok"], msg)
+                self.assertIs(ctl["orig_would_pass"], False, msg)   # 判据能区分对错
+                self.assertEqual(og["gross_bad_but_not_predicted"], 0, msg)
+                self.assertTrue(rep["verdict"], msg)
+
+    def test_shift_origin_is_exact(self):
+        """shift_origin(系数, t) 必须等于"平移后结构"的解析真值（符号/约定核对）。"""
+        for st, mesh in ((self.tsg.gan_std(), [4, 4, 3]), (self.tsg.mos2_aligned(), [6, 6, 1])):
+            t = np.array([.1, .2, .05 if mesh[2] > 1 else 0.0])
+            kp = full_mesh(mesh)
+            gp = gsphere(st)
+            cf, en = tb_coeffs(st, kp, gp)
+            c = {Spin.up: cf.copy()}
+            st_s = self.V.shift_origin(c, gp, kp, st, t)
+            truth, en_s = tb_coeffs(st_s, kp, gp)
+            np.testing.assert_allclose(en_s, en, atol=1e-9)
+            for ik in range(len(kp)):
+                s = self.V.subspace_scores(truth[:, ik], c[Spin.up][:, ik],
+                                           self.V.degenerate_groups(en[:, ik]))
+                self.assertGreater(s.min(), 1 - 1e-9, "%s k=%s" % (st.formula, kp[ik]))
+
+    def test_shift_makes_null_case_discriminating(self):
+        """标准原点 GaN（3D）/ 已对齐 MoS2（2D）：坏操作 0 -> 原样检验无区分力；
+        平移原点后同一份数据出现坏操作，修正式逐点分数**平移不变**（含噪声地板），原式不然。"""
+        for st, mesh, t in ((self.tsg.gan_std(), [4, 4, 3], [.1, .2, .05]),
+                            (self.tsg.mos2_aligned(), [6, 6, 1], [.1, .2, 0])):
+            kp = full_mesh(mesh)
+            gp = gsphere(st)
+            cf, en = tb_coeffs(st, kp, gp)
+            with self.subTest(st=st.formula):
+                r0 = self.V.validate({Spin.up: cf.copy()}, gp, kp, st, energies={Spin.up: en},
+                                     mesh=mesh, verbose=False)
+                self.assertEqual(r0["ops"]["bad_ops"], 0)
+                self.assertIsNone(r0["control"]["ok"])           # 无区分力
+                for noisy in (False, True):
+                    c = self._noisy(cf, 0.045) if noisy else cf.copy()
+                    rep = self.V.validate_with_shift({Spin.up: c}, gp, kp, st, t,
+                                                     energies={Spin.up: en}, mesh=mesh,
+                                                     verbose=False)
+                    sh = rep["shift"]
+                    msg = "%s noisy=%s %s" % (st.formula, noisy, sh)
+                    self.assertEqual(sh["bad_ops_before"], 0, msg)
+                    self.assertGreater(sh["bad_ops_after"], 0, msg)
+                    self.assertTrue(sh["invariant"], msg)
+                    self.assertGreater(sh["orig_max_abs_diff"], 0.05, msg)
+                    self.assertGreater(rep["formulas"]["orig"]["n_bad_k"], 0, msg)
+                    if not noisy:
+                        self.assertTrue(rep["verdict_strict"], msg)
+                        self.assertTrue(rep["verdict"], msg)
+
     def test_plugin_switch(self):
         """AZ_DESYM_FIX 未设 -> apply() 不动 AMSET；设了 -> 两个模块都被替换。"""
         import os

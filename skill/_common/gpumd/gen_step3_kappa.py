@@ -6,6 +6,7 @@
 判据：kappa_summary.json 的 "KAPPA_DONE": true。
 """
 import shutil
+import math
 import sys
 from pathlib import Path
 
@@ -31,6 +32,10 @@ SPEC = {
     "OUTPUT_INTERVAL": (1000, "int"),
     "DRIVING_FORCE": (0.00001, "float"),
     "CELL_REPLICATE": ("1 1 1", "str"),
+    "NVE_STEPS": (0, "int"),  # Optional preflight at dt and dt/2, equal duration
+    "NVE_OUTPUT_INTERVAL": (100, "int"),
+    "NVE_MAX_DRIFT_FRACTION": (0.01, "float"),
+    "NVE_MAX_SPAN_FRACTION": (0.05, "float"),
     # --- 可选：MD 之前先在该势的极小点上弛豫（含变胞），解决"DFT 构型不在势极小点" ---
     "RELAX_ENABLED": (0, "int"),
     "RELAX_TOL": (0.001, "float"),
@@ -60,6 +65,15 @@ def main():
     out = cwd / OUTDIR
     out.mkdir(exist_ok=True)
     conf = stepconf.load(SPEC, STEP)
+    if conf["NVE_STEPS"] < 0:
+        sys.exit("[ERROR] NVE_STEPS must be nonnegative")
+    if conf["NVE_STEPS"]:
+        interval = conf["NVE_OUTPUT_INTERVAL"]
+        if interval <= 0 or conf["NVE_STEPS"] // interval < 10 or conf["NVE_STEPS"] % interval:
+            sys.exit("[ERROR] NVE_STEPS must contain >=10 complete output intervals")
+        for name in ("TIME_STEP", "NVE_MAX_DRIFT_FRACTION", "NVE_MAX_SPAN_FRACTION"):
+            if not math.isfinite(conf[name]) or conf[name] <= 0:
+                sys.exit("[ERROR] %s must be positive and finite" % name)
     prev = cwd / "step2_nep"
     for f in ("nep.txt", "structure_reference.xyz"):
         src = prev / f

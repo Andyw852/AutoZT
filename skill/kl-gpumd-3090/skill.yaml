@@ -26,7 +26,7 @@ defaults:
   skill_subdir: true
 
 fetch_files: [POSCAR, CONTCAR, workflow_method.txt, klgpumd_params.txt,
-              struct_summary.json, nep_summary.json, kappa_summary.json,
+              struct_summary.json, nep_summary.json, kappa_summary.json, nve_summary.json,
               compare_summary.json, train.xyz, test.xyz, nep.txt, nep.in,
               train.log, loss.out, force_train.out, force_test.out,
               energy_train.out, energy_test.out, nep.restart,

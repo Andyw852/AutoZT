@@ -132,7 +132,24 @@ Si 的声子 MFP 长，必须 **≥ 512 原子 + ≥ 1 ns**，并做 Fe / cell /
 > （`compute_hnemd`，收敛快一个量级），不要用 512 原子/1 ns 的 EMD（必然不收敛）。
 
 
-## L2 正则化对照
+## 可选 NVE 稳定性预检
+
+S3 设置 `NVE_STEPS > 0` 后，在所有指定温度分别运行时间步 dt 和 dt/2
+的独立 NVT→NVE 轨迹，物理时长相同；先全部通过预检，才启动 HNEMD。
+`NVE_OUTPUT_INTERVAL` 控制采样。仅在 NVE 段输出 thermo，避免混入恒温段。
+使用总动能加势能计算每原子总能量，记录线性漂移率、温度范围，以及
+漂移/能量跨度占平均动能的比例到 `nve_summary.json`。
+`NVE_MAX_DRIFT_FRACTION`（默认 0.01）和 `NVE_MAX_SPAN_FRACTION`（0.05）
+是可配置的数值筛选门槛，不是势精度或四阶力常数合格标准。
+轨迹缺行、非有限值或超过门槛均中止后续 HNEMD；旧输出归档，避免追加污染。
+当前没有真实材料端到端验证结果；使用前仍需核对实际日志。
+默认 `NVE_STEPS=0` 保持已有项目不增加预检计算。
+
+GPUMD 文档：
+https://gpumd.org/gpumd/output_files/thermo_out.html
+https://gpumd.org/gpumd/input_parameters/dump_thermo.html
+
+## L2 参数
 
 S2 的 `[params]` 支持可选 `LAMBDA_2`。留空沿用 GPUMD 默认值；
 显式非负有限数值会写为 `nep.in` 的 `lambda_2`，其中 `0` 表示关闭 L2。
