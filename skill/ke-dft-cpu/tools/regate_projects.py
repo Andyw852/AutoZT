@@ -10,7 +10,8 @@
 裁决（每个 S8/S8.4 运行目录一行）：
   OK        unity 重叠（不读波函数）/ 全网格 h5（from_data）/ IBZ 且原公式 0 个坏操作 /
             IBZ 且当次打了相位补丁
-  ★ WRONG   IBZ + 真实重叠 + 原公式有坏操作 + 没打补丁 —— **静默算错**，要重算
+  ★ WRONG   IBZ + 真实重叠 + 原公式有坏操作 + 没打补丁 —— **静默算错**，要重算；
+            全网格 h5 + 真实重叠 + 有 k 点标签不在 (-0.5, 0.5]（V117：from_data 贴错系数标签）
   ?         判不出来（缺结构/缺 settings）
 另外列出 settings.yaml 里写了 EPS_INF_OVERRIDE 注释却可能没生效的旧 S8（见 V115 §8）。
 
@@ -27,6 +28,7 @@ from pathlib import Path
 
 _HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(_HERE.parent))
+sys.path.insert(0, str(_HERE.parent / "step8.4_amset2d"))       # overlap_preflight（V117 标签检查）
 for _p in (_HERE.parent.parent / "_common" / "opt",):
     sys.path.insert(0, str(_p))
 
@@ -58,7 +60,16 @@ def _run_info(run):
             src = os.path.basename(os.path.dirname(os.path.realpath(h5)))
         except OSError:
             src = None
-    return {"settings": bool(txt), "unity": unity, "h5_src": src,
+    offconv = None
+    if src and src.startswith("step4b") and h5.exists():
+        try:                                                     # 只读 kpoints 数据集，很快
+            import h5py
+            import overlap_preflight as pf
+            with h5py.File(str(h5), "r") as f:
+                offconv = pf.n_offconvention_kpoints(f["kpoints"][()])
+        except Exception:                                        # noqa: BLE001
+            offconv = None
+    return {"settings": bool(txt), "unity": unity, "h5_src": src, "offconv": offconv,
             "fix": "# AZ_DESYM_FIX=1" in txt,
             "transport": (run / "transport.json").is_file()}
 
@@ -83,8 +94,12 @@ def audit(root, pattern):
                 verdict, why = "?", "没有 settings.yaml"
             elif r["unity"]:
                 verdict, why = "OK", "unity 重叠（不读波函数）"
+            elif full and r["offconv"]:
+                verdict, why = "★ WRONG", ("全网格 h5 有 %d 个 k 点标签不在 (-0.5, 0.5] -> AMSET from_data "
+                                          "贴错这些点的系数标签（V117）" % r["offconv"])
             elif full:
-                verdict, why = "OK", "全网格 h5（from_data，不去对称化）"
+                verdict, why = "OK", "全网格 h5（from_data，不去对称化%s）" % (
+                    "；标签未能读取" if r["offconv"] is None else "；标签符合 (-0.5, 0.5]")
             elif bad is None:
                 verdict, why = "?", "取不到结构/对称操作"
             elif bad == 0:

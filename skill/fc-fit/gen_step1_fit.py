@@ -54,7 +54,7 @@ SPEC = {
     "FIT_INPUT_DIR": ("auto", "str"),       # dataset dir: auto | path (skill-dir or absolute)
     "SUBTRACT_EQUILIBRIUM": (True, "bool"),  # subtract the equilibrium residual forces
     "EQUILIBRIUM_FORCES_NPY": ("", "str"),   # optional explicit (natom,3) npy
-    "COORDS": ("cartesian", "str"),          # cartesian | fractional (displacement input)
+    "COORDS": ("auto", "str"),               # auto | cartesian | fractional (displacement input)
     "SUPERCELL": ("", "str"),                # 对角 "n n n"；或一般矩阵 9 个数
                                              # "n11 n12 n13 n21 n22 n23 n31 n32 n33"
                                              # （行主序，与 phonopy/phono3py --dim 同义）
@@ -376,9 +376,9 @@ def main():
     if engine == "hiphive" and h_method not in HIPHIVE_METHODS:
         sys.exit("[ERROR] HIPHIVE_FIT_METHOD must be one of %s"
                  % " | ".join(HIPHIVE_METHODS))
-    coords = str(conf["COORDS"] or "cartesian").lower()
-    if coords not in ("cartesian", "fractional"):
-        sys.exit("[ERROR] COORDS must be cartesian or fractional")
+    coords = str(conf["COORDS"] or "auto").lower()
+    if coords not in ("auto", "cartesian", "fractional"):
+        sys.exit("[ERROR] COORDS must be auto, cartesian or fractional")
 
     src, sig = resolve_dataset(cwd, out, conf["FIT_INPUT_DIR"])
 

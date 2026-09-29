@@ -67,6 +67,9 @@ NEAR_DEGEN_MEV = 25.0     # 近简并诊断：出错点的最差带离最近非�
 CONTROL_MIN_N = 20        # 对照组（好操作、非平凡映射）至少这么多点才有统计意义
 DISCRIM_MIN_FRAC = 0.05   # 原式在坏操作点上 < GROSS_COS 的比例 >= 5% 才算"有区分力"
 SHIFT_TOL = 1e-5          # 平移不变性：修正式逐点分数平移前后差 < 1e-5
+# ---- V117 数据侧排查（见 VERIFICATION V117）----
+EIG_CONSIST_MEV = 5.0     # 源点与目标点同一条带的本征值差 > 5 meV -> 数据本身不对称，该点不进对照统计
+LOW_PW_CUTOFF_EV = 250.0  # h5 平面波截断低于它时提示：AMSET 按 |G| 截断，折回点两边截断球不重合
 
 
 # --------------------------------------------------------------------------
@@ -90,6 +93,59 @@ def match_kpoints(query, ref, tol=1e-5):
             raise ValueError("k 点 %s 不在参考网格里" % np.round(k, 6).tolist())
         out[i] = j[0]
     return out
+
+
+def amset_canonical(k):
+    """AMSET 的 k 点代表元约定：(-0.5, 0.5]（desymmetrize_coefficients 与 expand_kpoints
+    都把 -0.5 改成 +0.5）。去对称化重建出来的系数就是按这个标签给的。"""
+    k = np.asarray(k, float)
+    k = k - np.around(k)
+    k[np.around(k, 5) == -0.5] += 1.0
+    return k
+
+
+def relabel_index(gpoints, b):
+    """标签从 k 换成 k-b 时系数的 G 重排：c_{k-b}(G) = c_k(G-b)。
+    返回 idx，使 new[i] = old[idx[i]]；G-b 不在 gpoints 里的记 -1（该分量取 0）。"""
+    gpoints = np.asarray(gpoints, int)
+    pos = {tuple(g): i for i, g in enumerate(gpoints)}
+    b = np.asarray(b, int)
+    return np.array([pos.get(tuple(g - b), -1) for g in gpoints], int)
+
+
+def _apply_relabel(c, idx):
+    """c: (nb, ng[,2]) -> 按 relabel_index 的 idx 重排。"""
+    out = np.zeros_like(c)
+    ok = idx >= 0
+    out[:, ok] = c[:, idx[ok]]
+    return out
+
+
+def pw_cutoff_ev(gpoints, structure):
+    """h5 里系数的平面波截断（eV）：AMSET 按 |G|（不含 k）截断，取 gpoints 的最大 |G|²。"""
+    rec = structure.lattice.reciprocal_lattice.matrix          # 含 2π，Å⁻¹
+    q = np.linalg.norm(np.asarray(gpoints, float) @ rec, axis=1)
+    return float((q ** 2).max() / 0.262465831)                  # 与 amset get_gpoints 同一常数
+
+
+def groups_with_split(e_all_k, abs_sel, tol=DEGEN_TOL_EV):
+    """V117：用**全部**带的能量分简并组，返回 (被比较带的局部分组, 被切开掩码)。
+
+    e_all_k：该 k 点 vasprun 里全部带的能量；abs_sel：被比较带的绝对带号。
+    一个简并组只有一部分带在比较范围里（典型：AMSET 带窗口的最底/最顶带与窗口外的带简并，
+    例如纤锌矿 kz=π/c 面上的能带粘连）时，这几条带在该点的逐带比较没有定义 -> 标成"切开"。
+    """
+    pos = {int(a): i for i, a in enumerate(abs_sel)}
+    split = np.zeros(len(abs_sel), bool)
+    groups = []
+    for g in degenerate_groups(e_all_k, tol):
+        loc = [pos[a] for a in g if a in pos]
+        if not loc:
+            continue
+        groups.append(loc)
+        if len(loc) < len(g):
+            split[loc] = True
+    return groups, split
 
 
 def mesh_from_kpoints(kpoints):
@@ -287,9 +343,11 @@ def _auto_chunk(coeffs, gpoints, budget_gb=2.0):
 
 def validate(coeffs_full, gpoints, kpoints_full, structure, energies=None,
              mesh=None, symprec=AMSET_SYMPREC, bands=None, pass_cos=PASS_COS,
-             chunk=None, formulas=None, verbose=True):
+             chunk=None, formulas=None, verbose=True, energies_all=None, band_abs=None):
     """核心检验。coeffs_full: {spin: (nb, nk_full, ng[,2])}；energies: {spin: (nb, nk_full)} 或 None。
 
+    V117：energies_all {spin: (nb_all, nk_full)}（vasprun 里**全部**带）+ band_abs {spin: h5 各带的
+    绝对带号} 给了时，简并分组用全部带，能识别被带窗口切开的简并组（见 groups_with_split）。
     返回报告 dict（见 main 的打印）。
     """
     from amset.electronic_structure.symmetry import expand_kpoints
@@ -319,23 +377,83 @@ def validate(coeffs_full, gpoints, kpoints_full, structure, energies=None,
     pred_bad_k = ~exact[op_map]                        # 按逐操作判据，原式会错的目标 k
     # V116 对照组：目标点 = 源点本身（IBZ 代表点映到自己）的是平凡映射，不进统计；
     #   其余按操作分"好"（原式精确 = AMSET 原生路径）/"坏"，再细分 TR / 非 TR。
-    trivial = (tgt_idx == ibz_idx[np.asarray(kp_map, int)])
+    src_idx = ibz_idx[np.asarray(kp_map, int)]        # 每个目标 k 的源点（全网格下标）
+    trivial = (tgt_idx == src_idx)
     tr_t = np.asarray(is_tr, bool)[op_map]
     classes = {"good": ~trivial & ~pred_bad_k, "bad": ~trivial & pred_bad_k}
     classes.update({"good_tr": classes["good"] & tr_t, "good_nontr": classes["good"] & ~tr_t,
                     "bad_tr": classes["bad"] & tr_t, "bad_nontr": classes["bad"] & ~tr_t})
 
     spins = list(coeffs_full.keys())
+    sels = {sp: (np.arange(coeffs_full[sp].shape[0]) if bands is None else np.asarray(bands, int))
+            for sp in spins}
+
+    # ---- V117 数据侧预检（与公式无关）----
+    # ① 边界标签：重建系数按 AMSET 约定 (-0.5, 0.5] 给标签；h5 若把边界点记成 -0.5，比较前要把
+    #    数据换到同一标签（c_{k-b}(G) = c_k(G-b)），否则比的是两个参照 k 不同的向量（假失败）。
+    k_can = amset_canonical(kpoints_full)
+    b_all = np.rint(kpoints_full - k_can).astype(int)
+    relabel = np.any(b_all != 0, axis=1)
+    relabel_maps = {b: relabel_index(gpoints, b) for b in {tuple(x) for x in b_all[relabel]}}
+    # ② 简并分组（有全部带能量时识别"被窗口切开"的组）；③ 源/目标本征值一致性
+    pre = {sp: [None] * len(full_k) for sp in spins}
+    split_any = np.zeros(len(full_k), bool)
+    no_cmp = np.zeros(len(full_k), bool)               # 该点所有被比较带都被切开 -> 无从比较
+    eig_dev = np.zeros(len(full_k))
+    for sp in spins:
+        sel = sels[sp]
+        e_sp = None if energies is None else np.asarray(energies[sp])
+        ea = None if energies_all is None else np.asarray(energies_all[sp])
+        babs = None if (ea is None or band_abs is None) else np.asarray(band_abs[sp], int)[sel]
+        for t in range(len(full_k)):
+            kf, src = tgt_idx[t], src_idx[t]
+            groups, split = None, np.zeros(len(sel), bool)
+            if babs is not None:
+                groups, split = groups_with_split(ea[:, kf], babs)
+            elif e_sp is not None:
+                groups = degenerate_groups(e_sp[sel, kf])
+            pre[sp][t] = (groups, split)
+            split_any[t] |= bool(split.any())
+            no_cmp[t] |= bool(split.all())
+            if e_sp is not None and not split.all():
+                d = np.abs(e_sp[sel, kf] - e_sp[sel, src])[~split] * 1000.0
+                eig_dev[t] = max(eig_dev[t], float(d.max()))
+    consistent = eig_dev <= EIG_CONSIST_MEV
+    usable = consistent & ~no_cmp
+    classes_all = classes
+    classes = {c: m & usable for c, m in classes_all.items()}
+    nontriv = ~trivial
+    data_checks = {
+        "relabeled_boundary_k": int(relabel.sum()),
+        "pw_cutoff_eV": round(pw_cutoff_ev(gpoints, structure), 1),
+        "n_gpoints": int(len(gpoints)),
+        "degeneracy_source": ("all_bands" if (energies_all is not None and band_abs is not None)
+                              else ("window_only" if energies is not None else "none")),
+        "split_degenerate_k": int((split_any & nontriv).sum()),
+        "no_comparable_band_k": int((no_cmp & nontriv).sum()),
+        "eig_inconsistent_k": int((~consistent & nontriv).sum()),
+        "eig_dev_meV_p99": float(np.percentile(eig_dev[nontriv], 99)) if nontriv.any() else 0.0,
+        "eig_dev_meV_max": float(eig_dev[nontriv].max()) if nontriv.any() else 0.0,
+        "excluded_from_control": {c: int((m & ~usable).sum()) for c, m in classes_all.items()
+                                  if c in ("good", "bad")},
+    }
+
     report = {"mesh": [int(x) for x in mesh], "nk_full": int(len(kpoints_full)),
               "nk_ibz": int(len(k_ibz)), "symprec": symprec, "degen_tol_eV": DEGEN_TOL_EV,
               "pass_cos": pass_cos, "ops": audit,
               "bad_op_ids": [int(i) for i in np.where(~exact)[0]],
               "bad_ops_tr": int(np.sum(~exact & np.asarray(is_tr, bool))),
-              "formulas": {}}
+              "formulas": {}, "data_checks": data_checks}
     if verbose:
         print("[..] 网格 %s：全网格 %d 点，IBZ %d 点；AMSET 操作 %d 个（其中原式会错 %d 个，TR %d 个）"
               % ("x".join(map(str, mesh)), len(kpoints_full), len(k_ibz),
                  audit["total_ops"], audit["bad_ops"], report["bad_ops_tr"]))
+        dc = data_checks
+        print("[..] 数据侧预检：边界标签换算 %d 点；平面波截断 ≈ %.0f eV（%d 个 G）；简并分组=%s；"
+              "被窗口切开的简并点 %d；本征值不一致(>%.0f meV) %d 点（p99 %.2f meV）"
+              % (dc["relabeled_boundary_k"], dc["pw_cutoff_eV"], dc["n_gpoints"],
+                 dc["degeneracy_source"], dc["split_degenerate_k"], EIG_CONSIST_MEV,
+                 dc["eig_inconsistent_k"], dc["eig_dev_meV_p99"]))
 
     worst_by_grid = {}
     for name, fn in formulas.items():
@@ -344,8 +462,10 @@ def validate(coeffs_full, gpoints, kpoints_full, structure, energies=None,
         per_band_min = None
         for spin in spins:
             cf = coeffs_full[spin]
-            sel = np.arange(cf.shape[0]) if bands is None else np.asarray(bands, int)
+            sel = sels[spin]
             e_spin = None if energies is None else np.asarray(energies[spin])
+            ea = None if energies_all is None else np.asarray(energies_all[spin])
+            babs = None if (ea is None or band_abs is None) else np.asarray(band_abs[spin], int)
             cf = cf[sel]
             c_ibz = {spin: cf[:, ibz_idx]}
             ch = chunk or _auto_chunk(c_ibz, gpoints)
@@ -355,19 +475,24 @@ def validate(coeffs_full, gpoints, kpoints_full, structure, energies=None,
                 rc = rc[spin]
                 for j, t in enumerate(range(sl.start, sl.stop)):
                     kf = tgt_idx[t]
-                    groups = None
-                    if e_spin is not None:
-                        groups = degenerate_groups(e_spin[sel, kf])
-                    s = subspace_scores(cf[:, kf], rc[:, j], groups)
+                    groups, split = pre[spin][t]
+                    data = cf[:, kf]
+                    if relabel[kf]:
+                        data = _apply_relabel(data, relabel_maps[tuple(b_all[kf])])
+                    s = subspace_scores(data, rc[:, j], groups)
+                    s[split] = 1.0                     # 被窗口切开的带在该点无定义，不计
                     jb = int(np.argmin(s))
                     if s[jb] < worst_k[t]:
                         worst_k[t] = float(s[jb])
-                        if e_spin is not None:
+                        if babs is not None:
+                            worst_gap[t] = band_gaps_mev(ea[:, kf], [babs[sel[jb]]])[0]
+                        elif e_spin is not None:
                             worst_gap[t] = band_gaps_mev(e_spin[:, kf], [sel[jb]])[0]
                     pbm = np.minimum(pbm, s)
             per_band_min = pbm if per_band_min is None else np.minimum(per_band_min, pbm)
         flagged = worst_k < pass_cos
         r = {"min_score": float(worst_k.min()),
+             "min_score_usable": float(worst_k[usable].min()) if usable.any() else None,
              "per_band_min": [round(float(x), 6) for x in per_band_min],
              "n_bad_k": int(flagged.sum()),
              "frac_bad_k": float(flagged.mean()),
@@ -376,7 +501,7 @@ def validate(coeffs_full, gpoints, kpoints_full, structure, energies=None,
         if energies is not None and flagged.any():
             gf = worst_gap[flagged]
             gf = gf[np.isfinite(gf)]
-            ga = worst_gap[~trivial]
+            ga = worst_gap[~trivial & usable]
             ga = ga[np.isfinite(ga)]
             r["flagged_gap_meV"] = {
                 "median": float(np.median(gf)) if len(gf) else None,
@@ -437,7 +562,10 @@ def validate(coeffs_full, gpoints, kpoints_full, structure, energies=None,
 # 读真实数据
 # --------------------------------------------------------------------------
 def _energies_from_vasprun(vasprun, kpoints_h5, nb_h5, energy_cutoff=None, bands=None):
-    """按 amset wave 的同一套规则（get_band_structure + get_ibands）从 vasprun 取出 h5 里那些带的能量。"""
+    """按 amset wave 的同一套规则（get_band_structure + get_ibands）从 vasprun 取出 h5 里那些带的能量。
+
+    返回 (energies, energies_all, band_abs)：h5 各带能量 {spin: (nb_h5, nk)}、全部带能量
+    {spin: (nb_all, nk)}（V117：识别被带窗口切开的简并组）、h5 各带的绝对带号 {spin: (nb_h5,)}。"""
     from pymatgen.io.vasp import BSVasprun
     from amset.constants import defaults
     from amset.electronic_structure.common import get_band_structure, get_ibands
@@ -450,7 +578,7 @@ def _energies_from_vasprun(vasprun, kpoints_h5, nb_h5, energy_cutoff=None, bands
         ib = get_ibands(energy_cutoff or defaults["energy_cutoff"], bs)
     kbs = np.array([k.frac_coords for k in bs.kpoints])
     idx = match_kpoints(kpoints_h5, kbs)
-    out = {}
+    out, out_all, babs = {}, {}, {}
     for spin, b in bs.bands.items():
         sel = np.asarray(ib[spin], int)
         if len(sel) != nb_h5[spin]:
@@ -458,7 +586,9 @@ def _energies_from_vasprun(vasprun, kpoints_h5, nb_h5, energy_cutoff=None, bands
                              "请用 --energy-cutoff / --amset-bands 对齐 amset wave 当时的取法"
                              % (len(sel), nb_h5[spin]))
         out[spin] = np.asarray(b)[sel][:, idx]
-    return out
+        out_all[spin] = np.asarray(b)[:, idx]
+        babs[spin] = sel
+    return out, out_all, babs
 
 
 def validate_with_shift(coeffs, gpoints, kpoints, structure, t, **kw):
@@ -517,11 +647,15 @@ def main(argv=None):
     if gpoints is None:
         print("[ERROR] h5 里没有 gpoints（太老的 amset wave？）", file=sys.stderr)
         return 2
-    energies = None
+    energies = energies_all = band_abs = None
     if a.vasprun:
-        energies = _energies_from_vasprun(a.vasprun, kpoints,
-                                          {s: v.shape[0] for s, v in coeffs.items()},
-                                          a.energy_cutoff, a.amset_bands)
+        _e = _energies_from_vasprun(a.vasprun, kpoints,
+                                    {s: v.shape[0] for s, v in coeffs.items()},
+                                    a.energy_cutoff, a.amset_bands)
+        if isinstance(_e, tuple):
+            energies, energies_all, band_abs = _e
+        else:                                   # 旧接口（测试桩）：只有 h5 各带能量
+            energies = _e
     else:
         print("[WARN] 没给 --vasprun：不做简并子空间比较，简并带会被误报为出错", file=sys.stderr)
     bands = None
@@ -529,7 +663,7 @@ def main(argv=None):
         lo, _, hi = a.bands.partition(":")
         bands = list(range(int(lo), int(hi))) if hi else [int(lo)]
     kw = dict(energies=energies, mesh=a.mesh, symprec=a.symprec, bands=bands,
-              pass_cos=a.pass_cos, chunk=a.chunk)
+              pass_cos=a.pass_cos, chunk=a.chunk, energies_all=energies_all, band_abs=band_abs)
     if a.shift:
         rep = validate_with_shift(coeffs, gpoints, kpoints, st, a.shift, **kw)
         st = rep.pop("_structure")
@@ -566,6 +700,20 @@ def main(argv=None):
               % ("  ".join("%s=%s" % (k, "✓" if v else "✗") for k, v in ctl["checks"].items()),
                  {True: "通过（判据无区分力！）", False: "不通过（应当如此）", None: "无从判定"}
                  [ctl.get("orig_would_pass")]))
+    dc = rep["data_checks"]
+    print("数据侧预检（V117）：边界标签换算 %d 点；被窗口切开的简并点 %d（简并分组=%s）；"
+          "本征值不一致 %d 点；对照统计剔除 好/坏 = %d/%d 点"
+          % (dc["relabeled_boundary_k"], dc["split_degenerate_k"], dc["degeneracy_source"],
+             dc["eig_inconsistent_k"], dc["excluded_from_control"].get("good", 0),
+             dc["excluded_from_control"].get("bad", 0)))
+    if dc["pw_cutoff_eV"] < LOW_PW_CUTOFF_EV:
+        print("    [注] h5 平面波截断仅 ≈ %.0f eV（%d 个 G，amset wave 自动选的）：AMSET 按 |G| 截断，"
+              "折回的目标点两边截断球不重合 -> 地板偏高，好/坏操作同样受影响（对照组判据不受干扰）。"
+              % (dc["pw_cutoff_eV"], dc["n_gpoints"]))
+    if dc["eig_inconsistent_k"]:
+        print("    [WARN] %d 个点源/目标本征值差 > %.0f meV（最大 %.1f meV）—— 数据本身在对称相关 k 点间"
+              "不一致（未收敛？），这些点已从对照统计剔除；这也会影响生产 AMSET，建议查 S3b 的收敛。"
+              % (dc["eig_inconsistent_k"], EIG_CONSIST_MEV, dc["eig_dev_meV_max"]))
     if "flagged_gap_meV" in fx:
         fg = fx["flagged_gap_meV"]
         if fg.get("frac_near_degenerate") is not None:

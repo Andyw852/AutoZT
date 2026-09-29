@@ -57,6 +57,12 @@ submit_required: [fit_config.json, submit.sh]
 # whole step directory (hdf5, shengbte/, logs) comes home.
 fetch_files: [POSCAR, SPOSCAR, phono3py_disp.yaml, phono3py_params.yaml,
               FORCES_FC3, BORN, fc2.hdf5, fc3.hdf5, FORCE_CONSTANTS,
+              # 两种力常数格式都显式列出：phono3py/phonopy 的 hdf5 + text，
+              # 以及 ShengBTE 的 FORCE_CONSTANTS_2ND/_3RD（顶层与 shengbte/ 子目录）。
+              # 即使项目覆盖了 fetch_all，这些也能按需单独回拉。
+              FORCE_CONSTANTS_2ND, FORCE_CONSTANTS_3RD,
+              shengbte/POSCAR, shengbte/FORCE_CONSTANTS_2ND,
+              shengbte/FORCE_CONSTANTS_3RD,
               fit_config.json, fc_dataset.json, phonon_summary.json,
               fc_fit_summary.json, band-dft-cpu.yaml,
               submit.sh, queue.out, queue.err]

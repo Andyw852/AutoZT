@@ -9,6 +9,9 @@
   4. fc_fit_driver.fc3_shell_index / bins / means：逐壳层 |Phi^3|
   5. fc_fit_driver.fc3_shell_stats_from_means / _recommend_cut：σ/|mean| 与
      stable_upper_cut（数据能确定的最大截断）
+  6. fc_fit_driver._detect_coords_mode / _normalize_displacement_frames：
+     COORDS=auto 自动分辨分数坐标 vs 笛卡尔位移，平衡帧可在文件任意位置
+     （首/中/末），无精确理想帧时不丢帧并用最近帧力作平衡近似
 
 不碰集群、不依赖 pheasy / phono3py。
 """
@@ -137,11 +140,71 @@ def test_fc3_shell_stability():
           drv._recommend_cut([{"cut": 6.0, "stable_upper_cut": 4.0}]) is None)
 
 
+def test_prep_coords_equilibrium():
+    print("[6] prep 坐标类型自动判定 + 平衡帧任意位置识别")
+    import numpy as np
+    import fc_fit_driver as drv
+    rng = np.random.default_rng(3)
+    cell = np.diag([9.0, 9.0, 15.0])
+    N = 12
+
+    # fractional: the ideal frame sits in the MIDDLE of the file
+    frac_ref = rng.random((N, 3))
+    fr = np.stack([frac_ref + rng.normal(0, 0.001, (N, 3)) for _ in range(9)])
+    fr[4] = frac_ref.copy()
+    ff = rng.normal(0, 1.0, (9, N, 3))
+    mode, dev, _ = drv._detect_coords_mode(fr, cell, frac_ref)
+    check("分数坐标 -> auto 判定 fractional", mode == "fractional", mode)
+    check("理想帧在中间 -> 最近帧距离 ~0", dev < 1e-4, str(dev))
+    d, _f, eq, info = drv._normalize_displacement_frames(fr, ff, cell, frac_ref, mode)
+    check("中间平衡帧被识别且剔除", info["reference_frame_index"] == 4
+          and len(d) == 8, str((info["reference_frame_index"], len(d))))
+    check("平衡力取自该中间帧", eq is not None and np.allclose(eq, ff[4]))
+    check("平衡帧已从训练集剔除（无零位移帧）",
+          float(np.sqrt((d ** 2).sum(axis=2).mean(axis=1)).min()) > 1e-4)
+
+    # fractional with no exact ideal frame: keep every frame, eq from nearest
+    fr2 = np.stack([frac_ref + rng.normal(0, 0.003, (N, 3)) for _ in range(9)])
+    ff2 = rng.normal(0, 1.0, (9, N, 3))
+    d2, _f2, eq2, i2 = drv._normalize_displacement_frames(fr2, ff2, cell,
+                                                          frac_ref, "fractional")
+    check("无精确理想帧 -> 不丢帧", len(d2) == 9, str(len(d2)))
+    check("无精确理想帧 -> 用最近帧的力当平衡近似", eq2 is not None,
+          str(i2.get("equilibrium_source")))
+
+    # Cartesian displacements: the zero frame sits in the MIDDLE
+    cad = rng.normal(0, 0.05, (11, N, 3))
+    cad[6] = 0.0
+    fc3 = rng.normal(0, 1.0, (11, N, 3))
+    mode3, dev3, _ = drv._detect_coords_mode(cad, cell, frac_ref)
+    check("笛卡尔位移 -> auto 判定 cartesian", mode3 == "cartesian", mode3)
+    check("笛卡尔位移与理想位置相差数埃", dev3 > 1.0, str(dev3))
+    d3, _f3, eq3, i3 = drv._normalize_displacement_frames(cad, fc3, None, None,
+                                                        "cartesian")
+    check("中间零位移帧被识别且剔除", i3["reference_frame_index"] == 6
+          and len(d3) == 10, str(i3.get("reference_frame_index")))
+    check("零位移帧的力作为平衡参考", eq3 is not None and np.allclose(eq3, fc3[6]))
+
+    # Cartesian with no near-zero frame: keep every frame, no equilibrium force
+    cad2 = rng.normal(0, 0.5, (11, N, 3))
+    d4, _f4, eq4, _i4 = drv._normalize_displacement_frames(cad2, fc3, None, None,
+                                                          "cartesian")
+    check("无近零位移帧 -> 不丢帧且无平衡力", len(d4) == 11 and eq4 is None,
+          str((len(d4), eq4 is not None)))
+
+    # ...but a frame within 0.25 A of zero is still used as the equilibrium proxy
+    cad3 = rng.normal(0, 0.02, (11, N, 3))
+    _d5, _f5, eq5, i5 = drv._normalize_displacement_frames(cad3, fc3, None, None,
+                                                          "cartesian")
+    check("最近帧 <0.25 A -> 用作平衡近似", eq5 is not None,
+          str(i5.get("equilibrium_source")))
+
 def main():
     test_shells_and_candidates()
     test_resolve()
     test_safe_cutoff()
     test_fc3_shell_stability()
+    test_prep_coords_equilibrium()
     print("\nsuite_fcfit_shell: %s（%d 项）"
           % ("ALL PASS" if not FAIL else "FAIL", N))
     return 1 if FAIL else 0

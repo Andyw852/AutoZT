@@ -75,23 +75,34 @@ Layouts 1-3 and 6 are read with phono3py's own YAML/dataset machinery; layouts
 POSCAR                                  unit cell
 SPOSCAR                                 supercell
 dataset_disps.npy, dataset_forces.npy   (n+1, natom_super, 3); Cartesian
-                                        displacements by default (trailing frame
-                                        = the zero equilibrium reference), or
-                                        fractional coordinates when COORDS =
-                                        fractional (trailing frame = reference)
+                                        displacements, trailing frame = the
+                                        zero equilibrium reference
 disp_matrix.pkl, force_matrix.pkl       (n, natom_super, 3), equilibrium
                                         subtracted - this is what pheasy reads
 fc_dataset.json                         frames, atoms, RMS displacement,
-                                        provenance, matrices
+                                        coords_mode / reference_frame_index /
+                                        equilibrium_source, provenance, matrices
 ~~~
 
-Displacements are **Cartesian, in Angstrom** by default.  Set
-`COORDS = fractional` when `dataset_disps.npy` holds fractional coordinates;
-the driver then subtracts the trailing reference frame, minimum-image wraps and
-converts to Cartesian with the supercell lattice (mirrors
-`prepare_dataset.py --frac`).  The RMS gate (1e-8 .. 1 A) does **not** catch a
-fractional array fed as Cartesian, so the driver warns when it sees no zero
-reference frame and every value in [0,1).
+`COORDS = auto` (default) inspects `dataset_disps.npy` and decides by itself:
+
+* **absolute fractional coordinates** - every value in [0,1) and the frame
+  closest to the ideal `SPOSCAR` is within ~1 A of it.  Each frame's
+  minimum-image displacement from the ideal supercell is converted to Cartesian
+  with the supercell lattice;
+* **Cartesian displacements** - centred on zero (about half the values
+  negative), so subtracting the ideal POSITIONS leaves a several-Angstrom
+  residual.
+
+The **equilibrium frame is located wherever it sits** (first, middle, last or
+absent), not assumed to be the first/last frame: the frame with the smallest
+RMS displacement from the ideal supercell becomes the reference and is dropped
+from the training set.  When no frame is exactly ideal, every frame is kept and
+the closest frame's forces are used as the equilibrium approximation when it is
+within 0.25 A (otherwise set `EQUILIBRIUM_FORCES_NPY`).  Force the old behaviour
+with `COORDS = fractional` / `COORDS = cartesian`; the auto choice and reference
+index are recorded in `fc_dataset.json` (`coords_mode`,
+`reference_frame_index`, `equilibrium_source`).
 
 Layouts 4-6 do not always carry a supercell matrix (a bare `.npy`/`.pkl`
 dataset has no YAML to record one), so the gen falls back to the `POSCAR` /
@@ -105,7 +116,9 @@ forces from every frame or the fit is biased:
 
 * `SUBTRACT_EQUILIBRIUM = true` (default) does it automatically when the
   dataset carries a reference: `disp-00000/vasprun.xml` for the VASP layout, or
-  a trailing all-zero displacement frame (the convention the kl skills write).
+  the frame closest to the ideal supercell - **wherever it sits** (first,
+  middle or last; in fractional mode any frame matching `SPOSCAR`, in Cartesian
+  mode a near-zero displacement frame).  That frame is dropped from training.
 * `EQUILIBRIUM_FORCES_NPY = <file.npy>` supplies the reference by hand
   (`(natom_super, 3)`), for datasets without one.
 * With no reference available the driver prints a note and fits the raw forces.

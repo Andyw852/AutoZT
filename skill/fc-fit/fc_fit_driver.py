@@ -492,6 +492,65 @@ def _stage_yaml_cells(src, out):
     return info
 
 
+def _min_image_cart(frac_delta, cell):
+    u = np.asarray(frac_delta, float)
+    u = u - np.round(u)
+    return u @ np.asarray(cell, float)
+
+
+def _detect_coords_mode(d, cell, frac_ref):
+    # Decide whether d holds absolute fractional coordinates or Cartesian
+    # displacements, with no user input.  Absolute fractional coordinates
+    # live in [0, 1) and the frame closest to the ideal SPOSCAR sits within
+    # ~1 A of it; Cartesian displacements are centred on zero, so subtracting
+    # the ideal POSITIONS leaves a several-Angstrom residual and ~half the
+    # values are negative.  Returns (mode, closest_to_ideal_A, frac_like).
+    d = np.asarray(d, float)
+    frac_ref = np.asarray(frac_ref, float)
+    devs = []
+    for i in range(len(d)):
+        cart = _min_image_cart(d[i] - frac_ref, cell)
+        devs.append(float(np.sqrt((cart ** 2).sum(axis=1).mean())))
+    min_dev = min(devs) if devs else 0.0
+    flat = d.reshape(-1)
+    frac_like = float(np.mean((flat >= -1e-6) & (flat < 1.0)))
+    mode = 'fractional' if (min_dev < 1.0 or frac_like > 0.95) else 'cartesian'
+    return mode, min_dev, frac_like
+
+
+def _normalize_displacement_frames(d, f, cell, frac_ref, mode):
+    # Normalise a raw (m, N, 3) frame set into the fc-fit canonical form.
+    # The equilibrium frame is wherever it is (first, middle, last or absent):
+    # the frame closest to the ideal supercell is located by its RMS
+    # displacement.  If it really is the ideal structure it becomes the
+    # reference and is dropped from training; otherwise every frame is kept
+    # and the closest frame's forces are the equilibrium approximation when
+    # it is close enough.  Returns (disps, forces, eq_forces, info).
+    d = np.asarray(d, float)
+    f = np.asarray(f, float)
+    frac_ref = np.asarray(frac_ref, float)
+    if mode == 'fractional':
+        disp_all = np.stack([_min_image_cart(d[i] - frac_ref, cell) for i in range(len(d))])
+    else:
+        disp_all = d.copy()
+    rms = np.sqrt((disp_all ** 2).sum(axis=2).mean(axis=1))
+    info = {'coords_detected': mode}
+    if not len(rms):
+        return disp_all, f, None, info
+    iref = int(np.argmin(rms))
+    info['reference_frame_index'] = iref
+    if float(rms[iref]) < 1e-4:
+        keep = [i for i in range(len(d)) if i != iref]
+        info['equilibrium_source'] = 'ideal frame #%d (%s)' % (iref, mode)
+        return disp_all[keep], f[keep], f[iref].copy(), info
+    info['equilibrium_source'] = None
+    eq_forces = None
+    if float(rms[iref]) < 0.25:
+        eq_forces = f[iref].copy()
+        info['equilibrium_source'] = 'nearest frame #%d to the ideal (rms %.3f A)' % (iref, float(rms[iref]))
+    return disp_all, f, eq_forces, info
+
+
 def cmd_prep(cfg, out):
     out = Path(out)
     src, kind = _resolve_dataset_dir(cfg, out)
@@ -564,34 +623,43 @@ def cmd_prep(cfg, out):
         if len(d) != len(f_):
             sys.exit("[ERROR] dataset_disps.npy has %d frames but "
                      "dataset_forces.npy has %d" % (len(d), len(f_)))
-        coords = str(cfg.get("coords") or "cartesian").strip().lower()
-        if coords == "fractional":
-            # dataset_disps.npy holds fractional coordinates, not displacements
-            # (the convention prepare_dataset.py consumes with --frac): subtract
-            # the trailing reference frame, minimum-image wrap, convert to
-            # Cartesian with the supercell lattice, then drop the reference.
-            sc = _read_poscar(out / "SPOSCAR")
-            cell = np.asarray(sc.cell, float)
-            ref = np.asarray(d[-1], float)
-            u = np.asarray(d, float) - ref[None]
-            u -= np.round(u)                       # minimum image (fractional)
-            disps = (u @ cell)[:-1]                # drop the reference frame
-            forces = np.asarray(f_[:-1], float)
-            eq_forces = np.asarray(f_[-1], float).copy()
-            info["equilibrium_source"] = "reference frame (fractional coords)"
-        elif np.allclose(d[-1], 0.0):
-            # A trailing all-zero frame is the equilibrium reference (kl convention).
-            eq_forces = f_[-1].copy()
-            info["equilibrium_source"] = "trailing zero-displacement frame"
-            disps, forces = d[:-1], f_[:-1]
+        coords = str(cfg.get("coords") or "auto").strip().lower()
+        if coords not in ("auto", "cartesian", "fractional"):
+            sys.exit("[ERROR] COORDS must be auto|cartesian|fractional, got %r"
+                     % coords)
+        sp_path = out / "SPOSCAR"
+        if sp_path.is_file():
+            sc0 = _read_poscar(sp_path)
+            cell0 = np.asarray(sc0.cell, float)
+            frac_ref0 = np.asarray(sc0.get_scaled_positions(wrap=True), float)
         else:
-            disps, forces = d, f_
-            if float(np.abs(d).max()) < 1.0:
-                print("[WARN] dataset_disps.npy has no trailing zero-displacement "
-                      "frame and every value lies in [0,1) -- it may hold fractional "
-                      "coordinates rather than Cartesian displacements.  If so set "
-                      "COORDS=fractional, else the fit treats positions as "
-                      "displacements.", flush=True)
+            cell0 = frac_ref0 = None
+        if coords == "auto" and cell0 is None:
+            coords = "cartesian"
+            print("[WARN] COORDS=auto needs SPOSCAR to compare against; falling "
+                  "back to Cartesian displacements.", flush=True)
+        if coords == "fractional" and cell0 is None:
+            sys.exit("[ERROR] COORDS=fractional needs SPOSCAR next to the dataset "
+                     "to convert fractional coordinates -- none found in %s." % src)
+        if coords == "auto":
+            coords, _dev0, _fl0 = _detect_coords_mode(d, cell0, frac_ref0)
+            print("[..] COORDS=auto -> %s (closest frame to the ideal supercell "
+                  "%.3f A, %.0f%% of values in [0,1))"
+                  % (coords, _dev0, 100.0 * _fl0), flush=True)
+        info["coords_mode"] = coords
+        if coords == "fractional":
+            # dataset_disps.npy holds ABSOLUTE fractional coordinates: measure
+            # every frame against the ideal SPOSCAR (minimum-image wrap), convert
+            # to Cartesian, and use the frame closest to the ideal as the
+            # equilibrium reference wherever it sits in the file.
+            disps, forces, eq_forces, _ninfo = _normalize_displacement_frames(
+                d, f_, cell0, frac_ref0, "fractional")
+        else:
+            # dataset_disps.npy already holds Cartesian displacements; a frame
+            # of ~zero displacement (anywhere) is the equilibrium reference.
+            disps, forces, eq_forces, _ninfo = _normalize_displacement_frames(
+                d, f_, None, None, "cartesian")
+        info.update(_ninfo)
         info["dataset_type"] = "random"
     else:   # pkl
         for f in ("POSCAR", "SPOSCAR", "BORN", "phono3py_params.yaml",
@@ -981,9 +1049,13 @@ def _pheasy_scan(cfg, out, cands, base_for, rasr_flag, fit_flags, make_env):
         cdir = scan_dir / ("cut3_%s" % tag)
         cdir.mkdir(parents=True, exist_ok=True)
         fit_txt = _fit_stages(c, tag)
+        # Bring pheasy's fc back to the DATASET atom order (and restore SPOSCAR)
+        # before saving/copying: phono3py/ShengBTE/hiphive rebuild the supercell
+        # from POSCAR + SUPERCELL in phonopy order, so leaving pheasy's order here
+        # would silently give the downstream kappa wrong force constants.
+        apply_pheasy_fc_order(cfg, out)
         if bins is None:
-            # Build the shell index now: the fit (and therefore fc3) is in
-            # pheasy's atom order, which is what SPOSCAR holds at this point.
+            # Shell index on the (now dataset-order) supercell.
             cell, frac = _shell_cell_frac(out)
             shell_dist, tri = fc3_shell_index(cell, frac, tol=0.05,
                                               r_max=max(cands) + 1.0)
@@ -994,6 +1066,11 @@ def _pheasy_scan(cfg, out, cands, base_for, rasr_flag, fit_flags, make_env):
         m = _pheasy_metrics(fit_txt)
         rec["train_rel_err"] = m.get("pheasy_relative_error")
         rec["free_ifcs"] = m.get("pheasy_free_ifcs")
+        rec["err_kind"] = "in-sample"          # pheasy -f residual on all frames
+        # equations / parameters -- kl-dft-cpu S6's select_cutoff gates on
+        # ratio >= 3 (data_ok); without this field every candidate is rejected.
+        _free = m.get("pheasy_free_ifcs")
+        rec["ratio"] = (float(nd) * 3.0 * len(frac) / float(_free)) if _free else None
         if (Path(out) / "fc2.hdf5").is_file():
             shutil.copyfile(str(Path(out) / "fc2.hdf5"), str(cdir / "fc2.hdf5"))
         if (Path(out) / "fc3.hdf5").is_file():
@@ -1025,6 +1102,7 @@ def _pheasy_scan(cfg, out, cands, base_for, rasr_flag, fit_flags, make_env):
             mm = _pheasy_metrics(txt)
             if mm.get("pheasy_relative_error") is not None:
                 rels.append(mm["pheasy_relative_error"])
+            apply_pheasy_fc_order(cfg, out)      # bootstrap fc -> dataset atom order
             try:
                 fc3 = _read_fc3_any(out)
                 if fc3 is not None:
@@ -1535,6 +1613,12 @@ def cmd_fit_pheasy(cfg, out):
     fit_step = "%s -f --ndata %d %s" % (base, len(disps), " ".join(fit_flags))
     disp_step = "%s -d --ndata %d --disp_file" % (base, len(disps))
 
+    # pheasy's cluster-space step rewrites SPOSCAR in its own atom order; keep the
+    # dataset's copy so apply_pheasy_fc_order can restore it -- including during
+    # the cutoff scan below, which must save pheasy's fc in the DATASET atom order.
+    if (out / "SPOSCAR").is_file():
+        shutil.copyfile(str(out / "SPOSCAR"), str(out / "SPOSCAR.dataset"))
+
     # ---- third-order cutoff scan (ported from kl-dft-cpu S5_fc) ----
     #   Refit every candidate cutoff and frame-bootstrap it BEFORE the nominal
     #   fit, so the nominal fit overwrites the last candidate's fc2/fc3 in cwd.
@@ -1558,11 +1642,6 @@ def cmd_fit_pheasy(cfg, out):
     elif cfg.get("cut3_candidates"):
         print("[..] 单截断拟合（CUT3_SCAN=%s，候选 %d 档）"
               % (cfg.get("cut3_scan"), len(_cands)), flush=True)
-
-    # pheasy's cluster-space step rewrites SPOSCAR in its own atom order; keep
-    # the dataset's copy so apply_pheasy_fc_order can restore it after the fit.
-    if (out / "SPOSCAR").is_file():
-        shutil.copyfile(str(out / "SPOSCAR"), str(out / "SPOSCAR.dataset"))
 
     run_steps = (("cluster space", "setup", base + " -s"),
                  ("symmetry constraints", "setup", base + " -c" + rasr_flag),

@@ -662,10 +662,9 @@ AMSET_SYMPREC = 0.01
 # ---- [patch_desym_fix] AMSET 去对称化相位补丁的开关（V115 §5）----------------------------
 #   补丁本体：step8.4_amset2d/amset_desym_fix.py（运行时替换 desymmetrize_coefficients 的
 #   相位因子）。开了以后，任何结构、任何原点 IBZ 都精确（模型检验 12/12，见 test_desym_fix.py）。
-#   ★ 验证期默认关：MoS₂（S4b 全网格同框自洽检验，tools/desym_fix_validate.py）与 GaN
-#     两项真实数据验证都通过后，把 DESYM_FIX_DEFAULT 改成 True。
+#   ★ 已验证：MoS₂（V116）+ GaN（V117）对照组判据 + 平移不变性均 PASS，默认开启。
 #   取值优先级：step.conf 的 DESYM_FIX（on/off）> gen 时的环境变量 AZ_DESYM_FIX > 本常量。
-DESYM_FIX_DEFAULT = False
+DESYM_FIX_DEFAULT = True
 DESYM_FIX_ENV = "AZ_DESYM_FIX"
 DESYM_FIX_PLUGIN = "amset_desym_fix.py"
 _ON = ("1", "true", "on", "yes")
@@ -686,7 +685,7 @@ def desym_fix_setting(conf_value=None):
         return True, "环境变量 %s=%s" % (DESYM_FIX_ENV, e)
     if e in _OFF:
         return False, "环境变量 %s=%s" % (DESYM_FIX_ENV, e)
-    return bool(DESYM_FIX_DEFAULT), ("出厂默认 DESYM_FIX_DEFAULT=%s（验证期默认关）"
+    return bool(DESYM_FIX_DEFAULT), ("出厂默认 DESYM_FIX_DEFAULT=%s（默认开）"
                                      % DESYM_FIX_DEFAULT)
 
 

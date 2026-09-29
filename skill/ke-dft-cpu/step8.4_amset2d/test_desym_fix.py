@@ -260,6 +260,95 @@ class DesymFixModelTests(unittest.TestCase):
                         self.assertTrue(rep["verdict_strict"], msg)
                         self.assertTrue(rep["verdict"], msg)
 
+    # ---- V117：数据侧假失败（GaN 实测"对照组无从判定"的两个来源）-------------------------
+    def test_boundary_label_minus_half(self):
+        """h5 把边界点记成 -0.5（系数与该标签自洽）时，验证脚本必须先换到 AMSET 的 (-0.5,0.5]
+        约定再比 —— 修前：标准原点 GaN（0 坏操作 = AMSET 原生路径）最低 0.112 的假失败。"""
+        for st in (self.tsg.gan_std(), self.tsg.shifted(self.tsg.gan_std(), [.1, .2, .05])):
+            mesh = [4, 4, 4]
+            kp = full_mesh(mesh)
+            kp[np.isclose(kp, 0.5)] = -0.5
+            gp = gsphere(st)
+            cf, en = tb_coeffs(st, kp, gp)
+            rep = self.V.validate({Spin.up: cf}, gp, kp, st, energies={Spin.up: en},
+                                  mesh=mesh, verbose=False)
+            msg = "%s %s" % (st.formula, rep["data_checks"])
+            self.assertGreater(rep["data_checks"]["relabeled_boundary_k"], 0, msg)
+            self.assertGreater(rep["formulas"]["fixed"]["min_score"], 1 - 1e-6, msg)
+            self.assertTrue(rep["verdict_strict"], msg)
+
+    def test_window_split_sticking_degeneracy(self):
+        """纤锌矿 kz=π/c 面上能带两两粘连（非点式操作 + 时间反演）。AMSET 的带窗口若切开一对
+        （只收其中一条），该点逐带比较无定义：只用窗口内能量分组 -> 好操作上 ~0 的假失败
+        （2026-09-29 GaN 实测 23%、最低 8e-6 的来源）；给全部带能量 -> 识别并剔除。"""
+        st = self.tsg.gan_std()
+        mesh = [4, 4, 4]                                   # 含 kz=0.5 面（4×4×3 不含）
+        kp = full_mesh(mesh)
+        gp = gsphere(st)
+        cf, en = tb_coeffs(st, kp, gp)
+        kz5 = np.isclose(np.abs(kp[:, 2]), 0.5)
+        self.assertLess(np.abs(en[1] - en[0])[kz5].max(), 1e-9)   # 粘连确实存在
+        win = [1, 2, 3, 4]                                 # 切开 (0,1) 与 (4,5) 两对
+        old = self.V.validate({Spin.up: cf[win]}, gp, kp, st, energies={Spin.up: en[win]},
+                              mesh=mesh, verbose=False)
+        self.assertLess(old["formulas"]["fixed"]["min_score"], 1e-3)          # 盲区复现
+        new = self.V.validate({Spin.up: cf[win]}, gp, kp, st, energies={Spin.up: en[win]},
+                              mesh=mesh, verbose=False, energies_all={Spin.up: en},
+                              band_abs={Spin.up: np.array(win)})
+        self.assertEqual(new["data_checks"]["degeneracy_source"], "all_bands")
+        self.assertGreater(new["data_checks"]["split_degenerate_k"], 0)
+        self.assertGreater(new["formulas"]["fixed"]["min_score"], 1 - 1e-6, new["data_checks"])
+
+    def test_gan_like_end_to_end(self):
+        """GaN 实测情形的整体复现：标准原点 + --shift + 窗口切开粘连对 + 异质数值地板。
+        只用窗口内能量 -> 对照组不通过/无从判定（ke 实测结论）；给全部带能量 -> 对照组 PASS、
+        平移不变、同一判据套原式 FAIL。"""
+        st = self.tsg.gan_std()
+        mesh = [6, 6, 4]
+        kp = full_mesh(mesh)
+        gp = gsphere(st)
+        cf, en = tb_coeffs(st, kp, gp)
+        win = [1, 2, 3, 4]
+        noisy = self._noisy(cf[win], 0.015, 7, sigma=0.6)
+        common = dict(energies={Spin.up: en[win]}, mesh=mesh, verbose=False)
+        old = self.V.validate_with_shift({Spin.up: noisy.copy()}, gp, kp, st, [.1, .2, .05], **common)
+        self.assertNotEqual(old["control"]["ok"], True, old["control"])
+        new = self.V.validate_with_shift({Spin.up: noisy.copy()}, gp, kp, st, [.1, .2, .05],
+                                         energies_all={Spin.up: en},
+                                         band_abs={Spin.up: np.array(win)}, **common)
+        msg = str({k: new[k] for k in ("control", "shift", "data_checks")})
+        self.assertTrue(new["shift"]["invariant"], msg)
+        self.assertGreater(new["shift"]["bad_ops_after"], 0, msg)
+        self.assertTrue(new["control"]["ok"], msg)
+        self.assertIs(new["control"]["orig_would_pass"], False, msg)
+        self.assertTrue(new["verdict"], msg)
+
+    def test_eig_inconsistent_points_excluded(self):
+        """某些目标点的数据坏了（态换成随机向量、本征值偏 50 meV，模拟未收敛）：
+        本征值一致性检查必须逐点抓出来，并从对照统计里剔除；其余点照常判定。"""
+        st = self.tsg.shifted(self.tsg.mos2_aligned(), [.1, .2, 0])
+        mesh = [12, 12, 1]
+        kp = full_mesh(mesh)
+        gp = gsphere(st)
+        cf, en = tb_coeffs(st, kp, gp)
+        rep0 = self.V.validate({Spin.up: cf}, gp, kp, st, energies={Spin.up: en},
+                               mesh=mesh, verbose=False)
+        ibz = set(self.V.match_kpoints(self.V.ibz_from_mesh(st, mesh), kp).tolist())
+        bad_k = [i for i in range(len(kp)) if i not in ibz][:5]
+        rng = np.random.default_rng(3)
+        cf2, en2 = cf.copy(), en.copy()
+        for i in bad_k:
+            v = rng.normal(size=cf.shape[-1]) + 1j * rng.normal(size=cf.shape[-1])
+            cf2[2, i] = v / np.linalg.norm(v) * np.linalg.norm(cf[2, i])
+            en2[2, i] += 0.05
+        rep = self.V.validate({Spin.up: cf2}, gp, kp, st, energies={Spin.up: en2},
+                              mesh=mesh, verbose=False)
+        dc = rep["data_checks"]
+        self.assertEqual(rep0["data_checks"]["eig_inconsistent_k"], 0)
+        self.assertEqual(dc["eig_inconsistent_k"], len(bad_k), dc)
+        self.assertGreater(rep["formulas"]["fixed"]["min_score_usable"], 1 - 1e-6, dc)
+        self.assertLess(rep["formulas"]["fixed"]["min_score"], 0.5, dc)      # 原始最小值仍如实报
+
     def test_plugin_switch(self):
         """AZ_DESYM_FIX 未设 -> apply() 不动 AMSET；设了 -> 两个模块都被替换。"""
         import os

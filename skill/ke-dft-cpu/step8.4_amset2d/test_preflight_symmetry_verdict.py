@@ -112,6 +112,31 @@ class PreflightVerdictTests(unittest.TestCase):
         verdict, lines = pf.run(out, out, False, desym_fix=True)
         self.assertNotEqual(verdict, "error", "\n".join(lines))
 
+    def test_full_grid_h5_with_minus_half_labels_blocks(self):
+        """V117：完整网格 h5 的边界点记成 -0.5 -> AMSET from_data 会贴错系数标签 -> 拦截（2D/3D 同）；
+        +0.5（VASP 的惯例，也是 AMSET 约定）照常放行。unity 重叠不读系数，不拦。"""
+        import h5py
+        for conv, expect_err in ((0.5, False), (-0.5, True)):
+            base = _material_dir(gan_std())
+            out = base / "step8_amset"
+            out.mkdir()
+            (out / "settings.yaml").write_text("unity_overlap: false\n")
+            g = np.array(list(np.ndindex(4, 4, 4)), float) / 4
+            kp = g - np.rint(g)
+            kp[np.isclose(np.abs(kp), 0.5)] = conv
+            with h5py.File(str(out / "wavefunction.h5"), "w") as f:
+                f["kpoints"] = kp
+                f["gpoints"] = np.zeros((3, 3), int)
+                f["coefficients_up"] = np.zeros((2, len(kp), 3), complex)
+            self.assertEqual(pf.n_offconvention_kpoints(kp), 0 if conv > 0 else 37)
+            verdict, lines = pf.run(out, out, False)
+            txt = "\n".join(lines)
+            self.assertEqual("(-0.5, 0.5]" in txt and "拦截" in txt, expect_err, txt)
+            if expect_err:
+                self.assertEqual(verdict, "error", txt)
+            verdict_u, lines_u = pf.run(out, out, True)
+            self.assertNotIn("(-0.5, 0.5]", "\n".join(lines_u))
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

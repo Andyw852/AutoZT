@@ -84,8 +84,23 @@ def is_2d_run(base, out):
     return False
 
 
+def n_offconvention_kpoints(kp):
+    """k 点标签不在 AMSET 约定 (-0.5, 0.5] 内的个数（典型：边界点记成 -0.5）。
+
+    V117（2026-09-29 模型实测）：AMSET 的全网格路径 from_data -> _grid_kpoints 调
+    kpoints_to_first_bz(negative_zone_boundary=False) 把这类标签改成 (-0.5, 0.5]，
+    **但不同步平移系数的 G** —— 这些点的系数被贴错标签（GaN 模型 min |cos| 1.0000 -> 0.016）。
+    去对称化路径不受影响（它按源点自己的标签算，输出就是 AMSET 约定）。
+    """
+    import numpy as np
+    kp = np.asarray(kp, float)
+    kc = kp - np.around(kp)
+    kc[np.around(kc, 5) == -0.5] += 1.0
+    return int(np.any(np.abs(kp - kc) > 1e-6, axis=1).sum())
+
+
 def h5_summary(h5_path):
-    """返回 dict(nk, mesh, complete, ng, nb)；读不到返回 {"error": ...}。"""
+    """返回 dict(nk, mesh, complete, ng, nb, n_offconv)；读不到返回 {"error": ...}。"""
     try:
         import h5py
         import numpy as np
@@ -97,7 +112,8 @@ def h5_summary(h5_path):
         mesh = get_mesh_from_kpoint_numbers(kp)
         prod = int(np.prod(mesh))
         return {"nk": len(kp), "mesh": tuple(int(x) for x in mesh), "mesh_prod": prod,
-                "complete": prod == len(kp), "ng": ng, "nb": nb}
+                "complete": prod == len(kp), "ng": ng, "nb": nb,
+                "n_offconv": n_offconvention_kpoints(kp)}
     except Exception as e:
         return {"error": "%s: %s" % (type(e).__name__, e)}
 
@@ -404,6 +420,14 @@ def run(cwd, out_dir=None, unity_overlap=False, desym_fix=None):
                         "完整网格，走 from_data（不去对称化）" if complete
                         else "非完整网格 -> AMSET 会去对称化",
                         info["ng"], info["nb"]))
+        # ---- V117：完整网格 + 标签不在 (-0.5, 0.5] -> AMSET from_data 贴错系数标签（2D/3D 同）----
+        if complete and not unity_overlap and info.get("n_offconv"):
+            err = True
+            lines.append("     ★ 拦截：完整网格 h5 里有 %d 个 k 点标签不在 AMSET 约定 (-0.5, 0.5]（如边界点"
+                         "记成 -0.5）。AMSET 的 from_data 会把标签改过去但不平移系数的 G —— 这些点的重叠"
+                         "静默算错（V117）。处理：重新生成 h5 前把 vasprun/h5 的 k 点换到 (-0.5, 0.5]"
+                         "（系数同步 c_{k-b}(G)=c_k(G-b)），或改走 IBZ + DESYM_FIX。"
+                         % info["n_offconv"])
         if not complete and not unity_overlap and two_d and controlled:
             warn = True
             lines.append("     [WARN] 2D + 真实重叠 + 非完整网格：受控对照放行（只用于算比值，"
