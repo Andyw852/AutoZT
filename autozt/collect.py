@@ -190,9 +190,10 @@ def collect_v3_batch(cfg, segs):
     _nw = int(os.environ.get("AUTOZT_WORKERS", "6") or "6")   # fixte⑦：并发可配（=1 串行定位）
     # 大体系分块采集：同组材料太多时，单条 ssh 的 --config64 会超 argv 上限
     # （Argument list too long）。按 AUTOZT_COLLECT_CHUNK 切成多块，每块单独 ssh
-    # （ControlMaster 复用连接，代价很小）。默认 500：大体系（数千材料）自动
-    # 分块，不再需要手动设环境变量；小体系（<500 材料）仍是单块、无额外开销。
-    _chunk = max(1, int(os.environ.get("AUTOZT_COLLECT_CHUNK", "500") or 500))
+    # （ControlMaster 复用连接，代价很小）。默认 100：比原 500 保守得多，长路径
+    # 大项目（如数百条长路径）不再需要手动设环境变量；显式设了
+    # AUTOZT_COLLECT_CHUNK 仍按给定值分块。
+    _chunk = max(1, int(os.environ.get("AUTOZT_COLLECT_CHUNK", "100") or 100))
     gitems = []
     for _key, _entries in sorted(by_hw.items()):
         for _i in range(0, len(_entries), _chunk):

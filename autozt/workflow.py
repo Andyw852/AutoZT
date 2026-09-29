@@ -166,6 +166,18 @@ def _skill_max_jobs(cfg, t):
         v = int(v)
     except (TypeError, ValueError):
         return None
+    # fix：项目段里写的 task_types.<key>.max_jobs 会被这里静默忽略（只读全局
+    # 主类型的值）。项目段值与生效值不一致时打一条告警，不改生效值（避免误改并发）。
+    _seg = t.get("max_jobs")
+    if _seg is not None:
+        try:
+            _seg = int(_seg)
+        except (TypeError, ValueError):
+            _seg = None
+        if _seg is not None and _seg != v:
+            print("警告：项目段 task_types.%s.max_jobs=%s 被忽略，实际生效 %s"
+                  "（来自全局 tf.yaml 主类型/全局默认）。若要项目值生效，请改全局配置。"
+                  % (t.get("key"), _seg, v), file=sys.stderr)
     return v if v > 0 else None
 
 def _skill_busy_jobs(t):
