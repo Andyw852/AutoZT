@@ -759,6 +759,13 @@ def cmd_prep(cfg, out):
         print("[OK] equilibrium residual subtracted from %s (max|F_eq| = %.4f eV/A)"
               % (info.get("equilibrium_source", "reference"), info["equilibrium_max_force"]),
               flush=True)
+        # 残余力闸：扣除只修正一阶项，参考结构离能量极小太远时 fc2 本身就偏了。
+        _fmax = float(cfg.get("eq_force_max") or 0.0)
+        if _fmax > 0 and info["equilibrium_max_force"] > _fmax:
+            sys.exit("[ERROR] 平衡帧残余力 max|F_eq| = %.4f eV/A > EQ_FORCE_MAX = %.3f "
+                     "—— 参考结构没弛豫好，先重新弛豫再生成数据集（确要硬跑：调大 "
+                     "EQ_FORCE_MAX，0 = 关闭此闸）"
+                     % (info["equilibrium_max_force"], _fmax))
     elif n_frames:
         print("[..] no equilibrium reference available -- forces used as given; "
               "set EQUILIBRIUM_FORCES_NPY if the reference cell is not force-free",
@@ -1161,12 +1168,16 @@ def _shell_single_report(cfg, out):
     if not cands or (Path(out) / "cutoff_scan.json").is_file():
         return
     try:
-        fc3 = _read_fc3_any(out)
+        fc3 = _read_fc3_any(out, compact_ok=True)
         if fc3 is None:
             return
         cell, frac = _shell_cell_frac(out)
         shell_dist, tri = fc3_shell_index(cell, frac, tol=0.05,
                                           r_max=max(cands) + 1.0)
+        if fc3.shape[0] != fc3.shape[1]:
+            # compact fc3: only the rows of the primitive atoms are stored; by
+            # translation symmetry their per-shell mean equals the full one.
+            tri = tri[_fc3_p2s(out)]
         bins = fc3_shell_bins(tri, len(shell_dist))
         means = fc3_shell_means(fc3, bins)
     except Exception as e:                               # noqa: BLE001
@@ -1243,7 +1254,7 @@ def _load_ph3(out):
     return ph3
 
 
-def _phono3py_scan(cfg, out, ph3, calc, enable):
+def _phono3py_scan(cfg, out, ph3, calc, enable, fc2_full, p2s):
     # Refit fc3 at every candidate cutoff and save per-cut fc2/fc3 dirs.
     # phono3py's fc3 cutoff is a physical truncation, not a data limit (the
     # symfc/alm fit is determined), so every candidate is usable and S2_kappa
@@ -1266,12 +1277,12 @@ def _phono3py_scan(cfg, out, ph3, calc, enable):
         try:
             ph3.produce_fc3(fc_calculator=calc,
                             fc_calculator_options="cutoff = %s" % c,
-                            is_compact_fc=False)
+                            is_compact_fc=True)
         except Exception as e:  # noqa: BLE001
             print("[WARN] c3=%.2f fc3 refit failed: %s" % (c, e), flush=True)
             continue
-        write_fc2_to_hdf5(ph3.fc2, filename=str(cd / "fc2.hdf5"))
-        write_fc3_to_hdf5(ph3.fc3, filename=str(cd / "fc3.hdf5"))
+        write_fc2_to_hdf5(fc2_full, filename=str(cd / "fc2.hdf5"))
+        write_fc3_to_hdf5(ph3.fc3, filename=str(cd / "fc3.hdf5"), p2s_map=p2s)
         records.append({"cut": c, "natom_super": len(ph3.supercell),
                         "ratio": 999.0, "train_rel_err": None,
                         "train_rel_se": 0.0, "err_kind": "in-sample",
@@ -1300,16 +1311,23 @@ def cmd_fit_phono3py(cfg, out):
 
     ph3 = _load_ph3(out)
     print("[..] phono3py fit: calculator=%s fc3_cutoff=%s" % (calc, cutoff), flush=True)
+    # fc2 stays full (N,N,3,3): small, and every phonopy/plot/ShengBTE consumer
+    # reads it as is.  fc3 is written COMPACT (n_prim,N,N,3,3,3) with its
+    # p2s_map: the full array is N/n_prim times larger (243-atom supercell:
+    # 3.1 GB vs 0.7 MB compressed) and producing it needs >15 GB.  phono3py's
+    # BTE reads compact fc3 natively; _read_fc3_any expands it on demand.
     ph3.produce_fc2(fc_calculator=calc, is_compact_fc=False)
+    fc2_full = np.array(ph3.fc2, copy=True)
     opts = None if cutoff is None else "cutoff = %s" % cutoff
     ph3.produce_fc3(fc_calculator=calc, fc_calculator_options=opts,
-                    is_compact_fc=False)
-    write_fc2_to_hdf5(ph3.fc2, filename=str(out / "fc2.hdf5"))
-    write_fc3_to_hdf5(ph3.fc3, filename=str(out / "fc3.hdf5"))
+                    is_compact_fc=True)
+    p2s = np.asarray(ph3.primitive.p2s_map, dtype="int64")
+    write_fc2_to_hdf5(fc2_full, filename=str(out / "fc2.hdf5"))
+    write_fc3_to_hdf5(ph3.fc3, filename=str(out / "fc3.hdf5"), p2s_map=p2s)
     for f in ("fc2.hdf5", "fc3.hdf5"):
         if not (out / f).is_file():
             sys.exit("[ERROR] phono3py produced no %s" % f)
-    _phono3py_scan(cfg, out, ph3, calc, enable)
+    _phono3py_scan(cfg, out, ph3, calc, enable, fc2_full, p2s)
     # NAC from a BORN file, then a self-describing params file for the gate and
     # for whoever picks the force constants up next (matches kl-dft-cpu S5_fc).
     born = out / "BORN"
@@ -2126,22 +2144,76 @@ def _read_fc2_any(out):
     sys.exit("[ERROR] no fc2 artifact found (fc2.hdf5 / FORCE_CONSTANTS / fc2.npy)")
 
 
-def _read_fc3_any(out):
+def _fc3_p2s(out):
+    """p2s_map of a compact fc3.hdf5 (n_prim,N,N,3,3,3), or None when full."""
+    import h5py
+    p = Path(out) / "fc3.hdf5"
+    if not p.is_file():
+        return None
+    with h5py.File(str(p), "r") as h:
+        if "fc3" not in h:
+            return None
+        shp = h["fc3"].shape
+        if shp[0] == shp[1]:
+            return None
+        if "p2s_map" in h:
+            return np.asarray(h["p2s_map"][()], dtype="int64")
+    # Compact without a stored map: take it from the phono3py primitive.
+    return np.asarray(_fc3_primitive(out).p2s_map, dtype="int64")
+
+
+def _fc3_primitive(out):
+    """phono3py primitive cell of the fit (the basis compact fc3 refers to)."""
+    import phono3py
+    out = Path(out)
+    for y in (out / P3_SUB / "phono3py_params.yaml", out / "phono3py_params.yaml",
+              out / "phono3py_disp.yaml"):
+        if y.is_file():
+            return phono3py.load(str(y), produce_fc=False, is_nac=False,
+                                 log_level=0).primitive
+    sys.exit("[ERROR] compact fc3.hdf5 needs a phono3py YAML to expand it")
+
+
+def _expand_compact_fc3(fc3c, prim):
+    """(n_prim,N,N,3,3,3) -> (N,N,N,3,3,3) by lattice translations."""
+    try:
+        from phono3py.phonon3.fc3 import compact_fc3_to_full_fc3
+        return compact_fc3_to_full_fc3(prim, fc3c)
+    except ImportError:
+        pass
+    # Older phono3py: fc3[t(s), t(j), t(k)] = fc3[s, j, k] for every lattice
+    # translation t of the supercell (atomic_permutations).
+    n = fc3c.shape[1]
+    full = np.zeros((n, n, n, 3, 3, 3), dtype="double")
+    p2s = np.asarray(prim.p2s_map, dtype="int64")
+    for t in np.asarray(prim.atomic_permutations, dtype="int64"):
+        for ip, s in enumerate(p2s):
+            full[t[s]][np.ix_(t, t)] = fc3c[ip]
+    return full
+
+
+def _read_fc3_any(out, compact_ok=False):
+    """fc3 array from fc3.hdf5; a compact file is expanded to full unless
+    compact_ok (then the caller gets (n_prim,N,N,3,3,3) and uses _fc3_p2s)."""
     import h5py
     p = out / "fc3.hdf5"
     if not p.is_file():
         return None
     with h5py.File(str(p), "r") as h:
-        if "fc3" in h:
-            return np.asarray(h["fc3"][()], float)
-    return None
+        if "fc3" not in h:
+            return None
+        fc3 = np.asarray(h["fc3"][()], float)
+    if compact_ok or fc3.shape[0] == fc3.shape[1]:
+        return fc3
+    return _expand_compact_fc3(fc3, _fc3_primitive(out))
 
 
 def _fc3_load_bytes(out):
-    """Byte count of the fc3 array if fully materialised (no load performed).
+    """Byte count of the FULL fc3 array once materialised (no load performed).
 
-    pheasy and phono3py both write a dense (N,N,N,3,3,3) array (gzip on disk),
-    which is ~8*N^3*27 bytes once read -- ~29 GB for a 512-atom supercell.
+    A full (N,N,N,3,3,3) array is ~8*N^3*27 bytes -- ~29 GB for a 512-atom
+    supercell; a compact file is counted at its expanded size, since the
+    consumers that ask (ShengBTE export, residual) need the full array.
     """
     import h5py
     p = out / "fc3.hdf5"
@@ -2150,7 +2222,10 @@ def _fc3_load_bytes(out):
     with h5py.File(str(p), "r") as h:
         if "fc3" in h:
             d = h["fc3"]
-            return int(d.size) * int(d.dtype.itemsize)
+            n = int(d.size) * int(d.dtype.itemsize)
+            if d.shape[0] != d.shape[1]:
+                n = n // int(d.shape[0]) * int(d.shape[1])
+            return n
     return None
 
 

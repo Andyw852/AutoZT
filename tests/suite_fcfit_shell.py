@@ -369,6 +369,41 @@ def test_kappa_mesh_auto():
         else:
             sys.modules["phono3py"] = old_mod
 
+def test_compact_fc3_expand():
+    print("[11] 紧凑 fc3 展开（旧版 phono3py 回退路径 == phono3py 官方）")
+    try:
+        import numpy as np
+        from phono3py import Phono3py
+        from phono3py.phonon3.fc3 import compact_fc3_to_full_fc3
+        from phonopy.structure.atoms import PhonopyAtoms
+    except Exception as e:  # noqa: BLE001
+        print("  SKIP 需要 phono3py>=4：%s" % e)
+        return
+    import fc_fit_driver as drv
+    uc = PhonopyAtoms(symbols=["Na", "Cl"], cell=np.eye(3) * 4.0,
+                      scaled_positions=[[0, 0, 0], [0.5, 0.5, 0.5]])
+    ph3 = Phono3py(uc, supercell_matrix=[2, 2, 2], primitive_matrix="P")
+    n = len(ph3.supercell)
+    rng = np.random.default_rng(0)
+    c = rng.normal(size=(len(ph3.primitive), n, n, 3, 3, 3))
+    ref = compact_fc3_to_full_fc3(ph3.primitive, c)
+    import builtins
+    real_import = builtins.__import__
+
+    def _no_helper(name, *a, **k):
+        if name == "phono3py.phonon3.fc3":
+            raise ImportError("simulated old phono3py")
+        return real_import(name, *a, **k)
+
+    builtins.__import__ = _no_helper
+    try:
+        got = drv._expand_compact_fc3(c, ph3.primitive)
+    finally:
+        builtins.__import__ = real_import
+    check("回退展开与 compact_fc3_to_full_fc3 一致",
+          got.shape == ref.shape and np.allclose(got, ref))
+
+
 def main():
     test_shells_and_candidates()
     test_resolve()
@@ -379,6 +414,7 @@ def main():
     test_kappa_step()
     test_cut3_select()
     test_kappa_mesh_auto()
+    test_compact_fc3_expand()
     print("\nsuite_fcfit_shell: %s（%d 项）"
           % ("ALL PASS" if not FAIL else "FAIL", N))
     return 1 if FAIL else 0

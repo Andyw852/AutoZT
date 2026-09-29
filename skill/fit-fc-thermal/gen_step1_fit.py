@@ -53,6 +53,7 @@ SPEC = {
     # ---- dataset ----
     "FIT_INPUT_DIR": ("auto", "str"),       # dataset dir: auto | path (skill-dir or absolute)
     "SUBTRACT_EQUILIBRIUM": (True, "bool"),  # subtract the equilibrium residual forces
+    "EQ_FORCE_MAX": (0.2, "float"),          # max |F| of the equilibrium frame (eV/A); 0 = off
     "EQUILIBRIUM_FORCES_NPY": ("", "str"),   # optional explicit (natom,3) npy
     "COORDS": ("auto", "str"),               # auto | cartesian | fractional (displacement input)
     "SUPERCELL": ("", "str"),                # 对角 "n n n"；或一般矩阵 9 个数
@@ -481,7 +482,7 @@ def main():
     except Exception as _e:                              # noqa: BLE001
         _cnote = "shell enumeration failed: %s" % _e
     print("[..] 壳层/截断候选：%s" % _cnote)
-    _safe, _nsc = None, 0
+    _safe, _nsc, _eff = None, 0, {}
     try:
         _sc_cell, _sc_frac = fc.read_poscar_cell_frac(src / "SPOSCAR")
         _nsc = len(_sc_frac)
@@ -510,36 +511,31 @@ def main():
                       "壳层 %s）" % (_extra,
                                  ", ".join("%.2f" % s for s in _skipped)))
         print("[..] 超胞安全截断 = %.2f Å → 有效候选 %s" % (_safe, _cands))
-        # hiphive 的 HIPHIVE_CUTOFF2/3 同样受超胞安全截断约束（超了会被周期镜像
-        # 重复计数；即便不崩，力常数也是错的）。
-        if engine == "hiphive":
-            for _k in ("HIPHIVE_CUTOFF2", "HIPHIVE_CUTOFF3"):
-                if _k == "HIPHIVE_CUTOFF3" and enable < 3:
-                    continue
-                try:
-                    _v = float(conf[_k])
-                except (TypeError, ValueError):
-                    continue
-                if _v > _safe + 1e-9:
-                    print("[WARN] %s=%.2f > 超胞安全截断 %.2f Å：周期镜像会重复计数，"
-                          "建议降到 <= %.2f" % (_k, _v, _safe, _safe), flush=True)
-        # pheasy / phono3py 的 fc3 截断同理（空 = 不截断：phono3py 全超胞 fc3，
-        # 大超胞内存爆；pheasy 不截断同样会越过镜像）。只告警，不改用户值。
-        _c3key = {"pheasy": "PHEASY_C3_CUTOFF",
-                  "phono3py": "FC3_CUTOFF"}.get(engine)
-        if _c3key and enable >= 3:
-            _raw = str(conf[_c3key] or "").strip()
+        # 截断一律不越界：超过超胞安全截断的值自动压到安全截断（周期镜像会重复
+        # 计数，力常数是错的）；fc3 截断留空（= 不截断，同样越界且大超胞内存爆）
+        # 也取安全截断。hiphive 的 cutoff2/3 同理。
+        _cap = float(int(_safe * 100)) / 100.0
+        _keys = {"phono3py": ("FC3_CUTOFF",),
+                 "pheasy": ("PHEASY_C3_CUTOFF",),
+                 "hiphive": ("HIPHIVE_CUTOFF2", "HIPHIVE_CUTOFF3")}.get(engine, ())
+        for _k in _keys:
+            if _k in ("FC3_CUTOFF", "PHEASY_C3_CUTOFF", "HIPHIVE_CUTOFF3") \
+                    and enable < 3:
+                continue
+            _raw = str(conf[_k] if conf[_k] is not None else "").strip()
+            if _raw == "":
+                _eff[_k] = _cap
+                print("[..] %s 为空（不截断会越过超胞镜像，%d 原子超胞内存也吃不消）"
+                      "→ 取超胞安全截断 %.2f Å" % (_k, _nsc, _cap), flush=True)
+                continue
             try:
-                _v = float(_raw) if _raw else None
+                _v = float(_raw)
             except ValueError:
-                _v = None
-            if _v is None and _raw == "":
-                print("[WARN] %s 为空 = fc3 不截断：超胞 %d 原子时内存/耗时很大，"
-                      "建议设 <= 超胞安全截断 %.2f Å" % (_c3key, _nsc, _safe),
-                      flush=True)
-            elif _v is not None and _v > _safe + 1e-9:
-                print("[WARN] %s=%.2f > 超胞安全截断 %.2f Å：周期镜像会重复计数，"
-                      "建议降到 <= %.2f" % (_c3key, _v, _safe, _safe), flush=True)
+                continue
+            if _v > _safe + 1e-9:
+                _eff[_k] = _cap
+                print("[WARN] %s=%.2f > 超胞安全截断 %.2f Å（周期镜像会重复计数）"
+                      "→ 已压到 %.2f Å" % (_k, _v, _safe, _cap), flush=True)
     _scan_req = str(conf["CUT3_SCAN"] or "off").strip().lower()
     if _scan_req not in ("off", "none", "false", "no", "0", "auto", "on", "true",
                          "1", "yes"):
@@ -568,6 +564,7 @@ def main():
         "dim": dim,
         "enable_fc": enable,
         "subtract_equilibrium": bool(conf["SUBTRACT_EQUILIBRIUM"]),
+        "eq_force_max": float(conf["EQ_FORCE_MAX"] or 0.0),
         "equilibrium_forces_npy": str(conf["EQUILIBRIUM_FORCES_NPY"] or ""),
         "coords": coords,
         # shell / third-order cutoff determination
@@ -579,12 +576,13 @@ def main():
         "cut3_safe_cutoff": (None if _safe is None else float(_safe)),
         # phono3py
         "fc_calc": fc_calc,
-        "fc3_cutoff": str(conf["FC3_CUTOFF"] or ""),
+        "fc3_cutoff": str(_eff.get("FC3_CUTOFF", conf["FC3_CUTOFF"]) or ""),
         # pheasy
         "pheasy_method": p_method,
         "pheasy_bin": p_bin,
         "pheasy_c2_cutoff": str(conf["PHEASY_C2_CUTOFF"] or ""),
-        "pheasy_c3_cutoff": str(conf["PHEASY_C3_CUTOFF"] or ""),
+        "pheasy_c3_cutoff": str(_eff.get("PHEASY_C3_CUTOFF",
+                                         conf["PHEASY_C3_CUTOFF"]) or ""),
         "null_space_eps": float(conf["NULL_SPACE_EPS"] or 0.001),
         "pheasy_rasr": str(conf["PHEASY_RASR"] or ""),
         "pheasy_std": bool(conf["PHEASY_STD"]),
@@ -604,8 +602,8 @@ def main():
         "pheasy_tol": p_tol,
         "pheasy_seed": int(conf["PHEASY_SEED"]),
         # hiphive
-        "hiphive_cutoff2": float(conf["HIPHIVE_CUTOFF2"]),
-        "hiphive_cutoff3": float(conf["HIPHIVE_CUTOFF3"]),
+        "hiphive_cutoff2": float(_eff.get("HIPHIVE_CUTOFF2", conf["HIPHIVE_CUTOFF2"])),
+        "hiphive_cutoff3": float(_eff.get("HIPHIVE_CUTOFF3", conf["HIPHIVE_CUTOFF3"])),
         "hiphive_fit_method": h_method,
         "hiphive_alpha": float(conf["HIPHIVE_ALPHA"]),
         "hiphive_symprec": float(conf["HIPHIVE_SYMPREC"]),

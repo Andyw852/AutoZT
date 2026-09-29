@@ -139,6 +139,9 @@ forces from every frame or the fit is biased:
 * `EQUILIBRIUM_FORCES_NPY = <file.npy>` supplies the reference by hand
   (`(natom_super, 3)`), for datasets without one.
 * With no reference available the driver prints a note and fits the raw forces.
+* `EQ_FORCE_MAX = 0.2` (eV/A, default): prep stops when the reference frame's
+  largest force exceeds it - subtraction only removes the linear term, a
+  reference far from the minimum biases fc2 itself.  `0` disables the gate.
 
 ## Engines
 
@@ -149,8 +152,17 @@ forces from every frame or the fit is biased:
 random-displacement datasets, because phono3py rebuilds the finite-difference
 set itself from the YAML + `FORCES_FC3`.
 
-* `FC3_CUTOFF` - third-order cutoff in Angstrom; empty means "all interactions",
-  which is correct but slow and produces a very large `fc3.hdf5`.
+* `FC3_CUTOFF` - third-order cutoff in Angstrom.  It never exceeds the
+  supercell safe cutoff (half the shortest supercell height - 0.1 A): empty or
+  larger values are clamped to it by the gen (the same clamp applies to
+  `PHEASY_C3_CUTOFF` and `HIPHIVE_CUTOFF2/3`).
+* `fc2.hdf5` is full `(N,N,3,3)`; `fc3.hdf5` is **compact**
+  `(n_prim,N,N,3,3,3)` with its `p2s_map` (phono3py's own format).  On the
+  243-atom test cell the full fc3 needed >15 GB and 3.1 GB on disk per cutoff;
+  compact is 43 s / 1.2 MB.  phono3py (S2_kappa, kl-dft-cpu import) reads it
+  natively; the ShengBTE export and the fit residual expand it on demand
+  (`compact_fc3_to_full_fc3`, or a translation-based fallback on older
+  phono3py), still subject to `FC3_LOAD_GB_LIMIT`.  Plots use fc2 only.
 * symfc is the fast path; if it is not installed, or it fails on a very large
   supercell, install it (`pip install symfc`) or set `FC_CALC = alm`.
 
@@ -520,11 +532,12 @@ actually determine the fc3.
 * **NAC.** A `BORN` file in the dataset (from `kl-dft-cpu` step3_nac) is picked
   up automatically; both the NAC and no-NAC minima are reported, and only the
   3D verdict uses the NAC one.
-* **Empty `FC3_CUTOFF` on a large supercell** is the classic way to exhaust the
-  memory of a compute node. Watch `queue.err` if `fc3.hdf5` never appears.
-  For the phono3py ShengBTE export, `FC3_LOAD_GB_LIMIT` skips the fc3 text when
-  the dense `fc3.hdf5` exceeds it (the pheasy engine is unaffected — it writes
-  ShengBTE from compact IFCs).
+* **fc3 memory**: an empty `FC3_CUTOFF` used to mean a full-supercell fc3 and
+  was the classic way to exhaust a compute node; it is now clamped to the safe
+  cutoff and fc3 is written compact.  For the ShengBTE export,
+  `FC3_LOAD_GB_LIMIT` still skips the fc3 text when the expanded array would
+  exceed it (the pheasy engine is unaffected — it writes ShengBTE from compact
+  IFCs).
 
 ## Relation to the kl skills
 
