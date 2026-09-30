@@ -71,7 +71,7 @@ def main():
     text = tpl.read_text(encoding="utf-8")
     jobname = ("%s-ke-dft-cpu-%s" % (cwd.name, STEP_LABEL)) if not _HAS_KC \
         else kc.new_jobname(cwd, STEP_LABEL)
-    _amset_env = kc.amset_env_name(cwd) if _HAS_KC else "amset_clean"
+    _amset_env = kc.amset_env_name(cwd) if _HAS_KC else sys.exit("[ERROR] 无法 import ke_common 且 step.conf 缺 AMSET_ENV；请写 AMSET_ENV=<本集群 0.5.1 环境名>（jzzn/hanhai25=amset051、a800=amset_env、3090/hfeshell=amset）")
     text = (text.replace("{{JOBNAME}}", jobname)
                 .replace("{{AMSET_CMD}}", AMSET_CMD)
                 .replace("{{AMSET_ENV}}", _amset_env))

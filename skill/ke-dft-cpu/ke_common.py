@@ -1243,13 +1243,18 @@ def new_jobname(cwd: Path, step_label: str):
     return "%s-ke-dft-cpu-%s" % (cwd.name, step_label)
 
 
-def amset_env_name(cwd=None, fallback="amset_clean"):
+def amset_env_name(cwd=None, fallback=None):
     """AMSET 运行环境名：读 step.conf 的 [params] AMSET_ENV。
 
     AMSET_ENV 由 autozt 从 setting/<集群>.yaml 的 amset_env 注入 step.conf
     （autozt/report.py，标签 [cluster:<hpc>]），项目级 step.conf 可覆盖。
     gen 的 cwd 是材料目录、step.conf 就在那儿；缺失或解析失败时回退
     fallback（本地直跑 / 旧项目）。用于渲染 submit_amset.tpl 的 {{AMSET_ENV}}。
+
+    2026-09-30（0.4.19 老环境已删）：fallback 默认改为 None——读不到 AMSET_ENV
+    即报错退出，绝不静默落一个可能错误的环境名。各集群 0.5.1 环境名不同
+    （jzzn/hanhai25=amset051、a800=amset_env、3090/hfeshell=amset），写死任何一个
+    都会在别的集群误触。
     """
     try:
         import stepconf as _sc
@@ -1260,13 +1265,14 @@ def amset_env_name(cwd=None, fallback="amset_clean"):
                 return v
     except Exception:
         pass
-    # 2026-09-22（全局切 0.5.1）：绝不能再"静默"回退——旧默认 amset_clean 是 0.4.19，
-    # 静默回退会让形变势又被减半且毫无提示。这里强制打印醒目警告，并回报实际用的环境名。
     import sys as _sys
-    print("[WARN] step.conf 里没读到 AMSET_ENV，回退到 %r —— 若这不是本集群的 AMSET 环境，"
-          "本步结果会口径错误（0.4.19 的 ISPIN=2 形变势会减半）。请在 step.conf 写 "
-          "AMSET_ENV=<集群环境名>。" % fallback, file=_sys.stderr)
-    return fallback
+    if fallback:
+        print("[WARN] step.conf 里没读到 AMSET_ENV，回退到显式指定的 %r。" % fallback,
+              file=_sys.stderr)
+        return fallback
+    _sys.exit("[ERROR] step.conf 里没读到 AMSET_ENV，无法确定本集群的 amset 环境名。"
+              "请在 step.conf 写 AMSET_ENV=<本集群 0.5.1 环境名>（jzzn/hanhai25=amset051、"
+              "a800=amset_env、3090/hfeshell=amset）。")
 
 
 def patch_submit_jobname(submit: Path, jobname: str):

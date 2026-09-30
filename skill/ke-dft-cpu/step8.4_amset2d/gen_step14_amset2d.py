@@ -45,7 +45,7 @@ except Exception:
 # === AMSET 环境名（2026-09-22，全局切 0.5.1）：由 step.conf 的 AMSET_ENV 驱动 ===
 # tf 从 setting/<集群>.yaml 的 amset_env 注入 step.conf，项目级可覆盖；
 # 缺失时 kc.amset_env_name() 内部兜底 amset_clean（本地直跑 / 旧项目）。
-AMSET_ENV_NAME = kc.amset_env_name() if _HAS_KC else "amset_clean"
+AMSET_ENV_NAME = kc.amset_env_name() if _HAS_KC else sys.exit("[ERROR] 无法 import ke_common 且 step.conf 缺 AMSET_ENV；请写 AMSET_ENV=<本集群 0.5.1 环境名>（jzzn/hanhai25=amset051、a800=amset_env、3090/hfeshell=amset）")
 
 
 # =========================== 可改参数区 ===========================

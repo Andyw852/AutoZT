@@ -1226,7 +1226,7 @@ def expand_spec(spec, log):
 def read_pop_frequency(dielect_dir):
     """用 AMSET 官方 phonon-frequency 命令计算有效 POP 频率。"""
     import subprocess
-    _amset = kc.amset_env_name() if _HAS_KC else "amset_clean"
+    _amset = kc.amset_env_name() if _HAS_KC else sys.exit("[ERROR] 无法 import ke_common 且 step.conf 缺 AMSET_ENV；请写 AMSET_ENV=<本集群 0.5.1 环境名>（jzzn/hanhai25=amset051、a800=amset_env、3090/hfeshell=amset）")
     commands = [["amset", "phonon-frequency", "-o", "OUTCAR", "-v", "vasprun.xml"]]
     # 远端 gen 由 taskflow 的 Python 直接执行，非交互 shell 未必加载 conda；
     # 用 step.conf 的 AMSET_ENV（kc.amset_env_name()）作无 shell 兜底，避免误报“缺少 POP”。
@@ -2056,7 +2056,7 @@ def main():
     jobname = ("%s-ke-dft-cpu-%s" % (cwd.name, STEP_LABEL)) if not _HAS_KC \
         else kc.new_jobname(cwd, STEP_LABEL)
     text = tpl.read_text(encoding="utf-8")
-    _amset_env = kc.amset_env_name(cwd) if _HAS_KC else "amset_clean"
+    _amset_env = kc.amset_env_name(cwd) if _HAS_KC else sys.exit("[ERROR] 无法 import ke_common 且 step.conf 缺 AMSET_ENV；请写 AMSET_ENV=<本集群 0.5.1 环境名>（jzzn/hanhai25=amset051、a800=amset_env、3090/hfeshell=amset）")
     # patch_desym_fix：插件在运行目录里就 import（不开时插件自己什么都不做）；
     #   开关用环境变量传进作业（preflight 也读它），命令最前面 export/unset。
     _acmd = AMSET_CMD.replace("@AMSET_PLUGINS@", ("import amset_ir_fix; " if _has_ir else "")
