@@ -171,14 +171,40 @@ def _kappa_at(s, t):
     return np.asarray(rows[j], float), float(T[j])
 
 
-def _mesh_change(prev, cur, t):
-    """max |d kappa_ij| / max |kappa_ii| between two runs (whole tensor)."""
+def _mesh_change(prev, cur, t, mode="per_component"):
+    """Relative change of kappa between two runs at temperature t.
+
+    mode='per_component' (default): rel = max_i |d kappa_ii| / |kappa_ii|.
+    Each diagonal component is normalised by *its own* value, so a slowly
+    converging out-of-plane kappa (zz) cannot be masked by the larger in-plane
+    one.  This is the fix for the old criterion, which used max|kappa_ii| as the
+    denominator and therefore reported the anisotropic zz mesh as converged.
+    mode='max_ii': the legacy max|d kappa_ij| / max|kappa_ii| (whole tensor).
+
+    Returns (rel, rel_vec, tt); rel_vec holds the per-component relative
+    changes (None where the reference component is ~0).
+    """
     a, _ = _kappa_at(prev, t)
     b, tt = _kappa_at(cur, t)
-    scale = float(np.max(np.abs(b[:3])))
-    if scale <= 0:
-        return None, tt
-    return float(np.max(np.abs(b - a)) / scale), tt
+    n = min(len(a), len(b))
+    nd = min(3, n)
+    rel_vec = [abs(b[i] - a[i]) / abs(a[i]) if abs(a[i]) > 1e-12 else None
+               for i in range(nd)]
+    if str(mode).lower() == "max_ii":
+        scale = float(np.max(np.abs(b[:3])))
+        rel = None if scale <= 0 else float(np.max(np.abs(b - a)) / scale)
+        return rel, rel_vec, tt
+    vals = [x for x in rel_vec if x is not None]
+    rel = max(vals) if vals else None
+    # Off-diagonal components are still checked, but normalised by the largest
+    # diagonal (their own values can be ~0, so a per-component ratio is not
+    # meaningful there).
+    if n > 3:
+        scale = float(np.max(np.abs(b[:3])))
+        if scale > 0:
+            off = float(np.max(np.abs(b[3:n] - a[3:n])) / scale)
+            rel = off if rel is None else max(rel, off)
+    return rel, rel_vec, tt
 
 
 def _converge_mesh(out, yaml_name, fc2, fc3, cfg, source_fc, first=None):
@@ -196,6 +222,7 @@ def _converge_mesh(out, yaml_name, fc2, fc3, cfg, source_fc, first=None):
         return _run_bte(out, yaml_name, fc2, fc3, cfg, source_fc, True,
                         spec=(kind, L))
     tol = float(cfg.get("mesh_conv_tol_pct") or 3.0) / 100.0
+    mode = str(cfg.get("mesh_conv_mode") or "per_component").strip().lower()
     fac = float(cfg.get("mesh_conv_factor") or 1.25)
     lmax = float(cfg.get("mesh_conv_max_length") or 150.0)
     pmax = int(cfg.get("mesh_conv_max_points") or 64000)
@@ -234,13 +261,19 @@ def _converge_mesh(out, yaml_name, fc2, fc3, cfg, source_fc, first=None):
         print("[..] 网格收敛：L=%.1f A -> mesh %s" % (L, m), flush=True)
         s = _run_bte(out, yaml_name, fc2, fc3, cfg, source_fc, True,
                      spec=("length", L))
-        rel, tt = (None, t_chk) if prev is None else _mesh_change(prev, s, t_chk)
+        if prev is None:
+            rel, rel_vec, tt = None, None, t_chk
+        else:
+            rel, rel_vec, tt = _mesh_change(prev, s, t_chk, mode)
         recs.append({"length": round(L, 3), "mesh": s["mesh"],
                      "kappa_at_T": _kappa_at(s, t_chk)[0].tolist(),
-                     "rel_change": rel})
-        print("    mesh %-10s kappa(%gK)=%s  change=%s"
+                     "rel_change": rel, "rel_change_per_component": rel_vec})
+        print("    mesh %-10s kappa(%gK)=%s  change=%s%s"
               % (s["mesh"], tt, np.round(_kappa_at(s, t_chk)[0][:3], 4),
-                 "-" if rel is None else "%.2f%%" % (100 * rel)), flush=True)
+                 "-" if rel is None else "%.2f%%" % (100 * rel),
+                 "" if rel_vec is None else " (per-component %s)"
+                 % ["%.2f%%" % (100 * x) if x is not None else "-"
+                    for x in rel_vec]), flush=True)
         prev = s
         if rel is not None and rel < tol:
             converged = True
@@ -250,8 +283,13 @@ def _converge_mesh(out, yaml_name, fc2, fc3, cfg, source_fc, first=None):
         sys.exit("[ERROR] 起始网格长度 MESH_LENGTH 已超过 MESH_CONV_MAX_LENGTH")
     rep = {"converged": converged, "tol_pct": 100 * tol, "check_T": t_chk,
            "factor": fac, "stop_reason": stop or "converged",
-           "criterion": "max|d kappa_ij| / max|kappa_ii| between consecutive "
-                        "meshes (whole tensor, first sigma)",
+           "norm": "max_ii" if mode == "max_ii" else "per_component",
+           "criterion": (
+               "max|d kappa_ij| / max|kappa_ii| between consecutive meshes "
+               "(whole tensor, first sigma)"
+               if mode == "max_ii" else
+               "per-component max_i |d kappa_ii| / |kappa_ii| between "
+               "consecutive meshes (xx, yy, zz each normalised by itself)"),
            "records": recs}
     (out / "mesh_convergence.json").write_text(
         json.dumps(rep, indent=2, ensure_ascii=False), encoding="utf-8",

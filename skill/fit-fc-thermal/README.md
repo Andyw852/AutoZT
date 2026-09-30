@@ -324,12 +324,20 @@ writing `kappa_summary.json`:
   reciprocal length that matters: a rhombohedral primitive cell with 16 A edges
   and a 14 deg angle has `|b| = 0.29 1/A`, i.e. the density of a 3.5 A cube.
   `MESH_CONV = auto` then reruns the BTE with `L *= MESH_CONV_FACTOR` (1.25)
-  until the whole kappa tensor at `MESH_CONV_T` (300 K) changes by less than
-  `MESH_CONV_TOL_PCT` (3 %) between two consecutive meshes, capped by
+  until kappa at `MESH_CONV_T` (300 K) changes by less than
+  `MESH_CONV_TOL_PCT` (3 %) between two consecutive meshes.  **`MESH_CONV_MODE
+  = per_component` (default)** judges each component against *itself*
+  (`max_i |d kappa_ii| / |kappa_ii|`, off-diagonals normalised by the largest
+  diagonal), so an anisotropic cell whose out-of-plane `zz` converges more
+  slowly than the in-plane `xx/yy` is not declared converged prematurely —
+  the old `max_ii` norm (`max|d kappa_ij| / max|kappa_ii|`, kept as
+  `MESH_CONV_MODE = max_ii`) did exactly that on a rhombohedral R-3m primitive.
+  Capped by
   `MESH_CONV_MAX_LENGTH` (150 A) and `MESH_CONV_MAX_POINTS` (64000 q-points).
   The denser mesh of the converged pair is reported; every point goes to
-  `mesh_convergence.json`, and `kappa_summary.json` carries `mesh`,
-  `mesh_converged` and `mesh_convergence`.  Hitting a cap leaves
+  `mesh_convergence.json` (each record also carries
+  `rel_change_per_component` = xx/yy/zz), and `kappa_summary.json` carries
+  `mesh`, `mesh_converged` and `mesh_convergence`.  Hitting a cap leaves
   `mesh_converged: false` with a warning (the densest mesh is still reported).
   With a cutoff scan the scan runs at the starting mesh, then the chosen
   cutoff is converged in mesh.  `MESH = "n n n"` keeps the old fixed-mesh

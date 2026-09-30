@@ -271,6 +271,35 @@ def main():
                     "        处理：把截断收到 ≤ %.3f，或重跑 S4 用更大的 ALM_CUT3。"
                     % (_val, _s4_c3, _s4_c3, _s4_c3))
 
+    # ---- 超胞安全截断硬闸（2026-10）：显式 SUPERCELL 时 S4 只 WARN 不拦截，这里在 S5 兜底 ----
+    #   超过安全截断（0.5×内切球直径−margin）的三阶对会被周期镜像重复计数，力常数是错的。
+    #   扫描：越界的候选档直接剔除；单档：压到安全截断。
+    _safe = None
+    _sc_reps = [int(x) for x in str(supercell or "").split()]
+    if len(_sc_reps) == 3 and (disp / "POSCAR").is_file():
+        try:
+            _vac = None
+            _d2, _vac = kc.resolve_dim(disp / "POSCAR", dim or "auto")
+            _safe = kc.supercell_safe_cutoff(disp / "POSCAR", _sc_reps,
+                                             dim=(dim or "3d"), vac_axis=_vac)
+        except Exception:
+            _safe = None
+    if _safe is not None:
+        _over = [c for c in cut3_list if c > _safe + 1e-9]
+        if _over:
+            if _scan_on:
+                cut3_list = [c for c in cut3_list if c <= _safe + 1e-9]
+                print("[WARN] 候选截断 %s 超过超胞安全截断 %.2f Å（周期镜像会重复计数），已剔除"
+                      % (", ".join("%.2f" % c for c in _over), _safe))
+                if not cut3_list:
+                    sys.exit("[ERROR] 所有候选截断都超过超胞安全截断 %.2f Å —— 请扩超胞"
+                             "（MIN_SC_LEN / SUPERCELL）后重跑 S4_disp。" % _safe)
+            else:
+                _clamp = float(int(_safe * 100)) / 100.0
+                cut3_list = [_clamp]
+                print("[WARN] 单档截断 %.2f Å > 超胞安全截断 %.2f Å（周期镜像会重复计数），"
+                      "已压到 %.2f Å" % (_over[0], _safe, _clamp))
+
     # ---- RASR（旋转不变性 + 零应力平衡条件）----
     # 2D 的 ZA 弯曲支 ω∝q² 由 Born-Huang 旋转不变性保证；不加时近 Γ 会线性化、
     #   常常还带小虚频，虚频闸可能过（频率全为正）但 κ 是错的，所以默认 2D 必加。

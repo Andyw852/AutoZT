@@ -209,6 +209,8 @@ def select_cutoff(records, kappa_tol_pct=5.0, se_mult=1.0, stability_thr=0.3,
                           （判据②；该截断 ≤ 它才算"数据能确定"）
         kappa             300 K 面内 κ
         kappa_err         κ 的 bootstrap 误差棒（判据③；缺省 0）
+        kappa_diag        300 K 各对角元 [xx, yy] 或 [xx, yy, zz]（可选；给出时判据③
+                          逐分量比较、取最严的 —— 3D 的 zz 往往最难收敛，只看面内会漏）
 
     pick：三判据都满足的截断有多个时，"smallest"（默认，总则：取最小）或
           "largest"（Mg8C120 口径：平的就取能确定范围里最大的那个）。
@@ -230,6 +232,8 @@ def select_cutoff(records, kappa_tol_pct=5.0, se_mult=1.0, stability_thr=0.3,
                                  else float(d["stable_upper_cut"]))
         d["kappa"] = (None if d.get("kappa") is None else float(d["kappa"]))
         d["kappa_err"] = float(d.get("kappa_err") or 0.0)
+        d["kappa_diag"] = (None if d.get("kappa_diag") is None
+                           else [float(x) for x in d["kappa_diag"]])
         recs.append(d)
     recs.sort(key=lambda r: r["cut"])
     for r in recs:
@@ -271,13 +275,28 @@ def select_cutoff(records, kappa_tol_pct=5.0, se_mult=1.0, stability_thr=0.3,
             continue
         ok = True
         for a, b in pairs:
-            ka, kb = a["kappa"], b["kappa"]
-            if ka is None or kb is None:
+            da, db = a.get("kappa_diag"), b.get("kappa_diag")
+            if da is None or db is None:
+                # 无对角分量时回退标量 kappa（旧行为）
+                ka, kb = a["kappa"], b["kappa"]
+                if ka is None or kb is None:
+                    continue
+                tol = max(float(kappa_tol_pct) / 100.0 * abs(ka),
+                          math.hypot(a["kappa_err"], b["kappa_err"]))
+                if abs(kb - ka) > tol + 1e-15:
+                    ok = False
+                    break
                 continue
-            tol = max(float(kappa_tol_pct) / 100.0 * abs(ka),
-                      math.hypot(a["kappa_err"], b["kappa_err"]))
-            if abs(kb - ka) > tol + 1e-15:
-                ok = False
+            for k in range(min(len(da), len(db))):
+                ka, kb = float(da[k]), float(db[k])
+                if abs(ka) <= 1e-12:
+                    continue
+                tol = max(float(kappa_tol_pct) / 100.0 * abs(ka),
+                          math.hypot(a["kappa_err"], b["kappa_err"]))
+                if abs(kb - ka) > tol + 1e-15:
+                    ok = False
+                    break
+            if not ok:
                 break
         if ok:
             plateau.add(r["cut"])
@@ -462,6 +481,22 @@ def _supercell_geometry(poscar, reps):
         area = _norm(_cross(sc[j], sc[k]))
         perp.append(vol / area if area > 1e-12 else 0.0)
     return lengths, perp, min(perp)
+
+
+def supercell_safe_cutoff(poscar, reps, dim="3d", vac_axis=2, margin=0.1):
+    """超胞安全截断（0.5×内切球直径 − margin），2D 只按面内方向判。
+    与 warn_cutoff_vs_supercell 同一口径，但只返回数值、不打 WARN，供 S5 逐档过滤。
+    失败（读不到结构/网格）返回 None。"""
+    try:
+        _, perp, insphere = _supercell_geometry(poscar, reps)
+    except Exception:
+        return None
+    if str(dim).lower() == "2d":
+        ax = int(vac_axis if vac_axis is not None else 2)
+        inplane = [perp[i] for i in range(3) if i != ax]
+        if inplane:
+            insphere = min(inplane)
+    return 0.5 * insphere - margin
 
 
 def warn_cutoff_vs_supercell(poscar, reps, cutoff, label="cutoff", margin=0.1,
@@ -1135,16 +1170,15 @@ def auto_mesh(spec, dim, vac_axis, poscar, q_len, nmin=20, dflt3d="15 15 15"):
     物理含义是"每个方向至少采这么长的倒格矢"，比写死 15 15 15 靠谱得多 ——
     15 15 15 对 a≈3 Å 的 2D 材料等于只覆盖 ~47 Å，kappa 远没收敛。
 
-    2D 只在面内估（真空轴恒 1）；3D 保持旧默认（dflt3d），避免老材料因为这一改
-    突然多跑几十倍的网格 —— 3D 想用同一套判据就把 KAPPA_MESH 显式写成 auto3d。
+    2D 只在面内估（真空轴恒 1）；3D 也按同一口径估（全三轴，auto 与 auto3d 同义，
+    dflt3d 参数仅作兼容保留）。不再写死 15 15 15：长轴方向倒格矢短 -> 网格自动稀疏、
+    短轴方向自动加密，与胞匹配（斜方胞沿薄轴可能需远不止 15 点）。
 
     返回 (mesh_str, note)；note 为空表示用的是显式值。
     """
     s = str(spec if spec is not None else "").strip()
     if s and s.lower() not in ("auto", "auto3d"):
         return mesh_str(s.split(), dim, vac_axis), ""
-    if dim != "2d" and s.lower() != "auto3d":
-        return mesh_str(dflt3d.split(), dim, vac_axis), "（3D 用默认 %s）" % dflt3d
     lat, _ = read_poscar_cell_frac(poscar)
     ax = vac_axis if vac_axis is not None else 2
     m = []

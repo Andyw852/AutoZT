@@ -310,11 +310,20 @@ def test_kappa_mesh_auto():
     ph = types.SimpleNamespace(primitive=_Prim())
     check("2D 真空轴取倒格矢最短轴", kd._vacuum_axis(ph) == 2)
 
-    # 整个张量判收敛（含非对角元），相对最大对角元
+    # 逐分量判据：面内 xx/yy 与面外 zz 各自用自己的 κ 归一
+    # （旧判据 max|Δκ|/max|κ_ii| 会把慢收敛的 zz 掩盖掉）
     a = {"temperatures": [300.0], "kappa_voigt_xx_yy_zz_yz_xz_xy": [[2, 2, 1, 0, 0, 0]]}
     b = {"temperatures": [300.0], "kappa_voigt_xx_yy_zz_yz_xz_xy": [[2, 2, 1, 0, 0, 0.1]]}
-    rel, _t = kd._mesh_change(a, b, 300)
+    rel, rel_vec, _t = kd._mesh_change(a, b, 300)
     check("收敛判据含非对角元 (0.1/2=5%)", abs(rel - 0.05) < 1e-12, str(rel))
+    check("逐分量 rel_vec=[xx,yy,zz]", len(rel_vec) == 3, str(rel_vec))
+    a = {"temperatures": [300.0], "kappa_voigt_xx_yy_zz_yz_xz_xy": [[4, 4, 2, 0, 0, 0]]}
+    b = {"temperatures": [300.0], "kappa_voigt_xx_yy_zz_yz_xz_xy": [[4, 4, 1.8, 0, 0, 0]]}
+    rel_pc, rel_vec_pc, _t = kd._mesh_change(a, b, 300)
+    rel_old, _rv, _t = kd._mesh_change(a, b, 300, mode="max_ii")
+    check("zz 慢收敛不再被掩盖（逐分量 10% > 旧 5%）",
+          abs(rel_pc - 0.10) < 1e-9 and rel_pc > rel_old + 0.04,
+          "pc=%s old=%s" % (rel_pc, rel_old))
 
     # 模拟 BTE：κ = 1 + 1/n，逐档加密直到相邻变化 < tol，取较密那档
     calls = []

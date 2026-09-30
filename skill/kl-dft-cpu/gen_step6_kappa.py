@@ -46,7 +46,7 @@ SPEC = {
     "MESH_OVERRIDE": (None,     "str"),   # 空=用 step4 写入 kl_params 的 MESH
     # q 网格收敛扫描（P1-1）：""=只跑一套 | auto=三档(N/1.25N/1.5625N) | "a b c; d e f"
     #   判据：相邻档 300K 面内 κ 变化 < 5%（写进 kappa_summary.json 的 mesh_convergence）
-    "MESH_SCAN":    ("auto",    "str"),   # auto=2D 三档扫描/3D 单套；""=强制单套
+    "MESH_SCAN":    ("auto",    "str"),   # auto=三档扫描(2D/3D)；""=强制单套
     "MESH_MIN":     (20,        "int"),   # auto 时每方向下限
     # RTA vs 完整解对照（P1-2）：auto = 2D 跑一次 --lbte（正规过程主导，RTA 会低估 κ）。
     #   两种解法的输出文件名相同，需跑完 RTA 先改名再跑 LBTE；比值写进 rta_over_full。
@@ -290,17 +290,27 @@ def build_extract(factor, meta, thick2d=None, plan=None, primary=None):
         "              'kappa_voigt_xx_yy_zz_yz_xz_xy','kappa_principal_300K','kappa_avg_300K'):",
         "        if k in prim: d[k] = prim[k]",
         "    d['bte_method'] = prim['method']",
-        "# ---- 网格收敛（P1-1）：同方法相邻档的 300K 面内 κ 相对变化 ----",
+        "# ---- 网格收敛（P1-1）：同方法相邻档的对角 κ 相对变化（3D 看 xx/yy/zz，2D 只看面内）----",
         "_by = {}",
         "for r in runs: _by.setdefault(r['method'], []).append(r)",
         "for _m, _rs in _by.items():",
         "    if len(_rs) < 2: continue",
         "    _rs = sorted(_rs, key=lambda r: [int(x) for x in r['mesh'].split()])",
         "    _kv = [r['kappa_inplane_300K'] for r in _rs]",
-        "    _rel = [abs(_kv[i+1]-_kv[i])/abs(_kv[i])*100.0",
-        "            for i in range(len(_kv)-1) if abs(_kv[i]) > 1e-12]",
+        "    # 判据取所有非真空对角元里相邻档相对变化最大的那个（2D 真空轴 zz 无意义，跳过）",
+        "    _diag = []",
+        "    for r in _rs:",
+        "        _d3 = r.get('kappa_300K_xx_yy_zz') or [0.0, 0.0, 0.0]",
+        "        _diag.append([_d3[0], _d3[1]] if META.get('dim') == '2d' else list(_d3))",
+        "    _rel = []",
+        "    for i in range(len(_diag)-1):",
+        "        _chg = [abs(_diag[i+1][k]-_diag[i][k])/abs(_diag[i][k])*100.0",
+        "                for k in range(len(_diag[i])) if abs(_diag[i][k]) > 1e-12]",
+        "        if _chg:",
+        "            _rel.append(max(_chg))",
         "    d.setdefault('mesh_convergence', {})[_m] = {",
         "        'meshes': [r['mesh'] for r in _rs], 'kappa300_inplane': _kv,",
+        "        'kappa300_diag': _diag,",
         "        'rel_change_pct': _rel, 'max_rel_change_pct': (max(_rel) if _rel else None),",
         "        'converged_5pct': bool(_rel) and max(_rel) < 5.0}",
         "    # ---- 外推（user review 一.2）----",
@@ -438,9 +448,8 @@ def _mesh_prim_remap(mesh_str, poscar_lat, prim_lat, cart_vac_axis):
 def meshes(conf, params, dim, vac_axis):
     """本步要跑的 q 网格列表（P1-1）。
 
-    MESH_SCAN 未设/auto → 2D 自动三档收敛扫描，3D 单套（旧行为）；
-                          网格收敛性没法从单次结果看出来，而 2D 的 ZA 支在 Γ 附近
-                          发散最慢、恰恰最需要这个判据，所以默认值按维度分。
+    MESH_SCAN 未设/auto → 2D/3D 都自动三档收敛扫描（2026-10 起 3D 也扫：
+                          写死 15^3 没收敛时没人会发现，代价是三档 BTE 而非一档）。
     MESH_SCAN = ""     → 显式只跑 kl_params（S4 按 Q_LEN 估好的）那一套
     MESH_SCAN = on/auto→ 强制三档：N、ceil(1.25N)、ceil(1.5625N)（2D 真空轴恒 1）
     MESH_SCAN = off    → 强制单套（同 ""）
@@ -456,9 +465,8 @@ def meshes(conf, params, dim, vac_axis):
     if scan == "":                       # 显式关掉（step.conf 写 MESH_SCAN = ）
         return [base]
     if scan.lower() in ("auto",):
-        # 默认 auto：只有 2D 展开扫描；3D 保持单套，不动既有 3D 项目的成本
-        if dim != "2d":
-            return [base]
+        # 默认 auto：2D/3D 都展开三档扫描（2026-10 起 3D 也扫：写死 15^3 不收敛时
+        #   没人会发现，代价是三档 BTE 而非一档；要退回单套就 MESH_SCAN = off/""）。
         scan = "on"
     if scan.lower() in ("on", "auto3d", "auto"):
         n = [int(x) for x in base.split()]
@@ -574,10 +582,11 @@ def _cut3_scan_records(fcd):
 
 
 def _cutoff_select_src(kappa_tol_pct=5.0, se_mult=1.0, stability_thr=0.3,
-                       pick="smallest"):
+                       pick="smallest", defer_promote=False):
     """生成"按判据②③选截断"的收尾片段源码（行列表）：读各 cut3_<tag>/kappa_summary.json 的 κ，
-    合并 step5_fc/cutoff_scan.json 的残差/稳定性，写 cutoff_selection.json，并把选中
-    截断的 κ 提到顶层 kappa_summary.json（附 cutoff_selection 供下游追溯）。"""
+    合并 step5_fc/cutoff_scan.json 的残差/稳定性，写 cutoff_selection.json。
+    defer_promote=False：直接把选中截断的 κ 提到顶层 kappa_summary.json（ShengBTE 路用）；
+    defer_promote=True：只把选中 tag 写 chosen_tag.txt，promote 留给后续网格加密+final_promote。"""
     body = [
         "import json, os",
         "import kl_common as kc",
@@ -595,6 +604,7 @@ def _cutoff_select_src(kappa_tol_pct=5.0, se_mult=1.0, stability_thr=0.3,
         "          'stable_upper_cut': _r.get('stable_upper_cut')}",
         "    _f = 'cut3_%s/kappa_summary.json' % _tag",
         "    _k = None",
+        "    _diag = None",
         "    _rel = 0.0",
         "    if os.path.isfile(_f):",
         "        _s = json.load(open(_f, encoding='utf-8'))",
@@ -619,12 +629,22 @@ def _cutoff_select_src(kappa_tol_pct=5.0, se_mult=1.0, stability_thr=0.3,
         "                    _row = [float(x) for x in _kk[_i]]",
         "                    _k = sum(_row) / len(_row) if _row else None",
         "                    break",
+        "        # 对角元（判据③ 3D 要看 zz）：2D 取归一化面内 [xx,yy]，3D 取 [xx,yy,zz]",
+        "        if _s.get('dim') == '2d':",
+        "            _row2 = _s.get('kappa_2d_normalized_300K_xx_yy_zz') or _s.get('kappa_300K_xx_yy_zz')",
+        "            if _row2:",
+        "                _diag = [float(x) for x in _row2[:2]]",
+        "        else:",
+        "            _row3 = _s.get('kappa_300K_xx_yy_zz')",
+        "            if _row3:",
+        "                _diag = [float(x) for x in _row3]",
         "        for _st in (_r.get('shell_stats') or []):",
         "            if (_st.get('rel_std') and _st.get('shell') is not None",
         "                    and _st['shell'] <= _c):",
         "                _rel = max(_rel, float(_st['rel_std']))",
         "    _e['kappa_err_rel'] = _rel",
         "    _e['kappa'] = _k",
+        "    _e['kappa_diag'] = _diag",
         "    _e['kappa_err'] = (abs(_k) * _rel) if _k is not None else None",
         "    _recs.append(_e)",
         ("_chosen, _rep = kc.select_cutoff(_recs, kappa_tol_pct=%r, se_mult=%r, "
@@ -643,35 +663,69 @@ def _cutoff_select_src(kappa_tol_pct=5.0, se_mult=1.0, stability_thr=0.3,
         "             _r['stable_ok'], _r['err_ok'], _r['plateau_ok']))",
         "if _chosen is not None:",
         "    _tag = ('%.2f' % _chosen).replace('.', 'p')",
-        "    _s = json.load(open('cut3_%s/kappa_summary.json' % _tag, encoding='utf-8'))",
-        "    _s['cutoff_selection'] = _rep",
-        "    _s['chosen_cutoff_A'] = _chosen",
-        "    json.dump(_s, open('kappa_summary.json', 'w'), ensure_ascii=False, indent=2)",
-        "    print('KAPPA_DONE' if _s.get('KAPPA_DONE') else 'NO_KAPPA')",
+        "    open('chosen_tag.txt', 'w').write(_tag)",
+        "    print('[选截断] chosen c3=%s Å' % _chosen)",
         "else:",
+        "    open('chosen_tag.txt', 'w').write('')",
         "    print('NO_KAPPA')",
     ]
+    if not defer_promote:
+        body += [
+            "if _chosen is not None:",
+            "    _s = json.load(open('cut3_%s/kappa_summary.json' % _tag, encoding='utf-8'))",
+            "    _s['cutoff_selection'] = _rep",
+            "    _s['chosen_cutoff_A'] = _chosen",
+            "    json.dump(_s, open('kappa_summary.json', 'w'), ensure_ascii=False, indent=2)",
+            "    print('KAPPA_DONE' if _s.get('KAPPA_DONE') else 'NO_KAPPA')",
+        ]
     return body
 
 
 def build_cutoff_select(kappa_tol_pct=5.0, se_mult=1.0, stability_thr=0.3,
-                        pick="smallest"):
+                        pick="smallest", defer_promote=False):
     """把选截断片段包成可直接塞进 submit.sh 的 heredoc 命令（phono3py 路用）。"""
     return ("python - <<'PY2'\n"
             + "\n".join(_cutoff_select_src(kappa_tol_pct=kappa_tol_pct,
                                            se_mult=se_mult,
                                            stability_thr=stability_thr,
-                                           pick=pick))
+                                           pick=pick,
+                                           defer_promote=defer_promote))
             + "\nPY2")
+
+
+def _final_promote_src():
+    """把 cutoff_selection + chosen_cutoff_A 合并进【网格加密后】的顶层 kappa_summary.json。"""
+    body = [
+        "import json",
+        "_tag = open('chosen_tag.txt').read().strip()",
+        "if not _tag:",
+        "    print('NO_KAPPA')",
+        "    raise SystemExit(1)",
+        "_s = json.load(open('kappa_summary.json', encoding='utf-8'))",
+        "_rep = json.load(open('../step5_fc/cutoff_selection.json', encoding='utf-8'))",
+        "_s['cutoff_selection'] = _rep",
+        "_s['chosen_cutoff_A'] = float(_tag.replace('p', '.'))",
+        "json.dump(_s, open('kappa_summary.json', 'w'), ensure_ascii=False, indent=2)",
+        "print('KAPPA_DONE' if _s.get('KAPPA_DONE') else 'NO_KAPPA')",
+    ]
+    return "python - <<'PY3'\n" + "\n".join(body) + "\nPY3"
 
 
 def build_cutoff_scan_cmd(cut3_list, plan, ts, isotope, use_nac, factor, meta,
                           thick2d, primary, tagged, ts_override,
                           kappa_tol_pct=5.0, se_mult=1.0, stability_thr=0.3,
                           pick="smallest"):
-    """截断扫描版 BTE：保持 cwd=step6 目录（extract 的 '../step5_fc/...' 相对路径不变），
-    逐档换 fc2/fc3 跑一次完整 κ，把 kappa_summary.json 收进 cut3_<tag>/，最后选截断。"""
-    inner = build_phono3py_cmd(
+    """截断扫描版 BTE：先在【最粗网格】上逐档扫截断、选出一档，再只对选中档做网格加密。
+    总次数 = 截断档数 + 网格档数（旧实现是截断档数 × 网格档数，浪费）。
+    cwd=step6 目录（extract 的 '../step5_fc/...' 相对路径不变）。"""
+    base_mesh, base_method = plan[0][0], plan[0][1]
+    base_plan = [(base_mesh, base_method)]
+    inner_base = build_phono3py_cmd(
+        base_plan, ts, isotope, use_nac,
+        build_extract(factor, meta, thick2d, extract_plan(base_plan, False),
+                      "%s|%s" % (base_mesh, base_method)),
+        tagged=False, ts_override=None)
+    inner_full = build_phono3py_cmd(
         plan, ts, isotope, use_nac,
         build_extract(factor, meta, thick2d, extract_plan(plan, tagged), primary),
         tagged=tagged, ts_override=ts_override)
@@ -684,10 +738,21 @@ def build_cutoff_scan_cmd(cut3_list, plan, ts, isotope, use_nac, factor, meta,
         lines.append('cp "../step5_fc/phono3py/cut3_%s/fc2.hdf5" fc2.hdf5' % tag)
         lines.append('cp "../step5_fc/phono3py/cut3_%s/fc3.hdf5" fc3.hdf5' % tag)
         lines.append('rm -f kappa-m*.hdf5 kappa_summary.json')
-        lines.append(inner)
+        lines.append(inner_base)
         lines.append('mv kappa_summary.json "cut3_%s/kappa_summary.json"' % tag)
+    # 选截断（只写 chosen_tag.txt，不 promote）
     lines.append(build_cutoff_select(kappa_tol_pct=kappa_tol_pct, se_mult=se_mult,
-                                     stability_thr=stability_thr, pick=pick))
+                                     stability_thr=stability_thr, pick=pick,
+                                     defer_promote=True))
+    # 只对选中截断做网格加密
+    lines.append('CHOSEN=$(cat chosen_tag.txt)')
+    lines.append('test -n "$CHOSEN" || { echo "NO_KAPPA：没有可用截断" >&2; exit 1; }')
+    lines.append('echo "===== 选中 c3=$CHOSEN → 网格加密 ====="')
+    lines.append('cp "../step5_fc/phono3py/cut3_$CHOSEN/fc2.hdf5" fc2.hdf5')
+    lines.append('cp "../step5_fc/phono3py/cut3_$CHOSEN/fc3.hdf5" fc3.hdf5')
+    lines.append('rm -f kappa-m*.hdf5')
+    lines.append(inner_full)
+    lines.append(_final_promote_src())
     return "\n".join(lines)
 
 

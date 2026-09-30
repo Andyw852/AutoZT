@@ -35,6 +35,10 @@ SPEC = {
     #   MESH_CONV_T 下整个 κ 张量相邻变化 < MESH_CONV_TOL_PCT；上限
     #   MESH_CONV_MAX_LENGTH / MESH_CONV_MAX_POINTS（总 q 点数）。off = 只跑起始网格。
     "MESH_CONV":            ("auto", "str"),
+    # per_component（默认）：面内(xx=yy)与面外(zz)分别用自己的 κ 归一，三者都 < tol
+    #   才算收敛——各向异性体系里 zz 收敛慢，旧判据 max|Δκ|/max|κ_ii| 会把它掩盖。
+    #   max_ii：旧的整张量判据（保留兼容）。
+    "MESH_CONV_MODE":       ("per_component", "str"),
     "MESH_CONV_TOL_PCT":    (3.0, "float"),
     "MESH_CONV_FACTOR":     (1.25, "float"),
     "MESH_CONV_MAX_LENGTH": (150.0, "float"),
@@ -142,6 +146,7 @@ def _mesh_cfg(conf, fit_dir):
         "is_2d": is_2d,
         "mesh_2d_vacuum": vac,
         "mesh_conv": "auto" if conv else "off",
+        "mesh_conv_mode": str(conf["MESH_CONV_MODE"] or "per_component").strip().lower(),
         "mesh_conv_tol_pct": float(conf["MESH_CONV_TOL_PCT"]),
         "mesh_conv_factor": float(conf["MESH_CONV_FACTOR"]),
         "mesh_conv_max_length": float(conf["MESH_CONV_MAX_LENGTH"]),
