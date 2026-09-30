@@ -2187,6 +2187,7 @@ def cmd_watch(cfg, types, projs, exclude, interval, tt=None, root=None,
                               % (_time.strftime("%H:%M:%S"), e))
                         sig = s2
                 _lap("cfg_check")       # 配置改动检测（遍历 project_roots）+ 可能的重载
+                _t_obs = _time.time()   # 采集开始时刻：进度文件/提交账本按它对齐
                 data = collect_data(cfg, types)
                 _lap("collect")         # 本地发现/解析 + ssh 远端采集（细分见 collect_detail）
                 fill_local_dim(cfg, data, types)
@@ -2218,8 +2219,13 @@ def cmd_watch(cfg, types, projs, exclude, interval, tt=None, root=None,
                 summary["auto_advance"] = bool(cfg.get("auto_advance"))
                 prev_kinds = _step_kinds(data)
                 n_err = 0
+                # 不按 -p/--project/-x/目录裁剪时本轮覆盖了整个技能（-tt 只挑技能，
+                # 不影响覆盖）：记进 coverage，单材料命令才能据此只采目标材料。
+                _whole = not (projs or exclude or root or project)
                 write_progress(cfg, data, writer="monitor", full_scope=full_scope,
-                               round_info=summary,
+                               covered_keys=([t["key"] for t in data["types"]]
+                                             if _whole else None),
+                               observed=_t_obs, round_info=summary,
                                monitor={"pid": os.getpid(), "interval": interval,
                                         "round": rnd})
                 if cfg.get("hide_done"):

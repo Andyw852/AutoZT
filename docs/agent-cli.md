@@ -19,9 +19,28 @@ autozt agent progress --status error --limit 20    # 只看失败
 #    跨项目同名材料、monitor/cron 保活、agent 网关是否识别到本会话
 autozt agent doctor
 
-# 3. 需要实时状态 / 候选动作时再采集（会 ssh）
+# 3. 候选动作：默认也读进度文件（source=auto，返回的 source 写明数据多旧）；
+#    要实时状态才加 --source live（会 ssh，大体系要几十分钟）
 autozt agent inspect --project my_batch_295 --status error
+
+# 4. 执行：同「动作+技能+步骤」合成一条 act -p A,B,C（一次采集、共享 max_jobs 闸门），
+#    每个动作按现采状态复核；看 results[].outcome
+autozt agent cycle --project my_batch_295 --execute
 ```
+
+执行结果 `results[].outcome`：
+
+| outcome | 含义 | 该做什么 |
+|---|---|---|
+| `submitted` | 已提交（`groups[].output` 里有 jobid） | 无 |
+| `deferred` | 达 max_jobs（技能级或项目级），已先生成输入 | 正常排队，有空位后再 start；不是故障 |
+| `skipped_stale` | 现采状态已不是计划时的状态（已在跑/已算完/已不是 FAIL） | 重新 `inspect` |
+| `ok` | 命令成功但没有提交事件（如 retry 只重生成输入、fetch） | 按动作语义继续 |
+| `failed` | 命令失败（整组停止） | 看 `error`/`groups[].output` |
+
+接入其它 AI 代理：`autozt agent setup` 输出可直接粘贴的 MCP 服务配置（绝对路径、
+`AUTOZT_CONFIG`、`workflow` profile）和一张规则卡；`autozt agent setup --rules` 只输出规则卡
+（Markdown），可追加到代理自己的 AGENTS.md。
 
 `progress` 每个材料一行，字段稳定：
 
@@ -36,7 +55,10 @@ autozt agent inspect --project my_batch_295 --status error
 | `since` / `eta_s` | 当前状态起始时刻；运行中步骤按历史同类步骤的中位耗时估算剩余秒数（样本 ≥3 才给） |
 
 文档顶层还有 `projects`（每项目×技能的材料状态计数）、`round`（monitor 上一轮摘要：
-提交/新完成/新失败数）和 `liveness`（monitor 是否在跑、文件多旧、是否过期）。
+提交/新完成/新失败数）、`liveness`（monitor 是否在跑、文件多旧、是否过期）和
+`fail_summary`（FAIL 按建议动作分桶：`{retry: {count, codes, ids}, human_review: …}`）。
+采集之后才提交的作业（提交账本 `.tf_submit_ledger.jsonl`）读时叠加成 `PD` 并标
+`submitted_after_collect`，所以刚提交的材料不会被下一轮 inspect 再提议一遍。
 进度文件不存在时（monitor 没跑过），任何一次真正采集（如 `autozt list --refresh`）都会写出它。
 
 `--project` / `"scope": {"project": …}` 在所有需要状态的命令上都可用，采集前就按项目裁剪。

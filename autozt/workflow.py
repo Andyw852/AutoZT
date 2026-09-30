@@ -230,6 +230,16 @@ class _SkillGate(object):
                 if pcap is not None:
                     self._pcap[pk] = pcap
                 self._pbusy[pk] = self._pbusy.get(pk, 0) + _material_busy_jobs(m)
+        # 只采了目标材料（-p 单材料快路径）时，没采到的同技能材料的占用由
+        # data["_busy_baseline"] 补上（进度文件 + 提交账本，见 progress.busy_baseline）。
+        base = (data or {}).get("_busy_baseline") or {}
+        for key, n in (base.get("skill") or {}).items():
+            if key in self._busy:
+                self._busy[key] += int(n or 0)
+        for pk, n in (base.get("project") or {}).items():
+            key, _sep, pfrom = str(pk).partition("\t")
+            if key in self._busy and pfrom:
+                self._pbusy[(key, pfrom)] = self._pbusy.get((key, pfrom), 0) + int(n or 0)
 
     def cap(self, key):
         with self._lk:
@@ -1517,6 +1527,11 @@ def do_submit(cfg, t, m, s, force, gen_first, contcar_cp, tag, submit=True):
     if ok:
         SUBMIT_COUNTER[0] += 1
         log_action(m, "%s jobid=%s" % (tag.split(" ", 1)[0] + " " + s["label"], jid))
+        from autozt import agent_event, ledger_append
+        ledger_append(cfg, m, s, jid)   # 只采目标材料的命令靠它补并发计数
+        agent_event("submitted", id=m.get("qualified_name") or m.get("name"),
+                    name=m.get("name"), tt=m.get("tt"), step=s.get("label"),
+                    jobid=str(jid or ""))
     else:
         # ★ 2026-09-28 用户建议：提交失败/被拒也落 tf.log。
         #   否则"扇出步骤的待补清单为空"这类拒绝只在终端闪一下，事后翻 tf.log
@@ -2576,6 +2591,10 @@ def _start_ready(cfg, t, m, force, incl_scancel=False, gate=None):
         if gate is not None and not _is_gen and not gate.try_acquire(m["tt"], m):
             print("%s[%s]：%s，未提交的任务先本地生成输入（不提交），等有空位自动补交。"
                   % (m["name"], m["tt"], gate.describe(m["tt"], m)))
+            from autozt import agent_event
+            agent_event("deferred", id=m.get("qualified_name") or m.get("name"),
+                        name=m.get("name"), tt=m.get("tt"), step=s.get("label"),
+                        reason=gate.describe(m["tt"], m))
             _pregenerate_ready(cfg, t, m, _fired)
             break
         if busy >= cap:
@@ -2648,14 +2667,17 @@ def guard_predecessors(m, s, force):
         return False
     return True
 
-def cmd_start(cfg, data, mname, jname, force, incl_scancel=False):
-    from autozt import _parallel_map, find_material, find_step, step_cfg
+def cmd_start(cfg, data, mname, jname, force, incl_scancel=False, gate=None):
+    from autozt import _parallel_map, agent_event, find_material, find_step, step_cfg
     """返回失败次数（含被拒绝的操作）。
     incl_scancel：-status scancel 显式筛选过时，SCANCEL 步骤也可被 start
-    （否则批量 start 一律跳过被 stop 标记的步骤——v1.4"不会自动重跑"）。"""
+    （否则批量 start 一律跳过被 stop 标记的步骤——v1.4"不会自动重跑"）。
+    gate：调用方共享的 _SkillGate（-p A,B,C 逐个调用时必须共用一个，否则每个材料
+    都从同一份提交前的计数起算，批量能冲过 max_jobs）；None 则本次新建。"""
     fails = 0
+    if gate is None:
+        gate = _SkillGate(cfg, data)   # patch_max_jobs：技能级 + 项目级并发提交上限
     if jname and not mname:  # v3.11：对全部材料只 start 指定步骤
-        gate = _SkillGate(cfg, data)   # patch_max_jobs：技能级并发提交上限
         for t, m, s in step_targets(data, jname):
             if not (m.get("ps") or {}).get("dir"):
                 continue   # 未 init 本技能的材料不 start
@@ -2678,6 +2700,9 @@ def cmd_start(cfg, data, mname, jname, force, incl_scancel=False):
             if not _is_gen and not gate.try_acquire(m["tt"], m):
                 print("%s，%s 先本地生成输入（不提交），等有空位自动补交。"
                       % (gate.describe(m["tt"], m), m["name"]))
+                agent_event("deferred", id=m.get("qualified_name") or m.get("name"),
+                            name=m.get("name"), tt=m.get("tt"), step=s.get("label"),
+                            reason=gate.describe(m["tt"], m))
                 _gen_step_input(cfg, t, m, s)
                 continue
             if not do_submit(cfg, t, m, s, force, gen_first=False,
@@ -2715,19 +2740,33 @@ def cmd_start(cfg, data, mname, jname, force, incl_scancel=False):
                           "rerun（推倒重来）；确定要 start 请加 -f。"
                           % (m["name"], s["label"]))
                     return 1
+            sc = step_cfg(t, s["name"], m)
+            _is_gen = sc.get("run") == "gen"
+            # 显式 -p X -j S 以前不过 max_jobs 闸门（agent 的 start_step 就走这条，
+            # 一轮 20 个动作能直接冲过上限）。现在同样占槽；-f 表示人明确要越过上限。
+            _held = False
+            if not _is_gen and not force:
+                if not gate.try_acquire(m["tt"], m):
+                    print("%s：%s 未提交（先本地生成输入）。有空位后再 start；"
+                          "确要越过上限用 -f。" % (gate.describe(m["tt"], m), m["name"]))
+                    agent_event("deferred", id=m.get("qualified_name") or m.get("name"),
+                                name=m.get("name"), tt=m.get("tt"), step=s.get("label"),
+                                reason=gate.describe(m["tt"], m))
+                    _gen_step_input(cfg, t, m, s)
+                    return 0
+                _held = True
             ok = do_submit(cfg, t, m, s, force, gen_first=False,
-                           contcar_cp=step_cfg(t, s["name"], m).get(
-                               "contcar_to_poscar", False),
+                           contcar_cp=sc.get("contcar_to_poscar", False),
                            tag="start " + tag_of(m, s))
+            if not ok and _held:
+                gate.release(m["tt"], m)
             return 0 if ok else 1
         # --- patch_start_dag：不带 -j 时交掉整个就绪集 -----------------
-        return _start_ready(cfg, t, m, force, incl_scancel,
-                            gate=_SkillGate(cfg, data))
+        return _start_ready(cfg, t, m, force, incl_scancel, gate=gate)
     items = [(t, m) for t in data["types"] for m in t["materials"]]
-    _gate = _SkillGate(cfg, data)   # patch_max_jobs：跨材料共享，线程安全
     results = _parallel_map(
         lambda tm: _start_ready(cfg, tm[0], tm[1], force, incl_scancel,
-                                gate=_gate),
+                                gate=gate),
         items, desc="start")
     return sum(r or 0 for r in results)
 

@@ -120,6 +120,18 @@ stdio 客户端启动进程后按 MCP 顺序发送 `initialize`、`tools/list`�
 执行型 `cycle` 在提交动作前会再次读取同一作用域；cursor 变化就返回
 `stale_plan`，整轮不执行。
 
+状态来源：`inspect`、`cycle`、`get_snapshot`、`propose_actions`、`apply_actions` 都接受
+`source`（`auto` 默认 / `progress` / `live`）。`auto` 在进度文件够新（monitor 在跑且未过期，
+或不超过 `narrow_max_age` 秒）且含所问范围时直接读它——秒级、不连超算；否则现采。返回里的
+`source` 写明来源和文件年龄。同一次 `cycle` 的复核读钉在第一次选定的来源上。
+
+执行：同一 (动作, 技能, 步骤) 的动作合成一条 `act -p A,B,C`（一次采集、共享 max_jobs 闸门），
+`start_step`/`prepare_step` 带 `--expect-state`，CLI 按现采状态逐个复核。每个动作的
+`outcome` ∈ `submitted`/`deferred`（达 max_jobs）/`skipped_stale`（状态已变）/`ok`/`failed`，
+`groups[]` 给出每条命令、耗时和输出。
+
+`autozt agent setup` 输出本机可直接用的服务配置（解释器和入口的绝对路径、`AUTOZT_CONFIG`）。
+
 ### Scientific conversation contract
 
 For a goal-driven scientific request, use this sequence:

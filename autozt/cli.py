@@ -104,7 +104,14 @@ def normalize_monitor_command(command, positional, restart=False):
 
 # 取值型选项：找裸命令词时跳过它们后面的值（-p agent 里的 agent 是材料名，不是子命令）
 _ROUTE_VALUE_FLAGS = {'-c', '--config', '-tt', '-p', '-j', '-job', '-status', '--status',
-                      '-x', '--exclude', '--host', '-u', '--user', '-proj', '--project'}
+                      '-x', '--exclude', '--host', '-u', '--user', '-proj', '--project',
+                      '--expect-state'}
+
+# 带 -p 时可以只采目标材料的命令（进度文件对该技能有足够新的整技能覆盖时）。
+# 这些命令只动/只看 -p 指定的材料；并发闸门缺的那部分由 busy_baseline 补。
+# stop/rerun/clean（破坏性）与 status（会顺带 auto-fetch 全部材料）保持全量采集。
+_NARROW_CMDS = {"start", "retry", "fetch", "advance", "list", "json", "diagnose",
+                "conf", "dir", "prove"}
 
 
 def _bare_index(argv, name):
@@ -262,6 +269,9 @@ def main():
                    help="json：只输出前 N 个材料（分页）")
     p.add_argument("--offset", dest="offset", type=int, metavar="M",
                    help="json：跳过前 M 个材料（配合 --limit 分页）")
+    p.add_argument("--expect-state", dest="expect_state", metavar="状态",
+                   help="start/retry 的前置条件（agent 执行计划用）：-p 目标步骤的当前状态"
+                        "不在列表里就跳过该材料，如 --expect-state TODO,PREP,SCANCEL")
     p.add_argument("args", nargs="*")
     a, unknown = p.parse_known_args()  # v3.14：位置参数可穿插在选项中间
     a.args = list(a.args) + unknown    # （-p A B retry / -p A B -j 1 dir）
@@ -542,6 +552,7 @@ def main():
     # -p 指定了材料时，收集前先把无关的段过滤掉——大体系（数千材料）下全量
     # 采集会逐材料读 yaml + ssh，极慢。skill_subdir 段的材料名 =
     # basename(local_root)，可零成本精确匹配；其余段原样保留（回退全量，行为不变）。
+    _types_all = list(types)
     if a.proj:
         _want = {x.strip() for x in a.proj.split(",") if x.strip()}
         # 共享(体系级)布局：local_root 是项目目录（无 POSCAR），材料名 = 相对路径
@@ -554,6 +565,24 @@ def main():
                      in _want
                      or not os.path.isfile(os.path.join(
                          os.path.realpath(t["local_root"]), "POSCAR")))]
+    # 单材料快路径：-p 指定材料时，共享布局的段只采目标材料（以前每条
+    # `start -p X` 都要把整个技能几百个材料在 9p 上解析 + ssh 探测一遍）。
+    # 前提是进度文件对该技能有足够新的整技能采集（narrow_max_age）——并发闸门里
+    # 没采到的材料的占用从进度文件 + 提交账本补（busy_baseline），否则回退全量。
+    _nkeys, _ndoc = set(), None
+    if a.proj and not mat_toks and not root:
+        from autozt import narrow_keys
+        _nkeys, _ndoc, _nwhy = narrow_keys(cfg, sorted({t["key"] for t in _types_all}))
+        if cmd in _NARROW_CMDS and not a.clean:
+            _toks = [x.strip() for x in a.proj.split(",") if x.strip()]
+            for t in types:
+                if t["key"] in _nkeys and t.get("local_root"):
+                    t["_narrow"] = _toks
+        if _nwhy and os.environ.get("AUTOZT_DEBUG_TIME"):
+            print("[采集] 以下技能全量采集（不能只采目标材料）：%s"
+                  % "; ".join("%s: %s" % kv for kv in sorted(_nwhy.items())),
+                  file=sys.stderr)
+    _narrowed = any(t.get("_narrow") for t in types)
     # patch_state_cache：list/summary 只读命令优先读本地缓存（跳过 ssh 采集），
     # --refresh 或 AUTOZT_CACHE_TTL=0 强制刷新；会改状态的命令一律现采。
     from autozt import tuning_value
@@ -569,7 +598,7 @@ def main():
     else:
         data = collect_data(cfg, types)
         fill_local_dim(cfg, data, types)
-        if cmd in ("list", "summary"):
+        if cmd in ("list", "summary") and not _narrowed:   # 只采了目标材料的不能当全量缓存
             _state_cache_save(cfg, data, types, a.tt, root)
         # v1.0（W5–8）：把本轮的状态转移追加进 history.jsonl。这样**任何技能**
         # 加进来就自动有历史，不必各技能自己写日志；走缓存那一支不重复记录。
@@ -582,8 +611,16 @@ def main():
         # 机器可读进度文件（.tf_progress.json）：AI 之后用 autozt progress /
         # agent progress 直接读，不用再 ssh。局部采集按材料合并，不截断全量视图。
         filter_config_conflicts(data)
-        write_progress(cfg, data, writer="cli",
-                       full_scope=not (a.tt or a.proj or a.project or root or mat_toks))
+        _whole = not (a.proj or a.project or root or mat_toks)
+        write_progress(cfg, data, writer="cli", full_scope=_whole and not a.tt,
+                       covered_keys=[t["key"] for t in data["types"]] if _whole else None,
+                       observed=_t0)
+    if _nkeys and data is not _cached:
+        # 没采到的同技能材料（被裁剪的段/材料）的在跑作业数，给 max_jobs 闸门加底数
+        from autozt import busy_baseline
+        data["_busy_baseline"] = busy_baseline(
+            cfg, _ndoc, data, _nkeys,
+            {_seg_proj_name(t): t.get("_from") for t in _types_all if _seg_proj_name(t)})
     _dbg_t("状态采集（ssh+远端扫描）", _t0)
 
     filter_config_conflicts(data)   # 包含旧缓存；必须先于状态过滤/动作分派
@@ -630,6 +667,43 @@ def main():
                 sys.exit(_i18n.t("错误：", "error: ") + "'%s' 不是命令、材料或步骤%s"
                          % (tok, ("，你是不是想 '%s'？" % close[0]) if close else "。"))
     jobs = jobs or [None]
+
+    if a.expect_state:
+        # agent 执行计划的前置条件：计划可能来自几十分钟前的进度文件，这里按**现采**
+        # 状态逐个核对，不符合的材料跳过（不会把已算完的步骤重交、把在跑的作业 retry 掉）。
+        if cmd not in ("start", "retry") or not projs:
+            sys.exit(_i18n.t("错误：", "error: ") + "--expect-state 只用于带 -p 的 start/retry。")
+        from autozt import agent_event, find_step_soft
+        from autozt.agent_protocol import status_kinds
+        _want_k = status_kinds(a.expect_state)
+        _keep = []
+        for pj in projs:
+            try:
+                _t, _m = find_material(data, pj)
+            except SystemExit as _e:
+                print("跳过 %s：%s" % (pj, _e.code))
+                agent_event("skipped", material=pj, reason=str(_e.code))
+                continue
+            _bad = []
+            for jb in jobs:
+                _s = find_step_soft(_m, jb) if jb else _m.get("active")
+                _k = (_s or {}).get("kind")
+                if _k not in _want_k:
+                    _bad.append({"step": (_s or {}).get("label") or jb, "kind": _k})
+            if _bad:
+                print("跳过 %s：当前状态 %s 不满足 --expect-state %s（计划已过期）。"
+                      % (_m["name"], ", ".join("%s=%s" % (b["step"], b["kind"]) for b in _bad),
+                         a.expect_state))
+                agent_event("skipped", material=pj,
+                            id=_m.get("qualified_name") or _m.get("name"),
+                            name=_m.get("name"), steps=_bad,
+                            expected=sorted(_want_k), reason="state_changed")
+                continue
+            _keep.append(pj)
+        if not _keep:
+            print("--expect-state：没有材料满足前置条件，未执行任何操作。")
+            return
+        projs = _keep
 
     # v2.0：--dry-run 排练。破坏性/有副作用命令只打印将影响的对象，不执行。
     # 按命令语义打印【真实】目标：retry=FAIL 步，start=就绪步，stop=有作业步，
@@ -839,11 +913,15 @@ def main():
         sys.exit(0 if fails == 0 else 1)
     else:
         fails = 0
+        # -p A,B,C 逐个 start 时共用一个闸门：以前每个材料都从同一份提交前的计数
+        # 起算，批量能冲过 max_jobs。
+        from autozt import _SkillGate
+        _start_gate = _SkillGate(cfg, data) if cmd == "start" else None
         for pj in (projs or [None]):
             for jb in jobs:
                 if cmd == "start":
                     fails += cmd_start(cfg, data, pj, jb, a.force,
-                                       incl_scancel=incl_sc)
+                                       incl_scancel=incl_sc, gate=_start_gate)
                 elif cmd == "stop":
                     fails += cmd_stop(cfg, data, pj, jb, a.yes)
                 elif cmd == "retry":

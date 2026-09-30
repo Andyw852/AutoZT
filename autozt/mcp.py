@@ -20,6 +20,7 @@ from collections import OrderedDict
 
 from autozt import agent_protocol as _protocol
 from autozt import agent_service as _service
+from autozt import agent_state as _agent_state
 from autozt import science as _science
 
 PROTOCOL_VERSION = "2025-06-18"
@@ -32,6 +33,10 @@ PROG = os.path.join(ROOT, "bin", "autozt")
 # 通用动词工具表：读/写/破坏三类，与技能无关
 _PROJ = {"type": "string",
          "description": "项目名（tf_<项目>.yaml 的 <项目>，逗号分隔）；按项目裁剪，不用列材料名"}
+_SOURCE = {"type": "string", "enum": list(_agent_state.SOURCES),
+           "description": "状态来源：auto（默认）=进度文件够新就读它（秒级、无 ssh），否则现采；"
+                          "live=强制现采（大体系在慢盘上要几十分钟）；progress=只读进度文件。"
+                          "执行动作时 CLI 总会按现采状态逐个复核"}
 
 TOOLS = [
     # ---- 只读 ----
@@ -92,7 +97,7 @@ TOOLS = [
       "temperature":{"type":"number"},"carrier":{"type":"number"},"direction":{"type":"string"}},
       "required":["result_dir","property"], "additionalProperties":False}, "read", ["results"]),
     # ---- 变更（走 act 网关）----
-    ("start_step", "推进材料/步骤（输入没生成先 gen 再提交）",
+    ("start_step", "推进材料/步骤（输入没生成先 gen 再提交；受 max_jobs 并发上限约束）",
      {"type": "object", "properties": {"tt": {"type": "string"},
                                        "material": {"type": "string"},
                                        "step": {"type": "string"}},
@@ -117,7 +122,8 @@ TOOLS = [
                                                      "enum": ["attention", "active", "all"]},
                                            "include_monitoring": {"type": "boolean"},
                                            "max_actions": {"type": "integer",
-                                                           "minimum": 1, "maximum": 20}},
+                                                           "minimum": 1, "maximum": 20},
+                                           "source": _SOURCE},
       "additionalProperties": False}, "read", ["inspect"]),
     # ---- 破坏性（走 act 网关，默认拒绝，需人工 approve）----
     ("cancel_step", "取消该步骤的作业（破坏性）",
@@ -145,26 +151,31 @@ TOOLS = [
                                            "max_actions": {"type": "integer",
                                                            "minimum": 1, "maximum": 20},
                                            "include_retry": {"type": "boolean"},
-                                           "execute": {"type": "boolean"}},
+                                           "execute": {"type": "boolean"},
+                                           "source": _SOURCE},
       "additionalProperties": False}, "mutate", ["cycle"]),
     # ---- LLM 高层接口：内部仍只调用上面的 CLI 能力 ----
     ("get_snapshot", "紧凑状态快照；传 cursor 时只返回变化，降低上下文开销",
      {"type": "object", "properties": {"project": _PROJ,
          "tt": {"type": "string"}, "material": {"type": "string"},
          "status": {"type": "string"}, "cursor": {"type": "string"},
-         "view": {"type": "string", "enum": ["attention", "active", "all"]}},
+         "view": {"type": "string", "enum": ["attention", "active", "all"]},
+         "source": _SOURCE},
       "additionalProperties": False}, "read", ["status"]),
     ("propose_actions", "按状态与稳定诊断码生成候选动作；只建议，不执行",
      {"type": "object", "properties": {"project": _PROJ,
          "tt": {"type": "string"}, "material": {"type": "string"},
          "status": {"type": "string"},
          "include_monitoring": {"type": "boolean"},
-         "max_actions": {"type": "integer", "minimum": 1, "maximum": 20}},
+         "max_actions": {"type": "integer", "minimum": 1, "maximum": 20},
+         "source": _SOURCE},
       "additionalProperties": False}, "read", ["status"]),
-    ("apply_actions", "批量执行已选定的非破坏性动作；破坏性动作始终拒绝",
+    ("apply_actions", "批量执行已选定的非破坏性动作（同技能同步骤合成一条命令、一次采集；"
+     "每个动作按现采状态复核，结果 outcome=submitted/deferred/skipped_stale/ok/failed）；"
+     "破坏性动作始终拒绝",
      {"type": "object", "properties": {"project": _PROJ,
          "dry_run": {"type": "boolean"},
-         "cursor": {"type": "string"},
+         "cursor": {"type": "string"}, "source": _SOURCE,
          "tt": {"type": "string"}, "material": {"type": "string"},
          "status": {"type": "string"},
          "actions": {"type": "array", "minItems": 1, "maxItems": 20,
@@ -212,7 +223,9 @@ TOOL_RESULT_SCHEMA = {
 }
 
 _SNAPSHOTS = OrderedDict()
+_SNAPSHOT_SOURCE = {}   # cursor -> progress/live：跨来源不比 diff（字段不同会全是假变化）
 _SNAPSHOT_LIMIT = 128
+_LAST_SOURCE = {}       # 最近一次读状态的来源说明，随结果返回给模型
 
 
 def _cfg_args():
@@ -231,6 +244,7 @@ def _run(argv, timeout=1800):
     cmd = _autozt_argv() + _cfg_args() + argv
     env = dict(os.environ)
     env.setdefault("AUTOZT_ACTOR", "mcp")   # 让 act 网关认出这是 agent 会话
+    env["AUTOZT_AGENT_EVENTS"] = "1"        # start/retry 输出 [agent-event] 行供执行器回填结果
     try:
         p = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8",
                            errors="replace", timeout=timeout, env=env)
@@ -502,30 +516,10 @@ def _scope_data(data, args=None):
 
 
 def _compact_state(data, args=None):
-    """Reduce full status JSON to fields needed for planning and state comparison."""
-    data = _scope_data(data, args)
-    out = {"types": [], "queue": data.get("queue") or {}}
-    for task_type in data.get("types") or []:
-        compact_type = {"key": task_type.get("key"), "materials": []}
-        for material in task_type.get("materials") or []:
-            cm = {"name": material.get("name"),
-                  "hpc": material.get("hpc_name") or material.get("hpc") or "",
-                  "dim": material.get("dim") or "",
-                  "active": _active_label(material),
-                  "action": material.get("action") or "", "steps": []}
-            for step in material.get("steps") or []:
-                job = step.get("job") or {}
-                cs = {"label": step.get("label"), "kind": step.get("kind")}
-                for key in ("diag", "diag_code", "suggested_action", "action_reason"):
-                    if step.get(key):
-                        cs[key] = step[key]
-                if job:
-                    cs["job"] = {k: job.get(k) for k in ("id", "state", "info")
-                                 if job.get(k) not in (None, "")}
-                cm["steps"].append(cs)
-            compact_type["materials"].append(cm)
-        out["types"].append(compact_type)
-    return out
+    """Reduce full status JSON to fields needed for planning and state comparison.
+
+    与 ``autozt agent`` 共用 agent_protocol 的实现（含稳定 id / project 字段）。"""
+    return _protocol.compact_state(data, args or {})
 
 
 def _state_counts(compact):
@@ -560,12 +554,14 @@ def _snapshot_flat(compact):
     return out
 
 
-def _remember_snapshot(compact):
+def _remember_snapshot(compact, kind="live"):
     cursor = _protocol.state_cursor(compact)
     _SNAPSHOTS[cursor] = compact
+    _SNAPSHOT_SOURCE[cursor] = kind
     _SNAPSHOTS.move_to_end(cursor)
     while len(_SNAPSHOTS) > _SNAPSHOT_LIMIT:
-        _SNAPSHOTS.popitem(last=False)
+        old, _v = _SNAPSHOTS.popitem(last=False)
+        _SNAPSHOT_SOURCE.pop(old, None)
     return cursor
 
 
@@ -594,14 +590,16 @@ def _filter_snapshot(compact, view):
 
 
 def _get_snapshot(args):
-    rc, data, error = _load_state(args)
-    if rc:
-        return _result("read", rc=rc, error=error)
-    compact = _compact_state(data, args)
-    new_cursor = _remember_snapshot(compact)
+    compact, error, rc = _mcp_load_compact(args)
+    if error:
+        return _result("read", rc=rc or 1, error=error)
+    kind = _LAST_SOURCE.get("kind") or "live"
+    new_cursor = _remember_snapshot(compact, kind)
     old_cursor = args.get("cursor")
     if old_cursor:
         old = _SNAPSHOTS.get(old_cursor)
+        if old is not None and _SNAPSHOT_SOURCE.get(old_cursor, "live") != kind:
+            old = None
         if old is None:
             payload = {"cursor": new_cursor, "cursor_reset": True,
                        "counts": _state_counts(compact),
@@ -614,6 +612,7 @@ def _get_snapshot(args):
         payload = {"cursor": new_cursor, "first_snapshot": True,
                    "counts": _state_counts(compact),
                    "snapshot": _filter_snapshot(compact, args.get("view") or "attention")}
+    payload["source"] = dict(_LAST_SOURCE)
     return _result("read", data=payload)
 
 
@@ -627,7 +626,7 @@ def _get_progress(args):
     except SystemExit as exc:
         return _result("read", rc=1, error=str(exc.code))
     cfg["_config_dir"] = os.path.dirname(os.path.abspath(found)) if found else os.getcwd()
-    doc = _progress.load_progress(cfg)
+    doc = _progress.load_progress_view(cfg)
     if doc is None:
         return _result("read", rc=1,
                        error="no progress file at %s yet; it is written by `autozt monitor` "
@@ -644,10 +643,9 @@ def _get_progress(args):
 
 
 def _propose_actions(args):
-    rc, data, error = _load_state(args)
-    if rc:
-        return _result("read", rc=rc, error=error)
-    compact = _compact_state(data, args)
+    compact, error, rc = _mcp_load_compact(args)
+    if error:
+        return _result("read", rc=rc or 1, error=error)
     include_monitoring = bool(args.get("include_monitoring"))
     limit = args.get("max_actions", _protocol.MAX_ACTIONS)
     try:
@@ -662,25 +660,43 @@ def _propose_actions(args):
                                             if args.get(key) not in (None, "")},
                                  "counts": _state_counts(compact),
                                  "proposals": proposals,
-                                 "proposal_limit": proposal_limit})
+                                 "proposal_limit": proposal_limit,
+                                 "source": dict(_LAST_SOURCE)})
+
+
+def _pinned_loader(args):
+    """同一次 inspect/cycle 里的复核读钉在第一次选定的来源上。"""
+    pinned = {}
+
+    def load(scope):
+        scope = dict(scope or {})
+        scope["source"] = pinned.get("kind") or args.get("source")
+        got = _mcp_load_compact(scope)
+        if not got[1] and _LAST_SOURCE.get("kind"):
+            pinned.setdefault("kind", _LAST_SOURCE["kind"])
+        return got
+    load.pinned = pinned
+    return load
 
 
 def _inspect(args):
     """Single read call for an LLM: state, bounded attention view, and plan."""
     data, error, rc = _service.inspect(
-        _mcp_load_compact, args,
+        _pinned_loader(args), args,
         view=args.get("view") or "attention",
         include_monitoring=bool(args.get("include_monitoring")),
         max_actions=args.get("max_actions", _protocol.MAX_ACTIONS),
         include_retry=bool(args.get("include_retry", True)))
     if error:
         return _result("read", rc=rc, error=error)
+    data["source"] = dict(_LAST_SOURCE)
     return _result("read", data=data)
 
 
 def _cycle(args):
     """Observe and plan once; execute only when the caller explicitly sets execute."""
     execute = bool(args.get("execute"))
+    loader = _pinned_loader(args)
 
     def apply(actions, dry_run, expected_cursor=None):
         # Use the cursor observed by agent_service.inspect/cycle.  _apply_actions
@@ -694,6 +710,7 @@ def _cycle(args):
                            if args.get(key) not in (None, "")})
         if not dry_run and expected_cursor:
             apply_args["cursor"] = expected_cursor
+            apply_args["source"] = loader.pinned.get("kind") or "live"
         result = _apply_actions(apply_args)
         structured = result.get("structuredContent") or {}
         return {
@@ -703,20 +720,33 @@ def _cycle(args):
         }
 
     data, error, rc = _service.cycle(
-        _mcp_load_compact, apply, args,
+        loader, apply, args,
         view=args.get("view") or "attention",
         include_monitoring=bool(args.get("include_monitoring")),
         max_actions=args.get("max_actions", _protocol.MAX_ACTIONS),
         execute=execute,
         include_retry=bool(args.get("include_retry", False)))
+    if isinstance(data, dict):
+        data["source"] = dict(_LAST_SOURCE)
     return _result("mutate", rc=rc, data=data, error=error)
 
 
-def _mcp_load_compact(scope):
+def _mcp_live_compact(scope):
     rc, raw, error = _load_state(scope or {})
     if rc:
         return None, error, rc
     return _compact_state(raw, scope or {}), None, 0
+
+
+def _mcp_load_compact(scope):
+    """按 source 读紧凑状态（默认 auto：进度文件够新就读它，否则现采）。"""
+    scope = scope or {}
+    source = scope.get("source")
+    compact, error, rc, info = _agent_state.load_compact(scope, source, None,
+                                                         _mcp_live_compact)
+    _LAST_SOURCE.clear()
+    _LAST_SOURCE.update(info)
+    return compact, error, rc
 
 
 def _apply_actions(args):
@@ -744,27 +774,13 @@ def _apply_actions(args):
                            error="plan is stale; call get_snapshot or inspect again")
     if args.get("dry_run"):
         return _result("mutate", data={"dry_run": True, "actions": actions})
-    results = []
-    failed = False
-    for action in actions:
-        name = action["action"]
-        call_args = {k: v for k, v in action.items() if k != "action"}
-        # The profile controls the public tool surface.  A high-level cycle is
-        # allowed to dispatch its bounded primitive actions internally, while
-        # those actions still pass through the same validation and act gateway.
-        got = call_tool(name, call_args, _internal=True)
-        structured = got.get("structuredContent") or {}
-        results.append({"action": name, "arguments": call_args,
-                        "ok": not got.get("isError"),
-                        "returncode": structured.get("returncode"),
-                        "data": structured.get("data"),
-                        "error": structured.get("error")})
-        if got.get("isError"):
-            failed = True
-            break
-    return _result("mutate", rc=1 if failed else 0,
-                   data={"results": results, "stopped_on_error": failed},
-                   error="batch stopped after first failed action" if failed else None)
+    # 同 (动作, 技能, 步骤) 合成一条 act -p A,B,C：一次采集、共享 max_jobs 闸门；
+    # start/retry 带 --expect-state，由 CLI 按现采状态逐个复核。仍然只走 act 网关。
+    execution = _agent_state.execute_grouped(actions, lambda argv: _run(argv))
+    failed = bool(execution.get("failed"))
+    execution["stopped_on_error"] = failed
+    return _result("mutate", rc=1 if failed else 0, data=execution,
+                   error=execution.get("error") if failed else None)
 
 
 def call_tool(name, args, _internal=False):

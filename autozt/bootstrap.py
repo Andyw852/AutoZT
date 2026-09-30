@@ -63,6 +63,7 @@ project_roots:
 # op_workers: 8            # 批量 start/clean 并发（AUTOZT_OP_WORKERS）
 # init_workers: 16         # 批量 init 并发（AUTOZT_INIT_WORKERS）
 # cache_ttl: 60            # list/summary 本地缓存秒数（AUTOZT_CACHE_TTL）
+# narrow_max_age: 7200     # -p 单材料快路径：整技能采集多久内可信（秒；0=关，AUTOZT_NARROW_MAX_AGE）
 
 # AI / agent 接入（可选）：
 # agent_gate: auto         # 默认：AI 会话（AUTOZT_ACTOR / 常见代理环境标记 / 非交互终端）
@@ -1797,6 +1798,8 @@ TUNING_KNOBS = {
     "op_workers":      ("AUTOZT_OP_WORKERS", 8, 1),
     "init_workers":    ("AUTOZT_INIT_WORKERS", 16, 1),
     "cache_ttl":       ("AUTOZT_CACHE_TTL", 60, 0),
+    # -p 单材料快路径：进度文件里的整技能采集多久以内可信（秒；0=关闭，一律全量采集）
+    "narrow_max_age":  ("AUTOZT_NARROW_MAX_AGE", 7200, 0),
 }
 
 

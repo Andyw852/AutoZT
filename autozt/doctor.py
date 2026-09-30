@@ -18,6 +18,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 
 _LEVELS = ("error", "warn", "info")
 
@@ -217,6 +218,27 @@ def check_monitor(cfg):
     return info, finds
 
 
+def check_fast_path(cfg, types):
+    """单材料快路径（-p 只采目标材料、agent 读进度文件）对每个技能是否可用。"""
+    from autozt import narrow_keys, narrow_max_age
+    keys = sorted({t.get("key") for t in types if t.get("key")})
+    ok, doc, why = narrow_keys(cfg, keys)
+    cov = (doc or {}).get("coverage") or {}
+    now = time.time()
+    rows = [{"skill": k, "narrow": k in ok,
+             "full_collect_age_s": int(now - float(cov[k])) if cov.get(k) else None,
+             "reason": why.get(k, "")} for k in keys]
+    finds = []
+    off = [r["skill"] for r in rows if not r["narrow"]]
+    if off and narrow_max_age(cfg) > 0:
+        finds.append(_finding("info", "fast_path_off",
+                              "%d 个技能暂不能只采目标材料（-p 命令会全量采集）：%s"
+                              % (len(off), ", ".join(off[:8])),
+                              fix="让 monitor 跑一轮（或 autozt -tt <技能> list --refresh）"
+                                  "记下整技能采集；有效期 narrow_max_age（默认 7200 秒）"))
+    return {"narrow_max_age": narrow_max_age(cfg), "skills": rows}, finds
+
+
 def check_gate(cfg):
     from autozt import agent_detect, agent_gate_policy
     actor, src = agent_detect(cfg)
@@ -247,6 +269,9 @@ def run_doctor(cfg, types, deep=True):
     report["monitor"] = mon
     finds += f
     report["agent_gate"] = check_gate(cfg)
+    fp, f = check_fast_path(cfg, types)
+    report["fast_path"] = fp
+    finds += f
     report["collector_transport"] = "stdin（payload 不占 argv，无 E2BIG 上限）"
     finds.sort(key=lambda d: _LEVELS.index(d["level"]))
     report["findings"] = finds
@@ -276,6 +301,12 @@ def cmd_doctor(cfg, types, json_out=False, strict=False, deep=True):
               % (("在跑 PID %s" % m["pid"]) if m["alive"] else "未运行",
                  m["auto_advance"], m["auto_watch"],
                  {True: "已装", False: "未装", None: "未知"}[m["cron_keepalive"]]))
+        fp = rep["fast_path"]
+        print("[单材料快路径]（-p 只采目标材料；并发计数由进度文件+提交账本补；"
+              "有效期 %ss）" % fp["narrow_max_age"])
+        for r in fp["skills"]:
+            print("  %-16s %s" % (r["skill"], ("可用（整技能采集 %s 秒前）" % r["full_collect_age_s"])
+                                  if r["narrow"] else ("全量采集：%s" % r["reason"])))
         g = rep["agent_gate"]
         print("[agent 网关] 策略=%s；本会话%s"
               % (g["policy"], ("识别为 agent（%s，%s）" % (g["actor"], g["detected_by"]))

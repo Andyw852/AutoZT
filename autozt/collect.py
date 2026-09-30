@@ -120,6 +120,14 @@ def _discover_memo(memo, local_root, key):
     return root, [dict(m) for m in mats]
 
 
+def _narrow_hit(name, proj, toks):
+    """-p 只采目标材料时的筛选：必须是 find_material 各匹配档（精确/<项目名>/<完整名>/
+    basename/子串）的超集——同名歧义照样报出来，不会因为只采一部分而悄悄选中某一个。
+    材料名以发现时的相对路径为准；跨项目重名时显示名会加项目前缀，两种形式都比。"""
+    full = "%s/%s" % (proj, name) if proj else name
+    return any(tok in name or tok in full for tok in toks)
+
+
 def collect_v3_batch(cfg, segs):
     from autozt import _LOCAL_ONLY_STEP_KEYS, _load_yaml_file, _natkey, discover_local, pkg_setting_path, resolve_material_local, step_cfg
     """v3 本地模式批量采集：所有段（项目配置）先本地解析，再按 (host, work_dir)
@@ -129,8 +137,14 @@ def collect_v3_batch(cfg, segs):
     resolved = []
     _t0 = time.time()
     _memo = {}
+    _narrowed = 0
     for t in segs:
         root, mats = _discover_memo(_memo, t["local_root"], t["key"])
+        if t.get("_narrow"):
+            from autozt import _seg_proj_name
+            _pn = _seg_proj_name(t)
+            mats = [m for m in mats if _narrow_hit(m["name"], _pn, t["_narrow"])]
+            _narrowed += 1
         for m in mats:
             resolve_material_local(t, root, m)
         steps = []
@@ -228,7 +242,10 @@ def collect_v3_batch(cfg, segs):
         "remote_ssh_s": round(time.time() - _t1, 1),  # 并行 ssh 采集（墙钟）
         "segments": len(segs), "discover_roots": len(_memo),
         "materials": sum(len(ms) for _t, _r, ms, _s in resolved),
-        "ssh_calls": len(gitems), "ssh_workers": _nw, "chunk": _chunk})
+        "ssh_calls": len(gitems), "ssh_workers": _nw, "chunk": _chunk,
+        # 采集失败被跳过的组数：>0 时这轮数据不完整，进度文件不能标成「整技能已覆盖」
+        "failed_groups": sum(1 for _g, _h, _q in grouped if not _g),
+        "narrowed_segments": _narrowed})
 
     seg_results = {id(t): [] for t, _, _, _ in resolved}
     _queue_by_host = {}   # 同一 host 的多个分组/分块会各自 squeue，队列数相同，按 host 去重

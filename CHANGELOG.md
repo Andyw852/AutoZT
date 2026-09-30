@@ -96,6 +96,41 @@ This project adheres to Semantic Versioning; versions before 1.0.0 are developme
   - `[round]` gains `collect_detail` (local resolve vs parallel ssh vs post-processing
     seconds, segment/material/ssh-call counts) and a separate `fill_dim` timing, so the
     local-9p and ssh parts of `collect` can be told apart.
+- Agent calls no longer collect the whole skill for every read or action (on the 328-material
+  production set each `inspect`/`cycle` or `act start -p X` took tens of minutes on 9p):
+  - `agent snapshot/inspect/plan/propose/cycle/run` and the MCP `get_snapshot`/`inspect`/
+    `cycle`/`propose_actions`/`apply_actions` tools take `source` (`auto` default,
+    `progress`, `live`). `auto` reads `.tf_progress.json` when it is fresh (live monitor, or
+    not older than `narrow_max_age`) and covers the requested scope, and falls back to live
+    collection otherwise. Every result says which source it used and how old it is.
+  - Execution groups actions by (action, skill, step) into one `act -p A,B,C` call: one
+    collection and one shared max_jobs gate per group instead of one full collection per
+    action. `start`/`retry` carry `--expect-state`, so each target is re-checked against the
+    freshly collected state and skipped if it changed (a plan from the progress file cannot
+    resubmit a finished step or `retry` away a running job). Each action reports an
+    `outcome`: `submitted`, `deferred` (max_jobs reached), `skipped_stale`, `ok`, `failed`.
+  - Commands with explicit `-p` targets (`start`, `retry`, `fetch`, `advance`, `list`, `json`,
+    `diagnose`, `conf`, `dir`, `prove`) resolve and probe only the matching materials of a
+    shared-layout segment when the progress file recorded a whole-skill collection within
+    `narrow_max_age` (default 7200 s; 0 disables). The matcher is a superset of `-p`
+    resolution, so ambiguity errors are unchanged. The max_jobs gate adds the running/queued
+    jobs of the materials that were not collected, from the progress file plus a submission
+    ledger (`.tf_submit_ledger.jsonl`) that covers jobs submitted after the last collection.
+    `autozt doctor` shows per skill whether this fast path is available.
+- `autozt agent setup` prints a ready-to-paste MCP server entry (absolute interpreter and
+  entry paths, `AUTOZT_CONFIG`, `workflow` profile) and a short rules card for the model;
+  `--rules` prints only the card.
+- Progress views carry `fail_summary` (FAILs bucketed by suggested action with codes and
+  ids), and jobs submitted after the last collection show as `PD`
+  (`submitted_after_collect`) instead of being proposed again.
+- max_jobs was not enforced for explicit `start -p X -j S` (the path every agent
+  `start_step` takes), and `start -p A,B,C` built a fresh gate per material from the same
+  pre-submission counts, so a batch could overshoot the cap. Both now share one gate; `-f`
+  still lets a human exceed the cap on purpose. The gate also counts jobs of materials
+  outside the collected scope (`--project`, skill-subdir `-p` pruning) when the progress
+  file is fresh.
+- `act --project P …` was classified as an unknown (destructive) command because
+  `--project`'s value was taken for the command word.
 
 ### Fixed
 - Cluster-switch self-checks, each backed by a real failure observed in testing:

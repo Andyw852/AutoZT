@@ -24,6 +24,7 @@ from typing import Any, Dict, Iterable, List, Mapping, Optional, Tuple
 
 from autozt import agent_protocol as _protocol
 from autozt import agent_service as _service
+from autozt import agent_state as _agent_state
 from autozt import science as _science
 
 
@@ -45,8 +46,10 @@ REQUEST_FIELDS = {
     "op", "scope", "project", "tt", "material", "status", "step", "view", "limit",
     "include_monitoring", "include_retry", "execute", "dry_run", "max_actions",
     "cursor", "full", "skill", "plan", "actions", "goal", "result_dir", "property",
-    "temperature", "carrier", "direction", "dimension", "thickness",
+    "temperature", "carrier", "direction", "dimension", "thickness", "source",
 }
+# 最近一次 _status 的数据来源（progress / live、多旧）；随结果一起返回给模型
+_LAST_SOURCE: Dict[str, Any] = {}
 
 
 def _json_compact(value: Any) -> str:
@@ -115,6 +118,8 @@ def _cfg_env(explicit: Optional[str]) -> Dict[str, str]:
     # Direct agent-cli calls are audited by the same gate as MCP calls. Mutating
     # actions still go through `autozt act`; this actor label distinguishes the source.
     env.setdefault("AUTOZT_ACTOR", "agent-cli")
+    # start/retry 输出机器可读的 [agent-event] 行（提交/达上限/状态已变），执行器据此回填
+    env["AUTOZT_AGENT_EVENTS"] = "1"
     return env
 
 
@@ -255,12 +260,24 @@ def _save_snapshot(path: str, value: Dict[str, Any]) -> None:
     os.replace(tmp, path)
 
 
-def _status(args: argparse.Namespace) -> Tuple[Optional[Dict[str, Any]], Optional[str], int]:
+def _live_status(args: argparse.Namespace) -> Tuple[Optional[Dict[str, Any]], Optional[str], int]:
     data, error, rc = _call_json(_context_argv(args) + ["list", "--json"],
                                  getattr(args, "config", None))
     if error:
         return None, error, rc
     return _compact_state(data, args), None, 0
+
+
+def _status(args: argparse.Namespace) -> Tuple[Optional[Dict[str, Any]], Optional[str], int]:
+    """读紧凑状态：source=auto（默认）先看进度文件（秒级、无 ssh），太旧/没有/不含
+    该范围才现采；live 强制现采；progress 强制读文件。来源记在 _LAST_SOURCE。"""
+    scope = {key: getattr(args, key, None) for key in ("project", "tt", "material", "status")}
+    compact, error, rc, info = _agent_state.load_compact(
+        scope, getattr(args, "source", None), getattr(args, "config", None),
+        lambda _scope: _live_status(args))
+    _LAST_SOURCE.clear()
+    _LAST_SOURCE.update(info)
+    return compact, error, rc
 
 
 def _proposals(compact: Dict[str, Any], include_monitoring: bool = False,
@@ -342,7 +359,7 @@ def _cmd_progress(args: argparse.Namespace) -> Tuple[Dict[str, Any], int]:
         cfg["_config_dir"] = os.path.dirname(os.path.abspath(found)) if found else os.getcwd()
     except SystemExit as exc:
         return _envelope("progress", ok=False, error=str(exc.code), returncode=1), 1
-    doc = _progress.load_progress(cfg)
+    doc = _progress.load_progress_view(cfg)
     if doc is None:
         return _envelope("progress", ok=False, returncode=1,
                          error="no progress file at %s yet; it is written by `autozt monitor` "
@@ -359,6 +376,59 @@ def _cmd_progress(args: argparse.Namespace) -> Tuple[Dict[str, Any], int]:
         view["materials_total"] = len(view["materials"])
         view["materials"] = view["materials"][:int(limit)]
     return _envelope("progress", view), 0
+
+
+AGENT_RULES_MD = """# AutoZT 调用规则（给 LLM；由 `autozt agent setup --rules` 生成）
+
+1. 看状态先用 `autozt agent progress [--project P] [-status error]`（MCP: get_progress）：
+   读 monitor 写的本地文件，秒级、不连超算。不要 grep 日志，不要解析 summary/list 的表格文本。
+2. FAIL 分诊看 `fail_summary` 和 `materials[].fails[].action`：retry 桶可以提议 prepare_step；
+   human_review 桶直接汇报给用户，不要自己反复重投。
+3. 要候选动作用 `autozt agent inspect [--project P]`（MCP: inspect）。它默认读进度文件
+   （返回里的 source 写明数据多旧）；确需实时状态才加 `--source live`（大体系要几十分钟）。
+4. 执行只用 `autozt agent cycle --execute`（MCP: cycle execute=true）或 apply：只会 start/retry/
+   fetch/advance；同技能同步骤合成一条命令，按现采状态逐个复核。结果看 `results[].outcome`：
+   submitted=已提交，deferred=达 max_jobs 在排队（正常，不是故障），skipped_stale=状态已变
+   （重新 inspect），failed=看 output。
+5. 破坏性动作（stop/rerun/clean、-f/-y、conf --set）不要执行：把命令给用户，让用户在终端
+   `autozt approve …` 后再说。
+6. 批量操作前可跑 `autozt agent doctor`（max_jobs 生效值、被屏蔽项目、同名材料）。
+7. 材料用稳定 id `<项目名>/<完整名>`（progress/inspect 返回的 id 字段）指代，避免同名歧义。
+8. 不改全局开关（auto_advance、auto_watch 等）和项目配置，除非用户明确要求。
+"""
+
+
+def _cmd_setup(args: argparse.Namespace) -> Tuple[Dict[str, Any], int]:
+    """接入说明：MCP 服务配置（绝对路径，直接粘进客户端配置）+ 给 LLM 的规则卡。只读。"""
+    config = _config_path(getattr(args, "config", None))
+    argv = autozt_argv()
+    env = {"AUTOZT_MCP_PROFILE": "workflow"}
+    if config:
+        env["AUTOZT_CONFIG"] = config
+    data: Dict[str, Any] = {
+        "mcp_server": {"mcpServers": {"autozt": {
+            "command": argv[0], "args": argv[1:] + ["mcp"], "env": env}}},
+        "mcp_profiles": {"workflow": "默认：progress/doctor/inspect/cycle/apply 等 14 个工具",
+                         "monitor": "最小：get_progress/get_snapshot/cycle",
+                         "full": "全部工具（含需人工批准的破坏性工具）"},
+        "cli": {"prefix": " ".join(argv + ["agent"]),
+                "first_calls": ["progress --project <P>", "doctor",
+                                "inspect --project <P>", "cycle --project <P> --execute"]},
+        "rules_md": AGENT_RULES_MD,
+        "config": config,
+    }
+    try:
+        from autozt import progress as _progress
+        cfg, _err = _agent_state.load_cfg(getattr(args, "config", None))
+        if cfg is not None:
+            doc = _progress.load_progress(cfg)
+            data["progress"] = {"path": _progress.progress_path(cfg), "exists": doc is not None}
+            if doc is not None:
+                data["progress"].update(_progress.monitor_liveness(cfg, doc))
+                data["progress"]["coverage"] = doc.get("coverage") or {}
+    except Exception:                             # noqa: BLE001
+        pass
+    return _envelope("setup", data), 0
 
 
 def _cmd_doctor(args: argparse.Namespace) -> Tuple[Dict[str, Any], int]:
@@ -451,9 +521,13 @@ def _cmd_snapshot(args: argparse.Namespace) -> Tuple[Dict[str, Any], int]:
     cursor = _protocol.state_cursor(compact)
     path = _snapshot_path(args)
     previous = _load_snapshot(path)
+    kind = _LAST_SOURCE.get("kind") or "live"
     record = {"version": SNAPSHOT_VERSION, "cursor": cursor, "snapshot": compact,
-              "updated": int(time.time())}
+              "updated": int(time.time()), "source": kind}
     _save_snapshot(path, record)
+    if previous is not None and previous.get("source", "live") != kind:
+        # 进度文件与现采的紧凑状态字段不完全相同，跨来源比 diff 会全是假变化
+        previous = None
     if previous is None:
         data = {"cursor": cursor, "first_snapshot": True,
                 "counts": _state_counts(compact),
@@ -466,6 +540,7 @@ def _cmd_snapshot(args: argparse.Namespace) -> Tuple[Dict[str, Any], int]:
     if args.cursor and args.cursor != (previous or {}).get("cursor"):
         data["cursor_reset"] = True
     data["snapshot_file"] = path
+    data["source"] = dict(_LAST_SOURCE)
     return _envelope("snapshot", data), 0
 
 
@@ -478,7 +553,8 @@ def _cmd_propose(args: argparse.Namespace) -> Tuple[Dict[str, Any], int]:
             "counts": _state_counts(compact),
             "proposals": _proposals(compact, args.include_monitoring,
                                      max_items=args.max_actions),
-            "proposal_limit": args.max_actions}
+            "proposal_limit": args.max_actions,
+            "source": dict(_LAST_SOURCE)}
     return _envelope("propose", data), 0
 
 
@@ -504,7 +580,7 @@ def _check_plan_cursor(args: argparse.Namespace, plan: Any,
     current_args = argparse.Namespace(
         config=getattr(args, "config", None), project=scope.get("project"),
         tt=scope.get("tt"), material=scope.get("material"),
-        status=scope.get("status"))
+        status=scope.get("status"), source=_plan_source(plan, args))
     compact, error, rc = _status(current_args)
     if error:
         return None, error, rc
@@ -514,6 +590,16 @@ def _check_plan_cursor(args: argparse.Namespace, plan: Any,
                 "current_cursor": actual, "actions": actions}, \
             "plan is stale; collect a new snapshot before applying actions", 1
     return None, None, 0
+
+
+def _plan_source(plan: Any, args: Any = None) -> str:
+    """计划是从哪种来源做出来的（复核 cursor 必须用同一来源，否则必然对不上）。"""
+    src = _plan_field(plan, "source")
+    if isinstance(src, dict):
+        src = src.get("kind")
+    if src in ("progress", "live"):
+        return str(src)
+    return getattr(args, "source", None) or "live"
 
 
 def _apply_payload(args: argparse.Namespace, plan: Any
@@ -549,52 +635,73 @@ def _agent_scope(args: argparse.Namespace) -> Dict[str, Any]:
 
 
 def _service_loader(args: argparse.Namespace):
+    pinned: Dict[str, str] = {}
+
     def load(scope: Mapping[str, Any]):
+        # 同一次 inspect/cycle 里的复核读必须和第一次同一来源（auto 第一次选定后钉住）
         scoped = argparse.Namespace(
             config=getattr(args, "config", None), project=scope.get("project"),
             tt=scope.get("tt"), material=scope.get("material"),
-            status=scope.get("status"))
-        return _status(scoped)
+            status=scope.get("status"),
+            source=pinned.get("kind") or getattr(args, "source", None))
+        got = _status(scoped)
+        if not got[1] and _LAST_SOURCE.get("kind"):
+            pinned.setdefault("kind", _LAST_SOURCE["kind"])
+        return got
+    load.pinned = pinned  # type: ignore[attr-defined]
     return load
 
 
 def _cmd_inspect(args: argparse.Namespace) -> Tuple[Dict[str, Any], int]:
+    loader = _service_loader(args)
     data, error, rc = _service.inspect(
-        _service_loader(args), _agent_scope(args),
+        loader, _agent_scope(args),
         view=getattr(args, "view", "attention"),
         include_monitoring=bool(getattr(args, "include_monitoring", False)),
         max_actions=getattr(args, "max_actions", _protocol.MAX_ACTIONS),
         include_retry=True)
     if error:
         return _envelope("inspect", ok=False, error=error, returncode=rc), rc
+    data["source"] = dict(_LAST_SOURCE)
     return _envelope("inspect", data), 0
 
 
 def _cmd_plan(args: argparse.Namespace) -> Tuple[Dict[str, Any], int]:
+    loader = _service_loader(args)
     data, error, rc = _service.plan(
-        _service_loader(args), _agent_scope(args),
+        loader, _agent_scope(args),
         view=getattr(args, "view", "attention"),
         include_monitoring=bool(getattr(args, "include_monitoring", False)),
         max_actions=getattr(args, "max_actions", _protocol.MAX_ACTIONS))
     if error:
         return _envelope("plan", ok=False, error=error, returncode=rc), rc
+    data["source"] = dict(_LAST_SOURCE)
     return _envelope("plan", data), 0
 
 
 def _execute_actions(actions: List[Dict[str, Any]], config: Optional[str],
                      dry_run: bool = False,
                      expected_cursor: Optional[str] = None,
-                     scope: Optional[Mapping[str, Any]] = None) -> Dict[str, Any]:
-    """Execute only the bounded non-destructive action vocabulary through ``act``."""
+                     scope: Optional[Mapping[str, Any]] = None,
+                     source: Optional[str] = None) -> Dict[str, Any]:
+    """Execute only the bounded non-destructive action vocabulary through ``act``.
+
+    同一 (动作, 技能, 步骤) 合成一条 ``act -p A,B,C``：一次采集、一个共享 max_jobs
+    闸门；start/retry 带 ``--expect-state``，CLI 按现采状态逐个复核（见 agent_state）。"""
     if dry_run:
         return {"results": [], "actions": actions, "dry_run": True, "failed": False}
+    for action in actions:
+        if action.get("action") not in _protocol.ALLOWED_ACTIONS:
+            return {"results": [], "actions": actions, "failed": True,
+                    "error": "unsupported or destructive action: %s" % action.get("action")}
     if expected_cursor:
         # The service has already rechecked once; this final read is the CAS
         # boundary immediately before invoking the mutation gateway.
         scoped = argparse.Namespace(config=config, tt=(scope or {}).get("tt"),
                                     project=(scope or {}).get("project"),
                                     material=(scope or {}).get("material"),
-                                    status=(scope or {}).get("status"))
+                                    status=(scope or {}).get("status"),
+                                    source=source or "live")
         compact, read_error, rc = _status(scoped)
         if read_error:
             return {"results": [], "actions": actions, "failed": True,
@@ -605,46 +712,26 @@ def _execute_actions(actions: List[Dict[str, Any]], config: Optional[str],
                     "stale_plan": True, "expected_cursor": str(expected_cursor),
                     "current_cursor": current,
                     "error": "plan is stale; call inspect again"}
-    results = []
-    for action in actions:
-        name = action.get("action")
-        if name not in _protocol.ALLOWED_ACTIONS:
-            return {"results": results, "actions": actions, "failed": True,
-                    "error": "unsupported or destructive action: %s" % name}
-        argv = ["act"]
-        if action.get("tt"):
-            argv += ["-tt", str(action["tt"])]
-        if action.get("material"):
-            argv += ["-p", str(action["material"])]
-        if action.get("step"):
-            argv += ["-j", str(action["step"])]
-        verb = {"start_step": "start", "prepare_step": "retry",
-                "sync_results": "fetch"}.get(name)
-        argv += (["advance"] if name == "run_ready_steps" else [verb])
-        rc, out, err = _run(argv, config)
-        text = ((out or "") + (("\n" + err) if err.strip() else "")).strip()
-        results.append({"action": name, "arguments": action, "ok": rc == 0,
-                        "returncode": rc, "output": text[:4000]})
-        if rc != 0:
-            return {"results": results, "actions": actions, "failed": True,
-                    "error": "batch stopped after first failed action"}
-    return {"results": results, "actions": actions, "failed": False}
+    return _agent_state.execute_grouped(actions, lambda argv: _run(argv, config))
 
 
 def _cmd_cycle(args: argparse.Namespace) -> Tuple[Dict[str, Any], int]:
     execute = bool(getattr(args, "execute", False)) and not bool(
         getattr(args, "dry_run", False))
+    loader = _service_loader(args)
     data, error, rc = _service.cycle(
-        _service_loader(args),
+        loader,
         lambda actions, dry_run, cursor=None: _execute_actions(
             actions, getattr(args, "config", None), dry_run, cursor,
-            _agent_scope(args)),
+            _agent_scope(args), loader.pinned.get("kind")),
         _agent_scope(args),
         view=getattr(args, "view", "attention"),
         include_monitoring=bool(getattr(args, "include_monitoring", False)),
         max_actions=getattr(args, "max_actions", _protocol.MAX_ACTIONS),
         execute=execute,
         include_retry=bool(getattr(args, "include_retry", False)))
+    if isinstance(data, dict):
+        data["source"] = dict(_LAST_SOURCE)
     if error:
         return _envelope("cycle", data, ok=False, error=error, returncode=rc), rc
     return _envelope("cycle", data), 0
@@ -654,17 +741,20 @@ def _cmd_run(args: argparse.Namespace) -> Tuple[Dict[str, Any], int]:
     """Run the deterministic AutoZT loop; dry-run is the default."""
     execute = bool(getattr(args, "execute", False)) and not bool(
         getattr(args, "dry_run", False))
+    loader = _service_loader(args)
     data, error, rc = _service.run(
-        _service_loader(args),
+        loader,
         lambda actions, dry_run, cursor=None: _execute_actions(
             actions, getattr(args, "config", None), dry_run, cursor,
-            _agent_scope(args)),
+            _agent_scope(args), loader.pinned.get("kind")),
         _agent_scope(args),
         view=getattr(args, "view", "attention"),
         include_monitoring=bool(getattr(args, "include_monitoring", False)),
         max_actions=getattr(args, "max_actions", _protocol.MAX_ACTIONS),
         execute=execute,
         include_retry=bool(getattr(args, "include_retry", False)))
+    if isinstance(data, dict):
+        data["source"] = dict(_LAST_SOURCE)
     if error:
         return _envelope("run", data, ok=False, error=error, returncode=rc), rc
     return _envelope("run", data), 0
@@ -709,6 +799,7 @@ def _request_args(base: argparse.Namespace, request: Mapping[str, Any]
         property=request.get("property"), temperature=request.get("temperature"),
         carrier=request.get("carrier"), direction=request.get("direction"),
         dimension=request.get("dimension"), thickness=request.get("thickness"),
+        source=request.get("source"),
         agent_command=str(request.get("op") or ""),
     )
 
@@ -748,11 +839,15 @@ def _dispatch_request(request: Any, base: argparse.Namespace
                                  error="scope field %s must be string" % key,
                                  returncode=2), 2
     for key in ("op", "project", "tt", "material", "status", "step", "view", "cursor",
-                "skill"):
+                "skill", "source"):
         if key in request and not isinstance(request[key], str):
             return _envelope("request", ok=False,
                              error="request field %s must be string" % key,
                              returncode=2), 2
+    if "source" in request and request["source"] not in _agent_state.SOURCES:
+        return _envelope("request", ok=False,
+                         error="request field source must be auto, progress, or live",
+                         returncode=2), 2
     if "view" in request and request["view"] not in ("attention", "active", "all"):
         return _envelope("request", ok=False,
                          error="request field view must be attention, active, or all",
@@ -795,6 +890,8 @@ def _dispatch_request(request: Any, base: argparse.Namespace
         return _cmd_progress(child)
     if op == "doctor":
         return _cmd_doctor(child)
+    if op == "setup":
+        return _cmd_setup(child)
     if op == "inspect":
         return _cmd_inspect(child)
     if op == "plan":
@@ -878,6 +975,12 @@ def _add_context_options(parser: argparse.ArgumentParser) -> None:
                         help="缩进输出 JSON")
 
 
+def _add_source_option(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--source", choices=_agent_state.SOURCES, default=None,
+                        help="状态来源：auto（默认，或 AUTOZT_AGENT_SOURCE）=进度文件够新就读它"
+                             "（秒级、无 ssh），否则现采；live=强制现采（慢）；progress=只读进度文件")
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="autozt agent",
@@ -902,9 +1005,14 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--limit", type=int, help="最多返回多少个材料")
     p = sub.add_parser("doctor", help="配置预检：max_jobs 生效值/屏蔽项目/同名材料（无 ssh）")
     _add_context_options(p)
+    p = sub.add_parser("setup", help="接入说明：MCP 服务配置（绝对路径）+ 给 LLM 的规则卡")
+    _add_context_options(p)
+    p.add_argument("--rules", action="store_true",
+                   help="只输出规则卡（Markdown 原文），可追加进 agent 的 AGENTS.md")
 
     p = sub.add_parser("snapshot", help="持久化增量状态快照")
     _add_context_options(p)
+    _add_source_option(p)
     p.add_argument("--cursor", help="上一轮 cursor；用于检测跨进程失效/重置")
     p.add_argument("--view", choices=("attention", "active", "all"), default="attention")
 
@@ -950,6 +1058,7 @@ def build_parser() -> argparse.ArgumentParser:
             ("run", "运行确定性的观察-规划-执行闭环")):
         p = sub.add_parser(command, help=help_text)
         _add_context_options(p)
+        _add_source_option(p)
         p.add_argument("--view", choices=("attention", "active", "all"), default="attention")
         p.add_argument("--include-monitoring", action="store_true",
                        help="把正在运行/排队的步骤也列为观察项")
@@ -965,6 +1074,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("propose", help="只读生成候选动作计划")
     _add_context_options(p)
+    _add_source_option(p)
     p.add_argument("--include-monitoring", action="store_true",
                    help="把正在运行/排队的步骤也列为观察项")
     p.add_argument("--max-actions", type=int, default=_protocol.MAX_ACTIONS,
@@ -1004,6 +1114,11 @@ def main(argv: Optional[List[str]] = None) -> int:
         result, rc = _cmd_progress(args)
     elif args.agent_command == "doctor":
         result, rc = _cmd_doctor(args)
+    elif args.agent_command == "setup":
+        if getattr(args, "rules", False):
+            sys.stdout.write(AGENT_RULES_MD)
+            return 0
+        result, rc = _cmd_setup(args)
     elif args.agent_command == "capabilities":
         result, rc = _cmd_capabilities(args)
     elif args.agent_command == "schema":

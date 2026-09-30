@@ -131,8 +131,12 @@ autozt auto [on|off]                   # 一键开关全局 auto_advance（改�
 - 失败处置看 `fails[].action`：`retry` 可按铁律提议/执行；`human_review` 不动、报告；同一步骤失败超过 `max_auto_retries`（默认 2）次时已自动变成 `human_review`（对应第五节"retry 2 次仍 FAIL 停手"）。
 - 破坏性命令的审批网关**默认开启**：AI 代理环境标记（CLAUDECODE/GEMINI_CLI/CODEX_SANDBOX，`agent_env_markers` 可追加）和非交互终端都会被识别，不再依赖 AI 自觉设 `AUTOZT_ACTOR`。
 - `autozt auto on` 批量前先 `--dry-run` 看会改哪些 `setting.yaml`；已是目标值的文件不重写（幂等）。
-- 调优旋钮（`collect_chunk`/`collect_workers`/`op_workers`/`init_workers`/`cache_ttl`）写进 `tf.yaml`，cron 保活进程也能拿到；环境变量仍可临时覆盖。采集 payload 已改走 stdin，不会再 E2BIG。
+- 调优旋钮（`collect_chunk`/`collect_workers`/`op_workers`/`init_workers`/`cache_ttl`/`narrow_max_age`）写进 `tf.yaml`，cron 保活进程也能拿到；环境变量仍可临时覆盖。采集 payload 已改走 stdin，不会再 E2BIG。
 - monitor 日志每轮一行 `[round] {...}`（提交/新完成/新失败/耗时），后面最多 20 行变更；单轮异常只记日志不退出。
+- `agent inspect/plan/snapshot/propose/cycle`（及 MCP 同名工具）默认 `source=auto`：进度文件够新就读它（秒级），返回的 `source` 写明数据多旧；要实时才传 `--source live`（大体系要几十分钟）。
+- 执行（`cycle --execute`/`apply`）按「动作+技能+步骤」合成一条 `act -p A,B,C`，每个动作带 `--expect-state` 按现采状态复核；看 `results[].outcome`：`submitted` / `deferred`（达 max_jobs，正常排队）/ `skipped_stale`（状态已变，重新 inspect）/ `failed`。
+- 带 `-p` 的 start/retry/fetch/list/diagnose 等只采目标材料（整技能采集记录在 `narrow_max_age` 内时；`autozt doctor` 的「单材料快路径」一节显示是否可用）；显式 `start -p X -j S` 现在也受 max_jobs 约束（`-f` 越过）。
+- 给其它 AI 代理接入：`autozt agent setup` 输出 MCP 配置（绝对路径）和规则卡；`autozt agent setup --rules` 只输出规则卡。
 
 ## 四、状态判读
 

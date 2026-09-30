@@ -79,6 +79,8 @@ def collect_data(cfg, types):
     """按类型采集全部材料状态（远端/本地两段路径），供各命令及 watch 循环复用。"""
     from autozt import (collect, collect_v3_batch, _dedup_segments, annotate,
                        _queue_total, check_duplicates)
+    from autozt.collect import COLLECT_TIMING
+    COLLECT_TIMING.clear()   # 本次没有本地段时也不能沿用上一轮的计时/失败组数
     data_types = []
     queue_by_host = {}
     v2 = [t for t in types if not t.get("local_root")]

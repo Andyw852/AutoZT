@@ -19,7 +19,10 @@ ssh 采集、和 monitor 抢 ssh/9p、1500s 跑不完；只有 count 没有逐�
   materials[]         每材料一行：id（<项目名>/<完整名>，稳定主键）、project、tt、
                       state（done 或活动步骤的状态）、active、steps{label: 状态}、
                       job（活动步骤作业）、fails[]（code/class/action/fail_count）、
-                      since（当前状态从何时起）、eta_s（按历史同类步骤中位耗时估计）
+                      since（当前状态从何时起）、eta_s（按历史同类步骤中位耗时估计）、
+                      busy（在跑/排队作业数，扇出按子作业计；与 max_jobs 闸门同口径）
+  coverage            {技能: 上次「整技能」采集的时刻}——只有这里够新，单材料命令才敢
+                      只采目标材料、其余材料的并发占用从本文件 + 提交账本补（见 busy_baseline）
 
 范围：采集只覆盖一部分（-p/-tt/--project）时按材料 id 合并进已有文件，不会把
 monitor 写的全量视图截断成局部视图。
@@ -34,6 +37,11 @@ import time
 PROGRESS_NAME = ".tf_progress.json"
 SCHEMA = "autozt-progress/1"
 _ETA_MIN_SAMPLES = 3
+# 提交账本：每次成功 sbatch 追加一行。进度文件只在「采集」后写，提交之后到下一次采集
+# 之间它看不到新作业；只采目标材料的命令靠账本把这段空档补上，max_jobs 不会被低估。
+LEDGER_NAME = ".tf_submit_ledger.jsonl"
+_LEDGER_KEEP_S = 3 * 86400
+_LEDGER_PRUNE_BYTES = 1 << 20
 
 
 def progress_path(cfg):
@@ -59,6 +67,50 @@ def load_progress(cfg):
         return d if isinstance(d, dict) and d.get("schema") == SCHEMA else None
     except (OSError, ValueError):
         return None
+
+
+def load_progress_view(cfg):
+    """给人/AI 看的进度：原文件 + 采集之后的提交（账本）叠加成 PD。
+
+    进度文件只在采集后写；monitor 更是先采集、再推进提交、最后才写文件——刚提交的
+    作业在文件里还是 TODO，AI 下一轮 inspect 会把它们再提议一遍。这里读时把账本里
+    比该材料观测时刻更新的提交标成 PD（submitted_after_collect），文件本身不改。"""
+    doc = load_progress(cfg)
+    if doc is None:
+        return None
+    mats = doc.get("materials") or []
+    since = min([float(e.get("obs") or 0) for e in mats] or [0])
+    led = ledger_recent(cfg, since) if mats else []
+    if not led:
+        return doc
+    by_id = {}
+    for r in led:
+        by_id.setdefault((r.get("tt"), r.get("id")), []).append(r)
+    out = []
+    for e in mats:
+        recs = [r for r in by_id.get((e.get("tt"), e.get("id")), ())
+                if float(r.get("ts") or 0) > float(e.get("obs") or 0)]
+        if not recs:
+            out.append(e)
+            continue
+        e = dict(e)
+        e["steps"] = dict(e.get("steps") or {})
+        for r in recs:
+            lab = str(r.get("step"))
+            if lab in e["steps"]:
+                e["steps"][lab] = "PD"
+            if lab == str(e.get("active")):
+                e["state"] = "PD"
+                e["job"] = {"id": r.get("jid"), "state": "SUBMITTED"}
+            e["busy"] = int(e.get("busy") or 0) + int(r.get("jobs") or 1)
+            e["fails"] = [f for f in e.get("fails") or [] if str(f.get("step")) != lab]
+        if not e["fails"]:
+            e.pop("fails", None)
+        e["submitted_after_collect"] = True
+        out.append(e)
+    doc = dict(doc)
+    doc["materials"] = out
+    return doc
 
 
 def _history_stats(cfg):
@@ -123,7 +175,7 @@ def _material_state(m):
 
 def build_entries(cfg, data, now=None):
     """collect_data 的结果 → {材料 id: 进度条目}。"""
-    from autozt import _diag_class, _diag_code, _suggested_action
+    from autozt import _diag_class, _diag_code, _material_busy_jobs, _suggested_action
     now = now or time.time()
     durs, fails = _history_stats(cfg)
     started = _history_started(cfg)
@@ -145,6 +197,7 @@ def build_entries(cfg, data, now=None):
                  "action": m.get("action") or "",
                  "done_steps": sum(1 for s in steps if s.get("kind") == "OK"),
                  "total_steps": len(steps),
+                 "busy": _material_busy_jobs(m),
                  "steps": {str(s.get("label")): s.get("kind") for s in steps}}
             j = (a or {}).get("job") or {}
             if j:
@@ -197,10 +250,20 @@ def _rollup(entries):
 
 
 def write_progress(cfg, data, writer="cli", full_scope=False, round_info=None,
-                   monitor=None):
-    """把本次采集写进 .tf_progress.json（原子替换）。失败只告警，绝不影响主流程。"""
+                   monitor=None, covered_keys=None, observed=None):
+    """把本次采集写进 .tf_progress.json（原子替换）。失败只告警，绝不影响主流程。
+
+    covered_keys：本次采集完整覆盖了哪些技能（没按 -p/--project/目录裁剪）；记进
+    coverage，供 busy_baseline 判断本文件的并发占用数据是否可信。
+    observed：采集**开始**时刻（monitor 在推进/提交之后才写文件，必须用采集时刻，
+    否则本轮刚提交的作业会被当成「文件里已经看到」而漏算）。"""
     try:
         now = time.time()
+        _col = sys.modules.get("autozt.collect")
+        if (getattr(_col, "COLLECT_TIMING", None) or {}).get("failed_groups"):
+            # 有采集组失败被跳过：这轮缺材料，按局部合并，也不标覆盖
+            full_scope, covered_keys = False, None
+        obs = float(observed or now)
         fresh = build_entries(cfg, data, now)
         prev = load_progress(cfg) or {}
         old = {e.get("id"): e for e in prev.get("materials") or [] if e.get("id")}
@@ -215,6 +278,7 @@ def write_progress(cfg, data, writer="cli", full_scope=False, round_info=None,
                 e["since"] = (o.get("since") if o and ofp == fp and o.get("since")
                               else _iso(now))
             e["updated"] = _iso(now)
+            e["obs"] = round(obs, 3)
             merged[mid] = e
         mats = sorted(merged.values(), key=lambda e: (e.get("project") or "",
                                                       e.get("tt") or "", e.get("id") or ""))
@@ -223,7 +287,13 @@ def write_progress(cfg, data, writer="cli", full_scope=False, round_info=None,
                "full_scope": bool(full_scope or prev.get("full_scope")),
                "counts": counts, "material_states": mstates, "projects": projects,
                "queue": (data or {}).get("queue") or prev.get("queue") or {},
+               "coverage": dict(prev.get("coverage") or {}),
                "materials": mats}
+        if full_scope:
+            covered_keys = [t.get("key") for t in (data or {}).get("types") or []]
+        for key in covered_keys or ():
+            if key:
+                out["coverage"][key] = round(obs, 3)
         if monitor:
             out["monitor"] = monitor
         elif prev.get("monitor"):
@@ -242,6 +312,142 @@ def write_progress(cfg, data, writer="cli", full_scope=False, round_info=None,
     except Exception as exc:                      # noqa: BLE001
         print("警告：进度文件写入失败（忽略）：%s" % exc, file=sys.stderr)
         return None
+
+
+# =============================================================================
+# 提交账本 + 只采目标材料时的并发基线
+# =============================================================================
+def ledger_path(cfg):
+    return os.path.join((cfg or {}).get("_config_dir") or os.getcwd(), LEDGER_NAME)
+
+
+def ledger_append(cfg, m, s, jid):
+    """成功 sbatch 后追加一行（O_APPEND 小行写，多进程安全）。失败静默：账本只用于
+    补并发计数，写不进去时只采目标材料的命令会因为没有账本而更保守（见 busy_baseline）。
+    没有配置目录（单元测试里的裸 cfg）就不写——绝不往当前目录乱落文件。"""
+    if not (cfg or {}).get("_config_dir"):
+        return
+    try:
+        n = len([x for x in str(jid or "").split(",") if x.strip()]) or 1
+        rec = {"ts": round(time.time(), 3), "tt": m.get("tt"),
+               "id": m.get("qualified_name") or m.get("name"),
+               "project": m.get("project") or "",
+               "from": ((m.get("_seg") or {}).get("_from")) or "",
+               "step": s.get("label"), "jobs": n, "jid": str(jid or "")}
+        path = ledger_path(cfg)
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(rec, ensure_ascii=False, sort_keys=True) + "\n")
+        if os.path.getsize(path) > _LEDGER_PRUNE_BYTES:
+            keep = ledger_recent(cfg, time.time() - _LEDGER_KEEP_S)
+            tmp = path + ".tmp.%d" % os.getpid()
+            with open(tmp, "w", encoding="utf-8") as f:
+                for r in keep:
+                    f.write(json.dumps(r, ensure_ascii=False, sort_keys=True) + "\n")
+            os.replace(tmp, path)
+    except Exception:                             # noqa: BLE001
+        pass
+
+
+def ledger_recent(cfg, since_ts):
+    out = []
+    try:
+        with open(ledger_path(cfg), encoding="utf-8") as f:
+            for line in f:
+                try:
+                    r = json.loads(line)
+                except ValueError:
+                    continue
+                if isinstance(r, dict) and float(r.get("ts") or 0) >= since_ts:
+                    out.append(r)
+    except OSError:
+        pass
+    return out
+
+
+def agent_event(kind, **fields):
+    """给 agent 执行器看的机器可读行（仅 AUTOZT_AGENT_EVENTS=1 时输出，人看的输出不变）。"""
+    if not os.environ.get("AUTOZT_AGENT_EVENTS"):
+        return
+    fields["event"] = kind
+    print("[agent-event] " + json.dumps(fields, ensure_ascii=False, sort_keys=True),
+          flush=True)
+
+
+def narrow_max_age(cfg):
+    """进度文件里「整技能覆盖」多久以内算新（秒）：AUTOZT_NARROW_MAX_AGE > tf.yaml
+    narrow_max_age > 默认 7200；0 = 关闭只采目标材料（一律全量采集）。"""
+    from autozt import tuning_value
+    return tuning_value("narrow_max_age", cfg or {})
+
+
+def narrow_keys(cfg, keys, now=None):
+    """哪些技能可以只采目标材料：进度文件在 narrow_max_age 内对该技能做过整技能采集。
+    返回 (可裁剪的技能集合, 进度文档, {技能: 不能裁剪的原因})。"""
+    now = now or time.time()
+    limit = narrow_max_age(cfg)
+    doc = load_progress(cfg) if limit > 0 else None
+    cov = (doc or {}).get("coverage") or {}
+    ok, why = set(), {}
+    for key in keys:
+        ts = cov.get(key)
+        if limit <= 0:
+            why[key] = "narrow_max_age=0"
+        elif doc is None:
+            why[key] = "no progress file"
+        elif not ts:
+            why[key] = "no full-skill collection recorded"
+        elif now - float(ts) > limit:
+            why[key] = "last full-skill collection %ds ago > %ds" % (now - float(ts), limit)
+        else:
+            ok.add(key)
+    return ok, doc, why
+
+
+def busy_baseline(cfg, doc, data, keys, from_by_project):
+    """只采了目标材料时，没采到的同技能材料的并发占用（给 _SkillGate 加底数）。
+
+    来源：进度文件每材料的 busy（采集时刻的在跑/排队作业数）+ 账本里该材料在那次
+    采集之后的提交。已完成但文件里还是 R/PD 的会被多算——宁多勿少（多算只会让提交
+    等一等，少算会超 max_jobs）。返回 {"skill": {key: n}, "project": {"key\tfrom": n}}。"""
+    present = set()
+    for t in (data or {}).get("types") or []:
+        for m in t.get("materials") or []:
+            present.add((t.get("key"), m.get("qualified_name") or m.get("name")))
+    cov = (doc or {}).get("coverage") or {}
+    oldest = min([float(cov.get(k) or 0) for k in keys] or [0])
+    led = ledger_recent(cfg, oldest)
+    skill, proj = {}, {}
+
+    def _add(key, pfrom, n):
+        if n <= 0:
+            return
+        skill[key] = skill.get(key, 0) + n
+        if pfrom:
+            pk = "%s\t%s" % (key, pfrom)
+            proj[pk] = proj.get(pk, 0) + n
+
+    seen = set()
+    for e in (doc or {}).get("materials") or []:
+        key, mid = e.get("tt"), e.get("id")
+        if key not in keys or (key, mid) in present:
+            continue
+        seen.add((key, mid))
+        n = e.get("busy")
+        if n is None:   # 旧文件没有 busy：按步骤状态数（扇出会少算子作业，仅兜底）
+            n = sum(1 for k in (e.get("steps") or {}).values() if k in ("R", "PD"))
+        obs = float(e.get("obs") or _parse_iso(e.get("updated")) or 0)
+        n += sum(int(r.get("jobs") or 1) for r in led
+                 if r.get("tt") == key and r.get("id") == mid
+                 and float(r.get("ts") or 0) > obs)
+        _add(key, from_by_project.get(e.get("project") or ""), int(n))
+    for r in led:   # 进度文件里还没有的材料：覆盖之后的提交全算
+        key, mid = r.get("tt"), r.get("id")
+        if key not in keys or (key, mid) in present or (key, mid) in seen:
+            continue
+        if float(r.get("ts") or 0) > float(cov.get(key) or 0):
+            _add(key, r.get("from") or from_by_project.get(r.get("project") or ""),
+                 int(r.get("jobs") or 1))
+    return {"skill": skill, "project": proj}
 
 
 # =============================================================================
@@ -268,7 +474,23 @@ def filter_progress(doc, project=None, tt=None, material=None, status=None):
     out = dict(doc or {})
     counts, mstates, projects = _rollup({e["id"]: e for e in keep})
     out.update({"materials": keep, "counts": counts, "material_states": mstates,
-                "projects": projects})
+                "projects": projects, "fail_summary": fail_summary(keep)})
+    return out
+
+
+def fail_summary(entries, max_ids=30):
+    """FAIL 按建议动作分桶：{action: {count, codes{code: n}, ids[…]}}。
+    给 AI 的分诊入口：retry 桶可提议重投，human_review 桶直接汇报给人。"""
+    out = {}
+    for e in entries or []:
+        for f in e.get("fails") or []:
+            b = out.setdefault(f.get("action") or "human_review",
+                               {"count": 0, "codes": {}, "ids": []})
+            b["count"] += 1
+            code = f.get("code") or "unknown"
+            b["codes"][code] = b["codes"].get(code, 0) + 1
+            if len(b["ids"]) < max_ids:
+                b["ids"].append("%s#%s" % (e.get("id"), f.get("step")))
     return out
 
 
@@ -278,7 +500,14 @@ def monitor_liveness(cfg, doc):
     pid, _pf = _watch_running_pid(cfg)
     age = int(time.time() - float((doc or {}).get("ts") or 0)) if doc else None
     interval = ((doc or {}).get("monitor") or {}).get("interval")
-    stale = bool(doc) and age is not None and interval and age > 3 * int(interval)
+    # 一轮本身可能比间隔长得多（9p 上 300+ 材料一轮 ~50 分钟）：按「间隔 + 上一轮耗时」算
+    # 周期，超过 3 个周期没更新才算过期——只按间隔算会在健康的慢 monitor 上误报。
+    try:
+        dur = float(((doc or {}).get("round") or {}).get("dur_s") or 0)
+    except (TypeError, ValueError):
+        dur = 0.0
+    period = int(interval) + dur if interval else 0
+    stale = bool(doc) and age is not None and bool(period) and age > 3 * period
     return {"alive": bool(pid), "pid": pid, "age_s": age,
             "stale": bool(stale) if doc else True}
 
@@ -288,7 +517,7 @@ def cmd_progress(cfg, project=None, tt=None, material=None, status=None,
     """autozt progress [--project P] [-tt T] [-p M] [-status S] [--json]
 
     只读本地进度文件：不采集、不连超算、不扫盘。"""
-    doc = load_progress(cfg)
+    doc = load_progress_view(cfg)
     if doc is None:
         msg = ("还没有进度文件 %s。它由 monitor 每轮、或任何一次真正采集"
                "（autozt list --refresh / summary --refresh / status）自动写出。"
@@ -325,6 +554,10 @@ def cmd_progress(cfg, project=None, tt=None, material=None, status=None,
                      st.get("R", 0), st.get("PD", 0), st.get("FAIL", 0),
                      row["materials"] - sum(st.get(k, 0) for k in
                                             ("done", "R", "PD", "FAIL"))))
+    for act, b in sorted((view.get("fail_summary") or {}).items()):
+        top = sorted(b["codes"].items(), key=lambda kv: -kv[1])[:4]
+        print("  FAIL 分诊 %-13s %3d  %s" % (act, b["count"],
+                                            ", ".join("%s×%d" % kv for kv in top)))
     fails = [(e, f) for e in view["materials"] for f in e.get("fails") or []]
     shown = fails if limit is None else fails[:int(limit)]
     for e, f in shown[:40] if limit is None else shown:

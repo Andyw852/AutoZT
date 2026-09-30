@@ -81,6 +81,8 @@ AGENT_VALUE_FLAGS = {
     "-p", "-j", "-job", "-tt", "-c", "--config", "-x", "--exclude",
     "-status", "--status", "-i", "--interval", "-n", "--since", "--limit",
     "--offset", "--host", "-u", "--user", "--set", "--out",
+    # 以前漏了 --project：`act --project P advance` 会把 P 当命令词 → 按未登记命令拒绝
+    "-proj", "--project", "--expect-state",
 }
 
 

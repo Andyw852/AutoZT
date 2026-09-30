@@ -190,8 +190,8 @@ def capabilities() -> Dict[str, Any]:
     the fixed agent protocol and its safety boundary.
     """
     read_commands = ["capabilities", "schema", "skills", "contract", "progress", "doctor",
-                     "snapshot", "inspect", "plan", "evidence", "propose", "research_plan",
-                     "preflight", "results"]
+                     "setup", "snapshot", "inspect", "plan", "evidence", "propose",
+                     "research_plan", "preflight", "results"]
     mutate_commands = ["cycle", "run", "apply"]
     commands = read_commands + mutate_commands + ["request"]
     request_ops = REQUEST_OPS
@@ -213,11 +213,20 @@ def capabilities() -> Dict[str, Any]:
             # 首选：读 monitor 每轮写的进度文件——不采集、不连超算、秒级返回
             "cheap_state": "autozt agent progress（= .tf_progress.json，无 ssh）",
             "preflight": "autozt agent doctor（配置预检：max_jobs 生效值/屏蔽项目/同名材料）",
+            # snapshot/inspect/plan/propose/cycle/run 的状态来源
+            "source": {"default": "auto", "values": ["auto", "progress", "live"],
+                       "auto": "进度文件够新（monitor 在跑且未过期，或不超过 narrow_max_age 秒）"
+                               "且含所问范围就读它，否则现采",
+                       "env": "AUTOZT_AGENT_SOURCE"},
         },
         "scope": {"fields": ["project", "tt", "material", "status", "step"],
                   "material_id": "materials 的 id 字段 = <项目名>/<完整名>，稳定主键，"
                                  "material 参数与 -p 都认"},
-        "mutate": {"commands": mutate_commands, "default": "dry_run"},
+        "mutate": {"commands": mutate_commands, "default": "dry_run",
+                   "batching": "同 (动作, 技能, 步骤) 合成一条 act -p A,B,C：一次采集、共享 max_jobs 闸门",
+                   "precondition": "start/retry 带 --expect-state，按现采状态逐个复核；"
+                                   "状态已变的动作跳过（outcome=skipped_stale）",
+                   "outcomes": ["submitted", "deferred", "skipped_stale", "ok", "failed"]},
         "conversation": {
             "schema_version": "autozt/conversation/1",
             "sequence": ["research_plan", "preflight", "inspect",
@@ -247,7 +256,7 @@ def capabilities() -> Dict[str, Any]:
 
 
 REQUEST_OPS = ["capabilities", "schema", "skills", "contract", "progress", "doctor",
-               "snapshot", "inspect", "plan", "cycle", "run", "evidence", "propose",
+               "setup", "snapshot", "inspect", "plan", "cycle", "run", "evidence", "propose",
                "research_plan", "preflight", "results", "apply"]
 
 
@@ -267,6 +276,7 @@ def _request_schema(request_ops: Any = None) -> Dict[str, Any]:
             "project": {"type": "string"},
             "limit": {"type": "integer", "minimum": 1},
             "view": {"type": "string", "enum": ["attention", "active", "all"]},
+            "source": {"type": "string", "enum": ["auto", "progress", "live"]},
             "include_monitoring": {"type": "boolean"},
             "include_retry": {"type": "boolean"},
             "execute": {"type": "boolean", "default": False},
@@ -305,11 +315,13 @@ def schema() -> Dict[str, Any]:
                                     "monitor 存活；不采集、不连超算"},
         "doctor": {"class": "read", "state": False, "ssh": False,
                    "description": "配置预检：max_jobs 生效值、调优旋钮来源、屏蔽项目、跨项目同名材料"},
-        "snapshot": {"class": "read", "state": True, "cursor": True},
-        "inspect": {"class": "read", "state": True, "cursor": True},
-        "plan": {"class": "read", "state": True, "cursor": True},
+        "setup": {"class": "read", "state": False, "ssh": False,
+                  "description": "接入说明：MCP 服务配置（绝对路径）+ 给 LLM 的简短规则卡"},
+        "snapshot": {"class": "read", "state": True, "cursor": True, "source": True},
+        "inspect": {"class": "read", "state": True, "cursor": True, "source": True},
+        "plan": {"class": "read", "state": True, "cursor": True, "source": True},
         "evidence": {"class": "read", "state": True},
-        "propose": {"class": "read", "state": True, "cursor": True},
+        "propose": {"class": "read", "state": True, "cursor": True, "source": True},
         "research_plan": {"class": "read", "state": False},
         "preflight": {"class": "read", "state": False},
         "results": {"class": "read", "state": False},
@@ -360,7 +372,8 @@ def schema() -> Dict[str, Any]:
                      "dry_run": {"op": "run", "scope": {"tt": "band-dft-cpu"}, "execute": False},
                      "execute_safe": {"op": "run", "scope": {"material": "C24/qHPC24"},
                                       "execute": True, "include_retry": False}},
-        "token_policy": {"first_read": "progress（本地文件，无 ssh）；需要实时再 snapshot/inspect",
+        "token_policy": {"first_read": "progress（本地文件，无 ssh）；inspect/snapshot 默认也读它"
+                                       "（source=auto），要实时状态才传 source=live",
                           "no_change": "Use summary --diff; do not call an LLM",
                           "polling": "Pass cursor to snapshot/get_snapshot and request only changes",
                           "large_scope": "Use project/tt/material/status filters and max_actions"},
