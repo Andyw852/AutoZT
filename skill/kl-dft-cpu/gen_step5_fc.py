@@ -15,6 +15,7 @@ tf 提交后，计算节点按 submit.sh 依次跑 kl_fc_backends 的 prep → �
 产出目录：step5_fc/
 """
 import json
+import os
 import shutil
 import sys
 from pathlib import Path
@@ -250,6 +251,18 @@ def main():
     p_bin = str(conf["PHEASY_BIN"] or "pheasy").lower()
     if p_bin not in ("pheasy", "pheasy-gpu"):
         sys.exit("[ERROR] PHEASY_BIN 只允许 pheasy / pheasy-gpu")
+    # [2026-09-30] fail-closed: CPU pheasy 没有 HARM_DENSE/FC2 保护，稀疏法(RFE/LASSO)
+    #   会修剪二阶力常数 → κ 不可信（GPU 版的同类 bug 已用 PHEASY_HARM_DENSE 修好）。
+    if (engine == "pheasy" and p_bin != "pheasy-gpu"
+            and int(conf.get("PHEASY_ENABLE_FC", 3) or 3) >= 3
+            and p_method in ("LASSO", "RFE", "RFE-OLS-TSQR")
+            and os.environ.get("PHEASY_ALLOW_NO_HARM_DENSE", "").lower()
+                not in ("1", "true", "yes")):
+        sys.exit(
+            "[ERROR] CPU pheasy（PHEASY_BIN=pheasy）不带 FC2(HARM_DENSE) 保护："
+            "%s 会修剪二阶力常数，得到的 κ 不可信。\n"
+            "        请把 PHEASY_BIN 改成 pheasy-gpu（GPU 版已带保护），"
+            "或在确实要接受 FC2 被删时显式设 PHEASY_ALLOW_NO_HARM_DENSE=1。" % p_method)
     if str(conf["FC_CALC"]).lower() not in ("symfc", "alm"):
         sys.exit("[ERROR] FC_CALC 只允许 symfc / alm")
 

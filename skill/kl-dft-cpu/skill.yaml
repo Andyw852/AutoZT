@@ -168,6 +168,8 @@ io_schema:
     - {name: fc3.hdf5, step: S5_fc, type: hdf5, desc: "三阶力常数（BTE 本征散射）"}
     - {name: BORN, step: S3_nac, type: text,
        desc: "介电张量 + Born 有效电荷（LO-TO 劈裂）；关掉 nac 步组时没有这个产物"}
+    - {name: cutoff_selection.json, step: S6_kappa, type: json,
+       desc: "截断选择报告（逐档 κ + 判据①②③，写在 step5_fc/ 下）"}
   params:
     - {name: METHOD, values: [alm, findiff], default: alm, where: step.conf,
        desc: "位移生成方式：alm = 随机位移+压缩感知（帧数少）；findiff = phono3py 对称有限位移"}
