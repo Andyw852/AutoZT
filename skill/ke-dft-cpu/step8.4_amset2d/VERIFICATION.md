@@ -5935,3 +5935,65 @@ SOC（非共线 + TR 操作）必须全网格，属正常；非 SOC 却是 step.
 
 测试：test_gen_desym_wiring 16 -> 20（全网格识别含平移 MP / IBZ 列表 / 缺点；2D MoS₂ 与 3D GaN 两条路径同网格且旧行为
 每方向多出一截；显式 factor 不换算）。
+
+## V125（2026-09-30）：AMSET 散射的两处白算 —— 不可约 k 点少用了对称性（修）+ 单层 k_z 层数（可选截断）
+
+**起因**：WSe2/WS2 单层 S8.4 预计 45–50 h。V124 只解释了 ~40%（全网格 factor）。继续往下查 AMSET 0.5.1 的散射循环
+（calculate_band_rates：逐个**不可约** k 点、在全网格等能面上做四面体积分），找到两处与物理无关的成本。
+
+**① AMSET 求不可约 k 点时晶格多转置了一次（amset_ir_fix.py，默认开）**
+`amset/electronic_structure/kpoints.py::get_kpoints_tetrahedral` 给 spglib 的是 `atoms.get_cell().T`；ASE 与 spglib
+都按行存晶格矢量，所以 spglib 拿到的是另一个晶格，只找得到两者共有、又把原子映回原子的操作：
+- 晶格矩阵对称（立方、fcc/bcc 原胞、正交/四方常规胞）：不受影响（Si、GaAs 原胞 61³：5456 = 5456）；
+- 六方/三方：只剩 {E, σh}×TR。WSe2 单层 263×263×33：AMSET 587945 个不可约点，正确应为 100232（×5.9）；
+  GaN 61×61×37：35359 vs 6479（×5.5）。
+
+找到的操作本来就是真对称操作，所以**以前的结果是对的**，只是散射白算了 5–6 倍。修法：只在 kpoints 模块里给
+`get_ir_reciprocal_mesh` 套一层，把 lattice 转回行矢量（该模块只有这一处调用 spglib）。
+护栏：源码里要有 `atoms.get_cell().T`，且 spglib 只调用这一处；对不上 -> 不打补丁、照原样运行，并在 stderr 说明。
+开关：step.conf `IR_FIX = auto/on/off`（auto = on）；命令前 `export AZ_IR_FIX=1/0`。S8 与 S8.4 都挂。
+日志：`[ir_fix] mesh AxBxC：不可约 k 点 n（AMSET 原式 m，少算 ×r）`。
+副作用：六方面内 xx/yy 的 ~2% 数值差（V122：三线性插值不满足 C3）被对称化掉 —— 等价点直接共用不可约点的散射率，
+面内平均不变。
+
+**② 单层的 k_z 层数（amset2d_plugin 的 kz_cap，出厂关，KZ_CAP_2D = on 开）**
+BoltzTraP2 的 equivalence 是实空间的球。面内要 263 个格点时，真空方向也跟着有 ~33 层（WSe2/WS2 的 c≈23 Å；
+MoS₂ 项目 c 更大，只有 21 层）。可单层的能带沿 k_z 是平的，本插件的 2D 核只用 q∥，所以这些 k_z 层只增加成本，
+不增加信息。kz_cap 把 |R_z| > r（默认 r=1）的 equivalence 去掉：面内半径不变，所以面内网格不变；k_z 只剩 2r+1 层。
+- 运行时护栏：用输入能带核对"沿 k_z 平"，即同一面内坐标、不同 k_z 的能量差 ≤ `KZ_FLAT_TOL_EV`（默认 5 meV，
+  只看带边 ±1 eV 内的带）。核不了（S3 真空方向只有 1 层）、不平（真空不够 / 不是单层），或 a、b 不垂直于层法向
+  -> 不截断，照原样跑并告警。
+- gen：`record_kz_cap` 把 `kz_cap_rmax` / `kz_flat_tol_ev` 写进 2d_correction.json（插件从这里读，论文记录也在这里）；
+  `_interp_mesh` 用同一截断预测网格（interpolation_info.json、内存粗估随之变小）；MESH_MIN_KZ=3 仍满足。
+- 与原来的差别只有一处：真实重叠下，slab 波函数沿 z 的形状因子在 k_z 上的平均从 ~33 个点变成 3 个点。
+  估计 ⟨q_z²⟩ 从 b₃²/12 变成 2b₃²/27，影响 ~0.1%。
+
+**合成六方单层 AMSET 0.5.1 端到端**（85×85×11，ADP+IMP 用本插件的 2D 核，nworkers=4）：
+
+| 跑法 | 网格 | 不可约点 | 散射耗时 | μ（n/p，300/600 K）面内 |
+|---|---|---|---|---|
+| 原版 | 85×85×11 | 21678 | 181.7 s | 0.932 / 0.720 / 5.450 / 3.864 |
+| IR_FIX | 85×85×11 | 3870 | 37.4 s | 0.932 / 0.720 / 5.449 / 3.862 |
+| IR_FIX + KZ_CAP | 85×85×3 | 1290 | 11.9 s | 0.933 / 0.720 / 5.453 / 3.867 |
+
+（最后一行用的就是随补丁发布的两个插件文件。）用 AMSET 原版 3D 核时，kz_cap 会差 1–3%：3D 核用到了 q_z，
+而这正是 2D 插件替换掉的部分 —— kz_cap 只该在 2D 插件下用，本来也只有 S8.4 挂它。
+
+**预期（WSe2/WS2）**：从当前约 299×299×37 的全网格 f=10 改成 V124 + ① + ② 后是 263×263×3，不可约点约
+850k -> 1.2 万（约 70 倍）。合成体系里散射耗时与不可约点数大致成正比，所以散射部分从几十小时降到约 1 h 量级。
+插值、系数去对称化、输运积分不变，另计。内存随网格降一个量级。
+
+**真实数据验证（用户侧，先做再上生产）**：
+1. MoS₂：复制材料目录，在 step.conf 写 `KZ_CAP_2D = on`（IR_FIX 默认开），重新 gen 并提交 S8.4。
+   log 里应看到 `[ir_fix] …少算 x5.x` 和 `[amset2d] kz_cap：…截到 |R_c| <= 1`，settings 的网格 k_z = 3。
+2. `python tools/compare_transport_json.py 旧/step8.4_amset2d/transport.json 新/step8.4_amset2d/transport.json`
+   （面内平均，默认阈值 2%）。PASS -> 两个补丁在真实重叠下都成立。
+   FAIL -> 再跑一次只开 IR_FIX（KZ_CAP_2D = off）的，把两处分开看。
+3. PASS 后：WSe2/WS2 就不必再等 ~35 h。scancel 后重新 gen（KZ_CAP_2D = on），预计 1–2 h 量级；
+   其他 2D 项目同样处理，3D 六方项目（GaN、AlN…）自动受益于 ①。
+
+测试：
+- 新增 test_ir_fix_kzcap（11 项）：修正后与 spglib 真实不可约点一致、原行为保留、源码不符拒绝；kz_cap 截断、
+  真空轴、沿 k_z 平的判定、Interpolator 端到端（平 -> 3 层，面内不变；有色散 -> 不截断）；gen 解析、
+  2d_correction 写删键、命令接线、gen_need 与 zt 软链。
+- 新增 test_compare_transport（4 项）。

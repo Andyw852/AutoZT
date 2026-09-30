@@ -105,6 +105,18 @@ AMSET_CMD   = ('rm -f transport.json; '
                '>> amset.log 2>&1')
 DESYM_FIX = "auto"        # auto/on/off，见 ke_common.desym_fix_setting
 _DESYM_FIX_ON = False
+# patch_ir_fix（V125）：AMSET 密网格不可约 k 点改用正确晶格（amset_ir_fix.py）。auto/on/off，auto = on。
+#   六方/三方少算 5.5–5.9 倍，结果不变（见 ke_common.IR_FIX_DEFAULT 处）。
+IR_FIX = "auto"
+_IR_FIX_ON = True
+# patch_kz_cap（V125）：插值网格真空方向只留 2r+1 层（amset2d_plugin 的 kz_cap）。
+#   off（默认）/ on（= r 取 1）/ 正整数 r。单层能带沿 k_z 平、2D 核只用 q∥，所以 k_z 层数只是成本：
+#   WSe2/WS2 的 263×263×33 -> 263×263×3。合成体系迁移率差 < 0.15%；真实重叠的额外差别（slab 形状因子）
+#   估计 ~0.1% —— 先在 MoS₂ 上与已有结果对照（VERIFICATION V125）再用于生产。
+#   运行时核对能带沿 k_z 的最大差 <= KZ_FLAT_TOL_EV（eV），不满足就不截断。
+KZ_CAP_2D = "off"
+KZ_FLAT_TOL_EV = 0.005
+_KZ_CAP_RMAX = None
 _GATE_SUMMARY = None
 # 链尾（patch_v63）：位于可选的后处理之后，后处理失败则不会生成 transport.json。
 AMSET_TAIL  = (' && cp -f "$(ls -t transport_*.json 2>/dev/null | head -1)" '
@@ -312,6 +324,10 @@ SPEC = {
     "MEM_AUTO_EXCLUSIVE": (MEM_AUTO_EXCLUSIVE, "bool"),
     # patch_desym_fix：去对称化相位补丁开关 auto/on/off。
     "DESYM_FIX": (DESYM_FIX, "str"),
+    # patch_ir_fix / patch_kz_cap（V125）
+    "IR_FIX": (IR_FIX, "str"),
+    "KZ_CAP_2D": (KZ_CAP_2D, "str"),
+    "KZ_FLAT_TOL_EV": (KZ_FLAT_TOL_EV, "float"),
     # patch_bandgap_override：scissor 带隙覆盖（eV）与来源说明。
     "BANDGAP_OVERRIDE": (None, "float"),
     "BANDGAP_NOTE": ("", "str"),
@@ -1859,6 +1875,21 @@ def _install_desym_fix(out):
     return True
 
 
+def _install_ir_fix(out):
+    """patch_ir_fix（V125）：把 amset_ir_fix.py 复制进运行目录。找不到只告警（原行为结果对，只是慢）。"""
+    if not _HAS_KC:
+        return False
+    here = Path(__file__).resolve().parent
+    ok = kc.install_run_plugin(kc.IR_FIX_PLUGIN, out, (here, Path.cwd()))
+    if not ok:
+        print("[WARN] 找不到 %s（gen_need 里要有它）—— 本次不修不可约 k 点（结果对，六方/三方慢 5–6 倍）"
+              % kc.IR_FIX_PLUGIN)
+    else:
+        print("[OK] 不可约 k 点修正插件就位：%s（IR_FIX=%s）" % (Path(out) / kc.IR_FIX_PLUGIN,
+                                                        "on" if _IR_FIX_ON else "off"))
+    return ok
+
+
 def _install_symmetry_deps(out):
     """把 ke_common.py / dim_common.py 复制进运行目录（作业内的 overlap_preflight.py 要用）。
 
@@ -1930,15 +1961,66 @@ def _alloc_cores(cwd: Path):
     return max(1, ntasks * cpus), "%s（%d × %d）" % (src, ntasks, cpus)
 
 
+def kz_cap_rmax(value):
+    """patch_kz_cap：KZ_CAP_2D 的取值 -> r（None = 不截断）。on/true/yes/1 -> 1；正整数 -> 本身。"""
+    v = "" if value is None else str(value).strip().lower()
+    if v in ("", "off", "false", "no", "0", "none", "auto"):
+        return None
+    if v in ("on", "true", "yes"):
+        return 1
+    try:
+        r = int(v)
+    except ValueError:
+        print("[WARN] KZ_CAP_2D=%r 不认识（只认 off/on/正整数），按 off 处理" % value)
+        return None
+    return r if r >= 1 else None
+
+
+def vacuum_axis(lattice_matrix, normal=(0.0, 0.0, 1.0), tol=1e-3):
+    """与 amset2d_plugin.vacuum_axis 同一判据：出面矢量下标；另两个须 ⟂ 层法向（c 可倾斜），否则 None。"""
+    import numpy as np
+    L = np.asarray(lattice_matrix, float)
+    n = np.asarray(normal, float)
+    n = n / np.linalg.norm(n)
+    cos = np.abs(L @ n) / np.linalg.norm(L, axis=1)
+    ax = int(np.argmax(cos))
+    if any(cos[i] > tol for i in range(3) if i != ax):
+        return None
+    return ax
+
+
 def _interp_mesh(structure, nk, factor, magmom=None):
     """复现 AMSET 的最终插值网格（amset/interpolation/bandstructure.py:104-111）。
-    与 tmp/amset2d/mesh_formula_check.py 一致：官方 Si 61/77/105、我们 Si 41/51/69 全部命中。"""
+    与 tmp/amset2d/mesh_formula_check.py 一致：官方 Si 61/77/105、我们 Si 41/51/69 全部命中。
+    patch_kz_cap：开了 KZ_CAP_2D 时与插件同样截断 equivalence（真空轴 |R| <= r）。"""
     import numpy as np
     from pymatgen.io.ase import AseAtomsAdaptor
     from BoltzTraP2 import sphere
     atoms = AseAtomsAdaptor.get_atoms(structure)
-    equiv = np.vstack(sphere.get_equivalences(atoms, magmom, int(round(nk * factor))))
+    eq = sphere.get_equivalences(atoms, magmom, int(round(nk * factor)))
+    ax = vacuum_axis(structure.lattice.matrix) if _KZ_CAP_RMAX else None
+    if ax is not None:
+        eq = [e for e in eq if np.abs(np.asarray(e)[:, ax]).max() <= _KZ_CAP_RMAX]
+    equiv = np.vstack(eq)
     return (2 * np.max(np.abs(equiv), axis=0) + 1).astype(int)
+
+
+def record_kz_cap(out):
+    """patch_kz_cap：把 kz_cap_rmax / kz_flat_tol_ev 写进 2d_correction.json（插件从这里读）；关着就删掉旧键。"""
+    import json as _json
+    rec_p = Path(out) / "2d_correction.json"
+    if not rec_p.is_file():
+        if _KZ_CAP_RMAX:
+            print("[WARN] KZ_CAP_2D 开着，但没有 2d_correction.json —— 插件读不到，本次不截断 k_z")
+        return
+    rec = _json.loads(rec_p.read_text())
+    if _KZ_CAP_RMAX:
+        rec["kz_cap_rmax"] = int(_KZ_CAP_RMAX)
+        rec["kz_flat_tol_ev"] = float(KZ_FLAT_TOL_EV)
+    else:
+        rec.pop("kz_cap_rmax", None)
+        rec.pop("kz_flat_tol_ev", None)
+    rec_p.write_text(_json.dumps(rec, ensure_ascii=False, indent=2))
 
 
 def mesh_need_by_density(structure, need, dk):
@@ -2169,6 +2251,7 @@ def main():
     global INTERPOLATION_FACTOR, INTERPOLATION_FACTOR_EXPLICIT, SCATTERING, WRITE_MESH, DOPING, TEMPERATURES
     global DESYM_FIX, _DESYM_FIX_ON, BANDGAP_OVERRIDE, BANDGAP_NOTE
     global EPS_INF_OVERRIDE, EPS_INF_OVERRIDE_BASIS, SYMMETRIZE_ELASTIC
+    global IR_FIX, _IR_FIX_ON, KZ_CAP_2D, KZ_FLAT_TOL_EV, _KZ_CAP_RMAX
     global MEM_WARN_GIB, MEM_LIMIT_GIB, MEM_AUTO_EXCLUSIVE
     _conf_nworkers = None
     if (cwd / "step.conf").is_file():
@@ -2271,6 +2354,12 @@ def main():
             # patch_desym_fix / patch_bandgap_override / patch_eps_inf_override_2d
             if _p["DESYM_FIX"]:
                 DESYM_FIX = str(_p["DESYM_FIX"])
+            if _p["IR_FIX"]:
+                IR_FIX = str(_p["IR_FIX"])
+            if _p["KZ_CAP_2D"]:
+                KZ_CAP_2D = str(_p["KZ_CAP_2D"])
+            if _p["KZ_FLAT_TOL_EV"]:
+                KZ_FLAT_TOL_EV = float(_p["KZ_FLAT_TOL_EV"])
             if _p["BANDGAP_OVERRIDE"] is not None:
                 BANDGAP_OVERRIDE = float(_p["BANDGAP_OVERRIDE"])
                 print("[..] BANDGAP_OVERRIDE = %.4f eV（step.conf 覆盖）" % BANDGAP_OVERRIDE)
@@ -2300,6 +2389,11 @@ def main():
     if _HAS_KC:
         _DESYM_FIX_ON, _dsrc = kc.desym_fix_setting(DESYM_FIX)
         print("[..] DESYM_FIX = %s（%s）" % ("on" if _DESYM_FIX_ON else "off", _dsrc))
+        _IR_FIX_ON, _isrc = kc.ir_fix_setting(IR_FIX)
+        print("[..] IR_FIX = %s（%s）" % ("on" if _IR_FIX_ON else "off", _isrc))
+    _KZ_CAP_RMAX = kz_cap_rmax(KZ_CAP_2D)
+    print("[..] KZ_CAP_2D = %s" % (("on，k_z 截到 |R_z| <= %d（%d 层）" % (_KZ_CAP_RMAX, 2 * _KZ_CAP_RMAX + 1))
+                                   if _KZ_CAP_RMAX else "off（插值网格 k_z 层数按 BoltzTraP2 的球定）"))
 
     # ---- NWORKERS：默认自动 = 本次提交实际分配到的核数 ----
     _alloc, _src = _alloc_cores(cwd)
@@ -2360,6 +2454,7 @@ def main():
     _install_fermi_check(out)   # patch_fermi_window（2026-09-28 用户批准）
     _install_symmetry_deps(out)  # patch_symmetry_gate：preflight 的判据来源
     _has_fix = _install_desym_fix(out)   # patch_desym_fix
+    _has_ir = _install_ir_fix(out)       # patch_ir_fix
     _wdir = "step4b_wave_full" if WAVEFUNCTION_FULL else WAVE_DIR
     # [guard-2026-09-26] 真实重叠（2D 出厂默认）要求全网格 h5 真的在。
     #   只检查 WAVEFUNCTION_FULL 这个标志不够 —— 分支没打开时标志仍是 True，
@@ -2442,6 +2537,7 @@ def main():
     if "PIE" in SCATTERING and piezo is None:
         print("[WARN] settings 要 PIE 但没有压电张量——本次退化为不含 PIE 的散射集"
               "（step6_elastic 的 DFPT 需 LEPSILON + IBRION=6）")
+    record_kz_cap(out)                   # patch_kz_cap（2d_correction.json 已由 apply_2d_corrections 写好）
     # patch_mesh_min：按最终插值网格下限反算 INTERPOLATION_FACTOR（必须在 write_settings 之前）。
     _fm = apply_mesh_min(_vr, out)
     write_settings(out, eps_inf, eps_static, gap, elastic,
@@ -2477,9 +2573,10 @@ def main():
     _acmd = _acmd + " && python fermi_window_check.py"
     _acmd = _acmd + AMSET_TAIL
     # patch_desym_fix：插件在运行目录里就 import；开关用环境变量传进作业（preflight 也读它）
-    _acmd = _acmd.replace("@AMSET_PLUGINS@", "import amset_desym_fix; " if _has_fix else "")
+    _acmd = _acmd.replace("@AMSET_PLUGINS@", ("import amset_ir_fix; " if _has_ir else "")
+                          + ("import amset_desym_fix; " if _has_fix else ""))
     if _HAS_KC:
-        _acmd = kc.desym_fix_cmd_prefix(_DESYM_FIX_ON) + _acmd
+        _acmd = kc.ir_fix_cmd_prefix(_IR_FIX_ON) + kc.desym_fix_cmd_prefix(_DESYM_FIX_ON) + _acmd
     text = (text.replace("{{JOBNAME}}", jobname)
                 .replace("{{AMSET_CMD}}", _acmd)
                 .replace("{{AMSET_ENV}}", AMSET_ENV_NAME))

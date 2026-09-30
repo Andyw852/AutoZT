@@ -104,6 +104,8 @@ AMSET_CMD   = ('rm -f transport.json; '
                'cp -f "$(ls -t transport_*.json 2>/dev/null | head -1)" transport.json && ls -l transport.json')
 # patch_desym_fix：去对称化相位补丁开关（auto = ke_common.desym_fix_setting 的默认链：
 #   step.conf DESYM_FIX > 环境变量 AZ_DESYM_FIX > ke_common.DESYM_FIX_DEFAULT（验证期 False））。
+IR_FIX = "auto"           # patch_ir_fix（V125）：auto/on/off，auto = on（见 ke_common.IR_FIX_DEFAULT）
+_IR_FIX_ON = True
 DESYM_FIX = "auto"
 _DESYM_FIX_ON = False
 _GATE_SUMMARY = None      # ke_common.gate_log_line() 的结果，写进 settings.yaml 注释
@@ -289,6 +291,7 @@ SPEC = {
     "MEM_AUTO_EXCLUSIVE": (MEM_AUTO_EXCLUSIVE, "bool"),
     # patch_desym_fix：去对称化相位补丁开关 auto/on/off（见文件头 DESYM_FIX）。
     "DESYM_FIX": (DESYM_FIX, "str"),
+    "IR_FIX": (IR_FIX, "str"),
     # patch_bandgap_override：scissor 带隙覆盖（eV）与来源说明。
     "BANDGAP_OVERRIDE": (None, "float"),
     "BANDGAP_NOTE": ("", "str"),
@@ -1549,6 +1552,22 @@ def _install_symmetry_deps(out):
             shutil.copyfile(src, dst)
 
 
+def _install_ir_fix(out):
+    """patch_ir_fix（V125）：把 amset_ir_fix.py（住在 step8.4_amset2d/）复制进运行目录。
+    找不到只告警 —— 不修时 AMSET 原行为结果是对的，只是六方/三方慢 5–6 倍。"""
+    if not _HAS_KC:
+        return False
+    here = Path(__file__).resolve().parent
+    ok = kc.install_run_plugin(kc.IR_FIX_PLUGIN, out, (here, Path.cwd(), here.parent / "step8.4_amset2d"))
+    if not ok:
+        print("[WARN] 找不到 %s（gen_need 里要有它）—— 本次不修不可约 k 点（结果对，六方/三方慢 5–6 倍）"
+              % kc.IR_FIX_PLUGIN)
+    else:
+        print("[OK] 不可约 k 点修正插件就位：%s（IR_FIX=%s）" % (Path(out) / kc.IR_FIX_PLUGIN,
+                                                        "on" if _IR_FIX_ON else "off"))
+    return ok
+
+
 def _install_desym_fix(out):
     """patch_desym_fix：把 amset_desym_fix.py 复制进运行目录（python -c 里 import 它）。
 
@@ -1816,6 +1835,7 @@ def main():
     #   _apply_eps_inf_override() 读到的仍是模块级 None，step.conf 的 ε∞ 覆盖**静默失效**
     #   （GaAs 用 HSE ε∞ 重跑 S8 会跑出与覆盖前相同的数）。test_gen_conf_wiring.py 防回归。
     global EPS_INF_OVERRIDE, EPS_INF_OVERRIDE_BASIS, DESYM_FIX, _DESYM_FIX_ON, SYMMETRIZE_ELASTIC
+    global IR_FIX, _IR_FIX_ON
     global BANDGAP_OVERRIDE, BANDGAP_NOTE
     global MEM_WARN_GIB, MEM_LIMIT_GIB, MEM_AUTO_EXCLUSIVE
     _conf_nworkers = None
@@ -1907,6 +1927,8 @@ def main():
             # patch_desym_fix：相位补丁开关（auto/on/off）
             if _p["DESYM_FIX"]:
                 DESYM_FIX = str(_p["DESYM_FIX"])
+            if _p["IR_FIX"]:
+                IR_FIX = str(_p["IR_FIX"])
             # patch_bandgap_override：scissor 带隙覆盖
             if _p["BANDGAP_OVERRIDE"] is not None:
                 BANDGAP_OVERRIDE = float(_p["BANDGAP_OVERRIDE"])
@@ -1930,6 +1952,8 @@ def main():
     if _HAS_KC:
         _DESYM_FIX_ON, _dsrc = kc.desym_fix_setting(DESYM_FIX)
         print("[..] DESYM_FIX = %s（%s）" % ("on" if _DESYM_FIX_ON else "off", _dsrc))
+        _IR_FIX_ON, _isrc = kc.ir_fix_setting(IR_FIX)
+        print("[..] IR_FIX = %s（%s）" % ("on" if _IR_FIX_ON else "off", _isrc))
 
     # ---- NWORKERS：默认自动 = 本次提交实际分配到的核数 ----
     # 写死一个常数在 jzzn/hanhai25/3090 上必然错两台（少要 = 算力闲置，
@@ -2018,6 +2042,7 @@ def main():
     _install_fermi_check(out)   # patch_fermi_window（2026-09-28 用户批准）
     _install_symmetry_deps(out)  # 作业内 preflight 的判据来源（与 S8.4 同款）
     _has_fix = _install_desym_fix(out)   # patch_desym_fix
+    _has_ir = _install_ir_fix(out)       # patch_ir_fix
     _preflight_gate(cwd, out, UNITY_OVERLAP_2D if is_2d else False)
 
     # tf 把 submit_amset.tpl 与本脚本一起推到 gen 运行目录，但按原名推、不会改成
@@ -2034,9 +2059,10 @@ def main():
     _amset_env = kc.amset_env_name(cwd) if _HAS_KC else "amset_clean"
     # patch_desym_fix：插件在运行目录里就 import（不开时插件自己什么都不做）；
     #   开关用环境变量传进作业（preflight 也读它），命令最前面 export/unset。
-    _acmd = AMSET_CMD.replace("@AMSET_PLUGINS@", "import amset_desym_fix; " if _has_fix else "")
+    _acmd = AMSET_CMD.replace("@AMSET_PLUGINS@", ("import amset_ir_fix; " if _has_ir else "")
+                              + ("import amset_desym_fix; " if _has_fix else ""))
     if _HAS_KC:
-        _acmd = kc.desym_fix_cmd_prefix(_DESYM_FIX_ON) + _acmd
+        _acmd = kc.ir_fix_cmd_prefix(_IR_FIX_ON) + kc.desym_fix_cmd_prefix(_DESYM_FIX_ON) + _acmd
     text = (text.replace("{{JOBNAME}}", jobname)
                 .replace("{{AMSET_CMD}}", _acmd)
                 .replace("{{AMSET_ENV}}", _amset_env))

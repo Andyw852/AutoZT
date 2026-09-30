@@ -408,6 +408,132 @@ if not getattr(C, "_amset2d_patched", False):
     C._amset2d_patched = True
 
 # =====================================================================
+# patch_kz_cap（V125）—— 插值网格在真空方向只留 2·r+1 层（2d_correction.json 的 kz_cap_rmax，默认不启用）
+#
+# 单层的能带沿 k_z 是平的（真空隔开，层间跳跃 ~0），本插件的 2D 核也只用 q∥ —— 沿 k_z 的积分
+# 只贡献常数因子 2π/c。可 BoltzTraP2 的 equivalence 是实空间**球**，面内要 263 个格点时真空方向
+# 也跟着要 ~33 层（WSe2/WS2 的 c≈23 Å），而 AMSET 的散射成本 ≈ (不可约点数 ∝ N_z) × (等能面上的
+# 四面体数 ∝ N_z) ∝ N_z²。把 |R_z| > r 的 equivalence 去掉：面内半径不变（面内网格不变），
+# k_z 只剩 2r+1 层。合成六方单层（2D ADP+IMP）实测：85×85×11 -> 85×85×3，迁移率差 < 0.15%。
+# 真实重叠下多出的差别只有 slab 波函数沿 z 的形状因子在 k_z 上的平均（估计 ~0.1%）。
+# 护栏：运行时用输入能带核对"沿 k_z 平"（同一面内坐标、不同 k_z 的能量差 ≤ kz_flat_tol_ev，
+# 默认 5 meV，只看带边 ±1 eV 内的带）；核不了或不平 -> 不截断、照原样跑并告警。
+# =====================================================================
+KZ_FLAT_TOL_EV_DEFAULT = 0.005
+_KZ = {"rmax": None, "axis": None, "spread_ev": None, "n_groups": 0, "active": False}
+
+
+def kz_cap_filter(equivalences, axis, rmax):
+    """只保留真空轴分量 |R_axis| <= rmax 的 equivalence（整个星都满足才留）。"""
+    return [e for e in equivalences if np.abs(np.asarray(e)[:, axis]).max() <= rmax]
+
+
+def vacuum_axis(lattice_matrix, normal=(0.0, 0.0, 1.0), tol=1e-3):
+    """出面的晶格矢量下标。条件只是**另两个矢量 ⟂ 层法向**（此时 b_axis ∥ 法向，k_z 就是这一轴；
+    c 本身可以倾斜）。不满足 -> None。"""
+    L = np.asarray(lattice_matrix, float)
+    n = np.asarray(normal, float)
+    n = n / np.linalg.norm(n)
+    cos = np.abs(L @ n) / np.linalg.norm(L, axis=1)
+    ax = int(np.argmax(cos))
+    if any(cos[i] > tol for i in range(3) if i != ax):
+        return None
+    return ax
+
+
+def kz_spread_ev(kpoints, energies, axis, emin, emax):
+    """同一面内坐标、不同 k_z 的 k 点之间，窗口 [emin, emax] 内各带的最大能量差（eV）。
+    kpoints (nk, 3) 分数坐标；energies (nb, nk) eV。返回 (spread, 可比较的面内坐标组数)。"""
+    k = np.mod(np.round(np.asarray(kpoints, float), 6), 1.0)
+    k[k > 1 - 1e-6] = 0.0
+    inp = [i for i in range(3) if i != axis]
+    keys = np.round(k[:, inp], 5)
+    kz = np.round(k[:, axis], 5)
+    E = np.asarray(energies, float)
+    bands = np.where(((E >= emin) & (E <= emax)).any(axis=1))[0]
+    groups = {}
+    for i, key in enumerate(map(tuple, keys)):
+        groups.setdefault(key, []).append(i)
+    spread, n = 0.0, 0
+    for idx in groups.values():
+        if len(set(kz[idx])) < 2:
+            continue
+        n += 1
+        sub = E[np.ix_(bands, idx)]
+        spread = max(spread, float((sub.max(axis=1) - sub.min(axis=1)).max()) if len(bands) else 0.0)
+    return spread, n
+
+
+def _kz_prepare(band_structure):
+    """在 Interpolator 构造前核对：真空轴、沿 k_z 平。通过才让 equivalence 截断生效。"""
+    from pymatgen.electronic_structure.core import Spin
+    _KZ["active"] = False
+    ax = vacuum_axis(band_structure.structure.lattice.matrix, _N)
+    if ax is None:
+        print("[amset2d][WARN] kz_cap：晶格的面内两个矢量不垂直于层法向 -> 不截断 k_z（照原样跑）", flush=True)
+        return
+    kp = np.array([k.frac_coords for k in band_structure.kpoints])
+    try:
+        vbm = band_structure.get_vbm()["energy"]
+        cbm = band_structure.get_cbm()["energy"]
+        emin, emax = (vbm - 1.0, cbm + 1.0) if (vbm is not None and cbm is not None) else \
+            (band_structure.efermi - 1.0, band_structure.efermi + 1.0)
+    except Exception:                                          # noqa: BLE001
+        emin, emax = band_structure.efermi - 1.0, band_structure.efermi + 1.0
+    spread, ng = 0.0, 0
+    for spin in band_structure.bands:
+        s, n = kz_spread_ev(kp, band_structure.bands[spin], ax, emin, emax)
+        spread, ng = max(spread, s), ng + n
+    tol = float(_REC.get("kz_flat_tol_ev") or KZ_FLAT_TOL_EV_DEFAULT)
+    _KZ.update(axis=ax, spread_ev=spread, n_groups=ng)
+    if ng == 0:
+        print("[amset2d][WARN] kz_cap：输入 k 点里找不到同一面内坐标、不同 k_z 的点（S3 真空方向只有 1 层？）"
+              " -> 核不了能带是否沿 k_z 平，不截断（照原样跑）", flush=True)
+        return
+    if spread > tol:
+        print("[amset2d][WARN] kz_cap：能带沿 k_z 不平（最大差 %.1f meV > %.1f meV，%d 组）—— 真空不够或不是单层 ->"
+              " 不截断 k_z（照原样跑）" % (1e3 * spread, 1e3 * tol, ng), flush=True)
+        return
+    _KZ["active"] = True
+    print("[amset2d] kz_cap：沿 k_z 最大能量差 %.2f meV（%d 组，阈值 %.1f meV）-> equivalence 截到 |R_%s| <= %d"
+          % (1e3 * spread, ng, 1e3 * tol, "abc"[ax], _KZ["rmax"]), flush=True)
+
+
+_KZ_RMAX = _REC.get("kz_cap_rmax")
+if _KZ_RMAX and not getattr(C, "_amset2d_kzcap", False):
+    import inspect as _insp
+    import types as _types
+    import amset.interpolation.bandstructure as _bsm
+
+    _KZ["rmax"] = int(_KZ_RMAX)
+    if "sphere.get_equivalences(" not in "".join(_insp.getsource(_bsm.Interpolator.__init__).split()):
+        print("[amset2d][WARN] kz_cap：amset %s 的 Interpolator 不再调 sphere.get_equivalences -> 不截断"
+              % amset.__version__, flush=True)
+    else:
+        _orig_init_kz = _bsm.Interpolator.__init__
+        _orig_eq_kz = _bsm.sphere.get_equivalences
+
+        def _init_kz(self, band_structure, *a, **kw):
+            _kz_prepare(band_structure)
+            return _orig_init_kz(self, band_structure, *a, **kw)
+
+        def _eq_kz(atoms, magmom, nkpt):
+            eq = _orig_eq_kz(atoms, magmom, nkpt)
+            if not _KZ["active"]:
+                return eq
+            out = kz_cap_filter(eq, _KZ["axis"], _KZ["rmax"])
+            print("[amset2d] kz_cap：equivalence %d -> %d（k_z 层数 %d）"
+                  % (len(eq), len(out), 2 * _KZ["rmax"] + 1), flush=True)
+            return out
+
+        _bsm.Interpolator.__init__ = _init_kz
+        _ns = _types.SimpleNamespace(**{k: getattr(_bsm.sphere, k) for k in dir(_bsm.sphere)
+                                        if not k.startswith("__")})
+        _ns.get_equivalences = _eq_kz
+        _bsm.sphere = _ns
+        C._amset2d_kzcap = True
+
+# =====================================================================
 # patch_valley_overlap（2026-09-17）—— 诊断专用：**按谷区分**的重叠
 #
 # 目的（VERIFICATION V23.5 的下一步）：把"残差来自哪里"彻底分开。

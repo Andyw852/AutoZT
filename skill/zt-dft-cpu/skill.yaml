@@ -177,7 +177,7 @@ optional_steps:
      # 否则 zt 的 S8 找不到它。dim_common.py：ke_common 顶层 import 它，gen 会一起复制进运行目录。
      gen_need: [stepconf.py, step.conf, ke_common.py, dim_common.py, submit_amset.tpl, vdw_radii.py,
                 discriminant_common.py, overlap_preflight.py, fermi_window_check.py,
-                amset_desym_fix.py],
+                amset_desym_fix.py, amset_ir_fix.py],
          fetch_all: true,
          needs: ["step4_wave", "step5_dielect", "step6_elastic", "step7b_deform_read",
                  "step2_bandgap/step2.2_pbe_plot", "step2_bandgap/step2.3_hse_plot"]}

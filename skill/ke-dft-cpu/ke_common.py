@@ -699,6 +699,52 @@ def desym_fix_cmd_prefix(on):
     return ("export %s=1; " % DESYM_FIX_ENV) if on else ("unset %s; " % DESYM_FIX_ENV)
 
 
+# ---- [patch_ir_fix] AMSET 密网格不可约 k 点用正确晶格（V125）----------------------------------
+#   插件本体：step8.4_amset2d/amset_ir_fix.py。AMSET 给 spglib 的晶格多转置了一次，六方/三方只用上
+#   {E, σh}×TR，不可约 k 点多 5.5–5.9 倍（散射白算 5–6 倍）；立方、fcc/bcc 原胞、正交常规胞不受影响。
+#   纯簿记修正（原来找到的操作也都是真对称操作），合成体系端到端迁移率一致到 0.05% -> 默认开。
+#   取值优先级：step.conf 的 IR_FIX（on/off）> gen 时的环境变量 AZ_IR_FIX > 本常量。
+IR_FIX_DEFAULT = True
+IR_FIX_ENV = "AZ_IR_FIX"
+IR_FIX_PLUGIN = "amset_ir_fix.py"
+
+
+def ir_fix_setting(conf_value=None):
+    """返回 (是否修正不可约 k 点, 来源说明)。conf_value = step.conf 的 IR_FIX 原值。"""
+    v = "" if conf_value is None else str(conf_value).strip().lower()
+    if v in _ON:
+        return True, "step.conf IR_FIX=%s" % conf_value
+    if v in _OFF:
+        return False, "step.conf IR_FIX=%s" % conf_value
+    if v not in ("", "auto", "none", "default"):
+        print("[WARN] IR_FIX=%r 不认识（只认 auto/on/off），按 auto 处理" % conf_value)
+    e = os.environ.get(IR_FIX_ENV, "").strip().lower()
+    if e in _ON:
+        return True, "环境变量 %s=%s" % (IR_FIX_ENV, e)
+    if e in _OFF:
+        return False, "环境变量 %s=%s" % (IR_FIX_ENV, e)
+    return bool(IR_FIX_DEFAULT), "出厂默认 IR_FIX_DEFAULT=%s（默认开）" % IR_FIX_DEFAULT
+
+
+def ir_fix_cmd_prefix(on):
+    """插件在环境变量未设时也会打补丁，所以关的时候必须显式 export 0。"""
+    return "export %s=%d; " % (IR_FIX_ENV, 1 if on else 0)
+
+
+def install_run_plugin(name, out, search_dirs):
+    """把运行时插件复制进 AMSET 运行目录。找不到返回 False（调用方决定是否致命）。"""
+    import shutil as _sh
+    src = next((Path(d) / name for d in search_dirs if (Path(d) / name).is_file()), None)
+    dst = Path(out) / name
+    if src is None:
+        if dst.is_file():
+            dst.unlink()
+        return False
+    if src.resolve() != dst.resolve():
+        _sh.copyfile(src, dst)
+    return True
+
+
 def incar_is_ncl(incar):
     """INCAR 里 LSORBIT 或 LNONCOLLINEAR 为真 -> 非共线（SOC）。读不到返回 False。"""
     p = Path(incar)

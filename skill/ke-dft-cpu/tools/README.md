@@ -27,6 +27,7 @@ ke 技能原本只覆盖到「生成 settings.yaml 并提交 amset」。当需�
 | desym_fix_validate.py | V115/V116：用同一份全网格 h5 检验去对称化相位公式（原式/修正式）。实数据用**对照组判据**（坏操作点 vs 好操作点 = AMSET 原生路径）；`--shift t1 t2 t3` 平移原点造坏操作 + 查平移不变性（标准原点 GaN 必须用它）。V117 起自动从 vasprun 取全部带能量识别被带窗口切开的简并组（纤锌矿 kz=π/c 粘连）、边界标签换到 AMSET 约定、查源/目标本征值一致性、打印平面波截断。判据见 VERIFICATION V115 §6、V116、V117 |
 | regate_projects.py | V115：用逐操作判据回查已有项目的 S8/S8.4 是否"IBZ + 真实重叠 + 有坏操作 + 没打补丁"（静默算错）；V117：全网格 h5 的 k 点标签不在 (-0.5, 0.5] 也判 ★ WRONG |
 | compare_deformation_h5.py | V123：重新 gen S7.1 前后两份形变势 h5 的**整场**对比（⟨\|D\|²⟩ 新/旧 ≈ ADP 迁移率粗估因子的倒数、逐点相对变化），给 ⚠ STALE-DP 项目分诊：变化小的可不重跑 S8/S8.4。只看带边 E1 判断不了（MoS₂ 带边 iso 几乎不变，ADP 迁移率却 ×2） |
+| compare_transport_json.py | V125：两份 AMSET transport.json 逐 (掺杂, 温度) 对比（迁移率 overall/各机制、电导率、Seebeck；2D 取面内平均），并报告新旧各自的 xx/yy 各向异性。用于 IR_FIX / KZ_CAP_2D 的真实数据验证：阈值默认 2%，退出码 0 = PASS、1 = FAIL、2 = 网格对不上 |
 
 注意：DFPT 产物的**数值校验器**不在这里，它是技能正式步骤的一部分，
 见 step5_dielect/validate_dielectric.py（含 NaN/单位矩阵/声学求和规则/
