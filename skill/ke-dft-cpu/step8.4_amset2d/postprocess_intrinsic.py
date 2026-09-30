@@ -220,6 +220,30 @@ def read_mesh_h5(path):
 # =====================================================================
 # 用 AMSET 自己的代码重建 AmsetData（不重算散射）
 # =====================================================================
+def _apply_run_plugins(run_dir):
+    """patch_kz_cap（V126）：运行目录的 2d_correction.json 开了 kz_cap_rmax 时，加载同目录的 amset2d_plugin，
+    它按与作业相同的判据截断 k_z 方向的 equivalence。V125 之前这里用原版插值重建网格（263×263×21），
+    与 KZ_CAP_2D 作业写出的 mesh.h5（263×263×3）对不上，apply_mesh_metadata 于是拒绝重积分。
+    返回是否加载。散射率展开用 mesh.h5 自带的 ir_to_full，与 IR_FIX 无关。"""
+    import json as _json
+    import os as _os
+    rec = Path(run_dir) / "2d_correction.json"
+    try:
+        kz = _json.loads(rec.read_text()).get("kz_cap_rmax") if rec.is_file() else None
+    except (OSError, ValueError):
+        kz = None
+    if not kz:
+        return False
+    if not (Path(run_dir) / "amset2d_plugin.py").is_file():
+        raise SystemExit("[ERROR] 2d_correction.json 开了 kz_cap_rmax，但运行目录里没有 amset2d_plugin.py —— "
+                         "重建的网格会与 mesh.h5 对不上")
+    _os.environ["AMSET2D_RECORD"] = str(rec.resolve())
+    sys.path.insert(0, str(Path(run_dir).resolve()))
+    import amset2d_plugin  # noqa: F401
+    print("[..] kz_cap：已按 2d_correction.json（kz_cap_rmax=%s）加载 amset2d_plugin 重建插值网格" % kz)
+    return True
+
+
 def build_amset_data(run_dir, nworkers=None, progress_bar=False):
     """用 vasprun.xml + settings.yaml 重建 AmsetData（能带/速度/DOS/费米能级）。
 
@@ -230,6 +254,7 @@ def build_amset_data(run_dir, nworkers=None, progress_bar=False):
     from amset.core.run import Runner
     from amset.interpolation.bandstructure import Interpolator
 
+    _apply_run_plugins(run_dir)          # patch_kz_cap：与作业同一套插值（否则网格对不上）
     runner = Runner.from_directory(run_dir)
     s = runner.settings
     nw = s["nworkers"] if nworkers is None else int(nworkers)
