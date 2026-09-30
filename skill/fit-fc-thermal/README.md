@@ -58,9 +58,13 @@ The gen step locates the dataset automatically. It searches `step4_disp`,
 sibling skills' step directories (`../kl-dft-cpu/step4_disp`,
 `../kl-mlff-cpu/step2_disp_force`, `../kl-mlff-gpu/step2_disp_force`,
 `../phonon-dft-cpu/step2_disp`, `../phonon-mlff-cpu/step2_disp_force`,
-`../phonon-mlff-gpu/step2_disp_force`) and then every sibling skill directory
-whose step starts with `step*disp*` or `step*force*`, so a producer that does
-not exist yet is found without editing anything. Point it somewhere else explicitly:
+`../phonon-mlff-gpu/step2_disp_force`), then `step*disp*` / `step*force*`
+directly under the material root (a hand-assembled dataset such as
+`<material>/step4_disp`), and then every sibling skill directory whose step
+starts with `step*disp*` or `step*force*`, so a producer that does not exist
+yet is found without editing anything. The skill's own output directories
+(`step1_fit/`, `step2_kappa/`) are never taken as input — a previous run's
+normalised copy used to shadow the real dataset. Point it somewhere else explicitly:
 
 ~~~bash
 autozt -tt fit-fc-thermal -p <material> -j step1_fit \

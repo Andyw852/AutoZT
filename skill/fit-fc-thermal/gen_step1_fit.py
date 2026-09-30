@@ -325,9 +325,16 @@ def resolve_dataset(cfg_dir, step_dir, want):
     # new producer does not need this file to be edited.
     cands = [Path(cfg_dir) / rel for rel in AUTO_DIRS]
     matdir = Path(cfg_dir).resolve().parent
-    for pat in ("*/step*disp*", "*/step*force*", "*/step*fit*"):
+    # A dataset dropped at the material root (<material>/step4_disp, the layout
+    # a hand-assembled dataset usually gets) comes right after the fixed list.
+    for pat in ("step*disp*", "step*force*",
+                "*/step*disp*", "*/step*force*", "*/step*fit*"):
         for hit in sorted(glob.glob(str(matdir / pat))):
             cands.append(Path(hit))
+    # Never feed this skill its own output back: step1_fit/ holds the
+    # normalised dataset + a synthesised phono3py_params.yaml from the previous
+    # run, which ranks above the arrays and silently replaced the real dataset.
+    own = Path(cfg_dir).resolve()
     seen, tried = set(), []
     for p in cands:
         key = str(p)
@@ -335,6 +342,11 @@ def resolve_dataset(cfg_dir, step_dir, want):
             continue
         seen.add(key)
         if not p.is_dir():
+            continue
+        rp = p.resolve()
+        if rp == Path(step_dir).resolve() or (
+                rp.parent == own and not any(
+                    tok in rp.name for tok in ("disp", "force"))):
             continue
         sig = detect_signature(p)
         if sig:

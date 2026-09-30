@@ -91,6 +91,38 @@ def run(cmd, **kw):
     return r
 
 
+def _die_with_parent():
+    """preexec_fn: the child gets SIGTERM when this driver dies (Linux only).
+
+    Under SLURM scancel reaps the whole job cgroup, but a driver run by hand or
+    by a local orchestrator that times it out (subprocess.run(timeout=...) sends
+    SIGKILL to the driver only) used to leave the pheasy grandchild running as an
+    orphan at 100 % CPU.  Best effort: silently a no-op where prctl is missing.
+    """
+    try:
+        import ctypes
+        import signal
+        ctypes.CDLL("libc.so.6", use_errno=True).prctl(1, signal.SIGTERM)  # PR_SET_PDEATHSIG
+    except Exception:
+        pass
+
+
+def _ensure_env_bin_on_path(binary):
+    """Find a console script next to the running interpreter when PATH lacks it.
+
+    submit.sh activates the conda env, so PATH is right on a compute node; a
+    driver started as <env>/bin/python without activation (local runs, agents)
+    has the env's python but not its bin/ on PATH, and pheasy was "not found".
+    """
+    if shutil.which(binary):
+        return
+    env_bin = str(Path(sys.executable).parent)   # no resolve(): keep venv symlinks
+    if (Path(env_bin) / binary).is_file():
+        os.environ["PATH"] = env_bin + os.pathsep + os.environ.get("PATH", "")
+        print("[..] %s found in %s (not on PATH) -- prepended it to PATH"
+              % (binary, env_bin), flush=True)
+
+
 def _rel_or_abs(p, base):
     p = Path(p).resolve()
     try:
@@ -1036,7 +1068,8 @@ def _pheasy_scan(cfg, out, cands, base_for, rasr_flag, fit_flags, make_env):
 
     def _run(label, phase, cmd, logfile=None):
         env = make_env(phase)
-        r = subprocess.run(cmd, shell=True, capture_output=True, text=True, env=env)
+        r = subprocess.run(cmd, shell=True, capture_output=True, text=True, env=env,
+                           preexec_fn=_die_with_parent)
         txt = (r.stdout or "") + (r.stderr or "")
         (Path(out) / logfile).write_text(txt, encoding="utf-8") if logfile else None
         sys.stdout.write(txt)
@@ -1497,7 +1530,8 @@ def _run_streaming(cmd, env):
     with an empty queue.out).  Returns (returncode, text).
     """
     proc = subprocess.Popen(cmd, shell=True, env=env, stdout=subprocess.PIPE,
-                            stderr=subprocess.STDOUT, text=True, bufsize=1)
+                            stderr=subprocess.STDOUT, text=True, bufsize=1,
+                            preexec_fn=_die_with_parent)
     chunks = []
     try:
         for line in proc.stdout:
@@ -1602,6 +1636,7 @@ def cmd_fit_pheasy(cfg, out):
         sys.exit("[ERROR] PHEASY_FIT_METHOD must be one of %s"
                  % ", ".join(PHEASY_METHODS))
     binary = str(cfg.get("pheasy_bin") or "pheasy")
+    _ensure_env_bin_on_path(binary)
     if not shutil.which(binary):
         sys.exit("[ERROR] %r is not on PATH -- check CONDA_ENV/CONDA_SH in "
                  "step.conf (the submit template activates it) and PHEASY_BIN "
@@ -1747,7 +1782,8 @@ def cmd_fit_pheasy(cfg, out):
         # its log to prove the constraint was imposed (see below)
         r = subprocess.run(cmd, shell=True, capture_output=True, text=True,
                            env=_pheasy_env(method, phase, ncpu, natom_super,
-                                           tuning, ols_ridge, ols_maxiter))
+                                           tuning, ols_ridge, ols_maxiter),
+                           preexec_fn=_die_with_parent)
         _out = (r.stdout or "") + (r.stderr or "")
         sys.stdout.write(_out)
         if r.returncode != 0:
