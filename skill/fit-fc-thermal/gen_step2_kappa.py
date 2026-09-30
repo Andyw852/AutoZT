@@ -35,11 +35,13 @@ SPEC = {
     #   MESH_CONV_T 下整个 κ 张量相邻变化 < MESH_CONV_TOL_PCT；上限
     #   MESH_CONV_MAX_LENGTH / MESH_CONV_MAX_POINTS（总 q 点数）。off = 只跑起始网格。
     "MESH_CONV":            ("auto", "str"),
-    # max_ii（默认）：整张量判据 max|Δκ_ij|/max|κ_ii|；收敛后仍逐分量检查
-    #   rel_change_per_component，任一超阈只打 [WARN] 不改判定——避免 zz 很小时
-    #   它的相对噪声卡住收敛。per_component：面内/面外分别用自己的 κ 归一，三者
-    #   都 < tol 才算收敛（各向异性体系 zz 收敛慢、要更严时用）。
-    "MESH_CONV_MODE":       ("max_ii", "str"),
+    # per_component（默认）：xx/yy/zz 各用自己的 κ 归一，全部 < tol 才算收敛——
+    #   各向异性体系慢收敛的面外 zz 不会被大的面内 κ 掩盖。分母有下限
+    #   MESH_CONV_FLOOR×max κ_ii：小于最大分量 10% 的分量（2D 真空轴、极弱层间）
+    #   按 0.1×max 归一，不会因为自身相对噪声卡住收敛。MESH_CONV_FLOOR=0 = 严格逐分量。
+    #   max_ii：旧的整张量判据 max|Δκ_ij|/max|κ_ii|（zz 没收敛只告警，不影响判定）。
+    "MESH_CONV_MODE":       ("per_component", "str"),
+    "MESH_CONV_FLOOR":      (0.1, "float"),
     "MESH_CONV_TOL_PCT":    (3.0, "float"),
     "MESH_CONV_FACTOR":     (1.25, "float"),
     "MESH_CONV_MAX_LENGTH": (150.0, "float"),
@@ -147,7 +149,9 @@ def _mesh_cfg(conf, fit_dir):
         "is_2d": is_2d,
         "mesh_2d_vacuum": vac,
         "mesh_conv": "auto" if conv else "off",
-        "mesh_conv_mode": str(conf["MESH_CONV_MODE"] or "max_ii").strip().lower(),
+        "mesh_conv_mode": str(conf["MESH_CONV_MODE"] or "per_component").strip().lower(),
+        "mesh_conv_floor": (0.1 if conf["MESH_CONV_FLOOR"] is None
+                            else float(conf["MESH_CONV_FLOOR"])),
         "mesh_conv_tol_pct": float(conf["MESH_CONV_TOL_PCT"]),
         "mesh_conv_factor": float(conf["MESH_CONV_FACTOR"]),
         "mesh_conv_max_length": float(conf["MESH_CONV_MAX_LENGTH"]),

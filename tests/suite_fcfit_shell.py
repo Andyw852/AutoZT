@@ -324,6 +324,15 @@ def test_kappa_mesh_auto():
     check("zz 慢收敛不再被掩盖（逐分量 10% > 旧 5%）",
           abs(rel_pc - 0.10) < 1e-9 and rel_pc > rel_old + 0.04,
           "pc=%s old=%s" % (rel_pc, rel_old))
+    # 分母下限：zz 只有 xx 的 2.5%（2D 真空轴 / 极弱层间）时，它自身 20% 的相对
+    # 噪声不再卡住收敛——按 0.1×max κ_ii 归一：0.02/0.4 = 5%；floor=0 仍是严格 20%
+    a = {"temperatures": [300.0], "kappa_voigt_xx_yy_zz_yz_xz_xy": [[4, 4, 0.1, 0, 0, 0]]}
+    b = {"temperatures": [300.0], "kappa_voigt_xx_yy_zz_yz_xz_xy": [[4, 4, 0.08, 0, 0, 0]]}
+    rel_f, _rv, _t = kd._mesh_change(a, b, 300)
+    rel_s, _rv, _t = kd._mesh_change(a, b, 300, floor=0.0)
+    check("小分量按下限归一（0.02/0.4=5%，严格逐分量 20%）",
+          abs(rel_f - 0.05) < 1e-9 and abs(rel_s - 0.20) < 1e-9,
+          "floor=%s strict=%s" % (rel_f, rel_s))
 
     # 模拟 BTE：κ = 1 + 1/n，逐档加密直到相邻变化 < tol，取较密那档
     calls = []
@@ -413,6 +422,49 @@ def test_compact_fc3_expand():
           got.shape == ref.shape and np.allclose(got, ref))
 
 
+def test_method_sweep():
+    print("[12] 方法扫描：第 N 近邻截断（thirdorder.py -n）+ SWEEP_* 解析")
+    import importlib
+    sys.path.insert(0, str(ROOT / "skill" / "_common" / "opt"))
+    with tempfile.TemporaryDirectory() as td:
+        # 简单立方 a=2：近邻 2, 2√2, 2√3, 4 -> N=1 截断 (2+2.828)/2
+        p = Path(td) / "POSCAR"
+        p.write_text("sc\n1.0\n2 0 0\n0 2 0\n0 0 2\nX\n1\nDirect\n0 0 0\n")
+        cuts, per_atom = fc.nth_neighbor_cutoffs(p, 3)
+        import math
+        check("简单立方 N=1..3 截断 = 相邻近邻距离中点",
+              all(abs(c - e) < 1e-3 for c, e in zip(
+                  cuts, [(2 + 2 * math.sqrt(2)) / 2,
+                         (2 * math.sqrt(2) + 2 * math.sqrt(3)) / 2,
+                         (2 * math.sqrt(3) + 4) / 2])), str(cuts))
+        # 两种原子、近邻距离不同：取原子间最大（thirdorder calc_frange 的 max(tonth)）
+        p.write_text("cscl\n1.0\n3 0 0\n0 3 0\n0 0 3.3\nA B\n1 1\nDirect\n"
+                     "0 0 0\n0.5 0.5 0.5\n")
+        cuts, per_atom = fc.nth_neighbor_cutoffs(p, 2)
+        exp = max(0.5 * (u[1] + u[2]) for u in per_atom)
+        check("N=2 截断取各原子 (u2+u3)/2 的最大值", abs(cuts[1] - exp) < 1e-4,
+              "%s vs %s" % (cuts, exp))
+    g3 = importlib.import_module("gen_step3_sweep")
+    got = g3.parse_methods("phono3py pheasy:ols,Ridge hiphive:all")
+    check("SWEEP_METHODS 解析（默认方法 / 大小写 / engine:all）",
+          got == [("phono3py", "symfc"), ("pheasy", "OLS"), ("pheasy", "RIDGE")]
+          + [("hiphive", m) for m in g3.ENGINE_METHODS["hiphive"]], str(got))
+    check("SWEEP_METHODS=all = 全部 13 种",
+          len(g3.parse_methods("all")) == 2 + 6 + 5)
+    check("SWEEP_C3_SHELLS 解析", g3.parse_shells("3-5 7,8") == [3, 4, 5, 7, 8]
+          and g3.parse_shells("auto") is None)
+    try:
+        g3.parse_shells("0")
+        ok = False
+    except SystemExit:
+        ok = True
+    check("SWEEP_C3_SHELLS=0 被拒绝", ok)
+    o = g3.variant_overrides("pheasy", "RIDGE", 5.2761, None)
+    check("变体覆盖：c3 写入、单变体截断扫描关闭",
+          o["PHEASY_C3_CUTOFF"] == "5.2761" and o["PHEASY_C2_CUTOFF"] == ""
+          and o["CUT3_SCAN"] == "off" and o["FIT_ENGINE"] == "pheasy", str(o))
+
+
 def main():
     test_shells_and_candidates()
     test_resolve()
@@ -424,6 +476,7 @@ def main():
     test_cut3_select()
     test_kappa_mesh_auto()
     test_compact_fc3_expand()
+    test_method_sweep()
     print("\nsuite_fcfit_shell: %s（%d 项）"
           % ("ALL PASS" if not FAIL else "FAIL", N))
     return 1 if FAIL else 0

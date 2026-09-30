@@ -72,6 +72,9 @@ fetch_files: [POSCAR, SPOSCAR, phono3py_disp.yaml, phono3py_params.yaml,
               mesh_convergence.json,
               kappa-m242424.hdf5,
               kappa-m161616.hdf5, phono3py_kappa.log,
+              # 方法扫描（S3_sweep / S4_compare）
+              sweep_result.json, sweep_plan.json, fit_compare.json,
+              fit_compare.csv,
               submit.sh, queue.out, queue.err]
 
 steps:
@@ -107,6 +110,30 @@ optional_steps:
          gen_need: [dim_common.py, za_2d.py],
          done_marker: phonon_band_summary.json, fetch_all: true}
 
+  # 方法横向对比（默认关）：同一数据集 × 多个引擎/方法 × 多个近邻壳层 N，
+  #   每个组合一个作业（fanout m-*），每个都拟合 + 算 κ，最后 S4_compare 汇总。
+  #   开：项目 tf_*.yaml 写 method_sweep: true，或直接
+  #     autozt -tt fit-fc-thermal -p <材料> -j S3_sweep start
+  #   选方法/壳层：
+  #     autozt -tt fit-fc-thermal -p <材料> -j S3_sweep conf --set params.SWEEP_METHODS="pheasy:OLS,RIDGE hiphive:ridge"
+  #     autozt -tt fit-fc-thermal -p <材料> -j S3_sweep conf --set params.SWEEP_C3_SHELLS="4 5 6"
+  #   needs: [] —— 与 S1_fit/S2_kappa 相互独立，只要 S3/S4 可配 run_steps: [3, 4]。
+  method_sweep:
+    default: false
+    steps:
+      - {seq: 3, name: step3_sweep, label: S3_sweep, after: step2_kappa, needs: [],
+         check: marker, marker: 'sweep_result.json:"SWEEP_DONE": true',
+         fanout: "m-*", gen: gen_step3_sweep.py, fetch_all: true,
+         gen_need: [stepconf.py, step.conf, fc_common.py, fc_fit_driver.py,
+                    dim_common.py, kappa_driver.py, cut3_select.py,
+                    gen_step1_fit.py, gen_step2_kappa.py, sweep_driver.py,
+                    submit_fcfit_p3py.tpl, submit_fcfit_hiphive.tpl,
+                    submit_fcfit_pheasy.tpl, submit_fcfit_pheasy_gpu.tpl]}
+      - {seq: 4, name: step4_compare, label: S4_compare, after: step3_sweep,
+         needs: [step3_sweep], gen: gen_step4_compare.py, check: plot, run: gen,
+         gen_need: [sweep_driver.py], done_marker: fit_compare.json,
+         fetch_all: true}
+
 requires:
   # phono3py is only needed for FIT_ENGINE=phono3py and for the hdf5 writers;
   # hiphive additionally needs hiphive + scikit-learn (+ numba for the residual
@@ -123,21 +150,27 @@ io_schema:
     - {name: fc3.hdf5, step: S1_fit, type: hdf5, desc: "三阶力常数（有三阶数据时）"}
     - {name: fc_fit_summary.json, step: S1_fit, type: json, desc: "拟合与虚频判据摘要"}
     - {name: kappa_summary.json, step: S2_kappa, type: json, desc: "最终产物：晶格热导率 κ(T) 及 300K 各分量"}
+    - {name: fit_compare.json, step: S4_compare, type: json, desc: "方法扫描对比表：每个 引擎×方法×近邻壳层 的虚频闸、拟合残差、κ(300K)"}
   params:
     - {name: FIT_ENGINE, values: [phono3py, pheasy, hiphive], default: phono3py, where: step.conf, desc: "力常数拟合引擎"}
     - {name: MESH, default: auto, where: step.conf, desc: "BTE q 网格：auto=按倒格矢自动+收敛测试（MESH_LENGTH/MESH_CONV*）| 长度 | \"n n n\" 显式"}
     - {name: BTE_METHOD, values: [rta, lbte], default: rta, where: step.conf, desc: "BTE 解法；rta 便宜、lbte 准但贵"}
     - {name: ISOTOPE, default: true, where: step.conf, desc: "同位素散射"}
+    - {name: SWEEP_METHODS, default: all, where: step.conf, desc: "方法扫描（S3_sweep）：all | \"phono3py:symfc pheasy:OLS,RIDGE hiphive:ridge\"（引擎:方法列表；引擎:all）"}
+    - {name: SWEEP_C3_SHELLS, default: auto, where: step.conf, desc: "方法扫描的三阶截断 = 第 N 近邻（thirdorder.py -n 约定）：auto | 5 | \"4 5 6\" | 3-6"}
     - {name: T_MIN/T_MAX/T_STEP, default: "100/800/100", where: step.conf, desc: "温度扫描 (K)"}
   steps:
     - {step: S1_fit, title: "Fit force constants", inputs: [displacement_force_dataset], outputs: [fc2.hdf5, fc3.hdf5, fc_fit_summary.json], validator: "phonon 判据且无超阈虚频"}
     - {step: S2_kappa, title: "Lattice thermal conductivity", inputs: [fc2.hdf5, fc3.hdf5], outputs: [kappa_summary.json], validator: "kappa_summary.json 里 KAPPA_DONE 为 true"}
     - {step: S2_plot, title: "Phonon plot", inputs: [fc2.hdf5], outputs: [phonon_band_summary.json], validator: "marker 文件存在"}
+    - {step: S3_sweep, title: "Method sweep (engines x methods x neighbour shells)", inputs: [displacement_force_dataset], outputs: [sweep_result.json], validator: "每个 m-* 子目录 sweep_result.json 里 SWEEP_DONE 为 true"}
+    - {step: S4_compare, title: "Method comparison table", inputs: [sweep_result.json], outputs: [fit_compare.json], validator: "marker 文件存在"}
 flow:
   summary: "读取已有位移-力数据 → 判断壳层/三阶截断 → 拟合 fc2/fc3（虚频闸）→ 三声子 BTE 输出 κ(T)"
   stages:
     - {name: 拟合, steps: [S1_fit], produces: [fc2.hdf5, fc3.hdf5]}
     - {name: 热导率, steps: [S2_kappa], produces: [kappa_summary.json]}
     - {name: 出图, steps: [S2_plot], produces: [phonon_band_summary.json]}
+    - {name: 方法对比（可选）, steps: [S3_sweep, S4_compare], produces: [fit_compare.json]}
   requires: {displacement_force_dataset: "需由上游技能生成或手工放置"}
 corrections: [node_fail, dir_missing]

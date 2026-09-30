@@ -34,6 +34,9 @@ S2_kappa (submitted job, needs S1_fit)
                                          -> kappa_summary.json, kappa-m*.hdf5
 S2_plot  (login node, optional)  phonon band figures from fc2.hdf5
                                  + ZA bending-branch exponent p
+S3_sweep (optional, method_sweep, fanout m-*)  one job per
+         engine x method x neighbour shell N: fit + BTE -> sweep_result.json
+S4_compare (login node, needs S3_sweep)  -> fit_compare.json / fit_compare.csv
 ~~~
 
 ## Quick start
@@ -330,12 +333,18 @@ writing `kappa_summary.json`:
   `MESH_CONV = auto` then reruns the BTE with `L *= MESH_CONV_FACTOR` (1.25)
   until kappa at `MESH_CONV_T` (300 K) changes by less than
   `MESH_CONV_TOL_PCT` (3 %) between two consecutive meshes.  **`MESH_CONV_MODE
-  = per_component` (default)** judges each component against *itself*
-  (`max_i |d kappa_ii| / |kappa_ii|`, off-diagonals normalised by the largest
-  diagonal), so an anisotropic cell whose out-of-plane `zz` converges more
-  slowly than the in-plane `xx/yy` is not declared converged prematurely —
-  the old `max_ii` norm (`max|d kappa_ij| / max|kappa_ii|`, kept as
-  `MESH_CONV_MODE = max_ii`) did exactly that on a rhombohedral R-3m primitive.
+  = per_component` (default)** judges each diagonal component against *itself*,
+  `max_i |d kappa_ii| / max(|kappa_ii|, MESH_CONV_FLOOR * max_j |kappa_jj|)`
+  (off-diagonals normalised by the largest diagonal), so an anisotropic cell
+  whose out-of-plane `zz` converges more slowly than the in-plane `xx/yy` is not
+  declared converged prematurely.  The floor (`MESH_CONV_FLOOR = 0.1`) keeps a
+  negligible component — a 2D vacuum axis, or a zz below 10 % of xx — from
+  blocking convergence on its own relative noise; `MESH_CONV_FLOOR = 0` is the
+  strict per-component test.  `MESH_CONV_MODE = max_ii` is the legacy
+  whole-tensor norm `max|d kappa_ij| / max|kappa_ii|`, which does mask a slow zz
+  (measured on a rhombohedral R-3m primitive).  Any component whose own change
+  is still above the tolerance when the mesh is declared converged is printed
+  as a `[WARN]` and listed in `mesh_convergence.components_over_tol`.
   Capped by
   `MESH_CONV_MAX_LENGTH` (150 A) and `MESH_CONV_MAX_POINTS` (64000 q-points).
   The denser mesh of the converged pair is reported; every point goes to
@@ -388,6 +397,52 @@ writing `kappa_summary.json`:
   too (`phonon_band_plot/cut3_<c>/`); the per-cut min/max frequencies land in
   `phonon_band_summary.json` under `cut3_bands`.
 * The compute host needs `phono3py` + `h5py` (the same env as the fit job).
+## Method sweep (S3_sweep / S4_compare)
+
+Comparing fitting methods on one dataset is a first-class step, not a script:
+the optional group `method_sweep` (off by default, independent of S1/S2 —
+`needs: []`) fans out one job per **engine x method x neighbour shell**, each
+fitting the dataset and running the BTE on its own fc2/fc3.
+
+~~~bash
+autozt -tt fit-fc-thermal -p <material> -j S3_sweep conf \
+   --set params.SWEEP_METHODS="phono3py:symfc pheasy:OLS,LASSO,RIDGE hiphive:ridge"
+autozt -tt fit-fc-thermal -p <material> -j S3_sweep conf --set params.SWEEP_C3_SHELLS="4 5 6"
+autozt -tt fit-fc-thermal -p <material> -j S3_sweep start      # enables the group for this run
+# ... when every m-* is done, S4_compare writes step4_compare/fit_compare.{json,csv}
+~~~
+
+* `SWEEP_METHODS` - `all` (13: phono3py symfc/alm, pheasy x6, hiphive x5) or
+  `engine[:m1,m2|all]` tokens; an engine alone means its default method.
+* `SWEEP_C3_SHELLS` - the third-order cutoff as **"up to the N-th nearest
+  neighbours"**, with the ShengBTE `thirdorder.py -n` definition
+  (`thirdorder_common.calc_frange`): for every atom the distinct neighbour
+  distances `u_1 < u_2 < ...` are listed and `cutoff(N) = max over atoms of
+  (u_N + u_{N+1}) / 2`.  N therefore means the same as in a paper that fitted
+  "fc3 up to the 5th neighbours".  `auto` = the largest N inside the supercell
+  safe cutoff; `5`, `4 5 6` and `3-6` are accepted; an N beyond the safe cutoff
+  is skipped with a warning (enlarge the supercell instead).  The N -> cutoff
+  table and every atom's shells land in `step3_sweep/sweep_plan.json`.
+  `SWEEP_SHELL_TOL` (1e-4 A, thirdorder's tolerance) merges nearly degenerate
+  distances; raising it changes the N count.
+* `SWEEP_C2` - `all` or a neighbour number for the pheasy/hiphive fc2
+  (phono3py/symfc fits the full fc2).
+* Every S1_fit/S2_kappa key (dataset, `SUPERCELL`, `HIPHIVE_CELL`, `MESH`,
+  temperatures, conda env, `[submit]`) is accepted in `step3_sweep/step.conf`
+  and applies to all variants; per variant the sweep only overrides engine,
+  method and cutoffs, and turns the per-variant cutoff scan off.  A fixed `MESH
+  = "n n 1"` is the cheap like-for-like choice; `auto` converges every variant.
+* Each variant is the unmodified S1 recipe (`gen_step1_fit.main`) plus the S2
+  recipe finished on the compute node (`sweep_driver.py kappa-prep`).  A fit
+  with imaginary modes records `stable=false` and skips kappa
+  (`SWEEP_KAPPA_IF_IMAG = true` runs it anyway); a tool error leaves no marker,
+  so `retry` re-runs only the failed variants.  The gen is idempotent: a
+  variant with `sweep_result.json` is never regenerated.
+* `fit_compare.json` / `.csv`: per variant the gate (`stable`,
+  `min_frequency_THz`), the fit residual (`fit_rmse_relative`,
+  `pheasy_relative_error`) and kappa(300 K) (in-plane, trace/3, xx/yy/zz), plus
+  the shell table.
+
 ## Artifacts
 
 ~~~text

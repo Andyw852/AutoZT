@@ -1,0 +1,32 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""gen_step4_compare.py -- S4_compare (login node, run: gen).
+
+Gathers step3_sweep/m-*/sweep_result.json into
+step4_compare/fit_compare.json (+ fit_compare.csv): one row per
+engine x method x neighbour shell with the fit gate, the fit residual and
+kappa(300 K).  Pure bookkeeping, no physics is recomputed.
+"""
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import sweep_driver
+
+OUTDIR = "step4_compare"
+SWEEP_DIR = "step3_sweep"
+
+
+def main():
+    cwd = Path.cwd()
+    sweep = cwd / SWEEP_DIR
+    if not (sweep / "sweep_plan.json").is_file():
+        sys.exit("[ERROR] %s/sweep_plan.json missing -- run S3_sweep first" % SWEEP_DIR)
+    doc = sweep_driver.compare(sweep, cwd / OUTDIR)
+    if doc["missing"]:
+        # the step is re-run by autozt once the missing variants finish
+        print("[WARN] 汇总不完整：%d/%d 个变体完成" % (doc["n_done"], doc["n_variants"]))
+
+
+if __name__ == "__main__":
+    main()

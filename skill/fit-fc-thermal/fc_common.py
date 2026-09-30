@@ -278,6 +278,68 @@ def resolve_cut3_candidates(poscar, spec, cut3_max=7.0, tol=0.05, min_shells=2,
     return vals, [], "explicit list: candidates %s" % vals
 
 
+def nth_neighbor_cutoffs(poscar, nmax, tol=1e-4, max_atoms=600):
+    """Cutoff (A) that keeps the 1st..N-th nearest neighbours, N = 1..nmax.
+
+    Same definition as ShengBTE thirdorder.py ``-n`` (thirdorder_common.
+    calc_frange), so "fc3 up to the N-th neighbours" is comparable with the
+    literature: for every atom of the cell the distinct neighbour distances
+    u_1 < u_2 < ... are listed (distances closer than ``tol`` are one shell;
+    thirdorder uses np.allclose, i.e. ~1e-5 relative), and
+
+        cutoff(N) = max over atoms of (u_N + u_{N+1}) / 2
+
+    i.e. the midpoint between the N-th and (N+1)-th shell of the atom whose
+    N-th shell reaches furthest.  Distances are taken in the infinite crystal
+    (thirdorder takes them inside the supercell - identical as long as the
+    cutoff stays below the supercell safe cutoff, which the caller enforces).
+
+    Returns (cuts, per_atom_shells): cuts[N-1] is the cutoff for N; the lists
+    in per_atom_shells hold each atom's first nmax+1 shell distances.
+    """
+    lat, frac = read_poscar_cell_frac(poscar)
+    natom = len(frac)
+    if natom > max_atoms:
+        raise RuntimeError("cell has %d atoms > %d, shell enumeration too big"
+                           % (natom, max_atoms))
+    nmax = int(nmax)
+    if nmax < 1:
+        raise ValueError("nmax must be >= 1")
+    cart_of = [[sum(f[k] * lat[k][m] for k in range(3)) for m in range(3)]
+               for f in frac]
+    r_max = 6.0
+    while True:
+        shifts = _min_image_shifts(lat, r_max)
+        tvec = [[sum(s[k] * lat[k][m] for k in range(3)) for m in range(3)]
+                for s in shifts]
+        per_atom, short = [], False
+        for i in range(natom):
+            ds = []
+            for j in range(natom):
+                for t in tvec:
+                    d = math.sqrt(sum((cart_of[j][m] + t[m] - cart_of[i][m]) ** 2
+                                      for m in range(3)))
+                    if 1e-6 < d < r_max:
+                        ds.append(d)
+            ds.sort()
+            u = []
+            for d in ds:
+                if not u or d - u[-1] > tol:
+                    u.append(d)
+            if len(u) < nmax + 1:
+                short = True
+            per_atom.append(u[:nmax + 1])
+        if not short:
+            break
+        if r_max > 40.0:
+            raise RuntimeError("could not find %d neighbour shells within %.0f A"
+                               % (nmax + 1, r_max))
+        r_max *= 1.5
+    cuts = [round(max(0.5 * (u[n - 1] + u[n]) for u in per_atom), 4)
+            for n in range(1, nmax + 1)]
+    return cuts, [[round(x, 4) for x in u] for u in per_atom]
+
+
 def supercell_safe_cutoff(cell, margin=0.1):
     """Largest cutoff that avoids periodic-image double counting (A).
 

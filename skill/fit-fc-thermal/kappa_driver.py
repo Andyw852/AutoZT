@@ -200,18 +200,21 @@ def _kappa_at(s, t):
     return np.asarray(rows[j], float), float(T[j])
 
 
-def _mesh_change(prev, cur, t, mode="max_ii"):
+def _mesh_change(prev, cur, t, mode="per_component", floor=0.1):
     """Relative change of kappa between two runs at temperature t.
 
-    mode='max_ii' (default): rel = max|d kappa_ij| / max|kappa_ii| (whole
-    tensor).  Converges fast, but can mask a slowly-converging out-of-plane zz
-    when it is much smaller than the in-plane kappa; the caller warns on that.
-    mode='per_component': rel = max_i |d kappa_ii| / |kappa_ii| (each diagonal
-    component normalised by *its own* value), so an anisotropic zz cannot be
-    hidden by the larger in-plane one.
+    mode='per_component' (default): rel = max_i |d kappa_ii| / D_i with
+    D_i = max(|kappa_ii|, floor * max_j |kappa_jj|): every diagonal component
+    is judged against *its own* value, so a slowly converging out-of-plane zz
+    of an anisotropic crystal cannot hide behind the larger in-plane kappa.
+    The floor keeps a negligible component (a 2D vacuum axis, zz < 10 % of xx
+    with floor=0.1) from blocking convergence on its own relative noise -- the
+    reason the default was once switched to max_ii.  floor=0 is the strict
+    per-component criterion.
+    mode='max_ii': rel = max|d kappa_ij| / max|kappa_ii| (whole tensor, legacy).
 
-    Returns (rel, rel_vec, tt); rel_vec holds the per-component relative
-    changes (None where the reference component is ~0).
+    Returns (rel, rel_vec, tt); rel_vec holds the plain per-component relative
+    changes |d kappa_ii| / |kappa_ii| (None where the reference is ~0).
     """
     a, _ = _kappa_at(prev, t)
     b, tt = _kappa_at(cur, t)
@@ -219,20 +222,24 @@ def _mesh_change(prev, cur, t, mode="max_ii"):
     nd = min(3, n)
     rel_vec = [abs(b[i] - a[i]) / abs(a[i]) if abs(a[i]) > 1e-12 else None
                for i in range(nd)]
+    scale = float(np.max(np.abs(b[:nd]))) if nd else 0.0
     if str(mode).lower() == "max_ii":
-        scale = float(np.max(np.abs(b[:3])))
-        rel = None if scale <= 0 else float(np.max(np.abs(b - a)) / scale)
+        rel = None if scale <= 0 else float(np.max(np.abs(b[:n] - a[:n])) / scale)
         return rel, rel_vec, tt
-    vals = [x for x in rel_vec if x is not None]
+    if scale <= 0:
+        return None, rel_vec, tt
+    lo = max(float(floor or 0.0), 0.0) * scale
+    vals = []
+    for i in range(nd):
+        den = max(abs(a[i]), lo)
+        if den > 1e-12:
+            vals.append(abs(b[i] - a[i]) / den)
     rel = max(vals) if vals else None
-    # Off-diagonal components are still checked, but normalised by the largest
-    # diagonal (their own values can be ~0, so a per-component ratio is not
-    # meaningful there).
+    # Off-diagonal components are still checked, normalised by the largest
+    # diagonal (their own values can be ~0).
     if n > 3:
-        scale = float(np.max(np.abs(b[:3])))
-        if scale > 0:
-            off = float(np.max(np.abs(b[3:n] - a[3:n])) / scale)
-            rel = off if rel is None else max(rel, off)
+        off = float(np.max(np.abs(b[3:n] - a[3:n])) / scale)
+        rel = off if rel is None else max(rel, off)
     return rel, rel_vec, tt
 
 
@@ -251,7 +258,11 @@ def _converge_mesh(out, yaml_name, fc2, fc3, cfg, source_fc, first=None):
         return _run_bte(out, yaml_name, fc2, fc3, cfg, source_fc, True,
                         spec=(kind, L))
     tol = float(cfg.get("mesh_conv_tol_pct") or 3.0) / 100.0
-    mode = str(cfg.get("mesh_conv_mode") or "max_ii").strip().lower()
+    mode = str(cfg.get("mesh_conv_mode") or "per_component").strip().lower()
+    if mode not in ("per_component", "max_ii"):
+        sys.exit("[ERROR] MESH_CONV_MODE must be per_component or max_ii, got %r" % mode)
+    floor = cfg.get("mesh_conv_floor")
+    floor = 0.1 if floor is None else float(floor)
     fac = float(cfg.get("mesh_conv_factor") or 1.25)
     lmax = float(cfg.get("mesh_conv_max_length") or 150.0)
     pmax = int(cfg.get("mesh_conv_max_points") or 64000)
@@ -272,7 +283,7 @@ def _converge_mesh(out, yaml_name, fc2, fc3, cfg, source_fc, first=None):
             L *= fac
         return None, None
 
-    recs, prev, converged, stop = [], None, False, ""
+    recs, prev, converged, stop, unconv = [], None, False, "", []
     if first is not None:
         prev = first[1]
         recs.append({"length": round(float(first[0]), 3), "mesh": prev["mesh"],
@@ -293,7 +304,7 @@ def _converge_mesh(out, yaml_name, fc2, fc3, cfg, source_fc, first=None):
         if prev is None:
             rel, rel_vec, tt = None, None, t_chk
         else:
-            rel, rel_vec, tt = _mesh_change(prev, s, t_chk, mode)
+            rel, rel_vec, tt = _mesh_change(prev, s, t_chk, mode, floor)
         recs.append({"length": round(L, 3), "mesh": s["mesh"],
                      "kappa_at_T": _kappa_at(s, t_chk)[0].tolist(),
                      "rel_change": rel, "rel_change_per_component": rel_vec})
@@ -305,15 +316,19 @@ def _converge_mesh(out, yaml_name, fc2, fc3, cfg, source_fc, first=None):
                     for x in rel_vec]), flush=True)
         prev = s
         if rel is not None and rel < tol:
-            if str(mode).lower() == "max_ii" and rel_vec:
+            if rel_vec:
                 _names = ("xx", "yy", "zz")
                 over = [(_names[i], 100 * rel_vec[i])
                         for i in range(min(3, len(rel_vec)))
                         if rel_vec[i] is not None and rel_vec[i] > tol]
                 if over:
-                    print("[WARN] q 网格按 max_ii 已收敛，但分量 %s 的相对变化仍超阈（%s）；"
-                          "该分量可能未收敛，见 mesh_convergence.json 的 rel_change_per_component"
-                          % (", ".join("%s %.2f%%" % (n, v) for n, v in over),
+                    # max_ii: any slow component; per_component: only one below
+                    # the floor.  Either way it is recorded, not just printed.
+                    unconv = [n for n, _v in over]
+                    print("[WARN] q 网格按 %s 已收敛，但分量 %s 自身的相对变化仍超阈（%s）；"
+                          "该分量可能未收敛（kappa_summary.json 的 "
+                          "mesh_convergence.components_over_tol）"
+                          % (mode, ", ".join("%s %.2f%%" % (n, v) for n, v in over),
                              "%.1f%%" % (100 * tol)), flush=True)
             converged = True
             break
@@ -323,12 +338,16 @@ def _converge_mesh(out, yaml_name, fc2, fc3, cfg, source_fc, first=None):
     rep = {"converged": converged, "tol_pct": 100 * tol, "check_T": t_chk,
            "factor": fac, "stop_reason": stop or "converged",
            "norm": "max_ii" if mode == "max_ii" else "per_component",
+           "floor": None if mode == "max_ii" else floor,
+           "components_over_tol": unconv,
            "criterion": (
                "max|d kappa_ij| / max|kappa_ii| between consecutive meshes "
                "(whole tensor, first sigma)"
                if mode == "max_ii" else
-               "per-component max_i |d kappa_ii| / |kappa_ii| between "
-               "consecutive meshes (xx, yy, zz each normalised by itself)"),
+               "per-component max_i |d kappa_ii| / max(|kappa_ii|, floor*max_j "
+               "|kappa_jj|) between consecutive meshes (xx, yy, zz each "
+               "normalised by itself; components below the floor by "
+               "floor*max)"),
            "records": recs}
     (out / "mesh_convergence.json").write_text(
         json.dumps(rep, indent=2, ensure_ascii=False), encoding="utf-8",

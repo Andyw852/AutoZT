@@ -360,11 +360,16 @@ def resolve_dataset(cfg_dir, step_dir, want):
              % "\n  ".join(tried))
 
 
-def main():
+def main(conf=None, out=None, job_label="S1fit"):
+    """S1_fit gen.  conf/out/job_label let gen_step3_sweep.py reuse the whole
+    recipe for one method-sweep variant (conf = the sweep step.conf with the
+    variant's engine/method/cutoff overrides, out = step3_sweep/m-<tag>/);
+    called without arguments it is the plain S1_fit gen."""
     cwd = Path.cwd()
-    out = cwd / OUTDIR
-    out.mkdir(exist_ok=True)
-    conf = stepconf.load(SPEC, STEP)
+    out = Path(out) if out is not None else cwd / OUTDIR
+    out.mkdir(parents=True, exist_ok=True)
+    if conf is None:
+        conf = stepconf.load(SPEC, STEP)
 
     engine = str(conf["FIT_ENGINE"] or "phono3py").lower()
     if engine not in ENGINES:
@@ -654,7 +659,7 @@ def main():
                      "setting/<hpc>/templates/.")
         raise
     subs = {
-        "JOBNAME": fc.new_jobname(cwd, "S1fit"),
+        "JOBNAME": fc.new_jobname(cwd, job_label),
         "CONDA_SH": str(conf["CONDA_SH"] or ""),
         "CONDA_ENV": str(conf["CONDA_ENV"] or ""),
         "ENGINE": engine,
@@ -672,7 +677,9 @@ def main():
     print("[DONE] %s: fit_config.json + submit.sh + fc_fit_driver.py ready.  "
           "tf submits the job; the compute node writes fc2.hdf5 (+ fc3.hdf5), "
           "shengbte/ and phonon_summary.json, which the built-in phonon judge "
-          "reads (stable | imaginary frequency | tool error)." % OUTDIR)
+          "reads (stable | imaginary frequency | tool error)."
+          % (OUTDIR if out == cwd / OUTDIR else os.path.relpath(str(out), str(cwd))))
+    return cfg
 
 
 if __name__ == "__main__":
