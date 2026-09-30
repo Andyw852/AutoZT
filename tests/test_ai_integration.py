@@ -511,5 +511,85 @@ def test_monitor_round_reports_stage_timing_and_auto_advance(tmp_path, capsys):
     line = [l for l in capsys.readouterr().out.splitlines() if l.startswith("[round] ")][0]
     rnd = json.loads(line[len("[round] "):])
     assert rnd["auto_advance"] is False
-    assert set(rnd["timing_s"]) == {"cfg_check", "collect", "cache_history", "fetch",
-                                    "hang_check", "advance"}
+    assert set(rnd["timing_s"]) == {"cfg_check", "collect", "fill_dim", "cache_history",
+                                    "fetch", "hang_check", "advance"}
+    assert "collect_detail" in rnd
+
+
+
+# ---------------------------------------------------------------- monitor 每轮的本地开销
+def test_cfg_sig_skips_step_dirs_but_keeps_config_files(tmp_path):
+    """配置签名不下探材料/技能子目录下的 step* 目录（只有计算产物），
+    但技能子目录的 hpc.yaml、project_setting/*.yaml 照常纳入。"""
+    proj = tmp_path / "proj"
+    (proj / "project_setting").mkdir(parents=True)
+    (proj / "project_setting" / "tf_proj.yaml").write_text("task_types: {}\n")
+    mat = proj / "Al" / "X"
+    (mat / "opt-dft-cpu" / "step4_disp" / "disp-001").mkdir(parents=True)
+    (mat / "step1_flat").mkdir()
+    (mat / "POSCAR").write_text("x")
+    (mat / "opt-dft-cpu" / "hpc.yaml").write_text("name: a\n")
+    (mat / "opt-dft-cpu" / "step4_disp" / "junk.yaml").write_text("x: 1\n")
+    (mat / "step1_flat" / "junk.yaml").write_text("x: 1\n")
+    listed = []
+    real = os.scandir
+
+    def spy(p):
+        listed.append(os.path.basename(str(p)))
+        return real(p)
+    cfg = {"project_roots": [str(tmp_path)]}
+    with patch.object(os, "scandir", side_effect=spy):
+        sig = autozt._watch_cfg_sig(cfg)
+    files = {os.path.relpath(x[0], tmp_path) for x in sig}
+    assert files == {"proj/project_setting/tf_proj.yaml", "proj/Al/X/opt-dft-cpu/hpc.yaml"}
+    assert not {"step4_disp", "disp-001", "step1_flat"} & set(listed)
+    (mat / "opt-dft-cpu" / "hpc.yaml").write_text("name: b-changed\n")
+    assert autozt._watch_cfg_sig(cfg) != sig          # 真配置改动仍能触发重载
+
+
+def test_fill_local_dim_caches_by_poscar_stat(tmp_path):
+    from autozt import report as R
+    R._LOCAL_DIM_CACHE.clear()
+    (tmp_path / "X").mkdir()
+    pos = tmp_path / "X" / "POSCAR"
+    pos.write_text("x")
+    calls = []
+
+    class Mod:
+        @staticmethod
+        def detect_dimension(p):
+            calls.append(p)
+            return ("2d",)
+
+    def data():
+        return {"types": [{"key": "opt", "materials": [
+            {"name": "X", "lpath": str(tmp_path / "X"), "dim": ""}]}]}
+    types = [{"key": "opt", "local_root": str(tmp_path)}]
+    with patch.object(R, "_dim_mod", return_value=Mod):
+        d1, d2 = data(), data()
+        R.fill_local_dim({}, d1, types)
+        R.fill_local_dim({}, d2, types)          # 第二轮：POSCAR 没变，不重算
+        assert len(calls) == 1
+        assert d1["types"][0]["materials"][0]["dim"] == "2D*" == \
+            d2["types"][0]["materials"][0]["dim"]
+        os.utime(pos, ns=(1, 1))                 # POSCAR 变了 → 重算
+        R.fill_local_dim({}, data(), types)
+        assert len(calls) == 2
+
+
+def test_discover_memo_scans_shared_root_once(tmp_path):
+    import sys as _sys
+    C = _sys.modules["autozt.collect"]
+    calls = []
+
+    def fake_discover(root, tt=None):
+        calls.append((root, tt))
+        return root, [{"name": "X", "lpath": root + "/X"}]
+    memo = {}
+    with patch.object(autozt, "discover_local", side_effect=fake_discover):
+        a = C._discover_memo(memo, str(tmp_path), "opt")
+        b = C._discover_memo(memo, str(tmp_path), "opt")
+        C._discover_memo(memo, str(tmp_path), "band")
+    assert len(calls) == 2                        # 同 root+技能只扫一次
+    a[1][0]["ps"] = "segment-specific"
+    assert "ps" not in b[1][0]                    # 每段拿到独立副本

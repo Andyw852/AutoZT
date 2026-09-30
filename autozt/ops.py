@@ -2038,7 +2038,12 @@ def _watch_cron(install):
 def _watch_cfg_sig(cfg):
     """v1.8：配置签名——主配置 + project_roots 下全部 *.yaml/*.yml 的
     (路径, mtime_ns, size)（result/log/隐藏目录不扫，里面没有配置）。
-    watch 每轮对比，变了自动重载配置。"""
+    watch 每轮对比，变了自动重载配置。
+
+    材料目录（含 POSCAR）及其技能子目录下的 step* 目录不下探：那里只有计算
+    产物（扇出步骤还有成百上千个 disp-*/ 子目录），没有任何配置文件；以前每轮都
+    把它们整棵列一遍，9p 上实测单轮 cfg_check 14 分钟。技能子目录里的 hpc.yaml、
+    project_setting/*.yaml 照常纳入签名。"""
     sig = []
     cp = cfg.get("_config_path")
     if cp and os.path.isfile(cp):
@@ -2051,9 +2056,14 @@ def _watch_cfg_sig(cfg):
         r = os.path.realpath(os.path.expanduser(r))
         if not os.path.isdir(r):
             continue
+        mat_dirs = set()
         for dp, dn, fn in os.walk(r):
             dn[:] = [d for d in dn
                      if d not in ("result", "log") and not d.startswith(".")]
+            if "POSCAR" in fn:
+                mat_dirs.add(dp)
+            if dp in mat_dirs or os.path.dirname(dp) in mat_dirs:
+                dn[:] = [d for d in dn if not d.startswith("step")]
             for f in fn:
                 if f.endswith((".yaml", ".yml")):
                     fp = os.path.join(dp, f)
@@ -2113,6 +2123,8 @@ def cmd_watch(cfg, types, projs, exclude, interval, tt=None, root=None,
     # history.jsonl（进度文件的 ETA / 失败次数都靠它）。
     from autozt import history_record
     from autozt import workflow as _wf
+    import sys as _sys
+    _collect_mod = _sys.modules.get("autozt.collect")
     """v3.15 监控模式：每 interval 秒重新采集 → auto-fetch → auto-advance。
     v1.8：每轮检测配置文件改动（tf.yaml / project_setting/*.yaml / 各级
     hpc.yaml），变了自动重载——改配置或换 tf 版本后不用手动重启监控。
@@ -2176,8 +2188,9 @@ def cmd_watch(cfg, types, projs, exclude, interval, tt=None, root=None,
                         sig = s2
                 _lap("cfg_check")       # 配置改动检测（遍历 project_roots）+ 可能的重载
                 data = collect_data(cfg, types)
+                _lap("collect")         # 本地发现/解析 + ssh 远端采集（细分见 collect_detail）
                 fill_local_dim(cfg, data, types)
-                _lap("collect")         # 本地发现 + ssh 远端采集
+                _lap("fill_dim")        # 未 gen 材料按本地 POSCAR 预判维度
                 # patch_state_cache：把本轮采集结果写进本地缓存，前台 autozt list/summary
                 # 在 TTL 内直接读它，不用再 ssh 采集一遍。
                 _state_cache_save(cfg, data, types, tt, root)
@@ -2199,6 +2212,7 @@ def cmd_watch(cfg, types, projs, exclude, interval, tt=None, root=None,
                 summary, changes = _round_summary(
                     rnd, data, prev_kinds, _wf.SUBMIT_COUNTER[0] - _sub0, _t0)
                 summary["timing_s"] = _tm
+                summary["collect_detail"] = dict(getattr(_collect_mod, "COLLECT_TIMING", {}))
                 # 全局 auto_advance 关着时本轮不会提交任何作业（submitted 恒为 0）；
                 # 写进摘要，避免把"没提交"误读成"卡住"。
                 summary["auto_advance"] = bool(cfg.get("auto_advance"))

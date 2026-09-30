@@ -89,6 +89,7 @@ def collect_data(cfg, types):
     segs = [t for t in types if t.get("local_root")]
     if segs:   # v3.20：跨段批量采集（一次 ssh 完成全部材料）
         _te_list, _qbh = collect_v3_batch(cfg, segs)
+        _tp = time.time()
         queue_by_host.update(_qbh)
         for te in _te_list:
             exist = next((x for x in data_types
@@ -110,6 +111,9 @@ def collect_data(cfg, types):
         t["gen_need"] = lc.get("gen_need")
         t["skill_dir"] = lc.get("skill_dir")
     check_duplicates(data)
+    if segs:   # 去重/注释/重名检查（每材料读 scancel 标记等，9p 上也不便宜）
+        from autozt.collect import COLLECT_TIMING
+        COLLECT_TIMING["post_s"] = round(time.time() - _tp, 1)
     return data
 
 def apply_exclude(data, exclude):

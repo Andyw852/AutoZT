@@ -829,6 +829,9 @@ def _dim_mod(cfg, t):
     _DIM_MOD[key] = mod
     return mod
 
+_LOCAL_DIM_CACHE = {}   # (POSCAR 路径, mtime_ns, size) -> 预判维度；进程内有效
+
+
 def fill_local_dim(cfg, data, types=None):
     """v1.9.5：dim 原本只来自远端 workflow_method.txt，也就是 gen 跑过才有。
     还没 gen 的材料改用本地 POSCAR 现算一个，结果加 * 表示是预判值
@@ -851,7 +854,13 @@ def fill_local_dim(cfg, data, types=None):
             if m.get("dim") or not mats.get(m.get("name")):
                 continue
             pos = os.path.join(mats[m["name"]], "POSCAR")
-            if not os.path.isfile(pos):
+            try:
+                _st = os.stat(pos)
+            except OSError:
+                continue
+            _ck = (pos, _st.st_mtime_ns, _st.st_size)
+            if _ck in _LOCAL_DIM_CACHE:      # monitor 每轮都会走到这里：POSCAR 没变就不重算
+                m["dim"] = _LOCAL_DIM_CACHE[_ck]
                 continue
             if mod is None:
                 mod = _dim_mod(cfg, t)
@@ -863,7 +872,8 @@ def fill_local_dim(cfg, data, types=None):
             except SystemExit:
                 m["dim"] = "?"     # 检测到 1D/0D，gen 会拒绝
             except Exception:
-                pass
+                continue
+            _LOCAL_DIM_CACHE[_ck] = m["dim"]
 
 def cmd_conf(cfg, data, proj, jname, sets=None):
     from autozt import STEP_CONF

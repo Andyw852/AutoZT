@@ -86,6 +86,16 @@ This project adheres to Semantic Versioning; versions before 1.0.0 are developme
 - Monitor `[round]` lines carry `timing_s` (config check / collect / cache+history / fetch /
   hang check / advance) and the global `auto_advance` flag, so "nothing submitted" is not
   mistaken for "stuck".
+- Monitor rounds do less local filesystem work (first real round on a 9p mount: 48.7 min,
+  of which `cfg_check` 14.4 min and `collect` 32.3 min):
+  - the configuration-change walk no longer descends into `step*` directories of materials
+    and their skill subfolders (only computation outputs and fanout `disp-*` folders live
+    there); ~5.5× fewer filesystem operations on a synthetic tree, same config files tracked;
+  - segments sharing a `local_root` are discovered once per round;
+  - `fill_local_dim` caches the POSCAR-based dimension guess by file stat across rounds;
+  - `[round]` gains `collect_detail` (local resolve vs parallel ssh vs post-processing
+    seconds, segment/material/ssh-call counts) and a separate `fill_dim` timing, so the
+    local-9p and ssh parts of `collect` can be told apart.
 
 ### Fixed
 - Cluster-switch self-checks, each backed by a real failure observed in testing:

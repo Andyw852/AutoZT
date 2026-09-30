@@ -105,6 +105,21 @@ def _queue_total(queue_by_host):
             out[k] = out.get(k, 0) + (v or 0)
     return out
 
+# 最近一次 collect_v3_batch 的分段耗时与规模（monitor 的 [round] 行写成 collect_detail）
+COLLECT_TIMING = {}
+
+
+def _discover_memo(memo, local_root, key):
+    """同一轮采集里，多个段指向同一个 local_root（如每个材料各有一份 tf_*.yaml、
+    local_root 都是 <元素>/ 目录）时只扫一次盘；每段拿到独立副本（后面要就地补字段）。"""
+    from autozt import discover_local
+    mk = (os.path.realpath(os.path.expanduser(str(local_root))), key)
+    if mk not in memo:
+        memo[mk] = discover_local(local_root, tt=key)
+    root, mats = memo[mk]
+    return root, [dict(m) for m in mats]
+
+
 def collect_v3_batch(cfg, segs):
     from autozt import _LOCAL_ONLY_STEP_KEYS, _load_yaml_file, _natkey, discover_local, pkg_setting_path, resolve_material_local, step_cfg
     """v3 本地模式批量采集：所有段（项目配置）先本地解析，再按 (host, work_dir)
@@ -112,8 +127,10 @@ def collect_v3_batch(cfg, segs):
     v3.20 之前每段各发一条 ssh：10 个材料配置就串行 10 次握手（每次 ~2s）。
     返回按段组织的类型条目列表（保持段顺序，_dedup_segments 归属判定依赖它）。"""
     resolved = []
+    _t0 = time.time()
+    _memo = {}
     for t in segs:
-        root, mats = discover_local(t["local_root"], tt=t["key"])
+        root, mats = _discover_memo(_memo, t["local_root"], t["key"])
         for m in mats:
             resolve_material_local(t, root, m)
         steps = []
@@ -198,12 +215,20 @@ def collect_v3_batch(cfg, segs):
     for _key, _entries in sorted(by_hw.items()):
         for _i in range(0, len(_entries), _chunk):
             gitems.append((_key, _entries[_i:_i + _chunk]))
+    _t1 = time.time()
     if len(gitems) > 1 and _nw > 1:
         from concurrent.futures import ThreadPoolExecutor
         with ThreadPoolExecutor(max_workers=min(_nw, len(gitems))) as ex:
             grouped = list(ex.map(_safe_probe, gitems))
     else:
         grouped = [_safe_probe(x) for x in gitems]
+    COLLECT_TIMING.clear()
+    COLLECT_TIMING.update({
+        "local_resolve_s": round(_t1 - _t0, 1),     # 本地发现 + 读项目配置（9p）
+        "remote_ssh_s": round(time.time() - _t1, 1),  # 并行 ssh 采集（墙钟）
+        "segments": len(segs), "discover_roots": len(_memo),
+        "materials": sum(len(ms) for _t, _r, ms, _s in resolved),
+        "ssh_calls": len(gitems), "ssh_workers": _nw, "chunk": _chunk})
 
     seg_results = {id(t): [] for t, _, _, _ in resolved}
     _queue_by_host = {}   # 同一 host 的多个分组/分块会各自 squeue，队列数相同，按 host 去重
