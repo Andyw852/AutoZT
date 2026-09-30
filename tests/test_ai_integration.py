@@ -396,3 +396,53 @@ def test_monitor_daemon_check_skips_project_scan_when_running(tmp_path, monkeypa
             patch.object(autozt, "agent_direct_gate", return_value=None):
         autozt.cli.main()
     assert "PID 4242" in capsys.readouterr().out
+
+
+# ---------------------------------------------------------------- 技能库命令不扫项目
+@pytest.mark.parametrize("argv", [["skills"], ["schema", "--json"],
+                                  ["schema", "band-dft-cpu", "--json"],
+                                  ["skill"], ["history"]])
+def test_skill_library_commands_skip_project_scan(tmp_path, monkeypatch, capsys, argv):
+    """skills/schema/skill（及不带目标的 history）只读技能库，不能触发 merge_project_configs
+    ——9p 上它每次 1–2 分钟，agent skills/contract 和 MCP list_skills/describe_skill
+    都经 `schema --json`，以前每调一次都白扫一遍。"""
+    cfg_path = tmp_path / "tf.yaml"
+    cfg_path.write_text("project_roots: [%s]\n" % tmp_path)
+    monkeypatch.setattr(sys, "argv", ["autozt", "-c", str(cfg_path)] + argv)
+    with patch.object(autozt, "merge_project_configs",
+                      side_effect=AssertionError("project scan")), \
+            patch.object(autozt, "agent_direct_gate", return_value=None):
+        try:
+            rc = autozt.cli.main()
+        except SystemExit as exc:
+            rc = exc.code
+    assert rc in (None, 0)
+    out = capsys.readouterr().out
+    if "--json" in argv and argv[0] == "schema":
+        skills = json.loads(out)["skills"]
+        assert skills and all("skill" in s for s in skills)
+        if len(argv) == 3:
+            assert [s["skill"] for s in skills] == ["band-dft-cpu"]
+
+
+def test_history_with_target_still_checks_blocked_projects(tmp_path, monkeypatch):
+    cfg_path = tmp_path / "tf.yaml"
+    cfg_path.write_text("project_roots: [%s]\n" % tmp_path)
+    monkeypatch.setattr(sys, "argv", ["autozt", "-c", str(cfg_path), "-p", "X", "history"])
+    with patch.object(autozt, "merge_project_configs",
+                      side_effect=AssertionError("project scan")), \
+            patch.object(autozt, "agent_direct_gate", return_value=None):
+        with pytest.raises(AssertionError, match="project scan"):
+            autozt.cli.main()
+
+
+def test_skill_library_commands_with_explicit_target_still_check_blocks(tmp_path, monkeypatch):
+    cfg_path = tmp_path / "tf.yaml"
+    cfg_path.write_text("project_roots: [%s]\n" % tmp_path)
+    for argv in (["-p", "X", "schema", "--json"], ["-p", "X", "skills"]):
+        monkeypatch.setattr(sys, "argv", ["autozt", "-c", str(cfg_path)] + argv)
+        with patch.object(autozt, "merge_project_configs",
+                          side_effect=AssertionError("project scan")), \
+                patch.object(autozt, "agent_direct_gate", return_value=None):
+            with pytest.raises(AssertionError, match="project scan"):
+                autozt.cli.main()

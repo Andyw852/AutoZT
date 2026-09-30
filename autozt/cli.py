@@ -369,6 +369,31 @@ def main():
                   % _watch_files(cfg)[1])
             return
     cfg = apply_skills(cfg, verbose=True)
+    # 只读技能库的命令用不到项目配置，在扫描 project_roots 之前就分派：
+    # merge_project_configs 要遍历全部项目目录，WSL 9p 上每次 1–2 分钟。以前
+    # `autozt skills`/`schema`/`skill`——以及 agent skills/contract/research_plan、
+    # MCP list_skills/describe_skill/research_plan（它们都调 `schema --json`）——
+    # 每调一次都白扫一遍。这三个命令只读 cfg["_skills"]（apply_skills 已装好）。
+    # 带了 -p 材料目标时不走捷径：显式目标必须先过下面的屏蔽项目检查（安全约定，
+    # 见 tests/test_skill_aliases.py）。schema/skill 的位置参数是技能名，不是材料。
+    _fast = not a.proj
+    if cmd == "skills" and _fast and not mat_toks:
+        return cmd_skills(cfg, tt=a.tt)
+    if cmd == "schema" and _fast:   # v1.0：看技能自描述（纯本地、不采集、不提交）
+        # 技能名既可用 -tt，也可直接当位置参数写：autozt schema band-dft-cpu
+        _which = a.tt or (mat_toks[0] if mat_toks else None)
+        sys.exit(cmd_schema(cfg, tt=_which, json_out=a.json_out, strict=a.strict))
+    if cmd == "skill" and _fast:   # v1.0：技能卡片（论文图 2 的机器可读来源；纯本地）
+        # tf skill show <技能> / tf skill show -tt <技能> / tf skill <技能> / tf skill
+        _args = list(mat_toks)
+        if _args and _args[0] in ("show", "list"):
+            _args.pop(0)
+        sys.exit(cmd_skill_show(cfg, which=a.tt or (_args[0] if _args else None),
+                                json_out=a.json_out, full=a.full))
+    if cmd == "history" and not a.hist_write and _fast and not mat_toks:
+        # 不带目标的 history 只读 history.jsonl；带 -p 时仍走下面的屏蔽项目检查
+        sys.exit(cmd_history(cfg, proj=None, tt=a.tt, since=a.since,
+                             last_n=a.last_n or 40, json_out=a.json_out))
     cfg = merge_project_configs(cfg)
 
     def _types_for_block_check():   # 只在 basename 撞上屏蔽项目时才算（本地发现，有缓存）
@@ -391,14 +416,12 @@ def main():
         if a.daemon:
             _watch_daemon(a, mat_toks, root, cfg)
             return
-    if cmd == "skills":
+    if cmd == "skills":   # 带 -p 目标时才会走到这里（已过屏蔽检查）
         return cmd_skills(cfg, tt=a.tt)
-    if cmd == "schema":   # v1.0：看技能自描述（纯本地、不采集、不提交）
-        # 技能名既可用 -tt，也可直接当位置参数写：autozt schema band-dft-cpu
+    if cmd == "schema":
         _which = a.tt or (mat_toks[0] if mat_toks else None)
         sys.exit(cmd_schema(cfg, tt=_which, json_out=a.json_out, strict=a.strict))
-    if cmd == "skill":   # v1.0：技能卡片（论文图 2 的机器可读来源；纯本地）
-        # tf skill show <技能> / tf skill show -tt <技能> / tf skill <技能> / tf skill
+    if cmd == "skill":
         _args = list(mat_toks)
         if _args and _args[0] in ("show", "list"):
             _args.pop(0)

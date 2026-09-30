@@ -70,6 +70,11 @@ This project adheres to Semantic Versioning; versions before 1.0.0 are developme
 - Blocked-project conflict checks cache material discovery per project (previously
   re-scanned for every target × blocked config) and see three-level layouts.
 - stdout is line-buffered when redirected, so `autozt … > log` shows progress.
+- `skills`, `schema`, `skill` and untargeted `history` no longer scan every project
+  configuration before running (1–2 minutes per call on a WSL 9p mount). This also speeds
+  up `autozt agent skills/contract/research_plan` and MCP `list_skills`/`describe_skill`/
+  `research_plan`, which all call `schema --json`. With an explicit `-p` target the
+  blocked-project check still runs first.
 
 ### Fixed
 - Cluster-switch self-checks, each backed by a real failure observed in testing:
