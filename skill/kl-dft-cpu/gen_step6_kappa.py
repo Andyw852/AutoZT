@@ -44,10 +44,13 @@ SPEC = {
     #   （jzzn 192 逻辑核 = 96 物理核）。改这一个键即可调；0/空回落 96。
     "P3PY_OMP_THREADS": (96,    "int"),
     "MESH_OVERRIDE": (None,     "str"),   # 空=用 step4 写入 kl_params 的 MESH
-    # q 网格收敛扫描（P1-1）：""=只跑一套 | auto=三档(N/1.25N/1.5625N) | "a b c; d e f"
-    #   判据：相邻档 300K 面内 κ 变化 < 5%（写进 kappa_summary.json 的 mesh_convergence）
-    "MESH_SCAN":    ("auto",    "str"),   # auto=三档扫描(2D/3D)；""=强制单套
-    "MESH_MIN":     (20,        "int"),   # auto 时每方向下限
+    # q 网格收敛扫描（P1-1）：""=只跑一套 | auto=连续加密到收敛 | "a b c; d e f"
+    #   判据：相邻档 300K 对角 κ 整张量变化 < 5%（写进 kappa_summary.json 的 mesh_convergence）
+    "MESH_SCAN":    ("auto",    "str"),   # auto=连续加密(2D/3D)；""=强制单套
+    "MESH_MIN":     (20,        "int"),   # base 网格每方向下限（S4 的 auto_mesh 用）
+    "MESH_CONV_FACTOR":     (1.25,   "float"), # 连续加密：每档 ×此因子
+    "MESH_CONV_MAX_TIERS":  (8,      "int"),   # 加密最多档数（防小胞无限加密）
+    "MESH_CONV_MAX_POINTS": (64000,  "int"),   # 总 q 点数上限，触顶即停
     # RTA vs 完整解对照（P1-2）：auto = 2D 跑一次 --lbte（正规过程主导，RTA 会低估 κ）。
     #   两种解法的输出文件名相同，需跑完 RTA 先改名再跑 LBTE；比值写进 rta_over_full。
     "COMPARE_LBTE": ("auto",    "str"),   # auto | on | off
@@ -392,6 +395,14 @@ def build_extract(factor, meta, thick2d=None, plan=None, primary=None):
         "    if _rb and _ra / _rb < 0.9:",
         "        d.setdefault('warnings', []).append(",
         "            'RTA/LBTE = %.3f，RTA 明显低估，生产值建议用 lbte' % (_ra / _rb))",
+        "# 顶层 mesh_converged：主口径方法是否收敛（连续加密触顶仍未收敛 → false）",
+        "_pm = d.get('bte_method') or 'rta'",
+        "d['mesh_converged'] = bool(d.get('mesh_convergence', {}).get(_pm, {}).get('converged_5pct'))",
+        "if not d['mesh_converged'] and d.get('mesh_convergence'):",
+        "    d.setdefault('warnings', []).append(",
+        "        '%s 连续加密到上限仍未收敛（见 mesh_convergence）：结果可能低估，建议调大'"
+        "        ' MESH_CONV_MAX_POINTS / MESH_CONV_MAX_TIERS 或显式写更密的 MESH_OVERRIDE'",
+        "        % _pm)",
         "# 成功判据：主口径（PRIMARY 的 method，通常是 RTA）的各档网格齐全即可；",
         "#   对照腿（LBTE）缺失只告警、不判失败 —— 否则 LBTE 太重/超时会把整步拖成 NO_KAPPA。",
         "_pmethod = PRIMARY.split('|')[1]",
@@ -465,13 +476,16 @@ def _mesh_prim_remap(mesh_str, poscar_lat, prim_lat, cart_vac_axis):
 def meshes(conf, params, dim, vac_axis):
     """本步要跑的 q 网格列表（P1-1）。
 
-    MESH_SCAN 未设/auto → 2D/3D 都自动三档收敛扫描（2026-10 起 3D 也扫：
-                          写死 15^3 没收敛时没人会发现，代价是三档 BTE 而非一档）。
+    MESH_SCAN 未设/auto → 2D/3D 都【连续加密到收敛】：从 S4 定的 base 网格起，
+                          每档 ×MESH_CONV_FACTOR 加密，直到 MESH_CONV_MAX_POINTS 或
+                          MESH_CONV_MAX_TIERS 触顶（收敛判定在作业里由 extract 做，
+                          结果写 mesh_convergence / mesh_converged）。
     MESH_SCAN = ""     → 显式只跑 kl_params（S4 按 Q_LEN 估好的）那一套
-    MESH_SCAN = on/auto→ 强制三档：N、ceil(1.25N)、ceil(1.5625N)（2D 真空轴恒 1）
+    MESH_SCAN = on/auto→ 连续加密（2D 真空轴恒 1）
     MESH_SCAN = off    → 强制单套（同 ""）
     MESH_SCAN = "a b c; d e f" → 显式多套
-    代价：三档 = 3 次完整 κ 求解（3D 不受影响）。
+    加密档不再吃 MESH_MIN 下限：base 已在 S4 由 auto_mesh 吃过 MESH_MIN；加密档再抬
+    会让长轴方向的网格被抬到远超所需密度（2026-10）。
     """
     import math
     ax = vac_axis if vac_axis is not None else 2
@@ -482,27 +496,30 @@ def meshes(conf, params, dim, vac_axis):
     if scan == "":                       # 显式关掉（step.conf 写 MESH_SCAN = ）
         return [base]
     if scan.lower() in ("auto",):
-        # 默认 auto：2D/3D 都展开三档扫描（2026-10 起 3D 也扫：写死 15^3 不收敛时
-        #   没人会发现，代价是三档 BTE 而非一档；要退回单套就 MESH_SCAN = off/""）。
         scan = "on"
     if scan.lower() in ("on", "auto3d", "auto"):
+        factor = float(conf.get("MESH_CONV_FACTOR", 1.25) or 1.25)
+        if factor <= 1.0:
+            sys.exit("[ERROR] MESH_CONV_FACTOR 必须 > 1")
+        max_tiers = int(conf.get("MESH_CONV_MAX_TIERS", 8) or 8)
+        max_points = int(conf.get("MESH_CONV_MAX_POINTS", 64000) or 64000)
         n = [int(x) for x in base.split()]
-        out = []
-        for f in (1.0, 1.25, 1.5625):
-            # 第一档就是 step4 定的那套（原样，不再被 MESH_MIN 抬高 —— 扫描要以
-            #   配置的网格为锚点）；只有加密档才吃 MESH_MIN 下限。
-            m = [1 if (dim == "2d" and i == ax)
-                 else (int(v) if f == 1.0
-                       else max(int(conf["MESH_MIN"]), int(math.ceil(v * f))))
-                 for i, v in enumerate(n)]
-            out.append(" ".join(str(x) for x in m))
-        # 去重 + 保持升序（网格小的时候 1.25 倍可能四舍五入撞档）
-        seen, uniq = set(), []
-        for m in out:
-            if m not in seen:
-                seen.add(m)
-                uniq.append(m)
-        return uniq
+        out, seen = [], set()
+        cur = list(n)
+        for _ in range(max_tiers):
+            m = [1 if (dim == "2d" and i == ax) else int(v) for i, v in enumerate(cur)]
+            key = " ".join(str(x) for x in m)
+            if key in seen:              # 网格小的时候加密可能撞档
+                break
+            seen.add(key)
+            out.append(key)
+            # 加密：每方向 ×factor 向上取整（2D 真空轴恒 1），至少 +1 防原地踏步
+            cur = [1 if (dim == "2d" and i == ax)
+                   else max(int(v) + 1, int(math.ceil(v * factor)))
+                   for i, v in enumerate(cur)]
+            if cur[0] * cur[1] * cur[2] > max_points:
+                break
+        return out
     return [kc.mesh_str(s.split(), dim, ax) for s in scan.split(";") if s.strip()]
 
 
@@ -956,10 +973,14 @@ def main():
     mesh = mesh_list[-1]          # phono3py：原胞基矢轴序
     mesh_sb = mesh_poscar[-1]     # ShengBTE/FourPhonon：POSCAR 轴序（不可用重排后的）
     if solver != "phono3py" and len(mesh_list) > 1:
-        sys.exit("[ERROR] MESH_SCAN 多套网格只有 phono3py 支持（shengbte/fourphonon 单套）；"
-                 "当前 SOLVER=%s，请把 MESH_SCAN 留空或只写一套。" % solver)
+        # shengbte/fourphonon 只支持单套：MESH_SCAN 的多套收敛扫描被忽略，用 base 网格
+        #   （旧行为是 sys.exit，2026-10 改：3D 的 auto 现在也会多套，不能默认报错）。
+        print("[WARN] SOLVER=%s 只支持单套网格：MESH_SCAN 多套收敛扫描被忽略，用 base 网格 %s。"
+              "要更密请显式 MESH_OVERRIDE 或 MESH_SCAN=\"\"。" % (solver, mesh_poscar[0]))
+        mesh = mesh_list[0]
+        mesh_sb = mesh_poscar[0]
     if dim == "2d" and len(mesh_list) == 1:
-        print("[..] 2D 提示：MESH_SCAN=auto 可一次跑三档网格做收敛判据（P1-1，5%% 判据）")
+        print("[..] 2D 提示：MESH_SCAN=auto 可连续加密网格做收敛判据（P1-1，5%% 判据）")
     bte_primary = str(conf["BTE_METHOD"] or "rta").lower()
     # RTA vs 完整解（P1-2）：auto = 2D 打开（正规过程主导，RTA 会低估 κ）
     _cm = str(conf["COMPARE_LBTE"] or "auto").strip().lower()

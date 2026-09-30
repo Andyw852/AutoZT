@@ -57,7 +57,8 @@ SPEC = {
     #   N_i = max(MESH_MIN, ceil(Q_LEN_2D/|a_i|))，真空轴=1（P1-1）。
     #   写死 15 15 15 对 a≈3 Å 的 2D 材料只覆盖 ~47 Å 倒空间，κ 远未收敛。
     "KAPPA_MESH":   ("auto",   "str"),   # auto | auto3d | "N N N"
-    "Q_LEN_2D":     (275.0,    "float"), # auto 时目标倒空间长度(Å)；文献 2D 用 250~300
+    "Q_LEN_2D":     (275.0,    "float"), # auto 时 2D 目标倒空间长度(Å)；文献 2D 用 250~300
+    "Q_LEN_3D":     (100.0,    "float"), # auto 时 3D 目标倒空间长度(Å)；3D 不必像 2D 那么密
     "MESH_MIN":     (20,       "int"),   # auto 时每个方向的下限（BZ 采样下限）
     # P1-4：2D 残余面内应力门禁（层内口径 σ_VASP×h⊥/d，kbar）。0 = 关掉门禁。
     #   Huang 条件是零应力条件；有外应力时 ZA 出现线性项、压制二次项，κ 不可信。
@@ -636,8 +637,9 @@ def main():
                                    conf["MAX_MULTIPLE"], vac_axis if vac_axis is not None else 2,
                                    cutoff=cut3)
     vac_ax = vac_axis if vac_axis is not None else 2
+    _q_len = conf["Q_LEN_3D"] if dim == "3d" else conf["Q_LEN_2D"]
     mesh, mesh_note = kc.auto_mesh(conf["KAPPA_MESH"], dim, vac_ax, out / "POSCAR",
-                                   conf["Q_LEN_2D"], conf["MESH_MIN"])
+                                   _q_len, conf["MESH_MIN"])
     print("[..] 维度=%s 方法=%s 超胞=%s mesh=%s %s"
           % (dim.upper(), method, kc.dim_str(reps), mesh, mesh_note))
     kc.write_kl_params(out / kc.KL_PARAMS, DIM=dim.upper(), SUPERCELL=kc.dim_str(reps),
