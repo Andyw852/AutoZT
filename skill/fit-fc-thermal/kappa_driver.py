@@ -132,18 +132,37 @@ def _apply_mesh(ph3, spec, cfg):
     kind, val = spec
     if kind == "explicit":
         ph3.mesh_numbers = list(val)
+    elif cfg.get("is_2d") and cfg.get("mesh_2d_vacuum", True):
+        # 2D: build the diagonal mesh ourselves (vacuum axis = 1).  Squashing the
+        # scalar result instead is wrong when phono3py returns a generalized
+        # (non-diagonal) grid: its D_diag entries are not per-axis counts.
+        rec = np.linalg.norm(np.linalg.inv(np.asarray(ph3.primitive.cell, float)),
+                             axis=0)
+        m = [max(1, int(round(float(val) * b))) for b in rec]
+        m[_vacuum_axis(ph3)] = 1
+        try:
+            ph3.mesh_numbers = m
+        except Exception as e:  # noqa: BLE001
+            sys.exit("[ERROR] 2D 网格 %s 不满足晶格对称性（%s）—— POSCAR 的真空轴大概"
+                     "不垂直于面内基矢，先标准化晶胞" % (m, e))
     else:
-        # phono3py turns a scalar into a symmetry-consistent mesh on the
-        # primitive cell (same convention as phonopy's mesh length).
+        # 3D: phono3py turns a scalar into a symmetry-consistent grid on the
+        # primitive cell (phonopy length convention).  For a basis whose axes
+        # are coupled by symmetry (e.g. a tilted c) it returns a generalized
+        # regular grid: D_diag like [1, 11, 22] is then NOT "points per axis";
+        # the real grid is grid_matrix, the q-point count prod(D_diag).
         ph3.mesh_numbers = float(val)
-    mesh = [int(x) for x in np.asarray(ph3.mesh_numbers).reshape(-1)[:3]]
-    if cfg.get("is_2d") and cfg.get("mesh_2d_vacuum", True):
-        vac = _vacuum_axis(ph3)
-        if mesh[vac] != 1:
-            mesh[vac] = 1
-            ph3.mesh_numbers = mesh
-            mesh = [int(x) for x in np.asarray(ph3.mesh_numbers).reshape(-1)[:3]]
-    return mesh
+    return [int(x) for x in np.asarray(ph3.mesh_numbers).reshape(-1)[:3]]
+
+
+def _grid_info(ph3):
+    """grid_matrix (3x3) + total q-point count of the grid in use."""
+    try:
+        gm = np.asarray(ph3.grid.grid_matrix).astype(int).tolist()
+    except Exception:  # noqa: BLE001
+        gm = None
+    nq = int(np.prod(np.asarray(ph3.mesh_numbers).reshape(-1)[:3]))
+    return gm, nq
 
 
 def _run_bte(out, yaml_name, fc2, fc3, cfg, source_fc, write_kappa, spec=None):
@@ -152,15 +171,25 @@ def _run_bte(out, yaml_name, fc2, fc3, cfg, source_fc, write_kappa, spec=None):
                         is_nac=bool(cfg.get("nac")), log_level=0)
     _load_fc(ph3, out, fc2, fc3, cfg.get("enable_fc"))
     mesh = _apply_mesh(ph3, spec or _mesh_spec(cfg), cfg)
-    print("[..] BTE mesh %s" % mesh, flush=True)
+    gm, nq = _grid_info(ph3)
+    diag = gm is not None and all(gm[i][j] == 0 for i in range(3)
+                                  for j in range(3) if i != j)
+    print("[..] BTE mesh %s (%d q-points%s)"
+          % (mesh, nq, "" if diag or gm is None
+             else "; generalized grid, grid_matrix=%s" % gm), flush=True)
     ph3.init_phph_interaction()
     ph3.run_thermal_conductivity(
         is_LBTE=(str(cfg.get("bte_method") or "rta").lower() == "lbte"),
         temperatures=[float(x) for x in cfg["temperatures"]],
         is_isotope=bool(cfg.get("isotope", True)),
         write_kappa=write_kappa, log_level=1)
-    return _summary(ph3.thermal_conductivity, cfg, source_fc,
-                    mesh=" ".join(str(x) for x in mesh))
+    s = _summary(ph3.thermal_conductivity, cfg, source_fc,
+                 mesh=" ".join(str(x) for x in mesh))
+    # "mesh" is phono3py's D_diag; for a generalized grid it is not points per
+    # axis, so keep the full grid matrix and the q-point count alongside.
+    s["mesh_grid_matrix"] = gm
+    s["n_qpoints"] = nq
+    return s
 
 
 def _kappa_at(s, t):
@@ -171,15 +200,15 @@ def _kappa_at(s, t):
     return np.asarray(rows[j], float), float(T[j])
 
 
-def _mesh_change(prev, cur, t, mode="per_component"):
+def _mesh_change(prev, cur, t, mode="max_ii"):
     """Relative change of kappa between two runs at temperature t.
 
-    mode='per_component' (default): rel = max_i |d kappa_ii| / |kappa_ii|.
-    Each diagonal component is normalised by *its own* value, so a slowly
-    converging out-of-plane kappa (zz) cannot be masked by the larger in-plane
-    one.  This is the fix for the old criterion, which used max|kappa_ii| as the
-    denominator and therefore reported the anisotropic zz mesh as converged.
-    mode='max_ii': the legacy max|d kappa_ij| / max|kappa_ii| (whole tensor).
+    mode='max_ii' (default): rel = max|d kappa_ij| / max|kappa_ii| (whole
+    tensor).  Converges fast, but can mask a slowly-converging out-of-plane zz
+    when it is much smaller than the in-plane kappa; the caller warns on that.
+    mode='per_component': rel = max_i |d kappa_ii| / |kappa_ii| (each diagonal
+    component normalised by *its own* value), so an anisotropic zz cannot be
+    hidden by the larger in-plane one.
 
     Returns (rel, rel_vec, tt); rel_vec holds the per-component relative
     changes (None where the reference component is ~0).
@@ -222,7 +251,7 @@ def _converge_mesh(out, yaml_name, fc2, fc3, cfg, source_fc, first=None):
         return _run_bte(out, yaml_name, fc2, fc3, cfg, source_fc, True,
                         spec=(kind, L))
     tol = float(cfg.get("mesh_conv_tol_pct") or 3.0) / 100.0
-    mode = str(cfg.get("mesh_conv_mode") or "per_component").strip().lower()
+    mode = str(cfg.get("mesh_conv_mode") or "max_ii").strip().lower()
     fac = float(cfg.get("mesh_conv_factor") or 1.25)
     lmax = float(cfg.get("mesh_conv_max_length") or 150.0)
     pmax = int(cfg.get("mesh_conv_max_points") or 64000)
@@ -276,6 +305,16 @@ def _converge_mesh(out, yaml_name, fc2, fc3, cfg, source_fc, first=None):
                     for x in rel_vec]), flush=True)
         prev = s
         if rel is not None and rel < tol:
+            if str(mode).lower() == "max_ii" and rel_vec:
+                _names = ("xx", "yy", "zz")
+                over = [(_names[i], 100 * rel_vec[i])
+                        for i in range(min(3, len(rel_vec)))
+                        if rel_vec[i] is not None and rel_vec[i] > tol]
+                if over:
+                    print("[WARN] q 网格按 max_ii 已收敛，但分量 %s 的相对变化仍超阈（%s）；"
+                          "该分量可能未收敛，见 mesh_convergence.json 的 rel_change_per_component"
+                          % (", ".join("%s %.2f%%" % (n, v) for n, v in over),
+                             "%.1f%%" % (100 * tol)), flush=True)
             converged = True
             break
         L *= fac
