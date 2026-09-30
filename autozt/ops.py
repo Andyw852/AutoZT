@@ -998,6 +998,8 @@ def _init_one_skill(cfg, types, target, name=None, tt=None, force=False,
             content = _scope_to_material(content, tkey)
         with open(f0, "w", encoding="utf-8") as f:
             f.write(content)
+        from autozt import invalidate_project_scan
+        invalidate_project_scan()   # 新项目配置：本进程后续扫描要能看见它
         if known_names is not None:
             known_names[pname] = f0   # 批量 init：新名字同步进预扫集合，后续材料继续 O(1) 查重
         print(_i18n.t("已生成 %s（项目配置：步骤/超算/路径按项目改它）",
@@ -2173,6 +2175,8 @@ def cmd_watch(cfg, types, projs, exclude, interval, tt=None, root=None,
                         for k, v in (overrides or {}).items():
                             c2[k] = v          # 命令行 --host/-u 覆盖照旧生效
                         c2 = apply_skills(c2)   # 重载需重装技能骨架（否则 get_types 缺 steps）
+                        from autozt import invalidate_project_scan
+                        invalidate_project_scan()   # 配置变了：不能用扫描缓存
                         c2 = merge_project_configs(c2)
                         t2 = _filter_types_by_project(
                             get_types(c2, tt=tt, root_override=root), project)

@@ -881,6 +881,7 @@ def apply_skills(cfg, verbose=False):
         tt.pop(key, None)
     cfg["task_types"] = tt
     cfg["_skills"] = skills
+    _note_skill_dirs(skills)
     return cfg
 
 def _seq_sort_steps(steps):
@@ -1068,6 +1069,36 @@ _CONFIG_WARNED = False
 # 重跑一遍无缓存的 discover_local：9p 慢盘上 295 材料 × ~30 配置，auto on 要跑
 # 近 50 分钟才写完 setting.yaml。材料清单在一次进程里不会变，缓存即可。
 _BLOCK_DISC_CACHE = {}
+# scan_project_configs 的进程内缓存：同一条命令里 merge_project_configs、cmd_init
+# 的查重和 _init_one 会各扫一遍 project_roots（9p 上每遍 1–2 分钟）。项目配置
+# 在一条命令里只会被 init 自己新增——init 写 tf_*.yaml 后调 invalidate_project_scan()。
+_SCAN_CACHE = {}
+_SCAN_TTL_S = 60.0
+# 步骤目录名（来自已加载技能的 steps/optional_steps）与技能目录名；apply_skills 填充。
+# 扫描 project_roots 时，材料/技能目录下的步骤目录不再下探（project_setting 不会在
+# 那里，而步骤目录里是成千的 disp-*/cfg-* 子目录和 VASP 文件）。
+_STEP_DIR_NAMES = set()
+_SKILL_DIR_NAMES = set()
+_STEP_DIR_RE = re.compile(r"^step\d")
+
+
+def invalidate_project_scan():
+    """init 新写了 project_setting/tf_*.yaml 后调用，下次扫描重新走盘。"""
+    _SCAN_CACHE.clear()
+
+
+def _note_skill_dirs(skills):
+    """记录技能名与步骤目录名，供 scan_project_configs 剪枝。"""
+    for key, sk in (skills or {}).items():
+        _SKILL_DIR_NAMES.add(str(key))
+        if not isinstance(sk, dict):
+            continue
+        steps = list(sk.get("steps") or [])
+        for grp in (sk.get("optional_steps") or {}).values():
+            steps += list((grp or {}).get("steps") or [])
+        for st in steps:
+            if isinstance(st, dict) and st.get("name"):
+                _STEP_DIR_NAMES.add(str(st["name"]))
 
 
 _BLOCK_SCAN_SKIP = ("project_setting", "result", "log")
@@ -1297,6 +1328,14 @@ def scan_project_configs(roots, excludes=None):
     excludes（可选）：不参与发现的目录子树，绝对路径 / 路径前缀 / glob 都可（tf.yaml 的
     project_root_excludes）。用途：某个根下混着【别的仓正在用】的项目时，把那一层排掉，
     避免本仓误推进/误 fetch 它们。"""
+    _key = (tuple(sorted({os.path.realpath(os.path.expanduser(str(r))) for r in roots})),
+             tuple(str(x) for x in (excludes or [])))
+    _hit = _SCAN_CACHE.get(_key)
+    # 60 s 有效期：一条命令内的重复扫描全部命中；monitor/MCP 这类常驻进程
+    # 不会永远看不到新项目（monitor 重载配置前还会显式 invalidate）。
+    if _hit is not None and time.time() - _hit[2] < _SCAN_TTL_S:
+        _register_config_conflicts(_hit[1])
+        return list(_hit[0])
     seen = {}
     # 排除项在进栈/下探两处都判：即使 project_setting 挂在更深一层也不会被发现。
     _EXCL = [os.path.realpath(os.path.expanduser(str(x))) for x in (excludes or []) if str(x).strip()]
@@ -1334,9 +1373,12 @@ def scan_project_configs(roots, excludes=None):
                 it = os.scandir(d)
             except OSError:
                 continue
-            ps_entries, subdirs = [], []
+            ps_entries, subdirs, has_poscar = [], [], False
             with it:
                 for e in it:
+                    if e.name == "POSCAR":
+                        has_poscar = True
+                        continue
                     if not e.is_dir(follow_symlinks=False):
                         continue
                     if e.name == "project_setting":
@@ -1345,15 +1387,26 @@ def scan_project_configs(roots, excludes=None):
                             and not _is_archive(e.path) \
                             and not _excluded(e.path):     # 排除项也不下探
                         subdirs.append(e.path)
+            # 材料目录（有 POSCAR）或技能目录（名字是已知技能）下的步骤目录不下探：
+            # project_setting 只在项目/材料/技能这几层，步骤目录里是成千的扇出子目录
+            # （disp-*、cfg-*、m-*）和 VASP 输出，9p 上逐个列目录是 -p 命令慢的主因。
+            # 只在父目录确认是材料/技能时才剪，名叫 step* 的项目目录不受影响。
+            if has_poscar or os.path.basename(d) in _SKILL_DIR_NAMES:
+                subdirs = [x for x in subdirs
+                           if not (_STEP_DIR_RE.match(os.path.basename(x))
+                                   or os.path.basename(x) in _STEP_DIR_NAMES)]
             for ps in sorted(ps_entries):
                 for p in sorted(glob.glob(os.path.join(ps, "tf_*.yaml"))):
                     name = os.path.basename(p)[len("tf_"):-len(".yaml")]
                     rp = os.path.realpath(p)
                     seen.setdefault(name, set()).add(rp)
             stack.extend(sorted(subdirs, reverse=True))
-    _register_config_conflicts({n: sorted(ps) for n, ps in seen.items() if len(ps) > 1})
-    return [(n, next(iter(ps)), os.path.dirname(os.path.dirname(next(iter(ps)))))
-            for n, ps in sorted(seen.items()) if len(ps) == 1 and n not in _CONFIG_CONFLICTS]
+    _conf = {n: sorted(ps) for n, ps in seen.items() if len(ps) > 1}
+    _register_config_conflicts(_conf)
+    out = [(n, next(iter(ps)), os.path.dirname(os.path.dirname(next(iter(ps)))))
+           for n, ps in sorted(seen.items()) if len(ps) == 1 and n not in _CONFIG_CONFLICTS]
+    _SCAN_CACHE[_key] = (list(out), _conf, time.time())
+    return out
 
 def _stepconf_param_from_file(path, key):
     """极简读取 step.conf 里某 [params] 键的值（行尾 # / ! 注释剥掉）。
