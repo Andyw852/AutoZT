@@ -75,6 +75,17 @@ This project adheres to Semantic Versioning; versions before 1.0.0 are developme
   up `autozt agent skills/contract/research_plan` and MCP `list_skills`/`describe_skill`/
   `research_plan`, which all call `schema --json`. With an explicit `-p` target the
   blocked-project check still runs first.
+- Loading project configurations with many blocked projects was slow again (>10 minutes on
+  a 9p mount with ~30 blocked projects): the three-level blocked-material discovery used a
+  `*/*/*/POSCAR` glob that listed the contents of every material directory. It now walks
+  level by level and never descends into a material directory (≈18× fewer filesystem
+  operations on a 30×295 synthetic layout, same materials found).
+- `history_record` merges its state file across scopes instead of overwriting it, so two
+  differently scoped monitors (or a monitor plus a scoped CLI call) no longer erase each
+  other's baselines and lose transitions and FAIL counts.
+- Monitor `[round]` lines carry `timing_s` (config check / collect / cache+history / fetch /
+  hang check / advance) and the global `auto_advance` flag, so "nothing submitted" is not
+  mistaken for "stuck".
 
 ### Fixed
 - Cluster-switch self-checks, each backed by a real failure observed in testing:

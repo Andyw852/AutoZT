@@ -1069,23 +1069,48 @@ _CONFIG_WARNED = False
 _BLOCK_DISC_CACHE = {}
 
 
+_BLOCK_SCAN_SKIP = ("project_setting", "result", "log")
+
+
 def _block_candidates(owner):
+    """被屏蔽项目下的材料目录（≤3 层，进程内缓存）。
+
+    逐层 scandir，遇到材料目录（含 POSCAR）就记下、**不再往里走**；只有「不是材料」
+    的目录（如 materials/<元素>/）才继续下探。<项目>/materials/<元素>/<材料> 这种
+    第 3 层布局也能找到，但绝不列材料目录自身的内容——那里是步骤目录和成堆的
+    VASP 文件，9p 上逐个 readdir/stat 极慢（~30 个被屏蔽项目时，曾用
+    */*/*/POSCAR 通配把每条命令的配置加载从 1–2 分钟拖到 10 分钟以上）。"""
     got = _BLOCK_DISC_CACHE.get(owner)
-    if got is None:
-        try:
-            got = [m["lpath"] for m in discover_local(owner, _include_blocked=True)[1]]
-        except OSError:
-            got = []
-        # discover_local 只下探 2 层；<项目>/materials/<元素>/<材料> 这种布局的材料在
-        # 第 3 层，以前根本不在候选里（屏蔽照样生效——按目录前缀判——但报不出撞名）。
-        seen = set(got)
-        for pat in ("*/*/*/POSCAR",):
-            for pp in sorted(glob.glob(os.path.join(owner, pat))):
-                d = os.path.dirname(pp)
-                if d not in seen:
-                    seen.add(d)
-                    got.append(d)
-        _BLOCK_DISC_CACHE[owner] = got
+    if got is not None:
+        return got
+    got = []
+    if os.path.isfile(os.path.join(owner, "POSCAR")):
+        got.append(owner)          # 与 discover_local 一致：根本身是材料就不再嵌套发现
+    else:
+        level = [owner]
+        for _depth in range(3):
+            nxt = []
+            for d in level:
+                try:
+                    it = os.scandir(d)
+                except OSError:
+                    continue
+                with it:
+                    for e in it:
+                        if e.name.startswith(".") or e.name in _BLOCK_SCAN_SKIP:
+                            continue
+                        try:
+                            if not e.is_dir():
+                                continue
+                        except OSError:
+                            continue
+                        if os.path.isfile(os.path.join(e.path, "POSCAR")):
+                            got.append(e.path)
+                        else:
+                            nxt.append(e.path)
+            level = nxt
+        got.sort(key=lambda p: _natkey(os.path.relpath(p, owner)))
+    _BLOCK_DISC_CACHE[owner] = got
     return got
 
 

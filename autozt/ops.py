@@ -2145,6 +2145,12 @@ def cmd_watch(cfg, types, projs, exclude, interval, tt=None, root=None,
             rnd += 1
             _t0 = _time.time()
             _sub0 = _wf.SUBMIT_COUNTER[0]
+            _tm, _tl = {}, [_t0]     # 每轮分阶段耗时（写进 [round] 的 timing_s，定位慢在哪）
+
+            def _lap(name):
+                _now = _time.time()
+                _tm[name] = round(_now - _tl[0], 1)
+                _tl[0] = _now
             try:
                 s2 = _watch_cfg_sig(cfg)
                 if s2 != sig:   # v1.8：配置变了 → 重载（沿用 adopt 的重载路径）
@@ -2168,8 +2174,10 @@ def cmd_watch(cfg, types, projs, exclude, interval, tt=None, root=None,
                         print("[%s] 配置变更但重载失败（%s），沿用旧配置继续监控。"
                               % (_time.strftime("%H:%M:%S"), e))
                         sig = s2
+                _lap("cfg_check")       # 配置改动检测（遍历 project_roots）+ 可能的重载
                 data = collect_data(cfg, types)
                 fill_local_dim(cfg, data, types)
+                _lap("collect")         # 本地发现 + ssh 远端采集
                 # patch_state_cache：把本轮采集结果写进本地缓存，前台 autozt list/summary
                 # 在 TTL 内直接读它，不用再 ssh 采集一遍。
                 _state_cache_save(cfg, data, types, tt, root)
@@ -2181,11 +2189,19 @@ def cmd_watch(cfg, types, projs, exclude, interval, tt=None, root=None,
                     pass
                 apply_exclude(data, exclude)
                 filter_projs(data, projs)
+                _lap("cache_history")
                 auto_fetch(cfg, data)
+                _lap("fetch")
                 auto_recover_hung(cfg, data)   # v1.11: 挂死作业自动恢复（scancel+CONTCAR 续跑）
+                _lap("hang_check")
                 auto_advance(cfg, data)
+                _lap("advance")
                 summary, changes = _round_summary(
                     rnd, data, prev_kinds, _wf.SUBMIT_COUNTER[0] - _sub0, _t0)
+                summary["timing_s"] = _tm
+                # 全局 auto_advance 关着时本轮不会提交任何作业（submitted 恒为 0）；
+                # 写进摘要，避免把"没提交"误读成"卡住"。
+                summary["auto_advance"] = bool(cfg.get("auto_advance"))
                 prev_kinds = _step_kinds(data)
                 n_err = 0
                 write_progress(cfg, data, writer="monitor", full_scope=full_scope,

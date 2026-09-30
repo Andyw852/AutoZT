@@ -466,3 +466,50 @@ def test_history_state_merges_across_scopes(tmp_path):
     evs, _ = history_load(cfg)
     got = sorted((e["mat"], e["f"], e["t"]) for e in evs)
     assert got == [("A", "R", "FAIL"), ("B", "R", "OK")]
+
+
+# ---------------------------------------------------------------- 屏蔽项目扫描不进材料目录
+def test_block_candidates_find_level3_without_listing_material_dirs(tmp_path):
+    """<项目>/materials/<元素>/<材料> 能找到，但绝不 scandir 材料目录本身
+    （那里是步骤目录和大量 VASP 文件；9p 上会把每次配置加载拖到 10 分钟以上）。"""
+    owner = tmp_path / "stale"
+    for m in ("materials/Al/X", "materials/Ca/Z", "Direct"):
+        d = owner / m
+        (d / "opt-dft-cpu" / "step1_opt").mkdir(parents=True)
+        (d / "POSCAR").write_text("x")
+        (d / "opt-dft-cpu" / "step1_opt" / "POSCAR").write_text("nested copy")
+    (owner / "project_setting").mkdir()
+    seen = []
+    real = os.scandir
+
+    def spy(p):
+        seen.append(os.path.realpath(p))
+        return real(p)
+    with patch.object(os, "scandir", side_effect=spy):
+        got = B._block_candidates(str(owner))
+    assert sorted(os.path.relpath(p, owner) for p in got) == \
+        ["Direct", "materials/Al/X", "materials/Ca/Z"]
+    mats = {os.path.realpath(p) for p in got}
+    assert not any(s == m or s.startswith(m + os.sep) for s in seen for m in mats)
+
+
+def test_monitor_round_reports_stage_timing_and_auto_advance(tmp_path, capsys):
+    cfg = {"_config_dir": str(tmp_path), "auto_advance": False}
+    sleeps = {"n": 0}
+
+    def fake_sleep(_s):
+        sleeps["n"] += 1
+        raise KeyboardInterrupt
+
+    with patch.object(autozt, "collect_data", return_value=_data()), \
+            patch.object(autozt, "fill_local_dim"), \
+            patch.object(autozt, "auto_fetch"), patch.object(autozt, "auto_advance"), \
+            patch.object(autozt.ops, "auto_recover_hung"), \
+            patch.object(autozt.ops, "_watch_cfg_sig", return_value=()), \
+            patch("time.sleep", side_effect=fake_sleep):
+        autozt.cmd_watch(cfg, [], [], None, 1)
+    line = [l for l in capsys.readouterr().out.splitlines() if l.startswith("[round] ")][0]
+    rnd = json.loads(line[len("[round] "):])
+    assert rnd["auto_advance"] is False
+    assert set(rnd["timing_s"]) == {"cfg_check", "collect", "cache_history", "fetch",
+                                    "hang_check", "advance"}
