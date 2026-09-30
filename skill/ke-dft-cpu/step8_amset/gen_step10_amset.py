@@ -1627,7 +1627,27 @@ def apply_mesh_min(vasprun_path, out):
         return None
     need = [int(lo or 0), int(lo or 0), int(lo_z or 0)]
     f0 = int(INTERPOLATION_FACTOR)
-    f, mesh = f0, _interp_mesh(st, nk, f0)
+    # ★ patch_full_grid_factor（V124）：出厂 factor（和 MESH_MIN_FMAX）是按 **IBZ** k 点数定的口径；
+    #   vasprun 是全网格（WAVEFUNCTION_FULL / S3b，ISYM=-1）时 nk 大十几倍，同一个 f 给的网格每方向
+    #   大 (n_full/n_ir)^(1/3) 倍，而下面的自动调整只在不满足下限时往上加、超 MESH_MAX 才往下降 ->
+    #   实测 WSe2/WS2 单层全网格 6075/6627 点 f=10 给 ~299×299×37（3.3M 点），验证密度只要
+    #   ~253×253×31（IBZ 路径 f≈100 给的就是这张）。换算到 IBZ 口径后两条路径落在同一张网格上
+    #   （MoS₂：全网格 6912 点 f=4 = IBZ 434 点 f=61 = 263×263×21，V112 两臂都验证过）。
+    #   显式 factor 不换算（仍按字面值，规则见上）。
+    _fg, fmax = None, int(MESH_MIN_FMAX)
+    if not INTERPOLATION_FACTOR_EXPLICIT and _HAS_KC:
+        try:
+            _fg = kc.full_grid_ibz_count(st, vr.actual_kpoints)
+        except Exception as _e:                                # noqa: BLE001
+            print("[WARN] patch_full_grid_factor：判不出 vasprun 是不是全网格（%s），按原口径" % _e)
+    f_start = f0
+    if _fg:
+        _r = float(_fg[0]) / _fg[1]
+        f_start, fmax = max(1, int(round(f0 * _r))), max(1, int(np.ceil(fmax * _r)))
+        print("[..] patch_full_grid_factor：vasprun 是全网格 %s（%d 点，IBZ %d 点）—— 出厂 factor %d / "
+              "上限 %d 按 IBZ 口径换算成 %d / %d（与 IBZ 路径同样多的 equivalence）"
+              % ("x".join(map(str, _fg[2])), _fg[1], _fg[0], f0, int(MESH_MIN_FMAX), f_start, fmax))
+    f, mesh = f_start, _interp_mesh(st, nk, f_start)
     # ★ 先处理上限：网格超 MESH_MAX 就把 factor 降下来。
     #   全网格 h5 的 k 点数大，同样 factor 会给更大的网格；不降就可能 OOM
     #   （实测 GaAs 全网格 f=10 -> 361^3 = 4700 万点，跑满 15:50 后要 236 GiB 失败）。
@@ -1657,14 +1677,16 @@ def apply_mesh_min(vasprun_path, out):
             f = max(1, min(_nf, f - 1))
             mesh = _interp_mesh(st, nk, f)
             _capped = True
-    while not all(int(mesh[i]) >= need[i] for i in range(3)) and f < MESH_MIN_FMAX:
-        f = min(int(MESH_MIN_FMAX), int(np.ceil(f * 1.15)) + 1)
+    while not all(int(mesh[i]) >= need[i] for i in range(3)) and f < fmax:
+        # 全网格口径下 f 只有个位数（MoS₂ 4、WSe2 7）：按 15% 步长会从 7 直接跳到 10，所以逐一加
+        f = min(fmax, (f + 1) if _fg else int(np.ceil(f * 1.15)) + 1)
         mesh = _interp_mesh(st, nk, f)
     okm = all(int(mesh[i]) >= need[i] for i in range(3))
     info = {"nk": int(nk), "mesh_min": lo, "mesh_min_kz": lo_z, "mesh_max": MESH_MAX,
             "factor_factory": f0, "factor_used": int(f), "fmax": MESH_MIN_FMAX,
             "mesh": [int(x) for x in mesh], "satisfied": bool(okm),
-            "capped": bool(_capped)}
+            "capped": bool(_capped), "full_grid": bool(_fg),
+            "nk_ir": (int(_fg[0]) if _fg else None), "factor_start": int(f_start), "fmax_used": int(fmax)}
     try:
         (out / "interpolation_info.json").write_text(
             _json.dumps(info, ensure_ascii=False, indent=2))
@@ -1675,9 +1697,10 @@ def apply_mesh_min(vasprun_path, out):
     if okm:
         print("[OK] 最终插值网格 %s（factor %d -> %d，下限 %s/%s，上限 %s，nk=%d%s）"
               % ("x".join(map(str, mesh)), f0, int(f), lo, lo_z, MESH_MAX, nk,
-                 "，**因上限自动降 factor**" if _capped else ""))
+                 ("，**因上限自动降 factor**" if _capped else "")
+                 + ("，全网格按 IBZ 口径（IBZ %d 点）" % _fg[0] if _fg else "")))
     else:
-        print("[WARN] 达到 MESH_MIN_FMAX=%d 仍未满足网格下限 %s（需要 %s）。\n"
+        print("[WARN] 达到 factor 上限 %d（MESH_MIN_FMAX；全网格时已按 IBZ 口径换算）仍未满足网格下限 %s（需要 %s）。\n"
               "       ★ 处理顺序（2026-09-26 精算，见 tmp/amset2d/si_matrix/RESULT.md）：\n"
               "         1) 先提高 MESH_MIN_FMAX 并**降低 nworkers** —— 最终网格一样大时，\n"
               "            AMSET 的插值/拟合成本几乎相同（11^3x155 = 8680 个 equivalence，\n"
@@ -1685,7 +1708,7 @@ def apply_mesh_min(vasprun_path, out):
               "            但**内存是硬约束**（V23：factor=10 + 24 workers 曾 MaxRSS 292 GB 被 OOM）。\n"
               "         2) 只有在内存也不够时才考虑加密 S3 的 K 间距 —— 那会让 SCF 贵 3~13 倍\n"
               "            （11^3 + f155 -> 1.0x SCF；17^3 + f51 -> 3.7x；22^3 + f28 -> 8.0x）。"
-              % (MESH_MIN_FMAX, "x".join(map(str, mesh)), need))
+              % (fmax, "x".join(map(str, mesh)), need))
     return int(f), [int(x) for x in mesh]
 
 

@@ -5892,3 +5892,46 @@ transport.json）、OK 2（MoS₂）。全量重跑 ≈ 12 × 3 h，其中相当
   变化超过 10% -> 重跑；否则旧结果可保留（把 S8/S8.4 被改名的完成标记 `*.stale-upstream-*` 改回原名即可）。
 - 没有 transport.json 的（MoSe2、WS2）不存在"旧结果"，按正常流程往下跑即可。
 - 优先级：2D TMD（WSe2 S8.4）> 3D 基准（GaAs/Si）> 其它；2D 材料的 S8（unity 对照）可按需再跑。
+
+## V124（2026-09-30）：全网格 vasprun 的插值 factor 按 IBZ 口径换算 —— WSe2/WS2 S8.4 多算的 ~40%
+
+**现象**：WSe2 / WS2 单层 S8.4 重跑（3917765 / 3917768）约 10 h 时 elastic 才 18% / 15%，预计总共 45–50 h，
+内存 200–384 GiB；最终插值网格 299×299×37 ≈ 3.3M 点（MoS₂ 验证配置是 263×263×21 ≈ 1.45M）。
+
+**先更正读数**：6075 / 6627 不是 IBZ 点数，而是 45×45×3 / 47×47×3 的**全网格**点数（同一网格 IBZ 只有 384 / 416）；
+S3 的 DFT 网格就是 45×45×3 / 47×47×3，正常，299 是 AMSET 的插值网格。也就是说这两个作业读的是
+step3b_uniform_full 的全网格 vasprun（WAVEFUNCTION_FULL 路径）。
+
+**根因**：AMSET 的 equivalence 数 = vasprun 的 k 点数 × interpolation_factor。出厂 factor 10、MESH_MIN_FMAX 是按
+IBZ 输入定的口径；全网格 vasprun 的点数多 ~16 倍，同一个 f=10 在全网格上相当于 IBZ 口径 f≈160。而 apply_mesh_min
+只在不满足下限时往上加、超 MESH_MAX（400）才往下降 —— 297–309 在两者之间，于是原样放行，比验证密度
+（|b|/MESH_MIN_DK = 253 / 263）每方向多 15–20%、总点数多 40–70%。MoS₂ 当初 V112 全网格臂是**手工**给的 f=4，
+所以没暴露。3D S8 是同一个函数（全网格时同样多算，只是常被 MESH_MAX=200 截住）。
+
+**修法（patch_full_grid_factor，S8 与 S8.4 同改；zt 的 step8_amset 是软链）**：
+- `ke_common.full_grid_ibz_count(structure, kpoints)`：vasprun 的 k 点是完整 Γ/MP 网格 -> 返回 (n_ir, n_full, mesh)，
+  n_ir 用 spglib 按晶体对称性（含时间反演、symprec 0.01）约化；IBZ 列表 / 不完整网格 -> None（不换算）。
+- 出厂 factor（非显式）时：起点 f = round(10 × n_ir/n_full)、上限 = ceil(MESH_MIN_FMAX × n_ir/n_full)，
+  然后**逐一**往上加到满足下限（全网格口径下 f 只有个位数，15% 步长会从 7 直接跳到 10）。
+  显式 INTERPOLATION_FACTOR 不换算（2026-09-28 规则不变）；IBZ 输入行为不变。
+- interpolation_info.json 增加 full_grid / nk_ir / factor_start / fmax_used。
+
+**效果（出厂默认参数，BoltzTraP2 实算；a、c 取近似值）**：
+
+| 材料 / S3 网格 | 旧：全网格 f=10 | 新：全网格 | IBZ 路径（不变） |
+|---|---|---|---|
+| WSe2 45×45×3（6075 / IBZ 384） | ~297×297×37，3.26M | f=7，263×263×33，2.28M（−30%） | f=111，263×263×33 |
+| WS2 47×47×3（6627 / IBZ 416） | ~309×309×37，3.53M | f=7，275×275×33，2.50M（−29%） | f=111，275×275×33 |
+
+全网格与 IBZ 两条路径现在落在同一张网格上（同样多的 equivalence）。精度口径：这正是 V112 两臂都验证过的做法
+（MoS₂ 全网格 6912 点 f=4 = IBZ 434 点 f=61 = 263×263×21）；面内仍 ≥ V118 的验证密度。kz 从 37 降到 33 是
+equivalence 变少的副产品（kz 由实空间球半径与 c 决定，不能单独调；WSe2/WS2 的 c 比 MoS₂ 项目小，所以 kz 更多）。
+
+**对正在跑的两个作业**：不受影响（改的是 gen）。它们的网格比验证密度密，结果可用，只是贵；已跑约 10 h，
+重提交按新网格从头算也要 ~25–35 h（点数 ×0.7，耗时按线性到平方估），与剩下的 ~35 h 相当 -> 让它们跑完。**为什么走了全网格**要查：
+`grep desym_gate step8.4_amset2d/settings.yaml`、`grep -i WAVEFUNCTION_FULL step.conf`、`grep -i LSORBIT step3b_uniform_full/INCAR`。
+SOC（非共线 + TR 操作）必须全网格，属正常；非 SOC 却是 step.conf 里显式 `WAVEFUNCTION_FULL = true`（9/26 旧政策留下的）
+-> 删掉这一行，以后走 IBZ（网格相同，还省掉 S3b/S4b）。
+
+测试：test_gen_desym_wiring 16 -> 20（全网格识别含平移 MP / IBZ 列表 / 缺点；2D MoS₂ 与 3D GaN 两条路径同网格且旧行为
+每方向多出一截；显式 factor 不换算）。

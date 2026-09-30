@@ -897,6 +897,42 @@ def deformation_h5_symmetrized(path):
         return None
 
 
+def full_grid_ibz_count(structure, kpoints, symprec=AMSET_SYMPREC):
+    """patch_full_grid_factor（V124）：vasprun 的 k 点是不是一整张 Γ/MP 网格（ISYM=-1 全网格）。
+
+    是 -> 返回 (n_ir, n_full, mesh)：n_ir = 同一网格按晶体对称性（含时间反演）约化后的不可约点数；
+    IBZ 列表、不完整网格或判不出来 -> None。
+    用途：AMSET 的 interpolation_factor 乘的是 vasprun 的 k 点数（equivalence 数 = nk × factor）；
+    全网格 vasprun 的点数是 IBZ 的十几倍，但对称副本不带新信息 —— 同一个出厂 factor 在全网格上
+    等于 IBZ 口径的 factor × n_full/n_ir（MoS₂：6912 点 f=4 与 IBZ 434 点 f=61 给同一张 263×263×21）。
+    """
+    import numpy as np
+    k = np.asarray(kpoints, float).reshape(-1, 3)
+    n = len(k)
+    if n < 2:
+        return None
+    fr = np.mod(np.round(k, 6), 1.0)
+    fr[fr > 1 - 1e-6] = 0.0
+    mesh, shift = [], []
+    for i in range(3):
+        u = np.unique(np.round(fr[:, i], 5))
+        m = len(u)
+        for s in (0, 1):
+            if np.allclose(u, (np.arange(m) + 0.5 * s) / m, atol=2e-5):
+                break
+        else:
+            return None
+        mesh.append(m)
+        shift.append(s)
+    if int(np.prod(mesh)) != n or len(np.unique(np.round(fr, 5), axis=0)) != n:
+        return None
+    import spglib
+    cell = (structure.lattice.matrix, structure.frac_coords, [s.Z for s in structure.species])
+    mapping, _ = spglib.get_ir_reciprocal_mesh(mesh, cell, is_shift=shift, is_time_reversal=True,
+                                               symprec=symprec)
+    return int(len(np.unique(mapping))), int(n), [int(x) for x in mesh]
+
+
 def report_dielectric_symmetry(cwd, eps_inf, eps_static, dirs):
     """介电张量偏离点群对称的诊断（只报告：2D 路径会重新读 OUTCAR，这里改值传不过去）。"""
     st, src = tensor_structure(cwd, dirs)

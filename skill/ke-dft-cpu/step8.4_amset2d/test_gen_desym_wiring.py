@@ -291,5 +291,92 @@ class FullGridWasteGuardTests(unittest.TestCase):
         self.assertFalse(self.G5B.FULL_GRID_FORCE)
 
 
+class FullGridFactorTests(unittest.TestCase):
+    """patch_full_grid_factor（V124）：vasprun 是全网格时出厂 factor 按 IBZ 口径换算 ——
+    全网格 / IBZ 两条路径落在同一张插值网格上；旧行为（全网格直接 f=10）每方向多出一截。
+    实例：WSe2/WS2 单层全网格 6075/6627 点 f=10 -> ~299×299×37（3.3M 点），验证密度只要 ~253×253×31。"""
+
+    @staticmethod
+    def _grid(mesh, shift=(0, 0, 0)):
+        import numpy as np
+        g = (np.array(list(np.ndindex(*mesh)), float) + 0.5 * np.array(shift)) / np.array(mesh)
+        return g - np.rint(g)                                  # VASP 的 (-0.5, 0.5] 写法
+
+    @staticmethod
+    def _ibz(st, mesh):
+        import numpy as np
+        import spglib
+        cell = (st.lattice.matrix, st.frac_coords, [s.Z for s in st.species])
+        mapping, grid = spglib.get_ir_reciprocal_mesh(mesh, cell, is_shift=[0, 0, 0])
+        return grid[np.unique(mapping)] / np.array(mesh, float)
+
+    def _run(self, mod, st, kpts, **glob):
+        import json
+        import pymatgen.io.vasp.outputs as O
+
+        class _VR:
+            def __init__(self, *a, **k):
+                self.actual_kpoints = [list(map(float, x)) for x in kpts]
+                self.final_structure = st
+        glob.setdefault("INTERPOLATION_FACTOR", 10)
+        glob.setdefault("INTERPOLATION_FACTOR_EXPLICIT", False)
+        saved = {k: getattr(mod, k) for k in glob}
+        old = O.Vasprun
+        O.Vasprun = _VR
+        try:
+            for k, v in glob.items():
+                setattr(mod, k, v)
+            out = Path(tempfile.mkdtemp())
+            f, mesh = mod.apply_mesh_min(out / "vasprun.xml", out)
+            return f, mesh, json.loads((out / "interpolation_info.json").read_text())
+        finally:
+            O.Vasprun = old
+            for k, v in saved.items():
+                setattr(mod, k, v)
+
+    def test_detect_full_grid(self):
+        import ke_common as kc
+        st = tsg.mos2_aligned()
+        r = kc.full_grid_ibz_count(st, self._grid([12, 12, 3]))
+        self.assertEqual(r, (len(self._ibz(st, [12, 12, 3])), 432, [12, 12, 3]))
+        self.assertIsNone(kc.full_grid_ibz_count(st, self._ibz(st, [12, 12, 3])))   # IBZ 列表
+        self.assertIsNone(kc.full_grid_ibz_count(st, self._grid([12, 12, 3])[1:]))  # 缺一个点
+        r = kc.full_grid_ibz_count(tsg.gan_std(), self._grid([4, 4, 4], (1, 1, 1)))  # 平移 MP
+        self.assertEqual(r[1:], (64, [4, 4, 4]))
+
+    def _paths(self, mod, st, grid, **glob):
+        f_full, m_full, i_full = self._run(mod, st, self._grid(grid), **glob)
+        f_ibz, m_ibz, i_ibz = self._run(mod, st, self._ibz(st, grid), **glob)
+        self.assertTrue(i_full["full_grid"])
+        self.assertEqual(i_full["nk_ir"], len(self._ibz(st, grid)))
+        self.assertFalse(i_ibz["full_grid"])
+        self.assertEqual(i_ibz["factor_start"], 10)            # IBZ 路径行为不变
+        self.assertTrue(i_full["satisfied"] and i_ibz["satisfied"])
+        self.assertLess(f_full, 10)
+        old = mod._interp_mesh(st, i_full["nk"], 10)            # 旧行为：全网格直接 f=10
+        # 两条路径同一张网格（差一两个奇数格点的步长粒度），旧行为每方向多出一截
+        self.assertLessEqual(abs(int(m_full[0]) - int(m_ibz[0])), 4, (m_full, m_ibz))
+        self.assertGreater(int(old[0]), int(m_full[0]) + 8, (old, m_full))
+        return m_full
+
+    def test_2d_full_grid_matches_ibz_path(self):
+        m = self._paths(G14, tsg.mos2_aligned(), [12, 12, 3], MESH_MIN=81, MESH_MIN_KZ=3, MESH_MIN_DK=0,
+                        MESH_MAX=400, MESH_MIN_FMAX=150)
+        self.assertGreaterEqual(int(m[0]), 81)
+
+    def test_3d_full_grid_matches_ibz_path(self):
+        m = self._paths(G10, tsg.gan_std(), [6, 6, 4], MESH_MIN=39, MESH_MIN_KZ=None, MESH_MAX=200,
+                        MESH_MIN_FMAX=60)
+        self.assertGreaterEqual(int(m[0]), 39)
+
+    def test_explicit_factor_not_scaled(self):
+        st = tsg.mos2_aligned()
+        f, mesh, info = self._run(G14, st, self._grid([12, 12, 3]), INTERPOLATION_FACTOR_EXPLICIT=True,
+                                  MESH_MIN=81, MESH_MIN_KZ=3, MESH_MIN_DK=0, MESH_MAX=400, MESH_MIN_FMAX=150)
+        self.assertEqual(f, 10)
+        self.assertFalse(info["full_grid"])
+        self.assertEqual(list(mesh), [int(x) for x in G14._interp_mesh(st, 432, 10)])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
