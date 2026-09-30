@@ -1,0 +1,47 @@
+# 超算配置：3090 GPU 服务器（8×RTX3090，Ubuntu22.04，已装 SLURM 24.05.8）
+# SLURM 分区：cpu192（CPU，56 逻辑/28 物理核，默认，MaxCPUsPerNode=44 限核）+ gpu（GPU，6 卡）。
+# 已撤掉 fakeslurm 垫片，tf 直接走真 sbatch/squeue/scancel（remote_path_prefix 只注入
+# ~/software/pybin 的 python/python3/vaspkit 软链，供 gen 脚本用 numpy/pymatgen/vaspkit）。
+name: local  # 沙盒本地测试
+ssh_host: ""   # 沙盒本地测试
+template_map: {}
+
+# ============================================================================
+# VASP 6.6.0 GPU 版（OpenACC）提交规范
+# ============================================================================
+# 二进制：~/software/vasp.6.6.0/bin/{vasp_std, vasp_gam, vasp_ncl}
+#   编译：NVIDIA HPC-SDK 24.11（nvfortran）+ CUDA 12.6 + SDK 自带 OpenMPI 4.1.5
+#         arch/makefile.include.nvhpc_acc → -gpu=cc86,cuda12.6 -fast -Mwarperf
+#         FFTW 用干净目录 ~/software/fftw_clean（lib+fftw3.f/fftw3.h，避免 conda MPI 头冲突）
+#   QD 四精度：$(NVHPC)/compilers/extras/qd（SDK 自带）
+# 运行环境（submit 模板里已固化，勿删）：
+#   NVHPC=/home/wangchaoyue852/software/nvhpc_dl/nvhpc_2024_2411_Linux_x86_64_cuda_12.6/install_components/Linux_x86_64/24.11
+#   OMPI=$NVHPC/comm_libs/12.6/openmpi4/openmpi-4.1.5
+#   PATH=$NVHPC/compilers/bin:$OMPI/bin:$NVHPC/cuda/12.6/bin:$PATH
+#   LD_LIBRARY_PATH=$NVHPC/compilers/lib:$OMPI/lib:$NVHPC/math_libs/12.6/lib64:\
+#     $NVHPC/cuda/12.6/lib64:$NVHPC/compilers/extras/qd/lib:~/software/fftw_clean/lib:...
+# 提交模板：setting/3090/templates/
+#   submit_std_{0d,2d,3d}.tpl      → vasp.6.6.0/bin/vasp_std
+#   submit_ncl_{2d,3d}.tpl         → vasp.6.6.0/bin/vasp_ncl
+#   step1_opt/submit_std_2d.tpl    → vasp.6.6.0/bin/vasp_std（GPU 原生支持变胞弛豫，无需 optcell 补丁）
+#   SBATCH 关键：--gres=gpu:1 --ntasks-per-node=1 --cpus-per-task=4
+#     （1 MPI rank 绑 1 张 GPU；GPU 作业可用 gpu 分区或默认 cpu192 + --gres=gpu:1）
+#   SLURM 24.05.8 已修 GPU 记账（GresUsed 正确增减、CUDA_VISIBLE_DEVICES 正常分配）。
+# ⚠️ RTX3090 为消费级卡：FP64 只有 ~1/64 的 FP32 且无 ECC，VASP（双精度 DFT）小体系
+#   加速有限（OUTCAR 可见 "scaLAPACK ... only on CPU"、GPU 利用率 9~26%）。
+#   大体系（数百原子）才能体现 GPU 版优势；小体系建议跑 jzzn CPU。
+# amset（S7_deform/S7.1_read/S8_kappa）：gen 脚本已按主机自适应 conda 路径：
+#   3090 → /home/wangchaoyue852/miniconda3 + conda activate amset
+#   jzzn → /public/home/wangchao/miniconda3 + conda activate amset_clean
+# ============================================================================
+
+# ---- 集群级默认（可被项目 project_setting 覆盖）----
+work_dir: /home/wangchaoyue852/taskflow/work
+conda_sh: /home/wangchaoyue852/miniconda3/etc/profile.d/conda.sh
+conda_env: mace-gpu
+amset_env: amset   # amset 专用环境（amset deform/read/run）
+# MACE 权重目录（MACE 技能自动注入 step.conf 的 MACE_MODEL_DIR；项目可覆盖）。
+mlff_model_dir: /home/wangchaoyue852/mlff_models
+# VASP POTCAR 库根目录 + 凸包参考相共享目录（自动注入 step.conf，切超算自动跟着走）
+potcar_dir: /home/wangchaoyue852/software/vasp_pseudopotentials
+references_dir: /home/wangchaoyue852/taskflow/work/convex_hull_refs

@@ -16,10 +16,12 @@ mace_local_venv/
 # ---- 运行时产物 / 测试输出（tf 生成，不进仓库）----
 tf_test/**/result/
 tf_test/**/log/
-test/tf_test/
 test/_si_backup/
-test/sandbox/
 test/unihamgnn/
+# 沙盒夹具（test/tf_test/ 的 POSCAR+project_setting、test/sandbox/tf.yaml）已纳入版本管理；
+# 只忽略其中的运行态文件（autozt 每轮写：状态缓存/进度/审计/快照）
+test/tf_test/**/.tf_*
+test/sandbox/.tf_*
 .tf_fetched
 .tf_monitor.out
 .tf_monitor.log

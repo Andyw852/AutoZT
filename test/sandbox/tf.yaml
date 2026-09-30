@@ -1,0 +1,32 @@
+host: ""
+# 本地沙盒：纯本地测试配置，不连任何超算（CLI 冒烟测试夹具）
+project_roots:
+  - /home/wangchao/software/AutoZT/test/tf_test
+# 覆盖技能默认集群（skill.yaml defaults.hpc=jzzn 会让 host_eff 回退到 jzzn 去 ssh）；
+# 内联 hpc 使 dhpc 无 ssh_host -> host_eff=None -> 纯本地（沙盒测试必需）
+task_types:
+  band-dft-cpu: {hpc: {name: local, ssh_host: ""}}
+  defect-dft-cpu: {hpc: {name: local, ssh_host: ""}}
+  elastic-dft-cpu: {hpc: {name: local, ssh_host: ""}}
+  ke-dft-cpu: {hpc: {name: local, ssh_host: ""}}
+  kl-dft-cpu: {hpc: {name: local, ssh_host: ""}}
+  kl-mlff-cpu: {hpc: {name: local, ssh_host: ""}}
+  kl-mlff-gpu: {hpc: {name: local, ssh_host: ""}}
+  mlff: {hpc: {name: local, ssh_host: ""}}
+  opt-dft-cpu: {hpc: {name: local, ssh_host: ""}}
+  opt-mlff-cpu: {hpc: {name: local, ssh_host: ""}}
+  opt-mlff-gpu: {hpc: {name: local, ssh_host: ""}}
+  phonon-dft-cpu: {hpc: {name: local, ssh_host: ""}}
+  phonon-mlff-cpu: {hpc: {name: local, ssh_host: ""}}
+  phonon-mlff-gpu: {hpc: {name: local, ssh_host: ""}}
+  te-screen: {hpc: {name: local, ssh_host: ""}}
+  unihamgnn: {hpc: {name: local, ssh_host: ""}}
+  cohp-cogito: {hpc: {name: local, ssh_host: ""}}
+  device-thermal: {hpc: {name: local, ssh_host: ""}}
+  device-thermal-fem: {hpc: {name: local, ssh_host: ""}}
+  device-zt: {hpc: {name: local, ssh_host: ""}}
+  eph-qe-cpu: {hpc: {name: local, ssh_host: ""}}
+  fit-fc-thermal: {hpc: {name: local, ssh_host: ""}}
+  kl-gpumd-3090: {hpc: {name: local, ssh_host: ""}}
+  phonon-lifetime: {hpc: {name: local, ssh_host: ""}}
+  zt-dft-cpu: {hpc: {name: local, ssh_host: ""}}

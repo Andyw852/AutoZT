@@ -1,0 +1,16 @@
+# 项目设置（就近优先：从材料目录向上找最近的 project_setting）
+# v1.9.9：新建的技能默认【不参与自动推进】——init 只是把配置建好，
+# 不等于你想现在就算它。想让本技能跟着 auto_advance 自动开算，改成 true：
+#     tf -tt <技能> -p <材料> auto on      （或直接把下面这行改 true）
+# 手动 autozt start / retry / rerun 不受本开关影响，随时可以单独跑。
+auto_advance: false
+# 路径占位符：{matdir}=材料目录 {mat}=材料名 {root}=本地项目根
+base_dir: "{matdir}"
+result_dir: "{matdir}/result"     # autozt fetch 回拉目的地（每步一个子目录）
+log_dir: "{matdir}/log"           # 该项目的操作日志 tf.log
+# work_dir 缺省继承项目配置 tf_<项目名>.yaml 里的类型定义；只在要为这个
+# 项目单独换超算工作根时才取消注释（优先级高于类型配置）：
+# work_dir: /public/home/wangchao/Fullerene_Network/fullerene_network/test
+# fetch 回拉的文件清单：v1.11 起由技能 skill.yaml 的 fetch_files 自描述；
+# 项目要覆盖时再取消注释、写自己的清单（否则继承技能的 fetch_files）。
+# fetch_files: [INCAR, POSCAR, POTCAR, KPOINTS, KPOINTS_OPT, kpath.json, submit.sh, OUTCAR, CONTCAR, EIGENVAL, vasprun.xml, queue.out]

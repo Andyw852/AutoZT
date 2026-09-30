@@ -1,0 +1,14 @@
+# 项目配置：tf_<项目名>.yaml（文件名全局唯一，禁止与其他项目重复）
+# 本文件放在项目文件夹的 project_setting/ 下；local_root 缺省 = project_setting 的父目录。
+# 未写的字段自动继承全局 tf.yaml 里同 key 类型的定义。
+task_types:
+  kl-gpumd-3090:
+    local_root: ".."   # 只发现本材料；整批管请到上级目录 tf init
+    work_dir: /public/home/wangchao/Fullerene_Network/fullerene_network/test
+    # local_root: ".."     # 技能子目录布局(<材料>/<技能>/project_setting)下写 ".."
+                       # = 只发现本材料；缺省会扫到同级所有兄弟材料
+    # skill_dir: skill/bd  # 缺省继承全局；项目有专用脚本时写相对本目录的路径
+    # hpc: jzzn
+    # gen_need: [incar.tpl, submit_std.tpl]
+    # steps:               # 缺省继承全局；项目流程不同就写自己的
+    #   - {name: step1_PBE_opt, label: S1_opt, check: outcar_relax, gen: gen_step1_PBE_opt.py}

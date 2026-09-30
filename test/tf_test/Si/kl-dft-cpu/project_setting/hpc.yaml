@@ -1,0 +1,19 @@
+# 超算配置（创建项目时由 autozt init 复制为 project_setting/hpc.yaml，按项目改）
+name: local  # 沙盒本地测试
+ssh_host: ""   # 沙盒本地测试
+# 提交模板已集中到 setting/jzzn/templates/（逻辑名即文件名），不再需要 template_map。
+# 换超算 = 改 name（或项目 hpc.yaml 的 name），提交模板自动切到 setting/<name>/templates/。
+# 项目级/步骤级覆盖仍放 project_setting/templates/（优先级最高）。
+template_map: {}
+
+# ---- 集群级默认（可被项目 project_setting 覆盖）----
+work_dir: /public/home/wangchao/Fullerene_Network/work
+conda_sh: /public/home/wangchao/miniconda3/etc/profile.d/conda.sh
+# MACE 实际走 venv（非 conda env）；带 "/" 会被 env_src 当 venv 路径激活。
+conda_env: /public/home/wangchao/venvs/mace_cpu
+amset_env: amset_clean   # amset 专用环境（amset deform/read/run）
+# MACE 权重目录（MACE 技能自动注入 step.conf 的 MACE_MODEL_DIR；项目可覆盖）。
+mlff_model_dir: /public/home/wangchao/software/mace/mlff_models
+# VASP POTCAR 库根目录 + 凸包参考相共享目录（自动注入 step.conf，切超算自动跟着走）
+potcar_dir: /public/home/wangchao/software/vasp_pseudopotentials
+references_dir: /public/home/wangchao/convex_hull_refs
