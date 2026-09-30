@@ -1,0 +1,2701 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+relax_common.py — 公共技能池：结构优化 step1 引擎
+（详细接口契约见 skill/_common/README.md）
+
+各技能的 gen_step1_*.py 退化成一个薄壳，只声明"这个技能的策略"：
+
+    import relax_common as R
+    R.run(OUTDIR_SINGLE="step1_PBE_opt",
+          OUTDIR_PATTERN="step1%s_PBE_opt",
+          SCRIPT_NAME="gen_step1_PBE_opt.py",
+          CELL_POLICY="primitive",
+          MOL_BRANCH=True,
+          NEXT_STEP="gen_step2_static.py")
+
+run() 把 overrides 写进本模块的全局量再调 main()；键名必须在 DEFAULTS 里，
+写错会立刻报错而不是被静默忽略。所有键的含义见 DEFAULTS 旁边的注释。
+
+输入（运行目录 = 材料目录）：
+    POSCAR                      必需
+    incar_{0d,2d,3d}.tpl        按维度选，缺失回退 incar.tpl
+    submit_std_{0d,2d,3d}.tpl   同上
+    step.conf                   可选，[params] FUNC 等
+输出：
+    <OUTDIR>/{POSCAR,INCAR,KPOINTS,POTCAR,submit.sh,workflow_method.txt}
+    workflow_method.txt 里的 FUNC/GGA/IVDW/DIM/MAG 供 step2+ 继承
+退出码：成功 0；任何 sys.exit("[ERROR] ...") 非 0，tf 会显示最后一行。
+"""
+
+import math
+import os
+import re
+import subprocess
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from dim_common import (AXIS_NAMES, adaptive_parallel_tags,  # noqa: E402
+                        detect_dimension, force_kz1,
+                        resolve_tpl, validate_poscar)
+import stepconf  # noqa: E402
+try:                       # 结构体检第五条：数值微畸变审计 + 对称化（公共池同目录）
+    import symmetry_audit  # noqa: E402
+except Exception:          # noqa: BLE001 —— 审计不可用绝不阻断 gen
+    symmetry_audit = None
+try:                       # 结构体检四条：重叠 / 悬挂 / 计量比 / 层厚（公共池同目录）
+    import structure_health  # noqa: E402
+except Exception:          # noqa: BLE001 —— 体检不可用绝不阻断 gen
+    structure_health = None
+
+# =====================================================================
+#                           用户配置区
+# =====================================================================
+
+# 结构优化泛函 —— 【不要改这里】。
+# 真正生效的值来自项目的 step.conf：
+#     <材料>/<技能>/project_setting/templates/step.conf 的  [params] FUNC =
+#   "auto"   : 嗅探 incar_*.tpl 里写死的 GGA/IVDW 反推；都没写就用下面的默认值
+#   "pbe-d3" : PBE + DFT-D3(BJ)，写入 GGA=PE、IVDW=12
+#   "pbesol" : PBEsol，不启用经验色散修正，写入 GGA=PS
+#   "pbe"    : 纯 PBE，无色散修正，写入 GGA=PE
+# 本脚本每次 gen 都被 tf 从 skill 库覆盖推送，改这里对单个项目无效。
+# 查看/修改：  tf -tt bd -p <材料> -j 1 conf [--set params.FUNC=pbe-d3]
+FUNC_DEFAULT = "pbesol"
+FUNC = FUNC_DEFAULT      # main() 里按 step.conf 解析后重新赋值
+
+# VASPKIT 设置
+RUN_VASPKIT = True
+VASPKIT_EXE = "vaspkit"
+KSCHEME = "2"       # VASPKIT: 1=Monkhorst-Pack, 2=Gamma-centered
+KSPACING = "0.03"   # VASPKIT 倒空间 K 点间距
+
+# ---- 维度自动识别（2D / 3D）----
+# "auto": 按 POSCAR 真空层判定 —— 沿某晶轴的最大真空间隙 >= VACUUM_MIN 即认定 2D。
+#         判定结果决定用哪套模板（在父目录按后缀选取，缺失时回退到无后缀旧名）：
+#             2D -> incar_2d.tpl + submit_std_2d.tpl   3D -> incar_3d.tpl + submit_std_3d.tpl
+#         并把 DIM=2D/3D 写进 workflow_method.txt，step2/3/4 据此选各自的
+#         submit_std_* / submit_ncl_* 模板，全程无需人工切换。
+#         检出 >=2 个真空方向（1D/0D）会直接报错交人工。
+# "2d" / "3d": 强制指定，跳过检测。
+DIMENSION = "auto"
+VACUUM_MIN = 8.0     # Å；2D 常用真空 15~25 Å，8 Å 足以与层状体相的层间距区分
+
+# 2D 时变胞约束的实现流派（务必与所用 VASP 二进制匹配！两种补丁互不兼容）：
+#   "optcell_file" : 补丁读运行目录下的 OPTCELL 文件（submit_std_2d.tpl 注释所述、
+#                    vasp.6.4.3-optcell 的流派）。脚本会把 INCAR 里的 IOPTCELL 行
+#                    转换成 OPTCELL 文件并【删除该行】—— VASP>=6.2 遇到不认识的
+#                    INCAR 标签会直接罢工，留着它反而跑不起来。
+#   "ioptcell_tag" : 补丁读 INCAR 的 IOPTCELL 标签，原样保留，不写 OPTCELL 文件。
+#   "lattice_constraints" : VASP 6.5+ 官方标签 LATTICE_CONSTRAINTS（P1-4）：
+#                    写 ".TRUE. .TRUE. .FALSE." 放开面内、冻结 c。比 IOPTCELL 更正统，
+#                    但它按【笛卡尔方向】置零应力分量，故要求 c ∥ z；且 6.5.0 起才在
+#                    IBRION=1/2 下被读取 —— 旧版会静默忽略 → ISIF=3 连真空一起弛豫、
+#                    真空塌缩。所以本模式要求能确认 VASP 版本（见 _vasp_version_from_text）。
+#   "none"         : 两者都不做（自行处理，如 ISIF=2 + 能量-面积扫描）。
+CELL_CONSTRAINT_2D = "auto"
+
+# ###################################################################
+# ★ 三段式结构优化 ★
+# ###################################################################
+# 为什么要分段：一上来就 ISIF=3 + CG，离子位置和晶胞两组自由度耦合在一起，
+# CG 的线搜索会同时试探原子位移和晶格应变，很容易在一次 trial step 里把结构
+# 甩出去（OSZICAR 上表现为能量一步涨好几 eV，然后来回震荡耗光 NSW）。
+# 拆开之后每一段只解一个问题，收敛快且稳：
+#
+#   a  ISIF=2  IBRION=2  (2D 去掉 IOPTCELL)  固定胞，先把原子弛豫干净
+#   b  ISIF=3  IBRION=2  (2D 加 IOPTCELL)    放开面内 xx/yy/xy，c 冻结
+#   c  ISIF=3  IBRION=1  (2D 加 IOPTCELL)    近极小值改准牛顿，收尾比 CG 快得多
+#
+# 3D 完全一样，只是三段都没有 IOPTCELL（整个胞自由弛豫）。
+#
+# 用法：
+#   python gen_step1_PBE_opt.py                 自动挑下一个该做的阶段
+#   python gen_step1_PBE_opt.py --stage a       指定阶段
+#   python gen_step1_PBE_opt.py --stage all     一次把 a 生成好（b/c 需前一段的 CONTCAR）
+# 目录名：step1a_PBE_opt / step1b_PBE_opt / step1c_PBE_opt
+# 结构来源：a <- ./POSCAR ；b <- step1a/CONTCAR ；c <- step1b/CONTCAR
+#
+# "single" = 旧行为：单目录 step1_PBE_opt，模板参数原样使用，不分段。
+RELAX_STAGES = "auto"          # "auto" | "single"
+
+# 变胞段（ISIF>=3）的 EDIFFG —— 2026-09-17 起改用【能量判据】。
+#   VASP 约定：EDIFFG<0 = 力判据（|F| 全小于该值才停）；EDIFFG>0 = 能量判据
+#   （相邻两步能量变化 < 该值就停，单位 eV）。
+#   为什么变胞段必须换能量判据（实测 Ti2S3 Z4-3-1，jzzn jobid 3847708）：
+#     该段起点晶胞恰好接近平衡（面内 +0.37 kB），离子力也很小，但 VASP 的 ISIF=3
+#     广义力（把晶胞自由度也算进去）判不过 -0.01，于是它一遍遍做无意义的 CG 试探：
+#     从第 3 步起【19 步内总能量只变 1e-7 eV】（完全平坦），VASP 硬撑到第 20 步，
+#     线搜索夹不到极小值，以 "ZBRENT: fatal error in bracketing" +
+#     "I REFUSE TO CONTINUE WITH THIS SICK JOB" 崩掉整个 S1（rc=1，前功尽弃）。
+#     改用能量判据后它在第 2 步就停（能量变化 < 1e-4 eV），不再空转。
+#   代价与兜底：能量判据可能在【力还没收干净】时就停，所以
+#     ① _cell_settled 额外要求末态最大力 < FORCE_TOL（见 CELL_FORCE_TOL_EV_A）；
+#     ② "晶胞到底到位没有" 一律由作业自身的稳定判据（Δ晶格 + 面内应力 + 力上限）
+#        和 S1 应力门禁去判，不再指望 VASP 单靠一个 EDIFFG 把两件事一起办了。
+#   旧证据仍然有效（段 a 必须用 -0.05 之外更紧的力判据，否则晶胞差几个 kbar）：
+#     Si 金刚石故意放大 2% 时，-0.05 末态仍有 -1.19 kB，且从 CONTCAR 重开一遍
+#     max|Δ晶格| = 0.000000 Å —— 完全幂等，多跑几遍治不了。现在的对策是
+#     CELL_FORCE_TOL_EV_A=0.01（= 旧 -0.01 的力判据本身）+ 应力判据。
+CELL_STAGE_EDIFFG = "1E-4"           # eV，正数 = 能量判据；只用于 ISIF>=3 的段
+# 变胞段末态最大力上限 (eV/Å)。2026-09-18 由 0.02 收紧回 0.01（= 原 EDIFFG=-0.01 的力判据）：
+#   位移法的力对平衡结构的残余力很敏感（pheasy 拟合要逐帧扣掉平衡帧的力），松一倍会让
+#   "力没洗干净"的晶格流到 S2/S4。Ti2S3 实测末态 max|F| = 0.0000 eV/Å，收紧不会造成麻烦。
+CELL_FORCE_TOL_EV_A = 0.01
+
+# 各阶段覆盖的 INCAR 标签。None 表示删除该标签。
+#   段 a（ISIF=2，只动原子）保持 -0.05 力判据做高通量粗安顿，快；后面变胞段会把力收下去。
+#   段 b/c（ISIF=3，动晶胞）用能量判据，理由见上面 CELL_STAGE_EDIFFG 的注释。
+STAGE_SPEC = {
+    "a": {"_desc": "固定胞，弛豫原子位置",
+          "ISIF": "2", "IBRION": "2", "POTIM": "0.3",
+          "EDIFFG": "-0.05", "NSW": "200", "IOPTCELL": None},
+    "b": {"_desc": "放开晶胞（2D 仅面内），CG",
+          "ISIF": "3", "IBRION": "2", "POTIM": "0.3",
+          "EDIFFG": CELL_STAGE_EDIFFG, "NSW": "200"},
+    "c": {"_desc": "准牛顿收尾",
+          "ISIF": "3", "IBRION": "1", "POTIM": "0.3",
+          "EDIFFG": CELL_STAGE_EDIFFG, "NSW": "100"},
+}
+STAGE_ORDER = ["a", "b", "c"]
+# ###################################################################
+
+# 2D 时把 VASPKIT 生成的 KPOINTS 真空方向细分强制改为 1。
+# 原因：VASPKIT 102 生成的是三维网格，c≈15~20 Å 时 0.03 的间距常给出 kz=2 ——
+# 对 2D 无物理意义且白翻倍机时。
+FORCE_KZ1_2D = True
+
+# ENCUT 设置
+# None：自动取 ceil(ENCUT_FACTOR * max(ENMAX))，并向上取整到 10 eV
+# 数值：手动指定 ENCUT，例如 MANUAL_ENCUT = 450
+MANUAL_ENCUT = None
+ENCUT_FACTOR = 1.5
+FALLBACK_ENCUT = "300"
+
+# 体系名称与作业名
+# None：根据 POSCAR 第一行/元素组成自动生成
+SYSTEM_OVERRIDE = None
+JOBNAME_OVERRIDE = None
+
+# ---- submit.sh Slurm 参数覆盖（渲染模板后再补丁；None=不改，保持模板原值）----
+# submit.sh 来源不变（仍从 submit_std_2d/3d.tpl 渲染）；这里只在渲染后覆盖三行：
+#   #SBATCH --nodes= / --ntasks-per-node= / --qos=
+SUBMIT_OVERRIDE = {
+    "nodes":           None,   # 或整数
+    "ntasks_per_node": None,   # 或整数
+    "qos":             None,   # 或 "regular" 等字符串
+}
+
+# ---- DFT+U 自动判定（按 POSCAR 元素）----
+# "auto": POSCAR 含下方 U_VALUES 表里的 d/f 元素就注入 LDAU 系列
+#         (LDAU=.TRUE., LDAUTYPE=2, 逐元素 LDAUL/LDAUU/LDAUJ)；否则不写 U。
+#         判定结果会【覆盖】incar.tpl 里手写的 LDAU* 标签（后处理注入，与磁性同套路）。
+# True  : 强制加 U（元素不在表里会报错，请用 U_OVERRIDE 手动给）。
+# False : 完全不加 U。
+# ★ 重要：U 是强依赖体系/轨道的经验参数。下表给的是文献里常见的起点值
+#   （偏 Materials Project 的 GGA+U 一档），【务必按你的体系自查文献核对】。
+#   不确定的元素宁可先不填（设 None 跳过）也不要瞎套。
+AUTO_U = "auto"            # "auto" | True | False
+U_OVERRIDE = {}           # 例: {"Fe": 5.3, "O": 0.0}；写了就优先于内置表(0/None=该元素不加U)
+# ---- [PATCH-KE-2026] 阴离子门控 ----
+# U_VALUES 里的 3d 金属 U 值出自对【氧化物】生成焓的拟合(Wang/Maxisch/Ceder
+# PRB 73,195107)，Materials Project 也只在最负电性元素为 O/F 时才写 LDAU。
+# 硫化物/硒化物/碲化物套这套 U 属于超出标定范围的外推（实测会把 1H-CrS2 从
+# 半导体压成金属）。门控开启后：AUTO_U="auto" 时必须同时命中 U_GATE_ANIONS
+# 才加 U。想强制加 U 就设 AUTO_U=True，或把 U_ANION_GATE 设成 False。
+U_ANION_GATE = True
+U_GATE_ANIONS = {"O", "F"}
+LDAUTYPE = 2              # 2=Dudarev(只需有效 U=U-J，最常用)；1=Liechtenstein
+# ---- [PATCH-U4D5D] 每元素有效 U 值（eV），按【来源】分三层 --------------
+# None 或缺失 = 表里没有这个元素；0.0 = 明确判定为不加 U。两者语义不同，见下。
+#
+# 第一层 U_VALUES_MP —— 有标定依据的，就这 8 个
+#   来源：Wang/Maxisch/Ceder, PRB 73, 195107（对氧化物生成焓拟合）。
+#   Materials Project 至今也只给这 8 个元素在【氧化物/氟化物】里加 U，
+#   4d/5d 里只有 Mo 和 W。这不是遗漏，MP 文档写明"目前只对过渡金属氧化物
+#   体系标定过"。
+#   ★ 即便这 8 个也别当真理：Moore et al., PRM 8, 014409 (2024) 用线性响应
+#     重算，W 与 MP 的 6.2 差了 4.7 eV；换新值后 MP 对含 W 化合物的能量修正
+#     从 -4.437 eV/atom 降到 0.12 eV/atom。
+U_VALUES_MP = {
+    "V": 3.25, "Cr": 3.7, "Mn": 3.9, "Fe": 5.3,
+    "Co": 3.32, "Ni": 6.2,
+    "Mo": 4.38, "W": 6.2,          # 4d/5d 里仅有的两个
+}
+
+# 第二层 U_VALUES_EXTRA —— 文献示例值，没有系统标定，MP 根本不给稀土加 U。
+#   用它们发文章前请自己查文献并在方法部分交代出处。Ce 尤其有争议。
+U_VALUES_EXTRA = {
+    "Ce": 4.5, "Pr": 5.0, "Nd": 5.0, "Sm": 5.0, "Eu": 5.0,
+    "Gd": 6.0, "Tb": 5.0, "Dy": 5.0, "Ho": 5.0, "Er": 5.0, "Tm": 5.0, "Yb": 5.0,
+    "U": 4.0, "Np": 4.0, "Pu": 4.0,
+}
+
+# 第三层 U_NO_U_ELEMS —— 明确【不该】加 U 的 d 元素，显式记 0。
+#   d0/d1 空壳（Sc Ti Y Zr Hf La Lu）：没有需要修正的局域 d 电子。
+#   d10 满壳（Cu Zn Ag Cd Au Hg）：加 U 只是把整条 d 带刚性下移，能带形状和
+#     电荷分布都不变，物理上毫无改善，但总能变了 —— 纯粹破坏形成能可比性。
+#   记 0 而不是"留空"，是为了和"没标定值"区分开（见 U_UNKNOWN_POLICY）。
+U_NO_U_ELEMS = {
+    "Sc", "Ti", "Y", "Zr", "Hf", "La", "Lu",     # 空 d 壳
+    "Cu", "Zn", "Ag", "Cd", "Au", "Hg",          # 满 d 壳
+}
+
+# 剩下的 d/f 元素（Nb Ta Tc Ru Rh Pd Re Os Ir Pt、以及 EXTRA 之外的稀土）
+# 三层都不在 = 【无标定值】。它们不会被静默按 0 处理，走 U_UNKNOWN_POLICY。
+#   warn （缺省）列出来并继续；error 当场退出（高通量批量建议用这个）；
+#   ignore 恢复打补丁前的静默行为。
+U_UNKNOWN_POLICY = "warn"
+U_UNKNOWN_LAST = []        # 上次 decide_u 判出的"无标定值"元素，供留痕用
+
+U_VALUES = dict(U_VALUES_MP)
+U_VALUES.update(U_VALUES_EXTRA)
+U_VALUES.update({e: 0.0 for e in U_NO_U_ELEMS})
+# 轨道角量子数 LDAUL：d 元素=2，f 元素=3。脚本按元素在 D_ELEMS/F_ELEMS 里自动定。
+
+# ---- 磁性自动判定（按 POSCAR 元素）----
+# "auto": POSCAR 含下方 MAG_ELEM_MOMENTS 里的元素（3d 过渡金属 / 4f 稀土 / 锕系）
+#         就按磁性处理：ISPIN=2 + 按元素给高自旋初始 MAGMOM；否则 ISPIN=1 不写 MAGMOM。
+#         判定结果会【覆盖】incar.tpl 里手写的 ISPIN/MAGMOM（脚本渲染后再后处理注入）。
+# True / False: 强制磁性 / 强制非磁。
+# 说明：
+#   * 初始磁矩是 FM 型高自旋起点。若真实基态是 AFM 等特定磁序，请用
+#     MAGMOM_OVERRIDE 逐元素改，或干脆改成手写整条 MAGMOM 的方式跑 step1；
+#     后续 step2/step3 会继承【收敛后】的逐离子磁矩，能保号、保 AFM。
+#   * 起点给磁但体系实为非磁时，SCF 会自己塌缩到 0——step2 检测到塌缩会
+#     自动降回 ISPIN=1，不需要人工干预（代价只是 step1 慢一点）。
+#   * step1/step2 始终共线（vasp_std）；SOC 到 step3/step4 才开（那里也是自动判定）。
+AUTO_MAG = "auto"            # "auto" | True | False
+MAGMOM_OVERRIDE = {}         # 例: {"Mn": 5.0, "In": 0.0, "Se": 0.0}（写了就优先于内置表）
+MAG_ELEM_MOMENTS = {
+    # 3d 过渡金属（高自旋起点；Ti/Cu 等弱磁候选也列入——误报只是白开 ISPIN=2，
+    # 会自动塌缩并被 step2 降级；漏报才是静默错误）
+    "Sc": 1.0, "Ti": 1.0, "V": 3.0, "Cr": 4.0, "Mn": 5.0,
+    "Fe": 4.0, "Co": 3.0, "Ni": 2.0, "Cu": 1.0,
+    # 4f 稀土（La/Lu 无 f 磁矩不列）
+    "Ce": 1.0, "Pr": 2.0, "Nd": 3.0, "Pm": 4.0, "Sm": 5.0, "Eu": 7.0,
+    "Gd": 7.0, "Tb": 6.0, "Dy": 5.0, "Ho": 4.0, "Er": 3.0, "Tm": 2.0, "Yb": 1.0,
+    # 常见磁性锕系
+    "U": 2.0, "Np": 3.0, "Pu": 4.0,
+}
+# 重元素表（Z>=50）：step1 只用来打提示，真正开 SOC 是 step3/step4 的事
+SOC_ELEMS = {
+    "In", "Sn", "Sb", "Te", "I", "Xe", "Cs", "Ba",
+    "La", "Ce", "Pr", "Nd", "Pm", "Sm", "Eu", "Gd", "Tb", "Dy", "Ho", "Er",
+    "Tm", "Yb", "Lu", "Hf", "Ta", "W", "Re", "Os", "Ir", "Pt", "Au", "Hg",
+    "Tl", "Pb", "Bi", "Po", "At", "Rn", "Fr", "Ra", "Ac", "Th", "Pa", "U",
+    "Np", "Pu", "Am", "Cm",
+}
+
+# ---- LMAXMIX 自动判定（按 POSCAR 元素）----
+# 含 f 元素 -> LMAXMIX=6；含 d 元素 -> LMAXMIX=4；否则 2。
+# 判定结果会【覆盖】incar.tpl 里手写的 LMAXMIX（与磁性同样的后处理注入方式）。
+# 说明：只要 POTCAR 价电子里有 d/f 通道就该升，宁多勿少——LMAXMIX 偏大只是
+# 混合器多存一点密度分量，几乎不增加代价；偏小则 d/f 体系 SCF 收敛变差甚至震荡。
+D_ELEMS = {
+    # 3d
+    "Sc", "Ti", "V", "Cr", "Mn", "Fe", "Co", "Ni", "Cu", "Zn",
+    # 4d
+    "Y", "Zr", "Nb", "Mo", "Tc", "Ru", "Rh", "Pd", "Ag", "Cd",
+    # 5d（La/Lu 的 5d 也在此归为 d；若同时命中 F_ELEMS 以 f 优先）
+    "La", "Lu", "Hf", "Ta", "W", "Re", "Os", "Ir", "Pt", "Au", "Hg",
+    # 主族里 POTCAR 常带 d 半芯态的（Ga_d/Ge_d/In_d/Sn_d/Tl_d/Pb_d/Bi_d 等）
+    "Ga", "Ge", "In", "Sn", "Tl", "Pb", "Bi",
+}
+F_ELEMS = {
+    # 4f 镧系
+    "Ce", "Pr", "Nd", "Pm", "Sm", "Eu", "Gd", "Tb", "Dy", "Ho", "Er",
+    "Tm", "Yb",
+    # 5f 锕系
+    "Ac", "Th", "Pa", "U", "Np", "Pu", "Am", "Cm",
+}
+
+# =====================================================================
+#                         用户配置区结束
+#  （Slurm 队列/核数/VASP 路径请直接修改 submit_std.tpl，
+#    NCORE/KPAR 等其余 VASP 参数请直接修改 incar.tpl）
+# =====================================================================
+
+# =====================================================================
+#  技能可覆盖的策略键（gen_step1_*.py 通过 relax_common.run(**overrides) 传入）
+#  下面是缺省值；run() 只接受这里出现过的键，写错键名立刻报错。
+# =====================================================================
+OUTDIR_SINGLE = "step1_PBE_opt"      # single 模式的输出目录名
+OUTDIR_PATTERN = "step1%s_PBE_opt"   # 分段模式的目录名模板，%s 是段号 a/b/c
+SCRIPT_NAME = "gen_step1_PBE_opt.py" # 只用于提示信息（"跑完后执行 xx --stage b"）
+NEXT_STEP = "gen_step2_static.py"    # 最后一段跑完的下一步提示
+JOBNAME_SUFFIX = "_s1opt"            # 作业名后缀：<label><JOBNAME_SUFFIX>
+
+# 取胞策略：'primitive'（能带/声子）/ 'standard'（弹性，IEEE 取向）/ 'none'（缺陷、分子）
+CELL_POLICY = "primitive"
+STD_CELL = "primitive_standard"      # CELL_POLICY='standard' 时：primitive_standard | conventional
+CELL_SYMPREC = 1e-2                  # 对称性识别容差（Å）
+CELL_ANGLE_TOL = 5.0                 # 对称性识别角度容差（度）
+CELL_BACKUP = "POSCAR_original"      # 改胞前的原结构备份名
+
+MOL_BRANCH = False                   # True: 检出 0D（>=2 个真空方向）时交给 mol_common
+# 2D 结构的真空不在 c 轴时怎么办：
+#   "error"   报错交人工（band-dft-cpu 旧行为）
+#   "rotate"  自动 3-轮换格矢把真空换到 c（elastic-dft-cpu 旧行为，需要 pymatgen）
+VACUUM_AXIS_POLICY = "error"
+
+# 分段弛豫的实现方式：
+#   "in_job"    一个目录、一个作业，作业内按 STAGE_ORDER 顺序跑（run_relax.sh）
+#               —— 排一次队、段间自动接力 CONTCAR、每段各存一份 OUTCAR.sN，
+#                  某段收敛就跳过后面的段。缺省。
+#   "tf_stages" 每段一个 tf 步骤（step1a/b/c），tf 层面推进（旧 band-dft-cpu 行为）
+#               —— 段间可换资源/可单独 retry 一段，代价是排三次队。
+#   "single"    不分段，模板里的 ISIF/IBRION 原样用
+STAGE_MODE = "in_job"
+STALL_MIN = 180                      # run_relax.sh 看门狗：输出停滞几分钟判卡死（0=关）
+                                     # 2026-09-17 由 60 提到 180：见 CONF_SPEC 里 STALL_MINUTES 的实测依据
+
+# 「某段已收敛就跳过后续段」——注意这个开关只对【不改晶胞】的段有意义。
+#   _converged() 判的是 OUTCAR 里的 "reached required accuracy"，那是【力】判据；
+#   变胞段（ISIF>=3）管的是晶胞/应力，力收敛完全说明不了应力收敛。
+#   实测教训：材料的段1(a)（ISIF=2 固定胞）力已收敛，末态残余力 RMS 0.022 eV/Å，
+#   但应力仍有 8 kbar —— 而旧逻辑据此把段2(b)/段3(c) 跳过并写成 *.done，
+#   结果晶胞从未弛豫，而所有标记都显示"已完成"，谁都不会再去跑它。
+#   现在：变胞段永远不被力判据跳过；被跳过的段写 .skipped（不是 .done），
+#   retry 时仍会被执行。
+EARLY_EXIT_ON_CONVERGENCE = True     # 不改晶胞的段：已收敛就跳过后续段
+PRESS_TOL_KB = 1.0                   # 变胞段稳定判据③(3D)：|external pressure| < 此值 (kB)
+# 2D 的稳定判据③改用【面内分量】（2026-09-17 修正）：
+#   原因见 run_relax.sh 里 _last_inplane 的注释 —— P=(σxx+σyy+σzz)/3，而 2D 的 σzz 是
+#   被 IOPTCELL 冻结的真空方向应力，不随面内弛豫下降，于是 |P| 判据系统性偏松：
+#   实测 Mo2S3 旧结构 P=-7.93（面内 -11.97/-10.62）、弛豫后 P=-0.51（面内 -0.06/-0.16），
+#   而 σzz 前后几乎不变（-1.21 → -1.30）。|P|<1.0 实际只等价于层内约 4 kbar，
+#   比 S4 的 STRESS_2D_THR=0.5 kbar 松 8 倍 —— 会出现"S1 说稳定、S4 门禁不过"。
+#   取 0.2 kB（胞口径）≈ 0.59 kbar 层内（h⊥/d≈2.9）—— 略高于 S4 门禁的 0.5 kbar，
+#   这样"过得 S4 门禁"的材料一定会过 S1 判据，不会出现"S1 判 FAIL 而 S4 门禁放行"的
+#   自相矛盾（实测 Mo2S3 收敛到面内 0.161 kB = 0.47 kbar，正好卡在两种口径之间）。
+#   ★ 若某材料 h⊥/d 明显偏离 2.9（真空特别厚/层特别薄），在 step.conf 里按
+#      INPLANE_STRESS_TOL_KB = STRESS_2D_THR / (h⊥/d) 显式设。
+# 变胞段（ISIF>=3）的 ENCUT 系数：2.0×max(ENMAX)，为消除 Pulay 应力偏差。
+#   依据（2026-09-17 实测，同一几何只改 ENCUT）：390(1.51×)→507(1.96×) 各应力分量
+#   各向同性平移 +1.0 kB；507→624(2.41×) 变化 <0.02 kB。S2/S4 不受影响（Pulay 不影响力）。
+CELL_STAGE_ENCUT_FACTOR = 2.0
+INPLANE_TOL_KB = 0.2                 # 兜底值（算不出 h⊥/d 时用）
+TOL_LAYER_KB = 0.4                   # 2D 面内应力的【层内口径】阈值(kbar)，
+                                     # 比 S4 的 STRESS_2D_THR=0.5 留余量
+
+# ---- 结构体检第五条：数值微畸变审计（2026-09-20；step.conf 可覆盖）----
+#   背景：S1 弛豫后常有 a/b 差 ~8e-6 A、gamma 偏 120 度 ~8e-5 度的数值微畸变，
+#   使 spglib 在 symprec=1e-5 只给 Amm2(#38)/4 ops、>=1e-4 才给 P-6m2(#187)/12 ops，
+#   对称操作少 2/3 -> pheasy 允许六方破缺 -> ZA 被算成线性。
+#   判据（user 指定）：symprec=1e-5 与 1e-4 空间群不一致 => 触发对称化建议。
+#   SYMMETRY_AUDIT:  off | warn | error   （S1 gen 审计输入结构；warn 只告警）
+#   SYMMETRY_SYMMETRIZE: off | on         （对称化默认关，用 symmetry_audit.py 显式触发）
+#   巡检/对称化引擎：skill/_common/opt/symmetry_audit.py（CLI + 可被 gen/check 调用）
+SYMMETRY_AUDIT = "warn"              # off | warn | error
+SYMMETRY_SYMMETRIZE = "off"          # off | on
+SYMMETRY_AUDIT_SYMPREC = 1e-4        # 对称化容差：取两容差中识别出高对称的那个
+SYMMETRY_ENERGY_TOL_MEV = 1.0        # 能量确认阈值 meV/atom（2 个单点）
+# 结构体检【四条】（2026-09-21，user）：最近邻重叠 / CN=1 悬挂 / 命名 vs 计量比 / z 跨度 vs 层数。
+#   off | warn | error；默认 warn（只告警，不阻断 gen）。引擎见 skill/_common/opt/structure_health.py。
+#   为什么要有：AlN(Al5N)、Zn5O3、BeO 这几个坏种子此前是【手工】拦下的；不落成代码，
+#   下一批材料进来没人拦（判定口径与标定见 tests/suite_structure_health.py）。
+STRUCTURE_HEALTH = "warn"            # off | warn | error
+# 变胞段【多遍循环】参数 —— 把"手动 cp CONTCAR POSCAR 重跑直到零应力"固化成自动流程。
+#   为什么必须多遍：① VASP 的 EDIFFG<0 只判【力】不判【应力】，单遍跑完晶胞常差几个 kbar；
+#                  ② 体积/形状一变，平面波基组的 G 矢量集合就变了（Pulay 应力），
+#                     必须重启一遍让基组与新晶胞自洽。
+#   实测依据（Mg4C60 expcif ISIF=3 那次，3 遍收敛到 P=+0.07 kbar）：
+#     第1遍 ΔV=0.978% 力未收敛 | 第2遍 ΔV=0.063% 力未收敛 | 第3遍 ΔV=0.005% 力收敛，
+#     且末遍 max|Δ晶格分量| = 0.0013 Å —— 正好落在 CELL_PASS_TOL=0.002 之内。
+CELL_PASS_MAX = 3                    # 变胞段最多重复几遍
+CELL_PASS_TOL = 0.002                # 稳定判据②：本遍晶格矢量分量最大变化 (Å)
+
+METHOD_FILE = "workflow_method.txt"
+
+FUNC_MAP = {
+    "pbe-d3": {
+        "GGA": "PE",
+        "IVDW": "12",
+        "VDW_LINE": "IVDW   = 12            # PBE + DFT-D3(BJ)",
+    },
+    "pbesol": {
+        "GGA": "PS",
+        "IVDW": None,
+        "VDW_LINE": "# IVDW disabled: PBEsol geometry",
+    },
+    "pbe": {
+        "GGA": "PE",
+        "IVDW": None,
+        "VDW_LINE": "# IVDW disabled: plain PBE geometry",
+    },
+}
+
+# 本脚本能填充的全部占位符（模板里出现才填，不出现就跳过）
+KNOWN_PLACEHOLDERS = {"SYSTEM", "ENCUT", "GGA", "VDW_LINE", "JOBNAME"}
+
+# step.conf 的 [params] 里本脚本认识的键 -> (默认值, 类型)
+# step.conf 的 [params] 里本模块认识的键。
+# ★ stepconf 对"没声明过的键"是直接报错的（StepConf.__init__ 的 unknown 检查），
+#   所以池子里所有会读 step.conf 的模块必须共用这一份 spec、只解析一次。
+#   mol_common 不再自己 stepconf.load()，改从 STEP_PARAMS 取。
+CONF_SPEC = {
+    "FUNC": (FUNC_DEFAULT, "str"),
+    "HAS_ADSORBATE": (False, "bool"),
+    "FIXED_CELL": (False, "bool"),
+    # 2D 专用逃生阀：默认 false = 2D 优化必须真正弛豫面内晶格（IOPTCELL/OPTCELL/
+    #   LATTICE_CONSTRAINTS 三选一）。设 true 才允许"固定胞 + 面内应力留着"的旧行为。
+    #   背景：2026-09-16 批量核查发现 jzz P1/P2 全部 step1 都是固定胞，
+    #   面内层内口径应力 −2 ~ −62 kbar（拉伸），κ 与 ZA 都不可信。
+    "ALLOW_2D_FIXED_CELL": (False, "bool"),
+    "USES_MOLECULAR_REFERENCE": (False, "bool"),
+    # 晶胞策略：step.conf 可覆盖技能默认（默认 None = 不设置，用技能 R.run 默认）。
+    #   CELL_POLICY: primitive | standard | none
+    #   STD_CELL:    primitive_standard | conventional （仅 CELL_POLICY=standard 生效）
+    #   VACUUM_AXIS_POLICY: error | rotate （仅 2D 生效）
+    "CELL_POLICY": (None, "str"),
+    "STD_CELL": (None, "str"),
+    "VACUUM_AXIS_POLICY": (None, "str"),
+    # P2-3：非对称 2D（Janus / 单面吸附）的偶极修正。
+    #   on  : 写 LDIPOL=.TRUE. / IDIPOL=3 / DIPOL=0.5 0.5 0.5 并把 ISYM 压到 0
+    #   off : 显式不加（模板里的注释行保留注释状态）
+    #   auto: 结构没有面外镜面、或上下两端元素不同 → 开
+    # 开了之后 S2/S4 必须跟 S1 用同一套（它们的 gen 从 S1 的 INCAR 抄这几个标签），
+    # 否则取力/弛豫处在不同静电边界条件下，力常数没有意义。
+    "DIPOLE_2D": (None, "str"),
+    # run_relax.sh 看门狗阈值。2026-09-17 由 60 提到 180：当天有 3 个材料（Mo2S3 A4-3-1、
+    #   AlN kl、AlN ke）都在段 2(b) 的 SCF 中被判"OUTCAR 与 OSZICAR 同时 60 分钟无增长"
+    #   而杀掉，但单步 EDDAV 只有 1~3 秒、节点也不同 —— 是文件系统/节点侧的瞬时停顿。
+    #   A4-3-1 提到 180 后一次跑通，所以默认值按证据放宽。
+    "STALL_MINUTES": (180, "int"),
+    "INPLANE_STRESS_TOL_KB": (0.2, "float"),   # 2D 变胞稳定判据③：面内分量阈值(kB,胞口径)
+    # 变胞段（ISIF>=3）的两个数值旋钮，2026-09-17 加（Ti2S3 ZBRENT 故障的产物）：
+    #   CELL_STAGE_EDIFFG     变胞段 EDIFFG。正数 = 能量判据(eV)；负数 = 力判据(eV/Å)。
+    #   CELL_FORCE_TOL_EV_A   变胞段末态最大力上限(eV/Å)，超过则判定本遍未稳定、再跑一遍。
+    "CELL_STAGE_EDIFFG": ("1E-4", "str"),
+    "CELL_FORCE_TOL_EV_A": (0.01, "float"),
+    "MOL_KPOINTS": ("gamma", "str"),     # 以下 MOL_* 由 mol_common 使用
+    "MOL_ISPIN": ("auto", "str"),
+    "MOL_MOMENT": ("1.0", "str"),
+    "MOL_DIPOL": ("auto", "str"),
+    "MOL_ENCUT_FLOOR": ("0", "str"),
+    "MOL_ALLOW_3D_TPL": ("false", "str"),
+    # ---- [PATCH-UCONS] DFT+U（原来只能改 relax_common.py，五技能一起变）----
+    #   AUTO_U        auto | true | false
+    #   U_OVERRIDE    元素:U，如  U_OVERRIDE = Mn:3.9 Fe:0
+    #   U_ANION_GATE  true/false，关掉阴离子门控（非氧化物也按表加 U）
+    #   U_GATE_ANIONS 门控放行的阴离子，如  U_GATE_ANIONS = O F S
+    "AUTO_U": (None, "str"),
+    "U_OVERRIDE": (None, "elemmap"),
+    "U_ANION_GATE": (None, "bool"),
+    "U_GATE_ANIONS": (None, "words"),
+    "U_UNKNOWN_POLICY": (None, "str"),   # warn | error | ignore
+    # ---- [PATCH-MAG-CONF] 磁性（原来只能改 relax_common.py，五技能一起变）----
+    #   AUTO_MAG        auto | true | false
+    #   MAGMOM_OVERRIDE 元素:初始磁矩，如  MAGMOM_OVERRIDE = Cr:0 Mn:5
+    #                   0 = 该元素不算磁性候选（全部为 0 且无其它磁元素 -> ISPIN=1）
+    "AUTO_MAG": (None, "str"),
+    "MAGMOM_OVERRIDE": (None, "elemmap"),
+    # ---- [PATCH-UCONS] 跨步骤键：opt-dft-cpu step3 的参数若写在项目共用的
+    #      templates/step.conf 里，会被三层合并带进 step1，必须声明才不报错。----
+    "CALC_FORMATION": (None, "str"), "CALC_INTERCALATION": (None, "str"),
+    "MU": (None, "elemmap"), "GUEST_ELEMENT": (None, "str"),
+    "MU_GUEST": (None, "float"), "HOST_ENERGY": (None, "float"),
+    "HOST_DIR": (None, "str"), "HOST_FORMULA": (None, "elemmap"),
+    # ---- 结构体检第五条：数值微畸变审计 / 对称化（2026-09-20）----
+    #   SYMMETRY_AUDIT        off | warn | error（默认 warn：只告警，不阻断）
+    #   SYMMETRY_SYMMETRIZE   off | on       （默认 off：对称化必须显式开）
+    #   SYMMETRY_AUDIT_SYMPREC   对称化容差（默认 1e-4）
+    #   SYMMETRY_ENERGY_TOL_MEV  能量确认阈值 meV/atom（默认 1.0）
+    #   引擎见公共池 skill/_common/opt/symmetry_audit.py。
+    "SYMMETRY_AUDIT": ("warn", "str"),
+    "SYMMETRY_SYMMETRIZE": ("off", "str"),
+    "SYMMETRY_AUDIT_SYMPREC": (1e-4, "float"),
+    "SYMMETRY_ENERGY_TOL_MEV": (1.0, "float"),
+    # ---- 结构体检四条：最近邻重叠 / CN 悬挂 / 命名计量比 / 层厚（2026-09-21）----
+    #   STRUCTURE_HEALTH  off | warn | error（默认 warn：只告警，不阻断）
+    #   引擎见公共池 skill/_common/opt/structure_health.py。
+    "STRUCTURE_HEALTH": ("warn", "str"),
+}
+
+STEP_PARAMS = {}      # step.conf [params] 的解析结果（resolve_func 里填）
+STEP_SUBMIT = {}      # step.conf [submit] 的解析结果（load_step_params 里填）
+
+
+def sniff_func_from_tpl(tpl_path: Path):
+    """FUNC=auto 时：从 incar 模板里【写死的】GGA/IVDW 反推泛函；推不出返回 None。
+    模板里写的是 GGA = {{GGA}} 占位符（正常情况）时也返回 None。"""
+    values = {}
+    for line in Path(tpl_path).read_text(encoding="utf-8-sig").splitlines():
+        s = line.strip()
+        if not s or s.startswith(("#", "!")):
+            continue
+        for mark in ("#", "!"):
+            if mark in s:
+                s = s.split(mark, 1)[0].strip()
+        for part in s.split(";"):
+            if "=" not in part:
+                continue
+            k, v = part.split("=", 1)
+            k, v = k.strip().upper(), v.strip()
+            if "{{" in v:            # 占位符，等本脚本填，不算"写死"
+                continue
+            values[k] = v
+    gga = values.get("GGA", "").upper().strip("\"'")
+    ivdw = values["IVDW"].split()[0] if values.get("IVDW") else None
+    if not gga:
+        return None
+    for name, spec in FUNC_MAP.items():
+        if spec["GGA"] == gga and spec["IVDW"] == ivdw:
+            return name
+    sys.exit("[ERROR] %s 里写死的 GGA=%s、IVDW=%s 不属于任何受支持泛函（%s）。\n"
+             "        请在 step.conf 的 [params] 里显式写 FUNC =。"
+             % (Path(tpl_path).name, gga, ivdw or "(none)",
+                ", ".join(FUNC_MAP)))
+
+
+def load_step_params(step_name=None):
+    """解析 step.conf 的 [params]，结果存进 STEP_PARAMS（全局，只解析一次）。
+    没有 step.conf 时留空字典。返回是否读到了文件。
+
+    ★ 池子里所有要读 step.conf 的模块都从这里取值，不要各自 stepconf.load()——
+      stepconf 对没在 spec 里声明的键会直接报错，各自解析必然互相踩。"""
+    if not (Path.cwd() / stepconf.CONF_NAME).is_file():
+        globals()["STEP_PARAMS"] = {}
+        globals()["STEP_SUBMIT"] = {}
+        return False
+    conf = stepconf.load(CONF_SPEC, step_name)   # 有文件就必须解析成功
+    globals()["STEP_PARAMS"] = dict(conf.params)
+    # [submit] 键连字符转下划线，与 SUBMIT_OVERRIDE / stepconf.apply_submit 对齐
+    globals()["STEP_SUBMIT"] = {k.replace("-", "_"): v
+                                for k, v in conf.submit.items()}
+    return True
+
+
+def resolve_func(incar_tpl: Path, step_name=None):
+    """返回 (func, 来源说明)。优先级：step.conf 显式值 > 模板反推 > 脚本默认值。"""
+    if not STEP_PARAMS:
+        load_step_params(step_name)
+    if not STEP_PARAMS:
+        want, where = FUNC_DEFAULT, "脚本默认值（无 step.conf，老材料兼容）"
+    else:
+        want, where = STEP_PARAMS.get("FUNC"), stepconf.CONF_NAME
+    want = (want or FUNC_DEFAULT).strip().lower()
+    if want != "auto":
+        if want not in FUNC_MAP:
+            sys.exit("[ERROR] %s 的 FUNC=%r 无效，只允许：auto, %s"
+                     % (where, want, ", ".join(FUNC_MAP)))
+        return want, where
+    import method_select
+    try:
+        from pymatgen.core import Structure
+        structure = Structure.from_file(str(Path.cwd() / "POSCAR"))
+        dimension = detect_dimension(Path.cwd() / "POSCAR", VACUUM_MIN)[0]
+    except Exception as exc:
+        sys.exit(f"[ERROR] FUNC=auto 无法读取结构并确定维度：{exc}；请显式指定 FUNC")
+    return method_select.default_method(
+        structure, dimension,
+        has_adsorbate=STEP_PARAMS.get("HAS_ADSORBATE", False),
+        uses_molecular_reference=STEP_PARAMS.get("USES_MOLECULAR_REFERENCE", False))
+
+
+def apply_step_params():
+    """把 step.conf 里本模块自己要用的键落到全局量（MOL_* 由 mol_common 取用）。"""
+    v = STEP_PARAMS.get("STALL_MINUTES")
+    if STEP_PARAMS.get("FIXED_CELL", False):
+        globals()["STAGE_MODE"] = "single"
+    if v is not None:
+        globals()["STALL_MIN"] = int(v)
+    _ip = STEP_PARAMS.get("INPLANE_STRESS_TOL_KB")
+    if _ip is not None:
+        try:
+            _ipf = float(_ip)
+        except (TypeError, ValueError):
+            sys.exit("[ERROR] INPLANE_STRESS_TOL_KB=%r 不是数" % _ip)
+        if _ipf <= 0:
+            sys.exit("[ERROR] INPLANE_STRESS_TOL_KB 必须 > 0，当前 %r" % _ip)
+        globals()["INPLANE_TOL_KB"] = _ipf
+
+    # ---- 变胞段数值旋钮（CELL_STAGE_EDIFFG / CELL_FORCE_TOL_EV_A）----
+    #   为什么需要按材料覆盖：能量判据的合适取值与体系的软硬有关，过松会让晶胞提前收手，
+    #   过紧又退回"力判据空转"。默认 1E-4 eV 是本批 2D 材料实测出来的。
+    g = globals()
+    _ce = STEP_PARAMS.get("CELL_STAGE_EDIFFG")
+    if _ce not in (None, ""):
+        _ces = str(_ce).strip()
+        try:
+            float(_ces)
+        except ValueError:
+            sys.exit("[ERROR] CELL_STAGE_EDIFFG=%r 不是数（正数=能量判据 eV，负数=力判据 eV/Å）"
+                     % _ce)
+        g["CELL_STAGE_EDIFFG"] = _ces
+        for _k in ("b", "c"):            # STAGE_SPEC 里存的是定义时的字符串副本，必须一起改
+            if _k in STAGE_SPEC:
+                STAGE_SPEC[_k]["EDIFFG"] = _ces
+        print("[..] step.conf 覆盖变胞段 EDIFFG = %s" % _ces)
+    _cfv = STEP_PARAMS.get("CELL_FORCE_TOL_EV_A")
+    if _cfv not in (None, ""):
+        try:
+            _cff = float(_cfv)
+        except (TypeError, ValueError):
+            sys.exit("[ERROR] CELL_FORCE_TOL_EV_A=%r 不是数" % _cfv)
+        if _cff <= 0:
+            sys.exit("[ERROR] CELL_FORCE_TOL_EV_A 必须 > 0，当前 %r" % _cfv)
+        g["CELL_FORCE_TOL_EV_A"] = _cff
+        print("[..] step.conf 覆盖变胞段力上限 = %s eV/Å" % _cff)
+
+    # ---- [PATCH-UCONS] step.conf 覆盖 DFT+U 设置（按材料生效）----
+    # 原来 AUTO_U / U_OVERRIDE / U_ANION_GATE 只在本文件里（五个技能共用），
+    # 想给单个材料放行 U 只能改公共池，改了又会影响其它技能。
+    v = STEP_PARAMS.get("AUTO_U")
+    if v not in (None, ""):
+        s = str(v).strip().lower()
+        if s in ("auto",):
+            g["AUTO_U"] = "auto"
+        elif s in ("true", ".true.", "yes", "on", "1"):
+            g["AUTO_U"] = True
+        elif s in ("false", ".false.", "no", "off", "0"):
+            g["AUTO_U"] = False
+        else:
+            sys.exit("[ERROR] step.conf 的 AUTO_U=%r 非法，只允许 auto / true / false" % v)
+        print("[..] step.conf 覆盖 AUTO_U = %r" % g["AUTO_U"])
+    v = STEP_PARAMS.get("U_OVERRIDE")
+    if v:
+        g["U_OVERRIDE"] = dict(v)
+        print("[..] step.conf 覆盖 U_OVERRIDE = %s" % g["U_OVERRIDE"])
+    v = STEP_PARAMS.get("U_ANION_GATE")
+    if v is not None and "U_ANION_GATE" in g:
+        g["U_ANION_GATE"] = bool(v)
+        print("[..] step.conf 覆盖 U_ANION_GATE = %s" % g["U_ANION_GATE"])
+    v = STEP_PARAMS.get("U_GATE_ANIONS")
+    if v and "U_GATE_ANIONS" in g:
+        g["U_GATE_ANIONS"] = set(v)
+        print("[..] step.conf 覆盖 U_GATE_ANIONS = %s" % sorted(g["U_GATE_ANIONS"]))
+    v = STEP_PARAMS.get("U_UNKNOWN_POLICY")
+    if v and "U_UNKNOWN_POLICY" in g:
+        s = str(v).strip().lower()
+        if s not in ("warn", "error", "ignore"):
+            sys.exit("[ERROR] step.conf 的 U_UNKNOWN_POLICY=%r 非法，"
+                     "只允许 warn / error / ignore" % v)
+        g["U_UNKNOWN_POLICY"] = s
+        print("[..] step.conf 覆盖 U_UNKNOWN_POLICY = %s" % s)
+
+    # ---- [PATCH-MAG-CONF] step.conf 覆盖磁性设置（按材料生效）----
+    # 与 DFT+U 同款语义：显式声明优先于公共池默认值。磁序是物理选择，
+    # 不该由公共池替所有材料拍板 —— 1H-CrX2 非磁、1T-CrX2 与 Mn 硫属体系
+    # 有磁，同一套全局常量伺候不了。
+    v = STEP_PARAMS.get("AUTO_MAG")
+    if v not in (None, ""):
+        s = str(v).strip().lower()
+        if s == "auto":
+            g["AUTO_MAG"] = "auto"
+        elif s in ("true", ".true.", "yes", "on", "1"):
+            g["AUTO_MAG"] = True
+        elif s in ("false", ".false.", "no", "off", "0"):
+            g["AUTO_MAG"] = False
+        else:
+            sys.exit("[ERROR] step.conf 的 AUTO_MAG=%r 非法，"
+                     "只允许 auto / true / false" % v)
+        print("[..] step.conf 覆盖 AUTO_MAG = %r" % g["AUTO_MAG"])
+    v = STEP_PARAMS.get("MAGMOM_OVERRIDE")
+    if v:
+        g["MAGMOM_OVERRIDE"] = {k: float(x) for k, x in dict(v).items()}
+        print("[..] step.conf 覆盖 MAGMOM_OVERRIDE = %s" % g["MAGMOM_OVERRIDE"])
+
+    # ---- 结构体检第五条：数值微畸变审计 / 对称化 开关（2026-09-20）----
+    _sa = STEP_PARAMS.get("SYMMETRY_AUDIT")
+    if _sa is not None:
+        _sas = str(_sa).strip().lower()
+        if _sas not in ("off", "false", "0", "none", "warn", "error"):
+            sys.exit("[ERROR] step.conf 的 SYMMETRY_AUDIT=%r 非法，"
+                     "只允许 off / warn / error" % _sa)
+        g["SYMMETRY_AUDIT"] = "off" if _sas in ("false", "0", "none") else _sas
+        if g["SYMMETRY_AUDIT"] != "warn":
+            print("[..] step.conf 覆盖 SYMMETRY_AUDIT = %s" % g["SYMMETRY_AUDIT"])
+    _ss = STEP_PARAMS.get("SYMMETRY_SYMMETRIZE")
+    if _ss is not None:
+        _sss = str(_ss).strip().lower()
+        if _sss not in ("off", "false", "0", "on", "true", "1", "yes"):
+            sys.exit("[ERROR] step.conf 的 SYMMETRY_SYMMETRIZE=%r 非法，"
+                     "只允许 off / on" % _ss)
+        g["SYMMETRY_SYMMETRIZE"] = "off" if _sss in ("false", "0", "off") else "on"
+        if g["SYMMETRY_SYMMETRIZE"] == "on":
+            print("[..] step.conf 覆盖 SYMMETRY_SYMMETRIZE = on")
+    _sp = STEP_PARAMS.get("SYMMETRY_AUDIT_SYMPREC")
+    if _sp not in (None, ""):
+        try:
+            _spf = float(_sp)
+        except (TypeError, ValueError):
+            sys.exit("[ERROR] SYMMETRY_AUDIT_SYMPREC=%r 不是数" % _sp)
+        if _spf <= 0:
+            sys.exit("[ERROR] SYMMETRY_AUDIT_SYMPREC 必须 > 0，当前 %r" % _sp)
+        g["SYMMETRY_AUDIT_SYMPREC"] = _spf
+    _se = STEP_PARAMS.get("SYMMETRY_ENERGY_TOL_MEV")
+    if _se not in (None, ""):
+        try:
+            _sef = float(_se)
+        except (TypeError, ValueError):
+            sys.exit("[ERROR] SYMMETRY_ENERGY_TOL_MEV=%r 不是数" % _se)
+        if _sef <= 0:
+            sys.exit("[ERROR] SYMMETRY_ENERGY_TOL_MEV 必须 > 0，当前 %r" % _se)
+        g["SYMMETRY_ENERGY_TOL_MEV"] = _sef
+
+    # ---- 结构体检四条开关（2026-09-21）----
+    _sh = STEP_PARAMS.get("STRUCTURE_HEALTH")
+    if _sh is not None:
+        _shs = str(_sh).strip().lower()
+        if _shs not in ("off", "false", "0", "none", "warn", "error"):
+            sys.exit("[ERROR] step.conf 的 STRUCTURE_HEALTH=%r 非法，"
+                     "只允许 off / warn / error" % _sh)
+        g["STRUCTURE_HEALTH"] = "off" if _shs in ("false", "0", "none") else _shs
+        if g["STRUCTURE_HEALTH"] != "warn":
+            print("[..] step.conf 覆盖 STRUCTURE_HEALTH = %s" % g["STRUCTURE_HEALTH"])
+
+
+# step.conf 可覆盖的晶胞键 -> 合法值集合
+_CELL_KEYS = {
+    "CELL_POLICY": {"primitive", "standard", "none"},
+    "STD_CELL": {"primitive_standard", "conventional"},
+    "VACUUM_AXIS_POLICY": {"error", "rotate"},
+}
+
+
+def apply_cell_params():
+    """step.conf 覆盖晶胞策略（CELL_POLICY / STD_CELL / VACUUM_AXIS_POLICY），
+    含合法值校验与护栏告警；返回一行 provenance（无论是否覆盖都返回，供留痕）。
+
+    优先级：step.conf 显式值 > 技能 R.run 默认。必须在 ensure_cell() 之前调用。
+    晶胞与下游步骤强耦合，偏离技能默认时高声告警，但不阻断（尊重用户判断）。"""
+    g = globals()
+    skill_default = {k: g[k] for k in _CELL_KEYS}
+    changed = []
+    for key, allowed in _CELL_KEYS.items():
+        v = STEP_PARAMS.get(key)
+        if not v:                     # None（未设置）或空串 -> 用技能默认
+            continue
+        v = str(v).strip().lower()
+        if v not in allowed:
+            sys.exit("[ERROR] step.conf 的 %s=%r 非法，只允许：%s"
+                     % (key, v, ", ".join(sorted(allowed))))
+        if v != str(g[key]).strip().lower():
+            g[key] = v
+            changed.append((key, skill_default[key], v))
+    if changed:
+        print("[!!] 晶胞策略被 step.conf 覆盖（偏离本技能默认）：")
+        for k, old, new in changed:
+            print("     %s: 技能默认 %r -> step.conf %r" % (k, old, new))
+        print("     警告：晶胞取向/原胞化与下游步骤强耦合——")
+        print("       · 能带：高对称路径定义在原胞倒空间，改成 standard/none 可能错标路径；")
+        print("       · 弹性：C_ij 定义在标准取向，改成 primitive/none 会得到旋转过的张量；")
+        print("       · AMSET/电子热导：需少原子原胞做密网格插值，改成 none(超胞) 会折叠 BZ。")
+        print("     仅在你明确知道后果时使用；最终生效值已写入 %s。" % METHOD_FILE)
+    src = "step.conf 覆盖" if changed else "技能默认"
+    return ("CELL_POLICY=%s STD_CELL=%s VACUUM_AXIS_POLICY=%s (%s)"
+            % (g["CELL_POLICY"], g["STD_CELL"], g["VACUUM_AXIS_POLICY"], src))
+
+
+def validate_user_config():
+    """检查脚本顶部的用户配置。"""
+    if FUNC not in FUNC_MAP:
+        allowed = ", ".join(repr(x) for x in FUNC_MAP)
+        sys.exit(f"[ERROR] FUNC={FUNC!r} 无效，只允许：{allowed}\n"
+                 f"        改 step.conf 的 [params] FUNC =，不要改本脚本。")
+
+    if MANUAL_ENCUT is not None:
+        try:
+            value = float(MANUAL_ENCUT)
+        except (TypeError, ValueError):
+            sys.exit("[ERROR] MANUAL_ENCUT 必须是数字或 None")
+        if value <= 0:
+            sys.exit("[ERROR] MANUAL_ENCUT 必须大于 0")
+
+    if ENCUT_FACTOR <= 0:
+        sys.exit("[ERROR] ENCUT_FACTOR 必须大于 0")
+
+    if str(DIMENSION).lower() not in ("auto", "0d", "2d", "3d"):
+        sys.exit("[ERROR] DIMENSION 只允许 'auto' / '2d' / '3d'")
+    if CELL_CONSTRAINT_2D not in ("auto", "optcell_file", "ioptcell_tag",
+                                  "lattice_constraints", "none"):
+        sys.exit("[ERROR] CELL_CONSTRAINT_2D 只允许 'auto' / 'optcell_file' / "
+                 "'ioptcell_tag' / 'lattice_constraints' / 'none'")
+
+
+def sanitize_label(text: str) -> str:
+    label = re.sub(r"[^A-Za-z0-9_.-]+", "_", text.strip())
+    return label.strip("_.-") or "material"
+
+
+def read_poscar_identity(path: Path):
+    """从 POSCAR 读取标题和化学式，用于 SYSTEM 与作业名。"""
+    lines = path.read_text(encoding="utf-8-sig").splitlines()
+    if len(lines) < 7:
+        sys.exit(f"[ERROR] POSCAR 内容不完整：{path}")
+
+    title_token = sanitize_label(lines[0].split()[0]) if lines[0].split() else ""
+    species_line = lines[5].split()
+
+    if species_line and all(re.fullmatch(r"[+-]?\d+", x) for x in species_line):
+        species = []
+        counts = [int(x) for x in species_line]
+    else:
+        species = species_line
+        try:
+            counts = [int(x) for x in lines[6].split()]
+        except (ValueError, IndexError):
+            sys.exit("[ERROR] 无法读取 POSCAR 元素数量行")
+
+    if species and len(species) == len(counts):
+        formula = "".join(
+            element + (str(number) if number != 1 else "")
+            for element, number in zip(species, counts)
+        )
+    else:
+        formula = "material"
+
+    generic = {"POSCAR", "CONTCAR", "structure", "material"}
+    label = title_token if title_token and title_token not in generic else sanitize_label(formula)
+    return label, formula
+
+
+def _free_backup_path(base: Path) -> Path:
+    """POSCAR_original -> 已存在就 POSCAR_original_1 / _2 ...  绝不覆盖已有备份。"""
+    if not base.exists():
+        return base
+    i = 1
+    while True:
+        cand = base.with_name(f"{base.name}_{i}")
+        if not cand.exists():
+            return cand
+        i += 1
+
+
+def ensure_primitive(poscar: Path):
+    """
+    确认 POSCAR 是原胞。若是 N 倍超胞（N>1）:
+        1. 原文件备份成 CELL_BACKUP（已存在则加后缀，不覆盖）；
+        2. 把原胞写回 POSCAR，流程照常继续。
+    返回一段 provenance 字符串（没转换就返回 None）。
+    """
+    try:
+        from pymatgen.core import Structure
+        from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
+    except ImportError:
+        print("[WARN] 没装 pymatgen，跳过原胞检查。"
+              "若 POSCAR 是超胞，后面 gen_step3 会在生成高对称路径时报错。")
+        return None
+
+    raw = poscar.read_text(encoding="utf-8-sig")
+    if any(ln.strip()[:1].upper() == "S" for ln in raw.splitlines()[7:8]):
+        print("[WARN] POSCAR 带 Selective dynamics；若发生原胞转换，该标记会丢失")
+
+    try:
+        struct = Structure.from_file(str(poscar))
+        sga = SpacegroupAnalyzer(struct, symprec=CELL_SYMPREC,
+                                 angle_tolerance=CELL_ANGLE_TOL)
+        prim = sga.find_primitive()
+    except Exception as exc:
+        print(f"[WARN] 原胞检查失败（{exc}），按原样继续")
+        return None
+
+    ratio = struct.volume / prim.volume
+    spg = f"{sga.get_space_group_symbol()} (#{sga.get_space_group_number()})"
+
+    if ratio < 1.01:
+        print(f"[OK] POSCAR 已经是原胞（空间群 {spg}，{len(struct)} 原子）")
+        return None
+
+    n = int(round(ratio))
+    backup = _free_backup_path(poscar.with_name(CELL_BACKUP))
+    backup.write_text(raw, encoding="utf-8", newline="\n")
+
+    title = raw.splitlines()[0].strip() or "structure"
+    prim.to(filename=str(poscar), fmt="poscar")
+    lines = poscar.read_text(encoding="utf-8").splitlines()
+    lines[0] = f"{title} (primitive, {n}x reduced from {backup.name})"
+    poscar.write_text("\n".join(lines) + "\n", encoding="utf-8", newline="\n")
+
+    print(f"[!!] POSCAR 不是原胞：空间群 {spg}，体积是原胞的 {ratio:.2f} 倍")
+    print(f"     原结构 : {len(struct):3d} 原子, {struct.composition.formula}, "
+          f"V={struct.volume:.2f} Å³  -> 已备份为 {backup.name}")
+    print(f"     新 POSCAR: {len(prim):3d} 原子, {prim.composition.formula}, "
+          f"V={prim.volume:.2f} Å³  (原胞)")
+    print("     原因：能带的高对称路径定义在原胞倒空间里，超胞上的能带是折叠的。")
+    print("     若你【就是要】算超胞（缺陷/掺杂），把 CELL_POLICY 设成 none 并恢复备份。")
+    return (f"PRIMITIVE=converted ({n}x -> 1x, spacegroup {spg}, "
+            f"original saved as {backup.name})")
+
+
+def ensure_standardized(poscar: Path):
+    """
+    把 POSCAR 标准化到 IEEE/惯用取向（弹性张量框架要求），并【原地替换】。
+    原文件备份成 CELL_BACKUP；返回一段 provenance 字符串。
+    （从 skill/elastic-dft-cpu 的 gen_step1_std_opt.py 原样搬进公共池）
+    """
+    try:
+        from pymatgen.core import Structure
+        from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
+    except ImportError:
+        sys.exit("[ERROR] CELL_POLICY='standard' 必须有 pymatgen；请先 pip install pymatgen")
+
+    raw = poscar.read_text(encoding="utf-8-sig")
+    if any(ln.strip()[:1].upper() == "S" for ln in raw.splitlines()[7:8]):
+        print("[WARN] POSCAR 带 Selective dynamics；标准化会丢失该标记")
+
+    try:
+        struct = Structure.from_file(str(poscar))
+        sga = SpacegroupAnalyzer(struct, symprec=CELL_SYMPREC,
+                                 angle_tolerance=CELL_ANGLE_TOL)
+        spg_sym = sga.get_space_group_symbol()
+        spg_num = sga.get_space_group_number()
+        if STD_CELL == "conventional":
+            std = sga.get_conventional_standard_structure()
+        else:
+            std = sga.get_primitive_standard_structure()
+    except Exception as exc:
+        sys.exit("[ERROR] 标准化失败（试着放宽 CELL_SYMPREC）：%s" % exc)
+
+    if spg_num == 1:
+        print("[WARN] 识别为 P1（空间群 1）：输入未对齐对称或 CELL_SYMPREC 过紧。"
+              "C_ij 仍可算但独立分量最多、最耗时。")
+
+    backup = _free_backup_path(poscar.with_name(CELL_BACKUP))
+    backup.write_text(raw, encoding="utf-8", newline="\n")
+    title = raw.splitlines()[0].strip() or "structure"
+    std.to(filename=str(poscar), fmt="poscar")
+    lines = poscar.read_text(encoding="utf-8").splitlines()
+    lines[0] = "%s (%s standardized, spg %d)" % (title, STD_CELL, spg_num)
+    poscar.write_text("\n".join(lines) + "\n", encoding="utf-8", newline="\n")
+
+    print("[OK] 已标准化到 %s：空间群 %s (#%d, %s)"
+          % (STD_CELL, spg_sym, spg_num, sga.get_crystal_system()))
+    print("     %d 原子 -> %d 原子；原结构备份为 %s"
+          % (len(struct), len(std), backup.name))
+    return ("STD=%s (spacegroup %s #%d, crystal_system %s, original saved as %s)"
+            % (STD_CELL, spg_sym, spg_num, sga.get_crystal_system(), backup.name))
+
+
+def ensure_cell(poscar: Path):
+    """按 CELL_POLICY 处理输入胞，返回写进 workflow_method.txt 的 provenance。
+       'primitive' 原胞化（能带流程：高对称路径定义在原胞倒空间）
+       'standard'  标准化到 IEEE 取向（弹性流程：C_ij 定义在惯用晶轴）
+       'none'      不动（缺陷/超胞/分子）"""
+    if CELL_POLICY == "none":
+        print("[SKIP] CELL_POLICY='none'，不改动输入胞")
+        return None
+    if CELL_POLICY == "standard":
+        return ensure_standardized(poscar)
+    if CELL_POLICY == "primitive":
+        return ensure_primitive(poscar)
+    sys.exit("[ERROR] CELL_POLICY 只允许 'primitive' / 'standard' / 'none'，当前 = %r"
+             % CELL_POLICY)
+
+
+def build_params(label: str):
+    """本脚本"计算得来"的占位符值；模板里没出现的会被自动跳过。"""
+    method = FUNC_MAP[FUNC]
+    system = SYSTEM_OVERRIDE if SYSTEM_OVERRIDE else label
+    jobname = JOBNAME_OVERRIDE if JOBNAME_OVERRIDE else sanitize_label(f"{label}{JOBNAME_SUFFIX}")[:80]
+
+    return {
+        "SYSTEM": system,
+        "ENCUT": FALLBACK_ENCUT,
+        "GGA": method["GGA"],
+        "VDW_LINE": method["VDW_LINE"],
+        "JOBNAME": jobname,
+    }
+
+
+def render(template_path: Path, out_path: Path, params: dict):
+    """
+    填充模板：
+      - params 中的键在模板里"出现才填、没有就跳过"（模板可自由删占位符）；
+      - 若模板出现本脚本不认识的占位符，报错并列出可用占位符。
+    """
+    if not template_path.exists():
+        sys.exit(f"[ERROR] 找不到模板：{template_path}")
+
+    text = template_path.read_text(encoding="utf-8")
+    for key, val in params.items():
+        text = text.replace("{{" + key + "}}", str(val))
+
+    leftover = set(re.findall(r"\{\{(\w+)\}\}", text))
+    if leftover:
+        sys.exit(
+            f"[ERROR] {template_path.name} 含无法填充的占位符：{sorted(leftover)}\n"
+            f"        本脚本支持的占位符：{sorted(KNOWN_PLACEHOLDERS)}\n"
+            f"        其余参数请在模板中直接写死。"
+        )
+
+    out_path.write_text(text, encoding="utf-8", newline="\n")
+    print(f"[OK] {out_path.name}")
+
+
+def run_vaspkit_kpoints(exe: str, outdir: Path, kscheme: str, kspacing: str):
+    print(f"[..] VASPKIT 生成 KPOINTS：1 -> 102 -> {kscheme} -> {kspacing}")
+    subprocess.run(
+        [exe],
+        input=f"1\n102\n{kscheme}\n{kspacing}\n",
+        text=True,
+        cwd=outdir,
+        check=True,
+    )
+
+
+def run_vaspkit_potcar(exe: str, outdir: Path):
+    potcar = outdir / "POTCAR"
+    if potcar.exists():
+        print("[OK] POTCAR 已存在，跳过重新生成")
+        return
+
+    print("[..] VASPKIT 生成 POTCAR：1 -> 103")
+    subprocess.run(
+        [exe],
+        input="1\n103\n",
+        text=True,
+        cwd=outdir,
+        check=True,
+    )
+
+
+def encut_from_potcar(potcar: Path, factor: float) -> int:
+    vals = []
+    for line in potcar.read_text(errors="ignore").splitlines():
+        match = re.search(r"ENMAX\s*=\s*([\d.]+)", line)
+        if match:
+            vals.append(float(match.group(1)))
+
+    if not vals:
+        sys.exit(f"[ERROR] 在 {potcar} 中没有找到 ENMAX")
+
+    max_enmax = max(vals)
+    encut = int(math.ceil(factor * max_enmax / 10.0)) * 10
+    print(f"[..] POTCAR ENMAX：{', '.join(f'{x:.1f}' for x in vals)} eV")
+    print(f"[..] ENCUT = ceil({factor} x {max_enmax:.1f}) -> {encut} eV")
+    return encut
+
+
+def read_species_and_counts(path: Path):
+    """从 POSCAR 读 (元素符号列表, 各元素原子数)。VASP4 无符号行时符号为 None。"""
+    lines = path.read_text(encoding="utf-8-sig").splitlines()
+    line6 = lines[5].split()
+    if line6 and line6[0].lstrip("-").isdigit():
+        return None, [int(x) for x in line6]
+    return line6, [int(x) for x in lines[6].split()]
+
+
+def decide_magnetism(symbols, counts):
+    """返回 (magnetic, magmom_str_or_None, note)。magmom 为共线 per-species 压缩写法。"""
+    if AUTO_MAG is False:
+        return False, None, "AUTO_MAG=False 强制非磁"
+    if symbols is None:
+        return False, None, "POSCAR 无元素符号行(VASP4 格式)，无法自动判定，按非磁处理"
+
+    table = dict(MAG_ELEM_MOMENTS)
+    table.update({k: float(v) for k, v in MAGMOM_OVERRIDE.items()})
+    hits = [s for s in symbols if table.get(s, 0.0) != 0.0]
+
+    if AUTO_MAG is True and not hits and not MAGMOM_OVERRIDE:
+        # 强制磁性但表里没有该体系的元素——给不出合理起点
+        sys.exit("[ERROR] AUTO_MAG=True 但 POSCAR 元素都不在磁性表里，"
+                 "请用 MAGMOM_OVERRIDE 手动给初始磁矩")
+    if not hits:
+        return False, None, "元素 %s 均非磁性候选" % "/".join(symbols)
+
+    magmom = "  ".join("%d*%g" % (n, table.get(s, 0.0))
+                       for s, n in zip(symbols, counts))
+    return True, magmom, "检测到磁性候选元素 %s（高自旋 FM 起点）" % "/".join(sorted(set(hits)))
+
+
+def apply_magnetism_to_incar(incar_path: Path, magnetic: bool, magmom: str, note: str):
+    """后处理生成好的 INCAR：剔除模板里已有的 ISPIN/MAGMOM/NUPDOWN，注入自动判定结果。
+       这样无论 incar.tpl 里写没写磁性参数，最终 INCAR 都与判定一致。"""
+    keep = [ln for ln in incar_path.read_text(encoding="utf-8").splitlines()
+            if not re.match(r"\s*(ISPIN|MAGMOM|NUPDOWN)\s*=", ln, re.IGNORECASE)]
+    keep.append("")
+    keep.append("# ---- 磁性（gen_step1 按 POSCAR 自动判定：%s）----" % note)
+    if magnetic:
+        keep.append("ISPIN    = 2")
+        keep.append("MAGMOM   = %s" % magmom)
+    else:
+        keep.append("ISPIN    = 1")
+    incar_path.write_text("\n".join(keep) + "\n", encoding="utf-8", newline="\n")
+
+
+def decide_lmaxmix(symbols):
+    """按元素返回 (lmaxmix, note)。f 元素 -> 6；d 元素 -> 4；否则 2。"""
+    if symbols is None:
+        return 2, "POSCAR 无元素符号行(VASP4 格式)，无法自动判定，保守取 2"
+    f_hits = sorted(set(symbols) & F_ELEMS)
+    d_hits = sorted(set(symbols) & D_ELEMS)
+    if f_hits:
+        return 6, "含 f 元素 %s" % "/".join(f_hits)
+    if d_hits:
+        return 4, "含 d 元素 %s" % "/".join(d_hits)
+    return 2, "无 d/f 元素"
+
+
+def apply_lmaxmix_to_incar(incar_path: Path, lmaxmix: int, note: str):
+    """后处理生成好的 INCAR：剔除模板里已有的 LMAXMIX，注入自动判定结果。
+       与 apply_magnetism_to_incar 同一套路，保证最终 INCAR 与元素组成一致。"""
+    keep = [ln for ln in incar_path.read_text(encoding="utf-8").splitlines()
+            if not re.match(r"\s*LMAXMIX\s*=", ln, re.IGNORECASE)]
+    keep.append("")
+    keep.append("# ---- LMAXMIX（gen_step1 按 POSCAR 自动判定：%s）----" % note)
+    keep.append("LMAXMIX  = %d" % lmaxmix)
+    incar_path.write_text("\n".join(keep) + "\n", encoding="utf-8", newline="\n")
+
+
+def decide_u(symbols):
+    """返回 (use_u, ldau_lines_or_None, note)。
+       按 U_VALUES/U_OVERRIDE 给每个（去重后）元素定 LDAUL/LDAUU/LDAUJ；
+       非 d/f 或值为 0/None 的元素给 LDAUL=-1、U=J=0（VASP 惯例：该元素不加 U）。"""
+    globals()["U_UNKNOWN_LAST"] = []      # [PATCH-U4D5D] 每次判定前清空
+    if AUTO_U is False:
+        return False, None, "AUTO_U=False，不加 U"
+    if symbols is None:
+        return False, None, "POSCAR 无元素符号行(VASP4)，无法判定，不加 U"
+
+    # ---- [PATCH-KE-2026] 阴离子门控：非氧化物/氟化物默认不加 U ----
+    # 豁免通道有两条：AUTO_U=True（全局强制），或在 U_OVERRIDE 里显式给该元素
+    # 写一个非零 U（按体系逐个放行，例如 Mn 硫属体系 U_OVERRIDE={"Mn":3.9}）。
+    if U_ANION_GATE and AUTO_U is not True:
+        elems = set(symbols)
+        forced = {e for e, u in U_OVERRIDE.items()
+                  if e in elems and u not in (None, 0, 0.0)}
+        if not (elems & U_GATE_ANIONS) and not forced:
+            return False, None, (
+                "阴离子门控：体系(%s)不含 %s —— 内置 U 值仅对氧化物/氟化物标定，"
+                "不加 U。要保留 U 请在 U_OVERRIDE 显式指定该元素，或设 "
+                "AUTO_U=True / U_ANION_GATE=False"
+                % ("".join(sorted(elems)), "/".join(sorted(U_GATE_ANIONS))))
+
+    table = dict(U_VALUES)
+    table.update({k: (None if v in (0, 0.0) else float(v))
+                  for k, v in U_OVERRIDE.items()})
+
+    order = list(dict.fromkeys(symbols))     # 保序去重，与 POTCAR 元素顺序一致
+
+    # ---- [PATCH-U4D5D] "表里没有" 不等于 "不需要 U" ----
+    # 打补丁前这两种情况返回同一句话、同样静默放行：高通量跑上百个材料时，
+    # 混进来的 Nb/Ta/Pd 体系不会有任何提示，最后整批形成能排名不可比。
+    unknown = [e for e in order
+               if (e in D_ELEMS or e in F_ELEMS) and e not in table]
+    globals()["U_UNKNOWN_LAST"] = list(unknown)
+    if unknown:
+        msg = ("d/f 元素 %s 在 U 表里没有标定值。\n"
+               "        这【不等于】它们不需要 U，也不该被默默当成 0 —— 那样这些\n"
+               "        体系的总能就和加了 U 的体系不在同一个能量零点上，整批形成能/\n"
+               "        稳定性排名会失真。\n"
+               "        背景：Wang/Maxisch/Ceder 那套拟合只覆盖 V Cr Mn Fe Co Ni Mo W，\n"
+               "        Materials Project 至今也只给这 8 个元素在氧化物/氟化物里加 U。\n"
+               "        怎么办：确认不需要 -> U_OVERRIDE = %s:0（显式留痕）；\n"
+               "                要加     -> U_OVERRIDE = %s:<查到的值>，并记下出处。\n"
+               "        批量筛选建议把 U_UNKNOWN_POLICY 设成 error，别让它混进去。"
+               % ("/".join(unknown), unknown[0], unknown[0]))
+        _pol = str(U_UNKNOWN_POLICY or "warn").strip().lower()
+        if _pol == "error":
+            sys.exit("[ERROR] " + msg)
+        if _pol != "ignore":
+            print("[WARN] " + msg)
+
+    hits = [e for e in order
+            if table.get(e) not in (None, 0, 0.0) and (e in D_ELEMS or e in F_ELEMS)]
+    if not hits:
+        if AUTO_U is True:
+            sys.exit("[ERROR] AUTO_U=True 但没有可加 U 的 d/f 元素，请用 U_OVERRIDE 指定")
+        note = "没有需要加 U 的 d/f 元素，不加 U"
+        if unknown:
+            note += "（其中 %s 属于「无标定值」而非「确定不需要」，见上面的 WARN）" % "/".join(unknown)
+        return False, None, note
+
+    ldaul, ldauu, ldauj = [], [], []
+    for e in order:
+        u = table.get(e)
+        if u not in (None, 0, 0.0) and (e in F_ELEMS or e in D_ELEMS):
+            l = 3 if e in F_ELEMS else 2
+            ldaul.append(str(l)); ldauu.append("%g" % float(u)); ldauj.append("0.0")
+        else:
+            ldaul.append("-1");   ldauu.append("0.0");           ldauj.append("0.0")
+
+    lines = [
+        "LDAU     = .TRUE.",
+        "LDAUTYPE = %d" % LDAUTYPE,
+        "LDAUL    = %s" % " ".join(ldaul),
+        "LDAUU    = %s" % " ".join(ldauu),
+        "LDAUJ    = %s" % " ".join(ldauj),
+        "LDAUPRINT= 1",
+    ]
+    detail = ", ".join("%s(U=%g,l=%s)" % (e, float(table[e]), "3" if e in F_ELEMS else "2")
+                       for e in hits)
+    return True, lines, "对 %s 加 U" % detail
+
+
+def u_method_line(symbols, use_u, ldau_lines):
+    """把 decide_u 的结果压成 workflow_method.txt 的一行，供下游判断可比性。
+
+    -> ("LDAU=off", None)  或  ("LDAU=Mn:3.9 Fe:5.3", "LDAUTYPE=2")
+
+    为什么必须留痕：形成能 E_form = E_tot - Sum n_i*mu_i 里，E_tot 带 U 而
+    元素参考态 mu_i 通常不带（单质不含 O/F，阴离子门控会挡掉），两者能量零点
+    不同，误差可达每个过渡金属原子 ~1 eV。不记下来，下游连"该不该报警"都判断不了。
+    """
+    # [PATCH-U4D5D] 无标定值的 d/f 元素也要留痕 —— "这批数据能不能横向比"
+    # 靠的就是这一行，事后审计（fix_u_table.py --scan）也读它。
+    extra = []
+    if U_UNKNOWN_LAST:
+        extra.append("LDAU_UNKNOWN=" + " ".join(U_UNKNOWN_LAST))
+
+    def _pack(u_line):
+        return u_line, ("\n".join(extra) if extra else None)
+
+    if not use_u or not ldau_lines:
+        return _pack("LDAU=off")
+    kv = {}
+    for ln in ldau_lines:
+        k, _, v = ln.partition("=")
+        kv[k.strip().upper()] = v.strip()
+    order = list(dict.fromkeys(symbols or []))
+    us, ls = kv.get("LDAUU", "").split(), kv.get("LDAUL", "").split()
+    parts = ["%s:%s" % (e, us[i]) for i, e in enumerate(order)
+             if i < len(us) and i < len(ls) and ls[i] != "-1"]
+    if not parts:
+        return _pack("LDAU=off")
+    extra.insert(0, "LDAUTYPE=%s" % kv.get("LDAUTYPE", str(LDAUTYPE)))
+    return _pack("LDAU=" + " ".join(parts))
+
+
+def apply_u_to_incar(incar_path, use_u, ldau_lines, note):
+    """后处理 INCAR：先剔除模板里已有的 LDAU* 标签，再按判定注入（或保持不写）。
+       同时确保 LMAXMIX>=4（加 U 的 d/f 混合需要；若已有更大值不降低）。"""
+    keep = [ln for ln in incar_path.read_text(encoding="utf-8").splitlines()
+            if not re.match(r"\s*(LDAU|LDAUTYPE|LDAUL|LDAUU|LDAUJ|LDAUPRINT)\s*=",
+                            ln, re.IGNORECASE)]
+    keep.append("")
+    keep.append("# ---- DFT+U（gen_step1 按 POSCAR 自动判定：%s）----" % note)
+    if use_u:
+        keep.append("# ★ 以下 U 值来自 gen_step1 的 U_VALUES 表，是【文献常见起点】，")
+        keep.append("#   不是对你这个体系的定论 —— 请务必自查文献后按需修改！")
+        keep.append("#   改法一（只改这一次）：直接编辑下面 LDAUU 一行；")
+        keep.append("#   改法二（以后都用新值）：改 gen_step1 的 U_VALUES / U_OVERRIDE 再重跑 gen。")
+        keep.append("#   LDAUL/LDAUU/LDAUJ 每一列依次对应 POSCAR 的一种元素（与 POTCAR 同序）；")
+        keep.append("#   LDAUL: 2=d 轨道, 3=f 轨道, -1=该元素不加 U（其 U/J 写 0）。")
+        keep.append("#   LDAUTYPE=2(Dudarev) 只用有效 U=U-J，故 LDAUJ 一律给 0。")
+        keep.append("#   注意：step2/step3 会原样继承这里的 U；step4(HSE) 是否保留由该脚本的")
+        keep.append("#   HSE_U_MODE 决定（默认 remove=纯 HSE06）。")
+        keep.extend(ldau_lines)
+    else:
+        keep.append("# （本体系未加 U。若你判断需要 U，可在此手写 LDAU/LDAUTYPE/LDAUL/")
+        keep.append("#   LDAUU/LDAUJ，或改 gen_step1 的 U_VALUES/U_OVERRIDE 后重跑 gen。）")
+    incar_path.write_text("\n".join(keep) + "\n", encoding="utf-8", newline="\n")
+def resolve_dimension(poscar: Path):
+    """按 DIMENSION 配置返回 (dim, vac_axis, note)。2D 时强制要求真空沿 c 轴。"""
+    mode = str(DIMENSION).lower()
+    if mode in ("2d", "3d"):
+        return mode, (2 if mode == "2d" else None), "DIMENSION=%r 强制指定" % DIMENSION
+
+    dim, axis, vacs = detect_dimension(poscar, VACUUM_MIN)
+    detail = ", ".join("%s=%.1f" % (AXIS_NAMES[i], v) for i, v in enumerate(vacs))
+    if dim == "0d":
+        # 走到这里说明 MOL_BRANCH=False（=True 时 main() 早就交给 mol_common 了）。
+        # 明确报错，而不是让后面 resolve_tpl 抛一个"找不到 incar_0d.tpl"的迷惑信息。
+        sys.exit(
+            "[ERROR] %s 有 >=2 个方向的真空（%s Å）—— 这是 0D 孤立体系。\n"
+            "        本技能没有开 0D 支持（MOL_BRANCH=False）。\n"
+            "        · 结构优化想跑 0D：用开了 MOL_BRANCH 的技能（如 band-dft-cpu）；\n"
+            "        · 弹性常数/晶格热导这类量对孤立分子没有定义，不要在这里跑。\n"
+            "        若判定有误（真空阈值 %.1f Å 偏小），调 VACUUM_MIN 或强制 DIMENSION。"
+            % (poscar, detail, VACUUM_MIN))
+    if dim == "2d":
+        note = "自动判定：沿 %s 轴真空 %.1f Å（各向真空 %s Å）" % (
+            AXIS_NAMES[axis], vacs[axis], detail)
+        if axis != 2 and VACUUM_AXIS_POLICY == "rotate":
+            print("[..] 真空沿 %s 轴而非 c —— 自动轮换格矢到 c 轴（右手系保持）"
+                  % AXIS_NAMES[axis])
+            rotate_vacuum_to_c(poscar, axis)
+            dim2, axis2, _ = detect_dimension(poscar, VACUUM_MIN)
+            if dim2 != "2d" or axis2 != 2:
+                sys.exit("[ERROR] 真空轴轮换后复核失败（仍不在 c），请人工检查 POSCAR")
+            axis = 2
+            note += "；真空轴已轮换到 c"
+        elif axis != 2:
+            sys.exit(
+                "[ERROR] 检测到 2D 体系，但真空沿 %s 轴而非 c 轴。\n"
+                "        incar_2d.tpl 的 IOPTCELL/OPTCELL 约束假设固定 c 轴，"
+                "真空不在 c 会锁错方向。\n"
+                "        请先把结构旋转/重排成真空沿第 3 个晶格矢量（标准做法），"
+                "再重新运行。" % AXIS_NAMES[axis])
+    else:
+        note = "自动判定：无真空方向（各向最大间隙 %s Å，阈值 %.1f Å）" % (
+            detail, VACUUM_MIN)
+    return dim, axis, note
+
+
+def rotate_vacuum_to_c(poscar: Path, vac_axis: int) -> None:
+    """2D 真空轴不在 c 时做 3-轮换把它换到第 3 格矢。
+    真空 a → 新格矢 [b,c,a]；真空 b → 新格矢 [c,a,b]。
+    3-轮换是偶置换（det 不变号），右手系保持——两轴对调会变左手系不能用。
+    （从 skill/elastic-dft-cpu 搬进公共池）"""
+    import numpy as np
+    from pymatgen.core import Structure
+    perm = {0: [1, 2, 0], 1: [2, 0, 1]}[vac_axis]
+    s0 = Structure.from_file(str(poscar))
+    new_lat = s0.lattice.matrix[perm]
+    assert np.linalg.det(new_lat) > 0, "轮换后 det<=0，不应发生"
+    s1 = Structure(lattice=new_lat, species=s0.species,
+                   coords=s0.frac_coords[:, perm], coords_are_cartesian=False,
+                   site_properties=s0.site_properties)
+    s1.to(fmt="poscar", filename=str(poscar))
+    lines = poscar.read_text(encoding="utf-8").splitlines()
+    lines[0] = "%s (vacuum %s-axis -> c rotated)" % (lines[0], AXIS_NAMES[vac_axis])
+    poscar.write_text("\n".join(lines) + "\n", encoding="utf-8", newline="\n")
+
+
+def _poscar_zspecies(poscar):
+    """读 POSCAR 的笛卡尔 z 坐标与逐原子元素（VASP4 无元素行 → 元素为 None）。"""
+    import re as _re
+    from dim_common import read_poscar_cell_frac
+    cell, frac = read_poscar_cell_frac(poscar)
+    zs = [sum(float(frac[i][k]) * float(cell[k][2]) for k in range(3))
+          for i in range(len(frac))]
+    species = None
+    try:
+        lines = Path(poscar).read_text(encoding="utf-8-sig").splitlines()
+        l6 = lines[5].split()
+        if l6 and not _re.fullmatch(r"[+-]?\d+", l6[0]):
+            counts = [int(x) for x in lines[6].split()]
+            sp = []
+            for sym, c in zip(l6, counts):
+                sp += [sym] * c
+            if len(sp) == len(frac):
+                species = sp
+    except Exception:
+        species = None
+    return zs, species
+
+
+def slab_is_asymmetric(poscar, tol=0.05):
+    """2D 层上下不对称？判据：不存在把层映射到自身的水平镜面，或两端元素不同。
+
+    用笛卡尔 z 直接判（与真空轴是否倾斜无关）：以 (zmin+zmax)/2 为镜面，逐原子找同
+    元素、z 镜像的配对；任一个找不到就是非对称。
+    """
+    try:
+        zs, species = _poscar_zspecies(poscar)
+    except Exception as e:
+        return None, "判不了（%s）" % e
+    if not zs:
+        return None, "空结构"
+    zmin, zmax = min(zs), max(zs)
+    if zmax - zmin < 1e-6:
+        return None, "层厚为 0"
+    # 两端元素不同（Janus）——最快的一条判据
+    if species:
+        order = sorted(range(len(zs)), key=lambda i: zs[i])
+        if species[order[0]] != species[order[-1]]:
+            return True, "两端元素不同（%s / %s）" % (species[order[0]], species[order[-1]])
+    mid = 0.5 * (zmin + zmax)
+    for i, z in enumerate(zs):
+        target = 2.0 * mid - z
+        ok = False
+        for j, z2 in enumerate(zs):
+            if abs(z2 - target) < tol and (species is None or species[j] == species[i]):
+                ok = True
+                break
+        if not ok:
+            return True, "原子 %d 找不到面外镜像配对（无水平镜面）" % i
+    return False, "存在面外镜面且上下元素一致"
+
+
+def decide_dipole_2d(poscar, dim, mode=None, vac_axis=2):
+    """DIPOLE_2D 解析。返回 (on: bool, note: str)。非 2D 恒 off。"""
+    m = str(mode if mode is not None else "auto").strip().lower()
+    if m in ("off", "false", "0", "no"):
+        return False, "DIPOLE_2D=off（显式不加）"
+    if dim != "2d" and m not in ("on", "true", "1", "yes"):
+        return False, "非 2D"
+    if m in ("on", "true", "1", "yes"):
+        return True, "DIPOLE_2D=on（强制）"
+    asym, why = slab_is_asymmetric(poscar)
+    if asym is None:
+        return False, "auto 判不了（%s），保守不加；要加请设 DIPOLE_2D=on" % why
+    return bool(asym), "auto：%s" % why
+
+
+def dipole_lines(on, note=""):
+    """生成 INCAR 里的偶极修正行（含 provenance 注释）。"""
+    if not on:
+        return ["# 偶极修正：未开（%s）" % note,
+                "# 非对称 2D 需要时设 step.conf 的 DIPOLE_2D=on（S1/S2/S4 会自动保持一致）"]
+    return ["# 偶极修正：%s；S2/S4 必须沿用同一套（gen 会从本 INCAR 抄这几个标签）" % note,
+            "LDIPOL = .TRUE.",
+            "IDIPOL = 3",
+            "DIPOL  = 0.5 0.5 0.5",
+            "ISYM   = 0              # 开偶极修正后必须为 0"]
+
+
+def _lc_mode():
+    """当前是否走 LATTICE_CONSTRAINTS 流派（由 apply_cell_constraint_2d._constraint_mode 决定）。"""
+    return getattr(apply_cell_constraint_2d, "_constraint_mode", "") == "lattice_constraints"
+
+
+def apply_stage_to_incar(incar_path: Path, stage: str):
+    """按 STAGE_SPEC 覆盖 INCAR 里的弛豫控制标签。值为 None 的标签直接删除。"""
+    spec = {k: v for k, v in STAGE_SPEC[stage].items() if not k.startswith("_")}
+    if _lc_mode():
+        # LATTICE_CONSTRAINTS 模式：不能同时给 IOPTCELL（新老标签并存会打架）
+        spec.pop("IOPTCELL", None)
+    keys = set(spec)
+    keep = [ln for ln in incar_path.read_text(encoding="utf-8").splitlines()
+            if not (re.match(r"\s*([A-Za-z_]+)\s*=", ln)
+                    and re.match(r"\s*([A-Za-z_]+)\s*=", ln).group(1).upper() in keys)]
+    keep.append("")
+    keep.append("# ---- 阶段 %s：%s（gen_step1 注入）----"
+                % (stage, STAGE_SPEC[stage]["_desc"]))
+    for k in ("ISIF", "IBRION", "POTIM", "EDIFFG", "NSW", "IOPTCELL"):
+        if k in spec and spec[k] is not None:
+            keep.append("%-8s = %s" % (k, spec[k]))
+    dropped = [k for k, v in spec.items() if v is None]
+    if dropped:
+        keep.append("# 本阶段已删除：%s" % ", ".join(sorted(dropped)))
+    incar_path.write_text("\n".join(keep) + "\n", encoding="utf-8", newline="\n")
+
+
+def resolve_stage(cwd: Path):
+    """返回 (stage, outdir_name, src_poscar)。stage=None 表示 single 模式。"""
+    argv = sys.argv[1:]
+    want = None
+    if "--stage" in argv:
+        i = argv.index("--stage")
+        if i + 1 >= len(argv):
+            sys.exit("[ERROR] --stage 后面要跟 a / b / c")
+        want = argv[i + 1].strip().lower()
+        if want == "all":
+            want = "a"
+        if want not in STAGE_ORDER:
+            sys.exit("[ERROR] --stage 只能是 a / b / c（或 all，等价于 a）")
+
+    if STAGE_MODE in ("in_job", "single"):
+        if want is not None:
+            print("[WARN] STAGE_MODE=%r 不使用 tf 层面的分段，--stage %s 被忽略"
+                  % (STAGE_MODE, want))
+        return None, OUTDIR_SINGLE, cwd / "POSCAR"
+
+    if RELAX_STAGES == "single" and want is None:
+        return None, OUTDIR_SINGLE, cwd / "POSCAR"
+
+    def dirname(st):
+        return OUTDIR_PATTERN % st
+
+    def src_of(st):
+        if st == "a":
+            return cwd / "POSCAR"
+        prev = cwd / dirname(STAGE_ORDER[STAGE_ORDER.index(st) - 1])
+        return prev / "CONTCAR"
+
+    if want is None:                       # 自动挑下一个
+        want = "a"
+        for st in STAGE_ORDER:
+            d = cwd / dirname(st)
+            if not d.exists():
+                want = st
+                break
+            # 目录已在：若已有 CONTCAR 且还有后续阶段，就往后走
+            idx = STAGE_ORDER.index(st)
+            if (d / "CONTCAR").exists() and idx + 1 < len(STAGE_ORDER):
+                want = STAGE_ORDER[idx + 1]
+            else:
+                want = st
+                break
+
+    src = src_of(want)
+    if not src.exists():
+        prev = STAGE_ORDER[STAGE_ORDER.index(want) - 1] if want != "a" else None
+        sys.exit("[ERROR] 阶段 %s 需要 %s，但它不存在。\n"
+                 "        请先跑完阶段 %s（%s），再回来生成阶段 %s。"
+                 % (want, src, prev, dirname(prev) if prev else "?", want))
+    # v1.3：接力结构完整性校验——前一段还在跑时 CONTCAR 只写了一半，
+    # 直接拿去生成会让 vaspkit/VASP 读文件崩（forrtl end-of-file）
+    bad = validate_poscar(src)
+    if bad:
+        sys.exit("[ERROR] %s 不完整：%s。\n"
+                 "        上一段弛豫很可能还在跑（CONTCAR 写了一半）——\n"
+                 "        等 tf 里上一段变 done 再生成；确认已正常结束就检查该文件内容。"
+                 % (src, bad))
+    return want, dirname(want), src
+
+
+_VASP_VER_RE = re.compile(r"vasp[._-]?(\d+)\.(\d+)\.(\d+)", re.IGNORECASE)
+
+
+def _vasp_version_from_text(text: str):
+    """从文本（submit.sh / 可执行文件路径 / OUTCAR 头）里抠 VASP 版本，返回 (major, minor)。
+
+    集群的 vasp 路径通常就带版本（.../vasp.6.4.3-optcell/bin/vasp_std），OUTCAR 头也写
+    " vasp.6.5.0 ..."。都找不到返回 None —— 调用方必须把 None 当"不支持"处理。
+    """
+    explicit = re.search(r"AUTOZT_VASP_VERSION\s*=\s*(\d+)\.(\d+)", text or "")
+    if explicit:                       # 显式声明优先（路径不带版本号时用）
+        return (int(explicit.group(1)), int(explicit.group(2)))
+    m = _VASP_VER_RE.search(text or "")
+    return (int(m.group(1)), int(m.group(2))) if m else None
+
+
+def _c_parallel_z(poscar: Path, vac_axis):
+    """2D 的 c 轴是否沿笛卡尔 z（LATTICE_CONSTRAINTS 按笛卡尔方向置零应力的前提）。"""
+    try:
+        from dim_common import read_poscar_cell_frac
+        cell, _ = read_poscar_cell_frac(poscar)
+    except Exception:
+        return False
+    ax = int(vac_axis if vac_axis is not None else 2)
+    other = [i for i in range(3) if i != ax]
+    cvec = [float(x) for x in cell[ax]]
+    if abs(cvec[2]) < 1e-6:
+        return False
+    for i in other:
+        if max(abs(float(cell[i][2])), abs(float(cell[ax][0])), abs(float(cell[ax][1]))) > 1e-3:
+            return False
+    return True
+
+
+def check_lattice_constraints_support(submit_text: str, poscar: Path, vac_axis, label=""):
+    """P1-4：用 LATTICE_CONSTRAINTS 前必须能确认 VASP>=6.5 且 c∥z，否则报错退出。
+
+    为什么必须硬拦：旧版 VASP 不认识该标签时是【静默忽略】，于是 ISIF=3 会把真空
+    一起弛豫、真空层塌缩 —— 这正好是文档要禁止的"静默退回"。宁可报错让人显式选择。
+    """
+    ver = _vasp_version_from_text(submit_text)
+    if ver is None:
+        sys.exit("[ERROR] %s集群配置声明了 cell_constraint=lattice_constraints，但无法确认 "
+                 "VASP 版本。\n        请把 setting/<集群>.yaml 的 vasp.relax_2d 二进制路径"
+                 "写成带版本号的形式（如 .../vasp.6.5.0/bin/vasp_std），\n"
+                 "        或显式声明 AUTOZT_VASP_VERSION=6.5.0；旧版 VASP 会静默忽略"
+                 "LATTICE_CONSTRAINTS → 真空被一起弛豫。" % (label or ""))
+    if ver < (6, 5):
+        sys.exit("[ERROR] %sLATTICE_CONSTRAINTS 自 VASP 6.5.0 起才在 IBRION=1/2 下被读取，"
+                 "当前检测到 VASP %d.%d。\n        请改用 cell_constraint=ioptcell_tag / "
+                 "optcell_file（配 optcell 补丁版二进制）。" % (label or "", ver[0], ver[1]))
+    if not _c_parallel_z(poscar, vac_axis):
+        sys.exit("[ERROR] %scell_constraint=lattice_constraints 要求 c 轴 ∥ z"
+                 "（该标签按笛卡尔方向把应力分量置零），当前结构不满足。\n"
+                 "        请改用 ioptcell_tag / optcell_file。" % (label or ""))
+    print("[..] 2D 变胞约束：LATTICE_CONSTRAINTS（VASP %d.%d，c ∥ z）" % ver)
+    return ver
+
+
+def apply_cell_constraint_2d(incar_path: Path, outdir: Path):
+    """2D 后处理：按 CELL_CONSTRAINT_2D 处理 IOPTCELL 标签 / OPTCELL 文件。"""
+    lines = incar_path.read_text(encoding="utf-8").splitlines()
+    iopt, kept = None, []
+    for ln in lines:
+        m = re.match(r"\s*IOPTCELL\s*=\s*([\d\s]+?)\s*(?:[#!].*)?$", ln, re.IGNORECASE)
+        if m:
+            vals = m.group(1).split()
+            if len(vals) == 9 and all(v in ("0", "1") for v in vals):
+                iopt = [int(v) for v in vals]
+            continue          # IOPTCELL 行先统一摘出，按流派决定去留
+        kept.append(ln)
+
+    mode = CELL_CONSTRAINT_2D
+    if mode == "auto":
+        mode = getattr(apply_cell_constraint_2d, "_constraint_mode", "ioptcell_tag")
+    if mode == "ioptcell_tag":
+        if iopt is not None:
+            kept.append("IOPTCELL = " + " ".join(str(v) for v in iopt))
+        if iopt is None:
+            # 模板里没有 IOPTCELL 行 = 这次优化根本不会动晶胞（或 ISIF=3 会连真空一起
+            # 弛豫），面内残余应力原样留在结构里 —— Huang 零应力条件不成立，下游 κ/ZA
+            # 全不可信，而声子谱可能照样全正、过得了虚频闸。所以硬失败，不再只 WARN。
+            #   实测（2026-09-16 批量核查）：jzz P1/P2 全部 10 个 step1 都是这个状态
+            #   （ISIF=2 + 无 IOPTCELL），面内层内口径应力 −2 ~ −62 kbar，全部拉伸。
+            if not STEP_PARAMS.get("ALLOW_2D_FIXED_CELL", False):
+                sys.exit("[ERROR] 2D 优化：CELL_CONSTRAINT_2D='ioptcell_tag' 但模板 %s "
+                         "里没有合法的 IOPTCELL 行 —— 晶胞不会弛豫，面内残余应力会原样"
+                         "留到声子/热导步。请修模板（项目级 project_setting/templates/ "
+                         "副本可能遮蔽了技能模板），或在 step.conf 显式设 "
+                         "ALLOW_2D_FIXED_CELL = true 表示你确实要固定胞。"
+                         % (incar_path.name,))
+            print("[WARN] 2D 优化：ioptcell_tag 但无 IOPTCELL 行，已按 "
+                  "ALLOW_2D_FIXED_CELL=true 放行 —— 晶胞不动，残余应力自负。")
+        return                # 原样保留，什么都不改
+
+    if iopt is None:
+        if any(re.match(r"\s*ISIF\s*=\s*2\b", ln, re.IGNORECASE) for ln in kept):
+            return
+        iopt = [1, 1, 0, 1, 1, 0, 0, 0, 0]   # 默认：面内 xx/yy/xy 放开，c 固定
+
+    if mode == "lattice_constraints":
+        # P1-4：VASP 6.5+ 官方标签。IOPTCELL 行必须删掉（老标签 + 新标签同时给会打架），
+        # 由 LATTICE_CONSTRAINTS 承担"只放面内 xx/yy/xy、冻结 c"的约束。
+        kept.append("")
+        kept.append("# 2D 约束变胞（VASP>=6.5 官方标签，P1-4）：只放开面内，c 轴冻结")
+        kept.append("LATTICE_CONSTRAINTS = .TRUE. .TRUE. .FALSE.")
+        incar_path.write_text("\n".join(kept) + "\n", encoding="utf-8", newline="\n")
+        print("[OK] LATTICE_CONSTRAINTS = .TRUE. .TRUE. .FALSE. 已写入 INCAR"
+              "（IOPTCELL 行已移除）")
+        return
+
+    if mode == "optcell_file":
+        optcell = outdir / "OPTCELL"
+        optcell.write_text(
+            "\n".join("".join(str(iopt[3 * r + c]) for c in range(3))
+                      for r in range(3)) + "\n",
+            encoding="utf-8", newline="\n")
+        kept.append("")
+        kept.append("# 2D 约束变胞：IOPTCELL 已转换为 OPTCELL 文件"
+                    "（optcell_file 流派，标签本身已删除以免 VASP 报未知标签）")
+        incar_path.write_text("\n".join(kept) + "\n", encoding="utf-8", newline="\n")
+        print("[OK] OPTCELL（%s / %s / %s）已写入，INCAR 中的 IOPTCELL 行已移除"
+              % tuple("".join(str(iopt[3 * r + c]) for c in range(3)) for r in range(3)))
+        return
+
+    # mode == "none"：既不写 IOPTCELL 也不写 OPTCELL。对 2D 来说这等于"面内晶格不弛豫"，
+    #   而文档里承诺的"能量-面积扫描另定面内晶格"在技能里并不存在 —— 这正是 2026-09-16
+    #   查出的系统性残余应力来源。默认硬失败；确要固定胞请显式开 ALLOW_2D_FIXED_CELL。
+    incar_path.write_text("\n".join(kept) + "\n", encoding="utf-8", newline="\n")
+    vals = {k: v for k, v in read_incar_values(incar_path).items()}
+    if vals.get("ISIF", "").startswith("3"):
+        print("[WARN] CELL_CONSTRAINT_2D='none' 且 ISIF=3 —— c 轴（真空层）会被一起"
+              "弛豫、真空可能塌缩！请确认这是你想要的。")
+    if not STEP_PARAMS.get("ALLOW_2D_FIXED_CELL", False):
+        sys.exit("[ERROR] 2D 优化：CELL_CONSTRAINT_2D='none' —— 面内晶格不会被弛豫，"
+                 "残余应力会原样传给声子/热导步（实测该模式下 2D 材料面内应力可达 "
+                 "−60 kbar，全部拉伸，Huang 零应力条件不成立）。\n"
+                 "        正确做法：集群 vasp.relax_2d 用 ioptcell_tag/optcell_file"
+                 "（jzzn/hanhai25/hfeshell 已配，a800/3090 目前是 none）。\n"
+                 "        确实要固定胞请在 step.conf 里显式设 ALLOW_2D_FIXED_CELL = true。")
+
+
+
+# ===========================================================================
+#  作业内分段弛豫（STAGE_MODE="in_job"）
+#  一个目录、一个作业里按 STAGE_ORDER 顺序跑完所有段。
+#  实现搬自 skill/elastic-dft-cpu 的 gen_step1_std_opt.py，并补了两点：
+#    * 段划分由 STAGE_SPEC 驱动（原来是写死的 ISIF=2 -> ISIF=3 -> IBRION=1）
+#    * 某段收敛后跳过后续段（原来无条件跑满，等价于 band-dft-cpu 的 ck_relax_skip 逻辑）
+# ===========================================================================
+def set_incar_tags(incar_text, set_map, remove_keys=()):
+    """行级增删 INCAR 标签：改 set_map 里的键、删 remove_keys、缺的键追加到末尾。"""
+    remove_keys = {k.upper() for k in remove_keys}
+    set_map = {k.upper(): v for k, v in set_map.items()}
+    out, seen = [], set()
+    for ln in incar_text.splitlines():
+        m = re.match(r"\s*([A-Za-z_]+)\s*=", ln)
+        if m:
+            key = m.group(1).upper()
+            if key in remove_keys:
+                continue
+            if key in set_map:
+                out.append("%-8s = %s" % (key, set_map[key]))
+                seen.add(key)
+                continue
+        out.append(ln)
+    for k, v in set_map.items():
+        if k not in seen:
+            out.append("%-8s = %s" % (k, v))
+    return "\n".join(out) + "\n"
+
+
+def extract_vasp_cmd(submit_text):
+    """从 submit.sh 里取实际跑 VASP 的那一行（含 mpirun/srun + vasp_*）。"""
+    for ln in submit_text.splitlines():
+        s = ln.strip()
+        if not s or s.startswith("#"):
+            continue
+        if re.match(r"(?:mpirun|mpiexec|srun)\b", s) and re.search(r"vasp_(std|ncl|gam)|AUTOZT_VASP_BIN", s):
+            return s
+    return None
+
+
+RUN_RELAX_HELPERS = r"""
+# --------------------------------------------------------------------
+# 工具函数（gen_step1 生成，勿手改；改请改项目 step.conf / 模板后重新 gen）
+# --------------------------------------------------------------------
+_ARCHIVE="OUTCAR OSZICAR CONTCAR vasprun.xml XDATCAR"
+
+# 看门狗：VASP 挂死（MPI 死锁、IB 掉线）时输出会停止增长，
+# 但作业照样占着节点直到墙钟耗尽。这里发现停滞就主动杀掉本段。
+#
+# ★ 2026-09-17 修正：进度指纹从"只看 OUTCAR 字节"改成 **OUTCAR 字节 + OSZICAR 行数**。
+#   只盯 OUTCAR 会误杀：VASP 按【离子步】写 OUTCAR，而 OSZICAR 每个电子步（DAV）加一行；
+#   大超胞上单个离子步跑几十次 DAV、超过 STALL_MIN 分钟很常见。实测当天
+#   Mo2S3(A4-3-1) 段2(b) 被误判卡死（queue.err 写 "OUTCAR 已 60 分钟无增长"），
+#   而 queue.out 里 DAV 5→10 一直在收敛 —— 白杀一次 1 小时 14 分的作业。
+#   两个指纹都没动才算真挂死；这与 autozt 自己的 hang_check 判据一致。
+# 累计 CPU 时间（秒）：优先用 VASP 进程，取不到退回看门狗那个 pid。
+#   ★ 2026-09-17 加（user 要求）：只看文件大小会误杀 —— 在 Lustre 上如果看门狗
+#   与作业不同节点，stat 可能读到客户端缓存的旧大小；而 VASP 真的挂死（MPI 死锁）时
+#   CPU 时间也不再增长。两者的区别只有 CPU 时间能分辨：
+#     CPU 在涨、文件不涨 → 缓存/写入延迟，不该杀；CPU 也不涨 → 真卡死，立即杀。
+#   ★ 2026-09-19 修正（user 指出：Mo2S3 15h 挂死看门狗未触发，是独立 bug）：
+#   旧实现 `ps -eo time=,comm=` 统计的是【整台节点】所有 vasp —— 共享节点上别人的 vasp
+#   （甚至本用户别的作业）CPU 一直在涨，`now_cpu` 每次都比上次大，stall 永远被重置，
+#   看门狗形同虚设。实测 cu57 当时并发跑着 wangxu 的多个 *_opt 作业与本用户 Si S4b(3850633)。
+#   改成从本段 mpirun 的 PID 出发、只累计它【子孙进程】的 CPU 时间。
+_cpu_seconds () {
+    local root="$1" queue tree k p
+    if [ -n "$root" ] && command -v pgrep >/dev/null 2>&1; then
+        queue="$root"; tree="$root"
+        while [ -n "$queue" ]; do
+            p="${queue%% *}"
+            if [ "${queue#* }" = "$queue" ]; then queue=""; else queue="${queue#* }"; fi
+            k=$(pgrep -P "$p" 2>/dev/null | tr '\n' ' ')
+            if [ -n "$k" ]; then tree="$tree $k"; queue="$queue $k"; fi
+        done
+        ps -o time=,comm= -p "$(echo $tree | tr ' ' ',')" 2>/dev/null | awk '$2 ~ /vasp/ { n=split($1,a,":"); s=0; for(i=1;i<=n;i++) s=s*60+a[i]; t+=s } END{ print t+0 }'
+    else
+        # 兜底：pgrep 不可用时退回本用户范围（仍不等价于全节点）
+        ps -u "$(id -u)" -o time=,comm= 2>/dev/null | awk '$2 ~ /vasp/ { n=split($1,a,":"); s=0; for(i=1;i<=n;i++) s=s*60+a[i]; t+=s } END{ print t+0 }'
+    fi
+}
+
+_watchdog () {
+    local pid="$1" last=-1 last_o=-1 last_cpu=-1 now now_o now_cpu stall=0
+    [ "${STALL_MIN}" -le 0 ] && return 0
+    while kill -0 "${pid}" 2>/dev/null; do
+        sleep 60
+        now=$(stat -c %s OUTCAR 2>/dev/null || echo 0)
+        now_o=$(wc -l < OSZICAR 2>/dev/null || echo 0)
+        now_cpu=$(_cpu_seconds "${pid}")
+        # 三个指纹里【任一】在涨 = 活着
+        if [ "${now}" = "${last}" ] && [ "${now_o}" = "${last_o}" ] && [ "${now_cpu}" = "${last_cpu}" ]; then
+            stall=$((stall + 1))
+            if [ "${stall}" -ge "${STALL_MIN}" ]; then
+                {
+                    echo "[run_relax][watchdog] OUTCAR(${now}B)/OSZICAR(${now_o} 行)/CPU(${now_cpu}s) 已 ${STALL_MIN} 分钟同时无增长，判定卡死，终止本段"
+                    echo "[run_relax][watchdog] 判定快照（供事后分辨缓存延迟 vs 真死）："
+                    hostname; date
+                    ps -eo pid,ppid,stat,time,pcpu,rss,comm 2>/dev/null | head -40
+                    echo "--- df -h . ---"; df -h . 2>/dev/null | tail -2
+                    echo "--- uptime ---"; uptime
+                } >>queue.err 2>&1
+                kill -TERM "${pid}" 2>/dev/null || true
+                sleep 30
+                kill -KILL "${pid}" 2>/dev/null || true
+                return 0
+            fi
+        else
+            stall=0
+        fi
+        last="${now}"
+        last_o="${now_o}"
+        last_cpu="${now_cpu}"
+    done
+}
+
+_contcar_ok () {
+    [ -s CONTCAR ] || return 1
+    [ "$(wc -l < CONTCAR)" -ge 8 ] || return 1
+    return 0
+}
+
+_converged () {
+    [ -f OUTCAR ] && grep -q "reached required accuracy" OUTCAR
+}
+
+# _last_pressure —— OUTCAR 末态 external pressure (kB)；取不到就打印空
+_last_pressure () {
+    grep -o "external pressure =[ ]*-\{0,1\}[0-9.]*" OUTCAR 2>/dev/null | tail -1 | awk '{print $NF}' || true
+}
+
+# _last_inplane —— OUTCAR 末态【面内】应力分量的最大绝对值 (kB)
+#   取 "in kB  xx yy zz xy yz zx" 行的第 1/2/4 列（xx/yy/xy）。
+#   为什么 2D 必须看分量而不是 external pressure：P=(σxx+σyy+σzz)/3，而 2D 的
+#   σzz 是【被约束的真空方向】应力（IOPTCELL 冻结 c），它不会随面内弛豫而变小。
+#   实测 2026-09-17 Mo2S3：旧结构 P=-7.93 时面内 -11.97/-10.62、σzz=-1.21；
+#   完全弛豫后 P=-0.51 但 σzz 仍是 -1.30 —— 面内已降到 -0.06/-0.16，
+#   而 P 有 2/3 被 σzz 撑着，用 |P| 当判据会系统性偏松。
+_last_inplane () {
+    grep -o "^ *in kB .*" OUTCAR 2>/dev/null | tail -1 | awk '
+        { x=$3<0?-$3:$3; y=$4<0?-$4:$4; xy=$6<0?-$6:$6;
+          m=x; if (y>m) m=y; if (xy>m) m=xy; printf "%.4f", m }' || true
+}
+
+# _max_force —— OUTCAR 最后一个 TOTAL-FORCE 块里的最大力分量 (eV/Å)；取不到打印空。
+#   用途见 CELL_FORCE_TOL_EV_A：变胞段改用能量判据后，VASP 可能在力还没收干净时就停，
+#   而力不干净的晶格会原样传给 S2/S4，所以稳定判据额外要求它达标。
+_max_force () {
+    awk '/TOTAL-FORCE/ { f=1; dash=0; m=0; next }
+         f && /^-+/ { dash++; if (dash >= 2) f=0; next }
+         f && NF >= 6 { for (i=4; i<=6; i++) { v=$i; if (v<0) v=-v; if (v>m) m=v } }
+         END { if (m>0) printf "%.4f", m }' OUTCAR 2>/dev/null || true
+}
+
+# _max_force_ok —— 末态最大力是否达标（读不到就放过，不因解析失败误判"未稳定"）
+_max_force_ok () {
+    local mf; mf="$(_max_force)"
+    [ -z "${mf}" ] && return 0
+    _abs_gt "${mf}" "${FORCE_TOL}" && return 1
+    return 0
+}
+
+# _abs_gt <数值> <阈值> —— |数值| > 阈值 时返回 0（真）
+_abs_gt () {
+    awk -v v="$1" -v t="$2" 'BEGIN{ if (v<0) v=-v; exit !(v>t) }'
+}
+
+# _cell_delta <文件A> <文件B> —— 两个 POSCAR/CONTCAR 的【晶格矢量分量最大绝对差】(Å)
+#   纯 awk（作业节点上不保证有 python3）。任一侧读不到就打印 9999，
+#   避免"文件缺失"被误判成"晶格已稳定"。
+_cell_delta () {
+    if [ ! -s "$1" ] || [ ! -s "$2" ]; then echo 9999; return 0; fi
+    awk -v f1="$1" -v f2="$2" '
+      FILENAME==f1 { if (FNR==2) s1=$1; else if (FNR>=3 && FNR<=5) { n++; a[n]=$1*s1; n++; a[n]=$2*s1; n++; a[n]=$3*s1 } next }
+      FILENAME==f2 { if (FNR==2) s2=$1; else if (FNR>=3 && FNR<=5) { k++; b[k]=$1*s2; k++; b[k]=$2*s2; k++; b[k]=$3*s2 } next }
+      END { m=0; if (n==0 || k==0) { print "9999.000000"; exit } for (i=1;i<=n && i<=k;i++) { d=a[i]-b[i]; if (d<0) d=-d; if (d>m) m=d } printf "%.6f\n", m }
+    ' "$1" "$2"
+}
+
+# _cell_settled <maxΔ晶格(Å)> <external pressure(kB)> —— 三条全满足才算变胞段稳定
+#   ① 力收敛（OUTCAR 出现 reached required accuracy）
+#   ② 本遍晶格几乎没动（< CELL_PASS_TOL）—— 说明基组/形状已经自洽
+#   ③ |P| < PRESS_TOL —— 真·零应力
+#   缺 ②③ 就会出现"力收敛但晶胞还差几个 kbar"的假收敛（历史上晶胞从未弛豫就是这么来的）。
+# _cell_settled <maxΔ晶格(Å)> <判据量(kB)> —— 三条全满足才算变胞段稳定
+#   2D 传进来的第 2 个参数是【面内最大分量】，与 INPLANE_TOL 比（见 _last_inplane 注释）；
+#   3D 传 external pressure，与 PRESS_TOL 比。
+_cell_settled () {
+    if _abs_gt "$1" "${CELL_PASS_TOL}"; then return 1; fi
+    if [ "${CELL_2D}" = "1" ]; then
+        if [ -n "$2" ] && _abs_gt "$2" "${INPLANE_TOL}"; then return 1; fi
+    else
+        if [ -n "$2" ] && _abs_gt "$2" "${PRESS_TOL}"; then return 1; fi
+    fi
+    if ! _max_force_ok; then return 1; fi   # 能量判据可能让 VASP 在力没洗干净时就停
+    _converged
+}
+
+# _run_stage <tag> <INCAR 文件> <是否把 CONTCAR 传给下一段:1/0> <描述> [本段允许被力判据跳过:1/0]
+#   第 5 个参数 ee（缺省 1）：
+#     1 = 本段不改晶胞（ISIF<=2），上一段力已收敛即可跳过（省机时）
+#     0 = 本段改晶胞（ISIF>=3）—— 禁止跳过。力判据 "reached required accuracy"
+#         只说明原子受力小，与晶胞/应力是否到位是两回事；跳过它等于晶胞永不弛豫。
+_run_stage () {
+    local tag="$1" incar="$2" pass="$3" desc="$4" ee="${5:-1}" rc=0 vpid wpid f
+    if [ -f ".${tag}.done" ]; then
+        echo "[run_relax] ${desc} —— 已完成，跳过"
+        return 0
+    fi
+    # ★ STAGES_RUN 闸门（2026-09-17 实测故障，Ti2S3 Z4-3-1 / jobid 3847708）：
+    #   _converged 读的是【当前目录里的 OUTCAR】，而作业刚起来时那是【上一次作业留下的】。
+    #   于是重投时第一段被「上一段已收敛」跳过（写 .s1.skipped），后面变胞段接手的是
+    #   上一次遗留的旧 CONTCAR —— 那个晶胞往往已经在旧 ENCUT 下弛豫到位，没有梯度可走，
+    #   CG 空转十几步后 ZBRENT 崩掉。只有【本次作业内真的跑过至少一段】之后，_converged
+    #   的结论才属于本次运行，才允许用它跳过后续段。
+    if [ "${EARLY_EXIT}" = "1" ] && [ "${ee}" = "1" ] && [ "${STAGES_RUN}" = "1" ] && _converged; then
+        echo "[run_relax] ${desc} —— 上一段已收敛，跳过（本段不改晶胞）"
+        : > ".${tag}.skipped"      # ★ 写 .skipped 不写 .done：被跳过的段不算已完成
+        return 0
+    fi
+    if [ "${EARLY_EXIT}" = "1" ] && [ "${ee}" = "1" ] && [ "${STAGES_RUN}" = "0" ]; then
+        echo "[run_relax] ${desc} —— 本次作业还没跑过任何段，不采信目录里残留的 OUTCAR（防陈旧跳过）"
+    fi
+    # 本段上次跑了一半被杀：CONTCAR 完好就从它接着算，不从头再来
+    if [ -f ".${tag}.started" ] && _contcar_ok; then
+        echo "[run_relax] ${desc} —— 检测到上次中断，从 CONTCAR 续跑"
+        cp CONTCAR POSCAR
+    fi
+    : > ".${tag}.started"
+    STAGES_RUN=1        # 本段真的要跑 VASP 了：此后 _converged 读到的才是本次作业的输出
+    echo "[run_relax] ${desc}"
+    cp "${incar}" INCAR
+
+    ${VASP_CMD} &
+    vpid=$!
+    _watchdog "${vpid}" &
+    wpid=$!
+    wait "${vpid}" || rc=$?
+    kill "${wpid}" 2>/dev/null || true
+    wait "${wpid}" 2>/dev/null || true
+
+    # 每段各存一份，否则下一段启动时 VASP 会把 OUTCAR/OSZICAR 覆盖掉，
+    # 出问题后连上一段跑了多久、有没有警告都查不到
+    for f in ${_ARCHIVE}; do
+        if [ -f "${f}" ]; then cp -f "${f}" "${f}.${tag}"; fi
+    done
+
+    if [ "${rc}" -ne 0 ]; then
+        echo "[run_relax] ${desc} 异常退出 (rc=${rc})，已存档 *.${tag}" >&2
+        return 1
+    fi
+    if ! grep -q "General timing and accounting" OUTCAR; then
+        echo "[run_relax] ${desc} 未正常收尾（OUTCAR 无 General timing）" >&2
+        return 1
+    fi
+    : > ".${tag}.done"
+    if [ "${pass}" = "1" ]; then
+        # 无论本段是否收敛，下一段都必须从本段的 CONTCAR 起算：
+        #   收敛   -> 带着弛豫好的离子进下一段；
+        #   未收敛 -> 接着本段停下的地方算。
+        # 旧版只在"未收敛"时才接力，于是段1(a) 一旦收敛，段2(b) 就从原始 POSCAR
+        # 起算，把段1 的离子弛豫整个丢掉。
+        if ! _contcar_ok; then
+            echo "[run_relax] ${desc} 的 CONTCAR 缺失/残缺，无法接力下一段" >&2
+            return 1
+        fi
+        cp CONTCAR POSCAR
+    fi
+    return 0
+}
+"""
+
+
+def stage_changes_cell(incar_text):
+    """这一段是否动晶胞（ISIF>=3，或写了 2D 的 IOPTCELL）。
+
+    动晶胞的段不能被"力已收敛"这个判据跳过 —— 力收敛说明不了应力收敛。
+    ISIF=2 时 IOPTCELL 会被 gen 主动忽略（见 apply_2d_cell_constraint），
+    所以只看 ISIF 就够；但为稳妥起见，IOPTCELL 非零行也一并算作动胞。"""
+    isif = "2"
+    for ln in incar_text.splitlines():
+        m = re.match(r"\s*ISIF\s*=\s*(\S+)", ln, re.IGNORECASE)
+        if m:
+            isif = m.group(1).strip()
+            break
+    m = re.match(r"(\d+)", isif)
+    if m and int(m.group(1)) >= 3:
+        return True
+    for ln in incar_text.splitlines():
+        mm = re.match(r"\s*IOPTCELL\s*=\s*(\S+)", ln, re.IGNORECASE)
+        if mm and re.search(r"[1-9]", mm.group(1)):
+            return True
+    return False
+
+
+def _layer_factor(poscar, vac_axis=2):
+    """算 h⊥/d（层内口径换算因子）；算不出返回 None。
+
+    h⊥ = V/|a_i×a_j|（垂直胞高，不是 |c|），d = 原子沿真空轴的跨度 + 两端 vdW 半径。
+    单一真源在 skill/_common/thickness_2d.py（ke 链读同一份）。它依赖 ase，且需要
+    gen_need 里带上该模块 —— 缺了就走兜底（调用方打 WARN），绝不在这里硬失败。
+    """
+    try:
+        import sys as _s
+        from pathlib import Path as _P
+        _c = _P(__file__).resolve().parent.parent          # skill/_common
+        if str(_c) not in _s.path:
+            _s.path.insert(0, str(_c))
+        from thickness_2d import slab_geometry_from_poscar
+        g = slab_geometry_from_poscar(_P(poscar), int(vac_axis or 2))
+        return float(g["h_perp_A"]) / float(g["thickness_d_A"])
+    except BaseException:                                  # noqa: BLE001
+        return None
+
+
+def _load_thickness2d(outdir=None):
+    """import 公共池的 thickness_2d 模块；outdir 用来兜住 tf 的推送位置。
+
+    tf 把 gen_need 里的模块平铺推到 gen 运行目录（= 技能目录 ≈ outdir.parent），
+    本地开发时 relax_common.py 却在 skill/_common/opt/ 下 —— 两种布局都试：
+      · outdir 的上一级（技能目录，tf 推送位置）；
+      · outdir 的上上级（材料根，S6 作业 cwd 里的 ".."）；
+      · 本文件同目录（skill/_common/opt）与上一级（skill/_common）。
+    找不到会抛 ImportError，由调用方按 best-effort 处理。"""
+    cands = []
+    if outdir is not None:
+        _od = Path(outdir).resolve()
+        cands += [_od.parent, _od.parent.parent]
+    _here = Path(__file__).resolve().parent
+    cands += [_here, _here.parent]
+    for _c in cands:
+        if str(_c) not in sys.path:
+            sys.path.insert(0, str(_c))
+    import thickness_2d
+    return thickness_2d
+
+
+def write_material_thickness(outdir, dim, vac_axis, tol=0.05):
+    """S1 gen 把 2D 层厚口径写到【材料根目录】的 thickness_2d.json（best-effort）。
+
+    材料级契约与"按技能链比较"的语义见 skill/_common/thickness_2d.write_material_level：
+      · 材料根 = 技能目录的上一级；技能目录 = outdir.parent
+        （gen 在 <材料>/<技能>/ 下运行，outdir = <材料>/<技能>/<步骤目录>）；
+      · source = "<技能>:<步骤目录>"（如 kl-dft-cpu:step1_std_opt），后续 S6 用弛豫
+        后的结构覆盖同一链的数值（按链比较，见 write_material_level）；
+      · kl / ke 两条链之间只比对，差 > tol 只 WARN、不覆盖。
+
+    **sanity check**：只有技能目录名像技能名（小写-小写…），且材料根能 glob 到
+    "*/*/step*" 或本身有 POSCAR 时才写，避免路径猜错把文件写到别处。
+
+    只在 2D 下做。任何异常只 print [WARN]，绝不让 gen 失败；异常文本原样打印
+    （本项目被静默吞过一次，这里不留静默洞）。"""
+    if str(dim) != "2d":
+        return
+    cwd = Path(outdir).parent                  # 技能目录，如 <mat>/kl-dft-cpu
+    matdir = cwd.parent                        # 材料根，如 <mat>
+    try:
+        # 技能名形如 kl-dft-cpu / ke-dft-cpu / opt-mlff-cpu / mlff
+        if not re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)+", cwd.name):
+            print("[..] 跳过材料级 thickness_2d.json：%s 不像技能目录（名 %r）"
+                  % (cwd, cwd.name))
+            return
+        if not (bool(list(matdir.glob("*/*/step*"))) or (matdir / "POSCAR").is_file()):
+            print("[..] 跳过材料级 thickness_2d.json：%s 不像材料根"
+                  "（既无 POSCAR，也 glob 不到 */*/step*）" % matdir)
+            return
+        t2d = _load_thickness2d(outdir)
+        geo = t2d.slab_geometry_from_poscar(outdir / "POSCAR", int(vac_axis or 2))
+        meta = dict(geo)
+        meta.update({
+            "dim": "2d",
+            "vac_axis": int(vac_axis if vac_axis is not None else 2),
+            "poscar": "%s/%s/POSCAR" % (cwd.name, Path(outdir).name),
+            "source": "%s:%s" % (cwd.name, Path(outdir).name),
+        })
+        print(t2d.write_material_level(matdir, meta, tol=tol))
+    except Exception as exc:                   # noqa: BLE001 —— best-effort，绝不中断 gen
+        print("[WARN] 材料级 thickness_2d.json 写入跳过：%s" % exc)
+
+
+def symmetry_health_check(poscar_path):
+    """结构体检第五条：双容差空间群审计 + 可选对称化（默认只告警，不改行为）。
+
+    审计【本次 gen 的结构】。弛豫后的微畸变要在进 S4 前用同一引擎
+    （symmetry_audit.py --mode symmetrize）复核并把对称化结构写回去。
+    返回审计 dict（关闭/不可用时 None）。任何异常都不阻断 gen。"""
+    mode = str(globals().get("SYMMETRY_AUDIT") or "warn").strip().lower()
+    if mode in ("off", "false", "0", "none", ""):
+        return None
+    if symmetry_audit is None:
+        print("[..] 结构体检第五条跳过：symmetry_audit.py 不可用")
+        return None
+    symprec = float(globals().get("SYMMETRY_AUDIT_SYMPREC") or 1e-4)
+    try:
+        res = symmetry_audit.audit_structure_file(poscar_path, symprec=symprec)
+    except Exception as exc:                   # noqa: BLE001
+        print("[..] 结构体检第五条跳过（审计失败）：%s" % exc)
+        return None
+    if not res.get("available"):
+        print("[..] 结构体检第五条跳过：%s" % res.get("reason"))
+        return None
+    sg = res["spacegroup"]
+    if res["micro_distortion"]:
+        print("[WARN] 结构体检第五条：检出数值微畸变 —— symprec=1e-5 -> %s (#%s)/%d ops，"
+              "1e-4 -> %s (#%s)/%d ops；建议进 S4 前用 symmetry_audit.py --mode symmetrize 对称化"
+              % (sg[0]["international"], sg[0]["number"], sg[0]["n_ops"],
+                 sg[-1]["international"], sg[-1]["number"], sg[-1]["n_ops"]))
+    else:
+        print("[..] 结构体检第五条：空间群一致（%s #%s，%d ops），无微畸变"
+              % (sg[-1]["international"], sg[-1]["number"], sg[-1]["n_ops"]))
+    try:
+        import json as _json
+        (Path(poscar_path).parent / "symmetry_audit.json").write_text(
+            _json.dumps(res, ensure_ascii=False, indent=2), encoding="utf-8")
+    except OSError:
+        pass
+    if res["micro_distortion"] and mode == "error":
+        sys.exit("[ERROR] 结构体检第五条：结构存在数值微畸变（SYMMETRY_AUDIT=error）。"
+                 "先跑 symmetry_audit.py --mode symmetrize，或在 step.conf 设 "
+                 "SYMMETRY_AUDIT=warn 继续。")
+    return res
+
+
+def structure_health_check(poscar_path, material_name=None):
+    """结构体检【四条】：最近邻重叠 / CN=1 悬挂 / 命名 vs 计量比 / z 跨度 vs 层数。
+
+    默认只告警（STRUCTURE_HEALTH=warn），不改结构、不阻断 gen；引擎不可用或异常一律跳过。
+    返回结果 dict（关闭/不可用时 None）。
+    """
+    mode = str(globals().get("STRUCTURE_HEALTH") or "warn").strip().lower()
+    if mode in ("off", "false", "0", "none", ""):
+        return None
+    if structure_health is None:
+        print("[..] 结构体检四条跳过：structure_health.py 不可用")
+        return None
+    try:
+        res = structure_health.check_structure_file(poscar_path,
+                                                    material_name=material_name)
+    except Exception as exc:                   # noqa: BLE001
+        print("[..] 结构体检四条跳过（体检失败）：%s" % exc)
+        return None
+    if not res.get("available"):
+        print("[..] 结构体检四条跳过：%s" % res.get("reason"))
+        return None
+    print(structure_health.format_report(res))
+    try:
+        import json as _json
+        (Path(poscar_path).parent / "structure_health.json").write_text(
+            _json.dumps(res, ensure_ascii=False, indent=2), encoding="utf-8")
+    except OSError:
+        pass
+    if not res.get("ok") and mode == "error":
+        sys.exit("[ERROR] 结构体检四条未过（STRUCTURE_HEALTH=error）：%s"
+                 % "；".join(res.get("flags", [])))
+    return res
+
+
+def build_in_job_stages(outdir: Path):
+    """把 outdir/INCAR 按 STAGE_SPEC 拆成 INCAR.s1_<段> …，生成 run_relax.sh，
+       并把 submit.sh 里的 VASP 执行行换成 `bash run_relax.sh`。
+
+       base = outdir/INCAR —— 此时已经过磁性/LMAXMIX/U/2D 变胞约束的全部后处理，
+       所以各段只在它之上覆盖 STAGE_SPEC 里的弛豫控制标签。
+       返回 True=已分段；False=没能分段（保持单段，已打印原因）。"""
+    # 本函数要用维度决定变胞稳定判据（2D 看面内分量、3D 看 |P|）。
+    # 这里自己判一次，避免依赖调用方是否已把 dim 放进作用域（2026-09-17 踩过）。
+    try:
+        _dim_bj, _vax_bj, _ = resolve_dimension(outdir / "POSCAR")
+    except BaseException:            # noqa: BLE001 —— 含 resolve_dimension 的 sys.exit
+        # 判不出来就退回 3D 判据（|P|），绝不在这里引入新的硬失败：main() 自己
+        # 还会按同一 POSCAR 再判一次并给出正确的报错。
+        _dim_bj, _vax_bj = "", 2
+
+    # 2D 的稳定判据必须换算到【层内口径】才能和 S4 的门禁（STRESS_2D_THR=0.5 kbar 层内）
+    #   对齐：σ_layer = σ_cell × h⊥/d，而 h⊥/d 因材料而异（Mo2S3≈2.91，平面单层 AlN/BeO
+    #   的 d≈3.4 Å、h⊥/d≈6）。固定用胞口径 0.2 kB 会在 AlN/BeO 上等效成 ~1.2 kbar，
+    #   比 S4 门禁还松 —— 就会出现"S1 判通过、S4 判失败"。所以：
+    #       tol_cell = TOL_LAYER / (h⊥/d)，TOL_LAYER = 0.4 kbar（比 S4 的 0.5 留余量）
+    #   h⊥/d 由 thickness_2d 现算；算不出（缺 ase/模块没推过去）就退回配置值并 WARN。
+    _tol_cell = INPLANE_TOL_KB
+    if _dim_bj == "2d":
+        _f = _layer_factor(outdir / "POSCAR", _vax_bj)
+        if _f and _f > 0:
+            _tol_cell = TOL_LAYER_KB / _f
+            # ★ 下限 0.05 kB（user 2026-09-17）：AlN/BeO 这类平面单层的 h⊥/d 可达 6，
+            #   0.4/6 = 0.067 kB 已经接近 VASP 应力的数值噪声（0.05~0.1 kB 量级），
+            #   变胞循环会在阈值附近来回振荡、永远收敛不了。设下限保证判据在可分辨范围内。
+            if _tol_cell < 0.05:
+                print("[..] 层内阈值 %.4f kB 低于数值噪声，抬到下限 0.05 kB" % _tol_cell)
+                _tol_cell = 0.05
+            print("[..] 2D 层内口径换算：h⊥/d = %.3f → 面内阈值 %.4f kB（胞口径）"
+                  "= %.2f kbar（层内）" % (_f, _tol_cell, _tol_cell * _f))
+        else:
+            print("[WARN] 算不出 h⊥/d（thickness_2d 不可用？）→ 面内阈值用配置值 %.4f kB，"
+                  "可能与 S4 的层内口径门禁不一致" % _tol_cell)
+
+    # ---- S1 gen：把 2D 层厚口径写到【材料根目录】的 thickness_2d.json（best-effort）----
+    #   放在这里而不是 main() 末尾：此处刚算过维度/真空轴（_dim_bj/_vax_bj）和层几何，
+    #   直接复用；且即使后面 extract_vasp_cmd 失败提前 return，材料级留档也已落盘。
+    #   失败只在函数内打 WARN，绝不影响分段/提交。
+    write_material_thickness(outdir, _dim_bj, _vax_bj)
+    base = (outdir / "INCAR").read_text(encoding="utf-8")
+    submit_path = outdir / "submit.sh"
+    vasp_cmd = extract_vasp_cmd(submit_path.read_text(encoding="utf-8"))
+    if not vasp_cmd:
+        print("[WARN] 未能从 submit.sh 解析 VASP 执行行 —— 跳过作业内分段，保持单段 INCAR")
+        return False
+
+    # 变胞段的 ENCUT 单独提到 2.0×max(ENMAX)（2026-09-17，user 定）：
+    #   Pulay 应力只影响【应力张量】，不影响固定几何下的力 —— 实测同几何下
+    #   ENCUT 390→507 每个应力分量各向同性地平移约 +1.0 kB，507→624 变化 <0.02 kB。
+    #   所以：① 用应力定晶格的变胞段（ISIF=3）必须用收敛 ENCUT（2.0×），否则晶格
+    #   是在带 ~1 kB 偏差的应力下定的；② S2/S4 是固定几何算力/静态，与 Pulay 无关，
+    #   保持原 ENCUT（省掉约 60% 的平面波成本，S4 有 166~478 帧，差别很大）。
+    #   面内应力门禁读的是 S1 的 OUTCAR，S1 改 2.0× 后自然满足。
+    try:
+        _encut_cell = str(encut_from_potcar(outdir / "POTCAR", CELL_STAGE_ENCUT_FACTOR))
+    except BaseException:                                  # noqa: BLE001
+        _encut_cell = None
+    stages = []
+    for k, st in enumerate(STAGE_ORDER):
+        spec = {a: b for a, b in STAGE_SPEC[st].items() if not a.startswith("_")}
+        if _encut_cell:
+            _moves = (str(spec.get("ISIF") or "").startswith(("3", "4", "5", "6", "7", "8"))
+                      or str(spec.get("IOPTCELL") or "").strip() not in ("", "None"))
+            if _moves:
+                spec["ENCUT"] = _encut_cell
+        if _lc_mode():
+            spec.pop("IOPTCELL", None)      # 同上：LATTICE_CONSTRAINTS 模式不给老标签
+        text = set_incar_tags(base,
+                              {a: b for a, b in spec.items() if b is not None},
+                              remove_keys=[a for a, b in spec.items() if b is None])
+        fname = "INCAR.s%d_%s" % (k + 1, st)
+        (outdir / fname).write_text(text, encoding="utf-8", newline="\n")
+        # ★ step.conf 的 [incar] / [incar.final] / [incar.delete] 覆盖。
+        #   本模块此前**只消费 [params]/[submit]**，而且不调 read_submit()，
+        #   所以这三节是"连告警都没有"的纯静默洞：用户在 step1_opt 的 step.conf
+        #   里写 INCAR 覆盖完全无效。2026-09-15 接上，用 stepconf 的唯一实现，
+        #   逐段应用（每个 INCAR.s* 都要，因为作业内分段跑的是这些文件）。
+        _ic_log = []
+        stepconf.apply_incar_file(outdir / fname, log=_ic_log)
+        for _m in _ic_log:
+            print("[..] %s" % _m)
+        desc = "段%d(%s) %s" % (k + 1, st, STAGE_SPEC[st].get("_desc", ""))
+        if stage_changes_cell(text):
+            desc += " [变胞]"
+        stages.append((fname, desc, stage_changes_cell(text)))
+        if k == 0:      # INCAR 本体指向第一段，便于手动排查
+            (outdir / "INCAR").write_text(text, encoding="utf-8", newline="\n")
+            stepconf.apply_incar_file(outdir / "INCAR")   # 同上，[incar*] 三节
+
+    # ---- 段序切分：前缀（不改胞，跑一次）／变胞主体（多遍循环）／尾部（跑一次）----
+    cell_idx = [i for i, s in enumerate(stages) if s[2]]
+    first_cell = cell_idx[0] if cell_idx else len(stages)
+    last_cell = cell_idx[-1] if cell_idx else -1
+    prefix = list(range(0, first_cell))
+    body = list(range(first_cell, last_cell + 1))
+    tail = list(range(last_cell + 1, len(stages)))
+    last_overall = len(stages) - 1
+
+    lines = ["#!/bin/bash", "set -e",
+             "# 作业内分段弛豫（%s 生成，STAGE_MODE=in_job）" % SCRIPT_NAME,
+             "# 段序：" + " -> ".join(s[1] for s in stages),
+             "# VASP 执行命令取自 submit.sh，$SLURM_NTASKS 运行时展开",
+             "#",
+             "# 断点续跑：每段【真跑完】才写 .sN.done，重投时自动跳过已完成的段。",
+             "#   因力判据被跳过的段写 .sN.skipped（不算完成，重投仍会跑）。",
+             "#   想强制从头重来： rm -f .s?.done .s?.started .s?.skipped .cellin.*",
+             "# 分段存档：每段的 OUTCAR/OSZICAR/CONTCAR 另存为 *.sN，便于事后排查。",
+             "",
+             'VASP_CMD="%s"' % vasp_cmd,
+             "STALL_MIN=%d    # OUTCAR 停滞这么多分钟判定卡死（0=关）" % int(STALL_MIN),
+             'EARLY_EXIT=%s   # 不改胞的段：已收敛就跳过后续段' % ("1" if EARLY_EXIT_ON_CONVERGENCE else "0"),
+             "PRESS_TOL=%s     # 稳定判据③(3D)：|external pressure| < 此值 (kB)" % PRESS_TOL_KB,
+             # 2D 用面内分量判据（2026-09-17）：|P| 有 2/3 被受约束的 σzz 撑着，偏松。
+             #   INPLANE_TOL 是【胞口径】阈值，来自 step.conf 的 INPLANE_STRESS_TOL_KB；
+             #   换算到层内口径要乘 h⊥/d（本批 2D 约 2.9），0.15 kB ≈ 0.44 kbar 层内，
+             #   正好卡在 S4 的 STRESS_2D_THR=0.5 kbar 之内。
+             "CELL_2D=%s       # 1 = 2D：变胞稳定判据改用面内分量" % ("1" if _dim_bj == "2d" else "0"),
+             "INPLANE_TOL=%s   # 稳定判据③(2D)：max(|σxx|,|σyy|,|σxy|) < 此值 (kB,胞口径)"
+             % _tol_cell,
+             "CELL_PASS_MAX=%d # 变胞段最多重复几遍" % int(CELL_PASS_MAX),
+             "CELL_PASS_TOL=%s # 稳定判据②：本遍晶格矢量分量最大变化 (Å)" % CELL_PASS_TOL,
+             "CELL_SETTLED=1   # 无变胞段时视为无需稳定判定；进循环会置 0",
+             "FORCE_TOL=%s     # 变胞段末态最大力上限 (eV/Å)：能量判据可能在力没洗干净时就停"
+             % CELL_FORCE_TOL_EV_A,
+             "STAGES_RUN=0     # 本次作业是否真跑过至少一段（防用上次遗留的 OUTCAR 判跳过）",
+             RUN_RELAX_HELPERS,
+             ""]
+
+    def _emit(i, tag, pass_flag):
+        fname, desc, cell_stage = stages[i]
+        # 变胞段一律 ee=0（禁止被力判据跳过）；不改胞的段沿用 EARLY_EXIT 开关
+        lines.append('_run_stage %s %s %s "%s" %s'
+                     % (tag, fname, pass_flag, desc, "0" if cell_stage else "1"))
+        # ★ 每段跑完记一行 (面内应力, 末态最大力, |P|) 三元组（2026-09-18，成本为零）：
+        #   实测教训：MoS2 曾出现段 b 0.078 → 段 c 0.143 kB 的段间抖动，当时只能另花一轮去
+        #   比对两段 CONTCAR 才判定是同一几何的数值噪声。有了这行，下次直接看日志即可。
+        lines.append('echo "[run_relax] 段存档 %s: 面内max|σ|=$(_last_inplane 2>/dev/null || echo NA) kB  '
+                     'max|F|=$(_max_force 2>/dev/null || echo NA) eV/Å  |P|=$(_last_pressure 2>/dev/null || echo NA) kB"'
+                     % tag)
+
+    for i in prefix:
+        _emit(i, "s%d" % (i + 1), "0" if i == last_overall else "1")
+
+    if body:
+        body_last_tag = "s%dr${CELL_PASS}" % (body[-1] + 1)
+        lines += ["",
+                  "# ===================== 变胞段多遍循环 =====================",
+                  "# 为什么必须多遍：",
+                  "#   ① VASP 的 EDIFFG<0 只判【力】不判【应力】，单遍跑完晶胞常差几个 kbar；",
+                  "#   ② 体积/形状一变，平面波基组的 G 矢量集合就变了（Pulay 应力），",
+                  "#      必须 CONTCAR->POSCAR 重开一遍让基组与新晶胞自洽。",
+                  "# 稳定判据（三条全满足）：力收敛 + 本遍晶格几乎不动 + |P| 达标。",
+                  "CELL_SETTLED=0",
+                  "CELL_PASS=1",
+                  'while [ -f ".%s.done" ]; do CELL_PASS=$((CELL_PASS + 1)); done' % body_last_tag,
+                  'echo "[run_relax] 变胞段从第 ${CELL_PASS} 遍开始（上限 ${CELL_PASS_MAX} 遍）"',
+                  "while : ; do",
+                  '    cp -f POSCAR ".cellin.${CELL_PASS}" 2>/dev/null || true']
+        for i in body:
+            _emit(i, "s%dr${CELL_PASS}" % (i + 1), "0" if i == last_overall else "1")
+        lines += ['    _dl="$(_cell_delta ".cellin.${CELL_PASS}" CONTCAR)"',
+                  '    _lp="$(_last_pressure 2>/dev/null || true)"',
+                  '    _ip="$(_last_inplane 2>/dev/null || true)"',
+                  '    _mf="$(_max_force 2>/dev/null || true)"',
+                  # 2D 判面内分量、3D 判 external pressure（_cell_settled 里按 CELL_2D 分流）
+                  '    _crit="${_lp}"; _tol="${PRESS_TOL}"; [ "${CELL_2D}" = "1" ] && { _crit="${_ip}"; _tol="${INPLANE_TOL}"; }',
+                  '    _critname="|P|"; [ "${CELL_2D}" = "1" ] && _critname="面内max|σ|"',
+                  '    echo "[run_relax] 第 ${CELL_PASS} 遍：max|Δ晶格| = ${_dl} Å   |P| = ${_lp} kB   面内max|σ| = ${_ip} kB   max|F| = ${_mf} eV/Å (上限 ${FORCE_TOL})"',
+                  '    if _cell_settled "${_dl}" "${_crit}"; then',
+                  '        echo "[run_relax] 变胞段稳定（力收敛 + 晶格变化 < ${CELL_PASS_TOL} Å + ${_critname} < ${_tol} kB），共 ${CELL_PASS} 遍"',
+                  "        CELL_SETTLED=1",
+                  "        break",
+                  "    fi",
+                  '    if [ "${CELL_PASS}" -ge "${CELL_PASS_MAX}" ]; then',
+                  '        echo "[run_relax][WARN] 已跑满 ${CELL_PASS_MAX} 遍仍未稳定：max|Δ晶格|=${_dl} Å, |P|=${_lp} kB, 面内=${_ip} kB" >&2',
+                  "        break",
+                  "    fi",
+                  '    echo "[run_relax] 未稳定，CONTCAR -> POSCAR 重开第 $((CELL_PASS + 1)) 遍"',
+                  "    cp -f CONTCAR POSCAR",
+                  "    CELL_PASS=$((CELL_PASS + 1))",
+                  "done",
+                  ""]
+
+    for i in tail:
+        _emit(i, "s%d" % (i + 1), "0" if i == last_overall else "1")
+
+    lines += ["",
+              'lastp="$(_last_pressure 2>/dev/null || true)"',
+              'lastip="$(_last_inplane 2>/dev/null || true)"',
+              'if [ "${CELL_2D}" = "1" ]; then',
+              '    echo "[run_relax] 末态：external pressure = ${lastp:-?} kB 面内max|σ| = ${lastip:-?} kB（2D 判据阈值 ${INPLANE_TOL} kB，胞口径）"',
+              "else",
+              '    echo "[run_relax] 末态 external pressure = ${lastp:-?} kB（阈值 ${PRESS_TOL}）"',
+              "fi",
+              'if [ "${CELL_SETTLED}" != "1" ]; then',
+              '    echo "[run_relax][WARN] 变胞段【未判定为稳定】—— 末态 P=${lastp:-?} kB、面内max|σ|=${lastip:-?} kB，晶胞可能没到位。" >&2',
+              '    echo "[run_relax][WARN] 补救：cp CONTCAR POSCAR; rm -f .s?r?.done; 重投本步。" >&2',
+              "    echo RELAX_CELL_UNCONVERGED",
+              "fi",
+              "",
+              'if grep -q "reached required accuracy" OUTCAR; then',
+              '    echo RELAX_OK',
+              "else",
+              '    echo RELAX_CHECK_NEEDED',
+              "fi"]
+    (outdir / "run_relax.sh").write_text("\n".join(lines) + "\n",
+                                         encoding="utf-8", newline="\n")
+    (outdir / "run_relax.sh").chmod(0o755)
+
+    submit_text = submit_path.read_text(encoding="utf-8")
+    submit_path.write_text(submit_text.replace(vasp_cmd, "bash run_relax.sh"),
+                           encoding="utf-8", newline="\n")
+    print("[OK] 作业内分段：%d 段 -> run_relax.sh；submit.sh 已改调 bash run_relax.sh"
+          % len(stages))
+    for fname, desc, cell_stage in stages:
+        print("     %-22s %s" % (fname, desc))
+    return True
+
+
+def write_method_file(path: Path, label: str, formula: str, prim_note: str = None,
+                      mag_line: str = None, dim_line: str = None,
+                      u_line: str = None, u_extra: str = None):
+    method = FUNC_MAP[FUNC]
+    lines = [
+        f"FUNC={FUNC}",
+        f"GGA={method['GGA']}",
+        f"IVDW={method['IVDW'] if method['IVDW'] else 'NONE'}",
+        f"LABEL={label}",
+        f"FORMULA={formula}",
+    ]
+    lines.append("STAGE_MODE=%s" % STAGE_MODE)
+    if dim_line:
+        lines.append(dim_line)
+    if mag_line:
+        lines.append(mag_line)
+    if u_line:                       # [PATCH-UCONS] LDAU=off / LDAU=Mn:3.9 ...
+        lines.append(u_line)
+    if u_extra:
+        lines.append(u_extra)
+    if prim_note:
+        lines.append(prim_note)
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8", newline="\n")
+
+
+def read_incar_values(path: Path):
+    values = {}
+    for line in path.read_text(encoding="utf-8").splitlines():
+        text = line.strip()
+        if not text or text.startswith(("#", "!")):
+            continue
+
+        for marker in ("#", "!"):
+            if marker in text:
+                text = text.split(marker, 1)[0].strip()
+
+        for part in text.split(";"):
+            if "=" in part:
+                key, value = part.split("=", 1)
+                values[key.strip().upper()] = value.strip()
+    return values
+
+
+def validate_generated_incar(path: Path):
+    """
+    确认生成的 INCAR 与顶部 FUNC 一致。
+    只校验方法关键的 GGA / IVDW 两项——其余参数模板自由增删，不做限制。
+    """
+    values = read_incar_values(path)
+    potcar = path.parent / "POTCAR"
+    if not potcar.is_file():
+        sys.exit("[ERROR] 缺少 POTCAR，无法校验 ENCUT 的 1.5×ENMAX 下限")
+    minimum = encut_from_potcar(potcar, max(1.5, ENCUT_FACTOR))
+    try:
+        actual = float(values.get("ENCUT", "nan"))
+    except ValueError:
+        actual = float("nan")
+    if not math.isfinite(actual) or actual < minimum:
+        sys.exit(f"[ERROR] 生成的 INCAR ENCUT={values.get('ENCUT')} 低于"
+                 f" POTCAR 下限 {minimum} eV；请修正硬编码模板")
+    method = FUNC_MAP[FUNC]
+    gga = values.get("GGA", "").upper()
+    ivdw = values.get("IVDW", "").split()[0] if values.get("IVDW") else None
+
+    if gga != method["GGA"]:
+        sys.exit(
+            f"[ERROR] 生成的 INCAR 中 GGA={gga or '(missing)'}，与 FUNC={FUNC!r} "
+            f"要求的 {method['GGA']} 不一致。\n"
+            "        请保留 incar.tpl 中的 GGA = {{GGA}}，"
+            "或将其手动固定为一致的值。"
+        )
+
+    if ivdw != method["IVDW"]:
+        if method["IVDW"] is None:
+            sys.exit(
+                f"[ERROR] FUNC={FUNC!r} 不应启用色散修正，但生成的 INCAR 有 IVDW={ivdw}。\n"
+                "        请删除 incar.tpl 中写死的 IVDW，只保留 {{VDW_LINE}}。"
+            )
+        sys.exit(
+            f"[ERROR] FUNC={FUNC!r} 要求 IVDW={method['IVDW']}，"
+            f"但生成的 INCAR 中 IVDW={ivdw or '(missing)'}。\n"
+            "        请确认 incar.tpl 中的 {{VDW_LINE}} 单独占一行。"
+        )
+
+
+def main():
+    cwd = Path.cwd()
+    if not (cwd / "POSCAR").exists():
+        sys.exit("[ERROR] 当前目录缺少 POSCAR")
+
+    if MOL_BRANCH:
+        import mol_common          # 公共池模块；MOL_BRANCH=False 的技能不需要它
+        if mol_common.is_molecule(cwd / "POSCAR", VACUUM_MIN, DIMENSION):
+            load_step_params(OUTDIR_SINGLE)   # MOL_* 也在 CONF_SPEC 里，一次读全
+            apply_step_params()
+            mol_common.generate(cwd, globals())
+            return
+
+    # ---- 弛豫阶段先解析（与 FUNC 共用同一 step 名读 step.conf）----
+    global FUNC
+    stage, outdir_name, src_poscar = resolve_stage(cwd)
+    # ---- 晶胞策略：step.conf 可覆盖技能默认（护栏 + provenance），必须在改胞前 ----
+    load_step_params(outdir_name)
+    cell_note = apply_cell_params()
+    prim_note = ensure_cell(cwd / "POSCAR")
+
+    # ---- 维度判定 + 按维度选模板（2D/3D 各一套，缺失回退到无后缀旧名）----
+    dim, vac_axis, dim_note = resolve_dimension(cwd / "POSCAR")
+    incar_tpl = resolve_tpl(cwd, "incar", dim)
+    submit_tpl = resolve_tpl(cwd, "submit_std", dim)
+    template_text = submit_tpl.read_text(encoding="utf-8", errors="ignore")
+    capability = re.search(r"^export AUTOZT_CELL_CONSTRAINT=(ioptcell_tag|optcell_file|none)$", template_text, re.M)
+    if dim == "2d" and (not capability or capability.group(1) == "none"):
+        sys.exit("[ERROR] 2D 优化模板未声明约束能力，请配置集群 vasp.relax_2d")
+    apply_cell_constraint_2d._constraint_mode = capability.group(1) if capability else "none"
+    print(f"[..] 维度：{dim.upper()} — {dim_note}")
+    print(f"[..] 模板：{incar_tpl.name} + {submit_tpl.name}")
+    if dim == "2d" and incar_tpl.name == "incar.tpl":
+        print("[WARN] 2D 体系但只找到了无后缀 incar.tpl —— 请确认它就是 2D 模板"
+              "（含 c 轴约束），建议改名为 incar_2d.tpl 并补一套 *_3d.tpl")
+
+    # ---- 泛函：step.conf 说了算（stage / step.conf 已在改胞前解析）----
+    FUNC, func_src = resolve_func(incar_tpl, outdir_name)
+    apply_step_params()
+    validate_user_config()
+    print("[..] 泛函：%s（来源：%s）" % (FUNC, func_src))
+
+    label, formula = read_poscar_identity(cwd / "POSCAR")
+    params = build_params(label)
+
+    outdir = cwd / outdir_name
+    outdir.mkdir(exist_ok=True)
+    if stage:
+        print("[..] 弛豫阶段：%s —— %s" % (stage, STAGE_SPEC[stage]["_desc"]))
+        print("[..] 结构来源：%s" % src_poscar)
+
+    print(f"[..] 结构标签：{label}")
+    print(f"[..] 化学式：{formula}")
+    print(f"[..] GGA={params['GGA']}，IVDW={FUNC_MAP[FUNC]['IVDW'] or 'off'}")
+    print(f"[..] 输出目录：{outdir}")
+
+    # 复制 POSCAR
+    poscar_text = src_poscar.read_text(encoding="utf-8-sig")
+    (outdir / "POSCAR").write_text(poscar_text, encoding="utf-8", newline="\n")
+    print("[OK] POSCAR")
+
+    # 结构体检第五条（2026-09-20）：双容差空间群审计；默认只告警，不改行为。
+    symmetry_health_check(outdir / "POSCAR")
+    # 结构体检四条（2026-09-21）：最近邻重叠 / CN 悬挂 / 命名计量比 / 层厚；默认只告警。
+    structure_health_check(outdir / "POSCAR", material_name=outdir.parent.name)
+
+    # [UPSTREAM-FROM-MLFF] retry 语义：gen 时清掉上次作业的阶段标记。.sN.done 只表示
+    # 「跑过」、不表示「收敛过」——上次 FAIL 后重投若不清理，run_relax.sh 会把所有段
+    # 判成「已完成，跳过」，作业 0 秒“完成”、判据原样挂掉。gen 只在本步无作业时
+    # 执行（do_submit 先 kill_if_queued），这里清理不会误伤在跑作业。
+    # .cellin.N 是变胞多遍循环每遍的晶格起点快照，也必须一起清——
+    # 否则重投时会拿上一代的旧快照去比新 CONTCAR，_cell_delta 直接算错。
+    for _m in (sorted(outdir.glob(".s*.done")) + sorted(outdir.glob(".s*.started"))
+               + sorted(outdir.glob(".s*.skipped")) + sorted(outdir.glob(".cellin.*"))):
+        _m.unlink()
+        print("[..] 清掉旧阶段标记 %s（本代重新从头续跑）" % _m.name)
+
+    # 生成提交脚本（Slurm 参数已固化在模板里，只填 JOBNAME）
+    render(submit_tpl, outdir / "submit.sh", params)
+    # 覆盖优先级：step.conf [submit] > 脚本硬编码 SUBMIT_OVERRIDE
+    sub_ov = dict(SUBMIT_OVERRIDE)
+    sub_ov.update(STEP_SUBMIT)
+    stepconf.apply_submit(outdir / "submit.sh", sub_ov)
+
+    # 生成 KPOINTS / POTCAR
+    have_potcar = (outdir / "POTCAR").exists()
+    if RUN_VASPKIT:
+        try:
+            run_vaspkit_kpoints(VASPKIT_EXE, outdir, KSCHEME, KSPACING)
+            if dim == "2d" and FORCE_KZ1_2D:
+                changed, kz_note = force_kz1(outdir / "KPOINTS", axis=vac_axis)
+                print(f"[{'OK' if changed else '..'}] 2D KPOINTS 真空方向细分：{kz_note}")
+            run_vaspkit_potcar(VASPKIT_EXE, outdir)
+            have_potcar = (outdir / "POTCAR").exists()
+        except FileNotFoundError:
+            sys.exit(f"[ERROR] 找不到 VASPKIT：{VASPKIT_EXE}")
+        except subprocess.CalledProcessError as exc:
+            sys.exit(f"[ERROR] VASPKIT 执行失败，returncode={exc.returncode}")
+    else:
+        print("[SKIP] RUN_VASPKIT=False，已跳过 VASPKIT")
+
+    # 确定 ENCUT
+    if have_potcar:
+        required_encut = encut_from_potcar(outdir / "POTCAR", ENCUT_FACTOR)
+        if MANUAL_ENCUT is not None and float(MANUAL_ENCUT) < required_encut:
+            sys.exit(f"[ERROR] 手动 ENCUT={MANUAL_ENCUT} eV 低于 POTCAR 要求的"
+                     f" {ENCUT_FACTOR}×ENMAX={required_encut} eV")
+        params["ENCUT"] = str(MANUAL_ENCUT if MANUAL_ENCUT is not None else required_encut)
+        print(f"[..] ENCUT = {params['ENCUT']} eV（POTCAR 最低要求 {required_encut} eV）")
+    elif MANUAL_ENCUT is not None:
+        params["ENCUT"] = str(MANUAL_ENCUT)
+        print(f"[..] 使用手动 ENCUT = {MANUAL_ENCUT} eV（无 POTCAR，无法校验 ENMAX）")
+    else:
+        print(f"[WARN] 没有 POTCAR，ENCUT 暂用兜底值 {params['ENCUT']} eV")
+
+    # ---- P2-3：2D 偶极修正（Janus / 单面吸附）----
+    # 必须在 render 之前决定：模板 incar_2d.tpl 用 {{DIPOLE_LINE}} 占位。
+    _dip_on, _dip_note = decide_dipole_2d(cwd / "POSCAR", dim,
+                                          STEP_PARAMS.get("DIPOLE_2D"), vac_axis)
+    params["DIPOLE_LINE"] = "\n".join(dipole_lines(_dip_on, _dip_note))
+    if dim == "2d" or _dip_on:
+        print("[..] 偶极修正：%s — %s" % ("ON" if _dip_on else "off", _dip_note))
+
+    # 生成并校验 INCAR
+    render(incar_tpl, outdir / "INCAR", params)
+    if _dip_on:
+        # 项目/集群级 incar_*.tpl 优先级高于技能模板（find_asset），老副本没有
+        # {{DIPOLE_LINE}} → 偶极修正会被静默吃掉。这里兜底补写。
+        _txt = (outdir / "INCAR").read_text(encoding="utf-8", errors="ignore")
+        if not re.search(r"^\s*LDIPOL\s*=", _txt, re.M):
+            with open(outdir / "INCAR", "a", encoding="utf-8", newline="\n") as fh:
+                fh.write("\n" + "\n".join(dipole_lines(True, _dip_note)) + "\n")
+            print("[WARN] 模板 %s 没有 {{DIPOLE_LINE}} 占位符（项目级副本遮蔽？）"
+                  "→ 已把偶极修正直接追加进 INCAR。" % incar_tpl.name)
+    validate_generated_incar(outdir / "INCAR")
+    if STEP_PARAMS.get("FIXED_CELL", False):
+        incar_path = outdir / "INCAR"
+        incar_path.write_text(set_incar_tags(incar_path.read_text(), {"ISIF": "2"},
+                                           remove_keys=["IOPTCELL"]))
+    print("[OK] INCAR 泛函检查通过")
+
+    # ---- 磁性自动判定并注入 INCAR（覆盖模板里的 ISPIN/MAGMOM）----
+    if stage:
+        # 阶段参数必须在 2D 变胞约束处理【之前】注入：
+        # 阶段 a 会删掉 IOPTCELL，apply_cell_constraint_2d 才不会去写 OPTCELL 文件
+        apply_stage_to_incar(outdir / "INCAR", stage)
+        print("[OK] 阶段 %s 参数已注入 INCAR" % stage)
+
+    symbols, counts = read_species_and_counts(outdir / "POSCAR")
+    magnetic, magmom, mag_note = decide_magnetism(symbols, counts)
+    apply_magnetism_to_incar(outdir / "INCAR", magnetic, magmom, mag_note)
+    if magnetic:
+        print(f"[..] 磁性：ON  — {mag_note}")
+        print(f"     ISPIN=2, MAGMOM = {magmom}")
+        print("     （FM 高自旋起点；要 AFM 请改 MAGMOM_OVERRIDE 或手写 MAGMOM）")
+    else:
+        print(f"[..] 磁性：off — {mag_note}")
+
+    # ---- LMAXMIX 自动判定并注入 INCAR（覆盖模板里的 LMAXMIX）----
+    lmaxmix, lmm_note = decide_lmaxmix(symbols)
+    apply_lmaxmix_to_incar(outdir / "INCAR", lmaxmix, lmm_note)
+    print(f"[..] LMAXMIX = {lmaxmix} — {lmm_note}")
+
+    # ---- DFT+U 自动判定并注入 INCAR（覆盖模板里的 LDAU*）----
+    use_u, ldau_lines, u_note = decide_u(symbols)
+    apply_u_to_incar(outdir / "INCAR", use_u, ldau_lines, u_note)
+    if use_u:
+        print(f"[..] DFT+U：ON  — {u_note}")
+        print("     （U 值为文献起点，务必自查；step2/3 继承，step4 由 HSE_U_MODE 决定去留）")
+    else:
+        print(f"[..] DFT+U：off — {u_note}")
+
+    # ---- 2D：变胞约束流派处理（OPTCELL 文件 / IOPTCELL 标签）----
+    if dim == "2d":
+        apply_cell_constraint_2d(outdir / "INCAR", outdir)
+
+    # ---- 并行参数按宿主机自适应（GPU 版强制 NCORE=1/KPAR=1，CPU 保持模板默认）----
+    p_tags = adaptive_parallel_tags()
+    if p_tags:
+        incar_path = outdir / "INCAR"
+        incar_path.write_text(set_incar_tags(incar_path.read_text(), p_tags))
+        print("[..] 并行参数已按宿主机覆盖：%s" % ", ".join("%s=%s" % kv for kv in p_tags.items()))
+
+    # ---- step.conf 的 [incar] / [incar.final] / [incar.delete] 覆盖 ----
+    # ★ 这一段两条路径都要有：
+    #   · STAGE_MODE="in_job" -> build_in_job_stages() 内逐段应用（紧跟本块的 if）
+    #   · STAGE_MODE="single" -> 就是这里
+    #   （FIXED_CELL=true 会把 STAGE_MODE 置成 single；分子分支也走 single）
+    # 2026-09-16 踩过的坑：此前只在分段路径接了这段，于是 single 模式下
+    # step.conf 写的 [incar.final] 完全不生效 —— 实测写了 ISPIN=2/MAGMOM，
+    # 生成的 INCAR 里仍是 ISPIN=1（被 apply_magnetism_to_incar 的自动判定覆盖）。
+    # 本块放在所有 apply_* 之后 = 真正的"最终覆盖"，与 apply_incar 语义一致。
+    if STAGE_MODE != "in_job":
+        _ic_log = []
+        stepconf.apply_incar_file(outdir / "INCAR", log=_ic_log)
+        for _m in _ic_log:
+            print("[..] %s" % _m)
+
+    # ---- 作业内分段：必须在 INCAR 全部后处理完成之后 ----
+    staged_in_job = False
+    if STAGE_MODE == "in_job":
+        staged_in_job = build_in_job_stages(outdir)
+
+    heavy = sorted(set(symbols or []) & SOC_ELEMS)
+    if heavy:
+        print(f"[..] 含重元素 {'/'.join(heavy)}：step1/step2 保持共线（正常），"
+              "SOC 会在 step3/step4 自动打开")
+
+    # 记录方法，供后续步骤继承
+    cell_prov = cell_note if not prim_note else (cell_note + "\n" + prim_note)
+    _u_line, _u_extra = u_method_line(symbols, use_u, ldau_lines)
+    write_method_file(outdir / METHOD_FILE, label, formula, cell_prov,
+                      mag_line=f"MAG={'magnetic' if magnetic else 'nonmag'}",
+                      dim_line=f"DIM={dim.upper()}",
+                      u_line=_u_line, u_extra=_u_extra)
+    print(f"[OK] {METHOD_FILE}")
+
+    print("\n文件检查：")
+    names = ["POSCAR", "INCAR", "submit.sh", "KPOINTS", "POTCAR", METHOD_FILE]
+    if dim == "2d" and CELL_CONSTRAINT_2D == "optcell_file":
+        names.append("OPTCELL")
+    for name in names:
+        status = "OK" if (outdir / name).exists() else "MISSING"
+        print(f"[{status}] {name}")
+
+    if STAGE_MODE == "in_job":
+        print("[..] 作业内分段%s，跑完后执行 %s"
+              % ("已生成" if staged_in_job else "未生效（单段）", NEXT_STEP))
+    if stage:
+        idx = STAGE_ORDER.index(stage)
+        if idx + 1 < len(STAGE_ORDER):
+            nxt = STAGE_ORDER[idx + 1]
+            print("[..] 跑完后执行 %s --stage %s（读 %s/CONTCAR 续接）"
+                  % (SCRIPT_NAME, nxt, outdir_name))
+        else:
+            print("[..] 这是最后一个弛豫阶段，跑完后执行 %s" % NEXT_STEP)
+    # tf 只取 gen 输出的最后一行来显示，所以把结论放在最后
+    print("[DONE] %s 已生成（%s），可提交"
+          % (outdir_name,
+             ("阶段 %s" % stage) if stage else
+             ("作业内 %d 段" % len(STAGE_ORDER) if STAGE_MODE == "in_job" else "single")))
+
+
+# =====================================================================
+#  对外接口
+# =====================================================================
+DEFAULTS = {k: v for k, v in list(globals().items())
+            if k.isupper() and not k.startswith("_")
+            and k not in ("FUNC",)}
+
+
+def run(**overrides):
+    """技能入口：用本技能的策略覆盖缺省值，然后跑通用流程。
+
+    只接受 DEFAULTS 里已有的键（写错键名直接报错，不静默忽略）。
+    命令行参数（--stage a/b/c）由本模块自己解析，薄壳不用管。
+    """
+    g = globals()
+    unknown = [k for k in overrides if k not in DEFAULTS]
+    if unknown:
+        sys.exit("[ERROR] relax_common.run() 收到未知参数：%s\n"
+                 "        可用的键：%s"
+                 % (", ".join(sorted(unknown)), ", ".join(sorted(DEFAULTS))))
+    for k, v in overrides.items():
+        g[k] = v
+    main()
+
+
+if __name__ == "__main__":
+    sys.exit("[ERROR] relax_common.py 是公共池模块，请通过技能的 gen_step1_*.py 调用")
