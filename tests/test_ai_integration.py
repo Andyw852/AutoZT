@@ -446,3 +446,23 @@ def test_skill_library_commands_with_explicit_target_still_check_blocks(tmp_path
                 patch.object(autozt, "agent_direct_gate", return_value=None):
             with pytest.raises(AssertionError, match="project scan"):
                 autozt.cli.main()
+
+
+# ---------------------------------------------------------------- history 状态按范围合并
+def _hist_data(mat, tt, kind):
+    return {"types": [{"key": tt, "materials": [
+        {"name": mat, "steps": [{"name": "step1", "label": "S1", "kind": kind, "diag": ""}]}]}]}
+
+
+def test_history_state_merges_across_scopes(tmp_path):
+    """两个不同范围的采集者（如 -tt 限定的 monitor + 另一个项目的 monitor / 一次 -p 查询）
+    共用配置目录时，互相不能抹掉对方的基线，否则状态转移（和 FAIL 次数）会丢。"""
+    from autozt.history import history_record, history_load
+    cfg = {"_config_dir": str(tmp_path)}
+    history_record(cfg, _hist_data("A", "opt", "R"))       # 首轮：只落基线
+    history_record(cfg, _hist_data("B", "band", "R"))      # 另一个范围
+    history_record(cfg, _hist_data("A", "opt", "FAIL"))    # A 的转移必须被记下
+    history_record(cfg, _hist_data("B", "band", "OK"))     # B 的转移也必须被记下
+    evs, _ = history_load(cfg)
+    got = sorted((e["mat"], e["f"], e["t"]) for e in evs)
+    assert got == [("A", "R", "FAIL"), ("B", "R", "OK")]

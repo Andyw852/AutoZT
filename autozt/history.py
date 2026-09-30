@@ -151,9 +151,15 @@ def history_record(cfg, data, force=False):
                 for e in events:
                     f.write(json.dumps(e, ensure_ascii=False) + "\n")
             _trim(path)
-        tmp = sp + ".tmp"
+        # 合并而不是覆盖：本次采集可能只覆盖一部分（-tt / -p / --project，或多个
+        # 不同范围的 monitor 共用一个配置目录）。以前直接用本次范围覆盖整个状态文件，
+        # 别的范围的基线被抹掉——下一轮它们被当成"新出现"、状态转移不记，FAIL 次数
+        # 永远是 0，进度文件里"失败超过 max_auto_retries 次转人工"的升级也就不会触发。
+        merged = dict(prev) if isinstance(prev, dict) else {}
+        merged.update(cur)
+        tmp = sp + ".tmp.%d" % os.getpid()
         with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(cur, f, ensure_ascii=False)
+            json.dump(merged, f, ensure_ascii=False)
         os.replace(tmp, sp)
     except OSError:
         return 0
