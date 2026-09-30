@@ -112,6 +112,43 @@ class ProbeTests(unittest.TestCase):
             P.band_window(tempfile.mkdtemp())
 
 
+class FermiFromOccupationsTests(unittest.TestCase):
+    """集群实测：MoS₂ step3_uniform 的 vasprun 读出来 efermi=None，旧版 float(None) 直接崩。"""
+
+    def test_midgap_from_occupations(self):
+        v = np.zeros((4, 3, 2))
+        v[..., 0] = [-2.0, -0.5, 1.3]
+        v[:, :2, 1] = 1.0
+        v[1, 1, 0] = -0.2                                        # VBM
+        v[2, 2, 0] = 1.0                                         # CBM
+        self.assertAlmostEqual(P.fermi_from_occupations({"up": v}), 0.4)
+
+    def test_metal_or_empty_returns_none(self):
+        v = np.zeros((2, 2, 2))
+        v[..., 0] = [[0.0, 1.0], [2.0, 3.0]]
+        v[0, 1, 1] = 1.0                                         # 占据 1.0 eV，但 k1 的 0 eV 空着
+        self.assertIsNone(P.fermi_from_occupations({"up": v}))
+        self.assertIsNone(P.fermi_from_occupations({"up": np.ones((2, 2, 2))}))
+
+    def test_vasprun_without_efermi(self):
+        class _VR:
+            efermi = None
+            eigenvalues = {"up": np.array([[[-1.0, 1.0], [1.0, 0.0]], [[-0.8, 1.0], [1.2, 0.0]]])}
+            actual_kpoints = [[0, 0, 0], [0.5, 0, 0]]
+        try:
+            import pymatgen.io.vasp.outputs as O
+        except ImportError:
+            self.skipTest("需要 pymatgen")
+        old = O.Vasprun
+        O.Vasprun = lambda *a, **k: _VR()
+        try:
+            E, kp, ef = P._energies_from_vasprun("x")
+        finally:
+            O.Vasprun = old
+        self.assertAlmostEqual(ef, 0.1)
+        self.assertEqual(E["up"].shape, (2, 2))
+
+
 class PostprocessKzCapTests(unittest.TestCase):
     CODE = textwrap.dedent('''
         import json, sys, numpy as np

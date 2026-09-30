@@ -220,13 +220,88 @@ def read_mesh_h5(path):
 # =====================================================================
 # 用 AMSET 自己的代码重建 AmsetData（不重算散射）
 # =====================================================================
-def _apply_run_plugins(run_dir):
+def _settings_symprec(run_dir):
+    """settings.yaml 的 symprec（AMSET 求不可约 k 点用的那个）；没写就用 AMSET 默认。"""
+    try:
+        import yaml
+        s = yaml.safe_load((Path(run_dir) / "settings.yaml").read_text()) or {}
+        if s.get("symprec"):
+            return float(s["symprec"])
+    except Exception:                                              # noqa: BLE001
+        pass
+    try:
+        from amset.constants import defaults
+        return float(defaults["symprec"] or 1e-8)
+    except Exception:                                              # noqa: BLE001
+        return 0.01
+
+
+def mesh_ir_fix_state(mesh, symprec):
+    """patch_ir_fix（V128）：mesh.h5 是用哪套不可约映射写的。
+    True = IR_FIX（spglib 用正确晶格），False = AMSET 原式（转置晶格），None = 两者相同（晶格矩阵对称，如立方）。
+    都对不上 -> ValueError。
+
+    重积分用的是 AMSET 的对称约化四面体积分（transport DOS 先把积分量加到不可约点上），
+    重建时的不可约映射必须与作业相同，否则复现检查在 1e-6 的容差下必然 FAIL（MoS₂ IR_FIX-only 实测）。"""
+    import spglib
+    st = mesh["structure"]
+    k = np.asarray(mesh["kpoints"], float)
+    dims = [len(np.unique(np.round(np.mod(k[:, i], 1.0), 6) % 1.0)) for i in range(3)]
+    L = np.ascontiguousarray(st.lattice.matrix, dtype="double")
+    pos = np.ascontiguousarray(st.frac_coords, dtype="double")
+    num = np.asarray([s.Z for s in st.species], dtype="intc")
+    tr = not bool(mesh.get("soc", False))
+
+    def n_ir(lat):
+        m, _ = spglib.get_ir_reciprocal_mesh(dims, (lat, pos, num), symprec=symprec, is_time_reversal=tr)
+        return int(len(np.unique(m)))
+
+    n_fix, n_orig = n_ir(L), n_ir(np.ascontiguousarray(L.T))
+    n_mesh = int(len(mesh["ir_kpoints"]))
+    if n_mesh == n_fix == n_orig:
+        return None
+    if n_mesh == n_fix:
+        return True
+    if n_mesh == n_orig:
+        return False
+    raise ValueError("mesh.h5 的不可约点数 %d 既不是 IR_FIX 的 %d，也不是 AMSET 原式的 %d（网格 %s，symprec %g）"
+                     " —— 与当前运行目录不同源" % (n_mesh, n_fix, n_orig, "x".join(map(str, dims)), symprec))
+
+
+def _apply_ir_fix(run_dir, ir_fix):
+    """按 mesh 判定的 IR_FIX 状态设 AZ_IR_FIX，并在需要时加载运行目录的 amset_ir_fix（与作业同一套不可约映射）。
+    必须在导入 amset2d_plugin 之前调用（V127 起插件会顺带导入 amset_ir_fix，开关看 AZ_IR_FIX）。"""
+    if ir_fix is None:
+        return False
+    os.environ["AZ_IR_FIX"] = "1" if ir_fix else "0"
+    if not ir_fix:
+        mod = sys.modules.get("amset_ir_fix")
+        if mod is not None and getattr(mod, "STATE", {}).get("applied"):
+            raise SystemExit("[ERROR] mesh.h5 是 AMSET 原式不可约映射，但本进程已挂上 amset_ir_fix —— 请单独运行本脚本")
+        print("[..] ir_fix：mesh.h5 用的是 AMSET 原式不可约映射（IR_FIX 关）")
+        return False
+    if not (Path(run_dir) / "amset_ir_fix.py").is_file():
+        raise SystemExit("[ERROR] mesh.h5 用的是 IR_FIX 的不可约映射，但运行目录里没有 amset_ir_fix.py —— "
+                         "重建的映射会与作业不同，重积分无法复现")
+    rd = str(Path(run_dir).resolve())
+    if rd not in sys.path:
+        sys.path.insert(0, rd)
+    import amset_ir_fix
+    if not (amset_ir_fix.STATE.get("applied") or amset_ir_fix.apply(force=True)):
+        raise SystemExit("[ERROR] mesh.h5 用的是 IR_FIX 的不可约映射，但 amset_ir_fix 在本机 AMSET 上拒绝打补丁")
+    print("[..] ir_fix：mesh.h5 用的是 IR_FIX 的不可约映射，已加载 amset_ir_fix 重建")
+    return True
+
+
+def _apply_run_plugins(run_dir, ir_fix=None):
     """patch_kz_cap（V126）：运行目录的 2d_correction.json 开了 kz_cap_rmax 时，加载同目录的 amset2d_plugin，
     它按与作业相同的判据截断 k_z 方向的 equivalence。V125 之前这里用原版插值重建网格（263×263×21），
     与 KZ_CAP_2D 作业写出的 mesh.h5（263×263×3）对不上，apply_mesh_metadata 于是拒绝重积分。
-    返回是否加载。散射率展开用 mesh.h5 自带的 ir_to_full，与 IR_FIX 无关。"""
+    patch_ir_fix（V128）：ir_fix 为 True/False 时先按它设 AZ_IR_FIX（见 mesh_ir_fix_state、_apply_ir_fix）。
+    返回是否加载了 amset2d_plugin。"""
     import json as _json
     import os as _os
+    _apply_ir_fix(run_dir, ir_fix)
     rec = Path(run_dir) / "2d_correction.json"
     try:
         kz = _json.loads(rec.read_text()).get("kz_cap_rmax") if rec.is_file() else None
@@ -244,17 +319,17 @@ def _apply_run_plugins(run_dir):
     return True
 
 
-def build_amset_data(run_dir, nworkers=None, progress_bar=False):
+def build_amset_data(run_dir, nworkers=None, progress_bar=False, ir_fix=None):
     """用 vasprun.xml + settings.yaml 重建 AmsetData（能带/速度/DOS/费米能级）。
 
     只做 interpolation + DOS + fermi levels，不做 overlap、不做 scattering；
-    散射率随后从 mesh.h5 注入。
+    散射率随后从 mesh.h5 注入。ir_fix：mesh_ir_fix_state 的结果（None = 不管）。
     """
     import amset
     from amset.core.run import Runner
     from amset.interpolation.bandstructure import Interpolator
 
-    _apply_run_plugins(run_dir)          # patch_kz_cap：与作业同一套插值（否则网格对不上）
+    _apply_run_plugins(run_dir, ir_fix)  # patch_kz_cap / patch_ir_fix：与作业同一套插值与不可约映射
     runner = Runner.from_directory(run_dir)
     s = runner.settings
     nw = s["nworkers"] if nworkers is None else int(nworkers)
@@ -400,6 +475,12 @@ def apply_mesh_metadata(ad, mesh, tol=1e-6):
         problems.append("mesh.doping 与 settings.doping 不一致")
     if not np.allclose(np.asarray(mesh["temperatures"]), ad.temperatures):
         problems.append("mesh.temperatures 与 settings.temperatures 不一致")
+
+    # patch_ir_fix（V128）：重积分的对称约化依赖不可约映射，点数不同 = IR_FIX 状态与作业不同
+    ad_ir = getattr(ad, "ir_kpoints_idx", None)
+    if ad_ir is not None and len(ad_ir) != len(mesh["ir_kpoints"]):
+        problems.append("不可约点数：mesh %d != 重建 %d（IR_FIX 状态与作业不同）"
+                        % (len(mesh["ir_kpoints"]), len(ad_ir)))
 
     # mesh 的不可约点顺序 = mesh["ir_kpoints"] 的顺序（to_dict 里按 ir_kpoints_idx 取列）；
     # 用坐标在 ad 的全网格里找位置，逐点核对能量（与不可约选择无关）。
@@ -643,12 +724,13 @@ def main(argv=None):
     mesh_file = find_mesh(run_dir, args.mesh)
     drop = [x for x in str(args.drop).replace(" ", ",").split(",") if x]
 
-    # 1) 重建 AmsetData（不重算散射）
-    ad, settings, amset_version = build_amset_data(
-        run_dir, nworkers=args.nworkers, progress_bar=False)
-
-    # 2) 读 mesh + 口径校验
+    # 1) 读 mesh，判定作业用的不可约映射（V128），再按同一套重建 AmsetData（不重算散射）
     mesh = read_mesh_h5(mesh_file)
+    ir_fix = mesh_ir_fix_state(mesh, _settings_symprec(run_dir))
+    ad, settings, amset_version = build_amset_data(
+        run_dir, nworkers=args.nworkers, progress_bar=False, ir_fix=ir_fix)
+
+    # 2) 口径校验
     labels = list(mesh["scattering_labels"])
     perm = apply_mesh_metadata(ad, mesh)
     if perm is not None:

@@ -44,6 +44,13 @@ from amset.scattering.elastic import (
     get_christoffel_tensors,
 )
 
+# V127：spawn 的散射子进程只导入本插件（worker 入口在这里），IR_FIX 的 ADP 星平均
+# 也必须在子进程里生效 —— 运行目录里有 amset_ir_fix.py 就一并导入（开关仍看 AZ_IR_FIX）。
+try:
+    import amset_ir_fix  # noqa: F401
+except ImportError:
+    pass
+
 # ---------------- 版本与接口护栏 ----------------
 # 集群 amset_clean 环境是 0.4.19；本地/新版是 0.5.1。两者的 scattering/elastic.py、
 # inelastic.py、common.py 逐字节相同，calculate.py 只差重叠因子的 umklapp 处理，
@@ -473,13 +480,16 @@ def _kz_prepare(band_structure):
         print("[amset2d][WARN] kz_cap：晶格的面内两个矢量不垂直于层法向 -> 不截断 k_z（照原样跑）", flush=True)
         return
     kp = np.array([k.frac_coords for k in band_structure.kpoints])
+    ef = band_structure.efermi
+    # 没有 efermi（vasprun 缺标签）又取不到带边 -> 全部带都核（只会更保守：多核的带不平就不截断）
+    emin, emax = (ef - 1.0, ef + 1.0) if ef is not None else (-np.inf, np.inf)
     try:
         vbm = band_structure.get_vbm()["energy"]
         cbm = band_structure.get_cbm()["energy"]
-        emin, emax = (vbm - 1.0, cbm + 1.0) if (vbm is not None and cbm is not None) else \
-            (band_structure.efermi - 1.0, band_structure.efermi + 1.0)
+        if vbm is not None and cbm is not None:
+            emin, emax = vbm - 1.0, cbm + 1.0
     except Exception:                                          # noqa: BLE001
-        emin, emax = band_structure.efermi - 1.0, band_structure.efermi + 1.0
+        pass
     spread, ng = 0.0, 0
     for spin in band_structure.bands:
         s, n = kz_spread_ev(kp, band_structure.bands[spin], ax, emin, emax)

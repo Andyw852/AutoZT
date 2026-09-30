@@ -5954,7 +5954,8 @@ SOC（非共线 + TR 操作）必须全网格，属正常；非 SOC 却是 step.
 开关：step.conf `IR_FIX = auto/on/off`（auto = on）；命令前 `export AZ_IR_FIX=1/0`。S8 与 S8.4 都挂。
 日志：`[ir_fix] mesh AxBxC：不可约 k 点 n（AMSET 原式 m，少算 ×r）`。
 副作用：六方面内 xx/yy 的 ~2% 数值差（V122：三线性插值不满足 C3）被对称化掉 —— 等价点直接共用不可约点的散射率，
-面内平均不变。
+面内平均不变。**【V127 更正】**面内平均不变只对协变的散射核成立。AMSET 的 ADP 核（|D| 逐元素、分数取整的 q、
+D 的线性插值）不协变，所以张量形变势下代表点≠成员平均：MoS₂ n 型 ADP −4.28%。已由 V127 的 ADP 星平均修正。
 
 **② 单层的 k_z 层数（amset2d_plugin 的 kz_cap，出厂关，KZ_CAP_2D = on 开）**
 BoltzTraP2 的 equivalence 是实空间的球。面内要 263 个格点时，真空方向也跟着有 ~33 层（WSe2/WS2 的 c≈23 Å；
@@ -6059,3 +6060,137 @@ IR_FIX 的份额另用一次隔离对照（KZ_CAP_2D = off、IR_FIX 默认开，
 
 测试：新增 test_kz_overlap_probe（6 项：随机/平滑规范、网格层规范无关、main 端到端、能带窗口解析、
 postprocess 加载/不加载/缺插件）。
+
+## V127（2026-09-30）：IR_FIX 改变了 n 型 ADP —— AMSET 的 ADP 核不协变，代表点≠星平均（修：星平均）
+
+**实测推翻了 V126 的解释**（MoS₂，用户侧）：
+- 探针 `kz_overlap_probe --nkz-old 21`：电子 0.998、空穴 0.994，都≈1。k_z 插值假象最多只占 0.2–0.6%。
+- 隔离对照（IR_FIX 开、KZ_CAP_2D 关，对 V121 面内平均）：n 型 ADP **−4.28%**，p 型 ADP −0.04%，overall 与电导
+  < 1%，xx/yy 各向异性 1.98% -> 0。IR_FIX + KZ_CAP_2D 是 −5.67%，所以 KZ_CAP 只多 ~−1.4%。
+- 所以 V125 说的"IR_FIX 只是少算、结果不变"**对张量形变势不成立**；差别主要来自 IR_FIX，不是 KZ_CAP。
+
+**机理**（AMSET 0.5.1 源码）：散射率只在不可约点上算，再原样抄给同一颗星的其它成员
+（`calculate_scattering_rates`：`rates[..., ir_idx][..., ir_to_full]`）。这要求同一颗星各成员的率相等，
+可 AMSET 的 ADP 核有三处不随旋转协变：
+1. `deform = np.abs(D(k)) + v⊗v`：形变势张量**逐元素**取绝对值，|R D Rᵀ| ≠ R |D| Rᵀ（非对角元、异号对角元）；
+2. q 的像：`pbc_diff` 在分数坐标里取整（f − round f），六方的分数胞不是 Wigner–Seitz 胞，旋转后取到的像不同，
+   q̂ 的方向跟着变（ADP 对 q̂ 的依赖来自张量 D 的缩并）；
+3. D(k) 在 deformation.h5 的粗网格（S7 的 k 网格）上线性插值，线性插值不满足 C3。
+
+旧跑法（转置晶格，只有 {E, σh}×时间反演）把星里的成员分别算，于是出现 xx≠yy（1.98%），面内平均是
+"对成员平均"的结果。IR_FIX 只算 spglib 挑的那个代表点，面内平均就偏向那个成员。导带在 K 谷之外（Q 谷、
+三角翘曲）D 的面内各向异性大，受影响大；价带（K、Γ 两个高对称谷）D 近乎各向同性，几乎不受影响。
+这和 n −4.28%、p −0.04% 的不对称一致。
+
+**修法（amset_ir_fix.py，IR_FIX 开时自动生效）**：在代表点 k 上，把 ADP 被积因子对新群 G 相对旧群 H 的
+右陪集代表 S（含时间反演）取平均：
+
+    f̄(q) = mean_S f( q̂_S, D(S·k), S·v(k) )，q_S = S·q 按 AMSET 的分数取整重新取像，D 在星成员 S·k 上重新插值
+
+这正是旧跑法在成员 S·k 上会算的被积函数（v 由 FFT 得到，本来就协变；弹性张量在点群下不变），所以 IR_FIX 的
+代表点给出的是旧跑法的"成员平均"。旧群的操作（σh、−E）是带符号的置换矩阵，与 |·| 对易，所以陪集里取哪个代表都一样。
+- 陪集：父进程在建密网格时用 spglib 分别求新旧两个群（真实晶格上都正交），把陪集旋转写进 `AZ_IR_FIX_STAR`
+  （JSON），spawn 出来的散射子进程读取。六方单层 6 个，纤锌矿 >1，立方原胞 1（什么都不做，与原 AMSET 逐位相同）。
+- 子进程：S8 由 amset_ir_fix 自己包装 `scattering_worker`（子进程反序列化入口时导入本模块）；S8.4 的入口是
+  amset2d_plugin 的 worker，插件现在顺带 `import amset_ir_fix`。星平均挂在 `calculate_rate` 上，对名为 ADP、
+  形变势是插值器（deformation.h5）的散射体生效；标量形变势本来协变，不动。
+- 开关：`AZ_ADP_STAR=0` 关掉（只用代表点，A/B 对照用）；`AZ_IR_FIX=0` 时整个不挂。
+- 日志：`[ir_fix] ADP 星平均：6 个陪集（新点群 12 个操作 / AMSET 原式 2，不计时间反演）`。
+- 成本：ADP 因子多算 |陪集| 次（六方单层 6 次）。合成体系（重叠恒为 1、因子占大头）散射 21 s -> 68 s；
+  真实重叠下因子占比小，增幅更小。仍远快于原版（原版 104 s）。
+
+剩下的差：星平均给的是**散射率**的成员平均，旧跑法是每个成员各自 τ = 1/Γ，按 τ 平均。两者只差二阶量
+（Jensen，≈ 成员间率的方差/均值²）：对成员平均率算出的迁移率偏小一点。
+
+**合成六方单层验证**（proto3：D3h，97×97×3，ADP 用本插件的 2D 核，协变的各向异性形变势场
+D = d₀I + d₁ g gᵀ，g = 能带梯度；重叠恒为 1；n 型面内平均迁移率）：
+
+| 核 | 旧跑法（各向异性） | IR_FIX 代表点 | IR_FIX + 星平均 |
+|---|---|---|---|
+| AMSET 原样（|D| + 分数取整） | 17.31（7.2%） | 20.57（+18.8%） | 16.61（−4.1%） |
+| 同上，D 的各向异性 ×1/4 | 14.14（3.8%） | 15.22（+7.6%） | 14.07（**−0.5%**） |
+| 去掉 |D|、q 取最短像 | 22.34（2.3%） | 21.55（−3.5%） | 22.15（−0.8%） |
+
+p 型三列都在 1% 以内（价带的 D 各向异性小）。拆开看（只看代表点那一列）：只去 |D| 或只改 q 的取像，都还差
+~20%；两者都去掉后剩的 −3.5% 来自 D 的线性插值，星平均里在成员上重新插值后降到 −0.8%。
+各向异性 ×1/4 时，代表点的偏差大致线性变小（18.8% -> 7.6%），星平均的残差按平方变小（4.1% -> 0.5%），
+与 Jensen 项的判断一致。MoS₂ 旧结果的各向异性只有 1.98%，所以预期星平均之后的残差 ≲ 0.3%。
+
+**合成纤锌矿（3D，S8 路径，AMSET 原版 ADP 类）**（proto3d：6mm，41×41×23，同样的协变各向异性 D 场，
+重叠恒为 1；n 型；旧群 {E, C2z}，6 个陪集）：
+
+| D 各向异性 | 旧跑法 面内 / zz（面内各向异性） | IR_FIX 代表点 | IR_FIX + 星平均 |
+|---|---|---|---|
+| ×1 | 1876 / 2536（12.2%） | −30.7% / −22.4% | −8.6% / −7.8% |
+| ×1/4 | 1453 / 2020（3.9%） | −9.9% / −7.1% | −1.7% / −1.9% |
+
+p 型 ×1/4：−1.9% -> −0.4%。3D 的接线（amset_ir_fix 自己包装 scattering_worker）有效，zz 也一起回来。
+3D 的残差比 2D 大，而且随各向异性缩小得不到平方那么快。粗网格（41×41×23）上四面体剖分、线性插值等
+其它不协变的数值噪声也在里面；这部分与 ADP 无关，原版 AMSET 在立方体系上本来就按代表点算，同样带着它。
+
+**不改 AMSET 的物理**：|D| 与分数取整是 AMSET 模型的一部分（文献里的 AMSET 结果也是这样算的）；
+星平均只让 IR_FIX 回到"每个成员分别算"的结果。真实的电声耦合是协变的；去掉 |D| 或改用最短像会让 n 型 ADP 变
+~30%（合成体系），属于换模型，要单独决定，本补丁不做。
+
+**用户侧验证**：
+1. MoS₂，KZ_CAP_2D = off、IR_FIX 默认开，重新 gen、提交 S8.4（log 里应有 `ADP 星平均：6 个陪集`）。
+   `compare_transport_json` 对 V121 面内平均：n 型 ADP 预期 < 1%（原来是 −4.28%）。
+2. 再开 KZ_CAP_2D = on：与第 1 步的差就是 k_z 截断本身。探针预测电子 −0.2%、空穴 −0.6%。
+3. A/B：`AZ_ADP_STAR=0` 应复现 −4.28%。
+4. 两步都过 -> WSe2/WS2 可以 scancel 重交（IR_FIX + KZ_CAP_2D）。
+3D 六方（GaN、AlN 等）走 S8，同一套星平均自动生效；立方体系不受影响。
+
+**顺带修的**：
+- `kz_overlap_probe`：`Vasprun(parse_dos=False)` 在这版 pymatgen 里不读 `<dos>` 里的 efermi（一直是 None），
+  原来直接 `float(None)` 崩（集群副本临时补成 −3.0）。现在没有 efermi 时，用占据数定 VBM、CBM，取带隙中点；
+  两者都没有才报错。
+- amset2d_plugin 的 kz_cap 能带窗口：efermi 为 None 且取不到带边时，改为核对全部带（更保守），不再抛异常。
+
+测试：新增 test_adp_star（9 项）：
+- 陪集个数（六方单层 6、纤锌矿 >1、fcc 1）、陪集覆盖全群、环境变量发布，以及 AZ_ADP_STAR=0 时关闭；
+- 星平均因子：对星成员不变（AMSET 式 |D| + 分数取整 + 协变 D 场，原因子成员间相差 >2%），且等于逐个成员算
+  原因子再平均，临时覆盖会撤掉，标量形变势不动；
+- 接线：3D 时 worker 与 calculate_rate 被包装，AZ_IR_FIX=0 保持原样；只导入 amset2d_plugin 时也会带上 amset_ir_fix。
+
+test_kz_overlap_probe 另加 3 项（占据数定带隙中点、金属或空集返回 None、vasprun 没有 efermi）。
+
+## V128（2026-09-30）：postprocess 按 mesh.h5 判定 IR_FIX —— IR_FIX-only 作业复现检查 FAIL
+
+**实测**（MoS₂ 隔离作业 3918400，IR_FIX 开、KZ_CAP_2D 关）：AMSET 本体跑完（transport_263x263x21.json，24.7 min），
+收尾的 `postprocess_intrinsic.py --check-reproduce` 报"重积分无法复现原 transport.json"，没有产出
+intrinsic_transport.json。
+
+**原因**：重积分用 AMSET 自己的 `solve_boltzman_transport_equation`，其中 transport DOS 是**对称约化**的四面体积分：
+先把 v⊗v·τ 按 `ir_kpoint_mapping` 加到不可约点上，再按不可约四面体积分。
+- 作业用的是 IR_FIX 的映射（正确晶格）。postprocess 重建 AmsetData 时，只有 KZ_CAP 开着才加载插件，
+  IR_FIX-only 的作业重建出来的是 AMSET 原式映射（转置晶格），点数不同，积分结果就差 ~1e-1。
+- 复现容差是 1e-6（绝对值），所以必然 FAIL。
+- 散射率展开一直用 mesh.h5 自带的 ir_to_full，没问题；V126 注释里"与 IR_FIX 无关"只对这一步成立，对积分不成立。
+
+**修法**：
+- `mesh_ir_fix_state(mesh, symprec)`：用 spglib 分别按正确晶格、转置晶格数 mesh 网格的不可约点，
+  与 mesh.h5 的 `ir_kpoints` 个数比。相等的那个就是作业用的映射；两者相同（立方）返回 None；都不对就报错。
+  这一步不依赖环境变量，事后手动跑也对。
+- `main` 先读 mesh、判定，再 `build_amset_data(..., ir_fix=state)`。`_apply_ir_fix` 按判定结果设 `AZ_IR_FIX`，
+  需要时加载运行目录的 amset_ir_fix；缺文件或补丁被拒就停。它必须在导入 amset2d_plugin 之前调用：V127 起插件
+  会顺带导入 amset_ir_fix，开关看 AZ_IR_FIX。
+- `apply_mesh_metadata` 多核一项不可约点数，对不上就明确报"IR_FIX 状态与作业不同"，不再笼统报"不同源"。
+
+**合成纤锌矿端到端**（AMSET 真跑 IR_FIX + write_mesh，37×37×21，不可约点 1463；原式 7535）：
+
+| 重建 | 不可约点 | 重积分 vs transport.json |
+|---|---|---|
+| 不挂 amset_ir_fix（V127 及以前的 postprocess） | 7535 | μ 差 0.23 cm²/Vs、σ 差 3.6 S/m -> FAIL |
+| 按 mesh 判定后挂上（V128） | 1463 | 最大差 1.4e-11 -> PASS |
+
+**顺带**：amset_ir_fix 的启动提示在每个散射子进程里都会打一遍（spawn 反序列化入口时导入模块，那时
+`parent_process()` 还是 None）。现在同时看 `current_process()._inheriting`，子进程里不再打印。
+
+**用户侧**：MoS₂ 隔离作业不用重跑 AMSET，在它的 S8.4 目录重跑收尾即可：
+`python postprocess_intrinsic.py --check-reproduce`。日志里应看到 `ir_fix：mesh.h5 用的是 IR_FIX 的不可约映射`
+和 `复现检查：max|diff|=… -> PASS`。
+
+测试：新增 test_postprocess_irfix（7 项）：
+- 判定：六方 True/False，立方 None，点数都不对 -> 报错；
+- _apply_ir_fix：True 时挂上，False 时不挂，缺文件时停；
+- 端到端：不挂时 apply_mesh_metadata 以不可约点数拒绝；挂上后重积分差 ≤ 1e-6。

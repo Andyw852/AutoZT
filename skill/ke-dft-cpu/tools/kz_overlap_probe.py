@@ -138,11 +138,31 @@ def probe(calc, samples, nkz_old=21, nkz_new=3, axis=2):
     return rep
 
 
+def fermi_from_occupations(eigenvalues, occ_tol=0.5):
+    """占据数定带隙中点：VBM = 占据态（占据数 > occ_tol）最高能，CBM = 空态最低能。
+    eigenvalues: {spin: (nk, nb, 2)}（vasprun 的 [能量, 占据数]）。没有带隙 -> None。"""
+    occ_e, emp_e = [], []
+    for v in eigenvalues.values():
+        v = np.asarray(v)
+        occ = v[..., 1] > occ_tol
+        occ_e.append(v[..., 0][occ])
+        emp_e.append(v[..., 0][~occ])
+    occ_e, emp_e = np.concatenate(occ_e), np.concatenate(emp_e)
+    if not len(occ_e) or not len(emp_e):
+        return None
+    vbm, cbm = float(occ_e.max()), float(emp_e.min())
+    return 0.5 * (vbm + cbm) if cbm > vbm else None
+
+
 def _energies_from_vasprun(path):
     from pymatgen.io.vasp.outputs import Vasprun
     vr = Vasprun(str(path), parse_dos=False, parse_potcar_file=False)
     E = {s: np.asarray(v)[:, :, 0].T for s, v in vr.eigenvalues.items()}   # (nb, nk)
-    return E, np.asarray(vr.actual_kpoints, float), float(vr.efermi)
+    # parse_dos=False 时 pymatgen 不读 <dos> 里的 efermi（一直是 None）；有的 vasprun 干脆没有这个标签
+    ef = vr.efermi if vr.efermi is not None else fermi_from_occupations(vr.eigenvalues)
+    if ef is None:
+        raise ValueError("%s：没有 efermi，按占据数也找不到带隙（金属？）" % path)
+    return E, np.asarray(vr.actual_kpoints, float), float(ef)
 
 
 def main(argv=None):
