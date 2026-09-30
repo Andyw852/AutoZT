@@ -6194,3 +6194,16 @@ intrinsic_transport.json。
 - 判定：六方 True/False，立方 None，点数都不对 -> 报错；
 - _apply_ir_fix：True 时挂上，False 时不挂，缺文件时停；
 - 端到端：不挂时 apply_mesh_metadata 以不可约点数拒绝；挂上后重积分差 ≤ 1e-6。
+
+## V129（2026-09-30）：gen_step14 在 import 时取 AMSET_ENV —— 材料目录外 import 就被 sys.exit 打断
+
+上游 edc8339 去掉了 `amset_env_name()` 的 `amset_clean` 回退（0.4.19 老环境已删），读不到 AMSET_ENV 就
+`sys.exit`，这是对的。但 gen_step14 在**模块顶层**调用它（`AMSET_ENV_NAME = kc.amset_env_name() ...`），
+所以在没有 step.conf 的目录里 import gen_step14 就退出：test_gen_desym_wiring（20 项）、test_ir_fix_kzcap（11 项）、
+test_kernels 都在 import 时被打断，一项都没跑（edc8339 本地实测）。生成作业不受影响（cwd 是材料目录，有 step.conf）。
+
+修法：改成 `_amset_env()`，在三个用到的地方（POP helper 的 conda run、read_pop_frequency_3d、渲染 submit 模板）
+调用时才取。缺 AMSET_ENV 时生成照样报错退出。其它 gen（S4、S4b、S8）本来就在函数里取，不用改。
+
+测试：test_gen_desym_wiring 新增 AmsetEnvLazyTests。它在空目录里 import 不退出；`_amset_env()` 缺 step.conf 时
+SystemExit，写了 `AMSET_ENV = amset051` 就返回它。三个套件恢复：20+1 / 11 / test_kernels 全 PASS。

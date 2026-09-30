@@ -44,8 +44,15 @@ except Exception:
 
 # === AMSET 环境名（2026-09-22，全局切 0.5.1）：由 step.conf 的 AMSET_ENV 驱动 ===
 # tf 从 setting/<集群>.yaml 的 amset_env 注入 step.conf，项目级可覆盖；
-# 缺失时 kc.amset_env_name() 内部兜底 amset_clean（本地直跑 / 旧项目）。
-AMSET_ENV_NAME = kc.amset_env_name() if _HAS_KC else sys.exit("[ERROR] 无法 import ke_common 且 step.conf 缺 AMSET_ENV；请写 AMSET_ENV=<本集群 0.5.1 环境名>（jzzn/hanhai25=amset051、a800=amset_env、3090/hfeshell=amset）")
+# 缺失 -> 报错退出（2026-09-30：0.4.19 老环境已删，不再回退）。
+# V129：用到时才取（生成作业 / 调 POP 命令时），不在 import 时取 —— 否则测试与工具在材料目录外
+# import 本模块就被 sys.exit 打断（test_gen_desym_wiring / test_ir_fix_kzcap / test_kernels 实测）。
+_AMSET_ENV_MSG = ("[ERROR] 无法 import ke_common 且 step.conf 缺 AMSET_ENV；请写 AMSET_ENV=<本集群 0.5.1 环境名>"
+                  "（jzzn/hanhai25=amset051、a800=amset_env、3090/hfeshell=amset）")
+
+
+def _amset_env():
+    return kc.amset_env_name() if _HAS_KC else sys.exit(_AMSET_ENV_MSG)
 
 
 # =========================== 可改参数区 ===========================
@@ -1235,10 +1242,11 @@ def read_pop_frequency_2d(dielect_dir):
     # 用**绝对路径**调 helper：cwd 必须是 step5_dielect（OUTCAR/vasprun.xml 在那儿），
     # 而 helper 自己躺在 gen 脚本目录里。
     script = ("%s '%s'" % (helper.name, str(Path(dielect_dir))))
+    _env = _amset_env()
     commands = [["python", str(helper), "OUTCAR", "vasprun.xml"],
                 ["/opt/miniconda3/bin/conda", "run", "--no-capture-output",
-                 "-n", AMSET_ENV_NAME, "python", str(helper), "OUTCAR", "vasprun.xml"],
-                ["conda", "run", "--no-capture-output", "-n", AMSET_ENV_NAME,
+                 "-n", _env, "python", str(helper), "OUTCAR", "vasprun.xml"],
+                ["conda", "run", "--no-capture-output", "-n", _env,
                  "python", str(helper), "OUTCAR", "vasprun.xml"]]
     err_tail = ""
     for command in commands:
@@ -1523,7 +1531,7 @@ def read_pop_frequency_3d(dielect_dir):
     read_pop_frequency_2d() 的 Γ 点面内极性模频率。
     """
     import subprocess
-    amset_env_name = AMSET_ENV_NAME  # 由 step.conf 的 AMSET_ENV 驱动（见文件顶部 helper）
+    amset_env_name = _amset_env()  # 由 step.conf 的 AMSET_ENV 驱动（见文件顶部 _amset_env）
     commands = [["amset", "phonon-frequency", "-o", "OUTCAR", "-v", "vasprun.xml"]]
     # 远端 gen 由 taskflow 的 Python 直接执行，非交互 shell 未必加载 conda；
     # 用 AMSET_ENV（集群 yaml 注入）指定的环境作为无 shell 的兜底，避免误报“缺少 POP”。
@@ -2579,7 +2587,7 @@ def main():
         _acmd = kc.ir_fix_cmd_prefix(_IR_FIX_ON) + kc.desym_fix_cmd_prefix(_DESYM_FIX_ON) + _acmd
     text = (text.replace("{{JOBNAME}}", jobname)
                 .replace("{{AMSET_CMD}}", _acmd)
-                .replace("{{AMSET_ENV}}", AMSET_ENV_NAME))
+                .replace("{{AMSET_ENV}}", _amset_env()))
     if "{{AMSET_ENV}}" in text:
         sys.exit("[ERROR] submit_amset.tpl 的 {{AMSET_ENV}} 未填充（step.conf 缺 AMSET_ENV？）")
     submit.write_text(text, encoding="utf-8", newline="\n")

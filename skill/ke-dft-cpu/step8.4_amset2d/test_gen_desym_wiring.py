@@ -378,5 +378,26 @@ class FullGridFactorTests(unittest.TestCase):
         self.assertEqual(list(mesh), [int(x) for x in G14._interp_mesh(st, 432, 10)])
 
 
+
+class AmsetEnvLazyTests(unittest.TestCase):
+    """V129：gen_step14 在 import 时不取 AMSET_ENV（材料目录外 import 不能被 sys.exit 打断，
+    本文件与 test_ir_fix_kzcap / test_kernels 都要 import 它）；生成作业时缺 AMSET_ENV 仍报错退出。"""
+
+    def test_import_is_lazy_and_generation_still_strict(self):
+        import os
+        d = Path(tempfile.mkdtemp())
+        old = os.getcwd()
+        try:
+            os.chdir(d)
+            g = _load("g14_env_lazy", HERE / "gen_step14_amset2d.py")
+            self.assertFalse(hasattr(g, "AMSET_ENV_NAME"))
+            with self.assertRaises(SystemExit):
+                g._amset_env()
+            (d / "step.conf").write_text("[params]\nAMSET_ENV = amset051\n", encoding="utf-8")
+            self.assertEqual(g._amset_env(), "amset051")
+        finally:
+            os.chdir(old)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
