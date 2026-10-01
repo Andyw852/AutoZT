@@ -1,0 +1,19 @@
+# =====================================================================
+# AutoZT 本机执行后端 —— 没有超算/没有 SLURM 时在本机跑（工作站、笔记本、CI）
+# 切换：autozt -tt <技能> -p <材料> hpc local -y   （或 autozt -p <材料> hpc local -y）
+# =====================================================================
+# ssh_host 为空 = 不 ssh，所有"远端"命令在本机 bash 执行。
+# 本机找不到 sbatch 时，AutoZT 自动把仓库自带的 tools/fakeslurm 接进 PATH：
+#   sbatch 后台起作业（输出 "Submitted batch job N"）、squeue/sacct 查状态、scancel 停止；
+#   按 CPU 预算先来先跑：FAKESLURM_MAX_CPUS（缺省=本机核数），状态目录 FAKESLURM_HOME（缺省 ~/.fakeslurm）。
+#   AUTOZT_FAKESLURM=0 关闭垫片（用本机真 SLURM），=1 强制使用。
+name: local
+ssh_host: ""
+# 本机计算根：材料步骤目录 = work_dir/<材料相对路径>/<技能>/stepN（可写 ~ 与 $HOME）
+work_dir: ~/autozt_local_work
+remote_path_prefix: ""       # 可选：本机跑 gen/驱动脚本用的 python 所在 bin 目录（带 numpy/phonopy 等）
+conda_sh: ""
+conda_env: ""
+amset_env: ""
+potcar_dir: ""
+mlff_model_dir: ""

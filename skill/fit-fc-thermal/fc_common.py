@@ -423,5 +423,10 @@ def resolve_submit(base_dir, kind):
                  base / "templates" / ("%s_step1_fit.tpl" % kind)):
         if cand.is_file():
             return cand
+    # 技能源码目录里模板按步骤分子目录（templates/step1_fit/submit_*.tpl）；
+    # 脱离 autozt 直接运行 gen 时 gen_need 没把它们摊平到脚本旁边。
+    for cand in sorted((base / "templates").glob("*/%s.tpl" % kind)):
+        if cand.is_file():
+            return cand
     sys.exit("[ERROR] cannot find the submit template %s.tpl (looked in %s and "
              "%s) -- is it listed in gen_need?" % (kind, base / "templates", base))

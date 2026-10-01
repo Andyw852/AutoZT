@@ -17,6 +17,13 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+# 脱离 autozt 直接运行（python skill/fit-fc-thermal/gen_*.py）时，gen_need 里
+# 来自 skill/_common 的 stepconf/dim_common/thickness_2d 等不在脚本旁边——
+# 追加到 sys.path 末尾兜底（autozt 推送的同目录拷贝仍优先）。
+for _d in ("_common/opt", "_common"):
+    _p = Path(__file__).resolve().parent.parent / _d
+    if _p.is_dir() and str(_p) not in sys.path:
+        sys.path.append(str(_p))
 import fc_common as fc
 import stepconf
 
@@ -230,7 +237,7 @@ def main():
     `kappa_driver.py compare` writes methods_compare.{json,png,pdf}."""
     cwd = Path.cwd()
     out = cwd / OUTDIR
-    conf = stepconf.load(SPEC, STEP)
+    conf = stepconf.load(SPEC, STEP, strict="warn")
     fit = cwd / FIT_DIR
     _gen_one(conf, fit, out, cwd, write_submit=True)
     mj = fit / "methods.json"

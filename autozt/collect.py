@@ -180,7 +180,10 @@ def collect_v3_batch(cfg, segs):
             for s in steps:
                 shpc = step_cfg(t, s["name"], m).get("hpc")
                 if shpc and str(shpc) != str(m["hpc_name"]):
-                    chpc = _load_yaml_file(pkg_setting_path(str(shpc) + ".yaml")) or {}
+                    _cp = pkg_setting_path(str(shpc) + ".yaml")
+                    # 步骤级 hpc 指向的集群没配（setting/<名>.yaml 不存在，如新机器/本机）
+                    # 就留在材料默认集群，别把 None 传给 _load_yaml_file 崩掉整轮采集
+                    chpc = (_load_yaml_file(_cp) or {}) if _cp else {}
                     host = chpc.get("ssh_host") or m["host_eff"]
                     wd = os.path.normpath(os.path.expanduser(
                         str(chpc.get("work_dir") or m["work_dir_eff"])))
@@ -348,7 +351,7 @@ def _effective_remote_path_prefix(cfg, host):
     from autozt import _PKG_ROOT, _load_yaml_file, pkg_setting_path
     prefix = (cfg.get("remote_path_prefix") or "").strip()
     if not host:
-        return prefix
+        return _local_path_prefix(prefix)
     config_paths = []
     direct = pkg_setting_path(str(host) + ".yaml")
     if direct:
@@ -364,6 +367,25 @@ def _effective_remote_path_prefix(cfg, host):
             if configured:
                 return str(configured).strip()
     return prefix
+
+
+def _local_path_prefix(prefix):
+    """本地执行（ssh_host 为空，setting/local.yaml）时的 PATH 前缀。
+
+    本机没有 SLURM（PATH 和配置前缀里都找不到 sbatch）就把仓库自带的
+    tools/fakeslurm 垫片接到最后，sbatch/squeue/sacct/scancel 由它提供；
+    有真 SLURM 时不动。AUTOZT_FAKESLURM=0 关闭、=1 强制接入。"""
+    import shutil
+    from autozt import _PKG_ROOT
+    shim = os.path.join(_PKG_ROOT, "tools", "fakeslurm")
+    flag = (os.environ.get("AUTOZT_FAKESLURM") or "").strip().lower()
+    if flag in ("0", "false", "no", "off") or not os.path.isfile(os.path.join(shim, "sbatch")):
+        return prefix
+    if flag not in ("1", "true", "yes", "on"):
+        search = os.pathsep.join([x for x in (prefix, os.environ.get("PATH", "")) if x])
+        if shutil.which("sbatch", path=search):
+            return prefix
+    return ":".join([x for x in (prefix, shim) if x])
 
 
 def collect(cfg, types, host="__default__"):
@@ -412,7 +434,7 @@ def run_remote(cfg, shell_line, host="__default__", use_stdin=False):
     if host == "__default__":
         host = cfg.get("host")
     _pp = _effective_remote_path_prefix(cfg, host)
-    if _pp and host:
+    if _pp:          # 本地模式（host 为空）也要：fakeslurm 垫片/本机工具链靠它进 PATH
         shell_line = "export PATH=\"%s:$PATH\"; %s" % (_pp, shell_line)
     if use_stdin:
         cmd = (_ssh_cmd(cfg, host, ["timeout 600 bash -s"]) if host else ["bash", "-s"])

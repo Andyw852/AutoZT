@@ -178,8 +178,9 @@ def test_default_profile_is_workflow_sized():
     old = os.environ.pop("AUTOZT_MCP_PROFILE", None)
     try:
         names = {item["name"] for item in M._tools_list()}
-        assert len(names) == 14
+        assert len(names) == 17
         assert "inspect" in names and "cycle" in names
+        assert {"register_material", "conf_get", "conf_set"} <= names
         assert "get_progress" in names and "doctor" in names
         assert "cancel_step" not in names and "rebuild_step" not in names
         assert "stop_step" not in names and "rerun_step" not in names
@@ -264,11 +265,12 @@ def test_workflow_profile_has_fixed_eight_tools():
     os.environ["AUTOZT_MCP_PROFILE"] = "workflow"
     try:
         names = {item["name"] for item in M._tools_list()}
-        assert len(names) == 14
+        assert len(names) == 17
         assert names == {
             "schema", "capabilities", "list_skills", "describe_skill", "get_progress",
             "doctor", "get_snapshot", "inspect", "probe_step", "cycle", "apply_actions",
             "research_plan", "preflight", "results",
+            "register_material", "conf_get", "conf_set",
         }
     finally:
         if old is None:

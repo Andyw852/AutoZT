@@ -222,11 +222,31 @@ class StepConf(object):
         # 如 FUNC）忽略。材料级 step.conf 是**全技能共用**的一份（"每层只写
         # 跟上一层不一样的键"），只认自己那一两个键的脚本用严格模式必然被
         # 别的步骤的键打死（2026-09-16 MoS2 S3_uniform 实测：FUNC 直接让 gen 退出）。
-        if strict and unknown:
+        if strict is True and unknown:
             raise SystemExit("[ERROR] %s 的 [params] 里有本脚本不认识的键：%s\n"
                              "        可用键：%s"
                              % (path or CONF_NAME, ", ".join(unknown),
                                 ", ".join(sorted(spec))))
+        # strict="warn"：只把"像是本步键名写错"的键（与 SPEC 某键高度相似，
+        # 如 FIT_METHOD vs FIT_METHODS）当错误；其余未知键多半是共用 step.conf
+        # 里别的步骤的参数——告警后忽略（手动跑 gen 不再被别的步骤的键打死）。
+        if strict == "warn" and unknown:
+            import difflib
+            known = sorted({k.upper() for k in spec})
+            typo = {}
+            for k in unknown:
+                near = difflib.get_close_matches(k, known, n=1, cutoff=0.85)
+                if near:
+                    typo[k] = near[0]
+            if typo:
+                raise SystemExit("[ERROR] %s 的 [params] 里有疑似写错的键：%s\n"
+                                 "        可用键：%s"
+                                 % (path or CONF_NAME,
+                                    ", ".join("%s（是不是 %s？）" % kv
+                                              for kv in sorted(typo.items())),
+                                    ", ".join(sorted(spec))))
+            sys.stderr.write("[WARN] %s 的 [params] 里有本步骤不用的键（多半属于别的步骤，"
+                             "已忽略）：%s\n" % (path or CONF_NAME, ", ".join(unknown)))
         for key, (default, typ) in spec.items():
             s = raw.get(key.upper())
             if s is None or s == "":
@@ -311,14 +331,36 @@ class StepConf(object):
         return out
 
 
+def _skill_default_conf(step_name):
+    """手动运行时的回退：gen 脚本所在技能目录下 templates/<step_name>/step.conf。"""
+    if not step_name or not sys.argv or not sys.argv[0]:
+        return None
+    here = Path(sys.argv[0]).resolve().parent
+    for cand in (here / "templates" / step_name / CONF_NAME,):
+        if cand.is_file():
+            return cand
+    return None
+
+
 def load(spec, step_name=None, cwd=".", strict=True):
     """gen 脚本入口：读材料目录里 tf 推来的那一份 step.conf。
 
     strict=False 时忽略 SPEC 之外的键（共用 step.conf 里别的步骤的参数），
-    只认自己声明的那几个 —— 给"只用一两个小开关"的 gen 脚本用。"""
+    只认自己声明的那几个 —— 给"只用一两个小开关"的 gen 脚本用。
+    strict="warn"：疑似写错的键（与 SPEC 键高度相似）报错，其余告警后忽略。"""
     p = Path(cwd) / CONF_NAME
     if not p.is_file():
-        raise SystemExit("[ERROR] 缺少 %s —— 该步骤的 gen_need 里漏了它？" % CONF_NAME)
+        # 脱离 autozt 手动跑 gen（python skill/<技能>/gen_xxx.py 于空目录）时，
+        # 回退到技能自带的默认 templates/<步骤>/step.conf，并明确告警。
+        fb = _skill_default_conf(step_name)
+        if fb is None:
+            raise SystemExit("[ERROR] 缺少 %s —— 该步骤的 gen_need 里漏了它？"
+                             "（手动运行请先 autozt -tt <技能> -p <材料> -j <步骤> init，"
+                             "或把 templates/<步骤>/step.conf 拷到当前目录）" % CONF_NAME)
+        sys.stderr.write("[WARN] 当前目录没有 %s，使用技能默认 %s"
+                         "（项目/材料层覆盖不生效；正式计算请走 autozt init/start）\n"
+                         % (CONF_NAME, fb))
+        p = fb
     merged = parse(p.read_text(encoding="utf-8-sig"), str(p))
     got = {k.upper(): v for k, v, _ in merged.get("params", [])}.get("STEP")
     if step_name and got and got != step_name:

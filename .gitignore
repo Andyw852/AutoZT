@@ -90,6 +90,7 @@ POTCAR.*
 # ---- 站点配置：模板照发，真实配置不发 ----
 setting/*.yaml
 !setting/template-cluster.yaml
+!setting/local.yaml
 !setting/example/
 # ---- 开发期临时物与配图 ----
 output/

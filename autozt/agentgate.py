@@ -71,7 +71,7 @@ AGENT_READ_CMDS = {
 }
 AGENT_MUTATE_CMDS = {
     "start", "retry", "fetch", "advance", "init", "adopt", "level", "hpc", "auto",
-    "conf", "correct", "monitor", "watch", "restart",
+    "conf", "correct", "monitor", "watch", "restart", "register",
 }
 AGENT_DESTRUCTIVE_CMDS = {"stop", "rerun", "clean", "migrate-subdir", "push"}
 AGENT_DESTRUCTIVE_FLAGS = {"-f", "--force", "-y", "--yes", "--purge-config"}
@@ -83,6 +83,8 @@ AGENT_VALUE_FLAGS = {
     "--offset", "--host", "-u", "--user", "--set", "--out",
     # 以前漏了 --project：`act --project P advance` 会把 P 当命令词 → 按未登记命令拒绝
     "-proj", "--project", "--expect-state",
+    # register 的取值选项（值是路径/集群名，不能被当成命令词）
+    "--dataset", "--poscar", "--root", "--cluster",
 }
 
 

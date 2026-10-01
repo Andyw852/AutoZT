@@ -77,9 +77,29 @@ addition to `tt`/`material`/`status`; scoping happens before collection. Materia
 a stable `id` = `<project>/<full name>` that `material` arguments accept, so identically
 named materials in different projects never collide.
 
-Profiles: `workflow` (default) = 14 tools incl. `get_progress` and `doctor`;
+Profiles: `workflow` (default) = 17 tools incl. `get_progress`, `doctor`,
+`register_material`, `conf_get` and `conf_set`;
 `monitor` = `get_progress`, `get_snapshot`, `cycle`; `compact` is unchanged for existing
 clients; `full` exposes everything.
+
+### New materials and parameters (`register_material`, `conf_set`)
+
+`register_material` onboards a material that so far exists only as a dataset or a structure:
+it creates `<project_root>/<material>/`, copies the POSCAR (`poscar`, or `dataset/POSCAR`),
+runs `init` for the skill, optionally switches the cluster (`cluster: "local"` runs on this
+machine; without SLURM the bundled `tools/fakeslurm` provides sbatch/squeue/sacct/scancel)
+and writes the dataset path into the skill's input parameter (fit-fc-thermal →
+`step1_fit.FIT_INPUT_DIR`) plus any `params` for `step`. It is idempotent and never submits.
+`conf_set` writes one key of a step's project-level `step.conf` (`key` = `[section.]KEY`,
+default section `params`; empty `value` deletes the key). Both are `mutate` tools routed
+through `autozt act`, i.e. the same gateway and audit trail as the CLI.
+
+```json
+{"name": "register_material", "arguments": {"tt": "fit-fc-thermal", "material": "MoS2",
+  "dataset": "/data/MoS2/step4_disp", "cluster": "local"}}
+{"name": "conf_set", "arguments": {"tt": "fit-fc-thermal", "material": "MoS2",
+  "step": "step1_fit", "key": "FIT_METHODS", "value": "pheasy:ALASSO"}}
+```
 
 ## Workflow profile for new LLM integrations
 

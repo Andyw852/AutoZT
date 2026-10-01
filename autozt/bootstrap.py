@@ -1774,7 +1774,12 @@ def resolve_material_local(t, root, m):
     m["hpc_name"] = str(hpc.get("name") or dhpc.get("name")
                         or (t.get("hpc") if isinstance(t.get("hpc"), str) else None)
                         or "jzzn")
-    m["host_eff"] = hpc.get("ssh_host") or dhpc.get("ssh_host") or None
+    # 项目/技能 hpc.yaml 显式写 ssh_host: ""（autozt hpc local）= 本机执行，
+    # 不能再回退到技能默认集群的 ssh_host（否则切 local 后照样去 ssh jzzn）。
+    if "ssh_host" in hpc and not hpc.get("ssh_host"):
+        m["host_eff"] = None
+    else:
+        m["host_eff"] = hpc.get("ssh_host") or dhpc.get("ssh_host") or None
     # v1.11：work_dir 回退链——项目 setting.yaml > 项目 hpc.yaml >
     # 集群 setting/<hpc_name>.yaml 的 work_dir > 技能默认 > root。
     # 三个集群（jzzn/3090/a800）都在 setting/<name>.yaml 里自描述 work_dir。
@@ -1797,6 +1802,10 @@ def resolve_material_local(t, root, m):
     m["work_dir_eff"] = (st.get("work_dir") or hpc.get("work_dir")
                          or _cluster_work_dir or t.get("work_dir")
                          or t.get("root"))
+    # 本地执行（ssh_host 为空，setting/local.yaml）：work_dir 是本机路径，
+    # 允许写 ~ / $HOME（远端模式不展开——那是远端 shell 的事）。
+    if not m["host_eff"] and m["work_dir_eff"]:
+        m["work_dir_eff"] = os.path.expandvars(os.path.expanduser(str(m["work_dir_eff"])))
     # v1.11：用户没显式指定 work_dir 时提示（按技能去重，避免刷屏）
     if not (st.get("work_dir") or hpc.get("work_dir")):
         _wk = t.get("key")

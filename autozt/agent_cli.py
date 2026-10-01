@@ -17,6 +17,7 @@ import argparse
 import hashlib
 import json
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -395,6 +396,14 @@ AGENT_RULES_MD = """# AutoZT 调用规则（给 LLM；由 `autozt agent setup --
 6. 批量操作前可跑 `autozt agent doctor`（max_jobs 生效值、被屏蔽项目、同名材料）。
 7. 材料用稳定 id `<项目名>/<完整名>`（progress/inspect 返回的 id 字段）指代，避免同名歧义。
 8. 不改全局开关（auto_advance、auto_watch 等）和项目配置，除非用户明确要求。
+9. 新材料/只有一份数据集：`autozt -tt <技能> -p <材料> register [--dataset D] [--poscar F]
+   [--cluster local]`（MCP: register_material），改参数用 MCP conf_set（= conf --set）——两者都
+   改项目配置，先向用户说明再调用。不要自己建目录、手跑 gen_*.py、手写 submit.sh 或 sbatch；
+   没有超算就 `--cluster local`（本机执行，无 SLURM 时自动用仓库自带 tools/fakeslurm）。
+10. 命令失败看退出码：非 0 即失败；代理环境下错误也会以 `[autozt error] …`（--json 时为
+   `{"ok": false, "error": …}`）出现在 stdout。`-p` 写错材料名会直接报"找不到材料"。
+11. `autozt` 不在 PATH 时用 setup 返回的 `cli.absolute`（绝对路径调用），或让用户
+   `pip install -e <仓库>` / 把 `<仓库>/bin` 加进 PATH。
 """
 
 
@@ -408,10 +417,15 @@ def _cmd_setup(args: argparse.Namespace) -> Tuple[Dict[str, Any], int]:
     data: Dict[str, Any] = {
         "mcp_server": {"mcpServers": {"autozt": {
             "command": argv[0], "args": argv[1:] + ["mcp"], "env": env}}},
-        "mcp_profiles": {"workflow": "默认：progress/doctor/inspect/cycle/apply 等 14 个工具",
+        "mcp_profiles": {"workflow": "默认：progress/doctor/inspect/cycle/apply/register_material/conf_set 等 17 个工具",
                          "monitor": "最小：get_progress/get_snapshot/cycle",
                          "full": "全部工具（含需人工批准的破坏性工具）"},
         "cli": {"prefix": " ".join(argv + ["agent"]),
+                "absolute": " ".join(argv),
+                "on_path": shutil.which("autozt"),
+                "install_hint": (None if shutil.which("autozt") else
+                                 "autozt 不在 PATH：pip install -e %s，或 export PATH=%s:$PATH；"
+                                 "也可直接用 cli.absolute" % (ROOT, os.path.join(ROOT, "bin"))),
                 "first_calls": ["progress --project <P>", "doctor",
                                 "inspect --project <P>", "cycle --project <P> --execute"]},
         "rules_md": AGENT_RULES_MD,

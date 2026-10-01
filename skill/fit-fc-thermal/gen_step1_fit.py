@@ -23,6 +23,13 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+# 脱离 autozt 直接运行（python skill/fit-fc-thermal/gen_*.py）时，gen_need 里
+# 来自 skill/_common 的 stepconf/dim_common/thickness_2d 等不在脚本旁边——
+# 追加到 sys.path 末尾兜底（autozt 推送的同目录拷贝仍优先）。
+for _d in ("_common/opt", "_common"):
+    _p = Path(__file__).resolve().parent.parent / _d
+    if _p.is_dir() and str(_p) not in sys.path:
+        sys.path.append(str(_p))
 import fc_common as fc
 import stepconf
 
@@ -492,7 +499,7 @@ def main(conf=None, out=None, job_label="S1fit"):
     variant (out = step3_sweep/m-<tag>/)."""
     cwd = Path.cwd()
     if conf is None:
-        conf = stepconf.load(SPEC, STEP)
+        conf = stepconf.load(SPEC, STEP, strict="warn")
     if out is not None:
         return _gen_one(conf, Path(out), job_label)
     out = cwd / OUTDIR
@@ -608,6 +615,14 @@ def _gen_one(conf, out, job_label="S1fit"):
         # A dataset without a phonopy YAML (the npy / pkl layouts) still ships
         # POSCAR + SPOSCAR, so the repetitions are recoverable from the edge
         # ratio -- pheasy needs them explicitly.
+        _miss = [n for n in ("POSCAR", "SPOSCAR") if not (src / n).is_file()]
+        if _miss:
+            sys.exit("[ERROR] dataset %s has no phonopy YAML and lacks %s -- the "
+                     "supercell cannot be deduced.\n"
+                     "        Add POSCAR (unit cell) + SPOSCAR (supercell) next to the "
+                     "arrays, or point FIT_INPUT_DIR at a complete dataset:\n"
+                     "          autozt -tt fit-fc-thermal -p <material> -j step1_fit conf "
+                     "--set params.FIT_INPUT_DIR=<dir>" % (src, " + ".join(_miss)))
         reps = fc.supercell_reps(src / "POSCAR", src / "SPOSCAR")
         if reps:
             sc_str = " ".join(str(x) for x in reps)

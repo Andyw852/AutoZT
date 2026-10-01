@@ -12,6 +12,7 @@
 以及只读 resources/list、resources/read、prompts/list、prompts/get。
 """
 import glob
+import re
 import json
 import os
 import subprocess
@@ -107,6 +108,32 @@ TOOLS = [
                                        "material": {"type": "string"},
                                        "step": {"type": "string"}},
       "required": ["material"]}, "mutate", ["retry"]),
+    ("conf_set", "改某步 step.conf 的一个键（写进该材料本技能的项目层 step.conf，"
+     "不碰技能库；等价 autozt -tt T -p M -j S conf --set 节.键=值）。key 缺省节为 params，"
+     "如 FIT_METHODS 或 params.FIT_METHODS、submit.cpus_per_task；value 为空字符串=删除该键。"
+     "改完用 prepare_step 重新生成输入再 start_step",
+     {"type": "object", "properties": {"tt": {"type": "string"},
+                                       "material": {"type": "string"},
+                                       "step": {"type": "string"},
+                                       "key": {"type": "string"},
+                                       "value": {"type": "string"}},
+      "required": ["material", "step", "key", "value"], "additionalProperties": False},
+     "mutate", ["conf"]),
+    ("register_material", "新材料一次接入（纯本地、不提交）：在 project_roots 下建材料目录、"
+     "放 POSCAR（poscar 或 dataset/POSCAR）、init 该技能；可选 cluster 切集群（local=本机执行，"
+     "无 SLURM 自动用 fakeslurm）、dataset 写进技能的数据集参数（fit-fc-thermal → "
+     "step1_fit.FIT_INPUT_DIR）、params 写进 step 的 step.conf。已存在的文件不覆盖（幂等）。"
+     "之后用 start_step 开算——不要自己拼目录、跑 gen 或 sbatch",
+     {"type": "object", "properties": {"tt": {"type": "string"},
+                                       "material": {"type": "string"},
+                                       "dataset": {"type": "string"},
+                                       "poscar": {"type": "string"},
+                                       "root": {"type": "string"},
+                                       "cluster": {"type": "string"},
+                                       "step": {"type": "string"},
+                                       "params": {"type": "object"}},
+      "required": ["tt", "material"], "additionalProperties": False},
+     "mutate", ["register"]),
     ("sync_results", "把已完成步骤的结果拉回本地",
      {"type": "object", "properties": {"tt": {"type": "string"},
                                        "material": {"type": "string"}},
@@ -207,6 +234,8 @@ WORKFLOW_TOOLS = {
     "schema", "capabilities", "list_skills", "describe_skill", "get_progress", "doctor",
     "get_snapshot", "inspect", "probe_step", "cycle", "apply_actions", "research_plan",
     "preflight", "results",
+    # 新材料接入与改参数：以前 workflow 档没有这两个入口，agent 只好绕开 autozt
+    "register_material", "conf_get", "conf_set",
 }
 
 TOOL_RESULT_SCHEMA = {
@@ -859,7 +888,27 @@ def call_tool(name, args, _internal=False):
     elif name == "conf_get":
         argv += ["conf"]
     elif name == "conf_set":
-        argv += ["conf", "--set", "%s=%s" % (args.get("key"), args.get("value"))]
+        key, val = str(args["key"]).strip(), str(args["value"])
+        if not re.match(r"^[A-Za-z_][\w.-]*$", key) or "\n" in val or "\r" in val:
+            return _result(risk, rc=1, error="conf_set: key 应为 [节.]键（如 params.FIT_METHODS），"
+                                             "value 不能含换行")
+        argv += ["conf", "--set", "%s=%s" % (key, val)]
+    elif name == "register_material":
+        argv = ["-tt", str(args["tt"]), "-p", str(args["material"])]
+        if args.get("step"):
+            argv += ["-j", str(args["step"])]
+        argv += ["register"]
+        for opt in ("dataset", "poscar", "root", "cluster"):
+            if args.get(opt):
+                argv += ["--" + opt, str(args[opt])]
+        for k, v in sorted((args.get("params") or {}).items()):
+            if not re.match(r"^[A-Za-z_][\w.-]*$", str(k)) or "\n" in str(v):
+                return _result(risk, rc=1, error="register_material: 非法参数 %r" % k)
+            argv += ["--set", "%s=%s" % (k, "" if v is None else v)]
+        if args.get("params") and not args.get("step"):
+            return _result(risk, rc=1, error="register_material: params 需要同时给 step")
+        argv += ["--json"]
+        json_result = True
     elif name == "session_export":
         argv += ["session", "export"]
         if args.get("out"):
@@ -889,10 +938,17 @@ def call_tool(name, args, _internal=False):
         # 变更/破坏性：交给动作网关（agent 会话下破坏性动作会被拒并给出批准命令）
         argv = ["act"] + argv
     rc, out, err = _run(argv)
-    combined = ((out or "") + (("\n" + err) if err.strip() else "")).strip()
+    # CLI 在代理环境会把错误镜像到 stdout（[autozt error] …），stderr 里同一句不再重复拼
+    _err = "\n".join(ln for ln in (err or "").splitlines()
+                     if ln.strip() and ln.strip() not in (out or ""))
+    combined = ((out or "") + (("\n" + _err) if _err.strip() else "")).strip()
     if rc != 0:
         return _result(risk, rc=rc, error=combined or "AutoZT command failed")
     if json_result:
+        if name == "register_material":
+            # 经 act 网关时 stdout 前面可能有网关/告警行；报告是最后一行 JSON
+            _js = [ln for ln in (out or "").splitlines() if ln.startswith("{")]
+            out = _js[-1] if _js else out
         parsed, parse_error = _json_stdout(out)
         if parse_error:
             return _result(risk, rc=1, error=parse_error,

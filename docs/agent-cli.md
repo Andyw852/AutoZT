@@ -28,6 +28,33 @@ autozt agent inspect --project my_batch_295 --status error
 autozt agent cycle --project my_batch_295 --execute
 ```
 
+### 新材料接入、改参数、本机执行
+
+```bash
+# 只有一份位移+力数据集（或一个结构）时的正规入口：建目录 + POSCAR + init + 写数据集参数。
+# --cluster local = 本机执行；本机没有 SLURM 时自动用仓库自带 tools/fakeslurm。
+autozt -tt fit-fc-thermal -p MoS2 register --dataset /data/MoS2/step4_disp --cluster local
+autozt -tt fit-fc-thermal -p MoS2 -j step1_fit conf --set params.FIT_METHODS=pheasy:ALASSO
+autozt -tt fit-fc-thermal -p MoS2 start
+```
+
+- MCP 等价：`register_material`（tt/material/dataset/poscar/cluster/step/params）、
+  `conf_set`（material/step/key/value）——都在 workflow 档，走 `act` 网关（mutate）。
+- 不要自己建目录、手跑 `gen_*.py`、手写 `submit.sh` 或 `sbatch`：状态表与真实作业会脱节。
+  确需离线检查输入，`gen_*.py` 现在可以在空目录直接运行（回退技能默认 step.conf、
+  从 `skill/_common` 补齐依赖、模板从 `templates/<步骤>/` 找），但正式计算一律走 autozt。
+- 本机后端：`setting/local.yaml`（`ssh_host: ""`，`work_dir` 可写 `~`）。fakeslurm 的并发核数
+  `FAKESLURM_MAX_CPUS`（缺省本机核数）、状态目录 `FAKESLURM_HOME`（缺省 `~/.fakeslurm`）；
+  `AUTOZT_FAKESLURM=0` 关闭垫片、`=1` 强制使用。
+
+### 错误与退出码
+
+- 非 0 即失败。`--json` 时错误以 `{"ok": false, "error": …, "rc": 1}` 写到 stdout；在 AI 代理
+  环境（CLAUDECODE/GEMINI_CLI/CODEX_SANDBOX…）或 `AUTOZT_JSON_ERRORS=1` 时以
+  `[autozt error] …` 镜像到 stdout（stderr 照旧）。`AUTOZT_JSON_ERRORS=0` 关闭镜像。
+- `-p` 写错材料名：全部找不到 → 报"找不到材料"并退出 1（附相近名字）；部分找不到 → 告警后
+  只处理找得到的。以前是静默输出空表、退出 0。
+
 执行结果 `results[].outcome`：
 
 | outcome | 含义 | 该做什么 |
@@ -185,6 +212,10 @@ MCP 协议本身不会减少模型 token。节省来自三个地方：profile �
 或 `-status error,running,pd` 缩小范围，再让模型读取单点证据，通常比一次发送全量状态更省。
 
 ## 安装方式与入口
+
+`autozt` 不在 PATH 时（代理里最常见的"command not found"）：`pip install -e <仓库>`，或
+`export PATH=<仓库>/bin:$PATH`，或直接用绝对路径——`autozt agent setup` 返回的
+`cli.absolute` / `cli.on_path` / `cli.install_hint` 给出本机的实际值。
 
 `pip install` 生成的 `autozt` 命令、`bin/autozt` 和 `python -m autozt` 走同一个路由
 （`autozt.cli.route_subcommand`）：`agent` / `mcp` 在主参数解析和任何采集之前分流。

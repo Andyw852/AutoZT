@@ -105,7 +105,8 @@ def normalize_monitor_command(command, positional, restart=False):
 # 取值型选项：找裸命令词时跳过它们后面的值（-p agent 里的 agent 是材料名，不是子命令）
 _ROUTE_VALUE_FLAGS = {'-c', '--config', '-tt', '-p', '-j', '-job', '-status', '--status',
                       '-x', '--exclude', '--host', '-u', '--user', '-proj', '--project',
-                      '--expect-state'}
+                      '--expect-state', '--dataset', '--poscar', '--root', '--cluster',
+                      '--set', '--out'}
 
 # 带 -p 时可以只采目标材料的命令（进度文件对该技能有足够新的整技能覆盖时）。
 # 这些命令只动/只看 -p 指定的材料；并发闸门缺的那部分由 busy_baseline 补。
@@ -146,7 +147,47 @@ def route_subcommand(argv):
     return None
 
 
+def _errors_to_stdout(argv):
+    """错误是否镜像到 stdout：--json、AUTOZT_JSON_ERRORS=1、或处在 AI 代理环境。
+
+    很多代理/MCP 宿主只读 stdout（或把 stderr 截断/丢弃），以前 `sys.exit("错误：…")`
+    只写 stderr，代理看到的是"空输出 + 非 0"，只能瞎猜。"""
+    if "--json" in argv:
+        return True
+    flag = (os.environ.get("AUTOZT_JSON_ERRORS") or "").strip().lower()
+    if flag in ("0", "false", "no", "off"):
+        return False
+    if flag in ("1", "true", "yes", "on"):
+        return True
+    try:
+        from autozt.agentgate import AGENT_ENV_MARKERS
+    except Exception:
+        AGENT_ENV_MARKERS = ("CLAUDECODE", "GEMINI_CLI", "CODEX_SANDBOX")
+    return any(os.environ.get(k) for k in AGENT_ENV_MARKERS)
+
+
 def main():
+    """入口：sys.exit("错误：…") 这类字符串退出照旧（解释器把它写 stderr、退出码 1）；
+    代理/--json 场景再往 stdout 镜像一行，免得只读 stdout 的宿主看到"空输出"。"""
+    argv = sys.argv[1:]
+    try:
+        return _main()
+    except SystemExit as e:
+        code = e.code
+        if code is not None and not isinstance(code, int) and _errors_to_stdout(argv):
+            try:
+                if "--json" in argv:
+                    sys.stdout.write(json.dumps({"ok": False, "error": str(code), "rc": 1},
+                                                ensure_ascii=False) + "\n")
+                else:
+                    sys.stdout.write("[autozt error] %s\n" % code)
+                sys.stdout.flush()
+            except Exception:
+                pass
+        raise
+
+
+def _main():
     from autozt.bootstrap import reset_config_conflicts, reject_config_conflict_targets, filter_config_conflicts
     reset_config_conflicts()
     # JSON/MCP/agent callers and Windows consoles must see the same UTF-8 text.
@@ -263,6 +304,14 @@ def main():
     p.add_argument("--set", dest="sets", action="append", metavar="节.键=值",
                    help="conf：改本步 step.conf（如 --set incar.EDIFF=1E-6；"
                         "值留空=删除该键）")
+    p.add_argument("--dataset", dest="reg_dataset", metavar="目录",
+                   help="register：位移+力数据集目录（写进该技能的数据集参数，如 FIT_INPUT_DIR）")
+    p.add_argument("--poscar", dest="reg_poscar", metavar="文件",
+                   help="register：材料结构文件（缺省取 --dataset 目录里的 POSCAR）")
+    p.add_argument("--root", dest="reg_root", metavar="目录",
+                   help="register：材料建在哪个 project_roots 下（缺省第一个）")
+    p.add_argument("--cluster", dest="reg_cluster", metavar="集群",
+                   help="register：顺带切到该集群（setting/<集群>.yaml；本机用 local）")
     p.add_argument("--errors-only", dest="errors_only", action="store_true",
                    help="json：只保留含 FAIL 步骤的材料与 FAIL 步骤")
     p.add_argument("--limit", dest="limit", type=int, metavar="N",
@@ -294,7 +343,9 @@ def main():
                 "session",
                 # AI 接入：progress = 读本地进度文件（不采集、不连超算）；
                 #          doctor   = 配置预检（不连超算）
-                "progress", "doctor"}
+                "progress", "doctor",
+                # register = 新材料一次接入（建目录+POSCAR+init+可选集群/数据集）
+                "register"}
     root, cmd, pos = None, "status", []
     for tok in a.args:  # v3.14：位置参数先收集，之后按"材料名/目录"消歧
         if tok == "help":
@@ -452,8 +503,8 @@ def main():
     if a.user:
         cfg["user"] = a.user
     types = get_types(cfg, tt=a.tt,
-                      root_override=None if cmd == "init" else root,
-                      quiet=(cmd == "init"))
+                      root_override=None if cmd in ("init", "register") else root,
+                      quiet=(cmd in ("init", "register")))
     if a.project:   # --project：采集前按项目配置裁剪段（只采这个项目，快且不串项目）
         _wp = {x.strip() for x in a.project.split(",") if x.strip()}
         _avail = sorted({_seg_proj_name(t) for t in types if _seg_proj_name(t)})
@@ -471,6 +522,16 @@ def main():
                  "（在全局 tf.yaml 或项目 project_setting/tf_*.yaml 里定义）。")
     # v1.1：-tt 指定的类型有骨架但无项目段时 types 为空——前面已打印引导
     # 提示，这里放行，按空表/无目标处理（不算错误）。
+
+    if cmd == "register":   # 新材料接入：纯本地（建目录/init/写 step.conf），不连超算
+        _gate = agent_direct_gate(cfg, cmd, sys.argv[1:])
+        if _gate is not None:
+            sys.exit(_gate)
+        from autozt import cmd_register
+        sys.exit(cmd_register(cfg, types, a.proj, a.tt, dataset=a.reg_dataset,
+                              poscar=a.reg_poscar, root=a.reg_root,
+                              cluster=a.reg_cluster, sets=a.sets, step=a.job,
+                              json_out=a.json_out))
 
     if cmd == "init" and not a.job:  # 项目配置初始化：纯本地，不连超算
         _gate = agent_direct_gate(cfg, cmd, sys.argv[1:])   # P0-1：init 也进审计
@@ -629,6 +690,51 @@ def main():
         for _t in data["types"]:
             _t["materials"] = [m for m in _t["materials"]
                                if (m.get("project") or "") in _wp]
+    if a.proj:
+        # -p 写错材料名以前静默返回"（没有任何任务类型）"/空 JSON 且 rc=0，
+        # agent 会当成"该材料没事"。现在全部 -p 都找不到 → 报错退出（rc≠0）；
+        # 部分找不到 → 警告后照常处理找得到的。
+        from autozt import _name_matches
+        _all_m = [m for t in data["types"] for m in t["materials"]]
+        def _hit(x):
+            # 材料名 / basename / <项目>/<名>；clean 等还接受体系目录（-p C20 → C20/*）
+            return any(_name_matches(m, x) or (m.get("name") or "").startswith(x + "/")
+                       or (m.get("qualified_name") or "").startswith(x + "/")
+                       for m in _all_m)
+        _miss = [x.strip() for x in a.proj.split(",") if x.strip() and not _hit(x.strip())]
+        # 本地存在、只是本轮没采到（ssh 不通/采集组失败）的不算"找不到"——只告警，
+        # 否则网络抖一下 agent 就会以为材料没了。
+        _roots = [os.path.realpath(os.path.expanduser(str(r)))
+                  for r in (cfg.get("project_roots") or [])]
+        _lr = {os.path.basename(os.path.realpath(t["local_root"]))
+               for t in _types_all if t.get("local_root")}
+
+        def _local(x):
+            return x in _lr or any(os.path.isfile(os.path.join(r, x, "POSCAR"))
+                                   for r in _roots)
+        _uncollected = [x for x in _miss if _local(x)]
+        if _uncollected:
+            print(_i18n.t("警告：", "warning: ")
+                  + "材料 %s 在本地存在，但本轮没有采集到它的状态（见上方采集告警，"
+                    "多半是 ssh/集群不可达）。" % ", ".join(_uncollected), file=sys.stderr)
+        _miss = [x for x in _miss if x not in _uncollected]
+        if _miss:
+            import difflib
+            # -p 预过滤可能已把 skill_subdir 段裁掉了：候选名再从未裁剪的段补
+            _cands = sorted({m["name"] for m in _all_m}
+                            | {os.path.basename(m["name"]) for m in _all_m}
+                            | {os.path.basename(os.path.realpath(t["local_root"]))
+                               for t in _types_all if t.get("local_root")})
+            _hint = ["%s→%s" % (x, ",".join(difflib.get_close_matches(x, _cands, n=2,
+                                                                   cutoff=0.6)))
+                     for x in _miss if difflib.get_close_matches(x, _cands, n=1, cutoff=0.6)]
+            _msg = (_i18n.t("找不到材料：", "material not found: ") + ", ".join(_miss)
+                    + ((a.tt and "（技能 %s 内）" % a.tt) or "")
+                    + (("；相近：" + "; ".join(_hint)) if _hint else "")
+                    + "。新材料先 autozt -tt <技能> -p <材料> init（或 MCP register_material）。")
+            if len(_miss) == len([x for x in a.proj.split(",") if x.strip()]):
+                sys.exit(_i18n.t("错误：", "error: ") + _msg)
+            print(_i18n.t("警告：", "warning: ") + _msg, file=sys.stderr)
     apply_exclude(data, a.exclude)   # v3.11：-x 跳过指定项目
 
     incl_sc = status_spec_has_scancel(a.status_f)   # v1.4

@@ -17,6 +17,7 @@
 | jzzn | `jzzn` | CPU 集群，真 SLURM（cpu192 分区）。VASP + MACE（venv `mace_cpu`） |
 | a800 | `A800` | A800 GPU 集群，真 SLURM（分区 a800，GRES gpu:a800） |
 | 3090 | `user_3090` | 8×RTX3090 服务器，**无 SLURM**（sbatch/squeue/scancel 是 `~/fakeslurm` 垫片，autozt 经 `remote_path_prefix` 注入 PATH） |
+| local | （无，本机） | `setting/local.yaml`，`ssh_host: ""` 本机执行；本机无 SLURM 时 autozt 自动把仓库 `tools/fakeslurm` 接进 PATH（`FAKESLURM_MAX_CPUS` 限核） |
 
 20 个技能（`-tt`，见 `autozt skills`）：VASP 类 `band-dft-cpu`（能带）/ `defect-dft-cpu`（本征缺陷+形成能）/ `elastic-dft-cpu`（弹性常数）/ `ke-dft-cpu`（电子热导率）/ `kl-dft-cpu`（晶格热导率）/ `opt-dft-cpu`（结构优化+能量）/ `phonon-dft-cpu`（声子谱）/ `zt-dft-cpu`（ZT 全流程）；MLFF 类 `kl-mlff-cpu`/`kl-mlff-gpu`（晶格热导率）/ `opt-mlff-cpu`/`opt-mlff-gpu`（结构优化+形成能）/ `phonon-mlff-cpu`/`phonon-mlff-gpu`（声子谱）/ `mlff`（随机位移法训练）；辅助 `cohp-cogito`（成键分析）/ `eph-qe-cpu`（电子-声子）/ `te-screen`（热电筛选）/ `unihamgnn`（机器学习势）；拟合 `fit-fc-thermal`（力常数拟合）。状态表 `hpc` 列显示每个项目实际跑的机器。
 
@@ -88,6 +89,9 @@ autozt [-tt TT] -p MAT [-j STEP] retry    # 保留产物重生成输入，不提
                                           #     都不生成）。首次生成用下面的 `init -j`，检查后再 `start`。
                                           #     实测：2026-09-21 S4b_wavefull（CrSe2_hex）踩过。
 autozt [-tt TT] -p MAT [-j STEP] rerun    # 删目录重新生成（破坏性，先请示；mlff step5_label 禁用）
+autozt -tt TT -p MAT register [--dataset D] [--poscar F] [--cluster local] [-j STEP --set 节.键=值]
+                                       # 新材料一次接入：建目录+POSCAR+init+可选切集群/写数据集参数，
+                                       #   不提交（改项目配置，先请示）；MCP 同名 register_material
 autozt -p MAT dir                      # 该材料在超算的目录（拼只读诊断命令用）
 autozt [-p MAT] [-j STEP] clean        # 删除生成物回到 PREP（破坏性，先请示）
 autozt [-p MAT] fetch                  # 手动强制拉回结果（status 时已自动保存完成的步骤，一般不用跑）
@@ -137,6 +141,9 @@ autozt auto [on|off]                   # 一键开关全局 auto_advance（改�
 - 执行（`cycle --execute`/`apply`）按「动作+技能+步骤」合成一条 `act -p A,B,C`，每个动作带 `--expect-state` 按现采状态复核；看 `results[].outcome`：`submitted` / `deferred`（达 max_jobs，正常排队）/ `skipped_stale`（状态已变，重新 inspect）/ `failed`。
 - 带 `-p` 的 start/retry/fetch/list/diagnose 等只采目标材料（整技能采集记录在 `narrow_max_age` 内时；`autozt doctor` 的「单材料快路径」一节显示是否可用）；显式 `start -p X -j S` 现在也受 max_jobs 约束（`-f` 越过）。
 - 给其它 AI 代理接入：`autozt agent setup` 输出 MCP 配置（绝对路径）和规则卡；`autozt agent setup --rules` 只输出规则卡。
+- `autozt` 不在 PATH 时用 `autozt agent setup` 返回的 `cli.absolute`（或 `pip install -e ~/software/AutoZT`）；不要因为 command not found 就绕开 autozt 手拼 ssh/sbatch。
+- 错误判定：非 0 退出即失败；代理环境下错误也镜像到 stdout（`[autozt error] …`，`--json` 时 `{"ok": false, …}`）。`-p` 材料名写错会直接报"找不到材料"（以前静默空表、rc=0）。
+- 新材料/只有数据集：`register`（MCP `register_material`）；改参数：`conf --set`（MCP `conf_set`）。两者都写项目配置，按铁律 3 先请示。`gen_*.py` 虽可脱离 autozt 在空目录运行（仅供检查输入），正式计算禁止手跑 gen + 手动 sbatch（铁律 1）。
 
 ## 四、状态判读
 

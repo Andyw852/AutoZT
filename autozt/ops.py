@@ -1314,8 +1314,11 @@ def cmd_hpc(cfg, types, projs, cluster, tt, yes):
               % (cluster, cluster, _list_pkg_clusters()))
         return 1
     master = _load_yaml_file(master_path)
-    if not master.get("ssh_host"):
+    if "ssh_host" not in master:
         print("警告：%s 没写 ssh_host——提交不知道该连哪台。" % master_path)
+    elif not master.get("ssh_host"):
+        print("提示：%s 的 ssh_host 为空 = 本机执行（无 SLURM 时自动用 tools/fakeslurm）。"
+              % master_path)
     todo, seen = [], set()
     for t in types:
         root = t.get("local_root")
@@ -1337,7 +1340,7 @@ def cmd_hpc(cfg, types, projs, cluster, tt, yes):
         return 1
     print("将把 %d 个项目的%s分配到集群 %s（ssh_host=%s）："
           % (len(todo), (" [%s] 技能" % tt) if tt else "（全部技能）",
-             master.get("name") or cluster, master.get("ssh_host") or "未写"))
+             master.get("name") or cluster, master.get("ssh_host") or ("本机" if "ssh_host" in master else "未写")))
     for t, root, m in todo:
         print("  %-24s → %s" % (m["name"], ("材料/%s/hpc.yaml" % t["key"])
                                  if tt else "project_setting/hpc.yaml"))
@@ -1376,7 +1379,7 @@ def cmd_hpc(cfg, types, projs, cluster, tt, yes):
                 % (", ".join(missing), t["key"], tdir)) if missing else ""
         print("%s[%s]: hpc → %s（%s）%s"
               % (m["name"], t["key"], master.get("name") or cluster,
-                 master.get("ssh_host") or "未写", note))
+                 master.get("ssh_host") or ("本机" if "ssh_host" in master else "未写"), note))
     print("完成。验证：tf -tt %s 状态表 hpc 列应显示 %s。"
           % (tt or "<技能>", master.get("name") or cluster))
     return 1 if fails else 0
@@ -2262,3 +2265,172 @@ def cmd_watch(cfg, types, projs, exclude, interval, tt=None, root=None,
             _time.sleep(interval)
     except KeyboardInterrupt:
         print("\n已退出监控。")
+
+
+# ---------------------------------------------------------------------------
+# register：把一个"只有数据集/结构文件"的新材料一次性接入 AutoZT
+# （建材料目录 + 放 POSCAR + init 该技能 + 可选切集群 + 可选把数据集路径写进 step.conf）。
+# 以前 agent 遇到"手里只有一份位移+力数据集"时找不到正规入口，只好绕开 autozt
+# 自己拼目录/跑 gen；MCP register_material 走的也是这里。
+# ---------------------------------------------------------------------------
+# 技能 → 数据集目录写进哪一步的哪个参数（--dataset 只对这些技能有意义）
+REGISTER_INPUT_PARAM = {
+    "fit-fc-thermal": ("step1_fit", "FIT_INPUT_DIR"),
+}
+
+
+def cmd_register(cfg, types, proj, tt, dataset=None, poscar=None, root=None,
+                 cluster=None, sets=None, step=None, json_out=False):
+    import shutil
+    from autozt import (get_types, invalidate_project_scan, _load_yaml_file,
+                        pkg_setting_path, _PKG_ROOT)
+    report = {"ok": False, "material": proj, "tt": tt, "actions": []}
+
+    def _fail(msg):
+        report["error"] = msg
+        if json_out:
+            print(json.dumps(report, ensure_ascii=False))
+        else:
+            print(_i18n.t("错误：", "error: ") + msg)
+        return 1
+
+    def _did(msg):
+        report["actions"].append(msg)
+        if not json_out:
+            print("  " + msg)
+
+    # ---- 先全部校验，校验不过不在盘上留任何东西 ----
+    if not tt:
+        return _fail("register 需要 -tt <技能>（如 -tt fit-fc-thermal）。")
+    if not proj or "," in proj:
+        return _fail("register 需要 -p <材料名>（一次一个，可带相对路径如 MoS2/1L）。")
+    if os.path.isabs(proj) or ".." in proj.split("/"):
+        return _fail("材料名不能是绝对路径或含 ..：%s" % proj)
+    roots = [os.path.realpath(os.path.expanduser(str(r)))
+             for r in (cfg.get("project_roots") or [])]
+    if root:
+        root = os.path.realpath(os.path.expanduser(str(root)))
+        if roots and not any(root == r or root.startswith(r + os.sep) for r in roots):
+            return _fail("--root %s 不在 project_roots（%s）下，autozt 发现不了它；"
+                         "先把它加进 tf.yaml 的 project_roots。" % (root, ", ".join(roots)))
+    elif roots:
+        root = roots[0]
+    else:
+        return _fail("tf.yaml 没有 project_roots，也没给 --root。")
+    if dataset:
+        if tt not in REGISTER_INPUT_PARAM:
+            return _fail("技能 %s 不接受 --dataset（支持：%s）；请用 --set 写对应参数。"
+                         % (tt, ", ".join(sorted(REGISTER_INPUT_PARAM))))
+        dataset = os.path.realpath(os.path.expanduser(str(dataset)))
+        if not os.path.isdir(dataset):
+            return _fail("--dataset %s 不是目录。" % dataset)
+    if poscar:
+        poscar = os.path.realpath(os.path.expanduser(str(poscar)))
+        if not os.path.isfile(poscar):
+            return _fail("--poscar %s 不存在。" % poscar)
+    if cluster and not pkg_setting_path(str(cluster) + ".yaml"):
+        return _fail("没有集群配置 setting/%s.yaml（可用：%s）。"
+                     % (cluster, _list_pkg_clusters()))
+    matdir = os.path.join(root, proj)
+    src_poscar = poscar or (os.path.join(dataset, "POSCAR") if dataset else None)
+    if not os.path.isfile(os.path.join(matdir, "POSCAR")):
+        if not src_poscar or not os.path.isfile(src_poscar):
+            return _fail("%s 下没有 POSCAR：用 --poscar 给结构文件（或让 --dataset 目录里带 "
+                         "POSCAR 原胞）。" % matdir)
+    report.update(material_dir=matdir, root=root)
+    if not json_out:
+        print("register %s [%s] → %s" % (proj, tt, matdir))
+
+    # ---- 建目录 + 结构 ----
+    os.makedirs(matdir, exist_ok=True)
+    if not os.path.isfile(os.path.join(matdir, "POSCAR")):
+        shutil.copyfile(src_poscar, os.path.join(matdir, "POSCAR"))
+        _did("POSCAR ← %s" % src_poscar)
+    else:
+        _did("POSCAR 已存在，保留")
+
+    # ---- init 该技能（已 init 的文件不覆盖，幂等）----
+    import contextlib as _ctx
+    import io as _io
+    invalidate_project_scan()
+    _buf = _io.StringIO()
+    with _ctx.redirect_stdout(_buf if json_out else sys.stdout):
+        rc = cmd_init(cfg, get_types(cfg, tt=tt, quiet=True), proj, tt=tt, yes=True)
+    if rc:
+        report["init_log"] = _buf.getvalue()[-2000:]
+        return _fail("init 失败（rc=%s）。" % rc)
+    _did("init -tt %s 完成" % tt)
+    ps = None
+    for cand in (os.path.join(matdir, tt, "project_setting"),
+                 os.path.join(matdir, "project_setting")):
+        if os.path.isdir(cand):
+            ps = cand
+            break
+    if not ps:
+        return _fail("init 后没找到 project_setting（%s/%s/project_setting）。" % (matdir, tt))
+    report["project_setting"] = ps
+
+    # ---- 可选：切集群（与 autozt -tt T -p M hpc C -y 等价）----
+    # 新建的 tf_*.yaml 还没并进本进程的 cfg，cmd_hpc 找不到材料——这里直接按
+    # cmd_hpc 的写法改本技能 project_setting/hpc.yaml（主配置字段全量覆盖）。
+    if cluster:
+        target = os.path.join(ps, "hpc.yaml")
+        master = _load_yaml_file(pkg_setting_path(str(cluster) + ".yaml")) or {}
+        new = _load_yaml_file(target) or {}
+        new.update(master)
+        _write_hpc_yaml(target, new, "超算配置（autozt register --cluster %s 于 %s 生成/更新）"
+                        % (cluster, time.strftime("%Y-%m-%d %H:%M:%S")))
+        _did("hpc → %s（%s）" % (master.get("name") or cluster,
+                                os.path.relpath(target, matdir)))
+
+    # ---- 可选：写 step.conf（数据集路径 + 其它 --set）----
+    writes = []          # [(step, section, key, value)]
+    if dataset:
+        st, key = REGISTER_INPUT_PARAM[tt]
+        writes.append((st, "params", key, dataset))
+    for kv in (sets or []):
+        if "=" not in kv:
+            return _fail("--set %r 应为 节.键=值（配 -j 步骤）。" % kv)
+        if not step:
+            return _fail("--set 需要 -j <步骤目录名>（如 -j step1_fit）。")
+        path, val = kv.split("=", 1)
+        sec, key = path.rsplit(".", 1) if "." in path else ("params", path)
+        writes.append((step, sec, key, val if val != "" else None))
+    if writes:
+        import importlib.util as _ilu
+        _sp = os.path.join(_PKG_ROOT, "skill", "_common", "opt", "stepconf.py")
+        _spec = _ilu.spec_from_file_location("stepconf_register", _sp)
+        mod = _ilu.module_from_spec(_spec)
+        _spec.loader.exec_module(mod)
+        _tsub = ((_load_yaml_file(os.path.join(ps, "setting.yaml")) or {})
+                 .get("template_subdir") or "templates")
+        for st, sec, key, val in writes:
+            dst = os.path.join(ps, _tsub, st, "step.conf")
+            os.makedirs(os.path.dirname(dst), exist_ok=True)
+            old, _ = mod.set_value(dst, sec, key, val)
+            _did("%s [%s] %s: %s -> %s" % (os.path.relpath(dst, matdir), sec, key,
+                                         old if old is not None else "（无）",
+                                         val if val is not None else "（删除）"))
+    # 数据集给的是本机路径：远端集群上得有同一路径
+    hpc_now = {}
+    for cand in (os.path.join(matdir, tt, "hpc.yaml"), os.path.join(ps, "hpc.yaml")):
+        if os.path.isfile(cand):
+            hpc_now = _load_yaml_file(cand) or {}
+            break
+    report["hpc"] = hpc_now.get("name")
+    if dataset and hpc_now.get("ssh_host"):
+        report["warning"] = ("数据集路径 %s 是本机路径，集群 %s（ssh %s）上必须有同一路径；"
+                             "否则把数据集放到远端后用 conf --set 改成远端路径，"
+                             "或 --cluster local 在本机跑。"
+                             % (dataset, hpc_now.get("name"), hpc_now.get("ssh_host")))
+        if not json_out:
+            print(_i18n.t("警告：", "warning: ") + report["warning"])
+    report["ok"] = True
+    report["next"] = ["autozt -tt %s -p %s -j %s init   # 只生成输入、检查" % (
+                          tt, proj, (REGISTER_INPUT_PARAM.get(tt) or ("<step>",))[0]),
+                      "autozt -tt %s -p %s start" % (tt, proj)]
+    if json_out:
+        print(json.dumps(report, ensure_ascii=False))
+    else:
+        print("完成。下一步：\n  " + "\n  ".join(report["next"]))
+    return 0
