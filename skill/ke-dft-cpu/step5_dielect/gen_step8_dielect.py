@@ -169,6 +169,16 @@ def main():
     stepconf.apply_incar_file(out / "INCAR", log=_ic_log)
     for _m in _ic_log:
         print("[..] %s" % _m)
+    # [patch_lpead_warn V137] 技能模板 09-14 起默认 LPEAD=.FALSE.：窄隙/强 SOC/近金属体系 LPEAD=.TRUE. +
+    #   IBRION=8 会 SIGSEGV 或出 NaN（P1_Mo-MoS2 实测 ε 全 NaN）。还是 .TRUE. 多半是 project_setting/templates/
+    #   里 init 时复制的旧模板副本盖过了技能模板（find_asset 优先用副本）。只告警：宽隙绝缘体可以有意开回 .TRUE.。
+    _inc = kc.parse_incar((out / "INCAR").read_text(errors="ignore"))
+    if _inc.get("LPEAD", "").strip().upper().lstrip(".").startswith("T") and \
+            _inc.get("IBRION", "").strip() in ("7", "8"):
+        print("[WARN] INCAR 是 LPEAD=.TRUE. + IBRION=%s（技能模板默认 LPEAD=.FALSE.）：窄隙/SOC/近金属体系会 SIGSEGV 或出 NaN。\n"
+              "       若不是有意为之，多半是 project_setting/templates/%s/ 里的旧模板副本盖过了技能模板 ——\n"
+              "       用 tools/template_drift.py 查；删掉副本（或改成 .FALSE.）后重新 gen 本步。"
+              % (_inc.get("IBRION"), OUTDIR_NAME))
 
     submit_tpl = resolve_tpl(Path(__file__).resolve().parent, "submit_std", dim)
     submit = out / "submit.sh"

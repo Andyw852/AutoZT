@@ -654,7 +654,7 @@ def _warn_small_pbe_gap(cwd, thresh=0.5):
         _bad = _g is not None and _g < 0.3
         _why = "%.4f eV（< 0.3 eV 绝对阈值；未读到 HSE 带隙）" % (_g or 0.0)
     if _bad:
-        print("[WARN] ★ PBE/PBEsol 带隙只有 %.4f eV（< %.2f eV）—— **介电常数 eps_inf 与 "
+        print("[WARN] ★ PBE/PBEsol 带隙只有 %s —— **介电常数 eps_inf 与 "
               "POP 散射不可靠**。\n"
               "       ★ 方向（2026-09-27 用户更正）：Fröhlich 耦合正比于 (1/eps_inf - 1/eps_0)，\n"
               "       eps_inf 偏大 -> 耦合变**弱** -> POP 散射变少 -> mu_POP 与总迁移率被**高估**；\n"

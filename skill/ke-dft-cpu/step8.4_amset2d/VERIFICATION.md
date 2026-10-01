@@ -6566,3 +6566,44 @@ C44 ≠ C66 的正确/错误顺序；立方不判）。
 - 用 autozt 的 ck_plot 核对：通过 -> 完成；OUTCAR 变了 -> 作废；ok=false -> 未完成；旧判据会放行（复现 bug）；
 - regate 的 ⚠ STALE / ★ WRONG；
 - 软链 h5 按目标 mtime。
+
+## V137（2026-10-01）：小带隙告警的 TypeError + 项目级模板副本盖过技能模板（审计工具）+ S5 的 LPEAD 告警
+
+**用户侧发现**：
+1. P1_Al-AlN 重跑 S8 崩在 `_warn_small_pbe_gap`：`TypeError: must be real number, not str`。
+   - print 的格式串残留 `%.4f eV（< %.2f eV）`，却只传了一个字符串 `_why`。
+   - 只要 PBE < 0.5×HSE 就必崩：P1_Al-AlN 是 0.11 vs 0.94，GaAs 是 0.4175 vs ~1.4，GaAs 的 S5 跑完重跑 S8 也会撞上。
+   - 这是 09-27 把判据从固定 0.3 eV 改成相对 HSE 时留下的。S8（gen_step10）与 S8.4（gen_step14）是同一段代码。
+2. P1_Mo-MoS2 的 `retry S5` 重新生成的 INCAR 仍是 LPEAD=.TRUE.。
+   - 原因是 project_setting/templates/step5_dielect/incar_dfpt_2d.tpl（8 月 15 日的旧副本）盖过了技能模板（09-14 起默认 .FALSE.）。
+   - 3 个 P1 材料共 6 份。
+
+**根因（系统性）**：ke-dft-cpu 的 skill.yaml 写 `template_dir: "."`，所以 autozt init 会把技能目录下**所有** *.tpl / *.conf
+按相对路径复制进 project_setting/templates/，find_asset 之后永远优先用副本（设计用意是"按项目手改只动这里"）。
+- 代价是技能模板后来的修复到不了老项目。Mo2S3 的 S1 残余力 0.022 eV/Å 而现行 S1 模板是 EDIFFG = −0.005，很可能也是这个原因。
+- autozt 的漂移检查（ops._template_drift / report.stale_template_note）只比 {{占位符}}，键值变了看不出来。
+- 这是 autozt 的设计，这里不改它，只给审计工具和 S5 的告警。
+
+**改动**：
+- S8 与 S8.4 的 `_warn_small_pbe_gap`：格式串改成 `%s`，直接用 `_why` 的完整说明。
+  - AST 扫了 ke/zt 全部 `"..." % x`，其余 13 处都是右边本身为元组的误报，只有这一处是真错。
+- 新增 tools/template_drift.py（只读）：对 <root> 下每个 templates/ 目录里的 *.tpl，与技能里同一相对路径的模板比较。
+  - 内容相同：不报。
+  - 不同：逐键列出 INCAR 式的 KEY = value 差异，关键键（LPEAD、EDIFFG、EDIFF、IBRION、ISIF、ISYM、PREC、ENCUT…）标 ★。
+  - 再用 git 历史判断：副本是技能模板某个历史版本的原样 -> [STALE]（可直接删副本，让技能模板生效）；
+    不是 -> [CUSTOM]（有手改，或比仓库历史更早；看键差和副本日期判断）；没有 git -> [DIFF]。
+  - submit*.tpl 是站点相关的，默认跳过（--all 也查）。有含 ★ 的不同 -> 退出码 1。
+- S5 的 gen（gen_step8_dielect）：渲染并套完 step.conf 的 [incar] 之后，若是 LPEAD=.TRUE. + IBRION=7/8 就告警，
+  指向 project_setting/templates/step5_dielect/ 与 template_drift。只告警：模板注释说明宽隙绝缘体可以有意开回 .TRUE.。
+
+**用户侧**：
+1. 在各项目根目录跑 `python <skill>/ke-dft-cpu/tools/template_drift.py <项目根> --repo <AutoZT 仓库>`。
+2. [STALE] 的副本直接删掉（或移走备份）。[CUSTOM] 的看键差：
+   - 要保留的改动移到 step.conf 的 [incar]，再删副本；
+   - 像 LPEAD .TRUE. 这种显然是旧默认的，按 STALE 处理。
+3. 删完重新 gen 受影响的步骤（P1 三个材料的 S5；Mo2S3 若重跑整条链，先处理 S1 的副本）。
+
+测试：新增 test_gap_warn_drift（5 项）：
+- S8/S8.4 的告警在 P1_Al-AlN、GaAs、无 HSE、带隙够大四种情况下都不崩、文案正确（修复前在第一种情况复现 TypeError）；
+- template_drift 的 STALE / CUSTOM / 相同不报 / submit 跳过 / 无 git / 退出码；
+- S5 告警的位置。
