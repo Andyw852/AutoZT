@@ -65,12 +65,36 @@ def test_local_path_prefix_toggle(monkeypatch):
     collect = sys.modules["autozt.collect"]
     monkeypatch.setenv("AUTOZT_FAKESLURM", "1")
     assert collect._effective_remote_path_prefix({}, None).endswith("tools/fakeslurm")
-    assert collect._effective_remote_path_prefix(
-        {"remote_path_prefix": "/opt/x/bin"}, "").startswith("/opt/x/bin:")
+    # tf.yaml 全局 remote_path_prefix 是给默认集群用的；本机执行用 setting/local.yaml 的
+    # （仓库版写的是 ""），全局那个不能混进本机 PATH。
+    assert "/opt/x/bin" not in collect._effective_remote_path_prefix(
+        {"remote_path_prefix": "/opt/x/bin"}, "")
     monkeypatch.setenv("AUTOZT_FAKESLURM", "0")
-    assert collect._effective_remote_path_prefix({}, None) == ""
+    assert "fakeslurm" not in collect._effective_remote_path_prefix({}, None)
     rc, out = collect.run_remote({"remote_path_prefix": "/opt/x/bin"}, "echo $PATH", host="")
-    assert rc == 0 and out.startswith("/opt/x/bin:")
+    assert rc == 0 and "/opt/x/bin" not in out
+
+
+def test_local_python_shim(tmp_path, monkeypatch):
+    """只有 python3 的系统（Ubuntu/WSL）：本机 PATH 前缀接上 tools/localbin 的 python 垫片。"""
+    import shutil as _sh
+    import autozt  # noqa: F401
+    collect = sys.modules["autozt.collect"]
+    py3 = _sh.which("python3")
+    nopy = tmp_path / "bin"
+    nopy.mkdir()
+    for tool in ("python3", "bash", "sh", "env"):
+        src = _sh.which(tool)
+        if src:
+            os.symlink(src, nopy / tool)
+    monkeypatch.setenv("PATH", str(nopy))
+    monkeypatch.setenv("AUTOZT_FAKESLURM", "0")
+    pre = collect._local_path_prefix("")
+    assert pre.endswith(os.path.join("tools", "localbin")), pre
+    r = subprocess.run([str(nopy / "bash"), "-c",
+                        'export PATH="%s:$PATH"; python -c "import sys; print(sys.version_info[0])"'
+                        % pre], capture_output=True, text=True)
+    assert r.stdout.strip() == "3", (r.stdout, r.stderr, py3)
 
 
 # ---------------------------------------------------------------- CLI: register + errors

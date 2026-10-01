@@ -1,0 +1,4 @@
+#!/bin/sh
+# AutoZT 本机后端垫片：系统只有 python3（Debian/Ubuntu/WSL）时，gen 脚本与作业里写的
+# `python` 由它转给 python3。仅在 PATH 里找不到 python 时才被接入（autozt/collect.py）。
+exec python3 "$@"

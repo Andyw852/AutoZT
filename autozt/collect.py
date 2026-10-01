@@ -379,6 +379,13 @@ def _effective_remote_path_prefix(cfg, host):
     from autozt import _PKG_ROOT, _load_yaml_file, pkg_setting_path
     prefix = (cfg.get("remote_path_prefix") or "").strip()
     if is_local_host(host):
+        # 本机执行：tf.yaml 全局 remote_path_prefix 是给默认集群用的（如集群上的
+        # ~/software/pybin），套到本机会把不存在/不对的 python 排在 PATH 最前。
+        # setting/local.yaml 写了 remote_path_prefix 就用它（空 = 不加前缀）。
+        _lp = pkg_setting_path("local.yaml")
+        _lc = (_load_yaml_file(_lp) or {}) if _lp else {}
+        if "remote_path_prefix" in _lc:
+            prefix = str(_lc.get("remote_path_prefix") or "").strip()
         return _local_path_prefix(prefix)
     config_paths = []
     direct = pkg_setting_path(str(host) + ".yaml")
@@ -406,14 +413,21 @@ def _local_path_prefix(prefix):
     import shutil
     from autozt import _PKG_ROOT
     shim = os.path.join(_PKG_ROOT, "tools", "fakeslurm")
+    pyshim = os.path.join(_PKG_ROOT, "tools", "localbin")
+    search = os.pathsep.join([x for x in (prefix, os.environ.get("PATH", "")) if x])
+    parts = [prefix] if prefix else []
+    # gen 命令与提交模板里写的是 `python`；只有 python3 的系统（Ubuntu/WSL 默认）
+    # 以前直接 "bash: python: command not found"。找不到 python 时接仓库垫片。
+    if (not shutil.which("python", path=search) and shutil.which("python3", path=search)
+            and os.path.isfile(os.path.join(pyshim, "python"))):
+        parts.append(pyshim)
     flag = (os.environ.get("AUTOZT_FAKESLURM") or "").strip().lower()
-    if flag in ("0", "false", "no", "off") or not os.path.isfile(os.path.join(shim, "sbatch")):
-        return prefix
-    if flag not in ("1", "true", "yes", "on"):
-        search = os.pathsep.join([x for x in (prefix, os.environ.get("PATH", "")) if x])
-        if shutil.which("sbatch", path=search):
-            return prefix
-    return ":".join([x for x in (prefix, shim) if x])
+    want_shim = os.path.isfile(os.path.join(shim, "sbatch")) and (
+        flag in ("1", "true", "yes", "on")
+        or (flag not in ("0", "false", "no", "off") and not shutil.which("sbatch", path=search)))
+    if want_shim:
+        parts.append(shim)
+    return ":".join(parts)
 
 
 # 只看配置的命令（conf 查看/--set、dir）不需要远端状态：置位后 collect() 不 ssh，

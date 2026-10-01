@@ -13,7 +13,9 @@ ssh_host: ""
 # 本机执行时 work_dir 取第一个【本机可写】的候选：project_setting/setting.yaml > hpc.yaml >
 # 本文件 > 项目/技能类型 work_dir；残留的集群路径（/public/...）自动跳过并提示。
 work_dir: ~/autozt_local_work
-remote_path_prefix: ""       # 可选：本机跑 gen/驱动脚本用的 python 所在 bin 目录（带 numpy/phonopy 等）
+remote_path_prefix: ""       # 可选：本机跑 gen/驱动脚本用的 python 所在 bin 目录（带 numpy/phonopy 等）。
+                             # 本机执行只认这里，不用 tf.yaml 全局的 remote_path_prefix（那是给集群的）；
+                             # 本机没有 `python`、只有 python3 时自动接 tools/localbin 垫片
 # 计算环境：写了就覆盖技能 step.conf 里自带的集群 conda 路径（项目里改过的值仍优先）。
 # 两项都留空 ""  = 不激活任何环境，直接用 PATH 里现成的 python（pip/venv 用户最简单）。
 conda_sh: ~/miniconda3/etc/profile.d/conda.sh
