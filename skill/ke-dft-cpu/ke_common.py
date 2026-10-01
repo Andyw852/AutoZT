@@ -702,9 +702,12 @@ def desym_fix_cmd_prefix(on):
 # ---- [patch_ir_fix] AMSET 密网格不可约 k 点用正确晶格（V125）----------------------------------
 #   插件本体：step8.4_amset2d/amset_ir_fix.py。AMSET 给 spglib 的晶格多转置了一次，六方/三方只用上
 #   {E, σh}×TR，不可约 k 点多 5.5–5.9 倍（散射白算 5–6 倍）；立方、fcc/bcc 原胞、正交常规胞不受影响。
-#   纯簿记修正（原来找到的操作也都是真对称操作），合成体系端到端迁移率一致到 0.05% -> 默认开。
+#   纯簿记修正（原来找到的操作也都是真对称操作），合成体系端到端迁移率一致到 0.05%（标量形变势）。
+#   V130 改为默认关：张量形变势下 AMSET 的 ADP 核不协变，代表点≠成员平均；V127 的星平均在 MoS₂ 上
+#   仍差 n −1.81% / p −3.12%（ADP，对 V121）。2D 的提速改由 KZ_CAP_2D 提供（结果不依赖不可约映射）；
+#   需要 IR_FIX 的提速（3D 六方）时在 step.conf 写 IR_FIX = on，并按 VERIFICATION V130 先对照。
 #   取值优先级：step.conf 的 IR_FIX（on/off）> gen 时的环境变量 AZ_IR_FIX > 本常量。
-IR_FIX_DEFAULT = True
+IR_FIX_DEFAULT = False
 IR_FIX_ENV = "AZ_IR_FIX"
 IR_FIX_PLUGIN = "amset_ir_fix.py"
 
@@ -723,7 +726,7 @@ def ir_fix_setting(conf_value=None):
         return True, "环境变量 %s=%s" % (IR_FIX_ENV, e)
     if e in _OFF:
         return False, "环境变量 %s=%s" % (IR_FIX_ENV, e)
-    return bool(IR_FIX_DEFAULT), "出厂默认 IR_FIX_DEFAULT=%s（默认开）" % IR_FIX_DEFAULT
+    return bool(IR_FIX_DEFAULT), "出厂默认 IR_FIX_DEFAULT=%s（V130 起默认关）" % IR_FIX_DEFAULT
 
 
 def ir_fix_cmd_prefix(on):

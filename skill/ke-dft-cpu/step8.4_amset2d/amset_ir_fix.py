@@ -2,9 +2,9 @@
 amset_ir_fix.py —— AMSET 密网格不可约 k 点改用正确的晶格（运行时插件，不改 AMSET 源码）
 
 用法（S8 / S8.4 的 gen 已把本文件复制进运行目录，并在 python -c 里最先 import）：
-    AZ_IR_FIX=1 python -c "import amset_ir_fix; ...; Runner.from_directory('.').run()"
+    AZ_IR_FIX=1 python -c "import amset_ir_fix; ...; Runner.from_directory('.').run()"   （V130 起必须显式设 1）
 
-开关：环境变量 AZ_IR_FIX（未设 / 1/true/on/yes = 修；0/false/off/no = AMSET 原行为）。
+开关：环境变量 AZ_IR_FIX（1/true/on/yes = 修；未设 / 0/false/off/no = AMSET 原行为；V130 起未设 = 关）。
     gen 按 step.conf 的 IR_FIX（auto/on/off，auto = on）在命令前写 export AZ_IR_FIX=…。
 
 ------------------------------------------------------------------------------
@@ -44,8 +44,12 @@ BUG_SNIPPET = "atoms.get_cell().T"
 STATE = {"applied": False, "calls": 0, "last": None}
 
 
+_ON = ("1", "true", "on", "yes")
+
+
 def enabled():
-    return os.environ.get(ENV_NAME, "").strip().lower() not in _OFF
+    """V130：未设 = 关（与 gen 的出厂默认一致）；只有显式 1/true/on/yes 才打补丁。"""
+    return os.environ.get(ENV_NAME, "").strip().lower() in _ON
 
 
 def _squash(s):

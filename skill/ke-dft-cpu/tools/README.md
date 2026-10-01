@@ -29,6 +29,7 @@ ke 技能原本只覆盖到「生成 settings.yaml 并提交 amset」。当需�
 | compare_deformation_h5.py | V123：重新 gen S7.1 前后两份形变势 h5 的**整场**对比（⟨\|D\|²⟩ 新/旧 ≈ ADP 迁移率粗估因子的倒数、逐点相对变化），给 ⚠ STALE-DP 项目分诊：变化小的可不重跑 S8/S8.4。只看带边 E1 判断不了（MoS₂ 带边 iso 几乎不变，ADP 迁移率却 ×2） |
 | compare_transport_json.py | V125：两份 AMSET transport.json 逐 (掺杂, 温度) 对比（迁移率 overall/各机制、电导率、Seebeck；2D 取面内平均），并报告新旧各自的 xx/yy 各向异性。用于 IR_FIX / KZ_CAP_2D 的真实数据验证：阈值默认 2%，退出码 0 = PASS、1 = FAIL、2 = 网格对不上 |
 | kz_overlap_probe.py | V126：2D 运行目录里用 AMSET 自己的重叠计算，量化沿 k_z **插值**波函数系数的假象：比较旧 21 层 / 新 3 层集合上的平均重叠，给出预测的 μ新/μ旧（秒级、不提交作业）。用来判断 KZ_CAP_2D 与旧结果的差别是截断引入的误差，还是旧结果里的插值假象 |
+| star_audit.py | V130：同一张密网格上，旧跑法（AMSET 原式映射，逐成员算）与 IR_FIX 跑法的 mesh.h5 逐星比较散射率，把迁移率差拆成 Jensen（对率平均 vs 对 τ 平均）、仿真误差（星平均没模仿到的部分）两项，并给出只用代表点的预测；只读 h5、不需要 AMSET。用来判断某材料能否开 IR_FIX |
 
 注意：DFPT 产物的**数值校验器**不在这里，它是技能正式步骤的一部分，
 见 step5_dielect/validate_dielectric.py（含 NaN/单位矩阵/声学求和规则/

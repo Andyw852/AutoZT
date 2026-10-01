@@ -112,10 +112,10 @@ AMSET_CMD   = ('rm -f transport.json; '
                '>> amset.log 2>&1')
 DESYM_FIX = "auto"        # auto/on/off，见 ke_common.desym_fix_setting
 _DESYM_FIX_ON = False
-# patch_ir_fix（V125）：AMSET 密网格不可约 k 点改用正确晶格（amset_ir_fix.py）。auto/on/off，auto = on。
-#   六方/三方少算 5.5–5.9 倍，结果不变（见 ke_common.IR_FIX_DEFAULT 处）。
+# patch_ir_fix（V125）：AMSET 密网格不可约 k 点改用正确晶格（amset_ir_fix.py）。auto/on/off，auto = off（V130）。
+#   六方/三方少算 5.5–5.9 倍；张量形变势下 ADP 会变（代表点≠成员平均，V127/V130），所以默认关。
 IR_FIX = "auto"
-_IR_FIX_ON = True
+_IR_FIX_ON = False
 # patch_kz_cap（V125）：插值网格真空方向只留 2r+1 层（amset2d_plugin 的 kz_cap）。
 #   off（默认）/ on（= r 取 1）/ 正整数 r。单层能带沿 k_z 平、2D 核只用 q∥，所以 k_z 层数只是成本：
 #   WSe2/WS2 的 263×263×33 -> 263×263×3。合成体系迁移率差 < 0.15%；真实重叠的额外差别（slab 形状因子）

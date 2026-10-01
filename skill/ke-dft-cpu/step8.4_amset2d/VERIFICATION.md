@@ -6207,3 +6207,55 @@ test_kernels 都在 import 时被打断，一项都没跑（edc8339 本地实测
 
 测试：test_gen_desym_wiring 新增 AmsetEnvLazyTests。它在空目录里 import 不退出；`_amset_env()` 缺 step.conf 时
 SystemExit，写了 `AMSET_ENV = amset051` 就返回它。三个套件恢复：20+1 / 11 / test_kernels 全 PASS。
+
+## V130（2026-09-30）：IR_FIX 改为默认关 + 输运前坏值守卫 + star_audit
+
+**实测**（用户侧，0013/0014 之后）：
+- MoS₂ (a)（IR_FIX + V127 星平均，KZ_CAP_2D 关，对 V121 面内平均）：overall 0.98%、σ 0.98%、S 0.27%，
+  但 **ADP n −1.81%（只用代表点时 −4.28%）、p −3.12%（只用代表点时 −0.04%）**。
+  V127 预期的"残差 ≲ 0.3%"不成立，p 型反而被星平均拉偏。
+- WSe2（IR_FIX + 星平均 + KZ_CAP_2D，271×271×3）：跑完，xx = yy。
+- WS2（同配置）：两次都在 BoltzTraP2 `calc_Onsager_coefficients` 的 `pinv(L11)` 报 "SVD did not converge"（确定性）。
+
+**判断**：V127 的推理（旧跑法 = 成员平均，星平均能复现）只在"其它量都协变"时成立。
+真实数据里至少还有两处 V127 没覆盖：
+1. **Jensen**：星平均给的是成员率的算术平均，旧跑法是每个成员各自 τ。成员间差得越多，差得越大。
+   xx/yy 各向异性只反映离散的"方向性"部分，低估了成员间的离散（V127 用 1.98% 估 ≲0.3% 就是这里错的）。
+2. **重叠**：星平均只在各成员上重算 ADP 因子，重叠仍用代表点的（插值系数 + 任意规范，本身不协变）。
+两者各占多少，用 `tools/star_audit.py` 在现有的两个 mesh.h5 上拆（见下），不用再跑作业。
+
+**决定**：IR_FIX 出厂默认改为**关**（`ke_common.IR_FIX_DEFAULT = False`；amset_ir_fix 未设 AZ_IR_FIX 也不打补丁）。
+- 2D 的提速本来就主要来自 KZ_CAP_2D。散射成本约 ∝ N_z²，21 -> 3 层就是约 50 倍；这一项的结果与不可约映射无关。
+  IR_FIX 关时，每个成员仍分别算，与原 AMSET 的口径逐项一致。
+- 3D 六方（没有 KZ_CAP）想要 IR_FIX 的 5–6 倍，就在 step.conf 写 `IR_FIX = on`，星平均随之启用。
+  上生产前按下面的 star_audit 在该材料上确认差别可接受。
+- 已经用 IR_FIX 跑出来的结果（MoS₂ (a)、WSe2）ADP 带着上述 2–3% 的偏差，按新默认重跑。
+
+**输运前守卫**（amset2d_plugin，不改数值）：包装 AMSET 的 `_calculate_transport_properties` / `_calculate_mobility`。
+- 第一次进入时扫一遍散射率（逐机制、掺杂、温度切片）、费米能级、速度积。发现 ≤0 或非有限值就打印前几处：
+  机制/自旋/带/掺杂/温度/k 点，以及离费米能多远。
+- pinv 失败（LinAlgError）时，把同样的报告附在 RuntimeError 里重新抛出。
+- WS2 下次如果还失败，日志会直接指出是哪个机制的哪个点。
+
+**star_audit.py**（tools，只读两个 mesh*.h5，不需要 AMSET）：同一张密网格上，旧跑法按原式映射逐成员算，
+新跑法是 IR_FIX 的结果。按完整点群的星逐轨道比较：
+- Jensen = μ_J/μ_old − 1：μ_J 用成员率先平均再取 τ，是星平均能做到的最好结果；
+- 仿真 = μ_new/μ_J − 1：新代表点率与旧成员率平均之差；
+- 代表点 = μ_rep/μ_old − 1：旧成员率在代表点上的取值。它应接近 IR_FIX-only 的实测（MoS₂ n −4.28%、p −0.04%），
+  用来检验近似可不可靠；
+- 另报星内离散（加权）、Γ新/星均 的 5/50/95 分位。
+权重取 f(1−f)/kT·|v∥|²（星内相同），即 RTA 的迁移率求和、不做四面体，比值级别够用。
+
+**用户侧**：
+1. `python tools/star_audit.py <V121 的 S8.4 目录> <MoS₂ (a) 的 S8.4 目录> --mech ADP`，p 型、n 型各看一行。
+   两份都是 263×263×21，网格一致。
+2. MoS₂ (c)：IR_FIX 关（新默认）、KZ_CAP_2D = on，几分钟，对 V121 面内平均。
+   预期只差 k_z 截断本身（探针：电子 −0.2%、空穴 −0.6%）。这一步通过，2D 生产配置就定为 KZ_CAP_2D = on、IR_FIX = off。
+3. WSe2/WS2 按同一配置重交。WS2 不要同时改 WAVEFUNCTION_FULL，先看守卫报告，一次只动一个变量。
+
+测试：新增 test_star_audit（4 项）：
+- 完美星平均时仿真 = 0，Jensen 等于直接算的值；
+- 只用代表点时新/旧 = 代表点/旧；
+- main 与网格不一致时报错；
+- 守卫能抓到 NaN 率、零率、NaN 费米能级，包装后 LinAlgError 改抛带报告的 RuntimeError。
+test_ir_fix_kzcap 的默认值断言改为关。

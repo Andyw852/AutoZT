@@ -9,7 +9,7 @@
 2) amset2d_plugin 的 kz_cap：equivalence 截断、真空轴判定、"沿 k_z 平"核对；Interpolator 端到端：
    能带平 -> k_z 3 层（面内不变），能带沿 k_z 有色散 -> 不截断。
 3) gen：KZ_CAP_2D 取值解析、与插件同一真空轴判据、_interp_mesh 预测 k_z=3、2d_correction.json 写/删键；
-   S8/S8.4 命令里 import 插件并 export AZ_IR_FIX；ke_common.ir_fix_setting 默认开；gen_need 与 zt 软链齐全。
+   S8/S8.4 命令里 import 插件并 export AZ_IR_FIX；ke_common.ir_fix_setting 默认关（V130）；gen_need 与 zt 软链齐全。
 """
 import importlib.util
 import json
@@ -101,8 +101,8 @@ class IrFixTests(unittest.TestCase):
             self.assertEqual(out[name][0], out[name][1], (name, out[name]))
 
     def test_default_on_and_off_keeps_original(self):
-        on = _run(self.CODE, env={"AZ_IR_FIX": ""})
-        self.assertTrue(on["applied"])                                      # 未设 = 开
+        unset = _run(self.CODE, env={"AZ_IR_FIX": ""})
+        self.assertFalse(unset["applied"])                                  # V130：未设 = 关
         off = _run(self.CODE, env={"AZ_IR_FIX": "0"})
         self.assertFalse(off["applied"])
         self.assertGreater(off["wse2"][0], 4 * off["wse2"][1])              # 原 AMSET：六方多 5–6 倍
@@ -262,12 +262,13 @@ class GenWiringTests(unittest.TestCase):
     def test_ir_fix_setting_and_commands(self):
         old = os.environ.pop(kc.IR_FIX_ENV, None)
         try:
-            self.assertTrue(kc.ir_fix_setting(None)[0])
+            self.assertFalse(kc.ir_fix_setting(None)[0])            # V130：出厂默认关
+            self.assertFalse(kc.ir_fix_setting("auto")[0])
+            self.assertFalse(kc.ir_fix_setting("off")[0])
+            self.assertTrue(kc.ir_fix_setting("on")[0])
+            os.environ[kc.IR_FIX_ENV] = "1"
             self.assertTrue(kc.ir_fix_setting("auto")[0])
             self.assertFalse(kc.ir_fix_setting("off")[0])
-            os.environ[kc.IR_FIX_ENV] = "0"
-            self.assertFalse(kc.ir_fix_setting("auto")[0])
-            self.assertTrue(kc.ir_fix_setting("on")[0])
         finally:
             os.environ.pop(kc.IR_FIX_ENV, None)
             if old is not None:

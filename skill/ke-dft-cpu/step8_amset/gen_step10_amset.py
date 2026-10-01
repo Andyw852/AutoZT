@@ -104,8 +104,8 @@ AMSET_CMD   = ('rm -f transport.json; '
                'cp -f "$(ls -t transport_*.json 2>/dev/null | head -1)" transport.json && ls -l transport.json')
 # patch_desym_fix：去对称化相位补丁开关（auto = ke_common.desym_fix_setting 的默认链：
 #   step.conf DESYM_FIX > 环境变量 AZ_DESYM_FIX > ke_common.DESYM_FIX_DEFAULT（验证期 False））。
-IR_FIX = "auto"           # patch_ir_fix（V125）：auto/on/off，auto = on（见 ke_common.IR_FIX_DEFAULT）
-_IR_FIX_ON = True
+IR_FIX = "auto"           # patch_ir_fix（V125）：auto/on/off，auto = off（V130，见 ke_common.IR_FIX_DEFAULT）
+_IR_FIX_ON = False
 DESYM_FIX = "auto"
 _DESYM_FIX_ON = False
 _GATE_SUMMARY = None      # ke_common.gate_log_line() 的结果，写进 settings.yaml 注释

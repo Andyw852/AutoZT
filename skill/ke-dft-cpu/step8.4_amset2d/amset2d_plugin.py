@@ -414,6 +414,73 @@ if not getattr(C, "_amset2d_patched", False):
     C.scattering_worker = worker_2d
     C._amset2d_patched = True
 
+
+# =====================================================================
+# 输运前守卫（V130）—— 不改数值，只把 NaN/inf/零率说清楚
+#
+# WS2（KZ_CAP + 全网格 h5）两次在 BoltzTraP2 calc_Onsager_coefficients 的 pinv(L11) 报
+# "SVD did not converge"：L11 里有 NaN/inf。可能的来源：某机制在 FD 窗口内的率 ≤ 0 或非有限
+# （τ = 1/Γ -> ∞，单机制迁移率 1/0）、费米能级 NaN、速度 NaN。这里在 AMSET 的两个输运入口
+# （_calculate_transport_properties / _calculate_mobility）前扫一遍，找到就打印前几处（机制/自旋/带/
+# 掺杂/温度/k 点/离费米能多远），pinv 失败时再打一次并附上下文重新抛出。
+# =====================================================================
+def transport_report(amset_data, max_lines=8):
+    """返回问题描述列表（空 = 没发现）。逐 (机制, 掺杂, 温度) 切片扫，避免整块布尔数组占内存。"""
+    from amset.constants import hartree_to_ev
+    out = []
+    fl = np.asarray(amset_data.fermi_levels, float)
+    if not np.all(np.isfinite(fl)):
+        out.append("fermi_levels 有非有限值：%s" % np.argwhere(~np.isfinite(fl)).tolist()[:max_lines])
+    labels = list(getattr(amset_data, "scattering_labels", []) or [])
+    kp = np.asarray(amset_data.kpoints)
+    for spin, r in amset_data.scattering_rates.items():
+        r = np.asarray(r)
+        e = np.asarray(amset_data.energies[spin])
+        vv = np.asarray(amset_data.velocities_product[spin])
+        if not np.all(np.isfinite(vv)):
+            out.append("velocities_product[%s] 有非有限值 %d 个" % (spin.name, int(np.count_nonzero(~np.isfinite(vv)))))
+        for m, n, t in np.ndindex(r.shape[:3]):
+            sl = r[m, n, t]
+            bad = ~np.isfinite(sl) | (sl <= 0)
+            if not bad.any():
+                continue
+            nb = int(np.count_nonzero(bad))
+            b, k = np.argwhere(bad)[0]
+            de = (e[b, k] - fl[n, t]) * hartree_to_ev if np.isfinite(fl[n, t]) else float("nan")
+            out.append("%s[%s] 掺杂#%d 温度#%d：%d 个率 ≤0 或非有限；首处 带 %d k=%s 值 %s，E−E_F = %+.3f eV"
+                       % (labels[m] if m < len(labels) else "mech%d" % m, spin.name, n, t, nb, b,
+                          np.round(kp[k], 4).tolist(), sl[b, k], de))
+            if len(out) >= max_lines:
+                out.append("……（只列前 %d 处）" % max_lines)
+                return out
+    return out
+
+
+def _guard_transport(fn):
+    def wrapped(amset_data, *a, **k):
+        if not getattr(amset_data, "_amset2d_guarded", False):
+            amset_data._amset2d_guarded = True
+            rep = transport_report(amset_data)
+            if rep:
+                print("[amset2d][WARN] 输运前发现坏值（BoltzTraP2 的 pinv 可能因此 SVD 不收敛）：\n  - "
+                      + "\n  - ".join(rep), flush=True)
+        try:
+            return fn(amset_data, *a, **k)
+        except np.linalg.LinAlgError as e:
+            rep = transport_report(amset_data)
+            raise RuntimeError("[amset2d] 输运积分 %s 失败（%s）。坏值：%s"
+                               % (fn.__name__, e, "; ".join(rep) if rep else "散射率/费米能级/速度都有限 —— "
+                                  "请把 amset.log 与本段报错一并反馈")) from e
+    wrapped.__name__ = fn.__name__
+    wrapped._amset2d_guard = True
+    return wrapped
+
+
+import amset.core.transport as _T  # noqa: E402
+for _fn in ("_calculate_transport_properties", "_calculate_mobility"):
+    if hasattr(_T, _fn) and not getattr(getattr(_T, _fn), "_amset2d_guard", False):
+        setattr(_T, _fn, _guard_transport(getattr(_T, _fn)))
+
 # =====================================================================
 # patch_kz_cap（V125）—— 插值网格在真空方向只留 2·r+1 层（2d_correction.json 的 kz_cap_rmax，默认不启用）
 #
