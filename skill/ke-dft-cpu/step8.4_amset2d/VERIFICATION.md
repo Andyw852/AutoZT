@@ -6520,3 +6520,49 @@ vasprun.xml（或 band_structure_data.json）重建 DOS。在合成 3D 目录上
 
 测试：test_elastic_guard_s3b 新增 VoigtOrderAuditTests（用户侧两个材料按取证数据造 OUTCAR；三维六方
 C44 ≠ C66 的正确/错误顺序；立方不判）。
+
+## V136（2026-10-01）：上游重算后的失效 —— S5.1 校验失败被判完成、S5/S6 重算不让 S8 失效、STALE-DP 漏网
+
+**用户侧发现**：
+1. P1_Mo-MoS2 重跑 S8 被 gen 拦下：`eps_inf 对角项 -0.0000 -3.5697 -0.0527 中有 < 1 的分量`。
+   - S5 的 OUTCAR 里 ε∞ 与 IONIC 两块全是 NaN（8 月 16 日的旧模板 LPEAD=.TRUE. + IBRION=8，模板里已注明这个组合会崩/出 NaN）。
+   - S5.1_dievalid 早就写了 `ok=false`，但它的完成判据只看 dielectric_check.json 在不在，状态表一直显示 OK。
+2. Mo2S3 的 S6 参考结构：最大受力 0.022 eV/Å、面内应力 XX −11.46 / YY −10.68 kB（EDIFF 1E-7、ENCUT 390 > 1.3×336 都够紧）。
+   - 结构没弛豫到极小。现行 S1 模板是 EDIFFG = −0.005，这份应是更早的模板或没收敛。
+3. Si / Si_diamond / P1_Al-AlN 的 transport.json（08-30 / 09-18）比 deformation.h5（09-30 02:33）旧。
+   - regate 的 STALE-DP 只看 h5 的对称化标记，标记清了就判 OK。
+   - S7.1 重生成本该让 S8 失效：V122 的 invalidate_downstream 接线是对的，目录名与软链都核对过。
+     02:33 这一批大概率早于集群部署 V122（MoSe2 的 S8.2 在 02:45 被正确归档）。
+
+**改动**：
+- S5.1 改用 autozt 现成的 strict_done_marker（ke、zt 的 skill.yaml）。
+  - validate_dielectric.py 写 `status`：通过 = done，否则 failed；
+  - 再写 `input_files`：S5 的 OUTCAR（相对材料目录）的 sha256；
+  - 效果：校验失败不再算完成；S5 重算（OUTCAR 变了）后，旧校验自动作废、重新校验。
+  - 注意：已有材料的 dielectric_check.json 是旧格式（没有 status），严格判据下一律显示"未完成"。
+    S5.1 是登录节点秒级的 run:gen 步，各材料重跑一次即可。
+- ke_common.DOWNSTREAM 加上：
+  - step5_dielect -> S5.1、S8、S8.4（always）；
+  - step6_elastic -> S8、S8.4、S8.2（always）。
+  - S8 在 gen 时把 ε、C 写进 settings.yaml（不是软链），原来 S5/S6 重算后旧 transport.json 仍被判完成。
+  - 新增 DONE_MARKERS：step5_dielect_validate -> dielectric_check.json。
+- S5 的 gen（gen_step8_dielect）与 S6 的 gen（gen_step2_elastic，ke 与 zt 共用）在已有 OUTCAR 时调用 invalidate_downstream（同 S4/S7.1）。
+  - S6 的 gen_need 补上 ke_common.py（ke、zt）；导入不到时只告警。
+- tools/regate_projects.py：
+  - transport.json 比它用到的上游产物晚 1 分钟以上 -> ⚠ STALE（并列出是哪几个）。
+    上游产物包括：形变势 h5、vasprun.xml、wavefunction.h5（软链按最终目标），以及 step5_dielect/OUTCAR、step6_elastic/OUTCAR。
+  - step5_dielect_validate/dielectric_check.json 的 ok = false 而有 transport.json -> ★ WRONG。
+
+**Mo2S3 的处理要点**：重新弛豫 = S1 的结构变了。面内应力约 −1.1 GPa（slab 平均），对 C11 约 53 GPa 是约 2% 的应变。
+- 能带、形变势、介电、弹性都会跟着变，所以要 S1 之后整条链重跑（S2…S8），不是只重算 S6。
+- 整条链对 S1 的重算没有自动失效：DOWNSTREAM 里没有 step1_opt，S3 的 gen 只在它自己重新生成时才比对 POSCAR。
+  需要逐步重新 gen。V136 起 S5/S6/S7.1 的重新 gen 会让 S8 自动失效。
+
+测试：新增 test_stale_upstream（7 项）：
+- S5、S6 重算的失效范围；
+- 两个 gen 的调用位置；
+- ke/zt skill.yaml 的 strict_done_marker 与 ke_common；
+- 校验文件的 status/input_files；
+- 用 autozt 的 ck_plot 核对：通过 -> 完成；OUTCAR 变了 -> 作废；ok=false -> 未完成；旧判据会放行（复现 bug）；
+- regate 的 ⚠ STALE / ★ WRONG；
+- 软链 h5 按目标 mtime。

@@ -129,6 +129,10 @@ GGA_MAP = {"pbe": "PE", "pbesol": "PS", "pbe-d3": "PE"}
 def main():
     _disc_gate()
     cwd = Path.cwd(); out = cwd / OUTDIR_NAME; out.mkdir(exist_ok=True)
+    # [patch_stale_upstream V136] 本步重新生成 = 介电会被重算：用旧介电的 S5.1 校验、S8/S8.4 的完成标记
+    #   一并失效、重新排队（同 S4 / S7.1 的做法）。S8 在 gen 时把 ε 写进 settings.yaml，不会自己发现。
+    if (out / "OUTCAR").is_file():
+        kc.invalidate_downstream(cwd, OUTDIR_NAME, "%s 重新生成（介电重算）" % OUTDIR_NAME)
     prev = kc.find_prev_dir(cwd, PREV_CANDS)
     if prev is None:
         sys.exit("[ERROR] 找不到含 CONTCAR 的上一步：%s" % PREV_CANDS)

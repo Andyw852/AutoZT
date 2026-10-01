@@ -86,7 +86,9 @@ steps:
   # 张量全是 NaN 却被判为完成，一路把 NaN 送到 step8，POP 散射静默丢失。
   # 本步用数值判据把关（NaN/ε<1/单位矩阵/缺 IONIC 块/ε_s≡ε_∞）。
   - {seq: 5.1, name: step5_dielect_validate, label: S5.1_dievalid, src: step5_dielect,
-     check: plot, run: gen, done_marker: dielectric_check.json,
+     check: plot, run: gen, done_marker: dielectric_check.json, strict_done_marker: true,
+     # V136：strict_done_marker —— 只有 status=done（校验通过）才算完成；S5 的 OUTCAR 变了（sha256）自动作废。
+     #   此前只看文件在不在，ok=false 也判完成（P1_Mo-MoS2 的 ε 全 NaN，状态表是 OK）。
      # --json 指到本步目录：脚本默认写 step5_dielect/dielectric_check.json（DFPT 步的目录），
      # 而 autozt 在本步目录里找 done_marker -> 不指就永远 error。
      gen: "validate_dielectric.py --json step5_dielect_validate/dielectric_check.json",
@@ -96,7 +98,7 @@ steps:
   - {seq: 6, name: step6_elastic, label: S6_elastic, src: step6_elastic,
      check: marker, marker: "OUTCAR:TOTAL ELASTIC MODULI",
      gen: gen_step2_elastic.py,
-     gen_need: [stepconf.py, step.conf, dim_common.py, check_common.py, step2_check_and_resubmit.py,
+     gen_need: [stepconf.py, step.conf, ke_common.py, dim_common.py, check_common.py, step2_check_and_resubmit.py,
                 submit_std_2d.tpl, submit_std_3d.tpl],
      needs: ["step1_opt"]}
 

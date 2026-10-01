@@ -275,6 +275,13 @@ DOWNSTREAM = {
     #   迁移率 198 -> 406，而旧 transport.json 仍被判"完成"。
     "step7b_deform_read": [("step8_amset", "link"), ("step8.4_amset2d", "link"),
                            ("step8.2_dpt", "always")],
+    # [patch_stale_upstream V136] S5（介电）/ S6（弹性）重新生成：S8/S8.4 在 gen 时把它们的数值写进
+    #   settings.yaml（不是软链）-> mode="always"；S8.2（DPT）读 step6_elastic/OUTCAR 的面内弹性；
+    #   S5.1 的校验结论随 S5 一起作废。此前没有这两项：S5/S6 重算后旧 transport.json 仍被判"完成"。
+    "step5_dielect": [("step5_dielect_validate", "always"), ("step8_amset", "always"),
+                      ("step8.4_amset2d", "always")],
+    "step6_elastic": [("step8_amset", "always"), ("step8.4_amset2d", "always"),
+                      ("step8.2_dpt", "always")],
     "step8_amset": [("step8.3_output", "always")],
     "step8.1_boltztrap": [("step8.3_output", "always")],
     "step8.2_dpt": [("step8.1_boltztrap", "always"), ("step8.3_output", "always")],
@@ -282,6 +289,7 @@ DOWNSTREAM = {
 DONE_MARKERS = {
     "step4_wave": ("wavefunction.h5",),
     "step4b_wave_full": ("wavefunction.h5",),
+    "step5_dielect_validate": ("dielectric_check.json",),
     "step8_amset": ("transport.json",),
     "step8.4_amset2d": ("transport.json", "intrinsic_transport.json"),
     "step8.1_boltztrap": ("boltztrap_crta.json",),
