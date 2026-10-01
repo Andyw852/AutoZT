@@ -449,8 +449,8 @@ def test_method_sweep():
     check("SWEEP_METHODS 解析（默认方法 / 大小写 / engine:all）",
           got == [("phono3py", "symfc"), ("pheasy", "OLS"), ("pheasy", "RIDGE")]
           + [("hiphive", m) for m in g3.ENGINE_METHODS["hiphive"]], str(got))
-    check("SWEEP_METHODS=all = 全部 13 种",
-          len(g3.parse_methods("all")) == 2 + 6 + 5)
+    check("SWEEP_METHODS=all = 全部方法",
+          len(g3.parse_methods("all")) == sum(len(v) for v in g3.ENGINE_METHODS.values()))
     check("SWEEP_C3_SHELLS 解析", g3.parse_shells("3-5 7,8") == [3, 4, 5, 7, 8]
           and g3.parse_shells("auto") is None)
     try:
