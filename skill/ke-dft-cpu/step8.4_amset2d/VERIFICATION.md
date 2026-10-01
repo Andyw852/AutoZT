@@ -6411,3 +6411,77 @@ vasprun.xml（或 band_structure_data.json）重建 DOS。在合成 3D 目录上
 - 挂插件后回退次数 = 宽松点数，carrier_guard 通过。
 
 子进程环境改为共用 `_sub_env()`。
+
+## V134（2026-10-01）：弹性张量稳定性闸门 + S3b 从 S3 的电荷密度起步 + S3/S3b 能带检查只拦混用
+
+**用户侧数据**：
+- 3D 费米能级审计复核：6 个材料各 90 行（10×9）、结尾判断完整；GaAs −1e17 @ 100 K 偏差 2.9e-8。结论：干净。
+- Mo2S3 的 settings.yaml 弹性张量：C11 155.7、C22 155.2、C12 51.7、C33 0.68、"C44" −40.16、"C55" 4.17、"C66" 1.02 GPa。
+- P1_Mo-MoS2：C11 191.4、C22 171.9、C12 45.2、C33 3.82、"C44" 46.04、"C55" 3.94、"C66" 1.31 GPa。
+- GaAs S5_dielect：墙时到了被杀（OpenFabrics 初始化告警），不是收敛失败。
+- MoSe2 preflight：S3/S3b，NBANDS 18 vs 18，共同 k 点 384，带 11–17 最大偏差 1.20 meV（阈值 1.0）-> 拦截。
+
+**弹性张量的读法**：两个材料的 C33 都只有零点几到几 GPa，是带真空层的单层。单层的面内剪切应与 (C11−C12)/2 同量级
+（这里 52–73 GPa），可第 6 位（标准 Voigt 的 XY）只有 1.0/1.3，大的剪切值落在第 4 位。这正是 VASP 顺序
+（XX YY ZZ XY YZ ZX）没重排的样子（patch_voigt_order 修的那个问题；这两份 settings 应早于它，或没走到重排）。
+- P1_Mo-MoS2 张量全正，但 AMSET 拿到的面内剪切近零，面内 TA 支几乎没有刚度，ADP 错。
+- Mo2S3 若判断成立，面内剪切本身是 −40 GPa，弹性计算就有问题（结构没弛豫到极小 / Γ 点软模，离子弛豫贡献压出负值）。
+  gen 里"面外负剪切取绝对值"只动 YZ/XZ，重新 gen 后 −40 会进到 C66，AMSET 照样出垃圾。
+- 两个材料都要以 step6_elastic/OUTCAR 的表头和 IONIC RELAXATION 那一块确认。
+
+**改动一：弹性张量稳定性闸门**（ke_common.elastic_stability / check_elastic_stability；S8、S8.4 的 gen 调用）
+- 判据：对最终张量（重排、点群对称化、2D 处理之后）取对称部分，3D 要求 6×6 正定，2D 要求面内块
+  (XX, YY, XY) 正定（面外分量是真空伪影，另有处理）。不正定、散射含 ADP -> gen 报错退出，并列出本征值、可能原因与处理。
+- 告警：最小本征值 < 1e-3·最大对角元（接近奇异）；2D 的 C66 < 2%·max(C11, C22)（疑似顺序没重排；
+  YZ 槽位又很大时明确指出"像是 XY 落在第 4 位"）。
+- 开关：step.conf 写 ELASTIC_GUARD = false 只告警（S8、S8.4 的 SPEC 都加了）。
+- 用户侧两个张量原样：都只出顺序告警；按"第 4 位是 XY"重排后，Mo2S3 被拦（本征值 −40.158），P1_Mo-MoS2 通过。
+- tools/regate_projects.py 同步扫已有运行目录：弹性不正定（含 ADP）判 ★ WRONG，2D C66 近零判 ⚠ ELASTIC。
+
+**改动二：S8/S8.4 preflight 的 S3/S3b 能带检查只在混用时拦**（overlap_preflight.run_sources）
+- gen 的接线是同源配对的：全网格分支 vasprun ← S3b、h5 ← S4b（S3b 的 WAVECAR）；IBZ 分支 vasprun ← S3、
+  h5 ← S4（S3 的 WAVECAR）。原检查只要 step3b_uniform_full 在就比，超阈值就拦，可这时 S3 与 S3b 差多少都不进本次结果。
+- 现在解析运行目录里两个软链的最终目标：
+  - 同源：记一行、不拦；
+  - 混用：照旧拦，并写明来源；
+  - 读不到来源：按混用处理（保守）。
+- MoSe2 若是同源配对，重新 gen 后不再被拦。
+
+**改动三：S3b 从 S3 的自洽电荷密度起步**（gen_step5b_uniform_full，2026-10-01 用户批准）
+- 原来 S3b 从头自洽（ICHARG=2），与 S3 是两次独立的自洽。本征值只收敛到 EDIFF 的一阶，同一 k 点上可差 ~1 meV；
+  16 倍 k 点上的整段自洽也很贵。
+- 现在满足以下条件时改成 ICHARG=1，作业开头复制 ../step3_uniform/CHGCAR：
+  - S3 已正常结束（OUTCAR 有 General timing）；
+  - S3 有 CHGCAR；
+  - 两边 POSCAR 语义相同；
+  - INCAR 除对称性/起步方式/输出/并行/自洽过程控制外的键都相同；
+  - 本步 ICHARG 没被显式改过。
+- 用复制而不是软链：LCHARG=.TRUE. 会写回 CHGCAR，软链会改掉 S3 那一份。NBANDS 照 S3 的 OUTCAR 写死（本步没设时）。
+- 从已收敛的密度出发，几步就满足 EDIFF，终点与 S3 是同一个自洽不动点。
+- **为什么不是 ICHARG=11（与当初提议不同）**：S3 没设 LMAXMIX，CHGCAR 里 d/f 元素的单中心密度只到 l=2。
+  非自洽会把这部分算偏，是 VASP 文档里的已知问题（MoSe2 的 Mo 正是 d 元素）。ICHARG=1 会把它重新自洽回来。
+- 条件不满足：照旧 ICHARG=2，并打印原因。step.conf 写 START_FROM_S3 = false 恢复旧行为。
+- skill.yaml：ke 与 zt 的 S3b 的 needs 改为 step3_uniform（要等 S3 跑完）。
+- 已完成的 S3b 不受影响。只有重新 gen 时才走新逻辑，而且 INCAR 变了会按 patch_stale_input 归档旧产物并让下游失效。
+- 附带：两个 S3b 模板里"S3c 要读这份 CHGCAR"的注释是错的（S3c 用的是 step3_uniform），已改。
+- 另记：S3c（离网格检验）的非自洽段同样用 ICHARG=11、没设 LMAXMIX，对 d/f 体系会有同一类偏差。
+  它是检验工具，暂不改，只在这里记下。
+
+**用户侧**：
+1. Mo2S3 / P1_Mo-MoS2：取 step6_elastic/OUTCAR 的 `TOTAL ELASTIC MODULI` 表头与数值、
+   `ELASTIC MODULI CONTR FROM IONIC RELAXATION` 那一块确认上面的判断；跑一次 regate_projects 看还有没有别的 ⚠ ELASTIC。
+2. GaAs S5_dielect：加墙时、换节点（避开 cu08）重交；顺带看 KPOINTS / NCORE / KPAR 是否合理。
+3. MoSe2：重新 gen S8.4，看 preflight 第 3 项是否显示"同源，不拦"。
+
+测试：
+- 新增 test_elastic_guard_s3b（11 项）：
+  - 用户侧两个张量原样只告警、重排后 Mo2S3 被拦；
+  - 关闭开关 / 不含 ADP 只告警；
+  - 3D 与标量；
+  - 两个 gen 的接线与顺序；
+  - s3_density_plan 的可行与 5 种拒绝；
+  - 复制命令插在启动行之前；
+  - _set_incar；
+  - skill.yaml 依赖；
+  - regate 的 ★/⚠ 判定。
+- test_preflight_symmetry_verdict 新增 2 项：S3/S3b 偏差 1.2 meV 同源不拦、混用拦；来源读不到。

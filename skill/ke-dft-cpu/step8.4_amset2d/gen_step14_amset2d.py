@@ -252,6 +252,9 @@ MANUAL_ELASTIC = None
 # patch_tensor_symmetry（2026-09-29，V120）：从 OUTCAR 读的弹性张量按晶体点群对称化（Neumann 原理），
 #   见 ke_common.symmetrize_elastic_for。MANUAL_ELASTIC（显式给定）不动。step.conf 写 false 关掉。
 SYMMETRIZE_ELASTIC = True
+# patch_elastic_guard（V134）：弹性张量（2D 看面内块、3D 看 6×6）不正定 -> gen 报错退出（ADP 没有意义）。
+#   确需照跑：step.conf 写 ELASTIC_GUARD = false（只告警）。见 ke_common.check_elastic_stability。
+ELASTIC_GUARD = True
 ELASTIC_DIR = "step6_elastic"
 # patch_deform_ref：形变势参考口径（2D 默认真空）。step7b 写出 deformation_vac.h5 就用它，
 # 否则退回 deformation.h5（AMSET 芯态对齐）。实测 CrS2：3.53 -> 5.86 eV，μ 差 2.76 倍。
@@ -342,6 +345,7 @@ SPEC = {
     "EPS_INF_OVERRIDE": (None, "str"),
     "EPS_INF_OVERRIDE_BASIS": ("", "str"),
     "SYMMETRIZE_ELASTIC": (True, "bool"),
+    "ELASTIC_GUARD": (True, "bool"),
 }
 # --- amset2d 插件相关（可改）---
 PLUGIN_SRC_NAME = "amset2d_plugin.py"   # 与本脚本同目录，运行时复制到 OUTDIR_NAME
@@ -2271,7 +2275,7 @@ def main():
     global LAYER_THICKNESS, NWORKERS, UNITY_OVERLAP, WAVEFUNCTION_FULL
     global INTERPOLATION_FACTOR, INTERPOLATION_FACTOR_EXPLICIT, SCATTERING, WRITE_MESH, DOPING, TEMPERATURES
     global DESYM_FIX, _DESYM_FIX_ON, BANDGAP_OVERRIDE, BANDGAP_NOTE
-    global EPS_INF_OVERRIDE, EPS_INF_OVERRIDE_BASIS, SYMMETRIZE_ELASTIC
+    global EPS_INF_OVERRIDE, EPS_INF_OVERRIDE_BASIS, SYMMETRIZE_ELASTIC, ELASTIC_GUARD
     global IR_FIX, _IR_FIX_ON, KZ_CAP_2D, KZ_FLAT_TOL_EV, _KZ_CAP_RMAX
     global MEM_WARN_GIB, MEM_LIMIT_GIB, MEM_AUTO_EXCLUSIVE
     _conf_nworkers = None
@@ -2392,6 +2396,7 @@ def main():
             if _p["EPS_INF_OVERRIDE_BASIS"]:
                 EPS_INF_OVERRIDE_BASIS = str(_p["EPS_INF_OVERRIDE_BASIS"])
             SYMMETRIZE_ELASTIC = bool(_p["SYMMETRIZE_ELASTIC"])
+            ELASTIC_GUARD = bool(_p["ELASTIC_GUARD"])
             # patch_mem_guard：内存粗估阈值 / 自动独占
             if _p["MEM_WARN_GIB"]:
                 MEM_WARN_GIB = int(_p["MEM_WARN_GIB"])
@@ -2555,6 +2560,9 @@ def main():
     if elastic is None:
         print("[WARN] 没读到弹性常数——step6_elastic 没算完，或手填 MANUAL_ELASTIC。"
               "ACD 声学散射需要它。")
+    elif _HAS_KC:   # patch_elastic_guard（V134）：最终张量（重排/对称化/2D 处理之后）必须力学稳定
+        kc.check_elastic_stability(elastic, is_2d=bool(is_2d), enabled=ELASTIC_GUARD,
+                                   used="ADP" in SCATTERING, label="S8.4")
     piezo = read_piezo(cwd) if "PIE" in SCATTERING else None
     if "PIE" in SCATTERING and piezo is None:
         print("[WARN] settings 要 PIE 但没有压电张量——本次退化为不含 PIE 的散射集"

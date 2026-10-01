@@ -7,6 +7,7 @@
   2. INCAR 模板换成 incar_uniform_full_*.tpl —— 唯一实质差别是 **ISYM = -1**
      （禁止 VASP 按对称性约化 k 点，产出完整网格的 WAVECAR，使 AMSET 走 from_data）；
   3. 末尾多一段"全网格自检"：打印应算出的 k 点数，并与 step3_uniform 的网格对照。
+  4. V134：S3 已完成且结构/INCAR 物理键一致时，从 S3 的自洽电荷密度起步（ICHARG=1，见 START_FROM_S3）。
 理由与判据见 skill/ke-dft-cpu/step8.4_amset2d/VERIFICATION.md V22.8。
 默认关闭（optional_steps.wavefunction_full.default = false），不影响原 S3/S4。
 在材料目录下运行，从结构优化结果接力（与 gen_step5_uniform.py 同）：
@@ -89,6 +90,21 @@ FULL_GRID_3D_SCALE = 0.5
 #     DESYM_FIX 被关掉且有坏操作。
 FULL_GRID_FORCE = False
 DESYM_FIX_CONF = "auto"   # 与 S8/S8.4 同名键；写在材料级 step.conf 时两边一致
+# ---- [patch_s3b_from_s3_density（V134，2026-10-01 用户批准）] 从 S3 的自洽电荷密度起步 ----
+#   原来 S3b 从头自洽（ICHARG=2），与 S3 是两次独立的自洽：本征值只收敛到 EDIFF 的一阶（总能是二阶），
+#   两边在同一 k 点上差到 ~1 meV（MoSe2 实测 1.2 meV，preflight 阈值 1.0），而且 16 倍 k 点上的整段自洽很贵。
+#   现在：S3 的 CHGCAR 在、结构与 INCAR 的物理键都与 S3 一致时，本步改成 ICHARG=1（读 S3 的电荷密度、
+#   再自洽到收敛），作业开头把 ../step3_uniform/CHGCAR 复制进来（复制而不是软链：LCHARG=.TRUE. 会写回
+#   CHGCAR，软链会改掉 S3 的）。从已收敛的密度出发，几步就满足 EDIFF，终点与 S3 是同一个不动点。
+#   不用 ICHARG=11（非自洽）：S3 没设 LMAXMIX，CHGCAR 里 d/f 元素的单中心密度只到 l=2，非自洽会把这部分
+#   算偏（VASP 文档的已知坑）；ICHARG=1 会把它重新自洽回来。
+#   条件不满足就照旧 ICHARG=2 并说明原因。step.conf 写 START_FROM_S3 = false 恢复旧行为。
+START_FROM_S3 = True
+S3_DIR = "step3_uniform"
+# S3 与 S3b 的 INCAR 允许不同的键：对称性/起步方式、输出开关、并行、自洽过程控制（不改自洽解）
+_FREE_VS_S3 = {"ISYM", "ICHARG", "ISTART", "LCHARG", "LWAVE", "NBANDS", "LORBIT", "NEDOS", "LOPTICS",
+               "LVTOT", "LVHAR", "LELF", "LAECHG", "NELM", "NELMIN", "NELMDL", "EDIFF", "ALGO", "AMIN",
+               "AMIX", "BMIX", "AMIX_MAG", "BMIX_MAG", "IMIX", "MAXMIX", "TIME"}
 SPEC = {"VACUUM_KZ_MIN": (VACUUM_KZ_MIN, "int"),
         "FULL_GRID_FORCE": (FULL_GRID_FORCE, "bool"),
         "DESYM_FIX": (DESYM_FIX_CONF, "str"),
@@ -100,7 +116,8 @@ SPEC = {"VACUUM_KZ_MIN": (VACUUM_KZ_MIN, "int"),
         "DK_MAX_3D": (DK_MAX_3D, "str"),
         "UNIFORM_NMAX": (UNIFORM_NMAX, "int"),
         "MATCH_MESH_OF": (None, "str"),
-        "KALIGN_3D": (KALIGN_3D, "str")}
+        "KALIGN_3D": (KALIGN_3D, "str"),
+        "START_FROM_S3": (START_FROM_S3, "bool")}
 FUNC         = "inherit"              # patch_ke_dag: inherit=继承 step1
                                       # 也可写死 pbe | pbesol | pbe-d3
 MANUAL_ENCUT = None                   # None=从 POTCAR 自动；或写数值
@@ -126,9 +143,91 @@ def _full_grid_needed(poscar, cwd, desym_conf="auto"):
         "on" if on else "off", src, "；SOC" if ncl else "", g.get("reason"))
 
 
+def _s3_finished(s3):
+    oc = s3 / "OUTCAR"
+    if not oc.is_file():
+        return False
+    with open(oc, "rb") as f:
+        f.seek(max(0, oc.stat().st_size - 20000))
+        return b"General timing and accounting" in f.read()
+
+
+def _read_nbands(outcar):
+    import re as _re
+    if not outcar.is_file():
+        return None
+    m = _re.findall(r"NBANDS=\s*(\d+)", outcar.read_text(errors="ignore"))
+    return int(m[-1]) if m else None
+
+
+def s3_density_plan(cwd, out):
+    """[patch_s3b_from_s3_density] 能不能从 S3 的 CHGCAR 起步。返回 (ok, 说明, S3 的 NBANDS 或 None)。
+    要在本步 POSCAR/INCAR 都写好（含 step.conf 的 [incar] 覆盖）之后调。"""
+    s3 = Path(cwd) / S3_DIR
+    chg = s3 / "CHGCAR"
+    if not (chg.is_file() and chg.stat().st_size > 1024):
+        return False, "%s/CHGCAR 不在（S3 没跑完或没写 CHGCAR）" % S3_DIR, None
+    if not _s3_finished(s3):
+        return False, "%s/OUTCAR 没有正常结束的标记" % S3_DIR, None
+    try:
+        same = (kc._poscar_key((s3 / "POSCAR").read_text(errors="ignore"))
+                == kc._poscar_key((Path(out) / "POSCAR").read_text(errors="ignore")))
+    except OSError:
+        same = False
+    if not same:
+        return False, "%s/POSCAR 与本步 POSCAR 不同（结构接力/原点对齐不一致）" % S3_DIR, None
+    try:
+        a = kc.parse_incar((s3 / "INCAR").read_text(errors="ignore"))
+        b = kc.parse_incar((Path(out) / "INCAR").read_text(errors="ignore"))
+    except OSError:
+        return False, "读不到 %s/INCAR" % S3_DIR, None
+    norm = lambda v: None if v is None else " ".join(str(v).split()).upper()  # noqa: E731
+    free = _FREE_VS_S3 | set(kc._INCAR_NONPHYS)
+    diff = sorted(k for k in set(a) | set(b) if k not in free and norm(a.get(k)) != norm(b.get(k)))
+    if diff:
+        return False, "INCAR 的物理键与 S3 不同：%s" % "、".join(
+            "%s（S3 %s / 本步 %s）" % (k, a.get(k, "未设"), b.get(k, "未设")) for k in diff), None
+    if norm(b.get("ICHARG", "2")) != "2":
+        return False, "本步 INCAR 的 ICHARG 已被显式改成 %s（尊重显式设置）" % b.get("ICHARG"), None
+    return True, "S3 已完成，结构与 INCAR 物理键一致", _read_nbands(s3 / "OUTCAR")
+
+
+def _set_incar(path, sets, note):
+    """逐行改键（保留注释与顺序）；没有的键追加在末尾。"""
+    lines = Path(path).read_text(encoding="utf-8").splitlines()
+    seen = set()
+    for i, ln in enumerate(lines):
+        body = ln.split("#", 1)[0]
+        if "=" in body:
+            k = body.split("=", 1)[0].strip().upper()
+            if k in sets:
+                lines[i] = "%-6s = %s          # %s" % (k, sets[k], note)
+                seen.add(k)
+    for k, v in sets.items():
+        if k not in seen:
+            lines.append("%-6s = %s          # %s" % (k, v, note))
+    Path(path).write_text("\n".join(lines) + "\n", encoding="utf-8", newline="\n")
+
+
+S3_CHG_COPY = ('# [patch_s3b_from_s3_density V134] 从 S3 的自洽电荷密度起步（INCAR 是 ICHARG=1）\n'
+               'if [ -s ../%s/CHGCAR ]; then cp -f ../%s/CHGCAR CHGCAR; '
+               'else echo "[S3b] 缺 ../%s/CHGCAR（INCAR 是 ICHARG=1）—— 先跑完 S3，或重新 gen 本步" >&2; exit 1; fi\n'
+               % (S3_DIR, S3_DIR, S3_DIR))
+_LAUNCH_RE = r"^[ \t]*(mpirun|mpiexec|srun|ibrun)\b.*$"
+
+
+def insert_before_launch(text, block):
+    """把 block 插在提交脚本第一条 MPI 启动行之前；找不到启动行返回 None。"""
+    import re as _re
+    m = _re.search(_LAUNCH_RE, text, _re.M)
+    if not m:
+        return None
+    return text[:m.start()] + block + text[m.start():]
+
+
 def main():
     global DK_MAX, DK_MAX_2D, DK_MAX_3D, UNIFORM_NMAX, KALIGN_3D, MATCH_MESH_OF
-    global FULL_GRID_3D_SCALE, FULL_GRID_FORCE, DESYM_FIX_CONF
+    global FULL_GRID_3D_SCALE, FULL_GRID_FORCE, DESYM_FIX_CONF, START_FROM_S3
     cwd = Path.cwd()
     out = cwd / OUTDIR_NAME
     out.mkdir(exist_ok=True)
@@ -203,6 +302,7 @@ def main():
                 FULL_GRID_3D_SCALE = float(_conf["FULL_GRID_3D_SCALE"])
             FULL_GRID_FORCE = bool(_conf["FULL_GRID_FORCE"])
             DESYM_FIX_CONF = _conf["DESYM_FIX"] or "auto"
+            START_FROM_S3 = bool(_conf["START_FROM_S3"])
         except (KeyError, ValueError, TypeError) as _e:
             # ★ 2026-09-28：不再静默（一个键出错会让它之后的覆盖全部失效，见 test_gen_conf_wiring）
             print("[WARN] 读 step.conf 覆盖时出错（%s: %s）—— 出错之后的覆盖项未生效"
@@ -401,7 +501,27 @@ def main():
 
     submit_tpl = resolve_tpl(Path(__file__).resolve().parent, "submit_std", dim)
     submit = out / "submit.sh"
-    submit.write_text(submit_tpl.read_text(encoding="utf-8"), encoding="utf-8", newline="\n")
+    _sub_text = submit_tpl.read_text(encoding="utf-8")
+    # [patch_s3b_from_s3_density（V134）] 条件满足 -> ICHARG=1 + 作业开头复制 S3 的 CHGCAR
+    if START_FROM_S3:
+        _ok, _why, _nb = s3_density_plan(cwd, out)
+        _patched = insert_before_launch(_sub_text, S3_CHG_COPY) if _ok else None
+        if _ok and _patched is None:
+            _ok, _why = False, "提交模板里找不到 mpirun/srun 启动行，插不进复制 CHGCAR 的命令"
+        if _ok:
+            _sets = {"ICHARG": "1"}
+            if _nb and "NBANDS" not in kc.parse_incar((out / "INCAR").read_text(errors="ignore")):
+                _sets["NBANDS"] = str(_nb)
+            _set_incar(out / "INCAR", _sets, "V134：从 S3 的自洽电荷密度起步（作业开头复制 ../%s/CHGCAR）" % S3_DIR)
+            _sub_text = _patched
+            print("[OK] patch_s3b_from_s3_density：%s -> ICHARG=1%s（S3 的 CHGCAR 作业开头复制进来；"
+                  "终点与 S3 同一个自洽不动点，省掉大部分自洽迭代）"
+                  % (_why, "，NBANDS=%s（照 S3）" % _sets["NBANDS"] if "NBANDS" in _sets else ""))
+        else:
+            print("[..] patch_s3b_from_s3_density：不从 S3 起步（%s）-> 照旧 ICHARG=2 从头自洽" % _why)
+    else:
+        print("[..] patch_s3b_from_s3_density：step.conf START_FROM_S3 = false -> ICHARG=2 从头自洽")
+    submit.write_text(_sub_text, encoding="utf-8", newline="\n")
     kc.patch_submit_jobname(submit, kc.new_jobname(cwd, STEP_LABEL))
     stepconf.apply_submit(submit, stepconf.read_submit(stepconf.CONF_NAME, used_incar=True))
 

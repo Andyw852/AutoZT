@@ -204,7 +204,8 @@ optional_steps:
          gen_need: [stepconf.py, step.conf, ke_common.py, dim_common.py, check_common.py,
                     incar_uniform_full_2d.tpl, incar_uniform_full_3d.tpl,
                     submit_std_2d.tpl, submit_std_3d.tpl],
-         needs: ["step1_opt"]}
+         # V134：从 S3 的自洽电荷密度起步（ICHARG=1，作业开头复制 ../step3_uniform/CHGCAR）-> 要等 S3 跑完
+         needs: ["step3_uniform"]}
       # ★ check: wavecar 的默认尺寸阈值是 1 MB（ck_wavecar 的 wavecar_min 键可覆盖）——
       #   而 S3c 是 stage2 **14 个离网格 k 点**的非自洽 WAVECAR，本来就只有 ~0.65 MB，
       #   用默认阈值会被误判 "WAVECAR too small"（还会连带挡住 S20_zt 的 guard_predecessors）。

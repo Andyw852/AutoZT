@@ -164,6 +164,61 @@ class PreflightVerdictTests(unittest.TestCase):
             v_off, l_off = pf.run(out, out, False, desym_fix=False)
             self.assertEqual(v_off, "error" if two_d else "warn", "\n".join(l_off))
 
+    def test_s3_s3b_gap_blocks_only_when_mixed(self):
+        """V134：S3/S3b 能带偏差（MoSe2 实测 1.2 meV > 1.0）只在本次能带与波函数来自不同自洽时才拦；
+        同源（vasprun 与 h5 都来自 S3，或都来自 S3b）只记一行、不拦。"""
+        import h5py
+        mos2 = Structure(Lattice.hexagonal(3.19, 12.0), ["Mo", "S", "S"],
+                         [[.1, .2, .5], [1/3 + .1, 2/3 + .2, .63], [1/3 + .1, 2/3 + .2, .37]])
+
+        def vasprun(path, shift_mev):
+            ks = [(0, 0, 0), (.25, 0, 0)]
+            kp = "".join("<v> %g %g %g </v>" % k for k in ks)
+            sets = "".join('<set comment="kpoint %d">%s</set>' % (
+                i + 1, "".join("<r> %.6f 1.0 </r>" % (-5 + 0.5 * b + shift_mev / 1000.0 * (b == 12))
+                               for b in range(18))) for i in range(len(ks)))
+            Path(path).write_text('<varray name="kpointlist">%s</varray><eigenvalues>%s</eigenvalues>' % (kp, sets))
+
+        def h5(path, kp):
+            with h5py.File(str(path), "w") as f:
+                f["kpoints"] = np.asarray(kp, float)
+                f["gpoints"] = np.zeros((3, 3), int)
+                f["coefficients_up"] = np.zeros((2, len(kp), 3), complex)
+
+        for h5_src, expect in (("step4_wave", "ok"), ("step4b_wave_full", "error")):
+            base = _material_dir(mos2)
+            for d in ("step3b_uniform_full", "step4_wave", "step4b_wave_full"):
+                (base / d).mkdir()
+            vasprun(base / "step3_uniform" / "vasprun.xml", 0.0)
+            vasprun(base / "step3b_uniform_full" / "vasprun.xml", 1.2)
+            h5(base / "step4_wave" / "wavefunction.h5", [[0, 0, 0], [.25, 0, 0], [.5, 0, 0], [.25, .25, 0]])
+            h5(base / "step4b_wave_full" / "wavefunction.h5", [[0, 0, 0], [.25, 0, 0], [.5, 0, 0], [.25, .25, 0]])
+            out = base / "step8.4_amset2d"
+            out.mkdir()
+            (out / "settings.yaml").write_text("unity_overlap: false\n")
+            (out / "2d_correction.json").write_text("{}")
+            (out / "amset_desym_fix.py").write_text("# stub\n")
+            (out / "vasprun.xml").symlink_to("../step3_uniform/vasprun.xml")
+            (out / "wavefunction.h5").symlink_to("../%s/wavefunction.h5" % h5_src)
+            self.assertEqual(pf.run_sources(out), ("S3", "S3" if h5_src == "step4_wave" else "S3b"))
+            v, lines = pf.run(out, out, False, desym_fix=True)
+            txt = "\n".join(lines)
+            self.assertIn("1.2000 meV", txt)
+            if expect == "ok":
+                self.assertIn("同源，都来自 S3", txt)
+                self.assertNotIn("★ 拦截：两者能带不一致", txt)
+                self.assertEqual(v, "ok", txt)
+            else:
+                self.assertIn("★ 拦截：两者能带不一致", txt)
+                self.assertIn("混用了两次独立的自洽", txt)
+                self.assertEqual(v, "error", txt)
+
+    def test_run_sources_unknown(self):
+        out = Path(tempfile.mkdtemp())
+        self.assertEqual(pf.run_sources(out), (None, None))
+        (out / "vasprun.xml").symlink_to("../nowhere/vasprun.xml")          # 断链
+        self.assertEqual(pf.run_sources(out), (None, None))
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -240,6 +240,9 @@ MANUAL_ELASTIC = None
 # patch_tensor_symmetry（2026-09-29，V120）：从 OUTCAR 读的弹性张量按晶体点群对称化（Neumann 原理），
 #   见 ke_common.symmetrize_elastic_for。MANUAL_ELASTIC（显式给定）不动。step.conf 写 false 关掉。
 SYMMETRIZE_ELASTIC = True
+# patch_elastic_guard（V134）：弹性张量（2D 看面内块、3D 看 6×6）不正定 -> gen 报错退出（ADP 没有意义）。
+#   确需照跑：step.conf 写 ELASTIC_GUARD = false（只告警）。见 ke_common.check_elastic_stability。
+ELASTIC_GUARD = True
 ELASTIC_DIR = "step6_elastic"
 # patch_deform_ref（2026-09-16）：形变势参考口径。step7b 若已写出
 # deformation_vac.h5（真空静电势零点，二维文献通行做法），2D 默认用它；
@@ -275,6 +278,7 @@ SPEC = {
     "EPS_INF_OVERRIDE": (EPS_INF_OVERRIDE, "str"),
     "EPS_INF_OVERRIDE_BASIS": ("", "str"),      # 2D 必填：layer | slab
     "SYMMETRIZE_ELASTIC": (True, "bool"),
+    "ELASTIC_GUARD": (True, "bool"),
     # patch_mesh_min：最终插值网格下限（None/0 = 不干预）。见文件头说明。
     "MESH_MIN": (MESH_MIN, "int"),
     "MESH_MIN_KZ": (MESH_MIN_KZ, "int"),
@@ -1847,7 +1851,7 @@ def main():
     # ★ 2026-09-28 修：EPS_INF_OVERRIDE 原来**没有声明 global** —— main() 里的赋值只落在局部变量，
     #   _apply_eps_inf_override() 读到的仍是模块级 None，step.conf 的 ε∞ 覆盖**静默失效**
     #   （GaAs 用 HSE ε∞ 重跑 S8 会跑出与覆盖前相同的数）。test_gen_conf_wiring.py 防回归。
-    global EPS_INF_OVERRIDE, EPS_INF_OVERRIDE_BASIS, DESYM_FIX, _DESYM_FIX_ON, SYMMETRIZE_ELASTIC
+    global EPS_INF_OVERRIDE, EPS_INF_OVERRIDE_BASIS, DESYM_FIX, _DESYM_FIX_ON, SYMMETRIZE_ELASTIC, ELASTIC_GUARD
     global IR_FIX, _IR_FIX_ON
     global BANDGAP_OVERRIDE, BANDGAP_NOTE
     global MEM_WARN_GIB, MEM_LIMIT_GIB, MEM_AUTO_EXCLUSIVE
@@ -1919,6 +1923,7 @@ def main():
             if _p["EPS_INF_OVERRIDE_BASIS"]:
                 EPS_INF_OVERRIDE_BASIS = str(_p["EPS_INF_OVERRIDE_BASIS"])
             SYMMETRIZE_ELASTIC = bool(_p["SYMMETRIZE_ELASTIC"])
+            ELASTIC_GUARD = bool(_p["ELASTIC_GUARD"])
             # patch_mesh_min：最终插值网格下限/上限（step.conf 覆盖；0/None = 不干预）
             global MESH_MIN, MESH_MIN_KZ, MESH_MIN_FMAX, MESH_MAX
             # ★ 2026-09-28：原来是 `if _v:` —— step.conf 写 0（注释说的"0 = 不干预"）会被当成
@@ -2046,6 +2051,9 @@ def main():
     if elastic is None:
         print("[WARN] 没读到弹性常数——step6_elastic 没算完，或手填 MANUAL_ELASTIC。"
               "ACD 声学散射需要它。")
+    elif _HAS_KC:   # patch_elastic_guard（V134）：最终张量（重排/对称化/2D 处理之后）必须力学稳定
+        kc.check_elastic_stability(elastic, is_2d=bool(is_2d), enabled=ELASTIC_GUARD,
+                                   used="ADP" in SCATTERING, label="S8")
     # patch_mesh_min：按最终插值网格下限反算 INTERPOLATION_FACTOR（必须在 write_settings 之前）。
     _fm = apply_mesh_min(_vr, out)
     write_settings(out, eps_inf, eps_static, gap, elastic,

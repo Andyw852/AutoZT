@@ -19,7 +19,7 @@
 SYSTEM = {{SYSTEM}}
 
 ISTART = 0
-ICHARG = 2
+ICHARG = 2               # V134：S3 的 CHGCAR 可用且结构/INCAR 物理键一致时，gen 改成 1（从 S3 的密度起步）
 GGA    = {{GGA}}
 {{VDW_LINE}}
 
@@ -41,7 +41,7 @@ ISYM   = -1          # ★ 全网格：禁止 VASP 按对称性约化 k 点
 
 # ---- AMSET 关键：输出致密 DOS 与波函数 ----
 LWAVE  = .TRUE.         # amset wave 读 WAVECAR
-LCHARG = .TRUE.          # ★ step3c_uniform_offgrid 要读这份 CHGCAR 做非自洽
+LCHARG = .TRUE.          # 写出本步的 CHGCAR（S3c 用的是 step3_uniform，不读这一份）
 LORBIT = 11
 NEDOS  = 5000
 LOPTICS = .FALSE.       # amset 自己算跃迁，不需要 VASP 的 LOPTICS

@@ -990,6 +990,85 @@ def full_grid_ibz_count(structure, kpoints, symprec=AMSET_SYMPREC):
     return int(len(np.unique(mapping))), int(n), [int(x) for x in mesh]
 
 
+# ---- [patch_elastic_guard] 弹性张量力学稳定性（V134）--------------------------------------
+#   AMSET 的 ADP 用 Christoffel 方程的本征值（声速²）；弹性张量不正定时有负/零本征值，ADP 散射率与
+#   迁移率没有意义，而 AMSET 照跑不报错（实测 Mo2S3：settings.yaml 里 C44 = −40.16 GPa）。
+#   判据（标准 Voigt 顺序 XX YY ZZ YZ XZ XY，取对称部分）：
+#     3D —— 整个 6×6 正定；
+#     2D —— 只看面内块 (XX, YY, XY) 的 3×3 正定（面外分量是真空伪影，另有处理）。
+#   另：2D 的面内剪切 C66 比 C11/C22 小两个量级以上、而 YZ 槽位却很大 —— 典型的"VASP 顺序没重排"
+#   （XY 落在第 4 位），只告警（各向异性很强的材料理论上也可能）。
+ELASTIC_SOFT_C66 = 0.02       # 2D：C66 < 0.02·max(C11, C22) 告警
+ELASTIC_NEAR_SINGULAR = 1e-3  # 最小本征值 < 1e-3·最大对角元 告警（接近奇异，声速≈0）
+
+
+def elastic_stability(elastic, is_2d=False):
+    """返回 dict(ok, kind, eigs, block, labels, near_singular, soft_c66, misorder_hint)；elastic 为 None 返回 None。"""
+    import numpy as _np
+    if elastic is None:
+        return None
+    a = _np.asarray(elastic, dtype=float)
+    if a.size == 1:
+        v = float(a.reshape(-1)[0])
+        return {"ok": v > 0, "kind": "scalar", "eigs": [v], "block": [[v]], "labels": ["C"],
+                "near_singular": False, "soft_c66": False, "misorder_hint": False}
+    if a.shape != (6, 6):
+        return {"ok": False, "kind": "shape", "eigs": [], "block": a.tolist(), "labels": [],
+                "near_singular": False, "soft_c66": False, "misorder_hint": False}
+    sym = 0.5 * (a + a.T)
+    if is_2d:
+        idx, labels = [0, 1, 5], ["XX", "YY", "XY"]
+    else:
+        idx, labels = list(range(6)), ["XX", "YY", "ZZ", "YZ", "XZ", "XY"]
+    blk = sym[_np.ix_(idx, idx)]
+    eigs = _np.linalg.eigvalsh(blk)
+    dmax = float(_np.max(_np.abs(_np.diag(blk)))) or 1.0
+    soft = misorder = False
+    if is_2d:
+        cmax = max(sym[0, 0], sym[1, 1])
+        soft = bool(cmax > 0 and 0 < sym[5, 5] < ELASTIC_SOFT_C66 * cmax)     # ≤ 0 由正定性判据处理
+        misorder = bool(soft and abs(sym[3, 3]) > 0.1 * cmax and abs(sym[3, 3]) > 5 * sym[5, 5])
+    return {"ok": bool(eigs.min() > 0), "kind": "2d" if is_2d else "3d", "eigs": [float(x) for x in eigs],
+            "block": blk.tolist(), "labels": labels,
+            "near_singular": bool(eigs.min() > 0 and eigs.min() < ELASTIC_NEAR_SINGULAR * dmax),
+            "soft_c66": soft, "misorder_hint": misorder}
+
+
+def check_elastic_stability(elastic, is_2d=False, enabled=True, used=True, label=""):
+    """gen 里调：不正定 -> 退出（enabled 且 ADP 要用它）；否则只告警。返回 elastic_stability 的结果。"""
+    r = elastic_stability(elastic, is_2d)
+    if r is None:
+        return None
+    tag = "[%s] " % label if label else ""
+    what = {"2d": "面内块 (XX, YY, XY)", "3d": "6×6", "scalar": "标量"}.get(r["kind"], "形状不对")
+    eig_s = ", ".join("%.3f" % x for x in r["eigs"])
+    if r["misorder_hint"] or r["soft_c66"]:
+        a = [list(map(float, row)) for row in elastic]
+        print("[WARN] %s弹性：面内剪切 C66 = %.3f GPa 只有 max(C11, C22) 的 %.1f%%%s —— 先核对 step6_elastic/OUTCAR "
+              "的 TOTAL ELASTIC MODULI 表头（XX YY ZZ XY YZ ZX）是否已重排成标准 Voigt（gen 日志应有"
+              "\"[OK] 弹性常数：来源顺序 … 已重排\"）。"
+              % (tag, a[5][5], 100 * a[5][5] / max(a[0][0], a[1][1]),
+                 "，而 YZ 槽位 |C44| = %.3f GPa 很大（像是 XY 落在了第 4 位）" % abs(a[3][3]) if r["misorder_hint"] else ""))
+    if r["ok"]:
+        print("[OK] %s弹性张量%s正定（本征值 %s GPa）" % (tag, what, eig_s))
+        if r["near_singular"]:
+            print("[WARN] %s弹性张量%s最小本征值很小（%s）—— 对应方向声速接近 0，ADP 会被放大" % (tag, what, eig_s))
+        return r
+    rows = "\n".join("          %s" % "  ".join("%9.3f" % x for x in row) for row in r["block"])
+    msg = ("%s弹性张量%s不正定（本征值 %s GPa）：\n%s\n"
+           "        AMSET 的 ADP 用 Christoffel 本征值（声速²），这里有负/零本征值，ADP 散射率与迁移率没有意义。\n"
+           "        常见原因：① step6_elastic 的结构没弛豫到极小 / Γ 点有软模 -> 离子弛豫贡献把剪切模量压成负值"
+           "（看 OUTCAR 的 ELASTIC MODULI CONTR FROM IONIC RELAXATION，收紧 EDIFFG 重新弛豫后重算 S6）；\n"
+           "                  ② 弹性表的行列顺序没按表头重排（XX YY ZZ XY YZ ZX -> 标准 Voigt）；\n"
+           "                  ③ MANUAL_ELASTIC 填错。\n"
+           "        确需照跑（结果的 ADP 不可信）：本步 step.conf 写 ELASTIC_GUARD = false。"
+           % (tag, what, eig_s, rows))
+    if enabled and used:
+        sys.exit("[ERROR] " + msg)
+    print("[WARN] " + msg + ("" if used else "\n        （本次散射机制不含 ADP，弹性张量用不上 —— 只告警）"))
+    return r
+
+
 def report_dielectric_symmetry(cwd, eps_inf, eps_static, dirs):
     """介电张量偏离点群对称的诊断（只报告：2D 路径会重新读 OUTCAR，这里改值传不过去）。"""
     st, src = tensor_structure(cwd, dirs)

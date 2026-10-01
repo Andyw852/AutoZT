@@ -180,7 +180,8 @@ optional_steps:
          gen_need: [stepconf.py, step.conf, ke_common.py, dim_common.py, check_common.py,
                     incar_uniform_full_2d.tpl, incar_uniform_full_3d.tpl,
                     submit_std_2d.tpl, submit_std_3d.tpl],
-     needs: ["step1_opt"]}
+     # V134：从 S3 的自洽电荷密度起步（ICHARG=1，作业开头复制 ../step3_uniform/CHGCAR）-> 要等 S3 跑完
+     needs: ["step3_uniform"]}
       - {seq: 3.6, name: "step3c_uniform_offgrid", label: S3c_offgrid,
          after: step3b_uniform_full,
          src: step3c_uniform_offgrid, check: wavecar, gen: gen_step5c_uniform_offgrid.py,

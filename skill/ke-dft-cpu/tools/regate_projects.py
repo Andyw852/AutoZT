@@ -14,6 +14,9 @@
             全网格 h5 + 真实重叠 + 有 k 点标签不在 (-0.5, 0.5]（V117：from_data 贴错系数标签）
   ⚠ STALE-DP 形变势 h5 没有 dp_symmetrized 标记 = S7.1 早于 V121 生成（V122：MoS2 同一批形变单点
             新版 S7.1 重读后电子 ADP 迁移率 198 -> 406）-> 重新 gen S7.1（秒级）再重跑本步
+  ★ WRONG   （V134）settings.yaml 的弹性张量不正定（2D 看面内块、3D 看 6×6）且散射含 ADP —— ADP 无意义
+  ⚠ ELASTIC （V134）2D 面内剪切 C66 不到 max(C11, C22) 的 2% —— 疑似 VASP 顺序（XX YY ZZ XY YZ ZX）没重排，
+            AMSET 拿到的面内剪切近零；核对 step6_elastic/OUTCAR 的表头后重新 gen 本步
   ?         判不出来（缺结构/缺 settings）
 另外列出 settings.yaml 里写了 EPS_INF_OVERRIDE 注释却可能没生效的旧 S8（见 V115 §8）。
 
@@ -80,8 +83,18 @@ def _run_info(run):
                 dp_sym = bool(int(f.attrs.get("dp_symmetrized", 0)))
         except Exception:                                        # noqa: BLE001
             dp_sym = None
+    elastic, adp = None, True
+    try:                                                         # V134：弹性张量（标准 Voigt，GPa）
+        import yaml
+        cfg = (yaml.safe_load(txt) or {}) if txt else {}
+        elastic = cfg.get("elastic_constant")
+        sc = cfg.get("scattering_type")
+        adp = sc is None or sc == "auto" or "ADP" in [str(x).upper() for x in (sc or [])]
+    except Exception:                                            # noqa: BLE001
+        elastic = None
+    two_d = (run / "2d_correction.json").is_file()
     return {"settings": bool(txt), "unity": unity, "h5_src": src, "offconv": offconv,
-            "dp_sym": dp_sym,
+            "dp_sym": dp_sym, "elastic": elastic, "adp": adp, "two_d": two_d,
             "fix": "# AZ_DESYM_FIX=1" in txt,
             "transport": (run / "transport.json").is_file()}
 
@@ -124,6 +137,22 @@ def audit(root, pattern):
             # V122：判据 OK 但形变势是旧版 S7.1 生成的 -> 结果要重跑（ADP 可差一倍）
             if verdict == "OK" and r["dp_sym"] is False:
                 verdict, why = "⚠ STALE-DP", why + "；但形变势 h5 未对称化（S7.1 早于 V121）-> 重新 gen S7.1 再重跑"
+            # V134：弹性张量不正定 -> ADP 无意义；2D 面内剪切近零 -> 疑似 Voigt 顺序没重排
+            el = None
+            if r["elastic"] is not None and r["adp"]:
+                try:
+                    el = kc.elastic_stability(r["elastic"], is_2d=r["two_d"])
+                except Exception:                                # noqa: BLE001
+                    el = None
+            if el is not None and not el["ok"]:
+                verdict = "★ WRONG"
+                why += "；弹性张量%s不正定（本征值 %s GPa）-> ADP 无意义（V134）" % (
+                    "面内块" if r["two_d"] else "", ", ".join("%.2f" % x for x in el["eigs"]))
+            elif el is not None and el["soft_c66"]:
+                if verdict == "OK":
+                    verdict = "⚠ ELASTIC"
+                why += "；面内剪切 C66 只有 max(C11, C22) 的 %.1f%%（疑似 VASP 顺序没重排，V134）" % (
+                    100 * el["block"][2][2] / max(el["block"][0][0], el["block"][1][1]))
             rows.append({"material": str(mat.relative_to(root)), "run": run_name,
                          "verdict": verdict, "why": why, "h5_src": r["h5_src"],
                          "unity": r["unity"], "desym_fix": r["fix"],
@@ -148,7 +177,8 @@ def main(argv=None):
                                            "" if r["transport"] else "（无 transport.json）"))
     n_bad = sum(1 for r in rows if r["verdict"].startswith("★"))
     n_stale = sum(1 for r in rows if r["verdict"].startswith("⚠"))
-    print("\n共 %d 个运行目录，★ 静默算错 %d 个，⚠ 形变势过期 %d 个" % (len(rows), n_bad, n_stale))
+    print("\n共 %d 个运行目录，★ 静默算错 %d 个，⚠ 待处理（形变势过期 / 弹性待核对）%d 个"
+          % (len(rows), n_bad, n_stale))
     if a.csv:
         with open(a.csv, "w", newline="", encoding="utf-8") as f:
             wr = csv.DictWriter(f, fieldnames=list(rows[0]))

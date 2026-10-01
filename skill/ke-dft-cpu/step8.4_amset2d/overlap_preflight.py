@@ -220,6 +220,29 @@ def check_s3_vs_s3b(s3_dir, s3b_dir, band_lo=BAND_LO, band_hi=BAND_HI):
             "ok": (n1 == n2 and common > 0 and dmax < EIG_TOL_MEV)}
 
 
+# V134：S3/S3b 一致性只在"能带与波函数来自不同的自洽"时才有意义。gen 的接线是同源配对的：
+#   全网格分支 vasprun ← step3b_uniform_full、h5 ← step4b_wave_full（S3b 的 WAVECAR）；
+#   IBZ 分支   vasprun ← step3_uniform、     h5 ← step4_wave（S3 的 WAVECAR）。
+#   这时 S3 与 S3b 之间差多少都不进本次结果。原来只要 step3b_uniform_full 在就比、超阈值就拦，
+#   MoSe2（1.2 meV > 1.0）因此被误拦。
+_SRC_OF_DIR = {"step3_uniform": "S3", "step4_wave": "S3",
+               "step3b_uniform_full": "S3b", "step4b_wave_full": "S3b"}
+
+
+def run_sources(out_dir):
+    """(能带来源, 波函数来源)：解析运行目录里 vasprun.xml / wavefunction.h5 软链的最终目标，
+    返回 "S3" / "S3b" / None（不在、断链或不认识的目录）。"""
+    def one(name):
+        p = Path(out_dir) / name
+        try:
+            if not p.exists():
+                return None
+            return _SRC_OF_DIR.get(p.resolve().parent.name)
+        except OSError:
+            return None
+    return one("vasprun.xml"), one("wavefunction.h5")
+
+
 def run_band_window(out_dir, default=(BAND_LO, BAND_HI)):
     """从 AMSET 运行日志读它**实际插值**的带窗口（1-based，含两端）。
 
@@ -530,10 +553,18 @@ def run(cwd, out_dir=None, unity_overlap=False, desym_fix=None):
                      % (r["nbands_s3"], r["nbands_s3b"], r["common"],
                         r["band_window"][0], r["band_window"][1], r["max_dev_mev"],
                         "通过" if r["ok"] else "**不通过**"))
-        if not r["ok"]:
+        _sv, _sh = run_sources(out_dir)
+        if not r["ok"] and _sv and _sv == _sh:
+            lines.append("     [..] 本次能带（vasprun.xml）与波函数（wavefunction.h5）同源，都来自 %s —— "
+                         "S3/S3b 的差别不进本次结果，不拦（只在两者混用时才拦，V134）。" % _sv)
+        elif not r["ok"]:
             err = True
             lines.append("     ★ 拦截：两者能带不一致（NBANDS 不同或偏差 >= %.1f meV），"
                          "重叠与能带不能配套使用。" % EIG_TOL_MEV)
+            lines.append("     本次能带来自 %s、波函数来自 %s%s。"
+                         % (_sv or "（读不到）", _sh or "（读不到）",
+                            " —— 混用了两次独立的自洽" if (_sv and _sh) else
+                            "；来源读不到时按混用处理（保守）"))
 
     logs = glob.glob(str(cwd / "step4_wave" / "amset.log")) + \
            glob.glob(str(cwd / "step4b_wave_full" / "amset.log"))
