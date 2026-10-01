@@ -26,7 +26,7 @@
 #   phono3py  phono3py + symfc/alm least squares.
 #             Finite-displacement and random-displacement datasets.
 #   pheasy    pheasy compressive sensing (OLS/LASSO/ALASSO/RFE-OLS/RFE-OLS-TSQR/
-#             RIDGE), CPU or GPU build.  Random-displacement datasets.
+#             RIDGE/ARDR/RVM), CPU or GPU build.  Random-displacement datasets.
 #   hiphive   hiphive cluster space + linear regression (ols/ridge/lasso/ard/
 #             bayes) with optional Huang + Born-Huang projection.
 #             Random-displacement datasets.

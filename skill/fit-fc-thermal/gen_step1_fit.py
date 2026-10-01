@@ -95,7 +95,7 @@ SPEC = {
     "FC_CALC": ("symfc", "str"),             # symfc | alm
     "FC3_CUTOFF": ("", "str"),               # fc3 cutoff in A; empty = no cutoff
     # ---- pheasy ----
-    "PHEASY_FIT_METHOD": ("ALASSO", "str"),  # OLS|LASSO|ALASSO|RFE-OLS|RFE-OLS-TSQR|RIDGE (RFE=alias)
+    "PHEASY_FIT_METHOD": ("ALASSO", "str"),  # OLS|LASSO|ALASSO|RFE-OLS|RFE-OLS-TSQR|RIDGE|ARDR|RVM
     "PHEASY_BIN": ("pheasy", "str"),         # pheasy | pheasy-gpu
     "PHEASY_C2_CUTOFF": ("", "str"),         # fc2 cutoff in A; empty = none
     "PHEASY_C3_CUTOFF": ("", "str"),         # fc3 cutoff in A; empty = none
@@ -177,7 +177,8 @@ ENGINES = ("phono3py", "pheasy", "hiphive")
 # Canonical pheasy method names.  "RFE-OLS" is the current name of the OLS-based
 # recursive-feature-elimination fitter; the pre-rename spelling "RFE" is NOT
 # accepted -- write RFE-OLS.
-PHEASY_METHODS = ("OLS", "LASSO", "ALASSO", "RFE-OLS", "RFE-OLS-TSQR", "RIDGE")
+PHEASY_METHODS = ("OLS", "LASSO", "ALASSO", "RFE-OLS", "RFE-OLS-TSQR", "RIDGE",
+                   "ARDR", "RVM")
 
 
 def normalize_pheasy_method(value):
