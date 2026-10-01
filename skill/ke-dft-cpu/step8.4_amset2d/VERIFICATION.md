@@ -6372,3 +6372,42 @@ build_amset_data 加了 `set_doping=False`（到 DOS 为止），供它使用。
 - 接线（两个 gen、插件、postprocess、ke/zt skill.yaml、zt 软链）。
 
 test_fermi_probe 改为显式调用原搜索。
+
+## V133（2026-10-01）：3D 上 AMSET 会静默接受偏差 100% 的费米能级 —— 已有 S8 结果需要用 fermi_probe 核对
+
+**实测**（用户侧，V132）：
+- WS2 10×9 重交（3918653）跑完。两个 100 K 点由二分法解出：−1.862e18 cm⁻³ 时 E_F = −1.1123 eV，
+  −3.311e17 cm⁻³ 时 E_F = −1.1280 eV，相对误差都在 1e-11 量级。复现检查 PASS。
+- WSe2 10×9 跑 fermi_probe：没有"宽松!"，旧结果可用。
+
+**新发现（合成 3D）**：AMSET 原式会静默接受错误的费米能级，而且 3D 出厂网格就会碰到。
+- 模型：纤锌矿型四带，带隙 2.2 eV，nelect 2（插值窗口内），用 band_structure_data.json 作输入。
+- 原式在 n 型 −1e15、−1e16 @ 50/100 K 和 **−1e17 @ 100 K** 都"成功"了，接受的 E_F 在带隙下半部
+  （0.12–0.25 eV），实际载流子几乎为 0（偏差 100%）。
+- 原因：误差恰好 = 1（或 1 减一点点），容差阶梯最后一级 tol = 1 判它通过，`1.0 > 1.0` 为假。
+  WS2 那次误差是 1 加一点点舍入，所以报了错。报错还是静默，只取决于舍入的符号。
+- 作业链里没人拦：
+  - fermi_window_check 只看 E_F 是否落在 [VBM − 2 eV, CBM + Δ + 2 eV]，带隙中的 E_F 照样通过；
+  - carrier_guard_3d 只查请求浓度，不查实现浓度；
+  - postprocess 的 carrier_guard 只在 S8.4 开 WRITE_MESH 时跑。
+- 后果：这些点的 σ ≈ 0、|S| 偏大，迁移率按请求浓度归一，数值没有意义。
+- S8 出厂网格：DOPING −1e21…−1e17 / 1e17…1e21，TEMPERATURES 100…900 K。最低的 ±1e17 @ 100 K（必要时含 200 K）
+  正好落在危险区。会不会中招取决于带边与 0.272 eV 网格怎么对齐，材料之间不同。
+- V132 起这些点都在阶梯第一级走二分：合成模型 5 个点全部解出，carrier_guard 最大偏差 2.8e-7。
+
+**fermi_probe 在 3D 运行目录可用**：没有 2d_correction.json 时不加载 2D 插件，直接按 settings.yaml +
+vasprun.xml（或 band_structure_data.json）重建 DOS。在合成 3D 目录上整条跑通，"宽松!"标得出来。
+
+**用户侧**：V132 之前跑完的 S8（3D）结果，只要温度含 ≤ 200 K，就在各运行目录跑一次
+`python <skill>/ke-dft-cpu/tools/fermi_probe.py`：
+- 没有"宽松!"：不受影响；
+- 有：那些 (掺杂, 温度) 点的输运不可信。要么用 V132 重跑这个 S8，要么在报告里剔除这些点。
+  其余点不受影响：散射与输运按 (掺杂, 温度) 逐点算，互不牵连。
+
+测试：test_fermi_probe 新增 ThreeDRunDirTests（合成 3D 运行目录）：
+- probe 标出"宽松!"，其中含 −1e17 @ 100 K；
+- 原式没有报错（是静默的）；
+- 二分解准确；
+- 挂插件后回退次数 = 宽松点数，carrier_guard 通过。
+
+子进程环境改为共用 `_sub_env()`。

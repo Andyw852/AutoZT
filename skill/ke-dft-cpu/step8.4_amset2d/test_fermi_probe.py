@@ -9,6 +9,9 @@
 2) 本征费米能级为 NaN：AMSET 的 get_fermi 不报错、静默返回 NaN（复现 WS2 IR_FIX 开时 pinv 崩的路径），
    probe 把它标成 nan；二分法不依赖本征费米能级，照样解出。
 3) 带隙中间有插值假态：dos_diagnostics 数得出带隙内的态数。
+4) V133：3D 运行目录（band_structure_data.json）上整条 fermi_probe 能跑；AMSET 原式在 tol=1 静默接受
+   偏差 ~100% 的解（含 S8 出厂网格的 −1e17 cm⁻³ @ 100 K），probe 标"宽松!"；挂上 amset_fermi_fix
+   后这些点都走二分、carrier_guard 通过。
 """
 import sys
 import unittest
@@ -81,15 +84,32 @@ class FermiProbeTests(unittest.TestCase):
         self.assertGreater(diag["states_in_gap_per_cell"], 1e-4)
 
 
+def _sub_env():
+    """子进程环境：本目录 + tools 在 PYTHONPATH 上；没装 sumo 时给一个最小桩（amset 顶层会 import 它）。"""
+    import os
+    import tempfile
+    import importlib.util
+    e = dict(os.environ)
+    paths = [str(HERE), str(HERE.parent / "tools")]
+    if importlib.util.find_spec("sumo") is None:
+        d = Path(tempfile.mkdtemp()) / "sumo"
+        d.mkdir()
+        (d / "__init__.py").write_text("")
+        (d / "symmetry.py").write_text("class Kpath: pass\nclass PymatgenKpath(Kpath): pass\n")
+        paths.append(str(d.parent))
+    e["PYTHONPATH"] = os.pathsep.join(paths + [e.get("PYTHONPATH", "")])
+    e.pop("AZ_FERMI_FIX", None)
+    e["AZ_IR_FIX"] = "0"
+    return e
+
+
 class PluginNanGuardTests(unittest.TestCase):
     """加载 amset2d_plugin 后，get_fermi 得到 NaN 会抛 ValueError（AMSET 原式静默返回 NaN）。"""
 
     def test_nan_raises_after_plugin(self):
         import json
-        import os
         import subprocess
         import tempfile
-        import importlib.util
         code = '''
 import json, numpy as np
 for _a, _b in (("Inf", "inf"), ("trapz", "trapezoid"), ("string_", "bytes_")):
@@ -108,21 +128,85 @@ except ValueError as e:
     raised = "NaN" in str(e)
 print(json.dumps({"ok_finite": bool(np.isfinite(ok)), "raised": raised}))
 '''
-        e = dict(os.environ)
-        paths = [str(HERE), str(HERE.parent / "tools")]
-        if importlib.util.find_spec("sumo") is None:
-            d = Path(tempfile.mkdtemp()) / "sumo"
-            d.mkdir()
-            (d / "__init__.py").write_text("")
-            (d / "symmetry.py").write_text("class Kpath: pass\nclass PymatgenKpath(Kpath): pass\n")
-            paths.append(str(d.parent))
-        e["PYTHONPATH"] = os.pathsep.join(paths + [e.get("PYTHONPATH", "")])
+        e = _sub_env()
         e["AMSET2D_RECORD"] = str(HERE / "example_2d_correction.json")
-        e["AZ_IR_FIX"] = "0"
         r = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, env=e,
                            cwd=tempfile.mkdtemp(), timeout=600)
         self.assertEqual(r.returncode, 0, r.stderr[-3000:])
         self.assertEqual(json.loads(r.stdout.strip().splitlines()[-1]), {"ok_finite": True, "raised": True})
+
+
+# V133：3D 运行目录（band_structure_data.json + settings.yaml，没有 2d_correction.json）。纤锌矿型四带模型、
+# 带隙 2.2 eV，掺杂/温度含 S8 出厂网格的最低点 −1e17 cm⁻³ @ 100 K。
+PROBE_3D = '''
+import json, sys, warnings
+import numpy as np
+warnings.filterwarnings("ignore")
+for _a, _b in (("Inf", "inf"), ("trapz", "trapezoid"), ("string_", "bytes_")):
+    if not hasattr(np, _a):
+        setattr(np, _a, getattr(np, _b))
+import spglib, yaml
+from monty.serialization import dumpfn
+from pymatgen.core import Lattice, Structure
+from pymatgen.electronic_structure.bandstructure import BandStructure
+from pymatgen.electronic_structure.core import Spin
+
+st = Structure(Lattice.hexagonal(3.19, 5.19), ["Ga", "Ga", "N", "N"],
+               [[1/3, 2/3, 0], [2/3, 1/3, .5], [1/3, 2/3, .377], [2/3, 1/3, .877]])
+m = [12, 12, 8]
+mp, grid = spglib.get_ir_reciprocal_mesh(m, (st.lattice.matrix, st.frac_coords, [s.Z for s in st.species]))
+k = grid[np.unique(mp)] / np.array(m, float)
+kc = k @ st.lattice.reciprocal_lattice.matrix
+L = st.lattice.matrix
+s = sum(np.cos(kc @ (np.array(r, float) @ L)) for r in ((1, 0, 0), (0, 1, 0), (1, 1, 0))) + 0.7 * np.cos(kc @ L[2])
+E = np.vstack([-0.3 * (3.7 - s) - 2, -0.3 * (3.7 - s), 2.2 + 0.35 * (3.7 - s), 4.7 + 0.35 * (3.7 - s)])
+bs = BandStructure(k, {Spin.up: E}, st.lattice.reciprocal_lattice, 1.1, structure=st)
+d = bs.as_dict()
+d["structure"] = st.as_dict()                  # as_dict 不带 structure（无投影时），AMSET 插值要它
+dumpfn({"nelect": 4, "band_structure": d}, "band_structure_data.json")
+yaml.safe_dump({"doping": [-1e15, -1e16, -1e17, -1e18, 1e16, 1e18], "temperatures": [50, 100, 300],
+                "interpolation_factor": 5, "energy_cutoff": 2.0, "scattering_type": ["ADP"],
+                "deformation_potential": [3.0, 3.0], "elastic_constant": (np.eye(6) * 200).tolist(),
+                "nworkers": 1, "dos_estep": 0.01, "symprec": 0.01}, open("settings.yaml", "w"))
+
+import fermi_probe
+fermi_probe.main(["--dir", ".", "--json", "probe.json"])
+rows = json.load(open("probe.json"))["rows"]
+import postprocess_intrinsic as P, amset_fermi_fix as FF
+guard = "ok"
+try:
+    P.build_amset_data(".", ir_fix=False)       # set_doping_and_temperatures（挂着插件）+ carrier_guard（>1% 退出）
+except SystemExit as e:
+    guard = str(e)
+print(json.dumps({"loose": [[r["doping_cm3"], r["T"], r["amset_rel_err"], r["bisect_rel_err"]] for r in rows
+                            if r["amset_ok"] and r["amset_rel_err"] > 0.01],
+                  "failed": [[r["doping_cm3"], r["T"]] for r in rows if not r["amset_ok"]],
+                  "fallbacks": len(FF.STATE["fallbacks"]), "guard": guard}))
+'''
+
+
+class ThreeDRunDirTests(unittest.TestCase):
+    """V133：fermi_probe 在 3D 运行目录可用；AMSET 原式在 tol=1 静默接受偏差 100% 的解（含出厂网格的
+    −1e17 @ 100 K）；挂上 amset_fermi_fix 后这些点都走二分，carrier_guard 通过。"""
+
+    @unittest.skipUnless(_HAS, "需要 amset + pymatgen")
+    def test_probe_flags_silent_loose_and_fix_solves(self):
+        import json
+        import subprocess
+        import tempfile
+        r = subprocess.run([sys.executable, "-c", PROBE_3D], capture_output=True, text=True, env=_sub_env(),
+                           cwd=tempfile.mkdtemp(), timeout=1200)
+        self.assertEqual(r.returncode, 0, r.stderr[-3000:])
+        self.assertIn("宽松!", r.stdout)
+        out = json.loads(r.stdout.strip().splitlines()[-1])
+        loose = {(d, T) for d, T, _, _ in out["loose"]}
+        self.assertIn((-1e17, 100.0), loose)
+        for d, T, err, berr in out["loose"]:
+            self.assertGreater(err, 0.5)                     # 原式接受的解差了一倍上下（载流子几乎为 0）
+            self.assertLess(berr, 1e-6)                      # 二分解照样准确
+        self.assertEqual(out["failed"], [])                  # 这些点原式不报错 —— 是静默的
+        self.assertEqual(out["fallbacks"], len(out["loose"]))
+        self.assertEqual(out["guard"], "ok")
 
 
 if __name__ == "__main__":
