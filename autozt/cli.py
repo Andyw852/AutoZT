@@ -311,7 +311,8 @@ def _main():
     p.add_argument("--root", dest="reg_root", metavar="目录",
                    help="register：材料建在哪个 project_roots 下（缺省第一个）")
     p.add_argument("--cluster", dest="reg_cluster", metavar="集群",
-                   help="register：顺带切到该集群（setting/<集群>.yaml；本机用 local）")
+                   help="register：顺带切到该集群（setting/<集群>.yaml；本机用 local）；"
+                        "check：探测哪台（缺省 local，all = setting/ 下全部集群）")
     p.add_argument("--errors-only", dest="errors_only", action="store_true",
                    help="json：只保留含 FAIL 步骤的材料与 FAIL 步骤")
     p.add_argument("--limit", dest="limit", type=int, metavar="N",
@@ -345,7 +346,9 @@ def _main():
                 #          doctor   = 配置预检（不连超算）
                 "progress", "doctor",
                 # register = 新材料一次接入（建目录+POSCAR+init+可选集群/数据集）
-                "register"}
+                "register",
+                # check = 运行依赖探测（技能 × 集群：缺哪些 python 包/程序/POTCAR/模型）
+                "check"}
     root, cmd, pos = None, "status", []
     for tok in a.args:  # v3.14：位置参数先收集，之后按"材料名/目录"消歧
         if tok == "help":
@@ -502,6 +505,21 @@ def _main():
         cfg["host"] = a.host or None
     if a.user:
         cfg["user"] = a.user
+    if cmd == "check":    # 运行依赖探测：哪台机器能跑哪个技能、缺什么（只读，不采集）
+        from autozt import envcheck
+        _keys = ([a.tt] if a.tt else
+                 sorted(k for k in (cfg.get("task_types") or {}) if k and not k.startswith("_")))
+        _cl = a.reg_cluster or "local"
+        _cls = envcheck.list_clusters() if _cl == "all" else [_cl]
+        _reps = [envcheck.check(cfg, _keys, c) for c in _cls]
+        if a.json_out:
+            print(json.dumps(_reps[0] if len(_reps) == 1 else {"clusters": _reps},
+                             ensure_ascii=False, indent=2))
+        else:
+            print("\n\n".join(envcheck.render(r) for r in _reps))
+        _bad = any(not r.get("ok") for r in _reps) or (
+            a.strict and any(s["status"] != "ready" for r in _reps for s in r["skills"]))
+        sys.exit(1 if _bad else 0)
     types = get_types(cfg, tt=a.tt,
                       root_override=None if cmd in ("init", "register") else root,
                       quiet=(cmd in ("init", "register")))

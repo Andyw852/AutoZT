@@ -228,7 +228,7 @@ def _hung_scf_rms_trend(last3):
         return False
     return vals[-1] < vals[-2]
 
-def _hung_incar_fix(cfg, workdir, level):
+def _hung_incar_fix(cfg, workdir, level, host="__default__"):
     from autozt import run_remote
     '''远端升级 INCAR 抗 SCF 空转（幂等 + 原子写 + 备份）：
     level=1：补 AMIX=0.1 / BMIX=0.0001（精细混合）
@@ -271,30 +271,30 @@ print(json.dumps(changed))
 '''
     code = code.replace("@WDIR@", json.dumps(workdir)).replace("@LEVEL@", str(level))
     b64 = base64.b64encode(code.encode()).decode()
-    rc, out = run_remote(cfg, "echo %s | base64 -d | python3" % b64)
+    rc, out = run_remote(cfg, "echo %s | base64 -d | python3" % b64, host=host)
     try:
         changed = json.loads(out or "[]")
     except ValueError:
         changed = []
     return rc, changed
 
-def _hung_scancel_wait(cfg, jobid, timeout=90):
+def _hung_scancel_wait(cfg, jobid, timeout=90, host="__default__"):
     from autozt import run_remote
     '''scancel 后轮询 squeue 直到作业消失（避免旧 VASP 进程还在写文件时我们动文件）。
     返回 (ok, msg)。'''
-    rc, _ = run_remote(cfg, "scancel %s" % jobid)
+    rc, _ = run_remote(cfg, "scancel %s" % jobid, host=host)
     if rc != 0:
         return False, "scancel rc=%s" % rc
     import time as _t
     t0 = _t.time()
     while _t.time() - t0 < timeout:
-        _rc, o = run_remote(cfg, "squeue -h -j %s -o '%%T' 2>/dev/null" % jobid)
+        _rc, o = run_remote(cfg, "squeue -h -j %s -o '%%T' 2>/dev/null" % jobid, host=host)
         if _rc != 0 or not (o or "").strip():
             return True, ""
         _t.sleep(5)
     return False, "scancel 后 %ds 作业仍未退出" % timeout
 
-def _hung_resume(cfg, wdir):
+def _hung_resume(cfg, wdir, host="__default__"):
     from autozt import run_remote
     from autozt.workflow import _sbatch_guarded
     '''从 CONTCAR 续跑（数据安全版）：
@@ -312,10 +312,10 @@ def _hung_resume(cfg, wdir):
         "else "
         "  echo 'WARN: CONTCAR 缺失/不完整，保留原 POSCAR 直接重跑'; "
         "fi" % shlex.quote(wdir))
-    rc, out = run_remote(cfg, prep)
+    rc, out = run_remote(cfg, prep, host=host)
     if rc != 0:
         return rc, out
-    ok, out2, _jids = _sbatch_guarded(cfg, wdir, host="__default__",
+    ok, out2, _jids = _sbatch_guarded(cfg, wdir, host=host,
                                       jobname=None, submit="submit.sh")
     msg = "\n".join(ln for ln in (out2 or "").splitlines()
                     if not ln.startswith("__TF_RESULT__"))
@@ -441,11 +441,11 @@ def auto_recover_hung(cfg, data):
                 print("[%s] hang[干跑]：job %s（%s）NODE_FAIL，将重跑。"
                       % (_now, rec.get("jobid"), wd))
                 continue
-            ok, msg = _hung_scancel_wait(cfg, rec.get("jobid"))
+            ok, msg = _hung_scancel_wait(cfg, rec.get("jobid"), host=rec.get("_host") or "__default__")
             if not ok and "scancel rc" not in msg:
                 print("[%s] hang：job %s 取消失败：%s" % (_now, rec.get("jobid"), msg))
                 continue
-            _rc3, o3 = _hung_resume(cfg, wd)
+            _rc3, o3 = _hung_resume(cfg, wd, host=rec.get("_host") or "__default__")
             st["recovered"] = n + 1
             st["grace"] = grace
             print("[%s] hang 自动恢复：job %s（%s）NODE_FAIL（第 %d/%d 次）→ %s"
@@ -520,19 +520,19 @@ def auto_recover_hung(cfg, data):
                   "请人工确认后再处理。"
                   % (_now, rec.get("jobid"), wd, age, cause, rec.get("_host")))
             continue
-        ok, msg = _hung_scancel_wait(cfg, rec.get("jobid"))
+        ok, msg = _hung_scancel_wait(cfg, rec.get("jobid"), host=rec.get("_host") or "__default__")
         if not ok:
             print("[%s] hang：job %s 取消/等待退出失败：%s" % (_now, rec.get("jobid"), msg))
             continue
         fix_txt = ""
         if incar_fix is not None and incar_fix > 0:
-            rc2, changed = _hung_incar_fix(cfg, wd, incar_fix)
+            rc2, changed = _hung_incar_fix(cfg, wd, incar_fix, host=rec.get("_host") or "__default__")
             if rc2 == 0 and changed:
                 fix_txt = " INCAR升级(%s)" % ",".join(changed)
             elif rc2 != 0:
                 print("[%s] hang：job %s INCAR 升级失败（rc=%s），继续原样重跑。"
                       % (_now, rec.get("jobid"), rc2))
-        _rc3, o3 = _hung_resume(cfg, wd)
+        _rc3, o3 = _hung_resume(cfg, wd, host=rec.get("_host") or "__default__")
         st["recovered"] = n + 1
         st["grace"] = grace
         nid = (o3 or "").strip() or "已重交"
@@ -1272,25 +1272,49 @@ def _yaml_type_block_remove(path, tkey):
 #   L6278  cmd_adopt
 #   L6391  cmd_migrate_subdir
 
+def _yaml_scalar(v):
+    if v is None or v == "":
+        return '""'
+    if isinstance(v, bool):
+        return "true" if v else "false"
+    sv = str(v)
+    # 含 YAML 敏感字符或首尾空格时加引号（路径里的 ~ / $ 不需要）
+    if sv != sv.strip() or any(c in sv for c in ":#{}[],&*!|>'\"%@`") and not sv.startswith("/"):
+        return '"%s"' % sv.replace("\\", "\\\\").replace('"', '\\"')
+    return sv
+
+
+def _yaml_lines(d, indent=0):
+    pad = "  " * indent
+    out = []
+    for k, v in d.items():
+        if isinstance(v, dict):
+            if not v:
+                out.append("%s%s: {}\n" % (pad, k))
+            else:
+                out.append("%s%s:\n" % (pad, k))
+                out += _yaml_lines(v, indent + 1)
+        elif isinstance(v, list):
+            out.append("%s%s: [%s]\n" % (pad, k, ", ".join(_yaml_scalar(x) for x in v)))
+        else:
+            out.append("%s%s: %s\n" % (pad, k, _yaml_scalar(v)))
+    return out
+
+
 def _write_hpc_yaml(path, d, note):
-    """hpc.yaml 写出（tf 不依赖 PyYAML，手写简单结构；dict 值只到一层）。"""
+    """hpc.yaml 写出（tf 不依赖 PyYAML，手写简单结构）。
+
+    嵌套 dict 逐层缩进写（以前只写一层，vasp: {standard: {...}} 会被写成 Python repr）；
+    空 dict 写 {}、空串写 ""——以前 template_map: {} 被写成裸 "template_map:"，读回是
+    None，"清空模板映射"的意图丢失。"""
     keys = [k for k in ("name", "ssh_host", "template_map") if k in d]
     keys += [k for k in d if k not in keys]
-    lines = ["# %s\n" % note]
-    for k in keys:
-        v = d[k]
-        if isinstance(v, dict):
-            lines.append("%s:\n" % k)
-            lines += ["  %s: %s\n" % (k2, v2) for k2, v2 in v.items()]
-        elif isinstance(v, list):
-            lines.append("%s: [%s]\n" % (k, ", ".join(str(x) for x in v)))
-        else:
-            lines.append("%s: %s\n" % (k, v))
+    lines = ["# %s\n" % note] + _yaml_lines({k: d[k] for k in keys})
     with open(path, "w", encoding="utf-8") as f:
         f.writelines(lines)
 
 def cmd_hpc(cfg, types, projs, cluster, tt, yes):
-    from autozt import _load_yaml_file, _name_matches, discover_local, find_asset, pkg_setting_path, resolve_material_local
+    from autozt import _load_yaml_file, _name_matches, discover_local, find_asset, pkg_setting_path, resolve_material_local, _PKG_ROOT
     """v1.7：把 -p 指定的项目（一个或多个）分配到指定超算；未指定的项目一律不动。
       tf -p X,Y hpc <集群名>             材料级：改写 project_setting/hpc.yaml
                                          （该材料全部技能生效）
@@ -1377,6 +1401,22 @@ def cmd_hpc(cfg, types, projs, cluster, tt, yes):
                    if not find_asset(cfg, t, m, lg)]
         note = ("；★ 模板缺失：%s——把文件放进 skill/%s/ 或 %s"
                 % (", ".join(missing), t["key"], tdir)) if missing else ""
+        if "ssh_host" in master and not master.get("ssh_host"):
+            # 切到本机：项目里 init 时拷进来的【集群版】提交模板优先级高于
+            # setting/local/templates，会让本机作业带着集群的分区/module/路径跑。
+            # 只提示、不删（可能是用户改过的）。
+            _ps_dir = (m.get("ps") or {}).get("dir") or ""
+            _stale = sorted(set(glob.glob(os.path.join(_ps_dir, "templates", "submit_*.tpl"))
+                                + glob.glob(os.path.join(_ps_dir, "templates", "*",
+                                                         "submit_*.tpl"))))
+            _stale = [x for x in _stale if os.path.isfile(os.path.join(
+                _PKG_ROOT, "setting", str(master.get("name") or cluster), "templates",
+                os.path.basename(x)))]
+            if _stale:
+                print("  提示：项目里有 %d 个集群版提交模板会盖过本机模板 setting/%s/templates/：\n    %s\n"
+                      "    若是 init 自动拷来的（没改过），移走它们即可用本机通用模板。"
+                      % (len(_stale), master.get("name") or cluster,
+                         "\n    ".join(os.path.relpath(x, m["lpath"]) for x in _stale)))
         print("%s[%s]: hpc → %s（%s）%s"
               % (m["name"], t["key"], master.get("name") or cluster,
                  master.get("ssh_host") or ("本机" if "ssh_host" in master else "未写"), note))
@@ -2348,6 +2388,26 @@ def cmd_register(cfg, types, proj, tt, dataset=None, poscar=None, root=None,
     else:
         _did("POSCAR 已存在，保留")
 
+    # ---- 先落目标集群的 hpc.yaml，再 init ----
+    # init 会按 hpc.yaml 的 template_map 把【该集群的】提交模板拷进 project_setting/
+    # templates/（项目级优先级最高）。不先写的话 init 用技能默认集群（jzzn），拷进来的
+    # jzzn 模板会盖过 setting/local/templates，本机跑起来还是 jzzn 的分区/module/路径。
+    def _write_cluster_hpc(ps_dir):
+        target = os.path.join(ps_dir, "hpc.yaml")
+        master = _load_yaml_file(pkg_setting_path(str(cluster) + ".yaml")) or {}
+        new = _load_yaml_file(target) or {}
+        new.update(master)
+        os.makedirs(ps_dir, exist_ok=True)
+        _write_hpc_yaml(target, new, "超算配置（autozt register --cluster %s 于 %s 生成/更新）"
+                        % (cluster, time.strftime("%Y-%m-%d %H:%M:%S")))
+        return target, master
+    _tdef = next((x for x in (types or []) if x.get("key") == tt), None) or \
+        ((cfg.get("task_types") or {}).get(tt) or {})
+    _sub = (str(_tdef.get("dir_name") or tt) if _tdef.get("skill_subdir") else None)
+    if cluster:
+        _write_cluster_hpc(os.path.join(matdir, _sub, "project_setting") if _sub
+                           else os.path.join(matdir, "project_setting"))
+
     # ---- init 该技能（已 init 的文件不覆盖，幂等）----
     import contextlib as _ctx
     import io as _io
@@ -2380,12 +2440,7 @@ def cmd_register(cfg, types, proj, tt, dataset=None, poscar=None, root=None,
     # 新建的 tf_*.yaml 还没并进本进程的 cfg，cmd_hpc 找不到材料——这里直接按
     # cmd_hpc 的写法改本技能 project_setting/hpc.yaml（主配置字段全量覆盖）。
     if cluster:
-        target = os.path.join(ps, "hpc.yaml")
-        master = _load_yaml_file(pkg_setting_path(str(cluster) + ".yaml")) or {}
-        new = _load_yaml_file(target) or {}
-        new.update(master)
-        _write_hpc_yaml(target, new, "超算配置（autozt register --cluster %s 于 %s 生成/更新）"
-                        % (cluster, time.strftime("%Y-%m-%d %H:%M:%S")))
+        target, master = _write_cluster_hpc(ps)
         _did("hpc → %s（%s）" % (master.get("name") or cluster,
                                 os.path.relpath(target, matdir)))
 

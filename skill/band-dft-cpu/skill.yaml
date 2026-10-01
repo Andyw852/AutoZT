@@ -121,3 +121,10 @@ optional_steps:
          gen: "gen_step3.2_vacuum_align.py --scf-dir step4_HSE_band --band-dft-cpu-dir step4_band_plot --out-dir step4_vacuum",
          check: plot, run: gen, gen_need: [],
          done_marker: vacuum_align_summary.json, fetch_all: true}
+
+# 运行依赖（autozt check 按它逐项探测；python=模块名、exe=可执行文件；
+#   VASP 技能还要 POTCAR 库：用 vaspkit 生成的查 ~/.vaspkit 的 PBE_PATH，否则查集群 yaml 的 potcar_dir）
+requires:
+  python: [numpy, pymatgen, seekpath, matplotlib]
+  exe: [vasp_std, vaspkit]
+  optional_exe: [vasp_ncl]   # 自旋轨道耦合步骤才用

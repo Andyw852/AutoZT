@@ -91,6 +91,7 @@ POTCAR.*
 setting/*.yaml
 !setting/template-cluster.yaml
 !setting/local.yaml
+!setting/local/
 !setting/example/
 # ---- 开发期临时物与配图 ----
 output/
@@ -106,3 +107,6 @@ C\:*
 .workbuddy/
 scripts/probe_out/
 perturbo-examples-light/
+# ---- autozt agent setup --write 生成的项目级 MCP 配置（含本机绝对路径）----
+.mcp.json
+.cursor/mcp.json

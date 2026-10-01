@@ -370,7 +370,8 @@ optional_steps:
          needs: ["step5_fc"]}
 
 requires:
-  python: [pymatgen, numpy, matplotlib, amset, BoltzTraP2, phonopy, phono3py, spglib]
+  python: [pymatgen, numpy, matplotlib, phonopy, phono3py, spglib]
+  amset_python: [amset, BoltzTraP2]   # 在集群 yaml 的 amset_env 环境里检查
   conda: amset051
   exe: [vasp_std, vaspkit, phono3py]
 

@@ -68,3 +68,8 @@ io_schema:
   params:
     - {name: CHANNEL_MATERIAL, values: [MoS2, WS2, MoSe2, WSe2, graphene, hBN], default: MoS2, where: step.conf, desc: "沟道材料（材料库键）"}
     - {name: OXIDE_MATERIAL, values: [SiO2, Al2O3, HfO2, hBN], default: SiO2, where: step.conf, desc: "栅介质/氧化层材料"}
+
+# 运行依赖（autozt check 按它逐项探测；python=模块名、exe=可执行文件；
+#   VASP 技能还要 POTCAR 库：用 vaspkit 生成的查 ~/.vaspkit 的 PBE_PATH，否则查集群 yaml 的 potcar_dir）
+requires:
+  python: [numpy]

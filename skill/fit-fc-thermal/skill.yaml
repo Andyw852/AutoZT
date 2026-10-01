@@ -145,9 +145,11 @@ requires:
   # phono3py is only needed for FIT_ENGINE=phono3py and for the hdf5 writers;
   # hiphive additionally needs hiphive + scikit-learn (+ numba for the residual
   # check), pheasy needs the pheasy package (and celer for LASSO/ALASSO/RFE).
-  python: [numpy, scipy, phonopy, spglib, ase, h5py, phono3py, symfc, hiphive, pheasy]
+  python: [numpy, scipy, phonopy, spglib, ase, h5py, phono3py]
+  optional_python: [symfc, hiphive, pheasy]   # 按 FIT_ENGINE/FIT_METHODS 选用，缺了只影响对应引擎
   conda: atomate2_p_a
-  exe: [phono3py, pheasy]
+  exe: [phono3py]
+  optional_exe: [pheasy]
 
 io_schema:
   inputs:

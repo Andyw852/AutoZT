@@ -77,8 +77,8 @@ addition to `tt`/`material`/`status`; scoping happens before collection. Materia
 a stable `id` = `<project>/<full name>` that `material` arguments accept, so identically
 named materials in different projects never collide.
 
-Profiles: `workflow` (default) = 17 tools incl. `get_progress`, `doctor`,
-`register_material`, `conf_get` and `conf_set`;
+Profiles: `workflow` (default) = 18 tools incl. `get_progress`, `doctor`,
+`register_material`, `conf_get`, `conf_set` and `check_env`;
 `monitor` = `get_progress`, `get_snapshot`, `cycle`; `compact` is unchanged for existing
 clients; `full` exposes everything.
 

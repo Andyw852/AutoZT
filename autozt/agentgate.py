@@ -67,7 +67,7 @@ AGENT_ENV_MARKERS = ("CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT", "GEMINI_CLI",
 AGENT_READ_CMDS = {
     "list", "summary", "status", "json", "dir", "skills", "skill", "schema",
     "history", "prove", "probe", "config", "help", "diagnose", "session",
-    "progress", "doctor",
+    "progress", "doctor", "check",
 }
 AGENT_MUTATE_CMDS = {
     "start", "retry", "fetch", "advance", "init", "adopt", "level", "hpc", "auto",

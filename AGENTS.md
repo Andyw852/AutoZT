@@ -98,6 +98,7 @@ autozt [-p MAT] fetch                  # 手动强制拉回结果（status 时�
 autozt -p MAT init                     # 在项目目录生成 project_setting/（运维操作，少用）
 autozt -p MAT -j STEP init             # 只生成该步骤输入不提交（用户要先检查输入时用）
 autozt skills                          # 只读列出全部技能（版本/步骤数/警告）
+autozt [-tt TT] check [--cluster C|all] [--json]   # 只读：技能在某机器上能否运行、缺什么、怎么补
 autozt [-tt TT] -p MAT -j STEP conf    # 查看该步骤 step.conf 合并后的最终值（只读）；--set 会写项目配置（先请示）
 autozt -p A,B hpc <集群>               # 换项目跑哪台超算（jzzn/a800/3090；改配置，先请示）
 autozt auto [on|off]                   # 一键开关全局 auto_advance（改全局配置，先请示）
@@ -144,6 +145,8 @@ autozt auto [on|off]                   # 一键开关全局 auto_advance（改�
 - `autozt` 不在 PATH 时用 `autozt agent setup` 返回的 `cli.absolute`（或 `pip install -e ~/software/AutoZT`）；不要因为 command not found 就绕开 autozt 手拼 ssh/sbatch。
 - 错误判定：非 0 退出即失败；代理环境下错误也镜像到 stdout（`[autozt error] …`，`--json` 时 `{"ok": false, …}`）。`-p` 材料名写错会直接报"找不到材料"（以前静默空表、rc=0）。
 - 本机后端（`--cluster local` / `hpc local`）与 tf.yaml 全局 `host:` 无关，一定在本机跑；work_dir 自动跳过本机不可写的集群路径；conda 跟 `setting/local.yaml` 走（两项留空 = 用 PATH 里的 python）。`conf`/`conf --set`/`dir` 不采集远端，秒级。
+- 能不能在某台机器跑某技能：`autozt [-tt T] check [--cluster local|<集群>|all] [--json]`（MCP `check_env`，只读）——列出缺的 python 包/程序/POTCAR/MACE 模型/GPU 和补法；本机 `start` 缺硬依赖会直接拒绝并给同样的提示（`-f` 越过，属破坏性开关先请示）。本机通用提交模板在 `setting/local/templates/`。
+- MCP 一键接入：`autozt agent setup --write`（写软件目录下 `.mcp.json` / `.cursor/mcp.json`，已 gitignore）。
 - 新材料/只有数据集：`register`（MCP `register_material`）；改参数：`conf --set`（MCP `conf_set`）。两者都写项目配置，按铁律 3 先请示。`gen_*.py` 虽可脱离 autozt 在空目录运行（仅供检查输入），正式计算禁止手跑 gen + 手动 sbatch（铁律 1）。
 
 ## 四、状态判读

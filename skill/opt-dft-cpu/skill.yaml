@@ -61,3 +61,9 @@ flow:
     - {name: 能量, steps: [S2_static, S3_energy], produces: [energy_summary.json]}
   next_skills: [{skill: band-dft-cpu, via: CONTCAR, desc: "能带计算"}]
 corrections: [node_fail, nsw_continue, zbrent, dir_missing]
+
+# 运行依赖（autozt check 按它逐项探测；python=模块名、exe=可执行文件；
+#   VASP 技能还要 POTCAR 库：用 vaspkit 生成的查 ~/.vaspkit 的 PBE_PATH，否则查集群 yaml 的 potcar_dir）
+requires:
+  python: [numpy]
+  exe: [vasp_std, vaspkit]

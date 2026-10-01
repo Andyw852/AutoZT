@@ -108,3 +108,10 @@ optional_steps:
          hpc: "3090", run: gen, gen: plot_kappa.py, check: plot,
          gen_need: [stepconf.py, step.conf, gpumd_common.py],
          done_marker: compare_summary.json, fetch_all: true}
+
+# 运行依赖（autozt check 按它逐项探测；python=模块名、exe=可执行文件；
+#   VASP 技能还要 POTCAR 库：用 vaspkit 生成的查 ~/.vaspkit 的 PBE_PATH，否则查集群 yaml 的 potcar_dir）
+requires:
+  python: [numpy, ase, h5py]
+  exe: [gpumd, nep]
+  gpu: true

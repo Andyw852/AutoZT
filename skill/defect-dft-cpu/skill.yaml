@@ -63,3 +63,11 @@ flow:
   next_skills: [{skill: ke-dft-cpu, via: CONTCAR, desc: "缺陷结构可继续电子输运"}]
   requires: {POSCAR: "材料目录根必须有 POSCAR"}
 corrections: [node_fail, nsw_continue, zbrent, dir_missing]
+
+# 运行依赖（autozt check 按它逐项探测；python=模块名、exe=可执行文件；
+#   VASP 技能还要 POTCAR 库：用 vaspkit 生成的查 ~/.vaspkit 的 PBE_PATH，否则查集群 yaml 的 potcar_dir）
+requires:
+  python: [numpy, pymatgen, spglib]
+  exe: [vasp_std]
+  optional_exe: [vasp_ncl]
+  potcar: potcar_dir   # POTCAR_DIR（集群 yaml 的 potcar_dir 注入）

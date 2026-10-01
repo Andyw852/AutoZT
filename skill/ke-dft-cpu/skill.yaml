@@ -344,6 +344,7 @@ flow:
   stages: [{name: inputs, steps: [S1_opt, S2.1_scf, S2.2_pbe, S2.3_hse], produces: [band_summary.json]}, {name: transport, steps: [S3_uniform, S5_dielect, S6_elastic, S7_deform, S8_kappa], produces: [transport.json]}]
 corrections: [node_fail, dir_missing]
 requires:
-  python: [pymatgen, numpy, matplotlib, amset, BoltzTraP2]
+  python: [pymatgen, numpy, matplotlib]
+  amset_python: [amset, BoltzTraP2]   # 在集群 yaml 的 amset_env 环境里检查
   conda: amset051
   exe: [vasp_std, vaspkit]

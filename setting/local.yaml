@@ -18,6 +18,20 @@ remote_path_prefix: ""       # 可选：本机跑 gen/驱动脚本用的 python 
 # 两项都留空 ""  = 不激活任何环境，直接用 PATH 里现成的 python（pip/venv 用户最简单）。
 conda_sh: ~/miniconda3/etc/profile.d/conda.sh
 conda_env: atomate2_p_a
-amset_env: ""
-potcar_dir: ""
-mlff_model_dir: ""
+amset_env: ""                # ke/zt 的 AMSET 步：venv 目录或 conda 环境名（留空则这些步 gen 时报错提示）
+# ---- 提交模板 ----
+# 本机通用模板在 setting/local/templates/（VASP std/gam/ncl、amset、MACE、fc、ShengBTE、hamgnn）。
+# 清空集群专用映射：从 jzzn 等切过来时，旧 hpc.yaml 里的 template_map 会把模板
+# 指回集群版本（分区/module/路径都是那台机器的）。
+template_map: {}
+# ---- VASP（VASP 类技能）：可执行文件名或绝对路径；在 PATH 里写名字即可 ----
+#   relax_2d：二维变胞优化需要带约束补丁的编译版（ioptcell_tag / lattice_constraints），
+#   没有就不写——2D 弛豫步会明确报错，其余步骤照常。
+vasp:
+  standard:
+    cell_constraint: none
+    std: vasp_std
+    gam: vasp_gam
+    ncl: vasp_ncl
+potcar_dir: ""               # VASP 赝势库根目录（含 PAW_PBE 等）；VASP 技能必填
+mlff_model_dir: ""           # MACE 模型目录（MLFF 技能必填）

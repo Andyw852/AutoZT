@@ -1463,10 +1463,60 @@ def do_run_gen_step(cfg, t, m, s, tag):
 SUBMIT_COUNTER = [0]
 
 
+def _local_env_ready(cfg, m, s, tag, t=None):
+    """本机执行前先核对技能的硬依赖（autozt check 同一套探测，进程内缓存）。
+
+    集群上依赖由站点环境保证、且探测要 ssh，所以只管本机：缺 VASP/POTCAR/MACE 模型/
+    python 包时直接说缺什么、怎么补，而不是排进 fakeslurm 跑到一半才在日志里报错。
+    探测失败或技能没声明依赖时放行；-f 或 AUTOZT_SKIP_ENV_CHECK=1 跳过。"""
+    from autozt.collect import is_local_host
+    if (os.environ.get("AUTOZT_SKIP_ENV_CHECK") or "").strip() in ("1", "true", "yes"):
+        return True
+    host = s.get("_host") or m.get("host_eff") or cfg.get("host") or ""
+    if not is_local_host(host) or not m.get("hpc_name"):
+        return True
+    try:
+        from autozt import envcheck
+        sk = envcheck.missing_for(cfg, m.get("tt"), m.get("hpc_name"))
+    except Exception:                       # noqa: BLE001 —— 探测本身出错绝不挡提交
+        return True
+    if not sk or sk.get("status") != "missing":
+        return True
+    missing, hints = list(sk["missing"]), list(sk.get("hints") or [])
+    # POTCAR 库 / MACE 模型目录也可以在项目 step.conf 里给（POTCAR_DIR / MACE_MODEL_DIR），
+    # 作业实际用的是合并后的 step.conf——那里给了且目录存在就不算缺。
+    _over = {"potcar_dir": "POTCAR_DIR", "mlff_model_dir": "MACE_MODEL_DIR"}
+    if t is not None and any(k in missing for k in _over):
+        try:
+            from autozt import build_step_conf
+            text, _leg = build_step_conf(cfg, t, m, s["name"])
+            vals = {}
+            for ln in (text or "").splitlines():
+                if "=" in ln and not ln.lstrip().startswith(("#", "[")):
+                    k, v = ln.split("=", 1)
+                    vals[k.strip().upper()] = v.split("#", 1)[0].strip()
+            for k, key in _over.items():
+                p = vals.get(key)
+                if k in missing and p and os.path.isdir(os.path.expanduser(p)):
+                    missing.remove(k)
+                    hints = [h for h in hints if k not in h]
+        except Exception:                   # noqa: BLE001
+            pass
+    if not missing:
+        return True
+    print("%s: 本机缺少运行依赖，未提交：%s" % (tag, ", ".join(missing)))
+    for h in hints:
+        print("    → %s" % h)
+    print("    （详情：autozt -tt %s check；确认环境其实没问题可加 -f 跳过本检查）" % m.get("tt"))
+    return False
+
+
 def do_submit(cfg, t, m, s, force, gen_first, contcar_cp, tag, submit=True):
     from autozt import log_action, run_remote, step_cfg
     """返回 True=成功 / False=失败或被拒绝（供退出码统计）。
     submit=False：只生成输入（gen），不 sbatch、不触发本地生成步，交由 autozt start。"""
+    if submit and not force and not _local_env_ready(cfg, m, s, tag, t):
+        return False
     if step_cfg(t, s["name"], m).get("run") == "gen":  # v3.21：画图等轻量步骤
         if not submit:
             print("%s: 本地生成步（画图/读取），已就绪，待 tf … start 触发。" % tag)
@@ -1502,7 +1552,8 @@ def do_submit(cfg, t, m, s, force, gen_first, contcar_cp, tag, submit=True):
         print(_i18n.t("%s: gen 完成。%s", "%s: generated. %s")
               % (tag, out.strip().splitlines()[-1] if out.strip() else ""))
     if contcar_cp:
-        run_remote(cfg, _contcar_to_poscar_line(s["dir"]))
+        run_remote(cfg, _contcar_to_poscar_line(s["dir"]),
+                   host=s.get("_host") or m.get("host_eff") or "__default__")
     if not submit:   # v3.22：只生成不提交，交由 start
         print(_i18n.t("%s: 已生成输入，未提交。检查后运行  pa -p %s -j %s start  提交。",
                   "%s: inputs generated, not submitted. Review them, then run "

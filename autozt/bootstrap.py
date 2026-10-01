@@ -1878,8 +1878,13 @@ def resolve_material_local(t, root, m):
     m["fetch_files"] = (st.get("fetch_files") or t.get("fetch_files") or [
         "INCAR", "POSCAR", "POTCAR", "KPOINTS", "KPOINTS_OPT", "kpath.json",
         "submit.sh", "OUTCAR", "CONTCAR", "EIGENVAL", "vasprun.xml", "queue.out"])
-    tmap = dict(dhpc.get("template_map") or {})   # 映射级合并：包内默认补缺，
-    tmap.update(hpc.get("template_map") or {})    # 项目 hpc.yaml 覆盖同名项
+    # 映射级合并：包内默认补缺，项目 hpc.yaml 覆盖同名项。但项目 hpc.yaml 指向的是
+    # 【另一台集群】时（hpc local / register --cluster local），默认集群（如 jzzn）的
+    # 模板映射不能继承——那会把模板指回 jzzn 版（分区/module/路径都是那台机器的）。
+    _other = (hpc.get("name") and dhpc.get("name")
+              and str(hpc.get("name")) != str(dhpc.get("name")))
+    tmap = {} if _other else dict(dhpc.get("template_map") or {})
+    tmap.update(hpc.get("template_map") or {})
     m["template_map"] = tmap
     m["rpath"] = (os.path.join(m["work_dir_eff"], m["name"], m["_subdir"] or "")
                   if m["work_dir_eff"] else None)

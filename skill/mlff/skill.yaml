@@ -129,5 +129,5 @@ flow:
 corrections: [node_fail, dir_missing]
 requires:
   python: [mace-torch, torch, ase, phonopy, numpy, matplotlib]
-  exe: [vaspkit]
+  exe: [vaspkit, vasp_std]   # step5_label 用 VASP 标注
   conda: mace          # [FIX-F4] 与 CONDA_ENV 对应；venv 路径写在 step.conf 的 CONDA_ENV

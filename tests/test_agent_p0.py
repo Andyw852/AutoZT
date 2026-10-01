@@ -246,3 +246,141 @@ def test_preflight_conda_regex_does_not_cross_lines():
         "{{CONDA_ENV}}", "env1")
     assert preflight.parse_conda_activations(full) == [
         ("sh", "/x/etc/profile.d/conda.sh"), ("env", "env1")]
+
+
+# ---------------------------------------------------------------- envcheck / local templates
+def _ec():
+    import autozt.envcheck  # noqa: F401  (不在包命名空间注入表里，按子模块导入)
+    return sys.modules["autozt.envcheck"]
+
+
+def test_envcheck_reports_missing_and_hints():
+    ec = _ec()
+    cfg = {"task_types": {
+        "fake-py": {"_skill_requires": {"python": ["numpy", "no-such-pkg-zz"],
+                                        "optional_python": ["also-missing-zz"],
+                                        "exe": ["sh", "no_such_exe_zz"]}},
+        "fake-vasp": {"_skill_requires": {"exe": ["vasp_std"], "potcar": "potcar_dir"}},
+        "fake-gpu": {"_skill_requires": {"python": ["numpy"], "gpu": True}},
+        "fake-none": {}}}
+    rep = ec.check(cfg, ["fake-py", "fake-vasp", "fake-gpu", "fake-none"], "local")
+    assert rep["ok"], rep
+    by = {s["skill"]: s for s in rep["skills"]}
+    assert by["fake-py"]["status"] == "missing"
+    assert set(by["fake-py"]["missing"]) == {"py:no-such-pkg-zz", "exe:no_such_exe_zz"}
+    assert by["fake-py"]["optional_missing"] == ["py:also-missing-zz"]
+    assert any("pip install no-such-pkg-zz" in h for h in by["fake-py"]["hints"])
+    assert "potcar_dir" in by["fake-vasp"]["missing"]          # local.yaml potcar_dir is ""
+    import shutil as _sh
+    assert ("gpu" in by["fake-gpu"]["missing"]) == (not _sh.which("nvidia-smi"))
+    assert by["fake-none"]["status"] == "unknown"
+    assert "合计" in ec.render(rep)
+
+
+def test_check_cli_json_and_strict(remote_default):
+    r = _cli(remote_default, "-tt", "te-screen", "check", "--json", "--strict")
+    doc = json.loads(r.stdout)
+    assert doc["cluster"] == "local" and doc["skills"][0]["skill"] == "te-screen"
+    assert r.returncode == (0 if doc["skills"][0]["status"] == "ready" else 1)
+    bad = _cli(remote_default, "check", "--cluster", "no-such-cluster")
+    assert bad.returncode == 1
+
+
+def test_local_start_gate(monkeypatch, capsys):
+    import autozt  # noqa: F401
+    wf = sys.modules["autozt.workflow"]
+    ec = _ec()
+    monkeypatch.delenv("AUTOZT_SKIP_ENV_CHECK", raising=False)
+    monkeypatch.setattr(ec, "missing_for", lambda cfg, k, c: {
+        "status": "missing", "missing": ["exe:vasp_std"], "hints": ["装 VASP"]})
+    m = {"host_eff": "@local", "hpc_name": "local", "tt": "band-dft-cpu"}
+    assert wf._local_env_ready({}, m, {}, "t") is False
+    assert "exe:vasp_std" in capsys.readouterr().out
+    monkeypatch.setenv("AUTOZT_SKIP_ENV_CHECK", "1")
+    assert wf._local_env_ready({}, m, {}, "t") is True
+    monkeypatch.delenv("AUTOZT_SKIP_ENV_CHECK")
+    assert wf._local_env_ready({}, dict(m, host_eff="jzzn"), {}, "t") is True  # clusters: no gate
+
+
+def test_hpc_yaml_writer_roundtrip(tmp_path):
+    import autozt  # noqa: F401
+    ops = sys.modules["autozt.ops"]
+    from autozt import _load_yaml_file
+    d = _load_yaml_file(os.path.join(ROOT, "setting", "local.yaml"))
+    d["x"] = "a: b"
+    p = str(tmp_path / "hpc.yaml")
+    ops._write_hpc_yaml(p, d, "t")
+    assert _load_yaml_file(p) == d
+    assert d["template_map"] == {} and d["ssh_host"] == ""
+
+
+def test_register_local_copies_no_cluster_templates(remote_default):
+    sb = remote_default
+    poscar = sb["ds"] / "POSCAR"
+    r = _cli(sb, "-tt", "band-dft-cpu", "-p", "SiV", "register", "--poscar", str(poscar),
+             "--cluster", "local", "--json")
+    assert r.returncode == 0, r.stdout + r.stderr
+    ps = sb["proj"] / "SiV" / "band-dft-cpu" / "project_setting"
+    assert not list(ps.rglob("submit_*.tpl"))
+    from autozt import _load_yaml_file
+    assert _load_yaml_file(str(ps / "hpc.yaml")).get("template_map") == {}
+
+
+def test_local_templates_render():
+    import re as _re
+    import autozt  # noqa: F401
+    wf = sys.modules["autozt.workflow"]
+    from autozt import _load_yaml_file
+    tdir = os.path.join(ROOT, "setting", "local", "templates")
+    keys = {   # placeholders each gen fills (see the gen scripts' write_submit/render calls)
+        "submit_mlff_relax.tpl": ["JOBNAME", "CONDA_SH", "CONDA_ENV", "MACE_CMD", "LOG"],
+        "submit_mlff_opt.tpl": ["JOBNAME", "CONDA_SH", "CONDA_ENV", "MACE_CMD", "LOG"],
+        "submit_mlff.tpl": ["JOBNAME", "CONDA_SH", "CONDA_ENV", "MACE_CMD"],
+        "submit_fc.tpl": ["JOBNAME", "CONDA_SH", "CONDA_ENV"],
+        "submit_shengbte_klm.tpl": ["JOBNAME", "CONDA_SH", "CONDA_ENV", "SHENGBTE_EXE",
+                                    "NTASKS", "CPUS_PER_TASK", "SB_EXTRACT"],
+        "submit_hamgnn.tpl": ["JOBNAME", "CONDA_SH", "CONDA_ENV", "NTHREADS", "CMD"],
+        "submit_hamgnn_mpi.tpl": ["JOBNAME", "CONDA_SH", "CONDA_ENV", "NPROC", "CMD"],
+        "submit_amset.tpl": ["JOBNAME", "AMSET_CMD", "AMSET_ENV"],
+    }
+    profiles = _load_yaml_file(os.path.join(ROOT, "setting", "local.yaml"))["vasp"]
+    names = sorted(os.listdir(tdir))
+    assert len(names) == 17
+    for n in names:
+        text = open(os.path.join(tdir, n), encoding="utf-8").read()
+        if _re.fullmatch(r"submit_(std|gam|ncl)_(0d|2d|3d)\.tpl", n):
+            text = wf.render_vasp_template(text, n, "step2_static", profiles)
+            text = text.replace("{{JOBNAME}}", "j")
+        else:
+            for k in keys[n]:
+                text = text.replace("{{%s}}" % k, "2")
+        assert not _re.findall(r"\{\{[A-Z_0-9]+\}\}", text), n
+        r = subprocess.run(["bash", "-n"], input=text, capture_output=True, text=True)
+        assert r.returncode == 0, (n, r.stderr)
+
+
+def test_agent_setup_write_merges(tmp_path, monkeypatch):
+    import argparse
+    from autozt import agent_cli as A
+    monkeypatch.setattr(A, "ROOT", str(tmp_path))
+    (tmp_path / ".mcp.json").write_text(json.dumps({"mcpServers": {"other": {"command": "x"}}}))
+    res, rc = A._cmd_setup(argparse.Namespace(config=None, write="all"))
+    assert rc == 0
+    doc = json.loads((tmp_path / ".mcp.json").read_text())
+    assert set(doc["mcpServers"]) == {"other", "autozt"}
+    assert doc["mcpServers"]["autozt"]["args"][-1] == "mcp"
+    assert json.loads((tmp_path / ".cursor" / "mcp.json").read_text())["mcpServers"]["autozt"]
+    (tmp_path / ".mcp.json").write_text("{broken")
+    _res, rc = A._cmd_setup(argparse.Namespace(config=None, write="claude"))
+    assert rc == 1 and (tmp_path / ".mcp.json").read_text() == "{broken"
+
+
+def test_hang_helpers_use_job_host(monkeypatch):
+    import autozt  # noqa: F401
+    ops = sys.modules["autozt.ops"]
+    seen = []
+    monkeypatch.setattr(autozt, "run_remote", lambda cfg, line, host="__default__", **k:
+                        (seen.append(host) or (0, "")))
+    ops._hung_scancel_wait({}, "1", timeout=1, host="a800")
+    ops._hung_incar_fix({}, "/w", 1, host="a800")
+    assert seen and all(h == "a800" for h in seen)

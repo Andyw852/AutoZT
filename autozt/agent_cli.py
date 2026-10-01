@@ -407,6 +407,43 @@ AGENT_RULES_MD = """# AutoZT 调用规则（给 LLM；由 `autozt agent setup --
 """
 
 
+MCP_CONFIG_FILES = {"claude": (".mcp.json",), "cursor": (".cursor", "mcp.json")}
+
+
+def _write_mcp_configs(server: Dict[str, Any], target: str) -> List[Dict[str, Any]]:
+    """把 autozt 的 MCP 服务配置合并进软件目录下的项目级配置文件。
+
+    只改 mcpServers.autozt 这一项，文件里其它服务/字段原样保留；文件坏了（不是 JSON）
+    就不碰并报告。路径是本机绝对路径，所以这两个文件已加进 .gitignore。"""
+    out = []
+    for name in (["claude", "cursor"] if target == "all" else [target]):
+        path = os.path.join(ROOT, *MCP_CONFIG_FILES[name])
+        doc: Dict[str, Any] = {}
+        if os.path.isfile(path):
+            try:
+                with open(path, encoding="utf-8") as fh:
+                    doc = json.load(fh) or {}
+            except (OSError, ValueError) as exc:
+                out.append({"client": name, "path": path, "ok": False,
+                            "error": "现有文件不是合法 JSON，未修改：%s" % exc})
+                continue
+        if not isinstance(doc, dict):
+            out.append({"client": name, "path": path, "ok": False,
+                        "error": "现有文件顶层不是对象，未修改"})
+            continue
+        servers = doc.setdefault("mcpServers", {})
+        changed = servers.get("autozt") != server
+        servers["autozt"] = server
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        tmp = path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump(doc, fh, ensure_ascii=False, indent=2)
+            fh.write("\n")
+        os.replace(tmp, path)
+        out.append({"client": name, "path": path, "ok": True, "changed": changed})
+    return out
+
+
 def _cmd_setup(args: argparse.Namespace) -> Tuple[Dict[str, Any], int]:
     """接入说明：MCP 服务配置（绝对路径，直接粘进客户端配置）+ 给 LLM 的规则卡。只读。"""
     config = _config_path(getattr(args, "config", None))
@@ -417,7 +454,7 @@ def _cmd_setup(args: argparse.Namespace) -> Tuple[Dict[str, Any], int]:
     data: Dict[str, Any] = {
         "mcp_server": {"mcpServers": {"autozt": {
             "command": argv[0], "args": argv[1:] + ["mcp"], "env": env}}},
-        "mcp_profiles": {"workflow": "默认：progress/doctor/inspect/cycle/apply/register_material/conf_set 等 17 个工具",
+        "mcp_profiles": {"workflow": "默认：progress/doctor/inspect/cycle/apply/register_material/conf_set/check_env 等 18 个工具",
                          "monitor": "最小：get_progress/get_snapshot/cycle",
                          "full": "全部工具（含需人工批准的破坏性工具）"},
         "cli": {"prefix": " ".join(argv + ["agent"]),
@@ -431,6 +468,10 @@ def _cmd_setup(args: argparse.Namespace) -> Tuple[Dict[str, Any], int]:
         "rules_md": AGENT_RULES_MD,
         "config": config,
     }
+    target = getattr(args, "write", None)
+    if target:
+        data["written"] = _write_mcp_configs(data["mcp_server"]["mcpServers"]["autozt"],
+                                             target)
     try:
         from autozt import progress as _progress
         cfg, _err = _agent_state.load_cfg(getattr(args, "config", None))
@@ -442,7 +483,8 @@ def _cmd_setup(args: argparse.Namespace) -> Tuple[Dict[str, Any], int]:
                 data["progress"]["coverage"] = doc.get("coverage") or {}
     except Exception:                             # noqa: BLE001
         pass
-    return _envelope("setup", data), 0
+    _bad_write = any(not w.get("ok") for w in data.get("written") or [])
+    return _envelope("setup", data), (1 if _bad_write else 0)
 
 
 def _cmd_doctor(args: argparse.Namespace) -> Tuple[Dict[str, Any], int]:
@@ -1023,6 +1065,10 @@ def build_parser() -> argparse.ArgumentParser:
     _add_context_options(p)
     p.add_argument("--rules", action="store_true",
                    help="只输出规则卡（Markdown 原文），可追加进 agent 的 AGENTS.md")
+    p.add_argument("--write", nargs="?", const="all", choices=["all", "claude", "cursor"],
+                   help="把 MCP 服务配置合并写进软件目录：claude=.mcp.json（Claude Code 等"
+                        "读项目级 .mcp.json 的客户端）、cursor=.cursor/mcp.json、all=两个都写。"
+                        "已有的其它 MCP 服务不动；在软件目录启动客户端即自动接上 autozt mcp")
 
     p = sub.add_parser("snapshot", help="持久化增量状态快照")
     _add_context_options(p)

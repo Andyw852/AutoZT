@@ -108,6 +108,12 @@ TOOLS = [
                                        "material": {"type": "string"},
                                        "step": {"type": "string"}},
       "required": ["material"]}, "mutate", ["retry"]),
+    ("check_env", "运行依赖探测：每个技能在某台机器（缺省本机 local；all=全部集群）上能不能跑、"
+     "缺哪些 python 包/程序/POTCAR/MACE 模型/GPU，以及怎么补（只读，不提交）。"
+     "在本机开算前先调它",
+     {"type": "object", "properties": {"tt": {"type": "string"},
+                                       "cluster": {"type": "string"}},
+      "additionalProperties": False}, "read", ["check"]),
     ("conf_set", "改某步 step.conf 的一个键（写进该材料本技能的项目层 step.conf，"
      "不碰技能库；等价 autozt -tt T -p M -j S conf --set 节.键=值）。key 缺省节为 params，"
      "如 FIT_METHODS 或 params.FIT_METHODS、submit.cpus_per_task；value 为空字符串=删除该键。"
@@ -235,7 +241,7 @@ WORKFLOW_TOOLS = {
     "get_snapshot", "inspect", "probe_step", "cycle", "apply_actions", "research_plan",
     "preflight", "results",
     # 新材料接入与改参数：以前 workflow 档没有这两个入口，agent 只好绕开 autozt
-    "register_material", "conf_get", "conf_set",
+    "register_material", "conf_get", "conf_set", "check_env",
 }
 
 TOOL_RESULT_SCHEMA = {
@@ -893,6 +899,11 @@ def call_tool(name, args, _internal=False):
             return _result(risk, rc=1, error="conf_set: key 应为 [节.]键（如 params.FIT_METHODS），"
                                              "value 不能含换行")
         argv += ["conf", "--set", "%s=%s" % (key, val)]
+    elif name == "check_env":
+        argv = (["-tt", str(args["tt"])] if args.get("tt") else []) + ["check", "--json"]
+        if args.get("cluster"):
+            argv += ["--cluster", str(args["cluster"])]
+        json_result = True
     elif name == "register_material":
         argv = ["-tt", str(args["tt"]), "-p", str(args["material"])]
         if args.get("step"):
