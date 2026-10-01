@@ -11,8 +11,36 @@ kl_common.select_cutoff -- keep the two in sync (TODO: move to skill/_common).
 import math
 
 
+def _plateau_pair(a, b, kappa_tol_pct, floor):
+    """相邻两截断是否在平台容差内。
+
+    有 kappa_vec（xx/yy/zz）时**逐分量**判：各向异性体系面外 zz 往往收敛更慢，只看
+    面内 κ 会把它掩盖（同 S2 网格收敛的 per_component 判据）。分母取
+    max(|κ_ii|, floor·max_j|κ_jj|)：2D 真空轴、极小分量不会因自身相对噪声卡住平台。
+    没有 kappa_vec（老记录）时退回只看标量 kappa。"""
+    frac = float(kappa_tol_pct) / 100.0
+    err = math.hypot(a["kappa_err"], b["kappa_err"])
+    va, vb = a.get("kappa_vec"), b.get("kappa_vec")
+    if va and vb and len(va) == len(vb):
+        # kappa_err 是标量 κ 的绝对误差，按相对量折算到各分量
+        rel_err = err / abs(a["kappa"]) if a["kappa"] else 0.0
+        big = max([abs(x) for x in va if x is not None] or [0.0])
+        for x, y in zip(va, vb):
+            if x is None or y is None:
+                continue
+            den = max(abs(x), float(floor) * big)
+            if den > 0 and abs(y - x) > max(frac, rel_err) * den + 1e-15:
+                return False
+        return True
+    ka, kb = a["kappa"], b["kappa"]
+    if ka is None or kb is None:
+        return True
+    tol = max(frac * abs(ka), err)
+    return abs(kb - ka) <= tol + 1e-15
+
+
 def select_cutoff(records, kappa_tol_pct=5.0, se_mult=1.0, stability_thr=0.3,
-                  pick="smallest"):
+                  pick="smallest", component_floor=0.1):
     """按三判据自动选最小可行截断。records 是每个候选截断一条 dict：
 
         cut               截断 (Å)
@@ -44,14 +72,22 @@ def select_cutoff(records, kappa_tol_pct=5.0, se_mult=1.0, stability_thr=0.3,
         d["err_kind"] = str(d.get("err_kind") or "in-sample")
         d["stable_upper_cut"] = (None if d.get("stable_upper_cut") is None
                                  else float(d["stable_upper_cut"]))
+        # stability_measured=False：没有 bootstrap 重拟合（CUT3_BOOTSTRAP=0），判据②
+        # 无从计算——跳过它、只靠判据③（κ 平台），与 phono3py 逐档扫描同一口径。
+        # 以前 None 一律判 stable_ok=False，导致默认能跑的扫描全部"无可用截断"。
+        d["stability_measured"] = bool(d.get("stability_measured", True))
         d["kappa"] = (None if d.get("kappa") is None else float(d["kappa"]))
         d["kappa_err"] = float(d.get("kappa_err") or 0.0)
+        kv = d.get("kappa_vec")
+        d["kappa_vec"] = ([None if x is None else float(x) for x in kv][:3]
+                          if kv else None)
         recs.append(d)
     recs.sort(key=lambda r: r["cut"])
     for r in recs:
         r["data_ok"] = r["ratio"] >= 3.0
-        r["stable_ok"] = (r["stable_upper_cut"] is not None
-                          and r["cut"] <= r["stable_upper_cut"] + 1e-9)
+        r["stable_ok"] = ((not r["stability_measured"])
+                          or (r["stable_upper_cut"] is not None
+                              and r["cut"] <= r["stable_upper_cut"] + 1e-9))
     usable = [r for r in recs if r["data_ok"] and r["stable_ok"]]
 
     # 判据①（残差 1-SE）：**只在误差是真·留出(CV)误差时才具否决权**。
@@ -87,12 +123,7 @@ def select_cutoff(records, kappa_tol_pct=5.0, se_mult=1.0, stability_thr=0.3,
             continue
         ok = True
         for a, b in pairs:
-            ka, kb = a["kappa"], b["kappa"]
-            if ka is None or kb is None:
-                continue
-            tol = max(float(kappa_tol_pct) / 100.0 * abs(ka),
-                      math.hypot(a["kappa_err"], b["kappa_err"]))
-            if abs(kb - ka) > tol + 1e-15:
+            if not _plateau_pair(a, b, kappa_tol_pct, component_floor):
                 ok = False
                 break
         if ok:
@@ -121,6 +152,7 @@ def select_cutoff(records, kappa_tol_pct=5.0, se_mult=1.0, stability_thr=0.3,
     report = {
         "status": status,
         "err_gate_applied": err_gate,
+        "stability_gate_applied": any(r["stability_measured"] for r in recs),
         "criteria": {"rel_err_1se": ("train_rel_err <= min(train_rel_err) + %g*SE"
                                      "（err_kind=held-out 时才启用）" % float(se_mult)),
                      "stability": "sigma/|mean| < %g" % float(stability_thr),
@@ -132,11 +164,13 @@ def select_cutoff(records, kappa_tol_pct=5.0, se_mult=1.0, stability_thr=0.3,
              "err_kind": r["err_kind"],
              "stable_upper_cut": r["stable_upper_cut"],
              "kappa": r["kappa"], "kappa_err": r["kappa_err"],
+             "stability_measured": r["stability_measured"],
              "data_ok": r["data_ok"], "stable_ok": r["stable_ok"],
              "err_ok": r["err_ok"], "plateau_ok": r["plateau_ok"]}
             for r in recs],
         "chosen_cut": chosen,
         "pick": str(pick).lower(),
+        "kappa_tol_pct": float(kappa_tol_pct),
         "reason": ("判据②③同时满足的最小截断 = %.2f Å%s" % (
                        chosen,
                        "" if err_gate else "（判据①为 in-sample 残差，已跳过否决）")
@@ -147,4 +181,7 @@ def select_cutoff(records, kappa_tol_pct=5.0, se_mult=1.0, stability_thr=0.3,
                          if status == "not_converged"
                          else "没有数据量/稳定性达标的截断：需补帧或加大位移")),
     }
+    if recs and not report["stability_gate_applied"]:
+        report["reason"] += ("；未做 bootstrap 重拟合（CUT3_BOOTSTRAP=0），稳定性判据②"
+                             "未参与，只按 κ 平台判断")
     return chosen, report

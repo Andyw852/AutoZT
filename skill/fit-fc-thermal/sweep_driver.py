@@ -68,6 +68,8 @@ def kappa_prep(vdir):
     recipe["disp_yaml"] = g2._find_disp_yaml(vdir, kdir)
     recipe["nac"] = nac
     recipe["is_2d"] = bool(ps.get("is_2d", recipe.get("is_2d")))
+    recipe["kappa_2d_norm"] = (g2.two_d_norm(vdir, recipe.pop("kappa_2d_thickness", "vdw"))
+                               if recipe["is_2d"] else None)
     recipe.pop("kappa_if_imag", None)
     _write(kdir / "kappa_config.json", recipe)
     print("[OK] kappa/kappa_config.json (yaml=%s nac=%s 2D=%s mesh=%s)"
@@ -96,6 +98,10 @@ def result(vdir):
                           if skip.is_file() else None),
         "kappa_300K_xx_yy_zz": ks.get("kappa_300K_xx_yy_zz"),
         "kappa_inplane_300K": ks.get("kappa_inplane_300K"),
+        "kappa_2d_normalized_inplane_300K": ks.get("kappa_2d_normalized_inplane_300K"),
+        "kappa_2d_norm_factor": (ks.get("kappa_2d_norm") or {}).get("kappa_2d_norm_factor"),
+        "sheet_conductance_inplane_300K_W_per_K":
+            ks.get("sheet_conductance_inplane_300K_W_per_K"),
         "kappa_avg_300K": ks.get("kappa_avg_300K"),
         "kappa_principal_300K": ks.get("kappa_principal_300K"),
         "mesh": ks.get("mesh"),
@@ -112,7 +118,9 @@ def result(vdir):
 
 COLS = ("tag", "engine", "method", "c3_shell", "c3_cutoff_A", "c2", "stable",
         "min_frequency_THz", "fit_rmse_relative", "pheasy_relative_error",
-        "kappa_inplane_300K", "kappa_avg_300K", "kappa_xx_300K", "kappa_yy_300K",
+        "kappa_inplane_300K", "kappa_2d_normalized_inplane_300K", "kappa_2d_norm_factor",
+        "sheet_conductance_inplane_300K_W_per_K",
+        "kappa_avg_300K", "kappa_xx_300K", "kappa_yy_300K",
         "kappa_zz_300K", "mesh", "mesh_converged", "kappa_skipped")
 
 

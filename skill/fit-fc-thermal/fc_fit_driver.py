@@ -1172,6 +1172,7 @@ def _pheasy_scan(cfg, out, cands, base_for, rasr_flag, fit_flags, make_env):
                                                       stability_thr=thr)
             rec["shell_stats"] = stats
             rec["stable_upper_cut"] = upper
+        rec["stability_measured"] = boot > 0   # boot>0 但样本全失败 = 测了、不可用
         if len(rels) >= 2:
             rec["train_rel_se"] = float(np.std(rels, ddof=1))
         elif rels:

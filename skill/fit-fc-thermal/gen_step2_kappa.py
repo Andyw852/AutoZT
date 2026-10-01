@@ -67,6 +67,11 @@ SPEC = {
     "CUT3_CV_1SE_MULT":   (1.0, "float"),
     "CUT3_STABILITY_THR": (0.3, "float"),
     "CUT3_PICK":          ("smallest", "str"),
+    # 2D 面内 κ 的层厚归一化（与 kl-dft-cpu S6 同一口径，真源 _common/thickness_2d.py）：
+    #   phono3py 按整胞体积（含真空）归一，面内 κ 被 h⊥/d 稀释。kappa_summary.json 另写
+    #   kappa_2d_normalized_* = 原始 κ × h⊥/d。vdw（默认：原子层跨度 + 上下 vdW 半径）|
+    #   cell（不归一）| 数值（固定层厚 Å，如 MoS2 体相层间距 6.15）。
+    "KAPPA_2D_THICKNESS": ("vdw", "str"),
 }
 
 
@@ -160,6 +165,33 @@ def _mesh_cfg(conf, fit_dir):
     }
 
 
+def two_d_norm(fit_dir, mode):
+    """2D thickness normalisation for kappa_driver (None for a 3D cell or when
+    the geometry cannot be read).  Same source as kl-dft-cpu: factor = h_perp/d."""
+    pos = Path(fit_dir) / "POSCAR"
+    if str(mode or "vdw").strip().lower() in ("cell", "lz", "none", "off"):
+        return None
+    try:
+        import dim_common
+        from thickness_2d import slab_geometry_from_poscar
+        dim, axis, _vac = dim_common.detect_dimension(str(pos))
+        if dim != "2d":
+            return None
+        g = slab_geometry_from_poscar(str(pos), vac_axis=axis, mode=str(mode or "vdw"))
+    except Exception as e:                               # noqa: BLE001
+        print("[WARN] 2D 层厚归一化算不出来（只写原始 κ，面内 κ 被真空稀释、不可直接"
+              "使用）：%s" % e, flush=True)
+        return None
+    g = dict(g)
+    g["vac_axis"] = int(axis)
+    g["note"] = ("kappa_2d_normalized = kappa_raw * h_perp/d (h_perp = V/A); only the "
+                 "in-plane components are physical for a 2D layer")
+    print("[..] 2D κ 归一化：h⊥=%.3f Å 层厚 d=%.3f Å（%s）→ factor=%.4f"
+          % (g["h_perp_A"], g["thickness_d_A"] or 0.0, g["thickness_convention"],
+             g["kappa_2d_norm_factor"]), flush=True)
+    return g
+
+
 def main():
     cwd = Path.cwd()
     out = cwd / OUTDIR
@@ -239,6 +271,8 @@ def main():
         "nac": nac,
         "bte_method": method,
         "enable_fc": enable_fc,
+        "kappa_2d_norm": (two_d_norm(fit, conf["KAPPA_2D_THICKNESS"])
+                          if mcfg["is_2d"] else None),
         "source_fc": str(fit),
     }
     (out / "kappa_config.json").write_text(

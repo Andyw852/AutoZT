@@ -104,7 +104,34 @@ def _summary(tc, cfg, source_fc, mesh=None):
         "kappa_inplane_300K": 0.5 * (raw[j][0] + raw[j][1]),
         "source_fc": source_fc,
         **extra,
+        **_two_d_fields(cfg, raw, j),
     }
+
+
+def _two_d_fields(cfg, raw, j):
+    """2D: kappa_2d_normalized_* = raw kappa * h_perp/d (kl-dft-cpu convention).
+
+    phono3py divides by the whole cell volume, vacuum included, so the raw
+    in-plane kappa of a slab is diluted by h_perp/d; the zz component of a 2D
+    layer has no physical meaning (no dispersion across the vacuum)."""
+    g = cfg.get("kappa_2d_norm") or None
+    if not g or not g.get("kappa_2d_norm_factor"):
+        return {}
+    f = float(g["kappa_2d_norm_factor"])
+    out = {
+        "kappa_2d_norm": g,
+        "kappa_2d_normalized_xx_yy_zz": [[v * f for v in r] for r in raw],
+        "kappa_2d_normalized_inplane_xx_yy": [[r[0] * f, r[1] * f] for r in raw],
+        "kappa_2d_normalized_inplane_300K": 0.5 * (raw[j][0] + raw[j][1]) * f,
+    }
+    # 面热导 sheet conductance = κ·d = κ_raw·h⊥（W/K）：与层厚取法无关，跨文献可直接比
+    # （Wu et al., arXiv:1607.06542）。h⊥ = V/A，即 phono3py 归一用的胞高。
+    h = g.get("h_perp_A")
+    if h:
+        hm = float(h) * 1e-10
+        out["sheet_conductance_W_per_K_xx_yy"] = [[r[0] * hm, r[1] * hm] for r in raw]
+        out["sheet_conductance_inplane_300K_W_per_K"] = 0.5 * (raw[j][0] + raw[j][1]) * hm
+    return out
 
 
 def _mesh_spec(cfg):
@@ -374,6 +401,10 @@ def _select(out, cfg, per_cut):
     scan = json.loads((out / "cutoff_scan.json").read_text(encoding="utf-8"))
     rows = {round(float(r["cut"]), 3): r
             for r in (scan.get("records") or []) if r.get("cut") is not None}
+    # pheasy 扫描 CUT3_BOOTSTRAP=0：没有重拟合样本，stable_upper_cut 恒为 None ——
+    # 是"没测"，不是"不稳定"。旧的 cutoff_scan.json 没有 stability_measured 字段，
+    # 按 bootstrap 次数推断，已有结果不用重拟合也能选截断。
+    _boot = scan.get("bootstrap")
     recs = []
     for tag, s in per_cut:
         cut = _cut_of_tag(tag)
@@ -390,7 +421,11 @@ def _select(out, cfg, per_cut):
             "train_rel_se": r.get("train_rel_se"),
             "err_kind": r.get("err_kind"),
             "stable_upper_cut": r.get("stable_upper_cut"),
+            "stability_measured": r.get("stability_measured",
+                                        not (_boot is not None and int(_boot) == 0
+                                             and r.get("stable_upper_cut") is None)),
             "kappa": k, "kappa_err": (abs(k) * rel if k is not None else None),
+            "kappa_vec": (s.get("kappa_300K_xx_yy_zz") or None),
         })
     chosen, rep = cut3_select.select_cutoff(
         recs,
@@ -409,6 +444,157 @@ def _select(out, cfg, per_cut):
               % (r["cut"], r["kappa"], r["data_ok"], r["stable_ok"],
                  r["err_ok"], r["plateau_ok"]), flush=True)
     return chosen, rep, dict(per_cut)
+
+
+# 作图（期刊风格）：默认参考配色第一槽（dataviz palette.md），黑色细框、刻度朝内
+_LINE = "#2a78d6"
+_INK, _INK2 = "#000000", "#4d4d4d"
+_SCI_RC = {
+    "font.family": "sans-serif",
+    "font.sans-serif": ["Arial", "Helvetica", "Liberation Sans", "DejaVu Sans"],
+    "font.size": 9, "axes.labelsize": 9, "xtick.labelsize": 8, "ytick.labelsize": 8,
+    "axes.linewidth": 0.8, "axes.edgecolor": _INK, "axes.labelcolor": _INK,
+    "xtick.direction": "in", "ytick.direction": "in",
+    "xtick.top": True, "ytick.right": True,
+    "xtick.major.size": 3.5, "ytick.major.size": 3.5,
+    "xtick.minor.size": 2.0, "ytick.minor.size": 2.0,
+    "xtick.major.width": 0.8, "ytick.major.width": 0.8,
+    "xtick.minor.visible": False, "ytick.minor.visible": True,
+    "xtick.color": _INK, "ytick.color": _INK,
+    "axes.grid": False, "legend.frameon": False,
+    "savefig.dpi": 300, "savefig.bbox": "tight", "pdf.fonttype": 42,
+    "mathtext.default": "regular",
+}
+
+
+def _write_kappa_vs_cutoff(out, per_cut, rep=None, cfg=None):
+    """kappa(300 K) vs third-order cutoff.
+
+    kappa_vs_cutoff.json always; kappa_vs_cutoff.png (300 dpi) + .pdf when
+    matplotlib is available.  One panel per component (xx, yy, zz), every
+    segment labelled with its relative change (bold inside the plateau
+    tolerance).  A 2D layer gets xx and yy only -- its zz has no physical
+    meaning -- plotted thickness-normalised (kappa * h_perp/d) when the run
+    carries the factor.  Written before the cutoff choice can fail."""
+    cfg = cfg or {}
+    shells = []
+    try:
+        shells = [float(x) for x in json.loads(
+            (out / "cutoff_scan.json").read_text(encoding="utf-8")).get("shells") or []]
+    except Exception:
+        shells = []
+    norm = cfg.get("kappa_2d_norm") or None
+    f2d = float(norm["kappa_2d_norm_factor"]) if norm and norm.get(
+        "kappa_2d_norm_factor") else None
+    flags = {round(float(r["cut"]), 3): r for r in ((rep or {}).get("records") or [])}
+    rows = []
+    for tag, s in sorted(per_cut, key=lambda x: _cut_of_tag(x[0])):
+        cut = _cut_of_tag(tag)
+        k3 = list(s.get("kappa_300K_xx_yy_zz") or [None, None, None]) + [None] * 3
+        f = flags.get(round(cut, 3), {})
+        row = {"cut_A": cut,
+               "n_shells": (sum(1 for d in shells if d <= cut + 1e-9)
+                            if shells else None),
+               "kappa_xx": k3[0], "kappa_yy": k3[1], "kappa_zz": k3[2],
+               "kappa_inplane": s.get("kappa_inplane_300K"),
+               "mesh": s.get("mesh"),
+               "stable_ok": f.get("stable_ok"), "plateau_ok": f.get("plateau_ok")}
+        if f2d:
+            for k in ("kappa_xx", "kappa_yy", "kappa_inplane"):
+                row[k + "_2d_norm"] = None if row[k] is None else row[k] * f2d
+        rows.append(row)
+    for a_, b_ in zip(rows, rows[1:]):
+        b_["pct_change_from_prev"] = {
+            k: (None if (a_[k] in (None, 0) or b_[k] is None
+                         or abs(a_[k]) < 1e-12)
+                else round(100.0 * (b_[k] - a_[k]) / abs(a_[k]), 3))
+            for k in ("kappa_xx", "kappa_yy", "kappa_zz", "kappa_inplane")}
+    big = max([abs(r[k] or 0.0) for r in rows for k in ("kappa_xx", "kappa_yy")] or [0])
+    is_2d = bool(cfg.get("is_2d")) or (bool(rows) and all(
+        abs(r["kappa_zz"] or 0.0) < 1e-3 * max(big, 1e-12) for r in rows))
+    doc = {"T_K": 300, "rows": rows, "is_2d": is_2d,
+           "kappa_2d_norm_factor": f2d,
+           "chosen_cut_A": (rep or {}).get("chosen_cut"),
+           "status": (rep or {}).get("status"),
+           "note": "each cutoff at the scan's starting mesh; only the chosen one "
+                   "is mesh-converged afterwards"}
+    (out / "kappa_vs_cutoff.json").write_text(
+        json.dumps(doc, indent=2, ensure_ascii=False), encoding="utf-8", newline="\n")
+    print("[..] kappa vs cutoff (300 K):", flush=True)
+    for r in rows:
+        print("     c3=%.2f A%s  in-plane %s%s  xx/yy/zz %s"
+              % (r["cut_A"], "" if r["n_shells"] is None else " (%d shells)" % r["n_shells"],
+                 r["kappa_inplane"],
+                 "" if not f2d else " (2D-normalised %.3f)" % r["kappa_inplane_2d_norm"],
+                 [r["kappa_xx"], r["kappa_yy"], r["kappa_zz"]]), flush=True)
+    try:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        from matplotlib.ticker import AutoMinorLocator
+    except Exception as e:                                 # noqa: BLE001
+        print("[..] matplotlib unavailable (%s) -- kappa_vs_cutoff.json only" % e,
+              flush=True)
+        return doc
+    tol = float((rep or {}).get("kappa_tol_pct") or 5.0)
+    suf = "_2d_norm" if (is_2d and f2d) else ""
+    comps = [("xx", "kappa_xx" + suf), ("yy", "kappa_yy" + suf)]
+    if not is_2d:
+        comps.append(("zz", "kappa_zz"))
+    xs = [r["cut_A"] for r in rows]
+    ch = doc["chosen_cut_A"]
+    with plt.rc_context(_SCI_RC):
+        fig, axes = plt.subplots(len(comps), 1, figsize=(3.5, 1.9 * len(comps) + 0.5),
+                                 sharex=True)
+        for i, (ax, (lab, key)) in enumerate(zip(axes, comps)):
+            pts = [(x, r[key]) for x, r in zip(xs, rows) if r[key] is not None]
+            ys = [p[1] for p in pts]
+            if ys:
+                ax.plot([p[0] for p in pts], ys, color=_LINE, lw=1.2, zorder=3)
+                ax.plot([p[0] for p in pts], ys, ls="none", marker="o", ms=4.5,
+                        mfc=_LINE, mec=_INK, mew=0.6, zorder=4)
+                lo, hi = min(ys), max(ys)
+                pad = 0.22 * (hi - lo if hi > lo else abs(hi) or 1.0)
+                ax.set_ylim(lo - pad * 0.6, hi + pad)
+                for (x0, y0), (x1, y1) in zip(pts, pts[1:]):
+                    if abs(y0) < 1e-12:
+                        continue
+                    pct = 100.0 * (y1 - y0) / abs(y0)
+                    inside = abs(pct) <= tol
+                    ax.annotate("%+.1f%%" % pct, ((x0 + x1) / 2, (y0 + y1) / 2),
+                                xytext=(0, 7), textcoords="offset points",
+                                ha="center", va="bottom", fontsize=6.5,
+                                color=_INK if inside else _INK2,
+                                fontweight="bold" if inside else "normal")
+            if ch is not None:
+                ax.axvline(float(ch), color=_INK2, lw=0.7, ls=(0, (4, 2)), zorder=1)
+            ax.set_ylabel(r"$\kappa_{%s}$ (W m$^{-1}$ K$^{-1}$)" % lab)
+            ax.yaxis.set_minor_locator(AutoMinorLocator(2))
+            ax.text(0.02, 0.94, "(%s)" % "abc"[i], transform=ax.transAxes,
+                    ha="left", va="top", fontsize=9, fontweight="bold")
+        last = axes[-1]
+        last.set_xlabel(r"Third-order cutoff $r_c$ ($\AA$)")
+        if rows and rows[0]["n_shells"] is not None:
+            last.set_xticks(xs)
+            last.set_xticklabels(["%.2f\n(%d)" % (r["cut_A"], r["n_shells"]) for r in rows])
+        notes = ["T = 300 K; (n) = neighbour shells within $r_c$",
+                 "bold: |change| $\\leq$ %g%%" % tol]
+        if ch is not None:
+            notes.append("dashed: chosen $r_c$ = %.2f $\\AA$ (%s)" % (float(ch),
+                                                                 doc["status"]))
+        if is_2d:
+            notes.append(("2D layer, d = %.2f $\\AA$; $\\kappa_{zz}$ not physical"
+                          % float(norm["thickness_d_A"])) if f2d else
+                         "2D layer: raw cell-volume kappa (not thickness-normalised); "
+                         "$\\kappa_{zz}$ not physical")
+        fig.text(0.0, 0.0, "\n".join(notes), ha="left", va="top", fontsize=6.5,
+                 color=_INK2, transform=fig.transFigure)
+        fig.tight_layout(h_pad=0.4)
+        fig.savefig(str(out / "kappa_vs_cutoff.png"))
+        fig.savefig(str(out / "kappa_vs_cutoff.pdf"))
+        plt.close(fig)
+    print("[OK] kappa_vs_cutoff.png / .pdf", flush=True)
+    return doc
 
 
 def main():
@@ -430,6 +616,10 @@ def main():
                 newline="\n")
             per_cut.append((tag, s))
         chosen, rep, by_tag = _select(out, cfg, per_cut)
+        try:
+            _write_kappa_vs_cutoff(out, per_cut, rep, cfg)
+        except Exception as e:                             # noqa: BLE001
+            print("[WARN] kappa_vs_cutoff not written: %s" % e, flush=True)
         if chosen is None:
             (out / "kappa_summary.json").write_text(
                 json.dumps({"KAPPA_DONE": False, "cutoff_selection": rep},
@@ -466,6 +656,14 @@ def main():
              s["kappa_300K_xx_yy_zz"][1], s["kappa_300K_xx_yy_zz"][2],
              s.get("kappa_principal_300K")),
           flush=True)
+    if s.get("kappa_2d_normalized_inplane_300K") is not None:
+        print("[DONE] 2D 层厚归一化后 300K 面内 %.4f W/mK（d=%.3f Å，factor=%.4f）；"
+              "面热导 %.4g W/K（与层厚取法无关）；κzz 对 2D 无物理意义"
+              % (s["kappa_2d_normalized_inplane_300K"],
+                 s["kappa_2d_norm"]["thickness_d_A"],
+                 s["kappa_2d_norm"]["kappa_2d_norm_factor"],
+                 s.get("sheet_conductance_inplane_300K_W_per_K") or float("nan")),
+              flush=True)
 
 
 if __name__ == "__main__":

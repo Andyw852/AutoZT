@@ -72,7 +72,9 @@ SPEC.update(SWEEP_SPEC)
 FORCED = {"ENABLE_FC": 3, "CUT3_SCAN": "off", "CUT3_CANDIDATES": "off",
           "EXPORT_KL_BUNDLE": False}
 
-HELPERS = ("sweep_driver.py", "gen_step2_kappa.py", "stepconf.py", "fc_common.py")
+HELPERS = ("sweep_driver.py", "gen_step2_kappa.py", "stepconf.py", "fc_common.py",
+           # kappa-prep 在计算节点上算 2D 层厚归一化（gen_step2_kappa.two_d_norm）
+           "dim_common.py", "thickness_2d.py", "vdw_radii.py")
 
 
 class Overlay(object):
@@ -203,6 +205,7 @@ def kappa_recipe(conf, vdir):
         "temperatures": temps, "isotope": bool(conf["ISOTOPE"]),
         "nac_request": str(conf["NAC"] or "auto").strip().lower(),
         "bte_method": method, "enable_fc": 3, "source_fc": "..",
+        "kappa_2d_thickness": str(conf["KAPPA_2D_THICKNESS"] or "vdw"),
     })
 
 

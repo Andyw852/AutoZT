@@ -388,6 +388,48 @@ writing `kappa_summary.json`:
   dirs too (no bootstrap, so only the kappa plateau discriminates).  With
   `CUT3_SCAN = off` (or a hiphive fit, which does not write per-cut dirs yet) it
   falls back to the nominal cutoff.
+* **Without a bootstrap** (`CUT3_BOOTSTRAP = 0`) the per-shell stability
+  (criterion 2) cannot be measured: those records carry
+  `stability_measured: false`, criterion 2 is skipped and the cutoff is chosen
+  by the kappa plateau alone - the same rule as a phono3py scan.
+  `cutoff_selection.json` says so (`stability_gate_applied: false`).  Older
+  `cutoff_scan.json` files are recognised by their `bootstrap: 0`.  With a
+  bootstrap, a candidate whose `stable_upper_cut` is null is still unusable.
+* **Plateau per component**: the kappa-plateau criterion compares xx, yy and
+  zz separately (each against `max(|kappa_ii|, 0.1 * max_j |kappa_jj|)`), so a
+  slowly converging out-of-plane zz is no longer hidden behind a flat in-plane
+  kappa; a 2D vacuum axis (zz ~ 0) never blocks it.  Records without
+  per-component kappa fall back to the in-plane value.
+* **2D thickness normalisation** (`KAPPA_2D_THICKNESS = vdw | cell | <A>`,
+  default `vdw`): phono3py divides by the whole cell volume, vacuum included, so
+  the raw in-plane kappa of a slab is diluted by `h_perp/d`.  For a 2D cell
+  `kappa_summary.json` keeps the raw fields and adds
+  `kappa_2d_normalized_xx_yy_zz`, `kappa_2d_normalized_inplane_xx_yy`,
+  `kappa_2d_normalized_inplane_300K` (= raw * `h_perp/d`) plus the geometry in
+  `kappa_2d_norm`, and the thickness-free sheet conductance
+  `sheet_conductance_W_per_K_xx_yy` / `sheet_conductance_inplane_300K_W_per_K`
+  (= kappa * d = raw kappa * h_perp, W/K; Wu et al., arXiv:1607.06542) -
+  the kl-dft-cpu S6 convention, computed by the same
+  `_common/thickness_2d.py` (`d` = atomic span + top/bottom vdW radii; a number
+  fixes `d`, e.g. 6.15 A, the MoS2 bulk interlayer spacing; `cell` = no
+  normalisation).  Compare with the literature only after checking which `d`
+  the paper used.  The zz component of a 2D layer is not physical (no
+  dispersion across the vacuum); the out-of-plane transport of a stack is a
+  bulk / multilayer calculation.
+* **kappa vs cutoff**: every scan writes `kappa_vs_cutoff.json` (per cutoff:
+  neighbour shells inside it, kappa xx/yy/zz and in-plane at 300 K, the
+  per-component % change from the previous cutoff, the criteria flags) and
+  `kappa_vs_cutoff.png` (300 dpi) + `kappa_vs_cutoff.pdf` (vector), journal
+  style: one panel each for kappa_xx, kappa_yy, kappa_zz, every segment
+  labelled with its % change (bold when inside the plateau tolerance), the
+  chosen cutoff dashed; a 2D layer gets xx and yy only, thickness-normalised.  Written also when no cutoff is usable, which is when the curve is
+  most needed.  The points are at the scan's starting mesh.
+* **Candidate spacing**: the candidates are the midpoints between *adjacent*
+  neighbour shells of the structure (all atom pairs, shells closer than 0.05 A
+  merged), so each step adds exactly one shell; a wide gap between two
+  candidates means a wide gap between two shells of that structure (MoS2
+  monolayer: 5.44 A = sqrt(3) a, 6.28 A = 2a -> candidates 5.86 / 6.50 A), not a
+  skipped shell.
 * **Cutoff cap**: fc3 can only be trusted up to half the supercell's smallest
   periodic width (5.27 A for the 3x3x3 / 189-atom cell).  Candidates beyond it
   are dropped.  To sweep larger cutoffs, regenerate the dataset with a larger

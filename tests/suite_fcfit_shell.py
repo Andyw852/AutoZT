@@ -465,6 +465,99 @@ def test_method_sweep():
           and o["CUT3_SCAN"] == "off" and o["FIT_ENGINE"] == "pheasy", str(o))
 
 
+def test_cut3_without_bootstrap_and_curve():
+    print("[13] 无 bootstrap 时只按 κ 平台选截断 + kappa_vs_cutoff 输出")
+    import importlib.util
+    import json
+    base = ROOT / "skill" / "fit-fc-thermal"
+    sys.path.insert(0, str(base))
+    import cut3_select as cs
+    recs = [{"cut": c, "ratio": 10, "stable_upper_cut": None,
+             "stability_measured": False, "kappa": k}
+            for c, k in ((4.2, 31.9), (4.7, 28.9), (5.2, 27.0), (5.9, 24.6), (6.5, 23.6))]
+    ch, rep = cs.select_cutoff(recs)
+    check("bootstrap=0：跳过判据②，按 κ 平台选到 5.9", ch == 5.9 and rep["status"] == "ok"
+          and rep["stability_gate_applied"] is False, "%s %s" % (ch, rep["status"]))
+    for r in recs:
+        r["stability_measured"] = True
+    ch2, rep2 = cs.select_cutoff(recs)
+    check("有 bootstrap 但 stable_upper_cut 为空：仍无可用截断",
+          ch2 is None and rep2["status"] == "no_usable_cutoff")
+    # 逐分量平台：面内已平、zz 还在降 10% → 不能判收敛；2D 的 zz≈0 不卡平台
+    vrec = [{"cut": c, "ratio": 10, "stability_measured": False, "kappa": k,
+             "kappa_vec": [k, k, z]}
+            for c, k, z in ((5.2, 27.0, 6.0), (5.9, 24.6, 5.0), (6.5, 23.6, 4.5))]
+    ch4, rep4 = cs.select_cutoff(vrec)
+    check("逐分量平台：zz 未平（-10%）→ not_converged",
+          rep4["status"] == "not_converged" and ch4 == 6.5, "%s %s" % (ch4, rep4["status"]))
+    for r in vrec:
+        r["kappa_vec"][2] = 0.0
+    ch5, rep5 = cs.select_cutoff(vrec)
+    check("2D 的 κzz≈0 不卡平台（按下限归一）", ch5 == 5.9 and rep5["status"] == "ok",
+          "%s %s" % (ch5, rep5["status"]))
+    spec = importlib.util.spec_from_file_location("kd_curve", str(base / "kappa_driver.py"))
+    kd = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(kd)
+    with tempfile.TemporaryDirectory() as td:
+        out = Path(td)
+        (out / "cutoff_scan.json").write_text(json.dumps({
+            "bootstrap": 0, "shells": [3.0, 4.0, 5.0],
+            "records": [{"cut": c, "ratio": 10, "stable_upper_cut": None}
+                        for c in (3.5, 4.5, 5.5)]}))
+        per = [(("%.2f" % c).replace(".", "p"),
+                {"kappa_inplane_300K": k, "kappa_300K_xx_yy_zz": [k, k, 0.0]})
+               for c, k in ((3.5, 30.0), (4.5, 25.0), (5.5, 24.5))]
+        cwd = os.getcwd()
+        os.chdir(td)
+        try:
+            ch3, rep3, _ = kd._select(out, {}, per)
+        finally:
+            os.chdir(cwd)
+        doc = kd._write_kappa_vs_cutoff(out, per, rep3)
+        check("旧 cutoff_scan.json（bootstrap=0）也能选截断", ch3 == 4.5, str(ch3))
+        check("kappa_vs_cutoff.json 含每档 κ 与壳层数",
+              (out / "kappa_vs_cutoff.json").is_file()
+              and [r["n_shells"] for r in doc["rows"]] == [1, 2, 3])
+        check("kappa_vs_cutoff.json 含相邻两档的逐分量变化百分比",
+              doc["rows"][1]["pct_change_from_prev"]["kappa_xx"] == round(-500 / 30, 3)
+              and doc["rows"][1]["pct_change_from_prev"]["kappa_zz"] is None,
+              str(doc["rows"][1].get("pct_change_from_prev")))
+
+
+def test_kappa_2d_thickness_norm():
+    print("[14] 2D 面内 κ 层厚归一化（与 kl-dft-cpu 同口径 h⊥/d）")
+    import importlib.util
+    base = ROOT / "skill" / "fit-fc-thermal"
+    for d in (ROOT / "skill" / "_common", ROOT / "skill" / "_common" / "opt"):
+        sys.path.insert(0, str(d))
+    spec = importlib.util.spec_from_file_location("g2_norm", str(base / "gen_step2_kappa.py"))
+    g2 = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(g2)
+    with tempfile.TemporaryDirectory() as td:
+        # MoS2 单层：a=3.14，真空胞 c=25，S 层 ±1.565 Å → d = 3.13 + 2×1.80(S vdW)
+        Path(td, "POSCAR").write_text(
+            "MoS2\n1.0\n3.14 0 0\n-1.57 2.719330 0\n0 0 25\nMo S\n1 2\nDirect\n"
+            "0.333333 0.666667 0.5\n0.666667 0.333333 0.5626\n0.666667 0.333333 0.4374\n")
+        g = g2.two_d_norm(td, "vdw")
+        check("MoS2 层厚 d≈6.73 Å，factor=h⊥/d≈3.71",
+              g and abs(g["thickness_d_A"] - 6.73) < 0.02
+              and abs(g["kappa_2d_norm_factor"] - 25 / g["thickness_d_A"]) < 1e-3, str(g))
+        check("KAPPA_2D_THICKNESS=cell 不归一", g2.two_d_norm(td, "cell") is None)
+    spec = importlib.util.spec_from_file_location("kd_norm", str(base / "kappa_driver.py"))
+    kd = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(kd)
+    f = kd._two_d_fields({"kappa_2d_norm": {"kappa_2d_norm_factor": 4.0,
+                                            "h_perp_A": 25.0}},
+                         [[10.0, 12.0, 0.0], [20.0, 22.0, 0.0]], 1)
+    check("kappa_2d_normalized_*：原始 κ × factor，原始字段不动",
+          f["kappa_2d_normalized_inplane_300K"] == 84.0
+          and f["kappa_2d_normalized_xx_yy_zz"][0] == [40.0, 48.0, 0.0])
+    check("面热导 = 原始 κ × h⊥（W/K，与层厚取法无关）",
+          abs(f["sheet_conductance_inplane_300K_W_per_K"] - 21.0 * 25e-10) < 1e-18,
+          str(f.get("sheet_conductance_inplane_300K_W_per_K")))
+    check("3D 不加归一化字段", kd._two_d_fields({}, [[1, 1, 1]], 0) == {})
+
+
 def main():
     test_shells_and_candidates()
     test_resolve()
@@ -477,6 +570,8 @@ def main():
     test_kappa_mesh_auto()
     test_compact_fc3_expand()
     test_method_sweep()
+    test_cut3_without_bootstrap_and_curve()
+    test_kappa_2d_thickness_norm()
     print("\nsuite_fcfit_shell: %s（%d 项）"
           % ("ALL PASS" if not FAIL else "FAIL", N))
     return 1 if FAIL else 0

@@ -69,6 +69,7 @@ fetch_files: [POSCAR, SPOSCAR, phono3py_disp.yaml, phono3py_params.yaml,
               fc_fit_summary.json, band-dft-cpu.yaml,
               # 热导率（S2_kappa）：kappa_summary.json + phono3py 的 κ 网格文件
               kappa_summary.json, kappa_config.json, cutoff_selection.json,
+              kappa_vs_cutoff.json, kappa_vs_cutoff.png, kappa_vs_cutoff.pdf,
               mesh_convergence.json,
               kappa-m242424.hdf5,
               kappa-m161616.hdf5, phono3py_kappa.log,
@@ -96,7 +97,9 @@ steps:
      check: marker, marker: 'kappa_summary.json:"KAPPA_DONE": true',
      gen: gen_step2_kappa.py, fetch_all: true,
      gen_need: [stepconf.py, step.conf, fc_common.py, kappa_driver.py,
-                cut3_select.py, submit_kappa.tpl]}
+                cut3_select.py, submit_kappa.tpl,
+                # 2D 面内 κ 层厚归一化（与 kl-dft-cpu S6 共用 _common/thickness_2d.py）
+                dim_common.py, thickness_2d.py, vdw_radii.py]}
 
 # Optional phonon band figures (login node, best effort).  Turn it off with
 #   tf -tt fit-fc-thermal -p <material> conf --set phonon_plot=false
@@ -127,6 +130,7 @@ optional_steps:
          gen_need: [stepconf.py, step.conf, fc_common.py, fc_fit_driver.py,
                     dim_common.py, kappa_driver.py, cut3_select.py,
                     gen_step1_fit.py, gen_step2_kappa.py, sweep_driver.py,
+                    thickness_2d.py, vdw_radii.py,
                     submit_fcfit_p3py.tpl, submit_fcfit_hiphive.tpl,
                     submit_fcfit_pheasy.tpl, submit_fcfit_pheasy_gpu.tpl]}
       - {seq: 4, name: step4_compare, label: S4_compare, after: step3_sweep,
