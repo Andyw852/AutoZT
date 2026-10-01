@@ -32,7 +32,10 @@ def farm(tmp_path):
     (root / "setting").mkdir()
     (root / "setting" / "tf.yaml").write_text(
         "project_roots: [%s]\nhang_check: false\ntask_types:\n  opt-dft-cpu:\n"
-        "    max_jobs: 100\n" % (root / "projects"), encoding="utf-8")
+        "    max_jobs: 100\n"
+        # 内联本机集群：否则回退技能默认 hpc=jzzn，开发机上真实的（gitignore 的）
+        # setting/jzzn.yaml 会让测试去 ssh jzzn
+        "    hpc: {name: farm, ssh_host: \"\"}\n" % (root / "projects"), encoding="utf-8")
     ps = root / "projects" / "big" / "project_setting"
     ps.mkdir(parents=True)
     (ps / "tf_big.yaml").write_text(
@@ -66,6 +69,7 @@ def farm(tmp_path):
     env["AUTOZT_AGENT_EVENTS"] = "1"
     env.pop("AUTOZT_NARROW_MAX_AGE", None)
     env["AUTOZT_AGENT_SOURCE"] = "auto"
+    env["AUTOZT_SKIP_ENV_CHECK"] = "1"   # 夹具没有 VASP；本机依赖闸门不是这里要测的
 
     def run(*argv, **extra):
         e = dict(env)
