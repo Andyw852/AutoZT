@@ -635,6 +635,28 @@ def run(cwd, out_dir=None, unity_overlap=False, desym_fix=None):
     return ("error" if err else ("warn" if warn else "ok")), lines
 
 
+# V138：作业内先核对"这个 python 真的是 AMSET 0.5.1 的环境"。提交模板激活的 conda 环境若在本集群不存在
+#   （P1_Al-AlN：模板引用 amset_clean，jzzn 上没有），激活静默失败、脚本照跑：要么 import 失败，要么用上了
+#   别的环境里别的版本 —— 后者不报错、结果口径不对。本项目只认 0.5.1（AZ_AMSET_REQUIRED=any 可跳过）。
+REQUIRED_AMSET = "0.5.1"
+
+
+def job_env_check():
+    """返回 (ok, 说明)。只在 --in-job 时调（登录节点上本来就可能没装 AMSET）。"""
+    want = os.environ.get("AZ_AMSET_REQUIRED", REQUIRED_AMSET).strip()
+    try:
+        import amset
+        ver = str(getattr(amset, "__version__", None))
+    except Exception as e:                                   # noqa: BLE001
+        return False, ("当前 python（%s）导入不了 amset（%s: %s）—— conda 环境多半没激活成功"
+                       "（提交模板里的环境在本集群不存在？看 submit.sh 的 conda activate 与 step.conf 的 AMSET_ENV）"
+                       % (sys.executable, type(e).__name__, e))
+    if want.lower() != "any" and ver != want:
+        return False, ("当前 python（%s）的 amset 是 %s，不是 %s —— 激活的不是本集群的 AMSET 0.5.1 环境"
+                       "（看 submit.sh 的 conda activate 与 step.conf 的 AMSET_ENV）" % (sys.executable, ver, want))
+    return True, "amset %s（%s）" % (ver, sys.executable)
+
+
 def main():
     import argparse
     ap = argparse.ArgumentParser(description="AMSET 重叠路径运行前检查（VERIFICATION V24）")
@@ -653,6 +675,11 @@ def main():
         m = re.search(r"^unity_overlap:\s*(\S+)", st.read_text(errors="ignore"), re.M)
         unity = (m.group(1).lower() == "true") if m else False
     v, lines = run(cwd, out_dir, unity)
+    if args.in_job:
+        _ok, _msg = job_env_check()
+        lines.insert(0, "  E) 作业环境：%s%s" % (_msg, "" if _ok else "\n     ★ 拦截：环境不对，AMSET 不跑（V138）"))
+        if not _ok:
+            v = "error"
     print("重叠路径运行前检查（VERIFICATION V24%s）：" % ("，作业内 --in-job" if args.in_job else ""))
     for l in lines:
         print(l)

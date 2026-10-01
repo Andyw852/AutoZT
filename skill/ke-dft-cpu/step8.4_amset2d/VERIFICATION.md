@@ -6607,3 +6607,29 @@ C44 ≠ C66 的正确/错误顺序；立方不判）。
 - S8/S8.4 的告警在 P1_Al-AlN、GaAs、无 HSE、带隙够大四种情况下都不崩、文案正确（修复前在第一种情况复现 TypeError）；
 - template_drift 的 STALE / CUSTOM / 相同不报 / submit 跳过 / 无 git / 退出码；
 - S5 告警的位置。
+
+## V138（2026-10-02）：作业内核对 AMSET 环境 + P1 项目模板审计的后续
+
+**用户侧**：
+- template_drift 审计 test_TE/P1：全部 [CUSTOM]。8-15~18 的副本早于仓库历史，但键差清楚：
+  - S5 DFPT：LPEAD .TRUE.（技能 .FALSE.）、缺 ADDGRID。6 份已改名为 `.tpl.stale-20261002`；
+  - S7 形变：ISYM 2（技能 0）、EDIFF、ADDGRID、LVHAR 都不同；
+  - S3：EDIFF 1E-8（技能 1E-7，更紧，无害）、LCHARG .FALSE.（技能 .TRUE.：只影响 V134 的 S3b 从 S3 密度起步，会退回 ICHARG=2）；
+  - S2.3 HFSCREEN：副本写死 0.2，技能由 gen 注入 0.2，同值无害；
+  - S1：键值相同。
+- P1_Al-AlN 的 S8（3918733）提交时，autozt 提示提交模板引用的 `amset_clean` 环境在 jzzn 上不存在。
+
+**S7 副本的影响（要处理）**：
+- ISYM=2 时各形变构型的不可约 k 点不同，模板注释写明"逐 k 差分会对不上"。
+- 缺 LVHAR 就没有 LOCPOT，S7.1 产不出 deformation_vac.h5，2D 的 S8 退回 core 口径（绝对值可差 ~2.8 倍，见 _pick_deformation_h5）。
+- EDIFF/ADDGRID 是 AMSET 官方形变势设置。
+- 所以 P1 三个材料如果 S7 是用这份副本跑的，形变势与 S8 的 ADP 都可疑。
+- 确认方法：看 step7_deform/*/INCAR 的 ISYM/LVHAR，以及 S8 gen 日志里形变势用的是哪个口径。
+
+**改动**：overlap_preflight 的 `--in-job`（S8/S8.4 作业里 AMSET 之前跑的那一步）新增"E) 作业环境"。
+- 当前 python 导入不了 amset -> 拦截，exit 1，提示看 submit.sh 的 conda activate 与 step.conf 的 AMSET_ENV。
+- amset 版本不是 0.5.1 -> 同样拦截。
+- 激活静默失败时，要么 import 失败，要么用上别的环境里别的版本；后者原来不报错、口径不对。
+- 本项目只认 0.5.1；`AZ_AMSET_REQUIRED=any` 可跳过。gen 时（登录节点）不查，那里本来就可能没装 AMSET。
+
+测试：test_preflight_symmetry_verdict 新增 JobEnvTests（2 项：版本/导入失败/跳过开关；--in-job 才拦）。

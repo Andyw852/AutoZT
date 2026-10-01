@@ -220,5 +220,67 @@ class PreflightVerdictTests(unittest.TestCase):
         self.assertEqual(pf.run_sources(out), (None, None))
 
 
+class JobEnvTests(unittest.TestCase):
+    """V138：--in-job 时核对 python 里的 amset 是 0.5.1；环境没激活对（导入失败 / 别的版本）-> 拦截。"""
+
+    def _with_amset(self, mod):
+        import types
+        old = sys.modules.get("amset", "missing")
+        if mod is None:
+            sys.modules["amset"] = None                       # import amset -> ImportError
+        else:
+            sys.modules["amset"] = types.SimpleNamespace(__version__=mod)
+        return old
+
+    def _restore(self, old):
+        if old == "missing":
+            sys.modules.pop("amset", None)
+        else:
+            sys.modules["amset"] = old
+
+    def test_check(self):
+        import os
+        ok, msg = pf.job_env_check()
+        self.assertTrue(ok, msg)                              # 测试环境就是 0.5.1
+        for fake, want_ok, word in (("0.4.19", False, "0.4.19"), (None, False, "导入不了")):
+            old = self._with_amset(fake)
+            try:
+                ok, msg = pf.job_env_check()
+            finally:
+                self._restore(old)
+            self.assertEqual(ok, want_ok, msg)
+            self.assertIn(word, msg)
+        old = self._with_amset("0.4.19")
+        os.environ["AZ_AMSET_REQUIRED"] = "any"
+        try:
+            self.assertTrue(pf.job_env_check()[0])
+        finally:
+            os.environ.pop("AZ_AMSET_REQUIRED", None)
+            self._restore(old)
+
+    def test_main_in_job_blocks(self):
+        import contextlib
+        import io
+        base = _material_dir(gan_std())
+        out = base / "step8_amset"
+        out.mkdir()
+        (out / "settings.yaml").write_text("unity_overlap: true\n")
+        orig, argv = pf.job_env_check, sys.argv
+        pf.job_env_check = lambda: (False, "amset 是 0.4.19")
+        try:
+            for extra, rc_want in ((["--in-job"], 1), ([], None)):
+                sys.argv = ["overlap_preflight.py", str(out)] + extra
+                buf = io.StringIO()
+                with contextlib.redirect_stdout(buf):
+                    rc = pf.main()
+                if rc_want is None:
+                    self.assertNotIn("E) 作业环境", buf.getvalue())    # gen 时（登录节点）不查
+                else:
+                    self.assertEqual(rc, rc_want, buf.getvalue())
+                    self.assertIn("E) 作业环境：amset 是 0.4.19", buf.getvalue())
+        finally:
+            pf.job_env_check, sys.argv = orig, argv
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
