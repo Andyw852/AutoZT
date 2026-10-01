@@ -16,7 +16,7 @@ fit_compare.csv.
 
 Which variants (step3_sweep/step.conf, or `conf --set params.X=...`):
     SWEEP_METHODS    all | "phono3py:symfc pheasy:OLS,RIDGE hiphive:ridge"
-                     (engine alone = that engine's default method,
+                     (engine alone = its default method -- pheasy:ALASSO,
                       engine:all = every method of the engine)
     SWEEP_C3_SHELLS  auto | "5" | "4 5 6" | "3-6"   -- N-th nearest neighbours,
                      the ShengBTE thirdorder.py "-n" convention (per atom, midpoint
@@ -46,12 +46,11 @@ import stepconf
 OUTDIR = "step3_sweep"
 STEP = "step3_sweep"
 
-ENGINE_METHODS = {
-    "phono3py": ("symfc", "alm"),
-    "pheasy": g1.PHEASY_METHODS,
-    "hiphive": g1.HIPHIVE_METHODS,
-}
-DEFAULT_METHOD = {"phono3py": "symfc", "pheasy": "RFE", "hiphive": "ridge"}
+# One method grammar for S1 (FIT_METHODS) and the sweep (SWEEP_METHODS).
+ENGINE_METHODS = g1.ENGINE_METHODS
+DEFAULT_METHOD = g1.DEFAULT_METHOD
+parse_methods = g1.parse_methods
+Overlay = g1.Overlay
 
 SWEEP_SPEC = {
     "SWEEP_METHODS":      ("all", "str"),
@@ -70,74 +69,11 @@ SPEC.update(SWEEP_SPEC)
 
 # per-variant values that must not be inherited from the sweep step.conf
 FORCED = {"ENABLE_FC": 3, "CUT3_SCAN": "off", "CUT3_CANDIDATES": "off",
-          "EXPORT_KL_BUNDLE": False}
+          "EXPORT_KL_BUNDLE": False, "FIT_METHODS": "auto"}
 
 HELPERS = ("sweep_driver.py", "gen_step2_kappa.py", "stepconf.py", "fc_common.py",
            # kappa-prep 在计算节点上算 2D 层厚归一化（gen_step2_kappa.two_d_norm）
            "dim_common.py", "thickness_2d.py", "vdw_radii.py")
-
-
-class Overlay(object):
-    """StepConf with per-variant overrides (read-only, same protocol)."""
-
-    def __init__(self, base, over):
-        self._b, self._o = base, dict(over)
-
-    def __getitem__(self, k):
-        return self._o[k] if k in self._o else self._b[k]
-
-    def get(self, k, default=None):
-        try:
-            return self[k]
-        except KeyError:
-            return default
-
-    def __contains__(self, k):
-        return k in self._o or k in self._b
-
-    @property
-    def submit(self):
-        return self._b.submit
-
-
-def parse_methods(spec):
-    """'all' | 'phono3py:symfc pheasy:OLS,RIDGE hiphive' -> [(engine, method)]."""
-    s = str(spec or "all").strip()
-    out = []
-    toks = re.split(r"[\s;]+", s)
-    for tok in toks:
-        if not tok:
-            continue
-        if tok.lower() == "all":
-            for e, ms in ENGINE_METHODS.items():
-                out += [(e, m) for m in ms]
-            continue
-        eng, _, meths = tok.partition(":")
-        eng = eng.strip().lower()
-        if eng not in ENGINE_METHODS:
-            sys.exit("[ERROR] SWEEP_METHODS: unknown engine %r (phono3py | pheasy | "
-                     "hiphive)" % eng)
-        allowed = ENGINE_METHODS[eng]
-        if not meths:
-            ms = [DEFAULT_METHOD[eng]]
-        elif meths.strip().lower() == "all":
-            ms = list(allowed)
-        else:
-            ms = [x.strip() for x in meths.split(",") if x.strip()]
-        for m in ms:
-            norm = m.upper() if eng == "pheasy" else m.lower()
-            if norm not in allowed:
-                sys.exit("[ERROR] SWEEP_METHODS: %s has no method %r (%s)"
-                         % (eng, m, " | ".join(allowed)))
-            out.append((eng, norm))
-    seen, uniq = set(), []
-    for x in out:
-        if x not in seen:
-            seen.add(x)
-            uniq.append(x)
-    if not uniq:
-        sys.exit("[ERROR] SWEEP_METHODS is empty")
-    return uniq
 
 
 def parse_shells(spec):

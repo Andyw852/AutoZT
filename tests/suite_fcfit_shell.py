@@ -558,6 +558,114 @@ def test_kappa_2d_thickness_norm():
     check("3D 不加归一化字段", kd._two_d_fields({}, [[1, 1, 1]], 0) == {})
 
 
+def test_fit_methods_param():
+    print("[15] FIT_METHODS：默认 ALASSO / 切换 / 多方法全算 + RMSE 面板 + 方法对比")
+    import importlib
+    import json
+    import numpy as np
+    for d in (ROOT / "skill" / "_common", ROOT / "skill" / "_common" / "opt"):
+        sys.path.insert(0, str(d))
+    g1 = importlib.import_module("gen_step1_fit")
+    check("FIT_METHODS 默认 auto，FIT_ENGINE/PHEASY_FIT_METHOD 默认 pheasy ALASSO",
+          g1.SPEC["FIT_METHODS"][0] == "auto" and g1.SPEC["FIT_ENGINE"][0] == "pheasy"
+          and g1.SPEC["PHEASY_FIT_METHOD"][0] == "ALASSO")
+    check("裸方法名：ALASSO / symfc / ard",
+          g1.parse_methods("ALASSO symfc ard") ==
+          [("pheasy", "ALASSO"), ("phono3py", "symfc"), ("hiphive", "ard")])
+    check("引擎单写 = 默认方法（pheasy -> ALASSO）",
+          g1.parse_methods("pheasy") == [("pheasy", "ALASSO")])
+    try:
+        g1.parse_methods("ridge")
+        amb = False
+    except SystemExit:
+        amb = True
+    check("ridge 有歧义（pheasy RIDGE / hiphive ridge）→ 报错", amb)
+    with tempfile.TemporaryDirectory() as td:
+        mat = Path(td) / "mat"
+        ds = mat / "step4_disp"
+        sk = mat / "fit-fc-thermal"
+        ds.mkdir(parents=True)
+        sk.mkdir()
+        ds.joinpath("POSCAR").write_text(
+            "sc\n1.0\n3 0 0\n0 3 0\n0 0 3\nX\n1\nDirect\n0 0 0\n")
+        pos = "".join("%g %g %g\n" % (i / 2, j / 2, k / 2)
+                      for i in range(2) for j in range(2) for k in range(2))
+        ds.joinpath("SPOSCAR").write_text(
+            "sc\n1.0\n6 0 0\n0 6 0\n0 0 6\nX\n8\nDirect\n" + pos)
+        rng = np.random.default_rng(1)
+        dd = rng.normal(0, 0.03, (6, 8, 3))
+        dd[-1] = 0
+        np.save(ds / "dataset_disps.npy", dd)
+        np.save(ds / "dataset_forces.npy", -dd)
+        sk.joinpath("step.conf").write_text(
+            "[params]\nSTEP = step1_fit\nFIT_METHODS = pheasy:OLS hiphive:ridge\n"
+            "CUT3_CANDIDATES = off\n")
+        for t in ("submit_fcfit_p3py", "submit_fcfit_pheasy", "submit_fcfit_hiphive",
+                  "submit_fcfit_pheasy_gpu"):
+            src = ROOT / "skill" / "fit-fc-thermal" / "templates" / "step1_fit" / (t + ".tpl")
+            (sk / (t + ".tpl")).write_text(src.read_text(encoding="utf-8"))
+        cwd = os.getcwd()
+        os.chdir(str(sk))
+        try:
+            import fc_common as _fc
+            _orig = _fc.resolve_submit
+            _fc.resolve_submit = lambda base, kind: sk / (kind + ".tpl")
+            g1.main()
+        finally:
+            _fc.resolve_submit = _orig
+            os.chdir(cwd)
+        st = sk / "step1_fit"
+        mj = json.loads((st / "methods.json").read_text())["methods"]
+        top = json.loads((st / "fit_config.json").read_text())
+        hip = json.loads((st / "methods" / "m-hiphive-ridge" / "fit_config.json").read_text())
+        sub = (st / "submit.sh").read_text()
+        check("多方法：第一个是主方法（step1_fit 本身），其余进 methods/<tag>",
+              [e["tag"] for e in mj] == ["m-pheasy-OLS", "m-hiphive-ridge"]
+              and mj[0]["primary"] and top["engine"] == "pheasy"
+              and top["pheasy_method"] == "OLS" and hip["engine"] == "hiphive"
+              and hip["hiphive_fit_method"] == "ridge", str(mj))
+        check("其余方法同作业串行、失败不致命",
+              "for d in m-hiphive-ridge; do" in sub and "set +e" in sub, sub[-300:])
+    spec = importlib.util.spec_from_file_location(
+        "kd_cmp", str(ROOT / "skill" / "fit-fc-thermal" / "kappa_driver.py"))
+    kd = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(kd)
+    with tempfile.TemporaryDirectory() as td:
+        out = Path(td)
+        (out / "methods" / "m-pheasy-RIDGE").mkdir(parents=True)
+        (out / "methods.json").write_text(json.dumps({"methods": [
+            {"tag": "m-pheasy-ALASSO", "engine": "pheasy", "method": "ALASSO",
+             "dir": ".", "primary": True},
+            {"tag": "m-pheasy-RIDGE", "engine": "pheasy", "method": "RIDGE",
+             "dir": "methods/m-pheasy-RIDGE", "primary": False}]}))
+        for d, k, r in ((out, 91.6, 1.5e-3), (out / "methods" / "m-pheasy-RIDGE", 88.4, 1.3e-3)):
+            (d / "kappa_summary.json").write_text(json.dumps(
+                {"KAPPA_DONE": True, "kappa_2d_normalized_inplane_300K": k}))
+            (d / "fc_fit_summary.json").write_text(json.dumps({"fit_rmse_eV_per_A": r}))
+        doc = kd.compare_methods(out)
+        check("methods_compare：每方法 κ（2D 归一化）+ 力 RMSE（meV/Å）",
+              doc["kappa_key"] == "kappa_2d_normalized_inplane_300K"
+              and [round(r["fit_rmse_meV_per_A"], 3) for r in doc["rows"]] == [1.5, 1.3]
+              and (out / "methods_compare.json").is_file(), str(doc["rows"]))
+        (out / "cutoff_scan.json").write_text(json.dumps({"shells": [2.0, 3.0], "records": [
+            {"cut": 2.5, "force_rmse_eV_per_A": 2e-3}, {"cut": 3.5, "force_rmse_eV_per_A": 1e-3}]}))
+        per = [("2p50", {"kappa_inplane_300K": 10.0, "kappa_300K_xx_yy_zz": [10, 10, 5]}),
+               ("3p50", {"kappa_inplane_300K": 9.0, "kappa_300K_xx_yy_zz": [9, 9, 4]})]
+        d2 = kd._write_kappa_vs_cutoff(out, per, {"chosen_cut": 3.5, "status": "ok"})
+        check("kappa_vs_cutoff.json 带每档力 RMSE（右侧面板数据）",
+              [r["force_rmse_meV_per_A"] for r in d2["rows"]] == [2.0, 1.0])
+        check("methods_compare 不再画图（只出 JSON）",
+              not (out / "methods_compare.png").exists())
+        one = out / "methods" / "m-pheasy-RIDGE"
+        d3 = kd._write_kappa_vs_cutoff(
+            one, [("4p00", {"kappa_inplane_300K": 8.0, "kappa_300K_xx_yy_zz": [8, 8, 0]})],
+            {"chosen_cut": 4.0, "status": "nominal"},
+            {"is_2d": True, "method_label": "pheasy RIDGE"})
+        check("无截断扫描：单点图，RMSE 取 fc_fit_summary，图上标方法名",
+              len(d3["rows"]) == 1 and d3["rows"][0]["force_rmse_meV_per_A"] == 1.3
+              and d3["method"] == "pheasy RIDGE", str(d3["rows"]))
+
+
 def main():
     test_shells_and_candidates()
     test_resolve()
@@ -572,6 +680,7 @@ def main():
     test_method_sweep()
     test_cut3_without_bootstrap_and_curve()
     test_kappa_2d_thickness_norm()
+    test_fit_methods_param()
     print("\nsuite_fcfit_shell: %s（%d 项）"
           % ("ALL PASS" if not FAIL else "FAIL", N))
     return 1 if FAIL else 0

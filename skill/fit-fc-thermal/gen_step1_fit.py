@@ -17,6 +17,7 @@ The fitting itself happens in the submitted job (fc_fit_driver.py prep|fit|post)
 import glob
 import json
 import os
+import re
 import shutil
 import sys
 from pathlib import Path
@@ -60,7 +61,11 @@ SPEC = {
                                              # "n11 n12 n13 n21 n22 n23 n31 n32 n33"
                                              # （行主序，与 phonopy/phono3py --dim 同义）
     # ---- engine ----
-    "FIT_ENGINE": ("phono3py", "str"),       # phono3py | pheasy | hiphive
+    # 拟合方法：FIT_METHODS 是总开关（auto = 用下面的 FIT_ENGINE + 该引擎的方法键）。
+    #   写一个（如 pheasy:RIDGE）= 切换；写多个 / all = 全都算，第一个是主方法
+    #   （S1 判据、S2 主结果），其余同一作业内串行拟合，S2 各算 κ 并出方法对比。
+    "FIT_METHODS": ("auto", "str"),
+    "FIT_ENGINE": ("pheasy", "str"),         # phono3py | pheasy | hiphive
     "ENABLE_FC": (3, "int"),                 # 2 | 3 (highest order to fit)
     "DIM": ("auto", "str"),                  # auto | 2d | 3d (NAC verdict only)
     # ---- shell / third-order cutoff determination (ported from kl-dft-cpu
@@ -83,7 +88,7 @@ SPEC = {
     "FC_CALC": ("symfc", "str"),             # symfc | alm
     "FC3_CUTOFF": ("", "str"),               # fc3 cutoff in A; empty = no cutoff
     # ---- pheasy ----
-    "PHEASY_FIT_METHOD": ("RFE", "str"),     # OLS|LASSO|ALASSO|RFE|RFE-OLS-TSQR|RIDGE
+    "PHEASY_FIT_METHOD": ("ALASSO", "str"),  # OLS|LASSO|ALASSO|RFE|RFE-OLS-TSQR|RIDGE
     "PHEASY_BIN": ("pheasy", "str"),         # pheasy | pheasy-gpu
     "PHEASY_C2_CUTOFF": ("", "str"),         # fc2 cutoff in A; empty = none
     "PHEASY_C3_CUTOFF": ("", "str"),         # fc3 cutoff in A; empty = none
@@ -149,7 +154,8 @@ SPEC = {
     "FC3_LOAD_GB_LIMIT": (8.0, "float"),     # skip materialising fc3 above this (ShengBTE/RMSE)
     "BAND_POINTS": (51, "int"),
     "IMAG_THR": (0.10, "float"),             # imaginary-frequency threshold (THz)
-    "FIT_RMSE_FRAMES": (0, "int"),           # 0 = off; else frames used for the residual
+    "FIT_RMSE_FRAMES": (10, "int"),          # frames for the force residual (also per
+                                             # cutoff -> S2 RMSE panel); 0 = off
     # ---- environment ----
     "CONDA_SH": ("/public/home/.../miniconda3/etc/profile.d/conda.sh", "str"),
     "CONDA_ENV": ("atomate2_p_a", "str"),
@@ -360,18 +366,176 @@ def resolve_dataset(cfg_dir, step_dir, want):
              % "\n  ".join(tried))
 
 
+ENGINE_METHODS = {
+    "phono3py": ("symfc", "alm"),
+    "pheasy": PHEASY_METHODS,
+    "hiphive": HIPHIVE_METHODS,
+}
+DEFAULT_METHOD = {"phono3py": "symfc", "pheasy": "ALASSO", "hiphive": "ridge"}
+_METHOD_KEY = {"phono3py": "FC_CALC", "pheasy": "PHEASY_FIT_METHOD",
+               "hiphive": "HIPHIVE_FIT_METHOD"}
+
+
+def parse_methods(spec):
+    """'all' | 'ALASSO' | 'pheasy:OLS,RIDGE hiphive' | 'pheasy:all' -> [(engine, method)].
+
+    A bare method name (ALASSO, ridge, symfc ...) is looked up across engines;
+    an engine alone means its default method (phono3py:symfc, pheasy:ALASSO,
+    hiphive:ridge)."""
+    s = str(spec or "all").strip()
+    out = []
+    for tok in re.split(r"[\s;]+", s):
+        if not tok:
+            continue
+        if tok.lower() == "all":
+            for e, ms in ENGINE_METHODS.items():
+                out += [(e, m) for m in ms]
+            continue
+        eng, _, meths = tok.partition(":")
+        eng = eng.strip().lower()
+        if eng not in ENGINE_METHODS and not meths:
+            # bare method name: ALASSO / RIDGE / ridge / symfc ...
+            hits = [(e, m) for e, ms in ENGINE_METHODS.items() for m in ms
+                    if m.lower() == eng]
+            if len(hits) != 1:
+                sys.exit("[ERROR] FIT_METHODS: %r is %s -- write engine:method "
+                         "(e.g. pheasy:RIDGE, hiphive:ridge)"
+                         % (tok, "ambiguous" if hits else "unknown"))
+            out += hits
+            continue
+        if eng not in ENGINE_METHODS:
+            sys.exit("[ERROR] FIT_METHODS: unknown engine %r (phono3py | pheasy | "
+                     "hiphive)" % eng)
+        allowed = ENGINE_METHODS[eng]
+        if not meths:
+            ms = [DEFAULT_METHOD[eng]]
+        elif meths.strip().lower() == "all":
+            ms = list(allowed)
+        else:
+            ms = [x.strip() for x in meths.split(",") if x.strip()]
+        for m in ms:
+            norm = m.upper() if eng == "pheasy" else m.lower()
+            if norm not in allowed:
+                sys.exit("[ERROR] FIT_METHODS: %s has no method %r (%s)"
+                         % (eng, m, " | ".join(allowed)))
+            out.append((eng, norm))
+    seen, uniq = set(), []
+    for x in out:
+        if x not in seen:
+            seen.add(x)
+            uniq.append(x)
+    if not uniq:
+        sys.exit("[ERROR] FIT_METHODS is empty")
+    return uniq
+
+
+def method_overrides(engine, method):
+    return {"FIT_ENGINE": engine, _METHOD_KEY[engine]: method, "FIT_METHODS": "auto"}
+
+
+def method_tag(engine, method):
+    return "m-%s-%s" % (engine, method)
+
+
+class Overlay(object):
+    """StepConf with per-method overrides (read-only, same protocol)."""
+
+    def __init__(self, base, over):
+        self._b, self._o = base, dict(over)
+
+    def __getitem__(self, k):
+        return self._o[k] if k in self._o else self._b[k]
+
+    def get(self, k, default=None):
+        try:
+            return self[k]
+        except KeyError:
+            return default
+
+    def __contains__(self, k):
+        return k in self._o or k in self._b
+
+    @property
+    def submit(self):
+        return self._b.submit
+
+
+def _cfg_method(cfg):
+    eng = str(cfg.get("engine") or "")
+    return eng, {"phono3py": cfg.get("fc_calc"), "pheasy": cfg.get("pheasy_method"),
+                 "hiphive": cfg.get("hiphive_fit_method")}.get(eng)
+
+
+METHODS_TAIL = """
+# ---- FIT_METHODS: the other fitting methods, serially, in methods/<tag>/ ------
+# Non-fatal: a failing method is logged and skipped; the primary fit above owns
+# the S1 gate.  Each method directory is a complete S1 recipe (fit_config.json).
+set +e
+for d in %s; do
+    ( cd "methods/$d" && python fc_fit_driver.py prep fit_config.json \\
+        && python fc_fit_driver.py fit fit_config.json \\
+        && python fc_fit_driver.py post fit_config.json ) > "methods/$d/run.log" 2>&1 \\
+        || echo "[WARN] method $d failed -- see methods/$d/run.log"
+done
+set -e
+"""
+
+
 def main(conf=None, out=None, job_label="S1fit"):
-    """S1_fit gen.  conf/out/job_label let gen_step3_sweep.py reuse the whole
-    recipe for one method-sweep variant (conf = the sweep step.conf with the
-    variant's engine/method/cutoff overrides, out = step3_sweep/m-<tag>/);
-    called without arguments it is the plain S1_fit gen."""
+    """S1_fit gen.
+
+    Called without arguments it is the plain S1_fit gen: FIT_METHODS picks the
+    method(s) -- auto = FIT_ENGINE + its method key; one method = switch; a list
+    or `all` = the first is the primary (step1_fit/ itself, the S1 gate), the
+    others go to step1_fit/methods/<tag>/ and run in the same job.
+    conf/out/job_label let gen_step3_sweep.py reuse the recipe for one sweep
+    variant (out = step3_sweep/m-<tag>/)."""
     cwd = Path.cwd()
-    out = Path(out) if out is not None else cwd / OUTDIR
-    out.mkdir(parents=True, exist_ok=True)
     if conf is None:
         conf = stepconf.load(SPEC, STEP)
+    if out is not None:
+        return _gen_one(conf, Path(out), job_label)
+    out = cwd / OUTDIR
+    spec = str(conf.get("FIT_METHODS") or "auto").strip()
+    methods = None if spec.lower() in ("", "auto") else parse_methods(spec)
+    if not methods:
+        cfg = _gen_one(conf, out, job_label)
+        entries = [dict(zip(("engine", "method"), _cfg_method(cfg)), dir=".",
+                        primary=True)]
+    else:
+        print("[..] FIT_METHODS=%s -> %d 个方法：%s（主方法 %s）"
+              % (spec, len(methods), ", ".join("%s:%s" % m for m in methods),
+                 "%s:%s" % methods[0]), flush=True)
+        cfg = _gen_one(Overlay(conf, method_overrides(*methods[0])), out, job_label)
+        entries = [{"engine": methods[0][0], "method": methods[0][1], "dir": ".",
+                    "primary": True}]
+        for eng, meth in methods[1:]:
+            tag = method_tag(eng, meth)
+            print("\n[..] ==== 方法 %s ====" % tag, flush=True)
+            _gen_one(Overlay(conf, method_overrides(eng, meth)),
+                     out / "methods" / tag, job_label)
+            entries.append({"engine": eng, "method": meth,
+                            "dir": "methods/" + tag, "primary": False})
+        extra = [e["dir"].split("/", 1)[1] for e in entries if not e["primary"]]
+        if extra:
+            with open(out / "submit.sh", "a", encoding="utf-8", newline="\n") as fh:
+                fh.write(METHODS_TAIL % " ".join(extra))
+            print("[..] 其余 %d 个方法与主方法同一作业串行运行（多方法耗时累加；"
+                  "大批量对比更适合 S3_sweep 并行）" % len(extra), flush=True)
+    for e in entries:
+        e["tag"] = method_tag(e["engine"], e["method"])
+    (out / "methods.json").write_text(
+        json.dumps({"methods": entries}, indent=2, ensure_ascii=False),
+        encoding="utf-8", newline="\n")
+    return cfg
 
-    engine = str(conf["FIT_ENGINE"] or "phono3py").lower()
+
+def _gen_one(conf, out, job_label="S1fit"):
+    """One S1 recipe (one engine/method) into `out`."""
+    cwd = Path.cwd()
+    out.mkdir(parents=True, exist_ok=True)
+
+    engine = str(conf["FIT_ENGINE"] or "pheasy").lower()
     if engine not in ENGINES:
         sys.exit("[ERROR] FIT_ENGINE must be one of %s" % " | ".join(ENGINES))
     enable = int(conf["ENABLE_FC"] or 3)
@@ -393,7 +557,7 @@ def main(conf=None, out=None, job_label="S1fit"):
     fc_calc = str(conf["FC_CALC"] or "symfc").lower()
     if fc_calc not in ("symfc", "alm"):
         sys.exit("[ERROR] FC_CALC must be symfc or alm")
-    p_method = str(conf["PHEASY_FIT_METHOD"] or "RFE").upper()
+    p_method = str(conf["PHEASY_FIT_METHOD"] or "ALASSO").upper()
     if engine == "pheasy" and p_method not in PHEASY_METHODS:
         sys.exit("[ERROR] PHEASY_FIT_METHOD must be one of %s"
                  % " | ".join(PHEASY_METHODS))
@@ -498,6 +662,14 @@ def main(conf=None, out=None, job_label="S1fit"):
             min_gap=float(conf["CUT3_MIN_GAP"]))
     except Exception as _e:                              # noqa: BLE001
         _cnote = "shell enumeration failed: %s" % _e
+    if not _shells and _pos.is_file():
+        # explicit / off candidates: still record the shells, S2's kappa-vs-cutoff
+        # figure labels every cutoff with the number of shells inside it
+        try:
+            _shells = fc.neighbor_shells(_pos, r_max=float(conf["CUT3_MAX"]),
+                                         tol=float(conf["CUT3_GAP_TOL"]))[0]
+        except Exception:                                # noqa: BLE001
+            _shells = []
     print("[..] 壳层/截断候选：%s" % _cnote)
     _safe, _nsc, _eff = None, 0, {}
     try:

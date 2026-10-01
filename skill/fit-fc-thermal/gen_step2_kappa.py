@@ -165,6 +165,25 @@ def _mesh_cfg(conf, fit_dir):
     }
 
 
+def _fit_identity(fit):
+    """{'method_label': 'pheasy ALASSO', 'nominal_cut3_A': 5.86} from the fit."""
+    try:
+        fc = json.loads((Path(fit) / "fit_config.json").read_text(encoding="utf-8"))
+    except Exception:
+        return {"method_label": None, "nominal_cut3_A": None}
+    eng = str(fc.get("engine") or "")
+    meth = {"phono3py": fc.get("fc_calc"), "pheasy": fc.get("pheasy_method"),
+            "hiphive": fc.get("hiphive_fit_method")}.get(eng)
+    raw = {"phono3py": fc.get("fc3_cutoff"), "pheasy": fc.get("pheasy_c3_cutoff"),
+           "hiphive": fc.get("hiphive_cutoff3")}.get(eng)
+    try:
+        cut = float(raw) if raw not in (None, "") else None
+    except (TypeError, ValueError):
+        cut = None
+    return {"method_label": ("%s %s" % (eng, meth)).strip() or None,
+            "nominal_cut3_A": cut}
+
+
 def two_d_norm(fit_dir, mode):
     """2D thickness normalisation for kappa_driver (None for a 3D cell or when
     the geometry cannot be read).  Same source as kl-dft-cpu: factor = h_perp/d."""
@@ -192,13 +211,62 @@ def two_d_norm(fit_dir, mode):
     return g
 
 
+METHODS_TAIL = """
+# ---- FIT_METHODS: kappa for the other fitting methods, then the comparison ----
+set +e
+for d in %s; do
+    ( cd "methods/$d" && python kappa_driver.py kappa_config.json ) \\
+        > "methods/$d/run.log" 2>&1 || echo "[WARN] kappa for $d failed -- see methods/$d/run.log"
+done
+python kappa_driver.py compare
+set -e
+"""
+
+
 def main():
+    """S2_kappa gen: the primary fit (step1_fit/) -> step2_kappa/; every other
+    FIT_METHODS fit (step1_fit/methods/<tag>/, listed in step1_fit/methods.json)
+    -> step2_kappa/methods/<tag>/, run in the same job, then
+    `kappa_driver.py compare` writes methods_compare.{json,png,pdf}."""
     cwd = Path.cwd()
     out = cwd / OUTDIR
-    out.mkdir(exist_ok=True)
     conf = stepconf.load(SPEC, STEP)
     fit = cwd / FIT_DIR
+    _gen_one(conf, fit, out, cwd, write_submit=True)
+    mj = fit / "methods.json"
+    entries = []
+    if mj.is_file():
+        try:
+            entries = json.loads(mj.read_text(encoding="utf-8")).get("methods") or []
+        except Exception:
+            entries = []
+    done = []
+    for e in entries:
+        if e.get("primary"):
+            continue
+        src = fit / e["dir"]
+        if not ((src / "fc2.hdf5").is_file() and (src / "fc3.hdf5").is_file()):
+            print("[WARN] 方法 %s 没有 fc2/fc3（S1 里失败了？见 %s/run.log）—— 跳过"
+                  % (e["tag"], src), flush=True)
+            e["skipped"] = "no fc2/fc3 from S1"
+            continue
+        print("\n[..] ==== 方法 %s ====" % e["tag"], flush=True)
+        _gen_one(conf, src, out / e["dir"], cwd, write_submit=False)
+        done.append(e["dir"].split("/", 1)[1])
+    if entries:
+        (out / "methods.json").write_text(
+            json.dumps({"methods": entries}, indent=2, ensure_ascii=False),
+            encoding="utf-8", newline="\n")
+    if done:
+        with open(out / "submit.sh", "a", encoding="utf-8", newline="\n") as fh:
+            fh.write(METHODS_TAIL % " ".join(done))
+        print("[..] 另 %d 个方法的 κ 在同一作业内串行算，最后出 methods_compare"
+              % len(done), flush=True)
 
+
+def _gen_one(conf, fit, out, cwd, write_submit=True):
+    """One S2 recipe: kappa from the fc2/fc3 in `fit` into `out`."""
+    out.mkdir(parents=True, exist_ok=True)
     if not (fit / "fc2.hdf5").is_file() or not (fit / "fc3.hdf5").is_file():
         sys.exit("[ERROR] %s 缺 fc2.hdf5/fc3.hdf5 —— step1_fit 还没拟合完" % fit)
     enable_fc = 3
@@ -274,6 +342,9 @@ def main():
         "kappa_2d_norm": (two_d_norm(fit, conf["KAPPA_2D_THICKNESS"])
                           if mcfg["is_2d"] else None),
         "source_fc": str(fit),
+        # the fit's own cutoff and method: the per-method kappa figure is drawn
+        # even without a cutoff scan (one point at the nominal cutoff)
+        **_fit_identity(fit),
     }
     (out / "kappa_config.json").write_text(
         json.dumps(cfg, indent=2, ensure_ascii=False), encoding="utf-8",
@@ -284,6 +355,13 @@ def main():
         if not (here / _f).is_file():
             sys.exit("[ERROR] %s missing -- is it listed in gen_need?" % _f)
         shutil.copyfile(str(here / _f), str(out / _f))
+    # the fit's own summary (method, gate, force RMSE) travels with the kappa so
+    # the method comparison and the RMSE panel need no path back into step1_fit
+    if (fit / "fc_fit_summary.json").is_file():
+        shutil.copyfile(str(fit / "fc_fit_summary.json"), str(out / "fc_fit_summary.json"))
+    if not write_submit:
+        print("[DONE] %s: kappa_config.json ready" % out.relative_to(cwd), flush=True)
+        return
 
     tpl = fc.resolve_submit(here, "submit_kappa")
     subs = {

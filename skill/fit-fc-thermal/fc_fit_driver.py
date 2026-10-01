@@ -1325,7 +1325,8 @@ def _phono3py_scan(cfg, out, ph3, calc, enable, fc2_full, p2s):
         print("  c3=%.2f A -> cutoff_scan/cut3_%s/" % (c, tag), flush=True)
     _write_cutoff_scan(out, {
         "mode": "scan", "engine": "phono3py",
-        "candidates": [float(x) for x in cands], "shells": [],
+        "candidates": [float(x) for x in cands],
+        "shells": [float(x) for x in (cfg.get("cut3_shells") or [])],
         "stability_thr": float(cfg.get("cut3_stability_thr") or 0.3),
         "safe_cutoff": safe,
         "note": ("phono3py per-cut fc3 refits: the cutoff is a physical "
@@ -2229,9 +2230,11 @@ def _expand_compact_fc3(fc3c, prim):
     return full
 
 
-def _read_fc3_any(out, compact_ok=False):
+def _read_fc3_any(out, compact_ok=False, prim_dir=None):
     """fc3 array from fc3.hdf5; a compact file is expanded to full unless
-    compact_ok (then the caller gets (n_prim,N,N,3,3,3) and uses _fc3_p2s)."""
+    compact_ok (then the caller gets (n_prim,N,N,3,3,3) and uses _fc3_p2s).
+    prim_dir: where the phono3py YAML for the expansion lives (default `out`;
+    cutoff_scan/cut3_<c>/ holds only the hdf5 files)."""
     import h5py
     p = out / "fc3.hdf5"
     if not p.is_file():
@@ -2242,7 +2245,7 @@ def _read_fc3_any(out, compact_ok=False):
         fc3 = np.asarray(h["fc3"][()], float)
     if compact_ok or fc3.shape[0] == fc3.shape[1]:
         return fc3
-    return _expand_compact_fc3(fc3, _fc3_primitive(out))
+    return _expand_compact_fc3(fc3, _fc3_primitive(prim_dir or out))
 
 
 def _fc3_load_bytes(out):
@@ -2509,12 +2512,17 @@ def _stability_gate(cfg, out):
             "is_2d": is2d, "status": "stable" if stable else "imaginary", "note": note}
 
 
-def _fit_rmse(cfg, out):
+def _fit_rmse(cfg, out, fc_dir=None, quiet=False):
     """Engine-independent training residual: predict the forces of a few frames
-    from the fitted force constants and compare with the dataset."""
+    from the fitted force constants and compare with the dataset.
+
+    fc_dir: where fc2.hdf5/fc3.hdf5 live (default: the step directory); the
+    dataset and SPOSCAR always come from the step directory.  Used per
+    cutoff_scan/cut3_<c>/ too (those force constants are in dataset order)."""
     n = int(cfg.get("fit_rmse_frames") or 0)
     if n <= 0:
         return {}
+    fcd = Path(fc_dir) if fc_dir is not None else Path(out)
     try:
         from hiphive import ForceConstants
         from hiphive.calculators import ForceConstantCalculator
@@ -2526,16 +2534,16 @@ def _fit_rmse(cfg, out):
         # dataset_*.npy, SPOSCAR and the force constants share one order.
         idx = np.linspace(0, len(disps) - 1, min(n, len(disps))).round().astype(int)
         sc = _read_poscar(out / "SPOSCAR")
-        fc2 = _read_fc2_any(out)
+        fc2 = _read_fc2_any(fcd)
         fc3 = None
-        _fc3_bytes = _fc3_load_bytes(out)
+        _fc3_bytes = _fc3_load_bytes(fcd)
         _fc3_limit = float(cfg.get("fc3_load_gb_limit") or 8.0) * 1e9
         if _fc3_bytes is not None and _fc3_bytes > _fc3_limit:
             print("[..] fc3.hdf5 too large to materialise (%.1f GB > %.1f GB); "
                   "evaluating the fc2-only residual" % (_fc3_bytes / 1e9, _fc3_limit / 1e9),
                   flush=True)
         else:
-            fc3 = _read_fc3_any(out)
+            fc3 = _read_fc3_any(fcd, prim_dir=out)
         arrays = {"fc2_array": fc2}
         if fc3 is not None:
             arrays["fc3_array"] = fc3
@@ -2553,13 +2561,51 @@ def _fit_rmse(cfg, out):
             cnt += p.size
         rmse = float(np.sqrt(se / max(cnt, 1)))
         rel = float(np.sqrt(se / ss)) if ss > 0 else None
-        print("[OK] fit residual over %d frame(s): RMSE %.5f eV/A (relative %.4f)"
-              % (len(idx), rmse, rel if rel is not None else float("nan")), flush=True)
+        if not quiet:
+            print("[OK] fit residual over %d frame(s): RMSE %.5f eV/A (relative %.4f)"
+                  % (len(idx), rmse, rel if rel is not None else float("nan")),
+                  flush=True)
         return {"fit_rmse_eV_per_A": rmse, "fit_rmse_relative": rel,
                 "fit_rmse_frames_used": int(len(idx))}
     except Exception as e:
         print("[..] fit-residual evaluation skipped: %s" % e, flush=True)
         return {}
+
+
+def _scan_rmse(cfg, out):
+    """Force RMSE of every cutoff_scan/cut3_<c>/ fit, written back into
+    cutoff_scan.json (force_rmse_eV_per_A / force_rmse_relative per record) --
+    the right-hand panel of S2's kappa_vs_cutoff figure."""
+    p = Path(out) / "cutoff_scan.json"
+    if not p.is_file() or int(cfg.get("fit_rmse_frames") or 0) <= 0:
+        return
+    try:
+        scan = json.loads(p.read_text(encoding="utf-8"))
+    except Exception:
+        return
+    changed = False
+    for r in scan.get("records") or []:
+        if r.get("cut") is None:
+            continue
+        d = Path(out) / (r.get("dir") or ("cutoff_scan/cut3_%s"
+                                          % ("%.2f" % float(r["cut"])).replace(".", "p")))
+        if not (d / "fc2.hdf5").is_file():
+            continue
+        try:
+            m = _fit_rmse(cfg, out, fc_dir=d, quiet=True)
+        except (Exception, SystemExit) as e:          # never fail post for a panel
+            print("[..] c3=%s: force RMSE skipped (%s)" % (r["cut"], e), flush=True)
+            m = {}
+        if m:
+            r["force_rmse_eV_per_A"] = m["fit_rmse_eV_per_A"]
+            r["force_rmse_relative"] = m["fit_rmse_relative"]
+            changed = True
+            print("[..] c3=%.2f A: force RMSE %.2f meV/A (relative %.2f%%)"
+                  % (float(r["cut"]), 1e3 * m["fit_rmse_eV_per_A"],
+                     100 * (m["fit_rmse_relative"] or float("nan"))), flush=True)
+    if changed:
+        p.write_text(json.dumps(scan, ensure_ascii=False, indent=2),
+                     encoding="utf-8", newline="\n")
 
 
 def _write_kl_bundle(out, cfg):
@@ -2613,6 +2659,7 @@ def cmd_post(cfg, out):
             cfg[k] = ds[src_key]
     sb_ok = _export_shengbte(cfg, out)
     rmse = _fit_rmse(cfg, out)
+    _scan_rmse(cfg, out)
     # Shell report: the pheasy scan already wrote the fuller cutoff_scan.json;
     # for phono3py / hiphive this records the per-shell mean |Phi^3| of the
     # nominal fit (no bootstrap -- stable_upper_cut needs the pheasy refits).

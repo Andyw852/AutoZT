@@ -27,6 +27,8 @@ cutoff scan the scan runs at the starting mesh, then the chosen cutoff's fc is
 converged in mesh.
 """
 import json
+import math
+import shutil
 import sys
 from pathlib import Path
 
@@ -468,21 +470,26 @@ _SCI_RC = {
 
 
 def _write_kappa_vs_cutoff(out, per_cut, rep=None, cfg=None):
-    """kappa(300 K) vs third-order cutoff.
+    """kappa(300 K) and the fit error vs third-order cutoff.
 
     kappa_vs_cutoff.json always; kappa_vs_cutoff.png (300 dpi) + .pdf when
-    matplotlib is available.  One panel per component (xx, yy, zz), every
-    segment labelled with its relative change (bold inside the plateau
-    tolerance).  A 2D layer gets xx and yy only -- its zz has no physical
-    meaning -- plotted thickness-normalised (kappa * h_perp/d) when the run
-    carries the factor.  Written before the cutoff choice can fail."""
+    matplotlib is available.  Left column: one panel per component (xx, yy,
+    zz), every point labelled with its kappa and every segment with its
+    relative change (bold inside the plateau tolerance).  Right column: the
+    force RMSE of each cutoff's fit (cutoff_scan.json force_rmse_eV_per_A,
+    written by S1 when FIT_RMSE_FRAMES > 0), or pheasy's relative error when
+    that is all there is.  A 2D layer gets xx and yy only -- its zz has no
+    physical meaning -- thickness-normalised when the run carries the factor.
+    Written before the cutoff choice can fail."""
     cfg = cfg or {}
-    shells = []
+    scan = {}
     try:
-        shells = [float(x) for x in json.loads(
-            (out / "cutoff_scan.json").read_text(encoding="utf-8")).get("shells") or []]
+        scan = json.loads((out / "cutoff_scan.json").read_text(encoding="utf-8"))
     except Exception:
-        shells = []
+        scan = {}
+    shells = [float(x) for x in (scan.get("shells") or [])]
+    srec = {round(float(r["cut"]), 3): r for r in (scan.get("records") or [])
+            if r.get("cut") is not None}
     norm = cfg.get("kappa_2d_norm") or None
     f2d = float(norm["kappa_2d_norm_factor"]) if norm and norm.get(
         "kappa_2d_norm_factor") else None
@@ -492,17 +499,34 @@ def _write_kappa_vs_cutoff(out, per_cut, rep=None, cfg=None):
         cut = _cut_of_tag(tag)
         k3 = list(s.get("kappa_300K_xx_yy_zz") or [None, None, None]) + [None] * 3
         f = flags.get(round(cut, 3), {})
+        sr = srec.get(round(cut, 3), {})
+        rm = sr.get("force_rmse_eV_per_A")
+        te = sr.get("train_rel_err")
         row = {"cut_A": cut,
                "n_shells": (sum(1 for d in shells if d <= cut + 1e-9)
                             if shells else None),
                "kappa_xx": k3[0], "kappa_yy": k3[1], "kappa_zz": k3[2],
                "kappa_inplane": s.get("kappa_inplane_300K"),
                "mesh": s.get("mesh"),
+               "force_rmse_meV_per_A": None if rm is None else 1e3 * float(rm),
+               "force_rmse_relative": sr.get("force_rmse_relative"),
+               "fit_rel_err": None if te is None else float(te),
                "stable_ok": f.get("stable_ok"), "plateau_ok": f.get("plateau_ok")}
         if f2d:
             for k in ("kappa_xx", "kappa_yy", "kappa_inplane"):
                 row[k + "_2d_norm"] = None if row[k] is None else row[k] * f2d
         rows.append(row)
+    if len(rows) == 1 and rows[0]["force_rmse_meV_per_A"] is None:
+        # no cutoff scan: the nominal fit's own residual (S2 copies fc_fit_summary.json)
+        try:
+            fs = json.loads((out / "fc_fit_summary.json").read_text(encoding="utf-8"))
+            if fs.get("fit_rmse_eV_per_A") is not None:
+                rows[0]["force_rmse_meV_per_A"] = 1e3 * float(fs["fit_rmse_eV_per_A"])
+                rows[0]["force_rmse_relative"] = fs.get("fit_rmse_relative")
+            elif fs.get("pheasy_relative_error") is not None:
+                rows[0]["fit_rel_err"] = float(fs["pheasy_relative_error"])
+        except Exception:
+            pass
     for a_, b_ in zip(rows, rows[1:]):
         b_["pct_change_from_prev"] = {
             k: (None if (a_[k] in (None, 0) or b_[k] is None
@@ -513,6 +537,7 @@ def _write_kappa_vs_cutoff(out, per_cut, rep=None, cfg=None):
     is_2d = bool(cfg.get("is_2d")) or (bool(rows) and all(
         abs(r["kappa_zz"] or 0.0) < 1e-3 * max(big, 1e-12) for r in rows))
     doc = {"T_K": 300, "rows": rows, "is_2d": is_2d,
+           "method": cfg.get("method_label"),
            "kappa_2d_norm_factor": f2d,
            "chosen_cut_A": (rep or {}).get("chosen_cut"),
            "status": (rep or {}).get("status"),
@@ -522,11 +547,13 @@ def _write_kappa_vs_cutoff(out, per_cut, rep=None, cfg=None):
         json.dumps(doc, indent=2, ensure_ascii=False), encoding="utf-8", newline="\n")
     print("[..] kappa vs cutoff (300 K):", flush=True)
     for r in rows:
-        print("     c3=%.2f A%s  in-plane %s%s  xx/yy/zz %s"
+        print("     c3=%.2f A%s  in-plane %s%s  xx/yy/zz %s%s"
               % (r["cut_A"], "" if r["n_shells"] is None else " (%d shells)" % r["n_shells"],
                  r["kappa_inplane"],
                  "" if not f2d else " (2D-normalised %.3f)" % r["kappa_inplane_2d_norm"],
-                 [r["kappa_xx"], r["kappa_yy"], r["kappa_zz"]]), flush=True)
+                 [r["kappa_xx"], r["kappa_yy"], r["kappa_zz"]],
+                 "" if r["force_rmse_meV_per_A"] is None
+                 else "  RMSE %.2f meV/A" % r["force_rmse_meV_per_A"]), flush=True)
     try:
         import matplotlib
         matplotlib.use("Agg")
@@ -538,24 +565,53 @@ def _write_kappa_vs_cutoff(out, per_cut, rep=None, cfg=None):
         return doc
     tol = float((rep or {}).get("kappa_tol_pct") or 5.0)
     suf = "_2d_norm" if (is_2d and f2d) else ""
-    comps = [("xx", "kappa_xx" + suf), ("yy", "kappa_yy" + suf)]
-    if not is_2d:
-        comps.append(("zz", "kappa_zz"))
     xs = [r["cut_A"] for r in rows]
     ch = doc["chosen_cut_A"]
+    if any(r["force_rmse_meV_per_A"] is not None for r in rows):
+        ekey, elab = "force_rmse_meV_per_A", r"Force RMSE (meV $\AA^{-1}$)"
+    elif any(r["fit_rel_err"] is not None for r in rows):
+        ekey, elab = "fit_rel_err", "Fit relative error"
+    else:
+        ekey, elab = None, r"Force RMSE (meV $\AA^{-1}$)"
+    xticks = (["%.2f\n(%d)" % (r["cut_A"], r["n_shells"]) for r in rows]
+              if rows and rows[0]["n_shells"] is not None else None)
     with plt.rc_context(_SCI_RC):
-        fig, axes = plt.subplots(len(comps), 1, figsize=(3.5, 1.9 * len(comps) + 0.5),
-                                 sharex=True)
-        for i, (ax, (lab, key)) in enumerate(zip(axes, comps)):
+        # always 2 x 2: (a) kxx | (b) kzz  /  (c) kyy | (d) force RMSE
+        fig, grid = plt.subplots(2, 2, figsize=(7.0, 5.4), sharex=True,
+                                 gridspec_kw={"wspace": 0.42, "hspace": 0.10})
+        ax_xx, ax_zz = grid[0]
+        ax_yy, ax_rm = grid[1]
+
+        def _series(ax, key, fmt, label_pct):
             pts = [(x, r[key]) for x, r in zip(xs, rows) if r[key] is not None]
             ys = [p[1] for p in pts]
-            if ys:
-                ax.plot([p[0] for p in pts], ys, color=_LINE, lw=1.2, zorder=3)
-                ax.plot([p[0] for p in pts], ys, ls="none", marker="o", ms=4.5,
-                        mfc=_LINE, mec=_INK, mew=0.6, zorder=4)
-                lo, hi = min(ys), max(ys)
-                pad = 0.22 * (hi - lo if hi > lo else abs(hi) or 1.0)
-                ax.set_ylim(lo - pad * 0.6, hi + pad)
+            if not ys:
+                return False
+            ax.plot([p[0] for p in pts], ys, color=_LINE, lw=1.2, zorder=3)
+            ax.plot([p[0] for p in pts], ys, ls="none", marker="o", ms=4.5,
+                    mfc=_LINE, mec=_INK, mew=0.6, zorder=4)
+            lo, hi = min(ys), max(ys)
+            # never zoom below 10 % of the value: a 0.01 % wiggle must not look
+            # like a collapse
+            span = max(hi - lo, 0.10 * max(abs(hi), abs(lo), 1e-12))
+            mid = 0.5 * (hi + lo)
+            ax.set_ylim(mid - 0.75 * span, mid + 0.75 * span)
+            if fmt is None:      # enough decimals to tell neighbouring values apart
+                diffs = [abs(b - a) for a, b in zip(ys, ys[1:]) if b != a]
+                dmin = min(diffs) if diffs else abs(hi) or 1.0
+                nd = max(1, min(4, int(math.ceil(-math.log10(dmin))) + 1)) \
+                    if dmin > 0 else 2
+                fmt = "%%.%df" % nd
+            for k, (x, y) in enumerate(pts):
+                # value under the point, on the side the curve does not run to
+                nxt = pts[k + 1][1] if k + 1 < len(pts) else None
+                prv = pts[k - 1][1] if k > 0 else None
+                down = (nxt is not None and nxt < y) or (nxt is None and prv is not None
+                                                         and prv > y)
+                ax.annotate(fmt % y, (x, y), xytext=(-4 if down else 4, -5),
+                            textcoords="offset points", ha="right" if down else "left",
+                            va="top", fontsize=6.5, color=_INK)
+            if label_pct:
                 for (x0, y0), (x1, y1) in zip(pts, pts[1:]):
                     if abs(y0) < 1e-12:
                         continue
@@ -566,35 +622,133 @@ def _write_kappa_vs_cutoff(out, per_cut, rep=None, cfg=None):
                                 ha="center", va="bottom", fontsize=6.5,
                                 color=_INK if inside else _INK2,
                                 fontweight="bold" if inside else "normal")
+            return True
+
+        _series(ax_xx, "kappa_xx" + suf, "%.1f", True)
+        _series(ax_yy, "kappa_yy" + suf, "%.1f", True)
+        if is_2d:
+            ax_zz.set_yticks([])        # 2D: kappa_zz is not physical -> frame only
+            ax_zz.yaxis.set_minor_locator(plt.NullLocator())
+        else:
+            _series(ax_zz, "kappa_zz", "%.1f", True)
+        if not (ekey and _series(ax_rm, ekey, None, False)):
+            ax_rm.set_yticks([])
+            ax_rm.yaxis.set_minor_locator(plt.NullLocator())
+        for ax, lab in ((ax_xx, "xx"), (ax_yy, "yy"), (ax_zz, "zz")):
+            ax.set_ylabel(r"$\kappa_{%s}$ (W m$^{-1}$ K$^{-1}$)" % lab)
+        ax_rm.set_ylabel(elab)
+        for ax, let in ((ax_xx, "a"), (ax_zz, "b"), (ax_yy, "c"), (ax_rm, "d")):
+            ax.text(0.03, 0.95, "(%s)" % let, transform=ax.transAxes, ha="left",
+                    va="top", fontsize=9, fontweight="bold")
+            if ax.get_yticks().size:
+                ax.yaxis.set_minor_locator(AutoMinorLocator(2))
             if ch is not None:
                 ax.axvline(float(ch), color=_INK2, lw=0.7, ls=(0, (4, 2)), zorder=1)
-            ax.set_ylabel(r"$\kappa_{%s}$ (W m$^{-1}$ K$^{-1}$)" % lab)
-            ax.yaxis.set_minor_locator(AutoMinorLocator(2))
-            ax.text(0.02, 0.94, "(%s)" % "abc"[i], transform=ax.transAxes,
-                    ha="left", va="top", fontsize=9, fontweight="bold")
-        last = axes[-1]
-        last.set_xlabel(r"Third-order cutoff $r_c$ ($\AA$)")
-        if rows and rows[0]["n_shells"] is not None:
-            last.set_xticks(xs)
-            last.set_xticklabels(["%.2f\n(%d)" % (r["cut_A"], r["n_shells"]) for r in rows])
-        notes = ["T = 300 K; (n) = neighbour shells within $r_c$",
+        if len(xs) > 1:
+            span = xs[-1] - xs[0]
+            ax_xx.set_xlim(xs[0] - 0.22 * span, xs[-1] + 0.10 * span)
+        else:                           # a single (nominal) cutoff: centre it
+            ax_xx.set_xlim(xs[0] - 0.6, xs[0] + 0.6)
+        for ax in (ax_yy, ax_rm):
+            ax.set_xlabel(r"Third-order cutoff $r_c$ ($\AA$)")
+            ax.set_xticks(xs)
+            ax.set_xticklabels(xticks or ["%.2f" % x for x in xs])
+        fig.subplots_adjust(top=0.93, bottom=0.13, left=0.10, right=0.98)
+        if doc.get("method"):
+            fig.text(0.10, 0.955, doc["method"], ha="left", va="bottom",
+                     fontsize=10, fontweight="bold", transform=fig.transFigure)
+        notes = ["T = 300 K; (n) = neighbour shells within $r_c$; "
                  "bold: |change| $\\leq$ %g%%" % tol]
         if ch is not None:
-            notes.append("dashed: chosen $r_c$ = %.2f $\\AA$ (%s)" % (float(ch),
-                                                                 doc["status"]))
+            notes.append("dashed: %s $r_c$ = %.2f $\\AA$ (%s)"
+                         % ("chosen" if len(rows) > 1 else "nominal", float(ch),
+                            doc["status"] or "nominal"))
         if is_2d:
-            notes.append(("2D layer, d = %.2f $\\AA$; $\\kappa_{zz}$ not physical"
-                          % float(norm["thickness_d_A"])) if f2d else
+            notes.append(("2D layer, d = %.2f $\\AA$; $\\kappa_{zz}$ not physical "
+                          "(frame left empty)" % float(norm["thickness_d_A"])) if f2d else
                          "2D layer: raw cell-volume kappa (not thickness-normalised); "
-                         "$\\kappa_{zz}$ not physical")
-        fig.text(0.0, 0.0, "\n".join(notes), ha="left", va="top", fontsize=6.5,
+                         "$\\kappa_{zz}$ not physical (frame left empty)")
+        fig.text(0.0, -0.01, "\n".join(notes), ha="left", va="top", fontsize=6.5,
                  color=_INK2, transform=fig.transFigure)
-        fig.tight_layout(h_pad=0.4)
         fig.savefig(str(out / "kappa_vs_cutoff.png"))
         fig.savefig(str(out / "kappa_vs_cutoff.pdf"))
         plt.close(fig)
     print("[OK] kappa_vs_cutoff.png / .pdf", flush=True)
     return doc
+
+
+def compare_methods(out):
+    """FIT_METHODS with several methods: kappa(300 K) and the fit's force RMSE
+    per method -> methods_compare.json (data only), and every method's own 2x2
+    kappa/RMSE figure copied to figures/kappa_vs_cutoff_<tag>.{png,pdf}."""
+    out = Path(out)
+    try:
+        entries = json.loads((out / "methods.json").read_text(
+            encoding="utf-8")).get("methods") or []
+    except Exception:
+        print("[..] no methods.json -- nothing to compare", flush=True)
+        return None
+    rows = []
+    for e in entries:
+        d = out / e.get("dir", ".")
+        try:
+            ks = json.loads((d / "kappa_summary.json").read_text(encoding="utf-8"))
+        except Exception:
+            ks = {}
+        try:
+            fs = json.loads((d / "fc_fit_summary.json").read_text(encoding="utf-8"))
+        except Exception:
+            fs = {}
+        k2d = ks.get("kappa_2d_normalized_inplane_300K")
+        rm = fs.get("fit_rmse_eV_per_A")
+        rows.append({
+            "tag": e.get("tag"), "engine": e.get("engine"), "method": e.get("method"),
+            "primary": bool(e.get("primary")), "skipped": e.get("skipped"),
+            "kappa_done": bool(ks.get("KAPPA_DONE")),
+            "stable": fs.get("stable"),
+            "chosen_cutoff_A": ks.get("chosen_cutoff_A"),
+            "kappa_inplane_300K": ks.get("kappa_inplane_300K"),
+            "kappa_2d_normalized_inplane_300K": k2d,
+            "kappa_avg_300K": ks.get("kappa_avg_300K"),
+            "kappa_300K_xx_yy_zz": ks.get("kappa_300K_xx_yy_zz"),
+            "sheet_conductance_inplane_300K_W_per_K":
+                ks.get("sheet_conductance_inplane_300K_W_per_K"),
+            "fit_rmse_meV_per_A": None if rm is None else 1e3 * float(rm),
+            "fit_rmse_relative": fs.get("fit_rmse_relative"),
+            "pheasy_relative_error": fs.get("pheasy_relative_error"),
+        })
+    is_2d = any(r["kappa_2d_normalized_inplane_300K"] is not None for r in rows)
+    if is_2d:
+        kkey = "kappa_2d_normalized_inplane_300K"
+    elif any(r["kappa_avg_300K"] is not None for r in rows):
+        kkey = "kappa_avg_300K"            # trace/3: orientation independent
+    else:
+        kkey = "kappa_inplane_300K"
+    doc = {"T_K": 300, "kappa_key": kkey, "rows": rows}
+    (out / "methods_compare.json").write_text(
+        json.dumps(doc, indent=2, ensure_ascii=False), encoding="utf-8", newline="\n")
+    print("[..] method comparison (300 K, %s):" % kkey, flush=True)
+    for r in rows:
+        print("     %s%-28s kappa=%-10s RMSE=%s meV/A  stable=%s rc=%s"
+              % ("*" if r["primary"] else " ", r["tag"], r[kkey],
+                 r["fit_rmse_meV_per_A"], r["stable"], r["chosen_cutoff_A"]),
+              flush=True)
+    # one 2x2 kappa/RMSE figure per method, collected side by side
+    figs = out / "figures"
+    n = 0
+    for r, e in zip(rows, entries):
+        d = out / e.get("dir", ".")
+        for ext in ("png", "pdf"):
+            f = d / ("kappa_vs_cutoff.%s" % ext)
+            if f.is_file():
+                figs.mkdir(exist_ok=True)
+                shutil.copyfile(str(f), str(figs / ("kappa_vs_cutoff_%s.%s"
+                                                    % (r["tag"], ext))))
+                n += ext == "png"
+    print("[OK] methods_compare.json; %d per-method figure(s) in figures/" % n,
+          flush=True)
+    return doc
+
 
 
 def main():
@@ -650,6 +804,14 @@ def main():
     (out / "kappa_summary.json").write_text(
         json.dumps(s, indent=2, ensure_ascii=False), encoding="utf-8",
         newline="\n")
+    if cfg.get("nominal_cut3_A") is not None:
+        # every fitting method gets its 2x2 figure, a single point without a scan
+        c = float(cfg["nominal_cut3_A"])
+        try:
+            _write_kappa_vs_cutoff(out, [(("%.2f" % c).replace(".", "p"), s)],
+                                   {"chosen_cut": c, "status": "nominal"}, cfg)
+        except Exception as e:                             # noqa: BLE001
+            print("[WARN] kappa_vs_cutoff not written: %s" % e, flush=True)
     print("[DONE] kappa_summary.json | mesh %s | 300K in-plane %.4f W/mK "
           "(xx=%.4f yy=%.4f zz=%.4f; principal %s)"
           % (s["mesh"], s["kappa_inplane_300K"], s["kappa_300K_xx_yy_zz"][0],
@@ -667,4 +829,7 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    if len(sys.argv) > 1 and sys.argv[1] == "compare":
+        compare_methods(Path.cwd())
+    else:
+        main()

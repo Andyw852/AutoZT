@@ -152,7 +152,39 @@ forces from every frame or the fit is biased:
 
 ## Engines
 
-### phono3py (FIT_ENGINE = phono3py, default)
+### Choosing the fitting method(s): `FIT_METHODS`
+
+One parameter in `step1_fit/step.conf` decides what is fitted:
+
+| `FIT_METHODS` | effect |
+|---|---|
+| `auto` (default) | `FIT_ENGINE` + that engine's method key; the defaults are **pheasy ALASSO** |
+| `pheasy:RIDGE` (or a unique bare name: `ALASSO`, `symfc`, `ard` ...) | switch to that one method (`ridge` is ambiguous: pheasy or hiphive) |
+| `pheasy:OLS,ALASSO hiphive:ridge` | all listed methods are computed |
+| `pheasy:all` / `all` | every pheasy method / all 13 methods |
+
+~~~bash
+autozt -tt fit-fc-thermal -p <material> -j step1_fit conf --set params.FIT_METHODS="pheasy:RIDGE"
+autozt -tt fit-fc-thermal -p <material> -j step1_fit conf --set params.FIT_METHODS=all
+~~~
+
+With several methods the **first** is the primary: it is `step1_fit/` itself
+(the S1 gate, the S2 headline kappa), so S1/S2 behave exactly as with one
+method.  The others are complete S1 recipes in `step1_fit/methods/<tag>/`
+that run **serially in the same job** (non-fatal: a failing method is logged
+in `methods/<tag>/run.log` and skipped); `step1_fit/methods.json` lists them.
+S2_kappa then computes kappa for every method in `step2_kappa/methods/<tag>/`,
+each with its own cutoff scan and its own 2x2 figure (below);
+`kappa_driver.py compare` collects the figures as
+`step2_kappa/figures/kappa_vs_cutoff_<tag>.{png,pdf}` and the numbers
+(kappa at each method's cutoff, force RMSE, gate) in `methods_compare.json`.  Wall time adds up - raise the
+`[submit]` time, or compare many methods in parallel with S3_sweep.
+
+ALASSO/LASSO note: when the cross-validated alpha lands on the edge of the
+grid the quality gate fails on purpose (`.fit_gate_fail`); widen
+`PHEASY_MU_MIN`/`PHEASY_MU_MAX` or add frames, or switch to `pheasy:RIDGE`.
+
+### phono3py (FIT_ENGINE = phono3py)
 
 `phono3py.produce_fc2` / `produce_fc3` with `FC_CALC = symfc | alm`, written as
 `fc2.hdf5` / `fc3.hdf5`. Works for both finite-displacement and
@@ -183,7 +215,7 @@ celer, two-level solvers) now lives in the driver (`_pheasy_env`), so the same
 job runs on any cluster.
 
 * `PHEASY_FIT_METHOD` - `OLS` (most memory hungry), `LASSO`, `ALASSO`,
-  `RFE` (default), `RFE-OLS-TSQR`, `RIDGE`.
+  `RFE`, `RFE-OLS-TSQR`, `RIDGE` (default: `ALASSO`).
 * `PHEASY_C2_CUTOFF` / `PHEASY_C3_CUTOFF` - cutoffs in Angstrom (empty = all
   interactions). Keep both comfortably below half the smallest supercell edge,
   otherwise periodic images double-count interactions.
@@ -420,9 +452,19 @@ writing `kappa_summary.json`:
   neighbour shells inside it, kappa xx/yy/zz and in-plane at 300 K, the
   per-component % change from the previous cutoff, the criteria flags) and
   `kappa_vs_cutoff.png` (300 dpi) + `kappa_vs_cutoff.pdf` (vector), journal
-  style: one panel each for kappa_xx, kappa_yy, kappa_zz, every segment
-  labelled with its % change (bold when inside the plateau tolerance), the
-  chosen cutoff dashed; a 2D layer gets xx and yy only, thickness-normalised.  Written also when no cutoff is usable, which is when the curve is
+  style, always 2 x 2: (a) kappa_xx top left, (b) kappa_zz top right,
+  (c) kappa_yy bottom left, (d) force RMSE bottom right; the method name sits
+  above (a).  Every point is labelled with its value and every kappa segment
+  with its % change (bold inside the plateau tolerance).  A 2D layer keeps
+  panel (b) as an empty frame (kappa_zz is not physical) and plots xx/yy
+  thickness-normalised; a 3D cell fills it.  Without a cutoff scan (e.g. the
+  hiphive engine) the figure shows the single nominal cutoff, with the fit's
+  own RMSE.  Panel (d): the force RMSE (meV/A) of each cutoff's
+  fit - S1 evaluates every `cutoff_scan/cut3_<c>/` on `FIT_RMSE_FRAMES` frames
+  and stores `force_rmse_eV_per_A` in `cutoff_scan.json` (pheasy's own
+  relative error is shown when no RMSE was recorded).  The chosen cutoff is
+  dashed in every panel; no axis zooms below 10 % of its values, so a tiny
+  wiggle never looks like a trend.  Written also when no cutoff is usable, which is when the curve is
   most needed.  The points are at the scan's starting mesh.
 * **Candidate spacing**: the candidates are the midpoints between *adjacent*
   neighbour shells of the structure (all atom pairs, shells closer than 0.05 A
@@ -520,7 +562,8 @@ built-in `phonon` judge gives three outcomes:
   non-zero so the step shows as error and the log is worth reading.
 
 `fc_fit_summary.json` adds the engine, frame count, atom count, the NAC/no-NAC
-minima, the ShengBTE export status and - when `FIT_RMSE_FRAMES > 0` - the
+minima, the ShengBTE export status and - when `FIT_RMSE_FRAMES > 0` (default 10;
+needs hiphive in the job environment) - the
 training residual (`fit_rmse_eV_per_A`, `fit_rmse_relative`) evaluated by
 predicting the forces of that many frames from the *fitted* force constants.
 That number is engine independent and is the quickest way to tell a good fit
