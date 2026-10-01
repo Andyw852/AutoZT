@@ -13,6 +13,8 @@
    缺 CHGCAR、结构不同、ENCUT 不同、ICHARG 被显式改过 -> 不行；只差并行/对称性/输出键 -> 可以。
    insert_before_launch 把复制命令插在第一条 mpirun/srun 前；_set_incar 改键保留其余行。
 4) tools/regate_projects.py 扫已有运行目录：弹性张量不正定 -> ★ WRONG；2D 面内剪切近零 -> ⚠ ELASTIC。
+5) V135：regate 把 settings.yaml 与 step6_elastic/OUTCAR 逐位对照，判出 VASP 顺序（用户侧两个材料、三维六方）；
+   立方分不出、不判；Mo2S3 重排后仍不正定 -> 提示先重做 S6。
 """
 import contextlib
 import io
@@ -220,6 +222,72 @@ class RegateElasticTests(unittest.TestCase):
             self.assertEqual(rows[name]["verdict"], verdict, rows[name]["why"])
         self.assertIn("疑似 VASP 顺序没重排", rows["as_written"]["why"])
         self.assertIn("-40.16", rows["reordered"]["why"])
+
+
+def _outcar(path, vasp_kbar):
+    lab = ("XX", "YY", "ZZ", "XY", "YZ", "ZX")
+    ln = [" TOTAL ELASTIC MODULI (kBar)",
+          " Direction    XX          YY          ZZ          XY          YZ          ZX",
+          " " + "-" * 80]
+    ln += [" %-5s" % l + "".join("%12.4f" % v for v in row) for l, row in zip(lab, vasp_kbar)]
+    ln.append(" " + "-" * 80)
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
+    Path(path).write_text("\n".join(ln) + "\n")
+
+
+# 三维六方、C44 与 C66 明显不同（Bi2Te3 量级，GPa，标准 Voigt）
+HEX3D = [[74.0, 22.0, 26.0, 15.0, 0, 0], [22.0, 74.0, 26.0, -15.0, 0, 0], [26.0, 26.0, 47.0, 0, 0, 0],
+         [15.0, -15.0, 0, 27.0, 0, 0], [0, 0, 0, 0, 27.0, 15.0], [0, 0, 0, 0, 15.0, 26.0]]
+HEX3D[5][5] = 18.0
+
+
+class VoigtOrderAuditTests(unittest.TestCase):
+    """V135：regate 把 settings.yaml 的弹性张量与 step6_elastic/OUTCAR 逐位对照，判出 VASP 顺序（没重排）。"""
+
+    def _audit(self, cases):
+        import yaml
+        sys.path.insert(0, str(ROOT / "tools"))
+        sys.path.insert(0, str(ROOT / "step8.4_amset2d"))
+        import regate_projects as R
+        root = Path(tempfile.mkdtemp())
+        for name, (settings_el, vasp_kbar, two_d, run_name) in cases.items():
+            mat = root / name / "ke-dft-cpu"
+            (mat / "step3_uniform").mkdir(parents=True)
+            (mat / "step3_uniform" / "POSCAR").write_text(POSCAR)
+            _outcar(mat / "step6_elastic" / "OUTCAR", vasp_kbar)
+            run = mat / run_name
+            run.mkdir()
+            if two_d:
+                (run / "2d_correction.json").write_text("{}")
+            (run / "settings.yaml").write_text(yaml.safe_dump({
+                "unity_overlap": True, "elastic_constant": settings_el, "scattering_type": ["ADP", "IMP"]}))
+        return {r["material"].split("/")[0]: r for r in R.audit(str(root), "*/ke-dft-cpu")}
+
+    def test_user_materials_and_3d(self):
+        k = 2.933                                            # c/t
+        to_vasp = lambda m: [[m[i][j] for j in (0, 1, 2, 5, 3, 4)] for i in (0, 1, 2, 5, 3, 4)]  # noqa: E731
+        cases = {
+            # 用户侧：settings 是 VASP 顺序（再乘 c/t）；OUTCAR 是同一张量的 kBar
+            "Mo2S3": (MO2S3, [[v / k * 10 for v in row] for row in MO2S3], True, "step8_amset"),
+            "P1_Mo-MoS2": (P1_MOS2, [[v / k * 10 for v in row] for row in P1_MOS2], True, "step8_amset"),
+            # 三维六方：settings 已是标准 Voigt -> 不判；settings 是 VASP 顺序 -> ★
+            "hex_ok": (HEX3D, [[v * 10 for v in row] for row in to_vasp(HEX3D)], False, "step8_amset"),
+            "hex_bad": (to_vasp(HEX3D), [[v * 10 for v in row] for row in to_vasp(HEX3D)], False, "step8_amset"),
+            # 立方：三个剪切一样，分不出也无所谓
+            "Si": (SI, [[v * 10 for v in row] for row in SI], False, "step8_amset"),
+        }
+        rows = self._audit(cases)
+        self.assertEqual(rows["Mo2S3"]["elastic_order"], "vasp")
+        self.assertEqual(rows["Mo2S3"]["verdict"], "★ WRONG")
+        self.assertIn("重排后面内块也不正定", rows["Mo2S3"]["why"])
+        self.assertEqual(rows["P1_Mo-MoS2"]["elastic_order"], "vasp")
+        self.assertNotIn("重排后", rows["P1_Mo-MoS2"]["why"])
+        self.assertEqual(rows["hex_ok"]["elastic_order"], "voigt")
+        self.assertEqual(rows["hex_ok"]["verdict"], "OK", rows["hex_ok"]["why"])
+        self.assertEqual(rows["hex_bad"]["elastic_order"], "vasp")
+        self.assertEqual(rows["hex_bad"]["verdict"], "★ WRONG")
+        self.assertIsNone(rows["Si"]["elastic_order"])
+        self.assertEqual(rows["Si"]["verdict"], "OK")
 
 
 if __name__ == "__main__":

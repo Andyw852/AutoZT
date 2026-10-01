@@ -17,6 +17,9 @@
   ★ WRONG   （V134）settings.yaml 的弹性张量不正定（2D 看面内块、3D 看 6×6）且散射含 ADP —— ADP 无意义
   ⚠ ELASTIC （V134）2D 面内剪切 C66 不到 max(C11, C22) 的 2% —— 疑似 VASP 顺序（XX YY ZZ XY YZ ZX）没重排，
             AMSET 拿到的面内剪切近零；核对 step6_elastic/OUTCAR 的表头后重新 gen 本步
+  ★ WRONG   （V135）settings.yaml 的弹性张量是 VASP 顺序（与 step6_elastic/OUTCAR 逐位对照：剪切对角三位依次是
+            XY、YZ、ZX），没重排成标准 Voigt —— 3D 非立方是 C44/C66 互换，2D 是面内剪切近零；重新 gen 本步。
+            立方等三个剪切相等的体系分不出（也不受影响），不判。
   ?         判不出来（缺结构/缺 settings）
 另外列出 settings.yaml 里写了 EPS_INF_OVERRIDE 注释却可能没生效的旧 S8（见 V115 §8）。
 
@@ -49,6 +52,49 @@ def _structure(mat):
                 except Exception:                              # noqa: BLE001
                     pass
     return None, None
+
+
+def _outcar_elastic_std(mat):
+    """用 S8 gen 的 read_elastic 从 step6_elastic/OUTCAR 读弹性张量（按表头重排成标准 Voigt，GPa）。读不到返回 None。"""
+    import contextlib
+    import io
+    try:
+        sys.path.insert(0, str(_HERE.parent / "step8_amset"))
+        with contextlib.redirect_stdout(io.StringIO()):
+            import gen_step10_amset as g10
+            el = g10.read_elastic(Path(mat))
+    except Exception:                                            # noqa: BLE001
+        return None
+    return el if isinstance(el, list) and len(el) == 6 else None
+
+
+def voigt_order_state(settings_el, outcar_std, match=0.10, apart=0.25):
+    """settings.yaml 的弹性张量（可能已按 c/t 重标度、对称化、2D 面外取绝对值）是标准 Voigt 还是 VASP 顺序。
+    先用 C11/C22 定标度 k，再把剪切对角三位与 OUTCAR 的两种排法比：
+        标准 Voigt：(YZ, XZ, XY)；VASP 顺序：(XY, YZ, ZX)。
+    返回 "voigt" / "vasp" / None（判不出来：两种排法几乎一样（立方等），或都对不上）。"""
+    import numpy as np
+    try:
+        S = np.abs(np.asarray(settings_el, float))
+        R = np.abs(np.asarray(outcar_std, float))
+        if S.shape != (6, 6) or R.shape != (6, 6) or min(R[0, 0], R[1, 1]) <= 0:
+            return None
+    except (TypeError, ValueError):
+        return None
+    k = 0.5 * (S[0, 0] / R[0, 0] + S[1, 1] / R[1, 1])
+    s = np.array([S[3, 3], S[4, 4], S[5, 5]])
+    std = k * np.array([R[3, 3], R[4, 4], R[5, 5]])
+    vasp = k * np.array([R[5, 5], R[3, 3], R[4, 4]])
+    scale = max(float(np.max(std)), 1e-9)
+    if float(np.max(np.abs(std - vasp))) / scale < apart:
+        return None                                    # 两种排法本来就差不多（立方/近立方）：分不出，也无所谓
+    e_std = float(np.max(np.abs(s - std))) / scale
+    e_vasp = float(np.max(np.abs(s - vasp))) / scale
+    if e_std < match and e_vasp > apart:
+        return "voigt"
+    if e_vasp < match and e_std > apart:
+        return "vasp"
+    return None
 
 
 def _run_info(run):
@@ -144,6 +190,17 @@ def audit(root, pattern):
                     el = kc.elastic_stability(r["elastic"], is_2d=r["two_d"])
                 except Exception:                                # noqa: BLE001
                     el = None
+            order = (voigt_order_state(r["elastic"], _outcar_elastic_std(mat))
+                     if r["elastic"] is not None and r["adp"] else None)
+            if order == "vasp":                          # V135：与 OUTCAR 逐位对照，确定没重排
+                verdict = "★ WRONG"
+                why += ("；弹性张量是 VASP 顺序（剪切对角三位依次是 XY、YZ、ZX，与 step6_elastic/OUTCAR 对照），"
+                        "没重排成标准 Voigt -> 重新 gen 本步（V135）")
+                _P = (0, 1, 2, 4, 5, 3)                  # VASP -> 标准 Voigt（与 gen 的 _VASP2VOIGT 相同）
+                el2 = kc.elastic_stability([[r["elastic"][i][j] for j in _P] for i in _P], is_2d=r["two_d"])
+                if el2 is not None and not el2["ok"]:
+                    why += ("；而且重排后%s也不正定（本征值 %s GPa）-> 重新 gen 会被 V134 的闸门拦下，先重做 S6"
+                            % ("面内块" if r["two_d"] else "", ", ".join("%.2f" % x for x in el2["eigs"])))
             if el is not None and not el["ok"]:
                 verdict = "★ WRONG"
                 why += "；弹性张量%s不正定（本征值 %s GPa）-> ADP 无意义（V134）" % (
@@ -157,7 +214,7 @@ def audit(root, pattern):
                          "verdict": verdict, "why": why, "h5_src": r["h5_src"],
                          "unity": r["unity"], "desym_fix": r["fix"],
                          "transport": r["transport"], "bad_ops": bad, "total_ops": tot,
-                         "structure": st_src})
+                         "structure": st_src, "elastic_order": order})
     return rows
 
 

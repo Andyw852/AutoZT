@@ -6485,3 +6485,38 @@ vasprun.xml（或 band_structure_data.json）重建 DOS。在合成 3D 目录上
   - skill.yaml 依赖；
   - regate 的 ★/⚠ 判定。
 - test_preflight_symmetry_verdict 新增 2 项：S3/S3b 偏差 1.2 meV 同源不拦、混用拦；来源读不到。
+
+## V135（2026-10-01）：已有结果的 Voigt 顺序核对 —— settings.yaml 与 step6_elastic/OUTCAR 逐位对照
+
+**用户侧取证**（step6_elastic/OUTCAR 的 TOTAL ELASTIC MODULI 对角，VASP 顺序 XX YY ZZ XY YZ ZX，kBar）：
+- Mo2S3：530.59 / 529.10 / 2.32 / **−136.89** / 14.21 / 3.48。
+  - settings.yaml 第 4/5/6 位（−40.158 / 4.169 / 1.021 GPa）= XY / YZ / ZX × c/t（2.933），逐位吻合；
+  - 离子弛豫贡献的 XY = −384.57 kBar，刚性离子部分约 +247.7 kBar。
+- P1_Mo-MoS2：653.54 / 587.06 / 13.04 / **157.18** / 13.45 / 4.48。
+  - settings 第 4 位 46.035 = 15.718 × 2.933；
+  - AMSET 拿到的"C66"是 ZX：4.48 kBar × c/t = 1.31 GPa（原始 slab 值 0.45 GPa）。
+
+**结论**：
+- 两份 settings 都是 VASP 顺序，没有重排成标准 Voigt。现在的 read_elastic 按表头重排，重新 gen 会得到正确顺序。
+- P1_Mo-MoS2 重排后面内块正定（C66 = 46.0 GPa），可以直接重新 gen S8。它同时是 ★ WRONG（重叠/对称性），一次重跑一起解决。
+- Mo2S3 重排后面内剪切 −40.16 GPa，会被 V134 的闸门拦下。刚性离子部分为正、离子弛豫贡献大且为负，说明 Γ 点有软模
+  （结构没弛豫到极小，或该相本身力学不稳定）。要先重做 S6：收紧 EDIFFG 重新弛豫，并看 OUTCAR 里 `f/i=` 的虚频。
+
+**regate 的盲区与修补**：
+- V134 的"2D C66 近零"只对 2D 可靠：2D 没重排时第 6 位是面外 ZX，必然近零。
+- 3D 非立方没重排时是 C44 与 C66 互换，数值都正常，看不出来；立方三个剪切相等，不受影响。
+- 现在 regate 调 S8 gen 的 read_elastic，从 OUTCAR 读出标准 Voigt 张量 R：
+  - 用 C11/C22 定出 settings 相对 R 的标度 k（含 c/t）；
+  - 把 settings 剪切对角三位的绝对值，分别与 k·(YZ, XZ, XY)（标准）和 k·(XY, YZ, ZX)（VASP）比较；
+  - 一边差 < 10%、另一边差 > 25% 才下结论；两种排法本来就差不到 25%（立方/近立方）的不判；
+  - 判为 VASP 顺序 -> ★ WRONG。另把 settings 按 VASP -> Voigt 重排后再做 V134 的稳定性判据，
+    不正定时提示"重新 gen 会被拦，先重做 S6"。
+- 没有 OUTCAR 或读不出时不判，退回 V134 的两条。
+
+**用户侧**：
+- 重新跑一次 regate_projects，看 3D 材料里有没有新的 ★（elastic_order = vasp）；
+- P1_Mo-MoS2 直接重新 gen S8；
+- Mo2S3 先重做 S6。
+
+测试：test_elastic_guard_s3b 新增 VoigtOrderAuditTests（用户侧两个材料按取证数据造 OUTCAR；三维六方
+C44 ≠ C66 的正确/错误顺序；立方不判）。
