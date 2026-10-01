@@ -12,8 +12,8 @@ ssh_host: ""
 # 本机计算根：材料步骤目录 = work_dir/<材料相对路径>/<技能>/stepN（可写 ~ 与 $HOME）
 work_dir: ~/autozt_local_work
 remote_path_prefix: ""       # 可选：本机跑 gen/驱动脚本用的 python 所在 bin 目录（带 numpy/phonopy 等）
-conda_sh: ""
-conda_env: ""
+conda_sh: /home/wangchao/miniconda3/etc/profile.d/conda.sh
+conda_env: atomate2_p_a
 amset_env: ""
 potcar_dir: ""
 mlff_model_dir: ""
