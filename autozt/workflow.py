@@ -1636,6 +1636,10 @@ def _remote_submit_preflight(cfg, m, s, t=None):
     _rc3, _so3 = _rrm(cfg, "sed -n '1,60p' %s 2>/dev/null" % _sub_path, host=host)
     _res = _pf.parse_submit(_so3 or "")
     _want = (_res.get("partition") or "").strip()
+    # 本机执行（fakeslurm 不认分区）不做分区提示，免得噪音
+    from autozt.collect import is_local_host as _is_local
+    if _is_local(host):
+        _want = ""
     if _want and not _declared:  # noqa: E501 (分区提示见 preflight.check_partition)
         # 集群没声明分区时，去该集群自带的模板里找实际使用的分区名，只做提示
         # （实测 3090 用 fakeslurm 时 --partition=cpu192 照样能跑，硬拦会误伤）

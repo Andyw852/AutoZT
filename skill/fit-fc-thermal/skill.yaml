@@ -108,7 +108,9 @@ optional_steps:
   phonon_plot:
     default: true
     steps:
-      - {seq: 2, name: step2_phonon_plot, label: S2_plot, after: step1_fit,
+      # 步骤目录名必须等于 fc_plot_phonon.py 的输出目录 OUTDIR（phonon_band_plot），
+      # 否则 done_marker 永远找不到（曾叫 step2_phonon_plot：S2_plot 从未判过完成）。
+      - {seq: 2, name: phonon_band_plot, label: S2_plot, after: step1_fit,
          gen: "fc_plot_phonon.py", check: plot, run: gen,
          # za_2d.py（2026-09-21）：S2_plot 用公共池的 ZA 2D 判定（_za_summary 调 za_2d）
          gen_need: [dim_common.py, za_2d.py],

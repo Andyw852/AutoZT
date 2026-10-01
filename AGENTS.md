@@ -143,6 +143,7 @@ autozt auto [on|off]                   # 一键开关全局 auto_advance（改�
 - 给其它 AI 代理接入：`autozt agent setup` 输出 MCP 配置（绝对路径）和规则卡；`autozt agent setup --rules` 只输出规则卡。
 - `autozt` 不在 PATH 时用 `autozt agent setup` 返回的 `cli.absolute`（或 `pip install -e ~/software/AutoZT`）；不要因为 command not found 就绕开 autozt 手拼 ssh/sbatch。
 - 错误判定：非 0 退出即失败；代理环境下错误也镜像到 stdout（`[autozt error] …`，`--json` 时 `{"ok": false, …}`）。`-p` 材料名写错会直接报"找不到材料"（以前静默空表、rc=0）。
+- 本机后端（`--cluster local` / `hpc local`）与 tf.yaml 全局 `host:` 无关，一定在本机跑；work_dir 自动跳过本机不可写的集群路径；conda 跟 `setting/local.yaml` 走（两项留空 = 用 PATH 里的 python）。`conf`/`conf --set`/`dir` 不采集远端，秒级。
 - 新材料/只有数据集：`register`（MCP `register_material`）；改参数：`conf --set`（MCP `conf_set`）。两者都写项目配置，按铁律 3 先请示。`gen_*.py` 虽可脱离 autozt 在空目录运行（仅供检查输入），正式计算禁止手跑 gen + 手动 sbatch（铁律 1）。
 
 ## 四、状态判读

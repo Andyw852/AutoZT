@@ -1725,6 +1725,44 @@ def pkg_setting_path(name):
             return cand
     return None
 
+LOCAL_WORK_DIR_DEFAULT = "~/autozt_local_work"
+
+
+def _writable_here(path):
+    """本机能否在 path 建目录：沿父目录找到第一个已存在的，看它可写。"""
+    p = os.path.abspath(path)
+    while p and not os.path.exists(p):
+        parent = os.path.dirname(p)
+        if parent == p:
+            break
+        p = parent
+    return os.path.isdir(p) and os.access(p, os.W_OK)
+
+
+def _local_work_dir(m, cands):
+    """本机执行时的 work_dir：按优先级取第一个【本机可写】的候选。
+
+    各层里常残留集群路径（init 从 tf_default.yaml 抄来的 /public/...、切集群前钉在
+    setting.yaml 里的旧值），本机根本建不了——以前直接用它，gen 报
+    "mkdir: Permission denied"。这里跳过并告警，最后回退 ~/autozt_local_work。"""
+    skipped = []
+    for src, val in cands + [("缺省", LOCAL_WORK_DIR_DEFAULT)]:
+        if not val:
+            continue
+        path = os.path.normpath(os.path.expandvars(os.path.expanduser(str(val))))
+        if _writable_here(path):
+            m["work_dir_eff"], m["work_dir_src"] = path, src
+            break
+        skipped.append("%s=%s" % (src, val))
+    if skipped:
+        _wkey = ("local_wd", tuple(skipped))
+        if _wkey not in _WARN_WORKDIR:
+            _WARN_WORKDIR.add(_wkey)
+            print("提示：%s 在本机执行，跳过本机不可写的 work_dir（%s），改用 %s"
+                  % (m.get("name"), "；".join(skipped), m.get("work_dir_eff")),
+                  file=sys.stderr)
+
+
 def resolve_material_local(t, root, m):
     """给本地发现的材料补齐：project_setting、hpc、路径、远端目录、有效 host。"""
     # v1.1：skill_subdir 子目录名（band/elastic…）。v1.7：先算出来，find_ps_dir
@@ -1776,10 +1814,15 @@ def resolve_material_local(t, root, m):
                         or "jzzn")
     # 项目/技能 hpc.yaml 显式写 ssh_host: ""（autozt hpc local）= 本机执行，
     # 不能再回退到技能默认集群的 ssh_host（否则切 local 后照样去 ssh jzzn）。
-    if "ssh_host" in hpc and not hpc.get("ssh_host"):
-        m["host_eff"] = None
+    # 本机用显式标记 LOCAL_HOST（"@local"），不能用 None：None 会在下游
+    # `host or "__default__"` 里回退成 tf.yaml 全局 host。
+    from autozt.collect import LOCAL_HOST
+    if "ssh_host" in hpc:
+        m["host_eff"] = hpc.get("ssh_host") or LOCAL_HOST
+    elif "ssh_host" in dhpc:
+        m["host_eff"] = dhpc.get("ssh_host") or LOCAL_HOST
     else:
-        m["host_eff"] = hpc.get("ssh_host") or dhpc.get("ssh_host") or None
+        m["host_eff"] = None          # 哪层都没写：沿用全局 host（老行为）
     # v1.11：work_dir 回退链——项目 setting.yaml > 项目 hpc.yaml >
     # 集群 setting/<hpc_name>.yaml 的 work_dir > 技能默认 > root。
     # 三个集群（jzzn/3090/a800）都在 setting/<name>.yaml 里自描述 work_dir。
@@ -1804,10 +1847,14 @@ def resolve_material_local(t, root, m):
                          or t.get("root"))
     # 本地执行（ssh_host 为空，setting/local.yaml）：work_dir 是本机路径，
     # 允许写 ~ / $HOME（远端模式不展开——那是远端 shell 的事）。
-    if not m["host_eff"] and m["work_dir_eff"]:
-        m["work_dir_eff"] = os.path.expandvars(os.path.expanduser(str(m["work_dir_eff"])))
+    if m["host_eff"] == LOCAL_HOST:
+        _local_work_dir(m, [("project_setting/setting.yaml", st.get("work_dir")),
+                            ("hpc.yaml", hpc.get("work_dir")),
+                            ("setting/%s.yaml" % m["hpc_name"], _cluster_work_dir),
+                            ("task_types.%s.work_dir" % t.get("key"), t.get("work_dir")),
+                            ("技能 root", t.get("root"))])
     # v1.11：用户没显式指定 work_dir 时提示（按技能去重，避免刷屏）
-    if not (st.get("work_dir") or hpc.get("work_dir")):
+    if not (st.get("work_dir") or hpc.get("work_dir")) and m["host_eff"] != LOCAL_HOST:
         _wk = t.get("key")
         if _wk not in _WARN_WORKDIR:
             _WARN_WORKDIR.add(_wk)

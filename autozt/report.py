@@ -735,9 +735,17 @@ def _cluster_conda_step_conf(m, hpc_name=None):
     aenv = hpc.get("amset_env")   # amset 专用环境名（如 amset / amset_clean）
     pdir = hpc.get("potcar_dir")          # VASP POTCAR 库根目录（VASP 技能）
     rdir = hpc.get("references_dir")      # 凸包参考相共享目录（defect 技能）
-    if not sh and not env and not mdir and not aenv and not pdir and not rdir:
+    # 本机集群（ssh_host 为空，setting/local.yaml）里显式写空的 conda_sh/conda_env
+    # = "用 PATH 里现成的 python"：要清掉技能 step.conf 里硬编码的集群 conda 路径，
+    # 否则本机作业会去 source 一个不存在的 /public/.../conda.sh。
+    _local = "ssh_host" in hpc and not hpc.get("ssh_host")
+    clear = [k for k, y in (("CONDA_SH", "conda_sh"), ("CONDA_ENV", "conda_env"))
+             if _local and y in hpc and not hpc.get(y)]
+    if not (sh or env or mdir or aenv or pdir or rdir or clear):
         return None
     lines = ["[params]"]
+    for k in clear:
+        lines.append("%s =" % k)
     if sh:
         lines.append("CONDA_SH = %s" % sh)
     if env:
@@ -752,6 +760,25 @@ def _cluster_conda_step_conf(m, hpc_name=None):
         lines.append("REFERENCES_DIR = %s" % rdir)
     return "\n".join(lines) + "\n"
 
+def _drop_default_keys(mod, text, sdef):
+    """删掉 [params] 里"键在 sdef 且值与技能默认相同"的行（只动这些行，其余原样）。"""
+    if not sdef:
+        return text
+    out, sec = [], "params"
+    for line in text.splitlines():
+        st = line.strip()
+        if st.startswith("[") and st.endswith("]"):
+            sec = st[1:-1].strip().lower()
+        elif sec == "params" and "=" in st and not st.startswith("#"):
+            items = mod.parse("[params]\n" + line).get("params", [])
+            if items:
+                k, v = items[0][0].upper(), items[0][1]
+                if k in sdef and v == sdef[k]:
+                    continue
+        out.append(line)
+    return "\n".join(out) + "\n"
+
+
 def build_step_conf(cfg, t, m, sname):
     from autozt import step_cfg
     """把分层 step.conf 合并成一份带来源注释的文本。无任何来源时返回 None。"""
@@ -759,10 +786,12 @@ def build_step_conf(cfg, t, m, sname):
     srcs = step_conf_sources(cfg, t, m, sname)
     if not mod or not srcs:
         return None, []
-    tagged, legend = [], []
+    tagged, legend, n_skill = [], [], 0
     for i, (path, note) in enumerate(srcs, 1):
         tag = "[%d]" % i
         legend.append((tag, path, note))
+        if str(note).startswith("skill"):
+            n_skill = i
         with open(path, encoding="utf-8-sig") as fh:
             tagged.append((tag, fh.read()))
     # v1.11：注入集群默认 conda（最低优先级，可被项目 step.conf 覆盖）。
@@ -776,9 +805,22 @@ def build_step_conf(cfg, t, m, sname):
             shpc_name = str(_shpc)
     cluster = _cluster_conda_step_conf(m, shpc_name)
     if cluster:
+        # 集群层插在【技能出厂默认之后、项目层之前】：技能 step.conf 里硬编码的
+        # 集群路径（如 jzzn 的 conda.sh）不能盖过 setting/<集群>.yaml——以前集群层
+        # 垫在最底下，切到 local/a800 后 CONDA_SH 还是 jzzn 的。
+        # init 会把技能 step.conf 原样拷进 project_setting/templates/，所以项目层里
+        # 与技能默认【完全相同】的集群键视为未定制、去掉；改过的值仍优先于集群。
+        ckeys = {k for k, _v, _l in mod.parse(cluster).get("params", [])}
+        sdef = {}
+        for _tg, txt in tagged[:n_skill]:
+            for k, v, _l in mod.parse(txt).get("params", []):
+                if k.upper() in ckeys:
+                    sdef[k.upper()] = v
+        for i in range(n_skill, len(tagged)):
+            tagged[i] = (tagged[i][0], _drop_default_keys(mod, tagged[i][1], sdef))
         tag = "[cluster:%s]" % shpc_name
-        tagged.insert(0, (tag, cluster))
-        legend.insert(0, (tag, "<setting/%s.yaml>" % shpc_name, "集群默认"))
+        tagged.insert(n_skill, (tag, cluster))
+        legend.insert(n_skill, (tag, "<setting/%s.yaml>" % shpc_name, "集群默认"))
     merged, prov = mod.merge(tagged)
     header = ["# ===== 本文件由 tf 自动合成，勿手改 —— 要改请改下面列出的上游 =====",
               "# 步骤 %s   材料 %s" % (sname, m.get("name")),

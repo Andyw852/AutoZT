@@ -14,11 +14,19 @@
 #SBATCH --error=queue.err
 cd $SLURM_SUBMIT_DIR
 
+# 环境：CONDA_ENV 是 venv 目录 → 直接激活；否则 source CONDA_SH 再 conda activate。
+# 两者都留空（如 setting/local.yaml）= 用 PATH 里现成的 python，不激活任何环境。
 if [ -n "{{CONDA_ENV}}" ] && [ -x "{{CONDA_ENV}}/bin/python" ]; then
     source "{{CONDA_ENV}}/bin/activate"
-else
-    source {{CONDA_SH}}
-    conda activate {{CONDA_ENV}}
+elif [ -n "{{CONDA_SH}}" ]; then
+    if [ -f {{CONDA_SH}} ]; then
+        source {{CONDA_SH}}
+        if [ -n "{{CONDA_ENV}}" ]; then
+            conda activate {{CONDA_ENV}}
+        fi
+    else
+        echo "[WARN] conda.sh not found: {{CONDA_SH}} -- using python from PATH" >&2
+    fi
 fi
 
 export OMP_NUM_THREADS=${SLURM_CPUS_PER_TASK:-8}

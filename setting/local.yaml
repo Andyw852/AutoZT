@@ -9,10 +9,14 @@
 #   AUTOZT_FAKESLURM=0 关闭垫片（用本机真 SLURM），=1 强制使用。
 name: local
 ssh_host: ""
-# 本机计算根：材料步骤目录 = work_dir/<材料相对路径>/<技能>/stepN（可写 ~ 与 $HOME）
+# 本机计算根：材料步骤目录 = work_dir/<材料相对路径>/<技能>/stepN（可写 ~ 与 $HOME）。
+# 本机执行时 work_dir 取第一个【本机可写】的候选：project_setting/setting.yaml > hpc.yaml >
+# 本文件 > 项目/技能类型 work_dir；残留的集群路径（/public/...）自动跳过并提示。
 work_dir: ~/autozt_local_work
 remote_path_prefix: ""       # 可选：本机跑 gen/驱动脚本用的 python 所在 bin 目录（带 numpy/phonopy 等）
-conda_sh: /home/wangchao/miniconda3/etc/profile.d/conda.sh
+# 计算环境：写了就覆盖技能 step.conf 里自带的集群 conda 路径（项目里改过的值仍优先）。
+# 两项都留空 ""  = 不激活任何环境，直接用 PATH 里现成的 python（pip/venv 用户最简单）。
+conda_sh: ~/miniconda3/etc/profile.d/conda.sh
 conda_env: atomate2_p_a
 amset_env: ""
 potcar_dir: ""

@@ -46,6 +46,12 @@ autozt -tt fit-fc-thermal -p MoS2 start
 - 本机后端：`setting/local.yaml`（`ssh_host: ""`，`work_dir` 可写 `~`）。fakeslurm 的并发核数
   `FAKESLURM_MAX_CPUS`（缺省本机核数）、状态目录 `FAKESLURM_HOME`（缺省 `~/.fakeslurm`）；
   `AUTOZT_FAKESLURM=0` 关闭垫片、`=1` 强制使用。
+- 本机执行与全局 `host:` 无关：hpc.yaml 写 `ssh_host: ""` 的材料一律在本机跑（内部标记
+  `@local`），不会因为 tf.yaml 全局 `host: jzzn` 回退去 ssh。work_dir 取第一个本机可写的候选，
+  残留的集群路径（如 init 从模板抄来的 `/public/...`）自动跳过并提示。
+- 计算环境跟着集群走：`setting/local.yaml` 的 `conda_sh`/`conda_env` 覆盖技能 step.conf 里自带的
+  集群路径；两项都写 `""` = 不激活环境、直接用 PATH 里的 python。项目里改过的值仍最优先。
+- `conf`（含 `--set`）与 `dir` 只读配置、不采集远端状态，秒级返回。
 
 ### 错误与退出码
 

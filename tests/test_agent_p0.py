@@ -170,3 +170,79 @@ def test_resolve_submit_step_subdir():
         assert str(p).endswith(os.path.join("templates", "step2_kappa", "submit_kappa.tpl"))
     finally:
         sys.path.pop(0)
+
+
+# ---------------------------------------------------------------- local backend vs global host
+@pytest.fixture()
+def remote_default(tmp_path):
+    """用户真实布局：全局 host 指向集群、技能类型带集群 work_dir；本机没有 ssh 可用。"""
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    cfg = tmp_path / "tf.yaml"
+    cfg.write_text("host: no-such-cluster\nproject_roots:\n  - %s\ntask_types:\n"
+                   "  fit-fc-thermal:\n    work_dir: /public/home/nobody/work\n" % proj)
+    ds = tmp_path / "ds"
+    ds.mkdir()
+    (ds / "POSCAR").write_text("Si\n1.0\n0 2.7 2.7\n2.7 0 2.7\n2.7 2.7 0\nSi\n2\n"
+                               "Direct\n0 0 0\n0.25 0.25 0.25\n")
+    return {"cfg": str(cfg), "proj": proj, "ds": ds, "tmp": tmp_path}
+
+
+def test_register_local_ignores_global_host(remote_default):
+    sb = remote_default
+    r = _cli(sb, "-tt", "fit-fc-thermal", "-p", "Si9", "register",
+             "--dataset", str(sb["ds"]), "--cluster", "local", "--json")
+    assert r.returncode == 0, r.stdout + r.stderr
+    # conf / dir only read configuration: no ssh (the host does not exist), fast
+    t0 = time.time()
+    c = _cli(sb, "-tt", "fit-fc-thermal", "-p", "Si9", "-j", "step1_fit", "conf",
+             "--set", "params.FIT_RMSE_FRAMES=5")
+    assert c.returncode == 0, c.stdout + c.stderr
+    assert time.time() - t0 < 60
+    assert "no-such-cluster" not in c.stdout + c.stderr
+    # cluster layer (setting/local.yaml) beats the skill's hard-coded conda path
+    for ln in c.stdout.splitlines():
+        if ln.startswith(("CONDA_SH", "CONDA_ENV")):
+            assert "[cluster:local]" in ln, ln
+    d = _cli(sb, "-tt", "fit-fc-thermal", "-p", "Si9", "dir")
+    assert d.returncode == 0, d.stdout + d.stderr
+    wd = d.stdout.strip().splitlines()[-1]
+    assert not wd.startswith("/public/") or os.access("/", os.W_OK)
+    assert wd.endswith(os.path.join("Si9", "fit-fc-thermal"))
+
+
+def test_local_host_marker_runs_locally():
+    import autozt  # noqa: F401
+    collect = sys.modules["autozt.collect"]
+    cfg = {"host": "no-such-cluster"}
+    assert collect._norm_host(cfg, collect.LOCAL_HOST) == ""
+    assert collect._norm_host(cfg, "__default__") == "no-such-cluster"
+    assert collect._ssh_cmd(cfg, collect.LOCAL_HOST, ["echo", "hi"])[:2] == ["bash", "-c"]
+    rc, out = collect.run_remote(cfg, "echo local-ok", host=collect.LOCAL_HOST)
+    assert rc == 0 and out.endswith("local-ok")
+
+
+def test_local_work_dir_skips_unwritable(tmp_path, monkeypatch, capsys):
+    import autozt  # noqa: F401
+    bs = sys.modules["autozt.bootstrap"]
+    ok_dir = tmp_path / "w"
+    monkeypatch.setattr(bs, "_writable_here",
+                        lambda p: str(p).startswith(str(tmp_path)))
+    m = {"name": "X"}
+    bs._local_work_dir(m, [("project_setting/setting.yaml", "/public/a"),
+                           ("hpc.yaml", None), ("task_types.k.work_dir", str(ok_dir))])
+    assert m["work_dir_eff"] == str(ok_dir)
+    assert m["work_dir_src"] == "task_types.k.work_dir"
+    assert "/public/a" in capsys.readouterr().err
+
+
+def test_preflight_conda_regex_does_not_cross_lines():
+    from autozt import preflight
+    tpl = open(os.path.join(ROOT, "skill", "fit-fc-thermal", "templates", "step1_fit",
+                            "submit_fcfit_pheasy.tpl")).read()
+    empty = tpl.replace("{{CONDA_SH}}", "").replace("{{CONDA_ENV}}", "")
+    assert preflight.parse_conda_activations(empty) == []
+    full = tpl.replace("{{CONDA_SH}}", "/x/etc/profile.d/conda.sh").replace(
+        "{{CONDA_ENV}}", "env1")
+    assert preflight.parse_conda_activations(full) == [
+        ("sh", "/x/etc/profile.d/conda.sh"), ("env", "env1")]

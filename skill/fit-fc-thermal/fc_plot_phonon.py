@@ -32,7 +32,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 SRC = "step1_fit"
-OUTDIR = "phonon_band_plot"
+OUTDIR = "phonon_band_plot"      # == skill.yaml S2_plot 的步骤目录名（done_marker 在这里找）
 LOWF_MAX = 10.0
 FULL_PAD = 3.0
 ZA_QMAX = 0.05            # reduced q cut for the ZA log-log fit (kl-dft-cpu default)

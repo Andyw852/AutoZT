@@ -2282,8 +2282,7 @@ REGISTER_INPUT_PARAM = {
 def cmd_register(cfg, types, proj, tt, dataset=None, poscar=None, root=None,
                  cluster=None, sets=None, step=None, json_out=False):
     import shutil
-    from autozt import (get_types, invalidate_project_scan, _load_yaml_file,
-                        pkg_setting_path, _PKG_ROOT)
+    from autozt import _load_yaml_file, pkg_setting_path, _PKG_ROOT
     report = {"ok": False, "material": proj, "tt": tt, "actions": []}
 
     def _fail(msg):
@@ -2352,10 +2351,17 @@ def cmd_register(cfg, types, proj, tt, dataset=None, poscar=None, root=None,
     # ---- init 该技能（已 init 的文件不覆盖，幂等）----
     import contextlib as _ctx
     import io as _io
-    invalidate_project_scan()
+    from autozt import scan_project_configs
+    # 目录是我们刚建的、路径已知：直接 _init_one(matdir)。不走 cmd_init -p 的
+    # resolve_mat_dir——它要遍历全部项目/技能的材料再扫盘找这个新目录，
+    # 大项目树（WSL /mnt/d）上一次 register 要好几分钟。
+    # 项目名查重表复用本进程启动时已扫过的结果（60 s 缓存），不 invalidate。
+    known = {n: p for n, p, _d in scan_project_configs(
+        cfg.get("project_roots") or [cfg.get("_config_dir")],
+        cfg.get("project_root_excludes"))}
     _buf = _io.StringIO()
     with _ctx.redirect_stdout(_buf if json_out else sys.stdout):
-        rc = cmd_init(cfg, get_types(cfg, tt=tt, quiet=True), proj, tt=tt, yes=True)
+        rc = _init_one(cfg, types, matdir, None, tt=tt, known_names=known)
     if rc:
         report["init_log"] = _buf.getvalue()[-2000:]
         return _fail("init 失败（rc=%s）。" % rc)

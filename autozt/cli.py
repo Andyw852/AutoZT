@@ -643,6 +643,14 @@ def _main():
             print("[采集] 以下技能全量采集（不能只采目标材料）：%s"
                   % "; ".join("%s: %s" % kv for kv in sorted(_nwhy.items())),
                   file=sys.stderr)
+    # conf（含 --set）/dir 只看配置：不采集远端，只解析 -p 目标材料（秒级）。
+    if cmd in ("conf", "dir") and a.proj and not mat_toks and not root:
+        from autozt.collect import CONFIG_ONLY
+        CONFIG_ONLY["on"] = True
+        _toks = [x.strip() for x in a.proj.split(",") if x.strip()]
+        for t in types:
+            if t.get("local_root"):
+                t["_narrow"] = _toks
     _narrowed = any(t.get("_narrow") for t in types)
     # patch_state_cache：list/summary 只读命令优先读本地缓存（跳过 ssh 采集），
     # --refresh 或 AUTOZT_CACHE_TTL=0 强制刷新；会改状态的命令一律现采。

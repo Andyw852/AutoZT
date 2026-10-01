@@ -314,10 +314,36 @@ def collect_v3_batch(cfg, segs):
                     "local": True, "materials": ms})
     return out, _queue_by_host
 
+# 本机执行的显式标记。hpc.yaml / 内联 hpc 里写 ssh_host: ""（setting/local.yaml，
+# autozt hpc local / register --cluster local）时 host_eff = LOCAL_HOST。
+# 不能用空串/None 表示本机：代码里大量 `host or "__default__"`，空值会一路回退到
+# tf.yaml 全局 host（如 jzzn）——2026-10 实测：register --cluster local 后 start
+# 仍去 jzzn 上 gen。真值 "@local" 能穿过这些 or 链，只在真正执行命令处换成本机 bash。
+LOCAL_HOST = "@local"
+
+
+def is_local_host(host):
+    return not host or host == LOCAL_HOST
+
+
+def _norm_host(cfg, host):
+    """执行边界的 host 规范化："__default__" → 全局 host；"@local"/空 → ""（本机）。"""
+    if host == "__default__":
+        host = cfg.get("host")
+    return "" if is_local_host(host) else host
+
+
 def _ssh_cmd(cfg, host, remote_args):
     """构造 ssh 命令。v3.17：ControlMaster 连接复用——首条 ssh 建连后，
     ControlPersist 窗口内（默认 120 秒）的后续 ssh 共用通道，免去重复握手，
-    status/auto-fetch 明显加速。设环境变量 AUTOZT_NO_SSH_MUX=1 可关闭。"""
+    status/auto-fetch 明显加速。设环境变量 AUTOZT_NO_SSH_MUX=1 可关闭。
+    host 是本机标记（@local/空）时返回等价的本机 bash 命令（带本地 PATH 前缀）。"""
+    if is_local_host(host):
+        line = " ".join(str(x) for x in remote_args)
+        _pp = _effective_remote_path_prefix(cfg, "")
+        if _pp:
+            line = "export PATH=\"%s:$PATH\"; %s" % (_pp, line)
+        return ["bash", "-c", line]
     opts = ["-o", "BatchMode=yes"]
     if not os.environ.get("AUTOZT_NO_SSH_MUX"):
         sockdir = os.path.expanduser("~/.ssh")
@@ -337,6 +363,8 @@ def _ssh_cmd(cfg, host, remote_args):
 
 def _ssh_cmd_pre(cfg, host, pre_opts, remote_args):
     """同 _ssh_cmd，但允许在 host 前追加选项（如 ConnectTimeout）。"""
+    if is_local_host(host):
+        return _ssh_cmd(cfg, host, remote_args)
     base = _ssh_cmd(cfg, host, [])          # ["ssh", 复用选项..., host]
     return base[:-1] + pre_opts + [host] + remote_args
 
@@ -350,7 +378,7 @@ def _effective_remote_path_prefix(cfg, host):
     """
     from autozt import _PKG_ROOT, _load_yaml_file, pkg_setting_path
     prefix = (cfg.get("remote_path_prefix") or "").strip()
-    if not host:
+    if is_local_host(host):
         return _local_path_prefix(prefix)
     config_paths = []
     direct = pkg_setting_path(str(host) + ".yaml")
@@ -388,12 +416,38 @@ def _local_path_prefix(prefix):
     return ":".join([x for x in (prefix, shim) if x])
 
 
+# 只看配置的命令（conf 查看/--set、dir）不需要远端状态：置位后 collect() 不 ssh，
+# 直接按步骤定义造一份"未采集"状态。以前 conf --set 一个键也要先把整个技能的
+# 材料在各集群上采一遍（实测 8 分钟）。
+CONFIG_ONLY = {"on": False}
+
+
+def _config_only_result(types):
+    out = []
+    for td in types:
+        root = td.get("root") or ""
+        mats = []
+        for name in td.get("materials") or []:
+            path = os.path.join(root, name)
+            mats.append({"name": name, "path": path, "dim": "", "steps": [
+                {"name": st["name"], "label": st.get("label") or st["name"],
+                 "dir": os.path.normpath(os.path.join(path, st["name"])),
+                 "exists": False, "has_incar": False, "has_outcar": False,
+                 "has_slurm_out": False, "submit": st.get("submit", "submit.sh"),
+                 "job": None, "done": False, "diag": "(未采集：只读配置)"}
+                for st in td.get("steps") or []]})
+        out.append({"key": td["key"], "desc": td.get("desc", td["key"]),
+                    "root": root, "materials": mats})
+    return {"types": out, "queue": {}}
+
+
 def collect(cfg, types, host="__default__"):
     # v1.2：把本次涉及技能的 checks.py 源码一起打包，远端注册成判据
     from autozt import COLLECTOR, _load_yaml_file, pkg_setting_path, skill_checks_for
+    if CONFIG_ONLY["on"]:
+        return _config_only_result(types)
     extra = skill_checks_for(cfg, [td.get("key") for td in types])
-    if host == "__default__":
-        host = cfg.get("host")
+    host = _norm_host(cfg, host)
     _pp = _effective_remote_path_prefix(cfg, host)
     payload = base64.b64encode(
         json.dumps({"user": cfg.get("user"), "types": types,
@@ -431,8 +485,7 @@ def collect(cfg, types, host="__default__"):
 def run_remote(cfg, shell_line, host="__default__", use_stdin=False):
     """use_stdin=True 时整个脚本经 stdin 投递（bash -s），不受 argv 长度限制
     （gen 推送大量 base64 文件时必须用，否则 Argument list too long）。"""
-    if host == "__default__":
-        host = cfg.get("host")
+    host = _norm_host(cfg, host)
     _pp = _effective_remote_path_prefix(cfg, host)
     if _pp:          # 本地模式（host 为空）也要：fakeslurm 垫片/本机工具链靠它进 PATH
         shell_line = "export PATH=\"%s:$PATH\"; %s" % (_pp, shell_line)

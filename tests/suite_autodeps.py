@@ -153,7 +153,7 @@ section("6. ZA 2D 共享模块（三副本合并）")
 # 否则首次上机就是 ModuleNotFoundError（公共池文件没推到生成目录）。
 for _tt, _sd, _step in (("kl-dft-cpu", "skill/kl-dft-cpu", "step5_fc"),
                         ("phonon-dft-cpu", "skill/phonon-dft-cpu", "step3_phonon"),
-                        ("fit-fc-thermal", "skill/fit-fc-thermal", "step2_phonon_plot"),
+                        ("fit-fc-thermal", "skill/fit-fc-thermal", "phonon_band_plot"),
                         ("kl-mlff-cpu", "skill/kl-mlff-cpu", "step3_fc"),
                         ("kl-mlff-gpu", "skill/kl-mlff-gpu", "step3_fc"),
                         ("opt-mlff-cpu", "skill/opt-mlff-cpu", "step1_mlff_relax"),

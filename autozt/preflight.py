@@ -15,8 +15,8 @@ from autozt import i18n as _i18n
 _PART_RE = re.compile(r"^#SBATCH\s+--partition=(\S+)", re.M)
 _CPT_RE = re.compile(r"^#SBATCH\s+--cpus-per-task=(\d+)", re.M)
 _NPN_RE = re.compile(r"^#SBATCH\s+--ntasks-per-node=(\d+)", re.M)
-_ACT_RE = re.compile(r"^\s*conda\s+activate\s+(\S+)", re.M)
-_SH_RE = re.compile(r"^\s*source\s+(\S*profile\.d/conda\.sh)", re.M)
+_ACT_RE = re.compile(r"^[ \t]*conda[ \t]+activate[ \t]+(\S+)", re.M)
+_SH_RE = re.compile(r"^[ \t]*source[ \t]+(\S*profile\.d/conda\.sh)", re.M)
 
 
 def parse_submit(text):
