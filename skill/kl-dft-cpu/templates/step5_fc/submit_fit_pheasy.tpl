@@ -46,12 +46,12 @@ FIT_ORDER=${ENABLE_FC}
 NCPU=${SLURM_CPUS_PER_TASK:-48}
 NCPU_BLAS=$(( NCPU>32 ? 32 : NCPU ))
 NCPU_DISP=${NCPU}
-if [ "${FIT_METHOD}" = "RFE" ] || [ "${FIT_METHOD}" = "OLS" ]; then
+if [ "${FIT_METHOD}" = "RFE-OLS" ] || [ "${FIT_METHOD}" = "OLS" ]; then
     NCPU_LOKY=1; NCPU_FIT_BLAS=${NCPU}
 else
     NCPU_LOKY=1; NCPU_FIT_BLAS=${NCPU}
 fi
-[[ "${FIT_METHOD}" =~ ^(LASSO|RFE|OLS|RFE-OLS-TSQR)$ ]] || { echo "❌ FIT_METHOD 非法: ${FIT_METHOD}"; exit 1; }
+[[ "${FIT_METHOD}" =~ ^(LASSO|RFE|RFE-OLS|OLS|RFE-OLS-TSQR)$ ]] || { echo "❌ FIT_METHOD 非法: ${FIT_METHOD}"; exit 1; }
 [[ "${ENABLE_FC}" =~ ^[234]$ ]] || { echo "❌ ENABLE_FC 非法: ${ENABLE_FC}"; exit 1; }
 
 # ===== 输入准备：vasprun → FORCES_FC3 → POSCAR/SPOSCAR/dataset_*.npy =====
@@ -80,7 +80,7 @@ export PHEASY_BLAS_THREADS=${NCPU_BLAS}
 export PHEASY_USE_CELER=1
 
 # RFE 触发（复用用户脚本的 PHEASY_USE_RFE 重定向）
-if [ "${FIT_METHOD}" = "RFE" ]; then
+if [ "${FIT_METHOD}" = "RFE-OLS" ]; then
     export PHEASY_USE_RFE=1 PHEASY_RFE_TWOLEVEL=1 MKL_INTERFACE_LAYER=ILP64 PHEASY_RFE_MKL=1
     export PHEASY_RFE_STEP=0.1 PHEASY_RFE_RIDGE_ALPHA=1e-11 PHEASY_RFE_CV=5
     export PHEASY_RFE_LSMR_MAXITER=60000 PHEASY_RFE_WARM_START=1
@@ -150,7 +150,7 @@ C_FLAG=""
 [ "${C3_CUTOFF}" != "None" ] && [ "${C3_CUTOFF}" != "none" ] && [ -n "${C3_CUTOFF}" ] \
     && [ "${FIT_ORDER}" -ge 3 ] && C_FLAG="--c3 ${C3_CUTOFF}"
 W_FLAG="-w ${FIT_ORDER}"
-CLI_METHOD="${FIT_METHOD}"; [ "${FIT_METHOD}" = "RFE" ] && CLI_METHOD="LASSO"   # RFE 走 env 重定向
+CLI_METHOD="${FIT_METHOD}"; case "${FIT_METHOD}" in RFE|RFE-OLS) CLI_METHOD="LASSO";; esac   # RFE-OLS 走 env 重定向
 # 注意：这里【不再】带 --rasr —— RASR 只在 -c（零空间构造）步生效，放 -f 上是死参数。
 FIT_FLAGS="--full_ifc -l ${CLI_METHOD} --hdf5"
 if [ "${FIT_METHOD}" = "LASSO" ]; then
@@ -165,7 +165,7 @@ if [ "${FIT_METHOD}" = "LASSO" ]; then
     else FIT_FLAGS="${FIT_FLAGS} --mu_min -8 --mu_max -5"; fi
     FIT_FLAGS="${FIT_FLAGS} --std --alpha_auto --alpha_decades 4.0 --max_iter 100000 --cv 5 --nmu 40 --tol 0.00001"
     echo "LASSO：--std 列标准化 + 去偏(PHEASY_LASSO_DEBIAS=${PHEASY_LASSO_DEBIAS}) + alpha_auto 锚定网格"
-elif [ "${FIT_METHOD}" = "RFE" ]; then
+elif [ "${FIT_METHOD}" = "RFE-OLS" ]; then
     FIT_FLAGS="${FIT_FLAGS} --mu_min -8 --mu_max -5 --max_iter 1000 --cv 5 --nmu 5 --tol 0.001"
 fi
 

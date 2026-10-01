@@ -1393,11 +1393,18 @@ def cmd_fit_phono3py(cfg, out):
 # ==========================================================================
 # fit: pheasy
 # ==========================================================================
-PHEASY_METHODS = ("OLS", "LASSO", "ALASSO", "RFE", "RFE-OLS-TSQR", "RIDGE")
+# Canonical names; the pre-rename spelling "RFE" is not accepted.  Kept local
+# so the compute-node driver does not import the gen module.
+PHEASY_METHODS = ("OLS", "LASSO", "ALASSO", "RFE-OLS", "RFE-OLS-TSQR", "RIDGE")
+
+
+def normalize_pheasy_method(value):
+    """Canonical spelling of a pheasy method name (upper case, no spaces)."""
+    return str(value or "").strip().upper().replace(" ", "")
 
 
 def _pheasy_env(method, phase, ncpu, natom_super, tuning="safe", ols_ridge=None,
-                ols_maxiter=None, cv_max_iter=None, cv_tol=None):
+                ols_maxiter=None, cv_max_iter=None, cv_tol=None, tsqr_criterion=None):
     """Environment for one pheasy sub-step.
 
     'phase' is 'setup' for -s/-c, 'displacement' for -d and 'fit' for -f: the
@@ -1457,7 +1464,7 @@ def _pheasy_env(method, phase, ncpu, natom_super, tuning="safe", ols_ridge=None,
         # 3*natom rows of one frame leak between training and validation
         "PHEASY_CV_GROUP_SIZE": str(3 * int(natom_super)),
     })
-    if method == "RFE":
+    if method == "RFE-OLS":
         env.update({
             "PHEASY_USE_RFE": "1", "PHEASY_RFE_TWOLEVEL": "1",
             "MKL_INTERFACE_LAYER": "ILP64", "PHEASY_RFE_MKL": "1",
@@ -1482,6 +1489,11 @@ def _pheasy_env(method, phase, ncpu, natom_super, tuning="safe", ols_ridge=None,
             env["PHEASY_OLS_MAXITER"] = str(ols_maxiter)
     elif method == "RIDGE":
         env["PHEASY_USE_CELER"] = "0"
+    # RFE-OLS-TSQR only: the feature-count criterion (aic | bic | cv).  pheasy's
+    # default since the rename is aic with n = the force-component rows; 'cv'
+    # reproduces RFE-OLS exactly.  Empty = leave pheasy's default.
+    if tsqr_criterion:
+        env["PHEASY_TSQR_CRITERION"] = str(tsqr_criterion).strip().lower()
     if phase == "displacement":
         env.update({"OPENBLAS_NUM_THREADS": "1", "OMP_NUM_THREADS": "1",
                     "MKL_NUM_THREADS": "1", "PHEASY_N_JOBS": str(int(ncpu))})
@@ -1633,7 +1645,8 @@ def _reconcile_gpu_env(env, method, cfg):
 def cmd_fit_pheasy(cfg, out):
     """Four pheasy CLI steps: cluster space / symmetry constraints / sensing
     matrix / fit.  Mirrors templates in kl-dft-cpu and _common/mlff."""
-    method = str(cfg.get("pheasy_method") or "RFE").upper()
+    method = normalize_pheasy_method(cfg.get("pheasy_method") or "RFE-OLS")
+    tsqr_criterion = (str(cfg.get("pheasy_tsqr_criterion") or "").strip() or None)
     if method not in PHEASY_METHODS:
         sys.exit("[ERROR] PHEASY_FIT_METHOD must be one of %s"
                  % ", ".join(PHEASY_METHODS))
@@ -1697,7 +1710,7 @@ def cmd_fit_pheasy(cfg, out):
 
     # fit step: -l LASSO for RFE is deliberate -- the RFE strategy itself is
     # selected through PHEASY_USE_RFE in the environment
-    fit_flags = ["--full_ifc", "-l", ("LASSO" if method == "RFE" else method),
+    fit_flags = ["--full_ifc", "-l", ("LASSO" if method == "RFE-OLS" else method),
                  "--hdf5"]
     # RASR (Born-Huang rotational invariance + Huang equilibrium) is read by
     # pheasy ONLY in the null-space construction step (-c).  Passing it to -f was
@@ -1723,7 +1736,7 @@ def cmd_fit_pheasy(cfg, out):
     # nmu=1, mu=4.052069, cv=2.  Everything downstream (which alpha the solver
     # ever sees, and therefore whether the fit is regularised at all) followed
     # from that one missing string.
-    if method in ("LASSO", "ALASSO", "RFE", "RFE-OLS-TSQR", "RIDGE"):
+    if method in ("LASSO", "ALASSO", "RFE-OLS", "RFE-OLS-TSQR", "RIDGE"):
         # pheasy parses these with argparse type=int, so "-8.0" is rejected
         # outright -- coerce here as well so a hand-written fit_config.json
         # cannot get past the gen step with a float and fail on the node.
@@ -1763,7 +1776,8 @@ def cmd_fit_pheasy(cfg, out):
             e = _pheasy_env(
                 method, phase, ncpu, natom_super, tuning, ols_ridge, ols_maxiter,
                 cv_max_iter=(str(cfg.get("pheasy_cv_max_iter") or "").strip() or None),
-                cv_tol=(str(cfg.get("pheasy_cv_tol") or "").strip() or None))
+                cv_tol=(str(cfg.get("pheasy_cv_tol") or "").strip() or None),
+                tsqr_criterion=tsqr_criterion)
             if phase == "fit":
                 _apply_cv_knobs(e, cfg)
                 _reconcile_gpu_env(e, method, cfg)
@@ -1784,7 +1798,8 @@ def cmd_fit_pheasy(cfg, out):
         # its log to prove the constraint was imposed (see below)
         r = subprocess.run(cmd, shell=True, capture_output=True, text=True,
                            env=_pheasy_env(method, phase, ncpu, natom_super,
-                                           tuning, ols_ridge, ols_maxiter),
+                                           tuning, ols_ridge, ols_maxiter,
+                                           tsqr_criterion=tsqr_criterion),
                            preexec_fn=_die_with_parent)
         _out = (r.stdout or "") + (r.stderr or "")
         sys.stdout.write(_out)
@@ -1804,7 +1819,8 @@ def cmd_fit_pheasy(cfg, out):
     env = _pheasy_env(method, "fit", ncpu, natom_super, tuning, ols_ridge,
                       ols_maxiter,
                       cv_max_iter=(str(cfg.get("pheasy_cv_max_iter") or "").strip() or None),
-                      cv_tol=(str(cfg.get("pheasy_cv_tol") or "").strip() or None))
+                      cv_tol=(str(cfg.get("pheasy_cv_tol") or "").strip() or None),
+                      tsqr_criterion=tsqr_criterion)
     _apply_cv_knobs(env, cfg)
     gpu_info = _reconcile_gpu_env(env, method, cfg)
     rc, log_txt = _run_streaming(fit_step, env)

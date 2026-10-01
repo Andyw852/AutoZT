@@ -25,7 +25,7 @@
 # Engines (FIT_ENGINE in step1_fit/step.conf):
 #   phono3py  phono3py + symfc/alm least squares.
 #             Finite-displacement and random-displacement datasets.
-#   pheasy    pheasy compressive sensing (OLS/LASSO/ALASSO/RFE/RFE-OLS-TSQR/
+#   pheasy    pheasy compressive sensing (OLS/LASSO/ALASSO/RFE-OLS/RFE-OLS-TSQR/
 #             RIDGE), CPU or GPU build.  Random-displacement datasets.
 #   hiphive   hiphive cluster space + linear regression (ols/ridge/lasso/ard/
 #             bayes) with optional Huang + Born-Huang projection.
@@ -144,7 +144,7 @@ optional_steps:
 requires:
   # phono3py is only needed for FIT_ENGINE=phono3py and for the hdf5 writers;
   # hiphive additionally needs hiphive + scikit-learn (+ numba for the residual
-  # check), pheasy needs the pheasy package (and celer for LASSO/ALASSO/RFE).
+  # check), pheasy needs the pheasy package (and celer for LASSO/ALASSO/RFE-OLS).
   python: [numpy, scipy, phonopy, spglib, ase, h5py, phono3py]
   optional_python: [symfc, hiphive, pheasy]   # 按 FIT_ENGINE/FIT_METHODS 选用，缺了只影响对应引擎
   conda: atomate2_p_a

@@ -43,7 +43,7 @@ SPEC = {
     "NAC_BORN": ("", "str"),          # 外部 BORN 文件路径（DFPT 算的），空=不加 NAC
     # ---- 拟合软件（FIT_SOFTWARE）----
     "FIT_SOFTWARE": ("phono3py", "str"),  # phono3py（symfc/alm）| pheasy
-    "PHEASY_METHOD": ("OLS", "str"),      # pheasy 拟合方法：OLS | LASSO | RFE | RFE_TSQR
+    "PHEASY_METHOD": ("OLS", "str"),      # pheasy 拟合方法：OLS | LASSO | RFE-OLS | RFE-OLS-TSQR
     "PHEASY_C3_CUTOFF": ("6.0", "str"),   # pheasy 三阶截断(Å)；None/空=不截断
     "PHEASY_BIN": ("pheasy", "str"),        # pheasy 可执行名：pheasy | pheasy-gpu（GPU 版）
     # 旋转不变性/平衡条件（RASR）：auto = 2D 用 BHH、3D 不加。对 2D 是硬要求——
@@ -128,14 +128,19 @@ except Exception:
 # 写 POSCAR/SPOSCAR/dataset_disps.npy/dataset_forces.npy → 四步 pheasy CLI
 # (-s cluster space / -c 对称约束 / -d 位移矩阵 / -f 拟合) → fc2.hdf5/fc3.hdf5。
 # 对照 user 的通用 pheasy 脚本：float64、LASSO 走 celer + --std。
-# 参数：拟合方法(OLS|LASSO|RFE|RFE_TSQR) 三阶截断(Å) RASR(none|BHH|BH|H)
+# 参数：拟合方法(OLS|LASSO|RFE-OLS|RFE-OLS-TSQR) 三阶截断(Å) RASR(none|BHH|BH|H)
 #   RASR 由 gen 按 DIM 解析后传进来（2D→BHH，3D→none），只挂 -c 步并校验施加日志。
+def _norm_pheasy_method(value):
+    """Canonical spelling of a pheasy method name (upper case, no spaces)."""
+    return str(value or "OLS").strip().upper().replace(" ", "")
+
+
 _PHEASY_FIT = r'''import os, re, sys, subprocess
 import numpy as np
 import phono3py
 from phonopy.interface.vasp import write_vasp
 
-method = sys.argv[1] if len(sys.argv) > 1 else "OLS"
+method = str(sys.argv[1] if len(sys.argv) > 1 else "OLS").strip().upper()
 c3 = sys.argv[2] if len(sys.argv) > 2 else "6.0"
 # RASR 由 gen 按 DIM 解析后传入（2D=BHH / 3D=none）；缺省 none 保持旧行为。
 rasr = (sys.argv[3].strip().upper() if len(sys.argv) > 3 else "") or "NONE"
@@ -168,7 +173,7 @@ env.update({
     "PHEASY_ASR_COL_BLOCK": "5000",
     "PHEASY_ASR_COMBINED": "1",
     "PHEASY_NS_RANK_TOL": "1e-6",
-    "PHEASY_USE_CELER": "1" if method in ("LASSO", "RFE", "RFE_TSQR") else "0",
+    "PHEASY_USE_CELER": "1" if method in ("LASSO", "RFE-OLS", "RFE-OLS-TSQR") else "0",
     # pheasy-gpu 的 CLI LASSO backend 是 CUDA FISTA；只有在显存不足时
     # 才由内部策略回退到 CPU 迭代器。不要强制关闭 GPU。
     "PHEASY_GPU_LASSO": "1" if method == "LASSO" else "0",
@@ -182,7 +187,7 @@ fit = ("%s --dim %s -w 3 -f %s --ndata %d --eps 0.001 -l %s --hdf5"
        % (bin, dim, cflag, ndata, method))
 if method == "LASSO":
     fit += " --std --mu_min -8 --mu_max -2 --max_iter 2000 --cv 5 --nmu 10 --tol 0.0001"
-elif method in ("RFE", "RFE_TSQR"):
+elif method in ("RFE-OLS", "RFE-OLS-TSQR"):
     fit += " --mu_min -8 --mu_max -5 --max_iter 1000 --cv 5 --nmu 5 --tol 0.001"
 steps = [
     ("-s", "%s --dim %s -w 3 -s %s --eps 0.001" % (bin, dim, cflag)),
@@ -300,9 +305,9 @@ def main():
         fc2_sc = params.get("FC2_SUPERCELL", "").split()
         if fc2_sc and fc2_sc != params.get("SUPERCELL", "").split():
             sys.exit("[ERROR] pheasy 尚不支持独立 FC2_SUPERCELL；请用 FIT_SOFTWARE=phono3py，避免忽略二阶数据")
-        p_method = str(conf["PHEASY_METHOD"] or "OLS").upper()
-        if p_method not in ("OLS", "LASSO", "RFE", "RFE_TSQR"):
-            sys.exit("[ERROR] PHEASY_METHOD 只允许 OLS / LASSO / RFE / RFE_TSQR")
+        p_method = _norm_pheasy_method(conf["PHEASY_METHOD"] or "OLS")
+        if p_method not in ("OLS", "LASSO", "RFE-OLS", "RFE-OLS-TSQR"):
+            sys.exit("[ERROR] PHEASY_METHOD 只允许 OLS / LASSO / RFE-OLS / RFE-OLS-TSQR")
         fit = ("pheasy-gpu" if p_bin == "pheasy-gpu" else "pheasy") + " (" + p_method + ")"
         (out / "_pheasy_fit.py").write_text(_PHEASY_FIT, encoding="utf-8")
     else:
@@ -324,7 +329,7 @@ def main():
         "yaml": yaml,
         "software": software,
         "fit": fit,
-        "pheasy_method": str(conf["PHEASY_METHOD"] or "OLS").upper(),
+        "pheasy_method": _norm_pheasy_method(conf["PHEASY_METHOD"] or "OLS"),
         "pheasy_bin": p_bin,
         "pheasy_rasr": rasr,
         "c3_cutoff": str(conf["PHEASY_C3_CUTOFF"]),

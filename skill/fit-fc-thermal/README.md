@@ -7,7 +7,7 @@ thermal conductivity. Three interchangeable engines:
 | `FIT_ENGINE` | Method | Dataset it accepts |
 |---|---|---|
 | `phono3py` | phono3py + symfc or alm (least squares) | finite-displacement **and** random-displacement |
-| `pheasy` | pheasy compressive sensing (OLS / LASSO / ALASSO / RFE / RFE-OLS-TSQR / RIDGE) | random-displacement |
+| `pheasy` | pheasy compressive sensing (OLS / LASSO / ALASSO / RFE-OLS / RFE-OLS-TSQR / RIDGE) | random-displacement |
 | `hiphive` | hiphive cluster space + linear regression (ols / ridge / lasso / ard / bayes), optional Huang + Born-Huang projection | random-displacement |
 
 The skill **never runs VASP** and **never generates displacements**. It is the
@@ -215,7 +215,11 @@ celer, two-level solvers) now lives in the driver (`_pheasy_env`), so the same
 job runs on any cluster.
 
 * `PHEASY_FIT_METHOD` - `OLS` (most memory hungry), `LASSO`, `ALASSO`,
-  `RFE`, `RFE-OLS-TSQR`, `RIDGE` (default: `ALASSO`).
+  `RFE-OLS`, `RFE-OLS-TSQR`, `RIDGE` (default: `ALASSO`).  The pre-rename
+  spelling `RFE` is not accepted; write `RFE-OLS`.
+* `PHEASY_TSQR_CRITERION` - `RFE-OLS-TSQR` only: `aic` (pheasy's default since
+  the rename; n = the force-component rows), `bic`, or `cv` (reproduces
+  `RFE-OLS` exactly).  Empty = pheasy's default.
 * `PHEASY_C2_CUTOFF` / `PHEASY_C3_CUTOFF` - cutoffs in Angstrom (empty = all
   interactions). Keep both comfortably below half the smallest supercell edge,
   otherwise periodic images double-count interactions.
@@ -761,8 +765,8 @@ Si 4x4x4 supercell (90 frames) on the cluster.
 | In2MnSe4 189 atoms (arrays only, 45 frames) | pheasy RIDGE, c3 = 5 A (1272 free IFCs) | stable, min -0.031 THz, RMSE 9.5e-4 eV/A, relative error 0.63 %, `kl_bundle/` (10 files) |
 | In2MnSe4 189 atoms | pheasy OLS, c3 = 5 A | stable, RMSE 9.5e-4 eV/A, relative error 0.63 % |
 | In2MnSe4 189 atoms | pheasy LASSO, c3 = 5 A | stable, RMSE 1.66e-3 eV/A, relative error 1.10 % |
-| In2MnSe4 189 atoms | pheasy ALASSO, c3 = 5 A | fit relative error 0.66 % but **stable=False** (significant imaginary frequency) - use RIDGE/OLS/RFE here |
-| In2MnSe4 189 atoms | pheasy RFE / RFE-OLS-TSQR, c3 = 3.5 A (CPU smoke) | both stable, relative error 0.94 % each |
+| In2MnSe4 189 atoms | pheasy ALASSO, c3 = 5 A | fit relative error 0.66 % but **stable=False** (significant imaginary frequency) - use RIDGE/OLS/RFE-OLS here |
+| In2MnSe4 189 atoms | pheasy RFE-OLS / RFE-OLS-TSQR, c3 = 3.5 A (CPU smoke) | both stable, relative error 0.94 % each |
 | In2MnSe4 189 atoms, phono3py fc2/fc3 | **S2_kappa** (phono3py BTE RTA, mesh 8x8x8, 200-400 K) | kappa300K in-plane 3.68, zz 1.63 W/mK -> `kappa_summary.json` KAPPA_DONE |
 | In2MnSe4 189 atoms | hiphive | not applicable: primitive min periodic width 3.51 A < 2xcutoff; driver now errors clearly (see the hiphive section) |
 | 16 atoms, fc2 | hiphive, pkl-only dataset (auto-detected, supercell deduced) | stable, mesh min -9.9e-08 THz |

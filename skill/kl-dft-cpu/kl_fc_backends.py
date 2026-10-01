@@ -403,13 +403,14 @@ def cmd_collect_pheasy(cfg):
 def _pheasy_fit_flag_list(cfg):
     order = int(cfg.get("PHEASY_ENABLE_FC") or 3)
     method = str(cfg.get("PHEASY_FIT_METHOD") or "LASSO").upper()
-    flags = ["--full_ifc", "-l", ("LASSO" if method == "RFE" else method), "--hdf5"]
+    flags = ["--full_ifc", "-l",
+             ("LASSO" if method == "RFE-OLS" else method), "--hdf5"]
     if method == "LASSO":
         mm = "0" if order == 2 else "-5"
         flags += ["--mu_min", "-8", "--mu_max", mm, "--std", "--alpha_auto",
                   "--alpha_decades", "4.0", "--max_iter", "100000", "--cv", "5",
                   "--nmu", "40", "--tol", "0.00001"]
-    elif method == "RFE":
+    elif method == "RFE-OLS":
         flags += ["--mu_min", "-8", "--mu_max", "-5", "--max_iter", "1000",
                   "--cv", "5", "--nmu", "5", "--tol", "0.001"]
     return flags
@@ -489,7 +490,7 @@ def cmd_scan_pheasy(cfg):
                                          r_max=max(cands) + 1.0)
     bins = kc.fc3_shell_bins(tri, len(shell_dist))
     env = dict(os.environ)
-    if str(cfg.get("PHEASY_FIT_METHOD") or "").upper() == "RFE":
+    if str(cfg.get("PHEASY_FIT_METHOD") or "").upper() == "RFE-OLS":
         env["PHEASY_USE_RFE"] = "1"
     env.setdefault("PHEASY_LASSO_DEBIAS", "1")
     _nb = str(int(cfg.get("NCPU_FIT_BLAS") or 8))

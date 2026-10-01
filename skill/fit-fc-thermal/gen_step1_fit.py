@@ -95,7 +95,7 @@ SPEC = {
     "FC_CALC": ("symfc", "str"),             # symfc | alm
     "FC3_CUTOFF": ("", "str"),               # fc3 cutoff in A; empty = no cutoff
     # ---- pheasy ----
-    "PHEASY_FIT_METHOD": ("ALASSO", "str"),  # OLS|LASSO|ALASSO|RFE|RFE-OLS-TSQR|RIDGE
+    "PHEASY_FIT_METHOD": ("ALASSO", "str"),  # OLS|LASSO|ALASSO|RFE-OLS|RFE-OLS-TSQR|RIDGE (RFE=alias)
     "PHEASY_BIN": ("pheasy", "str"),         # pheasy | pheasy-gpu
     "PHEASY_C2_CUTOFF": ("", "str"),         # fc2 cutoff in A; empty = none
     "PHEASY_C3_CUTOFF": ("", "str"),         # fc3 cutoff in A; empty = none
@@ -130,6 +130,11 @@ SPEC = {
     "PHEASY_TUNING": ("safe", "str"),        # safe | kl
     "PHEASY_OLS_RIDGE": ("", "str"),         # override the OLS ridge (e.g. 0)
     "PHEASY_OLS_MAXITER": ("", "str"),       # OLS LSMR iteration cap; empty = pheasy default (5000)
+    # RFE-OLS-TSQR only: how many features to keep.  pheasy's default since the
+    # RFE -> RFE-OLS rename is 'aic' with n = the force-component rows; 'bic' is
+    # the same with a heavier penalty, 'cv' reproduces RFE-OLS exactly (CV +
+    # 1-SE).  Empty = pheasy's own default.
+    "PHEASY_TSQR_CRITERION": ("", "str"),    # '' | aic | bic | cv
     # The LASSO grid and the RFE grid want different ranges; empty means "use
     # the method default" (see PHEASY_GRID_DEFAULTS), which reproduces the
     # values the pheasy author's own runs use.
@@ -169,7 +174,15 @@ SPEC = {
 }
 
 ENGINES = ("phono3py", "pheasy", "hiphive")
-PHEASY_METHODS = ("OLS", "LASSO", "ALASSO", "RFE", "RFE-OLS-TSQR", "RIDGE")
+# Canonical pheasy method names.  "RFE-OLS" is the current name of the OLS-based
+# recursive-feature-elimination fitter; the pre-rename spelling "RFE" is NOT
+# accepted -- write RFE-OLS.
+PHEASY_METHODS = ("OLS", "LASSO", "ALASSO", "RFE-OLS", "RFE-OLS-TSQR", "RIDGE")
+
+
+def normalize_pheasy_method(value):
+    """Canonical spelling of a pheasy method name (upper case, no spaces)."""
+    return str(value or "").strip().upper().replace(" ", "")
 HIPHIVE_METHODS = ("ols", "ridge", "lasso", "ard", "bayes")
 
 # Per-method defaults for the regularisation grid: (nmu, tol, max_iter).  A
@@ -179,7 +192,7 @@ HIPHIVE_METHODS = ("ols", "ridge", "lasso", "ard", "bayes")
 PHEASY_GRID_DEFAULTS = {
     "LASSO": (40, 1e-5, 100000),
     "ALASSO": (40, 1e-5, 100000),
-    "RFE": (5, 1e-3, 1000),
+    "RFE-OLS": (5, 1e-3, 1000),
     "RFE-OLS-TSQR": (5, 1e-3, 1000),
 }
 PHEASY_MU_MAX_DEFAULT = {2: 0, 3: -5}   # upper bound of the alpha grid
@@ -198,7 +211,7 @@ def _int_str(value, key):
 def pheasy_grid(conf, method, enable_fc):
     """Resolve nmu / tol / max_iter / mu_max, honouring explicit settings."""
     nmu_d, tol_d, mi_d = PHEASY_GRID_DEFAULTS.get(
-        method, PHEASY_GRID_DEFAULTS["RFE" if method.startswith("RFE") else "LASSO"])
+        method, PHEASY_GRID_DEFAULTS["RFE-OLS" if method.startswith("RFE") else "LASSO"])
 
     def pick(key, default, cast):
         v = conf[key]
@@ -401,9 +414,11 @@ def parse_methods(spec):
         eng, _, meths = tok.partition(":")
         eng = eng.strip().lower()
         if eng not in ENGINE_METHODS and not meths:
-            # bare method name: ALASSO / RIDGE / ridge / symfc ...
+            # bare method name: ALASSO / RIDGE / ridge / symfc ...  (normalise
+            # case/space before matching; RFE-OLS must be written in full)
+            _want = normalize_pheasy_method(eng).lower()
             hits = [(e, m) for e, ms in ENGINE_METHODS.items() for m in ms
-                    if m.lower() == eng]
+                    if normalize_pheasy_method(m).lower() == _want]
             if len(hits) != 1:
                 sys.exit("[ERROR] FIT_METHODS: %r is %s -- write engine:method "
                          "(e.g. pheasy:RIDGE, hiphive:ridge)"
@@ -421,7 +436,7 @@ def parse_methods(spec):
         else:
             ms = [x.strip() for x in meths.split(",") if x.strip()]
         for m in ms:
-            norm = m.upper() if eng == "pheasy" else m.lower()
+            norm = normalize_pheasy_method(m) if eng == "pheasy" else m.lower()
             if norm not in allowed:
                 sys.exit("[ERROR] FIT_METHODS: %s has no method %r (%s)"
                          % (eng, m, " | ".join(allowed)))
@@ -564,7 +579,7 @@ def _gen_one(conf, out, job_label="S1fit"):
     fc_calc = str(conf["FC_CALC"] or "symfc").lower()
     if fc_calc not in ("symfc", "alm"):
         sys.exit("[ERROR] FC_CALC must be symfc or alm")
-    p_method = str(conf["PHEASY_FIT_METHOD"] or "ALASSO").upper()
+    p_method = normalize_pheasy_method(conf["PHEASY_FIT_METHOD"] or "ALASSO")
     if engine == "pheasy" and p_method not in PHEASY_METHODS:
         sys.exit("[ERROR] PHEASY_FIT_METHOD must be one of %s"
                  % " | ".join(PHEASY_METHODS))
@@ -795,6 +810,7 @@ def _gen_one(conf, out, job_label="S1fit"):
         "pheasy_gpu_lasso_resident": str(conf["PHEASY_GPU_LASSO_RESIDENT"] or ""),
         "pheasy_cv_max_iter": str(conf["PHEASY_CV_MAX_ITER"] or ""),
         "pheasy_cv_tol": str(conf["PHEASY_CV_TOL"] or ""),
+        "pheasy_tsqr_criterion": str(conf["PHEASY_TSQR_CRITERION"] or ""),
         "pheasy_tuning": str(conf["PHEASY_TUNING"] or "safe"),
         "pheasy_ols_ridge": str(conf["PHEASY_OLS_RIDGE"] or ""),
         "pheasy_ols_maxiter": str(conf["PHEASY_OLS_MAXITER"] or ""),
