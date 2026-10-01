@@ -1395,7 +1395,8 @@ def cmd_fit_phono3py(cfg, out):
 # ==========================================================================
 # Canonical names; the pre-rename spelling "RFE" is not accepted.  Kept local
 # so the compute-node driver does not import the gen module.
-PHEASY_METHODS = ("OLS", "LASSO", "ALASSO", "RFE-OLS", "RFE-OLS-TSQR", "RIDGE")
+PHEASY_METHODS = ("OLS", "LASSO", "ALASSO", "RFE-OLS", "RFE-OLS-TSQR", "RIDGE",
+                   "ARDR", "RVM")
 
 
 def normalize_pheasy_method(value):
@@ -1723,7 +1724,9 @@ def cmd_fit_pheasy(cfg, out):
     rasr_flag = ""
     if rasr and rasr.lower() not in ("none", "false", "off"):
         rasr_flag = " --rasr %s" % rasr
-    if _truthy(cfg.get("pheasy_std"), False):
+    # ARDR / RVM are sparse Bayesian fits that prune on column scale, so they
+    # always get --std (unit variance) regardless of PHEASY_STD.
+    if _truthy(cfg.get("pheasy_std"), False) or method in ("ARDR", "RVM"):
         fit_flags.append("--std")
     seed = cfg.get("pheasy_seed")
     if seed is not None:

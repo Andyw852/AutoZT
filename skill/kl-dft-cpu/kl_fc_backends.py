@@ -413,6 +413,9 @@ def _pheasy_fit_flag_list(cfg):
     elif method == "RFE-OLS":
         flags += ["--mu_min", "-8", "--mu_max", "-5", "--max_iter", "1000",
                   "--cv", "5", "--nmu", "5", "--tol", "0.001"]
+    elif method in ("ARDR", "RVM"):
+        # sparse Bayesian: prune on column scale -> always standardise
+        flags += ["--std"]
     return flags
 
 

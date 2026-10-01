@@ -43,7 +43,7 @@ SPEC = {
     "NAC_BORN": ("", "str"),          # 外部 BORN 文件路径（DFPT 算的），空=不加 NAC
     # ---- 拟合软件（FIT_SOFTWARE）----
     "FIT_SOFTWARE": ("phono3py", "str"),  # phono3py（symfc/alm）| pheasy
-    "PHEASY_METHOD": ("OLS", "str"),      # pheasy 拟合方法：OLS | LASSO | RFE-OLS | RFE-OLS-TSQR
+    "PHEASY_METHOD": ("OLS", "str"),      # pheasy 拟合方法：OLS | LASSO | RFE-OLS | RFE-OLS-TSQR | ARDR | RVM
     "PHEASY_C3_CUTOFF": ("6.0", "str"),   # pheasy 三阶截断(Å)；None/空=不截断
     "PHEASY_BIN": ("pheasy", "str"),        # pheasy 可执行名：pheasy | pheasy-gpu（GPU 版）
     # 旋转不变性/平衡条件（RASR）：auto = 2D 用 BHH、3D 不加。对 2D 是硬要求——
@@ -189,6 +189,10 @@ if method == "LASSO":
     fit += " --std --mu_min -8 --mu_max -2 --max_iter 2000 --cv 5 --nmu 10 --tol 0.0001"
 elif method in ("RFE-OLS", "RFE-OLS-TSQR"):
     fit += " --mu_min -8 --mu_max -5 --max_iter 1000 --cv 5 --nmu 5 --tol 0.001"
+elif method in ("ARDR", "RVM"):
+    fit += " --std"
+elif method == "RIDGE":
+    fit += " --std --mu_min -8 --mu_max -2 --max_iter 2000 --cv 5 --nmu 10 --tol 0.0001"
 steps = [
     ("-s", "%s --dim %s -w 3 -s %s --eps 0.001" % (bin, dim, cflag)),
     ("-c", "%s --dim %s -w 3 -c %s --eps 0.001%s" % (bin, dim, cflag, rflag)),
@@ -306,8 +310,8 @@ def main():
         if fc2_sc and fc2_sc != params.get("SUPERCELL", "").split():
             sys.exit("[ERROR] pheasy 尚不支持独立 FC2_SUPERCELL；请用 FIT_SOFTWARE=phono3py，避免忽略二阶数据")
         p_method = _norm_pheasy_method(conf["PHEASY_METHOD"] or "OLS")
-        if p_method not in ("OLS", "LASSO", "RFE-OLS", "RFE-OLS-TSQR"):
-            sys.exit("[ERROR] PHEASY_METHOD 只允许 OLS / LASSO / RFE-OLS / RFE-OLS-TSQR")
+        if p_method not in ("OLS", "LASSO", "RFE-OLS", "RFE-OLS-TSQR", "ARDR", "RVM"):
+            sys.exit("[ERROR] PHEASY_METHOD 只允许 OLS / LASSO / RFE-OLS / RFE-OLS-TSQR / ARDR / RVM")
         fit = ("pheasy-gpu" if p_bin == "pheasy-gpu" else "pheasy") + " (" + p_method + ")"
         (out / "_pheasy_fit.py").write_text(_PHEASY_FIT, encoding="utf-8")
     else:

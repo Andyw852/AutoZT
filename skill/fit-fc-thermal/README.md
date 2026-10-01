@@ -7,7 +7,7 @@ thermal conductivity. Three interchangeable engines:
 | `FIT_ENGINE` | Method | Dataset it accepts |
 |---|---|---|
 | `phono3py` | phono3py + symfc or alm (least squares) | finite-displacement **and** random-displacement |
-| `pheasy` | pheasy compressive sensing (OLS / LASSO / ALASSO / RFE-OLS / RFE-OLS-TSQR / RIDGE) | random-displacement |
+| `pheasy` | pheasy compressive sensing (OLS / LASSO / ALASSO / RFE-OLS / RFE-OLS-TSQR / RIDGE / ARDR / RVM) | random-displacement |
 | `hiphive` | hiphive cluster space + linear regression (ols / ridge / lasso / ard / bayes), optional Huang + Born-Huang projection | random-displacement |
 
 The skill **never runs VASP** and **never generates displacements**. It is the
@@ -215,8 +215,11 @@ celer, two-level solvers) now lives in the driver (`_pheasy_env`), so the same
 job runs on any cluster.
 
 * `PHEASY_FIT_METHOD` - `OLS` (most memory hungry), `LASSO`, `ALASSO`,
-  `RFE-OLS`, `RFE-OLS-TSQR`, `RIDGE` (default: `ALASSO`).  The pre-rename
-  spelling `RFE` is not accepted; write `RFE-OLS`.
+  `RFE-OLS`, `RFE-OLS-TSQR`, `RIDGE`, `ARDR` (automatic relevance
+  determination), `RVM` (relevance vector machine) (default: `ALASSO`).  The
+  pre-rename spelling `RFE` is not accepted; write `RFE-OLS`.  ARDR/RVM are
+  sparse-Bayesian fitters: the driver always passes `--std` for them; the
+  pheasy knobs are `PHEASY_ARD_STD` / `PHEASY_ARDR_MAX_ITER` / `PHEASY_RVM_*`.
 * `PHEASY_TSQR_CRITERION` - `RFE-OLS-TSQR` only: `aic` (pheasy's default since
   the rename; n = the force-component rows), `bic`, or `cv` (reproduces
   `RFE-OLS` exactly).  Empty = pheasy's default.
@@ -500,7 +503,7 @@ autozt -tt fit-fc-thermal -p <material> -j S3_sweep start      # enables the gro
 # ... when every m-* is done, S4_compare writes step4_compare/fit_compare.{json,csv}
 ~~~
 
-* `SWEEP_METHODS` - `all` (13: phono3py symfc/alm, pheasy x6, hiphive x5) or
+* `SWEEP_METHODS` - `all` (15: phono3py symfc/alm, pheasy x8, hiphive x5) or
   `engine[:m1,m2|all]` tokens; an engine alone means its default method.
 * `SWEEP_C3_SHELLS` - the third-order cutoff as **"up to the N-th nearest
   neighbours"**, with the ShengBTE `thirdorder.py -n` definition

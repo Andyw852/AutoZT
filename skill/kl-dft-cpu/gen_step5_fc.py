@@ -53,7 +53,7 @@ SPEC = {
     #   选 LASSO 是因为对照实验里 RFE/OLS 的 fc3 幅值本就贴近参考值，而 LASSO 必须靠
     #   --std + 去偏才能压到 0.13% 以内 —— 那两项已写死在 submit_fit_pheasy.tpl 里，
     #   用 LASSO 前务必确认模板没被项目级副本遮蔽。
-    "PHEASY_FIT_METHOD": ("auto", "str"), # auto | LASSO | RFE-OLS | OLS | RFE-OLS-TSQR
+    "PHEASY_FIT_METHOD": ("auto", "str"), # auto | LASSO | RFE-OLS | OLS | RFE-OLS-TSQR | ARDR | RVM
     "PHEASY_C3_CUTOFF":  ("5.2", "str"), # pheasy fc3 截断 Å；None=不截断
     "PHEASY_ENABLE_FC":  (3,     "int"), # 2|3|4（热导率需 ≥3）
     # ---- 三阶截断扫描（2026-09-24 user 定）：S4 记的候选截断逐个拟合 ----
@@ -246,8 +246,8 @@ def main():
     if p_method in ("AUTO", ""):
         p_method = "LASSO" if dim == "2d" else "RFE-OLS"
         print("[..] PHEASY_FIT_METHOD=auto → %s（DIM=%s）" % (p_method, dim or "?"))
-    if p_method not in ("LASSO", "RFE-OLS", "OLS", "RFE-OLS-TSQR"):
-        sys.exit("[ERROR] PHEASY_FIT_METHOD 只允许 auto / LASSO / RFE-OLS / OLS / RFE-OLS-TSQR")
+    if p_method not in ("LASSO", "RFE-OLS", "OLS", "RFE-OLS-TSQR", "ARDR", "RVM"):
+        sys.exit("[ERROR] PHEASY_FIT_METHOD 只允许 auto / LASSO / RFE-OLS / OLS / RFE-OLS-TSQR / ARDR / RVM")
     p_bin = str(conf["PHEASY_BIN"] or "pheasy").lower()
     if p_bin not in ("pheasy", "pheasy-gpu"):
         sys.exit("[ERROR] PHEASY_BIN 只允许 pheasy / pheasy-gpu")
@@ -255,7 +255,7 @@ def main():
     #   会修剪二阶力常数 → κ 不可信（GPU 版的同类 bug 已用 PHEASY_HARM_DENSE 修好）。
     if (engine == "pheasy" and p_bin != "pheasy-gpu"
             and int(conf.get("PHEASY_ENABLE_FC", 3) or 3) >= 3
-            and p_method in ("LASSO", "RFE-OLS", "RFE-OLS-TSQR")
+            and p_method in ("LASSO", "RFE-OLS", "RFE-OLS-TSQR", "ARDR", "RVM")
             and os.environ.get("PHEASY_ALLOW_NO_HARM_DENSE", "").lower()
                 not in ("1", "true", "yes")):
         sys.exit(
