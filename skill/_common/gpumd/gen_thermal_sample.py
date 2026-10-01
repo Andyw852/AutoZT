@@ -13,8 +13,8 @@ import stepconf
 STEP = "step1_thermal_sample"
 OUTDIR = STEP
 SPEC = {
-    "GPUMD_BIN": ("/home/wangchaoyue852/gpumd/src/gpumd", "str"),
-    "NEP_BIN": ("/home/wangchaoyue852/gpumd/src/nep", "str"),
+    "GPUMD_BIN": ("/home/<user>/gpumd/src/gpumd", "str"),
+    "NEP_BIN": ("/home/<user>/gpumd/src/nep", "str"),
     "CONDA_SH": (gc.DEFAULT_CONDA_SH, "str"),
     "CONDA_ENV": (gc.DEFAULT_CONDA_ENV, "str"),
     "SEED_NEP": ("nep_Mn2In2Se5_gen1000.txt", "str"),

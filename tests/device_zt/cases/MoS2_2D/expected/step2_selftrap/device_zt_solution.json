@@ -293,7 +293,7 @@
   },
   "kappa_source_mode": "auto",
   "upstream_kappa": {
-    "file": "/home/wangchao/software/AutoZT/tmp/dt_fix/zt_MoS2_2D/MoS2_2D/kl-dft-cpu/step6_kappa/kappa_summary.json",
+    "file": "~/software/AutoZT/tmp/dt_fix/zt_MoS2_2D/MoS2_2D/kl-dft-cpu/step6_kappa/kappa_summary.json",
     "T_K": 300.0,
     "tensor": [
       62.08561064800001,
@@ -303,7 +303,7 @@
     "kappa_key": "kappa_2d_normalized_xx_yy_zz",
     "note": "2D 物理值 κ_2D = κ_cell × h⊥/d（与 thickness_2d.json 的 d 配套）"
   },
-  "elec_props_source": "/home/wangchao/software/AutoZT/tmp/dt_fix/zt_MoS2_2D/MoS2_2D/device-zt/step1_elec/elec_props.json",
+  "elec_props_source": "~/software/AutoZT/tmp/dt_fix/zt_MoS2_2D/MoS2_2D/device-zt/step1_elec/elec_props.json",
   "sigma_convention": "cell(含真空超胞高 h_perp)",
-  "sigma_convention_source": "/home/wangchao/software/AutoZT/tmp/dt_fix/zt_MoS2_2D/MoS2_2D/ke-dft-cpu/step8_amset/2d_correction.json"
+  "sigma_convention_source": "~/software/AutoZT/tmp/dt_fix/zt_MoS2_2D/MoS2_2D/ke-dft-cpu/step8_amset/2d_correction.json"
 }

@@ -28,4 +28,4 @@ ulimit -s unlimited
 # 但要确认 KPOINTS 确实是 1x1x1，且 relax_common 的 extract_vasp_cmd
 # 认得这一行（正则匹配 vasp_(std|ncl|gam)，vasp_gam 也认）。
 export AUTOZT_CELL_CONSTRAINT=none
-mpirun -np $SLURM_NTASKS /public/home/wangchao/software/vasp.6.4.3/bin/vasp_std
+mpirun -np $SLURM_NTASKS /public/home/<user>/software/vasp.6.4.3/bin/vasp_std

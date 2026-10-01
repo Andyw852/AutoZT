@@ -25,7 +25,8 @@ ke 技能原本只覆盖到「生成 settings.yaml 并提交 amset」。当需�
 | cmp_diel.py / cmp_eps.py | 新旧介电张量对比 |
 | cmp_csv.py / cmp_keyed.py | CSV 逐值比对 / 按键对齐比对 |
 | desym_fix_validate.py | V115/V116：用同一份全网格 h5 检验去对称化相位公式（原式/修正式）。实数据用**对照组判据**（坏操作点 vs 好操作点 = AMSET 原生路径）；`--shift t1 t2 t3` 平移原点造坏操作 + 查平移不变性（标准原点 GaN 必须用它）。V117 起自动从 vasprun 取全部带能量识别被带窗口切开的简并组（纤锌矿 kz=π/c 粘连）、边界标签换到 AMSET 约定、查源/目标本征值一致性、打印平面波截断。判据见 VERIFICATION V115 §6、V116、V117 |
-| regate_projects.py | V115：用逐操作判据回查已有项目的 S8/S8.4 是否"IBZ + 真实重叠 + 有坏操作 + 没打补丁"（静默算错）；V117：全网格 h5 的 k 点标签不在 (-0.5, 0.5] 也判 ★ WRONG；V134：settings.yaml 的弹性张量不正定（含 ADP）判 ★ WRONG，2D 面内剪切 C66 不到 C11 的 2% 判 ⚠ ELASTIC（疑似 Voigt 顺序没重排）；V135：settings.yaml 与 step6_elastic/OUTCAR 逐位对照，确定是 VASP 顺序（没重排）判 ★ WRONG（3D 非立方也查得出），重排后仍不正定的提示先重做 S6 |
+| template_drift.py | V137：项目级模板副本（init 时复制进 project_setting/templates/ 的 *.tpl，find_asset 优先用它）与技能模板的漂移审计：逐键列出不同的 INCAR 键（★ 关键键），用 git 历史判断副本是技能模板的原样旧版 [STALE]（可直接删，让技能模板生效）还是有手改 [CUSTOM]；只读 |
+| regate_projects.py | V115：用逐操作判据回查已有项目的 S8/S8.4 是否"IBZ + 真实重叠 + 有坏操作 + 没打补丁"（静默算错）；V117：全网格 h5 的 k 点标签不在 (-0.5, 0.5] 也判 ★ WRONG；V134：settings.yaml 的弹性张量不正定（含 ADP）判 ★ WRONG，2D 面内剪切 C66 不到 C11 的 2% 判 ⚠ ELASTIC（疑似 Voigt 顺序没重排）；V135：settings.yaml 与 step6_elastic/OUTCAR 逐位对照，确定是 VASP 顺序（没重排）判 ★ WRONG（3D 非立方也查得出），重排后仍不正定的提示先重做 S6；V136：transport.json 比它用到的上游产物（形变势 h5 / vasprun / h5 / S5、S6 的 OUTCAR）旧判 ⚠ STALE，S5.1 介电校验 ok=false 判 ★ WRONG |
 | compare_deformation_h5.py | V123：重新 gen S7.1 前后两份形变势 h5 的**整场**对比（⟨\|D\|²⟩ 新/旧 ≈ ADP 迁移率粗估因子的倒数、逐点相对变化），给 ⚠ STALE-DP 项目分诊：变化小的可不重跑 S8/S8.4。只看带边 E1 判断不了（MoS₂ 带边 iso 几乎不变，ADP 迁移率却 ×2） |
 | compare_transport_json.py | V125：两份 AMSET transport.json 逐 (掺杂, 温度) 对比（迁移率 overall/各机制、电导率、Seebeck；2D 取面内平均），并报告新旧各自的 xx/yy 各向异性。用于 IR_FIX / KZ_CAP_2D 的真实数据验证：阈值默认 2%，退出码 0 = PASS、1 = FAIL、2 = 网格对不上 |
 | kz_overlap_probe.py | V126：2D 运行目录里用 AMSET 自己的重叠计算，量化沿 k_z **插值**波函数系数的假象：比较旧 21 层 / 新 3 层集合上的平均重叠，给出预测的 μ新/μ旧（秒级、不提交作业）。用来判断 KZ_CAP_2D 与旧结果的差别是截断引入的误差，还是旧结果里的插值假象 |

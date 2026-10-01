@@ -1858,9 +1858,10 @@ def resolve_material_local(t, root, m):
         _wk = t.get("key")
         if _wk not in _WARN_WORKDIR:
             _WARN_WORKDIR.add(_wk)
-            print("提示：技能 %s 未在项目里显式指定 work_dir，回退到 %s"
-                  "（如需改，在 project_setting/setting.yaml 写 work_dir）"
-                  % (_wk, m["work_dir_eff"] or "(无)"), file=sys.stderr)
+            print("提示：技能 %s 的材料 %s 未在项目里显式指定 work_dir，回退到 %s"
+                  "（如需改，在 project_setting/setting.yaml 写 work_dir；"
+                  "同技能其它材料只提示这一次）"
+                  % (_wk, m.get("name"), m["work_dir_eff"] or "(无)"), file=sys.stderr)
     # v1.3：skill_subdir 开启时 result/log 默认进技能子目录；setting.yaml 里
     # 仍是 init 模板默认值（{matdir}/result）的视为"未定制"一并升级，
     # 定制过路径的尊重原值（用户明确指定的跨目录布局不能被隐式改写）。

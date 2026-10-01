@@ -20,6 +20,11 @@
   ★ WRONG   （V135）settings.yaml 的弹性张量是 VASP 顺序（与 step6_elastic/OUTCAR 逐位对照：剪切对角三位依次是
             XY、YZ、ZX），没重排成标准 Voigt —— 3D 非立方是 C44/C66 互换，2D 是面内剪切近零；重新 gen 本步。
             立方等三个剪切相等的体系分不出（也不受影响），不判。
+  ⚠ STALE   （V136）transport.json 比它用到的上游产物旧（形变势 h5 / vasprun.xml / wavefunction.h5 /
+            step5_dielect/OUTCAR / step6_elastic/OUTCAR 晚于它 1 分钟以上）—— 上游重算过，本步结果是旧输入算的。
+            V122 的 STALE-DP 只看 h5 的对称化标记，S7.1 重生成后标记清了、结果却没重跑（Si/Si_diamond/P1_Al-AlN 实测）。
+  ★ WRONG   （V136）step5_dielect_validate/dielectric_check.json 的 ok = false（介电 NaN/ε<1/缺 IONIC 块…）
+            而本步有 transport.json —— POP/IMP 用的介电不可信。
   ?         判不出来（缺结构/缺 settings）
 另外列出 settings.yaml 里写了 EPS_INF_OVERRIDE 注释却可能没生效的旧 S8（见 V115 §8）。
 
@@ -94,6 +99,44 @@ def voigt_order_state(settings_el, outcar_std, match=0.10, apart=0.25):
         return "voigt"
     if e_vasp < match and e_std > apart:
         return "vasp"
+    return None
+
+
+_UPSTREAM_FILES = (("形变势 h5", "deformation.h5"), ("vasprun.xml", "vasprun.xml"),
+                   ("wavefunction.h5", "wavefunction.h5"))
+_UPSTREAM_MAT_FILES = (("step5_dielect/OUTCAR", "step5_dielect/OUTCAR"),
+                       ("step6_elastic/OUTCAR", "step6_elastic/OUTCAR"))
+
+
+def stale_upstreams(mat, run, slack=60.0):
+    """transport.json 比哪些上游产物旧（软链按最终目标的 mtime）。没有 transport.json 返回 []。"""
+    tj = Path(run) / "transport.json"
+    try:
+        t0 = tj.stat().st_mtime
+    except OSError:
+        return []
+    out = []
+    for label, p in ([(lb, Path(run) / f) for lb, f in _UPSTREAM_FILES]
+                     + [(lb, Path(mat) / f) for lb, f in _UPSTREAM_MAT_FILES]):
+        try:
+            if p.exists() and p.stat().st_mtime > t0 + slack:
+                out.append(label)
+        except OSError:
+            pass
+    return out
+
+
+def dielectric_check_failed(mat):
+    """S5.1 的校验结论：ok = false 返回原因（字符串），通过/没有校验文件返回 None。"""
+    import json as _json
+    f = Path(mat) / "step5_dielect_validate" / "dielectric_check.json"
+    try:
+        d = _json.loads(f.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if d.get("ok") is False:
+        rs = d.get("reasons") or []
+        return rs[0] if rs else "ok=false"
     return None
 
 
@@ -210,11 +253,22 @@ def audit(root, pattern):
                     verdict = "⚠ ELASTIC"
                 why += "；面内剪切 C66 只有 max(C11, C22) 的 %.1f%%（疑似 VASP 顺序没重排，V134）" % (
                     100 * el["block"][2][2] / max(el["block"][0][0], el["block"][1][1]))
+            # V136：结果比上游旧（上游重算过、本步没重跑）；介电校验没通过
+            stale = stale_upstreams(mat, run)
+            if stale:
+                if verdict == "OK":
+                    verdict = "⚠ STALE"
+                why += "；transport.json 比 %s 旧 -> 结果是旧输入算的，重跑本步（V136）" % "、".join(stale)
+            dfail = dielectric_check_failed(mat) if r["transport"] else None
+            if dfail:
+                verdict = "★ WRONG"
+                why += "；S5.1 介电校验未通过（%s）-> POP/IMP 不可信，先重跑 S5（V136）" % dfail
             rows.append({"material": str(mat.relative_to(root)), "run": run_name,
                          "verdict": verdict, "why": why, "h5_src": r["h5_src"],
                          "unity": r["unity"], "desym_fix": r["fix"],
                          "transport": r["transport"], "bad_ops": bad, "total_ops": tot,
-                         "structure": st_src, "elastic_order": order})
+                         "structure": st_src, "elastic_order": order, "stale_upstream": "/".join(stale),
+                         "dielectric_fail": dfail})
     return rows
 
 
@@ -234,7 +288,7 @@ def main(argv=None):
                                            "" if r["transport"] else "（无 transport.json）"))
     n_bad = sum(1 for r in rows if r["verdict"].startswith("★"))
     n_stale = sum(1 for r in rows if r["verdict"].startswith("⚠"))
-    print("\n共 %d 个运行目录，★ 静默算错 %d 个，⚠ 待处理（形变势过期 / 弹性待核对）%d 个"
+    print("\n共 %d 个运行目录，★ 静默算错 %d 个，⚠ 待处理（形变势过期 / 结果比上游旧 / 弹性待核对）%d 个"
           % (len(rows), n_bad, n_stale))
     if a.csv:
         with open(a.csv, "w", newline="", encoding="utf-8") as f:

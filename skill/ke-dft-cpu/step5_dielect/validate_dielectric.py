@@ -193,6 +193,18 @@ def _is_nonpolar(step_dir):
     return False
 
 
+def _input_files(outcar, marker):
+    """{相对材料目录的 OUTCAR 路径: sha256}；材料目录 = 标记文件所在步骤目录的上一级。"""
+    import hashlib
+    try:
+        mat = Path(marker).resolve().parent.parent
+        rel = os.path.relpath(str(Path(outcar).resolve()), str(mat)).replace(os.sep, "/")
+        with open(outcar, "rb") as f:
+            return {rel: hashlib.sha256(f.read()).hexdigest()}
+    except OSError:
+        return {}
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--step-dir", default="step5_dielect")
@@ -204,7 +216,7 @@ def main():
     # 否则 --json 指到步骤目录时会 FileNotFoundError，autozt 也就永远找不到 done_marker。
     out.parent.mkdir(parents=True, exist_ok=True)
     oc = d / "OUTCAR"
-    res = {"step": "step5_dielect.validate", "outcar": str(oc), "ok": False, "reasons": []}
+    res = {"step": "step5_dielect.validate", "outcar": str(oc), "ok": False, "status": "failed", "reasons": []}
     if not oc.is_file():
         res["reasons"].append("缺 OUTCAR")
         out.write_text(json.dumps(res, indent=2, ensure_ascii=False) + "\n")
@@ -260,6 +272,11 @@ def main():
             "Born 有效电荷求和规则 Sigma Z* = %.4f 被破坏（>0.1）—— DFPT 线性响应不可信"
             % _phys["born_sum_max"])
     res["ok"] = not res["reasons"]
+    # [patch_strict_dievalid V136] autozt 的 strict_done_marker：只有 status == "done" 才算完成，且
+    #   input_files 里 OUTCAR 的 sha256 变了（S5 重算）就自动作废。此前只看文件在不在 —— 校验失败
+    #   （ok=false）也被判完成（P1_Mo-MoS2：ε 全是 NaN，状态表却是 OK）。路径相对材料目录。
+    res["status"] = "done" if res["ok"] else "failed"
+    res["input_files"] = _input_files(oc, out)
     out.write_text(json.dumps(res, indent=2, ensure_ascii=False) + "\n", encoding="utf-8", newline="\n")
     if res["ok"]:
         print("[OK] 介电张量通过数值校验：eps_inf=%s ionic=%s Frohlich=%.6f"

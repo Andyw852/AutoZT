@@ -63,10 +63,10 @@ export LD_LIBRARY_PATH=$MKLROOT/lib/intel64:/public/software/aocc/4.1.0/aocc-com
 export LD_PRELOAD=$MKLROOT/lib/intel64/libmkl_rt.so${LD_PRELOAD:+:$LD_PRELOAD}
 export MKL_NUM_THREADS=1
 export MKL_DYNAMIC=FALSE
-export QE_BIN=/public/home/.../software/AutoZT/qe-7.3-perturbo/bin
+export QE_BIN=/public/home/<user>/software/AutoZT/qe-7.3-perturbo/bin
 export WANNIER_BIN=/public/software/wannier/3.1.0/bin
-export PERTURBO_BIN=/public/home/.../software/AutoZT/qe-7.3-perturbo/perturbo/bin
-export PSEUDO_DIR=/public/home/.../software/AutoZT/pseudo
+export PERTURBO_BIN=/public/home/<user>/software/AutoZT/qe-7.3-perturbo/perturbo/bin
+export PSEUDO_DIR=/public/home/<user>/software/AutoZT/pseudo
 export OMP_NUM_THREADS=1
 export OMP_STACKSIZE=1G
 # jzzn compute nodes may expose an unusable OpenFabrics device.  These

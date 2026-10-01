@@ -42,7 +42,7 @@ def adaptive_parallel_tags():
       返回空 dict 表示不动。
     主机识别用 VASP GPU 版二进制目录是否存在，不硬编码主机名。
     """
-    if os.path.isdir("/home/user_3090/software/vasp.6.6.0/bin"):
+    if os.path.isdir("/home/<user>/software/vasp.6.6.0/bin"):
         return {"NCORE": "1", "KPAR": "1"}
     return {}
 

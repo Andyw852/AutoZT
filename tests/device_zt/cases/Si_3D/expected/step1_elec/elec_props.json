@@ -1,7 +1,7 @@
 {
   "ELEC_DONE": true,
   "device_name": "device",
-  "transport_source": "/home/wangchao/software/AutoZT/tmp/dt_fix/zt_Si_3D/Si_3D/ke-dft-cpu/step8_amset/transport.json",
+  "transport_source": "~/software/AutoZT/tmp/dt_fix/zt_Si_3D/Si_3D/ke-dft-cpu/step8_amset/transport.json",
   "transport_step": "step8_amset",
   "doping_cm3": 9.999999999999998e+19,
   "doping_requested_cm3": 1e+20,

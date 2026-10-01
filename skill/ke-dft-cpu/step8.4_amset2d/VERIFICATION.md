@@ -84,7 +84,7 @@ OUTCAR 的 VASP 顺序对角是 `[C11, C22, C33, C66, C44, C55]`，例如 Sn2Sb2
 
 > 附带发现：这四个合金**当前**的 `step8_amset/settings.yaml` 已经是重排后的正确顺序
 > （与本地 OUTCAR 逐元素最大偏差 0.0005 GPa；若是原始顺序会差 22 GPa），且集群上
-> `/public/home/.../ke_work/<合金>/ke-dft-cpu/gen_step10_amset.py` 里也已带 `order = (0,1,2,4,5,3)`
+> `/public/home/<user>/ke_work/<合金>/ke-dft-cpu/gen_step10_amset.py` 里也已带 `order = (0,1,2,4,5,3)`
 > —— 说明这条已经在现场单独修过并重跑过（transport.json 时间戳 9/15 22:17）。
 > 但**仓库里的 gen_step10 之前没有这个重排**，所以其它三维材料（以及以后新跑的项目）
 > 仍会踩坑；本次把修复正式落到技能里。
@@ -2933,7 +2933,7 @@ bash tmp/amset2d/crit2_run.sh
 
 ## V39. CrSe2_hex S7 只读诊断与 relax 保留候选（2026-09-21 22:42 CST）
 
-范围：jzzn `/public/home/.../Fullerene_Network/work/jzz/jap/CrSe2_hex/ke-dft-cpu/step7_deform`，仅 ssh 只读 sacct/现有日志。未提交、取消、推进或改远端；未修改主树 generator。
+范围：jzzn `/public/home/<user>/Fullerene_Network/work/jzz/jap/CrSe2_hex/ke-dft-cpu/step7_deform`，仅 ssh 只读 sacct/现有日志。未提交、取消、推进或改远端；未修改主树 generator。
 
 22:41:53 sacct 快照：
 
@@ -3119,7 +3119,7 @@ if "_up" in key or "_down" in key:
 
 **④ 两条虚警已排除**（勿再当故障）：① VASP 的 `FORTRAN STOP` + `ieee_*` 是**正常退出横幅**，
 判据看 `OUTCAR` 是否含 `reached required accuracy`；② `CONDA_SH` 指向 3090 路径的告警，
-模板 `if [ -d /home/user_3090/miniconda3 ]` 的 `else` 分支在 jzzn 上正确兜底。
+模板 `if [ -d /home/<user>/miniconda3 ]` 的 `else` 分支在 jzzn 上正确兜底。
 另：`autozt` 曾因 `/mnt/d`（WSL 9p）瞬时故障抛 `OSError: Bad address`，重跑即恢复，非代码问题。
 
 **⑤ 禁止用进度条日志做健康判据**：`amset.log`/`queue.out` 里 `inelastic: N%` 这类进度条
@@ -3171,7 +3171,7 @@ if "_up" in key or "_down" in key:
 CrSe2_ortho（0.5.1）h5 属性 `nspin_norm_fixed='skipped'` / `reason='amset>=0.5.1'`，
 且形变势 ×2.024 **由 0.5.1 原生得出**（非本地补丁）。故两版结果一致、口径统一。
 
-**附注**：jzzn 上的 `/public/home/.../software/AutoZT` **不是本仓库的副本**
+**附注**：jzzn 上的 `/public/home/<user>/software/AutoZT` **不是本仓库的副本**
 （无 `.git`、无 `skill/`），与作业无关——gen 运行时是把所需脚本（含
 `nspin_norm_fix.py`、`ke_common.py`）按 `gen_need` **随作业推送**到步骤目录，
 因此本地仓库才是唯一事实来源，远端无需 checkout。
@@ -3225,7 +3225,7 @@ CrSe2_hex 的"无磁性"结论（V43）在此得到跨材料佐证。
 实际存在 `/mnt/d/tf_data/MoS2/ke-dft-cpu`（用户 2026-09-16 建），且是**配置最全**的项目：
 `amset2d: true` + `wavefunction_full: true`（含 S3b/S4b 全网格分支）。
 
-其 autozt 状态（`Dir: /public/home/.../Fullerene_Network/work/MoS2/ke-dft-cpu`，
+其 autozt 状态（`Dir: /public/home/<user>/Fullerene_Network/work/MoS2/ke-dft-cpu`，
 注意**不在 jzz/jap 下**，HPC=jzzn）：
 
 | 步骤 | 状态 |
@@ -4243,8 +4243,8 @@ CrS2_ortho / CrSe2_ortho 的 S8 已完成、无模式争议（走 unity 默认�
 弹性对角 `[158.9, 162.401, -2.4042, **1.4978, 0.5765**, 58.3566]` —— 面外剪切 C44/C55
 **均为正**，本材料不触发 V76 的置零/取绝对值处理；旧 S8（08-30 备份）ADP=1967、overall=45.44
 （有限）也证明面外 C33=-2.4042 在实践中不致命。
-注：提交时的 `CONDA_SH` 指向 3090 路径告警为**已知虚警**（`submit.sh` 的 `if [ -d /home/user_3090/miniconda3 ]`
-在 jzzn 不成立，走 else 分支 `source /public/home/.../miniconda3/...`，已逐行核对）。
+注：提交时的 `CONDA_SH` 指向 3090 路径告警为**已知虚警**（`submit.sh` 的 `if [ -d /home/<user>/miniconda3 ]`
+在 jzzn 不成立，走 else 分支 `source /public/home/<user>/miniconda3/...`，已逐行核对）。
 
 **SS S8.4 已启用（本轮只做配置，未提交）**：
 - `project_setting/tf_SS_ke-dft-cpu.yaml` 加 `amset2d: true`（备份 `.bak_preamset2d`）；
@@ -6520,3 +6520,90 @@ vasprun.xml（或 band_structure_data.json）重建 DOS。在合成 3D 目录上
 
 测试：test_elastic_guard_s3b 新增 VoigtOrderAuditTests（用户侧两个材料按取证数据造 OUTCAR；三维六方
 C44 ≠ C66 的正确/错误顺序；立方不判）。
+
+## V136（2026-10-01）：上游重算后的失效 —— S5.1 校验失败被判完成、S5/S6 重算不让 S8 失效、STALE-DP 漏网
+
+**用户侧发现**：
+1. P1_Mo-MoS2 重跑 S8 被 gen 拦下：`eps_inf 对角项 -0.0000 -3.5697 -0.0527 中有 < 1 的分量`。
+   - S5 的 OUTCAR 里 ε∞ 与 IONIC 两块全是 NaN（8 月 16 日的旧模板 LPEAD=.TRUE. + IBRION=8，模板里已注明这个组合会崩/出 NaN）。
+   - S5.1_dievalid 早就写了 `ok=false`，但它的完成判据只看 dielectric_check.json 在不在，状态表一直显示 OK。
+2. Mo2S3 的 S6 参考结构：最大受力 0.022 eV/Å、面内应力 XX −11.46 / YY −10.68 kB（EDIFF 1E-7、ENCUT 390 > 1.3×336 都够紧）。
+   - 结构没弛豫到极小。现行 S1 模板是 EDIFFG = −0.005，这份应是更早的模板或没收敛。
+3. Si / Si_diamond / P1_Al-AlN 的 transport.json（08-30 / 09-18）比 deformation.h5（09-30 02:33）旧。
+   - regate 的 STALE-DP 只看 h5 的对称化标记，标记清了就判 OK。
+   - S7.1 重生成本该让 S8 失效：V122 的 invalidate_downstream 接线是对的，目录名与软链都核对过。
+     02:33 这一批大概率早于集群部署 V122（MoSe2 的 S8.2 在 02:45 被正确归档）。
+
+**改动**：
+- S5.1 改用 autozt 现成的 strict_done_marker（ke、zt 的 skill.yaml）。
+  - validate_dielectric.py 写 `status`：通过 = done，否则 failed；
+  - 再写 `input_files`：S5 的 OUTCAR（相对材料目录）的 sha256；
+  - 效果：校验失败不再算完成；S5 重算（OUTCAR 变了）后，旧校验自动作废、重新校验。
+  - 注意：已有材料的 dielectric_check.json 是旧格式（没有 status），严格判据下一律显示"未完成"。
+    S5.1 是登录节点秒级的 run:gen 步，各材料重跑一次即可。
+- ke_common.DOWNSTREAM 加上：
+  - step5_dielect -> S5.1、S8、S8.4（always）；
+  - step6_elastic -> S8、S8.4、S8.2（always）。
+  - S8 在 gen 时把 ε、C 写进 settings.yaml（不是软链），原来 S5/S6 重算后旧 transport.json 仍被判完成。
+  - 新增 DONE_MARKERS：step5_dielect_validate -> dielectric_check.json。
+- S5 的 gen（gen_step8_dielect）与 S6 的 gen（gen_step2_elastic，ke 与 zt 共用）在已有 OUTCAR 时调用 invalidate_downstream（同 S4/S7.1）。
+  - S6 的 gen_need 补上 ke_common.py（ke、zt）；导入不到时只告警。
+- tools/regate_projects.py：
+  - transport.json 比它用到的上游产物晚 1 分钟以上 -> ⚠ STALE（并列出是哪几个）。
+    上游产物包括：形变势 h5、vasprun.xml、wavefunction.h5（软链按最终目标），以及 step5_dielect/OUTCAR、step6_elastic/OUTCAR。
+  - step5_dielect_validate/dielectric_check.json 的 ok = false 而有 transport.json -> ★ WRONG。
+
+**Mo2S3 的处理要点**：重新弛豫 = S1 的结构变了。面内应力约 −1.1 GPa（slab 平均），对 C11 约 53 GPa 是约 2% 的应变。
+- 能带、形变势、介电、弹性都会跟着变，所以要 S1 之后整条链重跑（S2…S8），不是只重算 S6。
+- 整条链对 S1 的重算没有自动失效：DOWNSTREAM 里没有 step1_opt，S3 的 gen 只在它自己重新生成时才比对 POSCAR。
+  需要逐步重新 gen。V136 起 S5/S6/S7.1 的重新 gen 会让 S8 自动失效。
+
+测试：新增 test_stale_upstream（7 项）：
+- S5、S6 重算的失效范围；
+- 两个 gen 的调用位置；
+- ke/zt skill.yaml 的 strict_done_marker 与 ke_common；
+- 校验文件的 status/input_files；
+- 用 autozt 的 ck_plot 核对：通过 -> 完成；OUTCAR 变了 -> 作废；ok=false -> 未完成；旧判据会放行（复现 bug）；
+- regate 的 ⚠ STALE / ★ WRONG；
+- 软链 h5 按目标 mtime。
+
+## V137（2026-10-01）：小带隙告警的 TypeError + 项目级模板副本盖过技能模板（审计工具）+ S5 的 LPEAD 告警
+
+**用户侧发现**：
+1. P1_Al-AlN 重跑 S8 崩在 `_warn_small_pbe_gap`：`TypeError: must be real number, not str`。
+   - print 的格式串残留 `%.4f eV（< %.2f eV）`，却只传了一个字符串 `_why`。
+   - 只要 PBE < 0.5×HSE 就必崩：P1_Al-AlN 是 0.11 vs 0.94，GaAs 是 0.4175 vs ~1.4，GaAs 的 S5 跑完重跑 S8 也会撞上。
+   - 这是 09-27 把判据从固定 0.3 eV 改成相对 HSE 时留下的。S8（gen_step10）与 S8.4（gen_step14）是同一段代码。
+2. P1_Mo-MoS2 的 `retry S5` 重新生成的 INCAR 仍是 LPEAD=.TRUE.。
+   - 原因是 project_setting/templates/step5_dielect/incar_dfpt_2d.tpl（8 月 15 日的旧副本）盖过了技能模板（09-14 起默认 .FALSE.）。
+   - 3 个 P1 材料共 6 份。
+
+**根因（系统性）**：ke-dft-cpu 的 skill.yaml 写 `template_dir: "."`，所以 autozt init 会把技能目录下**所有** *.tpl / *.conf
+按相对路径复制进 project_setting/templates/，find_asset 之后永远优先用副本（设计用意是"按项目手改只动这里"）。
+- 代价是技能模板后来的修复到不了老项目。Mo2S3 的 S1 残余力 0.022 eV/Å 而现行 S1 模板是 EDIFFG = −0.005，很可能也是这个原因。
+- autozt 的漂移检查（ops._template_drift / report.stale_template_note）只比 {{占位符}}，键值变了看不出来。
+- 这是 autozt 的设计，这里不改它，只给审计工具和 S5 的告警。
+
+**改动**：
+- S8 与 S8.4 的 `_warn_small_pbe_gap`：格式串改成 `%s`，直接用 `_why` 的完整说明。
+  - AST 扫了 ke/zt 全部 `"..." % x`，其余 13 处都是右边本身为元组的误报，只有这一处是真错。
+- 新增 tools/template_drift.py（只读）：对 <root> 下每个 templates/ 目录里的 *.tpl，与技能里同一相对路径的模板比较。
+  - 内容相同：不报。
+  - 不同：逐键列出 INCAR 式的 KEY = value 差异，关键键（LPEAD、EDIFFG、EDIFF、IBRION、ISIF、ISYM、PREC、ENCUT…）标 ★。
+  - 再用 git 历史判断：副本是技能模板某个历史版本的原样 -> [STALE]（可直接删副本，让技能模板生效）；
+    不是 -> [CUSTOM]（有手改，或比仓库历史更早；看键差和副本日期判断）；没有 git -> [DIFF]。
+  - submit*.tpl 是站点相关的，默认跳过（--all 也查）。有含 ★ 的不同 -> 退出码 1。
+- S5 的 gen（gen_step8_dielect）：渲染并套完 step.conf 的 [incar] 之后，若是 LPEAD=.TRUE. + IBRION=7/8 就告警，
+  指向 project_setting/templates/step5_dielect/ 与 template_drift。只告警：模板注释说明宽隙绝缘体可以有意开回 .TRUE.。
+
+**用户侧**：
+1. 在各项目根目录跑 `python <skill>/ke-dft-cpu/tools/template_drift.py <项目根> --repo <AutoZT 仓库>`。
+2. [STALE] 的副本直接删掉（或移走备份）。[CUSTOM] 的看键差：
+   - 要保留的改动移到 step.conf 的 [incar]，再删副本；
+   - 像 LPEAD .TRUE. 这种显然是旧默认的，按 STALE 处理。
+3. 删完重新 gen 受影响的步骤（P1 三个材料的 S5；Mo2S3 若重跑整条链，先处理 S1 的副本）。
+
+测试：新增 test_gap_warn_drift（5 项）：
+- S8/S8.4 的告警在 P1_Al-AlN、GaAs、无 HSE、带隙够大四种情况下都不崩、文案正确（修复前在第一种情况复现 TypeError）；
+- template_drift 的 STALE / CUSTOM / 相同不报 / submit 跳过 / 无 git / 退出码；
+- S5 告警的位置。

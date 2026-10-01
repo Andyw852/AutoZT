@@ -7,13 +7,13 @@ ssh_host: ""   # 沙盒本地测试
 template_map: {}
 
 # ---- 集群级默认（可被项目 project_setting 覆盖）----
-work_dir: /public/home/wangchao/Fullerene_Network/work
-conda_sh: /public/home/wangchao/miniconda3/etc/profile.d/conda.sh
+work_dir: /public/home/<user>/Fullerene_Network/work
+conda_sh: /public/home/<user>/miniconda3/etc/profile.d/conda.sh
 # MACE 实际走 venv（非 conda env）；带 "/" 会被 env_src 当 venv 路径激活。
-conda_env: /public/home/wangchao/venvs/mace_cpu
+conda_env: /public/home/<user>/venvs/mace_cpu
 amset_env: amset_clean   # amset 专用环境（amset deform/read/run）
 # MACE 权重目录（MACE 技能自动注入 step.conf 的 MACE_MODEL_DIR；项目可覆盖）。
-mlff_model_dir: /public/home/wangchao/software/mace/mlff_models
+mlff_model_dir: /public/home/<user>/software/mace/mlff_models
 # VASP POTCAR 库根目录 + 凸包参考相共享目录（自动注入 step.conf，切超算自动跟着走）
-potcar_dir: /public/home/wangchao/software/vasp_pseudopotentials
-references_dir: /public/home/wangchao/convex_hull_refs
+potcar_dir: /public/home/<user>/software/vasp_pseudopotentials
+references_dir: /public/home/<user>/convex_hull_refs

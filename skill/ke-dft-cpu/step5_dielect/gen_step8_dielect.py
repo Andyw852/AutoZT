@@ -129,6 +129,10 @@ GGA_MAP = {"pbe": "PE", "pbesol": "PS", "pbe-d3": "PE"}
 def main():
     _disc_gate()
     cwd = Path.cwd(); out = cwd / OUTDIR_NAME; out.mkdir(exist_ok=True)
+    # [patch_stale_upstream V136] 本步重新生成 = 介电会被重算：用旧介电的 S5.1 校验、S8/S8.4 的完成标记
+    #   一并失效、重新排队（同 S4 / S7.1 的做法）。S8 在 gen 时把 ε 写进 settings.yaml，不会自己发现。
+    if (out / "OUTCAR").is_file():
+        kc.invalidate_downstream(cwd, OUTDIR_NAME, "%s 重新生成（介电重算）" % OUTDIR_NAME)
     prev = kc.find_prev_dir(cwd, PREV_CANDS)
     if prev is None:
         sys.exit("[ERROR] 找不到含 CONTCAR 的上一步：%s" % PREV_CANDS)
@@ -165,6 +169,16 @@ def main():
     stepconf.apply_incar_file(out / "INCAR", log=_ic_log)
     for _m in _ic_log:
         print("[..] %s" % _m)
+    # [patch_lpead_warn V137] 技能模板 09-14 起默认 LPEAD=.FALSE.：窄隙/强 SOC/近金属体系 LPEAD=.TRUE. +
+    #   IBRION=8 会 SIGSEGV 或出 NaN（P1_Mo-MoS2 实测 ε 全 NaN）。还是 .TRUE. 多半是 project_setting/templates/
+    #   里 init 时复制的旧模板副本盖过了技能模板（find_asset 优先用副本）。只告警：宽隙绝缘体可以有意开回 .TRUE.。
+    _inc = kc.parse_incar((out / "INCAR").read_text(errors="ignore"))
+    if _inc.get("LPEAD", "").strip().upper().lstrip(".").startswith("T") and \
+            _inc.get("IBRION", "").strip() in ("7", "8"):
+        print("[WARN] INCAR 是 LPEAD=.TRUE. + IBRION=%s（技能模板默认 LPEAD=.FALSE.）：窄隙/SOC/近金属体系会 SIGSEGV 或出 NaN。\n"
+              "       若不是有意为之，多半是 project_setting/templates/%s/ 里的旧模板副本盖过了技能模板 ——\n"
+              "       用 tools/template_drift.py 查；删掉副本（或改成 .FALSE.）后重新 gen 本步。"
+              % (_inc.get("IBRION"), OUTDIR_NAME))
 
     submit_tpl = resolve_tpl(Path(__file__).resolve().parent, "submit_std", dim)
     submit = out / "submit.sh"

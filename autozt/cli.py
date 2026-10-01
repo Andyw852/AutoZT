@@ -458,6 +458,34 @@ def _main():
         # 不带目标的 history 只读 history.jsonl；带 -p 时仍走下面的屏蔽项目检查
         sys.exit(cmd_history(cfg, proj=None, tt=a.tt, since=a.since,
                              last_n=a.last_n or 40, json_out=a.json_out))
+    # check / register 不需要其它项目的配置：在 merge_project_configs（扫 project_roots、
+    # 逐个读 tf_*.yaml）之前分流。大项目树在 WSL /mnt/d（9p）上这一步要几分钟。
+    if cmd == "check":    # 运行依赖探测：哪台机器能跑哪个技能、缺什么（只读，不采集）
+        from autozt import envcheck
+        _keys = ([a.tt] if a.tt else
+                 sorted(k for k in (cfg.get("task_types") or {}) if k and not k.startswith("_")))
+        _cl = a.reg_cluster or "local"
+        _cls = envcheck.list_clusters() if _cl == "all" else [_cl]
+        _reps = [envcheck.check(cfg, _keys, c) for c in _cls]
+        if a.json_out:
+            print(json.dumps(_reps[0] if len(_reps) == 1 else {"clusters": _reps},
+                             ensure_ascii=False, indent=2))
+        else:
+            print("\n\n".join(envcheck.render(r) for r in _reps))
+        _bad = any(not r.get("ok") for r in _reps) or (
+            a.strict and any(s["status"] != "ready" for r in _reps for s in r["skills"]))
+        sys.exit(1 if _bad else 0)
+    if cmd == "register":   # 新材料接入：纯本地（建目录/init/写 step.conf），不连超算
+        _gate = agent_direct_gate(cfg, cmd, sys.argv[1:])
+        if _gate is not None:
+            sys.exit(_gate)
+        from autozt import cmd_register
+        types = get_types(cfg, tt=a.tt, quiet=True)   # 只要技能骨架，不并入各项目配置
+        sys.exit(cmd_register(cfg, types, a.proj, a.tt, dataset=a.reg_dataset,
+                              poscar=a.reg_poscar, root=a.reg_root,
+                              cluster=a.reg_cluster, sets=a.sets, step=a.job,
+                              json_out=a.json_out))
+
     cfg = merge_project_configs(cfg)
 
     def _types_for_block_check():   # 只在 basename 撞上屏蔽项目时才算（本地发现，有缓存）
@@ -505,21 +533,6 @@ def _main():
         cfg["host"] = a.host or None
     if a.user:
         cfg["user"] = a.user
-    if cmd == "check":    # 运行依赖探测：哪台机器能跑哪个技能、缺什么（只读，不采集）
-        from autozt import envcheck
-        _keys = ([a.tt] if a.tt else
-                 sorted(k for k in (cfg.get("task_types") or {}) if k and not k.startswith("_")))
-        _cl = a.reg_cluster or "local"
-        _cls = envcheck.list_clusters() if _cl == "all" else [_cl]
-        _reps = [envcheck.check(cfg, _keys, c) for c in _cls]
-        if a.json_out:
-            print(json.dumps(_reps[0] if len(_reps) == 1 else {"clusters": _reps},
-                             ensure_ascii=False, indent=2))
-        else:
-            print("\n\n".join(envcheck.render(r) for r in _reps))
-        _bad = any(not r.get("ok") for r in _reps) or (
-            a.strict and any(s["status"] != "ready" for r in _reps for s in r["skills"]))
-        sys.exit(1 if _bad else 0)
     types = get_types(cfg, tt=a.tt,
                       root_override=None if cmd in ("init", "register") else root,
                       quiet=(cmd in ("init", "register")))
@@ -540,16 +553,6 @@ def _main():
                  "（在全局 tf.yaml 或项目 project_setting/tf_*.yaml 里定义）。")
     # v1.1：-tt 指定的类型有骨架但无项目段时 types 为空——前面已打印引导
     # 提示，这里放行，按空表/无目标处理（不算错误）。
-
-    if cmd == "register":   # 新材料接入：纯本地（建目录/init/写 step.conf），不连超算
-        _gate = agent_direct_gate(cfg, cmd, sys.argv[1:])
-        if _gate is not None:
-            sys.exit(_gate)
-        from autozt import cmd_register
-        sys.exit(cmd_register(cfg, types, a.proj, a.tt, dataset=a.reg_dataset,
-                              poscar=a.reg_poscar, root=a.reg_root,
-                              cluster=a.reg_cluster, sets=a.sets, step=a.job,
-                              json_out=a.json_out))
 
     if cmd == "init" and not a.job:  # 项目配置初始化：纯本地，不连超算
         _gate = agent_direct_gate(cfg, cmd, sys.argv[1:])   # P0-1：init 也进审计
