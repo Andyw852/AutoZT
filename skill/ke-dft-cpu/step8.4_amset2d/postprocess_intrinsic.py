@@ -319,11 +319,12 @@ def _apply_run_plugins(run_dir, ir_fix=None):
     return True
 
 
-def build_amset_data(run_dir, nworkers=None, progress_bar=False, ir_fix=None):
+def build_amset_data(run_dir, nworkers=None, progress_bar=False, ir_fix=None, set_doping=True):
     """用 vasprun.xml + settings.yaml 重建 AmsetData（能带/速度/DOS/费米能级）。
 
     只做 interpolation + DOS + fermi levels，不做 overlap、不做 scattering；
     散射率随后从 mesh.h5 注入。ir_fix：mesh_ir_fix_state 的结果（None = 不管）。
+    set_doping=False：到 DOS 为止，不求费米能级（tools/fermi_probe.py 用它诊断"求不到费米能级"）。
     """
     import amset
     from amset.core.run import Runner
@@ -348,6 +349,8 @@ def build_amset_data(run_dir, nworkers=None, progress_bar=False, ir_fix=None):
         nworkers=nw,
     )
     ad.calculate_dos(estep=s["dos_estep"], progress_bar=progress_bar)
+    if not set_doping:
+        return ad, s, amset.__version__
     ad.set_doping_and_temperatures(s["doping"], s["temperatures"])
     # patch_carrier_guard（2026-09-28 用户批准）：已实现 vs 请求载流子浓度（>1% 报错）。
     check_achieved_doping(ad)

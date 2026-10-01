@@ -481,6 +481,24 @@ for _fn in ("_calculate_transport_properties", "_calculate_mobility"):
     if hasattr(_T, _fn) and not getattr(getattr(_T, _fn), "_amset2d_guard", False):
         setattr(_T, _fn, _guard_transport(getattr(_T, _fn)))
 
+# V131：AMSET 的 FermiDos.get_fermi 在中间量是 NaN 时不报错（NaN > tol 为假），直接返回 NaN 当费米能级；
+# 下游输运在 BoltzTraP2 的 pinv 才崩（WS2：35 min 后 "SVD did not converge"）。这里把 NaN 当失败抛出，
+# AMSET 的容差阶梯会接着试，全失败就在求费米能级这一步报错。能解出的情况结果不变。
+from amset.electronic_structure.dos import FermiDos as _FD  # noqa: E402
+if not getattr(_FD.get_fermi, "_amset2d_nan", False):
+    _orig_get_fermi = _FD.get_fermi
+
+    def _get_fermi_no_nan(self, concentration, temperature, *a, **k):
+        out = _orig_get_fermi(self, concentration, temperature, *a, **k)
+        ef = out[0] if isinstance(out, tuple) else out
+        if not np.isfinite(ef):
+            raise ValueError("[amset2d] get_fermi 得到 NaN（本征费米能级 %r，浓度 %g）—— AMSET 原式会静默返回 NaN；"
+                             "用 tools/fermi_probe.py 诊断" % (self.efermi, concentration))
+        return out
+
+    _get_fermi_no_nan._amset2d_nan = True
+    _FD.get_fermi = _get_fermi_no_nan
+
 # =====================================================================
 # patch_kz_cap（V125）—— 插值网格在真空方向只留 2·r+1 层（2d_correction.json 的 kz_cap_rmax，默认不启用）
 #

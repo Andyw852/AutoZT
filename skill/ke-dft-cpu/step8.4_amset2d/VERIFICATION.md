@@ -6259,3 +6259,46 @@ SystemExit，写了 `AMSET_ENV = amset051` 就返回它。三个套件恢复：2
 - main 与网格不一致时报错；
 - 守卫能抓到 NaN 率、零率、NaN 费米能级，包装后 LinAlgError 改抛带报告的 RuntimeError。
 test_ir_fix_kzcap 的默认值断言改为关。
+
+## V131（2026-10-01）：WS2 求不到费米能级 —— 诊断工具 fermi_probe + get_fermi 的 NaN 静默返回改为报错
+
+**实测**（用户侧，V130 生产配置 IR_FIX 关 + KZ_CAP_2D 开）：
+- MoS₂ (c) 对 V121 面内平均：overall 1.48%、ADP 1.33%、IMP 1.41%、σ 1.48%、S 0.13%，判 PASS（阈值 2%）。
+  各机制差得几乎一样，像是公共因素，不是 ADP 专有的；比探针估的 k_z 截断（−0.2%/−0.6%）大，但在容差内。
+  V126 的分析认为截断后的结果更接近理想 2D。
+- WSe2：跑完（271×271×3，10 掺杂 × 9 温度，2 h 40 min）。
+- WS2：4 min 失败于 `set_doping_and_temperatures`：
+  "Could not find fermi within 100.0% of concentration=-2.759e-07" -> "Could not calculate Fermi level position"。
+
+**已排除**：AMSET 的 FermiDos.get_fermi 是贪心网格搜索（±5 Ha、0.1 Ha 起步、逐级细化 10 次）。合成二维阶梯 DOS 上
+（带隙 1.5/1.9/2.5 eV，100–1000 K，同一浓度 −2.759e-7 bohr⁻³ ≈ −1.9e18 cm⁻³，n、p 都试），每个点都在
+tol = 1e-5 就解出来了。所以不是"浓度太低搜不到"这个一般性问题，问题在 WS2 的 DOS 本身。
+可能是带隙里的插值假态、本征费米能级异常，或者 vb_idx 判错。
+
+**发现的 AMSET 隐患（已堵）**：get_fermi 在中间量为 NaN 时不报错。`min(relative_error) > tol` 对 NaN 为假，
+函数直接返回 NaN 当费米能级。下游输运要到 BoltzTraP2 的 pinv 才崩，报 "SVD did not converge"。
+WS2 上一次（IR_FIX 开）就是跑了 35 min 后这样崩的，很可能与这次同源，只是当时 DOS 略有不同（对称约化的
+四面体积分换了映射），没在求费米能级这一步失败。amset2d_plugin 现在包装 get_fermi：结果非有限就抛 ValueError，
+AMSET 的容差阶梯接着试，全失败就在这一步报错。能解出的情况结果不变。
+
+**tools/fermi_probe.py**（不提交作业，几分钟）：在 S8.4 运行目录按作业同一套插值重建能带与 DOS（加载同目录插件；
+IR_FIX 用 `--ir-fix`，auto = 看 AZ_IR_FIX，未设 = 关），不算散射。然后：
+- DOS 诊断：本征 E_F（是否 NaN）、能带 VBM/CBM 与带隙、DOS 看到的带边、带隙内的态数/胞、nelect、总态数；
+- 逐个 (掺杂, 温度)：
+  - AMSET 自己的容差阶梯：成功、失败或 NaN；
+  - 贪心搜索停在哪里、相对误差多大；
+  - 二分法解 doping(E_F) = 目标：N(E_F) 单调，只要能带里有态就一定有解；
+- 末尾一句判断：本征 E_F NaN / 带隙假态与失败点载流子数可比 / DOS 正常但贪心失败 / 都能解。
+build_amset_data 加了 `set_doping=False`（到 DOS 为止），供它使用。
+
+**用户侧**：
+1. 在 WS2 的 S8.4 目录跑 `python <skill>/ke-dft-cpu/tools/fermi_probe.py --json fermi_probe.json`，把表和判断发回来。
+   要修什么取决于它的结论（例如假态 -> 加密插值/调能量窗口；本征 E_F 异常 -> 查带隙/scissor/vb_idx）。
+2. 只需要和 MoS₂ 同口径的基准（±3.5e12 cm⁻²、300 K）时，可以把 WS2 的 DOPING/TEMPERATURES 设成与 MoS₂ 相同，先交一版。
+   这个配置避开了出问题的掺杂点，但不解决原因，要做掺杂/温度扫描时仍要靠第 1 步定位。
+
+测试：新增 test_fermi_probe（4 项）：
+- 干净 DOS 上 AMSET 与二分一致；
+- 本征 E_F 为 NaN 时 AMSET 静默返回 NaN、probe 标出、二分照样解；
+- 带隙假态能数出来；
+- 加载插件后 get_fermi 遇 NaN 抛错，正常值不变。
