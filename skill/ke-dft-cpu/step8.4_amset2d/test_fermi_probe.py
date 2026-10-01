@@ -66,7 +66,7 @@ class FermiProbeTests(unittest.TestCase):
         fd.efermi = float("nan")
         conc = -2.759e-7
         with np.errstate(all="ignore"):
-            ef = fd.get_fermi(conc, 300.0, tol=1e-5, precision=10)       # AMSET：不报错
+            ef = FP._original_get_fermi(fd)(fd, conc, 300.0, tol=1e-5, precision=10)   # AMSET 原式：不报错
             self.assertTrue(np.isnan(ef))
             a = FP.amset_ladder(fd, conc, 300.0)
             self.assertTrue(a["nan"])

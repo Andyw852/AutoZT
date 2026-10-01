@@ -6302,3 +6302,73 @@ build_amset_data 加了 `set_doping=False`（到 DOS 为止），供它使用。
 - 本征 E_F 为 NaN 时 AMSET 静默返回 NaN、probe 标出、二分照样解；
 - 带隙假态能数出来；
 - 加载插件后 get_fermi 遇 NaN 抛错，正常值不变。
+
+## V132（2026-10-01）：WS2 n 型 100 K 求不到费米能级 —— AMSET 的贪心搜索被双精度舍入困住（修：amset_fermi_fix，3D/2D 共用）
+
+**实测**（用户侧，fermi_probe，WS2 S8.4，IR_FIX 关 + KZ_CAP_2D 开）：
+- DOS 正常：本征 E_F −2.1749 eV（有限）；能带 VBM −3.243 / CBM −1.107 eV（带隙 2.137 eV）；带隙内 0 态；nelect 3.99。
+- 失败的只有 −1.86e18 cm⁻³ @ 100 K 和 −3.31e17 cm⁻³ @ 100 K：贪心误差 100%；二分法都能解。其余点（300 K 及以上、
+  更高浓度）AMSET 都能解。
+- 绕开：WS2 改成与 MoS₂ 同口径（±3.5e12 cm⁻²、300 K），跑完（3918648）。
+
+**更正 V131 的"已排除"**：当时用合成 DOS 测，导带 DOS 取了 25 态/Ha（≈ 0.9 态/eV/胞），比单层 TMD 实际的大好几倍。
+载流子数因此大了几倍，正好盖住了下面这个舍入问题，所以误判成"问题在 WS2 的 DOS"。实际 DOS 没问题。
+
+**机理**：
+- `FermiDos.get_fermi` 从本征 E_F 出发做网格搜索，每层 101 点，步长依次是 0.1 Ha（2.72 eV）、0.272 eV、27 meV……
+  每层取 |doping/conc − 1| 最小的格点，再在它周围细分。
+- `doping = (nelect − Σ f·DOS·dE)/V` 是两个 ≈ nelect 的数相减。双精度下，每胞少于约 nelect·1e-16 的载流子算出来就是 0。
+- 第二层（0.272 eV 步长）上，离目标最近、又没越过它的格点在导带边下约 0.25 eV。低温时那里的 n/目标 ~ exp(−0.2 eV/kT)：
+  100 K 约 1e-11，已经被舍入吃掉；300 K 约 5e-4，看得见。
+- 于是整个带隙的误差全都"等于 1"。argmin 取第一个，也就是最靠价带的格点，下一层的窗口（±1.36 eV）够不到导带边，
+  最后误差 100%。
+- 中不中招取决于"本征 E_F + j·0.272 eV"与带边怎么对齐。所以同配置的 MoS₂/WSe2 没事，WS2 n 型 100 K 出事，
+  这不是"局部极小"。3D 走的是同一段代码。
+- 合成复现（WS2 带边、导带 0.2 态/eV/胞、c = 30 Å、dos_estep 5 meV）：第二层上带隙格点的误差全是 1 + 1.2e-11（逐位相同），
+  argmin 选中 −2.719 eV，第三层窗口到 −1.36 eV，够不到解 −1.13 eV。导带 DOS 取 0.05–0.2 态/eV/胞、dos_estep 1–10 meV 时，
+  n 型 100 K 都会失败（−1e16 … −1.86e18）。
+
+**更隐蔽的一面**：`set_doping_and_temperatures` 按 tol = 1e-5, 1e-4, …, 1 依次试，前面的失败了就接受后面的。
+最后一级接受的是掺杂偏差至多 100% 的 E_F，不报错、不记日志。作业链里也没有核对实现浓度的步骤
+（carrier_guard 只在 postprocess 里），所以这种点会悄悄进结果。
+
+**修法**（step8.4_amset2d/amset_fermi_fix.py，运行时插件，S8 与 S8.4 都装、都 import）：
+- 先跑 AMSET 原搜索。它在请求的 tol 下抛 ValueError 时，对单调的 doping(E_F) − conc 做 brentq，
+  区间取 DOS 能量范围外扩 1 eV。达到 tol 就按原格式返回（含电子/空穴浓度）。阶梯第一级 1e-5 就能满足，不再往下退。
+- 原搜索能解的点，结果逐位不变（测试核对了返回值和电子/空穴浓度）。
+- tol > 1% 时，原搜索给出的解若实际偏差 > 1% 就不接受、报错（与 postprocess carrier_guard 同口径）。
+  走到这一步说明二分法也无解，即浓度超出了 DOS 能容纳的范围。
+- NaN 守卫（V131）从 amset2d_plugin 移进来，3D 也生效。它不受开关影响；本征 E_F 非有限时也不走二分法，
+  因为电子/空穴的划分要用它。
+- 开关：作业环境变量 AZ_FERMI_FIX。未设 = 开；0/false/off/no = 关，只用于复现旧结果做对照。
+- 每用一次二分法，amset.log 里记一行 `[fermi_fix] 掺杂 … @ … K：AMSET 贪心搜索在 tol=… 下失败 -> 二分法 E_F = …`。
+- 接线：
+  - ke_common.FERMI_FIX_PLUGIN；
+  - gen_step10 / gen_step14 的 `_install_fermi_fix`，并在 python -c 里 `import amset_fermi_fix;`；
+  - amset2d_plugin 导入它；
+  - postprocess_intrinsic.build_amset_data 加载它，与作业同一套求解；
+  - skill.yaml：ke 的 S8/S8.4 与 zt 的 S8 的 gen_need；zt 根目录软链。
+
+**fermi_probe**：
+- "AMSET" 一列始终是原搜索（剥掉插件外壳），新增"实际误差"列，即原搜索被接受时的掺杂偏差。
+- 偏差 > 1% 的标"宽松!"，表示旧作业在这些点的结果不可信。
+- 二分解与作业用同一个函数（amset_fermi_fix.solve_fermi）。
+- 3D 的 S8 运行目录同样可用。
+
+**用户侧**：
+1. WS2 恢复原来的 DOPING/TEMPERATURES（10×9）重交即可，不必再避开 100 K。
+2. 已跑完的低温结果（WSe2 10×9，以及 3D 里有 ≤ 200 K、低掺杂的材料）在各自运行目录跑一次 fermi_probe，看有没有"宽松!"的行：
+   - 没有：旧结果不受影响（原搜索能解的点，V132 逐位不变）；
+   - 有：这些点要重跑。
+
+测试：新增 test_fermi_fix（10 项）：
+- WS2 同款 DOS 下原搜索整条阶梯失败，插件在第一级拿到二分解（实现浓度误差 < 1e-8）；
+- 原搜索能解的点逐位不变；
+- NaN 报错（开关关也报）；
+- 旧运行目录里 V131 的 amset2d_plugin 先套了 NaN 壳时照样挂上，原函数找得到；
+- 超容量浓度：原式在 tol=1 接受偏差 > 50% 的解，插件拒绝；
+- AZ_FERMI_FIX=0 回到原行为；
+- 幂等；
+- 接线（两个 gen、插件、postprocess、ke/zt skill.yaml、zt 软链）。
+
+test_fermi_probe 改为显式调用原搜索。

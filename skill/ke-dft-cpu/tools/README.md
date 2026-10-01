@@ -30,7 +30,7 @@ ke 技能原本只覆盖到「生成 settings.yaml 并提交 amset」。当需�
 | compare_transport_json.py | V125：两份 AMSET transport.json 逐 (掺杂, 温度) 对比（迁移率 overall/各机制、电导率、Seebeck；2D 取面内平均），并报告新旧各自的 xx/yy 各向异性。用于 IR_FIX / KZ_CAP_2D 的真实数据验证：阈值默认 2%，退出码 0 = PASS、1 = FAIL、2 = 网格对不上 |
 | kz_overlap_probe.py | V126：2D 运行目录里用 AMSET 自己的重叠计算，量化沿 k_z **插值**波函数系数的假象：比较旧 21 层 / 新 3 层集合上的平均重叠，给出预测的 μ新/μ旧（秒级、不提交作业）。用来判断 KZ_CAP_2D 与旧结果的差别是截断引入的误差，还是旧结果里的插值假象 |
 | star_audit.py | V130：同一张密网格上，旧跑法（AMSET 原式映射，逐成员算）与 IR_FIX 跑法的 mesh.h5 逐星比较散射率，把迁移率差拆成 Jensen（对率平均 vs 对 τ 平均）、仿真误差（星平均没模仿到的部分）两项，并给出只用代表点的预测；只读 h5、不需要 AMSET。用来判断某材料能否开 IR_FIX |
-| fermi_probe.py | V131：AMSET 求不到费米能级（"Could not calculate Fermi level position"）或下游 pinv 报 SVD 不收敛时，在 S8.4 运行目录按作业同一套插值重建 DOS（不算散射），给出带隙内假态、本征 E_F、逐个掺杂/温度的 AMSET 结果、贪心搜索停点与二分解；几分钟、不提交作业 |
+| fermi_probe.py | V131/V132：AMSET 求不到费米能级（"Could not calculate Fermi level position"）或下游 pinv 报 SVD 不收敛时，在运行目录（S8.4 或 S8）按作业同一套插值重建 DOS（不算散射），给出带隙内假态、本征 E_F、逐个掺杂/温度的 AMSET **原搜索**结果与其实际掺杂偏差（> 1% 标"宽松!" = 旧结果在该点不可信）、贪心搜索停点与二分解（与 amset_fermi_fix 同一函数）；几分钟、不提交作业 |
 
 注意：DFPT 产物的**数值校验器**不在这里，它是技能正式步骤的一部分，
 见 step5_dielect/validate_dielectric.py（含 NaN/单位矩阵/声学求和规则/

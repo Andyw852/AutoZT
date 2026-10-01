@@ -1568,6 +1568,19 @@ def _install_ir_fix(out):
     return ok
 
 
+def _install_fermi_fix(out):
+    """patch_fermi_fix（V132）：把 amset_fermi_fix.py（住在 step8.4_amset2d/）复制进运行目录。
+    找不到只告警 —— 原搜索能解的情况结果不变，只是低温低掺杂可能求不到费米能级、宽松解不拦。"""
+    if not _HAS_KC:
+        return False
+    here = Path(__file__).resolve().parent
+    ok = kc.install_run_plugin(kc.FERMI_FIX_PLUGIN, out, (here, Path.cwd(), here.parent / "step8.4_amset2d"))
+    if not ok:
+        print("[WARN] 找不到 %s（gen_need 里要有它）—— 本次费米能级用 AMSET 原搜索（低温低掺杂可能失败）"
+              % kc.FERMI_FIX_PLUGIN)
+    return ok
+
+
 def _install_desym_fix(out):
     """patch_desym_fix：把 amset_desym_fix.py 复制进运行目录（python -c 里 import 它）。
 
@@ -2043,6 +2056,7 @@ def main():
     _install_symmetry_deps(out)  # 作业内 preflight 的判据来源（与 S8.4 同款）
     _has_fix = _install_desym_fix(out)   # patch_desym_fix
     _has_ir = _install_ir_fix(out)       # patch_ir_fix
+    _has_fermi = _install_fermi_fix(out)  # patch_fermi_fix（V132）
     _preflight_gate(cwd, out, UNITY_OVERLAP_2D if is_2d else False)
 
     # tf 把 submit_amset.tpl 与本脚本一起推到 gen 运行目录，但按原名推、不会改成
@@ -2059,7 +2073,8 @@ def main():
     _amset_env = kc.amset_env_name(cwd) if _HAS_KC else sys.exit("[ERROR] 无法 import ke_common 且 step.conf 缺 AMSET_ENV；请写 AMSET_ENV=<本集群 0.5.1 环境名>（jzzn/hanhai25=amset051、a800=amset_env、3090/hfeshell=amset）")
     # patch_desym_fix：插件在运行目录里就 import（不开时插件自己什么都不做）；
     #   开关用环境变量传进作业（preflight 也读它），命令最前面 export/unset。
-    _acmd = AMSET_CMD.replace("@AMSET_PLUGINS@", ("import amset_ir_fix; " if _has_ir else "")
+    _acmd = AMSET_CMD.replace("@AMSET_PLUGINS@", ("import amset_fermi_fix; " if _has_fermi else "")
+                              + ("import amset_ir_fix; " if _has_ir else "")
                               + ("import amset_desym_fix; " if _has_fix else ""))
     if _HAS_KC:
         _acmd = kc.ir_fix_cmd_prefix(_IR_FIX_ON) + kc.desym_fix_cmd_prefix(_DESYM_FIX_ON) + _acmd

@@ -37,7 +37,9 @@ slab 弹性常数（`C_2D/c`）即可，不要再乘 c/t。推导与各机制的
 | `amset2d_plugin.py` | 运行期插件：把 ADP/POP/IMP/PIE 四类换成二维核（同名注册表替换，不改 AMSET 安装） |
 | `amset2d_pop_freq.py` | 取 Gamma 点**面内极性模**有效频率（AMSET 自带口径会把面外 ZO 模算进去） |
 | `amset_desym_fix.py` | 运行期插件（S8 与 S8.4 共用）：修 AMSET 去对称化的相位因子（V115）；环境变量 `AZ_DESYM_FIX` 未设时不打补丁 |
+| `amset_fermi_fix.py` | 运行期插件（S8 与 S8.4 共用）：AMSET 求不到费米能级时改用二分法、宽松解偏差 > 1% 报错、NaN 报错（V132）；`AZ_FERMI_FIX=0` 关 |
 | `test_desym_fix.py` | 相位补丁的模型检验（紧束缚真值，12 构型；需要 amset） |
+| `test_fermi_fix.py` | 费米能级插件的检验（WS2 同款 DOS 复现与修复、原式能解时逐位不变、接线） |
 | `test_gen_desym_wiring.py` | S8/S8.4 gen 的逐操作判据、命令、覆盖通道接线自检 |
 | `test_kernels.py` | 四类核的自检（旋转不变、极限行为、护栏），`python test_kernels.py` 应全 PASS |
 | `example_2d_correction.json` | 自检用的最小 2d_correction.json 示例 |

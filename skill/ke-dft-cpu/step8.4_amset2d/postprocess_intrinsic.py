@@ -319,6 +319,22 @@ def _apply_run_plugins(run_dir, ir_fix=None):
     return True
 
 
+def _apply_fermi_fix(run_dir):
+    """patch_fermi_fix（V132）：与作业同一套费米能级求解 —— 加载运行目录（或本脚本旁）的 amset_fermi_fix。
+    返回是否加载上。"""
+    for d in (Path(run_dir).resolve(), Path(__file__).resolve().parent):
+        if (d / "amset_fermi_fix.py").is_file():
+            if str(d) not in sys.path:
+                sys.path.insert(0, str(d))
+            break
+    try:
+        import amset_fermi_fix  # noqa: F401
+    except ImportError:
+        print("[WARN] 找不到 amset_fermi_fix.py —— 费米能级用 AMSET 原搜索（低温低掺杂可能失败）")
+        return False
+    return True
+
+
 def build_amset_data(run_dir, nworkers=None, progress_bar=False, ir_fix=None, set_doping=True):
     """用 vasprun.xml + settings.yaml 重建 AmsetData（能带/速度/DOS/费米能级）。
 
@@ -331,6 +347,7 @@ def build_amset_data(run_dir, nworkers=None, progress_bar=False, ir_fix=None, se
     from amset.interpolation.bandstructure import Interpolator
 
     _apply_run_plugins(run_dir, ir_fix)  # patch_kz_cap / patch_ir_fix：与作业同一套插值与不可约映射
+    _apply_fermi_fix(run_dir)            # patch_fermi_fix（V132）：与作业同一套费米能级求解
     runner = Runner.from_directory(run_dir)
     s = runner.settings
     nw = s["nworkers"] if nworkers is None else int(nworkers)
@@ -362,7 +379,7 @@ def check_achieved_doping(ad, tol=0.01):
 
     AMSET 的 AmsetData.set_doping_and_temperatures 在解每个 (掺杂, 温度) 的费米能级时，
     会把 DOS 积分出来的**实际**电子/空穴浓度存进 ad.electron_conc / ad.hole_conc。
-    正常网格下它应与请求值一致（求解器自带 1% 收敛门）；一旦偏差 > tol，说明 DOS/网格/
+    正常网格下它应与请求值一致（AMSET 的容差阶梯最宽会接受 100% 偏差；V132 起 amset_fermi_fix 把关到 1%）；一旦偏差 > tol，说明 DOS/网格/
     费米求解没对上 —— 单位换算错、网格太粗、或带边被切掉，这种结果不可信，直接报错。
     （2026-09-27 MoS2：DOPING 单位事故 -> 费米能级 -153.9 eV，远在 DOS 窗口之外。）
     """

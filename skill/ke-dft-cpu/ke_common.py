@@ -712,6 +712,14 @@ IR_FIX_ENV = "AZ_IR_FIX"
 IR_FIX_PLUGIN = "amset_ir_fix.py"
 
 
+# ---- [patch_fermi_fix] 求费米能级的稳健化（V132）----------------------------------------------
+#   插件本体：step8.4_amset2d/amset_fermi_fix.py，S8 与 S8.4 都装进运行目录并在 python -c 里 import。
+#   AMSET 的贪心搜索在低温低掺杂时被双精度舍入困住（WS2 n 型 100 K），容差阶梯还会接受偏差至多 100%
+#   的解；插件在原搜索失败时改用二分法、宽松解偏差 > 1% 报错、NaN 报错。原搜索能解时结果逐位不变。
+#   开关：作业环境变量 AZ_FERMI_FIX（未设 = 开；0 = 关，仅供对照）。
+FERMI_FIX_PLUGIN = "amset_fermi_fix.py"
+
+
 def ir_fix_setting(conf_value=None):
     """返回 (是否修正不可约 k 点, 来源说明)。conf_value = step.conf 的 IR_FIX 原值。"""
     v = "" if conf_value is None else str(conf_value).strip().lower()

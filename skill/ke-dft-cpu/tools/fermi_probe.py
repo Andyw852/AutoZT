@@ -9,6 +9,11 @@
 直接返回 NaN 当费米能级 —— 下游输运就会在 BoltzTraP2 的 pinv 报 "SVD did not converge"
 （WS2 上一次 IR_FIX 开时正是这样崩的）。
 
+V132 结论（WS2 实测）：DOS 正常，是 AMSET 的贪心搜索被双精度舍入困住（低温时第二层 0.272 eV 网格上
+离目标最近的点载流子数低于 ~nelect·1e-16 /胞，整个带隙误差都"等于 1"）。修法见 step8.4_amset2d/amset_fermi_fix.py。
+"AMSET"一列始终是**原搜索**（不经 amset_fermi_fix），"实际误差"是原搜索被接受时的掺杂偏差 —— 用来核对旧作业
+有没有在宽松容差下接受了偏差大的解（> 1% 的点旧结果不可信）。3D 的 S8 运行目录同样可用。
+
 本工具在 S8.4 运行目录按作业同一套插值重建能带与 DOS（加载同目录插件；IR_FIX 状态见 --ir-fix），
 不算散射，然后：
   · DOS 诊断：本征费米能级、能带的 VBM/CBM、DOS 看到的带边、带隙里的态数（插值假态）、nelect、总态数；
@@ -34,16 +39,27 @@ sys.path.insert(0, str(HERE.parent / "step8.4_amset2d"))
 HA_EV = 27.211386245988
 
 
+def _original_get_fermi(dos):
+    """AMSET 原搜索（剥掉 amset_fermi_fix 与旧 amset2d_plugin 的外壳）。"""
+    import amset_fermi_fix
+    return amset_fermi_fix.unwrap(type(dos).get_fermi)
+
+
 def amset_ladder(dos, conc, T):
-    """与 AmsetData.set_doping_and_temperatures 相同：tol = 1e-5 … 1 依次试 dos.get_fermi。
-    返回 dict(ok, tol, ef_ha, nan)。"""
+    """与 AmsetData.set_doping_and_temperatures 相同：tol = 1e-5 … 1 依次试 AMSET 原 get_fermi。
+    返回 dict(ok, tol, ef_ha, nan, rel_err)；rel_err = 被接受的解的实际掺杂偏差。"""
+    fn = _original_get_fermi(dos)
     for tol in np.logspace(-5, 0, 6):
         try:
-            ef = float(dos.get_fermi(conc, T, tol=tol, precision=10))
+            with np.errstate(all="ignore"):
+                ef = float(fn(dos, conc, T, tol=tol, precision=10))
         except ValueError:
             continue
-        return {"ok": bool(np.isfinite(ef)), "tol": float(tol), "ef_ha": ef, "nan": not np.isfinite(ef)}
-    return {"ok": False, "tol": None, "ef_ha": None, "nan": False}
+        ok = bool(np.isfinite(ef))
+        with np.errstate(all="ignore"):
+            err = float(abs(dos.get_doping(ef, T) / conc - 1.0)) if ok else None
+        return {"ok": ok, "tol": float(tol), "ef_ha": ef, "nan": not ok, "rel_err": err}
+    return {"ok": False, "tol": None, "ef_ha": None, "nan": False, "rel_err": None}
 
 
 def greedy_trace(dos, conc, T, nstep=50, step=0.1, precision=10):
@@ -59,16 +75,10 @@ def greedy_trace(dos, conc, T, nstep=50, step=0.1, precision=10):
     return float(fermi), float(np.nanmin(err)) if np.any(np.isfinite(err)) else float("nan")
 
 
-def bisect_fermi(dos, conc, T, pad_ev=1.0, xtol_ha=1e-12):
-    """doping(E_F) − conc 的二分解。doping 随 E_F 单调减（N(E_F) 单调增）。无变号返回 None。"""
-    from scipy.optimize import brentq
-    lo = float(np.min(dos.energies)) - pad_ev / HA_EV
-    hi = float(np.max(dos.energies)) + pad_ev / HA_EV
-    g = lambda e: dos.get_doping(e, T) - conc  # noqa: E731
-    glo, ghi = g(lo), g(hi)
-    if not (np.isfinite(glo) and np.isfinite(ghi)) or glo * ghi > 0:
-        return None
-    return float(brentq(g, lo, hi, xtol=xtol_ha, maxiter=500))
+def bisect_fermi(dos, conc, T):
+    """doping(E_F) − conc 的二分解（Ha）—— 与 amset_fermi_fix 作业里用的是同一个函数。无变号返回 None。"""
+    import amset_fermi_fix
+    return amset_fermi_fix.solve_fermi(dos, conc, T)
 
 
 def dos_diagnostics(dos, vbm_ha, cbm_ha, volume_bohr3):
@@ -102,6 +112,7 @@ def probe_dos(dos, dopings_cm3, temps, vbm_ha, cbm_ha, volume_bohr3):
             rows.append({"doping_cm3": float(c_cm3), "T": float(T), "conc_bohr3": conc,
                          "electrons_per_cell": conc * volume_bohr3,
                          "amset_ok": a["ok"], "amset_tol": a["tol"], "amset_nan": a["nan"],
+                         "amset_rel_err": a["rel_err"],
                          "amset_ef_eV": a["ef_ha"] * HA_EV if a["ef_ha"] is not None and np.isfinite(a["ef_ha"]) else None,
                          "greedy_stop_eV": gf * HA_EV, "greedy_min_rel_err": gerr,
                          "bisect_ef_eV": b * HA_EV if b is not None else None,
@@ -139,23 +150,33 @@ def main(argv=None):
              d["cbm_bands_eV"], d["gap_bands_eV"], d["vbm_dos_eV"], d["cbm_dos_eV"]))
     print("     带隙内态数 %.3e /胞 | nelect %.6f | 总态数 %.3f" % (d["states_in_gap_per_cell"], d["nelect"],
                                                                   d["total_states"]))
-    print("%12s %6s %11s %6s %12s %12s %11s %12s" % ("掺杂 cm^-3", "T", "载流子/胞", "AMSET", "AMSET E_F",
-                                                      "贪心停在", "贪心误差", "二分 E_F"))
+    print("%12s %6s %11s %6s %12s %10s %12s %11s %12s" % ("掺杂 cm^-3", "T", "载流子/胞", "AMSET", "AMSET E_F",
+                                                           "实际误差", "贪心停在", "贪心误差", "二分 E_F"))
     for r in rep["rows"]:
-        st = "NaN!" if r["amset_nan"] else ("ok" if r["amset_ok"] else "失败")
+        st = "NaN!" if r["amset_nan"] else ("失败" if not r["amset_ok"] else
+                                             ("宽松!" if r["amset_rel_err"] > 0.01 else "ok"))
         f = lambda x: "—" if x is None else "%.4f" % x  # noqa: E731
-        print("%12.3e %6.0f %11.3e %6s %12s %12.4f %11.3e %12s"
-              % (r["doping_cm3"], r["T"], r["electrons_per_cell"], st, f(r["amset_ef_eV"]), r["greedy_stop_eV"],
+        print("%12.3e %6.0f %11.3e %6s %12s %10s %12.4f %11.3e %12s"
+              % (r["doping_cm3"], r["T"], r["electrons_per_cell"], st, f(r["amset_ef_eV"]),
+                 "—" if r["amset_rel_err"] is None else "%.1e" % r["amset_rel_err"], r["greedy_stop_eV"],
                  r["greedy_min_rel_err"], f(r["bisect_ef_eV"])))
     bad = [r for r in rep["rows"] if not r["amset_ok"]]
+    loose = [r for r in rep["rows"] if r["amset_ok"] and r["amset_rel_err"] > 0.01]
+    if loose:
+        print("判断：AMSET 原式在宽松容差下接受了 %d 个掺杂偏差 > 1%% 的解（表中'宽松!'）—— 旧作业这些点的结果不可信，"
+              "V132（amset_fermi_fix）起改用二分解，重跑即可。" % len(loose))
     if not d["efermi_finite"]:
         print("判断：本征费米能级是 NaN —— AMSET 的 get_fermi 会静默返回 NaN，下游 pinv 报 SVD 不收敛。")
     elif bad and d["states_in_gap_per_cell"] > 0.1 * min(abs(r["electrons_per_cell"]) for r in bad):
         print("判断：带隙内有插值假态（%.2e /胞），与失败点的载流子数（≥ %.2e /胞）可比 —— 低掺杂点受它支配。"
               % (d["states_in_gap_per_cell"], min(abs(r["electrons_per_cell"]) for r in bad)))
+    elif bad and all(r["bisect_ef_eV"] is not None for r in bad):
+        print("判断：DOS 正常而 AMSET 的贪心搜索失败（低温时被双精度舍入困住，见 amset_fermi_fix）—— 二分法都能解；"
+              "V132 起作业自动改用二分解，不必改掺杂/温度。")
     elif bad:
-        print("判断：DOS 正常而 AMSET 的贪心搜索失败 —— 看'贪心停在'与'二分 E_F'差多少（搜索被局部极小困住）。")
-    else:
+        print("判断：有 %d 个点连二分法也无解 —— 浓度超出 DOS 能容纳的范围（能量窗口/带数不够？）。"
+              % sum(r["bisect_ef_eV"] is None for r in bad))
+    elif not loose:
         print("判断：所有 (掺杂, 温度) AMSET 都能解 —— 失败不在费米能级这一步，或与作业配置不同（--ir-fix？）。")
     if a.json:
         Path(a.json).write_text(json.dumps(rep, ensure_ascii=False, indent=2, default=float), encoding="utf-8")

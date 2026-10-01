@@ -126,7 +126,8 @@ steps:
     # amset_desym_fix.py（V115，2026-09-28）：去对称化相位补丁插件，住在 step8.4_amset2d/，
     #   gen 复制进运行目录、python -c 入口里 import（AZ_DESYM_FIX 未设时不打补丁 = 原行为）。
     #   dim_common.py：ke_common 顶层 import 它；gen 现在把两者一起复制进运行目录给作业内 preflight 用。
-    gen: gen_step10_amset.py, gen_need: [stepconf.py, step.conf, ke_common.py, dim_common.py, submit_amset.tpl, vdw_radii.py, discriminant_common.py, overlap_preflight.py, fermi_window_check.py, amset_desym_fix.py, amset_ir_fix.py], fetch_all: true,
+    # amset_fermi_fix.py（V132）：求费米能级的稳健化插件（S8/S8.4 共用，住在 step8.4_amset2d/），python -c 里 import。
+    gen: gen_step10_amset.py, gen_need: [stepconf.py, step.conf, ke_common.py, dim_common.py, submit_amset.tpl, vdw_radii.py, discriminant_common.py, overlap_preflight.py, fermi_window_check.py, amset_desym_fix.py, amset_ir_fix.py, amset_fermi_fix.py], fetch_all: true,
      needs: ["step4_wave", "step5_dielect", "step6_elastic", "step7b_deform_read", "step2_bandgap/step2.2_pbe_plot", "step2_bandgap/step2.3_hse_plot"]}
 
 # --- 2 带隙段：子步嵌套进 step2_bandgap/，状态表合并成 S2_bandgap 一列 ---------
@@ -305,7 +306,7 @@ optional_steps:
          gen_need: [stepconf.py, step.conf, ke_common.py, dim_common.py, submit_amset.tpl, vdw_radii.py,
                     discriminant_common.py, amset2d_plugin.py, amset2d_pop_freq.py,
                     overlap_preflight.py, postprocess_intrinsic.py, fermi_window_check.py,
-                    amset_desym_fix.py, amset_ir_fix.py],
+                    amset_desym_fix.py, amset_ir_fix.py, amset_fermi_fix.py],
          fetch_all: true,
          needs: ["step4_wave", "step5_dielect", "step6_elastic", "step7b_deform_read",
                  "step2_bandgap/step2.2_pbe_plot", "step2_bandgap/step2.3_hse_plot"]}

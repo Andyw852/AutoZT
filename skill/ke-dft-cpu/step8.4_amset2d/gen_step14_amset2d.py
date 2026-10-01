@@ -1883,6 +1883,19 @@ def _install_desym_fix(out):
     return True
 
 
+def _install_fermi_fix(out):
+    """patch_fermi_fix（V132）：把 amset_fermi_fix.py 复制进运行目录（python -c 与 amset2d_plugin 都 import 它）。
+    找不到只告警 —— 原搜索能解的情况结果不变，只是低温低掺杂可能求不到费米能级、宽松解不拦。"""
+    if not _HAS_KC:
+        return False
+    here = Path(__file__).resolve().parent
+    ok = kc.install_run_plugin(kc.FERMI_FIX_PLUGIN, out, (here, Path.cwd()))
+    if not ok:
+        print("[WARN] 找不到 %s（gen_need 里要有它）—— 本次费米能级用 AMSET 原搜索（低温低掺杂可能失败）"
+              % kc.FERMI_FIX_PLUGIN)
+    return ok
+
+
 def _install_ir_fix(out):
     """patch_ir_fix（V125）：把 amset_ir_fix.py 复制进运行目录。找不到只告警（原行为结果对，只是慢）。"""
     if not _HAS_KC:
@@ -2463,6 +2476,7 @@ def main():
     _install_symmetry_deps(out)  # patch_symmetry_gate：preflight 的判据来源
     _has_fix = _install_desym_fix(out)   # patch_desym_fix
     _has_ir = _install_ir_fix(out)       # patch_ir_fix
+    _has_fermi = _install_fermi_fix(out)  # patch_fermi_fix（V132）
     _wdir = "step4b_wave_full" if WAVEFUNCTION_FULL else WAVE_DIR
     # [guard-2026-09-26] 真实重叠（2D 出厂默认）要求全网格 h5 真的在。
     #   只检查 WAVEFUNCTION_FULL 这个标志不够 —— 分支没打开时标志仍是 True，
@@ -2581,7 +2595,8 @@ def main():
     _acmd = _acmd + " && python fermi_window_check.py"
     _acmd = _acmd + AMSET_TAIL
     # patch_desym_fix：插件在运行目录里就 import；开关用环境变量传进作业（preflight 也读它）
-    _acmd = _acmd.replace("@AMSET_PLUGINS@", ("import amset_ir_fix; " if _has_ir else "")
+    _acmd = _acmd.replace("@AMSET_PLUGINS@", ("import amset_fermi_fix; " if _has_fermi else "")
+                          + ("import amset_ir_fix; " if _has_ir else "")
                           + ("import amset_desym_fix; " if _has_fix else ""))
     if _HAS_KC:
         _acmd = kc.ir_fix_cmd_prefix(_IR_FIX_ON) + kc.desym_fix_cmd_prefix(_DESYM_FIX_ON) + _acmd
