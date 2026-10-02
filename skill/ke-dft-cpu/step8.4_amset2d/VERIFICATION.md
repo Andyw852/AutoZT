@@ -6685,3 +6685,63 @@ C44 ≠ C66 的正确/错误顺序；立方不判）。
 - 在 0.5.1 与 0.4.19 两个环境里都是 13/13 通过。
 
 测试：test_ir_fix_kzcap 的出厂值断言改为 on（11 项照过）。
+
+## V140（2026-10-02）：rerun 绕过了下游失效 + S8/S8.4 的上游同源闸门
+
+**现象**（用户侧，Mo2S3：S1 重新弛豫后整条 rerun）：
+- S2.1、S2.3、S3、S5、S6、S7 已经 rerun 并提交；
+- S2.15、S2.2、S4、S7.1、S8 仍显示旧的 OK。它们的前序现在是 TODO，所以也没法 rerun。
+
+**根因 1：rerun 绕过了失效。** autozt 的 `rerun` 先 `rm -rf` 步骤目录，再 gen（workflow.do_rerun_step）。
+可现有的"上游重算 -> 下游失效"都以"gen 时本步目录里有旧产物"为条件：
+- S3/S3b：比对输入快照；
+- S4/S4b：有旧 h5；
+- S5/S6：有旧 OUTCAR（V136）；
+- S7.1：有旧形变势（V122）。
+
+目录被删掉后，这几处一个都不触发，派生步骤与 S8 于是一直是旧的"完成"。另外 S7 -> S7.1 这条边本来就没有：
+S7.1 的产物在材料目录的 step7b_deform_read/，rerun S7 删不到它。
+
+**根因 2：S2.3 抢先 rerun，算的是旧结构。** S2.3 HSE 的 gen 从 step2.2_pbe 拷 POSCAR、POTCAR、KPOINTS 和 WAVECAR。
+S2.2 还没重跑就 rerun S2.3，HSE 算的就是旧结构。autozt 只看 S2.2 是 OK，就放行了。
+
+**改动**：
+1. 失效不再依赖旧产物（patch_rerun_invalidate）：
+   - S4、S4b、S5、S6、S7.1 的 gen 无条件调用 invalidate_downstream。第一次 gen 时下游不存在，什么都不做；
+     gen 一次就意味着本步要重算，下游必然作废。
+   - S3/S3b 的 finalize_stale_inputs：输入快照全空（目录是新建的，即 rerun）时同样让下游失效；
+     原地重新 gen、输入没变时仍不失效（原行为）。
+   - 新增 S7 -> S7.1 这条边，S7 的 gen 调用它。S7.1 的 deformation.h5、deformation_vac.h5、band_edges.json 一起归档
+     （只归档 deformation.h5 的话，新 S7.1 没产出 vac 时 _pick_deformation_h5 会捡到旧的 vac h5），
+     并递归到 S8、S8.4、S8.2。
+2. 上游同源闸门（patch_lineage，S8/S8.4 的 gen，`STRUCTURE_GUARD` 默认开）：
+   - 结构：S2.1、S2.2、S2.3（含扇出子目录）、S3、S3b、S5、S6、S7 的 undeformed 的 POSCAR，
+     与 S1 当前的 CONTCAR 逐个按数值比对，偏差 > 1e-4 Å 即不同。各步都是 S1 CONTCAR 的原样拷贝，所以不会误判：
+     文本精度差约 1e-8；重新弛豫的差别在 1e-2 Å 量级。
+   - 新鲜度：S4/S4b 的 h5、S7.1 的形变势、S2 画图的 band_summary.json、S5.1 的校验，与来源的计算输出
+     （vasprun.xml、WAVECAR、OUTCAR）比时间，旧 60 s 以上算旧。只看计算输出，因为 gen 原地重写 INCAR 不代表重算。
+   - 有问题就列出步骤和原因并退出，不生成；`STRUCTURE_GUARD = false` 只告警。
+   - 本步在 step.conf 读完之后、读任何上游数值之前执行。
+3. tools/lineage_check.py：
+   - 对材料目录或项目根做同一核对，有问题退出码为 1；
+   - `--invalidate-from <步骤…>` 用来补救 V140 之前已经 rerun 过的上游：把它们下游的完成标记改名归档。
+
+**用户侧（Mo2S3，现在）**：
+1. **S2.3（3918828）先 scancel。** 它是从还没重跑的 S2.2 拷的旧结构。顺序是：S2.1 跑完 -> rerun S2.15、S2.2 ->
+   S2.2 跑完 -> rerun S2.3 -> 跑完后重新生成 S2.2 与 S2.3 的画图。
+2. 打上本补丁后，在材料目录跑 `python <skill>/ke-dft-cpu/tools/lineage_check.py . --invalidate-from step3_uniform step5_dielect step6_elastic step7_deform`。
+   - 作用：S4 的 h5、S5.1、S7.1、S8/S8.4/S8.2 的旧完成标记会被归档（只改名，不删）；
+   - 之后 auto-advance 会在 S3/S7 跑完后按顺序重做 S4、S7.1，再到 S8；
+   - S8 的 gen 会再核对一次，S2 链没跟上就停。
+3. 不带参数跑一次 `lineage_check.py <项目根>`，看别的材料有没有同样的问题。重点是 Si_diamond：它的 S1 也重新弛豫过。
+
+测试：
+- 新增 test_lineage（10 项）：
+  - POSCAR 各种格式的等价；0.3% 晶格差、0.005 Å 位移、原子顺序不同都判为不同；
+  - Mo2S3 式的混合状态（S2.2、S2.3 扇出、S4 h5）；
+  - rerun 后的新目录失效、原地重新 gen 不失效；
+  - S7 -> S7.1 三个产物 + S8/S8.2；
+  - gen 无条件调用、S8/S8.4 接线；
+  - CLI 的报告与 --invalidate-from。
+- test_stale_upstream 的 S5 接线断言改为无条件形式。
+

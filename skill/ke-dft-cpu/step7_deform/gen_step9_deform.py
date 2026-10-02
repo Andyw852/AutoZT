@@ -432,6 +432,9 @@ def _build_ionrelax(d: Path, encut, subs, submit_body):
 def main():
     import glob
     cwd = Path.cwd(); out = cwd / OUTDIR_NAME; out.mkdir(exist_ok=True)
+    # [patch_rerun_invalidate V140] 形变单点要重算：S7.1 读出的形变势（在材料目录的 step7b_deform_read/，
+    #   rerun 本步删不到它）连同 S8/S8.4/S8.2 一并失效，等本步跑完由 auto-advance 重新读。
+    kc.invalidate_downstream(cwd, OUTDIR_NAME, "%s 重新生成（形变单点重算）" % OUTDIR_NAME)
     prev = kc.find_prev_dir(cwd, PREV_CANDS)
     if prev is None:
         sys.exit("[ERROR] 找不到含 CONTCAR 的上一步：%s" % PREV_CANDS)

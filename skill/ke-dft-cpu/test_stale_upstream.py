@@ -105,7 +105,7 @@ class InvalidateTests(unittest.TestCase):
 
     def test_gens_call_it(self):
         s5 = (ROOT / "step5_dielect" / "gen_step8_dielect.py").read_text(encoding="utf-8")
-        i = s5.index('if (out / "OUTCAR").is_file():\n        kc.invalidate_downstream(cwd, OUTDIR_NAME')
+        i = s5.index('kc.invalidate_downstream(cwd, OUTDIR_NAME')               # V140：无条件
         self.assertLess(i, s5.index("kc.relay_poscar(prev / \"CONTCAR\""))
         s6 = (ROOT / "step6_elastic" / "gen_step2_elastic.py").read_text(encoding="utf-8")
         i = s6.index('_kc.invalidate_downstream(Path.cwd(), STEP2_DIR')

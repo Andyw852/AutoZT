@@ -192,13 +192,13 @@ def main():
     step2.mkdir(exist_ok=True)
     # [patch_stale_upstream V136] 本步重新生成 = 弹性会被重算：S8/S8.4（gen 时写进 settings.yaml）与
     #   S8.2（读本步 OUTCAR）的完成标记一并失效、重新排队。ke_common 由 gen_need 带进来。
-    if (step2 / "OUTCAR").is_file():
-        try:
-            import ke_common as _kc
-            _kc.invalidate_downstream(Path.cwd(), STEP2_DIR, "%s 重新生成（弹性重算）" % STEP2_DIR)
-        except ImportError:
-            print("[WARN] 找不到 ke_common.py（gen_need 里要有它）—— 下游 S8/S8.4/S8.2 的旧结果不会自动失效，"
-                  "请手动重跑")
+    #   V140：不再以"本步已有 OUTCAR"为条件 —— autozt rerun 先 rm -rf 本步目录，那样永远不触发。
+    try:
+        import ke_common as _kc
+        _kc.invalidate_downstream(Path.cwd(), STEP2_DIR, "%s 重新生成（弹性重算）" % STEP2_DIR)
+    except ImportError:
+        print("[WARN] 找不到 ke_common.py（gen_need 里要有它）—— 下游 S8/S8.4/S8.2 的旧结果不会自动失效，"
+              "请手动重跑")
     Path(step2 / "POSCAR").write_text(struct.read_text(encoding="utf-8-sig"),
                                       encoding="utf-8", newline="\n")
 

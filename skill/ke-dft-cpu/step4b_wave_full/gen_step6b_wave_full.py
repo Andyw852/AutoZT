@@ -45,7 +45,8 @@ def main():
     uni = cwd / UNIFORM_DIR
     # [patch_stale_input-2026-09-28] 本步重新生成 = 作业会 rm -f 旧 h5 再重算：
     #   下游 S8/S8.4（软链指向本步 h5 的那些）的 transport.json 一并失效、重新排队。
-    if _HAS_KC and (out / "wavefunction.h5").is_file():
+    #   V140：不再以"本步已有旧 h5"为条件 —— autozt rerun 先 rm -rf 本步目录，那样永远不触发。
+    if _HAS_KC:
         kc.invalidate_downstream(cwd, OUTDIR_NAME, "%s 重新生成" % OUTDIR_NAME)
 
     for f in LINK_FILES:

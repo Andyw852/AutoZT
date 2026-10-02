@@ -258,6 +258,10 @@ SYMMETRIZE_ELASTIC = True
 # patch_elastic_guard（V134）：弹性张量（2D 看面内块、3D 看 6×6）不正定 -> gen 报错退出（ADP 没有意义）。
 #   确需照跑：step.conf 写 ELASTIC_GUARD = false（只告警）。见 ke_common.check_elastic_stability。
 ELASTIC_GUARD = True
+# patch_lineage（V140）：上游同源闸门 —— 各步 POSCAR 与 S1 CONTCAR 不一致（S1 重新弛豫后没全部重跑）、
+#   或派生产物（S4 h5 / S7.1 形变势 / S2 画图 / S5.1）比来源的计算输出旧 -> 报错退出，不混用两版计算。
+#   见 ke_common.structure_lineage。确需照跑：step.conf 写 STRUCTURE_GUARD = false（只告警）。
+STRUCTURE_GUARD = True
 ELASTIC_DIR = "step6_elastic"
 # patch_deform_ref：形变势参考口径（2D 默认真空）。step7b 写出 deformation_vac.h5 就用它，
 # 否则退回 deformation.h5（AMSET 芯态对齐）。实测 CrS2：3.53 -> 5.86 eV，μ 差 2.76 倍。
@@ -349,6 +353,7 @@ SPEC = {
     "EPS_INF_OVERRIDE_BASIS": ("", "str"),
     "SYMMETRIZE_ELASTIC": (True, "bool"),
     "ELASTIC_GUARD": (True, "bool"),
+    "STRUCTURE_GUARD": (True, "bool"),
 }
 # --- amset2d 插件相关（可改）---
 PLUGIN_SRC_NAME = "amset2d_plugin.py"   # 与本脚本同目录，运行时复制到 OUTDIR_NAME
@@ -2279,6 +2284,7 @@ def main():
     global INTERPOLATION_FACTOR, INTERPOLATION_FACTOR_EXPLICIT, SCATTERING, WRITE_MESH, DOPING, TEMPERATURES
     global DESYM_FIX, _DESYM_FIX_ON, BANDGAP_OVERRIDE, BANDGAP_NOTE
     global EPS_INF_OVERRIDE, EPS_INF_OVERRIDE_BASIS, SYMMETRIZE_ELASTIC, ELASTIC_GUARD
+    global STRUCTURE_GUARD
     global IR_FIX, _IR_FIX_ON, KZ_CAP_2D, KZ_FLAT_TOL_EV, _KZ_CAP_RMAX
     global MEM_WARN_GIB, MEM_LIMIT_GIB, MEM_AUTO_EXCLUSIVE
     _conf_nworkers = None
@@ -2400,6 +2406,7 @@ def main():
                 EPS_INF_OVERRIDE_BASIS = str(_p["EPS_INF_OVERRIDE_BASIS"])
             SYMMETRIZE_ELASTIC = bool(_p["SYMMETRIZE_ELASTIC"])
             ELASTIC_GUARD = bool(_p["ELASTIC_GUARD"])
+            STRUCTURE_GUARD = bool(_p["STRUCTURE_GUARD"])
             # patch_mem_guard：内存粗估阈值 / 自动独占
             if _p["MEM_WARN_GIB"]:
                 MEM_WARN_GIB = int(_p["MEM_WARN_GIB"])
@@ -2413,6 +2420,10 @@ def main():
             print("[WARN] 读 step.conf 覆盖时出错（%s: %s）—— 出错之后的覆盖项未生效，"
                   "按出厂默认继续；请修 step.conf 或本脚本 SPEC。" % (type(_e).__name__, _e),
                   file=sys.stderr)
+
+    # ---- patch_lineage（V140）：上游同源 + 派生产物新鲜度，不通过就不生成 ----
+    if _HAS_KC:
+        kc.check_lineage(cwd, enabled=STRUCTURE_GUARD, label="S8.4")
 
     # ---- patch_desym_fix：相位补丁开关（必须在 _apply_inversion_rule 之前）----
     if _HAS_KC:
