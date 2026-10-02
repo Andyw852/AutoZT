@@ -226,17 +226,31 @@ if r.stderr:
     sys.stderr.write(r.stderr or "")
 if r.returncode != 0:
     sys.exit("[ERROR] pheasy 拟合失败(rc=%d): %s" % (r.returncode, fit))
-if method == "LASSO":
-    import re as _re
-    m = _re.search(r"best alpha=\s*([\d.eE+-]+)", r.stdout)
-    if m:
-        a = float(m.group(1))
-        lg = float(np.log10(a))
-        lo, hi = -8.0, -2.0
-        if lg <= lo + 0.05 or lg >= hi - 0.05:
-            print("[GATE] alpha_opt=%.3e 撞网格边界 [%g,%g] —— LASSO 选型无效，"
-                  "建议加大 N_RANDOM/OVERSAMPLE" % (a, lo, hi))
-            open(".fit_gate_fail", "a").write("alpha 撞边界\n")
+if method in ("LASSO", "ALASSO"):
+    # 质量门改读 pheasy 的 fit_manifest.json（与 fit-fc-thermal/fc_fit_driver.py 同口径）：
+    # 不再拿 log10(alpha*) 去比硬编码的 [mu_min, mu_max] —— alpha 自动选时那对参数
+    # 对 LASSO/ALASSO 本就无效，而且分不清“真卡网格下沿”和“数据本就不需要 L1”。
+    import json as _json
+    _res = {}
+    if os.path.isfile("fit_manifest.json"):
+        try:
+            _res = (_json.load(open("fit_manifest.json", encoding="utf-8")).get("results") or {})
+        except Exception as _e:
+            print("[WARN] fit_manifest.json 不可读(%s)，按缺失处理" % _e)
+    if not _res:
+        # 无 manifest：多半是 CPU 版 pheasy（不写 manifest）—— 保持旧行为，只告警不拦。
+        print("[WARN] 无 fit_manifest.json（CPU pheasy?）—— 跳过 LASSO/ALASSO 选型门禁。")
+    elif "cv_selection" not in _res:
+        # 老版 pheasy-gpu（< 35c0467）没做每折 alpha->0 的 OLS 参照，无法认证选型。
+        print("[GATE] fit_manifest.json 无 cv_selection：pheasy 过旧（< 35c0467），"
+              "无法认证 LASSO/ALASSO 选型；请升级 pheasy 后重算。")
+        open(".fit_gate_fail", "a").write("pheasy too old: no cv_selection in fit_manifest.json\n")
+    elif _res.get("cv_selected_ols_limit"):
+        print("[OK] CV 选到精确 OLS 极限(alpha->0)：数据不需要 L1 惩罚，交付拟合即 OLS。")
+    elif _res.get("alpha_at_grid_edge"):
+        print("[GATE] alpha* 卡在网格边界且 CV 曲线仍在下降 —— LASSO 选型无效，"
+              "建议加大 N_RANDOM/OVERSAMPLE 或加宽 alpha 网格。")
+        open(".fit_gate_fail", "a").write("alpha on grid boundary\n")
 
 for f in ("fc2.hdf5", "fc3.hdf5"):
     if not os.path.isfile(f):
