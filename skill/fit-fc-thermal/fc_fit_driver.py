@@ -1643,6 +1643,31 @@ def _reconcile_gpu_env(env, method, cfg):
     return info
 
 
+def resolve_rasr(value, dim):
+    """Resolve PHEASY_RASR, including the 'auto' policy.
+
+    RASR (Born-Huang rotational invariance + Huang equilibrium constraints) is
+    read by pheasy ONLY in the null-space construction step (-c), and it is
+    MANDATORY for a 2D slab: without it the ZA branch is unconstrained, omega
+    goes linear near Gamma instead of q^2, and kappa is wrong.
+
+    On a bulk crystal those conditions are not merely unnecessary -- they
+    measurably wreck the fit.  MnIn2Se4 (R-3m, 189-atom 3x3x3, pheasy OLS,
+    c3 = 5.16 A), one dataset, one run per setting:
+        PHEASY_RASR = BHH  -> pheasy relative error 8.9 %, worst force
+                              correlation 0.994, min freq -1.57 THz
+                              (spurious imaginary modes from the poorer fc2)
+        PHEASY_RASR = none -> 0.62 %, correlation 1.000, min freq -0.03 THz
+    The cutoff was irrelevant (4.99 A gave the same numbers as 5.16 A), so
+    'auto' resolves BHH for DIM=2d and none for bulk.  An explicit BH / H /
+    BHH / none is returned unchanged.
+    """
+    v = str(value or "").strip()
+    if v.lower() != "auto":
+        return v
+    return "BHH" if str(dim or "").strip().lower() == "2d" else "none"
+
+
 def cmd_fit_pheasy(cfg, out):
     """Four pheasy CLI steps: cluster space / symmetry constraints / sensing
     matrix / fit.  Mirrors templates in kl-dft-cpu and _common/mlff."""
@@ -1720,7 +1745,10 @@ def cmd_fit_pheasy(cfg, out):
     # Gamma instead of q^2, the frequencies can all be positive (so the imaginary
     # frequency gate passes) and kappa is still wrong.  Flag goes on -c now, and
     # the step output is checked to confirm the constraint really got imposed.
-    rasr = str(cfg.get("pheasy_rasr") or "").strip()
+    rasr = resolve_rasr(cfg.get("pheasy_rasr"), cfg.get("dim"))
+    if str(cfg.get("pheasy_rasr") or "").strip().lower() == "auto":
+        print("[..] PHEASY_RASR=auto -> %s (DIM=%s)"
+              % (rasr, cfg.get("dim") or "unknown"), flush=True)
     rasr_flag = ""
     if rasr and rasr.lower() not in ("none", "false", "off"):
         rasr_flag = " --rasr %s" % rasr

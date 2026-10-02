@@ -226,13 +226,17 @@ job runs on any cluster.
 * `PHEASY_C2_CUTOFF` / `PHEASY_C3_CUTOFF` - cutoffs in Angstrom (empty = all
   interactions). Keep both comfortably below half the smallest supercell edge,
   otherwise periodic images double-count interactions.
-* `PHEASY_RASR = BHH` imposes Born-Huang rotational invariance and the Huang
-  equilibrium conditions, which is what makes a truncated fit physical. It is
-  passed to pheasy's **null-space construction step (`-c`)** — that is the only
-  step that reads it (`-f` loads `ns_*.npz` and re-imposes nothing), and the
-  driver aborts if `-c` does not log the constraint. For 2D slabs this is
-  mandatory (without it ZA goes linear near Gamma); for bulk the conditions are
-  known to be negligible, so `PHEASY_RASR = none` is a legitimate choice there.
+* `PHEASY_RASR = auto` (default) resolves to `BHH` for a 2D slab and `none`
+  for a bulk crystal. RASR imposes Born-Huang rotational invariance and the
+  Huang equilibrium conditions, which is what makes a truncated fit physical.
+  It is passed to pheasy's **null-space construction step (`-c`)** — that is
+  the only step that reads it (`-f` loads `ns_*.npz` and re-imposes nothing),
+  and the driver aborts if `-c` does not log the constraint. For 2D slabs BHH
+  is mandatory (without it ZA goes linear near Gamma). On a bulk crystal it is
+  not neutral: the MnIn2Se4 189-atom 3x3x3 pheasy OLS fit went from **0.62 %**
+  force error / min frequency -0.03 THz with `none` to **8.9 %** / -1.57 THz
+  (spurious imaginary modes) with `BHH`, at the same cutoff — so `auto` never
+  puts BHH on a bulk cell. An explicit `BH` / `H` / `BHH` / `none` still wins.
 * `PHEASY_BIN = pheasy-gpu` (the CPU `pheasy` build was removed). It uses the
   GPU submit template; on a cluster with no GPU nodes the fit cannot run there.
 * **The GPU only accelerates the two-level sparse matvec.** pheasy builds a
