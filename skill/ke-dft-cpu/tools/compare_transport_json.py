@@ -83,12 +83,15 @@ def main(argv=None):
     except (ValueError, KeyError, OSError) as e:
         print("[ERROR] %s" % e, file=sys.stderr)
         return 2
-    print("%-22s %9s %13s %7s %11s %11s  %s" % ("量（%s）" % ("面内平均" if a.dims == 2 else "tr/3"), "最大相对差",
-                                             "掺杂", "T", "各向异性旧", "各向异性新", "判定"))
+    # V143：掺杂旁标出载流子（AMSET 约定：负 = 电子），别再靠符号去猜
+    def _car(x):
+        return {-1: "电子", 1: "空穴"}.get(int((x > 0) - (x < 0)), "本征")
+    print("%-22s %9s %13s %5s %7s %11s %11s  %s" % ("量（%s）" % ("面内平均" if a.dims == 2 else "tr/3"), "最大相对差",
+                                                 "掺杂", "载流子", "T", "各向异性旧", "各向异性新", "判定"))
     for k, q in rep["quantities"].items():
-        print("%-22s %8.2f%% %13.4g %7.0f %10.2f%% %10.2f%%  %s"
-              % (k, 100 * q["max_rel"], q["at_doping"], q["at_T"], 100 * q["aniso_old"], 100 * q["aniso_new"],
-                 "PASS" if q["pass"] else "FAIL"))
+        print("%-22s %8.2f%% %13.4g %5s %7.0f %10.2f%% %10.2f%%  %s"
+              % (k, 100 * q["max_rel"], q["at_doping"], _car(q["at_doping"]), q["at_T"], 100 * q["aniso_old"],
+                 100 * q["aniso_new"], "PASS" if q["pass"] else "FAIL"))
     for k in rep["only_old"]:
         print("  只在旧结果里：%s" % k)
     for k in rep["only_new"]:

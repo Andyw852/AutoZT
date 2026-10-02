@@ -6828,3 +6828,29 @@ dp_valley_probe 的说明和输出已按此改写（原文"倍数接近实测才
 （本流程 Mo、Se 不开 SOC；S8 的剪刀差只整体平移导带，不改 K–Q 差）。25 meV 量级的差，换 PBEsol/HSE/SOC
 很可能改变排序，MoSe2 的电子 ADP-only 数值应视为对该能量差敏感。
 
+## V143（2026-10-02）：载流子符号的唯一真源 + 迁移率对照工具 + S8.2 失败报错带原因（两次误判的根治）
+
+**两次误判**：
+1. 用户侧手写脚本读 transport.json 时把掺杂符号对调（+ 当电子），MoSe2/MoS₂ 的 ADP/DPT 表整张标反，
+   来回核对了两轮（V141 已更正）。AMSET 的约定：负掺杂 = n 型（电子）。
+2. WS2 的 S8.2 报"缺：m*←S3_uniform(vasprun/网格)"，被读成"vasprun 缺失"，S3 是重跑了，原因却查错了。
+   真正的原因在 dpt_result.json 的 m_provenance 里：六方胞带边 K=(⅓,⅓)，S3 网格 47 不是 3 的倍数，
+   K 不在网格上，有效质量拒绝拟合。现行 S3 gen 把 2D 网格对齐到 6 的倍数，retry 后是 48，正好修好。
+
+"以后记住"不算修复。改成让工具不给犯错的机会：
+- **ke_common.carrier_of_doping**：AMSET 掺杂值 -> electron/hole，文档里引用 FermiDos 原文。读掺杂的代码一律用它。
+- **tools/mobility_vs_dpt.py（新）**：
+  - 每个掺杂一行，给出载流子、Seebeck、overall 与各机制迁移率（2D 面内平均 / 3D 迹/3）、同载流子 DPT、ADP/DPT；
+  - 用 **Seebeck 符号自检**：n 型 S < 0、p 型 S > 0，对不上标 ★、退出码 1，载流子判反会被物理量当场抓住；
+  - ADP/DPT 超出 [1/3, 3] 标 ⚠，提示用 dp_valley_probe 查是否多谷。
+- **rep_transport.py**（table 模式）、**compare_transport_json.py** 在掺杂旁标出载流子。
+- **S8.2 全部失败时**，报错里直接打出 C / m* / E1 各自的 provenance（如"K 离网：step3_uniform 的 N 不是 3 的倍数"），
+  不再只写来源步骤名。
+
+测试：新增 test_mobility_vs_dpt（6 项）：
+- 符号；
+- 用 MoSe2 实测数回归：电子 = 负掺杂、ADP 4639.8、ADP/DPT 28.48 标 ⚠，空穴 0.742；
+- Seebeck 反号 -> ★、退出码 1；3D 迹/3、没有 DPT；
+- rep_transport 的载流子列；
+- S8.2 报错带原因。
+

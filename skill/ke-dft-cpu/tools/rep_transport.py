@@ -2,6 +2,16 @@ import json, sys
 import numpy as np
 from pathlib import Path
 
+_here = Path(__file__).resolve().parent
+for _p in (str(_here.parent), str(_here.parent.parent / "_common" / "opt")):
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
+import ke_common as _kc   # V143：载流子按 AMSET 约定（负掺杂 = 电子）的唯一真源
+
+
+def _car(d):
+    return {"electron": "电子(n)", "hole": "空穴(p)"}.get(_kc.carrier_of_doping(d), "本征")
+
 def load(p): return json.loads(Path(p).read_text())
 def parse(d):
     dop = np.array(d["doping"], dtype=float)
@@ -23,9 +33,9 @@ def rows300(d):
 
 mode = sys.argv[1]
 if mode == "table":
-    print("%-13s %10s %12s %10s" % ("doping", "S(uV/K)", "sigma(S/m)", "PF"))
+    print("%-13s %-8s %10s %12s %10s" % ("doping", "载流子", "S(uV/K)", "sigma(S/m)", "PF"))
     for d, s, c, pf in rows300(load(sys.argv[2])):
-        print("%-13.5g %10.2f %12.4g %10.3f" % (d, s, c, pf))
+        print("%-13.5g %-8s %10.2f %12.4g %10.3f" % (d, _car(d), s, c, pf))
 elif mode == "cmp":
     ro = rows300(load(sys.argv[2])); rn = rows300(load(sys.argv[3]))
     print("%-13s %9s %9s %6s | %11s %11s %6s | %8s" % (

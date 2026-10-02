@@ -360,6 +360,23 @@ def invalidate_downstream(cwd, step, reason, _seen=None):
 
 
 # --------------------------------------------------------------------------
+# [patch_carrier_sign V143] AMSET 掺杂符号 -> 载流子：**唯一真源**，读 transport.json 的脚本一律用它。
+#   AMSET 0.5.1 FermiDos 文档："A negative doping concentration indicates the majority carriers are
+#   electrons (n-type doping); a positive doping concentration indicates holes are the majority
+#   carriers (p-type doping)." 本技能 DOPING 也是负值在前、标 n 型。
+#   起因：2026-10-02 用户侧手写脚本把 +/− 对调，MoSe2 的电子/空穴 ADP/DPT 表整张标反，来回核对了两轮。
+# --------------------------------------------------------------------------
+def carrier_of_doping(doping):
+    """AMSET 掺杂值 -> "electron"（负，n 型）/ "hole"（正，p 型）/ None（0）。"""
+    x = float(doping)
+    if x < 0:
+        return "electron"
+    if x > 0:
+        return "hole"
+    return None
+
+
+# --------------------------------------------------------------------------
 # [patch_lineage V140] 上游结构同源 + 派生产物新鲜度（S8/S8.4 gen 的闸门；tools/lineage_check.py 也用）
 #   起因（Mo2S3，S1 重新弛豫后整条 rerun）：
 #   · autozt rerun 先 rm -rf 步骤目录再 gen，V122/V136 那几处"gen 时见到旧产物 -> 下游失效"一个都不触发，

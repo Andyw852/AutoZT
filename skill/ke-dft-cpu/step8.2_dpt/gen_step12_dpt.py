@@ -1016,12 +1016,14 @@ def main():
         miss = set()
         for r in res["results"]:
             i = r["inputs"]
+            # [V143] 带上具体原因：只写"m*←S3_uniform(vasprun/网格)"时，WS2（S3 网格 47，K 离网）被误读成
+            #   "vasprun 缺失"，白查了一轮。原因就在 *_provenance 里，直接打出来。
             if i.get("C_2D_N_per_m") is None and i.get("C_3D_Pa") is None:
-                miss.add("C←S6_elastic")
+                miss.add("C←S6_elastic（%s）" % i.get("C_provenance"))
             if i["m_eff_m0"] is None:
-                miss.add("m*←S3_uniform(vasprun/网格)")
+                miss.add("m*←S3_uniform（%s）" % i.get("m_provenance"))
             if i["E1_eV"] is None:
-                miss.add("E1←S7.1_read(deformation.h5)")
+                miss.add("E1←S7.1_read（%s）" % i.get("E1_provenance"))
         hint = "；".join(sorted(miss)) or "见 json 的 provenance"
         sys.exit("[ERROR] DPT 迁移率全部未算出。缺：%s。请先把对应步骤跑好/修好再重跑本步"
                  "（dpt_result.json 已写出，含各输入来源可排查）。" % hint)
