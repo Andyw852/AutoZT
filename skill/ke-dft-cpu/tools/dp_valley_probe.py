@@ -24,8 +24,10 @@ get_ibands 映射到 h5，k 点按分数坐标对上（允许 −k）。对电�
   · 贡献主要来自一个非带边谷（ΔE 几十 meV、D 小）-> 多谷物理：ADP-only 与单谷 DPT 本来就不可比，
     报告时注明；总迁移率里 ADP 只占一部分（POP/IMP 往往主导），影响要看 overall；
   · 带边谷自己的 rms D 就远小于带边 D -> D 场有问题，把输出发回来。
-  · 倍数接近实测（MoSe2 电子 28.5）就说明 D 的分布已经解释了差异；差很远则还有别的原因（有效质量、
-    谷间散射核等）。
+  · 倍数的**绝对值偏大约 5 倍**（V142 实测标定：MoS₂ 探针 9.43 / AMSET 实测 1.9 = 4.96，MoSe2 136.25 / 28.5
+    = 4.78）—— 单态 τ ∝ 1/D² 的估计没算速度、态密度和等能面积分的差别。判读用**材料之间的比值**，
+    不用绝对值：MoSe2/MoS₂ 探针 14.4 倍、实测 15.0 倍，所以差别完全由 Q 谷的位置（25 vs 129 meV）解释。
+    新材料的比值与 ×5 标定差得远（如探针 2、实测 30），才说明还有别的原因。
 用法（在材料目录，AMSET 0.5.1 环境）：
     python <skill>/ke-dft-cpu/tools/dp_valley_probe.py [--h5 step7b_deform_read/deformation_vac.h5]
                                                       [--T 300] [--window 0.3] [--json out.json]
@@ -115,7 +117,8 @@ def valley_stats(energies, dtens, kfrac, edge, carrier, T=300.0, window=0.3, kcl
 def _report(r, top=8):
     print("== %s（%g K，带边 %s %.2f eV 以内，%d 个态）"
           % (r["carrier"], r["T"], "以上" if r["carrier"] == "electron" else "以下", r["window_eV"], r["n_states"]))
-    print("   带边 D_iso = %.3f eV；倍数 E1²·⟨1/D²⟩ = %.2f（≈ 只因 D 的分布，ADP-only 迁移率相对 DPT 的倍数）；"
+    print("   带边 D_iso = %.3f eV；倍数 E1²·⟨1/D²⟩ = %.2f（只因 D 的分布的估计，比 AMSET 实测偏大约 5 倍，"
+          "看材料间比值）；"
           "加权 rms D = %.3f eV%s"
           % (r["edge_D"], r["mu_factor"], r["rms_D"],
              "；%d 个态 D < %.2f eV" % (r["n_below_floor"], D_FLOOR) if r["n_below_floor"] else ""))

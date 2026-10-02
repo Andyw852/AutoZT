@@ -105,6 +105,7 @@ class ValleyTests(unittest.TestCase):
             P._report(r)
         self.assertIn("E1²·⟨1/D²⟩", buf.getvalue())
         self.assertIn("迁移率份", buf.getvalue())
+        self.assertIn("偏大约 5 倍", buf.getvalue())                    # V142：绝对值不可直接当结论
         with contextlib.redirect_stderr(io.StringIO()):
             self.assertEqual(P.main([tempfile.mkdtemp()]), 2)
 
