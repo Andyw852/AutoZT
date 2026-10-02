@@ -56,6 +56,19 @@ class CompareTests(unittest.TestCase):
         rep = C.compare(self.d / "old.h5", self.d / "new.h5")
         self.assertFalse(rep["rerun"], rep)
 
+    def test_string_attrs_from_nspin_norm_fix(self):
+        """V141：0.5.1 的 h5 带 nspin_norm_fixed='skipped' / reason='amset>=0.5.1'，原来 int() 直接崩。"""
+        import h5py
+        _h5(self.d / "new.h5", self.D, self.kp, sym=1)
+        for name in ("old.h5", "new.h5"):
+            with h5py.File(str(self.d / name), "a") as f:
+                f.attrs["nspin_norm_fixed"] = "skipped"
+                f.attrs["nspin_norm_reason"] = np.bytes_(b"amset>=0.5.1")
+        rep = C.compare(self.d / "old.h5", self.d / "new.h5")
+        self.assertEqual(rep["old_attrs"]["nspin_norm_reason"], "amset>=0.5.1")
+        self.assertEqual(rep["old_attrs"]["nspin_norm_fixed"], "skipped")
+        self.assertEqual(rep["old_attrs"]["dp_symmetrized"], 0)
+
     def test_different_grid_is_input_error(self):
         _h5(self.d / "new.h5", self.D[:, :30], self.kp[:30], sym=1)
         self.assertEqual(C.main([str(self.d / "old.h5"), str(self.d / "new.h5")]), 2)

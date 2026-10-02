@@ -6745,3 +6745,61 @@ S2.2 还没重跑就 rerun S2.3，HSE 算的就是旧结构。autozt 只看 S2.2
   - CLI 的报告与 --invalidate-from。
 - test_stale_upstream 的 S5 接线断言改为无条件形式。
 
+## V141（2026-10-02）：MoSe2 电子 ADP-only 是 DPT 的 28.5 倍 —— 排查与谷探针；compare_deformation_h5 读不了 0.5.1 的 h5
+
+**先定掺杂符号**：AMSET 里负掺杂 = n 型（电子），正掺杂 = p 型（空穴）。依据：
+- `FermiDos` 的文档："A negative doping concentration indicates the majority carriers are electrons (n-type doping)"；
+- 本技能 DOPING 的注释也是负值在前、标 n 型；
+- MoS₂ 负掺杂那列的 ADP-only 400.9，就是 V122 记录的电子 ADP 406。
+
+用户侧曾把两列对调过一次（"电子 6.45×、空穴 3.28×"），那是错的。正确对照（300 K，±4.28e17，面内平均）：
+
+| 材料 | 电子 ADP-only / DPT | 空穴 ADP-only / DPT |
+|---|---|---|
+| MoSe2 | 4639.8 / 162.9 = **28.5×** | 1050.6 / 1416.7 = 0.74× |
+| MoS₂ | 400.9 / 210.2 = 1.9× | 1140.0 / 1663.0 = 0.69× |
+
+所以是 MoSe2 电子独有的问题，不是 2D 电子 ADP 路径普遍偏高。
+
+**已排除**（用户侧核对）：
+- 弹性常数：它对电子、空穴是同一个因子，而空穴正常；
+- core/vac 口径：S8.4 链的是 deformation_vac.h5，D_vac − D_core = +1.9556 eV，两种载流子一致；
+- 带边 D：vac h5 生成时有 5% 硬闸门（带边 D 对 band_edges 的 E1_vac），带边那一点的 D 是对的；
+- S7 设置：15 个目录都是 ISYM = 0、LVHAR = .TRUE.。
+
+**剩下的解释**：DPT 只用带边一点（K 谷）的 E1 = 7.39 eV；AMSET 的 ADP 用热分布内每个态自己的 D(k)，
+各谷并联导电，μ_i ∝ 1/D_i²。所以起作用的是 ⟨1/D²⟩，不是 ⟨D²⟩：只要有一个低能谷占相当一部分载流子、
+那里的 D 又小，ADP-only 迁移率就几乎全由它决定。
+
+合成六方单层算例：K/K′ 谷 D = 7.4 eV，6 个 Q 谷 D = 1.0 eV、只高 30 meV（Q 约占一半载流子），
+倍数 E1²·⟨1/D²⟩ ≈ 27，与 MoSe2 实测的 28.5 同一量级。单层 MoSe2 的 Q/Λ 谷离 K 谷很近，正是这种情形。
+但这只是可能性，要用真实 h5 确认（下面的探针）。另一种可能是 K 谷自己的 D 场在带边那一点之外就变小 —— 那是 D 场出错。
+
+**影响有多大**：电子 overall 35.1，主要由 IMP（86）和 POP（335）决定，ADP-only 4640 的贡献很小。
+即使 ADP 按 DPT 的 163 算，overall 也只降几十个百分点，不是 28 倍。问题主要在"ADP-only 与 DPT 的对照"本身。
+
+**tools/dp_valley_probe.py（新，只读，AMSET 环境，秒级）**：
+- 读 S7.1 的 h5（默认 vac）与 step7_deform/undeformed 的能带。band 轴按 get_ibands 映射；k 点按分数坐标对上
+  （允许 −k，必要时像 deform read 一样 expand_bandstructure）。
+- 对带边 0.3 eV 以内的态按谷列出：ΔE、载流子占比、对 ADP-only 迁移率的贡献占比、rms D、谷底 D_xx/D_yy。
+- 给出倍数 E1²·⟨1/D²⟩。
+
+判读：
+- 贡献主要来自非带边谷，且倍数接近 28 -> 多谷物理。报告注明 ADP-only 与单谷 DPT 不可比，结果可用。
+- 带边谷自己的 rms D 远小于带边 D -> D 场有问题，查 S7.1。
+- 倍数离 28 很远 -> 还有别的原因（有效质量、谷间散射核）。
+
+**compare_deformation_h5.py 的 bug（修）**：h5 属性原来一律 `int(v)`，nspin_norm_fix 写的字符串属性
+（`reason='amset>=0.5.1'`）一读就 `ValueError: invalid literal for int()`，所以 AMSET 0.5.1 生成的 h5 都用不了。
+现在字符串、bytes 原样保留，数值才转成 int/float。
+
+**用户侧**：
+1. 在 MoSe2 和 MoS₂ 的材料目录各跑一次 `python <skill>/ke-dft-cpu/tools/dp_valley_probe.py`，把两份输出发回来。
+   MoS₂ 的倍数应在 2 左右，MoSe2 的应在 28 左右。
+2. WSe2、WS2 缺 dpt_result.json：S8.2 是本地即时步，retry/start 即可，用来多两组对照。
+
+测试：
+- 新增 test_dp_valley_probe（6 项）：Q 谷 30 meV -> 倍数 ≈ 27、ADP-only 迁移率几乎全来自 Q 谷、rms 看不出来；
+  Q 谷在窗口外 -> 倍数 1；空穴侧、空窗口、D 全 0 不发散；−k 匹配；报告与缺文件。
+- test_compare_deformation 新增字符串属性一项：旧代码复现 `invalid literal`，修复后通过。
+

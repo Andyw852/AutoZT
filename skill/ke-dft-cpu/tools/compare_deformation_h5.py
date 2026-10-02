@@ -29,12 +29,27 @@ RERUN_R = 0.05        # ⟨|D|²⟩ 变 5% ≈ ADP 迁移率变 5%
 RERUN_P90 = 0.10      # 九成 (带, k) 点的 D 变化都在 10% 以内才算"变化小"
 
 
+def _attr(v):
+    """h5 属性 -> 可打印的值。V141：nspin_norm_fix 写的是字符串（如 reason='amset>=0.5.1'），
+    原来一律 int(v)，0.5.1 的 h5 一读就 ValueError。"""
+    if isinstance(v, bytes):
+        v = v.decode("utf-8", "ignore")
+    if isinstance(v, str):
+        return v
+    if np.ndim(v) == 0:
+        try:
+            return int(v) if float(v).is_integer() else float(v)
+        except (TypeError, ValueError):
+            return str(v)
+    return np.asarray(v).tolist()
+
+
 def _load(path):
     import h5py
     with h5py.File(str(path), "r") as f:
         d = {k: np.array(f[k]) for k in f.keys() if k.startswith("deformation_potentials_")}
         kp = np.array(f["kpoints"])
-        attrs = {k: (int(v) if np.ndim(v) == 0 else v) for k, v in f.attrs.items()}
+        attrs = {k: _attr(v) for k, v in f.attrs.items()}
     return d, kp, attrs
 
 
