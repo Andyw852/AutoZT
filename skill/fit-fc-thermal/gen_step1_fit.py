@@ -98,7 +98,7 @@ SPEC = {
     "FC3_CUTOFF": ("", "str"),               # fc3 cutoff in A; empty = no cutoff
     # ---- pheasy ----
     "PHEASY_FIT_METHOD": ("ALASSO", "str"),  # OLS|LASSO|ALASSO|RFE-OLS|RFE-OLS-TSQR|RIDGE|ARDR|RVM
-    "PHEASY_BIN": ("pheasy", "str"),         # pheasy | pheasy-gpu
+    "PHEASY_BIN": ("pheasy-gpu", "str"),  # pheasy-gpu (CPU build removed)
     "PHEASY_C2_CUTOFF": ("", "str"),         # fc2 cutoff in A; empty = none
     "PHEASY_C3_CUTOFF": ("", "str"),         # fc3 cutoff in A; empty = none
     "NULL_SPACE_EPS": (0.001, "float"),
@@ -566,9 +566,9 @@ def _gen_one(conf, out, job_label="S1fit"):
     enable = int(conf["ENABLE_FC"] or 3)
     if enable not in (2, 3):
         sys.exit("[ERROR] ENABLE_FC must be 2 or 3 (this skill fits fc2/fc3)")
-    p_bin = str(conf["PHEASY_BIN"] or "pheasy").lower()
-    if p_bin not in ("pheasy", "pheasy-gpu"):
-        sys.exit("[ERROR] PHEASY_BIN must be pheasy or pheasy-gpu")
+    p_bin = str(conf["PHEASY_BIN"] or "pheasy-gpu").lower()
+    if p_bin != "pheasy-gpu":
+        sys.exit("[ERROR] PHEASY_BIN must be pheasy-gpu (the CPU build was removed)")
     p_ngpu = str(conf["PHEASY_NGPU"] or "").strip()
     if p_ngpu:
         try:
@@ -860,9 +860,8 @@ def _gen_one(conf, out, job_label="S1fit"):
         if kind == "submit_fcfit_pheasy_gpu":
             sys.exit("[ERROR] PHEASY_BIN=pheasy-gpu needs the GPU template "
                      "submit_fcfit_pheasy_gpu.tpl.\n"
-                     "        If this cluster has no GPU nodes, use "
-                     "PHEASY_BIN=pheasy, or drop a cluster-specific copy into "
-                     "setting/<hpc>/templates/.")
+                     "        If this cluster has no GPU nodes, drop a "
+                     "cluster-specific copy into setting/<hpc>/templates/.")
         raise
     subs = {
         "JOBNAME": fc.new_jobname(cwd, job_label),
