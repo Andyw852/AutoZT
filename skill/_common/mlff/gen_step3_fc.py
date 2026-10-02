@@ -45,7 +45,7 @@ SPEC = {
     "FIT_SOFTWARE": ("phono3py", "str"),  # phono3py（symfc/alm）| pheasy
     "PHEASY_METHOD": ("OLS", "str"),      # pheasy 拟合方法：OLS | LASSO | RFE-OLS | RFE-OLS-TSQR | ARDR | RVM
     "PHEASY_C3_CUTOFF": ("6.0", "str"),   # pheasy 三阶截断(Å)；None/空=不截断
-    "PHEASY_BIN": ("pheasy", "str"),        # pheasy 可执行名：pheasy | pheasy-gpu（GPU 版）
+    "PHEASY_BIN": ("pheasy-gpu", "str"),    # pheasy-gpu（CPU 版 pheasy 已移除）
     # 旋转不变性/平衡条件（RASR）：auto = 2D 用 BHH、3D 不加。对 2D 是硬要求——
     #   不加则 ZA 近 Γ 线性化甚至出虚频（频率可能全为正、能过虚频闸，但 κ 是错的）。
     #   ★ 只在 pheasy 的 -c（零空间构造）步生效；-f 读 ns_*.npz，--rasr 放 -f 上无效。
@@ -182,7 +182,7 @@ env.update({
 })
 
 cflag = "" if c3 in ("None", "none", "") else "--c3 %s" % c3
-bin = os.environ.get("PHEASY_BIN", "pheasy")
+bin = os.environ.get("PHEASY_BIN", "pheasy-gpu")
 fit = ("%s --dim %s -w 3 -f %s --ndata %d --eps 0.001 -l %s --hdf5"
        % (bin, dim, cflag, ndata, method))
 if method == "LASSO":
@@ -237,11 +237,10 @@ if method in ("LASSO", "ALASSO"):
             _res = (_json.load(open("fit_manifest.json", encoding="utf-8")).get("results") or {})
         except Exception as _e:
             print("[WARN] fit_manifest.json 不可读(%s)，按缺失处理" % _e)
-    if not _res:
-        # 无 manifest：多半是 CPU 版 pheasy（不写 manifest）—— 保持旧行为，只告警不拦。
-        print("[WARN] 无 fit_manifest.json（CPU pheasy?）—— 跳过 LASSO/ALASSO 选型门禁。")
-    elif "cv_selection" not in _res:
-        # 老版 pheasy-gpu（< 35c0467）没做每折 alpha->0 的 OLS 参照，无法认证选型。
+    if "cv_selection" not in _res:
+        # 老版 pheasy（< 35c0467）没做每折 alpha->0 的 OLS 参照：alpha* 落在网格最小值和
+        # “数据不需要 L1”无法区分。这个“缺失”本身就是红旗 —— 要求升级后重算
+        # （与 fit-fc-thermal/fc_fit_driver.py 完全一致）。
         print("[GATE] fit_manifest.json 无 cv_selection：pheasy 过旧（< 35c0467），"
               "无法认证 LASSO/ALASSO 选型；请升级 pheasy 后重算。")
         open(".fit_gate_fail", "a").write("pheasy too old: no cv_selection in fit_manifest.json\n")
@@ -316,9 +315,9 @@ def main():
     software = str(conf["FIT_SOFTWARE"] or "phono3py").lower()
     # p_bin 先落默认值：fit_cfg 无论哪种 software 都引用它（此前只在校验分支内赋值，
     # phono3py 路会 NameError）。PHEASY_BIN 校验对两条路都生效。
-    p_bin = str(conf["PHEASY_BIN"] or "pheasy").lower()
-    if p_bin not in ("pheasy", "pheasy-gpu"):
-        sys.exit("[ERROR] PHEASY_BIN 只允许 pheasy / pheasy-gpu")
+    p_bin = str(conf["PHEASY_BIN"] or "pheasy-gpu").lower()
+    if p_bin != "pheasy-gpu":
+        sys.exit("[ERROR] PHEASY_BIN 只允许 pheasy-gpu（CPU 版 pheasy 已移除）")
     if software == "pheasy":
         fc2_sc = params.get("FC2_SUPERCELL", "").split()
         if fc2_sc and fc2_sc != params.get("SUPERCELL", "").split():
@@ -326,7 +325,7 @@ def main():
         p_method = _norm_pheasy_method(conf["PHEASY_METHOD"] or "OLS")
         if p_method not in ("OLS", "LASSO", "RFE-OLS", "RFE-OLS-TSQR", "ARDR", "RVM"):
             sys.exit("[ERROR] PHEASY_METHOD 只允许 OLS / LASSO / RFE-OLS / RFE-OLS-TSQR / ARDR / RVM")
-        fit = ("pheasy-gpu" if p_bin == "pheasy-gpu" else "pheasy") + " (" + p_method + ")"
+        fit = "pheasy-gpu (" + p_method + ")"
         (out / "_pheasy_fit.py").write_text(_PHEASY_FIT, encoding="utf-8")
     else:
         fit = str(conf["FIT"] or "auto").lower()
@@ -370,8 +369,8 @@ def main():
         if _kind == "submit_fc_gpu":
             sys.exit("[ERROR] PHEASY_BIN=pheasy-gpu 需要 GPU 拟合模板 submit_fc_gpu.tpl"
                      "（a800/3090 已配）。\n"
-                     "        当前集群没有 → 改用 PHEASY_BIN=pheasy（CPU），"
-                     "或把材料 hpc 切到 a800/3090。")
+                     "        当前集群没有 → 把材料 hpc 切到 a800/3090，"
+                     "或放一份集群专用的 submit_fc_gpu.tpl 到 setting/<hpc>/templates/。")
         raise
     kc.write_submit(tpl, out / "submit.sh",
                     {"JOBNAME": kc.new_jobname(cwd, "S3fit"),
