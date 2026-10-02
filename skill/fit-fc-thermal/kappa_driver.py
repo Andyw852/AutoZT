@@ -668,8 +668,12 @@ def _write_kappa_vs_cutoff(out, per_cut, rep=None, cfg=None):
             ax.set_xticklabels(xticks or ["%.2f" % x for x in xs])
         fig.subplots_adjust(top=0.93, bottom=0.13, left=0.10, right=0.98)
         if doc.get("method"):
-            fig.text(0.10, 0.955, doc["method"], ha="left", va="bottom",
-                     fontsize=10, fontweight="bold", transform=fig.transFigure)
+            # 左下角（κyy 面板内）标注拟合方法；原来是画在 figure 左上角
+            ax_yy.text(0.035, 0.06, doc["method"], transform=ax_yy.transAxes,
+                       ha="left", va="bottom", fontsize=10, fontweight="bold",
+                       color=_INK, zorder=6,
+                       bbox=dict(facecolor="white", edgecolor="none", alpha=0.75,
+                                 pad=1.6))
         notes = ["T = 300 K; (n) = neighbour shells within $r_c$; "
                  "bold: |change| $\\leq$ %g%%" % tol]
         if len(rows) == 1:
