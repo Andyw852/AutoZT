@@ -88,7 +88,9 @@ SPEC = {
     "CUT3_MIN_SHELLS": (2, "int"),           # skip the nearest-shell-only midpoint
     "CUT3_GAP_TOL": (0.05, "float"),         # shell clustering tolerance (A)
     "CUT3_MIN_GAP": (0.05, "float"),         # skip a midpoint in a split double shell
-    "CUT3_SCAN": ("off", "str"),             # off | auto/on: refit each candidate
+    # 默认 auto，与 templates/step1_fit/step.conf 一致（以前代码里是 off：项目 step.conf
+    # 没写这个键就悄悄不扫，S2 只剩单点、画不出 κ 随截断的变化图）
+    "CUT3_SCAN": ("auto", "str"),            # off | auto/on: refit each candidate
     "CUT3_BOOTSTRAP": (10, "int"),           # frame bootstrap per candidate (0 = off)
     "CUT3_STABILITY_THR": (0.3, "float"),    # sigma/|mean| below this = "determined"
     # ---- phono3py ----

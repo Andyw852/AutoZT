@@ -391,8 +391,13 @@ writing `kappa_summary.json`:
   `rel_change_per_component` = xx/yy/zz), and `kappa_summary.json` carries
   `mesh`, `mesh_converged` and `mesh_convergence`.  Hitting a cap leaves
   `mesh_converged: false` with a warning (the densest mesh is still reported).
-  With a cutoff scan the scan runs at the starting mesh, then the chosen
-  cutoff is converged in mesh.  `MESH = "n n n"` keeps the old fixed-mesh
+  With a cutoff scan the order is q-mesh -> cutoff -> temperature: the mesh is
+  converged on a reference cutoff (the nominal one, else the largest; report in
+  `mesh_convergence_reference.json`), every candidate cutoff is then run at that
+  converged mesh and the cutoff is picked there, and every BTE run carries all
+  of T_MIN..T_MAX, so the chosen cutoff's result is the full kappa(T).  If the
+  chosen cutoff is not the reference, its mesh is re-checked from the converged
+  length (at least one denser mesh).  `MESH = "n n n"` keeps the old fixed-mesh
   behaviour (no convergence); `MESH = 60` is a fixed starting length.
   No single default length is safe for every material (high-kappa, light-atom
   or low-T work needs denser meshes than a low-kappa complex cell), which is
@@ -472,7 +477,7 @@ writing `kappa_summary.json`:
   relative error is shown when no RMSE was recorded).  The chosen cutoff is
   dashed in every panel; no axis zooms below 10 % of its values, so a tiny
   wiggle never looks like a trend.  Written also when no cutoff is usable, which is when the curve is
-  most needed.  The points are at the scan's starting mesh.
+  most needed.  The points are at the converged q-mesh, i.e. the same mesh as the reported kappa.
 * **Candidate spacing**: the candidates are the midpoints between *adjacent*
   neighbour shells of the structure (all atom pairs, shells closer than 0.05 A
   merged), so each step adds exactly one shell; a wide gap between two

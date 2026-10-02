@@ -23,8 +23,11 @@ rerun on denser meshes (L *= MESH_CONV_FACTOR) until the whole kappa tensor at
 MESH_CONV_T changes by < MESH_CONV_TOL_PCT between two consecutive meshes, or
 MESH_CONV_MAX_LENGTH / MESH_CONV_MAX_POINTS is hit.  The denser mesh of the
 converged pair is reported; mesh_convergence.json keeps every point.  With a
-cutoff scan the scan runs at the starting mesh, then the chosen cutoff's fc is
-converged in mesh.
+cutoff scan the order is: (1) converge the mesh on a reference cutoff (the
+nominal one, else the largest), (2) run every cutoff at that converged mesh and
+pick the cutoff there, (3) every BTE run carries all temperatures, so the chosen
+cutoff's result is the full kappa(T).  If the chosen cutoff differs from the
+reference, its mesh is re-checked starting from the converged length.
 """
 import json
 import math
@@ -393,6 +396,16 @@ def _converge_mesh(out, yaml_name, fc2, fc3, cfg, source_fc, first=None):
     return prev
 
 
+def _reference_tag(tags, nominal=None):
+    """网格收敛用的参考截断：标称截断在扫描里就用它，否则取最大一档（包含的三阶
+    相互作用最全，散射最强、收敛最慢，用它定的网格对其余档偏保守）。"""
+    if nominal is not None:
+        want = ("%.2f" % float(nominal)).replace(".", "p")
+        if want in tags:
+            return want
+    return max(tags, key=_cut_of_tag)
+
+
 def _cut_of_tag(tag):
     return float(tag.replace("p", "."))
 
@@ -659,6 +672,9 @@ def _write_kappa_vs_cutoff(out, per_cut, rep=None, cfg=None):
                      fontsize=10, fontweight="bold", transform=fig.transFigure)
         notes = ["T = 300 K; (n) = neighbour shells within $r_c$; "
                  "bold: |change| $\\leq$ %g%%" % tol]
+        if len(rows) == 1:
+            notes.insert(0, "single cutoff only (no cutoff scan): set CUT3_SCAN = auto "
+                            "in step1_fit/step.conf to get kappa vs. cutoff")
         if ch is not None:
             notes.append("dashed: %s $r_c$ = %.2f $\\AA$ (%s)"
                          % ("chosen" if len(rows) > 1 else "nominal", float(ch),
@@ -757,12 +773,40 @@ def main():
     yaml_name = cfg["disp_yaml"]
 
     if cfg.get("scan") and cfg.get("cut_scans"):
+        # 收敛顺序（2026-10-02 用户定，文献通行做法）：
+        #   ① q 网格：在参考截断上做网格收敛，得到收敛网格长度 L*；
+        #   ② 截断：每档截断都在 L* 上跑 BTE，κ 随截断的平台/逐壳层稳定性在收敛网格上判
+        #      （以前在起始粗网格上选截断，再只对选中档收敛网格——选截断用的 κ 本身没收敛，
+        #       kappa_vs_cutoff 图上的数值也和最终报告的 κ 对不上）；
+        #   ③ 温度：每次 BTE 都按 T_MIN..T_MAX 全部温度算（RTA 下多温度几乎不加成本），
+        #      最终报告即选中截断 + 收敛网格的完整 κ(T)。
+        # 选中档若不是参考档，再从 L* 起对它复核一次网格（至少多一档加密）。
+        tags = list(cfg["cut_scans"])
+        ref = _reference_tag(tags, cfg.get("nominal_cut3_A"))
+        kind, _L0 = _mesh_spec(cfg)
+        print("[..] ① q 网格收敛（参考截断 %s A）" % _cut_of_tag(ref), flush=True)
+        s_ref = _converge_mesh(out, yaml_name, "cut3_%s/fc2.hdf5" % ref,
+                               "cut3_%s/fc3.hdf5" % ref, cfg,
+                               "cutoff_scan/cut3_%s" % ref)
+        mesh_rep = s_ref.get("mesh_convergence")
+        if mesh_rep:
+            (out / "mesh_convergence_reference.json").write_text(
+                json.dumps(dict(mesh_rep, reference_cut3_A=_cut_of_tag(ref)),
+                           indent=2, ensure_ascii=False), encoding="utf-8", newline="\n")
+        spec = (("length", float(mesh_rep["records"][-1]["length"]))
+                if (kind == "length" and mesh_rep and mesh_rep.get("records"))
+                else None)
+        print("[..] ② 截断扫描（收敛网格 %s）" % s_ref["mesh"], flush=True)
         per_cut = []
-        for tag in cfg["cut_scans"]:
-            print("[..] BTE @ cutoff %s" % _cut_of_tag(tag), flush=True)
-            s = _run_bte(out, yaml_name, "cut3_%s/fc2.hdf5" % tag,
-                         "cut3_%s/fc3.hdf5" % tag, cfg,
-                         "cutoff_scan/cut3_%s" % tag, write_kappa=False)
+        for tag in tags:
+            if tag == ref:
+                s = s_ref
+            else:
+                print("[..] BTE @ cutoff %s" % _cut_of_tag(tag), flush=True)
+                s = _run_bte(out, yaml_name, "cut3_%s/fc2.hdf5" % tag,
+                             "cut3_%s/fc3.hdf5" % tag, cfg,
+                             "cutoff_scan/cut3_%s" % tag, write_kappa=False,
+                             spec=spec)
             _cd = out / ("cut3_%s" % tag)
             _cd.mkdir(exist_ok=True)
             (_cd / "kappa_summary.json").write_text(
@@ -782,23 +826,33 @@ def main():
             sys.exit("[ERROR] 没有可用截断（数据量/稳定性不足）—— 见 cutoff_selection.json")
         tag = ("%.2f" % chosen).replace(".", "p")
         s = by_tag[tag]
-        # The scan ran at the starting mesh; now converge the mesh on the
-        # chosen cutoff's force constants (the scan point is reused).
-        s = _converge_mesh(out, yaml_name, "cut3_%s/fc2.hdf5" % tag,
-                           "cut3_%s/fc3.hdf5" % tag, cfg,
-                           "cutoff_scan/cut3_%s" % tag,
-                           first=(_mesh_spec(cfg)[1], s))
+        if tag != ref and spec is not None:
+            print("[..] 选中截断 %.2f A ≠ 参考截断：从收敛网格起复核一次" % chosen, flush=True)
+            s = _converge_mesh(out, yaml_name, "cut3_%s/fc2.hdf5" % tag,
+                               "cut3_%s/fc3.hdf5" % tag, cfg,
+                               "cutoff_scan/cut3_%s" % tag, first=(spec[1], s))
+        elif mesh_rep:
+            s["mesh_converged"] = s_ref.get("mesh_converged")
+            s["mesh_convergence"] = mesh_rep
+        s["convergence_order"] = ["q_mesh@reference_cut", "cutoff@converged_mesh",
+                                  "temperatures"]
+        s["mesh_reference_cut3_A"] = _cut_of_tag(ref)
         s["cutoff_selection"] = rep
         s["chosen_cutoff_A"] = chosen
         (out / "kappa_summary.json").write_text(
             json.dumps(s, indent=2, ensure_ascii=False), encoding="utf-8",
             newline="\n")
-        print("[DONE] 选中 c3=%.2f A | mesh %s | 300K in-plane %.4f W/mK "
-              "-> kappa_summary.json"
-              % (chosen, s["mesh"], s["kappa_inplane_300K"]), flush=True)
+        print("[DONE] ③ 选中 c3=%.2f A | mesh %s | 300K in-plane %.4f W/mK "
+              "| T=%s K -> kappa_summary.json"
+              % (chosen, s["mesh"], s["kappa_inplane_300K"],
+                 "/".join("%g" % t for t in s.get("temperatures") or [])), flush=True)
         return
 
     # nominal: single cutoff
+    print("[WARN] 没有截断扫描（step1_fit 的 CUT3_SCAN=off，或只有一档候选）：只算标称截断，"
+          "kappa_vs_cutoff 图只有一个点。要 κ 随截断/壳层的变化：\n"
+          "       autozt -tt fit-fc-thermal -p <材料> -j step1_fit conf --set params.CUT3_SCAN=auto"
+          "  然后 retry S1_fit、再跑 S2_kappa", flush=True)
     s = _converge_mesh(out, yaml_name, "fc2.hdf5", "fc3.hdf5", cfg,
                        cfg.get("source_fc"))
     (out / "kappa_summary.json").write_text(
