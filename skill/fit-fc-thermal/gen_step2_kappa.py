@@ -330,7 +330,8 @@ def _gen_one(conf, fit, out, cwd, write_submit=True):
     else:
         cut_scans = []
         if _want:
-            print("[..] step1_fit 只有标称一档（未开 CUT3_SCAN=auto）—— 只跑标称截断",
+            print("[WARN] step1_fit 没有逐档截断（CUT3_SCAN=off 或候选不足 2 档）—— 只跑标称截断，"
+                  "画不出 κ 随截断的变化图。要扫描：conf --set params.CUT3_SCAN=auto 后 retry S1_fit",
                   flush=True)
     cfg = {
         "disp_yaml": disp_name,

@@ -1656,7 +1656,7 @@ def cmd_fit_pheasy(cfg, out):
     if not shutil.which(binary):
         sys.exit("[ERROR] %r is not on PATH -- check CONDA_ENV/CONDA_SH in "
                  "step.conf (the submit template activates it) and PHEASY_BIN "
-                 "(%s)" % (binary, "pheasy | pheasy-gpu"))
+                 "(%s)" % (binary, "pheasy-gpu"))
     dim = str(cfg.get("supercell") or "").strip()
     if not dim:
         scm = np.asarray((cfg.get("supercell_matrix") or []), float)
@@ -1886,18 +1886,45 @@ def cmd_fit_pheasy(cfg, out):
               % (rel, _rel_thr), flush=True)
         (out / ".fit_gate_fail").write_text("pheasy relative error %.4f\n" % rel)
 
-    # LASSO alpha on the grid boundary is a red flag: the selection is bogus.
+    # LASSO/ALASSO selection sanity now comes from pheasy's own manifest
+    # (>= 35c0467), not from re-deriving log10(alpha*) against a hard-coded
+    # [mu_min, mu_max] grid.  --mu_min/--mu_max are ignored for LASSO/ALASSO when
+    # alpha is auto-selected (only RIDGE uses them), so that comparison was both
+    # meaningless and unable to tell a genuine grid-minimum pin apart from the
+    # data simply supporting no L1 penalty.
     if method in ("LASSO", "ALASSO"):
-        a = metrics.get("pheasy_best_alpha")
-        if a:
-            lo = float(cfg.get("pheasy_mu_min", -8))
-            hi = float(cfg.get("pheasy_mu_max", -2))
-            lg = np.log10(a) if a > 0 else -99
-            if lg <= lo + 0.05 or lg >= hi - 0.05:
-                print("[FAIL] best alpha=%.3e sits on the grid boundary [%g,%g] -- "
-                      "the LASSO selection is not trustworthy; add frames or widen "
-                      "the alpha grid" % (a, lo, hi), flush=True)
-                (out / ".fit_gate_fail").write_text("alpha on grid boundary\n")
+        _mf = {}
+        _mf_path = out / "fit_manifest.json"
+        if _mf_path.is_file():
+            try:
+                _mf = json.loads(_mf_path.read_text(encoding="utf-8"))
+            except Exception as _e:
+                print("[WARN] fit_manifest.json unreadable (%s); treating it as "
+                      "missing" % _e, flush=True)
+        _results = _mf.get("results") or {}
+        if "cv_selection" not in _results:
+            # Old pheasy (< 35c0467) never measured the alpha -> 0 OLS reference,
+            # so an alpha* at the grid minimum is indistinguishable from a real
+            # selection.  That absence is itself the red flag: require the upgrade.
+            print("[FAIL] fit_manifest.json carries no cv_selection: this pheasy "
+                  "is too old (before 35c0467, no per-fold alpha->0 OLS reference) "
+                  "to certify the LASSO/ALASSO selection.  Upgrade pheasy to "
+                  ">= 35c0467 and refit.", flush=True)
+            (out / ".fit_gate_fail").write_text(
+                "pheasy too old: no cv_selection in fit_manifest.json\n")
+        elif _results.get("cv_selected_ols_limit"):
+            # The CV resolved the exact alpha -> 0 limit at least as well as every
+            # resolved alpha: the delivered fit IS OLS, no L1 penalty.  Certified,
+            # not a truncated grid edge.
+            print("[OK] CV selected the exact OLS limit (alpha -> 0): the data "
+                  "support no L1 penalty; the delivered fit is OLS.", flush=True)
+        elif _results.get("alpha_at_grid_edge"):
+            # alpha* pinned at the grid bottom while the CV curve was still
+            # falling: the selection is not trustworthy.
+            print("[FAIL] alpha* sits on the grid boundary and the CV curve was "
+                  "still falling -- the LASSO selection is not trustworthy; add "
+                  "frames or widen the alpha grid.", flush=True)
+            (out / ".fit_gate_fail").write_text("alpha on grid boundary\n")
 
     for f in ("fc2.hdf5",):
         if not (out / f).is_file():
