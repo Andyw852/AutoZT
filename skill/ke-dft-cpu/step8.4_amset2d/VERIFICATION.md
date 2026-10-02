@@ -6633,3 +6633,55 @@ C44 ≠ C66 的正确/错误顺序；立方不判）。
 - 本项目只认 0.5.1；`AZ_AMSET_REQUIRED=any` 可跳过。gen 时（登录节点）不查，那里本来就可能没装 AMSET。
 
 测试：test_preflight_symmetry_verdict 新增 JobEnvTests（2 项：版本/导入失败/跳过开关；--in-job 才拦）。
+
+## V139（2026-10-02）：KZ_CAP_2D 出厂改为 on —— MoSe2 S8.4 按 263×263×~33 跑、超墙时
+
+**现象**（用户侧，MoSe2 S8.4 作业 3918710）：8.5 h 时 amset.log 的 elastic 进度才 9%，按这个速度弹性段要
+~25 h，作业墙时 24 h，跑不完。
+
+**先更正读数**：日志里的 45×45×3（6075 点）是 S3b 的 **DFT 全网格**（V124 已经更正过同一个误读），
+不是 AMSET 的插值网格。AMSET 实际用的插值网格面内 ~263，k_z 由 BoltzTraP2 的实空间球决定，有 ~30 层。
+
+**根因**：KZ_CAP_2D 的出厂值一直是 off。
+- V130 定的规则是"MoS₂ (c) 对照通过 -> 2D 生产配置 = KZ_CAP_2D on、IR_FIX off"。
+- V131 实测通过：面内平均 overall 1.48%、ADP 1.33%、σ 1.48%、S 0.13%，阈值 2%。
+- 生产也已经验证过：
+  - WSe2 271×271×3，10 掺杂 × 9 温度，全程 2 h 40 min；
+  - WS2（V132 修好费米能级后）跑完。
+- 但这两个材料是在 step.conf 里写了 on，gen 的默认值没跟着改。
+- 所以没写这一行的材料（MoSe2）仍走 263×263×~33。
+- 散射成本 ∝ 不可约点数 × 等能面四面体数 ∝ N_z²（V125/V130）：33 层对 3 层约 (33/3)² ≈ 120 倍。
+  WSe2/WS2 截断前的作业（V124，~299×299×37）预计 45–50 h，与 MoSe2 现在的速度同量级。
+
+**改动**：gen_step14 的 `KZ_CAP_2D` 出厂值 "off" -> "on"（r = 1，k_z 3 层）。
+- 运行时护栏不变：以下情况插件不截断，照原样跑并告警：
+  - 能带沿 k_z 的最大差 > KZ_FLAT_TOL_EV（5 meV），即真空不够或不是单层；
+  - S3 真空方向只有 1 层，核不了；
+  - 面内矢量不垂直于层法向。
+- IR_FIX 仍是 off（V130），3D 的 S8 不涉及。
+- 要复现旧口径：step.conf 写 `KZ_CAP_2D = off`。
+
+**已有结果**：KZ_CAP_2D off 跑出来的 S8.4 结果不作废。
+- 与 on 的差别在 V131 的 2% 容差内。V126 认为 on 更接近理想 2D。
+- 跨材料比较时注意口径：2d_correction.json 里有 `kz_cap_rmax` 就是 on。
+
+**用户侧**：
+1. 确认 3918710 是没截断跑的。下面三处任看一处：
+   - gen 输出里的 `[..] KZ_CAP_2D = off`；
+   - `grep kz_cap_rmax step8.4_amset2d/2d_correction.json` 没有结果；
+   - amset.log 里没有 `[amset2d] kz_cap：…截到`。
+2. 是 -> scancel。打了本补丁就直接重新 gen；还没打补丁就先在 MoSe2 的 S8.4 step.conf 写 `KZ_CAP_2D = on`，再 gen、提交。
+   - 新作业的 log 里应有 `[amset2d] kz_cap：沿 k_z 最大能量差 … meV … -> equivalence 截到 |R_c| <= 1`，网格 k_z = 3。
+   - 预计 2–3 h，与 WSe2 同量级。
+3. 以后判断 S8.4 慢不慢，先看 amset.log 里 AMSET 自己打印的插值网格和 tqdm 的 `[已用<剩余]`，不要看 DFT 网格。
+
+**测试的封闭性（顺带修）**：test_preflight_symmetry_verdict 在装了 AMSET 0.4.19 的环境里有 3 项失败，原因都是测试读了本机装的版本：
+- JobEnvTests.test_check 直接断言"本机就是 0.5.1"；
+- 另外两项走到 preflight 的 ①，它读本机 AMSET 版本，< 0.5.1 + 真实重叠会给 WARN，verdict 从 ok 变成 warn。
+
+生产判据没错，是测试不封闭。现在：
+- 这两项把 `importlib.metadata.version("amset")` 固定成 0.5.1；
+- test_check 用桩模块 0.5.1；
+- 在 0.5.1 与 0.4.19 两个环境里都是 13/13 通过。
+
+测试：test_ir_fix_kzcap 的出厂值断言改为 on（11 项照过）。

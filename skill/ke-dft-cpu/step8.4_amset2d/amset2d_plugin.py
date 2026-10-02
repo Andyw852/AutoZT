@@ -491,7 +491,8 @@ except ImportError:
           "宽松容差的解不拦）", file=sys.stderr)
 
 # =====================================================================
-# patch_kz_cap（V125）—— 插值网格在真空方向只留 2·r+1 层（2d_correction.json 的 kz_cap_rmax，默认不启用）
+# patch_kz_cap（V125）—— 插值网格在真空方向只留 2·r+1 层（2d_correction.json 的 kz_cap_rmax；
+# gen 的 KZ_CAP_2D 出厂 on（V139），写 off 时没有这个键、不截断）
 #
 # 单层的能带沿 k_z 是平的（真空隔开，层间跳跃 ~0），本插件的 2D 核也只用 q∥ —— 沿 k_z 的积分
 # 只贡献常数因子 2π/c。可 BoltzTraP2 的 equivalence 是实空间**球**，面内要 263 个格点时真空方向
