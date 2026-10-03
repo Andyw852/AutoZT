@@ -128,8 +128,8 @@ def main():
         sys.exit("[ERROR] 找不到 %s（形变单点没生成？）" % dfm)
     # [patch_stale_dp V122] 本步重新生成 = 形变势 h5 / band_edges.json 会被覆盖：用旧形变势算的
     #   S8/S8.4（软链本步 h5）与 S8.2（读 band_edges.json）的完成标记一并失效、重新排队（同 S4 的做法）。
-    if any((out / f).is_file() for f in ("deformation.h5", "deformation_vac.h5", "band_edges.json")):
-        kc.invalidate_downstream(cwd, OUTDIR_NAME, "%s 重新生成（形变势重读）" % OUTDIR_NAME)
+    #   V140：不再以"本步已有旧产物"为条件（与 S4 同理）。
+    kc.invalidate_downstream(cwd, OUTDIR_NAME, "%s 重新生成（形变势重读）" % OUTDIR_NAME)
 
     # 校验每个形变子目录都有 vasprun.xml，否则 read 会失败或给错结果
     subs = sorted(p for p in glob.glob(str(dfm / DEFORM_GLOB)) if os.path.isdir(p))

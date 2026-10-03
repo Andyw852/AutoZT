@@ -108,6 +108,14 @@ def _spin_arrays(v):
     return [(i, np.asarray(eigmap[s])) for i, s in enumerate(order)]
 
 
+# [V145] 带边简并时取哪一支：价带取简并里**编号最大**的一支、导带取**编号最小**的一支 ——
+#   VASP 按能量给带编号，离开带边后它们正是"最平 = 最重 = 态密度最大"的那支（重空穴 / 重电子）。
+#   原来 argmax 遇到并列取第一个，即价带简并里编号最小 = 下降最快的轻空穴：GaAs（无 SOC，Γ 点三重简并）
+#   的 DPT 空穴迁移率因此是 276 万 cm²/Vs。简并重数记在 _EDGE_DEGEN 里，写进 m_provenance。
+DEGEN_TOL_EV = 0.005
+_EDGE_DEGEN = {}
+
+
 def _find_band_edge(v, carrier, occ_tol=0.5):
     """跨【所有】自旋道找全局 CBM/VBM。
 
@@ -133,7 +141,12 @@ def _find_band_edge(v, carrier, occ_tol=0.5):
             best = (val, isp, int(k0), int(b0), ene)
     if best is None:
         return None
-    return best[1], best[2], best[3], best[4]
+    val, isp, k0, b0, ene = best
+    deg = [b for b in range(ene.shape[1]) if abs(float(ene[k0, b]) - float(val)) < DEGEN_TOL_EV]
+    _EDGE_DEGEN[carrier] = len(deg) if deg else 1
+    if len(deg) > 1:
+        b0 = max(deg) if carrier == "hole" else min(deg)
+    return isp, k0, int(b0), ene
 
 
 def _sorted_dp_keys(f):
@@ -935,7 +948,13 @@ def _aniso_block(cwd, is_2d, carrier, T):
 
 def _one_carrier(cwd, is_2d, carrier, T):
     C, Cunit, Cprov = get_C(cwd, is_2d)
+    _EDGE_DEGEN.pop(carrier, None)
     m, mprov = get_effective_mass(cwd, carrier, is_2d)
+    _nd = _EDGE_DEGEN.get(carrier, 1)
+    if m is not None and _nd > 1:                                   # [V145]
+        mprov = "%s；带边 %d 重简并，取重带（单带 DPT 对简并带边只是近似）" % (mprov, _nd)
+        print("[WARN] %s 带边 %d 重简并（如立方半导体 Γ 点的价带顶）：m* 取重带；单带 DPT 公式只是近似，"
+              "与 AMSET 的差别不能当作问题" % (carrier, _nd))
     e1, e1prov = get_E1(cwd, carrier)
     rec = {"carrier": carrier,
            "inputs": {"C_%s" % ("2D_N_per_m" if is_2d else "3D_Pa"): C,
@@ -1016,12 +1035,14 @@ def main():
         miss = set()
         for r in res["results"]:
             i = r["inputs"]
+            # [V143] 带上具体原因：只写"m*←S3_uniform(vasprun/网格)"时，WS2（S3 网格 47，K 离网）被误读成
+            #   "vasprun 缺失"，白查了一轮。原因就在 *_provenance 里，直接打出来。
             if i.get("C_2D_N_per_m") is None and i.get("C_3D_Pa") is None:
-                miss.add("C←S6_elastic")
+                miss.add("C←S6_elastic（%s）" % i.get("C_provenance"))
             if i["m_eff_m0"] is None:
-                miss.add("m*←S3_uniform(vasprun/网格)")
+                miss.add("m*←S3_uniform（%s）" % i.get("m_provenance"))
             if i["E1_eV"] is None:
-                miss.add("E1←S7.1_read(deformation.h5)")
+                miss.add("E1←S7.1_read（%s）" % i.get("E1_provenance"))
         hint = "；".join(sorted(miss)) or "见 json 的 provenance"
         sys.exit("[ERROR] DPT 迁移率全部未算出。缺：%s。请先把对应步骤跑好/修好再重跑本步"
                  "（dpt_result.json 已写出，含各输入来源可排查）。" % hint)

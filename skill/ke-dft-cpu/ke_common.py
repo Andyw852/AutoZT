@@ -247,6 +247,9 @@ def finalize_stale_inputs(cwd, outdir, step, snap, n_grid_archived=0):
     """
     import time as _t
     changed = inputs_changed(outdir, snap)
+    # [patch_rerun_invalidate V140] autozt rerun 先 rm -rf 本步目录再 gen：快照全空，上面比不出变化，
+    #   可下游（S4 的 h5、S8 …）是用被删掉的那一版算的 -> 同样失效。第一次 gen 时下游不存在，什么都不做。
+    fresh = bool(snap) and all(v is None for v in snap.values())
     n = 0
     if changed:
         n = archive_stale_outputs(outdir, "stale-input-" + _t.strftime("%Y%m%d%H%M%S"))
@@ -256,6 +259,8 @@ def finalize_stale_inputs(cwd, outdir, step, snap, n_grid_archived=0):
     down = []
     if n or n_grid_archived:
         down = invalidate_downstream(cwd, step, "输入变了：%s" % ("/".join(changed) or "网格"))
+    elif fresh:
+        down = invalidate_downstream(cwd, step, "%s 目录是新建的（rerun）" % step)
     return changed, n, down
 
 
@@ -275,6 +280,9 @@ DOWNSTREAM = {
     #   迁移率 198 -> 406，而旧 transport.json 仍被判"完成"。
     "step7b_deform_read": [("step8_amset", "link"), ("step8.4_amset2d", "link"),
                            ("step8.2_dpt", "always")],
+    # [patch_rerun_invalidate V140] S7（形变单点）重新生成 -> S7.1 读出的形变势作废（递归到 S8/S8.4/S8.2）。
+    #   S7.1 的产物在材料目录的 step7b_deform_read/，rerun S7 删不到它，此前一直是旧的"完成"。
+    "step7_deform": [("step7b_deform_read", "always")],
     # [patch_stale_upstream V136] S5（介电）/ S6（弹性）重新生成：S8/S8.4 在 gen 时把它们的数值写进
     #   settings.yaml（不是软链）-> mode="always"；S8.2（DPT）读 step6_elastic/OUTCAR 的面内弹性；
     #   S5.1 的校验结论随 S5 一起作废。此前没有这两项：S5/S6 重算后旧 transport.json 仍被判"完成"。
@@ -287,6 +295,9 @@ DOWNSTREAM = {
     "step8.2_dpt": [("step8.1_boltztrap", "always"), ("step8.3_output", "always")],
 }
 DONE_MARKERS = {
+    # S7.1：deformation_vac.h5 也要归档 —— 只归档 deformation.h5 的话，新 S7.1 没产出 vac 时
+    #   _pick_deformation_h5 会捡到旧的 vac h5。
+    "step7b_deform_read": ("deformation.h5", "deformation_vac.h5", "band_edges.json"),
     "step4_wave": ("wavefunction.h5",),
     "step4b_wave_full": ("wavefunction.h5",),
     "step5_dielect_validate": ("dielectric_check.json",),
@@ -346,6 +357,264 @@ def invalidate_downstream(cwd, step, reason, _seen=None):
                   % (step, reason, down, tag))
         done += invalidate_downstream(cwd, down, "上游 %s 失效" % step, seen)
     return done
+
+
+# --------------------------------------------------------------------------
+# [patch_walltime V144] 大 VASP 作业的墙时预估（S6 gen 用；tools/vasp_eta.py 对在跑的作业外推）
+#   起因：Mo2S3 S6（IBRION=6，20 原子，NFREE=4）跑满 regular 的 24 h 被 SLURM 杀掉（3918831，
+#   TIMEOUT 24:00:21），白跑一天；8 月 Zn5O3 的 S2.3/S6、GaAs S5（HSE）也都撞过墙时。
+#   IBRION=6 的 SCF 次数在 gen 时就能算出来；每步耗时用 S1 的离子步粗估，跑起来以后用实测外推。
+# --------------------------------------------------------------------------
+# 没写 --time 时按 QoS 的上限（jzzn 实测：regular 24 h —— 3918831 在 24:00:21 被杀；premium 48 h）。
+WALLTIME_BY_QOS_H = {"regular": 24.0, "premium": 48.0}
+WALLTIME_DEFAULT_H = 24.0
+WALLTIME_WARN_FRAC = 0.8
+
+
+def _hms_to_h(v):
+    """SLURM 时间格式 -> 小时。认不出返回 None。
+    无天数：MM / MM:SS / HH:MM:SS；有天数：D-HH / D-HH:MM / D-HH:MM:SS。"""
+    v = str(v).strip()
+    try:
+        if "-" in v:
+            d, rest = v.split("-", 1)
+            p = [float(x) for x in rest.split(":")] + [0.0, 0.0]
+            return int(d) * 24 + p[0] + p[1] / 60.0 + p[2] / 3600.0
+        p = [float(x) for x in v.split(":")]
+        if len(p) == 1:
+            return p[0] / 60.0
+        if len(p) == 2:
+            return p[0] / 60.0 + p[1] / 3600.0
+        if len(p) == 3:
+            return p[0] + p[1] / 60.0 + p[2] / 3600.0
+    except (ValueError, IndexError):
+        pass
+    return None
+
+
+def walltime_limit_h(submit_sh, by_qos=None, default_h=WALLTIME_DEFAULT_H):
+    """submit.sh 的墙时上限（小时）与来源说明：--time/-t 优先，否则按 --qos 查表，否则默认。"""
+    by_qos = WALLTIME_BY_QOS_H if by_qos is None else by_qos
+    try:
+        text = Path(submit_sh).read_text(errors="ignore")
+    except OSError:
+        return default_h, "读不到 submit.sh，按默认 %g h" % default_h
+    m = re.search(r"^#SBATCH\s+(?:--time[=\s]|-t\s+)(\S+)", text, re.M)
+    if m:
+        h = _hms_to_h(m.group(1))
+        if h:
+            return h, "submit.sh --time=%s" % m.group(1)
+    m = re.search(r"^#SBATCH\s+--qos[=\s](\S+)", text, re.M)
+    if m and m.group(1) in by_qos:
+        return by_qos[m.group(1)], "QoS %s 的上限" % m.group(1)
+    return default_h, "submit.sh 没写 --time%s，按默认 %g h" % (
+        "（QoS %s 不在表里）" % m.group(1) if m else "", default_h)
+
+
+def outcar_loop_times(outcar):
+    """OUTCAR 里每个 LOOP+（一个离子步/一个有限差分构型）的 real time（秒）。"""
+    out = []
+    try:
+        with open(outcar, errors="ignore") as fh:
+            for ln in fh:
+                if "LOOP+" in ln and "real time" in ln:
+                    try:
+                        out.append(float(ln.rsplit("real time", 1)[1].split()[0]))
+                    except (IndexError, ValueError):
+                        pass
+    except OSError:
+        pass
+    return out
+
+
+def ibrion6_steps(n_atoms, nfree, isif=3, n_ineq=None):
+    """IBRION=6 的 SCF 次数（上界）：初始 1 次 + NFREE × 3 × 不等价原子数 + （ISIF≥3）NFREE × 6 个应变。
+    有对称性时 VASP 只位移不等价原子、而且未必三个方向都要，所以这是上界。"""
+    n = int(n_ineq if n_ineq else n_atoms)
+    nf = int(nfree)
+    return 1 + nf * 3 * n + (nf * 6 if int(isif) >= 3 else 0)
+
+
+def n_inequivalent_atoms(poscar, symprec=1e-3):
+    """spglib 的不等价原子数；取不到返回 None（调用方按全部原子算）。"""
+    try:
+        import numpy as np
+        import spglib
+        lat, counts, frac, _ = read_poscar_cell(poscar)
+        nums = [i for i, c in enumerate(counts) for _ in range(c)]
+        ds = spglib.get_symmetry_dataset((lat, frac, nums), symprec=symprec)
+        if ds is None:
+            return None
+        eq = ds["equivalent_atoms"] if isinstance(ds, dict) else ds.equivalent_atoms
+        return int(len(np.unique(eq)))
+    except Exception:                                                # noqa: BLE001
+        return None
+
+
+def walltime_verdict(n_steps, t_step_s, limit_h, done_steps=0, elapsed_s=0.0, frac=WALLTIME_WARN_FRAC):
+    """(预计总小时, 是否超过 frac × 上限)。done/elapsed 给了就按"已用 + 剩余步数 × 每步"算。"""
+    remaining = max(int(n_steps) - int(done_steps), 0)
+    total_h = (float(elapsed_s) + remaining * float(t_step_s)) / 3600.0
+    return total_h, total_h > frac * float(limit_h)
+
+
+# --------------------------------------------------------------------------
+# [patch_carrier_sign V143] AMSET 掺杂符号 -> 载流子：**唯一真源**，读 transport.json 的脚本一律用它。
+#   AMSET 0.5.1 FermiDos 文档："A negative doping concentration indicates the majority carriers are
+#   electrons (n-type doping); a positive doping concentration indicates holes are the majority
+#   carriers (p-type doping)." 本技能 DOPING 也是负值在前、标 n 型。
+#   起因：2026-10-02 用户侧手写脚本把 +/− 对调，MoSe2 的电子/空穴 ADP/DPT 表整张标反，来回核对了两轮。
+# --------------------------------------------------------------------------
+def carrier_of_doping(doping):
+    """AMSET 掺杂值 -> "electron"（负，n 型）/ "hole"（正，p 型）/ None（0）。"""
+    x = float(doping)
+    if x < 0:
+        return "electron"
+    if x > 0:
+        return "hole"
+    return None
+
+
+# --------------------------------------------------------------------------
+# [patch_lineage V140] 上游结构同源 + 派生产物新鲜度（S8/S8.4 gen 的闸门；tools/lineage_check.py 也用）
+#   起因（Mo2S3，S1 重新弛豫后整条 rerun）：
+#   · autozt rerun 先 rm -rf 步骤目录再 gen，V122/V136 那几处"gen 时见到旧产物 -> 下游失效"一个都不触发，
+#     S4 的 h5、S7.1 的形变势、S2 画图的 band_summary.json、S8 仍是旧的"完成"；
+#   · S2.3 HSE 的 gen 从 S2.2 拷 POSCAR 与 WAVECAR —— S2.2 还没重跑就先 rerun S2.3，HSE 算的是旧结构。
+#   各步 POSCAR 都是 S1 CONTCAR 的原样拷贝（relay_poscar；S2.2 读 S2.1 的 CONTCAR；S2.3 拷 S2.2 的
+#   POSCAR；S7 的 undeformed/POSCAR 拷本步 POSCAR），所以逐个按数值比对不会误判。
+# --------------------------------------------------------------------------
+S1_DIRS = ("step1_opt", "step1_std_opt")
+LINEAGE_POSCARS = (
+    ("step2_bandgap/step2.1_static", ("POSCAR",)),
+    ("step2_bandgap/step2.2_pbe", ("POSCAR",)),
+    ("step2_bandgap/step2.3_hse", ("POSCAR", "*/POSCAR")),
+    ("step3_uniform", ("POSCAR",)),
+    ("step3b_uniform_full", ("POSCAR",)),
+    ("step5_dielect", ("POSCAR",)),
+    ("step6_elastic", ("POSCAR",)),
+    ("step7_deform", ("undeformed/POSCAR",)),
+)
+# (派生步骤, 它的产物, 来源步骤, 来源里的计算输出)：来源输出比产物新 = 产物是用旧来源做的。
+#   只看计算输出（VASP 重算才会变），不看 INCAR/POSCAR（gen 原地重写不代表重算）。
+LINEAGE_DERIVED = (
+    ("step4_wave", "wavefunction.h5", "step3_uniform", ("vasprun.xml", "WAVECAR")),
+    ("step4b_wave_full", "wavefunction.h5", "step3b_uniform_full", ("vasprun.xml", "WAVECAR")),
+    ("step7b_deform_read", "deformation.h5", "step7_deform", ("*/vasprun.xml", "*/*/vasprun.xml")),
+    ("step2_bandgap/step2.2_pbe_plot", "band_summary.json", "step2_bandgap/step2.2_pbe", ("vasprun.xml",)),
+    ("step2_bandgap/step2.3_hse_plot", "band_summary.json", "step2_bandgap/step2.3_hse",
+     ("vasprun.xml", "*/vasprun.xml")),
+    ("step5_dielect_validate", "dielectric_check.json", "step5_dielect", ("OUTCAR",)),
+)
+LINEAGE_TOL_A = 1e-4        # Å：CONTCAR 与 POSCAR 的文本精度差远小于它；重新弛豫的差别远大于它
+LINEAGE_SLACK_S = 60.0
+
+
+def read_poscar_cell(path):
+    """POSCAR/CONTCAR -> (晶格 3x3 Å, 各元素原子数, 分数坐标 n×3, 元素符号或 None)。纯 numpy。
+    支持 VASP4/5、负 scale（= 体积）、Selective dynamics、Direct/Cartesian。"""
+    import numpy as np
+    ln = Path(path).read_text(errors="ignore").splitlines()
+    scale = float(ln[1].split()[0])
+    lat0 = np.array([[float(x) for x in ln[i].split()[:3]] for i in (2, 3, 4)])
+    f = scale if scale > 0 else (abs(scale) / abs(np.linalg.det(lat0))) ** (1.0 / 3.0)
+    lat = lat0 * f
+    i = 5
+    toks = ln[i].split()
+    syms = None
+    if not all(t.isdigit() for t in toks):
+        syms = tuple(toks)
+        i += 1
+    counts = tuple(int(x) for x in ln[i].split())
+    i += 1
+    if ln[i].strip()[:1] in ("s", "S"):
+        i += 1
+    cart = ln[i].strip()[:1] in ("c", "C", "k", "K")
+    i += 1
+    n = sum(counts)
+    xyz = np.array([[float(x) for x in ln[i + j].split()[:3]] for j in range(n)]).reshape(n, 3)
+    frac = np.dot(xyz * f, np.linalg.inv(lat)) if cart else xyz
+    return lat, counts, frac, syms
+
+
+def cell_deviation(a, b):
+    """两个 read_poscar_cell 结果的最大偏差（Å）：晶格矢量逐分量、原子位置（最小像）。
+    原子数或元素对不上 -> inf。"""
+    import numpy as np
+    la, ca, fa, sa = a
+    lb, cb, fb, sb = b
+    if ca != cb or (sa and sb and sa != sb):
+        return float("inf")
+    dl = float(np.abs(la - lb).max())
+    d = fb - fa
+    d -= np.rint(d)
+    dp = float(np.linalg.norm(np.dot(d, la), axis=1).max()) if len(d) else 0.0
+    return max(dl, dp)
+
+
+def s1_contcar(cwd):
+    cwd = Path(cwd)
+    return next((cwd / d / "CONTCAR" for d in S1_DIRS if (cwd / d / "CONTCAR").is_file()), None)
+
+
+def structure_lineage(cwd, tol=LINEAGE_TOL_A, slack=LINEAGE_SLACK_S):
+    """返回 (S1 CONTCAR 路径或 None, 问题列表 [(步骤, 说明), ...])。
+    ① 各步 POSCAR 与 S1 CONTCAR 的数值偏差 > tol；② LINEAGE_DERIVED 里产物比来源的计算输出旧。
+    读不了的文件、不存在的步骤不判。"""
+    cwd = Path(cwd)
+    probs = []
+    ref_path = s1_contcar(cwd)
+    ref = None
+    if ref_path is not None:
+        try:
+            ref = read_poscar_cell(ref_path)
+        except Exception as e:                                       # noqa: BLE001
+            probs.append((ref_path.parent.name, "读不了 CONTCAR（%s: %s）" % (type(e).__name__, e)))
+    if ref is not None:
+        for step, pats in LINEAGE_POSCARS:
+            for p in sorted({q for pat in pats for q in cwd.glob(step + "/" + pat) if q.is_file()}):
+                try:
+                    dev = cell_deviation(ref, read_poscar_cell(p))
+                except Exception:                                    # noqa: BLE001
+                    continue
+                if dev > tol:
+                    probs.append((step, "%s 与 %s 的结构不同（%s）—— 用的是旧结构"
+                                  % (os.path.relpath(str(p), str(cwd)),
+                                     os.path.relpath(str(ref_path), str(cwd)),
+                                     "原子数/元素不同" if dev == float("inf") else "最大偏差 %.4f Å" % dev)))
+                    break
+    for step, marker, src, pats in LINEAGE_DERIVED:
+        f = cwd / step / marker
+        if not f.is_file():
+            continue
+        outs = [q for pat in pats for q in (cwd / src).glob(pat) if q.is_file()]
+        if not outs:
+            continue
+        newest = max(outs, key=lambda q: q.stat().st_mtime)
+        if newest.stat().st_mtime > f.stat().st_mtime + slack:
+            probs.append((step, "%s 比来源 %s 旧 —— 来源后来重算过，本步要在来源跑完后重新生成"
+                          % (marker, os.path.relpath(str(newest), str(cwd)))))
+    return ref_path, probs
+
+
+def check_lineage(cwd, enabled=True, label="S8"):
+    """gen 用：有问题就列出来；enabled -> 退出（不提交），否则只告警。返回问题列表。"""
+    ref, probs = structure_lineage(cwd)
+    if ref is None:
+        print("[..] 上游同源核对（V140）：没有 S1 的 CONTCAR，只核对派生产物的新旧")
+    if not probs:
+        print("[OK] 上游同源核对（V140）：各步结构与 S1 一致、派生产物不旧于来源")
+        return probs
+    print("[%s] ★ 上游同源核对（V140）：%d 处用的是旧结构或旧来源 —— %s 的输入混了两版计算："
+          % ("ERROR" if enabled else "WARN", len(probs), label))
+    for step, why in probs:
+        print("        - %s：%s" % (step, why))
+    print("      处理：结构不同的 VASP 步骤 rerun（S2.3 要等 S2.2 跑完，S2.2 要等 S2.1）；派生步骤"
+          "（S4 / S4b / S7.1 / S2 画图 / S5.1）在来源跑完后 rerun；都 OK 后再 gen 本步。")
+    print("      已经 rerun 过的上游可用 tools/lineage_check.py <材料目录> --invalidate-from <步骤> 归档它的下游完成标记。")
+    if enabled:
+        sys.exit("[ERROR] %s：上游不同源，不生成（确需照跑：step.conf 写 STRUCTURE_GUARD = false）" % label)
+    return probs
 
 
 # --------------------------------------------------------------------------

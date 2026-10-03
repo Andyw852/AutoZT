@@ -12,6 +12,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import numpy as np
 from pymatgen.core import Lattice, Structure
@@ -41,6 +42,15 @@ def si_on_atom():
                      ["Si", "Si"], [[0, 0, 0], [.25, .25, .25]])
 
 
+def _as_amset_051():
+    """V139：这些用例考的是 0.5.1 上的判据。preflight 的 ① 读本机装的 AMSET 版本（< 0.5.1 + 真实重叠 -> WARN），
+    所以在别的版本的环境里（如 0.4.19）跑测试，verdict 会从 ok 变成 warn —— 那是测试环境的事，不是判据错了。
+    这里把版本固定成 0.5.1。"""
+    import importlib.metadata as md
+    real = md.version
+    return mock.patch.object(md, "version", lambda name: "0.5.1" if name == "amset" else real(name))
+
+
 def _material_dir(st):
     """把结构写成 <tmp>/step3_uniform/POSCAR，返回材料目录。"""
     d = Path(tempfile.mkdtemp())
@@ -50,6 +60,11 @@ def _material_dir(st):
 
 
 class PreflightVerdictTests(unittest.TestCase):
+    def setUp(self):
+        p = _as_amset_051()
+        p.start()
+        self.addCleanup(p.stop)
+
     def test_gan_std_released_via_ke_common(self):
         """GaN 标准原点：原公式 0/24 错 -> 放行，且**确实走 ke_common**。"""
         need, why = pf._structure_verdict(_material_dir(gan_std()))
@@ -240,8 +255,12 @@ class JobEnvTests(unittest.TestCase):
 
     def test_check(self):
         import os
-        ok, msg = pf.job_env_check()
-        self.assertTrue(ok, msg)                              # 测试环境就是 0.5.1
+        old = self._with_amset("0.5.1")                       # 不依赖本机装的版本（V139）
+        try:
+            ok, msg = pf.job_env_check()
+        finally:
+            self._restore(old)
+        self.assertTrue(ok, msg)
         for fake, want_ok, word in (("0.4.19", False, "0.4.19"), (None, False, "导入不了")):
             old = self._with_amset(fake)
             try:

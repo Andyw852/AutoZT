@@ -6633,3 +6633,285 @@ C44 ≠ C66 的正确/错误顺序；立方不判）。
 - 本项目只认 0.5.1；`AZ_AMSET_REQUIRED=any` 可跳过。gen 时（登录节点）不查，那里本来就可能没装 AMSET。
 
 测试：test_preflight_symmetry_verdict 新增 JobEnvTests（2 项：版本/导入失败/跳过开关；--in-job 才拦）。
+
+## V139（2026-10-02）：KZ_CAP_2D 出厂改为 on —— MoSe2 S8.4 按 263×263×~33 跑、超墙时
+
+**现象**（用户侧，MoSe2 S8.4 作业 3918710）：8.5 h 时 amset.log 的 elastic 进度才 9%，按这个速度弹性段要
+~25 h，作业墙时 24 h，跑不完。
+
+**先更正读数**：日志里的 45×45×3（6075 点）是 S3b 的 **DFT 全网格**（V124 已经更正过同一个误读），
+不是 AMSET 的插值网格。AMSET 实际用的插值网格面内 ~263，k_z 由 BoltzTraP2 的实空间球决定，有 ~30 层。
+
+**根因**：KZ_CAP_2D 的出厂值一直是 off。
+- V130 定的规则是"MoS₂ (c) 对照通过 -> 2D 生产配置 = KZ_CAP_2D on、IR_FIX off"。
+- V131 实测通过：面内平均 overall 1.48%、ADP 1.33%、σ 1.48%、S 0.13%，阈值 2%。
+- 生产也已经验证过：
+  - WSe2 271×271×3，10 掺杂 × 9 温度，全程 2 h 40 min；
+  - WS2（V132 修好费米能级后）跑完。
+- 但这两个材料是在 step.conf 里写了 on，gen 的默认值没跟着改。
+- 所以没写这一行的材料（MoSe2）仍走 263×263×~33。
+- 散射成本 ∝ 不可约点数 × 等能面四面体数 ∝ N_z²（V125/V130）：33 层对 3 层约 (33/3)² ≈ 120 倍。
+  WSe2/WS2 截断前的作业（V124，~299×299×37）预计 45–50 h，与 MoSe2 现在的速度同量级。
+
+**改动**：gen_step14 的 `KZ_CAP_2D` 出厂值 "off" -> "on"（r = 1，k_z 3 层）。
+- 运行时护栏不变：以下情况插件不截断，照原样跑并告警：
+  - 能带沿 k_z 的最大差 > KZ_FLAT_TOL_EV（5 meV），即真空不够或不是单层；
+  - S3 真空方向只有 1 层，核不了；
+  - 面内矢量不垂直于层法向。
+- IR_FIX 仍是 off（V130），3D 的 S8 不涉及。
+- 要复现旧口径：step.conf 写 `KZ_CAP_2D = off`。
+
+**已有结果**：KZ_CAP_2D off 跑出来的 S8.4 结果不作废。
+- 与 on 的差别在 V131 的 2% 容差内。V126 认为 on 更接近理想 2D。
+- 跨材料比较时注意口径：2d_correction.json 里有 `kz_cap_rmax` 就是 on。
+
+**用户侧**：
+1. 确认 3918710 是没截断跑的。下面三处任看一处：
+   - gen 输出里的 `[..] KZ_CAP_2D = off`；
+   - `grep kz_cap_rmax step8.4_amset2d/2d_correction.json` 没有结果；
+   - amset.log 里没有 `[amset2d] kz_cap：…截到`。
+2. 是 -> scancel。打了本补丁就直接重新 gen；还没打补丁就先在 MoSe2 的 S8.4 step.conf 写 `KZ_CAP_2D = on`，再 gen、提交。
+   - 新作业的 log 里应有 `[amset2d] kz_cap：沿 k_z 最大能量差 … meV … -> equivalence 截到 |R_c| <= 1`，网格 k_z = 3。
+   - 预计 2–3 h，与 WSe2 同量级。
+3. 以后判断 S8.4 慢不慢，先看 amset.log 里 AMSET 自己打印的插值网格和 tqdm 的 `[已用<剩余]`，不要看 DFT 网格。
+
+**测试的封闭性（顺带修）**：test_preflight_symmetry_verdict 在装了 AMSET 0.4.19 的环境里有 3 项失败，原因都是测试读了本机装的版本：
+- JobEnvTests.test_check 直接断言"本机就是 0.5.1"；
+- 另外两项走到 preflight 的 ①，它读本机 AMSET 版本，< 0.5.1 + 真实重叠会给 WARN，verdict 从 ok 变成 warn。
+
+生产判据没错，是测试不封闭。现在：
+- 这两项把 `importlib.metadata.version("amset")` 固定成 0.5.1；
+- test_check 用桩模块 0.5.1；
+- 在 0.5.1 与 0.4.19 两个环境里都是 13/13 通过。
+
+测试：test_ir_fix_kzcap 的出厂值断言改为 on（11 项照过）。
+
+## V140（2026-10-02）：rerun 绕过了下游失效 + S8/S8.4 的上游同源闸门
+
+**现象**（用户侧，Mo2S3：S1 重新弛豫后整条 rerun）：
+- S2.1、S2.3、S3、S5、S6、S7 已经 rerun 并提交；
+- S2.15、S2.2、S4、S7.1、S8 仍显示旧的 OK。它们的前序现在是 TODO，所以也没法 rerun。
+
+**根因 1：rerun 绕过了失效。** autozt 的 `rerun` 先 `rm -rf` 步骤目录，再 gen（workflow.do_rerun_step）。
+可现有的"上游重算 -> 下游失效"都以"gen 时本步目录里有旧产物"为条件：
+- S3/S3b：比对输入快照；
+- S4/S4b：有旧 h5；
+- S5/S6：有旧 OUTCAR（V136）；
+- S7.1：有旧形变势（V122）。
+
+目录被删掉后，这几处一个都不触发，派生步骤与 S8 于是一直是旧的"完成"。另外 S7 -> S7.1 这条边本来就没有：
+S7.1 的产物在材料目录的 step7b_deform_read/，rerun S7 删不到它。
+
+**根因 2：S2.3 抢先 rerun，算的是旧结构。** S2.3 HSE 的 gen 从 step2.2_pbe 拷 POSCAR、POTCAR、KPOINTS 和 WAVECAR。
+S2.2 还没重跑就 rerun S2.3，HSE 算的就是旧结构。autozt 只看 S2.2 是 OK，就放行了。
+
+**改动**：
+1. 失效不再依赖旧产物（patch_rerun_invalidate）：
+   - S4、S4b、S5、S6、S7.1 的 gen 无条件调用 invalidate_downstream。第一次 gen 时下游不存在，什么都不做；
+     gen 一次就意味着本步要重算，下游必然作废。
+   - S3/S3b 的 finalize_stale_inputs：输入快照全空（目录是新建的，即 rerun）时同样让下游失效；
+     原地重新 gen、输入没变时仍不失效（原行为）。
+   - 新增 S7 -> S7.1 这条边，S7 的 gen 调用它。S7.1 的 deformation.h5、deformation_vac.h5、band_edges.json 一起归档
+     （只归档 deformation.h5 的话，新 S7.1 没产出 vac 时 _pick_deformation_h5 会捡到旧的 vac h5），
+     并递归到 S8、S8.4、S8.2。
+2. 上游同源闸门（patch_lineage，S8/S8.4 的 gen，`STRUCTURE_GUARD` 默认开）：
+   - 结构：S2.1、S2.2、S2.3（含扇出子目录）、S3、S3b、S5、S6、S7 的 undeformed 的 POSCAR，
+     与 S1 当前的 CONTCAR 逐个按数值比对，偏差 > 1e-4 Å 即不同。各步都是 S1 CONTCAR 的原样拷贝，所以不会误判：
+     文本精度差约 1e-8；重新弛豫的差别在 1e-2 Å 量级。
+   - 新鲜度：S4/S4b 的 h5、S7.1 的形变势、S2 画图的 band_summary.json、S5.1 的校验，与来源的计算输出
+     （vasprun.xml、WAVECAR、OUTCAR）比时间，旧 60 s 以上算旧。只看计算输出，因为 gen 原地重写 INCAR 不代表重算。
+   - 有问题就列出步骤和原因并退出，不生成；`STRUCTURE_GUARD = false` 只告警。
+   - 本步在 step.conf 读完之后、读任何上游数值之前执行。
+3. tools/lineage_check.py：
+   - 对材料目录或项目根做同一核对，有问题退出码为 1；
+   - `--invalidate-from <步骤…>` 用来补救 V140 之前已经 rerun 过的上游：把它们下游的完成标记改名归档。
+
+**用户侧（Mo2S3，现在）**：
+1. **S2.3（3918828）先 scancel。** 它是从还没重跑的 S2.2 拷的旧结构。顺序是：S2.1 跑完 -> rerun S2.15、S2.2 ->
+   S2.2 跑完 -> rerun S2.3 -> 跑完后重新生成 S2.2 与 S2.3 的画图。
+2. 打上本补丁后，在材料目录跑 `python <skill>/ke-dft-cpu/tools/lineage_check.py . --invalidate-from step3_uniform step5_dielect step6_elastic step7_deform`。
+   - 作用：S4 的 h5、S5.1、S7.1、S8/S8.4/S8.2 的旧完成标记会被归档（只改名，不删）；
+   - 之后 auto-advance 会在 S3/S7 跑完后按顺序重做 S4、S7.1，再到 S8；
+   - S8 的 gen 会再核对一次，S2 链没跟上就停。
+3. 不带参数跑一次 `lineage_check.py <项目根>`，看别的材料有没有同样的问题。重点是 Si_diamond：它的 S1 也重新弛豫过。
+
+测试：
+- 新增 test_lineage（10 项）：
+  - POSCAR 各种格式的等价；0.3% 晶格差、0.005 Å 位移、原子顺序不同都判为不同；
+  - Mo2S3 式的混合状态（S2.2、S2.3 扇出、S4 h5）；
+  - rerun 后的新目录失效、原地重新 gen 不失效；
+  - S7 -> S7.1 三个产物 + S8/S8.2；
+  - gen 无条件调用、S8/S8.4 接线；
+  - CLI 的报告与 --invalidate-from。
+- test_stale_upstream 的 S5 接线断言改为无条件形式。
+
+## V141（2026-10-02）：MoSe2 电子 ADP-only 是 DPT 的 28.5 倍 —— 排查与谷探针；compare_deformation_h5 读不了 0.5.1 的 h5
+
+**先定掺杂符号**：AMSET 里负掺杂 = n 型（电子），正掺杂 = p 型（空穴）。依据：
+- `FermiDos` 的文档："A negative doping concentration indicates the majority carriers are electrons (n-type doping)"；
+- 本技能 DOPING 的注释也是负值在前、标 n 型；
+- MoS₂ 负掺杂那列的 ADP-only 400.9，就是 V122 记录的电子 ADP 406。
+
+用户侧曾把两列对调过一次（"电子 6.45×、空穴 3.28×"），那是错的。正确对照（300 K，±4.28e17，面内平均）：
+
+| 材料 | 电子 ADP-only / DPT | 空穴 ADP-only / DPT |
+|---|---|---|
+| MoSe2 | 4639.8 / 162.9 = **28.5×** | 1050.6 / 1416.7 = 0.74× |
+| MoS₂ | 400.9 / 210.2 = 1.9× | 1140.0 / 1663.0 = 0.69× |
+
+所以是 MoSe2 电子独有的问题，不是 2D 电子 ADP 路径普遍偏高。
+
+**已排除**（用户侧核对）：
+- 弹性常数：它对电子、空穴是同一个因子，而空穴正常；
+- core/vac 口径：S8.4 链的是 deformation_vac.h5，D_vac − D_core = +1.9556 eV，两种载流子一致；
+- 带边 D：vac h5 生成时有 5% 硬闸门（带边 D 对 band_edges 的 E1_vac），带边那一点的 D 是对的；
+- S7 设置：15 个目录都是 ISYM = 0、LVHAR = .TRUE.。
+
+**剩下的解释**：DPT 只用带边一点（K 谷）的 E1 = 7.39 eV；AMSET 的 ADP 用热分布内每个态自己的 D(k)，
+各谷并联导电，μ_i ∝ 1/D_i²。所以起作用的是 ⟨1/D²⟩，不是 ⟨D²⟩：只要有一个低能谷占相当一部分载流子、
+那里的 D 又小，ADP-only 迁移率就几乎全由它决定。
+
+合成六方单层算例：K/K′ 谷 D = 7.4 eV，6 个 Q 谷 D = 1.0 eV、只高 30 meV（Q 约占一半载流子），
+倍数 E1²·⟨1/D²⟩ ≈ 27，与 MoSe2 实测的 28.5 同一量级。单层 MoSe2 的 Q/Λ 谷离 K 谷很近，正是这种情形。
+但这只是可能性，要用真实 h5 确认（下面的探针）。另一种可能是 K 谷自己的 D 场在带边那一点之外就变小 —— 那是 D 场出错。
+
+**影响有多大**：电子 overall 35.1，主要由 IMP（86）和 POP（335）决定，ADP-only 4640 的贡献很小。
+即使 ADP 按 DPT 的 163 算，overall 也只降几十个百分点，不是 28 倍。问题主要在"ADP-only 与 DPT 的对照"本身。
+
+**tools/dp_valley_probe.py（新，只读，AMSET 环境，秒级）**：
+- 读 S7.1 的 h5（默认 vac）与 step7_deform/undeformed 的能带。band 轴按 get_ibands 映射；k 点按分数坐标对上
+  （允许 −k，必要时像 deform read 一样 expand_bandstructure）。
+- 对带边 0.3 eV 以内的态按谷列出：ΔE、载流子占比、对 ADP-only 迁移率的贡献占比、rms D、谷底 D_xx/D_yy。
+- 给出倍数 E1²·⟨1/D²⟩。
+
+判读：
+- 贡献主要来自非带边谷，且倍数接近 28 -> 多谷物理。报告注明 ADP-only 与单谷 DPT 不可比，结果可用。
+- 带边谷自己的 rms D 远小于带边 D -> D 场有问题，查 S7.1。
+- 倍数离 28 很远 -> 还有别的原因（有效质量、谷间散射核）。
+
+**compare_deformation_h5.py 的 bug（修）**：h5 属性原来一律 `int(v)`，nspin_norm_fix 写的字符串属性
+（`reason='amset>=0.5.1'`）一读就 `ValueError: invalid literal for int()`，所以 AMSET 0.5.1 生成的 h5 都用不了。
+现在字符串、bytes 原样保留，数值才转成 int/float。
+
+**用户侧**：
+1. 在 MoSe2 和 MoS₂ 的材料目录各跑一次 `python <skill>/ke-dft-cpu/tools/dp_valley_probe.py`，把两份输出发回来。
+   MoS₂ 的倍数应在 2 左右，MoSe2 的应在 28 左右。
+2. WSe2、WS2 缺 dpt_result.json：S8.2 是本地即时步，retry/start 即可，用来多两组对照。
+
+测试：
+- 新增 test_dp_valley_probe（6 项）：Q 谷 30 meV -> 倍数 ≈ 27、ADP-only 迁移率几乎全来自 Q 谷、rms 看不出来；
+  Q 谷在窗口外 -> 倍数 1；空穴侧、空窗口、D 全 0 不发散；−k 匹配；报告与缺文件。
+- test_compare_deformation 新增字符串属性一项：旧代码复现 `invalid literal`，修复后通过。
+
+## V142（2026-10-02）：谷探针的实测结果 —— MoSe2 电子 ADP-only 28.5× 是多谷物理（结案）+ 探针倍数的标定
+
+**用户侧实测**（dp_valley_probe，电子，300 K，带边 0.3 eV 内，vac h5）：
+
+| 材料 | 带边 D_iso | Q 谷离 K 谷 | Q 谷载流子占比 | Q 谷占 ADP-only 迁移率 | Q 谷 rms D | 探针倍数 | AMSET 实测 ADP/DPT |
+|---|---|---|---|---|---|---|---|
+| MoSe2 | 7.387 eV | **25.1 meV** | 60% | 99.6% | 0.508 eV | 136.25 | 28.5 |
+| MoS₂ | 8.536 eV | 128.9 meV | 3.6% | 89.4% | 0.579 eV | 9.43 | 1.9 |
+
+**结论**：
+- 两个材料的 ADP-only 迁移率都由 Q 谷决定（D ≈ 0.5–0.6 eV，K 谷 7–8.5 eV）。差别只在 Q 谷离 K 谷多远：
+  MoSe2 的 Q 谷只高 25 meV，占 60% 载流子；MoS₂ 高 129 meV，只占 3.6%。
+- 决定性证据是材料之间的比值：探针 136.25 / 9.43 = **14.4**，AMSET 实测 28.5 / 1.9 = **15.0**。
+- 所以 MoSe2 电子 ADP-only ≫ DPT 是并联多谷的物理，不是 bug。结果可用；报告注明两点：
+  - ADP-only 不能和单谷 DPT 直接比；
+  - overall 由 IMP/POP 主导，影响不大。
+
+**探针倍数的标定**：两个材料都是探针比 AMSET 实测大约 5 倍（4.96、4.78），而且这个倍数稳定。
+原因是单态 τ ∝ 1/D² 的估计没算速度、态密度和等能面积分的差别。所以判读用材料间的比值，不用绝对值。
+dp_valley_probe 的说明和输出已按此改写（原文"倍数接近实测才算解释了差异"会把这次判错）。
+
+**一处敏感性要写进报告**：电子 ADP-only 对 K–Q 能量差极敏感。这个能量差随晶格常数、泛函、SOC 变化
+（本流程 Mo、Se 不开 SOC；S8 的剪刀差只整体平移导带，不改 K–Q 差）。25 meV 量级的差，换 PBEsol/HSE/SOC
+很可能改变排序，MoSe2 的电子 ADP-only 数值应视为对该能量差敏感。
+
+## V143（2026-10-02）：载流子符号的唯一真源 + 迁移率对照工具 + S8.2 失败报错带原因（两次误判的根治）
+
+**两次误判**：
+1. 用户侧手写脚本读 transport.json 时把掺杂符号对调（+ 当电子），MoSe2/MoS₂ 的 ADP/DPT 表整张标反，
+   来回核对了两轮（V141 已更正）。AMSET 的约定：负掺杂 = n 型（电子）。
+2. WS2 的 S8.2 报"缺：m*←S3_uniform(vasprun/网格)"，被读成"vasprun 缺失"，S3 是重跑了，原因却查错了。
+   真正的原因在 dpt_result.json 的 m_provenance 里：六方胞带边 K=(⅓,⅓)，S3 网格 47 不是 3 的倍数，
+   K 不在网格上，有效质量拒绝拟合。现行 S3 gen 把 2D 网格对齐到 6 的倍数，retry 后是 48，正好修好。
+
+"以后记住"不算修复。改成让工具不给犯错的机会：
+- **ke_common.carrier_of_doping**：AMSET 掺杂值 -> electron/hole，文档里引用 FermiDos 原文。读掺杂的代码一律用它。
+- **tools/mobility_vs_dpt.py（新）**：
+  - 每个掺杂一行，给出载流子、Seebeck、overall 与各机制迁移率（2D 面内平均 / 3D 迹/3）、同载流子 DPT、ADP/DPT；
+  - 用 **Seebeck 符号自检**：n 型 S < 0、p 型 S > 0，对不上标 ★、退出码 1，载流子判反会被物理量当场抓住；
+  - ADP/DPT 超出 [1/3, 3] 标 ⚠，提示用 dp_valley_probe 查是否多谷。
+- **rep_transport.py**（table 模式）、**compare_transport_json.py** 在掺杂旁标出载流子。
+- **S8.2 全部失败时**，报错里直接打出 C / m* / E1 各自的 provenance（如"K 离网：step3_uniform 的 N 不是 3 的倍数"），
+  不再只写来源步骤名。
+
+测试：新增 test_mobility_vs_dpt（6 项）：
+- 符号；
+- 用 MoSe2 实测数回归：电子 = 负掺杂、ADP 4639.8、ADP/DPT 28.48 标 ⚠，空穴 0.742；
+- Seebeck 反号 -> ★、退出码 1；3D 迹/3、没有 DPT；
+- rep_transport 的载流子列；
+- S8.2 报错带原因。
+
+## V144（2026-10-03）：大 VASP 作业的墙时预估 —— Mo2S3 S6 跑满 24 h 被杀
+
+**现象**：Mo2S3 S6_elastic（3918831）TIMEOUT 24:00:21（regular QoS），还没写出 TOTAL ELASTIC MODULI。
+IBRION=6 不能续算，一天白跑了；重交到 premium（48 h，3919101）。这已经是第三次了：
+- 8 月 Zn₅O₃ 的 S2.3 和 S6 都跑了约 26 h 被杀（HANDOVER §10.4）；
+- GaAs S5（HSE）也超时过。
+
+**算一笔账**：IBRION=6 的 SCF 次数 = 1 + NFREE×3×不等价原子数 + NFREE×6（ISIF=3）。
+- Mo2S3：20 原子，ISYM 关，NFREE=4，共 265 次；实测每步约 6.5 min，约 29 h，超过 24 h。
+- 这个数在 gen 时就能算出来，跑起来几个小时后就能按实测外推。
+
+**改动**：
+- ke_common：
+  - `walltime_limit_h`：submit.sh 的 --time，否则按 QoS 查 `WALLTIME_BY_QOS_H`（jzzn：regular 24 h、premium 48 h），否则 24 h；
+  - `outcar_loop_times`、`ibrion6_steps`、`n_inequivalent_atoms`（spglib，取不到按全部原子算）、`walltime_verdict`。
+- S6 gen：生成后打印 SCF 次数与预计墙时，并写 walltime_estimate.json。
+  - 每步耗时 = S1 离子步中位数 × `ELASTIC_STEP_FACTOR`（2.0，保守：k 网格更密、NCORE=1）。
+  - 超过上限 80% 时打 ★ 告警，列出办法：`conf --set submit.qos=premium` / `submit.time`、NFREE=2（约减半）、加节点。
+  - 放在 gen 输出的最后（autozt 回显末几行）。
+- tools/vasp_eta.py（新）：对在跑的作业按已完成步数与最近每步耗时外推，预计超过上限 80% 时退出码 1。
+  - IBRION=7/8、LCALCEPS、弛豫的总步数事先不知道，只报每步耗时。
+
+**用户侧**：
+- Mo2S3 S6（3919101）跑起来 1–2 h 后，在 step6_elastic 里跑一次 `python <skill>/ke-dft-cpu/tools/vasp_eta.py`，
+  预计应在 30 h 左右，低于 48 h。
+- 用这个实测回头校准 ELASTIC_STEP_FACTOR：实测每步 ÷ S1 离子步中位数。
+
+测试：新增 test_walltime（9 项）：
+- 时间格式、--time/--qos 推断、LOOP+、步数、不等价原子；
+- 用 Mo2S3 实测复现 regular 超时、premium 来得及；DFPT 只报每步；
+- S6 gen 的预估、告警、json，以及它在 [DONE] 之后。
+
+## V145（2026-10-03）：DPT 在简并带边取到轻带 —— GaAs 空穴 DPT 276 万 cm²/Vs
+
+**现象**（用户侧 mobility_vs_dpt，GaAs 300 K）：AMSET overall 电子 9247、空穴 233 cm²/Vs（实验约 8000 / 400），合理。
+但 DPT 是电子 14.6 万、**空穴 276 万** cm²/Vs。
+
+**电子的 14.6 万不是错**：3D DPT 只算声学形变势散射。m* = 0.067、C ≈ 120 GPa、E1 ≈ 7 eV 代进公式约 13 万。
+GaAs 电子受 POP 限制，ADP-only 本来就大。
+
+**空穴是 bug**：
+- GaAs（不开 SOC）的价带顶在 Γ 点三重简并。`_find_band_edge` 用 argmax 找带边，并列时取第一个，
+  也就是简并带里编号最小的一支。
+- VASP 按能量给带编号，离开 Γ 后编号最小的价带降得最快，是**轻空穴**。m* 太小，而 μ ∝ m*^(−5/2)，DPT 被放大了几个数量级。
+- 立方/闪锌矿半导体（GaAs、Si、Ge 等）的空穴 DPT 都受影响。
+
+**修法**：
+- 带边简并（5 meV 以内）时：价带取简并里编号最大的一支，导带取编号最小的一支。
+  两者离开带边后都是最平、最重、态密度最大的一支（重空穴 / 重电子）。导带原来就是这样，行为不变。
+- 简并重数写进 m_provenance（"带边 N 重简并，取重带（单带 DPT 对简并带边只是近似）"），并打 WARN。
+- tools/mobility_vs_dpt.py 认这个标记：简并的载流子 ADP/DPT 超界时只注明"单带公式只是近似"，
+  不再提示去查多谷。
+
+**用户侧**：
+- GaAs 的 S8.2 retry + start（秒级）；以后跑的立方体系 S8.2 空穴会自动用重带。
+- 旧的 S8.2 结果里，价带顶简并的材料（3D 立方）空穴 DPT 都偏大，不要拿来对照。
+
+测试：test_mobility_vs_dpt 新增两项：
+- 合成三重简并价带取重带：旧代码取到轻带 (0,0)，新代码 (0,2)；
+- 工具对简并 DPT 不给多谷提示。
+

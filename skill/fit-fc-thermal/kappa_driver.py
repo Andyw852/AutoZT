@@ -579,7 +579,20 @@ def _write_kappa_vs_cutoff(out, per_cut, rep=None, cfg=None):
     tol = float((rep or {}).get("kappa_tol_pct") or 5.0)
     suf = "_2d_norm" if (is_2d and f2d) else ""
     xs = [r["cut_A"] for r in rows]
+    # Plot against equally spaced positions, not the raw cutoff values: the
+    # candidates are midpoints between adjacent shells and are often only
+    # ~0.1 A apart (e.g. 3.93 / 4.15 / 4.33), so on a to-scale axis their tick
+    # labels, the point values and the segment percentages all collided.  Each
+    # tick label still carries the real cutoff and the neighbour-shell count,
+    # so equal spacing loses no information.
+    xpos = list(range(len(rows)))
     ch = doc["chosen_cut_A"]
+    ch_idx = None
+    if ch is not None:
+        for _i, _r in enumerate(rows):
+            if abs(_r["cut_A"] - float(ch)) < 1e-6:
+                ch_idx = _i
+                break
     if any(r["force_rmse_meV_per_A"] is not None for r in rows):
         ekey, elab = "force_rmse_meV_per_A", r"Force RMSE (meV $\AA^{-1}$)"
     elif any(r["fit_rel_err"] is not None for r in rows):
@@ -590,13 +603,14 @@ def _write_kappa_vs_cutoff(out, per_cut, rep=None, cfg=None):
               if rows and rows[0]["n_shells"] is not None else None)
     with plt.rc_context(_SCI_RC):
         # always 2 x 2: (a) kxx | (b) kzz  /  (c) kyy | (d) force RMSE
-        fig, grid = plt.subplots(2, 2, figsize=(7.0, 5.4), sharex=True,
-                                 gridspec_kw={"wspace": 0.42, "hspace": 0.10})
+        fig, grid = plt.subplots(2, 2, figsize=(8.6, 6.0), sharex=True,
+                                 gridspec_kw={"wspace": 0.34, "hspace": 0.10})
         ax_xx, ax_zz = grid[0]
         ax_yy, ax_rm = grid[1]
 
         def _series(ax, key, fmt, label_pct):
-            pts = [(x, r[key]) for x, r in zip(xs, rows) if r[key] is not None]
+            pts = [(i, rows[i][key]) for i in range(len(rows))
+                   if rows[i][key] is not None]
             ys = [p[1] for p in pts]
             if not ys:
                 return False
@@ -605,36 +619,41 @@ def _write_kappa_vs_cutoff(out, per_cut, rep=None, cfg=None):
                     mfc=_LINE, mec=_INK, mew=0.6, zorder=4)
             lo, hi = min(ys), max(ys)
             # never zoom below 10 % of the value: a 0.01 % wiggle must not look
-            # like a collapse
+            # like a collapse.  Extra head/tail room keeps the value and
+            # percentage annotations inside the axes.
             span = max(hi - lo, 0.10 * max(abs(hi), abs(lo), 1e-12))
             mid = 0.5 * (hi + lo)
-            ax.set_ylim(mid - 0.75 * span, mid + 0.75 * span)
+            ax.set_ylim(mid - 0.85 * span, mid + 0.95 * span)
             if fmt is None:      # enough decimals to tell neighbouring values apart
                 diffs = [abs(b - a) for a, b in zip(ys, ys[1:]) if b != a]
                 dmin = min(diffs) if diffs else abs(hi) or 1.0
                 nd = max(1, min(4, int(math.ceil(-math.log10(dmin))) + 1)) \
                     if dmin > 0 else 2
                 fmt = "%%.%df" % nd
-            for k, (x, y) in enumerate(pts):
-                # value under the point, on the side the curve does not run to
-                nxt = pts[k + 1][1] if k + 1 < len(pts) else None
-                prv = pts[k - 1][1] if k > 0 else None
-                down = (nxt is not None and nxt < y) or (nxt is None and prv is not None
-                                                         and prv > y)
-                ax.annotate(fmt % y, (x, y), xytext=(-4 if down else 4, -5),
-                            textcoords="offset points", ha="right" if down else "left",
-                            va="top", fontsize=6.5, color=_INK)
+            # Two label rows that never share a column: the point values run
+            # above the curve, the segment percentages below its midpoints, and
+            # both carry a translucent white box so the text stays readable even
+            # where the ~0.1 A-spaced candidates bring them close.  (The old
+            # to-scale x axis piled the tick labels, values and percentages on
+            # top of each other.)
+            _bbox = dict(boxstyle="round,pad=0.10", fc="white", ec="none",
+                         alpha=0.80)
+            for x, y in pts:
+                ax.annotate(fmt % y, (x, y), xytext=(0, 5),
+                            textcoords="offset points", ha="center", va="bottom",
+                            fontsize=6.0, color=_INK, bbox=_bbox, zorder=5)
             if label_pct:
                 for (x0, y0), (x1, y1) in zip(pts, pts[1:]):
                     if abs(y0) < 1e-12:
                         continue
                     pct = 100.0 * (y1 - y0) / abs(y0)
                     inside = abs(pct) <= tol
-                    ax.annotate("%+.1f%%" % pct, ((x0 + x1) / 2, (y0 + y1) / 2),
-                                xytext=(0, 7), textcoords="offset points",
-                                ha="center", va="bottom", fontsize=6.5,
+                    ax.annotate("%+.1f%%" % pct, ((x0 + x1) / 2.0, (y0 + y1) / 2.0),
+                                xytext=(0, -12), textcoords="offset points",
+                                ha="center", va="top", fontsize=6.0,
                                 color=_INK if inside else _INK2,
-                                fontweight="bold" if inside else "normal")
+                                fontweight="bold" if inside else "normal",
+                                bbox=_bbox, zorder=5)
             return True
 
         _series(ax_xx, "kappa_xx" + suf, "%.1f", True)
@@ -655,21 +674,21 @@ def _write_kappa_vs_cutoff(out, per_cut, rep=None, cfg=None):
                     va="top", fontsize=9, fontweight="bold")
             if ax.get_yticks().size:
                 ax.yaxis.set_minor_locator(AutoMinorLocator(2))
-            if ch is not None:
-                ax.axvline(float(ch), color=_INK2, lw=0.7, ls=(0, (4, 2)), zorder=1)
-        if len(xs) > 1:
-            span = xs[-1] - xs[0]
-            ax_xx.set_xlim(xs[0] - 0.22 * span, xs[-1] + 0.10 * span)
-        else:                           # a single (nominal) cutoff: centre it
-            ax_xx.set_xlim(xs[0] - 0.6, xs[0] + 0.6)
+            if ch_idx is not None:
+                ax.axvline(float(ch_idx), color=_INK2, lw=0.7, ls=(0, (4, 2)),
+                           zorder=1)
+        ax_xx.set_xlim(-0.6, len(rows) - 0.4)
         for ax in (ax_yy, ax_rm):
             ax.set_xlabel(r"Third-order cutoff $r_c$ ($\AA$)")
-            ax.set_xticks(xs)
+            ax.set_xticks(xpos)
             ax.set_xticklabels(xticks or ["%.2f" % x for x in xs])
+            ax.tick_params(axis="x", labelsize=6.5, pad=1)
         fig.subplots_adjust(top=0.93, bottom=0.13, left=0.10, right=0.98)
         if doc.get("method"):
-            fig.text(0.10, 0.955, doc["method"], ha="left", va="bottom",
-                     fontsize=10, fontweight="bold", transform=fig.transFigure)
+            # 方法名标注在底部说明区（图注）左上（不放面板内）
+            fig.text(0.0, 0.0, doc["method"], ha="left", va="bottom",
+                     fontsize=8, fontweight="bold", color=_INK,
+                     transform=fig.transFigure)
         notes = ["T = 300 K; (n) = neighbour shells within $r_c$; "
                  "bold: |change| $\\leq$ %g%%" % tol]
         if len(rows) == 1:

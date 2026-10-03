@@ -117,11 +117,14 @@ _DESYM_FIX_ON = False
 IR_FIX = "auto"
 _IR_FIX_ON = False
 # patch_kz_cap（V125）：插值网格真空方向只留 2r+1 层（amset2d_plugin 的 kz_cap）。
-#   off（默认）/ on（= r 取 1）/ 正整数 r。单层能带沿 k_z 平、2D 核只用 q∥，所以 k_z 层数只是成本：
-#   WSe2/WS2 的 263×263×33 -> 263×263×3。合成体系迁移率差 < 0.15%；真实重叠的额外差别（slab 形状因子）
-#   估计 ~0.1% —— 先在 MoS₂ 上与已有结果对照（VERIFICATION V125）再用于生产。
-#   运行时核对能带沿 k_z 的最大差 <= KZ_FLAT_TOL_EV（eV），不满足就不截断。
-KZ_CAP_2D = "off"
+#   off / on（= r 取 1）/ 正整数 r。单层能带沿 k_z 平、2D 核只用 q∥，所以 k_z 层数只是成本：
+#   WSe2/WS2 的 263×263×33 -> 263×263×3。合成体系迁移率差 < 0.15%。
+#   运行时核对能带沿 k_z 的最大差 <= KZ_FLAT_TOL_EV（eV），不满足就不截断（照原样跑并告警）。
+# ★ V139（2026-10-02）：出厂改为 on。V130 定的规则是"MoS₂ (c) 对照通过 -> 2D 生产配置 = KZ_CAP_2D on"，
+#   V131 实测通过（面内平均 1.48% < 2%；WSe2 271×271×3、10 掺杂 × 9 温度全程 2 h 40 min），
+#   可这里的默认值一直没改：没在 step.conf 写 on 的材料（MoSe2 3918710）仍按 263×263×~33 跑，
+#   散射成本 ∝ k_z 层数²，弹性段 8 h 才 9%，超 24 h 墙时。要复现旧结果：step.conf 写 KZ_CAP_2D = off。
+KZ_CAP_2D = "on"
 KZ_FLAT_TOL_EV = 0.005
 _KZ_CAP_RMAX = None
 _GATE_SUMMARY = None
@@ -255,6 +258,10 @@ SYMMETRIZE_ELASTIC = True
 # patch_elastic_guard（V134）：弹性张量（2D 看面内块、3D 看 6×6）不正定 -> gen 报错退出（ADP 没有意义）。
 #   确需照跑：step.conf 写 ELASTIC_GUARD = false（只告警）。见 ke_common.check_elastic_stability。
 ELASTIC_GUARD = True
+# patch_lineage（V140）：上游同源闸门 —— 各步 POSCAR 与 S1 CONTCAR 不一致（S1 重新弛豫后没全部重跑）、
+#   或派生产物（S4 h5 / S7.1 形变势 / S2 画图 / S5.1）比来源的计算输出旧 -> 报错退出，不混用两版计算。
+#   见 ke_common.structure_lineage。确需照跑：step.conf 写 STRUCTURE_GUARD = false（只告警）。
+STRUCTURE_GUARD = True
 ELASTIC_DIR = "step6_elastic"
 # patch_deform_ref：形变势参考口径（2D 默认真空）。step7b 写出 deformation_vac.h5 就用它，
 # 否则退回 deformation.h5（AMSET 芯态对齐）。实测 CrS2：3.53 -> 5.86 eV，μ 差 2.76 倍。
@@ -346,6 +353,7 @@ SPEC = {
     "EPS_INF_OVERRIDE_BASIS": ("", "str"),
     "SYMMETRIZE_ELASTIC": (True, "bool"),
     "ELASTIC_GUARD": (True, "bool"),
+    "STRUCTURE_GUARD": (True, "bool"),
 }
 # --- amset2d 插件相关（可改）---
 PLUGIN_SRC_NAME = "amset2d_plugin.py"   # 与本脚本同目录，运行时复制到 OUTDIR_NAME
@@ -2276,6 +2284,7 @@ def main():
     global INTERPOLATION_FACTOR, INTERPOLATION_FACTOR_EXPLICIT, SCATTERING, WRITE_MESH, DOPING, TEMPERATURES
     global DESYM_FIX, _DESYM_FIX_ON, BANDGAP_OVERRIDE, BANDGAP_NOTE
     global EPS_INF_OVERRIDE, EPS_INF_OVERRIDE_BASIS, SYMMETRIZE_ELASTIC, ELASTIC_GUARD
+    global STRUCTURE_GUARD
     global IR_FIX, _IR_FIX_ON, KZ_CAP_2D, KZ_FLAT_TOL_EV, _KZ_CAP_RMAX
     global MEM_WARN_GIB, MEM_LIMIT_GIB, MEM_AUTO_EXCLUSIVE
     _conf_nworkers = None
@@ -2397,6 +2406,7 @@ def main():
                 EPS_INF_OVERRIDE_BASIS = str(_p["EPS_INF_OVERRIDE_BASIS"])
             SYMMETRIZE_ELASTIC = bool(_p["SYMMETRIZE_ELASTIC"])
             ELASTIC_GUARD = bool(_p["ELASTIC_GUARD"])
+            STRUCTURE_GUARD = bool(_p["STRUCTURE_GUARD"])
             # patch_mem_guard：内存粗估阈值 / 自动独占
             if _p["MEM_WARN_GIB"]:
                 MEM_WARN_GIB = int(_p["MEM_WARN_GIB"])
@@ -2410,6 +2420,10 @@ def main():
             print("[WARN] 读 step.conf 覆盖时出错（%s: %s）—— 出错之后的覆盖项未生效，"
                   "按出厂默认继续；请修 step.conf 或本脚本 SPEC。" % (type(_e).__name__, _e),
                   file=sys.stderr)
+
+    # ---- patch_lineage（V140）：上游同源 + 派生产物新鲜度，不通过就不生成 ----
+    if _HAS_KC:
+        kc.check_lineage(cwd, enabled=STRUCTURE_GUARD, label="S8.4")
 
     # ---- patch_desym_fix：相位补丁开关（必须在 _apply_inversion_rule 之前）----
     if _HAS_KC:

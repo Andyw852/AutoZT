@@ -102,7 +102,10 @@ SPEC = {
     "PHEASY_C2_CUTOFF": ("", "str"),         # fc2 cutoff in A; empty = none
     "PHEASY_C3_CUTOFF": ("", "str"),         # fc3 cutoff in A; empty = none
     "NULL_SPACE_EPS": (0.001, "float"),
-    "PHEASY_RASR": ("BHH", "str"),           # BH | H | BHH | none
+    # auto = BHH for a 2D slab, none for a bulk crystal; see the driver's
+    # cmd_fit_pheasy: BHH on a bulk cell drove the MnIn2Se4 pheasy force error
+    # from 0.62 % (none) to 8.9 % and produced spurious imaginary modes.
+    "PHEASY_RASR": ("auto", "str"),          # auto | BH | H | BHH | none
     "PHEASY_STD": (False, "bool"),           # standardise the training data
     # '' = auto: on when the resident GPU LASSO is requested (that backend only
     # accepts a TwoLevelSM, and pheasy builds a dense/CSR matrix for LASSO unless

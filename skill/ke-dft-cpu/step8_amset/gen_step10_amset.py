@@ -243,6 +243,10 @@ SYMMETRIZE_ELASTIC = True
 # patch_elastic_guard（V134）：弹性张量（2D 看面内块、3D 看 6×6）不正定 -> gen 报错退出（ADP 没有意义）。
 #   确需照跑：step.conf 写 ELASTIC_GUARD = false（只告警）。见 ke_common.check_elastic_stability。
 ELASTIC_GUARD = True
+# patch_lineage（V140）：上游同源闸门 —— 各步 POSCAR 与 S1 CONTCAR 不一致（S1 重新弛豫后没全部重跑）、
+#   或派生产物（S4 h5 / S7.1 形变势 / S2 画图 / S5.1）比来源的计算输出旧 -> 报错退出，不混用两版计算。
+#   见 ke_common.structure_lineage。确需照跑：step.conf 写 STRUCTURE_GUARD = false（只告警）。
+STRUCTURE_GUARD = True
 ELASTIC_DIR = "step6_elastic"
 # patch_deform_ref（2026-09-16）：形变势参考口径。step7b 若已写出
 # deformation_vac.h5（真空静电势零点，二维文献通行做法），2D 默认用它；
@@ -279,6 +283,7 @@ SPEC = {
     "EPS_INF_OVERRIDE_BASIS": ("", "str"),      # 2D 必填：layer | slab
     "SYMMETRIZE_ELASTIC": (True, "bool"),
     "ELASTIC_GUARD": (True, "bool"),
+    "STRUCTURE_GUARD": (True, "bool"),
     # patch_mesh_min：最终插值网格下限（None/0 = 不干预）。见文件头说明。
     "MESH_MIN": (MESH_MIN, "int"),
     "MESH_MIN_KZ": (MESH_MIN_KZ, "int"),
@@ -1852,6 +1857,7 @@ def main():
     #   _apply_eps_inf_override() 读到的仍是模块级 None，step.conf 的 ε∞ 覆盖**静默失效**
     #   （GaAs 用 HSE ε∞ 重跑 S8 会跑出与覆盖前相同的数）。test_gen_conf_wiring.py 防回归。
     global EPS_INF_OVERRIDE, EPS_INF_OVERRIDE_BASIS, DESYM_FIX, _DESYM_FIX_ON, SYMMETRIZE_ELASTIC, ELASTIC_GUARD
+    global STRUCTURE_GUARD
     global IR_FIX, _IR_FIX_ON
     global BANDGAP_OVERRIDE, BANDGAP_NOTE
     global MEM_WARN_GIB, MEM_LIMIT_GIB, MEM_AUTO_EXCLUSIVE
@@ -1924,6 +1930,7 @@ def main():
                 EPS_INF_OVERRIDE_BASIS = str(_p["EPS_INF_OVERRIDE_BASIS"])
             SYMMETRIZE_ELASTIC = bool(_p["SYMMETRIZE_ELASTIC"])
             ELASTIC_GUARD = bool(_p["ELASTIC_GUARD"])
+            STRUCTURE_GUARD = bool(_p["STRUCTURE_GUARD"])
             # patch_mesh_min：最终插值网格下限/上限（step.conf 覆盖；0/None = 不干预）
             global MESH_MIN, MESH_MIN_KZ, MESH_MIN_FMAX, MESH_MAX
             # ★ 2026-09-28：原来是 `if _v:` —— step.conf 写 0（注释说的"0 = 不干预"）会被当成
@@ -1965,6 +1972,10 @@ def main():
             print("[WARN] 读 step.conf 覆盖时出错（%s: %s）—— 出错之后的覆盖项未生效，"
                   "按出厂默认继续；请修 step.conf 或本脚本 SPEC。" % (type(_e).__name__, _e),
                   file=sys.stderr)
+
+    # ---- patch_lineage（V140）：上游同源 + 派生产物新鲜度，不通过就不生成 ----
+    if _HAS_KC:
+        kc.check_lineage(cwd, enabled=STRUCTURE_GUARD, label="S8")
 
     # ---- patch_desym_fix：相位补丁开关（必须在 _apply_inversion_rule 之前）----
     if _HAS_KC:

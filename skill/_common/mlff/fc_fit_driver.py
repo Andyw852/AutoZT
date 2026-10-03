@@ -139,11 +139,16 @@ def main():
             "无明显虚频" if stable else "存在虚频，本势下动力学不稳定，κ 无物理意义")
         print("[%s] %s" % ("OK" if stable else "FAIL", note))
 
-    # pheasy 质量门禁（alpha 撞边界）
+    # pheasy 质量门禁（.fit_gate_fail 由拟合步写：alpha 撞边界 / pheasy 过旧缺 cv_selection）
     if os.path.isfile(".fit_gate_fail"):
         stable = False
-        note = ("pheasy 拟合质量门禁未通过（alpha 撞网格边界），κ 已阻止。"
-                "加大 N_RANDOM/OVERSAMPLE 重跑。")
+        try:
+            _reason = Path(".fit_gate_fail").read_text(
+                encoding="utf-8", errors="ignore").strip()
+        except Exception:
+            _reason = ""
+        note = ("pheasy 拟合质量门禁未通过：%s。κ 已阻止。"
+                % (_reason or "见 .fit_gate_fail"))
         print("[FAIL] " + note)
 
     Path("phonon_summary.json").write_text(json.dumps(

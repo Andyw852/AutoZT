@@ -220,7 +220,7 @@ class GenWiringTests(unittest.TestCase):
         self.assertEqual(f("on"), 1)
         self.assertEqual(f("2"), 2)
         self.assertIsNone(f("maybe"))
-        self.assertEqual(self.G14.KZ_CAP_2D, "off")                        # 出厂关
+        self.assertEqual(self.G14.KZ_CAP_2D, "on")                         # 出厂开（V139）
 
     def test_vacuum_axis_same_as_plugin_and_interp_mesh(self):
         from pymatgen.core import Lattice, Structure
