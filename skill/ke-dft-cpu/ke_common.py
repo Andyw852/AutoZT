@@ -360,6 +360,105 @@ def invalidate_downstream(cwd, step, reason, _seen=None):
 
 
 # --------------------------------------------------------------------------
+# [patch_walltime V144] 大 VASP 作业的墙时预估（S6 gen 用；tools/vasp_eta.py 对在跑的作业外推）
+#   起因：Mo2S3 S6（IBRION=6，20 原子，NFREE=4）跑满 regular 的 24 h 被 SLURM 杀掉（3918831，
+#   TIMEOUT 24:00:21），白跑一天；8 月 Zn5O3 的 S2.3/S6、GaAs S5（HSE）也都撞过墙时。
+#   IBRION=6 的 SCF 次数在 gen 时就能算出来；每步耗时用 S1 的离子步粗估，跑起来以后用实测外推。
+# --------------------------------------------------------------------------
+# 没写 --time 时按 QoS 的上限（jzzn 实测：regular 24 h —— 3918831 在 24:00:21 被杀；premium 48 h）。
+WALLTIME_BY_QOS_H = {"regular": 24.0, "premium": 48.0}
+WALLTIME_DEFAULT_H = 24.0
+WALLTIME_WARN_FRAC = 0.8
+
+
+def _hms_to_h(v):
+    """SLURM 时间格式 -> 小时。认不出返回 None。
+    无天数：MM / MM:SS / HH:MM:SS；有天数：D-HH / D-HH:MM / D-HH:MM:SS。"""
+    v = str(v).strip()
+    try:
+        if "-" in v:
+            d, rest = v.split("-", 1)
+            p = [float(x) for x in rest.split(":")] + [0.0, 0.0]
+            return int(d) * 24 + p[0] + p[1] / 60.0 + p[2] / 3600.0
+        p = [float(x) for x in v.split(":")]
+        if len(p) == 1:
+            return p[0] / 60.0
+        if len(p) == 2:
+            return p[0] / 60.0 + p[1] / 3600.0
+        if len(p) == 3:
+            return p[0] + p[1] / 60.0 + p[2] / 3600.0
+    except (ValueError, IndexError):
+        pass
+    return None
+
+
+def walltime_limit_h(submit_sh, by_qos=None, default_h=WALLTIME_DEFAULT_H):
+    """submit.sh 的墙时上限（小时）与来源说明：--time/-t 优先，否则按 --qos 查表，否则默认。"""
+    by_qos = WALLTIME_BY_QOS_H if by_qos is None else by_qos
+    try:
+        text = Path(submit_sh).read_text(errors="ignore")
+    except OSError:
+        return default_h, "读不到 submit.sh，按默认 %g h" % default_h
+    m = re.search(r"^#SBATCH\s+(?:--time[=\s]|-t\s+)(\S+)", text, re.M)
+    if m:
+        h = _hms_to_h(m.group(1))
+        if h:
+            return h, "submit.sh --time=%s" % m.group(1)
+    m = re.search(r"^#SBATCH\s+--qos[=\s](\S+)", text, re.M)
+    if m and m.group(1) in by_qos:
+        return by_qos[m.group(1)], "QoS %s 的上限" % m.group(1)
+    return default_h, "submit.sh 没写 --time%s，按默认 %g h" % (
+        "（QoS %s 不在表里）" % m.group(1) if m else "", default_h)
+
+
+def outcar_loop_times(outcar):
+    """OUTCAR 里每个 LOOP+（一个离子步/一个有限差分构型）的 real time（秒）。"""
+    out = []
+    try:
+        with open(outcar, errors="ignore") as fh:
+            for ln in fh:
+                if "LOOP+" in ln and "real time" in ln:
+                    try:
+                        out.append(float(ln.rsplit("real time", 1)[1].split()[0]))
+                    except (IndexError, ValueError):
+                        pass
+    except OSError:
+        pass
+    return out
+
+
+def ibrion6_steps(n_atoms, nfree, isif=3, n_ineq=None):
+    """IBRION=6 的 SCF 次数（上界）：初始 1 次 + NFREE × 3 × 不等价原子数 + （ISIF≥3）NFREE × 6 个应变。
+    有对称性时 VASP 只位移不等价原子、而且未必三个方向都要，所以这是上界。"""
+    n = int(n_ineq if n_ineq else n_atoms)
+    nf = int(nfree)
+    return 1 + nf * 3 * n + (nf * 6 if int(isif) >= 3 else 0)
+
+
+def n_inequivalent_atoms(poscar, symprec=1e-3):
+    """spglib 的不等价原子数；取不到返回 None（调用方按全部原子算）。"""
+    try:
+        import numpy as np
+        import spglib
+        lat, counts, frac, _ = read_poscar_cell(poscar)
+        nums = [i for i, c in enumerate(counts) for _ in range(c)]
+        ds = spglib.get_symmetry_dataset((lat, frac, nums), symprec=symprec)
+        if ds is None:
+            return None
+        eq = ds["equivalent_atoms"] if isinstance(ds, dict) else ds.equivalent_atoms
+        return int(len(np.unique(eq)))
+    except Exception:                                                # noqa: BLE001
+        return None
+
+
+def walltime_verdict(n_steps, t_step_s, limit_h, done_steps=0, elapsed_s=0.0, frac=WALLTIME_WARN_FRAC):
+    """(预计总小时, 是否超过 frac × 上限)。done/elapsed 给了就按"已用 + 剩余步数 × 每步"算。"""
+    remaining = max(int(n_steps) - int(done_steps), 0)
+    total_h = (float(elapsed_s) + remaining * float(t_step_s)) / 3600.0
+    return total_h, total_h > frac * float(limit_h)
+
+
+# --------------------------------------------------------------------------
 # [patch_carrier_sign V143] AMSET 掺杂符号 -> 载流子：**唯一真源**，读 transport.json 的脚本一律用它。
 #   AMSET 0.5.1 FermiDos 文档："A negative doping concentration indicates the majority carriers are
 #   electrons (n-type doping); a positive doping concentration indicates holes are the majority

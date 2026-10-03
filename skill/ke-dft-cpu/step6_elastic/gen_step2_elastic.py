@@ -54,6 +54,13 @@ KBLOWUP = ".FALSE."
 # 只在确认 KBLOWUP 无效后再用。None = 不强制，沿用原有的 ISYM 继承逻辑。
 ISYM_FORCE = None
 
+# ---- patch_walltime（V144）：提交前粗估墙时 ----
+#   SCF 次数 = 1 + NFREE×3×不等价原子数 + NFREE×6（ISIF=3），gen 时就能算；每步耗时取 S1 离子步
+#   real time 的中位数 × ELASTIC_STEP_FACTOR（本步 k 网格更密、NCORE=1，通常更慢；2.0 是保守值，
+#   用 tools/vasp_eta.py 的实测再校准）。超过墙时上限的 80% 就告警，并列出办法。
+#   Mo2S3（20 原子、NFREE=4、ISYM 关）= 265 次 SCF，实测每步约 6.5 min ≈ 29 h > regular 的 24 h。
+ELASTIC_STEP_FACTOR = 2.0
+
 # ---- KPOINTS（VASPKIT；弹性比静态更密）----
 RUN_VASPKIT = True
 VASPKIT_EXE = "vaspkit"
@@ -306,6 +313,49 @@ def main():
     for name in ["POSCAR", "INCAR", "submit.sh", "KPOINTS", "POTCAR", METHOD_FILE]:
         print(f"[{'OK' if (step2 / name).exists() else 'MISSING'}] {name}")
     print("\n[DONE] step2_elastic 已生成，可用 vasp_std 提交")
+    _walltime_estimate(step1, step2)      # 放在最后：autozt 回显的是 gen 的末几行
+
+
+def _walltime_estimate(step1, step2):
+    """patch_walltime（V144）：IBRION=6 的 SCF 次数 × S1 每步耗时 -> 预计墙时，与 submit.sh 的上限比。"""
+    try:
+        import json as _json
+        import statistics as _st
+        import ke_common as _kc
+    except ImportError:
+        return None
+    inc = {k.upper(): str(v) for k, v in parse_incar(step2 / "INCAR")}
+    lat, counts, _f, _s = _kc.read_poscar_cell(step2 / "POSCAR")
+    n_atoms = int(sum(counts))
+    isym = inc.get("ISYM", "2").strip()
+    n_ineq = n_atoms if isym in ("0", "-1") else (_kc.n_inequivalent_atoms(step2 / "POSCAR") or n_atoms)
+    steps = _kc.ibrion6_steps(n_atoms, inc.get("NFREE", NFREE), inc.get("ISIF", "3"), n_ineq)
+    limit_h, limit_src = _kc.walltime_limit_h(step2 / "submit.sh")
+    t1 = _kc.outcar_loop_times(step1 / "OUTCAR")
+    rec = {"scf_steps_upper_bound": steps, "n_atoms": n_atoms, "n_inequivalent": n_ineq,
+           "NFREE": inc.get("NFREE", NFREE), "ISYM": isym, "limit_h": limit_h, "limit_source": limit_src}
+    if t1:
+        t_step = _st.median(t1) * ELASTIC_STEP_FACTOR
+        est_h, over = _kc.walltime_verdict(steps, t_step, limit_h)
+        rec.update({"t_step_s": round(t_step, 1), "s1_loop_median_s": round(_st.median(t1), 1),
+                    "factor": ELASTIC_STEP_FACTOR, "estimate_h": round(est_h, 1), "over": bool(over)})
+    (step2 / "walltime_estimate.json").write_text(_json.dumps(rec, ensure_ascii=False, indent=1),
+                                                  encoding="utf-8")
+    head = ("[..] 墙时预估（V144）：IBRION=6 共约 %d 次 SCF（%d 原子，不等价 %d，NFREE=%s，ISYM=%s）；上限 %.0f h（%s）"
+            % (steps, n_atoms, n_ineq, rec["NFREE"], isym, limit_h, limit_src))
+    if not t1:
+        print(head + "；S1 的 OUTCAR 里没有 LOOP+，无法估每步耗时 —— 跑起来后用 tools/vasp_eta.py 看")
+        return rec
+    print(head)
+    msg = ("每步约 %.1f min（S1 离子步中位数 %.0f s × %.1f）-> 预计 %.1f h"
+           % (rec["t_step_s"] / 60.0, rec["s1_loop_median_s"], ELASTIC_STEP_FACTOR, rec["estimate_h"]))
+    if rec["over"]:
+        print("[WARN] ★ %s，超过上限 %.0f h 的 %.0f%%：照这样提交多半会被 SLURM 按 TIMEOUT 杀掉，IBRION=6 不能续算。"
+              "办法：conf --set submit.qos=premium（48 h）或 submit.time=…；或 NFREE=2（SCF 次数约减半，精度略降）；"
+              "或加节点。跑起来后用 tools/vasp_eta.py 复核" % (msg, limit_h, 100 * _kc.WALLTIME_WARN_FRAC))
+    else:
+        print("[OK] %s，在上限 %.0f h 之内" % (msg, limit_h))
+    return rec
 
 
 if __name__ == "__main__":

@@ -6854,3 +6854,35 @@ dp_valley_probe 的说明和输出已按此改写（原文"倍数接近实测才
 - rep_transport 的载流子列；
 - S8.2 报错带原因。
 
+## V144（2026-10-03）：大 VASP 作业的墙时预估 —— Mo2S3 S6 跑满 24 h 被杀
+
+**现象**：Mo2S3 S6_elastic（3918831）TIMEOUT 24:00:21（regular QoS），还没写出 TOTAL ELASTIC MODULI。
+IBRION=6 不能续算，一天白跑了；重交到 premium（48 h，3919101）。这已经是第三次了：
+- 8 月 Zn₅O₃ 的 S2.3 和 S6 都跑了约 26 h 被杀（HANDOVER §10.4）；
+- GaAs S5（HSE）也超时过。
+
+**算一笔账**：IBRION=6 的 SCF 次数 = 1 + NFREE×3×不等价原子数 + NFREE×6（ISIF=3）。
+- Mo2S3：20 原子，ISYM 关，NFREE=4，共 265 次；实测每步约 6.5 min，约 29 h，超过 24 h。
+- 这个数在 gen 时就能算出来，跑起来几个小时后就能按实测外推。
+
+**改动**：
+- ke_common：
+  - `walltime_limit_h`：submit.sh 的 --time，否则按 QoS 查 `WALLTIME_BY_QOS_H`（jzzn：regular 24 h、premium 48 h），否则 24 h；
+  - `outcar_loop_times`、`ibrion6_steps`、`n_inequivalent_atoms`（spglib，取不到按全部原子算）、`walltime_verdict`。
+- S6 gen：生成后打印 SCF 次数与预计墙时，并写 walltime_estimate.json。
+  - 每步耗时 = S1 离子步中位数 × `ELASTIC_STEP_FACTOR`（2.0，保守：k 网格更密、NCORE=1）。
+  - 超过上限 80% 时打 ★ 告警，列出办法：`conf --set submit.qos=premium` / `submit.time`、NFREE=2（约减半）、加节点。
+  - 放在 gen 输出的最后（autozt 回显末几行）。
+- tools/vasp_eta.py（新）：对在跑的作业按已完成步数与最近每步耗时外推，预计超过上限 80% 时退出码 1。
+  - IBRION=7/8、LCALCEPS、弛豫的总步数事先不知道，只报每步耗时。
+
+**用户侧**：
+- Mo2S3 S6（3919101）跑起来 1–2 h 后，在 step6_elastic 里跑一次 `python <skill>/ke-dft-cpu/tools/vasp_eta.py`，
+  预计应在 30 h 左右，低于 48 h。
+- 用这个实测回头校准 ELASTIC_STEP_FACTOR：实测每步 ÷ S1 离子步中位数。
+
+测试：新增 test_walltime（9 项）：
+- 时间格式、--time/--qos 推断、LOOP+、步数、不等价原子；
+- 用 Mo2S3 实测复现 regular 超时、premium 来得及；DFPT 只报每步；
+- S6 gen 的预估、告警、json，以及它在 [DONE] 之后。
+
