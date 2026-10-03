@@ -101,6 +101,19 @@ _STEP1_CANDS = ("step1_opt", "step1_std_opt",
                 "step1c_PBE_opt", "step1b_PBE_opt", "step1a_PBE_opt")
 
 
+def _exc_brief(e):
+    """[V150] 兜底 except 的说明：类型 + 信息 + 本脚本里出错的那一行（以前只写类型名，WS2 的
+    "二次型拟合异常：IndexError" 无从定位）。"""
+    import traceback
+    msg = "%s: %s" % (type(e).__name__, str(e)[:200]) if str(e) else type(e).__name__
+    here = [f for f in traceback.extract_tb(e.__traceback__)
+            if Path(f.filename).name == Path(__file__).name]
+    if here:
+        f = here[-1]
+        msg += "（%s:%d `%s`）" % (Path(f.filename).name, f.lineno, (f.line or "").strip()[:120])
+    return msg
+
+
 def _manual_prov(key):
     """[V148] 手填值的来源：step.conf（本材料）/ 脚本 MANUAL（所有材料）。"""
     return {"step.conf": "manual(step.conf)",
@@ -465,7 +478,7 @@ def get_effective_mass(cwd, carrier, is_2d):
         return round(float(m), 4), "能带边抛物拟合(%s, %d点, R<%.2f, spin=%d)" % (
             "面内" if is_2d else "3D", int(np.count_nonzero(sel)), Rused, isp)
     except Exception as e:
-        return None, "抛物拟合异常：%s" % type(e).__name__
+        return None, "抛物拟合异常：%s" % _exc_brief(e)
 
 
 # ---------- E1：从 deformation.h5 带边取（尽力） ----------
@@ -564,7 +577,7 @@ def get_E1(cwd, carrier):
         return round(float(e1), 4), (
             "deformation.h5 带边(b=%d,k=%d,%s)面内对角(旧逻辑)" % (b, k, dset))
     except Exception as e:
-        return None, "读 deformation.h5 异常：%s" % type(e).__name__
+        return None, "读 deformation.h5 异常：%s" % _exc_brief(e)
 
 
 def _band_edge_index(cwd, carrier, nband, nkpt):
@@ -960,7 +973,7 @@ def get_effective_mass_aniso(cwd, carrier, is_2d):
                   % (carrier, off))
         return (round(mx, 4), round(my, 4)), prov
     except Exception as e:
-        return None, "二次型拟合异常：%s" % type(e).__name__
+        return None, "二次型拟合异常：%s" % _exc_brief(e)
 
 
 def get_E1_aniso(cwd, carrier):
@@ -1012,7 +1025,7 @@ def get_E1_aniso(cwd, carrier):
                  round(float(abs(dp[b, k, 1, 1])), 4)),
                 "deformation.h5 带边(b=%d,k=%d,%s) D_xx/D_yy(旧逻辑)" % (b, k, dset))
     except Exception as e:
-        return None, "读 deformation.h5 异常：%s" % type(e).__name__
+        return None, "读 deformation.h5 异常：%s" % _exc_brief(e)
 
 
 def mobility_dpt_2d_aniso(C_alpha, m_alpha, m_d, E1_eV, T):

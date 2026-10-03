@@ -266,5 +266,34 @@ class DptReasonTests(unittest.TestCase):
         self.assertNotIn('miss.add("m*←S3_uniform(vasprun/网格)")', s)
 
 
+
+class ExcBriefTests(unittest.TestCase):
+    """V150：兜底 except 写出类型 + 信息 + 本脚本里出错的行（WS2 只看到"二次型拟合异常：IndexError"）。"""
+
+    def test_brief_has_line(self):
+        sys.path.insert(0, str(ROOT / "step8.2_dpt"))
+        import gen_step12_dpt as D
+        try:
+            D.mobility_dpt(True, None, 1.0, 1.0, 300.0)
+        except Exception as e:                                           # noqa: BLE001
+            msg = D._exc_brief(e)
+        self.assertIn("TypeError", msg)
+        self.assertRegex(msg, r"gen_step12_dpt\.py:\d+ `")
+
+    def test_aniso_failure_reports_where(self):
+        from unittest import mock
+        sys.path.insert(0, str(ROOT / "step8.2_dpt"))
+        import gen_step12_dpt as D
+        m = Path(tempfile.mkdtemp())
+        (m / D.UNIFORM_DIR).mkdir(parents=True)
+        (m / D.UNIFORM_DIR / "vasprun.xml").write_text("<x/>")
+        fake = GridResolutionTests()._fake_vasprun()
+        with mock.patch("pymatgen.io.vasp.Vasprun", lambda *a, **k: fake), \
+                mock.patch.object(D, "_band_edges_json", lambda cwd: {"electron": {"hits": [{"k_frac": [0, 0]}]}}):
+            got, prov = D.get_effective_mass_aniso(m, "electron", True)
+        self.assertIsNone(got)
+        self.assertIn("二次型拟合异常：", prov)
+        self.assertRegex(prov, r"gen_step12_dpt\.py:\d+")
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
