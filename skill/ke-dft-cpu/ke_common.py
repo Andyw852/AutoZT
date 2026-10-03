@@ -601,8 +601,13 @@ def read_poscar_cell(path):
 
 
 def cell_deviation(a, b):
-    """两个 read_poscar_cell 结果的最大偏差（Å）：晶格矢量逐分量、原子位置（最小像）。
-    原子数或元素对不上 -> inf。"""
+    """两个 read_poscar_cell 结果的最大偏差（Å）：晶格矢量逐分量、原子位置（最小像，**扣除整体平移**）。
+    原子数或元素对不上 -> inf。
+
+    [V149] 扣整体平移：S3/S3b 的 gen 调 align_origin 把原点刚性平移到 τ=0 的位置（V109，绕开 AMSET
+    去对称化 bug），是同一个结构。V140 不扣平移，WS2（S1 原点不在高对称位置）的 S3 被报"差 4.45 Å、旧结构"
+    —— 三个原子同移 [0, 0, 4.4494] Å，S8/S8.4 的闸门会据此拦住正常的 rerun。真正的旧结构（重新弛豫前的
+    晶格/相对位置）扣完平移照样报。"""
     import numpy as np
     la, ca, fa, sa = a
     lb, cb, fb, sb = b
@@ -611,8 +616,13 @@ def cell_deviation(a, b):
     dl = float(np.abs(la - lb).max())
     d = fb - fa
     d -= np.rint(d)
+    if len(d):
+        d -= d[0]                       # 以第一个原子为参照扣平移，再按最小像折回
+        d -= np.rint(d)
+        d -= d.mean(axis=0)             # 剩下的是小量，取平均再扣一次（对称分摊噪声）
     dp = float(np.linalg.norm(np.dot(d, la), axis=1).max()) if len(d) else 0.0
     return max(dl, dp)
+
 
 
 def s1_contcar(cwd):

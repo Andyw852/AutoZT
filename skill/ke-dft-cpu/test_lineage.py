@@ -12,6 +12,7 @@
    check_lineage 开着就退出、关着只告警。
 3) 失效：S3 目录是新建的（rerun）-> S4 的 h5 与 S8 归档；S7 -> S7.1 三个产物 + S8；各 gen 无条件调用。
 4) S8/S8.4 的 gen 接线；tools/lineage_check.py 的报告与 --invalidate-from。
+5) V149：比对扣除整体平移（S3/S3b 的 align_origin 是刚性平移，WS2 被误报 4.45 Å）；平移之外的位移照报。
 """
 import contextlib
 import io
@@ -83,6 +84,46 @@ class CellTests(unittest.TestCase):
         self.assertLess(kc.cell_deviation(ref, kc.read_poscar_cell(_w(d / "e", poscar(frac=frac3)))), 1e-6)
         bad = poscar().replace("Mo S\n1 2", "Mo S\n2 1")
         self.assertEqual(kc.cell_deviation(ref, kc.read_poscar_cell(_w(d / "f", bad))), float("inf"))
+
+    def test_rigid_translation_v149(self):
+        """S3/S3b 的 align_origin 是刚性平移：WS2 三个原子同移 [0, 0, 4.4494] Å，不算不同；平移之外的位移照报。"""
+        import numpy as np
+        d = Path(tempfile.mkdtemp())
+        ref = kc.read_poscar_cell(_w(d / "a", poscar()))
+        for t in ([0.0, 0.0, 4.4494 / 20.0], [0.37, -0.81, 0.6], [0.5, 0.5, 0.5]):
+            fr = (np.asarray(FRAC) + t) % 1.0
+            self.assertLess(kc.cell_deviation(ref, kc.read_poscar_cell(_w(d / "b", poscar(frac=fr)))), 1e-6, t)
+        fr = (np.asarray(FRAC) + [0.0, 0.0, 0.2225]) % 1.0
+        fr[2, 2] += 0.0005                                                   # 平移 + 一个 S 动 0.01 Å
+        self.assertGreater(kc.cell_deviation(ref, kc.read_poscar_cell(_w(d / "c", poscar(frac=fr)))), 5e-3)
+        fr = np.asarray(FRAC) + [0.0, 0.0, 0.2225]
+        lat2 = [[x * 1.003 for x in r] if i < 2 else r for i, r in enumerate(LAT)]
+        self.assertGreater(kc.cell_deviation(ref, kc.read_poscar_cell(_w(d / "e", poscar(lat=lat2, frac=fr)))),
+                           5e-3)
+
+    def test_align_origin_output_is_same_structure_v149(self):
+        """端到端：WS2 式 slab（原点不在高对称位置）经 align_origin 改写后，lineage 不报。"""
+        try:
+            from pymatgen.core import Lattice, Structure
+        except ImportError:
+            self.skipTest("需要 pymatgen + spglib")
+        import shutil
+        m = Path(tempfile.mkdtemp())
+        st = Structure(Lattice.hexagonal(3.18, 20.0), ["W", "S", "S"],
+                       [[0.11, 0.07, 0.13], [0.11 + 1 / 3, 0.07 + 2 / 3, 0.208], [0.11 + 1 / 3, 0.07 + 2 / 3, 0.052]])
+        (m / "step1_opt").mkdir()
+        (m / "step3_uniform").mkdir()
+        st.to(filename=str(m / "step1_opt" / "CONTCAR"), fmt="poscar")
+        shutil.copy(m / "step1_opt" / "CONTCAR", m / "step3_uniform" / "POSCAR")
+        with contextlib.redirect_stdout(io.StringIO()):
+            ao = kc.align_origin(m / "step3_uniform" / "POSCAR")
+        self.assertIsNotNone(ao, "align_origin 应当平移（原点不在高对称位置）")
+        a = kc.read_poscar_cell(m / "step1_opt" / "CONTCAR")
+        b = kc.read_poscar_cell(m / "step3_uniform" / "POSCAR")
+        import numpy as np
+        self.assertGreater(float(np.abs(b[2] - a[2]).max()), 1e-3)          # 坐标确实变了
+        self.assertLess(kc.cell_deviation(a, b), kc.LINEAGE_TOL_A)
+        self.assertEqual(kc.structure_lineage(m)[1], [])
 
 
 def _material(new_s1=True):

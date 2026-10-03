@@ -7020,3 +7020,27 @@ GaAs 电子受 POP 限制，ADP-only 本来就大。
   脚本被改时 ★；E1_SOURCE/FORCE_NSTEP 非法值退出；重跑归档 S8.1/S8.3；main 端到端写出 overrides 与 manual(step.conf)；
 - lineage_check：查出 S8.1 旧于 S8.2、S8 带隙 1.42 ≠ 画图 1.30；S8 闸门（structure_lineage）不报这些；
   --invalidate-from 归档 S8 与 S8.1。
+
+## V149（2026-10-03）：lineage 比对扣除整体平移 —— WS2 的 S3 "差 4.45 Å" 是误报
+
+**实测**（用户侧，V148 的 lineage_check 全项目扫描）：WS2 的 step3_uniform/POSCAR 与 S1 CONTCAR "最大偏差 4.45 Å"。
+但两边晶格完全相同，三个原子同移 [0, 0, 4.4494] Å，是同一个结构。
+
+**根因**（V140 的 bug）：
+- S3/S3b 的 gen 会调 `ke_common.align_origin`，把原点刚性平移到所有对称操作的分数平移 τ 都为 0 的位置
+  （V109：绕开 AMSET 去对称化的 bug；2D slab 另把层心放到 z=0.5）。
+- WS2 的 S1 原点不在高对称位置，所以 S3 被平移了。
+- V140 的 `cell_deviation` 只按最小像比逐原子位置，没有扣整体平移，于是误报。
+- 后果不只是报告错：S8/S8.4 的 gen 闸门（STRUCTURE_GUARD）会据此**拦住正常的 rerun**。
+- MoS2/MoSe2/WSe2 的 S1 原点本来就在高对称位置，align_origin 不平移，所以没暴露。
+
+**改动**：
+- `cell_deviation` 先以第一个原子为参照扣掉平移（最小像），剩余小量再扣一次平均值，然后取最大位移。
+- 晶格差、平移之外的相对位移照报：真正的旧结构（重新弛豫前的晶格或相对位置）不受影响。
+
+**需要回头复核**：V140 报过的 P1_Al-AlN（2.11 Å）、P1_Zn-ZnO（0.4619 Å）、P1_Mo-MoS2（0.1263 Å），
+如果只报在 S3/S3b 上，可能也是这个误报，要用新版 lineage_check 重扫。
+
+**测试**：test_lineage.py 新增两项（去掉修复时两项都失败，分别是 4.45 Å 和 7.41 Å）：
+- 刚性平移（WS2 的 z 平移、任意方向、半格矢）不报；平移加上一个 S 动 0.01 Å 报；平移加上晶格 0.3% 报；
+- 端到端：WS2 式 slab（原点不在高对称位置）用 `align_origin` 改写 S3 的 POSCAR，坐标确实变了，lineage 不报。
