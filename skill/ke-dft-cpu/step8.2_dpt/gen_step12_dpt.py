@@ -114,6 +114,11 @@ def _spin_arrays(v):
 #   的 DPT 空穴迁移率因此是 276 万 cm²/Vs。简并重数记在 _EDGE_DEGEN 里，写进 m_provenance。
 DEGEN_TOL_EV = 0.005
 _EDGE_DEGEN = {}
+# [V147] 网格分辨不出带边曲率：最近网格点高出带边 > NN_KT_MAX·kT 时，拟合量到的是能量平均的质量，
+#   带边非抛物时偏重。GaAs（PBEsol 带隙 0.418 eV）：S3 最近点高出 CBM 约 0.25 eV（~10 kT），拟合 0.0523，
+#   AMSET 插值密网格（amset eff-mass）给 0.030；ADP ∝ m*^(−5/2) -> ADP/DPT 正好差 4 倍。
+NN_KT_MAX = 4.0
+_EDGE_NN_DE = {}
 
 
 def _find_band_edge(v, carrier, occ_tol=0.5):
@@ -285,6 +290,9 @@ def get_effective_mass(cwd, carrier, is_2d):
         q2n, den = q2[nz], de_use[nz]
         if len(q2n) < 3:
             return None, "带边面内点太少（网格太粗）"
+        # [V147] 最近一壳网格点离带边多高（中位数）
+        _shell = q2n <= float(q2n.min()) * 1.05
+        _EDGE_NN_DE[carrier] = float(np.median(np.abs(den[_shell])))
 
         # [GUARD-2026-09-23] 方向分解 fit 只在带边锚在【真高对称点】上才可靠。
         # 径向（偶次）fit 吸收不了线性梯度：六方胞带边在 K=(1/3,1/3)，若网格 N 不是
@@ -946,15 +954,31 @@ def _aniso_block(cwd, is_2d, carrier, T):
     return blk
 
 
+def _grid_resolution_note(carrier, m, mprov, T):
+    """[V147] 最近网格点高出带边 > NN_KT_MAX·kT -> m_provenance 注明并告警。返回新的 mprov。"""
+    nn = _EDGE_NN_DE.get(carrier)
+    kt = KB * T / E_C
+    if m is None or mprov == "manual" or nn is None or nn <= NN_KT_MAX * kt:
+        return mprov
+    print("[WARN] %s 的 m* 网格分辨不足：最近网格点高出带边 %.0f meV（%.1f kT），拟合量到的是能量平均的质量，"
+          "带边非抛物时偏重（GaAs 实测 0.0523 vs 带边 0.030）。可靠值：在 S8 目录跑 "
+          "amset eff-mass vasprun.xml -i <interpolation_factor> -d <掺杂> -t %g --bandgap <带隙> --average，"
+          "填进 MANUAL['m_eff_%s']" % (carrier, 1000 * nn, nn / kt, T, carrier))
+    return ("%s；网格分辨不出带边曲率（最近网格点高出带边 %.0f meV = %.1f kT）：m* 是能量平均的值，带边非抛物时偏重"
+            % (mprov, 1000 * nn, nn / kt))
+
+
 def _one_carrier(cwd, is_2d, carrier, T):
     C, Cunit, Cprov = get_C(cwd, is_2d)
     _EDGE_DEGEN.pop(carrier, None)
+    _EDGE_NN_DE.pop(carrier, None)
     m, mprov = get_effective_mass(cwd, carrier, is_2d)
     _nd = _EDGE_DEGEN.get(carrier, 1)
     if m is not None and _nd > 1:                                   # [V145]
         mprov = "%s；带边 %d 重简并，取重带（单带 DPT 对简并带边只是近似）" % (mprov, _nd)
         print("[WARN] %s 带边 %d 重简并（如立方半导体 Γ 点的价带顶）：m* 取重带；单带 DPT 公式只是近似，"
               "与 AMSET 的差别不能当作问题" % (carrier, _nd))
+    mprov = _grid_resolution_note(carrier, m, mprov, T)
     e1, e1prov = get_E1(cwd, carrier)
     rec = {"carrier": carrier,
            "inputs": {"C_%s" % ("2D_N_per_m" if is_2d else "3D_Pa"): C,
