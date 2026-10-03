@@ -904,7 +904,9 @@ def get_effective_mass_aniso(cwd, carrier, is_2d):
 
         # [AXIS 覆盖] 每个面内倒格矢方向都要有非零步的点，否则该方向曲率无约束。
         # LS 的 kx 轴只有 N≈2 分割，会在这里干脆报错而不是返回假 m*_x。
-        _dfrac = kfrac[sel] - kfrac[k0]
+        # [V151] sel 是在面内子集（zm）上算的掩码，必须先取 kfrac[zm]：2D 的 S3 常用 kz≥3（WS2 48×48×3），
+        #   全 BZ 6912 点 vs 面内 2304 点 -> IndexError，分方向 m* 整块失败（kz=1 时两者等长，测不出来）。
+        _dfrac = kfrac[zm][sel] - kfrac[k0]
         _dfrac -= np.round(_dfrac)
         _steps = np.rint(_dfrac * mesh).astype(int)
         for _i in (0, 1):

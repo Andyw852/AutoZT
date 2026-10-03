@@ -295,5 +295,58 @@ class ExcBriefTests(unittest.TestCase):
         self.assertIn("二次型拟合异常：", prov)
         self.assertRegex(prov, r"gen_step12_dpt\.py:\d+")
 
+
+class AnisoKzTests(unittest.TestCase):
+    """V151：2D 的 S3 用 kz≥3（WS2 48×48×3）时，分方向拟合的面内掩码被拿去索引全 BZ 的 kfrac -> IndexError
+    （6912 vs 2304），分方向 m* 整块失败；kz=1 时两者等长测不出来。合成六方单层，K 谷抛物 m_c=0.30、m_v=0.42。"""
+
+    def _fake(self, n, nz):
+        import types
+        import numpy as np
+        try:
+            import spglib
+            from pymatgen.core import Lattice, Structure
+            from pymatgen.electronic_structure.core import Spin
+        except ImportError:
+            self.skipTest("需要 pymatgen + spglib")
+        st = Structure(Lattice.hexagonal(3.18, 20.0), ["W", "S", "S"],
+                       [[0, 0, 0.5], [1 / 3, 2 / 3, 0.578], [1 / 3, 2 / 3, 0.422]])
+        mp, grid = spglib.get_ir_reciprocal_mesh([n, n, nz], (st.lattice.matrix, st.frac_coords, [74, 16, 16]),
+                                                 is_shift=[0, 0, 0])
+        kf = grid[np.unique(mp)] / np.array([n, n, nz], float)
+        kf -= np.rint(kf)
+        recip = st.lattice.reciprocal_lattice.matrix
+        ks = [np.array(x + [0.0]) for x in ([1 / 3, 1 / 3], [-1 / 3, -1 / 3], [2 / 3, -1 / 3], [-2 / 3, 1 / 3],
+                                             [1 / 3, -2 / 3], [-1 / 3, 2 / 3])]
+
+        def band(e0, m, sgn):
+            out = []
+            for c in ks:
+                d = kf - c
+                d -= np.rint(d)
+                out.append(e0 + sgn * 3.80998 * np.sum((d @ recip) ** 2, axis=1) / m)
+            return np.min(out, axis=0) if sgn > 0 else np.max(out, axis=0)
+        ene = np.stack([band(0.0, 0.42, -1) - 1.0, band(0.0, 0.42, -1), band(1.6, 0.30, +1)], axis=1)
+        occ = np.stack([np.ones(len(kf))] * 2 + [np.zeros(len(kf))], axis=1)
+        return types.SimpleNamespace(final_structure=st, actual_kpoints=kf.tolist(), parameters={"ISPIN": 1},
+                                     eigenvalues={Spin.up: np.stack([ene, occ], axis=-1)})
+
+    def test_kz3_grid(self):
+        from unittest import mock
+        sys.path.insert(0, str(ROOT / "step8.2_dpt"))
+        import gen_step12_dpt as D
+        m = Path(tempfile.mkdtemp())
+        (m / D.UNIFORM_DIR).mkdir(parents=True)
+        (m / D.UNIFORM_DIR / "vasprun.xml").write_text("<x/>")
+        for nz in (1, 3):
+            fake = self._fake(12, nz)
+            with mock.patch("pymatgen.io.vasp.Vasprun", lambda *a, **k: fake), \
+                    contextlib.redirect_stdout(io.StringIO()):
+                for car, want in (("electron", 0.30), ("hole", 0.42)):
+                    got, prov = D.get_effective_mass_aniso(m, car, True)
+                    self.assertIsNotNone(got, "nz=%d %s：%s" % (nz, car, prov))
+                    self.assertAlmostEqual(got[0], want, places=3)
+                    self.assertAlmostEqual(got[1], want, places=3)
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

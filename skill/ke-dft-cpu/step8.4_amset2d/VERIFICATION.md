@@ -7058,3 +7058,23 @@ GaAs 电子受 POP 限制，ADP-only 本来就大。
 **测试**：test_mobility_vs_dpt 新增两项：
 - `_exc_brief` 带出本脚本的行号与代码；
 - 分方向拟合里抛出的异常，provenance 里带 `gen_step12_dpt.py:行号`。
+
+## V151（2026-10-03）：分方向 m* 在 kz≥3 的网格上整块失败（WS2 的 IndexError）
+
+**定位**（V150 的诊断，用户侧 WS2 S8.2 重跑）：
+`IndexError: boolean index did not match ... size of axis is 6912 but size of corresponding boolean axis is 2304（gen_step12_dpt.py:907 _dfrac = kfrac[sel] - kfrac[k0]）`
+
+**根因**：
+- `get_effective_mass_aniso` 先取面内子集 `zm`（|Δk_z| < 0.02），`sel` 是在这个子集上算出的掩码。
+- 第 907 行却拿 `sel` 去索引全 BZ 的 `kfrac`。2D 的 S3 网格常用 kz ≥ 3（WS2 是 48×48×3：全 BZ 6912 点，面内 2304 点），两者长度不同就抛 IndexError。
+- 电子、空穴的分方向块都失败；各向同性 m* 走另一条路径，不受影响。
+- kz=1 时两者等长，V150 的合成体系（48×48×1）因此没复现出来；改成 12×12×3 后复现了同一条错误。
+
+**影响**：所有 S3 网格 kz ≥ 3 的 2D 材料，S8.2 的 by_direction 都是失败状态，S8.1 一直回落用各向同性 τ。
+- 六方 TMD（C₃ 保证面内各向同性）数值影响很小；
+- 正交、面内各向异性的体系（SS/LS、*_ortho）影响大。
+
+**改动**：`_dfrac = kfrac[zm][sel] - kfrac[k0]`。
+
+**测试**：test_mobility_vs_dpt 新增 AnisoKzTests：合成六方单层（K 谷抛物，m_c = 0.30、m_v = 0.42），12×12×1 和 12×12×3 两种网格，
+分方向 m* 都还原到 3 位小数；去掉修复时 kz=3 报同一条 IndexError。
