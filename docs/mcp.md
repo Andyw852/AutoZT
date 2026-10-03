@@ -56,9 +56,12 @@ older clients.
 | sync_results | mutate | pull finished results back |
 | run_ready_steps | mutate | one-shot fetch and submit dependency-ready steps; does not change `auto_advance` |
 | inspect | read | one call: scoped attention state + deterministic actions |
-| cancel_step | destructive | cancel the job of a step |
-| rebuild_step | destructive | delete the step directory and regenerate |
-| clean_material | destructive | delete generated files, back to PREP |
+| task_graph | read | step DAG of a skill with live status per step (job id, queue reason, FAIL diagnosis, which upstream it waits for); without `material` = per-step material counts of the whole skill; `format: mermaid` for clients that render Markdown |
+| request_destructive_action | destructive | ask for `cancel` / `rebuild` / `clean` / `force_start`; **never executes by itself** — shows a confirm dialog (elicitation) or returns an approval card + `request_id` |
+| approve_request | destructive | after the user explicitly agreed to the card: approve `request_id` and run it (`reply` = the user's words, audited; `decision: deny` voids it) |
+| cancel_step | destructive | cancel the job of a step (same approval path as above; full profile) |
+| rebuild_step | destructive | delete the step directory and regenerate (full profile) |
+| clean_material | destructive | delete generated files, back to PREP (full profile) |
 | cycle | mutate | one dry-run or explicitly executed safe cycle |
 | get_snapshot | read | compact state; cursor returns only changes |
 | propose_actions | read | deterministic candidate actions from status/diagnosis |
@@ -77,8 +80,9 @@ addition to `tt`/`material`/`status`; scoping happens before collection. Materia
 a stable `id` = `<project>/<full name>` that `material` arguments accept, so identically
 named materials in different projects never collide.
 
-Profiles: `workflow` (default) = 18 tools incl. `get_progress`, `doctor`,
-`register_material`, `conf_get`, `conf_set` and `check_env`;
+Profiles: `workflow` (default) = 21 tools incl. `get_progress`, `doctor`,
+`register_material`, `conf_get`, `conf_set`, `check_env`, `task_graph`,
+`request_destructive_action` and `approve_request`;
 `monitor` = `get_progress`, `get_snapshot`, `cycle`; `compact` is unchanged for existing
 clients; `full` exposes everything.
 
@@ -99,6 +103,36 @@ through `autozt act`, i.e. the same gateway and audit trail as the CLI.
   "dataset": "/data/MoS2/step4_disp", "cluster": "local"}}
 {"name": "conf_set", "arguments": {"tt": "fit-fc-thermal", "material": "MoS2",
   "step": "step1_fit", "key": "FIT_METHODS", "value": "pheasy:ALASSO"}}
+```
+
+### Asking the user instead of the terminal (`request_destructive_action`, `approve_request`)
+
+Destructive actions (`stop` / `rerun` / `clean` / any `-f` / `-y`) are never executed on the
+model's own decision, but the user no longer has to type `autozt approve …` in a terminal:
+
+1. The model calls `request_destructive_action` (or `cancel_step`/… in the full profile, or the
+   CLI command itself). The gateway does not run it; it issues a one-time `request_id` bound to
+   the command signature (default 900 s) and builds an **approval card**: the command, its
+   consequence in plain words, and the task graph of the material with the target step marked
+   `◀ 本次：取消` and affected downstream steps marked `↳`.
+2. If the client declared the MCP `elicitation` capability (protocol 2025-06-18), the server
+   shows the card in a confirm dialog right away. Only an explicit accept with `执行` ticked
+   runs the command; decline voids the request; dismiss/timeout (`AUTOZT_APPROVAL_WAIT`, default
+   120 s) falls back to step 3. Set `AUTOZT_MCP_ELICITATION=0` to disable dialogs.
+3. Otherwise the tool returns `needs_approval` with the card as text. The model shows it to the
+   user and asks. When the user clearly agrees, the model calls
+   `approve_request(request_id, reply="<the user's words>")`, which approves and executes in one
+   step; when the user refuses, `approve_request(..., decision="deny")`.
+
+The user's reply, the channel (`chat` / `mcp` / `mcp-elicitation` / `tty`) and the exit code go
+to `.tf_agent_log.jsonl`. `approval_mode: tty` in tf.yaml (or `AUTOZT_APPROVAL_MODE=tty`) restores
+the strict policy where only a human in a real terminal (`autozt approve --request <id>`) can
+approve.
+
+```json
+{"name": "request_destructive_action", "arguments": {"action": "cancel",
+  "tt": "fit-fc-thermal", "material": "MnIn2Se4", "step": "step2_kappa"}}
+{"name": "approve_request", "arguments": {"request_id": "r3f2a9c", "reply": "同意，停掉"}}
 ```
 
 ## Workflow profile for new LLM integrations
@@ -306,7 +340,8 @@ list_skills → describe_skill → get_snapshot → probe_step
 The compact profile is an interface-size optimization, not a permission bypass. Read-only
 tools remain read-only, and `apply_actions` accepts only `start_step`, `prepare_step`,
 `sync_results`, and `run_ready_steps`; `cancel_step`, `rebuild_step`, `clean_material`, and force flags are
-rejected before they reach the CLI.
+rejected before they reach the CLI (destructive actions go through `request_destructive_action` and
+the user's consent instead).
 
 In compact mode, large results are carried once in MCP `structuredContent`; the text
 content contains only a small envelope pointing to that structured payload. Full mode
@@ -395,7 +430,8 @@ verbs: `list`/`get`/`describe`/`inspect` for reads, `start`/`prepare`/`sync`/`ru
 for recoverable workflow changes, and `apply` for an explicitly selected batch.
 The public action vocabulary uses a verb plus an object so the effect is visible in
 `tools/list`: `start_step`, `prepare_step`, `sync_results`, and `run_ready_steps`.
-Destructive actions use `cancel_step`, `rebuild_step`, and `clean_material`.
+Destructive actions use `cancel_step`, `rebuild_step`, and `clean_material` (full profile) or
+`request_destructive_action` + `approve_request` (workflow profile).
 These names are the only supported protocol names; clients must not rely on historical
 aliases. The protocol version is incremented when this vocabulary changes.
 

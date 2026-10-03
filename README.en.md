@@ -20,7 +20,10 @@ and every failure mode is diagnosed instead of hidden.
 - **Reproducibility.** Per-step provenance (per-file SHA-256) with autozt prove --verify,
   and autozt session export producing a self-contained, replayable archive.
 - **Agent safety.** autozt act / approve routes agent-driven actions through risk tiers,
-  a TTL-bounded human approval and an audit log.
+  a TTL-bounded human approval and an audit log. A blocked destructive action yields an
+  approval card (command, consequence, task graph with the target step marked); the user
+  agrees in the conversation or in an MCP confirm dialog and the agent runs it — no terminal
+  round trip. `autozt graph` shows any skill's step DAG with live status.
 - **Three agent transports.** MCP clients can use `AUTOZT_MCP_PROFILE=workflow autozt mcp`;
   one-shot callers can use `autozt agent request -`, and long-running wrappers can use
   `autozt agent serve` for one JSON request/response per line.

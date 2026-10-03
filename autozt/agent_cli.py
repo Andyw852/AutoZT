@@ -391,8 +391,12 @@ AGENT_RULES_MD = """# AutoZT 调用规则（给 LLM；由 `autozt agent setup --
    fetch/advance；同技能同步骤合成一条命令，按现采状态逐个复核。结果看 `results[].outcome`：
    submitted=已提交，deferred=达 max_jobs 在排队（正常，不是故障），skipped_stale=状态已变
    （重新 inspect），failed=看 output。
-5. 破坏性动作（stop/rerun/clean、-f/-y、conf --set）不要执行：把命令给用户，让用户在终端
-   `autozt approve …` 后再说。
+5. 破坏性动作（stop/rerun/clean、-f/-y）不要自己决定：直接调命令（或 MCP
+   request_destructive_action）会被拦下，返回**审批卡片**（命令、后果、任务图里标出目标步骤）
+   和请求号。把卡片原样给用户看并询问；用户明确同意后执行
+   `autozt approve --request <号> --reply "<用户原话>"`（MCP: approve_request）——就地批准并
+   执行，不要让用户自己去终端敲命令；用户拒绝就 `autozt approve --deny <号>`。客户端支持 MCP
+   确认框（elicitation）时会直接弹框，用户点了才执行。conf --set 改项目配置，同样先说明、得到同意。
 6. 批量操作前可跑 `autozt agent doctor`（max_jobs 生效值、被屏蔽项目、同名材料）。
 7. 材料用稳定 id `<项目名>/<完整名>`（progress/inspect 返回的 id 字段）指代，避免同名歧义。
 8. 不改全局开关（auto_advance、auto_watch 等）和项目配置，除非用户明确要求。
@@ -404,6 +408,8 @@ AGENT_RULES_MD = """# AutoZT 调用规则（给 LLM；由 `autozt agent setup --
    `{"ok": false, "error": …}`）出现在 stdout。`-p` 写错材料名会直接报"找不到材料"。
 11. `autozt` 不在 PATH 时用 setup 返回的 `cli.absolute`（绝对路径调用），或让用户
    `pip install -e <仓库>` / 把 `<仓库>/bin` 加进 PATH。
+12. 汇报进度、或请用户同意任何操作之前，先给用户看任务图：`autozt -p <材料> graph`
+   （整技能各步骤计数：`autozt -tt <技能> graph`；MCP: task_graph）。
 """
 
 
