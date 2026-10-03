@@ -165,6 +165,39 @@ class DegenerateEdgeTests(unittest.TestCase):
         self.assertNotIn("dp_valley_probe", line_h)
 
 
+class DegeneracyTests(unittest.TestCase):
+    """V146：GaAs 电子 m* 0.052 -> Nc ≈ 3e17；S8 的 3D 掺杂 1e18–1e21 都在简并区，ADP/DPT 超界不是多谷。"""
+
+    def test_ratio(self):
+        self.assertAlmostEqual(M.degeneracy_ratio(-1e17, 0.0523, 300, False), 1e17 / (2.509e19 * 0.0523 ** 1.5), 6)
+        self.assertLess(M.degeneracy_ratio(-1e17, 0.0523, 300, False), 0.5)
+        self.assertGreater(M.degeneracy_ratio(-1e18, 0.0523, 300, False), 3)
+        # 2D：MoSe2 ±4.28e17 cm⁻³、c = 20 Å -> 8.6e10 cm⁻²，远低于 N2D（m* 0.5 -> 5.4e12）
+        self.assertLess(M.degeneracy_ratio(4.28e17, 0.5, 300, True, 20.0), 0.05)
+        self.assertIsNone(M.degeneracy_ratio(4.28e17, 0.5, 300, True, None))
+        self.assertIsNone(M.degeneracy_ratio(1e17, None, 300, False))
+
+    def test_gaas_like_flags(self):
+        m = Path(tempfile.mkdtemp())
+        (m / "step8_amset").mkdir()
+        dop = [-1e17, -1e18, -1e21]
+        d = {"doping": dop, "temperatures": [300.0], "conductivity": [[_t(1.0)] for _ in dop],
+             "seebeck": [[_t(-300.0)] for _ in dop],
+             "mobility": {"overall": [[_t(9000.0)] for _ in dop], "ADP": [[_t(1.0e6)] for _ in dop]}}
+        (m / "step8_amset" / "transport.json").write_text(json.dumps(d))
+        (m / "step8.2_dpt").mkdir()
+        (m / "step8.2_dpt" / "dpt_result.json").write_text(json.dumps({"results": [
+            {"carrier": "electron", "mobility_cm2_Vs": 145658.0, "inputs": {"m_eff_m0": 0.0523}},
+            {"carrier": "hole", "mobility_cm2_Vs": 4527.0, "inputs": {"m_eff_m0": 0.623}}]}))
+        with contextlib.redirect_stdout(io.StringIO()) as buf:
+            M.main([str(m)])
+        lines = {ln.split()[0]: ln for ln in buf.getvalue().splitlines() if "电子(n)" in ln}
+        self.assertIn("dp_valley_probe", lines["-1e+17"])               # 非简并：多谷提示保留
+        for k in ("-1e+18", "-1e+21"):
+            self.assertIn("接近/进入简并", lines[k])
+            self.assertNotIn("dp_valley_probe", lines[k])
+
+
 class DptReasonTests(unittest.TestCase):
     def test_failure_message_has_provenance(self):
         s = (ROOT / "step8.2_dpt" / "gen_step12_dpt.py").read_text(encoding="utf-8")
