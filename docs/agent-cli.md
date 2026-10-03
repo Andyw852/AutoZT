@@ -96,8 +96,11 @@ autozt -tt fit-fc-thermal -p MoS2 start
 
 `--project` / `"scope": {"project": …}` 在所有需要状态的命令上都可用，采集前就按项目裁剪。
 
-安全边界：破坏性命令（`stop`/`rerun`/`clean`/`-f`/`-y`）默认要人工批准令牌——
-不再依赖 AI 自觉设置 `AUTOZT_ACTOR`：常见 AI 代理的环境标记（`CLAUDECODE`、`GEMINI_CLI`、
+安全边界：破坏性命令（`stop`/`rerun`/`clean`/`-f`/`-y`）默认要用户同意——被拦下时签发
+请求号并打印审批卡片（命令、后果、任务图里标出目标步骤）。agent 把卡片给用户看，用户在对话里
+同意后执行 `autozt approve --request <号> --reply "<用户原话>"`（就地批准并执行，用户不用去
+终端）；`approval_mode: tty` 回到只认交互终端的严格模式。看任务图：`autozt -p <材料> graph`。
+识别 agent 会话不再依赖 AI 自觉设置 `AUTOZT_ACTOR`：常见 AI 代理的环境标记（`CLAUDECODE`、`GEMINI_CLI`、
 `CODEX_SANDBOX`…，tf.yaml 的 `agent_env_markers` 可追加自己的）和**非交互终端**都会被识别。
 
 ```bash

@@ -13,9 +13,12 @@
    - `mutate`（start/retry/fetch/init/adopt/level/hpc/auto/conf --set/correct/
      monitor…）：放行（本来就是 agent 该干的事）；
    - `destructive`（stop/rerun/clean/migrate-subdir/push/`correct -y`，以及任何带
-     `-f`/`--force`/`-y`/`--yes`/`--purge-config` 的调用）：**必须人工批准**。
-     人工在**交互终端**里跑一次 `autozt approve <同一条命令>`（非 TTY 直接拒绝——
-     agent 没法自己批准自己）；批准按"命令签名"记账，默认 15 分钟、一次用完即销。
+     `-f`/`--force`/`-y`/`--yes`/`--purge-config` 的调用）：**必须用户同意**。
+     被拦下时签发请求号 + 打印审批卡片（命令、后果、任务图里标出目标步骤）；
+     chat 模式（默认）agent 把卡片给用户看、用户在对话里同意后，agent 执行
+     `autozt approve --request <号> --reply "<用户原话>"` 就地批准并执行；
+     tty 模式（approval_mode: tty）只认交互终端里的人工批准。批准按"命令签名"记账，
+     默认 15 分钟、一次用完即销。
 
 2. **审计 `.tf_agent_log.jsonl`**（落在配置目录）：每次 `autozt act` 调用都追加一条
    {ts, actor, cmd, argv, risk, decision, exit_code, dur, cwd, approved_by, …}
@@ -58,6 +61,10 @@ AGENT_GATEWAY_ENV = "AUTOZT_AGENT_GATEWAY"     # 网关子进程用它避免重�
 AGENT_TTL_ENV = "AUTOZT_APPROVE_TTL"
 AGENT_TTL_DEFAULT = 900                    # 批准有效期（秒）
 AGENT_GATE_ENV = "AUTOZT_AGENT_GATE"       # auto（默认）/ off
+# 批准方式：chat（默认）= agent 在对话里问、用户同意后 agent 凭请求号执行
+#           （MCP 客户端支持 elicitation 时直接弹确认框）；tty = 只认交互终端里的人工批准
+AGENT_APPROVAL_MODE_ENV = "AUTOZT_APPROVAL_MODE"
+AGENT_CARD_GRAPH_TIMEOUT = 90               # 审批卡片取任务图的采集上限（秒）
 # 常见 AI 编码代理在它执行的 shell 子进程里设置的环境变量；存在即视为 agent 会话。
 # 其它代理（如 DSH）在 tf.yaml 里用 agent_env_markers: [变量名, ...] 追加。
 AGENT_ENV_MARKERS = ("CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT", "GEMINI_CLI",
@@ -67,7 +74,7 @@ AGENT_ENV_MARKERS = ("CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT", "GEMINI_CLI",
 AGENT_READ_CMDS = {
     "list", "summary", "status", "json", "dir", "skills", "skill", "schema",
     "history", "prove", "probe", "config", "help", "diagnose", "session",
-    "progress", "doctor", "check",
+    "progress", "doctor", "check", "graph",
 }
 AGENT_MUTATE_CMDS = {
     "start", "retry", "fetch", "advance", "init", "adopt", "level", "hpc", "auto",
@@ -197,6 +204,30 @@ def agent_split(raw_argv):
     return toks[idx], list(toks[idx + 1:]), outer
 
 
+_OUTER_PAIRS = ("-c", "--config", "--host", "-u", "--user")
+
+
+def _split_outer(tokens):
+    """直接调用的 argv → (命令 token, 全局选项)。-c/--host/-u 与 act 网关同口径放进
+    全局选项、不进签名：直接调用和 act 调用的同一条命令签名一致。"""
+    inner, outer, i = [], [], 0
+    while i < len(tokens):
+        t = tokens[i]
+        key = t.split("=", 1)[0]
+        if key in _OUTER_PAIRS:
+            if "=" in t:
+                outer.append(t)
+                i += 1
+                continue
+            if i + 1 < len(tokens):
+                outer += [t, tokens[i + 1]]
+                i += 2
+                continue
+        inner.append(t)
+        i += 1
+    return inner, outer
+
+
 def agent_command(tokens):
     """从 token 流里挑出真正的命令词（跳过取值型选项的值）。"""
     skip = False
@@ -275,7 +306,7 @@ def agent_targets(argv):
 # ===== 审计日志 =====
 def agent_audit(cfg, actor, cmd, argv, risk, decision, why=None,
                 exit_code=None, dur=None, approved_by=None, sig=None,
-                gateway="act", ev="call", note=None):
+                gateway="act", ev="call", note=None, extra=None):
     """追加一条审计记录。整段包 try/except：审计失败绝不影响命令本身。"""
     rec = {
         "ts": _now(),
@@ -296,6 +327,9 @@ def agent_audit(cfg, actor, cmd, argv, risk, decision, why=None,
     rec.update({k: v for k, v in agent_targets(argv).items() if v})
     if note:
         rec["note"] = str(note)[:200]
+    for k, v in (extra or {}).items():
+        if v not in (None, ""):
+            rec[k] = v if not isinstance(v, str) else v[:500]
     try:
         path = agent_log_path(cfg)
         os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -414,15 +448,279 @@ def agent_pending_approvals(cfg):
             and float(x.get("expires_epoch") or 0) > now]
 
 
+# ===== 对话内审批：请求号 + 审批卡片（含任务图）=====
+# 流程：agent 调破坏性命令 → 网关不执行，签发一个请求号并打印「审批卡片」（命令、后果、
+# 任务图里标出目标步骤）→ agent 把卡片给用户看、问要不要做 → 用户同意 → agent 执行
+#   autozt approve --request <请求号> --reply "<用户原话>"
+# 就地批准并**立即执行**（不用用户自己去终端敲命令）。MCP 客户端支持 elicitation 时，
+# 由 MCP 服务直接弹确认框（用户点「执行」才算）。请求号绑定命令签名：一次有效、
+# 有有效期、改任何参数都要重新申请；同意的原话、通过哪条渠道批准都进审计日志。
+# approval_mode: tty（tf.yaml 或 AUTOZT_APPROVAL_MODE）回到「只认交互终端」的严格模式。
+_REQ_KEEP_S = 86400              # 请求记录保留一天（审计日志另有完整流水）
+_NEGATIVE_REPLIES = {"不", "否", "no", "n", "不要", "不同意", "拒绝", "别", "算了",
+                     "不行", "先别", "nope", "deny"}
+_ACTION_WORD = {"stop": "取消", "rerun": "删除重算", "clean": "清理",
+                "migrate-subdir": "迁移目录", "push": "推送", "start": "强制提交",
+                "retry": "强制重生成"}
+_CONSEQ = {
+    "stop": "scancel 目标步骤排队/在跑的作业，并打 SCANCEL 标记（auto 不会自动重跑）；"
+            "已有文件保留，之后 start 可续交。",
+    "rerun": "先 scancel，再删除该步骤目录（已算产物全部删除、不可恢复），然后重新生成并提交。",
+    "clean": "删除生成物回到 PREP（关联作业一并 scancel；材料级保留 POSCAR）。",
+    "migrate-subdir": "迁移/重排技能目录和配置，可能改变项目路径。",
+    "push": "向远端 Git 仓库写入提交（外部不可逆）。",
+}
+_CONFIRM_CMDS = ("stop", "rerun", "clean", "migrate-subdir")   # 自带 [y/N] 二次确认的命令
+
+
+def agent_approval_mode(cfg=None):
+    """chat（默认）：对话里征得同意后 agent 凭请求号执行；tty：只认交互终端。"""
+    v = (os.environ.get(AGENT_APPROVAL_MODE_ENV) or (cfg or {}).get("approval_mode")
+         or "chat")
+    v = str(v).strip().lower()
+    return "tty" if v in ("tty", "terminal", "strict", "终端", "严格") else "chat"
+
+
+def agent_consequences(cmd, argv):
+    """一句话后果（给人看的，不是给 agent 看的）。"""
+    flags = {str(x).split("=", 1)[0] for x in (argv or []) if str(x).startswith("-")}
+    out = []
+    whole = not agent_targets(argv).get("step")
+    if cmd == "rerun" and whole:
+        out.append("不带 -j = 整材料重来：scancel 全部作业，清空整个工作目录（只留 POSCAR，"
+                   "本地 result 也删），从第一步重新生成提交。不可恢复。")
+    elif cmd == "clean" and whole:
+        out.append("不带 -j = 整材料清理：删除全部生成物回到 PREP（关联作业一并 scancel，保留 POSCAR）。")
+    elif cmd in _CONSEQ:
+        out.append(_CONSEQ[cmd])
+    if flags & {"-f", "--force"}:
+        out.append("带 -f：越过安全闸门（max_jobs 并发上限 / 依赖未完成 / 本机环境检查等）强行执行。")
+    if "--purge-config" in flags:
+        out.append("--purge-config：连 project_setting 一起删（之后要重新 init）。")
+    if not out:
+        out.append("未登记的命令，按破坏性动作处理。")
+    return " ".join(out)
+
+
+def _split_list(v):
+    return [x.strip() for x in str(v or "").split(",") if x.strip()]
+
+
+def _node_hit(node, tok):
+    """-j 写法（label / name / 末段名 / 序号）是否指这个节点。"""
+    tok = str(tok).strip()
+    lb, nm = str(node.get("label") or ""), str(node.get("name") or "")
+    if tok in (lb, nm) or nm.rsplit("/", 1)[-1] == tok:
+        return True
+    if tok.replace(".", "", 1).isdigit():
+        return lb.startswith("S%s_" % tok) or nm.rsplit("/", 1)[-1].startswith("step%s_" % tok)
+    return False
+
+
+def agent_card_marks(graph, cmd, argv):
+    """在任务图上标出本次动作的目标步骤（◀）和受影响的下游（↳）。"""
+    from autozt.taskgraph import descendants
+    word = _ACTION_WORD.get(cmd, "执行")
+    steps = _split_list(agent_targets(argv).get("step"))
+    nodes = graph.get("nodes") or []
+    if steps:
+        targets = [n["label"] for n in nodes if any(_node_hit(n, j) for j in steps)]
+    elif cmd == "stop":
+        targets = [n["label"] for n in nodes if n.get("kind") in ("R", "PD")]
+    elif cmd in ("clean", "rerun"):         # 材料级：整个工作目录清空，所有步骤从头来
+        targets = [n["label"] for n in nodes]
+    elif cmd in ("start", "retry"):
+        targets = [n["label"] for n in nodes
+                   if n.get("kind") in ("TODO", "PREP", "SCANCEL", "FAIL", "WAIT")][:1]
+    else:
+        targets = []
+    marks = {lb: "◀ 本次：%s" % word for lb in targets}
+    if cmd in ("stop", "rerun", "clean"):
+        down = "↳ 上游被取消，不会推进" if cmd == "stop" else "↳ 上游产物将被删除，需重算"
+        kinds = {n["label"]: n.get("kind") for n in nodes}
+        for lb in descendants(graph, targets):
+            # stop 只影响还没算完、也没被取消的下游；rerun/clean 删了上游产物，下游全要重算
+            if cmd != "stop" or kinds.get(lb) not in ("OK", "SCANCEL"):
+                marks.setdefault(lb, down)
+    return marks
+
+
+def _card_graph_text(cfg, cmd, argv, outer=None):
+    """取目标材料的任务图（只读子进程，带超时）并渲染成带标注的文本。
+
+    返回 (文本或 None, [带标注的图 dict], 失败原因或 None)。"""
+    from autozt import _PKG_ROOT
+    from autozt.taskgraph import fetch_graphs, render_text, with_renderings
+    tg = agent_targets(argv)
+    mats = _split_list(tg.get("mat"))
+    if not mats and not tg.get("step"):
+        return None, [], None              # 全局动作：没有具体对象可画
+    if (os.environ.get("AUTOZT_APPROVAL_GRAPH") or "").strip().lower() in (
+            "0", "false", "no", "off"):
+        return None, [], None
+    outer = list(outer or [])
+    if not any(x in ("-c", "--config") or x.startswith("--config=") for x in outer):
+        if not (cfg or {}).get("_config_path"):
+            # 不知道是哪份配置就不去采（单元测试/嵌入调用），免得碰到别的项目
+            return None, [], None
+        outer = ["-c", cfg["_config_path"]] + outer
+    prog = os.path.join(_PKG_ROOT, "bin", "autozt")
+    base = ([sys.executable, prog] if os.path.isfile(prog)
+            else [sys.executable, "-m", "autozt"]) + outer
+    try:
+        wait = int((cfg or {}).get("approval_graph_timeout") or AGENT_CARD_GRAPH_TIMEOUT)
+    except (TypeError, ValueError):
+        wait = AGENT_CARD_GRAPH_TIMEOUT
+    graphs, err = fetch_graphs(base, tt=tg.get("tt"), materials=mats[:3] or None,
+                               timeout=wait)
+    if not graphs:
+        return None, [], err
+    texts, out = [], []
+    for g in graphs[:3]:
+        marks = agent_card_marks(g, cmd, argv) if g.get("view") == "material" else {}
+        if g.get("view") == "skill":
+            steps = _split_list(tg.get("step"))
+            marks = {n["label"]: "◀ 本次：%s（全部材料）" % _ACTION_WORD.get(cmd, "执行")
+                     for n in g.get("nodes") or [] if any(_node_hit(n, j) for j in steps)}
+        texts.append(render_text(g, marks=marks, ascii_mode=False, legend=False,
+                                 indent="    "))
+        out.append(with_renderings(g, marks=marks))
+    if len(mats) > 3:
+        texts.append("    …… 另有 %d 个材料（同一命令一起执行）" % (len(mats) - 3))
+    return "\n\n".join(texts), out, None
+
+
+def _cmd_text(argv):
+    return "autozt " + " ".join(_shell_quote(x) for x in argv)
+
+
+def _shell_quote(x):
+    x = str(x)
+    if x and all(c.isalnum() or c in "-_./,=:@%+" for c in x):
+        return x
+    return "'" + x.replace("'", "'\\''") + "'"
+
+
+def agent_request_create(cfg, sig, cmd, argv, why, actor, gateway, card="",
+                         graphs=None, outer=None):
+    """签发（或复用同签名未过期的）审批请求号。返回请求 dict；写不进文件返回 None。"""
+    import secrets
+    path = agent_approval_path(cfg)
+    d = _approvals_read(path)
+    now = _now_epoch()
+    reqs = [r for r in (d.get("requests") or [])
+            if float(r.get("created_epoch") or 0) > now - _REQ_KEEP_S]
+    hit = next((r for r in reqs if r.get("status") == "pending" and r.get("sig") == sig
+                and float(r.get("expires_epoch") or 0) > now), None)
+    if hit is None:
+        used = {r.get("id") for r in reqs}
+        rid = "r" + secrets.token_hex(3)
+        while rid in used:
+            rid = "r" + secrets.token_hex(3)
+        hit = {"id": rid, "sig": sig, "cmd": cmd, "argv": list(argv or []),
+               "why": list(why or []), "actor": actor or "", "gateway": gateway,
+               "outer": list(outer or []),
+               "created": _now(), "created_epoch": now,
+               "expires_epoch": now + float(agent_ttl()), "status": "pending"}
+        reqs.append(hit)
+    hit["card"] = card or hit.get("card") or ""
+    if graphs is not None:
+        hit["graphs"] = [{k: g.get(k) for k in ("view", "skill", "id", "text", "mermaid",
+                                                 "marks") if g.get(k) is not None}
+                         for g in graphs]
+    d["requests"] = reqs
+    d["updated"] = _now()
+    return hit if _approvals_write(path, d) else None
+
+
+def agent_request_get(cfg, rid):
+    d = _approvals_read(agent_approval_path(cfg))
+    return next((r for r in (d.get("requests") or []) if r.get("id") == rid), None)
+
+
+def agent_request_update(cfg, rid, **fields):
+    path = agent_approval_path(cfg)
+    d = _approvals_read(path)
+    for r in d.get("requests") or []:
+        if r.get("id") == rid:
+            r.update(fields)
+            d["updated"] = _now()
+            return _approvals_write(path, d)
+    return False
+
+
+def agent_requests_pending(cfg):
+    now = _now_epoch()
+    d = _approvals_read(agent_approval_path(cfg))
+    return [r for r in (d.get("requests") or []) if r.get("status") == "pending"
+            and float(r.get("expires_epoch") or 0) > now]
+
+
+def agent_render_card(cmd, argv, why, req, graph_text, graph_err=None, mode="chat"):
+    """审批卡片：给用户看的「要干什么、会怎样、在流程图的哪儿」。"""
+    left = int(max(0, float(req.get("expires_epoch") or 0) - _now_epoch())) if req else 0
+    L = ["━━ 需要你的同意（破坏性动作，AGENTS.md 铁律 2）━━",
+         "命令   %s" % _cmd_text(argv),
+         "后果   %s" % agent_consequences(cmd, argv)]
+    if graph_text:
+        L.append("任务图（◀ = 本次动作的目标，↳ = 受影响的下游）")
+        L.append(graph_text)
+    elif graph_err:
+        L.append("任务图   暂时取不到（%s）；可先看：autozt -p <材料> graph" % graph_err)
+    if req:
+        L.append("请求号 %s（%d 秒内有效，只能用一次；改任何参数都要重新申请）"
+                 % (req["id"], left))
+        if mode == "chat":
+            L.append("同意 → 回复「同意」即可，agent 会执行：")
+            L.append("        autozt approve --request %s --reply \"<你的原话>\"" % req["id"])
+            L.append("不同意 → 回复「不」（请求作废：autozt approve --deny %s）" % req["id"])
+        else:
+            L.append("本机是严格模式（approval_mode: tty）：请你在交互终端运行")
+            L.append("        autozt approve --request %s" % req["id"])
+    else:
+        L.append("（请求号写不进配置目录，只能用旧方式：在交互终端 autozt approve %s）"
+                 % " ".join(str(x) for x in argv))
+    return "\n".join(L)
+
+
+def agent_request_approval(cfg, cmd, inner, why, actor, gateway, outer=None):
+    """破坏性命令被拦下时：签发请求号 + 打印审批卡片（含任务图）+ 记审计。返回 3。"""
+    sig = agent_signature(cmd, inner)
+    graph_text, graphs, gerr = _card_graph_text(cfg, cmd, inner, outer=outer)
+    mode = agent_approval_mode(cfg)
+    req = agent_request_create(cfg, sig, cmd, inner, why, actor, gateway, graphs=graphs,
+                               outer=outer)
+    card = agent_render_card(cmd, inner, why, req, graph_text, gerr, mode=mode)
+    if req:
+        agent_request_update(cfg, req["id"], card=card)
+    agent_audit(cfg, actor, cmd, inner, "destructive", "deny-need-approval", why=why,
+                exit_code=3, sig=sig, gateway=gateway,
+                extra={"request": (req or {}).get("id"), "approval_mode": mode})
+    print("✗ 拒绝执行（先征得用户同意）：tf %s 属破坏性动作。" % " ".join(inner))
+    print(card)
+    print("  命令签名：%s  审计日志：%s" % (sig, agent_log_path(cfg)))
+    if os.environ.get("AUTOZT_AGENT_EVENTS") == "1":
+        # MCP / 执行器用：结构化的审批请求（一行 JSON）
+        ev = {"request_id": (req or {}).get("id"), "sig": sig, "cmd": cmd,
+              "command": _cmd_text(inner), "approval_mode": mode,
+              "consequences": agent_consequences(cmd, inner), "why": list(why or []),
+              "expires_in_s": int(max(0, float((req or {}).get("expires_epoch") or 0)
+                                      - _now_epoch())),
+              "card": card, "graphs": graphs}
+        print("[agent-approval] " + json.dumps(ev, ensure_ascii=False))
+    sys.stdout.flush()
+    return 3
+
+
 # ===== 渲染 =====
 AGENT_RISK_CN = {"read": "只读", "mutate": "推进", "destructive": "破坏性"}
 AGENT_POLICY_ROWS = [
     ("read", "list summary status json dir skills skill schema history prove "
-             "probe config help diagnose session progress doctor / 任何 --dry-run", "放行"),
+             "probe config help diagnose session progress doctor check graph / 任何 --dry-run", "放行"),
     ("mutate", "start retry fetch advance init adopt level hpc auto conf --set "
                "correct monitor restart", "放行（记账）"),
     ("destructive", "stop rerun clean migrate-subdir push / 未登记命令 / 任何 -f -y --yes --purge-config",
-     "需人工批准令牌"),
+     "需用户同意（请求号 + 审批卡片）"),
 ]
 
 
@@ -450,14 +748,17 @@ def render_agent_policy():
     L.append("")
     L.append("用法：")
     L.append("  autozt act <和 tf 一模一样的命令>     # agent 的唯一入口（自动记账）")
-    L.append("  autozt approve <同一条命令>           # 人工在交互终端批准破坏性动作")
+    L.append("  autozt approve --list                 # 看待你同意的请求（审批卡片 + 任务图）")
+    L.append("  autozt approve --request <号> --reply \"同意\"   # 批准并立即执行")
+    L.append("  autozt approve --deny <号>            # 拒绝/作废")
     L.append("  autozt act log [-n 40] [--json]       # 看审计流水")
     L.append("  autozt act policy                     # 看这张表")
     L.append("")
-    L.append("说明：批准按「命令签名」记账（同一命令、参数顺序无关），默认 %d 秒内一次有效；"
-             % AGENT_TTL_DEFAULT)
-    L.append("      非交互终端（管道 / agent 子进程 / 定时任务）不能执行 autozt approve")
-    L.append("      ——agent 无法自我批准。")
+    L.append("说明：破坏性命令被拦下时签发一个请求号并打印审批卡片（命令、后果、任务图里标出目标步骤）。")
+    L.append("      chat 模式（默认）：agent 把卡片给用户看，用户在对话里同意后 agent 执行")
+    L.append("      approve --request（必须带 --reply 用户原话，进审计）；MCP 客户端支持 elicitation")
+    L.append("      时直接弹确认框。tty 模式（tf.yaml approval_mode: tty）：只认交互终端里的人工批准。")
+    L.append("      请求号绑定命令签名（参数顺序无关），默认 %d 秒内一次有效。" % AGENT_TTL_DEFAULT)
     L.append("      默认网关开启（agent_gate: auto）：认 AUTOZT_ACTOR、常见 AI 代理环境标记，")
     L.append("      以及非交互终端里的破坏性命令；tf.yaml agent_gate: off / AUTOZT_AGENT_GATE=off 关。")
     L.append("      环境变量：AUTOZT_ACTOR=名字（谁在操作）、AUTOZT_AGENT_STRICT=0（关令牌）、")
@@ -533,6 +834,8 @@ def cmd_act(cfg, raw_argv):
               "      请把它们写在 act 之后（否则批准的命令和执行的命令不是同一条）：\n"
               "        autozt act -p <材料> [-j <步骤>] <命令>")
         return 2
+    inner, _outer2 = _split_outer(inner)    # act 之后写的 -c/--host 同样不进签名
+    outer = list(outer) + _outer2
     if not inner:
         print(render_agent_policy())
         return 0
@@ -556,10 +859,9 @@ def cmd_act(cfg, raw_argv):
     if risk == "destructive":
         ok, approver = agent_take_approval(cfg, sig)
         if not ok:
-            agent_audit(cfg, actor, sub, inner, risk, "deny-need-approval",
-                        why=why, exit_code=3, sig=sig, gateway="act")
-            print(agent_deny_message(cfg, sub, inner, sig, why, prog=prog))
-            return 3
+            # 不执行：签发请求号 + 审批卡片（含任务图），等用户在对话里同意
+            return agent_request_approval(cfg, sub, inner, why, actor, "act",
+                                          outer=outer)
         approved_by = approver or "human"
     # pip 非 editable 安装时没有 bin/autozt：退回 python -m autozt（同一入口）
     child = ([sys.executable, prog] if os.path.isfile(prog)
@@ -580,16 +882,172 @@ def cmd_act(cfg, raw_argv):
     return rc
 
 
+_APPROVE_OPTS = {"--request": 1, "--reply": 1, "--deny": 1, "--via": 1,
+                 "--list": 0, "--no-run": 0, "--json": 0}
+
+
+def _approve_parse(inner):
+    """把 approve 自己的选项（--request/--reply/--deny/--via/--list/--no-run/--json）
+    从命令 token 里拆出来。返回 (opts, 其余 token)。"""
+    opts, rest, i = {}, [], 0
+    toks = [str(x) for x in (inner or [])]
+    while i < len(toks):
+        key, eq, val = toks[i].partition("=")
+        if key in _APPROVE_OPTS:
+            if _APPROVE_OPTS[key]:
+                if eq:
+                    opts[key], i = val, i + 1
+                elif i + 1 < len(toks):
+                    opts[key], i = toks[i + 1], i + 2
+                else:
+                    opts[key], i = "", i + 1
+            else:
+                opts[key], i = True, i + 1
+            continue
+        rest.append(toks[i])
+        i += 1
+    return opts, rest
+
+
+def _approve_usage():
+    return ("用法：\n"
+            "  autozt approve --list                              # 看 agent 正在等你同意的请求（含任务图）\n"
+            "  autozt approve --request <请求号> --reply \"同意\"    # 批准并立即执行（agent 在对话里征得同意后用）\n"
+            "  autozt approve --deny <请求号>                     # 拒绝/作废\n"
+            "  autozt approve -p <材料> [-j <步骤>] <命令>         # 旧写法：在交互终端批准一条命令（agent 再用 act 执行）")
+
+
+def _approve_list(cfg, json_out=False):
+    reqs = agent_requests_pending(cfg)
+    if json_out:
+        print(json.dumps({"pending": [{k: r.get(k) for k in (
+            "id", "cmd", "argv", "created", "expires_epoch", "actor", "card", "graphs")}
+            for r in reqs], "approval_mode": agent_approval_mode(cfg)},
+            ensure_ascii=False))
+        return 0
+    if not reqs:
+        print("没有待你同意的请求。\n")
+        print(_approve_usage())
+        return 0
+    for r in reqs:
+        print(r.get("card") or ("请求 %s：%s" % (r["id"], _cmd_text(r.get("argv")))))
+        print()
+    return 0
+
+
+def _approve_deny(cfg, rid, reply=None):
+    r = agent_request_get(cfg, rid)
+    if not r:
+        print("✗ 找不到请求号 %s（autozt approve --list 看待批准的）。" % rid)
+        return 2
+    if r.get("status") != "pending":
+        print("请求 %s 已是 %s 状态，无需再拒绝。" % (rid, r.get("status")))
+        return 0
+    agent_request_update(cfg, rid, status="declined", declined=_now(), reply=reply or "")
+    agent_audit(cfg, agent_detect(cfg)[0] or os.environ.get("USER") or "?", r.get("cmd"),
+                r.get("argv"), "destructive", "declined-by-user", why=r.get("why"),
+                sig=r.get("sig"), gateway="approve", ev="approve",
+                extra={"request": rid, "reply": reply})
+    print("✓ 已作废请求 %s（没有执行任何操作）。" % rid)
+    return 0
+
+
+def _approve_request(cfg, opts, outer):
+    """凭请求号批准；默认批准后立即执行（--no-run 只发一次性令牌）。"""
+    rid = str(opts.get("--request") or "").strip()
+    r = agent_request_get(cfg, rid) if rid else None
+    if not r:
+        print("✗ 找不到请求号 %r（autozt approve --list 看待批准的）。" % rid)
+        return 2
+    if r.get("status") != "pending":
+        print("✗ 请求 %s 已%s，不能再用；重新执行原命令会签发新的请求号。"
+              % (rid, {"approved": "批准过", "used": "执行过", "declined": "被拒绝",
+                       "expired": "过期"}.get(r.get("status"), r.get("status"))))
+        return 3
+    if float(r.get("expires_epoch") or 0) <= _now_epoch():
+        agent_request_update(cfg, rid, status="expired")
+        print("✗ 请求 %s 已过期；重新执行原命令会签发新的请求号（并重新展示任务图）。" % rid)
+        return 3
+    mode = agent_approval_mode(cfg)
+    reply = str(opts.get("--reply") or "").strip()
+    via = str(opts.get("--via") or "").strip()
+    if _stdin_isatty() and not reply:
+        # 人就在终端前：卡片里给 agent 的「同意 → …」提示不用再印
+        print((r.get("card") or _cmd_text(r.get("argv"))).split("\n同意 →")[0])
+        try:
+            ans = input("确认批准并执行？[y/N] ")
+        except EOFError:
+            print("（没有输入，未批准。）")
+            return 1
+        if str(ans).strip().lower() not in ("y", "yes", "是", "好", "同意"):
+            print("（已取消，未批准。）")
+            return 1
+        reply, via = str(ans).strip(), via or "tty"
+    else:
+        if mode != "chat":
+            print("✗ 拒绝：本机是严格模式（approval_mode: tty），批准必须在**交互终端**里做：\n"
+                  "      autozt approve --request %s" % rid)
+            return 3
+        if not reply:
+            print("✗ 缺 --reply：把用户同意的原话原样传进来（写进审计日志），"
+                  "如 --reply \"同意\"。没问过用户就不能批准。")
+            return 2
+        if reply.lower().rstrip("。.!！~ ") in _NEGATIVE_REPLIES:
+            _approve_deny(cfg, rid, reply)
+            print("✗ 用户的回复是拒绝（%r），没有执行。" % reply)
+            return 3
+        via = via or "chat"
+    by = "user(%s)" % via
+    if not agent_save_approval(cfg, r["sig"], r.get("cmd"), r.get("argv"), by):
+        print("✗ 批准写不进 %s（检查配置目录权限）。" % agent_approval_path(cfg))
+        return 1
+    agent_request_update(cfg, rid, status="approved", approved=_now(), approved_by=by,
+                         reply=reply, via=via)
+    agent_audit(cfg, agent_detect(cfg)[0] or os.environ.get("USER") or "?", r.get("cmd"),
+                r.get("argv"), "destructive",
+                "approved-by-human" if via == "tty" else "approved-in-chat",
+                why=r.get("why"), sig=r["sig"], approved_by=by, gateway="approve",
+                ev="approve", extra={"request": rid, "reply": reply, "via": via})
+    if opts.get("--no-run"):
+        print("✓ 已批准（请求 %s，%d 秒内一次有效）。用同一条命令执行：autozt act %s"
+              % (rid, agent_ttl(), " ".join(r.get("argv") or [])))
+        return 0
+    run_argv = list(r.get("argv") or [])
+    if r.get("cmd") in _CONFIRM_CMDS and not ({"-y", "--yes"} & set(run_argv)):
+        run_argv.append("-y")              # 用户已经在卡片上确认过，不再二次 [y/N]
+    print("✓ 已批准（%s，原话：%s）。执行：%s" % (via, reply, _cmd_text(run_argv)))
+    sys.stdout.flush()
+    outer = list(r.get("outer") or outer or [])
+    if "-c" not in outer and "--config" not in outer and (cfg or {}).get("_config_path"):
+        outer = ["-c", cfg["_config_path"]] + outer
+    rc = cmd_act(cfg, outer + ["act"] + run_argv)
+    agent_request_update(cfg, rid, status="used", finished=_now(), exit_code=rc)
+    return rc
+
+
 def cmd_approve(cfg, raw_argv):
-    """autozt approve <命令> —— 人工批准一条破坏性命令（必须在交互终端里跑）。"""
+    """autozt approve —— 批准破坏性动作。
+
+    --request <请求号>：批准 agent 被拦下的那条命令并立即执行（chat 模式下 agent 在对话里
+    征得同意后可代为执行，必须带 --reply 用户原话；交互终端里会再问一次 y/N）；
+    旧写法 approve <命令>：只在交互终端里发一次性令牌，agent 再用 act 执行。"""
     verb, inner, outer = agent_split(raw_argv)
-    if verb == "act-error" or not inner:
-        print("用法：autozt approve -p <材料> [-j <步骤>] <破坏性命令>\n"
-              "      例：autozt approve -p C24/qHPC24 clean")
+    if verb == "act-error":
+        print(_approve_usage())
+        return 2
+    opts, inner = _approve_parse(inner)
+    if opts.get("--list") or (not inner and not opts):
+        return _approve_list(cfg, json_out=bool(opts.get("--json")))
+    if "--deny" in opts:
+        return _approve_deny(cfg, str(opts["--deny"]).strip(), opts.get("--reply"))
+    if "--request" in opts:
+        return _approve_request(cfg, opts, outer)
+    if not inner:
+        print(_approve_usage())
         return 2
     sub = agent_command(inner)
     if sub is None:
-        print("用法：autozt approve -p <材料> [-j <步骤>] <破坏性命令>")
+        print(_approve_usage())
         return 2
     risk, why = agent_classify(sub, inner)
     if risk != "destructive":
@@ -597,14 +1055,14 @@ def cmd_approve(cfg, raw_argv):
               % (sub, AGENT_RISK_CN.get(risk, risk)))
         return 0
     if not sys.stdin.isatty():
-        print("✗ 拒绝：批准必须在**交互终端**里做。\n"
-              "  非交互（管道 / agent 子进程 / 定时任务）一律不接受——"
-              "这条正是为了防止 agent 自己批准自己。")
+        print("✗ 拒绝：按命令批准必须在**交互终端**里做（防止 agent 自己批准自己）。\n"
+              "  agent 的正确做法：先执行原命令拿到请求号和审批卡片，给用户看、征得同意后\n"
+              "      autozt approve --request <请求号> --reply \"<用户原话>\"")
         return 3
     sig = agent_signature(sub, inner)
     print("即将批准一次破坏性动作：")
     print("    命令    tf %s" % " ".join(str(x) for x in inner))
-    print("    理由    %s" % "；".join(why))
+    print("    后果    %s" % agent_consequences(sub, inner))
     print("    签名    %s" % sig)
     print("    有效期  %d 秒（一次有效，用完即销）" % agent_ttl())
     try:
@@ -636,7 +1094,7 @@ def agent_direct_gate(cfg, cmd, raw_argv):
         return None
     if cmd in ("act", "approve"):
         return None
-    inner = [str(x) for x in (raw_argv or [])]
+    inner, outer = _split_outer([str(x) for x in (raw_argv or [])])
     risk, why = agent_classify(cmd, inner)
     actor, _src = agent_detect(cfg)
     if not actor:
@@ -651,15 +1109,11 @@ def agent_direct_gate(cfg, cmd, raw_argv):
     if risk == "destructive" and agent_strict():
         ok, approver = agent_take_approval(cfg, sig)
         if not ok:
-            agent_audit(cfg, actor, cmd, inner, risk, "deny-need-approval",
-                        why=why, exit_code=3, sig=sig, gateway="direct")
-            print("✗ 拒绝执行：agent 会话（%s）直接执行破坏性命令 tf %s。\n"
-                  "  请走网关：autozt act %s\n"
-                  "  人工批准（必须在交互终端里）：autozt approve %s\n"
-                  "  （自己的定时脚本需要非交互执行时：AUTOZT_AGENT_STRICT=0，"
-                  "或 tf.yaml 写 agent_gate: off）"
-                  % (actor, cmd, " ".join(inner), " ".join(inner)))
-            return 3
+            rc = agent_request_approval(cfg, cmd, inner, why, actor, "direct",
+                                        outer=outer)
+            print("  （自己的定时脚本需要非交互执行时：AUTOZT_AGENT_STRICT=0，"
+                  "或 tf.yaml 写 agent_gate: off）")
+            return rc
         agent_audit(cfg, actor, cmd, inner, risk, "allow-direct-approved",
                     why=why, sig=sig, approved_by=approver or "human",
                     gateway="direct")

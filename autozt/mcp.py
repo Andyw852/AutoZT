@@ -15,8 +15,11 @@ import glob
 import re
 import json
 import os
+import queue
 import subprocess
 import sys
+import threading
+import time
 from collections import OrderedDict
 
 from autozt import agent_protocol as _protocol
@@ -98,11 +101,42 @@ TOOLS = [
       "temperature":{"type":"number"},"carrier":{"type":"number"},"direction":{"type":"string"}},
       "required":["result_dir","property"], "additionalProperties":False}, "read", ["results"]),
     # ---- 变更（走 act 网关）----
-    ("start_step", "推进材料/步骤（输入没生成先 gen 再提交；受 max_jobs 并发上限约束）",
+    ("start_step", "推进材料/步骤（输入没生成先 gen 再提交；受 max_jobs 并发上限约束）。"
+     "force=true 越过闸门（max_jobs/依赖/环境检查），属破坏性：返回审批卡片，用户同意后才执行",
      {"type": "object", "properties": {"tt": {"type": "string"},
                                        "material": {"type": "string"},
-                                       "step": {"type": "string"}},
+                                       "step": {"type": "string"},
+                                       "force": {"type": "boolean"}},
       "required": ["material"]}, "mutate", ["start"]),
+    ("task_graph", "任务图：技能的步骤依赖 + 每步当前状态（✔完成 ▶运行 ◷排队 ✖失败 …、作业号、"
+     "排队原因、失败诊断）。带 material = 单材料；不带 = 整技能各步骤的材料计数。"
+     "给用户汇报进度、或请求破坏性动作前先给用户看它（只读）",
+     {"type": "object", "properties": {"project": _PROJ, "tt": {"type": "string"},
+                                       "material": {"type": "string"},
+                                       "format": {"type": "string",
+                                                  "enum": ["text", "mermaid"]}},
+      "additionalProperties": False}, "read", ["graph"]),
+    ("request_destructive_action", "申请一个破坏性动作（cancel=取消作业 stop / rebuild=删目录重算 "
+     "rerun / clean=清理回 PREP / force_start=强制提交 start -f）。**不会直接执行**："
+     "客户端支持确认框（elicitation）时直接弹框让用户点；否则返回审批卡片（命令、后果、"
+     "任务图里标出目标步骤）和 request_id——把卡片原样给用户看，用户在对话里明确同意后"
+     "调用 approve_request 执行",
+     {"type": "object", "properties": {"action": {"type": "string", "enum": [
+                                           "cancel", "rebuild", "clean", "force_start"]},
+                                       "tt": {"type": "string"},
+                                       "material": {"type": "string"},
+                                       "step": {"type": "string"}},
+      "required": ["action", "material"], "additionalProperties": False},
+     "destructive", ["request"]),
+    ("approve_request", "用户在对话里明确同意审批卡片后调用：批准该 request_id 并立即执行"
+     "（reply 必须是用户的原话，进审计日志；用户拒绝时 decision=deny 作废请求）。"
+     "没问过用户、或用户没明确同意，绝对不要调用",
+     {"type": "object", "properties": {"request_id": {"type": "string"},
+                                       "reply": {"type": "string"},
+                                       "decision": {"type": "string",
+                                                    "enum": ["approve", "deny"]}},
+      "required": ["request_id", "reply"], "additionalProperties": False},
+     "destructive", ["approve"]),
     ("prepare_step", "准备或更新本步骤输入，保留已有产物，不提交；检查后再调用 start_step",
      {"type": "object", "properties": {"tt": {"type": "string"},
                                        "material": {"type": "string"},
@@ -158,7 +192,7 @@ TOOLS = [
                                                            "minimum": 1, "maximum": 20},
                                            "source": _SOURCE},
       "additionalProperties": False}, "read", ["inspect"]),
-    # ---- 破坏性（走 act 网关，默认拒绝，需人工 approve）----
+    # ---- 破坏性（走 act 网关：不直接执行，签发请求号 + 审批卡片，用户同意后执行）----
     ("cancel_step", "取消该步骤的作业（破坏性）",
      {"type": "object", "properties": {"tt": {"type": "string"},
                                        "material": {"type": "string"},
@@ -242,6 +276,9 @@ WORKFLOW_TOOLS = {
     "preflight", "results",
     # 新材料接入与改参数：以前 workflow 档没有这两个入口，agent 只好绕开 autozt
     "register_material", "conf_get", "conf_set", "check_env",
+    # 任务图 + 对话内审批：破坏性动作只能「申请」（返回审批卡片/弹确认框），
+    # 用户同意后 approve_request 执行——不用用户自己去终端敲命令
+    "task_graph", "request_destructive_action", "approve_request",
 }
 
 TOOL_RESULT_SCHEMA = {
@@ -818,6 +855,171 @@ def _apply_actions(args):
                    error=execution.get("error") if failed else None)
 
 
+# ===== 对话内审批：elicitation（客户端确认框）+ 审批卡片回退 =====
+_CLIENT = {"elicitation": False, "protocol": None}      # initialize 时记下客户端能力
+_IO = {"q": None, "backlog": [], "seq": 0, "current": None}
+_DESTRUCTIVE_ACTIONS = {"cancel": ["stop", "-y"], "rebuild": ["rerun", "-y"],
+                        "clean": ["clean", "-y"], "force_start": ["start", "-f"]}
+
+
+def _write(msg):
+    sys.stdout.write(json.dumps(msg, ensure_ascii=False) + "\n")
+    sys.stdout.flush()
+
+
+def _approval_wait():
+    try:
+        return max(5, int(os.environ.get("AUTOZT_APPROVAL_WAIT") or 120))
+    except ValueError:
+        return 120
+
+
+def _elicitation_enabled():
+    if (os.environ.get("AUTOZT_MCP_ELICITATION") or "").strip().lower() in (
+            "0", "false", "no", "off"):
+        return False
+    return bool(_CLIENT.get("elicitation")) and _IO.get("q") is not None
+
+
+def _client_request(method, params, timeout):
+    """服务端 → 客户端的 JSON-RPC 请求（elicitation 用），在 stdio 循环里同步等回复。
+
+    等待期间客户端发来的其它消息先放进 backlog，回复后由主循环照常处理；ping 当场回；
+    当前 tools/call 被客户端取消则放弃等待。返回 (result 或 None, 原因)。"""
+    q = _IO.get("q")
+    if q is None:
+        return None, "no_channel"
+    _IO["seq"] += 1
+    rid = "autozt-%d" % _IO["seq"]
+    _write({"jsonrpc": "2.0", "id": rid, "method": method, "params": params})
+    deadline = time.time() + timeout
+    while True:
+        left = deadline - time.time()
+        if left <= 0:
+            return None, "timeout"
+        try:
+            line = q.get(timeout=left)
+        except queue.Empty:
+            return None, "timeout"
+        if line is None:
+            _IO["backlog"].append(None)
+            return None, "eof"
+        try:
+            msg = json.loads(line)
+        except ValueError:
+            _IO["backlog"].append(line)
+            continue
+        if not isinstance(msg, dict):
+            _IO["backlog"].append(line)
+            continue
+        if "method" not in msg and msg.get("id") == rid:
+            if msg.get("error"):
+                return None, "error: %s" % (msg["error"] or {}).get("message")
+            return msg.get("result") or {}, None
+        if msg.get("method") == "ping" and "id" in msg:
+            _write({"jsonrpc": "2.0", "id": msg["id"], "result": {}})
+            continue
+        if msg.get("method") == "notifications/cancelled":
+            if (msg.get("params") or {}).get("requestId") == _IO.get("current"):
+                return None, "cancelled"
+            continue
+        _IO["backlog"].append(line)
+
+
+def _approval_event(out):
+    """CLI 被拦下时输出的 [agent-approval] {...} 行 → dict；没有返回 None。"""
+    for ln in reversed((out or "").splitlines()):
+        if ln.startswith("[agent-approval] "):
+            try:
+                return json.loads(ln[len("[agent-approval] "):])
+            except ValueError:
+                return None
+    return None
+
+
+def _elicit_message(ev):
+    g = "\n\n".join(x.get("text") or "" for x in (ev.get("graphs") or []) if x.get("text"))
+    lines = ["AutoZT 需要你确认一个破坏性动作：", "",
+             "命令：%s" % ev.get("command"),
+             "后果：%s" % ev.get("consequences")]
+    if g:
+        lines += ["", "任务图（◀ = 本次目标，↳ = 受影响的下游）：", g]
+    lines += ["", "请求号 %s，%s 秒内有效。勾选「执行」并接受才会执行；拒绝或关闭则不执行。"
+              % (ev.get("request_id"), ev.get("expires_in_s"))]
+    return "\n".join(lines)
+
+
+def _strip_event(text):
+    return "\n".join(ln for ln in (text or "").splitlines()
+                     if not ln.startswith("[agent-approval] ")).strip()
+
+
+def _needs_approval(risk, ev, note=None):
+    rid = ev.get("request_id")
+    data = {"needs_approval": True, "request_id": rid, "command": ev.get("command"),
+            "consequences": ev.get("consequences"),
+            "approval_mode": ev.get("approval_mode"),
+            "expires_in_s": ev.get("expires_in_s"),
+            "graphs": [{k: g.get(k) for k in ("text", "mermaid", "marks") if g.get(k)}
+                       for g in (ev.get("graphs") or [])],
+            "card": ev.get("card")}
+    if note:
+        data["elicitation"] = note
+    if ev.get("approval_mode") == "chat":
+        data["next"] = ("把 card 原样展示给用户并询问是否执行；用户明确同意后调用 "
+                        "approve_request(request_id=%r, reply=<用户原话>)；用户拒绝则 "
+                        "approve_request(request_id=%r, reply=<原话>, decision='deny')。"
+                        "不要替用户做决定。" % (rid, rid))
+    else:
+        data["next"] = ("本机是严格模式（approval_mode: tty）：请用户在交互终端运行 "
+                        "autozt approve --request %s" % rid)
+    text = (ev.get("card") or "") + "\n\n[给 agent] " + data["next"]
+    return _result(risk, rc=3, data=data, error="needs_approval: 未执行，等待用户同意",
+                   text=text)
+
+
+def _run_approval(risk, rid, reply, via, decision="approve"):
+    """批准（并执行）或作废一个请求号——仍然只调 CLI。"""
+    if decision == "deny":
+        rc, out, err = _run(["approve", "--deny", rid, "--reply", reply])
+        combined = (out + err).strip()
+        return _result(risk, rc=rc, data={"approved": False, "declined": True,
+                                          "request_id": rid, "stdout": combined},
+                       error=None if rc == 0 else combined)
+    rc, out, err = _run(["approve", "--request", rid, "--reply", reply, "--via", via])
+    combined = _strip_event((out or "") + (("\n" + err) if (err or "").strip() else ""))
+    return _result(risk, rc=rc, data={"approved": rc == 0 or "已批准" in combined,
+                                      "via": via, "request_id": rid, "stdout": combined},
+                   error=None if rc == 0 else (combined or "approve failed"),
+                   text=combined)
+
+
+def _handle_approval(risk, ev):
+    """被网关拦下的破坏性动作：能弹确认框就弹（用户点了才执行），否则返回审批卡片。"""
+    rid = ev.get("request_id")
+    note = None
+    if rid and ev.get("approval_mode") == "chat" and _elicitation_enabled():
+        res, why = _client_request("elicitation/create", {
+            "message": _elicit_message(ev),
+            "requestedSchema": {"type": "object", "properties": {
+                "confirm": {"type": "boolean", "title": "执行", "default": False,
+                            "description": "勾选并接受 = 同意执行上面的命令"}},
+                "required": ["confirm"]}}, _approval_wait())
+        if res is not None:
+            action = res.get("action")
+            confirm = (res.get("content") or {}).get("confirm") is True
+            if action == "accept" and confirm:
+                return _run_approval(risk, rid, "MCP 确认框：执行", "mcp-elicitation")
+            if action == "decline" or action == "accept":
+                return _run_approval(risk, rid, "MCP 确认框：%s" % (
+                    "拒绝" if action == "decline" else "未勾选执行"), "mcp-elicitation",
+                    decision="deny")
+            note = "用户关闭了确认框（%s），改为在对话里询问" % action
+        else:
+            note = "确认框不可用（%s），改为在对话里询问" % why
+    return _needs_approval(risk, ev, note=note)
+
+
 def call_tool(name, args, _internal=False):
     """执行一个工具：只读直连，变更/破坏性走 autozt act（会返回需批准的错误）。"""
     if name not in BY_NAME:
@@ -882,8 +1084,33 @@ def call_tool(name, args, _internal=False):
             args["result_dir"], args["property"], temperature=args.get("temperature"),
             carrier=args.get("carrier"), direction=args.get("direction")))
 
+    if name == "task_graph":
+        argv = ([] if not args.get("project") else ["--project", str(args["project"])])
+        argv += (["-tt", str(args["tt"])] if args.get("tt") else [])
+        argv += (["-p", str(args["material"])] if args.get("material") else [])
+        rc, out, err = _run(argv + ["graph", "--json"])
+        parsed, parse_error = _json_stdout(out)
+        if rc != 0 or parse_error:
+            return _result("read", rc=rc or 1,
+                           error=((out or "") + (err or "")).strip()[:4000] or parse_error)
+        graphs = parsed if isinstance(parsed, list) else [parsed]
+        if args.get("format") == "mermaid":
+            text = "\n\n".join("```mermaid\n%s\n```" % g.get("mermaid", "") for g in graphs)
+        else:
+            text = "\n\n".join(g.get("text", "") for g in graphs)
+        return _result("read", data=parsed, text=text)
+    if name == "approve_request":
+        return _run_approval(risk, str(args["request_id"]).strip(), str(args["reply"]),
+                             "mcp", decision=args.get("decision") or "approve")
+
     argv = _mat_args(args)
     json_result = False
+    if name == "request_destructive_action":
+        argv = [x for x in argv] + list(_DESTRUCTIVE_ACTIONS[args["action"]])
+    elif name in ("cancel_step", "rebuild_step", "clean_material"):
+        argv += list(verb) + ["-y"]       # 卡片/确认框就是确认；-y 不参与签名
+    elif name == "start_step" and args.get("force"):
+        argv += ["start", "-f"]
     if name == "list_skills":
         argv = ["schema", "--json"]
         json_result = True
@@ -943,12 +1170,19 @@ def call_tool(name, args, _internal=False):
         # Keep detailed reads on the same explicitly read-only collector as snapshots.
         argv += ["list", "--json"]
         json_result = True
+    elif name in ("request_destructive_action", "cancel_step", "rebuild_step",
+                  "clean_material") or (name == "start_step" and args.get("force")):
+        pass                                  # argv 已在上面拼好
     else:
         argv += list(verb)
     if risk != "read":
-        # 变更/破坏性：交给动作网关（agent 会话下破坏性动作会被拒并给出批准命令）
+        # 变更/破坏性：交给动作网关（破坏性动作不执行，签发请求号 + 审批卡片）
         argv = ["act"] + argv
     rc, out, err = _run(argv)
+    if rc == 3:
+        _ev = _approval_event(out)
+        if _ev:
+            return _handle_approval("destructive", _ev)
     # CLI 在代理环境会把错误镜像到 stdout（[autozt error] …），stderr 里同一句不再重复拼
     _err = "\n".join(ln for ln in (err or "").splitlines()
                      if ln.strip() and ln.strip() not in (out or ""))
@@ -1038,6 +1272,11 @@ def handle(req):
     if method == "initialize":
         requested = ((req.get("params") or {}).get("protocolVersion") or "").strip()
         selected = requested if requested in SUPPORTED_PROTOCOL_VERSIONS else PROTOCOL_VERSION
+        caps = (req.get("params") or {}).get("capabilities") or {}
+        # elicitation（服务端请客户端弹确认框）是 2025-06-18 才有的能力
+        _CLIENT["elicitation"] = (isinstance(caps, dict) and "elicitation" in caps
+                                  and selected >= "2025-06-18")
+        _CLIENT["protocol"] = selected
         result = {"protocolVersion": selected,
                   "capabilities": {"tools": {"listChanged": False}, "resources": {"subscribe": False,
                                                                   "listChanged": False},
@@ -1102,24 +1341,41 @@ def main(argv=None):
         raw = argv[i + 2] if len(argv) > i + 2 else "{}"
         print(json.dumps(call_tool(name, json.loads(raw)), ensure_ascii=False))
         return 0
-    for line in sys.stdin:
+    # stdin 由读线程塞进队列：处理 tools/call 时服务端可以反过来向客户端发请求
+    # （elicitation 确认框）并在同一条流上等回复，期间到达的其它消息先排进 backlog。
+    q = queue.Queue()
+    _IO["q"] = q
+
+    def _reader():
+        for raw in sys.stdin:
+            q.put(raw)
+        q.put(None)
+
+    threading.Thread(target=_reader, name="autozt-mcp-stdin", daemon=True).start()
+    while True:
+        line = _IO["backlog"].pop(0) if _IO["backlog"] else q.get()
+        if line is None:
+            break
         line = line.strip()
         if not line:
             continue
         try:
             req = json.loads(line)
         except ValueError:
-            sys.stdout.write(json.dumps(
-                {"jsonrpc": "2.0", "id": None,
-                 "error": {"code": -32700, "message": "Parse error"}},
-                ensure_ascii=False) + "\n")
-            sys.stdout.flush()
+            _write({"jsonrpc": "2.0", "id": None,
+                    "error": {"code": -32700, "message": "Parse error"}})
             continue
-        resp = handle(req)
+        if isinstance(req, dict) and "method" not in req and (
+                "result" in req or "error" in req):
+            continue                          # 迟到的客户端回复（确认框超时后才点）：忽略
+        _IO["current"] = req.get("id") if isinstance(req, dict) else None
+        try:
+            resp = handle(req)
+        finally:
+            _IO["current"] = None
         if resp is None:
             continue
-        sys.stdout.write(json.dumps(resp, ensure_ascii=False) + "\n")
-        sys.stdout.flush()
+        _write(resp)
     return 0
 
 

@@ -245,7 +245,21 @@ def capabilities() -> Dict[str, Any]:
             "retry": "explicit_review",
             "destructive": ["stop", "rerun", "clean", "conf_set", "hpc"],
             "gateway": "autozt act",
+            # 对话内审批：破坏性动作被拦下 → 请求号 + 审批卡片（含任务图）→ 用户同意 → 执行
+            "approval": {
+                "flow": "request -> show card to user -> explicit consent -> approve (executes)",
+                "cli": "autozt approve --request <id> --reply \"<user words>\"",
+                "mcp": ["request_destructive_action", "approve_request"],
+                "elicitation": "MCP clients that declare the elicitation capability get a "
+                               "confirm dialog instead; only an explicit accept executes",
+                "modes": {"chat": "default; agent relays the user's consent",
+                          "tty": "approval_mode: tty -- only a human in a real terminal"},
+            },
         },
+        "task_graph": {"cli": "autozt [-tt T] [-p M] graph [--json|--mermaid]",
+                       "mcp": "task_graph",
+                       "use": "show the user the step DAG with live status before asking "
+                              "for consent or when reporting progress"},
         "request": {
             "ops": request_ops,
             "schema": request_schema,

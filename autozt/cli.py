@@ -106,13 +106,15 @@ def normalize_monitor_command(command, positional, restart=False):
 _ROUTE_VALUE_FLAGS = {'-c', '--config', '-tt', '-p', '-j', '-job', '-status', '--status',
                       '-x', '--exclude', '--host', '-u', '--user', '-proj', '--project',
                       '--expect-state', '--dataset', '--poscar', '--root', '--cluster',
-                      '--set', '--out'}
+                      '--set', '--out',
+                      # approve 的取值选项：用户原话/渠道可能恰好是 mcp/agent 这类词
+                      '--request', '--reply', '--deny', '--via'}
 
 # 带 -p 时可以只采目标材料的命令（进度文件对该技能有足够新的整技能覆盖时）。
 # 这些命令只动/只看 -p 指定的材料；并发闸门缺的那部分由 busy_baseline 补。
 # stop/rerun/clean（破坏性）与 status（会顺带 auto-fetch 全部材料）保持全量采集。
 _NARROW_CMDS = {"start", "retry", "fetch", "advance", "list", "json", "diagnose",
-                "conf", "dir", "prove"}
+                "conf", "dir", "prove", "graph"}
 
 
 def _bare_index(argv, name):
@@ -136,8 +138,14 @@ def route_subcommand(argv):
     命令直接进 main()：`autozt agent ...` 报"不是命令"，`autozt mcp` 要先把全部
     材料 ssh 采集一遍才启动。返回退出码；不是这两个子命令返回 None。"""
     argv = list(argv)
+    _gw = [i for i in (_bare_index(argv, "act"), _bare_index(argv, "approve"))
+           if i is not None]
+    _first = min(_gw) if _gw else None
     i_mcp = _bare_index(argv, "mcp")
     i_agent = _bare_index(argv, "agent")
+    # act/approve 网关在前：后面的 token 是被网关包着的命令/选项值，不是子命令
+    if _first is not None and all(i is None or _first < i for i in (i_mcp, i_agent)):
+        return None
     if i_mcp is not None and (i_agent is None or i_mcp < i_agent):
         from autozt import mcp as _mcp
         return _mcp.main(argv) or 0
@@ -313,6 +321,8 @@ def _main():
     p.add_argument("--cluster", dest="reg_cluster", metavar="集群",
                    help="register：顺带切到该集群（setting/<集群>.yaml；本机用 local）；"
                         "check：探测哪台（缺省 local，all = setting/ 下全部集群）")
+    p.add_argument("--mermaid", dest="mermaid", action="store_true",
+                   help="graph：输出 Mermaid 流程图（能渲染 Markdown 的客户端里就是一张图）")
     p.add_argument("--errors-only", dest="errors_only", action="store_true",
                    help="json：只保留含 FAIL 步骤的材料与 FAIL 步骤")
     p.add_argument("--limit", dest="limit", type=int, metavar="N",
@@ -348,7 +358,9 @@ def _main():
                 # register = 新材料一次接入（建目录+POSCAR+init+可选集群/数据集）
                 "register",
                 # check = 运行依赖探测（技能 × 集群：缺哪些 python 包/程序/POTCAR/模型）
-                "check"}
+                "check",
+                # graph = 任务图（步骤依赖 + 每步状态；带 -p 单材料，不带整技能）
+                "graph"}
     root, cmd, pos = None, "status", []
     for tok in a.args:  # v3.14：位置参数先收集，之后按"材料名/目录"消歧
         if tok == "help":
@@ -678,7 +690,7 @@ def _main():
     from autozt import tuning_value
     _ttl = tuning_value("cache_ttl", cfg)
     _cached = None
-    if cmd in ("list", "summary") and not a.refresh and _ttl > 0:
+    if cmd in ("list", "summary", "graph") and not a.refresh and _ttl > 0:
         _cached = _state_cache_load(cfg, types, a.tt, root, _ttl)
     if _cached is not None:
         data = _cached
@@ -688,7 +700,7 @@ def _main():
     else:
         data = collect_data(cfg, types)
         fill_local_dim(cfg, data, types)
-        if cmd in ("list", "summary") and not _narrowed:   # 只采了目标材料的不能当全量缓存
+        if cmd in ("list", "summary", "graph") and not _narrowed:   # 只采了目标材料的不能当全量缓存
             _state_cache_save(cfg, data, types, a.tt, root)
         # v1.0（W5–8）：把本轮的状态转移追加进 history.jsonl。这样**任何技能**
         # 加进来就自动有历史，不必各技能自己写日志；走缓存那一支不重复记录。
@@ -889,6 +901,9 @@ def _main():
         else:
             render_table(data)
         return
+    if cmd == "graph":   # 任务图：只读（同 list 的采集/缓存口径），不提交、不拉文件
+        from autozt.taskgraph import cmd_graph
+        sys.exit(cmd_graph(data, projs=projs, json_out=a.json_out, mermaid=a.mermaid))
     if cmd == "diagnose":   # v2.0：一键结构化诊断（只读；默认输出 FAIL 步）
         if not projs:
             sys.exit(_i18n.t("错误：", "error: ") + "diagnose 需要 -p 材料（如 tf -p C24/qHPC24 diagnose）。")

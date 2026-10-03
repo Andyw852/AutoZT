@@ -34,6 +34,7 @@
 1. **只通过 `autozt` 操作**。禁止自己拼接 `ssh`/`sbatch`/`scancel`/`rm` 来改状态。唯一例外：第 4 条的只读诊断。
 2. **破坏性操作必须先请示**：`stop`、`rerun`、`clean`、以及任何带 `-f` 或 `-y` 的命令，执行前必须向用户说明对象和后果，得到明确同意后才执行。
    **`-f`/`-y` 必须逐条单独请示**：批准"目标"（如"修 Mo2S3"）**不等于**批准具体命令里的 `-f`——不得从目标批准里推断 `-f` 的许可（2026-09-18 教训：以"修 Mo2S3"为由执行了 `start -f`）。**特别地：`mlff` 的 `step5_label`（及一切昂贵的扇出步骤）只用 `retry`/`start -f`，绝不 `rerun`/`clean`**——后两者会 `rm -rf` 步骤目录，毁掉已算完的 DFT 帧。用户说"以后这类都不用问了"才算预先授权。
+   **请示的方式（2026-10-03 起）**：直接执行原命令（或 MCP `request_destructive_action`），网关不会执行，而是返回**审批卡片**（命令、后果、任务图里 `◀` 标出目标步骤、`↳` 标出受影响的下游）和请求号 → 把卡片原样给用户看并询问 → 用户明确同意后执行 `autozt approve --request <请求号> --reply "<用户原话>"`（MCP `approve_request`）就地批准并执行；用户拒绝则 `autozt approve --deny <请求号>`。**不要再让用户自己去终端敲 approve 命令**。请求号绑定整条命令（改任何参数要重新申请），所以 `-f`/`-y` 逐条请示天然成立；没问过用户、或用户没明确说同意，绝不调用 approve。
 3. **监控循环里自动执行的命令只有**：`autozt progress`（及 `autozt agent progress`，只读本地进度文件、不连超算，**巡检首选**）、`autozt doctor`（只读配置预检）、`autozt summary --diff`、`autozt summary`、`autozt list`、`autozt -status <状态> summary`、`autozt -tt <类型> summary`、`autozt -p X status`、`autozt skills`、`autozt auto on`、`autozt -tt <技能> auto on`、`autozt start`、`autozt -p X start`。其余一律先请示（包括 `autozt conf --set`——它会改项目配置）。**巡检严禁每轮拉 `autozt json`**——它是全量结构化数据，token 巨大，只在写工具/做批量分析时才用。
 4. **只读诊断允许直接 ssh**：`tail`/`grep` 日志文件（如 `ssh jzzn 'tail -50 <步骤目录>/slurm-*.out'`、`grep -i error OUTCAR`）。只读，绝不改文件。材料目录下的 `stepN_check_and_resubmit.py`（autozt 已随生成推送到超算）也只允许加 `--check-only` 运行——它的重投功能**严禁使用**（重投一律走 `autozt retry`/`autozt rerun`，两套重投机制并用会打架）。其 stdout 是一行 JSON，退出码 0=converged / 10=not_converged / 20=running / 30=重启超限 / 40=error，可作为深度诊断依据。**注意 3090 服务器无 SLURM**：ssh 过去看到的 squeue 是 fakeslurm 垫片，作业状态一律以 `autozt` 采集为准，别用真 SLURM 语义判读。
 5. **用退出码判成败**：`autozt` 命令退出码 0 = 成功；非 0 = 失败或被拒绝。失败时把输出原文呈给用户，不要粉饰、不要假装成功。
@@ -82,6 +83,11 @@ autozt [-tt TT] -p MAT start           # 推进该材料：输入没生成先 ge
 autozt start                           # 推进所有材料（FAIL 的只报告不动）
 autozt [-tt TT] [-p MAT] advance       # 一次性采集、拉回已完成结果并推进就绪步骤；不改 auto_advance
 autozt monitor [-i 秒] -d              # 后台监控：自动拉结果+自动提交（restart 重做；watch 为旧名，仍可用）
+autozt [-tt TT] [-p MAT] graph         # ★ 任务图（只读）：步骤依赖 + 每步状态（✔完成 ▶运行 ◷排队 ✖失败 …、
+                                       #   作业号/排队原因/失败诊断/等哪个上游）；不带 -p = 整技能各步骤计数；
+                                       #   --json（含 mermaid）/ --mermaid。汇报进度、请示操作前给用户看（MCP task_graph）
+autozt approve --request <号> --reply "<用户原话>"   # 用户在对话里同意审批卡片后：批准并立即执行（MCP approve_request）
+autozt approve --list | --deny <号>    # 看待同意的审批卡片 / 用户拒绝时作废
 autozt [-tt TT] -p MAT [-j STEP] stop     # 取消作业（破坏性，先请示）
 autozt [-tt TT] -p MAT [-j STEP] retry    # 保留产物重生成输入，不提交；检查后 start（fanout 只补未完成子目录）
                                           #   ★ 从未跑过的步骤【不能用 retry】：它先要 cd 步骤目录归档旧调度日志，
@@ -135,6 +141,8 @@ autozt auto [on|off]                   # 一键开关全局 auto_advance（改�
 - 只走 JSON 面：`autozt agent …`（见 `docs/agent-cli.md`）或 `autozt mcp`（见 `docs/mcp.md`）；不要解析 `summary`/`list` 的人类文本表。
 - 失败处置看 `fails[].action`：`retry` 可按铁律提议/执行；`human_review` 不动、报告；同一步骤失败超过 `max_auto_retries`（默认 2）次时已自动变成 `human_review`（对应第五节"retry 2 次仍 FAIL 停手"）。
 - 破坏性命令的审批网关**默认开启**：AI 代理环境标记（CLAUDECODE/GEMINI_CLI/CODEX_SANDBOX，`agent_env_markers` 可追加）和非交互终端都会被识别，不再依赖 AI 自觉设 `AUTOZT_ACTOR`。
+- **对话内审批**（`approval_mode: chat`，默认）：破坏性命令被拦下 → 审批卡片（含任务图）+ 请求号 → 给用户看、问 → 用户同意 → `approve --request <号> --reply "<原话>"` 执行（原话进审计日志 `.tf_agent_log.jsonl`）。MCP 客户端支持确认框（elicitation）时服务端直接弹框，用户点「执行」才执行，关闭/超时（`AUTOZT_APPROVAL_WAIT`，默认 120 秒）**不执行**、退回对话询问。请求默认 900 秒有效、一次有效。tf.yaml `approval_mode: tty` 回到只认交互终端的严格模式。
+- **任务图**：`autozt [-tt T] [-p M] graph`（MCP `task_graph`）。巡检有异常时、请示任何操作前，先把相关材料的任务图给用户看。
 - `autozt auto on` 批量前先 `--dry-run` 看会改哪些 `setting.yaml`；已是目标值的文件不重写（幂等）。
 - 调优旋钮（`collect_chunk`/`collect_workers`/`op_workers`/`init_workers`/`cache_ttl`/`narrow_max_age`）写进 `tf.yaml`，cron 保活进程也能拿到；环境变量仍可临时覆盖。采集 payload 已改走 stdin，不会再 E2BIG。
 - monitor 日志每轮一行 `[round] {...}`（提交/新完成/新失败/耗时），后面最多 20 行变更；单轮异常只记日志不退出。
@@ -187,9 +195,10 @@ autozt auto [on|off]                   # 一键开关全局 auto_advance（改�
 
 ```
 【AutoZT 异常】C24/qHPC24 (band-dft-cpu, jzzn) S1_opt FAIL — force not converged
+任务图：<autozt -tt band-dft-cpu -p C24/qHPC24 graph 的输出>
 诊断：slurm-3559001.out 显示 ZBRENT 收敛困难，CONTCAR 存在
 建议：autozt -tt band-dft-cpu -p C24/qHPC24 retry（用 CONTCAR 续算）
-是否执行？
+是否执行？（破坏性动作直接给审批卡片，用户同意后 approve --request 执行）
 ```
 
 ## 七、token 省流监控技能（★ 核心）
@@ -238,7 +247,7 @@ autozt auto [on|off]                   # 一键开关全局 auto_advance（改�
 
 用户："C60 怎么样了" → `autozt -tt band-dft-cpu -p C60/qHPC60 status`（单材料详情，用人话汇报各步骤）。
 用户："把 qTPC24 的第二步重交" → `autozt -tt band-dft-cpu -p C24/qTPC24 -j 2 retry`，核验输入后 `autozt -tt band-dft-cpu -p C24/qTPC24 -j 2 start`，分别报告生成和提交结果；只有 start 成功后才报告新 jobid。
-用户："kl-dft-cpu 那个 Sn2Bi2Te 从头再来" → 属破坏性：`rerun` 前复述后果（删除全部步骤目录），确认后 `autozt -tt kl-dft-cpu -p Sn2Bi2Te rerun`。
+用户："kl-dft-cpu 那个 Sn2Bi2Te 从头再来" → 属破坏性：执行 `autozt -tt kl-dft-cpu -p Sn2Bi2Te rerun` 拿到审批卡片（后果 + 任务图）给用户看，用户回"同意"后 `autozt approve --request <号> --reply "同意"` 执行。
 用户："qHPC20 弹性常数想跑 A800" → `autozt -tt elastic-dft-cpu -p qHPC20 hpc a800`（改配置，说明只影响之后提交的作业）。
 用户："mlff 的 Si 继续下一代" → 说明三步：`conf --set params.GENERATION=K`（请示后执行）→ `-j 4 retry`（保留 gen-* 历史清单，勿用 rerun）→ `start`；若 S5 有帧失败只 `retry`。
 用户："现在整体什么情况" → `autozt summary` 先给一句话总览，别一上来就 `autozt json`。

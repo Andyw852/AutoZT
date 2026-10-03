@@ -67,7 +67,10 @@ project_roots:
 
 # AI / agent 接入（可选）：
 # agent_gate: auto         # 默认：AI 会话（AUTOZT_ACTOR / 常见代理环境标记 / 非交互终端）
-#                          # 执行破坏性命令必须人工 autozt approve；off = 只认 AUTOZT_ACTOR
+#                          # 执行破坏性命令必须经用户同意；off = 只认 AUTOZT_ACTOR
+# approval_mode: chat      # chat（默认）：agent 给用户看审批卡片（含任务图），用户在对话里
+#                          # 同意后 agent 执行 approve --request；tty：只认交互终端里的人工批准
+# approval_graph_timeout: 90   # 审批卡片取任务图的采集上限（秒）
 # agent_env_markers: [DSH_SESSION]   # 追加：你的 AI 代理在子进程里设的环境变量名
 # max_auto_retries: 2      # 进度文件里同一步骤失败超过这么多次就不再建议自动 retry
 # monitor_table: false     # true = monitor 每次变化打完整状态表（默认只打一行 [round] 摘要+变更）
@@ -283,7 +286,8 @@ AI 审计（v1.0 P0-1，agent 走网关：风险分档 + 每次调用留痕）�
   act <命令>         agent 的唯一入口：autozt act -p 材料 summary / autozt act start …
                      （只读与推进类放行并记账；stop/rerun/clean/-f/-y 需人工批准）
   act log           看审计流水（.tf_agent_log.jsonl）；act policy 看风险分档表
-  approve <命令>     人工在**交互终端**批准一条破坏性动作（一次性令牌，默认 15 分钟）
+  approve --list | --request 号 --reply "同意" | --deny 号   审批卡片：看 / 同意并执行 / 拒绝
+  graph              任务图：[-tt 技能] [-p 材料] graph（步骤依赖 + 每步状态；--json/--mermaid）
 
 旧命令和别名继续兼容。高级命令、全部参数及示例：tf --help-all
 注意：status/auto/monitor 可提交作业；只看状态用 summary 或 list。
@@ -322,9 +326,15 @@ USAGE = """\
             / 产物(Output)，外加输入、可调参数、能接哪些下游技能、纠错 handler。
             数据来自 skill.yaml 的 steps[] + io_schema.steps[]（见 skill/_template/）。
             不给技能名 = 全部技能一行摘要（含工具链）。写论文的图 2 可以直接用它。
+  graph     任务图（只读，同 list 的采集/缓存口径）：tf [-tt 技能] [-p 材料] graph
+            带 -p：单材料的步骤依赖树 + 每步状态（作业号/排队原因/失败诊断/等哪个上游）；
+            不带 -p：整技能每步的材料计数。--json（含 text/mermaid）、--mermaid。
   act       agent 动作网关（v1.0 P0-1）：agent 把命令交给 `autozt act <原命令>`——
-            只读/推进类放行并记账；stop/rerun/clean 与任何 -f/-y 属破坏性，
-            必须人工在交互终端 `autozt approve <同一条命令>` 换一次性令牌（默认 900 秒）。
+            只读/推进类放行并记账；stop/rerun/clean 与任何 -f/-y 属破坏性：不执行，
+            签发请求号并打印审批卡片（命令、后果、任务图里标出目标步骤）。
+            chat 模式（默认，approval_mode: chat）：agent 把卡片给用户看，用户在对话里
+            同意后 agent 执行 `autozt approve --request <号> --reply "<原话>"`，就地批准
+            并执行（一次有效，默认 900 秒）；tty 模式只认交互终端里的人工批准。
             每次调用都追加 {ts,actor,cmd,risk,decision,exit_code,approved_by} 到配置
             目录的 .tf_agent_log.jsonl：`autozt act log` 看流水，`autozt act policy` 看风险分档。
             网关默认开启（agent_gate: auto）：AUTOZT_ACTOR、常见 AI 代理环境标记
@@ -2040,7 +2050,10 @@ Agent interface (Model Context Protocol, stdio JSON-RPC)
 
 Safety gate (agent sessions only)
   act COMMAND...          run a command through the gateway (risk tiers + audit)
-  approve COMMAND...      human approval for a pending action (requires a real TTY)
+  approve --request ID --reply TEXT   approve a pending request and run it (the agent
+                          relays the user's consent; approval_mode: tty = real TTY only)
+  approve --list | --deny ID          pending approval cards / reject one
+  graph [--json|--mermaid]            task graph: step DAG + live status (-p one material)
 
 Common options
   -tt SKILL               skill key (e.g. kl-mlff-gpu, band-dft-cpu); see 'autozt skills'

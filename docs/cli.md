@@ -43,7 +43,8 @@ autozt --help 输出（自动生成）
       act <命令>         agent 的唯一入口：autozt act -p 材料 summary / autozt act start …
                          （只读与推进类放行并记账；stop/rerun/clean/-f/-y 需人工批准）
       act log           看审计流水（.tf_agent_log.jsonl）；act policy 看风险分档表
-      approve <命令>     人工在**交互终端**批准一条破坏性动作（一次性令牌，默认 15 分钟）
+      approve --list | --request 号 --reply "同意" | --deny 号   审批卡片：看 / 同意并执行 / 拒绝
+      graph              任务图：[-tt 技能] [-p 材料] graph（步骤依赖 + 每步状态；--json/--mermaid）
     
     旧命令和别名继续兼容。高级命令、全部参数及示例：tf --help-all
     注意：status/auto/monitor 可提交作业；只看状态用 summary 或 list。
