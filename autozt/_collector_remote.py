@@ -508,6 +508,51 @@ def ck_relax_skip(d, sc):
     return False, "OUTCAR missing"
 
 
+_STALE_RE = re.compile(r"\.stale-upstream-(.+)-(\d{14})$")
+
+
+def _stale_ts(name):
+    m = _STALE_RE.search(name)
+    if not m:
+        return None
+    try:
+        return m.group(1), time.mktime(time.strptime(m.group(2), "%Y%m%d%H%M%S"))
+    except (ValueError, OverflowError):
+        return None
+
+
+def stale_upstream(d):
+    """[V153] 上游重算后被归档、还没重新生成 -> (上游标签, 归档时刻)；否则 None。
+    ① 目录里有 *.stale-upstream-<上游>-<YYYYmmddHHMMSS>（技能 gen 的下游失效），且归档时刻不早于
+       目录里其它文件的修改时间（之后重新生成过、或重新生成失败留了 .autozt_gen_failed，就不算）；
+    ② 目录不在，同级有 <目录名>.stale-upstream-<上游>-<时刻>（整目录归档）。
+    以前这类步骤显示 FAIL，而 auto-advance 不重试 FAIL —— "会重新排队"其实要人手 retry。"""
+    best = None
+    if os.path.isdir(d):
+        newest = 0.0
+        try:
+            for e in os.scandir(d):
+                r = _stale_ts(e.name)
+                if r:
+                    if best is None or r[1] > best[1]:
+                        best = r
+                elif e.is_file(follow_symlinks=False):
+                    newest = max(newest, e.stat(follow_symlinks=False).st_mtime)
+        except OSError:
+            return None
+        return best if best and best[1] + 1.0 >= newest else None
+    par, base = os.path.split(os.path.normpath(d))
+    try:
+        for e in os.scandir(par or "."):
+            if e.name.startswith(base + ".stale-upstream-"):
+                r = _stale_ts(e.name)
+                if r and (best is None or r[1] > best[1]):
+                    best = r
+    except OSError:
+        return None
+    return best
+
+
 CHECKERS = {"outcar_relax": ck_outcar_relax, "outcar": ck_outcar,
             "deform": ck_deform,
             "wavecar": ck_wavecar, "eigenval": ck_eigenval, "marker": ck_marker,
@@ -664,6 +709,13 @@ def collect_type(t, jobs_by_dir):
                 f["done"], f["diag"] = ck(d, sc)
             else:
                 f["done"], f["diag"] = False, "dir missing"
+            if not f.get("done") and not (j and j.get("state") in ("R", "PD", "CG", "CF")):
+                _st = stale_upstream(d)                       # [V153]
+                if _st:
+                    f["stale"] = True
+                    f["plot_error"] = False
+                    f["diag"] = "上游 %s 重算后归档（%s），等重新生成" % (
+                        _st[0], time.strftime("%m-%d %H:%M", time.localtime(_st[1])))
             steps.append(f)
         m["steps"] = steps
         # v3.3：维度标记（任一步骤目录 workflow_method.txt 里的 DIM=2D/3D）

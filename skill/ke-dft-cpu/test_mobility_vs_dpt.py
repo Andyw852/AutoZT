@@ -399,5 +399,34 @@ class AnisoKzTests(unittest.TestCase):
                 self.assertNotIn("K 离网", prov)
 
 
+
+class BandEdgesRevTests(unittest.TestCase):
+    """V153：band_edges.json 的版本由 S7.1 写、S8.2 核对，两边共用 ke_common.BAND_EDGES_REV。
+    以前 S8.2 拿自己的 _SKILL_REV 比，永远不一致，每次都告警。"""
+
+    def _dpt(self):
+        sys.path.insert(0, str(ROOT / "step8.2_dpt"))
+        import gen_step12_dpt as D
+        return D
+
+    def test_current_file_no_warning_old_file_warns(self):
+        import ke_common as kc
+        D = self._dpt()
+        m = Path(tempfile.mkdtemp())
+        (m / D.DEFORM_READ_DIR).mkdir()
+        f = m / D.DEFORM_READ_DIR / "band_edges.json"
+        f.write_text(json.dumps({"skill_rev": kc.BAND_EDGES_REV, "electron": {}}))
+        with contextlib.redirect_stdout(io.StringIO()) as buf:
+            self.assertIsNotNone(D._band_edges_json(m))
+        self.assertNotIn("WARN", buf.getvalue())
+        f.write_text(json.dumps({"skill_rev": "2026-08-01-old", "electron": {}}))
+        with contextlib.redirect_stdout(io.StringIO()) as buf:
+            D._band_edges_json(m)
+        self.assertIn("重跑 step7b_deform_read", buf.getvalue())
+
+    def test_s71_writes_the_shared_constant(self):
+        src = (ROOT / "step7_deform" / "step7b_read" / "gen_step9b_deform_read.py").read_text(encoding="utf-8")
+        self.assertIn("_SKILL_REV = kc.BAND_EDGES_REV", src)
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

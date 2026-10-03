@@ -25,8 +25,9 @@ sys.path.insert(0, os.getcwd())
 import ke_common as kc  # noqa: E402
 
 # =========================== 可改参数区 ===========================
-# [SKILL_REV] 版本戳：写进 band_edges.json，与 gen_step12_dpt.py 交叉校验一致。
-_SKILL_REV = "2026-09-16-deform-ref-vacuum"
+# [SKILL_REV] 版本戳：写进 band_edges.json，gen_step12_dpt.py 拿它与 ke_common.BAND_EDGES_REV 核对（V153：
+#   两边共用这一个常量；以前 S8.2 拿自己的 _SKILL_REV 比，永远不一致）。
+_SKILL_REV = kc.BAND_EDGES_REV
 OUTDIR_NAME  = "step7b_deform_read"
 DEFORM_DIR   = "step7_deform"
 # patch_deform_ref（2026-09-16）：形变势的**参考能级口径**。
@@ -59,8 +60,12 @@ def _amset_env_src():
         _sh, _env = _p.get("CONDA_SH"), _p.get("AMSET_ENV")
         if _sh and _env:
             return "source %s && conda activate %s" % (_sh, _env)
-    except Exception:
-        pass
+        _why = "step.conf 里没有 CONDA_SH/AMSET_ENV"
+    except Exception as _e:                          # noqa: BLE001
+        _why = "读不了 step.conf（%s: %s）" % (type(_e).__name__, _e)
+    # [V153] 以前这里静默回退：读不到 step.conf 的环境就按主机猜一个，可能跑到另一个 AMSET 版本也没人知道
+    import sys as _sys
+    print("[WARN] AMSET 环境按主机探测回退（%s）——确认这就是要用的 amset 环境" % _why, file=_sys.stderr)
     if _os.path.isdir("/home/user_3090/miniconda3"):
         return "source /home/user_3090/miniconda3/etc/profile.d/conda.sh && conda activate amset"
     return "source /public/home/.../miniconda3/etc/profile.d/conda.sh && conda activate amset051"  # 2026-09-22 全局切 0.5.1

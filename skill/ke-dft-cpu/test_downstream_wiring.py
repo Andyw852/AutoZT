@@ -16,8 +16,10 @@
 import contextlib
 import io
 import json
+import os
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -56,36 +58,46 @@ def _gen_source(step):
     return (ROOT / s["src"] / gen).read_text(encoding="utf-8")
 
 
+ZT_STEPS = _steps(ROOT.parent / "zt-dft-cpu" / "skill.yaml")
+
+
 class WiringTests(unittest.TestCase):
     def test_every_needs_edge_is_covered(self):
-        miss = []
-        for s in STEPS:
-            for up in s.get("needs") or []:
-                if s["name"] in [d for d, _m in kc.DOWNSTREAM.get(up, ())]:
-                    continue
-                if (up, s["name"]) in kc.DOWNSTREAM_EXEMPT or (up, "*") in kc.DOWNSTREAM_EXEMPT:
-                    continue
-                miss.append("%s -> %s" % (up, s["name"]))
-        self.assertEqual(miss, [], "needs 边既不在 DOWNSTREAM 也不在 DOWNSTREAM_EXEMPT")
+        for label, steps in (("ke", STEPS), ("zt", ZT_STEPS)):          # V153：zt 也查
+            miss = []
+            for s in steps:
+                for up in s.get("needs") or []:
+                    if s["name"] in [d for d, _m in kc.DOWNSTREAM.get(up, ())]:
+                        continue
+                    if (up, s["name"]) in kc.DOWNSTREAM_EXEMPT or (up, "*") in kc.DOWNSTREAM_EXEMPT:
+                        continue
+                    miss.append("%s -> %s" % (up, s["name"]))
+            self.assertEqual(miss, [], "%s：needs 边既不在 DOWNSTREAM 也不在 DOWNSTREAM_EXEMPT" % label)
 
     def test_every_upstream_gen_invalidates(self):
         bad = []
+        zt = {s["name"] for s in ZT_STEPS}
         for up in kc.DOWNSTREAM:
+            if up in kc.DOWNSTREAM_FOREIGN:
+                self.assertIn(up, zt, up)                                    # zt 的 kl 分支
+                continue
             self.assertIn(up, BY_NAME, up)
             src = _gen_source(up)
-            if "invalidate_downstream(" not in src and "finalize_stale_inputs(" not in src:
-                bad.append(up + "：gen 不调 invalidate_downstream")
+            if not any(x in src for x in ("invalidate_downstream(", "finalize_stale_inputs(",
+                                          "cascade_on_rerun(")):
+                bad.append(up + "：gen 不调 invalidate_downstream / cascade_on_rerun")
             need = BY_NAME[up].get("gen_need")
             if need is not None and "ke_common.py" not in need:
                 bad.append(up + "：gen_need 没有 ke_common.py")
-            for d, _m in kc.DOWNSTREAM[up]:
-                self.assertIn(d, kc.DONE_MARKERS, "%s 没有 DONE_MARKERS，失效不了" % d)
+            for d, m in kc.DOWNSTREAM[up]:
+                if m != "dir":
+                    self.assertIn(d, kc.DONE_MARKERS, "%s 没有 DONE_MARKERS，失效不了" % d)
         self.assertEqual(bad, [])
 
     def test_zt_gen_need_matches(self):
-        zt = {s["name"]: s for s in _steps(ROOT.parent / "zt-dft-cpu" / "skill.yaml")}
+        zt = {s["name"]: s for s in ZT_STEPS}
         for up in kc.DOWNSTREAM:
-            if up in zt and zt[up].get("gen_need") is not None:
+            if up in zt and up not in kc.DOWNSTREAM_FOREIGN and zt[up].get("gen_need") is not None:
                 self.assertIn("ke_common.py", zt[up]["gen_need"], "zt " + up)
 
 
@@ -199,6 +211,105 @@ class PostLineageTests(unittest.TestCase):
             L.main([str(m), "--invalidate-from", "step2_bandgap/step2.3_hse_plot", "step8.2_dpt"])
         self.assertIn("step8_amset/transport.json", buf.getvalue())
         self.assertIn("step8.1_boltztrap/boltztrap_crta.json", buf.getvalue())
+
+
+def _chain(fresh_s1=True):
+    """S1 重新弛豫后 rerun：S1 目录是新建的；下游各步都是旧的"完成"。"""
+    m = Path(tempfile.mkdtemp())
+    old = time.time() - 7200
+
+    def w(rel, text="x"):
+        f = m / rel
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text(text)
+        os.utime(f, (old, old))
+    if not fresh_s1:
+        w("step1_opt/OUTCAR")
+    for d in ("step2_bandgap/step2.1_static", "step2_bandgap/step2.2_pbe", "step3_uniform", "step3b_uniform_full",
+              "step5_dielect", "step6_elastic", "step2_bandgap/step2.15_discriminant"):
+        w(d + "/OUTCAR")
+    w("step2_bandgap/step2.3_hse/p1of2/OUTCAR")
+    w("step2_bandgap/step2.3_hse_plot/band_summary.json", json.dumps({"gap_eV": 1.3}))
+    w("step2_bandgap/step2.2_pbe_plot/band_summary.json", json.dumps({"gap_eV": 0.9}))
+    w("step7_deform/deform-001/OUTCAR")
+    w("step7b_deform_read/deformation.h5")
+    w("step4_wave/wavefunction.h5")
+    (m / "step4_wave" / "WAVECAR").symlink_to("../step3_uniform/WAVECAR")
+    w("step8_amset/transport.json")
+    w("step5_dielect_validate/dielectric_check.json")
+    return m
+
+
+class CascadeTests(unittest.TestCase):
+    """V153：S1 / S2 链 rerun -> 下游 VASP 步骤整目录归档（autozt 看到目录不在 -> 等上游跑完后重新生成）。"""
+
+    def _run(self, m, step="step1_opt", jobs=None):
+        from unittest import mock
+        with mock.patch.object(kc, "_active_job_dirs", lambda: jobs), \
+                contextlib.redirect_stdout(io.StringIO()) as buf:
+            done = kc.cascade_on_rerun(m, step)
+        return done, buf.getvalue()
+
+    def test_s1_rerun_cascades_everything(self):
+        m = _chain()
+        done, out = self._run(m)
+        dirs = sorted(d for d, f in done if f == "<目录>")
+        self.assertEqual(dirs, sorted(["step2_bandgap/step2.1_static", "step2_bandgap/step2.15_discriminant",
+                                       "step2_bandgap/step2.2_pbe", "step2_bandgap/step2.2_pbe_plot",
+                                       "step2_bandgap/step2.3_hse", "step2_bandgap/step2.3_hse_plot",
+                                       "step3_uniform", "step3b_uniform_full", "step5_dielect", "step6_elastic",
+                                       "step7_deform"]))
+        for d in dirs:
+            self.assertFalse((m / d).exists(), d)
+            self.assertEqual(len(list((m / d).parent.glob(Path(d).name + ".stale-upstream-*"))), 1, d)
+        files = sorted((d, f) for d, f in done if f != "<目录>")
+        for x in (("step4_wave", "wavefunction.h5"), ("step7b_deform_read", "deformation.h5"),
+                  ("step8_amset", "transport.json"), ("step5_dielect_validate", "dielectric_check.json")):
+            self.assertIn(x, files)
+        self.assertIn("整个目录归档", out)
+
+    def test_in_place_regen_does_not_cascade(self):
+        m = _chain(fresh_s1=False)
+        done, out = self._run(m)
+        self.assertEqual(done, [])
+        self.assertTrue((m / "step3_uniform").is_dir())
+        self.assertIn("原地重新生成", out)
+
+    def test_running_downstream_left_alone(self):
+        m = _chain()
+        os.utime(m / "step2_bandgap" / "step2.2_pbe" / "OUTCAR", None)        # 刚写过 = 在跑
+        done, out = self._run(m, jobs={os.path.realpath(str(m / "step5_dielect"))})
+        dirs = [d for d, f in done if f == "<目录>"]
+        self.assertNotIn("step2_bandgap/step2.2_pbe", dirs)
+        self.assertNotIn("step5_dielect", dirs)
+        self.assertTrue((m / "step2_bandgap" / "step2.2_pbe").is_dir())
+        self.assertTrue((m / "step5_dielect").is_dir())
+        self.assertIn("step2_bandgap/step2.3_hse", dirs)                        # 在跑那步的下游照样归档
+        self.assertIn("step3_uniform", dirs)
+        self.assertEqual(out.count("★"), 2)
+        self.assertIn("squeue", out)
+
+    def test_s22_rerun_only_its_downstream(self):
+        m = _chain()
+        import shutil
+        shutil.rmtree(m / "step2_bandgap" / "step2.2_pbe")                    # autozt rerun S2.2 = rm -rf
+        done, _ = self._run(m, step="step2_bandgap/step2.2_pbe")
+        self.assertEqual(sorted(d for d, f in done if f == "<目录>"),
+                         ["step2_bandgap/step2.2_pbe_plot", "step2_bandgap/step2.3_hse",
+                          "step2_bandgap/step2.3_hse_plot"])
+        self.assertTrue((m / "step3_uniform").is_dir())
+
+    def test_gens_call_before_writing(self):
+        for step, first_write in (("step2_bandgap/step2.1_static", "step2.mkdir("),
+                                  ("step2_bandgap/step2.15_discriminant", "out.mkdir("),
+                                  ("step2_bandgap/step2.2_pbe", "os.makedirs("),
+                                  ("step2_bandgap/step2.3_hse", "resolve_tpl(")):
+            src = _gen_source(step)
+            body = src[src.index("\ndef main("):]
+            self.assertIn("_cascade_on_rerun(", body, step)
+            self.assertLess(body.index("_cascade_on_rerun("), body.index(first_write), step)
+        s1 = (ROOT / "step1_opt" / "gen_step1_std_opt.py").read_text(encoding="utf-8")
+        self.assertLess(s1.index('cascade_on_rerun(Path.cwd(), "step1_opt")'), s1.index("R.run("))
 
 
 class DptConfTests(unittest.TestCase):

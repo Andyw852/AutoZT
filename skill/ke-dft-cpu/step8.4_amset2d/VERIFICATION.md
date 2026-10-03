@@ -7103,3 +7103,73 @@ GaAs 电子受 POP 限制，ADP-only 本来就大。
 另记：试过加"六方胞 |x−y|/均值 > 5% 就拒绝"的 C₃ 检查，没有保留。原因有二：
 - K 在网格上时，IBZ→全 BZ 的展开按晶体对称性复制能量，人为造的各向异性也会被对称化（测试里得到 0.6857/0.6857），不会出现 x≠y；
 - 只看晶格度量会误拒六方晶格上真正缺 C₃ 的体系。
+
+## V153（2026-10-04）：重算后的下游状态四项修复
+
+### ① rerun 之后，下游 VASP 步骤带着旧结构一直显示"完成"
+
+**现象**：Mo2S3、Si_diamond、P1_Mo-MoS2 三次都是这样。S1 或 S2.1 重算后，S2.2/S2.3 照样判"完成"，每次都要人工 rerun。
+
+**原因**：
+- autozt 的 `rerun <步骤>` 只删除本步再重新生成；
+- V140/V148 的下游失效只会归档完成标记文件，而 VASP 步骤按 OUTCAR 判断完成；
+- 只归档一个文件也不行：原地重新生成时会读到旧的 WAVECAR/CHGCAR。
+
+**改动**：
+- `DOWNSTREAM` 新增 mode="dir"：把下游整个目录改名为 `<dir>.stale-upstream-<上游>-<时间>`（数据保留）。autozt 看到目录不在，会等上游跑完后重新生成。
+- 级联关系：
+  - S1 → S2.1、S3、S3b、S3c、S5、S6、S7，以及 zt 的 step1_std_opt；
+  - S2.1 → S2.15、S2.2；S2.15 → S2.155；S2.2 → S2.2 画图、S2.3；S2.3 → S2.3 画图；
+  - zt 的 kl 分支：step1_std_opt → step2_static → step3_nac；S8 → zt 的 step20_zt。
+  - 递归时，原有的 link/always/gap 规则照常生效（S4 的 h5、S7.1、S8 等都归档完成标记）。
+- 入口 `cascade_on_rerun(cwd, step)`：
+  - S1 和 S2.1/S2.15/S2.2/S2.3 的 gen 在写任何文件之前调用；
+  - 只有本步目录里还没有 OUTCAR（rerun 先 rm -rf 了）时才级联；
+  - `init -f` 或 retry 原地重新生成时不动下游，只给提示。
+- 安全：下游目录在 squeue 里有作业，或 OUTCAR/slurm 输出 15 分钟内还在更新，就不归档，只给 ★ 提示（先 scancel）。
+- skill.yaml（ke 与 zt）：S1、S2.1、S2.15、S2.2 的 gen_need 补上 ke_common.py。
+- `DOWNSTREAM_EXEMPT` 删掉 S1/S2 链的豁免（现在已经覆盖），新增 zt 的 kl 声子链豁免（gen 在 kl-dft-cpu）。test_downstream_wiring 的依赖边覆盖检查现在 ke 与 zt 都查。
+- 结构闸门的处理提示改为："rerun 最上游那一步即可"。
+
+### ② 被归档的步骤显示成 FAIL，而自动推进不重试 FAIL
+
+**原因**：autozt 的采集端不认识 `*.stale-upstream-*`。画图步骤因为"目录在、标记不在"被判 plot_error，作业步骤因为留着 slurm 输出被判 FAIL。而 auto-advance 只推进 TODO/PREP，所以 V140/V148 说的"会重新排队"，实际上都要人手 retry。P1_Mo-MoS2 任务图里的 6 个 FAIL 全是这种。
+
+**改动**（autozt）：
+- `_collector_remote.stale_upstream(d)`：目录里有 `*.stale-upstream-<上游>-<YYYYmmddHHMMSS>`，且归档时刻不早于目录里其它文件的修改时间；或者整个目录被归档 → stale。
+- `step_state`：stale 的步骤，上游未完成显示 WAIT；否则显示 `STALE`，kind 归为 PREP，auto-advance 会用 gen_first 重新生成。
+- 只认 stale-upstream：stale-grid / stale-input 是本步自己换网格或换输入，在同一次 gen 里就重做了。
+- 防止死循环：STALE 步骤重新生成失败时，留下 `.autozt_gen_failed`（比归档时刻新），下一轮显示 FAIL，不再自动重试。
+
+### ③ S8.2 每次都误报"step7b 可能跑的是旧副本"
+
+**原因**：S8.2 拿自己的 `_SKILL_REV`（2026-08-31）去比 S7.1 写进 band_edges.json 的版本（2026-09-16），两者从来没对上过。
+
+**改动**：`ke_common.BAND_EDGES_REV` 由 S7.1 写入、S8.2 核对，两边共用这一个常量。旧文件给出明确提示："重跑 step7b_deform_read"。S8.2 的 `_SKILL_REV` 更新为 2026-10-03-v153。
+
+### ④ 兜底 except 吞掉错误信息
+
+- 12 处只写异常类型名的告警补上信息，分布在 S8.1（6 处）、S8.2（全 BZ 展开）、S8.3（4 处）、S8.4（重叠运行前检查）、overlap_preflight（判据不可用）。
+- 会悄悄改变结果的 except-pass 改成告警：
+  - S7/S7.1 读不到 step.conf 的 amset 环境时，会按主机猜一个（可能跑到另一个 AMSET 版本）；
+  - S8/S8.4 写 interpolation_info.json 失败；
+  - S8.2 的 subprocess 展开失败（会改用 pymatgen）。
+- 其余 except-pass 是正常的尽力而为写法，不动：结构候选逐个尝试、版本号探测、AMSET 插件内部。
+
+### 测试
+
+- **test_downstream_wiring.py**（19 项，新增 5 项级联测试），覆盖：
+  - S1 rerun 时整链归档：11 个目录，加上 S4/S7.1/S8/S5.1 的标记；
+  - 原地重新生成时不级联；
+  - squeue 里有作业、或 OUTCAR 刚更新的下游不动，但它的下游照样归档；
+  - S2.2 rerun 只动它自己的下游；
+  - 各 gen 在第一次写文件之前调用。
+- **tests/test_stale_status.py**（autozt，7 项），覆盖：
+  - 归档后显示 STALE；
+  - 重新生成过，或重新生成失败后，不再算 STALE；
+  - 整目录归档；
+  - stale-grid / stale-input 不算；
+  - STALE 压过 FAIL，上游未完成时显示 WAIT，scancel 照旧优先；
+  - 失败标记只给 STALE 步骤打。
+- **test_mobility_vs_dpt.py**：新增 BandEdgesRevTests。
+- **test_exception_messages.py**（新）：本技能的 .py 里不许只写 `type(e).__name__`。在改动前的代码上正好报出那 13 处。

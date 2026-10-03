@@ -268,6 +268,24 @@ def finalize_stale_inputs(cwd, outdir, step, snap, n_grid_archived=0):
 # （S4 链 S3 的 WAVECAR/vasprun；S8/S8.4 链 S4/S4b 的 h5 与 S3/S3b 的 vasprun）——
 # 只有软链确实指向这个上游时才失效；mode="always"：下游直接读上游目录，一律失效。
 DOWNSTREAM = {
+    # [patch_rerun_cascade V153] VASP 步骤（S1 / S2 链）重算 -> 下游 VASP 步骤**整目录**归档（mode="dir"）。
+    #   autozt 的 rerun 只删本步；下游 VASP 步骤按 OUTCAR 判"完成"，归档某个文件没用（原地重新生成又会
+    #   读到旧 WAVECAR/CHGCAR），所以整目录改名 <dir>.stale-upstream-<步骤>-<时间>（数据保留），autozt 看到
+    #   目录不在 -> 等上游跑完后重新生成。Mo2S3 / Si_diamond / P1_Mo-MoS2 三次都是 S2.2/S2.3 带着旧结构
+    #   判"完成"，要手工 rerun。只在本步目录是新建的（rerun）时触发，见 cascade_on_rerun；下游有作业在
+    #   排队/运行时不动它（只告警）。S3b/S3c 的 needs 是 S3，但结构来自 S1，直接挂在 S1 下。
+    "step1_opt": [("step2_bandgap/step2.1_static", "dir"), ("step3_uniform", "dir"),
+                  ("step3b_uniform_full", "dir"), ("step3c_uniform_offgrid", "dir"),
+                  ("step5_dielect", "dir"), ("step6_elastic", "dir"), ("step7_deform", "dir"),
+                  ("step1_std_opt", "dir")],                    # 最后一个：zt 的 kl 分支（标准胞重新弛豫）
+    "step2_bandgap/step2.1_static": [("step2_bandgap/step2.15_discriminant", "dir"),
+                                     ("step2_bandgap/step2.2_pbe", "dir")],
+    "step2_bandgap/step2.15_discriminant": [("step2_bandgap/step2.155_discriminant_decide", "dir")],
+    "step2_bandgap/step2.2_pbe": [("step2_bandgap/step2.2_pbe_plot", "dir"), ("step2_bandgap/step2.3_hse", "dir")],
+    "step2_bandgap/step2.3_hse": [("step2_bandgap/step2.3_hse_plot", "dir")],
+    # zt 的 kl 分支：这些步骤的 gen 在 kl-dft-cpu、不调本函数，只靠 S1 的级联递归走到。
+    "step1_std_opt": [("step2_static", "dir")],
+    "step2_static": [("step3_nac", "dir")],
     "step3_uniform": [("step4_wave", "link"), ("step8_amset", "link"),
                       ("step8.4_amset2d", "link"), ("step8.1_boltztrap", "always"),
                       ("step8.2_dpt", "always")],
@@ -299,7 +317,7 @@ DOWNSTREAM = {
                                        ("step8.1_boltztrap", "always")],
     "step2_bandgap/step2.3_hse_plot": [("step8_amset", "gap"), ("step8.4_amset2d", "gap"),
                                        ("step8.1_boltztrap", "always")],
-    "step8_amset": [("step8.3_output", "always")],
+    "step8_amset": [("step8.3_output", "always"), ("step20_zt", "dir")],      # step20_zt：zt 的 ZT 汇总
     # [patch_post_invalidate V148] S8.3 的对比图也读 S8.4 的 transport.json；S8/S8.4/S8.1/S8.2 的 gen 现在都会调
     #   invalidate_downstream（以前只在表里、没有一个 gen 调：GaAs 的 S8.2 重跑了 4 次，S8.1 一直是旧 τ）。
     "step8.4_amset2d": [("step8.3_output", "always")],
@@ -309,17 +327,24 @@ DOWNSTREAM = {
 # skill.yaml 里不进 DOWNSTREAM 的 needs 边与理由（test_downstream_wiring.py：每条 needs 边要么在 DOWNSTREAM，
 #   要么在这里；"*" = 该上游的全部下游）。
 DOWNSTREAM_EXEMPT = {
-    ("step1_opt", "*"): "结构同源由 LINEAGE_POSCARS + S8/S8.4 的 check_lineage 管（各步 POSCAR 逐个与 S1 CONTCAR 比）",
-    ("step2_bandgap/step2.1_static", "*"): "S2 链：结构同源由 LINEAGE_POSCARS 管",
-    ("step2_bandgap/step2.15_discriminant", "*"): "金属/半导体判别的决策链，不进输运",
-    ("step2_bandgap/step2.2_pbe", "*"): "S2 链：结构由 LINEAGE_POSCARS 管；画图产物比来源旧由 LINEAGE_DERIVED 管",
-    ("step2_bandgap/step2.3_hse", "*"): "同上（S2.3 画图 vs S2.3 vasprun 由 LINEAGE_DERIVED 管）",
     ("step3_uniform", "step3b_uniform_full"): "S3b 从 S3 的 CHGCAR 起步后自洽到收敛（ICHARG=1），终点不依赖 S3；结构由 LINEAGE_POSCARS 管",
     ("step3b_uniform_full", "step3c_uniform_offgrid"): "S3c 段 1 自己自洽，不读 S3b 的产物；结构由 LINEAGE_POSCARS 管",
     ("step6_elastic", "step8.1_boltztrap"): "S8.1 的 τ 来自 S8.2：S6 -> S8.2 -> S8.1 递归失效",
     ("step7b_deform_read", "step8.1_boltztrap"): "同上：S7.1 -> S8.2 -> S8.1 递归失效",
+    # zt 的 kl 声子链：gen 在 kl-dft-cpu，不在本技能维护；位移数据集不来自 S1（step4_disp 没有 needs）
+    ("step4_disp", "*"): "kl 技能的声子链（gen 在 kl-dft-cpu）",
+    ("step5_fc", "*"): "kl 技能的声子链（gen 在 kl-dft-cpu）",
+    ("step6_kappa", "*"): "kl 技能的声子链（gen 在 kl-dft-cpu）",
 }
+# DOWNSTREAM 里 gen 不在本技能的上游（zt 的 kl 分支）：它们自己不调失效，只被 S1 的级联递归走到。
+DOWNSTREAM_FOREIGN = frozenset({"step1_std_opt", "step2_static"})
+RUNNING_GRACE_S = 900       # [V153] 下游目录的 OUTCAR / slurm 输出这么多秒内还在更新 -> 当作在跑，不整目录归档
 GAP_TOL_EV = 1e-3
+# [V153] band_edges.json 的格式/口径版本：S7.1（gen_step9b）写、S8.2（gen_step12_dpt）核对，两边都读这一个常量。
+#   以前两边各自拿脚本自己的 _SKILL_REV 比（S8.2 "2026-08-31-rscan" vs S7.1 "2026-09-16-deform-ref-vacuum"），
+#   从来没对上过，每次 S8.2 都告警"step7b 可能跑的是旧副本"——一条永远在响的告警等于没有告警。
+#   改 band_edges.json 的字段或口径时改这里，S8.2 会对旧文件告警。
+BAND_EDGES_REV = "2026-09-16-deform-ref-vacuum"
 
 
 def consumer_bandgap(step_dir):
@@ -380,15 +405,65 @@ def _links_into(d, upstream_dir):
     return False
 
 
-def invalidate_downstream(cwd, step, reason, _seen=None, gap=None):
+def _active_job_dirs():
+    """squeue 里本用户作业的工作目录（realpath 集合）；没有 squeue / 读不到 -> None（退回看文件时间）。"""
+    try:
+        r = subprocess.run(["squeue", "-h", "-u", os.environ.get("USER", ""), "-o", "%Z"],
+                           capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if r.returncode != 0:
+        return None
+    return {os.path.realpath(x.strip()) for x in r.stdout.splitlines() if x.strip()}
+
+
+def _dir_busy(d, jobs):
+    """[V153] 下游目录（含扇出子目录）有作业在排队/运行，或 OUTCAR/slurm 输出刚更新过 -> 说明；否则 None。"""
+    import time as _t
+    rd = os.path.realpath(str(d))
+    if jobs:
+        hit = sorted(j for j in jobs if j == rd or j.startswith(rd + os.sep))
+        if hit:
+            return "squeue 里有作业的工作目录在这里（%s）" % (os.path.relpath(hit[0], rd))
+    now = _t.time()
+    for pat in ("OUTCAR", "slurm-*.out", "*/OUTCAR", "*/slurm-*.out"):
+        for f in Path(d).glob(pat):
+            try:
+                age = now - f.stat().st_mtime
+            except OSError:
+                continue
+            if age < RUNNING_GRACE_S:
+                return "%s 在 %.0f 秒前还在更新" % (os.path.relpath(str(f), rd), age)
+    return None
+
+
+def cascade_on_rerun(cwd, step, reason=None):
+    """[V153] VASP 步骤的 gen 开头调（写任何文件之前）：本步目录里还没有 OUTCAR（autozt rerun 先 rm -rf 了，
+    或第一次生成）-> invalidate_downstream（下游 VASP 步骤整目录归档、run:gen 产物归档）。
+    已经有 OUTCAR（init -f、retry 原地重新生成）-> 不动下游，只提示。返回归档清单。"""
+    cwd = Path(cwd)
+    out = cwd / step
+    had = [q for pat in ("OUTCAR", "*/OUTCAR") for q in out.glob(pat)] if out.is_dir() else []
+    if had:
+        if any((cwd / d).exists() for d, _m in DOWNSTREAM.get(step, ())):
+            print("[..] %s 原地重新生成（已有 OUTCAR）：不自动归档下游。结构或输入真的变了就用 rerun，"
+                  "或 tools/lineage_check.py <材料目录> --invalidate-from %s" % (step, step))
+        return []
+    return invalidate_downstream(cwd, step, reason or ("%s 目录是新建的（rerun）" % step))
+
+
+def invalidate_downstream(cwd, step, reason, _seen=None, gap=None, _jobs=None):
     """上游 step 要重算：把下游完成标记改名 *.stale-upstream-<step>-<时间>，递归传递。
 
     返回 [(下游步骤, 改名的文件), ...]。只改名不删除；下游目录不存在/没有标记时什么都不做。
     gap：S2 画图的新带隙（mode="gap" 的下游只在带隙变了时失效；不给 = 这类下游一律不动）。
+    mode="dir"（V153）：下游整个目录改名 <dir>.stale-upstream-<step>-<时间>，记作 (下游, "<目录>")；
+    下游有作业在排队/运行时不动（★ 告警）。
     """
     import time as _t
     cwd = Path(cwd)
     seen = _seen if _seen is not None else set()
+    jobs = _jobs if _jobs is not None else []          # [已查?, 结果]：整个递归只查一次 squeue
     done = []
     tag = "stale-upstream-%s-%s" % (step.replace("/", "_"), _t.strftime("%Y%m%d%H%M%S"))
     for down, mode in DOWNSTREAM.get(step, ()):
@@ -396,6 +471,21 @@ def invalidate_downstream(cwd, step, reason, _seen=None, gap=None):
             continue
         d = cwd / down
         if not d.is_dir():
+            continue
+        if mode == "dir":
+            seen.add(down)
+            if not jobs:
+                jobs.extend([True, _active_job_dirs()])
+            busy = _dir_busy(d, jobs[1])
+            if busy:
+                print("[WARN] ★ 上游 %s 重算，但下游 %s 看起来还在跑（%s）—— 没有归档。先 scancel 它，"
+                      "再 tools/lineage_check.py <材料目录> --invalidate-from %s" % (step, down, busy, step))
+            else:
+                d.rename(d.with_name(d.name + "." + tag))
+                done.append((down, "<目录>"))
+                print("[WARN] 上游 %s 重算（%s）-> 下游 %s 整个目录归档为 %s.%s，上游跑完后会重新生成"
+                      % (step, reason, down, d.name, tag))
+            done += invalidate_downstream(cwd, down, "上游 %s 失效" % step, seen, _jobs=jobs)
             continue
         if mode == "link" and not _links_into(d, cwd / step):
             continue
@@ -418,7 +508,7 @@ def invalidate_downstream(cwd, step, reason, _seen=None, gap=None):
         elif old_gap is not None:
             print("[WARN] ★ %s 的 settings.yaml 用的是旧带隙 %.4f eV（%s 现在是 %.4f eV），它还没跑完 —— "
                   "取消那个作业、rerun %s" % (down, old_gap, step, gap, down))
-        done += invalidate_downstream(cwd, down, "上游 %s 失效" % step, seen)
+        done += invalidate_downstream(cwd, down, "上游 %s 失效" % step, seen, _jobs=jobs)
     return done
 
 
@@ -727,8 +817,9 @@ def check_lineage(cwd, enabled=True, label="S8"):
           % ("ERROR" if enabled else "WARN", len(probs), label))
     for step, why in probs:
         print("        - %s：%s" % (step, why))
-    print("      处理：结构不同的 VASP 步骤 rerun（S2.3 要等 S2.2 跑完，S2.2 要等 S2.1）；派生步骤"
-          "（S4 / S4b / S7.1 / S2 画图 / S5.1）在来源跑完后 rerun；都 OK 后再 gen 本步。")
+    print("      处理：rerun **最上游**那个结构不同的步骤即可（V153 起它的 gen 会把下游 VASP 步骤整目录归档，"
+          "上游跑完后自动重新生成）；派生步骤（S4 / S4b / S7.1 / S2 画图 / S5.1）在来源跑完后 rerun；"
+          "都 OK 后再 gen 本步。")
     print("      已经 rerun 过的上游可用 tools/lineage_check.py <材料目录> --invalidate-from <步骤> 归档它的下游完成标记。")
     if enabled:
         sys.exit("[ERROR] %s：上游不同源，不生成（确需照跑：step.conf 写 STRUCTURE_GUARD = false）" % label)

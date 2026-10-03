@@ -333,8 +333,8 @@ def _dpt_module():
         spec.loader.exec_module(m)
         return m
     except Exception as e:                                    # noqa: BLE001
-        print("[WARN] 加载 DPT 模块失败（%s）——改从 %s/dpt_result.json 读"
-              % (type(e).__name__, DPT_DIR))
+        print("[WARN] 加载 DPT 模块失败（%s: %s）——改从 %s/dpt_result.json 读"
+              % (type(e).__name__, e, DPT_DIR))
         return None
 
 
@@ -383,7 +383,7 @@ def _tau_aniso(cwd, is_2d, T):
                     for c, v in out.items()))
                 return out
         except Exception as e:                                # noqa: BLE001
-            print("[WARN] 直接调用 DPT 失败（%s）——改读 json" % type(e).__name__)
+            print("[WARN] 直接调用 DPT 失败（%s: %s）——改读 json" % (type(e).__name__, e))
     return _tau_from_json(cwd)
 
 
@@ -477,7 +477,7 @@ def _resolve_kappa_L(cwd, T, ninfo):
     try:
         j = json.loads(src.read_text(encoding="utf-8"))
     except (OSError, ValueError) as e:
-        return None, None, ["# kappa_L 读取失败：%s（%s）" % (src, type(e).__name__)]
+        return None, None, ["# kappa_L 读取失败：%s（%s: %s）" % (src, type(e).__name__, e)]
 
     raw = j.get("kappa_xx_yy_zz")
     temps = j.get("temperatures")
@@ -725,7 +725,7 @@ def write_paper_scan(out, cwd, res, is_2d):
     try:                                            # patch_align_n
         lines += write_doping_aligned(out, cwd, rows, T, ninfo)
     except Exception as e:                          # noqa: BLE001
-        lines.append("# 掺杂对齐失败：%s" % type(e).__name__)
+        lines.append("# 掺杂对齐失败：%s: %s" % (type(e).__name__, e))
 
     try:
         import matplotlib
@@ -759,7 +759,7 @@ def write_paper_scan(out, cwd, res, is_2d):
         fig.savefig(out / ("paper_mu_scan_%dK.png" % round(T)), dpi=150)
         plt.close(fig)
     except Exception as e:                                    # noqa: BLE001
-        lines.append("# 画图跳过：%s" % type(e).__name__)
+        lines.append("# 画图跳过：%s: %s" % (type(e).__name__, e))
     return lines
 
 
@@ -826,8 +826,8 @@ def main():
                 fh.write("\n".join(extra) + "\n")
             print("\n".join(extra))
         except Exception as e:                          # noqa: BLE001
-            print("[WARN] 文献口径扫描失败（%s）——per-τ 结果不受影响"
-                  % type(e).__name__)
+            print("[WARN] 文献口径扫描失败（%s: %s）——per-τ 结果不受影响"
+                  % (type(e).__name__, e))
     print("[DONE] %s：boltztrap_crta.json 已生成" % OUTDIR_NAME)
 
 

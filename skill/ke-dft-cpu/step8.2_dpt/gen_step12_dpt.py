@@ -34,7 +34,7 @@ from pathlib import Path
 # =========================== 可改参数区 ===========================
 # [SKILL_REV] 版本戳：写进 dpt_result.json，铺开时验证跑的是哪份 skill 副本。
 # 每次改本脚本逻辑后更新（如 "2026-08-29-nstep-linear"）。
-_SKILL_REV = "2026-08-31-rscan"
+_SKILL_REV = "2026-10-03-v153"
 # [R-SCAN] 强制选点壳层 NSTEP（None=自动 2/3/4/5；填 2/3/4/5=只试该值，做 R-scan 用）。
 # 用法：tf -p <材料> -j step8.2_dpt conf --set FORCE_NSTEP=3 → retry + start，对比 dpt_result.json 的 m_d
 #   与 m_provenance 里的 R（V148 起写 step.conf，不改本脚本）。
@@ -522,11 +522,23 @@ def _band_edges_json(cwd):
     # step7b 跑的是另一份 skill 副本（旧副本无 ionrelax 支持，会静默读刚性构型，
     # E1 偏低 20% 且无报错）。沿用 C2 哲学：不一致硬失败，不静默降级。
     be_rev = be.get("skill_rev")
-    if be_rev and be_rev != _SKILL_REV:
-        print("[WARN] band_edges.json skill_rev=%s 与本脚本 %s 不一致——"
-              "step7b 可能跑的是旧副本（无 ionrelax 支持）"
-              % (be_rev, _SKILL_REV))
+    want = _band_edges_rev()
+    if be_rev and want and be_rev != want:
+        print("[WARN] band_edges.json 的版本 %s ≠ 当前 S7.1 的 %s —— 它是旧版 S7.1 生成的"
+              "（旧副本可能无 ionrelax 支持，E1 偏低且不报错）：重跑 step7b_deform_read" % (be_rev, want))
     return be
+
+
+def _band_edges_rev():
+    """[V153] 当前 S7.1 写 band_edges.json 用的版本（ke_common.BAND_EDGES_REV）；读不到 ke_common -> None（不核对）。"""
+    try:
+        for _up in Path(__file__).resolve().parents[:2]:
+            if (_up / "ke_common.py").is_file() and str(_up) not in sys.path:
+                sys.path.insert(0, str(_up))
+        import ke_common as _kc
+        return getattr(_kc, "BAND_EDGES_REV", None)
+    except ImportError:
+        return None
 
 
 def _vac_missing_msg(be, carrier, field):
@@ -791,8 +803,8 @@ def get_effective_mass_aniso(cwd, carrier, is_2d):
                     _sh, _e = _p.get("CONDA_SH"), _p.get("AMSET_ENV")
                     if _sh and _e:
                         _env = "source %s && conda activate %s" % (_sh, _e)
-                except Exception:
-                    pass
+                except Exception as _ee:                    # noqa: BLE001
+                    print("[..] %s：读 step.conf 的 amset 环境失败（%s），跳过 subprocess 展开" % (carrier, _exc_brief(_ee)))
                 if _env:
                     _code = ("import sys,json,numpy as np\n"
                              "from pymatgen.core import Structure\n"
@@ -818,8 +830,8 @@ def get_effective_mass_aniso(cwd, carrier, is_2d):
                         _expand_method = "amset-subproc"
                         expanded = True
                         _sub_ok = True
-            except Exception:
-                pass
+            except Exception as _es:                        # noqa: BLE001
+                print("[..] %s：amset subprocess 展开失败（%s），改用 pymatgen 点群展开" % (carrier, _exc_brief(_es)))
             if not _sub_ok:
                 # 层3：pymatgen 点群展开（+ 时间反演，只依赖 pymatgen）
                 try:
@@ -858,7 +870,7 @@ def get_effective_mass_aniso(cwd, carrier, is_2d):
                 except Exception as _e2:
                     return None, ("全 BZ 展开失败（amset/subprocess/pymatgen 都不可用：%s）"
                                   "——拒绝在 IBZ 上拟合 m*（单侧取点是系统性错误）"
-                                  % type(_e2).__name__)
+                                  % _exc_brief(_e2))
         # 展开后（amset/pymatgen 共用）：能量映射 + 精确匹配 IBZ 原 k
         ene = ene_ibz[kp_mapping]                   # (n_full, nb)
         d = kfrac - kfrac_ibz[k0_ibz]; d -= np.round(d)

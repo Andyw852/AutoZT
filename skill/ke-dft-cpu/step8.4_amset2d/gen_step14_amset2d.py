@@ -2160,8 +2160,8 @@ def apply_mesh_min(vasprun_path, out):
     try:
         (out / "interpolation_info.json").write_text(
             _json.dumps(info, ensure_ascii=False, indent=2))
-    except Exception:
-        pass
+    except Exception as _e:                          # noqa: BLE001
+        print("[WARN] 写 interpolation_info.json 失败（%s: %s）——最终插值网格的溯源没留下" % (type(_e).__name__, _e))
     if int(f) != f0:
         INTERPOLATION_FACTOR = int(f)
     if okm:
@@ -2655,7 +2655,7 @@ def main():
     except SystemExit:
         raise
     except Exception as _e:
-        print("[WARN] 重叠运行前检查失败（%s）——不拦截，但请人工确认" % type(_e).__name__)
+        print("[WARN] 重叠运行前检查失败（%s: %s）——不拦截，但请人工确认" % (type(_e).__name__, _e))
 
     print("[DONE] %s：settings.yaml + 软链 + %s 就绪；"
           "submit.sh 里先 import 插件再跑 Runner，产出 transport.json"

@@ -1731,8 +1731,8 @@ def apply_mesh_min(vasprun_path, out):
     try:
         (out / "interpolation_info.json").write_text(
             _json.dumps(info, ensure_ascii=False, indent=2))
-    except Exception:
-        pass
+    except Exception as _e:                          # noqa: BLE001
+        print("[WARN] 写 interpolation_info.json 失败（%s: %s）——最终插值网格的溯源没留下" % (type(_e).__name__, _e))
     if int(f) != f0:
         INTERPOLATION_FACTOR = int(f)
     if okm:

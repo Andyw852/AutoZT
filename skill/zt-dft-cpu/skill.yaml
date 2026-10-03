@@ -102,7 +102,7 @@ optional_steps:
       - {seq: 1, name: step1_opt, label: S1_opt,
          src: step1_opt,
          check: relax_injob, gen: gen_step1_std_opt.py, contcar_to_poscar: true,
-         gen_need: [relax_common.py, method_select.py, mol_common.py, incar_0d.tpl, submit_std_0d.tpl, dim_common.py, stepconf.py, step.conf, check_common.py, step1_check_and_resubmit.py, thickness_2d.py, vdw_radii.py,
+         gen_need: [ke_common.py, relax_common.py, method_select.py, mol_common.py, incar_0d.tpl, submit_std_0d.tpl, dim_common.py, stepconf.py, step.conf, check_common.py, step1_check_and_resubmit.py, thickness_2d.py, vdw_radii.py,
                     incar_2d.tpl, incar_3d.tpl, submit_std_2d.tpl, submit_std_3d.tpl]}
 
       - {seq: 3, name: step3_uniform, label: S3_uniform,
@@ -290,14 +290,14 @@ optional_steps:
          group: S2_bandgap, after: step1_opt,
          src: step2_bandgap/step2.1_static,
          check: outcar, gen: gen_step2_static.py,
-         gen_need: [stepconf.py, step.conf, dim_common.py, check_common.py, step2_check_and_resubmit.py,
+         gen_need: [ke_common.py, stepconf.py, step.conf, dim_common.py, check_common.py, step2_check_and_resubmit.py,
                     incar_2d.tpl, incar_3d.tpl, submit_std_2d.tpl, submit_std_3d.tpl],
          needs: ["step1_opt"]}
       - {seq: 2.15, name: "step2_bandgap/step2.15_discriminant", label: S2.15_discr,
          group: S2_bandgap, after: "step2_bandgap/step2.1_static",
          src: step2_bandgap/step2.15_discriminant,
          check: outcar, gen: gen_step2.15_discriminant.py,
-         gen_need: [check_common.py, check_discriminant.py, decide_discriminant.py,
+         gen_need: [ke_common.py, check_common.py, check_discriminant.py, decide_discriminant.py,
                     discriminant_common.py, stepconf.py, step.conf, dim_common.py],
          needs: ["step2_bandgap/step2.1_static"]}
       - {seq: 2.155, name: "step2_bandgap/step2.155_discriminant_decide", label: S2.155_discr,
@@ -315,7 +315,7 @@ optional_steps:
          group: S2_bandgap, after: "step2_bandgap/step2.1_static",
          src: step2_bandgap/step2.2_pbe,
          check: wavecar, gen: gen_step3_WAVECAR.py,
-         gen_need: [stepconf.py, step.conf, dim_common.py, check_common.py, step3_check_and_resubmit.py,
+         gen_need: [ke_common.py, stepconf.py, step.conf, dim_common.py, check_common.py, step3_check_and_resubmit.py,
                     incar_2d.tpl, incar_3d.tpl, submit_std_2d.tpl, submit_std_3d.tpl,
                     submit_ncl_2d.tpl, submit_ncl_3d.tpl],
          needs: ["step2_bandgap/step2.1_static"]}

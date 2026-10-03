@@ -10,6 +10,7 @@
 S8/S8.4 的 gen 做同一核对（STRUCTURE_GUARD），不通过就不生成。本工具只读（除非 --invalidate-from）。
 V148 起本工具另查（S8 的 gen 不查）：S8.1/S8.3 的产物是否旧于 S8.2/S8/S8.4，S8/S8.4 的带隙是否与 S2 画图一致。
 V149 起结构比对扣除整体平移（S3/S3b 的 align_origin 是刚性平移，不算不同）。
+V153：--invalidate-from 也接受 S1 / S2 链（下游 VASP 步骤整目录归档；在跑的不动）。
 
 用法：
     python lineage_check.py <材料目录或项目根> [--glob "*/ke-dft-cpu"]
