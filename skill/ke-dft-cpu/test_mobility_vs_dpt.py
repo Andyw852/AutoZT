@@ -124,6 +124,47 @@ class OtherToolsTests(unittest.TestCase):
         self.assertIn("空穴(p)", next(ln for ln in lines if ln.startswith("4.28")))
 
 
+class DegenerateEdgeTests(unittest.TestCase):
+    """V145：GaAs（无 SOC）Γ 点价带顶三重简并 —— 原来取到轻空穴，DPT 空穴 276 万 cm²/Vs。"""
+
+    def _fake(self):
+        import types
+        import numpy as np
+        from pymatgen.electronic_structure.core import Spin
+        k = np.linspace(0.0, 0.2, 5)                             # k[0] = Γ
+        vb = np.stack([-40.0 * k ** 2, -15.0 * k ** 2, -3.0 * k ** 2], axis=1)   # 按能量升序：轻 < 中 < 重
+        cb = (1.0 + 20.0 * k ** 2)[:, None]
+        ene = np.concatenate([vb, cb], axis=1)
+        occ = np.concatenate([np.ones_like(vb), np.zeros_like(cb)], axis=1)
+        return types.SimpleNamespace(eigenvalues={Spin.up: np.stack([ene, occ], axis=-1)})
+
+    def test_heavy_band_picked(self):
+        sys.path.insert(0, str(ROOT / "step8.2_dpt"))
+        import gen_step12_dpt as D
+        v = self._fake()
+        isp, k0, b0, ene = D._find_band_edge(v, "hole")
+        self.assertEqual((k0, b0), (0, 2))                        # 重空穴（编号最大），不是轻空穴（0）
+        self.assertEqual(D._EDGE_DEGEN["hole"], 3)
+        isp, k0, b0, ene = D._find_band_edge(v, "electron")
+        self.assertEqual((k0, b0), (0, 3))
+        self.assertEqual(D._EDGE_DEGEN["electron"], 1)
+        src = (ROOT / "step8.2_dpt" / "gen_step12_dpt.py").read_text(encoding="utf-8")
+        self.assertIn("重简并，取重带", src)
+
+    def test_mobility_tool_respects_degenerate_dpt(self):
+        m = _material()
+        f = m / "step8.2_dpt" / "dpt_result.json"
+        js = json.loads(f.read_text())
+        js["results"][1]["mobility_cm2_Vs"] = 2.76e6                 # 空穴 DPT 离谱
+        js["results"][1]["inputs"] = {"m_provenance": "...；带边 3 重简并，取重带（单带 DPT 对简并带边只是近似）"}
+        f.write_text(json.dumps(js))
+        with contextlib.redirect_stdout(io.StringIO()) as buf:
+            M.main([str(m)])
+        line_h = next(ln for ln in buf.getvalue().splitlines() if "空穴(p)" in ln)
+        self.assertIn("带边简并", line_h)
+        self.assertNotIn("dp_valley_probe", line_h)
+
+
 class DptReasonTests(unittest.TestCase):
     def test_failure_message_has_provenance(self):
         s = (ROOT / "step8.2_dpt" / "gen_step12_dpt.py").read_text(encoding="utf-8")

@@ -40,14 +40,25 @@ def _avg(t, is_2d):
 
 def dpt_by_carrier(path):
     """dpt_result.json -> {"electron": μ, "hole": μ}（没有 / 算不出为 None）。"""
-    out = {"electron": None, "hole": None}
+    return _dpt(path)[0]
+
+
+def dpt_degenerate(path):
+    """dpt_result.json 里 m* 取自简并带边的载流子（V145：m_provenance 含"重简并"）。"""
+    return _dpt(path)[1]
+
+
+def _dpt(path):
+    out, deg = {"electron": None, "hole": None}, set()
     p = Path(path)
     if not p.is_file():
-        return out
+        return out, deg
     for r in json.loads(p.read_text(encoding="utf-8")).get("results") or []:
         if r.get("carrier") in out:
             out[r["carrier"]] = r.get("mobility_cm2_Vs")
-    return out
+            if "重简并" in str((r.get("inputs") or {}).get("m_provenance", "")):
+                deg.add(r["carrier"])
+    return out, deg
 
 
 def rows(transport, T=300.0, is_2d=True, dpt=None):
@@ -92,6 +103,7 @@ def main(argv=None):
         return 2
     is_2d = run.startswith("step8.4") or (mat / run / "2d_correction.json").is_file()
     dpt = dpt_by_carrier(mat / "step8.2_dpt" / "dpt_result.json")
+    deg = dpt_degenerate(mat / "step8.2_dpt" / "dpt_result.json")
     try:
         rs, mechs = rows(json.loads(tj.read_text(encoding="utf-8")), a.T, is_2d, dpt)
     except (KeyError, ValueError, IndexError) as e:
@@ -111,7 +123,10 @@ def main(argv=None):
             bad += 1
         q = r.get("ADP_over_DPT")
         if q is not None and not (RATIO_OK[0] <= q <= RATIO_OK[1]):
-            flag += "  ⚠ ADP/DPT 超出 [1/3, 3]：用 tools/dp_valley_probe.py 查是否多谷"
+            if r["carrier"] in deg:
+                flag += "  （DPT 的带边简并，单带公式只是近似，ADP/DPT 不作判据）"
+            else:
+                flag += "  ⚠ ADP/DPT 超出 [1/3, 3]：用 tools/dp_valley_probe.py 查是否多谷"
         print("  %-12.4g %-8s %9.1f " % (r["doping"], LABEL.get(r["carrier"], "本征"), r["seebeck_uV_K"])
               + " ".join("%9s" % (r.get(c, "")) for c in cols)
               + " %9s %9s" % (r["DPT"] if r["DPT"] is not None else "-", q if q is not None else "-") + flag)
