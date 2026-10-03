@@ -198,6 +198,42 @@ def _guard_not_0d(cwd):
         sys.exit("[ERROR] step8.2_dpt 不支持 0D 体系（无能带色散，形变势无意义）。")
 
 
+def _hex_cell(recip):
+    """面内两个倒格矢等长、夹角 60°/120° -> 六方胞。"""
+    import numpy as np
+    _b1 = float(np.linalg.norm(recip[0]))
+    _b2 = float(np.linalg.norm(recip[1]))
+    _ang = float(np.degrees(np.arccos(max(-1.0, min(1.0, float(np.dot(recip[0], recip[1])) / (_b1 * _b2))))))
+    return (abs(_b1 - _b2) < 0.05 * max(_b1, _b2)
+            and (abs(_ang - 60.0) < 5.0 or abs(_ang - 120.0) < 5.0))
+
+
+def _hex_offgrid(recip, kf, kgrid=None):
+    """[GUARD-2026-09-23 / V152] 六方胞的带边锚在非高对称点 -> (说明, False)；否则 (None, 是否高对称点)。
+    各向同性与分方向两条 m* 路径共用（V152 之前分方向路径没有这道闸：WSe2 的电子分方向给出
+    x=0.48 / y=0.68 且 status ok，而 C₃ 晶体的迁移率张量面内各向同性）。
+    kgrid（本路径用的 k 点）里有 K 点 -> 不是网格问题：带边在 Q/Λ 这类非高对称谷（WSe2 45×45：K=15/45 在网上，
+    带边在 8/45 = 0.178，Γ–K 中点附近）；重做 S3 没用，原来的"K 离网"提示把人引到了错的方向。"""
+    import numpy as np
+    _hex = _hex_cell(recip)
+    _kf = np.asarray(kf, float) % 1.0
+    _at_hs = bool(np.all(np.abs(_kf[:2] * 6.0 - np.round(_kf[:2] * 6.0)) < 0.01))
+    if not _hex or _at_hs:
+        return None, _at_hs
+    k_on_grid = False
+    if kgrid is not None:
+        g = np.asarray(kgrid, float)[:, :2] * 3.0
+        on3 = np.all(np.abs(g - np.round(g)) < 1e-3, axis=1)
+        k_on_grid = bool(np.any(on3 & np.any(np.abs(np.round(g) % 3) > 0.5, axis=1)))
+    if k_on_grid:
+        return ("六方胞带边在非高对称点 k_frac=%s，而 K 点在网格上：不是网格问题，带边多半在 Q/Λ 这类"
+                "非高对称谷（6 个等价谷）。单谷 DPT 的 m*（方向分解与分方向 x/y）都不适用，重做 step3_uniform "
+                "没用 —— 用 amset eff-mass 的质量写本材料 step.conf（M_EFF_*）" % np.round(_kf, 4)), False
+    return ("六方胞带边锚在非高对称点 k_frac=%s（K 离网：step3_uniform 的 N 不是"
+            " 3 的倍数）——请按 DK_MAX 规则用 N 为 6 的倍数重新生成 step3_uniform，"
+            "或在本材料 step.conf 手填 M_EFF_*" % np.round(_kf, 4)), False
+
+
 # ---------- [PATCH-KE-2026] 自旋道感知的带边定位 ----------
 def _spin_arrays(v):
     """按 (up, down) 固定顺序返回各自旋道本征值 [(ispin, arr(nk,nb,2)), ...]。
@@ -404,18 +440,9 @@ def get_effective_mass(cwd, carrier, is_2d):
         # 径向（偶次）fit 吸收不了线性梯度：六方胞带边在 K=(1/3,1/3)，若网格 N 不是
         # 3 的倍数则 K 离网，锚落在离网非极值点，「最轻两支」把梯度方向当曲率，
         # 静默给出错误轻质量（CrSe2 46×46 实测 0.52 vs 真值 1.03）。
-        _b1 = float(np.linalg.norm(recip[0]))
-        _b2 = float(np.linalg.norm(recip[1]))
-        _ang = float(np.degrees(np.arccos(max(-1.0, min(1.0,
-            float(np.dot(recip[0], recip[1])) / (_b1 * _b2))))))
-        _hex = (abs(_b1 - _b2) < 0.05 * max(_b1, _b2)
-                and (abs(_ang - 60.0) < 5.0 or abs(_ang - 120.0) < 5.0))
-        _kf = np.asarray(kfrac[k0], float) % 1.0
-        _at_hs = bool(np.all(np.abs(_kf[:2] * 6.0 - np.round(_kf[:2] * 6.0)) < 0.01))
-        if _hex and not _at_hs:
-            return None, ("六方胞带边锚在非高对称点 k_frac=%s（K 离网：step3_uniform 的 N 不是"
-                          " 3 的倍数）——请按 DK_MAX 规则用 N 为 6 的倍数重新生成 step3_uniform，"
-                          "或在本材料 step.conf 手填 M_EFF_*" % np.round(_kf, 4))
+        _off, _at_hs = _hex_offgrid(recip, kfrac[k0], kfrac)
+        if _off:
+            return None, _off
         _use_dird = _at_hs
 
         # [PATCH-2026-09-23] 方向分解 + q^4 外推（依据 tmp/odp/TASK3b_mass_rootcause.md）。
@@ -839,6 +866,9 @@ def get_effective_mass_aniso(cwd, carrier, is_2d):
         k0 = int(np.argmin(dd))
         if dd[k0] > 1e-4:
             return None, "展开后找不到原带边 k 点（回卷距离 %.3g）" % dd[k0]
+        _off, _ = _hex_offgrid(recip, kfrac[k0], kfrac)                 # [V152] 与各向同性路径同一道闸
+        if _off:
+            return None, _off
 
         kcart = kfrac @ recip
         dk = kcart - kcart[k0]

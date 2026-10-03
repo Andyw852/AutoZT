@@ -348,5 +348,56 @@ class AnisoKzTests(unittest.TestCase):
                     self.assertAlmostEqual(got[0], want, places=3)
                     self.assertAlmostEqual(got[1], want, places=3)
 
+    def test_hex_offgrid_refused_v152(self):
+        """V152：K 离网（N 不是 3 的倍数，WSe2 是 45）时分方向路径也要拒绝 —— 以前它给出 x≠y 且 status ok。"""
+        from unittest import mock
+        sys.path.insert(0, str(ROOT / "step8.2_dpt"))
+        import gen_step12_dpt as D
+        m = Path(tempfile.mkdtemp())
+        (m / D.UNIFORM_DIR).mkdir(parents=True)
+        (m / D.UNIFORM_DIR / "vasprun.xml").write_text("<x/>")
+        fake = self._fake(10, 3)
+        with mock.patch("pymatgen.io.vasp.Vasprun", lambda *a, **k: fake), \
+                contextlib.redirect_stdout(io.StringIO()):
+            for car in ("electron", "hole"):
+                got, prov = D.get_effective_mass_aniso(m, car, True)
+                self.assertIsNone(got, prov)
+                self.assertIn("K 离网", prov)
+                self.assertIsNone(D.get_effective_mass(m, car, True)[0])
+
+    def test_q_valley_not_blamed_on_grid_v152(self):
+        """V152：WSe2 —— K 在网格上（45 是 3 的倍数），导带底在 Q/Λ 谷（0.178）。两条路径都拒绝，
+        但说明是"非高对称谷、重做 S3 没用"，不是"K 离网"。"""
+        from unittest import mock
+        import numpy as np
+        sys.path.insert(0, str(ROOT / "step8.2_dpt"))
+        import gen_step12_dpt as D
+        from pymatgen.electronic_structure.core import Spin
+        from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
+        m = Path(tempfile.mkdtemp())
+        (m / D.UNIFORM_DIR).mkdir(parents=True)
+        (m / D.UNIFORM_DIR / "vasprun.xml").write_text("<x/>")
+        fake = self._fake(18, 1)
+        kf = np.asarray(fake.actual_kpoints)
+        recip = fake.final_structure.lattice.reciprocal_lattice.matrix
+        ops = SpacegroupAnalyzer(fake.final_structure).get_point_group_operations(cartesian=False)
+        star = {tuple(np.round(op.operate([4 / 18, 4 / 18, 0]) % 1.0, 6)) for op in ops}
+        out = []
+        for q in star:
+            d = kf - np.array(q)
+            d -= np.rint(d)
+            out.append(1.5 + 3.80998 * np.sum((d @ recip) ** 2, axis=1) / 0.5)
+        arr = fake.eigenvalues[Spin.up].copy()
+        arr[:, 2, 0] = np.min(out, axis=0)                                  # 导带底在 Q 谷
+        fake.eigenvalues = {Spin.up: arr}
+        with mock.patch("pymatgen.io.vasp.Vasprun", lambda *a, **k: fake), \
+                contextlib.redirect_stdout(io.StringIO()):
+            for fn in (D.get_effective_mass, D.get_effective_mass_aniso):
+                got, prov = fn(m, "electron", True)
+                self.assertIsNone(got, prov)
+                self.assertIn("非高对称谷", prov)
+                self.assertNotIn("K 离网", prov)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
