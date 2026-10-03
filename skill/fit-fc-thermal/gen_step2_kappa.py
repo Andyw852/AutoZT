@@ -109,6 +109,20 @@ def _find_disp_yaml(fit_dir, out):
              fit_dir / "phono3py" / "phono3py_params.yaml",
              fit_dir / "phono3py_disp.yaml",
              fit_dir / "phono3py_params.yaml"]
+    # FIT_METHODS with several methods: when the primary is a pheasy method its
+    # prep writes no phono3py YAML, but the phono3py method (e.g. symfc) in
+    # methods/<tag>/ does.  The cell/supercell YAML is method independent, so
+    # reuse it instead of re-synthesising -- synthesising needs phonopy on the
+    # gen host, which a bare login-node python may not provide (the S2 gen then
+    # died with an spglib/phonopy ImportError before submitting anything).
+    #   The YAML is method-independent: search this fit's own tree and, for a
+    #   method directory (step1_fit/methods/<tag>/), its siblings under methods/
+    #   -- the phono3py method (e.g. symfc) writes one even when the primary (or
+    #   the method being generated) is a pheasy fit.
+    cands += sorted(fit_dir.glob("**/phono3py_disp.yaml"))
+    cands += sorted(fit_dir.glob("**/phono3py_params.yaml"))
+    cands += sorted(fit_dir.parent.glob("*/phono3py_disp.yaml"))
+    cands += sorted(fit_dir.parent.glob("*/phono3py_params.yaml"))
     for c in cands:
         if c.is_file():
             shutil.copyfile(str(c), str(out / c.name))
