@@ -165,6 +165,99 @@ class DegenerateEdgeTests(unittest.TestCase):
         self.assertNotIn("dp_valley_probe", line_h)
 
 
+class DegeneracyTests(unittest.TestCase):
+    """V146：GaAs 电子 m* 0.052 -> Nc ≈ 3e17；S8 的 3D 掺杂 1e18–1e21 都在简并区，ADP/DPT 超界不是多谷。"""
+
+    def test_ratio(self):
+        self.assertAlmostEqual(M.degeneracy_ratio(-1e17, 0.0523, 300, False), 1e17 / (2.509e19 * 0.0523 ** 1.5), 6)
+        self.assertLess(M.degeneracy_ratio(-1e17, 0.0523, 300, False), 0.5)
+        self.assertGreater(M.degeneracy_ratio(-1e18, 0.0523, 300, False), 3)
+        # 2D：MoSe2 ±4.28e17 cm⁻³、c = 20 Å -> 8.6e10 cm⁻²，远低于 N2D（m* 0.5 -> 5.4e12）
+        self.assertLess(M.degeneracy_ratio(4.28e17, 0.5, 300, True, 20.0), 0.05)
+        self.assertIsNone(M.degeneracy_ratio(4.28e17, 0.5, 300, True, None))
+        self.assertIsNone(M.degeneracy_ratio(1e17, None, 300, False))
+
+    def test_gaas_like_flags(self):
+        m = Path(tempfile.mkdtemp())
+        (m / "step8_amset").mkdir()
+        dop = [-1e17, -1e18, -1e21]
+        d = {"doping": dop, "temperatures": [300.0], "conductivity": [[_t(1.0)] for _ in dop],
+             "seebeck": [[_t(-300.0)] for _ in dop],
+             "mobility": {"overall": [[_t(9000.0)] for _ in dop], "ADP": [[_t(1.0e6)] for _ in dop]}}
+        (m / "step8_amset" / "transport.json").write_text(json.dumps(d))
+        (m / "step8.2_dpt").mkdir()
+        (m / "step8.2_dpt" / "dpt_result.json").write_text(json.dumps({"results": [
+            {"carrier": "electron", "mobility_cm2_Vs": 145658.0, "inputs": {"m_eff_m0": 0.0523}},
+            {"carrier": "hole", "mobility_cm2_Vs": 4527.0, "inputs": {"m_eff_m0": 0.623}}]}))
+        with contextlib.redirect_stdout(io.StringIO()) as buf:
+            M.main([str(m)])
+        lines = {ln.split()[0]: ln for ln in buf.getvalue().splitlines() if "电子(n)" in ln}
+        self.assertIn("dp_valley_probe", lines["-1e+17"])               # 非简并：多谷提示保留
+        for k in ("-1e+18", "-1e+21"):
+            self.assertIn("接近/进入简并", lines[k])
+            self.assertNotIn("dp_valley_probe", lines[k])
+
+
+class GridResolutionTests(unittest.TestCase):
+    """V147：GaAs（PBEsol 带隙 0.418 eV）的 Γ 谷很轻且非抛物，S3 最近网格点高出 CBM ~0.25 eV（~10 kT），
+    DPT 拟合 0.0523，而 amset eff-mass 给带边 0.030。"""
+
+    def _fake_vasprun(self, n=19, a=5.65, m_c=0.03, gap=0.418, m_v=0.6):
+        import types
+        import numpy as np
+        from pymatgen.electronic_structure.core import Spin
+        g = np.arange(-4, 5) / float(n)
+        kf = np.array([[x, y, z] for x in g for y in g for z in g])
+        recip = np.eye(3) * (2 * np.pi / a)
+        q2 = np.sum((kf @ recip) ** 2, axis=1)
+        alpha = 1.0 / gap
+        rhs = 3.80998 * q2 / m_c
+        ec = gap + (-1.0 + np.sqrt(1.0 + 4.0 * alpha * rhs)) / (2.0 * alpha)    # Kane 非抛物导带
+        ev = -3.80998 * q2 / m_v
+        ene = np.stack([ev, ec], axis=1)
+        occ = np.stack([np.ones_like(ev), np.zeros_like(ec)], axis=1)
+        lat = types.SimpleNamespace(reciprocal_lattice=types.SimpleNamespace(matrix=recip))
+        return types.SimpleNamespace(final_structure=types.SimpleNamespace(lattice=lat),
+                                     actual_kpoints=kf.tolist(),
+                                     eigenvalues={Spin.up: np.stack([ene, occ], axis=-1)})
+
+    def test_flagged_for_light_nonparabolic_band(self):
+        from unittest import mock
+        sys.path.insert(0, str(ROOT / "step8.2_dpt"))
+        import gen_step12_dpt as D
+        m = Path(tempfile.mkdtemp())
+        (m / D.UNIFORM_DIR).mkdir(parents=True)
+        (m / D.UNIFORM_DIR / "vasprun.xml").write_text("<x/>")
+        fake = self._fake_vasprun()
+        with mock.patch("pymatgen.io.vasp.Vasprun", lambda *a, **k: fake):
+            for car in ("electron", "hole"):
+                D._EDGE_NN_DE.pop(car, None)
+                me, prov = D.get_effective_mass(m, car, False)
+                self.assertIsNotNone(me, prov)
+                with contextlib.redirect_stdout(io.StringIO()) as buf:
+                    note = D._grid_resolution_note(car, me, prov, 300.0)
+                if car == "electron":
+                    self.assertGreater(D._EDGE_NN_DE[car], 0.2)          # ~0.27 eV，约 10 kT
+                    self.assertIn("网格分辨不出带边曲率", note)
+                    self.assertIn("amset eff-mass", buf.getvalue())
+                else:
+                    self.assertLess(D._EDGE_NN_DE[car], 0.04)            # 重空穴 ~0.02 eV < 4 kT
+                    self.assertEqual(note, prov)
+        self.assertEqual(D._grid_resolution_note("electron", 0.03, "manual", 300.0), "manual")
+
+    def test_mobility_tool_respects_coarse_grid(self):
+        m = _material()
+        f = m / "step8.2_dpt" / "dpt_result.json"
+        js = json.loads(f.read_text())
+        js["results"][0]["inputs"] = {"m_provenance": "...；网格分辨不出带边曲率（最近网格点高出带边 266 meV = 10.3 kT）"}
+        f.write_text(json.dumps(js))
+        with contextlib.redirect_stdout(io.StringIO()) as buf:
+            M.main([str(m)])
+        line_e = next(ln for ln in buf.getvalue().splitlines() if "电子(n)" in ln)
+        self.assertIn("网格分辨不出带边曲率", line_e)
+        self.assertNotIn("dp_valley_probe", line_e)
+
+
 class DptReasonTests(unittest.TestCase):
     def test_failure_message_has_provenance(self):
         s = (ROOT / "step8.2_dpt" / "gen_step12_dpt.py").read_text(encoding="utf-8")
