@@ -323,7 +323,7 @@ optional_steps:
          group: S2_bandgap, after: "step2_bandgap/step2.2_pbe",
          src: step2_bandgap/step2.2_pbe_plot,
          check: plot, run: gen, done_marker: band_summary.json,
-         gen: "gen_step3.1_plot_band.py", gen_need: [], fetch_all: true,
+         gen: "gen_step3.1_plot_band.py", gen_need: [ke_common.py, dim_common.py], fetch_all: true,
          needs: ["step2_bandgap/step2.2_pbe"]}
 
   # --- ke 段：HSE 带隙分支（默认开；BANDGAP=pbe 或 bandgap_hse: false 关掉）--
@@ -344,7 +344,7 @@ optional_steps:
          group: S2_bandgap, after: "step2_bandgap/step2.3_hse",
          src: step2_bandgap/step2.3_hse_plot,
          check: plot, run: gen, done_marker: band_summary.json,
-         gen: "gen_step4.1_plot_band.py", gen_need: [], fetch_all: true,
+         gen: "gen_step4.1_plot_band.py", gen_need: [ke_common.py, dim_common.py], fetch_all: true,
          needs: ["step2_bandgap/step2.3_hse"]}
 
   # --- kl 段：NAC（极性绝缘体的 LO-TO 劈裂；金属请写 nac: false）------------

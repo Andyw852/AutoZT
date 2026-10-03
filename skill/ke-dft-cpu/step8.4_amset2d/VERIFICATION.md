@@ -6973,3 +6973,50 @@ GaAs 电子受 POP 限制，ADP-only 本来就大。
   抛物重空穴（0.6）拟合准确、最近点 0.02 eV -> 不注明；MANUAL 不注明；
 - 工具对"网格分辨不出"的 DPT 不给多谷提示。
 
+
+## V148（2026-10-03）：重算的下游失效补全接线；S8.2 手填改写本材料 step.conf
+
+**起因**（用户侧 GaAs，0033 验证后复核）：
+- S8.2 在 V145/V147/MANUAL 对照/还原中重跑了 4 次。`DOWNSTREAM` 表里早有 S8.2 -> S8.1/S8.3，可是**没有一个 gen 调
+  `invalidate_downstream`**（S8/S8.4/S8.1/S8.2 都没调）。所以 S8.1 的 boltztrap_crta.json 仍然是"完成"，
+  用的还是 V145 之前的空穴 τ（DPT 空穴 276 万 cm²/Vs）。
+- MANUAL 只能改共享脚本 gen_step12_dpt.py。autozt 每次 gen 都把脚本从 skill 原样推到材料目录
+  （workflow.py："gen 脚本以 skill 为唯一样板：总是覆盖推送"），所以在改着的那段时间里，**任何材料**的 S8.2 都会
+  用上 GaAs 的 m*=0.030（自动推进中的 P1_Mo-MoS2 / Si_diamond 也算）。
+- 顺带查出同类缺口：S8/S8.4 在 gen 时把 S2 画图的带隙写进 settings.yaml（不是软链）。S2.3 HSE 重算、画图重新生成后，
+  S8/S8.4 照样带着旧带隙判"完成"。
+
+**改动**：
+- `ke_common.DOWNSTREAM`：
+  - 新增 S2.2/S2.3 画图 -> S8、S8.4，mode="gap"：只有下游 settings.yaml 的 `# bandgap_source` 指向这份
+    band_summary、且带隙差 > 1 meV 才失效。S8 一跑几小时，只重画图不重排；BANDGAP_OVERRIDE 的下游不受影响。
+    下游还没跑完（没有完成标记）时给 ★，提示取消作业后 rerun。
+  - 新增 S2 画图 -> S8.1（剪刀差也读 band_summary，分钟级）"always"，以及 S8.4 -> S8.3。
+  - 新增 `DOWNSTREAM_EXEMPT`：skill.yaml 里不进 DOWNSTREAM 的 needs 边，各自写明理由
+    （S1/S2 链由 LINEAGE_POSCARS 管；S3b、S3c 各自自洽；S6/S7.1 -> S8.1 经 S8.2 递归）。
+- gen 接线：
+  - S8.2、S8.1 在 main 开头调 `invalidate_downstream`；S8、S8.4 在 check_lineage 之后调。
+  - S2.2/S2.3 画图在写 band_summary.json 前调，stdout 只留最后那行 JSON，归档清单写进 `invalidated_downstream`。
+  - skill.yaml（ke 与 zt）给这几步的 gen_need 补上 ke_common.py / dim_common.py；S8.2 另补 stepconf.py / step.conf。
+- S8.2 的材料级覆盖：
+  - 写法：`tf -p <材料> -j step8.2_dpt conf --set M_EFF_ELECTRON=0.030`。
+    可用键：M_EFF_ELECTRON/HOLE、E1_ELECTRON/HOLE_EV、C_2D_N_PER_M、C_3D_GPA、THICKNESS_A、E1_SOURCE、FORCE_NSTEP。
+  - 优先级：step.conf 优先于脚本。
+  - provenance 写成 `manual(step.conf)`，dpt_result.json 新增 `overrides`。
+  - 脚本里的 MANUAL / MANUAL_ANISO 不是全 None 时每次 gen 都 ★ 告警（作用到所有材料），provenance 写成
+    `manual(脚本 MANUAL，作用到所有材料)`。
+  - 各处"填 MANUAL"的提示（V147 的 eff-mass 告警、缺输入、K 离网、E1_SOURCE、mobility_vs_dpt）改成 step.conf 的写法。
+- `tools/lineage_check.py` 另查以下几项（S8 的 gen 闸门不查：它正要重写自己的 settings.yaml）：
+  - S8.1/S8.3 的产物是否旧于 S8.2/S8/S8.4（`POST_DERIVED`）；
+  - S8/S8.4 的带隙是否与 band_summary.json 一致。
+
+  `--invalidate-from step2_bandgap/step2.3_hse_plot` 按画图当前的带隙决定是否归档 S8/S8.4。
+
+**测试**：test_downstream_wiring.py（14 项）
+- skill.yaml 每条 needs 边都被覆盖；DOWNSTREAM 每个上游的 gen 都调失效、gen_need 都带 ke_common（ke 与 zt）；
+- gap 模式：带隙变化 -> S8 归档并递归到 S8.3；0.5 meV / 别的来源 / BANDGAP_OVERRIDE / 不给 gap 时不动；
+  没跑完的下游给 ★；画图 helper 实跑，stdout 为空；
+- S8.2：step.conf 覆盖只作用本材料（换材料后 MANUAL 恢复 None、E1_SOURCE 恢复 vac），并写进 overrides；
+  脚本被改时 ★；E1_SOURCE/FORCE_NSTEP 非法值退出；重跑归档 S8.1/S8.3；main 端到端写出 overrides 与 manual(step.conf)；
+- lineage_check：查出 S8.1 旧于 S8.2、S8 带隙 1.42 ≠ 画图 1.30；S8 闸门（structure_lineage）不报这些；
+  --invalidate-from 归档 S8 与 S8.1。

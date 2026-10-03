@@ -1976,6 +1976,8 @@ def main():
     # ---- patch_lineage（V140）：上游同源 + 派生产物新鲜度，不通过就不生成 ----
     if _HAS_KC:
         kc.check_lineage(cwd, enabled=STRUCTURE_GUARD, label="S8")
+        # [patch_post_invalidate V148] 本步重新生成 -> S8.3 的对比图作废（归档完成标记，重新排队）
+        kc.invalidate_downstream(cwd, OUTDIR_NAME, "%s 重新生成" % OUTDIR_NAME)
 
     # ---- patch_desym_fix：相位补丁开关（必须在 _apply_inversion_rule 之前）----
     if _HAS_KC:

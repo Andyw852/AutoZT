@@ -763,12 +763,24 @@ def write_paper_scan(out, cwd, res, is_2d):
     return lines
 
 
+def _invalidate_consumers(cwd):
+    """[patch_post_invalidate V148] 本步重新生成 -> S8.3 的对比图作废（归档完成标记，重新排队）。"""
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+        import ke_common as _kc
+    except ImportError:
+        print("[WARN] 没有 ke_common.py，S8.3 不会自动重排（skill.yaml 的 gen_need 漏了它？）")
+        return []
+    return _kc.invalidate_downstream(cwd, OUTDIR_NAME, "%s 重新生成" % OUTDIR_NAME)
+
+
 def main():
     _disc_gate()
     cwd = Path.cwd()
     _guard_not_0d(cwd)
     out = cwd / OUTDIR_NAME
     out.mkdir(exist_ok=True)
+    _invalidate_consumers(cwd)
 
     _need("BoltzTraP2", "BoltzTraP2")
     vr_dir = cwd / UNIFORM_DIR

@@ -245,7 +245,8 @@ optional_steps:
          group: S2_bandgap, after: "step2_bandgap/step2.2_pbe",
          src: step2_bandgap/step2.2_pbe_plot, check: plot, run: gen,
          done_marker: band_summary.json, gen: "gen_step3.1_plot_band.py",
-         gen_need: [], fetch_all: true,
+         # V148：带隙变了让 S8/S8.4/S8.1 重排，要 import ke_common
+         gen_need: [ke_common.py, dim_common.py], fetch_all: true,
      needs: ["step2_bandgap/step2.2_pbe"]}
   # HSE 分支单独一组：默认开=走到 HSE 带隙；BANDGAP=pbe（或 bandgap_hse: false）
   # 则整段跳过，只留 PBE 带隙。2.3 hse 从 2.2_pbe 继承，2.3_hse_plot 画 HSE 能带。
@@ -265,7 +266,8 @@ optional_steps:
          group: S2_bandgap, after: "step2_bandgap/step2.3_hse",
          src: step2_bandgap/step2.3_hse_plot, check: plot, run: gen,
          done_marker: band_summary.json, gen: "gen_step4.1_plot_band.py",
-         gen_need: [], fetch_all: true,
+         # V148：带隙变了让 S8/S8.4/S8.1 重排，要 import ke_common
+         gen_need: [ke_common.py, dim_common.py], fetch_all: true,
      needs: ["step2_bandgap/step2.3_hse"]}
 
 # --- 8.2 DPT 形变势迁移率：给 8.1 提供分方向 τ，必须排在 8.1 前面 ---
@@ -276,7 +278,9 @@ optional_steps:
          after: step8,
          src: step8.2_dpt, check: plot, run: gen,
          done_marker: dpt_result.json,
-         gen: gen_step12_dpt.py, gen_need: [], fetch_all: true,
+         # V148：材料级覆盖读 step.conf；重跑时让 S8.1/S8.3 重排要 import ke_common
+         gen: gen_step12_dpt.py, gen_need: [stepconf.py, step.conf, ke_common.py, dim_common.py],
+         fetch_all: true,
          needs: ["step3_uniform", "step6_elastic", "step7b_deform_read"]}
 
   # --- 8.1 BoltzTraP2 CRTA × DPT-τ：文献口径的完整实现 ---
@@ -289,7 +293,8 @@ optional_steps:
          after: step8,
          src: step8.1_boltztrap, check: plot, run: gen,
          done_marker: boltztrap_crta.json,
-         gen: gen_step11_boltztrap.py, gen_need: [discriminant_common.py], fetch_all: true,
+         gen: gen_step11_boltztrap.py, gen_need: [discriminant_common.py, ke_common.py, dim_common.py],
+         fetch_all: true,
          needs: ["step3_uniform", "step6_elastic", "step7b_deform_read",
                  "step8.2_dpt"]}
 

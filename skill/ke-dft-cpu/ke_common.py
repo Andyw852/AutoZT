@@ -290,10 +290,64 @@ DOWNSTREAM = {
                       ("step8.4_amset2d", "always")],
     "step6_elastic": [("step8_amset", "always"), ("step8.4_amset2d", "always"),
                       ("step8.2_dpt", "always")],
+    # [patch_gap_invalidate V148] S2 画图重新生成 = band_summary.json 的带隙可能变了。S8/S8.4 在 gen 时把带隙写进
+    #   settings.yaml（"bandgap:" + "# bandgap_source: <画图目录>/band_summary.json"）——不是软链，以前 HSE 重算后
+    #   S8 照样带着旧带隙判"完成"。mode="gap"：下游确实用的是这份 band_summary、且带隙变了 > GAP_TOL_EV 才失效
+    #   （S8 一跑几小时，只重画一张图不该让它重排；BANDGAP_OVERRIDE 的下游来源不同，不受影响）。
+    #   S8.1（BoltzTraP2 的剪刀差也读这份 band_summary）只要几分钟 -> "always"。
+    "step2_bandgap/step2.2_pbe_plot": [("step8_amset", "gap"), ("step8.4_amset2d", "gap"),
+                                       ("step8.1_boltztrap", "always")],
+    "step2_bandgap/step2.3_hse_plot": [("step8_amset", "gap"), ("step8.4_amset2d", "gap"),
+                                       ("step8.1_boltztrap", "always")],
     "step8_amset": [("step8.3_output", "always")],
+    # [patch_post_invalidate V148] S8.3 的对比图也读 S8.4 的 transport.json；S8/S8.4/S8.1/S8.2 的 gen 现在都会调
+    #   invalidate_downstream（以前只在表里、没有一个 gen 调：GaAs 的 S8.2 重跑了 4 次，S8.1 一直是旧 τ）。
+    "step8.4_amset2d": [("step8.3_output", "always")],
     "step8.1_boltztrap": [("step8.3_output", "always")],
     "step8.2_dpt": [("step8.1_boltztrap", "always"), ("step8.3_output", "always")],
 }
+# skill.yaml 里不进 DOWNSTREAM 的 needs 边与理由（test_downstream_wiring.py：每条 needs 边要么在 DOWNSTREAM，
+#   要么在这里；"*" = 该上游的全部下游）。
+DOWNSTREAM_EXEMPT = {
+    ("step1_opt", "*"): "结构同源由 LINEAGE_POSCARS + S8/S8.4 的 check_lineage 管（各步 POSCAR 逐个与 S1 CONTCAR 比）",
+    ("step2_bandgap/step2.1_static", "*"): "S2 链：结构同源由 LINEAGE_POSCARS 管",
+    ("step2_bandgap/step2.15_discriminant", "*"): "金属/半导体判别的决策链，不进输运",
+    ("step2_bandgap/step2.2_pbe", "*"): "S2 链：结构由 LINEAGE_POSCARS 管；画图产物比来源旧由 LINEAGE_DERIVED 管",
+    ("step2_bandgap/step2.3_hse", "*"): "同上（S2.3 画图 vs S2.3 vasprun 由 LINEAGE_DERIVED 管）",
+    ("step3_uniform", "step3b_uniform_full"): "S3b 从 S3 的 CHGCAR 起步后自洽到收敛（ICHARG=1），终点不依赖 S3；结构由 LINEAGE_POSCARS 管",
+    ("step3b_uniform_full", "step3c_uniform_offgrid"): "S3c 段 1 自己自洽，不读 S3b 的产物；结构由 LINEAGE_POSCARS 管",
+    ("step6_elastic", "step8.1_boltztrap"): "S8.1 的 τ 来自 S8.2：S6 -> S8.2 -> S8.1 递归失效",
+    ("step7b_deform_read", "step8.1_boltztrap"): "同上：S7.1 -> S8.2 -> S8.1 递归失效",
+}
+GAP_TOL_EV = 1e-3
+
+
+def consumer_bandgap(step_dir):
+    """S8/S8.4 的 settings.yaml -> (bandgap 或 None, bandgap_source 或 None)。"""
+    gap = src = None
+    try:
+        for ln in (Path(step_dir) / "settings.yaml").read_text(errors="ignore").splitlines():
+            s = ln.strip()
+            if s.startswith("# bandgap_source:"):
+                src = s.split(":", 1)[1].strip()
+            elif s.startswith("bandgap:"):
+                try:
+                    gap = float(s.split(":", 1)[1].split("#", 1)[0])
+                except ValueError:
+                    pass
+    except OSError:
+        pass
+    return gap, src
+
+
+def _gap_changed(step_dir, step, gap):
+    """下游用的是 step（画图目录）的 band_summary.json、且带隙与新值差 > GAP_TOL_EV -> 旧带隙值；否则 None。"""
+    if gap is None:
+        return None
+    old, src = consumer_bandgap(step_dir)
+    if old is None or not src or (Path(step).name + "/") not in src:
+        return None
+    return old if abs(float(gap) - old) > GAP_TOL_EV else None
 DONE_MARKERS = {
     # S7.1：deformation_vac.h5 也要归档 —— 只归档 deformation.h5 的话，新 S7.1 没产出 vac 时
     #   _pick_deformation_h5 会捡到旧的 vac h5。
@@ -326,10 +380,11 @@ def _links_into(d, upstream_dir):
     return False
 
 
-def invalidate_downstream(cwd, step, reason, _seen=None):
+def invalidate_downstream(cwd, step, reason, _seen=None, gap=None):
     """上游 step 要重算：把下游完成标记改名 *.stale-upstream-<step>-<时间>，递归传递。
 
     返回 [(下游步骤, 改名的文件), ...]。只改名不删除；下游目录不存在/没有标记时什么都不做。
+    gap：S2 画图的新带隙（mode="gap" 的下游只在带隙变了时失效；不给 = 这类下游一律不动）。
     """
     import time as _t
     cwd = Path(cwd)
@@ -344,6 +399,11 @@ def invalidate_downstream(cwd, step, reason, _seen=None):
             continue
         if mode == "link" and not _links_into(d, cwd / step):
             continue
+        old_gap = None
+        if mode == "gap":
+            old_gap = _gap_changed(d, step, gap)
+            if old_gap is None:
+                continue
         seen.add(down)
         hit = False
         for m in DONE_MARKERS.get(down, ()):
@@ -354,7 +414,10 @@ def invalidate_downstream(cwd, step, reason, _seen=None):
                 hit = True
         if hit:
             print("[WARN] 上游 %s 重算（%s）-> 下游 %s 的完成标记已归档（*.%s），会重新排队"
-                  % (step, reason, down, tag))
+                  % (step, reason if old_gap is None else "带隙 %.4f -> %.4f eV" % (old_gap, gap), down, tag))
+        elif old_gap is not None:
+            print("[WARN] ★ %s 的 settings.yaml 用的是旧带隙 %.4f eV（%s 现在是 %.4f eV），它还没跑完 —— "
+                  "取消那个作业、rerun %s" % (down, old_gap, step, gap, down))
         done += invalidate_downstream(cwd, down, "上游 %s 失效" % step, seen)
     return done
 
@@ -583,7 +646,13 @@ def structure_lineage(cwd, tol=LINEAGE_TOL_A, slack=LINEAGE_SLACK_S):
                                      os.path.relpath(str(ref_path), str(cwd)),
                                      "原子数/元素不同" if dev == float("inf") else "最大偏差 %.4f Å" % dev)))
                     break
-    for step, marker, src, pats in LINEAGE_DERIVED:
+    probs += _derived_probs(cwd, LINEAGE_DERIVED, slack)
+    return ref_path, probs
+
+
+def _derived_probs(cwd, table, slack=LINEAGE_SLACK_S):
+    probs = []
+    for step, marker, src, pats in table:
         f = cwd / step / marker
         if not f.is_file():
             continue
@@ -594,7 +663,46 @@ def structure_lineage(cwd, tol=LINEAGE_TOL_A, slack=LINEAGE_SLACK_S):
         if newest.stat().st_mtime > f.stat().st_mtime + slack:
             probs.append((step, "%s 比来源 %s 旧 —— 来源后来重算过，本步要在来源跑完后重新生成"
                           % (marker, os.path.relpath(str(newest), str(cwd)))))
-    return ref_path, probs
+    return probs
+
+
+# [V148] S8 之后的派生产物与带隙一致性：只给 tools/lineage_check.py 用 —— S8/S8.4 的 gen 正要重写自己的
+#   settings.yaml，拿旧的去拦自己就再也 rerun 不了；S8.1/S8.2/S8.3 都是秒级到分钟级，查出来直接重跑即可。
+POST_DERIVED = (
+    ("step8.1_boltztrap", "boltztrap_crta.json", "step8.2_dpt", ("dpt_result.json",)),
+    ("step8.3_output", "comparison_300K.png", "step8_amset", ("transport.json",)),
+    ("step8.3_output", "comparison_300K.png", "step8.4_amset2d", ("transport.json",)),
+    ("step8.3_output", "comparison_300K.png", "step8.1_boltztrap", ("boltztrap_crta.json",)),
+    ("step8.3_output", "comparison_300K.png", "step8.2_dpt", ("dpt_result.json",)),
+)
+
+
+def band_summary_gap(plot_dir):
+    """S2 画图目录 -> band_summary.json 的 gap_eV（读不到为 None）。"""
+    import json
+    try:
+        return float(json.loads((Path(plot_dir) / "band_summary.json").read_text(encoding="utf-8"))["gap_eV"])
+    except (OSError, KeyError, ValueError, TypeError):
+        return None
+
+
+def post_lineage(cwd, slack=LINEAGE_SLACK_S):
+    """[V148] -> [(步骤, 说明)]：① POST_DERIVED 里产物旧于来源；② S8/S8.4 settings.yaml 的带隙与它来源的
+    band_summary.json 差 > GAP_TOL_EV（S2 画图后来重新生成过，S8 还是旧带隙）。"""
+    cwd = Path(cwd)
+    probs = _derived_probs(cwd, POST_DERIVED, slack)
+    for down in ("step8_amset", "step8.4_amset2d"):
+        old, src = consumer_bandgap(cwd / down)
+        if old is None or not src:
+            continue
+        for plot in ("step2_bandgap/step2.2_pbe_plot", "step2_bandgap/step2.3_hse_plot"):
+            if (Path(plot).name + "/") not in src:
+                continue
+            new = band_summary_gap(cwd / plot)
+            if new is not None and abs(new - old) > GAP_TOL_EV:
+                probs.append((down, "settings.yaml 的带隙 %.4f eV ≠ %s/band_summary.json 的 %.4f eV —— S2 画图后来"
+                                    "重新生成过；--invalidate-from %s 让它重排" % (old, plot, new, plot)))
+    return probs
 
 
 def check_lineage(cwd, enabled=True, label="S8"):
