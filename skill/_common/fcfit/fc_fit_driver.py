@@ -2493,8 +2493,12 @@ def _write_shengbte_control(path, cfg, uc, dims, ngrid, nac):
         L.append("        T_min=%g, T_max=%g, T_step=%g" % tuple(t))
     else:
         L.append("        T=%g" % t[0])
-    L += ["        scalebroad=1.0", "&end", "&flags",
-          "        nonanalytic=%s" % (".TRUE." if nac is not None else ".FALSE."),
+    L += ["        scalebroad=%g" % float(cfg.get("shengbte_scalebroad") or 1.0),
+          "&end", "&flags",
+          # 迭代解（CONV）+ 同批的 RTA 都写；汇总 CONV 优先、缺温度点回退 RTA
+          "        convergence=.TRUE.,",
+          "        isotopes=%s," % (".TRUE." if cfg.get("isotope", True) else ".FALSE."),
+          "        nonanalytic=%s," % (".TRUE." if nac is not None else ".FALSE."),
           "        nanowires=.FALSE.", "&end", ""]
     Path(path).write_text("\n".join(L))
 

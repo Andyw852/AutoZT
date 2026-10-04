@@ -402,6 +402,13 @@ def _gen_one(conf, fit, out, cwd, write_submit=True):
         "shengbte_exe": str(conf["SHENGBTE_EXE"] or "ShengBTE"),
         "shengbte_scalebroad": float(conf["SHENGBTE_SCALEBROAD"] or 1.0),
         "shengbte_ntasks": str(conf["SHENGBTE_NTASKS"] or "auto"),
+        # SOLVER=shengbte：CONTROL 由 fc_fit_driver._shengbte_finalize 写（S1 同一函数），
+        # 这里把本步的网格/温度/维度换成它的参数（2D 时真空方向 ngrid=1）
+        "shengbte_ngrid": (mcfg["mesh"] if mcfg["mesh"] != "auto"
+                           else str(mcfg["mesh_length"])),
+        "shengbte_t": (("%g" % temps[0]) if len(temps) == 1 else
+                       "%g %g %g" % (min(temps), max(temps), temps[1] - temps[0])),
+        "dim": "2d" if mcfg["is_2d"] else "3d",
         "kappa_2d_norm": (two_d_norm(fit, conf["KAPPA_2D_THICKNESS"])
                           if mcfg["is_2d"] else None),
         "source_fc": str(fit),
@@ -424,6 +431,29 @@ def _gen_one(conf, fit, out, cwd, write_submit=True):
     # the method comparison and the RMSE panel need no path back into step1_fit
     if (fit / "fc_fit_summary.json").is_file():
         shutil.copyfile(str(fit / "fc_fit_summary.json"), str(out / "fc_fit_summary.json"))
+    if cfg["solver"] == "shengbte":
+        # 计算节点上 kappa_driver 调 fc_fit_driver._shengbte_finalize（CONTROL 唯一真源 +
+        # 2ND 顺序/表头/3RD 原子号校验，幂等）：带上它和它的依赖
+        for _f in ("fc_fit_driver.py", "fc_common.py", "imag_policy.py",
+                   "phonon_stability.py", "za_2d.py"):
+            if (_eng / _f).is_file():
+                shutil.copyfile(str(_eng / _f), str(out / _f))
+            else:
+                sys.exit("[ERROR] SOLVER=shengbte 需要 %s —— gen_need 里没列？" % _f)
+        # 复用 S1 已导出的 shengbte/（不再从 hdf5 重导）；SPOSCAR 给顺序校验当对照
+        _sb = fit / "shengbte"
+        if (_sb / "FORCE_CONSTANTS_2ND").is_file() and (_sb / "FORCE_CONSTANTS_3RD").is_file():
+            (out / "shengbte").mkdir(exist_ok=True)
+            for _f in ("FORCE_CONSTANTS_2ND", "FORCE_CONSTANTS_3RD", "POSCAR"):
+                if (_sb / _f).is_file():
+                    shutil.copyfile(str(_sb / _f), str(out / "shengbte" / _f))
+            print("[..] SOLVER=shengbte：复用 %s/shengbte/（CONTROL 在计算节点按本步"
+                  "网格/温度重写并重新校验）" % fit.name, flush=True)
+        else:
+            print("[WARN] SOLVER=shengbte 但 %s 没有 shengbte/ —— 计算节点从 fc2/fc3.hdf5 现导"
+                  % fit, flush=True)
+        if (fit / "SPOSCAR").is_file():
+            shutil.copyfile(str(fit / "SPOSCAR"), str(out / "SPOSCAR"))
     if not write_submit:
         print("[DONE] %s: kappa_config.json ready" % out.relative_to(cwd), flush=True)
         return
@@ -441,7 +471,11 @@ def _gen_one(conf, fit, out, cwd, write_submit=True):
             except ValueError:
                 sys.exit("[ERROR] SHENGBTE_NTASKS=%r 不是整数也不是 auto" % _nt_raw)
         else:
-            _ntasks = max(1, _total // _cpus_per_numa)
+            if _total % _cpus_per_numa:
+                sys.exit("[ERROR] SHENGBTE_TOTAL_CORES=%d 不能被 SHENGBTE_CORES_PER_NUMA=%d 整除"
+                         " —— 一个 rank 占一个 NUMA 域，核数必须整分（jzzn: 192=8x24、96=4x24）"
+                         % (_total, _cpus_per_numa))
+            _ntasks = _total // _cpus_per_numa
         if _ntasks <= 1:
             sys.exit("[ERROR] SHENGBTE_NTASKS 算出来是 %d —— ShengBTE 靠 MPI 按 q 点并行，"
                      "单进程等于串行（实测 11.8 h 零产物）。请检查 step.conf 的 "
