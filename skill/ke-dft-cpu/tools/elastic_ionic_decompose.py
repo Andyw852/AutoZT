@@ -248,17 +248,31 @@ def _is_pd(m):
     return bool(np.all(np.linalg.eigvalsh(m) > 0))
 
 
-def _freq_err(k, mass, freqs):
-    """力常数 k（eV/Å²）+ 质量 -> 频率，与 OUTCAR 的频率比（只比 |f| > 1 THz 的模）。拿不到 -> None。"""
+def _freq_calibrate(k, mass, freqs):
+    """[V157] 力常数候选 k + 质量 -> 频率谱，与 OUTCAR 的频率谱比（只比 |f| > 1 THz 的模），并定出单位标量。
+    -> (scale, err)：k×scale 才是 eV/Å² 的力常数；err = 定标后逐模的中位相对误差。拿不到频率/质量 -> (1.0, None)。
+    VASP 写进 vasprun.xml 的 hessian 单位随版本不同：phonopy 按 eV/Å²/amu（−Φ/√(m_i m_j)）读，Mo2S3 这份是
+    THz²（−hessian 的本征值直接是 f²）—— 差 15.633² ≈ 244 倍，V156 的固定换算因此两个候选都被拒。
+    只允许一个标量：质量加权方式错了，谱的**形状**对不上，定标救不回来。"""
     if mass is None or freqs is None:
-        return None
+        return 1.0, None
     w = np.linalg.eigvalsh(k / np.sqrt(np.outer(mass, mass)))
     f = np.sort(np.sign(w) * np.sqrt(np.abs(w)) * VASP_TO_THZ)
     g = np.sort(freqs)
-    sel = np.abs(g) > 1.0
+    sel = (np.abs(g) > 1.0) & (np.abs(f) > 1e-9)
     if not sel.any():
-        return None
-    return float(np.median(np.abs(f[sel] - g[sel]) / np.abs(g[sel])))
+        return 1.0, None
+    scale = float(np.median((g[sel] / f[sel]) ** 2))
+    f2 = f * np.sqrt(scale)
+    return scale, float(np.median(np.abs(f2[sel] - g[sel]) / np.abs(g[sel])))
+
+
+def _unit_note(scale):
+    for val, lab in ((1.0, "eV/Å²"), (1.0 / VASP_TO_THZ ** 2, "THz²（f²）"),
+                     (1.0 / (2 * np.pi * VASP_TO_THZ) ** 2, "(2πTHz)²（ω²）")):
+        if abs(scale / val - 1.0) < 0.05:
+            return lab
+    return "未知比例 ×%.4g" % scale
 
 
 def _translations(n):
@@ -311,10 +325,11 @@ def decompose(d, dim="2d"):
     for klab, kraw in d["k_cands"]:
         s_ = 0.5 * (kraw + kraw.T)
         k = s_ if np.trace(s_) > 0 else -s_                 # 力常数矩阵对角为正；打印的符号两种都接受
-        ferr = _freq_err(k, d.get("mass"), d.get("freqs"))
-        tried.append((klab, ferr))
+        fscale, ferr = _freq_calibrate(k, d.get("mass"), d.get("freqs"))
+        tried.append((klab, ferr, fscale))
         if ferr is not None and ferr > FREQ_TOL:
             continue
+        k = k * fscale                                      # 换成 eV/Å²（频谱定出的单位）
         for llab, lam0 in d["lam_cands"]:
             for f in (1.0, 0.5, 2.0):                       # 剪切列（XY YZ ZX）的约定因子
                 lam = lam0.copy()
@@ -335,7 +350,8 @@ def decompose(d, dim="2d"):
                             "keep": keep, "klab": klab, "llab": llab, "f": f, "ferr": ferr, "diff": diff}
     if best is None:
         raise ValueError("所有力常数候选都和 OUTCAR 的振动频率对不上：%s"
-                         % "；".join("%s 频率误差 %s" % (a, "%.0f%%" % (100 * b) if b is not None else "-") for a, b in tried))
+                         % "；".join("%s 定标后频率误差 %s（单位按 %s）" % (a, "%.0f%%" % (100 * b) if b is not None else "-",
+                                                                     _unit_note(c)) for a, b, c in tried))
     idx = list(INPLANE) if dim == "2d" else list(range(6))
     sub = lambda m: np.asarray(m)[np.ix_(idx, idx)]         # noqa: E731
     proj_total = d["clamped"] + best["ours"]
@@ -355,7 +371,8 @@ def decompose(d, dim="2d"):
     res = {
         "dim": dim, "n_ions": n, "volume_A3": vol, "ionic_reference": d["ionic_src"],
         "force_constants_from": best["klab"], "internal_strain_from": best["llab"], "shear_factor": best["f"],
-        "freq_check": {a: (round(b, 4) if b is not None else None) for a, b in tried},
+        "freq_check": {a: {"err": (round(b, 4) if b is not None else None), "scale": c, "unit": _unit_note(c)}
+                       for a, b, c in tried},
         "match_mode": best["mode"], "reproduce_rel_err": round(best["rel"], 4),
         "reproduced": best["rel"] <= MATCH_TOL,
         "worst_component": VASP_ORDER[worst],
@@ -411,9 +428,9 @@ def main(argv=None):
                                                     encoding="utf-8")
     c = r["worst_component"]
     print("== %s（%s，%d 原子；%s 块）" % (oc, dim.upper(), r["n_ions"], "面内 XX/YY/XY" if dim == "2d" else "6×6"))
-    print("   力常数候选与 OUTCAR 振动频率核对：%s"
-          % "；".join("%s %s" % (a, ("%.1f%%" % (100 * b)) if b is not None else "无法核对")
-                     for a, b in r["freq_check"].items()))
+    print("   力常数候选与 OUTCAR 振动频率谱核对（定标后逐模中位误差）：%s"
+          % "；".join("%s %s" % (a, ("%.1f%%（单位按 %s）" % (100 * b["err"], b["unit"])) if b["err"] is not None
+                                 else "无法核对") for a, b in r["freq_check"].items()))
     print("   复现 VASP 离子弛豫项（%s）：%s，残差 %.1f%%%s"
           % (r["ionic_reference"], {"exact": "直接复现（VASP 已去掉平移模）",
                                     "translation(uniform)": "差值完全落在平移子空间（均匀平移）"}[r["match_mode"]],

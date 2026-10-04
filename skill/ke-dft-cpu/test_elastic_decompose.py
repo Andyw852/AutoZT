@@ -12,7 +12,7 @@
   D：离子项块被篡改 -> 复现不了 -> unreliable（退出码 2）；
   E：VASP 已去掉平移模（离子项 = 非平移模之和）-> 认出来，按真实值判；
   F：VASP 6 的实际格式（Mo2S3）：OUTCAR 无 SECOND DERIVATIVES / 无离子项块、内应变两段，力常数在 vasprun.xml；
-     OUTCAR 的振动频率认出 hessian 是质量加权的；
+     OUTCAR 的振动频率谱认出 hessian 是质量加权的，且单位是 THz²（V157，Mo2S3 的实际单位；另测 eV/Å²/amu）；
   G（V156）：VASP 多出的部分落在软光学模方向（不在平移子空间）-> 不可用，点名软模。
 """
 import contextlib
@@ -110,7 +110,7 @@ def _run(case, **kw):
 MASS = [95.95, 95.95, 32.06, 32.06]                        # 2 Mo + 2 S
 
 
-def _vasp6(k, lmat, ionic):
+def _vasp6(k, lmat, ionic, hess_unit="THz2"):
     """VASP 6 / IBRION=6 + ISIF=3 的实际样子（Mo2S3）：OUTCAR 没有 SECOND DERIVATIVES、没有离子项块；
     内应变分 FROM STRAINED CELLS / FROM DISPLACED ATOMS 两段（表头 X Y Z XY YZ ZX）；力常数只在 vasprun.xml 的
     <dynmat> hessian 里（质量加权、取负）。这里让 DISPLACED ATOMS 是真值，STRAINED CELLS 偏 10%。"""
@@ -126,7 +126,9 @@ def _vasp6(k, lmat, ionic):
             lines.append("")
     lines += _block("TOTAL ELASTIC MODULI", CLAMPED + ionic) + [""]
     m = np.repeat(MASS, 3)
-    hess = -k / np.sqrt(np.outer(m, m))
+    hess = -k / np.sqrt(np.outer(m, m))                   # eV/Å²/amu（phonopy 的读法）
+    if hess_unit == "THz2":                                # Mo2S3 这份 vasprun 的实际单位：−hessian 的本征值 = f²（THz²）
+        hess = hess * E.VASP_TO_THZ ** 2
     wd = np.linalg.eigvalsh(k / np.sqrt(np.outer(m, m)))[::-1]            # VASP 从高到低打印
     lines += [" Eigenvectors and eigenvalues of the dynamical matrix", " " + "-" * 52]
     for i, v in enumerate(wd):
@@ -189,8 +191,10 @@ class DecomposeTests(unittest.TestCase):
         r = json.loads((s6 / "elastic_ionic_decompose.json").read_text(encoding="utf-8"))
         self.assertEqual(rc, 0, buf.getvalue())
         self.assertEqual(r["force_constants_from"], "vasprun hessian × √(m_i m_j)")
-        self.assertLess(r["freq_check"]["vasprun hessian × √(m_i m_j)"], 0.01)          # 频率核对认出质量加权
-        self.assertGreater(r["freq_check"]["vasprun hessian（不去质量加权）"], E.FREQ_TOL)
+        fc = r["freq_check"]
+        self.assertLess(fc["vasprun hessian × √(m_i m_j)"]["err"], 0.01)              # 频谱形状认出质量加权
+        self.assertEqual(fc["vasprun hessian × √(m_i m_j)"]["unit"], "THz²（f²）")     # 单位按频谱定标认出
+        self.assertGreater(fc["vasprun hessian（不去质量加权）"]["err"], E.FREQ_TOL)
         self.assertEqual(r["internal_strain_from"], "displaced atoms")
         self.assertEqual(r["ionic_reference"], "TOTAL − SYMMETRIZED")
         self.assertEqual(r["verdict"], "artifact")
@@ -199,6 +203,22 @@ class DecomposeTests(unittest.TestCase):
         with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()) as err:
             self.assertEqual(E.main([str(d), "--dim", "2d"]), 2)
         self.assertIn("拿不到力常数矩阵", err.getvalue())
+
+    def test_vasp_hessian_in_ev_units(self):
+        """phonopy 的读法（eV/Å²/amu）同样认得出：定标因子 1。"""
+        k, lmat, ionic, proj = _model("A")
+        d = Path(tempfile.mkdtemp())
+        s6 = d / "step6_elastic"
+        s6.mkdir()
+        oc, vr = _vasp6(k, lmat, ionic, hess_unit="eV")
+        (s6 / "OUTCAR").write_text(oc)
+        (s6 / "vasprun.xml").write_text(vr)
+        with contextlib.redirect_stdout(io.StringIO()):
+            rc = E.main([str(d), "--dim", "2d"])
+        r = json.loads((s6 / "elastic_ionic_decompose.json").read_text(encoding="utf-8"))
+        self.assertEqual(rc, 0)
+        self.assertEqual(r["freq_check"]["vasprun hessian × √(m_i m_j)"]["unit"], "eV/Å²")
+        np.testing.assert_allclose(np.array(r["projected_total_vasp_order_kbar"]), CLAMPED + proj, atol=0.05)
 
     def test_vasp_already_projected(self):
         """VASP 若已去掉平移模：它的离子项 = 非平移模之和；本工具认出来，结论按真实值（这里仍正定 -> ok）。"""
