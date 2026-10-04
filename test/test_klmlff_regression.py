@@ -12,7 +12,6 @@ ROOT = Path(__file__).resolve().parents[1]
 for p in ('skill/_common/opt', 'skill/_common/mlff', 'skill/_common'):
     sys.path.insert(0, str(ROOT / p))
 import gen_step4_kappa as k
-import gen_step3_fc as fc
 
 class Array:
     def __init__(self, values): self.values = values
@@ -84,25 +83,6 @@ class Regression(unittest.TestCase):
         result=json.loads(Path('kappa_summary.json').read_text())
         self.assertEqual(result['kappa_2d_normalized_300K_xx_yy_zz'],[4.,8.,12.])
 
-    def test_phonon_gate_fc2_and_nac(self):
-        Path('fit_config.json').write_text(json.dumps({'nac': True, 'yaml': 'phono3py_params.yaml'}))
-        ph3 = types.SimpleNamespace(unitcell='unit', supercell_matrix='small',
-            phonon_supercell_matrix='large', primitive_matrix='primitive', nac_params={'born': 'charges'})
-        seen = []
-        class Phonopy:
-            def __init__(self, unit, supercell_matrix, primitive_matrix):
-                seen.append(self); self.scm = supercell_matrix
-            def run_mesh(self, **kw): pass
-            def get_mesh_dict(self): return {'frequencies': [0.]}
-            def auto_band_structure(self, **kw): pass
-        modules = {'numpy': types.SimpleNamespace(asarray=lambda x:x, min=min),
-            'h5py': types.SimpleNamespace(),
-            'phono3py': types.SimpleNamespace(load=lambda *a, **kw: ph3),
-            'phono3py.file_IO': types.SimpleNamespace(read_fc2_from_hdf5=lambda **kw: 'fc2'),
-            'phonopy': types.SimpleNamespace(Phonopy=Phonopy)}
-        with patch.dict(sys.modules, modules): exec(fc._PHONON_GATE, {})
-        self.assertEqual(seen[0].scm, 'large')
-        self.assertEqual(seen[0].nac_params, {'born': 'charges'})
 
     def test_cpu_defaults(self):
         for base in (ROOT/'skill/kl-mlff-cpu/templates', ROOT/'test/tf_test/Si/kl-mlff-cpu/project_setting/templates'):

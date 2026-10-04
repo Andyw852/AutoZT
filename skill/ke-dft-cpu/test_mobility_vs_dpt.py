@@ -266,5 +266,167 @@ class DptReasonTests(unittest.TestCase):
         self.assertNotIn('miss.add("m*←S3_uniform(vasprun/网格)")', s)
 
 
+
+class ExcBriefTests(unittest.TestCase):
+    """V150：兜底 except 写出类型 + 信息 + 本脚本里出错的行（WS2 只看到"二次型拟合异常：IndexError"）。"""
+
+    def test_brief_has_line(self):
+        sys.path.insert(0, str(ROOT / "step8.2_dpt"))
+        import gen_step12_dpt as D
+        try:
+            D.mobility_dpt(True, None, 1.0, 1.0, 300.0)
+        except Exception as e:                                           # noqa: BLE001
+            msg = D._exc_brief(e)
+        self.assertIn("TypeError", msg)
+        self.assertRegex(msg, r"gen_step12_dpt\.py:\d+ `")
+
+    def test_aniso_failure_reports_where(self):
+        from unittest import mock
+        sys.path.insert(0, str(ROOT / "step8.2_dpt"))
+        import gen_step12_dpt as D
+        m = Path(tempfile.mkdtemp())
+        (m / D.UNIFORM_DIR).mkdir(parents=True)
+        (m / D.UNIFORM_DIR / "vasprun.xml").write_text("<x/>")
+        fake = GridResolutionTests()._fake_vasprun()
+        with mock.patch("pymatgen.io.vasp.Vasprun", lambda *a, **k: fake), \
+                mock.patch.object(D, "_band_edges_json", lambda cwd: {"electron": {"hits": [{"k_frac": [0, 0]}]}}):
+            got, prov = D.get_effective_mass_aniso(m, "electron", True)
+        self.assertIsNone(got)
+        self.assertIn("二次型拟合异常：", prov)
+        self.assertRegex(prov, r"gen_step12_dpt\.py:\d+")
+
+
+class AnisoKzTests(unittest.TestCase):
+    """V151：2D 的 S3 用 kz≥3（WS2 48×48×3）时，分方向拟合的面内掩码被拿去索引全 BZ 的 kfrac -> IndexError
+    （6912 vs 2304），分方向 m* 整块失败；kz=1 时两者等长测不出来。合成六方单层，K 谷抛物 m_c=0.30、m_v=0.42。"""
+
+    def _fake(self, n, nz):
+        import types
+        import numpy as np
+        try:
+            import spglib
+            from pymatgen.core import Lattice, Structure
+            from pymatgen.electronic_structure.core import Spin
+        except ImportError:
+            self.skipTest("需要 pymatgen + spglib")
+        st = Structure(Lattice.hexagonal(3.18, 20.0), ["W", "S", "S"],
+                       [[0, 0, 0.5], [1 / 3, 2 / 3, 0.578], [1 / 3, 2 / 3, 0.422]])
+        mp, grid = spglib.get_ir_reciprocal_mesh([n, n, nz], (st.lattice.matrix, st.frac_coords, [74, 16, 16]),
+                                                 is_shift=[0, 0, 0])
+        kf = grid[np.unique(mp)] / np.array([n, n, nz], float)
+        kf -= np.rint(kf)
+        recip = st.lattice.reciprocal_lattice.matrix
+        ks = [np.array(x + [0.0]) for x in ([1 / 3, 1 / 3], [-1 / 3, -1 / 3], [2 / 3, -1 / 3], [-2 / 3, 1 / 3],
+                                             [1 / 3, -2 / 3], [-1 / 3, 2 / 3])]
+
+        def band(e0, m, sgn):
+            out = []
+            for c in ks:
+                d = kf - c
+                d -= np.rint(d)
+                out.append(e0 + sgn * 3.80998 * np.sum((d @ recip) ** 2, axis=1) / m)
+            return np.min(out, axis=0) if sgn > 0 else np.max(out, axis=0)
+        ene = np.stack([band(0.0, 0.42, -1) - 1.0, band(0.0, 0.42, -1), band(1.6, 0.30, +1)], axis=1)
+        occ = np.stack([np.ones(len(kf))] * 2 + [np.zeros(len(kf))], axis=1)
+        return types.SimpleNamespace(final_structure=st, actual_kpoints=kf.tolist(), parameters={"ISPIN": 1},
+                                     eigenvalues={Spin.up: np.stack([ene, occ], axis=-1)})
+
+    def test_kz3_grid(self):
+        from unittest import mock
+        sys.path.insert(0, str(ROOT / "step8.2_dpt"))
+        import gen_step12_dpt as D
+        m = Path(tempfile.mkdtemp())
+        (m / D.UNIFORM_DIR).mkdir(parents=True)
+        (m / D.UNIFORM_DIR / "vasprun.xml").write_text("<x/>")
+        for nz in (1, 3):
+            fake = self._fake(12, nz)
+            with mock.patch("pymatgen.io.vasp.Vasprun", lambda *a, **k: fake), \
+                    contextlib.redirect_stdout(io.StringIO()):
+                for car, want in (("electron", 0.30), ("hole", 0.42)):
+                    got, prov = D.get_effective_mass_aniso(m, car, True)
+                    self.assertIsNotNone(got, "nz=%d %s：%s" % (nz, car, prov))
+                    self.assertAlmostEqual(got[0], want, places=3)
+                    self.assertAlmostEqual(got[1], want, places=3)
+
+    def test_hex_offgrid_refused_v152(self):
+        """V152：K 离网（N 不是 3 的倍数，WSe2 是 45）时分方向路径也要拒绝 —— 以前它给出 x≠y 且 status ok。"""
+        from unittest import mock
+        sys.path.insert(0, str(ROOT / "step8.2_dpt"))
+        import gen_step12_dpt as D
+        m = Path(tempfile.mkdtemp())
+        (m / D.UNIFORM_DIR).mkdir(parents=True)
+        (m / D.UNIFORM_DIR / "vasprun.xml").write_text("<x/>")
+        fake = self._fake(10, 3)
+        with mock.patch("pymatgen.io.vasp.Vasprun", lambda *a, **k: fake), \
+                contextlib.redirect_stdout(io.StringIO()):
+            for car in ("electron", "hole"):
+                got, prov = D.get_effective_mass_aniso(m, car, True)
+                self.assertIsNone(got, prov)
+                self.assertIn("K 离网", prov)
+                self.assertIsNone(D.get_effective_mass(m, car, True)[0])
+
+    def test_q_valley_not_blamed_on_grid_v152(self):
+        """V152：WSe2 —— K 在网格上（45 是 3 的倍数），导带底在 Q/Λ 谷（0.178）。两条路径都拒绝，
+        但说明是"非高对称谷、重做 S3 没用"，不是"K 离网"。"""
+        from unittest import mock
+        import numpy as np
+        sys.path.insert(0, str(ROOT / "step8.2_dpt"))
+        import gen_step12_dpt as D
+        from pymatgen.electronic_structure.core import Spin
+        from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
+        m = Path(tempfile.mkdtemp())
+        (m / D.UNIFORM_DIR).mkdir(parents=True)
+        (m / D.UNIFORM_DIR / "vasprun.xml").write_text("<x/>")
+        fake = self._fake(18, 1)
+        kf = np.asarray(fake.actual_kpoints)
+        recip = fake.final_structure.lattice.reciprocal_lattice.matrix
+        ops = SpacegroupAnalyzer(fake.final_structure).get_point_group_operations(cartesian=False)
+        star = {tuple(np.round(op.operate([4 / 18, 4 / 18, 0]) % 1.0, 6)) for op in ops}
+        out = []
+        for q in star:
+            d = kf - np.array(q)
+            d -= np.rint(d)
+            out.append(1.5 + 3.80998 * np.sum((d @ recip) ** 2, axis=1) / 0.5)
+        arr = fake.eigenvalues[Spin.up].copy()
+        arr[:, 2, 0] = np.min(out, axis=0)                                  # 导带底在 Q 谷
+        fake.eigenvalues = {Spin.up: arr}
+        with mock.patch("pymatgen.io.vasp.Vasprun", lambda *a, **k: fake), \
+                contextlib.redirect_stdout(io.StringIO()):
+            for fn in (D.get_effective_mass, D.get_effective_mass_aniso):
+                got, prov = fn(m, "electron", True)
+                self.assertIsNone(got, prov)
+                self.assertIn("非高对称谷", prov)
+                self.assertNotIn("K 离网", prov)
+
+
+
+class BandEdgesRevTests(unittest.TestCase):
+    """V153：band_edges.json 的版本由 S7.1 写、S8.2 核对，两边共用 ke_common.BAND_EDGES_REV。
+    以前 S8.2 拿自己的 _SKILL_REV 比，永远不一致，每次都告警。"""
+
+    def _dpt(self):
+        sys.path.insert(0, str(ROOT / "step8.2_dpt"))
+        import gen_step12_dpt as D
+        return D
+
+    def test_current_file_no_warning_old_file_warns(self):
+        import ke_common as kc
+        D = self._dpt()
+        m = Path(tempfile.mkdtemp())
+        (m / D.DEFORM_READ_DIR).mkdir()
+        f = m / D.DEFORM_READ_DIR / "band_edges.json"
+        f.write_text(json.dumps({"skill_rev": kc.BAND_EDGES_REV, "electron": {}}))
+        with contextlib.redirect_stdout(io.StringIO()) as buf:
+            self.assertIsNotNone(D._band_edges_json(m))
+        self.assertNotIn("WARN", buf.getvalue())
+        f.write_text(json.dumps({"skill_rev": "2026-08-01-old", "electron": {}}))
+        with contextlib.redirect_stdout(io.StringIO()) as buf:
+            D._band_edges_json(m)
+        self.assertIn("重跑 step7b_deform_read", buf.getvalue())
+
+    def test_s71_writes_the_shared_constant(self):
+        src = (ROOT / "step7_deform" / "step7b_read" / "gen_step9b_deform_read.py").read_text(encoding="utf-8")
+        self.assertIn("_SKILL_REV = kc.BAND_EDGES_REV", src)
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

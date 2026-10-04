@@ -1148,6 +1148,19 @@ def build_step4_dir(out_dir, args, ctx, part=None):
             "log": log, "warn": warn, "soc": soc, "vasp": vasp}
 
 
+def _cascade_on_rerun(step):
+    """[patch_rerun_cascade V153] 本步目录是新建的（rerun）-> 下游步骤整目录归档、等本步跑完后重新生成。"""
+    try:
+        for _up in Path(__file__).resolve().parents[:3]:
+            if (_up / "ke_common.py").is_file() and str(_up) not in sys.path:
+                sys.path.insert(0, str(_up))
+        import ke_common as _kc
+    except ImportError:
+        print("[WARN] 没有 ke_common.py：%s 重算不会让下游自动重排（skill.yaml 的 gen_need 漏了它？）" % step)
+        return []
+    return _kc.cascade_on_rerun(Path.cwd(), step)
+
+
 def main():
     ap = argparse.ArgumentParser(description="从 step3 搭建 step4 HSE06 能带输入（KPOINTS_OPT；SOC 自动检测）")
     ap.add_argument("--line-density", type=int, default=None, metavar="N",
@@ -1170,6 +1183,7 @@ def main():
                          "hse06=无论上游一律 GGA=PE；hsesol=无论上游一律 GGA=PS。"
                          "不传则沿用脚本内 HYBRID_FLAVOR（当前 %r）" % HYBRID_FLAVOR)
     args = ap.parse_args()
+    _cascade_on_rerun(STEP4_DIR)
 
     # 命令行开关优先于脚本内常量，让"开头选档位"不必回来改文件。
     # 不传 --hybrid-flavor 时退回 HYBRID_FLAVOR，保持旧的默认行为。

@@ -20,6 +20,14 @@ METHOD_FILE = "workflow_method.txt"
 KL_PARAMS = "kl_params.txt"
 
 
+def engine_dir():
+    """Directory of the shared fitting/kappa engine (fc_fit_driver.py,
+    kappa_driver.py, cut3_select.py).  fc_common.py lives in that same
+    directory, so its own parent is correct both in autozt's flat step dir and
+    in the source tree (_common/fcfit/)."""
+    return Path(__file__).resolve().parent
+
+
 # ==========================================================================
 # Simple KEY = VALUE files
 # ==========================================================================

@@ -304,10 +304,24 @@ def run_vaspkit_kpoints(exe, outdir, kscheme, kspacing):
     )
 
 
+def _cascade_on_rerun(step):
+    """[patch_rerun_cascade V153] 本步目录是新建的（rerun）-> 下游步骤整目录归档、等本步跑完后重新生成。"""
+    try:
+        for _up in Path(__file__).resolve().parents[:3]:
+            if (_up / "ke_common.py").is_file() and str(_up) not in sys.path:
+                sys.path.insert(0, str(_up))
+        import ke_common as _kc
+    except ImportError:
+        print("[WARN] 没有 ke_common.py：%s 重算不会让下游自动重排（skill.yaml 的 gen_need 漏了它？）" % step)
+        return []
+    return _kc.cascade_on_rerun(Path.cwd(), step)
+
+
 def main():
     args = parse_args()
     step1 = Path(resolve_step1_dir())
     step2 = Path(STEP2_DIR)
+    _cascade_on_rerun(STEP2_DIR)
     if not step1.is_dir():
         sys.exit(f"[ERROR] Missing {step1}; run in the workflow parent directory")
 

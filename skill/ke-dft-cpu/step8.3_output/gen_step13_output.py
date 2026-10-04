@@ -285,7 +285,7 @@ def load_amset(cwd, is_2d=False, dirname=None):
         out["aniso"] = _inplane_anisotropy(out) if is_2d else None
         return out
     except Exception as e:
-        print("[WARN] amset transport.json 解析失败：%s" % type(e).__name__)
+        print("[WARN] amset transport.json 解析失败：%s: %s" % (type(e).__name__, e))
         return None
 
 
@@ -321,7 +321,7 @@ def load_bt2(cwd):
         res["kappa_e_over_tau_yy"] = _dir("kappa_e_over_tau_yy")
         return res
     except Exception as e:
-        print("[WARN] boltztrap_crta.json 解析失败：%s" % type(e).__name__)
+        print("[WARN] boltztrap_crta.json 解析失败：%s: %s" % (type(e).__name__, e))
         return None
 
 
@@ -970,7 +970,7 @@ def main():
     try:
         make_figure(out, am, bt, dpt, am2=am2)
     except Exception as e:
-        print("[WARN] 画图失败（%s）——表已生成，图跳过" % type(e).__name__)
+        print("[WARN] 画图失败（%s: %s）——表已生成，图跳过" % (type(e).__name__, e))
     for _l in resolve_kappa_L(cwd)[2]:                # patch_kl_auto
         print("[..] " + _l)
 
@@ -1028,7 +1028,7 @@ def main():
             print("[..] 重叠报警：只找到 %d 个 unity / %d 个真实重叠运行，跳过。"
                   % (len(_u), len(_r)))
     except Exception as _e:
-        print("[WARN] 重叠报警检查失败（%s）——不影响主表" % type(_e).__name__)
+        print("[WARN] 重叠报警检查失败（%s: %s）——不影响主表" % (type(_e).__name__, _e))
 
     print("[DONE] %s：comparison_300K.png / .csv / summary.txt 已生成" % OUTDIR_NAME)
 

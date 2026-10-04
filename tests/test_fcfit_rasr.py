@@ -14,12 +14,13 @@ import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SK = os.path.join(ROOT, "skill", "fit-fc-thermal")
+ENG = os.path.join(ROOT, "skill", "_common", "fcfit")
 
 
 def _load():
     sys.path.insert(0, SK)
     spec = importlib.util.spec_from_file_location(
-        "fc_fit_driver_rasr_t", os.path.join(SK, "fc_fit_driver.py"))
+        "fc_fit_driver_rasr_t", os.path.join(ENG, "fc_fit_driver.py"))
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod
@@ -48,7 +49,7 @@ def test_gen_default_is_auto():
     """The gen default must stay in step with the driver resolution."""
     sys.path.insert(0, SK)
     spec = importlib.util.spec_from_file_location(
-        "gen_step1_fit_rasr_t", os.path.join(SK, "gen_step1_fit.py"))
+        "gen_step1_fit_rasr_t", os.path.join(ENG, "gen_step1_fit.py"))
     gen = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(gen)
     assert gen.SPEC["PHEASY_RASR"][0] == "auto"

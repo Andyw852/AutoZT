@@ -1,127 +1,62 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""gen_step5_fc.py —— 力常数拟合，提交计算节点（step5_fc）。
+"""gen_step5_fc.py —— kl-dft-cpu S5_fc：拟合力常数（共享 fit-fc-thermal 引擎）。
 
-【结构变更】S5_fc 从"登录节点 gen 里裸跑 phono3py"改成"提交计算节点作业"：pheasy/symfc
-拟合是重活（几十核 + 大内存 + 数小时），压不进登录节点。本 gen 只做准备：
-  1. 校验 step4 产物（phono3py_disp.yaml + disp-*/vasprun.xml；alm 才有 SPOSCAR）
-  2. 把 step.conf + kl_params 解析成 fit_config.json（作业里 kl_fc_backends.py 读它）
-  3. 按 FIT_ENGINE 选提交模板渲染 submit.sh
-tf 提交后，计算节点按 submit.sh 依次跑 kl_fc_backends 的 prep → 拟合 → post：
-  拟合器（FIT_ENGINE）：phono3py(symfc/alm，默认) | pheasy(随机位移压缩感知，需 METHOD=alm)
-  产出：step5_fc/phono3py/（fc2/fc3.hdf5 + phono3py_disp.yaml）
-        step5_fc/shengbte/（FORCE_CONSTANTS_2ND/3RD，EXPORT_SHENGBTE=true 时）
-        step5_fc/phonon_summary.json（虚频闸 marker：'"stable": true'）
-产出目录：step5_fc/
+保留 DFT 专属的【帧一致性 + SCF 收敛门禁】两个预检，然后把 step4_disp 的
+位移+力数据集交给共享引擎 _common/fcfit/gen_step1_fit，写 fit_config.json +
+submit.sh；计算节点跑 fc_fit_driver.py prep|fit|post。
+
+导入模式（跨技能复用）：检测到推送来的 kl_bundle/（或 FC_IMPORT_DIR）→ 装配
+step5_fc 布局、跳过拟合（见 reuse_fcfit.py）。
+
+注意：换共享引擎后，本技能旧引擎的 PHEASY_ENABLE_FC=4（四声子）与 2D ZA 二次性
+尚未并入共享 fc_fit_driver，后续单独补（3-3b / 四声子）。
 """
-import json
-import os
 import shutil
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-import kl_common as kc
-import stepconf
+# 共享引擎（_common/fcfit）+ stepconf/dim_common（_common/opt）+ _common
+_base = Path(__file__).resolve().parent.parent
+for _d in (_base / "fcfit", _base / "opt", _base):
+    if _d.is_dir() and str(_d) not in sys.path:
+        sys.path.append(str(_d))
 
-OUTDIR   = "step5_fc"
-STEP     = "step5_fc"
+import gen_step1_fit as g1  # noqa: E402
+import stepconf             # noqa: E402
+import kl_common as kc      # noqa: E402  (帧一致性/SCF 门禁)
+
+OUTDIR = "step5_fc"
+STEP = "step5_fc"
 DISP_DIR = "step4_disp"
 
-SPEC = {
-    "FUNC":        ("pbesol", "str"),   # 全局带入，本步不用
-    # —— 由 fit-fc-thermal 产物导入（跨技能复用）——
-    #   FC_IMPORT_DIR 指向【本集群上】fit-fc-thermal 的 step1_fit 目录（含 fc2/fc3.hdf5）。
-    #   非空时 gen 直接调 reuse_fcfit.assemble() 把 step5_fc/ 装配好，跳过 S4 校验与
-    #   拟合作业；phono3py 环境里顺手生成 phono3py_disp.yaml。产物齐全后本步即完成。
-    "FC_IMPORT_DIR":        ("", "str"),
-    "FC_IMPORT_SUPERCELL":  ("", "str"),   # 覆盖超胞矩阵 "n n n"（默认读 fc_dataset.json）
-    "FC_IMPORT_DIM":        ("", "str"),   # 覆盖 2d|3d（默认读 phonon_summary.json 的 is_2d）
-    "FC_IMPORT_MESH":       ("", "str"),   # kl_params 的 MESH（默认 3D "24 24 24" / 2D "24 24 1"）
-    "FC_IMPORT_FUNCTIONAL": ("", "str"),   # kl_params 的 FUNCTIONAL（默认 pbesol）
-    # —— 拟合器选择 ——
-    # auto：按维度选 —— 2D 用 pheasy，3D 用 phono3py（symfc 快且稳，3D 不需要旋转不变性）。
-    #   ★ 限制在"必须走 pheasy"这一步，与用哪种回归方法无关：RASR 是在 pheasy 的 -c
-    #   （零空间构造）步写进零空间的，之后 OLS / RFE / LASSO 都能用。所以引擎默认改成
-    #   pheasy 才是 P0-1 的关键，PHEASY_FIT_METHOD 是另一个独立选择（见下）。
-    "FIT_ENGINE":  ("auto", "str"),     # auto | phono3py | pheasy
-    # phono3py 路（symfc/alm）
-    "FC_CALC":     ("symfc",  "str"),   # symfc | alm
-    "FC3_CUTOFF":  (None,     "str"),   # fc3 截断 Å（"5.0"）；空/None=不截断
-    # pheasy 路
-    # auto：2D → LASSO、3D → RFE。与 RASR 无关（RASR 只看引擎是不是 pheasy）；
-    #   选 LASSO 是因为对照实验里 RFE/OLS 的 fc3 幅值本就贴近参考值，而 LASSO 必须靠
-    #   --std + 去偏才能压到 0.13% 以内 —— 那两项已写死在 submit_fit_pheasy.tpl 里，
-    #   用 LASSO 前务必确认模板没被项目级副本遮蔽。
-    "PHEASY_FIT_METHOD": ("auto", "str"), # auto | LASSO | RFE-OLS | OLS | RFE-OLS-TSQR | ARDR | RVM
-    "PHEASY_C3_CUTOFF":  ("5.2", "str"), # pheasy fc3 截断 Å；None=不截断
-    "PHEASY_ENABLE_FC":  (3,     "int"), # 2|3|4（热导率需 ≥3）
-    # ---- 三阶截断扫描（2026-09-24 user 定）：S4 记的候选截断逐个拟合 ----
-    "CUT3_SCAN":          ("auto", "str"),   # auto|on|off：候选 ≥2 且 auto 时逐个拟合
-    "CUT3_BOOTSTRAP":     (10,     "int"),   # 对帧有放回重抽样次数（0=不做稳定性）
-    "CUT3_STABILITY_THR": (0.3,    "float"), # 逐壳层 Φ³ 的 σ/|mean| 判"能确定"的阈值
-    "CUT3_CV_1SE_MULT":   (1.0,    "float"), # 1-SE 规则里的 SE 倍数
-    "CUT3_PICK":          ("smallest", "str"), # smallest|largest（见 kl_common.select_cutoff）
-    "CUT3_KAPPA_TOL_PCT": (5.0,    "float"), # κ 平台判据：相邻变化上限(%)（S6 用）
-    # 旋转不变性/平衡条件（RASR）：auto = 2D 用 BHH、3D 不加（文献结论：对体材料可忽略，
-    #   对 2D 是硬要求——不加则 ZA 近 Γ 线性化甚至出虚频）。BHH | BH | H | none 可强制。
-    #   ★ 必须施加在 pheasy 的 -c（零空间构造）步；-f 步读的是 ns_*.npz，--rasr 在 -f 上无效。
-    "PHEASY_RASR":       ("auto", "str"),
-    "PHEASY_BIN":        ("pheasy", "str"), # pheasy 可执行名：pheasy | pheasy-gpu（GPU 版）
-    "NULL_SPACE_EPS":    (0.001, "float"),
-    # —— 导出 & 虚频闸 ——
-    # —— 缺帧容错（仅随机位移 METHOD=alm 生效；findiff 必须帧帧齐全）——
-    "MIN_SUCCESS_RATIO":  (0.9, "float"),  # 成功帧占比下限，低于它报错
-    "MIN_SUCCESS_FRAMES": (0,   "int"),    # 成功帧绝对下限，0=不限
-    "EQ_FORCE_MAX":      (0.2, "float"),  # 平衡帧残余力上限(eV/Å)；>它报错；0=关闭
-    # —— 导出 & 虚频闸 ——
-    "EXPORT_SHENGBTE": (True, "bool"),   # 任一拟合器都产出 shengbte 力常数
-    "BAND_POINTS":     (51,   "int"),
-    # —— 虚频闸（唯一真源 skill/_common/imag_policy.py，2026-09-22）——
-    #   IMAG_THR 语义已从"全局阈值"变为"**近 Γ 声学支上限**"。
-    "IMAG_THR":        (0.10, "float"),  # 近 Γ 声学支上限(THz)；2026-09-22 用户统一到 0.10
-    "IMAG_THR_STRICT": (0.10, "float"),  # 噪声底；2026-09-22 用户统一到 0.10（< −0.10 判不稳定）
-    "IMAG_QGAMMA":     (0.05, "float"),  # 近 Γ 半径（分数坐标，Petretto 2018）
-    "IMAG_QGAMMA_GRACE": (1.2, "float"), # 声学支有效近 Γ 窗口 = IMAG_QGAMMA×它（1.0=严格）
-    # P2-2：2D 的 ZA 弯曲支二次性检查（ω ∝ q^p，要求 1.7<p<2.3）。
-    #   auto = 2D 打开；只看最小频率不够 —— ZA 线性化时频率全是正的，照样过虚频闸门，
-    #   但 κ 会整体错掉。检查结果写进 phonon_summary.json 的 za_exponent。
-    "ZA_CHECK":        ("auto", "str"),   # auto | on | off
-    "ZA_QMAX":         (0.05, "float"),   # 拟合用 q 上限（倒格子约化单位，0.05~0.1）
-    # 作业资源（核数/qos/时长）走 step.conf 的 [submit] 段覆盖 #SBATCH，不在 [params] 里。
-}
-
-
-_RASR_VALUES = ("BHH", "BH", "H")
-
-
-def _resolve_rasr(val, dim):
-    """PHEASY_RASR 解析：auto → 2D=BHH / 3D=none；显式值原样（none 归一成小写）。
-
-    pheasy 的 --rasr 只接受 BH / H / BHH（basic_io.py 的 choices），所以 "none" 不是
-    一个能传的值 —— 关掉就是不传这个开关（模板里 RASR_FLAGS 为空）。
-    """
-    v = str(val if val is not None else "auto").strip().upper()
-    if v == "AUTO":
-        return "BHH" if dim == "2d" else "none"
-    if v in _RASR_VALUES:
-        return v
-    if v in ("NONE", "OFF", "FALSE", "F", "0", ""):
-        return "none"
-    sys.exit("[ERROR] PHEASY_RASR=%r 非法：只允许 auto | BHH | BH | H | none" % val)
+SPEC = dict(g1.SPEC)
+SPEC.update({
+    "FUNC": ("pbesol", "str"),
+    # —— 由 fit-fc-thermal 产物导入（跨技能复用 fc2/fc3）——
+    "FC_IMPORT_DIR": ("", "str"),
+    "FC_IMPORT_SUPERCELL": ("", "str"),
+    "FC_IMPORT_DIM": ("", "str"),
+    "FC_IMPORT_MESH": ("", "str"),
+    "FC_IMPORT_FUNCTIONAL": ("", "str"),
+    # —— imag_policy 近 Γ 判据阈值（唯一真源 _common/imag_policy.py）——
+    "IMAG_THR_STRICT": (0.10, "float"),
+    "IMAG_QGAMMA": (0.05, "float"),
+    "IMAG_QGAMMA_GRACE": (1.2, "float"),
+    # —— 2D ZA 二次性（3-3b 再并入共享 fc_fit_driver，这里先保留键）——
+    "ZA_CHECK": ("auto", "str"),
+    "ZA_QMAX": (0.05, "float"),
+})
 
 
 def main():
     cwd = Path.cwd()
     out = cwd / OUTDIR
     out.mkdir(exist_ok=True)
-    conf = stepconf.load(SPEC, STEP)
-    disp = cwd / DISP_DIR
+    conf = stepconf.load(SPEC, STEP, strict="warn")
 
     # ---- fit-fc-thermal 产物导入模式（跨技能复用 fc2/fc3）----
-    #   FC_IMPORT_DIR 显式指定；或由 tf 的 push_paths 把本地暂存的 fit-fc-thermal
-    #   kl_bundle/ 推到本步骤目录后【自动】识别（见 skill.yaml 的 push_paths）。
-    #   想强制用本技能自己拟，设 FC_IMPORT_DIR = off。
     _fcimp = str(conf.get("FC_IMPORT_DIR") or "").strip()
     if _fcimp.lower() in ("off", "false", "0", "no", "none"):
         _fcimp = ""
@@ -153,7 +88,6 @@ def main():
             sys.exit("[ERROR] 从 fit-fc-thermal 产物装配 step5_fc 失败：%s\n"
                      "        （生成 phono3py_disp.yaml 需要 phono3py；本机 python=%s）"
                      % (_e, sys.executable))
-        # 产物已就绪；写一个最小 submit.sh，autozt 收尾时提交的作业是 no-op。
         (out / "submit.sh").write_text(
             "#!/bin/bash\n"
             "# FC_IMPORT_DIR 导入模式：step5_fc/ 已在 gen 阶段装配完成，无需计算。\n"
@@ -166,260 +100,43 @@ def main():
         return
 
     # ---- 校验 step4 产物 ----
+    disp = cwd / DISP_DIR
     if not (disp / "phono3py_disp.yaml").is_file():
         sys.exit("[ERROR] %s 缺 phono3py_disp.yaml（step4 未生成位移）" % disp)
     if not list(disp.glob("disp-*/vasprun.xml")):
         sys.exit("[ERROR] %s 下无 disp-*/vasprun.xml，位移单点还没算完" % disp)
 
-    # ---- 抽帧校验（2026-09-17，user 要求）：力必须与位移对应 ----
-    #   S4 是 fanout，retry 只补缺失帧；若 S1 换过结构而旧 disp-* 残留，会出现
-    #   "旧结构的力 + 新位移"的静默错配。这里抽 3 帧把 vasprun.xml 的坐标与
-    #   "phono3py_disp.yaml 的超胞 + 位移"逐原子比对（周期回绕后 < 1e-3 Å）。
+    # ---- 帧一致性（力必须与位移对应）----
     _ok, _note = kc.check_frames_match_displacements(disp)
     print("[%s] S4 帧一致性：%s" % ("OK" if _ok else "FAIL", _note))
     if not _ok:
         sys.exit("[ERROR] %s\n        请清空 step4_disp 的 disp-*/POSCAR-*/phono3py_disp.yaml/SPOSCAR "
                  "后重跑 S4（或 -j S4_disp rerun）。" % _note)
 
-    # ---- 截断候选 / 扫描开关（review #1 + 2026-09-24）：读 S4 记的候选截断 ----
-    #   S5 的 fc3 截断不得大于 S4 生成帧时用的截断（否则更大截断里的三阶项欠定）；
-    #   候选截断是 S4 按壳层中点算好、一次按【最大候选】生成帧的，故都不超。闸门在
-    #   engine 解析之后逐档核（见"截断扫描"段）。
-    def _cut(v):
-        s = str(v or "").strip()
-        return None if s in ("", "None", "none", "null") else float(s)
-    _plan, _plan_cands, _s4_c3 = {}, [], None
-    try:
-        _plan = json.loads((disp / "disp_plan.json").read_text(encoding="utf-8"))
-        _plan_cands = [float(x) for x in (_plan.get("cut3_candidates") or [])]
-        _s4_c3 = _cut(_plan.get("alm_cut3"))
-    except Exception:
-        _plan, _plan_cands, _s4_c3 = {}, [], None
-    _scan_on = (str(conf["CUT3_SCAN"]).lower() in ("auto", "on", "true", "1", "yes")
-                and len(_plan_cands) >= 2)
-    print("[..] S4 截断候选=%s（S4 生成用最大截断=%s）；CUT3_SCAN=%s → %s"
-          % (_plan_cands or "无", _s4_c3, conf["CUT3_SCAN"],
-             "逐候选扫描" if _scan_on else "单截断"))
-
-    # ---- SCF 收敛门禁（2026-09-19，user 要求）：NELM 截断/未收敛的帧不能拟合 ----
-    #   VASP 撞 NELM 时照样输出力、作业正常退出，只在 OUTCAR 留一段
-    #   "number of steps (NELM) ... forces ... might not be reliable"；这种帧拿去拟合
-    #   会让 fc2/fc3 与 κ 整体错掉，而下游所有检查都显示正常 —— 正是要拦的静默错误。
-    #   反向：静态单点正常收敛时 OUTCAR 必有且只有 1 次 "aborting loop because EDIFF is reached"。
+    # ---- SCF 收敛门禁（NELM 截断/未收敛的帧不能拟合）----
+    import json as _json
     _scf_ok, _scf = kc.check_outcar_scf_convergence(disp)
     print(kc.format_scf_report(_scf))
     (out / "scf_steps.json").write_text(
-        json.dumps(_scf, ensure_ascii=False, indent=2), encoding="utf-8", newline="\n")
+        _json.dumps(_scf, ensure_ascii=False, indent=2), encoding="utf-8", newline="\n")
     if not _scf_ok:
         _bad = "、".join(b["frame"] for b in _scf["bad_frames"][:20])
-        _more = "（共 %d 帧）" % _scf["n_bad"] if _scf["n_bad"] > 20 else ""
-        sys.exit(
-            "[ERROR] S4 有 %d/%d 帧 SCF 未正常收敛（NELM 截断 / 无 aborting loop / 帧未算完），"
-            "力不可信，拒绝拟合：\n        作废帧：%s%s\n"
-            "        这些帧的力是电子步没收敛的结果，拟合 fc2/fc3 会整体错掉而下游检查正常。\n"
-            "        处理：对作废帧调 INCAR（提高 NELM / 换 ALGO / 调 AMIX,BMIX）后 "
-            "autozt -tt kl-dft-cpu -p <材料> -j S4_disp retry 只补这些帧；\n"
-            "        每帧电子步数见 %s。"
-            % (_scf["n_bad"], _scf["n_frames"], _bad, _more, out / "scf_steps.json"))
+        sys.exit("[ERROR] S4 有 %d/%d 帧 SCF 未正常收敛（NELM 截断 / 无 aborting loop），"
+                 "力不可信，拒绝拟合：\n        作废帧：%s\n"
+                 "        处理：对作废帧调 INCAR 后 autozt -tt kl-dft-cpu -p <材料> "
+                 "-j S4_disp retry 只补这些帧。"
+                 % (_scf["n_bad"], _scf["n_frames"], _bad))
 
-    params = kc.read_kl_params(disp / kc.KL_PARAMS)
-    method = (params.get("METHOD") or "alm").lower()
-    supercell = params.get("SUPERCELL") or ""
-    dim = (params.get("DIM") or "").lower()
-    if dim not in ("2d", "3d") and (disp / "POSCAR").is_file():
-        # kl_params 是 S4 写的（DIM 一定有）；真缺了就按结构现判，别把 2D 当 3D 静默放过
-        try:
-            dim = kc.resolve_dim(disp / "POSCAR", "auto")[0]
-        except Exception:
-            dim = ""
+    # ---- NAC：共享引擎的 prep 从【数据集目录】读 BORN；本技能的 BORN 在 step3_nac ----
+    _born = cwd / "step3_nac" / "BORN"
+    if _born.is_file():
+        shutil.copyfile(str(_born), str(disp / "BORN"))
+        print("[OK] BORN <- step3_nac/BORN（供共享引擎 prep 拾取）", flush=True)
 
-    engine = str(conf["FIT_ENGINE"] or "auto").strip().lower()
-    if engine in ("auto", ""):
-        engine = "pheasy" if dim == "2d" else "phono3py"
-        print("[..] FIT_ENGINE=auto → %s（DIM=%s）" % (engine, dim or "?"))
-    if engine not in ("phono3py", "pheasy"):
-        sys.exit("[ERROR] FIT_ENGINE 只允许 auto / phono3py / pheasy")
-    if engine == "pheasy" and method != "alm":
-        sys.exit("[ERROR] FIT_ENGINE=pheasy 需要随机位移（step4 METHOD=alm）。\n"
-                 "        findiff 请用 FIT_ENGINE=phono3py，或把 step4 改成 alm 重跑。")
-    p_method = str(conf["PHEASY_FIT_METHOD"] or "auto").strip().upper().replace(" ", "")
-    if p_method in ("AUTO", ""):
-        p_method = "LASSO" if dim == "2d" else "RFE-OLS"
-        print("[..] PHEASY_FIT_METHOD=auto → %s（DIM=%s）" % (p_method, dim or "?"))
-    if p_method not in ("LASSO", "RFE-OLS", "OLS", "RFE-OLS-TSQR", "ARDR", "RVM"):
-        sys.exit("[ERROR] PHEASY_FIT_METHOD 只允许 auto / LASSO / RFE-OLS / OLS / RFE-OLS-TSQR / ARDR / RVM")
-    p_bin = str(conf["PHEASY_BIN"] or "pheasy").lower()
-    if p_bin not in ("pheasy", "pheasy-gpu"):
-        sys.exit("[ERROR] PHEASY_BIN 只允许 pheasy / pheasy-gpu")
-    # [2026-09-30] fail-closed: CPU pheasy 没有 HARM_DENSE/FC2 保护，稀疏法(RFE/LASSO)
-    #   会修剪二阶力常数 → κ 不可信（GPU 版的同类 bug 已用 PHEASY_HARM_DENSE 修好）。
-    if (engine == "pheasy" and p_bin != "pheasy-gpu"
-            and int(conf.get("PHEASY_ENABLE_FC", 3) or 3) >= 3
-            and p_method in ("LASSO", "RFE-OLS", "RFE-OLS-TSQR", "ARDR", "RVM")
-            and os.environ.get("PHEASY_ALLOW_NO_HARM_DENSE", "").lower()
-                not in ("1", "true", "yes")):
-        sys.exit(
-            "[ERROR] CPU pheasy（PHEASY_BIN=pheasy）不带 FC2(HARM_DENSE) 保护："
-            "%s 会修剪二阶力常数，得到的 κ 不可信。\n"
-            "        请把 PHEASY_BIN 改成 pheasy-gpu（GPU 版已带保护），"
-            "或在确实要接受 FC2 被删时显式设 PHEASY_ALLOW_NO_HARM_DENSE=1。" % p_method)
-    if str(conf["FC_CALC"]).lower() not in ("symfc", "alm"):
-        sys.exit("[ERROR] FC_CALC 只允许 symfc / alm")
-
-    # ---- S5 实际拟合的截断列表 + 不超过 S4 生成截断的硬闸 ----
-    if _scan_on:
-        cut3_list = sorted(_plan_cands)
-        print("[..] 截断扫描：S5 将逐个拟合 %s（共 %d 档），作业内对每档算 CV/稳定性"
-              % (cut3_list, len(cut3_list)))
-    else:
-        _one = (_cut(conf["PHEASY_C3_CUTOFF"]) if engine == "pheasy"
-                else _cut(conf["FC3_CUTOFF"]))
-        cut3_list = [] if _one is None else [_one]
-    if _s4_c3 is not None:
-        for _val in cut3_list:
-            if _val > _s4_c3 + 1e-9:
-                sys.exit(
-                    "[ERROR] S5 的 fc3 截断 %.3f Å 大于 S4 生成位移时用的 %.3f Å。\n"
-                    "        S4 的帧只采样到 %.3f Å 内的三阶项，更大截断里的项在拟合里欠定。\n"
-                    "        处理：把截断收到 ≤ %.3f，或重跑 S4 用更大的 ALM_CUT3。"
-                    % (_val, _s4_c3, _s4_c3, _s4_c3))
-
-    # ---- 超胞安全截断硬闸（2026-10）：显式 SUPERCELL 时 S4 只 WARN 不拦截，这里在 S5 兜底 ----
-    #   超过安全截断（0.5×内切球直径−margin）的三阶对会被周期镜像重复计数，力常数是错的。
-    #   扫描：越界的候选档直接剔除；单档：压到安全截断。
-    _safe = None
-    _sc_reps = [int(x) for x in str(supercell or "").split()]
-    if len(_sc_reps) == 3 and (disp / "POSCAR").is_file():
-        try:
-            _vac = None
-            _d2, _vac = kc.resolve_dim(disp / "POSCAR", dim or "auto")
-            _safe = kc.supercell_safe_cutoff(disp / "POSCAR", _sc_reps,
-                                             dim=(dim or "3d"), vac_axis=_vac)
-        except Exception:
-            _safe = None
-    if _safe is not None:
-        _over = [c for c in cut3_list if c > _safe + 1e-9]
-        if _over:
-            if _scan_on:
-                cut3_list = [c for c in cut3_list if c <= _safe + 1e-9]
-                print("[WARN] 候选截断 %s 超过超胞安全截断 %.2f Å（周期镜像会重复计数），已剔除"
-                      % (", ".join("%.2f" % c for c in _over), _safe))
-                if not cut3_list:
-                    sys.exit("[ERROR] 所有候选截断都超过超胞安全截断 %.2f Å —— 请扩超胞"
-                             "（MIN_SC_LEN / SUPERCELL）后重跑 S4_disp。" % _safe)
-            else:
-                _clamp = float(int(_safe * 100)) / 100.0
-                cut3_list = [_clamp]
-                print("[WARN] 单档截断 %.2f Å > 超胞安全截断 %.2f Å（周期镜像会重复计数），"
-                      "已压到 %.2f Å" % (_over[0], _safe, _clamp))
-
-    # ---- RASR（旋转不变性 + 零应力平衡条件）----
-    # 2D 的 ZA 弯曲支 ω∝q² 由 Born-Huang 旋转不变性保证；不加时近 Γ 会线性化、
-    #   常常还带小虚频，虚频闸可能过（频率全为正）但 κ 是错的，所以默认 2D 必加。
-    rasr = _resolve_rasr(conf["PHEASY_RASR"], dim)
-    if engine != "pheasy" and rasr != "none":
-        print("[..] FIT_ENGINE=%s 不用 pheasy 的 RASR，忽略 PHEASY_RASR=%s" % (engine, rasr))
-        rasr = "none"
-    print("[..] RASR=%s（DIM=%s，PHEASY_RASR=%s）"
-          % (rasr, dim or "?", conf["PHEASY_RASR"]))
-    if dim == "2d" and rasr == "none":
-        print("[WARN] 2D 体系关闭了 RASR（PHEASY_RASR=none）：ZA 近 Γ 可能线性化或出虚频，"
-              "拟合出的力常数与 κ 不可信。除非在做对照实验，请设 PHEASY_RASR=auto/BHH。")
-    elif dim != "2d" and rasr == "none":
-        print("[..] 3D：按文献结论不施加 RASR（auto 的行为），要强制请设 PHEASY_RASR=BHH/BH/H")
-
-    # kl_params 一并拷进 step5_fc（溯源/后续继承）
-    for f in (kc.KL_PARAMS, kc.METHOD_FILE):
-        if (disp / f).is_file():
-            shutil.copyfile(disp / f, out / f)
-
-    # ---- 写 fit_config.json（作业里读）----
-    cfg = {
-        "FIT_ENGINE": engine,
-        "METHOD": method,
-        "DIM": dim.upper(),
-        "SUPERCELL": supercell,                       # 对角三整数，pheasy --dim / shengbte scell
-        "FC_CALC": str(conf["FC_CALC"]).lower(),
-        "FC3_CUTOFF": (None if conf["FC3_CUTOFF"] in (None, "", "None", "none")
-                       else str(conf["FC3_CUTOFF"])),
-        "PHEASY_RASR": rasr,
-        "PHEASY_FIT_METHOD": p_method,
-        "PHEASY_C3_CUTOFF": str(conf["PHEASY_C3_CUTOFF"]),
-        "PHEASY_ENABLE_FC": int(conf["PHEASY_ENABLE_FC"]),
-        "PHEASY_BIN": p_bin,
-        "NULL_SPACE_EPS": float(conf["NULL_SPACE_EPS"]),
-        "MIN_SUCCESS_RATIO": float(conf["MIN_SUCCESS_RATIO"]),
-        "MIN_SUCCESS_FRAMES": int(conf["MIN_SUCCESS_FRAMES"]),
-        "EQ_FORCE_MAX": float(conf["EQ_FORCE_MAX"] or 0.0),
-        "EXPORT_SHENGBTE": bool(conf["EXPORT_SHENGBTE"]),
-        "BAND_POINTS": int(conf["BAND_POINTS"]),
-        "IMAG_THR": float(conf["IMAG_THR"]),
-        "ZA_CHECK": str(conf["ZA_CHECK"]),
-        "ZA_QMAX": float(conf["ZA_QMAX"]),
-        # ---- 三阶截断扫描 ----
-        "CUT3_SCAN": bool(_scan_on),
-        "CUT3_CANDIDATES": [float(x) for x in cut3_list],
-        "CUT3_BOOTSTRAP": int(conf["CUT3_BOOTSTRAP"]),
-        "CUT3_STABILITY_THR": float(conf["CUT3_STABILITY_THR"]),
-        "CUT3_CV_1SE_MULT": float(conf["CUT3_CV_1SE_MULT"]),
-        "CUT3_PICK": str(conf["CUT3_PICK"]),
-        "CUT3_KAPPA_TOL_PCT": float(conf["CUT3_KAPPA_TOL_PCT"]),
-    }
-    (out / "fit_config.json").write_text(
-        json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8", newline="\n")
-
-    # ---- 选模板渲染 submit.sh ----
-    here = Path(__file__).resolve().parent
-    # 关键：把作业运行时要执行的驱动脚本拷进产出目录。gen_need 只保证 gen 本地能用到它，
-    #   不会自动进到发往计算节点的 step 目录；作业里要 `python kl_fc_backends.py`，
-    #   必须显式拷过去（否则计算节点报 No such file）。
-    shutil.copyfile(here / "kl_fc_backends.py", out / "kl_fc_backends.py")
-    # kl_fc_backends 的 band_path_2d / 出图段是【懒】import kl_common（kl_common 又 import dim_common）。
-    # 不把这两个也拷过去，2D 的 band-dft-cpu.yaml 会静默跳过（2026-09-21 实测：
-    # "No module named 'kl_common'" —— 只影响出图、不影响 ZA/虚频判据，但那样 band_path_2d 的
-    # 2D 路径修复就没被真正执行）。作业目录 = out，所以直接拷到 out。
-    # za_2d.py：kl_fc_backends 现在【模块级】import za_2d（三副本合并后），
-    # 作业目录少了它会在 import 阶段直接 ModuleNotFoundError。
-    # imag_policy.py：kl_fc_backends 模块级 import imag_policy（2026-09-22 虚频判据统一）；
-    #   公共池只会把它推到技能目录，作业目录（out）必须显式拷，否则作业 import 阶段就挂。
-    for _dep in ("kl_common.py", "dim_common.py", "za_2d.py", "imag_policy.py",
-                 "phonon_stability.py"):
-        if (here / _dep).is_file():
-            shutil.copyfile(here / _dep, out / _dep)
-    if engine == "pheasy":
-        # GPU 拟合（PHEASY_BIN=pheasy-gpu）走独立模板 submit_fit_pheasy_gpu（--gres + 降核）。
-        # 纯 CPU 集群（jzzn/hanhai25）没有该模板 → gen 期即报错，不排进队才失败（G2）。
-        _kind = ("submit_fit_pheasy_gpu" if p_bin == "pheasy-gpu"
-                 else "submit_fit_pheasy")
-        try:
-            tpl = kc.resolve_submit(here, dim or "3d", _kind)
-        except SystemExit:
-            if _kind == "submit_fit_pheasy_gpu":
-                sys.exit("[ERROR] PHEASY_BIN=pheasy-gpu 需要 GPU 拟合模板 "
-                         "submit_fit_pheasy_gpu.tpl（a800/3090 已配）。\n"
-                         "        当前集群只有 CPU 模板——pheasy-gpu 在无 GPU 节点跑不了。\n"
-                         "        改用 PHEASY_BIN=pheasy（CPU 拟合），或把材料 hpc 切到 "
-                         "a800/3090。")
-            raise
-        subs = {"JOBNAME": kc.new_jobname(cwd, "S5fit"),
-                "DIM": supercell or "1 1 1",
-                "FIT_METHOD": cfg["PHEASY_FIT_METHOD"],
-                "ENABLE_FC": str(cfg["PHEASY_ENABLE_FC"]),
-                "PHEASY_BIN": p_bin,
-                "RASR": rasr,
-                "C3_CUTOFF": cfg["PHEASY_C3_CUTOFF"],
-                "CUT3_CANDIDATES": " ".join("%.2f" % x for x in cut3_list),
-                "CUT3_BOOTSTRAP": str(cfg["CUT3_BOOTSTRAP"]),
-                "NULL_SPACE_EPS": str(cfg["NULL_SPACE_EPS"])}
-    else:
-        tpl = kc.resolve_submit(here, dim or "3d", "submit_fit_p3py")
-        subs = {"JOBNAME": kc.new_jobname(cwd, "S5fit")}
-    kc.write_submit(tpl, out / "submit.sh", subs)
-    stepconf.apply_submit(out / "submit.sh", conf.submit)
-
-    print("[..] 拟合器=%s 方法=%s 超胞=%s DIM=%s" % (engine, method, supercell, dim or "?"))
-    print("[DONE] %s：submit.sh + fit_config.json 就绪。tf 提交后计算节点出 fc2/fc3，"
-          "写 phonon_summary.json（'\"stable\": true' 为 marker）。" % OUTDIR)
+    # ---- 委托共享引擎（数据集 = 本技能的 step4_disp）----
+    if str(conf.get("FIT_INPUT_DIR") or "auto").strip().lower() == "auto":
+        conf = g1.Overlay(conf, {"FIT_INPUT_DIR": DISP_DIR})
+    g1.main(conf=conf, outdir=OUTDIR, job_label="S5fit")
 
 
 if __name__ == "__main__":

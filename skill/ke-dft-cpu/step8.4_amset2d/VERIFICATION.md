@@ -6973,3 +6973,396 @@ GaAs 电子受 POP 限制，ADP-only 本来就大。
   抛物重空穴（0.6）拟合准确、最近点 0.02 eV -> 不注明；MANUAL 不注明；
 - 工具对"网格分辨不出"的 DPT 不给多谷提示。
 
+
+## V148（2026-10-03）：重算的下游失效补全接线；S8.2 手填改写本材料 step.conf
+
+**起因**（用户侧 GaAs，0033 验证后复核）：
+- S8.2 在 V145/V147/MANUAL 对照/还原中重跑了 4 次。`DOWNSTREAM` 表里早有 S8.2 -> S8.1/S8.3，可是**没有一个 gen 调
+  `invalidate_downstream`**（S8/S8.4/S8.1/S8.2 都没调）。所以 S8.1 的 boltztrap_crta.json 仍然是"完成"，
+  用的还是 V145 之前的空穴 τ（DPT 空穴 276 万 cm²/Vs）。
+- MANUAL 只能改共享脚本 gen_step12_dpt.py。autozt 每次 gen 都把脚本从 skill 原样推到材料目录
+  （workflow.py："gen 脚本以 skill 为唯一样板：总是覆盖推送"），所以在改着的那段时间里，**任何材料**的 S8.2 都会
+  用上 GaAs 的 m*=0.030（自动推进中的 P1_Mo-MoS2 / Si_diamond 也算）。
+- 顺带查出同类缺口：S8/S8.4 在 gen 时把 S2 画图的带隙写进 settings.yaml（不是软链）。S2.3 HSE 重算、画图重新生成后，
+  S8/S8.4 照样带着旧带隙判"完成"。
+
+**改动**：
+- `ke_common.DOWNSTREAM`：
+  - 新增 S2.2/S2.3 画图 -> S8、S8.4，mode="gap"：只有下游 settings.yaml 的 `# bandgap_source` 指向这份
+    band_summary、且带隙差 > 1 meV 才失效。S8 一跑几小时，只重画图不重排；BANDGAP_OVERRIDE 的下游不受影响。
+    下游还没跑完（没有完成标记）时给 ★，提示取消作业后 rerun。
+  - 新增 S2 画图 -> S8.1（剪刀差也读 band_summary，分钟级）"always"，以及 S8.4 -> S8.3。
+  - 新增 `DOWNSTREAM_EXEMPT`：skill.yaml 里不进 DOWNSTREAM 的 needs 边，各自写明理由
+    （S1/S2 链由 LINEAGE_POSCARS 管；S3b、S3c 各自自洽；S6/S7.1 -> S8.1 经 S8.2 递归）。
+- gen 接线：
+  - S8.2、S8.1 在 main 开头调 `invalidate_downstream`；S8、S8.4 在 check_lineage 之后调。
+  - S2.2/S2.3 画图在写 band_summary.json 前调，stdout 只留最后那行 JSON，归档清单写进 `invalidated_downstream`。
+  - skill.yaml（ke 与 zt）给这几步的 gen_need 补上 ke_common.py / dim_common.py；S8.2 另补 stepconf.py / step.conf。
+- S8.2 的材料级覆盖：
+  - 写法：`tf -p <材料> -j step8.2_dpt conf --set M_EFF_ELECTRON=0.030`。
+    可用键：M_EFF_ELECTRON/HOLE、E1_ELECTRON/HOLE_EV、C_2D_N_PER_M、C_3D_GPA、THICKNESS_A、E1_SOURCE、FORCE_NSTEP。
+  - 优先级：step.conf 优先于脚本。
+  - provenance 写成 `manual(step.conf)`，dpt_result.json 新增 `overrides`。
+  - 脚本里的 MANUAL / MANUAL_ANISO 不是全 None 时每次 gen 都 ★ 告警（作用到所有材料），provenance 写成
+    `manual(脚本 MANUAL，作用到所有材料)`。
+  - 各处"填 MANUAL"的提示（V147 的 eff-mass 告警、缺输入、K 离网、E1_SOURCE、mobility_vs_dpt）改成 step.conf 的写法。
+- `tools/lineage_check.py` 另查以下几项（S8 的 gen 闸门不查：它正要重写自己的 settings.yaml）：
+  - S8.1/S8.3 的产物是否旧于 S8.2/S8/S8.4（`POST_DERIVED`）；
+  - S8/S8.4 的带隙是否与 band_summary.json 一致。
+
+  `--invalidate-from step2_bandgap/step2.3_hse_plot` 按画图当前的带隙决定是否归档 S8/S8.4。
+
+**测试**：test_downstream_wiring.py（14 项）
+- skill.yaml 每条 needs 边都被覆盖；DOWNSTREAM 每个上游的 gen 都调失效、gen_need 都带 ke_common（ke 与 zt）；
+- gap 模式：带隙变化 -> S8 归档并递归到 S8.3；0.5 meV / 别的来源 / BANDGAP_OVERRIDE / 不给 gap 时不动；
+  没跑完的下游给 ★；画图 helper 实跑，stdout 为空；
+- S8.2：step.conf 覆盖只作用本材料（换材料后 MANUAL 恢复 None、E1_SOURCE 恢复 vac），并写进 overrides；
+  脚本被改时 ★；E1_SOURCE/FORCE_NSTEP 非法值退出；重跑归档 S8.1/S8.3；main 端到端写出 overrides 与 manual(step.conf)；
+- lineage_check：查出 S8.1 旧于 S8.2、S8 带隙 1.42 ≠ 画图 1.30；S8 闸门（structure_lineage）不报这些；
+  --invalidate-from 归档 S8 与 S8.1。
+
+## V149（2026-10-03）：lineage 比对扣除整体平移 —— WS2 的 S3 "差 4.45 Å" 是误报
+
+**实测**（用户侧，V148 的 lineage_check 全项目扫描）：WS2 的 step3_uniform/POSCAR 与 S1 CONTCAR "最大偏差 4.45 Å"。
+但两边晶格完全相同，三个原子同移 [0, 0, 4.4494] Å，是同一个结构。
+
+**根因**（V140 的 bug）：
+- S3/S3b 的 gen 会调 `ke_common.align_origin`，把原点刚性平移到所有对称操作的分数平移 τ 都为 0 的位置
+  （V109：绕开 AMSET 去对称化的 bug；2D slab 另把层心放到 z=0.5）。
+- WS2 的 S1 原点不在高对称位置，所以 S3 被平移了。
+- V140 的 `cell_deviation` 只按最小像比逐原子位置，没有扣整体平移，于是误报。
+- 后果不只是报告错：S8/S8.4 的 gen 闸门（STRUCTURE_GUARD）会据此**拦住正常的 rerun**。
+- MoS2/MoSe2/WSe2 的 S1 原点本来就在高对称位置，align_origin 不平移，所以没暴露。
+
+**改动**：
+- `cell_deviation` 先以第一个原子为参照扣掉平移（最小像），剩余小量再扣一次平均值，然后取最大位移。
+- 晶格差、平移之外的相对位移照报：真正的旧结构（重新弛豫前的晶格或相对位置）不受影响。
+
+**需要回头复核**：V140 报过的 P1_Al-AlN（2.11 Å）、P1_Zn-ZnO（0.4619 Å）、P1_Mo-MoS2（0.1263 Å），
+如果只报在 S3/S3b 上，可能也是这个误报，要用新版 lineage_check 重扫。
+
+**测试**：test_lineage.py 新增两项（去掉修复时两项都失败，分别是 4.45 Å 和 7.41 Å）：
+- 刚性平移（WS2 的 z 平移、任意方向、半格矢）不报；平移加上一个 S 动 0.01 Å 报；平移加上晶格 0.3% 报；
+- 端到端：WS2 式 slab（原点不在高对称位置）用 `align_origin` 改写 S3 的 POSCAR，坐标确实变了，lineage 不报。
+
+## V150（2026-10-03）：S8.2 兜底 except 写出出错位置
+
+**起因**：WS2 用 48 网格重跑 S8.2，各向同性迁移率正常算出（电子 421、空穴 4409 cm²/Vs，没有"K 离网"），但
+分方向块只留下"二次型拟合异常：IndexError"。gen_step12_dpt 有 4 处兜底 except（抛物拟合、二次型拟合、
+两处读 deformation.h5）只写异常类型名，无从定位。合成的 WS2 式六方单层（48×48 IBZ、K 谷抛物）复现不出来，
+两种载流子分方向拟合都正常。
+
+**改动**：`_exc_brief(e)` 写成"类型: 信息（gen_step12_dpt.py:行号 `该行代码`）"，4 处都用它。只改说明文字，
+数值行为不变；分方向失败时 S8.1 照旧回落各向同性 τ。
+
+**测试**：test_mobility_vs_dpt 新增两项：
+- `_exc_brief` 带出本脚本的行号与代码；
+- 分方向拟合里抛出的异常，provenance 里带 `gen_step12_dpt.py:行号`。
+
+## V151（2026-10-03）：分方向 m* 在 kz≥3 的网格上整块失败（WS2 的 IndexError）
+
+**定位**（V150 的诊断，用户侧 WS2 S8.2 重跑）：
+`IndexError: boolean index did not match ... size of axis is 6912 but size of corresponding boolean axis is 2304（gen_step12_dpt.py:907 _dfrac = kfrac[sel] - kfrac[k0]）`
+
+**根因**：
+- `get_effective_mass_aniso` 先取面内子集 `zm`（|Δk_z| < 0.02），`sel` 是在这个子集上算出的掩码。
+- 第 907 行却拿 `sel` 去索引全 BZ 的 `kfrac`。2D 的 S3 网格常用 kz ≥ 3（WS2 是 48×48×3：全 BZ 6912 点，面内 2304 点），两者长度不同就抛 IndexError。
+- 电子、空穴的分方向块都失败；各向同性 m* 走另一条路径，不受影响。
+- kz=1 时两者等长，V150 的合成体系（48×48×1）因此没复现出来；改成 12×12×3 后复现了同一条错误。
+
+**影响**：所有 S3 网格 kz ≥ 3 的 2D 材料，S8.2 的 by_direction 都是失败状态，S8.1 一直回落用各向同性 τ。
+- 六方 TMD（C₃ 保证面内各向同性）数值影响很小；
+- 正交、面内各向异性的体系（SS/LS、*_ortho）影响大。
+
+**改动**：`_dfrac = kfrac[zm][sel] - kfrac[k0]`。
+
+**测试**：test_mobility_vs_dpt 新增 AnisoKzTests：合成六方单层（K 谷抛物，m_c = 0.30、m_v = 0.42），12×12×1 和 12×12×3 两种网格，
+分方向 m* 都还原到 3 位小数；去掉修复时 kz=3 报同一条 IndexError。
+
+## V152（2026-10-03）：六方胞的带边不在高对称点时，分方向路径也要拒绝；区分"K 离网"与"Q/Λ 谷"
+
+**实测**（用户侧，V151 之后四个 2D 材料重跑 S8.2）：WS2、MoS2、MoSe2 的分方向 x = y，正常。WSe2 的电子分方向
+给出 x = 0.4828、y = 0.6829，status 却是 ok；各向同性路径对同一带边拒绝，提示"K 离网：N 不是 3 的倍数"。
+
+**两个问题**：
+1. **分方向路径没有六方闸门。** 各向同性路径对"六方胞带边锚在非高对称点"会拒绝（GUARD-2026-09-23，CrSe2 46×46 的教训），
+   分方向路径没有这道闸，V151 修好 IndexError 之后就直接给出了 x≠y。S8.1 会采用这个分方向 τ。
+   C₃ 晶体的迁移率张量面内各向同性，单谷的 x/y 不是晶体性质。
+2. **提示把人引错了方向。** WSe2 的网格是 45，45 是 3 的倍数，K = 15/45 本来就在网格上。带边在 8/45 = 0.178，
+   在 Γ–K 中点附近，是导带的 Q/Λ 谷（6 个等价谷），不是 K 离网。按提示重做 S3 不会有用。
+
+**改动**：
+- `_hex_offgrid(recip, kf, kgrid)` 由两条路径共用。
+- 它查本路径用的 k 点里有没有 K：有 K 时报"非高对称谷（Q/Λ）：单谷 DPT 不适用，重做 S3 没用，用 amset eff-mass
+  的质量写 step.conf"；没有 K 时仍报"K 离网"。
+
+**测试**：test_mobility_vs_dpt 新增两项：
+- 10×10×3 的网格（K 不在网格上）：两条路径都拒绝，报"K 离网"；去掉修复时分方向路径照样返回结果；
+- 18×18 的网格，导带底放在 Q 谷 (4/18, 4/18)：两条路径都拒绝，报"非高对称谷"，不报"K 离网"。
+
+另记：试过加"六方胞 |x−y|/均值 > 5% 就拒绝"的 C₃ 检查，没有保留。原因有二：
+- K 在网格上时，IBZ→全 BZ 的展开按晶体对称性复制能量，人为造的各向异性也会被对称化（测试里得到 0.6857/0.6857），不会出现 x≠y；
+- 只看晶格度量会误拒六方晶格上真正缺 C₃ 的体系。
+
+## V153（2026-10-04）：重算后的下游状态四项修复
+
+### ① rerun 之后，下游 VASP 步骤带着旧结构一直显示"完成"
+
+**现象**：Mo2S3、Si_diamond、P1_Mo-MoS2 三次都是这样。S1 或 S2.1 重算后，S2.2/S2.3 照样判"完成"，每次都要人工 rerun。
+
+**原因**：
+- autozt 的 `rerun <步骤>` 只删除本步再重新生成；
+- V140/V148 的下游失效只会归档完成标记文件，而 VASP 步骤按 OUTCAR 判断完成；
+- 只归档一个文件也不行：原地重新生成时会读到旧的 WAVECAR/CHGCAR。
+
+**改动**：
+- `DOWNSTREAM` 新增 mode="dir"：把下游整个目录改名为 `<dir>.stale-upstream-<上游>-<时间>`（数据保留）。autozt 看到目录不在，会等上游跑完后重新生成。
+- 级联关系：
+  - S1 → S2.1、S3、S3b、S3c、S5、S6、S7，以及 zt 的 step1_std_opt；
+  - S2.1 → S2.15、S2.2；S2.15 → S2.155；S2.2 → S2.2 画图、S2.3；S2.3 → S2.3 画图；
+  - zt 的 kl 分支：step1_std_opt → step2_static → step3_nac；S8 → zt 的 step20_zt。
+  - 递归时，原有的 link/always/gap 规则照常生效（S4 的 h5、S7.1、S8 等都归档完成标记）。
+- 入口 `cascade_on_rerun(cwd, step)`：
+  - S1 和 S2.1/S2.15/S2.2/S2.3 的 gen 在写任何文件之前调用；
+  - 只有本步目录里还没有 OUTCAR（rerun 先 rm -rf 了）时才级联；
+  - `init -f` 或 retry 原地重新生成时不动下游，只给提示。
+- 安全：下游目录在 squeue 里有作业，或 OUTCAR/slurm 输出 15 分钟内还在更新，就不归档，只给 ★ 提示（先 scancel）。
+- skill.yaml（ke 与 zt）：S1、S2.1、S2.15、S2.2 的 gen_need 补上 ke_common.py。
+- `DOWNSTREAM_EXEMPT` 删掉 S1/S2 链的豁免（现在已经覆盖），新增 zt 的 kl 声子链豁免（gen 在 kl-dft-cpu）。test_downstream_wiring 的依赖边覆盖检查现在 ke 与 zt 都查。
+- 结构闸门的处理提示改为："rerun 最上游那一步即可"。
+
+### ② 被归档的步骤显示成 FAIL，而自动推进不重试 FAIL
+
+**原因**：autozt 的采集端不认识 `*.stale-upstream-*`。画图步骤因为"目录在、标记不在"被判 plot_error，作业步骤因为留着 slurm 输出被判 FAIL。而 auto-advance 只推进 TODO/PREP，所以 V140/V148 说的"会重新排队"，实际上都要人手 retry。P1_Mo-MoS2 任务图里的 6 个 FAIL 全是这种。
+
+**改动**（autozt）：
+- `_collector_remote.stale_upstream(d)`：目录里有 `*.stale-upstream-<上游>-<YYYYmmddHHMMSS>`，且归档时刻不早于目录里其它文件的修改时间；或者整个目录被归档 → stale。
+- `step_state`：stale 的步骤，上游未完成显示 WAIT；否则显示 `STALE`，kind 归为 PREP，auto-advance 会用 gen_first 重新生成。
+- 只认 stale-upstream：stale-grid / stale-input 是本步自己换网格或换输入，在同一次 gen 里就重做了。
+- 防止死循环：STALE 步骤重新生成失败时，留下 `.autozt_gen_failed`（比归档时刻新），下一轮显示 FAIL，不再自动重试。
+
+### ③ S8.2 每次都误报"step7b 可能跑的是旧副本"
+
+**原因**：S8.2 拿自己的 `_SKILL_REV`（2026-08-31）去比 S7.1 写进 band_edges.json 的版本（2026-09-16），两者从来没对上过。
+
+**改动**：`ke_common.BAND_EDGES_REV` 由 S7.1 写入、S8.2 核对，两边共用这一个常量。旧文件给出明确提示："重跑 step7b_deform_read"。S8.2 的 `_SKILL_REV` 更新为 2026-10-03-v153。
+
+### ④ 兜底 except 吞掉错误信息
+
+- 12 处只写异常类型名的告警补上信息，分布在 S8.1（6 处）、S8.2（全 BZ 展开）、S8.3（4 处）、S8.4（重叠运行前检查）、overlap_preflight（判据不可用）。
+- 会悄悄改变结果的 except-pass 改成告警：
+  - S7/S7.1 读不到 step.conf 的 amset 环境时，会按主机猜一个（可能跑到另一个 AMSET 版本）；
+  - S8/S8.4 写 interpolation_info.json 失败；
+  - S8.2 的 subprocess 展开失败（会改用 pymatgen）。
+- 其余 except-pass 是正常的尽力而为写法，不动：结构候选逐个尝试、版本号探测、AMSET 插件内部。
+
+### 测试
+
+- **test_downstream_wiring.py**（19 项，新增 5 项级联测试），覆盖：
+  - S1 rerun 时整链归档：11 个目录，加上 S4/S7.1/S8/S5.1 的标记；
+  - 原地重新生成时不级联；
+  - squeue 里有作业、或 OUTCAR 刚更新的下游不动，但它的下游照样归档；
+  - S2.2 rerun 只动它自己的下游；
+  - 各 gen 在第一次写文件之前调用。
+- **tests/test_stale_status.py**（autozt，7 项），覆盖：
+  - 归档后显示 STALE；
+  - 重新生成过，或重新生成失败后，不再算 STALE；
+  - 整目录归档；
+  - stale-grid / stale-input 不算；
+  - STALE 压过 FAIL，上游未完成时显示 WAIT，scancel 照旧优先；
+  - 失败标记只给 STALE 步骤打。
+- **test_mobility_vs_dpt.py**：新增 BandEdgesRevTests。
+- **test_exception_messages.py**（新）：本技能的 .py 里不许只写 `type(e).__name__`。在改动前的代码上正好报出那 13 处。
+
+## V154（2026-10-04）：弹性张量的离子弛豫项按本征模拆开（Mo2S3 的 C66 < 0）
+
+**实测**（用户侧，Mo2S3 S6 = IBRION=6 + ISIF=3，20 原子，48 核跑了 27 h）：
+- 面内 C66：刚性离子项（SYMMETRIZED）为 +267.80 kBar，TOTAL 为 −162.94，离子弛豫项约 −430.7；
+- 面内 3×3 不正定，按约定判为不可用，auto_advance 已关；
+- Γ 点只有 3 个近零虚频（0.006 / 0.009 / 0.015 THz），也就是平移模，没有真正的软光学模。
+
+**机理**：VASP 的离子弛豫项 = −(1/Ω)·Λᵀ K⁻¹ Λ（Λ 是内应变张量，K 是力常数矩阵）。均匀平移和应变不耦合，Λ 在平移方向上本应为 0，
+但数值上 Λ 有残差，K 在平移方向上的本征值又接近 0，两个小量相除可以给出任意大的贡献。
+只看 OUTCAR 里的三块弹性模量，分不清这个负值是数值假象，还是真实的内应变耦合（Born 不稳定）。
+如果是前者，重算一天也未必能消掉；如果是后者，重算也不会变。
+
+**工具**（`tools/elastic_ionic_decompose.py`，只读，秒级）：
+- 读 SECOND DERIVATIVES、INTERNAL STRAIN TENSOR、三块弹性模量和体积，按 K 的本征模逐个算贡献。
+- 自检：先复现 VASP 自己的离子项。含平移模、去掉平移模两种求逆方式都试；剪切列的约定因子（1、½、2）按最佳复现自动选定；
+  复现误差超过 5% 就退出码 2（结论不可用）。
+- 按与均匀平移的重叠（> 0.9）认出平移模，单列它们的贡献，扣掉后判正定（2D 看面内 XX/YY/XY，3D 看 6×6）。
+- 结论分三种：
+  - artifact：翻负主要来自平移模，扣掉后正定。投影后的 TOTAL 写进 elastic_ionic_decompose.json，不用重算 S6；
+  - unstable：扣掉后仍不正定，列出贡献最大的非平移模。这是真实的内应变耦合，不可用，重算也不会变；
+  - ok：本来就正定。
+
+**测试**：test_elastic_decompose.py（6 项，合成 OUTCAR：4 原子，K = U·diag(λ)·Uᵀ，平移模 λ = 1e-4）。
+- 平移模带 XY 残差：TOTAL 翻负，判为 artifact，投影值与解析值一致；
+- 软光学模（λ = 0.05）强耦合 XY：判为 unstable，并认出这个模；
+- 剪切列按 ½ 打印：自动定出因子 2；
+- VASP 已去掉平移模：能认出来，按真实值判断；
+- 离子项被篡改：报"复现不了"；
+- 缺少输入文件。
+
+**之后**：如果 Mo2S3 判为 artifact，S8/S8.4 要改用投影后的张量，但现在只能改共享脚本里的 MANUAL_ELASTIC，
+会作用到所有材料（V148 修过的 S8.2 MANUAL 是同一个问题）。所以下一个补丁会加材料级的 step.conf 键，
+让 S8/S8.4 读 elastic_ionic_decompose.json；V134 的稳定性检查照样作用在投影后的张量上。
+
+## V155（2026-10-04）：elastic_ionic_decompose 适配 VASP 6 的 IBRION=6 + ISIF=3 输出（Mo2S3 实际格式）
+
+**实测**（用户侧）：V154 跑 Mo2S3 时报"读不到 SECOND DERIVATIVES"。这份 OUTCAR 里：
+- 没有 SECOND DERIVATIVES，也没有单独的 CONTR FROM IONIC RELAXATION 块；
+- 有 ELASTIC MODULI、SYMMETRIZED ELASTIC MODULI 和 TOTAL ELASTIC MODULI；
+- 内应变张量分两段：INTERNAL STRAIN TENSORS FROM STRAINED CELLS 与 FROM DISPLACED ATOMS，每段 20 个离子，表头是 X Y Z XY YZ ZX。
+V154 的合成测试用的是我假设的格式，和这份实际输出对不上。
+
+**改动**：
+- 力常数矩阵：OUTCAR 里有 SECOND DERIVATIVES 就用它；没有就读同目录 vasprun.xml（或 .gz）的 `<dynmat>` hessian，
+  并给出两个候选：乘以 √(mᵢmⱼ) 去掉质量加权，以及不去质量加权（质量取自 atominfo）。
+  IBRION=5–8 都会写这一块，phonopy/pymatgen 也是从这里读的。
+- 内应变：STRAINED CELLS、DISPLACED ATOMS 和两者平均三个候选；没有分段标题的旧格式只有一套。
+- 离子项参考值：有 CONTR FROM IONIC RELAXATION 就用它，否则用 TOTAL − SYMMETRIZED。
+- 所有组合（力常数来源 × 内应变口径 × 剪切因子 × 求逆时是否去掉平移模）都交给"复现 VASP 离子项"这个自检来选，
+  选中的组合写进输出和 json。
+- vasprun 用 iterparse 逐个处理，用完的 `<calculation>` 立即清掉；文件被截断时，已读到的部分仍然可用。
+
+**测试**：test_elastic_decompose 新增 F（共 7 项），按 VASP 6 的实际格式构造：
+- OUTCAR 里没有 SECOND DERIVATIVES、没有离子项块，内应变分两段，其中 DISPLACED ATOMS 是真值、STRAINED CELLS 偏 10%；
+- 力常数只放在 vasprun.xml 里，用 −K/√(mᵢmⱼ) 的形式写入；
+- 结果：自动选中"hessian × √(mᵢmⱼ)"、"displaced atoms"、"TOTAL − SYMMETRIZED"，判为 artifact，投影值与解析值一致；
+- 删掉 vasprun.xml 后报"拿不到力常数矩阵"，退出码 2；另外手工验证了 .gz 格式。
+
+## V156（2026-10-04）：elastic_ionic_decompose 的自检改为"差值是否落在平移子空间"，并加频率核对
+
+**实测**（用户侧，V155 跑 Mo2S3）：复现误差 85.6%，判为"复现不了"。
+- 选中的组合是：hessian 不去质量加权，内应变用 displaced atoms，VASP 求逆时已去掉平移模。
+- 3 个平移模的本征值为负（−2.2e-4 / −8.4e-5 / −3.8e-5 eV/Å²），如果算上它们会得到 +5.2×10⁵ kBar，可见 VASP 没有这样算。
+- 严格去掉平移模后得到 −146.9，VASP 是 −430.8，差约 −284。
+- hessian 第一行的对角元为 −66.07。按质量加权的动力学矩阵解读会对应约 127 THz，不可能；按没质量加权的 eV/Å² 力常数解读，
+  除以 Mo 的质量后约 13 THz，合理。
+
+**问题出在自检本身**：平移方向是病态的，VASP 内部怎么处理近零模（阈值、对称化、ASR 修正）我们无从得知。
+要求逐元素复现，恰好在"平移模假象"这种情况下注定通不过。
+
+**改动**：
+- 本工具的离子项改为把 K 投影到均匀平移的正交补上，严格去掉平移模后按本征模求和。
+- 自检分两步：
+  ① 直接复现（残差 ≤ 5%，说明 VASP 也去掉了平移模）；
+  ② 否则，看差值（VASP − 本工具）能否写成 bᵀMb：b = Tᵀ·Λ 是内应变在**严格均匀平移**方向上的分量
+    （也就是内应变违反平移不变性的那部分），M 是对称 3×3 矩阵，6 个自由参数拟合 21 个独立分量。
+    能写成这样（残差 ≤ 5%），就说明 VASP 多出来的那部分全在平移方向。
+- 不用 K 的近零本征模做基底：它们和软光学模有混合，投影后指向软模方向，会把软模的差值也"解释"成平移。
+  测试 G 一开始就是这样被误判的，已修正。
+- 复现不了时，再看差值是否落在某个软模方向：如果是，提示"软模刚度对数值敏感，需要更严格的 S6 或 DFPT 复核"。
+- 频率核对：用力常数和 vasprun 里的质量算出振动频率，与 OUTCAR 打印的频率比较（只比 |f| > 1 THz 的模），
+  中位误差超过 3% 的候选不用。这样可以从数据本身判断 hessian 是否经过质量加权。
+
+**测试**：test_elastic_decompose（8 项）：
+- A：平移模假象，差值落在平移子空间，判为 artifact；
+- B：真实软模，直接复现，判为 unstable；
+- C：剪切因子；
+- D：篡改 XX–YY 分量（平移子空间吸收不了），判为 unreliable；
+- E：VASP 已去掉平移模，直接复现，判为 ok；
+- F：VASP 6 实际格式，频率核对认出质量加权，判为 artifact；
+- G（新）：差值落在软模（λ = 0.05）方向，判为 unreliable，并点名该软模；
+- 另有一项：缺少输入文件。
+
+## V157（2026-10-04）：频率核对改为"频谱形状 + 一个单位标量"——Mo2S3 的 vasprun hessian 单位是 THz²
+
+**实测**（用户侧，V156 跑 Mo2S3）：两个候选都没通过频率核对，工具在分解之前就退出了：
+- 乘 √(mᵢmⱼ) 的候选误差 1463%，也就是算出的频率约为 OUTCAR 的 15.6 倍；
+- 不去质量加权的候选误差 152%，约 2.5 倍。
+
+**根因**：V156 按 phonopy 的读法，把 vasprun.xml 的 hessian 当作 −Φ/√(mᵢmⱼ)，单位 eV/Å²/amu。
+- 乘 √(mᵢmⱼ) 的候选偏了 15.6 倍，而 15.633 正是 √(eV/Å²/amu) 换算到 THz 的系数。所以这份 vasprun 的
+  −hessian 本征值直接就是频率的平方（THz²），质量加权方式是对的，只是单位差了 15.633² ≈ 244 倍。
+- 不去质量加权的候选偏了 2.5 倍，等于 15.6/√(约 38 amu 的平均质量)，和上面一致。
+- 用户手算 √(66.07/95.94) × 15.633 ≈ 13 THz 是巧合：66.07 THz² 开方是 8.1 THz，是这个对角元自己对应的频率。
+
+单位差 244 倍时，力常数整体就错了这么多，V155 和 V156 的离子项分解当然对不上；V155 的 85.6% 很可能主要来自这里。
+
+**改动**：`_freq_calibrate`：
+- 每个候选先用**一个**标量去拟合，使整个频谱与 OUTCAR 对齐（只比 |f| > 1 THz 的模），再看定标后逐模的中位误差，
+  超过 3% 的候选不用；力常数乘以这个标量，换算成 eV/Å²。
+- 只允许一个标量：质量加权方式错了，谱的形状对不上，定标也救不回来。
+- 识别出的单位会打印出来（eV/Å²、THz²（f²）、(2πTHz)²（ω²），或"未知比例"），也写进 json。
+
+**测试**：test_elastic_decompose（9 项）：
+- F 改为按 Mo2S3 实际的 THz² 单位写 hessian：认出质量加权，单位判为 THz²，不去质量加权的候选因形状不对（11.8%）被排除；
+- 新增 phonopy 读法（eV/Å²/amu）：定标因子为 1，单位判为 eV/Å²，投影值与解析值一致。
+
+## V158（2026-10-04）：Mo2S3 结论记录；归档后"已重新生成、等提交"的步骤显示 TODO，不再卡在 FAIL
+
+### Mo2S3（V157 实测，用户侧）
+- 频率核对：×√(mᵢmⱼ) 的候选定标后误差 0.0%，单位判为 THz²；不去质量加权的候选误差 4.1%，被排除。
+- VASP 的离子弛豫项被直接复现，残差 0.0%（VASP 求逆时已经去掉了平移模）。
+- XY 分解：刚性离子 +267.80，离子弛豫 −430.75 = 非平移模 −430.75 + 平移方向 −0.00。
+  - 非平移模 #5（K 的本征值 0.7781 eV/Å²）一个模就贡献了 −379.03 kBar。
+  - 扣掉平移方向后 XY 仍是 −162.95 kBar，面内 3×3 仍不正定。
+- **结论**：负的 C66 不是数值假象，是真实的应变—内坐标耦合不稳定。不可用；重算 S6 结论也不会变。
+
+这里的不稳定**不是 Γ 点虚频**：K 正定（只有 3 个平移模接近 0），#5 是个正的软光学模。不稳定的方向在
+（剪切应变 ε_xy，原子位移 u）的联合空间里：二阶能量的 Hessian [[C⁰, Λ], [Λᵀ, K]] 中，K 正定，但它的 Schur 补
+C⁰ − ΛK⁻¹Λᵀ 不正定，所以联合 Hessian 有负本征值。对应的形变是 ε_xy ≠ 0，同时 u = −K⁻¹Λᵀε（主要是 #5）。
+- 在固定晶胞下只沿 #5 扭曲，能量升高（K > 0），会弛豫回原结构。
+- 要找到稳定相，得同时加剪切应变和这组位移，关掉对称性（ISYM=0），放开面内晶胞去弛豫。
+- S1 收敛到这个结构，是因为默认保持对称性的弛豫出不了对称约束下的鞍点。
+- 弛豫出来的低对称结构是**另一个材料**（新 POSCAR，从 S1 起整条线重算），属于结构搜索，不归 ke 流水线修。
+
+### 归档后在原目录重新生成、还没提交的步骤（P1_Mo-MoS2 的 S4_wave）
+**现象**：summary 把 P1_Mo-MoS2 计为 err，FAIL 的是 S4_wave；队列空着，auto-advance 也不去提交它。
+
+**根因**（V153 漏掉的一条路径）：link 模式的下游（S4/S4b/S8/S8.4…）被归档时，只改名完成标记，目录和旧的
+slurm-*.out 都留着。
+- 作业槽满时，auto-advance 对就绪步骤只预生成输入、不提交（`_pregenerate_ready`）。
+- 预生成后 submit.sh 比归档新，于是不再算 STALE（V153 的规则：归档之后有新文件，就不算"等重新生成"）。
+- 接着 step_state 看到旧的 slurm-*.out，判为 FAIL；而 auto-advance 不重试 FAIL，这一步就一直卡着。
+- 生成成功、sbatch 失败时，走的也是同一条路。
+
+**改动**：
+- 采集端 `regen_pending(d, submit)`：目录里有 `*.stale-upstream-*` 归档、提交脚本不早于归档，并且比所有运行痕迹
+  （slurm-*.out / queue.out / queue.err / OUTCAR / .autozt_gen_failed）都新时，标记 `regen_ready`。
+  扇出步骤和画图步骤不走这条判定。
+- step_state：`regen_ready` 时显示 TODO（上游没好就显示 WAIT），auto-advance 下一轮会重新生成并提交。
+- `_mark_gen_failed` 也覆盖 `regen_ready`：重新生成失败时留下 .autozt_gen_failed，下一轮显示 FAIL，不会每轮都重试。
+- 没有归档的普通失败步骤（例如手动 init -f 过的）照旧显示 FAIL，不会被自动重交。
+
+**测试**：tests/test_stale_status.py，12 项（新增 5 项）：
+- 归档后预生成 → TODO；
+- 重新生成后跑过（出现新的 slurm 输出）或 gen 失败 → 不算 regen_ready；
+- 缺归档或缺提交脚本 → 不算；
+- 先生成、后归档 → 仍按 STALE；
+- `_mark_gen_failed` 覆盖 regen_ready。
+
+## V159（2026-10-04）：AMSET 提交脚本激活的环境必须是 AMSET_ENV（旧项目级模板钉死 amset_clean）
+
+**实测**（用户侧）：P1_Mo-MoS2 全链重跑，S4_wave 重投后报 `EnvironmentNameNotFound: Could not find conda
+environment: amset_clean`，接着 `amset: command not found`。集群上现在只有 amset051 / atomate2_p_a。
+
+**根因**：
+- 8 月 init 时，autozt 把当时的 submit_amset.tpl 拷进了 project_setting/templates/。
+- 那是 09-22（e51565a）之前的版本，写死 `conda activate amset_clean`（AMSET 0.4.19 的环境，09-30 已删），
+  没有 `{{AMSET_ENV}}` 占位符。
+- find_asset 的查找顺序是：材料/<技能>/templates → project_setting/templates → setting/<集群>/templates → 技能。
+  项目级副本排在前面，盖住了集群模板。
+- 4 个渲染这份模板的 gen（S4/S4b/S8/S8.4）只检查"占位符有没有残留"。旧模板里本来就没有占位符，于是照常生成、提交。
+- 环境被删了，所以这次作业是**报错**；在环境还在的集群上，会**悄悄用 0.4.19 算**（形变势减半，V75），比报错更糟。
+
+**改动**：
+- `ke_common.check_amset_submit(raw, rendered, env, tpl)`，4 个 gen 渲染后、写 submit.sh 之前调用：
+  - 非注释行里 `conda/mamba/micromamba activate X`、`conda run -n X`、`source activate X` 的 X 与 AMSET_ENV 不一致
+    → 直接退出，消息里给出改法（把副本改名为 `.stale-<日期>`，或改成 `{{AMSET_ENV}}`，再 retry）；
+  - `${VAR}` 这类 shell 变量不算（本机模板用的就是 `AMSET_ENV="{{AMSET_ENV}}"` 加 `conda activate "${AMSET_ENV}"`）；
+  - 写死的环境与 AMSET_ENV 一致、只是没有占位符 → 只告警，照常生成。
+- `amset_env_name`：step.conf 的 AMSET_ENV 是已知的 0.4.19 旧环境名（`OLD_AMSET_ENVS`，目前只有 amset_clean）
+  → 退出，提示去查 templates/step.conf 和 project_setting/hpc.yaml 的 amset_env。
+- `tools/template_drift.py`：submit_amset*.tpl 不再默认跳过环境检查。写死旧环境、或没有 `{{AMSET_ENV}}` 占位符的，
+  报 `[ENV]`，退出码 1。一条命令就能把所有受影响的项目扫出来。
+
+**测试**：test_amset_submit_env.py，10 项：
+- 旧模板被拒绝；现行模板和本机模板都放行；写死别的环境、`conda run -n` 都拒绝；写死同名环境只告警；注释行忽略；
+- step.conf 写 amset_clean 时拒绝；
+- 4 个 gen 都在渲染之后、写 submit.sh 之前做检查；
+- 真跑一遍 S4 的 gen：旧模板退出、不写 submit.sh；新模板写出 `conda activate amset051`；
+- template_drift 能报出旧副本。
+- 反证：换回旧版 S4 gen，旧模板被照常接受，测试失败。

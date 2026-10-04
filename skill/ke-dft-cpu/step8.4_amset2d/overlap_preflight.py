@@ -366,7 +366,7 @@ def _fallback_verdict(st, desym_fix=False):
             return True, "原公式会在 %d/%d 个操作上算错 -> 必须全网格 [fallback]" % (bad, len(first))
         return False, "原公式在全部 %d 个操作上精确 -> IBZ 即可 [fallback]" % len(first)
     except Exception as e:                                          # noqa: BLE001
-        return True, "判据不可用（%s）-> 保守按需要全网格" % type(e).__name__
+        return True, "判据不可用（%s: %s）-> 保守按需要全网格" % (type(e).__name__, e)
 
 def run(cwd, out_dir=None, unity_overlap=False, desym_fix=None):
     """desym_fix=None：自己判断（环境变量 AZ_DESYM_FIX > settings.yaml 的 # AZ_DESYM_FIX=1）。"""

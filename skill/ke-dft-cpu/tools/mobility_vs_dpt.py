@@ -182,8 +182,9 @@ def main(argv=None):
             elif r["carrier"] in deg:
                 flag += "  （DPT 的带边简并，单带公式只是近似，ADP/DPT 不作判据）"
             elif r["carrier"] in coarse:
-                flag += ("  （DPT 的 m* 网格分辨不出带边曲率、偏重，ADP/DPT 不作判据；"
-                         "要比就用 amset eff-mass 的质量填 MANUAL 重跑 S8.2）")
+                flag += ("  （DPT 的 m* 网格分辨不出带边曲率、偏重，ADP/DPT 不作判据；要比就把 amset eff-mass 的"
+                         "质量写进本材料 step.conf：conf --set M_EFF_%s=<m*> -j step8.2_dpt，重跑 S8.2）"
+                         % r["carrier"].upper())
             else:
                 flag += "  ⚠ ADP/DPT 超出 [1/3, 3]：用 tools/dp_valley_probe.py 查是否多谷"
         print("  %-12.4g %-8s %9.1f " % (r["doping"], LABEL.get(r["carrier"], "本征"), r["seebeck_uV_K"])

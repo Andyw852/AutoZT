@@ -189,9 +189,9 @@ def test_stepconf_warn_mode(tmp_path, capsys):
 def test_resolve_submit_step_subdir():
     sys.path.insert(0, os.path.join(ROOT, "skill", "fit-fc-thermal"))
     try:
-        fc = _load(os.path.join(ROOT, "skill", "fit-fc-thermal", "fc_common.py"), "fc_p0")
-        p = fc.resolve_submit(os.path.join(ROOT, "skill", "fit-fc-thermal"), "submit_kappa")
-        assert str(p).endswith(os.path.join("templates", "step2_kappa", "submit_kappa.tpl"))
+        fc = _load(os.path.join(ROOT, "skill", "_common", "fcfit", "fc_common.py"), "fc_p0")
+        p = fc.resolve_submit(os.path.join(ROOT, "skill", "_common", "fcfit"), "submit_kappa")
+        assert str(p).endswith(os.path.join("templates", "submit_kappa.tpl"))
     finally:
         sys.path.pop(0)
 
@@ -262,7 +262,7 @@ def test_local_work_dir_skips_unwritable(tmp_path, monkeypatch, capsys):
 
 def test_preflight_conda_regex_does_not_cross_lines():
     from autozt import preflight
-    tpl = open(os.path.join(ROOT, "skill", "fit-fc-thermal", "templates", "step1_fit",
+    tpl = open(os.path.join(ROOT, "skill", "_common", "fcfit", "templates",
                             "submit_fcfit_pheasy.tpl")).read()
     empty = tpl.replace("{{CONDA_SH}}", "").replace("{{CONDA_ENV}}", "")
     assert preflight.parse_conda_activations(empty) == []

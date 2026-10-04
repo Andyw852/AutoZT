@@ -2160,8 +2160,8 @@ def apply_mesh_min(vasprun_path, out):
     try:
         (out / "interpolation_info.json").write_text(
             _json.dumps(info, ensure_ascii=False, indent=2))
-    except Exception:
-        pass
+    except Exception as _e:                          # noqa: BLE001
+        print("[WARN] 写 interpolation_info.json 失败（%s: %s）——最终插值网格的溯源没留下" % (type(_e).__name__, _e))
     if int(f) != f0:
         INTERPOLATION_FACTOR = int(f)
     if okm:
@@ -2424,6 +2424,8 @@ def main():
     # ---- patch_lineage（V140）：上游同源 + 派生产物新鲜度，不通过就不生成 ----
     if _HAS_KC:
         kc.check_lineage(cwd, enabled=STRUCTURE_GUARD, label="S8.4")
+        # [patch_post_invalidate V148] 本步重新生成 -> S8.3 的对比图作废（归档完成标记，重新排队）
+        kc.invalidate_downstream(cwd, OUTDIR_NAME, "%s 重新生成" % OUTDIR_NAME)
 
     # ---- patch_desym_fix：相位补丁开关（必须在 _apply_inversion_rule 之前）----
     if _HAS_KC:
@@ -2598,6 +2600,7 @@ def main():
     jobname = ("%s-ke-dft-cpu-%s" % (cwd.name, STEP_LABEL)) if not _HAS_KC \
         else kc.new_jobname(cwd, STEP_LABEL)
     text = tpl.read_text(encoding="utf-8")
+    _tpl_raw = text
     # patch_intrinsic_auto（2026-09-22）：WRITE_MESH=true 时把 strict intrinsic 后处理
     # 自动接进作业链——否则 mesh.h5 白写、本征结果永远要人工补跑一次（用户指出
     # 「不是切换环境就自动对」）。--check-reproduce 是硬门：重积分必须复现原
@@ -2627,6 +2630,8 @@ def main():
                 .replace("{{AMSET_ENV}}", _amset_env()))
     if "{{AMSET_ENV}}" in text:
         sys.exit("[ERROR] submit_amset.tpl 的 {{AMSET_ENV}} 未填充（step.conf 缺 AMSET_ENV？）")
+    if _HAS_KC:   # [V159] 激活的环境必须是 AMSET_ENV（旧项目级模板写死 amset_clean = 0.4.19）
+        kc.check_amset_submit(_tpl_raw, text, _amset_env(), tpl.name)
     submit.write_text(text, encoding="utf-8", newline="\n")
     stepconf.apply_submit(submit, stepconf.read_submit(stepconf.CONF_NAME))
     # patch_mem_guard：最终网格 -> 作业级内存粗估（区间）；可选自动独占节点
@@ -2653,7 +2658,7 @@ def main():
     except SystemExit:
         raise
     except Exception as _e:
-        print("[WARN] 重叠运行前检查失败（%s）——不拦截，但请人工确认" % type(_e).__name__)
+        print("[WARN] 重叠运行前检查失败（%s: %s）——不拦截，但请人工确认" % (type(_e).__name__, _e))
 
     print("[DONE] %s：settings.yaml + 软链 + %s 就绪；"
           "submit.sh 里先 import 插件再跑 Runner，产出 transport.json"

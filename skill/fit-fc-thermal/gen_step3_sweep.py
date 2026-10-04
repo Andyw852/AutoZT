@@ -41,7 +41,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 # 脱离 autozt 直接运行（python skill/fit-fc-thermal/gen_*.py）时，gen_need 里
 # 来自 skill/_common 的 stepconf/dim_common/thickness_2d 等不在脚本旁边——
 # 追加到 sys.path 末尾兜底（autozt 推送的同目录拷贝仍优先）。
-for _d in ("_common/opt", "_common"):
+for _d in ("_common/opt", "_common/fcfit", "_common"):
     _p = Path(__file__).resolve().parent.parent / _d
     if _p.is_dir() and str(_p) not in sys.path:
         sys.path.append(str(_p))

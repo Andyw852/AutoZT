@@ -64,7 +64,8 @@ fetch_files: [POSCAR, SPOSCAR, phono3py_disp.yaml, phono3py_params.yaml,
               # 即使项目覆盖了 fetch_all，这些也能按需单独回拉。
               FORCE_CONSTANTS_2ND, FORCE_CONSTANTS_3RD,
               shengbte/POSCAR, shengbte/FORCE_CONSTANTS_2ND,
-              shengbte/FORCE_CONSTANTS_3RD,
+              shengbte/FORCE_CONSTANTS_3RD, shengbte/CONTROL,
+              shengbte/shengbte_manifest.json,
               fit_config.json, fc_dataset.json, phonon_summary.json,
               fc_fit_summary.json, band-dft-cpu.yaml,
               # 热导率（S2_kappa）：kappa_summary.json + phono3py 的 κ 网格文件
@@ -88,7 +89,7 @@ steps:
   - {seq: 1, name: step1_fit, label: S1_fit, check: phonon,
      gen: gen_step1_fit.py, fetch_all: true,
      gen_need: [stepconf.py, step.conf, fc_common.py, fc_fit_driver.py,
-                dim_common.py,
+                imag_policy.py, phonon_stability.py, za_2d.py, dim_common.py,
                 submit_fcfit_p3py.tpl, submit_fcfit_hiphive.tpl,
                 submit_fcfit_pheasy.tpl, submit_fcfit_pheasy_gpu.tpl]}
 
@@ -99,6 +100,9 @@ steps:
      gen: gen_step2_kappa.py, fetch_all: true,
      gen_need: [stepconf.py, step.conf, fc_common.py, kappa_driver.py,
                 cut3_select.py, submit_kappa.tpl,
+                # ShengBTE 求解器（SOLVER=shengbte）的提交模板：mpirun 带全套
+                # MPI/OMP/BLIS/AOCL/UCX 加速参数，准备/汇总各调一次 kappa_driver.py
+                submit_shengbte_fcfit.tpl,
                 # 2D 面内 κ 层厚归一化（与 kl-dft-cpu S6 共用 _common/thickness_2d.py）
                 dim_common.py, thickness_2d.py, vdw_radii.py]}
 
@@ -131,7 +135,7 @@ optional_steps:
          check: marker, marker: 'sweep_result.json:"SWEEP_DONE": true',
          fanout: "m-*", gen: gen_step3_sweep.py, fetch_all: true,
          gen_need: [stepconf.py, step.conf, fc_common.py, fc_fit_driver.py,
-                    dim_common.py, kappa_driver.py, cut3_select.py,
+                    imag_policy.py, phonon_stability.py, za_2d.py, dim_common.py, kappa_driver.py, cut3_select.py,
                     gen_step1_fit.py, gen_step2_kappa.py, sweep_driver.py,
                     thickness_2d.py, vdw_radii.py,
                     submit_fcfit_p3py.tpl, submit_fcfit_hiphive.tpl,

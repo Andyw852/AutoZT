@@ -11,14 +11,16 @@ run:gen 步骤：登录节点直接跑、不提交 SLURM，秒级。
   3D:  μ = 2√(2π) e ℏ⁴ C_3D / (3 (k_B T)^{3/2} m*^{5/2} E1²)
 其中 C 为弹性模量、m* 有效质量、E1 形变势。
 
-输入来源（都可在下方 MANUAL 手填覆盖；自动值仅尽力而为、务必核对）：
+输入来源（都可手填覆盖：写**本材料的 step.conf**，见下方 SPEC；自动值仅尽力而为、务必核对）：
   · C   ← step6_elastic/OUTCAR（可靠自动；2D 再乘层厚得 C_2D[N/m]）
   · m*  ← step3_uniform 能带曲率（BoltzTraP2 尽力自动）
   · E1  ← step7b_deform_read/deformation.h5 的带边形变势（尽力自动）
 
 【重要诚实说明】m* 与 E1 的自动提取精度有限。amset 的 ADP 已经用 deformation.h5 做了
-更严格的形变势散射；本步是"经典闭式对标"。要发表级 DPT，建议手填 MANUAL 里的
-m*/E1/C（多数 DPT 论文就是这么做的），或核对自动值后再用。
+更严格的形变势散射；本步是"经典闭式对标"。要发表级 DPT，建议手填 m*/E1/C
+（多数 DPT 论文就是这么做的），或核对自动值后再用。手填写本材料的 step.conf：
+    tf -p <材料> -j step8.2_dpt conf --set M_EFF_ELECTRON=0.030
+不要改本脚本的 MANUAL：本脚本每次 gen 都原样推到每个材料，改了就作用到所有材料（V148）。
 
 产出（done_marker）：本步目录下的 dpt_result.json（+ summary.txt）。缺输入时写出
 带指引的部分结果，绝不崩溃、绝不编造。
@@ -32,9 +34,10 @@ from pathlib import Path
 # =========================== 可改参数区 ===========================
 # [SKILL_REV] 版本戳：写进 dpt_result.json，铺开时验证跑的是哪份 skill 副本。
 # 每次改本脚本逻辑后更新（如 "2026-08-29-nstep-linear"）。
-_SKILL_REV = "2026-08-31-rscan"
+_SKILL_REV = "2026-10-03-v153"
 # [R-SCAN] 强制选点壳层 NSTEP（None=自动 2/3/4/5；填 2/3/4/5=只试该值，做 R-scan 用）。
-# 用法：改 FORCE_NSTEP → tf -p <材料> -j S8.2_dpt retry + start，对比 dpt_result.json 的 m_d 与 m_provenance 里的 R。
+# 用法：tf -p <材料> -j step8.2_dpt conf --set FORCE_NSTEP=3 → retry + start，对比 dpt_result.json 的 m_d
+#   与 m_provenance 里的 R（V148 起写 step.conf，不改本脚本）。
 FORCE_NSTEP = None
 OUTDIR_NAME = "step8.2_dpt"
 UNIFORM_DIR = "step3_uniform"
@@ -55,6 +58,8 @@ CARRIER = "both"                     # electron / hole / both
 E1_SOURCE = "vac"
 
 # —— 手动覆盖（填了就用手填值，最可靠；None=尝试自动）——
+# ★ V148：**只给一个材料用就写它的 step.conf**（下方 SPEC 的键），不要改这里。这里的值作用到所有材料
+#   （本脚本每次 gen 都从 skill 原样推到每个材料目录），不是全 None 时每次 gen 都 ★ 告警。
 MANUAL = {
     "m_eff_electron": None,   # m*/m0（各向同性；也可只填电子或空穴）
     "m_eff_hole":     None,
@@ -64,6 +69,26 @@ MANUAL = {
     "C_3D_GPa":       None,   # 3D 弹性模量 GPa
     "thickness_A":    None,   # 2D 层厚 Å（None=读 2d_correction.json）
 }
+
+# [V148] 材料级覆盖：本材料的 step.conf（tf -p <材料> -j step8.2_dpt conf --set 键=值）。
+#   起因：GaAs 要拿 amset eff-mass 的 m*=0.030 对照 ADP/DPT，只能改共享脚本的 MANUAL，改着的那段时间里
+#   任何材料的 S8.2 都会用上 GaAs 的 0.030（gen 脚本总是从 skill 覆盖推送）。step.conf 的值优先于脚本。
+STEP = OUTDIR_NAME
+SPEC = {
+    "M_EFF_ELECTRON": (None, "float"),    # m*/m0
+    "M_EFF_HOLE":     (None, "float"),
+    "E1_ELECTRON_EV": (None, "float"),    # 形变势 eV
+    "E1_HOLE_EV":     (None, "float"),
+    "C_2D_N_PER_M":   (None, "float"),    # 2D 弹性模量 N/m
+    "C_3D_GPA":       (None, "float"),    # 3D 弹性模量 GPa
+    "THICKNESS_A":    (None, "float"),    # 2D 层厚 Å
+    "E1_SOURCE":      (None, "str"),      # vac / amset
+    "FORCE_NSTEP":    (None, "int"),      # 2/3/4/5
+}
+_CONF_TO_MANUAL = {"M_EFF_ELECTRON": "m_eff_electron", "M_EFF_HOLE": "m_eff_hole",
+                   "E1_ELECTRON_EV": "E1_electron_eV", "E1_HOLE_EV": "E1_hole_eV",
+                   "C_2D_N_PER_M": "C_2D_N_per_m", "C_3D_GPA": "C_3D_GPa", "THICKNESS_A": "thickness_A"}
+_MANUAL_SRC = {}                          # MANUAL 键 -> "step.conf" / "脚本"
 # =================================================================
 
 # 物理常数（SI）
@@ -74,6 +99,87 @@ M0    = 9.1093837015e-31
 
 _STEP1_CANDS = ("step1_opt", "step1_std_opt",
                 "step1c_PBE_opt", "step1b_PBE_opt", "step1a_PBE_opt")
+
+
+def _exc_brief(e):
+    """[V150] 兜底 except 的说明：类型 + 信息 + 本脚本里出错的那一行（以前只写类型名，WS2 的
+    "二次型拟合异常：IndexError" 无从定位）。"""
+    import traceback
+    msg = "%s: %s" % (type(e).__name__, str(e)[:200]) if str(e) else type(e).__name__
+    here = [f for f in traceback.extract_tb(e.__traceback__)
+            if Path(f.filename).name == Path(__file__).name]
+    if here:
+        f = here[-1]
+        msg += "（%s:%d `%s`）" % (Path(f.filename).name, f.lineno, (f.line or "").strip()[:120])
+    return msg
+
+
+def _manual_prov(key):
+    """[V148] 手填值的来源：step.conf（本材料）/ 脚本 MANUAL（所有材料）。"""
+    return {"step.conf": "manual(step.conf)",
+            "脚本": "manual(脚本 MANUAL，作用到所有材料)"}.get(_MANUAL_SRC.get(key), "manual")
+
+
+def apply_conf(cwd):
+    """[V148] 读本材料 step.conf 的覆盖写进 MANUAL / E1_SOURCE / FORCE_NSTEP；脚本里 MANUAL 被改过就 ★ 告警。
+    返回 {键: {"value", "source"}}（写进 dpt_result.json 的 overrides）。"""
+    global E1_SOURCE, FORCE_NSTEP
+    rec = {}
+    for k, v in MANUAL.items():
+        if v is not None:
+            _MANUAL_SRC[k] = "脚本"
+            rec[k] = {"value": v, "source": "gen_step12_dpt.py 的 MANUAL（作用到所有材料）"}
+    for k, v in MANUAL_ANISO.items():
+        if v is not None:
+            rec[k] = {"value": list(v), "source": "gen_step12_dpt.py 的 MANUAL_ANISO（作用到所有材料）"}
+    if rec:
+        print("[WARN] ★ 共享脚本 gen_step12_dpt.py 的 MANUAL/MANUAL_ANISO 被改过（%s）：本脚本每次 gen 都原样推到每个材料，"
+              "这些值会用到**所有**材料的 S8.2。只给一个材料用：还原脚本，改写本材料的 step.conf"
+              "（tf -p <材料> -j step8.2_dpt conf --set M_EFF_ELECTRON=…）"
+              % ", ".join("%s=%s" % (k, r["value"]) for k, r in sorted(rec.items())))
+    if not (Path(cwd) / "step.conf").is_file():
+        return rec
+    try:
+        import stepconf
+    except ImportError:
+        print("[WARN] 有 step.conf 但没有 stepconf.py：step.conf 的覆盖未生效（skill.yaml 的 gen_need 漏了它？）")
+        return rec
+    p = stepconf.load(SPEC, STEP, str(cwd), strict=False)
+    for ck, mk in _CONF_TO_MANUAL.items():
+        if p[ck] is None:
+            continue
+        if mk in rec:
+            print("[WARN] %s：step.conf 的 %s=%s 盖过脚本 MANUAL 的 %s" % (mk, ck, p[ck], rec[mk]["value"]))
+        MANUAL[mk] = float(p[ck])
+        _MANUAL_SRC[mk] = "step.conf"
+        rec[mk] = {"value": float(p[ck]), "source": "step.conf %s" % ck}
+        print("[OK] %s = %s（step.conf %s）" % (mk, p[ck], ck))
+    if p["E1_SOURCE"]:
+        v = str(p["E1_SOURCE"]).strip().lower()
+        if v not in ("vac", "amset"):
+            sys.exit("[ERROR] step.conf 的 E1_SOURCE=%r：只能是 vac / amset" % p["E1_SOURCE"])
+        E1_SOURCE = v
+        rec["E1_SOURCE"] = {"value": v, "source": "step.conf E1_SOURCE"}
+        print("[OK] E1_SOURCE = %s（step.conf）" % v)
+    if p["FORCE_NSTEP"] is not None:
+        if int(p["FORCE_NSTEP"]) not in (2, 3, 4, 5):
+            sys.exit("[ERROR] step.conf 的 FORCE_NSTEP=%r：只能是 2/3/4/5" % p["FORCE_NSTEP"])
+        FORCE_NSTEP = int(p["FORCE_NSTEP"])
+        rec["FORCE_NSTEP"] = {"value": FORCE_NSTEP, "source": "step.conf FORCE_NSTEP"}
+        print("[OK] FORCE_NSTEP = %d（step.conf）" % FORCE_NSTEP)
+    return rec
+
+
+def invalidate_consumers(cwd):
+    """[patch_post_invalidate V148] 本步重新生成 -> S8.1（用本步的 τ）与 S8.3（对比图）的完成标记归档、重新排队。
+    以前 DOWNSTREAM 表里有这两条，但没有 gen 调：GaAs 的 S8.2 重跑 4 次，S8.1 一直用 V145 之前的空穴 τ。"""
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+        import ke_common as _kc
+    except ImportError:
+        print("[WARN] 没有 ke_common.py，S8.1/S8.3 不会自动重排（skill.yaml 的 gen_need 漏了它？）")
+        return []
+    return _kc.invalidate_downstream(cwd, OUTDIR_NAME, "%s 重新生成（DPT 重算）" % OUTDIR_NAME)
 
 
 def _read_dim(cwd):
@@ -90,6 +196,42 @@ def _read_dim(cwd):
 def _guard_not_0d(cwd):
     if _read_dim(cwd) == "0d":
         sys.exit("[ERROR] step8.2_dpt 不支持 0D 体系（无能带色散，形变势无意义）。")
+
+
+def _hex_cell(recip):
+    """面内两个倒格矢等长、夹角 60°/120° -> 六方胞。"""
+    import numpy as np
+    _b1 = float(np.linalg.norm(recip[0]))
+    _b2 = float(np.linalg.norm(recip[1]))
+    _ang = float(np.degrees(np.arccos(max(-1.0, min(1.0, float(np.dot(recip[0], recip[1])) / (_b1 * _b2))))))
+    return (abs(_b1 - _b2) < 0.05 * max(_b1, _b2)
+            and (abs(_ang - 60.0) < 5.0 or abs(_ang - 120.0) < 5.0))
+
+
+def _hex_offgrid(recip, kf, kgrid=None):
+    """[GUARD-2026-09-23 / V152] 六方胞的带边锚在非高对称点 -> (说明, False)；否则 (None, 是否高对称点)。
+    各向同性与分方向两条 m* 路径共用（V152 之前分方向路径没有这道闸：WSe2 的电子分方向给出
+    x=0.48 / y=0.68 且 status ok，而 C₃ 晶体的迁移率张量面内各向同性）。
+    kgrid（本路径用的 k 点）里有 K 点 -> 不是网格问题：带边在 Q/Λ 这类非高对称谷（WSe2 45×45：K=15/45 在网上，
+    带边在 8/45 = 0.178，Γ–K 中点附近）；重做 S3 没用，原来的"K 离网"提示把人引到了错的方向。"""
+    import numpy as np
+    _hex = _hex_cell(recip)
+    _kf = np.asarray(kf, float) % 1.0
+    _at_hs = bool(np.all(np.abs(_kf[:2] * 6.0 - np.round(_kf[:2] * 6.0)) < 0.01))
+    if not _hex or _at_hs:
+        return None, _at_hs
+    k_on_grid = False
+    if kgrid is not None:
+        g = np.asarray(kgrid, float)[:, :2] * 3.0
+        on3 = np.all(np.abs(g - np.round(g)) < 1e-3, axis=1)
+        k_on_grid = bool(np.any(on3 & np.any(np.abs(np.round(g) % 3) > 0.5, axis=1)))
+    if k_on_grid:
+        return ("六方胞带边在非高对称点 k_frac=%s，而 K 点在网格上：不是网格问题，带边多半在 Q/Λ 这类"
+                "非高对称谷（6 个等价谷）。单谷 DPT 的 m*（方向分解与分方向 x/y）都不适用，重做 step3_uniform "
+                "没用 —— 用 amset eff-mass 的质量写本材料 step.conf（M_EFF_*）" % np.round(_kf, 4)), False
+    return ("六方胞带边锚在非高对称点 k_frac=%s（K 离网：step3_uniform 的 N 不是"
+            " 3 的倍数）——请按 DK_MAX 规则用 N 为 6 的倍数重新生成 step3_uniform，"
+            "或在本材料 step.conf 手填 M_EFF_*" % np.round(_kf, 4)), False
 
 
 # ---------- [PATCH-KE-2026] 自旋道感知的带边定位 ----------
@@ -230,7 +372,7 @@ def get_C(cwd, is_2d):
     如 Qiao 等黑磷工作）。用 V/A 而非 |c|，对非正交/c 倾斜的胞也正确。"""
     if is_2d:
         if MANUAL["C_2D_N_per_m"]:
-            return float(MANUAL["C_2D_N_per_m"]), "N/m", "manual"
+            return float(MANUAL["C_2D_N_per_m"]), "N/m", _manual_prov("C_2D_N_per_m")
         c11, c22 = read_elastic_inplane_GPa(cwd)
         h = _cell_height_A(cwd)
         if c11 is None or c22 is None or not h:
@@ -240,7 +382,7 @@ def get_C(cwd, is_2d):
         return C_2D, "N/m", "step6 面内(C11+C22)/2 × h(V/A)=%.3fÅ" % h
     else:
         if MANUAL["C_3D_GPa"]:
-            return float(MANUAL["C_3D_GPa"]) * 1e9, "Pa", "manual"
+            return float(MANUAL["C_3D_GPa"]) * 1e9, "Pa", _manual_prov("C_3D_GPa")
         c11, c22 = read_elastic_inplane_GPa(cwd)
         if c11 is None:
             return None, "Pa", "缺 step6 弹性"
@@ -253,7 +395,7 @@ def get_effective_mass(cwd, carrier, is_2d):
     2D 只取面内。返回 (m*/m0, provenance)；失败 (None, 原因)。"""
     key = "m_eff_electron" if carrier == "electron" else "m_eff_hole"
     if MANUAL[key]:
-        return float(MANUAL[key]), "manual"
+        return float(MANUAL[key]), _manual_prov(key)
     vr = None
     for n in ("vasprun.xml", "vasprun.xml.gz"):
         p = Path(cwd) / UNIFORM_DIR / n
@@ -298,18 +440,9 @@ def get_effective_mass(cwd, carrier, is_2d):
         # 径向（偶次）fit 吸收不了线性梯度：六方胞带边在 K=(1/3,1/3)，若网格 N 不是
         # 3 的倍数则 K 离网，锚落在离网非极值点，「最轻两支」把梯度方向当曲率，
         # 静默给出错误轻质量（CrSe2 46×46 实测 0.52 vs 真值 1.03）。
-        _b1 = float(np.linalg.norm(recip[0]))
-        _b2 = float(np.linalg.norm(recip[1]))
-        _ang = float(np.degrees(np.arccos(max(-1.0, min(1.0,
-            float(np.dot(recip[0], recip[1])) / (_b1 * _b2))))))
-        _hex = (abs(_b1 - _b2) < 0.05 * max(_b1, _b2)
-                and (abs(_ang - 60.0) < 5.0 or abs(_ang - 120.0) < 5.0))
-        _kf = np.asarray(kfrac[k0], float) % 1.0
-        _at_hs = bool(np.all(np.abs(_kf[:2] * 6.0 - np.round(_kf[:2] * 6.0)) < 0.01))
-        if _hex and not _at_hs:
-            return None, ("六方胞带边锚在非高对称点 k_frac=%s（K 离网：step3_uniform 的 N 不是"
-                          " 3 的倍数）——请按 DK_MAX 规则用 N 为 6 的倍数重新生成 step3_uniform，"
-                          "或手填 MANUAL" % np.round(_kf, 4))
+        _off, _at_hs = _hex_offgrid(recip, kfrac[k0], kfrac)
+        if _off:
+            return None, _off
         _use_dird = _at_hs
 
         # [PATCH-2026-09-23] 方向分解 + q^4 外推（依据 tmp/odp/TASK3b_mass_rootcause.md）。
@@ -372,7 +505,7 @@ def get_effective_mass(cwd, carrier, is_2d):
         return round(float(m), 4), "能带边抛物拟合(%s, %d点, R<%.2f, spin=%d)" % (
             "面内" if is_2d else "3D", int(np.count_nonzero(sel)), Rused, isp)
     except Exception as e:
-        return None, "抛物拟合异常：%s" % type(e).__name__
+        return None, "抛物拟合异常：%s" % _exc_brief(e)
 
 
 # ---------- E1：从 deformation.h5 带边取（尽力） ----------
@@ -389,11 +522,23 @@ def _band_edges_json(cwd):
     # step7b 跑的是另一份 skill 副本（旧副本无 ionrelax 支持，会静默读刚性构型，
     # E1 偏低 20% 且无报错）。沿用 C2 哲学：不一致硬失败，不静默降级。
     be_rev = be.get("skill_rev")
-    if be_rev and be_rev != _SKILL_REV:
-        print("[WARN] band_edges.json skill_rev=%s 与本脚本 %s 不一致——"
-              "step7b 可能跑的是旧副本（无 ionrelax 支持）"
-              % (be_rev, _SKILL_REV))
+    want = _band_edges_rev()
+    if be_rev and want and be_rev != want:
+        print("[WARN] band_edges.json 的版本 %s ≠ 当前 S7.1 的 %s —— 它是旧版 S7.1 生成的"
+              "（旧副本可能无 ionrelax 支持，E1 偏低且不报错）：重跑 step7b_deform_read" % (be_rev, want))
     return be
+
+
+def _band_edges_rev():
+    """[V153] 当前 S7.1 写 band_edges.json 用的版本（ke_common.BAND_EDGES_REV）；读不到 ke_common -> None（不核对）。"""
+    try:
+        for _up in Path(__file__).resolve().parents[:2]:
+            if (_up / "ke_common.py").is_file() and str(_up) not in sys.path:
+                sys.path.insert(0, str(_up))
+        import ke_common as _kc
+        return getattr(_kc, "BAND_EDGES_REV", None)
+    except ImportError:
+        return None
 
 
 def _vac_missing_msg(be, carrier, field):
@@ -414,7 +559,7 @@ def _vac_missing_msg(be, carrier, field):
                "重跑 step7b_deform_read 生成新版")
     return ("E1_SOURCE='vac' 但 band_edges.json 无 %s：%s。"
             "看 step7_deform/band_edges.log；确认要用 amset 芯势口径就把 "
-            "gen_step12_dpt.py 的 E1_SOURCE 改成 'amset'（数值口径不同，勿混report）"
+            "本材料 step.conf 写 E1_SOURCE = amset（数值口径不同，勿混report）"
             % (field, why))
 
 
@@ -422,7 +567,7 @@ def get_E1(cwd, carrier):
     """返回 (E1_eV, provenance)。尽力自动；失败返回 (None, 原因)。"""
     key = "E1_electron_eV" if carrier == "electron" else "E1_hole_eV"
     if MANUAL[key]:
-        return float(MANUAL[key]), "manual"
+        return float(MANUAL[key]), _manual_prov(key)
     # [PATCH-DPT-2026] 优先 amset 权威带边（step7b_read 已定位好，k/band 全部对齐）
     be = _band_edges_json(cwd)
     if be and carrier in be and be[carrier].get("n_hits", 0) > 0:
@@ -465,13 +610,13 @@ def get_E1(cwd, carrier):
             # [PATCH-DPT-R5] 不再静默走「全带中位数」兜底（那是本次修复的 bug）：
             # 带边定位失败就显式失败，提示修 step7b 或手填 MANUAL_ANISO。
             return None, "带边定位失败：请检查 step7b_read 的 band_edges.json，" \
-                         "或手填 MANUAL/MANUAL_ANISO 的 E1"
+                         "或在本材料 step.conf 手填 E1_*_EV"
         b, k = bk[0], bk[1]
         e1 = abs((dp[b, k, 0, 0] + dp[b, k, 1, 1]) / 2.0)   # 面内对角均值 |eV|
         return round(float(e1), 4), (
             "deformation.h5 带边(b=%d,k=%d,%s)面内对角(旧逻辑)" % (b, k, dset))
     except Exception as e:
-        return None, "读 deformation.h5 异常：%s" % type(e).__name__
+        return None, "读 deformation.h5 异常：%s" % _exc_brief(e)
 
 
 def _band_edge_index(cwd, carrier, nband, nkpt):
@@ -514,6 +659,7 @@ def mobility_dpt(is_2d, C, m_star, E1_eV, T):
 
 
 # === patch_dpt_aniso：各向异性 DPT（m*、E1、C 全部分方向）===
+# ★ V148：MANUAL_ANISO 没有 step.conf 键（分方向手填少见）；改了它同样作用到所有材料，gen 时 ★ 告警。
 MANUAL_ANISO = {          # 分方向手填覆盖，None=自动。x/y 为笛卡尔面内方向
     "m_eff_electron_xy": None,    # (m_x, m_y)，单位 m0，例 (0.98, 0.90)
     "m_eff_hole_xy": None,
@@ -657,8 +803,8 @@ def get_effective_mass_aniso(cwd, carrier, is_2d):
                     _sh, _e = _p.get("CONDA_SH"), _p.get("AMSET_ENV")
                     if _sh and _e:
                         _env = "source %s && conda activate %s" % (_sh, _e)
-                except Exception:
-                    pass
+                except Exception as _ee:                    # noqa: BLE001
+                    print("[..] %s：读 step.conf 的 amset 环境失败（%s），跳过 subprocess 展开" % (carrier, _exc_brief(_ee)))
                 if _env:
                     _code = ("import sys,json,numpy as np\n"
                              "from pymatgen.core import Structure\n"
@@ -684,8 +830,8 @@ def get_effective_mass_aniso(cwd, carrier, is_2d):
                         _expand_method = "amset-subproc"
                         expanded = True
                         _sub_ok = True
-            except Exception:
-                pass
+            except Exception as _es:                        # noqa: BLE001
+                print("[..] %s：amset subprocess 展开失败（%s），改用 pymatgen 点群展开" % (carrier, _exc_brief(_es)))
             if not _sub_ok:
                 # 层3：pymatgen 点群展开（+ 时间反演，只依赖 pymatgen）
                 try:
@@ -724,7 +870,7 @@ def get_effective_mass_aniso(cwd, carrier, is_2d):
                 except Exception as _e2:
                     return None, ("全 BZ 展开失败（amset/subprocess/pymatgen 都不可用：%s）"
                                   "——拒绝在 IBZ 上拟合 m*（单侧取点是系统性错误）"
-                                  % type(_e2).__name__)
+                                  % _exc_brief(_e2))
         # 展开后（amset/pymatgen 共用）：能量映射 + 精确匹配 IBZ 原 k
         ene = ene_ibz[kp_mapping]                   # (n_full, nb)
         d = kfrac - kfrac_ibz[k0_ibz]; d -= np.round(d)
@@ -732,6 +878,9 @@ def get_effective_mass_aniso(cwd, carrier, is_2d):
         k0 = int(np.argmin(dd))
         if dd[k0] > 1e-4:
             return None, "展开后找不到原带边 k 点（回卷距离 %.3g）" % dd[k0]
+        _off, _ = _hex_offgrid(recip, kfrac[k0], kfrac)                 # [V152] 与各向同性路径同一道闸
+        if _off:
+            return None, _off
 
         kcart = kfrac @ recip
         dk = kcart - kcart[k0]
@@ -797,7 +946,9 @@ def get_effective_mass_aniso(cwd, carrier, is_2d):
 
         # [AXIS 覆盖] 每个面内倒格矢方向都要有非零步的点，否则该方向曲率无约束。
         # LS 的 kx 轴只有 N≈2 分割，会在这里干脆报错而不是返回假 m*_x。
-        _dfrac = kfrac[sel] - kfrac[k0]
+        # [V151] sel 是在面内子集（zm）上算的掩码，必须先取 kfrac[zm]：2D 的 S3 常用 kz≥3（WS2 48×48×3），
+        #   全 BZ 6912 点 vs 面内 2304 点 -> IndexError，分方向 m* 整块失败（kz=1 时两者等长，测不出来）。
+        _dfrac = kfrac[zm][sel] - kfrac[k0]
         _dfrac -= np.round(_dfrac)
         _steps = np.rint(_dfrac * mesh).astype(int)
         for _i in (0, 1):
@@ -866,7 +1017,7 @@ def get_effective_mass_aniso(cwd, carrier, is_2d):
                   % (carrier, off))
         return (round(mx, 4), round(my, 4)), prov
     except Exception as e:
-        return None, "二次型拟合异常：%s" % type(e).__name__
+        return None, "二次型拟合异常：%s" % _exc_brief(e)
 
 
 def get_E1_aniso(cwd, carrier):
@@ -918,7 +1069,7 @@ def get_E1_aniso(cwd, carrier):
                  round(float(abs(dp[b, k, 1, 1])), 4)),
                 "deformation.h5 带边(b=%d,k=%d,%s) D_xx/D_yy(旧逻辑)" % (b, k, dset))
     except Exception as e:
-        return None, "读 deformation.h5 异常：%s" % type(e).__name__
+        return None, "读 deformation.h5 异常：%s" % _exc_brief(e)
 
 
 def mobility_dpt_2d_aniso(C_alpha, m_alpha, m_d, E1_eV, T):
@@ -958,12 +1109,13 @@ def _grid_resolution_note(carrier, m, mprov, T):
     """[V147] 最近网格点高出带边 > NN_KT_MAX·kT -> m_provenance 注明并告警。返回新的 mprov。"""
     nn = _EDGE_NN_DE.get(carrier)
     kt = KB * T / E_C
-    if m is None or mprov == "manual" or nn is None or nn <= NN_KT_MAX * kt:
+    if m is None or str(mprov).startswith("manual") or nn is None or nn <= NN_KT_MAX * kt:
         return mprov
     print("[WARN] %s 的 m* 网格分辨不足：最近网格点高出带边 %.0f meV（%.1f kT），拟合量到的是能量平均的质量，"
           "带边非抛物时偏重（GaAs 实测 0.0523 vs 带边 0.030）。可靠值：在 S8 目录跑 "
           "amset eff-mass vasprun.xml -i <interpolation_factor> -d <掺杂> -t %g --bandgap <带隙> --average，"
-          "填进 MANUAL['m_eff_%s']" % (carrier, 1000 * nn, nn / kt, T, carrier))
+          "写进本材料的 step.conf：tf -p <材料> -j step8.2_dpt conf --set M_EFF_%s=<m*>（不要改脚本的 MANUAL）"
+          % (carrier, 1000 * nn, nn / kt, T, carrier.upper()))
     return ("%s；网格分辨不出带边曲率（最近网格点高出带边 %.0f meV = %.1f kT）：m* 是能量平均的值，带边非抛物时偏重"
             % (mprov, 1000 * nn, nn / kt))
 
@@ -989,8 +1141,8 @@ def _one_carrier(cwd, is_2d, carrier, T):
     if None in (C, m, e1):
         miss = [n for n, v in (("C", C), ("m*", m), ("E1", e1)) if v is None]
         rec["mobility_cm2_Vs"] = None
-        rec["status"] = "缺输入：%s —— 在脚本顶部 MANUAL 手填后重跑（μ∝1/T，报 %.0fK）" \
-                        % ("、".join(miss), T)
+        rec["status"] = ("缺输入：%s —— 在本材料 step.conf 手填（M_EFF_*/E1_*_EV/C_*）后重跑（μ∝1/T，报 %.0fK）"
+                         % ("、".join(miss), T))
     else:
         rec["mobility_cm2_Vs"] = round(mobility_dpt(is_2d, C, m, e1, T), 3)
         rec["status"] = "ok"
@@ -1003,6 +1155,8 @@ def main():
     _guard_not_0d(cwd)
     out = cwd / OUTDIR_NAME
     out.mkdir(exist_ok=True)
+    invalidate_consumers(cwd)
+    overrides = apply_conf(cwd)
     dim = _read_dim(cwd)
     is_2d = (dim == "2d")
 
@@ -1021,12 +1175,12 @@ def main():
     except Exception:
         _env = {"python": sys.executable}
     res = {"dim": dim, "is_2d": is_2d, "temperature_K": TEMPERATURE_K,
-           "skill_rev": _SKILL_REV, "env": _env,
+           "skill_rev": _SKILL_REV, "env": _env, "overrides": overrides,
            "formula": ("2D Bardeen-Shockley: μ=eℏ³C_2D/(k_BT m* m_d E1²)" if is_2d
                        else "3D: μ=2√(2π)eℏ⁴C_3D/(3(k_BT)^{3/2}m*^{5/2}E1²)"),
            "results": [_one_carrier(cwd, is_2d, c, TEMPERATURE_K) for c in carriers],
            "note": ("经典 DPT 声学支迁移率，用于和 amset(ADP) 对标。m*/E1 自动值精度"
-                    "有限——务必核对，或在 MANUAL 手填。μ∝1/T。")}
+                    "有限——务必核对，或在本材料 step.conf 手填。μ∝1/T。")}
     (out / "dpt_result.json").write_text(
         json.dumps(res, ensure_ascii=False, indent=2), encoding="utf-8")
 

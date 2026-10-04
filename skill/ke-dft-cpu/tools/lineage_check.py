@@ -8,6 +8,9 @@
   · S2.3 HSE 的 gen 从 S2.2 拷 POSCAR/WAVECAR，S2.2 没先重跑就 rerun S2.3，HSE 算的是旧结构；
   · S4 的 h5、S7.1 的形变势、S2 画图的 band_summary.json 仍是旧的"完成"。
 S8/S8.4 的 gen 做同一核对（STRUCTURE_GUARD），不通过就不生成。本工具只读（除非 --invalidate-from）。
+V148 起本工具另查（S8 的 gen 不查）：S8.1/S8.3 的产物是否旧于 S8.2/S8/S8.4，S8/S8.4 的带隙是否与 S2 画图一致。
+V149 起结构比对扣除整体平移（S3/S3b 的 align_origin 是刚性平移，不算不同）。
+V153：--invalidate-from 也接受 S1 / S2 链（下游 VASP 步骤整目录归档；在跑的不动）。
 
 用法：
     python lineage_check.py <材料目录或项目根> [--glob "*/ke-dft-cpu"]
@@ -52,7 +55,9 @@ def main(argv=None):
             sys.exit("[ERROR] 不认识的步骤 %s；可用：%s" % (unknown, ", ".join(sorted(kc.DOWNSTREAM))))
         done = []
         for step in a.invalidate_from:
-            done += kc.invalidate_downstream(mat, step, "lineage_check --invalidate-from")
+            # V148：S2 画图的下游按带隙变没变决定（gap 取它当前的 band_summary.json）
+            done += kc.invalidate_downstream(mat, step, "lineage_check --invalidate-from",
+                                             gap=kc.band_summary_gap(mat / step))
         print("[OK] 归档了 %d 个完成标记%s" % (len(done), "" if done else "（下游本来就没有完成标记）"))
         for step, m in done:
             print("     %s/%s" % (step, m))
@@ -64,6 +69,7 @@ def main(argv=None):
         return 0
     for mat in mats:
         ref, probs = kc.structure_lineage(mat)
+        probs = probs + kc.post_lineage(mat)                 # V148：S8 之后的派生产物 + 带隙一致性
         if not probs:
             print("[OK]  %s%s" % (mat, "" if ref else "（没有 S1 CONTCAR，只核对了派生产物）"))
             continue

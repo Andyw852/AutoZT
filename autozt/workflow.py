@@ -117,6 +117,13 @@ def step_state(step, blocked):
         return ("scancel", "SCANCEL")
     if step.get("imaginary"):
         return ("imaginary", "IMAG")   # 算完了但有虚频，不是 error
+    # [V153] 上游重算后被归档、等重新生成：不是失败。kind 归 PREP，auto-advance 会在上游完成后重新生成
+    #   （以前显示 FAIL，而 auto-advance 不重试 FAIL —— 技能里"归档完成标记、会重新排队"其实要人手 retry）。
+    if step.get("stale"):
+        return ("----", "WAIT") if blocked else ("STALE", "PREP")
+    # [V158] 归档后在原目录重新生成了输入、还没提交（旧 slurm-*.out 还在）：输入就绪，不是失败。
+    if step.get("regen_ready"):
+        return ("----", "WAIT") if blocked else ("TODO", "TODO")
     if step.get("plot_error"):
         return ("FAIL", "FAIL")
     if blocked:
@@ -1425,6 +1432,20 @@ def kill_if_queued(cfg, s, force, tag):
                                  "成功" if ok else ("失败: " + out)))
     return ok
 
+def _mark_gen_failed(cfg, s):
+    """[V153] STALE 步骤重新生成失败：留 .autozt_gen_failed（比归档新），下一轮显示 FAIL、不再自动重试。
+    [V158] 已重新生成、等提交（regen_ready）的步骤同样处理，否则 gen 失败后每轮都重试。"""
+    if not (s.get("stale") or s.get("regen_ready")) or not s.get("dir"):
+        return
+    from autozt import run_remote
+    try:
+        run_remote(cfg, "mkdir -p %s && touch %s" % (shlex.quote(s["dir"]),
+                                                    shlex.quote(os.path.join(s["dir"], ".autozt_gen_failed"))),
+                   host=s.get("_host") or "__default__")
+    except Exception as _e:                       # noqa: BLE001 —— 打标记失败不影响主流程
+        print("警告：给 %s 打 gen 失败标记没成功：%s" % (s.get("name"), _e), file=sys.stderr)
+
+
 def do_run_gen_step(cfg, t, m, s, tag):
     from autozt import log_action, run_remote, step_cfg
     """run: gen 的步骤（v3.21 能带画图等）：只在材料目录远端执行 gen 脚本，
@@ -1435,6 +1456,7 @@ def do_run_gen_step(cfg, t, m, s, tag):
     ok, out = remote_gen(cfg, t, m, s["name"], host=s.get("_host"), wd=s.get("_wd"))
     if not ok:
         print("%s: 运行失败。%s" % (tag, out))
+        _mark_gen_failed(cfg, s)
         return False
     marker = step_cfg(t, s["name"], m).get("done_marker") or "band_summary.json"
     rc, o = run_remote(cfg, "test -f %s && echo MARKER_OK"
@@ -1457,6 +1479,7 @@ def do_run_gen_step(cfg, t, m, s, tag):
     tail = (out or "").strip().splitlines()
     print("%s: 脚本运行了但没产出 %s%s（状态将显示 error，检查日志后 retry）"
           % (tag, marker, ("：" + tail[-1]) if tail else ""))
+    _mark_gen_failed(cfg, s)
     return False
 
 # 本进程成功 sbatch 的次数（monitor 每轮摘要用：本轮提交数 = 前后差值）
@@ -1540,6 +1563,7 @@ def do_submit(cfg, t, m, s, force, gen_first, contcar_cp, tag, submit=True):
         ok, out = remote_gen(cfg, t, m, s["name"], host=s.get("_host"), wd=s.get("_wd"))
         if not ok:
             print("%s: gen 失败。%s" % (tag, out))
+            _mark_gen_failed(cfg, s)
             # work_dir 提示只在像是路径问题时给（参数错误等 gen 自身报错时它是误导）
             if re.search(r"Permission denied|No such file or directory|cannot cd|"
                          r"can't cd|找不到|不存在", out or ""):

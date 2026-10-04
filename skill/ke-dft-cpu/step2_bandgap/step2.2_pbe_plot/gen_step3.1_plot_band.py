@@ -89,6 +89,26 @@ def log(msg):
     print(msg, file=sys.stderr, flush=True)
 
 
+def _invalidate_gap_consumers(out_dir, gap):
+    """[patch_gap_invalidate V148] 新带隙与下游 S8/S8.4 settings.yaml 里的 bandgap 不同 -> 它们的完成标记归档、
+    重新排队（S8.1 一律重排）。返回归档清单；没有 ke_common 时返回 None。stdout 只留给最后那行 JSON。"""
+    import contextlib
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
+        import ke_common as _kc
+    except ImportError:
+        log("[WARN] 没有 ke_common.py：带隙变了也不会让 S8/S8.4/S8.1 重排（skill.yaml 的 gen_need 漏了它？）")
+        return None
+    cwd = Path.cwd().resolve()
+    try:
+        step = Path(out_dir).resolve().relative_to(cwd).as_posix()
+    except ValueError:
+        return None
+    with contextlib.redirect_stdout(sys.stderr):
+        done = _kc.invalidate_downstream(cwd, step, "%s 重新生成" % step, gap=gap)
+    return ["%s/%s" % x for x in done]
+
+
 def emit(result, code):
     print(json.dumps(result, ensure_ascii=False), flush=True)
     sys.exit(code)
@@ -740,6 +760,9 @@ def main():
               "kpath_source": axis_src,
               "kpath_method": kmeta.get("method"),
               "kpath_note": kmeta.get("note")}
+
+    # [patch_gap_invalidate V148] 带隙变了 -> 用它的 S8/S8.4（settings.yaml 的 bandgap）与 S8.1 重新排队
+    result["invalidated_downstream"] = _invalidate_gap_consumers(dst, round(gap, 4))
 
     # 5) 摘要落盘
     (dst / f"{args.prefix}_summary.json").write_text(

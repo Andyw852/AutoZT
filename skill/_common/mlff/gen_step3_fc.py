@@ -1,384 +1,114 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""gen_step3_fc.py —— 拟合 fc2/fc3 → 声子谱 → 虚频闸（step3_fc）。
+"""gen_step3_fc.py —— kl-mlff S3_fc：拟合力常数（共享 fit-fc-thermal 引擎）。
 
-run: gen —— 登录节点跑。步骤：
-  1. 从 step2 取位移+力（优先 phono3py_params.yaml；没有就 phono3py_disp.yaml + FORCES_FC3）
-  2. 可选 NAC：MACE **给不出 Born 有效电荷和 ε∞**（势里没有电荷响应），所以这里只能
-     用外部 BORN 文件。有 kl-dft-cpu 技能算过 step3_nac 的同一材料，把那份 BORN 的路径填进
-     NAC_BORN 即可；极性材料不加 NAC，Γ 点 LO-TO 劈裂缺失，光学支和高温 κ 会偏。
-  3. 拟合力常数：findiff → --sym-fc；random → --fc-calc symfc（退回 alm）
-  4. 声子谱 → band-dft-cpu.yaml → 取最小频率
-  5. 写 phonon_summary.json："stable": true 才放行 step4（判据 marker）
+把 step2_disp_force 的位移+力数据集交给共享引擎 _common/fcfit/gen_step1_fit，
+写 fit_config.json + submit.sh；计算节点跑 fc_fit_driver.py prep|fit|post。
+产出 step3_fc/{fc2,fc3}.hdf5 + phonon_summary.json + shengbte/（虚频闸 marker）。
 
-虚频这一关对 MLIP 尤其要认真看：基座模型（mace-mp 等）在训练分布外的体系上，
-软模判断经常不可信。出虚频先别急着说材料不稳定，按 README 的排查顺序走一遍。
+导入模式（跨技能复用）：检测到推送来的 kl_bundle/（或 FC_IMPORT_DIR）→ 装配
+step3_fc 布局、跳过拟合（见 reuse_fcfit.py）。
 """
-import json
-import re
 import shutil
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-import klmlff_common as kc
-import stepconf
+# 共享引擎（_common/fcfit）+ stepconf/dim_common（_common/opt）+ _common
+_base = Path(__file__).resolve().parent.parent
+for _d in (_base / "fcfit", _base / "opt", _base):
+    if _d.is_dir() and str(_d) not in sys.path:
+        sys.path.append(str(_d))
+
+import gen_step1_fit as g1  # noqa: E402
+import stepconf             # noqa: E402
 
 OUTDIR = "step3_fc"
 STEP = "step3_fc"
 SRC = "step2_disp_force"
 
-SPEC = {
-    # ---- 全局 ----
+# 共享引擎的参数面 + 本技能独有键。MACE_MODEL/DEVICE/DTYPE 本步不用，但全局
+# step.conf 里有它们（step1/step2 用），声明出来避免 strict=warn 的未知键告警。
+SPEC = dict(g1.SPEC)
+SPEC.update({
     "MACE_MODEL": ("mace-mp:medium", "str"),
     "MACE_MODEL_DIR": ("", "str"),
     "DEVICE": ("auto", "str"),
     "DTYPE": ("float64", "str"),
-    "CONDA_SH": (kc.DEFAULT_CONDA_SH, "str"),
-    "CONDA_ENV": (kc.DEFAULT_CONDA_ENV, "str"),
-    # ---- 本步 ----
-    "BAND_POINTS": (101, "int"),
-    "IMAG_THR": (0.10, "float"),      # 虚频阈值(THz)
-    "FIT": ("auto", "str"),           # phono3py 拟合器：auto | sym-fc | symfc | alm
-    "NAC_BORN": ("", "str"),          # 外部 BORN 文件路径（DFPT 算的），空=不加 NAC
-    # ---- 拟合软件（FIT_SOFTWARE）----
-    "FIT_SOFTWARE": ("phono3py", "str"),  # phono3py（symfc/alm）| pheasy
-    "PHEASY_METHOD": ("OLS", "str"),      # pheasy 拟合方法：OLS | LASSO | RFE-OLS | RFE-OLS-TSQR | ARDR | RVM
-    "PHEASY_C3_CUTOFF": ("6.0", "str"),   # pheasy 三阶截断(Å)；None/空=不截断
-    "PHEASY_BIN": ("pheasy-gpu", "str"),    # pheasy-gpu（CPU 版 pheasy 已移除）
-    # 旋转不变性/平衡条件（RASR）：auto = 2D 用 BHH、3D 不加。对 2D 是硬要求——
-    #   不加则 ZA 近 Γ 线性化甚至出虚频（频率可能全为正、能过虚频闸，但 κ 是错的）。
-    #   ★ 只在 pheasy 的 -c（零空间构造）步生效；-f 读 ns_*.npz，--rasr 放 -f 上无效。
-    "PHEASY_RASR": ("auto", "str"),
-}
-
-
-_RASR_VALUES = ("BHH", "BH", "H")
-
-
-def _resolve_rasr(val, dim):
-    """PHEASY_RASR：auto → 2D=BHH / 3D=none；显式值原样（none/off/false/0 → 不传开关）。
-
-    与 kl-dft-cpu/gen_step5_fc.py 的同名函数保持同一套语义（那边是 DFT 拟合链，
-    这里是 MACE 拟合链），两条链的 2D 行为必须一致。pheasy 的 --rasr choices 只有
-    BH/H/BHH，"none" 不是一个能传的值 —— 关掉就是不传这个开关。
-    """
-    v = str(val if val is not None else "auto").strip().upper()
-    if v == "AUTO":
-        return "BHH" if dim == "2d" else "none"
-    if v in _RASR_VALUES:
-        return v
-    if v in ("NONE", "OFF", "FALSE", "F", "0", ""):
-        return "none"
-    sys.exit("[ERROR] PHEASY_RASR=%r 非法：只允许 auto | BHH | BH | H | none" % val)
-
-
-def parse_min_freq(band_yaml):
-    p = Path(band_yaml)
-    if not p.is_file():
-        return None
-    fr = [float(m.group(1))
-          for ln in p.read_text(errors="ignore").splitlines()
-          for m in [re.match(r"\s*frequency:\s*(-?[\d.Ee+]+)", ln)] if m]
-    return min(fr) if fr else None
-
-
-# 虚频闸用 phonopy API（对照 kl-dft-cpu 的 _stability_gate）：phono3py-load 3.x 的
-# `--band-dft-cpu auto` 不再产出 band-dft-cpu.yaml（只写 phono3py.yaml 摘要），所以这里直接
-# 读 symfc 拟合好的 fc2.hdf5 → Phonopy run_mesh 取 q-mesh 最小频率，再 best-effort
-# 出 band-dft-cpu.yaml 存档。stdout 打 `MIN_FREQ_THZ <值>` 供外层解析。
-_PHONON_GATE = r'''import numpy as np, os, h5py
-import phono3py
-from phono3py.file_IO import read_fc2_from_hdf5
-from phonopy import Phonopy
-
-import json
-from pathlib import Path
-cfg = json.loads(Path("fit_config.json").read_text())
-use_nac = bool(cfg.get("nac", False))
-yaml = cfg["yaml"]
-ph3 = phono3py.load(yaml, produce_fc=False, is_nac=use_nac, log_level=0)
-scm = ph3.phonon_supercell_matrix
-if scm is None:
-    scm = ph3.supercell_matrix
-uc, pm = ph3.unitcell, ph3.primitive_matrix
-try:
-    fc2 = np.asarray(read_fc2_from_hdf5(filename="fc2.hdf5"))
-except Exception:
-    # phono3py symfc 路径把 fc2 写成 phonopy full 格式（'force_constants'，无 'fc2'）
-    with h5py.File("fc2.hdf5", "r") as _h:
-        fc2 = np.asarray(_h["force_constants"][()])
-ph = Phonopy(uc, supercell_matrix=scm, primitive_matrix=pm)
-ph.force_constants = fc2
-if use_nac:
-    if ph3.nac_params is None:
-        raise RuntimeError("NAC requested but Born parameters could not be loaded")
-    ph.nac_params = ph3.nac_params
-ph.run_mesh(mesh=60.0, with_eigenvectors=False, is_mesh_symmetry=True)
-mf = float(np.min(ph.get_mesh_dict()["frequencies"]))
-print("MIN_FREQ_THZ %.6f" % mf)
-try:
-    ph.auto_band_structure(plot=False, write_yaml=True, filename="band-dft-cpu.yaml")
-except Exception:
-    pass
-'''
-
-
-# pheasy 拟合（FIT_SOFTWARE=pheasy）：从 phono3py_params.yaml 抽出随机位移+力 →
-# 写 POSCAR/SPOSCAR/dataset_disps.npy/dataset_forces.npy → 四步 pheasy CLI
-# (-s cluster space / -c 对称约束 / -d 位移矩阵 / -f 拟合) → fc2.hdf5/fc3.hdf5。
-# 对照 user 的通用 pheasy 脚本：float64、LASSO 走 celer + --std。
-# 参数：拟合方法(OLS|LASSO|RFE-OLS|RFE-OLS-TSQR) 三阶截断(Å) RASR(none|BHH|BH|H)
-#   RASR 由 gen 按 DIM 解析后传进来（2D→BHH，3D→none），只挂 -c 步并校验施加日志。
-def _norm_pheasy_method(value):
-    """Canonical spelling of a pheasy method name (upper case, no spaces)."""
-    return str(value or "OLS").strip().upper().replace(" ", "")
-
-
-_PHEASY_FIT = r'''import os, re, sys, subprocess
-import numpy as np
-import phono3py
-from phonopy.interface.vasp import write_vasp
-
-method = str(sys.argv[1] if len(sys.argv) > 1 else "OLS").strip().upper()
-c3 = sys.argv[2] if len(sys.argv) > 2 else "6.0"
-# RASR 由 gen 按 DIM 解析后传入（2D=BHH / 3D=none）；缺省 none 保持旧行为。
-rasr = (sys.argv[3].strip().upper() if len(sys.argv) > 3 else "") or "NONE"
-if rasr not in ("NONE", "BHH", "BH", "H"):
-    sys.exit("[ERROR] rasr 参数非法: %r（none|BHH|BH|H）" % rasr)
-rflag = "" if rasr == "NONE" else " --rasr %s" % rasr
-
-yaml = "phono3py_params.yaml" if os.path.isfile("phono3py_params.yaml") else "phono3py_disp.yaml"
-ph3 = phono3py.load(yaml, produce_fc=False, log_level=0)
-write_vasp("POSCAR", ph3.unitcell, direct=True)
-write_vasp("SPOSCAR", ph3.supercell, direct=True)
-ds = ph3.dataset
-disps = np.asarray(ds["displacements"], float)
-forces = np.asarray(ds["forces"], float)
-nsc = disps.shape[1]
-ndata = len(disps)
-# pheasy 的 -d/--disp_file 读 disp_matrix.pkl、-f 读 force_matrix.pkl
-# （对照通用脚本步骤1的 pickle 输出：cartesian 位移 + 已扣平衡帧的力）。
-import pickle
-pickle.dump(disps, open("disp_matrix.pkl", "wb"))
-pickle.dump(forces, open("force_matrix.pkl", "wb"))
-dim = " ".join(str(int(x)) for x in np.diag(ph3.supercell_matrix))
-
-env = dict(os.environ)
-env.update({
-    "PHEASY_SM_DTYPE": "float64",
-    "PHEASY_SM_THR": "1e-12",
-    "PHEASY_ASR_SPARSE": "1",
-    "PHEASY_ASR_SPARSE_THR": "1e-10",
-    "PHEASY_ASR_COL_BLOCK": "5000",
-    "PHEASY_ASR_COMBINED": "1",
-    "PHEASY_NS_RANK_TOL": "1e-6",
-    "PHEASY_USE_CELER": "1" if method in ("LASSO", "RFE-OLS", "RFE-OLS-TSQR") else "0",
-    # pheasy-gpu 的 CLI LASSO backend 是 CUDA FISTA；只有在显存不足时
-    # 才由内部策略回退到 CPU 迭代器。不要强制关闭 GPU。
-    "PHEASY_GPU_LASSO": "1" if method == "LASSO" else "0",
-    "PHEASY_USE_GPU": "1",
-    "PHEASY_LASSO_DEBIAS": "1" if method == "LASSO" else "0",
+    # MACE 给不出 Born 有效电荷：外部 DFPT 的 BORN 文件路径（空=不加 NAC）。
+    "NAC_BORN": ("", "str"),
+    # —— 由 fit-fc-thermal 产物导入（跨技能复用 fc2/fc3，对齐 kl-dft-cpu S5_fc）——
+    "FC_IMPORT_DIR": ("", "str"),
+    "FC_IMPORT_SUPERCELL": ("", "str"),
+    "FC_IMPORT_DIM": ("", "str"),
+    "FC_IMPORT_MESH": ("", "str"),
 })
-
-cflag = "" if c3 in ("None", "none", "") else "--c3 %s" % c3
-bin = os.environ.get("PHEASY_BIN", "pheasy-gpu")
-fit = ("%s --dim %s -w 3 -f %s --ndata %d --eps 0.001 -l %s --hdf5"
-       % (bin, dim, cflag, ndata, method))
-if method == "LASSO":
-    fit += " --std --mu_min -8 --mu_max -2 --max_iter 2000 --cv 5 --nmu 10 --tol 0.0001"
-elif method in ("RFE-OLS", "RFE-OLS-TSQR"):
-    fit += " --mu_min -8 --mu_max -5 --max_iter 1000 --cv 5 --nmu 5 --tol 0.001"
-elif method in ("ARDR", "RVM"):
-    fit += " --std"
-elif method == "RIDGE":
-    fit += " --std --mu_min -8 --mu_max -2 --max_iter 2000 --cv 5 --nmu 10 --tol 0.0001"
-steps = [
-    ("-s", "%s --dim %s -w 3 -s %s --eps 0.001" % (bin, dim, cflag)),
-    ("-c", "%s --dim %s -w 3 -c %s --eps 0.001%s" % (bin, dim, cflag, rflag)),
-    ("-d", "%s --dim %s -w 3 -d %s --ndata %d --disp_file --eps 0.001"
-     % (bin, dim, cflag, ndata)),
-]
-for _tag, s in steps:
-    print("[pheasy]", s, flush=True)
-    # 捕获输出：-c 步要留日志做 RASR 守卫（原来直接继承 stdout，看不到内容）
-    r = subprocess.run(s, shell=True, env=env, capture_output=True, text=True)
-    _out = (r.stdout or "") + (r.stderr or "")
-    sys.stdout.write(_out)
-    if r.returncode != 0:
-        sys.exit("[ERROR] pheasy 步骤失败(rc=%d): %s" % (r.returncode, s))
-    if _tag == "-c" and rflag:
-        # RASR 守卫：要求施加旋转不变性/平衡条件却没在 -c 输出里看到施加记录 → 硬失败。
-        #   2D 的 ZA 是否为 ω∝q² 全靠这一步；失效时频率可能仍然全为正、能过虚频闸，
-        #   但 κ 是错的，下游看不出来，所以必须在源头拦住。
-        open("pheasy_c.log", "w").write(_out)
-        if not re.search(r"Imposing rotational invariance|Imposing equilibrium conditions", _out):
-            sys.exit("[ERROR] RASR=%s 但 pheasy -c 没有施加记录（见 pheasy_c.log）——"
-                     "ZA 近 Γ 会线性化/出虚频，κ 不可信。先确认环境里的 pheasy 支持 --rasr。"
-                     % rasr)
-        print("[OK] RASR=%s 已在零空间构造步(-c)施加" % rasr, flush=True)
-
-# 拟合步：捕获输出，做 LASSO alpha 边界门禁（对照通用脚本 LASSO_GATE_ON_BOUNDARY）
-print("[pheasy]", fit, flush=True)
-r = subprocess.run(fit, shell=True, env=env, capture_output=True, text=True)
-sys.stdout.write(r.stdout or "")
-if r.stderr:
-    sys.stderr.write(r.stderr or "")
-if r.returncode != 0:
-    sys.exit("[ERROR] pheasy 拟合失败(rc=%d): %s" % (r.returncode, fit))
-if method in ("LASSO", "ALASSO"):
-    # 质量门改读 pheasy 的 fit_manifest.json（与 fit-fc-thermal/fc_fit_driver.py 同口径）：
-    # 不再拿 log10(alpha*) 去比硬编码的 [mu_min, mu_max] —— alpha 自动选时那对参数
-    # 对 LASSO/ALASSO 本就无效，而且分不清“真卡网格下沿”和“数据本就不需要 L1”。
-    import json as _json
-    _res = {}
-    if os.path.isfile("fit_manifest.json"):
-        try:
-            _res = (_json.load(open("fit_manifest.json", encoding="utf-8")).get("results") or {})
-        except Exception as _e:
-            print("[WARN] fit_manifest.json 不可读(%s)，按缺失处理" % _e)
-    if "cv_selection" not in _res:
-        # 老版 pheasy（< 35c0467）没做每折 alpha->0 的 OLS 参照：alpha* 落在网格最小值和
-        # “数据不需要 L1”无法区分。这个“缺失”本身就是红旗 —— 要求升级后重算
-        # （与 fit-fc-thermal/fc_fit_driver.py 完全一致）。
-        print("[GATE] fit_manifest.json 无 cv_selection：pheasy 过旧（< 35c0467），"
-              "无法认证 LASSO/ALASSO 选型；请升级 pheasy 后重算。")
-        open(".fit_gate_fail", "a").write("pheasy too old: no cv_selection in fit_manifest.json\n")
-    elif _res.get("cv_selected_ols_limit"):
-        print("[OK] CV 选到精确 OLS 极限(alpha->0)：数据不需要 L1 惩罚，交付拟合即 OLS。")
-    elif _res.get("alpha_at_grid_edge"):
-        print("[GATE] alpha* 卡在网格边界且 CV 曲线仍在下降 —— LASSO 选型无效，"
-              "建议加大 N_RANDOM/OVERSAMPLE 或加宽 alpha 网格。")
-        open(".fit_gate_fail", "a").write("alpha on grid boundary\n")
-
-for f in ("fc2.hdf5", "fc3.hdf5"):
-    if not os.path.isfile(f):
-        sys.exit("[ERROR] pheasy 未产出 %s" % f)
-print("PHEASY_DONE dim=%s ndata=%d method=%s rasr=%s" % (dim, ndata, method, rasr))
-'''
-
-
-def stage_inputs(cwd, out):
-    """从 step2 取位移+力。大文件软链，小文件拷。-> 用哪个 yaml。"""
-    src = cwd / SRC
-    if not src.is_dir():
-        sys.exit("[ERROR] 找不到 %s（step2 没跑）" % SRC)
-    for f in ("POSCAR", kc.KL_PARAMS, kc.METHOD_FILE, "phono3py_disp.yaml"):
-        if (src / f).is_file():
-            shutil.copyfile(str(src / f), str(out / f))
-    for f in ("FORCES_FC3", "FORCES_FC2", "phono3py_params.yaml"):
-        if (src / f).is_file():
-            kc.link_or_copy(src / f, out / f)
-
-    if (out / "phono3py_params.yaml").is_file():
-        return "phono3py_params.yaml"
-    if (out / "phono3py_disp.yaml").is_file() and (out / "FORCES_FC3").is_file():
-        return "phono3py_disp.yaml"
-    sys.exit("[ERROR] %s 里既没有 phono3py_params.yaml，也没有 "
-             "phono3py_disp.yaml + FORCES_FC3 —— step2 的取力作业没跑完。" % SRC)
-
-
-def stage_born(out, conf):
-    p = str(conf["NAC_BORN"] or "").strip()
-    if not p:
-        print("[..] NAC_BORN 未设 → 不加 NAC（非极性体系无所谓；极性体系见 README）")
-        return False
-    src = Path(p).expanduser()
-    if not src.is_file():
-        sys.exit("[ERROR] NAC_BORN 指向的文件不存在：%s" % src)
-    shutil.copyfile(str(src), str(out / "BORN"))
-    print("[OK] BORN ← %s（外部 DFPT 结果，MACE 自己给不出 Born 电荷）" % src)
-    return True
 
 
 def main():
     cwd = Path.cwd()
     out = cwd / OUTDIR
     out.mkdir(exist_ok=True)
-    conf = stepconf.load(SPEC, STEP)
+    conf = stepconf.load(SPEC, STEP, strict="warn")
 
-    yaml = stage_inputs(cwd, out)
-    params = kc.read_kl_params(out / kc.KL_PARAMS)
-    method = (params.get("METHOD") or "findiff").lower()
-    use_nac = stage_born(out, conf)
-
-    dim = (params.get("DIM") or "").lower()
-    if dim not in ("2d", "3d"):
-        # klmlff_params 是 step1 写的（DIM 一定有）；真缺了就按结构现判，别把 2D 当 3D 静默放过
+    # ---- fit-fc-thermal 产物导入模式（跨技能复用 fc2/fc3）----
+    _fcimp = str(conf.get("FC_IMPORT_DIR") or "").strip()
+    if _fcimp.lower() in ("off", "false", "0", "no", "none"):
+        _fcimp = ""
+    _bundle = cwd / "kl_bundle"
+    if not _fcimp and _bundle.is_dir() and (_bundle / "fc2.hdf5").is_file():
+        _fcimp = str(_bundle)
+        print("[..] 检测到推送来的 kl_bundle/（fit-fc-thermal 力常数）→ 自动进入导入模式"
+              "（想改为本技能自拟：FC_IMPORT_DIR = off）", flush=True)
+    if _fcimp:
+        _src = Path(_fcimp)
+        if not _src.is_absolute():
+            _src = cwd / _src
+        if not (_src / "fc2.hdf5").is_file() or not (_src / "fc3.hdf5").is_file():
+            sys.exit("[ERROR] FC_IMPORT_DIR=%s 里没有 fc2.hdf5/fc3.hdf5 —— 请指向 "
+                     "fit-fc-thermal 的 step1_fit 产物目录（已拉回/已放到本集群）。" % _src)
+        print("[..] S3_fc 导入模式：从 fit-fc-thermal 产物 %s 装配 step3_fc/（不重拟）" % _src)
+        import reuse_fcfit
+        _dim = str(conf.get("FC_IMPORT_DIM") or "").strip().lower() or None
+        _mesh = str(conf.get("FC_IMPORT_MESH") or "").strip() or None
+        _sc = str(conf.get("FC_IMPORT_SUPERCELL") or "").strip() or None
         try:
-            dim = kc.resolve_dim(cwd / "POSCAR", "auto")[0] if (cwd / "POSCAR").is_file() else ""
-        except Exception:
-            dim = ""
-    rasr = _resolve_rasr(conf["PHEASY_RASR"], dim)
-    print("[..] DIM=%s  PHEASY_RASR=%s → RASR=%s" % (dim or "?", conf["PHEASY_RASR"], rasr))
+            reuse_fcfit.assemble(_src, out, poscar=None, supercell=_sc, dim=_dim,
+                                 mesh=_mesh)
+        except SystemExit:
+            raise
+        except Exception as _e:  # noqa: BLE001
+            sys.exit("[ERROR] 从 fit-fc-thermal 产物装配 step3_fc 失败：%s\n"
+                     "        （生成 phono3py_disp.yaml 需要 phono3py；本机 python=%s）"
+                     % (_e, sys.executable))
+        # 产物已就绪；写一个最小 submit.sh，autozt 收尾时提交的作业是 no-op。
+        (out / "submit.sh").write_text(
+            "#!/bin/bash\n"
+            "# FC_IMPORT_DIR 导入模式：step3_fc/ 已在 gen 阶段装配完成，无需计算。\n"
+            "#SBATCH --job-name=fcimport\n"
+            "#SBATCH --output=queue.out\n"
+            "#SBATCH --error=queue.err\n"
+            "echo \"[S3_fc] imported from fit-fc-thermal; nothing to compute\"\n"
+            "exit 0\n", encoding="utf-8", newline="\n")
+        print("[DONE] step3_fc 已由 fit-fc-thermal 产物装配（导入模式），无需拟合作业")
+        return
 
-    software = str(conf["FIT_SOFTWARE"] or "phono3py").lower()
-    # p_bin 先落默认值：fit_cfg 无论哪种 software 都引用它（此前只在校验分支内赋值，
-    # phono3py 路会 NameError）。PHEASY_BIN 校验对两条路都生效。
-    p_bin = str(conf["PHEASY_BIN"] or "pheasy-gpu").lower()
-    if p_bin != "pheasy-gpu":
-        sys.exit("[ERROR] PHEASY_BIN 只允许 pheasy-gpu（CPU 版 pheasy 已移除）")
-    if software == "pheasy":
-        fc2_sc = params.get("FC2_SUPERCELL", "").split()
-        if fc2_sc and fc2_sc != params.get("SUPERCELL", "").split():
-            sys.exit("[ERROR] pheasy 尚不支持独立 FC2_SUPERCELL；请用 FIT_SOFTWARE=phono3py，避免忽略二阶数据")
-        p_method = _norm_pheasy_method(conf["PHEASY_METHOD"] or "OLS")
-        if p_method not in ("OLS", "LASSO", "RFE-OLS", "RFE-OLS-TSQR", "ARDR", "RVM"):
-            sys.exit("[ERROR] PHEASY_METHOD 只允许 OLS / LASSO / RFE-OLS / RFE-OLS-TSQR / ARDR / RVM")
-        fit = "pheasy-gpu (" + p_method + ")"
-        (out / "_pheasy_fit.py").write_text(_PHEASY_FIT, encoding="utf-8")
-    else:
-        fit = str(conf["FIT"] or "auto").lower()
-        if fit == "auto":
-            fit = "sym-fc" if method == "findiff" else "symfc"
-        if fit not in ("sym-fc", "symfc", "alm"):
-            sys.exit("[ERROR] FIT 只允许 auto / sym-fc / symfc / alm")
-    print("[..] 拟合软件=%s  方法=%s  输入=%s" % (software, fit, yaml))
+    # ---- 数据集默认指向本技能的 step2_disp_force（用户可 FIT_INPUT_DIR 覆盖）----
+    if str(conf.get("FIT_INPUT_DIR") or "auto").strip().lower() == "auto":
+        conf = g1.Overlay(conf, {"FIT_INPUT_DIR": SRC})
 
-    # 虚频闸脚本 + 驱动脚本 + 拟合配置（submit 作业里跑）
-    (out / "_phonon_gate.py").write_text(_PHONON_GATE, encoding="utf-8")
-    here = Path(__file__).resolve().parent
-    if not (here / "fc_fit_driver.py").is_file():
-        sys.exit("[ERROR] 缺 fc_fit_driver.py —— 本步 gen_need 里漏了它？")
-    shutil.copyfile(str(here / "fc_fit_driver.py"), str(out / "fc_fit_driver.py"))
+    # ---- NAC：MACE 给不出 Born，外部 DFPT 的 BORN 拷进数据集目录供 prep 拾取 ----
+    _born = str(conf.get("NAC_BORN") or "").strip()
+    if _born:
+        _bp = Path(_born).expanduser()
+        if not _bp.is_file():
+            sys.exit("[ERROR] NAC_BORN 指向的文件不存在：%s" % _bp)
+        _dst = cwd / SRC / "BORN"
+        _dst.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(str(_bp), str(_dst))
+        print("[OK] BORN <- %s（外部 DFPT 结果，MACE 自己给不出 Born 电荷）" % _bp)
 
-    fit_cfg = {
-        "yaml": yaml,
-        "software": software,
-        "fit": fit,
-        "pheasy_method": _norm_pheasy_method(conf["PHEASY_METHOD"] or "OLS"),
-        "pheasy_bin": p_bin,
-        "pheasy_rasr": rasr,
-        "c3_cutoff": str(conf["PHEASY_C3_CUTOFF"]),
-        "method": method,
-        "imag_thr": float(conf["IMAG_THR"]),
-        "supercell": params.get("SUPERCELL"),
-        "fc2_supercell": params.get("FC2_SUPERCELL"),
-        "nac": use_nac,
-    }
-    (out / "fit_config.json").write_text(
-        json.dumps(fit_cfg, ensure_ascii=False, indent=2), encoding="utf-8", newline="\n")
-
-    # GPU 拟合（FIT_SOFTWARE=pheasy + PHEASY_BIN=pheasy-gpu）走 submit_fc_gpu.tpl（--gres）；
-    # 集群没配该模板 → gen 期报错（pheasy-gpu 需要 GPU 节点，别等排进队才失败）。
-    _kind = ("submit_fc_gpu" if (software == "pheasy" and p_bin == "pheasy-gpu")
-             else "submit_fc")
-    try:
-        tpl = kc.resolve_submit(here, _kind)
-    except SystemExit:
-        if _kind == "submit_fc_gpu":
-            sys.exit("[ERROR] PHEASY_BIN=pheasy-gpu 需要 GPU 拟合模板 submit_fc_gpu.tpl"
-                     "（a800/3090 已配）。\n"
-                     "        当前集群没有 → 把材料 hpc 切到 a800/3090，"
-                     "或放一份集群专用的 submit_fc_gpu.tpl 到 setting/<hpc>/templates/。")
-        raise
-    kc.write_submit(tpl, out / "submit.sh",
-                    {"JOBNAME": kc.new_jobname(cwd, "S3fit"),
-                     "CONDA_SH": conf["CONDA_SH"] or kc.DEFAULT_CONDA_SH,
-                     "CONDA_ENV": conf["CONDA_ENV"] or kc.DEFAULT_CONDA_ENV})
-    stepconf.apply_submit(out / "submit.sh", conf.submit)
-    print("[DONE] %s：submit.sh 就绪（作业跑完写 fc2/fc3.hdf5 + phonon_summary.json）"
-          % OUTDIR)
+    g1.main(conf=conf, outdir=OUTDIR, job_label="S3fit")
 
 
 if __name__ == "__main__":

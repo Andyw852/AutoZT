@@ -59,6 +59,8 @@ import sys
 from pathlib import Path
 
 import numpy as np
+import imag_policy       # 近 Γ 声学支虚频判据唯一真源（_common/imag_policy.py）
+import phonon_stability  # 虚频/ZA 编排唯一真源（_common/phonon_stability.py，import za_2d）
 
 OUTDIR = "step1_fit"
 SB_SUB = "shengbte"
@@ -840,7 +842,7 @@ def cmd_prep(cfg, out):
     #   arrays so a bare .npy/.pkl dataset also works with FIT_ENGINE=phono3py.
     if (n_frames and str(cfg.get("engine") or "").lower() == "phono3py"
             and not (out / "phono3py_params.yaml").is_file()
-            and not (out / "phono3py_disp.yaml").is_file()):
+            and (kind == "vasprun" or not (out / "phono3py_disp.yaml").is_file())):
         try:
             _build_phono3py_params(out, disps, forces, scm)
         except Exception as _e:  # noqa: BLE001
@@ -2354,6 +2356,242 @@ def _wrap_scaled_positions(atoms, eps=1e-9):
 
 
 def _export_shengbte(cfg, out):
+    """Export fc2/fc3 to ShengBTE, then check the set and write CONTROL.
+
+    The force-constant files alone are not runnable: ShengBTE also needs a
+    CONTROL whose natoms/scell agree with them.  _shengbte_finalize derives that
+    CONTROL from the very cells the files were written from and records the
+    checks in shengbte/shengbte_manifest.json."""
+    ok = _export_shengbte_files(cfg, out)
+    if ok:
+        ok = _shengbte_finalize(cfg, out)
+    return ok
+
+
+# ShengBTE layout (Src/input.f90 read2fc / split_index, Test-VASP example):
+#   FORCE_CONSTANTS_2ND  phonopy FORCE_CONSTANTS text for the FULL supercell;
+#                        header ntot must equal natoms * scell(1)*scell(2)*scell(3)
+#                        (e.g. 9 atoms x 3x3x1 -> "81 81"); supercell index =
+#                        ((iatom*nz + iz)*ny + iy)*nx + ix  (x fastest, atom slowest)
+#   FORCE_CONSTANTS_3RD  thirdorder format: atom indices of the UNIT cell (1..natoms)
+#                        plus Cartesian R vectors of the 2nd/3rd atom's cells
+#   CONTROL              &crystal lattvec/positions = that unit cell, scell = the
+#                        supercell of FORCE_CONSTANTS_2ND
+# A "supercell 2ND + unit-cell 3RD/POSCAR" set is therefore the correct one; folding
+# the 2ND file down to the unit cell makes ShengBTE stop with "wrong number of force
+# constants for the specified scell".
+
+
+def _shengbte_scell(uc, sc):
+    """Integer supercell matrix sc = M . uc (rows = lattice vectors)."""
+    m = np.asarray(sc.cell) @ np.linalg.inv(np.asarray(uc.cell))
+    mi = np.rint(m).astype(int)
+    if not np.allclose(m, mi, atol=1e-3):
+        return None
+    return mi
+
+
+def _shengbte_order(uc, sc, dims, tol=1e-3):
+    """perm[k] = row of `sc` that sits at ShengBTE/phonopy supercell index k
+    (x fastest, then y, z, unit-cell atom slowest); None when unmatched."""
+    nx, ny, nz = dims
+    fs = sc.get_scaled_positions(wrap=True)
+    fu = uc.get_scaled_positions(wrap=True)
+    perm = []
+    for ia in range(len(uc)):
+        for iz in range(nz):
+            for iy in range(ny):
+                for ix in range(nx):
+                    want = (fu[ia] + [ix, iy, iz]) / np.array(dims, float)
+                    d = fs - want
+                    d -= np.rint(d)
+                    hit = np.where(np.all(np.abs(d) < tol, axis=1))[0]
+                    if len(hit) != 1:
+                        return None
+                    perm.append(int(hit[0]))
+    if sorted(perm) != list(range(len(sc))):
+        return None
+    return perm
+
+
+def _read_fc2_text(path):
+    lines = Path(path).read_text().split("\n")
+    head = lines[0].split()
+    n = int(head[0])
+    fc = np.zeros((n, n, 3, 3))
+    i = 1
+    for _ in range(n * n):
+        a, b = (int(x) - 1 for x in lines[i].split()[:2])
+        fc[a, b] = [[float(x) for x in lines[i + k].split()[:3]] for k in (1, 2, 3)]
+        i += 4
+    return fc
+
+
+def _write_fc2_text(fc, path):
+    n = fc.shape[0]
+    with open(path, "w") as f:
+        f.write("%d %d\n" % (n, n))
+        for a in range(n):
+            for b in range(n):
+                f.write("%d %d\n" % (a + 1, b + 1))
+                for r in fc[a, b]:
+                    f.write("%22.15f%22.15f%22.15f\n" % tuple(r))
+
+
+def _fc3_text_stats(path):
+    """(number of triplet blocks, largest atom index) of FORCE_CONSTANTS_3RD."""
+    lines = [ln.split() for ln in Path(path).read_text().splitlines()]
+    nblk, i, imax = int(lines[0][0]), 1, 0
+    for _ in range(nblk):
+        while i < len(lines) and not lines[i]:
+            i += 1
+        idx = lines[i + 3]                       # block no., R2, R3, "i j k"
+        imax = max(imax, *(int(x) for x in idx[:3]))
+        i += 4 + 27
+    return nblk, imax
+
+
+def _shengbte_ngrid(cfg, uc):
+    spec = str(cfg.get("shengbte_ngrid") or "auto").split()
+    if len(spec) == 3:
+        return [max(1, int(x)) for x in spec]
+    length = float(spec[0]) if spec and spec[0] not in ("auto", "") else 40.0
+    rec = np.linalg.inv(np.asarray(uc.cell)).T        # rows = b_i / 2pi (1/A)
+    return [max(1, int(round(length * np.linalg.norm(b)))) for b in rec]
+
+
+def _shengbte_born(uc, dims, out):
+    """(epsilon 3x3, born[natoms,3,3]) from BORN, or None."""
+    born = out / "BORN"
+    if not born.is_file():
+        return None
+    try:
+        from phonopy import Phonopy
+        from phonopy.structure.atoms import PhonopyAtoms
+        from phonopy.file_IO import parse_BORN
+        pa = PhonopyAtoms(symbols=uc.get_chemical_symbols(), cell=uc.cell,
+                          scaled_positions=uc.get_scaled_positions())
+        ph = Phonopy(pa, np.diag(dims))
+        nac = parse_BORN(ph.primitive, filename=str(born))
+        if len(nac["born"]) != len(uc):
+            return None
+        return np.asarray(nac["dielectric"]), np.asarray(nac["born"])
+    except Exception as e:
+        print("[WARN] BORN not usable for CONTROL (%s) -- nonanalytic=.false." % e,
+              flush=True)
+        return None
+
+
+def _write_shengbte_control(path, cfg, uc, dims, ngrid, nac):
+    elems = []
+    for s in uc.get_chemical_symbols():
+        if s not in elems:
+            elems.append(s)
+    types = [elems.index(s) + 1 for s in uc.get_chemical_symbols()]
+    t = [float(x) for x in str(cfg.get("shengbte_t") or "300").split()]
+    L = ["&allocations",
+         "        nelements=%d," % len(elems),
+         "        natoms=%d," % len(uc),
+         "        ngrid(:)=%d %d %d" % tuple(ngrid),
+         "&end", "&crystal",
+         "        lfactor=0.1,",                       # lattvec in A -> nm
+         ]
+    for i, v in enumerate(np.asarray(uc.cell)):
+        L.append("        lattvec(:,%d)=%.10f %.10f %.10f," % ((i + 1,) + tuple(v)))
+    L.append("        elements=%s" % " ".join('"%s"' % e for e in elems))
+    L.append("        types=%s," % " ".join(str(x) for x in types))
+    for i, f in enumerate(uc.get_scaled_positions(wrap=True)):
+        L.append("        positions(:,%d)=%.10f %.10f %.10f," % ((i + 1,) + tuple(f)))
+    if nac is not None:
+        eps, born = nac
+        for j in range(3):
+            L.append("        epsilon(:,%d)=%.6f %.6f %.6f," % ((j + 1,) + tuple(eps[:, j])))
+        for a in range(len(uc)):
+            for j in range(3):
+                L.append("        born(:,%d,%d)=%.6f %.6f %.6f,"
+                         % ((j + 1, a + 1) + tuple(born[a][:, j])))
+    L.append("        scell(:)=%d %d %d" % tuple(dims))
+    L += ["&end", "&parameters"]
+    if len(t) == 3:
+        L.append("        T_min=%g, T_max=%g, T_step=%g" % tuple(t))
+    else:
+        L.append("        T=%g" % t[0])
+    L += ["        scalebroad=1.0", "&end", "&flags",
+          "        nonanalytic=%s" % (".TRUE." if nac is not None else ".FALSE."),
+          "        nanowires=.FALSE.", "&end", ""]
+    Path(path).write_text("\n".join(L))
+
+
+def _shengbte_finalize(cfg, out):
+    """Check FORCE_CONSTANTS_2ND/_3RD against the unit cell, put the 2ND file in
+    ShengBTE supercell order when needed, and write CONTROL + a manifest."""
+    sbdir = out / SB_SUB
+    f2, f3 = sbdir / "FORCE_CONSTANTS_2ND", sbdir / "FORCE_CONSTANTS_3RD"
+    man = {"format": "ShengBTE",
+           "layout": {"FORCE_CONSTANTS_2ND": "full supercell (natoms*prod(scell) atoms; "
+                                             "ShengBTE read2fc requires this)",
+                      "FORCE_CONSTANTS_3RD": "unit-cell atom indices + R vectors",
+                      "POSCAR/CONTROL": "unit cell"},
+           "checks": {}, "usable": False}
+    try:
+        uc = _read_poscar(sbdir / "POSCAR")
+        sc = _read_poscar(out / "SPOSCAR")
+        M = _shengbte_scell(uc, sc)
+        if M is None or np.count_nonzero(M - np.diag(np.diag(M))):
+            man["error"] = ("supercell matrix %s is not diagonal -- ShengBTE scell "
+                            "cannot express it" % (None if M is None else M.tolist()))
+            raise ValueError(man["error"])
+        dims = [int(x) for x in np.diag(M)]
+        nat = len(uc)
+        man.update({"natoms": nat, "scell": dims, "supercell_atoms": nat * int(np.prod(dims))})
+        n2 = int(f2.read_text().split(None, 1)[0])
+        man["checks"]["fc2_header"] = n2
+        if n2 != nat * int(np.prod(dims)):
+            man["error"] = ("FORCE_CONSTANTS_2ND has %d atoms, expected natoms*prod(scell)"
+                            " = %d*%d = %d" % (n2, nat, int(np.prod(dims)),
+                                               nat * int(np.prod(dims))))
+            raise ValueError(man["error"])
+        perm = _shengbte_order(uc, sc, dims)
+        if perm is None:
+            man["error"] = "SPOSCAR atoms do not map onto unit cell + scell translations"
+            raise ValueError(man["error"])
+        if perm != list(range(len(sc))):
+            fc = _read_fc2_text(f2)
+            _write_fc2_text(fc[np.ix_(perm, perm)], f2)
+            man["checks"]["fc2_reordered"] = True
+            print("[OK] FORCE_CONSTANTS_2ND re-ordered to ShengBTE supercell order",
+                  flush=True)
+        if f3.is_file():
+            nblk, imax = _fc3_text_stats(f3)
+            man["checks"].update({"fc3_blocks": nblk, "fc3_max_index": imax})
+            if imax > nat:
+                man["error"] = ("FORCE_CONSTANTS_3RD uses atom index %d > natoms %d"
+                                % (imax, nat))
+                raise ValueError(man["error"])
+        ngrid = _shengbte_ngrid(cfg, uc)
+        if str(cfg.get("dim") or "").upper().startswith("2") and \
+                len(str(cfg.get("shengbte_ngrid") or "auto").split()) != 3:
+            # 2D：真空方向（最长晶格矢）只取 1 个 q 点
+            ngrid[int(np.argmax(np.linalg.norm(np.asarray(uc.cell), axis=1)))] = 1
+        nac = _shengbte_born(uc, dims, out)
+        _write_shengbte_control(sbdir / "CONTROL", cfg, uc, dims, ngrid, nac)
+        man.update({"ngrid": ngrid, "nonanalytic": nac is not None, "usable": True,
+                    "control": "CONTROL"})
+        if str(cfg.get("dim") or "").upper().startswith("2"):
+            man["note_2d"] = ("ShengBTE normalises kappa by the full (vacuum) cell "
+                              "volume: rescale by c / thickness for the in-plane value")
+        print("[OK] shengbte/CONTROL written (natoms=%d scell=%s ngrid=%s nonanalytic=%s);"
+              " FC_2ND %d atoms = %d x %d"
+              % (nat, dims, ngrid, nac is not None, n2, nat, int(np.prod(dims))), flush=True)
+    except Exception as e:
+        man.setdefault("error", str(e))
+        print("[WARN] ShengBTE set not runnable: %s" % man["error"], flush=True)
+    (sbdir / "shengbte_manifest.json").write_text(
+        json.dumps(man, ensure_ascii=False, indent=1))
+    return bool(man["usable"])
+
+
+def _export_shengbte_files(cfg, out):
     """Export fc2/fc3 to the ShengBTE text formats.
 
     pheasy already writes FORCE_CONSTANTS_2ND / FORCE_CONSTANTS_3RD from its
@@ -2518,9 +2756,10 @@ def _apply_nac(out, ph):
 
 
 def _stability_gate(cfg, out):
-    """q-mesh minimum frequency.  2D systems use the no-NAC verdict (the 3D
-    Coulomb kernel produces spurious imaginary frequencies near Gamma in a
-    strictly 2D material), matching kl-dft-cpu."""
+    """q-mesh minimum frequency + imag_policy near-Gamma classification (merged
+    from kl-dft-cpu S5_fc).  2D uses the no-NAC verdict (the 3D Coulomb kernel
+    fakes imaginary frequencies near Gamma) and an explicit integer mesh
+    (vacuum axis = 1) so near-Gamma soft modes are not missed."""
     dim = str(cfg.get("dim") or "3d").lower()
     is2d = dim.startswith("2")
 
@@ -2538,10 +2777,29 @@ def _stability_gate(cfg, out):
     except Exception as e:
         return _bad("could not prepare the phonopy input: %s" % e)
 
+    # 2D 真空轴：取最长的原胞格矢（近似 dim_common.detect_dimension；共享引擎不
+    #   携带真空轴）。用于显式整数网格的真空轴设 1 + ZA 面内方向投影。
+    vax = 2
+    if is2d:
+        _cell = np.asarray(uc.cell, float)
+        vax = int(np.argmax(np.linalg.norm(_cell, axis=1)))
+
+    def _mesh_numbers():
+        if not is2d:
+            return None
+        m = [60, 60, 60]
+        m[vax] = 1
+        return m
+
     def _minfreq(with_nac):
         p = _build_phonopy(scm, pm, uc, fc2)
         got = _apply_nac(out, p) if with_nac else False
-        p.run_mesh(mesh=60.0, with_eigenvectors=False, is_mesh_symmetry=True)
+        _mn = _mesh_numbers()
+        if _mn is None:
+            p.run_mesh(mesh=60.0, with_eigenvectors=False, is_mesh_symmetry=True)
+        else:
+            p.run_mesh(mesh=_mn, with_eigenvectors=False, is_mesh_symmetry=True,
+                       is_gamma_center=True)
         return float(np.min(p.get_mesh_dict()["frequencies"])), p, got
 
     try:
@@ -2568,22 +2826,46 @@ def _stability_gate(cfg, out):
         print("[..] band structure skipped (does not affect the verdict): %s" % e,
               flush=True)
 
-    if is2d or mf_nac is None:
-        mf_used, nac_used = mf_nonac, False
-    else:
-        mf_used, nac_used = mf_nac, True
-    thr = float(cfg.get("imag_thr", 0.10))
-    stable = mf_used >= -thr
+    # ---- imag_policy 单一裁判（近 Γ 声学支 warn/fail、区外/光学 fail）----
+    #   只对 mesh 采样（显式整数网格的真空轴分量恒 0，q 范数不受真空轴影响，故
+    #   vac_axis 传 None 即可）。
+    try:
+        md = ph_nonac.get_mesh_dict()
+        freqs = [[float(x) for x in row] for row in md["frequencies"]]
+        qpts = [[float(x) for x in q] for q in md["qpoints"]]
+        imag = imag_policy.classify_imag(freqs, qpts, is2d, None, cfg)
+    except Exception as e:
+        return _bad("imag_policy classify failed: %s" % e)
+
+    # ---- 2D ZA 二次性（P2-2）：只看最小频率不够，ZA 线性化时频率全正也能漏判 ----
+    za = None
+    if is2d:
+        try:
+            za = phonon_stability.za_check(cfg, ph_nonac, vax, is2d)
+            if za is not None and "error" in za:
+                print("[WARN] ZA 二次性检查没跑成（不拦）：%s" % za["error"], flush=True)
+        except Exception as e:
+            print("[WARN] ZA 二次性检查没跑成（不拦）：%s" % e, flush=True)
+
+    stability_verdict, stable = phonon_stability.finalize(imag, za)
+    _za_v = imag_policy.za_verdict(za)
+    mf_used = imag["min_freq_THz"] if imag.get("min_freq_THz") is not None else mf_nonac
+    nac_used = False
     parts = ["min_freq(no-NAC)=%.3f THz" % mf_nonac]
     if mf_nac is not None:
         parts.append("min_freq(NAC)=%.3f THz" % mf_nac)
-    parts.append("verdict uses %s, threshold -%.2f THz"
-                 % ("no-NAC" if not nac_used else "NAC", thr))
+    parts.append("imag_policy=%s/%s" % (imag["verdict"], imag["imag_class"]))
+    if is2d:
+        parts.append("ZA verdict=%s" % _za_v)
     note = "; ".join(parts) + " -> " + ("no significant imaginary frequency"
-                                       if stable else "imaginary frequency present")
+                                        if stable else "imaginary frequency present")
     return {"tool_ok": True, "stable": stable, "min_freq": mf_used,
             "min_freq_nonac": mf_nonac, "min_freq_nac": mf_nac, "nac_used": nac_used,
-            "is_2d": is2d, "status": "stable" if stable else "imaginary", "note": note}
+            "is_2d": is2d, "imag": imag, "za_exponent": za, "za_verdict": _za_v,
+            "stability_verdict": stability_verdict,
+            "status": ("stable" if stable else
+                       ("imaginary" if imag["verdict"] == "fail" else "za_not_quadratic")),
+            "note": note}
 
 
 def _fit_rmse(cfg, out, fc_dir=None, quiet=False):
@@ -2769,6 +3051,10 @@ def cmd_post(cfg, out):
         "shengbte_export": sb_ok,
         "fit_quality_gate_failed": bool(gate_fail),
         "tool_ok": tool_ok,
+        "stability_verdict": g.get("stability_verdict"),
+        "imag": g.get("imag"),
+        "imag_class": (g.get("imag") or {}).get("imag_class"),
+        "min_freq_THz": (g.get("imag") or {}).get("min_freq_THz"),
         "note": g["note"],
     }
     summary.update(rmse)
@@ -2797,7 +3083,16 @@ def cmd_post(cfg, out):
 
 
 # ==========================================================================
-COMMANDS = {"prep": cmd_prep, "fit": cmd_fit, "post": cmd_post}
+def cmd_shengbte(cfg, out):
+    """Re-export / re-check shengbte/ (+ CONTROL) in a finished S1_fit directory
+    without refitting -- e.g. in the fetched result/step1_fit/."""
+    cfg = dict(cfg)
+    cfg["export_shengbte"] = True
+    sys.exit(0 if _export_shengbte(cfg, out) else 1)
+
+
+COMMANDS = {"prep": cmd_prep, "fit": cmd_fit, "post": cmd_post,
+            "shengbte": cmd_shengbte}
 
 
 def main():

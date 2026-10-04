@@ -10,6 +10,18 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import relax_common as R
 
+# [patch_rerun_cascade V153] S1 目录是新建的（rerun）-> 下游 S2/S3/S3b/S3c/S5/S6/S7（及 zt 的 kl 分支）整目录
+#   归档，等 S1 跑完后按新结构重新生成。S1 原地重新生成（已有 OUTCAR）不动下游。必须在 R.run 写文件之前。
+try:
+    for _up in Path(__file__).resolve().parents[:2]:
+        if (_up / "ke_common.py").is_file() and str(_up) not in sys.path:
+            sys.path.insert(0, str(_up))
+    import ke_common as _kc
+except ImportError:
+    print("[WARN] 没有 ke_common.py：S1 重算不会让下游自动重排（skill.yaml 的 gen_need 漏了它？）")
+else:
+    _kc.cascade_on_rerun(Path.cwd(), "step1_opt")
+
 R.run(
     OUTDIR_SINGLE="step1_opt",
     SCRIPT_NAME="gen_step1_std_opt.py",

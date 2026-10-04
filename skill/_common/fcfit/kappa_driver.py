@@ -32,6 +32,7 @@ reference, its mesh is re-checked starting from the converged length.
 import json
 import math
 import shutil
+import subprocess
 import sys
 from pathlib import Path
 
@@ -110,6 +111,7 @@ def _summary(tc, cfg, source_fc, mesh=None):
         "source_fc": source_fc,
         **extra,
         **_two_d_fields(cfg, raw, j),
+        **cfg.get("stability", {}),
     }
 
 
@@ -221,7 +223,50 @@ def _run_bte(out, yaml_name, fc2, fc3, cfg, source_fc, write_kappa, spec=None):
     # axis, so keep the full grid matrix and the q-point count alongside.
     s["mesh_grid_matrix"] = gm
     s["n_qpoints"] = nq
+    s.update(_kappa_symmetry_audit(ph3, s, cfg))
     return s
+
+
+def _kappa_symmetry_audit(ph3, s, cfg):
+    """kl-mlff 的 κ 张量晶系审计（ported）：由原胞空间群定晶系，对 300K 的 3x3 κ
+    张量做对称审计（面内各向同性/对角失配/非对角幅度/行列式秩）。2D 用真空方向投影
+    面内块。失败只记 unavailable，绝不影响 κ 结果。"""
+    try:
+        import spglib
+        from kappa_validation import (crystal_system_from_spacegroup,
+                                      audit_kappa_voigt)
+    except Exception as _e:  # noqa: BLE001
+        return {"kappa_symmetry_audit_unavailable": "import: %s" % _e}
+    prim = ph3.primitive
+    try:
+        sg = spglib.get_spacegroup(
+            (np.asarray(prim.cell, float), np.asarray(prim.scaled_positions, float),
+             np.asarray(prim.numbers, int)), symprec=1e-3)
+        crystal = crystal_system_from_spacegroup(int(sg.split("(")[-1].rstrip(")")))
+    except Exception as _e:  # noqa: BLE001
+        return {"kappa_symmetry_audit_unavailable": "spacegroup: %s" % _e}
+    out = {"crystal_system": crystal, "spacegroup": sg}
+    voigt = s.get("kappa_voigt_xx_yy_zz_yz_xz_xy")
+    if not voigt:
+        return out
+    j = int(np.argmin(np.abs(np.asarray(s["temperatures"], float) - 300.0)))
+    v = [float(x) for x in voigt[j]]
+    plane = None
+    if cfg.get("is_2d"):
+        g = cfg.get("kappa_2d_norm") or {}
+        vax = int(g.get("vac_axis", _vacuum_axis(ph3)))
+        plane = np.asarray(prim.cell, float)[vax]
+    try:
+        aud = audit_kappa_voigt(
+            [v[0], v[1], v[2], v[3], v[4], v[5]], crystal_system=crystal,
+            plane_normal=plane)
+        out["kappa_symmetry_audit_300K"] = {
+            k: aud.get(k) for k in ("eigenvalue_ratio", "diagonal_relative_mismatch",
+                                    "offdiag_relative_magnitude", "determinant_ratio",
+                                    "threshold", "gate", "crystal_system")}
+    except Exception as _e:  # noqa: BLE001
+        out["kappa_symmetry_audit_unavailable"] = "audit: %s" % _e
+    return out
 
 
 def _kappa_at(s, t):
@@ -786,10 +831,175 @@ def compare_methods(out):
 
 
 
+def _shengbte_mesh(out, yaml_name, cfg):
+    """shengbte 只吃对角网格 [n,n,n]。显式 MESH 原样；auto/长度按倒格矢现算对角网格。"""
+    kind, val = _mesh_spec(cfg)
+    if kind == "explicit":
+        return [int(x) for x in val]
+    import phono3py
+    ph3 = phono3py.load(str(out / yaml_name), produce_fc=False, log_level=0)
+    rec = np.linalg.norm(np.linalg.inv(np.asarray(ph3.primitive.cell, float)), axis=0)
+    return [max(1, int(round(float(val) * b))) for b in rec]
+
+
+def _export_shengbte_fc(out):
+    """fc2/fc3.hdf5 → ShengBTE FORCE_CONSTANTS_2ND/3RD（hiphive 转格式，与 kl-mlff 同源）。"""
+    import ase, h5py
+    import phono3py
+    from hiphive import ForceConstants
+    yaml = out / ("phono3py_params.yaml" if (out / "phono3py_params.yaml").is_file()
+                  else "phono3py_disp.yaml")
+    ph3 = phono3py.load(str(yaml), produce_fc=False, log_level=0)
+    prim = ph3.phonon_primitive
+    sc = ph3.supercell
+    with h5py.File(str(out / "fc2.hdf5"), "r") as h:
+        fc2 = np.asarray(h["fc2" if "fc2" in h else "force_constants"][()])
+    # fc3 可能是 compact (n_prim,N,N,3,3,3)：用 fc_fit_driver 的展开（需 phono3py YAML）
+    from fc_fit_driver import _read_fc3_any
+    fc3 = _read_fc3_any(out, prim_dir=out)
+    # 分数坐标 wrap 到 [0,1)：phono3py 的原胞/超胞 scaled_positions 偶尔给出
+    # 0.9999999999907228 这种贴 1.0 的值，hiphive 的 Structure.__init__ 会直接
+    # "bad spos" 拒绝（MnIn2Se4 的 fc3 超胞踩过）——对周期胞 wrap 是无损的。
+    def _wrap(spos):
+        a = np.asarray(spos, float) % 1.0
+        # hiphive 的 Structure.__init__ 按 symprec=1e-6 拒绝 |sp| 或 |1-sp| 贴边的
+        # 坐标：0.9999999999907228（浮点 1.0）会被判 "bad spos"。等价原子就在 0.0，
+        # 把 > 1-1e-5 的值 snap 到 0（模 1 同一物理位置，无损）。
+        return np.where(a > 1.0 - 1e-5, 0.0, a)
+    prim_ase = ase.Atoms(symbols=prim.symbols, cell=prim.cell,
+                         scaled_positions=_wrap(prim.scaled_positions), pbc=True)
+    sc_ase = ase.Atoms(symbols=sc.symbols, cell=sc.cell,
+                       scaled_positions=_wrap(sc.scaled_positions), pbc=True)
+    sc2 = ph3.phonon_supercell
+    if sc2 is None:
+        sc2 = sc
+    sc2_ase = ase.Atoms(symbols=sc2.symbols, cell=sc2.cell,
+                        scaled_positions=_wrap(sc2.scaled_positions), pbc=True)
+    ForceConstants.from_arrays(sc2_ase, fc2_array=fc2).write_to_phonopy(
+        str(out / "FORCE_CONSTANTS_2ND"), format="text")
+    ForceConstants.from_arrays(sc_ase, fc3_array=fc3).write_to_shengBTE(
+        str(out / "FORCE_CONSTANTS_3RD"), prim_ase)
+    print("[OK] FORCE_CONSTANTS_2ND/3RD <- fc2/fc3.hdf5（hiphive 导出）", flush=True)
+
+
+def _shengbte_control(out, cfg, mesh):
+    """写 ShengBTE CONTROL（三声子 RTA，RTA 默认；NAC 有 BORN 才开）。"""
+    from ase.io import read as ase_read
+    from ase.data import chemical_symbols as _cs
+    atoms = ase_read(str(out / "POSCAR"), format="vasp")
+    cell = atoms.cell
+    numbers = atoms.numbers
+    unique = sorted(set(numbers))
+    syms = [_cs[z] for z in unique]
+    kd = {z: i + 1 for i, z in enumerate(unique)}
+    types = [kd[z] for z in numbers]
+    spos = atoms.get_scaled_positions(wrap=True)
+    scm = np.asarray(cfg.get("supercell_matrix") or np.diag([2, 2, 2]), float)
+    scell = [int(x) for x in np.diag(scm)]
+    if np.abs(scm - np.diag(np.diag(scm))).max() > 1e-8:
+        print("[WARN] ShengBTE CONTROL 的 scell 只能对角，非对角超胞矩阵按对角近似", flush=True)
+    ng = [int(x) for x in mesh]
+    L = ["&allocations", "  nelements=%d," % len(unique), "  natoms=%d," % len(atoms),
+         "  ngrid(:)=%d %d %d" % (ng[0], ng[1], ng[2]), "&end", "&crystal",
+         "  lfactor=0.1,"]
+    for r in range(3):
+        L.append("  lattvec(:,%d)=" % (r + 1) + " ".join("%.10f" % cell[r, i] for i in range(3)) + ",")
+    L.append("  elements=" + " ".join('"%s"' % s for s in syms))
+    L.append("  types=" + " ".join(str(t) for t in types) + ",")
+    for idx, p in enumerate(spos):
+        L.append("  positions(:,%d)=" % (idx + 1) + " ".join("%.10f" % x for x in p) + ",")
+    use_nac = bool(cfg.get("nac")) and (out / "BORN").is_file()
+    if use_nac:
+        from phonopy.file_IO import parse_BORN
+        from phonopy.structure.atoms import PhonopyAtoms
+        primitive = PhonopyAtoms(symbols=atoms.get_chemical_symbols(), cell=atoms.cell,
+                                 scaled_positions=spos)
+        nac = parse_BORN(primitive, filename=str(out / "BORN"))
+        if not nac:
+            use_nac = False
+        else:
+            for j in range(3):
+                L.append("  epsilon(:,%d)=" % (j + 1) + " ".join(str(x) for x in nac["dielectric"][:, j]) + ",")
+            for atom, born in enumerate(nac["born"]):
+                for j in range(3):
+                    L.append("  born(:,%d,%d)=" % (j + 1, atom + 1) + " ".join(str(x) for x in born[:, j]) + ",")
+    L.append("  scell(:)=%d %d %d" % (scell[0], scell[1], scell[2]))
+    temps = [float(x) for x in cfg["temperatures"]]
+    L += ["&end", "&parameters",
+          "  T_min=%.1f" % min(temps), "  T_max=%.1f" % max(temps),
+          "  T_step=%.1f" % (temps[1] - temps[0] if len(temps) > 1 else 100.0),
+          "  scalebroad=%s" % float(cfg.get("shengbte_scalebroad", 1.0)), "&end",
+          "&flags", "  autoisotopes=%s," % ("T" if cfg.get("isotope", True) else "F"),
+          "  convergence=F,", "  nonanalytic=%s," % ("T" if use_nac else "F"),
+          "  nanowires=F,", "&end"]
+    (out / "CONTROL").write_text("\n".join(L) + "\n", encoding="utf-8", newline="\n")
+    print("[OK] CONTROL <- %s（网格 %s，NAC=%s）" % ("CONTROL", " ".join(str(x) for x in ng), use_nac), flush=True)
+
+
+def _prepare_shengbte(cfg, out):
+    """SOLVER=shengbte 准备步：fc2/fc3 → FORCE_CONSTANTS_2ND/3RD + CONTROL。"""
+    _export_shengbte_fc(out)
+    mesh = _shengbte_mesh(out, cfg["disp_yaml"], cfg)
+    _shengbte_control(out, cfg, mesh)
+    return mesh
+
+
+def _collect_shengbte(cfg, out, mesh):
+    """SOLVER=shengbte 汇总步：解析 BTE.KappaTensorVsT_RTA → kappa_summary.json。"""
+    f = out / "BTE.KappaTensorVsT_RTA"
+    if not f.is_file():
+        sys.exit("[ERROR] ShengBTE 没产出 BTE.KappaTensorVsT_RTA（看 shengbte.log）")
+    rows = [l.split() for l in f.read_text(encoding="utf-8").splitlines()
+            if l.strip() and not l.lstrip().startswith("#")]
+    if not rows:
+        sys.exit("[ERROR] BTE.KappaTensorVsT_RTA 是空的")
+    temperatures = [float(r[0]) for r in rows]
+    raw = [[float(r[1]), float(r[5]), float(r[9])] for r in rows]
+    j = min(range(len(temperatures)), key=lambda i: abs(temperatures[i] - 300.0))
+    s = {"KAPPA_DONE": True, "solver": "shengbte", "mesh": " ".join(str(x) for x in mesh),
+         "temperatures": temperatures, "kappa_xx_yy_zz": raw,
+         "kappa_300K_xx_yy_zz": raw[j], "kappa_inplane_300K": 0.5 * (raw[j][0] + raw[j][1]),
+         "bte_method": "rta", "isotope": bool(cfg.get("isotope", True)),
+         "nac": bool(cfg.get("nac")) and (out / "BORN").is_file(),
+         **cfg.get("stability", {})}
+    (out / "kappa_summary.json").write_text(
+        json.dumps(s, indent=2, ensure_ascii=False), encoding="utf-8", newline="\n")
+    print("[DONE] shengbte κ：300K in-plane %.4f W/mK -> kappa_summary.json"
+          % s["kappa_inplane_300K"], flush=True)
+
+
+def cmd_shengbte(cfg, out):
+    """SOLVER=shengbte 单步兜底（本地冒烟 / 无 submit 模板）：准备 → mpirun → 汇总。
+
+    正式计算走 submit_shengbte_fcfit.tpl：准备/汇总在 submit 脚本里分两次调用
+    kappa_driver.py（--prepare-shengbte / --collect-shengbte），中间的 ShengBTE 由
+    mpirun 带全套 MPI/OMP/BLIS/AOCL/UCX 加速参数直接启动（见
+    setting/<hpc>/templates/ 或 _common/fcfit/templates/submit_shengbte_fcfit.tpl）。
+    本函数只保留给本地无 SLURM 的冒烟，不能代表正式作业的并行布局。"""
+    mesh = _prepare_shengbte(cfg, out)
+    exe = str(cfg.get("shengbte_exe") or "ShengBTE")
+    nt = str(cfg.get("shengbte_ntasks") or "auto").strip()
+    run = exe
+    if nt and nt.lower() != "auto":
+        try:
+            run = "mpirun -n %d %s" % (int(nt), exe)
+        except ValueError:
+            pass
+    print("[..] ShengBTE（单步兜底）: %s" % run, flush=True)
+    rc = subprocess.run(run, shell=True, cwd=str(out)).returncode
+    if rc != 0:
+        sys.exit("[ERROR] ShengBTE 失败（rc=%d），看 %s/shengbte.log" % (rc, out))
+    _collect_shengbte(cfg, out, mesh)
+
+
 def main():
     out = Path.cwd()
     cfg = json.loads((out / "kappa_config.json").read_text(encoding="utf-8"))
+    if str(cfg.get("solver") or "phono3py").strip().lower() == "shengbte":
+        cmd_shengbte(cfg, out)
+        return
     yaml_name = cfg["disp_yaml"]
+
 
     if cfg.get("scan") and cfg.get("cut_scans"):
         # 收敛顺序（2026-10-02 用户定，文献通行做法）：
@@ -901,8 +1111,23 @@ def main():
               flush=True)
 
 
+def _load_cfg():
+    return json.loads((Path.cwd() / "kappa_config.json").read_text(encoding="utf-8"))
+
+
 if __name__ == "__main__":
-    if len(sys.argv) > 1 and sys.argv[1] == "compare":
+    # 子命令（--prepare-shengbte / --collect-shengbte / compare）作为 argv 里的
+    # 标志传入：submit 脚本调用形如 python kappa_driver.py kappa_config.json
+    # --prepare-shengbte，所以按"是否在 argv 里出现"判断，而不是写死 argv[1]。
+    args = sys.argv[1:]
+    if "--prepare-shengbte" in args:
+        out = Path.cwd()
+        _prepare_shengbte(_load_cfg(), out)
+    elif "--collect-shengbte" in args:
+        out = Path.cwd()
+        cfg = _load_cfg()
+        _collect_shengbte(cfg, out, _shengbte_mesh(out, cfg["disp_yaml"], cfg))
+    elif "compare" in args:
         compare_methods(Path.cwd())
     else:
         main()
