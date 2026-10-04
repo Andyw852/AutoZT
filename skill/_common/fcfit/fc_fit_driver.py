@@ -2391,29 +2391,6 @@ def _shengbte_scell(uc, sc):
     return mi
 
 
-def _shengbte_order(uc, sc, dims, tol=1e-3):
-    """perm[k] = row of `sc` that sits at ShengBTE/phonopy supercell index k
-    (x fastest, then y, z, unit-cell atom slowest); None when unmatched."""
-    nx, ny, nz = dims
-    fs = sc.get_scaled_positions(wrap=True)
-    fu = uc.get_scaled_positions(wrap=True)
-    perm = []
-    for ia in range(len(uc)):
-        for iz in range(nz):
-            for iy in range(ny):
-                for ix in range(nx):
-                    want = (fu[ia] + [ix, iy, iz]) / np.array(dims, float)
-                    d = fs - want
-                    d -= np.rint(d)
-                    hit = np.where(np.all(np.abs(d) < tol, axis=1))[0]
-                    if len(hit) != 1:
-                        return None
-                    perm.append(int(hit[0]))
-    if sorted(perm) != list(range(len(sc))):
-        return None
-    return perm
-
-
 def _read_fc2_text(path):
     lines = Path(path).read_text().split("\n")
     head = lines[0].split()
@@ -2551,13 +2528,16 @@ def _shengbte_finalize(cfg, out):
                             " = %d*%d = %d" % (n2, nat, int(np.prod(dims)),
                                                nat * int(np.prod(dims))))
             raise ValueError(man["error"])
-        perm = _shengbte_order(uc, sc, dims)
-        if perm is None:
-            man["error"] = "SPOSCAR atoms do not map onto unit cell + scell translations"
-            raise ValueError(man["error"])
-        if perm != list(range(len(sc))):
-            fc = _read_fc2_text(f2)
-            _write_fc2_text(fc[np.ix_(perm, perm)], f2)
+        # 判定+重排都交给 fc_common（按力常数的平移不变性判断文件现在是哪种顺序，
+        # 幂等：已是 ShengBTE 顺序的文件——pheasy 原生输出、新版导出、重复补导——不会被
+        # 再次打乱；kappa_driver / kl-mlff S4 用的是同一个函数）
+        _here = str(Path(__file__).resolve().parent)       # fc_common.py 与本脚本同目录
+        if _here not in sys.path:
+            sys.path.insert(0, _here)
+        from fc_common import shengbte_fc2_ensure_order_files
+        od = shengbte_fc2_ensure_order_files(f2, sbdir / "POSCAR", out / "SPOSCAR")
+        man["checks"]["fc2_order"] = od["action"]
+        if od["action"] == "reordered":
             man["checks"]["fc2_reordered"] = True
             print("[OK] FORCE_CONSTANTS_2ND re-ordered to ShengBTE supercell order",
                   flush=True)
@@ -3088,6 +3068,17 @@ def cmd_shengbte(cfg, out):
     without refitting -- e.g. in the fetched result/step1_fit/."""
     cfg = dict(cfg)
     cfg["export_shengbte"] = True
+    # 从源头（pheasy 原生文件 / fc2/fc3.hdf5）重新导出，不复用 shengbte/ 里的旧文件：
+    # 旧文件可能是老版本按 SPOSCAR 顺序写的，甚至被老版本错误重排过
+    try:
+        import hiphive  # noqa: F401
+        _can_hdf5 = (out / "fc2.hdf5").is_file()
+    except Exception:
+        _can_hdf5 = False
+    for f in ("FORCE_CONSTANTS_2ND", "FORCE_CONSTANTS_3RD"):
+        p = out / SB_SUB / f
+        if p.is_file() and ((out / f).is_file() or _can_hdf5):
+            p.unlink()
     sys.exit(0 if _export_shengbte(cfg, out) else 1)
 
 
