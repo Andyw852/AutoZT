@@ -34,8 +34,10 @@ import numpy as np
 EV_A3_TO_KBAR = 1602.1766208          # eV/Å³ -> kBar
 VASP_ORDER = ("XX", "YY", "ZZ", "XY", "YZ", "ZX")
 INPLANE = (0, 1, 3)                   # VASP 顺序里的 XX YY XY
-MATCH_TOL = 0.05                      # 复现 VASP 离子项的相对误差上限
+MATCH_TOL = 0.05                      # 复现 VASP 离子项的相对误差上限（Frobenius）
 TRANS_OVERLAP = 0.9
+VASP_TO_THZ = 15.633302               # sqrt(eV/Å²/amu) -> THz
+FREQ_TOL = 0.03                       # 力常数换算出的频率 vs OUTCAR 频率（|f|>1 THz 的模，中位相对误差）
 _LABEL = re.compile(r"^(\d+)([XYZxyz])$")
 _FLOAT = re.compile(r"^[-+]?(\d+\.?\d*|\.\d+)([eEdD][-+]?\d+)?$")
 
@@ -180,6 +182,19 @@ def _iter_end(ET, fh):
             el.clear()
 
 
+def _outcar_freqs(txt, n):
+    """OUTCAR 的 Γ 点振动频率（THz，虚频取负），取第一套 3n 个；没有 -> None。"""
+    out = {}
+    for m in re.finditer(r"^\s*(\d+)\s+f(/i)?\s*=\s*([\d.]+)\s+THz", txt, re.M):
+        i = int(m.group(1))
+        if i in out:
+            if len(out) >= 3 * n:
+                break
+            continue
+        out[i] = -float(m.group(3)) if m.group(2) else float(m.group(3))
+    return np.array([out[i] for i in sorted(out)]) if len(out) == 3 * n else None
+
+
 def parse_outcar(path):
     """S6 目录的 OUTCAR（+ 同目录 vasprun.xml）-> 拆解要的全部输入；力常数与内应变给出所有候选，交给 decompose
     用"复现 VASP 离子项"来选。"""
@@ -191,6 +206,7 @@ def parse_outcar(path):
         raise ValueError("OUTCAR 里没有 NIONS / volume of cell")
     n = int(mn.group(1))
     k_cands = []
+    mass = None
     s, labels = _second_derivatives(txt, n)
     if s is not None:
         want = ["%d%s" % (a + 1, ax) for a in range(n) for ax in "XYZ"]
@@ -200,7 +216,7 @@ def parse_outcar(path):
     vr = next((path.with_name(x) for x in ("vasprun.xml", "vasprun.xml.gz") if path.with_name(x).is_file()),
               path.with_name("vasprun.xml"))
     if vr.is_file():
-        h, mass = _vasprun_hessian(vr, n)
+        h, mass = _vasprun_hessian(vr, n)                   # mass 也给频率核对用
         if h is not None:
             if mass is not None:
                 k_cands.append(("vasprun hessian × √(m_i m_j)", h * np.sqrt(np.outer(mass, mass))))
@@ -223,7 +239,8 @@ def parse_outcar(path):
     if ionic is None:                                       # VASP 6 不单独打印：TOTAL − 刚性离子
         ionic, src = total - clamped, "TOTAL − SYMMETRIZED"
     return {"n": n, "volume": float(vols[-1]), "k_cands": k_cands, "lam_cands": lam_cands,
-            "clamped": clamped, "ionic": ionic, "ionic_src": src, "total": total}
+            "clamped": clamped, "ionic": ionic, "ionic_src": src, "total": total,
+            "mass": mass, "freqs": _outcar_freqs(txt, n)}
 
 
 def _is_pd(m):
@@ -231,66 +248,131 @@ def _is_pd(m):
     return bool(np.all(np.linalg.eigvalsh(m) > 0))
 
 
-def decompose(d, dim="2d"):
-    n, vol = d["n"], d["volume"]
-    trans = np.zeros((3, 3 * n))
+def _freq_err(k, mass, freqs):
+    """力常数 k（eV/Å²）+ 质量 -> 频率，与 OUTCAR 的频率比（只比 |f| > 1 THz 的模）。拿不到 -> None。"""
+    if mass is None or freqs is None:
+        return None
+    w = np.linalg.eigvalsh(k / np.sqrt(np.outer(mass, mass)))
+    f = np.sort(np.sign(w) * np.sqrt(np.abs(w)) * VASP_TO_THZ)
+    g = np.sort(freqs)
+    sel = np.abs(g) > 1.0
+    if not sel.any():
+        return None
+    return float(np.median(np.abs(f[sel] - g[sel]) / np.abs(g[sel])))
+
+
+def _translations(n):
+    t = np.zeros((3 * n, 3))
     for ax in range(3):
-        trans[ax, ax::3] = 1.0 / np.sqrt(n)
-    scale = max(np.max(np.abs(d["ionic"])), 1e-9)
-    best = None
+        t[ax::3, ax] = 1.0 / np.sqrt(n)
+    return t
+
+
+def _projected(k, lam, vol):
+    """严格去掉均匀平移后的离子项：K 投影到平移的正交补，按本征模求和。-> (离子项, 每模贡献, 本征值, 非平移模下标)"""
+    n3 = k.shape[0]
+    t = _translations(n3 // 3)
+    q = np.eye(n3) - t @ t.T
+    kq = q @ k @ q
+    kq = 0.5 * (kq + kq.T)
+    w, u = np.linalg.eigh(kq)
+    null = np.argsort(-np.sum((t.T @ u) ** 2, axis=0))[:3]
+    keep = np.array([m for m in range(n3) if m not in set(null)])
+    p = u.T @ lam
+    contrib = {int(m): -np.outer(p[m], p[m]) / w[m] * EV_A3_TO_KBAR / vol for m in keep}
+    return sum(contrib.values()), contrib, w, keep
+
+
+def _fit_subspace(dmat, b):
+    """dmat ≈ bᵀ M b（M 对称 3×3）的最小二乘 -> (拟合矩阵, 残差的 Frobenius 范数)。b 为 3×6。"""
+    idx = [(i, j) for i in range(6) for j in range(i, 6)]
+    pairs = [(a, c) for a in range(3) for c in range(a, 3)]
+    a_mat = np.array([[b[a, i] * b[c, j] + (b[c, i] * b[a, j] if a != c else 0.0) for a, c in pairs]
+                      for i, j in idx])
+    y = np.array([dmat[i, j] for i, j in idx])
+    x, *_ = np.linalg.lstsq(a_mat, y, rcond=None)
+    m = np.zeros((3, 3))
+    for (a, c), v in zip(pairs, x):
+        m[a, c] = m[c, a] = v
+    fit = b.T @ m @ b
+    return fit, float(np.linalg.norm(dmat - fit))
+
+
+def decompose(d, dim="2d"):
+    """自检 = 能否复现 VASP 的离子项：
+    ① 精确复现（VASP 求逆时已去掉平移模）；或 ② 差值 VASP − 本工具 完全落在平移子空间里（bᵀMb，M 对称 3×3、6 个自由参数
+    对 21 个独立分量；b = 平移方向上的内应变）—— 即 VASP 多出来的只是平移模的贡献（数值假象，大小取决于 VASP 内部怎么处理
+    近零模，无从也无须精确复现）。两者都不成立 -> 结论不可用（并看差值是不是落在某个软模方向上）。"""
+    n, vol = d["n"], d["volume"]
+    t = _translations(n)
+    vi = d["ionic"]
+    scale = max(float(np.linalg.norm(vi)), 1e-9)
+    tried, best = [], None
     for klab, kraw in d["k_cands"]:
-        s = 0.5 * (kraw + kraw.T)
-        k = s if np.trace(s) > 0 else -s                    # 力常数矩阵对角为正；打印的符号两种都接受
-        w, u = np.linalg.eigh(k)
-        is_t_k = np.sum((trans @ u) ** 2, axis=0) > TRANS_OVERLAP     # 与均匀平移的重叠
+        s_ = 0.5 * (kraw + kraw.T)
+        k = s_ if np.trace(s_) > 0 else -s_                 # 力常数矩阵对角为正；打印的符号两种都接受
+        ferr = _freq_err(k, d.get("mass"), d.get("freqs"))
+        tried.append((klab, ferr))
+        if ferr is not None and ferr > FREQ_TOL:
+            continue
         for llab, lam0 in d["lam_cands"]:
             for f in (1.0, 0.5, 2.0):                       # 剪切列（XY YZ ZX）的约定因子
                 lam = lam0.copy()
                 lam[:, 3:] *= f
-                p = u.T @ lam                               # (3n, 6)
-                contrib = np.array([-np.outer(p[m], p[m]) / w[m] for m in range(3 * n)]) * EV_A3_TO_KBAR / vol
-                # VASP 求逆时可能含平移模（数值上没去掉），也可能已经去掉：两种都试，哪种复现得上就是哪种
-                for incl in (True, False):
-                    full = contrib.sum(axis=0) if incl else contrib[~is_t_k].sum(axis=0)
-                    err = float(np.max(np.abs(full - d["ionic"])) / scale)
-                    if best is None or err < best[0]:
-                        best = (err, f, contrib, incl, w, is_t_k, klab, llab)
-    err, f, contrib, incl, w, is_t, klab, llab = best
-    proj_ionic = contrib[~is_t].sum(axis=0)
-    trans_ionic = contrib[is_t].sum(axis=0)
-    proj_total = d["clamped"] + proj_ionic
+                ours, contrib, w, keep = _projected(k, lam, vol)
+                diff = vi - ours
+                mode, fit, res = "exact", np.zeros((6, 6)), float(np.linalg.norm(diff))
+                # 只用**严格的均匀平移**作基底（b = 平移方向上的内应变 = 它违反平移不变性的那部分）。
+                #   不用 K 的近零本征模：它们和软光学模有混合，投影出来指向软模方向，会把软模的差值也"解释"成平移。
+                basis = t.T @ lam
+                if res / scale > MATCH_TOL and np.linalg.norm(basis) > 1e-6 * max(np.linalg.norm(lam), 1e-12):
+                    fit_t, res_t = _fit_subspace(diff, basis)
+                    if res_t < res:
+                        mode, fit, res = "translation(uniform)", fit_t, res_t
+                rel = res / scale
+                if best is None or rel < best["rel"]:
+                    best = {"rel": rel, "mode": mode, "fit": fit, "ours": ours, "contrib": contrib, "w": w,
+                            "keep": keep, "klab": klab, "llab": llab, "f": f, "ferr": ferr, "diff": diff}
+    if best is None:
+        raise ValueError("所有力常数候选都和 OUTCAR 的振动频率对不上：%s"
+                         % "；".join("%s 频率误差 %s" % (a, "%.0f%%" % (100 * b) if b is not None else "-") for a, b in tried))
     idx = list(INPLANE) if dim == "2d" else list(range(6))
     sub = lambda m: np.asarray(m)[np.ix_(idx, idx)]         # noqa: E731
+    proj_total = d["clamped"] + best["ours"]
     total_pd, proj_pd = _is_pd(sub(d["total"])), _is_pd(sub(proj_total))
-    # 翻负的那个分量：TOTAL 在所查块里最负的对角元
-    diag = [(i, d["total"][i, i]) for i in idx]
-    worst = min(diag, key=lambda x: x[1])[0]
-    nt = [m for m in range(3 * n) if not is_t[m]]
-    top = sorted(nt, key=lambda m: contrib[m][worst, worst])[:3]
+    worst = min(idx, key=lambda i: d["total"][i, i])        # 翻负的那个分量：所查块里最负的对角元
+    contrib, w = best["contrib"], best["w"]
+    top = sorted(contrib, key=lambda m: contrib[m][worst, worst])[:3]
+    # 差值是不是落在某个软模方向上（软模刚度对数值敏感时的另一种解释）
+    soft = None
+    if best["rel"] > MATCH_TOL:
+        for m in sorted(contrib, key=lambda m: w[m])[:5]:
+            pm = contrib[m] / max(abs(contrib[m]).max(), 1e-12)
+            c = float(np.sum(best["diff"] * pm) / max(np.sum(pm * pm), 1e-12))
+            r_ = float(np.linalg.norm(best["diff"] - c * pm)) / scale
+            if soft is None or r_ < soft["rel"]:
+                soft = {"mode": int(m), "eigenvalue_eV_A2": round(float(w[m]), 4), "rel": round(r_, 3)}
     res = {
-        "dim": dim, "n_ions": n, "volume_A3": vol, "shear_factor": f,
-        "reproduce_rel_err": round(err, 4), "reproduced": err <= MATCH_TOL,
-        "vasp_includes_translations": bool(incl),
-        "force_constants_from": klab, "internal_strain_from": llab, "ionic_reference": d["ionic_src"],
-        "n_translation_modes": int(is_t.sum()),
-        "translation_eigenvalues_eV_A2": [round(float(w[m]), 6) for m in range(3 * n) if is_t[m]],
+        "dim": dim, "n_ions": n, "volume_A3": vol, "ionic_reference": d["ionic_src"],
+        "force_constants_from": best["klab"], "internal_strain_from": best["llab"], "shear_factor": best["f"],
+        "freq_check": {a: (round(b, 4) if b is not None else None) for a, b in tried},
+        "match_mode": best["mode"], "reproduce_rel_err": round(best["rel"], 4),
+        "reproduced": best["rel"] <= MATCH_TOL,
         "worst_component": VASP_ORDER[worst],
         "clamped": round(float(d["clamped"][worst, worst]), 2),
-        "vasp_ionic": round(float(d["ionic"][worst, worst]), 2),
-        "translation_part": round(float(trans_ionic[worst, worst]), 2),
-        "other_modes_part": round(float(proj_ionic[worst, worst]), 2),
+        "vasp_ionic": round(float(vi[worst, worst]), 2),
+        "other_modes_part": round(float(best["ours"][worst, worst]), 2),
+        "translation_part": round(float(vi[worst, worst] - best["ours"][worst, worst]), 2),
         "top_other_modes": [{"mode": int(m), "eigenvalue_eV_A2": round(float(w[m]), 5),
                              "contrib_kbar": round(float(contrib[m][worst, worst]), 2)} for m in top],
+        "soft_mode_fit": soft,
         "total_pd": total_pd, "projected_pd": proj_pd,
         "projected_total_vasp_order_kbar": np.round(proj_total, 3).tolist(),
     }
-    vi = d["ionic"][worst, worst]
-    t_share = float(trans_ionic[worst, worst] / vi) if abs(vi) > 1e-9 else 0.0
-    res["translation_share"] = round(t_share, 3)
     if not res["reproduced"]:
         res["verdict"] = "unreliable"
-    elif incl and proj_pd and not total_pd and t_share > 0.5:
-        res["verdict"] = "artifact"
+    elif proj_pd and not total_pd:
+        res["verdict"] = "artifact" if best["mode"] != "exact" else "unstable"
     elif proj_pd:
         res["verdict"] = "ok"
     else:
@@ -329,33 +411,39 @@ def main(argv=None):
                                                     encoding="utf-8")
     c = r["worst_component"]
     print("== %s（%s，%d 原子；%s 块）" % (oc, dim.upper(), r["n_ions"], "面内 XX/YY/XY" if dim == "2d" else "6×6"))
-    print("   复现 VASP 离子弛豫项（%s）：相对误差 %.1f%%%s"
-          % (r["ionic_reference"], 100 * r["reproduce_rel_err"], "" if r["reproduced"] else "  ★ 复现不了"))
-    print("     力常数：%s；内应变：%s；剪切列因子 %g；VASP 求逆时%s平移模"
-          % (r["force_constants_from"], r["internal_strain_from"], r["shear_factor"],
-             "含" if r["vasp_includes_translations"] else "已去掉"))
-    print("   %s：刚性离子 %+.2f，离子弛豫 %+.2f = 平移模 %+.2f（%d 个，本征值 %s eV/Å²）+ 其它模 %+.2f"
-          % (c, r["clamped"], r["vasp_ionic"], r["translation_part"], r["n_translation_modes"],
-             r["translation_eigenvalues_eV_A2"], r["other_modes_part"]))
+    print("   力常数候选与 OUTCAR 振动频率核对：%s"
+          % "；".join("%s %s" % (a, ("%.1f%%" % (100 * b)) if b is not None else "无法核对")
+                     for a, b in r["freq_check"].items()))
+    print("   复现 VASP 离子弛豫项（%s）：%s，残差 %.1f%%%s"
+          % (r["ionic_reference"], {"exact": "直接复现（VASP 已去掉平移模）",
+                                    "translation(uniform)": "差值完全落在平移子空间（均匀平移）"}[r["match_mode"]],
+             100 * r["reproduce_rel_err"], "" if r["reproduced"] else "  ★ 复现不了"))
+    print("     选中：力常数 %s；内应变 %s；剪切列因子 %g" % (r["force_constants_from"], r["internal_strain_from"],
+                                                        r["shear_factor"]))
+    print("   %s：刚性离子 %+.2f，VASP 离子弛豫 %+.2f = 非平移模 %+.2f + 平移方向 %+.2f"
+          % (c, r["clamped"], r["vasp_ionic"], r["other_modes_part"], r["translation_part"]))
     for t in r["top_other_modes"]:
-        print("     其它模 #%d：本征值 %.4f eV/Å²，贡献 %+.2f kBar" % (t["mode"], t["eigenvalue_eV_A2"], t["contrib_kbar"]))
-    print("   扣掉平移模后：%s = %+.2f kBar；%s %s"
+        print("     非平移模 #%d：本征值 %.4f eV/Å²，贡献 %+.2f kBar" % (t["mode"], t["eigenvalue_eV_A2"], t["contrib_kbar"]))
+    print("   扣掉平移方向后：%s = %+.2f kBar；%s %s"
           % (c, r["clamped"] + r["other_modes_part"], "面内 3×3" if dim == "2d" else "6×6",
              "正定" if r["projected_pd"] else "仍不正定"))
     v = r["verdict"]
     if v == "unreliable":
-        print("[ERROR] ★ 复现不了 VASP 自己的离子弛豫项：本工具对 OUTCAR 约定的理解有误，以上结论不可用")
+        sm = r.get("soft_mode_fit")
+        print("[ERROR] ★ 复现不了 VASP 的离子弛豫项：VASP − 本工具 的差值既不是 0，也不落在平移子空间里，以上结论不可用。")
+        if sm and sm["rel"] <= 2 * MATCH_TOL:
+            print("        差值主要落在软模 #%d（本征值 %.4f eV/Å²）方向：软模刚度对数值很敏感，单靠后处理分不清，"
+                  "要更严的 S6（EDIFF 更小 / POTIM 更合适）或 DFPT 复核" % (sm["mode"], sm["eigenvalue_eV_A2"]))
         return 2
     if v == "artifact":
-        print("[OK] 结论：数值假象 —— 翻负的 %.0f%% 来自平移模（均匀平移和应变不耦合，这部分本该是 0）。"
-              "扣掉后的弛豫张量正定，不用重算 S6；投影后的 TOTAL 写在 elastic_ionic_decompose.json"
-              % (100 * r["translation_share"]))
+        print("[OK] 结论：数值假象 —— VASP 离子项里多出的 %+.2f kBar 完全落在平移方向（均匀平移和应变不耦合，这部分本该是 0）。"
+              "扣掉后的弛豫张量正定，不用重算 S6；投影后的 TOTAL 写在 elastic_ionic_decompose.json" % r["translation_part"])
         return 0
     if v == "unstable":
-        print("[WARN] ★ 结论：扣掉平移模仍不正定 —— 真实的内应变耦合（贡献最大的非平移模见上，Born 不稳定或软模），"
+        print("[WARN] ★ 结论：扣掉平移方向仍不正定 —— 真实的内应变耦合（贡献最大的非平移模见上，Born 不稳定或软模），"
               "不可用；重算 S6 不会改变")
         return 1
-    print("[OK] 结论：TOTAL 本来就正定（或扣平移模前后都正定）")
+    print("[OK] 结论：TOTAL 本来就正定（或扣平移方向前后都正定）")
     return 0
 
 

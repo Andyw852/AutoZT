@@ -11,7 +11,9 @@
   C：Λ 的剪切列按 ½ 打印（约定不同）-> 自动定出剪切因子 2，照样复现；
   D：离子项块被篡改 -> 复现不了 -> unreliable（退出码 2）；
   E：VASP 已去掉平移模（离子项 = 非平移模之和）-> 认出来，按真实值判；
-  F：VASP 6 的实际格式（Mo2S3）：OUTCAR 无 SECOND DERIVATIVES / 无离子项块、内应变两段，力常数在 vasprun.xml。
+  F：VASP 6 的实际格式（Mo2S3）：OUTCAR 无 SECOND DERIVATIVES / 无离子项块、内应变两段，力常数在 vasprun.xml；
+     OUTCAR 的振动频率认出 hessian 是质量加权的；
+  G（V156）：VASP 多出的部分落在软光学模方向（不在平移子空间）-> 不可用，点名软模。
 """
 import contextlib
 import io
@@ -84,8 +86,9 @@ def _outcar(k, lmat, ionic, shear_scale=1.0, tamper=False):
         lines += [" %s   " % ax + "".join("%12.5f" % v for v in lm[3 * a + i]) for i, ax in enumerate("xyz")]
         lines.append("")
     ion = ionic.copy()
-    if tamper:
-        ion[3, 3] *= 0.3
+    if tamper:                                             # 平移子空间（这里只有 XY 方向）吸收不了的改动
+        ion[0, 1] += 50.0
+        ion[1, 0] += 50.0
     lines += _block("ELASTIC MODULI CONTR FROM IONIC RELAXATION", ion) + [""]
     lines += _block("TOTAL ELASTIC MODULI", CLAMPED + ion) + [""]
     return "\n".join(lines) + "\n"
@@ -124,6 +127,13 @@ def _vasp6(k, lmat, ionic):
     lines += _block("TOTAL ELASTIC MODULI", CLAMPED + ionic) + [""]
     m = np.repeat(MASS, 3)
     hess = -k / np.sqrt(np.outer(m, m))
+    wd = np.linalg.eigvalsh(k / np.sqrt(np.outer(m, m)))[::-1]            # VASP 从高到低打印
+    lines += [" Eigenvectors and eigenvalues of the dynamical matrix", " " + "-" * 52]
+    for i, v in enumerate(wd):
+        fr = np.sqrt(abs(v)) * E.VASP_TO_THZ
+        lines.append("  %3d %s %11.6f THz %12.6f 2PiTHz %10.4f cm-1 %10.4f meV"
+                     % (i + 1, "f  =" if v >= 0 else "f/i=", fr, 2 * np.pi * fr, fr * 33.356, fr * 4.1357))
+    lines.append("")
     xml = ['<?xml version="1.0" encoding="ISO-8859-1"?>', "<modeling>", " <atominfo>",
            '  <array name="atoms"><set>']
     xml += ["   <rc><c>%s</c><c>%d</c></rc>" % (el, t) for el, t in (("Mo", 1), ("Mo", 1), ("S", 2), ("S", 2))]
@@ -141,7 +151,7 @@ class DecomposeTests(unittest.TestCase):
         rc, r, out, ionic, proj = _run("A")
         self.assertEqual(rc, 0, out)
         self.assertTrue(r["reproduced"], r)
-        self.assertEqual(r["n_translation_modes"], 3)
+        self.assertTrue(r["match_mode"].startswith("translation"), r["match_mode"])
         self.assertEqual(r["worst_component"], "XY")
         self.assertFalse(r["total_pd"])
         self.assertTrue(r["projected_pd"])
@@ -179,6 +189,8 @@ class DecomposeTests(unittest.TestCase):
         r = json.loads((s6 / "elastic_ionic_decompose.json").read_text(encoding="utf-8"))
         self.assertEqual(rc, 0, buf.getvalue())
         self.assertEqual(r["force_constants_from"], "vasprun hessian × √(m_i m_j)")
+        self.assertLess(r["freq_check"]["vasprun hessian × √(m_i m_j)"], 0.01)          # 频率核对认出质量加权
+        self.assertGreater(r["freq_check"]["vasprun hessian（不去质量加权）"], E.FREQ_TOL)
         self.assertEqual(r["internal_strain_from"], "displaced atoms")
         self.assertEqual(r["ionic_reference"], "TOTAL − SYMMETRIZED")
         self.assertEqual(r["verdict"], "artifact")
@@ -198,9 +210,34 @@ class DecomposeTests(unittest.TestCase):
             rc = E.main([str(d), "--dim", "2d"])
         r = json.loads((d / "step6_elastic" / "elastic_ionic_decompose.json").read_text(encoding="utf-8"))
         self.assertEqual(rc, 0)
-        self.assertFalse(r["vasp_includes_translations"])
+        self.assertEqual(r["match_mode"], "exact")
         self.assertTrue(r["reproduced"])
         self.assertEqual(r["verdict"], "ok")
+
+    def test_soft_mode_discrepancy_not_blamed_on_translations(self):
+        """VASP 的离子项比本工具多出的部分落在软光学模方向（软模刚度对数值敏感）-> 不可用，并点名该软模。"""
+        k, lmat, _ionic, _proj = _model("B")
+        rng = np.random.default_rng(3)
+        t = np.zeros((3 * N, 3))
+        for ax in range(3):
+            t[ax::3, ax] = 1.0 / np.sqrt(N)
+        w, u = np.linalg.eigh(k)
+        soft = int(np.argsort(w)[3])                                        # 最软的非平移模（λ=0.05）
+        p = u.T @ lmat
+        vasp = sum(-np.outer(p[m], p[m]) / (w[m] * (0.6 if m == soft else 1.0))
+                   for m in range(3 * N) if m >= 3) * E.EV_A3_TO_KBAR / VOL
+        vasp[0, 0] += rng.normal() * 1e-3
+        d = Path(tempfile.mkdtemp())
+        (d / "step6_elastic").mkdir()
+        (d / "step6_elastic" / "OUTCAR").write_text(_outcar(k, lmat, vasp))
+        with contextlib.redirect_stdout(io.StringIO()) as buf:
+            rc = E.main([str(d), "--dim", "2d"])
+        r = json.loads((d / "step6_elastic" / "elastic_ionic_decompose.json").read_text(encoding="utf-8"))
+        self.assertEqual(rc, 2, buf.getvalue())
+        self.assertEqual(r["verdict"], "unreliable")
+        self.assertIsNotNone(r["soft_mode_fit"])
+        self.assertAlmostEqual(r["soft_mode_fit"]["eigenvalue_eV_A2"], 0.05, places=3)
+        self.assertIn("软模", buf.getvalue())
 
     def test_cannot_reproduce(self):
         rc, r, out, _i, _p = _run("A", tamper=True)
