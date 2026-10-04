@@ -88,7 +88,53 @@ def soc_isym_guard(step_dir):
     return info, w
 
 
-def born_asr_and_crosscheck(txt, ei):
+VAC_GAP_A = 6.0   # 原子沿某晶轴的最大空隙 > 6 Å 即真空方向（2D 板）
+
+
+def vacuum_axes(step_dir):
+    """[V164] POSCAR 里原子沿各晶轴的最大（周期）空隙 > VAC_GAP_A 的轴 = 真空方向。读不了返回 ()。"""
+    for cand in (Path(step_dir) / "POSCAR", Path(step_dir).parent / "POSCAR"):
+        try:
+            ln = cand.read_text(errors="ignore").splitlines()
+            sc = float(ln[1].split()[0])
+            lat = [[float(v) * (sc if sc > 0 else 1.0) for v in ln[2 + i].split()[:3]] for i in range(3)]
+            tok = ln[5].split()
+            if all(t.isdigit() for t in tok):          # VASP4：没有元素行
+                n, i0 = sum(int(t) for t in tok), 6
+            else:
+                n, i0 = sum(int(t) for t in ln[6].split()), 7
+            if ln[i0].strip()[:1] in "sS":             # Selective dynamics
+                i0 += 1
+            cart = ln[i0].strip()[:1] in "cCkK"
+            xyz = [[float(v) for v in ln[i0 + 1 + j].split()[:3]] for j in range(n)]
+        except (OSError, IndexError, ValueError):
+            continue
+        if cart:
+            a1, a2, a3 = lat
+            det = (a1[0] * (a2[1] * a3[2] - a2[2] * a3[1]) - a1[1] * (a2[0] * a3[2] - a2[2] * a3[0])
+                   + a1[2] * (a2[0] * a3[1] - a2[1] * a3[0]))
+            if abs(det) < 1e-12:
+                continue
+            inv = [[(a2[1] * a3[2] - a2[2] * a3[1]) / det, (a1[2] * a3[1] - a1[1] * a3[2]) / det,
+                    (a1[1] * a2[2] - a1[2] * a2[1]) / det],
+                   [(a2[2] * a3[0] - a2[0] * a3[2]) / det, (a1[0] * a3[2] - a1[2] * a3[0]) / det,
+                    (a1[2] * a2[0] - a1[0] * a2[2]) / det],
+                   [(a2[0] * a3[1] - a2[1] * a3[0]) / det, (a1[1] * a3[0] - a1[0] * a3[1]) / det,
+                    (a1[0] * a2[1] - a1[1] * a2[0]) / det]]
+            xyz = [[sum(r[c] * inv[c][i] for c in range(3)) for i in range(3)] for r in xyz]
+        out = []
+        for ax in range(3):
+            f = sorted(v[ax] % 1.0 for v in xyz)
+            if not f:
+                continue
+            gap = max([f[j + 1] - f[j] for j in range(len(f) - 1)] + [f[0] + 1.0 - f[-1]])
+            if gap * math.sqrt(sum(c * c for c in lat[ax])) > VAC_GAP_A:
+                out.append(ax)
+        return tuple(out)
+    return ()
+
+
+def born_asr_and_crosscheck(txt, ei, vac_axes=()):
     """DFPT 产物的物理自洽检查（2026-09-15 新增，来源：A2B2Te5 四材料复核）。
 
     这三项都是**零额外算力**的强校验，用来回答"DFPT 到底算对没有"：
@@ -155,9 +201,17 @@ def born_asr_and_crosscheck(txt, ei):
         if ind and ei and not any_nan(ei):
             d_d = [ei[k][k] for k in range(3)]
             d_i = [ind[k][k] for k in range(3)]
-            rat = max(abs(d_d[k] - d_i[k]) / max(abs(d_d[k]), 1e-9) for k in range(3))
+            # [V164] 2D 板的真空方向：DFPT 含局域场（去极化，层与真空串联 1/(f/εs+1-f)），独立粒子是体积平均
+            #   1+f(εs-1)，差一倍是物理（WS2：1.204 vs 2.447），不是 NBANDS/k 网格问题 —— 不进比值，只记录。
+            axes = [k for k in range(3) if k not in vac_axes] or [0, 1, 2]
+            rat = max(abs(d_d[k] - d_i[k]) / max(abs(d_d[k]), 1e-9) for k in axes)
             out["cross_ratio"] = round(rat, 4)
             out["eps_inf_independent"] = [round(v, 4) for v in d_i]
+            if vac_axes:
+                out["vacuum_axes"] = list(vac_axes)
+                out["cross_ratio_vacuum_axis"] = round(max(abs(d_d[k] - d_i[k]) / max(abs(d_d[k]), 1e-9)
+                                                           for k in vac_axes), 4)
+                out["cross_note"] = "真空方向含局域场（去极化）效应，与独立粒子值不可比，不计入 cross_ratio"
             if rat > 0.25:
                 warns.append("DFPT 与独立粒子 eps 差 %.1f%%（>25%%）—— 检查 NBANDS 是否够多、k 网格是否太稀" % (rat * 100))
         else:
@@ -261,7 +315,7 @@ def main():
     # ---- 物理自洽检查（求和规则 / 双算法交叉 / 对角性）----
     # 只有"求和规则被破坏到 1e-1"才判致命；其余进 warnings，不阻断流程 ——
     # 低对称(P1)晶胞的非对角项、宽隙体系的交叉偏差都可能是正常的。
-    _phys, _warns = born_asr_and_crosscheck(txt, ei)
+    _phys, _warns = born_asr_and_crosscheck(txt, ei, vacuum_axes(d))
     _soc, _sw = soc_isym_guard(d)
     res["physics"] = _phys
     if _soc:

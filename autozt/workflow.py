@@ -3304,6 +3304,10 @@ def retry_submit(cfg, t, m, s, force, tag):
         return False
     s2 = dict(s)
     s2["job"] = None
+    if step_cfg(t, s["name"], m).get("run") == "gen":
+        # [V164] 本地即时步（画图/读取/校验）：retry 就地重跑一次。以前走"只生成不提交"，只打印"待 start 触发"，
+        #   又不写重生成标记（这类步骤不生成输入）-> start 因 FAIL 要 -f：retry 救不回任何失败的本地步（WS2 的 S5.1）。
+        return do_submit(cfg, t, m, s2, force, gen_first=True, contcar_cp=False, tag=tag, submit=True)
     ok = do_submit(cfg, t, m, s2, force, gen_first=True,
                    contcar_cp=step_cfg(t, s["name"], m).get(
                        "contcar_to_poscar", False),

@@ -7470,3 +7470,36 @@ environment: amset_clean`，接着 `amset: command not found`。集群上现在�
 - VASP 步骤用 OUTCAR 子串判完成：作业在 VASP 启动前就失败时，旧 OUTCAR 会造成假完成（V100 遗留）。
   现在重跑会删目录、失效是整目录改名，只剩"对已完成步骤原地 init -f 再 start"这一条路径，风险低。
 - 方法层面的未验证项（不是流程 bug）：S8.4 的真空不变性、POP 的绝对归一化、GaAs 用 PBEsol 的 m*、WSe2 的多谷 DPT。
+
+## V164（2026-10-05）：本地步骤的 retry 不再是死路；旧格式完成标记判 STALE；2D 真空方向不进介电交叉比值
+
+**实测**（用户侧，WS2 的 S5.1_dievalid）：状态是 FAIL（"invalid completion marker"）。
+- 先 `retry`：只回了一句"本地生成步，已就绪，待 start 触发"，实际什么都没跑；
+- 再 `start`：报"FAIL 不豁免（需 -f）"。
+- MoS2、WSe2 的 S5.1 也是同样的情况。
+
+**① retry 对本地步骤是死路**
+- `retry_submit` 走的是"只生成、不提交"（`submit=False`）。碰到 run:gen 步骤（画图/读取/校验），do_submit 只打印就返回。
+- 它也不写重新生成标记（代码里写的是"这类步骤不生成输入"）。
+- 于是 `start` 看到 FAIL、又没有重新生成标记，就拒绝执行。所以任何一个失败的本地步骤，retry 都救不回来。
+- 改动：run:gen 步骤的 retry 直接就地重跑一次（`do_submit(submit=True)` → `do_run_gen_step`）。提交作业的步骤，retry 的语义不变。
+
+**② V136 严格完成标记之前的旧格式标记，被永久判为 FAIL**
+- WS2 的 dielectric_check.json 是 09-23 生成的，只有 `ok: true`，没有 V136 要求的 `status` 和 `input_files`。
+  内容本身是好的（ε∞ = 3.56 / 3.56 / 1.20，Born 电荷的求和规则也通过）。
+- 采集端判它"invalid completion marker"，走 plot_error → FAIL，auto-advance 不会重试。
+- 改动：标记 JSON 里既没有 `status` 也没有 `input_files` 时，判为"旧格式"，显示 STALE，由 auto-advance 按新格式重新校验。
+  重新校验失败会留下 `.autozt_gen_failed`，之后落回 FAIL，不会每轮重试。新格式但 `status=failed` 的照旧判 FAIL。
+
+**③ "DFPT 与独立粒子 ε 差 103%"是 2D 板真空方向的物理现象，不是 NBANDS / k 网格问题**
+- 场垂直于层时，DFPT 包含局域场（去极化）效应，相当于层和真空串联：1/(f/ε_s + 1 − f)。独立粒子值是按体积平均：1 + f(ε_s − 1)。
+- 以 WS2 为例，层厚占比 f ≈ 0.2、层内 ε_zz ≈ 7：串联给出 ≈ 1.21（实测 1.204），体积平均给出 ≈ 2.4（实测 2.447）。
+  所以每个 2D 材料的真空方向都会误报。
+- 改动：`vacuum_axes` 从 POSCAR 判断真空方向（原子沿某晶轴的最大周期空隙 > 6 Å），支持 VASP4/5 格式、Selective dynamics、
+  Cartesian 坐标。cross_ratio 只按面内方向计算；真空方向单独记为 `cross_ratio_vacuum_axis` 并附说明。面内仍按 25% 判。
+
+**测试**：
+- tests/test_v164_local_steps.py，6 项：本地步骤 retry 就地重跑、作业步骤不变；旧格式标记判 STALE、新格式失败照旧 FAIL、
+  重新生成失败后落回 FAIL、采集端接线。
+- skill/ke-dft-cpu/test_dielectric_vacuum.py，3 项：真空轴识别（Direct / Cartesian / 3D 的 Si）；WS2 的 z 方向不告警；
+  面内偏差照样告警。

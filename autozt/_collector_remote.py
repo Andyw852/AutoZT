@@ -399,6 +399,19 @@ def empty_fanout_ok(d, marker, require_empty=True):
     except (OSError, ValueError, TypeError, KeyError, configparser.Error):
         return False
 
+# [V164] strict_done_marker（V136）之前生成的旧格式标记（没有 status / input_files）：不是失败，是要按新格式重新校验。
+#   以前判 "invalid completion marker" -> FAIL，auto-advance 不重试 —— WS2/MoS2/WSe2 的 S5.1 一直卡着。
+LEGACY_MARKER_DIAG = "旧格式完成标记（strict_done_marker 之前生成），等按新格式重新生成"
+
+
+def _gen_failed_after(d, marker):
+    """重新生成失败过（.autozt_gen_failed 比标记新）-> True：落回 FAIL，不每轮重试。"""
+    try:
+        return os.path.getmtime(os.path.join(d, ".autozt_gen_failed")) >= os.path.getmtime(os.path.join(d, marker or ""))
+    except OSError:
+        return False
+
+
 def ck_plot(d, sc):
     """画图步骤：done_marker（默认 band_summary.json）或任一 .png 存在即完成。"""
     marker = sc.get("done_marker") or "band_summary.json"
@@ -409,6 +422,8 @@ def ck_plot(d, sc):
                 with open(os.path.join(d, marker), encoding="utf-8") as stream:
                     data = json.load(stream)
                 inputs = data.get("input_files")
+                if isinstance(data, dict) and "status" not in data and "input_files" not in data:
+                    return False, LEGACY_MARKER_DIAG
                 if data.get("status") != "done" or not isinstance(inputs, dict) or not inputs:
                     return False, "invalid completion marker"
                 for path, digest in inputs.items():
@@ -747,6 +762,9 @@ def collect_type(t, jobs_by_dir):
                 elif not sc.get("fanout") and not f.get("plot") and regen_pending(d, f["submit"]):
                     f["regen_ready"] = True                   # [V158]
                     f["diag"] = "上游重算后已在原目录重新生成输入，等提交"
+                elif f.get("diag") == LEGACY_MARKER_DIAG and not _gen_failed_after(d, sc.get("done_marker")):
+                    f["stale"] = True                         # [V164] 旧格式标记 -> STALE，auto-advance 重新校验
+                    f["plot_error"] = False
             steps.append(f)
         m["steps"] = steps
         # v3.3：维度标记（任一步骤目录 workflow_method.txt 里的 DIM=2D/3D）
