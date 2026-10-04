@@ -850,7 +850,9 @@ def _export_shengbte_fc(out):
     yaml = out / ("phono3py_params.yaml" if (out / "phono3py_params.yaml").is_file()
                   else "phono3py_disp.yaml")
     ph3 = phono3py.load(str(yaml), produce_fc=False, log_level=0)
-    prim = ph3.phonon_primitive
+    # ShengBTE 的「原胞」= CONTROL 写的 POSCAR 单胞（不是 phono3py 的 primitive：
+    # 设了 primitive_matrix 时两者不同，3RD 的原子号/2ND 的 scell 会和 CONTROL 对不上）
+    prim = ph3.unitcell
     sc = ph3.supercell
     with h5py.File(str(out / "fc2.hdf5"), "r") as h:
         fc2 = np.asarray(h["fc2" if "fc2" in h else "force_constants"][()])
@@ -879,10 +881,22 @@ def _export_shengbte_fc(out):
         str(out / "FORCE_CONSTANTS_2ND"), format="text")
     ForceConstants.from_arrays(sc_ase, fc3_array=fc3).write_to_shengBTE(
         str(out / "FORCE_CONSTANTS_3RD"), prim_ase)
-    print("[OK] FORCE_CONSTANTS_2ND/3RD <- fc2/fc3.hdf5（hiphive 导出）", flush=True)
+    # hiphive 按超胞（数据集）原子顺序写 2ND；ShengBTE 假定 phonopy 顺序（x 最快、原子
+    # 最慢）——数据集超胞是交错顺序时不重排就会读到乱序力常数（Mn2In2Se5/MnIn2Se4 踩过）
+    from fc_common import shengbte_fc2_ensure_order
+    try:
+        od = shengbte_fc2_ensure_order(
+            out / "FORCE_CONSTANTS_2ND",
+            np.asarray(prim_ase.cell).tolist(), prim_ase.get_scaled_positions().tolist(),
+            np.asarray(sc2_ase.cell).tolist(), sc2_ase.get_scaled_positions().tolist())
+    except ValueError as e:
+        sys.exit("[ERROR] ShengBTE 力常数不可用：%s" % e)
+    print("[OK] FORCE_CONSTANTS_2ND/3RD <- fc2/fc3.hdf5（hiphive 导出；2ND 顺序 %s，scell %s）"
+          % (od["action"], od["dims"]), flush=True)
+    return od["dims"]
 
 
-def _shengbte_control(out, cfg, mesh):
+def _shengbte_control(out, cfg, mesh, scell=None):
     """写 ShengBTE CONTROL（三声子 RTA，RTA 默认；NAC 有 BORN 才开）。"""
     from ase.io import read as ase_read
     from ase.data import chemical_symbols as _cs
@@ -894,10 +908,14 @@ def _shengbte_control(out, cfg, mesh):
     kd = {z: i + 1 for i, z in enumerate(unique)}
     types = [kd[z] for z in numbers]
     spos = atoms.get_scaled_positions(wrap=True)
-    scm = np.asarray(cfg.get("supercell_matrix") or np.diag([2, 2, 2]), float)
-    scell = [int(x) for x in np.diag(scm)]
-    if np.abs(scm - np.diag(np.diag(scm))).max() > 1e-8:
-        print("[WARN] ShengBTE CONTROL 的 scell 只能对角，非对角超胞矩阵按对角近似", flush=True)
+    if scell is None:
+        # 兜底（老调用）：没有从 2ND 实测的 scell 时才退回 fc3 的超胞矩阵
+        scm = np.asarray(cfg.get("supercell_matrix") or np.diag([2, 2, 2]), float)
+        if np.abs(scm - np.diag(np.diag(scm))).max() > 1e-8:
+            sys.exit("[ERROR] ShengBTE 的 scell 只能是对角超胞，当前超胞矩阵非对角：%s"
+                     % scm.tolist())
+        scell = [int(x) for x in np.diag(scm)]
+    scell = [int(x) for x in scell]
     ng = [int(x) for x in mesh]
     L = ["&allocations", "  nelements=%d," % len(unique), "  natoms=%d," % len(atoms),
          "  ngrid(:)=%d %d %d" % (ng[0], ng[1], ng[2]), "&end", "&crystal",
@@ -938,9 +956,9 @@ def _shengbte_control(out, cfg, mesh):
 
 def _prepare_shengbte(cfg, out):
     """SOLVER=shengbte 准备步：fc2/fc3 → FORCE_CONSTANTS_2ND/3RD + CONTROL。"""
-    _export_shengbte_fc(out)
+    scell = _export_shengbte_fc(out)          # = FORCE_CONSTANTS_2ND 的超胞（实测）
     mesh = _shengbte_mesh(out, cfg["disp_yaml"], cfg)
-    _shengbte_control(out, cfg, mesh)
+    _shengbte_control(out, cfg, mesh, scell=scell)
     return mesh
 
 
@@ -961,6 +979,8 @@ def _collect_shengbte(cfg, out, mesh):
          "kappa_300K_xx_yy_zz": raw[j], "kappa_inplane_300K": 0.5 * (raw[j][0] + raw[j][1]),
          "bte_method": "rta", "isotope": bool(cfg.get("isotope", True)),
          "nac": bool(cfg.get("nac")) and (out / "BORN").is_file(),
+         # ShengBTE 和 phono3py 一样按含真空的整胞体积归一：2D 同样给层厚归一化值
+         **_two_d_fields(cfg, raw, j),
          **cfg.get("stability", {})}
     (out / "kappa_summary.json").write_text(
         json.dumps(s, indent=2, ensure_ascii=False), encoding="utf-8", newline="\n")

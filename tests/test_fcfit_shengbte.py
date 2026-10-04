@@ -29,7 +29,16 @@ def _split_index(index, nx, ny, nz):
     return ix, iy, iz, ia
 
 
-def _setup(tmp_path, dims=(3, 3, 1), scramble=False, fc3_index=2, dim="2d"):
+def _pair_fc(fa, fb, dims, ta, tb):
+    """平移不变的「物理型」力常数块：只取决于两原子的种类和最近镜像相对位置。"""
+    d = np.asarray(fb) - np.asarray(fa)
+    d -= np.rint(d)
+    d = d * np.asarray(dims, float)               # 以原胞为单位，各分量互不相同
+    return np.outer(d, d + 0.1 * ta) + (1.0 + 0.3 * tb + np.dot(d, d)) * np.eye(3)
+
+
+def _setup(tmp_path, dims=(3, 3, 1), scramble=False, fc3_index=2, dim="2d",
+           file_in_shengbte_order=False):
     uc = Atoms("MoS", cell=[[3.16, 0, 0], [-1.58, 2.7366, 0], [0, 0, 20.0]],
                scaled_positions=[[1 / 3, 2 / 3, 0.5], [2 / 3, 1 / 3, 0.56]], pbc=True)
     nx, ny, nz = dims
@@ -46,12 +55,12 @@ def _setup(tmp_path, dims=(3, 3, 1), scramble=False, fc3_index=2, dim="2d"):
                cell=np.diag(dims) @ uc.cell, scaled_positions=[rows[k][1] for k in order],
                pbc=True)
     n = len(sc)
-    # 可辨认的力常数：fc[a,b] = (原子 a 的 ShengBTE 索引, b 的索引) 编码
+    # true = ShengBTE 顺序下的力常数（平移不变，像真实拟合结果一样）
     true = np.zeros((n, n, 3, 3))
     for a in range(n):
         for b in range(n):
-            true[a, b] = (a + 1) * 1000 + (b + 1)
-    fc_in_sc_order = true[np.ix_(order, order)]
+            true[a, b] = _pair_fc(rows[a][1], rows[b][1], dims, rows[a][0], rows[b][0])
+    fc_in_sc_order = true if file_in_shengbte_order else true[np.ix_(order, order)]
     sb = tmp_path / "shengbte"
     sb.mkdir()
     write(str(tmp_path / "POSCAR"), uc, format="vasp", direct=True)
@@ -84,10 +93,33 @@ def test_scrambled_supercell_is_reordered_for_shengbte(tmp_path):
     assert man["checks"].get("fc2_reordered")
     fc = D._read_fc2_text(tmp_path / "shengbte" / "FORCE_CONSTANTS_2ND")
     # 按 ShengBTE 的 split_index 读回来，每个块都对上真实的 (a,b)
-    for a in (1, 5, 17):
-        for b in (2, 9, 18):
-            assert fc[a - 1, b - 1][0, 0] == a * 1000 + b
-            assert _split_index(a, 3, 3, 1)[3] == (a - 1) // 9
+    assert np.allclose(fc, true, atol=1e-9)
+    assert _split_index(17, 3, 3, 1)[3] == 1
+    # 幂等：再补导一次不会把已经排好的文件再打乱
+    assert D._shengbte_finalize(cfg, tmp_path)
+    man = json.loads((tmp_path / "shengbte" / "shengbte_manifest.json").read_text())
+    assert man["checks"]["fc2_order"] == "kept"
+    assert np.allclose(D._read_fc2_text(tmp_path / "shengbte" / "FORCE_CONSTANTS_2ND"), true)
+
+
+def test_file_already_in_shengbte_order_with_scrambled_sposcar_is_kept(tmp_path):
+    # pheasy 原生输出 / 旧版已重排的文件：SPOSCAR 是数据集（交错）顺序，但文件已是
+    # ShengBTE 顺序——不能按 SPOSCAR 再排一遍
+    cfg, true = _setup(tmp_path, scramble=True, file_in_shengbte_order=True)
+    assert D._shengbte_finalize(cfg, tmp_path)
+    man = json.loads((tmp_path / "shengbte" / "shengbte_manifest.json").read_text())
+    assert man["checks"]["fc2_order"] == "kept"
+    assert np.allclose(D._read_fc2_text(tmp_path / "shengbte" / "FORCE_CONSTANTS_2ND"), true)
+
+
+def test_unrecognisable_order_is_refused(tmp_path):
+    cfg, true = _setup(tmp_path, scramble=True)
+    rng = np.random.default_rng(0)
+    p = rng.permutation(len(true))
+    D._write_fc2_text(true[np.ix_(p, p)], tmp_path / "shengbte" / "FORCE_CONSTANTS_2ND")
+    assert not D._shengbte_finalize(cfg, tmp_path)
+    man = json.loads((tmp_path / "shengbte" / "shengbte_manifest.json").read_text())
+    assert "neither" in man["error"]
 
 
 def test_inconsistent_set_is_flagged_not_run(tmp_path):

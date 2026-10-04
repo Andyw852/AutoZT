@@ -24,6 +24,8 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+# fc_common.py（ShengBTE 2ND 顺序校验）：部署时由 gen_need 放在旁边；源码树里在 _common/fcfit/
+sys.path.append(str(Path(__file__).resolve().parent.parent / "fcfit"))
 import klmlff_common as kc
 import stepconf
 
@@ -332,6 +334,24 @@ def _shengbte_control_from_poscar(poscar, SUPERCELL, ngrid, tmin, tmax, tstep,
     print("[OK] CONTROL <- %s" % out_path.name)
 
 
+def _shengbte_order_files(fc2, src):
+    """已存在的 FORCE_CONSTANTS_2ND：按 src 的 POSCAR/SPOSCAR 判定并修正超胞顺序。"""
+    from fc_common import shengbte_fc2_ensure_order_files
+    uc = src / "shengbte" / "POSCAR"
+    uc = uc if uc.is_file() else src / "POSCAR"
+    sc = src / "SPOSCAR"
+    if not (uc.is_file() and sc.is_file()):
+        print("[WARN] %s 缺 POSCAR/SPOSCAR，无法核对 FORCE_CONSTANTS_2ND 的超胞顺序" % src)
+        return None
+    try:
+        od = shengbte_fc2_ensure_order_files(fc2, uc, sc)
+    except ValueError as e:
+        sys.exit("[ERROR] %s 的 ShengBTE 力常数不可用：%s" % (src, e))
+    if od["action"] == "reordered":
+        print("[OK] %s 已重排为 ShengBTE 超胞顺序（x 最快、原子最慢）" % fc2)
+    return od
+
+
 def _ensure_shengbte_fc(src, sb_dir):
     """从 step3_fc 取 ShengBTE 力常数到 sb_dir。
     优先 step3_fc/shengbte/（fc_fit_driver 统一导出）；缺则现场从 fc2/3.hdf5 用 hiphive 转换。"""
@@ -340,6 +360,9 @@ def _ensure_shengbte_fc(src, sb_dir):
     need = ("FORCE_CONSTANTS_2ND", "FORCE_CONSTANTS_3RD")
     ready = [sb_dir / f for f in need]
     if all(p.is_file() for p in ready):
+        # 复用 step3 已导出的文件：老版本导出的 2ND 可能还是数据集超胞（交错）顺序，
+        # 这里统一判定/重排（幂等，已是 ShengBTE 顺序的不动）
+        _shengbte_order_files(ready[0], src)
         return ready
     # 现场转换：读 fc2.hdf5/fc3.hdf5 → hiphive ForceConstants → 导出
     print("[..] %s/shengbte/ 缺 ShengBTE 力常数，从 fc2/fc3.hdf5 现场转换（hiphive）" % src)
@@ -349,7 +372,7 @@ def _ensure_shengbte_fc(src, sb_dir):
     yaml = ("phono3py_params.yaml" if (src / "phono3py_params.yaml").is_file()
             else "phono3py_disp.yaml")
     ph3 = phono3py.load(str(src / yaml), produce_fc=False, log_level=0)
-    prim, sc = ph3.phonon_primitive, ph3.supercell
+    prim, sc = ph3.unitcell, ph3.supercell      # ShengBTE 原胞 = CONTROL 的 POSCAR 单胞
     with h5py.File(str(src / "fc2.hdf5"), "r") as h:
         fc2 = np.asarray(h["fc2" if "fc2" in h else "force_constants"][()])
     with h5py.File(str(src / "fc3.hdf5"), "r") as h:
@@ -367,7 +390,16 @@ def _ensure_shengbte_fc(src, sb_dir):
     fcs = ForceConstants.from_arrays(sc_ase, fc3_array=fc3)
     fcs2.write_to_phonopy(str(sb_dir / "FORCE_CONSTANTS_2ND"), format="text")
     fcs.write_to_shengBTE(str(sb_dir / "FORCE_CONSTANTS_3RD"), prim_ase)
-    print("[OK] FORCE_CONSTANTS_2ND/3RD <- fc2/fc3.hdf5（hiphive 导出，格式已验证）")
+    from fc_common import shengbte_fc2_ensure_order
+    try:
+        od = shengbte_fc2_ensure_order(
+            sb_dir / "FORCE_CONSTANTS_2ND",
+            np.asarray(prim_ase.cell).tolist(), prim_ase.get_scaled_positions().tolist(),
+            np.asarray(sc2_ase.cell).tolist(), sc2_ase.get_scaled_positions().tolist())
+    except ValueError as e:
+        sys.exit("[ERROR] ShengBTE 力常数不可用：%s" % e)
+    print("[OK] FORCE_CONSTANTS_2ND/3RD <- fc2/fc3.hdf5（hiphive 导出；2ND 顺序 %s）"
+          % od["action"])
     return [sb_dir / f for f in need]
 
 

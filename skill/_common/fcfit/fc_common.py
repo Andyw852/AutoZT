@@ -89,6 +89,171 @@ def supercell_reps(uc_path, sc_path, tol=1e-3):
 
 
 # ==========================================================================
+# ShengBTE FORCE_CONSTANTS_2ND atom order
+# --------------------------------------------------------------------------
+# ShengBTE (Src/input.f90 read2fc/split_index) reads the 2ND file as the full
+# supercell and *assumes* phonopy's layout: index-1 = ((ia*nz + iz)*ny + iy)*nx + ix
+# (x fastest, unit-cell atom slowest).  hiphive/phonopy writers emit the rows in
+# whatever order the supercell they were given has -- a dataset SPOSCAR built by
+# ASE repeat() interleaves the images, and ShengBTE then silently reads scrambled
+# force constants (Mn2In2Se5 / MnIn2Se4, 2026-10).  shengbte_fc2_ensure_order()
+# decides which layout the file is actually in from the force constants
+# themselves (a correct labelling is invariant under lattice translations, a
+# scrambled one is not), so it is idempotent: run it after every export, on
+# re-used files, on files written by older versions -- it only ever reorders a
+# file that is in SPOSCAR order, and refuses one that matches neither layout.
+# Stdlib only (runs on the login node too).
+# ==========================================================================
+def _frac_key(f, n_digits=3):
+    return tuple(int(round(((x % 1.0) % 1.0) * 10 ** n_digits)) % 10 ** n_digits for x in f)
+
+
+class _FracIndex(object):
+    """fractional position -> row, periodic, tolerant (dict first, scan fallback)."""
+
+    def __init__(self, frac, tol=1e-3):
+        self.frac, self.tol = frac, tol
+        self.key = {_frac_key(f): k for k, f in enumerate(frac)}
+
+    def get(self, f):
+        k = self.key.get(_frac_key(f))
+        if k is not None:
+            return k
+        for j, g in enumerate(self.frac):
+            if all(abs(((f[d] - g[d]) + 0.5) % 1.0 - 0.5) < self.tol for d in range(3)):
+                return j
+        return None
+
+
+def _matmul3(a, b):
+    return [[sum(a[i][k] * b[k][j] for k in range(3)) for j in range(3)] for i in range(3)]
+
+
+def shengbte_dims(uc_lat, sc_lat, tol=1e-3):
+    """Diagonal supercell repetitions (ShengBTE scell) or raise ValueError."""
+    m = _matmul3(sc_lat, _inv3(uc_lat))
+    mi = [[int(round(x)) for x in r] for r in m]
+    if any(abs(m[i][j] - mi[i][j]) > tol for i in range(3) for j in range(3)):
+        raise ValueError("supercell is not an integer multiple of the unit cell")
+    if any(mi[i][j] for i in range(3) for j in range(3) if i != j):
+        raise ValueError("supercell matrix %s is not diagonal -- ShengBTE scell cannot "
+                         "express it" % mi)
+    return [mi[0][0], mi[1][1], mi[2][2]]
+
+
+def _read_fc2_blocks(path):
+    lines = Path(path).read_text(errors="ignore").splitlines()
+    n = int(lines[0].split()[0])
+    if len(lines[0].split()) > 1 and int(lines[0].split()[1]) != n:
+        raise ValueError("compact FORCE_CONSTANTS_2ND (%s) -- ShengBTE needs the full "
+                         "supercell array" % lines[0].strip())
+    blocks, i = {}, 1
+    while i + 3 < len(lines) + 1 and len(blocks) < n * n:
+        ab = lines[i].split()
+        if len(ab) < 2:
+            i += 1
+            continue
+        a, b = int(ab[0]) - 1, int(ab[1]) - 1
+        blocks[(a, b)] = lines[i + 1:i + 4]
+        i += 4
+    if len(blocks) != n * n:
+        raise ValueError("FORCE_CONSTANTS_2ND has %d blocks, expected %d" % (len(blocks), n * n))
+    return n, blocks
+
+
+def _block_vals(lines):
+    return [float(x) for ln in lines for x in ln.split()[:3]]
+
+
+def _translation_mismatch(blocks, frac, n, dims):
+    """Relative mismatch of fc2 under one lattice translation, for a labelling
+    index -> fractional supercell position.  ~0 for the true labelling."""
+    where = _FracIndex(frac)
+    axis = max(range(3), key=lambda i: dims[i])
+    step = [0.0, 0.0, 0.0]
+    step[axis] = 1.0 / dims[axis]
+    # 只比非对角块（on-site 自作用块在同种原子间几乎一样，区分不了顺序）
+    num = den = 0.0
+    picks = list(range(0, n, max(1, n // 40)))
+    for i in picks:
+        ti = where.get([frac[i][d] + step[d] for d in range(3)])
+        if ti is None:
+            return float("inf")
+        for j in range(n):
+            if j == i:
+                continue
+            tj = where.get([frac[j][d] + step[d] for d in range(3)])
+            if tj is None:
+                return float("inf")
+            a, b = _block_vals(blocks[(i, j)]), _block_vals(blocks[(ti, tj)])
+            num += sum(abs(x - y) for x, y in zip(a, b))
+            den += sum(abs(x) for x in a)
+    return num / den if den > 0 else 0.0
+
+
+def shengbte_fc2_ensure_order(fc2_path, uc_lat, uc_frac, sc_lat, sc_frac, tol=1e-3):
+    """Make FORCE_CONSTANTS_2ND follow ShengBTE's supercell order (idempotent).
+
+    uc_* = the unit cell ShengBTE's CONTROL describes, sc_* = the supercell the
+    file was written from (e.g. SPOSCAR).  Returns a dict (dims, natoms, n,
+    action = kept | reordered, mismatch_*); raises ValueError when the set
+    cannot be run by ShengBTE."""
+    dims = shengbte_dims(uc_lat, sc_lat)
+    nat = len(uc_frac)
+    n, blocks = _read_fc2_blocks(fc2_path)
+    ncell = dims[0] * dims[1] * dims[2]
+    if n != nat * ncell:
+        raise ValueError("FORCE_CONSTANTS_2ND has %d atoms, expected natoms*prod(scell) "
+                         "= %d*%d = %d" % (n, nat, ncell, nat * ncell))
+    if len(sc_frac) != n:
+        raise ValueError("supercell has %d atoms but FORCE_CONSTANTS_2ND %d"
+                         % (len(sc_frac), n))
+    sheng = []                                    # ShengBTE label k -> sc fractional
+    for ia in range(nat):
+        for iz in range(dims[2]):
+            for iy in range(dims[1]):
+                for ix in range(dims[0]):
+                    sheng.append([(uc_frac[ia][0] + ix) / dims[0],
+                                  (uc_frac[ia][1] + iy) / dims[1],
+                                  (uc_frac[ia][2] + iz) / dims[2]])
+    where = _FracIndex(sc_frac)
+    perm = [where.get(f) for f in sheng]               # ShengBTE k -> sc row
+    if None in perm or len(set(perm)) != n:
+        raise ValueError("supercell atoms do not map onto unit cell + scell translations")
+    info = {"dims": dims, "natoms": nat, "n": n}
+    if perm == list(range(n)):
+        info["action"] = "kept"                   # both layouts coincide
+        return info
+    m_sheng = _translation_mismatch(blocks, sheng, n, dims)
+    m_sc = _translation_mismatch(blocks, sc_frac, n, dims)
+    info.update({"mismatch_shengbte_order": m_sheng, "mismatch_supercell_order": m_sc})
+    # 正确的标注下平移前后一致（拟合力常数 ~1e-10），错误的标注明显不一致（实测 ~1e-2）；
+    # 两种都不一致时宁可报错也不猜
+    if m_sheng <= 1e-4 and m_sheng <= m_sc:
+        info["action"] = "kept"                   # already in ShengBTE order
+        return info
+    if m_sc > 1e-4:
+        raise ValueError("FORCE_CONSTANTS_2ND matches neither the ShengBTE nor the "
+                         "supercell atom order (translation mismatch %.2g / %.2g)"
+                         % (m_sheng, m_sc))
+    with open(str(fc2_path), "w") as f:
+        f.write("%d %d\n" % (n, n))
+        for a in range(n):
+            for b in range(n):
+                f.write("%d %d\n" % (a + 1, b + 1))
+                f.write("\n".join(blocks[(perm[a], perm[b])]) + "\n")
+    info["action"] = "reordered"
+    return info
+
+
+def shengbte_fc2_ensure_order_files(fc2_path, unit_poscar, super_poscar):
+    """shengbte_fc2_ensure_order with the two cells read from POSCAR files."""
+    ul, uf = read_poscar_cell_frac(unit_poscar)
+    sl, sf = read_poscar_cell_frac(super_poscar)
+    return shengbte_fc2_ensure_order(fc2_path, ul, uf, sl, sf)
+
+
+# ==========================================================================
 # Neighbour shells -> third-order cutoff candidates
 # --------------------------------------------------------------------------
 # Ported from kl-dft-cpu/kl_common.py (2026-09-24 user 流程): the third-order

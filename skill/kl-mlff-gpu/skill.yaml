@@ -67,7 +67,7 @@ steps:
   - {seq: 4, name: step4_kappa, label: S4_kappa,
      check: marker, marker: 'kappa_summary.json:"KAPPA_DONE": true',
      gen: gen_step4_kappa.py,
-     gen_need: [dim_common.py, stepconf.py, step.conf, klmlff_common.py, za_2d.py, imag_policy.py,
+     gen_need: [dim_common.py, stepconf.py, step.conf, klmlff_common.py, za_2d.py, imag_policy.py, fc_common.py,
                 kappa_validation.py, submit_p3py.tpl, submit_shengbte_klm.tpl,
                 thickness_2d.py, vdw_radii.py]}
 

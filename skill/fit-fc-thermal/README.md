@@ -370,6 +370,15 @@ matrix and solves it.
 * Re-export without refitting (e.g. in the fetched `result/step1_fit/`):
   `python fc_fit_driver.py shengbte fit_config.json` (needs POSCAR, SPOSCAR, fc2/fc3
   or the existing shengbte/ files; exits non-zero when the set is not runnable).
+  It re-exports from the source (pheasy's native files or fc2/fc3.hdf5) instead of
+  re-using shengbte/, so files written or mis-ordered by older versions are replaced.
+* **2ND atom order is checked everywhere ShengBTE files are written** (S1 export, S2
+  `SOLVER=shengbte`, kl-mlff S4 — `fc_common.shengbte_fc2_ensure_order`): the file's
+  actual layout is decided from the force constants themselves (a correct labelling is
+  invariant under a lattice translation), so the check is idempotent — a file already
+  in ShengBTE order (pheasy native output, a previous fix) is kept, a file in the
+  dataset's SPOSCAR order (ASE-repeat interleave) is re-ordered, and a file matching
+  neither is refused (`fc2_order` in shengbte_manifest.json).
 
 ## Lattice thermal conductivity (S2_kappa)
 
