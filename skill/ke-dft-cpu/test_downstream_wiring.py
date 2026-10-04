@@ -198,7 +198,9 @@ class PostLineageTests(unittest.TestCase):
         _settings(m / "step8_amset", 1.4200, "step2.3_hse_plot/band_summary.json（gap_eV）")
         (m / "step2_bandgap" / "step2.3_hse_plot" / "band_summary.json").write_text(json.dumps({"gap_eV": 1.30}))
         probs = kc.post_lineage(m)
-        self.assertEqual(sorted(s for s, _w in probs), ["step8.1_boltztrap", "step8_amset"])
+        self.assertEqual(sorted({s for s, _w in probs}), ["step8.1_boltztrap", "step8_amset"])
+        # V163：S8.1 还比 S2.3 画图旧（always 边），也要报出来
+        self.assertTrue(any("step2.3_hse_plot" in w for s, w in probs if s == "step8.1_boltztrap"))
         self.assertIn("1.4200", dict(probs)["step8_amset"])
         self.assertEqual(kc.structure_lineage(m)[1], [])                  # S8 的闸门不管这些
         sys.path.insert(0, str(ROOT / "tools"))

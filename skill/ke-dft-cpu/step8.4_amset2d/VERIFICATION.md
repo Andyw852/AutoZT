@@ -7366,3 +7366,107 @@ environment: amset_clean`，接着 `amset: command not found`。集群上现在�
 - 真跑一遍 S4 的 gen：旧模板退出、不写 submit.sh；新模板写出 `conda activate amset051`；
 - template_drift 能报出旧副本。
 - 反证：换回旧版 S4 gen，旧模板被照常接受，测试失败。
+
+## V160（2026-10-04）：没开 auto_advance、但有步骤可开始的材料，summary 点名（Si_diamond）
+
+**实测**（用户侧）：Si_diamond 的 S2.3 等了很久都没有作业，队列空，状态是 8/19 完成，6 个步骤显示"可开始"（PREP）。
+大家以为它在"等自动重排"。
+
+**根因**：auto-advance 只推进 project_setting/setting.yaml 里显式写了 `auto_advance: true` 的材料。这是有意的设计：
+防止只为别的技能 init 过的材料被误提交，**不改**。Si_diamond 的 project_setting/ 里没有 setting.yaml，所以一直不会被推进。
+- 状态表只显示"可开始"，summary 只把它算进 wait，看不出它不会自动推进。
+- auto-advance 的跳过提示一律写成"（项目级 auto_advance: false）"，没写这个键的材料也这么说。
+
+**改动**（autozt）：
+- `report.auto_off_reason(m)`：给出不推进的原因——未 init 本技能 / setting.yaml 没写 auto_advance / auto_advance: false。
+- summary：有步骤可开始、但不会被推进的材料，多打一行
+  `手动 <材料>（<原因>，auto-advance 不会提交）可开始：<步骤…>  → tf -tt <技能> -p <材料> auto on`。
+- auto-advance 的跳过提示改为逐个写原因。
+- 计数行格式不变。
+
+**测试**：tests/test_auto_manual.py，3 项。
+
+## V161（2026-10-04）：init 种下、没人改过的模板副本，不再盖住技能后来的修复
+
+**起因**：同一个机制已经出了三次问题，这次又在 Si_diamond 上种了 19 个副本。
+- autozt init 把技能整套 `*.tpl` / `*.conf` 复制进 project_setting/templates/（v1.7/v1.9，本意是方便按项目手改）。
+- find_asset 的查找链里，项目副本排在集群模板、技能模板前面。没人改过的副本，就把 init 当时的技能版本永远钉住了。
+- 出过的问题：
+  - P1 的 `LPEAD=.TRUE.`（DFPT 出 NaN）；
+  - Mo2S3 的 EDIFFG 偏松；
+  - P1 S4 的 `conda activate amset_clean`（V159）。
+- 用户为此把 49 个副本手工改名。Si_diamond 刚 init 又种了 19 个：今天和技能一致，技能一改就会重蹈覆辙。
+
+**改动**（autozt/report.py）：
+- **判定规则**：项目 templates/ 下的副本（含 `<步骤>/` 子目录），如果与技能同路径文件（可以已经删除）在 git 历史里的某个**旧版本**
+  逐字节相同，就判为"init 原样种子、之后没人改过"。
+  - find_asset 当它不存在，按查找链往下取（集群模板 → 技能），结果和清理过副本的项目一样；打一行 `[模板] …` 说明。
+  - step_conf_sources 对 project_setting 的 `templates/step.conf`、`templates/<步骤>/step.conf` 用同样的规则，
+    不再让旧的出厂默认值盖住现行默认值。
+- **不受影响的情况**：手改过的副本（不是任何历史版本）照旧优先；和技能现行版相同的照常使用。
+- **开关**：setting.yaml 写 `templates_follow_skill: false` 可关掉（要钉住旧模板复现旧结果时用）。
+- **局限**：比仓库历史更早的副本（如 8 月的 P1 副本）认不出来，仍按项目副本优先，靠 template_drift 的 [CUSTOM] 审计（已清理）。
+- **开销**：每个技能文件只在每个进程里查一次 git 历史（缓存）。没有 git 或文件不在仓库里时，行为与以前相同。
+- tools/template_drift.py 的 [STALE] 说明补上"V161 起 gen 已自动不用它"。
+
+**测试**：tests/test_template_seed.py，7 项（临时 git 仓库）：
+- 旧版副本被跳过；手改副本优先；和现行版相同时照用；关开关后照用副本；
+- 技能文件已删除时落到集群模板；没有历史时照用副本；step.conf 旧版种子被去掉、手改的保留。
+
+## V162（2026-10-04）：完成标记被归档后，旧 png 不再算完成；本地回拉镜像清掉上一代残留，扇出步骤的子目录一起拉
+
+**实测**（用户侧）：Si_diamond 表上显示 19/19，但 lineage_check 退出码 1，报了两处。
+
+**① S8.1_boltztrap：boltztrap_crta.json 比 S8.2 的 dpt_result.json 旧——真问题**
+- 失效接线本来就有（S3 → S8.1、S8.2 → S8.1，都是 always）。S3 重算时 boltztrap_crta.json 也确实被归档了。
+- 问题出在画图步骤的完成判据 `ck_plot`："有完成标记，**或者目录里有任意 .png**"就算完成。
+  标记被归档后，目录里旧的 png 照样让 S8.1 判"完成"，既不显示 STALE，也不重新生成。
+  S8.3（标记是 comparison_300K.png，其它温度的 png 还在）、S7.1 也是同一个坑。
+- 改动：`ck_plot` 发现 `<标记>.stale-*` 归档时，判为未完成（"完成标记已归档，等重新生成"），之后按 V153 显示 STALE，
+  由 auto-advance 重新生成。
+
+**② S2.3_hse：本地 POSCAR 是旧结构——集群上是对的，问题出在回拉镜像**
+- S2.3 是扇出步骤（p1of4…p4of4），结果都在子目录里。fetch 只拉顶层的 fetch_files，所以子目录一个都没拉回来。
+- 本地顶层那份 POSCAR 是 08-30 上一代留下的：fetch 用 `tar --ignore-failed-read`，远端没有的文件直接跳过，
+  本地旧副本从来不清理（只加不减）。lineage_check 在本地读到的就是它。
+- 改动（`fetch_material`）：
+  - 扇出步骤把 `<fanout>/<fetch_files>` 一起拉回，通配交给远端 shell 展开；
+  - 用 `tar xv` 的清单记下收到了哪些文件。要拉的顶层文件（fetch_files，以及 fetch_all 步骤的 done_marker）
+    远端已经没有的，本地旧副本改名为 `<名>.stale-remote-<时间>`（不删）；不在清单里的本地文件一律不碰。
+
+**测试**：tests/test_fetch_mirror.py，5 项：
+- 标记被归档、只剩旧 png → 未完成，并且判为 STALE；有新标记或从没归档过 → 照旧完成；
+- tar 清单解析（GNU / bsdtar 两种格式）；只改名清单内、且远端没有的文件；
+- 真跑一遍 fetch_material：扇出子目录拉回，顶层旧 POSCAR 改名。
+
+回归：test/test_fetch_lifecycle.py 改动前后失败的都是同样 12 项（v1 引擎和环境问题），原来通过的场景仍然通过。
+
+## V163（2026-10-04）：主动审计——lineage_check 补复核 24 条失效边；"失效必须真生效"加防回归测试
+
+**起因**：用户问"怎么一直改不完"。最近的问题全出在流程的"记账层"（完成判据、失效、模板、回拉镜像），
+而这一层到处是不出声的兜底，都是真实材料第一次走到某条路径才暴露。这次不等实测撞上，按类别主动扫了一遍。
+
+**审计 1：失效归档的文件，能不能真让采集端判"未完成"**（9 个非 dir 的失效目标逐个造现场）
+- V162 之后 9/9 一致。
+- 反证：换回 V162 之前的 ck_plot，有 **4 个**步骤违反——S7.1、S8.1、S8.2、S8.3，归档标记后旧 png 仍让它们判完成。
+  可见 V162 修的不只是 S8.1。
+- 新增 `tests/test_invalidation_vs_completion.py`：以后改 skill.yaml 的 check/done_marker 或 DONE_MARKERS 时，
+  只要对不上就会挂。
+
+**审计 2：lineage_check 的事后复核覆盖面**
+- DOWNSTREAM 里有 24 条非 dir 失效边，lineage_check 一条都没复核：transport.json 对 S4/S4b/S7.1/S5/S6，
+  dpt_result.json 对 S7.1/S6/S3，boltztrap_crta.json 对 S3/S2 画图。
+  所以 P1_Mo-MoS2 那次"4 项全 OK"，其实没有验证输运结果是用最新上游算的。
+- 改动：
+  - POST_DERIVED 补上 always 边的新鲜度规则；
+  - 新增 `_linked_probs`：S8/S8.4 目录里软链进来的输入，按**链接实际指向的文件**比新旧。S8 用 S4 还是 S4b、用哪份形变势，
+    看软链就知道，不靠猜。本地回拉镜像里的断链不判。
+  - gap 边仍由带隙一致性规则检查。
+- 这些规则只给 lineage_check 用，不进 S8 的 gen 闸门（否则 S8 自己永远 rerun 不了，V148 的约束不变）。
+- 新增 `test_lineage_post.py`，4 项：覆盖率不变量（每条非 dir 边都有复核规则）、软链输入更新时报出、断链和旧输入不报、S5/S6 更新时报出。
+- `test_downstream_wiring` 一项的断言改为按步骤去重：S8.1 现在还会多报一条"比 S2.3 画图旧"，这是新规则在正常工作。
+
+**审计 3：仍开着的已知项**（这次没改，列入清单）
+- VASP 步骤用 OUTCAR 子串判完成：作业在 VASP 启动前就失败时，旧 OUTCAR 会造成假完成（V100 遗留）。
+  现在重跑会删目录、失效是整目录改名，只剩"对已完成步骤原地 init -f 再 start"这一条路径，风险低。
+- 方法层面的未验证项（不是流程 bug）：S8.4 的真空不变性、POP 的绝对归一化、GaAs 用 PBEsol 的 m*、WSe2 的多谷 DPT。

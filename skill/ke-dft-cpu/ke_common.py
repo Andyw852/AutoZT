@@ -774,7 +774,47 @@ POST_DERIVED = (
     ("step8.3_output", "comparison_300K.png", "step8.4_amset2d", ("transport.json",)),
     ("step8.3_output", "comparison_300K.png", "step8.1_boltztrap", ("boltztrap_crta.json",)),
     ("step8.3_output", "comparison_300K.png", "step8.2_dpt", ("dpt_result.json",)),
+    # [V163] DOWNSTREAM 里 always 边的事后复核（以前 lineage_check 只看 S8 之后的派生，S8/S8.4/S8.2 本身新不新
+    #   没人查：P1_Mo-MoS2 "4 项全 OK" 其实没验证 transport.json 是用最新的 S5/S6 算的）。link 边见 _linked_probs。
+    ("step8_amset", "transport.json", "step5_dielect", ("OUTCAR",)),
+    ("step8_amset", "transport.json", "step6_elastic", ("OUTCAR",)),
+    ("step8.4_amset2d", "transport.json", "step5_dielect", ("OUTCAR",)),
+    ("step8.4_amset2d", "transport.json", "step6_elastic", ("OUTCAR",)),
+    ("step8.2_dpt", "dpt_result.json", "step7b_deform_read", ("band_edges.json", "deformation.h5")),
+    ("step8.2_dpt", "dpt_result.json", "step6_elastic", ("OUTCAR",)),
+    ("step8.2_dpt", "dpt_result.json", "step3_uniform", ("vasprun.xml",)),
+    ("step8.1_boltztrap", "boltztrap_crta.json", "step3_uniform", ("vasprun.xml",)),
+    ("step8.1_boltztrap", "boltztrap_crta.json", "step2_bandgap/step2.2_pbe_plot", ("band_summary.json",)),
+    ("step8.1_boltztrap", "boltztrap_crta.json", "step2_bandgap/step2.3_hse_plot", ("band_summary.json",)),
 )
+# [V163] link 边（S3/S3b/S4/S4b/S7.1 -> S8/S8.4）：S8 用的是哪一份（S4 还是 S4b）看它目录里的软链，按链接目标比新旧。
+LINKED_PRODUCTS = (("step8_amset", "transport.json"), ("step8.4_amset2d", "transport.json"))
+
+
+def _linked_probs(cwd, slack=LINEAGE_SLACK_S):
+    """S8/S8.4 目录里软链进来的输入（wavefunction.h5、deformation.h5、vasprun.xml …）比 transport.json 新 -> 旧结果。
+    断链（本地回拉镜像里大文件没拉）不判。"""
+    probs = []
+    for step, marker in LINKED_PRODUCTS:
+        d = Path(cwd) / step
+        f = d / marker
+        if not f.is_file():
+            continue
+        t0 = f.stat().st_mtime
+        try:
+            links = sorted(p for p in d.iterdir() if p.is_symlink())
+        except OSError:
+            continue
+        for p in links:
+            try:
+                tgt = p.resolve(strict=True)
+            except (OSError, RuntimeError):
+                continue
+            if tgt.is_file() and tgt.stat().st_mtime > t0 + slack:
+                probs.append((step, "%s 比链接的输入 %s 旧 —— 来源后来重算过，本步要重新生成"
+                              % (marker, os.path.relpath(str(tgt), str(cwd)))))
+                break
+    return probs
 
 
 def band_summary_gap(plot_dir):
@@ -790,7 +830,7 @@ def post_lineage(cwd, slack=LINEAGE_SLACK_S):
     """[V148] -> [(步骤, 说明)]：① POST_DERIVED 里产物旧于来源；② S8/S8.4 settings.yaml 的带隙与它来源的
     band_summary.json 差 > GAP_TOL_EV（S2 画图后来重新生成过，S8 还是旧带隙）。"""
     cwd = Path(cwd)
-    probs = _derived_probs(cwd, POST_DERIVED, slack)
+    probs = _derived_probs(cwd, POST_DERIVED, slack) + _linked_probs(cwd, slack)
     for down in ("step8_amset", "step8.4_amset2d"):
         old, src = consumer_bandgap(cwd / down)
         if old is None or not src:

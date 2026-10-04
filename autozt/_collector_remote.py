@@ -422,6 +422,11 @@ def ck_plot(d, sc):
         return True, marker
     if sc.get("strict_done_marker"):
         return False, "required marker missing: " + marker
+    # [V162] 完成标记被归档（上游重算：<marker>.stale-upstream-*，或本步输入变了）-> 旧图不算完成。
+    #   以前归档了 boltztrap_crta.json，目录里旧的 png 照样让 S8.1 判"完成"，永远不重新生成
+    #   （Si_diamond：S8.2 10-04 重算了，S8.1 还是 08-30 的结果，表上 19/19）。
+    if glob.glob(os.path.join(d, glob.escape(marker) + ".stale-*")):
+        return False, "完成标记 %s 已归档，等重新生成" % marker
     pngs = glob.glob(os.path.join(d, "*.png"))
     if pngs:
         return True, os.path.basename(pngs[0])

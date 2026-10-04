@@ -847,6 +847,17 @@ def _gen_one(conf, out, job_label="S1fit"):
     if not (_eng / "fc_fit_driver.py").is_file():
         sys.exit("[ERROR] fc_fit_driver.py missing -- is it listed in gen_need?")
     shutil.copyfile(str(_eng / "fc_fit_driver.py"), str(out / "fc_fit_driver.py"))
+    # 驱动在计算节点还 import 了 fc_common（ShengBTE 校验/重排，同目录）和 _common 的
+    # imag_policy/phonon_stability(→za_2d)，必须一并拷进 step 目录，否则计算节点
+    # import 失败（ModuleNotFoundError）。
+    shutil.copyfile(str(_eng / "fc_common.py"), str(out / "fc_common.py"))
+    for _dep in ("imag_policy.py", "phonon_stability.py", "za_2d.py"):
+        # autozt 在集群上把 _common 的依赖铺平成同目录（_eng），源码树里则在
+        # 上一级 _common/（_base）——两个都试。
+        for _src in (_eng / _dep, _base / _dep):
+            if _src.is_file():
+                shutil.copyfile(str(_src), str(out / _dep))
+                break
 
     kind = "submit_fcfit_%s" % ("p3py" if engine == "phono3py" else engine)
     if engine == "pheasy" and p_bin == "pheasy-gpu":
