@@ -10,7 +10,8 @@
   B（真实软模）：平移模不耦合，一个光学模 λ=0.05 强耦合 XY -> 扣掉平移模仍不正定 -> unstable；
   C：Λ 的剪切列按 ½ 打印（约定不同）-> 自动定出剪切因子 2，照样复现；
   D：离子项块被篡改 -> 复现不了 -> unreliable（退出码 2）；
-  E：VASP 已去掉平移模（离子项 = 非平移模之和）-> 认出来，按真实值判。
+  E：VASP 已去掉平移模（离子项 = 非平移模之和）-> 认出来，按真实值判；
+  F：VASP 6 的实际格式（Mo2S3）：OUTCAR 无 SECOND DERIVATIVES / 无离子项块、内应变两段，力常数在 vasprun.xml。
 """
 import contextlib
 import io
@@ -103,6 +104,38 @@ def _run(case, **kw):
     return rc, r, buf.getvalue(), ionic, proj
 
 
+MASS = [95.95, 95.95, 32.06, 32.06]                        # 2 Mo + 2 S
+
+
+def _vasp6(k, lmat, ionic):
+    """VASP 6 / IBRION=6 + ISIF=3 的实际样子（Mo2S3）：OUTCAR 没有 SECOND DERIVATIVES、没有离子项块；
+    内应变分 FROM STRAINED CELLS / FROM DISPLACED ATOMS 两段（表头 X Y Z XY YZ ZX）；力常数只在 vasprun.xml 的
+    <dynmat> hessian 里（质量加权、取负）。这里让 DISPLACED ATOMS 是真值，STRAINED CELLS 偏 10%。"""
+    lines = [" NIONS =      %d" % N, "  volume of cell :      %.4f" % VOL, ""]
+    lines += _block("ELASTIC MODULI", CLAMPED) + [""] + _block("SYMMETRIZED ELASTIC MODULI", CLAMPED) + [""]
+    for title, lm in (("INTERNAL STRAIN TENSORS FROM STRAINED CELLS", lmat * 1.1),
+                      ("INTERNAL STRAIN TENSORS FROM DISPLACED ATOMS", lmat)):
+        lines += [" " + title, " " + "-" * 60]
+        for a in range(N):
+            lines += [" INTERNAL STRAIN TENSOR FOR ION    %d for displacements in x,y,z  (eV/Angst):" % (a + 1),
+                      "          X           Y           Z          XY          YZ          ZX"]
+            lines += [" %s " % ax + "".join("%12.5f" % v for v in lm[3 * a + i]) for i, ax in enumerate("xyz")]
+            lines.append("")
+    lines += _block("TOTAL ELASTIC MODULI", CLAMPED + ionic) + [""]
+    m = np.repeat(MASS, 3)
+    hess = -k / np.sqrt(np.outer(m, m))
+    xml = ['<?xml version="1.0" encoding="ISO-8859-1"?>', "<modeling>", " <atominfo>",
+           '  <array name="atoms"><set>']
+    xml += ["   <rc><c>%s</c><c>%d</c></rc>" % (el, t) for el, t in (("Mo", 1), ("Mo", 1), ("S", 2), ("S", 2))]
+    xml += ["  </set></array>", '  <array name="atomtypes"><set>',
+            "   <rc><c>2</c><c>Mo</c><c>%.4f</c><c>14.0</c><c>PAW_PBE Mo_pv</c></rc>" % MASS[0],
+            "   <rc><c>2</c><c>S</c><c>%.4f</c><c>6.0</c><c>PAW_PBE S</c></rc>" % MASS[2],
+            "  </set></array>", " </atominfo>", " <calculation>", "  <dynmat>", '   <varray name="hessian">']
+    xml += ["    <v>" + " ".join("%.10e" % v for v in row) + "</v>" for row in hess]
+    xml += ["   </varray>", "  </dynmat>", " </calculation>", "</modeling>"]
+    return "\n".join(lines) + "\n", "\n".join(xml) + "\n"
+
+
 class DecomposeTests(unittest.TestCase):
     def test_translation_artifact(self):
         rc, r, out, ionic, proj = _run("A")
@@ -131,6 +164,29 @@ class DecomposeTests(unittest.TestCase):
         self.assertEqual(rc, 0)
         self.assertEqual(r["shear_factor"], 2.0)
         self.assertTrue(r["reproduced"])
+
+    def test_vasp6_format_mo2s3(self):
+        """Mo2S3 的实际格式：力常数从 vasprun.xml 拿，内应变选 DISPLACED ATOMS，离子项 = TOTAL − SYMMETRIZED。"""
+        k, lmat, ionic, proj = _model("A")
+        d = Path(tempfile.mkdtemp())
+        s6 = d / "step6_elastic"
+        s6.mkdir()
+        oc, vr = _vasp6(k, lmat, ionic)
+        (s6 / "OUTCAR").write_text(oc)
+        (s6 / "vasprun.xml").write_text(vr)
+        with contextlib.redirect_stdout(io.StringIO()) as buf:
+            rc = E.main([str(d), "--dim", "2d"])
+        r = json.loads((s6 / "elastic_ionic_decompose.json").read_text(encoding="utf-8"))
+        self.assertEqual(rc, 0, buf.getvalue())
+        self.assertEqual(r["force_constants_from"], "vasprun hessian × √(m_i m_j)")
+        self.assertEqual(r["internal_strain_from"], "displaced atoms")
+        self.assertEqual(r["ionic_reference"], "TOTAL − SYMMETRIZED")
+        self.assertEqual(r["verdict"], "artifact")
+        np.testing.assert_allclose(np.array(r["projected_total_vasp_order_kbar"]), CLAMPED + proj, atol=0.05)
+        (s6 / "vasprun.xml").unlink()                                       # 没有力常数 -> 明确报错
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()) as err:
+            self.assertEqual(E.main([str(d), "--dim", "2d"]), 2)
+        self.assertIn("拿不到力常数矩阵", err.getvalue())
 
     def test_vasp_already_projected(self):
         """VASP 若已去掉平移模：它的离子项 = 非平移模之和；本工具认出来，结论按真实值（这里仍正定 -> ok）。"""

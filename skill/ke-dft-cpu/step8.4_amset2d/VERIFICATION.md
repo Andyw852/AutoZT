@@ -7207,3 +7207,27 @@ GaAs 电子受 POP 限制，ADP-only 本来就大。
 **之后**：如果 Mo2S3 判为 artifact，S8/S8.4 要改用投影后的张量，但现在只能改共享脚本里的 MANUAL_ELASTIC，
 会作用到所有材料（V148 修过的 S8.2 MANUAL 是同一个问题）。所以下一个补丁会加材料级的 step.conf 键，
 让 S8/S8.4 读 elastic_ionic_decompose.json；V134 的稳定性检查照样作用在投影后的张量上。
+
+## V155（2026-10-04）：elastic_ionic_decompose 适配 VASP 6 的 IBRION=6 + ISIF=3 输出（Mo2S3 实际格式）
+
+**实测**（用户侧）：V154 跑 Mo2S3 时报"读不到 SECOND DERIVATIVES"。这份 OUTCAR 里：
+- 没有 SECOND DERIVATIVES，也没有单独的 CONTR FROM IONIC RELAXATION 块；
+- 有 ELASTIC MODULI、SYMMETRIZED ELASTIC MODULI 和 TOTAL ELASTIC MODULI；
+- 内应变张量分两段：INTERNAL STRAIN TENSORS FROM STRAINED CELLS 与 FROM DISPLACED ATOMS，每段 20 个离子，表头是 X Y Z XY YZ ZX。
+V154 的合成测试用的是我假设的格式，和这份实际输出对不上。
+
+**改动**：
+- 力常数矩阵：OUTCAR 里有 SECOND DERIVATIVES 就用它；没有就读同目录 vasprun.xml（或 .gz）的 `<dynmat>` hessian，
+  并给出两个候选：乘以 √(mᵢmⱼ) 去掉质量加权，以及不去质量加权（质量取自 atominfo）。
+  IBRION=5–8 都会写这一块，phonopy/pymatgen 也是从这里读的。
+- 内应变：STRAINED CELLS、DISPLACED ATOMS 和两者平均三个候选；没有分段标题的旧格式只有一套。
+- 离子项参考值：有 CONTR FROM IONIC RELAXATION 就用它，否则用 TOTAL − SYMMETRIZED。
+- 所有组合（力常数来源 × 内应变口径 × 剪切因子 × 求逆时是否去掉平移模）都交给"复现 VASP 离子项"这个自检来选，
+  选中的组合写进输出和 json。
+- vasprun 用 iterparse 逐个处理，用完的 `<calculation>` 立即清掉；文件被截断时，已读到的部分仍然可用。
+
+**测试**：test_elastic_decompose 新增 F（共 7 项），按 VASP 6 的实际格式构造：
+- OUTCAR 里没有 SECOND DERIVATIVES、没有离子项块，内应变分两段，其中 DISPLACED ATOMS 是真值、STRAINED CELLS 偏 10%；
+- 力常数只放在 vasprun.xml 里，用 −K/√(mᵢmⱼ) 的形式写入；
+- 结果：自动选中"hessian × √(mᵢmⱼ)"、"displaced atoms"、"TOTAL − SYMMETRIZED"，判为 artifact，投影值与解析值一致；
+- 删掉 vasprun.xml 后报"拿不到力常数矩阵"，退出码 2；另外手工验证了 .gz 格式。
