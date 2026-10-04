@@ -102,7 +102,8 @@ steps:
      marker: 'kappa_summary.json:"KAPPA_DONE": true',
      gen: gen_step6_kappa.py, fetch_all: true,
      gen_need: [stepconf.py, step.conf, gen_step2_kappa.py, fc_common.py, kappa_driver.py,
-                cut3_select.py, submit_kappa.tpl, submit_shengbte_fcfit.tpl,
+                cut3_select.py, fc_fit_driver.py, imag_policy.py, phonon_stability.py, za_2d.py,
+                submit_kappa.tpl, submit_shengbte_fcfit.tpl,
                 dim_common.py, thickness_2d.py, vdw_radii.py]}
 
 # NAC 为可选步组：极性绝缘体默认开（LO-TO 劈裂需要）。

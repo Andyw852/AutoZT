@@ -831,17 +831,6 @@ def compare_methods(out):
 
 
 
-def _shengbte_mesh(out, yaml_name, cfg):
-    """shengbte 只吃对角网格 [n,n,n]。显式 MESH 原样；auto/长度按倒格矢现算对角网格。"""
-    kind, val = _mesh_spec(cfg)
-    if kind == "explicit":
-        return [int(x) for x in val]
-    import phono3py
-    ph3 = phono3py.load(str(out / yaml_name), produce_fc=False, log_level=0)
-    rec = np.linalg.norm(np.linalg.inv(np.asarray(ph3.primitive.cell, float)), axis=0)
-    return [max(1, int(round(float(val) * b))) for b in rec]
-
-
 def _export_shengbte_fc(out):
     """fc2/fc3.hdf5 → ShengBTE FORCE_CONSTANTS_2ND/3RD（hiphive 转格式，与 kl-mlff 同源）。"""
     import ase, h5py
@@ -877,115 +866,96 @@ def _export_shengbte_fc(out):
         sc2 = sc
     sc2_ase = ase.Atoms(symbols=sc2.symbols, cell=sc2.cell,
                         scaled_positions=_wrap(sc2.scaled_positions), pbc=True)
+    sb = out / "shengbte"
+    sb.mkdir(exist_ok=True)
     ForceConstants.from_arrays(sc2_ase, fc2_array=fc2).write_to_phonopy(
-        str(out / "FORCE_CONSTANTS_2ND"), format="text")
+        str(sb / "FORCE_CONSTANTS_2ND"), format="text")
     ForceConstants.from_arrays(sc_ase, fc3_array=fc3).write_to_shengBTE(
-        str(out / "FORCE_CONSTANTS_3RD"), prim_ase)
-    # hiphive 按超胞（数据集）原子顺序写 2ND；ShengBTE 假定 phonopy 顺序（x 最快、原子
-    # 最慢）——数据集超胞是交错顺序时不重排就会读到乱序力常数（Mn2In2Se5/MnIn2Se4 踩过）
-    from fc_common import shengbte_fc2_ensure_order
-    try:
-        od = shengbte_fc2_ensure_order(
-            out / "FORCE_CONSTANTS_2ND",
-            np.asarray(prim_ase.cell).tolist(), prim_ase.get_scaled_positions().tolist(),
-            np.asarray(sc2_ase.cell).tolist(), sc2_ase.get_scaled_positions().tolist())
-    except ValueError as e:
-        sys.exit("[ERROR] ShengBTE 力常数不可用：%s" % e)
-    print("[OK] FORCE_CONSTANTS_2ND/3RD <- fc2/fc3.hdf5（hiphive 导出；2ND 顺序 %s，scell %s）"
-          % (od["action"], od["dims"]), flush=True)
-    return od["dims"]
-
-
-def _shengbte_control(out, cfg, mesh, scell=None):
-    """写 ShengBTE CONTROL（三声子 RTA，RTA 默认；NAC 有 BORN 才开）。"""
-    from ase.io import read as ase_read
-    from ase.data import chemical_symbols as _cs
-    atoms = ase_read(str(out / "POSCAR"), format="vasp")
-    cell = atoms.cell
-    numbers = atoms.numbers
-    unique = sorted(set(numbers))
-    syms = [_cs[z] for z in unique]
-    kd = {z: i + 1 for i, z in enumerate(unique)}
-    types = [kd[z] for z in numbers]
-    spos = atoms.get_scaled_positions(wrap=True)
-    if scell is None:
-        # 兜底（老调用）：没有从 2ND 实测的 scell 时才退回 fc3 的超胞矩阵
-        scm = np.asarray(cfg.get("supercell_matrix") or np.diag([2, 2, 2]), float)
-        if np.abs(scm - np.diag(np.diag(scm))).max() > 1e-8:
-            sys.exit("[ERROR] ShengBTE 的 scell 只能是对角超胞，当前超胞矩阵非对角：%s"
-                     % scm.tolist())
-        scell = [int(x) for x in np.diag(scm)]
-    scell = [int(x) for x in scell]
-    ng = [int(x) for x in mesh]
-    L = ["&allocations", "  nelements=%d," % len(unique), "  natoms=%d," % len(atoms),
-         "  ngrid(:)=%d %d %d" % (ng[0], ng[1], ng[2]), "&end", "&crystal",
-         "  lfactor=0.1,"]
-    for r in range(3):
-        L.append("  lattvec(:,%d)=" % (r + 1) + " ".join("%.10f" % cell[r, i] for i in range(3)) + ",")
-    L.append("  elements=" + " ".join('"%s"' % s for s in syms))
-    L.append("  types=" + " ".join(str(t) for t in types) + ",")
-    for idx, p in enumerate(spos):
-        L.append("  positions(:,%d)=" % (idx + 1) + " ".join("%.10f" % x for x in p) + ",")
-    use_nac = bool(cfg.get("nac")) and (out / "BORN").is_file()
-    if use_nac:
-        from phonopy.file_IO import parse_BORN
-        from phonopy.structure.atoms import PhonopyAtoms
-        primitive = PhonopyAtoms(symbols=atoms.get_chemical_symbols(), cell=atoms.cell,
-                                 scaled_positions=spos)
-        nac = parse_BORN(primitive, filename=str(out / "BORN"))
-        if not nac:
-            use_nac = False
-        else:
-            for j in range(3):
-                L.append("  epsilon(:,%d)=" % (j + 1) + " ".join(str(x) for x in nac["dielectric"][:, j]) + ",")
-            for atom, born in enumerate(nac["born"]):
-                for j in range(3):
-                    L.append("  born(:,%d,%d)=" % (j + 1, atom + 1) + " ".join(str(x) for x in born[:, j]) + ",")
-    L.append("  scell(:)=%d %d %d" % (scell[0], scell[1], scell[2]))
-    temps = [float(x) for x in cfg["temperatures"]]
-    L += ["&end", "&parameters",
-          "  T_min=%.1f" % min(temps), "  T_max=%.1f" % max(temps),
-          "  T_step=%.1f" % (temps[1] - temps[0] if len(temps) > 1 else 100.0),
-          "  scalebroad=%s" % float(cfg.get("shengbte_scalebroad", 1.0)), "&end",
-          "&flags", "  autoisotopes=%s," % ("T" if cfg.get("isotope", True) else "F"),
-          "  convergence=F,", "  nonanalytic=%s," % ("T" if use_nac else "F"),
-          "  nanowires=F,", "&end"]
-    (out / "CONTROL").write_text("\n".join(L) + "\n", encoding="utf-8", newline="\n")
-    print("[OK] CONTROL <- %s（网格 %s，NAC=%s）" % ("CONTROL", " ".join(str(x) for x in ng), use_nac), flush=True)
+        str(sb / "FORCE_CONSTANTS_3RD"), prim_ase)
+    # 单胞/超胞照实写出：_shengbte_finalize 用它们写 CONTROL、判定 2ND 的原子顺序
+    from ase.io import write as _ase_write
+    _ase_write(str(sb / "POSCAR"), prim_ase, format="vasp", direct=True)
+    _ase_write(str(out / "SPOSCAR"), sc2_ase, format="vasp", direct=True)
+    print("[OK] shengbte/FORCE_CONSTANTS_2ND/3RD + POSCAR <- fc2/fc3.hdf5（hiphive 导出）",
+          flush=True)
 
 
 def _prepare_shengbte(cfg, out):
-    """SOLVER=shengbte 准备步：fc2/fc3 → FORCE_CONSTANTS_2ND/3RD + CONTROL。"""
-    scell = _export_shengbte_fc(out)          # = FORCE_CONSTANTS_2ND 的超胞（实测）
-    mesh = _shengbte_mesh(out, cfg["disp_yaml"], cfg)
-    _shengbte_control(out, cfg, mesh, scell=scell)
-    return mesh
+    """SOLVER=shengbte 准备步：shengbte/ 力常数 + CONTROL，放到作业目录顶层。
+
+    CONTROL 的唯一真源是 fc_fit_driver._shengbte_finalize（S1 导出用的同一个函数）：
+    优先用 gen 从 S1 拷来的 shengbte/，只按本步的 ngrid/温度重写 CONTROL，并重做
+    校验（2ND 表头 = 原胞×scell、3RD 原子号、对角 scell、2ND 原子顺序——顺序判定
+    是幂等的，S1 已排好的文件不会被再排一遍）；S1 没导出时才从 fc2/fc3.hdf5 现导。"""
+    from fc_fit_driver import _shengbte_finalize
+    sb = out / "shengbte"
+    if not ((sb / "FORCE_CONSTANTS_2ND").is_file() and (sb / "FORCE_CONSTANTS_3RD").is_file()):
+        _export_shengbte_fc(out)
+    if not _shengbte_finalize(cfg, out):
+        sys.exit("[ERROR] ShengBTE 输入自检未通过（见 shengbte/shengbte_manifest.json）")
+    for f in ("FORCE_CONSTANTS_2ND", "FORCE_CONSTANTS_3RD", "CONTROL"):
+        shutil.copyfile(str(sb / f), str(out / f))   # ShengBTE 从作业目录读输入
+    man = json.loads((sb / "shengbte_manifest.json").read_text(encoding="utf-8"))
+    return man.get("ngrid")
 
 
-def _collect_shengbte(cfg, out, mesh):
-    """SOLVER=shengbte 汇总步：解析 BTE.KappaTensorVsT_RTA → kappa_summary.json。"""
-    f = out / "BTE.KappaTensorVsT_RTA"
-    if not f.is_file():
-        sys.exit("[ERROR] ShengBTE 没产出 BTE.KappaTensorVsT_RTA（看 shengbte.log）")
-    rows = [l.split() for l in f.read_text(encoding="utf-8").splitlines()
-            if l.strip() and not l.lstrip().startswith("#")]
-    if not rows:
-        sys.exit("[ERROR] BTE.KappaTensorVsT_RTA 是空的")
-    temperatures = [float(r[0]) for r in rows]
-    raw = [[float(r[1]), float(r[5]), float(r[9])] for r in rows]
+def _read_shengbte_kt(path):
+    """BTE.KappaTensorVsT_RTA/_CONV：一行一个温度（F7.1 + 9E14.5 [+ 迭代数]），
+    列 1/5/9 = xx/yy/zz；NaN 或发散（>1e6）的行丢掉。"""
+    rows = []
+    for ln in Path(path).read_text(encoding="utf-8", errors="ignore").splitlines():
+        s = ln.split()
+        if len(s) < 10 or s[0].startswith("#"):
+            continue
+        try:
+            v = [float(x) for x in s[:10]]
+        except ValueError:
+            continue
+        if all(abs(v[k]) < 1e6 for k in (1, 5, 9)):
+            rows.append(v)
+    return rows
+
+
+def _collect_shengbte(cfg, out, mesh=None):
+    """SOLVER=shengbte 汇总步：迭代解（CONV）优先；缺温度点/发散时回退 RTA。
+
+    多温度时 ShengBTE 把每个温度追加成同一个 BTE.KappaTensorVsT_* 文件的一行
+    （T<温度>K/ 子目录里只是逐模式的量）。"""
+    want = len(cfg.get("temperatures") or []) or 1
+    src, rows = None, []
+    for c in (out / "BTE.KappaTensorVsT_CONV", out / "BTE.KappaTensorVsT_RTA"):
+        if not c.is_file():
+            continue
+        r = _read_shengbte_kt(c)
+        if not r or (c.name.endswith("_CONV") and len(r) < want):
+            continue
+        src, rows = c, r
+        break
+    if src is None:
+        sys.exit("[ERROR] ShengBTE 没产出可用的 BTE.KappaTensorVsT_CONV/RTA（看 shengbte.log）")
+    if mesh is None:
+        try:
+            mesh = json.loads((out / "shengbte" / "shengbte_manifest.json").read_text(
+                encoding="utf-8")).get("ngrid")
+        except Exception:
+            mesh = None
+    temperatures = [r[0] for r in rows]
+    raw = [[r[1], r[5], r[9]] for r in rows]
     j = min(range(len(temperatures)), key=lambda i: abs(temperatures[i] - 300.0))
-    s = {"KAPPA_DONE": True, "solver": "shengbte", "mesh": " ".join(str(x) for x in mesh),
+    s = {"KAPPA_DONE": True, "solver": "shengbte", "source": src.name,
+         "bte_method": "iterative" if src.name.endswith("_CONV") else "rta",
+         "mesh": " ".join(str(x) for x in (mesh or [])),
          "temperatures": temperatures, "kappa_xx_yy_zz": raw,
          "kappa_300K_xx_yy_zz": raw[j], "kappa_inplane_300K": 0.5 * (raw[j][0] + raw[j][1]),
-         "bte_method": "rta", "isotope": bool(cfg.get("isotope", True)),
+         "isotope": bool(cfg.get("isotope", True)),
          "nac": bool(cfg.get("nac")) and (out / "BORN").is_file(),
          # ShengBTE 和 phono3py 一样按含真空的整胞体积归一：2D 同样给层厚归一化值
          **_two_d_fields(cfg, raw, j),
          **cfg.get("stability", {})}
     (out / "kappa_summary.json").write_text(
         json.dumps(s, indent=2, ensure_ascii=False), encoding="utf-8", newline="\n")
-    print("[DONE] shengbte κ：300K in-plane %.4f W/mK -> kappa_summary.json"
-          % s["kappa_inplane_300K"], flush=True)
+    print("[DONE] shengbte κ（%s）：300K in-plane %.4f W/mK -> kappa_summary.json"
+          % (s["bte_method"], s["kappa_inplane_300K"]), flush=True)
 
 
 def cmd_shengbte(cfg, out):
@@ -1145,8 +1115,7 @@ if __name__ == "__main__":
         _prepare_shengbte(_load_cfg(), out)
     elif "--collect-shengbte" in args:
         out = Path.cwd()
-        cfg = _load_cfg()
-        _collect_shengbte(cfg, out, _shengbte_mesh(out, cfg["disp_yaml"], cfg))
+        _collect_shengbte(_load_cfg(), out)
     elif "compare" in args:
         compare_methods(Path.cwd())
     else:
