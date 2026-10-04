@@ -429,6 +429,7 @@ def _converge_mesh(out, yaml_name, fc2, fc3, cfg, source_fc, first=None):
     (out / "mesh_convergence.json").write_text(
         json.dumps(rep, indent=2, ensure_ascii=False), encoding="utf-8",
         newline="\n")
+    _write_kappa_vs_mesh(out, rep)
     if not converged:
         print("[WARN] q 网格未收敛（%s）—— 结果取最密网格 %s，见 mesh_convergence.json；"
               "可调大 MESH_CONV_MAX_LENGTH/MESH_CONV_MAX_POINTS 或放宽 MESH_CONV_TOL_PCT"
@@ -439,6 +440,61 @@ def _converge_mesh(out, yaml_name, fc2, fc3, cfg, source_fc, first=None):
     prev["mesh_converged"] = converged
     prev["mesh_convergence"] = rep
     return prev
+
+
+def _write_kappa_vs_mesh(out, rep):
+    """kappa 随 q 网格的收敛曲线：in-plane（xx=yy）对 mesh，写 kappa_vs_mesh.{json,png}。
+
+    和 mesh_convergence.json 是同一份记录；这里只是把它画成图，方便一眼看平台。"""
+    recs = rep.get("records") or []
+    if len(recs) < 2:
+        return
+    t = rep.get("check_T")
+    rows = []
+    for r in recs:
+        k = r.get("kappa_at_T") or [None] * 6
+        rows.append({"mesh": r.get("mesh"), "length_A": r.get("length"),
+                     "kappa_xx": k[0], "kappa_yy": k[1], "kappa_zz": k[2],
+                     "rel_change": r.get("rel_change")})
+    (out / "kappa_vs_mesh.json").write_text(
+        json.dumps({"check_T": t, "converged": rep.get("converged"),
+                    "tol_pct": rep.get("tol_pct"), "rows": rows},
+                   indent=2, ensure_ascii=False), encoding="utf-8", newline="\n")
+    try:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+    except Exception as e:
+        print("[..] matplotlib unavailable (%s) -- kappa_vs_mesh.json only" % e,
+              flush=True)
+        return
+    labels = [str(r["mesh"]) for r in rows]
+    xx = [r["kappa_xx"] for r in rows]
+    zz = [r["kappa_zz"] for r in rows]
+    has_zz = any(z is not None and abs(float(z)) > 1e-12 for z in zz)
+    with plt.rc_context(_SCI_RC):
+        fig, ax = plt.subplots(figsize=(5.6, 4.0))
+        ax.plot(range(len(xx)), xx, "o-", color="tab:blue", lw=1.5, ms=6,
+                label="in-plane xx=yy")
+        if has_zz:
+            ax.plot(range(len(zz)), zz, "s--", color="tab:red", lw=1.2, ms=5,
+                    label="zz")
+        for i, y in enumerate(xx):
+            if y is not None:
+                ax.annotate("%.2f" % y, (i, y), textcoords="offset points",
+                            xytext=(0, 8), ha="center", fontsize=8)
+        ax.set_xticks(range(len(labels)))
+        ax.set_xticklabels(labels)
+        ax.set_xlabel("q-mesh")
+        ax.set_ylabel("kappa (W/mK)")
+        ax.set_title("q-mesh convergence @ %g K%s"
+                     % (t, "" if rep.get("converged") else "  (NOT converged)"))
+        ax.grid(True, alpha=0.3)
+        ax.legend(fontsize=8)
+        fig.tight_layout()
+        fig.savefig(str(out / "kappa_vs_mesh.png"))
+        plt.close(fig)
+    print("[OK] kappa_vs_mesh.png / .json", flush=True)
 
 
 def _reference_tag(tags, nominal=None):
