@@ -21,6 +21,7 @@ import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT / "skill" / "_common"))          # imag_policy/za_2d/phonon_stability
 sys.path.insert(0, str(ROOT / "skill" / "_common" / "fcfit"))
 sys.path.insert(0, str(ROOT / "skill" / "fit-fc-thermal"))
 

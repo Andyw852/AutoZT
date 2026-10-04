@@ -352,6 +352,24 @@ matrix and solves it.
   compact cluster IFCs, so the dense fc3 is never materialised); the phono3py
   engine re-exports through hiphive, and `FC3_LOAD_GB_LIMIT` (default 8 GB)
   skips the fc3 text when the dense `fc3.hdf5` would need more than that.
+* **ShengBTE layout (checked, not a bug):** `FORCE_CONSTANTS_2ND` is the phonopy
+  `FORCE_CONSTANTS` of the **full supercell** — its header is
+  `natoms x prod(scell)` (9 atoms x 3x3x1 → `81 81`; 7 x 3x3x3 → `189 189`), which is
+  exactly what ShengBTE's `read2fc` requires; `FORCE_CONSTANTS_3RD`, `POSCAR` and
+  `CONTROL` refer to the **unit cell** (3RD atom indices 1..natoms + R vectors).
+  Do not fold the 2ND file to the unit cell — ShengBTE then stops with "wrong number of
+  force constants for the specified scell".
+* The export also writes a runnable `shengbte/CONTROL` (lattvec/positions of the unit
+  cell, `scell` = the 2ND supercell, `ngrid` from `SHENGBTE_NGRID`, temperatures from
+  `SHENGBTE_T`, Born charges + `nonanalytic=.TRUE.` when `BORN` exists) and
+  `shengbte/shengbte_manifest.json` with the checks: 2ND header = natoms x prod(scell),
+  3RD max index <= natoms, supercell ordering (the 2ND file is re-ordered into
+  ShengBTE's x-fastest/atom-slowest order if the dataset's SPOSCAR is not), diagonal
+  supercell (ShengBTE cannot express a non-diagonal one → `usable: false`).
+  2D: ShengBTE divides by the full cell volume — rescale the in-plane κ by c/thickness.
+* Re-export without refitting (e.g. in the fetched `result/step1_fit/`):
+  `python fc_fit_driver.py shengbte fit_config.json` (needs POSCAR, SPOSCAR, fc2/fc3
+  or the existing shengbte/ files; exits non-zero when the set is not runnable).
 
 ## Lattice thermal conductivity (S2_kappa)
 
@@ -555,7 +573,8 @@ step1_fit/
   phono3py_disp.yaml phono3py_params.yaml FORCES_FC3 BORN   passthrough
   fc2.hdf5 [fc3.hdf5]      fitted force constants (phono3py layout)
   FORCE_CONSTANTS          fc2 in phonopy text format (hiphive path)
-  shengbte/FORCE_CONSTANTS_2ND _3RD POSCAR    for ShengBTE / fourphonon
+  shengbte/FORCE_CONSTANTS_2ND _3RD POSCAR CONTROL shengbte_manifest.json
+                           ready-to-run ShengBTE / fourphonon set (2ND = supercell)
   band-dft-cpu.yaml        phonopy band structure of the fit
   cutoff_scan.json         shell / cutoff determination (see below)
   cutoff_scan/cut3_<c>/    per-candidate fc2/fc3 + pheasy logs (scan mode)

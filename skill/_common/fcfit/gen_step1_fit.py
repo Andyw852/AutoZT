@@ -164,6 +164,10 @@ SPEC = {
     "HIPHIVE_CELL": ("", "str"),
     # ---- output / gate ----
     "EXPORT_SHENGBTE": (True, "bool"),
+    # ShengBTE CONTROL（随 shengbte/ 一起写）：q 网格 auto = 按 40 A 倒格矢长度
+    # （n_i = round(40*|b_i|)），或一个长度（A），或 "n n n"；温度 "300" 或 "100 800 100"
+    "SHENGBTE_NGRID": ("auto", "str"),
+    "SHENGBTE_T": ("300", "str"),
     # 额外产出一份 kl_bundle/（fc2/fc3 + shengbte 力常数 + phonon_summary.json
     # + phono3py_disp.yaml 等），供 kl-dft-cpu 的 S5_fc 跨集群直接导入（见
     # kl skill 的 FC_IMPORT_DIR / push_paths）。体积小，默认开。
@@ -572,7 +576,14 @@ def _gen_one(conf, out, job_label="S1fit"):
         sys.exit("[ERROR] ENABLE_FC must be 2 or 3 (this skill fits fc2/fc3)")
     p_bin = str(conf["PHEASY_BIN"] or "pheasy-gpu").lower()
     if p_bin != "pheasy-gpu":
-        sys.exit("[ERROR] PHEASY_BIN must be pheasy-gpu (the CPU build was removed)")
+        # 旧材料 init 时从老模板拷进项目 step.conf 的 PHEASY_BIN = pheasy：只有 pheasy
+        # 引擎真的会用它；phono3py / hiphive 配方不该因此连输入都生成不了。
+        if engine == "pheasy":
+            sys.exit("[ERROR] PHEASY_BIN must be pheasy-gpu (the CPU build was removed)；"
+                     "改：conf --set params.PHEASY_BIN=pheasy-gpu")
+        print("[..] PHEASY_BIN=%s ignored (FIT_ENGINE=%s does not run pheasy)"
+              % (p_bin, engine))
+        p_bin = "pheasy-gpu"
     p_ngpu = str(conf["PHEASY_NGPU"] or "").strip()
     if p_ngpu:
         try:
@@ -600,34 +611,12 @@ def _gen_one(conf, out, job_label="S1fit"):
 
     src, sig = resolve_dataset(cwd, out, conf["FIT_INPUT_DIR"])
 
-    # Fail fast on the one dataset/engine combination that cannot work: a
-    # disp-*/vasprun.xml layout has neither forces embedded in a phono3py YAML
-    # nor a FORCES_FC3 file, so the phono3py engine would only discover it at
-    # fit time ("no forces available for the phono3py engine").  Guard exactly
-    # this layout: a phono3py_params.yaml / phono3py_disp.yaml + FORCES_FC3 /
-    # npy / pkl dataset still goes through untouched.
+    # disp-*/vasprun.xml 布局没有 FORCES_FC3、YAML 里也不带力。phono3py 引擎靠
+    #   prep 从 vasprun.xml 力合成带力的 phono3py_params.yaml 来支持（见 fc_fit_driver
+    #   cmd_prep 的合成分支）；pheasy/hiphive 则直接读 vasprun 力，无需合成。
     if sig == "vasprun" and engine == "phono3py":
-        sys.exit(
-            "[ERROR] FIT_ENGINE=phono3py cannot use a disp-*/vasprun.xml "
-            "dataset (%s).\n"
-            "        phono3py needs the forces either embedded in a phono3py "
-            "YAML\n"
-            "        (phono3py_params.yaml / phono3py_disp.yaml) or in a "
-            "FORCES_FC3 file,\n"
-            "        and this layout carries neither -- the fit would abort "
-            "later with\n"
-            "        'no forces available for the phono3py engine'.\n"
-            "        Use a regression engine (it reads the vasprun forces):\n"
-            "          tf -tt fit-fc-thermal -p <material> -j step1_fit conf "
-            "--set params.FIT_ENGINE=pheasy\n"
-            "          tf -tt fit-fc-thermal -p <material> -j step1_fit conf "
-            "--set params.FIT_ENGINE=hiphive\n"
-            "        or point FIT_INPUT_DIR at a dataset whose YAML embeds the "
-            "forces\n"
-            "        / that ships FORCES_FC3:\n"
-            "          tf -tt fit-fc-thermal -p <material> -j step1_fit conf "
-            "--set params.FIT_INPUT_DIR=<yaml-or-FORCES_FC3 dataset>\n"
-            "        (dataset: %s)" % (src, src))
+        print("[..] vasprun + phono3py：prep 将从 vasprun.xml 力合成带力的 "
+              "phono3py_params.yaml", flush=True)
 
     # Random-displacement (type-2) datasets are required by the regression
     # engines; finite-difference datasets only carry enough information for the
@@ -839,6 +828,8 @@ def _gen_one(conf, out, job_label="S1fit"):
         "hiphive_cell": str(conf["HIPHIVE_CELL"] or ""),
         # output / gate
         "export_shengbte": bool(conf["EXPORT_SHENGBTE"]),
+        "shengbte_ngrid": str(conf["SHENGBTE_NGRID"] or "auto"),
+        "shengbte_t": str(conf["SHENGBTE_T"] or "300"),
         "export_kl_bundle": bool(conf["EXPORT_KL_BUNDLE"]),
         "fc3_load_gb_limit": float(conf["FC3_LOAD_GB_LIMIT"] or 8.0),
         "band_points": int(conf["BAND_POINTS"]),

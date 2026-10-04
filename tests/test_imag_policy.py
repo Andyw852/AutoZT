@@ -191,12 +191,14 @@ def main():
                "policy_version", "stability_verdict", "imag_policy_refs"):
         check('phonon_summary.json 写 "%s"' % _k, ('"%s"' % _k) in kfb)
     check("S5 日志含 cm-1（THz 与 cm-1 同打）", "cm-1" in kfb)
-    # §五：kappa_summary.json 透传 + warn_note + 收敛检查建议
-    g6 = _src("skill/kl-dft-cpu/gen_step6_kappa.py")
+    # §五：kappa_summary.json 透传 + warn_note（kl-dft-cpu 现委托共享引擎
+    #   gen_step2_kappa / kappa_driver，故检查共享引擎源码）
+    g2k = _src("skill/_common/fcfit/gen_step2_kappa.py")
+    kdrv = _src("skill/_common/fcfit/kappa_driver.py")
     for _k in ("stability_verdict", "imag_class", "min_freq_THz", "warn_note"):
-        check("kappa_summary 透传 %s" % _k, _k in g6)
-    check("warn_note 给出收敛检查建议（真空层/超胞/应力/k 网格 + Lin 2022）",
-          ("真空层厚度" in g6) and ("Lin et al. 2022" in g6), "")
+        check("kappa_summary 透传 %s（共享引擎）" % _k, _k in g2k or _k in kdrv)
+    check("kappa_summary 透传 stability（cfg.get('stability')）",
+          'cfg.get("stability"' in kdrv, "")
     check("mlff 两个 driver 调用 classify_imag",
           ("classify_imag" in m_cpu) and ("classify_imag" in m_gpu))
     # §四：S5.1 mlff 之外，S6 的 lattice_kappa 也不再自带阈值

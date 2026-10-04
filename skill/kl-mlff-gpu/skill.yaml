@@ -60,7 +60,7 @@ steps:
      #   gen 端检测到 kl_bundle/ 即自动进入导入模式（复用拟合结果，不重拟）。
      push_paths: ["fit-fc-thermal/result/step1_fit/kl_bundle"],
      gen_need: [stepconf.py, step.conf, gen_step1_fit.py, fc_common.py, fc_fit_driver.py,
-                dim_common.py, reuse_fcfit.py,
+                imag_policy.py, phonon_stability.py, za_2d.py, dim_common.py, reuse_fcfit.py,
                 submit_fcfit_p3py.tpl, submit_fcfit_hiphive.tpl,
                 submit_fcfit_pheasy.tpl, submit_fcfit_pheasy_gpu.tpl]}
 

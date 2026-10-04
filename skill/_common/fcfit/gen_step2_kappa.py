@@ -79,9 +79,20 @@ SPEC = {
     #   kappa_2d_normalized_* = 原始 κ × h⊥/d。vdw（默认：原子层跨度 + 上下 vdW 半径）|
     #   cell（不归一）| 数值（固定层厚 Å，如 MoS2 体相层间距 6.15）。
     "KAPPA_2D_THICKNESS": ("vdw", "str"),
-    # 累积 κ vs 声子自由程（--mfp）：phono3py 写 kappa-mfp.hdf5，driver 把 50%/90%
-    #   累积处的 MFP 收进 kappa_summary.json（审稿人常问的热输运尺度）。默认关。
-    "MFP_CUMULATIVE": (False, "bool"),
+    # BTE 求解器：phono3py（默认，自动网格收敛）| shengbte（ShengBTE 三声子 BTE，
+    #   MPI 按 q 点并行，大胞/密网格更快；shengbte 只支持单套网格、无自动收敛）。
+    "SOLVER": ("phono3py", "str"),
+    # shengbte 专属
+    "SHENGBTE_EXE": ("ShengBTE", "str"),       # 按集群填绝对路径
+    "SHENGBTE_SCALEBROAD": (1.0, "float"),      # 高斯展宽（ShengBTE 默认 1.0；0.1 会漏过程）
+    # ShengBTE 的 MPI/OMP 布局（见 _common/fcfit/templates/submit_shengbte_fcfit.tpl）：
+    #   ShengBTE 靠 MPI 按 q 点并行：一个 rank 占一个 NUMA 节点（rank 数必须 <= NUMA 节点数），
+    #   NTASKS = TOTAL_CORES / CORES_PER_NUMA ，CPUS_PER_TASK = CORES_PER_NUMA。
+    #   jzzn 计算节点实测：192 核 = 8 NUMA x 24 核（96 核 = 4 rank x 24 线程）。
+    #   rank=1 会退化成串行（实测 11.8 h 零产物），必须显式算出来填进 submit 模板。
+    "SHENGBTE_TOTAL_CORES":    (96,     "int"),
+    "SHENGBTE_CORES_PER_NUMA": (24,     "int"),
+    "SHENGBTE_NTASKS":         ("auto", "str"),  # MPI rank 数；auto=按 TOTAL_CORES/CORES_PER_NUMA 算
 }
 
 
@@ -207,6 +218,26 @@ def _fit_identity(fit):
     # 图上只标方法本身（不带引擎前缀），例如 ALASSO / symfc
     _label = str(meth).strip() if meth not in (None, "") else None
     return {"method_label": _label, "nominal_cut3_A": cut}
+
+
+def _stability_passthrough(fit):
+    """从 phonon_summary.json 透传虚频判据字段到 kappa_summary（下游 device-thermal
+    等用 stability_verdict 判 κ 可靠性）。best effort：缺文件/字段只透传拿得到的。"""
+    p = Path(fit) / "phonon_summary.json"
+    if not p.is_file():
+        return {}
+    try:
+        ps = json.loads(p.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    out = {}
+    for _k in ("stability_verdict", "imag_class", "min_freq_THz"):
+        if ps.get(_k) is not None:
+            out[_k] = ps[_k]
+    _v = ps.get("stability_verdict")
+    if _v in ("warn", "needs_review", "fail") or ps.get("stable") is False:
+        out["warn_note"] = ps.get("note") or ""
+    return out
 
 
 def two_d_norm(fit_dir, mode):
@@ -367,10 +398,14 @@ def _gen_one(conf, fit, out, cwd, write_submit=True):
         "nac": nac,
         "bte_method": method,
         "enable_fc": enable_fc,
-        "mfp_cumulative": bool(conf["MFP_CUMULATIVE"]),
+        "solver": str(conf["SOLVER"] or "phono3py").strip().lower(),
+        "shengbte_exe": str(conf["SHENGBTE_EXE"] or "ShengBTE"),
+        "shengbte_scalebroad": float(conf["SHENGBTE_SCALEBROAD"] or 1.0),
+        "shengbte_ntasks": str(conf["SHENGBTE_NTASKS"] or "auto"),
         "kappa_2d_norm": (two_d_norm(fit, conf["KAPPA_2D_THICKNESS"])
                           if mcfg["is_2d"] else None),
         "source_fc": str(fit),
+        "stability": _stability_passthrough(fit),
         # the fit's own cutoff and method: the per-method kappa figure is drawn
         # even without a cutoff scan (one point at the nominal cutoff)
         **_fit_identity(fit),
@@ -393,14 +428,46 @@ def _gen_one(conf, fit, out, cwd, write_submit=True):
         print("[DONE] %s: kappa_config.json ready" % out.relative_to(cwd), flush=True)
         return
 
-    tpl = fc.resolve_submit(here, "submit_kappa")
-    subs = {
-        "JOBNAME": fc.new_jobname(cwd, "S2kappa"),
-        "CONDA_SH": str(conf["CONDA_SH"] or ""),
-        "CONDA_ENV": str(conf["CONDA_ENV"] or ""),
-        "CPUS_PER_TASK": str(int(conf["P3PY_OMP_THREADS"] or 48)),
-        "QOS": str(conf["SBATCH_QOS"] or "regular"),
-    }
+    solver = str(conf["SOLVER"] or "phono3py").strip().lower()
+    if solver == "shengbte":
+        # ShengBTE 的 MPI/OMP 布局：一个 rank 一个 NUMA 节点（rank 数必须 <= NUMA 节点数，
+        # 否则 OpenMPI 循环复用节点、多个 rank 挤同一组核）。rank=1 会退化成串行，必须显式算。
+        _cpus_per_numa = int(conf["SHENGBTE_CORES_PER_NUMA"] or 24)
+        _total = int(conf["SHENGBTE_TOTAL_CORES"] or 96)
+        _nt_raw = str(conf["SHENGBTE_NTASKS"] or "auto").strip()
+        if _nt_raw and _nt_raw.lower() != "auto":
+            try:
+                _ntasks = int(_nt_raw)
+            except ValueError:
+                sys.exit("[ERROR] SHENGBTE_NTASKS=%r 不是整数也不是 auto" % _nt_raw)
+        else:
+            _ntasks = max(1, _total // _cpus_per_numa)
+        if _ntasks <= 1:
+            sys.exit("[ERROR] SHENGBTE_NTASKS 算出来是 %d —— ShengBTE 靠 MPI 按 q 点并行，"
+                     "单进程等于串行（实测 11.8 h 零产物）。请检查 step.conf 的 "
+                     "SHENGBTE_TOTAL_CORES=%d / SHENGBTE_CORES_PER_NUMA=%d。"
+                     % (_ntasks, _total, _cpus_per_numa))
+        print("[..] ShengBTE 布局：%d MPI ranks x %d OMP threads = %d 核"
+              % (_ntasks, _cpus_per_numa, _ntasks * _cpus_per_numa))
+        tpl = fc.resolve_submit(here, "submit_shengbte_fcfit")
+        subs = {
+            "JOBNAME": fc.new_jobname(cwd, "S2sheng"),
+            "CONDA_SH": str(conf["CONDA_SH"] or ""),
+            "CONDA_ENV": str(conf["CONDA_ENV"] or ""),
+            "SHENGBTE_EXE": str(conf["SHENGBTE_EXE"] or "ShengBTE"),
+            "NTASKS": str(_ntasks),
+            "CPUS_PER_TASK": str(_cpus_per_numa),
+            "QOS": str(conf["SBATCH_QOS"] or "regular"),
+        }
+    else:
+        tpl = fc.resolve_submit(here, "submit_kappa")
+        subs = {
+            "JOBNAME": fc.new_jobname(cwd, "S2kappa"),
+            "CONDA_SH": str(conf["CONDA_SH"] or ""),
+            "CONDA_ENV": str(conf["CONDA_ENV"] or ""),
+            "CPUS_PER_TASK": str(int(conf["P3PY_OMP_THREADS"] or 48)),
+            "QOS": str(conf["SBATCH_QOS"] or "regular"),
+        }
     fc.write_submit(tpl, out / "submit.sh", subs)
     stepconf.apply_submit(out / "submit.sh", dict(conf.submit or {}))
 

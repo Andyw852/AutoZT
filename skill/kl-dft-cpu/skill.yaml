@@ -93,18 +93,17 @@ steps:
      #   （见 gen_step5_fc.py 的 _kind/except 分支）。
      #   2026-09-27：曾把它加进 gen_need，导致 jzzn/hanhai25 等所有非 GPU 集群的 S5
      #   gen 直接失败（"project_setting/skill_dir 里缺少 …"），已回退。
-     gen_need: [dim_common.py, stepconf.py, step.conf, kl_common.py, lattice_kappa.py,
-                kl_fc_backends.py, za_2d.py, imag_policy.py, phonon_stability.py,
-                reuse_fcfit.py,
-                submit_fit_p3py.tpl, submit_fit_pheasy.tpl]}
+     gen_need: [stepconf.py, step.conf, gen_step1_fit.py, fc_common.py, fc_fit_driver.py,
+                imag_policy.py, phonon_stability.py, dim_common.py, kl_common.py, za_2d.py, reuse_fcfit.py,
+                submit_fcfit_p3py.tpl, submit_fcfit_hiphive.tpl,
+                submit_fcfit_pheasy.tpl, submit_fcfit_pheasy_gpu.tpl]}
 
   - {seq: 6, name: step6_kappa, needs: [step5_fc], label: S6_kappa, check: marker,
      marker: 'kappa_summary.json:"KAPPA_DONE": true',
      gen: gen_step6_kappa.py, fetch_all: true,
-     gen_need: [dim_common.py, stepconf.py, step.conf, kl_common.py, lattice_kappa.py,
-                imag_policy.py, za_2d.py,
-                thickness_2d.py, vdw_radii.py,
-                submit_p3py.tpl, submit_shengbte.tpl, submit_fourphonon.tpl]}
+     gen_need: [stepconf.py, step.conf, gen_step2_kappa.py, fc_common.py, kappa_driver.py,
+                cut3_select.py, submit_kappa.tpl, submit_shengbte_fcfit.tpl,
+                dim_common.py, thickness_2d.py, vdw_radii.py]}
 
 # NAC 为可选步组：极性绝缘体默认开（LO-TO 劈裂需要）。
 #   关闭：项目配置写 nac: false —— tf 直接不注入 step3_nac，S5/S6 因无 BORN 自然无 NAC。
