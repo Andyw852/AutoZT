@@ -93,7 +93,7 @@ LLM 只在异常路径介入且可被替换。**2D/3D 验证材料集已建好�
 | 图 3 | 安全与治理：动作分档、一次性令牌、审计流水；gateway 开/关消融 | `scripts/safety_metrics.py` | 数据已有（9/9、三档 profile），待作图 |
 | 图 4 | 资源与精度基准：method × backend × fit 的机时/精度表 | 需新增 `autozt bench` 聚合（每步 `resource_summary.json`） | ❌ 需真实跑批数据 |
 | 图 5 | 筛选漏斗与排名（te-screen 各阶段剩余数、淘汰原因） | `screening_report.json/csv` | ❌ 需 te-screen 实跑 |
-| 表 1 | 技能 × 软件栈 × 硬件（CPU/GPU） | `docs/AutoZT_skill_and_software_tables*.docx` | ✅ 三版已出 |
+| 表 1–3、S1–S3 | 表 1：20 个核心技能按流程阶段分组（zT 角色/层级/引擎/硬件/2D）；表 2：zT 各量由谁算；表 3：MCP/Agent CLI 分档权限；S1：新增 5 个技能；S2：外部软件；S3：2D 专门处理 | `docs/build_skill_tables.py` → `docs/AutoZT_software_overview_npj.docx` + `docs/software-overview.md/.html`（旧版 `docs/AutoZT_skill_and_software_tables*.docx` 已被取代，仅留档） | ✅ 2026-10-04 重出 |
 
 ---
 
