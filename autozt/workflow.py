@@ -2366,6 +2366,48 @@ def _fetch_receipt_write(cfg, m, s):
         pass
 
 
+def _tar_names(listing):
+    """tar xv 的输出（GNU 在 stdout 打 "./POSCAR"；bsdtar 在 stderr 打 "x POSCAR"）-> 收到的相对路径集合。"""
+    out = set()
+    for ln in (listing or "").splitlines():
+        n = ln.strip()
+        if n.startswith("x "):
+            n = n[2:].strip()
+        while n.startswith("./"):
+            n = n[2:]
+        n = n.rstrip("/")
+        if n and n != ".":
+            out.add(n)
+    return out
+
+
+def _prune_unreceived(dest, listing, names, m=None, s=None):
+    """[V162] 本地 result/<步骤>/ 是回拉镜像：要拉的文件远端已经没有了（上游重算后归档、扇出步骤顶层本来就没有），
+    本地那份是上一代的残留 -> 改名 <名>.stale-remote-<时间>（不删）。以前只加不减：Si_diamond 的 S2.3 顶层
+    POSCAR 还是 08-30 的旧结构，lineage_check 在本地报"用的是旧结构"，集群上其实是新的。
+    只动 names 里的顶层文件名（fetch_files / done_marker），不碰本地其它文件。返回改名的文件名列表。"""
+    import time as _t
+    got = _tar_names(listing)
+    tag = "stale-remote-" + _t.strftime("%Y%m%d%H%M%S")
+    moved = []
+    for n in dict.fromkeys(x for x in names if x):
+        if "/" in n or any(ch in n for ch in "*?["):
+            continue
+        p = os.path.join(dest, n)
+        if n in got or not (os.path.isfile(p) or os.path.islink(p)):
+            continue
+        try:
+            os.replace(p, p + "." + tag)
+            moved.append(n)
+        except OSError:
+            pass
+    if moved:
+        print("%s: %s 远端已没有 %s —— 本地旧副本改名 *.%s（不再冒充当前结果）"
+              % ((m or {}).get("name", "?"), (s or {}).get("label", os.path.basename(dest)),
+                 ", ".join(moved), tag))
+    return moved
+
+
 def fetch_material(cfg, m, only_steps=None, quiet=False, all_files=False,
                    force_steps=None, fetch_files_override=None):
     from autozt import FETCH_STAMP, PROV_DIR, _ssh_cmd, log_action
@@ -2390,19 +2432,25 @@ def fetch_material(cfg, m, only_steps=None, quiet=False, all_files=False,
         os.makedirs(dest, exist_ok=True)
         sc2 = next((x for x in ((m.get("_seg") or {}).get("steps_cfg") or [])
                     if x.get("name") == s["name"]), {})
-        if sc2.get("fetch_all") or all_files:   # v3.21：画图步骤产物文件名不固定，整目录拉回；v1.1：fetch --all 整目录
+        _whole = bool(sc2.get("fetch_all") or all_files)
+        if _whole:   # v3.21：画图步骤产物文件名不固定，整目录拉回；v1.1：fetch --all 整目录
             remote = "cd %s && tar -cf - ." % shlex.quote(s["dir"])
         elif not files:
             continue
         else:
+            # [V162] 扇出步骤（S2.3_hse 的 p1of4…）：结果在子目录里，顶层只拉不到东西 —— 子目录的同名文件一起拉。
+            #   通配交给远端 shell 展开；没有匹配时原样留着，--ignore-failed-read 跳过。
+            _fan = str(sc2.get("fanout") or s.get("fanout") or "")
+            _pats = [shlex.quote(f) for f in files]
+            if _fan:
+                _pats += ["%s/%s" % (_fan, shlex.quote(f)) for f in files]
             remote = ("cd %s && tar --ignore-failed-read -cf - %s"
-                      % (shlex.quote(s["dir"]),
-                         " ".join(shlex.quote(f) for f in files)))
+                      % (shlex.quote(s["dir"]), " ".join(_pats)))
         s_host = s.get("_host") or host   # v1.12+：每步在各自集群，按步骤 host 拉
         cmd1 = (_ssh_cmd(cfg, s_host, [remote]) if s_host else ["bash", "-c", remote])
         p1 = subprocess.Popen(cmd1, stdout=subprocess.PIPE,
                               stderr=subprocess.DEVNULL)
-        p2 = subprocess.run(["tar", "xf", "-", "-C", dest], stdin=p1.stdout,
+        p2 = subprocess.run(["tar", "xvf", "-", "-C", dest], stdin=p1.stdout,
                             capture_output=True, text=True, encoding="utf-8",
                             errors="replace")
         p1.stdout.close()
@@ -2410,6 +2458,9 @@ def fetch_material(cfg, m, only_steps=None, quiet=False, all_files=False,
         if rc1 != 0 or p2.returncode != 0:
             print("%s: fetch %s 失败。%s" % (m["name"], s["label"], p2.stderr))
             return False
+        _prune_unreceived(dest, p2.stdout + "\n" + p2.stderr,
+                          [sc2.get("done_marker")] if _whole else list(files) + [sc2.get("done_marker")],
+                          m, s)
         _fetch_receipt_write(cfg, m, s)
         nstep += 1
     # v1.0：顺带把 <材料>/provenance/（每步档案 + 时间线，几 KB）拉回

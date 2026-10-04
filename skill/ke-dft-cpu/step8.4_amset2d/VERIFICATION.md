@@ -7412,3 +7412,31 @@ environment: amset_clean`，接着 `amset: command not found`。集群上现在�
 **测试**：tests/test_template_seed.py，7 项（临时 git 仓库）：
 - 旧版副本被跳过；手改副本优先；和现行版相同时照用；关开关后照用副本；
 - 技能文件已删除时落到集群模板；没有历史时照用副本；step.conf 旧版种子被去掉、手改的保留。
+
+## V162（2026-10-04）：完成标记被归档后，旧 png 不再算完成；本地回拉镜像清掉上一代残留，扇出步骤的子目录一起拉
+
+**实测**（用户侧）：Si_diamond 表上显示 19/19，但 lineage_check 退出码 1，报了两处。
+
+**① S8.1_boltztrap：boltztrap_crta.json 比 S8.2 的 dpt_result.json 旧——真问题**
+- 失效接线本来就有（S3 → S8.1、S8.2 → S8.1，都是 always）。S3 重算时 boltztrap_crta.json 也确实被归档了。
+- 问题出在画图步骤的完成判据 `ck_plot`："有完成标记，**或者目录里有任意 .png**"就算完成。
+  标记被归档后，目录里旧的 png 照样让 S8.1 判"完成"，既不显示 STALE，也不重新生成。
+  S8.3（标记是 comparison_300K.png，其它温度的 png 还在）、S7.1 也是同一个坑。
+- 改动：`ck_plot` 发现 `<标记>.stale-*` 归档时，判为未完成（"完成标记已归档，等重新生成"），之后按 V153 显示 STALE，
+  由 auto-advance 重新生成。
+
+**② S2.3_hse：本地 POSCAR 是旧结构——集群上是对的，问题出在回拉镜像**
+- S2.3 是扇出步骤（p1of4…p4of4），结果都在子目录里。fetch 只拉顶层的 fetch_files，所以子目录一个都没拉回来。
+- 本地顶层那份 POSCAR 是 08-30 上一代留下的：fetch 用 `tar --ignore-failed-read`，远端没有的文件直接跳过，
+  本地旧副本从来不清理（只加不减）。lineage_check 在本地读到的就是它。
+- 改动（`fetch_material`）：
+  - 扇出步骤把 `<fanout>/<fetch_files>` 一起拉回，通配交给远端 shell 展开；
+  - 用 `tar xv` 的清单记下收到了哪些文件。要拉的顶层文件（fetch_files，以及 fetch_all 步骤的 done_marker）
+    远端已经没有的，本地旧副本改名为 `<名>.stale-remote-<时间>`（不删）；不在清单里的本地文件一律不碰。
+
+**测试**：tests/test_fetch_mirror.py，5 项：
+- 标记被归档、只剩旧 png → 未完成，并且判为 STALE；有新标记或从没归档过 → 照旧完成；
+- tar 清单解析（GNU / bsdtar 两种格式）；只改名清单内、且远端没有的文件；
+- 真跑一遍 fetch_material：扇出子目录拉回，顶层旧 POSCAR 改名。
+
+回归：test/test_fetch_lifecycle.py 改动前后失败的都是同样 12 项（v1 引擎和环境问题），原来通过的场景仍然通过。
