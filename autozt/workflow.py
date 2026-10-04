@@ -1929,6 +1929,7 @@ def tag_of(m, s):
 
 def auto_advance(cfg, data, force=False):
     from autozt import _AUTO_CASCADE_MAX, _BUSY_KINDS, _load_yaml_file, step_cfg
+    from autozt.report import auto_off_reason
     """status 时自动推进可开始的步骤（全局 tf.yaml 写 auto_advance: true 开启；
     项目 setting.yaml 里 auto_advance: false 可单独关闭）。
     只推进 TODO/PREP（输入就绪/未生成）的活跃步骤；error 不自动重试；
@@ -1955,11 +1956,10 @@ def auto_advance(cfg, data, force=False):
             st = (m.get("ps") or {}).get("setting") or {}
             # 未为本技能初始化的材料（无 project_setting -> ps.dir 为空）不自动推进：
             # 否则 band/ke 共用数据根时，ke 会把只 init 了 band 的材料也自动跑起来（误提交）。
-            if not (m.get("ps") or {}).get("dir"):
-                _skipped.append("%s[%s]（未 init 本技能）" % (m["name"], m["tt"]))
-                continue
-            if st.get("auto_advance") is not True:   # 显式 true 才推进
-                _skipped.append("%s[%s]" % (m["name"], m["tt"]))
+            # 显式 true 才推进；[V160] 原因写清楚（以前一律说"auto_advance: false"，没写这个键的也这么说）
+            _why = auto_off_reason(m)
+            if _why:
+                _skipped.append("%s[%s]（%s）" % (m["name"], m["tt"], _why))
                 continue
             if _sfull:
                 # 本技能已达 max_jobs：只预生成输入（不提交），等有空位自动补交。
@@ -2042,7 +2042,7 @@ def auto_advance(cfg, data, force=False):
 
 
     if _skipped:
-        print("auto-advance 跳过 %d 个（项目级 auto_advance: false）：%s"
+        print("auto-advance 跳过 %d 个（只推进 setting.yaml 显式写了 auto_advance: true 的材料）：%s"
               "  → tf -tt <技能> -p <材料> auto on"
               % (len(_skipped), ", ".join(_skipped[:6])
                  + ("…" if len(_skipped) > 6 else "")))

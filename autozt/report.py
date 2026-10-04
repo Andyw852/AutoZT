@@ -1105,6 +1105,22 @@ def _json_changes(data, state_path):
         "unchanged": not first_run and len(diffs) == 0,
     }
 
+def auto_off_reason(m):
+    """[V160] 这个材料为什么不会被 auto-advance 推进；会推进返回 None。
+    auto-advance 只推进 project_setting/setting.yaml 里显式写了 auto_advance: true 的材料（有意的，
+    防止只为别的技能 init 过的材料被误提交）。"""
+    ps = m.get("ps") or {}
+    if not ps.get("dir"):
+        return "未 init 本技能"
+    st = ps.get("setting") or {}
+    v = st.get("auto_advance")
+    if v is True:
+        return None
+    if "auto_advance" not in st:
+        return "setting.yaml 没写 auto_advance"
+    return "auto_advance: %s" % ("false" if v is False else v)
+
+
 def _summary_lines(data):
     """把 data 规约成 summary 的文本行（打印与 diff 共用）。"""
     lines = []
@@ -1119,8 +1135,13 @@ def _summary_lines(data):
             continue
         cnt = {"done": 0, "run": 0, "pd": 0, "err": 0, "sc": 0, "wait": 0}
         fails = []   # (材料名, 步骤label, diag)
+        manual = []  # [V160] (材料名, 原因, 可开始的步骤)：有步骤可开始，但 auto-advance 不会提交
         for m in mats:
             kinds = [s["kind"] for s in m["steps"]]
+            _ready = [s["label"] for s in m["steps"] if s["kind"] in ("TODO", "PREP")]
+            _why = auto_off_reason(m) if _ready else None
+            if _why:
+                manual.append((m["name"], _why, _ready))
             if all(k == "OK" for k in kinds):
                 cnt["done"] += 1
             elif any(k == "FAIL" for k in kinds):
@@ -1141,6 +1162,11 @@ def _summary_lines(data):
                         cnt["err"], cnt["sc"], cnt["wait"]))
         for name, lab, diag in fails:
             lines.append("  FAIL %s %s %s" % (name, lab, _i18n.diag(diag)))
+        # [V160] Si_diamond 的 6 个就绪步骤一直不提交，表里只显示"可开始"，看起来像在"等自动重排"
+        for name, why, ready in manual:
+            lines.append("  手动 %s（%s，auto-advance 不会提交）可开始：%s%s  → tf -tt %s -p %s auto on"
+                         % (name, why, ",".join(ready[:6]), "…" if len(ready) > 6 else "",
+                            t["key"], name.split("/")[-1]))
     q = data.get("queue")
     if q and (q.get("R") or q.get("PD") or q.get("total")):
         lines.append(_i18n.t("队列(全部作业): R=%d PD=%d 共 %d",

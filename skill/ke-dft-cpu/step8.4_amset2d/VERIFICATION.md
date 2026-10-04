@@ -7366,3 +7366,22 @@ environment: amset_clean`，接着 `amset: command not found`。集群上现在�
 - 真跑一遍 S4 的 gen：旧模板退出、不写 submit.sh；新模板写出 `conda activate amset051`；
 - template_drift 能报出旧副本。
 - 反证：换回旧版 S4 gen，旧模板被照常接受，测试失败。
+
+## V160（2026-10-04）：没开 auto_advance、但有步骤可开始的材料，summary 点名（Si_diamond）
+
+**实测**（用户侧）：Si_diamond 的 S2.3 等了很久都没有作业，队列空，状态是 8/19 完成，6 个步骤显示"可开始"（PREP）。
+大家以为它在"等自动重排"。
+
+**根因**：auto-advance 只推进 project_setting/setting.yaml 里显式写了 `auto_advance: true` 的材料。这是有意的设计：
+防止只为别的技能 init 过的材料被误提交，**不改**。Si_diamond 的 project_setting/ 里没有 setting.yaml，所以一直不会被推进。
+- 状态表只显示"可开始"，summary 只把它算进 wait，看不出它不会自动推进。
+- auto-advance 的跳过提示一律写成"（项目级 auto_advance: false）"，没写这个键的材料也这么说。
+
+**改动**（autozt）：
+- `report.auto_off_reason(m)`：给出不推进的原因——未 init 本技能 / setting.yaml 没写 auto_advance / auto_advance: false。
+- summary：有步骤可开始、但不会被推进的材料，多打一行
+  `手动 <材料>（<原因>，auto-advance 不会提交）可开始：<步骤…>  → tf -tt <技能> -p <材料> auto on`。
+- auto-advance 的跳过提示改为逐个写原因。
+- 计数行格式不变。
+
+**测试**：tests/test_auto_manual.py，3 项。
