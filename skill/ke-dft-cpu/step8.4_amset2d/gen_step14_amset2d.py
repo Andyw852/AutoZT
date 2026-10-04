@@ -2600,6 +2600,7 @@ def main():
     jobname = ("%s-ke-dft-cpu-%s" % (cwd.name, STEP_LABEL)) if not _HAS_KC \
         else kc.new_jobname(cwd, STEP_LABEL)
     text = tpl.read_text(encoding="utf-8")
+    _tpl_raw = text
     # patch_intrinsic_auto（2026-09-22）：WRITE_MESH=true 时把 strict intrinsic 后处理
     # 自动接进作业链——否则 mesh.h5 白写、本征结果永远要人工补跑一次（用户指出
     # 「不是切换环境就自动对」）。--check-reproduce 是硬门：重积分必须复现原
@@ -2629,6 +2630,8 @@ def main():
                 .replace("{{AMSET_ENV}}", _amset_env()))
     if "{{AMSET_ENV}}" in text:
         sys.exit("[ERROR] submit_amset.tpl 的 {{AMSET_ENV}} 未填充（step.conf 缺 AMSET_ENV？）")
+    if _HAS_KC:   # [V159] 激活的环境必须是 AMSET_ENV（旧项目级模板写死 amset_clean = 0.4.19）
+        kc.check_amset_submit(_tpl_raw, text, _amset_env(), tpl.name)
     submit.write_text(text, encoding="utf-8", newline="\n")
     stepconf.apply_submit(submit, stepconf.read_submit(stepconf.CONF_NAME))
     # patch_mem_guard：最终网格 -> 作业级内存粗估（区间）；可选自动独占节点

@@ -7333,3 +7333,36 @@ slurm-*.out 都留着。
 - 缺归档或缺提交脚本 → 不算；
 - 先生成、后归档 → 仍按 STALE；
 - `_mark_gen_failed` 覆盖 regen_ready。
+
+## V159（2026-10-04）：AMSET 提交脚本激活的环境必须是 AMSET_ENV（旧项目级模板钉死 amset_clean）
+
+**实测**（用户侧）：P1_Mo-MoS2 全链重跑，S4_wave 重投后报 `EnvironmentNameNotFound: Could not find conda
+environment: amset_clean`，接着 `amset: command not found`。集群上现在只有 amset051 / atomate2_p_a。
+
+**根因**：
+- 8 月 init 时，autozt 把当时的 submit_amset.tpl 拷进了 project_setting/templates/。
+- 那是 09-22（e51565a）之前的版本，写死 `conda activate amset_clean`（AMSET 0.4.19 的环境，09-30 已删），
+  没有 `{{AMSET_ENV}}` 占位符。
+- find_asset 的查找顺序是：材料/<技能>/templates → project_setting/templates → setting/<集群>/templates → 技能。
+  项目级副本排在前面，盖住了集群模板。
+- 4 个渲染这份模板的 gen（S4/S4b/S8/S8.4）只检查"占位符有没有残留"。旧模板里本来就没有占位符，于是照常生成、提交。
+- 环境被删了，所以这次作业是**报错**；在环境还在的集群上，会**悄悄用 0.4.19 算**（形变势减半，V75），比报错更糟。
+
+**改动**：
+- `ke_common.check_amset_submit(raw, rendered, env, tpl)`，4 个 gen 渲染后、写 submit.sh 之前调用：
+  - 非注释行里 `conda/mamba/micromamba activate X`、`conda run -n X`、`source activate X` 的 X 与 AMSET_ENV 不一致
+    → 直接退出，消息里给出改法（把副本改名为 `.stale-<日期>`，或改成 `{{AMSET_ENV}}`，再 retry）；
+  - `${VAR}` 这类 shell 变量不算（本机模板用的就是 `AMSET_ENV="{{AMSET_ENV}}"` 加 `conda activate "${AMSET_ENV}"`）；
+  - 写死的环境与 AMSET_ENV 一致、只是没有占位符 → 只告警，照常生成。
+- `amset_env_name`：step.conf 的 AMSET_ENV 是已知的 0.4.19 旧环境名（`OLD_AMSET_ENVS`，目前只有 amset_clean）
+  → 退出，提示去查 templates/step.conf 和 project_setting/hpc.yaml 的 amset_env。
+- `tools/template_drift.py`：submit_amset*.tpl 不再默认跳过环境检查。写死旧环境、或没有 `{{AMSET_ENV}}` 占位符的，
+  报 `[ENV]`，退出码 1。一条命令就能把所有受影响的项目扫出来。
+
+**测试**：test_amset_submit_env.py，10 项：
+- 旧模板被拒绝；现行模板和本机模板都放行；写死别的环境、`conda run -n` 都拒绝；写死同名环境只告警；注释行忽略；
+- step.conf 写 amset_clean 时拒绝；
+- 4 个 gen 都在渲染之后、写 submit.sh 之前做检查；
+- 真跑一遍 S4 的 gen：旧模板退出、不写 submit.sh；新模板写出 `conda activate amset051`；
+- template_drift 能报出旧副本。
+- 反证：换回旧版 S4 gen，旧模板被照常接受，测试失败。

@@ -64,6 +64,7 @@ def main():
         sys.exit("[ERROR] 找不到 submit_amset.tpl（gen_need 里要有它，且应随 gen 脚本一起推送）")
     submit = out / "submit.sh"
     text = tpl.read_text(encoding="utf-8")
+    _tpl_raw = text
     jobname = ("%s-ke-dft-cpu-%s" % (cwd.name, STEP_LABEL)) if not _HAS_KC \
         else kc.new_jobname(cwd, STEP_LABEL)
     _amset_env = kc.amset_env_name(cwd) if _HAS_KC else sys.exit("[ERROR] 无法 import ke_common 且 step.conf 缺 AMSET_ENV；请写 AMSET_ENV=<本集群 0.5.1 环境名>（jzzn/hanhai25=amset051、a800=amset_env、3090/hfeshell=amset）")
@@ -72,6 +73,8 @@ def main():
                 .replace("{{AMSET_ENV}}", _amset_env))
     if "{{AMSET_ENV}}" in text:
         sys.exit("[ERROR] submit_amset.tpl 的 {{AMSET_ENV}} 未填充（step.conf 缺 AMSET_ENV？）")
+    if _HAS_KC:   # [V159] 激活的环境必须是 AMSET_ENV（旧项目级模板写死 amset_clean = 0.4.19）
+        kc.check_amset_submit(_tpl_raw, text, _amset_env, tpl.name)
     submit.write_text(text, encoding="utf-8", newline="\n")
     stepconf.apply_submit(submit, stepconf.read_submit(stepconf.CONF_NAME))
     print("[OK] submit.sh 填好 amset 命令")

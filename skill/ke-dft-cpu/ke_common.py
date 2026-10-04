@@ -1832,16 +1832,24 @@ def amset_env_name(cwd=None, fallback=None):
     （jzzn/hanhai25=amset051、a800=amset_env、3090/hfeshell=amset），写死任何一个
     都会在别的集群误触。
     """
+    import sys as _sys
+    env = None
     try:
         import stepconf as _sc
         base = Path(cwd) if cwd else Path(".")
         txt = (base / _sc.CONF_NAME).read_text(encoding="utf-8-sig")
         for k, v, _t in _sc.parse(txt, _sc.CONF_NAME).get("params", []):
             if k.upper() == "AMSET_ENV" and v:
-                return v
+                env = v
+                break
     except Exception:
         pass
-    import sys as _sys
+    if env:
+        if env in OLD_AMSET_ENVS:
+            _sys.exit("[ERROR] step.conf 的 AMSET_ENV=%s 是 AMSET 0.4.19 的旧环境（%s）。查材料/项目的 "
+                      "templates/step.conf 和 project_setting/hpc.yaml 的 amset_env，改成本集群的 0.5.1 环境名"
+                      "（jzzn/hanhai25=amset051、a800=amset_env、3090/hfeshell=amset）。" % (env, OLD_AMSET_ENVS[env]))
+        return env
     if fallback:
         print("[WARN] step.conf 里没读到 AMSET_ENV，回退到显式指定的 %r。" % fallback,
               file=_sys.stderr)
@@ -1849,6 +1857,55 @@ def amset_env_name(cwd=None, fallback=None):
     _sys.exit("[ERROR] step.conf 里没读到 AMSET_ENV，无法确定本集群的 amset 环境名。"
               "请在 step.conf 写 AMSET_ENV=<本集群 0.5.1 环境名>（jzzn/hanhai25=amset051、"
               "a800=amset_env、3090/hfeshell=amset）。")
+
+
+# [V159] AMSET 0.4.19 时代的环境名（已删）：0.4.19 的形变势只有 0.5.1 的一半（V75），绝不能悄悄用上。
+OLD_AMSET_ENVS = {"amset_clean": "jzzn 上 0.4.19 的环境，2026-09-30 已删"}
+_ACTIVATE_RE = re.compile(r"\b(?:conda|mamba|micromamba)\s+(?:activate|run\s+(?:-n|--name))\s+[\"']?([^\s\"';&|)]+)"
+                          r"|\bsource\s+activate\s+[\"']?([^\s\"';&|)]+)")
+
+
+def amset_submit_envs(text):
+    """提交脚本里（非注释行）激活/调用的 conda 环境名；${VAR} 这类 shell 变量不算。"""
+    out = []
+    for ln in text.splitlines():
+        s = ln.strip()
+        if not s or s.startswith("#"):
+            continue
+        for m in _ACTIVATE_RE.finditer(s):
+            name = m.group(1) or m.group(2)
+            if name and not name.startswith("$") and name not in out:
+                out.append(name)
+    return out
+
+
+def check_amset_submit(raw, rendered, env, tpl="submit_amset.tpl"):
+    """[V159] 渲染后的 AMSET 提交脚本必须激活 step.conf 的 AMSET_ENV。
+
+    起因：P1_Mo-MoS2 的 S4_wave 作业报 EnvironmentNameNotFound: amset_clean。8 月 init 时拷进
+    project_setting/templates/ 的 submit_amset.tpl 是 09-22 之前的版本，写死 conda activate amset_clean
+    （0.4.19），没有 {{AMSET_ENV}} 占位符；项目级模板优先于集群/技能模板，gen 只查"占位符有没有残留"，
+    于是照常生成、提交。环境还在的集群上会悄悄用 0.4.19 算。
+    返回告警列表；激活的环境不对时直接退出。
+    """
+    found = amset_submit_envs(rendered)
+    bad = [n for n in found if n != env]
+    stale_hint = ("这份 %s 多半是旧的项目级副本（<材料>/<技能>/templates/ 或 project_setting/templates/ 里的优先于"
+                  "集群 setting/<集群>/templates/ 和技能模板）。把它改名为 submit_amset.tpl.stale-<日期>，或者把"
+                  "写死的环境名改成 {{AMSET_ENV}}；然后 retry 本步。" % tpl)
+    if bad:
+        old = [n for n in bad if n in OLD_AMSET_ENVS]
+        sys.exit("[ERROR] %s 激活的 AMSET 环境是 %s，而 step.conf 的 AMSET_ENV=%s%s。%s"
+                 % (tpl, "/".join(bad), env,
+                    "（%s 是 AMSET 0.4.19 的旧环境）" % "/".join(old) if old else "", stale_hint))
+    warns = []
+    if "{{AMSET_ENV}}" not in raw:
+        warns.append("[WARN] %s 没有 {{AMSET_ENV}} 占位符%s —— 换集群或换环境时不会跟着变。%s"
+                     % (tpl, "（写死的 %s 与 AMSET_ENV 一致，这次照常生成）" % "/".join(found) if found
+                        else "，也没有 conda activate 行，作业用的是 PATH 里的 amset", stale_hint))
+    for w in warns:
+        print(w, file=sys.stderr)
+    return warns
 
 
 def patch_submit_jobname(submit: Path, jobname: str):
