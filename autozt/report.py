@@ -494,6 +494,113 @@ def _same_file(a, b):
     except OSError:
         return False
 
+# --------------------------------------------------------------------------
+# [V161] init 种下、没人改过的模板副本不再盖住技能后来的修复
+#   init 把技能整套 *.tpl/*.conf 复制进 project_setting/templates/（v1.7/v1.9，为了按项目手改），
+#   查找链里项目副本又排在技能前面 —— 没人改过的副本就把技能当时的版本永远钉住了：
+#   P1 的 LPEAD=.TRUE.（DFPT NaN）、Mo2S3 的松 EDIFFG、P1 的 conda activate amset_clean 都是这么来的。
+#   现在：项目副本与技能同路径文件在 git 历史里的某个**旧版本**逐字节相同 -> 当它不存在，按查找链往下走
+#   （结果与清理过副本的项目一样）；手改过的副本（不是任何历史版本）照旧优先；与技能当前版相同的照常用。
+#   material 的 setting.yaml 写 templates_follow_skill: false 可关掉（要钉住旧模板复现旧结果时）。
+#   比仓库历史更早的副本认不出来（8 月的 P1 副本），那些仍靠 tools/template_drift.py 的 [CUSTOM] 审计。
+# --------------------------------------------------------------------------
+_SEED_HIST = {}
+_SEED_NOTED = set()
+
+
+def _git_blob_id(data):
+    return hashlib.sha1(b"blob %d\0" % len(data) + data).hexdigest()
+
+
+def _git_hist_blobs(path):
+    """path（可以已从工作区删除）在所在 git 仓库全部历史里出现过的 blob id；没有 git / 不在仓库里 -> None。"""
+    path = os.path.abspath(path)
+    if path in _SEED_HIST:
+        return _SEED_HIST[path]
+    res = None
+    d, tail = os.path.dirname(path), [os.path.basename(path)]
+    while d and not os.path.isdir(d):                 # 父目录也可能已删
+        d, t = os.path.split(d)
+        tail.insert(0, t)
+    try:
+        top = subprocess.run(["git", "-C", d, "rev-parse", "--show-toplevel"],
+                             capture_output=True, text=True, timeout=30)
+        if top.returncode == 0 and top.stdout.strip():
+            topd = os.path.realpath(top.stdout.strip())
+            rel = os.path.relpath(os.path.join(os.path.realpath(d), *tail), topd).replace(os.sep, "/")
+            if not rel.startswith(".."):
+                r = subprocess.run(["git", "-C", topd, "log", "--all", "--format=", "--raw",
+                                    "--no-abbrev", "--", rel],
+                                   capture_output=True, text=True, timeout=60)
+                if r.returncode == 0:
+                    blobs = set()
+                    for ln in r.stdout.splitlines():
+                        if ln.startswith(":"):
+                            for b in ln.split("\t", 1)[0].split()[2:4]:
+                                if b.strip("0"):
+                                    blobs.add(b)
+                    res = frozenset(blobs)
+    except (OSError, subprocess.SubprocessError):
+        res = None
+    _SEED_HIST[path] = res
+    return res
+
+
+def untouched_seed(copy, counterparts):
+    """项目副本 copy 是不是技能 counterparts（同路径的技能文件，可已删除）的原样副本。
+    返回 ("same", 技能文件) = 与技能当前版相同；("old", 技能文件) = 等于技能的某个旧版本；None = 手改过/认不出。"""
+    try:
+        with open(copy, "rb") as fh:
+            data = fh.read()
+    except OSError:
+        return None
+    for sk in counterparts:
+        try:
+            with open(sk, "rb") as fh:
+                if fh.read() == data:
+                    return ("same", sk)
+        except OSError:
+            pass
+    blob = _git_blob_id(data)
+    for sk in counterparts:
+        h = _git_hist_blobs(sk)
+        if h and blob in h:
+            return ("old", sk)
+    return None
+
+
+def _seed_note(copy, sk):
+    if copy in _SEED_NOTED:
+        return
+    _SEED_NOTED.add(copy)
+    print("[模板] %s 是 init 时复制的原样旧版（= 技能 %s 的历史版本，之后没人改过），技能已更新 -> 不用它，"
+          "按查找链取现行模板（要钉住旧版：setting.yaml 写 templates_follow_skill: false）"
+          % (copy, sk), file=sys.stderr)
+
+
+def _seed_skip(m, t, copy, seed_root, skill_bases):
+    """[V161] find_asset / step_conf_sources 用：copy 是 seed_root（项目 templates/）下没人改过的旧副本 -> True。"""
+    if ((m.get("ps") or {}).get("setting") or {}).get("templates_follow_skill") is False:
+        return False
+    try:
+        rel = os.path.relpath(copy, seed_root)
+    except ValueError:
+        return False
+    if rel.startswith(".."):
+        return False
+    seg = (m.get("_seg") or {})
+    sk_tdir = str(seg.get("template_dir") or t.get("template_dir") or "templates")
+    cps = []
+    for b in skill_bases:
+        cps.append(os.path.normpath(os.path.join(b, sk_tdir, rel)))
+        cps.append(os.path.normpath(os.path.join(b, os.path.basename(copy))))   # init 也收技能根下平铺的模板
+    r = untouched_seed(copy, list(dict.fromkeys(cps)))
+    if r and r[0] == "old":
+        _seed_note(copy, r[1])
+        return True
+    return False
+
+
 def find_asset(cfg, t, m, fname, sname=None):
     from autozt import _PKG_DIR, _PKG_ROOT, _SKILL_ONLY, step_cfg
     """v3 资源查找链：材料/<技能>/逻辑名（v1.6 最优先）→ project_setting/逻辑名
@@ -522,11 +629,15 @@ def find_asset(cfg, t, m, fname, sname=None):
         return dirs
 
     _roots = [] if _SKILL_ONLY else (([sld] if sld else []) + ([ps] if ps else []))
+    seed_roots = {}   # [V161] 项目 templates/ 下的候选 -> 它的 templates 根（判断是不是 init 原样旧副本）
     for _root in _roots:
+        _troot = os.path.join(_root, tdir)
         for _d in _proj_dirs(_root):
-            cands.append(os.path.join(_d, fname))
-            if real:
-                cands.append(os.path.join(_d, real))
+            for _n in ([fname, real] if real else [fname]):
+                _c = os.path.join(_d, _n)
+                cands.append(_c)
+                if _d != _root:
+                    seed_roots.setdefault(_c, _troot)
     # v2.x：集中式 HPC 提交模板 setting/<hpc_name>/templates/（含步骤子目录）。
     # 优先级：项目内覆盖 > 这里 > 技能目录兜底。逻辑名即文件名，换超算 = 换
     # hpc_name，提交模板自动切到 setting/<新hpc>/templates/，技能逻辑零改动。
@@ -567,6 +678,8 @@ def find_asset(cfg, t, m, fname, sname=None):
                 cands.append(os.path.join(d, real))
     for c in cands:
         if os.path.isfile(c):
+            if c in seed_roots and _seed_skip(m, t, c, seed_roots[c], sdirs):
+                continue
             return c
     # v1.14 兜底：gen_need 里的辅助模块可能住在【别的步骤的 src 子目录】里。
     # 实测（2026-09-16 MoS2）：ke-dft-cpu 的 discriminant_common.py 只在
@@ -709,10 +822,13 @@ def step_conf_sources(cfg, t, m, sname):
                        (m.get("_skill_dir_local"), "材料/<技能>")]):
         if not root:
             continue
-        _add(os.path.join(root, pj_tdir, STEP_CONF), "%s 共用" % tag)
-        if sname:
-            _add(os.path.join(root, pj_tdir, str(sname), STEP_CONF),
-                 "%s 本步" % tag)
+        # [V161] init 复制来、没人改过的旧版 step.conf 不再盖住技能现行默认值
+        for _p, _note in ((os.path.join(root, pj_tdir, STEP_CONF), "%s 共用" % tag),
+                          (os.path.join(root, pj_tdir, str(sname), STEP_CONF) if sname else None,
+                           "%s 本步" % tag)):
+            if _p and os.path.isfile(_p) and sd and _seed_skip(m, t, _p, os.path.join(root, pj_tdir), [sd]):
+                continue
+            _add(_p, _note)
     return out
 
 def _cluster_conda_step_conf(m, hpc_name=None):

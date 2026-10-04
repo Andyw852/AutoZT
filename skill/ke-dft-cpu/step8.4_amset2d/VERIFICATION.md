@@ -7385,3 +7385,30 @@ environment: amset_clean`，接着 `amset: command not found`。集群上现在�
 - 计数行格式不变。
 
 **测试**：tests/test_auto_manual.py，3 项。
+
+## V161（2026-10-04）：init 种下、没人改过的模板副本，不再盖住技能后来的修复
+
+**起因**：同一个机制已经出了三次问题，这次又在 Si_diamond 上种了 19 个副本。
+- autozt init 把技能整套 `*.tpl` / `*.conf` 复制进 project_setting/templates/（v1.7/v1.9，本意是方便按项目手改）。
+- find_asset 的查找链里，项目副本排在集群模板、技能模板前面。没人改过的副本，就把 init 当时的技能版本永远钉住了。
+- 出过的问题：
+  - P1 的 `LPEAD=.TRUE.`（DFPT 出 NaN）；
+  - Mo2S3 的 EDIFFG 偏松；
+  - P1 S4 的 `conda activate amset_clean`（V159）。
+- 用户为此把 49 个副本手工改名。Si_diamond 刚 init 又种了 19 个：今天和技能一致，技能一改就会重蹈覆辙。
+
+**改动**（autozt/report.py）：
+- **判定规则**：项目 templates/ 下的副本（含 `<步骤>/` 子目录），如果与技能同路径文件（可以已经删除）在 git 历史里的某个**旧版本**
+  逐字节相同，就判为"init 原样种子、之后没人改过"。
+  - find_asset 当它不存在，按查找链往下取（集群模板 → 技能），结果和清理过副本的项目一样；打一行 `[模板] …` 说明。
+  - step_conf_sources 对 project_setting 的 `templates/step.conf`、`templates/<步骤>/step.conf` 用同样的规则，
+    不再让旧的出厂默认值盖住现行默认值。
+- **不受影响的情况**：手改过的副本（不是任何历史版本）照旧优先；和技能现行版相同的照常使用。
+- **开关**：setting.yaml 写 `templates_follow_skill: false` 可关掉（要钉住旧模板复现旧结果时用）。
+- **局限**：比仓库历史更早的副本（如 8 月的 P1 副本）认不出来，仍按项目副本优先，靠 template_drift 的 [CUSTOM] 审计（已清理）。
+- **开销**：每个技能文件只在每个进程里查一次 git 历史（缓存）。没有 git 或文件不在仓库里时，行为与以前相同。
+- tools/template_drift.py 的 [STALE] 说明补上"V161 起 gen 已自动不用它"。
+
+**测试**：tests/test_template_seed.py，7 项（临时 git 仓库）：
+- 旧版副本被跳过；手改副本优先；和现行版相同时照用；关开关后照用副本；
+- 技能文件已删除时落到集群模板；没有历史时照用副本；step.conf 旧版种子被去掉、手改的保留。

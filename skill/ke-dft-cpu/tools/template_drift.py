@@ -147,7 +147,8 @@ def audit(root, skill_dir=SKILL_DIR, repo=None, include_submit=False):
             diff = key_diff(pdata.decode("utf-8", "ignore"), sdata.decode("utf-8", "ignore"))
             hm = history_match(repo, sk, pdata)
             if hm:
-                kind, note = "STALE", "= 技能模板 %s（%s）的原样旧版" % (hm[0], hm[1])
+                kind, note = "STALE", ("= 技能模板 %s（%s）的原样旧版（V161 起 gen 已自动不用它、按技能现行版；改名只是清理）"
+                                       % (hm[0], hm[1]))
             elif hm is None:
                 kind, note = "CUSTOM", ("不是技能模板在本仓库历史里的任何版本（有手改，或比仓库历史更早的旧快照 —— "
                                         "看下面的键差和副本日期判断）")
