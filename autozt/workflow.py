@@ -121,6 +121,9 @@ def step_state(step, blocked):
     #   （以前显示 FAIL，而 auto-advance 不重试 FAIL —— 技能里"归档完成标记、会重新排队"其实要人手 retry）。
     if step.get("stale"):
         return ("----", "WAIT") if blocked else ("STALE", "PREP")
+    # [V158] 归档后在原目录重新生成了输入、还没提交（旧 slurm-*.out 还在）：输入就绪，不是失败。
+    if step.get("regen_ready"):
+        return ("----", "WAIT") if blocked else ("TODO", "TODO")
     if step.get("plot_error"):
         return ("FAIL", "FAIL")
     if blocked:
@@ -1430,8 +1433,9 @@ def kill_if_queued(cfg, s, force, tag):
     return ok
 
 def _mark_gen_failed(cfg, s):
-    """[V153] STALE 步骤重新生成失败：留 .autozt_gen_failed（比归档新），下一轮显示 FAIL、不再自动重试。"""
-    if not s.get("stale") or not s.get("dir"):
+    """[V153] STALE 步骤重新生成失败：留 .autozt_gen_failed（比归档新），下一轮显示 FAIL、不再自动重试。
+    [V158] 已重新生成、等提交（regen_ready）的步骤同样处理，否则 gen 失败后每轮都重试。"""
+    if not (s.get("stale") or s.get("regen_ready")) or not s.get("dir"):
         return
     from autozt import run_remote
     try:

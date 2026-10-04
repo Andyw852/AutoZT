@@ -553,6 +553,29 @@ def stale_upstream(d):
     return best
 
 
+_RUN_OUTPUTS = ("OUTCAR", "queue.out", "queue.err", ".autozt_gen_failed")
+
+
+def regen_pending(d, submit="submit.sh"):
+    """[V158] 上游归档后，本步在原目录里重新生成了输入、还没提交 -> True。
+    判据：目录里有 *.stale-upstream-* 归档；提交脚本不早于归档，且比目录里所有运行痕迹
+    （slurm-*.out / queue.out / queue.err / OUTCAR / .autozt_gen_failed）都新。
+    以前这种目录不算 STALE（有比归档新的文件）、旧 slurm-*.out 又还在 -> 判 FAIL，auto-advance 不重试：
+    作业槽满时 auto-advance 只预生成输入（_pregenerate_ready），这一步就永远卡在 FAIL。"""
+    try:
+        t_sub = os.stat(os.path.join(d, submit)).st_mtime
+        arch, newest = None, 0.0
+        for e in os.scandir(d):
+            r = _stale_ts(e.name)
+            if r:
+                arch = r[1] if arch is None else max(arch, r[1])
+            elif e.name in _RUN_OUTPUTS or (e.name.startswith("slurm-") and e.name.endswith(".out")):
+                newest = max(newest, e.stat(follow_symlinks=False).st_mtime)
+    except OSError:
+        return False
+    return arch is not None and t_sub + 1.0 >= arch and t_sub > newest
+
+
 CHECKERS = {"outcar_relax": ck_outcar_relax, "outcar": ck_outcar,
             "deform": ck_deform,
             "wavecar": ck_wavecar, "eigenval": ck_eigenval, "marker": ck_marker,
@@ -716,6 +739,9 @@ def collect_type(t, jobs_by_dir):
                     f["plot_error"] = False
                     f["diag"] = "上游 %s 重算后归档（%s），等重新生成" % (
                         _st[0], time.strftime("%m-%d %H:%M", time.localtime(_st[1])))
+                elif not sc.get("fanout") and not f.get("plot") and regen_pending(d, f["submit"]):
+                    f["regen_ready"] = True                   # [V158]
+                    f["diag"] = "上游重算后已在原目录重新生成输入，等提交"
             steps.append(f)
         m["steps"] = steps
         # v3.3：维度标记（任一步骤目录 workflow_method.txt 里的 DIM=2D/3D）
