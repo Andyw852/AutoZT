@@ -709,7 +709,7 @@ def _write_kappa_vs_cutoff(out, per_cut, rep=None, cfg=None):
         ax_xx, ax_zz = grid[0]
         ax_yy, ax_rm = grid[1]
 
-        def _series(ax, key, fmt, label_pct):
+        def _series(ax, key, fmt, label_pct, log=False):
             pts = [(i, rows[i][key]) for i in range(len(rows))
                    if rows[i][key] is not None]
             ys = [p[1] for p in pts]
@@ -719,12 +719,19 @@ def _write_kappa_vs_cutoff(out, per_cut, rep=None, cfg=None):
             ax.plot([p[0] for p in pts], ys, ls="none", marker="o", ms=4.5,
                     mfc=_LINE, mec=_INK, mew=0.6, zorder=4)
             lo, hi = min(ys), max(ys)
-            # never zoom below 10 % of the value: a 0.01 % wiggle must not look
-            # like a collapse.  Extra head/tail room keeps the value and
-            # percentage annotations inside the axes.
-            span = max(hi - lo, 0.10 * max(abs(hi), abs(lo), 1e-12))
-            mid = 0.5 * (hi + lo)
-            ax.set_ylim(mid - 0.85 * span, mid + 0.95 * span)
+            if log:
+                # kappa spans 1-2 decades: a linear axis squashes the small
+                # (plateau-region) values onto the x axis and their labels pile
+                # up.  A log axis spreads them and keeps every label readable.
+                ax.set_yscale("log")
+                ax.set_ylim(lo / 1.5, hi * 1.7)
+            else:
+                # never zoom below 10 % of the value: a 0.01 % wiggle must not
+                # look like a collapse.  Extra head/tail room keeps the value
+                # and percentage annotations inside the axes.
+                span = max(hi - lo, 0.10 * max(abs(hi), abs(lo), 1e-12))
+                mid = 0.5 * (hi + lo)
+                ax.set_ylim(mid - 0.85 * span, mid + 0.95 * span)
             if fmt is None:      # enough decimals to tell neighbouring values apart
                 diffs = [abs(b - a) for a, b in zip(ys, ys[1:]) if b != a]
                 dmin = min(diffs) if diffs else abs(hi) or 1.0
@@ -757,13 +764,13 @@ def _write_kappa_vs_cutoff(out, per_cut, rep=None, cfg=None):
                                 bbox=_bbox, zorder=5)
             return True
 
-        _series(ax_xx, "kappa_xx" + suf, "%.1f", True)
-        _series(ax_yy, "kappa_yy" + suf, "%.1f", True)
+        _series(ax_xx, "kappa_xx" + suf, "%.2f", True, log=True)
+        _series(ax_yy, "kappa_yy" + suf, "%.2f", True, log=True)
         if is_2d:
             ax_zz.set_yticks([])        # 2D: kappa_zz is not physical -> frame only
             ax_zz.yaxis.set_minor_locator(plt.NullLocator())
         else:
-            _series(ax_zz, "kappa_zz", "%.1f", True)
+            _series(ax_zz, "kappa_zz", "%.2f", True, log=True)
         if not (ekey and _series(ax_rm, ekey, None, False)):
             ax_rm.set_yticks([])
             ax_rm.yaxis.set_minor_locator(plt.NullLocator())
@@ -773,7 +780,7 @@ def _write_kappa_vs_cutoff(out, per_cut, rep=None, cfg=None):
         for ax, let in ((ax_xx, "a"), (ax_zz, "b"), (ax_yy, "c"), (ax_rm, "d")):
             ax.text(0.03, 0.95, "(%s)" % let, transform=ax.transAxes, ha="left",
                     va="top", fontsize=9, fontweight="bold")
-            if ax.get_yticks().size:
+            if ax.get_yticks().size and ax.get_yscale() != "log":
                 ax.yaxis.set_minor_locator(AutoMinorLocator(2))
             if ch_idx is not None:
                 ax.axvline(float(ch_idx), color=_INK2, lw=0.7, ls=(0, (4, 2)),
