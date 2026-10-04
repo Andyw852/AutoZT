@@ -7440,3 +7440,33 @@ environment: amset_clean`，接着 `amset: command not found`。集群上现在�
 - 真跑一遍 fetch_material：扇出子目录拉回，顶层旧 POSCAR 改名。
 
 回归：test/test_fetch_lifecycle.py 改动前后失败的都是同样 12 项（v1 引擎和环境问题），原来通过的场景仍然通过。
+
+## V163（2026-10-04）：主动审计——lineage_check 补复核 24 条失效边；"失效必须真生效"加防回归测试
+
+**起因**：用户问"怎么一直改不完"。最近的问题全出在流程的"记账层"（完成判据、失效、模板、回拉镜像），
+而这一层到处是不出声的兜底，都是真实材料第一次走到某条路径才暴露。这次不等实测撞上，按类别主动扫了一遍。
+
+**审计 1：失效归档的文件，能不能真让采集端判"未完成"**（9 个非 dir 的失效目标逐个造现场）
+- V162 之后 9/9 一致。
+- 反证：换回 V162 之前的 ck_plot，有 **4 个**步骤违反——S7.1、S8.1、S8.2、S8.3，归档标记后旧 png 仍让它们判完成。
+  可见 V162 修的不只是 S8.1。
+- 新增 `tests/test_invalidation_vs_completion.py`：以后改 skill.yaml 的 check/done_marker 或 DONE_MARKERS 时，
+  只要对不上就会挂。
+
+**审计 2：lineage_check 的事后复核覆盖面**
+- DOWNSTREAM 里有 24 条非 dir 失效边，lineage_check 一条都没复核：transport.json 对 S4/S4b/S7.1/S5/S6，
+  dpt_result.json 对 S7.1/S6/S3，boltztrap_crta.json 对 S3/S2 画图。
+  所以 P1_Mo-MoS2 那次"4 项全 OK"，其实没有验证输运结果是用最新上游算的。
+- 改动：
+  - POST_DERIVED 补上 always 边的新鲜度规则；
+  - 新增 `_linked_probs`：S8/S8.4 目录里软链进来的输入，按**链接实际指向的文件**比新旧。S8 用 S4 还是 S4b、用哪份形变势，
+    看软链就知道，不靠猜。本地回拉镜像里的断链不判。
+  - gap 边仍由带隙一致性规则检查。
+- 这些规则只给 lineage_check 用，不进 S8 的 gen 闸门（否则 S8 自己永远 rerun 不了，V148 的约束不变）。
+- 新增 `test_lineage_post.py`，4 项：覆盖率不变量（每条非 dir 边都有复核规则）、软链输入更新时报出、断链和旧输入不报、S5/S6 更新时报出。
+- `test_downstream_wiring` 一项的断言改为按步骤去重：S8.1 现在还会多报一条"比 S2.3 画图旧"，这是新规则在正常工作。
+
+**审计 3：仍开着的已知项**（这次没改，列入清单）
+- VASP 步骤用 OUTCAR 子串判完成：作业在 VASP 启动前就失败时，旧 OUTCAR 会造成假完成（V100 遗留）。
+  现在重跑会删目录、失效是整目录改名，只剩"对已完成步骤原地 init -f 再 start"这一条路径，风险低。
+- 方法层面的未验证项（不是流程 bug）：S8.4 的真空不变性、POP 的绝对归一化、GaAs 用 PBEsol 的 m*、WSe2 的多谷 DPT。
