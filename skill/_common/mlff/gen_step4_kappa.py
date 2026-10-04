@@ -509,6 +509,29 @@ def main():
     use_nac = (out / "BORN").is_file()
 
     params = kc.read_kl_params(out / kc.KL_PARAMS)
+    # 新 S3_fc（共享 fit-fc-thermal 引擎）不写 klmlff_params.txt：DIM 从 phonon_summary.json
+    #   （is_2d）、SUPERCELL 从 fc_dataset.json（supercell_matrix）继承，其余键仍走默认。
+    if not params.get("DIM") and (src / "phonon_summary.json").is_file():
+        try:
+            import json as _json
+            if _json.loads((src / "phonon_summary.json").read_text(encoding="utf-8")).get("is_2d"):
+                params["DIM"] = "2d"
+            else:
+                params["DIM"] = "3d"
+        except Exception:
+            pass
+    if not params.get("SUPERCELL") and (src / "fc_dataset.json").is_file():
+        try:
+            import json as _json
+            import numpy as np
+            _scm = _json.loads((src / "fc_dataset.json").read_text(encoding="utf-8")).get("supercell_matrix")
+            _m = np.asarray(_scm, float)
+            if _m.shape == (3, 3) and np.abs(_m - np.diag(np.diag(_m))).max() < 1e-8:
+                _sc = " ".join(str(int(round(float(x)))) for x in np.diag(_m))
+                params["SUPERCELL"] = _sc
+                params.setdefault("FC2_SUPERCELL", _sc)
+        except Exception:
+            pass
     # 维度 + 2D NAC 门槛（phono3py 只有 3D 方案；2D 极性材料 LO-TO 在 q->0 应趋零，
     #   3D-NAC 是随真空变化的伪劈裂）。auto：2D 不用 NAC、3D 随 BORN；on/off 强制。
     dim = (params.get("DIM") or "").lower()

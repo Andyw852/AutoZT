@@ -21,6 +21,7 @@ import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT / "skill" / "_common" / "fcfit"))
 sys.path.insert(0, str(ROOT / "skill" / "fit-fc-thermal"))
 
 import fc_common as fc  # noqa: E402
@@ -244,12 +245,16 @@ def test_kappa_step():
     check("skill.yaml 有 step2_kappa 且 needs step1_fit",
           "step2_kappa" in text and "needs: [step1_fit]" in text)
     check("skill.yaml 声明 KAPPA_DONE marker", "KAPPA_DONE" in text)
-    for f in ("gen_step2_kappa.py", "kappa_driver.py",
-              "templates/step2_kappa/submit_kappa.tpl",
-              "templates/step2_kappa/step.conf"):
+    for f in ("templates/step2_kappa/step.conf",):
         check("文件存在 %s" % f, (base / f).is_file())
+    check("文件存在 gen_step2_kappa.py",
+          (ROOT / "skill" / "_common" / "fcfit" / "gen_step2_kappa.py").is_file())
+    check("文件存在 submit_kappa.tpl",
+          (ROOT / "skill" / "_common" / "fcfit" / "templates" / "submit_kappa.tpl").is_file())
+    check("文件存在 kappa_driver.py",
+          (ROOT / "skill" / "_common" / "fcfit" / "kappa_driver.py").is_file())
     spec = importlib.util.spec_from_file_location(
-        "kd", str(base / "kappa_driver.py"))
+        "kd", str(ROOT / "skill" / "_common" / "fcfit" / "kappa_driver.py"))
     kd = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(kd)
     check("κ (T,6) Voigt -> xx/yy/zz",
@@ -258,7 +263,7 @@ def test_kappa_step():
           kd._flat_kappa(np.arange(9.0).reshape(1, 3, 3)).tolist()
           == [[0.0, 4.0, 8.0]])
     check("phono3py 逐档扫描函数存在（_phono3py_scan）",
-          "_phono3py_scan" in (base / "fc_fit_driver.py").read_text(encoding="utf-8"))
+          "_phono3py_scan" in (ROOT / "skill" / "_common" / "fcfit" / "fc_fit_driver.py").read_text(encoding="utf-8"))
     check("每档拟合都出声子谱（fc_plot_phonon 有 cut3_bands）",
           "cut3_bands" in (base / "fc_plot_phonon.py").read_text(encoding="utf-8"))
 
@@ -266,7 +271,7 @@ def test_cut3_select():
     print("[9] cut3_select.select_cutoff 三判据")
     import importlib.util
     spec = importlib.util.spec_from_file_location(
-        "cut3select", str(ROOT / "skill" / "fit-fc-thermal" / "cut3_select.py"))
+        "cut3select", str(ROOT / "skill" / "_common" / "fcfit" / "cut3_select.py"))
     cs = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(cs)
     recs = [
@@ -295,7 +300,7 @@ def test_kappa_mesh_auto():
     import numpy as np
     base = ROOT / "skill" / "fit-fc-thermal"
     spec = importlib.util.spec_from_file_location(
-        "kd_mesh", str(base / "kappa_driver.py"))
+        "kd_mesh", str(ROOT / "skill" / "_common" / "fcfit" / "kappa_driver.py"))
     kd = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(kd)
     check("MESH=auto -> 长度 MESH_LENGTH",
@@ -470,7 +475,7 @@ def test_cut3_without_bootstrap_and_curve():
     import importlib.util
     import json
     base = ROOT / "skill" / "fit-fc-thermal"
-    sys.path.insert(0, str(base))
+    sys.path.insert(0, str(ROOT / "skill" / "_common" / "fcfit"))
     import cut3_select as cs
     recs = [{"cut": c, "ratio": 10, "stable_upper_cut": None,
              "stability_measured": False, "kappa": k}
@@ -495,7 +500,7 @@ def test_cut3_without_bootstrap_and_curve():
     ch5, rep5 = cs.select_cutoff(vrec)
     check("2D 的 κzz≈0 不卡平台（按下限归一）", ch5 == 5.9 and rep5["status"] == "ok",
           "%s %s" % (ch5, rep5["status"]))
-    spec = importlib.util.spec_from_file_location("kd_curve", str(base / "kappa_driver.py"))
+    spec = importlib.util.spec_from_file_location("kd_curve", str(ROOT / "skill" / "_common" / "fcfit" / "kappa_driver.py"))
     kd = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(kd)
     with tempfile.TemporaryDirectory() as td:
@@ -530,7 +535,7 @@ def test_kappa_2d_thickness_norm():
     base = ROOT / "skill" / "fit-fc-thermal"
     for d in (ROOT / "skill" / "_common", ROOT / "skill" / "_common" / "opt"):
         sys.path.insert(0, str(d))
-    spec = importlib.util.spec_from_file_location("g2_norm", str(base / "gen_step2_kappa.py"))
+    spec = importlib.util.spec_from_file_location("g2_norm", str(ROOT / "skill" / "_common" / "fcfit" / "gen_step2_kappa.py"))
     g2 = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(g2)
     with tempfile.TemporaryDirectory() as td:
@@ -543,7 +548,7 @@ def test_kappa_2d_thickness_norm():
               g and abs(g["thickness_d_A"] - 6.73) < 0.02
               and abs(g["kappa_2d_norm_factor"] - 25 / g["thickness_d_A"]) < 1e-3, str(g))
         check("KAPPA_2D_THICKNESS=cell 不归一", g2.two_d_norm(td, "cell") is None)
-    spec = importlib.util.spec_from_file_location("kd_norm", str(base / "kappa_driver.py"))
+    spec = importlib.util.spec_from_file_location("kd_norm", str(ROOT / "skill" / "_common" / "fcfit" / "kappa_driver.py"))
     kd = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(kd)
     f = kd._two_d_fields({"kappa_2d_norm": {"kappa_2d_norm_factor": 4.0,
@@ -602,7 +607,7 @@ def test_fit_methods_param():
             "CUT3_CANDIDATES = off\n")
         for t in ("submit_fcfit_p3py", "submit_fcfit_pheasy", "submit_fcfit_hiphive",
                   "submit_fcfit_pheasy_gpu"):
-            src = ROOT / "skill" / "fit-fc-thermal" / "templates" / "step1_fit" / (t + ".tpl")
+            src = ROOT / "skill" / "_common" / "fcfit" / "templates" / (t + ".tpl")
             (sk / (t + ".tpl")).write_text(src.read_text(encoding="utf-8"))
         cwd = os.getcwd()
         os.chdir(str(sk))
@@ -627,7 +632,7 @@ def test_fit_methods_param():
         check("其余方法同作业串行、失败不致命",
               "for d in m-hiphive-ridge; do" in sub and "set +e" in sub, sub[-300:])
     spec = importlib.util.spec_from_file_location(
-        "kd_cmp", str(ROOT / "skill" / "fit-fc-thermal" / "kappa_driver.py"))
+        "kd_cmp", str(ROOT / "skill" / "_common" / "fcfit" / "kappa_driver.py"))
     kd = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(kd)
     with tempfile.TemporaryDirectory() as td:

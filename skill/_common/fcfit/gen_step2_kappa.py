@@ -17,11 +17,11 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-# 脱离 autozt 直接运行（python skill/fit-fc-thermal/gen_*.py）时，gen_need 里
-# 来自 skill/_common 的 stepconf/dim_common/thickness_2d 等不在脚本旁边——
-# 追加到 sys.path 末尾兜底（autozt 推送的同目录拷贝仍优先）。
-for _d in ("_common/opt", "_common"):
-    _p = Path(__file__).resolve().parent.parent / _d
+# 脱离 autozt 直接运行时，stepconf/dim_common（_common/opt）与
+# thickness_2d/vdw_radii（_common）不在脚本旁边（本脚本住在 _common/fcfit/，
+# 其上一级即 _common/）——追加到 sys.path 末尾兜底（autozt 推送的同目录拷贝仍优先）。
+_base = Path(__file__).resolve().parent.parent
+for _p in (_base, _base / "opt"):
     if _p.is_dir() and str(_p) not in sys.path:
         sys.path.append(str(_p))
 import fc_common as fc
@@ -79,6 +79,9 @@ SPEC = {
     #   kappa_2d_normalized_* = 原始 κ × h⊥/d。vdw（默认：原子层跨度 + 上下 vdW 半径）|
     #   cell（不归一）| 数值（固定层厚 Å，如 MoS2 体相层间距 6.15）。
     "KAPPA_2D_THICKNESS": ("vdw", "str"),
+    # 累积 κ vs 声子自由程（--mfp）：phono3py 写 kappa-mfp.hdf5，driver 把 50%/90%
+    #   累积处的 MFP 收进 kappa_summary.json（审稿人常问的热输运尺度）。默认关。
+    "MFP_CUMULATIVE": (False, "bool"),
 }
 
 
@@ -245,15 +248,17 @@ set -e
 """
 
 
-def main():
+def main(outdir=None, fit_dir=None, step=None):
     """S2_kappa gen: the primary fit (step1_fit/) -> step2_kappa/; every other
     FIT_METHODS fit (step1_fit/methods/<tag>/, listed in step1_fit/methods.json)
     -> step2_kappa/methods/<tag>/, run in the same job, then
-    `kappa_driver.py compare` writes methods_compare.{json,png,pdf}."""
+    `kappa_driver.py compare` writes methods_compare.{json,png,pdf}.
+    outdir/fit_dir/step let another skill (kl-mlff step4_kappa <- step3_fc) reuse
+    the whole recipe under its own step directory + step.conf names."""
     cwd = Path.cwd()
-    out = cwd / OUTDIR
-    conf = stepconf.load(SPEC, STEP, strict="warn")
-    fit = cwd / FIT_DIR
+    out = cwd / (outdir or OUTDIR)
+    conf = stepconf.load(SPEC, step or STEP, strict="warn")
+    fit = cwd / (fit_dir or FIT_DIR)
     _gen_one(conf, fit, out, cwd, write_submit=True)
     mj = fit / "methods.json"
     entries = []
@@ -362,6 +367,7 @@ def _gen_one(conf, fit, out, cwd, write_submit=True):
         "nac": nac,
         "bte_method": method,
         "enable_fc": enable_fc,
+        "mfp_cumulative": bool(conf["MFP_CUMULATIVE"]),
         "kappa_2d_norm": (two_d_norm(fit, conf["KAPPA_2D_THICKNESS"])
                           if mcfg["is_2d"] else None),
         "source_fc": str(fit),
@@ -374,10 +380,11 @@ def _gen_one(conf, fit, out, cwd, write_submit=True):
         newline="\n")
 
     here = Path(__file__).resolve().parent
+    _eng = fc.engine_dir()
     for _f in ("kappa_driver.py", "cut3_select.py"):
-        if not (here / _f).is_file():
+        if not (_eng / _f).is_file():
             sys.exit("[ERROR] %s missing -- is it listed in gen_need?" % _f)
-        shutil.copyfile(str(here / _f), str(out / _f))
+        shutil.copyfile(str(_eng / _f), str(out / _f))
     # the fit's own summary (method, gate, force RMSE) travels with the kappa so
     # the method comparison and the RMSE panel need no path back into step1_fit
     if (fit / "fc_fit_summary.json").is_file():

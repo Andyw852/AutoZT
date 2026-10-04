@@ -23,11 +23,11 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-# 脱离 autozt 直接运行（python skill/fit-fc-thermal/gen_*.py）时，gen_need 里
-# 来自 skill/_common 的 stepconf/dim_common/thickness_2d 等不在脚本旁边——
-# 追加到 sys.path 末尾兜底（autozt 推送的同目录拷贝仍优先）。
-for _d in ("_common/opt", "_common"):
-    _p = Path(__file__).resolve().parent.parent / _d
+# 脱离 autozt 直接运行时，stepconf/dim_common（_common/opt）与
+# thickness_2d/vdw_radii（_common）不在脚本旁边（本脚本住在 _common/fcfit/，
+# 其上一级即 _common/）——追加到 sys.path 末尾兜底（autozt 推送的同目录拷贝仍优先）。
+_base = Path(__file__).resolve().parent.parent
+for _p in (_base, _base / "opt"):
     if _p.is_dir() and str(_p) not in sys.path:
         sys.path.append(str(_p))
 import fc_common as fc
@@ -509,7 +509,7 @@ set -e
 """
 
 
-def main(conf=None, out=None, job_label="S1fit"):
+def main(conf=None, out=None, job_label="S1fit", outdir=None):
     """S1_fit gen.
 
     Called without arguments it is the plain S1_fit gen: FIT_METHODS picks the
@@ -517,13 +517,14 @@ def main(conf=None, out=None, job_label="S1fit"):
     or `all` = the first is the primary (step1_fit/ itself, the S1 gate), the
     others go to step1_fit/methods/<tag>/ and run in the same job.
     conf/out/job_label let gen_step3_sweep.py reuse the recipe for one sweep
-    variant (out = step3_sweep/m-<tag>/)."""
+    variant (out = step3_sweep/m-<tag>/).  outdir lets another skill (kl-mlff
+    step3_fc) reuse the whole recipe under its own step directory name."""
     cwd = Path.cwd()
     if conf is None:
         conf = stepconf.load(SPEC, STEP, strict="warn")
     if out is not None:
         return _gen_one(conf, Path(out), job_label)
-    out = cwd / OUTDIR
+    out = cwd / (outdir or OUTDIR)
     spec = str(conf.get("FIT_METHODS") or "auto").strip()
     methods = None if spec.lower() in ("", "auto") else parse_methods(spec)
     if not methods:
@@ -848,11 +849,13 @@ def _gen_one(conf, out, job_label="S1fit"):
         json.dumps(cfg, indent=2, ensure_ascii=False), encoding="utf-8", newline="\n")
 
     # The driver runs on the compute node: gen_need only places it next to this
-    # gen script, so copy it into the step directory explicitly.
+    # gen script (or in the shared _common/fcfit/ pool), so copy it into the step
+    # directory explicitly.
     here = Path(__file__).resolve().parent
-    if not (here / "fc_fit_driver.py").is_file():
+    _eng = fc.engine_dir()
+    if not (_eng / "fc_fit_driver.py").is_file():
         sys.exit("[ERROR] fc_fit_driver.py missing -- is it listed in gen_need?")
-    shutil.copyfile(str(here / "fc_fit_driver.py"), str(out / "fc_fit_driver.py"))
+    shutil.copyfile(str(_eng / "fc_fit_driver.py"), str(out / "fc_fit_driver.py"))
 
     kind = "submit_fcfit_%s" % ("p3py" if engine == "phono3py" else engine)
     if engine == "pheasy" and p_bin == "pheasy-gpu":

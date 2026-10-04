@@ -210,18 +210,106 @@ def _run_bte(out, yaml_name, fc2, fc3, cfg, source_fc, write_kappa, spec=None):
           % (mesh, nq, "" if diag or gm is None
              else "; generalized grid, grid_matrix=%s" % gm), flush=True)
     ph3.init_phph_interaction()
-    ph3.run_thermal_conductivity(
+    _kw = dict(
         is_LBTE=(str(cfg.get("bte_method") or "rta").lower() == "lbte"),
         temperatures=[float(x) for x in cfg["temperatures"]],
         is_isotope=bool(cfg.get("isotope", True)),
         write_kappa=write_kappa, log_level=1)
+    _mfp = bool(cfg.get("mfp_cumulative"))
+    if _mfp:
+        try:
+            ph3.run_thermal_conductivity(is_mfp=True, **_kw)
+        except TypeError:
+            print("[WARN] 此 phono3py 的 run_thermal_conductivity 不支持 is_mfp，"
+                  "退回无 MFP 的 BTE", flush=True)
+            ph3.run_thermal_conductivity(**_kw)
+    else:
+        ph3.run_thermal_conductivity(**_kw)
     s = _summary(ph3.thermal_conductivity, cfg, source_fc,
                  mesh=" ".join(str(x) for x in mesh))
     # "mesh" is phono3py's D_diag; for a generalized grid it is not points per
     # axis, so keep the full grid matrix and the q-point count alongside.
     s["mesh_grid_matrix"] = gm
     s["n_qpoints"] = nq
+    s.update(_kappa_symmetry_audit(ph3, s, cfg))
+    if _mfp:
+        s.update(_mfp_cumulative(out, s))
     return s
+
+
+def _mfp_cumulative(out, s):
+    """累积 κ vs 声子自由程（--mfp -> kappa-mfp.hdf5），把 50%/90% 累积处的 MFP
+    折进 summary。best effort，失败只记 unavailable。"""
+    import glob
+    try:
+        import h5py
+        cands = sorted(glob.glob(str(out / "kappa-mfp*.hdf5")))
+        if not cands:
+            return {"mfp_cumulative_unavailable": "no kappa-mfp*.hdf5"}
+        f = cands[0]
+        with h5py.File(f, "r") as h:
+            mfp = np.asarray(h["mfp"], float)
+            km = np.asarray(h["kappa_mfp"], float)
+            T = np.asarray(h["temperature"], float)
+        j = int(np.argmin(np.abs(T - 300.0)))
+        cum = np.asarray(km[j], float)
+        tot = float(np.trace(cum[-1]) / 3.0)
+        frac = (np.asarray([np.trace(c) / 3.0 for c in cum]) / tot
+                if tot > 0 else np.zeros(len(cum)))
+
+        def _mfp_at(pct):
+            idx = int(np.argmax(frac >= pct))
+            return float(mfp[idx]) if frac[idx] >= pct else None
+        return {"mfp_cumulative_300K": {
+            "file": Path(f).name,
+            "mfp_ang": [float(x) for x in mfp],
+            "cumulative_fraction": [float(x) for x in frac],
+            "mfp_at_50pct_ang": _mfp_at(0.5),
+            "mfp_at_90pct_ang": _mfp_at(0.9)}}
+    except Exception as _e:  # noqa: BLE001
+        return {"mfp_cumulative_unavailable": "%s" % _e}
+
+
+def _kappa_symmetry_audit(ph3, s, cfg):
+    """kl-mlff 的 κ 张量晶系审计（ported）：由原胞空间群定晶系，对 300K 的 3x3 κ
+    张量做对称审计（面内各向同性/对角失配/非对角幅度/行列式秩）。2D 用真空方向投影
+    面内块。失败只记 unavailable，绝不影响 κ 结果。"""
+    try:
+        import spglib
+        from kappa_validation import (crystal_system_from_spacegroup,
+                                      audit_kappa_voigt)
+    except Exception as _e:  # noqa: BLE001
+        return {"kappa_symmetry_audit_unavailable": "import: %s" % _e}
+    prim = ph3.primitive
+    try:
+        sg = spglib.get_spacegroup(
+            (np.asarray(prim.cell, float), np.asarray(prim.scaled_positions, float),
+             np.asarray(prim.numbers, int)), symprec=1e-3)
+        crystal = crystal_system_from_spacegroup(int(sg.split("(")[-1].rstrip(")")))
+    except Exception as _e:  # noqa: BLE001
+        return {"kappa_symmetry_audit_unavailable": "spacegroup: %s" % _e}
+    out = {"crystal_system": crystal, "spacegroup": sg}
+    voigt = s.get("kappa_voigt_xx_yy_zz_yz_xz_xy")
+    if not voigt:
+        return out
+    j = int(np.argmin(np.abs(np.asarray(s["temperatures"], float) - 300.0)))
+    v = [float(x) for x in voigt[j]]
+    plane = None
+    if cfg.get("is_2d"):
+        g = cfg.get("kappa_2d_norm") or {}
+        vax = int(g.get("vac_axis", _vacuum_axis(ph3)))
+        plane = np.asarray(prim.cell, float)[vax]
+    try:
+        aud = audit_kappa_voigt(
+            [v[0], v[1], v[2], v[3], v[4], v[5]], crystal_system=crystal,
+            plane_normal=plane)
+        out["kappa_symmetry_audit_300K"] = {
+            k: aud.get(k) for k in ("eigenvalue_ratio", "diagonal_relative_mismatch",
+                                    "offdiag_relative_magnitude", "determinant_ratio",
+                                    "threshold", "gate", "crystal_system")}
+    except Exception as _e:  # noqa: BLE001
+        out["kappa_symmetry_audit_unavailable"] = "audit: %s" % _e
+    return out
 
 
 def _kappa_at(s, t):
