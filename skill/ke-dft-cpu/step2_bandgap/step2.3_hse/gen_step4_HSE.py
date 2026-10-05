@@ -1142,6 +1142,10 @@ def build_step4_dir(out_dir, args, ctx, part=None):
     text = build_incar(items, incar_remove, incar_set)
     with open(os.path.join(out_dir, "INCAR"), "w") as f:
         f.write(text)
+    # [V165] 最终 INCAR 的杂化参数不是标准 HSE06/HSE03 -> 告警（Si 的 HFSCREEN=0.11 让带隙变成 1.340 eV，一路没人报）
+    _hy = ke_common.hybrid_params(os.path.join(out_dir, "INCAR"))
+    if _hy and _hy.get("warning"):
+        warn.append(_hy["warning"])
 
     return {"out_dir": out_dir, "range": (s, e), "jobname": jobname,
             "kpar": kpar, "npar_grp": npar_grp, "par_src": par_src,

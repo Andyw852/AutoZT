@@ -7503,3 +7503,22 @@ environment: amset_clean`，接着 `amset: command not found`。集群上现在�
   重新生成失败后落回 FAIL、采集端接线。
 - skill/ke-dft-cpu/test_dielectric_vacuum.py，3 项：真空轴识别（Direct / Cartesian / 3D 的 Si）；WS2 的 z 方向不告警；
   面内偏差照样告警。
+
+## V165（2026-10-05）：杂化泛函参数不是标准 HSE06/HSE03 时告警，并记进 band_summary
+
+**实测**（用户侧，核对带隙反常）：
+- **Si 的 S2.3（09-06 的结果）：** INCAR 是 `HFSCREEN = 0.11`，带隙 1.340 eV。同一材料按 0.2 跑的 Si_diamond 是 1.091 eV。
+  这个值进了 band_summary、S8 的剪刀差，也进了手稿里的表，一路没人报警。
+- 0.11 很可能是单位搞混了：HSE06 的屏蔽参数是 0.2 Å⁻¹，换成原子单位才是 0.106 bohr⁻¹，而 VASP 的 HFSCREEN 用的是 Å⁻¹。
+  屏蔽变弱，长程交换变多，带隙就偏大。
+- 技能的 gen 默认写的就是 0.2，git 历史里从没出现过 0.11。所以这是手改或 step.conf [incar] 覆盖留下的。
+- 同一轮还查出：MoS2 那一行其实是 PBE 带隙。它的 S2.3 是可选步骤，没打开，所以拿它和 HSE 的 MoSe2 比，顺序是反的。
+
+**改动**：
+- `ke_common.hybrid_params(INCAR)`：认出标准 HSE06/HSEsol（AEXX=0.25、HFSCREEN=0.2）和 HSE03（0.3）。
+  其它屏蔽值都给 ★ 告警；0.09–0.12 之间的，额外提示"像是 bohr⁻¹ 的值"。
+- S2.3 的 gen 写完 INCAR 后检查最终参数（包括 step.conf 的覆盖），告警进 warn 列表。
+- S2.3 画图步骤把 `hybrid`（AEXX、HFSCREEN、label、standard、warning）写进 band_summary.json，
+  非标准时打出告警。以后出带隙表时，看一眼 `hybrid.standard` 就知道这个带隙能不能直接比。
+
+**测试**：test_hybrid_params.py，4 项：Si 的 0.11 告警且带单位提示；标准 HSE06/HSE03 通过；没开杂化、文件缺失、PBE0 的情况；两处接线。

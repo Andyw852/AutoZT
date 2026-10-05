@@ -2049,3 +2049,46 @@ def resolve_func(prev_dir: Path, setting, step_name, drop_d3=False,
     print("[..] %s：泛函 %s（来源：%s）-> GGA=%s IVDW=%s"
           % (step_name, eff, src, m["GGA"], m["IVDW"] or "off"))
     return eff, {"GGA": m["GGA"], "VDW_LINE": m["VDW_LINE"]}
+
+
+# --------------------------------------------------------------------------
+# [V165] 杂化泛函参数核对：Si 的 S2.3 是 HFSCREEN = 0.11（HSE06 的 0.2 Å⁻¹ 换成 bohr⁻¹ 才是 0.106），
+#   屏蔽变弱 -> 带隙 1.340 eV（标准 HSE06 是 1.091），进了 band_summary、S8 的剪刀差和手稿的表，一路没人报警。
+#   VASP 的 HFSCREEN 单位是 Å⁻¹：HSE06/HSEsol = 0.2，HSE03 = 0.3。
+# --------------------------------------------------------------------------
+HYBRID_STD = {(0.25, 0.2): "HSE06/HSEsol", (0.25, 0.3): "HSE03"}
+
+
+def hybrid_params(incar):
+    """INCAR -> {"lhfcalc", "aexx", "hfscreen", "label", "standard", "warning"}；读不了或没开杂化 -> None。"""
+    try:
+        text = Path(incar).read_text(errors="ignore")
+    except OSError:
+        return None
+    kv = {}
+    for ln in text.splitlines():
+        ln = ln.split("#", 1)[0].split("!", 1)[0]
+        for part in ln.split(";"):
+            if "=" in part:
+                k, v = part.split("=", 1)
+                kv[k.strip().upper()] = v.strip()
+    if not kv.get("LHFCALC", "").upper().lstrip(".").startswith("T"):
+        return None
+
+    def _f(key, default):
+        try:
+            return float(kv[key].split()[0])
+        except (KeyError, ValueError, IndexError):
+            return default
+    aexx, hfs = _f("AEXX", 0.25), _f("HFSCREEN", 0.0)
+    std = HYBRID_STD.get((round(aexx, 4), round(hfs, 4)))
+    out = {"lhfcalc": True, "aexx": aexx, "hfscreen": hfs, "standard": bool(std),
+           "label": std or ("PBE0 型（不屏蔽）" if hfs == 0 else "非标准杂化（AEXX=%g, HFSCREEN=%g Å⁻¹）" % (aexx, hfs)),
+           "warning": None}
+    if not std and hfs > 0:
+        hint = ""
+        if 0.09 <= hfs <= 0.12:
+            hint = "；%g 像是 HSE06 的 bohr⁻¹ 值（0.106），VASP 的 HFSCREEN 单位是 Å⁻¹，HSE06 应写 0.2" % hfs
+        out["warning"] = ("★ 杂化参数不是标准 HSE06（AEXX=0.25, HFSCREEN=0.2 Å⁻¹）：AEXX=%g, HFSCREEN=%g%s。"
+                          "带隙会随之改变；若不是有意为之，查 step.conf 的 [incar] 覆盖" % (aexx, hfs, hint))
+    return out

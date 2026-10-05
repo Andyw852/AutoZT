@@ -837,6 +837,17 @@ def main():
               "kpath_method": kmeta.get("method"),
               "kpath_note": kmeta.get("note")}
 
+    # [V165] 记下这份带隙用的杂化参数；不是标准 HSE06/HSE03 就告警并写进摘要（Si：HFSCREEN=0.11 -> 1.340 eV）
+    try:
+        import ke_common as _kc
+        _hy = _kc.hybrid_params(out / "INCAR")
+    except Exception as _e:                                   # noqa: BLE001
+        _hy = None
+        log("[WARN] 读杂化参数失败（%s: %s），band_summary 不记 hybrid" % (type(_e).__name__, _e))
+    if _hy:
+        result["hybrid"] = _hy
+        if _hy.get("warning"):
+            log("[WARN] " + _hy["warning"])
     # [patch_gap_invalidate V148] 带隙变了 -> 用它的 S8/S8.4（settings.yaml 的 bandgap）与 S8.1 重新排队
     result["invalidated_downstream"] = _invalidate_gap_consumers(out, round(gap, 4))
 
