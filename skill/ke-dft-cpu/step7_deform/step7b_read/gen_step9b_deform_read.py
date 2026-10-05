@@ -239,6 +239,21 @@ def main():
               "可用；三维核若复用同一份 h5 需注意口径（本体系 DIM=%s）。" % (_dim_now or "?"))
         print("     面外 clamped 构型：%s" % ", ".join(_clamped_out[:8]))
     print("[..] 形变势构型口径 deform_geometry=%s（落盘到 band_edges.json）" % _def_geom)
+    # [V169] 芯能级参考的来源逐构型判定（amset deform read 读的就是这些目录的 OUTCAR）：平均静电芯势 / 1s 芯能级。
+    #   AMSET 缺前者时静默改用后者（ICORELEVEL=1 的旧 INCAR）；两种混用 -> 参考差无物理意义，直接报错。
+    _core_ref = {str(Path(_f).relative_to(dfm)): kc.outcar_core_ref_kind(Path(_f) / "OUTCAR")
+                 for _f in [Path(und)] + list(dp_subs)}
+    _core_kinds = sorted(set(str(v) for v in _core_ref.values()))
+    if len(_core_kinds) > 1:
+        sys.exit("[ERROR] 芯能级参考来源不一致：%s\n"
+                 "        AMSET 在没有平均静电芯势块的构型上会改用 1s 芯能级，两种量混着减，deformation.h5 没有意义。\n"
+                 "        通常是部分构型用了带 ICORELEVEL=1 的旧 INCAR：retry S7（V168 会归档这些旧产物）重算后再跑本步。"
+                 % "; ".join("%s=%s" % (k, v) for k, v in sorted(_core_ref.items())))
+    _core_kind = _core_kinds[0] if _core_kinds else "None"
+    if _core_kind == "1s":
+        print("[WARN] 全部构型都只有 1s 芯能级、没有平均静电芯势（INCAR 带 ICORELEVEL=1）：deformation.h5 的芯能级参考"
+              "不是 AMSET 的标准口径（元素依赖、非刚性），与其它项目的 core 口径不可直接比；真空口径不受影响。")
+    print("[..] 芯能级参考来源 core_reference=%s（落盘到 band_edges.json）" % _core_kind)
     # amset deform read 在形变目录里跑，产出 deformation.h5，再挪到本步目录
     # patch_deform_fix：amset 的签名是 read(bulk_folder, deformation_folders...)，
     # 【未形变的必须排第一个】。原来写成 `read *deform* undeformed`，既顺序
@@ -813,6 +828,8 @@ print("[OK] band_edges.json 已生成（amset 权威带边 E1 + 真空对齐 E1_
         _be = _json.loads(Path(be_out).read_text())
         _be["deform_geometry"] = _def_geom
         _be["deform_geometry_folders"] = _geom_map
+        _be["core_reference"] = _core_kind                      # [V169] avg_core / 1s
+        _be["core_reference_folders"] = _core_ref
         Path(be_out).write_text(_json.dumps(_be, indent=2, ensure_ascii=False) + "\n")
         print("[OK] band_edges.json 记录 deform_geometry=%s（%d 个构型）"
               % (_def_geom, len(_geom_map)))

@@ -402,6 +402,30 @@ def archive_if_run_mismatch(d, incar_text=None, vasprun_name="vasprun.xml", labe
     return diff
 
 
+# [V169] AMSET 形变势的"芯能级参考"（deformation.h5）有两种来源（amset/deformation/io.py get_reference_energy）：
+#   首选 OUTCAR 的各原子核处平均静电势块（"the norm of the test charge is"）；没有这块（ICORELEVEL=1 时 VASP 不写）
+#   就**静默**改用 1s 芯能级本征值（元素依赖、非刚性，模板注释：会把 E1 压到 ~0.3 eV 量级）。
+#   两种在构型之间混用时，参考差是两种量之差，形变势没有物理意义；全是 1s 时也不是 AMSET 的标准口径。
+def outcar_core_ref_kind(outcar):
+    """OUTCAR -> "avg_core"（平均静电芯势）/ "1s"（只有芯能级本征值）/ None（两者都没有或读不了）。"""
+    import gzip
+    p = Path(outcar)
+    if not p.is_file() and Path(str(p) + ".gz").is_file():
+        p = Path(str(p) + ".gz")
+    has_1s = False
+    try:
+        opener = gzip.open if p.suffix == ".gz" else open
+        with opener(p, "rt", encoding="utf-8", errors="ignore") as f:
+            for ln in f:
+                if "the norm of the test charge is" in ln:
+                    return "avg_core"
+                if "the core state eigen" in ln:
+                    has_1s = True
+    except OSError:
+        return None
+    return "1s" if has_1s else None
+
+
 # 下游关系（与 skill.yaml 的 needs 对应）。mode="link"：下游靠软链引用上游产物
 # （S4 链 S3 的 WAVECAR/vasprun；S8/S8.4 链 S4/S4b 的 h5 与 S3/S3b 的 vasprun）——
 # 只有软链确实指向这个上游时才失效；mode="always"：下游直接读上游目录，一律失效。

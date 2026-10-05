@@ -7642,3 +7642,36 @@ environment: amset_clean`，接着 `amset: command not found`。集群上现在�
    - gen 会归档旧的 5 个；
    - 新的 5 个保留；
    - start 只交被归档的 5 个。
+
+## V169（2026-10-06）：S7.1 判定芯能级参考的来源，两种混用直接报错
+
+**现场**：
+- V168 的回显核对在 CrS₂ 旧的 5 个形变单点上报了两项：`LVHAR: F -> .TRUE.` 和 `ICORELEVEL: 1 -> (删除)`。
+- 旧 INCAR 带 ICORELEVEL=1。这时 VASP 不写 OUTCAR 里的"各原子核处平均静电势"块。
+- AMSET 0.5.1 的 `get_reference_energy`（amset/deformation/io.py）先找这块，找不到就**静默**改用 1s 芯能级本征值。
+- 后果分两种：
+  - 部分构型重算后（一半有平均芯势、一半只有 1s），参考差是两种不同的量相减，deformation.h5 没有意义，却不报任何错；
+  - 全部构型都是 1s 时，也不是 AMSET 的标准口径。模板注释写明：元素依赖、非刚性，会把 E1 压到约 0.3 eV。
+- 真空口径（deformation_vac.h5）把参考替换成 LOCPOT 的真空能级，不受影响。
+
+**改动**：
+- ke_common 新增 `outcar_core_ref_kind(OUTCAR)`，返回 `avg_core` / `1s` / None。
+  - 判据与 pymatgen 的 `read_avg_core_poten` / `read_core_state_eigen` 一致；
+  - 只剩 `.gz` 也认。
+- S7.1 在 `amset deform read` 之前，对 AMSET 实际要读的目录逐个判定（undeformed，以及优先取的 ionrelax/）：
+  - 来源不一致：直接报错，提示 retry S7（V168 会把带 ICORELEVEL=1 的旧产物归档后重算）；
+  - 全是 1s：告警；
+  - 结果写进 band_edges.json 的 `core_reference` 和 `core_reference_folders`。
+
+**测试**：skill/ke-dft-cpu/test_core_ref_kind.py（2 项）。
+- 三种判定，含 `.gz`；
+- 判定在 `amset deform read` 之前，判的是 AMSET 实际读的目录，结果落盘。
+
+**要回头核对的**：
+- MoS₂ 的 vac/core 基准里，"芯能级参考把空穴 K 谷 D 压到 0.38 eV"，量级正好落在 1s 回退的典型范围。
+- 要先确认那次 core 口径用的是平均静电芯势还是 1s。
+  - 方法：对 MoS₂ step7_deform 的 undeformed/ 和各 deform-*（有 ionrelax/ 就看 ionrelax/）的 OUTCAR，分别 grep
+    `the norm of the test charge is` 和 `the core state eigen`。
+  - 如果是 1s，那组 core 结果不能拿来否定芯能级参考。
+- CrS₂ 08-29 的 band_edges.json（E1 5.861/3.078）也可能来自带 ICORELEVEL=1 的运行。
+  这次 S7 → S7.1 重跑后，用新的 E1（core/vac）对比，再看 S8.2 DPT 有没有变化。
