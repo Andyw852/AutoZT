@@ -737,6 +737,9 @@ def get_effective_mass_aniso(cwd, carrier, is_2d):
                 _kf_m = kfrac_ibz[k0_ibz].astype(float)
                 _d = _kf_be - _kf_m
                 _d -= np.round(_d)                   # 周期回卷
+                # [V167] 本函数只走 2D：c 是真空方向，能带沿 kz 是平的 —— [⅓,⅓,0] 与 [⅓,⅓,⅓] 是同一个 K 谷
+                #   （CrSe2：E1 链在 kz=⅓ 层定位、m* 链在 kz=0 层，以前误报"两链带边分叉"）。只比面内分量。
+                _d[2] = 0.0
                 if float(np.linalg.norm(_d)) > 1e-4:
                     print("[WARN] %s：m* 链带边 k=%s 与 E1 链带边 k=%s 不一致"
                           "（回卷距离 %.3g）——两链带边分叉，m* 与 E1 内部不自洽"
