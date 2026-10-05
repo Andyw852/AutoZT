@@ -7522,3 +7522,20 @@ environment: amset_clean`，接着 `amset: command not found`。集群上现在�
   非标准时打出告警。以后出带隙表时，看一眼 `hybrid.standard` 就知道这个带隙能不能直接比。
 
 **测试**：test_hybrid_params.py，4 项：Si 的 0.11 告警且带单位提示；标准 HSE06/HSE03 通过；没开杂化、文件缺失、PBE0 的情况；两处接线。
+
+## V166（2026-10-05）：band-dft-cpu 的 HSE gen 写死了 HFSCREEN = 0.11
+
+**用户侧排查 V165 时发现**：`skill/band-dft-cpu/gen_step4_HSE.py` 的 INCAR_SET 里，"权威值" HFSCREEN 写的是 `0.11`。
+- 同一行的注释写着"0.2 = 标准 HSE06/HSEsol"，可见值和注释对不上。
+- 0.11 是 bohr⁻¹ 的数值（HSE06 的 ω = 0.106 bohr⁻¹ = 0.2 Å⁻¹），而 VASP 的 HFSCREEN 单位是 Å⁻¹。
+- ke 的 Si S2.3（09-06）用到的 0.11 很可能也是从这里来的。ke 自己的 gen 历史里从没出现过 0.11，但两个 gen 同源。
+- 用户已在本地把这一处改回 0.2（ddc8026）。Si 的 band-dft-cpu S4 还没跑过，目前没有需要重跑的结果。
+
+**改动**：
+- 第 231 行 0.11 → 0.2。只改数值，与用户本地那次修改逐字相同，`git am -3` 能干净合并。
+- band 的 gen 写完 INCAR 后用 `hybrid_warning` 核对最终参数，判据与 ke 的 V165 相同：非标准值进 warn 列表，
+  0.09–0.12 额外提示"像是 bohr⁻¹"。
+- tests/test_band_hfscreen.py，3 项：默认值是 0.2；0.11 告警，0.2 / 0.3 / 非杂化不告警；接线位置在写完 INCAR 之后。
+
+**影响面**：凡是用旧版 band-dft-cpu（或同源的旧 ke gen）跑过 HSE 的材料，带隙都偏大（Si：1.34 对 1.09）。
+用一条 grep 扫所有 INCAR 里的 HFSCREEN 就能列全。
