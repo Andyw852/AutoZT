@@ -317,72 +317,209 @@ def _recorded_pheasy_perm(out):
     return None if np.array_equal(perm, np.arange(len(perm))) else perm
 
 
+def _perm_from_pheasy_sposcar(out):
+    """Permutation from the dataset supercell order to pheasy's actual order.
+
+    pheasy (without --read_scell) rebuilds the supercell in its own atom order
+    and rewrites SPOSCAR; wrapping differences (e.g. a primitive coordinate of
+    exactly 1.0 vs phonopy's ~1.0) mean the only reliable source of pheasy's
+    order is the SPOSCAR pheasy actually wrote -- NOT a re-implementation of
+    create_supercell (which got the wrap wrong before: ase 3.29 wraps 1.0 to
+    0.0 by default, so AutoZT's hand-written wrap=True assumption was correct
+    but fragile).  Match pheasy's SPOSCAR against SPOSCAR.dataset coordinate by
+    coordinate (mod lattice translation, element must agree).
+
+    Returns perm such that pheasy row i is dataset row perm[i], or None when
+    the two supercells cannot be matched.
+    """
+    out = Path(out)
+    p, d = out / "SPOSCAR", out / "SPOSCAR.dataset"
+    if not (p.is_file() and d.is_file()):
+        return None
+    try:
+        sc_ph = _read_poscar(p)
+        sc_ds = _read_poscar(d)
+    except Exception:
+        return None
+    if len(sc_ph) != len(sc_ds):
+        return None
+    frac_ds = np.asarray(sc_ds.get_scaled_positions(wrap=True), float) % 1.0
+    num_ds = np.asarray(sc_ds.get_atomic_numbers(), int)
+    perm = []
+    for i in range(len(sc_ph)):
+        f = np.asarray(sc_ph.get_scaled_positions(wrap=True), float)[i] % 1.0
+        num = int(sc_ph.get_atomic_numbers()[i])
+        same = np.where(num_ds == num)[0]
+        if same.size == 0:
+            return None
+        dd = frac_ds[same] - f
+        dd -= np.round(dd)
+        k = int(np.argmin(np.abs(dd).sum(axis=1)))
+        if np.abs(dd[k]).max() > 1e-5:
+            return None
+        perm.append(int(same[k]))
+    perm = np.asarray(perm, int)
+    return None if sorted(perm) != list(range(len(sc_ph))) else perm
+
+
+def _assert_sposcar_dataset_ok(cfg, out):
+    """Assert SPOSCAR.dataset still matches the dataset's ideal supercell.
+
+    The dataset source dir carries its own SPOSCAR (the ideal supercell in the
+    dataset order, i.e. the equilibrium reference frame that prep excluded from
+    training).  SPOSCAR.dataset is the step dir's copy of it; on a re-run it must
+    NOT be overwritten by pheasy's SPOSCAR, or the permutation would become the
+    identity and the input permutation would be silently skipped (job 5830).
+    Compare element order and mod-lattice coordinates (tol 1e-5).
+    """
+    out = Path(out)
+    ds = out / "SPOSCAR.dataset"
+    if not ds.is_file():
+        return
+    src = None
+    out_sp = (out / "SPOSCAR").resolve()
+    for key in ("dataset_dir_abs", "dataset_dir"):
+        v = cfg.get(key)
+        if v:
+            p = Path(v)
+            if not p.is_absolute():
+                p = out / v
+            cand = p / "SPOSCAR"
+            # 源头解析出来如果是步骤目录自己的 SPOSCAR（被 -s 改写过的 pheasy 序），
+            # 就当成没有独立源头，不能拿它当基准
+            if cand.is_file() and cand.resolve() != out_sp:
+                src = cand
+                break
+    if src is None:
+        print("[WARN] SPOSCAR.dataset cannot be verified: no dataset source SPOSCAR",
+              flush=True)
+        return
+    sc_ds = _read_poscar(ds)
+    sc_src = _read_poscar(src)
+    if len(sc_ds) != len(sc_src):
+        sys.exit("[ERROR] SPOSCAR.dataset has %d atoms but the dataset source "
+                 "SPOSCAR has %d -- the dataset-order baseline was overwritten"
+                 % (len(sc_ds), len(sc_src)))
+    if not np.array_equal(np.asarray(sc_ds.get_atomic_numbers()),
+                          np.asarray(sc_src.get_atomic_numbers())):
+        sys.exit("[ERROR] SPOSCAR.dataset element order differs from the dataset "
+                 "source SPOSCAR -- the baseline was overwritten")
+    d_ds = np.asarray(sc_ds.get_scaled_positions(wrap=True)) % 1.0
+    d_src = np.asarray(sc_src.get_scaled_positions(wrap=True)) % 1.0
+    dd = d_ds - d_src
+    dd -= np.round(dd)
+    if np.abs(dd).max() > 1e-5:
+        sys.exit("[ERROR] SPOSCAR.dataset coordinates differ from the dataset "
+                 "source SPOSCAR (max %.2e) -- the baseline was overwritten"
+                 % np.abs(dd).max())
+    print("[OK] SPOSCAR.dataset matches the dataset source SPOSCAR (order + "
+          "mod-lattice coordinates)", flush=True)
+
+
+def _write_order_record(out, perm, applied):
+    """Record the permutation and whether it was applied (for diagnostics)."""
+    (Path(out) / ".pheasy_order.json").write_text(
+        json.dumps({"applied": bool(applied),
+                    "permutation": perm.tolist() if perm is not None else None},
+                   indent=2), encoding="utf-8", newline="\n")
+
+
 def apply_pheasy_order(cfg, out):
     """Put disp_matrix.pkl / force_matrix.pkl into pheasy's atom order.
 
     Only the two pickles are touched -- they are the pheasy-specific inputs --
     so hiphive (which aligns the supercell internally) and phono3py (which uses
     the YAML/SPOSCAR that prep wrote, in the dataset order) are unaffected.
-    Idempotent: the decision is recorded in .pheasy_order.json.
+
+    The permutation comes from pheasy's OWN SPOSCAR (written by its -s step)
+    matched against SPOSCAR.dataset -- never from re-implementing
+    create_supercell.  Idempotent by CONTENT: the pickles are compared against
+    the dataset npy files, so a stale .pheasy_order.json cannot skip the
+    permutation a second time (the bug that scrambled Mn2In2Se5 job 5830).
     """
     out = Path(out)
-    rec = out / ".pheasy_order.json"
-    if rec.is_file():
-        return json.loads(rec.read_text(encoding="utf-8")).get("applied", False)
+    _assert_sposcar_dataset_ok(cfg, out)
     dp, fp = out / "disp_matrix.pkl", out / "force_matrix.pkl"
     if not (dp.is_file() and fp.is_file()):
         return False
-    # The permutation was frozen by prep, while SPOSCAR still described the
-    # dataset: pheasy overwrites SPOSCAR with its own atom order, so reading
-    # it back here would compare pheasy against pheasy and always say "fine".
-    rec_order = None
-    try:
-        rec_order = json.loads((out / "fc_dataset.json").read_text(
-            encoding="utf-8")).get("pheasy_atom_order")
-    except Exception:
-        rec_order = None
-    if isinstance(rec_order, dict) and rec_order.get("permutation"):
-        perm = np.asarray(rec_order["permutation"], int)
-    else:
-        # older prep output (or a hand-built step dir): fall back to the files
-        scm, _pm = _cells_cfg(cfg, out)
-        if scm is None or np.shape(scm) != (3, 3):
-            scm = np.asarray(_diag_supercell_matrix(out), float)
-        d = np.diag(scm)
-        if np.abs(scm - np.diag(d)).max() > 1e-8:
-            print("[WARN] the dataset supercell matrix is not diagonal; pheasy's "
-                  "--dim cannot express it, so the atom order cannot be checked",
-                  flush=True)
-            perm = None
-        else:
-            perm = _pheasy_supercell_order(_read_poscar(out / "POSCAR"),
-                                           _read_poscar(out / "SPOSCAR"),
-                                           [int(round(x)) for x in d])
-    applied = False
+    perm = _perm_from_pheasy_sposcar(out)
     if perm is None:
-        print("[WARN] could not verify the supercell atom order against the one "
-              "pheasy builds from POSCAR + SUPERCELL -- if the fit residual is "
-              "near 50%% with a force correlation around 0.7, the dataset was "
-              "written in ASE repeat() order instead", flush=True)
-    elif not np.array_equal(perm, np.arange(len(perm))):
-        with open(dp, "rb") as fh:
-            disps = pickle.load(fh)
-        with open(fp, "rb") as fh:
-            forces = pickle.load(fh)
-        with open(dp, "wb") as fh:
-            pickle.dump(np.asarray(disps, float)[:, perm, :], fh)
-        with open(fp, "wb") as fh:
-            pickle.dump(np.asarray(forces, float)[:, perm, :], fh)
-        applied = True
-        print("[WARN] the dataset supercell is not in the atom order pheasy "
-              "rebuilds from POSCAR + SUPERCELL, which would have scrambled "
-              "every atom but the first.  disp_matrix.pkl / force_matrix.pkl "
-              "were permuted into pheasy's order (npy files, SPOSCAR and every "
-              "other engine are untouched).", flush=True)
-    rec.write_text(json.dumps({"applied": applied,
-                               "permutation": perm.tolist() if perm is not None else None},
-                              indent=2), encoding="utf-8", newline="\n")
-    return applied
+        perm = _recorded_pheasy_perm(out)
+    if perm is None:
+        print("[WARN] could not determine the supercell atom order from pheasy's "
+              "SPOSCAR nor fc_dataset.json -- if the fit residual is near 50%% "
+              "with a force correlation around 0.7 the order is scrambled",
+              flush=True)
+        return False
+    if np.array_equal(perm, np.arange(len(perm))):
+        _write_order_record(out, perm, False)
+        return False
+
+    disps = np.asarray(pickle.load(open(dp, "rb")), float)
+    forces = np.asarray(pickle.load(open(fp, "rb")), float)
+    # 用 disp_matrix.pkl 的实际帧数截断，不能拿 n_frames（可能缺省或与实际不一致）
+    ds_disps, ds_forces = _load_dataset(out)
+    n = disps.shape[0]
+    ds_disps = ds_disps[:n]
+    ds_forces = ds_forces[:n]
+    perm_disps = ds_disps[:, perm, :]
+    perm_forces = ds_forces[:, perm, :]
+
+    if (np.array_equal(disps, perm_disps)
+            and np.array_equal(forces, perm_forces)):
+        print("[OK] disp/force already in pheasy's order (content check) -- skip",
+              flush=True)
+        _write_order_record(out, perm, False)
+        return False
+    if not (np.array_equal(disps, ds_disps)
+            and np.array_equal(forces, ds_forces)):
+        sys.exit("[ERROR] disp_matrix.pkl / force_matrix.pkl are neither the "
+                 "dataset order nor pheasy's order -- refusing to guess; delete "
+                 ".pheasy_order.json and the two pickles, then retry")
+    with open(dp, "wb") as fh:
+        pickle.dump(perm_disps, fh)
+    with open(fp, "wb") as fh:
+        pickle.dump(perm_forces, fh)
+    print("[OK] disp_matrix.pkl / force_matrix.pkl permuted into pheasy's order "
+          "(%d/%d atoms moved)" % (int((perm != np.arange(len(perm))).sum()),
+                                    len(perm)), flush=True)
+    _write_order_record(out, perm, True)
+    return True
+
+
+def _assert_pheasy_input_order(cfg, out):
+    """Fail before -f if the disp/force pickles or the sensing-matrix cache do
+    not match the dataset.
+
+    job 5830: a stale .pheasy_order.json skipped the input permutation while
+    pheasy -f reused an old sm_prime.npz built from misaligned data.  Content
+    checks here make that a hard error instead of a silent 6.9%->11% drift.
+    """
+    out = Path(out)
+    perm = _perm_from_pheasy_sposcar(out)
+    if perm is None:
+        perm = _recorded_pheasy_perm(out)
+    if perm is None or np.array_equal(perm, np.arange(len(perm))):
+        return
+    ds_disps, ds_forces = _load_dataset(out)
+    disps = np.asarray(pickle.load(open(out / "disp_matrix.pkl", "rb")), float)
+    forces = np.asarray(pickle.load(open(out / "force_matrix.pkl", "rb")), float)
+    n = disps.shape[0]
+    ds_disps = ds_disps[:n]
+    ds_forces = ds_forces[:n]
+    if not np.array_equal(disps, ds_disps[:, perm, :]):
+        sys.exit("[ERROR] disp_matrix.pkl is not in pheasy's order (perm): the "
+                 "input permutation did not take effect; delete .pheasy_order.json "
+                 "and retry")
+    if not np.array_equal(forces, ds_forces[:, perm, :]):
+        sys.exit("[ERROR] force_matrix.pkl is not in pheasy's order (perm): the "
+                 "input permutation did not take effect; delete .pheasy_order.json "
+                 "and retry")
+    sm, dp = out / "sm_prime.npz", out / "disp_matrix.pkl"
+    if sm.is_file() and dp.is_file() and sm.stat().st_mtime < dp.stat().st_mtime:
+        sys.exit("[ERROR] sm_prime.npz is older than disp_matrix.pkl -- pheasy -f "
+                 "would reuse a stale sensing matrix; delete sm_prime.npz and retry")
+
 
 def apply_pheasy_fc_order(cfg, out):
     """Permute pheasy's fitted force constants back to the dataset atom order.
@@ -907,11 +1044,35 @@ def _diag_supercell_matrix(out):
         return [[1, 0, 0], [0, 1, 0], [0, 0, 1]]
 
 
-def _load_dataset(out):
-    """Read the canonical dataset written by prep."""
+def _load_dataset(out, ndata=None):
+    """Read the training frames of the canonical dataset written by prep.
+
+    prep stores NDATA training frames plus one reference frame -- the
+    closest-to-ideal supercell whose equilibrium forces are subtracted.  That
+    reference frame is NOT a training sample, so it is dropped here.  The
+    training frames are always "all rows except the LAST one"; fc_dataset.json
+    records the reference frame's row number as `reference_frame_index`, and if
+    that index is not the last row the layout is unsupported and we abort
+    rather than slice by it (which would silently truncate training frames).
+    """
     d = np.load(out / "dataset_disps.npy")
     f = np.load(out / "dataset_forces.npy")
-    return np.asarray(d[:-1], float), np.asarray(f[:-1], float)
+    if ndata is None:
+        last = d.shape[0] - 1
+        try:
+            ds = json.loads((Path(out) / "fc_dataset.json").read_text(
+                encoding="utf-8"))
+            ref = ds.get("reference_frame_index")
+            if ref is not None and int(ref) != last:
+                sys.exit("[ERROR] reference_frame_index=%s but the reference frame "
+                         "is expected at the last row (index %d of %d rows) -- "
+                         "unsupported dataset layout" % (ref, last, d.shape[0]))
+        except SystemExit:
+            raise
+        except Exception:
+            pass
+        ndata = last
+    return np.asarray(d[:ndata], float), np.asarray(f[:ndata], float)
 
 
 # ==========================================================================
@@ -1068,6 +1229,23 @@ def _clear_pheasy_cache(out):
                 sys.exit("[ERROR] cannot clear stale pheasy cache %s: %s" % (f, e))
 
 
+def _clear_pheasy_sm_cache(out):
+    """Delete pheasy's sensing-matrix / fit-artifact caches in ``out``.
+
+    sm_prime.npz / sm_dense.npy are built by -d from disp_matrix.pkl; fm1d/fm2d/
+    phi are fit artifacts.  They must be rebuilt after the input permutation
+    changes, otherwise -f reuses a sensing matrix built from misaligned data
+    (job 5830 reused a stale sm_prime.npz)."""
+    out = Path(out)
+    for pat in ("sm_prime.npz", "sm_dense.npy", "sm_dense.npy.meta.json",
+                "fm1d.npz", "fm2d.npz", "phi*.npz", "*.npz.meta.json"):
+        for f in out.glob(pat):
+            try:
+                f.unlink()
+            except OSError as e:
+                sys.exit("[ERROR] cannot clear stale pheasy sm cache %s: %s" % (f, e))
+
+
 def _check_cutoff_honoured(txt, c3v, what):
     """Abort when pheasy -s did not build the cluster space for the requested c3.
 
@@ -1124,13 +1302,13 @@ def _pheasy_scan(cfg, out, cands, base_for, rasr_flag, fit_flags, make_env):
 
     def _fit_stages(c3v, tag):
         base = base_for(c3v)
-        _clear_pheasy_cache(out)
         _s_txt = _run("cluster space", "setup", base + " -s", "pheasy_s_%s.log" % tag)
         _check_cutoff_honoured(_s_txt, c3v, "scan c3=%.2f" % c3v)
         _run("symmetry constraints", "setup", base + " -c" + rasr_flag,
              "pheasy_c_%s.log" % tag)
         _run("displacement matrix", "displacement",
              "%s -d --ndata %d --disp_file" % (base, nd), "pheasy_d_%s.log" % tag)
+        _assert_pheasy_input_order(cfg, out)
         rc, txt = _run_streaming("%s -f --ndata %d %s" % (base, nd, " ".join(fit_flags)),
                                  make_env("fit"))
         (Path(out) / ("pheasy_f_%s.log" % tag)).write_text(txt, encoding="utf-8")
@@ -1143,6 +1321,8 @@ def _pheasy_scan(cfg, out, cands, base_for, rasr_flag, fit_flags, make_env):
         tag = ("%.2f" % c).replace(".", "p")
         cdir = scan_dir / ("cut3_%s" % tag)
         cdir.mkdir(parents=True, exist_ok=True)
+        _clear_pheasy_cache(out)   # rebuild cluster/null space for THIS cutoff
+        _clear_pheasy_sm_cache(out)
         fit_txt = _fit_stages(c, tag)
         # Bring pheasy's fc back to the DATASET atom order (and restore SPOSCAR)
         # before saving/copying: phono3py/ShengBTE/hiphive rebuild the supercell
@@ -1750,7 +1930,13 @@ def cmd_fit_pheasy(cfg, out):
               "the fit, and the production templates were corrected on "
               "2026-09-11.", flush=True)
     eps = float(cfg.get("null_space_eps") or 0.001)
-    apply_pheasy_order(cfg, out)
+    # Stale fit artifacts from a previous run must not survive into this one
+    # (job 5830 read a 10-03 fit_metrics.json / fc_fit_summary.json).
+    for _stale in ("fit_metrics.json", "fc_fit_summary.json",
+                   "phonon_summary.json", "fit_manifest.json", ".fit_gate_fail"):
+        _p = out / _stale
+        if _p.is_file():
+            _p.unlink()
     disps, forces = _load_dataset(out)
 
     c2 = _as_float_or_none(cfg.get("pheasy_c2_cutoff"))
@@ -1833,8 +2019,34 @@ def cmd_fit_pheasy(cfg, out):
     # pheasy's cluster-space step rewrites SPOSCAR in its own atom order; keep the
     # dataset's copy so apply_pheasy_fc_order can restore it -- including during
     # the cutoff scan below, which must save pheasy's fc in the DATASET atom order.
-    if (out / "SPOSCAR").is_file():
+    # SPOSCAR.dataset is the dataset-order baseline and must be written ONCE and
+    # never overwritten: on a re-run the directory's SPOSCAR is already the
+    # pheasy-order one from the previous -s, so copying it again would make the
+    # permutation identity and silently skip the input permutation (job 5830).
+    if (out / "SPOSCAR").is_file() and not (out / "SPOSCAR.dataset").is_file():
         shutil.copyfile(str(out / "SPOSCAR"), str(out / "SPOSCAR.dataset"))
+
+    # Compute the permutation from pheasy's OWN SPOSCAR and permute the
+    # disp/force pickles BEFORE any -d reads them (both the cutoff scan and the
+    # nominal fit read disp_matrix.pkl via -d).  pheasy's -s step rewrites
+    # SPOSCAR in its own atom order, so run one -s first, then match its SPOSCAR
+    # against SPOSCAR.dataset.  (job 5830: a stale .pheasy_order.json skipped
+    # the input permutation, so both the scan and the nominal fit saw misaligned
+    # data.)
+    _clear_pheasy_cache(out)
+    _clear_pheasy_sm_cache(out)
+    _probe = subprocess.run(base + " -s", shell=True, capture_output=True,
+                            text=True,
+                            env=_pheasy_env(method, "setup", ncpu, natom_super,
+                                            tuning, ols_ridge, ols_maxiter,
+                                            tsqr_criterion=tsqr_criterion),
+                            preexec_fn=_die_with_parent)
+    sys.stdout.write((_probe.stdout or "") + (_probe.stderr or ""))
+    if _probe.returncode != 0:
+        sys.exit("[ERROR] pheasy -s (order probe) failed (rc=%d)" % _probe.returncode)
+    apply_pheasy_order(cfg, out)
+    _clear_pheasy_cache(out)
+    _clear_pheasy_sm_cache(out)
 
     # ---- third-order cutoff scan (ported from kl-dft-cpu S5_fc) ----
     #   Refit every candidate cutoff and frame-bootstrap it BEFORE the nominal
@@ -1861,13 +2073,13 @@ def cmd_fit_pheasy(cfg, out):
         print("[..] 单截断拟合（CUT3_SCAN=%s，候选 %d 档）"
               % (cfg.get("cut3_scan"), len(_cands)), flush=True)
 
+    _clear_pheasy_cache(out)   # 名义拟合也重新建簇空间（防上次遗留的旧 cs.pkl/ns）
+    _clear_pheasy_sm_cache(out)
     run_steps = (("cluster space", "setup", base + " -s"),
                  ("symmetry constraints", "setup", base + " -c" + rasr_flag),
                  ("displacement matrix", "displacement", disp_step))
     for label, phase, cmd in run_steps:
         print("[pheasy] %s: %s" % (label, cmd), flush=True)
-        if label == "cluster space":
-            _clear_pheasy_cache(out)
         # capture output: the -c step is where RASR has to show up, and we need
         # its log to prove the constraint was imposed (see below)
         r = subprocess.run(cmd, shell=True, capture_output=True, text=True,
@@ -1891,6 +2103,7 @@ def cmd_fit_pheasy(cfg, out):
                          % rasr)
             print("[OK] RASR=%s imposed in the null-space construction step (-c)" % rasr,
                   flush=True)
+    _assert_pheasy_input_order(cfg, out)
     print("[pheasy] fit: %s" % fit_step, flush=True)
     env = _pheasy_env(method, "fit", ncpu, natom_super, tuning, ols_ridge,
                       ols_maxiter,
@@ -2955,6 +3168,64 @@ def _fit_rmse(cfg, out, fc_dir=None, quiet=False):
         return {}
 
 
+def _postfit_self_check(cfg, out):
+    """hiphive re-evaluates the DELIVERED fc on all training frames and compares
+    it against pheasy's self-reported re (fit_manifest.json metrics.re).
+
+    A large gap means the export/reorder path scrambled the constants -- the
+    job-5830 failure mode: pheasy reported 6.89% while hiphive on the exported
+    fc gave 11%.  This is the cheapest one-shot tripwire for that class of bug.
+    """
+    # 只在 pheasy 引擎下做这个自检（hiphive/phono3py 没有可对照的 fit_manifest re）
+    if str(cfg.get("engine") or "").lower() != "pheasy":
+        return {}
+    out = Path(out)
+    mf = out / "fit_manifest.json"
+    if not mf.is_file():
+        return {}
+    try:
+        re_pheasy = json.loads(mf.read_text(encoding="utf-8")).get(
+            "metrics", {}).get("re")
+    except Exception:
+        return {}
+    if re_pheasy is None:
+        return {}
+    cfg2 = dict(cfg)
+    # 用实际训练帧数（不是写死的 50 / n_frames 缺省值）
+    ds_disps, _ = _load_dataset(out)
+    cfg2["fit_rmse_frames"] = len(ds_disps)
+    r = _fit_rmse(cfg2, out, quiet=True)
+    re_hiphive = r.get("fit_rmse_relative")
+    if re_hiphive is None:
+        return {}
+    rel_dev = abs(float(re_hiphive) - float(re_pheasy)) / max(float(re_pheasy), 1e-12)
+    print("[self-check] pheasy re=%.5f hiphive(all-frames) re=%.5f (rel dev %.2f%%)"
+          % (re_pheasy, re_hiphive, 100.0 * rel_dev), flush=True)
+    if rel_dev > 0.05:
+        print("[FAIL] fit self-check: hiphive re-evaluation diverges from "
+              "pheasy's reported error by %.1f%% -- the exported force constants "
+              "are not the fit pheasy reported" % (100.0 * rel_dev), flush=True)
+        (out / ".fit_gate_fail").write_text(
+            "hiphive re %.4f vs pheasy re %.4f\n" % (re_hiphive, re_pheasy))
+    return {"self_check_pheasy_re": float(re_pheasy),
+            "self_check_hiphive_re": float(re_hiphive),
+            "self_check_rel_dev": float(rel_dev)}
+
+
+def _job_id(out=None):
+    """A per-run id stamped into every summary.
+
+    Uses the scheduler id when available, otherwise a fresh uuid4 -- so the id
+    is NEVER None, and a stale summary from a previous run can always be told
+    apart (a None id would silently skip the job-id check downstream)."""
+    for key in ("SLURM_JOB_ID", "PBS_JOBID", "AUTOZT_JOB_ID"):
+        v = os.environ.get(key)
+        if v:
+            return "slurm-" + v
+    import uuid
+    return "uuid-" + uuid.uuid4().hex
+
+
 def _scan_rmse(cfg, out):
     """Force RMSE of every cutoff_scan/cut3_<c>/ fit, written back into
     cutoff_scan.json (force_rmse_eV_per_A / force_rmse_relative per record) --
@@ -3042,6 +3313,7 @@ def cmd_post(cfg, out):
             cfg[k] = ds[src_key]
     sb_ok = _export_shengbte(cfg, out)
     rmse = _fit_rmse(cfg, out)
+    self_check = _postfit_self_check(cfg, out)
     _scan_rmse(cfg, out)
     # Shell report: the pheasy scan already wrote the fuller cutoff_scan.json;
     # for phono3py / hiphive this records the per-shell mean |Phi^3| of the
@@ -3059,6 +3331,7 @@ def cmd_post(cfg, out):
 
     summary = {
         "FIT_DONE": True,
+        "job_id": _job_id(out),
         "engine": cfg.get("engine"),
         "fit_method": {"phono3py": cfg.get("fc_calc"),
                        "pheasy": cfg.get("pheasy_method"),
@@ -3085,6 +3358,7 @@ def cmd_post(cfg, out):
         "note": g["note"],
     }
     summary.update(rmse)
+    summary.update(self_check)
     try:
         summary.update(json.loads((out / "fit_metrics.json").read_text(encoding="utf-8")))
     except Exception:
