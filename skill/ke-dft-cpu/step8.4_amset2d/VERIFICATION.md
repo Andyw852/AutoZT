@@ -7567,3 +7567,78 @@ environment: amset_clean`，接着 `amset: command not found`。集群上现在�
 
 **还开着的**：CrS₂ 的 band_edges.json 是 08-29 的 S7.1 生成的，E1（5.861/3.078）没有用现行 S7.1 复核。
 它的 step7_deform 在本地和集群上都已经没有了，复核需要重算 S7。好在新 DPT 已经和文献对上，这一项风险不高。
+
+## V168（2026-10-06）：换了 INCAR 的旧形变单点不再算完成；在跑的扇出步骤能补交没交上的子目录
+
+**现场**（CrS₂ S7_deform 重跑）：
+- retry 生成了带 LVHAR 的新 INCAR（为了输出 LOCPOT），然后 start 只交上 5/10 个子目录：deform-01..04 和 deform-09。
+- 再 start，报"已有作业，先 stop 或加 -f"。agent 判断剩下 5 个是被 QOS 卡住的。
+- 实际不是：提交是按 glob 排序逐个交的，真被 QOS 截断的话，交上去的应该是 01..05。
+- 剩下的 undeformed 和 deform-05..08 留着旧 INCAR 跑出来的完整 OUTCAR，ck_deform 判它们已完成，所以不进 fan_todo。
+  等这 5 个跑完再 start，也只会得到"待补清单为空"。
+- S7.1 读不到这 5 个的 LOCPOT，deformation_vac.h5 照样出不来。
+- 交上去的 5 个正好是面内分量：新模板给它们建了 ionrelax/，而 ionrelax/OUTCAR 缺失，所以判未完成。
+
+**根因 1**：同一份 vasprun.xml，旧 INCAR 跑出来的产物照样判完成。
+- patch_stale_grid 只比 KPOINTS。
+- patch_stale_input 的 snapshot_inputs 只用在 S3/S3b，而且要在 gen 覆盖输入之前拍快照。
+  INCAR 已经被上一次 gen 换掉时，快照比不出差别。
+- 改动：
+  - ke_common 新增 `run_incar_mismatch(INCAR 文本, vasprun.xml)`：
+    - 拿 vasprun.xml 里 VASP 回显的 `<incar>`（INCAR 里写了的键）和 `<parameters>`（含默认值）跟现在的 INCAR 比；
+    - 并行/标签键不算；
+    - 只控制写不写输出文件的键（LWAVE/LCHARG/LVHAR/LVTOT/LELF/LORBIT/LAECHG）不影响 SCF，
+      只有新 INCAR 要了旧运行没给的输出才算变化：补 LVHAR 要重算，关掉 LWAVE 不用；
+    - `n*x` 展开；`T` 和 `.TRUE.` 等价；
+    - 数值按相对 1e-6 比，并容忍 8 位定点小数的舍入；
+    - 字符串前缀相同就算一致（`<parameters>` 里 PREC 写作 `accura`）；
+    - VASP 两处都没回显的键跳过；
+    - 读不到回显返回 None。
+  - `archive_if_run_mismatch(d)`：不一致就把产物改名为 `*.stale-input-<时间>`。输入文件不动。
+  - S7 gen 在每个子目录 INCAR 定稿之后调用它。没有 vasprun.xml 可核对时，退回 gen 前后的 INCAR 快照。
+  - 已完成 ionrelax 的复用判据里加一条：拿现在会写的静态段 INCAR 跟 ionrelax/vasprun.xml 的回显比，不一致就重建。
+  - zt-dft-cpu 的 step7_deform 是软链，一起生效。
+
+**根因 2**：扇出步骤只要有一个子作业在跑，start 就整步拒绝；`-f` 是"杀了不交"。
+- `-f` 会 scancel 全部在跑的子作业，但提交用的 fan_todo 是杀之前采的，不含它们。
+  CrS₂ 这种 fan_todo 为空的情况，结果是 5 个全杀，再被"待补清单为空"拒交，一个也没交上。
+- 改动：
+  - `start`（不带 -f，不重新生成）遇到"有子作业在跑、fan_todo 非空"时，只补交 fan_todo，不动在跑的。
+    auto-advance 和 retry 会重新生成输入，不走这条路，因为 gen 会覆盖在跑子目录的输入，ionrelax/ 还会被清空。
+  - `-f` 杀掉的子目录（采集新增的 fan_running）并进 fan_todo 一起重交。
+  - 没有要补交的子目录时，提示改为"N 个在跑、M 个已判完成"，并说清楚 -f 和 retry 分别会干什么。
+  - squeue 不支持 %Z、只能按作业名去重时，改成逐子目录比（`<作业名>-<子目录>`）。
+    以前同一步任一子作业在跑，就整批拒交。
+  - sbatch 交到一半被拒（如 QOS 提交上限）时，已交上的 jobid 照样记账、写进 tf.log，
+    并提示用 start 补交，不要加 -f。
+
+**没改**：
+- 有完成子目录、其余从没跑过的扇出步骤仍显示 FAIL。考虑过改成 TODO，但没做：
+  auto-advance 对 TODO 步骤会先重新生成再全部提交，已完成的子目录会被重算。
+
+**测试**：
+- skill/ke-dft-cpu/test_stale_input_run.py（10 项）：
+  - 回显比较：NCORE/KPAR、注释、`n*x`、ALGO 缩写、`1E-8` 对 `0.00000001`、关掉 LWAVE 都不算变化；
+  - 加 LVHAR、改 EDIFF、删键、按 `<parameters>` 比 ADDGRID，都会报；
+  - 归档后 ck_deform 判未完成，输入保留；
+  - 核对点在 INCAR 定稿之后，ionrelax 静态段继承 LVHAR。
+- tests/test_fanout_topup.py（7 项）：
+  - 补交不 scancel、不重新生成，只交 fan_todo；
+  - 没有可补的时提示"已判完成"；
+  - `-f` 重交被杀的子目录；
+  - gen_first / -f 不走补交；
+  - 部分提交会记账；
+  - 按作业名去重时逐子目录比（用假调度器）；
+  - 采集给出 fan_running。
+
+**CrS₂ 怎么继续**：
+1. 现在什么都不要动：不要 `-f`，也不要 retry。retry 会先杀掉在跑的 5 个，gen 还会重建它们的 ionrelax/。
+2. 应用补丁后先只读核对：每个子目录跑
+   `kc.run_incar_mismatch(INCAR, vasprun.xml)`。
+   - 预期旧的 5 个报 `LVHAR: F -> .TRUE.`（可能还有别的键）。
+     LVHAR 只控制输出：只差这一项时，这 5 个旧单点的本征值和芯势照样有效，重算只是为了拿到 LOCPOT；
+   - 新的 5 个跑完后应该是 `[]`。如果它们报差异，就是误报，先回报，不要往下走。
+3. 等在跑的 5 个全部跑完，再走 retry → start：
+   - gen 会归档旧的 5 个；
+   - 新的 5 个保留；
+   - start 只交被归档的 5 个。

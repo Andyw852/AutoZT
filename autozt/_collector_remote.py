@@ -689,6 +689,7 @@ def collect_type(t, jobs_by_dir):
                 f["empty_fanout_manifest"] = sc.get("empty_fanout_manifest")
                 f["subs"] = [os.path.basename(p) for p in subs]
                 f["fan_jobids"] = [x["id"] for x in fj]
+                f["fan_running"] = [os.path.basename(p) for p in subs if jobs_by_dir.get(p)]   # [V168] -f 杀掉后要重交
                 f["fan_todo"] = todo          # 没作业也没完成 → 待提交/失败
                 f["fan_done"] = ndone
                 f["has_incar"] = any(os.path.isfile(os.path.join(p, "INCAR"))

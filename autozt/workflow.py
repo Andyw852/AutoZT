@@ -1240,8 +1240,10 @@ def main():
             blocking[key] = (jid, st)
         for t in targets:
             for key, (jid, st) in blocking.items():
+                # [V168] 按作业名去重时逐子目录比（jn-<子目录>，与下面 _set_jobname 一致）：以前同一步任一子作业
+                #   在跑就整批拒交，start 补交没交上的子目录（_fanout_topup）在 %Z 不可用的集群上永远交不上。
                 hit = ((key == t or key.startswith(t + os.sep)) if mode == "wd"
-                       else (key == jn or (bool(fanout) and key.startswith(jn + "-"))))
+                       else (key == jn or (bool(fanout) and key == jn + "-" + os.path.basename(t))))
                 if hit:
                     _emit(False, [], "已有作业 %s(%s) 占用该目录，拒绝重复提交" % (jid, st))
         for t in targets:
@@ -1416,6 +1418,23 @@ def remote_sbatch(cfg, s, jobname=None, force=False):
     return _sbatch_guarded(cfg, s["dir"], s.get("_host") or "__default__",
                            jobname=jobname, force=force, submit=s.get("submit"))
 
+def _fanout_topup(s, force, gen_first, tag):
+    """[V168] 扇出步骤有子作业在跑/排队、还有既没作业也没完成的子目录（fan_todo）-> 只补交这些，不动在跑的。
+
+    以前一律走 kill_if_queued："已有作业，先 stop 或加 -f"——提交到一半被 QOS 拒、或 gen 补出新子目录时，
+    只能等全部跑完，或者 -f 把在跑的全杀掉（CrS₂ S7）。只在 start（不重新生成、不带 -f）时生效：
+    gen 会覆盖在跑子目录的输入（ionrelax/ 还会被清空），带 -f 是"全部重来"。提交端照样逐子目录查队列和回执去重。"""
+    if force or gen_first or not s.get("fanout") or not s.get("job"):
+        return False
+    todo = list(s.get("fan_todo") or [])
+    if not todo:
+        return False
+    print("%s: 扇出步骤 %d 个子作业在跑/排队，不动它们；只补交还没交上的 %d 个：%s"
+          % (tag, len(s.get("fan_jobids") or []) or 1, len(todo),
+             ",".join(todo[:8]) + ("…" if len(todo) > 8 else "")))
+    return True
+
+
 def kill_if_queued(cfg, s, force, tag):
     j = s.get("job")
     if not j:
@@ -1425,11 +1444,24 @@ def kill_if_queued(cfg, s, force, tag):
             print("%s: 上一批作业正在取消中(CG，SLURM 异步收尾)，"
                   "等几秒再 start；急的话加 -f 强制。" % tag)
             return False
+        if s.get("fanout"):
+            # [V168] 走到这里 = 没有要补交的子目录（有的话 _fanout_topup 已放行）。说清楚 -f 会干什么。
+            _n = len(s.get("fan_jobids") or []) or 1
+            print("%s: 扇出 %d 个子作业在跑/排队，其余 %d 个子目录已判完成，没有要补交的。\n"
+                  "  加 -f = scancel 这 %d 个子作业再把它们重交（已判完成的不动）；"
+                  "要重算已判完成的子目录用 retry（重新生成输入）或 rerun。"
+                  % (tag, _n, int(s.get("fan_done") or 0), _n))
+            return False
         print("%s: 已有作业 %s(%s)，先 stop 或加 -f。" % (tag, j["id"], j["state"]))
         return False
     ok, out = remote_scancel(cfg, [j["id"]], host=s.get("_host") or "__default__")
     print("%s: scancel %s %s" % (tag, _scancel_desc([j["id"]]),
                                  "成功" if ok else ("失败: " + out)))
+    if ok and s.get("fanout") and s.get("fan_running"):
+        # [V168] 杀掉的子作业也要重交：fan_todo 是杀之前采的（只含没作业、没完成的），不并进来 -f 就是"杀了不交"
+        #   （fan_todo 为空时提交端还会以"待补清单为空"拒交——在跑的全没了，什么也没交上）。
+        _todo = list(s.get("fan_todo") or [])
+        s["fan_todo"] = _todo + [x for x in s["fan_running"] if x not in _todo]
     return ok
 
 def _mark_gen_failed(cfg, s):
@@ -1545,7 +1577,9 @@ def do_submit(cfg, t, m, s, force, gen_first, contcar_cp, tag, submit=True):
             print("%s: 本地生成步（画图/读取），已就绪，待 tf … start 触发。" % tag)
             return True
         return do_run_gen_step(cfg, t, m, s, tag)
-    if not kill_if_queued(cfg, s, force, tag):
+    if _fanout_topup(s, force, gen_first, tag):
+        pass
+    elif not kill_if_queued(cfg, s, force, tag):
         return False
     if gen_first or not s["has_incar"]:
         _fetch_stamp_clear(m, s["name"])
@@ -1617,6 +1651,17 @@ def do_submit(cfg, t, m, s, force, gen_first, contcar_cp, tag, submit=True):
         _why = (out or "").strip().splitlines()
         log_action(m, "提交失败 %s：%s"
                    % (s["label"], _why[0] if _why else "(无输出)"))
+        if jid:
+            # [V168] 扇出提交到一半被 sbatch 拒（QOS 提交上限等）：已交上的照样记账（并发计数靠它），
+            #   并说清楚剩下的怎么补——start 会只补交没交上的子目录，不用 -f。
+            from autozt import ledger_append
+            SUBMIT_COUNTER[0] += 1
+            ledger_append(cfg, m, s, jid)
+            _nj = len(str(jid).split(","))
+            log_action(m, "%s 部分提交 %d 个 jobid=%s" % (s["label"], _nj, jid))
+            print("%s: 其中已交上 %d 个（jobid=%s）；其余等有空位后 "
+                  "tf -tt %s -p %s -j %s start 补交（只交没交上的子目录，不要加 -f）。"
+                  % (tag, _nj, jid, m.get("tt"), m["name"].split("/")[-1], s["label"]))
         _fetch_stamp_clear(m, s["name"])   # v1.11：重交后结果会更新，清戳记重拉
         s["done"] = False  # do not reuse completion from before submission
         _scancel_clear(m, s["name"])       # v1.4：重交成功，清 stop 标记

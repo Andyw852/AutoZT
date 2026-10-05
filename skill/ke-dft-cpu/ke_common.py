@@ -264,6 +264,144 @@ def finalize_stale_inputs(cwd, outdir, step, snap, n_grid_archived=0):
     return changed, n, down
 
 
+# --------------------------------------------------------------------------
+# [V168] 产物是不是用【现在的】INCAR 跑出来的：拿 vasprun.xml 的 <incar>（VASP 读到的 INCAR 原文键）
+#   和 <parameters>（含默认值的生效参数）跟现在的 INCAR 比。
+#   snapshot_inputs 只能在 gen 覆盖输入之前拍快照；输入已经被上一次 gen 换掉、旧产物还在时就比不出来了
+#   （CrS₂ S7：retry 换上带 LVHAR 的新 INCAR，undeformed/deform-05..08 的旧 OUTCAR 照样判完成、
+#   不进 fan_todo，永远不重算，S7.1 读不到 LOCPOT）——这时只有运行时的回显能说明问题。
+#   比较按语义：并行/标签键（_INCAR_NONPHYS）不算；n*x 展开；T/.TRUE. 等价；数值按相对 1e-6
+#   且容忍 vasprun 定点 8 位小数的舍入；字符串大小写不敏感、前缀相同即算一致（VASP 只认前几个字母，
+#   <parameters> 里的 PREC 写作 "accura"）。新 INCAR 里有、VASP 两处都没回显的键（VASP 不认识）跳过。
+# --------------------------------------------------------------------------
+_VASPRUN_HEAD_MAX = 64 * 1024 * 1024
+# 只决定"写不写某个输出文件"、不影响 SCF 结果的键：只有新 INCAR 要了旧运行没给的输出才算变化
+#   （补 LVHAR 要 LOCPOT -> 要重算；关掉 LWAVE -> 旧产物照用）。
+_INCAR_OUTPUT_ONLY = {"LWAVE", "LCHARG", "LVHAR", "LVTOT", "LELF", "LORBIT", "LAECHG"}
+_XML_ITEM = re.compile(r"<(i|v)\b([^>]*)>(.*?)</\1>", re.S)
+_XML_NAME = re.compile(r'name="([^"]+)"')
+
+
+def _vasprun_incar(vasprun):
+    """vasprun.xml -> (<incar> 字典, <parameters> 字典)；没有 <incar> 返回 (None, None)。只读到 </parameters>。"""
+    buf = ""
+    try:
+        with open(vasprun, encoding="utf-8", errors="ignore") as f:
+            while len(buf) < _VASPRUN_HEAD_MAX:
+                chunk = f.read(1 << 20)
+                if not chunk:
+                    break
+                buf += chunk
+                if "</parameters>" in buf:
+                    break
+    except OSError:
+        return None, None
+
+    def block(tag):
+        i = buf.find("<%s>" % tag)
+        j = buf.find("</%s>" % tag, i + 1) if i >= 0 else -1
+        return buf[i:j] if j > i else None
+
+    def items(txt):
+        d = {}
+        for m in _XML_ITEM.finditer(txt or ""):
+            n = _XML_NAME.search(m.group(2))
+            if n:
+                d.setdefault(n.group(1).upper(), m.group(3).strip())
+        return d
+
+    inc = block("incar")
+    if inc is None:
+        return None, None
+    return items(inc), items(block("parameters"))
+
+
+def _incar_tokens(v):
+    out = []
+    for t in str(v).replace(",", " ").split():
+        n, star, x = t.partition("*")
+        if star and n.isdigit() and x:
+            out.extend([x] * int(n))
+        else:
+            out.append(t)
+    return out
+
+
+def _incar_atom(t):
+    s = t.strip().strip("'\"").lower()
+    if s in (".true.", "true", "t", ".t."):
+        return True
+    if s in (".false.", "false", "f", ".f."):
+        return False
+    try:
+        return float(s.replace("d", "e"))
+    except ValueError:
+        return s
+
+
+def _incar_same(a, b):
+    ta, tb = _incar_tokens(a), _incar_tokens(b)
+    if len(ta) != len(tb):
+        return False
+    for x, y in zip(ta, tb):
+        x, y = _incar_atom(x), _incar_atom(y)
+        if isinstance(x, bool) or isinstance(y, bool):
+            if x is not y:
+                return False
+        elif isinstance(x, float) and isinstance(y, float):
+            if abs(x - y) > max(1e-6 * max(abs(x), abs(y)), 5e-9):
+                return False
+        elif isinstance(x, str) and isinstance(y, str):
+            if not (x.startswith(y) or y.startswith(x)):
+                return False
+        else:
+            return False
+    return True
+
+
+def run_incar_mismatch(incar_text, vasprun):
+    """现在的 INCAR 文本 vs 那次运行的 vasprun.xml 回显 -> 变了的键列表 ["LVHAR: F -> .TRUE.", ...]。
+
+    vasprun.xml 读不到 / 没有 <incar>（没跑、跑到一半就挂）-> None（判不了，调用方按原逻辑走）。"""
+    old, eff = _vasprun_incar(vasprun)
+    if old is None:
+        return None
+    new = {k: v for k, v in parse_incar(incar_text).items() if k not in _INCAR_NONPHYS}
+    diff = []
+    for k, v in sorted(new.items()):
+        ov = old.get(k, (eff or {}).get(k))
+        if ov is None:
+            continue
+        if _incar_same(v, ov):
+            continue
+        if k in _INCAR_OUTPUT_ONLY and all(_incar_atom(x) in (False, 0.0) for x in _incar_tokens(v)):
+            continue                                       # 新 INCAR 不要这个输出了：旧产物照用
+        diff.append("%s: %s -> %s" % (k, ov, v))
+    for k in sorted(set(old) - set(new) - _INCAR_NONPHYS - _INCAR_OUTPUT_ONLY):
+        diff.append("%s: %s -> (删除)" % (k, old[k]))
+    return diff
+
+
+def archive_if_run_mismatch(d, incar_text=None, vasprun_name="vasprun.xml", label=None):
+    """目录 d 里已有的产物不是现在这份 INCAR 跑的 -> 归档 *.stale-input-<时间>。
+
+    返回变了的键（一致 -> []；没有 vasprun.xml 回显、判不了 -> None）。"""
+    import time as _t
+    d = Path(d)
+    if incar_text is None:
+        p = d / "INCAR"
+        if not p.is_file():
+            return None
+        incar_text = p.read_text(errors="ignore")
+    diff = run_incar_mismatch(incar_text, d / vasprun_name)
+    if not diff:
+        return diff
+    n = archive_stale_outputs(d, "stale-input-" + _t.strftime("%Y%m%d%H%M%S"))
+    print("[..] %s：已有产物是旧 INCAR 跑的（%s%s）-> 归档 %d 个，本目录会重算"
+          % (label or d.name, "; ".join(diff[:4]), "…" if len(diff) > 4 else "", n))
+    return diff
+
+
 # 下游关系（与 skill.yaml 的 needs 对应）。mode="link"：下游靠软链引用上游产物
 # （S4 链 S3 的 WAVECAR/vasprun；S8/S8.4 链 S4/S4b 的 h5 与 S3/S3b 的 vasprun）——
 # 只有软链确实指向这个上游时才失效；mode="always"：下游直接读上游目录，一律失效。
