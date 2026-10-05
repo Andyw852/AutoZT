@@ -1051,6 +1051,43 @@ def _write_cutoff_scan(out, payload):
                                                        payload.get("mode")), flush=True)
 
 
+def _clear_pheasy_cache(out):
+    """Delete pheasy's cluster-space / null-space caches in ``out``.
+
+    pheasy -s/-c reuse cs.pkl / ns_*.npz found in the working directory and
+    only *warn* when the .meta.json sidecar is missing, so a second run with a
+    different --c3 silently inherits the first cutoff's cluster space (the
+    CUT3_SCAN bug: every candidate logged "2.73 / 15 clusters").  Always start
+    each pheasy -s from a clean directory."""
+    out = Path(out)
+    for pat in ("cs.pkl", "cs.pkl.meta.json", "ns_*.npz", "ns_*.npz.meta.json"):
+        for f in out.glob(pat):
+            try:
+                f.unlink()
+            except OSError as e:
+                sys.exit("[ERROR] cannot clear stale pheasy cache %s: %s" % (f, e))
+
+
+def _check_cutoff_honoured(txt, c3v, what):
+    """Abort when pheasy -s did not build the cluster space for the requested c3.
+
+    pheasy prints "Cutoff distance (A) for 3-order IFCs: <c3>"; a mismatch (or a
+    missing line while c3 was passed) means a stale cache was used, so any fc3
+    from this run would belong to a different model than its label."""
+    if c3v is None:
+        return
+    m = re.search(r"Cutoff distance \(A\) for 3-order IFCs:\s*([0-9.eE+-]+)", txt or "")
+    if not m:
+        print("[WARN] %s: pheasy -s log has no 3-order cutoff line; cannot verify "
+              "c3=%.2f" % (what, c3v), flush=True)
+        return
+    got = float(m.group(1))
+    if abs(got - float(c3v)) > 0.01 + 0.005 * abs(float(c3v)):
+        sys.exit("[ERROR] %s: requested c3=%.2f but pheasy built the cluster space "
+                 "for c3=%.2f (stale cs.pkl/ns cache?) -- refusing to continue"
+                 % (what, float(c3v), got))
+
+
 def _pheasy_scan(cfg, out, cands, base_for, rasr_flag, fit_flags, make_env):
     """Refit every candidate cutoff; frame-bootstrap the per-shell |Phi^3|.
 
@@ -1087,7 +1124,9 @@ def _pheasy_scan(cfg, out, cands, base_for, rasr_flag, fit_flags, make_env):
 
     def _fit_stages(c3v, tag):
         base = base_for(c3v)
-        _run("cluster space", "setup", base + " -s", "pheasy_s_%s.log" % tag)
+        _clear_pheasy_cache(out)
+        _s_txt = _run("cluster space", "setup", base + " -s", "pheasy_s_%s.log" % tag)
+        _check_cutoff_honoured(_s_txt, c3v, "scan c3=%.2f" % c3v)
         _run("symmetry constraints", "setup", base + " -c" + rasr_flag,
              "pheasy_c_%s.log" % tag)
         _run("displacement matrix", "displacement",
@@ -1827,6 +1866,8 @@ def cmd_fit_pheasy(cfg, out):
                  ("displacement matrix", "displacement", disp_step))
     for label, phase, cmd in run_steps:
         print("[pheasy] %s: %s" % (label, cmd), flush=True)
+        if label == "cluster space":
+            _clear_pheasy_cache(out)
         # capture output: the -c step is where RASR has to show up, and we need
         # its log to prove the constraint was imposed (see below)
         r = subprocess.run(cmd, shell=True, capture_output=True, text=True,
@@ -1838,6 +1879,8 @@ def cmd_fit_pheasy(cfg, out):
         sys.stdout.write(_out)
         if r.returncode != 0:
             sys.exit("[ERROR] pheasy %s failed (rc=%d)" % (label, r.returncode))
+        if label == "cluster space" and enable >= 3:
+            _check_cutoff_honoured(_out, c3, "nominal c3=%s" % c3)
         if label == "symmetry constraints" and rasr_flag:
             open("pheasy_c.log", "w").write(_out)
             if not re.search(r"Imposing rotational invariance"
