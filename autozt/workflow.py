@@ -3023,6 +3023,31 @@ def _ask_confirm(prompt):
         sys.exit(_i18n.t("错误：", "error: ") + "读取确认输入失败（stdin 已关闭）。请显式加 -y 表示同意。")
 
 
+def _kill_step_leftovers(cfg, s):
+    """stop 时杀掉步骤目录下残留的 pheasy 进程组（submit.sh 顺序跑的后续方法）。
+
+    调用 autozt/kill_step_leftovers.py：只认 pheasy 可执行文件本身（前 3 个参数
+    的 basename 是 pheasy / pheasy-gpu / run_pheasy.py）、只看本用户、排除自身与
+    父进程、整组成员都在步骤目录下才整组杀（否则只杀该进程 + 目录内驱动脚本 +
+    其子进程）、先打印 TO_KILL、SIGTERM 等 10s 再 SIGKILL、存活统计不算僵尸。
+    脚本经 python3 -c 传到远端执行，步骤目录作为 sys.argv[1]。
+    """
+    from autozt import run_remote
+    d = s.get("dir")
+    host = s.get("_host") or "__default__"
+    if not d:
+        return
+    script_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                               "kill_step_leftovers.py")
+    script = open(script_path, encoding="utf-8").read()
+    rc, out = run_remote(cfg, "python3 -c %s %s"
+                         % (shlex.quote(script), shlex.quote(d)), host=host)
+    print("[stop] %s: %s" % (s.get("label"), (out or "").strip()))
+    # rc==0 才算成功：NO_DIR（目录不存在/本地路径）会以 rc=2 退出，不能当成
+    # "什么都没杀、alive=0" 报成功。
+    return rc == 0 and "alive=0" in (out or "")
+
+
 def cmd_stop(cfg, data, mname, jname, yes):
     from autozt import find_material, find_step, log_action
     if jname and not mname:  # v3.11：取消全部材料的指定步骤作业
@@ -3052,6 +3077,10 @@ def cmd_stop(cfg, data, mname, jname, yes):
             if ok:   # v1.4：打 scancel 标记，auto_advance 不再自动重跑
                 for j, m, s in trio:
                     _scancel_set(m, s["name"], j["id"])
+                    if not _kill_step_leftovers(cfg, s):
+                        print("[WARN] %s: 残留进程可能仍在运行，请用 ps 核对"
+                              % s.get("label"), flush=True)
+                        log_action(m, "stop-leftover-fail %s" % s["name"])
                     log_action(m, "stop %s" % j["id"])
         if ok_all:
             print("已打 scancel 标记（不会自动重跑）；重跑："
@@ -3070,6 +3099,12 @@ def cmd_stop(cfg, data, mname, jname, yes):
             if jname:
                 for s in steps:
                     _scancel_set(m, s["name"], None)
+                    # 主方法已完成、步骤 job 不再 running 时，submit.sh 里顺序跑的
+                    # 后续方法子进程（如 RVM）可能仍在写目录 —— 一并按 cwd 杀掉进程组。
+                    if not _kill_step_leftovers(cfg, s):
+                        print("[WARN] %s: 残留进程可能仍在运行，请用 ps 核对"
+                              % s.get("label"), flush=True)
+                        log_action(m, "stop-leftover-fail %s" % s["name"])
                 log_action(m, "stop-mark %s（无运行作业）"
                            % ",".join(s["name"] for s in steps))
                 print("%s: 没有排队/运行的作业，仍按你的要求打了 scancel 标记：%s"
@@ -3100,6 +3135,10 @@ def cmd_stop(cfg, data, mname, jname, yes):
             if ok:   # v1.4：打 scancel 标记，auto_advance 不再自动重跑
                 for j, s in trio:
                     _scancel_set(m, s["name"], j["id"])
+                    if not _kill_step_leftovers(cfg, s):
+                        print("[WARN] %s: 残留进程可能仍在运行，请用 ps 核对"
+                              % s.get("label"), flush=True)
+                        log_action(m, "stop-leftover-fail %s" % s["name"])
         if ok_all:
             log_action(m, "stop %s" % " ".join(j["id"] for j, _ in jobs))
             print("%s: 已打 scancel 标记（不会自动重跑）；重跑："
@@ -3131,6 +3170,10 @@ def cmd_stop(cfg, data, mname, jname, yes):
         if ok:   # v1.4：打 scancel 标记，auto_advance 不再自动重跑
             for j, m, s in trio:
                 _scancel_set(m, s["name"], j["id"])
+                if not _kill_step_leftovers(cfg, s):
+                    print("[WARN] %s: 残留进程可能仍在运行，请用 ps 核对"
+                          % s.get("label"), flush=True)
+                    log_action(m, "stop-leftover-fail %s" % s["name"])
                 log_action(m, "stop %s" % j["id"])
     if ok_all:
         print("已打 scancel 标记（不会自动重跑）；重跑："
