@@ -233,49 +233,63 @@
 <rect x="1449.0" y="692" width="90" height="26" rx="13" fill="#fdf5e6" stroke="#b7791f" stroke-width="2"/><text x="1494" y="711" font-size="16" font-weight="700" text-anchor="middle" fill="#b7791f">mutate</text><text x="1494" y="743" font-size="17" text-anchor="middle" fill="#24313a">allowed, logged</text>
 <rect x="1717.0" y="692" width="122" height="26" rx="13" fill="#fcecea" stroke="#c0392b" stroke-width="2"/><text x="1778" y="711" font-size="16" font-weight="700" text-anchor="middle" fill="#c0392b">destructive</text><text x="1778" y="743" font-size="17" text-anchor="middle" fill="#24313a">human approval</text>
 <g transform="translate(1846,726) scale(0.8)"><path d="M4 9 V5 a6 6 0 0 1 12 0 V9" fill="none" stroke="#c0392b" stroke-width="2.6"/><rect x="1" y="9" width="18" height="14" rx="3" fill="#c0392b"/></g>
-<path d="M1494 786 V809" fill="none" stroke="#3a4654" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#m-ink)"/>
-<text x="1508" y="804" font-size="15" fill="#5b6673">calls</text>
-<rect x="1050" y="966" width="420" height="184" rx="14" fill="#eef7f2" stroke="#238266" stroke-width="2"/>
-<rect x="1518" y="966" width="420" height="184" rx="14" fill="#eff1f4" stroke="#5b6673" stroke-width="2"/>
-<rect x="1066" y="982" width="120" height="44" rx="8" fill="#fff" stroke="#5b3fa0" stroke-width="2.6"/><text x="1126" y="1009" font-size="14" font-weight="700" text-anchor="middle" fill="#5b3fa0">zt-dft-cpu</text>
-<rect x="1534" y="982" width="120" height="44" rx="8" fill="#fff" stroke="#a3adb8" stroke-width="1.6"/><text x="1594" y="1009" font-size="14" text-anchor="middle" fill="#24313a">AMSET</text>
-<rect x="1200" y="982" width="120" height="44" rx="8" fill="#fff" stroke="#8fb9a5" stroke-width="1.6"/><text x="1260" y="1009" font-size="14" text-anchor="middle" fill="#24313a">ke-dft-cpu</text>
-<rect x="1668" y="982" width="120" height="44" rx="8" fill="#fff" stroke="#a3adb8" stroke-width="1.6"/><text x="1728" y="1009" font-size="14" text-anchor="middle" fill="#24313a">phono3py</text>
-<rect x="1334" y="982" width="120" height="44" rx="8" fill="#fff" stroke="#8fb9a5" stroke-width="1.6"/><text x="1394" y="1009" font-size="14" text-anchor="middle" fill="#24313a">kl-dft-cpu</text>
-<rect x="1802" y="982" width="120" height="44" rx="8" fill="#fff" stroke="#5b3fa0" stroke-width="2.6"/><text x="1862" y="1009" font-size="14" font-weight="700" text-anchor="middle" fill="#5b3fa0">VASP</text>
-<rect x="1066" y="1036" width="120" height="44" rx="8" fill="#fff" stroke="#8fb9a5" stroke-width="1.6"/><text x="1126" y="1063" font-size="14" text-anchor="middle" fill="#24313a">kl-mlff-gpu</text>
-<rect x="1534" y="1036" width="120" height="44" rx="8" fill="#fff" stroke="#a3adb8" stroke-width="1.6"/><text x="1594" y="1063" font-size="14" text-anchor="middle" fill="#24313a">ShengBTE</text>
-<rect x="1200" y="1036" width="120" height="44" rx="8" fill="#fff" stroke="#8fb9a5" stroke-width="1.6"/><text x="1260" y="1063" font-size="14" text-anchor="middle" fill="#24313a">phonon-mlff-gpu</text>
-<rect x="1668" y="1036" width="120" height="44" rx="8" fill="#fff" stroke="#a3adb8" stroke-width="1.6"/><text x="1728" y="1063" font-size="14" text-anchor="middle" fill="#24313a">Pheasy</text>
-<rect x="1334" y="1036" width="120" height="44" rx="8" fill="#fff" stroke="#8fb9a5" stroke-width="1.6"/><text x="1394" y="1063" font-size="14" text-anchor="middle" fill="#24313a">fit-fc-thermal</text>
-<rect x="1802" y="1036" width="120" height="44" rx="8" fill="#fff" stroke="#a3adb8" stroke-width="1.6"/><text x="1862" y="1063" font-size="14" text-anchor="middle" fill="#24313a">MACE</text>
-<rect x="1066" y="1090" width="120" height="44" rx="8" fill="#fff" stroke="#8fb9a5" stroke-width="1.6"/><text x="1126" y="1117" font-size="14" text-anchor="middle" fill="#24313a">band-dft-cpu</text>
-<rect x="1534" y="1090" width="120" height="44" rx="8" fill="#fff" stroke="#a3adb8" stroke-width="1.6"/><text x="1594" y="1117" font-size="14" text-anchor="middle" fill="#24313a">BoltzTraP2</text>
-<rect x="1200" y="1090" width="120" height="44" rx="8" fill="#fff" stroke="#8fb9a5" stroke-width="1.6"/><text x="1260" y="1117" font-size="14" text-anchor="middle" fill="#24313a">te-screen</text>
-<rect x="1668" y="1090" width="120" height="44" rx="8" fill="#fff" stroke="#a3adb8" stroke-width="1.6"/><text x="1728" y="1117" font-size="14" text-anchor="middle" fill="#24313a">phonopy</text>
-<rect x="1334" y="1090" width="120" height="44" rx="8" fill="#fff" stroke="#8fb9a5" stroke-width="1.6" stroke-dasharray="5 4"/><text x="1394" y="1119" font-size="22" font-weight="700" text-anchor="middle" fill="#5b6673">…</text>
-<rect x="1802" y="1090" width="120" height="44" rx="8" fill="#fff" stroke="#a3adb8" stroke-width="1.6" stroke-dasharray="5 4"/><text x="1862" y="1119" font-size="22" font-weight="700" text-anchor="middle" fill="#5b6673">…</text>
-<rect x="1308" y="848" width="18" height="28" rx="4" fill="#4a5563"/><path d="M1314 862 L1126 944" fill="none" stroke="#4a5563" stroke-width="15" stroke-linecap="round" stroke-linejoin="round"/><path d="M1126 942 V956" fill="none" stroke="#4a5563" stroke-width="9" stroke-linecap="round" stroke-linejoin="round"/><path d="M1060 958 H1192" fill="none" stroke="#4a5563" stroke-width="9" stroke-linecap="round" stroke-linejoin="round"/><path d="M1060 958 L1056 986 L1064 1004" fill="none" stroke="#4a5563" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"/><path d="M1192 958 L1196 986 L1188 1004" fill="none" stroke="#4a5563" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"/>
-<rect x="1662" y="848" width="18" height="28" rx="4" fill="#4a5563"/><path d="M1674 862 L1862 944" fill="none" stroke="#4a5563" stroke-width="15" stroke-linecap="round" stroke-linejoin="round"/><path d="M1862 942 V956" fill="none" stroke="#4a5563" stroke-width="9" stroke-linecap="round" stroke-linejoin="round"/><path d="M1796 958 H1928" fill="none" stroke="#4a5563" stroke-width="9" stroke-linecap="round" stroke-linejoin="round"/><path d="M1796 958 L1792 986 L1800 1004" fill="none" stroke="#4a5563" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"/><path d="M1928 958 L1932 986 L1924 1004" fill="none" stroke="#4a5563" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"/>
-<rect x="1324" y="814" width="340" height="96" rx="16" fill="#1d2733"/>
-<text x="1494" y="860" font-size="40" font-weight="700" text-anchor="middle" fill="#fff">AutoZT</text>
-<g transform="translate(1358,887)" fill="none" stroke="#d9e3eb" stroke-width="2.2" stroke-linecap="round"><path d="M7 -5 A8 8 0 1 0 8 2"/><path d="M7 -10 V-4 H1"/></g>
-<text x="1374" y="893" font-size="16" fill="#d9e3eb">monitor · auto-advance · auto-resume</text>
-<text x="1260" y="1180" font-size="22" font-weight="700" text-anchor="middle" fill="#238266">Skill pool</text>
-<text x="1260" y="1204" font-size="15" text-anchor="middle" fill="#5b6673">20 skills · details in Table 1</text>
-<text x="1728" y="1180" font-size="22" font-weight="700" text-anchor="middle" fill="#1d2733">Tool pool</text>
-<text x="1728" y="1204" font-size="15" text-anchor="middle" fill="#5b6673">computational engines · Table 1</text>
-<path d="M1494 912 V1278" fill="none" stroke="#3a4654" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#m-ink)" marker-start="url(#m-ink)"/>
-<rect x="1060" y="1284" width="868" height="96" rx="12" fill="#fff" stroke="#c7d0da" stroke-width="2"/>
-<rect x="1074" y="1272" width="98" height="24" rx="4" fill="#f7f8fa"/>
-<text x="1080" y="1290" font-size="18" font-weight="700" fill="#5b6673">compute</text>
-<g transform="translate(1100,1310) scale(0.8)"><g transform="translate(0,0)" fill="#fff" stroke="#1d2733" stroke-width="2.4"><rect x="0" y="0" width="60" height="16" rx="3"/><line x1="10" y1="8" x2="30" y2="8"/><circle cx="48" cy="8" r="2.4" fill="#1d2733" stroke="none"/><rect x="0" y="20" width="60" height="16" rx="3"/><line x1="10" y1="28" x2="30" y2="28"/><circle cx="48" cy="28" r="2.4" fill="#1d2733" stroke="none"/><rect x="0" y="40" width="60" height="16" rx="3"/><line x1="10" y1="48" x2="30" y2="48"/><circle cx="48" cy="48" r="2.4" fill="#1d2733" stroke="none"/></g></g>
-<text x="1164" y="1328" font-size="20" font-weight="700" fill="#1d2733">CPU</text>
-<text x="1164" y="1353" font-size="15" fill="#5b6673">SLURM</text>
-<g transform="translate(1376,1310) scale(0.8)"><g transform="translate(0,0)" fill="#fff" stroke="#1d2733" stroke-width="2.4"><rect x="0" y="0" width="60" height="16" rx="3"/><line x1="10" y1="8" x2="30" y2="8"/><circle cx="48" cy="8" r="2.4" fill="#1d2733" stroke="none"/><rect x="0" y="20" width="60" height="16" rx="3"/><line x1="10" y1="28" x2="30" y2="28"/><circle cx="48" cy="28" r="2.4" fill="#1d2733" stroke="none"/><rect x="0" y="40" width="60" height="16" rx="3"/><line x1="10" y1="48" x2="30" y2="48"/><circle cx="48" cy="48" r="2.4" fill="#1d2733" stroke="none"/></g></g>
-<text x="1440" y="1328" font-size="20" font-weight="700" fill="#1d2733">GPU</text>
-<text x="1440" y="1353" font-size="15" fill="#5b6673">SLURM / no-SLURM host</text>
-<g transform="translate(1690,1310) scale(0.8)"><g transform="translate(0,0)" fill="#fff" stroke="#1d2733" stroke-width="2.4"><rect x="0" y="0" width="60" height="16" rx="3"/><line x1="10" y1="8" x2="30" y2="8"/><circle cx="48" cy="8" r="2.4" fill="#1d2733" stroke="none"/><rect x="0" y="20" width="60" height="16" rx="3"/><line x1="10" y1="28" x2="30" y2="28"/><circle cx="48" cy="28" r="2.4" fill="#1d2733" stroke="none"/><rect x="0" y="40" width="60" height="16" rx="3"/><line x1="10" y1="48" x2="30" y2="48"/><circle cx="48" cy="48" r="2.4" fill="#1d2733" stroke="none"/></g></g>
-<text x="1754" y="1328" font-size="20" font-weight="700" fill="#1d2733">local</text>
-<text x="1754" y="1353" font-size="15" fill="#5b6673">this machine</text>
+<path d="M1494 786 V841" fill="none" stroke="#3a4654" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#m-ink)"/>
+<text x="1508" y="820" font-size="15" fill="#5b6673">calls</text>
+<rect x="1050" y="1024" width="345" height="256" rx="14" fill="#eef7f2" stroke="#238266" stroke-width="2"/>
+<rect x="1593" y="1024" width="345" height="256" rx="14" fill="#eff1f4" stroke="#5b6673" stroke-width="2"/>
+<rect x="1063" y="1038" width="101" height="46" rx="8" fill="#fff" stroke="#8fb9a5" stroke-width="1.6"/><text x="1113.5" y="1066" font-size="13" text-anchor="middle" fill="#24313a">ke-dft-cpu</text>
+<rect x="1606" y="1038" width="101" height="46" rx="8" fill="#fff" stroke="#a3adb8" stroke-width="1.6"/><text x="1656.5" y="1066" font-size="13" text-anchor="middle" fill="#24313a">AMSET</text>
+<rect x="1172" y="1038" width="101" height="46" rx="8" fill="#fff" stroke="#5b3fa0" stroke-width="2.6"/><text x="1222.5" y="1066" font-size="13" font-weight="700" text-anchor="middle" fill="#5b3fa0">zt-dft-cpu</text>
+<rect x="1715" y="1038" width="101" height="46" rx="8" fill="#fff" stroke="#5b3fa0" stroke-width="2.6"/><text x="1765.5" y="1066" font-size="13" font-weight="700" text-anchor="middle" fill="#5b3fa0">VASP</text>
+<rect x="1281" y="1038" width="101" height="46" rx="8" fill="#fff" stroke="#8fb9a5" stroke-width="1.6"/><text x="1331.5" y="1066" font-size="13" text-anchor="middle" fill="#24313a">kl-dft-cpu</text>
+<rect x="1824" y="1038" width="101" height="46" rx="8" fill="#fff" stroke="#a3adb8" stroke-width="1.6"/><text x="1874.5" y="1066" font-size="13" text-anchor="middle" fill="#24313a">phono3py</text>
+<rect x="1063" y="1098" width="101" height="46" rx="8" fill="#fff" stroke="#8fb9a5" stroke-width="1.6"/><text x="1113.5" y="1126" font-size="13" text-anchor="middle" fill="#24313a">kl-mlff-gpu</text>
+<rect x="1606" y="1098" width="101" height="46" rx="8" fill="#fff" stroke="#a3adb8" stroke-width="1.6"/><text x="1656.5" y="1126" font-size="13" text-anchor="middle" fill="#24313a">ShengBTE</text>
+<rect x="1172" y="1098" width="101" height="46" rx="8" fill="#fff" stroke="#8fb9a5" stroke-width="1.6"/><text x="1222.5" y="1126" font-size="13" text-anchor="middle" fill="#24313a">kl-mlff-cpu</text>
+<rect x="1715" y="1098" width="101" height="46" rx="8" fill="#fff" stroke="#a3adb8" stroke-width="1.6"/><text x="1765.5" y="1126" font-size="13" text-anchor="middle" fill="#24313a">Pheasy</text>
+<rect x="1281" y="1098" width="101" height="46" rx="8" fill="#fff" stroke="#8fb9a5" stroke-width="1.6"/><text x="1331.5" y="1126" font-size="13" text-anchor="middle" fill="#24313a">fit-fc-thermal</text>
+<rect x="1824" y="1098" width="101" height="46" rx="8" fill="#fff" stroke="#a3adb8" stroke-width="1.6"/><text x="1874.5" y="1126" font-size="13" text-anchor="middle" fill="#24313a">MACE</text>
+<rect x="1063" y="1158" width="101" height="46" rx="8" fill="#fff" stroke="#8fb9a5" stroke-width="1.6"/><text x="1113.5" y="1186" font-size="13" text-anchor="middle" fill="#24313a">phonon-mlff-gpu</text>
+<rect x="1606" y="1158" width="101" height="46" rx="8" fill="#fff" stroke="#a3adb8" stroke-width="1.6"/><text x="1656.5" y="1186" font-size="13" text-anchor="middle" fill="#24313a">BoltzTraP2</text>
+<rect x="1172" y="1158" width="101" height="46" rx="8" fill="#fff" stroke="#8fb9a5" stroke-width="1.6"/><text x="1222.5" y="1186" font-size="13" text-anchor="middle" fill="#24313a">phonon-dft-cpu</text>
+<rect x="1715" y="1158" width="101" height="46" rx="8" fill="#fff" stroke="#a3adb8" stroke-width="1.6"/><text x="1765.5" y="1186" font-size="13" text-anchor="middle" fill="#24313a">phonopy</text>
+<rect x="1281" y="1158" width="101" height="46" rx="8" fill="#fff" stroke="#8fb9a5" stroke-width="1.6"/><text x="1331.5" y="1186" font-size="13" text-anchor="middle" fill="#24313a">band-dft-cpu</text>
+<rect x="1824" y="1158" width="101" height="46" rx="8" fill="#fff" stroke="#a3adb8" stroke-width="1.6"/><text x="1874.5" y="1186" font-size="13" text-anchor="middle" fill="#24313a">hiPhive</text>
+<rect x="1063" y="1218" width="101" height="46" rx="8" fill="#fff" stroke="#8fb9a5" stroke-width="1.6"/><text x="1113.5" y="1246" font-size="13" text-anchor="middle" fill="#24313a">elastic-dft-cpu</text>
+<rect x="1606" y="1218" width="101" height="46" rx="8" fill="#fff" stroke="#a3adb8" stroke-width="1.6"/><text x="1656.5" y="1246" font-size="13" text-anchor="middle" fill="#24313a">symfc</text>
+<rect x="1172" y="1218" width="101" height="46" rx="8" fill="#fff" stroke="#8fb9a5" stroke-width="1.6"/><text x="1222.5" y="1246" font-size="13" text-anchor="middle" fill="#24313a">te-screen</text>
+<rect x="1715" y="1218" width="101" height="46" rx="8" fill="#fff" stroke="#a3adb8" stroke-width="1.6"/><text x="1765.5" y="1246" font-size="13" text-anchor="middle" fill="#24313a">ALM</text>
+<rect x="1281" y="1218" width="101" height="46" rx="8" fill="#fff" stroke="#8fb9a5" stroke-width="1.6" stroke-dasharray="5 4"/><text x="1331.5" y="1248" font-size="22" font-weight="700" text-anchor="middle" fill="#5b6673">…</text>
+<rect x="1824" y="1218" width="101" height="46" rx="8" fill="#fff" stroke="#a3adb8" stroke-width="1.6" stroke-dasharray="5 4"/><text x="1874.5" y="1248" font-size="22" font-weight="700" text-anchor="middle" fill="#5b6673">…</text>
+<rect x="1482" y="934" width="24" height="112" rx="3" fill="#2b3440"/>
+<rect x="1419" y="958" width="150" height="322" rx="12" fill="#e9edf2" stroke="#8a96a3" stroke-width="2"/>
+<g transform="translate(1473,978) scale(0.7)"><g transform="translate(0,0)" fill="#fff" stroke="#1d2733" stroke-width="2.4"><rect x="0" y="0" width="60" height="16" rx="3"/><line x1="10" y1="8" x2="30" y2="8"/><circle cx="48" cy="8" r="2.4" fill="#1d2733" stroke="none"/><rect x="0" y="20" width="60" height="16" rx="3"/><line x1="10" y1="28" x2="30" y2="28"/><circle cx="48" cy="28" r="2.4" fill="#1d2733" stroke="none"/><rect x="0" y="40" width="60" height="16" rx="3"/><line x1="10" y1="48" x2="30" y2="48"/><circle cx="48" cy="48" r="2.4" fill="#1d2733" stroke="none"/></g></g>
+<text x="1494" y="1038" font-size="17" font-weight="700" text-anchor="middle" fill="#1d2733">CPU</text>
+<text x="1494" y="1055" font-size="13" text-anchor="middle" fill="#5b6673">SLURM</text>
+<g transform="translate(1473,1080) scale(0.7)"><g transform="translate(0,0)" fill="#fff" stroke="#1d2733" stroke-width="2.4"><rect x="0" y="0" width="60" height="16" rx="3"/><line x1="10" y1="8" x2="30" y2="8"/><circle cx="48" cy="8" r="2.4" fill="#1d2733" stroke="none"/><rect x="0" y="20" width="60" height="16" rx="3"/><line x1="10" y1="28" x2="30" y2="28"/><circle cx="48" cy="28" r="2.4" fill="#1d2733" stroke="none"/><rect x="0" y="40" width="60" height="16" rx="3"/><line x1="10" y1="48" x2="30" y2="48"/><circle cx="48" cy="48" r="2.4" fill="#1d2733" stroke="none"/></g></g>
+<text x="1494" y="1140" font-size="17" font-weight="700" text-anchor="middle" fill="#1d2733">GPU</text>
+<text x="1494" y="1157" font-size="13" text-anchor="middle" fill="#5b6673">SLURM / no-SLURM</text>
+<g transform="translate(1473,1182) scale(0.7)"><g transform="translate(0,0)" fill="#fff" stroke="#1d2733" stroke-width="2.4"><rect x="0" y="0" width="60" height="16" rx="3"/><line x1="10" y1="8" x2="30" y2="8"/><circle cx="48" cy="8" r="2.4" fill="#1d2733" stroke="none"/><rect x="0" y="20" width="60" height="16" rx="3"/><line x1="10" y1="28" x2="30" y2="28"/><circle cx="48" cy="28" r="2.4" fill="#1d2733" stroke="none"/><rect x="0" y="40" width="60" height="16" rx="3"/><line x1="10" y1="48" x2="30" y2="48"/><circle cx="48" cy="48" r="2.4" fill="#1d2733" stroke="none"/></g></g>
+<text x="1494" y="1242" font-size="17" font-weight="700" text-anchor="middle" fill="#1d2733">local</text>
+<text x="1494" y="1259" font-size="13" text-anchor="middle" fill="#5b6673">this machine</text>
+<rect x="1352" y="879" width="12" height="24" rx="3" fill="#2b3440"/>
+<path d="M1350 891 L1222.5 992" fill="none" stroke="#2b3440" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M1222.5 992 C1203.5 996 1194.5 1016 1203.5 1034 C1207.5 1041 1214.5 1041 1217.5 1036" fill="none" stroke="#2b3440" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"/><path d="M1222.5 992 C1203.5 996 1194.5 1016 1203.5 1034 C1207.5 1041 1214.5 1041 1217.5 1036" fill="none" stroke="#ffffff" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/><path d="M1222.5 992 C1241.5 996 1250.5 1016 1241.5 1034 C1237.5 1041 1230.5 1041 1227.5 1036" fill="none" stroke="#2b3440" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"/><path d="M1222.5 992 C1241.5 996 1250.5 1016 1241.5 1034 C1237.5 1041 1230.5 1041 1227.5 1036" fill="none" stroke="#ffffff" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/>
+<circle cx="1350" cy="891" r="8" fill="#ffffff" stroke="#2b3440" stroke-width="2.6"/>
+<circle cx="1222.5" cy="992" r="8" fill="#ffffff" stroke="#2b3440" stroke-width="2.6"/>
+<rect x="1624" y="879" width="12" height="24" rx="3" fill="#2b3440"/>
+<path d="M1638 891 L1765.5 992" fill="none" stroke="#2b3440" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M1765.5 992 C1746.5 996 1737.5 1016 1746.5 1034 C1750.5 1041 1757.5 1041 1760.5 1036" fill="none" stroke="#2b3440" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"/><path d="M1765.5 992 C1746.5 996 1737.5 1016 1746.5 1034 C1750.5 1041 1757.5 1041 1760.5 1036" fill="none" stroke="#ffffff" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/><path d="M1765.5 992 C1784.5 996 1793.5 1016 1784.5 1034 C1780.5 1041 1773.5 1041 1770.5 1036" fill="none" stroke="#2b3440" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"/><path d="M1765.5 992 C1784.5 996 1793.5 1016 1784.5 1034 C1780.5 1041 1773.5 1041 1770.5 1036" fill="none" stroke="#ffffff" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/>
+<circle cx="1638" cy="891" r="8" fill="#ffffff" stroke="#2b3440" stroke-width="2.6"/>
+<circle cx="1765.5" cy="992" r="8" fill="#ffffff" stroke="#2b3440" stroke-width="2.6"/>
+<rect x="1364" y="846" width="260" height="90" rx="16" fill="#1d2733"/>
+<text x="1494" y="890" font-size="38" font-weight="700" text-anchor="middle" fill="#fff">AutoZT</text>
+<g transform="translate(1400,916)" fill="none" stroke="#d9e3eb" stroke-width="2.2" stroke-linecap="round"><path d="M7 -5 A8 8 0 1 0 8 2"/><path d="M7 -10 V-4 H1"/></g>
+<text x="1416" y="922" font-size="15" fill="#d9e3eb">auto-advance · auto-resume</text>
+<text x="1222.5" y="1312" font-size="22" font-weight="700" text-anchor="middle" fill="#238266">Skill pool</text>
+<text x="1222.5" y="1336" font-size="15" text-anchor="middle" fill="#5b6673">20 skills · details in Table 1</text>
+<text x="1494" y="1312" font-size="20" font-weight="700" text-anchor="middle" fill="#1d2733">compute</text>
+<text x="1494" y="1336" font-size="15" text-anchor="middle" fill="#5b6673">HPC back-ends</text>
+<text x="1765.5" y="1312" font-size="22" font-weight="700" text-anchor="middle" fill="#1d2733">Tool pool</text>
+<text x="1765.5" y="1336" font-size="15" text-anchor="middle" fill="#5b6673">engines · details in Table 1</text>
 </svg>
