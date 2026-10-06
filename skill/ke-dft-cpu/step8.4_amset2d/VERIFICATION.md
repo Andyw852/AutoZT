@@ -7710,3 +7710,37 @@ environment: amset_clean`，接着 `amset: command not found`。集群上现在�
 - retry → start 只放行一次，不占 FAIL 额度；
 - retry 之后输入又改过，就不放行；
 - FAIL 走放行提交、跑完变 OK 后，再 start 被拒。
+
+## V171（2026-10-06）：同一步骤的 gen 不许并发
+
+**现场**：
+- CrSe₂ 重跑 S7.1，`retry` 报 band_edges.json 生成失败：`load_deformation_potentials("deformation.h5")` 抛 FileNotFoundError。
+- 可 `deform_read.log` 显示 amset deform read 是成功的，而 step7b_deform_read/deformation.h5 的时间（14:53:30）和 band_edges.log 同一秒。
+- S7.1 里只有最后一行 `os.replace(h5, dst)` 会把 step7_deform/deformation.h5 挪进 step7b，失败路径在这之前就 sys.exit 了。
+  所以这一秒里，一定有另一个 S7.1 的 gen 走到了最后一行。
+
+**根因**：
+- agent 第一次调用 `retry+start` 时，本地工具 2 分钟就超时，输出为空；但远端那次 gen（`timeout 600 bash -s`）照跑。
+- agent 以为它失败了，又执行了一次 retry，于是两个 S7.1 gen 在同一个目录里并发：
+  - 前一个最后挪走了后一个刚写出的 deformation.h5；
+  - 后一个读 h5 时，文件已经不在了。
+- 提交作业那条路早有目录锁（`_SBATCH_GUARD`，Mg4C60 重复 sbatch 之后加的），remote_gen 这条路没有任何锁。
+
+**改动**：
+- remote_gen 在远端 `cd` 进材料目录后，先 `flock -n` 一个按步骤命名的锁 `.tf_gen.<步骤>.lock`。
+  - 拿不到锁就打印 `TF_GEN_BUSY` 并以 75 退出，一行 gen 都不执行；
+  - fd 9 由 gen 和它的子进程继承，锁一直持有到它们全部退出；
+  - 集群上没有 `flock` 命令时，照旧不加锁。
+- 被挡下的那次不算 gen 失败：do_run_gen_step 和 do_submit 不打 `.autozt_gen_failed`。否则前一个正常跑完之前，状态会先显示 FAIL。
+- 只锁同一步骤，不同步骤的 gen 不互相挡。
+
+**测试**：tests/test_gen_lock.py（3 项）。
+- 第一个 gen 还在跑时，第二个被挡下，而且一行都没执行；第一个跑完、锁释放后，第三个照常执行。
+- 不同步骤的 gen 不受影响。
+- 被挡下不打失败标记；真正失败时照常打。
+- remote_gen 拼出的远端命令原样交给本机 bash 执行，不碰集群。
+
+**CrSe₂ 这次的产物不可信**：
+- step7b 里的 deformation.h5 是后一个 gen 的 amset 输出，被前一个挪了过去；它有没有经过 dp_symmetrize 取决于两者的先后。
+- deformation_vac.h5 由前一个 gen 生成，它读的是 step7_deform/deformation.h5，那时这个文件可能已经被后一个换掉了。
+- 处理办法：确认没有 gen 还在跑之后，干净地重跑一次 S7.1，只跑一个实例。

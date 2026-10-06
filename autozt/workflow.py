@@ -741,6 +741,14 @@ def _contcar_to_poscar_line(step_dir):
             % shlex.quote(step_dir))
 
 
+GEN_BUSY_TAG = "TF_GEN_BUSY"     # [V171] 同一步骤已有 gen 在跑
+GEN_BUSY_RC = 75
+
+
+def _gen_busy(out):
+    return GEN_BUSY_TAG in (out or "")
+
+
 def remote_gen(cfg, t, m, sname, host=None, wd=None):
     from autozt import (PROV_DIR, PROV_NAME, STEP_CONF, build_gen_provenance,
                        build_step_conf, find_asset, provenance_enabled, run_remote,
@@ -786,6 +794,15 @@ def remote_gen(cfg, t, m, sname, host=None, wd=None):
                 need.append(lg)
     line = "mkdir -p %s && cd %s && " % (shlex.quote(step_dir),
                                          shlex.quote(step_dir))
+    # [V171] 同一步骤的 gen 不许并发：远端 flock 一个按步骤命名的锁，拿不到就不跑（不排队、不算 gen 失败）。
+    #   提交作业那条路早有目录锁（_SBATCH_GUARD），gen 这条路没有。CrSe₂ S7.1：agent 第一次调用本地 2 分钟超时、
+    #   远端 gen 照跑；第二次 retry 又起一个 —— 前一个最后 os.replace 把后一个刚写出的 deformation.h5 挪走，
+    #   后一个读 h5 报 FileNotFoundError，step7b 里留下的 h5 / vac.h5 出自哪一次也说不清。
+    #   fd 9 由 gen 及其子进程继承，锁一直持有到它们全部退出；集群没有 flock 命令时照旧不加锁。
+    _lock = ".tf_gen.%s.lock" % re.sub(r"[^A-Za-z0-9_.-]", "_", str(sname))
+    line += ("if command -v flock >/dev/null 2>&1; then exec 9>>%s; flock -n 9 || "
+             "{ echo '%s 同一步骤已有一个 gen 在跑（%s 被占用），本次不重复执行；等它跑完再看状态' >&2; "
+             "exit %d; }; fi; " % (shlex.quote(_lock), GEN_BUSY_TAG, _lock, GEN_BUSY_RC))
     prov_files = {}   # v1.0：这一步推送了哪些文件（名字 → sha256/来源），写 provenance.json
     if is_py:  # gen 脚本以 skill 为唯一样板：总是覆盖推送（本地改了立即生效）
         gsrc = find_asset(cfg, t, m, gen_script, sname)
@@ -1488,7 +1505,8 @@ def do_run_gen_step(cfg, t, m, s, tag):
     ok, out = remote_gen(cfg, t, m, s["name"], host=s.get("_host"), wd=s.get("_wd"))
     if not ok:
         print("%s: 运行失败。%s" % (tag, out))
-        _mark_gen_failed(cfg, s)
+        if not _gen_busy(out):                # [V171] 别的 gen 正在跑 ≠ 这一步失败
+            _mark_gen_failed(cfg, s)
         return False
     marker = step_cfg(t, s["name"], m).get("done_marker") or "band_summary.json"
     rc, o = run_remote(cfg, "test -f %s && echo MARKER_OK"
@@ -1597,6 +1615,8 @@ def do_submit(cfg, t, m, s, force, gen_first, contcar_cp, tag, submit=True):
         ok, out = remote_gen(cfg, t, m, s["name"], host=s.get("_host"), wd=s.get("_wd"))
         if not ok:
             print("%s: gen 失败。%s" % (tag, out))
+            if _gen_busy(out):                # [V171] 别的 gen 正在跑：不打失败标记、不给路径提示
+                return False
             _mark_gen_failed(cfg, s)
             # work_dir 提示只在像是路径问题时给（参数错误等 gen 自身报错时它是误导）
             if re.search(r"Permission denied|No such file or directory|cannot cd|"
