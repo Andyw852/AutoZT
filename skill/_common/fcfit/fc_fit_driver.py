@@ -1572,11 +1572,23 @@ def cmd_fit_phono3py(cfg, out):
     # p2s_map: the full array is N/n_prim times larger (243-atom supercell:
     # 3.1 GB vs 0.7 MB compressed) and producing it needs >15 GB.  phono3py's
     # BTE reads compact fc3 natively; _read_fc3_any expands it on demand.
-    ph3.produce_fc2(fc_calculator=calc, is_compact_fc=False)
-    fc2_full = np.array(ph3.fc2, copy=True)
+    # 只用 produce_fc3：phono3py 3.24.0 的 produce_fc3 用 orders=[2,3] 联合求解
+    # （symfc 的 FCSolverO2O3），没有单独声子超胞时会把联合二阶写回 ph3.fc2。
+    # 之前先调 produce_fc2（orders=[2] 单独拟合）再取那份二阶，会把三阶力吸进
+    # 二阶（"有效二阶"），配上 fc3 就重复计了——symfc 误差 1.95% vs pheasy 0.578%
+    # 的根因。fc3 的 cutoff 只作用于三阶，二阶不截断，和 pheasy 一致。
     opts = None if cutoff is None else "cutoff = %s" % cutoff
     ph3.produce_fc3(fc_calculator=calc, fc_calculator_options=opts,
                     is_compact_fc=True)
+    if getattr(ph3, "phonon_supercell_matrix", None) is not None:
+        sys.exit("[ERROR] separate phonon supercell set: phono3py keeps a "
+                 "separately fitted fc2 and the joint fc2 is not available on "
+                 "this path -- not supported")
+    fc2_full = np.asarray(ph3.fc2, float)
+    if fc2_full.shape[0] != fc2_full.shape[1]:
+        # compact (n_prim, n_super, 3, 3) -> full
+        from phonopy.harmonic.force_constants import compact_fc_to_full_fc
+        fc2_full = compact_fc_to_full_fc(ph3.primitive, fc2_full)
     p2s = np.asarray(ph3.primitive.p2s_map, dtype="int64")
     write_fc2_to_hdf5(fc2_full, filename=str(out / "fc2.hdf5"))
     write_fc3_to_hdf5(ph3.fc3, filename=str(out / "fc3.hdf5"), p2s_map=p2s)
