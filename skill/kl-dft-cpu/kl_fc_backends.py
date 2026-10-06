@@ -938,9 +938,10 @@ def cmd_post(cfg):
     if _fmp.is_file():
         try:
             _fm = json.loads(_fmp.read_text(encoding="utf-8"))
-            print("[..] fit_metrics.json：rel_err=%s RMSE=%s fc2max=%s fc3max=%s rasr=%s"
-                  % (_fm.get("pheasy_relative_error"), _fm.get("pheasy_rmse_eV_per_A"),
-                     _fm.get("fc2max"), _fm.get("fc3max"), _fm.get("rasr_applied")))
+            print("[..] fit_metrics.json：rel_err=%s rmse_train=%s rmse_cv=%s fc2max=%s fc3max=%s rasr=%s"
+                  % (_fm.get("pheasy_relative_error"), _fm.get("pheasy_rmse_train"),
+                     _fm.get("pheasy_rmse_cv"), _fm.get("fc2max"), _fm.get("fc3max"),
+                     _fm.get("rasr_applied")))
         except Exception as _e:
             print("[WARN] fit_metrics.json 解析失败：%s" % _e)
     _im = g.get("imag") or {}

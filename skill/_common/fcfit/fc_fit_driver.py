@@ -1309,6 +1309,9 @@ def _pheasy_scan(cfg, out, cands, base_for, rasr_flag, fit_flags, make_env):
         _run("displacement matrix", "displacement",
              "%s -d --ndata %d --disp_file" % (base, nd), "pheasy_d_%s.log" % tag)
         _assert_pheasy_input_order(cfg, out)
+        _fmp = Path(out) / "fit_manifest.json"
+        if _fmp.is_file():
+            _fmp.unlink()   # 上一档 -f 的 manifest 不能混进来（-f 失败时尤其）
         rc, txt = _run_streaming("%s -f --ndata %d %s" % (base, nd, " ".join(fit_flags)),
                                  make_env("fit"))
         (Path(out) / ("pheasy_f_%s.log" % tag)).write_text(txt, encoding="utf-8")
@@ -1338,7 +1341,7 @@ def _pheasy_scan(cfg, out, cands, base_for, rasr_flag, fit_flags, make_env):
         rec = {"cut": float(c), "natom_super": int(len(frac)), "ndata": int(nd),
                "shell_stats": [], "stable_upper_cut": None,
                "dir": str(cdir.relative_to(out))}
-        m = _pheasy_metrics(fit_txt)
+        m = _pheasy_metrics(fit_txt, out=out)
         rec["train_rel_err"] = m.get("pheasy_relative_error")
         rec["free_ifcs"] = m.get("pheasy_free_ifcs")
         rec["err_kind"] = "in-sample"          # pheasy -f residual on all frames
@@ -1366,6 +1369,9 @@ def _pheasy_scan(cfg, out, cands, base_for, rasr_flag, fit_flags, make_env):
             _run("displacement matrix", "displacement",
                  "%s -d --ndata %d --disp_file" % (base, nd),
                  "pheasy_d_%s_b%02d.log" % (tag, b))
+            _fmp = Path(out) / "fit_manifest.json"
+            if _fmp.is_file():
+                _fmp.unlink()   # 上一 bootstrap 的 manifest 不能混进来
             rc, txt = _run_streaming("%s -f --ndata %d %s"
                                      % (base, nd, " ".join(fit_flags)), make_env("fit"))
             (Path(out) / ("pheasy_f_%s_b%02d.log" % (tag, b))).write_text(
@@ -1374,7 +1380,7 @@ def _pheasy_scan(cfg, out, cands, base_for, rasr_flag, fit_flags, make_env):
                 print("[WARN] bootstrap #%d c3=%.2f -f failed; sample skipped"
                       % (b, c), flush=True)
                 continue
-            mm = _pheasy_metrics(txt)
+            mm = _pheasy_metrics(txt, out=out)
             if mm.get("pheasy_relative_error") is not None:
                 rels.append(mm["pheasy_relative_error"])
             apply_pheasy_fc_order(cfg, out)      # bootstrap fc -> dataset atom order
@@ -1901,6 +1907,37 @@ def resolve_rasr(value, dim):
     return "BHH" if str(dim or "").strip().lower() == "2d" else "none"
 
 
+def _rel_err_gate(engine, rel, thr, out):
+    """fit_rel_err_fail 硬闸：只在 pheasy 引擎下执行。
+
+    phono3py / hiphive 没有 pheasy_relative_error，绝不能因为缺这个字段就把它们
+    判成失败——显式要求 engine == "pheasy"，其它引擎直接放行。  pheasy 下门开着
+    （thr > 0）却拿不到 rel（fit_manifest.json 缺失 / 无 metrics.re）时也不能悄悄
+    放行，否则这道闸等于被关掉。  Returns True when it wrote the failure marker.
+    """
+    if str(engine or "").strip().lower() != "pheasy":
+        return False
+    thr = float(thr or 0.02)
+    if thr <= 0:
+        return False
+    if rel is None:
+        print("[FAIL] pheasy relative error unavailable (fit_manifest.json "
+              "missing or has no metrics.re): cannot enforce fit_rel_err_fail",
+              flush=True)
+        (Path(out) / ".fit_gate_fail").write_text(
+            "pheasy relative error unavailable\n")
+        return True
+    if rel > thr:
+        print("[FAIL] pheasy relative error %.4f > %.4f -- the fitted constants "
+              "do not reproduce the training forces; check the supercell atom "
+              "order and the C2/C3 cutoffs before trusting kappa"
+              % (rel, thr), flush=True)
+        (Path(out) / ".fit_gate_fail").write_text(
+            "pheasy relative error %.4f\n" % rel)
+        return True
+    return False
+
+
 def cmd_fit_pheasy(cfg, out):
     """Four pheasy CLI steps: cluster space / symmetry constraints / sensing
     matrix / fit.  Mirrors templates in kl-dft-cpu and _common/mlff."""
@@ -2124,6 +2161,9 @@ def cmd_fit_pheasy(cfg, out):
                       tsqr_criterion=tsqr_criterion)
     _apply_cv_knobs(env, cfg)
     gpu_info = _reconcile_gpu_env(env, method, cfg)
+    _fmp = Path(out) / "fit_manifest.json"
+    if _fmp.is_file():
+        _fmp.unlink()   # 截断扫描/bootstrap 的 manifest 不能混进主拟合
     rc, log_txt = _run_streaming(fit_step, env)
     if rc != 0:
         sys.exit("[ERROR] pheasy fit failed (rc=%d)" % rc)
@@ -2140,7 +2180,7 @@ def cmd_fit_pheasy(cfg, out):
     #   ~0.5 .. 0.98  ordinary model error: an fc2-only fit of anharmonic data,
     #                 or cutoffs too small.  Recorded, not fatal -- otherwise
     #                 every legitimate ENABLE_FC=2 run would be rejected.
-    metrics = _pheasy_metrics(log_txt)
+    metrics = _pheasy_metrics(log_txt, out=out)
     metrics["pheasy_method"] = method
     metrics.update(gpu_info)
     if gpu_info.get("pheasy_gpu_requested") and not metrics.get("pheasy_gpu_used"):
@@ -2171,18 +2211,12 @@ def cmd_fit_pheasy(cfg, out):
               "PHEASY_C3_CUTOFF or fit fc3 as well if it matters" % mort, flush=True)
     _write_fit_metrics(out, metrics)
 
-    # Relative-error hard gate: an atom-order mismatch (~0.10) or a too-tight
-    # cutoff (~0.05) lands here first.  The old code only parsed the number into
-    # metrics and never failed on it, so a scrambled fit could pass the phonon
-    # gate (kappa then silently off by tens of percent).
-    rel = metrics.get("pheasy_relative_error")
-    _rel_thr = float(cfg.get("fit_rel_err_fail") or 0.02)
-    if rel is not None and _rel_thr > 0 and rel > _rel_thr:
-        print("[FAIL] pheasy relative error %.4f > %.4f -- the fitted constants do "
-              "not reproduce the training forces; check the supercell atom order and "
-              "the C2/C3 cutoffs before trusting kappa"
-              % (rel, _rel_thr), flush=True)
-        (out / ".fit_gate_fail").write_text("pheasy relative error %.4f\n" % rel)
+    # Relative-error hard gate (pheasy only): an atom-order mismatch (~0.10) or
+    # a too-tight cutoff (~0.05) lands here first.  The old code only parsed the
+    # number into metrics and never failed on it, so a scrambled fit could pass
+    # the phonon gate (kappa then silently off by tens of percent).
+    _rel_err_gate(cfg.get("engine"), metrics.get("pheasy_relative_error"),
+                  cfg.get("fit_rel_err_fail"), out)
 
     # LASSO/ALASSO selection sanity now comes from pheasy's own manifest
     # (>= 35c0467), not from re-deriving log10(alpha*) against a hard-coded
@@ -2233,12 +2267,37 @@ def cmd_fit_pheasy(cfg, out):
           % (method, len(disps), dim), flush=True)
 
 
-def _pheasy_metrics(log_txt):
-    """Pull the numbers pheasy reports out of its log."""
+def _pheasy_metrics(log_txt, out=None):
+    """Pull the numbers pheasy reports.
+
+    Train/CV fit error come from pheasy's own fit_manifest.json, not regexed
+    from the log: the RFE family prints "best CV RMSE:" before "RMSE:", so a
+    ``\\bRMSE:`` regex grabbed the CV value and filed it under the train key --
+    the method-comparison table then showed RFE as worse than it is.  The log
+    is still regexed for markers the manifest does not carry (GPU path,
+    per-config correlation, alpha, LSMR, FISTA cap)."""
     m = {}
+    if out is not None:
+        mm = {}
+        mf = Path(out) / "fit_manifest.json"
+        if mf.is_file():
+            try:
+                mm = json.loads(mf.read_text(encoding="utf-8")).get("metrics") or {}
+            except Exception:
+                mm = {}
+        if mm.get("rmse") is not None:
+            m["pheasy_rmse_train"] = float(mm["rmse"])
+        if mm.get("re") is not None:
+            m["pheasy_relative_error"] = float(mm["re"])
+        rp = mm.get("rmse_path_mean")
+        if rp is None and mm.get("rmse_path") is not None:
+            try:
+                rp = float(np.mean(np.asarray(mm["rmse_path"], float)))
+            except Exception:
+                rp = None
+        if rp is not None:
+            m["pheasy_rmse_cv"] = float(rp)
     for key, pat, cast in (
-            ("pheasy_rmse_eV_per_A", r"\bRMSE:\s*([\d.eE+-]+)", float),
-            ("pheasy_relative_error", r"Relative error:\s*([\d.eE+-]+)", float),
             ("pheasy_worst_force_correlation", r"worst corr=([\d.]+)", float),
             ("pheasy_free_ifcs", r"Free IFC terms:\s*(\d+)", int),
             ("pheasy_best_alpha", r"best alpha=\s*([\d.eE+-]+)", float),
