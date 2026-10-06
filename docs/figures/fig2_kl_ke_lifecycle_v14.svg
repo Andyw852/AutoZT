@@ -1,0 +1,259 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="2000" height="1420" viewBox="0 0 2000 1420" font-family="Arial, Helvetica, 'Liberation Sans', sans-serif">
+<defs>
+<marker id="m-ink" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="12" markerHeight="12" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path d="M0,0.5 L10,5 L0,9.5 z" fill="#3a4654"/></marker>
+<marker id="m-blue" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="12" markerHeight="12" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path d="M0,0.5 L10,5 L0,9.5 z" fill="#2f5fa7"/></marker>
+<marker id="m-orange" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="12" markerHeight="12" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path d="M0,0.5 L10,5 L0,9.5 z" fill="#b8660f"/></marker>
+<marker id="m-green" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="12" markerHeight="12" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path d="M0,0.5 L10,5 L0,9.5 z" fill="#238266"/></marker>
+<marker id="m-purple" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="12" markerHeight="12" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path d="M0,0.5 L10,5 L0,9.5 z" fill="#5b3fa0"/></marker>
+<marker id="m-crimson" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="12" markerHeight="12" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path d="M0,0.5 L10,5 L0,9.5 z" fill="#b8244a"/></marker>
+<marker id="m-red" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="12" markerHeight="12" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path d="M0,0.5 L10,5 L0,9.5 z" fill="#c0392b"/></marker>
+<marker id="m-gray" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="12" markerHeight="12" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path d="M0,0.5 L10,5 L0,9.5 z" fill="#8a96a3"/></marker>
+</defs>
+<rect width="2000" height="1420" fill="#ffffff"/>
+<text x="24" y="62" font-size="42" font-weight="700" fill="#1d2733">a</text>
+<text x="68" y="62" font-size="30" font-weight="700" fill="#1d2733"><tspan>kl + ke  →  zT</tspan><tspan>(n, T)</tspan></text>
+<rect x="28" y="100" width="52" height="24" rx="5" fill="#fff" stroke="#1d2733" stroke-width="2"/><text x="94" y="116" font-size="18" fill="#24313a">step of a skill</text>
+<rect x="28" y="136" width="52" height="24" rx="5" fill="#fff" stroke="#1d2733" stroke-width="2" stroke-dasharray="6 4"/><text x="94" y="152" font-size="18" fill="#24313a">optional step</text>
+<rect x="28" y="172" width="52" height="24" rx="5" fill="#fff" stroke="#c0392b" stroke-width="2.5"/><text x="94" y="188" font-size="18" fill="#24313a">fan-out: × N jobs</text>
+<rect x="31" y="209" width="46" height="22" rx="4" fill="#5b3fa0"/><text x="54" y="225" font-size="14" font-weight="700" text-anchor="middle" fill="#fff">GPU</text><text x="94" y="224" font-size="18" fill="#24313a">GPU-accelerated</text>
+<path d="M480 240 L488 326 L638 326 L860 240 Z" fill="#5b3fa0" fill-opacity="0.07" stroke="none"/><path d="M480 240 L488 326" fill="none" stroke="#5b3fa0" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="6 5"/><path d="M860 240 L638 326" fill="none" stroke="#5b3fa0" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="6 5"/>
+<path d="M890 240 L1010 326 L1160 326 L1340 240 Z" fill="#c0392b" fill-opacity="0.07" stroke="none"/><path d="M890 240 L1010 326" fill="none" stroke="#c0392b" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="6 5"/><path d="M1340 240 L1160 326" fill="none" stroke="#c0392b" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="6 5"/>
+<path d="M1370 240 L1184 326 L1334 326 L1700 240 Z" fill="#3a4654" fill-opacity="0.07" stroke="none"/><path d="M1370 240 L1184 326" fill="none" stroke="#3a4654" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="6 5"/><path d="M1700 240 L1334 326" fill="none" stroke="#3a4654" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="6 5"/>
+<rect x="480" y="24" width="380" height="216" rx="12" fill="#fbfaff" stroke="#5b3fa0" stroke-width="2"/>
+<text x="498" y="56" font-size="21" font-weight="700" fill="#5b3fa0">MLIP pre-screen</text>
+<rect x="672" y="38" width="46" height="22" rx="4" fill="#5b3fa0"/><text x="695" y="54" font-size="14" font-weight="700" text-anchor="middle" fill="#fff">GPU</text>
+<text x="498" y="80" font-size="15" fill="#5b6673" font-family="'DejaVu Sans Mono', Menlo, Consolas, monospace">phonon-mlff-gpu</text>
+<path d="M506 100 H690 L628 226 H568 Z" fill="#efebf9" stroke="#5b3fa0" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+<circle cx="520.6" cy="108.6" r="4.2" fill="#9aa3ad"/>
+<circle cx="543.2" cy="108.3" r="4.2" fill="#9aa3ad"/>
+<circle cx="562.3" cy="109.5" r="4.2" fill="#9aa3ad"/>
+<circle cx="578.5" cy="110.0" r="4.2" fill="#9aa3ad"/>
+<circle cx="598.3" cy="109.7" r="4.2" fill="#9aa3ad"/>
+<circle cx="618.6" cy="108.4" r="4.2" fill="#9aa3ad"/>
+<circle cx="641.4" cy="111.3" r="4.2" fill="#9aa3ad"/>
+<circle cx="659.0" cy="108.9" r="4.2" fill="#9aa3ad"/>
+<circle cx="523.0" cy="124.8" r="4.2" fill="#9aa3ad"/>
+<circle cx="542.6" cy="122.6" r="4.2" fill="#9aa3ad"/>
+<circle cx="565.8" cy="121.2" r="4.2" fill="#9aa3ad"/>
+<circle cx="584.9" cy="122.2" r="4.2" fill="#9aa3ad"/>
+<circle cx="599.2" cy="121.5" r="4.2" fill="#9aa3ad"/>
+<circle cx="620.5" cy="124.3" r="4.2" fill="#9aa3ad"/>
+<circle cx="639.4" cy="123.3" r="4.2" fill="#9aa3ad"/>
+<circle cx="663.1" cy="122.5" r="4.2" fill="#9aa3ad"/>
+<text x="598" y="162" font-size="16" text-anchor="middle" fill="#5b3fa0">MACE relax</text>
+<text x="598" y="188" font-size="16" text-anchor="middle" fill="#5b3fa0">phonons</text>
+<circle cx="584" cy="212" r="4.6" fill="#238266"/>
+<circle cx="598" cy="212" r="4.6" fill="#238266"/>
+<circle cx="612" cy="212" r="4.6" fill="#238266"/>
+<text x="712" y="116" font-size="15" fill="#5b6673">all candidates</text>
+<text x="712" y="170" font-size="15" font-weight="700" fill="#c0392b">unstable: dropped</text>
+<text x="712" y="216" font-size="15" font-weight="700" fill="#238266">stable → DFT</text>
+<path d="M664 165 H704" fill="none" stroke="#c0392b" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#m-red)"/>
+<path d="M636 211 H704" fill="none" stroke="#238266" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#m-green)"/>
+<rect x="890" y="24" width="450" height="216" rx="12" fill="#fffafa" stroke="#c0392b" stroke-width="2"/>
+<text x="908" y="56" font-size="21" font-weight="700" fill="#c0392b">Random displacements</text>
+<rect x="908" y="84" width="62" height="62" rx="4" fill="#fff" stroke="#9aa3ad" stroke-width="1.6"/><circle cx="921" cy="97" r="4.6" fill="#e0a43a"/><circle cx="939" cy="97" r="4.6" fill="#3b6fc4"/><circle cx="957" cy="97" r="4.6" fill="#e0a43a"/><circle cx="921" cy="115" r="4.6" fill="#3b6fc4"/><circle cx="939" cy="115" r="4.6" fill="#e0a43a"/><circle cx="957" cy="115" r="4.6" fill="#3b6fc4"/><circle cx="921" cy="133" r="4.6" fill="#e0a43a"/><circle cx="939" cy="133" r="4.6" fill="#3b6fc4"/><circle cx="957" cy="133" r="4.6" fill="#e0a43a"/><path d="M921 97 H933" fill="none" stroke="#c0392b" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+<rect x="986" y="84" width="62" height="62" rx="4" fill="#fff" stroke="#9aa3ad" stroke-width="1.6"/><line x1="999" y1="97" x2="994.8" y2="97.7" stroke="#c0392b" stroke-width="1.6"/><circle cx="999" cy="97" r="4.6" fill="#e0a43a"/><line x1="1017" y1="97" x2="1014.9" y2="98.7" stroke="#c0392b" stroke-width="1.6"/><circle cx="1017" cy="97" r="4.6" fill="#3b6fc4"/><line x1="1035" y1="97" x2="1037.0" y2="90.0" stroke="#c0392b" stroke-width="1.6"/><circle cx="1035" cy="97" r="4.6" fill="#e0a43a"/><line x1="999" y1="115" x2="991.2" y2="120.4" stroke="#c0392b" stroke-width="1.6"/><circle cx="999" cy="115" r="4.6" fill="#3b6fc4"/><line x1="1017" y1="115" x2="1013.1" y2="110.7" stroke="#c0392b" stroke-width="1.6"/><circle cx="1017" cy="115" r="4.6" fill="#e0a43a"/><line x1="1035" y1="115" x2="1042.9" y2="114.5" stroke="#c0392b" stroke-width="1.6"/><circle cx="1035" cy="115" r="4.6" fill="#3b6fc4"/><line x1="999" y1="133" x2="1004.4" y2="132.6" stroke="#c0392b" stroke-width="1.6"/><circle cx="999" cy="133" r="4.6" fill="#e0a43a"/><line x1="1017" y1="133" x2="1019.2" y2="127.4" stroke="#c0392b" stroke-width="1.6"/><circle cx="1017" cy="133" r="4.6" fill="#3b6fc4"/><line x1="1035" y1="133" x2="1037.2" y2="138.9" stroke="#c0392b" stroke-width="1.6"/><circle cx="1035" cy="133" r="4.6" fill="#e0a43a"/>
+<text x="939" y="168" font-size="15" text-anchor="middle" fill="#5b6673">finite</text>
+<text x="1017" y="168" font-size="15" font-weight="700" text-anchor="middle" fill="#c0392b">random</text>
+<text x="1072" y="86" font-size="15" font-weight="700" fill="#1d2733">DFT supercells (fc2 + fc3)</text>
+<text x="1072" y="112" font-size="14" fill="#5b6673">SnSe, 144 atoms</text>
+<rect x="1072" y="120" width="250" height="14" rx="2" fill="#c9d0d8"/>
+<rect x="1072" y="138" width="6" height="14" rx="1" fill="#c0392b"/>
+<text x="1084" y="150" font-size="14" font-weight="700" fill="#c0392b">21</text>
+<text x="1072" y="178" font-size="14" fill="#5b6673"><tspan>MoS</tspan><tspan dy="4.2" font-size="9.2">2</tspan><tspan dy="-4.2"> 1L, 48 atoms</tspan></text>
+<rect x="1072" y="186" width="96" height="14" rx="2" fill="#c9d0d8"/>
+<text x="1162" y="198" font-size="12" font-weight="700" text-anchor="end" fill="#1d2733">13</text>
+<rect x="1072" y="204" width="6" height="14" rx="1" fill="#c0392b"/>
+<text x="1084" y="216" font-size="14" font-weight="700" fill="#c0392b">21</text>
+<rect x="1200" y="214" width="12" height="10" rx="1" fill="#c9d0d8"/>
+<text x="1216" y="223" font-size="13" fill="#5b6673">finite</text>
+<rect x="1262" y="214" width="12" height="10" rx="1" fill="#c0392b"/>
+<text x="1278" y="223" font-size="13" fill="#5b6673">random</text>
+<rect x="1370" y="24" width="330" height="216" rx="12" fill="#fbfcfd" stroke="#3a4654" stroke-width="2"/>
+<text x="1388" y="56" font-size="21" font-weight="700" fill="#1d2733">pheasy-gpu</text>
+<rect x="1510" y="38" width="46" height="22" rx="4" fill="#5b3fa0"/><text x="1533" y="54" font-size="14" font-weight="700" text-anchor="middle" fill="#fff">GPU</text>
+<text x="1388" y="86" font-size="15" fill="#5b6673">force-constant fit, same result</text>
+<text x="1388" y="108" font-size="15" fill="#5b6673"><tspan>as CPU (Δ ≈ 10</tspan><tspan dy="-6.3" font-size="9.9">−16</tspan><tspan dy="6.3">)</tspan></text>
+<text x="1682" y="138" font-size="13" text-anchor="end" fill="#5b6673">wall time</text>
+<text x="1388" y="162" font-size="15" font-weight="700" fill="#1d2733">CPU</text>
+<rect x="1432" y="148" width="250" height="18" rx="2" fill="#c9d0d8"/>
+<text x="1388" y="200" font-size="15" font-weight="700" fill="#5b3fa0">GPU</text>
+<rect x="1432" y="186" width="92" height="18" rx="2" fill="#fff" stroke="#5b3fa0" stroke-width="1.6" stroke-dasharray="5 4"/>
+<text x="1534" y="200" font-size="15" font-weight="700" fill="#5b3fa0">× ?</text>
+<text x="89" y="508" font-size="21" font-weight="700" text-anchor="middle" fill="#1d2733">POSCAR</text>
+<path d="M44 520 H112 L134 542 V624 H44 Z" fill="#fff" stroke="#1d2733" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M112 520 V542 H134" fill="none" stroke="#1d2733" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+<line x1="89.0" y1="554.0" x2="108.1" y2="565.0" stroke="#8aa0c0" stroke-width="2"/>
+<line x1="108.1" y1="565.0" x2="108.1" y2="587.0" stroke="#8aa0c0" stroke-width="2"/>
+<line x1="108.1" y1="587.0" x2="89.0" y2="598.0" stroke="#8aa0c0" stroke-width="2"/>
+<line x1="89.0" y1="598.0" x2="69.9" y2="587.0" stroke="#8aa0c0" stroke-width="2"/>
+<line x1="69.9" y1="587.0" x2="69.9" y2="565.0" stroke="#8aa0c0" stroke-width="2"/>
+<line x1="69.9" y1="565.0" x2="89.0" y2="554.0" stroke="#8aa0c0" stroke-width="2"/>
+<line x1="89.0" y1="576.0" x2="89.0" y2="554.0" stroke="#8aa0c0" stroke-width="2"/>
+<line x1="89.0" y1="576.0" x2="108.1" y2="587.0" stroke="#8aa0c0" stroke-width="2"/>
+<line x1="89.0" y1="576.0" x2="69.9" y2="587.0" stroke="#8aa0c0" stroke-width="2"/>
+<circle cx="89.0" cy="554.0" r="5.2" fill="#d9534f"/>
+<circle cx="108.1" cy="565.0" r="5.2" fill="#3b6fc4"/>
+<circle cx="108.1" cy="587.0" r="5.2" fill="#d9534f"/>
+<circle cx="89.0" cy="598.0" r="5.2" fill="#3b6fc4"/>
+<circle cx="69.9" cy="587.0" r="5.2" fill="#d9534f"/>
+<circle cx="69.9" cy="565.0" r="5.2" fill="#3b6fc4"/>
+<circle cx="89.0" cy="576.0" r="5.2" fill="#3b6fc4"/>
+<path d="M89 626 V662" fill="none" stroke="#238266" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#m-green)"/>
+<rect x="24" y="668" width="130" height="80" rx="10" fill="#eef7f2" stroke="#238266" stroke-width="2.5"/>
+<text x="89" y="700" font-size="20" font-weight="700" text-anchor="middle" fill="#238266">Dimension</text>
+<text x="89" y="730" font-size="19" text-anchor="middle" fill="#24313a">2D / 3D</text>
+<path d="M154 700 H184 V372 H484" fill="none" stroke="#b8660f" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#m-orange)"/>
+<path d="M154 716 H194 V920 H484" fill="none" stroke="#2f5fa7" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#m-blue)"/>
+<text x="212" y="326" font-size="18" fill="#5b6673">Skill</text>
+<text x="212" y="354" font-size="26" font-weight="700" fill="#a3570a">kl-dft-cpu</text>
+<text x="212" y="874" font-size="18" fill="#5b6673">Skill</text>
+<text x="212" y="902" font-size="26" font-weight="700" fill="#1f4e9a">ke-dft-cpu</text>
+<text x="212" y="618" font-size="22" font-weight="700" fill="#1d2733">Shared step</text>
+<text x="212" y="646" font-size="22" font-weight="700" fill="#1d2733">lifecycle</text>
+<text x="212" y="672" font-size="15" fill="#5b6673">every step, both skills</text>
+<rect x="470" y="316" width="1230" height="112" rx="14" fill="#f4f6f8" stroke="#d6dce3" stroke-width="1.5"/><path d="M639 372 H659" fill="none" stroke="#3a4654" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#m-ink)"/><path d="M813 372 H833" fill="none" stroke="#3a4654" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#m-ink)"/><path d="M987 372 H1007" fill="none" stroke="#3a4654" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#m-ink)"/><path d="M1161 372 H1181" fill="none" stroke="#3a4654" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#m-ink)"/><path d="M1335 372 H1355" fill="none" stroke="#3a4654" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#m-ink)"/><path d="M1509 372 H1529" fill="none" stroke="#3a4654" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#m-ink)"/>
+<rect x="488" y="326" width="150" height="92" rx="10" fill="#fff" stroke="#1d2733" stroke-width="2"/><rect x="496" y="334" width="61.599999999999994" height="22" rx="4" fill="#f1f3f5" stroke="#c3cad2" stroke-width="1"/><text x="501" y="350" font-size="14" fill="#1d2733" font-family="'DejaVu Sans Mono', Menlo, Consolas, monospace">S1_opt</text><text x="563.0" y="394" font-size="19" font-weight="700" text-anchor="middle" fill="#1d2733">Relax</text>
+<rect x="662" y="326" width="150" height="92" rx="10" fill="#fff" stroke="#1d2733" stroke-width="2"/><rect x="670" y="334" width="87.39999999999999" height="22" rx="4" fill="#f1f3f5" stroke="#c3cad2" stroke-width="1"/><text x="675" y="350" font-size="14" fill="#1d2733" font-family="'DejaVu Sans Mono', Menlo, Consolas, monospace">S2_static</text><text x="737.0" y="394" font-size="19" font-weight="700" text-anchor="middle" fill="#1d2733">Static SCF</text>
+<rect x="836" y="326" width="150" height="92" rx="10" fill="#fff" stroke="#1d2733" stroke-width="2" stroke-dasharray="7 5"/><rect x="844" y="334" width="61.599999999999994" height="22" rx="4" fill="#f1f3f5" stroke="#c3cad2" stroke-width="1"/><text x="849" y="350" font-size="14" fill="#1d2733" font-family="'DejaVu Sans Mono', Menlo, Consolas, monospace">S3_nac</text><text x="911.0" y="384" font-size="19" font-weight="700" text-anchor="middle" fill="#1d2733">NAC</text><text x="911.0" y="407" font-size="16" text-anchor="middle" fill="#5b6673">dielectric</text>
+<rect x="1010" y="326" width="150" height="92" rx="10" fill="#fff" stroke="#c0392b" stroke-width="2.5"/><rect x="1018" y="334" width="70.19999999999999" height="22" rx="4" fill="#f1f3f5" stroke="#c3cad2" stroke-width="1"/><text x="1023" y="350" font-size="14" fill="#1d2733" font-family="'DejaVu Sans Mono', Menlo, Consolas, monospace">S4_disp</text><text x="1085.0" y="384" font-size="19" font-weight="700" text-anchor="middle" fill="#1d2733">Forces</text><text x="1085.0" y="407" font-size="17" font-weight="700" text-anchor="middle" fill="#c0392b">(× N)</text>
+<rect x="1184" y="326" width="150" height="92" rx="10" fill="#fff" stroke="#1d2733" stroke-width="2"/><rect x="1192" y="334" width="53.0" height="22" rx="4" fill="#f1f3f5" stroke="#c3cad2" stroke-width="1"/><text x="1197" y="350" font-size="14" fill="#1d2733" font-family="'DejaVu Sans Mono', Menlo, Consolas, monospace">S5_fc</text><text x="1259.0" y="384" font-size="19" font-weight="700" text-anchor="middle" fill="#1d2733">Force</text><text x="1259.0" y="407" font-size="19" font-weight="700" text-anchor="middle" fill="#1d2733">constants</text>
+<rect x="1358" y="326" width="150" height="92" rx="10" fill="#fff" stroke="#1d2733" stroke-width="2"/><rect x="1366" y="334" width="78.8" height="22" rx="4" fill="#f1f3f5" stroke="#c3cad2" stroke-width="1"/><text x="1371" y="350" font-size="14" fill="#1d2733" font-family="'DejaVu Sans Mono', Menlo, Consolas, monospace">S6_kappa</text><text x="1433.0" y="394" font-size="19" font-weight="700" text-anchor="middle" fill="#1d2733">Phonon BTE</text>
+<rect x="1532" y="326" width="150" height="92" rx="10" fill="#fdf3e7" stroke="#b8660f" stroke-width="2.5"/><text x="1607.0" y="384" font-size="28" font-weight="700" text-anchor="middle" fill="#a3570a"><tspan>κ</tspan><tspan dy="8.4" font-size="18.5">L</tspan><tspan dy="-8.4">(T)</tspan></text><text x="1607.0" y="407" font-size="15" text-anchor="middle" fill="#24313a">→ te-screen, zT</text>
+<rect x="470" y="864" width="1230" height="112" rx="14" fill="#f4f6f8" stroke="#d6dce3" stroke-width="1.5"/><path d="M639 920 H659" fill="none" stroke="#3a4654" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#m-ink)"/><path d="M813 920 H833" fill="none" stroke="#3a4654" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#m-ink)"/><path d="M987 920 H1007" fill="none" stroke="#3a4654" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#m-ink)"/><path d="M1161 920 H1181" fill="none" stroke="#3a4654" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#m-ink)"/><path d="M1335 920 H1355" fill="none" stroke="#3a4654" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#m-ink)"/><path d="M1509 920 H1529" fill="none" stroke="#3a4654" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#m-ink)"/>
+<rect x="488" y="874" width="150" height="92" rx="10" fill="#fff" stroke="#1d2733" stroke-width="2"/><rect x="496" y="882" width="61.599999999999994" height="22" rx="4" fill="#f1f3f5" stroke="#c3cad2" stroke-width="1"/><text x="501" y="898" font-size="14" fill="#1d2733" font-family="'DejaVu Sans Mono', Menlo, Consolas, monospace">S1_opt</text><text x="563.0" y="942" font-size="19" font-weight="700" text-anchor="middle" fill="#1d2733">Relax</text>
+<rect x="662" y="874" width="150" height="92" rx="10" fill="#fff" stroke="#1d2733" stroke-width="2"/><rect x="670" y="882" width="96.0" height="22" rx="4" fill="#f1f3f5" stroke="#c3cad2" stroke-width="1"/><text x="675" y="898" font-size="14" fill="#1d2733" font-family="'DejaVu Sans Mono', Menlo, Consolas, monospace">S2_bandgap</text><text x="737.0" y="932" font-size="19" font-weight="700" text-anchor="middle" fill="#1d2733">Bands</text><text x="737.0" y="955" font-size="16" text-anchor="middle" fill="#5b6673">PBE / HSE</text>
+<rect x="836" y="874" width="150" height="92" rx="10" fill="#fff" stroke="#1d2733" stroke-width="2"/><rect x="844" y="882" width="70.19999999999999" height="22" rx="4" fill="#f1f3f5" stroke="#c3cad2" stroke-width="1"/><text x="849" y="898" font-size="14" fill="#1d2733" font-family="'DejaVu Sans Mono', Menlo, Consolas, monospace">S3 + S4</text><text x="911.0" y="932" font-size="17" font-weight="700" text-anchor="middle" fill="#1d2733">Uniform k-grid</text><text x="911.0" y="955" font-size="16" text-anchor="middle" fill="#5b6673">wavefunction</text>
+<rect x="1010" y="874" width="150" height="92" rx="10" fill="#fff" stroke="#1d2733" stroke-width="2"/><rect x="1018" y="882" width="70.19999999999999" height="22" rx="4" fill="#f1f3f5" stroke="#c3cad2" stroke-width="1"/><text x="1023" y="898" font-size="14" fill="#1d2733" font-family="'DejaVu Sans Mono', Menlo, Consolas, monospace">S5 + S6</text><text x="1085.0" y="932" font-size="17" font-weight="700" text-anchor="middle" fill="#1d2733">Dielectric ε</text><text x="1085.0" y="955" font-size="17" font-weight="700" text-anchor="middle" fill="#1d2733">Elastic C</text>
+<rect x="1184" y="874" width="150" height="92" rx="10" fill="#fff" stroke="#c0392b" stroke-width="2.5"/><rect x="1192" y="882" width="87.39999999999999" height="22" rx="4" fill="#f1f3f5" stroke="#c3cad2" stroke-width="1"/><text x="1197" y="898" font-size="14" fill="#1d2733" font-family="'DejaVu Sans Mono', Menlo, Consolas, monospace">S7_deform</text><text x="1259.0" y="932" font-size="18" font-weight="700" text-anchor="middle" fill="#1d2733"><tspan>Deform. E</tspan><tspan dy="5.4" font-size="11.9">1</tspan></text><text x="1259.0" y="955" font-size="17" font-weight="700" text-anchor="middle" fill="#c0392b">(× N)</text>
+<rect x="1358" y="874" width="150" height="92" rx="10" fill="#fff" stroke="#1d2733" stroke-width="2"/><rect x="1366" y="882" width="78.8" height="22" rx="4" fill="#f1f3f5" stroke="#c3cad2" stroke-width="1"/><text x="1371" y="898" font-size="14" fill="#1d2733" font-family="'DejaVu Sans Mono', Menlo, Consolas, monospace">S8_kappa</text><text x="1433.0" y="932" font-size="19" font-weight="700" text-anchor="middle" fill="#1d2733">AMSET</text><text x="1433.0" y="955" font-size="15" text-anchor="middle" fill="#5b6673">carrier transport</text>
+<rect x="1532" y="874" width="150" height="92" rx="10" fill="#edf3fc" stroke="#2f5fa7" stroke-width="2.5"/><text x="1607.0" y="932" font-size="26" font-weight="700" text-anchor="middle" fill="#1f4e9a"><tspan>σ, S, κ</tspan><tspan dy="7.8" font-size="17.2">e</tspan></text><text x="1607.0" y="955" font-size="15" text-anchor="middle" fill="#24313a">→ zT</text>
+<rect x="1318" y="986" width="230" height="28" rx="14" fill="#fff" stroke="#2f5fa7" stroke-width="1.6" stroke-dasharray="5 4"/>
+<text x="1433" y="1005" font-size="14" text-anchor="middle" fill="#1f4e9a">S8.2_dpt: CRTA × DPT check</text>
+<path d="M1433 967 V984" fill="none" stroke="#2f5fa7" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="4 4"/>
+<path d="M1700 372 H1870 V466" fill="none" stroke="#b8660f" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#m-orange)"/>
+<path d="M1700 920 H1870 V838" fill="none" stroke="#2f5fa7" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#m-blue)"/>
+<rect x="1760" y="470" width="220" height="364" rx="12" fill="#fcf0f3" stroke="#b8244a" stroke-width="2.5"/>
+<text x="1870" y="510" font-size="26" font-weight="700" text-anchor="middle" fill="#b8244a">zT(n, T)</text>
+<text x="1776" y="594" font-size="23" font-style="italic" fill="#1d2733">zT =</text>
+<text x="1906" y="574" font-size="23" font-style="italic" text-anchor="middle" fill="#1d2733"><tspan>S</tspan><tspan dy="-9.7" font-size="15.2">2</tspan><tspan dy="9.7">σT</tspan></text>
+<path d="M1856 586 H1958" fill="none" stroke="#1d2733" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="1906" y="618" font-size="23" font-style="italic" text-anchor="middle" fill="#1d2733"><tspan>κ</tspan><tspan dy="6.9" font-size="15.2">e</tspan><tspan dy="-6.9"> + κ</tspan><tspan dy="6.9" font-size="15.2">L</tspan></text>
+<rect x="1822" y="648" width="18.5" height="18.5" fill="#eeb2c6"/>
+<rect x="1842" y="648" width="18.5" height="18.5" fill="#d16388"/>
+<rect x="1862" y="648" width="18.5" height="18.5" fill="#b23c66"/>
+<rect x="1882" y="648" width="18.5" height="18.5" fill="#8a1d46"/>
+<rect x="1902" y="648" width="18.5" height="18.5" fill="#b23c66"/>
+<rect x="1922" y="648" width="18.5" height="18.5" fill="#e38aa8"/>
+<rect x="1822" y="668" width="18.5" height="18.5" fill="#eeb2c6"/>
+<rect x="1842" y="668" width="18.5" height="18.5" fill="#e38aa8"/>
+<rect x="1862" y="668" width="18.5" height="18.5" fill="#d16388"/>
+<rect x="1882" y="668" width="18.5" height="18.5" fill="#b23c66"/>
+<rect x="1902" y="668" width="18.5" height="18.5" fill="#d16388"/>
+<rect x="1922" y="668" width="18.5" height="18.5" fill="#e38aa8"/>
+<rect x="1822" y="688" width="18.5" height="18.5" fill="#f6d3de"/>
+<rect x="1842" y="688" width="18.5" height="18.5" fill="#e38aa8"/>
+<rect x="1862" y="688" width="18.5" height="18.5" fill="#d16388"/>
+<rect x="1882" y="688" width="18.5" height="18.5" fill="#d16388"/>
+<rect x="1902" y="688" width="18.5" height="18.5" fill="#e38aa8"/>
+<rect x="1922" y="688" width="18.5" height="18.5" fill="#eeb2c6"/>
+<rect x="1822" y="708" width="18.5" height="18.5" fill="#f6d3de"/>
+<rect x="1842" y="708" width="18.5" height="18.5" fill="#eeb2c6"/>
+<rect x="1862" y="708" width="18.5" height="18.5" fill="#e38aa8"/>
+<rect x="1882" y="708" width="18.5" height="18.5" fill="#e38aa8"/>
+<rect x="1902" y="708" width="18.5" height="18.5" fill="#e38aa8"/>
+<rect x="1922" y="708" width="18.5" height="18.5" fill="#eeb2c6"/>
+<rect x="1822" y="728" width="18.5" height="18.5" fill="#f6d3de"/>
+<rect x="1842" y="728" width="18.5" height="18.5" fill="#f6d3de"/>
+<rect x="1862" y="728" width="18.5" height="18.5" fill="#eeb2c6"/>
+<rect x="1882" y="728" width="18.5" height="18.5" fill="#eeb2c6"/>
+<rect x="1902" y="728" width="18.5" height="18.5" fill="#eeb2c6"/>
+<rect x="1922" y="728" width="18.5" height="18.5" fill="#f6d3de"/>
+<rect x="1822" y="748" width="18.5" height="18.5" fill="#f6d3de"/>
+<rect x="1842" y="748" width="18.5" height="18.5" fill="#f6d3de"/>
+<rect x="1862" y="748" width="18.5" height="18.5" fill="#f6d3de"/>
+<rect x="1882" y="748" width="18.5" height="18.5" fill="#eeb2c6"/>
+<rect x="1902" y="748" width="18.5" height="18.5" fill="#f6d3de"/>
+<rect x="1922" y="748" width="18.5" height="18.5" fill="#f6d3de"/>
+<path d="M1810 784 V650" fill="none" stroke="#3a4654" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#m-ink)"/>
+<path d="M1810 784 H1950" fill="none" stroke="#3a4654" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#m-ink)"/>
+<text x="1794" y="722" font-size="20" font-style="italic" text-anchor="middle" fill="#5b6673">T</text>
+<text x="1882" y="812" font-size="20" font-style="italic" text-anchor="middle" fill="#5b6673">n</text>
+<rect x="470" y="470" width="1230" height="364" rx="16" fill="#f6f7fb" stroke="#aeb8c4" stroke-width="2"/>
+<path d="M560 432 V466" fill="none" stroke="#8a96a3" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="2 5" marker-end="url(#m-gray)" marker-start="url(#m-gray)"/>
+<text x="574" y="456" font-size="14" font-style="italic" fill="#5b6673">every step runs this lifecycle</text>
+<path d="M560 838 V860" fill="none" stroke="#8a96a3" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="2 5" marker-end="url(#m-gray)" marker-start="url(#m-gray)"/>
+<path d="M1625 600 V494 H545 V596" fill="none" stroke="#238266" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#m-green)"/>
+<text x="574" y="520" font-size="16" fill="#238266"><tspan font-weight="700">passed → next step</tspan><tspan>  ·  monitor every 300 s</tspan></text>
+<rect x="490" y="600" width="110" height="64" rx="10" fill="#fff" stroke="#b5bec8" stroke-width="2.2"/><text x="545.0" y="633" font-size="24" font-weight="700" text-anchor="middle" fill="#9aa3ad">WAIT</text><text x="545.0" y="654" font-size="14" text-anchor="middle" fill="#5b6673">blocked</text>
+<rect x="670" y="600" width="110" height="64" rx="10" fill="#fff" stroke="#1d2733" stroke-width="2.2"/><text x="725.0" y="633" font-size="24" font-weight="700" text-anchor="middle" fill="#1d2733">PREP</text><text x="725.0" y="654" font-size="14" text-anchor="middle" fill="#5b6673">no inputs</text>
+<rect x="850" y="600" width="110" height="64" rx="10" fill="#fff" stroke="#1d2733" stroke-width="2.2"/><text x="905.0" y="633" font-size="24" font-weight="700" text-anchor="middle" fill="#1d2733">TODO</text><text x="905.0" y="654" font-size="14" text-anchor="middle" fill="#5b6673">inputs ready</text>
+<rect x="1030" y="600" width="110" height="64" rx="10" fill="#fff" stroke="#2f5fa7" stroke-width="2.2"/><text x="1085.0" y="633" font-size="24" font-weight="700" text-anchor="middle" fill="#1f4e9a">PD</text><text x="1085.0" y="654" font-size="14" text-anchor="middle" fill="#5b6673">queued</text>
+<rect x="1210" y="600" width="110" height="64" rx="10" fill="#fff" stroke="#2f5fa7" stroke-width="2.2"/><text x="1265.0" y="633" font-size="24" font-weight="700" text-anchor="middle" fill="#1f4e9a">R</text><text x="1265.0" y="654" font-size="14" text-anchor="middle" fill="#5b6673">running</text>
+<rect x="1390" y="600" width="110" height="64" rx="10" fill="#fff" stroke="#1d2733" stroke-width="2.6"/><g transform="translate(1407,625)"><circle r="9" fill="#3a4654" stroke="#fff" stroke-width="2.5"/><path d="M-4.0 0.5 L-0.9 3.2 L4.5 -3.1" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></g><text x="1458.0" y="633" font-size="22" font-weight="700" text-anchor="middle" fill="#1d2733">Check</text><text x="1445.0" y="654" font-size="14" text-anchor="middle" fill="#5b6673">validator</text>
+<rect x="1570" y="600" width="110" height="64" rx="10" fill="#238266" stroke="#238266" stroke-width="2.2"/><text x="1625.0" y="633" font-size="24" font-weight="700" text-anchor="middle" fill="#fff">OK</text><text x="1625.0" y="654" font-size="14" text-anchor="middle" fill="#dff2e9">passed</text>
+<path d="M601 640 H667" fill="none" stroke="#3a4654" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#m-ink)"/>
+<text x="635.0" y="630" font-size="13" text-anchor="middle" fill="#5b6673">unblocked</text>
+<path d="M781 640 H847" fill="none" stroke="#3a4654" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#m-ink)"/>
+<text x="815.0" y="630" font-size="13" text-anchor="middle" fill="#5b6673">generate</text>
+<path d="M961 640 H1027" fill="none" stroke="#3a4654" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#m-ink)"/>
+<text x="995.0" y="630" font-size="13" text-anchor="middle" fill="#5b6673">submit</text>
+<path d="M1141 640 H1207" fill="none" stroke="#3a4654" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#m-ink)"/>
+<text x="1175.0" y="630" font-size="13" text-anchor="middle" fill="#5b6673">start</text>
+<path d="M1321 640 H1387" fill="none" stroke="#3a4654" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#m-ink)"/>
+<text x="1355.0" y="630" font-size="13" text-anchor="middle" fill="#5b6673">fetch</text>
+<path d="M1501 640 H1567" fill="none" stroke="#3a4654" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#m-ink)"/>
+<text x="1535.0" y="630" font-size="13" text-anchor="middle" fill="#5b6673">pass</text>
+<text x="995" y="688" font-size="14" font-weight="700" text-anchor="middle" fill="#5b6673">max_jobs</text>
+<rect x="945" y="696" width="100" height="26" rx="13" fill="#fff" stroke="#c0392b" stroke-width="1.8"/>
+<text x="995" y="714" font-size="14" font-weight="700" text-anchor="middle" fill="#c0392b">fan-out × N</text>
+<rect x="1000" y="510" width="350" height="52" rx="10" fill="#fff8ee" stroke="#b8660f" stroke-width="2"/>
+<text x="1016" y="531" font-size="17" font-weight="700" fill="#a3570a">Hang recovery</text>
+<text x="1016" y="552" font-size="14" fill="#24313a">stalled ≥ 1.5 h → patch INCAR / node → resume</text>
+<path d="M1265 598 V566" fill="none" stroke="#b8660f" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#m-orange)"/>
+<path d="M1085 562 V596" fill="none" stroke="#b8660f" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#m-orange)"/>
+<rect x="1380" y="720" width="130" height="56" rx="10" fill="#fcecea" stroke="#c0392b" stroke-width="2.4"/>
+<text x="1445" y="745" font-size="22" font-weight="700" text-anchor="middle" fill="#c0392b">FAIL</text>
+<text x="1445" y="766" font-size="14" text-anchor="middle" fill="#c0392b">diagnosed</text>
+<path d="M1430 665 V716" fill="none" stroke="#c0392b" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#m-red)"/>
+<text x="1420" y="698" font-size="14" font-weight="700" text-anchor="end" fill="#c0392b">fail</text>
+<rect x="1560" y="720" width="130" height="56" rx="10" fill="#fdf3e7" stroke="#b8660f" stroke-width="2.4"/>
+<text x="1625" y="745" font-size="22" font-weight="700" text-anchor="middle" fill="#a3570a">IMAG</text>
+<text x="1625" y="766" font-size="13" text-anchor="middle" fill="#a3570a">unstable · S5_fc</text>
+<path d="M1470 665 V690 H1625 V716" fill="none" stroke="#b8660f" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#m-orange)"/>
+<text x="1548" y="684" font-size="14" text-anchor="middle" fill="#a3570a">imag. modes</text>
+<path d="M1378 740 H905 V668" fill="none" stroke="#b8660f" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#m-orange)"/>
+<text x="1200" y="732" font-size="16" text-anchor="middle" fill="#a3570a"><tspan font-weight="700">Known cause: </tspan><tspan>rule-based fix → retry</tspan></text>
+<rect x="655" y="690" width="140" height="46" rx="10" fill="#fff" stroke="#1d2733" stroke-width="2"/>
+<g transform="translate(667,701) scale(0.9)"><path d="M4 9 V5 a6 6 0 0 1 12 0 V9" fill="none" stroke="#1d2733" stroke-width="2.6"/><rect x="1" y="9" width="18" height="14" rx="3" fill="#1d2733"/></g>
+<text x="694" y="711" font-size="18" font-weight="700" fill="#1d2733">Gateway</text>
+<text x="694" y="728" font-size="13" fill="#5b6673">risk tiers</text>
+<path d="M725 688 V668" fill="none" stroke="#3a4654" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#m-ink)"/>
+<text x="736" y="684" font-size="13" fill="#5b6673">retry / rerun</text>
+<rect x="655" y="760" width="140" height="50" rx="10" fill="#efebf9" stroke="#5b3fa0" stroke-width="2"/>
+<g transform="translate(664,766) scale(0.95)" fill="none" stroke="#5b3fa0" stroke-width="2.6" stroke-linecap="round"><line x1="18" y1="3" x2="18" y2="9"/><circle cx="18" cy="2.5" r="2.5" fill="#5b3fa0" stroke="none"/><rect x="2" y="9" width="32" height="26" rx="7" fill="#fff"/><circle cx="12" cy="20" r="2.6" fill="#5b3fa0" stroke="none"/><circle cx="24" cy="20" r="2.6" fill="#5b3fa0" stroke="none"/><path d="M11 27 Q18 32 25 27"/></g>
+<text x="706" y="783" font-size="19" font-weight="700" fill="#5b3fa0">LLM</text>
+<text x="706" y="801" font-size="13" fill="#5b3fa0">via MCP / CLI</text>
+<path d="M725 758 V740" fill="none" stroke="#5b3fa0" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#m-purple)"/>
+<text x="733" y="753" font-size="13" fill="#5b3fa0">call</text>
+<rect x="490" y="760" width="100" height="50" rx="10" fill="#fff" stroke="#1d2733" stroke-width="2"/>
+<g transform="translate(514,787) scale(0.9)" fill="none" stroke="#1d2733" stroke-width="2.6"><circle cx="0" cy="-9" r="9"/><path d="M-15 16 C-15 3 15 3 15 16"/></g>
+<text x="552" y="791" font-size="18" font-weight="700" text-anchor="middle" fill="#1d2733">user</text>
+<path d="M592 776 H651" fill="none" stroke="#3a4654" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#m-ink)"/>
+<text x="621" y="770" font-size="13" text-anchor="middle" fill="#5b6673">task</text>
+<path d="M653 796 H594" fill="none" stroke="#3a4654" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#m-ink)"/>
+<text x="624" y="824" font-size="13" text-anchor="middle" fill="#5b6673">report</text>
+<path d="M540 758 V713 H651" fill="none" stroke="#b8244a" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="5 4" marker-end="url(#m-crimson)"/>
+<text x="548" y="706" font-size="13" fill="#b8244a">approve</text>
+<path d="M1445 778 V800 H799" fill="none" stroke="#5b3fa0" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#m-purple)"/>
+<text x="1120" y="792" font-size="16" text-anchor="middle" fill="#5b3fa0"><tspan font-weight="700">Unknown cause: </tspan><tspan>evidence → LLM proposes a fix</tspan></text>
+<text x="24" y="1060" font-size="40" font-weight="700" fill="#1d2733">b</text>
+<text x="64" y="1060" font-size="30" font-weight="700" fill="#1d2733">2D example</text>
+<rect x="24" y="1080" width="960" height="320" rx="14" fill="#fbfbfd" stroke="#8f7cc3" stroke-width="2"/>
+<text x="504" y="1250" font-size="20" font-style="italic" text-anchor="middle" fill="#a7a0c4"><tspan>[ 2D results: zT(n, T), κ</tspan><tspan dy="6.0" font-size="13.2">L</tspan><tspan dy="-6.0">(T), σ, S ]</tspan></text>
+<text x="1016" y="1060" font-size="40" font-weight="700" fill="#1d2733">c</text>
+<text x="1056" y="1060" font-size="30" font-weight="700" fill="#1d2733">3D example</text>
+<rect x="1016" y="1080" width="964" height="320" rx="14" fill="#fdfbfb" stroke="#d58a8a" stroke-width="2"/>
+<text x="1498" y="1250" font-size="20" font-style="italic" text-anchor="middle" fill="#cfa3a3"><tspan>[ 3D results: zT(n, T), κ</tspan><tspan dy="6.0" font-size="13.2">L</tspan><tspan dy="-6.0">(T), σ, S ]</tspan></text>
+</svg>
