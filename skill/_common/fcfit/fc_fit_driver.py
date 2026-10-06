@@ -3199,17 +3199,26 @@ def _postfit_self_check(cfg, out):
     if re_hiphive is None:
         return {}
     rel_dev = abs(float(re_hiphive) - float(re_pheasy)) / max(float(re_pheasy), 1e-12)
-    print("[self-check] pheasy re=%.5f hiphive(all-frames) re=%.5f (rel dev %.2f%%)"
-          % (re_pheasy, re_hiphive, 100.0 * rel_dev), flush=True)
-    if rel_dev > 0.05:
+    # excess = 顺序错误额外带来的误差估计（和数据集本身误差 R 无关）：
+    # 误差按平方和叠加 hiphive ≈ sqrt(R² + M²)，所以 M ≈ sqrt(re_h² - re_p²)。
+    # 数据误差大时相对偏差会变迟钝（M²/2R²），excess 不受影响。
+    excess = float(np.sqrt(abs(float(re_hiphive) ** 2 - float(re_pheasy) ** 2)))
+    print("[self-check] pheasy re=%.5f hiphive(all-frames) re=%.5f "
+          "(rel dev %.2f%%, excess %.4f)"
+          % (re_pheasy, re_hiphive, 100.0 * rel_dev, excess), flush=True)
+    # 相对偏差 >5% 或 excess >0.5%（绝对阈值，先按此值，可据实测调整）都判 FAIL
+    if rel_dev > 0.05 or excess > 0.005:
         print("[FAIL] fit self-check: hiphive re-evaluation diverges from "
-              "pheasy's reported error by %.1f%% -- the exported force constants "
-              "are not the fit pheasy reported" % (100.0 * rel_dev), flush=True)
+              "pheasy's reported error (rel dev %.1f%%, excess %.4f) -- the "
+              "exported force constants are not the fit pheasy reported"
+              % (100.0 * rel_dev, excess), flush=True)
         (out / ".fit_gate_fail").write_text(
-            "hiphive re %.4f vs pheasy re %.4f\n" % (re_hiphive, re_pheasy))
+            "hiphive re %.4f vs pheasy re %.4f (excess %.4f)\n"
+            % (re_hiphive, re_pheasy, excess))
     return {"self_check_pheasy_re": float(re_pheasy),
             "self_check_hiphive_re": float(re_hiphive),
-            "self_check_rel_dev": float(rel_dev)}
+            "self_check_rel_dev": float(rel_dev),
+            "self_check_excess": float(excess)}
 
 
 def _job_id(out=None):
