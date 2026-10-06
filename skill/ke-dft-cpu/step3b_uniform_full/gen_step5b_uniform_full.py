@@ -53,7 +53,7 @@ DK_MAX_3D    = "0.06"
 #   **外推**，插值网格一变结果就差 30-45%（实测：固定 c 只改
 #   interpolation_factor，ADP 迁移率 2188~2488）。设 >=3 让 kz 变成内插。
 #   默认 1 = 保持原行为（不动存量 2D 项目）；新项目在 project_setting 里设 3。
-VACUUM_KZ_MIN = 1
+VACUUM_KZ_MIN = 3                 # ★ V173：与 step3_uniform 同步改为 3（S3b 必须与 S3 网格一致）
 # ---- patch_match_mesh：单变量对照，网格照抄指定步骤 ---------------------
 #   用途：本步的全部意义是"与 step3_uniform 只差 ISYM"。但 step3_uniform 若是在
 #   DK_MAX 修复前生成的（3D 整段跳过，见 gen_step5_uniform 注释里的历史坑），
@@ -279,7 +279,7 @@ def main():
     # [patch_stale_grid-2026-09-23] 覆盖 KPOINTS 之前先抓旧网格，末尾与新网格比对后归档旧产物
     _old_mesh = kc.read_kpoints_mesh(out / "KPOINTS")
     kc.vaspkit_kpoints(out, KSCHEME, KSPACING, VASPKIT_EXE, dim, vac_axis)
-    # [patch_vacuum_kz] 把真空方向 kz 提到 VACUUM_KZ_MIN（默认 1 = 不动）
+    # [patch_vacuum_kz] 把真空方向 kz 提到 VACUUM_KZ_MIN（V173 起出厂 3；step.conf 写 1 = 旧行为）
     _kzmin = int(VACUUM_KZ_MIN)
     if (cwd / "step.conf").is_file():
         # strict=False：材料级 step.conf 是全技能共用的一份，含别的步骤的键

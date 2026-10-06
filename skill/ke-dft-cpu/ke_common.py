@@ -119,6 +119,67 @@ def read_kpoints_mesh(kpoints: Path):
 
 
 # --------------------------------------------------------------------------
+# [V173] S3（AMSET 能带 / 波函数 / 形变势网格的唯一来源）网格是否满足现行规则。
+#   规则在 step3_uniform 的 gen 里（DK_MAX_2D 0.05 / DK_MAX_3D 0.06 Å⁻¹，2D 真空轴 kz ≥ 3），可只在 gen 运行时生效：
+#   旧规则下算完的 S3 一直判完成、不会重新生成，S7 照抄它的网格，S8/S8.4 照用 —— 谁都不查。
+#   CrS₂_hex：S3 还是 08-26 的 15×15×1（面内间距 0.16 Å⁻¹ = 规则的 3.2 倍、kz 只有一层），CrSe₂ 是 48×48×3；
+#   两者 S8.4 的 ADP/DPT 一个 1.7、一个 0.5。kz 只有一层时 AMSET 沿 kz 外推（V8：插值网格一变 ADP 差 30–45%）。
+# --------------------------------------------------------------------------
+S3_DK_MAX = {"2d": 0.05, "3d": 0.06}
+S3_KZ_MIN_2D = 3
+S3_DK_ERR_FACTOR = 2.0          # 面内间距超过规则这么多倍 -> 报错（规则以内的小差别只告警）
+
+
+def s3_grid_issues(mat_dir, dim=None):
+    """材料目录 -> [(level, msg)]，level 为 "error" / "warn"；读不到 S3 的 KPOINTS / POSCAR 返回 []。"""
+    import numpy as np
+    s3 = Path(mat_dir) / "step3_uniform"
+    mesh = read_kpoints_mesh(s3 / "KPOINTS")
+    pos = s3 / "POSCAR"
+    if not mesh or not pos.is_file():
+        return []
+    try:
+        dim = dim or read_method_dim(s3 / METHOD_FILE) or resolve_dim_for(pos, "auto")[0]
+        vac = resolve_dim_for(pos, dim)[1] if dim == "2d" else None
+        rec = 2.0 * np.pi * np.linalg.inv(read_lattice_matrix(pos)).T
+    except (OSError, ValueError, IndexError, SystemExit):
+        return []
+    dk = S3_DK_MAX.get(dim, S3_DK_MAX["3d"])
+    out = []
+    for i in range(3):
+        if i == vac:
+            continue
+        sp = float(np.linalg.norm(rec[i])) / max(int(mesh[i]), 1)
+        if sp > S3_DK_ERR_FACTOR * dk:
+            out.append(("error", "step3_uniform 第 %d 轴 %d 分：笛卡尔间距 %.3f Å⁻¹，是现行规则 %.2f 的 %.1f 倍"
+                        % (i + 1, mesh[i], sp, dk, sp / dk)))
+        elif sp > 1.1 * dk:
+            out.append(("warn", "step3_uniform 第 %d 轴 %d 分：笛卡尔间距 %.3f Å⁻¹，比现行规则 %.2f 粗"
+                        % (i + 1, mesh[i], sp, dk)))
+    if vac is not None and int(mesh[vac]) < S3_KZ_MIN_2D:
+        out.append(("error", "step3_uniform 真空轴 kz = %d < %d：AMSET 沿 kz 外推而不是内插"
+                    "（V8：插值网格一变 ADP 差 30–45%%）" % (mesh[vac], S3_KZ_MIN_2D)))
+    return out
+
+
+def s3_grid_gate(mat_dir, label, allow=False, dim=None):
+    """S8 / S8.4 gen 调：S3 网格不满足现行规则 -> 打印；有 error 且 allow=False -> sys.exit。返回 issues。"""
+    issues = s3_grid_issues(mat_dir, dim)
+    for lv, msg in issues:
+        print("[%s] %s：%s" % ("ERROR" if lv == "error" and not allow else "WARN", label, msg))
+    if any(lv == "error" for lv, _ in issues):
+        if not allow:
+            sys.exit("[ERROR] %s：step3_uniform 的网格是旧规则下生成的，AMSET 的能带 / 波函数 / 形变势都在这张网格上，"
+                     "结果不可信。\n"
+                     "        处理：retry step3_uniform（现行规则：2D 面内 ≤ %.2f Å⁻¹、kz ≥ %d）-> S4 -> S7 -> S7.1 -> 本步；"
+                     "S7 会照抄新的 S3 网格。\n"
+                     "        确实要用这张网格（复现旧结果）：本步 step.conf 写 ALLOW_COARSE_S3 = true。"
+                     % (label, S3_DK_MAX["2d"], S3_KZ_MIN_2D))
+        print("[WARN] %s：ALLOW_COARSE_S3 = true —— 按旧网格继续，结果只作复现/对照" % label)
+    return issues
+
+
+# --------------------------------------------------------------------------
 # [patch_stale_grid-2026-09-23] 网格变了 -> 归档旧产物（S3 / S3b 用）
 #   ck_wavecar 只查 WAVECAR 存不存在、够不够大，**不比对网格**。所以改了网格之后，
 #   旧网格算完的目录仍被判「已完成」，auto/start 不会重算 —— 输入是新网格、产物是旧网格，

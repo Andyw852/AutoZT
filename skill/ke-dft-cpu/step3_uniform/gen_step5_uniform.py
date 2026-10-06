@@ -45,7 +45,10 @@ DK_MAX_3D    = "0.06"
 #   **外推**，插值网格一变结果就差 30-45%（实测：固定 c 只改
 #   interpolation_factor，ADP 迁移率 2188~2488）。设 >=3 让 kz 变成内插。
 #   默认 1 = 保持原行为（不动存量 2D 项目）；新项目在 project_setting 里设 3。
-VACUUM_KZ_MIN = 1
+# ★ V173（2026-10-07）：出厂改为 3。"新项目自己设"没人记得设：CrS₂_hex 的 S3 一直是 15×15×1，S7 照抄、S8.4 照用，
+#   ADP/DPT 和同网格规则下的 CrSe₂ 差 3 倍。S8/S8.4 现在会拦 kz < 3 的 S3（ke_common.s3_grid_gate），
+#   默认值跟着改，retry S3 就直接得到 kz = 3。只影响 2D、只在本步重新生成时生效（旧网格产物照 patch_stale_grid 归档）。
+VACUUM_KZ_MIN = 3
 # ---- 成本护栏：网格总点数上限 -------------------------------------------
 #   超了就【报错要求显式覆盖】，而不是静默降密 —— 否则将来又有人用"跳过加密"
 #   绕过，回到同一个坑。参考量级：Si(5.43Å) 0.08 → 25³ ≈ 1.6e4；
@@ -178,7 +181,7 @@ def main():
     # [patch_stale_grid-2026-09-23] 覆盖 KPOINTS 之前先抓旧网格，末尾与新网格比对后归档旧产物
     _old_mesh = kc.read_kpoints_mesh(out / "KPOINTS")
     kc.vaspkit_kpoints(out, KSCHEME, KSPACING, VASPKIT_EXE, dim, vac_axis)
-    # [patch_vacuum_kz] 把真空方向 kz 提到 VACUUM_KZ_MIN（默认 1 = 不动）
+    # [patch_vacuum_kz] 把真空方向 kz 提到 VACUUM_KZ_MIN（V173 起出厂 3；step.conf 写 1 = 旧行为）
     _kzmin = int(VACUUM_KZ_MIN)
     if (cwd / "step.conf").is_file():
         # strict=False：材料级 step.conf 是全技能共用的一份，含别的步骤的键

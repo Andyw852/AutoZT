@@ -299,6 +299,10 @@ def _reference_kpoints(out, dim, vac_axis, n_sub):
             # [2026-09-24] kz 也一并照抄：三个分量与 step3_uniform 完全一致，
             #   不再由本步 VACUUM_KZ_MIN 决定（根除 S3=3 / S7=1 的轴序不一致）。
             _need = list(_s3)
+            # [V173] 照抄之前先看 S3 本身合不合现行网格规则：旧规则下的 S3（如 CrS₂ 的 15×15×1）照抄过来，
+            #   形变势网格跟着粗，S8/S8.4 也会被 s3_grid_gate 拦下 —— 应先 retry S3，再重生成本步。
+            for _lv, _msg in kc.s3_grid_issues(out.parent, dim):
+                print("[WARN] S7 照抄的 S3 网格不合现行规则：%s —— 先 retry step3_uniform（-> S4），再重生成本步" % _msg)
             if kc.align_kgrid(_need, dim, _axes, quiet=True) != _need:
                 print("[WARN] step3_uniform 面内网格 %s 未对齐高对称点（旧版 S3 生成？）"
                       "—— 建议先 rerun step3_uniform，再重生成本步" % "x".join(str(x) for x in _cp))
