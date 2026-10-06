@@ -1728,13 +1728,14 @@ def write_settings(out: Path, eps_inf, eps_static, gap, elastic,
     # 而真实重叠要求 h5 是完整网格，否则去对称化会把重叠算坏，见 V22/V23）。
     lines.append("unity_overlap: %s" % ("true" if UNITY_OVERLAP else "false"))
     if not UNITY_OVERLAP:
-        lines.append("# ^ 真实重叠：**必须**让 h5 走 from_data（WAVEFUNCTION_FULL=true 全网格），"
-                     "否则结果不可信（见 overlap_preflight.py 的拦截）")
-        if not WAVEFUNCTION_FULL:
-            # patch_overlap_controlled（2026-09-20）：只有在**故意**退回旧去对称化路径时，
-            #   才把这次标成"受控对照"，让 overlap_preflight 把拦截降为告警。
-            #   2026-09-26：出厂已是真实重叠 + 全网格，故正常路径不再打这个标记。
-            lines.append("# AZ_OVERLAP_CONTROLLED=1")
+        if WAVEFUNCTION_FULL:
+            lines.append("# ^ 真实重叠 + 全网格 h5（from_data，不去对称化）")
+        else:
+            # [V172] 走到这里 = main() 的对称性闸门已放行 IBZ（不放行会 sys.exit）：V118 起这是出厂生产路径。
+            #   以前这里写 AZ_OVERLAP_CONTROLLED（patch_overlap_controlled，2026-09-20 给"故意退回去对称化"用的），
+            #   preflight 于是把每次正常运行都标成"受控对照，只用于算比值，不作生产结果"。
+            lines.append("# ^ 真实重叠 + IBZ h5：对称性判据已放行（DESYM_FIX=%s），出厂生产路径（V118）"
+                         % ("on" if _DESYM_FIX_ON else "off"))
     # patch_write_mesh：显式落盘开关。true 时 AMSET 额外写 mesh_<mesh>.h5，
     #   里面是每机制每（不可约）k 点的散射率 + 能带/速度/DOS 元数据；
     #   postprocess_intrinsic.py 读它把 IMP 置零后用 AMSET 自己的输运积分重算本征 μ/S/σ。
@@ -2315,8 +2316,10 @@ def main():
                 print("[..] WAVEFUNCTION_FULL=true（step.conf 显式）：强制全网格")
             elif _wf in ("false", "0", "no", "off"):
                 _WF_EXPLICIT = False
-                print("[WARN] WAVEFUNCTION_FULL=false（step.conf 显式）：退回**去对称化**路径 ——"
-                      " 无反演体系的 2D 结果不可信，只作受控对照")
+                # [V172] V118 之后 IBZ + 相位补丁就是出厂路径；能不能走 IBZ 由后面的对称性闸门裁决（不行就 sys.exit），
+                #   这里不再一律说"结果不可信，只作受控对照"。
+                print("[..] WAVEFUNCTION_FULL=false（step.conf 显式）：走 IBZ h5 —— DESYM_FIX 开着时这就是出厂路径"
+                      "（V118）；能不能走 IBZ 由后面的对称性闸门裁决")
             elif _wf != "auto":
                 print("[WARN] WAVEFUNCTION_FULL=%r 不认识（只认 auto/true/false），按 auto 处理" % _wf)
             # unity_overlap 显式覆盖：auto/true/false

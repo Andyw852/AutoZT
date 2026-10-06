@@ -7744,3 +7744,39 @@ environment: amset_clean`，接着 `amset: command not found`。集群上现在�
 - step7b 里的 deformation.h5 是后一个 gen 的 amset 输出，被前一个挪了过去；它有没有经过 dp_symmetrize 取决于两者的先后。
 - deformation_vac.h5 由前一个 gen 生成，它读的是 step7_deform/deformation.h5，那时这个文件可能已经被后一个换掉了。
 - 处理办法：确认没有 gen 还在跑之后，干净地重跑一次 S7.1，只跑一个实例。
+
+## V172（2026-10-06）：S8.4 出厂生产路径不再被标成"受控对照，不作生产结果"
+
+**现场**：
+- CrSe₂ 的 S8.4 要用现行代码重跑，agent 看到两条路：
+  - A：保留旧 step.conf 里的 `UNITY_OVERLAP = true`，只把插值倍数改掉；
+  - B：和 CrS₂ 设置一致，用真实重叠。
+- 它把 B 描述成"要走受控对照路线（preflight 会标'只用于算比值'）"，差点选了 A。
+- MoS₂ 基准和 CrS₂ 的 S8.4 也都被 preflight 标过"受控对照放行（只用于算比值，不作生产结果）"。
+
+**根因**：
+- V118（09-29）之后，IBZ h5 + DESYM_FIX + 真实重叠就是 2D 的出厂生产路径。
+- 但 gen 的 `write_settings` 仍按 2026-09-20 的老规矩，在 `UNITY_OVERLAP=false 且 WAVEFUNCTION_FULL=false` 时写 `# AZ_OVERLAP_CONTROLLED=1`。这个标记原本只给"故意退回去对称化"的对照用。
+- preflight 遇到这个标记就直接走"受控对照"分支，抢在 V118 加的 `[OK] 2D + 真实重叠 + IBZ h5 + 相位补丁` 之前。
+- 所以每一次正常运行都被标成"不作生产结果"。
+- step.conf 显式写 `WAVEFUNCTION_FULL=false` 时，gen 也会打"无反演体系的 2D 结果不可信，只作受控对照"。
+
+**改动**：
+- gen：真实重叠 + IBZ 时不再写这个标记。走到 `write_settings` 就说明 main() 里的对称性闸门已经放行，不放行会直接 sys.exit。改为写一行注释说明是 V118 生产路径。
+- preflight：先看统一判据，再看标记。
+  - 判据放行，且相位补丁开着：给 `[OK]`；旧 settings 里的标记只加一句"是误写的旧标记，不改变结论"。
+  - 判据要求全网格时，标记才会把拦截降为"受控对照"告警。
+- `WAVEFUNCTION_FULL=false` 显式写出时，提示改为信息级：IBZ 是出厂路径，能不能走 IBZ 由后面的闸门裁决。
+
+**测试**：test_preflight_symmetry_verdict.py 新增 2 项，共 15 项。
+- 旧标记 + 补丁开 + 判据放行：结果是 ok 和 `[OK]`，不出现"不作生产结果"；
+- 旧标记 + 补丁关 + 有坏操作：结果是"受控对照"告警；
+- gen 源码里不再写这个标记。
+- 反证：preflight 退回改动前的版本，新用例失败。
+
+**对已有结果的意义**：
+- CrS₂ 的 S8.4（10-06）和 MoS₂ 基准走的都是 V118 生产路径，"受控对照"是误标，结果本身就是生产数据，不用重跑。
+- CrSe₂ 09-24 那次 S8.4 用的是 `unity_overlap: true`，是 preflight 一直标注的"快速筛选"路线：
+  - 它把谷间 / 大 q 散射当成完全耦合，而真实的 K→K' 重叠 |I|² 只有约 0.25；
+  - 所以迁移率系统性偏低，只能看数量级（见 2026-09-26 的结论）。
+  - 那次的 ADP/DPT（0.276/0.236）和手稿里的 0.29/0.31 都出自这条路线，不能和 CrS₂ 的 1.69/1.82 比。

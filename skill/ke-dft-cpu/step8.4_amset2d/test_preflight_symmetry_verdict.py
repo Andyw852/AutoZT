@@ -179,6 +179,37 @@ class PreflightVerdictTests(unittest.TestCase):
             v_off, l_off = pf.run(out, out, False, desym_fix=False)
             self.assertEqual(v_off, "error" if two_d else "warn", "\n".join(l_off))
 
+    def test_legacy_controlled_marker_does_not_demote_production_v172(self):
+        """V172：V118 之后 gen 在出厂生产路径上也写了 AZ_OVERLAP_CONTROLLED，preflight 因此把正常结果标成
+        "受控对照，只用于算比值，不作生产结果"。现在先看判据：放行 -> [OK]（注明旧标记）；判据要全网格时标记才起作用。"""
+        import h5py
+        mos2 = Structure(Lattice.hexagonal(3.19, 12.0), ["Mo", "S", "S"],
+                         [[.1, .2, .5], [1/3 + .1, 2/3 + .2, .63], [1/3 + .1, 2/3 + .2, .37]])
+        base = _material_dir(mos2)
+        out = base / "step8.4_amset2d"
+        out.mkdir()
+        (out / "settings.yaml").write_text("unity_overlap: false\n# AZ_OVERLAP_CONTROLLED=1\n")
+        (out / "2d_correction.json").write_text("{}")
+        (out / "amset_desym_fix.py").write_text("# stub\n")
+        kp = np.array([[0, 0, 0], [.25, 0, 0], [.5, 0, 0], [.25, .25, 0]], float)
+        with h5py.File(str(out / "wavefunction.h5"), "w") as f:
+            f["kpoints"] = kp
+            f["gpoints"] = np.zeros((3, 3), int)
+            f["coefficients_up"] = np.zeros((2, len(kp), 3), complex)
+        v_on, l_on = pf.run(out, out, False, desym_fix=True)
+        t_on = "\n".join(l_on)
+        self.assertEqual(v_on, "ok", t_on)
+        self.assertIn("[OK] 2D + 真实重叠 + IBZ h5 + 相位补丁", t_on)
+        self.assertNotIn("不作生产结果）。", t_on)
+        v_off, l_off = pf.run(out, out, False, desym_fix=False)    # 补丁关、坏操作：标记才把拦截降为告警
+        t_off = "\n".join(l_off)
+        self.assertEqual(v_off, "warn", t_off)
+        self.assertIn("受控对照放行", t_off)
+
+    def test_gen_no_longer_writes_controlled_marker_v172(self):
+        src = (HERE / "gen_step14_amset2d.py").read_text(encoding="utf-8")
+        self.assertNotIn('lines.append("# AZ_OVERLAP_CONTROLLED=1")', src)
+
     def test_s3_s3b_gap_blocks_only_when_mixed(self):
         """V134：S3/S3b 能带偏差（MoSe2 实测 1.2 meV > 1.0）只在本次能带与波函数来自不同自洽时才拦；
         同源（vasprun 与 h5 都来自 S3，或都来自 S3b）只记一行、不拦。"""

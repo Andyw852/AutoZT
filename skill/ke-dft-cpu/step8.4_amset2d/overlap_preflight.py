@@ -451,17 +451,25 @@ def run(cwd, out_dir=None, unity_overlap=False, desym_fix=None):
                          "静默算错（V117）。处理：重新生成 h5 前把 vasprun/h5 的 k 点换到 (-0.5, 0.5]"
                          "（系数同步 c_{k-b}(G)=c_k(G-b)），或改走 IBZ + DESYM_FIX。"
                          % info["n_offconv"])
-        if not complete and not unity_overlap and two_d and controlled:
+        # [V172] 先问统一判据，再看"受控对照"标记。以前标记优先：V118 之后 gen 在出厂生产路径（IBZ + 相位补丁）上
+        #   也写 AZ_OVERLAP_CONTROLLED，于是 CrS₂/MoS₂ 的正常结果全被标成"只用于算比值，不作生产结果"，
+        #   agent 据此差点把 CrSe₂ 留在 unity_overlap 快速筛选路线。标记只在判据说必须全网格时才有意义。
+        _v2d = (_structure_verdict(cwd, desym_fix=desym_fix)
+                if (not complete and not unity_overlap and two_d) else None)
+        if _v2d is not None and controlled and _v2d[0]:
             warn = True
-            lines.append("     [WARN] 2D + 真实重叠 + 非完整网格：受控对照放行（只用于算比值，"
-                         "不作生产结果）。")
-        elif not complete and not unity_overlap and two_d:
+            lines.append("     [WARN] 2D + 真实重叠 + 非完整网格，判据说要全网格：受控对照放行（只用于算比值，"
+                         "不作生产结果）。%s" % _v2d[1])
+        elif _v2d is not None:
             # ★ 2026-09-28 用户批准（第二批 (a)）：先问**统一判据**，别一刀切。
-            _need_full, _why = _structure_verdict(cwd, desym_fix=desym_fix)
+            _need_full, _why = _v2d
             if not _need_full and desym_fix:
                 # ★ 2026-09-29（V118）：补丁默认开以后这是**出厂标准路径**（V115–V117 验证），
                 #   不再每次打 WARN —— 天天出现的告警会让人习惯性忽略真正的告警。
                 lines.append("     [OK] 2D + 真实重叠 + IBZ h5 + 相位补丁：%s" % _why)
+                if controlled:
+                    lines.append("     （settings.yaml 里的 AZ_OVERLAP_CONTROLLED 是 V172 之前的 gen 在生产路径上"
+                                 "误写的标记，不改变结论：这是生产数据）")
             elif not _need_full:
                 warn = True
                 lines.append("     [WARN] 2D + 真实重叠 + 非完整网格，但**判据说可以走 IBZ**：%s" % _why)
