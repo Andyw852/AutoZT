@@ -12,7 +12,7 @@
 <text x="34" y="72" font-size="42" font-weight="700" fill="#1d2733">a</text>
 <text x="80" y="72" font-size="34" font-weight="700" fill="#1d2733">From one POSCAR to zT(n, T)</text>
 <text x="1022" y="72" font-size="42" font-weight="700" fill="#1d2733">c</text>
-<text x="1068" y="72" font-size="34" font-weight="700" fill="#1d2733">LLM operates autoZT through MCP / CLI</text>
+<text x="1068" y="72" font-size="34" font-weight="700" fill="#1d2733">LLM operates AutoZT through MCP / CLI</text>
 <text x="34" y="604" font-size="42" font-weight="700" fill="#1d2733">b</text>
 <text x="80" y="604" font-size="34" font-weight="700" fill="#1d2733">One workflow for 3D and 2D materials</text>
 <rect x="34" y="98" width="946" height="440" rx="16" fill="#f7f8fa" stroke="#d6dce3" stroke-width="2"/>
@@ -148,83 +148,131 @@
 <rect x="334" y="1322" width="622" height="62" rx="10" fill="#f3faf6" stroke="#238266" stroke-width="2"/>
 <text x="645" y="1362" font-size="26" text-anchor="middle" fill="#1d2733"><tspan font-style="italic">ε</tspan><tspan dy="7.8" font-size="17.2">2D</tspan><tspan dy="-7.8">  =  1 + (</tspan><tspan font-style="italic">c</tspan><tspan> / </tspan><tspan font-style="italic">t</tspan><tspan>) (</tspan><tspan font-style="italic">ε</tspan><tspan dy="7.8" font-size="17.2">slab</tspan><tspan dy="-7.8"> − 1)</tspan></text>
 <rect x="1022" y="98" width="944" height="1310" rx="16" fill="#f7f8fa" stroke="#d6dce3" stroke-width="2"/>
-<rect x="1056" y="130" width="600" height="280" rx="14" fill="#d9d2ee"/>
-<rect x="1050" y="124" width="600" height="280" rx="14" fill="#fff" stroke="#1d2733" stroke-width="2.2"/>
-<g transform="translate(1072,136) scale(1.05)" fill="none" stroke="#5b3fa0" stroke-width="2.6" stroke-linecap="round"><line x1="18" y1="3" x2="18" y2="9"/><circle cx="18" cy="2.5" r="2.5" fill="#5b3fa0" stroke="none"/><rect x="2" y="9" width="32" height="26" rx="7" fill="#fff"/><circle cx="12" cy="20" r="2.6" fill="#5b3fa0" stroke="none"/><circle cx="24" cy="20" r="2.6" fill="#5b3fa0" stroke="none"/><path d="M11 27 Q18 32 25 27"/></g>
-<text x="1122" y="170" font-size="30" font-weight="700" fill="#5b3fa0">LLM agent</text>
-<rect x="1072" y="190" width="556" height="60" rx="10" fill="#f6e6f0"/>
-<text x="1090" y="228" font-size="21" fill="#1d2733"><tspan font-weight="700">User: </tspan><tspan>compute </tspan><tspan font-style="italic">zT</tspan><tspan>(</tspan><tspan font-style="italic">n</tspan><tspan>, </tspan><tspan font-style="italic">T</tspan><tspan>) for this POSCAR.</tspan></text>
-<rect x="1072" y="262" width="556" height="126" rx="10" fill="#efebf9"/>
-<text x="1090" y="294" font-size="21" fill="#1d2733"><tspan font-weight="700">Agent: </tspan><tspan>plan for your review</tspan></text>
-<rect x="1088" y="312" width="104" height="32" rx="16" fill="#fff" stroke="#cfc6ea" stroke-width="1.5"/><circle cx="1105" cy="328" r="11" fill="#5b3fa0"/><text x="1105" y="333" font-size="14" font-weight="700" text-anchor="middle" fill="#fff">1</text><text x="1122" y="334" font-size="18" fill="#24313a">Relax</text>
-<rect x="1202" y="312" width="138" height="32" rx="16" fill="#fff" stroke="#cfc6ea" stroke-width="1.5"/><circle cx="1219" cy="328" r="11" fill="#5b3fa0"/><text x="1219" y="333" font-size="14" font-weight="700" text-anchor="middle" fill="#fff">2</text><text x="1236" y="334" font-size="18" fill="#24313a">Electrons</text>
-<rect x="1350" y="312" width="128" height="32" rx="16" fill="#fff" stroke="#cfc6ea" stroke-width="1.5"/><circle cx="1367" cy="328" r="11" fill="#5b3fa0"/><text x="1367" y="333" font-size="14" font-weight="700" text-anchor="middle" fill="#fff">3</text><text x="1384" y="334" font-size="18" fill="#24313a">Phonons</text>
-<rect x="1488" y="312" width="124" height="32" rx="16" fill="#fff" stroke="#cfc6ea" stroke-width="1.5"/><circle cx="1505" cy="328" r="11" fill="#5b3fa0"/><text x="1505" y="333" font-size="14" font-weight="700" text-anchor="middle" fill="#fff">4</text><text x="1522" y="334" font-size="18" fill="#24313a">Combine</text>
-<rect x="1506" y="352" width="106" height="28" rx="14" fill="#5b3fa0"/>
-<text x="1559" y="372" font-size="17" font-weight="700" text-anchor="middle" fill="#fff">Proceed</text>
-<g transform="translate(1838,176) scale(1.9)" fill="none" stroke="#1d2733" stroke-width="2.6"><circle cx="0" cy="-9" r="9"/><path d="M-15 16 C-15 3 15 3 15 16"/></g>
-<text x="1838" y="244" font-size="21" font-weight="700" text-anchor="middle" fill="#1d2733">researcher</text>
-<path d="M1772 284 H1666" fill="none" stroke="#3a4654" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#m-ink)"/>
-<text x="1719" y="274" font-size="17" text-anchor="middle" fill="#5b6673">task</text>
-<path d="M1666 326 H1772" fill="none" stroke="#3a4654" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#m-ink)"/>
-<text x="1719" y="350" font-size="17" text-anchor="middle" fill="#5b6673">report</text>
-<path d="M1838 372 V538" fill="none" stroke="#b8244a" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="6 6" marker-end="url(#m-crimson)"/>
-<text x="1826" y="468" font-size="18" text-anchor="end" fill="#b8244a">human approves</text>
-<path d="M1400 408 V541" fill="none" stroke="#5b3fa0" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#m-purple)" marker-start="url(#m-purple)"/>
-<rect x="1324.0" y="456" width="152" height="38" rx="19" fill="#fff" stroke="#5b3fa0" stroke-width="2.2"/>
-<text x="1400" y="482" font-size="19" font-weight="700" text-anchor="middle" fill="#5b3fa0">MCP server</text>
-<path d="M1590 408 V541" fill="none" stroke="#5b3fa0" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#m-purple)" marker-start="url(#m-purple)"/>
-<rect x="1524.0" y="456" width="132" height="38" rx="19" fill="#fff" stroke="#5b3fa0" stroke-width="2.2"/>
-<text x="1590" y="482" font-size="19" font-weight="700" text-anchor="middle" fill="#5b3fa0">agent CLI</text>
-<rect x="1050" y="545" width="890" height="74" rx="12" fill="#fff" stroke="#1d2733" stroke-width="2"/>
-<rect x="1064" y="532" width="132" height="24" rx="4" fill="#f7f8fa"/>
-<text x="1070" y="551" font-size="19" font-weight="700" fill="#b7791f">act gateway</text>
-<path d="M1347 556 V608" fill="none" stroke="#d0d6dd" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
-<path d="M1643 556 V608" fill="none" stroke="#d0d6dd" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
-<rect x="1162.0" y="556" width="72" height="26" rx="13" fill="#f1f3f5" stroke="#5b6673" stroke-width="2"/><text x="1198" y="575" font-size="17" font-weight="700" text-anchor="middle" fill="#5b6673">read</text><text x="1198" y="607" font-size="18" text-anchor="middle" fill="#24313a">runs directly</text>
-<rect x="1449.0" y="556" width="92" height="26" rx="13" fill="#fdf5e6" stroke="#b7791f" stroke-width="2"/><text x="1495" y="575" font-size="17" font-weight="700" text-anchor="middle" fill="#b7791f">mutate</text><text x="1495" y="607" font-size="18" text-anchor="middle" fill="#24313a">allowed, logged</text>
-<rect x="1720.0" y="556" width="124" height="26" rx="13" fill="#fcecea" stroke="#c0392b" stroke-width="2"/><text x="1782" y="575" font-size="17" font-weight="700" text-anchor="middle" fill="#c0392b">destructive</text><text x="1782" y="607" font-size="18" text-anchor="middle" fill="#24313a">human approval</text>
-<g transform="translate(1856,588) scale(0.85)"><path d="M4 9 V5 a6 6 0 0 1 12 0 V9" fill="none" stroke="#c0392b" stroke-width="2.6"/><rect x="1" y="9" width="18" height="14" rx="3" fill="#c0392b"/></g>
-<path d="M1494 619 V655" fill="none" stroke="#3a4654" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#m-ink)"/>
-<path d="M1306 716 L1196 768 L1166 856" fill="none" stroke="#4a5563" stroke-width="15" stroke-linecap="round" stroke-linejoin="round"/><circle cx="1306" cy="716" r="15" fill="#6b7785" stroke="#1d2733" stroke-width="2.5"/><circle cx="1196" cy="768" r="13" fill="#6b7785" stroke="#1d2733" stroke-width="2.5"/><circle cx="1166" cy="856" r="11" fill="#6b7785" stroke="#1d2733" stroke-width="2.5"/><path d="M1166 860 V876" fill="none" stroke="#4a5563" stroke-width="9" stroke-linecap="round" stroke-linejoin="round"/><path d="M1108 878 H1224" fill="none" stroke="#4a5563" stroke-width="9" stroke-linecap="round" stroke-linejoin="round"/><path d="M1108 878 L1086 900 L1092 922" fill="none" stroke="#4a5563" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"/><path d="M1224 878 L1246 900 L1240 922" fill="none" stroke="#4a5563" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"/>
-<path d="M1682 716 L1792 768 L1822 856" fill="none" stroke="#4a5563" stroke-width="15" stroke-linecap="round" stroke-linejoin="round"/><circle cx="1682" cy="716" r="15" fill="#6b7785" stroke="#1d2733" stroke-width="2.5"/><circle cx="1792" cy="768" r="13" fill="#6b7785" stroke="#1d2733" stroke-width="2.5"/><circle cx="1822" cy="856" r="11" fill="#6b7785" stroke="#1d2733" stroke-width="2.5"/><path d="M1822 860 V876" fill="none" stroke="#4a5563" stroke-width="9" stroke-linecap="round" stroke-linejoin="round"/><path d="M1764 878 H1880" fill="none" stroke="#4a5563" stroke-width="9" stroke-linecap="round" stroke-linejoin="round"/><path d="M1764 878 L1742 900 L1748 922" fill="none" stroke="#4a5563" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"/><path d="M1880 878 L1902 900 L1896 922" fill="none" stroke="#4a5563" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"/>
-<rect x="1314" y="660" width="360" height="112" rx="16" fill="#1d2733"/>
-<text x="1494" y="714" font-size="42" font-weight="700" text-anchor="middle" fill="#fff">autoZT</text>
-<g transform="translate(1349,744)" fill="none" stroke="#d9e3eb" stroke-width="2.2" stroke-linecap="round"><path d="M7 -5 A8 8 0 1 0 8 2"/><path d="M7 -10 V-4 H1"/></g>
-<text x="1366" y="750" font-size="17" fill="#d9e3eb">monitor · auto-advance · auto-resume</text>
-<rect x="1096" y="892" width="140" height="34" rx="8" fill="#fff" stroke="#5b3fa0" stroke-width="2.5"/>
-<text x="1166" y="915" font-size="17" font-weight="700" text-anchor="middle" fill="#5b3fa0">zt-dft-cpu</text>
-<rect x="1752" y="892" width="140" height="34" rx="8" fill="#fff" stroke="#5b3fa0" stroke-width="2.5"/>
-<text x="1822" y="915" font-size="17" font-weight="700" text-anchor="middle" fill="#5b3fa0">research_plan</text>
-<rect x="1050" y="948" width="390" height="162" rx="14" fill="#eef7f2" stroke="#238266" stroke-width="2"/>
-<rect x="1548" y="948" width="390" height="162" rx="14" fill="#f3f1f8" stroke="#5b3fa0" stroke-width="2"/>
-<rect x="1066" y="962" width="170" height="34" rx="8" fill="#fff" stroke="#8fb9a5" stroke-width="1.8"/><text x="1151.0" y="985" font-size="17" text-anchor="middle" fill="#24313a">kl-dft-cpu</text>
-<rect x="1254" y="962" width="170" height="34" rx="8" fill="#fff" stroke="#8fb9a5" stroke-width="1.8"/><text x="1339.0" y="985" font-size="17" text-anchor="middle" fill="#24313a">ke-dft-cpu</text>
-<rect x="1066" y="1008" width="170" height="34" rx="8" fill="#fff" stroke="#8fb9a5" stroke-width="1.8"/><text x="1151.0" y="1031" font-size="17" text-anchor="middle" fill="#24313a">phonon-mlff-gpu</text>
-<rect x="1254" y="1008" width="170" height="34" rx="8" fill="#fff" stroke="#8fb9a5" stroke-width="1.8"/><text x="1339.0" y="1031" font-size="17" text-anchor="middle" fill="#24313a">opt-mlff-gpu</text>
-<rect x="1066" y="1054" width="170" height="34" rx="8" fill="#fff" stroke="#8fb9a5" stroke-width="1.8"/><text x="1151.0" y="1077" font-size="17" text-anchor="middle" fill="#24313a">te-screen</text>
-<rect x="1254" y="1054" width="170" height="34" rx="8" fill="#fff" stroke="#8fb9a5" stroke-width="1.8"/><text x="1339.0" y="1077" font-size="17" font-style="italic" text-anchor="middle" fill="#5b6673">+ 14 more</text>
-<rect x="1564" y="962" width="170" height="34" rx="8" fill="#fff" stroke="#8a96a3" stroke-width="1.8"/><text x="1649.0" y="985" font-size="17" text-anchor="middle" fill="#24313a">get_progress</text>
-<rect x="1752" y="962" width="170" height="34" rx="8" fill="#fff" stroke="#8a96a3" stroke-width="1.8"/><text x="1837.0" y="985" font-size="17" text-anchor="middle" fill="#24313a">task_graph</text>
-<rect x="1564" y="1008" width="170" height="34" rx="8" fill="#fff" stroke="#b7791f" stroke-width="1.8"/><text x="1649.0" y="1031" font-size="17" text-anchor="middle" fill="#24313a">start_step</text>
-<rect x="1752" y="1008" width="170" height="34" rx="8" fill="#fff" stroke="#b7791f" stroke-width="1.8"/><text x="1837.0" y="1031" font-size="17" text-anchor="middle" fill="#24313a">run_ready_steps</text>
-<rect x="1564" y="1054" width="170" height="34" rx="8" fill="#fff" stroke="#c0392b" stroke-width="1.8"/><text x="1649.0" y="1077" font-size="17" text-anchor="middle" fill="#24313a">approve_request</text>
-<rect x="1752" y="1054" width="170" height="34" rx="8" fill="#fff" stroke="#b8b0d4" stroke-width="1.8"/><text x="1837.0" y="1077" font-size="17" font-style="italic" text-anchor="middle" fill="#5b6673">+ more</text>
-<text x="1245" y="1142" font-size="24" font-weight="700" text-anchor="middle" fill="#238266">Skill pool</text>
-<text x="1245" y="1168" font-size="17" text-anchor="middle" fill="#5b6673">computational workflows (skill.yaml)</text>
-<text x="1743" y="1142" font-size="24" font-weight="700" text-anchor="middle" fill="#5b3fa0">Tool pool</text>
-<text x="1743" y="1168" font-size="17" text-anchor="middle" fill="#5b6673">MCP tools / CLI commands</text>
-<path d="M1494 776 V1204" fill="none" stroke="#3a4654" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#m-ink)" marker-start="url(#m-ink)"/>
-<rect x="1050" y="1210" width="890" height="170" rx="14" fill="#fff" stroke="#c7d0da" stroke-width="2"/>
-<rect x="1064" y="1197" width="112" height="24" rx="4" fill="#f7f8fa"/>
-<text x="1070" y="1216" font-size="19" font-weight="700" fill="#5b6673">compute</text>
-<g transform="translate(1168,1238)" fill="#fff" stroke="#1d2733" stroke-width="2.4"><rect x="0" y="0" width="60" height="16" rx="3"/><line x1="10" y1="8" x2="30" y2="8"/><circle cx="48" cy="8" r="2.4" fill="#1d2733" stroke="none"/><rect x="0" y="20" width="60" height="16" rx="3"/><line x1="10" y1="28" x2="30" y2="28"/><circle cx="48" cy="28" r="2.4" fill="#1d2733" stroke="none"/><rect x="0" y="40" width="60" height="16" rx="3"/><line x1="10" y1="48" x2="30" y2="48"/><circle cx="48" cy="48" r="2.4" fill="#1d2733" stroke="none"/></g>
-<text x="1198" y="1330" font-size="22" font-weight="700" text-anchor="middle" fill="#1d2733">CPU</text>
-<text x="1198" y="1356" font-size="17" text-anchor="middle" fill="#5b6673">SLURM</text>
-<g transform="translate(1464,1238)" fill="#fff" stroke="#1d2733" stroke-width="2.4"><rect x="0" y="0" width="60" height="16" rx="3"/><line x1="10" y1="8" x2="30" y2="8"/><circle cx="48" cy="8" r="2.4" fill="#1d2733" stroke="none"/><rect x="0" y="20" width="60" height="16" rx="3"/><line x1="10" y1="28" x2="30" y2="28"/><circle cx="48" cy="28" r="2.4" fill="#1d2733" stroke="none"/><rect x="0" y="40" width="60" height="16" rx="3"/><line x1="10" y1="48" x2="30" y2="48"/><circle cx="48" cy="48" r="2.4" fill="#1d2733" stroke="none"/></g>
-<text x="1494" y="1330" font-size="22" font-weight="700" text-anchor="middle" fill="#1d2733">GPU</text>
-<text x="1494" y="1356" font-size="17" text-anchor="middle" fill="#5b6673">SLURM / no-SLURM host</text>
-<g transform="translate(1760,1238)" fill="#fff" stroke="#1d2733" stroke-width="2.4"><rect x="0" y="0" width="60" height="16" rx="3"/><line x1="10" y1="8" x2="30" y2="8"/><circle cx="48" cy="8" r="2.4" fill="#1d2733" stroke="none"/><rect x="0" y="20" width="60" height="16" rx="3"/><line x1="10" y1="28" x2="30" y2="28"/><circle cx="48" cy="28" r="2.4" fill="#1d2733" stroke="none"/><rect x="0" y="40" width="60" height="16" rx="3"/><line x1="10" y1="48" x2="30" y2="48"/><circle cx="48" cy="48" r="2.4" fill="#1d2733" stroke="none"/></g>
-<text x="1790" y="1330" font-size="22" font-weight="700" text-anchor="middle" fill="#1d2733">local</text>
-<text x="1790" y="1356" font-size="17" text-anchor="middle" fill="#5b6673">this machine</text>
+<rect x="1050" y="127" width="904" height="668" rx="18" fill="#ddd8ec"/>
+<rect x="1040" y="116" width="904" height="668" rx="18" fill="#fcfbff" stroke="#b4a9d6" stroke-width="2"/>
+<text x="1062" y="156" font-size="26" font-weight="700" fill="#5b3fa0">AutoZT agent interface</text>
+<rect x="1060" y="196" width="448" height="444" rx="12" fill="#fff" stroke="#a99ccf" stroke-width="1.8" stroke-dasharray="6 5"/>
+<rect x="1076" y="182" width="132" height="28" rx="14" fill="#fff" stroke="#5b3fa0" stroke-width="2"/>
+<text x="1142" y="202" font-size="16" font-weight="700" text-anchor="middle" fill="#5b3fa0">MCP server</text>
+<rect x="1218" y="182" width="112" height="28" rx="14" fill="#fff" stroke="#5b3fa0" stroke-width="2"/>
+<text x="1274" y="202" font-size="16" font-weight="700" text-anchor="middle" fill="#5b3fa0">agent CLI</text>
+<text x="1078" y="238" font-size="15" fill="#5b6673">shared skill contracts, state and action gateway</text>
+<rect x="1076" y="254" width="416" height="32" rx="6" fill="#f8e0d1"/>
+<text x="1090" y="275" font-size="16" font-weight="700" fill="#7a3413">Discovery</text>
+<text x="1196" y="275" font-size="15" fill="#3b2a22">skill listing and contract lookup</text>
+<rect x="1076" y="294" width="416" height="32" rx="6" fill="#f8e0d1"/>
+<text x="1090" y="315" font-size="16" font-weight="700" fill="#7a3413">Planning</text>
+<text x="1196" y="315" font-size="15" fill="#3b2a22">research plan and preflight checks</text>
+<rect x="1076" y="334" width="416" height="32" rx="6" fill="#f8e0d1"/>
+<text x="1090" y="355" font-size="16" font-weight="700" fill="#7a3413">Execution</text>
+<text x="1196" y="355" font-size="15" fill="#3b2a22">inspection; dry run before execution</text>
+<rect x="1076" y="374" width="416" height="32" rx="6" fill="#f8e0d1"/>
+<text x="1090" y="395" font-size="16" font-weight="700" fill="#7a3413">Reporting</text>
+<text x="1196" y="395" font-size="15" fill="#3b2a22">results with units and provenance</text>
+<rect x="1076" y="420" width="416" height="118" rx="9" fill="#ebf5e6" stroke="#3d8b3d" stroke-width="2"/>
+<text x="1090" y="447" font-size="19" font-weight="700" fill="#2b6a2b">Skill contract</text>
+<text x="1478" y="447" font-size="14" font-style="italic" text-anchor="end" fill="#2b6a2b">skill.yaml</text>
+<rect x="1090" y="460" width="134" height="28" rx="14" fill="#fff" stroke="#3d8b3d" stroke-width="1.5"/>
+<text x="1157.0" y="479" font-size="14" font-weight="700" text-anchor="middle" fill="#2b6a2b">inputs / outputs</text>
+<rect x="1234" y="460" width="118" height="28" rx="14" fill="#fff" stroke="#3d8b3d" stroke-width="1.5"/>
+<text x="1293.0" y="479" font-size="14" font-weight="700" text-anchor="middle" fill="#2b6a2b">steps &amp; codes</text>
+<rect x="1362" y="460" width="98" height="28" rx="14" fill="#fff" stroke="#3d8b3d" stroke-width="1.5"/>
+<text x="1411.0" y="479" font-size="14" font-weight="700" text-anchor="middle" fill="#2b6a2b">validators</text>
+<rect x="1090" y="498" width="104" height="28" rx="14" fill="#fff" stroke="#3d8b3d" stroke-width="1.5"/>
+<text x="1142.0" y="517" font-size="14" font-weight="700" text-anchor="middle" fill="#2b6a2b">parameters</text>
+<rect x="1204" y="498" width="110" height="28" rx="14" fill="#fff" stroke="#3d8b3d" stroke-width="1.5"/>
+<text x="1259.0" y="517" font-size="14" font-weight="700" text-anchor="middle" fill="#2b6a2b">corrections</text>
+<text x="1326" y="517" font-size="14" font-style="italic" fill="#2b6a2b">one folder per skill</text>
+<rect x="1076" y="552" width="416" height="32" rx="6" fill="#e1ecf8"/>
+<text x="1090" y="573" font-size="16" font-weight="700" fill="#1f4e7a">Prompts</text>
+<text x="1196" y="573" font-size="15" fill="#24313a">validated zT workflow, failure triage, …</text>
+<rect x="1078" y="602" width="16" height="16" rx="3" fill="#f8e0d1"/>
+<text x="1100" y="615" font-size="15" fill="#5b6673">tools</text>
+<rect x="1160" y="602" width="16" height="16" rx="3" fill="#ebf5e6" stroke="#3d8b3d" stroke-width="1.5"/>
+<text x="1182" y="615" font-size="15" fill="#5b6673">resource</text>
+<rect x="1262" y="602" width="16" height="16" rx="3" fill="#e1ecf8"/>
+<text x="1284" y="615" font-size="15" fill="#5b6673">prompts</text>
+<rect x="1574" y="204" width="352" height="420" rx="14" fill="#fff" stroke="#c9c2e2" stroke-width="1.5"/>
+<rect x="1566" y="196" width="352" height="420" rx="14" fill="#fff" stroke="#1d2733" stroke-width="2"/>
+<g transform="translate(1584,208) scale(1.0)" fill="none" stroke="#5b3fa0" stroke-width="2.6" stroke-linecap="round"><line x1="18" y1="3" x2="18" y2="9"/><circle cx="18" cy="2.5" r="2.5" fill="#5b3fa0" stroke="none"/><rect x="2" y="9" width="32" height="26" rx="7" fill="#fff"/><circle cx="12" cy="20" r="2.6" fill="#5b3fa0" stroke="none"/><circle cx="24" cy="20" r="2.6" fill="#5b3fa0" stroke="none"/><path d="M11 27 Q18 32 25 27"/></g>
+<text x="1630" y="240" font-size="26" font-weight="700" fill="#5b3fa0">LLM agent</text>
+<rect x="1584" y="260" width="316" height="66" rx="10" fill="#f6e6f0"/>
+<text x="1598" y="288" font-size="18" fill="#1d2733"><tspan font-weight="700">User: </tspan><tspan>compute </tspan><tspan font-style="italic">zT</tspan><tspan>(</tspan><tspan font-style="italic">n</tspan><tspan>, </tspan><tspan font-style="italic">T</tspan><tspan>)</tspan></text>
+<text x="1598" y="314" font-size="18" fill="#1d2733">for this 2D POSCAR.</text>
+<rect x="1584" y="338" width="316" height="264" rx="10" fill="#efebf9"/>
+<text x="1598" y="366" font-size="18" fill="#1d2733"><tspan font-weight="700">Agent: </tspan><tspan>plan for your review</tspan></text>
+<rect x="1596" y="380" width="292" height="162" rx="8" fill="#fff" stroke="#d8d0ee" stroke-width="1.5"/>
+<circle cx="1614" cy="404" r="10" fill="#5b3fa0"/>
+<text x="1614" y="408.5" font-size="13" font-weight="700" text-anchor="middle" fill="#fff">1</text>
+<text x="1632" y="410" font-size="16" fill="#1d2733">Relax structure</text>
+<text x="1878" y="410" font-size="15" text-anchor="end" fill="#5b6673"><tspan>CONTCAR</tspan></text>
+<circle cx="1614" cy="442" r="10" fill="#5b3fa0"/>
+<text x="1614" y="446.5" font-size="13" font-weight="700" text-anchor="middle" fill="#fff">2</text>
+<text x="1632" y="448" font-size="16" fill="#1d2733">Electron transport</text>
+<text x="1878" y="448" font-size="15" text-anchor="end" fill="#5b6673"><tspan>S, σ, κ</tspan><tspan dy="4.5" font-size="9.9">e</tspan></text>
+<circle cx="1614" cy="480" r="10" fill="#5b3fa0"/>
+<text x="1614" y="484.5" font-size="13" font-weight="700" text-anchor="middle" fill="#fff">3</text>
+<text x="1632" y="486" font-size="16" fill="#1d2733">Phonon transport</text>
+<text x="1878" y="486" font-size="15" text-anchor="end" fill="#5b6673"><tspan>κ</tspan><tspan dy="4.5" font-size="9.9">L</tspan></text>
+<circle cx="1614" cy="518" r="10" fill="#5b3fa0"/>
+<text x="1614" y="522.5" font-size="13" font-weight="700" text-anchor="middle" fill="#fff">4</text>
+<text x="1632" y="524" font-size="16" fill="#1d2733">Combine</text>
+<text x="1878" y="524" font-size="15" text-anchor="end" fill="#5b6673"><tspan>zT(n, T)</tspan></text>
+<rect x="1790" y="556" width="98" height="30" rx="15" fill="#5b3fa0"/>
+<text x="1839" y="576" font-size="16" font-weight="700" text-anchor="middle" fill="#fff">Proceed</text>
+<path d="M1562 352 H1512" fill="none" stroke="#5b3fa0" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#m-purple)"/>
+<text x="1537" y="344" font-size="14" text-anchor="middle" fill="#5b3fa0">call</text>
+<path d="M1512 396 H1562" fill="none" stroke="#5b3fa0" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#m-purple)"/>
+<text x="1537" y="416" font-size="14" text-anchor="middle" fill="#5b3fa0">result</text>
+<path d="M1284 642 V676" fill="none" stroke="#5b3fa0" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#m-purple)"/>
+<path d="M1868 632 V676" fill="none" stroke="#b8244a" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="5 5" marker-end="url(#m-crimson)"/>
+<text x="1856" y="660" font-size="14" text-anchor="end" fill="#b8244a">human approves</text>
+<rect x="1060" y="680" width="868" height="78" rx="12" fill="#fff" stroke="#1d2733" stroke-width="2"/>
+<rect x="1074" y="668" width="124" height="24" rx="4" fill="#fcfbff"/>
+<text x="1080" y="686" font-size="18" font-weight="700" fill="#b7791f">act gateway</text>
+<path d="M1349 692 V748" fill="none" stroke="#d0d6dd" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M1639 692 V748" fill="none" stroke="#d0d6dd" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+<rect x="1170.0" y="692" width="70" height="26" rx="13" fill="#f1f3f5" stroke="#5b6673" stroke-width="2"/><text x="1205" y="711" font-size="16" font-weight="700" text-anchor="middle" fill="#5b6673">read</text><text x="1205" y="743" font-size="17" text-anchor="middle" fill="#24313a">runs directly</text>
+<rect x="1449.0" y="692" width="90" height="26" rx="13" fill="#fdf5e6" stroke="#b7791f" stroke-width="2"/><text x="1494" y="711" font-size="16" font-weight="700" text-anchor="middle" fill="#b7791f">mutate</text><text x="1494" y="743" font-size="17" text-anchor="middle" fill="#24313a">allowed, logged</text>
+<rect x="1717.0" y="692" width="122" height="26" rx="13" fill="#fcecea" stroke="#c0392b" stroke-width="2"/><text x="1778" y="711" font-size="16" font-weight="700" text-anchor="middle" fill="#c0392b">destructive</text><text x="1778" y="743" font-size="17" text-anchor="middle" fill="#24313a">human approval</text>
+<g transform="translate(1846,726) scale(0.8)"><path d="M4 9 V5 a6 6 0 0 1 12 0 V9" fill="none" stroke="#c0392b" stroke-width="2.6"/><rect x="1" y="9" width="18" height="14" rx="3" fill="#c0392b"/></g>
+<path d="M1494 786 V823" fill="none" stroke="#3a4654" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#m-ink)"/>
+<text x="1508" y="812" font-size="15" fill="#5b6673">calls</text>
+<rect x="1050" y="1034" width="420" height="140" rx="14" fill="#eef7f2" stroke="#238266" stroke-width="2"/>
+<rect x="1518" y="1034" width="420" height="140" rx="14" fill="#eff1f4" stroke="#5b6673" stroke-width="2"/>
+<rect x="1066" y="1052" width="120" height="44" rx="8" fill="#fff" stroke="#5b3fa0" stroke-width="2.6"/><text x="1126" y="1079" font-size="14" font-weight="700" text-anchor="middle" fill="#5b3fa0">zt-dft-cpu</text>
+<rect x="1200" y="1052" width="120" height="44" rx="8" fill="#fff" stroke="#8fb9a5" stroke-width="1.6"/><text x="1260" y="1079" font-size="14" text-anchor="middle" fill="#24313a">ke-dft-cpu</text>
+<rect x="1334" y="1052" width="120" height="44" rx="8" fill="#fff" stroke="#8fb9a5" stroke-width="1.6"/><text x="1394" y="1079" font-size="14" text-anchor="middle" fill="#24313a">kl-dft-cpu</text>
+<rect x="1066" y="1110" width="120" height="44" rx="8" fill="#fff" stroke="#8fb9a5" stroke-width="1.6"/><text x="1126" y="1137" font-size="14" text-anchor="middle" fill="#24313a">phonon-mlff-gpu</text>
+<rect x="1200" y="1110" width="120" height="44" rx="8" fill="#fff" stroke="#8fb9a5" stroke-width="1.6"/><text x="1260" y="1137" font-size="14" text-anchor="middle" fill="#24313a">fit-fc-thermal</text>
+<rect x="1334" y="1110" width="120" height="44" rx="8" fill="#fff" stroke="#8fb9a5" stroke-width="1.6" stroke-dasharray="5 4"/><text x="1394" y="1139" font-size="22" font-weight="700" text-anchor="middle" fill="#5b6673">…</text>
+<rect x="1534" y="1052" width="120" height="44" rx="8" fill="#fff" stroke="#a3adb8" stroke-width="1.6"/><text x="1594" y="1079" font-size="14" text-anchor="middle" fill="#24313a">AMSET</text>
+<rect x="1668" y="1052" width="120" height="44" rx="8" fill="#fff" stroke="#a3adb8" stroke-width="1.6"/><text x="1728" y="1079" font-size="14" text-anchor="middle" fill="#24313a">phono3py</text>
+<rect x="1802" y="1052" width="120" height="44" rx="8" fill="#fff" stroke="#5b3fa0" stroke-width="2.6"/><text x="1862" y="1079" font-size="14" font-weight="700" text-anchor="middle" fill="#5b3fa0">VASP</text>
+<rect x="1534" y="1110" width="120" height="44" rx="8" fill="#fff" stroke="#a3adb8" stroke-width="1.6"/><text x="1594" y="1137" font-size="14" text-anchor="middle" fill="#24313a">MACE</text>
+<rect x="1668" y="1110" width="120" height="44" rx="8" fill="#fff" stroke="#a3adb8" stroke-width="1.6"/><text x="1728" y="1137" font-size="14" text-anchor="middle" fill="#24313a">Pheasy</text>
+<rect x="1802" y="1110" width="120" height="44" rx="8" fill="#fff" stroke="#a3adb8" stroke-width="1.6" stroke-dasharray="5 4"/><text x="1862" y="1139" font-size="22" font-weight="700" text-anchor="middle" fill="#5b6673">…</text>
+<rect x="1308" y="862" width="18" height="30" rx="4" fill="#4a5563"/><path d="M1314 877 L1196 930 L1126 1006" fill="none" stroke="#4a5563" stroke-width="15" stroke-linecap="round" stroke-linejoin="round"/><circle cx="1196" cy="930" r="14" fill="#6b7785" stroke="#1d2733" stroke-width="2.5"/><path d="M1126 1004 V1020" fill="none" stroke="#4a5563" stroke-width="9" stroke-linecap="round" stroke-linejoin="round"/><path d="M1060 1022 H1192" fill="none" stroke="#4a5563" stroke-width="9" stroke-linecap="round" stroke-linejoin="round"/><path d="M1060 1022 L1056 1050 L1064 1068" fill="none" stroke="#4a5563" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"/><path d="M1192 1022 L1196 1050 L1188 1068" fill="none" stroke="#4a5563" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"/>
+<rect x="1662" y="862" width="18" height="30" rx="4" fill="#4a5563"/><path d="M1674 877 L1792 930 L1862 1006" fill="none" stroke="#4a5563" stroke-width="15" stroke-linecap="round" stroke-linejoin="round"/><circle cx="1792" cy="930" r="14" fill="#6b7785" stroke="#1d2733" stroke-width="2.5"/><path d="M1862 1004 V1020" fill="none" stroke="#4a5563" stroke-width="9" stroke-linecap="round" stroke-linejoin="round"/><path d="M1796 1022 H1928" fill="none" stroke="#4a5563" stroke-width="9" stroke-linecap="round" stroke-linejoin="round"/><path d="M1796 1022 L1792 1050 L1800 1068" fill="none" stroke="#4a5563" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"/><path d="M1928 1022 L1932 1050 L1924 1068" fill="none" stroke="#4a5563" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"/>
+<rect x="1324" y="828" width="340" height="100" rx="16" fill="#1d2733"/>
+<text x="1494" y="876" font-size="40" font-weight="700" text-anchor="middle" fill="#fff">AutoZT</text>
+<g transform="translate(1358,906)" fill="none" stroke="#d9e3eb" stroke-width="2.2" stroke-linecap="round"><path d="M7 -5 A8 8 0 1 0 8 2"/><path d="M7 -10 V-4 H1"/></g>
+<text x="1374" y="912" font-size="16" fill="#d9e3eb">monitor · auto-advance · auto-resume</text>
+<text x="1260" y="1204" font-size="22" font-weight="700" text-anchor="middle" fill="#238266">Skill pool</text>
+<text x="1260" y="1228" font-size="15" text-anchor="middle" fill="#5b6673">20 skills · details in Table 1</text>
+<text x="1728" y="1204" font-size="22" font-weight="700" text-anchor="middle" fill="#1d2733">Tool pool</text>
+<text x="1728" y="1228" font-size="15" text-anchor="middle" fill="#5b6673">computational engines · Table 1</text>
+<path d="M1494 932 V1266" fill="none" stroke="#3a4654" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#m-ink)" marker-start="url(#m-ink)"/>
+<rect x="1060" y="1272" width="868" height="96" rx="12" fill="#fff" stroke="#c7d0da" stroke-width="2"/>
+<rect x="1074" y="1260" width="98" height="24" rx="4" fill="#f7f8fa"/>
+<text x="1080" y="1278" font-size="18" font-weight="700" fill="#5b6673">compute</text>
+<g transform="translate(1100,1298) scale(0.8)"><g transform="translate(0,0)" fill="#fff" stroke="#1d2733" stroke-width="2.4"><rect x="0" y="0" width="60" height="16" rx="3"/><line x1="10" y1="8" x2="30" y2="8"/><circle cx="48" cy="8" r="2.4" fill="#1d2733" stroke="none"/><rect x="0" y="20" width="60" height="16" rx="3"/><line x1="10" y1="28" x2="30" y2="28"/><circle cx="48" cy="28" r="2.4" fill="#1d2733" stroke="none"/><rect x="0" y="40" width="60" height="16" rx="3"/><line x1="10" y1="48" x2="30" y2="48"/><circle cx="48" cy="48" r="2.4" fill="#1d2733" stroke="none"/></g></g>
+<text x="1164" y="1316" font-size="20" font-weight="700" fill="#1d2733">CPU</text>
+<text x="1164" y="1341" font-size="15" fill="#5b6673">SLURM</text>
+<g transform="translate(1376,1298) scale(0.8)"><g transform="translate(0,0)" fill="#fff" stroke="#1d2733" stroke-width="2.4"><rect x="0" y="0" width="60" height="16" rx="3"/><line x1="10" y1="8" x2="30" y2="8"/><circle cx="48" cy="8" r="2.4" fill="#1d2733" stroke="none"/><rect x="0" y="20" width="60" height="16" rx="3"/><line x1="10" y1="28" x2="30" y2="28"/><circle cx="48" cy="28" r="2.4" fill="#1d2733" stroke="none"/><rect x="0" y="40" width="60" height="16" rx="3"/><line x1="10" y1="48" x2="30" y2="48"/><circle cx="48" cy="48" r="2.4" fill="#1d2733" stroke="none"/></g></g>
+<text x="1440" y="1316" font-size="20" font-weight="700" fill="#1d2733">GPU</text>
+<text x="1440" y="1341" font-size="15" fill="#5b6673">SLURM / no-SLURM host</text>
+<g transform="translate(1690,1298) scale(0.8)"><g transform="translate(0,0)" fill="#fff" stroke="#1d2733" stroke-width="2.4"><rect x="0" y="0" width="60" height="16" rx="3"/><line x1="10" y1="8" x2="30" y2="8"/><circle cx="48" cy="8" r="2.4" fill="#1d2733" stroke="none"/><rect x="0" y="20" width="60" height="16" rx="3"/><line x1="10" y1="28" x2="30" y2="28"/><circle cx="48" cy="28" r="2.4" fill="#1d2733" stroke="none"/><rect x="0" y="40" width="60" height="16" rx="3"/><line x1="10" y1="48" x2="30" y2="48"/><circle cx="48" cy="48" r="2.4" fill="#1d2733" stroke="none"/></g></g>
+<text x="1754" y="1316" font-size="20" font-weight="700" fill="#1d2733">local</text>
+<text x="1754" y="1341" font-size="15" fill="#5b6673">this machine</text>
 </svg>
