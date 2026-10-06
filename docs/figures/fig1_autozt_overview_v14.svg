@@ -1,0 +1,343 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="2000" height="1440" viewBox="0 0 2000 1440" font-family="Arial, Helvetica, 'Liberation Sans', sans-serif">
+<defs>
+<marker id="m-ink" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="12" markerHeight="12" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path d="M0,0.5 L10,5 L0,9.5 z" fill="#3a4654"/></marker>
+<marker id="m-blue" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="12" markerHeight="12" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path d="M0,0.5 L10,5 L0,9.5 z" fill="#2f5fa7"/></marker>
+<marker id="m-orange" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="12" markerHeight="12" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path d="M0,0.5 L10,5 L0,9.5 z" fill="#b8660f"/></marker>
+<marker id="m-green" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="12" markerHeight="12" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path d="M0,0.5 L10,5 L0,9.5 z" fill="#238266"/></marker>
+<marker id="m-purple" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="12" markerHeight="12" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path d="M0,0.5 L10,5 L0,9.5 z" fill="#5b3fa0"/></marker>
+<marker id="m-crimson" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="12" markerHeight="12" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path d="M0,0.5 L10,5 L0,9.5 z" fill="#b8244a"/></marker>
+<marker id="m-red" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="12" markerHeight="12" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path d="M0,0.5 L10,5 L0,9.5 z" fill="#c0392b"/></marker>
+</defs>
+<rect width="2000" height="1440" fill="#ffffff"/>
+<text x="34" y="72" font-size="42" font-weight="700" fill="#1d2733">a</text>
+<text x="80" y="72" font-size="34" font-weight="700" fill="#1d2733">From one POSCAR to zT(n, T)</text>
+<text x="1022" y="72" font-size="42" font-weight="700" fill="#1d2733">c</text>
+<text x="1068" y="72" font-size="34" font-weight="700" fill="#1d2733">LLM operates AutoZT through MCP / CLI</text>
+<text x="34" y="604" font-size="42" font-weight="700" fill="#1d2733">b</text>
+<text x="80" y="604" font-size="34" font-weight="700" fill="#1d2733">One workflow for 3D and 2D materials</text>
+<rect x="34" y="98" width="946" height="440" rx="16" fill="#f7f8fa" stroke="#d6dce3" stroke-width="2"/>
+<text x="122" y="148" font-size="22" font-weight="700" text-anchor="middle" fill="#1d2733">POSCAR</text>
+<path d="M74 160 H148 L170 182 V272 H74 Z" fill="#fff" stroke="#1d2733" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M148 160 V182 H170" fill="none" stroke="#1d2733" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+<line x1="122.0" y1="198.0" x2="141.1" y2="209.0" stroke="#8aa0c0" stroke-width="2"/>
+<line x1="141.1" y1="209.0" x2="141.1" y2="231.0" stroke="#8aa0c0" stroke-width="2"/>
+<line x1="141.1" y1="231.0" x2="122.0" y2="242.0" stroke="#8aa0c0" stroke-width="2"/>
+<line x1="122.0" y1="242.0" x2="102.9" y2="231.0" stroke="#8aa0c0" stroke-width="2"/>
+<line x1="102.9" y1="231.0" x2="102.9" y2="209.0" stroke="#8aa0c0" stroke-width="2"/>
+<line x1="102.9" y1="209.0" x2="122.0" y2="198.0" stroke="#8aa0c0" stroke-width="2"/>
+<line x1="122.0" y1="220.0" x2="122.0" y2="198.0" stroke="#8aa0c0" stroke-width="2"/>
+<line x1="122.0" y1="220.0" x2="141.1" y2="231.0" stroke="#8aa0c0" stroke-width="2"/>
+<line x1="122.0" y1="220.0" x2="102.9" y2="231.0" stroke="#8aa0c0" stroke-width="2"/>
+<circle cx="122.0" cy="198.0" r="5.2" fill="#d9534f"/>
+<circle cx="141.1" cy="209.0" r="5.2" fill="#3b6fc4"/>
+<circle cx="141.1" cy="231.0" r="5.2" fill="#d9534f"/>
+<circle cx="122.0" cy="242.0" r="5.2" fill="#3b6fc4"/>
+<circle cx="102.9" cy="231.0" r="5.2" fill="#d9534f"/>
+<circle cx="102.9" cy="209.0" r="5.2" fill="#3b6fc4"/>
+<circle cx="122.0" cy="220.0" r="5.2" fill="#3b6fc4"/>
+<path d="M122 274 V338" fill="none" stroke="#238266" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#m-green)"/>
+<rect x="58" y="344" width="128" height="88" rx="10" fill="#eef7f2" stroke="#238266" stroke-width="2.5"/>
+<text x="122" y="380" font-size="21" font-weight="700" text-anchor="middle" fill="#238266">Dimension</text>
+<text x="122" y="413" font-size="19" text-anchor="middle" fill="#24313a">0D / 2D / 3D</text>
+<path d="M186 388 H198 V309 H209" fill="none" stroke="#3a4654" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#m-ink)"/>
+<rect x="212" y="264" width="146" height="90" rx="10" fill="#fff" stroke="#1d2733" stroke-width="2.5"/>
+<text x="285" y="302" font-size="23" font-weight="700" text-anchor="middle" fill="#1d2733">Relaxation</text>
+<text x="285" y="332" font-size="18" text-anchor="middle" fill="#5b6673">VASP / MLIP</text>
+<g transform="translate(358,264)"><circle r="13" fill="#3a4654" stroke="#fff" stroke-width="2.5"/><path d="M-5.9 0.5 L-1.3 4.7 L6.5 -4.4" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></g>
+<path d="M358 299 H380 V198 H399" fill="none" stroke="#2f5fa7" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#m-blue)"/>
+<path d="M358 319 H380 V420 H399" fill="none" stroke="#b8660f" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#m-orange)"/>
+<rect x="402" y="140" width="290" height="116" rx="10" fill="#edf3fc" stroke="#2f5fa7" stroke-width="2.5"/>
+<text x="422" y="178" font-size="24" font-weight="700" fill="#1f4e9a">Electron transport</text>
+<text x="422" y="210" font-size="19" fill="#24313a">bands + scattering inputs</text>
+<text x="422" y="240" font-size="19" fill="#24313a"><tspan>AMSET  →  σ, S, κ</tspan><tspan dy="5.7" font-size="12.5">e</tspan></text>
+<g transform="translate(692,140)"><circle r="13" fill="#3a4654" stroke="#fff" stroke-width="2.5"/><path d="M-5.9 0.5 L-1.3 4.7 L6.5 -4.4" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></g>
+<rect x="402" y="362" width="290" height="116" rx="10" fill="#fdf3e7" stroke="#b8660f" stroke-width="2.5"/>
+<text x="422" y="400" font-size="24" font-weight="700" fill="#a3570a">Phonon transport</text>
+<text x="422" y="432" font-size="19" fill="#24313a">MLIP screen → DFT FCs</text>
+<text x="422" y="462" font-size="19" fill="#24313a"><tspan>phono3py / ShengBTE  →  κ</tspan><tspan dy="5.7" font-size="12.5">L</tspan></text>
+<g transform="translate(692,362)"><circle r="13" fill="#3a4654" stroke="#fff" stroke-width="2.5"/><path d="M-5.9 0.5 L-1.3 4.7 L6.5 -4.4" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></g>
+<path d="M692 198 H721" fill="none" stroke="#2f5fa7" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#m-blue)"/>
+<path d="M692 420 H721" fill="none" stroke="#b8660f" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#m-orange)"/>
+<rect x="724" y="128" width="232" height="362" rx="12" fill="#fcf0f3" stroke="#b8244a" stroke-width="2.5"/>
+<text x="840" y="168" font-size="27" font-weight="700" text-anchor="middle" fill="#b8244a">zT(n, T)</text>
+<text x="742" y="252" font-size="25" font-style="italic" fill="#1d2733">zT =</text>
+<text x="880" y="232" font-size="25" font-style="italic" text-anchor="middle" fill="#1d2733"><tspan>S</tspan><tspan dy="-10.5" font-size="16.5">2</tspan><tspan dy="10.5">σT</tspan></text>
+<path d="M824 244 H938" fill="none" stroke="#1d2733" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="880" y="278" font-size="25" font-style="italic" text-anchor="middle" fill="#1d2733"><tspan>κ</tspan><tspan dy="7.5" font-size="16.5">e</tspan><tspan dy="-7.5"> + κ</tspan><tspan dy="7.5" font-size="16.5">L</tspan></text>
+<rect x="800" y="312" width="20.5" height="20.5" fill="#eeb2c6"/>
+<rect x="822" y="312" width="20.5" height="20.5" fill="#d16388"/>
+<rect x="844" y="312" width="20.5" height="20.5" fill="#b23c66"/>
+<rect x="866" y="312" width="20.5" height="20.5" fill="#8a1d46"/>
+<rect x="888" y="312" width="20.5" height="20.5" fill="#b23c66"/>
+<rect x="910" y="312" width="20.5" height="20.5" fill="#e38aa8"/>
+<rect x="800" y="334" width="20.5" height="20.5" fill="#eeb2c6"/>
+<rect x="822" y="334" width="20.5" height="20.5" fill="#e38aa8"/>
+<rect x="844" y="334" width="20.5" height="20.5" fill="#d16388"/>
+<rect x="866" y="334" width="20.5" height="20.5" fill="#b23c66"/>
+<rect x="888" y="334" width="20.5" height="20.5" fill="#d16388"/>
+<rect x="910" y="334" width="20.5" height="20.5" fill="#e38aa8"/>
+<rect x="800" y="356" width="20.5" height="20.5" fill="#f6d3de"/>
+<rect x="822" y="356" width="20.5" height="20.5" fill="#e38aa8"/>
+<rect x="844" y="356" width="20.5" height="20.5" fill="#d16388"/>
+<rect x="866" y="356" width="20.5" height="20.5" fill="#d16388"/>
+<rect x="888" y="356" width="20.5" height="20.5" fill="#e38aa8"/>
+<rect x="910" y="356" width="20.5" height="20.5" fill="#eeb2c6"/>
+<rect x="800" y="378" width="20.5" height="20.5" fill="#f6d3de"/>
+<rect x="822" y="378" width="20.5" height="20.5" fill="#eeb2c6"/>
+<rect x="844" y="378" width="20.5" height="20.5" fill="#e38aa8"/>
+<rect x="866" y="378" width="20.5" height="20.5" fill="#e38aa8"/>
+<rect x="888" y="378" width="20.5" height="20.5" fill="#e38aa8"/>
+<rect x="910" y="378" width="20.5" height="20.5" fill="#eeb2c6"/>
+<rect x="800" y="400" width="20.5" height="20.5" fill="#f6d3de"/>
+<rect x="822" y="400" width="20.5" height="20.5" fill="#f6d3de"/>
+<rect x="844" y="400" width="20.5" height="20.5" fill="#eeb2c6"/>
+<rect x="866" y="400" width="20.5" height="20.5" fill="#eeb2c6"/>
+<rect x="888" y="400" width="20.5" height="20.5" fill="#eeb2c6"/>
+<rect x="910" y="400" width="20.5" height="20.5" fill="#f6d3de"/>
+<rect x="800" y="422" width="20.5" height="20.5" fill="#f6d3de"/>
+<rect x="822" y="422" width="20.5" height="20.5" fill="#f6d3de"/>
+<rect x="844" y="422" width="20.5" height="20.5" fill="#f6d3de"/>
+<rect x="866" y="422" width="20.5" height="20.5" fill="#eeb2c6"/>
+<rect x="888" y="422" width="20.5" height="20.5" fill="#f6d3de"/>
+<rect x="910" y="422" width="20.5" height="20.5" fill="#f6d3de"/>
+<path d="M788 448 V306" fill="none" stroke="#3a4654" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#m-ink)"/>
+<path d="M788 448 H936" fill="none" stroke="#3a4654" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#m-ink)"/>
+<text x="770" y="386" font-size="22" font-style="italic" text-anchor="middle" fill="#5b6673">T</text>
+<text x="868" y="476" font-size="22" font-style="italic" text-anchor="middle" fill="#5b6673">n</text>
+<g transform="translate(72,514)"><circle r="11" fill="#3a4654" stroke="#fff" stroke-width="2.5"/><path d="M-5.0 0.5 L-1.1 4.0 L5.5 -3.7" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></g>
+<text x="92" y="520" font-size="18" fill="#5b6673">acceptance gate</text>
+<rect x="34" y="628" width="946" height="780" rx="16" fill="#f7f8fa" stroke="#d6dce3" stroke-width="2"/>
+<rect x="104" y="668" width="150" height="176" rx="4" fill="#fff" stroke="#8a96a3" stroke-width="2"/>
+<circle cx="124" cy="690" r="8.5" fill="#e0a43a"/><circle cx="159" cy="690" r="8.5" fill="#e0a43a"/><circle cx="194" cy="690" r="8.5" fill="#e0a43a"/><circle cx="229" cy="690" r="8.5" fill="#e0a43a"/>
+<circle cx="142" cy="716" r="10.5" fill="#3b6fc4"/><circle cx="177" cy="716" r="10.5" fill="#3b6fc4"/><circle cx="212" cy="716" r="10.5" fill="#3b6fc4"/>
+<circle cx="124" cy="742" r="8.5" fill="#e0a43a"/><circle cx="159" cy="742" r="8.5" fill="#e0a43a"/><circle cx="194" cy="742" r="8.5" fill="#e0a43a"/><circle cx="229" cy="742" r="8.5" fill="#e0a43a"/>
+<circle cx="124" cy="772" r="8.5" fill="#e0a43a"/><circle cx="159" cy="772" r="8.5" fill="#e0a43a"/><circle cx="194" cy="772" r="8.5" fill="#e0a43a"/><circle cx="229" cy="772" r="8.5" fill="#e0a43a"/>
+<circle cx="142" cy="798" r="10.5" fill="#3b6fc4"/><circle cx="177" cy="798" r="10.5" fill="#3b6fc4"/><circle cx="212" cy="798" r="10.5" fill="#3b6fc4"/>
+<circle cx="124" cy="824" r="8.5" fill="#e0a43a"/><circle cx="159" cy="824" r="8.5" fill="#e0a43a"/><circle cx="194" cy="824" r="8.5" fill="#e0a43a"/><circle cx="229" cy="824" r="8.5" fill="#e0a43a"/>
+<path d="M278 672 V840" fill="none" stroke="#3a4654" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#m-ink)" marker-start="url(#m-ink)"/>
+<text x="292" y="764" font-size="22" font-style="italic" fill="#1d2733">c</text>
+<text x="179" y="878" font-size="22" font-weight="700" text-anchor="middle" fill="#1d2733">3D bulk</text>
+<rect x="104" y="908" width="150" height="390" rx="4" fill="#fff" stroke="#8a96a3" stroke-width="2" stroke-dasharray="7 6"/>
+<text x="179" y="970" font-size="19" font-style="italic" text-anchor="middle" fill="#8a96a3">vacuum</text>
+<text x="179" y="1252" font-size="19" font-style="italic" text-anchor="middle" fill="#8a96a3">vacuum</text>
+<rect x="105" y="1066" width="148" height="88" rx="0" fill="#e3f2ea"/>
+<circle cx="124" cy="1084" r="8.5" fill="#e0a43a"/><circle cx="159" cy="1084" r="8.5" fill="#e0a43a"/><circle cx="194" cy="1084" r="8.5" fill="#e0a43a"/><circle cx="229" cy="1084" r="8.5" fill="#e0a43a"/>
+<circle cx="142" cy="1110" r="10.5" fill="#3b6fc4"/><circle cx="177" cy="1110" r="10.5" fill="#3b6fc4"/><circle cx="212" cy="1110" r="10.5" fill="#3b6fc4"/>
+<circle cx="124" cy="1136" r="8.5" fill="#e0a43a"/><circle cx="159" cy="1136" r="8.5" fill="#e0a43a"/><circle cx="194" cy="1136" r="8.5" fill="#e0a43a"/><circle cx="229" cy="1136" r="8.5" fill="#e0a43a"/>
+<path d="M96 1066 H86 V1154 H96" fill="none" stroke="#238266" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="68" y="1119" font-size="26" font-weight="700" font-style="italic" text-anchor="middle" fill="#238266">t</text>
+<path d="M278 912 V1294" fill="none" stroke="#3a4654" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#m-ink)" marker-start="url(#m-ink)"/>
+<text x="292" y="1110" font-size="22" font-style="italic" fill="#1d2733">c</text>
+<text x="179" y="1336" font-size="22" font-weight="700" text-anchor="middle" fill="#238266">2D slab</text>
+<text x="58" y="1384" font-size="17" fill="#5b6673">t: van der Waals thickness</text>
+<text x="334" y="690" font-size="18" font-weight="700" fill="#1d2733">Bulk</text><path d="M386 684 H956" fill="none" stroke="#c9d1da" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+<rect x="334" y="707" width="42" height="27" rx="5" fill="#4a5563"/><text x="355" y="726" font-size="16" font-weight="700" text-anchor="middle" fill="#fff">3D</text><text x="388" y="728" font-size="23" font-weight="700" fill="#1d2733"><tspan>Bulk crystals</tspan></text><text x="640" y="728" font-size="21" fill="#24313a">standard path</text>
+<text x="334" y="782" font-size="20" font-style="italic" fill="#5b6673">2D slabs run the same path, plus:</text>
+<text x="334" y="830" font-size="18" font-weight="700" fill="#1d2733">Structure</text><path d="M430 824 H956" fill="none" stroke="#c9d1da" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+<rect x="334" y="847" width="42" height="27" rx="5" fill="#238266"/><text x="355" y="866" font-size="16" font-weight="700" text-anchor="middle" fill="#fff">2D</text><text x="388" y="868" font-size="23" font-weight="700" fill="#1d2733"><tspan>Vacuum axis</tspan></text><text x="640" y="868" font-size="21" fill="#24313a">normalised to c</text>
+<rect x="334" y="887" width="42" height="27" rx="5" fill="#238266"/><text x="355" y="906" font-size="16" font-weight="700" text-anchor="middle" fill="#fff">2D</text><text x="388" y="908" font-size="23" font-weight="700" fill="#1d2733"><tspan>Relaxation</tspan></text><text x="640" y="908" font-size="21" fill="#24313a">in-plane only</text>
+<text x="334" y="962" font-size="18" font-weight="700" fill="#1f4e9a">Electrons</text><path d="M434 956 H956" fill="none" stroke="#c9d1da" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+<rect x="334" y="979" width="42" height="27" rx="5" fill="#238266"/><text x="355" y="998" font-size="16" font-weight="700" text-anchor="middle" fill="#fff">2D</text><text x="388" y="1000" font-size="23" font-weight="700" fill="#1f4e9a"><tspan>Elastic constant</tspan></text><text x="640" y="1000" font-size="21" fill="#24313a">in N/m</text>
+<rect x="334" y="1019" width="42" height="27" rx="5" fill="#238266"/><text x="355" y="1038" font-size="16" font-weight="700" text-anchor="middle" fill="#fff">2D</text><text x="388" y="1040" font-size="23" font-weight="700" fill="#1f4e9a"><tspan>Dielectric ε</tspan></text><text x="640" y="1040" font-size="21" fill="#24313a">vacuum removed</text>
+<rect x="334" y="1059" width="42" height="27" rx="5" fill="#238266"/><text x="355" y="1078" font-size="16" font-weight="700" text-anchor="middle" fill="#fff">2D</text><text x="388" y="1080" font-size="23" font-weight="700" fill="#1f4e9a"><tspan>Deformation E</tspan><tspan dy="6.9" font-size="15.2">1</tspan></text><text x="640" y="1080" font-size="21" fill="#24313a">vacuum-level reference</text>
+<text x="334" y="1134" font-size="18" font-weight="700" fill="#a3570a">Phonons</text><path d="M420 1128 H956" fill="none" stroke="#c9d1da" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+<rect x="334" y="1151" width="42" height="27" rx="5" fill="#238266"/><text x="355" y="1170" font-size="16" font-weight="700" text-anchor="middle" fill="#fff">2D</text><text x="388" y="1172" font-size="23" font-weight="700" fill="#a3570a"><tspan>NAC</tspan></text><text x="640" y="1172" font-size="21" fill="#24313a">switched off</text>
+<rect x="334" y="1191" width="42" height="27" rx="5" fill="#238266"/><text x="355" y="1210" font-size="16" font-weight="700" text-anchor="middle" fill="#fff">2D</text><text x="388" y="1212" font-size="23" font-weight="700" fill="#a3570a"><tspan>ZA branch</tspan></text><text x="640" y="1212" font-size="21" fill="#24313a">quadratic, gated</text>
+<text x="334" y="1264" font-size="18" font-weight="700" fill="#b8244a">zT</text><path d="M368 1258 H956" fill="none" stroke="#c9d1da" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+<rect x="334" y="1279" width="42" height="27" rx="5" fill="#238266"/><text x="355" y="1298" font-size="16" font-weight="700" text-anchor="middle" fill="#fff">2D</text><text x="388" y="1300" font-size="23" font-weight="700" fill="#b8244a"><tspan>σ, κ</tspan><tspan dy="6.9" font-size="15.2">e</tspan><tspan dy="-6.9">, κ</tspan><tspan dy="6.9" font-size="15.2">L</tspan></text><text x="640" y="1300" font-size="21" fill="#24313a">in-plane, × c / t</text>
+<rect x="334" y="1322" width="622" height="62" rx="10" fill="#f3faf6" stroke="#238266" stroke-width="2"/>
+<text x="645" y="1362" font-size="26" text-anchor="middle" fill="#1d2733"><tspan font-style="italic">ε</tspan><tspan dy="7.8" font-size="17.2">2D</tspan><tspan dy="-7.8">  =  1 + (</tspan><tspan font-style="italic">c</tspan><tspan> / </tspan><tspan font-style="italic">t</tspan><tspan>) (</tspan><tspan font-style="italic">ε</tspan><tspan dy="7.8" font-size="17.2">slab</tspan><tspan dy="-7.8"> − 1)</tspan></text>
+<rect x="1022" y="98" width="944" height="592" rx="16" fill="#f7f8fa" stroke="#d6dce3" stroke-width="2"/>
+<rect x="1040" y="118" width="532" height="554" rx="18" fill="#ffffff" stroke="#a99ccf" stroke-width="1.8" stroke-dasharray="6 5"/>
+<rect x="1058" y="104" width="132" height="28" rx="14" fill="#fff" stroke="#5b3fa0" stroke-width="2"/>
+<text x="1124" y="124" font-size="16" font-weight="700" text-anchor="middle" fill="#5b3fa0">MCP server</text>
+<rect x="1200" y="104" width="112" height="28" rx="14" fill="#fff" stroke="#5b3fa0" stroke-width="2"/>
+<text x="1256" y="124" font-size="16" font-weight="700" text-anchor="middle" fill="#5b3fa0">agent CLI</text>
+<text x="1062" y="158" font-size="15" fill="#5b6673">shared skill contracts, state and action gateway</text>
+<rect x="1056" y="172" width="500" height="226" rx="10" fill="#fdf5f0" stroke="#e2b79d" stroke-width="1.6"/>
+<text x="1072" y="200" font-size="20" font-weight="700" fill="#6b2f12">Tool</text>
+<text x="1122" y="200" font-size="15" fill="#5b6673">model-callable actions</text>
+<rect x="1066" y="214" width="480" height="36" rx="5" fill="#f8e0d1"/>
+<text x="1080" y="238" font-size="16" font-weight="700" fill="#6b2f12">Discovery</text>
+<text x="1190" y="238" font-size="15" fill="#3b2a22">skill listing and contract lookup</text>
+<rect x="1066" y="258" width="480" height="36" rx="5" fill="#f8e0d1"/>
+<text x="1080" y="282" font-size="16" font-weight="700" fill="#6b2f12">Planning</text>
+<text x="1190" y="282" font-size="15" fill="#3b2a22">research plan and preflight checks</text>
+<rect x="1066" y="302" width="480" height="36" rx="5" fill="#f8e0d1"/>
+<text x="1080" y="326" font-size="16" font-weight="700" fill="#6b2f12">Execution</text>
+<text x="1190" y="326" font-size="15" fill="#3b2a22">dry run, then submit, monitor, retry</text>
+<rect x="1066" y="346" width="480" height="36" rx="5" fill="#f8e0d1"/>
+<text x="1080" y="370" font-size="16" font-weight="700" fill="#6b2f12">Reporting</text>
+<text x="1190" y="370" font-size="15" fill="#3b2a22">results with units and provenance</text>
+<rect x="1056" y="414" width="500" height="140" rx="10" fill="#ebf5e6" stroke="#3d8b3d" stroke-width="1.6"/>
+<text x="1072" y="444" font-size="20" font-weight="700" fill="#2b6a2b">Resource</text>
+<text x="1170" y="444" font-size="15" font-style="italic" fill="#2b6a2b">skill contract · skill.yaml</text>
+<rect x="1072" y="462" width="144" height="32" rx="16" fill="#fff" stroke="#3d8b3d" stroke-width="1.5"/>
+<text x="1144.0" y="483" font-size="14" font-weight="700" text-anchor="middle" fill="#2b6a2b">inputs / outputs</text>
+<rect x="1226" y="462" width="126" height="32" rx="16" fill="#fff" stroke="#3d8b3d" stroke-width="1.5"/>
+<text x="1289.0" y="483" font-size="14" font-weight="700" text-anchor="middle" fill="#2b6a2b">steps &amp; codes</text>
+<rect x="1362" y="462" width="106" height="32" rx="16" fill="#fff" stroke="#3d8b3d" stroke-width="1.5"/>
+<text x="1415.0" y="483" font-size="14" font-weight="700" text-anchor="middle" fill="#2b6a2b">validators</text>
+<rect x="1072" y="506" width="112" height="32" rx="16" fill="#fff" stroke="#3d8b3d" stroke-width="1.5"/>
+<text x="1128.0" y="527" font-size="14" font-weight="700" text-anchor="middle" fill="#2b6a2b">parameters</text>
+<rect x="1194" y="506" width="120" height="32" rx="16" fill="#fff" stroke="#3d8b3d" stroke-width="1.5"/>
+<text x="1254.0" y="527" font-size="14" font-weight="700" text-anchor="middle" fill="#2b6a2b">corrections</text>
+<text x="1330" y="527" font-size="14" font-style="italic" fill="#2b6a2b">one folder per skill</text>
+<rect x="1056" y="570" width="500" height="82" rx="10" fill="#e8f0fa" stroke="#8fb0d6" stroke-width="1.6"/>
+<text x="1072" y="618" font-size="20" font-weight="700" fill="#1f4e7a">Prompt</text>
+<text x="1156" y="618" font-size="15" fill="#24313a">validated zT workflow, failure triage, …</text>
+<rect x="1596" y="118" width="352" height="554" rx="20" fill="#efebf9"/>
+<text x="1772" y="160" font-size="24" font-weight="700" text-anchor="middle" fill="#5b3fa0">Coding Agents</text>
+<text x="1772" y="184" font-size="14" text-anchor="middle" fill="#5b6673">drive AutoZT via MCP / CLI</text>
+<g transform="translate(1710,250)"><path d="M-38 4 C-38 -16 -18 -26 4 -24 C22 -22 32 -10 34 2 C35 14 26 24 6 25 C-16 26 -38 22 -38 4 Z" fill="#4d6bfe"/><path d="M30 4 C38 -2 42 -14 52 -22 C50 -10 52 2 58 6 C48 6 40 10 32 14 Z" fill="#4d6bfe"/><path d="M-34 10 C-24 20 -2 22 16 16 C6 24 -24 24 -34 10 Z" fill="#a9b8ff"/><circle cx="-20" cy="-4" r="4.5" fill="#ffffff"/><circle cx="-19" cy="-4" r="2.2" fill="#1d2733"/><path d="M-12 -28 C-14 -38 -20 -40 -24 -44 M-12 -28 C-10 -38 -4 -40 0 -44" fill="none" stroke="#4d6bfe" stroke-width="3" stroke-linecap="round"/></g>
+<g transform="translate(1840,252) scale(0.95)"><path d="M-12 -30 L-17 -42 M12 -30 L17 -42" stroke="#9e1f1f" stroke-width="3" stroke-linecap="round"/><circle cx="-17" cy="-43" r="3.5" fill="#9e1f1f"/><circle cx="17" cy="-43" r="3.5" fill="#9e1f1f"/><ellipse cx="-30" cy="6" rx="8" ry="12" fill="#c62f2f"/><ellipse cx="30" cy="6" rx="8" ry="12" fill="#c62f2f"/><ellipse cx="0" cy="2" rx="27" ry="31" fill="#d93a3a"/><ellipse cx="-8" cy="-14" rx="10" ry="6" fill="#ef7a7a" opacity="0.6"/><circle cx="-9" cy="-4" r="5" fill="#1d2733"/><circle cx="9" cy="-4" r="5" fill="#1d2733"/><circle cx="-8" cy="-5.5" r="1.6" fill="#ffffff"/><circle cx="10" cy="-5.5" r="1.6" fill="#ffffff"/><path d="M-6 10 Q0 14 6 10" stroke="#7a1515" stroke-width="2" fill="none" stroke-linecap="round"/><ellipse cx="-11" cy="33" rx="7" ry="4" fill="#9e1f1f"/><ellipse cx="11" cy="33" rx="7" ry="4" fill="#9e1f1f"/></g>
+<rect x="1612" y="304" width="320" height="64" rx="10" fill="#f6e6f0"/>
+<text x="1626" y="330" font-size="17" fill="#1d2733"><tspan font-weight="700">User: </tspan><tspan>compute </tspan><tspan font-style="italic">zT</tspan><tspan>(</tspan><tspan font-style="italic">n</tspan><tspan>, </tspan><tspan font-style="italic">T</tspan><tspan>)</tspan></text>
+<text x="1626" y="355" font-size="17" fill="#1d2733">for this 2D POSCAR.</text>
+<rect x="1612" y="380" width="320" height="222" rx="10" fill="#ffffff" stroke="#cfc6ea" stroke-width="1.5"/>
+<text x="1626" y="408" font-size="17" fill="#1d2733"><tspan font-weight="700">Agent: </tspan><tspan>plan for your review</tspan></text>
+<circle cx="1636" cy="444" r="10" fill="#5b3fa0"/>
+<text x="1636" y="448.5" font-size="13" font-weight="700" text-anchor="middle" fill="#fff">1</text>
+<text x="1654" y="450" font-size="15" fill="#1d2733">Relax structure</text>
+<text x="1918" y="450" font-size="14" text-anchor="end" fill="#5b6673"><tspan>CONTCAR</tspan></text>
+<circle cx="1636" cy="484" r="10" fill="#5b3fa0"/>
+<text x="1636" y="488.5" font-size="13" font-weight="700" text-anchor="middle" fill="#fff">2</text>
+<text x="1654" y="490" font-size="15" fill="#1d2733">Electron transport</text>
+<text x="1918" y="490" font-size="14" text-anchor="end" fill="#5b6673"><tspan>S, σ, κ</tspan><tspan dy="4.2" font-size="9.2">e</tspan></text>
+<circle cx="1636" cy="524" r="10" fill="#5b3fa0"/>
+<text x="1636" y="528.5" font-size="13" font-weight="700" text-anchor="middle" fill="#fff">3</text>
+<text x="1654" y="530" font-size="15" fill="#1d2733">Phonon transport</text>
+<text x="1918" y="530" font-size="14" text-anchor="end" fill="#5b6673"><tspan>κ</tspan><tspan dy="4.2" font-size="9.2">L</tspan></text>
+<circle cx="1636" cy="564" r="10" fill="#5b3fa0"/>
+<text x="1636" y="568.5" font-size="13" font-weight="700" text-anchor="middle" fill="#fff">4</text>
+<text x="1654" y="570" font-size="15" fill="#1d2733">Combine</text>
+<text x="1918" y="570" font-size="14" text-anchor="end" fill="#5b6673"><tspan>zT(n, T)</tspan></text>
+<rect x="1830" y="616" width="102" height="32" rx="16" fill="#5b3fa0"/>
+<text x="1881" y="637" font-size="16" font-weight="700" text-anchor="middle" fill="#fff">Proceed</text>
+<rect x="1040" y="706" width="532" height="310" rx="16" fill="#eef7f2" stroke="#238266" stroke-width="2"/>
+<text x="1060" y="740" font-size="22" font-weight="700" fill="#238266">Skill pool</text>
+<text x="1176" y="740" font-size="14" fill="#5b6673">20 skills · details in Table 1</text>
+<rect x="1060" y="754" width="156" height="50" rx="8" fill="#fff" stroke="#8fb9a5" stroke-width="1.6"/>
+<text x="1138.0" y="784" font-size="15" text-anchor="middle" fill="#24313a">ke-dft-cpu</text>
+<rect x="1228" y="754" width="156" height="50" rx="8" fill="#fff" stroke="#8fb9a5" stroke-width="1.6"/>
+<text x="1306.0" y="784" font-size="15" text-anchor="middle" fill="#24313a">kl-dft-cpu</text>
+<rect x="1396" y="754" width="156" height="50" rx="8" fill="#fff" stroke="#5b3fa0" stroke-width="2.6"/>
+<text x="1474.0" y="784" font-size="15" font-weight="700" text-anchor="middle" fill="#5b3fa0">zt-dft-cpu</text>
+<rect x="1060" y="818" width="156" height="50" rx="8" fill="#fff" stroke="#8fb9a5" stroke-width="1.6"/>
+<text x="1138.0" y="848" font-size="15" text-anchor="middle" fill="#24313a">kl-mlff-gpu</text>
+<rect x="1228" y="818" width="156" height="50" rx="8" fill="#fff" stroke="#8fb9a5" stroke-width="1.6"/>
+<text x="1306.0" y="848" font-size="15" text-anchor="middle" fill="#24313a">kl-mlff-cpu</text>
+<rect x="1396" y="818" width="156" height="50" rx="8" fill="#fff" stroke="#8fb9a5" stroke-width="1.6"/>
+<text x="1474.0" y="848" font-size="15" text-anchor="middle" fill="#24313a">fit-fc-thermal</text>
+<rect x="1060" y="882" width="156" height="50" rx="8" fill="#fff" stroke="#8fb9a5" stroke-width="1.6"/>
+<text x="1138.0" y="912" font-size="15" text-anchor="middle" fill="#24313a">phonon-mlff-gpu</text>
+<rect x="1228" y="882" width="156" height="50" rx="8" fill="#fff" stroke="#8fb9a5" stroke-width="1.6"/>
+<text x="1306.0" y="912" font-size="15" text-anchor="middle" fill="#24313a">phonon-dft-cpu</text>
+<rect x="1396" y="882" width="156" height="50" rx="8" fill="#fff" stroke="#8fb9a5" stroke-width="1.6"/>
+<text x="1474.0" y="912" font-size="15" text-anchor="middle" fill="#24313a">band-dft-cpu</text>
+<rect x="1060" y="946" width="156" height="50" rx="8" fill="#fff" stroke="#8fb9a5" stroke-width="1.6"/>
+<text x="1138.0" y="976" font-size="15" text-anchor="middle" fill="#24313a">elastic-dft-cpu</text>
+<rect x="1228" y="946" width="156" height="50" rx="8" fill="#fff" stroke="#8fb9a5" stroke-width="1.6"/>
+<text x="1306.0" y="976" font-size="15" text-anchor="middle" fill="#24313a">te-screen</text>
+<rect x="1396" y="946" width="156" height="50" rx="8" fill="#fff" stroke="#8fb9a5" stroke-width="1.6" stroke-dasharray="5 4"/>
+<text x="1474.0" y="978" font-size="22" font-weight="700" text-anchor="middle" fill="#5b6673">…</text>
+<rect x="1040" y="1040" width="532" height="350" rx="16" fill="#eff1f4" stroke="#5b6673" stroke-width="2"/>
+<text x="1060" y="1074" font-size="22" font-weight="700" fill="#1d2733">Tool pool</text>
+<text x="1166" y="1074" font-size="14" fill="#5b6673">engines and the hardware they run on · Table 1</text>
+<rect x="1060" y="1088" width="156" height="60" rx="8" fill="#fff" stroke="#a3adb8" stroke-width="1.6"/>
+<text x="1138.0" y="1115" font-size="17" font-weight="700" text-anchor="middle" fill="#1d2733">MACE</text>
+<text x="1138.0" y="1135" font-size="13" font-weight="700" text-anchor="middle" fill="#1f8a7a">CPU / GPU</text>
+<rect x="1228" y="1088" width="156" height="60" rx="8" fill="#fff" stroke="#a3adb8" stroke-width="1.6"/>
+<text x="1306.0" y="1115" font-size="17" font-weight="700" text-anchor="middle" fill="#1d2733">ShengBTE</text>
+<text x="1306.0" y="1135" font-size="13" font-weight="700" text-anchor="middle" fill="#1f8a7a">CPU / GPU</text>
+<rect x="1396" y="1088" width="156" height="60" rx="8" fill="#fff" stroke="#5b3fa0" stroke-width="2.6"/>
+<text x="1474.0" y="1115" font-size="17" font-weight="700" text-anchor="middle" fill="#5b3fa0">VASP</text>
+<text x="1474.0" y="1135" font-size="13" font-weight="700" text-anchor="middle" fill="#1f8a7a">CPU / GPU</text>
+<rect x="1060" y="1162" width="156" height="60" rx="8" fill="#fff" stroke="#a3adb8" stroke-width="1.6"/>
+<text x="1138.0" y="1189" font-size="17" font-weight="700" text-anchor="middle" fill="#1d2733">Pheasy</text>
+<text x="1138.0" y="1209" font-size="13" font-weight="700" text-anchor="middle" fill="#1f8a7a">CPU / GPU</text>
+<rect x="1228" y="1162" width="156" height="60" rx="8" fill="#fff" stroke="#a3adb8" stroke-width="1.6"/>
+<text x="1306.0" y="1189" font-size="17" font-weight="700" text-anchor="middle" fill="#1d2733">phono3py</text>
+<text x="1306.0" y="1209" font-size="13" font-weight="700" text-anchor="middle" fill="#1f8a7a">CPU</text>
+<rect x="1396" y="1162" width="156" height="60" rx="8" fill="#fff" stroke="#a3adb8" stroke-width="1.6"/>
+<text x="1474.0" y="1189" font-size="17" font-weight="700" text-anchor="middle" fill="#1d2733">phonopy</text>
+<text x="1474.0" y="1209" font-size="13" font-weight="700" text-anchor="middle" fill="#1f8a7a">CPU</text>
+<rect x="1060" y="1236" width="156" height="60" rx="8" fill="#fff" stroke="#a3adb8" stroke-width="1.6"/>
+<text x="1138.0" y="1263" font-size="17" font-weight="700" text-anchor="middle" fill="#1d2733">AMSET</text>
+<text x="1138.0" y="1283" font-size="13" font-weight="700" text-anchor="middle" fill="#1f8a7a">CPU</text>
+<rect x="1228" y="1236" width="156" height="60" rx="8" fill="#fff" stroke="#a3adb8" stroke-width="1.6"/>
+<text x="1306.0" y="1263" font-size="17" font-weight="700" text-anchor="middle" fill="#1d2733">BoltzTraP2</text>
+<text x="1306.0" y="1283" font-size="13" font-weight="700" text-anchor="middle" fill="#1f8a7a">CPU</text>
+<rect x="1396" y="1236" width="156" height="60" rx="8" fill="#fff" stroke="#a3adb8" stroke-width="1.6"/>
+<text x="1474.0" y="1263" font-size="17" font-weight="700" text-anchor="middle" fill="#1d2733">hiPhive</text>
+<text x="1474.0" y="1283" font-size="13" font-weight="700" text-anchor="middle" fill="#1f8a7a">CPU</text>
+<rect x="1060" y="1310" width="156" height="60" rx="8" fill="#fff" stroke="#a3adb8" stroke-width="1.6"/>
+<text x="1138.0" y="1337" font-size="17" font-weight="700" text-anchor="middle" fill="#1d2733">symfc</text>
+<text x="1138.0" y="1357" font-size="13" font-weight="700" text-anchor="middle" fill="#1f8a7a">CPU</text>
+<rect x="1228" y="1310" width="156" height="60" rx="8" fill="#fff" stroke="#a3adb8" stroke-width="1.6"/>
+<text x="1306.0" y="1337" font-size="17" font-weight="700" text-anchor="middle" fill="#1d2733">ALM</text>
+<text x="1306.0" y="1357" font-size="13" font-weight="700" text-anchor="middle" fill="#1f8a7a">CPU</text>
+<rect x="1396" y="1310" width="156" height="60" rx="8" fill="#fff" stroke="#a3adb8" stroke-width="1.6" stroke-dasharray="5 4"/>
+<text x="1474.0" y="1347" font-size="22" font-weight="700" text-anchor="middle" fill="#5b6673">…</text>
+<path d="M1794 674 V700" fill="none" stroke="#b8244a" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="5 5" marker-end="url(#m-crimson)"/>
+<defs><linearGradient id="robot_final-body" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#ffffff"/><stop offset="0.7" stop-color="#ffffff"/><stop offset="1" stop-color="#efebf9"/></linearGradient><linearGradient id="robot_final-head" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#ffffff"/><stop offset="0.75" stop-color="#ffffff"/><stop offset="1" stop-color="#efebf9"/></linearGradient><linearGradient id="robot_final-face" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#e1eaf8"/><stop offset="1" stop-color="#edf3fc"/></linearGradient><radialGradient id="robot_final-bulb" cx="0.38" cy="0.35" r="0.75"><stop offset="0" stop-color="#ffffff"/><stop offset="0.5" stop-color="#f6d3de"/><stop offset="1" stop-color="#e38aa8"/></radialGradient></defs>
+<path d="M1677 886 H1648 Q1622 886 1622 860 V805.0 Q1622 779.0 1596 779.0 H1565" fill="none" stroke="#5b3fa0" stroke-width="15" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M1536 746.0 H1560 V812.0 H1536" fill="none" stroke="#5b3fa0" stroke-width="11" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M1677 960 H1626 Q1600 960 1600 986 V1092.0 Q1600 1118.0 1574 1118.0 H1565" fill="none" stroke="#5b3fa0" stroke-width="15" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M1536 1080.0 H1560 V1156.0 H1536" fill="none" stroke="#5b3fa0" stroke-width="11" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M1677 886 H1648 Q1622 886 1622 860 V805.0 Q1622 779.0 1596 779.0 H1565" fill="none" stroke="#dcd3f2" stroke-width="9" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M1677 960 H1626 Q1600 960 1600 986 V1092.0 Q1600 1118.0 1574 1118.0 H1565" fill="none" stroke="#dcd3f2" stroke-width="9" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M1536 746.0 H1560 V812.0 H1536" fill="none" stroke="#dcd3f2" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M1536 1080.0 H1560 V1156.0 H1536" fill="none" stroke="#dcd3f2" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M1677 886 H1648 Q1622 886 1622 860 V805.0 Q1622 779.0 1596 779.0 H1570" fill="none" stroke="#ffffff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" opacity="0.75" transform="translate(-1.5,-1.5)"/>
+<path d="M1677 960 H1626 Q1600 960 1600 986 V1092.0 Q1600 1118.0 1574 1118.0 H1570" fill="none" stroke="#ffffff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" opacity="0.75" transform="translate(-1.5,-1.5)"/>
+<path d="M1794 724.5 V734" fill="none" stroke="#5b3fa0" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/>
+<circle cx="1794" cy="718" r="6.5" fill="url(#robot_final-bulb)" stroke="#5b3fa0" stroke-width="2.2"/>
+<rect x="1713" y="766" width="14" height="36" rx="7" fill="#efebf9" stroke="#5b3fa0" stroke-width="2.4"/>
+<rect x="1861" y="766" width="14" height="36" rx="7" fill="#efebf9" stroke="#5b3fa0" stroke-width="2.4"/>
+<rect x="1776" y="828" width="36" height="26" rx="6" fill="#efebf9" stroke="#5b3fa0" stroke-width="2.4"/>
+<rect x="1722" y="732" width="144" height="102" rx="46" fill="url(#robot_final-head)" stroke="#5b3fa0" stroke-width="3"/>
+<rect x="1738" y="750" width="112" height="66" rx="33.0" fill="url(#robot_final-face)" stroke="#b9c9e6" stroke-width="2"/>
+<path d="M1750 774 Q1751 759 1768 756" fill="none" stroke="#ffffff" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round" opacity="0.95"/>
+<rect x="1763" y="769.0" width="14" height="22" rx="7" fill="#5b3fa0"/><rect x="1766.8" y="772.5" width="4" height="7" rx="2" fill="#ffffff" opacity="0.9"/>
+<rect x="1811" y="769.0" width="14" height="22" rx="7" fill="#5b3fa0"/><rect x="1814.8" y="772.5" width="4" height="7" rx="2" fill="#ffffff" opacity="0.9"/>
+<ellipse cx="1751" cy="794.0" rx="6.5" ry="4" fill="#f2bccb" opacity="0.45"/>
+<ellipse cx="1837" cy="794.0" rx="6.5" ry="4" fill="#f2bccb" opacity="0.45"/>
+<path d="M1786 793.0 Q1794 800.0 1802 793.0" fill="none" stroke="#5b3fa0" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round"/>
+<rect x="1739" y="978" width="40" height="24" rx="8" fill="#efebf9" stroke="#5b3fa0" stroke-width="2.4"/>
+<rect x="1809" y="978" width="40" height="24" rx="8" fill="#efebf9" stroke="#5b3fa0" stroke-width="2.4"/>
+<ellipse cx="1794" cy="1021" rx="104" ry="4" fill="#1d2733" opacity="0.08"/>
+<rect x="1736" y="999" width="46" height="20" rx="10" fill="#ffffff" stroke="#5b3fa0" stroke-width="2.4"/>
+<rect x="1806" y="999" width="46" height="20" rx="10" fill="#ffffff" stroke="#5b3fa0" stroke-width="2.4"/>
+<rect x="1677" y="850" width="234" height="140" rx="40" fill="url(#robot_final-body)" stroke="#5b3fa0" stroke-width="3"/>
+<rect x="1700" y="866" width="188" height="86" rx="18" fill="#edf3fc" stroke="#5b3fa0" stroke-width="2.2"/>
+<text x="1794" y="907" font-size="31" font-weight="700" text-anchor="middle" fill="#5b3fa0">AutoZT</text>
+<text x="1794" y="933" font-size="13" text-anchor="middle" fill="#2f5fa7">auto-advance &#183; auto-resume</text>
+<rect x="1741.0" y="964.5" width="22" height="7" rx="3.5" fill="#1f8a7a"/>
+<rect x="1769.0" y="964.5" width="22" height="7" rx="3.5" fill="#1f8a7a"/>
+<rect x="1797.0" y="964.5" width="22" height="7" rx="3.5" fill="#1f8a7a"/>
+<rect x="1825.7" y="965.2" width="20.6" height="5.6" rx="2.8" fill="#ffffff" stroke="#1f8a7a" stroke-width="1.4"/>
+<rect x="1862" y="960.8" width="28" height="2.4" rx="1.2" fill="#5b3fa0" opacity="0.35"/>
+<rect x="1862" y="966.8" width="28" height="2.4" rx="1.2" fill="#5b3fa0" opacity="0.35"/>
+<rect x="1862" y="972.8" width="28" height="2.4" rx="1.2" fill="#5b3fa0" opacity="0.35"/>
+<circle cx="1677" cy="886" r="13" fill="#efebf9" stroke="#5b3fa0" stroke-width="2.6"/>
+<circle cx="1677" cy="886" r="4" fill="#5b3fa0"/>
+<circle cx="1677" cy="960" r="13" fill="#efebf9" stroke="#5b3fa0" stroke-width="2.6"/>
+<circle cx="1677" cy="960" r="4" fill="#5b3fa0"/>
+<rect x="1640" y="1062" width="308" height="326" rx="18" fill="#ffffff" stroke="#1d2733" stroke-width="2"/>
+<path d="M1778 1063 L1794 1046 L1810 1063 Z" fill="#ffffff" stroke="#1d2733" stroke-width="2" stroke-linejoin="round"/>
+<rect x="1779" y="1061" width="30" height="4" rx="0" fill="#ffffff"/>
+<text x="1662" y="1104" font-size="21" font-weight="700" fill="#b7791f">act gateway</text>
+<rect x="1662" y="1136" width="70" height="32" rx="16" fill="#f1f3f5" stroke="#5b6673" stroke-width="2"/>
+<text x="1697.0" y="1158" font-size="16" font-weight="700" text-anchor="middle" fill="#5b6673">read</text>
+<text x="1662" y="1194" font-size="16" fill="#24313a">runs directly</text>
+<path d="M1660 1202 H1928" fill="none" stroke="#e1e5ea" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+<rect x="1662" y="1220" width="90" height="32" rx="16" fill="#fdf5e6" stroke="#b7791f" stroke-width="2"/>
+<text x="1707.0" y="1242" font-size="16" font-weight="700" text-anchor="middle" fill="#b7791f">mutate</text>
+<text x="1662" y="1278" font-size="16" fill="#24313a">allowed, logged</text>
+<path d="M1660 1286 H1928" fill="none" stroke="#e1e5ea" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+<rect x="1662" y="1304" width="140" height="32" rx="16" fill="#fcecea" stroke="#c0392b" stroke-width="2"/>
+<text x="1732.0" y="1326" font-size="16" font-weight="700" text-anchor="middle" fill="#c0392b">destructive</text>
+<text x="1662" y="1362" font-size="16" fill="#24313a">human approval</text>
+<g transform="translate(1796,1345) scale(0.8)"><path d="M4 9 V5 a6 6 0 0 1 12 0 V9" fill="none" stroke="#c0392b" stroke-width="2.6"/><rect x="1" y="9" width="18" height="14" rx="3" fill="#c0392b"/></g>
+</svg>
