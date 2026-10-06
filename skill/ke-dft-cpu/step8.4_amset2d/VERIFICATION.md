@@ -7675,3 +7675,38 @@ environment: amset_clean`，接着 `amset: command not found`。集群上现在�
   - 如果是 1s，那组 core 结果不能拿来否定芯能级参考。
 - CrS₂ 08-29 的 band_edges.json（E1 5.861/3.078）也可能来自带 ICORELEVEL=1 的运行。
   这次 S7 → S7.1 重跑后，用新的 E1（core/vac）对比，再看 S8.2 DPT 有没有变化。
+
+## V170（2026-10-06）：显式 start 不再重交已完成（OK）的步骤
+
+**现场**：
+- CrS₂ 的 S8.4（job 3919559）跑了 4h41m，正常完成（exit 0）。
+- agent 想把结果拉回来，又执行了一次 `-p CrS2_hex -j S8.4 start`。
+- 这条路不检查 OK，按现有输入原样重交了一次。
+- 作业链开头的 `rm -f transport.json`（patch_v63，本意是清掉上次残留）把刚完成的结果删了。agent 又 scancel 了这个重复作业，步骤于是变成 FAIL。
+- 最后靠手工从 `transport_117x117x15.json` 拷回。
+  - 和作业链尾的 `cp -f $(ls -t transport_*.json | head -1) transport.json` 等价；
+  - 前提是第一次作业的 preflight 和 fermi_window_check 都已通过，exit 0 说明确实通过了。
+
+**根因**：
+- 批量 start（`-j` 不带 `-p`，或不带 `-j`）、`step init`、`rerun` 都会跳过 OK 的步骤。
+- 只有 cmd_start 里显式 `-p X -j S` 这条路漏了。
+- 同一条路上，max_jobs 占满时还会对 OK 步骤调 `_gen_step_input`，重新生成输入。
+
+**改动**：
+- 显式 start 遇到 OK 步骤（不带 -f）时不重交，并提示：
+  - 拉结果用 `fetch`；
+  - 要重算：先 retry 再 start，或 `start -f` / `rerun`。
+- 例外：retry 刚重新生成过输入、还没被 start 交过、而且输入指纹一致时，放行一次，保留 retry → start 的用法。
+  - 判断用重生成标记，新增 `consumed_ts`；
+  - 不占 FAIL 放行的 24h 额度。
+- 显式 start 提交成功后，给标记记上 `consumed_ts`。
+  - 这样 retry → start → 跑完 OK 之后再误 start，会被拒；
+  - 再 retry 一次会写新标记，重新放行。
+- 本地即时步（run: gen，如 S7.1）同样受保护：对 OK 的 S7.1 重跑一次，会把 S8/S8.4/S8.2 全部作废。
+
+**测试**：tests/test_start_ok_step.py（5 项）。
+- OK 步骤不重交，也不重新生成输入；
+- `-f` 照样重交；
+- retry → start 只放行一次，不占 FAIL 额度；
+- retry 之后输入又改过，就不放行；
+- FAIL 走放行提交、跑完变 OK 后，再 start 被拒。

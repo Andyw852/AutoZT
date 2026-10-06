@@ -2918,6 +2918,19 @@ def cmd_start(cfg, data, mname, jname, force, incl_scancel=False, gate=None):
                           "rerun（推倒重来）；确定要 start 请加 -f。"
                           % (m["name"], s["label"]))
                     return 1
+            if s["kind"] == "OK" and not force:
+                # [V170] 已完成的步骤不重交。以前显式 -p X -j S start 不看 OK：按现有输入原样重交，作业开头删旧产物
+                #   （S8.4 的 rm -f transport.json）——CrS₂ 跑了 4h41m 的 S8.4 被第二次 start 删掉，靠手工从
+                #   transport_*.json 拷回。批量 start / step init / rerun 早就跳过 OK，只有这条路漏了。
+                #   例外：retry 刚重新生成过输入、还没被 start 用过（指纹一致）—— retry→start 照常放行一次。
+                if not _regen_marker_fresh(cfg, m, s):
+                    print("%s: 步骤 %s 已完成（OK），不重交——start 会按现有输入重新提交，作业开头会删掉已完成的产物。\n"
+                          "  只想把结果拉回本地：tf -tt %s -p %s -j %s fetch\n"
+                          "  确实要重算：先 retry（重新生成输入）再 start，或 start -f / rerun。"
+                          % (m["name"], s["label"], m["tt"], m["name"].split("/")[-1], s["label"]))
+                    return 0
+                print("%s: 步骤 %s 已完成（OK），但 retry 刚重新生成过输入（指纹一致）-> 按 retry→start 放行。"
+                      % (m["name"], s["label"]))
             sc = step_cfg(t, s["name"], m)
             _is_gen = sc.get("run") == "gen"
             # 显式 -p X -j S 以前不过 max_jobs 闸门（agent 的 start_step 就走这条，
@@ -2938,6 +2951,8 @@ def cmd_start(cfg, data, mname, jname, force, incl_scancel=False, gate=None):
                            tag="start " + tag_of(m, s))
             if not ok and _held:
                 gate.release(m["tt"], m)
+            if ok:
+                _regen_marker_consume(m, s)          # [V170] 这次 retry 的输入已经交过了
             return 0 if ok else 1
         # --- patch_start_dag：不带 -j 时交掉整个就绪集 -----------------
         return _start_ready(cfg, t, m, force, incl_scancel, gate=gate)
@@ -3301,6 +3316,24 @@ def _regen_marker_save(m, marks):
     except OSError as exc:
         print("警告：写重生成标记失败：%s" % exc, file=sys.stderr)
         return False
+
+def _regen_marker_fresh(cfg, m, s):
+    """[V170] retry 重新生成过输入、之后还没被 start 交过、且输入指纹没变 -> True。不消耗 FAIL 放行额度。"""
+    ent = _regen_marker_load(m).get(_regen_key(m, s))
+    if not isinstance(ent, dict) or ent.get("consumed_ts"):
+        return False
+    fp, _files = _regen_input_fingerprint(cfg, m, s)
+    return bool(fp) and fp == ent.get("fingerprint")
+
+
+def _regen_marker_consume(m, s):
+    """[V170] start 交出去之后给本步的重生成标记记上 consumed_ts（再 retry 会写新标记、清掉它）。"""
+    marks = _regen_marker_load(m)
+    ent = marks.get(_regen_key(m, s))
+    if isinstance(ent, dict) and not ent.get("consumed_ts"):
+        ent["consumed_ts"] = time.time()
+        _regen_marker_save(m, marks)
+
 
 def _regen_marker_write(cfg, t, m, s, tag=""):
     """retry 生成成功后写标记（best-effort，失败不改 retry 语义）。"""
