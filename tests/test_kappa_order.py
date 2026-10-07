@@ -6,7 +6,8 @@ import os
 import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-SK = os.path.join(ROOT, "skill", "fit-fc-thermal")
+SK = os.path.join(ROOT, "skill", "_common", "fcfit")   # 共享引擎（原 skill/fit-fc-thermal/）
+sys.path.insert(0, os.path.join(ROOT, "skill", "_common"))
 
 
 def _load():
