@@ -75,7 +75,9 @@ __all__ = [
     "spacegroup_audit", "symmetrize", "confirmations", "audit_structure",
     "audit_structure_file", "parse_outcar_energy", "parse_inplane_stress_kb",
     "parse_external_pressure_kb", "energy_check", "stress_recheck",
-    "read_switches", "symmetrize_enabled", "spglib_available", "main",
+    "read_switches", "symmetrize_enabled", "spglib_available",
+    "point_group_rotations", "supercell_symmetry_report", "suggest_symmetric_diag",
+    "supercell_symmetry_gate", "main",
 ]
 
 AXIS_NAMES = ("a", "b", "c")
@@ -804,6 +806,167 @@ def symmetrize_structure_file(poscar, out=None, archive_dir=None, symprec=DEFAUL
         raise SystemExit("[symmetry_audit] 能量确认 pending —— 必须提供对称化前后两个单点，"
                          "或显式 --allow-energy-pending（结果 fit_for_use=false）")
     return result
+
+
+# ---------------------------------------------------------------------------
+# 超胞保对称检查（2026-10-07，Mn2In2Se5 教训）
+# ---------------------------------------------------------------------------
+# R-3m 菱方原胞（a1、a2 在面内，a3 斜着）上取对角超胞 3x3x1：超胞晶格只剩 12 个
+# 点群操作里的 4 个，三重轴丢了。拟合引擎只能施加超胞自己保有的对称（symfc 按超胞
+# 求对称；pheasy 日志写着 12 个操作，结果照样破），长程原子对还会折叠到不对称的
+# 镜像上 -> fc2 破 R-3m，布里渊区内部出现假虚频，kappa 随 q 网格来回跳（4.80 A
+# 截断下 0.74~1.00 W/mK）。高对称路径上频率全正，虚频门禁也看不出来。
+# 所以超胞要在生成位移、花 DFT 机时之前就拦下。
+SUPERCELL_SYMPREC = 1e-3
+SUPERCELL_SYMMETRY_MODES = ("strict", "warn", "off")
+
+
+def _mm(a, b):
+    return [[sum(a[i][k] * b[k][j] for k in range(3)) for j in range(3)]
+            for i in range(3)]
+
+
+def _transpose(a):
+    return [[a[j][i] for j in range(3)] for i in range(3)]
+
+
+def _as_sc_matrix(reps):
+    """对角 [n1,n2,n3]、9 个数或 3x3 -> 3x3 整数矩阵（行 = 超胞基矢在单胞基下的系数，
+    与 phonopy/phono3py --dim 同义）。"""
+    vals = []
+    for x in reps:
+        if hasattr(x, "__iter__") and not isinstance(x, str):
+            vals.extend(x)
+        else:
+            vals.append(x)
+    vals = [round(float(v)) for v in vals]
+    if len(vals) == 3:
+        return [[vals[0], 0, 0], [0, vals[1], 0], [0, 0, vals[2]]]
+    if len(vals) == 9:
+        return [vals[0:3], vals[3:6], vals[6:9]]
+    raise ValueError("超胞要 3 个（对角）或 9 个（3x3）整数，收到 %r" % (reps,))
+
+
+def _sc_str(S):
+    if all(S[i][j] == 0 for i in range(3) for j in range(3) if i != j):
+        return " ".join(str(S[i][i]) for i in range(3))
+    return " ".join(str(v) for row in S for v in row)
+
+
+def point_group_rotations(lattice, frac, symbols, symprec=SUPERCELL_SYMPREC):
+    """结构的点群旋转（单胞分数坐标下的整数阵，去重）+ 空间群标签。"""
+    spg = _import_spglib()
+    np = _import_numpy()
+    cell = (np.array(lattice, dtype=float), np.array(frac, dtype=float),
+            symbol_to_z(symbols))
+    ds = spg.get_symmetry_dataset(cell, symprec=float(symprec))
+    if ds is None:
+        raise RuntimeError("spglib 求不出对称性（symprec=%g）" % symprec)
+    uniq = {}
+    for r in ds.rotations:
+        m = [[int(v) for v in row] for row in np.asarray(r)]
+        uniq[tuple(v for row in m for v in row)] = m
+    return list(uniq.values()), "%s (%d)" % (ds.international, int(ds.number))
+
+
+def _keeps_rotation(S, R, tol=1e-6):
+    """超胞晶格（行 = S 的行）在旋转 R（x' = R x，单胞分数坐标）下不变
+    <=> S R^T S^-1 是整数阵。"""
+    M = _mm(_mm(S, _transpose(R)), _inv3([[float(v) for v in row] for row in S]))
+    return all(abs(v - round(v)) < tol for row in M for v in row)
+
+
+def supercell_symmetry_report(lattice, frac, symbols, reps, symprec=SUPERCELL_SYMPREC,
+                              rotations=None):
+    """超胞是否保有结构的全部点群操作。返回 dict：ok / n_ops / n_kept / spacegroup /
+    matrix / det / natoms。"""
+    S = _as_sc_matrix(reps)
+    det = round(abs(_det3(S)))
+    if det == 0:
+        raise ValueError("超胞矩阵行列式为 0：%s" % _sc_str(S))
+    if rotations is None:
+        rotations, sg = point_group_rotations(lattice, frac, symbols, symprec)
+    else:
+        sg = None
+    kept = [R for R in rotations if _keeps_rotation(S, R)]
+    return {"ok": len(kept) == len(rotations), "n_ops": len(rotations),
+            "n_kept": len(kept), "spacegroup": sg, "matrix": S, "det": det,
+            "natoms": len(symbols) * det, "symprec": float(symprec)}
+
+
+def suggest_symmetric_diag(lattice, frac, symbols, reps, dim="3d", vac_axis=2,
+                           max_multiple=6, symprec=SUPERCELL_SYMPREC):
+    """在 n_i >= 原超胞对角元的对角超胞里，找体积最小、保全部点群操作的一个。
+    2D 真空方向恒 1。找不到返回 None。"""
+    S0 = _as_sc_matrix(reps)
+    diag0 = all(S0[i][j] == 0 for i in range(3) for j in range(3) if i != j)
+    base = [max(1, abs(S0[i][i])) for i in range(3)] if diag0 else [1, 1, 1]
+    det0 = round(abs(_det3(S0)))
+    rotations, _ = point_group_rotations(lattice, frac, symbols, symprec)
+    is2d = str(dim or "").lower().startswith("2")
+    ranges = []
+    for i in range(3):
+        if is2d and i == (vac_axis if vac_axis is not None else 2):
+            ranges.append([1])
+        else:
+            ranges.append(list(range(base[i], max(base[i], int(max_multiple)) + 1)))
+    cands = [(a, b, c) for a in ranges[0] for b in ranges[1] for c in ranges[2]
+             if a * b * c >= det0]
+    cands.sort(key=lambda n: (n[0] * n[1] * n[2], max(n) - min(n)))
+    for n in cands:
+        rep = supercell_symmetry_report(lattice, frac, symbols, list(n), symprec,
+                                        rotations=rotations)
+        if rep["ok"]:
+            rep["reps"] = list(n)
+            return rep
+    return None
+
+
+def supercell_symmetry_gate(poscar, reps, mode="strict", dim="3d", vac_axis=2,
+                            max_multiple=6, symprec=SUPERCELL_SYMPREC, label="超胞"):
+    """生成位移/拟合之前的超胞保对称闸。
+
+    mode: strict（默认）= 不保全部点群操作就 sys.exit；warn = 只告警；off = 不查。
+    spglib 不可用或结构读不了时只告警跳过（不阻断）。返回报告 dict 或 None。"""
+    mode = str(mode or "strict").strip().lower()
+    if mode in ("off", "false", "0", "no", "none"):
+        return None
+    if mode not in ("strict", "warn"):
+        sys.exit("[ERROR] SUPERCELL_SYMMETRY 只能是 strict | warn | off，收到 %r" % mode)
+    try:
+        st = read_poscar(poscar)
+        rep = supercell_symmetry_report(st["lattice"], st["frac"], st["symbols"],
+                                        reps, symprec)
+    except Exception as exc:            # noqa: BLE001
+        print("[WARN] 超胞保对称检查跳过（%s）：无法确认%s是否保有晶体的全部点群操作"
+              % (exc, label), flush=True)
+        return None
+    sc = _sc_str(rep["matrix"])
+    if rep["ok"]:
+        print("[OK] %s %s 保有 %s 的全部 %d 个点群操作"
+              % (label, sc, rep["spacegroup"], rep["n_ops"]), flush=True)
+        return rep
+    try:
+        sug = suggest_symmetric_diag(st["lattice"], st["frac"], st["symbols"], reps,
+                                     dim, vac_axis, max_multiple, symprec)
+    except Exception:                   # noqa: BLE001
+        sug = None
+    rep["suggestion"] = sug
+    msg = ("%s %s 只保留了 %s 的 %d/%d 个点群操作。这样的超胞拟合出的力常数会破坏"
+           "晶体对称：布里渊区内部出现假虚频，kappa 随 q 网格来回跳，虚频门禁在高对称"
+           "路径上看不出来（2026-10-07 Mn2In2Se5 3x3x1 实例）。"
+           % (label, sc, rep["spacegroup"], rep["n_kept"], rep["n_ops"]))
+    if sug:
+        msg += ("\n        建议改用保对称的超胞 SUPERCELL=\"%s\"（%d 原子，现为 %d 原子）"
+                % (_sc_str(sug["matrix"]), sug["natoms"], rep["natoms"]))
+    else:
+        msg += ("\n        MAX_MULTIPLE=%d 以内找不到保对称的对角超胞：给 9 个数的保对称"
+                "超胞矩阵，或调大 MAX_MULTIPLE" % int(max_multiple))
+    msg += "\n        确认要沿用这个超胞（结果需自行核对称性）：SUPERCELL_SYMMETRY=warn"
+    if mode == "strict":
+        sys.exit("[ERROR] " + msg)
+    print("[WARN] " + msg, flush=True)
+    return rep
 
 
 # ---------------------------------------------------------------------------

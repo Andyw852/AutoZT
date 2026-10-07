@@ -260,7 +260,7 @@ optional_steps:
       - {seq: 14, name: step4_disp, label: SK4_disp,
          src: ../kl-dft-cpu,
          check: outcar, fanout: "disp-*", gen: gen_step4_disp.py,
-         gen_need: [dim_common.py, stepconf.py, step.conf, kl_common.py, lattice_kappa.py,
+         gen_need: [symmetry_audit.py, dim_common.py, stepconf.py, step.conf, kl_common.py, lattice_kappa.py,
                     check_common.py, step2_check_and_resubmit.py,
                     thickness_2d.py, vdw_radii.py,
                     incar_force_2d.tpl, incar_force_3d.tpl,

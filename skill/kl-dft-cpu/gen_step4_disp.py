@@ -53,6 +53,7 @@ SPEC = {
     "SUPERCELL":    (None,     "words"), # 显式 "3 3 3"；空=按 MIN_SC_LEN 自动
     "MIN_SC_LEN":   (12.0,     "float"),
     "MAX_MULTIPLE": (6,        "int"),
+    "SUPERCELL_SYMMETRY": ("strict", "str"),  # 超胞须保晶体全部点群操作：strict 拦 | warn 告警 | off
     # q 网格（写进 kl_params 供 step6）。auto = 2D 按倒空间长度估：
     #   N_i = max(MESH_MIN, ceil(Q_LEN_2D/|a_i|))，真空轴=1（P1-1）。
     #   写死 15 15 15 对 a≈3 Å 的 2D 材料只覆盖 ~47 Å 倒空间，κ 远未收敛。
@@ -636,6 +637,16 @@ def main():
         reps = kc.supercell_matrix(out / "POSCAR", dim, conf["MIN_SC_LEN"],
                                    conf["MAX_MULTIPLE"], vac_axis if vac_axis is not None else 2,
                                    cutoff=cut3)
+    # 超胞保对称闸（2026-10-07 Mn2In2Se5）：超胞不保晶体全部点群操作时，拟合出的
+    #   力常数必破对称（假虚频、kappa 随网格乱跳），在生成位移、花 DFT 机时之前拦下
+    try:
+        import symmetry_audit as _SA
+    except ImportError as _e:
+        print("[WARN] symmetry_audit.py 不可用，超胞保对称检查跳过：%s" % _e)
+    else:
+        _SA.supercell_symmetry_gate(out / "POSCAR", reps, conf["SUPERCELL_SYMMETRY"],
+                                    dim, vac_axis if vac_axis is not None else 2,
+                                    conf["MAX_MULTIPLE"])
     vac_ax = vac_axis if vac_axis is not None else 2
     _q_len = conf["Q_LEN_3D"] if dim == "3d" else conf["Q_LEN_2D"]
     mesh, mesh_note = kc.auto_mesh(conf["KAPPA_MESH"], dim, vac_ax, out / "POSCAR",

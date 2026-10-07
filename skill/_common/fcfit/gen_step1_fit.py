@@ -67,6 +67,8 @@ SPEC = {
     "SUPERCELL": ("", "str"),                # 对角 "n n n"；或一般矩阵 9 个数
                                              # "n11 n12 n13 n21 n22 n23 n31 n32 n33"
                                              # （行主序，与 phonopy/phono3py --dim 同义）
+    "SUPERCELL_SYMMETRY": ("strict", "str"), # 数据集超胞须保晶体全部点群操作：
+                                             # strict 拦 | warn 告警 | off（2026-10-07）
     # ---- engine ----
     # 拟合方法：FIT_METHODS 是总开关（auto = 用下面的 FIT_ENGINE + 该引擎的方法键）。
     #   写一个（如 pheasy:RIDGE）= 切换；写多个 / all = 全都算，第一个是主方法
@@ -175,6 +177,8 @@ SPEC = {
     "FC3_LOAD_GB_LIMIT": (8.0, "float"),     # skip materialising fc3 above this (ShengBTE/RMSE)
     "BAND_POINTS": (51, "int"),
     "IMAG_THR": (0.10, "float"),             # imaginary-frequency threshold (THz)
+    "IMAG_MESH_LENGTH": (100.0, "float"),    # 3D gate mesh length (A), full mesh, no symmetry reduction
+    "FC2_SYM_TOL": (1e-3, "float"),          # max frequency spread between symmetry-equivalent q (THz)
     "FIT_RMSE_FRAMES": (10, "int"),          # frames for the force residual (also per
                                              # cutoff -> S2 RMSE panel); 0 = off
     # ---- environment ----
@@ -563,6 +567,24 @@ def main(conf=None, out=None, job_label="S1fit", outdir=None):
     return cfg
 
 
+def _supercell_symmetry_gate(src, sc_rows, mode, dim):
+    """数据集超胞保对称闸（2026-10-07 Mn2In2Se5）：超胞不保晶体全部点群操作时，
+    任何引擎拟合出的 fc2 都破对称（假虚频、kappa 随 q 网格乱跳），拟合前就拦下。
+    数据集没带 POSCAR 时这里查不了，计算节点 prep 后由 fc_fit_driver 再查一次。"""
+    if not sc_rows:
+        return None
+    if not (src / "POSCAR").is_file():
+        print("[..] 数据集无 POSCAR，超胞保对称检查推迟到计算节点（fc_fit_driver）")
+        return None
+    try:
+        import symmetry_audit as SA
+    except ImportError as e:
+        print("[WARN] symmetry_audit.py 不可用，超胞保对称检查跳过：%s" % e)
+        return None
+    return SA.supercell_symmetry_gate(src / "POSCAR", sc_rows, mode, dim,
+                                      label="数据集超胞")
+
+
 def _gen_one(conf, out, job_label="S1fit"):
     """One S1 recipe (one engine/method) into `out`."""
     cwd = Path.cwd()
@@ -670,6 +692,7 @@ def _gen_one(conf, out, job_label="S1fit"):
 
     p_nmu, p_tol, p_max_iter, p_mu_max = pheasy_grid(conf, p_method, enable)
     dim = resolve_dim(conf["DIM"], src, src.parent)
+    _supercell_symmetry_gate(src, sc_rows, conf["SUPERCELL_SYMMETRY"], dim)
 
     # ---- shell / third-order cutoff candidates (ported from kl-dft-cpu S4/S5) ----
     #   Cheap and engine independent: enumerate the neighbour shells of the unit
@@ -775,6 +798,7 @@ def _gen_one(conf, out, job_label="S1fit"):
         "dataset_signature": sig,
         "supercell": sc_str,
         "supercell_matrix": sc_rows,
+        "supercell_symmetry": str(conf["SUPERCELL_SYMMETRY"] or "strict"),
         "primitive_matrix": primitive_matrix(src),
         "dim": dim,
         "enable_fc": enable,
@@ -834,6 +858,8 @@ def _gen_one(conf, out, job_label="S1fit"):
         "fc3_load_gb_limit": float(conf["FC3_LOAD_GB_LIMIT"] or 8.0),
         "band_points": int(conf["BAND_POINTS"]),
         "imag_thr": float(conf["IMAG_THR"]),
+        "imag_mesh_length": float(conf["IMAG_MESH_LENGTH"]),
+        "fc2_sym_tol": float(conf["FC2_SYM_TOL"]),
         "fit_rmse_frames": int(conf["FIT_RMSE_FRAMES"] or 0),
     }
     (out / "fit_config.json").write_text(

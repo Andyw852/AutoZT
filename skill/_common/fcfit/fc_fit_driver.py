@@ -65,6 +65,10 @@ import phonon_stability  # 虚频/ZA 编排唯一真源（_common/phonon_stabili
 OUTDIR = "step1_fit"
 SB_SUB = "shengbte"
 P3_SUB = "phono3py"
+# 虚频门禁（3D）的长度网格（A）。60 在层状/斜胞上太粗（Mn2In2Se5 只有 17x17x4）。
+IMAG_MESH_LENGTH = 100.0
+# 对称等价 q 点之间允许的最大频差（THz）；满足对称的 fc2 在 1e-8 量级。
+FC2_SYM_TOL = 1e-3
 
 # Recognised dataset signatures, most specific first.
 SIGNATURES = (
@@ -2223,9 +2227,26 @@ def _write_fc2_hdf5(fc2, path):
         h.create_dataset("force_constants", data=fc2, compression="gzip")
 
 
+def _supercell_symmetry_check(cfg, out):
+    """拟合前再查一次数据集超胞是否保晶体全部点群操作（gen 时数据集可能没带
+    POSCAR；prep 之后 POSCAR 一定在）。SUPERCELL_SYMMETRY=strict 时不保就停。"""
+    scm, _pm = _cells_cfg(cfg, out)
+    if scm is None or not (out / "POSCAR").is_file():
+        return
+    try:
+        import symmetry_audit as SA
+    except ImportError as e:
+        print("[WARN] symmetry_audit.py 不可用，超胞保对称检查跳过：%s" % e, flush=True)
+        return
+    SA.supercell_symmetry_gate(out / "POSCAR", np.rint(scm).astype(int).tolist(),
+                               cfg.get("supercell_symmetry") or "strict",
+                               str(cfg.get("dim") or "3d"), label="数据集超胞")
+
+
 def cmd_fit(cfg, out):
     engine = str(cfg.get("engine") or "phono3py").lower()
     print("[..] FIT_ENGINE=%s" % engine, flush=True)
+    _supercell_symmetry_check(cfg, out)
     if engine == "phono3py":
         cmd_fit_phono3py(cfg, out)
     elif engine == "pheasy":
@@ -2760,6 +2781,7 @@ def _stability_gate(cfg, out):
         uc = _phonopy_unitcell(out / "POSCAR")
     except Exception as e:
         return _bad("could not prepare the phonopy input: %s" % e)
+    fc2 = _fc2_in_phonopy_order(fc2, uc, scm, pm, out / "SPOSCAR")
 
     # 2D 真空轴：取最长的原胞格矢（近似 dim_common.detect_dimension；共享引擎不
     #   携带真空轴）。用于显式整数网格的真空轴设 1 + ZA 面内方向投影。
@@ -2775,14 +2797,19 @@ def _stability_gate(cfg, out):
         m[vax] = 1
         return m
 
+    # 网格（2026-10-07）：3D 原来 run_mesh(60.0, is_mesh_symmetry=True)，Mn2In2Se5 上
+    #   只有 17x17x4、对称约化后只算 315 个 q 点，破对称 fc2 的假虚频全在区内低对称点上，
+    #   一个没采到。改为更密的长度网格 + 不做对称约化（fc2 不对称时约化本身就不成立）。
+    _len3d = float(cfg.get("imag_mesh_length") or IMAG_MESH_LENGTH)
+
     def _minfreq(with_nac):
         p = _build_phonopy(scm, pm, uc, fc2)
         got = _apply_nac(out, p) if with_nac else False
         _mn = _mesh_numbers()
         if _mn is None:
-            p.run_mesh(mesh=60.0, with_eigenvectors=False, is_mesh_symmetry=True)
+            p.run_mesh(mesh=_len3d, with_eigenvectors=False, is_mesh_symmetry=False)
         else:
-            p.run_mesh(mesh=_mn, with_eigenvectors=False, is_mesh_symmetry=True,
+            p.run_mesh(mesh=_mn, with_eigenvectors=False, is_mesh_symmetry=False,
                        is_gamma_center=True)
         return float(np.min(p.get_mesh_dict()["frequencies"])), p, got
 
@@ -2835,21 +2862,119 @@ def _stability_gate(cfg, out):
     _za_v = imag_policy.za_verdict(za)
     mf_used = imag["min_freq_THz"] if imag.get("min_freq_THz") is not None else mf_nonac
     nac_used = False
+
+    # ---- fc2 对称性（2026-10-07）：对称等价 q 点的频率必须相同 ----
+    #   破对称的 fc2 在高对称路径上看着完全正常，只有等价点之间的频差能暴露它
+    #   （Mn2In2Se5 3x3x1：0.07 THz）。超过 FC2_SYM_TOL 判失败，原因写清楚。
+    sym = _fc2_symmetry_spread(ph_nonac, cfg)
+    sym_tol = float(cfg.get("fc2_sym_tol") if cfg.get("fc2_sym_tol") is not None
+                    else FC2_SYM_TOL)
+    sym_broken = (sym.get("spread_THz") is not None and sym["spread_THz"] > sym_tol)
+    if sym.get("error"):
+        print("[WARN] fc2 对称性检查没跑成（不拦）：%s" % sym["error"], flush=True)
+    sym["tol_THz"] = sym_tol
+    sym["broken"] = bool(sym_broken)
+
     parts = ["min_freq(no-NAC)=%.3f THz" % mf_nonac]
     if mf_nac is not None:
         parts.append("min_freq(NAC)=%.3f THz" % mf_nac)
     parts.append("imag_policy=%s/%s" % (imag["verdict"], imag["imag_class"]))
     if is2d:
         parts.append("ZA verdict=%s" % _za_v)
-    note = "; ".join(parts) + " -> " + ("no significant imaginary frequency"
-                                        if stable else "imaginary frequency present")
+    if sym.get("spread_THz") is not None:
+        parts.append("fc2 symmetry spread=%.2e THz over %d ops (tol %.0e)"
+                     % (sym["spread_THz"], sym["n_ops"], sym_tol))
+    if sym_broken:
+        stable = False
+        status = "fc2_symmetry_broken"
+        note = ("; ".join(parts) + " -> fc2 breaks the crystal symmetry: symmetry-"
+                "equivalent q points differ by %.2e THz.  Usually the supercell does not "
+                "keep every point-group operation (e.g. n n 1 on a rhombohedral cell); a "
+                "magnetic order that lowers the symmetry does the same.  Imaginary-"
+                "frequency and kappa results from this fc2 are not usable"
+                % sym["spread_THz"])
+    else:
+        status = ("stable" if stable else
+                  ("imaginary" if imag["verdict"] == "fail" else "za_not_quadratic"))
+        note = "; ".join(parts) + " -> " + ("no significant imaginary frequency"
+                                            if stable else "imaginary frequency present")
     return {"tool_ok": True, "stable": stable, "min_freq": mf_used,
             "min_freq_nonac": mf_nonac, "min_freq_nac": mf_nac, "nac_used": nac_used,
             "is_2d": is2d, "imag": imag, "za_exponent": za, "za_verdict": _za_v,
-            "stability_verdict": stability_verdict,
-            "status": ("stable" if stable else
-                       ("imaginary" if imag["verdict"] == "fail" else "za_not_quadratic")),
-            "note": note}
+            "stability_verdict": stability_verdict, "fc2_symmetry": sym,
+            "status": status, "note": note}
+
+
+def _fc2_in_phonopy_order(fc2, uc, scm, pm, sposcar, tol=1e-4):
+    """fc2 按数据集 SPOSCAR 的原子顺序存；phonopy 由 POSCAR 重建的超胞顺序不一定
+    相同——_phonopy_unitcell 把分数坐标卷回 [0,1)，POSCAR 里有 1.0 或负坐标的原子
+    （Mn2In2Se5 的 Se 在 (1,0,0)）卷回后，phonopy 超胞里它的各个像排列换了位，
+    fc2 就被套到错位的原子上，门禁算出来的频率是错的。按位置把 fc2 重排成
+    phonopy 的顺序；对不上（或 fc2 是 compact 格式）时原样返回并告警。"""
+    fc2 = np.asarray(fc2, float)
+    if not Path(sposcar).is_file() or fc2.ndim != 4 or fc2.shape[0] != fc2.shape[1]:
+        return fc2
+    try:
+        from phonopy import Phonopy
+        sc = Phonopy(uc, supercell_matrix=np.asarray(scm, float),
+                     primitive_matrix=pm).supercell
+        sp = _read_poscar(sposcar)
+        if len(sp) != len(sc) or len(sc) != fc2.shape[0]:
+            return fc2
+        inv = np.linalg.inv(np.asarray(sp.cell, float))
+        f_ph = np.asarray(sc.positions, float) @ inv
+        f_sp = np.asarray(sp.positions, float) @ inv
+        perm = np.empty(len(sc), dtype=int)
+        for a, f in enumerate(f_ph):
+            d = f_sp - f
+            d -= np.rint(d)
+            b = int(np.argmin(np.abs(d).max(axis=1)))
+            if np.abs(d[b]).max() > tol:
+                raise ValueError("phonopy 超胞原子 %d 在 SPOSCAR 里找不到" % a)
+            perm[a] = b
+        if len(set(perm.tolist())) != len(perm):
+            raise ValueError("位置匹配不是一一对应")
+        if np.array_equal(perm, np.arange(len(perm))):
+            return fc2
+        print("[..] 门禁：fc2（数据集 SPOSCAR 顺序）按位置重排成 phonopy 超胞顺序"
+              "（%d/%d 个原子换位）" % (int((perm != np.arange(len(perm))).sum()),
+                                     len(perm)), flush=True)
+        return fc2[np.ix_(perm, perm)]
+    except Exception as e:                       # noqa: BLE001
+        print("[WARN] 门禁：核对 fc2 与 phonopy 超胞的原子顺序失败（%s），按原顺序算"
+              % e, flush=True)
+        return fc2
+
+
+def _fc2_symmetry_spread(ph, cfg, n_q=12, seed=0):
+    """对称等价 q 点之间的最大频差（THz）。
+
+    取 n_q 个随机（低对称）q，用原胞的全部点群操作展开成对称星，每颗星内逐支求
+    max-min，再取最大。fc2 满足晶体对称时这个数是数值噪声（~1e-8 THz）。
+    symprec 用严格的 1e-5：只认结构真正具有的对称操作，免得微畸变结构被误判。"""
+    try:
+        import spglib
+        prim = ph.primitive
+        cell = (np.asarray(prim.cell, float), np.asarray(prim.scaled_positions, float),
+                np.asarray(prim.numbers, int))
+        symprec = float(cfg.get("fc2_sym_symprec") or 1e-5)
+        rots = spglib.get_symmetry(cell, symprec=symprec)["rotations"]
+        rots = list({np.asarray(r).tobytes(): np.asarray(r) for r in rots}.values())
+        if len(rots) <= 1:
+            return {"spread_THz": 0.0, "n_ops": len(rots), "n_q": 0,
+                    "symprec": symprec}
+        rng = np.random.default_rng(seed)
+        qs = rng.random((int(n_q), 3)) * 0.5
+        stars = [np.array([r.T @ q for r in rots]) for q in qs]
+        ph.run_qpoints(np.vstack(stars))
+        fr = np.asarray(ph.get_qpoints_dict()["frequencies"])
+        k = len(rots)
+        spread = max(float(np.max(np.ptp(fr[i * k:(i + 1) * k], axis=0)))
+                     for i in range(len(stars)))
+        return {"spread_THz": spread, "n_ops": len(rots), "n_q": int(n_q),
+                "symprec": symprec}
+    except Exception as e:                       # noqa: BLE001
+        return {"spread_THz": None, "error": str(e)}
 
 
 def _fit_rmse(cfg, out, fc_dir=None, quiet=False):
@@ -3039,6 +3164,7 @@ def cmd_post(cfg, out):
         "imag": g.get("imag"),
         "imag_class": (g.get("imag") or {}).get("imag_class"),
         "min_freq_THz": (g.get("imag") or {}).get("min_freq_THz"),
+        "fc2_symmetry": g.get("fc2_symmetry"),
         "note": g["note"],
     }
     summary.update(rmse)
