@@ -56,6 +56,10 @@ CARRIER = "both"                     # electron / hole / both
 # [C2] E1_SOURCE 是【硬选择】不是偏好：要 "vac" 却拿不到 E1_vac_* 时直接报错，
 #   绝不静默回退 amset 口径（两者数值能差 3 倍，μ 差一个量级）。
 E1_SOURCE = "vac"
+# [V174] m* 直接拟合 step3_uniform 的网格点：S3 面内网格不合现行规则（2D 0.05 / 3D 0.06 Å⁻¹）就拒绝生成。
+#   CrS₂_hex 15×15×1 -> 48×48×3：m* 0.967/1.009 -> 0.866/0.883，DPT +25%/+31%（拟合窗口 4×最近邻 = 0.64 Å⁻¹，
+#   吃进了非抛物区；V147 的最近一壳 3.85 kT 刚好没过 4 kT 的线）。只为复现旧结果才写 step.conf ALLOW_COARSE_S3 = true。
+ALLOW_COARSE_S3 = False
 
 # —— 手动覆盖（填了就用手填值，最可靠；None=尝试自动）——
 # ★ V148：**只给一个材料用就写它的 step.conf**（下方 SPEC 的键），不要改这里。这里的值作用到所有材料
@@ -84,6 +88,7 @@ SPEC = {
     "THICKNESS_A":    (None, "float"),    # 2D 层厚 Å
     "E1_SOURCE":      (None, "str"),      # vac / amset
     "FORCE_NSTEP":    (None, "int"),      # 2/3/4/5
+    "ALLOW_COARSE_S3": (False, "bool"),   # [V174] S3 面内网格不合现行规则也照算
 }
 _CONF_TO_MANUAL = {"M_EFF_ELECTRON": "m_eff_electron", "M_EFF_HOLE": "m_eff_hole",
                    "E1_ELECTRON_EV": "E1_electron_eV", "E1_HOLE_EV": "E1_hole_eV",
@@ -123,7 +128,7 @@ def _manual_prov(key):
 def apply_conf(cwd):
     """[V148] 读本材料 step.conf 的覆盖写进 MANUAL / E1_SOURCE / FORCE_NSTEP；脚本里 MANUAL 被改过就 ★ 告警。
     返回 {键: {"value", "source"}}（写进 dpt_result.json 的 overrides）。"""
-    global E1_SOURCE, FORCE_NSTEP
+    global E1_SOURCE, FORCE_NSTEP, ALLOW_COARSE_S3
     rec = {}
     for k, v in MANUAL.items():
         if v is not None:
@@ -167,6 +172,10 @@ def apply_conf(cwd):
         FORCE_NSTEP = int(p["FORCE_NSTEP"])
         rec["FORCE_NSTEP"] = {"value": FORCE_NSTEP, "source": "step.conf FORCE_NSTEP"}
         print("[OK] FORCE_NSTEP = %d（step.conf）" % FORCE_NSTEP)
+    if p["ALLOW_COARSE_S3"]:
+        ALLOW_COARSE_S3 = True
+        rec["ALLOW_COARSE_S3"] = {"value": True, "source": "step.conf ALLOW_COARSE_S3"}
+        print("[OK] ALLOW_COARSE_S3 = true（step.conf）")
     return rec
 
 
@@ -196,6 +205,23 @@ def _read_dim(cwd):
 def _guard_not_0d(cwd):
     if _read_dim(cwd) == "0d":
         sys.exit("[ERROR] step8.2_dpt 不支持 0D 体系（无能带色散，形变势无意义）。")
+
+
+def _s3_grid_gate(cwd, dim):
+    """[V174] S3 面内网格不合现行规则 -> 拒绝（ALLOW_COARSE_S3 时告警照算）。真空轴 kz 不影响面内 m*，不查。
+    返回写进 dpt_result.json 的 {"mesh", "issues", "allow_coarse"}；没有 ke_common 返回 None。"""
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+        import ke_common as _kc
+    except ImportError:
+        print("[WARN] 没有 ke_common.py，S3 网格没查（skill.yaml 的 gen_need 漏了它？）")
+        return None
+    iss = _kc.s3_grid_gate(cwd, "S8.2", allow=ALLOW_COARSE_S3, dim=dim if dim in ("2d", "3d") else None,
+                           check_kz=False, uses="m* 直接拟合这张网格上的点（拟合窗口随最近邻间距放大）",
+                           redo="本步（E1 跟着 S7 -> S7.1 的新网格再更新一次）")
+    mesh = _kc.read_kpoints_mesh(Path(cwd) / UNIFORM_DIR / "KPOINTS")
+    return {"mesh": [int(x) for x in mesh] if mesh else None,
+            "issues": [m for _, m in iss], "allow_coarse": bool(ALLOW_COARSE_S3)}
 
 
 def _hex_cell(recip):
@@ -1162,6 +1188,7 @@ def main():
     overrides = apply_conf(cwd)
     dim = _read_dim(cwd)
     is_2d = (dim == "2d")
+    s3_grid = _s3_grid_gate(cwd, dim)                     # [V174] 在算 m* 之前
 
     carriers = (["electron", "hole"] if CARRIER == "both" else [CARRIER])
     # [ENV] 记录执行环境，铺开时"哪个环境跑的"从推断变成可读事实
@@ -1178,7 +1205,7 @@ def main():
     except Exception:
         _env = {"python": sys.executable}
     res = {"dim": dim, "is_2d": is_2d, "temperature_K": TEMPERATURE_K,
-           "skill_rev": _SKILL_REV, "env": _env, "overrides": overrides,
+           "skill_rev": _SKILL_REV, "env": _env, "overrides": overrides, "s3_grid": s3_grid,
            "formula": ("2D Bardeen-Shockley: μ=eℏ³C_2D/(k_BT m* m_d E1²)" if is_2d
                        else "3D: μ=2√(2π)eℏ⁴C_3D/(3(k_BT)^{3/2}m*^{5/2}E1²)"),
            "results": [_one_carrier(cwd, is_2d, c, TEMPERATURE_K) for c in carriers],
@@ -1188,6 +1215,9 @@ def main():
         json.dumps(res, ensure_ascii=False, indent=2), encoding="utf-8")
 
     lines = ["# DPT 迁移率摘要（%s, %.0f K）" % (dim, TEMPERATURE_K)]
+    if s3_grid and s3_grid["issues"]:                     # [V174] 只在 ALLOW_COARSE_S3 时走到这里
+        lines.append("# ★ S3 网格 %s 不合现行规则（ALLOW_COARSE_S3）：m* 只作复现/对照 —— %s"
+                     % ("×".join(map(str, s3_grid["mesh"] or [])), "；".join(s3_grid["issues"])))
     for r in res["results"]:
         mu = r["mobility_cm2_Vs"]
         lines.append("%-9s μ = %s cm²/(V·s)   [%s]" % (

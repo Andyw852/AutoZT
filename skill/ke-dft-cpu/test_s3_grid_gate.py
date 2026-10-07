@@ -4,9 +4,13 @@
 
 起因（2026-10-07）：CrS₂_hex 的 S3 一直是 08-26 的 15×15×1（面内间距 0.16 Å⁻¹ = 规则 0.05 的 3.2 倍、kz 一层），
 CrSe₂ 是 48×48×3。S7 照抄 S3 网格、S8.4 照用，谁都不查；两者 S8.4 的 ADP/DPT 一个 1.7、一个 0.5。
+V174：S8.2（m* 直接拟合 S3 网格点）同样拦、S8.1（BoltzTraP2）告警；两步只查面内。CrS₂ 换 48×48×3 后
+m* 0.967/1.009 -> 0.866/0.883、DPT +25%/+31%。
 
 用法：python test_s3_grid_gate.py      退出码 0 = 全部 PASS。
 """
+import contextlib
+import io
 import math
 import sys
 import tempfile
@@ -16,6 +20,8 @@ from pathlib import Path
 _ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(_ROOT))
 sys.path.insert(0, str(_ROOT.parent / "_common" / "opt"))
+sys.path.insert(0, str(_ROOT / "step8.2_dpt"))
+sys.path.insert(0, str(_ROOT / "step8.1_boltztrap"))
 import ke_common as kc  # noqa: E402
 
 
@@ -57,6 +63,11 @@ class S3GridTests(unittest.TestCase):
         d = _mat(5.43, 5.43, (20, 20, 20), dim="3D", hexagonal=False)
         self.assertEqual(kc.s3_grid_issues(d), [])
 
+    def test_inplane_only(self):                                       # [V174] S8.1 / S8.2
+        self.assertEqual(kc.s3_grid_issues(_mat(3.04, 20, (48, 48, 1)), check_kz=False), [])
+        iss = kc.s3_grid_issues(_mat(3.04, 20, (15, 15, 1)), check_kz=False)
+        self.assertEqual([lv for lv, _ in iss], ["error", "error"])
+
     def test_missing_s3_is_silent(self):
         self.assertEqual(kc.s3_grid_issues(Path(tempfile.mkdtemp())), [])
 
@@ -68,6 +79,38 @@ class S3GridTests(unittest.TestCase):
         self.assertEqual(kc.s3_grid_gate(_mat(3.21, 20, (48, 48, 3)), "S8.4"), [])
 
 
+class DptGateTests(unittest.TestCase):                                  # [V174]
+    def setUp(self):
+        import importlib
+        import gen_step12_dpt as D
+        self.D = importlib.reload(D)
+
+    def test_coarse_s3_blocks_dpt(self):
+        d = _mat(3.04, 20, (15, 15, 1))
+        with contextlib.redirect_stdout(io.StringIO()), self.assertRaises(SystemExit) as cm:
+            self.D._s3_grid_gate(d, "2d")
+        self.assertIn("m* 直接拟合", str(cm.exception.code))
+        self.assertIn("ALLOW_COARSE_S3", str(cm.exception.code))
+        self.assertEqual(self.D._s3_grid_gate(_mat(3.04, 20, (48, 48, 1)), "2d"),    # kz 一层不拦 DPT
+                         {"mesh": [48, 48, 1], "issues": [], "allow_coarse": False})
+
+    def test_allow_via_step_conf(self):
+        d = _mat(3.04, 20, (15, 15, 1))
+        (d / "step.conf").write_text("[params]\nALLOW_COARSE_S3 = true\n")
+        with contextlib.redirect_stdout(io.StringIO()):
+            rec = self.D.apply_conf(d)
+            g = self.D._s3_grid_gate(d, "2d")
+        self.assertTrue(rec["ALLOW_COARSE_S3"]["value"])
+        self.assertEqual((g["mesh"], len(g["issues"]), g["allow_coarse"]), ([15, 15, 1], 2, True))
+
+    def test_boltztrap_warns_only(self):
+        import gen_step11_boltztrap as B
+        with contextlib.redirect_stdout(io.StringIO()) as buf:
+            g = B._s3_grid_note(_mat(3.04, 20, (15, 15, 1)), "2d")
+        self.assertEqual((g["mesh"], len(g["issues"])), ([15, 15, 1], 2))
+        self.assertIn("BoltzTraP2 插值的就是这张网格", buf.getvalue())
+
+
 class WiringTests(unittest.TestCase):
     def test_gens(self):
         for f, label in (("step8.4_amset2d/gen_step14_amset2d.py", "S8.4"), ("step8_amset/gen_step10_amset.py", "S8")):
@@ -77,6 +120,18 @@ class WiringTests(unittest.TestCase):
             i = s.index('kc.s3_grid_gate(cwd, "%s"' % label)
             self.assertLess(s.index('ALLOW_COARSE_S3 = bool(_p["ALLOW_COARSE_S3"])'), i, f)
             self.assertLess(i, s.index('kc.check_lineage(cwd, enabled=STRUCTURE_GUARD, label="%s")' % label), f)
+
+    def test_dpt_and_boltztrap_wiring(self):                           # [V174]
+        s = (_ROOT / "step8.2_dpt" / "gen_step12_dpt.py").read_text(encoding="utf-8")
+        body = s[s.index("\ndef main("):]
+        self.assertIn('"ALLOW_COARSE_S3": (False, "bool")', s)
+        self.assertLess(body.index("overrides = apply_conf(cwd)"), body.index("s3_grid = _s3_grid_gate(cwd, dim)"))
+        self.assertLess(body.index("s3_grid = _s3_grid_gate(cwd, dim)"), body.index('"results": [_one_carrier('))
+        self.assertIn('"s3_grid": s3_grid', body)
+        b = (_ROOT / "step8.1_boltztrap" / "gen_step11_boltztrap.py").read_text(encoding="utf-8")
+        body = b[b.index("\ndef main("):]
+        self.assertLess(body.index("s3_grid = _s3_grid_note(cwd, dim)"), body.index("run_boltztrap_crta("))
+        self.assertIn('res["s3_grid"] = s3_grid', body)
 
     def test_s3_defaults_and_s7_warning(self):
         for f in ("step3_uniform/gen_step5_uniform.py", "step3b_uniform_full/gen_step5b_uniform_full.py"):
