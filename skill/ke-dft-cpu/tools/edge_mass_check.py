@@ -36,6 +36,8 @@ import ke_common as kc  # noqa: E402
 HB2M = 3.80998            # ħ²/(2 m0)，eV·Å²（与 S8.2 同一常数）
 DEGEN_EV = 0.005
 TOTEN_TOL_EV = 1e-4       # stage1 自洽必须复现 S3 的总能量（同网格、同 INCAR）
+HALF_TOL = 0.02           # 窗口减半后 m* 的变化上限
+NOISE_ANISO = 1.01        # [V178] 窗口减半时各方向离散 > 1% -> 判为小 q 点的能量噪声；≤ 1% 且仍变 -> 高阶非抛物
 META = "edge_mass_meta.json"
 RESULT = "edge_mass_result.json"
 # [V177] 两段式（S3 没有可用的 CHGCAR 时）。VASP 命令由调用者给，本工具不碰集群的提交方式。
@@ -189,7 +191,8 @@ def fit_directions(e, pts, ndir, carrier, qfit):
         q = np.array(qs)
         eb = np.array([(plus[x] + minus[x]) / 2.0 - e0 for x in qs])
         c1, c2 = np.linalg.lstsq(np.c_[q ** 2, q ** 4], eb, rcond=None)[0]
-        rec.update(c1=float(c1), c2=float(c2))
+        rms = float(np.sqrt(np.mean((eb - c1 * q ** 2 - c2 * q ** 4) ** 2)))
+        rec.update(c1=float(c1), c2=float(c2), rms_meV=1000.0 * rms)
         if (carrier == "electron" and c1 <= 0) or (carrier == "hole" and c1 >= 0):
             rec["error"] = "曲率符号不对：k0 不是这条带的极值点"
         else:
@@ -364,25 +367,48 @@ def cmd_fit(a):
             ok = False
             res["carriers"][carrier] = r
             continue
-        r["half_window_change"] = sh["m_light2"] / sf["m_light2"] - 1.0
-        print("   m*（最轻两支几何均值，S8.2 口径）= %.4f；全部方向几何均值 %.4f；各向异性 %.3f；窗口减半 %+.1f%%"
-              % (sf["m_light2"], sf["m_geo"], sf["anisotropy"], 100 * r["half_window_change"]))
-        if abs(r["half_window_change"]) > 0.02:
-            print("   [WARN] 窗口减半后变化 > 2%%：小 q 点的能量精度不够或非抛物太强，结论要打折扣")
-            ok = False
+        r["half_window_change"] = hc = sh["m_light2"] / sf["m_light2"] - 1.0
+        rms = max(d.get("rms_meV", 0.0) for d in full)
+        print("   m*（最轻两支几何均值，S8.2 口径）：全窗口 %.4f（各向异性 %.3f，残差 RMS ≤ %.4f meV）；"
+              "窗口减半 %.4f（%+.1f%%，各方向离散 %.3f）"
+              % (sf["m_light2"], sf["anisotropy"], rms, sh["m_light2"], 100 * hc, sh["anisotropy"]))
+        # [V178] 两条判据分开写、各自给结论（V177 只打一行 WARN，agent 把"窗口减半不稳"当成了通过）
+        why = []
+        stable = abs(hc) <= HALF_TOL
+        if not stable:
+            noise = sh["anisotropy"] > NOISE_ANISO
+            r["half_window_diagnosis"] = "noise" if noise else "higher_order"
+            print("   [★] 窗口减半后变了 %+.1f%%（> %.0f%%）：%s" % (
+                100 * hc, 100 * HALF_TOL,
+                "各方向的半窗口值彼此不一致（离散 %.3f）—— 多半是小 q 点的能量噪声，全窗口值更可信" % sh["anisotropy"]
+                if noise else
+                "各方向一致地变（离散 %.3f）—— 多半是带的高阶非抛物项，半窗口值更接近带边" % sh["anisotropy"]))
+            why.append("拟合不稳（窗口减半 %+.1f%%）" % (100 * hc))
+        lo, hi = sorted((sf["m_light2"], sh["m_light2"]))
+        r["m_range"] = [lo, hi] if not stable else [sf["m_light2"], sf["m_light2"]]
         if r["dpt_m"]:
             r["dpt_over_fine"] = r["dpt_m"] / sf["m_light2"]
+            r["dpt_over_half"] = r["dpt_m"] / sh["m_light2"]
             good = abs(r["dpt_over_fine"] - 1.0) < a.tol
-            print("   S8.2（S3 网格 %s）m* = %.4f，是细网格值的 %.3f 倍 -> %s"
+            print("   S8.2（S3 网格 %s）m* = %.4f：是全窗口值的 %.3f 倍%s"
                   % ("×".join(map(str, meta["s3_mesh"] or [])), r["dpt_m"], r["dpt_over_fine"],
-                     "[OK] 已收敛" if good else "[★] 差 ≥ %.0f%%：S3 网格对 m* 还不够" % (100 * a.tol)))
-            ok = ok and good
+                     "" if stable else "、半窗口值的 %.3f 倍；带边 m* 在 %.4f–%.4f 之间" % (r["dpt_over_half"], lo, hi)))
+            if not good:
+                why.append("和 S8.2 差 ≥ %.0f%%" % (100 * a.tol))
         else:
             print("   （没有 step8.2_dpt/dpt_result.json，只给细网格值）")
+        r["pass"] = not why
+        r["fail_reasons"] = why
+        print("   -> %s 判定：%s" % (carrier, "通过" if not why else "不通过（%s）" % "；".join(why)))
+        ok = ok and not why
         res["carriers"][carrier] = r
     res["pass"] = ok
     (out / RESULT).write_text(json.dumps(res, ensure_ascii=False, indent=1), encoding="utf-8")
-    print("[%s] 结果写到 %s" % ("OK" if ok else "★", out / RESULT))
+    bad = ["%s：%s" % (c, "；".join(r.get("fail_reasons") or ["拟合不了"]))
+           for c, r in res["carriers"].items() if not r.get("pass")]
+    print("[%s] 总判定：%s（退出码 %d）。结果写到 %s" % (
+        "OK" if ok else "★", "通过" if ok else "不通过 —— " + " / ".join(bad or ["stage1 没复现 S3"]),
+        0 if ok else 1, out / RESULT))
     return 0 if ok else 1
 
 

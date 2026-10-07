@@ -5,6 +5,7 @@
 模型能带：六方 2D（a = 3.04 Å），带边在 K；E = Eg + ħ²q²/2m + w q³ cos3θ + c₄q⁴（导带），价带取负。
 三角翘曲 w q³cos3θ 是奇次项，±q 平均后应完全消掉；q⁴ 由拟合吸收。
 V177：S3 的 CHGCAR 是 0 字节（出厂 LCHARG = .FALSE.）时走两段式（stage1 从 WAVECAR 自洽 -> stage2 非自洽）。
+V178：每个载流子单独给"通过/不通过"和原因；窗口减半不稳时区分"能量噪声"（各方向离散大）和"高阶非抛物"（各方向一致）。
 
 用法：python test_edge_mass_check.py      退出码 0 = 全部 PASS。
 """
@@ -35,11 +36,11 @@ K = np.array([1 / 3, 1 / 3, 0.0])
 ME, MH, EG = 0.8663, 0.8829, 0.94
 
 
-def _model(kf, me=ME, mh=MH, w=0.6, c4=-3.0):
+def _model(kf, me=ME, mh=MH, w=0.6, c4=-3.0, c6h=0.0):
     d = (np.asarray(kf) - K) @ REC
     q, th = math.hypot(d[0], d[1]), math.atan2(d[1], d[0])
     warp = w * q ** 3 * math.cos(3 * th)
-    return (-(E.HB2M * q * q / mh) - warp - c4 * q ** 4,          # 价带
+    return (-(E.HB2M * q * q / mh) - warp - c4 * q ** 4 + c6h * q ** 6,   # 价带（c6h：高阶非抛物）
             EG + E.HB2M * q * q / me + warp + c4 * q ** 4)       # 导带
 
 
@@ -87,13 +88,15 @@ def _dpt(m, me, mh):
         {"carrier": "electron", "inputs": {"m_eff_m0": me}}, {"carrier": "hole", "inputs": {"m_eff_m0": mh}}]}))
 
 
-def _eigenval(out, vasp6=True, **model):
+def _eigenval(out, vasp6=True, noise_h=0.0, seed=0, **model):
+    rng = np.random.default_rng(seed)
     out = out / "stage2_nscf" if (out / "stage2_nscf").is_dir() else out
     ln = (out / "KPOINTS").read_text().splitlines()
     kf = [[float(x) for x in l.split()[:3]] for l in ln[3:3 + int(ln[1])]]
     rows = ["    3    3    1    1", "  0.1E+02", "  1.0E-04", "  CAR", " CrS2", "     18  %d  2" % len(kf)]
     for k in kf:
         ev, ec = _model(k, **model)
+        ev += noise_h * rng.standard_normal()                     # 价带加噪声（模拟非自洽本征值没收敛透）
         rows += ["", "  %.7E  %.7E  %.7E  %.7E" % (k[0], k[1], k[2], 1.0)]
         rows += ["    1  %.6f%s" % (ev, "  1.000000" if vasp6 else ""), "    2  %.6f%s" % (ec, "  0.000000" if vasp6 else "")]
     (out / "EIGENVAL").write_text("\n".join(rows) + "\n")
@@ -212,7 +215,7 @@ class MakeFitTests(unittest.TestCase):
         _eigenval(out2)
         rc, txt = _run(["fit", str(out2)])
         self.assertEqual(rc, 1)
-        self.assertIn("S3 网格对 m* 还不够", txt)
+        self.assertIn("-> electron 判定：不通过（和 S8.2 差 ≥ 3%）", txt)
 
     def test_fit_wrong_run(self):
         m = _material()
@@ -222,6 +225,45 @@ class MakeFitTests(unittest.TestCase):
         rc, txt = _run(["fit", str(out)])
         self.assertEqual(rc, 2)
         self.assertIn("不是这次 make 的输入", txt)
+
+
+class VerdictTests(unittest.TestCase):                                   # [V178]
+    def _fit(self, **kw):
+        m = _material()
+        _dpt(m, ME, MH)
+        out = m.parent / "emc"
+        _run(["make", str(m), str(out)])
+        _eigenval(out, **kw)
+        rc, txt = _run(["fit", str(out)])
+        return rc, txt, json.loads((out / E.RESULT).read_text())["carriers"]
+
+    def test_clean_pass_is_explicit(self):
+        rc, txt, c = self._fit()
+        self.assertEqual(rc, 0, txt)
+        self.assertIn("-> electron 判定：通过", txt)
+        self.assertIn("-> hole 判定：通过", txt)
+        self.assertIn("总判定：通过（退出码 0）", txt)
+        self.assertLess(max(d["rms_meV"] for d in c["hole"]["directions"]), 1e-3)
+
+    def test_unstable_half_window_is_a_fail_not_a_warn(self):
+        # CrS₂ 空穴那种：窗口减半 > 2%。V177 只打 WARN，agent 当成了通过
+        rc, txt, c = self._fit(noise_h=2e-5)
+        self.assertEqual(rc, 1)
+        self.assertIn("-> hole 判定：不通过（拟合不稳", txt)
+        self.assertIn("-> electron 判定：通过", txt)
+        self.assertIn("总判定：不通过 —— hole：拟合不稳", txt)
+        self.assertEqual(c["hole"]["half_window_diagnosis"], "noise")
+        self.assertIn("多半是小 q 点的能量噪声", txt)
+        lo, hi = c["hole"]["m_range"]
+        self.assertLess(lo, hi)
+        self.assertIn("带边 m* 在 %.4f–%.4f 之间" % (lo, hi), txt)
+
+    def test_higher_order_diagnosed(self):
+        rc, txt, c = self._fit(c6h=6e4)
+        self.assertEqual(rc, 1)
+        self.assertEqual(c["hole"]["half_window_diagnosis"], "higher_order")
+        self.assertIn("多半是带的高阶非抛物项，半窗口值更接近带边", txt)
+        self.assertLess(c["hole"]["summary_half_window"]["anisotropy"], E.NOISE_ANISO)
 
 
 class TwoStageTests(unittest.TestCase):                                  # [V177]
