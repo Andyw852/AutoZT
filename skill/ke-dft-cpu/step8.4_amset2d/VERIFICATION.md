@@ -8170,3 +8170,27 @@ environment: amset_clean`，接着 `amset: command not found`。集群上现在�
 - 方向标签：a1 沿 x 时 θ = 0 是锯齿；a1 沿 y 时 θ = 0 是扶手椅；矩形胞不标。
 - 命令行：make（qmax 0.3）→ scan，表头标签、超出 qmax 的告警、JSON 都正确；同一次结果 fit 照样能读。
 - 把 edge_mass_check.py 退回 V183，新增的 5 项全部报错。
+
+## V185（2026-10-07）：lineage_check 在 autozt fetch 拉回的本地副本上跑时，标出来并提示到集群复核
+
+**现场**：
+- 在本地结果目录上跑 lineage_check，报"CrS₂ 的 S7 ionrelax 是 15×15×1，S3 是 48×48×3"。
+- 到集群上核对：undeformed、deform-01..04 及其 ionrelax/ 全是 48×48×3，而且都在 S3 之后重跑过。V175 的检查没有漏，是本地副本的 KPOINTS 旧了。
+
+**根因**：
+- autozt fetch 只刷新 fetch_files 里的文件。扇出步骤（S7）也只拉子目录里的同名文件。
+- KPOINTS / INCAR / POSCAR 这类文件不在列表里，本地留着的是更早一次拉回的版本，而 _prune_unreceived 只清理列表里的文件，不会处理它们。
+- 于是本地出现了"S3 是新的、S7 是旧的"这种混合状态，lineage_check 照着它判断，就得出了假结论。
+- 9p / drvfs 上修改时间也是拉回时刻（V179），新旧比较同样不可信。
+
+**改动**（tools/lineage_check.py）：
+- 新增 `is_local_copy(mat)`：材料的任一步骤目录里有 `.tf_fetched`（autozt fetch 写的回执），就判为本地副本。
+- 本地副本在逐行结果里标"（本地拉回的副本）"。
+- 末尾提示：这些结论请在集群上的材料目录里再跑一次确认；要刷新本地副本，用 `autozt fetch --all`。
+- 不改退出码，也不改判据。
+
+**测试**：test_lineage.py 新增 3 项，共 16 项。
+- 有回执的材料被标出，末尾有提示；没有回执的材料不标。
+- 集群目录（没有回执）不出提示。
+- `FETCH_STAMP` 与 autozt/bootstrap.py 里的同名常量一致。
+- 把 lineage_check.py 退回 V184，前两项报错（`is_local_copy` / `FETCH_STAMP` 不存在）。"集群目录不出提示"这一项新旧代码都通过，这符合预期。

@@ -288,5 +288,41 @@ class FindMaterialsV183Tests(unittest.TestCase):
         self.assertEqual(L.find_materials(root / "CrA" / "ke-dft-cpu"), [root / "CrA" / "ke-dft-cpu"])
 
 
+class LocalCopyV185Tests(unittest.TestCase):
+    """V185：在 autozt fetch 拉回的本地副本上跑时逐个标出，末尾提示到集群复核。"""
+
+    def _run(self, root):
+        import lineage_check as L
+        with contextlib.redirect_stdout(io.StringIO()) as buf:
+            L.main([str(root)])
+        return buf.getvalue()
+
+    def test_local_copy_flagged(self):
+        import lineage_check as L
+        root = Path(tempfile.mkdtemp())
+        for name in ("CrA", "CrB"):
+            (root / name / "step1_opt").mkdir(parents=True)
+        (root / "CrA" / "step7_deform").mkdir()
+        (root / "CrA" / "step7_deform" / L.FETCH_STAMP).write_text("{}")
+        self.assertTrue(L.is_local_copy(root / "CrA"))
+        self.assertFalse(L.is_local_copy(root / "CrB"))
+        out = self._run(root)
+        self.assertIn("CrA（本地拉回的副本）", out)
+        self.assertNotIn("CrB（本地拉回的副本）", out)
+        self.assertIn("[提示] 1 个材料目录是 autozt fetch 拉回的本地副本", out)
+
+    def test_cluster_dirs_no_hint(self):
+        root = Path(tempfile.mkdtemp())
+        (root / "CrA" / "step1_opt").mkdir(parents=True)
+        self.assertNotIn("本地拉回的副本", self._run(root))
+
+    def test_stamp_name_matches_autozt(self):
+        import lineage_check as L
+        src = ROOT.parents[1] / "autozt" / "bootstrap.py"
+        if not src.is_file():
+            self.skipTest("没有 autozt 源码")
+        self.assertIn('FETCH_STAMP = "%s"' % L.FETCH_STAMP, src.read_text(encoding="utf-8"))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

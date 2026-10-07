@@ -13,6 +13,10 @@ V149 起结构比对扣除整体平移（S3/S3b 的 align_origin 是刚性平移
 V153：--invalidate-from 也接受 S1 / S2 链（下游 VASP 步骤整目录归档；在跑的不动）。
 V175：另查 k 网格 —— S3 不合现行规则、S7 和 S3 不是同一张网格且不合规。gen 的闸门只在重新生成时起作用，
       已经算完的旧结果只能靠这里查出来（CrS₂ 的 15×15×1 当初就是这样"收口"的）。
+V185：材料目录是 autozt fetch 拉回的本地副本（步骤目录里有 .tf_fetched）时逐个标出，末尾提示到集群上复核。
+      fetch 只刷新 fetch_files 里的文件（扇出步骤如 S7 也只拉子目录里的同名文件），KPOINTS / INCAR / POSCAR
+      往往是更早一次拉回的旧版；9p / drvfs 上修改时间也是拉回时刻。实测：本地 S7 的 ionrelax/KPOINTS 还是
+      15×15×1，集群上早已是 48×48×3，本地跑出了一条假的"S7 网格不合规"。
 V183：递归找材料时跳过 project_setting/、templates/、隐藏目录和 *.stale-* 归档目录（模板不是材料）。
 V182：末尾按泛函分组列出本次查到的材料（step1 的 FUNC=，读不到从 INCAR 反推）；不止一种时提示。
       只是提示，不算上游问题、不改退出码 —— 出厂是 PBEsol，材料级 step.conf 可以改成 PBE，
@@ -48,6 +52,14 @@ def _is_material_path(p, root):
     except ValueError:
         parts = Path(p).parts
     return not any(x in _NOT_MATERIAL_PARTS or x.startswith(".") or ".stale-" in x for x in parts)
+
+
+FETCH_STAMP = ".tf_fetched"        # autozt fetch 在 result_dir/<步骤>/ 下写的回执（autozt.bootstrap.FETCH_STAMP）
+
+
+def is_local_copy(mat):
+    """[V185] 材料目录是不是 autozt fetch 拉回的本地副本。"""
+    return any(Path(mat).glob("*/" + FETCH_STAMP))
 
 
 def find_materials(root, pattern=None):
@@ -109,15 +121,17 @@ def main(argv=None):
     if not mats:
         print("没找到材料目录（含 step1_opt / step1_std_opt）：%s" % a.path)
         return 0
+    local = [m for m in mats if is_local_copy(m)]               # V185
     for mat in mats:
+        tag = "（本地拉回的副本）" if mat in local else ""
         ref, probs = kc.structure_lineage(mat)
         probs = probs + kc.post_lineage(mat)                 # V148：S8 之后的派生产物 + 带隙一致性
         probs = probs + kc.grid_lineage(mat)                 # V175：S3 / S7 的 k 网格
         if not probs:
-            print("[OK]  %s%s" % (mat, "" if ref else "（没有 S1 CONTCAR，只核对了派生产物）"))
+            print("[OK]  %s%s%s" % (mat, tag, "" if ref else "（没有 S1 CONTCAR，只核对了派生产物）"))
             continue
         bad += 1
-        print("[★]   %s：%d 处" % (mat, len(probs)))
+        print("[★]   %s%s：%d 处" % (mat, tag, len(probs)))
         for step, why in probs:
             print("        - %s：%s" % (step, why))
     if bad:
@@ -127,6 +141,11 @@ def main(argv=None):
               "只有 S7 不合规 -> retry S7 -> S7.1 -> S8/S8.4。")
     for ln in functional_report(mats):                       # V182：只提示，不改退出码
         print(ln)
+    if local:                                                # V185
+        print("\n[提示] %d 个材料目录是 autozt fetch 拉回的本地副本：fetch 只刷新 fetch_files 里的文件，"
+              "KPOINTS / INCAR / POSCAR 等可能还是更早拉回的旧版，修改时间在 9p / drvfs 上也不可信。"
+              "上面的结论（尤其网格、新旧）请在集群上的材料目录里再跑一次确认；"
+              "要刷新本地副本，用 autozt fetch --all。" % len(local))
     return 1 if bad else 0
 
 
