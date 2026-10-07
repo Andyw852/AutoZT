@@ -199,10 +199,77 @@ def _grid_info(ph3):
     return gm, nq
 
 
+_SC_SYM_CHECKED = set()
+
+
+def _supercell_keeps_symmetry(prim_cell, prim_rots, sc_cell, tol=1e-6):
+    """超胞晶格在原胞全部点群操作下是否不变。返回 (n_kept, n_ops)。
+
+    rots 是原胞分数坐标下的整数阵（x' = R x）。笛卡尔下 C = A^T R A^-T（A 行为基矢），
+    超胞晶格不变 <=> A_s C^T A_s^-1 为整数阵。"""
+    A = np.asarray(prim_cell, float)
+    As = np.asarray(sc_cell, float)
+    Ainv_T = np.linalg.inv(A).T
+    As_inv = np.linalg.inv(As)
+    kept = 0
+    for R in prim_rots:
+        C = A.T @ np.asarray(R, float) @ Ainv_T
+        M = As @ C.T @ As_inv
+        if np.abs(M - np.rint(M)).max() < tol:
+            kept += 1
+    return kept, len(prim_rots)
+
+
+def _check_supercell_symmetry(ph3, cfg):
+    """BTE 前查超胞是否保原胞全部点群操作（2026-10-07 Mn2In2Se5）。
+
+    phono3py 遇到这种超胞只打印 "point group symmetries of supercell and primitive
+    cell are different" 就照常算，而它约化 q 点时假定力常数满足全部对称——超胞
+    丢了操作，拟合出的 fc 就不满足，kappa 随 q 网格乱跳。SUPERCELL_SYMMETRY：
+    strict（默认）停 | warn 告警 | off 不查。每个超胞只查一次。"""
+    mode = str(cfg.get("supercell_symmetry") or "strict").strip().lower()
+    if mode in ("off", "false", "0", "no", "none"):
+        return
+    try:
+        import spglib
+        prim = ph3.primitive
+        cell = (np.asarray(prim.cell, float), np.asarray(prim.scaled_positions, float),
+                np.asarray(prim.numbers, int))
+        ds = spglib.get_symmetry_dataset(cell, symprec=1e-5)
+        rots = list({np.asarray(r).tobytes(): np.asarray(r)
+                     for r in ds.rotations}.values())
+        sg = "%s (%d)" % (ds.international, int(ds.number))
+    except Exception as e:                       # noqa: BLE001
+        print("[WARN] 超胞保对称检查没跑成（不拦）：%s" % e, flush=True)
+        return
+    cells = [("fc3 超胞", ph3.supercell)]
+    psc = getattr(ph3, "phonon_supercell", None)
+    if psc is not None and psc.cell.tobytes() != ph3.supercell.cell.tobytes():
+        cells.append(("fc2 超胞", psc))
+    for label, sc in cells:
+        key = (label, np.asarray(sc.cell, float).round(6).tobytes())
+        if key in _SC_SYM_CHECKED:
+            continue
+        _SC_SYM_CHECKED.add(key)
+        kept, n = _supercell_keeps_symmetry(prim.cell, rots, sc.cell)
+        if kept == n:
+            print("[OK] %s保有原胞 %s 的全部 %d 个点群操作" % (label, sg, n), flush=True)
+            continue
+        msg = ("%s只保留了原胞 %s 的 %d/%d 个点群操作：拟合出的力常数破坏晶体对称，"
+               "phono3py 按全部对称约化 q 点，kappa 会随 q 网格来回跳、不可信"
+               "（Mn2In2Se5 3x3x1 实例）。换保对称的超胞重算位移和拟合；"
+               "确认要照算：SUPERCELL_SYMMETRY=warn" % (label, sg, kept, n))
+        if mode == "warn":
+            print("[WARN] " + msg, flush=True)
+        else:
+            sys.exit("[ERROR] " + msg)
+
+
 def _run_bte(out, yaml_name, fc2, fc3, cfg, source_fc, write_kappa, spec=None):
     import phono3py
     ph3 = phono3py.load(str(out / yaml_name), produce_fc=False,
                         is_nac=bool(cfg.get("nac")), log_level=0)
+    _check_supercell_symmetry(ph3, cfg)
     _load_fc(ph3, out, fc2, fc3, cfg.get("enable_fc"))
     mesh = _apply_mesh(ph3, spec or _mesh_spec(cfg), cfg)
     gm, nq = _grid_info(ph3)
@@ -223,6 +290,7 @@ def _run_bte(out, yaml_name, fc2, fc3, cfg, source_fc, write_kappa, spec=None):
     # axis, so keep the full grid matrix and the q-point count alongside.
     s["mesh_grid_matrix"] = gm
     s["n_qpoints"] = nq
+    s["mesh_axis_counts"] = _mesh_axis_counts(s)
     s.update(_kappa_symmetry_audit(ph3, s, cfg))
     return s
 
@@ -320,6 +388,49 @@ def _mesh_change(prev, cur, t, mode="per_component", floor=0.1):
     return rel, rel_vec, tt
 
 
+def _mesh_axis_counts(s):
+    """各方向的分格数，判"每个方向都加密过"用。
+
+    对角网格就是 D_diag。广义网格（非对角 grid_matrix）的 D_diag 不是各轴点数：
+    phonopy 由惯用胞分格数 n 构造 grid_matrix = diag(n) X（X 只由晶胞决定），所以
+    每一行的 gcd 正比于对应惯用胞轴的 n，同一材料各档之间可直接比较。
+    例：Mn2In2Se5 [[0,-14,0],[-14,14,0],[1,1,-3]] -> [14, 14, 1]。"""
+    c = s.get("mesh_axis_counts")
+    if c:
+        return [int(x) for x in c]
+    gm = s.get("mesh_grid_matrix")
+    if gm is not None and any(int(gm[i][j]) for i in range(3) for j in range(3)
+                              if i != j):
+        return [math.gcd(math.gcd(abs(int(r[0])), abs(int(r[1]))), abs(int(r[2])))
+                for r in gm]
+    try:
+        return [int(x) for x in str(s.get("mesh") or "").split()[:3]] or None
+    except ValueError:
+        return None
+
+
+def _ref_coarser_everywhere(hist, cur, frozen=()):
+    """hist 里最近一档"每个（可加密的）方向都比 cur 粗"的网格；没有就返回 None。
+
+    2026-10-07 Mn2In2Se5：L 每次 x1.25，长轴（c_hex）两三档才进位一次，旧判据拿
+    相邻两档比，[1,14,42] 和 [1,18,54] 的 k_z 一样，2.4% 就判了收敛，k_z 从没测过。
+    frozen：在允许的长度范围内根本不会变的轴（2D 真空轴等），不参与比较。
+    分格数拿不到时退回旧行为（和上一档比）。"""
+    if not hist:
+        return None
+    c = _mesh_axis_counts(cur)
+    if not c:
+        return hist[-1]
+    axes = [i for i in range(len(c)) if i not in frozen]
+    for h in reversed(hist):
+        hc = _mesh_axis_counts(h)
+        if not hc or len(hc) != len(c):
+            return hist[-1]
+        if all(hc[i] < c[i] for i in axes):
+            return h
+    return None
+
+
 def _converge_mesh(out, yaml_name, fc2, fc3, cfg, source_fc, first=None):
     """Densify the mesh until kappa stops changing.  Returns the summary of the
     last (densest converged) mesh, with a mesh_convergence report attached.
@@ -360,10 +471,32 @@ def _converge_mesh(out, yaml_name, fc2, fc3, cfg, source_fc, first=None):
             L *= fac
         return None, None
 
-    recs, prev, converged, stop, unconv = [], None, False, "", []
+    def _counts_at(Lx):
+        m = _apply_mesh(probe, ("length", Lx), cfg)
+        try:
+            gm = probe.grid.grid_matrix
+            gm = None if gm is None else np.asarray(gm).astype(int).tolist()
+        except Exception:                        # noqa: BLE001
+            gm = None
+        return _mesh_axis_counts({"mesh": " ".join(map(str, m)),
+                                  "mesh_grid_matrix": gm})
+
+    # 在 [起始长度, MESH_CONV_MAX_LENGTH] 里根本不会变的轴（2D 真空轴、极长的轴）
+    # 不要求加密；其余每个轴都必须比参照档密，才拿来判收敛。
+    L0 = float(first[0]) if first is not None else L
+    try:
+        c_lo, c_hi = _counts_at(L0), _counts_at(lmax)
+        frozen = tuple(i for i in range(len(c_lo)) if c_lo[i] == c_hi[i]) \
+            if c_lo and c_hi and len(c_lo) == len(c_hi) else ()
+    except Exception:                            # noqa: BLE001
+        frozen = ()
+
+    recs, prev, converged, stop, unconv, hist = [], None, False, "", [], []
     if first is not None:
         prev = first[1]
+        hist.append(prev)
         recs.append({"length": round(float(first[0]), 3), "mesh": prev["mesh"],
+                     "axis_counts": _mesh_axis_counts(prev),
                      "kappa_at_T": _kappa_at(prev, t_chk)[0].tolist(),
                      "rel_change": None})
         L = float(first[0]) * fac
@@ -378,19 +511,28 @@ def _converge_mesh(out, yaml_name, fc2, fc3, cfg, source_fc, first=None):
         print("[..] 网格收敛：L=%.1f A -> mesh %s" % (L, m), flush=True)
         s = _run_bte(out, yaml_name, fc2, fc3, cfg, source_fc, True,
                      spec=("length", L))
-        if prev is None:
+        ref = _ref_coarser_everywhere(hist, s, frozen)
+        if ref is None:
             rel, rel_vec, tt = None, None, t_chk
         else:
-            rel, rel_vec, tt = _mesh_change(prev, s, t_chk, mode, floor)
+            rel, rel_vec, tt = _mesh_change(ref, s, t_chk, mode, floor)
         recs.append({"length": round(L, 3), "mesh": s["mesh"],
+                     "axis_counts": _mesh_axis_counts(s),
+                     "compared_with": None if ref is None else ref["mesh"],
                      "kappa_at_T": _kappa_at(s, t_chk)[0].tolist(),
                      "rel_change": rel, "rel_change_per_component": rel_vec})
-        print("    mesh %-10s kappa(%gK)=%s  change=%s%s"
+        ref_note = ("" if ref is None or ref is hist[-1]
+                    else "  [对比 %s：各方向都更粗的那档]" % ref["mesh"])
+        print("    mesh %-10s kappa(%gK)=%s  change=%s%s%s"
               % (s["mesh"], tt, np.round(_kappa_at(s, t_chk)[0][:3], 4),
                  "-" if rel is None else "%.2f%%" % (100 * rel),
                  "" if rel_vec is None else " (per-component %s)"
                  % ["%.2f%%" % (100 * x) if x is not None else "-"
-                    for x in rel_vec]), flush=True)
+                    for x in rel_vec],
+                 ref_note), flush=True)
+        if ref is None and hist:
+            print("    （还没有各方向都更粗的参照档，不判收敛，继续加密）", flush=True)
+        hist.append(s)
         prev = s
         if rel is not None and rel < tol:
             if rel_vec:
@@ -417,12 +559,16 @@ def _converge_mesh(out, yaml_name, fc2, fc3, cfg, source_fc, first=None):
            "norm": "max_ii" if mode == "max_ii" else "per_component",
            "floor": None if mode == "max_ii" else floor,
            "components_over_tol": unconv,
+           "frozen_axes": list(frozen),
+           "reference": ("each mesh is compared with the latest earlier mesh that is "
+                         "coarser along every axis (axes that cannot change within "
+                         "MESH_CONV_MAX_LENGTH excepted), not just the previous one"),
            "criterion": (
-               "max|d kappa_ij| / max|kappa_ii| between consecutive meshes "
+               "max|d kappa_ij| / max|kappa_ii| against the reference mesh "
                "(whole tensor, first sigma)"
                if mode == "max_ii" else
                "per-component max_i |d kappa_ii| / max(|kappa_ii|, floor*max_j "
-               "|kappa_jj|) between consecutive meshes (xx, yy, zz each "
+               "|kappa_jj|) against the reference mesh (xx, yy, zz each "
                "normalised by itself; components below the floor by "
                "floor*max)"),
            "records": recs}
@@ -435,8 +581,9 @@ def _converge_mesh(out, yaml_name, fc2, fc3, cfg, source_fc, first=None):
               "可调大 MESH_CONV_MAX_LENGTH/MESH_CONV_MAX_POINTS 或放宽 MESH_CONV_TOL_PCT"
               % (stop, prev["mesh"]), flush=True)
     else:
-        print("[OK] q 网格收敛：mesh %s（相邻变化 %.2f%% < %.1f%%）"
-              % (prev["mesh"], 100 * recs[-1]["rel_change"], 100 * tol), flush=True)
+        print("[OK] q 网格收敛：mesh %s（与各方向都更粗的 %s 相比变化 %.2f%% < %.1f%%）"
+              % (prev["mesh"], recs[-1].get("compared_with"),
+                 100 * recs[-1]["rel_change"], 100 * tol), flush=True)
     prev["mesh_converged"] = converged
     prev["mesh_convergence"] = rep
     return prev

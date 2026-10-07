@@ -49,6 +49,7 @@ SPEC = {
     "FC2_SUPERCELL": (None, "str"),        # 二阶专用大超胞（--dim-fc2）；空=与 fc3 同
     "MIN_SC_LEN": (12.0, "float"),
     "MAX_MULTIPLE": (8, "int"),
+    "SUPERCELL_SYMMETRY": ("strict", "str"),  # 超胞须保晶体全部点群操作：strict 拦 | warn 告警 | off
     "DISP_DISTANCE": (0.03, "float"),      # 位移幅度(Å)：MC-rattle 的目标 RMS / findiff 模长
     "MC_DMIN_SCALE": (0.85, "float"),      # MC-rattle d_min = 最近邻 × 此系数
     "MC_NITER": (10, "int"),               # MC-rattle 迭代数
@@ -185,6 +186,18 @@ def main():
             else kc.supercell_matrix(out / "POSCAR", dim, conf["MIN_SC_LEN"],
                                      conf["MAX_MULTIPLE"], ax, cutoff=cut_max))
     reps2 = kc.parse_reps(conf["FC2_SUPERCELL"], dim, ax) if conf["FC2_SUPERCELL"] else None
+    # 超胞保对称闸（2026-10-07 Mn2In2Se5）：超胞不保晶体全部点群操作时，拟合出的
+    #   力常数必破对称（假虚频、kappa 随网格乱跳），在生成位移、花 DFT 机时之前拦下
+    try:
+        import symmetry_audit as _SA
+    except ImportError as _e:
+        print("[WARN] symmetry_audit.py 不可用，超胞保对称检查跳过：%s" % _e)
+    else:
+        _SA.supercell_symmetry_gate(out / "POSCAR", reps, conf["SUPERCELL_SYMMETRY"],
+                                    dim, ax, conf["MAX_MULTIPLE"], label="fc3 超胞")
+        if reps2:
+            _SA.supercell_symmetry_gate(out / "POSCAR", reps2, conf["SUPERCELL_SYMMETRY"],
+                                        dim, ax, conf["MAX_MULTIPLE"], label="fc2 超胞")
     mesh = kc.mesh_str(conf["KAPPA_MESH"].split(), dim, ax)
     print("[..] 维度=%s 方法=%s fc3超胞=%s fc2超胞=%s mesh=%s 位移=%.3f Å"
           % (dim.upper(), method, kc.dim_str(reps),

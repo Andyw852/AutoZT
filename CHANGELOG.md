@@ -15,6 +15,17 @@ This project adheres to Semantic Versioning; versions before 1.0.0 are developme
 ## [Unreleased]
 
 ### Added
+- Supercell symmetry guard (`SUPERCELL_SYMMETRY = strict | warn | off`, default strict):
+  the displacement generators (kl-dft-cpu S4, phonon-dft-cpu S2, phonon-mlff S2, kl-mlff S2,
+  zt-dft-cpu SK4), the fit-fc-thermal S1 fit and S2_kappa stop when the supercell does not
+  keep every point-group operation of the crystal, and suggest the smallest symmetric
+  diagonal supercell.  Mn2In2Se5 (R-3m) on a 3x3x1 supercell kept 4 of 12 operations; every
+  fitting engine then produced a symmetry-broken fc2 (spurious zone-interior imaginary
+  modes, kappa jumping by 20-30 % between q meshes).  `symmetry_audit.supercell_symmetry_gate`.
+- fit-fc-thermal S1 gate: fc2 symmetry check (`FC2_SYM_TOL`, frequency spread between
+  symmetry-equivalent q points; new status `fc2_symmetry_broken`, shown by autozt as
+  "fc2 breaks crystal symmetry") and a denser full mesh (`IMAG_MESH_LENGTH = 100`, no
+  symmetry reduction) instead of `run_mesh(60.0)` with reduction.
 - docs/mcp.md: the MCP interface (tool table, risk tiers, measured safety numbers).
 - AI integration (from a 295-material production run where every problem was in discovery,
   name resolution or status retrieval, not in scheduling):
@@ -39,6 +50,11 @@ This project adheres to Semantic Versioning; versions before 1.0.0 are developme
     `cache_ttl` can live in tf.yaml (environment variables still override).
 
 ### Changed
+- `_converge_mesh` compares each mesh with the latest earlier mesh that is coarser along every
+  axis (axes frozen below `MESH_CONV_MAX_LENGTH` exempt), not with the previous mesh: with
+  `L *= 1.25` the long axis of an anisotropic cell only steps every few meshes, and two meshes
+  with the same k_z division were declared converged without k_z ever being tested.
+  `mesh_convergence.json` records `axis_counts`, `compared_with` and `frozen_axes`.
 - Project-level `max_jobs` in `tf_*.yaml` is now enforced as a per-project cap in addition
   to the skill-level cap. It was previously ignored silently. **Check `autozt doctor`
   before restarting a monitor: a project that sets `max_jobs: 16` now really runs at 16.**
@@ -54,6 +70,9 @@ This project adheres to Semantic Versioning; versions before 1.0.0 are developme
 - Legacy skill-name warnings are aggregated by rename pair once there are more than ten.
 
 ### Fixed
+- fit-fc-thermal S1 gate: the fc2 (dataset SPOSCAR order) is reordered into the supercell order
+  phonopy rebuilds from the wrapped POSCAR; an atom at fractional coordinate 1.0 had its
+  periodic images permuted, so the gate evaluated a mislabelled fc2.
 - E2BIG during collection: the collector payload is sent on stdin instead of as a
   `--config64` argument (Linux caps one argument at 128 KiB). The sbatch guard uses the
   same transport.

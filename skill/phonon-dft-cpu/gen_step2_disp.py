@@ -43,6 +43,7 @@ SPEC = {
     "SUPERCELL":    (None,    "words"),
     "MIN_SC_LEN":   (12.0,    "float"),
     "MAX_MULTIPLE": (6,       "int"),
+    "SUPERCELL_SYMMETRY": ("strict", "str"),  # 超胞须保晶体全部点群操作：strict 拦 | warn 告警 | off
     "FD_DISTANCE":  (0.01,    "float"),
     "PHONON_MESH":  ("20 20 20", "str"),
     "MAX_DISP":     (200,     "int"),
@@ -350,6 +351,16 @@ def main():
         reps = kc.supercell_matrix(out / "POSCAR", dim, conf["MIN_SC_LEN"],
                                    conf["MAX_MULTIPLE"],
                                    vac_axis if vac_axis is not None else 2)
+    # 超胞保对称闸（2026-10-07 Mn2In2Se5）：超胞不保晶体全部点群操作时，拟合出的
+    #   力常数必破对称（假虚频、kappa 随网格乱跳），在生成位移、花 DFT 机时之前拦下
+    try:
+        import symmetry_audit as _SA
+    except ImportError as _e:
+        print("[WARN] symmetry_audit.py 不可用，超胞保对称检查跳过：%s" % _e)
+    else:
+        _SA.supercell_symmetry_gate(out / "POSCAR", reps, conf["SUPERCELL_SYMMETRY"],
+                                    dim, vac_axis if vac_axis is not None else 2,
+                                    conf["MAX_MULTIPLE"])
     mesh = kc.mesh_str(conf["PHONON_MESH"].split(), dim,
                        vac_axis if vac_axis is not None else 2)
     print("[..] 维度=%s 超胞=%s mesh=%s FUNC=%s" % (dim.upper(), kc.dim_str(reps), mesh, func))

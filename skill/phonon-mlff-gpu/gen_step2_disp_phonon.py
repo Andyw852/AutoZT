@@ -29,6 +29,7 @@ SPEC = {
     "SUPERCELL": (None, "str"),
     "MIN_SC_LEN": (15.0, "float"),
     "MAX_MULTIPLE": (6, "int"),
+    "SUPERCELL_SYMMETRY": ("strict", "str"),  # 超胞须保晶体全部点群操作：strict 拦 | warn 告警 | off
     "N_DISP": ("auto", "str"),        # auto=按 ALM 2 阶反推；整数=固定
     "OVERSAMPLE": (3, "int"),
     "DISP_DISTANCE": (0.01, "float"),  # MC-rattle 目标位移 RMS(Å)
@@ -115,6 +116,15 @@ def main():
     reps = (kc.parse_reps(conf["SUPERCELL"], dim, ax) if conf["SUPERCELL"]
             else kc.supercell_matrix(out / "POSCAR", dim, conf["MIN_SC_LEN"],
                                      conf["MAX_MULTIPLE"], ax))
+    # 超胞保对称闸（2026-10-07 Mn2In2Se5）：超胞不保晶体全部点群操作时，拟合出的
+    #   力常数必破对称（假虚频、kappa 随网格乱跳），在生成位移、花 DFT 机时之前拦下
+    try:
+        import symmetry_audit as _SA
+    except ImportError as _e:
+        print("[WARN] symmetry_audit.py 不可用，超胞保对称检查跳过：%s" % _e)
+    else:
+        _SA.supercell_symmetry_gate(out / "POSCAR", reps, conf["SUPERCELL_SYMMETRY"],
+                                    dim, ax, conf["MAX_MULTIPLE"])
     n_disp = resolve_ndisp(conf, out, reps)
     print("[..] 维度=%s 超胞=%s 随机位移帧数=%d 振幅=%.3f Å"
           % (dim.upper(), kc.dim_str(reps), n_disp, conf["DISP_DISTANCE"]))

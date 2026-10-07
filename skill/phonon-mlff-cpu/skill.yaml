@@ -39,7 +39,7 @@ steps:
   - {seq: 2, name: step2_disp_force, label: S2_force,
      check: marker, marker: "forces_summary.json:FORCES_DONE",
      gen: gen_step2_disp_phonon.py,
-     gen_need: [dim_common.py, stepconf.py, step.conf, klmlff_common.py, za_2d.py, imag_policy.py,
+     gen_need: [symmetry_audit.py, dim_common.py, stepconf.py, step.conf, klmlff_common.py, za_2d.py, imag_policy.py,
                 mlff_model.py, mc_rattle.py, mlff_forces_phonon.py,
                 submit_mlff_relax.tpl]}
 

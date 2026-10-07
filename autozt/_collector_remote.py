@@ -350,6 +350,11 @@ def ck_phonon(d, cfg):
     mfs = ("min_freq=%.3f THz" % mf) if isinstance(mf, (int, float)) else "n/a"
     if js.get("stable"):                     # '"stable": true' → 完成
         return True, "stable (%s)" % mfs, False
+    if js.get("status") == "fc2_symmetry_broken":
+        # 不是物理虚频：fc2 破了晶体对称（多半是超胞丢了点群操作，也可能是磁序降了对称）
+        _sp = (js.get("fc2_symmetry") or {}).get("spread_THz")
+        return False, ("fc2 breaks crystal symmetry (spread %s THz) -- check supercell"
+                       % ("%.2e" % _sp if isinstance(_sp, (int, float)) else "?")), True
     return False, "imaginary frequency (%s)" % mfs, True   # 完成但有虚频
 
 def empty_fanout_ok(d, marker, require_empty=True):

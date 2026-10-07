@@ -88,7 +88,7 @@ steps:
   #   tool error -> step error.
   - {seq: 1, name: step1_fit, label: S1_fit, check: phonon,
      gen: gen_step1_fit.py, fetch_all: true,
-     gen_need: [stepconf.py, step.conf, fc_common.py, fc_fit_driver.py,
+     gen_need: [symmetry_audit.py, stepconf.py, step.conf, fc_common.py, fc_fit_driver.py,
                 imag_policy.py, phonon_stability.py, za_2d.py, dim_common.py,
                 submit_fcfit_p3py.tpl, submit_fcfit_hiphive.tpl,
                 submit_fcfit_pheasy.tpl, submit_fcfit_pheasy_gpu.tpl]}
@@ -137,7 +137,7 @@ optional_steps:
       - {seq: 3, name: step3_sweep, label: S3_sweep, after: step2_kappa, needs: [],
          check: marker, marker: 'sweep_result.json:"SWEEP_DONE": true',
          fanout: "m-*", gen: gen_step3_sweep.py, fetch_all: true,
-         gen_need: [stepconf.py, step.conf, fc_common.py, fc_fit_driver.py,
+         gen_need: [symmetry_audit.py, stepconf.py, step.conf, fc_common.py, fc_fit_driver.py,
                     imag_policy.py, phonon_stability.py, za_2d.py, dim_common.py, kappa_driver.py, cut3_select.py,
                     gen_step1_fit.py, gen_step2_kappa.py, sweep_driver.py,
                     thickness_2d.py, vdw_radii.py,

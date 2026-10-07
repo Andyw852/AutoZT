@@ -402,7 +402,17 @@ writing `kappa_summary.json`:
   and a 14 deg angle has `|b| = 0.29 1/A`, i.e. the density of a 3.5 A cube.
   `MESH_CONV = auto` then reruns the BTE with `L *= MESH_CONV_FACTOR` (1.25)
   until kappa at `MESH_CONV_T` (300 K) changes by less than
-  `MESH_CONV_TOL_PCT` (3 %) between two consecutive meshes.  **`MESH_CONV_MODE
+  `MESH_CONV_TOL_PCT` (3 %) against the latest earlier mesh that is **coarser
+  along every axis** (not simply the previous mesh).  Each mesh records its
+  per-axis counts (`axis_counts`; for a generalized grid the gcd of each
+  `grid_matrix` row, i.e. the conventional-cell divisions) and the mesh it was
+  compared with (`compared_with`); axes that cannot change below
+  `MESH_CONV_MAX_LENGTH` (a 2D vacuum axis) are listed in `frozen_axes` and
+  exempt.  Why: with `L *= 1.25` the long axis of an anisotropic cell only
+  steps every two or three meshes.  On Mn2In2Se5 (R-3m) `[1,14,42]` and
+  `[1,18,54]` share one k_z division, the old consecutive-pair test passed at
+  2.4 % without k_z ever being densified, and kappa then moved by 12-18 % when
+  k_z was refined.  **`MESH_CONV_MODE
   = per_component` (default)** judges each diagonal component against *itself*,
   `max_i |d kappa_ii| / max(|kappa_ii|, MESH_CONV_FLOOR * max_j |kappa_jj|)`
   (off-diagonals normalised by the largest diagonal), so an anisotropic cell
@@ -602,8 +612,38 @@ built-in `phonon` judge gives three outcomes:
 * **imaginary frequency** - the fit finished but the mesh minimum is below
   `-IMAG_THR`; the step is *not* done and downstream steps stay held back (this
   is a physics result, not an error);
+* **fc2 breaks the crystal symmetry** (`status: fc2_symmetry_broken`, autozt
+  shows `fc2 breaks crystal symmetry (spread ... THz) -- check supercell`) -
+  symmetry-equivalent q points differ by more than `FC2_SYM_TOL` (1e-3 THz;
+  a symmetric fc2 gives ~1e-8).  Usually the supercell does not keep every
+  point-group operation of the crystal.  Not a physics result: imaginary
+  frequencies and kappa from this fc2 are not usable;
 * **tool error** - the gate itself could not be evaluated; the job exits
   non-zero so the step shows as error and the log is worth reading.
+
+How the gate samples (2026-10-07): the 3D mesh is the length
+`IMAG_MESH_LENGTH` (100 A) evaluated on the **full** mesh with no symmetry
+reduction, plus the band path.  The old `run_mesh(60.0)` with symmetry
+reduction gave 17x17x4 on Mn2In2Se5 and evaluated 315 q points; the spurious
+modes of its symmetry-broken fc2 sat at low-symmetry points inside the zone and
+none were sampled, while the high-symmetry paths were all positive.  The gate
+also checks the fc2 itself (`fc2_symmetry` in the summary: the largest
+frequency spread inside 12 random symmetry stars) and, before evaluating
+anything, reorders the fc2 from the dataset's SPOSCAR atom order into the order
+phonopy rebuilds from POSCAR: `_phonopy_unitcell` wraps fractional coordinates
+into [0, 1), and an atom written at exactly 1.0 (or a negative coordinate) then
+has its periodic images permuted relative to the dataset.
+
+**Supercell symmetry.**  `SUPERCELL_SYMMETRY = strict` (default) stops the fit
+when the dataset supercell does not keep every point-group operation of the
+crystal (checked at gen when the dataset ships a POSCAR, and again on the
+compute node before the fit); `warn` only prints, `off` skips.  The same key
+guards the displacement generators (kl-dft-cpu S4, phonon-dft-cpu S2,
+phonon-mlff S2, kl-mlff S2) and S2_kappa (`kappa_driver` stops before the BTE).
+A rhombohedral primitive cell with `a1`, `a2` in the plane and a tilted `a3`
+repeated `n n 1` loses the 3-fold axis (Mn2In2Se5 3x3x1 keeps 4 of 12
+operations); the message suggests the smallest symmetric diagonal supercell
+(there: `3 3 3`).
 
 `fc_fit_summary.json` adds the engine, frame count, atom count, the NAC/no-NAC
 minima, the ShengBTE export status and - when `FIT_RMSE_FRAMES > 0` (default 10;

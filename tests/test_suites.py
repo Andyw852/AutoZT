@@ -32,7 +32,7 @@ LOCAL = ["agentgate", "session", "autodeps", "history", "skillspec",
          "step_contract", "device_thermal", "device_zt"]
 CLUSTER = ["dropin"]
 # 独立的 pytest 测试模块（不是 suite_*.py 形式），也要纳入回归
-LOCAL_PYTEST = ["test_imag_policy"]
+LOCAL_PYTEST = ["test_imag_policy", "test_supercell_symmetry"]
 
 
 # 干净克隆里没有 tmp/（gitignore），依赖本机测试配置的套件自动跳过

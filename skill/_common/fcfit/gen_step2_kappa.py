@@ -62,6 +62,9 @@ SPEC = {
     # NAC：auto = 有 BORN 就开；on/off 强制
     "NAC":              ("auto", "str"),
     "BTE_METHOD":       ("rta", "str"),      # rta | lbte
+    # 超胞须保原胞全部点群操作，否则 phono3py 照常算但 κ 不可信（2026-10-07）：
+    #   strict = BTE 前报错停 | warn = 只告警 | off
+    "SUPERCELL_SYMMETRY": ("strict", "str"),
     "P3PY_OMP_THREADS": (48, "int"),
     "SBATCH_QOS":       ("regular", "str"),
     "CONDA_SH":         ("", "str"),
@@ -417,6 +420,7 @@ def _gen_one(conf, fit, out, cwd, write_submit=True):
         "isotope": bool(conf["ISOTOPE"]),
         "nac": nac,
         "bte_method": method,
+        "supercell_symmetry": str(conf["SUPERCELL_SYMMETRY"] or "strict").strip().lower(),
         "enable_fc": enable_fc,
         "solver": str(conf["SOLVER"] or "phono3py").strip().lower(),
         "shengbte_exe": str(conf["SHENGBTE_EXE"] or "ShengBTE"),

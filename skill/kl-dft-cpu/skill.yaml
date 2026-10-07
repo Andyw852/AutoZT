@@ -93,7 +93,7 @@ steps:
      #   （见 gen_step5_fc.py 的 _kind/except 分支）。
      #   2026-09-27：曾把它加进 gen_need，导致 jzzn/hanhai25 等所有非 GPU 集群的 S5
      #   gen 直接失败（"project_setting/skill_dir 里缺少 …"），已回退。
-     gen_need: [stepconf.py, step.conf, gen_step1_fit.py, fc_common.py, fc_fit_driver.py,
+     gen_need: [symmetry_audit.py, stepconf.py, step.conf, gen_step1_fit.py, fc_common.py, fc_fit_driver.py,
                 imag_policy.py, phonon_stability.py, dim_common.py, kl_common.py, za_2d.py, reuse_fcfit.py,
                 submit_fcfit_p3py.tpl, submit_fcfit_hiphive.tpl,
                 submit_fcfit_pheasy.tpl, submit_fcfit_pheasy_gpu.tpl]}
