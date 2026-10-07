@@ -87,7 +87,7 @@ autozt --version
   | `opt-mlff-cpu` / `opt-mlff-gpu` | 结构优化 + 形成能 | MACE | 0.1 |
   | `phonon-mlff-cpu` | 声子谱（仅 2 阶） | MACE | 0.1 |
   | `mlff` | 随机位移法 MLFF 训练（产出 MACE 势） | VASP(标注)+MACE | 0.1 |
-  | `zt-dft-cpu` | 热电优值 ZT 全流程（电子输运 + 晶格热导 + ZT 汇总） | VASP/DFT | 0.1 |
+  | `zt-dft-cpu` | 热电优值 ZT（组合 ke-dft-cpu + kl-dft-cpu → ZT 汇总） | VASP/DFT | 0.2 |
 
 - **project（-p）**：材料项目，如 `C20/qHPC20`。
 - **job（-j）**：项目里的一个步骤，可写步骤全名 / label / 序号，**必须配 -p**（不带 -p 时 `-j` = 对全部材料只操作该步骤）。序号是 `skill.yaml` 里的 `seq`（画图步用小数，如 3.1；带隙子步用 2.1~2.35）。
@@ -688,54 +688,30 @@ autozt -tt mlff -p <材料> start               # 仅 status=pass 才发布
 
 ---
 
-### 6.11 zt-dft-cpu 热电优值 ZT 全流程（v0.1，组合技能）
+### 6.11 zt-dft-cpu 热电优值 ZT（v0.2，组合技能：ke-dft-cpu + kl-dft-cpu → 汇总）
 
-ZT = S²σT / (κ_e + κ_L)。本技能把 `ke-dft-cpu`（电子输运 → S/σ/κ_e）与 `kl-dft-cpu`
-（晶格热导 → κ_L）**拼成一条流水线**，再加一个汇总步算出 ZT(T, 载流子浓度)。
-
-| seq | 步骤 | label | 内容 | 判据 |
-|---|---|---|---|---|
-| 1 | `step1_opt` | S1_opt | 电子段结构优化 | `relax_injob` |
-| 2.1–2.35 | `step2_bandgap/*` | S2.1_scf…S2.3_hseplot | 电子段带隙段（PBE/HSE + 判别 + 画图），与 ke 逐字一致 | outcar/wavecar/plot |
-| 3–8 | `step3_uniform`…`step8_amset` | S3_uniform…S8_kappa_e | 密网格 / WAVECAR / 介电 / 弹性 / 形变势 / **AMSET 输运 → transport.json** | 与 ke 一致 |
-| 11–16 | `step1_std_opt`…`step6_kappa` | SK1_opt…SK6_kappa | 晶格段全链（弛豫/静态/NAC/位移/拟合/**BTE → kappa_summary.json**） | 与 kl 一致 |
-| 20 | `step20_zt` | S20_zt | 汇总：ZT(T,n) 全栅格 + 峰值 + 出图（run: gen，登录节点） | done_marker `zt_summary.json` |
-
-**装配方式（关键）**：autozt 没有技能 include/reuse 机制，`src` / `template_dir` 只在**本技能目录**下解析，
-所以本技能目录里除 `skill.yaml` / `step.conf` / `step20_zt/` 之外**全是指向上游技能目录的符号链接**
-（`step1_opt -> ../ke-dft-cpu/step1_opt`、`step6_kappa -> ../kl-dft-cpu/templates/step6_kappa` …）。
-好处：上游 gen 脚本/模板/step.conf 改动**自动跟随**，不存在副本漂移；代价：不能脱离同目录下的
-`ke-dft-cpu` / `kl-dft-cpu` 单独安装。远端仍是按内容推送，超算上落的是真文件。
-
-**全局 step.conf 纪律**：本技能 `step.conf` 只放两段都认识的键（`BANDGAP`、`FUNC`）。
-往全局层加步骤专属参数（`NWORKERS`/`METHOD`/`SOLVER`/`MESH`…）会让另一段的 gen 因“不认识的键”
-直接 `SystemExit`（ke 自己的 step.conf 顶部记着这条教训）。
-
-**三种精简模式**（两段可各自开关，关掉的段其 `needs` 被 autozt 当缺失依赖忽略）：
-
-```yaml
-# <材料>/zt-dft-cpu/project_setting/tf_<项目名>.yaml
-task_types:
-  zt-dft-cpu:
-    electronic: false     # 只跑晶格段 + 汇总（电子输运借同材料 ke 结果）
-    lattice: false        # 只跑电子段 + 汇总（κ_L 借同材料 kl 结果）
-    # 两个都 false = 只出 ZT 汇总（两段结果都由独立技能项目算好）
-```
-
-**参数**：`BANDGAP`（pbe/hse，透传电子段）、`FUNC`（两段共用泛函）、`KTEMP_MODE`（`interp` 按温度插值
-κ_L、`const300` 固定用 300 K 的 κ_L）；可选组 `bandgap_hse` / `nac` / `phonon_plot` 与上游同名同义。
-
-**产物**：`zt_summary.json`（温度×掺杂的 S/σ/κ_e/κ_L/κ_tot/PF/ZT + 峰值 + 口径说明 + 来源）、
-`zt_summary.txt`、`zt_vs_T.png`、`zt_vs_doping.png`、`zt_components.png`。
-κ_L 只取 kl 的**元胞口径** `kappa_xx_yy_zz`（与 AMSET 的 σ/κ_e 同口径，可直接相加）；2D 张量按
-面内 (xx+yy)/2 约化、3D 按对角平均；κ_L 温区外不外推（ZT 记 null）；若 kl 结果带 `Lz_ang`，还会与
-电子段胞的 c 轴比对做**元胞口径闸门**。详见 `skill/zt-dft-cpu/README.md`。
+ZT = S²σT / (κ_e + κ_L)。本技能**只有一个步骤 S20_zt**；S/σ/κ_e 由同一材料目录下的
+`ke-dft-cpu`（S8_kappa）、κ_L 由 `kl-dft-cpu`（S6_kappa；也接受 kl-mlff-* / fit-fc-thermal）各自计算。
+ke / kl 改了什么（换引擎、修 bug、加步骤），ZT 自动跟着用——不再像 v0.1 那样在本技能里抄一份
+步骤定义 + 符号链接（v0.1 的 kl 段一直停在旧力常数引擎上）。
 
 ```bash
-autozt -tt zt-dft-cpu -p <材料> init      # 建项目配置
-autozt -tt zt-dft-cpu -p <材料> start     # 跑（默认 24 步）
-autozt -tt zt-dft-cpu -p <材料> status
+autozt -tt zt-dft-cpu -p <材料> register --poscar POSCAR   # 同时 init zt/ke/kl（companion_skills）
+autozt -p <材料> start                                       # 不带 -tt：依次推进该材料的每个技能
+autozt -p <材料> graph                                       # 三个技能的任务图；S20 写着在等哪份结果
 ```
+
+**跨技能结果依赖 `needs_results`**（步骤级，通用机制，任何组合技能都能用）：键 → 候选结果文件列表，
+路径相对**本材料的本地目录**，按顺序取第一个合格的；没满足时步骤是 WAIT；gen 时把选中的结果目录推到
+远端 `<技能目录>/inputs/<键>/`（附 `source.json`）。**来源戳**：autozt 拉回任何步骤的结果时写
+`result/<步骤>/.autozt_origin.json`（材料目录 + 材料 POSCAR sha256 + 技能/步骤/远端目录）；只认同一材料
+目录、当前结构指纹一致的结果——另一个项目里的同名材料、改过结构后的旧结果、没有来源戳的旧版本结果都不算
+（旧结果 `autozt -tt <技能> -p M fetch` 重新拉一次即可补戳）。S20 再核一次三份输入同材料、同结构。
+
+**产物**：`zt_summary.json`（温度×掺杂的 S/σ/κ_e/κ_L/κ_tot/PF/ZT + 峰值 + 口径 + 输入来源）、
+`zt_heatmap.png`（zT(n,T) 热图，n/p 两栏）、`zt_vs_T.png`、`zt_vs_doping.png`、`zt_components.png`、`zt_summary.txt`。
+参数只有 `step20_zt/step.conf` 的 `KTEMP_MODE`（interp / const300）与 `KL_CONST_T`；电子/晶格参数改上游技能。
+详见 `skill/zt-dft-cpu/README.md`。
 ## 7. 技能开发规范（原 SKILL_DEV.md 内容）
 
 > 本章是技能开发规范的统一维护位置。符合现有步骤、生成器、判据与调度抽象的技能可被自动发现，通常不需要改核心或 MCP；超出现有抽象时须扩展执行层，不能仅靠添加 YAML 声明。模型接入契约、错误处理与验收要求见 **7.15–7.18**；7.13 的提示词应与这些要求一起使用。

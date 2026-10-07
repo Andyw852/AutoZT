@@ -140,7 +140,11 @@ def _status_text(n):
         return "失败：%s" % _short(n.get("diag") or lt or "?", 60) + fan
     if k == "WAIT":
         need = [d for d in (n.get("pending_deps") or [])]
-        return ("等上游 %s" % "、".join(need)) if need else "等上游"
+        txt = ("等上游 %s" % "、".join(need)) if need else ""
+        if n.get("missing_results"):          # 跨技能结果（needs_results）
+            txt = (txt + "；" if txt else "") + "等跨技能结果：" + "；".join(
+                n["missing_results"])
+        return txt or "等上游"
     if k == "TODO":
         return "可提交（输入已生成）" + fan
     if k == "PREP":
@@ -168,7 +172,8 @@ def material_graph(t, m):
         j = s.get("job") or None
         node = {"name": s.get("name"), "label": lb, "kind": _kind(s),
                 "label_txt": s.get("label_txt"), "diag": _short(s.get("diag"), 200),
-                "deps": deps, "missing_deps": list(s.get("_missing_deps") or [])}
+                "deps": deps, "missing_deps": list(s.get("_missing_deps") or []),
+                "missing_results": list(s.get("_missing_results") or [])}
         if j:
             node["job"] = {k: j.get(k) for k in ("id", "state", "info", "time")
                            if j.get(k) not in (None, "")}
@@ -377,9 +382,16 @@ def cmd_graph(data, projs=None, json_out=False, mermaid=False):
     from autozt.report import find_material
     graphs = []
     if projs:
+        from autozt import _name_matches
         for pj in projs:
-            t, m = find_material(data, pj)
-            graphs.append(material_graph(t, m))
+            # 同一个材料常常挂着好几个技能（zt = ke + kl + 汇总）：不带 -tt 时每个技能
+            # 各画一张，而不是报"属于多个任务类型"
+            hits = [(t, m) for t in data.get("types") or [] for m in t.get("materials") or []
+                    if _name_matches(m, pj)]
+            if len({id(m) for _t, m in hits}) <= 1 or len({t.get("key") for t, _m in hits}) != len(hits):
+                hits = [find_material(data, pj)]
+            for t, m in hits:
+                graphs.append(material_graph(t, m))
     else:
         for t in data.get("types") or []:
             if t.get("materials"):

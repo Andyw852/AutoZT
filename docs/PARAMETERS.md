@@ -26,7 +26,7 @@
 | phonon-mlff-gpu | 声子谱(MACE/GPU) | 3 | S1_relax, S2_force, S3_phonon |
 | te-screen | 热电快速筛选(替代模型) | 2 | S1_feat, S2_pred |
 | unihamgnn | 能带(Uni-HamGNN) | 3 | S1_graph, S2_predict, S3_band |
-| zt-dft-cpu | 热电优值 ZT 全流程(电子输运 + 晶格热导 + ZT 汇总) | 15 | S1_opt, S3_uniform, S4_wave, S5_dielect, S5.1_dievalid, S6_elastic, S7_deform, S7.1_read, S8_kappa_e, SK1_opt, SK2_static, SK4_disp, SK5_fc, SK6_kappa, S20_zt |
+| zt-dft-cpu | 热电优值 ZT（组合 ke-dft-cpu 电子输运 + kl-dft-cpu 晶格热导 → ZT 汇总） | 1 | S20_zt |
 
 ## 2. io_schema 声明的参数（schema 2，机器可读）
 
@@ -82,7 +82,6 @@
 | phonon-mlff-cpu | DEVICE | cpu | cpu | step.conf | MACE 推理设备 |
 | phonon-mlff-gpu | DEVICE | cuda | cuda | step.conf | MACE GPU 推理设备 |
 | unihamgnn | SOC | True | True, False | step.conf | 是否生成 SOC 图数据（技能模板默认 true = 同时出 non-SOC 与 SOC 两份） |
-| zt-dft-cpu | BANDGAP | hse | pbe, hse | step.conf | 电子段带隙层级：pbe 只算 PBE，hse 继续算 HSE（透传给上游 ke 段） |
 | zt-dft-cpu | KTEMP_MODE | interp | interp, const300 | step.conf | ZT 汇总取 κ_L 的方式：interp = 按温度插值 κ_L(T)；const300 = 固定用 300 K 的 κ_L |
 
 ## 3. 出厂默认值总表（step.conf 与 SPEC 内建）
@@ -578,8 +577,6 @@
 | unihamgnn | templates/step.conf（技能级） | SOC | true | - | 通用 SOC 模型：true = 生成 non-SOC + SOC 两份 graph_data |
 | unihamgnn | templates/step.conf（技能级） | UNI_MODEL | /home/<user>/software/Uni-HamGNN/uni-hamgnn_2_1.pkl | - | - |
 | unihamgnn | templates/step.conf（技能级） | XC | GGA-PBE | - | - |
-| zt-dft-cpu | step.conf（技能级） | BANDGAP | hse | - | - |
-| zt-dft-cpu | step.conf（技能级） | FUNC | pbesol | - | - |
 | zt-dft-cpu | step20_zt/step.conf（步骤级） | KL_CONST_T | 300 | - | - |
 | zt-dft-cpu | step20_zt/step.conf（步骤级） | KTEMP_MODE | interp | - | - |
 

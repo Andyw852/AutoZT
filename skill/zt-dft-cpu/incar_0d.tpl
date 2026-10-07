@@ -1,1 +1,0 @@
-../_common/opt/templates/incar_0d.tpl

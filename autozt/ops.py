@@ -2426,6 +2426,25 @@ def cmd_register(cfg, types, proj, tt, dataset=None, poscar=None, root=None,
         report["init_log"] = _buf.getvalue()[-2000:]
         return _fail("init 失败（rc=%s）。" % rc)
     _did("init -tt %s 完成" % tt)
+    # 组合技能（如 zt-dft-cpu = ke-dft-cpu + kl-dft-cpu + 汇总）：上游技能在同一个材料
+    # 目录里各自 init、各自计算，组合技能只读它们拉回的结果（needs_results）。
+    for _comp in (_tdef.get("companion_skills") or []):
+        _cdef = next((x for x in (types or []) if x.get("key") == _comp), None) or \
+            ((cfg.get("task_types") or {}).get(_comp) or {})
+        if not _cdef:
+            report.setdefault("warnings", []).append("组合技能需要的 %s 没装" % _comp)
+            continue
+        _csub = (str(_cdef.get("dir_name") or _comp) if _cdef.get("skill_subdir") else None)
+        if cluster:
+            _write_cluster_hpc(os.path.join(matdir, _csub, "project_setting") if _csub
+                               else os.path.join(matdir, "project_setting"))
+        with _ctx.redirect_stdout(_buf if json_out else sys.stdout):
+            _rc2 = _init_one(cfg, types, matdir, None, tt=_comp, known_names=known)
+        if _rc2:
+            return _fail("组合技能的上游 %s init 失败（rc=%s）。" % (_comp, _rc2))
+        if cluster and _csub:
+            _write_cluster_hpc(os.path.join(matdir, _csub, "project_setting"))
+        _did("init -tt %s 完成（%s 的上游技能）" % (_comp, tt))
     ps = None
     for cand in (os.path.join(matdir, tt, "project_setting"),
                  os.path.join(matdir, "project_setting")):

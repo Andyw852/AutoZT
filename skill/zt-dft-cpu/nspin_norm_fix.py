@@ -1,1 +1,0 @@
-../ke-dft-cpu/nspin_norm_fix.py
