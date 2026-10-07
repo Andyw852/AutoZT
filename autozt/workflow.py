@@ -3043,15 +3043,18 @@ def _stop_host(m, s, cfg):
     return str(s.get("_host") or m.get("host_eff") or cfg.get("host") or "__default__")
 
 
-def _ask_confirm(prompt):
+_STOP_Y = "tf -tt <技能> -p <材料> -j <步骤> stop -y"
+
+
+def _ask_confirm(prompt, example=None):
     """交互确认。无 TTY 时给可执行的错误，而不是抛 EOFError 栈。
 
     旧代码直接 input()：非交互场景（agent / cron / 管道）会抛
-    EOFError traceback，既不友好也不说明该加 -y。"""
+    EOFError traceback，既不友好也不说明该加 -y。所有 [y/N] 确认都走这里
+    （stop / hpc / adopt …），example 给出该命令带 -y 的写法。"""
     if not sys.stdin or not sys.stdin.isatty():
-        sys.exit(_i18n.t("错误：", "error: ") + "%s 需要确认，但当前不是交互终端。"
-                 "请显式加 -y 表示同意（例：tf -tt <技能> -p <材料> -j <步骤> stop -y）"
-                 % "该操作")
+        sys.exit(_i18n.t("错误：", "error: ") + "该操作需要确认，但当前不是交互终端。"
+                 "请显式加 -y 表示同意" + ("（例：%s）" % example if example else "。"))
     try:
         return input(prompt).strip().lower()
     except EOFError:
@@ -3095,7 +3098,7 @@ def cmd_stop(cfg, data, mname, jname, yes):
                          for j, m, s in jobs)
         if not yes:
             ans = _ask_confirm("取消全部材料的步骤 %s 的作业：%s ? [y/N] "
-                               % (jobs[0][2]["label"], desc))
+                               % (jobs[0][2]["label"], desc), example=_STOP_Y)
             if ans not in ("y", "yes"):
                 print("已取消操作。")
                 return 1
@@ -3152,7 +3155,7 @@ def cmd_stop(cfg, data, mname, jname, yes):
         desc = ", ".join("%s(%s,%s)" % (j["id"], j["state"], s["label"]) for j, s in jobs)
         if not yes:
             ans = _ask_confirm("取消 %s(tt=%s) 的作业 %s ? [y/N] "
-                               % (m["name"], m["tt"], desc))
+                               % (m["name"], m["tt"], desc), example=_STOP_Y)
             if ans not in ("y", "yes"):
                 print("已取消操作。")
                 return 1
@@ -3188,7 +3191,8 @@ def cmd_stop(cfg, data, mname, jname, yes):
     desc = ", ".join("%s(%s|%s,%s)" % (j["id"], m["name"], m["tt"], s["label"])
                      for j, m, s in jobs)
     if not yes:
-        ans = _ask_confirm("取消全部 %d 个作业：%s ? [y/N] " % (len(jobs), desc))
+        ans = _ask_confirm("取消全部 %d 个作业：%s ? [y/N] " % (len(jobs), desc),
+                           example=_STOP_Y)
         if ans not in ("y", "yes"):
             print("已取消操作。")
             return 1

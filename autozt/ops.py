@@ -1314,7 +1314,7 @@ def _write_hpc_yaml(path, d, note):
         f.writelines(lines)
 
 def cmd_hpc(cfg, types, projs, cluster, tt, yes):
-    from autozt import _load_yaml_file, _name_matches, discover_local, find_asset, pkg_setting_path, resolve_material_local, _PKG_ROOT
+    from autozt import _ask_confirm, _load_yaml_file, _name_matches, discover_local, find_asset, pkg_setting_path, resolve_material_local, _PKG_ROOT
     """v1.7：把 -p 指定的项目（一个或多个）分配到指定超算；未指定的项目一律不动。
       tf -p X,Y hpc <集群名>             材料级：改写 project_setting/hpc.yaml
                                          （该材料全部技能生效）
@@ -1369,7 +1369,7 @@ def cmd_hpc(cfg, types, projs, cluster, tt, yes):
         print("  %-24s → %s" % (m["name"], ("材料/%s/hpc.yaml" % t["key"])
                                  if tt else "project_setting/hpc.yaml"))
     if not yes:
-        ans = input("确认执行？ [y/N] ").strip().lower()
+        ans = _ask_confirm("确认执行？ [y/N] ", example="autozt -p <材料> hpc <集群> -y")
         if ans not in ("y", "yes"):
             print("已取消操作。")
             return 1
@@ -1723,7 +1723,7 @@ def cmd_auto(cfg, arg):
     return 0
 
 def cmd_adopt(cfg, types, proj, yes, dry, tt):
-    from autozt import collect_data, get_types, load_config, merge_project_configs
+    from autozt import _ask_confirm, collect_data, get_types, load_config, merge_project_configs
     """v1.5：接管手工整理的技能子目录结构。适用场景：人手工把 POSCAR、
     project_setting、result、log 搬进了 材料/<技能>/。tf 的规矩是 POSCAR 和
     project_setting 必须在材料根（所有技能共用），<技能>/ 里只放该技能产物。
@@ -1795,7 +1795,7 @@ def cmd_adopt(cfg, types, proj, yes, dry, tt):
         print("（--dry-run，未执行）")
         return 0
     if plans and not yes:
-        ans = input("执行以上移动？ [y/N] ").strip().lower()
+        ans = _ask_confirm("执行以上移动？ [y/N] ", example="autozt -p <材料> adopt -y")
         if ans not in ("y", "yes"):
             print("已取消操作。")
             return 1

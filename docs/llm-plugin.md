@@ -75,11 +75,19 @@ autozt agent research_plan --goal "比较二维材料的 zT" --dimension 2D \
   --temperature 300 600 --carrier 1e18 2e18
 ```
 
-### 2. 执行前科学预检查
+### 2. 科学预检查（执行前 / 结果回收后）
 
-结果回收后，`preflight` 只读检查结果目录、电子输运和晶格热导产物、zT 汇总产物，以及二维厚度约定。它明确区分“文件存在”和“技能物理 validator 已判定通过”；不会把描述性 Schema 冒充为收敛证明。
+`preflight` 分两段，都是只读：
+
+- **执行前**（不给 `--result-dir`）：用 `--poscar` 或 `-p 材料` 检查输入——结构能否完整解析、
+  按工作流同一判据（`dim_common.py`，真空 ≥ 8 Å）判定的维度是否与请求一致、二维真空层是否沿 c 轴、
+  温度/载流子网格是否为正的有限值。通过时状态为 `ready_to_execute`。
+- **结果回收后**（给 `--result-dir`）：检查结果目录、电子输运和晶格热导产物、zT 汇总产物、单位、
+  网格以及二维厚度约定。它明确区分“文件存在”和“技能物理 validator 已判定通过”；不会把描述性
+  Schema 冒充为收敛证明。通过时状态为 `completed`。
 
 ```bash
+autozt agent preflight -p MoS2 --dimension 2D --temperature 300 600 --carrier 1e19 1e20
 autozt agent preflight --result-dir /path/to/material/zt-dft-cpu/result \
   --dimension 2D --thickness 6.5 --temperature 300 600
 ```
@@ -113,8 +121,8 @@ Agent：调用 cycle(execute=true)，动作经 autozt act，返回 job、集群�
 `research_plan`、`preflight` 和 `results` 都带有统一的 `conversation_state`、`message`、
 `next_action`、`requires_user_confirmation` 和 `confirmation_payload` 字段。缺少温度网格、
 载流子网格或二维材料名时状态为 `needs_user_input`；计划完整但未确认时为
-`awaiting_confirmation`；预检查失败时为 `preflight_review`；通过后为
-`ready_to_execute`。这些字段只表达对话边界，不替代技能自身的物理 validator。
+`awaiting_confirmation`；预检查失败时为 `preflight_review`；执行前输入预检通过后为
+`ready_to_execute`，结果预检通过后为 `completed`。这些字段只表达对话边界，不替代技能自身的物理 validator。
 
 `research_plan.review_card` 是面向界面的计划卡：包含目标、编号步骤、每步输入/输出/判据、
 后续工具调用顺序和 `Proceed` 状态。`action_surface` 会把普通 CLI/人工动作与 MCP 可执行动作

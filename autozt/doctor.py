@@ -155,21 +155,61 @@ def check_same_names(cfg, types):
     return finds
 
 
-def check_clusters(cfg, types):
+def _clusters_in_use(types):
+    """{集群名: [材料[技能], ...]}：本地发现的材料**实际**用的集群（纯本地，不连超算）。
+
+    材料的有效集群按 resolve_material_local 的优先级取：材料/<技能>/hpc.yaml ＞
+    project_setting/hpc.yaml ＞ 技能/段级默认。只看技能默认会把「默认 jzzn、但材料已
+    register --cluster local」误报成缺集群配置。"""
+    from autozt import discover_local, resolve_material_local
+    used = {}
+    for t in types or []:
+        lr = t.get("local_root")
+        if not lr:
+            continue
+        try:
+            root, mats = discover_local(lr, tt=t.get("key"))
+        except Exception:                       # noqa: BLE001
+            continue
+        for m in mats:
+            try:
+                resolve_material_local(t, root, m)
+            except Exception:                   # noqa: BLE001
+                continue
+            name = m.get("hpc_name")
+            if name:
+                used.setdefault(str(name), []).append("%s[%s]" % (m["name"], t.get("key")))
+    return used
+
+
+def check_clusters(cfg, types, deep=True):
     from autozt import _PKG_ROOT, pkg_setting_path, _load_yaml_file
     import glob
     import re
-    finds, names = [], set()
+    finds, defaults = [], set()
     for t in types or []:
         h = t.get("hpc")
         if isinstance(h, str) and h:
-            names.add(h)
-    for n in sorted(names):
+            defaults.add(h)
+    used = _clusters_in_use(types) if deep else {}
+    for n in sorted(defaults | set(used)):
         path = pkg_setting_path(n + ".yaml")
         if not path:
-            finds.append(_finding("error", "cluster_config_missing",
-                                  "技能/项目引用的集群 %s 没有 setting/%s.yaml" % (n, n),
-                                  fix="照 setting/template-cluster.yaml 建一份"))
+            if n in used:
+                mats = used[n]
+                msg = "%d 个材料用的集群 %s 没有 setting/%s.yaml" % (len(mats), n, n)
+                finds.append(_finding("error", "cluster_config_missing", msg,
+                                      fix="照 setting/template-cluster.yaml 建一份，"
+                                          "或 autozt -p <材料> hpc <已配置的集群> 换集群",
+                                      examples=sorted(mats)[:10]))
+            else:
+                skills = sorted({str(t.get("key")) for t in types or [] if t.get("hpc") == n})
+                msg = ("技能默认集群 %s 没有 setting/%s.yaml；目前没有材料在用它，"
+                       "但不指定集群就注册的新材料会落到这里" % (n, n))
+                fix = ("注册时加 --cluster local（或已配置的集群），"
+                       "或照 setting/template-cluster.yaml 建 setting/%s.yaml" % n)
+                finds.append(_finding("warn", "cluster_default_unconfigured", msg, fix=fix,
+                                      examples=skills[:10]))
             continue
         c = _load_yaml_file(path) or {}
         declared = str(c.get("partition") or c.get("queue") or "").strip()
@@ -264,7 +304,7 @@ def run_doctor(cfg, types, deep=True):
     finds += check_aliases()
     if deep:
         finds += check_same_names(cfg, types)
-    finds += check_clusters(cfg, types)
+    finds += check_clusters(cfg, types, deep=deep)
     mon, f = check_monitor(cfg)
     report["monitor"] = mon
     finds += f
