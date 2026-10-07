@@ -27,9 +27,11 @@
      使用的带窗口，默认 11-17；最高的几条带没收敛会给出几十 meV，属正常）。
   ④ amset wave 的带窗口必须是显式的（自动选会得到不同带区间 -> 带索引错位，
      系数没法逐带比较）。
-  ⑤ 弹性张量正定性：Christoffel 最小特征值 <= 0 时 **拦截** —— 与重叠无关的独立坑，
-     AMSET 的形变势因子用负特征值 -> ADP 直接算废（V25.10 §九；Mo2S3/CrS2 实测）。
-     只有运行目录里有 settings.yaml 时才生效（gen 写完 settings 之后 / 作业内都满足）。
+  ⑤ 弹性张量正定性 —— 与重叠无关的独立坑，AMSET 的形变势因子用负特征值 -> ADP 直接算废
+     （V25.10 §九；Mo2S3/CrS2 实测）。二维**面内**特征值比 <=0 或 <1e-2 **拦截**；
+     完整 3x3 的 Christoffel 最小特征值 <= 0 只**告警**（gen 的 ELASTIC_GUARD 已经先拦过一道）。
+     S8.4 插件路径（运行目录里有 amset2d_plugin.py）的 ADP/PIE 只用面内 2x2，面外剪切为负
+     只记录、不告警（V180）。只有运行目录里有 settings.yaml 时才生效。
 """
 import glob
 import os
@@ -149,6 +151,59 @@ def elastic_min_christoffel(elastic):
     n = int(np.argmin(ev))
     idx = np.unravel_index(n, ev.shape)
     return float(ev.ravel()[n]), dirs[idx[0]] if ev.ndim > 1 else dirs[0]
+
+
+def plugin_2d_active(out_dir):
+    """S8.4 插件路径：运行目录里有 amset2d_plugin.py，且 2d_correction.json 记的插件就是它。
+
+    插件替换了 ADP/PIE 的散射核，只用面内 2x2 Christoffel 子块（amset2d_plugin._inplane_modes），
+    完整 3x3 里的面外剪切进不了计算（V180）。
+    """
+    out = Path(out_dir)
+    if not (out / "amset2d_plugin.py").is_file():
+        return False
+    try:
+        import json
+        rec = json.loads((out / "2d_correction.json").read_text(errors="ignore"))
+    except Exception:
+        return False
+    return isinstance(rec, dict) and rec.get("plugin") == "amset2d_plugin.py"
+
+
+def elastic_check_lines(elastic, two_d, plugin):
+    """⑤ 的判定。返回 (状态 "ok"/"warn"/"error", 行列表)；elastic 为空返回 ("ok", [跳过说明])。"""
+    if not elastic:
+        return "ok", ["  5) 弹性张量：settings.yaml 里没有 elastic_constant，跳过"]
+    me = elastic_min_christoffel(elastic)
+    if me is None:
+        return "ok", ["  5) 弹性张量：装备缺 pymatgen/amset 或格式异常，跳过"]
+    val, d = me
+    r2 = inplane_eig_ratio(elastic) if two_d else None
+    lines = ["  5) 弹性张量：Christoffel 最小特征值 = %.4f（方向 %s）%s"
+             % (val, d, "" if r2 is None else "；面内特征值比 = %.4f" % r2)]
+    if two_d and r2 is not None and (r2 <= 0 or r2 < 1e-2):
+        lines.append("     ★ 拦截（**面内**不可信）：二维面内 Christoffel 特征值比 = %.4f"
+                     "（<=0 或 <1e-2）—— 要么张量仍是 VASP 打印顺序没重排（C44/C66 互换；"
+                     "实测 SS 旧 settings C66 槽 0.557 / C44 槽 56.337），要么面内本身非正定。"
+                     "用当前 gen（gen_step10/gen_step14）重新生成 settings 后再跑。" % r2)
+        return "error", lines
+    if val > 0:
+        return "ok", lines
+    if two_d and plugin:
+        lines.append("     负特征值来自面外剪切（二维 slab 的真空伪影）。本步走 amset2d_plugin，"
+                     "ADP/PIE 只用面内 2x2，面外剪切进不了计算 -> 不影响结果，不告警。")
+        return "ok", lines
+    if two_d:
+        lines.append("     [WARN] 最小 Christoffel 特征值为负 —— 多为**面外**剪切（二维 slab 的真空伪影），"
+                     "不是面内问题。但本步不走插件，AMSET 原版 ADP 用的是完整 3x3，这个负值会进计算。"
+                     "gen 现在把二维面外**负**剪切取绝对值（原值->新值记在 2d_correction.json 的 "
+                     "elastic_outofplane_shear_zeroed）；还看到负值，多半是 settings 在这条修正之前生成的，"
+                     "retry 本步重生成。准确的二维处理走 step8.4_amset2d 插件（面内 2x2）。")
+        return "warn", lines
+    lines.append("     [WARN] 弹性张量不正定（Christoffel 最小特征值为负）—— ADP 散射率与迁移率不可信。"
+                 "gen 的 ELASTIC_GUARD 默认会拦下；这里还看到，说明 step.conf 关了 ELASTIC_GUARD "
+                 "或 settings.yaml 被手改过。")
+    return "warn", lines
 
 
 def inplane_eig_ratio(elastic):
@@ -616,29 +671,11 @@ def run(cwd, out_dir=None, unity_overlap=False, desym_fix=None):
         if _s is None:
             lines.append("  5) 弹性张量：读 settings.yaml 失败（缺 yaml？），跳过")
         else:
-            _el = _s.get("elastic_constant")
-            me = elastic_min_christoffel(_el) if _el else None
-            if not _el:
-                lines.append("  5) 弹性张量：settings.yaml 里没有 elastic_constant，跳过")
-            elif me is None:
-                lines.append("  5) 弹性张量：装备缺 pymatgen/amset 或格式异常，跳过")
-            else:
-                val, d = me
-                _r2 = inplane_eig_ratio(_el) if two_d else None
-                lines.append("  5) 弹性张量：Christoffel 最小特征值 = %.4f（方向 %s）%s"
-                             % (val, d, "" if _r2 is None else "；面内特征值比 = %.4f" % _r2))
-                if two_d and _r2 is not None and (_r2 <= 0 or _r2 < 1e-2):
-                    err = True
-                    lines.append("     ★ 拦截（**面内**不可信）：二维面内 Christoffel 特征值比 = %.4f"
-                                 "（<=0 或 <1e-2）—— 要么张量仍是 VASP 打印顺序没重排（C44/C66 互换；"
-                                 "实测 SS 旧 settings C66 槽 0.557 / C44 槽 56.337），要么面内本身非正定。"
-                                 "用当前 gen（gen_step10/gen_step14）重新生成 settings 后再跑。" % _r2)
-                elif val <= 0:
-                    warn = True
-                    lines.append("     [WARN] 最小 Christoffel 特征值为负 —— 多为**面外**剪切（二维 slab "
-                                 "的真空伪影），不是面内问题。gen 现已对二维面外剪切置零（原值记在 "
-                                 "2d_correction.json 的 elastic_outofplane_shear_zeroed）；"
-                                 "旧 settings 请 retry 重生成，或走 step8.4_amset2d 插件（面内 2x2）。")
+            _st5, _l5 = elastic_check_lines(_s.get("elastic_constant"), two_d,
+                                            plugin_2d_active(out_dir))
+            lines.extend(_l5)
+            err = err or _st5 == "error"
+            warn = warn or _st5 == "warn"
 
     return ("error" if err else ("warn" if warn else "ok")), lines
 

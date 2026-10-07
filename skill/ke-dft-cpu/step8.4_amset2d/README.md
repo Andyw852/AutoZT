@@ -202,8 +202,9 @@ gen（`patch_write_mesh` + `patch_intrinsic_auto`）会：
        ③ S3 vs S3b：NBANDS + 本征值一致性（<1 meV，窗口取运行日志实际值）；
        ④ `amset wave` 带窗口必须等于 AMSET 实际插值的窗口；
        ⑤ 弹性张量：**面内** Christoffel 特征值比 `<=0` 或 `<1e-2` -> **拦截**（多为 VASP 顺序未重排、C44/C66 互换）；
-          **仅面外**为负 -> **告警**（二维 slab 真空伪影；gen 会把**负的**面外剪切清掉，原值记进
-          `2d_correction.json` 的 `elastic_outofplane_shear_zeroed`）。
+          **仅面外**为负（二维 slab 真空伪影）：本步（插件，ADP/PIE 只用面内 2x2）**只记录、不告警**（V180）；
+          `step8_amset` 标准路径用完整 3x3 -> **告警**（gen 会把**负的**面外剪切取绝对值，原值->新值记进
+          `2d_correction.json` 的 `elastic_outofplane_shear_zeroed`；还看到负值多半是旧 settings）。
     ② `use_projections: true` 的运行**不适用**比值报警：投影重叠不满足 `|I|^2<=1`（实测比值可 0.71/0.41），guard 遇到它直接跳过。
     ③ 8.3 自动算比值（`overlap_ratio_guard.py`，2026-09-19 分级）：ADP **`<1` 红 / `[1, N_v]` 绿 / `>N_v` 黄（要求人工确认）**；
        **N_ch（按谷区分实测，同谷=1/谷间=0）只作解释打印，不再当放行阈值**（SS 实测 N_ch 电子 ~23、空穴 ~250，见 V29）；材料目录放 `valley_ratio.json`（`{"n_ch": 3.13}`）会被读到并打印。
