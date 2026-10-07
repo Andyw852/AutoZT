@@ -6,6 +6,7 @@
 三角翘曲 w q³cos3θ 是奇次项，±q 平均后应完全消掉；q⁴ 由拟合吸收。
 V177：S3 的 CHGCAR 是 0 字节（出厂 LCHARG = .FALSE.）时走两段式（stage1 从 WAVECAR 自洽 -> stage2 非自洽）。
 V178：每个载流子单独给"通过/不通过"和原因；窗口减半不稳时区分"能量噪声"（各方向离散大）和"高阶非抛物"（各方向一致）。
+V184：scan —— 在一串窗口上逐方向做抛物线拟合；六方胞标出锯齿/扶手椅。
 
 用法：python test_edge_mass_check.py      退出码 0 = 全部 PASS。
 """
@@ -332,6 +333,81 @@ class TwoStageTests(unittest.TestCase):                                  # [V177
             rc, txt = _run(["fit", str(out)])
             self.assertEqual(rc, want, txt)
             self.assertIn("复现了 S3" if want == 0 else "电荷密度不是 S3 那一份", txt)
+
+
+class ScanTests(unittest.TestCase):                                      # [V184]
+    QS = [0.01 * (i + 1) for i in range(30)]
+
+    def _pts(self):
+        return E.star_points(REC, K, self.QS, 6)
+
+    def test_isotropic_parabola_same_everywhere(self):
+        pts = self._pts()
+        e = np.array([EG + E.HB2M * np.linalg.norm(((p[0] - K) @ REC)[:2]) ** 2 / ME for p in pts])
+        for w in (0.05, 0.3):
+            for j in range(6):
+                for model in ("fixed", "free"):
+                    m, why = E.parabola_mass(e, pts, j, w, "electron", model)
+                    self.assertAlmostEqual(m / ME, 1.0, delta=1e-9, msg=(w, j, model, why))
+
+    def test_sixfold_quartic_gives_window_dependent_anisotropy(self):
+        """q⁴cos6θ 是六方 K 谷里锯齿 / 扶手椅差别的最低阶来源：带边处两者相同，窗口越大差得越多。"""
+        d = 2.0
+        pts = self._pts()
+
+        def en(p):
+            v = ((p[0] - K) @ REC)[:2]
+            q, th = np.linalg.norm(v), math.atan2(v[1], v[0])
+            return EG + E.HB2M * q * q / ME + d * q ** 4 * math.cos(6 * th)
+        e = np.array([en(p) for p in pts])
+        ratios = []
+        for w in (0.05, 0.15, 0.3):
+            qs = np.array([q for q in self.QS if q <= w + 1e-12])
+            shift = d * np.sum(qs ** 6) / np.sum(qs ** 4)                 # 固定顶点的最小二乘：c = c0 ± d·Σq⁶/Σq⁴
+            m0, _ = E.parabola_mass(e, pts, 0, w, "electron")              # θ = 0：cos6θ = +1
+            m90, _ = E.parabola_mass(e, pts, 3, w, "electron")             # θ = 90°：cos6θ = −1
+            self.assertAlmostEqual(m0, E.HB2M / (E.HB2M / ME + shift), places=9)
+            self.assertAlmostEqual(m90, E.HB2M / (E.HB2M / ME - shift), places=9)
+            ratios.append(m90 / m0)
+        self.assertTrue(1.0 < ratios[0] < ratios[1] < ratios[2], ratios)
+
+    def test_one_sided_picks_up_warping(self):
+        pts = self._pts()
+        e = np.array([_model(p[0])[1] for p in pts])                       # 导带：含三角翘曲 w q³cos3θ
+        mb, _ = E.parabola_mass(e, pts, 0, 0.1, "electron", side="both")
+        mp, _ = E.parabola_mass(e, pts, 0, 0.1, "electron", side="plus")
+        mm, _ = E.parabola_mass(e, pts, 0, 0.1, "electron", side="minus")
+        self.assertLess(mp, mb)
+        self.assertGreater(mm, mb)                                          # 两侧的三次项符号相反
+        self.assertIsNone(E.parabola_mass(-e, pts, 0, 0.1, "electron")[0])  # 曲率符号不对
+
+    def test_hex_labels(self):
+        th = [0.0, 30.0, 60.0, 90.0, 120.0, 150.0]
+        self.assertEqual(E.hex_direction_labels(LAT, th), ["锯齿", "扶手椅", "锯齿", "扶手椅", "锯齿", "扶手椅"])
+        rot = np.array([[0, A, 0], [-A * math.sqrt(3) / 2, -A / 2, 0], [0, 0, C]])   # a1 沿 y
+        self.assertEqual(E.hex_direction_labels(rot, th)[:4], ["扶手椅", "锯齿", "扶手椅", "锯齿"])
+        rect = np.array([[5.26, 0, 0], [0, 3.04, 0], [0, 0, C]])
+        self.assertIsNone(E.hex_direction_labels(rect, th))
+
+    def test_cli_scan(self):
+        m = _material()
+        out = m.parent / "emc"
+        rc, txt = _run(["make", str(m), str(out), "--qmax", "0.3", "--nq", "30"])
+        self.assertEqual(rc, 0, txt)
+        _eigenval(out)
+        rc, txt = _run(["scan", str(out), "--windows", "0.05,0.3,0.5"])
+        self.assertEqual(rc, 0, txt)
+        self.assertIn("超过 make 时的 qmax", txt)
+        self.assertIn("0°（锯齿）", txt)
+        self.assertIn("90°（扶手椅）", txt)
+        self.assertIn("扶手椅/锯齿", txt)
+        res = json.loads((out / E.SCAN).read_text())
+        self.assertEqual(res["windows"], [0.05, 0.3, 0.5])
+        r0 = res["carriers"]["electron"]["rows"][0]
+        self.assertAlmostEqual(r0["m"][0] / ME, 1.0, delta=0.02)            # 小窗口 ≈ 带边质量
+        self.assertIsNotNone(r0["armchair_over_zigzag"])
+        rc, _ = _run(["fit", str(out)])                                     # fit 照旧能读同一次结果
+        self.assertIn(rc, (0, 1))
 
 
 if __name__ == "__main__":

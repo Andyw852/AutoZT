@@ -20,6 +20,11 @@
   python edge_mass_check.py fit <out_dir> [--tol 0.03]
       -> 读 EIGENVAL（6 位小数；没有才退回 vasprun.xml 的 4 位），打印各方向的 m* 和与 S8.2 的对比，
          写 edge_mass_result.json。退出码 0 = 通过，1 = 不通过，2 = 算不了。
+  python edge_mass_check.py scan <out_dir> [--windows 0.05,0.1,...] [--model fixed|free] [--side both|plus|minus]
+      -> [V184] 按"沿某方向取一段 k 点、拟合抛物线"的常见做法，在一串拟合窗口上逐方向算 m*，看它随窗口怎么变、
+         各方向差多少（带边 m* 是 q -> 0 的极限；窗口越大，高阶项混进来越多，六方 K 谷也会出现方向差）。
+         复现别人用某个窗口拟合出的 m* 时用它：make 时把 --qmax 放大（例如 0.3，--nq 30）。
+         六方胞时给出每个方向是锯齿还是扶手椅（按 POSCAR 的 a1 方向判断）。写 edge_mass_scan.json。
 """
 import argparse
 import json
@@ -40,6 +45,7 @@ HALF_TOL = 0.02           # 窗口减半后 m* 的变化上限
 NOISE_ANISO = 1.01        # [V178] 窗口减半时各方向离散 > 1% -> 判为小 q 点的能量噪声；≤ 1% 且仍变 -> 高阶非抛物
 META = "edge_mass_meta.json"
 RESULT = "edge_mass_result.json"
+SCAN = "edge_mass_scan.json"     # [V184]
 # [V177] 两段式（S3 没有可用的 CHGCAR 时）。VASP 命令由调用者给，本工具不碰集群的提交方式。
 RUN_TWO_STAGE = r'''#!/bin/bash
 # edge_mass_check 两段式（V177）。用法：bash run_two_stage.sh <VASP 命令>，例如 bash run_two_stage.sh mpirun -np 24 vasp_std
@@ -311,10 +317,52 @@ def cmd_make(a):
     return 0
 
 
-# ---------------------------------------------------------------- fit
-def cmd_fit(a):
+# ---------------------------------------------------------------- scan（V184）
+def parabola_mass(e, pts, j, w, carrier, model="fixed", side="both"):
+    """沿第 j 个方向、|q| ≤ w 的点拟合抛物线 -> (m 或 None, 说明)。
+
+    model = fixed：E − E(k0) = c·q²（顶点固定在带边，最常见的"抛物线拟合"）；
+            free： E = a + b·q + c·q²（顶点不固定，q 带符号）。
+    side  = both：两侧都取（奇次项如三角翘曲在对称取点下进不了 c）；plus / minus：只取一侧。
+    """
     import numpy as np
-    out = Path(a.out_dir).resolve()
+    e0 = e[0]
+    sel = [(s * q, e[i]) for i, (_, jj, s, q) in enumerate(pts)
+           if jj == j and q <= w + 1e-12 and (side == "both" or (s == 1) == (side == "plus"))]
+    if len(sel) < 2:
+        return None, "窗口内点太少"
+    qs = np.array([x for x, _ in sel])
+    es = np.array([y for _, y in sel])
+    if model == "fixed":
+        c = float(np.sum(qs ** 2 * (es - e0)) / np.sum(qs ** 4))
+    else:
+        qs = np.r_[0.0, qs]
+        es = np.r_[e0, es]
+        c = float(np.linalg.lstsq(np.c_[np.ones_like(qs), qs, qs ** 2], es, rcond=None)[0][2])
+    if (carrier == "electron" and c <= 0) or (carrier == "hole" and c >= 0):
+        return None, "曲率符号不对"
+    return HB2M / abs(c), ""
+
+
+def hex_direction_labels(lat, thetas, tol_deg=1.0):
+    """六方胞：θ（从笛卡尔 x 量起）是锯齿（沿晶格矢量）还是扶手椅（与晶格矢量成 30°）；不是六方返回 None。"""
+    import numpy as np
+    a1, a2 = np.asarray(lat[0], float)[:2], np.asarray(lat[1], float)[:2]
+    l1, l2 = np.linalg.norm(a1), np.linalg.norm(a2)
+    ang = np.degrees(np.arccos(np.clip(a1 @ a2 / (l1 * l2), -1, 1)))
+    if abs(l1 - l2) > 0.01 * max(l1, l2) or min(abs(ang - 60), abs(ang - 120)) > tol_deg:
+        return None
+    phi = np.degrees(np.arctan2(a1[1], a1[0]))
+    out = []
+    for th in thetas:
+        r = (th - phi) % 60.0
+        r = min(r, 60.0 - r)
+        out.append("锯齿" if r < tol_deg else ("扶手椅" if abs(r - 30.0) < tol_deg else ""))
+    return out
+
+
+def _load_run(out):
+    """-> (meta, nscf 目录, eig) 或打印原因后返回 None。"""
     try:
         meta = json.loads((out / META).read_text(encoding="utf-8"))
         nscf = out / "stage2_nscf" if meta.get("layout") == "two_stage" else out
@@ -325,10 +373,75 @@ def cmd_fit(a):
             kfrac, eig, _ = read_vasprun_eigen(nscf / "vasprun.xml")
     except (OSError, ValueError, IndexError) as e:
         print("[ERROR] %s" % e)
-        return 2
+        return None
     if len(kfrac) != len(meta["points"]):
         print("[ERROR] 结果有 %d 个 k 点，meta 记了 %d 个 —— 不是这次 make 的输入" % (len(kfrac), len(meta["points"])))
+        return None
+    return meta, nscf, eig
+
+
+def cmd_scan(a):
+    out = Path(a.out_dir).resolve()
+    run = _load_run(out)
+    if run is None:
         return 2
+    meta, nscf, eig = run
+    qmax, ndir = meta["qmax"], meta["ndir"]
+    if a.windows:
+        wins = sorted(float(x) for x in a.windows.split(",") if x.strip())
+    else:
+        wins = [round(qmax * f, 6) for f in (0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0)]
+    big = [w for w in wins if w > qmax + 1e-12]
+    if big:
+        print("[WARN] 窗口 %s 超过 make 时的 qmax = %g，按 qmax 截断（要更大的窗口，重新 make 时放大 --qmax）"
+              % (big, qmax))
+    thetas = [round(180.0 * j / ndir, 3) for j in range(ndir)]
+    try:
+        labels = hex_direction_labels(kc.read_lattice_matrix(nscf / "POSCAR"), thetas)
+    except Exception:                                                # noqa: BLE001
+        labels = None
+    names = ["%g°%s" % (t, "（%s）" % labels[i] if labels and labels[i] else "") for i, t in enumerate(thetas)]
+    res = {"material": meta["material"], "qmax": qmax, "model": a.model, "side": a.side, "windows": wins,
+           "theta_deg": thetas, "direction_labels": labels, "carriers": {}}
+    desc = {"fixed": "E − E(k0) = c·q²（顶点固定在带边）", "free": "E = a + b·q + c·q²（顶点不固定）"}[a.model]
+    print("拟合：%s；取点：%s；θ 从笛卡尔 x 量起%s" % (
+        desc, {"both": "两侧", "plus": "只取 +q 一侧", "minus": "只取 −q 一侧"}[a.side],
+        "；六方胞，锯齿 = 沿晶格矢量方向，扶手椅 = 与晶格矢量成 30°" if labels else ""))
+    arm = [i for i, l in enumerate(labels or []) if l == "扶手椅"]
+    zig = [i for i, l in enumerate(labels or []) if l == "锯齿"]
+    for name, carrier in (("cbm", "electron"), ("vbm", "hole")):
+        ed = meta["edges"][name]
+        si = next(i for i, st in enumerate(meta["stars"]) if name in st["edges"])
+        st = meta["stars"][si]
+        sl = slice(st["start"], st["start"] + st["count"])
+        pts = [(None, j, s, q) for _, j, s, q in meta["points"][sl]]
+        band = eig[ed["spin"], sl, ed["band"]]
+        rows = []
+        print("== %s（band %d, k0 = %s）" % (carrier, ed["band"], st["k0"]))
+        print("   窗口 q≤(Å⁻¹) | " + "  ".join("%-12s" % n for n in names)
+              + ("  | 扶手椅/锯齿" if arm and zig else ""))
+        for w in wins:
+            ms = [parabola_mass(band, pts, j, min(w, qmax), carrier, a.model, a.side)[0] for j in range(ndir)]
+            ratio = None
+            if arm and zig and ms[arm[0]] and ms[zig[0]]:
+                ratio = ms[arm[0]] / ms[zig[0]]
+            rows.append({"window": w, "m": ms, "armchair_over_zigzag": ratio})
+            print("   %-12g | " % w + "  ".join("%-12s" % ("%.4f" % m if m else "—") for m in ms)
+                  + ("  | %.3f" % ratio if ratio else ("  | —" if arm and zig else "")))
+        res["carriers"][carrier] = {"band": ed["band"], "k0": st["k0"], "rows": rows}
+    (out / SCAN).write_text(json.dumps(res, ensure_ascii=False, indent=1), encoding="utf-8")
+    print("[OK] 结果写到 %s" % (out / SCAN))
+    return 0
+
+
+# ---------------------------------------------------------------- fit
+def cmd_fit(a):
+    import numpy as np
+    out = Path(a.out_dir).resolve()
+    run = _load_run(out)
+    if run is None:
+        return 2
+    meta, nscf, eig = run
     ok, res = True, {"material": meta["material"], "s3_mesh": meta["s3_mesh"], "qmax": meta["qmax"], "carriers": {}}
     if meta.get("layout") == "two_stage":                            # [V177] stage1 的电荷密度得是 S3 那一份
         e1, e3 = outcar_toten(out / "stage1_scf" / "OUTCAR"), meta.get("s3_toten")
@@ -424,8 +537,13 @@ def main(argv=None):
     f = sub.add_parser("fit")
     f.add_argument("out_dir")
     f.add_argument("--tol", type=float, default=0.03)
+    sc = sub.add_parser("scan")                                       # [V184]
+    sc.add_argument("out_dir")
+    sc.add_argument("--windows", default=None, help="逗号分隔的拟合窗口（Å⁻¹，含 2π），默认 qmax 的 10%%…100%%")
+    sc.add_argument("--model", choices=("fixed", "free"), default="fixed")
+    sc.add_argument("--side", choices=("both", "plus", "minus"), default="both")
     a = ap.parse_args(argv)
-    return cmd_make(a) if a.cmd == "make" else cmd_fit(a)
+    return {"make": cmd_make, "fit": cmd_fit, "scan": cmd_scan}[a.cmd](a)
 
 
 if __name__ == "__main__":
