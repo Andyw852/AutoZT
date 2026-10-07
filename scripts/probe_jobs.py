@@ -182,7 +182,19 @@ def main():
     ap.add_argument("--work-dir", default="/public/home/<user>/defect_work",
                     help="超算工作根目录")
     ap.add_argument("--raw", action="store_true", help="只打印远端原始数据")
+    ap.add_argument("--targets", default=None,
+                    help="JSON 列表 [{material, host, dir}]：autozt probe 按材料自己的 hpc.yaml / "
+                         "work_dir 解析后传入；host 为空 = 本机材料，直接在本机读，不走 ssh")
     args = ap.parse_args()
+    targets = {}
+    if args.targets:
+        try:
+            for t in json.loads(args.targets):
+                targets[str(t["material"])] = t
+        except (ValueError, KeyError, TypeError):
+            print(json.dumps({"error": "--targets 不是合法的 JSON 列表"}, ensure_ascii=False),
+                  file=sys.stderr)
+            sys.exit(2)
 
     # 步骤 label -> 目录名
     label2dir = {"S0_refs": "step0_references", "S0": "step0_references",
@@ -195,13 +207,27 @@ def main():
 
     all_jobs = []
     for mat in [m.strip() for m in args.projects.split(",") if m.strip()]:
-        matdir = "%s/%s/defect-dft-cpu" % (args.work_dir.rstrip("/"), mat)
-        proc = subprocess.run(
-            ["ssh", "-o", "BatchMode=yes", args.host, "python3", "-", matdir, step, "1" if fanout else "0"],
-            input=REMOTE_GATHER, capture_output=True, text=True)
+        tgt = targets.get(mat) or next(
+            (v for k, v in targets.items() if os.path.basename(k) == mat), None)
+        if tgt:
+            host, matdir = str(tgt.get("host") or ""), str(tgt["dir"])
+        else:   # 独立运行 / 未解析到的材料：沿用旧的 --host / --work-dir 约定
+            host, matdir = args.host, "%s/%s/defect-dft-cpu" % (args.work_dir.rstrip("/"), mat)
+        flag = "1" if fanout else "0"
+        local = host in ("", "@local")
+        cmd = ([sys.executable, "-", matdir, step, flag] if local else
+               ["ssh", "-o", "BatchMode=yes", host, "python3", "-", matdir, step, flag])
+        try:
+            proc = subprocess.run(cmd, input=REMOTE_GATHER, capture_output=True, text=True)
+        except FileNotFoundError:
+            print(json.dumps({"error": "找不到命令 %s" % cmd[0], "material": mat, "host": host,
+                              "hint": "本机没有 ssh；本机材料请用 register --cluster local 或 "
+                                      "autozt -p <材料> hpc local"}, ensure_ascii=False),
+                  file=sys.stderr)
+            sys.exit(1)
         if proc.returncode != 0:
-            print(json.dumps({"error": "ssh 失败", "detail": proc.stderr[-500:]},
-                             ensure_ascii=False), file=sys.stderr)
+            print(json.dumps({"error": "本机读取失败" if local else "ssh 失败", "material": mat,
+                              "detail": proc.stderr[-500:]}, ensure_ascii=False), file=sys.stderr)
             sys.exit(1)
         try:
             data = json.loads(proc.stdout.strip().splitlines()[-1])

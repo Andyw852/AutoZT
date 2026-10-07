@@ -348,6 +348,28 @@ class AnisoKzTests(unittest.TestCase):
                     self.assertAlmostEqual(got[0], want, places=3)
                     self.assertAlmostEqual(got[1], want, places=3)
 
+    def test_edge_k_check_ignores_kz_v167(self):
+        """V167：2D 的 m* 链与 E1 链带边只差 kz（[⅓,⅓,0] vs [⅓,⅓,⅓]）是同一个 K 谷，不该报"两链带边分叉"；
+        面内真不同（K vs Γ）照样报。CrSe2 实测误报回卷距离 0.333。"""
+        import json
+        from unittest import mock
+        sys.path.insert(0, str(ROOT / "step8.2_dpt"))
+        import gen_step12_dpt as D
+        m = Path(tempfile.mkdtemp())
+        (m / D.UNIFORM_DIR).mkdir(parents=True)
+        (m / D.UNIFORM_DIR / "vasprun.xml").write_text("<x/>")
+        (m / D.DEFORM_READ_DIR).mkdir(parents=True)
+        fake = self._fake(12, 3)
+        for kf_be, want_warn in (([1 / 3, 1 / 3, 1 / 3], False), ([0.0, 0.0, 0.0], True)):
+            (m / D.DEFORM_READ_DIR / "band_edges.json").write_text(json.dumps(
+                {"electron": {"hits": [{"k_frac": kf_be}]}}))
+            buf = io.StringIO()
+            with mock.patch("pymatgen.io.vasp.Vasprun", lambda *a, **k: fake), \
+                    mock.patch.object(D, "_band_edges_rev", lambda: None), contextlib.redirect_stdout(buf):
+                got, prov = D.get_effective_mass_aniso(m, "electron", True)
+            self.assertIsNotNone(got, prov)
+            self.assertEqual("两链带边分叉" in buf.getvalue(), want_warn, (kf_be, buf.getvalue()[-400:]))
+
     def test_hex_offgrid_refused_v152(self):
         """V152：K 离网（N 不是 3 的倍数，WSe2 是 45）时分方向路径也要拒绝 —— 以前它给出 x≠y 且 status ok。"""
         from unittest import mock

@@ -155,6 +155,46 @@ def route_subcommand(argv):
     return None
 
 
+def _probe_targets(cfg, mats, tt, host_override=None):
+    """把 probe 的 -p 材料解析成 [{material, host, dir}]（纯本地，不采集、不连超算）。
+
+    host/dir 取材料自己的有效配置（材料/<技能>/hpc.yaml ＞ project_setting/hpc.yaml ＞
+    技能默认；work_dir 同理）；host 为空串 = 本机材料。解析不到的材料不给 target，
+    probe_jobs.py 对它沿用旧的 --host/--work-dir 约定。"""
+    from autozt import get_types, discover_local, resolve_material_local
+    from autozt.collect import is_local_host
+    want = set(mats)
+    out, seen = [], set()
+    try:
+        types = get_types(cfg, tt=tt, quiet=True)
+    except SystemExit:
+        return out
+    if not tt:      # 没给 -tt：按材料实际所在技能找，defect-dft-cpu 优先（探测脚本为它而写）
+        types = sorted(types, key=lambda t: t.get("key") != "defect-dft-cpu")
+    for t in types:
+        lr = t.get("local_root")
+        if not lr:
+            continue
+        try:
+            root, found = discover_local(lr, tt=t.get("key"))
+        except Exception:                       # noqa: BLE001
+            continue
+        for m in found:
+            if m["name"] not in want and os.path.basename(m["name"]) not in want:
+                continue
+            try:
+                resolve_material_local(t, root, m)
+            except Exception:                   # noqa: BLE001
+                continue
+            if not m.get("rpath") or m["name"] in seen:
+                continue
+            seen.add(m["name"])
+            host = host_override or m.get("host_eff") or cfg.get("host") or ""
+            out.append({"material": m["name"], "host": "" if is_local_host(host) else str(host),
+                        "dir": m["rpath"]})
+    return out
+
+
 def _errors_to_stdout(argv):
     """错误是否镜像到 stdout：--json、AUTOZT_JSON_ERRORS=1、或处在 AI 代理环境。
 
@@ -401,6 +441,11 @@ def _main():
             _argv += ["-j", a.job]
         if a.host:
             _argv += ["--host", a.host]
+        # 按材料自己的 hpc.yaml / work_dir 定位（纯本地解析，不采集）：本机材料不再硬走
+        # ssh jzzn（以前 local 材料 probe 直接 FileNotFoundError: 'ssh' 崩栈）。
+        _targets = _probe_targets(_probe_cfg, _mats, a.tt, a.host)
+        if _targets:
+            _argv += ["--targets", json.dumps(_targets, ensure_ascii=False)]
         sys.exit(_sp.call(_argv))
     if cmd == "push":   # git 提交：delegate 到 scripts/tf-git-push.sh（本地真实版 + 远端脱敏版）
         import subprocess as _sp

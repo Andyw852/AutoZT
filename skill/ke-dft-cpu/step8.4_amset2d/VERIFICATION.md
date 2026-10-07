@@ -7470,3 +7470,522 @@ environment: amset_clean`，接着 `amset: command not found`。集群上现在�
 - VASP 步骤用 OUTCAR 子串判完成：作业在 VASP 启动前就失败时，旧 OUTCAR 会造成假完成（V100 遗留）。
   现在重跑会删目录、失效是整目录改名，只剩"对已完成步骤原地 init -f 再 start"这一条路径，风险低。
 - 方法层面的未验证项（不是流程 bug）：S8.4 的真空不变性、POP 的绝对归一化、GaAs 用 PBEsol 的 m*、WSe2 的多谷 DPT。
+
+## V164（2026-10-05）：本地步骤的 retry 不再是死路；旧格式完成标记判 STALE；2D 真空方向不进介电交叉比值
+
+**实测**（用户侧，WS2 的 S5.1_dievalid）：状态是 FAIL（"invalid completion marker"）。
+- 先 `retry`：只回了一句"本地生成步，已就绪，待 start 触发"，实际什么都没跑；
+- 再 `start`：报"FAIL 不豁免（需 -f）"。
+- MoS2、WSe2 的 S5.1 也是同样的情况。
+
+**① retry 对本地步骤是死路**
+- `retry_submit` 走的是"只生成、不提交"（`submit=False`）。碰到 run:gen 步骤（画图/读取/校验），do_submit 只打印就返回。
+- 它也不写重新生成标记（代码里写的是"这类步骤不生成输入"）。
+- 于是 `start` 看到 FAIL、又没有重新生成标记，就拒绝执行。所以任何一个失败的本地步骤，retry 都救不回来。
+- 改动：run:gen 步骤的 retry 直接就地重跑一次（`do_submit(submit=True)` → `do_run_gen_step`）。提交作业的步骤，retry 的语义不变。
+
+**② V136 严格完成标记之前的旧格式标记，被永久判为 FAIL**
+- WS2 的 dielectric_check.json 是 09-23 生成的，只有 `ok: true`，没有 V136 要求的 `status` 和 `input_files`。
+  内容本身是好的（ε∞ = 3.56 / 3.56 / 1.20，Born 电荷的求和规则也通过）。
+- 采集端判它"invalid completion marker"，走 plot_error → FAIL，auto-advance 不会重试。
+- 改动：标记 JSON 里既没有 `status` 也没有 `input_files` 时，判为"旧格式"，显示 STALE，由 auto-advance 按新格式重新校验。
+  重新校验失败会留下 `.autozt_gen_failed`，之后落回 FAIL，不会每轮重试。新格式但 `status=failed` 的照旧判 FAIL。
+
+**③ "DFPT 与独立粒子 ε 差 103%"是 2D 板真空方向的物理现象，不是 NBANDS / k 网格问题**
+- 场垂直于层时，DFPT 包含局域场（去极化）效应，相当于层和真空串联：1/(f/ε_s + 1 − f)。独立粒子值是按体积平均：1 + f(ε_s − 1)。
+- 以 WS2 为例，层厚占比 f ≈ 0.2、层内 ε_zz ≈ 7：串联给出 ≈ 1.21（实测 1.204），体积平均给出 ≈ 2.4（实测 2.447）。
+  所以每个 2D 材料的真空方向都会误报。
+- 改动：`vacuum_axes` 从 POSCAR 判断真空方向（原子沿某晶轴的最大周期空隙 > 6 Å），支持 VASP4/5 格式、Selective dynamics、
+  Cartesian 坐标。cross_ratio 只按面内方向计算；真空方向单独记为 `cross_ratio_vacuum_axis` 并附说明。面内仍按 25% 判。
+
+**测试**：
+- tests/test_v164_local_steps.py，6 项：本地步骤 retry 就地重跑、作业步骤不变；旧格式标记判 STALE、新格式失败照旧 FAIL、
+  重新生成失败后落回 FAIL、采集端接线。
+- skill/ke-dft-cpu/test_dielectric_vacuum.py，3 项：真空轴识别（Direct / Cartesian / 3D 的 Si）；WS2 的 z 方向不告警；
+  面内偏差照样告警。
+
+## V165（2026-10-05）：杂化泛函参数不是标准 HSE06/HSE03 时告警，并记进 band_summary
+
+**实测**（用户侧，核对带隙反常）：
+- **Si 的 S2.3（09-06 的结果）：** INCAR 是 `HFSCREEN = 0.11`，带隙 1.340 eV。同一材料按 0.2 跑的 Si_diamond 是 1.091 eV。
+  这个值进了 band_summary、S8 的剪刀差，也进了手稿里的表，一路没人报警。
+- 0.11 很可能是单位搞混了：HSE06 的屏蔽参数是 0.2 Å⁻¹，换成原子单位才是 0.106 bohr⁻¹，而 VASP 的 HFSCREEN 用的是 Å⁻¹。
+  屏蔽变弱，长程交换变多，带隙就偏大。
+- 技能的 gen 默认写的就是 0.2，git 历史里从没出现过 0.11。所以这是手改或 step.conf [incar] 覆盖留下的。
+- 同一轮还查出：MoS2 那一行其实是 PBE 带隙。它的 S2.3 是可选步骤，没打开，所以拿它和 HSE 的 MoSe2 比，顺序是反的。
+
+**改动**：
+- `ke_common.hybrid_params(INCAR)`：认出标准 HSE06/HSEsol（AEXX=0.25、HFSCREEN=0.2）和 HSE03（0.3）。
+  其它屏蔽值都给 ★ 告警；0.09–0.12 之间的，额外提示"像是 bohr⁻¹ 的值"。
+- S2.3 的 gen 写完 INCAR 后检查最终参数（包括 step.conf 的覆盖），告警进 warn 列表。
+- S2.3 画图步骤把 `hybrid`（AEXX、HFSCREEN、label、standard、warning）写进 band_summary.json，
+  非标准时打出告警。以后出带隙表时，看一眼 `hybrid.standard` 就知道这个带隙能不能直接比。
+
+**测试**：test_hybrid_params.py，4 项：Si 的 0.11 告警且带单位提示；标准 HSE06/HSE03 通过；没开杂化、文件缺失、PBE0 的情况；两处接线。
+
+## V166（2026-10-05）：band-dft-cpu 的 HSE gen 写死了 HFSCREEN = 0.11
+
+**用户侧排查 V165 时发现**：`skill/band-dft-cpu/gen_step4_HSE.py` 的 INCAR_SET 里，"权威值" HFSCREEN 写的是 `0.11`。
+- 同一行的注释写着"0.2 = 标准 HSE06/HSEsol"，可见值和注释对不上。
+- 0.11 是 bohr⁻¹ 的数值（HSE06 的 ω = 0.106 bohr⁻¹ = 0.2 Å⁻¹），而 VASP 的 HFSCREEN 单位是 Å⁻¹。
+- ke 的 Si S2.3（09-06）用到的 0.11 很可能也是从这里来的。ke 自己的 gen 历史里从没出现过 0.11，但两个 gen 同源。
+- 用户已在本地把这一处改回 0.2（ddc8026）。Si 的 band-dft-cpu S4 还没跑过，目前没有需要重跑的结果。
+
+**改动**：
+- 第 231 行 0.11 → 0.2。只改数值，与用户本地那次修改逐字相同，`git am -3` 能干净合并。
+- band 的 gen 写完 INCAR 后用 `hybrid_warning` 核对最终参数，判据与 ke 的 V165 相同：非标准值进 warn 列表，
+  0.09–0.12 额外提示"像是 bohr⁻¹"。
+- tests/test_band_hfscreen.py，3 项：默认值是 0.2；0.11 告警，0.2 / 0.3 / 非杂化不告警；接线位置在写完 INCAR 之后。
+
+**影响面**：凡是用旧版 band-dft-cpu（或同源的旧 ke gen）跑过 HSE 的材料，带隙都偏大（Si：1.34 对 1.09）。
+用一条 grep 扫所有 INCAR 里的 HFSCREEN 就能列全。
+
+## V167（2026-10-05）：CrS₂/CrSe₂ 用新代码重跑 S8.2 —— "输入差"出在旧的 m* 拟合；2D 带边 k 点核对不再计入 kz
+
+**实测**（用户侧，在 tmp/dpt_rerun/ 的副本里跑，没碰原项目）：
+
+| 材料 | 载流子 | 旧 m*（08-31 代码） | 新 m*（V153 代码） | 旧 DPT μ | 新 DPT μ | 文献 DPT |
+|---|---|---|---|---|---|---|
+| CrS₂ | 电子 | 1.281 / 0.925 | 0.967（x/y 0.943/0.992） | 45.6 | **79.9** | 82.4 |
+| CrS₂ | 空穴 | 1.301 / 0.944 | 1.009 | 160.2 | **266.2** | 281 |
+| CrSe₂ | 电子 | 0.96 | 0.96 | 91.5 | 91.5 | 69.5 |
+| CrSe₂ | 空穴 | 0.982 | 0.982 | 270.6 | 270.6 | 199 |
+
+- CrS₂ 旧的 x/y 相差 38%，而且电子、空穴几乎相同，都是旧拟合方法造成的假象（V151/V152 已修）。
+- 新代码下，CrS₂ 的 DPT 和文献只差 3–5%，所以 CrS₂ 的"输入差"基本消失。
+- CrSe₂ 的 m* 本来就是对的，它的输入差（约 1.34，电子、空穴相同）还在，要等 JAP Table I 核对 C₂D/E1。
+- 手稿那个约 0.4 的比例，按"方法差 × 输入差"拆开：
+  - CrS₂ ≈ 0.4 × 0.96：几乎全是方法差（AMSET 全能带 ADP 对比 DPT）；
+  - CrSe₂ ≈ 0.3 × 1.34。
+  两个材料都约等于 0.4 是巧合。
+
+**误报**：CrSe₂ 报"m* 链带边 k=[⅓,⅓,0] 与 E1 链带边 k=[⅓,⅓,⅓] 不一致（回卷距离 0.333）"。
+- 分方向质量拟合这条路径只给 2D 用，c 是真空方向，能带沿 kz 是平的。只差 kz 的两个点，是同一个 K 谷：
+  E1 链在 kz=⅓ 那一层定位，m* 链在 kz=0 那一层定位。
+- 改动：核对时把 kz 分量置零，只比较面内分量。面内真的不同（例如 K 对 Γ）时照样报。
+- 测试：test_mobility_vs_dpt 新增一项（共 20 项）：只差 kz 时不报，K 对 Γ 时报。反证：去掉修复，这项测试失败。
+
+**还开着的**：CrS₂ 的 band_edges.json 是 08-29 的 S7.1 生成的，E1（5.861/3.078）没有用现行 S7.1 复核。
+它的 step7_deform 在本地和集群上都已经没有了，复核需要重算 S7。好在新 DPT 已经和文献对上，这一项风险不高。
+
+## V168（2026-10-06）：换了 INCAR 的旧形变单点不再算完成；在跑的扇出步骤能补交没交上的子目录
+
+**现场**（CrS₂ S7_deform 重跑）：
+- retry 生成了带 LVHAR 的新 INCAR（为了输出 LOCPOT），然后 start 只交上 5/10 个子目录：deform-01..04 和 deform-09。
+- 再 start，报"已有作业，先 stop 或加 -f"。agent 判断剩下 5 个是被 QOS 卡住的。
+- 实际不是：提交是按 glob 排序逐个交的，真被 QOS 截断的话，交上去的应该是 01..05。
+- 剩下的 undeformed 和 deform-05..08 留着旧 INCAR 跑出来的完整 OUTCAR，ck_deform 判它们已完成，所以不进 fan_todo。
+  等这 5 个跑完再 start，也只会得到"待补清单为空"。
+- S7.1 读不到这 5 个的 LOCPOT，deformation_vac.h5 照样出不来。
+- 交上去的 5 个正好是面内分量：新模板给它们建了 ionrelax/，而 ionrelax/OUTCAR 缺失，所以判未完成。
+
+**根因 1**：同一份 vasprun.xml，旧 INCAR 跑出来的产物照样判完成。
+- patch_stale_grid 只比 KPOINTS。
+- patch_stale_input 的 snapshot_inputs 只用在 S3/S3b，而且要在 gen 覆盖输入之前拍快照。
+  INCAR 已经被上一次 gen 换掉时，快照比不出差别。
+- 改动：
+  - ke_common 新增 `run_incar_mismatch(INCAR 文本, vasprun.xml)`：
+    - 拿 vasprun.xml 里 VASP 回显的 `<incar>`（INCAR 里写了的键）和 `<parameters>`（含默认值）跟现在的 INCAR 比；
+    - 并行/标签键不算；
+    - 只控制写不写输出文件的键（LWAVE/LCHARG/LVHAR/LVTOT/LELF/LORBIT/LAECHG）不影响 SCF，
+      只有新 INCAR 要了旧运行没给的输出才算变化：补 LVHAR 要重算，关掉 LWAVE 不用；
+    - `n*x` 展开；`T` 和 `.TRUE.` 等价；
+    - 数值按相对 1e-6 比，并容忍 8 位定点小数的舍入；
+    - 字符串前缀相同就算一致（`<parameters>` 里 PREC 写作 `accura`）；
+    - VASP 两处都没回显的键跳过；
+    - 读不到回显返回 None。
+  - `archive_if_run_mismatch(d)`：不一致就把产物改名为 `*.stale-input-<时间>`。输入文件不动。
+  - S7 gen 在每个子目录 INCAR 定稿之后调用它。没有 vasprun.xml 可核对时，退回 gen 前后的 INCAR 快照。
+  - 已完成 ionrelax 的复用判据里加一条：拿现在会写的静态段 INCAR 跟 ionrelax/vasprun.xml 的回显比，不一致就重建。
+  - zt-dft-cpu 的 step7_deform 是软链，一起生效。
+
+**根因 2**：扇出步骤只要有一个子作业在跑，start 就整步拒绝；`-f` 是"杀了不交"。
+- `-f` 会 scancel 全部在跑的子作业，但提交用的 fan_todo 是杀之前采的，不含它们。
+  CrS₂ 这种 fan_todo 为空的情况，结果是 5 个全杀，再被"待补清单为空"拒交，一个也没交上。
+- 改动：
+  - `start`（不带 -f，不重新生成）遇到"有子作业在跑、fan_todo 非空"时，只补交 fan_todo，不动在跑的。
+    auto-advance 和 retry 会重新生成输入，不走这条路，因为 gen 会覆盖在跑子目录的输入，ionrelax/ 还会被清空。
+  - `-f` 杀掉的子目录（采集新增的 fan_running）并进 fan_todo 一起重交。
+  - 没有要补交的子目录时，提示改为"N 个在跑、M 个已判完成"，并说清楚 -f 和 retry 分别会干什么。
+  - squeue 不支持 %Z、只能按作业名去重时，改成逐子目录比（`<作业名>-<子目录>`）。
+    以前同一步任一子作业在跑，就整批拒交。
+  - sbatch 交到一半被拒（如 QOS 提交上限）时，已交上的 jobid 照样记账、写进 tf.log，
+    并提示用 start 补交，不要加 -f。
+
+**没改**：
+- 有完成子目录、其余从没跑过的扇出步骤仍显示 FAIL。考虑过改成 TODO，但没做：
+  auto-advance 对 TODO 步骤会先重新生成再全部提交，已完成的子目录会被重算。
+
+**测试**：
+- skill/ke-dft-cpu/test_stale_input_run.py（10 项）：
+  - 回显比较：NCORE/KPAR、注释、`n*x`、ALGO 缩写、`1E-8` 对 `0.00000001`、关掉 LWAVE 都不算变化；
+  - 加 LVHAR、改 EDIFF、删键、按 `<parameters>` 比 ADDGRID，都会报；
+  - 归档后 ck_deform 判未完成，输入保留；
+  - 核对点在 INCAR 定稿之后，ionrelax 静态段继承 LVHAR。
+- tests/test_fanout_topup.py（7 项）：
+  - 补交不 scancel、不重新生成，只交 fan_todo；
+  - 没有可补的时提示"已判完成"；
+  - `-f` 重交被杀的子目录；
+  - gen_first / -f 不走补交；
+  - 部分提交会记账；
+  - 按作业名去重时逐子目录比（用假调度器）；
+  - 采集给出 fan_running。
+
+**CrS₂ 怎么继续**：
+1. 现在什么都不要动：不要 `-f`，也不要 retry。retry 会先杀掉在跑的 5 个，gen 还会重建它们的 ionrelax/。
+2. 应用补丁后先只读核对：每个子目录跑
+   `kc.run_incar_mismatch(INCAR, vasprun.xml)`。
+   - 预期旧的 5 个报 `LVHAR: F -> .TRUE.`（可能还有别的键）。
+     LVHAR 只控制输出：只差这一项时，这 5 个旧单点的本征值和芯势照样有效，重算只是为了拿到 LOCPOT；
+   - 新的 5 个跑完后应该是 `[]`。如果它们报差异，就是误报，先回报，不要往下走。
+3. 等在跑的 5 个全部跑完，再走 retry → start：
+   - gen 会归档旧的 5 个；
+   - 新的 5 个保留；
+   - start 只交被归档的 5 个。
+
+## V169（2026-10-06）：S7.1 判定芯能级参考的来源，两种混用直接报错
+
+**现场**：
+- V168 的回显核对在 CrS₂ 旧的 5 个形变单点上报了两项：`LVHAR: F -> .TRUE.` 和 `ICORELEVEL: 1 -> (删除)`。
+- 旧 INCAR 带 ICORELEVEL=1。这时 VASP 不写 OUTCAR 里的"各原子核处平均静电势"块。
+- AMSET 0.5.1 的 `get_reference_energy`（amset/deformation/io.py）先找这块，找不到就**静默**改用 1s 芯能级本征值。
+- 后果分两种：
+  - 部分构型重算后（一半有平均芯势、一半只有 1s），参考差是两种不同的量相减，deformation.h5 没有意义，却不报任何错；
+  - 全部构型都是 1s 时，也不是 AMSET 的标准口径。模板注释写明：元素依赖、非刚性，会把 E1 压到约 0.3 eV。
+- 真空口径（deformation_vac.h5）把参考替换成 LOCPOT 的真空能级，不受影响。
+
+**改动**：
+- ke_common 新增 `outcar_core_ref_kind(OUTCAR)`，返回 `avg_core` / `1s` / None。
+  - 判据与 pymatgen 的 `read_avg_core_poten` / `read_core_state_eigen` 一致；
+  - 只剩 `.gz` 也认。
+- S7.1 在 `amset deform read` 之前，对 AMSET 实际要读的目录逐个判定（undeformed，以及优先取的 ionrelax/）：
+  - 来源不一致：直接报错，提示 retry S7（V168 会把带 ICORELEVEL=1 的旧产物归档后重算）；
+  - 全是 1s：告警；
+  - 结果写进 band_edges.json 的 `core_reference` 和 `core_reference_folders`。
+
+**测试**：skill/ke-dft-cpu/test_core_ref_kind.py（2 项）。
+- 三种判定，含 `.gz`；
+- 判定在 `amset deform read` 之前，判的是 AMSET 实际读的目录，结果落盘。
+
+**要回头核对的**：
+- MoS₂ 的 vac/core 基准里，"芯能级参考把空穴 K 谷 D 压到 0.38 eV"，量级正好落在 1s 回退的典型范围。
+- 要先确认那次 core 口径用的是平均静电芯势还是 1s。
+  - 方法：对 MoS₂ step7_deform 的 undeformed/ 和各 deform-*（有 ionrelax/ 就看 ionrelax/）的 OUTCAR，分别 grep
+    `the norm of the test charge is` 和 `the core state eigen`。
+  - 如果是 1s，那组 core 结果不能拿来否定芯能级参考。
+- CrS₂ 08-29 的 band_edges.json（E1 5.861/3.078）也可能来自带 ICORELEVEL=1 的运行。
+  这次 S7 → S7.1 重跑后，用新的 E1（core/vac）对比，再看 S8.2 DPT 有没有变化。
+
+## V170（2026-10-06）：显式 start 不再重交已完成（OK）的步骤
+
+**现场**：
+- CrS₂ 的 S8.4（job 3919559）跑了 4h41m，正常完成（exit 0）。
+- agent 想把结果拉回来，又执行了一次 `-p CrS2_hex -j S8.4 start`。
+- 这条路不检查 OK，按现有输入原样重交了一次。
+- 作业链开头的 `rm -f transport.json`（patch_v63，本意是清掉上次残留）把刚完成的结果删了。agent 又 scancel 了这个重复作业，步骤于是变成 FAIL。
+- 最后靠手工从 `transport_117x117x15.json` 拷回。
+  - 和作业链尾的 `cp -f $(ls -t transport_*.json | head -1) transport.json` 等价；
+  - 前提是第一次作业的 preflight 和 fermi_window_check 都已通过，exit 0 说明确实通过了。
+
+**根因**：
+- 批量 start（`-j` 不带 `-p`，或不带 `-j`）、`step init`、`rerun` 都会跳过 OK 的步骤。
+- 只有 cmd_start 里显式 `-p X -j S` 这条路漏了。
+- 同一条路上，max_jobs 占满时还会对 OK 步骤调 `_gen_step_input`，重新生成输入。
+
+**改动**：
+- 显式 start 遇到 OK 步骤（不带 -f）时不重交，并提示：
+  - 拉结果用 `fetch`；
+  - 要重算：先 retry 再 start，或 `start -f` / `rerun`。
+- 例外：retry 刚重新生成过输入、还没被 start 交过、而且输入指纹一致时，放行一次，保留 retry → start 的用法。
+  - 判断用重生成标记，新增 `consumed_ts`；
+  - 不占 FAIL 放行的 24h 额度。
+- 显式 start 提交成功后，给标记记上 `consumed_ts`。
+  - 这样 retry → start → 跑完 OK 之后再误 start，会被拒；
+  - 再 retry 一次会写新标记，重新放行。
+- 本地即时步（run: gen，如 S7.1）同样受保护：对 OK 的 S7.1 重跑一次，会把 S8/S8.4/S8.2 全部作废。
+
+**测试**：tests/test_start_ok_step.py（5 项）。
+- OK 步骤不重交，也不重新生成输入；
+- `-f` 照样重交；
+- retry → start 只放行一次，不占 FAIL 额度；
+- retry 之后输入又改过，就不放行；
+- FAIL 走放行提交、跑完变 OK 后，再 start 被拒。
+
+## V171（2026-10-06）：同一步骤的 gen 不许并发
+
+**现场**：
+- CrSe₂ 重跑 S7.1，`retry` 报 band_edges.json 生成失败：`load_deformation_potentials("deformation.h5")` 抛 FileNotFoundError。
+- 可 `deform_read.log` 显示 amset deform read 是成功的，而 step7b_deform_read/deformation.h5 的时间（14:53:30）和 band_edges.log 同一秒。
+- S7.1 里只有最后一行 `os.replace(h5, dst)` 会把 step7_deform/deformation.h5 挪进 step7b，失败路径在这之前就 sys.exit 了。
+  所以这一秒里，一定有另一个 S7.1 的 gen 走到了最后一行。
+
+**根因**：
+- agent 第一次调用 `retry+start` 时，本地工具 2 分钟就超时，输出为空；但远端那次 gen（`timeout 600 bash -s`）照跑。
+- agent 以为它失败了，又执行了一次 retry，于是两个 S7.1 gen 在同一个目录里并发：
+  - 前一个最后挪走了后一个刚写出的 deformation.h5；
+  - 后一个读 h5 时，文件已经不在了。
+- 提交作业那条路早有目录锁（`_SBATCH_GUARD`，Mg4C60 重复 sbatch 之后加的），remote_gen 这条路没有任何锁。
+
+**改动**：
+- remote_gen 在远端 `cd` 进材料目录后，先 `flock -n` 一个按步骤命名的锁 `.tf_gen.<步骤>.lock`。
+  - 拿不到锁就打印 `TF_GEN_BUSY` 并以 75 退出，一行 gen 都不执行；
+  - fd 9 由 gen 和它的子进程继承，锁一直持有到它们全部退出；
+  - 集群上没有 `flock` 命令时，照旧不加锁。
+- 被挡下的那次不算 gen 失败：do_run_gen_step 和 do_submit 不打 `.autozt_gen_failed`。否则前一个正常跑完之前，状态会先显示 FAIL。
+- 只锁同一步骤，不同步骤的 gen 不互相挡。
+
+**测试**：tests/test_gen_lock.py（3 项）。
+- 第一个 gen 还在跑时，第二个被挡下，而且一行都没执行；第一个跑完、锁释放后，第三个照常执行。
+- 不同步骤的 gen 不受影响。
+- 被挡下不打失败标记；真正失败时照常打。
+- remote_gen 拼出的远端命令原样交给本机 bash 执行，不碰集群。
+
+**CrSe₂ 这次的产物不可信**：
+- step7b 里的 deformation.h5 是后一个 gen 的 amset 输出，被前一个挪了过去；它有没有经过 dp_symmetrize 取决于两者的先后。
+- deformation_vac.h5 由前一个 gen 生成，它读的是 step7_deform/deformation.h5，那时这个文件可能已经被后一个换掉了。
+- 处理办法：确认没有 gen 还在跑之后，干净地重跑一次 S7.1，只跑一个实例。
+
+## V172（2026-10-06）：S8.4 出厂生产路径不再被标成"受控对照，不作生产结果"
+
+**现场**：
+- CrSe₂ 的 S8.4 要用现行代码重跑，agent 看到两条路：
+  - A：保留旧 step.conf 里的 `UNITY_OVERLAP = true`，只把插值倍数改掉；
+  - B：和 CrS₂ 设置一致，用真实重叠。
+- 它把 B 描述成"要走受控对照路线（preflight 会标'只用于算比值'）"，差点选了 A。
+- MoS₂ 基准和 CrS₂ 的 S8.4 也都被 preflight 标过"受控对照放行（只用于算比值，不作生产结果）"。
+
+**根因**：
+- V118（09-29）之后，IBZ h5 + DESYM_FIX + 真实重叠就是 2D 的出厂生产路径。
+- 但 gen 的 `write_settings` 仍按 2026-09-20 的老规矩，在 `UNITY_OVERLAP=false 且 WAVEFUNCTION_FULL=false` 时写 `# AZ_OVERLAP_CONTROLLED=1`。这个标记原本只给"故意退回去对称化"的对照用。
+- preflight 遇到这个标记就直接走"受控对照"分支，抢在 V118 加的 `[OK] 2D + 真实重叠 + IBZ h5 + 相位补丁` 之前。
+- 所以每一次正常运行都被标成"不作生产结果"。
+- step.conf 显式写 `WAVEFUNCTION_FULL=false` 时，gen 也会打"无反演体系的 2D 结果不可信，只作受控对照"。
+
+**改动**：
+- gen：真实重叠 + IBZ 时不再写这个标记。走到 `write_settings` 就说明 main() 里的对称性闸门已经放行，不放行会直接 sys.exit。改为写一行注释说明是 V118 生产路径。
+- preflight：先看统一判据，再看标记。
+  - 判据放行，且相位补丁开着：给 `[OK]`；旧 settings 里的标记只加一句"是误写的旧标记，不改变结论"。
+  - 判据要求全网格时，标记才会把拦截降为"受控对照"告警。
+- `WAVEFUNCTION_FULL=false` 显式写出时，提示改为信息级：IBZ 是出厂路径，能不能走 IBZ 由后面的闸门裁决。
+
+**测试**：test_preflight_symmetry_verdict.py 新增 2 项，共 15 项。
+- 旧标记 + 补丁开 + 判据放行：结果是 ok 和 `[OK]`，不出现"不作生产结果"；
+- 旧标记 + 补丁关 + 有坏操作：结果是"受控对照"告警；
+- gen 源码里不再写这个标记。
+- 反证：preflight 退回改动前的版本，新用例失败。
+
+**对已有结果的意义**：
+- CrS₂ 的 S8.4（10-06）和 MoS₂ 基准走的都是 V118 生产路径，"受控对照"是误标，结果本身就是生产数据，不用重跑。
+- CrSe₂ 09-24 那次 S8.4 用的是 `unity_overlap: true`，是 preflight 一直标注的"快速筛选"路线：
+  - 它把谷间 / 大 q 散射当成完全耦合，而真实的 K→K' 重叠 |I|² 只有约 0.25；
+  - 所以迁移率系统性偏低，只能看数量级（见 2026-09-26 的结论）。
+  - 那次的 ADP/DPT（0.276/0.236）和手稿里的 0.29/0.31 都出自这条路线，不能和 CrS₂ 的 1.69/1.82 比。
+
+## V173（2026-10-07）：S3 网格不合现行规则时，S8/S8.4 拒绝生成；2D 的 S3 默认 kz = 3
+
+**现场**：
+- CrS₂ 和 CrSe₂ 都用现行代码、同样设置跑了 S8.4，ADP/DPT 却一个是 1.69/1.82，一个是 0.514/0.662。
+- 用 `amset eff-mass` 量 AMSET 自己的热平均质量后，"质量口径不同"这个解释被否掉了：
+  - CrS₂ 的 m_c 是 1.021/1.093，比 DPT 的 m* 还重；
+  - 按质量预测，ADP/DPT 应该约 0.85–0.90。
+- 只读核对两个材料的输入：形变势都是真空参考，vasprun 都来自 S3，波函数都是 IBZ，C₂D 都和 DPT 一致。
+- 唯一的大差别在 S3 的 KPOINTS：
+  - CrS₂ 是 **15×15×1**（08-26 生成）；
+  - CrSe₂ 是 **48×48×3**（09-23 生成）。
+- CrS₂ 的面内间距是 0.159 Å⁻¹，相当于现行规则（DK_MAX_2D 0.05）的 3.2 倍，真空方向只有一层 kz。
+- 这也解释了 CrSe₂ 跑 eff-mass 为什么慢 10 倍：它的 vasprun 有 6912 个 k 点，CrS₂ 只有 225 个。
+
+**根因**：
+- 网格规则只在 S3 的 gen 运行时才起作用。旧规则下算完的 S3 一直判"完成"，不会重新生成。
+- 下游都不查：S7 原样照抄 S3 的三个分量（2026-09-24 起），S8/S8.4 直接拿来用。
+- `VACUUM_KZ_MIN` 的出厂默认值是 1，注释写"新项目在 project_setting 里设 3"，但老项目没人去设。
+- kz 只有一层时，AMSET 沿 kz 方向是外推而不是内插。V8 实测：插值网格一变，ADP 就差 30–45%。
+
+**改动**：
+- ke_common 新增 `s3_grid_issues` / `s3_grid_gate`，逐轴检查 S3 的笛卡尔间距和 2D 的 kz：
+  - 2D 面内间距超过 2×0.05 Å⁻¹、3D 超过 2×0.06 Å⁻¹，或 2D 的 kz < 3：报错；
+  - 超过规则 1.1 倍：告警。
+- S8 和 S8.4 的 gen 在 lineage 检查之前调用 `s3_grid_gate`：
+  - 不合规就拒绝生成，并写明处理顺序：retry S3 → S4 → S7 → S7.1 → 本步；
+  - 要复现旧结果，在本步 step.conf 写 `ALLOW_COARSE_S3 = true`，此时只打告警。
+- S7 照抄 S3 网格之前先检查一遍，S3 不合规就告警。
+- S3 和 S3b 的 `VACUUM_KZ_MIN` 出厂默认值改为 3。只影响 2D，只在这两步重新生成时生效；旧网格的产物会按 patch_stale_grid 归档。
+
+**测试**：skill/ke-dft-cpu/test_s3_grid_gate.py（9 项）。
+- CrS₂ 的旧网格（15×15×1）报 3 个错，现行网格（48×48×3）通过；
+- 只有 kz = 1 时报错；略粗于规则时只告警；
+- 3D 的规则也检查；读不到 S3 时不报；
+- 闸门默认退出，`allow=True` 时放行；
+- 接线检查：S8/S8.4 闸门的位置、S3/S3b 的默认值、S7 的告警。
+
+**尚未证实的部分**：
+- CrS₂ 的 1.7 是不是完全来自这张粗网格，要等 S3（48×48×3）→ S4 → S7 → S7.1 → S8.2 → S8.4 重跑完才能确定。
+- 但不管怎样，这张网格本身就不合现行规则，CrS₂ 的 AMSET 数值在重跑之前不能用。
+- 其他材料只要 S3 是旧网格，下次生成 S8/S8.4 时也会被拦下。应先用 `kc.s3_grid_issues(<材料目录>)` 扫一遍。
+
+## V174（2026-10-07）：S8.2 同样查 S3 网格（不合规拒绝生成），S8.1 告警；两步只查面内
+
+**现场**：
+- CrS₂_hex 按 V173 重跑 S3（15×15×1 → 48×48×3），在 S7 之前的检查点只重跑了 S8.2。
+- DPT 的 m* 从 0.967/1.009 变成 0.866/0.883（−10.4%/−12.5%）。E1 没变，DPT 迁移率因此 +25%/+31%，和 (m*旧/m*新)² 完全对上。
+- 同一检查点上，`amset eff-mass`（AMSET 自己插值的能带）给出的 m_c 也变了：1.021/1.093 → 0.912/1.239。
+  S3 网格既决定 DPT 拟合用哪些点，也决定 AMSET 插值从哪里出发。
+- 也就是说，S3 的粗网格不只影响 AMSET，DPT 也受影响。V173 只拦了 S8/S8.4。
+
+**根因**：
+- S8.2 的 m* 直接拟合 step3_uniform 网格上的点：按方向分组，用 E = c₁q² + c₂q⁴ 外推到 q→0，只保留 R ≤ 4×最近邻距离的点。
+- 15×15×1 的最近邻是 0.159 Å⁻¹，拟合窗口于是放大到 0.64 Å⁻¹，吃进了非抛物区，m* 拟重。48×48×3 时窗口约 0.2 Å⁻¹。
+- V147 的网格分辨率检查（最近一壳高出带边 > 4 kT 才告警）在 CrS₂ 上量到约 3.85 kT，刚好没触发。
+- S8.1（BoltzTraP2）插值的也是这张网格，同样没人查。
+
+**改动**：
+- ke_common：`s3_grid_issues` / `s3_grid_gate` 增加 `check_kz`，S8.1/S8.2 传 False（面内 m*、面内输运和真空轴 kz 无关）；`s3_grid_gate` 增加 `uses` / `redo`，报错时说明本步拿这张网格做什么、该怎么重跑。
+- S8.2：在算 m* 之前调 `s3_grid_gate`，面内不合规就拒绝生成；本材料 step.conf 写 `ALLOW_COARSE_S3 = true` 时告警照算（只作复现/对照），摘要里加 ★ 行。
+- S8.1：只告警不拦（它在 DAG 上排在 S8.2 之后，S8.2 已拦）。
+- 两步都把 S3 的网格和问题写进结果 JSON（`dpt_result.json` / `boltztrap_crta.json` 的 `s3_grid`），之后看结果就能知道 m* 和输运是在哪张网格上算的。
+
+**测试**：skill/ke-dft-cpu/test_s3_grid_gate.py（9 → 14 项）。
+- `check_kz=False`：48×48×1 通过，15×15×1 只报 2 个面内错；
+- S8.2：15×15×1 时退出，报错里有原因和 `ALLOW_COARSE_S3`；48×48×1 不拦（kz 一层不影响 DPT）；
+- S8.2：step.conf 的 `ALLOW_COARSE_S3 = true` 生效，返回的 `s3_grid` 记下网格和问题；
+- S8.1：只告警、不退出；
+- 接线检查：S8.2 的闸门在 apply_conf 之后、算 m* 之前，S8.1 在 BoltzTraP2 插值之前，两者的结果 JSON 都写 `s3_grid`。
+- 把三个源文件退回 V173，新增的 5 项全部失败，原有 9 项照样通过。
+
+**不改的**：
+- 已有的 S8.1/S8.2 结果不会自动作废：它们只在重新生成时才过闸门。V173 之后的全材料扫描已经列出了面内过粗的材料（CrS2_hex、CrS2_ortho、CrSe2_ortho、P1_Al-AlN、Si），这些材料的 DPT m* 和 BoltzTraP 结果都要按此处理。
+- V147 的 4 kT 阈值没动：有了网格闸门以后，它只用来提示规则以内的网格。
+
+## V175（2026-10-07）：S7 和 S3 不是同一张网格时 S8/S8.4 拦下；lineage_check 查 k 网格
+
+**问题**（V173/V174 之后复查，没有现场事故，但 CrS₂ 这次只差一步就会踩到）：
+- **S7 只在自己 gen 的时候照抄 S3 的网格。** 如果 S3 重算了而 S7 没有跟着重跑：
+  - S3 闸门照样通过，因为 S3 是新网格；
+  - lineage 也通过，因为它只比新旧：S7.1 比 S7 新，S4 比 S3 新；
+  - 于是 S8/S8.4 会拿旧粗网格上的形变势 D(k) 去算，没有任何提示。
+  - CrS₂ 这次是 agent 手动 retry 了 S7 才没踩上。
+- **闸门只在重新生成时起作用。** 已经算完的旧结果没人再查。CrS₂ 的 15×15×1 当初就是这样通过 lineage_check、被当成"收口"的；Si、CrS2_ortho、CrSe2_ortho、P1_Al-AlN 现在也还挂着"完成"。
+
+**改动**：
+- ke_common：
+  - 按网格查规则的部分抽成 `_mesh_rule_issues`，`s3_grid_issues` 的行为和报错文字都不变；
+  - 新增 `s7_grid_issues`：逐个比 S7 子目录（含 `ionrelax/`）的 KPOINTS 和 S3。S7 的网格不同且本身不合规则 → error；不同但合规 → warn（AMSET 会插值 D(k)）；
+  - 新增 `grid_lineage`：给 lineage_check 用，只收 error，注明哪些下游受影响。
+- S8 和 S8.4 的闸门加 `with_s7=True`。只有 S7 不合规时，报错写明处理顺序：retry S7（会照抄 S3）→ S7.1 → 本步。`ALLOW_COARSE_S3 = true` 同样能放行。
+- S7.1：在 `amset deform read` 之前先告警。
+- tools/lineage_check.py：每个材料另查 `grid_lineage`，有问题就退出码 1，末尾给出两种重跑顺序。
+- S8.2 不查 S7：E1 是带边移动，K 点在网格上时它对网格不敏感。
+
+**测试**：skill/ke-dft-cpu/test_s3_grid_gate.py，从 14 项增加到 21 项。
+- S3 重算到 48×48×3、S7 还是 15×15×1：S3 闸门通过，`s7_grid_issues` 报 error，S8.4 的闸门退出并提示 retry step7_deform；`allow` 时放行；S8.2 的闸门不受影响；
+- S7 和 S3 相同：不报；S7 不同但合规（54×54×3）：只告警、不退出；
+- 只有 `deform-01/ionrelax` 是旧网格：也报出来；没有 S7 目录：不报；
+- S3 和 S7 一起粗（S7 照抄）：报的是 S3 的那条；
+- `grid_lineage`：CrS₂ 旧网格报 3 条（2 条面内、1 条 kz），略粗于规则的不算，S7 旧网格报 1 条；
+- lineage_check：两个材料一个 S7 旧、一个干净，退出码 1，只标出旧的那个；
+- 接线检查：S8/S8.4 的 `with_s7=True`，S7.1 的告警在 `amset deform read` 之前，lineage_check 调了 `grid_lineage`。
+- 把 5 个源文件退回 V174，新增的 7 项全部失败，原有 14 项照样通过。
+
+**用法**：收口时跑 `python tools/lineage_check.py <项目根>`，退出码 0 才算收口。网格不合规的材料会被列出来，同时写明受影响的下游步骤。
+
+## V176（2026-10-07）：网格规则哪些有依据、哪些没有；S7 网格的报错改成写事实；新增 m* 收敛核对工具
+
+**起因**：
+- 用户问"这个网格确定选取正确吗"。如实回答：48×48×3 符合现行规则，但规则本身只有一部分有依据。
+- 另外，V175 的 S7 网格报错把原因写死成"S3 重算过、S7 没跟着重跑"。CrS2_ortho 的 S7 是 48×48×1、S3 是 15×15×1：S7 面内反而更细，只是 kz = 1。agent 照字面理解，反了。
+
+**网格规则的依据（如实记录）**：
+
+| 规则 | 依据 | 状态 |
+|---|---|---|
+| 2D 面内间距 ≤ 0.05 Å⁻¹，3D ≤ 0.06 Å⁻¹ | 导入本仓库（09-15）时就有，没有收敛记录 | **经验值，未验证** |
+| 2D kz ≥ 3 | V8：输入 kz = 1 时，只改插值倍数，ADP 就差 ×1.29–×1.83 | **只证实了 kz = 1 不行**；kz = 3 够不够，15.12 计划的对照组（CrS₂ 改 kz = 3 后扫插值倍数）一直没做，V173 照样改成了默认值 |
+| 六方 N 取 3 的倍数（K 在网格上） | S8.2 的 `_hex_offgrid`：CrSe₂ 46×46 时 K 离网，m* 0.52 对真值 1.03 | **有依据** |
+
+**CrS₂_hex 的 48×48×3 已经能确认的**：
+- 合现行规则；48 是 3 的倍数，带边都在 K。
+- 最近一壳高出带边约 11 meV ≈ 0.42 kT，离 V147 的 4 kT 线很远；m* 拟合窗口约 0.2 Å⁻¹（15×15×1 时是 0.64）。
+
+**还没验证的、怎么验证**：
+- **A. DPT 的 m\* 收敛没有**：用新增的 `tools/edge_mass_check.py`，在带边周围用细 k 点（q ≤ 0.05 Å⁻¹）做一次非自洽，直接量带边质量，和 S8.2 比。几个核时。
+- **B. AMSET 对插值倍数收敛没有（kz = 3 够不够）**：即 15.12 的对照 ②。CrS₂ 的 S8.4 跑完后，在副本里只开 ADP，换两档插值倍数各跑一次；ADP 迁移率变化 ≤ 10% 算收敛。参照：解析 TB 台子上 f = 6/10/15 相对解析值是 0.90–1.06（见上文 Nz 那一节），这是 AMSET 插值本身的散布，DFT 输入不该比它差太多。
+- **C. DFT 面内网格对 AMSET 收敛没有**：只在 B 不收敛时才做。S3 + S4 换 60×60×3，S7 保持 48×48×3（合规但不同，V175 只告警），再跑 S8.4。约 200 核时。
+
+**改动**：
+- ke_common `s7_grid_issues`：报错写明 S7 网格具体不合哪条规则。只有 S7 某个轴确实比 S3 粗时，才提示"多半是 S3 重算过、S7 没跟着重跑"；否则写"S7 按旧规则自己定的网格（09-24 之前 S7 不照抄 S3）"。S8/S8.4 闸门的退出文字同步改。
+- S3/S3b gen：注释里"3D 放宽到 0.08"与实际值 0.06 不符，改正；并注明 0.05/0.06/kz ≥ 3 是经验值、验证状态见本节。
+- 新增 `tools/edge_mass_check.py`（见上面 A）：
+  - `make` 只读材料目录，输入一律拷贝到项目外的临时目录（CHGCAR 不软链，防止 VASP 写回 S3），NBANDS 写死成 S3 的值，EDIFF 收紧到 1E-8；
+  - `fit` 读 EIGENVAL（6 位小数；vasprun.xml 只有 4 位，小 q 点的能量只有零点几 meV）。每个方向取 ±q 平均，消掉三角翘曲，再拟合 c₁q²+c₂q⁴；
+  - 判据：和 S8.2 差 < 3%，且窗口减半后变化 < 2%。
+
+**测试**：
+- test_s3_grid_gate.py：21 → 22 项。新增"S3 一直是 15×15×1、S7 是 48×48×1"不再归因到 S3 重算；"S3 重算到 kz = 3、S7 还是一层"仍给出该提示。把 ke_common 退回 V175，新增项失败。
+- test_edge_mass_check.py：9 项。
+  - 布点：笛卡尔距离等于 q，且只在面内；
+  - 模型能带：带三角翘曲和 q⁴ 时 m 还原到 1e-6，各向异性能带的两个方向都对；
+  - 解析：vasprun 不会读到 `<projected>` 里的本征值；EIGENVAL 的 VASP 5/6 两种格式都能读；
+  - make：INCAR 改动正确，CHGCAR 等是拷贝、不是链接；拒绝写进材料目录或非空目录，拒绝 3D；
+  - fit：S8.2 值正确时退出码 0，偏 10% 时退出码 1，k 点数对不上时退出码 2。
+
+## V177（2026-10-07）：edge_mass_check 在 S3 没有 CHGCAR 时走两段式
+
+**现场**：
+- agent 准备跑 V176 的验证 A 时发现，CrS₂ 和 CrSe₂ 的 step3_uniform 都是 `LCHARG = .FALSE.`，CHGCAR 只是个 0 字节的占位文件。
+- V176 的 `make` 只查 `is_file()`，0 字节也放行。如果照常提交，VASP 要到非自洽（ICHARG = 11）读 CHGCAR 时才会挂。
+- agent 提的"改成 ICHARG = 1 / ISTART = 1"不可行：ICHARG = 1 同样要读 CHGCAR。用 WAVECAR 重建电荷密度的思路是对的，但必须先做一次自洽。
+- 重跑 S3 打开 LCHARG 也不可取：在项目里重跑 S3 会让 S4/S7/S8.x 全部失效。
+
+**改动**（tools/edge_mass_check.py）：
+- 必需文件改成查非空（`_nonempty`），KPOINTS 也必须存在。
+- CHGCAR 缺失或是 0 字节时，`make` 生成两段式：
+  - `stage1_scf/`：S3 的 INCAR/KPOINTS/POSCAR/POTCAR/WAVECAR 的**拷贝**。只改 `ISTART = 1, ICHARG = 0, LCHARG = .TRUE., LWAVE = .FALSE.`，NBANDS 写死成 S3 的值，ISYM 照 S3（WAVECAR 是 S3 的不可约 k 点）。从收敛的轨道起跑，几步就收敛。没有 WAVECAR 时改为 ISTART = 0 / ICHARG = 2 从头算，成本约等于重跑一次 S3，并告警。
+  - `stage2_nscf/`：原来的非自洽输入（ICHARG = 11，带边星形 k 点），CHGCAR 由 stage1 拷过来。
+  - `run_two_stage.sh <VASP 命令>`：依次跑两段。stage1 没跑完或没写出 CHGCAR 就停下，不跑 stage2。本工具不碰集群的提交方式，VASP 命令由调用者给。
+- `fit`：两段式时读 `stage2_nscf/` 的 EIGENVAL，并比较 stage1 和 S3 的最后一个 TOTEN（`make` 时记进 meta）。差 > 1e-4 eV 判不通过：电荷密度不是 S3 那一份，m* 不可信。
+
+**测试**：test_edge_mass_check.py 从 9 项增加到 13 项。
+- 0 字节 CHGCAR + 有 WAVECAR → 两段式。stage1 的 INCAR 改动正确、ISYM 照 S3、KPOINTS 与 S3 相同、WAVECAR 是拷贝；stage2 没有 CHGCAR，等 stage1 写出。
+- 没有 WAVECAR → ISTART = 0 / ICHARG = 2，并有成本告警。
+- 用假 VASP 跑 `run_two_stage.sh`：两段依次执行，CHGCAR 拷进 stage2；stage1 不写 CHGCAR 时退出码 1，stage2 不跑。
+- `fit`：stage1 的 TOTEN 差 2e-5 eV 通过，差 2e-3 eV 不通过。
+- 把工具退回 V176，新增 4 项全部失败。
+
+## V178（2026-10-07）：edge_mass_check 的 fit 每个载流子单独给判定；窗口减半不稳时分清是噪声还是高阶项
+
+**现场**（验证 A 的第一批实测，48×48×3，两段式，stage1 和 S3 的 TOTEN 差 0）：
+
+| 材料 | 载流子 | 细 k 星 m* | S8.2 m* | S8.2 / 细 k | 窗口减半 |
+|---|---|---|---|---|---|
+| CrS₂ | 电子 | 0.8775 | 0.8663 | 0.987 | −0.5% |
+| CrS₂ | 空穴 | 0.9019 | 0.8829 | 0.979 | **+2.5%** |
+| CrSe₂ | 电子 | 0.9857 | 0.9600 | 0.974 | −0.9% |
+| CrSe₂ | 空穴 | 0.9875 | 0.9824 | 0.995 | −1.3% |
+
+- 按工具自己的判据，CrS₂ 空穴不通过（窗口减半变化 > 2%），CrS₂ 那次 fit 的退出码是 1。agent 却报成了"✅ 收敛（带 WARN）"。
+- 原因在输出：比值那条打的是"[OK] 已收敛"，稳定性只另打一行 WARN，总结论藏在最后一行的 ★ 里。
+- 另外，"窗口减半不稳"有两种可能，V177 没有区分：
+  - 小 q 点的能量噪声：非自洽本征值没收敛透，此时全窗口值更可信；
+  - 带的高阶非抛物项：此时半窗口值更接近带边。
+
+**改动**（tools/edge_mass_check.py 的 fit）：
+- 每个方向记下拟合残差 RMS（meV）。
+- 每个载流子打印：
+  - 全窗口和半窗口的 m*，以及各自的各方向离散；
+  - 一行"-> 判定：通过 / 不通过（原因）"。
+- 窗口减半变化 > 2% 时给诊断，并写明带边 m* 的范围（两个窗口值之间），同时给出 S8.2 和两个窗口值各自的比：
+  - 半窗口各方向离散 > 1%：判为噪声；
+  - 离散 ≤ 1%（各方向一致地变）：判为高阶项。
+- 最后一行改成"总判定：通过 / 不通过 —— <载流子：原因>（退出码 N）"。
+- 判据本身没变：和 S8.2 差 < 3%，且窗口减半变化 ≤ 2%。
+
+**测试**：test_edge_mass_check.py，从 13 项增加到 16 项。
+- 干净数据：两个载流子都写"通过"，残差 < 1e-3 meV。
+- 价带加 2e-5 eV 噪声：窗口减半变 −2.5%，半窗口离散 1.05，判为噪声。判定是"不通过（拟合不稳）"而不是 WARN，同时给出 m* 范围。
+- 价带加 q⁶ 项：半窗口离散 1.000，判为高阶项。
+- 把工具退回 V177，新增 3 项全部失败。
+
+**CrS₂ 空穴怎么定**：不用重算。用 0064 重新 fit 一次，看半窗口各方向离散：
+- > 1%：是噪声，取全窗口值 0.9019，S8.2 偏差 2.1%，在 3% 以内；
+- ≤ 1%：是高阶项，带边 m* 在 0.902–0.924 之间，S8.2 偏差 2–4.5%。
+- 不管哪种，对 DPT 迁移率的影响都 ≤ 9%（μ ∝ 1/m²）。

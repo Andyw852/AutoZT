@@ -113,3 +113,9 @@ perturbo-examples-light/
 # ---- autozt agent setup --write 生成的项目级 MCP 配置（含本机绝对路径）----
 .mcp.json
 .cursor/mcp.json
+
+# 2026-10: 论文对比表/文献工作文件（本地保留，不提交不推送）
+docs/related_work_comparison_table*.docx
+docs/related_work_comparison_table*.tex
+docs/related_work_platform_comparison*.docx
+高通量计算文献/

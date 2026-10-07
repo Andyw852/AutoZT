@@ -741,6 +741,14 @@ def _contcar_to_poscar_line(step_dir):
             % shlex.quote(step_dir))
 
 
+GEN_BUSY_TAG = "TF_GEN_BUSY"     # [V171] 同一步骤已有 gen 在跑
+GEN_BUSY_RC = 75
+
+
+def _gen_busy(out):
+    return GEN_BUSY_TAG in (out or "")
+
+
 def remote_gen(cfg, t, m, sname, host=None, wd=None):
     from autozt import (PROV_DIR, PROV_NAME, STEP_CONF, build_gen_provenance,
                        build_step_conf, find_asset, provenance_enabled, run_remote,
@@ -786,6 +794,15 @@ def remote_gen(cfg, t, m, sname, host=None, wd=None):
                 need.append(lg)
     line = "mkdir -p %s && cd %s && " % (shlex.quote(step_dir),
                                          shlex.quote(step_dir))
+    # [V171] 同一步骤的 gen 不许并发：远端 flock 一个按步骤命名的锁，拿不到就不跑（不排队、不算 gen 失败）。
+    #   提交作业那条路早有目录锁（_SBATCH_GUARD），gen 这条路没有。CrSe₂ S7.1：agent 第一次调用本地 2 分钟超时、
+    #   远端 gen 照跑；第二次 retry 又起一个 —— 前一个最后 os.replace 把后一个刚写出的 deformation.h5 挪走，
+    #   后一个读 h5 报 FileNotFoundError，step7b 里留下的 h5 / vac.h5 出自哪一次也说不清。
+    #   fd 9 由 gen 及其子进程继承，锁一直持有到它们全部退出；集群没有 flock 命令时照旧不加锁。
+    _lock = ".tf_gen.%s.lock" % re.sub(r"[^A-Za-z0-9_.-]", "_", str(sname))
+    line += ("if command -v flock >/dev/null 2>&1; then exec 9>>%s; flock -n 9 || "
+             "{ echo '%s 同一步骤已有一个 gen 在跑（%s 被占用），本次不重复执行；等它跑完再看状态' >&2; "
+             "exit %d; }; fi; " % (shlex.quote(_lock), GEN_BUSY_TAG, _lock, GEN_BUSY_RC))
     prov_files = {}   # v1.0：这一步推送了哪些文件（名字 → sha256/来源），写 provenance.json
     if is_py:  # gen 脚本以 skill 为唯一样板：总是覆盖推送（本地改了立即生效）
         gsrc = find_asset(cfg, t, m, gen_script, sname)
@@ -1240,8 +1257,10 @@ def main():
             blocking[key] = (jid, st)
         for t in targets:
             for key, (jid, st) in blocking.items():
+                # [V168] 按作业名去重时逐子目录比（jn-<子目录>，与下面 _set_jobname 一致）：以前同一步任一子作业
+                #   在跑就整批拒交，start 补交没交上的子目录（_fanout_topup）在 %Z 不可用的集群上永远交不上。
                 hit = ((key == t or key.startswith(t + os.sep)) if mode == "wd"
-                       else (key == jn or (bool(fanout) and key.startswith(jn + "-"))))
+                       else (key == jn or (bool(fanout) and key == jn + "-" + os.path.basename(t))))
                 if hit:
                     _emit(False, [], "已有作业 %s(%s) 占用该目录，拒绝重复提交" % (jid, st))
         for t in targets:
@@ -1416,6 +1435,23 @@ def remote_sbatch(cfg, s, jobname=None, force=False):
     return _sbatch_guarded(cfg, s["dir"], s.get("_host") or "__default__",
                            jobname=jobname, force=force, submit=s.get("submit"))
 
+def _fanout_topup(s, force, gen_first, tag):
+    """[V168] 扇出步骤有子作业在跑/排队、还有既没作业也没完成的子目录（fan_todo）-> 只补交这些，不动在跑的。
+
+    以前一律走 kill_if_queued："已有作业，先 stop 或加 -f"——提交到一半被 QOS 拒、或 gen 补出新子目录时，
+    只能等全部跑完，或者 -f 把在跑的全杀掉（CrS₂ S7）。只在 start（不重新生成、不带 -f）时生效：
+    gen 会覆盖在跑子目录的输入（ionrelax/ 还会被清空），带 -f 是"全部重来"。提交端照样逐子目录查队列和回执去重。"""
+    if force or gen_first or not s.get("fanout") or not s.get("job"):
+        return False
+    todo = list(s.get("fan_todo") or [])
+    if not todo:
+        return False
+    print("%s: 扇出步骤 %d 个子作业在跑/排队，不动它们；只补交还没交上的 %d 个：%s"
+          % (tag, len(s.get("fan_jobids") or []) or 1, len(todo),
+             ",".join(todo[:8]) + ("…" if len(todo) > 8 else "")))
+    return True
+
+
 def kill_if_queued(cfg, s, force, tag):
     j = s.get("job")
     if not j:
@@ -1425,11 +1461,24 @@ def kill_if_queued(cfg, s, force, tag):
             print("%s: 上一批作业正在取消中(CG，SLURM 异步收尾)，"
                   "等几秒再 start；急的话加 -f 强制。" % tag)
             return False
+        if s.get("fanout"):
+            # [V168] 走到这里 = 没有要补交的子目录（有的话 _fanout_topup 已放行）。说清楚 -f 会干什么。
+            _n = len(s.get("fan_jobids") or []) or 1
+            print("%s: 扇出 %d 个子作业在跑/排队，其余 %d 个子目录已判完成，没有要补交的。\n"
+                  "  加 -f = scancel 这 %d 个子作业再把它们重交（已判完成的不动）；"
+                  "要重算已判完成的子目录用 retry（重新生成输入）或 rerun。"
+                  % (tag, _n, int(s.get("fan_done") or 0), _n))
+            return False
         print("%s: 已有作业 %s(%s)，先 stop 或加 -f。" % (tag, j["id"], j["state"]))
         return False
     ok, out = remote_scancel(cfg, [j["id"]], host=s.get("_host") or "__default__")
     print("%s: scancel %s %s" % (tag, _scancel_desc([j["id"]]),
                                  "成功" if ok else ("失败: " + out)))
+    if ok and s.get("fanout") and s.get("fan_running"):
+        # [V168] 杀掉的子作业也要重交：fan_todo 是杀之前采的（只含没作业、没完成的），不并进来 -f 就是"杀了不交"
+        #   （fan_todo 为空时提交端还会以"待补清单为空"拒交——在跑的全没了，什么也没交上）。
+        _todo = list(s.get("fan_todo") or [])
+        s["fan_todo"] = _todo + [x for x in s["fan_running"] if x not in _todo]
     return ok
 
 def _mark_gen_failed(cfg, s):
@@ -1456,7 +1505,8 @@ def do_run_gen_step(cfg, t, m, s, tag):
     ok, out = remote_gen(cfg, t, m, s["name"], host=s.get("_host"), wd=s.get("_wd"))
     if not ok:
         print("%s: 运行失败。%s" % (tag, out))
-        _mark_gen_failed(cfg, s)
+        if not _gen_busy(out):                # [V171] 别的 gen 正在跑 ≠ 这一步失败
+            _mark_gen_failed(cfg, s)
         return False
     marker = step_cfg(t, s["name"], m).get("done_marker") or "band_summary.json"
     rc, o = run_remote(cfg, "test -f %s && echo MARKER_OK"
@@ -1545,7 +1595,9 @@ def do_submit(cfg, t, m, s, force, gen_first, contcar_cp, tag, submit=True):
             print("%s: 本地生成步（画图/读取），已就绪，待 tf … start 触发。" % tag)
             return True
         return do_run_gen_step(cfg, t, m, s, tag)
-    if not kill_if_queued(cfg, s, force, tag):
+    if _fanout_topup(s, force, gen_first, tag):
+        pass
+    elif not kill_if_queued(cfg, s, force, tag):
         return False
     if gen_first or not s["has_incar"]:
         _fetch_stamp_clear(m, s["name"])
@@ -1563,6 +1615,8 @@ def do_submit(cfg, t, m, s, force, gen_first, contcar_cp, tag, submit=True):
         ok, out = remote_gen(cfg, t, m, s["name"], host=s.get("_host"), wd=s.get("_wd"))
         if not ok:
             print("%s: gen 失败。%s" % (tag, out))
+            if _gen_busy(out):                # [V171] 别的 gen 正在跑：不打失败标记、不给路径提示
+                return False
             _mark_gen_failed(cfg, s)
             # work_dir 提示只在像是路径问题时给（参数错误等 gen 自身报错时它是误导）
             if re.search(r"Permission denied|No such file or directory|cannot cd|"
@@ -1617,6 +1671,17 @@ def do_submit(cfg, t, m, s, force, gen_first, contcar_cp, tag, submit=True):
         _why = (out or "").strip().splitlines()
         log_action(m, "提交失败 %s：%s"
                    % (s["label"], _why[0] if _why else "(无输出)"))
+        if jid:
+            # [V168] 扇出提交到一半被 sbatch 拒（QOS 提交上限等）：已交上的照样记账（并发计数靠它），
+            #   并说清楚剩下的怎么补——start 会只补交没交上的子目录，不用 -f。
+            from autozt import ledger_append
+            SUBMIT_COUNTER[0] += 1
+            ledger_append(cfg, m, s, jid)
+            _nj = len(str(jid).split(","))
+            log_action(m, "%s 部分提交 %d 个 jobid=%s" % (s["label"], _nj, jid))
+            print("%s: 其中已交上 %d 个（jobid=%s）；其余等有空位后 "
+                  "tf -tt %s -p %s -j %s start 补交（只交没交上的子目录，不要加 -f）。"
+                  % (tag, _nj, jid, m.get("tt"), m["name"].split("/")[-1], s["label"]))
         _fetch_stamp_clear(m, s["name"])   # v1.11：重交后结果会更新，清戳记重拉
         s["done"] = False  # do not reuse completion from before submission
         _scancel_clear(m, s["name"])       # v1.4：重交成功，清 stop 标记
@@ -2873,6 +2938,19 @@ def cmd_start(cfg, data, mname, jname, force, incl_scancel=False, gate=None):
                           "rerun（推倒重来）；确定要 start 请加 -f。"
                           % (m["name"], s["label"]))
                     return 1
+            if s["kind"] == "OK" and not force:
+                # [V170] 已完成的步骤不重交。以前显式 -p X -j S start 不看 OK：按现有输入原样重交，作业开头删旧产物
+                #   （S8.4 的 rm -f transport.json）——CrS₂ 跑了 4h41m 的 S8.4 被第二次 start 删掉，靠手工从
+                #   transport_*.json 拷回。批量 start / step init / rerun 早就跳过 OK，只有这条路漏了。
+                #   例外：retry 刚重新生成过输入、还没被 start 用过（指纹一致）—— retry→start 照常放行一次。
+                if not _regen_marker_fresh(cfg, m, s):
+                    print("%s: 步骤 %s 已完成（OK），不重交——start 会按现有输入重新提交，作业开头会删掉已完成的产物。\n"
+                          "  只想把结果拉回本地：tf -tt %s -p %s -j %s fetch\n"
+                          "  确实要重算：先 retry（重新生成输入）再 start，或 start -f / rerun。"
+                          % (m["name"], s["label"], m["tt"], m["name"].split("/")[-1], s["label"]))
+                    return 0
+                print("%s: 步骤 %s 已完成（OK），但 retry 刚重新生成过输入（指纹一致）-> 按 retry→start 放行。"
+                      % (m["name"], s["label"]))
             sc = step_cfg(t, s["name"], m)
             _is_gen = sc.get("run") == "gen"
             # 显式 -p X -j S 以前不过 max_jobs 闸门（agent 的 start_step 就走这条，
@@ -2893,6 +2971,8 @@ def cmd_start(cfg, data, mname, jname, force, incl_scancel=False, gate=None):
                            tag="start " + tag_of(m, s))
             if not ok and _held:
                 gate.release(m["tt"], m)
+            if ok:
+                _regen_marker_consume(m, s)          # [V170] 这次 retry 的输入已经交过了
             return 0 if ok else 1
         # --- patch_start_dag：不带 -j 时交掉整个就绪集 -----------------
         return _start_ready(cfg, t, m, force, incl_scancel, gate=gate)
@@ -2963,19 +3043,47 @@ def _stop_host(m, s, cfg):
     return str(s.get("_host") or m.get("host_eff") or cfg.get("host") or "__default__")
 
 
-def _ask_confirm(prompt):
+_STOP_Y = "tf -tt <技能> -p <材料> -j <步骤> stop -y"
+
+
+def _ask_confirm(prompt, example=None):
     """交互确认。无 TTY 时给可执行的错误，而不是抛 EOFError 栈。
 
     旧代码直接 input()：非交互场景（agent / cron / 管道）会抛
-    EOFError traceback，既不友好也不说明该加 -y。"""
+    EOFError traceback，既不友好也不说明该加 -y。所有 [y/N] 确认都走这里
+    （stop / hpc / adopt …），example 给出该命令带 -y 的写法。"""
     if not sys.stdin or not sys.stdin.isatty():
-        sys.exit(_i18n.t("错误：", "error: ") + "%s 需要确认，但当前不是交互终端。"
-                 "请显式加 -y 表示同意（例：tf -tt <技能> -p <材料> -j <步骤> stop -y）"
-                 % "该操作")
+        sys.exit(_i18n.t("错误：", "error: ") + "该操作需要确认，但当前不是交互终端。"
+                 "请显式加 -y 表示同意" + ("（例：%s）" % example if example else "。"))
     try:
         return input(prompt).strip().lower()
     except EOFError:
         sys.exit(_i18n.t("错误：", "error: ") + "读取确认输入失败（stdin 已关闭）。请显式加 -y 表示同意。")
+
+
+def _kill_step_leftovers(cfg, s):
+    """stop 时杀掉步骤目录下残留的 pheasy 进程组（submit.sh 顺序跑的后续方法）。
+
+    调用 autozt/kill_step_leftovers.py：只认 pheasy 可执行文件本身（前 3 个参数
+    的 basename 是 pheasy / pheasy-gpu / run_pheasy.py）、只看本用户、排除自身与
+    父进程、整组成员都在步骤目录下才整组杀（否则只杀该进程 + 目录内驱动脚本 +
+    其子进程）、先打印 TO_KILL、SIGTERM 等 10s 再 SIGKILL、存活统计不算僵尸。
+    脚本经 python3 -c 传到远端执行，步骤目录作为 sys.argv[1]。
+    """
+    from autozt import run_remote
+    d = s.get("dir")
+    host = s.get("_host") or "__default__"
+    if not d:
+        return
+    script_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                               "kill_step_leftovers.py")
+    script = open(script_path, encoding="utf-8").read()
+    rc, out = run_remote(cfg, "python3 -c %s %s"
+                         % (shlex.quote(script), shlex.quote(d)), host=host)
+    print("[stop] %s: %s" % (s.get("label"), (out or "").strip()))
+    # rc==0 才算成功：NO_DIR（目录不存在/本地路径）会以 rc=2 退出，不能当成
+    # "什么都没杀、alive=0" 报成功。
+    return rc == 0 and "alive=0" in (out or "")
 
 
 def cmd_stop(cfg, data, mname, jname, yes):
@@ -2990,7 +3098,7 @@ def cmd_stop(cfg, data, mname, jname, yes):
                          for j, m, s in jobs)
         if not yes:
             ans = _ask_confirm("取消全部材料的步骤 %s 的作业：%s ? [y/N] "
-                               % (jobs[0][2]["label"], desc))
+                               % (jobs[0][2]["label"], desc), example=_STOP_Y)
             if ans not in ("y", "yes"):
                 print("已取消操作。")
                 return 1
@@ -3007,6 +3115,10 @@ def cmd_stop(cfg, data, mname, jname, yes):
             if ok:   # v1.4：打 scancel 标记，auto_advance 不再自动重跑
                 for j, m, s in trio:
                     _scancel_set(m, s["name"], j["id"])
+                    if not _kill_step_leftovers(cfg, s):
+                        print("[WARN] %s: 残留进程可能仍在运行，请用 ps 核对"
+                              % s.get("label"), flush=True)
+                        log_action(m, "stop-leftover-fail %s" % s["name"])
                     log_action(m, "stop %s" % j["id"])
         if ok_all:
             print("已打 scancel 标记（不会自动重跑）；重跑："
@@ -3025,6 +3137,12 @@ def cmd_stop(cfg, data, mname, jname, yes):
             if jname:
                 for s in steps:
                     _scancel_set(m, s["name"], None)
+                    # 主方法已完成、步骤 job 不再 running 时，submit.sh 里顺序跑的
+                    # 后续方法子进程（如 RVM）可能仍在写目录 —— 一并按 cwd 杀掉进程组。
+                    if not _kill_step_leftovers(cfg, s):
+                        print("[WARN] %s: 残留进程可能仍在运行，请用 ps 核对"
+                              % s.get("label"), flush=True)
+                        log_action(m, "stop-leftover-fail %s" % s["name"])
                 log_action(m, "stop-mark %s（无运行作业）"
                            % ",".join(s["name"] for s in steps))
                 print("%s: 没有排队/运行的作业，仍按你的要求打了 scancel 标记：%s"
@@ -3037,7 +3155,7 @@ def cmd_stop(cfg, data, mname, jname, yes):
         desc = ", ".join("%s(%s,%s)" % (j["id"], j["state"], s["label"]) for j, s in jobs)
         if not yes:
             ans = _ask_confirm("取消 %s(tt=%s) 的作业 %s ? [y/N] "
-                               % (m["name"], m["tt"], desc))
+                               % (m["name"], m["tt"], desc), example=_STOP_Y)
             if ans not in ("y", "yes"):
                 print("已取消操作。")
                 return 1
@@ -3055,6 +3173,10 @@ def cmd_stop(cfg, data, mname, jname, yes):
             if ok:   # v1.4：打 scancel 标记，auto_advance 不再自动重跑
                 for j, s in trio:
                     _scancel_set(m, s["name"], j["id"])
+                    if not _kill_step_leftovers(cfg, s):
+                        print("[WARN] %s: 残留进程可能仍在运行，请用 ps 核对"
+                              % s.get("label"), flush=True)
+                        log_action(m, "stop-leftover-fail %s" % s["name"])
         if ok_all:
             log_action(m, "stop %s" % " ".join(j["id"] for j, _ in jobs))
             print("%s: 已打 scancel 标记（不会自动重跑）；重跑："
@@ -3069,7 +3191,8 @@ def cmd_stop(cfg, data, mname, jname, yes):
     desc = ", ".join("%s(%s|%s,%s)" % (j["id"], m["name"], m["tt"], s["label"])
                      for j, m, s in jobs)
     if not yes:
-        ans = _ask_confirm("取消全部 %d 个作业：%s ? [y/N] " % (len(jobs), desc))
+        ans = _ask_confirm("取消全部 %d 个作业：%s ? [y/N] " % (len(jobs), desc),
+                           example=_STOP_Y)
         if ans not in ("y", "yes"):
             print("已取消操作。")
             return 1
@@ -3086,6 +3209,10 @@ def cmd_stop(cfg, data, mname, jname, yes):
         if ok:   # v1.4：打 scancel 标记，auto_advance 不再自动重跑
             for j, m, s in trio:
                 _scancel_set(m, s["name"], j["id"])
+                if not _kill_step_leftovers(cfg, s):
+                    print("[WARN] %s: 残留进程可能仍在运行，请用 ps 核对"
+                          % s.get("label"), flush=True)
+                    log_action(m, "stop-leftover-fail %s" % s["name"])
                 log_action(m, "stop %s" % j["id"])
     if ok_all:
         print("已打 scancel 标记（不会自动重跑）；重跑："
@@ -3214,6 +3341,24 @@ def _regen_marker_save(m, marks):
         print("警告：写重生成标记失败：%s" % exc, file=sys.stderr)
         return False
 
+def _regen_marker_fresh(cfg, m, s):
+    """[V170] retry 重新生成过输入、之后还没被 start 交过、且输入指纹没变 -> True。不消耗 FAIL 放行额度。"""
+    ent = _regen_marker_load(m).get(_regen_key(m, s))
+    if not isinstance(ent, dict) or ent.get("consumed_ts"):
+        return False
+    fp, _files = _regen_input_fingerprint(cfg, m, s)
+    return bool(fp) and fp == ent.get("fingerprint")
+
+
+def _regen_marker_consume(m, s):
+    """[V170] start 交出去之后给本步的重生成标记记上 consumed_ts（再 retry 会写新标记、清掉它）。"""
+    marks = _regen_marker_load(m)
+    ent = marks.get(_regen_key(m, s))
+    if isinstance(ent, dict) and not ent.get("consumed_ts"):
+        ent["consumed_ts"] = time.time()
+        _regen_marker_save(m, marks)
+
+
 def _regen_marker_write(cfg, t, m, s, tag=""):
     """retry 生成成功后写标记（best-effort，失败不改 retry 语义）。"""
     from autozt import step_cfg
@@ -3304,6 +3449,10 @@ def retry_submit(cfg, t, m, s, force, tag):
         return False
     s2 = dict(s)
     s2["job"] = None
+    if step_cfg(t, s["name"], m).get("run") == "gen":
+        # [V164] 本地即时步（画图/读取/校验）：retry 就地重跑一次。以前走"只生成不提交"，只打印"待 start 触发"，
+        #   又不写重生成标记（这类步骤不生成输入）-> start 因 FAIL 要 -f：retry 救不回任何失败的本地步（WS2 的 S5.1）。
+        return do_submit(cfg, t, m, s2, force, gen_first=True, contcar_cp=False, tag=tag, submit=True)
     ok = do_submit(cfg, t, m, s2, force, gen_first=True,
                    contcar_cp=step_cfg(t, s["name"], m).get(
                        "contcar_to_poscar", False),

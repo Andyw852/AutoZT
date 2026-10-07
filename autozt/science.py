@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """面向模型的科学工作流层。
 
-这里只读整理已有技能契约和已回收结果，不创建项目、不改配置、不提交作业。
+这里只读整理已有技能契约、执行前的输入和已回收结果，不创建项目、不改配置、不提交作业。
 """
 from __future__ import annotations
 
@@ -93,11 +93,14 @@ def _review_card(goal: str, plan_summary: str, stages: List[Dict[str, Any]],
     planned_calls = [
         {"tool": "list_skills", "purpose": "发现可用技能", "risk": "read"},
         {"tool": "describe_skill", "purpose": "读取输入、输出、依赖和判据", "risk": "read"},
-        {"tool": "preflight", "purpose": "检查结构、网格、单位和二维厚度", "risk": "read"},
+        {"tool": "preflight", "mode": "inputs",
+         "purpose": "执行前检查结构、维度与真空轴、温度/载流子网格", "risk": "read"},
         {"tool": "inspect", "purpose": "读取当前状态和诊断证据", "risk": "read"},
         {"tool": "cycle", "mode": "dry_run", "purpose": "展示确定性动作清单", "risk": "read"},
         {"tool": "cycle", "mode": "execute", "purpose": "确认后通过 autozt act 执行", "risk": "mutate",
          "requires_user_confirmation": True},
+        {"tool": "preflight", "mode": "results",
+         "purpose": "结果回收后校验产物、validator、单位和二维厚度", "risk": "read"},
         {"tool": "results", "purpose": "读取带来源的计算结果", "risk": "read"},
     ]
     return {
@@ -433,19 +436,135 @@ def preflight(root: str, *, dimension: Optional[str] = None, thickness: Optional
                    "二维厚度与请求一致", [th_path] if th_path else [], actual, thickness)
 
     passed = all(item["ok"] for item in checks)
+    # 结果校验发生在作业算完、产物回收之后：通过 = 可以查询/汇报结果，而不是「可以执行」。
+    # 执行前的检查是 preflight_inputs（结构、维度、真空轴、网格）。
     conversation = _conversation(
-        state="ready_to_execute" if passed else "preflight_review",
-        message=("预检查通过，可进入执行前确认。" if passed else
-                 "预检查发现需要复核的输入、单位或结果证据。"),
-        next_action="confirm_execution" if passed else "review_preflight",
-        requires_confirmation=passed, risk="mutate", will_submit_jobs=False)
-    return {"schema_version": "autozt/preflight/1",
+        state="completed" if passed else "preflight_review",
+        message=("结果预检通过：产物、validator、单位、网格和二维厚度一致，可以查询并汇报结果。"
+                 if passed else "结果预检发现需要复核的产物、单位或 validator 证据。"),
+        next_action="review_result" if passed else "review_preflight",
+        requires_confirmation=False, risk="read", will_submit_jobs=False)
+    return {"schema_version": "autozt/preflight/1", "stage": "results",
             "status": "pass" if passed else "review", **conversation,
             "root": root, "checks": checks, "files_scanned": len(paths),
             "loaded_files": len(loaded), "parse_errors": load_errors,
             "requested": {"dimension": dimension, "temperature": _as_list(temperature),
                           "carrier": _as_list(carrier), "thickness_A": thickness},
             "note": "检查包含文件内容、单位、validator、网格和二维厚度；最终物理正确性仍由技能 validator 决定。"}
+
+
+def _load_dim_common():
+    """仓库根的 dim_common.py（gen 脚本共用的维度判定）。与工作流用同一份判据，不另写一套。"""
+    path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                        "dim_common.py")
+    if not os.path.isfile(path):
+        return None
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("_autozt_dim_common", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def poscar_from_listing(listing: Any, material: str) -> Optional[str]:
+    """从 `autozt -p <材料> list --json` 的输出里找该材料本地目录下的 POSCAR。"""
+    want = str(material or "").strip()
+    for t in (listing or {}).get("types", []) if isinstance(listing, dict) else []:
+        for m in t.get("materials") or []:
+            names = {str(m.get(k)) for k in ("name", "qualified_name", "id") if m.get(k)}
+            names |= {os.path.basename(x) for x in names}
+            if want in names and m.get("lpath"):
+                path = os.path.join(str(m["lpath"]), "POSCAR")
+                if os.path.isfile(path):
+                    return path
+    return None
+
+
+def preflight_inputs(poscar: Optional[str], *, dimension: Optional[str] = None,
+                     thickness: Optional[float] = None,
+                     temperature: Optional[Iterable[Any]] = None,
+                     carrier: Optional[Iterable[Any]] = None,
+                     material: Optional[str] = None) -> Dict[str, Any]:
+    """执行前的输入检查（只读）：结构可解析、维度与真空轴、温度/载流子网格、二维厚度约定。
+
+    与结果校验 preflight(result_dir) 分开：提交前还没有 zt_summary / transport /
+    kappa_summary，拿结果文件去检查必然失败。维度判据与 gen 脚本共用 dim_common.py
+    （真空 >= 8 Å 记一个真空方向；二维要求真空沿 c 轴）。"""
+    checks: List[Dict[str, Any]] = []
+    structure: Dict[str, Any] = {}
+    have_file = bool(poscar) and os.path.isfile(str(poscar))
+    _check(checks, "poscar", have_file, "找到结构文件 POSCAR", [poscar] if poscar else [],
+           poscar, "existing POSCAR")
+    detected, axis, height_c = None, None, None
+    if have_file:
+        dc = _load_dim_common()
+        if dc is None:
+            _check(checks, "structure_parse", False, "缺少 dim_common.py，无法解析结构", [poscar])
+        else:
+            try:
+                lat, frac = dc.read_poscar_cell_frac(poscar)
+                vacuums = dc.vacuum_per_axis(lat, frac)
+                dim_lc, axis, _ = dc.detect_dimension(poscar, allow_0d=True)
+                detected = str(dim_lc).upper()
+                vol = abs(dc._det3(lat))
+                area_ab = dc._norm(dc._cross(lat[0], lat[1]))
+                height_c = vol / area_ab if area_ab > 1e-12 else None
+                structure = {"natoms": len(frac),
+                             "lattice_A": [round(dc._norm(v), 4) for v in lat],
+                             "vacuum_A": {n: round(v, 2) for n, v in zip("abc", vacuums)},
+                             "vacuum_axis": "abc"[axis] if axis is not None else None,
+                             "dimension_detected": detected,
+                             "vacuum_min_A": getattr(dc, "VACUUM_MIN", 8.0)}
+                _check(checks, "structure_parse", True, "POSCAR 可完整解析", [poscar], len(frac))
+            except (ValueError, IndexError, OSError, SystemExit) as exc:
+                _check(checks, "structure_parse", False, "POSCAR 解析失败", [poscar], str(exc),
+                       "valid POSCAR")
+    if dimension and detected:
+        _check(checks, "dimension", detected == dimension, "结构判定的维度与请求一致", [poscar],
+               detected, dimension)
+    if detected == "2D":
+        _check(checks, "vacuum_axis", axis == 2,
+               "二维真空层沿 c 轴（k_z/q_z = 1 与厚度换算都按 c 轴）", [poscar],
+               structure.get("vacuum_axis"), "c")
+    temps = _as_list(temperature)
+    if temps:
+        values = [_float(x) for x in temps]
+        _check(checks, "temperature_grid", all(v is not None and v > 0 for v in values),
+               "温度网格是正的有限值（K）", [], temps, "> 0 K")
+    carriers = _as_list(carrier)
+    if carriers:
+        values = [_float(x) for x in carriers]
+        positive = all(v is not None and v > 0 for v in values)
+        _check(checks, "carrier_grid", positive, "载流子浓度是正的有限值（cm^-3）", [], carriers,
+               "> 0 cm^-3")
+        if positive:
+            _check(checks, "carrier_range", all(1e15 <= v <= 1e23 for v in values),
+                   "载流子浓度在常见范围 1e15–1e23 cm^-3 内", [], carriers, "1e15..1e23",
+                   severity="warning")
+    if (dimension or detected) == "2D" and thickness is not None:
+        t = _float(thickness)
+        ok_t = t is not None and t > 0 and (height_c is None or t < height_c)
+        _check(checks, "2d_thickness", ok_t,
+               "给定的二维厚度为正且小于沿 c 的胞高", [poscar] if poscar else [], thickness,
+               "0 < t < %.2f A" % height_c if height_c else "> 0 A")
+    passed = all(item["ok"] for item in checks if item["severity"] == "error")
+    conversation = _conversation(
+        state="ready_to_execute" if passed else "preflight_review",
+        message=("输入预检通过：结构、维度与网格一致，可以 dry-run 并在执行前确认。" if passed else
+                 "输入预检发现需要复核的结构、维度、真空轴或网格。"),
+        next_action="confirm_execution" if passed else "review_preflight",
+        requires_confirmation=passed, risk="mutate", will_submit_jobs=False)
+    notes = ["执行前只检查输入；作业完成、结果回收后用 preflight(result_dir=…) 校验产物、"
+             "validator、单位、网格和二维厚度。"]
+    if (dimension or detected) == "2D" and thickness is None:
+        notes.append("二维厚度由工作流按原子跨度 + 范德华半径计算（thickness_2d.json），"
+                     "结果校验时复核。")
+    return {"schema_version": "autozt/preflight/1", "stage": "inputs",
+            "status": "pass" if passed else "review", **conversation,
+            "poscar": poscar, "material": material, "structure": structure, "checks": checks,
+            "requested": {"dimension": dimension, "temperature": temps, "carrier": carriers,
+                          "thickness_A": thickness},
+            "notes": notes}
 
 
 def _result_record(canonical: str, value: Any, *, source: str, path: str,

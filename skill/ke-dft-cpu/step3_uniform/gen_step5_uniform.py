@@ -29,13 +29,16 @@ KSPACING     = "0.03"                 # vaspkit 起点（与静态同值，所�
 #   N_i = max(vaspkit, ceil(|b_i| / DK_MAX))，逐轴。判据必须是笛卡尔的：
 #   能带曲率在笛卡尔 k 空间有绝对尺度，与胞长短无关（分割数下限做不到这点）。
 #   ★值按维度【分档】，而不是按维度【开关】：
-#     点数在 2D ∝ N²、3D ∝ N³，三维成本紧一档，所以 3D 放宽到 0.08。
+#     点数在 2D ∝ N²、3D ∝ N³，三维成本紧一档，所以 3D 放宽到 0.06（2D 是 0.05）。
 #     （历史坑：原来是  if DK_MAX and dim == "2d"  —— 3D 整段跳过，于是 uniform
 #      退化成 vaspkit(KSPACING=0.03)，而静态也用 0.03 → 两网格逐轴相同，
 #      "密网格"步骤实际给的是静态网格。扫 10 个走这条链的项目，8 个中招，
 #      含 Si / Si_diamond / Mg2C60 / Mg4C60 / Mo2S3 / AlN / MoS2。）
 #   DK_MAX = None  → 按维度自动取 DK_MAX_2D / DK_MAX_3D
 #   DK_MAX = 数值  → 强制覆盖（半金属/小带隙体系建议显式收紧到 0.05）
+#   ★ V176：0.05 / 0.06 和 kz ≥ 3 都是经验值（导入本仓库时就有，没有收敛记录）。已证实的只有
+#     "kz = 1 不行"（V8）；面内 0.05 够不够、kz = 3 够不够，见 VERIFICATION V176 的待做对照。
+#     DPT 的 m* 可以用 tools/edge_mass_check.py 直接核对（带边细 k 点非自洽，几个核时）。
 DK_MAX       = None
 DK_MAX_2D    = "0.05"
 DK_MAX_3D    = "0.06"
@@ -45,7 +48,10 @@ DK_MAX_3D    = "0.06"
 #   **外推**，插值网格一变结果就差 30-45%（实测：固定 c 只改
 #   interpolation_factor，ADP 迁移率 2188~2488）。设 >=3 让 kz 变成内插。
 #   默认 1 = 保持原行为（不动存量 2D 项目）；新项目在 project_setting 里设 3。
-VACUUM_KZ_MIN = 1
+# ★ V173（2026-10-07）：出厂改为 3。"新项目自己设"没人记得设：CrS₂_hex 的 S3 一直是 15×15×1，S7 照抄、S8.4 照用，
+#   ADP/DPT 和同网格规则下的 CrSe₂ 差 3 倍。S8/S8.4 现在会拦 kz < 3 的 S3（ke_common.s3_grid_gate），
+#   默认值跟着改，retry S3 就直接得到 kz = 3。只影响 2D、只在本步重新生成时生效（旧网格产物照 patch_stale_grid 归档）。
+VACUUM_KZ_MIN = 3
 # ---- 成本护栏：网格总点数上限 -------------------------------------------
 #   超了就【报错要求显式覆盖】，而不是静默降密 —— 否则将来又有人用"跳过加密"
 #   绕过，回到同一个坑。参考量级：Si(5.43Å) 0.08 → 25³ ≈ 1.6e4；
@@ -178,7 +184,7 @@ def main():
     # [patch_stale_grid-2026-09-23] 覆盖 KPOINTS 之前先抓旧网格，末尾与新网格比对后归档旧产物
     _old_mesh = kc.read_kpoints_mesh(out / "KPOINTS")
     kc.vaspkit_kpoints(out, KSCHEME, KSPACING, VASPKIT_EXE, dim, vac_axis)
-    # [patch_vacuum_kz] 把真空方向 kz 提到 VACUUM_KZ_MIN（默认 1 = 不动）
+    # [patch_vacuum_kz] 把真空方向 kz 提到 VACUUM_KZ_MIN（V173 起出厂 3；step.conf 写 1 = 旧行为）
     _kzmin = int(VACUUM_KZ_MIN)
     if (cwd / "step.conf").is_file():
         # strict=False：材料级 step.conf 是全技能共用的一份，含别的步骤的键

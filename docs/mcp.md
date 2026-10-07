@@ -45,11 +45,11 @@ older clients.
 | get_summary | read | per-skill counters, FAIL list, global queue |
 | get_status | read | one material in detail (diagnosis, cluster, work_dir source) |
 | capabilities | read | fixed agent protocol, actions, and risk boundary |
-| conf_get | read | effective step.conf of one step |
+| conf_get | read | effective step.conf of one step (`material` and `step` required) |
 | describe_skill | read | machine-readable skill contract (I/O, DAG, checks, corrections) |
 | probe_step | read | adaptive probe for defect-dft-cpu, generic diagnosis for other skills |
 | research_plan | read | turn a research goal into a reviewable dry-run plan |
-| preflight | read | validate result files, units, grids, validators and 2D thickness |
+| preflight | read | before execution (no `result_dir`): check the POSCAR or registered `material`, detected dimension, 2D vacuum axis and T/n grids; after results are recovered (`result_dir`): validate products, units, grids, validators and 2D thickness |
 | results | read | query values with units, method, validator and provenance |
 | start_step | mutate | generate inputs if needed, then submit |
 | prepare_step | mutate | prepare or regenerate inputs, keep products, do not submit |
@@ -191,15 +191,22 @@ stdio 客户端启动进程后按 MCP 顺序发送 `initialize`、`tools/list`�
 For a goal-driven scientific request, use this sequence:
 
 ```text
-research_plan → user reviews plan → preflight → inspect
-→ cycle(execute=false) → user confirms → cycle(execute=true) → results
+research_plan → user reviews plan → preflight (inputs) → inspect
+→ cycle(execute=false) → user confirms → cycle(execute=true)
+→ preflight(result_dir) → results
 ```
+
+`preflight` has two stages. Before execution, call it without `result_dir` and with a `poscar`
+path or a registered `material`: it parses the structure with the workflow's own dimension rule
+(`dim_common.py`, vacuum ≥ 8 Å), requires the 2D vacuum along c, and checks the T/n grids.
+After the jobs finish, call it with `result_dir` to validate the recovered products.
 
 The three science tools return the common `autozt/conversation/1` fields
 `conversation_state`, `message`, `next_action`, `requires_user_confirmation`, and
 `confirmation_payload`. Missing goal parameters produce `needs_user_input`; a complete
 plan produces `awaiting_confirmation`; an invalid preflight produces `preflight_review`;
-and a passing preflight produces `ready_to_execute`. The plan and preflight calls are
+a passing input preflight produces `ready_to_execute`, and a passing result preflight
+produces `completed`. The plan and preflight calls are
 read-only and never submit jobs. The short text content states the current phase and next
 action, while complete evidence remains in `structuredContent.data`.
 

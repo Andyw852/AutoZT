@@ -262,6 +262,8 @@ ELASTIC_GUARD = True
 #   或派生产物（S4 h5 / S7.1 形变势 / S2 画图 / S5.1）比来源的计算输出旧 -> 报错退出，不混用两版计算。
 #   见 ke_common.structure_lineage。确需照跑：step.conf 写 STRUCTURE_GUARD = false（只告警）。
 STRUCTURE_GUARD = True
+# [V173] step3_uniform 网格不满足现行规则（旧规则下生成）时拒绝生成；复现旧结果才写 true
+ALLOW_COARSE_S3 = False
 ELASTIC_DIR = "step6_elastic"
 # patch_deform_ref：形变势参考口径（2D 默认真空）。step7b 写出 deformation_vac.h5 就用它，
 # 否则退回 deformation.h5（AMSET 芯态对齐）。实测 CrS2：3.53 -> 5.86 eV，μ 差 2.76 倍。
@@ -354,6 +356,7 @@ SPEC = {
     "SYMMETRIZE_ELASTIC": (True, "bool"),
     "ELASTIC_GUARD": (True, "bool"),
     "STRUCTURE_GUARD": (True, "bool"),
+    "ALLOW_COARSE_S3": (False, "bool"),         # [V173]
 }
 # --- amset2d 插件相关（可改）---
 PLUGIN_SRC_NAME = "amset2d_plugin.py"   # 与本脚本同目录，运行时复制到 OUTDIR_NAME
@@ -1728,13 +1731,14 @@ def write_settings(out: Path, eps_inf, eps_static, gap, elastic,
     # 而真实重叠要求 h5 是完整网格，否则去对称化会把重叠算坏，见 V22/V23）。
     lines.append("unity_overlap: %s" % ("true" if UNITY_OVERLAP else "false"))
     if not UNITY_OVERLAP:
-        lines.append("# ^ 真实重叠：**必须**让 h5 走 from_data（WAVEFUNCTION_FULL=true 全网格），"
-                     "否则结果不可信（见 overlap_preflight.py 的拦截）")
-        if not WAVEFUNCTION_FULL:
-            # patch_overlap_controlled（2026-09-20）：只有在**故意**退回旧去对称化路径时，
-            #   才把这次标成"受控对照"，让 overlap_preflight 把拦截降为告警。
-            #   2026-09-26：出厂已是真实重叠 + 全网格，故正常路径不再打这个标记。
-            lines.append("# AZ_OVERLAP_CONTROLLED=1")
+        if WAVEFUNCTION_FULL:
+            lines.append("# ^ 真实重叠 + 全网格 h5（from_data，不去对称化）")
+        else:
+            # [V172] 走到这里 = main() 的对称性闸门已放行 IBZ（不放行会 sys.exit）：V118 起这是出厂生产路径。
+            #   以前这里写 AZ_OVERLAP_CONTROLLED（patch_overlap_controlled，2026-09-20 给"故意退回去对称化"用的），
+            #   preflight 于是把每次正常运行都标成"受控对照，只用于算比值，不作生产结果"。
+            lines.append("# ^ 真实重叠 + IBZ h5：对称性判据已放行（DESYM_FIX=%s），出厂生产路径（V118）"
+                         % ("on" if _DESYM_FIX_ON else "off"))
     # patch_write_mesh：显式落盘开关。true 时 AMSET 额外写 mesh_<mesh>.h5，
     #   里面是每机制每（不可约）k 点的散射率 + 能带/速度/DOS 元数据；
     #   postprocess_intrinsic.py 读它把 IMP 置零后用 AMSET 自己的输运积分重算本征 μ/S/σ。
@@ -2284,7 +2288,7 @@ def main():
     global INTERPOLATION_FACTOR, INTERPOLATION_FACTOR_EXPLICIT, SCATTERING, WRITE_MESH, DOPING, TEMPERATURES
     global DESYM_FIX, _DESYM_FIX_ON, BANDGAP_OVERRIDE, BANDGAP_NOTE
     global EPS_INF_OVERRIDE, EPS_INF_OVERRIDE_BASIS, SYMMETRIZE_ELASTIC, ELASTIC_GUARD
-    global STRUCTURE_GUARD
+    global STRUCTURE_GUARD, ALLOW_COARSE_S3
     global IR_FIX, _IR_FIX_ON, KZ_CAP_2D, KZ_FLAT_TOL_EV, _KZ_CAP_RMAX
     global MEM_WARN_GIB, MEM_LIMIT_GIB, MEM_AUTO_EXCLUSIVE
     _conf_nworkers = None
@@ -2315,8 +2319,10 @@ def main():
                 print("[..] WAVEFUNCTION_FULL=true（step.conf 显式）：强制全网格")
             elif _wf in ("false", "0", "no", "off"):
                 _WF_EXPLICIT = False
-                print("[WARN] WAVEFUNCTION_FULL=false（step.conf 显式）：退回**去对称化**路径 ——"
-                      " 无反演体系的 2D 结果不可信，只作受控对照")
+                # [V172] V118 之后 IBZ + 相位补丁就是出厂路径；能不能走 IBZ 由后面的对称性闸门裁决（不行就 sys.exit），
+                #   这里不再一律说"结果不可信，只作受控对照"。
+                print("[..] WAVEFUNCTION_FULL=false（step.conf 显式）：走 IBZ h5 —— DESYM_FIX 开着时这就是出厂路径"
+                      "（V118）；能不能走 IBZ 由后面的对称性闸门裁决")
             elif _wf != "auto":
                 print("[WARN] WAVEFUNCTION_FULL=%r 不认识（只认 auto/true/false），按 auto 处理" % _wf)
             # unity_overlap 显式覆盖：auto/true/false
@@ -2407,6 +2413,7 @@ def main():
             SYMMETRIZE_ELASTIC = bool(_p["SYMMETRIZE_ELASTIC"])
             ELASTIC_GUARD = bool(_p["ELASTIC_GUARD"])
             STRUCTURE_GUARD = bool(_p["STRUCTURE_GUARD"])
+            ALLOW_COARSE_S3 = bool(_p["ALLOW_COARSE_S3"])
             # patch_mem_guard：内存粗估阈值 / 自动独占
             if _p["MEM_WARN_GIB"]:
                 MEM_WARN_GIB = int(_p["MEM_WARN_GIB"])
@@ -2423,6 +2430,7 @@ def main():
 
     # ---- patch_lineage（V140）：上游同源 + 派生产物新鲜度，不通过就不生成 ----
     if _HAS_KC:
+        kc.s3_grid_gate(cwd, "S8.4", allow=ALLOW_COARSE_S3, dim="2d", with_s7=True)   # [V173] S3 网格符合现行规则；[V175] S7 与 S3 同网格
         kc.check_lineage(cwd, enabled=STRUCTURE_GUARD, label="S8.4")
         # [patch_post_invalidate V148] 本步重新生成 -> S8.3 的对比图作废（归档完成标记，重新排队）
         kc.invalidate_downstream(cwd, OUTDIR_NAME, "%s 重新生成" % OUTDIR_NAME)

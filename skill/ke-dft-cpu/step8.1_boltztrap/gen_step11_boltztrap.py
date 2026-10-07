@@ -774,6 +774,22 @@ def _invalidate_consumers(cwd):
     return _kc.invalidate_downstream(cwd, OUTDIR_NAME, "%s 重新生成" % OUTDIR_NAME)
 
 
+def _s3_grid_note(cwd, dim):
+    """[V174] S3 面内网格不合现行规则 -> 告警并记进 boltztrap_crta.json（不拦：本步排在 S8.2 之后，S8.2 已拦）。
+    真空轴 kz 一层不影响面内输运，不查。"""
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+        import ke_common as _kc
+    except ImportError:
+        print("[WARN] 没有 ke_common.py，S3 网格没查（skill.yaml 的 gen_need 漏了它？）")
+        return None
+    iss = _kc.s3_grid_issues(cwd, dim if dim in ("2d", "3d") else None, check_kz=False)
+    for lv, msg in iss:
+        print("[WARN] S8.1：%s%s" % (msg, "（BoltzTraP2 插值的就是这张网格，σ/τ、S 不可信）" if lv == "error" else ""))
+    mesh = _kc.read_kpoints_mesh(Path(cwd) / UNIFORM_DIR / "KPOINTS")
+    return {"mesh": [int(x) for x in mesh] if mesh else None, "issues": [m for _, m in iss]}
+
+
 def main():
     _disc_gate()
     cwd = Path.cwd()
@@ -798,6 +814,7 @@ def main():
         nelect = None
 
     dim = _read_dim(cwd)
+    s3_grid = _s3_grid_note(cwd, dim)                     # [V174]
     print("[..] BoltzTraP2 CRTA 插值 + 输运 ...")
     # 注意：BoltzTraP2 的 DFTData 要的是"目录"（它自己进去找 vasprun.xml），
     # 不是 vasprun.xml 文件本身。2D 时张量取面内 (xx+yy)/2。
@@ -807,6 +824,7 @@ def main():
                              scissor_gap_eV=_read_target_gap(cwd))
 
     res["dim"] = dim
+    res["s3_grid"] = s3_grid
     if dim == "2d":
         res["tensor_average"] = "in-plane (xx+yy)/2"
         ct, c_A, t_A = _read_ct_factor(cwd)

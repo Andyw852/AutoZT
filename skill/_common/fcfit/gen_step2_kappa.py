@@ -220,6 +220,19 @@ def _fit_identity(fit):
     return {"method_label": _label, "nominal_cut3_A": cut}
 
 
+def _fit_job_id(fit):
+    """The S1_fit job id stamped into its summary, or None.
+
+    Recorded into kappa_config.json so the kappa step can refuse to read a
+    stale fc_fit_summary.json from a different fit run (job-5830 failure mode).
+    """
+    try:
+        s = json.loads((Path(fit) / "fc_fit_summary.json").read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    return s.get("job_id")
+
+
 def _stability_passthrough(fit):
     """从 phonon_summary.json 透传虚频判据字段到 kappa_summary（下游 device-thermal
     等用 stability_verdict 判 κ 可靠性）。best effort：缺文件/字段只透传拿得到的。"""
@@ -412,6 +425,7 @@ def _gen_one(conf, fit, out, cwd, write_submit=True):
         "kappa_2d_norm": (two_d_norm(fit, conf["KAPPA_2D_THICKNESS"])
                           if mcfg["is_2d"] else None),
         "source_fc": str(fit),
+        "expect_fit_job_id": _fit_job_id(fit),
         "stability": _stability_passthrough(fit),
         # the fit's own cutoff and method: the per-method kappa figure is drawn
         # even without a cutoff scan (one point at the nominal cutoff)

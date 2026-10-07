@@ -1045,9 +1045,34 @@ def cmd_shengbte(cfg, out):
     _collect_shengbte(cfg, out, mesh)
 
 
+def _check_fit_job_id(cfg, out):
+    """Refuse to read a stale fc_fit_summary.json from a different S1_fit run."""
+    expect = cfg.get("expect_fit_job_id")
+    if not expect:
+        return
+    # 读的是 S1_fit 目录下的实时 summary（source_fc），不是 kappa 目录里的那份拷贝：
+    # 要防的是 S1 重跑后结果变了，副本只反映 gen 那一刻。
+    src = cfg.get("source_fc")
+    p = (Path(src) / "fc_fit_summary.json") if src else (out / "fc_fit_summary.json")
+    if not p.is_file():
+        sys.exit("[ERROR] expect_fit_job_id=%s but %s is missing -- the S1_fit "
+                 "result changed; re-run gen (retry) before computing kappa"
+                 % (expect, p))
+    try:
+        got = json.loads(p.read_text(encoding="utf-8")).get("job_id")
+    except Exception:
+        got = None
+    # got 为 None（旧 summary 没 job_id）也算不一致，不能放行
+    if got != expect:
+        sys.exit("[ERROR] fc_fit_summary.json job_id=%s != expect_fit_job_id=%s -- "
+                 "the S1_fit result changed after this kappa step was generated; "
+                 "re-run gen (retry) before computing kappa" % (got, expect))
+
+
 def main():
     out = Path.cwd()
     cfg = json.loads((out / "kappa_config.json").read_text(encoding="utf-8"))
+    _check_fit_job_id(cfg, out)
     if str(cfg.get("solver") or "phono3py").strip().lower() == "shengbte":
         cmd_shengbte(cfg, out)
         return

@@ -228,7 +228,7 @@ INCAR_SET = {
     "ALGO":     "Damped",     # HF 用 Damped/All；Normal/Fast 不适用
     "TIME":     "0.4",        # ALGO=Damped 的阻尼步长
     "LHFCALC":  ".TRUE.",     # 打开杂化
-    "HFSCREEN": "0.11",       # ★ 屏蔽参数，权威值在此（0.2=标准 HSE06/HSEsol；0.3=HSE03）
+    "HFSCREEN": "0.2",       # ★ 屏蔽参数，权威值在此（0.2=标准 HSE06/HSEsol；0.3=HSE03）
     "AEXX":     "0.25",       # ★ 精确交换比例，权威值在此（0.25=标准 HSE06/HSEsol）
     "PRECFOCK": "Fast",       # 交换积分用粗档 FFT，HSE 主要提速点（定稿用 Normal 复核）
     "LORBIT":   "11",         # ★ 轨道投影：写 PROCAR/PROCAR_OPT（lm 分解权重）→ fat band-dft-cpu 必需
@@ -890,10 +890,42 @@ def build_step4_dir(out_dir, args, ctx, part=None):
     text = build_incar(items, incar_remove, incar_set)
     with open(os.path.join(out_dir, "INCAR"), "w") as f:
         f.write(text)
+    # [V166] 最终 INCAR 的杂化参数不是标准 HSE06/HSE03 -> 告警（本脚本以前写死 HFSCREEN=0.11，Si 的带隙因此 1.34 eV）
+    _hw = hybrid_warning(os.path.join(out_dir, "INCAR"))
+    if _hw:
+        warn.append(_hw)
 
     return {"out_dir": out_dir, "range": (s, e), "jobname": jobname,
             "kpar": kpar, "npar_grp": npar_grp, "par_src": par_src,
             "log": log, "warn": warn, "soc": soc, "vasp": vasp}
+
+
+def hybrid_warning(incar):
+    """[V166] 杂化参数不是标准 HSE06/HSEsol（AEXX=0.25, HFSCREEN=0.2 Å⁻¹）或 HSE03（0.3）-> 告警文字；否则 None。
+    与 ke-dft-cpu 的 ke_common.hybrid_params 同一判据（本技能不带 ke_common）。"""
+    try:
+        text = Path(incar).read_text(errors="ignore")
+    except OSError:
+        return None
+    kv = {}
+    for ln in text.splitlines():
+        for part in ln.split("#", 1)[0].split("!", 1)[0].split(";"):
+            if "=" in part:
+                k, v = part.split("=", 1)
+                kv[k.strip().upper()] = v.strip()
+    if not kv.get("LHFCALC", "").upper().lstrip(".").startswith("T"):
+        return None
+    try:
+        aexx = float(kv.get("AEXX", "0.25").split()[0])
+        hfs = float(kv.get("HFSCREEN", "0").split()[0])
+    except (ValueError, IndexError):
+        return "★ 杂化参数读不出来（AEXX=%r, HFSCREEN=%r）" % (kv.get("AEXX"), kv.get("HFSCREEN"))
+    if hfs <= 0 or (round(aexx, 4), round(hfs, 4)) in ((0.25, 0.2), (0.25, 0.3)):
+        return None
+    hint = ("；%g 像是 HSE06 的 bohr⁻¹ 值（0.106），VASP 的 HFSCREEN 单位是 Å⁻¹，HSE06 应写 0.2" % hfs
+            if 0.09 <= hfs <= 0.12 else "")
+    return ("★ 杂化参数不是标准 HSE06（AEXX=0.25, HFSCREEN=0.2 Å⁻¹）：AEXX=%g, HFSCREEN=%g%s。"
+            "带隙会随之改变；若不是有意为之，查 step.conf 的 [incar] 覆盖" % (aexx, hfs, hint))
 
 
 def main():

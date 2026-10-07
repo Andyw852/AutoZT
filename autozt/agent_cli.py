@@ -46,7 +46,7 @@ REQUEST_OPS = set(_service.REQUEST_OPS)
 REQUEST_FIELDS = {
     "op", "scope", "project", "tt", "material", "status", "step", "view", "limit",
     "include_monitoring", "include_retry", "execute", "dry_run", "max_actions",
-    "cursor", "full", "skill", "plan", "actions", "goal", "result_dir", "property",
+    "cursor", "full", "skill", "plan", "actions", "goal", "result_dir", "poscar", "property",
     "temperature", "carrier", "direction", "dimension", "thickness", "source",
 }
 # 最近一次 _status 的数据来源（progress / live、多旧）；随结果一起返回给模型
@@ -534,14 +534,31 @@ def _cmd_research_plan(args: argparse.Namespace) -> Tuple[Dict[str, Any], int]:
 
 
 def _cmd_preflight(args: argparse.Namespace) -> Tuple[Dict[str, Any], int]:
+    """--result-dir：结果回收后的校验；否则 --poscar / -p 材料：执行前的输入检查。"""
     root = getattr(args, "result_dir", None)
-    if not root:
-        return _envelope("preflight", ok=False, error="preflight requires --result-dir", returncode=2), 2
-    data = _science.preflight(root, dimension=getattr(args, "dimension", None),
-                              thickness=getattr(args, "thickness", None),
-                              temperature=getattr(args, "temperature", None),
-                              carrier=getattr(args, "carrier", None))
-    return _envelope("preflight", data), 0
+    common = {"dimension": getattr(args, "dimension", None),
+              "thickness": getattr(args, "thickness", None),
+              "temperature": getattr(args, "temperature", None),
+              "carrier": getattr(args, "carrier", None)}
+    if root:
+        return _envelope("preflight", _science.preflight(root, **common)), 0
+    poscar = getattr(args, "poscar", None)
+    material = getattr(args, "material", None)
+    if not poscar and material:
+        argv = (["-tt", args.tt] if getattr(args, "tt", None) else [])
+        argv += ["-p", material, "list", "--json"]
+        listing, error, rc = _call_json(argv, getattr(args, "config", None))
+        if error:
+            return _envelope("preflight", ok=False, error=error, returncode=rc or 1), rc or 1
+        poscar = _science.poscar_from_listing(listing, material)
+        if not poscar:
+            return _envelope("preflight", ok=False, returncode=1,
+                             error="preflight: 材料 %s 的本地目录下没有 POSCAR" % material), 1
+    if not poscar:
+        return _envelope("preflight", ok=False, returncode=2,
+                         error="preflight 需要 --result-dir（结果校验）或 --poscar / -p 材料"
+                               "（执行前输入检查）"), 2
+    return _envelope("preflight", _science.preflight_inputs(poscar, material=material, **common)), 0
 
 
 def _cmd_results(args: argparse.Namespace) -> Tuple[Dict[str, Any], int]:
@@ -858,6 +875,7 @@ def _request_args(base: argparse.Namespace, request: Mapping[str, Any]
         full=bool(request.get("full", False)),
         skill=request.get("skill"),
         goal=request.get("goal", ""), result_dir=request.get("result_dir"),
+        poscar=request.get("poscar"),
         property=request.get("property"), temperature=request.get("temperature"),
         carrier=request.get("carrier"), direction=request.get("direction"),
         dimension=request.get("dimension"), thickness=request.get("thickness"),
@@ -1093,9 +1111,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--temperature", nargs="*", help="目标温度网格")
     p.add_argument("--carrier", nargs="*", help="目标载流子网格")
 
-    p = sub.add_parser("preflight", help="检查已回收结果的跨文件科学输入一致性（只读）")
+    p = sub.add_parser("preflight", help="执行前检查输入（--poscar 或 -p 材料），"
+                                         "或结果回收后校验结果（--result-dir）；只读")
     _add_context_options(p)
-    p.add_argument("--result-dir", required=True)
+    p.add_argument("--result-dir", help="给出 = 结果校验；不给 = 执行前输入检查")
+    p.add_argument("--poscar", help="执行前输入检查用的 POSCAR（或用 -p 材料）")
     p.add_argument("--dimension", choices=("0D", "1D", "2D", "3D"))
     p.add_argument("--thickness", type=float)
     p.add_argument("--temperature", nargs="*")

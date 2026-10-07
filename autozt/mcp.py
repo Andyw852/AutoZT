@@ -73,11 +73,12 @@ TOOLS = [
     ("schema", "读取完整 JSON 请求/响应/动作 Schema（只读，首次接入调用一次）",
      {"type": "object", "properties": {}, "additionalProperties": False},
      "read", ["schema"]),
-    ("conf_get", "查看某步 step.conf 合并后的最终值（只读）",
+    ("conf_get", "查看某步 step.conf 合并后的最终值（只读）；"
+                 "step 必填，写步骤 label 或序号（如 S1_opt / 1）",
      {"type": "object", "properties": {"tt": {"type": "string"},
                                        "material": {"type": "string"},
                                        "step": {"type": "string"}},
-      "required": ["material"]}, "read", ["conf"]),
+      "required": ["material", "step"]}, "read", ["conf"]),
     ("describe_skill", "读取技能能力目录：步骤、依赖、判据和专属说明（只读）",
      {"type": "object", "properties": {"tt": {"type": "string"},
                                            "detail": {"type": "string",
@@ -92,10 +93,18 @@ TOOLS = [
      {"type":"object", "properties":{"goal":{"type":"string"},"dimension":{"type":"string"},
       "material":{"type":"string"},"temperature":{"type":"array","items":{"type":"number"}},"carrier":{"type":"array","items":{"type":"number"}}}, "required":["goal"],
       "additionalProperties":False}, "read", ["research_plan"]),
-    ("preflight", "检查结果内容、validator、单位、温度/载流子网格、二维厚度和口径（只读）",
-     {"type":"object", "properties":{"result_dir":{"type":"string"},"dimension":{"type":"string"},
-      "thickness":{"type":"number"},"temperature":{"type":"array","items":{"type":"number"}},"carrier":{"type":"array","items":{"type":"number"}}}, "required":["result_dir"],
-      "additionalProperties":False}, "read", ["preflight"]),
+    ("preflight", "执行前：不给 result_dir，按 poscar 或已注册的 material 检查输入"
+     "（结构、维度与真空轴、温度/载流子网格）；"
+     "结果回收后：给 result_dir 校验产物、validator、单位、网格和二维厚度（只读）",
+     {"type": "object", "properties": {
+         "result_dir": {"type": "string", "description": "给出 = 结果校验；不给 = 执行前输入检查"},
+         "poscar": {"type": "string", "description": "输入检查用的结构文件"},
+         "material": {"type": "string", "description": "输入检查：用该材料本地目录下的 POSCAR"},
+         "tt": {"type": "string"}, "dimension": {"type": "string"},
+         "thickness": {"type": "number"},
+         "temperature": {"type": "array", "items": {"type": "number"}},
+         "carrier": {"type": "array", "items": {"type": "number"}}},
+      "additionalProperties": False}, "read", ["preflight"]),
     ("results", "按性质/条件查询带来源路径的结构化结果（只读）",
      {"type":"object", "properties":{"result_dir":{"type":"string"},"property":{"type":"string"},
       "temperature":{"type":"number"},"carrier":{"type":"number"},"direction":{"type":"string"}},
@@ -1075,10 +1084,30 @@ def call_tool(name, args, _internal=False):
             temperature=args.get("temperature"), carrier=args.get("carrier"),
             material=args.get("material")))
     if name == "preflight":
-        return _result("read", data=_science.preflight(
-            args["result_dir"], dimension=args.get("dimension"),
-            thickness=args.get("thickness"), temperature=args.get("temperature"),
-            carrier=args.get("carrier")))
+        if args.get("result_dir"):
+            return _result("read", data=_science.preflight(
+                args["result_dir"], dimension=args.get("dimension"),
+                thickness=args.get("thickness"), temperature=args.get("temperature"),
+                carrier=args.get("carrier")))
+        poscar = args.get("poscar")
+        if not poscar and args.get("material"):
+            rc, out, err = _run(_mat_args({"tt": args.get("tt"), "material": args["material"]})
+                                + ["list", "--json"])
+            listing, parse_error = _json_stdout(out) if rc == 0 else (None, None)
+            if rc != 0 or parse_error:
+                return _result("read", rc=rc or 1,
+                               error=((out or "") + (err or "")).strip()[:4000] or parse_error)
+            poscar = _science.poscar_from_listing(listing, args["material"])
+            if not poscar:
+                return _result("read", rc=1, error="preflight: 材料 %s 的本地目录下没有 POSCAR"
+                                                   % args["material"])
+        if not poscar:
+            return _result("read", rc=1, error="preflight 需要 result_dir（结果校验）"
+                                               "或 poscar / material（执行前输入检查）")
+        return _result("read", data=_science.preflight_inputs(
+            poscar, dimension=args.get("dimension"), thickness=args.get("thickness"),
+            temperature=args.get("temperature"), carrier=args.get("carrier"),
+            material=args.get("material")))
     if name == "results":
         return _result("read", data=_science.query_results(
             args["result_dir"], args["property"], temperature=args.get("temperature"),
@@ -1532,12 +1561,15 @@ def _prompt_get(name, args=None):
                 % (mat, step))
     elif name == "compute-zt":
         text = ("先确认材料、维度（2D 要确认厚度契约）、温度网格和载流子网格。"
-                "严格按 research_plan → preflight → inspect → cycle(execute=false) → "
-                "用户确认 → cycle(execute=true) → results 执行；research_plan、preflight "
-                "和 dry-run 不提交作业，所有执行动作都必须经过 autozt act。")
+                "严格按 research_plan → preflight（不给 result_dir：检查 POSCAR/材料、维度、"
+                "真空轴和网格）→ inspect → cycle(execute=false) → 用户确认 → "
+                "cycle(execute=true) → 作业完成后 preflight(result_dir) 校验结果 → "
+                "results 执行；research_plan、preflight 和 dry-run 不提交作业，"
+                "所有执行动作都必须经过 autozt act。")
     elif name == "run-validated-workflow":
-        text = ("严格按 research_plan → preflight → inspect → cycle(execute=false) → "
-                "用户确认 → cycle(execute=true) → results 执行。所有执行动作都必须经过 "
+        text = ("严格按 research_plan → preflight（执行前，检查输入）→ inspect → "
+                "cycle(execute=false) → 用户确认 → cycle(execute=true) → "
+                "preflight(result_dir)（结果回收后校验）→ results 执行。所有执行动作都必须经过 "
                 "autozt act；dry-run 和 preflight 不提交作业。")
     elif name == "explain-result-provenance":
         text = ("回答数值时逐条引用 results 的 value、unit、method、validator、"

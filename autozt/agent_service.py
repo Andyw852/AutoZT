@@ -229,8 +229,14 @@ def capabilities() -> Dict[str, Any]:
                    "outcomes": ["submitted", "deferred", "skipped_stale", "ok", "failed"]},
         "conversation": {
             "schema_version": "autozt/conversation/1",
-            "sequence": ["research_plan", "preflight", "inspect",
-                          "cycle(dry_run)", "user_confirmation", "cycle(execute)", "results"],
+            "sequence": ["research_plan", "preflight(inputs)", "inspect",
+                          "cycle(dry_run)", "user_confirmation", "cycle(execute)",
+                          "preflight(result_dir)", "results"],
+            "preflight_stages": {
+                "inputs": "before execution, without result_dir: POSCAR/material, dimension, "
+                          "vacuum axis, T/n grids",
+                "results": "after results are recovered, with result_dir: products, validators, "
+                           "units, grids, 2D thickness"},
             "confirmation_boundary": "execution actions may submit jobs; read-only planning and preflight do not",
             "research_plan": {
                 "review_card": "renderable plan with steps, planned_calls and Proceed state",
@@ -301,6 +307,7 @@ def _request_schema(request_ops: Any = None) -> Dict[str, Any]:
             "skill": {"type": "string"}, "plan": {},
             "actions": {"type": "array", "maxItems": protocol.MAX_ACTIONS},
             "goal": {"type": "string"}, "result_dir": {"type": "string"},
+            "poscar": {"type": "string"},
             "property": {"type": "string"}, "direction": {"type": "string"},
             "dimension": {"type": "string"}, "thickness": {"type": "number"},
             "temperature": {}, "carrier": {},
@@ -365,8 +372,9 @@ def schema() -> Dict[str, Any]:
                         "ready_to_execute", "executing", "completed", "blocked"],
             "next_actions": ["provide_inputs", "confirm_plan", "review_preflight",
                               "confirm_execution", "review_result", "inspect_results"],
-            "sequence": ["research_plan", "preflight", "inspect", "cycle(dry_run)",
-                          "user_confirmation", "cycle(execute)", "results"],
+            "sequence": ["research_plan", "preflight(inputs)", "inspect", "cycle(dry_run)",
+                          "user_confirmation", "cycle(execute)", "preflight(result_dir)",
+                          "results"],
             "research_plan_fields": ["plan_id", "plan_summary", "plan_steps",
                                       "review_card", "action_surface"],
         },

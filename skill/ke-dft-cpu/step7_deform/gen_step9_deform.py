@@ -14,6 +14,7 @@ import re
 import shutil
 import subprocess
 import sys
+import time as _time
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import ke_common as kc
@@ -298,6 +299,10 @@ def _reference_kpoints(out, dim, vac_axis, n_sub):
             # [2026-09-24] kz 也一并照抄：三个分量与 step3_uniform 完全一致，
             #   不再由本步 VACUUM_KZ_MIN 决定（根除 S3=3 / S7=1 的轴序不一致）。
             _need = list(_s3)
+            # [V173] 照抄之前先看 S3 本身合不合现行网格规则：旧规则下的 S3（如 CrS₂ 的 15×15×1）照抄过来，
+            #   形变势网格跟着粗，S8/S8.4 也会被 s3_grid_gate 拦下 —— 应先 retry S3，再重生成本步。
+            for _lv, _msg in kc.s3_grid_issues(out.parent, dim):
+                print("[WARN] S7 照抄的 S3 网格不合现行规则：%s —— 先 retry step3_uniform（-> S4），再重生成本步" % _msg)
             if kc.align_kgrid(_need, dim, _axes, quiet=True) != _need:
                 print("[WARN] step3_uniform 面内网格 %s 未对齐高对称点（旧版 S3 生成？）"
                       "—— 建议先 rerun step3_uniform，再重生成本步" % "x".join(str(x) for x in _cp))
@@ -352,6 +357,33 @@ IONRELAX_EDIFFG = "-0.02"
 IONRELAX_NSW = "60"
 
 # ---- [PATCH-IONRELAX] 对 xx±/yy± 4 个形变目录生成 ionrelax/ 子目录 ----
+def _ionrelax_incars(base):
+    """主单点 INCAR -> (弛豫段, 静态段) INCAR 文本。[V168] 单独拿出来：判"已算完的 ionrelax 能不能复用"
+    要拿【现在会写的】静态段跟 ionrelax/vasprun.xml 的回显比，不能只看文件在不在。"""
+    # 弛豫段
+    relax = re.sub(r"IBRION\s*=.*", "IBRION = 2            # 离子弛豫（固定晶格）", base)
+    relax = re.sub(r"NSW\s*=.*", "NSW    = " + IONRELAX_NSW, relax)
+    relax = re.sub(r"EDIFF\s*=.*", "EDIFF  = 1E-6", relax)
+    relax = re.sub(r"LVHAR\s*=.*", "LVHAR  = .FALSE.", relax)
+    relax = re.sub(r"LWAVE\s*=.*", "LWAVE  = .TRUE.", relax)
+    relax = re.sub(r"LCHARG\s*=.*", "LCHARG = .FALSE.", relax)
+    # 力判据：用 IONRELAX_EDIFFG（默认 -0.02）。两种情形都处理：
+    #   段 INCAR 里已有 EDIFFG（继承自模板）-> 覆盖；没有 -> 追加。
+    # 旧代码只在"没有"时追加 -1E-3，等于把一个过严值写死、且没有任何配置出口。
+    if re.search(r"EDIFFG\s*=", relax):
+        relax = re.sub(r"EDIFFG\s*=.*", "EDIFFG = " + IONRELAX_EDIFFG, relax)
+    else:
+        relax = relax.rstrip() + "\nEDIFFG = " + IONRELAX_EDIFFG + "\n"
+    # 静态段
+    stat = re.sub(r"IBRION\s*=.*", "IBRION = -1           # 静态段（弛豫后精确带边）", base)
+    stat = re.sub(r"NSW\s*=.*", "NSW    = 0", stat)
+    stat = re.sub(r"ISTART\s*=.*", "ISTART = 1            # 接弛豫段 WAVECAR", stat)
+    stat = re.sub(r"ICHARG\s*=.*", "ICHARG = 0", stat)
+    if "ISTART" not in stat:
+        stat = stat.rstrip() + "\nISTART = 1\n"
+    return relax, stat
+
+
 def _build_ionrelax(d: Path, encut, subs, submit_body):
     """在 deform-NN 下建 ionrelax/：两段式（弛豫段 IBRION=2 + 静态段 LVHAR）。
 
@@ -372,29 +404,8 @@ def _build_ionrelax(d: Path, encut, subs, submit_body):
     shutil.copy2(str(d / "KPOINTS"), str(ir / "KPOINTS"))
     shutil.copy2(str(d / "POTCAR"), str(ir / "POTCAR"))
 
-    base = (d / "INCAR").read_text(encoding="utf-8")
-    # 弛豫段
-    relax = re.sub(r"IBRION\s*=.*", "IBRION = 2            # 离子弛豫（固定晶格）", base)
-    relax = re.sub(r"NSW\s*=.*", "NSW    = " + IONRELAX_NSW, relax)
-    relax = re.sub(r"EDIFF\s*=.*", "EDIFF  = 1E-6", relax)
-    relax = re.sub(r"LVHAR\s*=.*", "LVHAR  = .FALSE.", relax)
-    relax = re.sub(r"LWAVE\s*=.*", "LWAVE  = .TRUE.", relax)
-    relax = re.sub(r"LCHARG\s*=.*", "LCHARG = .FALSE.", relax)
-    # 力判据：用 IONRELAX_EDIFFG（默认 -0.02）。两种情形都处理：
-    #   段 INCAR 里已有 EDIFFG（继承自模板）-> 覆盖；没有 -> 追加。
-    # 旧代码只在"没有"时追加 -1E-3，等于把一个过严值写死、且没有任何配置出口。
-    if re.search(r"EDIFFG\s*=", relax):
-        relax = re.sub(r"EDIFFG\s*=.*", "EDIFFG = " + IONRELAX_EDIFFG, relax)
-    else:
-        relax = relax.rstrip() + "\nEDIFFG = " + IONRELAX_EDIFFG + "\n"
+    relax, stat = _ionrelax_incars((d / "INCAR").read_text(encoding="utf-8"))
     (ir / "INCAR.relax").write_text(relax, encoding="utf-8", newline="\n")
-    # 静态段
-    stat = re.sub(r"IBRION\s*=.*", "IBRION = -1           # 静态段（弛豫后精确带边）", base)
-    stat = re.sub(r"NSW\s*=.*", "NSW    = 0", stat)
-    stat = re.sub(r"ISTART\s*=.*", "ISTART = 1            # 接弛豫段 WAVECAR", stat)
-    stat = re.sub(r"ICHARG\s*=.*", "ICHARG = 0", stat)
-    if "ISTART" not in stat:
-        stat = stat.rstrip() + "\nISTART = 1\n"
     (ir / "INCAR.static").write_text(stat, encoding="utf-8", newline="\n")
 
     # deform-NN 的 submit.sh 追加 ionrelax 两段（跑完刚性单点后 cd ionrelax 续跑）
@@ -471,6 +482,7 @@ def main():
         pos = d / "POSCAR"
         if not pos.is_file():
             sys.exit("[ERROR] %s 缺 POSCAR" % d)
+        _snap_in = kc.snapshot_inputs(d, ("INCAR",))      # [V168] 覆盖 INCAR 之前
         if ref_kpts is not None:
             # patch_kpts_samefile：subs 里包含 undeformed 自己，而基准 KPOINTS
             #   就生成在那儿——拷到自己身上会抛 SameFileError，跳过即可。
@@ -521,6 +533,13 @@ def main():
         stepconf.apply_incar_file(d / "INCAR", log=_ic_log)
         for _m in _ic_log:
             print("[..] %s" % _m)
+        # [V168] 已算完的单点是不是用现在这份 INCAR 跑的（vasprun.xml 回显）：不是 -> 归档，ck_deform 判未完成、
+        #   进 fan_todo 重算。patch_stale_grid 只管 KPOINTS；以前换了 INCAR（如补 LVHAR）旧 OUTCAR 照样判完成。
+        if kc.archive_if_run_mismatch(d) is None and _snap_in.get("INCAR") is not None \
+                and kc.inputs_changed(d, _snap_in):        # 没有 vasprun 回显：退回 gen 前后的 INCAR 快照
+            _n = kc.archive_stale_outputs(d, "stale-input-" + _time.strftime("%Y%m%d%H%M%S"))
+            if _n:
+                print("[..] %s：INCAR 变了（无 vasprun.xml 可核对）-> 归档旧产物 %d 个" % (d.name, _n))
 
         sub = d / "submit.sh"
         sub.write_text(submit_body.replace(
@@ -594,6 +613,16 @@ def main():
                             _done = False
                     except (OSError, IndexError, ValueError):
                         _done = False   # 读不出就保守重建，不赌
+                if _done:
+                    # [V168] INCAR 也必须一致：拿现在会写的静态段跟 ionrelax/vasprun.xml（静态段的回显）比。
+                    #   主单点 INCAR 换了（如补 LVHAR）而 ionrelax 照旧复用，E1 与真空对齐就混了两套输入。
+                    _why = kc.run_incar_mismatch(
+                        _ionrelax_incars((out / _name / "INCAR").read_text(encoding="utf-8"))[1],
+                        _irp / "vasprun.xml")
+                    if _why:
+                        print("[IONRELAX] %s：已有结果是旧 INCAR 跑的（%s），重建。"
+                              % (_name, "; ".join(_why[:4])))
+                        _done = False
                 if _done:
                     _skipped.append(_name)
                     continue

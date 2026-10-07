@@ -248,9 +248,21 @@ log = ""
 for _f in ('pheasy_f.log', 'pheasy_c.log'):
     if os.path.isfile(_f):
         log += open(_f, encoding='utf-8', errors='ignore').read()
+# 训练/CV 误差从 fit_manifest.json 读（日志里 RFE 系 "best CV RMSE:" 在 "RMSE:" 之前，
+# 正则第一次命中 CV 行，旧代码把 CV 值存进 train 键）。
+_mf = {}
+if os.path.isfile('fit_manifest.json'):
+    try:
+        _mf = json.load(open('fit_manifest.json', encoding='utf-8')).get('metrics') or {}
+    except Exception:
+        _mf = {}
+if _mf.get('rmse') is not None:
+    m['pheasy_rmse_train'] = float(_mf['rmse'])
+if _mf.get('re') is not None:
+    m['pheasy_relative_error'] = float(_mf['re'])
+if _mf.get('rmse_path_mean') is not None:
+    m['pheasy_rmse_cv'] = float(_mf['rmse_path_mean'])
 for _k, _p, _c in (
-        ('pheasy_rmse_eV_per_A', r'\bRMSE:\s*([\d.eE+-]+)', float),
-        ('pheasy_relative_error', r'Relative error:\s*([\d.eE+-]+)', float),
         ('pheasy_worst_force_correlation', r'worst corr=([\d.]+)', float),
         ('pheasy_free_ifcs', r'Free IFC terms:\s*(\d+)', int),
         ('pheasy_best_alpha', r'best alpha=\s*([\d.eE+-]+)', float),
@@ -296,7 +308,7 @@ for _p in sorted(glob.glob('ns_*.npz') + glob.glob('phono3py/ns_*.npz')):
         m['%s_error' % os.path.basename(_p)] = str(_e)
 open('fit_metrics.json', 'w').write(json.dumps(m, ensure_ascii=False, indent=2))
 print('[OK] fit_metrics.json：%s' % json.dumps(
-      {k: m[k] for k in ('pheasy_relative_error', 'pheasy_rmse_eV_per_A',
+      {k: m[k] for k in ('pheasy_relative_error', 'pheasy_rmse_train', 'pheasy_rmse_cv',
                          'fc2max', 'fc3max', 'rasr_applied') if k in m}, ensure_ascii=False))
 PYEOF
 

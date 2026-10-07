@@ -119,6 +119,136 @@ def read_kpoints_mesh(kpoints: Path):
 
 
 # --------------------------------------------------------------------------
+# [V173] S3（AMSET 能带 / 波函数 / 形变势网格的唯一来源）网格是否满足现行规则。
+#   规则在 step3_uniform 的 gen 里（DK_MAX_2D 0.05 / DK_MAX_3D 0.06 Å⁻¹，2D 真空轴 kz ≥ 3），可只在 gen 运行时生效：
+#   旧规则下算完的 S3 一直判完成、不会重新生成，S7 照抄它的网格，S8/S8.4 照用 —— 谁都不查。
+#   CrS₂_hex：S3 还是 08-26 的 15×15×1（面内间距 0.16 Å⁻¹ = 规则的 3.2 倍、kz 只有一层），CrSe₂ 是 48×48×3；
+#   两者 S8.4 的 ADP/DPT 一个 1.7、一个 0.5。kz 只有一层时 AMSET 沿 kz 外推（V8：插值网格一变 ADP 差 30–45%）。
+# [V174] S8.2（DPT 的 m* 直接拟合 S3 网格点）、S8.1（BoltzTraP2 插值 S3）也读这张网格，V173 没管：
+#   CrS₂_hex 重跑 S3（15×15×1 -> 48×48×3）后 m* 0.967/1.009 -> 0.866/0.883，DPT +25%/+31%：
+#   粗网格的拟合窗口吃进了非抛物区，m* 拟重。面内 m* 与真空轴 kz 无关，这两步 check_kz=False。
+# [V175] 还有两处漏洞：
+#   ① S7 只在自己 gen 时照抄 S3 网格。S3 重算后 S7 没跟着重跑，S3 闸门照样通过（S3 是新的）、lineage 也通过
+#      （S7.1 比 S7 新），S8/S8.4 就拿旧粗网格上的形变势去算 —— s7_grid_issues 查 S7 和 S3 是否同一张网格；
+#   ② 闸门只在重新生成时起作用，已经算完的旧结果没人再查，CrS₂ 当初就是这样"收口"的 ——
+#      grid_lineage 给 tools/lineage_check.py 用。
+# --------------------------------------------------------------------------
+S3_DK_MAX = {"2d": 0.05, "3d": 0.06}
+S3_KZ_MIN_2D = 3
+S3_DK_ERR_FACTOR = 2.0          # 面内间距超过规则这么多倍 -> 报错（规则以内的小差别只告警）
+
+
+def _mesh_rule_issues(mesh, s3, dim, check_kz, where):
+    """一张网格（按 S3 的晶胞和维度）是否合现行规则 -> [(level, msg)]；读不到晶胞返回 []。"""
+    import numpy as np
+    pos = s3 / "POSCAR"
+    if not pos.is_file():
+        return []
+    try:
+        dim = dim or read_method_dim(s3 / METHOD_FILE) or resolve_dim_for(pos, "auto")[0]
+        vac = resolve_dim_for(pos, dim)[1] if dim == "2d" else None
+        rec = 2.0 * np.pi * np.linalg.inv(read_lattice_matrix(pos)).T
+    except (OSError, ValueError, IndexError, SystemExit):
+        return []
+    dk = S3_DK_MAX.get(dim, S3_DK_MAX["3d"])
+    out = []
+    for i in range(3):
+        if i == vac:
+            continue
+        sp = float(np.linalg.norm(rec[i])) / max(int(mesh[i]), 1)
+        if sp > S3_DK_ERR_FACTOR * dk:
+            out.append(("error", "%s 第 %d 轴 %d 分：笛卡尔间距 %.3f Å⁻¹，是现行规则 %.2f 的 %.1f 倍"
+                        % (where, i + 1, mesh[i], sp, dk, sp / dk)))
+        elif sp > 1.1 * dk:
+            out.append(("warn", "%s 第 %d 轴 %d 分：笛卡尔间距 %.3f Å⁻¹，比现行规则 %.2f 粗"
+                        % (where, i + 1, mesh[i], sp, dk)))
+    if check_kz and vac is not None and int(mesh[vac]) < S3_KZ_MIN_2D:
+        out.append(("error", "%s 真空轴 kz = %d < %d：AMSET 沿 kz 外推而不是内插"
+                    "（V8：插值网格一变 ADP 差 30–45%%）" % (where, mesh[vac], S3_KZ_MIN_2D)))
+    return out
+
+
+def s3_grid_issues(mat_dir, dim=None, check_kz=True):
+    """材料目录 -> [(level, msg)]，level 为 "error" / "warn"；读不到 S3 的 KPOINTS / POSCAR 返回 []。
+    check_kz=False：只查面内（S8.1 / S8.2 只用面内能带，2D 真空轴 kz 一层不影响它们）。"""
+    s3 = Path(mat_dir) / "step3_uniform"
+    mesh = read_kpoints_mesh(s3 / "KPOINTS")
+    if not mesh:
+        return []
+    return _mesh_rule_issues(mesh, s3, dim, check_kz, "step3_uniform")
+
+
+def s7_grid_issues(mat_dir, dim=None):
+    """[V175] S7 形变子目录（含 ionrelax/）的网格和 S3 不同 -> [(level, msg)]，每种网格一条：
+    S7 这张网格本身不合现行规则 -> error（S3 重算过、S7 没跟着重跑，形变势还在旧粗网格上）；合规只是不同 -> warn。
+    没有 S3 KPOINTS / S7 目录返回 []。"""
+    mat = Path(mat_dir)
+    s3 = mat / "step3_uniform"
+    ref = read_kpoints_mesh(s3 / "KPOINTS")
+    s7 = mat / "step7_deform"
+    if not ref or not s7.is_dir():
+        return []
+    ref = [int(x) for x in ref]
+    diff = {}
+    for kp in sorted(set(s7.glob("*/KPOINTS")) | set(s7.glob("*/ionrelax/KPOINTS"))):
+        m = read_kpoints_mesh(kp)
+        if m and [int(x) for x in m] != ref:
+            diff.setdefault(tuple(int(x) for x in m), []).append(str(kp.parent.relative_to(s7)))
+    out = []
+    for m, dirs in sorted(diff.items()):
+        # [V176] 写事实（哪条规则不合、比 S3 粗还是细），原因只在 S7 确实比 S3 粗时才推断：
+        #   CrS2_ortho 的 S7 是 48×48×1、S3 是 15×15×1 —— S7 面内反而更细，只是 kz = 1；V175 的报错一律写成
+        #   "S3 重算过、S7 没跟着重跑"，agent 照字面理解成了反方向。
+        errs = [msg[len("step7_deform "):].split("：AMSET")[0]
+                for lv, msg in _mesh_rule_issues(m, s3, dim, True, "step7_deform") if lv == "error"]
+        where = ", ".join(dirs[:4]) + (" 等 %d 个" % len(dirs) if len(dirs) > 4 else "")
+        head = "step7_deform 的 %s 是 %s 网格，S3 是 %s" % (where, "×".join(map(str, m)), "×".join(map(str, ref)))
+        if not errs:
+            out.append(("warn", head + "（两张都合现行规则，AMSET 会插值 D(k)；要完全一致就 retry S7 -> S7.1）"))
+            continue
+        hint = ("S7 有轴比 S3 粗：多半是 S3 重算过、S7 没跟着重跑" if any(m[i] < ref[i] for i in range(3))
+                else "S7 每个轴都不比 S3 粗：是 S7 按旧规则自己定的网格（09-24 之前 S7 不照抄 S3）")
+        out.append(("error", "%s；S7 这张网格不合现行规则（%s），形变势 D(k) 是在它上面算的 —— %s"
+                    % (head, "；".join(errs), hint)))
+    return out
+
+
+def grid_lineage(mat_dir):
+    """[V175] tools/lineage_check.py 用 -> [(步骤, 说明)]：只收 error（略粗于规则的告警不算）。
+    gen 的闸门只在重新生成时起作用，已经算完的旧结果只能靠这里查出来。"""
+    inplane = {m for lv, m in s3_grid_issues(mat_dir, check_kz=False) if lv == "error"}
+    probs = [("step3_uniform", m + ("（S4/S7 照抄这张网格，S8/S8.4/S8.1/S8.2 的结果都在它上面）" if m in inplane
+                                    else "（S8/S8.4 的 AMSET 结果受影响）"))
+             for lv, m in s3_grid_issues(mat_dir) if lv == "error"]
+    probs += [("step7_deform", m + "（S7.1 / S8 / S8.4 受影响）") for lv, m in s7_grid_issues(mat_dir) if lv == "error"]
+    return probs
+
+
+def s3_grid_gate(mat_dir, label, allow=False, dim=None, check_kz=True, uses=None, redo=None, with_s7=False):
+    """S8 / S8.4 / S8.2 gen 调：S3 网格不满足现行规则 -> 打印；有 error 且 allow=False -> sys.exit。返回 issues。
+    uses：本步拿这张网格做什么（报错用）；redo：重跑顺序。None = S8/S8.4（AMSET）的说法。
+    with_s7（S8/S8.4）：S7 的网格也要和 S3 一致（s7_grid_issues），不合规同样拦。"""
+    issues = s3_grid_issues(mat_dir, dim, check_kz=check_kz)
+    s7 = s7_grid_issues(mat_dir, dim) if with_s7 else []
+    for lv, msg in issues + s7:
+        print("[%s] %s：%s" % ("ERROR" if lv == "error" and not allow else "WARN", label, msg))
+    if any(lv == "error" for lv, _ in s7) and not any(lv == "error" for lv, _ in issues) and not allow:
+        sys.exit("[ERROR] %s：S3 已是现行网格，但 step7_deform 的网格不合现行规则（见上面几行），"
+                 "形变势 D(k) 是在那张网格上算的，结果不可信。\n"
+                 "        处理：retry step7_deform（会照抄 S3 的网格）-> S7.1 -> 本步。\n"
+                 "        确实要用这套网格（复现旧结果）：本步 step.conf 写 ALLOW_COARSE_S3 = true。" % label)
+    if any(lv == "error" for lv, _ in issues + s7):
+        if not allow:
+            sys.exit("[ERROR] %s：step3_uniform 的网格是旧规则下生成的，%s，结果不可信。\n"
+                     "        处理：retry step3_uniform（现行规则：2D 面内 ≤ %.2f Å⁻¹、kz ≥ %d）-> %s。\n"
+                     "        确实要用这张网格（复现旧结果）：本步 step.conf 写 ALLOW_COARSE_S3 = true。"
+                     % (label, uses or "AMSET 的能带 / 波函数 / 形变势都在这张网格上", S3_DK_MAX["2d"],
+                        S3_KZ_MIN_2D, redo or "S4 -> S7 -> S7.1 -> 本步；S7 会照抄新的 S3 网格"))
+        print("[WARN] %s：ALLOW_COARSE_S3 = true —— 按旧网格继续，结果只作复现/对照" % label)
+    return issues + s7
+
+
+# --------------------------------------------------------------------------
 # [patch_stale_grid-2026-09-23] 网格变了 -> 归档旧产物（S3 / S3b 用）
 #   ck_wavecar 只查 WAVECAR 存不存在、够不够大，**不比对网格**。所以改了网格之后，
 #   旧网格算完的目录仍被判「已完成」，auto/start 不会重算 —— 输入是新网格、产物是旧网格，
@@ -262,6 +392,168 @@ def finalize_stale_inputs(cwd, outdir, step, snap, n_grid_archived=0):
     elif fresh:
         down = invalidate_downstream(cwd, step, "%s 目录是新建的（rerun）" % step)
     return changed, n, down
+
+
+# --------------------------------------------------------------------------
+# [V168] 产物是不是用【现在的】INCAR 跑出来的：拿 vasprun.xml 的 <incar>（VASP 读到的 INCAR 原文键）
+#   和 <parameters>（含默认值的生效参数）跟现在的 INCAR 比。
+#   snapshot_inputs 只能在 gen 覆盖输入之前拍快照；输入已经被上一次 gen 换掉、旧产物还在时就比不出来了
+#   （CrS₂ S7：retry 换上带 LVHAR 的新 INCAR，undeformed/deform-05..08 的旧 OUTCAR 照样判完成、
+#   不进 fan_todo，永远不重算，S7.1 读不到 LOCPOT）——这时只有运行时的回显能说明问题。
+#   比较按语义：并行/标签键（_INCAR_NONPHYS）不算；n*x 展开；T/.TRUE. 等价；数值按相对 1e-6
+#   且容忍 vasprun 定点 8 位小数的舍入；字符串大小写不敏感、前缀相同即算一致（VASP 只认前几个字母，
+#   <parameters> 里的 PREC 写作 "accura"）。新 INCAR 里有、VASP 两处都没回显的键（VASP 不认识）跳过。
+# --------------------------------------------------------------------------
+_VASPRUN_HEAD_MAX = 64 * 1024 * 1024
+# 只决定"写不写某个输出文件"、不影响 SCF 结果的键：只有新 INCAR 要了旧运行没给的输出才算变化
+#   （补 LVHAR 要 LOCPOT -> 要重算；关掉 LWAVE -> 旧产物照用）。
+_INCAR_OUTPUT_ONLY = {"LWAVE", "LCHARG", "LVHAR", "LVTOT", "LELF", "LORBIT", "LAECHG"}
+_XML_ITEM = re.compile(r"<(i|v)\b([^>]*)>(.*?)</\1>", re.S)
+_XML_NAME = re.compile(r'name="([^"]+)"')
+
+
+def _vasprun_incar(vasprun):
+    """vasprun.xml -> (<incar> 字典, <parameters> 字典)；没有 <incar> 返回 (None, None)。只读到 </parameters>。"""
+    buf = ""
+    try:
+        with open(vasprun, encoding="utf-8", errors="ignore") as f:
+            while len(buf) < _VASPRUN_HEAD_MAX:
+                chunk = f.read(1 << 20)
+                if not chunk:
+                    break
+                buf += chunk
+                if "</parameters>" in buf:
+                    break
+    except OSError:
+        return None, None
+
+    def block(tag):
+        i = buf.find("<%s>" % tag)
+        j = buf.find("</%s>" % tag, i + 1) if i >= 0 else -1
+        return buf[i:j] if j > i else None
+
+    def items(txt):
+        d = {}
+        for m in _XML_ITEM.finditer(txt or ""):
+            n = _XML_NAME.search(m.group(2))
+            if n:
+                d.setdefault(n.group(1).upper(), m.group(3).strip())
+        return d
+
+    inc = block("incar")
+    if inc is None:
+        return None, None
+    return items(inc), items(block("parameters"))
+
+
+def _incar_tokens(v):
+    out = []
+    for t in str(v).replace(",", " ").split():
+        n, star, x = t.partition("*")
+        if star and n.isdigit() and x:
+            out.extend([x] * int(n))
+        else:
+            out.append(t)
+    return out
+
+
+def _incar_atom(t):
+    s = t.strip().strip("'\"").lower()
+    if s in (".true.", "true", "t", ".t."):
+        return True
+    if s in (".false.", "false", "f", ".f."):
+        return False
+    try:
+        return float(s.replace("d", "e"))
+    except ValueError:
+        return s
+
+
+def _incar_same(a, b):
+    ta, tb = _incar_tokens(a), _incar_tokens(b)
+    if len(ta) != len(tb):
+        return False
+    for x, y in zip(ta, tb):
+        x, y = _incar_atom(x), _incar_atom(y)
+        if isinstance(x, bool) or isinstance(y, bool):
+            if x is not y:
+                return False
+        elif isinstance(x, float) and isinstance(y, float):
+            if abs(x - y) > max(1e-6 * max(abs(x), abs(y)), 5e-9):
+                return False
+        elif isinstance(x, str) and isinstance(y, str):
+            if not (x.startswith(y) or y.startswith(x)):
+                return False
+        else:
+            return False
+    return True
+
+
+def run_incar_mismatch(incar_text, vasprun):
+    """现在的 INCAR 文本 vs 那次运行的 vasprun.xml 回显 -> 变了的键列表 ["LVHAR: F -> .TRUE.", ...]。
+
+    vasprun.xml 读不到 / 没有 <incar>（没跑、跑到一半就挂）-> None（判不了，调用方按原逻辑走）。"""
+    old, eff = _vasprun_incar(vasprun)
+    if old is None:
+        return None
+    new = {k: v for k, v in parse_incar(incar_text).items() if k not in _INCAR_NONPHYS}
+    diff = []
+    for k, v in sorted(new.items()):
+        ov = old.get(k, (eff or {}).get(k))
+        if ov is None:
+            continue
+        if _incar_same(v, ov):
+            continue
+        if k in _INCAR_OUTPUT_ONLY and all(_incar_atom(x) in (False, 0.0) for x in _incar_tokens(v)):
+            continue                                       # 新 INCAR 不要这个输出了：旧产物照用
+        diff.append("%s: %s -> %s" % (k, ov, v))
+    for k in sorted(set(old) - set(new) - _INCAR_NONPHYS - _INCAR_OUTPUT_ONLY):
+        diff.append("%s: %s -> (删除)" % (k, old[k]))
+    return diff
+
+
+def archive_if_run_mismatch(d, incar_text=None, vasprun_name="vasprun.xml", label=None):
+    """目录 d 里已有的产物不是现在这份 INCAR 跑的 -> 归档 *.stale-input-<时间>。
+
+    返回变了的键（一致 -> []；没有 vasprun.xml 回显、判不了 -> None）。"""
+    import time as _t
+    d = Path(d)
+    if incar_text is None:
+        p = d / "INCAR"
+        if not p.is_file():
+            return None
+        incar_text = p.read_text(errors="ignore")
+    diff = run_incar_mismatch(incar_text, d / vasprun_name)
+    if not diff:
+        return diff
+    n = archive_stale_outputs(d, "stale-input-" + _t.strftime("%Y%m%d%H%M%S"))
+    print("[..] %s：已有产物是旧 INCAR 跑的（%s%s）-> 归档 %d 个，本目录会重算"
+          % (label or d.name, "; ".join(diff[:4]), "…" if len(diff) > 4 else "", n))
+    return diff
+
+
+# [V169] AMSET 形变势的"芯能级参考"（deformation.h5）有两种来源（amset/deformation/io.py get_reference_energy）：
+#   首选 OUTCAR 的各原子核处平均静电势块（"the norm of the test charge is"）；没有这块（ICORELEVEL=1 时 VASP 不写）
+#   就**静默**改用 1s 芯能级本征值（元素依赖、非刚性，模板注释：会把 E1 压到 ~0.3 eV 量级）。
+#   两种在构型之间混用时，参考差是两种量之差，形变势没有物理意义；全是 1s 时也不是 AMSET 的标准口径。
+def outcar_core_ref_kind(outcar):
+    """OUTCAR -> "avg_core"（平均静电芯势）/ "1s"（只有芯能级本征值）/ None（两者都没有或读不了）。"""
+    import gzip
+    p = Path(outcar)
+    if not p.is_file() and Path(str(p) + ".gz").is_file():
+        p = Path(str(p) + ".gz")
+    has_1s = False
+    try:
+        opener = gzip.open if p.suffix == ".gz" else open
+        with opener(p, "rt", encoding="utf-8", errors="ignore") as f:
+            for ln in f:
+                if "the norm of the test charge is" in ln:
+                    return "avg_core"
+                if "the core state eigen" in ln:
+                    has_1s = True
+    except OSError:
+        return None
+    return "1s" if has_1s else None
 
 
 # 下游关系（与 skill.yaml 的 needs 对应）。mode="link"：下游靠软链引用上游产物
@@ -2049,3 +2341,46 @@ def resolve_func(prev_dir: Path, setting, step_name, drop_d3=False,
     print("[..] %s：泛函 %s（来源：%s）-> GGA=%s IVDW=%s"
           % (step_name, eff, src, m["GGA"], m["IVDW"] or "off"))
     return eff, {"GGA": m["GGA"], "VDW_LINE": m["VDW_LINE"]}
+
+
+# --------------------------------------------------------------------------
+# [V165] 杂化泛函参数核对：Si 的 S2.3 是 HFSCREEN = 0.11（HSE06 的 0.2 Å⁻¹ 换成 bohr⁻¹ 才是 0.106），
+#   屏蔽变弱 -> 带隙 1.340 eV（标准 HSE06 是 1.091），进了 band_summary、S8 的剪刀差和手稿的表，一路没人报警。
+#   VASP 的 HFSCREEN 单位是 Å⁻¹：HSE06/HSEsol = 0.2，HSE03 = 0.3。
+# --------------------------------------------------------------------------
+HYBRID_STD = {(0.25, 0.2): "HSE06/HSEsol", (0.25, 0.3): "HSE03"}
+
+
+def hybrid_params(incar):
+    """INCAR -> {"lhfcalc", "aexx", "hfscreen", "label", "standard", "warning"}；读不了或没开杂化 -> None。"""
+    try:
+        text = Path(incar).read_text(errors="ignore")
+    except OSError:
+        return None
+    kv = {}
+    for ln in text.splitlines():
+        ln = ln.split("#", 1)[0].split("!", 1)[0]
+        for part in ln.split(";"):
+            if "=" in part:
+                k, v = part.split("=", 1)
+                kv[k.strip().upper()] = v.strip()
+    if not kv.get("LHFCALC", "").upper().lstrip(".").startswith("T"):
+        return None
+
+    def _f(key, default):
+        try:
+            return float(kv[key].split()[0])
+        except (KeyError, ValueError, IndexError):
+            return default
+    aexx, hfs = _f("AEXX", 0.25), _f("HFSCREEN", 0.0)
+    std = HYBRID_STD.get((round(aexx, 4), round(hfs, 4)))
+    out = {"lhfcalc": True, "aexx": aexx, "hfscreen": hfs, "standard": bool(std),
+           "label": std or ("PBE0 型（不屏蔽）" if hfs == 0 else "非标准杂化（AEXX=%g, HFSCREEN=%g Å⁻¹）" % (aexx, hfs)),
+           "warning": None}
+    if not std and hfs > 0:
+        hint = ""
+        if 0.09 <= hfs <= 0.12:
+            hint = "；%g 像是 HSE06 的 bohr⁻¹ 值（0.106），VASP 的 HFSCREEN 单位是 Å⁻¹，HSE06 应写 0.2" % hfs
+        out["warning"] = ("★ 杂化参数不是标准 HSE06（AEXX=0.25, HFSCREEN=0.2 Å⁻¹）：AEXX=%g, HFSCREEN=%g%s。"
+                          "带隙会随之改变；若不是有意为之，查 step.conf 的 [incar] 覆盖" % (aexx, hfs, hint))
+    return out
