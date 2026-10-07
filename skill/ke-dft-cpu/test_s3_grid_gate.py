@@ -108,6 +108,15 @@ class S7GridTests(unittest.TestCase):                                   # [V175]
             self.assertEqual(len(kc.s3_grid_gate(d, "S8.4", allow=True, with_s7=True)), 1)
             self.assertEqual(kc.s3_grid_gate(d, "S8.2", check_kz=False), [])          # S8.2 不看 S7
 
+    def test_s7_finer_but_kz1_is_not_blamed_on_s3(self):               # [V176] CrS2_ortho 那种
+        iss = kc.s7_grid_issues(_s7(_mat(3.04, 20, (15, 15, 1)), (48, 48, 1)))   # S3 一直没动，S7 面内更细、kz 一层
+        self.assertEqual([lv for lv, _ in iss], ["error"])
+        self.assertIn("真空轴 kz = 1 < 3", iss[0][1])
+        self.assertIn("S7 按旧规则自己定的网格", iss[0][1])
+        self.assertNotIn("没跟着重跑", iss[0][1])
+        iss = kc.s7_grid_issues(_s7(_mat(3.04, 20, (48, 48, 3)), (48, 48, 1)))   # S3 重算到 kz = 3，S7 还是一层
+        self.assertIn("多半是 S3 重算过、S7 没跟着重跑", iss[0][1])
+
     def test_same_or_compliant_mesh(self):
         self.assertEqual(kc.s7_grid_issues(_s7(_mat(3.04, 20, (48, 48, 3)), (48, 48, 3))), [])
         iss = kc.s7_grid_issues(_s7(_mat(3.04, 20, (48, 48, 3)), (54, 54, 3)))

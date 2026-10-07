@@ -196,13 +196,20 @@ def s7_grid_issues(mat_dir, dim=None):
             diff.setdefault(tuple(int(x) for x in m), []).append(str(kp.parent.relative_to(s7)))
     out = []
     for m, dirs in sorted(diff.items()):
-        bad = any(lv == "error" for lv, _ in _mesh_rule_issues(m, s3, dim, True, "step7_deform"))
+        # [V176] 写事实（哪条规则不合、比 S3 粗还是细），原因只在 S7 确实比 S3 粗时才推断：
+        #   CrS2_ortho 的 S7 是 48×48×1、S3 是 15×15×1 —— S7 面内反而更细，只是 kz = 1；V175 的报错一律写成
+        #   "S3 重算过、S7 没跟着重跑"，agent 照字面理解成了反方向。
+        errs = [msg[len("step7_deform "):].split("：AMSET")[0]
+                for lv, msg in _mesh_rule_issues(m, s3, dim, True, "step7_deform") if lv == "error"]
         where = ", ".join(dirs[:4]) + (" 等 %d 个" % len(dirs) if len(dirs) > 4 else "")
-        out.append(("error" if bad else "warn",
-                    "step7_deform 的 %s 是 %s 网格，S3 是 %s%s" % (
-                        where, "×".join(map(str, m)), "×".join(map(str, ref)),
-                        "，而且不合现行规则：S3 重算过、S7 没跟着重跑，形变势 D(k) 还在旧粗网格上" if bad else
-                        "（两张都合现行规则，AMSET 会插值 D(k)；要完全一致就 retry S7 -> S7.1）")))
+        head = "step7_deform 的 %s 是 %s 网格，S3 是 %s" % (where, "×".join(map(str, m)), "×".join(map(str, ref)))
+        if not errs:
+            out.append(("warn", head + "（两张都合现行规则，AMSET 会插值 D(k)；要完全一致就 retry S7 -> S7.1）"))
+            continue
+        hint = ("S7 有轴比 S3 粗：多半是 S3 重算过、S7 没跟着重跑" if any(m[i] < ref[i] for i in range(3))
+                else "S7 每个轴都不比 S3 粗：是 S7 按旧规则自己定的网格（09-24 之前 S7 不照抄 S3）")
+        out.append(("error", "%s；S7 这张网格不合现行规则（%s），形变势 D(k) 是在它上面算的 —— %s"
+                    % (head, "；".join(errs), hint)))
     return out
 
 
@@ -226,8 +233,8 @@ def s3_grid_gate(mat_dir, label, allow=False, dim=None, check_kz=True, uses=None
     for lv, msg in issues + s7:
         print("[%s] %s：%s" % ("ERROR" if lv == "error" and not allow else "WARN", label, msg))
     if any(lv == "error" for lv, _ in s7) and not any(lv == "error" for lv, _ in issues) and not allow:
-        sys.exit("[ERROR] %s：S3 已是现行网格，但 step7_deform 还是旧的粗网格（S3 重算后 S7 没跟着重跑），"
-                 "形变势 D(k) 还在旧网格上，结果不可信。\n"
+        sys.exit("[ERROR] %s：S3 已是现行网格，但 step7_deform 的网格不合现行规则（见上面几行），"
+                 "形变势 D(k) 是在那张网格上算的，结果不可信。\n"
                  "        处理：retry step7_deform（会照抄 S3 的网格）-> S7.1 -> 本步。\n"
                  "        确实要用这套网格（复现旧结果）：本步 step.conf 写 ALLOW_COARSE_S3 = true。" % label)
     if any(lv == "error" for lv, _ in issues + s7):
