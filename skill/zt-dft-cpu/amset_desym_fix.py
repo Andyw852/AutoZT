@@ -1,1 +1,0 @@
-../ke-dft-cpu/step8.4_amset2d/amset_desym_fix.py

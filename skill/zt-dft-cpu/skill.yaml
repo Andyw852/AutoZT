@@ -1,428 +1,100 @@
 # =============================================================================
-# skill/zt-dft-cpu/skill.yaml —— 热电优值 ZT 全流程（DFT/CPU）
+# skill/zt-dft-cpu/skill.yaml —— 热电优值 ZT = S²σT / (κ_e + κ_L)（组合技能）
 #
-# ZT = S²σT / (κ_e + κ_L)
-#   · S / σ / κ_e ← 电子输运段（AMSET，复用 ke-dft-cpu 的全套步骤）
-#   · κ_L         ← 晶格热导率段（phono3py BTE，复用 kl-dft-cpu 的全套步骤）
-#   · ZT 汇总     ← 本技能唯一的新步骤 step20_zt（run: gen，读上面两段产物）
+# ★ 装配方式（2026-10 起）：本技能【只有一个步骤】S20_zt。电子输运和晶格热导率不再
+#   在本技能里重抄一遍，而是由同一个材料目录下的两个上游技能各自计算：
+#     · ke-dft-cpu  → <材料>/ke-dft-cpu/  …  S8_kappa（AMSET：S/σ/κ_e）
+#     · kl-dft-cpu  → <材料>/kl-dft-cpu/  …  S6_kappa（phono3py/ShengBTE：κ_L）
+#   上游技能怎么改（换引擎、修 bug、加步骤），ZT 自动跟着用，没有副本漂移。
+#   （以前这里抄了一份两段的步骤定义 + 符号链接，kl 段一直停在旧引擎上。）
 #
-# ★ 装配方式（本技能是「拼」出来的组合技能，**不复制任何上游脚本/模板**）：
-#   本技能目录里除 skill.yaml / step.conf / step20_zt/ 之外，全是
-#   【指向上游技能目录的符号链接】。例如 ln -s ../ke-dft-cpu/step1_opt step1_opt：
-#     ke 段：step1_opt、step2_bandgap、step3_uniform、step4_wave、step5_dielect、
-#            step6_elastic、step7_deform、step8_amset → ../ke-dft-cpu/<同名>
-#            （另加 ke_common.py、discriminant_common.py、incar_0d.tpl 三个
-#              "住在技能根/公共池、按 basename 查找" 的文件链接）
-#     kl 段：step1_std_opt、step2_static、step3_nac、step4_disp、step5_fc、
-#            step5_phonon_plot、step6_kappa → ../kl-dft-cpu/templates/<同名>
-#            （kl 的 gen 脚本在 kl 技能根，所以 kl 段步骤写 src: ../kl-dft-cpu）
-#   为什么用软链而不是复制：autozt 的资源查找链 find_asset / step_conf_sources
-#   只在【本技能目录】下按 <技能>/<src>、<技能>/<template_dir>/<步骤名> 两级找文件
-#   （report.py:441-490、703-721；template_dir 只有类型级、没有步骤级）。
-#   软链让这两级直接穿透到上游目录，于是 gen 脚本、模板、gen_need 依赖，
-#   以及 [skill 默认] / [skill 默认(本步)] 两层 step.conf 全部按【上游原样】命中；
-#   上游改了脚本，本技能立刻跟着改，不存在副本漂移。
-#   已用 autozt 自身的 find_asset/step_conf_sources 全量核对：24 个步骤 0 缺件
-#   （见 README「装配原理与自检」）。
-#   代价：本技能不能脱离同目录下的 ke-dft-cpu / kl-dft-cpu 单独安装。
-#   注意：远端是【按内容推送】的 —— 软链只影响本地查找，超算上落的是真文件。
+#   给一个结构就能跑完：
+#     autozt -tt zt-dft-cpu -p <材料> register --poscar POSCAR   # 同时 init ke/kl
+#     autozt -p <材料> start                                      # 三个技能一起推进
+#   S20_zt 在 ke/kl 的结果拉回本地之前一直是 WAIT（任务图里写着在等哪份结果）。
 #
-# ★ 远端目录布局：<work_dir>/<材料>/zt-dft-cpu/<步骤名>/ —— 两段链路的所有
-#   步骤都落在这一个技能子目录下，因此上游 gen 脚本里的相对路径
-#   （"step1_opt"、"step5_fc"、"../step2_bandgap/step2.2_pbe_plot" …）全部照旧成立。
-#   注意：ke 段与 kl 段各自有一份【结构优化】（step1_opt / step1_std_opt，同一个
-#   gen 脚本），这是上游技能的既有设计（ke 的 S3 认 step1_opt、kl 的 S2 只认
-#   step1_std_opt），本技能原样保留 —— 多花一次弛豫，换取两段链路与独立跑
-#   ke-dft-cpu / kl-dft-cpu 时【逐字一致】。
+# ★ 同名材料 / 旧结果不会被误读：needs_results 按【本材料的本地目录】找上游结果，
+#   不按材料名；每份拉回的结果带 autozt 写的来源戳 .autozt_origin.json（材料目录 +
+#   POSCAR sha256），属于别的材料目录、或结构改过之后的旧结果一律不算。选中的结果
+#   在 gen 时推到远端 zt-dft-cpu/inputs/<键>/（附 source.json），S20 只读这里，
+#   并再核一次三份输入是同一个材料、同一个结构。
+#
+#   κ_L 的来源按下面列表的顺序取第一个合格的：kl-dft-cpu > kl-mlff-cpu >
+#   kl-mlff-gpu > fit-fc-thermal（项目里可覆盖 needs_results 改顺序）。
 # =============================================================================
 schema: 2
 name: zt-dft-cpu
-desc: 热电优值 ZT 全流程(电子输运 + 晶格热导 + ZT 汇总)
-version: "0.1"
-checks: ../_common/checks_relax.py   # 公共池里的私有判据（relax_injob）
+desc: 热电优值 ZT（组合 ke-dft-cpu 电子输运 + kl-dft-cpu 晶格热导 → ZT 汇总）
+version: "0.2"
 
 template_layout: per_step
-template_dir: "."                    # 步骤资源在技能根（软链穿透到上游目录）
+template_dir: "."
 
 defaults:
   hpc: jzzn
   skill_subdir: true
 
-# 两段链路的 fetch 清单并集 + 本技能自己的产物
-fetch_files: [INCAR, POSCAR, CONTCAR, POTCAR, KPOINTS, KPOINTS_OPT, kpath.json,
-              submit.sh, OUTCAR, EIGENVAL, vasprun.xml, queue.out, queue.err,
-              workflow_method.txt, band_summary.json, settings.yaml,
-              deformation.h5, deformation_vac.h5, band_edges.json,
-              transport.json, amset.log,
-              BORN, provenance.json, kl_params.txt, phono3py_disp.yaml,
-              fc2.hdf5, fc3.hdf5, phonon_summary.json, kappa_summary.json,
-              thickness_2d.json, phono3py_kappa.log,
-              phonon_plot_summary.json, band_nac.yaml, band_nonac.yaml,
-              band_nac.dat, band_nonac.dat, band_nac.png, band_nonac.png,
-              band_nac_lowfreq.png, band_nonac_lowfreq.png,
-              zt_summary.json, zt_summary.txt, zt_vs_T.png, zt_vs_doping.png]
+# register 时一并 init 的上游技能（同一个材料目录，各自计算）
+companion_skills: [ke-dft-cpu, kl-dft-cpu]
+
+fetch_files: [zt_summary.json, zt_summary.txt, zt_vs_T.png, zt_vs_doping.png,
+              zt_heatmap.png, zt_components.png, inputs]
 
 steps:
-  # ★ 电子输运段（S1_opt…S8_kappa_e）整体放在 optional_steps.electronic 里，
-  #   默认开启；关掉它 = 只跑晶格段 + ZT 汇总（电子输运用同材料已有的 ke-dft-cpu 结果，
-  #   见 README「只算晶格段 + 汇总」）。下面只留晶格段与汇总步。
-
-
-  # ★ 晶格热导段（SK1_opt…SK6_kappa）整体放在 optional_steps.lattice 里，默认开启；
-  #   关掉它 = 只跑电子段 + ZT 汇总（κ_L 用同材料已有的 kl-dft-cpu / kl-mlff-* 结果），
-  #   两个段都关掉 = 只跑 ZT 汇总步（见 README「只出 ZT 汇总」）。
-
-  # ===========================================================================
-  # 第 3 段：ZT 汇总（本技能唯一的新步骤）
-  #   ZT(T, n) = S²σT/(κ_e + κ_L)；读 step8_amset/transport.json 与
-  #   step6_kappa/kappa_summary.json，出 zt_summary.json + 两张图。
-  # ===========================================================================
   - {seq: 20, name: step20_zt, label: S20_zt,
      src: step20_zt, template_dir: ".",
      check: plot, run: gen, done_marker: zt_summary.json,
-     gen: gen_step20_zt.py, gen_need: [zt_common.py], fetch_all: true,
-     needs: ["step8_amset", "step6_kappa"]}
-
-# =============================================================================
-# 可选步组（与上游技能一一对应；关掉方式：项目 project_setting 里写
-#   <组名>: false，例如 bandgap_hse: false / nac: false）
-# =============================================================================
-optional_steps:
-  # ---------------------------------------------------------------------------
-  # electronic：电子输运段（ke-dft-cpu 链路）。默认开。
-  #   关掉（项目 project_setting 或 tf_*.yaml 里写 electronic: false）= 只跑晶格段
-  #   与 ZT 汇总步；此时 S20_zt 的 needs 里 step8_amset 不存在，autozt 会【忽略
-  #   缺失依赖】(_dag_recompute)，于是 S20_zt 只等 step6_kappa，transport.json
-  #   走兄弟技能兜底（../ke-dft-cpu/step8_amset/transport.json）。
-  #   bandgap_steps / bandgap_hse 两个子组的锚点是本组的步骤，本组关掉时它们不注入。
-  # ---------------------------------------------------------------------------
-  electronic:
-    default: true
-    steps:
-      - {seq: 1, name: step1_opt, label: S1_opt,
-         src: step1_opt,
-         check: relax_injob, gen: gen_step1_std_opt.py, contcar_to_poscar: true,
-         gen_need: [ke_common.py, relax_common.py, method_select.py, mol_common.py, incar_0d.tpl, submit_std_0d.tpl, dim_common.py, stepconf.py, step.conf, check_common.py, step1_check_and_resubmit.py, thickness_2d.py, vdw_radii.py,
-                    incar_2d.tpl, incar_3d.tpl, submit_std_2d.tpl, submit_std_3d.tpl]}
-
-      - {seq: 3, name: step3_uniform, label: S3_uniform,
-         src: step3_uniform,
-         check: wavecar, gen: gen_step5_uniform.py,
-         gen_need: [stepconf.py, step.conf, ke_common.py, dim_common.py, check_common.py,
-                    incar_uniform_2d.tpl, incar_uniform_3d.tpl,
-                    submit_std_2d.tpl, submit_std_3d.tpl],
-         needs: ["step1_opt"]}
-
-      - {seq: 4, name: step4_wave, label: S4_wave,
-         src: step4_wave,
-         check: marker, marker: "wavefunction.h5:", gen: gen_step6_wave.py,
-         gen_need: [stepconf.py, step.conf, ke_common.py, submit_amset.tpl],
-         needs: ["step3_uniform"]}
-
-      - {seq: 5, name: step5_dielect, label: S5_dielect,
-         src: step5_dielect,
-         check: marker, marker: "OUTCAR:MACROSCOPIC STATIC DIELECTRIC TENSOR",
-         gen: gen_step8_dielect.py,
-         gen_need: [stepconf.py, step.conf, ke_common.py, dim_common.py, check_common.py,
-                    discriminant_common.py,
-                    incar_dfpt_2d.tpl, incar_dfpt_3d.tpl,
-                    submit_std_2d.tpl, submit_std_3d.tpl],
-         needs: ["step1_opt"]}
-
-      - {seq: 5.1, name: step5_dielect_validate, label: S5.1_dievalid,
-         src: step5_dielect,
-         check: plot, run: gen, done_marker: dielectric_check.json, strict_done_marker: true,
-         # V136：strict_done_marker —— 只有 status=done（校验通过）才算完成；S5 的 OUTCAR 变了（sha256）自动作废。
-         #   此前只看文件在不在，ok=false 也判完成（P1_Mo-MoS2 的 ε 全 NaN，状态表是 OK）。
-         # --json 指到本步目录（脚本默认写 step5_dielect/，那是 DFPT 步的目录）：
-         # autozt 在本步目录找 done_marker，不指就永远 error。
-         gen: "validate_dielectric.py --json step5_dielect_validate/dielectric_check.json",
-         gen_need: [], fetch_all: true,
-         needs: ["step5_dielect"]}
-
-      - {seq: 6, name: step6_elastic, label: S6_elastic,
-         src: step6_elastic,
-         check: marker, marker: "OUTCAR:TOTAL ELASTIC MODULI",
-         gen: gen_step2_elastic.py,
-         gen_need: [stepconf.py, step.conf, ke_common.py, dim_common.py, check_common.py, step2_check_and_resubmit.py,
-                    submit_std_2d.tpl, submit_std_3d.tpl],
-         needs: ["step1_opt"]}
-
-      - {seq: 7, name: step7_deform, label: S7_deform,
-         src: step7_deform,
-         check: deform, fanout: "*deform*", gen: gen_step9_deform.py,
-         gen_need: [stepconf.py, step.conf, ke_common.py, dim_common.py, incar_deform_2d.tpl, incar_deform_3d.tpl,
-                    submit_std_2d.tpl, submit_std_3d.tpl],
-         needs: ["step1_opt"]}
-
-      - {seq: 7.1, name: step7b_deform_read, label: S7.1_read,
-         src: step7_deform/step7b_read,
-         check: plot, run: gen, done_marker: deformation.h5,
-         # nspin_norm_fix.py（2026-09-21 起 ke 的 S7.1 嵌入脚本 import 它，zt 一直漏声明 -> S7.1 必
-         #   ImportError，2026-09-29 V121 复核时发现）与 dp_symmetrize.py（V121）：显式声明 + 根目录软链。
-         gen: gen_step9b_deform_read.py, gen_need: [ke_common.py, nspin_norm_fix.py, dp_symmetrize.py], fetch_all: true,
-         needs: ["step7_deform"]}
-
-      - {seq: 8, name: step8_amset, label: S8_kappa_e,
-         src: step8_amset,
-         check: marker, marker: "transport.json:thermal_conductivity",
-         gen: gen_step10_amset.py,
-         # overlap_preflight.py（2026-09-18）：ke 的 submit_amset 命令里写着
-     # 'python overlap_preflight.py --in-job || exit 1'，而 ke 自己的 S8 gen_need 没声明它
-     # （在 ke 单技能里靠 basename 递归兜底能碰巧找到，本技能靠软链装配找不到）→
-     # 不推这个文件，作业一起来就会秒失败。这里显式声明 + 根目录软链。
-     # fermi_window_check.py（2026-09-28）：同款问题，而且**更隐蔽** —— ke 的 2026-09-28
-     # 把费米能级窗口自检挂在作业链**末尾**（AMSET 跑完之后），漏推这个文件会让作业白跑
-     # 几个小时才失败。同样显式声明 + 根目录软链。
-     # amset_desym_fix.py（V115，2026-09-28）：ke 的 S8 现在用 python -c 入口 import 这个插件
-     # （AZ_DESYM_FIX 未设时不打补丁 = 原行为）。同 fermi_window_check：显式声明 + 根目录软链，
-     # 否则 zt 的 S8 找不到它。dim_common.py：ke_common 顶层 import 它，gen 会一起复制进运行目录。
-     # amset_fermi_fix.py（V132）：S8 的 python -c 也 import 求费米能级的稳健化插件，同样显式声明 + 根目录软链。
-     gen_need: [stepconf.py, step.conf, ke_common.py, dim_common.py, submit_amset.tpl, vdw_radii.py,
-                discriminant_common.py, overlap_preflight.py, fermi_window_check.py,
-                amset_desym_fix.py, amset_ir_fix.py, amset_fermi_fix.py],
-         fetch_all: true,
-         needs: ["step4_wave", "step5_dielect", "step6_elastic", "step7b_deform_read",
-                 "step2_bandgap/step2.2_pbe_plot", "step2_bandgap/step2.3_hse_plot"]}
-
-
-  # ---------------------------------------------------------------------------
-  # wavefunction_full：ke 的【全网格】波函数对照分支（默认关）。
-  #   S3b 与 S3_uniform 逐行等价，唯一实质差别是 ISYM = -1（不按对称性约化 k 点），
-  #   产出完整网格 WAVECAR → S4b amset wave → 完整网格 wavefunction.h5；
-  #   S8_kappa_e 在项目 step.conf 写 WAVEFUNCTION_FULL = true 时改读它，AMSET 走
-  #   from_data（不再去对称化）—— 这就是 V22.8 / V25 的"三维单变量对照"。
-  #   S3c 是附带的离网格 k 点诊断（V22.9，两段式，成本约全网格 1/16）。
-  #   ★ 2026-09-29（V118）：相位补丁默认开后本组对非 SOC 材料不再有生产用途，S3b gen 会拦下
-  #     不需要的全网格（FULL_GRID_FORCE = true 放行），见 ke-dft-cpu/skill.yaml 同名组。
-  #   ★ 锚点 step1_opt 在 electronic 组里，所以本组必须排在 electronic 之后。
-  # ---------------------------------------------------------------------------
-  wavefunction_full:
-    default: false
-    steps:
-      - {seq: 3.5, name: "step3b_uniform_full", label: S3b_uniformfull,
-         after: step1_opt,
-         src: step3b_uniform_full, check: wavecar, gen: gen_step5b_uniform_full.py,
-         gen_need: [stepconf.py, step.conf, ke_common.py, dim_common.py, check_common.py,
-                    incar_uniform_full_2d.tpl, incar_uniform_full_3d.tpl,
-                    submit_std_2d.tpl, submit_std_3d.tpl],
-         # V134：从 S3 的自洽电荷密度起步（ICHARG=1，作业开头复制 ../step3_uniform/CHGCAR）-> 要等 S3 跑完
-         needs: ["step3_uniform"]}
-      # ★ check: wavecar 的默认尺寸阈值是 1 MB（ck_wavecar 的 wavecar_min 键可覆盖）——
-      #   而 S3c 是 stage2 **14 个离网格 k 点**的非自洽 WAVECAR，本来就只有 ~0.65 MB，
-      #   用默认阈值会被误判 "WAVECAR too small"（还会连带挡住 S20_zt 的 guard_predecessors）。
-      #   这里按本步的实际口径显式给一个下限。
-      - {seq: 3.6, name: "step3c_uniform_offgrid", label: S3c_offgrid,
-         after: step3b_uniform_full,
-         src: step3c_uniform_offgrid, check: wavecar, wavecar_min: 100000,
-         gen: gen_step5c_uniform_offgrid.py,
-         gen_need: [stepconf.py, step.conf, ke_common.py, dim_common.py, check_common.py,
-                    submit_std_2d.tpl],
-         needs: ["step3b_uniform_full"]}
-      - {seq: 4.5, name: "step4b_wave_full", label: S4b_wavefull,
-         after: step3b_uniform_full,
-         src: step4b_wave_full, check: marker, marker: "wavefunction.h5:",
-         gen: gen_step6b_wave_full.py,
-         gen_need: [stepconf.py, step.conf, ke_common.py, submit_amset.tpl],
-         needs: ["step3b_uniform_full"]}
-  # --- ke 段：带隙分支（PBE 静态 → 判别 → PBE 能带 → 画图）-------------------
-  # ---------------------------------------------------------------------------
-  # lattice：晶格热导段（kl-dft-cpu 链路）。默认开。关掉它 = 只跑电子段 + ZT 汇总，
-  #   κ_L 走兄弟技能兜底（../kl-dft-cpu/step6_kappa/kappa_summary.json 等），
-  #   此时 S20_zt 的 needs 里 step6_kappa 不存在 → autozt 忽略该依赖。
-  #   nac / phonon_plot 两个子组的锚点在本组里，本组关掉时它们不注入。
-  # ---------------------------------------------------------------------------
-  lattice:
-    default: true
-    steps:
-      # ===========================================================================
-      # 第 2 段：晶格热导率（kl-dft-cpu 链路，κ_L）
-      #   needs: [step1_opt] —— 故意排在上游 ke 段的弛豫之后（只差一次几分钟的弛豫）：
-      #   两段的结构优化是【两个同名的 gen 脚本】（ke/step1_opt/gen_step1_std_opt.py 与
-      #   kl 根目录的 gen_step1_std_opt.py），远端落点都是技能根目录下的同名文件；
-      #   串行化这两步就不会在同一秒互相覆盖（其余步骤的文件名两段不重叠）。
-      # ===========================================================================
-      - {seq: 11, name: step1_std_opt, label: SK1_opt, needs: ["step1_opt"],
-         src: ../kl-dft-cpu,
-         check: relax_injob, gen: gen_step1_std_opt.py, contcar_to_poscar: true,
-         gen_need: [relax_common.py, method_select.py, mol_common.py, incar_0d.tpl, submit_std_0d.tpl, dim_common.py, stepconf.py, step.conf,
-                    check_common.py, step1_check_and_resubmit.py, thickness_2d.py, vdw_radii.py,
-                    incar_2d.tpl, incar_3d.tpl, submit_std_2d.tpl, submit_std_3d.tpl]}
-
-      - {seq: 12, name: step2_static, label: SK2_static,
-         src: ../kl-dft-cpu,
-         check: outcar, gen: gen_step2_static.py,
-         gen_need: [dim_common.py, stepconf.py, step.conf, kl_common.py,
-                    check_common.py, step2_check_and_resubmit.py, provenance_common.py,
-                    incar_2d.tpl, incar_3d.tpl, submit_std_2d.tpl, submit_std_3d.tpl],
-         needs: ["step1_std_opt"]}
-
-      - {seq: 14, name: step4_disp, label: SK4_disp,
-         src: ../kl-dft-cpu,
-         check: outcar, fanout: "disp-*", gen: gen_step4_disp.py,
-         gen_need: [dim_common.py, stepconf.py, step.conf, kl_common.py, lattice_kappa.py,
-                    check_common.py, step2_check_and_resubmit.py,
-                    thickness_2d.py, vdw_radii.py,
-                    incar_force_2d.tpl, incar_force_3d.tpl,
-                    submit_std_2d.tpl, submit_std_3d.tpl]}
-         # ★ 不写 needs：NA C 步组关掉时自动回落到上一步 step2_static（与上游 kl 技能一致）
-
-      - {seq: 15, name: step5_fc, label: SK5_fc,
-         src: ../kl-dft-cpu,
-         check: phonon, gen: gen_step5_fc.py, fetch_all: true,
-         gen_need: [dim_common.py, stepconf.py, step.conf, kl_common.py, lattice_kappa.py,
-                    kl_fc_backends.py, submit_fit_p3py.tpl, submit_fit_pheasy.tpl],
-         needs: ["step4_disp"]}
-
-      - {seq: 16, name: step6_kappa, label: SK6_kappa, needs: ["step5_fc"],
-         src: ../kl-dft-cpu,
-         check: marker, marker: 'kappa_summary.json:"KAPPA_DONE": true',
-         gen: gen_step6_kappa.py, fetch_all: true,
-         gen_need: [dim_common.py, stepconf.py, step.conf, kl_common.py, lattice_kappa.py,
-                    thickness_2d.py, vdw_radii.py,
-                    submit_p3py.tpl, submit_shengbte.tpl, submit_fourphonon.tpl]}
-
-
-  bandgap_steps:
-    default: true
-    steps:
-      - {seq: 2.1, name: "step2_bandgap/step2.1_static", label: S2.1_scf,
-         group: S2_bandgap, after: step1_opt,
-         src: step2_bandgap/step2.1_static,
-         check: outcar, gen: gen_step2_static.py,
-         gen_need: [ke_common.py, stepconf.py, step.conf, dim_common.py, check_common.py, step2_check_and_resubmit.py,
-                    incar_2d.tpl, incar_3d.tpl, submit_std_2d.tpl, submit_std_3d.tpl],
-         needs: ["step1_opt"]}
-      - {seq: 2.15, name: "step2_bandgap/step2.15_discriminant", label: S2.15_discr,
-         group: S2_bandgap, after: "step2_bandgap/step2.1_static",
-         src: step2_bandgap/step2.15_discriminant,
-         check: outcar, gen: gen_step2.15_discriminant.py,
-         gen_need: [ke_common.py, check_common.py, check_discriminant.py, decide_discriminant.py,
-                    discriminant_common.py, stepconf.py, step.conf, dim_common.py],
-         needs: ["step2_bandgap/step2.1_static"]}
-      - {seq: 2.155, name: "step2_bandgap/step2.155_discriminant_decide", label: S2.155_discr,
-         group: S2_bandgap, after: "step2_bandgap/step2.15_discriminant",
-         src: step2_bandgap/step2.15_discriminant,
-         # done_marker 必须带 ..：decide_discriminant.py 把 discriminant.json 写在
-         # step2_bandgap/step2.15_discriminant/（下游 gen 也从那里读），而本步目录是
-         # step2_bandgap/step2.155_discriminant_decide —— 不写 .. 会永远找不到 marker、
-         # 状态表长期 error（ck_plot 用 os.path.join(dir, marker)，支持相对 ..）。
-         check: plot, run: gen,
-         done_marker: ../step2.15_discriminant/discriminant.json,
-         gen: "decide_discriminant.py", gen_need: [discriminant_common.py], fetch_all: true,
-         needs: ["step2_bandgap/step2.15_discriminant"]}
-      - {seq: 2.2, name: "step2_bandgap/step2.2_pbe", label: S2.2_pbe,
-         group: S2_bandgap, after: "step2_bandgap/step2.1_static",
-         src: step2_bandgap/step2.2_pbe,
-         check: wavecar, gen: gen_step3_WAVECAR.py,
-         gen_need: [ke_common.py, stepconf.py, step.conf, dim_common.py, check_common.py, step3_check_and_resubmit.py,
-                    incar_2d.tpl, incar_3d.tpl, submit_std_2d.tpl, submit_std_3d.tpl,
-                    submit_ncl_2d.tpl, submit_ncl_3d.tpl],
-         needs: ["step2_bandgap/step2.1_static"]}
-      - {seq: 2.25, name: "step2_bandgap/step2.2_pbe_plot", label: S2.2_pbeplot,
-         group: S2_bandgap, after: "step2_bandgap/step2.2_pbe",
-         src: step2_bandgap/step2.2_pbe_plot,
-         check: plot, run: gen, done_marker: band_summary.json,
-         gen: "gen_step3.1_plot_band.py", gen_need: [ke_common.py, dim_common.py], fetch_all: true,
-         needs: ["step2_bandgap/step2.2_pbe"]}
-
-  # --- ke 段：HSE 带隙分支（默认开；BANDGAP=pbe 或 bandgap_hse: false 关掉）--
-  bandgap_hse:
-    default: true
-    steps:
-      - {seq: 2.3, name: "step2_bandgap/step2.3_hse", label: S2.3_hse,
-         group: S2_bandgap, after: "step2_bandgap/step2.2_pbe",
-         src: step2_bandgap/step2.3_hse,
-         check: outcar, gen: "gen_step4_HSE.py --kpath-slice all/4", fanout: "*p*of*",
-         # ke_common.py：gen_step4_HSE.py 顶层 import 它（vaspkit_kpoints），ke 已声明、zt 漏了 ——
-         #   之前能跑只是因为 S3 碰巧先把它推进了材料目录（2026-09-29 gen_need 对齐测试发现）。
-         gen_need: [stepconf.py, step.conf, dim_common.py, ke_common.py, check_common.py, step4_check_and_resubmit.py,
-                    incar_2d.tpl, incar_3d.tpl, submit_std_2d.tpl, submit_std_3d.tpl,
-                    submit_ncl_2d.tpl, submit_ncl_3d.tpl],
-         needs: ["step2_bandgap/step2.2_pbe"]}
-      - {seq: 2.35, name: "step2_bandgap/step2.3_hse_plot", label: S2.3_hseplot,
-         group: S2_bandgap, after: "step2_bandgap/step2.3_hse",
-         src: step2_bandgap/step2.3_hse_plot,
-         check: plot, run: gen, done_marker: band_summary.json,
-         gen: "gen_step4.1_plot_band.py", gen_need: [ke_common.py, dim_common.py], fetch_all: true,
-         needs: ["step2_bandgap/step2.3_hse"]}
-
-  # --- kl 段：NAC（极性绝缘体的 LO-TO 劈裂；金属请写 nac: false）------------
-  nac:
-    default: true
-    steps:
-      - {seq: 13, name: step3_nac, label: SK3_nac, after: step2_static,
-         src: ../kl-dft-cpu,
-         check: marker, marker: "OUTCAR:MACROSCOPIC STATIC DIELECTRIC TENSOR",
-         gen: gen_step3_nac.py,
-         gen_need: [dim_common.py, stepconf.py, step.conf, kl_common.py,
-                    check_common.py, step2_check_and_resubmit.py,
-                    incar_2d.tpl, incar_3d.tpl, submit_std_2d.tpl, submit_std_3d.tpl],
-         needs: ["step2_static"]}
-
-  # --- kl 段：声子谱画图（提交计算节点小作业）--------------------------------
-  phonon_plot:
-    default: true
-    steps:
-      - {seq: 15.1, name: step5_phonon_plot, label: SK5.1_plot, after: step5_fc,
-         src: ../kl-dft-cpu,
-         gen: "gen_step5.1_plot_phonon.py", check: plot,
-         gen_need: [step.conf, stepconf.py, submit_plot.tpl],
-         done_marker: phonon_plot_summary.json, fetch_all: true,
-         needs: ["step5_fc"]}
+     gen: gen_step20_zt.py, gen_need: [zt_common.py, stepconf.py], fetch_all: true,
+     needs: [],
+     needs_results: {
+       transport: [ke-dft-cpu/result/step8_amset/transport.json,
+                   ke-dft-cpu/result/step8.4_amset2d/transport.json],
+       kappa_L:   [kl-dft-cpu/result/step6_kappa/kappa_summary.json,
+                   kl-mlff-cpu/result/step4_kappa/kappa_summary.json,
+                   kl-mlff-gpu/result/step4_kappa/kappa_summary.json,
+                   fit-fc-thermal/result/step2_kappa/kappa_summary.json],
+       structure: [ke-dft-cpu/result/step1_opt/workflow_method.txt]}}
 
 requires:
-  python: [pymatgen, numpy, matplotlib, phonopy, phono3py, spglib]
-  amset_python: [amset, BoltzTraP2]   # 在集群 yaml 的 amset_env 环境里检查
-  conda: amset051
-  exe: [vasp_std, vaspkit, phono3py]
+  # 本技能只做汇总；VASP/AMSET/phono3py 等依赖由上游 ke-dft-cpu / kl-dft-cpu 声明
+  python: [numpy, matplotlib]
 
 # =============================================================================
 # 自描述三段（只给人/AI 看，不参与运行期装配）
 # =============================================================================
 io_schema:
   inputs:
-    - {name: POSCAR, from: user, required: true, desc: "材料结构（材料目录根）"}
+    - {name: POSCAR, from: user, required: true, desc: "材料结构（材料目录根；ke/kl 两个上游技能共用）"}
+    - {name: transport.json, from: "skill:ke-dft-cpu", required: true,
+       desc: "AMSET 电子输运（ke-dft-cpu S8_kappa 或 S8.4_amset2d），按材料目录 + 结构指纹核对"}
+    - {name: kappa_summary.json, from: "skill:kl-dft-cpu", required: true,
+       desc: "κ_L(T)（kl-dft-cpu S6_kappa；或 kl-mlff-* / fit-fc-thermal）"}
   outputs:
     - {name: zt_summary.json, step: S20_zt, type: json,
-       desc: "最终产物：ZT(T, 载流子浓度) 全表 + 峰值 ZT + 所用 κ_L/κ_e 口径"}
-    - {name: transport.json, step: S8_kappa_e, type: json,
-       desc: "AMSET 电子输运：S / σ / κ_e / 迁移率（多温度 × 多掺杂）"}
-    - {name: kappa_summary.json, step: SK6_kappa, type: json,
-       desc: "phono3py BTE 晶格热导率 κ_L(T)（xx/yy/zz）"}
-    - {name: band_summary.json, step: S2.2_pbeplot, type: json, desc: "PBE/HSE 带隙与带边汇总"}
+       desc: "最终产物：ZT(T, 载流子浓度) 全表 + 峰值 ZT + 所用 κ_L/κ_e 口径 + 输入来源"}
+    - {name: zt_heatmap.png, step: S20_zt, type: png,
+       desc: "zT(n, T) 热图：n 型 / p 型两栏，横轴载流子浓度、纵轴温度"}
+    - {name: zt_vs_T.png, step: S20_zt, type: png, desc: "各掺杂档 ZT(T)"}
+    - {name: zt_vs_doping.png, step: S20_zt, type: png, desc: "各温度下 ZT(载流子浓度)"}
   params:
-    - {name: BANDGAP, values: [pbe, hse], default: hse, where: step.conf,
-       desc: "电子段带隙层级：pbe 只算 PBE，hse 继续算 HSE（透传给上游 ke 段）"}
     - {name: KTEMP_MODE, values: [interp, const300], default: interp, where: step.conf,
        desc: "ZT 汇总取 κ_L 的方式：interp = 按温度插值 κ_L(T)；const300 = 固定用 300 K 的 κ_L"}
   steps:
-    - {step: S1_opt, title: "电子段·结构优化", tool: "VASP (vasp_std)",
-       inputs: [POSCAR], outputs: [CONTCAR], validator: "relax_injob 力/能量收敛"}
-    - {step: S3_uniform, title: "电子段·密网格自洽", tool: "VASP",
-       inputs: [CONTCAR], outputs: [WAVECAR], validator: "wavecar"}
-    - {step: S8_kappa_e, title: "电子段·AMSET 输运", tool: "AMSET",
-       inputs: ["WAVECAR", "deformation.h5", "弹性/介电"], outputs: [transport.json],
-       validator: "transport.json 含 thermal_conductivity"}
-    - {step: SK6_kappa, title: "晶格段·BTE κ_L", tool: "phono3py RTA/LBTE",
-       inputs: [fc2.hdf5, fc3.hdf5, BORN], outputs: [kappa_summary.json],
-       validator: "KAPPA_DONE 为 true"}
     - {step: S20_zt, title: "ZT 汇总", tool: "python (run: gen)",
        inputs: [transport.json, kappa_summary.json],
-       outputs: [zt_summary.json, zt_vs_T.png], validator: "done_marker zt_summary.json"}
+       outputs: [zt_summary.json, zt_heatmap.png, zt_vs_T.png],
+       validator: "三份输入属于同一材料目录 + 同一 POSCAR；done_marker zt_summary.json"}
 
 flow:
   title: "Thermoelectric figure of merit ZT"
-  backend: "VASP / AMSET / phono3py (BTE)"
-  summary: "结构优化 → [电子段] 带隙(±HSE)/密网格/WAVECAR/介电/弹性/形变势 → AMSET 出 S,σ,κ_e ‖ [晶格段] 静态/NAC/位移/力常数 → BTE 出 κ_L → ZT = S²σT/(κ_e+κ_L)"
+  backend: "ke-dft-cpu (VASP/AMSET) + kl-dft-cpu (VASP/phono3py/ShengBTE)"
+  summary: "POSCAR → ke-dft-cpu 出 S,σ,κ_e ‖ kl-dft-cpu 出 κ_L（两个技能各自计算、各自修改）→ S20_zt：ZT = S²σT/(κ_e+κ_L)"
   stages:
-    - {name: electronic, steps: [S1_opt, S2.1_scf, S2.2_pbe, S2.3_hse, S3_uniform, S4_wave, S5_dielect, S6_elastic, S7_deform, S7.1_read, S8_kappa_e],
-       produces: [transport.json]}
-    - {name: lattice, steps: [SK1_opt, SK2_static, SK3_nac, SK4_disp, SK5_fc, SK6_kappa],
-       produces: [kappa_summary.json]}
-    - {name: zt, steps: [S20_zt], produces: [zt_summary.json]}
+    - {name: zt, steps: [S20_zt], produces: [zt_summary.json, zt_heatmap.png]}
   next_skills:
     - {skill: te-screen, via: POSCAR, desc: "先用替代模型粗筛 ZT，再上本技能做 DFT 全流程"}
-  requires: {POSCAR: "材料目录根必须有 POSCAR"}
+  requires: {POSCAR: "材料目录根必须有 POSCAR",
+             ke-dft-cpu: "同一材料目录下的电子输运结果",
+             kl-dft-cpu: "同一材料目录下的晶格热导结果"}
 
 corrections: [node_fail, dir_missing]

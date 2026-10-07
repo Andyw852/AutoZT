@@ -4,9 +4,9 @@
 分两部分：
   [A] zt_common 物理/数值：张量约化口径、ZT 公式与单位、κ_L 插值（不外推）、
       n/p 分型取峰、AMSET/kl 产物解析。
-  [B] 装配完整性：24 个步骤（含 electronic 开关两种模式）用 autozt 自身的
-      find_asset / step_conf_sources 全量核对，任何缺件都会在这里被抓住
-      —— 本技能靠软链装到上游技能目录，上游改了目录/步骤名时这里应当先红。
+  [B] 组合方式：本技能只有 S20_zt，电子/晶格结果来自同一材料目录下的 ke-dft-cpu /
+      kl-dft-cpu（needs_results + 来源戳），不再抄上游步骤、不再有软链。
+  [C] gen 脚本级：只读 autozt 推上来的 inputs/，三份输入必须同一材料、同一结构。
 
 不依赖超算、不依赖 matplotlib。
 """
@@ -222,15 +222,21 @@ def test_text_report_contains_key_sections(tmp_path):
 
 
 # -------------------------------------------- [C] gen 脚本级：温区不重叠必须报错
-def _gen_fixture(root, tr, kl, dim="3d"):
-    """搭一个最小的远端技能目录：step8_amset/transport.json + step6_kappa/"""
-    (root / "step8_amset").mkdir(parents=True)
-    (root / "step6_kappa").mkdir(parents=True)
-    (root / "step1_opt").mkdir(parents=True)
-    (root / "step8_amset" / "transport.json").write_text(json.dumps(tr), encoding="utf-8")
-    (root / "step6_kappa" / "kappa_summary.json").write_text(json.dumps(kl), encoding="utf-8")
-    (root / "step1_opt" / "workflow_method.txt").write_text("DIM = %s\n" % dim,
-                                                             encoding="utf-8")
+def _gen_fixture(root, tr, kl, dim="3d", sha=("abc", "abc", "abc"), mdir=None):
+    """搭一个最小的远端技能目录：inputs/{transport,kappa_L,structure}/ + source.json
+    （模拟 autozt 按 needs_results 推上来的样子）。"""
+    mdir = mdir or str(root.parent)
+    files = {"transport": {"transport.json": json.dumps(tr)},
+             "kappa_L": {"kappa_summary.json": json.dumps(kl)},
+             "structure": {"workflow_method.txt": "DIM = %s\n" % dim}}
+    for (key, fs), h in zip(files.items(), sha):
+        d = root / "inputs" / key
+        d.mkdir(parents=True)
+        for n, txt in fs.items():
+            (d / n).write_text(txt, encoding="utf-8")
+        (d / "source.json").write_text(json.dumps(
+            {"key": key, "from": "x/result/y/%s" % n, "material_dir": mdir,
+             "origin": {"poscar_sha256": h, "material_dir": mdir}}), encoding="utf-8")
     src = os.path.join(SKILL, "step20_zt")
     for f in ("gen_step20_zt.py", "zt_common.py", "step.conf"):
         shutil.copyfile(os.path.join(src, f), root / f)
@@ -266,7 +272,7 @@ def test_gen_records_amset_settings(tmp_path):
           "kappa_xx_yy_zz": [[50.0, 50.0, 50.0], [40.0, 40.0, 40.0]]}
     root = tmp_path / "Si" / "zt-dft-cpu"
     _gen_fixture(root, tr, kl)
-    (root / "step8_amset" / "settings.yaml").write_text(
+    (root / "inputs" / "transport" / "settings.yaml").write_text(
         "scattering_type: [ADP, IMP]\nbandgap: 1.0913\ninterpolation_factor: 10\n",
         encoding="utf-8")
     r = subprocess.run([sys.executable, "gen_step20_zt.py", "--material", "Si"],
@@ -298,89 +304,105 @@ def test_gen_step_ok_on_overlapping_range(tmp_path):
     assert d["peak_ZT"]["n"] is not None
 
 
-# ------------------------------------------------------------- [B] 装配完整性
-def _expand(electronic, lattice=True):
-    from autozt import load_config, apply_skills, expand_optional_steps, _seq_sort_steps
+def _ok_tr_kl():
+    tr = {"doping": [-1e20, -1e19, 1e19, 1e20], "temperatures": [300.0, 400.0, 500.0],
+          "conductivity": [[_t33(1e5, 1e5, 1e5)] * 3] * 4,
+          "seebeck": [[_t33(-200.0, -200.0, -200.0)] * 3] * 4,
+          "electronic_thermal_conductivity": [[_t33(1.0, 1.0, 1.0)] * 3] * 4}
+    kl = {"KAPPA_DONE": True, "temperatures": [200.0, 600.0],
+          "kappa_xx_yy_zz": [[5.0, 5.0, 5.0], [2.0, 2.0, 2.0]]}
+    return tr, kl
+
+
+def test_gen_refuses_inputs_from_other_material_or_structure(tmp_path):
+    """同名材料 / 旧结果：三份输入的来源戳不一致必须拒绝（以前按目录名找兄弟技能会串）。"""
+    tr, kl = _ok_tr_kl()
+    root = tmp_path / "A" / "Si" / "zt-dft-cpu"
+    _gen_fixture(root, tr, kl, sha=("abc", "OLD", "abc"))
+    r = subprocess.run([sys.executable, "gen_step20_zt.py", "--material", "Si"],
+                       cwd=str(root), capture_output=True, text=True)
+    assert r.returncode != 0 and "不同的 POSCAR" in (r.stdout + r.stderr)
+    root2 = tmp_path / "B" / "Si" / "zt-dft-cpu"
+    _gen_fixture(root2, tr, kl)
+    src = root2 / "inputs" / "kappa_L" / "source.json"
+    d = json.loads(src.read_text(encoding="utf-8"))
+    d["material_dir"] = "/other/project/Si"
+    src.write_text(json.dumps(d), encoding="utf-8")
+    r = subprocess.run([sys.executable, "gen_step20_zt.py", "--material", "Si"],
+                       cwd=str(root2), capture_output=True, text=True)
+    assert r.returncode != 0 and "不同的材料目录" in (r.stdout + r.stderr)
+    # 没有 source.json（不是 autozt 推上来的）也拒绝
+    root3 = tmp_path / "C" / "Si" / "zt-dft-cpu"
+    _gen_fixture(root3, tr, kl)
+    (root3 / "inputs" / "transport" / "source.json").unlink()
+    r = subprocess.run([sys.executable, "gen_step20_zt.py", "--material", "Si"],
+                       cwd=str(root3), capture_output=True, text=True)
+    assert r.returncode != 0 and "source.json" in (r.stdout + r.stderr)
+
+
+def test_heatmap_data_and_png(tmp_path):
+    tr, kl = _ok_tr_kl()
+    root = tmp_path / "Si" / "zt-dft-cpu"
+    _gen_fixture(root, tr, kl)
+    r = subprocess.run([sys.executable, "gen_step20_zt.py", "--material", "Si"],
+                       cwd=str(root), capture_output=True, text=True)
+    assert r.returncode == 0, r.stdout + r.stderr
+    d = json.loads((root / "step20_zt" / "zt_summary.json").read_text(encoding="utf-8"))
+    assert d["sources"]["inputs"]["kappa_L"]["material_dir"] == str(root.parent)
+    spec = importlib.util.spec_from_file_location("g20", str(root / "gen_step20_zt.py"))
+    g20 = importlib.util.module_from_spec(spec)
+    sys.path.insert(0, str(root))
+    spec.loader.exec_module(g20)
+    grid = zc.build_grid(zc.load_transport(str(root / "inputs/transport/transport.json")),
+                         zc.load_kappa(str(root / "inputs/kappa_L/kappa_summary.json")))
+    hm = g20.heatmap_data(grid)
+    assert set(hm) == {"n", "p"}
+    assert hm["n"]["doping_cm-3"] == [1e19, 1e20]               # |n| 升序
+    assert len(hm["p"]["zt"]) == 3 and len(hm["p"]["zt"][0]) == 2   # 行 = T，列 = n
+    try:
+        import matplotlib  # noqa: F401
+    except Exception:
+        return
+    assert (root / "step20_zt" / "zt_heatmap.png").is_file()
+
+
+# ------------------------------------------------------------- [B] 组合方式
+def _zt_type():
+    from autozt import load_config, apply_skills
     cfg, _ = load_config(None)
     cfg = apply_skills(cfg)
-    t = dict(cfg["task_types"]["zt-dft-cpu"])
-    t["key"] = "zt-dft-cpu"
-    t["electronic"] = electronic
-    t["lattice"] = lattice
-    expand_optional_steps(t)
-    _seq_sort_steps(t.get("steps") or [])
-    seg = {"steps_cfg": t.get("steps"), "skill_dir": t.get("skill_dir"),
-           "template_dir": t.get("template_dir"),
-           "template_layout": t.get("template_layout")}
-    # 干净克隆里没有 setting/jzzn/（集群配置是 gitignored 的）→ 落到脱敏示例 setting/example/
-    _hpc = "jzzn" if os.path.isdir(os.path.join("setting", "jzzn")) else "example"
-    m = {"name": "X", "hpc_name": _hpc, "_seg": seg, "template_map": {}, "ps": {}}
-    return cfg, t, m
+    return cfg, cfg["task_types"]["zt-dft-cpu"]
 
 
-@pytest.mark.parametrize("electronic,lattice,min_steps",
-                         [(True, True, 24),      # 完整 ZT 全流程
-                          (True, False, 17),     # 只电子段 + 汇总
-                          (False, True, 8),      # 只晶格段 + 汇总
-                          (False, False, 1)])    # 只出 ZT 汇总（两段都借兄弟技能结果）
-def test_all_step_assets_resolve(electronic, lattice, min_steps):
-    """四种模式下，gen 脚本 / 模板 / gen_need / step.conf 都必须找得到。"""
-    from autozt import step_cfg, find_asset, step_conf_sources
-    cfg, t, m = _expand(electronic, lattice)
-    assert len(t["steps"]) == min_steps
-    missing = []
-    for s in t["steps"]:
-        n = s["name"]
-        sc = step_cfg(t, n, m)
-        gen = (sc.get("gen") or "").split()[0]
-        for f in [gen] + list(sc.get("gen_need") or []):
-            if f and f != "step.conf" and not find_asset(cfg, t, m, f, n):
-                missing.append((n, f))
-        if not step_conf_sources(cfg, t, m, n):
-            missing.append((n, "step.conf"))
-    assert missing == []
+def test_zt_is_a_composition_not_a_copy():
+    """只有 S20_zt；电子/晶格由 ke-dft-cpu / kl-dft-cpu 计算（改上游即生效）。"""
+    cfg, t = _zt_type()
+    assert [s["name"] for s in t["steps"]] == ["step20_zt"]
+    assert not t.get("optional_steps")
+    assert t["companion_skills"] == ["ke-dft-cpu", "kl-dft-cpu"]
+    nr = t["steps"][0]["needs_results"]
+    assert nr["transport"][0] == "ke-dft-cpu/result/step8_amset/transport.json"
+    assert nr["kappa_L"][0] == "kl-dft-cpu/result/step6_kappa/kappa_summary.json"
+    # 上游技能里真有这些步骤（上游改了步骤名这里先红）
+    for rel in [x for v in nr.values() for x in v]:
+        skill, _r, step = rel.split("/")[:3]
+        if skill in cfg["task_types"]:
+            names = {s["name"] for s in cfg["task_types"][skill]["steps"]} | {
+                d["name"] for g in (cfg["task_types"][skill].get("optional_steps") or {}).values()
+                for d in (g or {}).get("steps") or []}
+            assert step in names, rel
+    real = [n for n in os.listdir(SKILL)
+            if n not in ("skill.yaml", "step.conf", "step20_zt", "README.md", "__pycache__")]
+    assert real == [] and not any(os.path.islink(os.path.join(SKILL, n))
+                                  for n in os.listdir(SKILL))
 
 
-def test_segment_groups_drop_only_their_own_steps():
-    """两个段组各自只影响自己那一段；S20_zt 的缺失依赖必须被忽略。"""
-    from autozt import _dag_needs
-    _, t_on, _ = _expand(True, True)
-    full = {s["name"] for s in t_on["steps"]}
-
-    _, t_e, m_e = _expand(False, True)          # 关电子段
-    e_off = {s["name"] for s in t_e["steps"]}
-    assert e_off < full and "step8_amset" in full - e_off
-    assert "step6_kappa" in e_off
-
-    _, t_l, m_l = _expand(True, False)          # 关晶格段
-    l_off = {s["name"] for s in t_l["steps"]}
-    assert l_off < full and "step6_kappa" in full - l_off
-    assert "step8_amset" in l_off
-
-    # 关电子段：step8_amset 不在步骤表 → autozt 忽略它，只等 step6_kappa
-    s20 = [s for s in t_e["steps"] if s["name"] == "step20_zt"][0]
-    deps = _dag_needs(t_e, m_e, s20, "step6_kappa")
-    assert deps == ["step8_amset", "step6_kappa"]
-    assert [d for d in deps if d in e_off] == ["step6_kappa"]
-
-    # 两段都关：只剩汇总步，且无有效依赖（立即就绪）
-    _, t_z, m_z = _expand(False, False)
-    assert [s["name"] for s in t_z["steps"]] == ["step20_zt"]
-    s20z = t_z["steps"][0]
-    assert [d for d in _dag_needs(t_z, m_z, s20z, None) if d in {"step20_zt"}] == []
-
-
-def test_skill_dir_is_symlinks_not_copies():
-    """装配纪律：除 skill.yaml / step.conf / step20_zt 外，技能目录里必须都是软链
-    （防止有人图省事把上游脚本拷进来，产生副本漂移）。"""
-    real = []
-    for name in os.listdir(SKILL):
-        if name in ("skill.yaml", "step.conf", "step20_zt", "README.md",
-                    "__pycache__", "tests"):
-            continue
-        p = os.path.join(SKILL, name)
-        if not os.path.islink(p):
-            real.append(name)
-        else:
-            assert os.path.exists(p), "软链失效：%s" % name
-    assert real == []
+def test_s20_assets_resolve():
+    from autozt import step_cfg, find_asset
+    cfg, t = _zt_type()
+    t = dict(t, key="zt-dft-cpu")
+    m = {"name": "X", "_seg": {"steps_cfg": t["steps"], "skill_dir": t.get("skill_dir")},
+         "template_map": {}, "ps": {}}
+    sc = step_cfg(t, "step20_zt", m)
+    for f in [sc["gen"].split()[0]] + list(sc.get("gen_need") or []):
+        assert find_asset(cfg, t, m, f, "step20_zt"), f

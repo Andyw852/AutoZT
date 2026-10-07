@@ -2,13 +2,13 @@
 # -*- coding: utf-8 -*-
 """gen_step20_zt.py —— ZT 全流程汇总（zt-dft-cpu 的收尾步，run: gen）。
 
-输入（相对技能目录，cwd = <超算 work_dir>/<材料>/zt-dft-cpu/）：
-  · step8_amset/transport.json          AMSET：S(μV/K) / σ(S/m) / κ_e(W/m/K)，[掺杂][温度][3][3]
-  · step6_kappa/kappa_summary.json      phono3py BTE：κ_L(T)，W/m/K（元胞口径）
-      找不到就退而求其次读【兄弟技能】的材料目录（../kl-dft-cpu/step6_kappa 等）——
-      这样"只补跑 ZT 汇总"或"κ_L 用 MACE 链路算的"也能出 ZT；用它时产物里
-      会记 sources.kappa_src，看得见来源。
-  · step1_opt/workflow_method.txt       DIM=（决定张量约化口径 2D/3D）
+输入（cwd = <超算 work_dir>/<材料>/zt-dft-cpu/；autozt 按 skill.yaml 的 needs_results
+从【本材料的本地目录】选出上游技能已拉回的结果，推到 inputs/<键>/，附 source.json）：
+  · inputs/transport/transport.json      ke-dft-cpu S8_kappa（或 S8.4_amset2d）：S/σ/κ_e
+  · inputs/kappa_L/kappa_summary.json    kl-dft-cpu S6_kappa（或 kl-mlff-* / fit-fc-thermal）：κ_L(T)
+  · inputs/structure/workflow_method.txt ke-dft-cpu S1_opt：DIM=（2D/3D 口径）+ CONTCAR
+  三份输入的 source.json 必须指向同一个材料目录、同一个 POSCAR 指纹，否则拒绝汇总——
+  不再去远端按目录名找"兄弟技能"（同名材料会串）。
 
 输出（done_marker = zt_summary.json）：
   · zt_summary.json   机读全表：温度网格 × 掺杂网格的 S/σ/κ_e/κ_L/κ_tot/PF/ZT、
@@ -29,17 +29,10 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import zt_common as zc          # noqa: E402
 
 OUTDIR = "step20_zt"
-AMSET_DIR = "step8_amset"
-KL_DIR = "step6_kappa"
-# 兄弟技能兜底（同一材料目录下、同一 work_dir）：(技能子目录, 步骤目录)
-KL_SIBLINGS = (("kl-dft-cpu", "step6_kappa"),
-               ("kl-mlff-cpu", "step4_kappa"),
-               ("kl-mlff-gpu", "step4_kappa"))
-# 电子段同理：若本技能的 S8_kappa_e 没跑（例如电子输运已由独立的 ke-dft-cpu
-# 项目算过），允许读同级 ke-dft-cpu 目录的 transport.json —— 来源会写进产物。
-AMSET_SIBLINGS = (("ke-dft-cpu", "step8_amset"),
-                  ("ke-dft-cpu", "step8.4_amset2d"))
-STEP1_CANDS = ("step1_opt", "step1_std_opt")
+INPUTS = "inputs"                 # autozt needs_results 推上来的上游结果
+AMSET_DIR = INPUTS + "/transport"
+KL_DIR = INPUTS + "/kappa_L"
+STEP1_CANDS = (INPUTS + "/structure",)
 T_TARGETS = (300.0, 500.0, 700.0, 900.0)   # zt_vs_doping 想画的目标温度
 
 
@@ -85,7 +78,7 @@ def _read_dim(cwd):
 def _cell_c_axis(cwd):
     """读 step3_uniform / step1_opt 的结构，返回 c 轴长度（Å）；读不到返回 None。
     用途：与 kl 的 kappa_summary.json 的 Lz_ang 做元胞一致性闸门（同 ke 的 step8.3）。"""
-    for rel in ("step3_uniform", "step1_opt", "step1_std_opt"):
+    for rel in STEP1_CANDS:
         for name in ("CONTCAR", "POSCAR"):
             p = Path(cwd) / rel / name
             if not p.is_file():
@@ -140,30 +133,43 @@ def _amset_settings(cwd):
     return out or None
 
 
+def _source(cwd, key):
+    """inputs/<键>/source.json（autozt 推送时写）；没有返回 None。"""
+    p = Path(cwd) / INPUTS / key / "source.json"
+    try:
+        return json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+
+
+def check_input_sources(cwd, keys=("transport", "kappa_L", "structure")):
+    """三份输入必须来自同一个材料目录、同一个 POSCAR 指纹（防同名材料/旧结果串读）。
+
+    返回 {键: source}；不一致直接退出。"""
+    srcs = {k: _source(cwd, k) for k in keys}
+    miss = [k for k, v in srcs.items() if not v]
+    if miss:
+        sys.exit("[ERROR] 缺 %s 的 source.json —— inputs/ 不是 autozt 按 needs_results 推上来的，"
+                 "拒绝汇总（不再按目录名去找兄弟技能，避免同名材料串读）。" % "、".join(miss))
+    dirs = {k: os.path.realpath(v.get("material_dir") or "") for k, v in srcs.items()}
+    if len(set(dirs.values())) != 1:
+        sys.exit("[ERROR] 输入来自不同的材料目录：%s" % json.dumps(dirs, ensure_ascii=False))
+    shas = {k: (v.get("origin") or {}).get("poscar_sha256") for k, v in srcs.items()}
+    if len({x for x in shas.values() if x}) > 1:
+        sys.exit("[ERROR] 输入按不同的 POSCAR 算的（结构改过、有旧结果）：%s"
+                 % json.dumps(shas, ensure_ascii=False))
+    return srcs
+
+
 def _find_transport(cwd):
-    """找 AMSET transport.json。返回 (path, src 说明)。本技能优先，其次兄弟技能。"""
     p = Path(cwd) / AMSET_DIR / "transport.json"
-    if p.is_file():
-        return p, "本技能 %s/transport.json" % AMSET_DIR
-    base = Path(cwd).parent
-    for sub, step in AMSET_SIBLINGS:
-        q = base / sub / step / "transport.json"
-        if q.is_file():
-            return q, "兄弟技能 %s/%s/transport.json" % (sub, step)
-    return None, "未找到"
+    return (p, "ke-dft-cpu → %s" % AMSET_DIR) if p.is_file() else (None, "未找到")
 
 
 def _find_kappa(cwd):
-    """找 κ_L 汇总。返回 (path, src 说明)。同技能优先，其次兄弟技能目录。"""
     p = Path(cwd) / KL_DIR / "kappa_summary.json"
-    if p.is_file():
-        return p, "本技能 %s/kappa_summary.json" % KL_DIR
-    base = Path(cwd).parent
-    for sub, step in KL_SIBLINGS:
-        q = base / sub / step / "kappa_summary.json"
-        if q.is_file():
-            return q, "兄弟技能 %s/%s/kappa_summary.json" % (sub, step)
-    return None, "未找到"
+    return (p, "%s → %s" % ((_source(cwd, "kappa_L") or {}).get("from", "?"), KL_DIR)) \
+        if p.is_file() else (None, "未找到")
 
 
 def _have_matplotlib():
@@ -174,6 +180,60 @@ def _have_matplotlib():
         return False
 
 
+def heatmap_data(grid):
+    """zT(n, T) 热图数据：按载流子类型分开，|n| 升序为列、T 为行；ZT 缺值为 None。"""
+    temps = list(grid["temperatures"])
+    out = {}
+    for kind in ("n", "p"):
+        rows = [r for r in grid["rows"] if r.get("type") == kind]
+        rows.sort(key=lambda r: abs(r["doping_cm-3"]))
+        if not rows:
+            continue
+        out[kind] = {"doping_cm-3": [abs(r["doping_cm-3"]) for r in rows],
+                     "temperatures": temps,
+                     "zt": [[r["ZT"][j] for r in rows] for j in range(len(temps))]}
+    return out
+
+
+def make_heatmap(out, grid, meta, plt):
+    """zT(n, T) 热图：n 型 / p 型两栏，横轴 |n|（对数刻度的档位）、纵轴 T。"""
+    import numpy as np
+    data = heatmap_data(grid)
+    if not data:
+        return
+    kinds = [k for k in ("n", "p") if k in data]
+    vmax = max((v for d in data.values() for row in d["zt"] for v in row
+                if v is not None), default=None)
+    if not vmax:
+        return
+    fig, axes = plt.subplots(1, len(kinds), figsize=(5.2 * len(kinds) + 1.0, 4.4),
+                             squeeze=False)
+    im = None
+    for ax, kind in zip(axes[0], kinds):
+        d = data[kind]
+        z = np.array([[np.nan if v is None else v for v in row] for row in d["zt"]], float)
+        im = ax.imshow(z, origin="lower", aspect="auto", cmap="magma", vmin=0, vmax=vmax,
+                       interpolation="nearest")
+        ax.set_xticks(range(len(d["doping_cm-3"])))
+        ax.set_xticklabels(["%.0e" % x for x in d["doping_cm-3"]], rotation=45,
+                           ha="right", fontsize=7)
+        ax.set_yticks(range(len(d["temperatures"])))
+        ax.set_yticklabels(["%g" % t for t in d["temperatures"]], fontsize=7)
+        ax.set_xlabel("%s-type carrier concentration (cm$^{-3}$)" % kind)
+        ax.set_ylabel("T (K)")
+        ax.set_title("%s-type zT(n, T)" % kind)
+        j, i = np.unravel_index(np.nanargmax(z), z.shape) if np.isfinite(z).any() else (None, None)
+        if j is not None:
+            ax.plot(i, j, marker="*", ms=12, mfc="white", mec="black", mew=0.8)
+            ax.annotate("%.2f" % z[j, i], (i, j), xytext=(6, 6), textcoords="offset points",
+                        color="black" if z[j, i] > 0.6 * vmax else "white",
+                        fontsize=8, fontweight="bold")
+    fig.colorbar(im, ax=list(axes[0]), label="zT", shrink=0.9)
+    fig.suptitle("zT(n, T) — %s" % meta["material"])
+    fig.savefig(Path(out) / "zt_heatmap.png", dpi=150, bbox_inches="tight")
+    plt.close(fig)
+
+
 def make_plots(out, grid, peaks, meta):
     """三张图；任何一张失败只告警，不影响 JSON/TXT 产物。"""
     import matplotlib
@@ -181,6 +241,7 @@ def make_plots(out, grid, peaks, meta):
     import matplotlib.pyplot as plt
 
     temps = grid["temperatures"]
+    make_heatmap(out, grid, meta, plt)
     # ---- 1) ZT(T) ----
     fig, ax = plt.subplots(figsize=(7.2, 5.0))
     for i, r in enumerate(grid["rows"]):
@@ -271,16 +332,15 @@ def main():
     out = cwd / OUTDIR
     out.mkdir(exist_ok=True)
 
+    srcs = check_input_sources(cwd)
     tr_path, tr_src = _find_transport(cwd)
     if tr_path is None:
-        sys.exit("[ERROR] 找不到电子段产物：本技能 %s/transport.json 与兄弟技能 "
-                 "%s 都没有。先把电子段（S8_kappa_e）跑完再汇总 ZT。"
-                 % (AMSET_DIR, "、".join("%s/%s" % x for x in AMSET_SIBLINGS)))
+        sys.exit("[ERROR] 找不到 %s/transport.json —— 先把 ke-dft-cpu 的 S8_kappa 跑完并拉回。"
+                 % AMSET_DIR)
     kl_path, kl_src = _find_kappa(cwd)
     if kl_path is None:
-        sys.exit("[ERROR] 找不到 κ_L：本技能 %s/kappa_summary.json 与兄弟技能 "
-                 "%s 都没有。先把晶格段（SK6_kappa）跑完。"
-                 % (KL_DIR, "、".join("%s/%s" % x for x in KL_SIBLINGS)))
+        sys.exit("[ERROR] 找不到 %s/kappa_summary.json —— 先把 kl-dft-cpu 的 S6_kappa 跑完并拉回。"
+                 % KL_DIR)
 
     par = _params(cwd)
     ktemp_mode = str(par.get("KTEMP_MODE", "interp") or "interp").lower()
@@ -299,8 +359,6 @@ def main():
         kl = zc.load_kappa(str(kl_path))
     except Exception as e:
         sys.exit("[ERROR] 解析 %s 失败：%s: %s" % (kl_src, type(e).__name__, e))
-    if not str(tr_path).startswith(str(cwd)):
-        print("[WARN] 电子段用的是兄弟技能目录：%s" % tr_src)
     print("[..] 电子段 %s：%d 个掺杂档 × %d 个温度点"
           % (tr_src, len(tr["doping"]), len(tr["temperatures"])))
     if kl.get("single_T_fallback"):
@@ -323,7 +381,7 @@ def main():
 
     grid = zc.build_grid(tr, kl, is_2d=is_2d, ktemp_mode=ktemp_mode,
                          const_T=const_T)
-    _amset_s = _amset_settings(cwd) if tr_src.startswith("本技能") else None
+    _amset_s = _amset_settings(cwd)
     if _amset_s and _amset_s.get("scattering_type"):
         grid["notes"].append("电子段 AMSET 散射机制 = %s；带隙 = %s eV"
                              % (", ".join(map(str, _amset_s["scattering_type"])),
@@ -377,8 +435,7 @@ def main():
                     "thickness_convention": kl.get("thickness_convention"),
                     "kappa_300K_xx_yy_zz": kl.get("kappa_300K_xx_yy_zz")},
         "amset_settings": _amset_settings(cwd),
-        "transport": {"source": tr_src,
-                      "sibling_fallback": not str(tr_path).startswith(str(cwd))},
+        "transport": {"source": tr_src},
         "kappa_e": {"source": meta["transport_src"],
                     "note": "AMSET electronic_thermal_conductivity（含双极项；未单独拆分）"},
         "grid_ZT": grid["grid_zt"],
@@ -389,7 +446,11 @@ def main():
             "ZT 只在 κ_L 温区内计算（不外推）；区域外的温度点 ZT 记 null。",
         ],
         "cell_caliber_check": cal,
-        "sources": {"transport_json": meta["transport_src"], "kappa_src": kl_src},
+        "sources": {"transport_json": meta["transport_src"], "kappa_src": kl_src,
+                    # 来源戳：哪个材料目录、哪个结构、哪个技能的哪一步（防同名串读）
+                    "inputs": {k: {"from": v.get("from"),
+                                   "material_dir": v.get("material_dir"),
+                                   "origin": v.get("origin")} for k, v in srcs.items()}},
     }
     (out / "zt_summary.json").write_text(
         json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -407,7 +468,7 @@ def main():
     if _have_matplotlib():
         try:
             make_plots(out, grid, peaks, meta)
-            print("[OK] zt_vs_T.png / zt_vs_doping.png / zt_components.png 已生成")
+            print("[OK] zt_heatmap.png / zt_vs_T.png / zt_vs_doping.png / zt_components.png 已生成")
         except Exception as e:                          # noqa: BLE001
             print("[WARN] 画图失败（%s: %s）——JSON/TXT 已生成，图跳过"
                   % (type(e).__name__, e))

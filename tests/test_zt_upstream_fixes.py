@@ -196,16 +196,6 @@ def test_discriminant_done_marker_resolves_to_script_output():
     assert resolved == expected, \
         "done_marker 没指到脚本真实写出的位置：%s" % resolved
 
-    # 本技能（zt-dft-cpu）里那份声明也要一致
-    zs = yaml.safe_load(open(os.path.join(ROOT, "skill", "zt-dft-cpu", "skill.yaml"),
-                             encoding="utf-8"))
-    zdefs = list(zs["steps"])
-    for grp in (zs.get("optional_steps") or {}).values():
-        zdefs += list((grp or {}).get("steps") or [])
-    zstep = next(s for s in zdefs
-                 if s.get("name") == "step2_bandgap/step2.155_discriminant_decide")
-    assert zstep["done_marker"] == marker
-
 
 # ---------------------------------------------------------------- 08/09/10 [结构]
 def test_gen_steps_marker_lands_in_their_own_step_dir():
@@ -225,7 +215,7 @@ def test_gen_steps_marker_lands_in_their_own_step_dir():
                 encoding="utf-8").read()
     assert "step2.155_discriminant_decide" in dsrc and "mkdir" in dsrc
 
-    for skill in ("ke-dft-cpu", "zt-dft-cpu"):
+    for skill in ("ke-dft-cpu",):   # zt v0.2 起不再复制 ke 的步骤（组合 ke/kl 结果）
         sk = yaml.safe_load(open(os.path.join(ROOT, "skill", skill, "skill.yaml"),
                                  encoding="utf-8"))
         defs = list(sk["steps"])
@@ -255,22 +245,12 @@ def _steps_by_name(skill_yaml):
 
 
 def test_zt_gen_need_covers_ke_for_shared_steps():
-    """[结构] zt 复用 ke 的步骤（同名 + 同一个 gen 脚本）时，zt 的 gen_need 必须覆盖 ke 的 ——
-    ke 给 gen_need 加了模块、zt 忘了跟，zt 那一步就会 ImportError。
-    2026-09-29（V121 复核）实例：ke S7.1 自 2026-09-21 起 import nspin_norm_fix，zt 一直没声明。"""
+    """[结构] zt v0.2 起不再复制 ke 的步骤（只剩 S20_zt，经 needs_results 读 ke/kl 的结果），
+    所以不存在"zt 复用 ke 的步骤却漏了 gen_need"的问题；守住这个前提：
+    zt 里任何与 ke 同名同 gen 的步骤都不允许再出现（要复用就走组合，不要复制）。
+    历史：2026-09-29（V121 复核）ke S7.1 import nspin_norm_fix、zt 复制的那份一直没声明。"""
     ke = _steps_by_name(os.path.join(ROOT, "skill", "ke-dft-cpu", "skill.yaml"))
     zt = _steps_by_name(os.path.join(ROOT, "skill", "zt-dft-cpu", "skill.yaml"))
-    missing = {}
-    for name, zs in zt.items():
-        ks = ke.get(name)
-        if not ks or ks.get("gen") != zs.get("gen"):
-            continue
-        lack = set(ks.get("gen_need") or []) - set(zs.get("gen_need") or [])
-        # 模板按维度/集群映射，zt 可以换名；只要求 .py 模块跟上
-        lack = {f for f in lack if f.endswith(".py")}
-        if lack:
-            missing[name] = sorted(lack)
-    assert not missing, "zt 复用 ke 的步骤漏了 gen_need 模块：%s" % missing
-    zroot = os.path.join(ROOT, "skill", "zt-dft-cpu")
-    for f in ("nspin_norm_fix.py", "dp_symmetrize.py"):
-        assert os.path.exists(os.path.join(zroot, f)), "zt 根目录缺软链 %s" % f
+    dup = sorted(n for n, zs in zt.items()
+                 if n in ke and ke[n].get("gen") == zs.get("gen"))
+    assert not dup, "zt 又复制了 ke 的步骤（应改用 needs_results 组合）：%s" % dup

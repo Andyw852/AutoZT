@@ -1,1 +1,0 @@
-../ke-dft-cpu/step2_bandgap/step2.15_discriminant/discriminant_common.py

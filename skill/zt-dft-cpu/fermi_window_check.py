@@ -1,1 +1,0 @@
-../ke-dft-cpu/step8.4_amset2d/fermi_window_check.py

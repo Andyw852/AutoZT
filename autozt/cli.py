@@ -860,6 +860,21 @@ def _main():
                          % (tok, ("，你是不是想 '%s'？" % close[0]) if close else "。"))
     jobs = jobs or [None]
 
+    # 同一个材料挂着好几个技能（如 zt-dft-cpu 组合了 ke-dft-cpu + kl-dft-cpu）时，
+    # 不带 -tt / -j 的 start/fetch 依次推进它的每个技能，而不是报"属于多个任务类型"。
+    if cmd in ("start", "fetch") and projs and not a.tt and jobs == [None]:
+        from autozt import _name_matches
+        _exp = []
+        for pj in projs:
+            _hits = [m for t in data["types"] for m in t["materials"] if _name_matches(m, pj)]
+            _keys = {m.get("tt") for m in _hits}
+            if len(_hits) > 1 and len(_keys) == len(_hits) and all(
+                    m.get("qualified_name") for m in _hits):
+                _exp += [m["qualified_name"] for m in _hits]
+            else:
+                _exp.append(pj)
+        projs = _exp
+
     if a.expect_state:
         # agent 执行计划的前置条件：计划可能来自几十分钟前的进度文件，这里按**现采**
         # 状态逐个核对，不符合的材料跳过（不会把已算完的步骤重交、把在跑的作业 retry 掉）。

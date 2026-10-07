@@ -352,6 +352,103 @@ def _dep_display(m, name):
         return hit[1].get("label") or name
     return os.path.basename(str(name))
 
+# ===== 跨技能结果依赖（needs_results）+ 结果来源戳 =====
+# 组合技能（如 zt-dft-cpu 的 S20_zt）不再抄上游技能的步骤，而是声明「要同一个材料
+# 的哪个技能的哪份结果」：
+#   needs_results: {transport: [ke-dft-cpu/result/step8_amset/transport.json, ...],
+#                   kappa_L:   [kl-dft-cpu/result/step6_kappa/kappa_summary.json, ...]}
+# 路径相对【本材料的本地目录】（lpath），按材料目录定位而不是按材料名——两个项目里
+# 同名的材料、或同名材料换过结构后的旧结果，都不会被误读：每份拉回的结果目录里有
+# autozt 写的来源戳 .autozt_origin.json（材料目录 + 当时的 POSCAR sha256），对不上就
+# 不算满足。满足的那份（每个键取第一个合格的候选）在 gen 时推到远端
+# <技能目录>/inputs/<键>/，并附 source.json 记录来源。
+ORIGIN_NAME = ".autozt_origin.json"
+
+
+def _sha256_file(path):
+    import hashlib
+    h = hashlib.sha256()
+    try:
+        with open(path, "rb") as f:
+            for chunk in iter(lambda: f.read(1 << 20), b""):
+                h.update(chunk)
+    except OSError:
+        return None
+    return h.hexdigest()
+
+
+def material_poscar_sha(m):
+    lp = (m or {}).get("lpath")
+    return _sha256_file(os.path.join(lp, "POSCAR")) if lp else None
+
+
+def write_result_origin(m, s):
+    """拉回结果时写来源戳：这份结果属于哪个材料目录、算的是哪个结构。"""
+    dest = os.path.join(m.get("result_dir") or "", s["name"])
+    if not m.get("result_dir") or not os.path.isdir(dest):
+        return
+    rec = {"schema": "autozt-origin/1",
+           "material": m.get("qualified_name") or m.get("name"),
+           "material_dir": os.path.realpath(m.get("lpath") or ""),
+           "skill": m.get("tt"), "step": s.get("name"), "label": s.get("label"),
+           "poscar_sha256": material_poscar_sha(m),
+           "host": s.get("_host") or m.get("host_eff"), "remote_dir": s.get("dir"),
+           "fetched_at": time.strftime("%Y-%m-%dT%H:%M:%S")}
+    try:
+        with open(os.path.join(dest, ORIGIN_NAME), "w", encoding="utf-8") as f:
+            json.dump(rec, f, ensure_ascii=False, indent=1)
+    except OSError:
+        pass
+
+
+def result_origin_check(result_dir, m):
+    """(ok, 原因)：result_dir 的来源戳是否属于材料 m 的当前结构。"""
+    p = os.path.join(result_dir, ORIGIN_NAME)
+    try:
+        with open(p, encoding="utf-8") as f:
+            o = json.load(f)
+    except (OSError, ValueError):
+        return False, "缺来源戳（旧版本拉回的结果，重新 fetch 该技能即可补上）"
+    lp = os.path.realpath(m.get("lpath") or "")
+    if os.path.realpath(o.get("material_dir") or "") != lp:
+        return False, "来自另一个材料目录 %s" % o.get("material_dir")
+    cur = material_poscar_sha(m)
+    if cur and o.get("poscar_sha256") and o["poscar_sha256"] != cur:
+        return False, "结构已变：结果按旧 POSCAR 算的，需重算"
+    return True, ""
+
+
+def resolve_needs_results(m, spec):
+    """needs_results → ({键: (结果文件绝对路径, 相对路径)}, [缺的说明])。"""
+    chosen, missing = {}, []
+    lp = m.get("lpath") or ""
+    for key, alts in (spec or {}).items():
+        alts = [alts] if isinstance(alts, str) else list(alts or [])
+        why = []
+        for rel in alts:
+            fp = os.path.join(lp, str(rel))
+            if not os.path.isfile(fp):
+                continue
+            ok, reason = result_origin_check(os.path.dirname(fp), m)
+            if ok:
+                chosen[key] = (fp, str(rel))
+                break
+            why.append("%s：%s" % (rel, reason))
+        if key not in chosen:
+            first = str(alts[0]).split("/result/")[0] if alts else key
+            missing.append("%s（%s）" % (key, "；".join(why) if why else
+                                         "等 %s 的结果：%s" % (first, alts[0] if alts else "?")))
+    return chosen, missing
+
+
+def step_cfg_safe(t, sname, m):
+    try:
+        from autozt import step_cfg
+        return step_cfg(t, sname, m)
+    except Exception:
+        return {}
+
+
 def _dag_recompute(t, m):
     """按 needs 重算每个步骤的 blocked / kind，并返回就绪集（可立即启动的）。
     依赖全部 OK 才算就绪；FAIL / SCANCEL 不自动推进，交给 retry。"""
@@ -369,6 +466,12 @@ def _dag_recompute(t, m):
         deps = [d for d in raw if d in names]
         s["_missing_deps"] = [_dep_display(m, d) for d in raw if d not in names]
         blocked = any(d not in okset for d in deps)
+        _nr = (step_cfg_safe(t, s["name"], m) or {}).get("needs_results")
+        if _nr:
+            _chosen, _miss = resolve_needs_results(m, _nr)
+            s["_missing_results"] = _miss
+            if _miss and not s.get("done"):
+                blocked = True
         s["label_txt"], s["kind"] = step_state(s, blocked)
         s["_deps"] = deps
         if s["kind"] in ("TODO", "PREP"):
@@ -968,6 +1071,53 @@ def remote_gen(cfg, t, m, sname, host=None, wd=None):
                         base64.b64encode(_data).decode(), shlex.quote(_dstroot)))
             prov_files[_base] = {"sha256": hashlib.sha256(_data).hexdigest(),
                                 "source": _src, "origin": "push_paths"}
+
+    # needs_results：把选中的上游结果目录推到 <技能目录>/inputs/<键>/（+ source.json）。
+    #   依赖判定（_dag_recompute）和这里用同一个 resolve_needs_results，缺了就不 gen。
+    _nr = sc.get("needs_results")
+    if _nr:
+        _chosen, _miss = resolve_needs_results(m, _nr)
+        if _miss:
+            return False, "跨技能结果还没齐：%s" % "；".join(_miss)
+        for _key, (_fp, _rel) in sorted(_chosen.items()):
+            _srcdir = os.path.dirname(_fp)
+            _dstroot = os.path.join(step_dir, "inputs", str(_key))
+            line += "rm -rf %s && mkdir -p %s ; " % (shlex.quote(_dstroot),
+                                                    shlex.quote(_dstroot))
+            _files = []
+            for _root, _dirs, _fns in os.walk(_srcdir):
+                _dirs[:] = [d for d in _dirs if not d.startswith(".")]
+                for _fn in _fns:
+                    if _fn.startswith(".tf_"):
+                        continue
+                    _files.append(os.path.join(_root, _fn))
+            _src_meta = {"key": _key, "from": _rel,
+                         "material_dir": os.path.realpath(m.get("lpath") or ""),
+                         "files": {}}
+            try:
+                with open(os.path.join(_srcdir, ORIGIN_NAME), encoding="utf-8") as _fo:
+                    _src_meta["origin"] = json.load(_fo)
+            except (OSError, ValueError):
+                pass
+            for _full in _files:
+                if os.path.getsize(_full) > 200 * 1024 * 1024:
+                    continue                      # 大文件（WAVECAR 等）不随汇总步推送
+                _sub = os.path.relpath(_full, _srcdir)
+                _dst = os.path.join(_dstroot, _sub)
+                with open(_full, "rb") as _fh:
+                    _data = _fh.read()
+                if os.path.dirname(_sub):
+                    line += "mkdir -p %s ; " % shlex.quote(os.path.dirname(_dst))
+                line += "echo %s | base64 -d > %s ; " % (
+                    base64.b64encode(_data).decode(), shlex.quote(_dst))
+                _sha = hashlib.sha256(_data).hexdigest()
+                _src_meta["files"][_sub] = _sha
+                prov_files[os.path.join("inputs", str(_key), _sub)] = {
+                    "sha256": _sha, "source": _full, "origin": "needs_results"}
+            _meta = json.dumps(_src_meta, ensure_ascii=False, indent=1).encode("utf-8")
+            line += "echo %s | base64 -d > %s ; " % (
+                base64.b64encode(_meta).decode(),
+                shlex.quote(os.path.join(_dstroot, "source.json")))
 
     # v1.0：把本步"输入指纹"档案推到远端（<材料>/provenance/<步骤>.json，
     # 另追加一行到 provenance/history.jsonl 作时间线）。放 provenance/ 子目录是
@@ -2429,6 +2579,7 @@ def _fetch_receipt_write(cfg, m, s):
         os.replace(tmp, os.path.join(dest, FETCH_STAMP))
     except OSError:
         pass
+    write_result_origin(m, s)        # 来源戳：组合技能按材料目录 + 结构指纹核对
 
 
 def _tar_names(listing):

@@ -183,7 +183,9 @@ _MANIFEST_TYPE_KEYS = ("desc", "steps", "optional_steps", "gen_need", "aux_files
                        # v3.24：技能自报的「提交前必须存在的输入」清单。
                        # 不跑 VASP 的技能（如 fit-fc-thermal）没有 INCAR/KPOINTS，
                        # 声明它即可通过 _remote_submit_preflight。
-                       "submit_required")
+                       "submit_required",
+                       # 组合技能（zt-dft-cpu）：register 时一并 init 的上游技能
+                       "companion_skills")
 
 _PS_CACHE = {}
 
