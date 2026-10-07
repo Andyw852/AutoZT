@@ -272,5 +272,21 @@ class WiringTests(unittest.TestCase):
                 L.main([str(target), "--invalidate-from", "step99"])
 
 
+class FindMaterialsV183Tests(unittest.TestCase):
+    """V183：project_setting/templates/ 里的步骤目录模板不当成材料。"""
+
+    def test_skips_templates_and_archives(self):
+        import lineage_check as L
+        root = Path(tempfile.mkdtemp())
+        for rel in ("CrA/ke-dft-cpu/step1_opt", "CrB/ke-dft-cpu/step1_opt",
+                    "project_setting/templates/ke-dft-cpu/step1_opt", "project_setting/templates/step1_opt",
+                    "CrC.stale-20261001/ke-dft-cpu/step1_opt", ".trash/CrD/step1_opt"):
+            (root / rel).mkdir(parents=True)
+        got = [p.relative_to(root).as_posix() for p in L.find_materials(root)]
+        self.assertEqual(got, ["CrA/ke-dft-cpu", "CrB/ke-dft-cpu"])
+        # 直接指向一个材料目录时照旧
+        self.assertEqual(L.find_materials(root / "CrA" / "ke-dft-cpu"), [root / "CrA" / "ke-dft-cpu"])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

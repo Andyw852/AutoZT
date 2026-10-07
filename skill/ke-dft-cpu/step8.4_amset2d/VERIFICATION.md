@@ -8123,3 +8123,20 @@ environment: amset_clean`，接着 `amset: command not found`。集群上现在�
 - 两个材料、同一种泛函：没有提示。
 - 把 lineage_check.py 退回 V181，这 2 项失败。
 - test_lineage.py、test_lineage_post.py、test_s3_grid_gate.py 照旧通过。
+
+## V183（2026-10-07）：lineage_check 不再把模板目录当成材料
+
+**现场**：在项目根目录跑 V182 版 lineage_check，按泛函分组时多出 6 个"泛函未知"的"材料"，实际是 `project_setting/templates/` 下的模板目录。
+
+**根因**：
+- `autozt init` 会把技能的整套模板复制进 `project_setting/templates/`，里面也有 `step1_opt/` 这类步骤目录。
+- `find_materials` 递归查找"含 step1_opt 的目录"，于是把这些模板也算成了材料。
+
+**改动**（tools/lineage_check.py）：
+- 递归查找时，路径里只要有以下任一种就跳过：`project_setting`、`templates`、隐藏目录（`.` 开头）、`*.stale-*` 归档目录。
+- 直接指定单个材料目录时，行为不变。
+
+**测试**：test_lineage.py 新增 1 项，共 13 项。
+- 构造的项目里有两个材料，外加两处模板、一个归档目录、一个隐藏目录；只认出那两个材料。
+- 直接指定单个材料目录时照旧。
+- 把 lineage_check.py 退回 V182，这一项失败。

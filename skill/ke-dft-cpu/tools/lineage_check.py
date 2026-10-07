@@ -13,6 +13,7 @@ V149 起结构比对扣除整体平移（S3/S3b 的 align_origin 是刚性平移
 V153：--invalidate-from 也接受 S1 / S2 链（下游 VASP 步骤整目录归档；在跑的不动）。
 V175：另查 k 网格 —— S3 不合现行规则、S7 和 S3 不是同一张网格且不合规。gen 的闸门只在重新生成时起作用，
       已经算完的旧结果只能靠这里查出来（CrS₂ 的 15×15×1 当初就是这样"收口"的）。
+V183：递归找材料时跳过 project_setting/、templates/、隐藏目录和 *.stale-* 归档目录（模板不是材料）。
 V182：末尾按泛函分组列出本次查到的材料（step1 的 FUNC=，读不到从 INCAR 反推）；不止一种时提示。
       只是提示，不算上游问题、不改退出码 —— 出厂是 PBEsol，材料级 step.conf 可以改成 PBE，
       同一项目里混着两种很正常，但放进同一张表比较前要知道。
@@ -35,12 +36,27 @@ for _p in (str(HERE.parent), str(HERE.parent.parent / "_common" / "opt")):
 import ke_common as kc  # noqa: E402
 
 
+# [V183] 不是材料的目录：autozt init 把技能整套模板（含 step1_opt/ 等步骤目录）复制进
+#   project_setting/templates/，递归找 step1_opt 时会把它当成材料（实测项目根多出 6 个"泛函未知"的"材料"）。
+#   归档目录（*.stale-*）、隐藏目录同理跳过。
+_NOT_MATERIAL_PARTS = ("project_setting", "templates")
+
+
+def _is_material_path(p, root):
+    try:
+        parts = Path(p).relative_to(root).parts
+    except ValueError:
+        parts = Path(p).parts
+    return not any(x in _NOT_MATERIAL_PARTS or x.startswith(".") or ".stale-" in x for x in parts)
+
+
 def find_materials(root, pattern=None):
     root = Path(root)
     if any((root / d).is_dir() for d in kc.S1_DIRS):
         return [root]
     cands = root.glob(pattern) if pattern else (p.parent for d in kc.S1_DIRS for p in root.rglob(d))
-    return sorted({Path(p) for p in cands if any((Path(p) / d).is_dir() for d in kc.S1_DIRS)})
+    return sorted({Path(p) for p in cands
+                   if any((Path(p) / d).is_dir() for d in kc.S1_DIRS) and _is_material_path(p, root)})
 
 
 def _short(mat):
