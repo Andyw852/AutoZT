@@ -2045,9 +2045,9 @@ Reproducibility
 
 Agent interface (Model Context Protocol, stdio JSON-RPC)
   mcp                     MCP server: initialize / tools/list / tools/call
-  mcp --list-tools        print the tool table (24 generic tools in full mode, risk-tagged;
-                          AUTOZT_MCP_PROFILE=compact exposes 7, workflow 12,
-                          monitor 2 LLM-facing tools)
+  mcp --list-tools        print the tool table (default core: 12 tools in 5 stages
+                          discover/plan/execute/approve/report; AUTOZT_MCP_PROFILE=
+                          workflow 21, full 32, compact 7, monitor 3)
   mcp --call NAME JSON    call one tool directly (testing)
 
 Safety gate (agent sessions only)

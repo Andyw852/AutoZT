@@ -15,6 +15,15 @@ PROG = os.path.join(ROOT, "bin", "autozt")
 sys.path.insert(0, ROOT)
 from autozt import mcp as M  # noqa: E402
 
+import pytest  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _full_profile_by_default(monkeypatch):
+    """这些用例测的是各个工具本身；默认档（core）只开放 12 个，统一切到 full 再测。
+    专门测分档的用例会自己改/删 AUTOZT_MCP_PROFILE。"""
+    monkeypatch.setenv("AUTOZT_MCP_PROFILE", "full")
+
 
 def test_tool_table_is_generic_and_capped():
     assert len(M.TOOLS) >= 24, "当前协议应包含通用工具和科学工作流工具"
@@ -121,10 +130,10 @@ def test_prompts_list_and_get():
     assert M._prompt_get("nope") is None
     triage = M._prompt_get("triage-failures")
     triage_text = triage["messages"][0]["content"]["text"]
-    assert "inspect" in triage_text
+    assert "cycle" in triage_text and "get_progress" in triage_text
     assert "get_summary" not in triage_text and "get_status" not in triage_text
     review_text = got["messages"][0]["content"]["text"]
-    assert "inspect" in review_text
+    assert "preflight" in review_text and "cycle" in review_text
     assert "get_status" not in review_text
     resp = M.handle({"jsonrpc": "2.0", "id": 9, "method": "prompts/get",
                      "params": {"name": "nope"}})
@@ -174,21 +183,54 @@ def test_tools_have_output_schema_and_compact_profile():
             os.environ["AUTOZT_MCP_PROFILE"] = old
 
 
-def test_default_profile_is_workflow_sized():
-    old = os.environ.pop("AUTOZT_MCP_PROFILE", None)
-    try:
-        names = {item["name"] for item in M._tools_list()}
-        assert len(names) == 21
-        assert "inspect" in names and "cycle" in names
-        assert {"register_material", "conf_get", "conf_set"} <= names
-        assert "get_progress" in names and "doctor" in names
-        # 破坏性动作只能「申请」（审批卡片/确认框），直接执行的工具不进默认档
-        assert {"task_graph", "request_destructive_action", "approve_request"} <= names
-        assert "cancel_step" not in names and "rebuild_step" not in names
-        assert "stop_step" not in names and "rerun_step" not in names
-    finally:
-        if old is not None:
-            os.environ["AUTOZT_MCP_PROFILE"] = old
+def test_default_profile_is_core_by_stage(monkeypatch):
+    """默认档 core：12 个工具，按 发现/规划/执行/审批/汇报 五段组织，每个都带 x-stage。"""
+    monkeypatch.delenv("AUTOZT_MCP_PROFILE", raising=False)
+    tools = M._tools_list()
+    names = {item["name"] for item in tools}
+    assert names == M.CORE_TOOLS and len(names) == 12
+    assert list(M.STAGES) == ["discover", "plan", "execute", "approve", "report"]
+    assert {t["name"]: t["x-stage"] for t in tools} == M.STAGE_OF
+    # 破坏性动作只能「申请」+「用户同意后批准」，直接执行的工具不进默认档
+    assert {"request_destructive_action", "approve_request"} <= names
+    assert not names & {"cancel_step", "rebuild_step", "clean_material", "start_step"}
+    # 不在档里的工具调用会被拒绝（门禁不因分档放宽）
+    got = M.call_tool("inspect", {})
+    assert got["isError"] and "profile" in got["structuredContent"]["error"]
+
+
+def test_core_alias_and_unknown_profile(monkeypatch):
+    monkeypatch.setenv("AUTOZT_MCP_PROFILE", "default")
+    assert {t["name"] for t in M._tools_list()} == M.CORE_TOOLS
+    monkeypatch.setenv("AUTOZT_MCP_PROFILE", "typo")       # 写错不会放大到 full
+    assert {t["name"] for t in M._tools_list()} == M.COMPACT_TOOLS
+
+
+def test_rules_layer_in_initialize_and_resources(monkeypatch):
+    """规则层：initialize.instructions 与资源 autozt://rules 同一份文本，只引用 core 里的工具。"""
+    monkeypatch.delenv("AUTOZT_MCP_PROFILE", raising=False)
+    init = M.handle({"jsonrpc": "2.0", "id": 1, "method": "initialize",
+                     "params": {"protocolVersion": "2025-06-18"}})["result"]
+    assert init["serverInfo"]["name"] == "autozt"
+    assert init["serverInfo"]["title"] == "AutoZT MCP server"
+    assert init["instructions"] == M.HARNESS_RULES
+    uris = [r["uri"] for r in M._resources_list()]
+    assert uris[0] == M.RULES_URI
+    assert M._resource_read(M.RULES_URI)["contents"][0]["text"] == M.HARNESS_RULES
+    import re
+    every_tool = set(M.BY_NAME)
+    cited = set(re.findall(r"[a-z]+_[a-z_]+|\b[a-z]+\b", M.HARNESS_RULES)) & every_tool
+    assert cited and cited <= M.CORE_TOOLS, cited - M.CORE_TOOLS
+
+
+def test_prompts_only_cite_core_tools():
+    """默认档下照着 prompt 做必须走得通：prompt 里点名的工具都在 core 里。"""
+    import re
+    every_tool = set(M.BY_NAME)
+    for p in M._prompts_list():
+        text = M._prompt_get(p["name"], {"material": "m", "step": "s"})["messages"][0]["content"]["text"]
+        cited = set(re.findall(r"[a-z]+(?:_[a-z]+)*", text)) & every_tool
+        assert cited <= M.CORE_TOOLS, (p["name"], cited - M.CORE_TOOLS)
 
 
 def test_workflow_profile_exposes_one_shot_control_loop(monkeypatch):

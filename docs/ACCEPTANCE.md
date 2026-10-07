@@ -10,7 +10,7 @@ artifact that carries the evidence, so a reviewer can re-run it.
 | CLI works under both names (autozt, pa) | bin/autozt, bin/pa; pyproject scripts |
 | English help | AUTOZT_LANG=en pa --help (50 lines, 29 commands, no Chinese left) |
 | MCP server (JSON-RPC over stdio) | autozt mcp; tests/test_mcp.py (32 checks, including profiles, capabilities, bounded proposals, configured skill resources, failure data, and cursor snapshots) |
-| 24 generic MCP tools in the explicit full profile; compact exposes 7, workflow 12, monitor 2 | autozt mcp --list-tools; MCP tests assert skill-agnostic names and profile output |
+| 32 generic MCP tools in the explicit full profile; default core exposes 12 in five stages, workflow 21, compact 7, monitor 3 | autozt mcp --list-tools; MCP tests assert skill-agnostic names and profile output |
 
 ## 2. Safety
 

@@ -454,13 +454,14 @@ def _cmd_setup(args: argparse.Namespace) -> Tuple[Dict[str, Any], int]:
     """接入说明：MCP 服务配置（绝对路径，直接粘进客户端配置）+ 给 LLM 的规则卡。只读。"""
     config = _config_path(getattr(args, "config", None))
     argv = autozt_argv()
-    env = {"AUTOZT_MCP_PROFILE": "workflow"}
+    env = {"AUTOZT_MCP_PROFILE": "core"}
     if config:
         env["AUTOZT_CONFIG"] = config
     data: Dict[str, Any] = {
         "mcp_server": {"mcpServers": {"autozt": {
             "command": argv[0], "args": argv[1:] + ["mcp"], "env": env}}},
-        "mcp_profiles": {"workflow": "默认：progress/doctor/inspect/cycle/apply/register_material/conf_set/check_env 等 18 个工具",
+        "mcp_profiles": {"core": "默认：12 个工具，按 发现/规划/执行/审批/汇报 五段组织（tools/list 的 x-stage）",
+                         "workflow": "21 个：core + inspect/apply_actions/conf_get/conf_set/doctor 等",
                          "monitor": "最小：get_progress/get_snapshot/cycle",
                          "full": "全部工具（含需人工批准的破坏性工具）"},
         "cli": {"prefix": " ".join(argv + ["agent"]),

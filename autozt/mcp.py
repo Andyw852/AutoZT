@@ -266,7 +266,9 @@ TOOLS = [
 ]
 BY_NAME = {t[0]: t for t in TOOLS}
 
-# 默认 full 暴露完整的固定工具表；新 LLM 接入推荐 workflow，只把高层闭环放进模型上下文。
+# 工具面分档（AUTOZT_MCP_PROFILE）：默认 core = 按 5 个阶段组织的 12 个工具，一一对应
+# 「发现 → 规划 → 执行 → 审批 → 汇报」；workflow（21 个）/ full（全部）/ compact / monitor /
+# readonly 仍可显式选择。分档只决定模型看到哪些工具，门禁与审计不变。
 COMPACT_TOOLS = {
     # Compatibility profile retained for existing clients.
     "schema", "list_skills", "describe_skill", "get_snapshot", "probe_step",
@@ -289,6 +291,28 @@ WORKFLOW_TOOLS = {
     # 用户同意后 approve_request 执行——不用用户自己去终端敲命令
     "task_graph", "request_destructive_action", "approve_request",
 }
+
+# 默认档：每个阶段只留做这件事必需的工具。观察+规划+执行都收在 cycle 里
+# （execute=false 是只读的候选动作，execute=true 才提交），所以 inspect/apply_actions 等不进默认档。
+STAGES = OrderedDict((
+    ("discover", ("list_skills", "describe_skill", "check_env")),
+    ("plan", ("research_plan", "preflight")),
+    ("execute", ("register_material", "cycle", "get_progress")),
+    ("approve", ("request_destructive_action", "approve_request")),
+    ("report", ("results", "task_graph")),
+))
+STAGE_OF = {tool: stage for stage, tools in STAGES.items() for tool in tools}
+CORE_TOOLS = set(STAGE_OF)
+
+# MCP 服务端的「规则」层：initialize.instructions 原样下发，也可作为资源 autozt://rules 读取。
+# 只引用 core 档里的工具，保证默认档下照做就能走完整条链。
+HARNESS_RULES = """AutoZT harness rules (MCP server `autozt mcp`; the same verbs exist as `autozt agent <verb>`).
+1. Discover: list_skills / describe_skill to pick skills (contracts are also resources autozt://skill/<name>/skill.yaml); check_env before running on a machine.
+2. Plan: research_plan, then preflight on the structure. Show the plan and wait for the user to agree before anything is submitted.
+3. Execute: register_material for a new material, then cycle(execute=false) to preview and cycle(execute=true) to submit; get_progress to follow jobs. deferred = queued behind max_jobs, not a failure.
+4. Approve: stop / rerun / clean / forced start are never automatic. request_destructive_action returns a consent card with the task graph; call approve_request only after the user explicitly agrees, passing their words as reply.
+5. Report: results gives values with unit, method, validator and provenance; task_graph shows where every step is. Show the task graph before asking for consent.
+6. Refer to materials by the stable id <project>/<name>. Do not hand-run gen scripts, ssh, or sbatch; everything goes through these tools."""
 
 TOOL_RESULT_SCHEMA = {
     "type": "object",
@@ -1256,13 +1280,15 @@ def readonly_profile():
 def _profile_tool_names():
     # Keep the default model-facing surface small.  The complete compatibility
     # surface remains available explicitly with AUTOZT_MCP_PROFILE=full.
-    profile = (os.environ.get("AUTOZT_MCP_PROFILE") or "workflow").strip().lower()
+    profile = (os.environ.get("AUTOZT_MCP_PROFILE") or "core").strip().lower()
     if profile in ("readonly", "read-only", "ro"):
         return {item[0] for item in TOOLS if item[3] == "read"}
     if profile == "compact":
         return COMPACT_TOOLS
     if profile == "monitor":
         return MONITOR_TOOLS
+    if profile in ("core", "default"):
+        return CORE_TOOLS
     if profile in ("workflow", "agent"):
         return WORKFLOW_TOOLS
     if profile == "full":
@@ -1282,13 +1308,16 @@ def _tools_list():
         if name not in exposed:
             continue
         s = dict(schema)
-        out.append({"name": name, "description": "[%s] %s" % (risk, desc),
+        item = {"name": name, "description": "[%s] %s" % (risk, desc),
                     "inputSchema": s,
                     "outputSchema": TOOL_RESULT_SCHEMA,
                     "annotations": {"readOnlyHint": risk == "read",
                                     "destructiveHint": risk == "destructive",
                                     "idempotentHint": risk == "read"},
-                    "x-risk": risk})
+                    "x-risk": risk}
+        if name in STAGE_OF:
+            item["x-stage"] = STAGE_OF[name]
+        out.append(item)
     return out
 
 
@@ -1310,7 +1339,9 @@ def handle(req):
                   "capabilities": {"tools": {"listChanged": False}, "resources": {"subscribe": False,
                                                                   "listChanged": False},
                                     "prompts": {}},
-                  "serverInfo": {"name": "autozt", "version": SCHEMA_VERSION}}
+                  "serverInfo": {"name": "autozt", "title": "AutoZT MCP server",
+                                 "version": SCHEMA_VERSION},
+                  "instructions": HARNESS_RULES}
     elif method in ("tools/list", "list_tools"):
         result = {"tools": _tools_list()}
     elif method == "resources/list":
@@ -1447,8 +1478,13 @@ def _skill_dirs():
     return out
 
 
+RULES_URI = "autozt://rules"
+
+
 def _resources_list():
-    out, seen_names = [], set()
+    out, seen_names = [{"uri": RULES_URI, "name": "rules",
+                        "description": "AutoZT harness rules (same text as initialize.instructions)",
+                        "mimeType": "text/markdown"}], set()
     for d in _skill_dirs():
         name = os.path.basename(d)
         if name in seen_names:
@@ -1505,6 +1541,8 @@ def _resource_path(uri):
 
 
 def _resource_read(uri):
+    if uri == RULES_URI:
+        return {"contents": [{"uri": uri, "mimeType": "text/markdown", "text": HARNESS_RULES}]}
     p = _resource_path(uri)
     if not p:
         return None
@@ -1544,33 +1582,33 @@ def _prompts_list():
 def _prompt_get(name, args=None):
     args = args or {}
     if name == "triage-failures":
-        text = ("Call inspect with status=error to obtain the bounded failure snapshot, "
-                "diagnosis codes, and deterministic proposals. For each failing step "
-                "use the returned evidence to decide whether retry is appropriate; "
-                "retry keeps products and must be explicitly selected before execution. "
-                "Never try to perform stop, rerun, or clean through an automatic plan: "
-                "report the evidence and let a human approve destructive actions.")
+        text = ("Call get_progress with status=error to list failing steps with their "
+                "diagnosis code and suggested action. For a material you need to look at, "
+                "show task_graph. Then call cycle with execute=false and include_retry=true: "
+                "it proposes retries that keep products. Submit them with execute=true only "
+                "after the user agrees. Never stop, rerun, or clean on your own: use "
+                "request_destructive_action and wait for the user's explicit consent.")
     elif name == "review-before-submit":
         mat = args.get("material") or "<material>"
         step = args.get("step") or "<step>"
-        text = ("Call inspect with material %s and review the active step %s. If the "
-                "contract or input evidence is insufficient, call describe_skill or "
-                "get_snapshot for the same scope. Check the effective step settings, "
-                "remote directory, and work_dir source before selecting start_step; "
-                "execute only after the plan is explicit and its cursor is current."
-                % (mat, step))
+        text = ("Review material %s, step %s before submitting. Call describe_skill for "
+                "the step's contract, preflight with material=%s for the inputs, and "
+                "task_graph to see what runs next. Then call cycle with execute=false and "
+                "material=%s; submit with execute=true only after the user agrees."
+                % (mat, step, mat, mat))
     elif name == "compute-zt":
         text = ("先确认材料、维度（2D 要确认厚度契约）、温度网格和载流子网格。"
                 "严格按 research_plan → preflight（不给 result_dir：检查 POSCAR/材料、维度、"
-                "真空轴和网格）→ inspect → cycle(execute=false) → 用户确认 → "
-                "cycle(execute=true) → 作业完成后 preflight(result_dir) 校验结果 → "
-                "results 执行；research_plan、preflight 和 dry-run 不提交作业，"
-                "所有执行动作都必须经过 autozt act。")
+                "真空轴和网格）→ register_material → cycle(execute=false) → 用户确认 → "
+                "cycle(execute=true) → get_progress 跟进 → 作业完成后 preflight(result_dir) "
+                "校验结果 → results 执行；research_plan、preflight 和 dry-run 不提交作业。"
+                "zt-dft-cpu 读 ke-dft-cpu 与 kl-dft-cpu 的结果，task_graph 会标出它在等哪一个。")
     elif name == "run-validated-workflow":
-        text = ("严格按 research_plan → preflight（执行前，检查输入）→ inspect → "
-                "cycle(execute=false) → 用户确认 → cycle(execute=true) → "
-                "preflight(result_dir)（结果回收后校验）→ results 执行。所有执行动作都必须经过 "
-                "autozt act；dry-run 和 preflight 不提交作业。")
+        text = ("严格按 research_plan → preflight（执行前，检查输入）→ "
+                "cycle(execute=false) → 用户确认 → cycle(execute=true) → get_progress → "
+                "preflight(result_dir)（结果回收后校验）→ results 执行。破坏性动作只用 "
+                "request_destructive_action 申请，用户同意后 approve_request；dry-run 和 "
+                "preflight 不提交作业。")
     elif name == "explain-result-provenance":
         text = ("回答数值时逐条引用 results 的 value、unit、method、validator、"
                 "provenance.source 和 provenance.field_path；找不到结果时说明缺少的产物或筛选条件。")
