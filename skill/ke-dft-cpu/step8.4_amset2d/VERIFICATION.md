@@ -7927,3 +7927,26 @@ environment: amset_clean`，接着 `amset: command not found`。集群上现在�
   - 解析：vasprun 不会读到 `<projected>` 里的本征值；EIGENVAL 的 VASP 5/6 两种格式都能读；
   - make：INCAR 改动正确，CHGCAR 等是拷贝、不是链接；拒绝写进材料目录或非空目录，拒绝 3D；
   - fit：S8.2 值正确时退出码 0，偏 10% 时退出码 1，k 点数对不上时退出码 2。
+
+## V177（2026-10-07）：edge_mass_check 在 S3 没有 CHGCAR 时走两段式
+
+**现场**：
+- agent 准备跑 V176 的验证 A 时发现，CrS₂ 和 CrSe₂ 的 step3_uniform 都是 `LCHARG = .FALSE.`，CHGCAR 只是个 0 字节的占位文件。
+- V176 的 `make` 只查 `is_file()`，0 字节也放行。如果照常提交，VASP 要到非自洽（ICHARG = 11）读 CHGCAR 时才会挂。
+- agent 提的"改成 ICHARG = 1 / ISTART = 1"不可行：ICHARG = 1 同样要读 CHGCAR。用 WAVECAR 重建电荷密度的思路是对的，但必须先做一次自洽。
+- 重跑 S3 打开 LCHARG 也不可取：在项目里重跑 S3 会让 S4/S7/S8.x 全部失效。
+
+**改动**（tools/edge_mass_check.py）：
+- 必需文件改成查非空（`_nonempty`），KPOINTS 也必须存在。
+- CHGCAR 缺失或是 0 字节时，`make` 生成两段式：
+  - `stage1_scf/`：S3 的 INCAR/KPOINTS/POSCAR/POTCAR/WAVECAR 的**拷贝**。只改 `ISTART = 1, ICHARG = 0, LCHARG = .TRUE., LWAVE = .FALSE.`，NBANDS 写死成 S3 的值，ISYM 照 S3（WAVECAR 是 S3 的不可约 k 点）。从收敛的轨道起跑，几步就收敛。没有 WAVECAR 时改为 ISTART = 0 / ICHARG = 2 从头算，成本约等于重跑一次 S3，并告警。
+  - `stage2_nscf/`：原来的非自洽输入（ICHARG = 11，带边星形 k 点），CHGCAR 由 stage1 拷过来。
+  - `run_two_stage.sh <VASP 命令>`：依次跑两段。stage1 没跑完或没写出 CHGCAR 就停下，不跑 stage2。本工具不碰集群的提交方式，VASP 命令由调用者给。
+- `fit`：两段式时读 `stage2_nscf/` 的 EIGENVAL，并比较 stage1 和 S3 的最后一个 TOTEN（`make` 时记进 meta）。差 > 1e-4 eV 判不通过：电荷密度不是 S3 那一份，m* 不可信。
+
+**测试**：test_edge_mass_check.py 从 9 项增加到 13 项。
+- 0 字节 CHGCAR + 有 WAVECAR → 两段式。stage1 的 INCAR 改动正确、ISYM 照 S3、KPOINTS 与 S3 相同、WAVECAR 是拷贝；stage2 没有 CHGCAR，等 stage1 写出。
+- 没有 WAVECAR → ISTART = 0 / ICHARG = 2，并有成本告警。
+- 用假 VASP 跑 `run_two_stage.sh`：两段依次执行，CHGCAR 拷进 stage2；stage1 不写 CHGCAR 时退出码 1，stage2 不跑。
+- `fit`：stage1 的 TOTEN 差 2e-5 eV 通过，差 2e-3 eV 不通过。
+- 把工具退回 V176，新增 4 项全部失败。

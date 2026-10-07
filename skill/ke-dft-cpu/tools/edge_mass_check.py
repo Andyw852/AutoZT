@@ -12,8 +12,11 @@
 
 用法：
   python edge_mass_check.py make <材料目录> <out_dir> [--qmax 0.05] [--nq 10] [--ndir 6]
-      -> out_dir 里有 INCAR / KPOINTS / POSCAR / POTCAR / CHGCAR + edge_mass_meta.json。
+      -> S3 有可用的 CHGCAR：out_dir 里直接是非自洽的 INCAR / KPOINTS / POSCAR / POTCAR / CHGCAR，
          用 step3_uniform 的同一套 VASP 命令提交（k 点约 1 + 2·ndir·nq 个，几分钟）。
+      -> S3 的 CHGCAR 缺失或是 0 字节（出厂 LCHARG = .FALSE.）：两段式（V177）。stage1_scf 在 S3 的副本里从 S3 的
+         WAVECAR 起跑自洽写出 CHGCAR（几步收敛），stage2_nscf 再非自洽；提交脚本里只写
+         bash <out_dir>/run_two_stage.sh <VASP 命令>。
   python edge_mass_check.py fit <out_dir> [--tol 0.03]
       -> 读 EIGENVAL（6 位小数；没有才退回 vasprun.xml 的 4 位），打印各方向的 m* 和与 S8.2 的对比，
          写 edge_mass_result.json。退出码 0 = 通过，1 = 不通过，2 = 算不了。
@@ -32,8 +35,51 @@ import ke_common as kc  # noqa: E402
 
 HB2M = 3.80998            # ħ²/(2 m0)，eV·Å²（与 S8.2 同一常数）
 DEGEN_EV = 0.005
+TOTEN_TOL_EV = 1e-4       # stage1 自洽必须复现 S3 的总能量（同网格、同 INCAR）
 META = "edge_mass_meta.json"
 RESULT = "edge_mass_result.json"
+# [V177] 两段式（S3 没有可用的 CHGCAR 时）。VASP 命令由调用者给，本工具不碰集群的提交方式。
+RUN_TWO_STAGE = r'''#!/bin/bash
+# edge_mass_check 两段式（V177）。用法：bash run_two_stage.sh <VASP 命令>，例如 bash run_two_stage.sh mpirun -np 24 vasp_std
+set -euo pipefail
+[ $# -ge 1 ] || { echo "用法：bash run_two_stage.sh <VASP 命令>" >&2; exit 2; }
+here="$(cd "$(dirname "$0")" && pwd)"
+cd "$here/stage1_scf"
+"$@"
+grep -q "General timing" OUTCAR || { echo "[ERROR] stage1 自洽没跑完" >&2; exit 1; }
+[ -s CHGCAR ] || { echo "[ERROR] stage1 没写出 CHGCAR" >&2; exit 1; }
+cp CHGCAR "$here/stage2_nscf/CHGCAR"
+cd "$here/stage2_nscf"
+"$@"
+grep -q "General timing" OUTCAR || { echo "[ERROR] stage2 非自洽没跑完" >&2; exit 1; }
+echo "[OK] 两段都跑完了"
+'''
+
+
+def _nonempty(p):
+    try:
+        return Path(p).is_file() and Path(p).stat().st_size > 0
+    except OSError:
+        return False
+
+
+def outcar_toten(outcar):
+    """OUTCAR（或 OUTCAR.gz）里最后一个 free energy TOTEN（eV）；读不到返回 None。"""
+    import gzip
+    import re
+    p = Path(outcar)
+    try:
+        if p.is_file():
+            txt = p.read_text(errors="ignore")
+        elif Path(str(p) + ".gz").is_file():
+            with gzip.open(str(p) + ".gz", "rt", errors="ignore") as f:
+                txt = f.read()
+        else:
+            return None
+    except OSError:
+        return None
+    m = re.findall(r"free\s+energy\s+TOTEN\s*=\s*(-?\d+\.\d+)", txt)
+    return float(m[-1]) if m else None
 
 
 # ---------------------------------------------------------------- vasprun（只用标准库）
@@ -182,9 +228,14 @@ def cmd_make(a):
         sys.exit("[ERROR] out_dir 不能放在材料目录里（%s）：这是一次性核对，放到项目外的临时目录" % out)
     if out.exists() and any(out.iterdir()):
         sys.exit("[ERROR] %s 已存在且不空" % out)
-    for f in ("INCAR", "POSCAR", "POTCAR", "CHGCAR", "vasprun.xml"):
-        if not (s3 / f).is_file():
-            sys.exit("[ERROR] 缺 %s（S3 没跑完，或 CHGCAR 被删了？）" % (s3 / f))
+    for f in ("INCAR", "POSCAR", "POTCAR", "KPOINTS", "vasprun.xml"):
+        if not _nonempty(s3 / f):
+            sys.exit("[ERROR] 缺 %s 或是空文件（S3 没跑完？）" % (s3 / f))
+    # [V177] S3 的出厂 INCAR 是 LCHARG = .FALSE.，CHGCAR 只是个 0 字节的占位文件（CrS₂ / CrSe₂ 实测）。
+    #   V176 只查 is_file()，0 字节也放行，VASP 要到非自洽那步才会挂。没有可用的 CHGCAR 就走两段式：
+    #   stage1 在 S3 的副本里从 S3 的 WAVECAR 起跑自洽（ISTART = 1、ICHARG = 0，几步就收敛）写出 CHGCAR，stage2 再非自洽。
+    two_stage = not _nonempty(s3 / "CHGCAR")
+    has_wave = _nonempty(s3 / "WAVECAR")
     dim = kc.read_method_dim(s3 / kc.METHOD_FILE) or kc.resolve_dim_for(s3 / "POSCAR", "auto")[0]
     if dim != "2d":
         sys.exit("[ERROR] 只支持 2D（本材料 DIM=%s）" % dim)
@@ -209,12 +260,27 @@ def cmd_make(a):
                 kp_lines.append("  %.10f  %.10f  %.10f  1" % tuple(kf))
                 pts_meta.append([len(stars) - 1, j, s, q])
     out.mkdir(parents=True, exist_ok=True)
-    for f in ("POSCAR", "POTCAR", "CHGCAR"):
-        shutil.copyfile(s3 / f, out / f)                            # 拷贝，不链接
     base = kc.parse_incar((s3 / "INCAR").read_text(errors="ignore"))
-    ov = {"ICHARG": "11", "ISTART": "0", "ISYM": "0", "NSW": "0", "IBRION": "-1", "NBANDS": str(eig.shape[2]),
-          "LWAVE": ".FALSE.", "LCHARG": ".FALSE.", "LVHAR": None, "LVTOT": None, "LELF": None, "LAECHG": None,
-          "LORBIT": None, "KSPACING": None, "KGAMMA": None, "ICORELEVEL": None}
+    nb = str(eig.shape[2])
+    _quiet = {"LVHAR": None, "LVTOT": None, "LELF": None, "LAECHG": None, "LORBIT": None, "ICORELEVEL": None}
+    nscf = out / "stage2_nscf" if two_stage else out
+    nscf.mkdir(exist_ok=True)
+    if two_stage:
+        scf = out / "stage1_scf"
+        scf.mkdir()
+        for f in ("POSCAR", "POTCAR", "KPOINTS") + (("WAVECAR",) if has_wave else ()):
+            shutil.copyfile(s3 / f, scf / f)                         # 拷贝，不链接（VASP 不许写回 S3）
+        ov1 = dict(_quiet, ISTART="1" if has_wave else "0", ICHARG="0" if has_wave else "2", LCHARG=".TRUE.",
+                   LWAVE=".FALSE.", NBANDS=nb, NSW="0", IBRION="-1")
+        (scf / "INCAR").write_text(kc.incar_text(kc.merge_incar(base, ov1), system="edge_mass_check stage1"))
+        (out / "run_two_stage.sh").write_text(RUN_TWO_STAGE)
+        (out / "run_two_stage.sh").chmod(0o755)
+        if not has_wave:
+            print("[WARN] S3 也没有 WAVECAR：stage1 只能从头自洽，成本约等于重跑一次 S3")
+    for f in ("POSCAR", "POTCAR") + (() if two_stage else ("CHGCAR",)):
+        shutil.copyfile(s3 / f, nscf / f)                           # 拷贝，不链接
+    ov = dict(_quiet, ICHARG="11", ISTART="0", ISYM="0", NSW="0", IBRION="-1", NBANDS=nb,
+              LWAVE=".FALSE.", LCHARG=".FALSE.", KSPACING=None, KGAMMA=None)
     try:
         if float(base.get("EDIFF", "1E-4").lower().replace("d", "e")) > 1e-8:
             ov["EDIFF"] = "1E-8"                                     # 最小的 ΔE 只有 0.1 meV 量级
@@ -222,17 +288,23 @@ def cmd_make(a):
         ov["EDIFF"] = "1E-8"
     if base.get("ALGO", "N").strip()[:1].upper() in ("F", "V"):
         ov["ALGO"] = "Normal"
-    (out / "INCAR").write_text(kc.incar_text(kc.merge_incar(base, ov), system="edge_mass_check"))
-    (out / "KPOINTS").write_text("edge_mass_check star (V176)\n%d\nReciprocal\n%s\n" % (len(kp_lines), "\n".join(kp_lines)))
-    meta = {"version": 1, "material": str(mat), "s3_mesh": kc.read_kpoints_mesh(s3 / "KPOINTS"),
+    (nscf / "INCAR").write_text(kc.incar_text(kc.merge_incar(base, ov), system="edge_mass_check"))
+    (nscf / "KPOINTS").write_text("edge_mass_check star (V176)\n%d\nReciprocal\n%s\n" % (len(kp_lines), "\n".join(kp_lines)))
+    meta = {"version": 2, "material": str(mat), "s3_mesh": kc.read_kpoints_mesh(s3 / "KPOINTS"),
+            "layout": "two_stage" if two_stage else "single", "s3_toten": outcar_toten(s3 / "OUTCAR"),
             "qmax": a.qmax, "nq": a.nq, "ndir": a.ndir,
             "edges": {n: {"spin": edges[n][0], "band": edges[n][2], "E_s3": edges[n][3]} for n in edges},
             "stars": stars, "points": pts_meta, "dpt_m": _dpt_masses(mat)}
     (out / META).write_text(json.dumps(meta, ensure_ascii=False, indent=1), encoding="utf-8")
-    print("[OK] %s：%d 个 k 点（%d 个星，%s），NBANDS = %d" % (
-        out, len(kp_lines), len(stars), "；".join("k0=%s 用于 %s" % (st["k0"], "/".join(st["edges"])) for st in stars),
-        eig.shape[2]))
-    print("     用 step3_uniform 的同一套 VASP 命令提交；跑完：python %s fit %s" % (Path(__file__).name, out))
+    print("[OK] %s：%d 个 k 点（%d 个星，%s），NBANDS = %s" % (
+        out, len(kp_lines), len(stars), "；".join("k0=%s 用于 %s" % (st["k0"], "/".join(st["edges"])) for st in stars), nb))
+    if two_stage:
+        print("     S3 没有可用的 CHGCAR（LCHARG = .FALSE.）-> 两段式：stage1_scf 从 S3 的 %s 起跑自洽写出 CHGCAR，"
+              "stage2_nscf 再非自洽。" % ("WAVECAR" if has_wave else "初始猜测"))
+        print("     提交脚本里只写一行：bash %s/run_two_stage.sh <S3 用的 VASP 命令，如 mpirun -np 24 vasp_std>" % out)
+    else:
+        print("     用 step3_uniform 的同一套 VASP 命令在 %s 里提交" % out)
+    print("     跑完：python %s fit %s" % (Path(__file__).name, out))
     return 0
 
 
@@ -242,11 +314,12 @@ def cmd_fit(a):
     out = Path(a.out_dir).resolve()
     try:
         meta = json.loads((out / META).read_text(encoding="utf-8"))
-        if (out / "EIGENVAL").is_file():
-            kfrac, eig = read_eigenval(out / "EIGENVAL")
+        nscf = out / "stage2_nscf" if meta.get("layout") == "two_stage" else out
+        if (nscf / "EIGENVAL").is_file():
+            kfrac, eig = read_eigenval(nscf / "EIGENVAL")
         else:
             print("[WARN] 没有 EIGENVAL，退回 vasprun.xml：本征值只有 4 位小数（0.1 meV），窗口减半的检查会偏严")
-            kfrac, eig, _ = read_vasprun_eigen(out / "vasprun.xml")
+            kfrac, eig, _ = read_vasprun_eigen(nscf / "vasprun.xml")
     except (OSError, ValueError, IndexError) as e:
         print("[ERROR] %s" % e)
         return 2
@@ -254,6 +327,17 @@ def cmd_fit(a):
         print("[ERROR] 结果有 %d 个 k 点，meta 记了 %d 个 —— 不是这次 make 的输入" % (len(kfrac), len(meta["points"])))
         return 2
     ok, res = True, {"material": meta["material"], "s3_mesh": meta["s3_mesh"], "qmax": meta["qmax"], "carriers": {}}
+    if meta.get("layout") == "two_stage":                            # [V177] stage1 的电荷密度得是 S3 那一份
+        e1, e3 = outcar_toten(out / "stage1_scf" / "OUTCAR"), meta.get("s3_toten")
+        res["stage1_toten_minus_s3_eV"] = None if None in (e1, e3) else e1 - e3
+        if None in (e1, e3):
+            print("[WARN] 读不到 stage1 或 S3 的 TOTEN，没法确认 stage1 复现了 S3 的电荷密度")
+        elif abs(e1 - e3) > TOTEN_TOL_EV:
+            print("[★] stage1 的总能量和 S3 差 %.2e eV（> %.0e）：电荷密度不是 S3 那一份，m* 不可信"
+                  % (e1 - e3, TOTEN_TOL_EV))
+            ok = False
+        else:
+            print("[OK] stage1 复现了 S3 的总能量（差 %.1e eV）" % (e1 - e3))
     for name, carrier in (("cbm", "electron"), ("vbm", "hole")):
         ed = meta["edges"][name]
         si = next(i for i, st in enumerate(meta["stars"]) if name in st["edges"])

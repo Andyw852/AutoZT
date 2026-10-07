@@ -4,6 +4,7 @@
 
 模型能带：六方 2D（a = 3.04 Å），带边在 K；E = Eg + ħ²q²/2m + w q³ cos3θ + c₄q⁴（导带），价带取负。
 三角翘曲 w q³cos3θ 是奇次项，±q 平均后应完全消掉；q⁴ 由拟合吸收。
+V177：S3 的 CHGCAR 是 0 字节（出厂 LCHARG = .FALSE.）时走两段式（stage1 从 WAVECAR 自洽 -> stage2 非自洽）。
 
 用法：python test_edge_mass_check.py      退出码 0 = 全部 PASS。
 """
@@ -12,6 +13,7 @@ import io
 import json
 import math
 import os
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -54,7 +56,10 @@ def _vasprun(kpts, eig, occ, decoy=True):
             + ks + "\n  </varray>\n </kpoints>\n <calculation>\n" + proj + eig_xml + " </calculation>\n</modeling>\n")
 
 
-def _material(dim="2D"):
+S3_TOTEN = -20.12345678
+
+
+def _material(dim="2D", chgcar="chg\n", wavecar="wave"):
     m = Path(tempfile.mkdtemp()) / "CrS2_hex"
     s3 = m / "step3_uniform"
     s3.mkdir(parents=True)
@@ -64,7 +69,11 @@ def _material(dim="2D"):
                               "LVHAR = .TRUE.\nKPAR = 4\nNCORE = 6\n")
     (s3 / "KPOINTS").write_text("auto\n0\nGamma\n 48 48 3\n")
     (s3 / "POTCAR").write_text("PAW_PBE Cr\nPAW_PBE S\n")
-    (s3 / "CHGCAR").write_text("chg\n")
+    (s3 / "CHGCAR").write_text(chgcar)                          # "" = 出厂 LCHARG = .FALSE. 的 0 字节占位
+    if wavecar is not None:
+        (s3 / "WAVECAR").write_text(wavecar)
+    (s3 / "OUTCAR").write_text("  free  energy   TOTEN  =       -19.00000000 eV\n"
+                               "  free  energy   TOTEN  =       %.8f eV\n General timing\n" % S3_TOTEN)
     (s3 / kc.METHOD_FILE).write_text("DIM=%s\n" % dim)
     kpts = [[0, 0, 0], list(K), [0.5, 0, 0]]
     eig = [[-1.0, 2.0], list(_model(K)), [-0.8, 1.6]]                  # 模型只在 K 附近成立：Γ、M 直接给远离带边的值
@@ -79,6 +88,7 @@ def _dpt(m, me, mh):
 
 
 def _eigenval(out, vasp6=True, **model):
+    out = out / "stage2_nscf" if (out / "stage2_nscf").is_dir() else out
     ln = (out / "KPOINTS").read_text().splitlines()
     kf = [[float(x) for x in l.split()[:3]] for l in ln[3:3 + int(ln[1])]]
     rows = ["    3    3    1    1", "  0.1E+02", "  1.0E-04", "  CAR", " CrS2", "     18  %d  2" % len(kf)]
@@ -212,6 +222,74 @@ class MakeFitTests(unittest.TestCase):
         rc, txt = _run(["fit", str(out)])
         self.assertEqual(rc, 2)
         self.assertIn("不是这次 make 的输入", txt)
+
+
+class TwoStageTests(unittest.TestCase):                                  # [V177]
+    def test_empty_chgcar_gives_two_stage(self):
+        m = _material(chgcar="")
+        out = m.parent / "emc"
+        rc, txt = _run(["make", str(m), str(out)])
+        self.assertEqual(rc, 0, txt)
+        self.assertIn("两段式", txt)
+        s1, s2 = out / "stage1_scf", out / "stage2_nscf"
+        i1 = kc.parse_incar((s1 / "INCAR").read_text())
+        self.assertEqual((i1["ISTART"], i1["ICHARG"], i1["LCHARG"], i1["LWAVE"], i1["NBANDS"], i1["ISYM"]),
+                         ("1", "0", ".TRUE.", ".FALSE.", "2", "2"))   # ISYM 照 S3：WAVECAR 是 S3 的不可约 k 点
+        self.assertNotIn("LVHAR", i1)
+        self.assertEqual((s1 / "KPOINTS").read_text(), (m / "step3_uniform" / "KPOINTS").read_text())
+        self.assertNotEqual(os.stat(s1 / "WAVECAR").st_ino, os.stat(m / "step3_uniform" / "WAVECAR").st_ino)
+        self.assertEqual(kc.parse_incar((s2 / "INCAR").read_text())["ICHARG"], "11")
+        self.assertFalse((s2 / "CHGCAR").exists())                    # 等 stage1 写出来
+        self.assertEqual(int((s2 / "KPOINTS").read_text().splitlines()[1]), 121)
+        meta = json.loads((out / E.META).read_text())
+        self.assertEqual((meta["layout"], meta["s3_toten"]), ("two_stage", S3_TOTEN))
+
+    def test_no_wavecar_starts_from_scratch(self):
+        m = _material(chgcar="", wavecar=None)
+        out = m.parent / "emc"
+        rc, txt = _run(["make", str(m), str(out)])
+        self.assertIn("成本约等于重跑一次 S3", txt)
+        i1 = kc.parse_incar((out / "stage1_scf" / "INCAR").read_text())
+        self.assertEqual((i1["ISTART"], i1["ICHARG"]), ("0", "2"))
+        self.assertFalse((out / "stage1_scf" / "WAVECAR").exists())
+
+    def test_run_two_stage_script(self):
+        m = _material(chgcar="")
+        out = m.parent / "emc"
+        _run(["make", str(m), str(out)])
+        fake = m.parent / "fakevasp.sh"                               # 假 VASP：写 OUTCAR；LCHARG = .TRUE. 时写 CHGCAR
+        fake.write_text("#!/bin/bash\necho \"$PWD\" >> %s/calls\n"
+                        "echo ' General timing' > OUTCAR\n"
+                        "grep -q 'LCHARG *= *.TRUE.' INCAR && echo chg > CHGCAR\nexit 0\n" % m.parent)
+        fake.chmod(0o755)
+        r = subprocess.run(["bash", str(out / "run_two_stage.sh"), str(fake)], capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        calls = (m.parent / "calls").read_text().split()
+        self.assertEqual([Path(c).name for c in calls], ["stage1_scf", "stage2_nscf"])
+        self.assertEqual((out / "stage2_nscf" / "CHGCAR").read_text(), "chg\n")
+        # stage1 没写出 CHGCAR -> 停下，不跑 stage2
+        m2 = _material(chgcar="")
+        out2 = m2.parent / "emc"
+        _run(["make", str(m2), str(out2)])
+        bad = m2.parent / "badvasp.sh"
+        bad.write_text("#!/bin/bash\necho ' General timing' > OUTCAR\n")
+        bad.chmod(0o755)
+        r = subprocess.run(["bash", str(out2 / "run_two_stage.sh"), str(bad)], capture_output=True, text=True)
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("没写出 CHGCAR", r.stderr)
+        self.assertFalse((out2 / "stage2_nscf" / "OUTCAR").exists())
+
+    def test_fit_checks_stage1_energy(self):
+        for toten, want in ((S3_TOTEN + 2e-5, 0), (S3_TOTEN + 2e-3, 1)):
+            m = _material(chgcar="")
+            _dpt(m, ME, MH)
+            out = m.parent / "emc"
+            _run(["make", str(m), str(out)])
+            (out / "stage1_scf" / "OUTCAR").write_text("  free  energy   TOTEN  =       %.8f eV\n" % toten)
+            _eigenval(out)
+            rc, txt = _run(["fit", str(out)])
+            self.assertEqual(rc, want, txt)
+            self.assertIn("复现了 S3" if want == 0 else "电荷密度不是 S3 那一份", txt)
 
 
 if __name__ == "__main__":
