@@ -302,6 +302,13 @@ def main(outdir=None, fit_dir=None, step=None):
     cwd = Path.cwd()
     out = cwd / (outdir or OUTDIR)
     conf = stepconf.load(SPEC, step or STEP, strict="warn")
+    _solver = str(conf["SOLVER"] or "phono3py").strip().lower()
+    if _solver not in ("phono3py", "shengbte"):
+        # 以前未知值（含旧引擎的 fourphonon）会被静默当成 phono3py 跑——用户以为在用
+        # GPU FourPhonon，实际算的是 phono3py
+        sys.exit("[ERROR] SOLVER=%r 不支持：共享 κ 引擎只有 phono3py | shengbte"
+                 "（fourphonon 还没并入共享引擎，需要时用 kl-dft-cpu/lattice_kappa.py 手动跑）"
+                 % _solver)
     fit = cwd / (fit_dir or FIT_DIR)
     _gen_one(conf, fit, out, cwd, write_submit=True)
     mj = fit / "methods.json"
