@@ -230,7 +230,8 @@ def fetch_provenance_dir(cfg, m, quiet=True):
                      errors="replace")
         p1.stdout.close()
         rc1 = p1.wait()
-        if rc1 != 0 or p2.returncode != 0:
+        from autozt import tar_meta_only_errors          # [V179] 9p / drvfs：只是设不了时间戳，不算失败
+        if rc1 != 0 or (p2.returncode != 0 and not tar_meta_only_errors(p2.stderr)):
             if not quiet:
                 print("%s: provenance 拉回失败。%s" % (m.get("name"), p2.stderr))
             return False

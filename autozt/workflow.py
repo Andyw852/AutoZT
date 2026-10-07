@@ -2048,8 +2048,10 @@ def _remote_submit_preflight(cfg, m, s, t=None):
             p1.stdout.close()
             err = p1.stderr.read().decode(errors="replace") if p1.stderr else ""
             rc1 = p1.wait()
-            if rc1 != 0 or p2.returncode != 0:
+            if rc1 != 0 or (p2.returncode != 0 and not tar_meta_only_errors(p2.stderr)):
                 return False, "扇出输入回拉失败：%s" % (p2.stderr or err).strip()
+            if p2.returncode != 0:
+                print("[WARN] %s" % TAR_META_WARN)
         missing = ["%s/%s" % (name, item) for name in names for item in per_child[name]
                    if not os.path.isfile(os.path.join(dest, name, item))]
         return (True, "") if not missing else (False, "本地仍缺少 " + ", ".join(missing[:12]))
@@ -2582,6 +2584,26 @@ def _fetch_receipt_write(cfg, m, s):
     write_result_origin(m, s)        # 来源戳：组合技能按材料目录 + 结构指纹核对
 
 
+# [V179] 本地结果目录在 9p / drvfs 这类挂载上（WSL 的 /mnt/<盘>）时，tar 能写进文件内容，却不许设时间戳 / 权限：
+#   GNU tar 逐个报 "Cannot utime: Operation not permitted"，最后以 2 退出。fetch 以前把这当成整步失败，
+#   第一个步骤（S1_opt）就 abort，后面的步骤一个都拉不回（CrS₂ S8.4 只好手工 scp）。
+#   只放过这几类"元数据设不上"的错误；磁盘满、坏包、拒绝写入等其余错误照样算失败。
+_TAR_META_ERRORS = ("Cannot utime", "Cannot change mode", "Cannot change ownership",
+                    "Can't restore time", "Can't set permissions", "Can't update time")
+
+
+def tar_meta_only_errors(stderr):
+    """tar 解包返回非零时：是否所有错误都只是"设不了时间戳 / 权限 / 属主"（文件内容已经落盘）。
+    只看 "tar:" 开头的行（bsdtar 的 xv 清单 "x POSCAR" 也打在 stderr，不算错误）。"""
+    errs = [ln.strip() for ln in (stderr or "").splitlines() if ln.strip().startswith("tar:")]
+    errs = [ln for ln in errs if "Exiting with failure status" not in ln]
+    return bool(errs) and all(any(k in ln for k in _TAR_META_ERRORS) for ln in errs)
+
+
+TAR_META_WARN = ("本地文件系统不允许设置时间戳 / 权限（9p、drvfs 这类挂载）：文件已拉回，但修改时间是拉回时刻，"
+                 "在本地结果目录上跑 lineage_check 判新旧不可信 —— 新旧核对请在集群上跑")
+
+
 def _tar_names(listing):
     """tar xv 的输出（GNU 在 stdout 打 "./POSCAR"；bsdtar 在 stderr 打 "x POSCAR"）-> 收到的相对路径集合。"""
     out = set()
@@ -2637,7 +2659,7 @@ def fetch_material(cfg, m, only_steps=None, quiet=False, all_files=False,
         if not quiet:
             print("%s: fetch_files 为空，跳过。" % m["name"])
         return True
-    nstep = 0
+    nstep, meta_warned = 0, False
     for s in m["steps"]:
         if not s.get("exists") and s["name"] not in (force_steps or set()):
             continue
@@ -2671,9 +2693,12 @@ def fetch_material(cfg, m, only_steps=None, quiet=False, all_files=False,
                             errors="replace")
         p1.stdout.close()
         rc1 = p1.wait()
-        if rc1 != 0 or p2.returncode != 0:
+        if rc1 != 0 or (p2.returncode != 0 and not tar_meta_only_errors(p2.stderr)):
             print("%s: fetch %s 失败。%s" % (m["name"], s["label"], p2.stderr))
             return False
+        if p2.returncode != 0 and not meta_warned:                  # [V179] 只打一次
+            print("[WARN] %s: %s" % (m["name"], TAR_META_WARN))
+            meta_warned = True
         _prune_unreceived(dest, p2.stdout + "\n" + p2.stderr,
                           [sc2.get("done_marker")] if _whole else list(files) + [sc2.get("done_marker")],
                           m, s)

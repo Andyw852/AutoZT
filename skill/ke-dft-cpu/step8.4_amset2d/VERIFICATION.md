@@ -7989,3 +7989,34 @@ environment: amset_clean`，接着 `amset: command not found`。集群上现在�
 - > 1%：是噪声，取全窗口值 0.9019，S8.2 偏差 2.1%，在 3% 以内；
 - ≤ 1%：是高阶项，带边 m* 在 0.902–0.924 之间，S8.2 偏差 2–4.5%。
 - 不管哪种，对 DPT 迁移率的影响都 ≤ 9%（μ ∝ 1/m²）。
+
+## V179（2026-10-07）：autozt fetch 在 9p / drvfs 挂载上不再因"设不了时间戳"整步失败
+
+**现场**：
+- CrS₂ 的 S8.4 跑完后，`autozt fetch` 在 S1_opt 第一步就失败退出，报错是 tar 的 `Cannot utime: Operation not permitted`，后面的步骤一个都没拉回。
+- transport.json 等结果只好手工 `scp` 回来。
+
+**根因**：
+- 本地结果目录在 9p / drvfs 这类挂载上（WSL 的 `/mnt/<盘>`），文件内容能写，但不许设置文件的修改时间和权限。
+- GNU tar 解包时逐个文件报 utime 错误，最后以退出码 2 结束。
+- fetch 只看退出码，于是把它当作整步失败，并在第一步就 abort。
+- 回拉扇出输入和回拉 provenance 这两处也是同样的写法。
+
+**改动**（autozt/workflow.py、autozt/prov.py）：
+- 新增 `tar_meta_only_errors(stderr)`：只看以 `tar:` 开头的错误行。全部错误都属于以下几类时，判定为"文件内容已落盘"：
+  - 设不了修改时间（`Cannot utime` / `Can't restore time` / `Can't update time`）；
+  - 设不了权限或属主（`Cannot change mode` / `Cannot change ownership` / `Can't set permissions`）。
+- bsdtar 打在 stderr 上的 `x 文件名` 清单行不算错误。
+- 三处本地解包（fetch、扇出输入、provenance）都改成：只是元数据设不上时照常继续，并告警一次。告警说明本地文件的修改时间是拉回时刻，所以在本地结果目录上跑 lineage_check 判新旧不可信，新旧核对要在集群上跑。
+- 其余错误（磁盘满、坏包、拒绝写入）照样判失败。
+- 没有改成 `tar -m`：那样会把所有文件的修改时间都改成拉回时刻，正常文件系统上的 lineage 新旧比较也会跟着失效。
+
+**测试**：tests/test_fetch_9p.py，6 项。
+- 用真 tar 解包、再模拟 9p 上的报错（追加 utime 错误、退出码 2）：
+  - 两个步骤都拉回来了，只告警一次；
+  - 混入"磁盘满"时仍然判失败；
+  - 正常解包没有告警。
+- provenance 回拉：9p 报错时放行，混入 `Permission denied` 时失败。
+- 扇出输入那一处的接线检查。
+- 把两个源文件退回 V178，新增的 4 项会失败；另外 2 项（真错误照样失败、正常解包不告警）本来就该在新旧代码上都通过。
+- tests/ 下其余测试全部通过（133 项）。suite_*.py 有 4 个脚本失败，退回改动前也是同样 4 个，与本次无关。
