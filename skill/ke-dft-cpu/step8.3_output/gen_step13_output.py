@@ -29,7 +29,8 @@ from pathlib import Path
 # [SKILL_REV] 版本戳：写进 comparison_summary.txt。每次改本脚本逻辑后更新。
 #   陈旧副本已咬人三次（step12/step9b 盖戳后，step13 是最后一个没盖的），
 #   这里盖戳便于从产物反查到底跑的是哪份 skill 副本。
-_SKILL_REV = "2026-09-16-amset2d"
+_SKILL_REV = "2026-10-07-v181"
+#   bump 记录：2026-10-07-v181 —— 汇总里写明泛函（csv 的 functional 列 + summary 的 [口径] 行）。
 #   bump 记录：2026-09-16-amset2d —— 增加 step8.4_amset2d（二维散射核）对比列；
 #   仅在目录存在时读取，**不写进 needs**，以免 3D 项目因缺这个步骤而卡住。
 
@@ -95,6 +96,30 @@ def _deform_geometry(cwd):
             if v:
                 return str(v)
     return None
+
+
+# [V181] 泛函标签。本步 gen_need 为空、不依赖 ke_common 模块：先取 S8.2/S8.4 已写进结果的，
+#   都没有再直接读 step1 的 workflow_method.txt（FUNC=），标签与 ke_common.FUNC_LABEL 保持一致。
+_FUNC_LABEL = {"pbe": "PBE（GGA=PE，无色散修正）",
+               "pbesol": "PBEsol（GGA=PS，无色散修正）",
+               "pbe-d3": "PBE+D3(BJ)（GGA=PE，IVDW=12）"}
+
+
+def _functional(cwd):
+    """返回 (标签, 来源)；读不到返回 (None, None)。"""
+    for rel, key in (("step8.2_dpt/dpt_result.json", "functional"),
+                     ("step8.4_amset2d/2d_correction.json", "functional")):
+        f = (_load_json(Path(cwd) / rel) or {}).get(key) if (Path(cwd) / rel).is_file() else None
+        if isinstance(f, dict) and f.get("func"):
+            return f.get("label") or f["func"], rel
+    for d in ("step1_opt", "step1"):
+        mf = Path(cwd) / d / "workflow_method.txt"
+        if mf.is_file():
+            for ln in mf.read_text(errors="ignore").splitlines():
+                if ln.strip().upper().startswith("FUNC="):
+                    v = ln.split("=", 1)[1].strip().lower()
+                    return _FUNC_LABEL.get(v, v), "%s/workflow_method.txt" % d
+    return None, None
 
 
 def _areal_factor_cm(cwd):
@@ -667,6 +692,9 @@ def write_table(out, rows, am, bt, dpt, am2=None):
     _dgeom = _deform_geometry(Path.cwd())
     if _dgeom:
         cols = cols + ["deform_geometry"]
+    _func, _func_src = _functional(Path.cwd())             # [V181]
+    if _func:
+        cols = cols + ["functional"]
     with open(out / "comparison_300K.csv", "w", newline="") as fh:
         w = csv.DictWriter(fh, fieldnames=cols, extrasaction="ignore")
         w.writeheader()
@@ -691,6 +719,8 @@ def write_table(out, rows, am, bt, dpt, am2=None):
                     pass
             if _dgeom:
                 _row["deform_geometry"] = _dgeom
+            if _func:
+                _row["functional"] = _func
             w.writerow(_row)
 
     def fmt(v, f="%.4g"):
@@ -703,6 +733,14 @@ def write_table(out, rows, am, bt, dpt, am2=None):
              "# 张量约化：%s" % _red,
              "# S/Lorenz 可直接比；σ/κ_e amset是绝对值、BT2是per-τ只比趋势；DPT迁移率仅ADP",
              "# [DPT μ] m* 取 full-BZ 二次型 m_d（面内平均），非 3 点抛物拟合"]
+    if not _func:
+        lines.append("# [口径] 泛函 = 未知（step1 的 workflow_method.txt 读不到）—— 先查 step1 INCAR 的 GGA/IVDW，"
+                     "再和文献比")
+    else:
+        _fnote = ("；GGA=PS 是 PBEsol 不是 PBE，晶格通常比 PBE 小约 1%，C_2D 偏硬，m* 和谷间能差也会变"
+                  if _func.startswith("PBEsol") else "")
+        lines.append("# [口径] 泛函 = %s（来源 %s）—— 和文献比较前先核对文献用的泛函%s"
+                     % (_func, _func_src, _fnote))
     if _dgeom:
         _warn = ("" if _dgeom == "ionrelax" else
                  "  ⚠ 非离子弛豫口径：与 TOTAL ELASTIC MODULI 不同源，ADP 绝对值跨项目不可直接比")

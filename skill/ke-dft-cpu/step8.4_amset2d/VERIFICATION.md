@@ -8054,3 +8054,51 @@ environment: amset_clean`，接着 `amset: command not found`。集群上现在�
 - `run()` 接线：同一张张量，有插件不告警，没有插件告警。
 - 把 overlap_preflight.py 退回 V179：接线那一项失败（插件路径仍然告警），其余 7 项报错（新函数不存在）。
 - step8.4_amset2d 下其余 14 个测试脚本、ke-dft-cpu 根目录的测试脚本全部通过。
+
+## V181（2026-10-07）：结果文件里写明泛函
+
+**现场**：
+- 和 PBE 文献逐项对比 DPT 时，agent 把 step1 INCAR 的 `GGA = PS` 报成了"PBE"。
+- `GGA = PS` 在 VASP 里是 PBEsol。本技能的出厂泛函就是 PBEsol（step.conf `FUNC = pbesol`）。
+- 对比里 C₂D 系统偏高。它其实来自泛函（PBEsol 的晶格更小，弹性更硬），差点被归到别的原因上。
+
+**根因**：
+- 几何、能带、弹性、形变势用的都是 step1 定下的同一个泛函，下游各步通过 workflow_method.txt 的 `FUNC=` 继承。
+- 但 dpt_result.json、2d_correction.json 和 8.3 汇总都不记泛函。看结果的人只能回头翻 INCAR，而 `PS` / `PE` 很容易认错。
+
+**改动**：
+- ke_common：
+  - 新增 `FUNC_LABEL`（例如"PBEsol（GGA=PS，无色散修正）"）和 `FUNC_COMPARE_NOTE`（和文献比较时要注意的地方）。
+  - 新增 `material_functional(mat_dir)`：先读 step1 的 workflow_method.txt，读不到再从 step1 的 INCAR 反推。返回泛函、标签、来源和提示。
+- S8.2（gen_step12_dpt）：
+  - dpt_result.json 新增 `functional`；
+  - dpt_summary.txt 第二行写"泛函：…——提示"；
+  - gen 时打印一行；
+  - `_SKILL_REV` 改为 2026-10-07-v181，没有 `functional` 的结果一看版本号就能认出来。
+- S8.4（gen_step14_amset2d）：2d_correction.json 新增 `functional`，gen 时打印一行。
+- S8.3（gen_step13_output）：
+  - comparison_300K.csv 新增 `functional` 列，comparison_summary.txt 新增"[口径] 泛函 = …"一行；
+  - 依次取 S8.2 结果里的、S8.4 记录里的，都没有再直接读 workflow_method.txt；
+  - 本步 gen_need 为空，所以不依赖 ke_common 模块，标签表单独写一份，测试会核对两份一致；
+  - `_SKILL_REV` 改为 2026-10-07-v181。
+- 读不到泛函时写"未知"，并提示去查 step1 INCAR 的 GGA/IVDW，不会空着。
+- 不改任何计算，只多记一个字段。
+- 已有结果要带上这个字段：S8.2、S8.3 重跑 gen 即可，都是秒级。8.3 汇总会从 S8.2 结果或 workflow_method.txt 取泛函。
+- S8.4 的 2d_correction.json 等下次因为别的原因重新生成时再带上。不要为这一个字段单独重新生成 S8.4，那样会让已经跑完的 AMSET 结果作废。
+
+**测试**：test_functional_label.py，12 项。材料目录在测试里构造。
+- `material_functional`：
+  - workflow_method.txt 的 pbesol；
+  - INCAR 反推（GGA=PS 无 IVDW 判为 PBEsol；GGA=PE 加 IVDW=12 判为 PBE+D3）；
+  - workflow_method.txt 和 INCAR 不一致时以前者为准；
+  - 都没有时返回"未知"；
+  - 标签和提示覆盖 `SUPPORTED_FUNCS` 的全部取值。
+- S8.3：
+  - 标签表和 ke_common 一致；
+  - 取值顺序是 S8.2、S8.4、workflow_method.txt；
+  - `write_table` 产出的 summary 有"[口径] 泛函 = PBEsol（GGA=PS，无色散修正）"和"不是 PBE"，csv 有 `functional` 列；
+  - 读不到泛函时 summary 写"未知"。
+- 接线：
+  - S8.2 的 `_functional` 能读出 PBEsol，res 和摘要里都有这个字段；
+  - S8.4 的记录里有 `"functional": _func`。
+- 把 4 个源文件退回 V180，12 项全部不通过（4 项失败、8 项报错）。

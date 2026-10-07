@@ -34,7 +34,7 @@ from pathlib import Path
 # =========================== 可改参数区 ===========================
 # [SKILL_REV] 版本戳：写进 dpt_result.json，铺开时验证跑的是哪份 skill 副本。
 # 每次改本脚本逻辑后更新（如 "2026-08-29-nstep-linear"）。
-_SKILL_REV = "2026-10-03-v153"
+_SKILL_REV = "2026-10-07-v181"   # V181：结果里记泛函
 # [R-SCAN] 强制选点壳层 NSTEP（None=自动 2/3/4/5；填 2/3/4/5=只试该值，做 R-scan 用）。
 # 用法：tf -p <材料> -j step8.2_dpt conf --set FORCE_NSTEP=3 → retry + start，对比 dpt_result.json 的 m_d
 #   与 m_provenance 里的 R（V148 起写 step.conf，不改本脚本）。
@@ -222,6 +222,18 @@ def _s3_grid_gate(cwd, dim):
     mesh = _kc.read_kpoints_mesh(Path(cwd) / UNIFORM_DIR / "KPOINTS")
     return {"mesh": [int(x) for x in mesh] if mesh else None,
             "issues": [m for _, m in iss], "allow_coarse": bool(ALLOW_COARSE_S3)}
+
+
+def _functional(cwd):
+    """[V181] 本材料用的泛函（step1 定下、下游继承），写进 dpt_result.json 和摘要；没有 ke_common 返回 None。"""
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+        import ke_common as _kc
+    except ImportError:
+        return None
+    f = _kc.material_functional(cwd)
+    print("[..] 泛函：%s（来源：%s）" % (f["label"], f["source"] or "—"))
+    return f
 
 
 def _hex_cell(recip):
@@ -1189,6 +1201,7 @@ def main():
     dim = _read_dim(cwd)
     is_2d = (dim == "2d")
     s3_grid = _s3_grid_gate(cwd, dim)                     # [V174] 在算 m* 之前
+    functional = _functional(cwd)                         # [V181]
 
     carriers = (["electron", "hole"] if CARRIER == "both" else [CARRIER])
     # [ENV] 记录执行环境，铺开时"哪个环境跑的"从推断变成可读事实
@@ -1206,6 +1219,7 @@ def main():
         _env = {"python": sys.executable}
     res = {"dim": dim, "is_2d": is_2d, "temperature_K": TEMPERATURE_K,
            "skill_rev": _SKILL_REV, "env": _env, "overrides": overrides, "s3_grid": s3_grid,
+           "functional": functional,
            "formula": ("2D Bardeen-Shockley: μ=eℏ³C_2D/(k_BT m* m_d E1²)" if is_2d
                        else "3D: μ=2√(2π)eℏ⁴C_3D/(3(k_BT)^{3/2}m*^{5/2}E1²)"),
            "results": [_one_carrier(cwd, is_2d, c, TEMPERATURE_K) for c in carriers],
@@ -1215,6 +1229,8 @@ def main():
         json.dumps(res, ensure_ascii=False, indent=2), encoding="utf-8")
 
     lines = ["# DPT 迁移率摘要（%s, %.0f K）" % (dim, TEMPERATURE_K)]
+    if functional:                                        # [V181]
+        lines.append("# 泛函：%s —— %s" % (functional["label"], functional["note"]))
     if s3_grid and s3_grid["issues"]:                     # [V174] 只在 ALLOW_COARSE_S3 时走到这里
         lines.append("# ★ S3 网格 %s 不合现行规则（ALLOW_COARSE_S3）：m* 只作复现/对照 —— %s"
                      % ("×".join(map(str, s3_grid["mesh"] or [])), "；".join(s3_grid["issues"])))

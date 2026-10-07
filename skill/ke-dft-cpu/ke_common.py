@@ -2304,6 +2304,37 @@ def sniff_func_from_incar(incar: Path):
     return None
 
 
+# [V181] 结果文件里写明泛函。几何、能带、弹性、形变势全用 step1 定下的同一个泛函（下游继承 FUNC=），
+#   但 dpt_result.json / 2d_correction.json / 8.3 汇总以前都不记它：agent 把 GGA=PS 读成"PBE"，
+#   和 PBE 文献逐项比时把泛函差异（PBEsol 晶格更小 -> C_2D 更硬、m* 和谷间能差跟着变）当成了别的原因。
+FUNC_LABEL = {"pbe": "PBE（GGA=PE，无色散修正）",
+              "pbesol": "PBEsol（GGA=PS，无色散修正）",
+              "pbe-d3": "PBE+D3(BJ)（GGA=PE，IVDW=12）"}
+FUNC_COMPARE_NOTE = {
+    "pbesol": "和文献比较前先核对文献用的泛函：GGA=PS 是 PBEsol，不是 PBE。PBEsol 的晶格通常比 PBE "
+              "小约 1%，C_2D 随之偏硬，m*、形变势和谷间能差也会变，不能直接当作 PBE 结果比。",
+    "pbe": "和文献比较前先核对文献用的泛函。",
+    "pbe-d3": "和文献比较前先核对文献用的泛函：D3 只改总能、力和应力（几何），不改给定几何下的能带。",
+}
+
+
+def material_functional(mat_dir):
+    """[V181] 本材料用的泛函：{"func", "label", "source", "note"}；读不到时 func=None。
+
+    先读 step1 的 workflow_method.txt（FUNC=，下游各步继承的就是它），没有再从 step1 的 INCAR 反推。
+    """
+    base = Path(mat_dir)
+    for how, fn in (("workflow_method.txt", lambda d: read_method_func(base / d / METHOD_FILE)),
+                    ("INCAR（从 GGA/IVDW 反推）", lambda d: sniff_func_from_incar(base / d / "INCAR"))):
+        for d in ("step1_opt", "step1"):
+            f = fn(d)
+            if f:
+                return {"func": f, "label": FUNC_LABEL[f], "source": "%s/%s" % (d, how),
+                        "note": FUNC_COMPARE_NOTE[f]}
+    return {"func": None, "label": "未知（step1 的 workflow_method.txt 和 INCAR 都读不到）",
+            "source": None, "note": "泛函未知：先查 step1 的 INCAR（GGA/IVDW），再和文献比。"}
+
+
 def resolve_func(prev_dir: Path, setting, step_name, drop_d3=False,
                  fallback="pbe"):
     """定出本步用的泛函，返回 (func, subs)。

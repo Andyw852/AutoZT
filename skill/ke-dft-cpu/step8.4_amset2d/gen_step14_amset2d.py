@@ -1469,8 +1469,12 @@ def apply_2d_corrections(cwd: Path, elastic, eps_inf=None, eps_static=None):
     if isinstance(r_check, dict) and _LAST_POP_JSON.get("delta_r_check"):
         r_check["delta_r_crosscheck"] = _LAST_POP_JSON["delta_r_check"]
 
+    _func = kc.material_functional(cwd) if _HAS_KC else None     # [V181] 结果里写明泛函
+    if _func:
+        print("[..] 泛函：%s（来源：%s）" % (_func["label"], _func["source"] or "—"))
     rec = {
         "cell_c_A": round(c_len, 4),
+        "functional": _func,
         "layer_normal": layer_normal,
         "layer_thickness": t_info,
         "elastic_rescale_factor_c_over_t": round(factor, 4),
