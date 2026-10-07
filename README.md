@@ -20,7 +20,7 @@ AutoZT 的三个主亮点是：
 - **多超算**：jzzn（CPU 真 SLURM）、a800（A800 GPU 真 SLURM）、3090（无 SLURM 的 fakeslurm 垫片服务器），换超算只改一个 `hpc` 名。
 - **全自动**：`auto_advance` + `autozt monitor` 后台监控，作业算完自动拉结果、自动提交下一步；挂死作业自动 `scancel`+续跑（`hang_check`）。
 - **省心巡检**：`autozt summary --diff` 无变化输出 0 字节，有变化才吐几行——适合 AI / cron 定时巡检。
-- **三种接入面**：MCP 默认使用 `workflow` 小工具面（完整面需显式设置 `AUTOZT_MCP_PROFILE=full`）；一次性脚本用 `autozt agent request -`；常驻 wrapper 用 `autozt agent serve` 的 JSONL。三者共用技能契约、快照和动作审计。
+- **三种接入面**：MCP 默认使用 `core` 工具面（12 个工具，分 发现/规划/执行/审批/汇报 五段；`workflow`/`full` 需显式设置 `AUTOZT_MCP_PROFILE`），规则经 `initialize.instructions` 下发；一次性脚本用 `autozt agent request -`；常驻 wrapper 用 `autozt agent serve` 的 JSONL。三者共用技能契约、快照和动作审计。
 - **低上下文巡检**：长期监控可用 `AUTOZT_MCP_PROFILE=monitor autozt mcp`，只暴露 `get_snapshot`/`cycle` 两个通用工具；异常时再切换到 `workflow`。
 - **过期计划保护**：`inspect`/`propose`/`snapshot` 返回状态 `cursor`；`apply_actions` 或 `autozt agent apply` 执行前重新核对，状态变化就拒绝旧计划并要求重新观察。
 

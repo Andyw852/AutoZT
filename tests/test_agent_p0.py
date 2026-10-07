@@ -154,7 +154,7 @@ def test_register_rejects_bad_input(sandbox):
 
 # ---------------------------------------------------------------- MCP surface
 def test_mcp_workflow_has_register_and_conf_set(monkeypatch):
-    monkeypatch.delenv("AUTOZT_MCP_PROFILE", raising=False)
+    monkeypatch.setenv("AUTOZT_MCP_PROFILE", "workflow")
     monkeypatch.delenv("AUTOZT_MCP_READONLY", raising=False)
     from autozt import mcp
     names = {t["name"] for t in mcp._tools_list()}
@@ -164,6 +164,9 @@ def test_mcp_workflow_has_register_and_conf_set(monkeypatch):
     r = mcp.call_tool("conf_set", {"material": "m", "step": "s", "key": "A;rm -rf",
                                    "value": "1"})["structuredContent"]
     assert r["ok"] is False and "key" in r["error"]
+    # 默认档 core 也能接入新材料（改参数 conf_set 只在 workflow/full）
+    monkeypatch.delenv("AUTOZT_MCP_PROFILE")
+    assert "register_material" in {t["name"] for t in mcp._tools_list()}
 
 
 # ---------------------------------------------------------------- standalone gen helpers

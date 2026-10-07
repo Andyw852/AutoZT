@@ -15,7 +15,7 @@ older clients.
 
     autozt mcp                 # JSON-RPC 2.0 over stdio: initialize / tools/list / tools/call
     autozt mcp --list-tools    # print the tool table (for humans and tests)
-    autozt mcp --call NAME JSON
+    autozt mcp --call NAME JSON   # tools outside the active profile need AUTOZT_MCP_PROFILE=full
 
 ## Design rules
 
@@ -33,6 +33,42 @@ older clients.
 4. The MCP layer may aggregate and reduce CLI output, but it never imports skill
    generators or changes workflow semantics. Skill fixes and new skill development stay
    in their existing directories.
+
+## Harness layers and the default `core` profile
+
+AutoZT is an outer harness for a general-purpose coding agent: it adds domain tools, skills,
+workflows and rules on top of the agent's own loop. Each layer maps onto one MCP primitive,
+and every layer is also reachable without MCP through the agent CLI.
+
+| Layer | MCP primitive | Content | Agent CLI equivalent |
+|---|---|---|---|
+| Tools | `tools/*` | generic verbs (below), risk-tiered `read` / `mutate` / `destructive` | `autozt agent <verb>` |
+| Skills | `resources/*` | skill contracts `autozt://skill/<name>/skill.yaml` + README | `autozt agent contract -tt <name>` |
+| Workflows | `prompts/*` | `compute-zt`, `triage-failures`, `review-before-submit`, … | — (same text in `docs/`) |
+| Rules | `initialize.instructions` + resource `autozt://rules` | consent, provenance and "everything through AutoZT" rules | `autozt agent setup --rules` |
+
+Names used in docs and figures: the **MCP server** is `autozt mcp` (`serverInfo.name` =
+`autozt`, `title` = "AutoZT MCP server"); the **agent CLI** is `autozt agent …` (JSON in/out).
+The MCP server only calls the agent CLI and the gateway, so both entry points share one
+contract, one approval gate and one audit log.
+
+The default profile is `core`: 12 tools grouped in five stages. `tools/list` tags each with
+`x-stage`, and the rules and prompts only cite these tools, so an agent that follows them
+never needs a tool outside the default profile.
+
+| Stage | Tools |
+|---|---|
+| discover | `list_skills`, `describe_skill`, `check_env` |
+| plan | `research_plan`, `preflight` |
+| execute | `register_material`, `cycle` (`execute=false` previews, `true` submits), `get_progress` |
+| approve | `request_destructive_action` → user consents in chat → `approve_request` |
+| report | `results`, `task_graph` |
+
+Larger surfaces stay available: `AUTOZT_MCP_PROFILE=workflow` (21 tools, adds `inspect`,
+`apply_actions`, `conf_get`/`conf_set`, `doctor`, …), `full` (all 32), `compact`, `monitor`,
+`readonly`. An unknown profile name falls back to `compact`, never to `full`. Profiles only
+choose what the model sees; a call to a tool outside the profile is refused and the gateway
+rules are the same in every profile.
 
 ## Tools
 
@@ -80,7 +116,7 @@ addition to `tt`/`material`/`status`; scoping happens before collection. Materia
 a stable `id` = `<project>/<full name>` that `material` arguments accept, so identically
 named materials in different projects never collide.
 
-Profiles: `workflow` (default) = 21 tools incl. `get_progress`, `doctor`,
+Profiles: `core` (default) = the 12 staged tools above; `workflow` = 21 tools incl. `get_progress`, `doctor`,
 `register_material`, `conf_get`, `conf_set`, `check_env`, `task_graph`,
 `request_destructive_action` and `approve_request`;
 `monitor` = `get_progress`, `get_snapshot`, `cycle`; `compact` is unchanged for existing
@@ -137,7 +173,8 @@ approve.
 
 ## Workflow profile for new LLM integrations
 
-新接入优先使用 `AUTOZT_MCP_PROFILE=workflow`。它把一次观察、规则规划和可选执行收敛为少量稳定工具：
+默认档 `core` 已覆盖从计划到汇报的完整链路；需要逐条看候选动作、改参数（`conf_set`）或
+按 JSON 计划执行时，再显式使用 `AUTOZT_MCP_PROFILE=workflow`。它把一次观察、规则规划和可选执行收敛为少量稳定工具：
 
 ```text
 get_progress (cheap, no ssh) → inspect → (model reviews only if needed)
@@ -318,7 +355,8 @@ Tool Search，直接使用 `AUTOZT_MCP_PROFILE=workflow` 即可达到同样的�
 
 ## Compact LLM profile
 
-The default profile is `workflow`, which exposes the small model-facing control loop. The full
+The default profile is `core` (12 staged tools, see above); `workflow` exposes the wider
+model-facing control loop. The full
 profile exposes the complete fixed generic tool table and must be selected explicitly with
 `AUTOZT_MCP_PROFILE=full`. For an even smaller compatibility surface, set
 `AUTOZT_MCP_PROFILE=compact` before starting the server. `tools/list` then
@@ -488,10 +526,10 @@ smaller result to the model. Clients should avoid full-state reads during pollin
 10-minute steady-state monitor should run `autozt summary --diff` without an LLM call;
 involve the model only when a new FAIL, queue anomaly, or ambiguous diagnosis appears.
 
-With the current schemas, the compact JSON tool definitions measure about 13,455
-characters in the full profile, 4,808 in compact, 6,243 in workflow, and 1,552 in
-monitor (compact and workflow are about 64% and 54% smaller; monitor about 88% smaller
-before the client adds its own wrapper). These are transport/context savings,
+With the current schemas, the compact JSON tool definitions (`tools/list`, UTF-8, no
+whitespace) measure about 24,800 characters in the full profile, 17,500 in workflow,
+10,100 in core, 5,700 in compact, and 3,000 in monitor (core is about 59% smaller than
+full) before the client adds its own wrapper. These are transport/context savings,
 not a reduction in VASP or SSH work. Re-measure after changing a tool schema because the
 values are not a protocol guarantee.
 

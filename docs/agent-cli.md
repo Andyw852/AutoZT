@@ -72,7 +72,7 @@ autozt -tt fit-fc-thermal -p MoS2 start
 | `failed` | 命令失败（整组停止） | 看 `error`/`groups[].output` |
 
 接入其它 AI 代理：`autozt agent setup` 输出可直接粘贴的 MCP 服务配置（绝对路径、
-`AUTOZT_CONFIG`、`workflow` profile）和一张规则卡；`autozt agent setup --rules` 只输出规则卡
+`AUTOZT_CONFIG`、默认 `core` profile）和一张规则卡；`autozt agent setup --rules` 只输出规则卡
 （Markdown），可追加到代理自己的 AGENTS.md。
 
 `progress` 每个材料一行，字段稳定：
@@ -208,7 +208,7 @@ cursor 不一致就返回 `stale_plan`，不会提交任何动作。这样队列
 
 | 场景 | 入口 |
 |---|---|
-| Claude、ChatGPT、Kimi 等支持 MCP 的客户端 | `autozt mcp`，异常分析建议 `AUTOZT_MCP_PROFILE=workflow`；长期巡检用 `monitor` |
+| Claude、ChatGPT、Kimi 等支持 MCP 的客户端 | `autozt mcp`（默认 `core`：12 个工具分 发现/规划/执行/审批/汇报 五段）；要改参数或逐条看候选动作用 `AUTOZT_MCP_PROFILE=workflow`；长期巡检用 `monitor` |
 | 不支持 MCP 的单次调用、Shell、cron、CI、人工排查 | `autozt agent ...` 或 `autozt agent request -` |
 | 需要保持进程、逐行收发 JSON 的 wrapper | `autozt agent serve` |
 | 10 分钟稳定巡检 | `autozt summary --diff`，不调用模型 |
