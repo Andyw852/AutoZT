@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""test_functional_label.py —— 结果文件里写明泛函（V181）。
+"""test_functional_label.py —— 结果文件里写明泛函（V181）；lineage_check 按泛函分组列材料（V182）。
 
 用法：python test_functional_label.py     退出码 0 = 全部 PASS。
 
@@ -142,6 +142,43 @@ class WiringTests(unittest.TestCase):
         i = src.index("    rec = {\n        \"cell_c_A\": round(c_len, 4),")
         self.assertIn('"functional": _func,', src[i:i + 200])
         self.assertIn("kc.material_functional(cwd)", src[i - 300:i])
+
+
+class LineageReportTests(unittest.TestCase):
+    """V182：lineage_check 末尾按泛函分组列材料；不止一种时提示，不改退出码。"""
+
+    @classmethod
+    def setUpClass(cls):
+        sys.path.insert(0, str(HERE / "tools"))
+        import lineage_check
+        cls.L = lineage_check
+
+    def _project(self, funcs):
+        root = Path(tempfile.mkdtemp())
+        for name, func in funcs.items():
+            d = root / name / "ke-dft-cpu" / "step1_opt"
+            d.mkdir(parents=True)
+            (d / "workflow_method.txt").write_text("DIM=2D\nFUNC=%s\n" % func)
+        return root
+
+    def _run(self, root):
+        import contextlib
+        import io
+        with contextlib.redirect_stdout(io.StringIO()) as buf:
+            rc = self.L.main([str(root)])
+        return rc, buf.getvalue()
+
+    def test_mixed_functionals_listed_and_flagged(self):
+        rc, out = self._run(self._project({"CrA": "pbe", "CrB": "pbe", "MoA": "pbesol"}))
+        self.assertEqual(rc, 0, out)                                      # 只是提示
+        self.assertIn("PBE（GGA=PE，无色散修正） × 2：CrA、CrB", out)
+        self.assertIn("PBEsol（GGA=PS，无色散修正） × 1：MoA", out)
+        self.assertIn("[提示] 这些材料不是同一个泛函", out)
+
+    def test_single_functional_no_flag(self):
+        rc, out = self._run(self._project({"MoA": "pbesol", "WA": "pbesol"}))
+        self.assertIn("PBEsol（GGA=PS，无色散修正） × 2：MoA、WA", out)
+        self.assertNotIn("[提示]", out)
 
 
 if __name__ == "__main__":

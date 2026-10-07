@@ -8102,3 +8102,24 @@ environment: amset_clean`，接着 `amset: command not found`。集群上现在�
   - S8.2 的 `_functional` 能读出 PBEsol，res 和摘要里都有这个字段；
   - S8.4 的记录里有 `"functional": _func`。
 - 把 4 个源文件退回 V180，12 项全部不通过（4 项失败、8 项报错）。
+
+## V182（2026-10-07）：lineage_check 按泛函分组列出材料
+
+**现场**：
+- V181 之后又核对了一轮，两边都猜错过泛函。
+  - agent 把 `GGA = PS` 当成了 PBE。
+  - 我按出厂默认（PBEsol）去推断另外两个材料，结果它们的材料级 step.conf 写的是 `FUNC = pbe`。
+- 同一个项目里，各材料的泛函可以不同：出厂是 PBEsol，材料级 step.conf 可以改。
+- 但没有一处能一眼看出每个材料用的是哪个泛函，只能逐个翻 INCAR。放进同一张表比较时，泛函不一致就看不出来。
+
+**改动**（tools/lineage_check.py）：
+- 末尾按泛函分组列出本次查到的材料，泛函用 V181 的 `material_functional` 读取。
+- 不止一种泛函时，加一行提示：放进同一张表或互相比较前，先统一泛函，或在表里注明各自的泛函。
+- 只是提示：不算上游问题，不改退出码。
+- 材料短名：`<材料>/ke-dft-cpu` 这种布局取上一级目录名。
+
+**测试**：test_functional_label.py 新增 2 项，共 14 项。
+- 三个材料、两种泛函：分组和计数正确，有提示，退出码仍为 0。
+- 两个材料、同一种泛函：没有提示。
+- 把 lineage_check.py 退回 V181，这 2 项失败。
+- test_lineage.py、test_lineage_post.py、test_s3_grid_gate.py 照旧通过。

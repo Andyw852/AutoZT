@@ -13,6 +13,9 @@ V149 起结构比对扣除整体平移（S3/S3b 的 align_origin 是刚性平移
 V153：--invalidate-from 也接受 S1 / S2 链（下游 VASP 步骤整目录归档；在跑的不动）。
 V175：另查 k 网格 —— S3 不合现行规则、S7 和 S3 不是同一张网格且不合规。gen 的闸门只在重新生成时起作用，
       已经算完的旧结果只能靠这里查出来（CrS₂ 的 15×15×1 当初就是这样"收口"的）。
+V182：末尾按泛函分组列出本次查到的材料（step1 的 FUNC=，读不到从 INCAR 反推）；不止一种时提示。
+      只是提示，不算上游问题、不改退出码 —— 出厂是 PBEsol，材料级 step.conf 可以改成 PBE，
+      同一项目里混着两种很正常，但放进同一张表比较前要知道。
 
 用法：
     python lineage_check.py <材料目录或项目根> [--glob "*/ke-dft-cpu"]
@@ -38,6 +41,27 @@ def find_materials(root, pattern=None):
         return [root]
     cands = root.glob(pattern) if pattern else (p.parent for d in kc.S1_DIRS for p in root.rglob(d))
     return sorted({Path(p) for p in cands if any((Path(p) / d).is_dir() for d in kc.S1_DIRS)})
+
+
+def _short(mat):
+    """材料的短名：<材料>/ke-dft-cpu 这种布局取上一级目录名。"""
+    mat = Path(mat)
+    return mat.parent.name if mat.name.endswith("-cpu") and mat.parent.name else mat.name
+
+
+def functional_report(mats):
+    """[V182] 按泛函分组的几行文字；mats 为空返回 []。"""
+    groups = {}
+    for m in mats:
+        groups.setdefault(kc.material_functional(m)["label"], []).append(_short(m))
+    if not groups:
+        return []
+    lines = ["\n泛函（step1 的 FUNC=；GGA=PS 是 PBEsol，GGA=PE 是 PBE）："]
+    for lab in sorted(groups):
+        lines.append("  %s × %d：%s" % (lab, len(groups[lab]), "、".join(sorted(groups[lab]))))
+    if len(groups) > 1:
+        lines.append("  [提示] 这些材料不是同一个泛函：放进同一张表或互相比较前，先统一泛函，或在表里注明各自的泛函。")
+    return lines
 
 
 def main(argv=None):
@@ -85,6 +109,8 @@ def main(argv=None):
               "派生步骤在来源跑完后 rerun，或用 --invalidate-from 让 auto-advance 接手。" % (bad, len(mats)))
         print("k 网格问题：S3 不合规 -> retry S3 -> S4 -> S7 -> S7.1 -> S8/S8.4/S8.2/S8.1；"
               "只有 S7 不合规 -> retry S7 -> S7.1 -> S8/S8.4。")
+    for ln in functional_report(mats):                       # V182：只提示，不改退出码
+        print(ln)
     return 1 if bad else 0
 
 
