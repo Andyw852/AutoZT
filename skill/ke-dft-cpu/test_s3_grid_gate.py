@@ -6,6 +6,8 @@
 CrSe₂ 是 48×48×3。S7 照抄 S3 网格、S8.4 照用，谁都不查；两者 S8.4 的 ADP/DPT 一个 1.7、一个 0.5。
 V174：S8.2（m* 直接拟合 S3 网格点）同样拦、S8.1（BoltzTraP2）告警；两步只查面内。CrS₂ 换 48×48×3 后
 m* 0.967/1.009 -> 0.866/0.883、DPT +25%/+31%。
+V175：S7 和 S3 不是同一张网格且 S7 不合规（S3 重算后 S7 没跟着重跑）-> S8/S8.4 拦、S7.1 告警；
+tools/lineage_check.py 查已经算完的旧结果。
 
 用法：python test_s3_grid_gate.py      退出码 0 = 全部 PASS。
 """
@@ -22,6 +24,7 @@ sys.path.insert(0, str(_ROOT))
 sys.path.insert(0, str(_ROOT.parent / "_common" / "opt"))
 sys.path.insert(0, str(_ROOT / "step8.2_dpt"))
 sys.path.insert(0, str(_ROOT / "step8.1_boltztrap"))
+sys.path.insert(0, str(_ROOT / "tools"))
 import ke_common as kc  # noqa: E402
 
 
@@ -79,6 +82,79 @@ class S3GridTests(unittest.TestCase):
         self.assertEqual(kc.s3_grid_gate(_mat(3.21, 20, (48, 48, 3)), "S8.4"), [])
 
 
+def _s7(d, mesh, dirs=("undeformed", "deform-01", "deform-02"), ionrelax_mesh=None):
+    for n in dirs:
+        (d / "step7_deform" / n).mkdir(parents=True, exist_ok=True)
+        (d / "step7_deform" / n / "KPOINTS").write_text("auto\n0\nGamma\n %d %d %d\n" % tuple(mesh))
+    if ionrelax_mesh:
+        ir = d / "step7_deform" / dirs[1] / "ionrelax"
+        ir.mkdir(parents=True, exist_ok=True)
+        (ir / "KPOINTS").write_text("auto\n0\nGamma\n %d %d %d\n" % tuple(ionrelax_mesh))
+    return d
+
+
+class S7GridTests(unittest.TestCase):                                   # [V175]
+    def test_s3_redone_but_s7_stale(self):
+        d = _s7(_mat(3.04, 20, (48, 48, 3)), (15, 15, 1))
+        iss = kc.s7_grid_issues(d)
+        self.assertEqual([lv for lv, _ in iss], ["error"])
+        self.assertIn("15×15×1", iss[0][1])
+        self.assertIn("S7 没跟着重跑", iss[0][1])
+        self.assertEqual(kc.s3_grid_issues(d), [])                     # S3 闸门本身是通过的
+        with contextlib.redirect_stdout(io.StringIO()), self.assertRaises(SystemExit) as cm:
+            kc.s3_grid_gate(d, "S8.4", with_s7=True)
+        self.assertIn("retry step7_deform", str(cm.exception.code))
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(len(kc.s3_grid_gate(d, "S8.4", allow=True, with_s7=True)), 1)
+            self.assertEqual(kc.s3_grid_gate(d, "S8.2", check_kz=False), [])          # S8.2 不看 S7
+
+    def test_same_or_compliant_mesh(self):
+        self.assertEqual(kc.s7_grid_issues(_s7(_mat(3.04, 20, (48, 48, 3)), (48, 48, 3))), [])
+        iss = kc.s7_grid_issues(_s7(_mat(3.04, 20, (48, 48, 3)), (54, 54, 3)))
+        self.assertEqual([lv for lv, _ in iss], ["warn"])
+        with contextlib.redirect_stdout(io.StringIO()):
+            kc.s3_grid_gate(_s7(_mat(3.04, 20, (48, 48, 3)), (54, 54, 3)), "S8.4", with_s7=True)   # 不退出
+
+    def test_ionrelax_and_missing(self):
+        d = _s7(_mat(3.04, 20, (48, 48, 3)), (48, 48, 3), ionrelax_mesh=(15, 15, 1))
+        iss = kc.s7_grid_issues(d)
+        self.assertEqual(len(iss), 1)
+        self.assertIn("deform-01/ionrelax", iss[0][1])
+        self.assertEqual(kc.s7_grid_issues(_mat(3.04, 20, (48, 48, 3))), [])           # 没有 S7
+
+    def test_coarse_s3_message_wins(self):
+        d = _s7(_mat(3.04, 20, (15, 15, 1)), (15, 15, 1))                 # S7 照抄了同一张粗网格
+        self.assertEqual(kc.s7_grid_issues(d), [])
+        with contextlib.redirect_stdout(io.StringIO()), self.assertRaises(SystemExit) as cm:
+            kc.s3_grid_gate(d, "S8.4", with_s7=True)
+        self.assertIn("step3_uniform 的网格是旧规则下生成的", str(cm.exception.code))
+
+
+class GridLineageTests(unittest.TestCase):                              # [V175]
+    def test_grid_lineage(self):
+        probs = kc.grid_lineage(_mat(3.04, 20, (15, 15, 1)))
+        self.assertEqual([st for st, _ in probs], ["step3_uniform"] * 3)
+        self.assertEqual(sum("S8/S8.4/S8.1/S8.2" in w for _, w in probs), 2)     # 面内两条
+        self.assertEqual(sum("AMSET 结果受影响" in w for _, w in probs), 1)       # kz 一条
+        self.assertEqual(kc.grid_lineage(_mat(3.04, 20, (42, 42, 3))), [])        # 略粗只告警，不算问题
+        probs = kc.grid_lineage(_s7(_mat(3.04, 20, (48, 48, 3)), (15, 15, 1)))
+        self.assertEqual([st for st, _ in probs], ["step7_deform"])
+
+    def test_cli_flags_old_results(self):
+        import lineage_check as L
+        root = Path(tempfile.mkdtemp())
+        for name, s3, s7 in (("CrS2_hex", (48, 48, 3), (15, 15, 1)), ("CrSe2_hex", (48, 48, 3), (48, 48, 3))):
+            m = _s7(_mat(3.04, 20, s3), s7)
+            (m / "step1_opt").mkdir()
+            m.rename(root / name)
+        with contextlib.redirect_stdout(io.StringIO()) as buf:
+            self.assertEqual(L.main([str(root)]), 1)
+        out = buf.getvalue()
+        self.assertIn("[★]   %s" % (root / "CrS2_hex"), out)
+        self.assertIn("[OK]  %s" % (root / "CrSe2_hex"), out)
+        self.assertIn("retry S7 -> S7.1", out)
+
+
 class DptGateTests(unittest.TestCase):                                  # [V174]
     def setUp(self):
         import importlib
@@ -132,6 +208,16 @@ class WiringTests(unittest.TestCase):
         body = b[b.index("\ndef main("):]
         self.assertLess(body.index("s3_grid = _s3_grid_note(cwd, dim)"), body.index("run_boltztrap_crta("))
         self.assertIn('res["s3_grid"] = s3_grid', body)
+
+    def test_s7_wiring(self):                                          # [V175]
+        for f, label in (("step8.4_amset2d/gen_step14_amset2d.py", "S8.4"), ("step8_amset/gen_step10_amset.py", "S8")):
+            s = (_ROOT / f).read_text(encoding="utf-8")
+            i = s.index('kc.s3_grid_gate(cwd, "%s"' % label)
+            self.assertIn("with_s7=True", s[i:i + 120], f)
+        s = (_ROOT / "step7_deform" / "step7b_read" / "gen_step9b_deform_read.py").read_text(encoding="utf-8")
+        self.assertLess(s.index("kc.s7_grid_issues(cwd"), s.index("amset deform read undeformed"))
+        s = (_ROOT / "tools" / "lineage_check.py").read_text(encoding="utf-8")
+        self.assertIn("kc.grid_lineage(mat)", s)
 
     def test_s3_defaults_and_s7_warning(self):
         for f in ("step3_uniform/gen_step5_uniform.py", "step3b_uniform_full/gen_step5b_uniform_full.py"):

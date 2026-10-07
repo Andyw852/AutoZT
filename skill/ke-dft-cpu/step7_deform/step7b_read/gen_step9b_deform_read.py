@@ -254,6 +254,9 @@ def main():
         print("[WARN] 全部构型都只有 1s 芯能级、没有平均静电芯势（INCAR 带 ICORELEVEL=1）：deformation.h5 的芯能级参考"
               "不是 AMSET 的标准口径（元素依赖、非刚性），与其它项目的 core 口径不可直接比；真空口径不受影响。")
     print("[..] 芯能级参考来源 core_reference=%s（落盘到 band_edges.json）" % _core_kind)
+    # [V175] S7 的网格和 S3 不同（S3 重算过、S7 没跟着重跑）-> 先在这里告警；不合规的那种 S8/S8.4 的闸门会拦。
+    for _lv, _msg in kc.s7_grid_issues(cwd, _dim_now if _dim_now in ("2d", "3d") else None):
+        print("[WARN] S7.1：%s" % _msg)
     # amset deform read 在形变目录里跑，产出 deformation.h5，再挪到本步目录
     # patch_deform_fix：amset 的签名是 read(bulk_folder, deformation_folders...)，
     # 【未形变的必须排第一个】。原来写成 `read *deform* undeformed`，既顺序

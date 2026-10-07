@@ -11,6 +11,8 @@ S8/S8.4 的 gen 做同一核对（STRUCTURE_GUARD），不通过就不生成。�
 V148 起本工具另查（S8 的 gen 不查）：S8.1/S8.3 的产物是否旧于 S8.2/S8/S8.4，S8/S8.4 的带隙是否与 S2 画图一致。
 V149 起结构比对扣除整体平移（S3/S3b 的 align_origin 是刚性平移，不算不同）。
 V153：--invalidate-from 也接受 S1 / S2 链（下游 VASP 步骤整目录归档；在跑的不动）。
+V175：另查 k 网格 —— S3 不合现行规则、S7 和 S3 不是同一张网格且不合规。gen 的闸门只在重新生成时起作用，
+      已经算完的旧结果只能靠这里查出来（CrS₂ 的 15×15×1 当初就是这样"收口"的）。
 
 用法：
     python lineage_check.py <材料目录或项目根> [--glob "*/ke-dft-cpu"]
@@ -70,6 +72,7 @@ def main(argv=None):
     for mat in mats:
         ref, probs = kc.structure_lineage(mat)
         probs = probs + kc.post_lineage(mat)                 # V148：S8 之后的派生产物 + 带隙一致性
+        probs = probs + kc.grid_lineage(mat)                 # V175：S3 / S7 的 k 网格
         if not probs:
             print("[OK]  %s%s" % (mat, "" if ref else "（没有 S1 CONTCAR，只核对了派生产物）"))
             continue
@@ -80,6 +83,8 @@ def main(argv=None):
     if bad:
         print("\n%d/%d 个材料的上游不同源。结构不同的 VASP 步骤 rerun（S2.3 要等 S2.2、S2.2 要等 S2.1）；"
               "派生步骤在来源跑完后 rerun，或用 --invalidate-from 让 auto-advance 接手。" % (bad, len(mats)))
+        print("k 网格问题：S3 不合规 -> retry S3 -> S4 -> S7 -> S7.1 -> S8/S8.4/S8.2/S8.1；"
+              "只有 S7 不合规 -> retry S7 -> S7.1 -> S8/S8.4。")
     return 1 if bad else 0
 
 

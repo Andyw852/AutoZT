@@ -127,20 +127,22 @@ def read_kpoints_mesh(kpoints: Path):
 # [V174] S8.2（DPT 的 m* 直接拟合 S3 网格点）、S8.1（BoltzTraP2 插值 S3）也读这张网格，V173 没管：
 #   CrS₂_hex 重跑 S3（15×15×1 -> 48×48×3）后 m* 0.967/1.009 -> 0.866/0.883，DPT +25%/+31%：
 #   粗网格的拟合窗口吃进了非抛物区，m* 拟重。面内 m* 与真空轴 kz 无关，这两步 check_kz=False。
+# [V175] 还有两处漏洞：
+#   ① S7 只在自己 gen 时照抄 S3 网格。S3 重算后 S7 没跟着重跑，S3 闸门照样通过（S3 是新的）、lineage 也通过
+#      （S7.1 比 S7 新），S8/S8.4 就拿旧粗网格上的形变势去算 —— s7_grid_issues 查 S7 和 S3 是否同一张网格；
+#   ② 闸门只在重新生成时起作用，已经算完的旧结果没人再查，CrS₂ 当初就是这样"收口"的 ——
+#      grid_lineage 给 tools/lineage_check.py 用。
 # --------------------------------------------------------------------------
 S3_DK_MAX = {"2d": 0.05, "3d": 0.06}
 S3_KZ_MIN_2D = 3
 S3_DK_ERR_FACTOR = 2.0          # 面内间距超过规则这么多倍 -> 报错（规则以内的小差别只告警）
 
 
-def s3_grid_issues(mat_dir, dim=None, check_kz=True):
-    """材料目录 -> [(level, msg)]，level 为 "error" / "warn"；读不到 S3 的 KPOINTS / POSCAR 返回 []。
-    check_kz=False：只查面内（S8.1 / S8.2 只用面内能带，2D 真空轴 kz 一层不影响它们）。"""
+def _mesh_rule_issues(mesh, s3, dim, check_kz, where):
+    """一张网格（按 S3 的晶胞和维度）是否合现行规则 -> [(level, msg)]；读不到晶胞返回 []。"""
     import numpy as np
-    s3 = Path(mat_dir) / "step3_uniform"
-    mesh = read_kpoints_mesh(s3 / "KPOINTS")
     pos = s3 / "POSCAR"
-    if not mesh or not pos.is_file():
+    if not pos.is_file():
         return []
     try:
         dim = dim or read_method_dim(s3 / METHOD_FILE) or resolve_dim_for(pos, "auto")[0]
@@ -155,24 +157,80 @@ def s3_grid_issues(mat_dir, dim=None, check_kz=True):
             continue
         sp = float(np.linalg.norm(rec[i])) / max(int(mesh[i]), 1)
         if sp > S3_DK_ERR_FACTOR * dk:
-            out.append(("error", "step3_uniform 第 %d 轴 %d 分：笛卡尔间距 %.3f Å⁻¹，是现行规则 %.2f 的 %.1f 倍"
-                        % (i + 1, mesh[i], sp, dk, sp / dk)))
+            out.append(("error", "%s 第 %d 轴 %d 分：笛卡尔间距 %.3f Å⁻¹，是现行规则 %.2f 的 %.1f 倍"
+                        % (where, i + 1, mesh[i], sp, dk, sp / dk)))
         elif sp > 1.1 * dk:
-            out.append(("warn", "step3_uniform 第 %d 轴 %d 分：笛卡尔间距 %.3f Å⁻¹，比现行规则 %.2f 粗"
-                        % (i + 1, mesh[i], sp, dk)))
+            out.append(("warn", "%s 第 %d 轴 %d 分：笛卡尔间距 %.3f Å⁻¹，比现行规则 %.2f 粗"
+                        % (where, i + 1, mesh[i], sp, dk)))
     if check_kz and vac is not None and int(mesh[vac]) < S3_KZ_MIN_2D:
-        out.append(("error", "step3_uniform 真空轴 kz = %d < %d：AMSET 沿 kz 外推而不是内插"
-                    "（V8：插值网格一变 ADP 差 30–45%%）" % (mesh[vac], S3_KZ_MIN_2D)))
+        out.append(("error", "%s 真空轴 kz = %d < %d：AMSET 沿 kz 外推而不是内插"
+                    "（V8：插值网格一变 ADP 差 30–45%%）" % (where, mesh[vac], S3_KZ_MIN_2D)))
     return out
 
 
-def s3_grid_gate(mat_dir, label, allow=False, dim=None, check_kz=True, uses=None, redo=None):
+def s3_grid_issues(mat_dir, dim=None, check_kz=True):
+    """材料目录 -> [(level, msg)]，level 为 "error" / "warn"；读不到 S3 的 KPOINTS / POSCAR 返回 []。
+    check_kz=False：只查面内（S8.1 / S8.2 只用面内能带，2D 真空轴 kz 一层不影响它们）。"""
+    s3 = Path(mat_dir) / "step3_uniform"
+    mesh = read_kpoints_mesh(s3 / "KPOINTS")
+    if not mesh:
+        return []
+    return _mesh_rule_issues(mesh, s3, dim, check_kz, "step3_uniform")
+
+
+def s7_grid_issues(mat_dir, dim=None):
+    """[V175] S7 形变子目录（含 ionrelax/）的网格和 S3 不同 -> [(level, msg)]，每种网格一条：
+    S7 这张网格本身不合现行规则 -> error（S3 重算过、S7 没跟着重跑，形变势还在旧粗网格上）；合规只是不同 -> warn。
+    没有 S3 KPOINTS / S7 目录返回 []。"""
+    mat = Path(mat_dir)
+    s3 = mat / "step3_uniform"
+    ref = read_kpoints_mesh(s3 / "KPOINTS")
+    s7 = mat / "step7_deform"
+    if not ref or not s7.is_dir():
+        return []
+    ref = [int(x) for x in ref]
+    diff = {}
+    for kp in sorted(set(s7.glob("*/KPOINTS")) | set(s7.glob("*/ionrelax/KPOINTS"))):
+        m = read_kpoints_mesh(kp)
+        if m and [int(x) for x in m] != ref:
+            diff.setdefault(tuple(int(x) for x in m), []).append(str(kp.parent.relative_to(s7)))
+    out = []
+    for m, dirs in sorted(diff.items()):
+        bad = any(lv == "error" for lv, _ in _mesh_rule_issues(m, s3, dim, True, "step7_deform"))
+        where = ", ".join(dirs[:4]) + (" 等 %d 个" % len(dirs) if len(dirs) > 4 else "")
+        out.append(("error" if bad else "warn",
+                    "step7_deform 的 %s 是 %s 网格，S3 是 %s%s" % (
+                        where, "×".join(map(str, m)), "×".join(map(str, ref)),
+                        "，而且不合现行规则：S3 重算过、S7 没跟着重跑，形变势 D(k) 还在旧粗网格上" if bad else
+                        "（两张都合现行规则，AMSET 会插值 D(k)；要完全一致就 retry S7 -> S7.1）")))
+    return out
+
+
+def grid_lineage(mat_dir):
+    """[V175] tools/lineage_check.py 用 -> [(步骤, 说明)]：只收 error（略粗于规则的告警不算）。
+    gen 的闸门只在重新生成时起作用，已经算完的旧结果只能靠这里查出来。"""
+    inplane = {m for lv, m in s3_grid_issues(mat_dir, check_kz=False) if lv == "error"}
+    probs = [("step3_uniform", m + ("（S4/S7 照抄这张网格，S8/S8.4/S8.1/S8.2 的结果都在它上面）" if m in inplane
+                                    else "（S8/S8.4 的 AMSET 结果受影响）"))
+             for lv, m in s3_grid_issues(mat_dir) if lv == "error"]
+    probs += [("step7_deform", m + "（S7.1 / S8 / S8.4 受影响）") for lv, m in s7_grid_issues(mat_dir) if lv == "error"]
+    return probs
+
+
+def s3_grid_gate(mat_dir, label, allow=False, dim=None, check_kz=True, uses=None, redo=None, with_s7=False):
     """S8 / S8.4 / S8.2 gen 调：S3 网格不满足现行规则 -> 打印；有 error 且 allow=False -> sys.exit。返回 issues。
-    uses：本步拿这张网格做什么（报错用）；redo：重跑顺序。None = S8/S8.4（AMSET）的说法。"""
+    uses：本步拿这张网格做什么（报错用）；redo：重跑顺序。None = S8/S8.4（AMSET）的说法。
+    with_s7（S8/S8.4）：S7 的网格也要和 S3 一致（s7_grid_issues），不合规同样拦。"""
     issues = s3_grid_issues(mat_dir, dim, check_kz=check_kz)
-    for lv, msg in issues:
+    s7 = s7_grid_issues(mat_dir, dim) if with_s7 else []
+    for lv, msg in issues + s7:
         print("[%s] %s：%s" % ("ERROR" if lv == "error" and not allow else "WARN", label, msg))
-    if any(lv == "error" for lv, _ in issues):
+    if any(lv == "error" for lv, _ in s7) and not any(lv == "error" for lv, _ in issues) and not allow:
+        sys.exit("[ERROR] %s：S3 已是现行网格，但 step7_deform 还是旧的粗网格（S3 重算后 S7 没跟着重跑），"
+                 "形变势 D(k) 还在旧网格上，结果不可信。\n"
+                 "        处理：retry step7_deform（会照抄 S3 的网格）-> S7.1 -> 本步。\n"
+                 "        确实要用这套网格（复现旧结果）：本步 step.conf 写 ALLOW_COARSE_S3 = true。" % label)
+    if any(lv == "error" for lv, _ in issues + s7):
         if not allow:
             sys.exit("[ERROR] %s：step3_uniform 的网格是旧规则下生成的，%s，结果不可信。\n"
                      "        处理：retry step3_uniform（现行规则：2D 面内 ≤ %.2f Å⁻¹、kz ≥ %d）-> %s。\n"
@@ -180,7 +238,7 @@ def s3_grid_gate(mat_dir, label, allow=False, dim=None, check_kz=True, uses=None
                      % (label, uses or "AMSET 的能带 / 波函数 / 形变势都在这张网格上", S3_DK_MAX["2d"],
                         S3_KZ_MIN_2D, redo or "S4 -> S7 -> S7.1 -> 本步；S7 会照抄新的 S3 网格"))
         print("[WARN] %s：ALLOW_COARSE_S3 = true —— 按旧网格继续，结果只作复现/对照" % label)
-    return issues
+    return issues + s7
 
 
 # --------------------------------------------------------------------------

@@ -7855,3 +7855,35 @@ environment: amset_clean`，接着 `amset: command not found`。集群上现在�
 **不改的**：
 - 已有的 S8.1/S8.2 结果不会自动作废：它们只在重新生成时才过闸门。V173 之后的全材料扫描已经列出了面内过粗的材料（CrS2_hex、CrS2_ortho、CrSe2_ortho、P1_Al-AlN、Si），这些材料的 DPT m* 和 BoltzTraP 结果都要按此处理。
 - V147 的 4 kT 阈值没动：有了网格闸门以后，它只用来提示规则以内的网格。
+
+## V175（2026-10-07）：S7 和 S3 不是同一张网格时 S8/S8.4 拦下；lineage_check 查 k 网格
+
+**问题**（V173/V174 之后复查，没有现场事故，但 CrS₂ 这次只差一步就会踩到）：
+- **S7 只在自己 gen 的时候照抄 S3 的网格。** 如果 S3 重算了而 S7 没有跟着重跑：
+  - S3 闸门照样通过，因为 S3 是新网格；
+  - lineage 也通过，因为它只比新旧：S7.1 比 S7 新，S4 比 S3 新；
+  - 于是 S8/S8.4 会拿旧粗网格上的形变势 D(k) 去算，没有任何提示。
+  - CrS₂ 这次是 agent 手动 retry 了 S7 才没踩上。
+- **闸门只在重新生成时起作用。** 已经算完的旧结果没人再查。CrS₂ 的 15×15×1 当初就是这样通过 lineage_check、被当成"收口"的；Si、CrS2_ortho、CrSe2_ortho、P1_Al-AlN 现在也还挂着"完成"。
+
+**改动**：
+- ke_common：
+  - 按网格查规则的部分抽成 `_mesh_rule_issues`，`s3_grid_issues` 的行为和报错文字都不变；
+  - 新增 `s7_grid_issues`：逐个比 S7 子目录（含 `ionrelax/`）的 KPOINTS 和 S3。S7 的网格不同且本身不合规则 → error；不同但合规 → warn（AMSET 会插值 D(k)）；
+  - 新增 `grid_lineage`：给 lineage_check 用，只收 error，注明哪些下游受影响。
+- S8 和 S8.4 的闸门加 `with_s7=True`。只有 S7 不合规时，报错写明处理顺序：retry S7（会照抄 S3）→ S7.1 → 本步。`ALLOW_COARSE_S3 = true` 同样能放行。
+- S7.1：在 `amset deform read` 之前先告警。
+- tools/lineage_check.py：每个材料另查 `grid_lineage`，有问题就退出码 1，末尾给出两种重跑顺序。
+- S8.2 不查 S7：E1 是带边移动，K 点在网格上时它对网格不敏感。
+
+**测试**：skill/ke-dft-cpu/test_s3_grid_gate.py，从 14 项增加到 21 项。
+- S3 重算到 48×48×3、S7 还是 15×15×1：S3 闸门通过，`s7_grid_issues` 报 error，S8.4 的闸门退出并提示 retry step7_deform；`allow` 时放行；S8.2 的闸门不受影响；
+- S7 和 S3 相同：不报；S7 不同但合规（54×54×3）：只告警、不退出；
+- 只有 `deform-01/ionrelax` 是旧网格：也报出来；没有 S7 目录：不报；
+- S3 和 S7 一起粗（S7 照抄）：报的是 S3 的那条；
+- `grid_lineage`：CrS₂ 旧网格报 3 条（2 条面内、1 条 kz），略粗于规则的不算，S7 旧网格报 1 条；
+- lineage_check：两个材料一个 S7 旧、一个干净，退出码 1，只标出旧的那个；
+- 接线检查：S8/S8.4 的 `with_s7=True`，S7.1 的告警在 `amset deform read` 之前，lineage_check 调了 `grid_lineage`。
+- 把 5 个源文件退回 V174，新增的 7 项全部失败，原有 14 项照样通过。
+
+**用法**：收口时跑 `python tools/lineage_check.py <项目根>`，退出码 0 才算收口。网格不合规的材料会被列出来，同时写明受影响的下游步骤。
