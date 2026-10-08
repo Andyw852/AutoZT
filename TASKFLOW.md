@@ -499,12 +499,14 @@ _AMSET_ENV_SRC = "source %s && conda activate %s" % (CONDA_SH, AMSET_ENV)
 | 5.1 | `step5_phonon_plot` | S5.1_plot | 声子谱画图 | plot |
 | 6 | `step6_kappa` | S6_kappa | phono3py BTE → κ（`needs: [step5_fc]`） | `kappa.dat:END` |
 
-S5_fc 拟合器由 `FIT_ENGINE` 选：`phono3py`（symfc/alm，默认）| `pheasy`（随机位移压缩感知，需 step4 `METHOD=alm`）。选 `pheasy` 时再配：
-`PHEASY_BIN=pheasy`（CPU 版，默认）| `pheasy-gpu`（GPU 版，走 `pheasy_gpu` 模块 + CUDA 后端，`PHEASY_USE_GPU` 缺省 auto）、
-`PHEASY_FIT_METHOD`（LASSO / RFE / OLS）、`PHEASY_C3_CUTOFF`、`PHEASY_ENABLE_FC`。两个软件都在 `~/software/` 下，CLI 参数一致：
+S5_fc 拟合器由 `FIT_ENGINE` 选（补丁 0019 起与 fit-fc-thermal、kl-mlff 统一）：`pheasy`（默认，`PHEASY_FIT_METHOD = ALASSO`；
+随机位移压缩感知，需 step4 `METHOD=alm`；2D 由 `PHEASY_RASR=auto` 自动加旋转不变/平衡约束）| `phono3py`（symfc/alm，纯 CPU）。
+pheasy 只有 GPU 版（`PHEASY_BIN = pheasy-gpu`），作业走 `submit_fcfit_pheasy_gpu.tpl`；纯 CPU 集群三选一：
+在 GPU 集群用 fit-fc-thermal 拟合后由 S5_fc 自动导入 `kl_bundle/`、在 `setting/<集群>/templates/` 放本集群能跑的
+`submit_fcfit_pheasy_gpu.tpl`、或改 phono3py。旧项目里的 `FIT_ENGINE = auto` / `PHEASY_FIT_METHOD = auto` 按 pheasy + ALASSO 解析。
 
 ```bash
-autozt -tt kl-dft-cpu -p <材料> -j 5 conf --set params.FIT_ENGINE=pheasy params.PHEASY_BIN=pheasy-gpu
+autozt -tt kl-dft-cpu -p <材料> -j 5 conf --set params.FIT_ENGINE=phono3py   # 纯 CPU 集群改回 symfc
 ```
 
 ### 6.5 opt-dft-cpu 结构优化 + 能量（v0.1）

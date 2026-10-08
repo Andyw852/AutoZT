@@ -85,7 +85,7 @@ optional_steps:
 
 requires:
   python: [mace-torch, torch, ase, phonopy, phono3py, spglib, numpy, h5py]
-  optional_python: [symfc, pheasy]   # FIT_SOFTWARE 选用
+  optional_python: [pheasy, symfc]   # [0019] FIT_ENGINE 默认 pheasy；phono3py 路用 symfc
   # 实际 conda 环境按集群默认注入（setting/<hpc>.yaml 的 conda_env：jzzn=mace_cpu venv、
   # 3090=mace-gpu、a800=mace）。此处 conda 字段仅作展示。
   conda: mace
@@ -143,10 +143,10 @@ io_schema:
        validator: "forces_summary.json 含 FORCES_DONE",
        note: "与 DFT 版的关键差别：**不扇出**——N 个位移在 GPU 上一个作业里循环算完"}
     - {step: S3_fc, title: "Fit force constants",
-       tool: "phono3py symfc / Pheasy (GPU 可选)",
+       tool: "Pheasy ALASSO (GPU，默认) / phono3py symfc",
        inputs: [FORCES_FC3], outputs: [fc2.hdf5, fc3.hdf5, phonon_summary.json, "band-dft-cpu.yaml"],
        validator: "声子判据（虚频闸 IMAG_THR）+ phonon_summary.json marker",
-       note: "登录节点跑；PHEASY_BIN=pheasy-gpu 时用 GPU 拟合，否则 phono3py/symfc（CPU）"}
+       note: "默认 pheasy-gpu + ALASSO（GPU 模板）；FIT_ENGINE=phono3py 时 phono3py/symfc（CPU）"}
     - {step: S4_kappa, title: "Solve transport (BTE)",
        tool: "phono3py BTE（本步没有 GPU 路径，两版都排 CPU 队列）",
        inputs: [fc2.hdf5, fc3.hdf5], outputs: [kappa_summary.json, "kappa-m*.hdf5"],

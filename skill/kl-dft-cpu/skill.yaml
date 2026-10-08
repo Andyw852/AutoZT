@@ -10,7 +10,7 @@
 #                 method=alm     → 随机位移，位移数由 ALM 自由力常数个数 × oversample 决定
 #               每个位移一个 disp-* 子目录，各自单点取力
 #   S5_fc       提交计算节点：收力 → 拟合 fc2/fc3 → 双格式导出 → 虚频做闸（FAIL 则 S6 不启动）
-#               拟合器 FIT_ENGINE=phono3py(symfc/alm，默认) | pheasy(随机位移压缩感知，需 alm)
+#               拟合器 FIT_ENGINE=pheasy(ALASSO，默认；随机位移压缩感知，需 alm，pheasy-gpu 走 GPU 模板) | phono3py(symfc/alm)
 #               产出 step5_fc/phono3py/（fc2/fc3.hdf5）与 step5_fc/shengbte/（FORCE_CONSTANTS_2ND/3RD）
 #   S6_kappa    提交计算节点跑 BTE：SOLVER=phono3py(rta/lbte) | shengbte → 晶格热导率
 #
@@ -149,6 +149,7 @@ optional_steps:
 
 requires:
   python: [phonopy, phono3py, numpy, spglib]
+  optional_python: [pheasy, symfc]   # [0019] 拟合默认 pheasy（FIT_ENGINE）；改 phono3py 时用 symfc
   conda: atomate2_p_a
   exe: [vasp_std, vaspkit, phono3py]
 # =============================================================================
@@ -173,8 +174,10 @@ io_schema:
   params:
     - {name: METHOD, values: [alm, findiff], default: alm, where: step.conf,
        desc: "位移生成方式：alm = 随机位移+压缩感知（帧数少）；findiff = phono3py 对称有限位移"}
-    - {name: FIT_ENGINE, values: [auto, phono3py, pheasy], default: auto, where: step.conf,
-       desc: "力常数拟合引擎；auto = 按 DIM/帧数选（多为 phono3py），pheasy 需要 METHOD=alm（随机位移压缩感知）"}
+    - {name: FIT_ENGINE, values: [pheasy, phono3py, hiphive], default: pheasy, where: step.conf,
+       desc: "力常数拟合引擎；默认 pheasy（ALASSO，2D 自动加 RASR=BHH），需要 METHOD=alm 且走 GPU 模板；纯 CPU 集群可改 phono3py。旧值 auto 按 pheasy 解析"}
+    - {name: PHEASY_FIT_METHOD, values: [ALASSO, LASSO, RFE-OLS, RFE-OLS-TSQR, OLS, RIDGE, ARDR, RVM], default: ALASSO,
+       where: step.conf, desc: "pheasy 的拟合方法；旧值 auto 按 ALASSO 解析"}
     - {name: FC_CALC, values: [symfc, alm], default: symfc, where: step.conf,
        desc: "phono3py 的拟合后端：symfc（对称性约束）或 alm"}
     - {name: SOLVER, values: [phono3py, shengbte, fourphonon], default: phono3py, where: step.conf,
@@ -219,7 +222,7 @@ io_schema:
        validator: "扇出判据：每个 disp-* 子目录的 OUTCAR 全部完成（表格显示 3/5 这样的进度）",
        note: "method=findiff 走对称有限位移；alm 走随机位移，帧数由自由力常数个数 × OVERSAMPLE 定"}
     - {step: S5_fc, title: "Fit force constants",
-       tool: "phono3py symfc / ALM · Pheasy (CPU)",
+       tool: "Pheasy ALASSO (GPU，默认) · phono3py symfc / ALM",
        inputs: ["disp-* 力数据集"], outputs: [fc2.hdf5, fc3.hdf5, phonon_summary.json],
        validator: "声子判据（虚频闸 IMAG_THR）+ phonon_summary.json marker",
        note: "在计算节点作业里做：收力 → 拟合 → 双格式导出 → 虚频闸；FAIL 则 S6 不启动"}
