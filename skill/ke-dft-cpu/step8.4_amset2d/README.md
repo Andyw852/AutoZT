@@ -94,6 +94,12 @@ gen（`patch_write_mesh` + `patch_intrinsic_auto`）会：
 - 置零（默认）IMP 后重积分，写 `intrinsic_transport.json`（schema `autozt.intrinsic_transport/1`）。
 
 **注意**：`WRITE_MESH` 只负责产出 mesh；**正确性取决于这个后处理被套用**——直接换 AMSET 环境不会自动对。
+
+**只含 ADP 的一套（[0018]）**：step.conf 再写 `INTRINSIC_ADP_ONLY = true`（隐含 `WRITE_MESH = true`），作业链在上面
+的后处理之后用**同一份 mesh** 再跑 `postprocess_intrinsic.py --drop IMP,POP,PIE --out intrinsic_ADP.json`。
+各机制散射率彼此独立，等价于单独跑 `SCATTERING = [ADP]`，不用第二次 AMSET。于是一次 S8.4 出三套：
+`transport.json`（overall = ADP+POP+IMP）、`intrinsic_transport.json`（剔除 IMP）、`intrinsic_ADP.json`（只 ADP）。
+本征 JSON 含 μ、S、σ、κe（κe 自 [0018] 起写出）；PF 用 S²σ 自算。三份都在本步目录，不另建步骤目录。
 0.4.19 与 0.5.1 在真实 2 自旋 / 不可约网格数据上的端到端复现均 PASS（见 `VERIFICATION.md` V89/V90/V91）。
 
 ## 已知局限（写论文要写进方法学）

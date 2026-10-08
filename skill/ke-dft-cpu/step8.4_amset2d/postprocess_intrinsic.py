@@ -62,7 +62,7 @@ from pathlib import Path
 import numpy as np
 
 __author__ = "AutoZT / DSH subagent"
-__version__ = "2026-09-22-intrinsic-v1"
+__version__ = "2026-10-08-intrinsic-v2"   # [0018] 输出加 κe（electronic_thermal_conductivity）
 
 # AMSET 的 write_mesh 对自旋向下数据集的 bug 编码："<name>_up_down"。
 # 顺序重要：先匹配最长的 "_up_down"，再 "_down"，最后 "_up"。
@@ -692,6 +692,12 @@ def build_result(run_dir, mesh_file, amset_version, settings, all_labels,
             "conductivity_S_m": to_jsonable(transport["conductivity_S_m"]),
             "conductivity_inplane_S_m": to_jsonable(
                 inplane_average(transport["conductivity_S_m"])),
+            # [0018] κe：AMSET 重积分本来就算了（W/m/K，元胞口径，与 transport.json 同单位），以前没写出
+            **({"electronic_thermal_conductivity_W_mK": to_jsonable(
+                    transport["electronic_thermal_conductivity"]),
+                "electronic_thermal_conductivity_inplane_W_mK": to_jsonable(
+                    inplane_average(transport["electronic_thermal_conductivity"]))}
+               if transport.get("electronic_thermal_conductivity") is not None else {}),
         },
         "doping_marks": _doping_marks(
             run_dir, doping_cm3, temperatures,
