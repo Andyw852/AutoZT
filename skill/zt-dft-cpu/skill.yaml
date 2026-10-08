@@ -3,7 +3,7 @@
 #
 # ★ 装配方式（2026-10 起）：本技能【只有一个步骤】S20_zt。电子输运和晶格热导率不再
 #   在本技能里重抄一遍，而是由同一个材料目录下的两个上游技能各自计算：
-#     · ke-dft-cpu  → <材料>/ke-dft-cpu/  …  S8_kappa（AMSET：S/σ/κ_e）
+#     · ke-dft-cpu  → <材料>/ke-dft-cpu/  …  S8_kappa（AMSET：S/σ/κ_e；2D 用 S8.4_amset2d）
 #     · kl-dft-cpu  → <材料>/kl-dft-cpu/  …  S6_kappa（phono3py/ShengBTE：κ_L）
 #   上游技能怎么改（换引擎、修 bug、加步骤），ZT 自动跟着用，没有副本漂移。
 #   （以前这里抄了一份两段的步骤定义 + 符号链接，kl 段一直停在旧引擎上。）
@@ -47,8 +47,11 @@ steps:
      gen: gen_step20_zt.py, gen_need: [zt_common.py, stepconf.py], fetch_all: true,
      needs: [],
      needs_results: {
-       transport: [ke-dft-cpu/result/step8_amset/transport.json,
-                   ke-dft-cpu/result/step8.4_amset2d/transport.json],
+       # [0014] 按材料维度（S1 的 DIM=）选：2D 只认 S8.4_amset2d（二维散射核，弹性/介电用原始
+       #   slab 值），3D 用 S8_kappa。2D 不回退 S8：S8 与 S8.4 并行，先跑完的 S8 会被抢先用掉。
+       transport: [{path: ke-dft-cpu/result/step8.4_amset2d/transport.json, dim: 2d,
+                    hint: "2D 只认 S8.4_amset2d；ke-dft-cpu 项目配置写 amset2d: true"},
+                   {path: ke-dft-cpu/result/step8_amset/transport.json, not_dim: 2d}],
        kappa_L:   [kl-dft-cpu/result/step6_kappa/kappa_summary.json,
                    kl-mlff-cpu/result/step4_kappa/kappa_summary.json,
                    kl-mlff-gpu/result/step4_kappa/kappa_summary.json,
@@ -66,7 +69,7 @@ io_schema:
   inputs:
     - {name: POSCAR, from: user, required: true, desc: "材料结构（材料目录根；ke/kl 两个上游技能共用）"}
     - {name: transport.json, from: "skill:ke-dft-cpu", required: true,
-       desc: "AMSET 电子输运（ke-dft-cpu S8_kappa 或 S8.4_amset2d），按材料目录 + 结构指纹核对"}
+       desc: "AMSET 电子输运（3D：ke-dft-cpu S8_kappa；2D：S8.4_amset2d），按材料目录 + 结构指纹核对"}
     - {name: kappa_summary.json, from: "skill:kl-dft-cpu", required: true,
        desc: "κ_L(T)（kl-dft-cpu S6_kappa；或 kl-mlff-* / fit-fc-thermal）"}
   outputs:

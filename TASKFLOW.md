@@ -470,13 +470,14 @@ _AMSET_ENV_SRC = "source %s && conda activate %s" % (CONDA_SH, AMSET_ENV)
 | 8.1 | `step8.1_boltztrap` | S8.1_bt2 | BoltzTraP2 CRTA × DPT-τ 文献口径完整实现 | `boltztrap_crta.json` |
 | 8.3 | `step8.3_output` | S8.3_cmp | AMSET / amset2d / CRTA×DPT 对比图与表 | `comparison_300K.png` |
 
-- 开关：`bandgap_steps: false` 完全不算带隙（手填 setting.yaml 的 bandgap）、`bandgap_hse: false`、`dpt: false`、`boltztrap_crta: false`、`amset2d: false`（**2D 项目才打开**）、`output_compare: false`。
+- 开关：`bandgap_steps: false` 完全不算带隙（手填 setting.yaml 的 bandgap）、`bandgap_hse: false`、`dpt: false`、`boltztrap_crta: false`、`amset2d`（**2D 材料 init/register 时自动写 `amset2d: true`**，老材料手写；zt-dft-cpu 对 2D 只认 S8.4）、`output_compare: false`。
 - 依赖：`pymatgen, numpy, matplotlib, amset, BoltzTraP2` + `vaspkit`（conda 环境 `amset_clean`）。
 
 **8.4 amset2d（2D 项目专用）**：把 AMSET 的四种散射核（ADP/POP/IMP/PIE）换成二维形式
 （运行期插件，**不改 AMSET 安装**，3D 项目 `amset run` 完全不受影响）。要点：
 
-- 弹性常数写**原始 slab 值**（标准 Voigt，已从 VASP 的 XX YY ZZ XY YZ ZX 重排），**不乘 c/t**；
+- 弹性常数写**原始 slab 值**（标准 Voigt，已从 VASP 的 XX YY ZZ XY YZ ZX 重排），**不乘 c/t**
+  （2026-10 起原版 S8 的 2D 路径也一样；此前 S8 乘了 c/t，2D 的 μ_ADP 偏大 c/t 倍）；
 - `pop_frequency` 取 Γ 点**面内极性模**（AMSET 自带口径会把面外 ZO 模算进去）；
 - `2d_correction.json` 额外写 `layer_normal` / 完整 3×3 `eps_inf_slab`、`eps_static_slab` / `eps_env` 等；
 - 8.3 的对比表/图会**自动**多一路 amset2d 列（目录存在才读，不进 `needs`，3D 项目缺它不卡）；

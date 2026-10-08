@@ -439,7 +439,7 @@ writing `kappa_summary.json`:
   orientation and are not the crystal axes for a non-standard cell.
 * Keys live in `step2_kappa/step.conf`: `MESH`, `MESH_LENGTH`, `MESH_CONV*`,
   `T_MIN/T_MAX/T_STEP`,
-  `ISOTOPE`, `NAC` (auto = on iff `S1_fit/BORN` exists), `BTE_METHOD`,
+  `ISOTOPE`, `NAC` (auto = on iff `S1_fit/BORN` exists and the cell is not 2D), `BTE_METHOD`,
   `P3PY_OMP_THREADS` (phono3py is OpenMP-only: 1 process x N threads, never
   `mpirun`), `SBATCH_QOS`, `MESH_2D_VACUUM`.
 * The driver (`kappa_driver.py`) loads `phono3py_params.yaml` (or

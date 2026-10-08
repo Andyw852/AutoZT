@@ -870,6 +870,43 @@ def _scope_to_material(content, tkey):
     line = '%s  local_root: ".."   # 只发现本材料；整批管请到上级目录 autozt init\n' % m.group(1)
     return content[:m.end()] + "\n" + line + content[m.end() + 1:]
 
+def _auto_dim_flags(cfg, t, content, tkey, target):
+    """[0014] optional_steps.<组>.auto_dim：按材料 POSCAR 的维度，新建项目配置时自动打开可选组。
+
+    例：ke-dft-cpu 的 amset2d（S8.4 二维散射核）写 auto_dim: 2d —— 2D 材料 init/register
+    时在本材料的 tf_*.yaml 里写 amset2d: true；3D 不写（S8.4 对 3D 会直接退出）。
+    只在新建配置时写一次，之后以配置文件为准（用户改 false 不会被改回来）。"""
+    skel = (cfg.get("task_types") or {}).get(tkey) or {}
+    groups = {f: g for f, g in ((t or {}).get("optional_steps")
+                                or skel.get("optional_steps") or {}).items()
+              if isinstance(g, dict) and g.get("auto_dim")}
+    pos = os.path.join(target, "POSCAR")
+    if not groups or not os.path.isfile(pos):
+        return content
+    try:
+        from autozt.report import _dim_mod
+        _td = dict(skel)
+        _td.update(t or {})
+        _td["key"] = tkey
+        mod = _dim_mod(cfg, _td)
+        dim = str(mod.detect_dimension(pos)[0]).lower() if mod else None
+    except (SystemExit, Exception):                       # noqa: BLE001
+        dim = None
+    on = [f for f, g in groups.items()
+          if dim and dim in {str(x).strip().lower() for x in
+                             ([g["auto_dim"]] if isinstance(g["auto_dim"], str) else g["auto_dim"])}]
+    m = re.search(r"(?m)^([ \t]*)%s:[ \t]*$" % re.escape(str(tkey or "")), content)
+    if not on or not m:
+        return content
+    eol = content.find("\n", m.end())
+    eol = len(content) if eol < 0 else eol + 1
+    lines = "".join("%s  %s: true   # auto_dim：POSCAR 判为 %s，自动打开（不需要就改 false）\n"
+                    % (m.group(1), f, dim.upper()) for f in on)
+    print("[..] %s 判为 %s：自动打开可选步骤组 %s" % (os.path.basename(os.path.abspath(target)),
+                                              dim.upper(), "、".join(on)))
+    return content[:eol] + lines + content[eol:]
+
+
 # 模板占位符漂移检查（2026-09-21）：项目级模板若缺了技能模板里的 {{占位符}}，
 #   说明它是技能模板的【旧拷贝】。gen 阶段 render_tpl/write_submit 虽然能拦，
 #   但那时（多步链路里）前序作业往往已经提交。init 时先 WARN 出来，代价为零。
@@ -996,6 +1033,7 @@ def _init_one_skill(cfg, types, target, name=None, tt=None, force=False,
                            + content[mk.end():])
         if _sub:   # kls7-scope：技能子目录布局 = 一材料一项目
             content = _scope_to_material(content, tkey)
+            content = _auto_dim_flags(cfg, t, content, tkey, target)   # [0014] 2D -> amset2d
         with open(f0, "w", encoding="utf-8") as f:
             f.write(content)
         from autozt import invalidate_project_scan

@@ -47,8 +47,10 @@ step5_dielect 的 VASP 输出是 slab-in-a-box 介电（含真空稀释）。ski
 `ε_m = 1 + (c/t)(ε_slab - 1)`，c/t 复用弹性同款。
 
 **但散射核本身还是三维的** —— 这一条不再靠「只作比值」糊过去：2D 项目改走
-`step8.4_amset2d`（可选步骤组 `amset2d: true`），运行期插件把四种散射核换成二维形式。
-原版 `step8_amset` 保留给三维项目，两者用同一批上游输入、在 DAG 上并行。
+`step8.4_amset2d`（可选步骤组 `amset2d`；`auto_dim: 2d`，2D 材料 init/register 时自动写
+`amset2d: true`），运行期插件把四种散射核换成二维形式。原版 `step8_amset` 保留给三维项目，
+两者用同一批上游输入、在 DAG 上并行；2D 的 S8 结果只作对照，`zt-dft-cpu` 的 S20 对 2D
+只认 S8.4 的 transport.json。
 
 ### 4.1 弹性张量顺序（三维也中招，已修）
 
@@ -99,6 +101,9 @@ gen_step14 现在会算出这三个数、打印并落盘到 `2d_correction.json`
 即 settings.yaml 里的 `elastic_constant` 必须写**原始 slab 值**，**不能再乘 c/t**。
 旧做法乘了 c/t -> ADP 散射率偏小 `t/c` 倍 -> ADP 迁移率偏大 `c/t` 倍
 （CrS2：c/t = 3.06；实测旧流程 mu_ADP/正确值 = 3.1，见 VERIFICATION.md 的 T2）。
+ADP 与 q 无关，所以这条对原版 `step8_amset` 同样成立：2026-10（补丁 0014）起 S8 的 2D 路径
+也改为原始 slab 值，c/t 只用于介电扣真空与 σ/κ 的厚度归一化（`2d_correction.json` 的
+`elastic_constant_used_GPa`）。此前 S8 的 2D μ_ADP 偏大 c/t 倍，需要重算。
 
 ### 4.3 pop_frequency 取面内极性模
 
@@ -110,17 +115,26 @@ slab 里会把面外极性模也算进去。二维 Fröhlich 只用面内极性�
 
 ### 4.4 形变势的构型口径（ionrelax）与参考能级（2D 默认真空）
 
-**构型口径（2026-09-16 修订，影响三维）**：step7b 生成的**两份** h5（芯势口径的
-`deformation.h5` 与真空口径的 `deformation_vac.h5`）都改为读 `deform-*/ionrelax/`
+**构型口径（2026-09-16 修订；2026-10 按代码核对）**：step7b 生成的**两份** h5（芯势口径的
+`deformation.h5` 与真空口径的 `deformation_vac.h5`）都读 `deform-*/ionrelax/`
 （离子弛豫构型，有则用）。物理依据：q→0 声学声子 = 均匀应变 + 内坐标弛豫；一致性依据：
 ADP 核分母是 Christoffel 刚度（VASP `TOTAL ELASTIC MODULI`，含离子弛豫）。实测 MoS2 单层
 xx 0.5%：电子 E1_vac 由 6.58（离子固定）变 8.51 eV（离子弛豫），差 **29%**。
 
-> ⚠ **这是行为变化，不是纯修 bug**：HEAD 里三维 `step8/gen_step10` 读的正是
-> `deformation.h5`，所以此改动之后**所有三维项目新算的 ADP 都会变**（含内坐标的体系
-> 幅度类似）。三维数值与改动前**不可直接比较**；225 相合金重做时的差异要分成
-> "缺陷修复"与"口径切换"两部分说明。
-> ⚠ **回退不静默**：没有 `ionrelax/` 的构型退回离子固定口径时，gen 会打 WARN 并把
+**但 `ionrelax/` 只有 2D 会生成**：step7（`gen_step9_deform.py`）只在 `dim == "2d"` 时给
+**面内**应变分量（xx/yy/xy）的形变目录建 `ionrelax/`；面外分量与**全部三维形变**都是
+离子固定的单点（`IBRION=-1, NSW=0`）。所以实际口径是：
+
+| 体系 | 形变构型 | `deform_geometry` |
+|---|---|---|
+| 2D | 面内 ionrelax，面外 clamped（二维核只用面内分量） | `ionrelax(in-plane)+clamped(out-of-plane)` |
+| 3D | 全部 clamped（离子固定） | `clamped`（step7b 打 WARN） |
+
+> ⚠ 三维的形变势因此仍是**离子固定**口径，而弹性常数含离子弛豫 —— 两者不同源；
+> 内坐标自由度大的三维体系（如 225 相 tetradymite）E1 会系统性偏离。要改成三维也弛豫，
+> 需在 step7 放开 `dim == "2d"` 的限制（每个形变胞多一段离子弛豫，代价约 ×(1+NSW 步)），
+> 属口径变更，改前先评估存量三维结果。
+> ⚠ **回退不静默**：没有 `ionrelax/` 的构型按离子固定口径处理时，gen 会打 WARN 并把
 > `deform_geometry`（ionrelax / clamped / mixed）写进 `band_edges.json`，进而出现在
 > settings 注释、`2d_correction.json` 与 8.3 汇总表里，跨项目比较前先核对这一项。
 

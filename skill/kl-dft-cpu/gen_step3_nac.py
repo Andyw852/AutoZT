@@ -62,7 +62,7 @@ def warn_2d_nac(dim):
     print("       厚度变化的伪劈裂。文献（Sohier et al., Nano Lett. 2017）的实用处方是：")
     print("       2D 极性材料在 phono3py/phonopy 里【建议关掉 NAC】(nac: false)；")
     print("       严格的 2D-NAC 需用 Quantum ESPRESSO 的 2D 开边界 DFPT，phono3py 不带。")
-    print("       本流程 step6 已默认对 2D 不施加 NAC（KAPPA_NAC=auto）；要强制用设 KAPPA_NAC=on。")
+    print("       本流程 step6 已默认对 2D 不施加 NAC（step6_kappa 的 NAC=auto）；要强制用设 NAC=on。")
 
 
 def main():

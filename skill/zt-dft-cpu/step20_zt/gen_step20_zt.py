@@ -4,7 +4,7 @@
 
 输入（cwd = <超算 work_dir>/<材料>/zt-dft-cpu/；autozt 按 skill.yaml 的 needs_results
 从【本材料的本地目录】选出上游技能已拉回的结果，推到 inputs/<键>/，附 source.json）：
-  · inputs/transport/transport.json      ke-dft-cpu S8_kappa（或 S8.4_amset2d）：S/σ/κ_e
+  · inputs/transport/transport.json      ke-dft-cpu：3D 取 S8_kappa，2D 取 S8.4_amset2d：S/σ/κ_e
   · inputs/kappa_L/kappa_summary.json    kl-dft-cpu S6_kappa（或 kl-mlff-* / fit-fc-thermal）：κ_L(T)
   · inputs/structure/workflow_method.txt ke-dft-cpu S1_opt：DIM=（2D/3D 口径）+ CONTCAR
   三份输入的 source.json 必须指向同一个材料目录、同一个 POSCAR 指纹，否则拒绝汇总——
@@ -163,7 +163,23 @@ def check_input_sources(cwd, keys=("transport", "kappa_L", "structure")):
 
 def _find_transport(cwd):
     p = Path(cwd) / AMSET_DIR / "transport.json"
-    return (p, "ke-dft-cpu → %s" % AMSET_DIR) if p.is_file() else (None, "未找到")
+    return (p, "%s → %s" % ((_source(cwd, "transport") or {}).get("from", "ke-dft-cpu"), AMSET_DIR)) \
+        if p.is_file() else (None, "未找到")
+
+
+def transport_route(src, is_2d):
+    """[0014] 电子段来自哪一步 + 2D 口径核对。返回 (步骤标签, 警告或 None)。
+
+    2D 必须用 S8.4_amset2d（二维散射核）；S8_kappa 的 POP/IMP 是三维核，对 2D 只是近似。
+    zt-dft-cpu 的 needs_results 对 2D 只认 S8.4，走到 S8 只可能是项目层改了 needs_results。"""
+    frm = str((src or {}).get("from") or "")
+    step = ("S8.4_amset2d" if "step8.4_amset2d" in frm else
+            "S8_kappa" if "step8_amset" in frm else (frm or "?"))
+    warn = None
+    if is_2d and step != "S8.4_amset2d":
+        warn = ("2D 材料的电子段来自 %s（不是 S8.4_amset2d）：POP/IMP 为三维散射核，"
+                "ZT 只作对照，不作二维结论" % step)
+    return step, warn
 
 
 def _find_kappa(cwd):
@@ -335,8 +351,8 @@ def main():
     srcs = check_input_sources(cwd)
     tr_path, tr_src = _find_transport(cwd)
     if tr_path is None:
-        sys.exit("[ERROR] 找不到 %s/transport.json —— 先把 ke-dft-cpu 的 S8_kappa 跑完并拉回。"
-                 % AMSET_DIR)
+        sys.exit("[ERROR] 找不到 %s/transport.json —— 先把 ke-dft-cpu 的 S8_kappa（3D）"
+                 "或 S8.4_amset2d（2D）跑完并拉回。" % AMSET_DIR)
     kl_path, kl_src = _find_kappa(cwd)
     if kl_path is None:
         sys.exit("[ERROR] 找不到 %s/kappa_summary.json —— 先把 kl-dft-cpu 的 S6_kappa 跑完并拉回。"
@@ -349,6 +365,9 @@ def main():
     dim, dim_note = _read_dim(cwd)
     is_2d = (dim == "2d")
     print("[..] %s" % dim_note)
+    tr_step, tr_warn = transport_route(srcs.get("transport"), is_2d)
+    if tr_warn:
+        print("[WARN] " + tr_warn)
 
     try:
         tr = zc.load_transport(str(tr_path))
@@ -386,6 +405,9 @@ def main():
         grid["notes"].append("电子段 AMSET 散射机制 = %s；带隙 = %s eV"
                              % (", ".join(map(str, _amset_s["scattering_type"])),
                                 _amset_s.get("bandgap", "?")))
+    grid["notes"].append("电子段来自 ke-dft-cpu %s" % tr_step)
+    if tr_warn:
+        grid["notes"].append("★ " + tr_warn)
     if cal is not None:      # 闸门结论也进人读汇总（notes 同时进 JSON 与 TXT）
         grid["notes"].append("元胞口径闸门：电子段胞 c=%.3f Å vs κ_L 的 Lz=%.3f Å"
                              "（差 %.1f%%）——%s"
@@ -435,7 +457,7 @@ def main():
                     "thickness_convention": kl.get("thickness_convention"),
                     "kappa_300K_xx_yy_zz": kl.get("kappa_300K_xx_yy_zz")},
         "amset_settings": _amset_settings(cwd),
-        "transport": {"source": tr_src},
+        "transport": {"source": tr_src, "step": tr_step, "warning": tr_warn},
         "kappa_e": {"source": meta["transport_src"],
                     "note": "AMSET electronic_thermal_conductivity（含双极项；未单独拆分）"},
         "grid_ZT": grid["grid_zt"],

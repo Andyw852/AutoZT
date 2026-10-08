@@ -1,7 +1,8 @@
 # step8.4_amset2d -- AMSET 二维散射核（插件式）
 
 > 只在 2D 项目里打开；三维项目走原版 `step8_amset`，完全不受影响。
-> 开关：项目 `project_setting` 里写 `amset2d: true`（技能里该组 `default: false`）。
+> 开关：项目 `project_setting` 里写 `amset2d: true`（技能里该组 `default: false`、`auto_dim: 2d`：
+> 2D 材料 init/register 时自动写这一行；老材料手写）。zt-dft-cpu 的 S20 对 2D 只认本步的 transport.json。
 
 ## 这个步骤解决什么
 
