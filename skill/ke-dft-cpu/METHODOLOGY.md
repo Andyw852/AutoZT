@@ -20,7 +20,11 @@ vdW 口径 d = zspan + r_vdW(top) + r_vdW(bot)（S 1.80、Se 1.90 Å），
 **但绝对值依赖 t。** 文献超晶格取两单层平均 6.73 Å，而 vdW 自动
 值为 6.97 Å（由较厚的 CrSe₂ 侧决定），两者差 3.4%。要与文献的
 κ_p 37/53（SS）逐点对比，需在两处分别锁 6.73：
-- `ke-dft-cpu` 的 `LAYER_THICKNESS`（决定 σ、κ_e，以及 8.1 报出的 κ_p）
+- `ke-dft-cpu` 的 `LAYER_THICKNESS`（决定 σ、κ_e，以及 8.1 报出的 κ_p）。2026-10（补丁 0016）起写在
+  **本材料共用 step.conf**（`project_setting/templates/step.conf` 的 `[params]`），S8 / S8.1 / S8.4
+  同读这一个；旧做法写在 `templates/step8_amset/step.conf` 只对 S8 生效，2D 默认不跑 S8 之后要搬过来。
+  S8.1 的取值顺序：`THICKNESS_A` → 共用 `LAYER_THICKNESS` → S8 / S8.4 的 `2d_correction.json` →
+  按结构现算 vdW；实际来源写在 `paper_mu_scan_*.csv` 首行的 `t_source`。
 - `kl-*` 的 `KAPPA_2D_THICKNESS`（决定 kl 自己报的 κ_p）
 
 两者互不影响，各自锁各自的；漏锁其一只影响该侧的绝对值，不影响 ZT。
@@ -48,8 +52,10 @@ step5_dielect 的 VASP 输出是 slab-in-a-box 介电（含真空稀释）。ski
 
 **但散射核本身还是三维的** —— 这一条不再靠「只作比值」糊过去：2D 项目改走
 `step8.4_amset2d`（可选步骤组 `amset2d`；`auto_dim: 2d`，2D 材料 init/register 时自动写
-`amset2d: true`），运行期插件把四种散射核换成二维形式。原版 `step8_amset` 保留给三维项目，
-两者用同一批上游输入、在 DAG 上并行；2D 的 S8 结果只作对照，`zt-dft-cpu` 的 S20 对 2D
+`amset2d: true`），运行期插件把四种散射核换成二维形式。原版 `step8_amset` 保留给三维项目：
+它在可选步骤组 `amset3d` 里（`auto_dim_off: 2d`，补丁 0016），2D 材料新建时自动写 `amset3d: false`、
+不跑 S8（三维核的 POP/IMP 对 2D 不适用，只能作对照）；要三维核对照就把它改回 true，或
+`-j S8_kappa start` 按需启用。已有材料的配置里没有这个键，行为不变。`zt-dft-cpu` 的 S20 对 2D
 只认 S8.4 的 transport.json。
 
 ### 4.1 弹性张量顺序（三维也中招，已修）
@@ -185,7 +191,10 @@ kz>=3 的网格收敛测试完成前，仍建议用同 c（20 Å）的跨体系�
 
 1. **"去掉 ZA 支"只对存在水平镜面（σh）的材料成立**：缺少 σh 的翘曲结构（硅烯、锗烯）
    与 Janus 结构可以有**一阶 ZA 耦合**，对它们是模型遗漏（ZA 是二次色散，形变势模型
-   本身也处理不了）。
+   本身也处理不了）。补丁 0016 起自动判断（`ke_common.za_coupling_check`：spglib 对称操作里
+   有没有笛卡尔部分为 I − 2nnᵀ 的操作，n 为层法向，含滑移镜面），结论写进 S8.2 的
+   `dpt_result.json` 与 S8.4 的 `2d_correction.json`（键 `za_coupling`），没有 σh 时 gen 打 WARN。
+   只能标注，补不上：DPT 与 AMSET 都不含 ZA 一阶耦合，文献 DPT 同样不含。
 2. **缺非极性光学声子（光学形变势 ODP）**：AMSET 实现的机制只有 **ADP / POP / IMP / PIE**
    （`amset/scattering/elastic.py` = ADP+IMP+PIE，`inelastic.py` 只有 `PolarOpticalScattering`；
    官方文档 Summary of scattering rates 同）。**非极性晶体 POP 前因子为零**

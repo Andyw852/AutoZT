@@ -871,15 +871,16 @@ def _scope_to_material(content, tkey):
     return content[:m.end()] + "\n" + line + content[m.end() + 1:]
 
 def _auto_dim_flags(cfg, t, content, tkey, target):
-    """[0014] optional_steps.<组>.auto_dim：按材料 POSCAR 的维度，新建项目配置时自动打开可选组。
+    """[0014/0016] optional_steps.<组>.auto_dim / auto_dim_off：按材料 POSCAR 的维度，新建项目配置时
+    自动打开 / 关闭可选组。
 
-    例：ke-dft-cpu 的 amset2d（S8.4 二维散射核）写 auto_dim: 2d —— 2D 材料 init/register
-    时在本材料的 tf_*.yaml 里写 amset2d: true；3D 不写（S8.4 对 3D 会直接退出）。
-    只在新建配置时写一次，之后以配置文件为准（用户改 false 不会被改回来）。"""
+    例：ke-dft-cpu 的 amset2d（S8.4 二维散射核）写 auto_dim: 2d，amset3d（S8 原版三维核）写
+    auto_dim_off: 2d —— 2D 材料 init/register 时在本材料的 tf_*.yaml 里写 amset2d: true、
+    amset3d: false；3D 不写。只在新建配置时写一次，之后以配置文件为准（用户改了不会被改回来）。"""
     skel = (cfg.get("task_types") or {}).get(tkey) or {}
     groups = {f: g for f, g in ((t or {}).get("optional_steps")
                                 or skel.get("optional_steps") or {}).items()
-              if isinstance(g, dict) and g.get("auto_dim")}
+              if isinstance(g, dict) and (g.get("auto_dim") or g.get("auto_dim_off"))}
     pos = os.path.join(target, "POSCAR")
     if not groups or not os.path.isfile(pos):
         return content
@@ -892,18 +893,25 @@ def _auto_dim_flags(cfg, t, content, tkey, target):
         dim = str(mod.detect_dimension(pos)[0]).lower() if mod else None
     except (SystemExit, Exception):                       # noqa: BLE001
         dim = None
-    on = [f for f, g in groups.items()
-          if dim and dim in {str(x).strip().lower() for x in
-                             ([g["auto_dim"]] if isinstance(g["auto_dim"], str) else g["auto_dim"])}]
+
+    def _hit(v):
+        vals = [v] if isinstance(v, str) else list(v or [])
+        return bool(dim) and dim in {str(x).strip().lower() for x in vals}
+
+    sets = [(f, True) for f, g in groups.items() if _hit(g.get("auto_dim"))]
+    sets += [(f, False) for f, g in groups.items() if _hit(g.get("auto_dim_off"))]
     m = re.search(r"(?m)^([ \t]*)%s:[ \t]*$" % re.escape(str(tkey or "")), content)
-    if not on or not m:
+    if not sets or not m:
         return content
     eol = content.find("\n", m.end())
     eol = len(content) if eol < 0 else eol + 1
-    lines = "".join("%s  %s: true   # auto_dim：POSCAR 判为 %s，自动打开（不需要就改 false）\n"
-                    % (m.group(1), f, dim.upper()) for f in on)
-    print("[..] %s 判为 %s：自动打开可选步骤组 %s" % (os.path.basename(os.path.abspath(target)),
-                                              dim.upper(), "、".join(on)))
+    lines = "".join("%s  %s: %s   # auto_dim：POSCAR 判为 %s，自动%s（需要的话改 %s）\n"
+                    % (m.group(1), f, "true" if on else "false", dim.upper(),
+                       "打开" if on else "关闭", "false" if on else "true")
+                    for f, on in sets)
+    print("[..] %s 判为 %s：%s" % (
+        os.path.basename(os.path.abspath(target)), dim.upper(),
+        "；".join("%s可选步骤组 %s" % ("打开" if on else "关闭", f) for f, on in sets)))
     return content[:eol] + lines + content[eol:]
 
 

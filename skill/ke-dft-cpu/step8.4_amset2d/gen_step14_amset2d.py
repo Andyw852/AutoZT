@@ -1485,6 +1485,8 @@ def apply_2d_corrections(cwd: Path, elastic, eps_inf=None, eps_static=None):
         "eps_inf_override": _eps_ov,
         "r_inf_delta_r_check": r_check,
         "deform_geometry": _DEFORM_GEOM,
+        # [0016] 二维核只用面内 2×2 Christoffel（不含 ZA）：没有 σh 的结构缺 ZA 一阶耦合这一项
+        "za_coupling": _za_check(cwd),
         "eps_env": float(EPS_ENV),
         "imp_distance_A": float(IMP_DISTANCE_A),
         "pop_lo_dispersion": bool(POP_LO_DISPERSION),
@@ -1802,6 +1804,15 @@ def write_settings(out: Path, eps_inf, eps_static, gap, elastic,
 # 直接从 step1 的 workflow_method.txt 读 DIM=：本步**只服务 2D**，不是 2d 就退出。
 _STEP1_CANDS = ("step1_opt", "step1_std_opt",
                 "step1c_PBE_opt", "step1b_PBE_opt", "step1a_PBE_opt")
+
+
+def _za_check(cwd):
+    """[0016] σh / ZA 判断（ke_common.za_coupling_check）；没有 σh 打 WARN。"""
+    if not _HAS_KC or not hasattr(kc, "za_coupling_check"):
+        return None
+    r = kc.za_coupling_check(cwd)
+    print(("[WARN] " if r.get("sigma_h") is False else "[..] ") + "ZA：" + r["note"])
+    return r
 
 
 def _guard_dim_2d(cwd):
@@ -2556,6 +2567,15 @@ def main():
         kc.report_dielectric_symmetry(cwd, eps_inf, eps_static, (DIELECT_DIR,) + tuple(STRUCT_CANDS))
     # patch_2d_amset：落盘二维修正依据（原始 slab 介电/层法向/机制），弹性保持原始 slab 值
     is_2d, elastic, c_len = apply_2d_corrections(cwd, elastic, eps_inf, eps_static)
+    if is_2d and c_len and _HAS_KC and hasattr(kc, "invalidate_ct_consumers"):
+        # [0016] 2D 默认不跑 S8 之后，S8.1 的 c/t 可能取自本步记录或按结构现算；层厚不同就让 S8.1 重排
+        try:
+            import json as _json
+            _ct_new = _json.loads((out / "2d_correction.json").read_text(encoding="utf-8")) \
+                .get("elastic_rescale_factor_c_over_t")
+            kc.invalidate_ct_consumers(cwd, _ct_new, step=OUTDIR_NAME)
+        except (OSError, ValueError, AttributeError) as _e:
+            print("[WARN] 没能核对 S8.1 的 c/t（%s）" % _e)
     if is_2d and c_len and TWO_D_DIELECTRIC_VACUUM:  # patch_2d_dielec
         eps_inf, eps_static = _dielectric_2d_inplane(
             cwd / DIELECT_DIR, out, eps_inf, eps_static)

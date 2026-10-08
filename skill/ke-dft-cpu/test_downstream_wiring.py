@@ -66,7 +66,7 @@ class WiringTests(unittest.TestCase):
         for label, steps in (("ke", STEPS), ("zt", ZT_STEPS)):          # V153：zt 也查
             miss = []
             for s in steps:
-                for up in s.get("needs") or []:
+                for up in [str(u).rstrip("?") for u in (s.get("needs") or [])]:   # [0016] 软依赖
                     if s["name"] in [d for d, _m in kc.DOWNSTREAM.get(up, ())]:
                         continue
                     if (up, s["name"]) in kc.DOWNSTREAM_EXEMPT or (up, "*") in kc.DOWNSTREAM_EXEMPT:

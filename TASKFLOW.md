@@ -470,7 +470,7 @@ _AMSET_ENV_SRC = "source %s && conda activate %s" % (CONDA_SH, AMSET_ENV)
 | 8.1 | `step8.1_boltztrap` | S8.1_bt2 | BoltzTraP2 CRTA × DPT-τ 文献口径完整实现 | `boltztrap_crta.json` |
 | 8.3 | `step8.3_output` | S8.3_cmp | AMSET / amset2d / CRTA×DPT 对比图与表 | `comparison_300K.png` |
 
-- 开关：`bandgap_steps: false` 完全不算带隙（手填 setting.yaml 的 bandgap）、`bandgap_hse: false`、`dpt: false`、`boltztrap_crta: false`、`amset2d`（**2D 材料 init/register 时自动写 `amset2d: true`**，老材料手写；zt-dft-cpu 对 2D 只认 S8.4）、`output_compare: false`。
+- 开关：`bandgap_steps: false` 完全不算带隙（手填 setting.yaml 的 bandgap）、`bandgap_hse: false`、`dpt: false`、`boltztrap_crta: false`、`amset2d`（**2D 材料 init/register 时自动写 `amset2d: true`**，老材料手写；zt-dft-cpu 对 2D 只认 S8.4）、`amset3d`（S8 原版三维核；**2D 材料新建时自动写 `amset3d: false`**，不跑 S8；层厚 `LAYER_THICKNESS` 写在本材料共用 step.conf，S8/S8.1/S8.4 共用）、`output_compare: false`。
 - 依赖：`pymatgen, numpy, matplotlib, amset, BoltzTraP2` + `vaspkit`（conda 环境 `amset_clean`）。
 
 **8.4 amset2d（2D 项目专用）**：把 AMSET 的四种散射核（ADP/POP/IMP/PIE）换成二维形式

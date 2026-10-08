@@ -808,6 +808,17 @@ def invalidate_downstream(cwd, step, reason, _seen=None, gap=None, _jobs=None):
 
 
 CT_CONSUMERS = ("step8.1_boltztrap",)
+# [0016] S8.1 取 c/t 的优先级（与 gen_step11 的 _ct_info 一致，靠前的优先）。下游用的来源比写记录的这一步
+#   优先级更高时，这一步的层厚根本不会被用到，不该让下游重排。
+_CT_PRIORITY = ("THICKNESS_A", "LAYER_THICKNESS", "step8_amset/", "step8.4_amset2d/", "vdw")
+
+
+def _ct_rank(src):
+    s = str(src or "")
+    for i, pfx in enumerate(_CT_PRIORITY):
+        if s.startswith(pfx):
+            return i
+    return len(_CT_PRIORITY)          # 旧版本没记来源：按最低优先级（应当核对）
 
 
 def invalidate_ct_consumers(cwd, ct, step="step8_amset", rel_tol=1e-3):
@@ -815,8 +826,9 @@ def invalidate_ct_consumers(cwd, ct, step="step8_amset", rel_tol=1e-3):
 
     S8.1 的 needs 里没有 S8（S8 要等 S4/S5/HSE，常常更晚生成），S8.1 先跑时 c/t 按本步结构的 vdW
     层厚现算；S8 的 LAYER_THICKNESS 若被 step.conf 覆盖（如 SS/LS 的 6.73），两边就不是同一个 t。
-    这里只在 c/t 真的不同（或下游没记录 c/t）时归档下游完成标记，递归到 S8.3；下游手填了
-    THICKNESS_A 的不动。返回 [(下游步骤, 改名的文件), ...]。"""
+    这里只在 c/t 真的不同（或下游没记录 c/t）时归档下游完成标记，递归到 S8.3；下游用的来源比
+    本步优先（手填 THICKNESS_A、共用 step.conf 的 LAYER_THICKNESS、S8.4 调用时的 S8 记录）的不动。
+    返回 [(下游步骤, 改名的文件), ...]。"""
     import json as _json
     import time as _t
     if not ct:
@@ -835,8 +847,9 @@ def invalidate_ct_consumers(cwd, ct, step="step8_amset", rel_tol=1e-3):
                 rec = _json.loads(f.read_text(encoding="utf-8"))
             except (OSError, ValueError):
                 rec = {}
-            if rec.get("dim") not in (None, "2d") or rec.get("twoD_c_over_t_source") == "THICKNESS_A":
-                continue
+            if rec.get("dim") not in (None, "2d") \
+                    or _ct_rank(rec.get("twoD_c_over_t_source")) < _ct_rank(step + "/"):
+                continue                    # 3D，或下游用的是更优先的来源（手填 / 共用 step.conf / S8）
             old = rec.get("twoD_c_over_t")
             if old and abs(float(old) - float(ct)) <= rel_tol * abs(float(ct)):
                 continue
@@ -1026,6 +1039,48 @@ def read_poscar_cell(path):
     xyz = np.array([[float(x) for x in ln[i + j].split()[:3]] for j in range(n)]).reshape(n, 3)
     frac = np.dot(xyz * f, np.linalg.inv(lat)) if cart else xyz
     return lat, counts, frac, syms
+
+
+ZA_STRUCT_CANDS = ("step3_uniform", "step6_elastic", "step1_opt", "step1_std_opt")
+
+
+def za_coupling_check(cwd, symprec=1e-2, cands=ZA_STRUCT_CANDS):
+    """[0016] 2D：ZA（弯曲声子）的一阶形变耦合是否被对称性禁止 —— 结构有没有水平镜面 σh（z→−z，含滑移）。
+
+    有 σh：电子态对 z→−z 有确定宇称，ZA 的一阶耦合为零 -> 只算面内声学支（DPT 的 LA、S8.4 的面内
+      2×2 Christoffel）是对的；
+    没有 σh（翘曲结构、Janus、上下不对称堆叠的超晶格）：ZA 一阶耦合可以不为零，DPT 与 AMSET 都没计入，
+      结果缺这一项（模型局限，不是能补的数值误差）。
+    判据：spglib 对称操作里存在笛卡尔部分 R = I − 2nnᵀ 的操作（n = 层法向，平移任意）。
+    返回 {"sigma_h": True/False/None, "structure": 相对路径, "note": 说明}；判不出 sigma_h=None。"""
+    import numpy as np
+    pos = next((Path(cwd) / d / fn for d in cands for fn in ("POSCAR", "CONTCAR")
+                if (Path(cwd) / d / fn).is_file()), None)
+    if pos is None:
+        return {"sigma_h": None, "structure": None, "note": "找不到结构，判不出 σh"}
+    rel = "%s/%s" % (pos.parent.name, pos.name)
+    try:
+        import spglib
+        lat, counts, frac, _ = read_poscar_cell(pos)
+        dim, axis, _vac = detect_dimension(str(pos))
+        if dim != "2d":
+            return {"sigma_h": None, "structure": rel, "note": "不是 2D（%s），不适用" % dim}
+        ip = [i for i in range(3) if i != int(axis)]
+        n = np.cross(lat[ip[0]], lat[ip[1]])
+        n = n / np.linalg.norm(n)
+        mirror = np.eye(3) - 2.0 * np.outer(n, n)
+        nums = [i for i, c in enumerate(counts) for _ in range(c)]
+        ds = spglib.get_symmetry_dataset((lat, frac, nums), symprec=symprec)
+        if ds is None:
+            return {"sigma_h": None, "structure": rel, "note": "spglib 取不到对称操作"}
+        rots = ds["rotations"] if isinstance(ds, dict) else ds.rotations
+        inv = np.linalg.inv(lat)
+        has = any(np.allclose(inv @ np.asarray(R).T @ lat, mirror, atol=1e-3) for R in rots)
+    except (SystemExit, Exception) as e:                             # noqa: BLE001
+        return {"sigma_h": None, "structure": rel, "note": "判不出 σh：%s: %s" % (type(e).__name__, e)}
+    note = ("有水平镜面 σh：ZA 一阶耦合被对称性禁止，只算面内声学支成立" if has else
+            "没有水平镜面 σh：ZA 一阶耦合可以不为零，DPT 与 AMSET 都没计入（结果缺这一项，报数时注明）")
+    return {"sigma_h": bool(has), "structure": rel, "symprec": symprec, "note": note}
 
 
 def cell_deviation(a, b):

@@ -1179,6 +1179,20 @@ def _one_carrier(cwd, is_2d, carrier, T):
     return rec
 
 
+def _za_check(cwd):
+    """[0016] σh / ZA 判断（ke_common.za_coupling_check），写进 dpt_result.json；没有 σh 打 WARN。
+    DPT 只算 LA 支：有 σh 时 ZA 一阶耦合被对称性禁止，没有 σh 时结果缺这一项（文献 DPT 同样不含）。"""
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+        import ke_common as _kc
+    except ImportError:
+        print("[WARN] 没有 ke_common.py，σh/ZA 没判（skill.yaml 的 gen_need 漏了它？）")
+        return None
+    r = _kc.za_coupling_check(cwd)
+    print(("[WARN] " if r.get("sigma_h") is False else "[..] ") + "ZA：" + r["note"])
+    return r
+
+
 def main():
     cwd = Path.cwd()
     _guard_not_0d(cwd)
@@ -1211,10 +1225,14 @@ def main():
            "results": [_one_carrier(cwd, is_2d, c, TEMPERATURE_K) for c in carriers],
            "note": ("经典 DPT 声学支迁移率，用于和 amset(ADP) 对标。m*/E1 自动值精度"
                     "有限——务必核对，或在本材料 step.conf 手填。μ∝1/T。")}
+    if is_2d:
+        res["za_coupling"] = _za_check(cwd)                # [0016] σh / ZA
     (out / "dpt_result.json").write_text(
         json.dumps(res, ensure_ascii=False, indent=2), encoding="utf-8")
 
     lines = ["# DPT 迁移率摘要（%s, %.0f K）" % (dim, TEMPERATURE_K)]
+    if res.get("za_coupling"):                            # [0016]
+        lines.append("# ZA：%s" % res["za_coupling"]["note"])
     if s3_grid and s3_grid["issues"]:                     # [V174] 只在 ALLOW_COARSE_S3 时走到这里
         lines.append("# ★ S3 网格 %s 不合现行规则（ALLOW_COARSE_S3）：m* 只作复现/对照 —— %s"
                      % ("×".join(map(str, s3_grid["mesh"] or [])), "；".join(s3_grid["issues"])))
