@@ -465,6 +465,26 @@ def parse_methods(spec):
     return uniq
 
 
+def resolve_auto_recipe(engine, p_method):
+    """[0019] 默认拟合配方 = pheasy + ALASSO（2D/3D 同一套；2D 的旋转不变/平衡约束由
+    PHEASY_RASR=auto 自动加 BHH，3D 不加）。旧模板 / 旧项目 step.conf 里的
+    FIT_ENGINE = auto、PHEASY_FIT_METHOD = auto 按它解析，不再报"must be one of"退出。
+
+    返回 (engine, pheasy_method, notes)；notes 是要打印的解析说明（没解析时为空）。"""
+    eng = str(engine or "").strip().lower()
+    meth = str(p_method or "").strip()
+    notes = []
+    if eng in ("", "auto"):
+        if eng == "auto":
+            notes.append("FIT_ENGINE=auto -> pheasy")
+        eng = "pheasy"
+    if meth.lower() in ("", "auto"):
+        if meth.lower() == "auto":
+            notes.append("PHEASY_FIT_METHOD=auto -> %s" % DEFAULT_METHOD["pheasy"])
+        meth = DEFAULT_METHOD["pheasy"]
+    return eng, meth, notes
+
+
 def method_overrides(engine, method):
     return {"FIT_ENGINE": engine, _METHOD_KEY[engine]: method, "FIT_METHODS": "auto"}
 
@@ -590,7 +610,11 @@ def _gen_one(conf, out, job_label="S1fit"):
     cwd = Path.cwd()
     out.mkdir(parents=True, exist_ok=True)
 
-    engine = str(conf["FIT_ENGINE"] or "pheasy").lower()
+    engine, _p_method_raw, _notes = resolve_auto_recipe(conf["FIT_ENGINE"],
+                                                        conf["PHEASY_FIT_METHOD"])
+    if _notes:
+        print("[..] 默认拟合配方：%s（2D/3D 同一套；要 phono3py+symfc 写 FIT_ENGINE = "
+              "phono3py）" % "；".join(_notes), flush=True)
     if engine not in ENGINES:
         sys.exit("[ERROR] FIT_ENGINE must be one of %s" % " | ".join(ENGINES))
     enable = int(conf["ENABLE_FC"] or 3)
@@ -619,7 +643,7 @@ def _gen_one(conf, out, job_label="S1fit"):
     fc_calc = str(conf["FC_CALC"] or "symfc").lower()
     if fc_calc not in ("symfc", "alm"):
         sys.exit("[ERROR] FC_CALC must be symfc or alm")
-    p_method = normalize_pheasy_method(conf["PHEASY_FIT_METHOD"] or "ALASSO")
+    p_method = normalize_pheasy_method(_p_method_raw)
     if engine == "pheasy" and p_method not in PHEASY_METHODS:
         sys.exit("[ERROR] PHEASY_FIT_METHOD must be one of %s"
                  % " | ".join(PHEASY_METHODS))
