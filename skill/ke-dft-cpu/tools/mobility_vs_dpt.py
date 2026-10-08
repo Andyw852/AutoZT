@@ -9,6 +9,8 @@ AMSET 的约定：负掺杂 = n 型（电子），正掺杂 = p 型（空穴）�
 
 输出（指定温度，默认 300 K）：每个掺杂一行 —— 载流子、Seebeck、overall 与各机制迁移率（2D 取面内 xx/yy 平均，
 3D 取迹/3），以及 DPT（step8.2_dpt/dpt_result.json 同一载流子）和 ADP/DPT。
+[0017] 2D 的 DPT 取 by_direction 的面内平均（全 BZ 二次型 m_d，与 S8.3、JAP Table I 同口径），
+没有时退回 header 的 mobility_cm2_Vs；实际取了哪个写在表头和 --json 的 DPT_source。
 ADP/DPT 超出 [1/3, 3]：标 ⚠，提示用 tools/dp_valley_probe.py 查是不是多谷（V141/V142）。
   例外（只注明、不提示多谷）：n/N_eff ≥ 0.5（接近/进入简并，DPT 的非简并统计不成立，V146）；
   DPT 的 m* 取自简并带边（单带公式只是近似，V145）；DPT 的 m* 网格分辨不出带边曲率（V147）。
@@ -55,6 +57,24 @@ def dpt_degenerate(path):
     return _dpt(path)[1]
 
 
+def _bd_ok(r):
+    bd = r.get("by_direction")
+    return bd if isinstance(bd, dict) and bd.get("status") == "ok" else None
+
+
+def dpt_mu(r):
+    """[0017] 一个载流子的 DPT 迁移率：2D 有 by_direction（全 BZ 二次型 m_d）就取面内 (μx+μy)/2，
+    与 S8.3（gen_step13._dpt_inplane_mu）、文献 JAP Table I 同一口径；否则退回 header 的 mobility_cm2_Vs
+    （3 点抛物 m*，旧口径，SS/LS 这类带边不在网格上的体系可差 5–15%）。返回 (μ, 来源)。"""
+    bd = _bd_ok(r)
+    if bd:
+        vals = [bd[d]["mobility_cm2_Vs"] for d in ("x", "y")
+                if isinstance(bd.get(d), dict) and isinstance(bd[d].get("mobility_cm2_Vs"), (int, float))]
+        if vals:
+            return sum(vals) / len(vals), "by_direction"
+    return r.get("mobility_cm2_Vs"), "header"
+
+
 def _dpt(path):
     out, deg = {"electron": None, "hole": None}, set()
     p = Path(path)
@@ -62,10 +82,21 @@ def _dpt(path):
         return out, deg
     for r in json.loads(p.read_text(encoding="utf-8")).get("results") or []:
         if r.get("carrier") in out:
-            out[r["carrier"]] = r.get("mobility_cm2_Vs")
+            out[r["carrier"]] = dpt_mu(r)[0]
             if "重简并" in str((r.get("inputs") or {}).get("m_provenance", "")):
                 deg.add(r["carrier"])
     return out, deg
+
+
+def dpt_sources(path):
+    """{"electron": "by_direction"|"header", ...}：DPT 迁移率取自哪个口径（写进输出，跨材料核对用）。"""
+    out = {}
+    p = Path(path)
+    if p.is_file():
+        for r in json.loads(p.read_text(encoding="utf-8")).get("results") or []:
+            if r.get("carrier") in ("electron", "hole"):
+                out[r["carrier"]] = dpt_mu(r)[1]
+    return out
 
 
 def dpt_grid_unresolved(path):
@@ -86,7 +117,9 @@ def dpt_masses(path):
     if p.is_file():
         for r in json.loads(p.read_text(encoding="utf-8")).get("results") or []:
             if r.get("carrier") in out:
-                out[r["carrier"]] = (r.get("inputs") or {}).get("m_eff_m0")
+                bd = _bd_ok(r)                 # [0017] 2D 态密度用 by_direction 的 m_d（与 DPT 同口径）
+                out[r["carrier"]] = ((bd or {}).get("m_d_m0")
+                                     or (r.get("inputs") or {}).get("m_eff_m0"))
     return out
 
 
@@ -162,9 +195,13 @@ def main(argv=None):
     except (KeyError, ValueError, IndexError) as e:
         print("[ERROR] 读 %s 失败：%s: %s" % (tj, type(e).__name__, e), file=sys.stderr)
         return 2
+    srcs = dpt_sources(mat / "step8.2_dpt" / "dpt_result.json")      # [0017]
     print("%s（%s，%g K，迁移率 cm²/Vs，%s；载流子按 AMSET 约定：负掺杂 = 电子）"
           % (tj, "2D 面内 xx/yy 平均" if is_2d else "3D 迹/3", rs[0]["T"] if rs else a.T,
-             "DPT 来自 step8.2_dpt" if any(dpt.values()) else "没有 DPT 结果"))
+             ("DPT 来自 step8.2_dpt（%s）" % "、".join("%s=%s" % kv for kv in sorted(srcs.items())))
+             if any(dpt.values()) else "没有 DPT 结果"))
+    for r in rs:
+        r["DPT_source"] = srcs.get(r["carrier"])
     cols = ["overall"] + mechs
     print("  %-12s %-8s %9s " % ("doping/cm⁻³", "载流子", "S/μV·K⁻¹") + " ".join("%9s" % c for c in cols)
           + " %9s %9s" % ("DPT", "ADP/DPT"))
