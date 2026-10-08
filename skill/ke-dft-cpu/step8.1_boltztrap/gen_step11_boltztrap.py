@@ -89,7 +89,8 @@ KAPPA_L_YY_W_MK = None
 #   TMD 族 t 取体相层间距）。★ ZT 对口径不变，变的是 σ/PF/浓度的绝对值。
 #   κ_L 不用手动折算——脚本对 σ、κ_e、κ_L 同乘同一因子。
 NORM_2D     = "thickness" # "cell" | "thickness"；thickness=按有效厚度 t 重标度（文献主流口径）
-THICKNESS_A = None        # None = 读 step8_amset/2d_correction.json
+THICKNESS_A = None        # None = 读 step8_amset/2d_correction.json；S8 还没生成时按本步结构算 vdW 层厚
+                          # [0015] 都拿不到就报错，不再静默退回元胞口径
 SOMMERFELD_L = 2.44e-8    # WΩ/K²
 # patch_align_n：把 μ 扫描的结果落到 amset 用的那套载流子浓度上，便于逐行并排比。
 #   "amset" = 从 step8_amset/transport.json 读 doping 数组（推荐）
@@ -136,16 +137,72 @@ def _find_vasprun(d):
     return None
 
 
-def _read_ct_factor(cwd):
-    """2D：从 step8_amset/2d_correction.json 读 c/t 与 c、t（没有则 None）。"""
+_CT_STRUCT_CANDS = (UNIFORM_DIR, "step7_deform", "step1_opt", "step1_std_opt")
+
+
+def _ct_info(cwd):
+    """2D 的 c/t：{c_over_t, cell_c_A, thickness_A, source}；都拿不到时 c_over_t=None。
+
+    [0015] 取值顺序：
+      ① THICKNESS_A（本步手填；c 取 S8 的记录或本步结构的胞高）；
+      ② step8_amset/2d_correction.json（S8 的 LAYER_THICKNESS，含 step.conf 覆盖，如 SS/LS 的 6.73）；
+      ③ 本步按结构现算 vdW 层厚（_common/thickness_2d，与 S8 出厂的 "vdw" 同一取法）。
+    以前只有 ②：S8.1 的 needs 里没有 S8，S8 要等 S4/S5/HSE，常常比 S8.1 晚生成 ->
+    S8.1 静默退回元胞口径（σ/PF/κ_e 小 c/t 倍，CSV 首行 norm=cell(回退)）。
+    ③ 之后 S8 若用了不同的层厚（step.conf 覆盖），S8 的 gen 会让本步重排（ke_common.invalidate_ct_consumers）。"""
+    rec = {}
     p = Path(cwd) / AMSET_DIR / "2d_correction.json"
     try:
         rec = json.loads(p.read_text())
-        return (float(rec["elastic_rescale_factor_c_over_t"]),
-                float(rec.get("cell_c_A") or 0) or None,
-                float((rec.get("layer_thickness") or {}).get("thickness_used_A") or 0) or None)
-    except (OSError, KeyError, ValueError, TypeError):
-        return None, None, None
+    except (OSError, ValueError):
+        rec = {}
+    c = rec.get("cell_c_A")
+    geo = None
+    if not c or not rec.get("elastic_rescale_factor_c_over_t"):
+        geo = _vdw_geometry(cwd)
+        c = c or (geo or {}).get("h_perp_A")
+    if THICKNESS_A and c:
+        return {"c_over_t": float(c) / float(THICKNESS_A), "cell_c_A": float(c),
+                "thickness_A": float(THICKNESS_A), "source": "THICKNESS_A"}
+    if rec.get("elastic_rescale_factor_c_over_t"):
+        return {"c_over_t": float(rec["elastic_rescale_factor_c_over_t"]),
+                "cell_c_A": float(c) if c else None,
+                "thickness_A": (rec.get("layer_thickness") or {}).get("thickness_used_A"),
+                "source": "%s/2d_correction.json" % AMSET_DIR}
+    if geo and geo.get("thickness_d_A"):
+        return {"c_over_t": float(geo["h_perp_A"]) / float(geo["thickness_d_A"]),
+                "cell_c_A": float(geo["h_perp_A"]), "thickness_A": float(geo["thickness_d_A"]),
+                "source": "vdw(本步按 %s 现算；S8 生成后层厚不同会让本步重排)" % geo["poscar"]}
+    return {"c_over_t": None, "cell_c_A": float(c) if c else None, "thickness_A": None,
+            "source": None}
+
+
+def _vdw_geometry(cwd):
+    """本步结构的 vdW 层厚与胞高（thickness_2d.slab_geometry_from_poscar）；失败返回 None。"""
+    for d in _CT_STRUCT_CANDS:
+        for fn in ("POSCAR", "CONTCAR"):
+            pos = Path(cwd) / d / fn
+            if not pos.is_file():
+                continue
+            try:
+                import dim_common
+                from thickness_2d import slab_geometry_from_poscar
+                dim, axis, _vac = dim_common.detect_dimension(str(pos))
+                if dim != "2d":
+                    return None
+                g = dict(slab_geometry_from_poscar(str(pos), vac_axis=axis, mode="vdw"))
+                g["poscar"] = "%s/%s" % (d, fn)
+                return g
+            except (SystemExit, Exception) as e:          # noqa: BLE001
+                print("[WARN] 按 %s/%s 算 vdW 层厚失败：%s" % (d, fn, e))
+                return None
+    return None
+
+
+def _read_ct_factor(cwd):
+    """2D：(c/t, c, t)，取值顺序见 _ct_info；拿不到返回 (None, c 或 None, None)。"""
+    i = _ct_info(cwd)
+    return i["c_over_t"], i["cell_c_A"], i["thickness_A"]
 
 
 # === patch_bt2_scissor：剪刀算符（把导带整体上移到目标带隙）===
@@ -387,30 +444,20 @@ def _tau_aniso(cwd, is_2d, T):
     return _tau_from_json(cwd)
 
 
-def _norm_2d(cwd):
-    """返回 (factor, info)。factor 同时乘在 σ、κ_e、κ_L 上。"""
-    import json
-    rec = {}
-    p = Path(cwd) / AMSET_DIR / "2d_correction.json"
-    if p.is_file():
-        try:
-            rec = json.loads(p.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            rec = {}
-    c = rec.get("cell_c_A")
-    t = THICKNESS_A if THICKNESS_A else (rec.get("layer_thickness") or {}).get("thickness_used_A")
-    f = rec.get("elastic_rescale_factor_c_over_t")
-    if THICKNESS_A and c:
-        f = c / float(THICKNESS_A)
-    info = {"norm": NORM_2D, "cell_c_A": c, "thickness_A": t, "c_over_t": f,
-            "factor_applied": 1.0}
-    if str(NORM_2D).lower() != "thickness":
+def _norm_2d(cwd, is_2d=True):
+    """返回 (factor, info)。factor 同时乘在 σ、κ_e、κ_L 上。3D 恒为 1。"""
+    ct = _ct_info(cwd) if is_2d else {"c_over_t": None, "cell_c_A": None,
+                                      "thickness_A": None, "source": None}
+    c, t, f = ct["cell_c_A"], ct["thickness_A"], ct["c_over_t"]
+    info = {"norm": NORM_2D if is_2d else "cell(3D)", "cell_c_A": c, "thickness_A": t,
+            "c_over_t": f, "c_over_t_source": ct["source"], "factor_applied": 1.0}
+    if not is_2d or str(NORM_2D).lower() != "thickness":
         return 1.0, info
     if not f:
-        print("[WARN] NORM_2D='thickness' 但读不到 c/t（缺 %s/2d_correction.json），"
-              "回退 cell 口径" % AMSET_DIR)
-        info["norm"] = "cell(回退)"
-        return 1.0, info
+        # [0015] 不再静默退回元胞口径：那样 σ/PF/κ_e 小 c/t 倍，CSV 首行的 norm=cell(回退) 很容易漏看
+        sys.exit("[ERROR] 2D + NORM_2D='thickness' 但拿不到 c/t：没有 THICKNESS_A、没有 %s/2d_correction.json，"
+                 "按结构算 vdW 层厚也失败。处理：step.conf 写 THICKNESS_A（Å），或 NORM_2D = cell（元胞口径）。"
+                 % AMSET_DIR)
     info["factor_applied"] = float(f)
     print("[..] 2D 口径 thickness：σ/κ_e/κ_L 同乘 c/t = %.4f（c=%.3f Å, t=%.3f Å）"
           % (f, c or float("nan"), t or float("nan")))
@@ -651,7 +698,7 @@ def write_paper_scan(out, cwd, res, is_2d):
     if not taus:
         return ["# 文献口径扫描跳过：拿不到 DPT 的 τ（step8.2 跑了吗？）"]
 
-    fac, ninfo = _norm_2d(cwd)
+    fac, ninfo = _norm_2d(cwd, is_2d)
     cA = ninfo.get("cell_c_A") or 0.0
     kl_xx, kl_yy, kl_lines = _resolve_kappa_L(cwd, T, ninfo)   # patch_kappaL
     for _l in kl_lines:
@@ -694,9 +741,10 @@ def write_paper_scan(out, cwd, res, is_2d):
     p = out / ("paper_mu_scan_%dK.csv" % round(T))
     with open(p, "w", newline="") as fh:
         fh.write("# CRTA(BoltzTraP2) x DPT-tau 文献口径；T=%.0f K；"
-                 "kappa_e=L*sigma*T (WF)；norm=%s, c=%s A, t=%s A, factor=%.4f\n"
+                 "kappa_e=L*sigma*T (WF)；norm=%s, c=%s A, t=%s A, factor=%.4f, t_source=%s\n"
                  % (T, ninfo["norm"], ninfo.get("cell_c_A"),
-                    ninfo.get("thickness_A"), ninfo["factor_applied"]))
+                    ninfo.get("thickness_A"), ninfo["factor_applied"],
+                    ninfo.get("c_over_t_source")))
         w = csv.DictWriter(fh, fieldnames=cols, extrasaction="ignore")
         w.writeheader()
         for r in rows:
@@ -814,6 +862,10 @@ def main():
         nelect = None
 
     dim = _read_dim(cwd)
+    if dim == "2d" and PAPER_SCAN and str(NORM_2D).lower() == "thickness" \
+            and not _ct_info(cwd)["c_over_t"]:
+        # [0015] 在写完成标记之前拦：写完 boltztrap_crta.json 再报错，步骤仍会被判"完成"
+        _norm_2d(cwd, True)
     s3_grid = _s3_grid_note(cwd, dim)                     # [V174]
     print("[..] BoltzTraP2 CRTA 插值 + 输运 ...")
     # 注意：BoltzTraP2 的 DFTData 要的是"目录"（它自己进去找 vasprun.xml），
@@ -827,8 +879,11 @@ def main():
     res["s3_grid"] = s3_grid
     if dim == "2d":
         res["tensor_average"] = "in-plane (xx+yy)/2"
-        ct, c_A, t_A = _read_ct_factor(cwd)
+        _ct = _ct_info(cwd)
+        ct = _ct["c_over_t"]
         res["twoD_c_over_t"] = ct
+        res["twoD_c_over_t_source"] = _ct["source"]      # [0015] S8 据此判断要不要让本步重排
+        res["twoD_thickness_A"] = _ct["thickness_A"]
         res["twoD_note"] = ("2D：张量已取面内 (xx+yy)/2；σ、κ_e 仍按超胞体积口径"
                             "（与 amset 一致，可直接对比）。要面内薄片口径再乘 c/t=%s。" % ct)
 

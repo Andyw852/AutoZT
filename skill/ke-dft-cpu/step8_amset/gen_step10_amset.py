@@ -2059,6 +2059,15 @@ def main():
         kc.report_dielectric_symmetry(cwd, eps_inf, eps_static, (DIELECT_DIR,) + tuple(STRUCT_CANDS))
     # patch_2d_amset：2D 时重标度弹性常数并记下 c，供面浓度换算
     is_2d, elastic, c_len = apply_2d_corrections(cwd, elastic)
+    if is_2d and c_len and _HAS_KC:
+        # [0015] S8.1 可能先于本步按 vdW 层厚现算了 c/t；本步的 LAYER_THICKNESS 不同就让它重排
+        try:
+            import json as _json
+            _ct_new = _json.loads((out / "2d_correction.json").read_text(encoding="utf-8")) \
+                .get("elastic_rescale_factor_c_over_t")
+            kc.invalidate_ct_consumers(cwd, _ct_new)
+        except (OSError, ValueError, AttributeError) as _e:
+            print("[WARN] 没能核对 S8.1 的 c/t（%s）" % _e)
     if is_2d and c_len and TWO_D_DIELECTRIC_VACUUM:  # patch_2d_dielec
         eps_inf, eps_static = _dielectric_2d_inplane(
             cwd / DIELECT_DIR, out, eps_inf, eps_static)
