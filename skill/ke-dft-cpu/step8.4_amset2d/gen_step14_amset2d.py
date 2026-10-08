@@ -248,6 +248,10 @@ _WF_EXPLICIT = None
 #     （patch_intrinsic_auto，2026-09-22）——不再需要人工补跑，跑完即有
 #     intrinsic_transport.json；复现检查不过则整步失败，不产出不可信本征数。
 WRITE_MESH = False
+# [0018] INTRINSIC_ADP_ONLY：true 时作业链在 IMP 剔除的本征后处理之后，再用同一份 mesh 跑一次
+#   postprocess_intrinsic.py --drop IMP,POP,PIE，写 intrinsic_ADP.json（只含 ADP 的 μ/S/σ/κe）。
+#   各机制散射率彼此独立，等价于单独跑 SCATTERING=[ADP]，不用再跑第二次 AMSET。隐含 WRITE_MESH=true。
+INTRINSIC_ADP_ONLY = False
 # --- 弹性常数来源（amset run 的 ACD 散射需要）---
 #   MANUAL_ELASTIC 填了就用它，否则从 ELASTIC_DIR/OUTCAR 自动解析（kBar→GPa）。
 #   直接填：单个数（各向同性近似，GPa），或 6x6 列表（完整 Cij，GPa）。
@@ -334,6 +338,7 @@ SPEC = {
     # write_mesh 开关（2026-09-22 用户批准）：true = settings.yaml 写 write_mesh: true，
     # 产出 mesh_*.h5 供 postprocess_intrinsic.py 重积分；默认 False，行为不变。
     "WRITE_MESH": (WRITE_MESH, "bool"),
+    "INTRINSIC_ADP_ONLY": (INTRINSIC_ADP_ONLY, "bool"),   # [0018]
     # 掺杂/温度范围覆盖（B4/B5 缩减设置用）：默认顶部 DOPING/TEMPERATURES；step.conf 可覆盖。
     "DOPING": (DOPING, "str"),
     "TEMPERATURES": (TEMPERATURES, "str"),
@@ -2297,6 +2302,7 @@ def main():
     cwd = Path.cwd()
     global LAYER_THICKNESS, NWORKERS, UNITY_OVERLAP, WAVEFUNCTION_FULL
     global INTERPOLATION_FACTOR, INTERPOLATION_FACTOR_EXPLICIT, SCATTERING, WRITE_MESH, DOPING, TEMPERATURES
+    global INTRINSIC_ADP_ONLY
     global DESYM_FIX, _DESYM_FIX_ON, BANDGAP_OVERRIDE, BANDGAP_NOTE
     global EPS_INF_OVERRIDE, EPS_INF_OVERRIDE_BASIS, SYMMETRIZE_ELASTIC, ELASTIC_GUARD
     global STRUCTURE_GUARD, ALLOW_COARSE_S3
@@ -2391,6 +2397,12 @@ def main():
                 WRITE_MESH = True
                 print("[..] WRITE_MESH=true（step.conf 覆盖）：settings.yaml 写 "
                       "write_mesh: true，产出 mesh_*.h5")
+            if _p["INTRINSIC_ADP_ONLY"]:                      # [0018]
+                INTRINSIC_ADP_ONLY = True
+                if not WRITE_MESH:
+                    WRITE_MESH = True
+                    print("[..] INTRINSIC_ADP_ONLY=true 需要 mesh：自动打开 WRITE_MESH")
+                print("[..] INTRINSIC_ADP_ONLY=true：作业末尾另写 intrinsic_ADP.json（只含 ADP）")
             # patch_doping_override（B4/B5 缩减设置）：step.conf 可覆盖掺杂/温度范围
             if _p["DOPING"]:
                 _d = str(_p["DOPING"])
@@ -2642,6 +2654,9 @@ def main():
     _acmd = AMSET_CMD
     if WRITE_MESH:
         _acmd = _acmd + " && python postprocess_intrinsic.py --check-reproduce"
+        if INTRINSIC_ADP_ONLY:                  # [0018] 同一份 mesh 再出只含 ADP 的一套（复现已由上一条把关）
+            _acmd = _acmd + (" && python postprocess_intrinsic.py --drop IMP,POP,PIE"
+                             " --out intrinsic_ADP.json")
     # ★ 2026-09-28 用户批准（patch_fermi_window）：不依赖 WRITE_MESH 的费米能级窗口检查，
     #   必须放在 cp 成 transport.json **之前** —— 否则失败时 transport.json 已存在，
     #   autozt marker 判据会把失败隐藏（V63 的教训）。
