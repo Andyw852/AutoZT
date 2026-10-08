@@ -59,7 +59,8 @@ SPEC = {
     "T_MAX":            (800.0, "float"),
     "T_STEP":           (100.0, "float"),
     "ISOTOPE":          (True, "bool"),
-    # NAC：auto = 有 BORN 就开；on/off 强制
+    # NAC：auto = 有 BORN 且不是 2D 就开（[0014] 2D 不施加 phono3py 的 3D-NAC，与
+    #   kl-mlff 的 KAPPA_NAC=auto 一致）；on/off 强制
     "NAC":              ("auto", "str"),
     "BTE_METHOD":       ("rta", "str"),      # rta | lbte
     # 超胞须保原胞全部点群操作，否则 phono3py 照常算但 κ 不可信（2026-10-07）：
@@ -256,6 +257,24 @@ def _stability_passthrough(fit):
     return out
 
 
+def _fit_is_2d(fit_dir):
+    """拟合目录的体系是不是 2D：先看 phonon_summary.json 的 is_2d，读不到再按 POSCAR 判。"""
+    ps = Path(fit_dir) / "phonon_summary.json"
+    if ps.is_file():
+        try:
+            return bool(json.loads(ps.read_text(encoding="utf-8")).get("is_2d"))
+        except Exception:                                # noqa: BLE001
+            pass
+    pos = Path(fit_dir) / "POSCAR"
+    if not pos.is_file():
+        return False
+    try:
+        import dim_common
+        return dim_common.detect_dimension(str(pos))[0] == "2d"
+    except (SystemExit, Exception):                      # noqa: BLE001
+        return False
+
+
 def two_d_norm(fit_dir, mode):
     """2D thickness normalisation for kappa_driver (None for a 3D cell or when
     the geometry cannot be read).  Same source as kl-dft-cpu: factor = h_perp/d."""
@@ -345,6 +364,23 @@ def main(outdir=None, fit_dir=None, step=None):
               % len(done), flush=True)
 
 
+def resolve_nac(nac_cfg, fit):
+    """NAC 开关：on/off 强制；auto = 有 BORN 且不是 2D 才开。
+
+    [0014] 2D：LO-TO 劈裂在 q->0 应趋零，phono3py 只有 3D 方案（随真空变化的伪劈裂）。
+      与稳定性判据（fc_fit_driver 用无 NAC 谱 + ZA 检查）和 kl-mlff 的 KAPPA_NAC=auto 同口径。"""
+    nac_cfg = str(nac_cfg).strip().lower()
+    if nac_cfg not in ("auto", ""):
+        return nac_cfg in ("on", "true", "1", "yes")
+    if not (Path(fit) / "BORN").is_file():
+        return False
+    if _fit_is_2d(fit):
+        print("[WARN] 2D + NAC=auto：不对 2D 施加 phono3py 的 3D-NAC（LO-TO 在 2D 应趋零）。"
+              "要强制用设 NAC=on；正确的 2D-NAC 需用 QE 的 2D-DFPT。", flush=True)
+        return False
+    return True
+
+
 def _gen_one(conf, fit, out, cwd, write_submit=True):
     """One S2 recipe: kappa from the fc2/fc3 in `fit` into `out`."""
     out.mkdir(parents=True, exist_ok=True)
@@ -354,12 +390,8 @@ def _gen_one(conf, fit, out, cwd, write_submit=True):
     for f in ("fc2.hdf5", "fc3.hdf5"):
         shutil.copyfile(str(fit / f), str(out / f))
 
-    nac_cfg = str(conf["NAC"]).strip().lower()
     born = fit / "BORN"
-    if nac_cfg in ("auto", ""):
-        nac = born.is_file()
-    else:
-        nac = nac_cfg in ("on", "true", "1", "yes")
+    nac = resolve_nac(conf["NAC"], fit)
     if nac and born.is_file():
         shutil.copyfile(str(born), str(out / "BORN"))
     elif nac and not born.is_file():

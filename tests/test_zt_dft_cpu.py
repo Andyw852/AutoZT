@@ -381,10 +381,13 @@ def test_zt_is_a_composition_not_a_copy():
     assert not t.get("optional_steps")
     assert t["companion_skills"] == ["ke-dft-cpu", "kl-dft-cpu"]
     nr = t["steps"][0]["needs_results"]
-    assert nr["transport"][0] == "ke-dft-cpu/result/step8_amset/transport.json"
+    # [0014] 电子段按维度选：2D 只认 S8.4_amset2d，3D 用 S8_kappa
+    assert [(x["path"], x.get("dim"), x.get("not_dim")) for x in nr["transport"]] == [
+        ("ke-dft-cpu/result/step8.4_amset2d/transport.json", "2d", None),
+        ("ke-dft-cpu/result/step8_amset/transport.json", None, "2d")]
     assert nr["kappa_L"][0] == "kl-dft-cpu/result/step6_kappa/kappa_summary.json"
     # 上游技能里真有这些步骤（上游改了步骤名这里先红）
-    for rel in [x for v in nr.values() for x in v]:
+    for rel in [x["path"] if isinstance(x, dict) else x for v in nr.values() for x in v]:
         skill, _r, step = rel.split("/")[:3]
         if skill in cfg["task_types"]:
             names = {s["name"] for s in cfg["task_types"][skill]["steps"]} | {

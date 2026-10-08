@@ -418,26 +418,88 @@ def result_origin_check(result_dir, m):
     return True, ""
 
 
+def _alt_path(alt):
+    """候选写法：字符串路径，或 {path, dim, not_dim, hint}（按材料维度筛选）。"""
+    return str(alt.get("path") or "") if isinstance(alt, dict) else str(alt)
+
+
+def _dims(v):
+    v = [v] if isinstance(v, str) else list(v or [])
+    return {str(x).strip().lower() for x in v if str(x).strip()}
+
+
+def needs_results_dim(m, spec):
+    """材料维度：取 needs_results 里那份 workflow_method.txt（来源戳合格）的 DIM=。
+    读不到 DIM= 返回 None（按 3D 处理，与 S20 的 _read_dim 一致）。"""
+    lp = m.get("lpath") or ""
+    for alts in (spec or {}).values():
+        for alt in ([alts] if isinstance(alts, (str, dict)) else list(alts or [])):
+            rel = _alt_path(alt)
+            if not rel.endswith("workflow_method.txt"):
+                continue
+            fp = os.path.join(lp, rel)
+            if not os.path.isfile(fp) or not result_origin_check(os.path.dirname(fp), m)[0]:
+                continue
+            try:
+                with open(fp, encoding="utf-8", errors="ignore") as f:
+                    for line in f:
+                        s = line.strip()
+                        if s.upper().startswith("DIM"):
+                            v = s.split("=", 1)[-1].strip().strip('"').lower()
+                            if v:
+                                return v
+            except OSError:
+                continue
+    return None
+
+
+def _alt_dim_ok(alt, dim):
+    if not isinstance(alt, dict):
+        return True
+    d = dim or "3d"
+    if alt.get("dim") and d not in _dims(alt["dim"]):
+        return False
+    return not (alt.get("not_dim") and d in _dims(alt["not_dim"]))
+
+
 def resolve_needs_results(m, spec):
-    """needs_results → ({键: (结果文件绝对路径, 相对路径)}, [缺的说明])。"""
+    """needs_results → ({键: (结果文件绝对路径, 相对路径)}, [缺的说明])。
+
+    [0014] 候选可写成 {path, dim | not_dim, hint}：只在材料维度（needs_results_dim）匹配时才算。
+      zt-dft-cpu 用它让 2D 只认 S8.4_amset2d 的 transport —— 否则 S8 与 S8.4 并行时，
+      先跑完的 S8（三维散射核）会被 S20 抢先用掉。"""
     chosen, missing = {}, []
     lp = m.get("lpath") or ""
+    dim = None
+    if any(isinstance(a, dict) for v in (spec or {}).values()
+           for a in ([v] if isinstance(v, (str, dict)) else list(v or []))):
+        dim = needs_results_dim(m, spec)
     for key, alts in (spec or {}).items():
-        alts = [alts] if isinstance(alts, str) else list(alts or [])
+        alts = [alts] if isinstance(alts, (str, dict)) else list(alts or [])
+        alts = [a for a in alts if _alt_dim_ok(a, dim)]
         why = []
-        for rel in alts:
-            fp = os.path.join(lp, str(rel))
+        for alt in alts:
+            rel = _alt_path(alt)
+            fp = os.path.join(lp, rel)
             if not os.path.isfile(fp):
                 continue
             ok, reason = result_origin_check(os.path.dirname(fp), m)
             if ok:
-                chosen[key] = (fp, str(rel))
+                chosen[key] = (fp, rel)
                 break
             why.append("%s：%s" % (rel, reason))
         if key not in chosen:
-            first = str(alts[0]).split("/result/")[0] if alts else key
-            missing.append("%s（%s）" % (key, "；".join(why) if why else
-                                         "等 %s 的结果：%s" % (first, alts[0] if alts else "?")))
+            rel0 = _alt_path(alts[0]) if alts else ""
+            first = rel0.split("/result/")[0] if alts else key
+            hint = alts[0].get("hint") if alts and isinstance(alts[0], dict) else None
+            text = "；".join(why) if why else (
+                "等 %s 的结果：%s" % (first, rel0 or "?") if alts else
+                "DIM=%s 没有适用的候选" % (dim or "3d"))
+            if dim and alts and isinstance(alts[0], dict):
+                text += "（DIM=%s）" % dim
+            if hint and not why:
+                text += "；" + str(hint)
+            missing.append("%s（%s）" % (key, text))
     return chosen, missing
 
 

@@ -752,7 +752,7 @@ def _za_check(cfg, ph, cart_vac_axis, is2d):
 
 def _stability_gate(cfg, out):
     # phonopy 判虚频（q-mesh 最小频率）。2D 材料默认用【无 NAC】判据：3D 库仑核的 NAC 在
-    # 严格 2D 体系近 Γ 会产生【虚假虚频】(LO-TO 在真 2D 应趋零)，与 step6 KAPPA_NAC=auto 一致。
+    # 严格 2D 体系近 Γ 会产生【虚假虚频】(LO-TO 在真 2D 应趋零)，与 step6 NAC=auto 一致。
     # NAC 与无 NAC 两个最小频率都算出来记进 summary 供对照。返回诊断 dict。
     import numpy as np
     p3dir = out / P3PY_SUB
@@ -863,7 +863,7 @@ def _stability_gate(cfg, out):
     # ---- 单一裁判（2026-09-22）：把 [IMAG_MESH_N]^3 网格 + 2D 路径上的频率合并，
     #      交给 imag_policy.classify_imag。阈值语义见 skill/_common/imag_policy.py。
     #      2D 默认用无 NAC 的频率（3D 库仑核的 NAC 在严格 2D 近 Γ 会产生虚假虚频，
-    #      与 step6 KAPPA_NAC=auto 一致）；NAC 的 mesh 最小值只留作对照。
+    #      与 step6 NAC=auto 一致）；NAC 的 mesh 最小值只留作对照。
     all_freqs, all_qpts = phonon_stability.imag_samples(ph_nonac)
     if not all_freqs:
         return _err("imag_policy：mesh/band 都没有取到频率（无法判定虚频）")

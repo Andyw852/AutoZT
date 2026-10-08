@@ -4,7 +4,7 @@ ZT = S²σT / (κ_e + κ_L)。从 v0.2（2026-10）起本技能**只有一个步
 
 | 量 | 谁算 | 在哪 |
 |---|---|---|
-| S、σ、κ_e | `ke-dft-cpu`（S8_kappa，2D 可用 S8.4_amset2d） | `<材料>/ke-dft-cpu/` |
+| S、σ、κ_e | `ke-dft-cpu`（3D：S8_kappa；2D：S8.4_amset2d） | `<材料>/ke-dft-cpu/` |
 | κ_L | `kl-dft-cpu`（S6_kappa；也接受 kl-mlff-* S4_kappa、fit-fc-thermal S2_kappa） | `<材料>/kl-dft-cpu/` |
 | ZT(n, T) | 本技能 S20_zt | `<材料>/zt-dft-cpu/` |
 
@@ -33,10 +33,19 @@ autozt -p Bi2Te3 graph
 
 ```yaml
 needs_results:
-  transport: [ke-dft-cpu/result/step8_amset/transport.json, ke-dft-cpu/result/step8.4_amset2d/transport.json]
+  transport: [{path: ke-dft-cpu/result/step8.4_amset2d/transport.json, dim: 2d, hint: "..."},
+              {path: ke-dft-cpu/result/step8_amset/transport.json, not_dim: 2d}]
   kappa_L:   [kl-dft-cpu/result/step6_kappa/kappa_summary.json, kl-mlff-cpu/..., kl-mlff-gpu/..., fit-fc-thermal/...]
   structure: [ke-dft-cpu/result/step1_opt/workflow_method.txt]
 ```
+
+- 候选可以带 `dim` / `not_dim`：按 `structure` 那份 `workflow_method.txt` 的 `DIM=` 筛选
+  （读不到 DIM= 按 3D）。**2D 只认 S8.4_amset2d**（二维散射核；S8 的 POP/IMP 是三维核），
+  不回退 S8 —— S8 与 S8.4 并行，回退会让先跑完的 S8 被抢先用掉。ke-dft-cpu 的 `amset2d`
+  组带 `auto_dim: 2d`：2D 材料 init/register 时自动在 ke 的项目配置写 `amset2d: true`；
+  老的 2D 材料手写这一行，S20 的 WAIT 提示里也写着。
+- `zt_summary.json` 的 `transport.step` 记录电子段实际来自哪一步（项目层改了 needs_results、
+  2D 用了 S8 时有 `transport.warning`，notes 里同样标出）。
 
 - 依赖没满足时 S20_zt 是 WAIT，任务图 / 状态表写明在等哪一份。
 - gen 时 autozt 把选中的结果目录推到远端 `zt-dft-cpu/inputs/<键>/`，附 `source.json`

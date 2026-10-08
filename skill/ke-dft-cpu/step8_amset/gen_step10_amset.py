@@ -17,7 +17,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 # [SKILL_REV] 版本戳：写进 settings.yaml 头，便于从结果反查跑的是哪份 skill 副本。
-_SKILL_REV = "2026-09-28-desym-fix"   # V115：逐操作判据 / 相位补丁 / 覆盖通道修复
+_SKILL_REV = "2026-10-08-2d-raw-elastic"   # [0014] 2D 弹性用原始 slab 值（不乘 c/t）；V115 相位补丁
 import stepconf  # noqa: E402
 try:
     import ke_common as kc
@@ -972,7 +972,12 @@ def get_slab_geometry(cwd: Path):
 
 
 def rescale_elastic_2d(elastic, factor):
-    """把弹性常数整体乘 factor（= c/t）。标量和 6x6 都支持。"""
+    """把弹性常数整体乘 factor。标量和 6x6 都支持。
+
+    ★ [0014] S8 的 2D 路径**不再调用它乘 c/t**：AMSET 在真空 slab 上 q_z 积分只给 2π/c，
+      ADP 的 G_s = k_B T D²/C_slab 正好等于二维 k_B T D²/C_2D（C_2D = c·C_slab），
+      settings.yaml 里必须写原始 slab 值（METHODOLOGY §4.2；VERIFICATION T2 实测乘了
+      c/t 的 μ_ADP 偏大 3.08 倍 ≈ c/t = 3.059）。保留函数只为 MANUAL/外部调用兼容。"""
     if elastic is None:
         return None
     if isinstance(elastic, (int, float)):
@@ -1091,8 +1096,8 @@ def apply_2d_corrections(cwd: Path, elastic):
 
     c_len, span = get_slab_geometry(cwd)
     if c_len is None:
-        print("[WARN] 2D 体系但读不到结构，弹性常数未做 c/t 修正——"
-              "结果的绝对值不可用。请手填 MANUAL_ELASTIC。")
+        print("[WARN] 2D 体系但读不到结构：c/t 算不出，介电扣真空与厚度归一化无从施加——"
+              "结果的绝对值不可用。")
         return True, elastic, None
 
     # patch_2d_thickness：层厚三种取法，结果连同依据一起落盘
@@ -1124,7 +1129,7 @@ def apply_2d_corrections(cwd: Path, elastic):
         print("[OK] LAYER_THICKNESS 手填 %s Å" % t)
 
     if t is None or float(t) <= 0.1:
-        print("[WARN] 2D 体系但定不出层厚，弹性常数未做 c/t 修正。"
+        print("[WARN] 2D 体系但定不出层厚：介电扣真空与 σ 厚度归一化缺 c/t。"
               "请手填 LAYER_THICKNESS。")
         return True, elastic, c_len
     t = float(t)
@@ -1132,11 +1137,14 @@ def apply_2d_corrections(cwd: Path, elastic):
         sys.exit("[ERROR] LAYER_THICKNESS=%s Å 不合理（c=%.3f Å）" % (t, c_len))
 
     factor = c_len / t
-    new_elastic = rescale_elastic_2d(elastic, factor)
+    # [0014] 弹性常数用原始 slab 值，不乘 c/t（见 rescale_elastic_2d 的说明）。
+    #   c/t 只用于介电扣真空（_dielectric_2d_inplane）与 σ/κ 的厚度归一化（S8.1/S8.3）。
+    new_elastic = elastic
     if elastic is None:
-        print("[WARN] 2D：没读到弹性常数，c/t=%.3f 的修正无从施加" % factor)
+        print("[WARN] 2D：没读到弹性常数")
     else:
-        print("[OK] 2D 弹性常数重标度：c=%.3f Å / t=%.3f Å -> ×%.3f"
+        print("[OK] 2D 弹性常数用原始 slab 值（= C_2D/c，不乘 c/t）；"
+              "c=%.3f Å / t=%.3f Å -> c/t=%.3f 只用于介电扣真空与厚度归一化"
               % (c_len, t, factor))
     # patch_2d_zero_outofplane_shear（2026-09-18，用户批准）：
     #   二维 slab 的**面外剪切**是真空伪影（CrS2 C44=-0.52、SS 未重排时 C66 槽 0.56、
@@ -1183,7 +1191,11 @@ def apply_2d_corrections(cwd: Path, elastic):
         "layer_thickness": t_info,
         "elastic_rescale_factor_c_over_t": round(factor, 4),
         "elastic_constant_raw_GPa": elastic,
-        "elastic_constant_rescaled_GPa": new_elastic,
+        # [0014] 不再乘 c/t：这里是写进 settings.yaml 的值（原始 slab + 面外负剪切取绝对值）
+        "elastic_constant_rescaled_GPa": None,
+        "elastic_constant_used_GPa": new_elastic,
+        "elastic_constant_note": "原始 slab 值（= C_2D/c），不乘 c/t；"
+                                 "c/t 只用于介电扣真空与 σ/κ 的厚度归一化",
         "elastic_constant_convention": "standard Voigt (XX YY ZZ YZ XZ XY)，"
                                        "已由 read_elastic 从 VASP 的 (XX YY ZZ XY YZ ZX) 重排",
         "elastic_outofplane_shear_zeroed": zeroed,
@@ -1191,8 +1203,9 @@ def apply_2d_corrections(cwd: Path, elastic):
                                     "取绝对值并抬到 1e-3×面内对角下限"
                                     "（V76/V77/V78：置零会让 Christoffel 奇异、声速 0、ADP=0），"
                                     "原值->新值见 elastic_outofplane_shear_zeroed。"
-                                    "★ 标准 step8_amset 路径对二维是近似；准确的二维处理请走 "
-                                    "step8.4_amset2d 插件（面内 2x2 Christoffel）。"),
+                                    "★ 标准 step8_amset 路径对二维是近似（POP/IMP 仍是三维核）；"
+                                    "准确的二维处理请走 step8.4_amset2d 插件（面内 2x2 Christoffel），"
+                                    "zt-dft-cpu 对 2D 只认 S8.4 的结果。"),
         "areal_density_factor_cm": c_len * 1e-8,
         "areal_density_note": "n_2D [cm^-2] = n_3D [cm^-3] x cell_c [cm]",
         "free_carrier_screening": bool(FREE_CARRIER_SCREENING_2D),
@@ -1344,7 +1357,7 @@ def write_settings(out: Path, eps_inf, eps_static, gap, elastic,
         # 免得几个月后拿着 transport.json 忘了这是 slab 模型跑出来的。
         lines += [
             "# ===== 2D slab 模型 =====",
-            "# 1) elastic_constant 已按 c/t 重标度（还原成层材料的等效三维值）",
+            "# 1) elastic_constant 是原始 slab 值（= C_2D/c，不乘 c/t；乘了 μ_ADP 偏大 c/t 倍）",
             "#    顺序为标准 Voigt (XX YY ZZ YZ XZ XY)，已从 VASP 顺序重排",
             "# 2) free_carrier_screening 已打开（否则 POP 主导时迁移率对浓度不响应）",
             "# 3) 下面的 doping 是体浓度 cm^-3；面浓度 n_2D = n_3D × c",
