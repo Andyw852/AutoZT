@@ -505,7 +505,9 @@ def resolve_kappa_L(cwd):
         return r
     lines.append("  kappa_L(%.0f K)  xx=%.4f  yy=%.4f W/mK" % (TARGET_T, kxx, kyy))
     # 元胞闸门：kl-dft-cpu 的 Lz 与 ke-dft-cpu 的 c
-    rec = _load_json(Path(cwd) / AMSET_DIR / "2d_correction.json") or {}
+    # [0016] 2D 默认不跑 S8：胞高改读 S8.4 的记录
+    rec = (_load_json(Path(cwd) / AMSET_DIR / "2d_correction.json")
+           or _load_json(Path(cwd) / AMSET2D_DIR / "2d_correction.json") or {})
     Lz, cA = j.get("Lz_ang"), rec.get("cell_c_A")
     if Lz and cA:
         dc = abs(float(Lz) - float(cA)) / float(cA) * 100

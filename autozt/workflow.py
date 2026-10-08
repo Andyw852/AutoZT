@@ -146,6 +146,13 @@ def _dag_needs(t, m, s, prev_name):
         dep = [dep]
     return [str(x) for x in dep]
 
+
+def _soft_dep(d):
+    """[0016] needs 里写 "<步骤>?" = 软依赖：该步骤在本材料的工作流里就等它，不在（可选组关了）
+    不算缺、不提示。例：ke 的 S8.3 对 2D 要等 S8.4 出结果，3D 没有 S8.4 也不该显示"缺 S8.4"。"""
+    d = str(d)
+    return (d[:-1], True) if d.endswith("?") else (d, False)
+
 def _dag_max_inflight(cfg, m):
     from autozt import _MAX_INFLIGHT_DEFAULT
     st = (m.get("ps") or {}).get("setting") or {}
@@ -626,9 +633,9 @@ def _dag_recompute(t, m):
     for s in m["steps"]:
         # 被 optional_steps 关掉的步骤不在 m["steps"] 里，依赖到它要忽略（不卡死），
         # 但记进 _missing_deps，让状态表第三行提醒"下游步骤缺这个数据"。
-        raw = _dag_needs(t, m, s, prev)
-        deps = [d for d in raw if d in names]
-        s["_missing_deps"] = [_dep_display(m, d) for d in raw if d not in names]
+        raw = [_soft_dep(d) for d in _dag_needs(t, m, s, prev)]
+        deps = [d for d, _soft in raw if d in names]
+        s["_missing_deps"] = [_dep_display(m, d) for d, soft in raw if d not in names and not soft]
         blocked = any(d not in okset for d in deps)
         _nr = (step_cfg_safe(t, s["name"], m) or {}).get("needs_results")
         if _nr:
@@ -1205,8 +1212,8 @@ def remote_gen(cfg, t, m, sname, host=None, wd=None):
             continue
         _base = os.path.basename(_src.rstrip(os.sep)) or "pushed"
         _dstroot = os.path.join(step_dir, _base)
-        line += "mkdir -p %s ; " % shlex.quote(_dstroot)
         if os.path.isdir(_src):
+            line += "mkdir -p %s ; " % shlex.quote(_dstroot)
             for _root, _dirs, _files in os.walk(_src):
                 for _fn in _files:
                     _full = os.path.join(_root, _fn)
@@ -1228,6 +1235,14 @@ def remote_gen(cfg, t, m, sname, host=None, wd=None):
         else:
             with open(_src, "rb") as _fh:
                 _data = _fh.read()
+            # 文件型 push_paths 直接写目标文件；不能先 mkdir 同名路径，
+            # 否则 POTCAR 等单文件会被创建成目录，后续生成器无法读取。
+            _dst_parent = os.path.dirname(_dstroot)
+            line += ("mkdir -p %s ; "
+                     "if [ -d %s ]; then rmdir %s 2>/dev/null || "
+                     "{ echo 'ERROR: push_paths 文件目标已是非空目录：%s' >&2; exit 1; }; fi ; "
+                     % (shlex.quote(_dst_parent), shlex.quote(_dstroot),
+                        shlex.quote(_dstroot), shlex.quote(_dstroot)))
             line += ("[ -f %s ] && [ \"$(md5sum %s 2>/dev/null | cut -d' ' -f1)\" = %s ] "
                      "|| echo %s | base64 -d > %s ; "
                      % (shlex.quote(_dstroot), shlex.quote(_dstroot),
@@ -2669,7 +2684,8 @@ def _relay_prev_across_host(cfg, m, s, t=None):
         return
     # 需要回传的依赖步骤：needs 优先，未写 needs 回退成 seq 前一步
     prev_name = steps[idx - 1].get("name") if idx > 0 else None
-    dep_names = _dag_needs(t, m, s, prev_name) if t is not None else ([prev_name] if prev_name else [])
+    dep_names = ([_soft_dep(d)[0] for d in _dag_needs(t, m, s, prev_name)] if t is not None
+                 else ([prev_name] if prev_name else []))
     name2step = {x.get("name"): x for x in steps}
     # 技能子目录根：cur_dir 尾部去掉 "/<step.name>"（step.name 形如 "step2_bandgap/step2.3_hse"）
     rel = s.get("name") or ""

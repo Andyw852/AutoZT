@@ -121,16 +121,6 @@ steps:
      gen: gen_step9b_deform_read.py, gen_need: [ke_common.py, nspin_norm_fix.py, dp_symmetrize.py], fetch_all: true,
      needs: ["step7_deform"]}
 
-  - {seq: 8, name: step8_amset, label: S8_kappa, src: step8_amset,
-     check: marker, marker: "transport.json:thermal_conductivity",
-     # gen_need 带上 overlap_preflight.py（住在 step8.4_amset2d/，靠 report.find_asset 的
-    #   basename 唯一兜底找到）：gen 时查维度/重叠模式，并把它复制进运行目录供作业内 --in-job。
-    # amset_desym_fix.py（V115，2026-09-28）：去对称化相位补丁插件，住在 step8.4_amset2d/，
-    #   gen 复制进运行目录、python -c 入口里 import（AZ_DESYM_FIX 未设时不打补丁 = 原行为）。
-    #   dim_common.py：ke_common 顶层 import 它；gen 现在把两者一起复制进运行目录给作业内 preflight 用。
-    # amset_fermi_fix.py（V132）：求费米能级的稳健化插件（S8/S8.4 共用，住在 step8.4_amset2d/），python -c 里 import。
-    gen: gen_step10_amset.py, gen_need: [stepconf.py, step.conf, ke_common.py, dim_common.py, submit_amset.tpl, vdw_radii.py, discriminant_common.py, overlap_preflight.py, fermi_window_check.py, amset_desym_fix.py, amset_ir_fix.py, amset_fermi_fix.py], fetch_all: true,
-     needs: ["step4_wave", "step5_dielect", "step6_elastic", "step7b_deform_read", "step2_bandgap/step2.2_pbe_plot", "step2_bandgap/step2.3_hse_plot"]}
 
 # --- 2 带隙段：子步嵌套进 step2_bandgap/，状态表合并成 S2_bandgap 一列 ---------
 # 泛函 pbe/pbesol 由 step1 弛豫继承。两条分支各自带画图，由 step.conf 的
@@ -270,12 +260,33 @@ optional_steps:
          gen_need: [ke_common.py, dim_common.py], fetch_all: true,
      needs: ["step2_bandgap/step2.3_hse"]}
 
+# --- 8 原版 AMSET（三维散射核）：3D 材料的生产路径；2D 材料新建时自动关 ------------
+#   [0016] auto_dim_off: 2d —— init / register 时 POSCAR 判为 2D 的材料在本材料 tf_*.yaml 里写
+#   amset3d: false（只写一次，之后以配置为准）。2D 用 S8.4（二维散射核）；三维核的 POP/IMP 对 2D
+#   不适用，S8 的结果只能作对照。2D 材料确要三维核对照：配置改 true，或 -j S8_kappa start 按需启用。
+#   已有材料不受影响（配置里没有这个键 = 默认 true）。
+  amset3d:
+    default: true
+    auto_dim_off: 2d
+    steps:
+      - {seq: 8, name: step8_amset, label: S8_kappa, after: step7b_deform_read,
+         src: step8_amset,
+         check: marker, marker: "transport.json:thermal_conductivity",
+         # gen_need 带上 overlap_preflight.py（住在 step8.4_amset2d/，靠 report.find_asset 的
+        #   basename 唯一兜底找到）：gen 时查维度/重叠模式，并把它复制进运行目录供作业内 --in-job。
+        # amset_desym_fix.py（V115，2026-09-28）：去对称化相位补丁插件，住在 step8.4_amset2d/，
+        #   gen 复制进运行目录、python -c 入口里 import（AZ_DESYM_FIX 未设时不打补丁 = 原行为）。
+        #   dim_common.py：ke_common 顶层 import 它；gen 现在把两者一起复制进运行目录给作业内 preflight 用。
+        # amset_fermi_fix.py（V132）：求费米能级的稳健化插件（S8/S8.4 共用，住在 step8.4_amset2d/），python -c 里 import。
+        gen: gen_step10_amset.py, gen_need: [stepconf.py, step.conf, ke_common.py, dim_common.py, submit_amset.tpl, vdw_radii.py, discriminant_common.py, overlap_preflight.py, fermi_window_check.py, amset_desym_fix.py, amset_ir_fix.py, amset_fermi_fix.py], fetch_all: true,
+         needs: ["step4_wave", "step5_dielect", "step6_elastic", "step7b_deform_read", "step2_bandgap/step2.2_pbe_plot", "step2_bandgap/step2.3_hse_plot"]}
+
 # --- 8.2 DPT 形变势迁移率：给 8.1 提供分方向 τ，必须排在 8.1 前面 ---
   dpt:
     default: true
     steps:
       - {seq: 8.2, name: "step8.2_dpt", label: S8.2_dpt,
-         after: step8,
+         after: step7b_deform_read,
          src: step8.2_dpt, check: plot, run: gen,
          done_marker: dpt_result.json,
          # V148：材料级覆盖读 step.conf；重跑时让 S8.1/S8.3 重排要 import ke_common
@@ -284,17 +295,18 @@ optional_steps:
          needs: ["step3_uniform", "step6_elastic", "step7b_deform_read"]}
 
   # --- 8.1 BoltzTraP2 CRTA × DPT-τ：文献口径的完整实现 ---
-  #   after 用 step8 前缀（匹配最后一个 step8*），这样 dpt 组关掉时
-  #   本步自动挂回 step8_amset，不会因为锚点消失而静默不注入。
+  #   [0016] S8.x 各组的 after 一律锚在 step7b_deform_read（主步骤，一定在）：S8 现在可以被关掉
+  #   （2D 默认关），锚在 step8* 上会让 S8.1/S8.2/S8.3/S8.4 跟着静默不注入。最终顺序按 seq 重排。
   boltztrap_crta:
     default: true
     steps:
       - {seq: 8.1, name: "step8.1_boltztrap", label: S8.1_bt2,
-         after: step8,
+         after: step7b_deform_read,
          src: step8.1_boltztrap, check: plot, run: gen,
          done_marker: boltztrap_crta.json,
          # [0015] thickness_2d/vdw_radii：S8 还没写 2d_correction.json 时按本步结构现算 vdW 层厚（c/t）
-         gen: gen_step11_boltztrap.py, gen_need: [discriminant_common.py, ke_common.py, dim_common.py, thickness_2d.py, vdw_radii.py],
+         # [0016] stepconf.py/step.conf：本步开始读 step.conf（THICKNESS_A / NORM_2D / 共用 LAYER_THICKNESS）
+         gen: gen_step11_boltztrap.py, gen_need: [discriminant_common.py, ke_common.py, dim_common.py, thickness_2d.py, vdw_radii.py, stepconf.py, step.conf],
          fetch_all: true,
          needs: ["step3_uniform", "step6_elastic", "step7b_deform_read",
                  "step8.2_dpt"]}
@@ -303,8 +315,8 @@ optional_steps:
   #   默认 false —— 3D 项目看不到这个步骤，零回归风险（S8.4 对 3D 直接退出）。
   #   [0014] auto_dim: 2d —— init / register 时 POSCAR 判为 2D 的材料，在本材料的
   #   tf_*.yaml 里自动写 amset2d: true（只写一次，之后以配置为准）；老材料手写同一行。
-  #   与 step8_amset 用同一批上游输入，DAG 上两者并行；同一个 2D 材料于是同时有
-  #   bt2(8.1) / 原版 AMSET(8) / amset2d(8.4) 三套结果，正好用于对比。
+  #   与 step8_amset 用同一批上游输入，DAG 上两者并行。[0016] 起 2D 新材料默认不跑 S8（amset3d: false），
+  #   2D 的电子输运就是 bt2(8.1) + DPT(8.2) + amset2d(8.4)；要三维核对照再把 amset3d 打开。
   #   zt-dft-cpu 的 S20 对 2D 只认 S8.4 的 transport.json（S8 的 POP/IMP 是三维核）。
   #   ★ 8.4 不开插件之外的一切：插件只在那一次 amset 运行里 import 生效，不改 AMSET 安装。
   amset2d:
@@ -312,7 +324,7 @@ optional_steps:
     auto_dim: 2d
     steps:
       - {seq: 8.4, name: "step8.4_amset2d", label: S8.4_amset2d,
-         after: step8_amset,
+         after: step7b_deform_read,
          src: step8.4_amset2d, check: marker, marker: "transport.json:thermal_conductivity",
          gen: gen_step14_amset2d.py,
          gen_need: [stepconf.py, step.conf, ke_common.py, dim_common.py, submit_amset.tpl, vdw_radii.py,
@@ -327,11 +339,12 @@ optional_steps:
     default: true
     steps:
       - {seq: 8.3, name: "step8.3_output", label: S8.3_cmp,
-         after: step8,
+         after: step7b_deform_read,
          src: step8.3_output, check: plot, run: gen,
          done_marker: comparison_300K.png,
          gen: gen_step13_output.py, gen_need: [], fetch_all: true,
-         needs: ["step8_amset", "step8.1_boltztrap", "step8.2_dpt"]}
+         # [0016] "?" = 软依赖：S8（2D 默认关）/ S8.4（只有 2D）在本材料工作流里就等它，不在不提示缺
+         needs: ["step8_amset?", "step8.1_boltztrap", "step8.2_dpt", "step8.4_amset2d?"]}
 
 io_schema:
   inputs:

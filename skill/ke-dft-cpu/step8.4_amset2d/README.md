@@ -3,6 +3,8 @@
 > 只在 2D 项目里打开；三维项目走原版 `step8_amset`，完全不受影响。
 > 开关：项目 `project_setting` 里写 `amset2d: true`（技能里该组 `default: false`、`auto_dim: 2d`：
 > 2D 材料 init/register 时自动写这一行；老材料手写）。zt-dft-cpu 的 S20 对 2D 只认本步的 transport.json。
+> 补丁 0016 起 2D 新材料默认不跑原版 S8（`amset3d: false`）；层厚写在本材料共用 step.conf 的 `LAYER_THICKNESS`。
+> `2d_correction.json` 的 `za_coupling` 记录结构有没有水平镜面 σh（没有时本步不含的 ZA 一阶耦合可能不为零）。
 
 ## 这个步骤解决什么
 

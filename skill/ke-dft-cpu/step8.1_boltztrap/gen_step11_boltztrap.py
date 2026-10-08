@@ -49,6 +49,10 @@ def _disc_gate():
 OUTDIR_NAME = "step8.1_boltztrap"
 UNIFORM_DIR = "step3_uniform"          # 密网格 vasprun 来源
 AMSET_DIR   = "step8_amset"            # 读 2d_correction.json 拿 c/t（若有）
+AMSET2D_DIR = "step8.4_amset2d"        # [0016] 2D 不跑 S8 时，c/t 与掺杂档改读 S8.4
+STEP = "step8.1_boltztrap"
+# [0016] 版本戳：写进 boltztrap_crta.json 与 paper_mu_scan_*.csv 首行（以前没有，跨材料核对只能看文件时间）
+_SKILL_REV = "2026-10-08-0016-ct-source"
 
 TEMPERATURES = [100, 200, 300, 400, 500, 600, 700, 800, 900]  # K
 # patch_mu_window：CRTA 类文献普遍把 μ 扫到带边上下 ±3 eV，ZT 峰
@@ -89,14 +93,23 @@ KAPPA_L_YY_W_MK = None
 #   TMD 族 t 取体相层间距）。★ ZT 对口径不变，变的是 σ/PF/浓度的绝对值。
 #   κ_L 不用手动折算——脚本对 σ、κ_e、κ_L 同乘同一因子。
 NORM_2D     = "thickness" # "cell" | "thickness"；thickness=按有效厚度 t 重标度（文献主流口径）
-THICKNESS_A = None        # None = 读 step8_amset/2d_correction.json；S8 还没生成时按本步结构算 vdW 层厚
+THICKNESS_A = None        # 本步手填层厚（Å）；None = 按 _ct_info 的顺序取（见下）
                           # [0015] 都拿不到就报错，不再静默退回元胞口径
+# [0016] 与 S8 / S8.4 同名的共用键：写在本材料共用 step.conf（project_setting/templates/step.conf）
+#   的 [params]，三步同读一个层厚（超晶格如 SS/LS 写 6.73）。"vdw" = 不手填。
+LAYER_THICKNESS = "vdw"
 SOMMERFELD_L = 2.44e-8    # WΩ/K²
 # patch_align_n：把 μ 扫描的结果落到 amset 用的那套载流子浓度上，便于逐行并排比。
 #   "amset" = 从 step8_amset/transport.json 读 doping 数组（推荐）
 #   None    = 关掉；也可直接给一个列表（带符号，负=n型电子、正=p型空穴）
 DOPING_ALIGN = "amset"
 DOPING_LIST  = [-1e20, -1e19, -1e18, 1e18, 1e19, 1e20]   # 读不到 amset 时兜底
+# [0016] 以前本步不读 step.conf（THICKNESS_A / NORM_2D 只能改脚本）；现在按 SPEC 读 tf 推来的 step.conf。
+SPEC = {
+    "THICKNESS_A": (None, "float"),
+    "NORM_2D": (NORM_2D, "str"),
+    "LAYER_THICKNESS": (LAYER_THICKNESS, "str"),
+}
 # =================================================================
 
 _STEP1_CANDS = ("step1_opt", "step1_std_opt",
@@ -137,38 +150,76 @@ def _find_vasprun(d):
     return None
 
 
+def _apply_conf(cwd):
+    """[0016] 读 tf 推来的 step.conf 覆盖 THICKNESS_A / NORM_2D / LAYER_THICKNESS（没有 step.conf 不动）。"""
+    global THICKNESS_A, NORM_2D, LAYER_THICKNESS
+    if not (Path(cwd) / "step.conf").is_file():
+        return
+    try:
+        import stepconf
+    except ImportError:
+        print("[WARN] 有 step.conf 但没有 stepconf.py：覆盖未生效（skill.yaml 的 gen_need 漏了它？）")
+        return
+    p = stepconf.load(SPEC, STEP, str(cwd), strict=False)
+    if p["THICKNESS_A"] is not None:
+        THICKNESS_A = float(p["THICKNESS_A"])
+    if p["NORM_2D"]:
+        NORM_2D = str(p["NORM_2D"])
+    if p["LAYER_THICKNESS"]:
+        LAYER_THICKNESS = str(p["LAYER_THICKNESS"])
+
+
+def _layer_thickness_number():
+    """LAYER_THICKNESS 是数值（手填层厚）时返回 float，否则 None（"vdw"/"span" 等取法）。"""
+    try:
+        v = float(str(LAYER_THICKNESS).strip())
+    except (TypeError, ValueError):
+        return None
+    return v if v > 0 else None
+
+
+def _read_2d_record(cwd, d):
+    try:
+        return json.loads((Path(cwd) / d / "2d_correction.json").read_text())
+    except (OSError, ValueError):
+        return {}
+
+
 _CT_STRUCT_CANDS = (UNIFORM_DIR, "step7_deform", "step1_opt", "step1_std_opt")
 
 
 def _ct_info(cwd):
     """2D 的 c/t：{c_over_t, cell_c_A, thickness_A, source}；都拿不到时 c_over_t=None。
 
-    [0015] 取值顺序：
-      ① THICKNESS_A（本步手填；c 取 S8 的记录或本步结构的胞高）；
-      ② step8_amset/2d_correction.json（S8 的 LAYER_THICKNESS，含 step.conf 覆盖，如 SS/LS 的 6.73）；
-      ③ 本步按结构现算 vdW 层厚（_common/thickness_2d，与 S8 出厂的 "vdw" 同一取法）。
-    以前只有 ②：S8.1 的 needs 里没有 S8，S8 要等 S4/S5/HSE，常常比 S8.1 晚生成 ->
+    [0015/0016] 取值顺序：
+      ① THICKNESS_A（本步手填）；
+      ② LAYER_THICKNESS 数值（共用 step.conf，S8 / S8.4 同读这一个，如 SS/LS 的 6.73）；
+      ③ step8_amset/2d_correction.json（S8 的层厚，含旧做法写在 S8 本步 step.conf 的覆盖）；
+      ④ step8.4_amset2d/2d_correction.json（2D 默认不跑 S8 之后，记录在这里）；
+      ⑤ 本步按结构现算 vdW 层厚（_common/thickness_2d，与 S8 出厂的 "vdw" 同一取法）。
+    c（胞高）取 S8 / S8.4 的记录，没有就按本步结构算。
+    以前只有 ③：S8.1 的 needs 里没有 S8，S8 要等 S4/S5/HSE，常常比 S8.1 晚生成 ->
     S8.1 静默退回元胞口径（σ/PF/κ_e 小 c/t 倍，CSV 首行 norm=cell(回退)）。
-    ③ 之后 S8 若用了不同的层厚（step.conf 覆盖），S8 的 gen 会让本步重排（ke_common.invalidate_ct_consumers）。"""
-    rec = {}
-    p = Path(cwd) / AMSET_DIR / "2d_correction.json"
-    try:
-        rec = json.loads(p.read_text())
-    except (OSError, ValueError):
-        rec = {}
-    c = rec.get("cell_c_A")
+    ⑤ 之后 S8 若用了不同的层厚，S8 的 gen 会让本步重排（ke_common.invalidate_ct_consumers）。"""
+    rec = _read_2d_record(cwd, AMSET_DIR)
+    rec2 = _read_2d_record(cwd, AMSET2D_DIR)
+    c = rec.get("cell_c_A") or rec2.get("cell_c_A")
     geo = None
-    if not c or not rec.get("elastic_rescale_factor_c_over_t"):
+    if not c or not (rec.get("elastic_rescale_factor_c_over_t")
+                     or rec2.get("elastic_rescale_factor_c_over_t")):
         geo = _vdw_geometry(cwd)
         c = c or (geo or {}).get("h_perp_A")
-    if THICKNESS_A and c:
-        return {"c_over_t": float(c) / float(THICKNESS_A), "cell_c_A": float(c),
-                "thickness_A": float(THICKNESS_A), "source": "THICKNESS_A"}
-    if rec.get("elastic_rescale_factor_c_over_t"):
-        return {"c_over_t": float(rec["elastic_rescale_factor_c_over_t"]),
-                "cell_c_A": float(c) if c else None,
-                "thickness_A": (rec.get("layer_thickness") or {}).get("thickness_used_A"),
-                "source": "%s/2d_correction.json" % AMSET_DIR}
+    for t_manual, src in ((THICKNESS_A, "THICKNESS_A"),
+                          (_layer_thickness_number(), "LAYER_THICKNESS(step.conf)")):
+        if t_manual and c:
+            return {"c_over_t": float(c) / float(t_manual), "cell_c_A": float(c),
+                    "thickness_A": float(t_manual), "source": src}
+    for r, d in ((rec, AMSET_DIR), (rec2, AMSET2D_DIR)):
+        if r.get("elastic_rescale_factor_c_over_t"):
+            return {"c_over_t": float(r["elastic_rescale_factor_c_over_t"]),
+                    "cell_c_A": float(c) if c else None,
+                    "thickness_A": (r.get("layer_thickness") or {}).get("thickness_used_A"),
+                    "source": "%s/2d_correction.json" % d}
     if geo and geo.get("thickness_d_A"):
         return {"c_over_t": float(geo["h_perp_A"]) / float(geo["thickness_d_A"]),
                 "cell_c_A": float(geo["h_perp_A"]), "thickness_A": float(geo["thickness_d_A"]),
@@ -455,9 +506,10 @@ def _norm_2d(cwd, is_2d=True):
         return 1.0, info
     if not f:
         # [0015] 不再静默退回元胞口径：那样 σ/PF/κ_e 小 c/t 倍，CSV 首行的 norm=cell(回退) 很容易漏看
-        sys.exit("[ERROR] 2D + NORM_2D='thickness' 但拿不到 c/t：没有 THICKNESS_A、没有 %s/2d_correction.json，"
-                 "按结构算 vdW 层厚也失败。处理：step.conf 写 THICKNESS_A（Å），或 NORM_2D = cell（元胞口径）。"
-                 % AMSET_DIR)
+        sys.exit("[ERROR] 2D + NORM_2D='thickness' 但拿不到 c/t：没有 THICKNESS_A / LAYER_THICKNESS、"
+                 "没有 %s 或 %s 的 2d_correction.json，按结构算 vdW 层厚也失败。处理：本材料共用 step.conf "
+                 "写 LAYER_THICKNESS（Å），或本步 step.conf 写 NORM_2D = cell（元胞口径）。"
+                 % (AMSET_DIR, AMSET2D_DIR))
     info["factor_applied"] = float(f)
     print("[..] 2D 口径 thickness：σ/κ_e/κ_L 同乘 c/t = %.4f（c=%.3f Å, t=%.3f Å）"
           % (f, c or float("nan"), t or float("nan")))
@@ -578,12 +630,14 @@ def _doping_targets(cwd):
         return [float(x) for x in DOPING_ALIGN], "手填列表"
     if str(DOPING_ALIGN).lower() != "amset":
         return None, "DOPING_ALIGN 取值无法识别"
-    p = Path(cwd) / AMSET_DIR / "transport.json"
-    if p.is_file():
+    for _d in (AMSET_DIR, AMSET2D_DIR):          # [0016] 2D 默认不跑 S8，改读 S8.4 的掺杂档
+        p = Path(cwd) / _d / "transport.json"
+        if not p.is_file():
+            continue
         try:
             d = json.loads(p.read_text(encoding="utf-8")).get("doping")
             if d:
-                return [float(x) for x in d], "%s/transport.json" % AMSET_DIR
+                return [float(x) for x in d], "%s/transport.json" % _d
         except (OSError, ValueError):
             pass
     return [float(x) for x in DOPING_LIST], "DOPING_LIST 兜底（amset 结果没读到）"
@@ -741,10 +795,10 @@ def write_paper_scan(out, cwd, res, is_2d):
     p = out / ("paper_mu_scan_%dK.csv" % round(T))
     with open(p, "w", newline="") as fh:
         fh.write("# CRTA(BoltzTraP2) x DPT-tau 文献口径；T=%.0f K；"
-                 "kappa_e=L*sigma*T (WF)；norm=%s, c=%s A, t=%s A, factor=%.4f, t_source=%s\n"
+                 "kappa_e=L*sigma*T (WF)；norm=%s, c=%s A, t=%s A, factor=%.4f, t_source=%s, skill_rev=%s\n"
                  % (T, ninfo["norm"], ninfo.get("cell_c_A"),
                     ninfo.get("thickness_A"), ninfo["factor_applied"],
-                    ninfo.get("c_over_t_source")))
+                    ninfo.get("c_over_t_source"), _SKILL_REV))
         w = csv.DictWriter(fh, fieldnames=cols, extrasaction="ignore")
         w.writeheader()
         for r in rows:
@@ -841,6 +895,7 @@ def _s3_grid_note(cwd, dim):
 def main():
     _disc_gate()
     cwd = Path.cwd()
+    _apply_conf(cwd)                                   # [0016]
     _guard_not_0d(cwd)
     out = cwd / OUTDIR_NAME
     out.mkdir(exist_ok=True)
@@ -876,6 +931,7 @@ def main():
                              scissor_gap_eV=_read_target_gap(cwd))
 
     res["dim"] = dim
+    res["skill_rev"] = _SKILL_REV
     res["s3_grid"] = s3_grid
     if dim == "2d":
         res["tensor_average"] = "in-plane (xx+yy)/2"

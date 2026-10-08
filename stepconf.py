@@ -28,7 +28,9 @@ _SECTION = re.compile(r"^\[([A-Za-z0-9_.\-]+)\]$")
 # 驱动层保留键：写在 [params] 里、供 tf 决定步骤图（如 BANDGAP=pbe|hse 增删
 # 整段 HSE），gen 脚本本身不消费。校验白名单时无条件放行，避免各 gen 脚本
 # 都误报"不认识的键"。新增工作流级开关往这里加即可。
-RESERVED_PARAMS = frozenset({"BANDGAP", "CONDA_SH", "CONDA_ENV", "MACE_MODEL_DIR", "AMSET_ENV", "POTCAR_DIR", "REFERENCES_DIR"})
+# LAYER_THICKNESS（[0016]）：ke-dft-cpu 的 2D 层厚，写在材料共用 step.conf，S8 / S8.1 / S8.4 同读。
+RESERVED_PARAMS = frozenset({"BANDGAP", "CONDA_SH", "CONDA_ENV", "MACE_MODEL_DIR", "AMSET_ENV", "POTCAR_DIR", "REFERENCES_DIR",
+                             "LAYER_THICKNESS"})
 
 
 def _strip(line):
