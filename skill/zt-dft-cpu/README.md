@@ -44,6 +44,10 @@ needs_results:
   不回退 S8 —— S8 与 S8.4 并行，回退会让先跑完的 S8 被抢先用掉。ke-dft-cpu 的 `amset2d`
   组带 `auto_dim: 2d`：2D 材料 init/register 时自动在 ke 的项目配置写 `amset2d: true`；
   老的 2D 材料手写这一行，S20 的 WAIT 提示里也写着。
+- **上游重跑后 S20 自动判过期**（0015）：S20 每次 gen 成功，autozt 把当时用的输入（来源路径 + 文件
+  sha256）记在 `<材料>/zt-dft-cpu/result/.autozt_inputs/step20_zt.json`；之后按规则选中的上游
+  结果换了来源或内容变了（如 S8.4 / κL 重算、2D 改选 S8.4），已完成的 S20 显示 STALE，auto-advance
+  重新生成。只重新 fetch 同一份结果（来源戳变、内容不变）不触发。0015 之前生成的 S20 没有记录，不判。
 - `zt_summary.json` 的 `transport.step` 记录电子段实际来自哪一步（项目层改了 needs_results、
   2D 用了 S8 时有 `transport.warning`，notes 里同样标出）。
 

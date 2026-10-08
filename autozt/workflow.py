@@ -503,6 +503,107 @@ def resolve_needs_results(m, spec):
     return chosen, missing
 
 
+# [0015] 组合步骤（如 S20_zt）当初 gen 用的跨技能输入：<结果目录>/.autozt_inputs/<步骤>.json。
+#   上游重跑后（S8.4 / κL 换了结果、或 2D 改选了另一步），已完成的组合步骤要判过期并重新生成。
+#   ke 的失效表（ke_common.DOWNSTREAM）只在 ke 技能目录里找下游，管不到另一个技能目录里的 S20。
+_SHA_CACHE = {}
+
+
+def _sha256_cached(path):
+    try:
+        st = os.stat(path)
+    except OSError:
+        return None
+    k = (path, st.st_mtime_ns, st.st_size)
+    if k not in _SHA_CACHE:
+        _SHA_CACHE[k] = _sha256_file(path)
+    return _SHA_CACHE[k]
+
+
+def needs_results_fingerprint(chosen):
+    """{键: {"from": 相对路径, "files": {文件: sha256}}}。文件集合与 gen 推送的一致，
+    但不含来源戳（重新 fetch 同一份结果只改 fetched_at，不该让下游重算）。"""
+    out = {}
+    for key, (fp, rel) in sorted((chosen or {}).items()):
+        srcdir = os.path.dirname(fp)
+        files = {}
+        for root, dirs, fns in os.walk(srcdir):
+            dirs[:] = [d for d in dirs if not d.startswith(".")]
+            for fn in fns:
+                if fn.startswith(".tf_") or fn == ORIGIN_NAME:
+                    continue
+                full = os.path.join(root, fn)
+                try:
+                    if os.path.getsize(full) > 200 * 1024 * 1024:
+                        continue
+                except OSError:
+                    continue
+                files[os.path.relpath(full, srcdir)] = _sha256_cached(full)
+        out[str(key)] = {"from": rel, "files": files}
+    return out
+
+
+def _inputs_record_path(m, sname):
+    rd = (m or {}).get("result_dir")
+    if not rd:
+        return None
+    return os.path.join(rd, ".autozt_inputs",
+                        re.sub(r"[^A-Za-z0-9_.-]", "_", str(sname)) + ".json")
+
+
+def write_inputs_record(m, sname, fingerprint):
+    p = _inputs_record_path(m, sname)
+    if not p:
+        return
+    try:
+        os.makedirs(os.path.dirname(p), exist_ok=True)
+        with open(p, "w", encoding="utf-8") as f:
+            json.dump({"schema": "autozt-inputs/1", "step": sname,
+                       "written_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+                       "inputs": fingerprint}, f, ensure_ascii=False, indent=1)
+    except OSError:
+        pass
+
+
+def needs_results_changed(m, sname, chosen):
+    """已完成的组合步骤：当初 gen 用的输入与现在应选的上游结果不同 -> 说明文字；否则 None。
+    没有记录（0015 之前生成的）不判过期。"""
+    p = _inputs_record_path(m, sname)
+    if not p or not os.path.isfile(p):
+        return None
+    try:
+        with open(p, encoding="utf-8") as f:
+            rec = json.load(f).get("inputs") or {}
+    except (OSError, ValueError, AttributeError):
+        return None
+    cur = needs_results_fingerprint(chosen)
+    diffs = []
+    for key in sorted(set(rec) | set(cur)):
+        a, b = rec.get(key) or {}, cur.get(key) or {}
+        if a.get("from") != b.get("from"):
+            diffs.append("%s：%s → %s" % (key, a.get("from") or "无", b.get("from") or "无（不再合格）"))
+        elif a.get("files") != b.get("files"):
+            diffs.append("%s：%s 的内容变了" % (key, b.get("from")))
+    return "；".join(diffs) or None
+
+
+def _mark_stale_composites(t, m):
+    """[0015] 已完成、带 needs_results 的步骤：输入变了 -> 改判 STALE（auto-advance 重新生成）。"""
+    for s in m.get("steps") or []:
+        if not s.get("done") or s.get("job"):
+            continue
+        _nr = (step_cfg_safe(t, s["name"], m) or {}).get("needs_results")
+        if not _nr:
+            continue
+        _chosen, _miss = resolve_needs_results(m, _nr)
+        why = needs_results_changed(m, s["name"], _chosen)
+        if why:
+            s["done"] = False
+            s["stale"] = True
+            s["plot_error"] = False
+            s["diag"] = "跨技能输入变了（%s），等重新生成" % why
+
+
 def step_cfg_safe(t, sname, m):
     try:
         from autozt import step_cfg
@@ -514,6 +615,7 @@ def step_cfg_safe(t, sname, m):
 def _dag_recompute(t, m):
     """按 needs 重算每个步骤的 blocked / kind，并返回就绪集（可立即启动的）。
     依赖全部 OK 才算就绪；FAIL / SCANCEL 不自动推进，交给 retry。"""
+    _mark_stale_composites(t, m)          # [0015] 组合步骤的跨技能输入变了 -> STALE
     names = set(x["name"] for x in m["steps"])
     okset = set()
     for s in m["steps"]:
@@ -1137,10 +1239,12 @@ def remote_gen(cfg, t, m, sname, host=None, wd=None):
     # needs_results：把选中的上游结果目录推到 <技能目录>/inputs/<键>/（+ source.json）。
     #   依赖判定（_dag_recompute）和这里用同一个 resolve_needs_results，缺了就不 gen。
     _nr = sc.get("needs_results")
+    _nr_fp = None
     if _nr:
         _chosen, _miss = resolve_needs_results(m, _nr)
         if _miss:
             return False, "跨技能结果还没齐：%s" % "；".join(_miss)
+        _nr_fp = needs_results_fingerprint(_chosen)   # [0015] gen 成功后记下，供判过期
         for _key, (_fp, _rel) in sorted(_chosen.items()):
             _srcdir = os.path.dirname(_fp)
             _dstroot = os.path.join(step_dir, "inputs", str(_key))
@@ -1225,6 +1329,8 @@ def remote_gen(cfg, t, m, sname, host=None, wd=None):
         _tail = ((" ; " + _cores_cmd(_cores, _sub)) if _cores else "")
         rc, out = run_remote(cfg, line + sh_b64(gen) + _tail, host=host,
                              use_stdin=True)
+    if rc == 0 and _nr_fp is not None:
+        write_inputs_record(m, sname, _nr_fp)       # [0015]
     if _cores and rc == 0:
         out = (out or "") + ("\n[cores] 本步按 cores=%d 提交（来源：项目 setting.yaml / "
                              "hpc.yaml / 类型配置 / tf.yaml 的 cores）\n" % _cores)

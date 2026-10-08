@@ -609,7 +609,10 @@ DOWNSTREAM = {
                                        ("step8.1_boltztrap", "always")],
     "step2_bandgap/step2.3_hse_plot": [("step8_amset", "gap"), ("step8.4_amset2d", "gap"),
                                        ("step8.1_boltztrap", "always")],
-    "step8_amset": [("step8.3_output", "always"), ("step20_zt", "dir")],      # step20_zt：zt 的 ZT 汇总
+    # step20_zt：zt v0.1（抄 ke 步骤进 zt 目录）的遗留条目。v0.2 起 S20 在 <材料>/zt-dft-cpu/，这里按 ke 目录
+    #   找不到它；S20 的过期改由 autozt 判断（[0015] workflow._mark_stale_composites：比对当初的跨技能输入）。
+    #   S8.1 的 c/t 由 S8 gen 里的 invalidate_ct_consumers 管（只在 c/t 真变了时重排）。
+    "step8_amset": [("step8.3_output", "always"), ("step20_zt", "dir")],
     # [patch_post_invalidate V148] S8.3 的对比图也读 S8.4 的 transport.json；S8/S8.4/S8.1/S8.2 的 gen 现在都会调
     #   invalidate_downstream（以前只在表里、没有一个 gen 调：GaAs 的 S8.2 重跑了 4 次，S8.1 一直是旧 τ）。
     "step8.4_amset2d": [("step8.3_output", "always")],
@@ -801,6 +804,49 @@ def invalidate_downstream(cwd, step, reason, _seen=None, gap=None, _jobs=None):
             print("[WARN] ★ %s 的 settings.yaml 用的是旧带隙 %.4f eV（%s 现在是 %.4f eV），它还没跑完 —— "
                   "取消那个作业、rerun %s" % (down, old_gap, step, gap, down))
         done += invalidate_downstream(cwd, down, "上游 %s 失效" % step, seen, _jobs=jobs)
+    return done
+
+
+CT_CONSUMERS = ("step8.1_boltztrap",)
+
+
+def invalidate_ct_consumers(cwd, ct, step="step8_amset", rel_tol=1e-3):
+    """[0015] S8 写出 2d_correction.json 之后：读 c/t 的下游（S8.1）当时用的 c/t 与新值不同 -> 让它重排。
+
+    S8.1 的 needs 里没有 S8（S8 要等 S4/S5/HSE，常常更晚生成），S8.1 先跑时 c/t 按本步结构的 vdW
+    层厚现算；S8 的 LAYER_THICKNESS 若被 step.conf 覆盖（如 SS/LS 的 6.73），两边就不是同一个 t。
+    这里只在 c/t 真的不同（或下游没记录 c/t）时归档下游完成标记，递归到 S8.3；下游手填了
+    THICKNESS_A 的不动。返回 [(下游步骤, 改名的文件), ...]。"""
+    import json as _json
+    import time as _t
+    if not ct:
+        return []
+    cwd = Path(cwd)
+    done = []
+    tag = "stale-upstream-%s-%s" % (step.replace("/", "_"), _t.strftime("%Y%m%d%H%M%S"))
+    for down in CT_CONSUMERS:
+        d = cwd / down
+        hit = False
+        for m in DONE_MARKERS.get(down, ()):
+            f = d / m
+            if not f.is_file():
+                continue
+            try:
+                rec = _json.loads(f.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                rec = {}
+            if rec.get("dim") not in (None, "2d") or rec.get("twoD_c_over_t_source") == "THICKNESS_A":
+                continue
+            old = rec.get("twoD_c_over_t")
+            if old and abs(float(old) - float(ct)) <= rel_tol * abs(float(ct)):
+                continue
+            f.rename(d / (m + "." + tag))
+            done.append((down, m))
+            hit = True
+            print("[WARN] %s 的 c/t=%s（%s）与 %s 新写的 c/t=%.4f 不同 -> 完成标记已归档（*.%s），会重新排队"
+                  % (down, old, rec.get("twoD_c_over_t_source") or "旧版本未记录来源", step, float(ct), tag))
+        if hit:
+            done += invalidate_downstream(cwd, down, "上游 %s 的 c/t 变了" % step)
     return done
 
 

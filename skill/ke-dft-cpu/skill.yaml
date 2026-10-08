@@ -293,7 +293,8 @@ optional_steps:
          after: step8,
          src: step8.1_boltztrap, check: plot, run: gen,
          done_marker: boltztrap_crta.json,
-         gen: gen_step11_boltztrap.py, gen_need: [discriminant_common.py, ke_common.py, dim_common.py],
+         # [0015] thickness_2d/vdw_radii：S8 还没写 2d_correction.json 时按本步结构现算 vdW 层厚（c/t）
+         gen: gen_step11_boltztrap.py, gen_need: [discriminant_common.py, ke_common.py, dim_common.py, thickness_2d.py, vdw_radii.py],
          fetch_all: true,
          needs: ["step3_uniform", "step6_elastic", "step7b_deform_read",
                  "step8.2_dpt"]}
