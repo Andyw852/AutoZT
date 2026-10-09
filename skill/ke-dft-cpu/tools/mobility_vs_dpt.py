@@ -16,6 +16,7 @@ AMSET 的约定：负掺杂 = n 型（电子），正掺杂 = p 型（空穴）�
 ADP/DPT 超出 [1/3, 3]：标 ⚠，提示用 tools/dp_valley_probe.py 查是不是多谷（V141/V142）。
 [0022] S8.2 有多谷 DPT（multi_valley）时另列 DPT_mv 与 ADP/DPT_mv（逐温度算的，不按 1/T 换算；网格外不外推）；
 单谷算不出（带边在 Q 这类非高对称谷）时 DPT 栏为 -，看 DPT_mv。
+[0024] S8.2 发现还有别的谷时，表头写明单谷 DPT 只代表哪个谷、该温度占多少载流子（其余谷与谷间散射不含）。
   例外（只注明、不提示多谷）：n/N_eff ≥ 0.5（接近/进入简并，DPT 的非简并统计不成立，V146）；
   DPT 的 m* 取自简并带边（单带公式只是近似，V145）；DPT 的 m* 网格分辨不出带边曲率（V147）。
 
@@ -72,7 +73,7 @@ def dpt_mu(r):
     （3 点抛物 m*，旧口径，SS/LS 这类带边不在网格上的体系可差 5–15%）。返回 (μ, 来源)。"""
     bd = _bd_ok(r)
     if bd:
-        vals = [bd[d]["mobility_cm2_Vs"] for d in ("x", "y")
+        vals = [bd[d]["mobility_cm2_Vs"] for d in ("x", "y", "z")      # [0025] 3D 有 z（取迹/3）
                 if isinstance(bd.get(d), dict) and isinstance(bd[d].get("mobility_cm2_Vs"), (int, float))]
         if vals:
             return sum(vals) / len(vals), "by_direction"
@@ -118,6 +119,27 @@ def mv_at(mv, T):
             ya, yb = a["mobility_inplane_cm2_Vs"], b["mobility_inplane_cm2_Vs"]
             return float(np.exp(np.log(ya) + t * np.log(yb / ya)))
     return None
+
+
+def dpt_scope(path):
+    """[0024] {"electron": single_valley_scope, ...}（S8.2 发现别的谷时才有）。"""
+    out = {}
+    p = Path(path)
+    if p.is_file():
+        for r in json.loads(p.read_text(encoding="utf-8")).get("results") or []:
+            if r.get("single_valley_scope"):
+                out[r["carrier"]] = r["single_valley_scope"]
+    return out
+
+
+def scope_line(car, sc, T):
+    """[0024] 一行说明：单谷 DPT 只代表哪个谷、T（S8.2 网格最近一档）时占多少载流子。"""
+    rows = sc.get("shares_vs_T") or []
+    if not rows:
+        return None
+    r = min(rows, key=lambda q: abs(float(q["T_K"]) - float(T)))
+    return ("  %sDPT(%s) 只代表 %s 谷：%.0f K 时占载流子 %.1f%%（其余谷与谷间散射不含，ADP/DPT 偏离不能只归因于多谷）"
+            % ("★ " if r["share"] < 0.5 else "", LABEL.get(car, car), sc["edge_star"], r["T_K"], 100 * r["share"]))
 
 
 def dpt_T0(path):
@@ -271,18 +293,19 @@ def main(argv=None):
         print("[ERROR] 读 %s 失败：%s: %s" % (tj, type(e).__name__, e), file=sys.stderr)
         return 2
     srcs = dpt_sources(mat / "step8.2_dpt" / "dpt_result.json")      # [0017]
+    scopes = dpt_scope(mat / "step8.2_dpt" / "dpt_result.json")      # [0024]
     bad, allrows = 0, []
     for rs, mechs in blocks:
         for r in rs:
             r["DPT_source"] = srcs.get(r["carrier"])
-        bad += _print_block(tj, is_2d, rs, mechs, dpt, srcs, T0, deg, coarse, Ts[0])
+        bad += _print_block(tj, is_2d, rs, mechs, dpt, srcs, T0, deg, coarse, Ts[0], scopes=scopes)
         allrows.extend(rs)
     if a.json:
         Path(a.json).write_text(json.dumps(allrows, ensure_ascii=False, indent=1), encoding="utf-8")
     return 1 if bad else 0
 
 
-def _print_block(tj, is_2d, rs, mechs, dpt, srcs, T0, deg, coarse, T_req):
+def _print_block(tj, is_2d, rs, mechs, dpt, srcs, T0, deg, coarse, T_req, scopes=None):
     """一个温度一段表；返回 ★（Seebeck 符号不符）的行数。"""
     T_used = rs[0]["T"] if rs else T_req
     print("%s（%s，%g K，迁移率 cm²/Vs，%s；载流子按 AMSET 约定：负掺杂 = 电子）"
@@ -291,6 +314,10 @@ def _print_block(tj, is_2d, rs, mechs, dpt, srcs, T0, deg, coarse, T_req):
                                              "" if abs(T_used - T0) < 1e-6
                                              else "；由 %g K 按 %s 换算" % (T0, "1/T" if is_2d else "T^-1.5")))
              if any(dpt.values()) else "没有 DPT 结果"))
+    for car, sc in sorted((scopes or {}).items()):                    # [0024]
+        ln = scope_line(car, sc, T_used)
+        if ln and any(r["carrier"] == car for r in rs):
+            print(ln)
     cols = ["overall"] + mechs
     has_mv = any("DPT_mv" in r for r in rs)                    # [0022]
     print("  %-12s %-8s %9s " % ("doping/cm⁻³", "载流子", "S/μV·K⁻¹") + " ".join("%9s" % c for c in cols)

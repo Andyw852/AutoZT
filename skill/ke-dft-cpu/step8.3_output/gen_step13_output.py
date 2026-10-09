@@ -33,7 +33,7 @@ from pathlib import Path
 # [SKILL_REV] 版本戳：写进 comparison_summary.txt。每次改本脚本逻辑后更新。
 #   陈旧副本已咬人三次（step12/step9b 盖戳后，step13 是最后一个没盖的），
 #   这里盖戳便于从产物反查到底跑的是哪份 skill 副本。
-_SKILL_REV = "2026-10-09-0022"
+_SKILL_REV = "2026-10-09-0025"
 #   bump 记录：2026-10-07-v181 —— 汇总里写明泛函（csv 的 functional 列 + summary 的 [口径] 行）。
 #   bump 记录：2026-10-09-0021 —— DPT 的 μ/τ 换到 TARGET_T（S8.2 的 TEMPERATURE_K 可改了）；
 #   2D 只有真实重叠、没有 unity 对照不再判红（2026-09-26 起真实重叠是出厂默认）。
@@ -365,7 +365,7 @@ def _dpt_inplane_mu(bd, r):
     mobility_cm2_Vs 是 3 点抛物 m* 的旧口径，两者 μ 能差近一倍（CrS2 45.6 vs 87.5）。
     主口径一律取 by_direction。3D 时 by_direction.status 非 "ok"，自然回退。"""
     if isinstance(bd, dict) and bd.get("status") == "ok":
-        vals = [bd[d]["mobility_cm2_Vs"] for d in ("x", "y")
+        vals = [bd[d]["mobility_cm2_Vs"] for d in ("x", "y", "z")          # [0025] 3D 有 z
                 if isinstance(bd.get(d), dict)
                 and isinstance(bd[d].get("mobility_cm2_Vs"), (int, float))]
         if vals:
@@ -392,7 +392,7 @@ def _scale_dir(bd, f):
     if not (isinstance(bd, dict) and bd.get("status") == "ok") or f == 1.0:
         return bd
     out = dict(bd)
-    for d in ("x", "y"):
+    for d in ("x", "y", "z"):                                   # [0025] 3D 有 z
         if isinstance(bd.get(d), dict):
             q = dict(bd[d])
             for k in ("mobility_cm2_Vs", "tau_s"):
@@ -423,6 +423,74 @@ def _mv_at(mv, T):
     return hit
 
 
+def _scope_share(scope, T):
+    """[0024] single_valley_scope 在温度 T（S8.2 网格上最近的一档）的 (档温度, 带边谷占比)；没有 -> (None, None)。"""
+    rows = (scope or {}).get("shares_vs_T") or []
+    if not rows:
+        return None, None
+    r = min(rows, key=lambda q: abs(float(q["T_K"]) - float(T)))
+    return float(r["T_K"]), float(r["share"])
+
+
+def _dpt_scope_lines(dpt):
+    """[0024] 汇总里的"单谷 DPT 只代表哪个谷"。"""
+    out = []
+    for c in ("electron", "hole"):
+        sc = (dpt or {}).get("scope_" + c)
+        if not sc:
+            continue
+        T_, sh = _scope_share(sc, (dpt or {}).get("T_used") or TARGET_T)
+        others = ", ".join("%s" % k for k in sc.get("others") or {})
+        out.append("# [DPT 单谷] %s%s：dpt_mu 只代表 %s 谷（%.0f K 占载流子 %.1f%%；%s 未计入，谷间散射也不含）"
+                   "—— 材料的迁移率看 AMSET 栏" % ("★ " if sh is not None and sh < 0.5 else "", c,
+                                               sc["edge_star"], T_ or 0.0, 100 * (sh or 0.0), others or "其余谷"))
+    return out
+
+
+def _amset_mech_lines(cwd, is_2d, T=None):
+    """[0024] AMSET 各散射机制单独的迁移率（每种载流子取 |掺杂| 最低一档、最接近 T 的温度）与限制因素。
+    Matthiessen：1/μ ≈ Σ 1/μ_i，μ_i 最小的机制限制迁移率；"本征"不计 IMP（随掺杂变）。"""
+    T = TARGET_T if T is None else T
+    for run in (AMSET2D_DIR, AMSET_DIR):
+        j = _load_json(Path(cwd) / run / "transport.json")
+        if j:
+            break
+    else:
+        return []
+    try:
+        dop = [float(x) for x in _unwrap(j["doping"])]
+        temps = [float(t) for t in _unwrap(j["temperatures"])]
+        mob = j.get("mobility") or {}
+    except (KeyError, TypeError, ValueError):
+        return []
+    it = min(range(len(temps)), key=lambda i: abs(temps[i] - T))
+    mechs = [m for m in mob if m.lower() != "overall" and mob[m] is not None]
+    if not mechs:
+        return []
+    out = []
+    for car, sgn in (("electron", -1), ("hole", 1)):
+        idx = [i for i, x in enumerate(dop) if x * sgn > 0]
+        if not idx:
+            continue
+        i = min(idx, key=lambda k: abs(dop[k]))
+        vals = {}
+        for m in mechs:
+            try:
+                v = _diag_avg(_unwrap(mob[m])[i][it], is_2d)
+            except (IndexError, TypeError, KeyError):
+                continue
+            if isinstance(v, (int, float)) and v == v and v > 0:
+                vals[m] = float(v)
+        if not vals:
+            continue
+        order = sorted(vals.items(), key=lambda kv: kv[1])
+        intr = [kv for kv in order if kv[0].upper() != "IMP"]
+        out.append("# [AMSET 机制] %s %.0f K（掺杂 %.2e cm⁻³，%s）：%s → 限制因素 %s%s" % (
+            car, temps[it], dop[i], run, " < ".join("%s %.4g" % kv for kv in order), order[0][0],
+            ("；本征（不计 IMP）限制因素 %s" % intr[0][0]) if intr and intr[0][0] != order[0][0] else ""))
+    return out
+
+
 def _mv_desc(mv):
     """'Q×6 ΔE=0.000 / K×2 ΔE=0.030' —— 多谷块里有哪些谷。"""
     return " / ".join("%s×%d ΔE=%.3f" % (v["label"], v["g"], v["dE_eV"]) for v in (mv or {}).get("valleys") or [])
@@ -446,6 +514,8 @@ def load_dpt(cwd):
         out[carrier] = (mu * f) if isinstance(mu, (int, float)) else mu
         out["m_" + carrier] = _dpt_m_d(bd, r)
         out["dir_" + carrier] = _scale_dir(bd, f)   # patch_bt2_dir
+        if r.get("single_valley_scope"):            # [0024] 单谷值只代表带边那组谷
+            out["scope_" + carrier] = r["single_valley_scope"]
         # [0022] 多谷 DPT：另列一栏对照；单谷算不出（带边在 Q 这类非高对称谷）时主栏也用它
         mv = r.get("multi_valley") or {}
         mvT = _mv_at(mv, out["T_used"])
@@ -459,6 +529,7 @@ def load_dpt(cwd):
                                          "x": {"mobility_cm2_Vs": mvT["x"], "tau_s": mvT["tau_x"]},
                                          "y": {"mobility_cm2_Vs": mvT["y"], "tau_s": mvT["tau_y"]}}
                 out["src_" + carrier] = "multi_valley"
+                out.pop("scope_" + carrier, None)       # [0024] 主栏已是多谷，单谷的适用范围不适用
         elif mv.get("status") == "ok":
             print("[WARN] %s 多谷 DPT 没有 %.0f K 这一档（S8.2 的 TEMPERATURES 不含它，不外推）"
                   % (carrier, out["T_used"]))
@@ -914,18 +985,27 @@ MU_T_CSV = "comparison_vs_T.csv"
 MU_T_JSON = "comparison_vs_T.json"
 MU_T_PNG = "mobility_vs_T.png"
 MU_T_COLS = ("mu_DPT", "mu_DPT_mv", "mu_AMSET_ADP", "mu_AMSET_intrinsic", "mu_AMSET_all")   # [0022] +mu_DPT_mv
+# [0030] 分方向参数列（来自 S8.2 by_direction，逐方向）。2D=x/y，3D=x/y/z；不出比值/平均。
+def _c_col(is_2d):
+    """C 列名（单位随维度变）：2D 用 C_2D_N_per_m（N/m），3D 用 C_3D_GPa（GPa）。"""
+    return "C_2D_N_per_m" if is_2d else "C_3D_GPa"
+
+
+def _param_cols(is_2d):
+    """[0030] 分方向参数列：E1 / C / m* / m_d / tau。"""
+    return ("E1_eV", _c_col(is_2d), "m_eff_m0", "m_d_m0", "tau_DPT_fs")
 
 
 def _dirs(is_2d):
-    return ("x", "y", "mean") if is_2d else ("x", "y", "z", "mean")
+    """分方向列表（**不出平均**）：2D 面内 x/y；3D x/y/z。"""
+    return ("x", "y") if is_2d else ("x", "y", "z")
 
 
 def _t_dirs(t33, is_2d):
-    """3×3 张量 -> {"x","y",("z"),"mean"}；2D mean=(xx+yy)/2，3D mean=迹/3。"""
+    """3×3 张量 -> {"x","y",("z")}（按方向，不出平均）。"""
     d = {"x": float(t33[0][0]), "y": float(t33[1][1])}
     if not is_2d:
         d["z"] = float(t33[2][2])
-    d["mean"] = _diag_avg(t33, is_2d)
     return d
 
 
@@ -995,6 +1075,10 @@ def _dpt_mu_T(cwd, is_2d):
             d = {"x": bd["x"]["mobility_cm2_Vs"], "y": bd["y"]["mobility_cm2_Vs"]}
             d["mean"] = (d["x"] + d["y"]) / 2.0
             how[r["carrier"]] = "by_direction"
+        elif (not is_2d) and isinstance(bd, dict) and bd.get("status") == "ok" and isinstance(bd.get("z"), dict):
+            d = {k: bd[k]["mobility_cm2_Vs"] for k in ("x", "y", "z")}        # [0025] 3D 分方向
+            d["mean"] = (d["x"] + d["y"] + d["z"]) / 3.0
+            how[r["carrier"]] = "by_direction(3D)"
         elif isinstance(r.get("mobility_cm2_Vs"), (int, float)):
             v = float(r["mobility_cm2_Vs"])
             d = {k: v for k in _dirs(is_2d)}
@@ -1003,6 +1087,36 @@ def _dpt_mu_T(cwd, is_2d):
             continue
         out[r["carrier"]] = d
     return T0, out, how
+
+
+def _dpt_params_dir(cwd, carrier, is_2d):
+    """[0030] 从 dpt_result.json 的 by_direction 取**分方向**参数（E1/C2D/m*/m_d/tau）。
+    返回 {direction: {...}}；没有 by_direction(ok) 返回 {}。2D=x/y，3D=x/y/z；不出平均、不出比值。"""
+    j = _load_json(Path(cwd) / DPT_DIR / "dpt_result.json") or {}
+    for r in j.get("results", []):
+        if r.get("carrier") != carrier:
+            continue
+        bd = r.get("by_direction") or {}
+        if bd.get("status") != "ok":
+            return {}
+        out, md = {}, bd.get("m_d_m0")
+        for d in _dirs(is_2d):
+            q = bd.get(d)
+            if not isinstance(q, dict):
+                continue
+            t = q.get("tau_s")
+            ck = _c_col(is_2d)
+            out[d] = {"E1_eV": q.get("E1_eV"), ck: q.get(ck),
+                      "m_eff_m0": q.get("m_eff_m0"), "m_d_m0": md,
+                      "tau_DPT_fs": (t * 1e15) if t is not None else None}
+        return out
+    return {}
+
+
+def _dpt_scopes(cwd):
+    """[0024] {载流子: single_valley_scope}。"""
+    j = _load_json(Path(cwd) / DPT_DIR / "dpt_result.json") or {}
+    return {r["carrier"]: r["single_valley_scope"] for r in j.get("results", []) if r.get("single_valley_scope")}
 
 
 def _dpt_mv_blocks(cwd, is_2d):
@@ -1019,6 +1133,7 @@ def build_mu_vs_T(cwd, is_2d):
     am = _amset_mu_T_sources(cwd)
     T0, dpt, dpt_how = _dpt_mu_T(cwd, is_2d)
     mvb = _dpt_mv_blocks(cwd, is_2d)
+    scopes = _dpt_scopes(cwd)                                          # [0024]
     if not am and not dpt and not mvb:
         return None
     cfac = _areal_factor_cm(cwd) if is_2d else None
@@ -1038,6 +1153,7 @@ def build_mu_vs_T(cwd, is_2d):
         if car not in picks and car not in dpt and car not in mvb:
             continue
         i = picks.get(car)
+        params = _dpt_params_dir(cwd, car, is_2d)              # [0030] 分方向 E1/C2D/m*/m_d/tau
         for it, T in enumerate(temps):
             f = ((T0 / T) if is_2d else (T0 / T) ** 1.5) if T0 else None
             vals = {}
@@ -1059,15 +1175,16 @@ def build_mu_vs_T(cwd, is_2d):
                 for c in MU_T_COLS:
                     v = (vals.get(c) or {}).get(d)
                     row[c] = v if (v is not None and v == v) else None
-                a, dp, al = row["mu_AMSET_ADP"], row["mu_DPT"], row["mu_AMSET_all"]
-                row["ADP_over_DPT"] = (a / dp) if (a and dp) else None
-                dmv = row["mu_DPT_mv"]
-                row["ADP_over_DPT_mv"] = (a / dmv) if (a and dmv) else None
-                row["all_over_ADP"] = (al / a) if (al and a) else None
+                for c in _param_cols(is_2d):                            # [0030] 分方向参数
+                    row[c] = (params.get(d) or {}).get(c)
+                _ts, _sh = _scope_share(scopes.get(car), T)             # [0024] mu_DPT 代表的谷占多少载流子
+                row["DPT_edge_share"] = (_sh if (row["mu_DPT"] is not None and _ts is not None
+                                                 and abs(_ts - T) < 1e-6) else None)
                 rows.append(row)
     meta = {"is_2d": is_2d, "dpt_T0_K": T0, "dpt_source": dpt_how,
             "dpt_scaling": ("1/T" if is_2d else "T^-1.5"),
             "dpt_mv": ({c: _mv_desc(b) for c, b in mvb.items()} or None),
+            "dpt_scope": ({c: "%s 谷" % sc["edge_star"] for c, sc in scopes.items()} or None),
             "amset_run": am["run"] if am else None, "amset_sources": am["src"] if am else {},
             "intrinsic_labels": am["intrinsic_labels"] if am else None,
             "doping_choice": "每种载流子取 |掺杂| 最低的一档（最接近 DPT 的非简并口径）",
@@ -1082,8 +1199,8 @@ def write_mu_vs_T(out, cwd, is_2d):
     if not res or not res["rows"]:
         print("[..] μ(T) 表：没有 AMSET 也没有 DPT 结果，跳过")
         return None
-    head = (["T_K", "carrier", "direction", "doping_cm3", "n2D_cm2"] + list(MU_T_COLS)
-            + ["ADP_over_DPT", "ADP_over_DPT_mv", "all_over_ADP"])
+    head = (["T_K", "carrier", "direction", "doping_cm3", "n2D_cm2"]
+            + list(_param_cols(is_2d)) + list(MU_T_COLS) + ["DPT_edge_share"])
 
     def _fmt(v):
         return "" if v is None else (("%.6g" % v) if isinstance(v, float) else v)
@@ -1091,6 +1208,9 @@ def write_mu_vs_T(out, cwd, is_2d):
         m = res["meta"]
         fh.write("# 迁移率随温度（cm²/Vs）；DPT 由 %s K 按 %s 换算（%s）；AMSET=%s；%s\n" % (
             m["dpt_T0_K"], m["dpt_scaling"], m["dpt_source"], m["amset_run"], m["doping_choice"]))
+        if m.get("dpt_scope"):                                 # [0024]
+            fh.write("# DPT_edge_share = mu_DPT（单谷）所代表的谷在该温度占载流子的比例：%s；其余谷与谷间散射不含\n"
+                     % "；".join("%s %s" % kv for kv in sorted(m["dpt_scope"].items())))
         if m.get("dpt_mv"):                                    # [0022]
             fh.write("# mu_DPT_mv = S8.2 多谷 DPT（逐温度算，不是 1/T 换算；无谷间散射，上限）：%s\n"
                      % "；".join("%s %s" % kv for kv in sorted(m["dpt_mv"].items())))
@@ -1101,16 +1221,16 @@ def write_mu_vs_T(out, cwd, is_2d):
         for r in res["rows"]:
             w.writerow([_fmt(r[k]) for k in head])
     (out / MU_T_JSON).write_text(json.dumps(res, ensure_ascii=False, indent=1), encoding="utf-8")
-    lines = ["", "# [0020] 迁移率随温度（%s，cm²/Vs；全表见 %s）" % ("面内平均" if is_2d else "迹/3", MU_T_CSV),
-             "# %-8s %6s %10s %10s %10s %10s %10s %9s %9s" % (
-                 "carrier", "T(K)", "DPT", "DPT_mv", "AMSET_ADP", "intrinsic", "all", "ADP/DPT", "ADP/mv")]
+    lines = ["", "# [0030] 迁移率随温度 + 分方向参数（%s；E1 eV / C2D N/m / m* mₑ / tau fs / mu cm²/Vs；全表见 %s）"
+             % ("2D：面内 x/y" if is_2d else "3D：x/y/z", MU_T_CSV),
+             "# %-8s %4s %5s %8s %8s %7s %7s %8s %9s %9s %9s %9s %9s" % (
+                 "carrier", "dir", "T(K)", "E1", "C2D", "m*", "m_d", "tau",
+                 "DPT", "DPT_mv", "AMSET_ADP", "intrinsic", "all")]
     for r in res["rows"]:
-        if r["direction"] != "mean":
-            continue
-        lines.append("  %-8s %6.0f %10s %10s %10s %10s %10s %9s %9s" % (
-            r["carrier"], r["T_K"], *[("%.1f" % r[c]) if r[c] is not None else "—" for c in MU_T_COLS],
-            ("%.2f" % r["ADP_over_DPT"]) if r["ADP_over_DPT"] is not None else "—",
-            ("%.2f" % r["ADP_over_DPT_mv"]) if r["ADP_over_DPT_mv"] is not None else "—"))
+        lines.append("  %-8s %4s %5.0f %8s %8s %7s %7s %8s %9s %9s %9s %9s %9s" % (
+            r["carrier"], r["direction"], r["T_K"],
+            *[("%.3f" % r[c]) if r.get(c) is not None else "—" for c in _param_cols(is_2d)],
+            *[("%.1f" % r[c]) if r[c] is not None else "—" for c in MU_T_COLS]))
     try:
         with open(out / "comparison_summary.txt", "a", encoding="utf-8") as fh:
             fh.write("\n".join(lines) + "\n")
@@ -1134,11 +1254,16 @@ def _plot_mu_vs_T(out, res):
     cars = [c for c in ("electron", "hole") if any(r["carrier"] == c for r in res["rows"])]
     fig, axs = plt.subplots(1, len(cars), figsize=(5.5 * len(cars), 4.2), squeeze=False)
     for ax, car in zip(axs[0], cars):
-        rs = [r for r in res["rows"] if r["carrier"] == car and r["direction"] == "mean"]
+        rs = [r for r in res["rows"] if r["carrier"] == car]
+        dirs = [d for d in ("x", "y", "z") if any(r["direction"] == d for r in rs)]
         for c, (col, ls, lab) in style.items():
-            pts = [(r["T_K"], r[c]) for r in rs if r[c]]
-            if pts:
-                ax.plot(*zip(*pts), color=col, ls=ls, marker="o", ms=3, label=lab)
+            for d in dirs:                                   # [0030] 每个方法按 x/y(/z) 各画一条
+                pts = [(r["T_K"], r[c]) for r in rs if r["direction"] == d and r[c]]
+                if pts:
+                    ax.plot(*zip(*pts), color=col, ls=ls, ms=3,
+                            marker=("o" if d == "x" else "s"),
+                            alpha=(1.0 if d == "x" else 0.55),
+                            label="%s %s" % (lab, d))
         ax.set_yscale("log")
         ax.set_xlabel("T (K)")
         ax.set_ylabel("mobility (cm$^2$/Vs)")

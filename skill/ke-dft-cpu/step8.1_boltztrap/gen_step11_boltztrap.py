@@ -52,7 +52,7 @@ AMSET_DIR   = "step8_amset"            # 读 2d_correction.json 拿 c/t（若有
 AMSET2D_DIR = "step8.4_amset2d"        # [0016] 2D 不跑 S8 时，c/t 与掺杂档改读 S8.4
 STEP = "step8.1_boltztrap"
 # [0016] 版本戳：写进 boltztrap_crta.json 与 paper_mu_scan_*.csv 首行（以前没有，跨材料核对只能看文件时间）
-_SKILL_REV = "2026-10-09-0022-mv-tau"
+_SKILL_REV = "2026-10-09-0024-valley-scope"
 
 TEMPERATURES = [100, 200, 300, 400, 500, 600, 700, 800, 900]  # K
 # patch_mu_window：CRTA 类文献普遍把 μ 扫到带边上下 ±3 eV，ZT 峰
@@ -476,6 +476,20 @@ def _mv_tau_at(mv, T):
     return None
 
 
+_TAU_SCOPE = {}     # [0024] 载流子 -> 单谷 τ 只代表哪个谷、占多少（写进 boltztrap_summary.txt）
+
+
+def _scope_at(scope, T):
+    """[0024] S8.2 的 single_valley_scope 在温度 T（取 S8.2 网格上最近的一档）的说明；没有 -> None。"""
+    if not scope:
+        return None
+    rows = scope.get("shares_vs_T") or [{"T_K": scope.get("T_K"), "share": scope.get("share")}]
+    r = min(rows, key=lambda q: abs(float(q["T_K"]) - float(T if T is not None else scope.get("T_K") or 300.0)))
+    return ("τ 来自单谷 DPT，只代表 %s 谷：%.0f K 时占载流子 %.1f%%（其余谷与谷间散射未计入，"
+            "σ/PF/ZT 只代表这一组谷，材料的迁移率以 S8.4 为准）" % (scope["edge_star"], r["T_K"], 100 * r["share"])), \
+        float(r["share"])
+
+
 def _tau_from_json(cwd, T=None, is_2d=None):
     """读 step8.2_dpt/dpt_result.json 的 τ，换算到温度 T（[0021] 主通道）。
     [0021] 以前不换温：gen 推到材料目录跑时 _dpt_module() 永远找不到模块（它找的是 <材料上一级>/step8.2_dpt/），
@@ -495,6 +509,7 @@ def _tau_from_json(cwd, T=None, is_2d=None):
         c, bd = r.get("carrier"), (r.get("by_direction") or {})
         if bd.get("status") == "ok":
             out[c] = {d: bd[d]["tau_s"] * f for d in ("x", "y")}
+            _note_scope(c, r, T)
             continue
         # [0022] 单谷分方向不可用（带边在 Q 这类非高对称谷，WSe2 导带）-> S8.2 的多谷 τ_eff（逐温度算的，不换算）
         mv = r.get("multi_valley") or {}
@@ -515,12 +530,21 @@ def _tau_from_json(cwd, T=None, is_2d=None):
             t = (mu * 1e-4) * (me * M0) / E_C * f
             out[c] = {"x": t, "y": t}
             print("[WARN] %s 无分方向 τ，回落各向同性" % c)
+            _note_scope(c, r, T)
     if out and T is not None:
         print("[OK] DPT τ 取自 %s/dpt_result.json（%.0f K），换算到 %.0f K（×%.4f；多谷的按温度直接取）：%s"
               % (DPT_DIR, T0, float(T), f, "；".join(
                   "%s x=%.1f fs y=%.1f fs%s" % (c, v["x"] * 1e15, v["y"] * 1e15, "（多谷）" if c in mv_used else "")
                   for c, v in out.items())))
     return out
+
+
+def _note_scope(c, r, T):
+    """[0024] 用了单谷 τ 的载流子：S8.2 若发现还有别的谷（single_valley_scope），打印并记下（不改 τ）。"""
+    got = _scope_at(r.get("single_valley_scope"), T)
+    if got:
+        _TAU_SCOPE[c] = got[0]
+        print("%s %s：%s" % ("[WARN]" if got[1] < 0.5 else "[..]", c, got[0]))
 
 
 def _tau_aniso(cwd, is_2d, T):
@@ -869,6 +893,8 @@ def write_paper_scan(out, cwd, res, is_2d):
     for c, tb in taus.items():
         lines.append("# tau_%-8s x=%.1f fs  y=%.1f fs"
                      % (c, tb["x"] * 1e15, tb["y"] * 1e15))
+        if c in _TAU_SCOPE:                                   # [0024]
+            lines.append("#   ★ %s" % _TAU_SCOPE[c])
     for key in ("ZT_xx", "ZT_yy", "PF_xx_W/mK2", "PF_yy_W/mK2"):
         best = max((r for r in rows if r.get(key) is not None),
                    key=lambda r: r[key], default=None)

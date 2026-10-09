@@ -117,14 +117,17 @@ def test_s83_mu_vs_T_three_values(tmp_path):
     res = S.build_mu_vs_T(mat, True)
     rows = {(r["T_K"], r["carrier"], r["direction"]): r for r in res["rows"]}
     assert sorted({r["T_K"] for r in res["rows"]}) == TEMPS
-    e600 = rows[(600.0, "electron", "mean")]
-    assert e600["doping_cm3"] == -1e17                         # 最低掺杂
+    e600 = rows[(600.0, "electron", "x")]                        # [0030] 按方向，不出平均
+    assert e600["doping_cm3"] == -1e17                           # 最低掺杂
     assert e600["n2D_cm2"] == pytest.approx(1e17 * 2e-7)
-    assert e600["mu_DPT"] == pytest.approx(110.0 / 2)           # (100+120)/2 × 300/600
-    assert e600["mu_AMSET_ADP"] == pytest.approx(60.0 * 1.1 / 2)  # intrinsic_ADP.json，不是 transport 的 61
-    assert e600["mu_AMSET_intrinsic"] == pytest.approx(45.0 * 1.1 / 2)
-    assert e600["mu_AMSET_all"] == pytest.approx(30.0 * 1.1 / 2)
-    assert e600["ADP_over_DPT"] == pytest.approx(66.0 / 110.0)
+    assert e600["mu_DPT"] == pytest.approx(100.0 / 2)            # 100 × 300/600
+    assert e600["mu_AMSET_ADP"] == pytest.approx(60.0 / 2)       # intrinsic_ADP.json，不是 transport 的 61
+    assert e600["mu_AMSET_intrinsic"] == pytest.approx(45.0 / 2)
+    assert e600["mu_AMSET_all"] == pytest.approx(30.0 / 2)
+    assert e600["m_d_m0"] == 0.95 and e600["tau_DPT_fs"] == pytest.approx(10.0)
+    assert e600["E1_eV"] is None and e600["C_2D_N_per_m"] is None  # 夹具 by_direction 未带这些字段
+    assert "ADP_over_DPT" not in e600                            # [0030] 不再输出比值
+    assert rows[(600.0, "electron", "y")]["mu_DPT"] == pytest.approx(120.0 / 2)
     h300x = rows[(300.0, "hole", "x")]
     assert h300x["mu_DPT"] == 300.0 and h300x["mu_AMSET_ADP"] == 200.0 and h300x["doping_cm3"] == 1e17
     assert "intrinsic_ADP.json" in res["meta"]["amset_sources"]["mu_AMSET_ADP"]
@@ -149,7 +152,8 @@ def test_s83_write_outputs(tmp_path):
         S.write_mu_vs_T(out, mat, True)
     lines = [ln for ln in (out / S.MU_T_CSV).read_text().splitlines() if not ln.startswith("#")]
     rs = list(csv.DictReader(lines))
-    assert len(rs) == len(TEMPS) * 2 * 3                         # 温度 × 载流子 × (x, y, mean)
+    assert len(rs) == len(TEMPS) * 2 * 2                         # 温度 × 载流子 × (x, y)，不出平均
+    assert "ADP_over_DPT" not in rs[0] and "E1_eV" in rs[0]      # [0030] 分方向参数列在、比值列没了
     assert json.loads((out / S.MU_T_JSON).read_text())["meta"]["dpt_scaling"] == "1/T"
     summ = (out / "comparison_summary.txt").read_text()
     assert summ.startswith("# 300 K") and "迁移率随温度" in summ
