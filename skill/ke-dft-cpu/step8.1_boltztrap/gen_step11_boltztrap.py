@@ -52,7 +52,7 @@ AMSET_DIR   = "step8_amset"            # 读 2d_correction.json 拿 c/t（若有
 AMSET2D_DIR = "step8.4_amset2d"        # [0016] 2D 不跑 S8 时，c/t 与掺杂档改读 S8.4
 STEP = "step8.1_boltztrap"
 # [0016] 版本戳：写进 boltztrap_crta.json 与 paper_mu_scan_*.csv 首行（以前没有，跨材料核对只能看文件时间）
-_SKILL_REV = "2026-10-08-0016-ct-source"
+_SKILL_REV = "2026-10-09-0021-tau-T"
 
 TEMPERATURES = [100, 200, 300, 400, 500, 600, 700, 800, 900]  # K
 # patch_mu_window：CRTA 类文献普遍把 μ 扫到带边上下 ±3 eV，ZT 峰
@@ -446,8 +446,21 @@ def _dpt_module():
         return None
 
 
-def _tau_from_json(cwd):
-    """回退通道：读 step8.2_dpt/dpt_result.json。"""
+def _tau_T_factor(j, T, is_2d=None):
+    """[0021] dpt_result.json 的 τ 是它 temperature_K（默认 300 K）下的值；换到 T：2D ×T0/T，3D ×(T0/T)^1.5。
+    返回 (因子, T0)。T=None -> (1, T0)。"""
+    T0 = float(j.get("temperature_K") or 300.0)
+    if T is None:
+        return 1.0, T0
+    if is_2d is None:
+        is_2d = j.get("is_2d") if j.get("is_2d") is not None else (str(j.get("dim")).lower() == "2d")
+    return ((T0 / float(T)) if is_2d else (T0 / float(T)) ** 1.5), T0
+
+
+def _tau_from_json(cwd, T=None, is_2d=None):
+    """读 step8.2_dpt/dpt_result.json 的 τ，换算到温度 T（[0021] 主通道）。
+    [0021] 以前不换温：gen 推到材料目录跑时 _dpt_module() 永远找不到模块（它找的是 <材料上一级>/step8.2_dpt/），
+    一直走这里，于是 600 K 的文献口径扫描用的是 300 K 的 τ —— σ/PF/κe(WF) 全部偏大 2 倍（2D τ∝1/T）。"""
     import json
     p = Path(cwd) / DPT_DIR / "dpt_result.json"
     if not p.is_file():
@@ -457,24 +470,34 @@ def _tau_from_json(cwd):
     except (OSError, ValueError):
         return {}
     M0, E_C = 9.1093837015e-31, 1.602176634e-19
+    f, T0 = _tau_T_factor(j, T, is_2d)
     out = {}
     for r in j.get("results", []):
         c, bd = r.get("carrier"), (r.get("by_direction") or {})
         if bd.get("status") == "ok":
-            out[c] = {d: bd[d]["tau_s"] for d in ("x", "y")}
+            out[c] = {d: bd[d]["tau_s"] * f for d in ("x", "y")}
             continue
         mu = r.get("mobility_cm2_Vs")
         me = (r.get("inputs") or {}).get("m_eff_m0")
         if isinstance(mu, (int, float)) and isinstance(me, (int, float)) \
                 and mu > 0 and me > 0:
-            t = (mu * 1e-4) * (me * M0) / E_C
+            t = (mu * 1e-4) * (me * M0) / E_C * f
             out[c] = {"x": t, "y": t}
             print("[WARN] %s 无分方向 τ，回落各向同性" % c)
+    if out and T is not None:
+        print("[OK] DPT τ 取自 %s/dpt_result.json（%.0f K），换算到 %.0f K（×%.4f）：%s"
+              % (DPT_DIR, T0, float(T), f, "；".join(
+                  "%s x=%.1f fs y=%.1f fs" % (c, v["x"] * 1e15, v["y"] * 1e15) for c, v in out.items())))
     return out
 
 
 def _tau_aniso(cwd, is_2d, T):
-    """{'electron': {'x':τ,'y':τ}, 'hole': {...}}。优先直接调 DPT 模块。"""
+    """{'electron': {'x':τ,'y':τ}, 'hole': {...}}，温度 T 下的值。
+    [0021] 优先读 S8.2 的 dpt_result.json（S8.2 实际报出的结果，含本材料 step.conf 的覆盖）并换温；
+    没有它才直接调 DPT 模块现算（模块调用不经 apply_conf，step.conf 覆盖不生效）。"""
+    out = _tau_from_json(cwd, T, is_2d)
+    if out:
+        return out
     m = _dpt_module()
     if m is not None:
         try:
@@ -491,8 +514,8 @@ def _tau_aniso(cwd, is_2d, T):
                     for c, v in out.items()))
                 return out
         except Exception as e:                                # noqa: BLE001
-            print("[WARN] 直接调用 DPT 失败（%s: %s）——改读 json" % (type(e).__name__, e))
-    return _tau_from_json(cwd)
+            print("[WARN] 直接调用 DPT 失败（%s: %s）" % (type(e).__name__, e))
+    return {}
 
 
 def _norm_2d(cwd, is_2d=True):

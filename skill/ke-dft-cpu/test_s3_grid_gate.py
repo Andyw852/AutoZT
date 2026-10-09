@@ -45,9 +45,10 @@ def _mat(a, c, mesh, dim="2D", hexagonal=True):
 class S3GridTests(unittest.TestCase):
     def test_crs2_old_grid_is_rejected(self):
         iss = kc.s3_grid_issues(_mat(3.04, 20, (15, 15, 1)))
-        self.assertEqual([lv for lv, _ in iss], ["error", "error", "error"])
+        self.assertEqual([lv for lv, _ in iss], ["error", "error", "error", "warn"])   # [0021] 15 是奇数：M 不在网格上
         self.assertIn("3.2 倍", iss[0][1])
         self.assertIn("kz = 1", iss[2][1])
+        self.assertIn("M = (1/2, 0)", iss[3][1])
 
     def test_current_grid_passes(self):
         self.assertEqual(kc.s3_grid_issues(_mat(3.21, 20, (48, 48, 3))), [])
@@ -69,7 +70,7 @@ class S3GridTests(unittest.TestCase):
     def test_inplane_only(self):                                       # [V174] S8.1 / S8.2
         self.assertEqual(kc.s3_grid_issues(_mat(3.04, 20, (48, 48, 1)), check_kz=False), [])
         iss = kc.s3_grid_issues(_mat(3.04, 20, (15, 15, 1)), check_kz=False)
-        self.assertEqual([lv for lv, _ in iss], ["error", "error"])
+        self.assertEqual([lv for lv, _ in iss], ["error", "error", "warn"])
 
     def test_missing_s3_is_silent(self):
         self.assertEqual(kc.s3_grid_issues(Path(tempfile.mkdtemp())), [])
@@ -78,7 +79,7 @@ class S3GridTests(unittest.TestCase):
         d = _mat(3.04, 20, (15, 15, 1))
         with self.assertRaises(SystemExit):
             kc.s3_grid_gate(d, "S8.4")
-        self.assertEqual(len(kc.s3_grid_gate(d, "S8.4", allow=True)), 3)
+        self.assertEqual(len(kc.s3_grid_gate(d, "S8.4", allow=True)), 4)
         self.assertEqual(kc.s3_grid_gate(_mat(3.21, 20, (48, 48, 3)), "S8.4"), [])
 
 
@@ -186,13 +187,13 @@ class DptGateTests(unittest.TestCase):                                  # [V174]
             rec = self.D.apply_conf(d)
             g = self.D._s3_grid_gate(d, "2d")
         self.assertTrue(rec["ALLOW_COARSE_S3"]["value"])
-        self.assertEqual((g["mesh"], len(g["issues"]), g["allow_coarse"]), ([15, 15, 1], 2, True))
+        self.assertEqual((g["mesh"], len(g["issues"]), g["allow_coarse"]), ([15, 15, 1], 3, True))
 
     def test_boltztrap_warns_only(self):
         import gen_step11_boltztrap as B
         with contextlib.redirect_stdout(io.StringIO()) as buf:
             g = B._s3_grid_note(_mat(3.04, 20, (15, 15, 1)), "2d")
-        self.assertEqual((g["mesh"], len(g["issues"])), ([15, 15, 1], 2))
+        self.assertEqual((g["mesh"], len(g["issues"])), ([15, 15, 1], 3))
         self.assertIn("BoltzTraP2 插值的就是这张网格", buf.getvalue())
 
 

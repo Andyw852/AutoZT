@@ -109,6 +109,15 @@ def align_kgrid(need, dim, axes, align3d="off", label="", quiet=False):
     return out
 
 
+def read_kpoints_gamma(kpoints: Path):
+    """[0021] 自动网格 KPOINTS 第 3 行：Gamma -> True，Monkhorst-Pack -> False，读不到 -> None。"""
+    try:
+        c = Path(kpoints).read_text(errors="ignore").splitlines()[2].strip()[:1].lower()
+    except (OSError, IndexError):
+        return None
+    return True if c == "g" else (False if c == "m" else None)
+
+
 def read_kpoints_mesh(kpoints: Path):
     """读 Γ/MP 自动网格 KPOINTS 第 4 行的 3 个分割数；读不到返回 None。"""
     try:
@@ -138,8 +147,45 @@ S3_KZ_MIN_2D = 3
 S3_DK_ERR_FACTOR = 2.0          # 面内间距超过规则这么多倍 -> 报错（规则以内的小差别只告警）
 
 
-def _mesh_rule_issues(mesh, s3, dim, check_kz, where):
-    """一张网格（按 S3 的晶胞和维度）是否合现行规则 -> [(level, msg)]；读不到晶胞返回 []。"""
+def _hex_inplane(lat, vac):
+    """面内两个晶格矢量等长、夹角 60°/120° -> 六方胞（K = (1/3, 1/3)）。"""
+    import numpy as np
+    ii = [i for i in range(3) if i != vac]
+    if len(ii) != 2:
+        return False
+    a, b = np.asarray(lat[ii[0]], float), np.asarray(lat[ii[1]], float)
+    la, lb = float(np.linalg.norm(a)), float(np.linalg.norm(b))
+    if la <= 0 or lb <= 0 or abs(la - lb) > 1e-3 * max(la, lb):
+        return False
+    cosg = float(np.dot(a, b)) / (la * lb)
+    return abs(abs(cosg) - 0.5) < 2e-3
+
+
+def _align_issues(mesh, lat, vac, where):
+    """[0021] 2D 面内高对称点是否落在 Γ 心网格上（align_kgrid 的现行规则：面内 6 的倍数）-> 至多一条 (level, msg)。
+    起因：SS/LS（六方晶格的矩形超胞）S3 的 y = 41，K/K' 折叠到 (0, 1/3)、(0, 2/3)，不在网格上；
+    WS2 的 S7 是 47×47（六方，47 不是 3 的倍数，K 不在网格上）。旧闸门只查间距和 kz，两者都放过了。
+      六方胞：有轴 N % 3 != 0 -> error（K 不在网格上，m*/形变势锚不到带边）；只是奇数 -> warn（M 不在网格上）。
+      其它胞：有轴 N 既不是 2 也不是 3 的倍数 -> error（1/2 的 X/M 和六方超胞折叠的 1/3 都不在）；缺一个 -> warn。"""
+    axes = [(i, int(mesh[i])) for i in range(3) if i != vac and int(mesh[i]) % 6 != 0]
+    if not axes:
+        return []
+    desc = "、".join("第 %d 轴 %d 分" % (i + 1, n) for i, n in axes)
+    rule = "（现行规则：2D 面内取 6 的倍数，见 align_kgrid）"
+    if _hex_inplane(lat, vac):
+        if any(n % 3 for _, n in axes):
+            return [("error", "%s %s：六方胞的 K = (1/3, 1/3) 不在 Γ 心网格上，m* 和形变势锚不到 K 谷%s"
+                     % (where, desc, rule))]
+        return [("warn", "%s %s：M = (1/2, 0) 不在网格上%s" % (where, desc, rule))]
+    if any(n % 2 and n % 3 for _, n in axes):
+        return [("error", "%s %s：1/2（X/M）和 1/3（六方晶格超胞折叠的 K）都不在 Γ 心网格上%s"
+                 % (where, desc, rule))]
+    return [("warn", "%s %s：1/2 或 1/3 的高对称点不在 Γ 心网格上%s" % (where, desc, rule))]
+
+
+def _mesh_rule_issues(mesh, s3, dim, check_kz, where, gamma=True):
+    """一张网格（按 S3 的晶胞和维度）是否合现行规则 -> [(level, msg)]；读不到晶胞返回 []。
+    gamma：网格是不是 Γ 心（[0021] 面内对齐只对 Γ 心网格有意义，MP 网格不查；None 按 Γ 心）。"""
     import numpy as np
     pos = s3 / "POSCAR"
     if not pos.is_file():
@@ -147,7 +193,8 @@ def _mesh_rule_issues(mesh, s3, dim, check_kz, where):
     try:
         dim = dim or read_method_dim(s3 / METHOD_FILE) or resolve_dim_for(pos, "auto")[0]
         vac = resolve_dim_for(pos, dim)[1] if dim == "2d" else None
-        rec = 2.0 * np.pi * np.linalg.inv(read_lattice_matrix(pos)).T
+        lat = read_lattice_matrix(pos)
+        rec = 2.0 * np.pi * np.linalg.inv(lat).T
     except (OSError, ValueError, IndexError, SystemExit):
         return []
     dk = S3_DK_MAX.get(dim, S3_DK_MAX["3d"])
@@ -165,6 +212,8 @@ def _mesh_rule_issues(mesh, s3, dim, check_kz, where):
     if check_kz and vac is not None and int(mesh[vac]) < S3_KZ_MIN_2D:
         out.append(("error", "%s 真空轴 kz = %d < %d：AMSET 沿 kz 外推而不是内插"
                     "（V8：插值网格一变 ADP 差 30–45%%）" % (where, mesh[vac], S3_KZ_MIN_2D)))
+    if dim == "2d" and vac is not None and gamma is not False:      # [0021]
+        out += _align_issues(mesh, lat, vac, where)
     return out
 
 
@@ -175,7 +224,8 @@ def s3_grid_issues(mat_dir, dim=None, check_kz=True):
     mesh = read_kpoints_mesh(s3 / "KPOINTS")
     if not mesh:
         return []
-    return _mesh_rule_issues(mesh, s3, dim, check_kz, "step3_uniform")
+    return _mesh_rule_issues(mesh, s3, dim, check_kz, "step3_uniform",
+                             gamma=read_kpoints_gamma(s3 / "KPOINTS"))
 
 
 def s7_grid_issues(mat_dir, dim=None):
@@ -189,18 +239,20 @@ def s7_grid_issues(mat_dir, dim=None):
     if not ref or not s7.is_dir():
         return []
     ref = [int(x) for x in ref]
-    diff = {}
+    diff, gam = {}, {}
     for kp in sorted(set(s7.glob("*/KPOINTS")) | set(s7.glob("*/ionrelax/KPOINTS"))):
         m = read_kpoints_mesh(kp)
         if m and [int(x) for x in m] != ref:
             diff.setdefault(tuple(int(x) for x in m), []).append(str(kp.parent.relative_to(s7)))
+            gam.setdefault(tuple(int(x) for x in m), read_kpoints_gamma(kp))
     out = []
     for m, dirs in sorted(diff.items()):
         # [V176] 写事实（哪条规则不合、比 S3 粗还是细），原因只在 S7 确实比 S3 粗时才推断：
         #   CrS2_ortho 的 S7 是 48×48×1、S3 是 15×15×1 —— S7 面内反而更细，只是 kz = 1；V175 的报错一律写成
         #   "S3 重算过、S7 没跟着重跑"，agent 照字面理解成了反方向。
         errs = [msg[len("step7_deform "):].split("：AMSET")[0]
-                for lv, msg in _mesh_rule_issues(m, s3, dim, True, "step7_deform") if lv == "error"]
+                for lv, msg in _mesh_rule_issues(m, s3, dim, True, "step7_deform", gamma=gam.get(m))
+                if lv == "error"]
         where = ", ".join(dirs[:4]) + (" 等 %d 个" % len(dirs) if len(dirs) > 4 else "")
         head = "step7_deform 的 %s 是 %s 网格，S3 是 %s" % (where, "×".join(map(str, m)), "×".join(map(str, ref)))
         if not errs:
@@ -240,7 +292,7 @@ def s3_grid_gate(mat_dir, label, allow=False, dim=None, check_kz=True, uses=None
     if any(lv == "error" for lv, _ in issues + s7):
         if not allow:
             sys.exit("[ERROR] %s：step3_uniform 的网格是旧规则下生成的，%s，结果不可信。\n"
-                     "        处理：retry step3_uniform（现行规则：2D 面内 ≤ %.2f Å⁻¹、kz ≥ %d）-> %s。\n"
+                     "        处理：retry step3_uniform（现行规则：2D 面内 ≤ %.2f Å⁻¹ 且分数取 6 的倍数、kz ≥ %d）-> %s。\n"
                      "        确实要用这张网格（复现旧结果）：本步 step.conf 写 ALLOW_COARSE_S3 = true。"
                      % (label, uses or "AMSET 的能带 / 波函数 / 形变势都在这张网格上", S3_DK_MAX["2d"],
                         S3_KZ_MIN_2D, redo or "S4 -> S7 -> S7.1 -> 本步；S7 会照抄新的 S3 网格"))

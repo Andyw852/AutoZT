@@ -33,7 +33,9 @@ from pathlib import Path
 # [SKILL_REV] 版本戳：写进 comparison_summary.txt。每次改本脚本逻辑后更新。
 #   陈旧副本已咬人三次（step12/step9b 盖戳后，step13 是最后一个没盖的），
 #   这里盖戳便于从产物反查到底跑的是哪份 skill 副本。
-_SKILL_REV = "2026-10-09-mu-vs-T"
+_SKILL_REV = "2026-10-09-0021"
+#   bump 记录：2026-10-09-0021 —— DPT 的 μ/τ 换到 TARGET_T（S8.2 的 TEMPERATURE_K 可改了）；
+#   2D 只有真实重叠、没有 unity 对照不再判红（2026-09-26 起真实重叠是出厂默认）。
 #   bump 记录：2026-10-09-mu-vs-T —— [0020] 增加 μ(T) 三值表 comparison_vs_T.csv/json + mobility_vs_T.png。
 #   bump 记录：2026-09-16-amset2d —— 增加 step8.4_amset2d（二维散射核）对比列；
 #   仅在目录存在时读取，**不写进 needs**，以免 3D 项目因缺这个步骤而卡住。
@@ -186,7 +188,8 @@ def _read_dim(cwd):
 def overlap_grade_only_real(dim):
     """只有"真实重叠"运行、没有 unity 对照时的判级：返回 "2d" 或 "3d"。
 
-    2d：去对称化已实测会把重叠算坏（V23）-> 红，必须用 unity 重跑。
+    2d：[0021] 不再判红。V23（去对称化把重叠算坏）由 S8.4 的 overlap_preflight 按反演判据把关
+        （全网格 h5 / IBZ + 相位补丁，不安全就拦截），2026-09-26 起真实重叠是 2D 出厂默认。
     3d / 维度读不到（本模块其它地方一律"按 3D 处理"）：黄 —— 受影响面已确认，
         是否真算错待 Si 全网格对照（V25）。
     """
@@ -352,19 +355,46 @@ def _dpt_m_d(bd, r):
     return r.get("inputs", {}).get("m_eff_m0")
 
 
+def _dpt_T_factor(j, T):
+    """[0021] dpt_result.json 的 μ/τ 是它 temperature_K 下的值，换到 T：2D ×T0/T，3D ×(T0/T)^1.5。"""
+    T0 = float(j.get("temperature_K") or 300.0)
+    is2d = j.get("is_2d") if j.get("is_2d") is not None else (str(j.get("dim")).lower() == "2d")
+    return ((T0 / T) if is2d else (T0 / T) ** 1.5), T0
+
+
+def _scale_dir(bd, f):
+    """by_direction 的 x/y μ 与 τ 同乘 f（返回新 dict，不改原数据）。"""
+    if not (isinstance(bd, dict) and bd.get("status") == "ok") or f == 1.0:
+        return bd
+    out = dict(bd)
+    for d in ("x", "y"):
+        if isinstance(bd.get(d), dict):
+            q = dict(bd[d])
+            for k in ("mobility_cm2_Vs", "tau_s"):
+                if isinstance(q.get(k), (int, float)):
+                    q[k] = q[k] * f
+            out[d] = q
+    return out
+
+
 def load_dpt(cwd):
     j = _load_json(Path(cwd) / DPT_DIR / "dpt_result.json")
     if not j:
         return None
-    out = {"T_used": j.get("temperature_K", 300.0)}
+    # [0021] 对比在 TARGET_T：S8.2 的 TEMPERATURE_K 不是它时，μ 与 τ 一并换温（以前直接拿来比）
+    f, T0 = _dpt_T_factor(j, TARGET_T)
+    out = {"T_used": TARGET_T if abs(f - 1.0) > 1e-12 else T0, "T0": T0}
+    if abs(f - 1.0) > 1e-12:
+        print("[..] DPT 结果在 %.0f K，换算到 %.0f K（×%.4f）再对比" % (T0, TARGET_T, f))
     for r in j.get("results", []):
         carrier = r["carrier"]
         bd = r.get("by_direction")
         # [fix m*口径] 主 μ/m* 取 by_direction 的 m_d + 面内平均 μ，
         #   不再用 inputs 的 3 点抛物 m*（后者 μ 系统性偏高一倍）。
-        out[carrier] = _dpt_inplane_mu(bd, r)
+        mu = _dpt_inplane_mu(bd, r)
+        out[carrier] = (mu * f) if isinstance(mu, (int, float)) else mu
         out["m_" + carrier] = _dpt_m_d(bd, r)
-        out["dir_" + carrier] = bd   # patch_bt2_dir
+        out["dir_" + carrier] = _scale_dir(bd, f)   # patch_bt2_dir
         # [C6/C7] 真空对齐的 edge_flip / vac_align / provenance
         out["E1_prov_" + r["carrier"]] = r.get("inputs", {}).get("E1_provenance", "")
     # step7b_deform_read/band_edges.json 的 edge_flip / vac_align / window_scan
@@ -1243,16 +1273,19 @@ def main():
                 print("[重叠报警] ADP 比值在 [1, N_v] 内。")
         elif _r and not _u:
             # 只跑了真实重叠、没有 unity 对照 -> 按维数分档（V25）：
-            #   2D：红色（已实测会错，必须用 unity 重跑）
+            #   2D：[0021] 只提示（以前判红，要求 unity 重跑 —— 与 09-26 起的出厂默认矛盾）
             #   3D：黄色（Si 全网格对照已出：ADP/overall 差 3~9%、IMP 逐机制高 1.3~1.7 倍）
             if overlap_grade_only_real(dim) == "3d":
                 print("[重叠报警] **黄色**：三维 + 真实重叠（无 unity 对照）——"
                       "Si 全网格对照（V26）：ADP/overall 只差 3~9%，但 IMP 逐机制偏高 1.3~1.7 倍。"
                       "**采纳前需人工确认逐机制值**。")
             else:
-                print("[重叠报警] ★ 红色：2D + 真实重叠（无 unity 对照）——"
-                      "去对称化已实测会把重叠算坏（V23），**必须用 unity_overlap 重跑本步**，"
-                      "该结果不得进入 zT 汇总。")
+                # [0021] 2026-09-26 起 2D 出厂就是真实重叠：V23 的根因（无反演体系去对称化算坏重叠）由 S8.4 的
+                #   overlap_preflight 按反演判据处理 —— 全网格 h5（WAVEFUNCTION_FULL）或 IBZ + 相位补丁，不安全就拦截。
+                #   以前这里一律判红、要求 unity 重跑，与出厂默认矛盾（unity 的 μ 系统性偏低，只作数量级筛选）。
+                print("[重叠报警] 2D + 真实重叠（出厂默认，无 unity 对照）：不做比值报警。去对称化风险由 S8.4 的"
+                      "overlap_preflight 按反演判据把关（全网格 h5 或 IBZ + 相位补丁，不安全就拦截）；"
+                      "要核对就看 S8.4 生成日志里 WAVEFUNCTION_FULL / 真实重叠那几行。")
         else:
             print("[..] 重叠报警：只找到 %d 个 unity / %d 个真实重叠运行，跳过。"
                   % (len(_u), len(_r)))
