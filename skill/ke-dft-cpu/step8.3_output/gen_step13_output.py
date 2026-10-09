@@ -18,6 +18,10 @@ run:gen 步骤：登录节点直接跑、秒级。读取
     2D 面内各向异性(xx≠yy)时，另出 S_xx/S_yy、σ_xx/σ_yy、κ_xx/κ_yy 分方向列，ZT 分方向算。
 
 产物（done_marker）：comparison_300K.png + comparison_300K.csv + comparison_summary.txt
+[0020] 另出迁移率随温度表（尽力而为，不影响完成标记）：comparison_vs_T.csv / .json + mobility_vs_T.png ——
+  每个温度（AMSET 的温度网格，默认 100–900 K）× 载流子（取最低掺杂）× 方向（2D x / y / 面内平均）：
+  DPT（由 dpt_result.json 的 temperature_K 换算，2D ∝1/T、3D ∝T^-1.5）、AMSET 只 ADP（intrinsic_ADP.json，
+  没有就用 transport.json 的 ADP 单机制）、AMSET 本征（intrinsic_transport.json，去 IMP）、AMSET 全机制（overall）。
 缺任一输入都不崩，能画多少画多少。
 """
 import json
@@ -29,7 +33,8 @@ from pathlib import Path
 # [SKILL_REV] 版本戳：写进 comparison_summary.txt。每次改本脚本逻辑后更新。
 #   陈旧副本已咬人三次（step12/step9b 盖戳后，step13 是最后一个没盖的），
 #   这里盖戳便于从产物反查到底跑的是哪份 skill 副本。
-_SKILL_REV = "2026-09-16-amset2d"
+_SKILL_REV = "2026-10-09-mu-vs-T"
+#   bump 记录：2026-10-09-mu-vs-T —— [0020] 增加 μ(T) 三值表 comparison_vs_T.csv/json + mobility_vs_T.png。
 #   bump 记录：2026-09-16-amset2d —— 增加 step8.4_amset2d（二维散射核）对比列；
 #   仅在目录存在时读取，**不写进 needs**，以免 3D 项目因缺这个步骤而卡住。
 
@@ -784,6 +789,224 @@ def write_table(out, rows, am, bt, dpt, am2=None):
 
 
 # ---------- 图 ----------
+# ---------- [0020] 迁移率随温度：DPT / AMSET 只 ADP / AMSET 本征 / AMSET 全机制 ----------
+MU_T_CSV = "comparison_vs_T.csv"
+MU_T_JSON = "comparison_vs_T.json"
+MU_T_PNG = "mobility_vs_T.png"
+MU_T_COLS = ("mu_DPT", "mu_AMSET_ADP", "mu_AMSET_intrinsic", "mu_AMSET_all")
+
+
+def _dirs(is_2d):
+    return ("x", "y", "mean") if is_2d else ("x", "y", "z", "mean")
+
+
+def _t_dirs(t33, is_2d):
+    """3×3 张量 -> {"x","y",("z"),"mean"}；2D mean=(xx+yy)/2，3D mean=迹/3。"""
+    d = {"x": float(t33[0][0]), "y": float(t33[1][1])}
+    if not is_2d:
+        d["z"] = float(t33[2][2])
+    d["mean"] = _diag_avg(t33, is_2d)
+    return d
+
+
+def _amset_mu_T_sources(cwd):
+    """选 AMSET 运行目录（2D 有 step8.4_amset2d 就用它）并读三套迁移率。
+    返回 {"run", "doping", "temps", "cols": {列名: arr[ndop][nT][3][3]}, "src": {列名: 说明}, "intrinsic_labels"}；没有 -> None。"""
+    for run in (AMSET2D_DIR, AMSET_DIR):
+        j = _load_json(Path(cwd) / run / "transport.json")
+        if j:
+            break
+    else:
+        return None
+    doping = [float(x) for x in _unwrap(j["doping"])]
+    temps = [float(t) for t in _unwrap(j["temperatures"])]
+    mob = j.get("mobility") or {}
+    cols, src = {}, {}
+    over = _unwrap(mob.get("overall") or mob.get("Overall"))
+    if over is not None:
+        cols["mu_AMSET_all"], src["mu_AMSET_all"] = over, "%s/transport.json mobility.overall" % run
+
+    def _intr(name):
+        q = _load_json(Path(cwd) / run / name)
+        if not q:
+            return None, None
+        try:
+            ok = (len(q["doping_cm3"]) == len(doping) and len(q["temperatures_K"]) == len(temps)
+                  and all(abs(float(a) - b) <= 1e-6 * max(1.0, abs(b)) for a, b in zip(q["doping_cm3"], doping))
+                  and all(abs(float(a) - b) < 1e-6 for a, b in zip(q["temperatures_K"], temps)))
+        except (KeyError, TypeError, ValueError):
+            ok = False
+        if not ok:
+            print("[WARN] %s/%s 的掺杂/温度网格与 transport.json 不同（不是同一次运行？）——不用" % (run, name))
+            return None, None
+        return q["intrinsic"]["mobility_cm2_Vs_s"].get("overall"), q
+
+    adp, q_adp = _intr("intrinsic_ADP.json")
+    if adp is not None:
+        cols["mu_AMSET_ADP"] = adp
+        src["mu_AMSET_ADP"] = "%s/intrinsic_ADP.json（只留 %s 重积分）" % (
+            run, "+".join(q_adp.get("intrinsic_labels") or ["ADP"]))
+    else:
+        a = _unwrap(mob.get("ADP") or mob.get("ACD"))
+        if a is not None:
+            cols["mu_AMSET_ADP"] = a
+            src["mu_AMSET_ADP"] = "%s/transport.json mobility.ADP（单机制）" % run
+    intr, q_in = _intr("intrinsic_transport.json")
+    labels = None
+    if intr is not None:
+        labels = list(q_in.get("intrinsic_labels") or [])
+        cols["mu_AMSET_intrinsic"] = intr
+        src["mu_AMSET_intrinsic"] = "%s/intrinsic_transport.json（%s，去 %s）" % (
+            run, "+".join(labels) or "?", "+".join(q_in.get("intrinsic_dropped") or []) or "?")
+    return {"run": run, "doping": doping, "temps": temps, "cols": cols, "src": src,
+            "intrinsic_labels": labels}
+
+
+def _dpt_mu_T(cwd, is_2d):
+    """dpt_result.json -> (T0, {载流子: {"x","y",("z"),"mean"} @T0}, 来源)；没有 -> (None, {}, None)。"""
+    j = _load_json(Path(cwd) / DPT_DIR / "dpt_result.json")
+    if not j:
+        return None, {}, None
+    T0 = float(j.get("temperature_K") or 300.0)
+    out, how = {}, {}
+    for r in j.get("results", []):
+        bd = r.get("by_direction")
+        if is_2d and isinstance(bd, dict) and bd.get("status") == "ok":
+            d = {"x": bd["x"]["mobility_cm2_Vs"], "y": bd["y"]["mobility_cm2_Vs"]}
+            d["mean"] = (d["x"] + d["y"]) / 2.0
+            how[r["carrier"]] = "by_direction"
+        elif isinstance(r.get("mobility_cm2_Vs"), (int, float)):
+            v = float(r["mobility_cm2_Vs"])
+            d = {k: v for k in _dirs(is_2d)}
+            how[r["carrier"]] = "header（各向同性）"
+        else:
+            continue
+        out[r["carrier"]] = d
+    return T0, out, how
+
+
+def build_mu_vs_T(cwd, is_2d):
+    """[0020] μ(T) 三值表的行。温度网格 = AMSET 的；没有 AMSET 就用 dpt_result.json 的 temperatures_K。"""
+    am = _amset_mu_T_sources(cwd)
+    T0, dpt, dpt_how = _dpt_mu_T(cwd, is_2d)
+    if not am and not dpt:
+        return None
+    cfac = _areal_factor_cm(cwd) if is_2d else None
+    if am:
+        temps = am["temps"]
+        picks = {}
+        for i, x in enumerate(am["doping"]):
+            car = "electron" if x < 0 else ("hole" if x > 0 else None)
+            if car and (car not in picks or abs(x) < abs(am["doping"][picks[car]])):
+                picks[car] = i
+    else:
+        jd = _load_json(Path(cwd) / DPT_DIR / "dpt_result.json") or {}
+        temps = [float(t) for t in (jd.get("temperatures_K") or [T0])]
+        picks = {c: None for c in dpt}
+    rows = []
+    for car in ("electron", "hole"):
+        if car not in picks and car not in dpt:
+            continue
+        i = picks.get(car)
+        for it, T in enumerate(temps):
+            f = ((T0 / T) if is_2d else (T0 / T) ** 1.5) if T0 else None
+            vals = {}
+            if car in dpt and f:
+                vals["mu_DPT"] = {k: v * f for k, v in dpt[car].items()}
+            if am and i is not None:
+                for c, arr in am["cols"].items():
+                    try:
+                        vals[c] = _t_dirs(arr[i][it], is_2d)
+                    except (IndexError, TypeError):
+                        pass
+            x = am["doping"][i] if (am and i is not None) else None
+            for d in _dirs(is_2d):
+                row = {"T_K": T, "carrier": car, "direction": d, "doping_cm3": x,
+                       "n2D_cm2": (abs(x) * cfac if (x is not None and cfac) else None)}
+                for c in MU_T_COLS:
+                    v = (vals.get(c) or {}).get(d)
+                    row[c] = v if (v is not None and v == v) else None
+                a, dp, al = row["mu_AMSET_ADP"], row["mu_DPT"], row["mu_AMSET_all"]
+                row["ADP_over_DPT"] = (a / dp) if (a and dp) else None
+                row["all_over_ADP"] = (al / a) if (al and a) else None
+                rows.append(row)
+    meta = {"is_2d": is_2d, "dpt_T0_K": T0, "dpt_source": dpt_how,
+            "dpt_scaling": ("1/T" if is_2d else "T^-1.5"),
+            "amset_run": am["run"] if am else None, "amset_sources": am["src"] if am else {},
+            "intrinsic_labels": am["intrinsic_labels"] if am else None,
+            "doping_choice": "每种载流子取 |掺杂| 最低的一档（最接近 DPT 的非简并口径）",
+            "temperatures_K": temps, "skill_rev": _SKILL_REV}
+    return {"meta": meta, "rows": rows}
+
+
+def write_mu_vs_T(out, cwd, is_2d):
+    """[0020] 写 comparison_vs_T.csv / .json + mobility_vs_T.png，并在 comparison_summary.txt 末尾追加 μ(T) 表。"""
+    import csv
+    res = build_mu_vs_T(cwd, is_2d)
+    if not res or not res["rows"]:
+        print("[..] μ(T) 表：没有 AMSET 也没有 DPT 结果，跳过")
+        return None
+    head = ["T_K", "carrier", "direction", "doping_cm3", "n2D_cm2"] + list(MU_T_COLS) + ["ADP_over_DPT", "all_over_ADP"]
+
+    def _fmt(v):
+        return "" if v is None else (("%.6g" % v) if isinstance(v, float) else v)
+    with open(out / MU_T_CSV, "w", newline="") as fh:
+        m = res["meta"]
+        fh.write("# 迁移率随温度（cm²/Vs）；DPT 由 %s K 按 %s 换算（%s）；AMSET=%s；%s\n" % (
+            m["dpt_T0_K"], m["dpt_scaling"], m["dpt_source"], m["amset_run"], m["doping_choice"]))
+        for c, sdesc in sorted(m["amset_sources"].items()):
+            fh.write("# %s <- %s\n" % (c, sdesc))
+        w = csv.writer(fh)
+        w.writerow(head)
+        for r in res["rows"]:
+            w.writerow([_fmt(r[k]) for k in head])
+    (out / MU_T_JSON).write_text(json.dumps(res, ensure_ascii=False, indent=1), encoding="utf-8")
+    lines = ["", "# [0020] 迁移率随温度（%s，cm²/Vs；全表见 %s）" % ("面内平均" if is_2d else "迹/3", MU_T_CSV),
+             "# %-8s %6s %10s %10s %10s %10s %9s" % ("carrier", "T(K)", "DPT", "AMSET_ADP", "intrinsic", "all",
+                                                    "ADP/DPT")]
+    for r in res["rows"]:
+        if r["direction"] != "mean":
+            continue
+        lines.append("  %-8s %6.0f %10s %10s %10s %10s %9s" % (
+            r["carrier"], r["T_K"], *[("%.1f" % r[c]) if r[c] is not None else "—" for c in MU_T_COLS],
+            ("%.2f" % r["ADP_over_DPT"]) if r["ADP_over_DPT"] is not None else "—"))
+    try:
+        with open(out / "comparison_summary.txt", "a", encoding="utf-8") as fh:
+            fh.write("\n".join(lines) + "\n")
+    except OSError:
+        pass
+    try:
+        _plot_mu_vs_T(out, res)
+    except Exception as e:                                     # noqa: BLE001
+        print("[WARN] μ(T) 图失败（%s: %s）——表已生成" % (type(e).__name__, e))
+    print("[OK] μ(T) 表：%s / %s（%d 个温度）" % (MU_T_CSV, MU_T_JSON, len(res["meta"]["temperatures_K"])))
+    return res
+
+
+def _plot_mu_vs_T(out, res):
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    style = {"mu_DPT": ("k", "-", "DPT"), "mu_AMSET_ADP": ("C0", "--", "AMSET ADP"),
+             "mu_AMSET_intrinsic": ("C2", "-.", "AMSET intrinsic"), "mu_AMSET_all": ("C3", ":", "AMSET all")}
+    cars = [c for c in ("electron", "hole") if any(r["carrier"] == c for r in res["rows"])]
+    fig, axs = plt.subplots(1, len(cars), figsize=(5.5 * len(cars), 4.2), squeeze=False)
+    for ax, car in zip(axs[0], cars):
+        rs = [r for r in res["rows"] if r["carrier"] == car and r["direction"] == "mean"]
+        for c, (col, ls, lab) in style.items():
+            pts = [(r["T_K"], r[c]) for r in rs if r[c]]
+            if pts:
+                ax.plot(*zip(*pts), color=col, ls=ls, marker="o", ms=3, label=lab)
+        ax.set_yscale("log")
+        ax.set_xlabel("T (K)")
+        ax.set_ylabel("mobility (cm$^2$/Vs)")
+        ax.set_title(car)
+        ax.legend(fontsize=8)
+    fig.tight_layout()
+    fig.savefig(out / MU_T_PNG, dpi=130)
+    plt.close(fig)
+
+
 def make_figure(out, am, bt, dpt, am2=None):
     import matplotlib
     matplotlib.use("Agg")
@@ -973,6 +1196,10 @@ def main():
         make_figure(out, am, bt, dpt, am2=am2)
     except Exception as e:
         print("[WARN] 画图失败（%s: %s）——表已生成，图跳过" % (type(e).__name__, e))
+    try:                                              # [0020] μ(T)，尽力而为，不影响完成标记
+        write_mu_vs_T(out, cwd, is_2d)
+    except Exception as e:                            # noqa: BLE001
+        print("[WARN] μ(T) 表失败（%s: %s）——300 K 对比不受影响" % (type(e).__name__, e))
     for _l in resolve_kappa_L(cwd)[2]:                # patch_kl_auto
         print("[..] " + _l)
 
@@ -1032,7 +1259,7 @@ def main():
     except Exception as _e:
         print("[WARN] 重叠报警检查失败（%s: %s）——不影响主表" % (type(_e).__name__, _e))
 
-    print("[DONE] %s：comparison_300K.png / .csv / summary.txt 已生成" % OUTDIR_NAME)
+    print("[DONE] %s：comparison_300K.png / .csv / summary.txt 已生成（μ(T)：%s）" % (OUTDIR_NAME, MU_T_CSV))
 
 
 if __name__ == "__main__":

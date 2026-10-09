@@ -7,16 +7,18 @@
 AMSET 的约定：负掺杂 = n 型（电子），正掺杂 = p 型（空穴）—— 唯一真源是 ke_common.carrier_of_doping。
 本工具另用 Seebeck 的符号自检（n 型 S < 0、p 型 S > 0）：对不上就标 ★，说明载流子判反了或数据有问题。
 
-输出（指定温度，默认 300 K）：每个掺杂一行 —— 载流子、Seebeck、overall 与各机制迁移率（2D 取面内 xx/yy 平均，
+输出（指定温度，默认 300 K；--T all = AMSET 的全部温度，每个温度一段）：每个掺杂一行 —— 载流子、Seebeck、overall 与各机制迁移率（2D 取面内 xx/yy 平均，
 3D 取迹/3），以及 DPT（step8.2_dpt/dpt_result.json 同一载流子）和 ADP/DPT。
 [0017] 2D 的 DPT 取 by_direction 的面内平均（全 BZ 二次型 m_d，与 S8.3、JAP Table I 同口径），
 没有时退回 header 的 mobility_cm2_Vs；实际取了哪个写在表头和 --json 的 DPT_source。
+[0020] DPT 按 AMSET 实际取的温度换算（2D ∝1/T，3D ∝T^-1.5，基准是 dpt_result.json 的 temperature_K）；
+以前 --T 600 时 DPT 仍是 300 K 的值，ADP/DPT 偏 2 倍。
 ADP/DPT 超出 [1/3, 3]：标 ⚠，提示用 tools/dp_valley_probe.py 查是不是多谷（V141/V142）。
   例外（只注明、不提示多谷）：n/N_eff ≥ 0.5（接近/进入简并，DPT 的非简并统计不成立，V146）；
   DPT 的 m* 取自简并带边（单带公式只是近似，V145）；DPT 的 m* 网格分辨不出带边曲率（V147）。
 
 用法（在材料目录）：
-    python <skill>/ke-dft-cpu/tools/mobility_vs_dpt.py [--run step8.4_amset2d] [--T 300] [--json out.json]
+    python <skill>/ke-dft-cpu/tools/mobility_vs_dpt.py [--run step8.4_amset2d] [--T 300|600|all] [--json out.json]
     --run 默认：有 step8.4_amset2d/transport.json 用它，否则 step8_amset。
 退出码：0 正常；1 有 ★（Seebeck 符号与载流子不符）；2 输入问题。
 """
@@ -88,6 +90,25 @@ def _dpt(path):
     return out, deg
 
 
+def dpt_T0(path):
+    """[0020] DPT 结果对应的温度（dpt_result.json 的 temperature_K；没有为 300）。"""
+    p = Path(path)
+    if p.is_file():
+        try:
+            v = json.loads(p.read_text(encoding="utf-8")).get("temperature_K")
+            if isinstance(v, (int, float)) and v > 0:
+                return float(v)
+        except ValueError:
+            pass
+    return 300.0
+
+
+def dpt_at_T(dpt, T0, T, is_2d):
+    """[0020] {载流子: μ(T0)} -> {载流子: μ(T)}：2D Bardeen-Shockley ∝1/T，3D ∝T^-1.5。"""
+    f = (T0 / T) if is_2d else (T0 / T) ** 1.5
+    return {c: (round(v * f, 3) if isinstance(v, (int, float)) else v) for c, v in (dpt or {}).items()}
+
+
 def dpt_sources(path):
     """{"electron": "by_direction"|"header", ...}：DPT 迁移率取自哪个口径（写进输出，跨材料核对用）。"""
     out = {}
@@ -135,7 +156,8 @@ def degeneracy_ratio(doping, m_eff, T, is_2d, c_A=None):
     return n / (2.509e19 * float(m_eff) ** 1.5 * (T / 300.0) ** 1.5)
 
 
-def rows(transport, T=300.0, is_2d=True, dpt=None, masses=None, c_A=None):
+def rows(transport, T=300.0, is_2d=True, dpt=None, masses=None, c_A=None, dpt_T0=None):
+    """dpt_T0：DPT 值对应的温度；给了就把 DPT 换算到 AMSET 实际取的温度（[0020]），None = 原样用。"""
     d = transport
     dop = np.asarray(d["doping"], float)
     temps = np.asarray(d["temperatures"], float)
@@ -144,6 +166,8 @@ def rows(transport, T=300.0, is_2d=True, dpt=None, masses=None, c_A=None):
     mechs = [m for m in mob if m != "overall" and mob[m] is not None]
     S = np.asarray(d["seebeck"], float)
     dpt = dpt or {}
+    if dpt_T0:
+        dpt = dpt_at_T(dpt, float(dpt_T0), float(temps[it]), is_2d)
     out = []
     for i, x in enumerate(dop):
         car = kc.carrier_of_doping(x)
@@ -170,10 +194,17 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("path", nargs="?", default=".", help="材料目录（默认当前目录）")
     ap.add_argument("--run", default=None, help="step8.4_amset2d / step8_amset（默认自动）")
-    ap.add_argument("--T", type=float, default=300.0)
+    ap.add_argument("--T", default="300", help="温度 K（取 AMSET 网格上最近的点），或 all = 全部温度")
     ap.add_argument("--json", default=None)
     a = ap.parse_args(argv)
     mat = Path(a.path)
+    want_all = str(a.T).strip().lower() == "all"
+    if not want_all:
+        try:
+            float(a.T)
+        except ValueError:
+            print("[ERROR] --T %r：写温度（K）或 all" % a.T, file=sys.stderr)
+            return 2
     run = a.run or ("step8.4_amset2d" if (mat / "step8.4_amset2d" / "transport.json").is_file() else "step8_amset")
     tj = mat / run / "transport.json"
     if not tj.is_file():
@@ -190,18 +221,38 @@ def main(argv=None):
             c_A = json.loads((mat / run / "2d_correction.json").read_text(encoding="utf-8")).get("cell_c_A")
         except ValueError:
             c_A = None
+    T0 = dpt_T0(mat / "step8.2_dpt" / "dpt_result.json")              # [0020]
     try:
-        rs, mechs = rows(json.loads(tj.read_text(encoding="utf-8")), a.T, is_2d, dpt, masses, c_A)
+        tdat = json.loads(tj.read_text(encoding="utf-8"))
+        if want_all:
+            Ts = [float(t) for t in np.asarray(tdat["temperatures"], float)]
+        else:
+            Ts = [float(a.T)]
+        blocks = [rows(tdat, T, is_2d, dpt, masses, c_A, dpt_T0=T0) for T in Ts]
     except (KeyError, ValueError, IndexError) as e:
         print("[ERROR] 读 %s 失败：%s: %s" % (tj, type(e).__name__, e), file=sys.stderr)
         return 2
     srcs = dpt_sources(mat / "step8.2_dpt" / "dpt_result.json")      # [0017]
+    bad, allrows = 0, []
+    for rs, mechs in blocks:
+        for r in rs:
+            r["DPT_source"] = srcs.get(r["carrier"])
+        bad += _print_block(tj, is_2d, rs, mechs, dpt, srcs, T0, deg, coarse, Ts[0])
+        allrows.extend(rs)
+    if a.json:
+        Path(a.json).write_text(json.dumps(allrows, ensure_ascii=False, indent=1), encoding="utf-8")
+    return 1 if bad else 0
+
+
+def _print_block(tj, is_2d, rs, mechs, dpt, srcs, T0, deg, coarse, T_req):
+    """一个温度一段表；返回 ★（Seebeck 符号不符）的行数。"""
+    T_used = rs[0]["T"] if rs else T_req
     print("%s（%s，%g K，迁移率 cm²/Vs，%s；载流子按 AMSET 约定：负掺杂 = 电子）"
-          % (tj, "2D 面内 xx/yy 平均" if is_2d else "3D 迹/3", rs[0]["T"] if rs else a.T,
-             ("DPT 来自 step8.2_dpt（%s）" % "、".join("%s=%s" % kv for kv in sorted(srcs.items())))
+          % (tj, "2D 面内 xx/yy 平均" if is_2d else "3D 迹/3", T_used,
+             ("DPT 来自 step8.2_dpt（%s%s）" % ("、".join("%s=%s" % kv for kv in sorted(srcs.items())),
+                                             "" if abs(T_used - T0) < 1e-6
+                                             else "；由 %g K 按 %s 换算" % (T0, "1/T" if is_2d else "T^-1.5")))
              if any(dpt.values()) else "没有 DPT 结果"))
-    for r in rs:
-        r["DPT_source"] = srcs.get(r["carrier"])
     cols = ["overall"] + mechs
     print("  %-12s %-8s %9s " % ("doping/cm⁻³", "载流子", "S/μV·K⁻¹") + " ".join("%9s" % c for c in cols)
           + " %9s %9s" % ("DPT", "ADP/DPT"))
@@ -227,9 +278,7 @@ def main(argv=None):
         print("  %-12.4g %-8s %9.1f " % (r["doping"], LABEL.get(r["carrier"], "本征"), r["seebeck_uV_K"])
               + " ".join("%9s" % (r.get(c, "")) for c in cols)
               + " %9s %9s" % (r["DPT"] if r["DPT"] is not None else "-", q if q is not None else "-") + flag)
-    if a.json:
-        Path(a.json).write_text(json.dumps(rs, ensure_ascii=False, indent=1), encoding="utf-8")
-    return 1 if bad else 0
+    return bad
 
 
 if __name__ == "__main__":
