@@ -33,7 +33,7 @@ from pathlib import Path
 # [SKILL_REV] 版本戳：写进 comparison_summary.txt。每次改本脚本逻辑后更新。
 #   陈旧副本已咬人三次（step12/step9b 盖戳后，step13 是最后一个没盖的），
 #   这里盖戳便于从产物反查到底跑的是哪份 skill 副本。
-_SKILL_REV = "2026-10-09-0021"
+_SKILL_REV = "2026-10-09-0022"
 #   bump 记录：2026-10-07-v181 —— 汇总里写明泛函（csv 的 functional 列 + summary 的 [口径] 行）。
 #   bump 记录：2026-10-09-0021 —— DPT 的 μ/τ 换到 TARGET_T（S8.2 的 TEMPERATURE_K 可改了）；
 #   2D 只有真实重叠、没有 unity 对照不再判红（2026-09-26 起真实重叠是出厂默认）。
@@ -402,6 +402,32 @@ def _scale_dir(bd, f):
     return out
 
 
+def _mv_at(mv, T):
+    """[0022] dpt_result.json 多谷块（multi_valley）在温度 T 的值 {x, y, mean, tau_x, tau_y}。多谷不是 ∝1/T
+    （谷间布居随 T 变）：正好有这一档就取，夹在两档之间按 log–log 线性插值，网格外 -> None（不外推）。"""
+    import math
+    if not (isinstance(mv, dict) and mv.get("status") == "ok"):
+        return None
+    rows = sorted(mv.get("mobility_vs_T") or [], key=lambda r: r["T_K"])
+    keys = (("x", "mobility_x_cm2_Vs"), ("y", "mobility_y_cm2_Vs"), ("tau_x", "tau_x_s"), ("tau_y", "tau_y_s"))
+    hit = None
+    for r in rows:
+        if abs(float(r["T_K"]) - float(T)) < 1e-6:
+            hit = {k: float(r[c]) for k, c in keys}
+    for a, b in zip(rows, rows[1:]):
+        if hit is None and float(a["T_K"]) < float(T) < float(b["T_K"]):
+            t = math.log(float(T) / a["T_K"]) / math.log(b["T_K"] / a["T_K"])
+            hit = {k: math.exp(math.log(a[c]) + t * math.log(b[c] / a[c])) for k, c in keys}
+    if hit:
+        hit["mean"] = (hit["x"] + hit["y"]) / 2.0
+    return hit
+
+
+def _mv_desc(mv):
+    """'Q×6 ΔE=0.000 / K×2 ΔE=0.030' —— 多谷块里有哪些谷。"""
+    return " / ".join("%s×%d ΔE=%.3f" % (v["label"], v["g"], v["dE_eV"]) for v in (mv or {}).get("valleys") or [])
+
+
 def load_dpt(cwd):
     j = _load_json(Path(cwd) / DPT_DIR / "dpt_result.json")
     if not j:
@@ -420,6 +446,22 @@ def load_dpt(cwd):
         out[carrier] = (mu * f) if isinstance(mu, (int, float)) else mu
         out["m_" + carrier] = _dpt_m_d(bd, r)
         out["dir_" + carrier] = _scale_dir(bd, f)   # patch_bt2_dir
+        # [0022] 多谷 DPT：另列一栏对照；单谷算不出（带边在 Q 这类非高对称谷）时主栏也用它
+        mv = r.get("multi_valley") or {}
+        mvT = _mv_at(mv, out["T_used"])
+        if mvT:
+            out["mv_" + carrier] = mvT
+            out["mv_desc_" + carrier] = _mv_desc(mv)
+            if not isinstance(out[carrier], (int, float)):
+                out[carrier] = mvT["mean"]
+                out["m_" + carrier] = (mv["x"]["m_c_m0"] + mv["y"]["m_c_m0"]) / 2.0
+                out["dir_" + carrier] = {"status": "ok", "source": "multi_valley",
+                                         "x": {"mobility_cm2_Vs": mvT["x"], "tau_s": mvT["tau_x"]},
+                                         "y": {"mobility_cm2_Vs": mvT["y"], "tau_s": mvT["tau_y"]}}
+                out["src_" + carrier] = "multi_valley"
+        elif mv.get("status") == "ok":
+            print("[WARN] %s 多谷 DPT 没有 %.0f K 这一档（S8.2 的 TEMPERATURES 不含它，不外推）"
+                  % (carrier, out["T_used"]))
         # [C6/C7] 真空对齐的 edge_flip / vac_align / provenance
         out["E1_prov_" + r["carrier"]] = r.get("inputs", {}).get("E1_provenance", "")
     # step7b_deform_read/band_edges.json 的 edge_flip / vac_align / window_scan
@@ -648,6 +690,9 @@ def build_table(am, bt, dpt, am2=None):
             row["bt2_sigma/tau"] = _interp_loglog(bt["n_signed"], bt["sigma_over_tau"], nt)
         if dpt:
             row["dpt_mu_cm2/Vs"] = dpt.get("electron") if nt < 0 else dpt.get("hole")
+            _mv = dpt.get("mv_electron" if nt < 0 else "mv_hole")      # [0022]
+            if _mv:
+                row["dpt_mv_mu_cm2/Vs"] = _mv["mean"]
         # κ_e 三方（BT2 用 DPT-τ 反推、DPT 用 WF 估）
         carrier = "electron" if nt < 0 else "hole"
         if bt and dpt:
@@ -708,6 +753,7 @@ def write_table(out, rows, am, bt, dpt, am2=None):
     cols += ["bt2_S_uV/K", "bt2_Lorenz", "bt2_sigma/tau", "bt2_sigma_S/m",
              "bt2_PF_W/mK2", "bt2_kappa_e_W/mK", "bt2_kappa_e_WF_W/mK",
              "dpt_mu_cm2/Vs", "dpt_kappa_e_WF_W/mK"]
+    cols += [c for c in ("dpt_mv_mu_cm2/Vs",) if any(c in r for r in rows)]       # [0022]
     cols += [c for c in ("bt2_S_xx_uV/K", "bt2_S_yy_uV/K",            # patch_bt2_dir
                          "bt2_sigma_xx_S/m", "bt2_sigma_yy_S/m",
                          "bt2_PF_xx_W/mK2", "bt2_PF_yy_W/mK2",
@@ -770,6 +816,12 @@ def write_table(out, rows, am, bt, dpt, am2=None):
              "# 张量约化：%s" % _red,
              "# S/Lorenz 可直接比；σ/κ_e amset是绝对值、BT2是per-τ只比趋势；DPT迁移率仅ADP",
              "# [DPT μ] m* 取 full-BZ 二次型 m_d（面内平均），非 3 点抛物拟合"]
+    for _c in ("electron", "hole"):                                   # [0022] 多谷 DPT
+        if dpt and dpt.get("mv_" + _c):
+            lines.append("# [DPT 多谷] %s：μ=%.1f cm²/Vs（%s；无谷间散射，上限）%s" % (
+                _c, dpt["mv_" + _c]["mean"], dpt.get("mv_desc_" + _c, ""),
+                "  ← 单谷算不出（带边在非高对称谷），dpt_mu 主栏与 BT2 的 τ 都用它"
+                if dpt.get("src_" + _c) == "multi_valley" else ""))
     if not _func:
         lines.append("# [口径] 泛函 = 未知（step1 的 workflow_method.txt 读不到）—— 先查 step1 INCAR 的 GGA/IVDW，"
                      "再和文献比")
@@ -861,7 +913,7 @@ def write_table(out, rows, am, bt, dpt, am2=None):
 MU_T_CSV = "comparison_vs_T.csv"
 MU_T_JSON = "comparison_vs_T.json"
 MU_T_PNG = "mobility_vs_T.png"
-MU_T_COLS = ("mu_DPT", "mu_AMSET_ADP", "mu_AMSET_intrinsic", "mu_AMSET_all")
+MU_T_COLS = ("mu_DPT", "mu_DPT_mv", "mu_AMSET_ADP", "mu_AMSET_intrinsic", "mu_AMSET_all")   # [0022] +mu_DPT_mv
 
 
 def _dirs(is_2d):
@@ -953,11 +1005,21 @@ def _dpt_mu_T(cwd, is_2d):
     return T0, out, how
 
 
+def _dpt_mv_blocks(cwd, is_2d):
+    """[0022] {载流子: multi_valley 块}（只 2D、status ok 的）。"""
+    j = _load_json(Path(cwd) / DPT_DIR / "dpt_result.json") or {}
+    if not is_2d:
+        return {}
+    return {r["carrier"]: r["multi_valley"] for r in j.get("results", [])
+            if (r.get("multi_valley") or {}).get("status") == "ok"}
+
+
 def build_mu_vs_T(cwd, is_2d):
     """[0020] μ(T) 三值表的行。温度网格 = AMSET 的；没有 AMSET 就用 dpt_result.json 的 temperatures_K。"""
     am = _amset_mu_T_sources(cwd)
     T0, dpt, dpt_how = _dpt_mu_T(cwd, is_2d)
-    if not am and not dpt:
+    mvb = _dpt_mv_blocks(cwd, is_2d)
+    if not am and not dpt and not mvb:
         return None
     cfac = _areal_factor_cm(cwd) if is_2d else None
     if am:
@@ -970,10 +1032,10 @@ def build_mu_vs_T(cwd, is_2d):
     else:
         jd = _load_json(Path(cwd) / DPT_DIR / "dpt_result.json") or {}
         temps = [float(t) for t in (jd.get("temperatures_K") or [T0])]
-        picks = {c: None for c in dpt}
+        picks = {c: None for c in list(dpt) + list(mvb)}
     rows = []
     for car in ("electron", "hole"):
-        if car not in picks and car not in dpt:
+        if car not in picks and car not in dpt and car not in mvb:
             continue
         i = picks.get(car)
         for it, T in enumerate(temps):
@@ -981,6 +1043,9 @@ def build_mu_vs_T(cwd, is_2d):
             vals = {}
             if car in dpt and f:
                 vals["mu_DPT"] = {k: v * f for k, v in dpt[car].items()}
+            mvT = _mv_at(mvb.get(car), T)
+            if mvT:
+                vals["mu_DPT_mv"] = {"x": mvT["x"], "y": mvT["y"], "mean": mvT["mean"]}
             if am and i is not None:
                 for c, arr in am["cols"].items():
                     try:
@@ -996,10 +1061,13 @@ def build_mu_vs_T(cwd, is_2d):
                     row[c] = v if (v is not None and v == v) else None
                 a, dp, al = row["mu_AMSET_ADP"], row["mu_DPT"], row["mu_AMSET_all"]
                 row["ADP_over_DPT"] = (a / dp) if (a and dp) else None
+                dmv = row["mu_DPT_mv"]
+                row["ADP_over_DPT_mv"] = (a / dmv) if (a and dmv) else None
                 row["all_over_ADP"] = (al / a) if (al and a) else None
                 rows.append(row)
     meta = {"is_2d": is_2d, "dpt_T0_K": T0, "dpt_source": dpt_how,
             "dpt_scaling": ("1/T" if is_2d else "T^-1.5"),
+            "dpt_mv": ({c: _mv_desc(b) for c, b in mvb.items()} or None),
             "amset_run": am["run"] if am else None, "amset_sources": am["src"] if am else {},
             "intrinsic_labels": am["intrinsic_labels"] if am else None,
             "doping_choice": "每种载流子取 |掺杂| 最低的一档（最接近 DPT 的非简并口径）",
@@ -1014,7 +1082,8 @@ def write_mu_vs_T(out, cwd, is_2d):
     if not res or not res["rows"]:
         print("[..] μ(T) 表：没有 AMSET 也没有 DPT 结果，跳过")
         return None
-    head = ["T_K", "carrier", "direction", "doping_cm3", "n2D_cm2"] + list(MU_T_COLS) + ["ADP_over_DPT", "all_over_ADP"]
+    head = (["T_K", "carrier", "direction", "doping_cm3", "n2D_cm2"] + list(MU_T_COLS)
+            + ["ADP_over_DPT", "ADP_over_DPT_mv", "all_over_ADP"])
 
     def _fmt(v):
         return "" if v is None else (("%.6g" % v) if isinstance(v, float) else v)
@@ -1022,6 +1091,9 @@ def write_mu_vs_T(out, cwd, is_2d):
         m = res["meta"]
         fh.write("# 迁移率随温度（cm²/Vs）；DPT 由 %s K 按 %s 换算（%s）；AMSET=%s；%s\n" % (
             m["dpt_T0_K"], m["dpt_scaling"], m["dpt_source"], m["amset_run"], m["doping_choice"]))
+        if m.get("dpt_mv"):                                    # [0022]
+            fh.write("# mu_DPT_mv = S8.2 多谷 DPT（逐温度算，不是 1/T 换算；无谷间散射，上限）：%s\n"
+                     % "；".join("%s %s" % kv for kv in sorted(m["dpt_mv"].items())))
         for c, sdesc in sorted(m["amset_sources"].items()):
             fh.write("# %s <- %s\n" % (c, sdesc))
         w = csv.writer(fh)
@@ -1030,14 +1102,15 @@ def write_mu_vs_T(out, cwd, is_2d):
             w.writerow([_fmt(r[k]) for k in head])
     (out / MU_T_JSON).write_text(json.dumps(res, ensure_ascii=False, indent=1), encoding="utf-8")
     lines = ["", "# [0020] 迁移率随温度（%s，cm²/Vs；全表见 %s）" % ("面内平均" if is_2d else "迹/3", MU_T_CSV),
-             "# %-8s %6s %10s %10s %10s %10s %9s" % ("carrier", "T(K)", "DPT", "AMSET_ADP", "intrinsic", "all",
-                                                    "ADP/DPT")]
+             "# %-8s %6s %10s %10s %10s %10s %10s %9s %9s" % (
+                 "carrier", "T(K)", "DPT", "DPT_mv", "AMSET_ADP", "intrinsic", "all", "ADP/DPT", "ADP/mv")]
     for r in res["rows"]:
         if r["direction"] != "mean":
             continue
-        lines.append("  %-8s %6.0f %10s %10s %10s %10s %9s" % (
+        lines.append("  %-8s %6.0f %10s %10s %10s %10s %10s %9s %9s" % (
             r["carrier"], r["T_K"], *[("%.1f" % r[c]) if r[c] is not None else "—" for c in MU_T_COLS],
-            ("%.2f" % r["ADP_over_DPT"]) if r["ADP_over_DPT"] is not None else "—"))
+            ("%.2f" % r["ADP_over_DPT"]) if r["ADP_over_DPT"] is not None else "—",
+            ("%.2f" % r["ADP_over_DPT_mv"]) if r["ADP_over_DPT_mv"] is not None else "—"))
     try:
         with open(out / "comparison_summary.txt", "a", encoding="utf-8") as fh:
             fh.write("\n".join(lines) + "\n")
@@ -1055,7 +1128,8 @@ def _plot_mu_vs_T(out, res):
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
-    style = {"mu_DPT": ("k", "-", "DPT"), "mu_AMSET_ADP": ("C0", "--", "AMSET ADP"),
+    style = {"mu_DPT": ("k", "-", "DPT"), "mu_DPT_mv": ("0.5", "-", "DPT multi-valley"),
+             "mu_AMSET_ADP": ("C0", "--", "AMSET ADP"),
              "mu_AMSET_intrinsic": ("C2", "-.", "AMSET intrinsic"), "mu_AMSET_all": ("C3", ":", "AMSET all")}
     cars = [c for c in ("electron", "hole") if any(r["carrier"] == c for r in res["rows"])]
     fig, axs = plt.subplots(1, len(cars), figsize=(5.5 * len(cars), 4.2), squeeze=False)

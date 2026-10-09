@@ -14,6 +14,8 @@ AMSET 的约定：负掺杂 = n 型（电子），正掺杂 = p 型（空穴）�
 [0020] DPT 按 AMSET 实际取的温度换算（2D ∝1/T，3D ∝T^-1.5，基准是 dpt_result.json 的 temperature_K）；
 以前 --T 600 时 DPT 仍是 300 K 的值，ADP/DPT 偏 2 倍。
 ADP/DPT 超出 [1/3, 3]：标 ⚠，提示用 tools/dp_valley_probe.py 查是不是多谷（V141/V142）。
+[0022] S8.2 有多谷 DPT（multi_valley）时另列 DPT_mv 与 ADP/DPT_mv（逐温度算的，不按 1/T 换算；网格外不外推）；
+单谷算不出（带边在 Q 这类非高对称谷）时 DPT 栏为 -，看 DPT_mv。
   例外（只注明、不提示多谷）：n/N_eff ≥ 0.5（接近/进入简并，DPT 的非简并统计不成立，V146）；
   DPT 的 m* 取自简并带边（单带公式只是近似，V145）；DPT 的 m* 网格分辨不出带边曲率（V147）。
 
@@ -90,6 +92,34 @@ def _dpt(path):
     return out, deg
 
 
+def dpt_mv(path):
+    """[0022] {"electron": 多谷块, "hole": 多谷块}（status ok 的；没有为 None）。"""
+    out = {"electron": None, "hole": None}
+    p = Path(path)
+    if p.is_file():
+        for r in json.loads(p.read_text(encoding="utf-8")).get("results") or []:
+            mv = r.get("multi_valley") or {}
+            if r.get("carrier") in out and mv.get("status") == "ok":
+                out[r["carrier"]] = mv
+    return out
+
+
+def mv_at(mv, T):
+    """[0022] 多谷块在 T 的面内平均 μ：正好有这一档就取，两档之间 log–log 插值，网格外 None（不外推）。"""
+    if not mv:
+        return None
+    rs = sorted(mv.get("mobility_vs_T") or [], key=lambda r: r["T_K"])
+    for r in rs:
+        if abs(float(r["T_K"]) - float(T)) < 1e-6:
+            return float(r["mobility_inplane_cm2_Vs"])
+    for a, b in zip(rs, rs[1:]):
+        if float(a["T_K"]) < float(T) < float(b["T_K"]):
+            t = np.log(float(T) / a["T_K"]) / np.log(b["T_K"] / a["T_K"])
+            ya, yb = a["mobility_inplane_cm2_Vs"], b["mobility_inplane_cm2_Vs"]
+            return float(np.exp(np.log(ya) + t * np.log(yb / ya)))
+    return None
+
+
 def dpt_T0(path):
     """[0020] DPT 结果对应的温度（dpt_result.json 的 temperature_K；没有为 300）。"""
     p = Path(path)
@@ -156,8 +186,9 @@ def degeneracy_ratio(doping, m_eff, T, is_2d, c_A=None):
     return n / (2.509e19 * float(m_eff) ** 1.5 * (T / 300.0) ** 1.5)
 
 
-def rows(transport, T=300.0, is_2d=True, dpt=None, masses=None, c_A=None, dpt_T0=None):
-    """dpt_T0：DPT 值对应的温度；给了就把 DPT 换算到 AMSET 实际取的温度（[0020]），None = 原样用。"""
+def rows(transport, T=300.0, is_2d=True, dpt=None, masses=None, c_A=None, dpt_T0=None, mv=None):
+    """dpt_T0：DPT 值对应的温度；给了就把 DPT 换算到 AMSET 实际取的温度（[0020]），None = 原样用。
+    mv：[0022] {载流子: 多谷块}（dpt_mv() 的结果），给了就加 DPT_mv / ADP_over_DPT_mv 两栏。"""
     d = transport
     dop = np.asarray(d["doping"], float)
     temps = np.asarray(d["temperatures"], float)
@@ -186,6 +217,11 @@ def rows(transport, T=300.0, is_2d=True, dpt=None, masses=None, c_A=None, dpt_T0
         r["DPT"] = mu_dpt
         if mu_dpt and r.get("ADP"):
             r["ADP_over_DPT"] = round(r["ADP"] / mu_dpt, 3)
+        if mv is not None:                                    # [0022]
+            q_mv = mv_at(mv.get(car), r["T"]) if car else None
+            r["DPT_mv"] = round(q_mv, 3) if q_mv else None
+            if q_mv and r.get("ADP"):
+                r["ADP_over_DPT_mv"] = round(r["ADP"] / q_mv, 3)
         out.append(r)
     return out, mechs
 
@@ -214,6 +250,8 @@ def main(argv=None):
     dpt = dpt_by_carrier(mat / "step8.2_dpt" / "dpt_result.json")
     deg = dpt_degenerate(mat / "step8.2_dpt" / "dpt_result.json")
     masses = dpt_masses(mat / "step8.2_dpt" / "dpt_result.json")
+    mvs = dpt_mv(mat / "step8.2_dpt" / "dpt_result.json")                 # [0022]
+    mvs = mvs if any(mvs.values()) else None
     coarse = dpt_grid_unresolved(mat / "step8.2_dpt" / "dpt_result.json")
     c_A = None
     if is_2d and (mat / run / "2d_correction.json").is_file():
@@ -228,7 +266,7 @@ def main(argv=None):
             Ts = [float(t) for t in np.asarray(tdat["temperatures"], float)]
         else:
             Ts = [float(a.T)]
-        blocks = [rows(tdat, T, is_2d, dpt, masses, c_A, dpt_T0=T0) for T in Ts]
+        blocks = [rows(tdat, T, is_2d, dpt, masses, c_A, dpt_T0=T0, mv=mvs) for T in Ts]
     except (KeyError, ValueError, IndexError) as e:
         print("[ERROR] 读 %s 失败：%s: %s" % (tj, type(e).__name__, e), file=sys.stderr)
         return 2
@@ -254,8 +292,9 @@ def _print_block(tj, is_2d, rs, mechs, dpt, srcs, T0, deg, coarse, T_req):
                                              else "；由 %g K 按 %s 换算" % (T0, "1/T" if is_2d else "T^-1.5")))
              if any(dpt.values()) else "没有 DPT 结果"))
     cols = ["overall"] + mechs
+    has_mv = any("DPT_mv" in r for r in rs)                    # [0022]
     print("  %-12s %-8s %9s " % ("doping/cm⁻³", "载流子", "S/μV·K⁻¹") + " ".join("%9s" % c for c in cols)
-          + " %9s %9s" % ("DPT", "ADP/DPT"))
+          + " %9s %9s" % ("DPT", "ADP/DPT") + (" %9s %9s" % ("DPT_mv", "ADP/mv") if has_mv else ""))
     bad = 0
     for r in rs:
         flag = ""
@@ -273,11 +312,16 @@ def _print_block(tj, is_2d, rs, mechs, dpt, srcs, T0, deg, coarse, T_req):
                 flag += ("  （DPT 的 m* 网格分辨不出带边曲率、偏重，ADP/DPT 不作判据；要比就把 amset eff-mass 的"
                          "质量写进本材料 step.conf：conf --set M_EFF_%s=<m*> -j step8.2_dpt，重跑 S8.2）"
                          % r["carrier"].upper())
+            elif r.get("ADP_over_DPT_mv") is not None:
+                flag += "  （单谷 ADP/DPT 超界；多谷 DPT 已含其它谷：ADP/DPT_mv = %.2f）" % r["ADP_over_DPT_mv"]
             else:
                 flag += "  ⚠ ADP/DPT 超出 [1/3, 3]：用 tools/dp_valley_probe.py 查是否多谷"
         print("  %-12.4g %-8s %9.1f " % (r["doping"], LABEL.get(r["carrier"], "本征"), r["seebeck_uV_K"])
               + " ".join("%9s" % (r.get(c, "")) for c in cols)
-              + " %9s %9s" % (r["DPT"] if r["DPT"] is not None else "-", q if q is not None else "-") + flag)
+              + " %9s %9s" % (r["DPT"] if r["DPT"] is not None else "-", q if q is not None else "-")
+              + ((" %9s %9s" % (r.get("DPT_mv") if r.get("DPT_mv") is not None else "-",
+                                r.get("ADP_over_DPT_mv") if r.get("ADP_over_DPT_mv") is not None else "-"))
+                 if has_mv else "") + flag)
     return bad
 
 

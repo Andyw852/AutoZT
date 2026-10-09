@@ -34,7 +34,7 @@ from pathlib import Path
 # =========================== 可改参数区 ===========================
 # [SKILL_REV] 版本戳：写进 dpt_result.json，铺开时验证跑的是哪份 skill 副本。
 # 每次改本脚本逻辑后更新（如 "2026-08-29-nstep-linear"）。
-_SKILL_REV = "2026-10-09-v0020"
+_SKILL_REV = "2026-10-09-0023-mv-e1gate"
 # [R-SCAN] 强制选点壳层 NSTEP（None=自动 2/3/4/5；填 2/3/4/5=只试该值，做 R-scan 用）。
 # 用法：tf -p <材料> -j step8.2_dpt conf --set FORCE_NSTEP=3 → retry + start，对比 dpt_result.json 的 m_d
 #   与 m_provenance 里的 R（V148 起写 step.conf，不改本脚本）。
@@ -43,6 +43,7 @@ OUTDIR_NAME = "step8.2_dpt"
 UNIFORM_DIR = "step3_uniform"
 ELASTIC_DIR = "step6_elastic"
 DEFORM_READ_DIR = "step7b_deform_read"
+DEFORM_DIR = "step7_deform"          # [0022] 逐谷 E1 读 S7 形变构型的 vasprun（S7.1 读的同一份）
 AMSET_DIR   = "step8_amset"          # 读 2d_correction.json 拿层厚 t、c/t
 
 TEMPERATURE_K = 300.0                # DPT 迁移率报此温度（μ∝1/T，可换算）
@@ -51,6 +52,18 @@ TEMPERATURE_K = 300.0                # DPT 迁移率报此温度（μ∝1/T，�
 #   只要 100–700 K 就在本步 step.conf 写 TEMPERATURES = 100:700:7。格式 "起:止:个数" 或逗号列表。
 TEMPERATURES = "100:900:9"
 CARRIER = "both"                     # electron / hole / both
+# [0022] 多谷 DPT（dpt_result.json 的 multi_valley，2D）：自动找离带边 VALLEY_WINDOW_EV 以内的所有谷（K/Q/Γ/M…），
+#   逐谷质量张量与 E1、按玻尔兹曼布居加权，每个温度单独算。带边在 Q 这类非高对称谷时单谷值拒绝出数，这里照样能算。
+#   关掉：step.conf 写 DPT_VALLEYS = off。窗口：VALLEY_WINDOW_EV（eV，默认 0.30；900 K 时 e^(−0.3/kT)≈2%）。
+DPT_VALLEYS = "auto"
+VALLEY_WINDOW_EV = 0.30
+# [0023] 有贡献的谷（任一温度布居 ≥ VALLEY_W_MIN）之间等效形变势相差 > VALLEY_E1_RATIO_MAX 倍 -> 多谷拒绝出数。
+#   实跑四个 TMD：电子 Q 谷 E1 只有 0.5–0.8 eV、K 谷 7.4–9.4 eV（真空口径），τ∝1/E1² 让 Q 谷 τ 长两个数量级，
+#   多谷 μ 被放大 7× 到 6×10⁵×。E1 小说明该谷的 LA 膨胀形变势耦合几乎抵消，它的输运由 DPT 不含的
+#   TA/谷间/光学散射决定（Jin et al. PRB 90, 045422：DFPT 拟合的 Q/K 声学形变势比 0.6–0.9；WSe2 电子含谷间 30、
+#   只 K 250 cm²/Vs）——不是 E1 取法能修的，DPT 在这里失效。3 倍 = 两谷 τ 差一个数量级。
+VALLEY_E1_RATIO_MAX = 3.0
+VALLEY_W_MIN = 0.01
 # E1 自动提取口径开关（手填 MANUAL/MANUAL_ANISO 时此开关失效）：
 #   "vac"   = 真空对齐 E1_vac（文献 Eq.9 dE_edge/dγ 口径，仅 2D 且 LOCPOT 可用）
 #   "amset" = amset h5 平均芯势口径（⟨|D|⟩）
@@ -95,6 +108,9 @@ SPEC = {
     "ALLOW_COARSE_S3": (False, "bool"),   # [V174] S3 面内网格不合现行规则也照算
     "TEMPERATURE_K":  (None, "float"),    # [0020] 主报告温度（K），默认 300
     "TEMPERATURES":   (None, "str"),      # [0020] μ(T) 网格："100:900:9" 或 "100,300,600"
+    "DPT_VALLEYS":    (None, "str"),      # [0022] auto / off
+    "VALLEY_WINDOW_EV": (None, "float"),  # [0022] 多谷窗口（eV）
+    "VALLEY_E1_RATIO_MAX": (None, "float"),  # [0023] 贡献谷之间 E1 最大/最小 超过它就拒绝
 }
 _CONF_TO_MANUAL = {"M_EFF_ELECTRON": "m_eff_electron", "M_EFF_HOLE": "m_eff_hole",
                    "E1_ELECTRON_EV": "E1_electron_eV", "E1_HOLE_EV": "E1_hole_eV",
@@ -134,7 +150,8 @@ def _manual_prov(key):
 def apply_conf(cwd):
     """[V148] 读本材料 step.conf 的覆盖写进 MANUAL / E1_SOURCE / FORCE_NSTEP；脚本里 MANUAL 被改过就 ★ 告警。
     返回 {键: {"value", "source"}}（写进 dpt_result.json 的 overrides）。"""
-    global E1_SOURCE, FORCE_NSTEP, ALLOW_COARSE_S3, TEMPERATURE_K, TEMPERATURES
+    global E1_SOURCE, FORCE_NSTEP, ALLOW_COARSE_S3, TEMPERATURE_K, TEMPERATURES, DPT_VALLEYS, VALLEY_WINDOW_EV
+    global VALLEY_E1_RATIO_MAX
     rec = {}
     for k, v in MANUAL.items():
         if v is not None:
@@ -196,6 +213,25 @@ def apply_conf(cwd):
         TEMPERATURES = str(p["TEMPERATURES"]).strip()
         rec["TEMPERATURES"] = {"value": TEMPERATURES, "source": "step.conf TEMPERATURES"}
         print("[OK] TEMPERATURES = %s（step.conf）" % TEMPERATURES)
+    if p["DPT_VALLEYS"]:                                  # [0022]
+        v = str(p["DPT_VALLEYS"]).strip().lower()
+        if v not in ("auto", "off"):
+            sys.exit("[ERROR] step.conf 的 DPT_VALLEYS=%r：只能是 auto / off" % p["DPT_VALLEYS"])
+        DPT_VALLEYS = v
+        rec["DPT_VALLEYS"] = {"value": v, "source": "step.conf DPT_VALLEYS"}
+        print("[OK] DPT_VALLEYS = %s（step.conf）" % v)
+    if p["VALLEY_WINDOW_EV"] is not None:
+        if not 0.0 < float(p["VALLEY_WINDOW_EV"]) <= 2.0:
+            sys.exit("[ERROR] step.conf 的 VALLEY_WINDOW_EV=%r：必须在 (0, 2] eV" % p["VALLEY_WINDOW_EV"])
+        VALLEY_WINDOW_EV = float(p["VALLEY_WINDOW_EV"])
+        rec["VALLEY_WINDOW_EV"] = {"value": VALLEY_WINDOW_EV, "source": "step.conf VALLEY_WINDOW_EV"}
+        print("[OK] VALLEY_WINDOW_EV = %g（step.conf）" % VALLEY_WINDOW_EV)
+    if p["VALLEY_E1_RATIO_MAX"] is not None:                # [0023]
+        if not float(p["VALLEY_E1_RATIO_MAX"]) >= 1.0:
+            sys.exit("[ERROR] step.conf 的 VALLEY_E1_RATIO_MAX=%r：必须 ≥ 1" % p["VALLEY_E1_RATIO_MAX"])
+        VALLEY_E1_RATIO_MAX = float(p["VALLEY_E1_RATIO_MAX"])
+        rec["VALLEY_E1_RATIO_MAX"] = {"value": VALLEY_E1_RATIO_MAX, "source": "step.conf VALLEY_E1_RATIO_MAX"}
+        print("[OK] VALLEY_E1_RATIO_MAX = %g（step.conf）" % VALLEY_E1_RATIO_MAX)
     return rec
 
 
@@ -332,7 +368,9 @@ def _hex_offgrid(recip, kf, kgrid=None):
     if k_on_grid:
         return ("六方胞带边在非高对称点 k_frac=%s，而 K 点在网格上：不是网格问题，带边多半在 Q/Λ 这类"
                 "非高对称谷（6 个等价谷）。单谷 DPT 的 m*（方向分解与分方向 x/y）都不适用，重做 step3_uniform "
-                "没用 —— 用 amset eff-mass 的质量写本材料 step.conf（M_EFF_*）" % np.round(_kf, 4)), False
+                "没用 —— 看 dpt_result.json 的 multi_valley（[0022] 逐谷质量张量与 E1、按布居加权；[0023] Q 与 K 的形变势"
+                "悬殊时它也拒绝出数：那是 DPT 对这类带边不适用，不是缺参数）；不要手填 M_EFF_*（单个质量混了 K/Q "
+                "两类谷，也不随温度变）" % np.round(_kf, 4)), False
     return ("六方胞带边锚在非高对称点 k_frac=%s（K 离网：step3_uniform 的 N 不是"
             " 3 的倍数）——请按 DK_MAX 规则用 N 为 6 的倍数重新生成 step3_uniform，"
             "或在本材料 step.conf 手填 M_EFF_*" % np.round(_kf, 4)), False
@@ -788,6 +826,283 @@ def get_C_aniso(cwd, is_2d):
     return (c11 * f, c22 * f), "step6 C11/C22 × h(V/A)=%.3fA" % h
 
 
+def _time_reversal_ok(v, cwd, carrier):
+    """[0022] 时间反演能否当能带对称操作（原在 _expand_full_bz 里，多谷 DPT 归星时共用；逻辑不变）。"""
+    use_tr = True
+    try:
+        ispin = int(v.parameters.get("ISPIN", 1))
+        if ispin == 1:
+            use_tr = True
+        else:
+            oc = Path(cwd) / UNIFORM_DIR / "OUTCAR"
+            tot_mag = None
+            if oc.is_file():
+                import re as _re
+                m = _re.findall(r"number of electron\s+\S+\s+magnetization\s+(\S+)",
+                                oc.read_text(errors="ignore"))
+                if m:
+                    tot_mag = abs(float(m[-1]))
+            if tot_mag is None:
+                use_tr = False
+                print("[WARN] %s：ISPIN=2 但读不到总磁矩（OUTCAR 缺失/解析失败），"
+                      "保守关闭 time_reversal" % carrier)
+            else:
+                use_tr = (tot_mag <= 0.05)
+    except Exception:
+        use_tr = True
+    return use_tr
+
+
+def _expand_full_bz(v, cwd, carrier):
+    """[0022] IBZ -> 全 BZ（原在 get_effective_mass_aniso 里，多谷 DPT 共用；逻辑不变，只修了 pymatgen 层的
+    倒空间旋转）。返回 (kfrac(n_full,3), kp_mapping(n_full,), 方法, None)；失败 (None, None, None, 原因)。"""
+    import numpy as np
+    kfrac_ibz = np.array(v.actual_kpoints)
+    # [P1-2] 展开 IBZ → 全 BZ：带边 K 点坐在 IBZ 楔形边界，近邻点只存在于
+    # 楔形内一侧，单侧取点会让 a/b 两个曲率被不对称地吃掉（hex 实测 2.7 倍差）。
+    # 展开后 k0 周围点对称，二次型拟合才无偏。失败退回 IBZ（靠 cond/残差验收兜底）。
+    # [TR] 时间反演只在净磁矩≈0 时是能带的对称操作。CrS2/CrSe2 塌到零磁矩
+    # 无碍，但本 skill 还要复用到 MnIn2Se4/Mn2In2Se5 等磁性体系——自旋分辨
+    # 能带在有净磁矩时 TR 会把 up/down 错配。有磁矩就关掉 TR。
+    # [TR] 时间反演只在净磁矩≈0 时是能带的对称操作。ISPIN=1 → TR 安全；
+    # ISPIN=2 → 读 OUTCAR 总磁矩判断，读不到 → 保守关掉（磁性体系不安全）。
+    use_tr = _time_reversal_ok(v, cwd, carrier)
+
+    # [P1-2] 展开 IBZ → 全 BZ，两层：amset（环境）→ pymatgen 点群（不依赖环境）。
+    # 【彻底删掉 IBZ 兜底】IBZ 上的 m* 不是"精度差一点"，是系统性错误（单侧
+    # 取点，SS 正交胞对称性禁止交叉项却拟合出 off=0.28 的假数）。展开不成功
+    # 就硬失败、不出 m*，绝不静默退回 IBZ。
+    expanded = False
+    _expand_method = None
+    try:
+        from amset.electronic_structure.symmetry import expand_kpoints
+        full_kfrac, _, _, _, _, kp_mapping = expand_kpoints(
+            v.final_structure, kfrac_ibz, symprec=0.01,
+            time_reversal=use_tr, return_mapping=True)
+        kp_mapping = np.asarray(kp_mapping)
+        kfrac = np.array(full_kfrac)            # (n_full, 3)
+        _expand_method = "amset"
+        expanded = True
+    except Exception:
+        # 层2：subprocess 到 step.conf 的 amset 环境跑 expand_kpoints
+        # （jzzn 默认 python 是 atomate2_p_a 无 amset，但 conda 里有 amset_clean）
+        _sub_ok = False
+        try:
+            import subprocess as _sp, shlex as _shlex, json as _json
+            _env = None
+            try:
+                import stepconf as _sc
+                _txt = open(_sc.CONF_NAME, encoding="utf-8-sig").read()
+                _p = {k.upper(): v for k, v, _ in _sc.parse(_txt, _sc.CONF_NAME).get("params", [])}
+                _sh, _e = _p.get("CONDA_SH"), _p.get("AMSET_ENV")
+                if _sh and _e:
+                    _env = "source %s && conda activate %s" % (_sh, _e)
+            except Exception as _ee:                    # noqa: BLE001
+                print("[..] %s：读 step.conf 的 amset 环境失败（%s），跳过 subprocess 展开" % (carrier, _exc_brief(_ee)))
+            if _env:
+                _code = ("import sys,json,numpy as np\n"
+                         "from pymatgen.core import Structure\n"
+                         "from amset.electronic_structure.symmetry import expand_kpoints\n"
+                         "st=Structure.from_dict(json.loads(sys.argv[1]))\n"
+                         "kf=np.array(json.loads(sys.argv[2]))\n"
+                         "ut=sys.argv[3]=='True'\n"
+                         "f,_,_,_,_,kp=expand_kpoints(st,kf,symprec=0.01,time_reversal=ut,return_mapping=True)\n"
+                         "print(json.dumps({'full':np.array(f).tolist(),'kp':np.asarray(kp).tolist()}))")
+                _cmd = "%s && python3 -c %s %s %s %s" % (
+                    _env, _shlex.quote(_code),
+                    _shlex.quote(_json.dumps(v.final_structure.as_dict())),
+                    _shlex.quote(_json.dumps(kfrac_ibz.tolist())),
+                    str(use_tr))
+                _out = _sp.run(["bash", "-lc", _cmd], capture_output=True,
+                               text=True, timeout=180)
+                _lines = [l for l in (_out.stdout or "").strip().splitlines()
+                          if l.strip().startswith("{")]
+                if _lines:
+                    _data = _json.loads(_lines[-1])
+                    kp_mapping = np.asarray(_data["kp"])
+                    kfrac = np.array(_data["full"])
+                    _expand_method = "amset-subproc"
+                    expanded = True
+                    _sub_ok = True
+        except Exception as _es:                        # noqa: BLE001
+            print("[..] %s：amset subprocess 展开失败（%s），改用 pymatgen 点群展开" % (carrier, _exc_brief(_es)))
+        if not _sub_ok:
+            # 层3：pymatgen 点群展开（+ 时间反演，只依赖 pymatgen）
+            try:
+                from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
+                _ops = SpacegroupAnalyzer(
+                    v.final_structure, symprec=0.01
+                ).get_point_group_operations(cartesian=False)
+                # [0022] k 是倒空间分数坐标：实空间分数旋转 R 作用到 k 上是 (R⁻¹)ᵀ，对整个点群取集合
+                #   等价于 Rᵀ。以前直接用 op.operate(k)（= R·k），六方胞上展开不满（12×12 网格只得到 97/144 点），
+                #   amset 不可用时分方向 m* 一律被拒（AnisoKzTests 在无 amset 的环境里因此失败）。
+                _rots = [np.asarray(op.rotation_matrix, float).T for op in _ops]
+                _seen, _kf_list, _idx_list = {}, [], []
+                for _i, _k in enumerate(kfrac_ibz):
+                    _targets = [r @ _k for r in _rots]
+                    if use_tr:
+                        _targets += [r @ (-_k) for r in _rots]
+                    for _kk in _targets:
+                        # [0022] 区界点 ±0.5 是同一点：键取 [0,1) 里的值（0.999999 -> 0），存的值落在 [-0.5, 0.5)
+                        _w = _kk - np.floor(_kk)
+                        _key = tuple(np.round(_w, 6) % 1.0)
+                        _kk = _w - (_w >= 0.5 - 1e-9)
+                        if _key not in _seen:
+                            _seen[_key] = True
+                            _kf_list.append(_kk)
+                            _idx_list.append(_i)
+                if not _kf_list:
+                    raise RuntimeError("点群展开得到 0 个点")
+                # [网格一致性校验] 与 amset 同等严格：铺满才接受，否则单侧取点
+                _df = kfrac_ibz - kfrac_ibz[0]; _df -= np.round(_df)
+                _nz = np.abs(_df) > 1e-6
+                _mesh = np.array([int(round(1.0 / float(np.min(np.abs(_df[_nz[:, i], i])))))
+                                  if _nz[:, i].any() else 1 for i in range(3)])
+                _n_expect = int(np.prod(_mesh))
+                if len(_kf_list) != _n_expect:
+                    raise RuntimeError(
+                        "pymatgen 展开只得到 %d/%d 点，网格未铺满"
+                        % (len(_kf_list), _n_expect))
+                kfrac = np.array(_kf_list)
+                kp_mapping = np.asarray(_idx_list)
+                _expand_method = "pymatgen"
+                expanded = True
+            except Exception as _e2:
+                return None, None, None, ("全 BZ 展开失败（amset/subprocess/pymatgen 都不可用：%s）"
+                                      "——拒绝在 IBZ 上拟合 m*（单侧取点是系统性错误）"
+                                      % _exc_brief(_e2))
+    return kfrac, kp_mapping, _expand_method, None
+
+
+def _quad_fit_2d(kfrac, recip, eband, k0, need_lin=None, mesh=None):
+    """[0022] 带边二次型拟合的取点 + 最小二乘 + 验收（原在 get_effective_mass_aniso 里，多谷 DPT 逐谷共用；逻辑不变）。
+    kfrac：全 BZ 分数坐标；eband：同一组点上该带的能量；k0：拟合中心的下标。
+    need_lin=None 时按 k0 是否高对称点自动决定；mesh=None 时由 kfrac 反解。
+    返回 ({a, b, c, den=4|a||b|-c², npt, n_shell, Rused, names, cond, rel}, None)；失败 (None, 原因)。"""
+    import numpy as np
+    kcart = kfrac @ recip
+    dk = kcart - kcart[k0]
+    de = eband - eband[k0]
+    zm = np.abs(dk[:, 2]) < 0.02                 # 只取面内
+    dkx, dky, dee = dk[zm][:, 0], dk[zm][:, 1], de[zm]
+    q2 = dkx ** 2 + dky ** 2
+    qnz = np.sqrt(q2[q2 > 1e-9])
+    if len(qnz) == 0:
+        return None, "带边面内无有效 k 点（q > 0）"
+    q_min = float(qnz.min())
+    # [SHELL+AXIS] 网格分割数：从全 BZ k 点反解。半径由「最差采样轴」的笛卡尔
+    # 步长定，细长胞（LS a=21.64, N_x≈2）不会圈出单方向长条。壳层用相对距离
+    # q/q_min 聚类（容差 1e-3），避免浮点噪声把单壳层劈成两个。
+    if mesh is None:
+        try:
+            from amset.electronic_structure.symmetry import get_mesh_from_kpoint_diff
+            _mesh, _ = get_mesh_from_kpoint_diff(kfrac)
+            mesh = np.rint(np.asarray(_mesh)).astype(int)
+        except Exception:
+            _df = kfrac - kfrac[k0]; _df -= np.round(_df)
+            _nz = np.abs(_df) > 1e-6
+            mesh = np.array([int(round(1.0 / float(np.min(np.abs(_df[_nz[:, i], i])))))
+                             if _nz[:, i].any() else 1 for i in range(3)])
+    step_cart = np.array([np.linalg.norm(recip[i]) / max(int(mesh[i]), 1)
+                          for i in (0, 1)])
+    # [SS/LS 线性项] 带边非高对称点（Y-Γ 路径，如 SS k=(0,0.3636)）时，真实
+    # 极值点一般不在网格点上，存在真实线性项——继续升 NSTEP 直到点数够 3 倍
+    # 冗余（18 点），否则线性项被关掉，k0 偏移被 a/b 吸收（重演 CrS2 曲率偏置，
+    # 且这次没有对称性兜底）。
+    def _is_high_sym(kf, tol=1e-3):
+        _bases = (0.0, 0.5, 1.0 / 3.0, 2.0 / 3.0, 0.25, 0.75)
+        for _c in kf[:2]:
+            _c = _c % 1.0
+            if not any(abs(_c - _b) < tol or abs(_c - _b - 1.0) < tol
+                       for _b in _bases):
+                return False
+        return True
+    if need_lin is None:
+        need_lin = not _is_high_sym(kfrac[k0])
+
+    sel = Rused = n_shell = NSTEP_used = None
+    _nstep_iter = (FORCE_NSTEP,) if FORCE_NSTEP else (2, 3, 4, 5)
+    for NSTEP in _nstep_iter:
+        # -0.1 留余量：整数步恰好卡在下一壳层边界，浮点噪声会把下一壳层的
+        # 个别点纳入。1.9 步≈0.302 落在第二/三壳层之间。
+        Rmax = (NSTEP - 0.1) * float(step_cart.min())
+        m = (q2 < Rmax * Rmax) & (q2 > 1e-9)
+        n = int(np.count_nonzero(m))
+        if n < 8:
+            continue
+        q_sel = np.sqrt(q2[m])
+        shells = np.unique(np.round(q_sel / q_min, 3))
+        n_sh = int(len(shells))
+        ok = (n_sh >= 2)                        # 至少 2 壳层，才有径向信息
+        if need_lin:
+            ok = ok and (n >= 18)               # 非高对称点：线性项需 3 倍冗余
+        if ok:
+            sel, Rused, n_shell, NSTEP_used = m, Rmax, n_sh, NSTEP
+            break
+    if sel is None:
+        return None, ("带边面内点太少或全在单壳层（需 ≥8 点 + ≥2 壳层）——"
+                      "加密 step3_uniform 网格或手填 MANUAL_ANISO")
+    npt = int(np.count_nonzero(sel))
+
+    # [AXIS 覆盖] 每个面内倒格矢方向都要有非零步的点，否则该方向曲率无约束。
+    # LS 的 kx 轴只有 N≈2 分割，会在这里干脆报错而不是返回假 m*_x。
+    # [V151] sel 是在面内子集（zm）上算的掩码，必须先取 kfrac[zm]：2D 的 S3 常用 kz≥3（WS2 48×48×3），
+    #   全 BZ 6912 点 vs 面内 2304 点 -> IndexError，分方向 m* 整块失败（kz=1 时两者等长，测不出来）。
+    _dfrac = kfrac[zm][sel] - kfrac[k0]
+    _dfrac -= np.round(_dfrac)
+    _steps = np.rint(_dfrac * mesh).astype(int)
+    for _i in (0, 1):
+        if int(np.abs(_steps[:, _i]).max()) < 1:
+            return None, ("倒格矢方向 %d 无非零步取点（该轴分割数 N=%d 过少），"
+                          "该方向曲率完全无约束——把 step3_uniform 的 KSPACING "
+                          "调小或设 KMIN_DIV≥12" % (_i, int(mesh[_i])))
+    # [P1] 设计矩阵：高对称点（K）在网格上时线性项被 C₃ 强制为 0，但 SS/LS
+    # 的带边在 Y–Γ 路径上（非高对称点），真实极值点一般不在网格点上，存在
+    # 真实线性项——点数够就拟合它，吸收 k0 偏移；否则只拟合二次项。
+    # [Q4] ≥2 壳层时再加各向同性四次项 q⁴，把次抛物偏置直接拟掉。
+    use_quartic = (n_shell >= 2) and (npt >= 8)
+    # 线性项（d,e,f）需 3 倍冗余才稳定：2 倍冗余（14 点）在对称点上会把曲率
+    # 拟合进线性项（hex 实测 m* 1.124 vs 0.924）。≥18 点才启用。
+    use_linear = (npt >= 18)
+    cols = [dkx[sel] ** 2, dky[sel] ** 2, dkx[sel] * dky[sel]]
+    names = ["a", "b", "c"]
+    if use_quartic:
+        cols.append(q2[sel] ** 2)
+        names.append("q4")
+    if use_linear:
+        cols += [dkx[sel], dky[sel], np.ones(npt)]
+        names += ["d", "e", "f"]
+    A = np.column_stack(cols)
+    if A.shape[0] < 2 * A.shape[1]:
+        return None, ("拟合点数不足：%d 点 / %d 参数（需 ≥2 倍冗余）——"
+                      "加密 step3_uniform 网格" % (A.shape[0], A.shape[1]))
+    cond = float(np.linalg.cond(A))
+    if cond > 1e5:
+        return None, ("设计矩阵病态 cond=%.1e（k 点单侧/共线，"
+                      "IBZ 楔形取点不对称）" % cond)
+    sol, *_ = np.linalg.lstsq(A, dee[sel], rcond=None)
+    a, b, c = float(sol[0]), float(sol[1]), float(sol[2])
+    pred = A @ sol
+    rel = float(np.linalg.norm(dee[sel] - pred)
+                / (np.linalg.norm(dee[sel]) + 1e-12))
+    if rel > 0.2:
+        return None, "二次型拟合残差过大 rel=%.2f（带边附近非二次型）" % rel
+    # [P2] 逆质量张量求逆的对角元（H=[[2a,c],[c,2b]]）。
+    # 质量恒正：electron(CBM) 曲率 a,b>0，hole(VBM) 曲率 a,b<0——统一取 |a|,|b|，
+    # 否则 hole 会得到负质量（den=4ab-c² 因 ab>0 为正，但分子 4b/4a 带负号）。
+    if a * b <= 0:
+        return None, ("带边曲率异号（a=%.3f b=%.3f，鞍点？"
+                      "带边定位可疑或取点跨了多个带边）" % (a, b))
+    aa, bb = abs(a), abs(b)
+    den = 4.0 * aa * bb - c * c
+    if den <= 1e-12:
+        return None, "逆质量张量奇异（4|a||b|-c²=%.2g，能量椭圆退化）" % den
+    return {"a": a, "b": b, "c": c, "den": den, "npt": npt, "n_shell": n_shell,
+            "Rused": Rused, "names": names, "cond": cond, "rel": rel,
+            "coef": {n: float(x) for n, x in zip(names, sol)},
+            "step_min": float(step_cart.min())}, None
+
+
 def get_effective_mass_aniso(cwd, carrier, is_2d):
     """带边二次型拟合 ΔE = a·Δkx² + b·Δky² + c·Δkx·Δky + d·Δkx + e·Δky + f。
 
@@ -850,134 +1165,9 @@ def get_effective_mass_aniso(cwd, carrier, is_2d):
                           % (carrier, np.round(_kf_m, 4).tolist(),
                              np.round(_kf_be, 4).tolist(), float(np.linalg.norm(_d))))
 
-        # [P1-2] 展开 IBZ → 全 BZ：带边 K 点坐在 IBZ 楔形边界，近邻点只存在于
-        # 楔形内一侧，单侧取点会让 a/b 两个曲率被不对称地吃掉（hex 实测 2.7 倍差）。
-        # 展开后 k0 周围点对称，二次型拟合才无偏。失败退回 IBZ（靠 cond/残差验收兜底）。
-        # [TR] 时间反演只在净磁矩≈0 时是能带的对称操作。CrS2/CrSe2 塌到零磁矩
-        # 无碍，但本 skill 还要复用到 MnIn2Se4/Mn2In2Se5 等磁性体系——自旋分辨
-        # 能带在有净磁矩时 TR 会把 up/down 错配。有磁矩就关掉 TR。
-        # [TR] 时间反演只在净磁矩≈0 时是能带的对称操作。ISPIN=1 → TR 安全；
-        # ISPIN=2 → 读 OUTCAR 总磁矩判断，读不到 → 保守关掉（磁性体系不安全）。
-        use_tr = True
-        try:
-            ispin = int(v.parameters.get("ISPIN", 1))
-            if ispin == 1:
-                use_tr = True
-            else:
-                oc = Path(cwd) / UNIFORM_DIR / "OUTCAR"
-                tot_mag = None
-                if oc.is_file():
-                    import re as _re
-                    m = _re.findall(r"number of electron\s+\S+\s+magnetization\s+(\S+)",
-                                    oc.read_text(errors="ignore"))
-                    if m:
-                        tot_mag = abs(float(m[-1]))
-                if tot_mag is None:
-                    use_tr = False
-                    print("[WARN] %s：ISPIN=2 但读不到总磁矩（OUTCAR 缺失/解析失败），"
-                          "保守关闭 time_reversal" % carrier)
-                else:
-                    use_tr = (tot_mag <= 0.05)
-        except Exception:
-            use_tr = True
-
-        # [P1-2] 展开 IBZ → 全 BZ，两层：amset（环境）→ pymatgen 点群（不依赖环境）。
-        # 【彻底删掉 IBZ 兜底】IBZ 上的 m* 不是"精度差一点"，是系统性错误（单侧
-        # 取点，SS 正交胞对称性禁止交叉项却拟合出 off=0.28 的假数）。展开不成功
-        # 就硬失败、不出 m*，绝不静默退回 IBZ。
-        expanded = False
-        _expand_method = None
-        try:
-            from amset.electronic_structure.symmetry import expand_kpoints
-            full_kfrac, _, _, _, _, kp_mapping = expand_kpoints(
-                v.final_structure, kfrac_ibz, symprec=0.01,
-                time_reversal=use_tr, return_mapping=True)
-            kp_mapping = np.asarray(kp_mapping)
-            kfrac = np.array(full_kfrac)            # (n_full, 3)
-            _expand_method = "amset"
-            expanded = True
-        except Exception:
-            # 层2：subprocess 到 step.conf 的 amset 环境跑 expand_kpoints
-            # （jzzn 默认 python 是 atomate2_p_a 无 amset，但 conda 里有 amset_clean）
-            _sub_ok = False
-            try:
-                import subprocess as _sp, shlex as _shlex, json as _json
-                _env = None
-                try:
-                    import stepconf as _sc
-                    _txt = open(_sc.CONF_NAME, encoding="utf-8-sig").read()
-                    _p = {k.upper(): v for k, v, _ in _sc.parse(_txt, _sc.CONF_NAME).get("params", [])}
-                    _sh, _e = _p.get("CONDA_SH"), _p.get("AMSET_ENV")
-                    if _sh and _e:
-                        _env = "source %s && conda activate %s" % (_sh, _e)
-                except Exception as _ee:                    # noqa: BLE001
-                    print("[..] %s：读 step.conf 的 amset 环境失败（%s），跳过 subprocess 展开" % (carrier, _exc_brief(_ee)))
-                if _env:
-                    _code = ("import sys,json,numpy as np\n"
-                             "from pymatgen.core import Structure\n"
-                             "from amset.electronic_structure.symmetry import expand_kpoints\n"
-                             "st=Structure.from_dict(json.loads(sys.argv[1]))\n"
-                             "kf=np.array(json.loads(sys.argv[2]))\n"
-                             "ut=sys.argv[3]=='True'\n"
-                             "f,_,_,_,_,kp=expand_kpoints(st,kf,symprec=0.01,time_reversal=ut,return_mapping=True)\n"
-                             "print(json.dumps({'full':np.array(f).tolist(),'kp':np.asarray(kp).tolist()}))")
-                    _cmd = "%s && python3 -c %s %s %s %s" % (
-                        _env, _shlex.quote(_code),
-                        _shlex.quote(_json.dumps(v.final_structure.as_dict())),
-                        _shlex.quote(_json.dumps(kfrac_ibz.tolist())),
-                        str(use_tr))
-                    _out = _sp.run(["bash", "-lc", _cmd], capture_output=True,
-                                   text=True, timeout=180)
-                    _lines = [l for l in (_out.stdout or "").strip().splitlines()
-                              if l.strip().startswith("{")]
-                    if _lines:
-                        _data = _json.loads(_lines[-1])
-                        kp_mapping = np.asarray(_data["kp"])
-                        kfrac = np.array(_data["full"])
-                        _expand_method = "amset-subproc"
-                        expanded = True
-                        _sub_ok = True
-            except Exception as _es:                        # noqa: BLE001
-                print("[..] %s：amset subprocess 展开失败（%s），改用 pymatgen 点群展开" % (carrier, _exc_brief(_es)))
-            if not _sub_ok:
-                # 层3：pymatgen 点群展开（+ 时间反演，只依赖 pymatgen）
-                try:
-                    from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
-                    _ops = SpacegroupAnalyzer(
-                        v.final_structure, symprec=0.01
-                    ).get_point_group_operations(cartesian=False)
-                    _seen, _kf_list, _idx_list = {}, [], []
-                    for _i, _k in enumerate(kfrac_ibz):
-                        _targets = [op.operate(_k) for op in _ops]
-                        if use_tr:
-                            _targets += [op.operate(-_k) for op in _ops]
-                        for _kk in _targets:
-                            _kk -= np.round(_kk)
-                            _key = tuple(np.round(_kk, 6))
-                            if _key not in _seen:
-                                _seen[_key] = True
-                                _kf_list.append(_kk)
-                                _idx_list.append(_i)
-                    if not _kf_list:
-                        raise RuntimeError("点群展开得到 0 个点")
-                    # [网格一致性校验] 与 amset 同等严格：铺满才接受，否则单侧取点
-                    _df = kfrac_ibz - kfrac_ibz[0]; _df -= np.round(_df)
-                    _nz = np.abs(_df) > 1e-6
-                    _mesh = np.array([int(round(1.0 / float(np.min(np.abs(_df[_nz[:, i], i])))))
-                                      if _nz[:, i].any() else 1 for i in range(3)])
-                    _n_expect = int(np.prod(_mesh))
-                    if len(_kf_list) != _n_expect:
-                        raise RuntimeError(
-                            "pymatgen 展开只得到 %d/%d 点，网格未铺满"
-                            % (len(_kf_list), _n_expect))
-                    kfrac = np.array(_kf_list)
-                    kp_mapping = np.asarray(_idx_list)
-                    _expand_method = "pymatgen"
-                    expanded = True
-                except Exception as _e2:
-                    return None, ("全 BZ 展开失败（amset/subprocess/pymatgen 都不可用：%s）"
-                                  "——拒绝在 IBZ 上拟合 m*（单侧取点是系统性错误）"
-                                  % _exc_brief(_e2))
+        kfrac, kp_mapping, _expand_method, _xerr = _expand_full_bz(v, cwd, carrier)
+        if _xerr:
+            return None, _xerr
         # 展开后（amset/pymatgen 共用）：能量映射 + 精确匹配 IBZ 原 k
         ene = ene_ibz[kp_mapping]                   # (n_full, nb)
         d = kfrac - kfrac_ibz[k0_ibz]; d -= np.round(d)
@@ -989,121 +1179,12 @@ def get_effective_mass_aniso(cwd, carrier, is_2d):
         if _off:
             return None, _off
 
-        kcart = kfrac @ recip
-        dk = kcart - kcart[k0]
-        de = ene[:, b0] - ene[k0, b0]
-        zm = np.abs(dk[:, 2]) < 0.02                 # 只取面内
-        dkx, dky, dee = dk[zm][:, 0], dk[zm][:, 1], de[zm]
-        q2 = dkx ** 2 + dky ** 2
-        qnz = np.sqrt(q2[q2 > 1e-9])
-        if len(qnz) == 0:
-            return None, "带边面内无有效 k 点（q > 0）"
-        q_min = float(qnz.min())
-        # [SHELL+AXIS] 网格分割数：从全 BZ k 点反解。半径由「最差采样轴」的笛卡尔
-        # 步长定，细长胞（LS a=21.64, N_x≈2）不会圈出单方向长条。壳层用相对距离
-        # q/q_min 聚类（容差 1e-3），避免浮点噪声把单壳层劈成两个。
-        try:
-            from amset.electronic_structure.symmetry import get_mesh_from_kpoint_diff
-            _mesh, _ = get_mesh_from_kpoint_diff(kfrac)
-            mesh = np.rint(np.asarray(_mesh)).astype(int)
-        except Exception:
-            _df = kfrac - kfrac[k0]; _df -= np.round(_df)
-            _nz = np.abs(_df) > 1e-6
-            mesh = np.array([int(round(1.0 / float(np.min(np.abs(_df[_nz[:, i], i])))))
-                             if _nz[:, i].any() else 1 for i in range(3)])
-        step_cart = np.array([np.linalg.norm(recip[i]) / max(int(mesh[i]), 1)
-                              for i in (0, 1)])
-        # [SS/LS 线性项] 带边非高对称点（Y-Γ 路径，如 SS k=(0,0.3636)）时，真实
-        # 极值点一般不在网格点上，存在真实线性项——继续升 NSTEP 直到点数够 3 倍
-        # 冗余（18 点），否则线性项被关掉，k0 偏移被 a/b 吸收（重演 CrS2 曲率偏置，
-        # 且这次没有对称性兜底）。
-        def _is_high_sym(kf, tol=1e-3):
-            _bases = (0.0, 0.5, 1.0 / 3.0, 2.0 / 3.0, 0.25, 0.75)
-            for _c in kf[:2]:
-                _c = _c % 1.0
-                if not any(abs(_c - _b) < tol or abs(_c - _b - 1.0) < tol
-                           for _b in _bases):
-                    return False
-            return True
-        need_lin = not _is_high_sym(kfrac[k0])
-
-        sel = Rused = n_shell = NSTEP_used = None
-        _nstep_iter = (FORCE_NSTEP,) if FORCE_NSTEP else (2, 3, 4, 5)
-        for NSTEP in _nstep_iter:
-            # -0.1 留余量：整数步恰好卡在下一壳层边界，浮点噪声会把下一壳层的
-            # 个别点纳入。1.9 步≈0.302 落在第二/三壳层之间。
-            Rmax = (NSTEP - 0.1) * float(step_cart.min())
-            m = (q2 < Rmax * Rmax) & (q2 > 1e-9)
-            n = int(np.count_nonzero(m))
-            if n < 8:
-                continue
-            q_sel = np.sqrt(q2[m])
-            shells = np.unique(np.round(q_sel / q_min, 3))
-            n_sh = int(len(shells))
-            ok = (n_sh >= 2)                        # 至少 2 壳层，才有径向信息
-            if need_lin:
-                ok = ok and (n >= 18)               # 非高对称点：线性项需 3 倍冗余
-            if ok:
-                sel, Rused, n_shell, NSTEP_used = m, Rmax, n_sh, NSTEP
-                break
-        if sel is None:
-            return None, ("带边面内点太少或全在单壳层（需 ≥8 点 + ≥2 壳层）——"
-                          "加密 step3_uniform 网格或手填 MANUAL_ANISO")
-        npt = int(np.count_nonzero(sel))
-
-        # [AXIS 覆盖] 每个面内倒格矢方向都要有非零步的点，否则该方向曲率无约束。
-        # LS 的 kx 轴只有 N≈2 分割，会在这里干脆报错而不是返回假 m*_x。
-        # [V151] sel 是在面内子集（zm）上算的掩码，必须先取 kfrac[zm]：2D 的 S3 常用 kz≥3（WS2 48×48×3），
-        #   全 BZ 6912 点 vs 面内 2304 点 -> IndexError，分方向 m* 整块失败（kz=1 时两者等长，测不出来）。
-        _dfrac = kfrac[zm][sel] - kfrac[k0]
-        _dfrac -= np.round(_dfrac)
-        _steps = np.rint(_dfrac * mesh).astype(int)
-        for _i in (0, 1):
-            if int(np.abs(_steps[:, _i]).max()) < 1:
-                return None, ("倒格矢方向 %d 无非零步取点（该轴分割数 N=%d 过少），"
-                              "该方向曲率完全无约束——把 step3_uniform 的 KSPACING "
-                              "调小或设 KMIN_DIV≥12" % (_i, int(mesh[_i])))
-        # [P1] 设计矩阵：高对称点（K）在网格上时线性项被 C₃ 强制为 0，但 SS/LS
-        # 的带边在 Y–Γ 路径上（非高对称点），真实极值点一般不在网格点上，存在
-        # 真实线性项——点数够就拟合它，吸收 k0 偏移；否则只拟合二次项。
-        # [Q4] ≥2 壳层时再加各向同性四次项 q⁴，把次抛物偏置直接拟掉。
-        use_quartic = (n_shell >= 2) and (npt >= 8)
-        # 线性项（d,e,f）需 3 倍冗余才稳定：2 倍冗余（14 点）在对称点上会把曲率
-        # 拟合进线性项（hex 实测 m* 1.124 vs 0.924）。≥18 点才启用。
-        use_linear = (npt >= 18)
-        cols = [dkx[sel] ** 2, dky[sel] ** 2, dkx[sel] * dky[sel]]
-        names = ["a", "b", "c"]
-        if use_quartic:
-            cols.append(q2[sel] ** 2)
-            names.append("q4")
-        if use_linear:
-            cols += [dkx[sel], dky[sel], np.ones(npt)]
-            names += ["d", "e", "f"]
-        A = np.column_stack(cols)
-        if A.shape[0] < 2 * A.shape[1]:
-            return None, ("拟合点数不足：%d 点 / %d 参数（需 ≥2 倍冗余）——"
-                          "加密 step3_uniform 网格" % (A.shape[0], A.shape[1]))
-        cond = float(np.linalg.cond(A))
-        if cond > 1e5:
-            return None, ("设计矩阵病态 cond=%.1e（k 点单侧/共线，"
-                          "IBZ 楔形取点不对称）" % cond)
-        sol, *_ = np.linalg.lstsq(A, dee[sel], rcond=None)
-        a, b, c = float(sol[0]), float(sol[1]), float(sol[2])
-        pred = A @ sol
-        rel = float(np.linalg.norm(dee[sel] - pred)
-                    / (np.linalg.norm(dee[sel]) + 1e-12))
-        if rel > 0.2:
-            return None, "二次型拟合残差过大 rel=%.2f（带边附近非二次型）" % rel
-        # [P2] 逆质量张量求逆的对角元（H=[[2a,c],[c,2b]]）。
-        # 质量恒正：electron(CBM) 曲率 a,b>0，hole(VBM) 曲率 a,b<0——统一取 |a|,|b|，
-        # 否则 hole 会得到负质量（den=4ab-c² 因 ab>0 为正，但分子 4b/4a 带负号）。
-        if a * b <= 0:
-            return None, ("带边曲率异号（a=%.3f b=%.3f，鞍点？"
-                          "带边定位可疑或取点跨了多个带边）" % (a, b))
+        fit, _ferr = _quad_fit_2d(kfrac, recip, ene[:, b0], k0)
+        if _ferr:
+            return None, _ferr
+        a, b, c, den = fit["a"], fit["b"], fit["c"], fit["den"]
         aa, bb = abs(a), abs(b)
-        den = 4.0 * aa * bb - c * c
-        if den <= 1e-12:
-            return None, "逆质量张量奇异（4|a||b|-c²=%.2g，能量椭圆退化）" % den
+        npt, n_shell, Rused, names, cond, rel = (fit[k] for k in ("npt", "n_shell", "Rused", "names", "cond", "rel"))
         mx = 3.80998 * (4.0 * bb) / den
         my = 3.80998 * (4.0 * aa) / den
         if mx <= 0 or my <= 0:
@@ -1212,6 +1293,663 @@ def _aniso_block(cwd, is_2d, carrier, T):
     return blk
 
 
+# ============================ [0022] 多谷 DPT ============================
+# 单谷 DPT（上面的各向同性值与 by_direction）只看全局带边那一个谷：带边在 Q/Λ 这类非高对称点（WSe2 导带）时
+# 单谷 m* 拒绝出数；带边附近还有别的谷（MoS2 价带 K 与 Γ、导带 K 与 Q）时单谷值也漏了它们。这里全自动：
+#   ① 在 S3 全 BZ 网格的 kz=0 层上找离带边 VALLEY_WINDOW_EV 以内的所有谷（各带、各自旋道的局部极值），
+#      按点群（+时间反演）归成星：K 星 2 个谷、Q 星 6 个、Γ 1 个、M 3 个；
+#   ② 每个谷单独做二次型拟合（与 by_direction 同一个 _quad_fit_2d）-> 逆质量张量 W=M⁻¹（1/m0）、
+#      态密度质量 m_d=√det M、拟合出的极值能量（离网的 Q 谷不取网格点的能量）；
+#   ③ 每个谷单独取形变势，与 S7.1 的 E1_vac 同一定义：S7 形变构型（S7.1 实际读的那份，ionrelax 优先）里
+#      该谷 k 点、该带本征值的中心差分减去真空势的应变导数，E1_α = |dE/dε_αα − dE_vac/dε_αα|；
+#      不用 deformation_vac.h5：AMSET 把对称化转出来的斜向应变也平均进 D_xx/D_yy，各向异性的 Q 谷会被抹平；
+#   ④ τ_α,v = ħ³C_α/(k_BT·m_d,v·E1_α,v²)；非简并统计下谷 v 的载流子数 n_v ∝ m_d,v·exp(−ΔE_v/k_BT)：
+#        μ_αα(T) = (e/m0)·Σ_v n_v·τ_α,v·W_αα,v / Σ_v n_v       每个温度单独算（谷间布居随 T 变，不再是 μ∝1/T）
+#      只有一个星且交叉项为零时（K 谷材料）与 by_direction 完全相同。不含谷间散射 -> 偏上限。
+HB2_2M0 = 3.80998          # ħ²/(2m0)，eV·Å²
+KINK_TOL_EV = 0.02         # 按能量排序的两条带相交处，上面那条带是 V 形"极小"（不是谷）：靠带边一侧的相邻带
+                           #   在这点差 < 20 meV 且它自己在这点不是极值 -> 当交叉点跳过（记进 skipped）
+_MV_CACHE = {}             # 本进程内两种载流子共用：S3 vasprun 与 S7 形变构型只解析一次
+
+
+class _MVStop(Exception):
+    """多谷块的"拒绝出数 + 原因"（不是程序错误）。"""
+
+
+def _vasprun_s3(cwd):
+    for n in ("vasprun.xml", "vasprun.xml.gz"):
+        p = Path(cwd) / UNIFORM_DIR / n
+        if p.is_file():
+            return p
+    return None
+
+
+def _cached_vasprun(path):
+    st = Path(path).stat()
+    key = ("vr", str(Path(path).resolve()), st.st_mtime_ns, st.st_size)
+    if key not in _MV_CACHE:
+        from pymatgen.io.vasp import Vasprun
+        _MV_CACHE[key] = Vasprun(str(path), parse_dos=False, parse_potcar_file=False)
+    return _MV_CACHE[key]
+
+
+def _cached_eig(path):
+    """(k 列表, {自旋名: 本征值数组})，按文件缓存。"""
+    import numpy as np
+    st = Path(path).stat()
+    key = ("eig", str(Path(path).resolve()), st.st_mtime_ns, st.st_size)
+    if key not in _MV_CACHE:
+        v = _cached_vasprun(path)
+        _MV_CACHE[key] = (np.asarray(v.actual_kpoints, float), dict(_spin_items(v)))
+    return _MV_CACHE[key]
+
+
+def _spin_items(v):
+    """[(自旋名 up/down, arr(nk,nb,2)), ...]，顺序与 _spin_arrays 相同。"""
+    import numpy as np
+    eigmap = v.eigenvalues
+    keys = list(eigmap.keys())
+    try:
+        from pymatgen.electronic_structure.core import Spin
+        keys = [s for s in (Spin.up, Spin.down) if s in eigmap] or keys
+    except Exception:
+        pass
+    return [(str(getattr(s, "name", s)).lower(), np.asarray(eigmap[s])) for s in keys]
+
+
+def _kidx_tr(kp, kf, tol=1e-4):
+    """kf（或 −kf：VASP 的 ISYM=0 仍按时间反演只留半个网格）在 k 列表里的下标；没有 -> None。"""
+    import numpy as np
+    for sg in (1.0, -1.0):
+        d = kp - sg * np.asarray(kf, float)
+        d -= np.round(d)
+        dd = np.linalg.norm(d, axis=1)
+        i = int(np.argmin(dd))
+        if dd[i] <= tol:
+            return i
+    return None
+
+
+def _mv_plane(kfrac):
+    """全 BZ 的 kz=0 层 -> {"N": (N1, N2), "idx": (N1,N2) 网格坐标 -> kfrac 下标}；失败 (None, 原因)。"""
+    import numpy as np
+    w = np.asarray(kfrac, float)
+    w = w - np.round(w)
+    sel = np.where(np.abs(w[:, 2]) < 1e-6)[0]
+    if len(sel) < 9:
+        return None, "全 BZ 的 kz=0 层只有 %d 个点" % len(sel)
+    p = w[sel, :2]
+    N = []
+    for a in (0, 1):
+        nz = np.abs(p[:, a]) > 1e-6
+        if not nz.any():
+            return None, "面内方向 %d 只有 1 个分割" % a
+        N.append(int(round(1.0 / float(np.min(np.abs(p[nz, a]))))))
+    N = np.array(N)
+    g = p * N
+    if float(np.max(np.abs(g - np.round(g)))) > 1e-3:
+        return None, "step3_uniform 的面内网格不是 Γ 中心的均匀网格"
+    ij = np.mod(np.round(g).astype(int), N)
+    key = ij[:, 0] * N[1] + ij[:, 1]
+    if len(np.unique(key)) != len(key) or len(key) != int(N[0] * N[1]):
+        return None, "kz=0 层 %d 点 ≠ %d×%d（全 BZ 展开不完整）" % (len(key), N[0], N[1])
+    idx = np.full((int(N[0]), int(N[1])), -1, int)
+    idx[ij[:, 0], ij[:, 1]] = sel
+    return {"N": (int(N[0]), int(N[1])), "idx": idx}, None
+
+
+def _mv_extrema(E, sgn):
+    """周期网格 E(N1,N2) 上的局部极值（sgn=+1 极小 / −1 极大，8 邻域）。极值正好落在两个网格点中间时
+    （如奇数网格的 M）两点等高、都算极值：8 邻接且等高的并成一个谷。返回 [[(i,j), ...], ...]。"""
+    import numpy as np
+    s = sgn * np.asarray(E, float)
+    ok = np.ones(s.shape, bool)
+    for di in (-1, 0, 1):
+        for dj in (-1, 0, 1):
+            if di or dj:
+                ok &= s <= np.roll(s, (-di, -dj), axis=(0, 1)) + 1e-6
+    pts = [tuple(int(x) for x in q) for q in np.argwhere(ok)]
+    n1, n2 = s.shape
+    par = {q: q for q in pts}
+
+    def find(q):
+        while par[q] != q:
+            par[q] = par[par[q]]
+            q = par[q]
+        return q
+    for (i, j) in pts:
+        for di in (-1, 0, 1):
+            for dj in (-1, 0, 1):
+                q = ((i + di) % n1, (j + dj) % n2)
+                if q != (i, j) and q in par and abs(s[i, j] - s[q]) < 1e-3:
+                    par[find((i, j))] = find(q)
+    groups = {}
+    for q in pts:
+        groups.setdefault(find(q), []).append(q)
+    return [sorted(g) for g in groups.values()]
+
+
+def _mv_collect(ene, idx, N, nocc, sgn, edge, win):
+    """各自旋道、各带（从带边往外）在 kz=0 网格上的极值。ene：{自旋: (n_full, nb)}；idx：网格坐标 -> 下标；
+    edge：sgn·E 的带边值。返回 (valleys=[(自旋, 带, [(i,j)...], 网格能量)], seeds=窗口内的下标, skipped=交叉点说明)。
+    窗口外的极值也收（归星时找对称像用），带的最低点（sgn 意义下）出窗口就不再往外扫。"""
+    import numpy as np
+    valleys, seeds, skipped = [], set(), []
+    for sp in ene:
+        nbands = ene[sp].shape[1]
+        for b in (range(nocc[sp], nbands) if sgn > 0 else range(nocc[sp] - 1, -1, -1)):
+            E2 = ene[sp][idx, b]
+            if float((sgn * E2).min()) > edge + win:
+                break
+            nb = b - 1 if sgn > 0 else b + 1                  # 靠带边一侧的相邻带（也得是同类带）
+            has_nb = (nb >= nocc[sp]) if sgn > 0 else (nb < nocc[sp])
+            nb_ext = {q for g in _mv_extrema(ene[sp][idx, nb], sgn) for q in g} if has_nb else set()
+            for pts in _mv_extrema(E2, sgn):
+                e_here = float(E2[pts[0]])
+                if has_nb and abs(e_here - float(ene[sp][idx, nb][pts[0]])) < KINK_TOL_EV \
+                        and not (set(pts) & nb_ext):
+                    if sgn * e_here <= edge + win:
+                        skipped.append("%s 带 %d k=%s：与带 %d 交叉（差 %.0f meV），不是谷" % (
+                            sp, b, (np.array(pts[0]) / np.array(N)).round(4).tolist(), nb,
+                            1000 * abs(e_here - float(ene[sp][idx, nb][pts[0]]))))
+                    continue
+                if sgn * e_here <= edge + win:
+                    seeds.add(len(valleys))
+                valleys.append((sp, b, pts, e_here))
+    return valleys, seeds, skipped
+
+
+def _mv_kops(structure, use_tr):
+    """点群在倒空间分数坐标上的作用（Rᵀ，整数矩阵），有时间反演再加 −Rᵀ；只留保 z 轴的（面内）。"""
+    import numpy as np
+    from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
+    ops = SpacegroupAnalyzer(structure, symprec=0.01).get_point_group_operations(cartesian=False)
+    out = []
+    for op in ops:
+        r = np.rint(np.asarray(op.rotation_matrix, float).T).astype(int)
+        if np.any(r[2, :2]) or np.any(r[:2, 2]):
+            continue
+        for rr in ((r, -r) if use_tr else (r,)):
+            if not any(np.array_equal(rr, u) for u in out):
+                out.append(rr)
+    return out
+
+
+def _mv_rot3(r):
+    """面内部分是 ≥3 次转轴（C3/C4/C6）。"""
+    import numpy as np
+    r2 = np.asarray(r)[:2, :2]
+    return int(round(float(np.linalg.det(r2)))) == 1 and abs(int(np.trace(r2))) <= 1
+
+
+def _mv_site_iso(kf, kops):
+    """k 点的小群（含时间反演）有 ≥3 次转轴（K、Γ）-> 该谷的面内形变势张量各向同性，E1_x = E1_y。"""
+    import numpy as np
+    kf = np.asarray(kf, float)
+    for r in kops:
+        d = r @ kf - kf
+        d -= np.round(d)
+        if float(np.max(np.abs(d[:2]))) < 1e-6 and _mv_rot3(r):
+            return True
+    return False
+
+
+def _mv_stars(valleys, N, kops, seeds=None):
+    """valleys：[(自旋, 带, [(i,j),...], E)]（扫过的带上的全部极值）。从 seeds（窗口内的谷）出发按点群轨道归星
+    -> ([[谷下标...], ...], None)；失败 (None, 原因)。"""
+    import numpy as np
+    N = np.asarray(N)
+    where = {}
+    for vi, (sp, b, pts, _e) in enumerate(valleys):
+        for q in pts:
+            where[(sp, b, q)] = vi
+    star_of = [-1] * len(valleys)
+    stars = []
+    for vi, (sp, b, pts, _e) in enumerate(valleys):
+        if star_of[vi] >= 0 or (seeds is not None and vi not in seeds):
+            continue
+        k = np.array([pts[0][0] / N[0], pts[0][1] / N[1], 0.0])
+        mem = set()
+        for r in kops:
+            g = (r @ k)[:2] * N
+            if float(np.max(np.abs(g - np.round(g)))) > 1e-6:
+                return None, "step3_uniform 的面内网格 %d×%d 在晶体对称操作下不封闭" % (N[0], N[1])
+            q = tuple(int(x) for x in np.mod(np.round(g).astype(int), N))
+            vj = where.get((sp, b, q))
+            if vj is None:
+                return None, ("谷 k=%s（%s 带 %d）的对称像 %s 不是网格上的极值点：网格与晶体对称性不一致"
+                              % (np.round(k[:2], 4).tolist(), sp, b, (np.array(q) / N).round(4).tolist()))
+            mem.add(vj)
+        for vj in mem:
+            if star_of[vj] >= 0:
+                return None, "谷的对称轨道互相重叠（对称操作不成群？）"
+            star_of[vj] = len(stars)
+        stars.append(sorted(mem))
+    return stars, None
+
+
+def _mv_label(kf, recip, hexcell):
+    """星的名字（只作标注）：六方 Γ/K/M/Q(Γ–K 线)/Γ–M；矩形 Γ/X/Y/S；其余写分数坐标。"""
+    import numpy as np
+    k = np.asarray(kf, float)[:2]
+    k = k - np.round(k)
+    if np.all(np.abs(k) < 1e-6):
+        return "Γ"
+    if hexcell:
+        kc = np.array([k[0], k[1], 0.0]) @ np.asarray(recip)
+        b = float(np.linalg.norm(recip[0]))
+        rel = (math.degrees(math.atan2(kc[1], kc[0]))
+               - math.degrees(math.atan2(recip[0][1], recip[0][0]))) % 60.0
+        r = float(np.linalg.norm(kc))
+        if min(rel, 60.0 - rel) < 2.0:                       # Γ–M 方向
+            return "M" if abs(r - b / 2.0) < 1e-2 * b else "Γ–M"
+        if abs(rel - 30.0) < 2.0:                            # Γ–K 方向
+            rk = b / math.sqrt(3.0)
+            if abs(r - rk) < 1e-2 * rk:
+                return "K"
+            if r < rk:
+                return "Q"
+    else:
+        two = 2.0 * k
+        if np.all(np.abs(two - np.round(two)) < 1e-6):
+            return {(1, 0): "X", (0, 1): "Y", (1, 1): "S"}.get(
+                (int(abs(round(two[0]))), int(abs(round(two[1])))), "k")
+    return "k(%.3f,%.3f)" % (k[0], k[1])
+
+
+class _DeformE1:
+    """[0022] 逐谷形变势：与 S7.1 的 E1_vac 同一定义（gen_step9b_deform_read.py 的 _edge_raw / dvac 段）：
+        E1_α(k, 带, 自旋) = | [(E₊−E₀)/γ + (E₋−E₀)/(−γ)]/2 − dE_vac/dε_α |
+    E 取 step7_deform/<构型>/(ionrelax/)vasprun.xml —— band_edges.json 的 read_paths 记着 S7.1 实际读的哪份；
+    γ、dE_vac/dε、±应变配对目录都取 band_edges.json 的 vac_align（S7.1 落盘的同一组数）。"""
+    AX = ("xx", "yy")
+
+    def __init__(self, cwd, be):
+        va = (be or {}).get("vac_align") or {}
+        if va.get("status") != "ok":
+            raise _MVStop("band_edges.json 的真空对齐不是 ok（%s）：逐谷 E1 用真空口径，先让 S7.1 的真空对齐跑通"
+                          % (va.get("reason") or va.get("status") or "无 vac_align 段，旧版 S7.1"))
+        try:
+            self.pairs = {a: [str(x) for x in va["pairs"][a]] for a in self.AX}
+            self.g = {a: float(va["strain_mag"][a]) for a in self.AX}
+            self.dvac = {a: float(va["dvac_eV_per_unit_strain"][a]) for a in self.AX}
+        except (KeyError, TypeError, ValueError):
+            raise _MVStop("band_edges.json 的 vac_align 缺 pairs/strain_mag/dvac_eV_per_unit_strain"
+                          "（旧版 S7.1）：重跑 step7b_deform_read")
+        self.read_paths = be.get("read_paths") or {}
+        self.root = Path(cwd) / DEFORM_DIR
+        self.used = {}
+
+    def _path(self, folder):
+        rp = (self.read_paths.get(folder) or {}).get("vasprun.xml")
+        dirs = {"ionrelax": [self.root / folder / "ionrelax"], "rigid": [self.root / folder]}.get(
+            rp, [self.root / folder / "ionrelax", self.root / folder])
+        for d in dirs:
+            for n in ("vasprun.xml", "vasprun.xml.gz"):
+                if (d / n).is_file():
+                    return d / n
+        raise _MVStop("缺 %s/%s/%svasprun.xml（S7.1 读的那份，逐谷 E1 要它；S7 目录被清理过？）"
+                      % (DEFORM_DIR, folder, "ionrelax/" if rp == "ionrelax" else ""))
+
+    def data(self, folder):
+        path = self._path(folder)
+        self.used[folder] = str(path)
+        return _cached_eig(path)
+
+    def energy(self, folder, kf, band, spin):
+        kp, eig = self.data(folder)
+        i = _kidx_tr(kp, kf)
+        if i is None:
+            raise _MVStop("k=%s 不在 %s 的 k 网格（含 −k）上" % ([round(float(x), 4) for x in kf], folder))
+        if spin not in eig or band >= eig[spin].shape[1]:
+            raise _MVStop("%s 没有自旋 %s 的第 %d 条带" % (folder, spin, band))
+        return float(eig[spin][i, band, 0])
+
+    def e1_parts(self, ax, kf, band, spin):
+        """[0023] (raw, signed)：raw = 本征值对应变的中心差分（VASP 本征值以胞内平均静电势为零点），
+        signed = raw − dE_vac/dε（真空口径，带符号）。E1 = |signed|。两者都写进 json：真空口径下 K、Q 谷
+        的形变势若一正一负被同一个 dE_vac/dε 平移，小的那个可能被移到 0 附近，看 raw 就知道是不是这种抵消。"""
+        dp_, dm_ = self.pairs[ax]
+        g = self.g[ax] if self.g[ax] > 1e-6 else 0.005
+        e0 = self.energy("undeformed", kf, band, spin)
+        raw = ((self.energy(dp_, kf, band, spin) - e0) / g
+               + (self.energy(dm_, kf, band, spin) - e0) / (-g)) / 2.0
+        return raw, raw - self.dvac[ax]
+
+    def e1(self, ax, kf, band, spin):
+        return abs(self.e1_parts(ax, kf, band, spin)[1])
+
+    def snap(self, kf, recip):
+        """S3 网格上的谷 k -> S7 网格上最近的点（ISYM=0 的列表 ∪ −列表 = 全网格）。返回 (k, 偏差 Å⁻¹)。"""
+        import numpy as np
+        kp, _ = self.data("undeformed")
+        cand = np.vstack([kp, -kp])
+        d = cand - np.asarray(kf, float)
+        d -= np.round(d)
+        dc = np.linalg.norm(d @ np.asarray(recip), axis=1)
+        i = int(np.argmin(dc))
+        return np.asarray(kf, float) + d[i], float(dc[i])
+
+    def nocc(self, spin):
+        import numpy as np
+        _kp, eig = self.data("undeformed")
+        if spin not in eig:
+            raise _MVStop("S7 undeformed 没有自旋道 %s（S3 与 S7 的 ISPIN 不同）" % spin)
+        return int(np.count_nonzero(eig[spin][0, :, 1] > 0.5))
+
+    def selfcheck(self, be, carrier):
+        """带边 E1 必须复现 S7.1 写的 E1_vac_*（同一 k、同一组简并带）：不一致说明构型/带号/自旋对错了。"""
+        e = be.get(carrier) or {}
+        hits = e.get("hits") or []
+        if not hits or hits[0].get("k_frac") is None:
+            raise _MVStop("band_edges.json 没有 %s 的带边 hits" % carrier)
+        kf = hits[0]["k_frac"]
+        sb = sorted({(str(h["spin"]).lower(), int(h["band_global"])) for h in hits})
+        out = {}
+        for ax in self.AX:
+            ref = e.get("E1_vac_%s_raw_eV" % ax, e.get("E1_vac_%s_eV" % ax))
+            if ref is None:
+                raise _MVStop("band_edges.json 没有 %s 的 E1_vac_%s：S7.1 真空对齐没出数" % (carrier, ax))
+            val = sum(self.e1(ax, kf, b, sp) for sp, b in sb) / len(sb)
+            out[ax] = {"recomputed_eV": round(val, 4), "S7.1_eV": float(ref)}
+            if abs(val - float(ref)) > max(0.02, 0.02 * abs(float(ref))):
+                raise _MVStop("带边 E1_%s 重算 %.4f eV ≠ S7.1 的 %.4f eV：读的构型/带号/自旋与 S7.1 不一致，"
+                              "逐谷 E1 不可信（S7 目录在 S7.1 之后被改过？重跑 step7b_deform_read）"
+                              % (ax, val, float(ref)))
+        e_edge = self.energy("undeformed", kf, sb[0][1], sb[0][0])
+        return out, e_edge
+
+
+def _mv_mobility(srecs, Cxy, T, iso_crystal, only=None):
+    """[0023] 多谷加权（原是 _multi_valley 里的闭包，挪出来给文献对照测试直接调）。
+    srecs：[{"label", "members": [{"m_d", "dE", "E1": [x, y], "W": 2×2 逆质量张量(1/m0)}]}]；only：只算这个星。
+    μ_αα = (e/m0)·Σ n τ_α W_αα / Σ n，n = m_d·exp(−ΔE/k_BT)，τ_α = ħ³C_α/(k_BT m_d E1_α²)。
+    返回 {"mu": [x, y] cm²/Vs, "tau": [x, y] s, "m_c": [x, y] m0, "w": {星: 布居}}。"""
+    kT = KB * T / E_C
+    sn, snw, sntw, per = 0.0, [0.0, 0.0], [0.0, 0.0], {}
+    for s in srecs:
+        if only is not None and s is not only:
+            continue
+        ns = 0.0
+        for m in s["members"]:
+            n = m["m_d"] * math.exp(-m["dE"] / kT)
+            ns += n
+            for a in (0, 1):
+                tau = HBAR ** 3 * Cxy[a] / (KB * T * (m["m_d"] * M0) * (m["E1"][a] * E_C) ** 2)
+                snw[a] += n * m["W"][a][a]
+                sntw[a] += n * tau * m["W"][a][a]
+        per[s["label"]] = ns
+        sn += ns
+    if iso_crystal:                                  # 六方/四方：面内输运张量各向同性
+        snw = [sum(snw) / 2.0] * 2
+        sntw = [sum(sntw) / 2.0] * 2
+    mu = [E_C / M0 * sntw[a] / sn * 1e4 for a in (0, 1)]
+    return {"mu": mu, "tau": [sntw[a] / snw[a] for a in (0, 1)],
+            "m_c": [sn / snw[a] for a in (0, 1)], "w": {k: x / sn for k, x in per.items()}}
+
+
+def _mv_e1_eff(star):
+    """[0023] 星的等效形变势：τ ∝ ⟨1/E1²⟩（成员 × 方向平均）-> E1_eff = ⟨1/E1²⟩^(-1/2)。"""
+    vals = [1.0 / (e * e) for m in star["members"] for e in m["E1"]]
+    return (sum(vals) / len(vals)) ** -0.5
+
+
+def _mv_e1_gate(srecs, Cxy, temps, iso_crystal):
+    """[0023] 有贡献的星（任一温度布居 ≥ VALLEY_W_MIN）之间 E1_eff 相差 > VALLEY_E1_RATIO_MAX 倍 -> (说明, 明细)；
+    否则 (None, 明细)。明细 = {星: {"E1_eff_eV", "pop_max"}}。"""
+    pmax = {}
+    for T in temps:
+        for k, x in _mv_mobility(srecs, Cxy, T, iso_crystal)["w"].items():
+            pmax[k] = max(pmax.get(k, 0.0), x)
+    info = {s["label"]: {"E1_eff_eV": round(_mv_e1_eff(s), 4), "pop_max": round(pmax[s["label"]], 4)}
+            for s in srecs}
+    contrib = [k for k in info if info[k]["pop_max"] >= VALLEY_W_MIN]
+    if len(contrib) < 2:
+        return None, info
+    hi = max(contrib, key=lambda k: info[k]["E1_eff_eV"])
+    lo = min(contrib, key=lambda k: info[k]["E1_eff_eV"])
+    ratio = info[hi]["E1_eff_eV"] / info[lo]["E1_eff_eV"]
+    if ratio <= VALLEY_E1_RATIO_MAX:
+        return None, info
+    return ("拒绝：有贡献的谷之间形变势相差 %.1f 倍（%s E1=%.2f eV、最大布居 %.1f%%；%s E1=%.2f eV；阈值 "
+            "VALLEY_E1_RATIO_MAX=%g）。τ∝1/E1²，E1 小的谷 τ 长约 %.0f 倍，布居再小也会主导电导；它的 LA 膨胀形变势"
+            "耦合几乎抵消，真实输运由 DPT 不含的 TA/谷间/光学散射决定（Jin et al. PRB 90, 045422：DFPT 拟合的 Q/K "
+            "声学形变势比 0.6–0.9，WSe2 电子含谷间 30、只 K 250 cm²/Vs），多谷 DPT 给不出可信数。"
+            "单谷结果（若有）照旧可用；各谷带符号的 dE/dε 见 valleys[].E1_signed_xy_eV / dEdeps_raw_xy_eV"
+            % (ratio, lo, info[lo]["E1_eff_eV"], 100 * info[lo]["pop_max"], hi, info[hi]["E1_eff_eV"],
+               VALLEY_E1_RATIO_MAX, ratio ** 2)), info
+
+
+def _multi_valley_block(cwd, is_2d, carrier, T0, temps, by_direction=None):
+    """[0022] 多谷 DPT 结果块（2D）。拒绝出数时只写 status（原因），绝不崩。"""
+    if not is_2d:
+        return {"status": "多谷 DPT 只实现 2D（3D 用上面的各向同性值）"}
+    if str(DPT_VALLEYS).strip().lower() == "off":
+        return {"status": "off（本材料 step.conf DPT_VALLEYS = off）"}
+    try:
+        return _multi_valley(cwd, carrier, T0, temps, by_direction)
+    except _MVStop as e:
+        return {"status": str(e)}
+    except Exception as e:                       # noqa: BLE001
+        return {"status": "多谷 DPT 异常：%s" % _exc_brief(e)}
+
+
+def _multi_valley(cwd, carrier, T0, temps, by_direction):
+    import numpy as np
+    if E1_SOURCE != "vac":
+        raise _MVStop("多谷 DPT 只实现真空口径 E1（E1_SOURCE=vac）；当前 E1_SOURCE=%s" % E1_SOURCE)
+    Cxy, Cprov = get_C_aniso(cwd, True)
+    if Cxy is None:
+        raise _MVStop("缺 C：%s" % Cprov)
+    be = _band_edges_json(cwd)
+    if not be:
+        raise _MVStop("缺 %s/band_edges.json" % DEFORM_READ_DIR)
+    vr = _vasprun_s3(cwd)
+    if vr is None:
+        raise _MVStop("缺 step3_uniform/vasprun.xml")
+    v = _cached_vasprun(vr)
+    st = v.final_structure
+    recip = np.asarray(st.lattice.reciprocal_lattice.matrix)
+    hexcell = _hex_cell(recip)
+    sgn = 1.0 if carrier == "electron" else -1.0
+    win = float(VALLEY_WINDOW_EV)
+
+    spins = _spin_items(v)
+    nocc = {}
+    for sp, arr in spins:
+        n_k = np.count_nonzero(arr[:, :, 1] > 0.5, axis=1)
+        if int(n_k.min()) != int(n_k.max()):
+            raise _MVStop("自旋 %s 各 k 点的占据带数不同（%d..%d）：能带交叠（金属/半金属），多谷 DPT 不适用"
+                          % (sp, int(n_k.min()), int(n_k.max())))
+        nocc[sp] = int(n_k[0])
+
+    kfrac, kp_map, xmethod, xerr = _expand_full_bz(v, cwd, carrier)
+    if xerr:
+        raise _MVStop(xerr)
+    plane, perr = _mv_plane(kfrac)
+    if perr:
+        raise _MVStop(perr)
+    N, idx = plane["N"], plane["idx"]
+    ene = {sp: arr[np.asarray(kp_map), :, 0] for sp, arr in spins}          # (n_full, nb)
+
+    def bands_of(sp):
+        nb = ene[sp].shape[1]
+        return range(nocc[sp], nb) if sgn > 0 else range(nocc[sp] - 1, -1, -1)
+    edge = None
+    for sp, _arr in spins:
+        for b in bands_of(sp):
+            e = float((sgn * ene[sp][idx, b]).min())
+            edge = e if edge is None else min(edge, e)
+            break
+    if edge is None:
+        raise _MVStop("没有%s带" % ("导" if sgn > 0 else "价"))
+
+    valleys, seeds, skipped = _mv_collect(ene, idx, N, nocc, sgn, edge, win)
+    kops = _mv_kops(st, _time_reversal_ok(v, cwd, carrier))
+    stars, serr = _mv_stars(valleys, N, kops, seeds)
+    if serr:
+        raise _MVStop(serr)
+    iso_crystal = any(_mv_rot3(r) for r in kops)
+
+    rd = _DeformE1(cwd, be)
+    for sp in nocc:
+        if rd.nocc(sp) != nocc[sp]:
+            raise _MVStop("S3 与 S7 undeformed 的占据带数不同（自旋 %s：%d vs %d）：NELECT/SOC 不一致，带号对不上"
+                          % (sp, nocc[sp], rd.nocc(sp)))
+    selfcheck, e7_edge = rd.selfcheck(be, carrier)
+
+    srecs, warns = [], []
+    for star in stars:
+        members = []
+        for vi in star:
+            sp, b, pts, e_grid = valleys[vi]
+            k0 = int(idx[pts[0]])
+            tag = "%s 带 %d k=%s" % (sp, b, np.round(kfrac[k0][:2], 4).tolist())
+            fit, ferr = _quad_fit_2d(kfrac, recip, ene[sp][:, b], k0)
+            if ferr:
+                raise _MVStop("谷 %s（离带边 %.3f eV）拟合失败：%s —— 它在窗口 VALLEY_WINDOW_EV=%.2f 里不能丢；"
+                              "确认它不重要就在本材料 step.conf 把 VALLEY_WINDOW_EV 调到它以下"
+                              % (tag, float(sgn * e_grid) - edge, ferr, win))
+            a, bq, c = fit["a"], fit["b"], fit["c"]
+            if sgn * a <= 0:
+                raise _MVStop("谷 %s 的拟合曲率符号与%s不符（a=%.3f）" % (tag, "极小" if sgn > 0 else "极大", a))
+            W = sgn * np.array([[a, c / 2.0], [c / 2.0, bq]]) / HB2_2M0              # 1/m0
+            M = np.linalg.inv(W)
+            co = fit["coef"]
+            e_fit, xs = e_grid, np.zeros(2)
+            if "d" in co:                                        # 极值不在网格点上：取拟合出的极值（能量与位置）
+                H = np.array([[2 * a, c], [c, 2 * bq]])
+                gl = np.array([co["d"], co["e"]])
+                xs = -np.linalg.solve(H, gl)
+                e_fit = e_grid + co["f"] + 0.5 * float(gl @ xs)
+            shift = float(np.linalg.norm(xs))
+            if shift > 1.5 * fit["step_min"]:                   # 网格极值离真极值不会超过 ~1 步：拟合与网格矛盾
+                raise _MVStop("谷 %s 的拟合极值离网格点 %.3f Å⁻¹（> 1.5 步 = %.3f）：与网格上的极值矛盾，拟合不可信"
+                              % (tag, shift, 1.5 * fit["step_min"]))
+            kf3 = np.array(kfrac[k0], float)
+            kc_fit = kf3 @ recip + np.array([xs[0], xs[1], 0.0])
+            kf_fit = np.linalg.solve(recip.T, kc_fit)            # 拟合极值的分数坐标（标注、取 E1 都用它）
+            ks7, koff = rd.snap(kf_fit, recip)
+            parts = [rd.e1_parts(ax, ks7, b, sp) for ax in ("xx", "yy")]
+            e1 = [abs(q[1]) for q in parts]
+            e1_raw = list(e1)
+            if _mv_site_iso(kf3, kops):                         # K/Γ（网格点就是该点）：C₃ 使面内形变势张量各向同性
+                e1 = [(e1[0] + e1[1]) / 2.0] * 2
+            if min(e1) < 1e-3:
+                raise _MVStop("谷 %s 的形变势 E1=(%.4f, %.4f) eV ≈ 0：DPT 发散，该谷不能用 DPT" % (tag, e1[0], e1[1]))
+            d7 = sgn * (rd.energy("undeformed", ks7, b, sp) - e7_edge)
+            members.append({"spin": sp, "band": b, "k": kf_fit, "k_grid": kf3, "e_grid": e_grid, "e_fit": e_fit,
+                            "W": W, "M": M,
+                            "m_d": 1.0 / math.sqrt(float(np.linalg.det(W))), "E1": e1, "E1_raw": e1_raw,
+                            "E1_signed": [q[1] for q in parts], "dEdeps_raw": [q[0] for q in parts],
+                            "k_S7": ks7, "k_offset_S7": koff, "dE_S7": d7, "shift": shift,
+                            "fit": "%d点/%d壳层, 模型=%s, rel=%.3f" % (fit["npt"], fit["n_shell"],
+                                                                     "+".join(fit["names"]), fit["rel"])})
+        srecs.append({"members": members})
+
+    ref = min(sgn * m["e_fit"] for s in srecs for m in s["members"])
+    used_labels = set()
+    for s in srecs:
+        m0 = s["members"][0]
+        for m in s["members"]:
+            m["dE"] = sgn * m["e_fit"] - ref
+        lab = _mv_label(m0["k"], recip, hexcell)
+        if lab in used_labels:
+            lab = "%s(%s带%d)" % (lab, m0["spin"], m0["band"])
+        used_labels.add(lab)
+        s["label"] = lab
+        dEs = [m["dE"] for m in s["members"]]
+        if max(dEs) - min(dEs) > 0.005:
+            warns.append("星 %s 的等价谷能量相差 %.1f meV（网格/对称性不一致？）" % (lab, 1000 * (max(dEs) - min(dEs))))
+        for m in s["members"]:
+            dd = abs(m["dE_S7"] - (sgn * m["e_grid"] - edge))
+            if dd > 0.05:
+                warns.append("星 %s：S7 网格上的谷能量与 S3 差 %.0f meV（S7 网格太粗、谷 k 偏 %.3f Å⁻¹）"
+                             % (lab, 1000 * dd, m["k_offset_S7"]))
+                break
+
+    def at_T(T, only=None):
+        return _mv_mobility(srecs, Cxy, T, iso_crystal, only)
+
+    r0 = at_T(T0)
+    gate, e1info = _mv_e1_gate(srecs, Cxy, sorted(set(temps) | {T0}), iso_crystal)
+    rows = []
+    for T in temps:
+        r = at_T(T)
+        rows.append({"T_K": T,
+                     "mobility_x_cm2_Vs": round(float(r["mu"][0]), 3),
+                     "mobility_y_cm2_Vs": round(float(r["mu"][1]), 3),
+                     "mobility_inplane_cm2_Vs": round(float(r["mu"][0] + r["mu"][1]) / 2.0, 3),
+                     "tau_x_s": float(r["tau"][0]), "tau_y_s": float(r["tau"][1]),
+                     "weights": {k: round(float(x), 4) for k, x in r["w"].items()}})
+
+    # 自洽核对：只留带边所在的那个星时应等于 by_direction（同一拟合、同一 E1 定义）
+    cons = None
+    bd = by_direction or {}
+    if bd.get("status") == "ok":
+        grid_edge = min(srecs, key=lambda s: min(sgn * m["e_grid"] for m in s["members"]))
+        rs = at_T(T0, only=grid_edge)
+        cons = {"star": grid_edge["label"],
+                "x": round(float(rs["mu"][0] / bd["x"]["mobility_cm2_Vs"]), 4),
+                "y": round(float(rs["mu"][1] / bd["y"]["mobility_cm2_Vs"]), 4)}
+        if max(abs(cons["x"] - 1), abs(cons["y"] - 1)) > 0.10:
+            warns.append("只留 %s 星的多谷 μ 与 by_direction 差 >10%%（x %.3f, y %.3f）：同一个谷两条路径不自洽"
+                         % (grid_edge["label"], cons["x"], cons["y"]))
+
+    vout = []
+    for s in sorted(srecs, key=lambda s: min(m["dE"] for m in s["members"])):
+        m0 = s["members"][0]
+        vout.append({
+            "label": s["label"], "g": len(s["members"]), "spin": m0["spin"], "band_index": int(m0["band"]),
+            "dE_eV": round(float(min(m["dE"] for m in s["members"])), 4),
+            "k_frac": [np.round(m["k"], 6).tolist() for m in s["members"]],
+            "k_grid": [np.round(m["k_grid"], 6).tolist() for m in s["members"]],
+            "m_d_m0": round(float(np.mean([m["m_d"] for m in s["members"]])), 4),
+            "M_m0": np.round(m0["M"], 4).tolist(),
+            "E1_xy_eV": [[round(float(x), 4) for x in m["E1"]] for m in s["members"]],
+            "E1_xy_raw_eV": [[round(float(x), 4) for x in m["E1_raw"]] for m in s["members"]],
+            "E1_signed_xy_eV": [[round(float(x), 4) for x in m["E1_signed"]] for m in s["members"]],
+            "dEdeps_raw_xy_eV": [[round(float(x), 4) for x in m["dEdeps_raw"]] for m in s["members"]],
+            "E1_eff_eV": e1info[s["label"]]["E1_eff_eV"], "pop_max": e1info[s["label"]]["pop_max"],
+            "k_S7": [np.round(m["k_S7"], 6).tolist() for m in s["members"]],
+            "k_offset_S7_invA": round(float(max(m["k_offset_S7"] for m in s["members"])), 4),
+            "extremum_shift_invA": round(float(max(m["shift"] for m in s["members"])), 4),
+            "fit": m0["fit"],
+            "weight_T0": round(float(r0["w"][s["label"]]), 4)})
+    trunc = [T for T in temps if math.exp(-win / (KB * T / E_C)) > 0.01]
+    for w_ in warns:
+        print("[WARN] %s 多谷：%s" % (carrier, w_))
+    if gate:                                             # [0023] 只留诊断，不给任何迁移率/τ（下游只认 status ok）
+        print("[WARN] %s 多谷：%s" % (carrier, gate))
+        return {"status": gate, "window_eV": win, "valleys": vout,
+                "dvac_eV_per_unit_strain": dict(rd.dvac), "E1_selfcheck": selfcheck,
+                "S7_files": dict(rd.used), "warnings": warns}
+    return {
+        "status": "ok",
+        "method": ("多谷 DPT：S3 全 BZ（kz=0 层）找窗口内各带各自旋的谷、按点群(+TR)归星；逐谷二次型拟合 W=M⁻¹、"
+                   "m_d=√det M；逐谷 E1_α=|dE/dε_αα − dE_vac/dε_αα|（S7 形变构型本征值中心差分，与 S7.1 E1_vac 同一定义）；"
+                   "μ_αα(T)=(e/m0)Σ n_v τ_α,v W_αα,v/Σ n_v，n_v∝m_d,v·exp(−ΔE_v/k_BT)，τ_α,v=ħ³C_α/(k_BT m_d,v E1_α,v²)"),
+        "window_eV": win, "expand": xmethod, "grid_plane": list(N),
+        "C_2D_N_per_m": [round(Cxy[0], 3), round(Cxy[1], 3)], "C_provenance": Cprov,
+        "valleys": vout, "T_K": T0,
+        "x": {"mobility_cm2_Vs": round(float(r0["mu"][0]), 3), "tau_s": float(r0["tau"][0]),
+              "m_c_m0": round(float(r0["m_c"][0]), 4)},
+        "y": {"mobility_cm2_Vs": round(float(r0["mu"][1]), 3), "tau_s": float(r0["tau"][1]),
+              "m_c_m0": round(float(r0["m_c"][1]), 4)},
+        "mobility_inplane_cm2_Vs": round(float(r0["mu"][0] + r0["mu"][1]) / 2.0, 3),
+        "inplane_isotropic_by_symmetry": bool(iso_crystal),
+        "mobility_vs_T": rows,
+        "window_truncation_T_K": trunc,
+        "E1_selfcheck": selfcheck, "S7_files": dict(rd.used),
+        "dvac_eV_per_unit_strain": dict(rd.dvac),
+        "edge_star_vs_by_direction": cons,
+        "skipped_band_crossings": skipped,
+        "warnings": warns,
+        "note": ("不含谷间散射（K↔Q、K↔K' 的大波矢声子），只有谷内 LA 形变势散射，是上限；"
+                 "窗口外的谷不计（window_truncation_T_K 列出窗口边缘玻尔兹曼因子 >1% 的温度）。"),
+    }
+
+
 def _grid_resolution_note(carrier, m, mprov, T):
     """[V147] 最近网格点高出带边 > NN_KT_MAX·kT -> m_provenance 注明并告警。返回新的 mprov。"""
     nn = _EDGE_NN_DE.get(carrier)
@@ -1227,7 +1965,7 @@ def _grid_resolution_note(carrier, m, mprov, T):
             % (mprov, 1000 * nn, nn / kt))
 
 
-def _one_carrier(cwd, is_2d, carrier, T):
+def _one_carrier(cwd, is_2d, carrier, T, temps=None):
     C, Cunit, Cprov = get_C(cwd, is_2d)
     _EDGE_DEGEN.pop(carrier, None)
     _EDGE_NN_DE.pop(carrier, None)
@@ -1254,6 +1992,8 @@ def _one_carrier(cwd, is_2d, carrier, T):
         rec["mobility_cm2_Vs"] = round(mobility_dpt(is_2d, C, m, e1, T), 3)
         rec["status"] = "ok"
     rec["by_direction"] = _aniso_block(cwd, is_2d, carrier, T)   # patch_dpt_aniso
+    rec["multi_valley"] = _multi_valley_block(cwd, is_2d, carrier, T, temps or [T],     # [0022]
+                                              rec["by_direction"])
     return rec
 
 
@@ -1303,7 +2043,7 @@ def main():
            "functional": functional,
            "formula": ("2D Bardeen-Shockley: μ=eℏ³C_2D/(k_BT m* m_d E1²)" if is_2d
                        else "3D: μ=2√(2π)eℏ⁴C_3D/(3(k_BT)^{3/2}m*^{5/2}E1²)"),
-           "results": [_one_carrier(cwd, is_2d, c, TEMPERATURE_K) for c in carriers],
+           "results": [_one_carrier(cwd, is_2d, c, TEMPERATURE_K, temps) for c in carriers],
            "note": ("经典 DPT 声学支迁移率，用于和 amset(ADP) 对标。m*/E1 自动值精度"
                     "有限——务必核对，或在本材料 step.conf 手填。μ∝1/T。")}
     res["temperatures_K"] = temps                          # [0020] μ(T) 网格（含 temperature_K）
@@ -1342,6 +2082,31 @@ def main():
                 bd["m_d_m0"], bd["m_provenance"], bd["E1_provenance"]))
         elif bd.get("status"):
             lines.append("           [各向异性] %s" % bd["status"])
+        mv = r.get("multi_valley") or {}                      # [0022]
+        if mv.get("status") == "ok":
+            lines.append("           [多谷] mu_x=%.1f mu_y=%.1f cm2/Vs  tau_x=%.1f tau_y=%.1f fs  m_c=%.3f/%.3f  "
+                         "（%.0f K，窗口 %.2f eV，无谷间散射 -> 上限）" % (
+                             mv["x"]["mobility_cm2_Vs"], mv["y"]["mobility_cm2_Vs"],
+                             mv["x"]["tau_s"] * 1e15, mv["y"]["tau_s"] * 1e15,
+                             mv["x"]["m_c_m0"], mv["y"]["m_c_m0"], mv["T_K"], mv["window_eV"]))
+            for vv in mv["valleys"]:
+                lines.append("             %-8s ×%d  ΔE=%.3f eV  m_d=%.3f  E1(x,y)=%s eV  布居 %.1f%%" % (
+                    vv["label"], vv["g"], vv["dE_eV"], vv["m_d_m0"],
+                    "/".join("%.2f" % x for x in vv["E1_xy_eV"][0]), 100 * vv["weight_T0"]))
+            cons = mv.get("edge_star_vs_by_direction")
+            if cons:
+                lines.append("             只留 %s 星 / by_direction = %.3f (x), %.3f (y)（应≈1）"
+                             % (cons["star"], cons["x"], cons["y"]))
+            for w_ in mv.get("warnings") or []:
+                lines.append("             ★ %s" % w_)
+        elif mv.get("status") and not str(mv["status"]).startswith(("off", "多谷 DPT 只实现 2D")):
+            lines.append("           [多谷] %s" % mv["status"])
+            for vv in mv.get("valleys") or []:                 # [0023] 拒绝时也列出各谷，看得出是哪个谷、为什么
+                lines.append("             %-8s ×%d  ΔE=%.3f eV  m_d=%.3f  E1_eff=%.2f eV  最大布居 %.1f%%  "
+                             "带符号 dE/dε(x,y)=%s eV" % (
+                                 vv["label"], vv["g"], vv["dE_eV"], vv["m_d_m0"], vv.get("E1_eff_eV", float("nan")),
+                                 100 * vv.get("pop_max", 0.0),
+                                 "/".join("%+.2f" % x for x in (vv.get("E1_signed_xy_eV") or [[0, 0]])[0])))
     # [0020] μ(T) 表：2D 给 x / y / 面内平均，3D 给主值
     lines.append("")
     lines.append("# μ(T) cm²/(V·s)，由 %.0f K 换算（%s）" % (TEMPERATURE_K, "∝1/T" if is_2d else "∝T^-1.5"))
@@ -1358,11 +2123,25 @@ def main():
                 "", t["T_K"], ("%.1f" % mu) if mu is not None else "—",
                 ("%10.1f %10.1f %10.1f" % (t["mobility_x_cm2_Vs"], t["mobility_y_cm2_Vs"],
                                            t["mobility_inplane_cm2_Vs"])) if has_xy else ""))
+    mv_ok = [r for r in res["results"] if (r.get("multi_valley") or {}).get("status") == "ok"]
+    if mv_ok:                                              # [0022] 多谷 μ(T)：每个温度单独算，不是 ∝1/T
+        lines.append("")
+        lines.append("# 多谷 μ(T) cm²/(V·s)：每个温度单独算（谷间布居随 T 变）；不含谷间散射，是上限")
+        for r in mv_ok:
+            tab = r["multi_valley"]["mobility_vs_T"]
+            labs = list(tab[0]["weights"]) if tab else []
+            lines.append("%-9s %7s %10s %10s %10s  %s" % (r["carrier"], "T(K)", "μx", "μy", "(μx+μy)/2",
+                                                         "  ".join("%s%%" % l for l in labs)))
+            for t in tab:
+                lines.append("%-9s %7.0f %10.1f %10.1f %10.1f  %s" % (
+                    "", t["T_K"], t["mobility_x_cm2_Vs"], t["mobility_y_cm2_Vs"], t["mobility_inplane_cm2_Vs"],
+                    "  ".join("%.1f" % (100 * t["weights"][l]) for l in labs)))
     (out / "dpt_summary.txt").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
     # 软失败 → 报错：关键产物(迁移率)一个都算不出，就让 tf 判 error 而非 completed，
     # 并指明缺什么、该跑哪一步（不手填、全自动的前提下）。
-    if all(r["mobility_cm2_Vs"] is None for r in res["results"]):
+    if all(r["mobility_cm2_Vs"] is None and (r.get("multi_valley") or {}).get("status") != "ok"
+           for r in res["results"]):
         miss = set()
         for r in res["results"]:
             i = r["inputs"]
@@ -1378,6 +2157,10 @@ def main():
         sys.exit("[ERROR] DPT 迁移率全部未算出。缺：%s。请先把对应步骤跑好/修好再重跑本步"
                  "（dpt_result.json 已写出，含各输入来源可排查）。" % hint)
 
+    for r in res["results"]:
+        if r["mobility_cm2_Vs"] is None and (r.get("multi_valley") or {}).get("status") == "ok":
+            print("[OK] %s：单谷 DPT 未出数（%s），多谷 DPT 已算出（dpt_result.json 的 multi_valley）"
+                  % (r["carrier"], (r["inputs"].get("m_provenance") or "")[:60]))
     print("[DONE] %s：dpt_result.json 已生成" % OUTDIR_NAME)
 
 

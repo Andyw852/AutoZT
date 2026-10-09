@@ -52,7 +52,7 @@ AMSET_DIR   = "step8_amset"            # 读 2d_correction.json 拿 c/t（若有
 AMSET2D_DIR = "step8.4_amset2d"        # [0016] 2D 不跑 S8 时，c/t 与掺杂档改读 S8.4
 STEP = "step8.1_boltztrap"
 # [0016] 版本戳：写进 boltztrap_crta.json 与 paper_mu_scan_*.csv 首行（以前没有，跨材料核对只能看文件时间）
-_SKILL_REV = "2026-10-09-0021-tau-T"
+_SKILL_REV = "2026-10-09-0022-mv-tau"
 
 TEMPERATURES = [100, 200, 300, 400, 500, 600, 700, 800, 900]  # K
 # patch_mu_window：CRTA 类文献普遍把 μ 扫到带边上下 ±3 eV，ZT 峰
@@ -457,6 +457,25 @@ def _tau_T_factor(j, T, is_2d=None):
     return ((T0 / float(T)) if is_2d else (T0 / float(T)) ** 1.5), T0
 
 
+def _mv_tau_at(mv, T):
+    """[0022] dpt_result.json 多谷块（multi_valley）在温度 T 的 τ_eff {x, y}。多谷 τ 不是 ∝1/T（谷间布居随 T 变），
+    只用 S8.2 实际算过的温度：正好有就取，夹在两档之间按 log τ–log T 线性插值，网格外 -> None（不外推）。"""
+    import math
+    if T is None:
+        return {"x": mv["x"]["tau_s"], "y": mv["y"]["tau_s"]}
+    T = float(T)
+    rows = sorted(mv.get("mobility_vs_T") or [], key=lambda r: r["T_K"])
+    for r in rows:
+        if abs(float(r["T_K"]) - T) < 1e-6:
+            return {"x": r["tau_x_s"], "y": r["tau_y_s"]}
+    for a, b in zip(rows, rows[1:]):
+        if float(a["T_K"]) < T < float(b["T_K"]):
+            t = math.log(T / a["T_K"]) / math.log(b["T_K"] / a["T_K"])
+            return {d: math.exp(math.log(a["tau_%s_s" % d]) + t * math.log(b["tau_%s_s" % d] / a["tau_%s_s" % d]))
+                    for d in ("x", "y")}
+    return None
+
+
 def _tau_from_json(cwd, T=None, is_2d=None):
     """读 step8.2_dpt/dpt_result.json 的 τ，换算到温度 T（[0021] 主通道）。
     [0021] 以前不换温：gen 推到材料目录跑时 _dpt_module() 永远找不到模块（它找的是 <材料上一级>/step8.2_dpt/），
@@ -471,12 +490,24 @@ def _tau_from_json(cwd, T=None, is_2d=None):
         return {}
     M0, E_C = 9.1093837015e-31, 1.602176634e-19
     f, T0 = _tau_T_factor(j, T, is_2d)
-    out = {}
+    out, mv_used = {}, set()
     for r in j.get("results", []):
         c, bd = r.get("carrier"), (r.get("by_direction") or {})
         if bd.get("status") == "ok":
             out[c] = {d: bd[d]["tau_s"] * f for d in ("x", "y")}
             continue
+        # [0022] 单谷分方向不可用（带边在 Q 这类非高对称谷，WSe2 导带）-> S8.2 的多谷 τ_eff（逐温度算的，不换算）
+        mv = r.get("multi_valley") or {}
+        if mv.get("status") == "ok":
+            t = _mv_tau_at(mv, T)
+            if t:
+                out[c] = t
+                mv_used.add(c)
+                print("[..] %s 单谷分方向不可用（%s），用 S8.2 多谷 τ_eff（谷：%s）" % (
+                    c, str(bd.get("status") or "无")[:60],
+                    "、".join("%s×%d" % (v["label"], v["g"]) for v in mv.get("valleys") or [])))
+                continue
+            print("[WARN] %s 多谷 τ 没覆盖 %.0f K（S8.2 的 TEMPERATURES 不含它，不外推）" % (c, float(T)))
         mu = r.get("mobility_cm2_Vs")
         me = (r.get("inputs") or {}).get("m_eff_m0")
         if isinstance(mu, (int, float)) and isinstance(me, (int, float)) \
@@ -485,9 +516,10 @@ def _tau_from_json(cwd, T=None, is_2d=None):
             out[c] = {"x": t, "y": t}
             print("[WARN] %s 无分方向 τ，回落各向同性" % c)
     if out and T is not None:
-        print("[OK] DPT τ 取自 %s/dpt_result.json（%.0f K），换算到 %.0f K（×%.4f）：%s"
+        print("[OK] DPT τ 取自 %s/dpt_result.json（%.0f K），换算到 %.0f K（×%.4f；多谷的按温度直接取）：%s"
               % (DPT_DIR, T0, float(T), f, "；".join(
-                  "%s x=%.1f fs y=%.1f fs" % (c, v["x"] * 1e15, v["y"] * 1e15) for c, v in out.items())))
+                  "%s x=%.1f fs y=%.1f fs%s" % (c, v["x"] * 1e15, v["y"] * 1e15, "（多谷）" if c in mv_used else "")
+                  for c, v in out.items())))
     return out
 
 
