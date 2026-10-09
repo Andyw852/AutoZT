@@ -466,9 +466,9 @@ _AMSET_ENV_SRC = "source %s && conda activate %s" % (CONDA_SH, AMSET_ENV)
 | 7.1 | `step7b_deform_read` | S7.1_read | 形变势读取（登录节点）→ `deformation.h5` | plot |
 | 8 | `step8_amset` | S8_kappa | AMSET 电子热导率 → `transport.json`（needs: wave+dielect+elastic+deform+带隙画图） | `transport.json:thermal_conductivity` |
 | 8.4 | `step8.4_amset2d` | S8.4_amset2d | **2D 专用**：二维散射核版 AMSET（插件 amset2d_plugin，可选组 `amset2d`，默认关） | `transport.json:thermal_conductivity` |
-| 8.2 | `step8.2_dpt` | S8.2_dpt | DPT 形变势迁移率 → `dpt_result.json`（必须排在 8.1 前） | plot |
+| 8.2 | `step8.2_dpt` | S8.2_dpt | DPT 形变势迁移率 → `dpt_result.json`（必须排在 8.1 前）；[0020] 另出 `mobility_vs_T`（默认 100–900 K，step.conf `TEMPERATURES` 可改） | plot |
 | 8.1 | `step8.1_boltztrap` | S8.1_bt2 | BoltzTraP2 CRTA × DPT-τ 文献口径完整实现 | `boltztrap_crta.json` |
-| 8.3 | `step8.3_output` | S8.3_cmp | AMSET / amset2d / CRTA×DPT 对比图与表 | `comparison_300K.png` |
+| 8.3 | `step8.3_output` | S8.3_cmp | AMSET / amset2d / CRTA×DPT 对比图与表；[0020] 另出 μ(T) 三值表 `comparison_vs_T.csv/json` + `mobility_vs_T.png`（DPT / AMSET 只 ADP / 本征 / 全机制，最低掺杂） | `comparison_300K.png` |
 
 - 开关：`bandgap_steps: false` 完全不算带隙（手填 setting.yaml 的 bandgap）、`bandgap_hse: false`、`dpt: false`、`boltztrap_crta: false`、`amset2d`（**2D 材料 init/register 时自动写 `amset2d: true`**，老材料手写；zt-dft-cpu 对 2D 只认 S8.4）、`amset3d`（S8 原版三维核；**2D 材料新建时自动写 `amset3d: false`**，不跑 S8；层厚 `LAYER_THICKNESS` 写在本材料共用 step.conf，S8/S8.1/S8.4 共用）、`output_compare: false`。
 - 依赖：`pymatgen, numpy, matplotlib, amset, BoltzTraP2` + `vaspkit`（conda 环境 `amset_clean`）。

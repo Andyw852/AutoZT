@@ -34,7 +34,7 @@ from pathlib import Path
 # =========================== 可改参数区 ===========================
 # [SKILL_REV] 版本戳：写进 dpt_result.json，铺开时验证跑的是哪份 skill 副本。
 # 每次改本脚本逻辑后更新（如 "2026-08-29-nstep-linear"）。
-_SKILL_REV = "2026-10-07-v181"   # V181：结果里记泛函
+_SKILL_REV = "2026-10-09-v0020"
 # [R-SCAN] 强制选点壳层 NSTEP（None=自动 2/3/4/5；填 2/3/4/5=只试该值，做 R-scan 用）。
 # 用法：tf -p <材料> -j step8.2_dpt conf --set FORCE_NSTEP=3 → retry + start，对比 dpt_result.json 的 m_d
 #   与 m_provenance 里的 R（V148 起写 step.conf，不改本脚本）。
@@ -46,6 +46,10 @@ DEFORM_READ_DIR = "step7b_deform_read"
 AMSET_DIR   = "step8_amset"          # 读 2d_correction.json 拿层厚 t、c/t
 
 TEMPERATURE_K = 300.0                # DPT 迁移率报此温度（μ∝1/T，可换算）
+# [0020] 多温度：mobility_vs_T 按 μ∝1/T（2D）/ T^-1.5（3D）从 TEMPERATURE_K 的值精确换算（m*/E1/C 与 T 无关）。
+#   默认与 S8/S8.4 的 AMSET 网格（100:900:9）、S8.1 的 TEMPERATURES 一致，S8.3 才能逐温度对齐；
+#   只要 100–700 K 就在本步 step.conf 写 TEMPERATURES = 100:700:7。格式 "起:止:个数" 或逗号列表。
+TEMPERATURES = "100:900:9"
 CARRIER = "both"                     # electron / hole / both
 # E1 自动提取口径开关（手填 MANUAL/MANUAL_ANISO 时此开关失效）：
 #   "vac"   = 真空对齐 E1_vac（文献 Eq.9 dE_edge/dγ 口径，仅 2D 且 LOCPOT 可用）
@@ -89,6 +93,8 @@ SPEC = {
     "E1_SOURCE":      (None, "str"),      # vac / amset
     "FORCE_NSTEP":    (None, "int"),      # 2/3/4/5
     "ALLOW_COARSE_S3": (False, "bool"),   # [V174] S3 面内网格不合现行规则也照算
+    "TEMPERATURE_K":  (None, "float"),    # [0020] 主报告温度（K），默认 300
+    "TEMPERATURES":   (None, "str"),      # [0020] μ(T) 网格："100:900:9" 或 "100,300,600"
 }
 _CONF_TO_MANUAL = {"M_EFF_ELECTRON": "m_eff_electron", "M_EFF_HOLE": "m_eff_hole",
                    "E1_ELECTRON_EV": "E1_electron_eV", "E1_HOLE_EV": "E1_hole_eV",
@@ -128,7 +134,7 @@ def _manual_prov(key):
 def apply_conf(cwd):
     """[V148] 读本材料 step.conf 的覆盖写进 MANUAL / E1_SOURCE / FORCE_NSTEP；脚本里 MANUAL 被改过就 ★ 告警。
     返回 {键: {"value", "source"}}（写进 dpt_result.json 的 overrides）。"""
-    global E1_SOURCE, FORCE_NSTEP, ALLOW_COARSE_S3
+    global E1_SOURCE, FORCE_NSTEP, ALLOW_COARSE_S3, TEMPERATURE_K, TEMPERATURES
     rec = {}
     for k, v in MANUAL.items():
         if v is not None:
@@ -176,7 +182,67 @@ def apply_conf(cwd):
         ALLOW_COARSE_S3 = True
         rec["ALLOW_COARSE_S3"] = {"value": True, "source": "step.conf ALLOW_COARSE_S3"}
         print("[OK] ALLOW_COARSE_S3 = true（step.conf）")
+    if p["TEMPERATURE_K"] is not None:                    # [0020]
+        if not float(p["TEMPERATURE_K"]) > 0:
+            sys.exit("[ERROR] step.conf 的 TEMPERATURE_K=%r：必须 > 0" % p["TEMPERATURE_K"])
+        TEMPERATURE_K = float(p["TEMPERATURE_K"])
+        rec["TEMPERATURE_K"] = {"value": TEMPERATURE_K, "source": "step.conf TEMPERATURE_K"}
+        print("[OK] TEMPERATURE_K = %g（step.conf）" % TEMPERATURE_K)
+    if p["TEMPERATURES"]:
+        try:
+            parse_temps(p["TEMPERATURES"])
+        except ValueError as e:
+            sys.exit("[ERROR] step.conf 的 TEMPERATURES=%r：%s" % (p["TEMPERATURES"], e))
+        TEMPERATURES = str(p["TEMPERATURES"]).strip()
+        rec["TEMPERATURES"] = {"value": TEMPERATURES, "source": "step.conf TEMPERATURES"}
+        print("[OK] TEMPERATURES = %s（step.conf）" % TEMPERATURES)
     return rec
+
+
+def parse_temps(spec):
+    """[0020] "100:900:9"（起:止:个数，与 AMSET 的 TEMPERATURES 同写法）或 "100,300,600" -> 升序 K 列表。"""
+    if isinstance(spec, (list, tuple)):
+        vals = [float(x) for x in spec]
+    else:
+        txt = str(spec).strip()
+        if ":" in txt:
+            parts = txt.split(":")
+            if len(parts) != 3:
+                raise ValueError("区间写法是 起:止:个数，例如 100:900:9")
+            a, b, n = float(parts[0]), float(parts[1]), int(float(parts[2]))
+            if n < 1:
+                raise ValueError("个数必须 >= 1")
+            vals = [a] if n == 1 else [a + (b - a) * i / (n - 1) for i in range(n)]
+        else:
+            vals = [float(x) for x in txt.replace(";", ",").replace(" ", ",").split(",") if x]
+    vals = sorted({round(v, 6) for v in vals})
+    if not vals or vals[0] <= 0:
+        raise ValueError("温度必须 > 0 K")
+    return vals
+
+
+def _scale_T(is_2d, T0, T):
+    """[0020] μ(T)/μ(T0)：2D Bardeen-Shockley ∝ 1/T，3D ∝ T^-1.5（τ = μm*/e 同比例）。"""
+    return (T0 / T) if is_2d else (T0 / T) ** 1.5
+
+
+def mobility_vs_T(rec, is_2d, T0, temps):
+    """[0020] 由 T0 的结果换算各温度：μ（主值）、2D 分方向 μ/τ 与面内平均 (μx+μy)/2。"""
+    bd = rec.get("by_direction") or {}
+    aniso = bd.get("status") == "ok"
+    rows = []
+    for T in temps:
+        f = _scale_T(is_2d, T0, T)
+        mu = rec.get("mobility_cm2_Vs")
+        row = {"T_K": T, "mobility_cm2_Vs": (round(mu * f, 3) if mu is not None else None)}
+        if aniso:
+            for d in ("x", "y"):
+                row["mobility_%s_cm2_Vs" % d] = round(bd[d]["mobility_cm2_Vs"] * f, 3)
+                row["tau_%s_s" % d] = bd[d]["tau_s"] * f
+            row["mobility_inplane_cm2_Vs"] = round(
+                (row["mobility_x_cm2_Vs"] + row["mobility_y_cm2_Vs"]) / 2.0, 3)
+        rows.append(row)
+    return rows
 
 
 def invalidate_consumers(cwd):
@@ -1215,6 +1281,7 @@ def main():
     dim = _read_dim(cwd)
     is_2d = (dim == "2d")
     s3_grid = _s3_grid_gate(cwd, dim)                     # [V174] 在算 m* 之前
+    temps = sorted(set(parse_temps(TEMPERATURES)) | {round(TEMPERATURE_K, 6)})   # [0020]
     functional = _functional(cwd)                         # [V181]
 
     carriers = (["electron", "hole"] if CARRIER == "both" else [CARRIER])
@@ -1239,6 +1306,9 @@ def main():
            "results": [_one_carrier(cwd, is_2d, c, TEMPERATURE_K) for c in carriers],
            "note": ("经典 DPT 声学支迁移率，用于和 amset(ADP) 对标。m*/E1 自动值精度"
                     "有限——务必核对，或在本材料 step.conf 手填。μ∝1/T。")}
+    res["temperatures_K"] = temps                          # [0020] μ(T) 网格（含 temperature_K）
+    for r in res["results"]:
+        r["mobility_vs_T"] = mobility_vs_T(r, is_2d, TEMPERATURE_K, temps)
     if is_2d:
         res["za_coupling"] = _za_check(cwd)                # [0016] σh / ZA
     (out / "dpt_result.json").write_text(
@@ -1272,6 +1342,22 @@ def main():
                 bd["m_d_m0"], bd["m_provenance"], bd["E1_provenance"]))
         elif bd.get("status"):
             lines.append("           [各向异性] %s" % bd["status"])
+    # [0020] μ(T) 表：2D 给 x / y / 面内平均，3D 给主值
+    lines.append("")
+    lines.append("# μ(T) cm²/(V·s)，由 %.0f K 换算（%s）" % (TEMPERATURE_K, "∝1/T" if is_2d else "∝T^-1.5"))
+    for r in res["results"]:
+        tab = r.get("mobility_vs_T") or []
+        if not tab or all(t["mobility_cm2_Vs"] is None and "mobility_x_cm2_Vs" not in t for t in tab):
+            continue
+        has_xy = "mobility_x_cm2_Vs" in tab[0]
+        lines.append("%-9s %7s %10s%s" % (r["carrier"], "T(K)", "μ",
+                                         ("%10s %10s %10s" % ("μx", "μy", "(μx+μy)/2")) if has_xy else ""))
+        for t in tab:
+            mu = t["mobility_cm2_Vs"]
+            lines.append("%-9s %7.0f %10s%s" % (
+                "", t["T_K"], ("%.1f" % mu) if mu is not None else "—",
+                ("%10.1f %10.1f %10.1f" % (t["mobility_x_cm2_Vs"], t["mobility_y_cm2_Vs"],
+                                           t["mobility_inplane_cm2_Vs"])) if has_xy else ""))
     (out / "dpt_summary.txt").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
     # 软失败 → 报错：关键产物(迁移率)一个都算不出，就让 tf 判 error 而非 completed，
