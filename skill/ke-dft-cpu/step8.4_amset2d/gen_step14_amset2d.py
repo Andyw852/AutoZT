@@ -959,6 +959,28 @@ def get_slab_geometry(cwd: Path):
     return None, None
 
 
+def _c_axis_of_dir(d):
+    """读某步骤目录 POSCAR/CONTCAR 的 c 轴长度（Å）；没有/读不到返回 None。"""
+    for fn in ("CONTCAR", "POSCAR"):
+        p = Path(d) / fn
+        if p.is_file():
+            c, _ = _read_poscar_cz(p)
+            if c:
+                return c
+    return None
+
+
+def _drop_stale_2d_record(cwd):
+    """几何/层厚读不到时删除旧的 2d_correction.json，避免下游插件沿用上一次的值。"""
+    p = Path(cwd) / OUTDIR_NAME / "2d_correction.json"
+    try:
+        if p.is_file():
+            p.unlink()
+            print("[..] 已删除旧的 %s（本次几何不完整，禁止下游沿用）" % p)
+    except OSError as _e:
+        print("[WARN] 删除 %s 失败：%s" % (p, _e))
+
+
 _CELL_AREA_CM2 = None   # 2D 原胞面内面积（cm²），apply_2d_corrections 里设
 
 
@@ -1188,9 +1210,10 @@ def delta_r_check(c_len, inf33, stat33):
         print("[WARN] Δr < 0（ε0 < ε∞）：离子介电缺失或读错，POP 强度会变成 0 或负值，"
               "请核对 %s/OUTCAR 的 IONIC CONTRIBUTION 块" % DIELECT_DIR)
     elif ratio > 0.6:
-        print("[WARN] Δr/r∞ = %.0f%% 远大于文献锚点量级 —— 最常见的原因是把**体相** "
-              "ε0/ε∞ 外推当作 slab 值（曾出现 43.5 Å vs 0.53 Å）。"
-              "请确认 ε0/ε∞ 取自同一次 DFPT 的原始 slab 张量。" % (100 * ratio))
+        print("[WARN] Δr/r∞ = %.0f%% 偏大（MoS2 约 1%%，强离子性 h-BN 约 37%%）。"
+              "若这不是本征的强离子屏蔽，先核对两点：① ε0/ε∞ 是否取自**同一次** DFPT 的"
+              "原始 slab 张量（混入体相外推或别的来源会异常放大）；② ε_slab 是否已真空收敛"
+              "（r = c(ε_slab−1)/2 在收敛后应与 c 无关）。" % (100 * ratio))
     if r_inf <= 0 or r_inf > 2000:
         print("[WARN] r∞ = %.1f Å 超出合理范围（0-2000 Å），请核对 ε∞ 张量" % r_inf)
     return out
@@ -1342,18 +1365,23 @@ def _apply_eps_inf_override_2d(inf33, stat33, c_over_t):
     want = _parse_eps_override(EPS_INF_OVERRIDE)
     new_inf = [list(map(float, r)) for r in inf33]
     stat = [list(map(float, r)) for r in (stat33 if stat33 is not None else inf33)]
+    _fl = 1.0 / f                            # 层占胞高比例 t/c
     for i in range(3):
         if want[i] is None:
             continue
         v = float(want[i])
         if v < 1.0:
             sys.exit("[ERROR] EPS_INF_OVERRIDE 第 %d 个值 %.4f < 1，非物理" % (i + 1, v))
-        new_inf[i][i] = (1.0 + (v - 1.0) / f) if basis == "layer" else v
+        if basis == "layer":
+            if i == 2:                       # [0031] zz：层 -> slab 串联
+                new_inf[i][i] = 1.0 / (_fl / v + (1.0 - _fl))
+            else:                            # 面内：层 -> slab 并联
+                new_inf[i][i] = 1.0 + (v - 1.0) / f
+        else:
+            new_inf[i][i] = v
     new_stat = [[new_inf[i][j] + (stat[i][j] - float(inf33[i][j])) for j in range(3)]
                 for i in range(3)]
-    corr = lambda m: [[((1 if i == j else 0) + f * (m[i][j] - (1 if i == j else 0)))  # noqa: E731
-                       for j in range(3)] for i in range(3)]
-    _EPS_OV_LAYER = (corr(new_inf), corr(new_stat))
+    _EPS_OV_LAYER = (_slab_to_layer(new_inf, f), _slab_to_layer(new_stat, f))
     diag = lambda m: [round(m[i][i], 4) for i in range(3)]                          # noqa: E731
     rec = {"input": str(EPS_INF_OVERRIDE), "basis": basis, "c_over_t": round(f, 4),
            "eps_inf_slab_before": diag(inf33), "eps_inf_slab_after": diag(new_inf),
@@ -1391,9 +1419,18 @@ def apply_2d_corrections(cwd: Path, elastic, eps_inf=None, eps_static=None):
     global _CELL_AREA_CM2
     _CELL_AREA_CM2 = _inplane_area_cm2(cwd)
     if c_len is None:
-        print("[WARN] 2D 体系但读不到结构，弹性常数未做 c/t 修正——"
-              "结果的绝对值不可用。请手填 MANUAL_ELASTIC。")
-        return True, elastic, None
+        _drop_stale_2d_record(cwd)
+        sys.exit("[ERROR] 2D 体系但读不到结构（候选：%s）——无法定 c/层厚，且**禁止沿用**"
+                 "上一次的 2d_correction.json（已删除）。请先跑完结构步骤，或手填 "
+                 "LAYER_THICKNESS/MANUAL_ELASTIC 后重跑。" % " / ".join(STRUCT_CANDS))
+    # [0031] c 一致性闸门：r = c(ε_slab − 1)/2 的 c 必须和被 DFPT 介电的那个超胞同源。
+    #   结构候选（STRUCT_CANDS，通常是 S3）与 S5 之间若真空/胞高不同（重算了结构却漏跑
+    #   S5，或反过来），r 与 σ 的厚度归一化都会被静默错算，所以直接拦下。
+    _c5 = _c_axis_of_dir(cwd / DIELECT_DIR)
+    if _c5 is not None and abs(_c5 - c_len) > max(0.05, 1e-3 * c_len):
+        sys.exit("[ERROR] 2D 几何不自洽：结构 c=%.4f Å ≠ %s 超胞 c=%.4f Å —— r = c(ε_slab−1)/2 "
+                 "的 c 必须与 S5 的 ε 同源。多半是重算了结构却没重跑 S5（或反之）；"
+                 "请对齐真空后重跑缺的那一步再生成。" % (c_len, DIELECT_DIR, _c5))
 
     # patch_2d_thickness：层厚三种取法，结果连同依据一起落盘
     mode_t = LAYER_THICKNESS
@@ -1424,9 +1461,9 @@ def apply_2d_corrections(cwd: Path, elastic, eps_inf=None, eps_static=None):
         print("[OK] LAYER_THICKNESS 手填 %s Å" % t)
 
     if t is None or float(t) <= 0.1:
-        print("[WARN] 2D 体系但定不出层厚，弹性常数未做 c/t 修正。"
-              "请手填 LAYER_THICKNESS。")
-        return True, elastic, c_len
+        _drop_stale_2d_record(cwd)
+        sys.exit("[ERROR] 2D 体系但定不出层厚（LAYER_THICKNESS=%r）——禁止沿用旧的 "
+                 "2d_correction.json（已删除）。请手填 LAYER_THICKNESS 后重跑。" % (LAYER_THICKNESS,))
     t = float(t)
     if t <= 0 or t >= c_len:
         sys.exit("[ERROR] LAYER_THICKNESS=%s Å 不合理（c=%.3f Å）" % (t, c_len))
@@ -1636,9 +1673,37 @@ def _grab_diag3(txt, tag):
     return [rows[0][0], rows[1][1], rows[2][2]] if len(rows) == 3 else None
 
 
+def _slab_to_layer(mat, factor):
+    """slab（含真空）→ layer（扣真空）层介电张量。
+
+    面内 xx/yy 并联（体积加权）：ε_layer − 1 = (c/t)(ε_slab − 1)；
+    面外 zz 串联（层与真空去极化/局域场）：1/ε_slab = (t/c)/ε_layer + (1 − t/c)。
+    [0031] 旧代码对 zz 也套并联式，会把 ε_zz 放大 (c/t) 倍；gen14 的二维核只用面内，
+    数值不受影响，但 settings.yaml 的层 ε 必须写对，否则易被下游误用。
+    非对角项按并联缩放（2D 体系层法向 ∥ z 时通常为 0）。
+    """
+    factor = float(factor)
+    f = 1.0 / factor                     # 层占胞高的比例 t/c
+    out = [list(row) for row in mat]
+    for i in range(3):
+        for j in range(3):
+            if i != j:
+                out[i][j] = factor * mat[i][j]
+            elif i == 2:                 # zz：串联
+                inv = 1.0 / float(mat[2][2]) - (1.0 - f)
+                if inv > 0:
+                    out[2][2] = f / inv
+                else:
+                    print("[WARN] ε_zz slab=%.4f 无法按串联扣真空（c/t=%.3f）——保持原值"
+                          % (mat[2][2], factor))
+            else:                        # xx/yy：并联
+                out[i][i] = 1.0 + factor * (mat[i][i] - 1.0)
+    return out
+
+
 def _dielectric_2d_inplane(dielect_dir, out_dir, eps_inf_fb, eps_static_fb):
-    """2D 面内介电 (εx+εy)/2 + 扣真空 ε^m = 1 + (L/t)(ε_sup − 1)。
-    L/t 读 2d_correction.json 的 elastic_rescale_factor_c_over_t（与弹性同款）。
+    """2D 介电扣真空：面内 xx/yy 并联、面外 zz 串联（见 _slab_to_layer）。
+    c/t 读 2d_correction.json 的 elastic_rescale_factor_c_over_t（与弹性同款）。
     任一步失败/离子介电为负/非极性 → 安全退回原值或仅电子项。"""
     import json as _json
     try:
@@ -1656,9 +1721,7 @@ def _dielectric_2d_inplane(dielect_dir, out_dir, eps_inf_fb, eps_static_fb):
     if inf is None:
         return eps_inf_fb, eps_static_fb
     stat = [[inf[i][j] + ion[i][j] for j in range(3)] for i in range(3)] if ion else inf
-    corr = lambda mat: [[((1 if i == j else 0) + factor * (mat[i][j] - (1 if i == j else 0)))
-                         for j in range(3)] for i in range(3)]
-    return corr(inf), corr(stat)
+    return _slab_to_layer(inf, factor), _slab_to_layer(stat, factor)
 
 
 def _grab_matrix3(txt, tag):

@@ -341,9 +341,12 @@ class IonizedImpurity2D(_IMP):
 
 # ---------------- PIE ----------------
 class Piezoelectric2D(_PIE):
-    """二维面内压电：F = c²(2π)² Σ_b (q̂q̂:e·v_b)²/w_b · q²/(q·ε∞(q) + q_TF)²。
+    """二维面内压电：F = c²(2π)² Σ_b (q̂q̂:e·v_b)²/w_b · q²/(q·ε0(q) + q_TF)²。
 
     只处理面内压电（Janus 结构的面外偶极层在这里被忽略）；e 与 w 都用原始 slab 值。
+    [0031] e 取 VASP 的 **including ionic contribution**（离子弛豫）总张量，而压电势是
+    静态势，屏蔽必须用**静态** ε0（r0）而不是 ε∞；旧代码配 r∞ 属于张量口径错配
+    （默认不开 PIE 时无影响；MoS2 这类弱压电材料也接近可忽略）。
     """
     name = "PIE"
 
@@ -353,7 +356,7 @@ class Piezoelectric2D(_PIE):
         e_au = e_au * coulomb_to_au / m_to_bohr ** 2      # C/m² -> a.u.（原版会就地改 settings）
         obj = super().from_amset_data(materials_properties, amset_data)
         obj.e_raw = e_au
-        obj.r_inf = _r_tensor("eps_inf_slab")
+        obj.r_0 = _r_tensor("eps_static_slab")
         if materials_properties["free_carrier_screening"]:
             obj.q_tf = _qtf(amset_data)
         else:
@@ -368,9 +371,9 @@ class Piezoelectric2D(_PIE):
         for b in range(2):
             cpl = np.einsum("ijk,ni,nj,nk->n", e2, u[:, :2], u[:, :2], v[:, b, :2])
             s = s + cpl ** 2 / w[:, b]
-        a_i = _q_eps(qv, qn, self.r_inf)
+        a_0 = _q_eps(qv, qn, self.r_0)
         return (_C ** 2 * (2 * np.pi) ** 2 * (s * qn ** 2)[None, None]
-                / (a_i[None, None] + self.q_tf[..., None]) ** 2)
+                / (a_0[None, None] + self.q_tf[..., None]) ** 2)
 
 
 # ---------------- 注册 ----------------

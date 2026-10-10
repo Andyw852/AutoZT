@@ -199,7 +199,7 @@ e[1, 0, 1] = e[1, 1, 0] = -e11
 pz = P.Piezoelectric2D.__new__(P.Piezoelectric2D)
 pz.e_raw = e
 pz.elastic_constant = Cf
-pz.r_inf = np.eye(2) * 2.0
+pz.r_0 = np.eye(2) * 2.0      # [0031] PIE 屏蔽改用静态 ε0（配离子弛豫压电张量）
 pz.q_tf = np.zeros((1, 1))
 Fp0 = pz.factor(np.array([[1.0, 0, 0]]), np.array([1e-14]), None, 0, None, None)[0, 0, 0]
 Fp1 = pz.factor(np.array([[1.0, 0, 0]]), np.array([1e-4]), None, 0, None, None)[0, 0, 0]

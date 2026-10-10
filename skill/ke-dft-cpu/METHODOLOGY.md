@@ -47,8 +47,12 @@ vdW 口径 d = zspan + r_vdW(top) + r_vdW(bot)（S 1.80、Se 1.90 Å），
 ## 4. ε 真空稀释与二维散射核（amset2d）
 
 step5_dielect 的 VASP 输出是 slab-in-a-box 介电（含真空稀释）。skill 的
-`gen_step10_amset.py` 里 `_dielectric_2d_inplane` 已扣真空：
-`ε_m = 1 + (c/t)(ε_slab - 1)`，c/t 复用弹性同款。
+`gen_step10_amset.py` / `gen_step14_amset2d.py` 里 `_dielectric_2d_inplane`
+按方向扣真空：**面内**并联 `ε_layer − 1 = (c/t)(ε_slab − 1)`，**面外 zz 串联**
+`1/ε_slab = (t/c)/ε_layer + (1 − t/c)`（层与真空去极化；c/t 复用弹性同款）。
+★ 口径（[0031]）：S8.4 的二维散射核真正"消除真空"靠的是插件里的
+`r = c(ε_slab,∥ − 1)/2`（取 `2d_correction.json` 的原始 slab 张量）；settings.yaml 里这个
+layer ε 只在旧的三维核（S8）里起作用，不进 S8.4 的数值。
 
 **但散射核本身还是三维的** —— 这一条不再靠「只作比值」糊过去：2D 项目改走
 `step8.4_amset2d`（可选步骤组 `amset2d`；`auto_dim: 2d`，2D 材料 init/register 时自动写
@@ -90,7 +94,7 @@ AMSET 结果 = (2*pi/hbar) * Int d2q/(2*pi)^2 * (G_s/c) * delta(dE)
 | ADP | `k_B T*(q.v:D)^2/C_2D` | `sum_面内两支 (q.v_b:D)^2/w_b`，w 取**原始 slab** 弹性张量的面内 2x2 Christoffel 本征值 |
 | POP | `2*pi*[1/eps_inf(q) - 1/eps_0(q)]/q` | `2*pi*c*(q.dr.q)/[(q.eps_inf(q)+q_TF)(q.eps_0(q)+q_TF)]` |
 | IMP | `N_2D*(2*pi*Z*exp(-qd))^2/(q.eps_0(q)+q_TF)^2` | `c^2*(2*pi)^2*exp(-2qd)/(q.eps_0(q)+q_TF)^2` |
-| PIE | `k_B T*(2*pi)^2*(q q:e_2D.v)^2*q^2/[C_2D*(q.eps_inf(q)+q_TF)^2]` | `c^2*(2*pi)^2*sum_b (q q:e.v_b)^2*q^2/(w_b*(q.eps_inf(q)+q_TF)^2)` |
+| PIE | `k_B T*(2*pi)^2*(q q:e_2D.v)^2*q^2/[C_2D*(q.eps_0(q)+q_TF)^2]` | `c^2*(2*pi)^2*sum_b (q q:e.v_b)^2*q^2/(w_b*(q.eps_0(q)+q_TF)^2)`（e 为离子弛豫总张量，故屏蔽用静态 ε0） |
 
 其中张量 Keldysh 介电函数 `q.eps(q) = eps_env*|q| + q.r.q`，`r = c*(eps_slab,|| - 1)/2`
 （2x2 张量，bohr）；`q_TF = 2*pi*c*dn_3D/dmu`（二维 Thomas-Fermi）。
@@ -99,8 +103,8 @@ AMSET 结果 = (2*pi/hbar) * Int d2q/(2*pi)^2 * (G_s/c) * delta(dE)
 `r∞ = c*(eps_inf,|| - 1)/2`、`r0 = c*(eps_0,|| - 1)/2`、`Δr = r0 - r∞ = c*(eps_0,|| - eps_inf,||)/2`。
 gen_step14 现在会算出这三个数、打印并落盘到 `2d_correction.json` 的 `r_inf_delta_r_check`，
 插件每次运行也在横幅里复述一遍（`[amset2d] POP: r_inf=... delta_r=...`）。闸门：
-`Δr < 0` 报警（离子介电缺失/读错）；`Δr/r∞ > 0.6` 报警（典型病因是拿**体相** ε0/ε∞ 外推
-当 slab 值用——早期验证台子正是因此拿到 Δr = 43.5 Å，比 Sohier 的 0.53 Å 大 ~80 倍）。
+`Δr < 0` 报警（离子介电缺失/读错）；`Δr/r∞ > 0.6` 报警（偏大；先核对 ε0/ε∞ 是否同源、
+ε_slab 是否真空收敛——早期台子曾因拿**体相**外推移当 slab 值得到 Δr = 43.5 Å，比 Sohier 的 0.53 Å 大 ~80 倍）。
 文献锚点：MoS2 r∞ ≈ 46.5 Å / Δr ≈ 0.53 Å（Δr/r∞ ≈ 1.1%）；h-BN r∞ ≈ 7.6 Å / Δr ≈ 2.8 Å（≈37%）。
 
 **ADP 的等价说法（最要紧的一条）**：`C_2D = c*C_slab`，所以 `G_s = k_B T*D^2/C_slab`，

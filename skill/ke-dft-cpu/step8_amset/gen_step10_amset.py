@@ -344,9 +344,17 @@ def _apply_eps_inf_override(eps_inf, eps_static, is_2d=False, out=None):
                            ["elastic_rescale_factor_c_over_t"])
             except Exception as _e:                            # noqa: BLE001
                 sys.exit("[ERROR] EPS_INF_OVERRIDE_BASIS=slab 需要 c/t（2d_correction.json）：%s" % _e)
+            _fl = 1.0 / _f                    # 层占胞高比例 t/c
+            _lz = []
+            for _i, _x in enumerate(_v):
+                if _i == 2 and len(_v) == 3:  # zz：层↔slab 串联
+                    _den = 1.0 / _x - (1.0 - _fl)
+                    _lz.append((_fl / _den) if _den > 0 else _x)
+                else:                         # 面内：并联
+                    _lz.append(1 + _f * (_x - 1))
             print("[..] EPS_INF_OVERRIDE 是 slab 口径：按 c/t=%.4f 换成单层值 %s -> %s"
-                  % (_f, _v, [round(1 + _f * (x - 1), 4) for x in _v]))
-            _v = [1 + _f * (x - 1) for x in _v]
+                  % (_f, _v, [round(x, 4) for x in _lz]))
+            _v = _lz
     if len(_v) == 1:
         _new = _np.eye(3) * _v[0]
         if is_2d:                                  # 2D 标量 = 面内，zz 保持原值
@@ -1310,9 +1318,36 @@ def _grab_diag3(txt, tag):
     return [rows[0][0], rows[1][1], rows[2][2]] if len(rows) == 3 else None
 
 
+def _slab_to_layer(mat, factor):
+    """slab（含真空）→ layer（扣真空）层介电张量。
+
+    面内 xx/yy 并联（体积加权）：ε_layer − 1 = (c/t)(ε_slab − 1)；
+    面外 zz 串联（层与真空去极化/局域场）：1/ε_slab = (t/c)/ε_layer + (1 − t/c)。
+    [0031] 旧代码对 zz 也套并联式，会把 ε_zz 放大 (c/t) 倍，污染三维 Fröhlich 核。
+    非对角项按并联缩放（2D 体系层法向 ∥ z 时通常为 0）。
+    """
+    factor = float(factor)
+    f = 1.0 / factor                     # 层占胞高的比例 t/c
+    out = [list(row) for row in mat]
+    for i in range(3):
+        for j in range(3):
+            if i != j:
+                out[i][j] = factor * mat[i][j]
+            elif i == 2:                 # zz：串联
+                inv = 1.0 / float(mat[2][2]) - (1.0 - f)
+                if inv > 0:
+                    out[2][2] = f / inv
+                else:
+                    print("[WARN] ε_zz slab=%.4f 无法按串联扣真空（c/t=%.3f）——保持原值"
+                          % (mat[2][2], factor))
+            else:                        # xx/yy：并联
+                out[i][i] = 1.0 + factor * (mat[i][i] - 1.0)
+    return out
+
+
 def _dielectric_2d_inplane(dielect_dir, out_dir, eps_inf_fb, eps_static_fb):
-    """2D 面内介电 (εx+εy)/2 + 扣真空 ε^m = 1 + (L/t)(ε_sup − 1)。
-    L/t 读 2d_correction.json 的 elastic_rescale_factor_c_over_t（与弹性同款）。
+    """2D 介电扣真空：面内 xx/yy 并联、面外 zz 串联（见 _slab_to_layer）。
+    c/t 读 2d_correction.json 的 elastic_rescale_factor_c_over_t（与弹性同款）。
     任一步失败/离子介电为负/非极性 → 安全退回原值或仅电子项。"""
     import json as _json
     try:
@@ -1330,9 +1365,7 @@ def _dielectric_2d_inplane(dielect_dir, out_dir, eps_inf_fb, eps_static_fb):
     if inf is None:
         return eps_inf_fb, eps_static_fb
     stat = [[inf[i][j] + ion[i][j] for j in range(3)] for i in range(3)] if ion else inf
-    corr = lambda mat: [[((1 if i == j else 0) + factor * (mat[i][j] - (1 if i == j else 0)))
-                         for j in range(3)] for i in range(3)]
-    return corr(inf), corr(stat)
+    return _slab_to_layer(inf, factor), _slab_to_layer(stat, factor)
 
 
 def _grab_matrix3(txt, tag):
