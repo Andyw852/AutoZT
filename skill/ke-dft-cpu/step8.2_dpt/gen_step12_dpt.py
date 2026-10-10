@@ -34,7 +34,7 @@ from pathlib import Path
 # =========================== 可改参数区 ===========================
 # [SKILL_REV] 版本戳：写进 dpt_result.json，铺开时验证跑的是哪份 skill 副本。
 # 每次改本脚本逻辑后更新（如 "2026-08-29-nstep-linear"）。
-_SKILL_REV = "2026-10-10-0028-spin"
+_SKILL_REV = "2026-10-10-0029-spin-window"
 # [R-SCAN] 强制选点壳层 NSTEP（None=自动 2/3/4/5；填 2/3/4/5=只试该值，做 R-scan 用）。
 # 用法：tf -p <材料> -j step8.2_dpt conf --set FORCE_NSTEP=3 → retry + start，对比 dpt_result.json 的 m_d
 #   与 m_provenance 里的 R（V148 起写 step.conf，不改本脚本）。
@@ -1835,13 +1835,22 @@ def _multi_valley(cwd, carrier, T0, temps, by_direction):
         nocc[sp] = int(n_k[0])
     # [0028] 非磁体系用 ISPIN=2 算时两个自旋道的能带逐点相同：同一个谷会按 up/down 各算一次，
     #   布居对半分（CrS2/CrSe2 hex 实测"单谷只代表 K 谷 50%"，另一半其实是同一个 K 谷的另一自旋）。
-    #   两道占据带数相同、能带处处差 < 1 meV 就只留一道（μ 不变，布居与占比回到正确值）。
+    #   两道占据带数相同、能带逐点相同就只留一道（μ 不变，布居与占比回到正确值）。
+    # [0029] 只比多谷会扫到的带：本载流子一侧、极值离带边不超过窗口 + 0.5 eV 的那些。0028 比的是全部带，
+    #   CrS2/CrSe2 hex 最高那条空带（收敛最松）两道差 0.16–0.38 eV，其余带都 < 1 meV，于是一票否决、没合并。
     if len(spins) == 2 and nocc[spins[0][0]] == nocc[spins[1][0]]:
         _e0, _e1 = spins[0][1][:, :, 0], spins[1][1][:, :, 0]
-        if _e0.shape == _e1.shape and float(np.max(np.abs(_e0 - _e1))) < 1e-3:
-            print("[..] %s：两个自旋道能带逐点相同（非磁），多谷只按一道算" % carrier)
-            spins = spins[:1]
-            nocc = {spins[0][0]: nocc[spins[0][0]]}
+        _no = nocc[spins[0][0]]
+        _side = list(range(_no, _e0.shape[1]) if sgn > 0 else range(0, _no)) if _e0.shape == _e1.shape else []
+        if _side:
+            _ext = [min(float((sgn * _e0[:, b]).min()), float((sgn * _e1[:, b]).min())) for b in _side]
+            _rel = [b for b, x in zip(_side, _ext) if x <= min(_ext) + win + 0.5]
+            _dmax = float(np.max(np.abs(_e0[:, _rel] - _e1[:, _rel])))
+            if _dmax < 1e-3:
+                print("[..] %s：两个自旋道在带边附近 %d 条带上逐点相同（最大差 %.1e eV，非磁），多谷只按一道算"
+                      % (carrier, len(_rel), _dmax))
+                spins = spins[:1]
+                nocc = {spins[0][0]: _no}
 
     kfrac, kp_map, xmethod, xerr = _expand_full_bz(v, cwd, carrier)
     if xerr:

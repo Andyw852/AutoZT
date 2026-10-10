@@ -17,18 +17,27 @@ HAVE = T22.HAVE
 
 
 class SpinModel(T22.Model):
-    """同一个模型，eigenvalues 给两个自旋道；split≠0 时 down 道整体上移 split（eV）。"""
+    """同一个模型，eigenvalues 给两个自旋道；split≠0 时 down 道整体上移 split（eV）。
+    top_split 不为 None 时再加一条离导带底 5 eV 的最高空带，down 道这条带另外上移 top_split（[0029]：
+    VASP 最高几条空带收敛最松，CrS2/CrSe2 hex 实测两道差 0.16–0.38 eV，其余带 < 1 meV）。"""
 
-    def __init__(self, split=0.0, **kw):
+    def __init__(self, split=0.0, top_split=None, **kw):
         super().__init__(**kw)
-        self.split = split
+        self.split, self.top_split = split, top_split
 
     def vasprun(self, kf, strain=None, nocc=2):
+        import numpy as np
         from pymatgen.electronic_structure.core import Spin
         v = super().vasprun(kf, strain, nocc)
         up = v.eigenvalues[Spin.up]
+        if self.top_split is not None:
+            top = up[:, 2:3, :].copy()
+            top[..., 0] += 5.0
+            up = np.concatenate([up, top], axis=1)
         dn = up.copy()
         dn[..., 0] += self.split
+        if self.top_split is not None:
+            dn[:, -1, 0] += self.top_split
         v.parameters = {"ISPIN": 2}
         v.eigenvalues = {Spin.up: up, Spin.down: dn}
         return v
@@ -76,6 +85,15 @@ class SpinDupTests(unittest.TestCase):
         s1, s2 = self.D._single_valley_scope(one, 300.0), self.D._single_valley_scope(two, 300.0)
         self.assertAlmostEqual(s2["share"], s1["share"], places=9)
         self.assertGreater(s2["share"], 0.5)                 # 以前会被对半分成 < 0.5
+
+    def test_top_band_mismatch_still_merged(self):
+        """[0029] 只有远离带边的最高空带两道不一致：仍然合并，结果与 ISPIN=1 相同。"""
+        for car in ("hole", "electron"):
+            one = self._mv(T22.Model(), car)
+            two = self._mv(SpinModel(top_split=0.3), car)
+            self.assertEqual(two["status"], one["status"], car)
+            self.assertEqual([(v["label"], v["g"]) for v in two.get("valleys") or []],
+                             [(v["label"], v["g"]) for v in one.get("valleys") or []], car)
 
     def test_split_spins_kept_apart(self):
         two = self._mv(SpinModel(split=0.05))
