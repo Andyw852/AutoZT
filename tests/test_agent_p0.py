@@ -207,7 +207,7 @@ def remote_default(tmp_path):
     proj.mkdir()
     cfg = tmp_path / "tf.yaml"
     cfg.write_text("host: no-such-cluster\nproject_roots:\n  - %s\ntask_types:\n"
-                   "  fit-fc-thermal:\n    work_dir: /public/home/nobody/work\n" % proj)
+                   "  fit-fc-thermal:\n    work_dir: /public/home/<user>/work\n" % proj)
     ds = tmp_path / "ds"
     ds.mkdir()
     (ds / "POSCAR").write_text("Si\n1.0\n0 2.7 2.7\n2.7 0 2.7\n2.7 2.7 0\nSi\n2\n"

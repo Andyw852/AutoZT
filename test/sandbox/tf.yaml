@@ -1,7 +1,7 @@
 host: ""
 # 本地沙盒：纯本地测试配置，不连任何超算（CLI 冒烟测试夹具）
 project_roots:
-  - /home/wangchao/software/AutoZT/test/tf_test
+  - ~/software/AutoZT/test/tf_test
 # 覆盖技能默认集群（skill.yaml defaults.hpc=jzzn 会让 host_eff 回退到 jzzn 去 ssh）；
 # 内联 hpc 使 dhpc 无 ssh_host -> host_eff=None -> 纯本地（沙盒测试必需）
 task_types:

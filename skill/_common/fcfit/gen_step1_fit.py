@@ -182,7 +182,7 @@ SPEC = {
     "FIT_RMSE_FRAMES": (10, "int"),          # frames for the force residual (also per
                                              # cutoff -> S2 RMSE panel); 0 = off
     # ---- environment ----
-    "CONDA_SH": ("/public/home/.../miniconda3/etc/profile.d/conda.sh", "str"),
+    "CONDA_SH": ("/public/home/<user>/miniconda3/etc/profile.d/conda.sh", "str"),
     "CONDA_ENV": ("atomate2_p_a", "str"),
 }
 

@@ -126,7 +126,7 @@ except Exception as exc:                                    # noqa: BLE001
     print("  SKIP 读测试配置失败：%s" % exc)
 if cfg:
     cfg.setdefault("_config_path", os.path.join(ROOT, "tmp", "tf_jzzn_si_all.yaml"))
-    d3090 = ("/home/user_3090/taskflow/work/tf_smoke/Si_unihamgnn/"
+    d3090 = ("/home/<user>/taskflow/work/tf_smoke/Si_unihamgnn/"
              "unihamgnn/step1_graph_data")
     got = autozt._discover_step_inputs(cfg, "user_3090", d3090)
     if not got:

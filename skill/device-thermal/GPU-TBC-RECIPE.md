@@ -139,7 +139,7 @@ S6 输出 `quality`（good/poor）+ `quality_reasons`，判据：
   界面自动定在 z=27.03 A（键中心），源/漏各 192 原子，面积 491.9 A²。
 - 流程：S5 生成 deck -> S5b 在 3090 GPU5（UUID `GPU-377470de-…`）跑 GPUMD
   320000 步（20000 平衡 + 100000 烧入 + 200000 测量）-> S6 出 G。三个种子
-  `TBC_SEED`=20260923/24/25，远端目录 `/data/wangchaoyue852/AutoZT_tbc_v3/seed_<seed>`。
+  `TBC_SEED`=20260923/24/25，远端目录 `/data/user_3090/AutoZT_tbc_v3/seed_<seed>`。
 
 | seed | q (W/m²) | 自洽度 | dT_i (K) | G (MW/m²K) | tau_int | n_eff | 余量敏感 | quality |
 |---|---|---|---|---|---|---|---|---|

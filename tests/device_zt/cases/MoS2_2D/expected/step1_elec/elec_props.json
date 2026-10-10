@@ -1,7 +1,7 @@
 {
   "ELEC_DONE": true,
   "device_name": "device",
-  "transport_source": "/home/wangchao/software/AutoZT/tmp/dt_fix/zt_MoS2_2D/MoS2_2D/ke-dft-cpu/step8_amset/transport.json",
+  "transport_source": "~/software/AutoZT/tmp/dt_fix/zt_MoS2_2D/MoS2_2D/ke-dft-cpu/step8_amset/transport.json",
   "transport_step": "step8_amset",
   "doping_cm3": 9.999999999999998e+19,
   "doping_requested_cm3": 1e+20,
@@ -77,7 +77,7 @@
   "seebeck_unit": "uV/K（原值）；seebeck_V_K 为 SI",
   "t_conv_m": 3.4879e-09,
   "sigma_convention": "cell(含真空超胞高 h_perp)",
-  "sigma_convention_source": "/home/wangchao/software/AutoZT/tmp/dt_fix/zt_MoS2_2D/MoS2_2D/ke-dft-cpu/step8_amset/2d_correction.json",
+  "sigma_convention_source": "~/software/AutoZT/tmp/dt_fix/zt_MoS2_2D/MoS2_2D/ke-dft-cpu/step8_amset/2d_correction.json",
   "G_sheet_S": [
     0.001560633481384631,
     0.0018083348759893958,

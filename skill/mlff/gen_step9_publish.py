@@ -61,7 +61,7 @@ def main():
             "kl-mlff-* 跑出与已知参考对照，本技能不替它背书",
             "磁性体系：MACE 不含自旋自由度，模型只对训练时的磁序有效",
         ],
-        "downstream_MACE_MODEL": ("/public/home/.../software/mace/mlff_models/%s_ft.model" % mat)
+        "downstream_MACE_MODEL": ("/public/home/<user>/software/mace/mlff_models/%s_ft.model" % mat)
         if status == "pass" else None,
     }
     if val.get("dim") == "2d":
@@ -72,7 +72,7 @@ def main():
         if not model_src.is_file():
             sys.exit("[ERROR] status=pass 但 seed-1 模型不存在：%s" % model_src)
         dst_dir = Path(cv["MACE_MODEL_DIR"] or
-                       "/public/home/.../software/mace/mlff_models")
+                       "/public/home/<user>/software/mace/mlff_models")
         dst_dir.mkdir(parents=True, exist_ok=True)
         dst = dst_dir / ("%s_ft.model" % mat)
         shutil.copyfile(str(model_src), str(dst))

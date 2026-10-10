@@ -100,7 +100,7 @@ def test_vasp_selection_replaces_suffixed_executable():
 def test_remote_path_prefix_matches_ssh_alias_case():
     from autozt.collect import _effective_remote_path_prefix
     assert _effective_remote_path_prefix({}, "A800") == (
-        "/fs0/home/wangcch/software/taskflow/pybin")
+        "~/software/taskflow/pybin")
 
 
 def test_monitor_alias_normalization():

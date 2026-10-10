@@ -14,7 +14,7 @@ M="$1"; NEWD="$2"; DO_SUBMIT="$3"
 if [ -z "$M" ] || [ -z "$NEWD" ]; then echo "用法: $0 <材料> <DFPT目录> [--submit]"; exit 1; fi
 [ -f "$NEWD/OUTCAR" ] || { echo "[ERROR] $NEWD/OUTCAR 不存在"; exit 1; }
 
-source /public/home/.../miniconda3/etc/profile.d/conda.sh
+source /public/home/<user>/miniconda3/etc/profile.d/conda.sh
 conda activate amset051 >/dev/null 2>&1
 
 echo "===== $M ====="
@@ -63,8 +63,8 @@ echo "  pop_frequency: $POP"
 
 # ---- 3) 备份 + 更新两套 settings.yaml ----
 UPDATED=""
-for S in /public/home/.../ke_work/$M/ke-dft-cpu/step8_amset/settings.yaml \
-         /public/home/.../ke_soc_20260910/$M/ke-dft-cpu/step8_amset/settings.yaml; do
+for S in /public/home/<user>/ke_work/$M/ke-dft-cpu/step8_amset/settings.yaml \
+         /public/home/<user>/ke_soc_20260910/$M/ke-dft-cpu/step8_amset/settings.yaml; do
   if [ ! -f "$S" ]; then echo "  [跳过] $S 不存在"; continue; fi
   [ -f "$S.bak-9x9x1" ] || cp "$S" "$S.bak-9x9x1"
   python3 /tmp/update_amset_settings.py "$S" /tmp/diel_$M.json "$POP"
@@ -76,8 +76,8 @@ python3 /tmp/val_yaml.py $UPDATED
 
 # ---- 5) 提交 ----
 if [ "$DO_SUBMIT" = "--submit" ]; then
-  for D in /public/home/.../ke_work/$M/ke-dft-cpu/step8_amset \
-           /public/home/.../ke_soc_20260910/$M/ke-dft-cpu/step8_amset; do
+  for D in /public/home/<user>/ke_work/$M/ke-dft-cpu/step8_amset \
+           /public/home/<user>/ke_soc_20260910/$M/ke-dft-cpu/step8_amset; do
     [ -f "$D/submit.sh" ] || continue
     ( cd "$D"
       if [ -f transport.json ]; then mv transport.json "transport.json.9x9x1-$(date +%m%d)"; fi

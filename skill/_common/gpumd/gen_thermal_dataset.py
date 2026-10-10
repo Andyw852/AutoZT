@@ -13,8 +13,8 @@ import stepconf
 STEP = "step1_thermal_dataset"
 OUTDIR = STEP
 SPEC = {
-    "GPUMD_BIN": ("/home/wangchaoyue852/gpumd/src/gpumd", "str"),
-    "NEP_BIN": ("/home/wangchaoyue852/gpumd/src/nep", "str"),
+    "GPUMD_BIN": ("/home/<user>/gpumd/src/gpumd", "str"),
+    "NEP_BIN": ("/home/<user>/gpumd/src/nep", "str"),
     "SAMPLE_STEP": ("step1_thermal_sample", "str"),
     "SAMPLE_SUBDIR": ("sampled", "str"),
     "LABEL_STEP": ("step1_thermal_label", "str"),

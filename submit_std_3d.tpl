@@ -21,4 +21,4 @@ ulimit -s unlimited
 
 # 标准共线版本：step1/step2 使用 vasp_std
 export AUTOZT_CELL_CONSTRAINT=none
-mpirun -np $SLURM_NTASKS /public/home/wangchao/software/vasp.6.4.3/bin/vasp_std
+mpirun -np $SLURM_NTASKS /public/home/<user>/software/vasp.6.4.3/bin/vasp_std

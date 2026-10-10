@@ -14,8 +14,8 @@ import stepconf
 STEP = "step1_thermal_label"
 OUTDIR = STEP
 SPEC = {
-    "GPUMD_BIN": ("/home/wangchaoyue852/gpumd/src/gpumd", "str"),
-    "NEP_BIN": ("/home/wangchaoyue852/gpumd/src/nep", "str"),
+    "GPUMD_BIN": ("/home/<user>/gpumd/src/gpumd", "str"),
+    "NEP_BIN": ("/home/<user>/gpumd/src/nep", "str"),
     "INCAR_SOURCE": ("INCAR_thermal_source", "str"),
     "KPOINTS_SOURCE": ("KPOINTS_thermal_source", "str"),
     "POTCAR_SOURCE": ("POTCAR_thermal_source", "str"),

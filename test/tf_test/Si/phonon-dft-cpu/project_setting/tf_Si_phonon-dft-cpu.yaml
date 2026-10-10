@@ -4,7 +4,7 @@
 task_types:
   phonon-dft-cpu:
     local_root: ".."   # 只发现本材料；整批管请到上级目录 tf init
-    work_dir: /public/home/wangchao/Fullerene_Network/fullerene_network/test
+    work_dir: /public/home/<user>/Fullerene_Network/fullerene_network/test
     # local_root: ".."     # 技能子目录布局(<材料>/<技能>/project_setting)下写 ".."
                        # = 只发现本材料；缺省会扫到同级所有兄弟材料
     # skill_dir: skill/bd  # 缺省继承全局；项目有专用脚本时写相对本目录的路径

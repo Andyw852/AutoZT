@@ -3129,6 +3129,20 @@ def _stability_gate(cfg, out):
     #   一个没采到。改为更密的长度网格 + 不做对称约化（fc2 不对称时约化本身就不成立）。
     _len3d = float(cfg.get("imag_mesh_length") or IMAG_MESH_LENGTH)
 
+    # 2D 真空轴：取最长的原胞格矢（近似 dim_common.detect_dimension；共享引擎不
+    #   携带真空轴）。用于显式整数网格的真空轴设 1 + ZA 面内方向投影。
+    vax = 2
+    if is2d:
+        _cell = np.asarray(uc.cell, float)
+        vax = int(np.argmax(np.linalg.norm(_cell, axis=1)))
+
+    def _mesh_numbers():
+        if not is2d:
+            return None
+        m = [60, 60, 60]
+        m[vax] = 1
+        return m
+
     def _minfreq(with_nac):
         p = _build_phonopy(scm, pm, uc, fc2)
         got = _apply_nac(out, p) if with_nac else False

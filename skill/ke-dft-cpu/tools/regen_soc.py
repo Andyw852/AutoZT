@@ -25,8 +25,8 @@ def pair(a, b):
     return b - a, (b - a) / abs(a) * 100.0
 
 MATS = ["Pb2Bi2Te5", "Pb2Sb2Te5", "Sn2Bi2Te5", "Sn2Sb2Te5"]
-BASE = "/public/home/.../ke_work/%s/ke-dft-cpu/step8_amset/transport.json"
-SOC  = "/public/home/.../ke_soc_20260910/%s/ke-dft-cpu/step8_amset/transport.json"
+BASE = "/public/home/<user>/ke_work/%s/ke-dft-cpu/step8_amset/transport.json"
+SOC  = "/public/home/<user>/ke_soc_20260910/%s/ke-dft-cpu/step8_amset/transport.json"
 HEAD = ["material","temperature_K","doping_cm3","direction",
         "mobility_noSOC","mobility_SOC","mobility_difference","mobility_relative_pct",
         "conductivity_noSOC","conductivity_SOC","conductivity_difference","conductivity_relative_pct",

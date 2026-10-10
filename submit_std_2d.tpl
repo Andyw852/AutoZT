@@ -31,4 +31,4 @@ export UCX_TLS=rc,sm,self
 export UCX_NET_DEVICES=mlx5_0:1
 # 标准共线版本：step1/step2 使用 vasp_std
 export AUTOZT_CELL_CONSTRAINT=ioptcell_tag
-mpirun -np $SLURM_NTASKS /public/home/wangchao/software/vasp.6.4.3-optcell/bin/vasp_std
+mpirun -np $SLURM_NTASKS /public/home/<user>/software/vasp.6.4.3-optcell/bin/vasp_std

@@ -72,7 +72,7 @@ export OMP_NUM_THREADS=$SLURM_CPUS_PER_TASK
 export OMP_PROC_BIND=close OMP_PLACES=cores OMP_NESTED=FALSE
 export BLIS_NUM_THREADS=$OMP_NUM_THREADS
 export AOCL_ENABLE_INSTRUCTIONS=AVX512
-export LD_LIBRARY_PATH=/public/home/wangchao/software/aocl-gcc/5.0.0/gcc/lib_LP64:$CONDA_PREFIX/lib:$LD_LIBRARY_PATH
+export LD_LIBRARY_PATH=/public/home/<user>/software/aocl-gcc/5.0.0/gcc/lib_LP64:$CONDA_PREFIX/lib:$LD_LIBRARY_PATH
 unset MKL_NUM_THREADS MKL_DEBUG_CPU_TYPE I_MPI_PMI_LIBRARY
 ulimit -s unlimited
 # [FIX P49/OMP] 第一个温度 RTA 写完、rank 0 进 cumulative-κ 段就 SIGSEGV（rc=139）的根因 =

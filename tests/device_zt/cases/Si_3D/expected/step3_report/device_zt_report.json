@@ -246,7 +246,7 @@
   ],
   "upstream": {
     "kappa": {
-      "file": "/home/wangchao/software/AutoZT/tmp/dt_fix/zt_Si_3D/Si_3D/kl-dft-cpu/step6_kappa/kappa_summary.json",
+      "file": "~/software/AutoZT/tmp/dt_fix/zt_Si_3D/Si_3D/kl-dft-cpu/step6_kappa/kappa_summary.json",
       "T_K": 300.0,
       "tensor": [
         88.80941300947907,
@@ -256,6 +256,6 @@
       "kappa_key": "kappa_xx_yy_zz",
       "note": "3D 材料，κ 可直接用（无 2D 归一化）"
     },
-    "elec": "/home/wangchao/software/AutoZT/tmp/dt_fix/zt_Si_3D/Si_3D/device-zt/step1_elec/elec_props.json"
+    "elec": "~/software/AutoZT/tmp/dt_fix/zt_Si_3D/Si_3D/device-zt/step1_elec/elec_props.json"
   }
 }
