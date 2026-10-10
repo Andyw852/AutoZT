@@ -34,7 +34,7 @@ from pathlib import Path
 # =========================== 可改参数区 ===========================
 # [SKILL_REV] 版本戳：写进 dpt_result.json，铺开时验证跑的是哪份 skill 副本。
 # 每次改本脚本逻辑后更新（如 "2026-08-29-nstep-linear"）。
-_SKILL_REV = "2026-10-10-0027-kpin"
+_SKILL_REV = "2026-10-10-0028-spin"
 # [R-SCAN] 强制选点壳层 NSTEP（None=自动 2/3/4/5；填 2/3/4/5=只试该值，做 R-scan 用）。
 # 用法：tf -p <材料> -j step8.2_dpt conf --set FORCE_NSTEP=3 → retry + start，对比 dpt_result.json 的 m_d
 #   与 m_provenance 里的 R（V148 起写 step.conf，不改本脚本）。
@@ -1833,6 +1833,15 @@ def _multi_valley(cwd, carrier, T0, temps, by_direction):
             raise _MVStop("自旋 %s 各 k 点的占据带数不同（%d..%d）：能带交叠（金属/半金属），多谷 DPT 不适用"
                           % (sp, int(n_k.min()), int(n_k.max())))
         nocc[sp] = int(n_k[0])
+    # [0028] 非磁体系用 ISPIN=2 算时两个自旋道的能带逐点相同：同一个谷会按 up/down 各算一次，
+    #   布居对半分（CrS2/CrSe2 hex 实测"单谷只代表 K 谷 50%"，另一半其实是同一个 K 谷的另一自旋）。
+    #   两道占据带数相同、能带处处差 < 1 meV 就只留一道（μ 不变，布居与占比回到正确值）。
+    if len(spins) == 2 and nocc[spins[0][0]] == nocc[spins[1][0]]:
+        _e0, _e1 = spins[0][1][:, :, 0], spins[1][1][:, :, 0]
+        if _e0.shape == _e1.shape and float(np.max(np.abs(_e0 - _e1))) < 1e-3:
+            print("[..] %s：两个自旋道能带逐点相同（非磁），多谷只按一道算" % carrier)
+            spins = spins[:1]
+            nocc = {spins[0][0]: nocc[spins[0][0]]}
 
     kfrac, kp_map, xmethod, xerr = _expand_full_bz(v, cwd, carrier)
     if xerr:
