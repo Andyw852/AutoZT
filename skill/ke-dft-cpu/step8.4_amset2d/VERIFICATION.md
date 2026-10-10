@@ -8433,3 +8433,42 @@ band_edges.json 的每个带边点也带了 `band_h5`/`k_h5`/`spin`，直接索�
 - 下游：S8.3 的 DPT 主栏与 μ(T) 取三方向平均；工具的 `dpt_mu` 同样。
 
 **怎么用**：3D 材料 S8.2 retry + start（秒级），S8.1/S8.3 会自动重排。前提是 S7.1 已产出 `deformation.h5`。
+
+## V191（2026-10-10）：3D 的 zz 方向打通 S8.1 → S8.3；恢复 0024 的 S8.3 汇总两行
+
+**问题**
+- 0025 之后 S8.2 的 3D 已有 x/y/z，但下游只到 x/y：
+  - S8.1 的 `boltztrap_crta.json` 只写 `sigma_over_tau_xx/yy`、`seebeck_xx/yy`、`kappa_e_over_tau_xx/yy`
+    （各向同性平均对 3D 已是三方向，分方向序列没有 zz）；
+  - S8.1 的 `_resolve_kappa_L` 读的 `kappa_xx_yy_zz` 三项都在，只取了前两项，ZT_zz 算不出来；
+  - S8.3 的 `build_table` 只循环 xx/yy；3D 的平均 ZT 用的是 (κL_xx+κL_yy)/2，而 S、σ 是三方向平均，口径不一致。
+- 本机 master（5911b60）合并 0030 与 V181 时，gen13 里 0024 的两行调用被冲掉：
+  `_dpt_scope_lines`、`_amset_mech_lines` 还在，但 `comparison_summary.txt` 不再写 `[DPT 单谷]` / `[AMSET 机制]`。
+  0024 的测试直接调这两个函数，没走 `write_table`，所以没测出来。
+
+**改动**（2D 的输出逐字节不变，只有版本戳变）
+- S8.1：
+  - 3D 另写 `sigma_over_tau_zz`、`seebeck_zz_V_per_K`、`kappa_e_over_tau_zz`（追加在原有键之后；2D 不写，zz 是真空方向）；
+  - τ 读取带 z（S8.2 by_direction 的 z；各向同性回退时 3D 也给 z）；
+  - κL_zz：kl 链来源时取 `kappa_xx_yy_zz` 第三项（手填只有 xx/yy，手填时没有 ZT_zz）；
+  - 文献口径扫描 3D 加 zz：τ_zz、S_zz、σ_zz、PF_zz、κe_WF_zz 紧跟 yy 列，末尾加 ZT_zz；片电导只对 2D 有意义，不出 zz；
+    汇总的 τ 行与峰值行带 z，图里加 z 方向曲线。按掺杂对齐的表按行里的键取列，自动带上 zz。
+- S8.3：
+  - `load_bt2` 读 zz，`build_table` 的方向循环加 zz（只有 3D 的 S8.1 才写 zz，2D 自然跳过）；
+  - 列：`bt2_S/sigma/PF/kappa_e_WF_zz` 紧跟 yy，`bt2_ZT_zz` 紧跟 `bt2_ZT_yy`；
+  - 3D 的平均 ZT（amset_ZT、bt2_ZT）改用三个方向 κL 的平均，与三方向平均的 S、σ 同口径；2D 仍是面内平均；
+  - 恢复 0024 的 `[DPT 单谷]` / `[AMSET 机制]` 两行（放回多谷几行之后）。
+  - `_SKILL_REV` 换成 `2026-10-10-0026`：本机 5911b60 的 `2026-10-09-0025` 其实是 0030+0025 的合并版。
+- AMSET 一路的分方向（`amset_*_xx/yy`）仍只有面内，3D 的 zz 不在本补丁范围。
+
+**测试**：tests/test_0026_zz_3d.py，6 项。假的 BoltzTraP2 只给 3×3 输运张量（三个对角不同），走真实的
+run_boltztrap_crta → 文献口径扫描 → boltztrap_crta.json → S8.3 的 load_bt2 / build_table / write_table。
+- 3D：zz 键追加在原有键之后；扫描与对比表的 zz 列位置、σ_zz = (σ/τ)_zz·τ_z、ZT_zz 与独立计算相符；3D 平均 ZT 用三方向 κL。
+- 2D：S8.1 的键和顺序、扫描表的列与以前完全一致；对比表没有任何 zz 列；平均 ZT 仍用面内 κL。
+  另外用基线脚本（3bd79c8）和新脚本对同一组 2D 输入逐字节比较：boltztrap_crta.json、扫描汇总、comparison_300K.csv 相同，
+  扫描表与 comparison_summary.txt 只差版本戳。
+- `write_table` 真的写出 `[DPT 单谷]` 和 `[AMSET 机制]`（去掉恢复的两行，这项测试就失败）。
+- test_0022 有一条断言还在找 μ(T) 表的 "mean" 行，0030 已不出平均行，改成按 x/y 两行核对（数值不变）。
+
+**怎么用**：3D 材料 S8.1 retry + start（BoltzTraP2 要重跑才有 zz），S8.3 自动重排。2D 材料不用重跑 S8.1；
+S8.3 下次重跑时（比如 S8.4 跑完后）会补上 `[DPT 单谷]` / `[AMSET 机制]` 两行。

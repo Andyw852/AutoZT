@@ -33,7 +33,10 @@ from pathlib import Path
 # [SKILL_REV] 版本戳：写进 comparison_summary.txt。每次改本脚本逻辑后更新。
 #   陈旧副本已咬人三次（step12/step9b 盖戳后，step13 是最后一个没盖的），
 #   这里盖戳便于从产物反查到底跑的是哪份 skill 副本。
-_SKILL_REV = "2026-10-09-0025"
+_SKILL_REV = "2026-10-10-0026"
+#   bump 记录：2026-10-10-0026 —— 3D 的 BT2 分方向加 zz（σ/S/PF/κe_WF/ZT），3D 的平均 ZT 用三个方向的 κL；
+#   恢复 0024 的 [DPT 单谷] / [AMSET 机制] 汇总行（本机合并 0030+V181 时调用被冲掉，函数还在）。
+#   （本机 5911b60 的 "2026-10-09-0025" 是 0030+0025 的合并版，与纯 0025 不是同一份内容。）
 #   bump 记录：2026-10-07-v181 —— 汇总里写明泛函（csv 的 functional 列 + summary 的 [口径] 行）。
 #   bump 记录：2026-10-09-0021 —— DPT 的 μ/τ 换到 TARGET_T（S8.2 的 TEMPERATURE_K 可改了）；
 #   2D 只有真实重叠、没有 unity 对照不再判红（2026-09-26 起真实重叠是出厂默认）。
@@ -352,6 +355,9 @@ def load_bt2(cwd):
         res["seebeck_yy"] = _dir("seebeck_yy_V_per_K", 1e6)
         res["kappa_e_over_tau_xx"] = _dir("kappa_e_over_tau_xx")
         res["kappa_e_over_tau_yy"] = _dir("kappa_e_over_tau_yy")
+        res["sigma_over_tau_zz"] = _dir("sigma_over_tau_zz")         # [0026] 3D 才有
+        res["seebeck_zz"] = _dir("seebeck_zz_V_per_K", 1e6)
+        res["kappa_e_over_tau_zz"] = _dir("kappa_e_over_tau_zz")
         return res
     except Exception as e:
         print("[WARN] boltztrap_crta.json 解析失败：%s: %s" % (type(e).__name__, e))
@@ -643,6 +649,8 @@ def resolve_kappa_L(cwd):
         return r
     kxx = _interp_T(temps, [x[0] for x in raw], TARGET_T)
     kyy = _interp_T(temps, [x[1] for x in raw], TARGET_T)
+    if _read_dim(cwd) == "3d" and all(len(x) > 2 for x in raw):            # [0026] 3D 才用 zz
+        _KL_CACHE["zz"] = _interp_T(temps, [x[2] for x in raw], TARGET_T)
     lines = ["kappa_L 来源：%s（原始元胞口径，与 amset 同口径，不重标度）"
              % os.path.relpath(str(src), str(root))]
     if kxx is None or kyy is None:
@@ -652,6 +660,8 @@ def resolve_kappa_L(cwd):
         _KL_CACHE["v"] = r
         return r
     lines.append("  kappa_L(%.0f K)  xx=%.4f  yy=%.4f W/mK" % (TARGET_T, kxx, kyy))
+    if _KL_CACHE.get("zz") is not None:
+        lines[-1] += "  zz=%.4f" % _KL_CACHE["zz"]
     # 元胞闸门：kl-dft-cpu 的 Lz 与 ke-dft-cpu 的 c
     # [0016] 2D 默认不跑 S8：胞高改读 S8.4 的记录
     rec = (_load_json(Path(cwd) / AMSET_DIR / "2d_correction.json")
@@ -692,7 +702,11 @@ def _add_zt_columns(row, has_am2=False):
                                            row.get("amset2d_sigma_%s_S/m" % d),
                                            row.get("amset2d_kappa_e_%s_W/mK" % d),
                                            kl, TARGET_T)
-    kl_avg = ([k for k in (kxx, kyy) if k is not None])
+    kzz = _KL_CACHE.get("zz")                                         # [0026] 只有 3D + auto 来源才有
+    if kzz is not None and row.get("bt2_sigma_zz_S/m") is not None:
+        row["bt2_ZT_zz"] = _zt(row.get("bt2_S_zz_uV/K"), row.get("bt2_sigma_zz_S/m"),
+                               row.get("bt2_kappa_e_WF_zz_W/mK"), kzz, TARGET_T)
+    kl_avg = ([k for k in (kxx, kyy, kzz) if k is not None])        # 3D：S、σ 是三方向平均，κL 也取三方向
     kl_avg = sum(kl_avg) / len(kl_avg)
     row["amset_ZT"] = _zt(row.get("amset_S_uV/K"), row.get("amset_sigma_S/m"),
                           row.get("amset_kappa_e_W/mK"), kl_avg, TARGET_T)
@@ -781,7 +795,7 @@ def build_table(am, bt, dpt, am2=None):
                 row["bt2_PF_W/mK2"] = (_s * 1e-6) ** 2 * sig
                 row["bt2_kappa_e_WF_W/mK"] = SOMMERFELD_L * sig * TARGET_T
             # patch_bt2_dir：每个方向用它自己的 τ_α —— 这才是文献的做法
-            for _d, _dd in (("xx", "x"), ("yy", "y")):
+            for _d, _dd in (("xx", "x"), ("yy", "y"), ("zz", "z")):     # [0026] zz 只有 3D 的 S8.1 才写
                 _sot = bt.get("sigma_over_tau_%s" % _d)
                 _sbk = bt.get("seebeck_%s" % _d)
                 if not _sot:
@@ -825,15 +839,15 @@ def write_table(out, rows, am, bt, dpt, am2=None):
              "bt2_PF_W/mK2", "bt2_kappa_e_W/mK", "bt2_kappa_e_WF_W/mK",
              "dpt_mu_cm2/Vs", "dpt_kappa_e_WF_W/mK"]
     cols += [c for c in ("dpt_mv_mu_cm2/Vs",) if any(c in r for r in rows)]       # [0022]
-    cols += [c for c in ("bt2_S_xx_uV/K", "bt2_S_yy_uV/K",            # patch_bt2_dir
-                         "bt2_sigma_xx_S/m", "bt2_sigma_yy_S/m",
-                         "bt2_PF_xx_W/mK2", "bt2_PF_yy_W/mK2",
-                         "bt2_kappa_e_WF_xx_W/mK", "bt2_kappa_e_WF_yy_W/mK")
+    cols += [c for c in ("bt2_S_xx_uV/K", "bt2_S_yy_uV/K", "bt2_S_zz_uV/K",            # patch_bt2_dir
+                         "bt2_sigma_xx_S/m", "bt2_sigma_yy_S/m", "bt2_sigma_zz_S/m",
+                         "bt2_PF_xx_W/mK2", "bt2_PF_yy_W/mK2", "bt2_PF_zz_W/mK2",
+                         "bt2_kappa_e_WF_xx_W/mK", "bt2_kappa_e_WF_yy_W/mK", "bt2_kappa_e_WF_zz_W/mK")
              if any(c in r for r in rows)]
     if any(resolve_kappa_L(Path.cwd())[:2]):                          # patch_kl_auto
         cols += [c for c in ("amset_ZT_xx", "amset_ZT_yy", "amset_ZT",
                              "amset2d_ZT_xx", "amset2d_ZT_yy", "amset2d_ZT",
-                             "bt2_ZT_xx", "bt2_ZT_yy", "bt2_ZT")
+                             "bt2_ZT_xx", "bt2_ZT_yy", "bt2_ZT_zz", "bt2_ZT")
                  if any(c in r for r in rows)]
     # [patch_dose_range] 每原胞载流子数 + 可解读范围标记（2D/3D 同一判据）
     _c_cm = _areal_factor_cm(Path.cwd())
@@ -893,6 +907,8 @@ def write_table(out, rows, am, bt, dpt, am2=None):
                 _c, dpt["mv_" + _c]["mean"], dpt.get("mv_desc_" + _c, ""),
                 "  ← 单谷算不出（带边在非高对称谷），dpt_mu 主栏与 BT2 的 τ 都用它"
                 if dpt.get("src_" + _c) == "multi_valley" else ""))
+    lines += _dpt_scope_lines(dpt)                                     # [0024]
+    lines += _amset_mech_lines(Path.cwd(), _read_dim(Path.cwd()) == "2d")
     if not _func:
         lines.append("# [口径] 泛函 = 未知（step1 的 workflow_method.txt 读不到）—— 先查 step1 INCAR 的 GGA/IVDW，"
                      "再和文献比")

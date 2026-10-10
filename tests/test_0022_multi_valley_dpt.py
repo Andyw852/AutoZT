@@ -524,10 +524,11 @@ class S83Tests(unittest.TestCase):
         _dpt_json(m)
         res = O.build_mu_vs_T(m, True)
         self.assertIn("mu_DPT_mv", O.MU_T_COLS)
-        e600 = next(r for r in res["rows"] if r["carrier"] == "electron" and r["T_K"] == 600.0
-                    and r["direction"] == "x")                        # [0030] 按方向，不出平均
-        self.assertIsNone(e600["mu_DPT"])
-        self.assertAlmostEqual(e600["mu_DPT_mv"], 190.0)
+        e600 = {r["direction"]: r for r in res["rows"] if r["carrier"] == "electron" and r["T_K"] == 600.0}
+        self.assertNotIn("mean", e600)                   # [0030] μ(T) 表按方向出，不出平均行
+        self.assertIsNone(e600["x"]["mu_DPT"])
+        self.assertAlmostEqual(e600["x"]["mu_DPT_mv"], 190.0)
+        self.assertAlmostEqual(e600["y"]["mu_DPT_mv"], 200.0)
         h300 = next(r for r in res["rows"] if r["carrier"] == "hole" and r["T_K"] == 300.0
                     and r["direction"] == "x")
         self.assertAlmostEqual(h300["mu_DPT"], 2000.0)

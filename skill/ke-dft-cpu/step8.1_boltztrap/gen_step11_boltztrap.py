@@ -52,7 +52,7 @@ AMSET_DIR   = "step8_amset"            # 读 2d_correction.json 拿 c/t（若有
 AMSET2D_DIR = "step8.4_amset2d"        # [0016] 2D 不跑 S8 时，c/t 与掺杂档改读 S8.4
 STEP = "step8.1_boltztrap"
 # [0016] 版本戳：写进 boltztrap_crta.json 与 paper_mu_scan_*.csv 首行（以前没有，跨材料核对只能看文件时间）
-_SKILL_REV = "2026-10-09-0024-valley-scope"
+_SKILL_REV = "2026-10-10-0026-zz"
 
 TEMPERATURES = [100, 200, 300, 400, 500, 600, 700, 800, 900]  # K
 # patch_mu_window：CRTA 类文献普遍把 μ 扫到带边上下 ±3 eV，ZT 峰
@@ -390,6 +390,10 @@ def run_boltztrap_crta(uniform_dir, temperatures, mu_window_ev, mu_npts,
     sig_xx, sig_yy = sigma[..., 0, 0], sigma[..., 1, 1]
     sbk_xx, sbk_yy = seebeck[..., 0, 0], seebeck[..., 1, 1]
     kap_xx, kap_yy = kappa[..., 0, 0], kappa[..., 1, 1]
+    # [0026] 3D 另存 zz（2D 的 zz 是真空方向，没有意义，不写）
+    zz = {} if is_2d else {"sigma_over_tau_zz": sigma[..., 2, 2].tolist(),
+                           "seebeck_zz_V_per_K": seebeck[..., 2, 2].tolist(),
+                           "kappa_e_over_tau_zz": kappa[..., 2, 2].tolist()}
     with np.errstate(divide="ignore", invalid="ignore"):
         lorenz = np.where(sig > 0, kap / (sig * Tr[:, None]), np.nan)
         pf = sbk**2 * sig          # S^2 σ/τ
@@ -402,7 +406,7 @@ def run_boltztrap_crta(uniform_dir, temperatures, mu_window_ev, mu_npts,
         carr = (N + float(nelect)) / vuc_cm3
 
     mu_ev = (mur - efermi) * Ha    # 相对费米能，eV
-    return {
+    res = {
         "scissor": scissor_info,          # patch_bt2_scissor
         "temperatures_K": [float(t) for t in Tr],
         "mu_rel_efermi_eV": [round(float(x), 5) for x in mu_ev],
@@ -426,6 +430,8 @@ def run_boltztrap_crta(uniform_dir, temperatures, mu_window_ev, mu_npts,
                  "Lorenz L=κ_e/(σT) 里 τ 抵消，可直接与 amset/文献比。"
                  "载流子浓度符号：- 为电子(n 型)、+ 为空穴(p 型)，与 amset 一致。"),
     }
+    res.update(zz)
+    return res
 
 
 # ======================= patch_merge81：文献口径复现 =======================
@@ -504,11 +510,13 @@ def _tau_from_json(cwd, T=None, is_2d=None):
         return {}
     M0, E_C = 9.1093837015e-31, 1.602176634e-19
     f, T0 = _tau_T_factor(j, T, is_2d)
+    if is_2d is None:
+        is_2d = j.get("is_2d") if j.get("is_2d") is not None else (str(j.get("dim")).lower() == "2d")
     out, mv_used = {}, set()
     for r in j.get("results", []):
         c, bd = r.get("carrier"), (r.get("by_direction") or {})
         if bd.get("status") == "ok":
-            out[c] = {d: bd[d]["tau_s"] * f for d in ("x", "y")}
+            out[c] = {d: bd[d]["tau_s"] * f for d in ("x", "y", "z") if isinstance(bd.get(d), dict)}   # [0026] 3D 有 z
             _note_scope(c, r, T)
             continue
         # [0022] 单谷分方向不可用（带边在 Q 这类非高对称谷，WSe2 导带）-> S8.2 的多谷 τ_eff（逐温度算的，不换算）
@@ -528,15 +536,20 @@ def _tau_from_json(cwd, T=None, is_2d=None):
         if isinstance(mu, (int, float)) and isinstance(me, (int, float)) \
                 and mu > 0 and me > 0:
             t = (mu * 1e-4) * (me * M0) / E_C * f
-            out[c] = {"x": t, "y": t}
+            out[c] = {"x": t, "y": t} if is_2d else {"x": t, "y": t, "z": t}
             print("[WARN] %s 无分方向 τ，回落各向同性" % c)
             _note_scope(c, r, T)
     if out and T is not None:
         print("[OK] DPT τ 取自 %s/dpt_result.json（%.0f K），换算到 %.0f K（×%.4f；多谷的按温度直接取）：%s"
               % (DPT_DIR, T0, float(T), f, "；".join(
-                  "%s x=%.1f fs y=%.1f fs%s" % (c, v["x"] * 1e15, v["y"] * 1e15, "（多谷）" if c in mv_used else "")
+                  "%s %s%s" % (c, _tau_txt(v), "（多谷）" if c in mv_used else "")
                   for c, v in out.items())))
     return out
+
+
+def _tau_txt(v):
+    """{'x':τ,'y':τ,('z':τ)} -> "x=… fs y=… fs (z=… fs)"。"""
+    return " ".join("%s=%.1f fs" % (d, v[d] * 1e15) for d in ("x", "y", "z") if d in v)
 
 
 def _note_scope(c, r, T):
@@ -561,13 +574,11 @@ def _tau_aniso(cwd, is_2d, T):
             for c in ("electron", "hole"):
                 bd = m._aniso_block(Path(cwd), is_2d, c, T)
                 if bd.get("status") == "ok":
-                    out[c] = {d: bd[d]["tau_s"] for d in ("x", "y")}
+                    out[c] = {d: bd[d]["tau_s"] for d in ("x", "y", "z") if isinstance(bd.get(d), dict)}
                 else:
                     print("[WARN] DPT %s 分方向不可用：%s" % (c, bd.get("status")))
             if out:
-                print("[OK] DPT 分方向 τ：" + "；".join(
-                    "%s x=%.1f fs y=%.1f fs" % (c, v["x"] * 1e15, v["y"] * 1e15)
-                    for c, v in out.items()))
+                print("[OK] DPT 分方向 τ：" + "；".join("%s %s" % (c, _tau_txt(v)) for c, v in out.items()))
                 return out
         except Exception as e:                                # noqa: BLE001
             print("[WARN] 直接调用 DPT 失败（%s: %s）" % (type(e).__name__, e))
@@ -632,6 +643,9 @@ def _find_kl_kappa(cwd):
     return None, base
 
 
+_KL_ZZ = {}         # [0026] 3D 的 κL_zz（auto 来源时由 _resolve_kappa_L 填；手填只有 xx/yy）
+
+
 def _resolve_kappa_L(cwd, T, ninfo):
     """返回 (kxx, kyy, lines)。手填优先；否则读 kl 链的 kappa_summary.json。
 
@@ -640,6 +654,7 @@ def _resolve_kappa_L(cwd, T, ninfo):
       那用的是 kl-dft-cpu 的 vdW 表，未必等于 ke-dft-cpu 的 t。"""
     import json
     fac = ninfo.get("factor_applied", 1.0)
+    _KL_ZZ.pop("v", None)
     if KAPPA_L_XX_W_MK is not None or KAPPA_L_YY_W_MK is not None:
         kx = KAPPA_L_XX_W_MK * fac if KAPPA_L_XX_W_MK is not None else None
         ky = KAPPA_L_YY_W_MK * fac if KAPPA_L_YY_W_MK is not None else None
@@ -664,6 +679,7 @@ def _resolve_kappa_L(cwd, T, ninfo):
                             % src.name]
     kxx = _interp_T(temps, [r[0] for r in raw], T)
     kyy = _interp_T(temps, [r[1] for r in raw], T)
+    kzz = _interp_T(temps, [r[2] for r in raw], T) if all(len(r) > 2 for r in raw) else None   # [0026]
     lines = ["# kappa_L 来源：%s（原始元胞口径 → 套本步 %s 因子 %.4f）"
              % (os.path.relpath(str(src), str(root)), ninfo["norm"], fac)]
     if kxx is None or kyy is None:
@@ -671,6 +687,9 @@ def _resolve_kappa_L(cwd, T, ninfo):
                      % (T, min(temps), max(temps)))
         return None, None, lines
     lines.append("#   kappa_L(%.0f K) 元胞口径 xx=%.4f yy=%.4f W/mK" % (T, kxx, kyy))
+    if kzz is not None and ninfo.get("norm") == "cell(3D)":
+        lines[-1] += "  zz=%.4f" % kzz                    # [0026] 3D 才用 zz
+        _KL_ZZ["v"] = kzz * fac
 
     # ---- 自动闸门：元胞与厚度口径一致性 ----
     Lz, cA = j.get("Lz_ang"), ninfo.get("cell_c_A")
@@ -839,6 +858,10 @@ def write_paper_scan(out, cwd, res, is_2d):
     mu = res["mu_rel_efermi_eV"]
     sot = {"xx": res["sigma_over_tau_xx"][iT], "yy": res["sigma_over_tau_yy"][iT]}
     sbk = {"xx": res["seebeck_xx_V_per_K"][iT], "yy": res["seebeck_yy_V_per_K"][iT]}
+    dirs = [("xx", "x", kl_xx), ("yy", "y", kl_yy)]
+    if not is_2d and res.get("sigma_over_tau_zz") and res.get("seebeck_zz_V_per_K"):   # [0026] 3D 加 zz
+        sot["zz"], sbk["zz"] = res["sigma_over_tau_zz"][iT], res["seebeck_zz_V_per_K"][iT]
+        dirs.append(("zz", "z", _KL_ZZ.get("v")))
 
     rows = []
     for i, m in enumerate(mu):
@@ -847,7 +870,7 @@ def write_paper_scan(out, cwd, res, is_2d):
         tb = taus.get(branch) or {}
         r = {"mu_rel_efermi_eV": m, "carrier_conc_cm-3": n, "branch": branch,
              "n_2D_cm-2": (n * cA * 1e-8) if cA else None}
-        for d, dd, kl in (("xx", "x", kl_xx), ("yy", "y", kl_yy)):   # patch_kappaL
+        for d, dd, kl in dirs:                                   # patch_kappaL；[0026] 3D 含 zz
             S = sbk[d][i] * 1e6                     # V/K -> µV/K，与 τ 无关
             r["S_%s_uV/K" % d] = S
             tau = tb.get(dd)
@@ -860,7 +883,8 @@ def write_paper_scan(out, cwd, res, is_2d):
             r["sigma_%s_S/m" % d] = sig
             r["PF_%s_W/mK2" % d] = pf
             r["kappa_e_WF_%s_W/mK" % d] = ke
-            r["sheet_sigma_%s_S" % d] = (sig / fac) * (cA * 1e-10) if cA else None
+            if d != "zz":                                        # 片电导只对 2D 面内有意义
+                r["sheet_sigma_%s_S" % d] = (sig / fac) * (cA * 1e-10) if cA else None
             if kl is not None and (kl + ke) > 0:      # kl-dft-cpu 已含口径因子
                 r["ZT_%s" % d] = pf * T / (kl + ke)
         rows.append(r)
@@ -870,7 +894,10 @@ def write_paper_scan(out, cwd, res, is_2d):
             "sigma_xx_S/m", "sigma_yy_S/m", "sheet_sigma_xx_S", "sheet_sigma_yy_S",
             "PF_xx_W/mK2", "PF_yy_W/mK2",
             "kappa_e_WF_xx_W/mK", "kappa_e_WF_yy_W/mK"]
-    cols += [c for c in ("ZT_xx", "ZT_yy") if any(c in r for r in rows)]
+    if len(dirs) > 2:                                            # [0026] 3D：zz 列紧跟 yy
+        for k in ("tau_%s_fs", "S_%s_uV/K", "sigma_%s_S/m", "PF_%s_W/mK2", "kappa_e_WF_%s_W/mK"):
+            cols.insert(cols.index(k % "yy") + 1, k % "zz")
+    cols += [c for c in ("ZT_xx", "ZT_yy", "ZT_zz") if any(c in r for r in rows)]
     p = out / ("paper_mu_scan_%dK.csv" % round(T))
     with open(p, "w", newline="") as fh:
         fh.write("# CRTA(BoltzTraP2) x DPT-tau 文献口径；T=%.0f K；"
@@ -891,11 +918,12 @@ def write_paper_scan(out, cwd, res, is_2d):
                 ninfo["factor_applied"])]
     lines += kl_lines                                   # patch_kappaL
     for c, tb in taus.items():
-        lines.append("# tau_%-8s x=%.1f fs  y=%.1f fs"
-                     % (c, tb["x"] * 1e15, tb["y"] * 1e15))
+        lines.append("# tau_%-8s %s" % (c, "  ".join("%s=%.1f fs" % (d, tb[d] * 1e15)
+                                                    for d in ("x", "y", "z") if d in tb)))
         if c in _TAU_SCOPE:                                   # [0024]
             lines.append("#   ★ %s" % _TAU_SCOPE[c])
-    for key in ("ZT_xx", "ZT_yy", "PF_xx_W/mK2", "PF_yy_W/mK2"):
+    for key in (("ZT_xx", "ZT_yy", "PF_xx_W/mK2", "PF_yy_W/mK2") if len(dirs) == 2 else
+                ("ZT_xx", "ZT_yy", "ZT_zz", "PF_xx_W/mK2", "PF_yy_W/mK2", "PF_zz_W/mK2")):
         best = max((r for r in rows if r.get(key) is not None),
                    key=lambda r: r[key], default=None)
         if best:
@@ -922,7 +950,8 @@ def write_paper_scan(out, cwd, res, is_2d):
         x = [r["mu_rel_efermi_eV"] for r in rows]
         for ax, (kx, ky, lab) in zip(axes.ravel(), panels):
             got = False
-            for k, sty, nm in ((kx, "-", "x-axis"), (ky, "--", "y-axis")):
+            for k, sty, nm in ((kx, "-", "x-axis"), (ky, "--", "y-axis"),
+                               (kx.replace("xx", "zz"), ":", "z-axis")):      # [0026] 3D 才有 zz 列
                 y = [r.get(k) for r in rows]
                 if any(v is not None for v in y):
                     ax.plot(x, [(v if v is not None else float("nan")) for v in y],
