@@ -72,12 +72,15 @@ python test_kernels.py          # 需要 amset + pymatgen 环境（如 conda ams
 
 ## strict intrinsic（`WRITE_MESH`）—— 剔除 IMP 的严格本征结果
 
-S8.4 默认产出的 `transport.json` **含电离杂质（IMP）**，是「掺杂后」的迁移率，不是本征值。
-要在项目里拿到剔除 IMP 的严格本征结果，在 `project_setting/templates/step8.4_amset2d/step.conf` 写：
+S8.4 的 `transport.json` **含电离杂质（IMP）**，是「掺杂后」的迁移率，不是本征值。
+**[0032] 起 `WRITE_MESH` 与 `INTRINSIC_ADP_ONLY` 出厂即开**（S8.4 只跑 2D）：每个材料跑完自动有
+`intrinsic_transport.json`（去 IMP = ADP+POP）和 `intrinsic_ADP.json`（只 ADP），S8.3 据此出本征五参数图与表
+（`step8.3_output/intrinsic/`，见 VERIFICATION V195）。mesh_*.h5 不回拉本地（skill.yaml 的 `fetch_exclude`）。
+要关掉，在 `project_setting/templates/step8.4_amset2d/step.conf` 写：
 
 ```ini
 [params]
-WRITE_MESH = true
+WRITE_MESH = false
 ```
 
 gen（`patch_write_mesh` + `patch_intrinsic_auto`）会：

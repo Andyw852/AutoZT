@@ -285,7 +285,7 @@ class S83SummaryLinesTests(unittest.TestCase):
         self.assertIn("只代表 K 谷", txt)
         self.assertIn("[AMSET 机制] electron", txt)
         self.assertIn("限制因素 POP", txt)
-        self.assertIn('_SKILL_REV = "2026-10-10-0026"',
+        self.assertIn("bump 记录：2026-10-10-0026",          # [0032] 版本戳之后会再升，查 0026 的 bump 记录
                       (KE / "step8.3_output" / "gen_step13_output.py").read_text(encoding="utf-8"))
 
 

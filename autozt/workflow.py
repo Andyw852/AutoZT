@@ -2729,11 +2729,23 @@ def _fetch_receipt(cfg, m, s):
     """Completion receipt tied to source and configured transfer scope."""
     sc = next((x for x in ((m.get("_seg") or {}).get("steps_cfg") or [])
                if x.get("name") == s["name"]), {})
-    return {"version": 2, "complete": True,
-            "host": s.get("_host") or m.get("host_eff") or cfg.get("host"),
-            "dir": s.get("dir"), "exists": bool(s.get("exists")),
-            "files": sorted(m.get("fetch_files") or []),
-            "all": bool(sc.get("fetch_all"))}
+    r = {"version": 2, "complete": True,
+         "host": s.get("_host") or m.get("host_eff") or cfg.get("host"),
+         "dir": s.get("dir"), "exists": bool(s.get("exists")),
+         "files": sorted(m.get("fetch_files") or []),
+         "all": bool(sc.get("fetch_all"))}
+    _ex = fetch_excludes(sc)
+    if _ex:                       # [0032] 只在有排除项时写进回执：没配的步骤回执不变、不会被判失效重拉
+        r["exclude"] = _ex
+    return r
+
+
+def fetch_excludes(sc):
+    """[0032] 步骤配置的 fetch_exclude（整目录回拉时跳过的通配，如 S8.4 的 mesh_*.h5）。字符串或列表。"""
+    v = (sc or {}).get("fetch_exclude") or []
+    if isinstance(v, str):
+        v = [v]
+    return sorted(str(x).strip() for x in v if str(x).strip())
 
 
 def _fetch_receipt_valid(cfg, m, s):
@@ -2856,7 +2868,9 @@ def fetch_material(cfg, m, only_steps=None, quiet=False, all_files=False,
                     if x.get("name") == s["name"]), {})
         _whole = bool(sc2.get("fetch_all") or all_files)
         if _whole:   # v3.21：画图步骤产物文件名不固定，整目录拉回；v1.1：fetch --all 整目录
-            remote = "cd %s && tar -cf - ." % shlex.quote(s["dir"])
+            # [0032] fetch_exclude：整目录回拉时跳过的大文件（S8.4 的 mesh_*.h5 只给作业内后处理用）
+            _exs = "".join(" --exclude=%s" % shlex.quote(x) for x in fetch_excludes(sc2))
+            remote = "cd %s && tar%s -cf - ." % (shlex.quote(s["dir"]), _exs)
         elif not files:
             continue
         else:

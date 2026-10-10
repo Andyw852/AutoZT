@@ -193,7 +193,7 @@ _WARN_WORKDIR = set()   # v1.11：work_dir 未显式指定时按技能去重的�
 
 _LOCAL_ONLY_STEP_KEYS = {"gen", "gen_need", "aux_files", "run", "group", "seq",
                          "contcar_to_poscar", "fetch_all", "fetch_files", "after",
-                         "src"}   # v1.5 src
+                         "src", "fetch_exclude"}   # v1.5 src；[0032] fetch_exclude
 
 SCANCEL_MARK = ".tf_scancel.json"   # lpath 下的"autozt stop 取消"标记（v1.4）
 

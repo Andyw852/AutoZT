@@ -32,7 +32,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 # [SKILL_REV] 版本戳：写进 settings.yaml 头，便于从结果反查跑的是哪份 skill 副本。
-_SKILL_REV = "2026-09-28-desym-fix"   # V115
+_SKILL_REV = "2026-10-10-0032-intrinsic-default"   # [0032] WRITE_MESH/INTRINSIC_ADP_ONLY 2D 默认开（旧：2026-09-28-desym-fix V115）
 # 复制来源（gen_step10_amset.py 的 _SKILL_REV），用于人工比对两份文件是否同步
 _SOURCE_GEN_REV = "2026-10-08-2d-raw-elastic"   # [0014] S8 的 2D 弹性改为原始 slab 值，与本步一致
 import stepconf  # noqa: E402
@@ -247,11 +247,16 @@ _WF_EXPLICIT = None
 #   ★ true 时作业链尾部【自动】接 postprocess_intrinsic.py --check-reproduce
 #     （patch_intrinsic_auto，2026-09-22）——不再需要人工补跑，跑完即有
 #     intrinsic_transport.json；复现检查不过则整步失败，不产出不可信本征数。
-WRITE_MESH = False
+# ★ [0032] 2026-10-10 用户决定：2D 默认打开（S8.4 只跑 2D），每个材料自动产出三套结果
+#   transport.json（overall）/ intrinsic_transport.json（去 IMP = ADP+POP）/ intrinsic_ADP.json（只 ADP），
+#   S8.3 据此出本征五参数图与表。代价：多一个 mesh_*.h5（几十 MB 到 GB，不回拉本地，
+#   见 skill.yaml 的 fetch_exclude）和几分钟后处理。关掉：step.conf 写 WRITE_MESH = false。
+WRITE_MESH = True
 # [0018] INTRINSIC_ADP_ONLY：true 时作业链在 IMP 剔除的本征后处理之后，再用同一份 mesh 跑一次
 #   postprocess_intrinsic.py --drop IMP,POP,PIE，写 intrinsic_ADP.json（只含 ADP 的 μ/S/σ/κe）。
 #   各机制散射率彼此独立，等价于单独跑 SCATTERING=[ADP]，不用再跑第二次 AMSET。隐含 WRITE_MESH=true。
-INTRINSIC_ADP_ONLY = False
+#   [0032] 默认 True；step.conf 显式写 WRITE_MESH = false 时跟着关（没有 mesh 就出不了）。
+INTRINSIC_ADP_ONLY = True
 # --- 弹性常数来源（amset run 的 ACD 散射需要）---
 #   MANUAL_ELASTIC 填了就用它，否则从 ELASTIC_DIR/OUTCAR 自动解析（kBar→GPa）。
 #   直接填：单个数（各向同性近似，GPa），或 6x6 列表（完整 Cij，GPa）。
@@ -336,9 +341,11 @@ SPEC = {
     # 空串 = 出厂 ["ADP","IMP","POP"] 行为不变。
     "SCATTERING": ("", "str"),
     # write_mesh 开关（2026-09-22 用户批准）：true = settings.yaml 写 write_mesh: true，
-    # 产出 mesh_*.h5 供 postprocess_intrinsic.py 重积分；默认 False，行为不变。
-    "WRITE_MESH": (WRITE_MESH, "bool"),
-    "INTRINSIC_ADP_ONLY": (INTRINSIC_ADP_ONLY, "bool"),   # [0018]
+    # 产出 mesh_*.h5 供 postprocess_intrinsic.py 重积分。
+    # [0032] SPEC 默认 None ——「step.conf 里有没有写」才是判据：出厂值改成 True 之后，
+    #   旧写法（默认取常量、只认 true）会让 step.conf 写 false 也关不掉。
+    "WRITE_MESH": (None, "bool"),
+    "INTRINSIC_ADP_ONLY": (None, "bool"),   # [0018]
     # 掺杂/温度范围覆盖（B4/B5 缩减设置用）：默认顶部 DOPING/TEMPERATURES；step.conf 可覆盖。
     "DOPING": (DOPING, "str"),
     "TEMPERATURES": (TEMPERATURES, "str"),
@@ -1917,6 +1924,30 @@ def _install_plugin(out):
     print("[OK] 二维插件就位：%s（只在本步的 amset 运行里生效）" % dst)
 
 
+def resolve_intrinsic_switches(conf_mesh, conf_adp, default_mesh=True, default_adp=True):
+    """[0032] step.conf 的 WRITE_MESH / INTRINSIC_ADP_ONLY（None = 没写）与出厂值合成最终开关。
+
+    规则：写了就用写的；只 ADP 需要 mesh —— 显式要只 ADP 时打开 mesh；显式关 mesh、只 ADP 没写时
+    只 ADP 跟着关（不然会因为没有 mesh 而整步失败）。返回 (write_mesh, intrinsic_adp_only)。"""
+    mesh = default_mesh if conf_mesh is None else bool(conf_mesh)
+    adp = default_adp if conf_adp is None else bool(conf_adp)
+    if adp and not mesh:
+        if conf_adp:                          # 显式要只 ADP：它隐含 mesh
+            mesh = True
+            print("[..] INTRINSIC_ADP_ONLY=true 需要 mesh：自动打开 WRITE_MESH")
+        else:                                 # 显式关 mesh：只 ADP 跟着关
+            adp = False
+    if conf_mesh is not None or conf_adp is not None:
+        print("[..] WRITE_MESH=%s / INTRINSIC_ADP_ONLY=%s（step.conf 覆盖；出厂 %s / %s）"
+              % (str(mesh).lower(), str(adp).lower(), str(default_mesh).lower(), str(default_adp).lower()))
+    if mesh:
+        print("[..] 本征后处理：作业末尾写 intrinsic_transport.json（去 IMP）%s"
+              % ("+ intrinsic_ADP.json（只 ADP）" if adp else ""))
+    else:
+        print("[..] WRITE_MESH=false：不出本征文件，S8.3 的本征图表会跳过")
+    return mesh, adp
+
+
 def _install_postprocess(out):
     """把 postprocess_intrinsic.py 复制进运行目录。
 
@@ -1943,7 +1974,7 @@ def _install_postprocess(out):
 def _install_fermi_check(out):
     """把 fermi_window_check.py 复制进运行目录（作业链末尾的费米能级窗口检查要用）。
 
-    ★ 2026-09-28 用户批准：**不依赖 WRITE_MESH** —— 2D 默认 WRITE_MESH=false，
+    ★ 2026-09-28 用户批准：**不依赖 WRITE_MESH** —— 当时 2D 默认 WRITE_MESH=false（[0032] 起默认开，仍可关），
     只靠 postprocess 的 1% 核对拦不住单位事故，所以作业链末尾固定加这道自检。
     脚本本体住在本目录（与 overlap_preflight.py 同款，靠 gen_need 兜底找到）。
     """
@@ -2458,18 +2489,10 @@ def main():
                 elif _sc_list != SCATTERING:
                     print("[OK] SCATTERING = %s（step.conf 覆盖，出厂 %s）" % (_sc_list, SCATTERING))
                     SCATTERING = _sc_list
-            # patch_write_mesh：step.conf WRITE_MESH = true -> 落 mesh.h5，
-            #   供 postprocess_intrinsic.py 重算严格本征迁移率。
-            if _p["WRITE_MESH"]:
-                WRITE_MESH = True
-                print("[..] WRITE_MESH=true（step.conf 覆盖）：settings.yaml 写 "
-                      "write_mesh: true，产出 mesh_*.h5")
-            if _p["INTRINSIC_ADP_ONLY"]:                      # [0018]
-                INTRINSIC_ADP_ONLY = True
-                if not WRITE_MESH:
-                    WRITE_MESH = True
-                    print("[..] INTRINSIC_ADP_ONLY=true 需要 mesh：自动打开 WRITE_MESH")
-                print("[..] INTRINSIC_ADP_ONLY=true：作业末尾另写 intrinsic_ADP.json（只含 ADP）")
+            # patch_write_mesh：WRITE_MESH -> 落 mesh.h5，供 postprocess_intrinsic.py 重算严格本征迁移率。
+            #   [0032] 出厂 True；step.conf 显式写 true/false 才覆盖（SPEC 默认 None）。
+            WRITE_MESH, INTRINSIC_ADP_ONLY = resolve_intrinsic_switches(
+                _p["WRITE_MESH"], _p["INTRINSIC_ADP_ONLY"], WRITE_MESH, INTRINSIC_ADP_ONLY)
             # patch_doping_override（B4/B5 缩减设置）：step.conf 可覆盖掺杂/温度范围
             if _p["DOPING"]:
                 _d = str(_p["DOPING"])

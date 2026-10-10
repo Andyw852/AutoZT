@@ -38,7 +38,7 @@ def test_intrinsic_json_has_kappa_e(tmp_path):
 
 def test_s84_chain_runs_adp_only_postprocess_when_asked():
     src = (S84 / "gen_step14_amset2d.py").read_text(encoding="utf-8")
-    assert '"INTRINSIC_ADP_ONLY": (INTRINSIC_ADP_ONLY, "bool")' in src
+    assert '"INTRINSIC_ADP_ONLY": (None, "bool")' in src          # [0032] SPEC 默认 None（显式才覆盖）
     i = src.index("if INTRINSIC_ADP_ONLY:")
     assert "--drop IMP,POP,PIE" in src[i:i + 300] and "intrinsic_ADP.json" in src[i:i + 300]
     j = src.index('_acmd = _acmd + " && python postprocess_intrinsic.py --check-reproduce"')

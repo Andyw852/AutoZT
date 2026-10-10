@@ -8544,3 +8544,70 @@ S8.3 下次重跑时（比如 S8.4 跑完后）会补上 `[DPT 单谷]` / `[AMSE
 
 **怎么用**：CrS2_hex、CrSe2_hex 按 S8.2 → S8.1 → S8.3 重做；μ 不变，谷表与 `edge_share` 应变成：
 电子约 1.0，CrS2 空穴约 0.87，CrSe2 空穴约 1.0。
+
+## V195（2026-10-10）：[0032] 本征五参数图 + 输运参数表；S8.4 默认产出本征结果；2D 图双横轴
+
+**用户要求**：
+1. 在现有基础上，为本征迁移率单独画一套五参数图（S、σ、κe、Lorenz、μ 随浓度），并出对应的输运参数表，每个材料自动产出。
+2. 要四套线：ADP 极限、本征 ADP+POP、overall，以及 BT2 验证线。温度全出。
+3. 2D 图横轴标两个值：下 cm⁻²，上 cm⁻³（文献口径，除以层厚 t）。图注写明 AutoZT 的 cm⁻³ 用的是含真空的胞高 c，两者差 c/t 倍。
+
+**为什么之前画不出来**：AMSET 的 transport.json 只把**迁移率**按机制拆开（`separate_mobility`）；S、σ、κe 只有全机制的值。
+所以"纯 ADP"只有 μ_ADP，没有对应的 S/σ/κe。要得到某个机制子集的完整输运量，必须走 `WRITE_MESH`：存下每机制、每 k 点的散射率，
+用 postprocess_intrinsic.py 置零后重积分（V89–V91、V108 已在本地和集群真实作业上逐位复现 transport.json）。
+
+**改动**：
+- **S8.4（gen_step14_amset2d.py）**：`WRITE_MESH` 和 `INTRINSIC_ADP_ONLY` 出厂改成 True（S8.4 只跑 2D，所以就是"2D 默认开"）。
+  一次运行出三套：transport.json（overall）、intrinsic_transport.json（去 IMP = ADP+POP）、intrinsic_ADP.json（只 ADP）。
+  - SPEC 默认改成 None，表示"step.conf 里有没有写"。旧写法是"默认取常量、只认 true"，出厂值改成 True 之后，写 false 会关不掉。
+  - 新函数 `resolve_intrinsic_switches()` 合成最终开关：
+    - 显式写 `WRITE_MESH = false`，只 ADP 跟着关（没有 mesh 就出不了）；
+    - 显式写 `INTRINSIC_ADP_ONLY = true`，自动打开 mesh。
+  - `_SKILL_REV` 换成 `2026-10-10-0032-intrinsic-default`。
+- **skill.yaml 加 `fetch_exclude: ["mesh_*.h5"]`；autozt 新增 `fetch_exclude` 键**（workflow.py 的整目录回拉加 `tar --exclude`，bootstrap.py 列为本地键）。
+  - 原因：S8.4 是 `fetch_all`，默认开 mesh 之后，每次回拉都会把几十 MB 到 GB 的 mesh_*.h5 拉到本地。mesh 只给作业内的后处理用。
+  - 回执（`.tf_fetch`）只在配置了排除项时多写一个 `exclude` 键，没配的步骤回执不变，不会被判失效、整批重拉。
+- **S8.3（gen_step13_output.py）新增 `write_intrinsic_suite()`**，输出放 `step8.3_output/intrinsic/`，尽力而为，不影响完成标记：
+  - **每个 AMSET 温度一张 `intrinsic_transport_<T>K.png`**：2×5 面板，行是 n 型 / p 型，列是 S、σ、κe、Lorenz、μ。
+    - 四套线：ADP only、intrinsic ADP+POP、overall、BT2（CRTA 的 σ/τ、κe/τ 乘该温度的 DPT τ；S 与 L 是 BT2 自己的，与 τ 无关）。
+    - μ 面板另画 DPT 单谷水平线。
+    - 灰色区：每原胞载流子数大于 0.1，超出刚带近似。
+  - **`intrinsic_transport_table.csv`**：长表，覆盖全部温度 × 原生掺杂档（不插值）× 数据集。
+    - 浓度三列：n_cell（AMSET 口径）、n_2D、n_lit = n_2D/t。
+    - 输运量：S、σ、κe、PF 及其 xx/yy，片电导 sheet_sigma，Lorenz，μ 及其 xx/yy。
+    - 另有每原胞载流子数和可解读标记。
+    - DPT 每个温度、每种载流子一行。
+  - **`intrinsic_summary.txt`**：几何与换算说明、三套文件来源与复现检查结果，以及逐温度、逐掺杂的对照表。
+  - **口径**：
+    - σ、κe、PF 按层厚 t 归一，等于元胞值 × c/t；μ、S、Lorenz 与口径无关。
+    - c 和 t 按材料从 2d_correction.json 读取：`cell_c_A`、`elastic_rescale_factor_c_over_t`、`layer_thickness.method`。
+  - **缺文件时的处理**：
+    - 缺 intrinsic_ADP.json：ADP 一栏退回 transport.json 的单机制 μ_ADP，只有 μ，并在汇总里写明。
+    - 本征文件的掺杂/温度网格与 transport.json 不同：不用。
+  - **3D 不做**：S8.4 只跑 2D。
+- **S8.3 的 comparison_300K.png（2D）**：
+  - 横轴改成 n_2D（cm⁻²），上轴加文献口径 n_2D/t（cm⁻³）。
+  - 注释栏加浓度换算说明，并写明这张图的 σ、κe 仍按元胞体积。
+  - Lorenz 面板改以 1e-8 为单位（科学计数的偏移文字会压住上轴）。
+  - `load_bt2` / `load_dpt` 加可选 `T`，不给时仍是 300 K。
+  - `_SKILL_REV` 换成 `2026-10-10-0032`。
+
+**测试**：新增 tests/test_0032_intrinsic_suite.py，11 项。用合成 MoS₂ 型材料（c = 34.88 Å，t = 6.72 Å）覆盖：
+- 浓度三口径：1e11 cm⁻² 对应 n_cell 2.87e17、n_lit 1.49e18 cm⁻³。
+- σ 按 t 归一、片电导、Lorenz、PF 的换算。
+- BT2 在 m* = m_d 时 μ_BT2 = μ_DPT，2D 下 ∝ 1/T。
+- 表、汇总、两张图都生成；main() 端到端。
+- 缺 intrinsic_ADP.json 时退回 μ_ADP；网格不同时拒用。
+- 3D 和缺几何时跳过；加载器默认温度不变。
+- S8.4 开关的五种组合。
+- fetch_exclude 的辅助函数与回执；skill.yaml 里的排除项。
+
+test_0018 与 test_0026 里写死旧字面量的两条断言改成新写法（意图不变）。
+其余 tests/ 与 skill 内测试的失败集合与改动前完全相同，都是本机缺 pymatgen / amset / BoltzTraP2 / ase，或改动前就已失败。
+
+**怎么用**：
+- **新材料**：S8.4 跑完就有三套 JSON，S8.3 自动出图出表，不用改配置。
+- **已有材料**：现有 S8.4 结果不会自动重跑（autozt 的 STALE 判据看输入，不看 gen 脚本版本）。
+  - 已经开过 WRITE_MESH 的（WS₂ / MoSe₂ / WSe₂ 建项目时复制了 MoS₂ 的设置），S8.3 retry + start 即可。
+  - 要补 intrinsic_ADP.json 的，要 S8.4 retry + start（重跑 AMSET，代价与原来一样）。属于重交作业，按铁律先请示。
+- **关掉**：本材料 step.conf 写 `WRITE_MESH = false`。
