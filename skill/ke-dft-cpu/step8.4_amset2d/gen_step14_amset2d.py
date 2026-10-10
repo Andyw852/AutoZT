@@ -32,7 +32,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 # [SKILL_REV] 版本戳：写进 settings.yaml 头，便于从结果反查跑的是哪份 skill 副本。
-_SKILL_REV = "2026-10-10-0032-intrinsic-default"   # [0032] WRITE_MESH/INTRINSIC_ADP_ONLY 2D 默认开（旧：2026-09-28-desym-fix V115）
+_SKILL_REV = "2026-10-10-0032-r2"   # 复审：链首清旧本征产物与 mesh；SCATTERING 无 ADP 不出只 ADP   # [0032] WRITE_MESH/INTRINSIC_ADP_ONLY 2D 默认开（旧：2026-09-28-desym-fix V115）
 # 复制来源（gen_step10_amset.py 的 _SKILL_REV），用于人工比对两份文件是否同步
 _SOURCE_GEN_REV = "2026-10-08-2d-raw-elastic"   # [0014] S8 的 2D 弹性改为原始 slab 值，与本步一致
 import stepconf  # noqa: E402
@@ -104,7 +104,9 @@ STEP_LABEL  = "S8.4_amset2d"
 #   "import amset_desym_fix; "（插件装进运行目录时）或空串；命令最前面再拼
 #   export/unset AZ_DESYM_FIX（ke_common.desym_fix_cmd_prefix）。插件在 AZ_DESYM_FIX
 #   未设时什么都不做（AMSET 原公式），所以默认关时行为与改动前完全一样。
-AMSET_CMD   = ('rm -f transport.json; '
+# [0032] 链首一并清掉上一轮的本征产物与 mesh：关掉 WRITE_MESH / INTRINSIC_ADP_ONLY 再 retry 时，
+#   旧 intrinsic_*.json 会留在目录里、被 S8.3 当成本轮结果（retry 不删目录）。mesh 本轮会重写。
+AMSET_CMD   = ('rm -f transport.json intrinsic_transport.json intrinsic_ADP.json mesh_*.h5; '
                'python overlap_preflight.py --in-job || exit 1; '
                'python -c "import amset2d_plugin; @AMSET_PLUGINS@'
                'from amset.log import initialize_amset_logger as L; L(); '
@@ -2742,6 +2744,11 @@ def main():
     #   新顺序 AMSET -> postprocess -> cp transport.json：失败则 transport.json
     #   不生成，判据自然 not-done，失败可见。链首的 rm -f 清掉上次残留。
     _acmd = AMSET_CMD
+    # [0032] 只 ADP 要求 SCATTERING 里有 ADP：没有时 --drop IMP,POP,PIE 会把全部机制置零，
+    #   重积分 1/0 失败、整条作业链中断（transport.json 不落盘、S8.4 判 FAIL）。
+    if INTRINSIC_ADP_ONLY and "ADP" not in [str(x).upper() for x in SCATTERING]:
+        INTRINSIC_ADP_ONLY = False
+        print("[WARN] SCATTERING=%s 不含 ADP —— 不出 intrinsic_ADP.json（只 ADP 无从谈起）" % SCATTERING)
     if WRITE_MESH:
         _acmd = _acmd + " && python postprocess_intrinsic.py --check-reproduce"
         if INTRINSIC_ADP_ONLY:                  # [0018] 同一份 mesh 再出只含 ADP 的一套（复现已由上一条把关）

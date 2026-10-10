@@ -37,7 +37,9 @@ from pathlib import Path
 # [SKILL_REV] 版本戳：写进 comparison_summary.txt。每次改本脚本逻辑后更新。
 #   陈旧副本已咬人三次（step12/step9b 盖戳后，step13 是最后一个没盖的），
 #   这里盖戳便于从产物反查到底跑的是哪份 skill 副本。
-_SKILL_REV = "2026-10-10-0032"
+_SKILL_REV = "2026-10-10-0032-r2"
+#   bump 记录：2026-10-10-0032-r2 —— 复审修正：本征文件按 transport 指纹判同一轮；可解读判据改每原子（与 S8.4 同）；
+#   BT2 μ 双极区屏蔽；DPT 多谷标注；图例用实际机制；0 掺杂跳过；intrinsic/ 先清旧产物；3D 对比图与改动前逐字节相同。
 #   bump 记录：2026-10-10-0032 —— 本征五参数图 + 输运参数表（intrinsic/，全部温度，2D）；2D 对比图双横轴
 #   （下 n_2D cm^-2、上文献口径 n_2D/t cm^-3）+ 浓度口径图注；Lorenz 面板以 1e-8 为单位；load_bt2/load_dpt 可传 T。
 #   bump 记录：2026-10-10-0026 —— 3D 的 BT2 分方向加 zz（σ/S/PF/κe_WF/ZT），3D 的平均 ZT 用三个方向的 κL；
@@ -267,6 +269,8 @@ def _nearest_T_index(temps, target):
 def _interp_loglog(x_signed, y, target_signed):
     """在同号子集里，对 |x| 做 log 插值取 target。x_signed/target_signed 同号才有效。"""
     import numpy as np
+    if not target_signed or target_signed != target_signed:   # [0032] 0 / NaN：没有同号分支
+        return None
     if target_signed < 0:
         idx = [i for i in range(len(x_signed)) if x_signed[i] < 0]
     else:
@@ -1064,6 +1068,9 @@ def _amset_mu_T_sources(cwd):
         if not ok:
             print("[WARN] %s/%s 的掺杂/温度网格与 transport.json 不同（不是同一次运行？）——不用" % (run, name))
             return None, None
+        if not _intr_same_run(Path(cwd) / run, q)[0]:                  # [0032] 上一轮残留
+            print("[WARN] %s/%s 是上一轮 S8.4 留下的（与当前 transport.json 内容不同）——不用" % (run, name))
+            return None, None
         return q["intrinsic"]["mobility_cm2_Vs_s"].get("overall"), q
 
     adp, q_adp = _intr("intrinsic_ADP.json")
@@ -1327,11 +1334,11 @@ INTR_PANELS = (   # (行字典里的键, y 轴标签, 对数 y, 取绝对值)
     ("mu_cm2/Vs", "mobility (cm^2/Vs)", True, False),
 )
 INTR_COLS = ("T_K", "type", "dataset", "n_cell_cm-3", "n_2D_cm-2", "n_lit_cm-3",
-             "carriers_per_cell", "in_interpret_range",
+             "carriers_per_cell", "carriers_per_atom", "in_interpret_range", "S84_marks",
              "S_uV/K", "S_xx_uV/K", "S_yy_uV/K",
              "sigma_S/m", "sigma_xx_S/m", "sigma_yy_S/m", "sheet_sigma_S",
              "kappa_e_W/mK", "kappa_e_xx_W/mK", "kappa_e_yy_W/mK",
-             "Lorenz_WOhm/K2", "PF_W/mK2", "mu_cm2/Vs", "mu_xx_cm2/Vs", "mu_yy_cm2/Vs")
+             "Lorenz_WOhm/K2", "PF_W/mK2", "mu_cm2/Vs", "mu_xx_cm2/Vs", "mu_yy_cm2/Vs", "flag")
 
 
 def _geom_2d(cwd):
@@ -1346,9 +1353,37 @@ def _geom_2d(cwd):
         if not c or not f or f <= 0:
             continue
         lt = rec.get("layer_thickness")
+        # 可解读范围：与 S8.4（postprocess_intrinsic._doping_marks，2026-09-28 用户批准）同一判据 ——
+        #   每【原子】载流子数 ≤ carrier_per_atom_threshold（默认 0.02）；缺键时退回每原胞 0.1。
         return {"c_A": c, "t_A": c / f, "c_over_t": f, "src": run,
-                "t_method": (lt.get("method") if isinstance(lt, dict) else None) or "?"}
+                "t_method": (lt.get("method") if isinstance(lt, dict) else None) or "?",
+                "area_cm2": _num(rec.get("inplane_cell_area_cm2")),
+                "num_atoms": _num(rec.get("num_atoms")),
+                "thr_atom": _num(rec.get("carrier_per_atom_threshold"))}
     return None
+
+
+def _sha256_file(p):
+    import hashlib
+    h = hashlib.sha256()
+    with open(p, "rb") as fh:
+        for chunk in iter(lambda: fh.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _intr_same_run(run_dir, q):
+    """[0032] 本征文件是否与当前 transport.json 同一次运行：postprocess 记下的本轮 transport_*.json 的 sha256
+    必须等于当前 transport.json 的（作业末尾由它 cp 而来，内容相同）。不靠 mtime：drvfs/9p 回拉保不住时间戳。
+    没有指纹的旧文件（[0032] 之前）只能靠网格判，返回 (True, None)。"""
+    fp = (q or {}).get("transport_fingerprint") or {}
+    if not fp.get("sha256"):
+        return True, None
+    tj = Path(run_dir) / "transport.json"
+    try:
+        return (_sha256_file(tj) == fp["sha256"]), fp.get("file")
+    except OSError:
+        return True, None
 
 
 def _same_grid(q_dop, q_T, doping, temps):
@@ -1381,6 +1416,11 @@ def load_intrinsic_sets(cwd):
         if not _same_grid(q.get("doping_cm3") or [], q.get("temperatures_K") or [], doping, temps):
             notes.append("%s：%s 的掺杂/温度网格与 transport.json 不同（不是同一次运行），不用" % (key, fname))
             continue
+        same, src_name = _intr_same_run(Path(cwd) / AMSET2D_DIR, q)
+        if not same:
+            notes.append("%s：%s 是上一轮 S8.4 留下的（记录的 %s 与当前 transport.json 内容不同），不用"
+                         % (key, fname, src_name or "transport"))
+            continue
         it = q.get("intrinsic") or {}
         sets[key] = {"S": it.get("seebeck_uV_K"), "sigma": it.get("conductivity_S_m"),
                      "kappa": it.get("electronic_thermal_conductivity_W_mK"),
@@ -1396,9 +1436,17 @@ def load_intrinsic_sets(cwd):
             notes.append("ADP_only：没有 intrinsic_ADP.json，只有 transport.json 的单机制 μ_ADP；"
                          "S/σ/κe 要 S8.4 开 INTRINSIC_ADP_ONLY（[0032] 起 2D 默认开）重跑后才有")
     if "intrinsic" not in sets:
-        notes.append("intrinsic：没有 intrinsic_transport.json —— S8.4 没开 WRITE_MESH（[0032] 起 2D 默认开），"
-                     "重跑 S8.4 后才有")
-    return {"doping": doping, "temps": temps, "sets": sets, "notes": notes}
+        notes.append("intrinsic：没有可用的 intrinsic_transport.json —— S8.4 没开 WRITE_MESH（[0032] 起 2D 默认开），"
+                     "或是上一轮残留；重跑 S8.4 后才有")
+    marks = {}
+    for key in ("intrinsic", "ADP_only"):                   # S8.4 写的 doping_marks（每原子判据 + sign_anomaly）
+        if key in sets and not sets[key].get("partial"):
+            q = _load_json(Path(cwd) / AMSET2D_DIR / dict((a, b) for a, b, *_ in INTR_SETS)[key]) or {}
+            marks = q.get("doping_marks") or {}
+            break
+    over_labels = [k for k in mob if str(k).lower() != "overall"]
+    return {"doping": doping, "temps": temps, "sets": sets, "notes": notes, "marks": marks,
+            "overall_labels": over_labels}
 
 
 def _tv(arr, i, k):
@@ -1412,15 +1460,29 @@ def _tv(arr, i, k):
     return v[0], v[1], v[2]
 
 
-def _dose_cols(n3_signed, geom, V_cm3):
-    """浓度三口径 + 每原胞载流子数（与 comparison_300K 的 patch_dose_range 同一判据）。"""
+def _interp_rule(geom):
+    """可解读判据的文字（图注/表头用）。"""
+    if geom.get("num_atoms") and geom.get("thr_atom"):
+        return "> %.3g carriers per atom (S8.4 criterion)" % geom["thr_atom"], "每原子 ≤ %.3g（与 S8.4 同口径）" % geom["thr_atom"]
+    return "> %.2g carriers per cell" % NCELL_INTERPRET_MAX, "每原胞 ≤ %.2g（2d_correction.json 缺 num_atoms，退回旧判据）" % NCELL_INTERPRET_MAX
+
+
+def _dose_cols(n3_signed, geom, V_cm3, A_cm2=None):
+    """浓度三口径 + 每原胞 / 每原子载流子数；可解读判据与 S8.4 相同（每原子，缺键退回每原胞 0.1）。"""
     n3 = abs(float(n3_signed))
     n2d = n3 * geom["c_A"] * 1e-8
-    ncell = n3 * V_cm3 if V_cm3 else None
+    A = geom.get("area_cm2") or A_cm2
+    ncell = (n2d * A) if A else (n3 * V_cm3 if V_cm3 else None)
+    natom = (ncell / geom["num_atoms"]) if (ncell is not None and geom.get("num_atoms")) else None
+    if natom is not None and geom.get("thr_atom"):
+        ok = natom <= geom["thr_atom"]
+    elif ncell is not None:
+        ok = ncell <= NCELL_INTERPRET_MAX
+    else:
+        ok = None
     return {"n_cell_cm-3": float(n3_signed), "n_2D_cm-2": n2d, "n_lit_cm-3": n2d / (geom["t_A"] * 1e-8),
-            "carriers_per_cell": ncell,
-            "in_interpret_range": (None if ncell is None else
-                                   ("yes" if ncell <= NCELL_INTERPRET_MAX else "NO"))}
+            "carriers_per_cell": ncell, "carriers_per_atom": natom,
+            "in_interpret_range": (None if ok is None else ("yes" if ok else "NO"))}
 
 
 def _row_from(vals, T, fac, geom):
@@ -1447,18 +1509,25 @@ def _bt2_tau(dpt_T, carrier):
 def build_intrinsic_rows(cwd, data, geom):
     """[0032] 长表：每个温度 × 原生掺杂档 × 数据集一行；BT2 行在同一掺杂档上插值（同号分支、不外推）；
     DPT 每个温度、载流子一行（与掺杂无关，只有 μ）。返回 (rows, {T: (bt, dpt_T)})。"""
-    _A, V_cm3 = _cell_geometry(cwd)
+    A_cm2, V_cm3 = _cell_geometry(cwd)
     fac = geom["c_over_t"]
-    rows, extra = [], {}
+    rows, extra, miss = [], {}, {"BT2": [], "DPT": []}
+    marks = data.get("marks") or {}
     for k, T in enumerate(data["temps"]):
         dpt_T = load_dpt(cwd, T=T, quiet=True)
         bt = load_bt2(cwd, T=T)
         if bt and abs(float(bt["T_used"]) - T) > 1.0:
             bt = None                                    # BT2 没有这个温度：不跨温度凑
+        if not bt:
+            miss["BT2"].append(T)
         extra[T] = (bt, dpt_T)
         for i, n3 in enumerate(data["doping"]):
+            if not n3 or n3 != n3:                       # 0 / NaN 掺杂：分不出 n/p，log 插值也没定义
+                continue
             typ = "n" if n3 < 0 else "p"
-            base = dict(_dose_cols(n3, geom, V_cm3), **{"T_K": T, "type": typ})
+            base = dict(_dose_cols(n3, geom, V_cm3, A_cm2), **{"T_K": T, "type": typ})
+            if marks.get(str(i)):
+                base["S84_marks"] = ";".join(marks[str(i)])
             for key, *_ in INTR_SETS:
                 st = data["sets"].get(key)
                 if not st:
@@ -1474,16 +1543,29 @@ def build_intrinsic_rows(cwd, data, geom):
                 sg = (sot * tau) if (sot is not None and tau) else None
                 kp = (kot * tau) if (kot is not None and tau) else None
                 mu = (sg / (E_C * abs(n3) * 1e6) * 1e4) if sg else None
+                # μ_BT2 = σ_总/(e|n_净|)：双极区（S 符号与载流子类型相反）分子含少子、分母是净浓度，
+                #   与 AMSET 的多子迁移率不是同一个量 —— 不给 μ，打标记。
+                bip = S is not None and ((S > 0) if typ == "n" else (S < 0))
                 r = dict(base, dataset=BT2_KEY,
                          **_row_from({"S": (S, None, None), "sigma": (sg, None, None),
-                                      "kappa": (kp, None, None), "mu": (mu, None, None)}, T, fac, geom))
+                                      "kappa": (kp, None, None), "mu": (None if bip else mu, None, None)},
+                                     T, fac, geom))
+                if bip:
+                    r["flag"] = "bipolar(S sign): mu masked"
                 if L is not None:
                     r["Lorenz_WOhm/K2"] = L                      # BT2 自己的 L（τ 无关），不依赖 DPT
                 rows.append(r)
         for carrier, typ in (("electron", "n"), ("hole", "p")):
             mu = (dpt_T or {}).get(carrier)
             if isinstance(mu, (int, float)):
-                rows.append({"T_K": T, "type": typ, "dataset": "DPT", "mu_cm2/Vs": float(mu)})
+                mv = (dpt_T or {}).get("src_" + carrier) == "multi_valley"
+                rows.append({"T_K": T, "type": typ, "dataset": "DPT_mv" if mv else "DPT", "mu_cm2/Vs": float(mu)})
+            else:
+                miss["DPT"].append("%.0f K %s" % (T, carrier))
+    for key, lst in miss.items():
+        if lst:
+            data.setdefault("notes", []).append(
+                "%s 缺这些温度（不外推）：%s" % (key, ", ".join("%.0f K" % x if isinstance(x, float) else x for x in lst)))
     return rows, extra
 
 
@@ -1496,14 +1578,27 @@ def write_intrinsic_table(out_dir, rows, geom, data):
                  % (geom["c_A"], geom["t_A"], geom["t_method"], geom["c_over_t"]))
         fh.write("# σ、κe、PF 按层厚 t 归一（= 元胞值 × c/t）；sheet_sigma_S = 片电导（与口径无关）；"
                  "μ、S、Lorenz 与口径无关；分方向列为 xx/yy\n")
+        fh.write("# in_interpret_range：%s；S84_marks = S8.4 本征文件的 doping_marks；"
+                 "BT2 的 μ = σ_总/(e|n_净|)，双极区（S 符号与类型相反）不给（flag 列）\n" % _interp_rule(geom)[1])
         fh.write("# dataset：ADP_only = 只 ADP（声学极限）；intrinsic = 去 IMP（%s）；overall = 全机制；"
-                 "%s = BoltzTraP2 CRTA × DPT τ（同号插值到本档，L 为 BT2 自身）；DPT = 单谷 Bardeen–Shockley μ\n"
+                 "%s = BoltzTraP2 CRTA × DPT τ（同号插值到本档，L 为 BT2 自身）；DPT / DPT_mv = 单谷 / 多谷 Bardeen–Shockley μ\n"
                  % ("+".join((data["sets"].get("intrinsic") or {}).get("labels") or ["ADP", "POP"]), BT2_KEY))
         w = csv.DictWriter(fh, fieldnames=list(INTR_COLS), extrasaction="ignore")
         w.writeheader()
         for r in rows:
             w.writerow({c: ("" if r.get(c) is None else
                             ("%.6g" % r[c] if isinstance(r[c], float) else r[c])) for c in INTR_COLS})
+
+
+def _intr_legend(key, data, default):
+    """图例用实际机制（SCATTERING 可被 step.conf 改；非极性材料没有 POP）。"""
+    if key == "intrinsic":
+        lab = (data["sets"].get("intrinsic") or {}).get("labels")
+        return ("intrinsic %s (no IMP)" % "+".join(lab)) if lab else default
+    if key == "overall":
+        lab = data.get("overall_labels")
+        return ("overall %s" % "+".join(lab)) if lab else default
+    return default
 
 
 def _intr_caption(geom, data):
@@ -1514,11 +1609,11 @@ def _intr_caption(geom, data):
             "t = %.3f A (%s).  AutoZT/AMSET files use n_cell = n_2D/c with c = %.3f A incl. vacuum, "
             "so n_lit = n_cell x c/t (c/t = %.3f).\n"
             "sigma, kappa_e normalized by layer thickness t (cell value x c/t); mobility, S, Lorenz do not depend on it.  "
-            "Shaded: > %.2g carriers per cell (beyond rigid-band range).\n"
+            "Shaded: %s (beyond rigid-band range).\n"
             "ADP only: acoustic deformation potential only (upper limit)%s.  intrinsic: %s, ionized impurities removed.  "
-            "overall: all mechanisms incl. IMP.  BT2: BoltzTraP2 CRTA with DPT tau (S, Lorenz tau-free).  "
-            "DPT: single-valley Bardeen-Shockley."
-            % (geom["t_A"], geom["t_method"], geom["c_A"], geom["c_over_t"], NCELL_INTERPRET_MAX, part, lab))
+            "overall: all mechanisms incl. IMP.  BT2: BoltzTraP2 CRTA with DPT tau (S, Lorenz tau-free); "
+            "BT2 mobility = sigma_total/(e|n_net|), masked where bipolar.  DPT: Bardeen-Shockley (single or multi-valley)."
+            % (geom["t_A"], geom["t_method"], geom["c_A"], geom["c_over_t"], _interp_rule(geom)[0], part, lab))
 
 
 def _bt2_curve(bt, dpt_T, typ, geom, xr):
@@ -1544,7 +1639,8 @@ def _bt2_curve(bt, dpt_T, typ, geom, xr):
             kp = bt["kappa_e_over_tau"][i] * tau
             if sg == sg and sg > 0:
                 out["sigma_S/m"].append((x, sg * fac))
-                out["mu_cm2/Vs"].append((x, sg / (E_C * abs(n3) * 1e6) * 1e4))
+                if not (S == S and ((S > 0) if typ == "n" else (S < 0))):     # 双极区不画 μ
+                    out["mu_cm2/Vs"].append((x, sg / (E_C * abs(n3) * 1e6) * 1e4))
             if kp == kp and kp > 0:
                 out["kappa_e_W/mK"].append((x, kp * fac))
     return {k: sorted(v) for k, v in out.items() if v}
@@ -1571,6 +1667,7 @@ def plot_intrinsic_T(path, T, rows, geom, data, bt, dpt_T, material=""):
             a = ax[ri][ci]
             ysc = 1e8 if col == "Lorenz_WOhm/K2" else 1.0
             for key, _f, leg, ls, colr, mk in INTR_SETS:
+                leg = _intr_legend(key, data, leg)
                 pts = sorted((r["n_2D_cm-2"], (abs(r[col]) if absval else r[col]) * ysc) for r in rT
                              if r["dataset"] == key and r["type"] == typ and r.get(col) is not None
                              and r[col] == r[col] and (not logy or (abs(r[col]) if absval else r[col]) > 0))
@@ -1580,9 +1677,12 @@ def plot_intrinsic_T(path, T, rows, geom, data, bt, dpt_T, material=""):
                 a.plot(*zip(*[(x, y * ysc) for x, y in btc[col]]), "--", color="C1", lw=1.3, alpha=.85,
                        label=BT2_LABEL)
             if col == "mu_cm2/Vs":
-                mu_d = (dpt_T or {}).get("electron" if typ == "n" else "hole")
+                _car = "electron" if typ == "n" else "hole"
+                mu_d = (dpt_T or {}).get(_car)
                 if isinstance(mu_d, (int, float)) and mu_d > 0:
-                    a.axhline(mu_d, color="k", lw=1.0, ls=(0, (1, 1.5)), label="DPT (single valley)")
+                    a.axhline(mu_d, color="k", lw=1.0, ls=(0, (1, 1.5)),
+                              label="DPT (%s)" % ("multi-valley" if (dpt_T or {}).get("src_" + _car) == "multi_valley"
+                                                   else "single valley"))
             if col == "Lorenz_WOhm/K2":
                 a.axhline(SOMMERFELD_L * 1e8, color="grey", lw=.8, ls=":", label="Sommerfeld 2.44e-8")
             if lim:
@@ -1605,7 +1705,7 @@ def plot_intrinsic_T(path, T, rows, geom, data, bt, dpt_T, material=""):
             a.set_xlabel("n_2D (cm$^{-2}$)", fontsize=9)
             if ci == 0 or col in ("mu_cm2/Vs", "Lorenz_WOhm/K2"):
                 a.legend(fontsize=7, loc="best")
-    fig.suptitle("Intrinsic transport @ %.0f K%s  (S8.4 ADP-only / ADP+POP / overall; BT2 x DPT tau)"
+    fig.suptitle("Intrinsic transport @ %.0f K%s  (S8.4 ADP only / intrinsic / overall; BT2 x DPT tau)"
                  % (T, (" - " + material) if material else ""), fontsize=13)
     fig.text(0.006, 0.006, _intr_caption(geom, data), fontsize=8.2, va="bottom", ha="left", wrap=True)
     fig.tight_layout(rect=[0, 0.075, 1, 0.96])
@@ -1618,7 +1718,8 @@ def _intr_summary(out_dir, rows, geom, data, files):
     L = ["# [0032] 本征输运汇总（详见 %s；图 %s）" % (INTR_CSV, ", ".join(files[:2]) + (" …" if len(files) > 2 else "")),
          "# 几何：c = %.4f Å（含真空，AMSET 的 cm^-3 用它）；t = %.4f Å（%s，文献 cm^-3 与 σ/κe 归一用它）；c/t = %.4f"
          % (geom["c_A"], geom["t_A"], geom["t_method"], geom["c_over_t"]),
-         "# 换算：n_2D = n_cell × c；n_lit = n_2D / t = n_cell × c/t"]
+         "# 换算：n_2D = n_cell × c；n_lit = n_2D / t = n_cell × c/t",
+         "# 可解读范围：%s" % _interp_rule(geom)[1]]
     for key, fname, leg, *_ in INTR_SETS:
         st = sets.get(key)
         if not st:
@@ -1651,6 +1752,8 @@ def _intr_summary(out_dir, rows, geom, data, files):
     for T in data["temps"]:
         for typ in ("n", "p"):
             dpt_mu = g(T, typ, None, "DPT", "mu_cm2/Vs")
+            if dpt_mu is None:
+                dpt_mu = g(T, typ, None, "DPT_mv", "mu_cm2/Vs")
             for n2d in sorted({r["n_2D_cm-2"] for r in rows if r.get("n_2D_cm-2") and r["type"] == typ
                                and abs(r["T_K"] - T) < 1e-6}):
                 nlit = n2d / (geom["t_A"] * 1e-8)
@@ -1666,7 +1769,18 @@ def _intr_summary(out_dir, rows, geom, data, files):
 
 
 def write_intrinsic_suite(out, cwd, is_2d):
-    """[0032] 入口：2D 才做；缺 S8.4 / 几何时打印原因后跳过。返回生成的文件名列表。"""
+    """[0032] 入口：2D 才做；缺 S8.4 / 几何时打印原因后跳过。返回生成的文件名列表。
+    先清掉 intrinsic/ 里上一轮的图表（温度网格变了、本轮跳过或失败时，旧文件不能冒充本轮结果）。"""
+    odir = Path(out) / INTR_SUBDIR
+    if odir.is_dir():
+        _old = list(odir.glob("intrinsic_transport_*K.png")) + [odir / INTR_CSV, odir / INTR_TXT]
+        _n = 0
+        for f in _old:
+            if f.is_file():
+                f.unlink()
+                _n += 1
+        if _n:
+            print("[..] 本征五参数：清掉上一轮的 %d 个文件（%s/）" % (_n, INTR_SUBDIR))
     if not is_2d:
         print("[..] 本征五参数图：只做 2D（S8.4 只跑 2D），跳过")
         return []
@@ -1678,7 +1792,6 @@ def write_intrinsic_suite(out, cwd, is_2d):
     if not geom:
         print("[WARN] 本征五参数图：读不到 2d_correction.json 的 cell_c_A / c/t，无法换算浓度口径，跳过")
         return []
-    odir = Path(out) / INTR_SUBDIR
     odir.mkdir(exist_ok=True)
     rows, extra = build_intrinsic_rows(cwd, data, geom)
     write_intrinsic_table(odir, rows, geom, data)
@@ -1722,7 +1835,7 @@ def make_figure(out, am, bt, dpt, am2=None, geom=None):
                 a.secondary_xaxis("top", functions=(lambda x: x / _t, lambda x: x * _t)).set_xlabel(
                     "n_2D / t (cm$^{-3}$, literature)", fontsize=8)
             except Exception as _e:                    # noqa: BLE001
-                print("[WARN] 上横轴（文献口径 cm^-3）画不出（%s），只留 n_2D 横轴" % type(_e).__name__)
+                print("[WARN] 上横轴（文献口径 cm^-3）画不出（%s: %s），只留 n_2D 横轴" % (type(_e).__name__, _e))
 
     fig, ax = plt.subplots(2, 3, figsize=(16.5, 9))
     # (0,0) Seebeck
@@ -1744,7 +1857,7 @@ def make_figure(out, am, bt, dpt, am2=None, geom=None):
     a.legend(fontsize=8); a.grid(alpha=.3)
     # (0,1) Lorenz（[0032] 以 1e-8 为单位画：科学计数偏移文字会压住 2D 的上横轴）
     a = ax[0, 1]
-    _L8 = lambda v: [x * 1e8 for x in v]
+    _L8 = (lambda v: [x * 1e8 for x in v]) if geom else (lambda v: v)      # 3D 不变
     if am:
         n, p = split(am["doping_signed"], _L8(am["lorenz"]))
         if n: a.plot(*zip(*n), "o-", c="C0", label="amset n")
@@ -1753,9 +1866,10 @@ def make_figure(out, am, bt, dpt, am2=None, geom=None):
         n, p = split(bt["n_signed"], _L8(bt["lorenz"]))
         if n: a.plot(*zip(*n), "--", c="C0", alpha=.7, label="BT2 n")
         if p: a.plot(*zip(*p), "--", c="C1", alpha=.7, label="BT2 p")
-    a.axhline(SOMMERFELD_L * 1e8, ls=":", c="k", label="Sommerfeld 2.44e-8")
+    a.axhline(SOMMERFELD_L * (1e8 if geom else 1.0), ls=":", c="k", label="Sommerfeld 2.44e-8")
     a.set_xscale("log"); a.set_xlabel(XL); top_axis(a)
-    a.set_ylabel("Lorenz (1e-8 W.Ohm/K^2)"); a.set_title("Lorenz @300K (directly comparable)")
+    a.set_ylabel("Lorenz (1e-8 W.Ohm/K^2)" if geom else "Lorenz (W.Ohm/K^2)")
+    a.set_title("Lorenz @300K (directly comparable)")
     a.legend(fontsize=8); a.grid(alpha=.3)
     # (0,2) sigma: amset absolute + BT2 per-tau (right axis)
     a = ax[0, 2]
@@ -1868,7 +1982,7 @@ def make_figure(out, am, bt, dpt, am2=None, geom=None):
                   " n_lit = n_cell x c/t (x%.3f).\n"
                   " sigma, kappa_e: per cell (x c/t)."
                   % (geom["t_A"], geom["t_method"], geom["c_A"], geom["c_over_t"]))
-    a.text(0.0, 1.0, notes, va="top", ha="left", fontsize=(7.2 if geom else 8.5),
+    a.text(0.0, (1.0 if geom else 0.98), notes, va="top", ha="left", fontsize=(7.2 if geom else 8.5),
            family="monospace", transform=a.transAxes)
 
     fig.suptitle("Electronic transport comparison @ ~300 K "

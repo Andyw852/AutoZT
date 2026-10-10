@@ -8611,3 +8611,33 @@ test_0018 与 test_0026 里写死旧字面量的两条断言改成新写法（�
   - 已经开过 WRITE_MESH 的（WS₂ / MoSe₂ / WSe₂ 建项目时复制了 MoS₂ 的设置），S8.3 retry + start 即可。
   - 要补 intrinsic_ADP.json 的，要 S8.4 retry + start（重跑 AMSET，代价与原来一样）。属于重交作业，按铁律先请示。
 - **关掉**：本材料 step.conf 写 `WRITE_MESH = false`。
+
+### V195 复审修正（同日，0032-r2）
+
+提交后用三路独立审查（数值口径、开关与回拉、健壮性）对 0032 做了对抗复核，下面这些成立的已全部修掉。
+
+- **【高】retry 后提交被拦，报"本地仍缺少 mesh_*.h5"**
+  - 原因：提交前的输入检查（`_remote_submit_preflight`）把远端步骤目录里所有小于 40 MB 的文件都当成输入，上一轮的 mesh 也在其中。而 fetch_exclude 让 mesh 永远不会回到本地。
+  - 修复：检查清单里去掉匹配 fetch_exclude 的文件（新增 `_drop_excluded`，扇出子目录同样处理）。`fetch --all` 是显式要"全部文件"，不再套用排除项。
+- **【中】旧本征文件冒充本轮结果**
+  - 场景：关掉开关再 retry 时，上一轮的 intrinsic_*.json 还留在目录里。
+  - S8.4 修复：作业链开头一并 `rm -f intrinsic_transport.json intrinsic_ADP.json mesh_*.h5`。
+  - postprocess 修复：在本征文件里记下本轮 transport_*.json 的 sha256（`transport_fingerprint`，脚本版本 intrinsic-v3）。
+  - S8.3 修复：拿这个指纹核对当前 transport.json，内容不同就不用。μ(T) 表的本征来源也一并核对。
+  - 为什么不用 mtime：drvfs 和 9p 回拉时保不住时间戳（V179）。
+- **【中】`intrinsic/` 不清理**：进入函数先删掉上一轮的图、表和汇总，跳过或失败时也不会留下旧文件冒充本轮结果。
+- **【中】可解读判据与 S8.4 冲突**
+  - 改成与 S8.4 相同的每原子判据：`carrier_per_atom_threshold`（默认 0.02），缺键时才退回每原胞 0.1。
+  - 表格新增 `carriers_per_atom` 和 `S84_marks`（即 S8.4 的 doping_marks）两列。灰区与图注同步改。
+  - 结果：MoS₂ 在 1e14 cm⁻² 时每原子 0.029，标 NO；C60 网络在 1.78e13 时每原子 0.004，可解读。
+  - comparison_300K 仍用每原胞判据，没有改，要统一需先请示。
+- **【低】BT2 迁移率在双极区不可比**：BT2 的 μ = σ_总/(e|n_净|)，S 符号与载流子类型相反时不给 μ，flag 列写明原因。
+- **【低】DPT 多谷时标注错误**：S8.2 单谷算不出、改用多谷时，数据集名记为 DPT_mv，图例写 multi-valley。缺温度（不外推）时在汇总里列出。
+- **【低】图例写死了机制**：图例改用实际机制（来自 intrinsic_labels 和 transport.json 的 mobility 键），非极性材料不再标 POP。
+- **【低】掺杂含 0 时整套崩溃**：跳过 0 和 NaN 掺杂档，`_interp_loglog` 遇到目标为 0 或 NaN 时直接返回 None。
+- **【低】SCATTERING 不含 ADP 时整步 FAIL**：此时自动不出"只 ADP"一套。否则 `--drop IMP,POP,PIE` 会把全部机制置零，整条作业链 FAIL。
+- **【低】3D 对比图被顺带改动**：Lorenz 面板的 ×1e8 和注释位置只在 2D 时生效。实测 3D 的 comparison_300K.png 与改动前逐字节相同。
+- **旧 matplotlib**：上横轴两处都加了降级处理（<3.1 没有 secondary_xaxis），只丢上轴，图照出。
+
+测试：test_0032 增至 18 项，新增覆盖以下 8 处：每原子判据与大原胞、上一轮残留拒用、0 掺杂与图例、双极屏蔽、DPT 多谷标注、旧产物清理、transport 指纹、提交前排除项过滤。
+全量测试与改动前对比：没有新增失败。test_exception_messages 抓到一处只打异常类型名的 WARN，已改成带异常消息。

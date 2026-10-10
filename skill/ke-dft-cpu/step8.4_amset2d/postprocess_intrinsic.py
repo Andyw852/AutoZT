@@ -62,7 +62,7 @@ from pathlib import Path
 import numpy as np
 
 __author__ = "AutoZT / DSH subagent"
-__version__ = "2026-10-08-intrinsic-v2"   # [0018] 输出加 κe（electronic_thermal_conductivity）
+__version__ = "2026-10-10-intrinsic-v3"   # [0032] 写 transport_fingerprint；[0018] 输出加 κe
 
 # AMSET 的 write_mesh 对自旋向下数据集的 bug 编码："<name>_up_down"。
 # 顺序重要：先匹配最长的 "_up_down"，再 "_down"，最后 "_up"。
@@ -711,6 +711,19 @@ def build_result(run_dir, mesh_file, amset_version, settings, all_labels,
 # =====================================================================
 # CLI
 # =====================================================================
+def transport_fingerprint(run_dir):
+    """[0032] 运行目录里最新的 transport*.json（本轮 AMSET 写的 transport_<网格>.json）的 {文件名, sha256}；没有 -> None。"""
+    import hashlib
+    tf = sorted(glob.glob(str(Path(run_dir) / "transport*.json")), key=os.path.getmtime, reverse=True)
+    if not tf:
+        return None
+    h = hashlib.sha256()
+    with open(tf[0], "rb") as fh:
+        for chunk in iter(lambda: fh.read(1 << 20), b""):
+            h.update(chunk)
+    return {"file": os.path.basename(tf[0]), "sha256": h.hexdigest()}
+
+
 def find_mesh(run_dir, explicit=None):
     if explicit:
         p = Path(explicit)
@@ -832,6 +845,9 @@ def main(argv=None):
         temperatures=ad.temperatures, reproduce=reproduce, extra_notes=notes,
         n_atoms=int(ad.structure.num_sites),
     )
+    # [0032] 记下本轮 AMSET 输出（最新的 transport_*.json）的 sha256：S8.3 用它核对本征文件与当前
+    #   transport.json（作业末尾由它 cp 而来，内容相同）是否同一次运行 —— 不靠 mtime（drvfs/9p 回拉保不住时间戳）。
+    result["transport_fingerprint"] = transport_fingerprint(run_dir)
     out = Path(args.out)
     if not out.is_absolute():
         out = run_dir / out

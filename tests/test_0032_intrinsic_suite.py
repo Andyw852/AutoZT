@@ -18,6 +18,7 @@ C_A, T_A = 34.88, 6.72                     # 胞高（含真空）与 vdW 层厚
 N2D = [1e11, 5.62e11, 3.16e12, 1.78e13, 1e14]
 TEMPS = [300.0, 600.0]
 MU_E, MU_H, MD = 200.0, 1600.0, 0.5         # DPT 单谷 μ(300 K) 与 m_d（BT2 用 m*=MD，μ_BT2 应 = μ_DPT）
+AREA_CM2 = math.sqrt(3) / 2 * 3.18 ** 2 * 1e-16
 
 
 def _load(name, path):
@@ -46,13 +47,13 @@ def _amset_grid(dop, temps, mu300):
         for T in temps:
             m = mu300 * 300.0 / T
             s = abs(n3) * 1e6 * E_C * m * 1e-4
-            seeb = (-1 if n3 < 0 else 1) * 86.17 * (2.0 + math.log(1e19 / abs(n3)))
+            seeb = ((-1 if n3 < 0 else 1) * 86.17 * (2.0 + math.log(1e19 / abs(n3)))) if n3 else 0.0
             rs.append(_t(seeb)), rg.append(_t(s)), rk.append(_t(1.6e-8 * s * T)), rm.append(_t(m))
         S.append(rs), sig.append(rg), ke.append(rk), mu.append(rm)
     return S, sig, ke, mu
 
 
-def _material(tmp_path, adp_file=True, intr_file=True, bad_grid=False):
+def _material(tmp_path, adp_file=True, intr_file=True, bad_grid=False, stale=False, doping0=False):
     mat = tmp_path / "MoS2"
     cwd = mat / "ke-dft-cpu"
     for d in ("step1_opt", "step3_uniform", "step8.4_amset2d", "step8.1_boltztrap", "step8.2_dpt"):
@@ -63,16 +64,20 @@ def _material(tmp_path, adp_file=True, intr_file=True, bad_grid=False):
         "MoS2\n1.0\n%.6f 0 0\n%.6f %.6f 0\n0 0 %.4f\nMo S\n1 2\nDirect\n0 0 0.5\n"
         "0.3333 0.6667 0.545\n0.3333 0.6667 0.455\n" % (a, -a / 2, a * math.sqrt(3) / 2, C_A))
     c_cm = C_A * 1e-8
-    dop = [-n / c_cm for n in N2D] + [n / c_cm for n in N2D]
+    dop = [-n / c_cm for n in N2D] + ([0.0] if doping0 else []) + [n / c_cm for n in N2D]
     run = cwd / "step8.4_amset2d"
     (run / "2d_correction.json").write_text(json.dumps({
         "cell_c_A": C_A, "elastic_rescale_factor_c_over_t": round(C_A / T_A, 4),
-        "layer_thickness": {"method": "vdw"}, "areal_density_factor_cm": c_cm}))
+        "layer_thickness": {"method": "vdw"}, "areal_density_factor_cm": c_cm,
+        "inplane_cell_area_cm2": AREA_CM2, "num_atoms": 3, "carrier_per_atom_threshold": 0.02}))
     S, sg, ke, mu = _amset_grid(dop, TEMPS, 100.0)
     _, _, _, mu_adp = _amset_grid(dop, TEMPS, 400.0)
-    (run / "transport.json").write_text(json.dumps({
-        "doping": dop, "temperatures": TEMPS, "seebeck": S, "conductivity": sg,
-        "electronic_thermal_conductivity": ke, "mobility": {"overall": mu, "ADP": mu_adp}}))
+    tj = json.dumps({"doping": dop, "temperatures": TEMPS, "seebeck": S, "conductivity": sg,
+                     "electronic_thermal_conductivity": ke,
+                     "mobility": {"overall": mu, "ADP": mu_adp, "IMP": mu, "POP": mu}})
+    (run / "transport.json").write_text(tj)
+    import hashlib
+    sha = hashlib.sha256((tj + ("x" if stale else "")).encode()).hexdigest()   # stale：记录的是上一轮内容
     for name, mu300, kept, ok in (("intrinsic_ADP.json", 400.0, ["ADP"], adp_file),
                                   ("intrinsic_transport.json", 300.0, ["ADP", "POP"], intr_file)):
         if not ok:
@@ -85,6 +90,8 @@ def _material(tmp_path, adp_file=True, intr_file=True, bad_grid=False):
                            "mobility_cm2_Vs_s": {"overall": mu_}}}
         if kept == ["ADP", "POP"]:
             q["reproduction_check"] = {"passed": True, "max_abs_diff": {"overall": 1e-10}}
+            q["doping_marks"] = {str(len(dop) - 1): ["超出刚带近似"]}
+        q["transport_fingerprint"] = {"file": "transport_47x47x3.json", "sha256": sha}
         (run / name).write_text(json.dumps(q))
     # BT2：净浓度 ±1e15..1e22（元胞口径），σ/τ = |n| e² / (MD m0)，S、L 粗估
     ns = [-(10 ** (22 - 7 * i / 199)) for i in range(200)] + [10 ** (15 + 7 * i / 199) for i in range(200)]
@@ -135,7 +142,23 @@ def test_geometry_and_concentration_conversions(tmp_path):
     assert r["n_lit_cm-3"] == pytest.approx(1e11 / (T_A * 1e-8), rel=1e-4)  # 文献口径 1.49e18
     assert r["n_lit_cm-3"] == pytest.approx(abs(r["n_cell_cm-3"]) * C_A / T_A, rel=1e-4)
     assert r["in_interpret_range"] == "yes"
-    assert _pick(rows, 300.0, "intrinsic", "n", 1e14)["in_interpret_range"] == "yes"   # 0.087/胞 < 0.1
+    # 判据与 S8.4 同口径（每原子 0.02）：MoS2 1e14 每胞 0.088、每原子 0.029 -> NO；1.78e13 每原子 0.005 -> yes
+    r14 = _pick(rows, 300.0, "intrinsic", "p", 1e14)
+    assert r14["carriers_per_cell"] == pytest.approx(0.0876, rel=1e-2)
+    assert r14["carriers_per_atom"] == pytest.approx(0.0292, rel=1e-2)
+    assert r14["in_interpret_range"] == "NO" and r14["S84_marks"] == "超出刚带近似"
+    assert _pick(rows, 300.0, "intrinsic", "n", 1.78e13)["in_interpret_range"] == "yes"
+
+
+def test_large_cell_not_flagged_per_atom():
+    """C60 网络型大原胞（146 Å²、60 原子）在 1.78e13：每胞 0.26、每原子 0.0043 -> 可解读（09-28 修掉的误标）。"""
+    S = _s83()
+    g = {"c_A": 20.0, "t_A": 10.0, "c_over_t": 2.0, "area_cm2": 146e-16, "num_atoms": 60, "thr_atom": 0.02}
+    d = S._dose_cols(-1.78e13 / (20e-8), g, None)
+    assert d["carriers_per_cell"] == pytest.approx(0.26, rel=1e-2)
+    assert d["in_interpret_range"] == "yes"
+    g2 = dict(g, num_atoms=None, thr_atom=None)                      # 缺键：退回每原胞 0.1
+    assert S._dose_cols(-1.78e13 / (20e-8), g2, None)["in_interpret_range"] == "NO"
 
 
 def test_values_basis_and_lorenz(tmp_path):
@@ -205,6 +228,70 @@ def test_adp_fallback_and_grid_mismatch(tmp_path):
     assert r["mu_cm2/Vs"] == pytest.approx(400.0) and r.get("sigma_S/m") is None
 
 
+def test_stale_intrinsic_from_previous_run_rejected(tmp_path):
+    """本征文件记录的 transport 指纹与当前 transport.json 不同 -> 上一轮残留，不用（不靠 mtime）。"""
+    S = _s83()
+    cwd = _material(tmp_path, stale=True)
+    data = S.load_intrinsic_sets(cwd)
+    assert "intrinsic" not in data["sets"]
+    assert data["sets"]["ADP_only"]["partial"] is True              # 退回 transport.json 的 μ_ADP
+    assert sum("上一轮 S8.4 留下的" in n for n in data["notes"]) == 2
+    mu = S._amset_mu_T_sources(cwd)
+    assert "mu_AMSET_intrinsic" not in mu["cols"]
+
+
+def test_zero_doping_skipped_and_legends(tmp_path):
+    S = _s83()
+    cwd = _material(tmp_path, doping0=True)
+    data, geom, rows = _rows(S, cwd)
+    assert all(r.get("n_2D_cm-2") != 0 for r in rows if r["dataset"] != "DPT")
+    assert S._intr_legend("intrinsic", data, "x") == "intrinsic ADP+POP (no IMP)"
+    assert S._intr_legend("overall", data, "x") == "overall ADP+IMP+POP"
+    data["sets"]["intrinsic"]["labels"] = ["ADP"]                      # 非极性材料：没有 POP
+    assert S._intr_legend("intrinsic", data, "x") == "intrinsic ADP (no IMP)"
+
+
+def test_bt2_mobility_masked_in_bipolar_region(tmp_path):
+    S = _s83()
+    cwd = _material(tmp_path)
+    p = cwd / "step8.1_boltztrap" / "boltztrap_crta.json"
+    j = json.loads(p.read_text())
+    j["seebeck_V_per_K"] = [[abs(v) for v in row] for row in j["seebeck_V_per_K"]]   # n 型也给正 S：双极
+    p.write_text(json.dumps(j))
+    _, _, rows = _rows(S, cwd)
+    b = _pick(rows, 300.0, "BT2_DPTtau", "n", 1e11)
+    assert b.get("mu_cm2/Vs") is None and b["flag"].startswith("bipolar")
+    assert _pick(rows, 300.0, "BT2_DPTtau", "p", 1e11)["mu_cm2/Vs"] is not None
+
+
+def test_dpt_multi_valley_labelled(tmp_path, monkeypatch):
+    S = _s83()
+    cwd = _material(tmp_path)
+    real = S.load_dpt
+
+    def fake(c, T=None, quiet=False):
+        d = real(c, T=T, quiet=quiet)
+        d["src_electron"] = "multi_valley"
+        return d
+    monkeypatch.setattr(S, "load_dpt", fake)
+    _, _, rows = _rows(S, cwd)
+    assert _pick(rows, 300.0, "DPT_mv", "n")["mu_cm2/Vs"] == pytest.approx(MU_E)
+    assert _pick(rows, 300.0, "DPT", "p")["mu_cm2/Vs"] == pytest.approx(MU_H)
+
+
+def test_old_outputs_cleared(tmp_path):
+    S = _s83()
+    cwd = _material(tmp_path)
+    d = cwd / "step8.3_output" / "intrinsic"
+    d.mkdir(parents=True)
+    old = d / "intrinsic_transport_100K.png"
+    old.write_bytes(b"old")
+    (d / "intrinsic_transport_table.csv").write_text("old")
+    (cwd / "step8.4_amset2d" / "2d_correction.json").unlink()        # 本轮跳过：旧文件也不能留着冒充
+    assert S.write_intrinsic_suite(cwd / "step8.3_output", cwd, True) == []
+    assert not old.exists() and not (d / "intrinsic_transport_table.csv").exists()
+
+
 def test_suite_skips_3d_and_missing_geometry(tmp_path):
     S = _s83()
     cwd = _material(tmp_path)
@@ -234,6 +321,15 @@ def test_loaders_default_temperature_unchanged(tmp_path):
     assert S.load_dpt(cwd, T=600.0, quiet=True)["electron"] == pytest.approx(MU_E / 2)
 
 
+def test_postprocess_transport_fingerprint(tmp_path):
+    pp = _load("pp_0032", KE / "step8.4_amset2d" / "postprocess_intrinsic.py")
+    assert pp.transport_fingerprint(tmp_path) is None
+    (tmp_path / "transport_47x47x3.json").write_text('{"a": 1}')
+    fp = pp.transport_fingerprint(tmp_path)
+    import hashlib
+    assert fp == {"file": "transport_47x47x3.json", "sha256": hashlib.sha256(b'{"a": 1}').hexdigest()}
+
+
 # ---------------------------------------------------------------- S8.4 开关
 def test_s84_intrinsic_switches_default_on_and_explicit_off():
     src = (KE / "step8.4_amset2d" / "gen_step14_amset2d.py").read_text(encoding="utf-8")
@@ -246,6 +342,11 @@ def test_s84_intrinsic_switches_default_on_and_explicit_off():
     assert f(None, False) == (True, False)
     assert f(False, True) == (True, True)                # 显式要只 ADP -> 隐含 mesh
     assert f(True, None, False, False) == (True, False)  # 旧出厂值 + 只开 mesh
+    # SCATTERING 不含 ADP 时不出只 ADP（否则全部机制置零、整步 FAIL）
+    i = src.index('if INTRINSIC_ADP_ONLY and "ADP" not in [str(x).upper() for x in SCATTERING]:')
+    assert i < src.index('_acmd = _acmd + (" && python postprocess_intrinsic.py --drop IMP,POP,PIE"')
+    # 链首清掉上一轮的本征产物与 mesh
+    assert "rm -f transport.json intrinsic_transport.json intrinsic_ADP.json mesh_*.h5;" in src
 
 
 # ---------------------------------------------------------------- autozt fetch_exclude
@@ -262,6 +363,11 @@ def test_fetch_exclude_helper_and_receipt():
     rb = w._fetch_receipt({}, m, {"name": "b", "dir": "/y"})
     assert "exclude" not in ra                           # 没配的步骤回执不变（不会被判失效重拉）
     assert rb["exclude"] == ["mesh_*.h5"]
+    # 提交前输入检查：排除项（上一轮 mesh）不算输入，否则 retry 后 start 被"本地仍缺少 mesh"拦下
+    assert w._drop_excluded(("INCAR", "mesh_35x35x5.h5", "d/mesh_1.h5", "submit.sh"),
+                            ["mesh_*.h5"]) == ("INCAR", "submit.sh")
+    src = (ROOT / "autozt" / "workflow.py").read_text(encoding="utf-8")
+    assert '_exs = "" if all_files else' in src            # fetch --all 不套排除项
 
 
 def test_skill_yaml_excludes_mesh_from_s84_fetch():

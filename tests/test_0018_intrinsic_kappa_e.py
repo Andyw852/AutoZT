@@ -33,7 +33,7 @@ def test_intrinsic_json_has_kappa_e(tmp_path):
     k = res["intrinsic"]
     assert k["electronic_thermal_conductivity_inplane_W_mK"] == [[0.05]]
     assert np.asarray(k["electronic_thermal_conductivity_W_mK"]).shape == (1, 1, 3, 3)
-    assert res["intrinsic_labels"] == ["ADP"] and pp.__version__.startswith("2026-10-08")
+    assert res["intrinsic_labels"] == ["ADP"] and pp.__version__ >= "2026-10-08"   # [0032] 版本只升不降
 
 
 def test_s84_chain_runs_adp_only_postprocess_when_asked():

@@ -2196,6 +2196,12 @@ def _remote_submit_preflight(cfg, m, s, t=None):
             required = (("POSCAR", "submit.sh") if is_mace
                         else ("INCAR", "POSCAR", "KPOINTS", "submit.sh"))
     dest = os.path.join(m.get("result_dir") or "", s["name"])
+    # [0032] fetch_exclude 的文件（S8.4 的 mesh_*.h5：上一轮的产物，不是输入）永远不回拉本地，
+    #   不能算"提交前必须存在"的输入 —— 否则 retry 后 start 会被"本地仍缺少 mesh_*.h5"拦下。
+    _sc_ex = fetch_excludes(next((x for x in ((m.get("_seg") or {}).get("steps_cfg") or [])
+                                  if x.get("name") == s["name"]), {}))
+    if _sc_ex:
+        required = _drop_excluded(required, _sc_ex)
 
     # 扇出步骤的输入在 deform-*/ 子目录中，父目录通常只有 POSCAR，不能
     # 按普通步骤检查父目录。先按本次待提交子目录逐项检查；缺失时只回拉
@@ -2211,6 +2217,8 @@ def _remote_submit_preflight(cfg, m, s, t=None):
                 if not per_child[name]:
                     per_child[name] = (("POSCAR", "submit.sh") if is_mace else
                                        ("INCAR", "POSCAR", "KPOINTS", "submit.sh"))
+            if _sc_ex:                                   # [0032] 同上
+                per_child[name] = _drop_excluded(per_child[name], _sc_ex)
         missing = []
         for name in names:
             for item in per_child[name]:
@@ -2740,6 +2748,14 @@ def _fetch_receipt(cfg, m, s):
     return r
 
 
+def _drop_excluded(names, patterns):
+    """[0032] 去掉匹配 fetch_exclude 通配的文件（按 basename 或相对路径匹配）。"""
+    import fnmatch
+    return tuple(x for x in names
+                 if not any(fnmatch.fnmatch(os.path.basename(str(x)), pt) or fnmatch.fnmatch(str(x), pt)
+                            for pt in patterns))
+
+
 def fetch_excludes(sc):
     """[0032] 步骤配置的 fetch_exclude（整目录回拉时跳过的通配，如 S8.4 的 mesh_*.h5）。字符串或列表。"""
     v = (sc or {}).get("fetch_exclude") or []
@@ -2869,7 +2885,8 @@ def fetch_material(cfg, m, only_steps=None, quiet=False, all_files=False,
         _whole = bool(sc2.get("fetch_all") or all_files)
         if _whole:   # v3.21：画图步骤产物文件名不固定，整目录拉回；v1.1：fetch --all 整目录
             # [0032] fetch_exclude：整目录回拉时跳过的大文件（S8.4 的 mesh_*.h5 只给作业内后处理用）
-            _exs = "".join(" --exclude=%s" % shlex.quote(x) for x in fetch_excludes(sc2))
+            #   显式 fetch --all（all_files）= 「每个步骤的全部文件」，不套排除项。
+            _exs = "" if all_files else "".join(" --exclude=%s" % shlex.quote(x) for x in fetch_excludes(sc2))
             remote = "cd %s && tar%s -cf - ." % (shlex.quote(s["dir"]), _exs)
         elif not files:
             continue
