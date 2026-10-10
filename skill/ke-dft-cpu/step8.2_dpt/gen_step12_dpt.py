@@ -34,7 +34,7 @@ from pathlib import Path
 # =========================== 可改参数区 ===========================
 # [SKILL_REV] 版本戳：写进 dpt_result.json，铺开时验证跑的是哪份 skill 副本。
 # 每次改本脚本逻辑后更新（如 "2026-08-29-nstep-linear"）。
-_SKILL_REV = "2026-10-09-0025-dpt-3d"
+_SKILL_REV = "2026-10-10-0027-kpin"
 # [R-SCAN] 强制选点壳层 NSTEP（None=自动 2/3/4/5；填 2/3/4/5=只试该值，做 R-scan 用）。
 # 用法：tf -p <材料> -j step8.2_dpt conf --set FORCE_NSTEP=3 → retry + start，对比 dpt_result.json 的 m_d
 #   与 m_provenance 里的 R（V148 起写 step.conf，不改本脚本）。
@@ -1011,10 +1011,11 @@ def _expand_full_bz(v, cwd, carrier):
     return kfrac, kp_mapping, _expand_method, None
 
 
-def _quad_fit_2d(kfrac, recip, eband, k0, need_lin=None, mesh=None):
+def _quad_fit_2d(kfrac, recip, eband, k0, need_lin=None, mesh=None, kops=None):
     """[0022] 带边二次型拟合的取点 + 最小二乘 + 验收（原在 get_effective_mass_aniso 里，多谷 DPT 逐谷共用；逻辑不变）。
     kfrac：全 BZ 分数坐标；eband：同一组点上该带的能量；k0：拟合中心的下标。
     need_lin=None 时按 k0 是否高对称点自动决定；mesh=None 时由 kfrac 反解。
+    [0027] kops（k 空间对称操作，_mv_kops）给出时按 k0 的小群判断（_k_pinned），不再查 ⅓/¼ 坐标表。
     返回 ({a, b, c, den=4|a||b|-c², npt, n_shell, Rused, names, cond, rel}, None)；失败 (None, 原因)。"""
     import numpy as np
     kcart = kfrac @ recip
@@ -1055,7 +1056,9 @@ def _quad_fit_2d(kfrac, recip, eband, k0, need_lin=None, mesh=None):
                 return False
         return True
     if need_lin is None:
-        need_lin = not _is_high_sym(kfrac[k0])
+        # [0027] 坐标表把矩形胞 Y–Γ 线上的 (0, ⅓) 也当成高对称点（⅓ 是给六方 K 用的）：SS 导带底落在网格点 ⅓、
+        #   真实极小在 ≈0.36，NSTEP=2 只取到 <18 个点，线性项被关掉，rel=0.23 拒绝。有对称操作时改按小群判断。
+        need_lin = (not _k_pinned(kfrac[k0], kops, 2)) if kops else (not _is_high_sym(kfrac[k0]))
 
     sel = Rused = n_shell = NSTEP_used = None
     _nstep_iter = (FORCE_NSTEP,) if FORCE_NSTEP else (2, 3, 4, 5)
@@ -1216,7 +1219,11 @@ def get_effective_mass_aniso(cwd, carrier, is_2d):
         if _off:
             return None, _off
 
-        fit, _ferr = _quad_fit_2d(kfrac, recip, ene[:, b0], k0)
+        try:                                                             # [0027]
+            _kops = _mv_kops(v.final_structure, _time_reversal_ok(v, cwd, carrier))
+        except Exception:                                                # noqa: BLE001
+            _kops = None
+        fit, _ferr = _quad_fit_2d(kfrac, recip, ene[:, b0], k0, kops=_kops)
         if _ferr:
             return None, _ferr
         a, b, c, den = fit["a"], fit["b"], fit["c"], fit["den"]
@@ -1510,6 +1517,33 @@ def _mv_kops(structure, use_tr):
             if not any(np.array_equal(rr, u) for u in out):
                 out.append(rr)
     return out
+
+
+def _kops_3d(structure, use_tr):
+    """[0027] 点群在倒空间分数坐标上的作用（Rᵀ，整数矩阵），有时间反演再加 −Rᵀ；3D 用，不筛面内。"""
+    import numpy as np
+    from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
+    out = []
+    for op in SpacegroupAnalyzer(structure, symprec=0.01).get_point_group_operations(cartesian=False):
+        r = np.rint(np.asarray(op.rotation_matrix, float).T).astype(int)
+        for rr in ((r, -r) if use_tr else (r,)):
+            if not any(np.array_equal(rr, u) for u in out):
+                out.append(rr)
+    return out
+
+
+def _k_pinned(kf, kops, nd):
+    """[0027] 对称性是否把 k 处的能量梯度钉成零：取 k 的小群（kops 里把 k 映回自身、模倒格矢的操作），
+    梯度只能落在小群矩阵的公共不动子空间里，而小群矩阵的平均就是到这个子空间的投影 —— 平均为零矩阵才算钉住。
+    六方 K（C₃）、Γ / M / X / Y（含 −1）是；矩形胞 Y–Γ 线上的 (0, ⅓)（小群只有 E 与 m_x）不是。nd：2 只看面内。"""
+    import numpy as np
+    kf = np.asarray(kf, float)
+    little = []
+    for r in kops:
+        d = (np.asarray(r) @ kf - kf)[:nd]
+        if float(np.max(np.abs(d - np.round(d)))) < 1e-6:
+            little.append(np.asarray(r, float)[:nd, :nd])
+    return bool(little) and float(np.max(np.abs(sum(little) / len(little)))) < 1e-6
 
 
 def _mv_rot3(r):
@@ -1842,7 +1876,7 @@ def _multi_valley(cwd, carrier, T0, temps, by_direction):
             sp, b, pts, e_grid = valleys[vi]
             k0 = int(idx[pts[0]])
             tag = "%s 带 %d k=%s" % (sp, b, np.round(kfrac[k0][:2], 4).tolist())
-            fit, ferr = _quad_fit_2d(kfrac, recip, ene[sp][:, b], k0)
+            fit, ferr = _quad_fit_2d(kfrac, recip, ene[sp][:, b], k0, kops=kops)
             if ferr:
                 raise _MVStop("谷 %s（离带边 %.3f eV）拟合失败：%s —— 它在窗口 VALLEY_WINDOW_EV=%.2f 里不能丢；"
                               "确认它不重要就在本材料 step.conf 把 VALLEY_WINDOW_EV 调到它以下"
@@ -2123,7 +2157,7 @@ def _e1_diag_3d(cwd, carrier, be=None):
         return None, "读 deformation.h5 异常：%s" % _exc_brief(e)
 
 
-def _quad_fit_3d(kfrac, recip, eband, k0, need_lin=None, mesh=None):
+def _quad_fit_3d(kfrac, recip, eband, k0, need_lin=None, mesh=None, kops=None):
     """[0025] 带边三维二次型拟合（_quad_fit_2d 的三维版，判据同构）：
     ΔE = a x² + b y² + c z² + d xy + e yz + f zx（+ q⁴）（+ 线性 gx + hy + iz + j）。
     返回 ({"H": 3×3 Hessian（eV·Å²）, npt, n_shell, Rused, names, cond, rel, step_min}, None)；失败 (None, 原因)。"""
@@ -2148,6 +2182,8 @@ def _quad_fit_3d(kfrac, recip, eband, k0, need_lin=None, mesh=None):
             mesh = np.array([int(round(1.0 / float(np.min(np.abs(_df[_nz[:, i], i])))))
                              if _nz[:, i].any() else 1 for i in range(3)])
     step_cart = np.array([np.linalg.norm(recip[i]) / max(int(mesh[i]), 1) for i in range(3)])
+    if need_lin is None and kops:                                        # [0027] 按小群判断
+        need_lin = not _k_pinned(kfrac[k0], kops, 3)
     if need_lin is None:
         bases = (0.0, 0.5, 1.0 / 3.0, 2.0 / 3.0, 0.25, 0.75)
         need_lin = not all(any(abs((c % 1.0) - b) < 1e-3 or abs((c % 1.0) - b - 1.0) < 1e-3 for b in bases)
@@ -2240,7 +2276,11 @@ def get_effective_mass_3d(cwd, carrier):
         dd = kfrac - kfrac_ibz[k0_ibz]
         dd -= np.round(dd)
         k0 = int(np.argmin(np.linalg.norm(dd, axis=1)))
-        fit, ferr = _quad_fit_3d(kfrac, recip, ene[:, b0], k0)
+        try:                                                             # [0027]
+            kops3 = _kops_3d(v.final_structure, _time_reversal_ok(v, cwd, carrier))
+        except Exception:                                                # noqa: BLE001
+            kops3 = None
+        fit, ferr = _quad_fit_3d(kfrac, recip, ene[:, b0], k0, kops=kops3)
         if ferr:
             return None, ferr
         rots = _cart_rots(v.final_structure)
