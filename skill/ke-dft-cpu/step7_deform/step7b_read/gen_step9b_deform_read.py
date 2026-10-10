@@ -65,10 +65,18 @@ def _amset_env_src():
         _why = "读不了 step.conf（%s: %s）" % (type(_e).__name__, _e)
     # [V153] 以前这里静默回退：读不到 step.conf 的环境就按主机猜一个，可能跑到另一个 AMSET 版本也没人知道
     import sys as _sys
-    print("[WARN] AMSET 环境按主机探测回退（%s）——确认这就是要用的 amset 环境" % _why, file=_sys.stderr)
-    if _os.path.isdir("/home/user_3090/miniconda3"):
-        return "source /home/user_3090/miniconda3/etc/profile.d/conda.sh && conda activate amset"
-    return "source /public/home/.../miniconda3/etc/profile.d/conda.sh && conda activate amset051"  # 2026-09-22 全局切 0.5.1
+    # [脱敏] 回退不再硬编码站点路径：原先那两条本身也已失效（3090 的真实 conda 在
+    #   setting/3090.yaml 的 conda_sh，jzzn 那条的 "..." 不是可解析路径）。改为只认环境变量；
+    #   经 autozt 提交时它必然已把 setting/<集群>.yaml 的 conda_sh/amset_env 注入 step.conf，走不到这里。
+    print("[WARN] AMSET 环境回退（%s）——改用环境变量 AUTOZT_CONDA_SH/AUTOZT_AMSET_ENV" % _why, file=_sys.stderr)
+    _sh2, _env2 = _os.environ.get("AUTOZT_CONDA_SH"), _os.environ.get("AUTOZT_AMSET_ENV")
+    if _sh2 and _env2:
+        return "source %s && conda activate %s" % (_sh2, _env2)
+    raise SystemExit(
+        "[ERROR] AMSET 环境未配置：step.conf 缺 CONDA_SH/AMSET_ENV（%s），环境变量也没有。"
+        "请在本材料 step.conf 写 CONDA_SH=<conda.sh 路径> / AMSET_ENV=<环境名>"
+        "（autozt 会从 setting/<集群>.yaml 自动注入）；直接跑脚本请自行 export "
+        "AUTOZT_CONDA_SH/AUTOZT_AMSET_ENV。" % _why)
 AMSET_ENV_SRC = _amset_env_src()
 # =================================================================
 

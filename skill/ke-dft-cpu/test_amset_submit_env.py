@@ -27,7 +27,7 @@ import template_drift as TD  # noqa: E402
 OLD_TPL = """#!/bin/bash
 #SBATCH --job-name={{JOBNAME}}
 #SBATCH --nodes=1
-source /home/x/miniconda3/etc/profile.d/conda.sh
+source /home/<user>/miniconda3/etc/profile.d/conda.sh
 conda activate amset_clean
 {{AMSET_CMD}}
 """

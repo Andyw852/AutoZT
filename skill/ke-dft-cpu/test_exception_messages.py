@@ -46,7 +46,7 @@ class TypeOnlyTests(unittest.TestCase):
         for rel in ("step7_deform/gen_step9_deform.py", "step7_deform/step7b_read/gen_step9b_deform_read.py"):
             src = (ROOT / rel).read_text(encoding="utf-8")
             body = src[src.index("def _amset_env_src():"):src.index("AMSET_ENV_SRC")]
-            self.assertIn("主机探测回退", body, rel)
+            self.assertIn("AMSET 环境回退", body, rel)
             self.assertNotRegex(body, r"except Exception:\s*\n\s*pass", rel)
         for rel in ("step8_amset/gen_step10_amset.py", "step8.4_amset2d/gen_step14_amset2d.py"):
             src = (ROOT / rel).read_text(encoding="utf-8")
