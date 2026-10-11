@@ -40,6 +40,10 @@ class HelperTests(unittest.TestCase):
         self.assertTrue(wf.tar_meta_only_errors(GNU_9P))
         self.assertTrue(wf.tar_meta_only_errors("x transport.json\ntar: transport.json: Can't restore time\n"))  # bsdtar
         self.assertTrue(wf.tar_meta_only_errors("tar: ./a: Cannot change mode to rw-r--r--: Operation not permitted\n"))
+        self.assertTrue(wf.tar_meta_only_errors(   # 9p 挂载 + 集群 mtime 快于本地时钟（MoS₂ S8.4，2026-10-11）
+            "tar: ./dp_optical.py: Cannot utime: Operation not permitted\n"
+            "tar: .: time stamp 2026-10-11 20:39:53 is 244.784772271 s in the future\n"
+            "tar: Exiting with failure status due to previous errors\n"))
         self.assertFalse(wf.tar_meta_only_errors(""))
         self.assertFalse(wf.tar_meta_only_errors("tar: Exiting with failure status due to previous errors\n"))
         self.assertFalse(wf.tar_meta_only_errors(
