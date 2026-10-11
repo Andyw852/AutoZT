@@ -8724,3 +8724,45 @@ test_0018 与 test_0026 里写死旧字面量的两条断言改成新写法（�
 - S8.2 谷标签（`_mv_label`）：Γ / K / M / Q / Γ–M / X / Y / S，或 `k(…)`；重名时加 `(自旋带号)`。通道解析同样认 `G`、`G-M`。
 - SOC：旋量带下目标谷态密度含两种自旋，自旋守恒的通道会偏大到 2 倍 —— 插件检测到 SOC 时打 WARN（不改数值）。
 
+## V197（2026-10-11）：[0034] comparison_300K 改每原子判据；S8.4 多出"overall 去 ODP"一套
+
+**用户要求**：
+1. 文献通常按每原子载流子数判可解读，comparison_300K 也改成这样。
+2. 要四套结果：只 ADP、overall、本征、overall 不含 ODP（看 ODP 实现的影响）。
+3. 问：ADP 加了谷内掩码，"只 ADP"还和文献对得上吗？
+
+**改动**：
+- **S8.3 comparison_300K**：
+  - `in_interpret_range` 改按每原子载流子数判断；csv 新增 `carriers_per_atom` 列，`carriers_per_cell` 保留作参考。
+  - 2D 的原子数与阈值读 S8.4 的 `2d_correction.json`（`num_atoms`、`carrier_per_atom_threshold`），与 S8.4、本征表同源。
+  - 3D 或记录缺键时，数 step3_uniform / step1 的结构文件，阈值用 `CARRIER_PER_ATOM_MAX = 0.02`。
+  - 只有原子数也数不出来时，才退回每原胞 0.1。
+  - 汇总 `[范围]` 行写明判据、原子数与来源。
+  - 本征表的 `_geom_2d` 同样改为：记录缺 `num_atoms` 时数结构文件，不再退回每原胞。
+- **S8.4 `OVERALL_WITHOUT`**（新 step.conf 键，出厂 `ODP`）：
+  - 列出的机制本次开着时，作业链在只 ADP 那一步之后再跑
+    `postprocess_intrinsic.py --drop ODP --out overall_noODP.json`（同一份 mesh、复现已由第一步把关）。
+  - 写 `ODP,IVS` 时输出 `overall_noODP_IVS.json`；写 `off` 不出。
+  - 列出的机制都没开、或会剔除全部机制时自动不出；机制名写错报错退出。
+  - 链首的 `rm -f` 一并清 `overall_no*.json`；`ke_common.DONE_MARKERS` 归档这两个默认名字。
+- **S8.3 接入**（有文件就自动带上，与本征文件一样核对网格与 transport 指纹）：
+  - 本征五参数图多一条 "overall w/o ODP (ADP+POP+IMP+IVS)"；
+  - 长表多一个数据集 `overall_noODP`；
+  - 汇总表多一列 `mu_noODP`，图注说明这一套的含义；
+  - μ(T) 表/图多一列 `mu_AMSET_all_without`（来源写进 csv 头）。
+- **"只 ADP"与文献**：只有开了 IVS 的载流子才掩码；没写 `DP_OPTICAL_*` 时 ADP 与以前完全相同。
+  掩码后的 ADP 是谷内声学散射，正是形变势理论（Bardeen–Shockley / Takagi、Kaasbjerg 2012、Jin 2014 的声学项）
+  与 S8.2 DPT 的定义；谷间部分交给 IVS（区边界声子能量）。所以只 ADP 一套更接近文献口径。
+  量级参考：V25.5 的 K↔K′ 谷间置零诊断，MoS₂ ADP-only 电子 +24%、空穴 +9%。
+
+**测试**：新增 tests/test_0034_without_set_and_atom_rule.py，9 项：
+- `overall_without_set` 的各种写法；
+- gen 作业链顺序、rm 与 DONE_MARKERS；
+- S8.3 本征套件读入、图例、汇总列、图注、长表数据集与图；没有文件或上一轮残留时不用；
+- μ(T) 新列；
+- 每原子判据的来源（2D 记录 / 3D VASP5 / VASP4 / 读不到）；
+- `_geom_2d` 缺键时数原子；
+- comparison_300K 端到端：阈值取自 S8.4 记录，至少一档"旧判据 yes、新判据 NO"。
+
+test_0032 的链首 rm 断言随新文件名更新。
+

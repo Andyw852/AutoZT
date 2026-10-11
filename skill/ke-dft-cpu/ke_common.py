@@ -728,7 +728,8 @@ DONE_MARKERS = {
     "step4b_wave_full": ("wavefunction.h5",),
     "step5_dielect_validate": ("dielectric_check.json",),
     "step8_amset": ("transport.json",),
-    "step8.4_amset2d": ("transport.json", "intrinsic_transport.json", "intrinsic_ADP.json"),   # [0018]
+    "step8.4_amset2d": ("transport.json", "intrinsic_transport.json", "intrinsic_ADP.json",   # [0018]
+                        "overall_noODP.json", "overall_noODP_IVS.json"),                        # [0034]
     "step8.1_boltztrap": ("boltztrap_crta.json",),
     "step8.2_dpt": ("dpt_result.json",),
     "step8.3_output": ("comparison_300K.png",),

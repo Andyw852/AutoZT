@@ -37,7 +37,9 @@ from pathlib import Path
 # [SKILL_REV] 版本戳：写进 comparison_summary.txt。每次改本脚本逻辑后更新。
 #   陈旧副本已咬人三次（step12/step9b 盖戳后，step13 是最后一个没盖的），
 #   这里盖戳便于从产物反查到底跑的是哪份 skill 副本。
-_SKILL_REV = "2026-10-10-0032-r2"
+_SKILL_REV = "2026-10-11-0034"
+#   bump 记录：2026-10-11-0034 —— comparison_300K 的可解读判据改每原子（与 S8.4、本征表同一判据，缺原子数才退回每原胞），
+#   csv 加 carriers_per_atom；本征表/图、μ(T) 加 S8.4 的 overall_no*.json（overall 去掉 OVERALL_WITHOUT，出厂去 ODP）。
 #   bump 记录：2026-10-10-0032-r2 —— 复审修正：本征文件按 transport 指纹判同一轮；可解读判据改每原子（与 S8.4 同）；
 #   BT2 μ 双极区屏蔽；DPT 多谷标注；图例用实际机制；0 掺杂跳过；intrinsic/ 先清旧产物；3D 对比图与改动前逐字节相同。
 #   bump 记录：2026-10-10-0032 —— 本征五参数图 + 输运参数表（intrinsic/，全部温度，2D）；2D 对比图双横轴
@@ -64,7 +66,11 @@ AMSET2D_DIR = "step8.4_amset2d"
 # 早超出刚性能带近似（也超出实验可达），只按面密度判会**漏报**。
 # 上限取每原胞约 0.1 个载流子；超过的档位只在表里留数、标 NO，不作定量解读、
 # 不进论文图。物理依据见 VERIFICATION §15.10。
-NCELL_INTERPRET_MAX = 0.1         # 每原胞载流子数（2D 与 3D 同一判据）
+NCELL_INTERPRET_MAX = 0.1         # 每原胞载流子数（只在数不出原子数时兜底）
+# ★ [0034] 2026-10-11 用户决定：comparison_300K 也按【每原子】载流子数判可解读（文献通行口径，与 S8.4 /
+#   本征表同一判据）。每原胞数取决于晶胞大小（原胞 vs 惯用胞差几倍），按原子才与晶胞选择无关。
+#   阈值：2D 取 S8.4 2d_correction.json 的 carrier_per_atom_threshold，3D 与缺键时用这个默认值。
+CARRIER_PER_ATOM_MAX = 0.02
 N2D_INTERPRET_MAX_REF = 1.0e14    # cm^-2：仅作 2D 输出的参考对照（MoS2 量级），不参与判据
 
 
@@ -99,6 +105,41 @@ def _cell_geometry(cwd):
         V = abs(sum(c[i] * cr[i] for i in range(3))) * 1e-24  # Å³ -> cm³
         return A, V
     return None, None
+
+
+def _cell_atoms(cwd):
+    """[0034] 晶胞原子数：与 _cell_geometry 同一批候选结构文件（VASP5 / VASP4 都认）；读不到 -> None。"""
+    import glob as _glob
+    cands = []
+    for _d in ("step3_uniform", "step1_opt", "step1_std_opt", "."):
+        cands += sorted(_glob.glob(str(Path(cwd) / _d / "CONTCAR")))
+        cands += sorted(_glob.glob(str(Path(cwd) / _d / "POSCAR")))
+    for p in cands:
+        try:
+            ln = Path(p).read_text(errors="ignore").splitlines()
+            for row in (ln[5], ln[6]):
+                toks = row.split()
+                if toks and all(t.isdigit() for t in toks):
+                    n = sum(int(t) for t in toks)
+                    if n > 0:
+                        return n
+        except (OSError, IndexError, ValueError):
+            continue
+    return None
+
+
+def _atom_rule(cwd):
+    """[0034] 可解读判据：(原子数, 每原子阈值, 来源说明)。2D 优先读 S8.4 的 2d_correction.json（与本征表、S8.4 同源），
+    否则数结构文件的原子、阈值用 CARRIER_PER_ATOM_MAX；原子数也读不到 -> (None, None, 原因)。"""
+    for run in (AMSET2D_DIR, AMSET_DIR):
+        rec = _load_json(Path(cwd) / run / "2d_correction.json") or {}
+        n, thr = _num(rec.get("num_atoms")), _num(rec.get("carrier_per_atom_threshold"))
+        if n and n > 0:
+            return int(n), (thr if thr and thr > 0 else CARRIER_PER_ATOM_MAX), "%s/2d_correction.json" % run
+    n = _cell_atoms(cwd)
+    if n:
+        return n, CARRIER_PER_ATOM_MAX, "结构文件（step3_uniform 等）"
+    return None, None, "数不出原子数（step3_uniform/step1 的 POSCAR/CONTCAR 都读不到）"
 
 
 def _deform_geometry(cwd):
@@ -866,9 +907,10 @@ def write_table(out, rows, am, bt, dpt, am2=None):
     _c_cm = _areal_factor_cm(Path.cwd())
     _A_cm2, _V_cm3 = _cell_geometry(Path.cwd())
     _add_dose = bool(am or am2 or bt or dpt) and bool(_A_cm2 or _V_cm3)
+    _natom, _thr_atom, _atom_src = _atom_rule(Path.cwd())          # [0034] 每原子判据
     if _add_dose:
         _dcols = (["n_2D_cm-2"] if (_c_cm and (am or am2)) else [])
-        cols = _dcols + ["carriers_per_cell", "in_interpret_range"] + cols
+        cols = _dcols + ["carriers_per_cell", "carriers_per_atom", "in_interpret_range"] + cols
     # [patch_deform_geom] 形变势构型口径整列输出（每行同值；回退到 clamped 时一眼可见）
     _dgeom = _deform_geometry(Path.cwd())
     if _dgeom:
@@ -893,9 +935,16 @@ def write_table(out, rows, am, bt, dpt, am2=None):
                         _row["n_2D_cm-2"] = "%.3g" % (_n3a * _c_cm)
                     if _ncell is not None:
                         _row["carriers_per_cell"] = "%.3g" % _ncell
-                        _row["in_interpret_range"] = (
-                            "yes" if _ncell <= NCELL_INTERPRET_MAX else
-                            "NO(>%.2g/cell：超出刚性能带近似/实验范围)" % NCELL_INTERPRET_MAX)
+                        if _natom:                                     # [0034] 每原子（与 S8.4 同判据）
+                            _nat = _ncell / _natom
+                            _row["carriers_per_atom"] = "%.3g" % _nat
+                            _row["in_interpret_range"] = (
+                                "yes" if _nat <= _thr_atom else
+                                "NO(>%.3g/atom：超出刚性能带近似/实验范围)" % _thr_atom)
+                        else:                                          # 数不出原子：退回每原胞
+                            _row["in_interpret_range"] = (
+                                "yes" if _ncell <= NCELL_INTERPRET_MAX else
+                                "NO(>%.2g/cell：超出刚性能带近似/实验范围)" % NCELL_INTERPRET_MAX)
                 except (TypeError, ValueError):
                     pass
             if _dgeom:
@@ -936,11 +985,13 @@ def write_table(out, rows, am, bt, dpt, am2=None):
         lines.append("# [口径] 形变势构型 deform_geometry = %s（ionrelax=离子弛豫；clamped=离子固定）%s"
                      % (_dgeom, _warn))
     if _add_dose:
-        lines.append("# [范围] 可解读上限 = 每原胞 %.2g 个载流子"
+        _rule = (("每原子 %.3g 个载流子（%d 原子/胞，来源 %s；与 S8.4、本征表同一判据）" % (_thr_atom, _natom, _atom_src))
+                 if _natom else ("每原胞 %.2g 个载流子（%s，退回旧判据）" % (NCELL_INTERPRET_MAX, _atom_src)))
+        lines.append("# [范围] 可解读上限 = %s"
                      "（n_cell = n_2D×A_cell 或 n_3D×V_cell；本胞 A = %s Å², V = %s Å³）%s。"
                      "超出档位在 csv 里标 in_interpret_range=NO：刚性能带近似已不成立、"
                      "实验也达不到，只看趋势，不进论文图。"
-                     % (NCELL_INTERPRET_MAX,
+                     % (_rule,
                         ("%.3g" % (_A_cm2 * 1e16)) if _A_cm2 else "?",
                         ("%.3g" % (_V_cm3 * 1e24)) if _V_cm3 else "?",
                         ("；面密度换算因子 c = %.4f cm" % _c_cm) if _c_cm else ""))
@@ -1013,7 +1064,8 @@ def write_table(out, rows, am, bt, dpt, am2=None):
 MU_T_CSV = "comparison_vs_T.csv"
 MU_T_JSON = "comparison_vs_T.json"
 MU_T_PNG = "mobility_vs_T.png"
-MU_T_COLS = ("mu_DPT", "mu_DPT_mv", "mu_AMSET_ADP", "mu_AMSET_intrinsic", "mu_AMSET_all")   # [0022] +mu_DPT_mv
+MU_T_COLS = ("mu_DPT", "mu_DPT_mv", "mu_AMSET_ADP", "mu_AMSET_intrinsic", "mu_AMSET_all",   # [0022] +mu_DPT_mv
+             "mu_AMSET_all_without")   # [0034] overall 去掉 OVERALL_WITHOUT 的机制（S8.4 的 overall_no*.json，出厂去 ODP）
 # [0030] 分方向参数列（来自 S8.2 by_direction，逐方向）。2D=x/y，3D=x/y/z；不出比值/平均。
 def _c_col(is_2d):
     """C 列名（单位随维度变）：2D 用 C_2D_N_per_m（N/m），3D 用 C_3D_GPa（GPa）。"""
@@ -1090,8 +1142,16 @@ def _amset_mu_T_sources(cwd):
         cols["mu_AMSET_intrinsic"] = intr
         src["mu_AMSET_intrinsic"] = "%s/intrinsic_transport.json（%s，去 %s）" % (
             run, "+".join(labels) or "?", "+".join(q_in.get("intrinsic_dropped") or []) or "?")
+    without = None
+    for name in _overall_without_files(Path(cwd) / run)[:1]:          # [0034]
+        wo, q_wo = _intr(name)
+        if wo is not None:
+            without = list(q_wo.get("intrinsic_dropped") or [])
+            cols["mu_AMSET_all_without"] = wo
+            src["mu_AMSET_all_without"] = "%s/%s（overall 去 %s：%s）" % (
+                run, name, "+".join(without) or "?", "+".join(q_wo.get("intrinsic_labels") or []) or "?")
     return {"run": run, "doping": doping, "temps": temps, "cols": cols, "src": src,
-            "intrinsic_labels": labels}
+            "intrinsic_labels": labels, "without": without}
 
 
 def _dpt_mu_T(cwd, is_2d):
@@ -1219,6 +1279,7 @@ def build_mu_vs_T(cwd, is_2d):
             "dpt_scope": ({c: "%s 谷" % sc["edge_star"] for c, sc in scopes.items()} or None),
             "amset_run": am["run"] if am else None, "amset_sources": am["src"] if am else {},
             "intrinsic_labels": am["intrinsic_labels"] if am else None,
+            "all_without": am.get("without") if am else None,             # [0034]
             "doping_choice": "每种载流子取 |掺杂| 最低的一档（最接近 DPT 的非简并口径）",
             "temperatures_K": temps, "skill_rev": _SKILL_REV}
     return {"meta": meta, "rows": rows}
@@ -1255,11 +1316,13 @@ def write_mu_vs_T(out, cwd, is_2d):
     (out / MU_T_JSON).write_text(json.dumps(res, ensure_ascii=False, indent=1), encoding="utf-8")
     lines = ["", "# [0030] 迁移率随温度 + 分方向参数（%s；E1 eV / C2D N/m / m* mₑ / tau fs / mu cm²/Vs；全表见 %s）"
              % ("2D：面内 x/y" if is_2d else "3D：x/y/z", MU_T_CSV),
-             "# %-8s %4s %5s %8s %8s %7s %7s %8s %9s %9s %9s %9s %9s" % (
+             "# %-8s %4s %5s %8s %8s %7s %7s %8s %9s %9s %9s %9s %9s %9s" % (
                  "carrier", "dir", "T(K)", "E1", "C2D", "m*", "m_d", "tau",
-                 "DPT", "DPT_mv", "AMSET_ADP", "intrinsic", "all")]
+                 "DPT", "DPT_mv", "AMSET_ADP", "intrinsic", "all",
+                 ("w/o" + "+".join(res["meta"].get("all_without") or []))[:9] if res["meta"].get("all_without")
+                 else "all_w/o")]
     for r in res["rows"]:
-        lines.append("  %-8s %4s %5.0f %8s %8s %7s %7s %8s %9s %9s %9s %9s %9s" % (
+        lines.append("  %-8s %4s %5.0f %8s %8s %7s %7s %8s %9s %9s %9s %9s %9s %9s" % (
             r["carrier"], r["direction"], r["T_K"],
             *[("%.3f" % r[c]) if r.get(c) is not None else "—" for c in _param_cols(is_2d)],
             *[("%.1f" % r[c]) if r[c] is not None else "—" for c in MU_T_COLS]))
@@ -1282,7 +1345,9 @@ def _plot_mu_vs_T(out, res):
     import matplotlib.pyplot as plt
     style = {"mu_DPT": ("k", "-", "DPT"), "mu_DPT_mv": ("0.5", "-", "DPT multi-valley"),
              "mu_AMSET_ADP": ("C0", "--", "AMSET ADP"),
-             "mu_AMSET_intrinsic": ("C2", "-.", "AMSET intrinsic"), "mu_AMSET_all": ("C3", ":", "AMSET all")}
+             "mu_AMSET_intrinsic": ("C2", "-.", "AMSET intrinsic"), "mu_AMSET_all": ("C3", ":", "AMSET all"),
+             "mu_AMSET_all_without": ("C4", "--", "AMSET all w/o %s"                       # [0034]
+                                      % "+".join(res["meta"].get("all_without") or ["?"]))}
     cars = [c for c in ("electron", "hole") if any(r["carrier"] == c for r in res["rows"])]
     fig, axs = plt.subplots(1, len(cars), figsize=(5.5 * len(cars), 4.2), squeeze=False)
     for ax, car in zip(axs[0], cars):
@@ -1325,7 +1390,15 @@ INTR_SETS = (   # (键, 文件, 图例, 线型, 颜色, 标记)
     ("intrinsic", "intrinsic_transport.json", "intrinsic ADP+POP (no IMP)", "-", "C0", "o"),
     ("overall", "transport.json", "overall ADP+POP+IMP", "-.", "C3", "s"),
 )
+# [0034] S8.4 的 OVERALL_WITHOUT 那一套（overall_no*.json，出厂 overall_noODP.json）：有就自动加进图、表、汇总。
+INTR_WITHOUT_STYLE = (("--", "C4", "D"), ("--", "C5", "v"))
 BT2_KEY, BT2_LABEL = "BT2_DPTtau", "BT2 CRTA x DPT tau"
+
+
+def _overall_without_files(run_dir):
+    """[0034] S8.4 目录里的 overall_no*.json（按名字排序）。"""
+    import glob as _glob
+    return [Path(p).name for p in sorted(_glob.glob(str(Path(run_dir) / "overall_no*.json")))]
 INTR_PANELS = (   # (行字典里的键, y 轴标签, 对数 y, 取绝对值)
     ("S_uV/K", "|S| (uV/K)", False, True),
     ("sigma_S/m", "sigma (S/m, per layer thickness t)", True, False),
@@ -1355,11 +1428,13 @@ def _geom_2d(cwd):
         lt = rec.get("layer_thickness")
         # 可解读范围：与 S8.4（postprocess_intrinsic._doping_marks，2026-09-28 用户批准）同一判据 ——
         #   每【原子】载流子数 ≤ carrier_per_atom_threshold（默认 0.02）；缺键时退回每原胞 0.1。
+        # [0034] 记录里缺 num_atoms / 阈值（老记录）时数结构文件、用默认 0.02，不再退回每原胞
+        _na = _num(rec.get("num_atoms")) or _cell_atoms(cwd)
         return {"c_A": c, "t_A": c / f, "c_over_t": f, "src": run,
                 "t_method": (lt.get("method") if isinstance(lt, dict) else None) or "?",
                 "area_cm2": _num(rec.get("inplane_cell_area_cm2")),
-                "num_atoms": _num(rec.get("num_atoms")),
-                "thr_atom": _num(rec.get("carrier_per_atom_threshold"))}
+                "num_atoms": _na,
+                "thr_atom": (_num(rec.get("carrier_per_atom_threshold")) or CARRIER_PER_ATOM_MAX) if _na else None}
     return None
 
 
@@ -1409,7 +1484,12 @@ def load_intrinsic_sets(cwd):
     sets["overall"] = {"S": _unwrap(j.get("seebeck")), "sigma": _unwrap(j.get("conductivity")),
                        "kappa": _unwrap(j.get("electronic_thermal_conductivity")),
                        "mu": _unwrap(mob.get("overall") or mob.get("Overall")), "partial": False}
-    for key, fname, *_ in INTR_SETS[:2]:
+    set_defs = list(INTR_SETS)
+    extra = []
+    for k_, fname in enumerate(_overall_without_files(Path(cwd) / AMSET2D_DIR)):   # [0034]
+        ls, colr, mk = INTR_WITHOUT_STYLE[k_ % len(INTR_WITHOUT_STYLE)]
+        extra.append((Path(fname).stem, fname, "overall w/o " + Path(fname).stem[len("overall_no"):], ls, colr, mk))
+    for key, fname, *_ in list(INTR_SETS[:2]) + extra:
         q = _load_json(Path(cwd) / AMSET2D_DIR / fname)
         if not q:
             continue
@@ -1425,7 +1505,8 @@ def load_intrinsic_sets(cwd):
         sets[key] = {"S": it.get("seebeck_uV_K"), "sigma": it.get("conductivity_S_m"),
                      "kappa": it.get("electronic_thermal_conductivity_W_mK"),
                      "mu": (it.get("mobility_cm2_Vs_s") or {}).get("overall"), "partial": False,
-                     "labels": q.get("intrinsic_labels"), "reproduce": q.get("reproduction_check")}
+                     "labels": q.get("intrinsic_labels"), "reproduce": q.get("reproduction_check"),
+                     "dropped": q.get("intrinsic_dropped")}
         if sets[key]["kappa"] is None:
             notes.append("%s：%s 是 [0018] 之前的旧文件，没有 κe —— κe/Lorenz 留空" % (key, fname))
     if "ADP_only" not in sets:
@@ -1445,8 +1526,9 @@ def load_intrinsic_sets(cwd):
             marks = q.get("doping_marks") or {}
             break
     over_labels = [k for k in mob if str(k).lower() != "overall"]
+    set_defs += [e for e in extra if e[0] in sets]                  # [0034] 只列真读到的
     return {"doping": doping, "temps": temps, "sets": sets, "notes": notes, "marks": marks,
-            "overall_labels": over_labels}
+            "overall_labels": over_labels, "set_defs": set_defs}
 
 
 def _tv(arr, i, k):
@@ -1464,7 +1546,7 @@ def _interp_rule(geom):
     """可解读判据的文字（图注/表头用）。"""
     if geom.get("num_atoms") and geom.get("thr_atom"):
         return "> %.3g carriers per atom (S8.4 criterion)" % geom["thr_atom"], "每原子 ≤ %.3g（与 S8.4 同口径）" % geom["thr_atom"]
-    return "> %.2g carriers per cell" % NCELL_INTERPRET_MAX, "每原胞 ≤ %.2g（2d_correction.json 缺 num_atoms，退回旧判据）" % NCELL_INTERPRET_MAX
+    return "> %.2g carriers per cell" % NCELL_INTERPRET_MAX, "每原胞 ≤ %.2g（数不出原子数，退回旧判据）" % NCELL_INTERPRET_MAX
 
 
 def _dose_cols(n3_signed, geom, V_cm3, A_cm2=None):
@@ -1528,7 +1610,7 @@ def build_intrinsic_rows(cwd, data, geom):
             base = dict(_dose_cols(n3, geom, V_cm3, A_cm2), **{"T_K": T, "type": typ})
             if marks.get(str(i)):
                 base["S84_marks"] = ";".join(marks[str(i)])
-            for key, *_ in INTR_SETS:
+            for key, *_ in data.get("set_defs", INTR_SETS):
                 st = data["sets"].get(key)
                 if not st:
                     continue
@@ -1598,6 +1680,10 @@ def _intr_legend(key, data, default):
     if key == "overall":
         lab = data.get("overall_labels")
         return ("overall %s" % "+".join(lab)) if lab else default
+    st = data["sets"].get(key) or {}
+    if key.startswith("overall_no") and st.get("labels"):            # [0034]
+        return "overall w/o %s (%s)" % ("+".join(st.get("dropped") or []) or key[len("overall_no"):],
+                                        "+".join(st["labels"]))
     return default
 
 
@@ -1611,9 +1697,12 @@ def _intr_caption(geom, data):
             "sigma, kappa_e normalized by layer thickness t (cell value x c/t); mobility, S, Lorenz do not depend on it.  "
             "Shaded: %s (beyond rigid-band range).\n"
             "ADP only: acoustic deformation potential only (upper limit)%s.  intrinsic: %s, ionized impurities removed.  "
-            "overall: all mechanisms incl. IMP.  BT2: BoltzTraP2 CRTA with DPT tau (S, Lorenz tau-free); "
+            "overall: all mechanisms incl. IMP%s.  BT2: BoltzTraP2 CRTA with DPT tau (S, Lorenz tau-free); "
             "BT2 mobility = sigma_total/(e|n_net|), masked where bipolar.  DPT: Bardeen-Shockley (single or multi-valley)."
-            % (geom["t_A"], geom["t_method"], geom["c_A"], geom["c_over_t"], _interp_rule(geom)[0], part, lab))
+            % (geom["t_A"], geom["t_method"], geom["c_A"], geom["c_over_t"], _interp_rule(geom)[0], part, lab,
+               "".join("; w/o %s: same mesh with %s removed" % ("+".join(sets[k].get("dropped") or []),
+                                                               "+".join(sets[k].get("dropped") or []))
+                       for k in sets if k.startswith("overall_no"))))
 
 
 def _bt2_curve(bt, dpt_T, typ, geom, xr):
@@ -1666,7 +1755,7 @@ def plot_intrinsic_T(path, T, rows, geom, data, bt, dpt_T, material=""):
         for ci, (col, ylab, logy, absval) in enumerate(INTR_PANELS):
             a = ax[ri][ci]
             ysc = 1e8 if col == "Lorenz_WOhm/K2" else 1.0
-            for key, _f, leg, ls, colr, mk in INTR_SETS:
+            for key, _f, leg, ls, colr, mk in data.get("set_defs", INTR_SETS):
                 leg = _intr_legend(key, data, leg)
                 pts = sorted((r["n_2D_cm-2"], (abs(r[col]) if absval else r[col]) * ysc) for r in rT
                              if r["dataset"] == key and r["type"] == typ and r.get(col) is not None
@@ -1720,7 +1809,7 @@ def _intr_summary(out_dir, rows, geom, data, files):
          % (geom["c_A"], geom["t_A"], geom["t_method"], geom["c_over_t"]),
          "# 换算：n_2D = n_cell × c；n_lit = n_2D / t = n_cell × c/t",
          "# 可解读范围：%s" % _interp_rule(geom)[1]]
-    for key, fname, leg, *_ in INTR_SETS:
+    for key, fname, leg, *_ in data.get("set_defs", INTR_SETS):
         st = sets.get(key)
         if not st:
             L.append("# %-9s 缺：%s" % (key, fname))
@@ -1734,8 +1823,10 @@ def _intr_summary(out_dir, rows, geom, data, files):
                                     if rep else ""))
     for n_ in data.get("notes") or []:
         L.append("# [注] " + n_)
-    hdr = "%5s %4s %10s %10s | %10s %10s %10s %10s %8s | %9s %10s %10s %10s" % (
-        "T(K)", "type", "n2D(cm-2)", "nlit(cm-3)", "mu_ADP", "mu_intr", "mu_all", "mu_BT2", "mu_DPT",
+    wo = [d[0] for d in data.get("set_defs", INTR_SETS) if d[0].startswith("overall_no")]   # [0034]
+    hdr = "%5s %4s %10s %10s | %10s %10s %10s%s %10s %8s | %9s %10s %10s %10s" % (
+        "T(K)", "type", "n2D(cm-2)", "nlit(cm-3)", "mu_ADP", "mu_intr", "mu_all",
+        "".join(" %10s" % ("mu_" + k[len("overall_"):])[:10] for k in wo), "mu_BT2", "mu_DPT",
         "S_intr", "sig_intr", "ke_intr", "PF_intr")
     L.append(hdr)
 
@@ -1757,9 +1848,10 @@ def _intr_summary(out_dir, rows, geom, data, files):
             for n2d in sorted({r["n_2D_cm-2"] for r in rows if r.get("n_2D_cm-2") and r["type"] == typ
                                and abs(r["T_K"] - T) < 1e-6}):
                 nlit = n2d / (geom["t_A"] * 1e-8)
-                L.append("%5.0f %4s %10.3g %10.3g | %s %s %s %s %s | %s %s %s %s" % (
+                L.append("%5.0f %4s %10.3g %10.3g | %s %s %s%s %s %s | %s %s %s %s" % (
                     T, typ, n2d, nlit, f(g(T, typ, n2d, "ADP_only", "mu_cm2/Vs")),
                     f(g(T, typ, n2d, "intrinsic", "mu_cm2/Vs")), f(g(T, typ, n2d, "overall", "mu_cm2/Vs")),
+                    "".join(" " + f(g(T, typ, n2d, k, "mu_cm2/Vs")) for k in wo),
                     f(g(T, typ, n2d, BT2_KEY, "mu_cm2/Vs")), f(dpt_mu, "%8.4g"),
                     f(g(T, typ, n2d, "intrinsic", "S_uV/K"), "%9.4g"), f(g(T, typ, n2d, "intrinsic", "sigma_S/m")),
                     f(g(T, typ, n2d, "intrinsic", "kappa_e_W/mK")), f(g(T, typ, n2d, "intrinsic", "PF_W/mK2"))))

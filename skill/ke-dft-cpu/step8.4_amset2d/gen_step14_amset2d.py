@@ -32,7 +32,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 # [SKILL_REV] 版本戳：写进 settings.yaml 头，便于从结果反查跑的是哪份 skill 副本。
-_SKILL_REV = "2026-10-11-0033"   # ODP/谷间散射（常数形变势，step.conf DP_OPTICAL_E/H）+ ADP 谷内掩码   # [0032-r2] 复审：链首清旧本征产物与 mesh；SCATTERING 无 ADP 不出只 ADP   # [0032] WRITE_MESH/INTRINSIC_ADP_ONLY 2D 默认开（旧：2026-09-28-desym-fix V115）
+_SKILL_REV = "2026-10-11-0034"   # OVERALL_WITHOUT（出厂 ODP）-> overall_noODP.json   # [0033] ODP/谷间散射（常数形变势，step.conf DP_OPTICAL_E/H）+ ADP 谷内掩码   # [0032-r2] 复审：链首清旧本征产物与 mesh；SCATTERING 无 ADP 不出只 ADP   # [0032] WRITE_MESH/INTRINSIC_ADP_ONLY 2D 默认开（旧：2026-09-28-desym-fix V115）
 # 复制来源（gen_step10_amset.py 的 _SKILL_REV），用于人工比对两份文件是否同步
 _SOURCE_GEN_REV = "2026-10-08-2d-raw-elastic"   # [0014] S8 的 2D 弹性改为原始 slab 值，与本步一致
 import stepconf  # noqa: E402
@@ -106,7 +106,8 @@ STEP_LABEL  = "S8.4_amset2d"
 #   未设时什么都不做（AMSET 原公式），所以默认关时行为与改动前完全一样。
 # [0032] 链首一并清掉上一轮的本征产物与 mesh：关掉 WRITE_MESH / INTRINSIC_ADP_ONLY 再 retry 时，
 #   旧 intrinsic_*.json 会留在目录里、被 S8.3 当成本轮结果（retry 不删目录）。mesh 本轮会重写。
-AMSET_CMD   = ('rm -f transport.json intrinsic_transport.json intrinsic_ADP.json mesh_*.h5; '
+# [0034] 再加 overall_no*.json（OVERALL_WITHOUT 那一套）。
+AMSET_CMD   = ('rm -f transport.json intrinsic_transport.json intrinsic_ADP.json overall_no*.json mesh_*.h5; '
                'python overlap_preflight.py --in-job || exit 1; '
                'python -c "import amset2d_plugin; @AMSET_PLUGINS@'
                'from amset.log import initialize_amset_logger as L; L(); '
@@ -274,6 +275,11 @@ WRITE_MESH = True
 #   各机制散射率彼此独立，等价于单独跑 SCATTERING=[ADP]，不用再跑第二次 AMSET。隐含 WRITE_MESH=true。
 #   [0032] 默认 True；step.conf 显式写 WRITE_MESH = false 时跟着关（没有 mesh 就出不了）。
 INTRINSIC_ADP_ONLY = True
+# [0034] OVERALL_WITHOUT：同一份 mesh 再出一套"overall 去掉这些机制"，写 overall_no<机制>.json（如 overall_noODP.json），
+#   用来看某个机制对总结果的影响（2026-10-11 用户要求：只 ADP / overall / 本征 / overall 不含 ODP 四套）。
+#   出厂 "ODP"；逗号分隔可写多个（ODP,IVS -> overall_noODP_IVS.json）；off = 不出。
+#   列出的机制本次都没开（如没写 DP_OPTICAL_*）时这一套与 overall 相同，自动不出。需要 WRITE_MESH。
+OVERALL_WITHOUT = "ODP"
 # --- 弹性常数来源（amset run 的 ACD 散射需要）---
 #   MANUAL_ELASTIC 填了就用它，否则从 ELASTIC_DIR/OUTCAR 自动解析（kBar→GPa）。
 #   直接填：单个数（各向同性近似，GPa），或 6x6 列表（完整 Cij，GPa）。
@@ -363,6 +369,7 @@ SPEC = {
     #   旧写法（默认取常量、只认 true）会让 step.conf 写 false 也关不掉。
     "WRITE_MESH": (None, "bool"),
     "INTRINSIC_ADP_ONLY": (None, "bool"),   # [0018]
+    "OVERALL_WITHOUT": (None, "str"),       # [0034] None = 没写（用出厂 ODP）；off = 不出
     # 掺杂/温度范围覆盖（B4/B5 缩减设置用）：默认顶部 DOPING/TEMPERATURES；step.conf 可覆盖。
     "DOPING": (DOPING, "str"),
     "TEMPERATURES": (TEMPERATURES, "str"),
@@ -2044,6 +2051,29 @@ def resolve_intrinsic_switches(conf_mesh, conf_adp, default_mesh=True, default_a
     return mesh, adp
 
 
+
+def overall_without_set(spec, scattering):
+    """[0034] OVERALL_WITHOUT -> (要剔除的机制列表, 输出文件名)；不出这一套 -> (None, 原因)。
+    名字由机制拼成：ODP -> overall_noODP.json；ODP,IVS -> overall_noODP_IVS.json。"""
+    raw = "ODP" if spec is None else str(spec)
+    if raw.strip().lower() in ("", "off", "none", "false", "no", "0"):
+        return None, "OVERALL_WITHOUT=off"
+    mechs = []
+    for x in raw.replace(",", " ").split():
+        x = x.strip().upper()
+        if x and x not in mechs:
+            mechs.append(x)
+    bad = [m for m in mechs if m not in _ALLOWED_SCATTERING]
+    if bad:
+        sys.exit("[ERROR] OVERALL_WITHOUT 含不认识的机制 %s（允许 %s）" % (bad, sorted(_ALLOWED_SCATTERING)))
+    have = [m for m in mechs if m in [str(y).upper() for y in scattering]]
+    if not have:
+        return None, "OVERALL_WITHOUT=%s 本次都没开（SCATTERING=%s），这一套就是 overall" % (",".join(mechs), scattering)
+    if len(have) == len([str(y) for y in scattering]):
+        return None, "OVERALL_WITHOUT=%s 会把全部机制剔除" % ",".join(mechs)
+    return have, "overall_no%s.json" % "_".join(have)
+
+
 def _install_postprocess(out):
     """把 postprocess_intrinsic.py 复制进运行目录。
 
@@ -2512,7 +2542,7 @@ def main():
     cwd = Path.cwd()
     global LAYER_THICKNESS, NWORKERS, UNITY_OVERLAP, WAVEFUNCTION_FULL
     global INTERPOLATION_FACTOR, INTERPOLATION_FACTOR_EXPLICIT, SCATTERING, WRITE_MESH, DOPING, TEMPERATURES
-    global INTRINSIC_ADP_ONLY
+    global INTRINSIC_ADP_ONLY, OVERALL_WITHOUT
     global DESYM_FIX, _DESYM_FIX_ON, BANDGAP_OVERRIDE, BANDGAP_NOTE
     global EPS_INF_OVERRIDE, EPS_INF_OVERRIDE_BASIS, SYMMETRIZE_ELASTIC, ELASTIC_GUARD
     global STRUCTURE_GUARD, ALLOW_COARSE_S3
@@ -2607,6 +2637,8 @@ def main():
             #   [0032] 出厂 True；step.conf 显式写 true/false 才覆盖（SPEC 默认 None）。
             WRITE_MESH, INTRINSIC_ADP_ONLY = resolve_intrinsic_switches(
                 _p["WRITE_MESH"], _p["INTRINSIC_ADP_ONLY"], WRITE_MESH, INTRINSIC_ADP_ONLY)
+            if _p["OVERALL_WITHOUT"] is not None:           # [0034]
+                OVERALL_WITHOUT = str(_p["OVERALL_WITHOUT"])
             # [0033] ODP / IVS 的通道表、手填谷表、ADP 谷内掩码（解析与校验在 resolve_dp_optical）
             DP_OPTICAL_E = str(_p["DP_OPTICAL_E"] or "")
             DP_OPTICAL_H = str(_p["DP_OPTICAL_H"] or "")
@@ -2880,6 +2912,13 @@ def main():
         if INTRINSIC_ADP_ONLY:                  # [0018] 同一份 mesh 再出只含 ADP 的一套（复现已由上一条把关）
             _acmd = _acmd + (" && python postprocess_intrinsic.py --drop IMP,POP,PIE,ODP,IVS"
                              " --out intrinsic_ADP.json")
+        # [0034] overall 去掉 OVERALL_WITHOUT 列的机制（出厂 ODP），看它对总结果的影响
+        _ow, _ow_name = overall_without_set(OVERALL_WITHOUT, SCATTERING)
+        if _ow:
+            _acmd = _acmd + (" && python postprocess_intrinsic.py --drop %s --out %s" % (",".join(_ow), _ow_name))
+            print("[OK] 另出 %s（overall 去掉 %s，同一份 mesh 重积分）" % (_ow_name, "+".join(_ow)))
+        else:
+            print("[..] 不出 overall 去掉机制的那一套：%s" % _ow_name)
     # ★ 2026-09-28 用户批准（patch_fermi_window）：不依赖 WRITE_MESH 的费米能级窗口检查，
     #   必须放在 cp 成 transport.json **之前** —— 否则失败时 transport.json 已存在，
     #   autozt marker 判据会把失败隐藏（V63 的教训）。

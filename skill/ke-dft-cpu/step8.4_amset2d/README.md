@@ -100,6 +100,9 @@ gen（`patch_write_mesh` + `patch_intrinsic_auto`）会：
 
 **注意**：`WRITE_MESH` 只负责产出 mesh；**正确性取决于这个后处理被套用**——直接换 AMSET 环境不会自动对。
 
+**overall 去掉某些机制（[0034]）**：`OVERALL_WITHOUT`（出厂 `ODP`）列的机制本次开着时，作业链再跑
+`postprocess_intrinsic.py --drop <列表> --out overall_no<列表>.json`（如 `overall_noODP.json`），用来看该机制对总结果的影响。
+
 **只含 ADP 的一套（[0018]）**：step.conf 再写 `INTRINSIC_ADP_ONLY = true`（隐含 `WRITE_MESH = true`），作业链在上面
 的后处理之后用**同一份 mesh** 再跑 `postprocess_intrinsic.py --drop IMP,POP,PIE --out intrinsic_ADP.json`。
 各机制散射率彼此独立，等价于单独跑 `SCATTERING = [ADP]`，不用第二次 AMSET。于是一次 S8.4 出三套：
@@ -140,8 +143,26 @@ DP_OPTICAL_H = K>K:<D>@<ħω>; K>K':<D>@<ħω>; K>Γ:<D>@<ħω>; Γ>K:<D>@<ħω>
 - **ADP 谷内掩码**（`ADP_INTRAVALLEY = auto`，出厂）：开了 IVS 的载流子，ADP 只留谷内（k 与 k+q 落在同一个谷）。
   AMSET 的 ADP 对整个布里渊区的 q 积分，大 q 的 K→K′、K→Q 用长波声速和带边形变势算，既不物理、又和 IVS 重复计数。
   只开 ODP（没有谷间通道）时 auto 不掩。掩码同样作用于「只 ADP」那一套（同一个 ADP 机制）。
-- 三套结果：overall = 全部机制；`intrinsic_transport.json` = 去 IMP（含 ODP/IVS，它们是声子机制）；
-  `intrinsic_ADP.json` = 只 ADP（`--drop IMP,POP,PIE,ODP,IVS`）。S8.3 的图例、机制表自动带上 ODP/IVS。
+- **四套结果**（同一次 AMSET、同一份 mesh 重积分，S8.3 的本征图/表/μ(T) 全部带上）：
+
+  | 文件 | 含哪些机制 | 用途 |
+  |---|---|---|
+  | `intrinsic_ADP.json` | 只 ADP | 声学极限，对照文献的 ADP/DP 理论迁移率与 S8.2 DPT |
+  | `transport.json` | 全部（ADP+POP+IMP+ODP+IVS） | overall |
+  | `intrinsic_transport.json` | 去 IMP（ADP+POP+ODP+IVS） | 本征（声子限制） |
+  | `overall_noODP.json` | 去 ODP（ADP+POP+IMP+IVS） | 看 ODP 对总结果的影响（[0034]，`OVERALL_WITHOUT`） |
+
+  "只 ADP"就是把其余机制的散射率全部置零后重积分；ODP/IVS 是新加的机制，所以也在置零之列，
+  否则那一套就成了 ADP+ODP+IVS。
+- `OVERALL_WITHOUT`（[0034]）：出厂 `ODP`。写 `ODP,IVS` 得到 `overall_noODP_IVS.json`（去掉全部新加的光学/谷间散射）；
+  写 `off` 不出。列出的机制本次都没开时这一套就是 overall，自动不出。
+- **"只 ADP"与文献对得上吗**：
+  - 没写 `DP_OPTICAL_*`：ADP 与以前逐字节相同（不掩码）。
+  - 开了 IVS 的载流子，ADP 只留谷内，正是形变势理论（Bardeen–Shockley / Takagi、Kaasbjerg、Jin 2014 的声学项）
+    和 S8.2 DPT 的定义 —— 谷间散射另由 IVS（区边界声子能量 ħω）给出。所以"只 ADP"反而更接近文献口径。
+  - 量级参考：V25.5 在 MoS₂ 真实重叠上做过 K↔K′ 谷间置零的诊断（与本掩码同一思路，当时谷表只有 K/K′），
+    ADP-only 电子 250 → 311（+24%）、空穴 1070 → 1162（+9%）。谷表里有 Q 时，掩码还会去掉 K↔Q 的声学散射。
+  - 想对照开 ODP/IVS 之前的结果，直接用这个材料上一轮（没写 `DP_OPTICAL_*`）的 S8.4 结果。
 
 **跑完看日志**（`amset.log` 前面几行）：
 
