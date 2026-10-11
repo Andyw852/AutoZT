@@ -2917,6 +2917,31 @@ def fetch_material(cfg, m, only_steps=None, quiet=False, all_files=False,
         _prune_unreceived(dest, p2.stdout + "\n" + p2.stderr,
                           [sc2.get("done_marker")] if _whole else list(files) + [sc2.get("done_marker")],
                           m, s)
+        # [0034] fetch_extra：步骤产物之外的额外目录（相对步骤目录），例如 S8.3 规定格式绘图输出
+        #   写在材料根的 transport_plots/。拉回本地 result/<basename(extra)>/；集群上没有则跳过。
+        for _ex in (sc2.get("fetch_extra") or []):
+            _exdir = os.path.normpath(os.path.join(s["dir"], _ex))
+            _exdest = os.path.join(m["result_dir"], os.path.basename(_exdir))
+            os.makedirs(_exdest, exist_ok=True)
+            _exs = "" if all_files else "".join(" --exclude=%s" % shlex.quote(x)
+                                                for x in fetch_excludes(sc2))
+            _exremote = ("if [ -d %s ]; then cd %s && tar%s -cf - .;"
+                         " else tar -cf - --files-from=/dev/null; fi"
+                         % (shlex.quote(_exdir), shlex.quote(_exdir), _exs))
+            _excmd = (_ssh_cmd(cfg, s_host, [_exremote]) if s_host else ["bash", "-c", _exremote])
+            _exp1 = subprocess.Popen(_excmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+            _exp2 = subprocess.run(["tar", "xvf", "-", "-C", _exdest], stdin=_exp1.stdout,
+                                   capture_output=True, text=True, encoding="utf-8",
+                                   errors="replace")
+            _exp1.stdout.close()
+            _exrc1 = _exp1.wait()
+            _exok = (_exrc1 == 0 and (_exp2.returncode == 0
+                                      or tar_meta_only_errors(_exp2.stderr)))
+            if _exok:                                   # 9p/drvfs 的 chmod/utime 失败不算错
+                if not quiet:
+                    print("%s: fetch_extra %s → %s" % (m["name"], _ex, _exdest))
+            elif not quiet:
+                print("%s: fetch_extra %s 拉取失败，跳过。%s" % (m["name"], _ex, _exp2.stderr))
         _fetch_receipt_write(cfg, m, s)
         nstep += 1
     # v1.0：顺带把 <材料>/provenance/（每步档案 + 时间线，几 KB）拉回

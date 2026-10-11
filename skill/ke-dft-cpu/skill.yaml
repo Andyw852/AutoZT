@@ -345,6 +345,10 @@ optional_steps:
          src: step8.3_output, check: plot, run: gen,
          done_marker: comparison_300K.png,
          gen: gen_step13_output.py, gen_need: [], fetch_all: true,
+         # [0034] 规定格式绘图输出写在【材料根】的 transport_plots/（不在本步骤目录内），
+         #   由 workflow.fetch_material 的 fetch_extra 一并拉回本地 result/transport_plots/
+         #   路径相对【步骤目录】step8.3_output/：../../ = <材料>/ke-dft-cpu/../ = 材料根
+         fetch_extra: ["../../transport_plots"],
          # [0016] "?" = 软依赖：S8（2D 默认关）/ S8.4（只有 2D）在本材料工作流里就等它，不在不提示缺
          needs: ["step8_amset?", "step8.1_boltztrap", "step8.2_dpt", "step8.4_amset2d?"]}
 
