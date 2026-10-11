@@ -36,12 +36,13 @@ STEP_LABEL = "S7.2_odp"
 SUB_PREFIX = "odp-"            # 与 skill.yaml 的 fanout "odp-*" 一致
 REF_NAME = "odp-ref"
 MANIFEST = "odp_manifest.json"
-_SKILL_REV = "2026-10-11-0035-r1"
+_SKILL_REV = "2026-10-11-0035-r3"
 # 最大原子位移（Å）。0.01 Å 时强耦合的带边移动 ~10–30 meV（线性区），EDIFF=1E-8 下本征值噪声 ~1e-5 eV。
 ODP_DISP_A = 0.01
 # 极性（红外活性）模：exclude（出厂：长程 Fröhlich 耦合由 POP 管）/ include（把它们的短程形变势也算进 ODP）。
 ODP_POLAR = "exclude"
 ODP_POLAR_TOL = 0.1                  # 模有效电荷（e）大于它算极性（= odp_frozen.POLAR_TOL_E）
+ODP_POLAR_Z_TOL = 0.02               # [0035-r3] 面外模有效电荷（e）大于它也算极性（面外极性，= odp_frozen.POLAR_Z_TOL_E）
 ODP_FMIN_THZ = 0.5                   # 低于它的光学模不算（虚频/太软）（= odp_frozen.FMIN_THZ）
 # auto = 全部合格的模；或者逗号分隔的模编号（按频率升序从 1 数，看 odp_manifest.json 的 modes），简并伙伴自动补全。
 ODP_MODES = "auto"
@@ -52,6 +53,7 @@ SPEC = {
     "ODP_DISP_A": (None, "float"),
     "ODP_POLAR": (None, "str"),
     "ODP_POLAR_TOL": (None, "float"),
+    "ODP_POLAR_Z_TOL": (None, "float"),
     "ODP_FMIN_THZ": (None, "float"),
     "ODP_MODES": (None, "str"),
     "ODP_MAX_JOBS": (None, "int"),
@@ -61,7 +63,7 @@ SPEC = {
 
 def apply_conf(cwd):
     """step.conf 覆盖写进全局参数，返回 {键: 值}（写进 manifest）。"""
-    global ODP_DISP_A, ODP_POLAR, ODP_POLAR_TOL, ODP_FMIN_THZ, ODP_MODES, ODP_MAX_JOBS
+    global ODP_DISP_A, ODP_POLAR, ODP_POLAR_TOL, ODP_POLAR_Z_TOL, ODP_FMIN_THZ, ODP_MODES, ODP_MAX_JOBS
     got = {}
     if (Path(cwd) / stepconf.CONF_NAME).is_file():
         p = stepconf.load(SPEC, OUTDIR_NAME, str(cwd), strict=False)
@@ -189,17 +191,23 @@ def main():
     masses = [float(s.specie.atomic_mass) for s in base]
     try:
         modes, groups, notes = of.mode_table(freqs, eig, masses, born, polar_tol=float(ODP_POLAR_TOL),
-                                             fmin_thz=float(ODP_FMIN_THZ), include_polar=(ODP_POLAR == "include"))
+                                             fmin_thz=float(ODP_FMIN_THZ), include_polar=(ODP_POLAR == "include"),
+                                             polar_z_tol=float(ODP_POLAR_Z_TOL))
     except ValueError as e:
         sys.exit("[ERROR] S5 的声子数据不能用：%s" % e)
     for n in notes:
         print("[WARN] %s" % n)
     use = select(groups, modes)
-    print("[..] Γ 点光学模（频率升序编号）：")
+    by_index_ = {m["index"]: m for m in modes}
+    print("[..] Γ 点光学模（频率升序编号；Z = 模有效电荷，总 / 面外，e）：")
     for g in groups:
-        print("     组 %d 模 %-8s %7.3f THz = %6.2f meV  %s%s" % (
+        zt = max((by_index_[i]["Z_mode_e"] or 0.0) for i in g["modes"]) if born is not None else None
+        zz = max((by_index_[i]["Z_mode_z_e"] or 0.0) for i in g["modes"]) if born is not None else None
+        print("     组 %d 模 %-8s %7.3f THz = %6.2f meV  Z=%s  %s%s" % (
             g["group"], ",".join(map(str, g["modes"])), g["freq_THz"], g["hw_meV"],
-            "极性 " if g["polar"] else "", "算" if g["use"] else "不算：%s" % g["why"]))
+            "—" if zt is None else "%.3f/%.3f" % (zt, zz),
+            ("%s极性 " % (by_index_[g["modes"][0]]["polar_kind"] or "")) if g["polar"] else "",
+            "算" if g["use"] else "不算：%s" % g["why"]))
     if not use and born is None and ODP_POLAR != "include":
         sys.exit("[ERROR] 读不到 S5 的 Born 有效电荷（OUTCAR 里没有 BORN EFFECTIVE CHARGES？S5 要 LEPSILON=.TRUE.），"
                  "判不了哪些模是极性的：先查/重跑 S5；确认要把全部光学模都算上（含极性模的短程形变势）就在 S7.2 的 "
@@ -269,6 +277,7 @@ def main():
     manifest = {
         "schema": "odp_manifest/1", "skill_rev": _SKILL_REV, "created": _time.strftime("%Y-%m-%d %H:%M:%S"),
         "disp_max_A": float(ODP_DISP_A), "polar": ODP_POLAR, "polar_tol_e": float(ODP_POLAR_TOL),
+        "polar_z_tol_e": float(ODP_POLAR_Z_TOL),
         "fmin_THz": float(ODP_FMIN_THZ), "overrides": overrides,
         "masses_amu": masses, "species": [str(s.specie) for s in base],
         "modes": [{k: v for k, v in m.items() if not k.startswith("_")} for m in modes],

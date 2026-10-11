@@ -32,7 +32,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 # [SKILL_REV] 版本戳：写进 settings.yaml 头，便于从结果反查跑的是哪份 skill 副本。
-_SKILL_REV = "2026-10-11-0035-r2"   # [0035-r2] 冻声子优先、手填谷内只作对照；[0035-r1] 复审：交叉拒绝、并星平均、τ 挪到 transport.json 之后；[0035] 冻声子 ODP 参数（ODP_FROZEN）+ τ(E)（tau_energy.py）   # [0034-r3] 二审：重复星按 S8.2 k_grid 合并；显式 SCATTERING+掩码的日志   # [0034-r2] 复审：同中心谷合并、显式 SCATTERING 照办、PIE 与 settings 一致   # [0034] OVERALL_WITHOUT（出厂 ODP）-> overall_noODP.json   # [0033] ODP/谷间散射（常数形变势，step.conf DP_OPTICAL_E/H）+ ADP 谷内掩码   # [0032-r2] 复审：链首清旧本征产物与 mesh；SCATTERING 无 ADP 不出只 ADP   # [0032] WRITE_MESH/INTRINSIC_ADP_ONLY 2D 默认开（旧：2026-09-28-desym-fix V115）
+_SKILL_REV = "2026-10-11-0035-r3"   # [0035-r3] 复审：not_in_scattering 只认显式排除、D 全低于阈值仍建记录、面外极性；[0035-r2] 冻声子优先、手填谷内只作对照；[0035-r1] 复审：交叉拒绝、并星平均、τ 挪到 transport.json 之后；[0035] 冻声子 ODP 参数（ODP_FROZEN）+ τ(E)（tau_energy.py）   # [0034-r3] 二审：重复星按 S8.2 k_grid 合并；显式 SCATTERING+掩码的日志   # [0034-r2] 复审：同中心谷合并、显式 SCATTERING 照办、PIE 与 settings 一致   # [0034] OVERALL_WITHOUT（出厂 ODP）-> overall_noODP.json   # [0033] ODP/谷间散射（常数形变势，step.conf DP_OPTICAL_E/H）+ ADP 谷内掩码   # [0032-r2] 复审：链首清旧本征产物与 mesh；SCATTERING 无 ADP 不出只 ADP   # [0032] WRITE_MESH/INTRINSIC_ADP_ONLY 2D 默认开（旧：2026-09-28-desym-fix V115）
 # 复制来源（gen_step10_amset.py 的 _SKILL_REV），用于人工比对两份文件是否同步
 _SOURCE_GEN_REV = "2026-10-08-2d-raw-elastic"   # [0014] S8 的 2D 弹性改为原始 slab 值，与本步一致
 import stepconf  # noqa: E402
@@ -1342,6 +1342,8 @@ def resolve_dp_optical(cwd: Path):
             f_use[car] = "off" if fmode == "off" else "unavailable"
         elif not fz_ok:
             f_use[car] = "unavailable"
+        if str(v_spec or "").strip() and fmode != "off":
+            f_use[car] = "manual_valleys"     # [0035-r3] 手填谷表：冻声子参数永远用不上（不论现在有没有），记下来免得以后误重排
         if not chs and not want_frozen:
             continue
         raw = None
@@ -1414,6 +1416,9 @@ def resolve_dp_optical(cwd: Path):
                            "summary": of.describe(frozen, car, norm=dpo.norm_label, keep=keep,
                                                   dmin=float(ODP_FROZEN_DMIN), alias=alias)}
             print("[OK] %s 冻声子 ODP（%s）：%s" % (car, ODP_FROZEN_SRC, f_info[car]["summary"]))
+            if not fchs:
+                print("[..] %s：冻声子谷内 D 全部 < %.2f eV/Å（对称性禁戒），本载流子没有谷内 ODP 通道"
+                      % (car, float(ODP_FROZEN_DMIN)))
             if manual_intra:
                 f_info[car]["manual_reference"] = [{"valley": c["from"], "D_eV_A": c["D_eV_A"], "hw_meV": c["hw_meV"]}
                                                    for c in manual_intra]
@@ -1426,8 +1431,8 @@ def resolve_dp_optical(cwd: Path):
                           % (lab, ", ".join("%.2f eV/Å@%.1f meV" % (c["D_eV_A"], c["hw_meV"]) for c in man_),
                              ", ".join("%.2f eV/Å@%.1f meV" % (c["D_eV_A"], c["hw_meV"]) for c in fz_)
                              or "无（全部 D < %.2f eV/Å，对称性禁戒）" % float(ODP_FROZEN_DMIN)))
-            if not chs:
-                continue
+            # [0035-r3] 冻声子 D 全部低于阈值、又没有手填谷间通道时 chs 为空：照样建 rec[car]（ADP_INTRAVALLEY=on 的
+            #   掩码要它；冻声子记录与手填对照也要落盘），没有通道的载流子由后面按 mode 统一处理。
         try:
             dpo.check_channels(chs, vs)
         except ValueError as e:
@@ -1436,8 +1441,19 @@ def resolve_dp_optical(cwd: Path):
         if car in f_info:
             rec[car]["frozen"] = f_info[car]
         kinds_on |= {c["kind"] for c in chs}
+    # [0035-r3] 只有显式 SCATTERING 把 ODP 排除了，冻声子参数才算"没用上"（not_in_scattering，参数再变也不重排）；
+    #   以前按"本次没有谷内通道"判，冻声子 D 全部低于阈值时也被记成 not_in_scattering、指纹被丢掉，参数以后变大也不会重排。
+    odp_allowed = not (_SCATTERING_EXPLICIT and "ODP" not in [str(x).upper() for x in SCATTERING])
+    if not odp_allowed:
+        for car in list(f_use):
+            if f_use[car] == "used":
+                f_use[car] = "not_in_scattering"
+                f_digest.pop(car, None)
+                if car in rec:
+                    rec[car].pop("frozen", None)
     _DP_OPTICAL_FROZEN_REC = {"mode": fmode, "source": ODP_FROZEN_SRC, "dmin_eV_A": float(ODP_FROZEN_DMIN),
-                              "frozen_use": f_use, "digest": f_digest}
+                              "frozen_use": f_use, "digest": f_digest, "odp_allowed": odp_allowed,
+                              "info": {c: f_info[c] for c in f_info if f_use.get(c) == "used"}}
     kinds_of = {"ODP": {"intra"}, "IVS": {"inter_star", "inter"}}
     want = [m for m in ("ODP", "IVS") if kinds_on & kinds_of[m]]
     asked = [m for m in ("ODP", "IVS") if m in SCATTERING and m not in want]
@@ -1460,10 +1476,6 @@ def resolve_dp_optical(cwd: Path):
     active = set().union(*[kinds_of[m] for m in want]) if want else set()
     for car in list(rec):         # 不生效的通道不进记录（插件横幅/谷间掩码都按记录走）
         rec[car]["channels"] = [c for c in rec[car]["channels"] if c["kind"] in active]
-        if f_use.get(car) == "used" and "intra" not in active:     # [0035] 冻声子通道被显式 SCATTERING 关掉了
-            f_use[car] = "not_in_scattering"
-            f_digest.pop(car, None)
-            rec[car].pop("frozen", None)
         if not rec[car]["channels"] and mode != "on":
             rec.pop(car)
     if not rec:

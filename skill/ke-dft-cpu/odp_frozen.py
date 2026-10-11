@@ -40,6 +40,10 @@ CROSS_ABS = 0.05                  # 交叉核对：绝对差上限（(eV/Å)²�
 FREQ_DEG_THZ = 0.05               # 声子简并判据（ħω 相差 < 0.2 meV）
 ACOUSTIC_WEIGHT = 0.5             # 本征矢在平移子空间上的投影权重 > 它 = 声学模
 POLAR_TOL_E = 0.1                 # 模有效电荷 |Σ Z*·U|/|U|（e）> 它 = 极性模
+# [0035-r3] 面外分量单独判：面外偶极弱（MoS₂ 的 A2″ 总模有效电荷 < 0.1 e）也要认出来。它不在二维 POP 里（POP 只用面内
+#   极性模），有 σh 的材料里它对谷内一阶耦合是对称性禁戒的；位移还会产生面外偶极、真空区出现斜坡。默认不算。
+#   对称的非极性模（A1′/E″）的面外偶极按对称性精确为零（数值上 ~1e-3 e），0.02 e 留了一个数量级的余量。
+POLAR_Z_TOL_E = 0.02
 FMIN_THZ = 0.5                    # 低于它的光学模（含虚频）不算：ħω -> 0 时 1/ω 发散，参数也不可信
 DMIN_EV_A = 0.05                  # S8.4 用：D 小于它的通道不进 SCATTERING（对称性禁戒的模，贡献 < 0.1%）
 SPREAD_WARN = 0.10                # 星内各成员谷 Σ D² 的相对离散度超过它 -> 告警（对称等价的谷应相同）
@@ -66,7 +70,7 @@ def check_eigvecs(eigvecs, tol_norm=1e-3, tol_orth=1e-2):
 
 
 def mode_table(freqs_thz, eigvecs, masses_amu, born=None, polar_tol=POLAR_TOL_E, fmin_thz=FMIN_THZ,
-               deg_thz=FREQ_DEG_THZ, include_polar=False):
+               deg_thz=FREQ_DEG_THZ, include_polar=False, polar_z_tol=POLAR_Z_TOL_E):
     """Γ 点声子模 -> (modes, groups, notes)。按频率升序编号（index 从 1 起）。
 
     modes[i]：index、freq_THz、hw_meV、trans_weight（平移子空间投影）、acoustic、Z_mode_e（模有效电荷，无 Born 电荷为 None）、
@@ -111,7 +115,9 @@ def mode_table(freqs_thz, eigvecs, masses_amu, born=None, polar_tol=POLAR_TOL_E,
                       "trans_weight": float(tw[i]), "acoustic": bool(acoustic[i]),
                       "Z_mode_e": None if zmode is None else float(zmode[i]),
                       "Z_mode_z_e": None if zz is None else float(zz[i]),
-                      "polar": bool(zmode is not None and zmode[i] > polar_tol),
+                      "polar": bool(zmode is not None and (zmode[i] > polar_tol or zz[i] > polar_z_tol)),
+                      "polar_kind": (None if zmode is None or not (zmode[i] > polar_tol or zz[i] > polar_z_tol)
+                                     else ("面外" if zz[i] > polar_z_tol and zz[i] >= 0.5 * zmode[i] else "面内")),
                       "group": None, "_src": int(i)})
     # 简并分组：频率相差 < deg_thz 且极性相同（真简并的伙伴属于同一个不可约表示，极性必相同；
     #   偶然近简并的极性/非极性两个模不能并组，否则非极性的那个会跟着被当成极性剔掉）。
@@ -146,8 +152,14 @@ def mode_table(freqs_thz, eigvecs, masses_amu, born=None, polar_tol=POLAR_TOL_E,
         elif g["polar"] is None and not include_polar:
             why = "没有 Born 有效电荷，判不了极性（ODP_POLAR=include 则不判、全算）"
         elif g["polar"] and not include_polar:
-            why = "极性模（模有效电荷 %.2f e > %.2f）：长程耦合由 POP 管（ODP_POLAR=include 才算）" % (
-                max(by_index[i]["Z_mode_e"] for i in g["modes"]), polar_tol)
+            kinds = {by_index[i]["polar_kind"] for i in g["modes"]}
+            zt = max(by_index[i]["Z_mode_e"] for i in g["modes"])
+            zz = max(by_index[i]["Z_mode_z_e"] for i in g["modes"])
+            if kinds == {"面外"}:
+                why = ("面外极性模（面外模有效电荷 %.3f e > %.2f）：二维 POP 不含它；有 σh 的材料里它对谷内一阶耦合是"
+                       "对称性禁戒的（D≈0），位移还会产生面外偶极（ODP_POLAR=include 才算）" % (zz, polar_z_tol))
+            else:
+                why = "极性模（模有效电荷 %.2f e > %.2f）：长程耦合由 POP 管（ODP_POLAR=include 才算）" % (zt, polar_tol)
         g["use"] = why is None
         g["why"] = why
     return modes, groups, notes
@@ -266,22 +278,30 @@ def vacuum_window(zfrac, half_ratio=0.25):
     return (c - w) % 1.0, (c + w) % 1.0
 
 
-def vacuum_level(planar, zfrac, half_ratio=0.25, flat_tol=1e-3):
-    """planar：沿真空轴的平面平均静电势（eV，n 个格点，第 j 个在分数坐标 j/n）。返回 (平均, 标准差)。
-    窗口可以跨 z = 1 边界。不平坦（std > flat_tol）-> ValueError（偶极层/取到 slab 尾巴，对齐不可信）。"""
+def vacuum_level(planar, zfrac, half_ratio=0.25, flat_tol=1e-3, return_slope=False):
+    """planar：沿真空轴的平面平均静电势（eV，n 个格点，第 j 个在分数坐标 j/n）。返回 (真空区中点的值, 去线性后的残差 std)，
+    return_slope=True 时再加斜率（eV/分数坐标）。窗口以真空间隙中心为对称中心，可以跨 z = 1 边界。
+
+    [0035-r3] 平坦度按"扣掉线性斜坡后的残差"判：周期性 slab 有面外偶极时（面外极性模的位移、Janus），真空区电势是一段
+    直线（补偿电场），中点值 = 两侧真空能级的平均。对有 σh 的材料，±u 两个构型的中点值相同，面外模的 D 正确地为 0。
+    残差 > flat_tol（取到 slab 尾巴、窗口里不是直线）-> ValueError。"""
     v = np.asarray(planar, float)
     n = len(v)
     a, b = vacuum_window(zfrac, half_ratio)
     z = np.arange(n) / float(n)
     sel = (z >= a) & (z <= b) if a <= b else (z >= a) | (z <= b)
-    if sel.sum() < 2:
+    if sel.sum() < 3:
         raise ValueError("真空窗口里只有 %d 个格点（LOCPOT 网格太粗？）" % int(sel.sum()))
+    c = (a + ((b - a) % 1.0) / 2.0) % 1.0                         # 窗口（真空间隙）中心
+    dz = z[sel] - c
+    dz -= np.round(dz)                                             # 以中心为原点、跨边界展开
     seg = v[sel]
-    sd = float(np.std(seg))
+    slope, mid = np.polyfit(dz, seg, 1)
+    sd = float(np.std(seg - (mid + slope * dz)))
     if sd > flat_tol:
-        raise ValueError("真空区平面平均势不平坦 std=%.3g eV（> %.0e）：可能有面外偶极（极性面外模）或取到了 slab 尾巴"
+        raise ValueError("真空区平面平均势扣掉线性斜坡后仍不平坦 std=%.3g eV（> %.0e）：可能取到了 slab 尾巴"
                          % (sd, flat_tol))
-    return float(np.mean(seg)), sd
+    return (float(mid), sd, float(slope)) if return_slope else (float(mid), sd)
 
 
 # ---------------------------------------------------------------------------

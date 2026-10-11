@@ -33,12 +33,13 @@ DIELECT_DIR = "step5_dielect"
 DPT_RESULT = "step8.2_dpt/dpt_result.json"
 MANIFEST = "odp_manifest.json"
 REF_NAME = "odp-ref"
-_SKILL_REV = "2026-10-11-0035-r1"
+_SKILL_REV = "2026-10-11-0035-r3"
 REF_TOL_EV = 0.005            # odp-ref 与 S7 undeformed 同一 k、同一带的本征值差上限
 SNAP_TOL_INVA = 0.02          # 旧 S8.2（没有 k_S7）时把 k_grid 吸附到本步网格的容差（Å⁻¹）
 SHIFT_WARN_EV = 0.1           # 带边移动超过它：出线性区，建议减小 ODP_DISP_A
 FREQ_WARN = 0.02              # S5 现在的频率与生成时相差超过它 -> 告警
 FREQ_FAIL = 0.05              # ……超过它 -> 报错（位移用的是旧本征矢，要 retry S7.2）
+DIPOLE_NOTE_EV = 0.005        # [0035-r3] 真空区斜坡（每胞）超过它就提示该构型有面外偶极
 VAC_CACHE = "vacuum_levels.json"   # 各构型真空能级缓存（按 vasprun.xml 的 sha256 认）：LOCPOT 清掉后 S8.21 重读照样能跑
 OUTCAR_DONE = "General timing and accounting informations"
 
@@ -92,13 +93,15 @@ class Config(object):
             planar = np.asarray(Locpot.from_file(str(lp)).get_average_along_axis(vac_axis))
             zf = np.asarray(self.structure.frac_coords)[:, vac_axis]
             try:
-                self.vac, self.vac_std = of.vacuum_level(planar, zf)
+                self.vac, self.vac_std, self.vac_slope = of.vacuum_level(planar, zf, return_slope=True)
             except ValueError as e:
                 _die("%s/%s：%s" % (SRC_DIR, d.name, e))
             if cache is not None:
-                cache[d.name] = {"vasprun_sha256": key, "vac_eV": self.vac, "std_eV": self.vac_std}
+                cache[d.name] = {"vasprun_sha256": key, "vac_eV": self.vac, "std_eV": self.vac_std,
+                                 "slope_eV": self.vac_slope}
         elif ent.get("vasprun_sha256") == key:
             self.vac, self.vac_std = float(ent["vac_eV"]), float(ent["std_eV"])
+            self.vac_slope = float(ent.get("slope_eV", 0.0))
             print("[..] %s：LOCPOT 已清，用上次读出的真空能级（%s，vasprun.xml 未变）" % (d.name, VAC_CACHE))
         else:
             _die("缺 %s/%s/LOCPOT，也没有这次运行的真空能级缓存（%s/%s）：真空对齐要它。INCAR 要 LVHAR=.TRUE.；"
@@ -305,7 +308,12 @@ def main():
         if not d.is_dir():
             _die("缺 %s/%s（manifest 里有，目录没了）" % (SRC_DIR, nm))
         cfg[nm] = Config(d, vac_axis, cache)
-        print("[..] %-12s 真空能级 %.5f eV（std %.1e）" % (nm, cfg[nm].vac, cfg[nm].vac_std))
+        slope = float(getattr(cfg[nm], "vac_slope", 0.0))
+        print("[..] %-12s 真空能级 %.5f eV（去斜坡残差 %.1e，真空区斜坡 %+.1f meV/胞）"
+              % (nm, cfg[nm].vac, cfg[nm].vac_std, 1000 * slope))
+        if abs(slope) > DIPOLE_NOTE_EV:
+            print("[..] %s 有面外偶极（真空区斜坡 %+.1f meV/胞）：取真空区中点为参考（两侧真空能级的平均）"
+                  % (nm, 1000 * slope))
     (out / VAC_CACHE).write_text(json.dumps(cache, indent=1), encoding="utf-8")
     s7ref = None
     und = cwd / DEFORM_DIR / "undeformed"

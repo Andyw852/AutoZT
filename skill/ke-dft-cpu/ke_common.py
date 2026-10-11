@@ -826,17 +826,26 @@ def invalidate_dp_optical_valleys(cwd, dpt_res, consumer="step8.4_amset2d"):
 ODP_PARAMS_SRC = "step8.21_odp_read/odp_params.json"   # [0035] 冻声子 ODP 参数（gen_step14 的 ODP_FROZEN_SRC）
 
 
-def odp_consumer_stale(rec, params):
+def odp_consumer_stale(rec, params, full=None):
     """[0035] S8.4 的 2d_correction.json 里 dp_optical_frozen 记录 vs 新的 odp_params.json -> 需要重排的载流子列表。
 
-    rec = {"frozen_use": {载流子: 决定}, "digest": {载流子: 用过的参数指纹}}。每个载流子看 S8.4 当时的决定：
+    rec = {"frozen_use": {载流子: 决定}, "digest": {载流子: 用过的参数指纹}, "odp_allowed": bool}；
+    full = 整份 2d_correction.json（判旧记录用）。每个载流子看 S8.4 当时的决定：
       used（用了冻声子参数）  -> 指纹变了（或新参数不可用了）才重排；
       off / manual_valleys / not_in_scattering（关掉、手填谷表、显式 SCATTERING 不含 ODP）-> 不动；
       unavailable、manual 或没有记录（S8.4 在参数出来之前跑的、0035-r1 之前"手填谷内优先"的旧口径、旧版 S8.4）
-        -> 新参数可用就重排（[0035-r2] 起冻声子参数优先，开了 odp_frozen 就该用上）。"""
+        -> 新参数可用就重排（[0035-r2] 起冻声子参数优先，开了 odp_frozen 就该用上）。
+    [0035-r3] 现在的规则下用不上冻声子参数的不重排（重排只会得到一样的结果、白跑几小时 AMSET）：
+      记录写明 odp_allowed=False（显式 SCATTERING 不含 ODP）；旧记录里该载流子用的是手填谷表
+      （dp_optical.<载流子>.valleys_source 以 "step.conf" 开头）；旧 manual 记录而 mechanisms_2d 没有 ODP
+      （有手填谷内通道却没开 ODP，只能是显式 SCATTERING 排除了它）。"""
     import odp_frozen as _of
-    use = (rec or {}).get("frozen_use") or {}
-    dig = (rec or {}).get("digest") or {}
+    rec = rec or {}
+    full = full or {}
+    use = rec.get("frozen_use") or {}
+    dig = rec.get("digest") or {}
+    dp = full.get("dp_optical") or {}
+    mech = [str(x).upper() for x in (full.get("mechanisms_2d") or [])]
     out = []
     for car in ("electron", "hole"):
         new = _of.params_digest(params, car)
@@ -844,8 +853,16 @@ def odp_consumer_stale(rec, params):
         if how == "used":
             if dig.get(car) != new:
                 out.append(car)
-        elif how in (None, "unavailable", "manual") and new is not None:
-            out.append(car)
+            continue
+        if how not in (None, "unavailable", "manual") or new is None:
+            continue
+        if rec.get("odp_allowed") is False:
+            continue
+        if str(((dp.get(car) or {}).get("valleys_source")) or "").startswith("step.conf"):
+            continue
+        if how == "manual" and full and "ODP" not in mech:
+            continue
+        out.append(car)
     return out
 
 
@@ -860,7 +877,7 @@ def invalidate_odp_consumer(cwd, params, consumer="step8.4_amset2d"):
         rec = _json.loads((d / "2d_correction.json").read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return []
-    changed = odp_consumer_stale(rec.get("dp_optical_frozen") or {}, params)
+    changed = odp_consumer_stale(rec.get("dp_optical_frozen") or {}, params, full=rec)
     if not changed:
         return []
     busy = _dir_busy(d, _active_job_dirs())

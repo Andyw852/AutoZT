@@ -232,9 +232,13 @@ def test_vacuum_level(of):
     v = np.where((z > 0.2) & (z < 0.85), 4.321, -10.0 * np.exp(-((z - 0.03) % 1.0) ** 2 / 0.002))
     mean, sd = of.vacuum_level(v, atoms)
     assert mean == pytest.approx(4.321) and sd < 1e-12
-    ramp = v + np.where((z > 0.2) & (z < 0.85), 0.5 * z, 0.0)  # 面外偶极 -> 真空区斜坡
+    # [0035-r3] 面外偶极 -> 真空区一段直线（周期性补偿电场）：允许，取中点（= 两侧真空能级的平均）
+    ramp = v + np.where((z > 0.2) & (z < 0.85), 0.5 * (z - 0.525), 0.0)
+    mean, sd, slope = of.vacuum_level(ramp, atoms, return_slope=True)
+    assert mean == pytest.approx(4.321) and slope == pytest.approx(0.5) and sd < 1e-12
+    bump = v + np.where((z > 0.2) & (z < 0.85), 0.02 * np.cos(2 * np.pi * (z - 0.525) / 0.3), 0.0)   # 不是直线
     with pytest.raises(ValueError):
-        of.vacuum_level(ramp, atoms)
+        of.vacuum_level(bump, atoms)
 
 
 def test_mode_table_rejects_non_orthonormal(of):
@@ -256,6 +260,28 @@ def test_mode_table_polar_and_soft_selection(of):
     assert all(g["use"] for g in g_nbi)
     _m, g_soft, _n = of.mode_table(f, E, MASS, born, fmin_thz=1e6)
     assert not any(g["use"] for g in g_soft)
+
+
+def test_out_of_plane_polar_mode_is_recognised(of):
+    """[0035-r3] MoS₂ 的 A2″：面外偶极弱（总模有效电荷 < 0.1 e），原来被当成非极性算进去。现在面外分量单独判。"""
+    f, E = _phonons()
+    weak = np.array([np.diag([-2.0, -2.0, -0.06]), np.diag([1.0, 1.0, 0.03]), np.diag([1.0, 1.0, 0.03])])
+    modes, groups, _n = of.mode_table(f, E, MASS, weak)
+    a2 = np.zeros((3, 3))
+    a2[0, 2] = 1.0
+    a2[1, 2] = a2[2, 2] = -1.0                                  # M 对 X 沿 z（A2″ 型）
+    ia2 = _mode(E, a2)
+    m = next(x for x in modes if x["_src"] == ia2)
+    assert m["Z_mode_e"] < of.POLAR_TOL_E < 1 and m["Z_mode_z_e"] > of.POLAR_Z_TOL_E
+    assert m["polar"] and m["polar_kind"] == "面外"
+    g = next(x for x in groups if m["index"] in x["modes"])
+    assert not g["use"] and "面外极性模" in g["why"]
+    a1 = np.zeros((3, 3))
+    a1[1, 2], a1[2, 2] = 1, -1
+    m1 = next(x for x in modes if x["_src"] == _mode(E, a1))
+    assert not m1["polar"] and m1["Z_mode_z_e"] < 1e-9               # A1′：面外偶极按对称性为零
+    _m, g_inc, _n = of.mode_table(f, E, MASS, weak, include_polar=True)
+    assert next(x for x in g_inc if m["index"] in x["modes"])["use"]
 
 
 def test_combine_members_and_degenerate_pairs(of):
@@ -310,6 +336,16 @@ def test_odp_consumer_stale(kc, of):
     for how in ("off", "manual_valleys", "not_in_scattering"):
         assert st({"frozen_use": {"electron": how}}, p) == []
     assert st({"frozen_use": {"electron": "manual"}}, p) == ["electron"]       # [0035-r2] 旧口径"手填优先" -> 改用算出来的
+    # [0035-r3] 现在的规则下也用不上冻声子参数的旧记录：不重排（只会白跑几小时得到一样的结果）
+    man = {"frozen_use": {"electron": "manual"}}
+    assert st(man, p, full={"dp_optical": {"electron": {"valleys_source": "step.conf DP_OPTICAL_VALLEYS_E"}},
+                            "mechanisms_2d": ["ADP", "ODP"]}) == []
+    assert st(man, p, full={"dp_optical": {"electron": {"valleys_source": "step8.2_dpt/dpt_result.json"}},
+                            "mechanisms_2d": ["ADP", "IVS"]}) == []                  # 显式 SCATTERING 排除了 ODP
+    assert st(man, p, full={"dp_optical": {"electron": {"valleys_source": "step8.2_dpt/dpt_result.json"}},
+                            "mechanisms_2d": ["ADP", "ODP"]}) == ["electron"]
+    assert st({"frozen_use": {"electron": "unavailable"}, "odp_allowed": False}, p) == []
+    assert st({"frozen_use": {"electron": "manual_valleys"}}, p) == []
     gone = {"schema": "odp_params/1", "carriers": {"electron": {"status": "no_valleys"}}}
     assert st({"frozen_use": {"electron": "used"}, "digest": {"electron": dg}}, gone) == ["electron"]
 
@@ -342,7 +378,7 @@ def _gen(monkeypatch, **conf):
     return g
 
 
-def _dpt_and_params(tmp_path, kc, shift=False):
+def _dpt_and_params(tmp_path, kc, shift=False, d_e=4.2):
     K = [[1 / 3, 1 / 3, 0], [-1 / 3, -1 / 3, 0]]
     vs = [{"label": "K", "g": 2, "dE_eV": 0.0, "k_frac": K, "k_grid": K, "spin": "up", "band_index": 9}]
     (tmp_path / "step8.2_dpt").mkdir(parents=True, exist_ok=True)
@@ -353,7 +389,7 @@ def _dpt_and_params(tmp_path, kc, shift=False):
     sig = {"use_grid": True, "sig": json.loads(json.dumps(kc._valley_sig(vs_p, True)))}
     p = {"schema": "odp_params/1", "carriers": {
         "electron": {"status": "ok", "valley_sig": sig, "valleys": [
-            {"label": "K", "groups": [{"group": 2, "D_eV_A": 4.2, "hw_meV": 49.5},
+            {"label": "K", "groups": [{"group": 2, "D_eV_A": d_e, "hw_meV": 49.5},
                                       {"group": 1, "D_eV_A": 0.0, "hw_meV": 35.0}]}]},
         "hole": {"status": "ok", "valley_sig": sig, "valleys": [
             {"label": "K", "groups": [{"group": 2, "D_eV_A": 2.5, "hw_meV": 49.5}]}]}}}
@@ -401,6 +437,51 @@ def test_gen_frozen_wins_manual_intra_is_reference(tmp_path, monkeypatch, kc, ca
     g = _gen(monkeypatch, DP_OPTICAL_E="K>K:3.0@50; M>M:1@40")
     with pytest.raises(SystemExit):
         g.resolve_dp_optical(tmp_path)
+
+
+def test_gen_frozen_below_dmin_keeps_record_and_digest(tmp_path, monkeypatch, kc, of):
+    """[0035-r3] 复审：冻声子 D 全部低于阈值 + 手填谷内/谷间（0033 的写法），默认 SCATTERING：不能记成 not_in_scattering、
+    丢指纹（否则参数以后变大也不重排）；手填对照要落盘。"""
+    p = _dpt_and_params(tmp_path, kc, d_e=0.01)
+    g = _gen(monkeypatch, DP_OPTICAL_E="K>K:3.0@50; K>K':2.0@45")
+    rec = g.resolve_dp_optical(tmp_path)
+    fr = g._DP_OPTICAL_FROZEN_REC
+    assert fr["frozen_use"]["electron"] == "used" and fr["digest"]["electron"] == of.params_digest(p, "electron")
+    assert fr["odp_allowed"] is True
+    assert fr["info"]["electron"]["manual_reference"] == [{"valley": "K", "D_eV_A": 3.0, "hw_meV": 50.0}]
+    assert [c["kind"] for c in rec["electron"]["channels"]] == ["inter_star"]          # 只剩手填谷间
+    p2 = json.loads((tmp_path / "step8.21_odp_read" / "odp_params.json").read_text())
+    p2["carriers"]["electron"]["valleys"][0]["groups"][0]["D_eV_A"] = 4.2                # 以后参数变大：要重排
+    assert kc.odp_consumer_stale(fr, p2, full={"dp_optical": rec, "mechanisms_2d": g.SCATTERING}) == ["electron"]
+
+
+def test_gen_frozen_below_dmin_mask_on_and_explicit_scattering(tmp_path, monkeypatch, kc):
+    """[0035-r3] 复审：严格对照（显式 SCATTERING = ADP、ADP_INTRAVALLEY = on），电子冻声子 D 全部低于阈值：
+    电子的 ADP 谷内掩码不能丢；显式排除了 ODP -> not_in_scattering。"""
+    _dpt_and_params(tmp_path, kc, d_e=0.01)
+    g = _gen(monkeypatch, SCATTERING=["ADP"], _SCATTERING_EXPLICIT=True, ADP_INTRAVALLEY="on",
+             DP_OPTICAL_E="K>K:3.0@50", DP_OPTICAL_H="K>K:2.0@50")
+    rec = g.resolve_dp_optical(tmp_path)
+    assert rec["adp_intravalley"] == {"electron": True, "hole": True}
+    assert g._DP_OPTICAL_FROZEN_REC["frozen_use"] == {"electron": "not_in_scattering", "hole": "not_in_scattering"}
+    assert g._DP_OPTICAL_FROZEN_REC["odp_allowed"] is False and g.SCATTERING == ["ADP"]
+    # 显式要 ODP，可冻声子 D 全低于阈值、手填谷内只作对照：报错并提示 ODP_FROZEN = off
+    g = _gen(monkeypatch, SCATTERING=["ADP", "ODP"], _SCATTERING_EXPLICIT=True, DP_OPTICAL_E="K>K:3.0@50")
+    p = json.loads((tmp_path / "step8.21_odp_read" / "odp_params.json").read_text())
+    p["carriers"]["hole"] = {"status": "no_valleys"}
+    (tmp_path / "step8.21_odp_read" / "odp_params.json").write_text(json.dumps(p))
+    with pytest.raises(SystemExit) as e:
+        g.resolve_dp_optical(tmp_path)
+    assert "ODP_FROZEN = off" in str(e.value)
+
+
+def test_gen_manual_valleys_keep_manual_intra(tmp_path, monkeypatch, kc):
+    """手填谷表的载流子：冻声子参数用不上，手填谷内通道照用（README 写明的行为）。"""
+    _dpt_and_params(tmp_path, kc)
+    g = _gen(monkeypatch, DP_OPTICAL_E="K>K:3.0@50", DP_OPTICAL_VALLEYS_E="K:0.3333,0.3333,0|-0.3333,-0.3333,0")
+    rec = g.resolve_dp_optical(tmp_path)
+    assert g._DP_OPTICAL_FROZEN_REC["frozen_use"]["electron"] == "manual_valleys"
+    assert [c["D_eV_A"] for c in rec["electron"]["channels"]] == [3.0] and "frozen" not in rec["electron"]
 
 
 def test_gen_frozen_off_explicit_and_stale(tmp_path, monkeypatch, kc):
