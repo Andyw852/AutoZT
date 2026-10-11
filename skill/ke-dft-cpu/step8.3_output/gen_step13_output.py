@@ -69,11 +69,10 @@ N2D_INTERPRET_MAX_REF = 1.0e14    # cm^-2：仅作 2D 输出的参考对照（Mo
 
 
 def _cell_geometry(cwd):
-    """(A_cell [cm²], V_cell [cm³], num_atoms)：从 step3_uniform 的 CONTCAR/POSCAR 读晶胞。
+    """(A_cell [cm²], V_cell [cm³])：从 step3_uniform 的 CONTCAR/POSCAR 读晶胞。
 
-    2D 用 A = |a×b|（面内），3D 用 V = |a·(b×c)|；num_atoms 从 POSCAR 第 6/7 行元素数量读
-    （[0032] 每原子可解读判据用，VASP5 第 7 行 / VASP4 第 6 行，读不到返回 None）。
-    读不到返回 (None, None, None)——那种情况下不做每胞/每原子判据，只保留面密度列。
+    2D 用 A = |a×b|（面内），3D 用 V = |a·(b×c)|。读不到返回 (None, None)——
+    那种情况下不做每胞判据，只保留面密度列。
     """
     import glob as _glob
     cands = []
@@ -85,15 +84,6 @@ def _cell_geometry(cwd):
             ln = Path(p).read_text(errors="ignore").splitlines()
             s = float(ln[1].split()[0])
             L = [[float(x) * s for x in ln[2 + i].split()[:3]] for i in range(3)]
-            nat = None
-            for _i in (6, 5):                       # VASP5 第 7 行 / VASP4 第 6 行
-                try:
-                    toks = ln[_i].split()
-                except IndexError:
-                    continue
-                if toks and all(_is_int(t) for t in toks):
-                    nat = sum(int(t) for t in toks)
-                    break
         except (OSError, IndexError, ValueError):
             continue
         a, b, c = L
@@ -107,17 +97,8 @@ def _cell_geometry(cwd):
         # ★ 体积必须是三重积 c·(a×b)。初版误写成 a·(a×b) 恒为 0（自检当场抓到：
         #   V_cell 打印成 0.0000 Å³），那会让 3D 的每胞判据永远"通过"。
         V = abs(sum(c[i] * cr[i] for i in range(3))) * 1e-24  # Å³ -> cm³
-        return A, V, nat
-    return None, None, None
-
-
-def _is_int(tok):
-    """POSCAR 元素数量行判定：能转 int 才算数量（元素名如 "Mo" 转不了）。"""
-    try:
-        int(tok)
-        return True
-    except (TypeError, ValueError):
-        return False
+        return A, V
+    return None, None
 
 
 def _deform_geometry(cwd):
@@ -881,16 +862,13 @@ def write_table(out, rows, am, bt, dpt, am2=None):
                              "amset2d_ZT_xx", "amset2d_ZT_yy", "amset2d_ZT",
                              "bt2_ZT_xx", "bt2_ZT_yy", "bt2_ZT_zz", "bt2_ZT")
                  if any(c in r for r in rows)]
-    # [patch_dose_range] 每原胞/每原子载流子数 + 可解读范围标记（[0032] 起与 S8.4 同口径：每原子）
+    # [patch_dose_range] 每原胞载流子数 + 可解读范围标记（2D/3D 同一判据）
     _c_cm = _areal_factor_cm(Path.cwd())
-    _A_cm2, _V_cm3, _nat0 = _cell_geometry(Path.cwd())
-    _geom2d = _geom_2d(Path.cwd())
-    _nat = (_geom2d or {}).get("num_atoms") or _nat0      # 2D 优先 2d_correction.json 的 num_atoms
-    _thr_atom = (_geom2d or {}).get("thr_atom") or 0.02   # 与 S8.4 默认 carrier_per_atom_threshold 一致
+    _A_cm2, _V_cm3 = _cell_geometry(Path.cwd())
     _add_dose = bool(am or am2 or bt or dpt) and bool(_A_cm2 or _V_cm3)
     if _add_dose:
         _dcols = (["n_2D_cm-2"] if (_c_cm and (am or am2)) else [])
-        cols = _dcols + ["carriers_per_cell", "carriers_per_atom", "in_interpret_range"] + cols
+        cols = _dcols + ["carriers_per_cell", "in_interpret_range"] + cols
     # [patch_deform_geom] 形变势构型口径整列输出（每行同值；回退到 clamped 时一眼可见）
     _dgeom = _deform_geometry(Path.cwd())
     if _dgeom:
@@ -915,16 +893,9 @@ def write_table(out, rows, am, bt, dpt, am2=None):
                         _row["n_2D_cm-2"] = "%.3g" % (_n3a * _c_cm)
                     if _ncell is not None:
                         _row["carriers_per_cell"] = "%.3g" % _ncell
-                        _natom = (_ncell / _nat) if _nat else None
-                        if _natom is not None:
-                            _row["carriers_per_atom"] = "%.3g" % _natom
-                            _row["in_interpret_range"] = (
-                                "yes" if _natom <= _thr_atom else
-                                "NO(>%.3g/atom：超出刚性能带近似/实验范围)" % _thr_atom)
-                        else:
-                            _row["in_interpret_range"] = (
-                                "yes" if _ncell <= NCELL_INTERPRET_MAX else
-                                "NO(>%.2g/cell：超出刚性能带近似/实验范围)" % NCELL_INTERPRET_MAX)
+                        _row["in_interpret_range"] = (
+                            "yes" if _ncell <= NCELL_INTERPRET_MAX else
+                            "NO(>%.2g/cell：超出刚性能带近似/实验范围)" % NCELL_INTERPRET_MAX)
                 except (TypeError, ValueError):
                     pass
             if _dgeom:
@@ -965,14 +936,13 @@ def write_table(out, rows, am, bt, dpt, am2=None):
         lines.append("# [口径] 形变势构型 deform_geometry = %s（ionrelax=离子弛豫；clamped=离子固定）%s"
                      % (_dgeom, _warn))
     if _add_dose:
-        lines.append("# [范围] 可解读上限 = 每原子 %.3g 个载流子（与 S8.4 同口径）"
-                     "（n_cell = n_2D×A_cell 或 n_3D×V_cell；每原子 = n_cell/N_atoms；本胞 A = %s Å², V = %s Å³, N = %s）%s。"
+        lines.append("# [范围] 可解读上限 = 每原胞 %.2g 个载流子"
+                     "（n_cell = n_2D×A_cell 或 n_3D×V_cell；本胞 A = %s Å², V = %s Å³）%s。"
                      "超出档位在 csv 里标 in_interpret_range=NO：刚性能带近似已不成立、"
                      "实验也达不到，只看趋势，不进论文图。"
-                     % (_thr_atom,
+                     % (NCELL_INTERPRET_MAX,
                         ("%.3g" % (_A_cm2 * 1e16)) if _A_cm2 else "?",
                         ("%.3g" % (_V_cm3 * 1e24)) if _V_cm3 else "?",
-                        ("%d" % _nat) if _nat else "?",
                         ("；面密度换算因子 c = %.4f cm" % _c_cm) if _c_cm else ""))
     # [C6/C7] DPT 真空对齐结局 / edge_flip / 来源
     if dpt:
@@ -1539,7 +1509,7 @@ def _bt2_tau(dpt_T, carrier):
 def build_intrinsic_rows(cwd, data, geom):
     """[0032] 长表：每个温度 × 原生掺杂档 × 数据集一行；BT2 行在同一掺杂档上插值（同号分支、不外推）；
     DPT 每个温度、载流子一行（与掺杂无关，只有 μ）。返回 (rows, {T: (bt, dpt_T)})。"""
-    A_cm2, V_cm3, _nat0 = _cell_geometry(cwd)
+    A_cm2, V_cm3 = _cell_geometry(cwd)
     fac = geom["c_over_t"]
     rows, extra, miss = [], {}, {"BT2": [], "DPT": []}
     marks = data.get("marks") or {}
