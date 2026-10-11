@@ -62,7 +62,7 @@ from pathlib import Path
 import numpy as np
 
 __author__ = "AutoZT / DSH subagent"
-__version__ = "2026-10-10-intrinsic-v3"   # [0032] 写 transport_fingerprint；[0018] 输出加 κe
+__version__ = "2026-10-11-intrinsic-v4"   # [0034] 说明按实际剔除机制写；[0032] 写 transport_fingerprint；[0018] 输出加 κe
 
 # AMSET 的 write_mesh 对自旋向下数据集的 bug 编码："<name>_up_down"。
 # 顺序重要：先匹配最长的 "_up_down"，再 "_down"，最后 "_up"。
@@ -831,8 +831,9 @@ def main(argv=None):
     # 5) 输出
     notes = []
     if args.mode == "zero":
-        notes.append("IMP 行已置零后重积分；overall=sum(ADP,POP)，单项由 AMSET "
-                     "_calculate_mobility 对保留机制逐一给出。")
+        notes.append("%s 行已置零后重积分；overall=sum(%s)，单项由 AMSET "
+                     "_calculate_mobility 对保留机制逐一给出。"
+                     % ("+".join(dropped) or "（无）", ",".join(kept)))   # [0034] 按实际剔除/保留写
     notes.append("各机制散射率独立，故本结果 == 单独运行 scattering_type=[%s]。"
                  % ",".join(kept))
     if ad.is_metal:

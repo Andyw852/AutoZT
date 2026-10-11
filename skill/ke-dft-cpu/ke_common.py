@@ -736,6 +736,64 @@ DONE_MARKERS = {
 }
 
 
+DP_OPTICAL_DPT_SRC = "step8.2_dpt/dpt_result.json"     # [0034] S8.4 的 ODP/IVS 谷表来源（gen_step14 的 DPT_RESULT）
+
+
+def _valley_sig(valleys):
+    """谷表签名：每个星的面内中心集合（4 位小数、模 1），与标签、星的顺序、同中心的重复星都无关。"""
+    stars = set()
+    for v in valleys or []:
+        ks = []
+        for k in v.get("k_frac") or []:
+            f = []
+            for x in list(k)[:2]:
+                y = round(round(float(x), 4) % 1.0, 4)
+                f.append(0.0 if y >= 1.0 else y)
+            ks.append(tuple(f))
+        stars.add(tuple(sorted(ks)))
+    return sorted(stars)
+
+
+def invalidate_dp_optical_valleys(cwd, dpt_res, consumer="step8.4_amset2d"):
+    """[0034] S8.2 刚写出新的 dpt_result.json 时调：S8.4 的 ODP/IVS 用了 S8.2 的谷表、且谷中心变了
+    -> 归档 S8.4 的完成标记（autozt 按 *.stale-upstream-* 重新生成、重新排队），并递归让 S8.3 失效。
+    谷表没变、或 S8.4 没开 ODP/IVS / 用的是手填谷表 -> 什么都不做（S8.4 一跑几小时，不能每次 S8.2 重算都重排）。"""
+    import json as _json
+    import time as _t
+    cwd = Path(cwd)
+    d = cwd / consumer
+    try:
+        rec = _json.loads((d / "2d_correction.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    dp = rec.get("dp_optical") or {}
+    changed = []
+    for car in ("electron", "hole"):
+        c = dp.get(car) or {}
+        if c.get("valleys_source") != DP_OPTICAL_DPT_SRC:
+            continue
+        new = []
+        for r in (dpt_res or {}).get("results", []):
+            if r.get("carrier") == car:
+                new = ((r.get("multi_valley") or {}).get("valleys")) or []
+        if _valley_sig(c.get("valleys")) != _valley_sig(new):
+            changed.append(car)
+    if not changed:
+        return []
+    tag = "stale-upstream-step8.2_dpt-%s" % _t.strftime("%Y%m%d%H%M%S")
+    done = []
+    for m in DONE_MARKERS.get(consumer, ()):
+        f = d / m
+        if f.is_file() or f.is_symlink():
+            f.rename(d / (m + "." + tag))
+            done.append((consumer, m))
+    if done:
+        print("[WARN] S8.2 的谷表变了（%s）—— %s 的 ODP/IVS 用的是旧谷表 -> 完成标记已归档（*.%s），会重新生成、重新排队"
+              % ("/".join(changed), consumer, tag))
+        done += invalidate_downstream(cwd, consumer, "上游 S8.2 谷表变了")
+    return done
+
+
 def _links_into(d, upstream_dir):
     """d 里有没有软链指向 upstream_dir（解析后比较）。"""
     try:

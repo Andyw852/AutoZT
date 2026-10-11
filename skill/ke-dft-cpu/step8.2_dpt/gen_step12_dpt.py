@@ -34,7 +34,8 @@ from pathlib import Path
 # =========================== 可改参数区 ===========================
 # [SKILL_REV] 版本戳：写进 dpt_result.json，铺开时验证跑的是哪份 skill 副本。
 # 每次改本脚本逻辑后更新（如 "2026-08-29-nstep-linear"）。
-_SKILL_REV = "2026-10-10-0029-spin-window"
+_SKILL_REV = "2026-10-11-0034"   # 写完 dpt_result.json 后：S8.4 的 ODP/IVS 用了本步谷表且谷中心变了 -> S8.4 重排
+#   （上一版：2026-10-10-0029-spin-window）
 # [R-SCAN] 强制选点壳层 NSTEP（None=自动 2/3/4/5；填 2/3/4/5=只试该值，做 R-scan 用）。
 # 用法：tf -p <材料> -j step8.2_dpt conf --set FORCE_NSTEP=3 → retry + start，对比 dpt_result.json 的 m_d
 #   与 m_provenance 里的 R（V148 起写 step.conf，不改本脚本）。
@@ -295,6 +296,18 @@ def invalidate_consumers(cwd):
         print("[WARN] 没有 ke_common.py，S8.1/S8.3 不会自动重排（skill.yaml 的 gen_need 漏了它？）")
         return []
     return _kc.invalidate_downstream(cwd, OUTDIR_NAME, "%s 重新生成（DPT 重算）" % OUTDIR_NAME)
+
+
+def invalidate_dp_optical_consumer(cwd, res):
+    """[0034] S8.4 的 ODP/IVS 用的是本步的多谷谷表时：新谷表的谷中心变了 -> S8.4 重新生成、重新排队。"""
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+        import ke_common as _kc
+    except ImportError:
+        return []
+    if not hasattr(_kc, "invalidate_dp_optical_valleys"):
+        return []
+    return _kc.invalidate_dp_optical_valleys(cwd, res)
 
 
 def _read_dim(cwd):
@@ -2470,6 +2483,7 @@ def main():
         res["za_coupling"] = _za_check(cwd)                # [0016] σh / ZA
     (out / "dpt_result.json").write_text(
         json.dumps(res, ensure_ascii=False, indent=2), encoding="utf-8")
+    invalidate_dp_optical_consumer(cwd, res)              # [0034] S8.4 的 ODP/IVS 用了本步谷表且谷变了 -> 重排
 
     lines = ["# DPT 迁移率摘要（%s, %.0f K）" % (dim, TEMPERATURE_K)]
     if res.get("za_coupling"):                            # [0016]

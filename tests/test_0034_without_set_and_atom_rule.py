@@ -176,3 +176,122 @@ def test_comparison_300K_csv_is_per_atom(tmp_path, monkeypatch):
     assert any(r["in_interpret_range"] == "yes" for r in rows)
     txt = (out / "comparison_summary.txt").read_text(encoding="utf-8")
     assert "可解读上限 = 每原子 0.005 个载流子（3 原子/胞" in txt
+
+
+# ---------------------------------------------------------------- [0034-r2] 复审修正
+def _dpo():
+    return _load("dpo_0034", S84 / "dp_optical.py")
+
+
+def test_merge_coincident_stars_and_shadowed_channel_rejected(tmp_path, monkeypatch):
+    D = _dpo()
+    K = [[1 / 3, 1 / 3, 0], [-1 / 3, -1 / 3, 0]]
+    vs = [{"label": "K", "g": 2, "k_frac": K}, {"label": "Q", "g": 1, "k_frac": [[0.17, 0.17, 0]]},
+          {"label": "K(up带27)", "g": 2, "k_frac": [[2 / 3, 2 / 3, 0], [1 / 3 + 1, 1 / 3, 0.5]]}]   # 同中心（周期像、kz 无关）
+    out, alias = D.merge_coincident(vs)
+    assert [v["label"] for v in out] == ["K", "Q"] and alias == {"K(up带27)": "K"}
+    with pytest.raises(ValueError):                                         # 只部分重合：谷表自相矛盾
+        D.merge_coincident([{"label": "K", "g": 2, "k_frac": K}, {"label": "X", "g": 1, "k_frac": [K[0]]}])
+    d = tmp_path / "step8.2_dpt"
+    d.mkdir()
+    (d / "dpt_result.json").write_text(json.dumps({"results": [{"carrier": "electron", "multi_valley": {"valleys": vs}}]}))
+    g = _g14()
+    monkeypatch.setattr(g, "SCATTERING", ["ADP", "IMP", "POP"])
+    monkeypatch.setattr(g, "DP_OPTICAL_E", "K(up带27)>K(up带27):4@50")
+    with pytest.raises(SystemExit):                                         # 用被并掉的星 -> 报错，不再静默 0 率
+        g.resolve_dp_optical(tmp_path)
+    monkeypatch.setattr(g, "DP_OPTICAL_E", "K>K:4@50; K>Q:2@45")
+    rec = g.resolve_dp_optical(tmp_path)
+    assert [v["label"] for v in rec["electron"]["valleys"]] == ["K", "Q"]
+
+
+def test_explicit_scattering_is_honoured(tmp_path, monkeypatch):
+    d = tmp_path / "step8.2_dpt"
+    d.mkdir()
+    K = [[1 / 3, 1 / 3, 0], [-1 / 3, -1 / 3, 0]]
+    (d / "dpt_result.json").write_text(json.dumps({"results": [{"carrier": "electron", "multi_valley": {"valleys": [
+        {"label": "K", "g": 2, "k_frac": K}]}}]}))
+    g = _g14()
+    monkeypatch.setattr(g, "_SCATTERING_EXPLICIT", True)
+    monkeypatch.setattr(g, "SCATTERING", ["ADP"])                           # 严格对照：只开 ADP
+    monkeypatch.setattr(g, "DP_OPTICAL_E", "K>K:4@50; K>K':2.6@46")
+    assert g.resolve_dp_optical(tmp_path) is None and g.SCATTERING == ["ADP"]   # 不补 ODP/IVS、不掩码
+    monkeypatch.setattr(g, "SCATTERING", ["ADP", "IVS"])
+    rec = g.resolve_dp_optical(tmp_path)
+    assert g.SCATTERING == ["ADP", "IVS"] and [c["kind"] for c in rec["electron"]["channels"]] == ["inter_star"]
+    assert rec["adp_intravalley"]["electron"] is True
+    monkeypatch.setattr(g, "_SCATTERING_EXPLICIT", False)                   # 没显式写：照旧自动补
+    monkeypatch.setattr(g, "SCATTERING", ["ADP", "IMP", "POP"])
+    g.resolve_dp_optical(tmp_path)
+    assert g.SCATTERING == ["ADP", "IMP", "POP", "ODP", "IVS"]
+
+
+def test_pie_without_piezo_dropped_from_settings_too(tmp_path, monkeypatch):
+    g = _g14()
+    monkeypatch.setattr(g, "SCATTERING", ["ADP", "IMP", "PIE"])
+    monkeypatch.chdir(tmp_path)                                             # 没有 step6_elastic/OUTCAR
+    assert g._amset_scatterers() == ["ADP", "IMP"]
+    assert g._mechanisms_2d(tmp_path) == ["ADP", "IMP"]                      # 两边一致
+
+
+def test_postprocess_note_follows_drop_list():
+    src = (S84 / "postprocess_intrinsic.py").read_text(encoding="utf-8")
+    assert '"%s 行已置零后重积分；overall=sum(%s)' in src and "IMP 行已置零后重积分；overall=sum(ADP,POP)" not in src
+
+
+def test_plugin_symmetrizes_dpo_rates_and_warns_empty_star():
+    src = (S84 / "amset2d_plugin.py").read_text(encoding="utf-8")
+    i = src.index("def _dpo_rates(")
+    body = src[i:src.index("\nclass _DPOptical2D", i)]
+    assert 'r = r[..., np.asarray(ir)][..., np.asarray(i2f)]' in body           # 按 AMSET 不可约映射对称化
+    assert body.index("r += dpo.RATE_FLOOR") < body.index("np.asarray(ir)") < body.index("np.broadcast_to")
+    assert 'r["dk_rel"] is None and r["label"] in used' in src                 # 有通道却分不到 k 点 -> WARN
+
+
+def test_mu_vs_T_skips_stale_first_without_file(tmp_path):
+    S = _s83()
+    cwd = T32._material(tmp_path)
+    _add_without(cwd, stale=True)                                           # overall_noODP.json：上一轮残留
+    _add_without(cwd, dropped=("ODP", "IVS"), name="overall_noODP_IVS.json")
+    am = S._amset_mu_T_sources(cwd)
+    assert am["without"] == ["ODP", "IVS"] and "overall_noODP_IVS.json" in am["src"]["mu_AMSET_all_without"]
+
+
+def _s84_with_dpo(tmp_path, valleys, src="step8.2_dpt/dpt_result.json"):
+    run = tmp_path / "step8.4_amset2d"
+    run.mkdir(parents=True)
+    (run / "2d_correction.json").write_text(json.dumps({"dp_optical": {"electron": {
+        "valleys": valleys, "valleys_source": src, "channels": []}}}))
+    (run / "transport.json").write_text("{}")
+    (run / "intrinsic_transport.json").write_text("{}")
+    s83 = tmp_path / "step8.3_output"
+    s83.mkdir()
+    (s83 / "comparison_300K.png").write_text("x")
+    return run
+
+
+def test_s82_valley_change_requeues_s84_only_when_used_and_changed(tmp_path, capsys):
+    kc = _load("kc_0034b", KE / "ke_common.py")
+    K = [[1 / 3, 1 / 3, 0], [-1 / 3, -1 / 3, 0]]
+    same = {"results": [{"carrier": "electron", "multi_valley": {"valleys": [
+        {"label": "K", "k_frac": [[0.333333, 0.333333, 0.0], [-0.333333, -0.333333, 0.0]]},
+        {"label": "K(up带27)", "k_frac": [[2 / 3, 2 / 3, 0], [1 / 3, 1 / 3, 0]]}]}}]}     # 同中心重复星：不算变
+    moved = {"results": [{"carrier": "electron", "multi_valley": {"valleys": [
+        {"label": "K", "k_frac": K}, {"label": "Q", "k_frac": [[0.17, 0.17, 0]]}]}}]}
+    run = _s84_with_dpo(tmp_path / "a", [{"label": "K", "g": 2, "k_frac": K}])
+    assert kc.invalidate_dp_optical_valleys(tmp_path / "a", same) == []
+    assert (run / "transport.json").is_file()
+    done = kc.invalidate_dp_optical_valleys(tmp_path / "a", moved)
+    assert ("step8.4_amset2d", "transport.json") in done and not (run / "transport.json").exists()
+    assert any(f.name.startswith("transport.json.stale-upstream-step8.2_dpt-") for f in run.iterdir())
+    assert ("step8.3_output", "comparison_300K.png") in done                  # 递归让 S8.3 失效
+    run_b = _s84_with_dpo(tmp_path / "b", [{"label": "K", "g": 2, "k_frac": K}], src="step.conf DP_OPTICAL_VALLEYS_E")
+    assert kc.invalidate_dp_optical_valleys(tmp_path / "b", moved) == []     # 手填谷表：与 S8.2 无关
+    assert (run_b / "transport.json").is_file()
+    assert kc.invalidate_dp_optical_valleys(tmp_path / "none", moved) == []  # 没有 S8.4
+
+
+def test_s82_gen_calls_valley_invalidation_after_writing_result():
+    src = (KE / "step8.2_dpt" / "gen_step12_dpt.py").read_text(encoding="utf-8")
+    i = src.index('(out / "dpt_result.json").write_text(')
+    assert src.index("invalidate_dp_optical_consumer(cwd, res)", i) - i < 200

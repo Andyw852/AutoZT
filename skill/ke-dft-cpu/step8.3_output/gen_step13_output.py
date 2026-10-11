@@ -1143,13 +1143,14 @@ def _amset_mu_T_sources(cwd):
         src["mu_AMSET_intrinsic"] = "%s/intrinsic_transport.json（%s，去 %s）" % (
             run, "+".join(labels) or "?", "+".join(q_in.get("intrinsic_dropped") or []) or "?")
     without = None
-    for name in _overall_without_files(Path(cwd) / run)[:1]:          # [0034]
+    for name in _overall_without_files(Path(cwd) / run):              # [0034] 第一份通过网格/同轮核对的
         wo, q_wo = _intr(name)
         if wo is not None:
             without = list(q_wo.get("intrinsic_dropped") or [])
             cols["mu_AMSET_all_without"] = wo
             src["mu_AMSET_all_without"] = "%s/%s（overall 去 %s：%s）" % (
                 run, name, "+".join(without) or "?", "+".join(q_wo.get("intrinsic_labels") or []) or "?")
+            break
     return {"run": run, "doping": doping, "temps": temps, "cols": cols, "src": src,
             "intrinsic_labels": labels, "without": without}
 

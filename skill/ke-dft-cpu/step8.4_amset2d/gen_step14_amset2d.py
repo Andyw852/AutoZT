@@ -32,7 +32,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 # [SKILL_REV] 版本戳：写进 settings.yaml 头，便于从结果反查跑的是哪份 skill 副本。
-_SKILL_REV = "2026-10-11-0034"   # OVERALL_WITHOUT（出厂 ODP）-> overall_noODP.json   # [0033] ODP/谷间散射（常数形变势，step.conf DP_OPTICAL_E/H）+ ADP 谷内掩码   # [0032-r2] 复审：链首清旧本征产物与 mesh；SCATTERING 无 ADP 不出只 ADP   # [0032] WRITE_MESH/INTRINSIC_ADP_ONLY 2D 默认开（旧：2026-09-28-desym-fix V115）
+_SKILL_REV = "2026-10-11-0034-r2"   # 复审：同中心谷合并、显式 SCATTERING 照办、PIE 与 settings 一致   # [0034] OVERALL_WITHOUT（出厂 ODP）-> overall_noODP.json   # [0033] ODP/谷间散射（常数形变势，step.conf DP_OPTICAL_E/H）+ ADP 谷内掩码   # [0032-r2] 复审：链首清旧本征产物与 mesh；SCATTERING 无 ADP 不出只 ADP   # [0032] WRITE_MESH/INTRINSIC_ADP_ONLY 2D 默认开（旧：2026-09-28-desym-fix V115）
 # 复制来源（gen_step10_amset.py 的 _SKILL_REV），用于人工比对两份文件是否同步
 _SOURCE_GEN_REV = "2026-10-08-2d-raw-elastic"   # [0014] S8 的 2D 弹性改为原始 slab 值，与本步一致
 import stepconf  # noqa: E402
@@ -154,6 +154,7 @@ DP_OPTICAL_VALLEYS_H = ""
 ADP_INTRAVALLEY = "auto"
 DPT_RESULT = "step8.2_dpt/dpt_result.json"
 _DP_OPTICAL_REC = None          # resolve_dp_optical() 的结果，apply_2d_corrections 落进 2d_correction.json
+_SCATTERING_EXPLICIT = False    # [0034] step.conf 显式写了 SCATTERING：照它来，不自动补 ODP/IVS
 MANUAL_BANDGAP = None                 # None=自动读；或写数值(eV) 覆盖 scissor
 # ★ patch_bandgap_override（2026-09-28）：scissor 带隙的 step.conf 覆盖通道（与 gen_step10 同款）。
 #   BANDGAP_OVERRIDE = <eV>、BANDGAP_NOTE = <来源说明>；优先级
@@ -271,7 +272,7 @@ _WF_EXPLICIT = None
 #   见 skill.yaml 的 fetch_exclude）和几分钟后处理。关掉：step.conf 写 WRITE_MESH = false。
 WRITE_MESH = True
 # [0018] INTRINSIC_ADP_ONLY：true 时作业链在 IMP 剔除的本征后处理之后，再用同一份 mesh 跑一次
-#   postprocess_intrinsic.py --drop IMP,POP,PIE，写 intrinsic_ADP.json（只含 ADP 的 μ/S/σ/κe）。
+#   postprocess_intrinsic.py --drop IMP,POP,PIE,ODP,IVS，写 intrinsic_ADP.json（只含 ADP 的 μ/S/σ/κe）。
 #   各机制散射率彼此独立，等价于单独跑 SCATTERING=[ADP]，不用再跑第二次 AMSET。隐含 WRITE_MESH=true。
 #   [0032] 默认 True；step.conf 显式写 WRITE_MESH = false 时跟着关（没有 mesh 就出不了）。
 INTRINSIC_ADP_ONLY = True
@@ -1302,25 +1303,50 @@ def resolve_dp_optical(cwd: Path):
             if not vs:
                 sys.exit("[ERROR] %s 写了通道，但 %s 里没有 %s 的多谷谷表（multi_valley.valleys）。"
                          "\n        处理：在 step.conf 手填 %s。" % (ch_key, DPT_RESULT, car, v_key))
+        try:                                  # [0034] 同中心的星（S8.2 按带/自旋分的）并成一个谷
+            vs, alias = dpo.merge_coincident(vs)
+        except ValueError as e:
+            sys.exit("[ERROR] %s（谷表来自 %s）：%s" % (v_key, src, e))
+        used = sorted({lab for c in chs for lab in (c["from"], c["to"]) if lab in alias})
+        if used:
+            sys.exit("[ERROR] %s 用了 %s，但它与 %s 的谷中心相同（S8.2 按能带/自旋分了星）。本模型按谷中心归属 k 点、"
+                     "态密度统计所有能带，同中心就是同一个谷 —— 请改用 %s"
+                     % (ch_key, ",".join(used), ",".join(alias[u] for u in used), ",".join(alias[u] for u in used)))
+        if alias:
+            print("[..] %s 谷表：%s 与 %s 中心相同，并成一个谷" % (car, ",".join(alias), ",".join(set(alias.values()))))
         try:
             dpo.check_channels(chs, vs)
         except ValueError as e:
             sys.exit("[ERROR] %s（谷表来自 %s）：%s" % (ch_key, src, e))
         rec[car] = {"channels": chs, "valleys": vs, "valleys_source": src}
         kinds_on |= {c["kind"] for c in chs}
-    want = [m for m, ks in (("ODP", {"intra"}), ("IVS", {"inter_star", "inter"})) if kinds_on & ks]
+    kinds_of = {"ODP": {"intra"}, "IVS": {"inter_star", "inter"}}
+    want = [m for m in ("ODP", "IVS") if kinds_on & kinds_of[m]]
     asked = [m for m in ("ODP", "IVS") if m in SCATTERING and m not in want]
     if asked:
         sys.exit("[ERROR] SCATTERING 含 %s，但 step.conf 的 DP_OPTICAL_E/H 里没有对应通道"
                  "（ODP 要 X>X，IVS 要 X>X' 或 X>Y）" % ",".join(asked))
     if not rec:
         return None
-    for m in want:
-        if m not in SCATTERING:
-            SCATTERING = list(SCATTERING) + [m]
     mode = str(ADP_INTRAVALLEY or "auto").strip().lower()
     if mode not in ("auto", "on", "off"):
         sys.exit("[ERROR] ADP_INTRAVALLEY=%r 无效，只允许 auto / on / off" % ADP_INTRAVALLEY)
+    if _SCATTERING_EXPLICIT:      # [0034] 显式 SCATTERING（如严格对照只开 ADP）：照它来，不补 ODP/IVS
+        skip = [m for m in want if m not in SCATTERING]
+        if skip:
+            print("[WARN] step.conf 显式写了 SCATTERING = %s，不含 %s —— DP_OPTICAL 里对应的通道本次不生效"
+                  % (",".join(SCATTERING), ",".join(skip)))
+        want = [m for m in want if m in SCATTERING]
+    active = set().union(*[kinds_of[m] for m in want]) if want else set()
+    for car in list(rec):         # 不生效的通道不进记录（插件横幅/谷间掩码都按记录走）
+        rec[car]["channels"] = [c for c in rec[car]["channels"] if c["kind"] in active]
+        if not rec[car]["channels"] and mode != "on":
+            rec.pop(car)
+    if not rec:
+        return None
+    for m in want:
+        if m not in SCATTERING:
+            SCATTERING = list(SCATTERING) + [m]
     flags = {}
     for car in ("electron", "hole"):
         has_iv = any(c["kind"] != "intra" for c in (rec.get(car) or {}).get("channels") or [])
@@ -1763,6 +1789,10 @@ def _amset_scatterers():
         mechs = [s for s in mechs if s != "POP"]
     if "POP" in mechs and read_pop_frequency(Path.cwd() / DIELECT_DIR) is None:
         raise ValueError("AMSET 有效 POP 频率缺失；检查环境和 DFPT 文件，禁止静默删除 POP")
+    # [0034 复审] 没有压电张量时 _mechanisms_2d 已去掉 PIE、main 也告警"退化为不含 PIE"，settings 必须一致：
+    #   否则 AMSET 拿原版 3D PIE（缺 piezoelectric_constant）直接报错，整步失败。
+    if "PIE" in mechs and read_piezo(Path.cwd()) is None:
+        mechs = [s for s in mechs if s != "PIE"]
     return mechs
 
 
@@ -2549,7 +2579,7 @@ def main():
     global IR_FIX, _IR_FIX_ON, KZ_CAP_2D, KZ_FLAT_TOL_EV, _KZ_CAP_RMAX
     global MEM_WARN_GIB, MEM_LIMIT_GIB, MEM_AUTO_EXCLUSIVE
     global DP_OPTICAL_E, DP_OPTICAL_H, DP_OPTICAL_VALLEYS_E, DP_OPTICAL_VALLEYS_H, ADP_INTRAVALLEY
-    global _DP_OPTICAL_REC
+    global _DP_OPTICAL_REC, _SCATTERING_EXPLICIT
     _conf_nworkers = None
     if (cwd / "step.conf").is_file():
         # strict=False：材料级 step.conf 是【全技能共用】的一份，含别的步骤的键
@@ -2630,9 +2660,11 @@ def main():
                 if _bad:
                     print("[WARN] SCATTERING 含不认识的机制 %s（允许 %s），本项忽略，保持出厂 %s"
                           % (_bad, sorted(_ALLOWED_SCATTERING), SCATTERING), file=sys.stderr)
-                elif _sc_list != SCATTERING:
-                    print("[OK] SCATTERING = %s（step.conf 覆盖，出厂 %s）" % (_sc_list, SCATTERING))
-                    SCATTERING = _sc_list
+                else:
+                    _SCATTERING_EXPLICIT = True
+                    if _sc_list != SCATTERING:
+                        print("[OK] SCATTERING = %s（step.conf 覆盖，出厂 %s）" % (_sc_list, SCATTERING))
+                        SCATTERING = _sc_list
             # patch_write_mesh：WRITE_MESH -> 落 mesh.h5，供 postprocess_intrinsic.py 重算严格本征迁移率。
             #   [0032] 出厂 True；step.conf 显式写 true/false 才覆盖（SPEC 默认 None）。
             WRITE_MESH, INTRINSIC_ADP_ONLY = resolve_intrinsic_switches(

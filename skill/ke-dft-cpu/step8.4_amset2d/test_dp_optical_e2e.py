@@ -12,7 +12,8 @@
   1. AMSET 落进 mesh 的 ODP/IVS 率 = dp_optical.carrier_rates 直接算的（窗口内外每个 k 点，相对差 < 1e-9）；
   2. 掩码开/关的 ADP 率之比：电子 = 0.5（两等价谷、unity overlap、q 无关的核 -> 谷间恰好占一半），空穴 = 1；
   3. 电子单机制迁移率 IVS/ODP 落在 [0.9, 1.6]（由两组参数直接估算 ≈ 1.2；修 FD 窗口外填充之前是 ~40）；
-  4. 日志里有横幅、谷表核对（谷底离中心 < 0.01|b1|）、"FD 窗口外保留解析率"。
+  4. 日志里有横幅、谷表核对（谷底离中心 < 0.01|b1|）、"FD 窗口外保留解析率"；
+  5. 作业里的率 = 按 AMSET 不可约映射展开的率（[0034-r2]：不一致会让 postprocess 的复现检查失败、整步 FAIL）。
 """
 import argparse
 import glob
@@ -88,7 +89,14 @@ def run_one(run, mask, nworkers):
                 "unity_overlap": True, "write_mesh": True, "nworkers": nworkers, "interpolation_factor": 4,
                 "free_carrier_screening": False, "file_format": "json", "print_log": False,
                 "energy_cutoff": 1.5}
-    Runner(bs, 4, settings).run(directory=".")
+    ad = Runner(bs, 4, settings).run(directory=".")
+    # [0034-r2] 作业里的率必须等于按不可约映射展开的率（mesh 只存代表点，postprocess --check-reproduce 按它重积分）
+    ad = ad[0] if isinstance(ad, tuple) else ad
+    n_bad = 0
+    for sp, r in ad.scattering_rates.items():
+        r_ir = r[..., ad.ir_kpoints_idx][..., ad.ir_to_full_kpoint_mapping]
+        n_bad += int((~np.isclose(r, r_ir, rtol=1e-9, atol=0)).sum())
+    Path("sym_check.json").write_text(json.dumps({"n_differ": n_bad}))
 
 
 def load(run):
@@ -132,6 +140,8 @@ def main():
             print(txt[-3000:])
             continue
         runs[tag] = load(run)
+        nd = json.loads(Path(run, "sym_check.json").read_text())["n_differ"]
+        ok(nd == 0, "作业里的散射率 = 按不可约映射展开的率（不一致 %d 处；不一致会让 --check-reproduce 失败）" % nd)
         if tag == "on":
             ok("ADP 谷内掩码：电子 开，空穴 关" in txt and "K>K':3@40" in txt, "横幅写明通道与掩码")
             ok("谷表核对（electron）：K 谷底离中心 0.000|b1|" in txt, "谷表核对：谷底落在谷中心")

@@ -129,6 +129,36 @@ def valleys_from_dpt(dpt, carrier):
     return []
 
 
+def _same_k(a, b, tol=1e-4):
+    d = np.asarray(a, float) - np.asarray(b, float)
+    d = d - np.rint(d)
+    d[2:] = 0.0
+    return bool(np.all(np.abs(d) < tol))
+
+
+def merge_coincident(valleys):
+    """S8.2 按（自旋, 能带）分星：两条带（或两个自旋）在同一组 k 上都有极值时，会出现中心完全相同的两个星，
+    第二个标成 "K(up带27)" 这样。本模型按"离谷中心最近"归属 k 点、DOS 统计所有带，所以同中心的星是同一个谷：
+    后出现的那个并进前一个（返回 (新谷表, {被并掉的标签: 保留的标签})）。只部分重合 -> ValueError（谷表自相矛盾）。"""
+    out, alias = [], {}
+    for v in valleys:
+        ks = v.get("k_frac") or []
+        hit = None
+        for u in out:
+            same = [any(_same_k(k, w) for w in u["k_frac"]) for k in ks]
+            if all(same) and len(ks) == len(u["k_frac"]):
+                hit = u
+                break
+            if any(same):
+                raise ValueError("谷表里 %s 与 %s 只有部分中心重合（%d/%d）——谷表自相矛盾，请手填 DP_OPTICAL_VALLEYS_*"
+                                 % (v.get("label"), u["label"], sum(same), len(ks)))
+        if hit is None:
+            out.append(dict(v))
+        else:
+            alias[v["label"]] = hit["label"]
+    return out, alias
+
+
 def check_channels(channels, valleys):
     """通道两端的谷都要在谷表里；X>X' 要求该星至少 2 个谷。不通过 -> ValueError。"""
     have = {v["label"]: v for v in valleys}

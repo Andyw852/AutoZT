@@ -103,11 +103,12 @@ gen（`patch_write_mesh` + `patch_intrinsic_auto`）会：
 **overall 去掉某些机制（[0034]）**：`OVERALL_WITHOUT`（出厂 `ODP`）列的机制本次开着时，作业链再跑
 `postprocess_intrinsic.py --drop <列表> --out overall_no<列表>.json`（如 `overall_noODP.json`），用来看该机制对总结果的影响。
 
-**只含 ADP 的一套（[0018]）**：step.conf 再写 `INTRINSIC_ADP_ONLY = true`（隐含 `WRITE_MESH = true`），作业链在上面
-的后处理之后用**同一份 mesh** 再跑 `postprocess_intrinsic.py --drop IMP,POP,PIE --out intrinsic_ADP.json`。
-各机制散射率彼此独立，等价于单独跑 `SCATTERING = [ADP]`，不用第二次 AMSET。于是一次 S8.4 出三套：
-`transport.json`（overall = ADP+POP+IMP）、`intrinsic_transport.json`（剔除 IMP）、`intrinsic_ADP.json`（只 ADP）。
-本征 JSON 含 μ、S、σ、κe（κe 自 [0018] 起写出）；PF 用 S²σ 自算。三份都在本步目录，不另建步骤目录。
+**只含 ADP 的一套（[0018]）**：`INTRINSIC_ADP_ONLY`（[0032] 起 2D 出厂开，隐含 `WRITE_MESH = true`）。作业链在上面
+的后处理之后用**同一份 mesh** 再跑 `postprocess_intrinsic.py --drop IMP,POP,PIE,ODP,IVS --out intrinsic_ADP.json`
+（[0033] 起把 ODP/IVS 也剔除；没开的机制自动忽略）。各机制散射率彼此独立，等价于单独跑一次只有 ADP 的 AMSET
+（开了 IVS 时这个 ADP 是谷内 ADP，见下面「ODP 与谷间散射」），不用第二次 AMSET。于是一次 S8.4 出三套（开了 ODP 再加
+`overall_noODP.json`，共四套）：`transport.json`（overall）、`intrinsic_transport.json`（剔除 IMP）、`intrinsic_ADP.json`（只 ADP）。
+本征 JSON 含 μ、S、σ、κe（κe 自 [0018] 起写出）；PF 用 S²σ 自算。都在本步目录，不另建步骤目录。
 0.4.19 与 0.5.1 在真实 2 自旋 / 不可约网格数据上的端到端复现均 PASS（见 `VERIFICATION.md` V89/V90/V91）。
 
 ## ODP 与谷间散射（[0033]，可选，出厂不开）
@@ -140,6 +141,12 @@ DP_OPTICAL_H = K>K:<D>@<ħω>; K>K':<D>@<ħω>; K>Γ:<D>@<ħω>; Γ>K:<D>@<ħω>
 - **谷表**默认读 S8.2 的 `step8.2_dpt/dpt_result.json`（`multi_valley.valleys`，拒绝出数时谷表照样在）；没跑 S8.2 或不对，
   用 `DP_OPTICAL_VALLEYS_E/H` 手填。通道两端的谷必须在谷表里，否则 gen 直接报错。
 - 写了通道表 gen 就自动把 ODP / IVS 加进 SCATTERING（日志 `[OK] ODP/IVS 开：…`），并写进 2d_correction.json 的 `dp_optical`。
+  **例外**（[0034]）：step.conf 显式写了 `SCATTERING`（如严格对照写 `SCATTERING = ADP`）时照它来，不补；
+  要开就把 ODP、IVS 写进去（`SCATTERING = ADP,IMP,POP,ODP,IVS`），没写进去的那类通道打 WARN、不生效。
+- S8.2 的谷表里，同一组谷中心可能因为"按能带/自旋分星"出现两次（第二个标成 `K(up带27)` 这样）。本模型按谷中心归属 k 点、
+  态密度统计所有能带，同中心就是同一个谷：gen 自动并成一个；通道里写被并掉的标签直接报错（请用 `K`）。
+- S8.2 重算后谷中心变了、而 S8.4 的 ODP/IVS 用的是 S8.2 的谷表：S8.2 自动把 S8.4 的完成标记归档，S8.4 重新生成、重新排队
+  （谷表没变、或用的是手填谷表就不动）。
 - **ADP 谷内掩码**（`ADP_INTRAVALLEY = auto`，出厂）：开了 IVS 的载流子，ADP 只留谷内（k 与 k+q 落在同一个谷）。
   AMSET 的 ADP 对整个布里渊区的 q 积分，大 q 的 K→K′、K→Q 用长波声速和带边形变势算，既不物理、又和 IVS 重复计数。
   只开 ODP（没有谷间通道）时 auto 不掩。掩码同样作用于「只 ADP」那一套（同一个 ADP 机制）。

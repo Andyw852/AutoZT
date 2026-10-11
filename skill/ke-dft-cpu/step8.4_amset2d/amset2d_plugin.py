@@ -333,9 +333,12 @@ def _valley_check(amset_data):
             r["label"], "—" if r["dk_rel"] is None else "%.3f|b1|" % r["dk_rel"],
             "—" if r["dE_eV"] is None else "%.3f eV" % r["dE_eV"]) for r in rows)
         bad = [r["label"] for r in rows if r["dk_rel"] is not None and r["dk_rel"] > VALLEY_DK_WARN]
+        used = {lab for h in (_DPO_REC.get(car) or {}).get("channels") or [] for lab in (h["from"], h["to"])}
+        bad += [r["label"] for r in rows if r["dk_rel"] is None and r["label"] in used]   # 有通道却分不到 k 点
         print("[amset2d]%s 谷表核对（%s）：%s%s" % (
             "[WARN]" if bad else "", car, txt,
-            ("  ——%s 的谷底不在给定中心：谷表与 AMSET 的晶胞/网格不同源？（S8.2 谷表来自 S3 晶胞）" % ",".join(bad))
+            ("  ——%s 的谷底不在给定中心或分不到 k 点：谷表与 AMSET 的晶胞/网格不同源？（S8.2 谷表来自 S3 晶胞）"
+             % ",".join(bad))
             if bad else ""), flush=True)
 
 
@@ -359,6 +362,13 @@ def _dpo_rates(amset_data, kinds):
                 r[:, sel] = dpo.carrier_rates(E[sel], kf, rlat, c.get("valleys") or [], c["channels"],
                                               temps, mass, kinds, sign)
         r += dpo.RATE_FLOOR
+        # 按 AMSET 的不可约映射对称化：每个 k 点取它代表点的率。窗口内 AMSET 本来就只用代表点的率，
+        # 窗口外由 _fill_keep_dpo 写回这份；mesh 只存代表点、postprocess 再按映射展开 —— 三处必须同一份。
+        # 谷归属按"最近中心"，等距（Voronoi 边界）时的取舍不随对称操作协变，不对称化会让窗口外的率与 mesh
+        # 不一致，--check-reproduce 失败、整步 FAIL（复审实跑：矩形胞 1044 个 k 点，重积分差 0.14）。
+        ir, i2f = getattr(amset_data, "ir_kpoints_idx", None), getattr(amset_data, "ir_to_full_kpoint_mapping", None)
+        if ir is not None and i2f is not None:
+            r = r[..., np.asarray(ir)][..., np.asarray(i2f)]
         out[spin] = np.broadcast_to(r[None], (ndop,) + r.shape)
     return out
 
