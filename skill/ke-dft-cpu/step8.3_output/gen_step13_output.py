@@ -37,7 +37,7 @@ from pathlib import Path
 # [SKILL_REV] 版本戳：写进 comparison_summary.txt。每次改本脚本逻辑后更新。
 #   陈旧副本已咬人三次（step12/step9b 盖戳后，step13 是最后一个没盖的），
 #   这里盖戳便于从产物反查到底跑的是哪份 skill 副本。
-_SKILL_REV = "2026-10-11-0035"   # [0035] transport_plots 合并 + τ 对比（tau/）
+_SKILL_REV = "2026-10-11-0036"   # [0036] transport_plots 加 bt2_muscan/ + amset_scan/ 两个扫描图子文件夹；[0035] transport_plots 合并 + τ 对比（tau/）
 #   bump 记录：2026-10-11-0035 —— transport_plots 合并：intrinsic 图并入 transport 图（4 条数据集
 #   overall / intrinsic / ADP only / BT2xDPT-tau），不再单独出 <M>_intrinsic*.{png,csv}，
 #   只留 <M>_transport.png + 每温度 CSV + <M>_params_<T>K.csv。
@@ -2437,6 +2437,94 @@ def write_transport_plots(cwd, out, is_2d):
                         w.writerow([M, "N" if c == "electron" else "P", r["direction"], r["E1_eV"],
                                     r["C_2D_N_per_m"], r["m_eff_m0"], r["mu_DPT"], r["tau_DPT_fs"]])
         print("[plots] %s_params_<T>K.csv x%d" % (M, len(temps)))
+
+    # ---- ⑥ bt2 μ 扫描图 + amset 浓度扫描图（各放一个子文件夹）----
+    #   [0036] bt2 的 paper_mu_scan（随化学势 μ）与 amset 的输运（随载流子浓度 n）
+    #   各出一张图，分别放 transport_plots/{bt2_muscan, amset_scan}/，便于和文献 Fig.5/7/8 对点。
+    def _scan_grid(ncol, titles):
+        _f, _ax = plt.subplots(1, ncol, figsize=(3.15 * ncol, 2.9), squeeze=False)
+        for j in range(ncol):
+            _ax[0][j].set_title(titles[j], fontsize=9.5)
+            _ax[0][j].grid(alpha=0.25, lw=0.4)
+        return _f, _ax[0]
+
+    # ⑥a bt2 μ 扫描（CRTA×DPT-τ，随 μ，x/y 两方向）
+    try:
+        _mscan = sorted((cwd / BT2_DIR).glob("paper_mu_scan_*.csv"))
+        if _mscan:
+            _mp = _mscan[-1]
+            _bdir = plots / "bt2_muscan"; _bdir.mkdir(exist_ok=True)
+            _br = list(csv.DictReader([l for l in _mp.read_text(errors="ignore").splitlines()
+                                        if l.strip() and not l.startswith("#")]))
+            _T = int(_mp.stem.rsplit("_", 1)[1].rstrip("K"))
+            _muv = np.array([fnum(r["mu_rel_efermi_eV"]) for r in _br])
+            _bp = [("S_xx_uV/K", "S_yy_uV/K", "S (uV/K)"),
+                   ("sigma_xx_S/m", "sigma_yy_S/m", "sigma (S/m)"),
+                   ("PF_xx_W/mK2", "PF_yy_W/mK2", "PF (W/mK^2)"),
+                   ("kappa_e_WF_xx_W/mK", "kappa_e_WF_yy_W/mK", "kappa_e (W/mK)")]
+            if "ZT_xx" in (_br[0] if _br else {}):
+                _bp.append(("ZT_xx", "ZT_yy", "ZT"))
+            _f, _ax = _scan_grid(len(_bp), [p[2] for p in _bp])
+            for j, (cx, cy, _t) in enumerate(_bp):
+                a = _ax[j]
+                for col, ls, lab in ((cx, "-", "x"), (cy, "--", "y")):
+                    v = np.array([fnum(r[col]) for r in _br])
+                    msk = np.isfinite(_muv) & np.isfinite(v)
+                    a.plot(_muv[msk], v[msk], lw=1.15, ls=ls, label=lab)
+                a.set_xlabel("mu (eV)", fontsize=8)
+                if j == 0:
+                    a.legend(fontsize=7.5, frameon=False, loc="upper right")
+            _f.suptitle("%s  bt2 CRTA x DPT-tau  (chemical-potential scan, %d K)" % (M, _T), fontsize=11)
+            _f.tight_layout(rect=[0, 0, 1, 0.93])
+            _f.savefig(_bdir / ("bt2_muscan_%dK.png" % _T), dpi=130); plt.close(_f)
+            (_bdir / ("bt2_muscan_%dK.csv" % _T)).write_text(_mp.read_text(errors="ignore"), encoding="utf-8")
+            print("[plots] bt2_muscan/bt2_muscan_%dK.png" % _T)
+    except Exception as _e:
+        print("[WARN] bt2 μ 扫描图失败（%s: %s）" % (type(_e).__name__, _e))
+
+    # ⑥b amset 浓度扫描（overall / intrinsic / ADP only，随 n，600 K）
+    try:
+        _adir = plots / "amset_scan"; _adir.mkdir(exist_ok=True)
+        _tab = out / "intrinsic" / "intrinsic_transport_table.csv"
+        if _tab.is_file():
+            _r2 = list(csv.DictReader([l for l in _tab.read_text(errors="ignore").splitlines()
+                                        if l.strip() and not l.startswith("#")]))
+            _sub = [r for r in _r2 if abs(fnum(r["T_K"]) - 600.0) < 1e-6]
+            if _sub:
+                _aq = [("mu_cm2/Vs", "mu (cm^2/V/s)"), ("S_uV/K", "S (uV/K)"),
+                       ("sigma_S/m", "sigma (S/m)"), ("PF_W/mK2", "PF (W/mK^2)"),
+                       ("kappa_e_W/mK", "kappa_e (W/mK)")]
+                _ads = [("overall", "tab:red", "-"), ("intrinsic", "tab:orange", "-."), ("ADP_only", "tab:green", ":")]
+                _f2, _ax2 = _scan_grid(len(_aq), [q[1] for q in _aq])
+                for j, (col, _t) in enumerate(_aq):
+                    a = _ax2[j]
+                    for ds, cc, ls in _ads:
+                        dd = [r for r in _sub if r["dataset"] == ds]
+                        if not dd:
+                            continue
+                        n = np.array([fnum(r["n_cell_cm-3"]) for r in dd])
+                        y = np.array([fnum(r[col]) for r in dd])
+                        keep = np.abs(n) >= NFLOOR
+                        seg(a, n[keep], y[keep], color=cc, lw=1.3, ls=ls, marker="s", ms=3.0)
+                    if col == "S_uV/K":
+                        a.set_ylim(-1000, 1000); a.axhline(0, color="k", lw=0.5)
+                    else:
+                        a.set_yscale("log")
+                    a.set_xlim(-4.15, 4.15); a.set_xticks([-4, -3, -2, -1, 0, 1, 2, 3, 4])
+                    a.set_xticklabels(["1e21", "1e20", "1e19", "1e18", "1e17", "1e18", "1e19", "1e20", "1e21"], fontsize=6)
+                    a.axvline(0, color="0.55", lw=0.6, ls=":")
+                    a.set_xlabel("n (cm^-3)", fontsize=8)
+                _f2.suptitle("%s  amset  (concentration scan, 600 K, overall / intrinsic / ADP only)" % M, fontsize=11)
+                _f2.tight_layout(rect=[0, 0, 1, 0.93])
+                _f2.savefig(_adir / "amset_scan_600K.png", dpi=130); plt.close(_f2)
+                with open(_adir / "amset_scan_data_600K.csv", "w", newline="") as _fh:
+                    _w = csv.writer(_fh); _w.writerow(list(_r2[0].keys()))
+                    for r in _sub:
+                        _w.writerow([r.get(c, "") for c in _r2[0].keys()])
+                print("[plots] amset_scan/amset_scan_600K.png")
+    except Exception as _e:
+        print("[WARN] amset 浓度扫描图失败（%s: %s）" % (type(_e).__name__, _e))
+
     return True
 
 
