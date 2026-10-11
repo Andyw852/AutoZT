@@ -739,15 +739,17 @@ DONE_MARKERS = {
 DP_OPTICAL_DPT_SRC = "step8.2_dpt/dpt_result.json"     # [0034] S8.4 的 ODP/IVS 谷表来源（gen_step14 的 DPT_RESULT）
 
 
-def _valley_sig(valleys):
-    """谷表签名：每个星的面内中心集合（4 位小数、模 1），与标签、星的顺序、同中心的重复星都无关。"""
+def _valley_sig(valleys, use_grid=False):
+    """谷表签名：每个星的面内中心集合（模 1），与标签、星的顺序、同一组谷的重复星都无关。
+    use_grid：用 S8.2 的 k_grid（网格极值点，按带/自旋不浮动，5 位）；否则用拟合中心 k_frac（4 位）。"""
+    key, nd = ("k_grid", 5) if use_grid else ("k_frac", 4)
     stars = set()
     for v in valleys or []:
         ks = []
-        for k in v.get("k_frac") or []:
+        for k in v.get(key) or []:
             f = []
             for x in list(k)[:2]:
-                y = round(round(float(x), 4) % 1.0, 4)
+                y = round(round(float(x), nd) % 1.0, nd)
                 f.append(0.0 if y >= 1.0 else y)
             ks.append(tuple(f))
         stars.add(tuple(sorted(ks)))
@@ -776,9 +778,17 @@ def invalidate_dp_optical_valleys(cwd, dpt_res, consumer="step8.4_amset2d"):
         for r in (dpt_res or {}).get("results", []):
             if r.get("carrier") == car:
                 new = ((r.get("multi_valley") or {}).get("valleys")) or []
-        if _valley_sig(c.get("valleys")) != _valley_sig(new):
+        old = c.get("valleys") or []
+        # [0034-r2] 两边都有网格极值点 k_grid 就按它比（拟合中心按带/自旋浮动、取整边界会抖）；老记录没有就比 k_frac
+        grid = bool(old and new and all(v.get("k_grid") for v in old) and all(v.get("k_grid") for v in new))
+        if _valley_sig(old, grid) != _valley_sig(new, grid):
             changed.append(car)
     if not changed:
+        return []
+    busy = _dir_busy(d, _active_job_dirs())
+    if busy:                       # 作业在排队/运行：它用的是 gen 时的旧谷表，跑完会被判完成 -> 必须人手处理
+        print("[WARN] ★ S8.2 的谷表变了（%s），但 %s 的作业还在排队/运行（%s）—— 它用的是旧谷表。"
+              "先 scancel 它，再 retry %s（用新谷表重新生成）" % ("/".join(changed), consumer, busy, consumer))
         return []
     tag = "stale-upstream-step8.2_dpt-%s" % _t.strftime("%Y%m%d%H%M%S")
     done = []
@@ -791,6 +801,9 @@ def invalidate_dp_optical_valleys(cwd, dpt_res, consumer="step8.4_amset2d"):
         print("[WARN] S8.2 的谷表变了（%s）—— %s 的 ODP/IVS 用的是旧谷表 -> 完成标记已归档（*.%s），会重新生成、重新排队"
               % ("/".join(changed), consumer, tag))
         done += invalidate_downstream(cwd, consumer, "上游 S8.2 谷表变了")
+    elif (d / "submit.sh").is_file():
+        print("[WARN] ★ S8.2 的谷表变了（%s），%s 生成过输入、还没有结果 —— 若它的作业已在排队/运行（这里查不到），"
+              "用的是旧谷表：scancel 后 retry %s" % ("/".join(changed), consumer, consumer))
     return done
 
 

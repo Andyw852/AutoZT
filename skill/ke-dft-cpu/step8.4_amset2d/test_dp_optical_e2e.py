@@ -14,6 +14,8 @@
   3. 电子单机制迁移率 IVS/ODP 落在 [0.9, 1.6]（由两组参数直接估算 ≈ 1.2；修 FD 窗口外填充之前是 ~40）；
   4. 日志里有横幅、谷表核对（谷底离中心 < 0.01|b1|）、"FD 窗口外保留解析率"；
   5. 作业里的率 = 按 AMSET 不可约映射展开的率（[0034-r2]：不一致会让 postprocess 的复现检查失败、整步 FAIL）。
+     另跑一个矩形胞两星模型（只开 ODP/IVS，几分钟）专测这一项：单星模型里谷归属不影响率，这一项在那里不可能失败；
+     矩形两星模型在修复前有 1044 处不一致。
 """
 import argparse
 import glob
@@ -53,6 +55,25 @@ def record(mask):
                 "adp_intravalley": {"electron": mask, "hole": False}}}
 
 
+def record_rect():
+    """[0034-r2] 矩形胞两星模型（电子 Γ + V(±0.4,0)，空穴 Γ）：谷归属在 Voronoi 边界上有等距平局，
+    检验"作业率 = 按不可约映射展开的率"。单星模型里归属不影响率，这一项在那里不可能失败（复审指出）。"""
+    return {"cell_c_A": 20.0, "layer_normal": [0, 0, 1], "kz_cap_rmax": 1,
+            "eps_inf_slab": [[3, 0, 0], [0, 3, 0], [0, 0, 1.2]],
+            "eps_static_slab": [[3.2, 0, 0], [0, 3.2, 0], [0, 0, 1.2]],
+            "mechanisms_2d": ["ODP", "IVS"],
+            "dp_optical": {
+                "electron": {"valleys": [{"label": "Γ", "g": 1, "k_frac": [[0, 0, 0]]},
+                                         {"label": "V", "g": 2, "k_frac": [[0.4, 0, 0], [-0.4, 0, 0]]}],
+                             "channels": [{"from": "V", "to": "V", "D_eV_A": 4.0, "hw_meV": 48.0, "kind": "intra"},
+                                          {"from": "V", "to": "Γ", "D_eV_A": 2.0, "hw_meV": 45.0, "kind": "inter"},
+                                          {"from": "Γ", "to": "Γ", "D_eV_A": 6.0, "hw_meV": 50.0, "kind": "intra"},
+                                          {"from": "Γ", "to": "V", "D_eV_A": 2.0, "hw_meV": 45.0, "kind": "inter"}]},
+                "hole": {"valleys": [{"label": "Γ", "g": 1, "k_frac": [[0, 0, 0]]}],
+                         "channels": [{"from": "Γ", "to": "Γ", "D_eV_A": 5.0, "hw_meV": 50.0, "kind": "intra"}]},
+                "adp_intravalley": {"electron": False, "hole": False}}}
+
+
 def run_one(run, mask, nworkers):
     """子进程入口：在 run 目录里放插件 + 记录，跑一次 AMSET（插件按 2d_correction.json 在导入时定型，所以一次一进程）。"""
     os.makedirs(run, exist_ok=True)
@@ -60,22 +81,28 @@ def run_one(run, mask, nworkers):
         shutil.copy(HERE / f, run)
     os.chdir(run)
     sys.path.insert(0, run)
-    Path("2d_correction.json").write_text(json.dumps(record(mask)))
+    rect = mask == "rect"
+    Path("2d_correction.json").write_text(json.dumps(record_rect() if rect else record(mask == "on")))
     import amset2d_plugin  # noqa: F401
     from pymatgen.core import Lattice, Structure
     from pymatgen.electronic_structure.bandstructure import BandStructure
     from pymatgen.electronic_structure.core import Spin
     from amset.core.run import Runner
 
-    lat = Lattice.hexagonal(3.18, 20.0)
+    lat = Lattice.orthorhombic(3.2, 5.5, 20.0) if rect else Lattice.hexagonal(3.18, 20.0)
     st = Structure(lat, ["Mo"], [[0, 0, 0]])
     n = 30
     k1, k2, k3 = np.meshgrid(np.arange(n) / n, np.arange(n) / n, [0.0, 0.5], indexing="ij")
     kf = np.stack([k1.ravel(), k2.ravel(), k3.ravel()], 1)
-    S = (np.cos(2 * np.pi * kf[:, 0]) + np.cos(2 * np.pi * kf[:, 1])
-         + np.cos(2 * np.pi * (kf[:, 0] + kf[:, 1])))
-    cb = 1.8 + 1.0 * (S + 1.5)
-    vb = -0.8 * (S + 1.5)
+    if rect:
+        S = np.cos(2 * np.pi * kf[:, 0]) + np.cos(2 * np.pi * kf[:, 1])
+        cb = 1.8 + 0.3 * (2 - S)
+        vb = -1.0 * (2 + S)
+    else:
+        S = (np.cos(2 * np.pi * kf[:, 0]) + np.cos(2 * np.pi * kf[:, 1])
+             + np.cos(2 * np.pi * (kf[:, 0] + kf[:, 1])))
+        cb = 1.8 + 1.0 * (S + 1.5)
+        vb = -0.8 * (S + 1.5)
     bs = BandStructure(kf, {Spin.up: np.array([-6.0 + 0.0 * S, vb, cb, cb + 4.0])}, lat.reciprocal_lattice,
                        efermi=0.9, structure=st)
     Cv = np.zeros((6, 6))
@@ -89,6 +116,11 @@ def run_one(run, mask, nworkers):
                 "unity_overlap": True, "write_mesh": True, "nworkers": nworkers, "interpolation_factor": 4,
                 "free_carrier_screening": False, "file_format": "json", "print_log": False,
                 "energy_cutoff": 1.5}
+    if rect:                     # 只有 basic 机制：不起 worker，几分钟
+        settings.update(scattering_type=["ODP", "IVS"], doping=[-1e17, 1e17, 1e19], temperatures=[300, 900],
+                        nworkers=1)
+        for k in ("deformation_potential", "elastic_constant"):
+            settings.pop(k)
     ad = Runner(bs, 4, settings).run(directory=".")
     # [0034-r2] 作业里的率必须等于按不可约映射展开的率（mesh 只存代表点，postprocess --check-reproduce 按它重积分）
     ad = ad[0] if isinstance(ad, tuple) else ad
@@ -119,7 +151,7 @@ def main():
     ap.add_argument("--_child", nargs=2, metavar=("RUN", "MASK"), help=argparse.SUPPRESS)
     a = ap.parse_args()
     if a._child:
-        return run_one(a._child[0], a._child[1] == "on", a.nworkers)
+        return run_one(a._child[0], a._child[1], a.nworkers)
 
     sys.path.insert(0, str(HERE))
     import dp_optical as D
@@ -127,7 +159,7 @@ def main():
 
     tmp = tempfile.mkdtemp(prefix="dpo_e2e_")
     runs = {}
-    for tag in ("on", "off"):
+    for tag in ("on", "off", "rect"):
         run = os.path.join(tmp, "mask_" + tag)
         log = os.path.join(tmp, tag + ".log")
         print("[..] AMSET（ADP 谷内掩码 %s）-> %s" % (tag, run), flush=True)
@@ -139,9 +171,12 @@ def main():
         if rc != 0:
             print(txt[-3000:])
             continue
-        runs[tag] = load(run)
         nd = json.loads(Path(run, "sym_check.json").read_text())["n_differ"]
-        ok(nd == 0, "作业里的散射率 = 按不可约映射展开的率（不一致 %d 处；不一致会让 --check-reproduce 失败）" % nd)
+        ok(nd == 0, "%s：作业里的散射率 = 按不可约映射展开的率（不一致 %d 处；不一致会让 --check-reproduce 失败）"
+           % (tag, nd))
+        if tag == "rect":        # 矩形两星模型只为对称化这一项（修复前：1044 处不一致）
+            continue
+        runs[tag] = load(run)
         if tag == "on":
             ok("ADP 谷内掩码：电子 开，空穴 关" in txt and "K>K':3@40" in txt, "横幅写明通道与掩码")
             ok("谷表核对（electron）：K 谷底离中心 0.000|b1|" in txt, "谷表核对：谷底落在谷中心")

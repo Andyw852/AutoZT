@@ -37,7 +37,8 @@ from pathlib import Path
 # [SKILL_REV] 版本戳：写进 comparison_summary.txt。每次改本脚本逻辑后更新。
 #   陈旧副本已咬人三次（step12/step9b 盖戳后，step13 是最后一个没盖的），
 #   这里盖戳便于从产物反查到底跑的是哪份 skill 副本。
-_SKILL_REV = "2026-10-11-0034"
+_SKILL_REV = "2026-10-11-0034-r2"
+#   bump 记录：2026-10-11-0034-r2 —— μ(T) 用第一份通过网格/同轮核对的 overall_no*.json（以前只看排序后的第一份）。
 #   bump 记录：2026-10-11-0034 —— comparison_300K 的可解读判据改每原子（与 S8.4、本征表同一判据，缺原子数才退回每原胞），
 #   csv 加 carriers_per_atom；本征表/图、μ(T) 加 S8.4 的 overall_no*.json（overall 去掉 OVERALL_WITHOUT，出厂去 ODP）。
 #   bump 记录：2026-10-10-0032-r2 —— 复审修正：本征文件按 transport 指纹判同一轮；可解读判据改每原子（与 S8.4 同）；

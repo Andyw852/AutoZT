@@ -168,11 +168,22 @@ def test_rate_floor_beats_amset_zero_rate_threshold(dpo):
     assert dpo.RATE_FLOOR > 1e6 and dpo.RATE_FLOOR < 1e8
 
 
-def test_vacuum_cancels(dpo):
-    """D²·G/M：原胞面积/质量不变，c 变化不影响（G 每原胞、M 每原胞，都与真空无关）。"""
+def test_vacuum_cancels(dpo, two_star):
+    """D²·G/M：G 与 M 都是每原胞的量，真空长度（c）不进率 —— 同一能带只改 c（倒格子 z 分量），carrier_rates 逐点不变。"""
+    E, n = two_star["E"], int(round(math.sqrt(len(two_star["E"]))))
+    g = np.arange(n) / n
+    k1, k2 = np.meshgrid(g, g, indexing="ij")
+    kf = np.stack([k1.ravel(), k2.ravel(), np.zeros(n * n)], 1)
+    out = []
+    for c in (20.0, 40.0):
+        rlat = 2 * np.pi / A_LAT * np.eye(3)
+        rlat[2, 2] = 2 * np.pi / c
+        out.append(dpo.carrier_rates((E / dpo.HA_EV)[None], kf, rlat, VAL, dpo.parse_channels(CH), [300.0],
+                                     CELL_KG, {"intra", "inter_star", "inter"}, +1))
+    assert np.array_equal(out[0], out[1]) and out[0].max() > 1e12
+    # 解析参考同样只认原胞面积与质量：发射阈值（x < ħω 时只有吸收）照旧
     r1 = dpo.analytic_rate(0.1 * dpo.E_C, 0, 0.5, 1, 1e-19, 3.0, 50, 300, CELL_KG)
     assert r1 > 0 and dpo.analytic_rate(0.01 * dpo.E_C, 0, 0.5, 1, 1e-19, 3.0, 50, 300, CELL_KG) < r1
-
 
 def test_valley_report(dpo, two_star):
     rlat = 2 * np.pi / A_LAT * np.eye(3)

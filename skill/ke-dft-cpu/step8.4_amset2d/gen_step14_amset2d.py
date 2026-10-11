@@ -32,7 +32,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 # [SKILL_REV] 版本戳：写进 settings.yaml 头，便于从结果反查跑的是哪份 skill 副本。
-_SKILL_REV = "2026-10-11-0034-r2"   # 复审：同中心谷合并、显式 SCATTERING 照办、PIE 与 settings 一致   # [0034] OVERALL_WITHOUT（出厂 ODP）-> overall_noODP.json   # [0033] ODP/谷间散射（常数形变势，step.conf DP_OPTICAL_E/H）+ ADP 谷内掩码   # [0032-r2] 复审：链首清旧本征产物与 mesh；SCATTERING 无 ADP 不出只 ADP   # [0032] WRITE_MESH/INTRINSIC_ADP_ONLY 2D 默认开（旧：2026-09-28-desym-fix V115）
+_SKILL_REV = "2026-10-11-0034-r3"   # 二审：重复星按 S8.2 k_grid 合并；显式 SCATTERING+掩码的日志   # [0034-r2] 复审：同中心谷合并、显式 SCATTERING 照办、PIE 与 settings 一致   # [0034] OVERALL_WITHOUT（出厂 ODP）-> overall_noODP.json   # [0033] ODP/谷间散射（常数形变势，step.conf DP_OPTICAL_E/H）+ ADP 谷内掩码   # [0032-r2] 复审：链首清旧本征产物与 mesh；SCATTERING 无 ADP 不出只 ADP   # [0032] WRITE_MESH/INTRINSIC_ADP_ONLY 2D 默认开（旧：2026-09-28-desym-fix V115）
 # 复制来源（gen_step10_amset.py 的 _SKILL_REV），用于人工比对两份文件是否同步
 _SOURCE_GEN_REV = "2026-10-08-2d-raw-elastic"   # [0014] S8 的 2D 弹性改为原始 slab 值，与本步一致
 import stepconf  # noqa: E402
@@ -1356,7 +1356,11 @@ def resolve_dp_optical(cwd: Path):
     rec["model"] = ("常数形变势：1/τ_c(x) = π D_c²/(M ω_c)·[N·G_c(x+ħω) + (N+1)·G_c(x−ħω)]，"
                     "G_c 为目标谷（星平均）每原胞每自旋态密度，M 为原胞质量；各向同性，动量弛豫率 = 散射率")
     rec["reference"] = "Jin et al. PRB 90, 045422 (2014); Kaasbjerg et al. PRB 85, 115317 (2012)"
-    print("[OK] ODP/IVS 开：%s；SCATTERING = %s" % (dpo.describe(rec), SCATTERING))
+    if want:
+        print("[OK] ODP/IVS 开：%s；SCATTERING = %s" % (dpo.describe(rec), SCATTERING))
+    else:                         # 显式 SCATTERING 不含 ODP/IVS、ADP_INTRAVALLEY=on：只掩码
+        print("[WARN] 不加 ODP/IVS（显式 SCATTERING = %s）；ADP_INTRAVALLEY=on：ADP 只留谷内 ——"
+              "谷间散射没有任何机制承担，迁移率按'只谷内'口径（对照形变势理论/S8.2 DPT 用）" % ",".join(SCATTERING))
     for car in ("electron", "hole"):
         if car in rec:
             print("[..]   %s 谷表来自 %s；ADP 谷内掩码 %s" % (car, rec[car]["valleys_source"],

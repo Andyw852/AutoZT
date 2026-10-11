@@ -122,9 +122,12 @@ def valleys_from_dpt(dpt, carrier):
         for v in vs:
             ks = v.get("k_frac") or []
             if ks:
-                out.append({"label": norm_label(v.get("label")), "g": len(ks),
-                            "k_frac": [[float(x) for x in k] for k in ks],
-                            "dE_eV": v.get("dE_eV")})
+                row = {"label": norm_label(v.get("label")), "g": len(ks),
+                       "k_frac": [[float(x) for x in k] for k in ks], "dE_eV": v.get("dE_eV")}
+                kg = v.get("k_grid") or []
+                if len(kg) == len(ks):           # [0034-r2] 网格上的极值点：判"同一个谷"用它（拟合中心按带各自浮动）
+                    row["k_grid"] = [[float(x) for x in k] for k in kg]
+                out.append(row)
         return out
     return []
 
@@ -136,17 +139,36 @@ def _same_k(a, b, tol=1e-4):
     return bool(np.all(np.abs(d) < tol))
 
 
+def grid_key(k):
+    """网格点的比较键：面内分数坐标取 5 位、模 1（S8.2 的 k_grid 是网格上的精确点，按带/自旋不浮动）。"""
+    out = []
+    for x in list(k)[:2]:
+        y = round(round(float(x), 5) % 1.0, 5)
+        out.append(0.0 if y >= 1.0 else y)
+    return tuple(out)
+
+
+def _member_match(v, u):
+    """v 的每个成员是否落在 u 的某个成员上：两边都有 k_grid 就按网格点精确比，否则按拟合中心（容差 1e-4）。"""
+    if v.get("k_grid") and u.get("k_grid"):
+        uk = {grid_key(w) for w in u["k_grid"]}
+        return [grid_key(k) in uk for k in v["k_grid"]]
+    return [any(_same_k(k, w) for w in u["k_frac"]) for k in (v.get("k_frac") or [])]
+
+
 def merge_coincident(valleys):
-    """S8.2 按（自旋, 能带）分星：两条带（或两个自旋）在同一组 k 上都有极值时，会出现中心完全相同的两个星，
-    第二个标成 "K(up带27)" 这样。本模型按"离谷中心最近"归属 k 点、DOS 统计所有带，所以同中心的星是同一个谷：
-    后出现的那个并进前一个（返回 (新谷表, {被并掉的标签: 保留的标签})）。只部分重合 -> ValueError（谷表自相矛盾）。"""
+    """S8.2 按（自旋, 能带）分星：两条带（或两个自旋）在同一组 k 上都有极值时，会出现同一组谷的两个星，
+    第二个标成 "K(up带27)" 这样。本模型按"离谷中心最近"归属 k 点、DOS 统计所有带，所以它们是同一个谷：
+    后出现的那个并进前一个（返回 (新谷表, {被并掉的标签: 保留的标签})）。只部分重合 -> ValueError（谷表自相矛盾）。
+    [0034-r2] 判同优先用 S8.2 的 k_grid（网格极值点）：非高对称谷（Q 等）的拟合中心按带各自浮动、差一个网格步长的
+    零头，按拟合中心判会漏合并（谷被中垂线劈成两半、一半拿不到通道）或误报部分重合。"""
     out, alias = [], {}
     for v in valleys:
         ks = v.get("k_frac") or []
         hit = None
         for u in out:
-            same = [any(_same_k(k, w) for w in u["k_frac"]) for k in ks]
-            if all(same) and len(ks) == len(u["k_frac"]):
+            same = _member_match(v, u)
+            if same and all(same) and len(ks) == len(u["k_frac"]):
                 hit = u
                 break
             if any(same):

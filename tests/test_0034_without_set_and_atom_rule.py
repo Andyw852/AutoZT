@@ -295,3 +295,82 @@ def test_s82_gen_calls_valley_invalidation_after_writing_result():
     src = (KE / "step8.2_dpt" / "gen_step12_dpt.py").read_text(encoding="utf-8")
     i = src.index('(out / "dpt_result.json").write_text(')
     assert src.index("invalidate_dp_optical_consumer(cwd, res)", i) - i < 200
+
+
+# ---------------------------------------------------------------- [0034-r3] 第二轮复审修正
+Q6 = [[0.17, 0.17, 0], [-0.17, -0.17, 0], [0.17, -0.34, 0], [-0.17, 0.34, 0], [0.34, -0.17, 0], [-0.34, 0.17, 0]]
+Q6G = [[1 / 6, 1 / 6, 0], [-1 / 6, -1 / 6, 0], [1 / 6, -1 / 3, 0], [-1 / 6, 1 / 3, 0], [1 / 3, -1 / 6, 0], [-1 / 3, 1 / 6, 0]]
+
+
+def _shift(ks, d):
+    return [[k[0] + d, k[1] - d / 2, k[2]] for k in ks]
+
+
+def test_merge_uses_k_grid_for_off_symmetry_duplicates():
+    """Q 谷不钉在高对称点：两条带各自拟合的中心差零点几个网格步长（这里 2e-3），但网格极值点 k_grid 相同 -> 合并。"""
+    D = _dpo()
+    dpt = {"results": [{"carrier": "electron", "multi_valley": {"valleys": [
+        {"label": "Q", "k_frac": Q6, "k_grid": Q6G},
+        {"label": "Q(up带27)", "k_frac": _shift(Q6, 2e-3), "k_grid": Q6G}]}}]}
+    vs = D.valleys_from_dpt(dpt, "electron")
+    assert all("k_grid" in v for v in vs)
+    out, alias = D.merge_coincident(vs)
+    assert [v["label"] for v in out] == ["Q"] and alias == {"Q(up带27)": "Q"}
+    # 没有 k_grid（手填 / 老结果）：照旧按拟合中心 1e-4 判，2e-3 的差不合并
+    nog = [{k: v[k] for k in v if k != "k_grid"} for v in vs]
+    assert len(D.merge_coincident(nog)[0]) == 2
+    with pytest.raises(ValueError):                                     # 网格点只部分重合：谷表自相矛盾
+        D.merge_coincident([vs[0], dict(vs[1], k_grid=Q6G[:3] + [[0.4, 0.1, 0]] * 3)])
+
+
+def test_valley_signature_uses_k_grid(tmp_path, capsys):
+    kc = _load("kc_0034c", KE / "ke_common.py")
+    D = _dpo()
+    raw = {"results": [{"carrier": "electron", "multi_valley": {"valleys": [
+        {"label": "Q", "k_frac": Q6, "k_grid": Q6G},
+        {"label": "Q(up带27)", "k_frac": _shift(Q6, 3e-5), "k_grid": Q6G}]}}]}
+    merged, _ = D.merge_coincident(D.valleys_from_dpt(raw, "electron"))   # gen 记下的是合并后的
+    run = _s84_with_dpo(tmp_path / "a", merged)
+    assert kc.invalidate_dp_optical_valleys(tmp_path / "a", raw) == []      # 同一张原始谷表：不重排
+    jit = json.loads(json.dumps(raw))
+    jit["results"][0]["multi_valley"]["valleys"][0]["k_frac"] = _shift(Q6, 6e-5)   # 拟合中心抖动、网格点不变
+    assert kc.invalidate_dp_optical_valleys(tmp_path / "a", jit) == []
+    assert (run / "transport.json").is_file()
+    moved = json.loads(json.dumps(raw))
+    for v in moved["results"][0]["multi_valley"]["valleys"]:
+        v["k_grid"] = [[k[0] + 1 / 12, k[1], 0] for k in Q6G]             # 网格极值点变了
+    assert ("step8.4_amset2d", "transport.json") in kc.invalidate_dp_optical_valleys(tmp_path / "a", moved)
+
+
+def test_valley_change_with_job_in_flight_warns_not_archives(tmp_path, capsys):
+    kc = _load("kc_0034d", KE / "ke_common.py")
+    K = [[1 / 3, 1 / 3, 0], [-1 / 3, -1 / 3, 0]]
+    run = _s84_with_dpo(tmp_path, [{"label": "K", "g": 2, "k_frac": K}])
+    (run / "slurm-123.out").write_text("running")                            # 刚更新过：作业在跑
+    moved = {"results": [{"carrier": "electron", "multi_valley": {"valleys": [{"label": "Q", "k_frac": [[0.17, 0.17, 0]]}]}}]}
+    assert kc.invalidate_dp_optical_valleys(tmp_path, moved) == []
+    out = capsys.readouterr().out
+    assert "★" in out and "scancel" in out and (run / "transport.json").is_file()
+    run2 = _s84_with_dpo(tmp_path / "b", [{"label": "K", "g": 2, "k_frac": K}])
+    for m in ("transport.json", "intrinsic_transport.json"):
+        (run2 / m).unlink()
+    (run2 / "submit.sh").write_text("#!/bin/bash\n")                         # 生成过、还没结果
+    assert kc.invalidate_dp_optical_valleys(tmp_path / "b", moved) == []
+    assert "还没有结果" in capsys.readouterr().out
+
+
+def test_explicit_scattering_with_mask_on_only_masks(tmp_path, monkeypatch, capsys):
+    d = tmp_path / "step8.2_dpt"
+    d.mkdir()
+    K = [[1 / 3, 1 / 3, 0], [-1 / 3, -1 / 3, 0]]
+    (d / "dpt_result.json").write_text(json.dumps({"results": [{"carrier": "electron", "multi_valley": {"valleys": [
+        {"label": "K", "g": 2, "k_frac": K}]}}]}))
+    g = _g14()
+    monkeypatch.setattr(g, "_SCATTERING_EXPLICIT", True)
+    monkeypatch.setattr(g, "SCATTERING", ["ADP"])
+    monkeypatch.setattr(g, "DP_OPTICAL_E", "K>K:4@50; K>K':2.6@46")
+    monkeypatch.setattr(g, "ADP_INTRAVALLEY", "on")
+    rec = g.resolve_dp_optical(tmp_path)
+    assert g.SCATTERING == ["ADP"] and rec["electron"]["channels"] == [] and rec["adp_intravalley"]["electron"]
+    out = capsys.readouterr().out
+    assert "不加 ODP/IVS" in out and "ODP/IVS 开：无" not in out
