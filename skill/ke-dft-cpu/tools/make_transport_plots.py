@@ -15,8 +15,8 @@
 <材料目录>  含各 step 目录的 ke-dft-cpu 根（本地已 fetch 的 result/ 或集群目录）；
             也可直接给以 step* 开头的目录（即 <M>/ke-dft-cpu/ 本身）。
 <输出目录>  独立输出目录（约定: <M>/transport_plots/），生成:
-              <M>_transport.png / <M>_transport_data.csv   电输运总览 9温度x5参数(mu/S/sigma/PF/kappa_e)
-              <M>_intrinsic.png / <M>_intrinsic_data.csv   本征输运   9温度x5参数(S/sigma/kappa_e/Lorenz/mu)
+              <M>_transport.png / <M>_transport_data_<T>K.csv   电输运总览 9温度x5参数(mu/S/sigma/PF/kappa_e)
+              <M>_intrinsic.png / <M>_intrinsic_data_<T>K.csv   本征输运   同 5 列(mu/S/sigma/PF/kappa_e)
               <M>_params_<T>K.csv                          每个温度一张参数表(E1/C2D/m*/tau/mu)
 
 数据来源:
@@ -41,10 +41,8 @@ NFLOOR = 5e17
 QUANTS_T = [("mu", r"$\mu$  (cm$^2$/V/s)"), ("S", "S  (uV/K)"),
             ("sigma", r"$\sigma$  (S/m)"), ("PF", r"PF  (W/m/K$^2$)"),
             ("kappa_e", r"$\kappa_e$  (W/m/K)")]
-QUANTS_I = [("S_uV/K", "S  (uV/K)"), ("sigma_S/m", "sigma  (S/m)"),
-            ("kappa_e_W/mK", "kappa_e  (W/m/K)"),
-            ("Lorenz_WOhm/K2", "Lorenz  (1e-8 W Ohm/K^2)"),
-            ("mu_cm2/Vs", "mu  (cm^2/V/s)")]
+QUANTS_I = [("mu_cm2/Vs", "mu  (cm^2/V/s)"), ("S_uV/K", "S  (uV/K)"), ("sigma_S/m", "sigma  (S/m)"),
+            ("PF_W/mK2", "PF  (W/m/K$^2$)"), ("kappa_e_W/mK", "kappa_e  (W/m/K)")]  # 与 QUANTS_T 同列
 DATASETS = [("overall", "tab:red", "--", "s"), ("intrinsic", "tab:orange", "-.", "D"),
             ("ADP_only", "tab:green", ":", "^"), ("BT2_DPTtau", "tab:blue", "-", "o")]
 
@@ -157,8 +155,10 @@ def make_transport(mdir, out, M):
             for i in range(len(X["na"])):
                 br = "electron" if X["na"][i] < 0 else "hole"
                 rows_out.append([T, tag, br, X["na"][i], X["Sa"][i], X["ga"][i], X["pa"][i], X["ka"][i], X["ma"][i]])
-    with open(os.path.join(out, "%s_transport_data.csv" % M), "w", newline="") as fh:
-        csv.writer(fh).writerows(rows_out)
+    for T in btT:                                   # 每温度一个 CSV
+        rows_T = [rows_out[0]] + [r for r in rows_out[1:] if abs(float(r[0]) - T) < 1e-6]
+        with open(os.path.join(out, "%s_transport_data_%dK.csv" % (M, int(round(T)))), "w", newline="") as fh:
+            csv.writer(fh).writerows(rows_T)
 
     fig, axes = axes_grid(len(btT), 5, ["%d K" % t for t in btT], [q[1] for q in QUANTS_T])
     for rr, T in enumerate(btT):
@@ -203,11 +203,13 @@ def make_intrinsic(mdir, out, M):
     temps = sorted(set(float(r["T_K"]) for r in rows))
     cols = ["T_K", "dataset", "type", "n_cell_cm-3", "n_2D_cm-2", "n_lit_cm-3",
             "carriers_per_cell", "carriers_per_atom", "in_interpret_range",
-            "S_uV/K", "sigma_S/m", "kappa_e_W/mK", "Lorenz_WOhm/K2", "mu_cm2/Vs", "flag"]
-    with open(os.path.join(out, "%s_intrinsic_data.csv" % M), "w", newline="") as fh:
-        w = csv.writer(fh); w.writerow(cols)
-        for r in rows:
-            w.writerow([r.get(c, "") for c in cols])
+            "S_uV/K", "sigma_S/m", "PF_W/mK2", "kappa_e_W/mK", "mu_cm2/Vs", "flag"]
+    for T in temps:                                 # 每温度一个 CSV
+        with open(os.path.join(out, "%s_intrinsic_data_%dK.csv" % (M, int(round(T)))), "w", newline="") as fh:
+            w = csv.writer(fh); w.writerow(cols)
+            for r in rows:
+                if abs(float(r["T_K"]) - T) < 1e-6:
+                    w.writerow([r.get(c, "") for c in cols])
     fig, axes = axes_grid(len(temps), 5, ["%d K" % t for t in temps], [q[1] for q in QUANTS_I])
     for rr, T in enumerate(temps):
         sub = [r for r in rows if abs(float(r["T_K"]) - T) < 1e-6]
@@ -219,8 +221,6 @@ def make_intrinsic(mdir, out, M):
                     continue
                 n = np.array([fnum(r["n_cell_cm-3"]) for r in dd])
                 y = np.array([fnum(r[col]) for r in dd])
-                if col == "Lorenz_WOhm/K2":
-                    y = y * 1e8
                 keep = np.abs(n) >= NFLOOR
                 seg(ax, n[keep], y[keep], color=color, lw=1.3, ls=ls, marker=mk, ms=3.2)
             if col == "mu_cm2/Vs":

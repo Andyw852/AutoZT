@@ -2110,6 +2110,13 @@ def write_transport_plots(cwd, out, is_2d):
         plots.mkdir(exist_ok=True)
     M = cwd.parent.name
     NFLOOR = 5e17
+    # [0035] 清理旧格式（单文件长表）残留：现在按温度分文件，旧的 _transport_data.csv /
+    #   _intrinsic_data.csv 若还在，会被误当成新产物读。
+    for _old in (plots / ("%s_transport_data.csv" % M), plots / ("%s_intrinsic_data.csv" % M)):
+        try:
+            _old.unlink()
+        except OSError:
+            pass
 
     def fnum(x):
         try:
@@ -2173,7 +2180,7 @@ def write_transport_plots(cwd, out, is_2d):
         def c3(a, i, k):
             return float(a[i][k][0][0])
 
-        rows_out = [["T_K", "source", "carrier", "n_cm-3", "S_uVK", "sigma_Sm", "PF_WmK2", "kappa_e_WmK", "mu_cm2Vs"]]
+        HDR_T = ["T_K", "source", "carrier", "n_cm-3", "S_uVK", "sigma_Sm", "PF_WmK2", "kappa_e_WmK", "mu_cm2Vs"]
         data = {}
         for T in temps:
             iT = temps.index(T)
@@ -2205,17 +2212,18 @@ def write_transport_plots(cwd, out, is_2d):
             AD = collect(iad["conductivity_S_m"], iad["seebeck_uV_K"], iad["electronic_thermal_conductivity_W_mK"],
                          iad["mobility_cm2_Vs_s"]["ADP"]) if iad else None
             data[T] = dict(nd=np.array(nd), Sd=np.array(Sd), gd=np.array(gd), pd=np.array(pd), kd=np.array(kd), OV=OV, AD=AD)
+            rows_T = [HDR_T]                       # [0035] 每温度一个 CSV（温度一目了然）
             for i in range(len(nd)):
                 br = "electron" if nd[i] < 0 else "hole"
-                rows_out.append([T, "DPT", br, nd[i], Sd[i], gd[i], pd[i], kd[i], ""])
+                rows_T.append([T, "DPT", br, nd[i], Sd[i], gd[i], pd[i], kd[i], ""])
             for tag, X in (("AMSET_overall", OV), ("AMSET_ADP", AD)):
                 if not X:
                     continue
                 for i in range(len(X["na"])):
                     br = "electron" if X["na"][i] < 0 else "hole"
-                    rows_out.append([T, tag, br, X["na"][i], X["Sa"][i], X["ga"][i], X["pa"][i], X["ka"][i], X["ma"][i]])
-        with open(plots / ("%s_transport_data.csv" % M), "w", newline="") as fh:
-            csv.writer(fh).writerows(rows_out)
+                    rows_T.append([T, tag, br, X["na"][i], X["Sa"][i], X["ga"][i], X["pa"][i], X["ka"][i], X["ma"][i]])
+            with open(plots / ("%s_transport_data_%dK.csv" % (M, int(round(T)))), "w", newline="") as fh:
+                csv.writer(fh).writerows(rows_T)
         quants = [("mu", r"$\mu$  (cm$^2$/V/s)"), ("S", "S  (uV/K)"), ("sigma", r"$\sigma$  (S/m)"),
                   ("PF", r"PF  (W/m/K$^2$)"), ("kappa_e", r"$\kappa_e$  (W/m/K)")]
         fig, axes = grid(len(temps), 5, ["%d K" % t for t in temps], [q[1] for q in quants])
@@ -2250,7 +2258,7 @@ def write_transport_plots(cwd, out, is_2d):
         fig.suptitle("%s  electronic transport  (100-900 K)   --   x = carrier conc. n,  left = n-type, right = p-type" % M, fontsize=12)
         fig.tight_layout(rect=[0, 0.03, 1, 0.985])
         fig.savefig(plots / ("%s_transport.png" % M), dpi=130); plt.close(fig)
-        print("[plots] %s_transport.png / _transport_data.csv" % M)
+        print("[plots] %s_transport.png / _transport_data_<T>K.csv x%d" % (M, len(temps)))
 
     # ---- ② 本征输运总览（复用 write_intrinsic_suite 刚写出的长表）----
     itab = out / "intrinsic" / "intrinsic_transport_table.csv"
@@ -2258,15 +2266,18 @@ def write_transport_plots(cwd, out, is_2d):
         rows = list(csv.DictReader([l for l in itab.read_text(errors="ignore").splitlines()
                                     if l.strip() and not l.startswith("#")]))
         temps = sorted(set(float(r["T_K"]) for r in rows))
+        # [0035] 与 transport 图同 5 列（mu/S/sigma/PF/kappa_e）；每温度一个 CSV
         cols = ["T_K", "dataset", "type", "n_cell_cm-3", "n_2D_cm-2", "n_lit_cm-3",
                 "carriers_per_cell", "carriers_per_atom", "in_interpret_range",
-                "S_uV/K", "sigma_S/m", "kappa_e_W/mK", "Lorenz_WOhm/K2", "mu_cm2/Vs", "flag"]
-        with open(plots / ("%s_intrinsic_data.csv" % M), "w", newline="") as fh:
-            w = csv.writer(fh); w.writerow(cols)
-            for r in rows:
-                w.writerow([r.get(c, "") for c in cols])
-        iquants = [("S_uV/K", "S  (uV/K)"), ("sigma_S/m", "sigma  (S/m)"), ("kappa_e_W/mK", "kappa_e  (W/m/K)"),
-                   ("Lorenz_WOhm/K2", "Lorenz  (1e-8 W Ohm/K^2)"), ("mu_cm2/Vs", "mu  (cm^2/V/s)")]
+                "S_uV/K", "sigma_S/m", "PF_W/mK2", "kappa_e_W/mK", "mu_cm2/Vs", "flag"]
+        for T in temps:
+            with open(plots / ("%s_intrinsic_data_%dK.csv" % (M, int(round(T)))), "w", newline="") as fh:
+                w = csv.writer(fh); w.writerow(cols)
+                for r in rows:
+                    if abs(float(r["T_K"]) - T) < 1e-6:
+                        w.writerow([r.get(c, "") for c in cols])
+        iquants = [("mu_cm2/Vs", "mu  (cm^2/V/s)"), ("S_uV/K", "S  (uV/K)"), ("sigma_S/m", "sigma  (S/m)"),
+                   ("PF_W/mK2", "PF  (W/m/K$^2$)"), ("kappa_e_W/mK", "kappa_e  (W/m/K)")]
         dsets = [("overall", "tab:red", "--", "s"), ("intrinsic", "tab:orange", "-.", "D"),
                  ("ADP_only", "tab:green", ":", "^"), ("BT2_DPTtau", "tab:blue", "-", "o")]
         fig, axes = grid(len(temps), 5, ["%d K" % t for t in temps], [q[1] for q in iquants])
@@ -2280,8 +2291,6 @@ def write_transport_plots(cwd, out, is_2d):
                         continue
                     n = np.array([fnum(r["n_cell_cm-3"]) for r in dd])
                     y = np.array([fnum(r[col]) for r in dd])
-                    if col == "Lorenz_WOhm/K2":
-                        y = y * 1e8
                     keep = np.abs(n) >= NFLOOR
                     seg(ax, n[keep], y[keep], color=color, lw=1.3, ls=ls, marker=mk, ms=3.2)
                 if col == "mu_cm2/Vs":
@@ -2299,7 +2308,7 @@ def write_transport_plots(cwd, out, is_2d):
         fig.suptitle("%s  intrinsic transport  (overall / ADP+POP / ADP only / BT2xDPT-tau)  100-900 K" % M, fontsize=12)
         fig.tight_layout(rect=[0, 0.03, 1, 0.985])
         fig.savefig(plots / ("%s_intrinsic.png" % M), dpi=130); plt.close(fig)
-        print("[plots] %s_intrinsic.png / _intrinsic_data.csv" % M)
+        print("[plots] %s_intrinsic.png / _intrinsic_data_<T>K.csv x%d" % (M, len(temps)))
 
     # ---- ③ 参数表（每温度一张，文献格式）----
     vp = out / MU_T_CSV

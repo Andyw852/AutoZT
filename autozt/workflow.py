@@ -2801,7 +2801,8 @@ def _fetch_receipt_write(cfg, m, s):
 #   第一个步骤（S1_opt）就 abort，后面的步骤一个都拉不回（CrS₂ S8.4 只好手工 scp）。
 #   只放过这几类"元数据设不上"的错误；磁盘满、坏包、拒绝写入等其余错误照样算失败。
 _TAR_META_ERRORS = ("Cannot utime", "Cannot change mode", "Cannot change ownership",
-                    "Can't restore time", "Can't set permissions", "Can't update time")
+                    "Can't restore time", "Can't set permissions", "Can't update time",
+                    "in the future")   # 9p 挂载时远端 mtime 快于本地时钟 -> "tar: .: time stamp ... is in the future"
 
 
 def tar_meta_only_errors(stderr):
