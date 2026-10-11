@@ -363,6 +363,13 @@ def _reference_kpoints(out, dim, vac_axis, n_sub):
 #   要更紧就改这一行（不要改下面那几处 re.sub）。
 IONRELAX_EDIFFG = "-0.02"
 IONRELAX_NSW = "60"
+# 弛豫段的 ISYM。★ 只有弛豫段能放开 ★
+#   静态段必须保持模板的 ISYM=0：E1 是逐 k 差分出来的，各形变目录的 IBZ 必须一致
+#   （见 incar_deform_*.tpl 的注释），放开对称性会让各目录 IBZ 不同、差分对不上。
+#   而弛豫段只产出「弛豫后的坐标」，放开对称性不改变 E1 口径，却能把不可约 k 点
+#   从全 BZ 降到对称约化后的数量 —— LS（ISYM=0 → 6x42x3 = 756 点、24 核、~3.3 h/离子步）
+#   正是被这条卡在 24 h 墙钟上，2026-10-11 实测。
+IONRELAX_ISYM = "2"
 
 # ---- [PATCH-IONRELAX] 对 xx±/yy± 4 个形变目录生成 ionrelax/ 子目录 ----
 def _ionrelax_incars(base):
@@ -375,6 +382,12 @@ def _ionrelax_incars(base):
     relax = re.sub(r"LVHAR\s*=.*", "LVHAR  = .FALSE.", relax)
     relax = re.sub(r"LWAVE\s*=.*", "LWAVE  = .TRUE.", relax)
     relax = re.sub(r"LCHARG\s*=.*", "LCHARG = .FALSE.", relax)
+    # [IONRELAX_ISYM] 弛豫段放开对称性（静态段不动）。两种情形都处理：
+    #   段 INCAR 里已有 ISYM（继承自模板的 0）-> 覆盖；没有 -> 追加。
+    if re.search(r"ISYM\s*=", relax):
+        relax = re.sub(r"ISYM\s*=.*", "ISYM = " + IONRELAX_ISYM, relax)
+    else:
+        relax = relax.rstrip() + "\nISYM = " + IONRELAX_ISYM + "\n"
     # 力判据：用 IONRELAX_EDIFFG（默认 -0.02）。两种情形都处理：
     #   段 INCAR 里已有 EDIFFG（继承自模板）-> 覆盖；没有 -> 追加。
     # 旧代码只在"没有"时追加 -1E-3，等于把一个过严值写死、且没有任何配置出口。
@@ -398,7 +411,8 @@ def _build_ionrelax(d: Path, encut, subs, submit_body):
     E1 必须用「离子弛豫后的内坐标」取带边能量（刚性形变 S 原子不动，E1 系统性
     偏小 24%），amset h5 仍用本级刚性单点（clamped-ion 口径不变）。弛豫段
     EDIFF=1E-6 省时间，静态段读 CONTCAR+WAVECAR 取 EDIFF=1E-8 精确带边 + LOCPOT。
-    两段都保持 ISYM=0。
+    弛豫段 ISYM=IONRELAX_ISYM（默认 2，放开对称性提速）；静态段保持 ISYM=0 —— E1 逐 k
+    差分要求各形变目录 IBZ 一致。
     力判据用 IONRELAX_EDIFFG（默认 -0.02）—— 详见文件头该常量的注释。"""
     ir = d / "ionrelax"
     ir.mkdir(exist_ok=True)
