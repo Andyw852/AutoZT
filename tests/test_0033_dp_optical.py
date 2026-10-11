@@ -39,6 +39,7 @@ def test_parse_channels_kinds_and_aliases(dpo):
     assert dpo.parse_channels("") == [] and dpo.parse_channels(None) == []
     assert dpo.parse_channels("k>k′:1@2")[0]["kind"] == "inter_star"      # 小写、′ 也认
     assert len(dpo.parse_channels("K>Q:1.2@24; K>Q:2.0@48")) == 2            # 同一对谷按声子支分列
+    assert dpo.parse_channels("G-M>G-M':1@30")[0]["from"] == "Γ–M"           # S8.2 标签 Γ–M 的 ASCII 写法
 
 
 @pytest.mark.parametrize("bad", ["K>Q:2.0", "K>Q:-1@40", "K>Q:1@0", "K>Q':1@40", "K>K:1@40; K>K:2@40", "KQ:1@4"])

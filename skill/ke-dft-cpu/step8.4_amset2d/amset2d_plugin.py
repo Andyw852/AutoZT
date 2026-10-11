@@ -318,6 +318,10 @@ def _valley_check(amset_data):
     if _VALLEY_CHECKED[0]:
         return
     _VALLEY_CHECKED[0] = True
+    if getattr(amset_data, "_soc", False):
+        print("[amset2d][WARN] ODP/IVS：SOC 能带（旋量带）—— 目标谷态密度把两种自旋都算进去了；"
+              "通道若应守恒自旋（如 MoS₂ 价带 K↔K′ 的自旋-谷锁定），率会偏大到 2 倍、谷间可能根本不该有。"
+              "参数要与文献的 SOC 口径一致，结论慎用。", flush=True)
     rlat = amset_data.structure.lattice.reciprocal_lattice.matrix
     spin = amset_data.spins[0]
     for car, sel, sign in zip(_CARRIERS, _split_bands(amset_data, spin), (+1, -1)):
