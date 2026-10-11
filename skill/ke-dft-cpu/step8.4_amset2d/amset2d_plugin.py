@@ -33,11 +33,11 @@ import numpy as np
 import amset
 import amset.scattering.calculate as C
 from amset.constants import (angstrom_to_bohr as A2B, boltzmann_au,
-                            coulomb_to_au, ev_to_hartree, m_to_bohr, s_to_au)
+                            coulomb_to_au, m_to_bohr)
 from amset.electronic_structure.fd import fd
 from amset.scattering.inelastic import PolarOpticalScattering
+from amset.scattering.basic import AbstractBasicScattering as _ABS_BASIC
 from amset.scattering.elastic import (
-    AbstractElasticScattering as _ABS_ELASTIC,
     AcousticDeformationPotentialScattering as _ADP,
     IonizedImpurityScattering as _IMP,
     PiezoelectricScattering as _PIE,
@@ -185,10 +185,50 @@ def _note_qz_only(n):
 
 # ---------------- ADP ----------------
 class AcousticDeformation2D(_ADP):
-    """只保留面内传播、面内极化的 LA/TA 支；弹性常数用原始 slab 值（= C_2D/c）。"""
+    """只保留面内传播、面内极化的 LA/TA 支；弹性常数用原始 slab 值（= C_2D/c）。
+
+    [0033] 开了谷间散射（IVS）的载流子，ADP 只留**谷内**（k 与 k+q 落在同一个成员谷）：
+    AMSET 的 ADP 对整个布里渊区的 q 积分，大 q 的 K→K′/K→Q 用长波声速和带边形变势算，
+    既不物理、又与 IVS 的谷间通道重复计数。掩码数据在 _ivm（主进程 from_amset_data 建，
+    经 to_reference/from_reference 带进散射子进程）；没有 _ivm 时与以前逐字节相同。
+    """
     name = "ADP"
 
+    @classmethod
+    def from_amset_data(cls, materials_properties, amset_data):
+        obj = super().from_amset_data(materials_properties, amset_data)
+        obj._ivm = _adp_mask_setup(amset_data)
+        return obj
+
+    def to_reference(self):
+        return super().to_reference() + (getattr(self, "_ivm", None),)
+
+    @classmethod
+    def from_reference(cls, *ref):
+        obj = super().from_reference(*ref[:-1])
+        obj._ivm = ref[-1]
+        return obj
+
+    def _iv_keep(self, unit_q, norm_q_sq, spin, band_idx, kpoint):
+        """谷内掩码：k+q 与 k 在同一个成员谷 -> True。该载流子没开掩码 -> None（不掩）。"""
+        ivm = getattr(self, "_ivm", None)
+        if not ivm or kpoint is None:
+            return None
+        vb = (getattr(self, "vb_idx", None) or {}).get(spin)
+        centers = ivm.get("electron" if (vb is not None and band_idx > vb) else "hole")
+        if centers is None:
+            return None
+        q = np.sqrt(norm_q_sq)[:, None] * np.asarray(unit_q)
+        kp = q @ ivm["rinv"] + np.asarray(kpoint, float)
+        return _DPO.same_member(kpoint, kp, centers, ivm["rlat"])
+
     def factor(self, unit_q, norm_q_sq, spin, band_idx, kpoint, velocity):
+        f = self._factor_core(unit_q, norm_q_sq, spin, band_idx, kpoint, velocity)
+        keep = self._iv_keep(unit_q, norm_q_sq, spin, band_idx, kpoint)
+        return f if keep is None else f * keep
+
+    def _factor_core(self, unit_q, norm_q_sq, spin, band_idx, kpoint, velocity):
+        # （amset_ir_fix 的 ADP 星平均对本方法做旋转平均，谷内掩码在平均之后按未旋转的 q 乘）
         _, _, u = _inplane(unit_q, norm_q_sq)
         w, v = _inplane_modes(self.elastic_constant, u)
         if hasattr(self.deformation_potential, "interpolate"):
@@ -218,68 +258,171 @@ class AcousticDeformation2D(_ADP):
         return f[None, None] * np.ones(self.fermi_levels.shape + norm_q_sq.shape)
 
 
-# ---------------- ODP（实验性，默认惰性） ----------------
-# 非极性光学声子形变势（Einstein 模）。物理耦合（标准、无歧义）：
-#     |g(q)|^2 = hbar * D^2 / (2 * M_eff * omega)        （short-range，q 无关）
-#   D      = dE_edge/du，u 为【未权重位移范数】sqrt(sum_i |u_i|^2)，单位 eV/Å
-#   M_eff  = sum_i m_i |u_hat_i|^2（amu），u_hat 为同一范数下的单位位移图样
-#   omega  = Γ 点该光学模频率（THz）
-# 提取途径：step5_dielect 的 DFPT Γ 本征矢 + step7_deform 的 relaxed−clamped
-# 带边差，脚本 tmp/odp/extract_odp.py；量级评估 tmp/odp/odp_mobility.py。
-#
-# 实现走 AMSET 的 **elastic** 框架（弹性近似：忽略发射/吸收能量位移，取 2N+1），
-# 因此不需要给 inelastic 路径打"每机制 ħω"补丁。
-# ★ 默认惰性：只有 mechanisms_2d 含 "ODP" 且 scattering_type 含 ODP 时才生效；
-#   否则与本机制相关的一切都不改变。
-# ★ 常数从 2d_correction.json 读，【不能】放 settings.yaml —— AMSET 的 settings
-#   校验会拒绝未知 key（实测 "Unrecognised setting: odp_frequency"）。
-# ★ 绝对归一化标定见 tmp/odp/CALIBRATION.md（_ODP_NORM 为标定旋钮，端到端实跑钉死）。
-_AMU_TO_ME = 1822.888486209
-_BOHR_TO_ANG = 0.529177210903
-# 端到端标定（2026-09-23，本地 amset 0.5.1 实跑 CrS2_ortho，见 tmp/odp/CALIBRATION.md）：
-#   AMSET ODP-only 空穴 8226 cm2/Vs，解析物理 ODP 10681 -> norm = sqrt(8226/10681) = 0.88。
-#   （只对空穴有意义：本类只支持单一 D/M/ω，无法逐带给 D。）
-_ODP_NORM = 0.88
-_ODP_KEYS = ("odp_frequency_THz", "odp_deformation_potential_eV_A",
-             "odp_mode_mass_amu")
+# ---------------- ODP / IVS（[0033] 常数形变势，默认不开） ----------------
+# 谷内光学形变势（ODP）与谷间散射（IVS）：Jin 2014 / Kaasbjerg 2012 的常数形变势模型，率由
+# dp_optical.py 解析给出（发射/吸收阈值精确、各向同性 -> 动量弛豫率 = 散射率），走 AMSET 的
+# basic 接口（每 k 点直接给率，1/s），不经过四面体积分与 worker。
+# 参数在 2d_correction.json 的 dp_optical 记录里（gen 从 step.conf 的 DP_OPTICAL_E/H 与 S8.2 谷表写入）：
+#   {"electron": {"valleys": [...], "channels": [...]}, "hole": {...},
+#    "adp_intravalley": {"electron": bool, "hole": bool}}
+# mechanisms_2d 不含 ODP/IVS、adp_intravalley 全关时，本段对运行没有任何影响。
+# （旧的"弹性近似 ODP"实验类（2N+1、端到端标定系数 0.88）已由本段取代。）
+try:
+    import dp_optical as _DPO
+except ImportError:          # 老运行目录没有 dp_optical.py：不开 ODP/IVS/谷内掩码就用不到
+    _DPO = None
+_DPO_REC = _REC.get("dp_optical") or {}
+_CARRIERS = ("electron", "hole")
+_DPO_KINDS = {"ODP": frozenset({"intra"}), "IVS": frozenset({"inter_star", "inter"})}
 
 
-def _odp_cfg():
-    """从 2d_correction.json 取 ODP 常数；缺项直接报清楚错（不静默）。"""
-    miss = [k for k in _ODP_KEYS if k not in _REC]
-    if miss:
-        raise KeyError("amset2d：mechanisms_2d 含 ODP，但 2d_correction.json 缺 %s"
-                       % ", ".join(miss))
-    return dict(frequency_THz=float(_REC[_ODP_KEYS[0]]),
-                D_eV_A=float(_REC[_ODP_KEYS[1]]),
-                M_amu=float(_REC[_ODP_KEYS[2]]))
+def _need_dpo():
+    if _DPO is None:
+        raise ImportError("amset2d：2d_correction.json 开了 ODP/IVS 或 ADP 谷内掩码，但运行目录里没有"
+                          " dp_optical.py（请用 gen_step14_amset2d.py 重新生成 step8.4_amset2d）")
+    return _DPO
 
 
-class OpticalDeformation2D(_ABS_ELASTIC):
-    """非极性光学声子形变势（弹性近似）。"""
+def _split_bands(amset_data, spin):
+    """该自旋的能带 -> (电子带, 空穴带) 布尔数组。常数形变势模型按载流子分谷，金属没有意义。"""
+    if amset_data.is_metal or not amset_data.vb_idx:
+        raise ValueError("amset2d：ODP/IVS/ADP 谷内掩码需要半导体（AMSET 的 vb_idx），本体系被判为金属")
+    cb = np.arange(len(amset_data.energies[spin])) > amset_data.vb_idx[spin]
+    return cb, ~cb
 
-    name = "ODP"
-    required_properties = ()          # 常数走 _odp_cfg()，不进 settings 校验
 
-    def __init__(self, properties, doping, temperatures, nbands):
+def _adp_mask_setup(amset_data):
+    """ADP 谷内掩码的数据（{"electron"/"hole": 成员谷中心 (n,3) 或 None, "rlat", "rinv"}）；都不开 -> None。
+    rlat 与 calculate_rate 里的同一个（amset_data.structure 的倒格子，bohr⁻¹）：q 就是在这个笛卡尔系里给的。"""
+    flags = _DPO_REC.get("adp_intravalley") or {}
+    if not any(flags.get(c) for c in _CARRIERS):
+        return None
+    dpo = _need_dpo()
+    rlat = np.asarray(amset_data.structure.lattice.reciprocal_lattice.matrix, float)
+    out = {"rlat": rlat, "rinv": np.linalg.inv(rlat)}
+    for car in _CARRIERS:
+        vs = (_DPO_REC.get(car) or {}).get("valleys") or []
+        out[car] = dpo.member_table(vs)[0] if (flags.get(car) and vs) else None
+    if out["electron"] is not None or out["hole"] is not None:
+        _split_bands(amset_data, amset_data.spins[0])          # 金属直接拒绝
+        return out
+    return None
+
+
+_VALLEY_CHECKED = [False]
+VALLEY_DK_WARN = 0.05          # |Δk|/|b1|：谷区域里的能量最低点离谷中心超过这么远就告警
+
+
+def _valley_check(amset_data):
+    """每次运行打一次：谷表与 AMSET 网格上的能带对不对得上（谷底是否落在给定的谷中心）。"""
+    if _VALLEY_CHECKED[0]:
+        return
+    _VALLEY_CHECKED[0] = True
+    rlat = amset_data.structure.lattice.reciprocal_lattice.matrix
+    spin = amset_data.spins[0]
+    for car, sel, sign in zip(_CARRIERS, _split_bands(amset_data, spin), (+1, -1)):
+        vs = (_DPO_REC.get(car) or {}).get("valleys") or []
+        if not vs or not sel.any():
+            continue
+        rows = _DPO.valley_report(np.asarray(amset_data.energies[spin])[sel], amset_data.kpoints, rlat, vs, sign)
+        txt = "; ".join("%s 谷底离中心 %s、高于带边 %s" % (
+            r["label"], "—" if r["dk_rel"] is None else "%.3f|b1|" % r["dk_rel"],
+            "—" if r["dE_eV"] is None else "%.3f eV" % r["dE_eV"]) for r in rows)
+        bad = [r["label"] for r in rows if r["dk_rel"] is not None and r["dk_rel"] > VALLEY_DK_WARN]
+        print("[amset2d]%s 谷表核对（%s）：%s%s" % (
+            "[WARN]" if bad else "", car, txt,
+            ("  ——%s 的谷底不在给定中心：谷表与 AMSET 的晶胞/网格不同源？（S8.2 谷表来自 S3 晶胞）" % ",".join(bad))
+            if bad else ""), flush=True)
+
+
+def _dpo_rates(amset_data, kinds):
+    """{spin: (ndop, ntemp, nbands, nk)} 的率（1/s），按载流子各用自己的谷表与通道；
+    没有通道的态加 RATE_FLOOR（> AMSET 的 1e6 零率阈值，免得被最近邻插值顶替）。与掺杂无关 -> 广播视图。"""
+    dpo = _need_dpo()
+    _valley_check(amset_data)
+    rlat = np.asarray(amset_data.structure.lattice.reciprocal_lattice.matrix, float)
+    mass = float(amset_data.structure.composition.weight) * dpo.AMU           # 原胞质量 kg
+    kf = np.asarray(amset_data.kpoints, float)
+    temps = np.asarray(amset_data.temperatures, float)
+    ndop = amset_data.fermi_levels.shape[0]
+    out = {}
+    for spin in amset_data.spins:
+        E = np.asarray(amset_data.energies[spin], float)
+        r = np.zeros((len(temps),) + E.shape)
+        for car, sel, sign in zip(_CARRIERS, _split_bands(amset_data, spin), (+1, -1)):
+            c = _DPO_REC.get(car) or {}
+            if sel.any() and c.get("channels"):
+                r[:, sel] = dpo.carrier_rates(E[sel], kf, rlat, c.get("valleys") or [], c["channels"],
+                                              temps, mass, kinds, sign)
+        r += dpo.RATE_FLOOR
+        out[spin] = np.broadcast_to(r[None], (ndop,) + r.shape)
+    return out
+
+
+class _DPOptical2D(_ABS_BASIC):
+    """常数形变势光学声子散射的公共部分（AMSET basic 接口）。"""
+    required_properties = ()          # 参数走 2d_correction.json，不进 settings 校验
+    kinds = frozenset()
+
+    def __init__(self, properties, doping, temperatures, nbands, rates):
         super().__init__(properties, doping, temperatures, nbands)
-        cfg = _odp_cfg()
-        self.odp = cfg
-        self.omega = cfg["frequency_THz"] * 1e12 * 2 * np.pi / s_to_au
-        d_au = cfg["D_eV_A"] * ev_to_hartree / _BOHR_TO_ANG
-        m_au = cfg["M_amu"] * _AMU_TO_ME
-        self._prefactor = s_to_au * self.omega / 2.0
-        self._coupling = _ODP_NORM * d_au ** 2 / (m_au * self.omega ** 2)
-        kt = np.asarray(temperatures, float)[None, :] * boltzmann_au
-        self.n_op = 1.0 / (np.exp(self.omega / kt) - 1.0)
+        self._rates = rates
 
-    def prefactor(self, spin, b_idx):
-        return ((2 * self.n_op + 1) * self._prefactor
-                * np.ones((len(self.doping), len(self.temperatures))))
+    @classmethod
+    def from_amset_data(cls, materials_properties, amset_data):
+        rates = _dpo_rates(amset_data, cls.kinds)
+        _DPO_FULL[cls.name] = rates          # FD 窗口外的态也要用解析率（见下面 _fill_keep_dpo）
+        return cls(cls.get_properties(materials_properties), amset_data.doping,
+                   amset_data.temperatures, cls.get_nbands(amset_data), rates)
 
-    def factor(self, unit_q, norm_q_sq, spin, band_idx, kpoint, velocity):
-        shape = (len(self.doping), len(self.temperatures))
-        return self._coupling * np.ones(shape + norm_q_sq.shape)
+    @property
+    def rates(self):
+        return self._rates
+
+
+# FD 窗口外的态：AMSET 的 fill_rates_outside_cutoffs 把每个机制窗口外的率统一填成"窗口内全部态（电子带+空穴带）
+# 的对数平均"。ODP/IVS 的率是解析的、全网格都有，没必要填；而且只给一种载流子写了通道时，另一种载流子的
+# RATE_FLOOR（2e6）会把对数平均拉到 ~1e9，窗口外的态于是成了"几乎不散射"的通道，单机制迁移率被放大几十倍
+# （合成双谷实测：电子 IVS 11778 vs 应有 ~350 cm²/Vs）。这里在 AMSET 填完之后把 ODP/IVS 窗口外的率改回解析值。
+_DPO_FULL = {}
+
+
+def _install_fill_keep_dpo():
+    import amset.core.data as _AD
+    if getattr(_AD.AmsetData.fill_rates_outside_cutoffs, "_amset2d_dpo", False):
+        return
+    _orig = _AD.AmsetData.fill_rates_outside_cutoffs
+
+    def _fill_keep_dpo(self, fill_value=None):
+        out = _orig(self, fill_value)
+        labels = list(getattr(self, "scattering_labels", None) or [])
+        hit = [lab for lab in labels if lab in _DPO_FULL]
+        if hit and fill_value is None:
+            lo, hi = self.fd_cutoffs
+            for spin, e in self.energies.items():
+                mask = (e < lo) | (e > hi)
+                for lab in hit:
+                    full = _DPO_FULL[lab].get(spin)
+                    arr = self.scattering_rates[spin][labels.index(lab)]
+                    if full is not None and full.shape == arr.shape:
+                        arr[:, :, mask] = full[:, :, mask]
+            print("[amset2d] %s：FD 窗口外保留解析率（不用 AMSET 的对数平均填充）" % "/".join(hit), flush=True)
+        return out
+
+    _fill_keep_dpo._amset2d_dpo = True
+    _AD.AmsetData.fill_rates_outside_cutoffs = _fill_keep_dpo
+
+
+class OpticalDeformation2D(_DPOptical2D):
+    """谷内光学形变势（X>X 通道）。"""
+    name = "ODP"
+    kinds = _DPO_KINDS["ODP"]
+
+
+class Intervalley2D(_DPOptical2D):
+    """谷间散射（X>X′ 同星其它谷、X>Y 到别的星）。"""
+    name = "IVS"
+    kinds = _DPO_KINDS["IVS"]
 
 
 # ---------------- POP ----------------
@@ -378,12 +521,18 @@ class Piezoelectric2D(_PIE):
 
 # ---------------- 注册 ----------------
 _CLASSES = {"ADP": AcousticDeformation2D, "POP": PolarOptical2D,
-            "IMP": IonizedImpurity2D, "PIE": Piezoelectric2D}
-if "ODP" in _MECHS:          # 实验性：只有 mechanisms_2d 显式含 ODP 才注册
-    _CLASSES["ODP"] = OpticalDeformation2D
-_ACTIVE = [k for k in ("ADP", "POP", "IMP", "PIE", "ODP") if k in _MECHS]
+            "IMP": IonizedImpurity2D, "PIE": Piezoelectric2D,
+            "ODP": OpticalDeformation2D, "IVS": Intervalley2D}
+_ACTIVE = [k for k in ("ADP", "POP", "IMP", "PIE", "ODP", "IVS") if k in _MECHS]
+for _k in ("ODP", "IVS"):    # [0033] 开了就必须有对应种类的通道（gen 保证；手写 json 在这里拦）
+    if _k in _MECHS and not any(h.get("kind") in _DPO_KINDS[_k]
+                                for _c in _CARRIERS for h in (_DPO_REC.get(_c) or {}).get("channels") or []):
+        raise ValueError("amset2d：mechanisms_2d 含 %s，但 2d_correction.json 的 dp_optical 里没有 %s 通道"
+                         % (_k, "/".join(sorted(_DPO_KINDS[_k]))))
 for _k in _ACTIVE:
     C._scattering_mechanisms[_k] = _CLASSES[_k]
+if {"ODP", "IVS"} & set(_ACTIVE):
+    _install_fill_keep_dpo()
 if "ADP" in _MECHS:
     C.AcousticDeformationPotentialScattering = AcousticDeformation2D   # worker 用此名重建 ADP
 
@@ -391,6 +540,12 @@ _BANNER = ("[amset2d] amset %s | c=%.3f A | r_inf=%s | mechanisms=%s"
            % (amset.__version__, _C / A2B, np.round(_r_tensor("eps_inf_slab").tolist(), 3),
               ",".join(_ACTIVE)))
 print(_BANNER, flush=True)
+if _DPO_REC and ({"ODP", "IVS"} & set(_ACTIVE) or any((_DPO_REC.get("adp_intravalley") or {}).values())):
+    _need_dpo()
+    _ivf = _DPO_REC.get("adp_intravalley") or {}
+    print("[amset2d] ODP/IVS（常数形变势，D eV/Å @ ħω meV）：%s | ADP 谷内掩码：电子 %s，空穴 %s"
+          % (_DPO.describe(_DPO_REC), "开" if _ivf.get("electron") else "关",
+             "开" if _ivf.get("hole") else "关"), flush=True)
 # r∞/Δr 自检（gen_step14 落盘的值）。曾把体相 ε0/ε∞ 外推的 Δr=43.5 Å 当 Sohier 的
 # 0.53 Å 用，POP 单机制迁移率差约两个量级；这里每次运行都把真正喂进核的两个数打出来。
 _RCHK = _REC.get("r_inf_delta_r_check") or {}

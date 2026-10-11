@@ -32,7 +32,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 # [SKILL_REV] 版本戳：写进 settings.yaml 头，便于从结果反查跑的是哪份 skill 副本。
-_SKILL_REV = "2026-10-10-0032-r2"   # 复审：链首清旧本征产物与 mesh；SCATTERING 无 ADP 不出只 ADP   # [0032] WRITE_MESH/INTRINSIC_ADP_ONLY 2D 默认开（旧：2026-09-28-desym-fix V115）
+_SKILL_REV = "2026-10-11-0033"   # ODP/谷间散射（常数形变势，step.conf DP_OPTICAL_E/H）+ ADP 谷内掩码   # [0032-r2] 复审：链首清旧本征产物与 mesh；SCATTERING 无 ADP 不出只 ADP   # [0032] WRITE_MESH/INTRINSIC_ADP_ONLY 2D 默认开（旧：2026-09-28-desym-fix V115）
 # 复制来源（gen_step10_amset.py 的 _SKILL_REV），用于人工比对两份文件是否同步
 _SOURCE_GEN_REV = "2026-10-08-2d-raw-elastic"   # [0014] S8 的 2D 弹性改为原始 slab 值，与本步一致
 import stepconf  # noqa: E402
@@ -137,7 +137,22 @@ AMSET_TAIL  = (' && cp -f "$(ls -t transport_*.json 2>/dev/null | head -1)" '
 DOPING      = "-1e14:-1e11:5, 1e11:1e14:5"   # n 型 + p 型各 5 点（对数均布）cm^-2 面密度；gen 里按 c 折算成体浓度
 TEMPERATURES = "100:900:9"            # 100,200,...,900 K，每 100 K 一个点
 SCATTERING  = ["ADP", "IMP", "POP"]   # 形变势声学 + 电离杂质 + 极性光学 "ADP", "IMP", "POP"
-_ALLOWED_SCATTERING = {"ADP", "IMP", "POP", "PIE"}   # step.conf SCATTERING 允许的机制
+_ALLOWED_SCATTERING = {"ADP", "IMP", "POP", "PIE", "ODP", "IVS"}   # step.conf SCATTERING 允许的机制
+# [0033] 光学形变势（ODP，谷内）与谷间散射（IVS）：常数形变势模型（dp_optical.py，Jin 2014 / Kaasbjerg 2012）。
+#   出厂不开。step.conf 写了通道表就开，并自动把 ODP / IVS 加进 SCATTERING：
+#     DP_OPTICAL_E = K>K:4.1@50; K>K':2.6@46; K>Q:2.0@48; Q>Q:3.0@50; Q>Q':2.0@45; Q>K:2.0@48
+#     DP_OPTICAL_H = K>K:...; K>Γ:...; Γ>K:...
+#   写法 起>止:D@ħω，D 单位 eV/Å（= 1e8 eV/cm），ħω 单位 meV；X>X 谷内（ODP），X>X' 同星其它谷、X>Y 别的星（IVS）。
+#   谷表（各谷的 k 中心）默认读 S8.2 的 step8.2_dpt/dpt_result.json（multi_valley.valleys）；
+#   没跑 S8.2 或要改，用 DP_OPTICAL_VALLEYS_E/H 手填（K:kx,ky,kz|kx,ky,kz; Q:...，S3 晶胞的分数坐标）。
+#   ADP_INTRAVALLEY：auto（出厂；开了 IVS 的载流子，ADP 只留谷内，免得与 IVS 重复计数）/ on / off。
+DP_OPTICAL_E = ""
+DP_OPTICAL_H = ""
+DP_OPTICAL_VALLEYS_E = ""
+DP_OPTICAL_VALLEYS_H = ""
+ADP_INTRAVALLEY = "auto"
+DPT_RESULT = "step8.2_dpt/dpt_result.json"
+_DP_OPTICAL_REC = None          # resolve_dp_optical() 的结果，apply_2d_corrections 落进 2d_correction.json
 MANUAL_BANDGAP = None                 # None=自动读；或写数值(eV) 覆盖 scissor
 # ★ patch_bandgap_override（2026-09-28）：scissor 带隙的 step.conf 覆盖通道（与 gen_step10 同款）。
 #   BANDGAP_OVERRIDE = <eV>、BANDGAP_NOTE = <来源说明>；优先级
@@ -371,6 +386,12 @@ SPEC = {
     "ELASTIC_GUARD": (True, "bool"),
     "STRUCTURE_GUARD": (True, "bool"),
     "ALLOW_COARSE_S3": (False, "bool"),         # [V173]
+    # [0033] ODP / IVS（见顶部 DP_OPTICAL_* 说明）
+    "DP_OPTICAL_E": ("", "str"),
+    "DP_OPTICAL_H": ("", "str"),
+    "DP_OPTICAL_VALLEYS_E": ("", "str"),
+    "DP_OPTICAL_VALLEYS_H": ("", "str"),
+    "ADP_INTRAVALLEY": ("auto", "str"),
 }
 # --- amset2d 插件相关（可改）---
 PLUGIN_SRC_NAME = "amset2d_plugin.py"   # 与本脚本同目录，运行时复制到 OUTDIR_NAME
@@ -1238,6 +1259,78 @@ def _mechanisms_2d(cwd: Path):
     return mechs
 
 
+def resolve_dp_optical(cwd: Path):
+    """[0033] step.conf 的 DP_OPTICAL_* -> 2d_correction.json 的 dp_optical 记录，并把 ODP/IVS 补进 SCATTERING。
+
+    没写通道表 -> None（与以前完全一样；SCATTERING 里手写了 ODP/IVS 却没通道 -> 报错）。
+    格式错、谷表缺、通道指向谷表里没有的谷 -> sys.exit 说清楚（不静默）。"""
+    global SCATTERING
+    import json
+    import dp_optical as dpo
+    specs = {"electron": (DP_OPTICAL_E, DP_OPTICAL_VALLEYS_E, "DP_OPTICAL_E", "DP_OPTICAL_VALLEYS_E"),
+             "hole": (DP_OPTICAL_H, DP_OPTICAL_VALLEYS_H, "DP_OPTICAL_H", "DP_OPTICAL_VALLEYS_H")}
+    rec, kinds_on = {}, set()
+    dpt = None
+    for car, (ch_spec, v_spec, ch_key, v_key) in specs.items():
+        try:
+            chs = dpo.parse_channels(ch_spec)
+        except ValueError as e:
+            sys.exit("[ERROR] %s：%s" % (ch_key, e))
+        if not chs:
+            continue
+        if str(v_spec or "").strip():
+            try:
+                vs, src = dpo.parse_valleys(v_spec), "step.conf %s" % v_key
+            except ValueError as e:
+                sys.exit("[ERROR] %s：%s" % (v_key, e))
+        else:
+            if dpt is None:
+                f = cwd / DPT_RESULT
+                if not f.is_file():
+                    sys.exit("[ERROR] %s 写了通道，但没有谷表：%s 不存在（S8.2 没跑完）。\n"
+                             "        处理：先跑 S8.2_dpt，或在 step.conf 手填 %s（K:kx,ky,kz|...; Q:...）。"
+                             % (ch_key, DPT_RESULT, v_key))
+                dpt = json.loads(f.read_text(encoding="utf-8"))
+            vs, src = dpo.valleys_from_dpt(dpt, car), DPT_RESULT
+            if not vs:
+                sys.exit("[ERROR] %s 写了通道，但 %s 里没有 %s 的多谷谷表（multi_valley.valleys）。"
+                         "\n        处理：在 step.conf 手填 %s。" % (ch_key, DPT_RESULT, car, v_key))
+        try:
+            dpo.check_channels(chs, vs)
+        except ValueError as e:
+            sys.exit("[ERROR] %s（谷表来自 %s）：%s" % (ch_key, src, e))
+        rec[car] = {"channels": chs, "valleys": vs, "valleys_source": src}
+        kinds_on |= {c["kind"] for c in chs}
+    want = [m for m, ks in (("ODP", {"intra"}), ("IVS", {"inter_star", "inter"})) if kinds_on & ks]
+    asked = [m for m in ("ODP", "IVS") if m in SCATTERING and m not in want]
+    if asked:
+        sys.exit("[ERROR] SCATTERING 含 %s，但 step.conf 的 DP_OPTICAL_E/H 里没有对应通道"
+                 "（ODP 要 X>X，IVS 要 X>X' 或 X>Y）" % ",".join(asked))
+    if not rec:
+        return None
+    for m in want:
+        if m not in SCATTERING:
+            SCATTERING = list(SCATTERING) + [m]
+    mode = str(ADP_INTRAVALLEY or "auto").strip().lower()
+    if mode not in ("auto", "on", "off"):
+        sys.exit("[ERROR] ADP_INTRAVALLEY=%r 无效，只允许 auto / on / off" % ADP_INTRAVALLEY)
+    flags = {}
+    for car in ("electron", "hole"):
+        has_iv = any(c["kind"] != "intra" for c in (rec.get(car) or {}).get("channels") or [])
+        flags[car] = bool(car in rec and (mode == "on" or (mode == "auto" and has_iv)))
+    rec["adp_intravalley"] = flags
+    rec["adp_intravalley_mode"] = mode
+    rec["model"] = ("常数形变势：1/τ_c(x) = π D_c²/(M ω_c)·[N·G_c(x+ħω) + (N+1)·G_c(x−ħω)]，"
+                    "G_c 为目标谷（星平均）每原胞每自旋态密度，M 为原胞质量；各向同性，动量弛豫率 = 散射率")
+    rec["reference"] = "Jin et al. PRB 90, 045422 (2014); Kaasbjerg et al. PRB 85, 115317 (2012)"
+    print("[OK] ODP/IVS 开：%s；SCATTERING = %s" % (dpo.describe(rec), SCATTERING))
+    for car in ("electron", "hole"):
+        if car in rec:
+            print("[..]   %s 谷表来自 %s；ADP 谷内掩码 %s" % (car, rec[car]["valleys_source"],
+                                                    "开" if flags[car] else "关"))
+    return rec
+
+
 def read_piezo(cwd: Path):
     """从 ELASTIC_DIR/OUTCAR 读**弛豫离子**压电张量 e（3×6，C/m²），重排成标准 Voigt 列序。
 
@@ -1546,6 +1639,7 @@ def apply_2d_corrections(cwd: Path, elastic, eps_inf=None, eps_static=None):
         "imp_distance_A": float(IMP_DISTANCE_A),
         "pop_lo_dispersion": bool(POP_LO_DISPERSION),
         "mechanisms_2d": mechanisms,
+        "dp_optical": _DP_OPTICAL_REC,          # [0033] None = 不开 ODP/IVS
         "areal_density_factor_cm": c_len * 1e-8,
         "areal_density_note": "n_2D [cm^-2] = n_3D [cm^-3] x cell_c [cm]",
         "inplane_cell_area_cm2": _CELL_AREA_CM2,
@@ -1971,6 +2065,22 @@ def _install_postprocess(out):
     print("[OK] 本征后处理脚本就位：%s" % dst)
 
 
+
+
+def _install_dp_optical(out):
+    """[0033] 把 dp_optical.py（ODP/IVS 的率、ADP 谷内掩码）复制进运行目录。
+    插件只在 2d_correction.json 开了 ODP/IVS/谷内掩码时才真正用它；开了却缺文件 -> 插件报错。"""
+    here = Path(__file__).resolve().parent
+    name = "dp_optical.py"
+    src = next((p for p in (here / name, Path.cwd() / name) if p.is_file()), None)
+    if src is None:
+        if _DP_OPTICAL_REC:
+            sys.exit("[ERROR] 开了 ODP/IVS，但找不到 %s（gen_need 里要有它）" % name)
+        print("[WARN] 找不到 %s —— 不开 ODP/IVS 时不影响本次运行" % name)
+        return
+    dst = Path(out) / name
+    if src.resolve() != dst.resolve():
+        shutil.copyfile(src, dst)
 
 
 def _install_fermi_check(out):
@@ -2408,6 +2518,8 @@ def main():
     global STRUCTURE_GUARD, ALLOW_COARSE_S3
     global IR_FIX, _IR_FIX_ON, KZ_CAP_2D, KZ_FLAT_TOL_EV, _KZ_CAP_RMAX
     global MEM_WARN_GIB, MEM_LIMIT_GIB, MEM_AUTO_EXCLUSIVE
+    global DP_OPTICAL_E, DP_OPTICAL_H, DP_OPTICAL_VALLEYS_E, DP_OPTICAL_VALLEYS_H, ADP_INTRAVALLEY
+    global _DP_OPTICAL_REC
     _conf_nworkers = None
     if (cwd / "step.conf").is_file():
         # strict=False：材料级 step.conf 是【全技能共用】的一份，含别的步骤的键
@@ -2495,6 +2607,12 @@ def main():
             #   [0032] 出厂 True；step.conf 显式写 true/false 才覆盖（SPEC 默认 None）。
             WRITE_MESH, INTRINSIC_ADP_ONLY = resolve_intrinsic_switches(
                 _p["WRITE_MESH"], _p["INTRINSIC_ADP_ONLY"], WRITE_MESH, INTRINSIC_ADP_ONLY)
+            # [0033] ODP / IVS 的通道表、手填谷表、ADP 谷内掩码（解析与校验在 resolve_dp_optical）
+            DP_OPTICAL_E = str(_p["DP_OPTICAL_E"] or "")
+            DP_OPTICAL_H = str(_p["DP_OPTICAL_H"] or "")
+            DP_OPTICAL_VALLEYS_E = str(_p["DP_OPTICAL_VALLEYS_E"] or "")
+            DP_OPTICAL_VALLEYS_H = str(_p["DP_OPTICAL_VALLEYS_H"] or "")
+            ADP_INTRAVALLEY = str(_p["ADP_INTRAVALLEY"] or "auto")
             # patch_doping_override（B4/B5 缩减设置）：step.conf 可覆盖掺杂/温度范围
             if _p["DOPING"]:
                 _d = str(_p["DOPING"])
@@ -2580,6 +2698,9 @@ def main():
         NWORKERS = NWORKERS_FALLBACK
         print("[WARN] 推不出提交分配（%s）—— NWORKERS 兜底 %d" % (_src, NWORKERS))
     _guard_dim_2d(cwd)
+    # [0033] ODP / IVS：解析 step.conf 通道表 + 谷表（S8.2 或手填），把 ODP/IVS 补进 SCATTERING。
+    #   必须在 apply_2d_corrections（落 mechanisms_2d）与 write_settings（scattering_type）之前。
+    _DP_OPTICAL_REC = resolve_dp_optical(cwd)
     # patch_inversion_rule：把 WAVEFUNCTION_FULL 从 auto 解析成 True/False（必须在闸门与 _wdir 之前）。
     _apply_inversion_rule(cwd)
     # [guard-2026-09-25 / 强化 2026-09-26] 真实重叠 + 无反演 + 非全网格 h5 = 已知算坏的组合。
@@ -2616,6 +2737,7 @@ def main():
     _install_plugin(out)
     _install_preflight(out)
     _install_postprocess(out)
+    _install_dp_optical(out)    # [0033] 插件 import 它（ODP/IVS 与 ADP 谷内掩码）
     _install_fermi_check(out)   # patch_fermi_window（2026-09-28 用户批准）
     _install_symmetry_deps(out)  # patch_symmetry_gate：preflight 的判据来源
     _has_fix = _install_desym_fix(out)   # patch_desym_fix
@@ -2671,6 +2793,9 @@ def main():
         kc.report_dielectric_symmetry(cwd, eps_inf, eps_static, (DIELECT_DIR,) + tuple(STRUCT_CANDS))
     # patch_2d_amset：落盘二维修正依据（原始 slab 介电/层法向/机制），弹性保持原始 slab 值
     is_2d, elastic, c_len = apply_2d_corrections(cwd, elastic, eps_inf, eps_static)
+    if _DP_OPTICAL_REC and not is_2d:
+        sys.exit("[ERROR] ODP/IVS（DP_OPTICAL_E/H）只在 2D 插件里实现，本次没有走 2D 路径"
+                 "（TWO_D_MODE / DIM）—— 去掉 DP_OPTICAL_* 或核对维度。")
     if is_2d and c_len and _HAS_KC and hasattr(kc, "invalidate_ct_consumers"):
         # [0016] 2D 默认不跑 S8 之后，S8.1 的 c/t 可能取自本步记录或按结构现算；层厚不同就让 S8.1 重排
         try:
@@ -2751,8 +2876,9 @@ def main():
         print("[WARN] SCATTERING=%s 不含 ADP —— 不出 intrinsic_ADP.json（只 ADP 无从谈起）" % SCATTERING)
     if WRITE_MESH:
         _acmd = _acmd + " && python postprocess_intrinsic.py --check-reproduce"
+        # [0033] ODP/IVS 也是声子机制：只 ADP 时一并剔除（没开的机制 postprocess 自动忽略）
         if INTRINSIC_ADP_ONLY:                  # [0018] 同一份 mesh 再出只含 ADP 的一套（复现已由上一条把关）
-            _acmd = _acmd + (" && python postprocess_intrinsic.py --drop IMP,POP,PIE"
+            _acmd = _acmd + (" && python postprocess_intrinsic.py --drop IMP,POP,PIE,ODP,IVS"
                              " --out intrinsic_ADP.json")
     # ★ 2026-09-28 用户批准（patch_fermi_window）：不依赖 WRITE_MESH 的费米能级窗口检查，
     #   必须放在 cp 成 transport.json **之前** —— 否则失败时 transport.json 已存在，

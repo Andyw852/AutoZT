@@ -344,7 +344,7 @@ def test_s84_intrinsic_switches_default_on_and_explicit_off():
     assert f(True, None, False, False) == (True, False)  # 旧出厂值 + 只开 mesh
     # SCATTERING 不含 ADP 时不出只 ADP（否则全部机制置零、整步 FAIL）
     i = src.index('if INTRINSIC_ADP_ONLY and "ADP" not in [str(x).upper() for x in SCATTERING]:')
-    assert i < src.index('_acmd = _acmd + (" && python postprocess_intrinsic.py --drop IMP,POP,PIE"')
+    assert i < src.index('_acmd = _acmd + (" && python postprocess_intrinsic.py --drop IMP,POP,PIE,ODP,IVS"')
     # 链首清掉上一轮的本征产物与 mesh
     assert "rm -f transport.json intrinsic_transport.json intrinsic_ADP.json mesh_*.h5;" in src
 

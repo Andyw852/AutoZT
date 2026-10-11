@@ -37,7 +37,8 @@ slab 弹性常数（`C_2D/c`）即可，不要再乘 c/t。推导与各机制的
 | 文件 | 作用 |
 |---|---|
 | `gen_step14_amset2d.py` | 登录节点 gen：写 settings.yaml + 2d_correction.json + submit.sh，复制插件 |
-| `amset2d_plugin.py` | 运行期插件：把 ADP/POP/IMP/PIE 四类换成二维核（同名注册表替换，不改 AMSET 安装） |
+| `amset2d_plugin.py` | 运行期插件：把 ADP/POP/IMP/PIE 四类换成二维核（同名注册表替换，不改 AMSET 安装）；[0033] 可选 ODP/IVS 两个新机制与 ADP 谷内掩码 |
+| `dp_optical.py` | [0033] 光学形变势（ODP）与谷间散射（IVS）的常数形变势模型：解析散射率、谷归属、step.conf 解析（纯 numpy） |
 | `amset2d_pop_freq.py` | 取 Gamma 点**面内极性模**有效频率（AMSET 自带口径会把面外 ZO 模算进去） |
 | `amset_desym_fix.py` | 运行期插件（S8 与 S8.4 共用）：修 AMSET 去对称化的相位因子（V115）；环境变量 `AZ_DESYM_FIX` 未设时不打补丁 |
 | `amset_fermi_fix.py` | 运行期插件（S8 与 S8.4 共用）：AMSET 求不到费米能级时改用二分法、宽松解偏差 > 1% 报错、NaN 报错（V132）；`AZ_FERMI_FIX=0` 关 |
@@ -45,6 +46,7 @@ slab 弹性常数（`C_2D/c`）即可，不要再乘 c/t。推导与各机制的
 | `test_fermi_fix.py` | 费米能级插件的检验（WS2 同款 DOS 复现与修复、原式能解时逐位不变、接线） |
 | `test_gen_desym_wiring.py` | S8/S8.4 gen 的逐操作判据、命令、覆盖通道接线自检 |
 | `test_kernels.py` | 四类核的自检（旋转不变、极限行为、护栏），`python test_kernels.py` 应全 PASS |
+| `test_dp_optical_e2e.py` | [0033] ODP/IVS 与 ADP 谷内掩码的真 AMSET 端到端自检（合成双谷模型，5–15 分钟；需要 amset） |
 | `example_2d_correction.json` | 自检用的最小 2d_correction.json 示例 |
 | `VERIFICATION.md` | 在真实 2D 数据上做的端到端验证记录（T1/T2 + 三材料对比） |
 
@@ -104,6 +106,53 @@ gen（`patch_write_mesh` + `patch_intrinsic_auto`）会：
 `transport.json`（overall = ADP+POP+IMP）、`intrinsic_transport.json`（剔除 IMP）、`intrinsic_ADP.json`（只 ADP）。
 本征 JSON 含 μ、S、σ、κe（κe 自 [0018] 起写出）；PF 用 S²σ 自算。三份都在本步目录，不另建步骤目录。
 0.4.19 与 0.5.1 在真实 2 自旋 / 不可约网格数据上的端到端复现均 PASS（见 `VERIFICATION.md` V89/V90/V91）。
+
+## ODP 与谷间散射（[0033]，可选，出厂不开）
+
+AMSET 只有 ADP / POP / IMP / PIE，**没有非极性光学声子（ODP）和谷间散射**。MoS₂ 这类 TMD 的同极 A1′ 模与 K→K′、K→Q
+谷间声子很重要（Kaasbjerg 2012、Jin 2014），缺了它们总迁移率系统偏高。[0033] 用文献的**常数形变势模型**补上：
+
+    1/τ_c(x) = π D_c² / (M ω_c) · [ N·G_c(x + ħω_c) + (N + 1)·G_c(x − ħω_c) ]
+
+- `D_c`：通道 c 的形变势（eV/Å）；`ħω_c`：该通道声子能量；`N`：玻色占据；`M`：原胞质量。
+- `G_c`：目标谷的态密度（每原胞、每自旋），**直接用 AMSET 插值网格上的真实能带**统计（不假设抛物带），按星平均。
+- 发射/吸收阈值精确（目标谷在 x ± ħω 处没有态就是 0）；矩阵元与 q 无关 → 各向同性，动量弛豫率 = 散射率。
+- 体积（含真空）在 D²·G/M 里抵消，与真空长度无关。
+- 走 AMSET 的 basic 接口（每 k 点直接给率），不经四面体积分，几乎不增加耗时。
+
+**开法**：材料的 step.conf 写通道表（`起>止:D@ħω`，D 单位 eV/Å = 1e8 eV/cm，ħω 单位 meV），**数值从文献表里抄**
+（Jin et al. PRB 90, 045422 (2014) 的 Table IV/V，arXiv:1406.4569；或 Kaasbjerg PRB 85, 115317 (2012)）：
+
+```ini
+[params]
+DP_OPTICAL_E = K>K:<D>@<ħω>; K>K':<D>@<ħω>; K>Q:<D>@<ħω>; Q>Q:<D>@<ħω>; Q>Q':<D>@<ħω>; Q>K:<D>@<ħω>
+DP_OPTICAL_H = K>K:<D>@<ħω>; K>K':<D>@<ħω>; K>Γ:<D>@<ħω>; Γ>K:<D>@<ħω>
+# 可选：
+# DP_OPTICAL_VALLEYS_E = K:0.333333,0.333333,0|-0.333333,-0.333333,0; Q:...   # 手填谷中心（S3 晶胞分数坐标）
+# ADP_INTRAVALLEY = auto        # auto / on / off
+```
+
+- `X>X`：谷内（同一个谷）→ **ODP**；`X>X'`：同一星的其它谷（K→K′）、`X>Y`：到别的星（K→Q）→ **IVS**。
+  文献按声子支分列的（如 K→Q 的 TA、LA、LO 各有 D 与 ħω），**每支写一条**（`K>Q:1.2@24; K>Q:2.0@48`），各支的率相加。
+- **谷表**默认读 S8.2 的 `step8.2_dpt/dpt_result.json`（`multi_valley.valleys`，拒绝出数时谷表照样在）；没跑 S8.2 或不对，
+  用 `DP_OPTICAL_VALLEYS_E/H` 手填。通道两端的谷必须在谷表里，否则 gen 直接报错。
+- 写了通道表 gen 就自动把 ODP / IVS 加进 SCATTERING（日志 `[OK] ODP/IVS 开：…`），并写进 2d_correction.json 的 `dp_optical`。
+- **ADP 谷内掩码**（`ADP_INTRAVALLEY = auto`，出厂）：开了 IVS 的载流子，ADP 只留谷内（k 与 k+q 落在同一个谷）。
+  AMSET 的 ADP 对整个布里渊区的 q 积分，大 q 的 K→K′、K→Q 用长波声速和带边形变势算，既不物理、又和 IVS 重复计数。
+  只开 ODP（没有谷间通道）时 auto 不掩。掩码同样作用于「只 ADP」那一套（同一个 ADP 机制）。
+- 三套结果：overall = 全部机制；`intrinsic_transport.json` = 去 IMP（含 ODP/IVS，它们是声子机制）；
+  `intrinsic_ADP.json` = 只 ADP（`--drop IMP,POP,PIE,ODP,IVS`）。S8.3 的图例、机制表自动带上 ODP/IVS。
+
+**跑完看日志**（`amset.log` 前面几行）：
+
+- `[amset2d] ODP/IVS（常数形变势…）：electron[K×2,Q×6] K>K:…` —— 实际生效的通道；
+- `[amset2d] 谷表核对（electron）：K 谷底离中心 0.000|b1|、高于带边 0.000 eV; Q …` —— 谷底要落在谷中心（< 0.05|b1|），
+  Q 比带边高多少应与 S8.2 的 `dE_eV` 一致；带 `[WARN]` 说明谷表与 AMSET 的晶胞/网格不同源，先查再用；
+- `[amset2d] ODP/IVS：FD 窗口外保留解析率` —— ODP/IVS 在费米窗口外不用 AMSET 的对数平均填充（见 V196）；
+- transport.json 里多出 ODP、IVS 两个单机制迁移率；某载流子没写通道时它的单机制值会极大（只有 2e6 s⁻¹ 的下限率），这是正常的。
+
+**局限**：常数形变势（q 无关、各向同性）是文献的简化模型，参数质量决定结果；不含一阶（∝q）谷间耦合；
+谷归属按「离谷中心最近」划分。要发表的绝对值仍建议与 EPW/Perturbo 对照。
 
 ## 已知局限（写论文要写进方法学）
 

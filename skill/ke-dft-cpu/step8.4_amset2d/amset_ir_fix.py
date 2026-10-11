@@ -209,7 +209,10 @@ def star_average_factor(scatterer, rots, rlat=None):
     dp = getattr(scatterer, "deformation_potential", None)
     if not hasattr(dp, "interpolate") or not rots or len(rots) < 2:
         return False
-    orig = scatterer.factor
+    # [0033] 2D 插件的 ADP 把谷内掩码与核分开（_factor_core / _iv_keep）：星平均只平均核，
+    # 掩码在平均之后按**未旋转**的 k、q 乘 —— 旋转后的 q 配原来的 k 不是一对真实的 (k, k′)。
+    orig = getattr(scatterer, "_factor_core", None) or scatterer.factor
+    keep_fn = getattr(scatterer, "_iv_keep", None)
     rlat = None if rlat is None else np.asarray(rlat, float)
 
     interp = dp.interpolate
@@ -243,7 +246,9 @@ def star_average_factor(scatterer, rots, rlat=None):
                 acc = out if acc is None else acc + out
         finally:
             dp.__dict__.pop("interpolate", None)
-        return acc / len(rots)
+        acc = acc / len(rots)
+        keep = keep_fn(unit_q, norm_q_sq, spin, band_idx, kpoint) if keep_fn else None
+        return acc if keep is None else acc * keep
 
     scatterer.factor = factor
     return True
