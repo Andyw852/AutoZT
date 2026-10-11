@@ -307,8 +307,9 @@ def test_odp_consumer_stale(kc, of):
     assert st({"frozen_use": {"electron": "used"}, "digest": {"electron": "old"}}, p) == ["electron"]
     assert st({"frozen_use": {"electron": "unavailable"}}, p) == ["electron"]     # 参数刚可用 -> 用上
     assert st({}, p) == ["electron"]                                               # 旧版 S8.4 没记录
-    for how in ("manual", "off", "manual_valleys", "not_in_scattering"):
+    for how in ("off", "manual_valleys", "not_in_scattering"):
         assert st({"frozen_use": {"electron": how}}, p) == []
+    assert st({"frozen_use": {"electron": "manual"}}, p) == ["electron"]       # [0035-r2] 旧口径"手填优先" -> 改用算出来的
     gone = {"schema": "odp_params/1", "carriers": {"electron": {"status": "no_valleys"}}}
     assert st({"frozen_use": {"electron": "used"}, "digest": {"electron": dg}}, gone) == ["electron"]
 
@@ -377,16 +378,29 @@ def test_gen_frozen_used(tmp_path, monkeypatch, kc, capsys):
     assert "冻声子 ODP" in capsys.readouterr().out
 
 
-def test_gen_frozen_manual_wins_and_ivs_combines(tmp_path, monkeypatch, kc):
+def test_gen_frozen_wins_manual_intra_is_reference(tmp_path, monkeypatch, kc, capsys):
+    """[0035-r2] 算出来的优先：手填谷内通道只打印对照、记进 manual_reference，不进散射率；手填谷间通道照用。"""
     _dpt_and_params(tmp_path, kc)
     g = _gen(monkeypatch, DP_OPTICAL_E="K>K:3.0@50", DP_OPTICAL_H="K>K':1.5@45")
     rec = g.resolve_dp_optical(tmp_path)
     fr = g._DP_OPTICAL_FROZEN_REC["frozen_use"]
-    assert fr == {"electron": "manual", "hole": "used"}
-    assert [c["D_eV_A"] for c in rec["electron"]["channels"]] == [3.0]                       # 手填谷内优先
+    assert fr == {"electron": "used", "hole": "used"}
+    assert [(c["D_eV_A"], c.get("source")) for c in rec["electron"]["channels"]] == [(pytest.approx(4.2), "frozen")]
+    assert rec["electron"]["frozen"]["manual_reference"] == [{"valley": "K", "D_eV_A": 3.0, "hw_meV": 50.0}]
+    out = capsys.readouterr().out
+    assert "只作对照" in out and "手填 3.00 eV/Å@50.0 meV | 冻声子 4.20 eV/Å@49.5 meV" in out
     kinds = sorted(c["kind"] for c in rec["hole"]["channels"])
     assert kinds == ["inter_star", "intra"] and "IVS" in g.SCATTERING                        # 手填谷间 + 冻声子谷内
     assert rec["adp_intravalley"]["hole"] is True
+    # 要用手填（文献）值：ODP_FROZEN = off
+    g = _gen(monkeypatch, DP_OPTICAL_E="K>K:3.0@50", ODP_FROZEN="off")
+    rec = g.resolve_dp_optical(tmp_path)
+    assert [c["D_eV_A"] for c in rec["electron"]["channels"]] == [3.0] and "frozen" not in rec["electron"]
+    assert g._DP_OPTICAL_FROZEN_REC["frozen_use"]["electron"] == "off"
+    # 手填谷内只作对照也照样校验：谷名写错要报出来
+    g = _gen(monkeypatch, DP_OPTICAL_E="K>K:3.0@50; M>M:1@40")
+    with pytest.raises(SystemExit):
+        g.resolve_dp_optical(tmp_path)
 
 
 def test_gen_frozen_off_explicit_and_stale(tmp_path, monkeypatch, kc):

@@ -831,8 +831,9 @@ def odp_consumer_stale(rec, params):
 
     rec = {"frozen_use": {载流子: 决定}, "digest": {载流子: 用过的参数指纹}}。每个载流子看 S8.4 当时的决定：
       used（用了冻声子参数）  -> 指纹变了（或新参数不可用了）才重排；
-      manual / off / manual_valleys / not_in_scattering（手填优先、关掉、手填谷表、显式 SCATTERING 不含 ODP）-> 不动；
-      unavailable 或没有记录（S8.4 在参数出来之前跑的，或旧版 S8.4）-> 新参数可用就重排（开了 odp_frozen 就该用上）。"""
+      off / manual_valleys / not_in_scattering（关掉、手填谷表、显式 SCATTERING 不含 ODP）-> 不动；
+      unavailable、manual 或没有记录（S8.4 在参数出来之前跑的、0035-r1 之前"手填谷内优先"的旧口径、旧版 S8.4）
+        -> 新参数可用就重排（[0035-r2] 起冻声子参数优先，开了 odp_frozen 就该用上）。"""
     import odp_frozen as _of
     use = (rec or {}).get("frozen_use") or {}
     dig = (rec or {}).get("digest") or {}
@@ -843,7 +844,7 @@ def odp_consumer_stale(rec, params):
         if how == "used":
             if dig.get(car) != new:
                 out.append(car)
-        elif how in (None, "unavailable") and new is not None:
+        elif how in (None, "unavailable", "manual") and new is not None:
             out.append(car)
     return out
 

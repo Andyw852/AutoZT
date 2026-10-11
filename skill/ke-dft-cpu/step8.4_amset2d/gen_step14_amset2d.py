@@ -32,7 +32,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 # [SKILL_REV] 版本戳：写进 settings.yaml 头，便于从结果反查跑的是哪份 skill 副本。
-_SKILL_REV = "2026-10-11-0035-r1"   # [0035-r1] 复审：交叉拒绝、并星平均、τ 挪到 transport.json 之后；[0035] 冻声子 ODP 参数（ODP_FROZEN）+ τ(E)（tau_energy.py）   # [0034-r3] 二审：重复星按 S8.2 k_grid 合并；显式 SCATTERING+掩码的日志   # [0034-r2] 复审：同中心谷合并、显式 SCATTERING 照办、PIE 与 settings 一致   # [0034] OVERALL_WITHOUT（出厂 ODP）-> overall_noODP.json   # [0033] ODP/谷间散射（常数形变势，step.conf DP_OPTICAL_E/H）+ ADP 谷内掩码   # [0032-r2] 复审：链首清旧本征产物与 mesh；SCATTERING 无 ADP 不出只 ADP   # [0032] WRITE_MESH/INTRINSIC_ADP_ONLY 2D 默认开（旧：2026-09-28-desym-fix V115）
+_SKILL_REV = "2026-10-11-0035-r2"   # [0035-r2] 冻声子优先、手填谷内只作对照；[0035-r1] 复审：交叉拒绝、并星平均、τ 挪到 transport.json 之后；[0035] 冻声子 ODP 参数（ODP_FROZEN）+ τ(E)（tau_energy.py）   # [0034-r3] 二审：重复星按 S8.2 k_grid 合并；显式 SCATTERING+掩码的日志   # [0034-r2] 复审：同中心谷合并、显式 SCATTERING 照办、PIE 与 settings 一致   # [0034] OVERALL_WITHOUT（出厂 ODP）-> overall_noODP.json   # [0033] ODP/谷间散射（常数形变势，step.conf DP_OPTICAL_E/H）+ ADP 谷内掩码   # [0032-r2] 复审：链首清旧本征产物与 mesh；SCATTERING 无 ADP 不出只 ADP   # [0032] WRITE_MESH/INTRINSIC_ADP_ONLY 2D 默认开（旧：2026-09-28-desym-fix V115）
 # 复制来源（gen_step10_amset.py 的 _SKILL_REV），用于人工比对两份文件是否同步
 _SOURCE_GEN_REV = "2026-10-08-2d-raw-elastic"   # [0014] S8 的 2D 弹性改为原始 slab 值，与本步一致
 import stepconf  # noqa: E402
@@ -156,9 +156,10 @@ DPT_RESULT = "step8.2_dpt/dpt_result.json"
 _DP_OPTICAL_REC = None          # resolve_dp_optical() 的结果，apply_2d_corrections 落进 2d_correction.json
 _SCATTERING_EXPLICIT = False    # [0034] step.conf 显式写了 SCATTERING：照它来，不自动补 ODP/IVS
 # [0035] 冻声子 ODP 参数（S7.2 单点 + S8.21 读取；本材料 tf_*.yaml 开 odp_frozen 组才会有）：
-#   ODP_FROZEN = auto（出厂：有 step8.21_odp_read/odp_params.json 就用它的谷内通道 X>X；某载流子在 DP_OPTICAL_E/H
-#                手填了谷内通道就用手填的；手填了谷表 DP_OPTICAL_VALLEYS_* 的载流子不用 —— 参数是按 S8.2 谷表算的）
-#              / on（必须有，没有就报错）/ off（不用）。
+#   ODP_FROZEN = auto（出厂：有 step8.21_odp_read/odp_params.json 就用它的谷内通道 X>X。[0035-r2] 算出来的优先：
+#                DP_OPTICAL_E/H 里手填的谷内通道只打印对照、记进 2d_correction.json，不进散射率；手填的谷间通道照用。
+#                手填了谷表 DP_OPTICAL_VALLEYS_* 的载流子不用冻声子参数 —— 它是按 S8.2 谷表算的）
+#              / on（必须有，没有就报错）/ off（不用冻声子参数：手填的谷内通道照用，要用文献值就写这个）。
 #   ODP_FROZEN_DMIN：D 小于它（eV/Å）的模不进通道（对称性禁戒的模，D ≈ 0，贡献 < 0.1%）。
 #   谷间（IVS）没有自动参数：要开仍按 DP_OPTICAL_E/H 手填 X>X'、X>Y（与冻声子的 X>X 可以同时用）。
 ODP_FROZEN = "auto"
@@ -1313,7 +1314,8 @@ def _load_frozen(cwd: Path):
 
 def resolve_dp_optical(cwd: Path):
     """[0033] step.conf 的 DP_OPTICAL_* -> 2d_correction.json 的 dp_optical 记录，并把 ODP/IVS 补进 SCATTERING。
-    [0035] 再加冻声子参数（ODP_FROZEN，S8.21 的 odp_params.json）：没手填谷内通道的载流子用它的 X>X 通道。
+    [0035] 再加冻声子参数（ODP_FROZEN，S8.21 的 odp_params.json）的 X>X 通道。[0035-r2] 有冻声子参数就用它，
+    手填的谷内通道只作对照（打印、记进 frozen.manual_reference），不进散射率；要用手填值写 ODP_FROZEN = off。
 
     没写通道表、也没有冻声子参数 -> None（与以前完全一样；SCATTERING 里手写了 ODP/IVS 却没通道 -> 报错）。
     格式错、谷表缺、通道指向谷表里没有的谷、冻声子参数是按旧谷表算的 -> sys.exit 说清楚（不静默）。"""
@@ -1333,16 +1335,13 @@ def resolve_dp_optical(cwd: Path):
             chs = dpo.parse_channels(ch_spec)
         except ValueError as e:
             sys.exit("[ERROR] %s：%s" % (ch_key, e))
-        manual_intra = any(c["kind"] == "intra" for c in chs)
+        manual_intra = [c for c in chs if c["kind"] == "intra"]
         fz_ok = frozen is not None and of.params_digest(frozen, car) is not None   # noqa: F821（frozen 非空才求值）
-        want_frozen = fz_ok and not manual_intra
+        want_frozen = fz_ok                   # [0035-r2] 算出来的优先；手填谷内通道只作对照
         if frozen is None:
             f_use[car] = "off" if fmode == "off" else "unavailable"
         elif not fz_ok:
             f_use[car] = "unavailable"
-        elif manual_intra:
-            f_use[car] = "manual"
-            print("[..] %s：%s 手填了谷内通道，冻声子参数（%s）不用" % (car, ch_key, ODP_FROZEN_SRC))
         if not chs and not want_frozen:
             continue
         raw = None
@@ -1402,7 +1401,12 @@ def resolve_dp_optical(cwd: Path):
             if stray:
                 sys.exit("[ERROR] %s 里 %s 的谷 %s 不在现在的谷表里（%s）：重跑 S8.21_odp"
                          % (ODP_FROZEN_SRC, car, ",".join(stray), ",".join(sorted(keep))))
-            chs = chs + fchs
+            if manual_intra:                  # [0035-r2] 手填谷内通道：先照常校验（写错的谷名要报出来），再只作对照
+                try:
+                    dpo.check_channels(manual_intra, vs)
+                except ValueError as e:
+                    sys.exit("[ERROR] %s（谷表来自 %s）：%s" % (ch_key, src, e))
+            chs = [c for c in chs if c["kind"] != "intra"] + fchs
             f_use[car] = "used"
             f_digest[car] = of.params_digest(frozen, car)
             f_info[car] = {"digest": f_digest[car], "n_channels": len(fchs), "dropped_below_dmin": dropped,
@@ -1410,6 +1414,18 @@ def resolve_dp_optical(cwd: Path):
                            "summary": of.describe(frozen, car, norm=dpo.norm_label, keep=keep,
                                                   dmin=float(ODP_FROZEN_DMIN), alias=alias)}
             print("[OK] %s 冻声子 ODP（%s）：%s" % (car, ODP_FROZEN_SRC, f_info[car]["summary"]))
+            if manual_intra:
+                f_info[car]["manual_reference"] = [{"valley": c["from"], "D_eV_A": c["D_eV_A"], "hw_meV": c["hw_meV"]}
+                                                   for c in manual_intra]
+                print("[..] %s：%s 里手填的谷内通道只作对照（不进散射率；要用它们写 ODP_FROZEN = off）："
+                      % (car, ch_key))
+                for lab in sorted({c["from"] for c in manual_intra}):
+                    man_ = [c for c in manual_intra if c["from"] == lab]
+                    fz_ = [c for c in fchs if c["from"] == lab]
+                    print("[..]   谷 %s：手填 %s | 冻声子 %s"
+                          % (lab, ", ".join("%.2f eV/Å@%.1f meV" % (c["D_eV_A"], c["hw_meV"]) for c in man_),
+                             ", ".join("%.2f eV/Å@%.1f meV" % (c["D_eV_A"], c["hw_meV"]) for c in fz_)
+                             or "无（全部 D < %.2f eV/Å，对称性禁戒）" % float(ODP_FROZEN_DMIN)))
             if not chs:
                 continue
         try:
@@ -1427,7 +1443,9 @@ def resolve_dp_optical(cwd: Path):
     asked = [m for m in ("ODP", "IVS") if m in SCATTERING and m not in want]
     if asked:
         sys.exit("[ERROR] SCATTERING 含 %s，但没有对应通道（step.conf 的 DP_OPTICAL_E/H 或冻声子参数；"
-                 "ODP 要 X>X，IVS 要 X>X' 或 X>Y）" % ",".join(asked))
+                 "ODP 要 X>X，IVS 要 X>X' 或 X>Y）%s" % (",".join(asked),
+                 "。冻声子参数在用：它算出的谷内 D 全部 < ODP_FROZEN_DMIN（对称性禁戒），手填的谷内通道只作对照；"
+                 "确要用手填值写 ODP_FROZEN = off" if "used" in f_use.values() and "ODP" in asked else ""))
     if not rec:
         return None
     mode = str(ADP_INTRAVALLEY or "auto").strip().lower()
