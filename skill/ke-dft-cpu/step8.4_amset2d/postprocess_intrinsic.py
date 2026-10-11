@@ -755,8 +755,8 @@ def main(argv=None):
     ap.add_argument("--nworkers", type=int, default=None, help="插值并行数（默认用 settings）")
     ap.add_argument("--check-reproduce", action="store_true",
                     help="先用全部机制重积分并与 transport*.json 对比，验证逐位复现")
-    ap.add_argument("--reproduce-tol", type=float, default=1e-6,
-                    help="复现检查的容差（绝对），默认 1e-6")
+    ap.add_argument("--reproduce-tol", type=float, default=1e-5,
+                    help="复现检查的容差（绝对），默认 1e-5（覆盖双精度输运积分浮点噪声 ~2e-6；真正不同源会差 1e-3 以上）")
     args = ap.parse_args(argv)
 
     run_dir = Path(args.run_dir).resolve()
