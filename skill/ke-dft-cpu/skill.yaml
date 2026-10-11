@@ -300,7 +300,8 @@ optional_steps:
   #   S7.2 照抄 S7 undeformed 的 INCAR/KPOINTS/POTCAR（同一套 k 网格，S8.2 谷表的 k_S7 点都在上面），
   #   按 S5 DFPT 的 Γ 点本征矢做 ±u 位移；S8.21 按 S8.2 的谷表在各谷 k 点取带边能量，算 D（真空对齐）。
   #   S8.4 的 ODP_FROZEN=auto（出厂）读 step8.21_odp_read/odp_params.json；手填了 DP_OPTICAL_E/H 谷内通道的载流子用手填的。
-  #   ★ LOCPOT：S7.2 各单点的 LOCPOT 在 S8.21 跑完之前不能清（真空能级对齐要它），与 S7 -> S7.1 同一条纪律。
+  #   ★ LOCPOT：S7.2 各单点的 LOCPOT 在 S8.21 第一次跑完之前不能清（真空能级对齐要它）；之后 S8.21 用自己记下的
+  #     vacuum_levels.json（按 vasprun.xml 的 sha256 认），vasprun.xml 要留着。
   odp_frozen:
     default: false
     steps:

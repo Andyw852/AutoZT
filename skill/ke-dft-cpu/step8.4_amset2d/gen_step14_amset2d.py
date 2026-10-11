@@ -32,7 +32,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 # [SKILL_REV] 版本戳：写进 settings.yaml 头，便于从结果反查跑的是哪份 skill 副本。
-_SKILL_REV = "2026-10-11-0035"   # [0035] 冻声子 ODP 参数（ODP_FROZEN）+ τ(E)（tau_energy.py）   # [0034-r3] 二审：重复星按 S8.2 k_grid 合并；显式 SCATTERING+掩码的日志   # [0034-r2] 复审：同中心谷合并、显式 SCATTERING 照办、PIE 与 settings 一致   # [0034] OVERALL_WITHOUT（出厂 ODP）-> overall_noODP.json   # [0033] ODP/谷间散射（常数形变势，step.conf DP_OPTICAL_E/H）+ ADP 谷内掩码   # [0032-r2] 复审：链首清旧本征产物与 mesh；SCATTERING 无 ADP 不出只 ADP   # [0032] WRITE_MESH/INTRINSIC_ADP_ONLY 2D 默认开（旧：2026-09-28-desym-fix V115）
+_SKILL_REV = "2026-10-11-0035-r1"   # [0035-r1] 复审：交叉拒绝、并星平均、τ 挪到 transport.json 之后；[0035] 冻声子 ODP 参数（ODP_FROZEN）+ τ(E)（tau_energy.py）   # [0034-r3] 二审：重复星按 S8.2 k_grid 合并；显式 SCATTERING+掩码的日志   # [0034-r2] 复审：同中心谷合并、显式 SCATTERING 照办、PIE 与 settings 一致   # [0034] OVERALL_WITHOUT（出厂 ODP）-> overall_noODP.json   # [0033] ODP/谷间散射（常数形变势，step.conf DP_OPTICAL_E/H）+ ADP 谷内掩码   # [0032-r2] 复审：链首清旧本征产物与 mesh；SCATTERING 无 ADP 不出只 ADP   # [0032] WRITE_MESH/INTRINSIC_ADP_ONLY 2D 默认开（旧：2026-09-28-desym-fix V115）
 # 复制来源（gen_step10_amset.py 的 _SKILL_REV），用于人工比对两份文件是否同步
 _SOURCE_GEN_REV = "2026-10-08-2d-raw-elastic"   # [0014] S8 的 2D 弹性改为原始 slab 值，与本步一致
 import stepconf  # noqa: E402
@@ -1393,7 +1393,10 @@ def resolve_dp_optical(cwd: Path):
             print("[..] %s 谷表：%s 与 %s 中心相同，并成一个谷" % (car, ",".join(alias), ",".join(set(alias.values()))))
         if want_frozen:
             keep = {v["label"] for v in vs}
-            fchs, dropped = of.frozen_channels(frozen, car, keep=keep, norm=dpo.norm_label, dmin=float(ODP_FROZEN_DMIN))
+            fchs, dropped, fnotes = of.frozen_channels(frozen, car, keep=keep, norm=dpo.norm_label,
+                                                        dmin=float(ODP_FROZEN_DMIN), alias=alias)
+            for _n in fnotes:
+                print("[WARN] %s 冻声子：%s" % (car, _n))
             known = keep | set(alias)
             stray = sorted({dpo.norm_label(v.get("label")) for v in frozen["carriers"][car].get("valleys") or []} - known)
             if stray:
@@ -1403,7 +1406,9 @@ def resolve_dp_optical(cwd: Path):
             f_use[car] = "used"
             f_digest[car] = of.params_digest(frozen, car)
             f_info[car] = {"digest": f_digest[car], "n_channels": len(fchs), "dropped_below_dmin": dropped,
-                           "summary": of.describe(frozen, car, norm=dpo.norm_label, keep=keep, dmin=float(ODP_FROZEN_DMIN))}
+                           "merge_notes": fnotes,
+                           "summary": of.describe(frozen, car, norm=dpo.norm_label, keep=keep,
+                                                  dmin=float(ODP_FROZEN_DMIN), alias=alias)}
             print("[OK] %s 冻声子 ODP（%s）：%s" % (car, ODP_FROZEN_SRC, f_info[car]["summary"]))
             if not chs:
                 continue
@@ -3078,11 +3083,6 @@ def main():
             print("[OK] 另出 %s（overall 去掉 %s，同一份 mesh 重积分）" % (_ow_name, "+".join(_ow)))
         else:
             print("[..] 不出 overall 去掉机制的那一套：%s" % _ow_name)
-        # [0035] τ(E) 与迁移率等效 τ：尽力而为（子 shell 吞掉失败），失败原因写在 tau_energy.json，不挡 transport.json
-        if TAU_ENERGY:
-            _acmd = _acmd + (" && { python tau_energy.py || echo '[WARN] tau_energy.py 失败（原因见 tau_energy.json），"
-                             "不影响 transport.json' >&2; }")
-            print("[OK] 另出 tau_energy.json（逐机制 τ(E) + 迁移率等效 τ，同一份 mesh）")
     elif TAU_ENERGY:
         print("[..] WRITE_MESH=false：不出 tau_energy.json（τ(E) 要 mesh）")
     # ★ 2026-09-28 用户批准（patch_fermi_window）：不依赖 WRITE_MESH 的费米能级窗口检查，
@@ -3090,6 +3090,12 @@ def main():
     #   autozt marker 判据会把失败隐藏（V63 的教训）。
     _acmd = _acmd + " && python fermi_window_check.py"
     _acmd = _acmd + AMSET_TAIL
+    # [0035] τ(E) 与迁移率等效 τ：放在 transport.json 落成**之后**、尽力而为（子 shell 吞掉失败）——它超时或被杀
+    #   也不会丢掉几个小时的 AMSET 结果；失败原因写在 tau_energy.json，S8.3 读到 status=error 就跳过 τ 对比。
+    if WRITE_MESH and TAU_ENERGY:
+        _acmd = _acmd + (" && { python tau_energy.py || echo '[WARN] tau_energy.py 失败（原因见 tau_energy.json），"
+                         "transport.json 不受影响' >&2; }")
+        print("[OK] 另出 tau_energy.json（逐机制 τ(E) + 迁移率等效 τ，同一份 mesh；在 transport.json 落成之后跑）")
     # patch_desym_fix：插件在运行目录里就 import；开关用环境变量传进作业（preflight 也读它）
     _acmd = _acmd.replace("@AMSET_PLUGINS@", ("import amset_fermi_fix; " if _has_fermi else "")
                           + ("import amset_ir_fix; " if _has_ir else "")

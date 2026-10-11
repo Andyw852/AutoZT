@@ -23,7 +23,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.path.insert(0, os.getcwd())
 import ke_common as kc  # noqa: E402
-import odp_frozen as of  # noqa: E402
+
+of = None                     # odp_frozen：main() 里切好 python 环境后再 import（它要 numpy）
 
 OUTDIR_NAME = "step8.21_odp_read"
 SRC_DIR = "step7c_odp_frozen"
@@ -32,11 +33,13 @@ DIELECT_DIR = "step5_dielect"
 DPT_RESULT = "step8.2_dpt/dpt_result.json"
 MANIFEST = "odp_manifest.json"
 REF_NAME = "odp-ref"
-_SKILL_REV = "2026-10-11-0035"
+_SKILL_REV = "2026-10-11-0035-r1"
 REF_TOL_EV = 0.005            # odp-ref 与 S7 undeformed 同一 k、同一带的本征值差上限
 SNAP_TOL_INVA = 0.02          # 旧 S8.2（没有 k_S7）时把 k_grid 吸附到本步网格的容差（Å⁻¹）
 SHIFT_WARN_EV = 0.1           # 带边移动超过它：出线性区，建议减小 ODP_DISP_A
 FREQ_WARN = 0.02              # S5 现在的频率与生成时相差超过它 -> 告警
+FREQ_FAIL = 0.05              # ……超过它 -> 报错（位移用的是旧本征矢，要 retry S7.2）
+VAC_CACHE = "vacuum_levels.json"   # 各构型真空能级缓存（按 vasprun.xml 的 sha256 认）：LOCPOT 清掉后 S8.21 重读照样能跑
 OUTCAR_DONE = "General timing and accounting informations"
 
 
@@ -51,10 +54,19 @@ def _vasprun(d):
     return None
 
 
+def _sha256(path):
+    import hashlib
+    h = hashlib.sha256()
+    with open(path, "rb") as fh:
+        for chunk in iter(lambda: fh.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
 class Config(object):
     """一个单点构型：本征值（按自旋）、k 列表、真空能级。"""
 
-    def __init__(self, d, vac_axis=2):
+    def __init__(self, d, vac_axis=2, cache=None):
         import numpy as np
         from pymatgen.io.vasp import Locpot, Vasprun
         self.name = d.name
@@ -65,21 +77,32 @@ class Config(object):
         if vr is None:
             _die("缺 %s/%s/vasprun.xml" % (SRC_DIR, d.name))
         v = Vasprun(str(vr), parse_dos=False, parse_potcar_file=False)
+        if not v.converged_electronic:
+            _die("%s/%s 的电子步没收敛（跑到 NELM 了）：本征值不可信，D 会是噪声。查 OSZICAR，调 NELM/ALGO 后 retry S7.2"
+                 % (SRC_DIR, d.name))
         self.kpts = np.asarray(v.actual_kpoints, float)
         self.eig = {}
         for sp, arr in v.eigenvalues.items():
             self.eig[str(getattr(sp, "name", sp)).lower()] = np.asarray(arr)[:, :, 0]
         self.structure = v.final_structure
         lp = d / "LOCPOT"
-        if not lp.is_file():
-            _die("缺 %s/%s/LOCPOT（真空能级对齐要它；INCAR 要 LVHAR=.TRUE.，且 S8.21 跑完之前别清 LOCPOT）"
-                 % (SRC_DIR, d.name))
-        planar = np.asarray(Locpot.from_file(str(lp)).get_average_along_axis(vac_axis))
-        zf = np.asarray(self.structure.frac_coords)[:, vac_axis]
-        try:
-            self.vac, self.vac_std = of.vacuum_level(planar, zf)
-        except ValueError as e:
-            _die("%s/%s：%s" % (SRC_DIR, d.name, e))
+        key = _sha256(vr)
+        ent = (cache or {}).get(d.name) or {}
+        if lp.is_file():
+            planar = np.asarray(Locpot.from_file(str(lp)).get_average_along_axis(vac_axis))
+            zf = np.asarray(self.structure.frac_coords)[:, vac_axis]
+            try:
+                self.vac, self.vac_std = of.vacuum_level(planar, zf)
+            except ValueError as e:
+                _die("%s/%s：%s" % (SRC_DIR, d.name, e))
+            if cache is not None:
+                cache[d.name] = {"vasprun_sha256": key, "vac_eV": self.vac, "std_eV": self.vac_std}
+        elif ent.get("vasprun_sha256") == key:
+            self.vac, self.vac_std = float(ent["vac_eV"]), float(ent["std_eV"])
+            print("[..] %s：LOCPOT 已清，用上次读出的真空能级（%s，vasprun.xml 未变）" % (d.name, VAC_CACHE))
+        else:
+            _die("缺 %s/%s/LOCPOT，也没有这次运行的真空能级缓存（%s/%s）：真空对齐要它。INCAR 要 LVHAR=.TRUE.；"
+                 "第一次跑 S8.21 之前别清 LOCPOT（跑过一次之后可以清）" % (SRC_DIR, d.name, OUTDIR_NAME, VAC_CACHE))
 
     def kidx(self, kf):
         import numpy as np
@@ -107,6 +130,8 @@ def check_inputs(cwd, man):
     und = cwd / DEFORM_DIR / "undeformed"
     ref = cwd / SRC_DIR / REF_NAME
     bad = []
+    if not (ref / "INCAR").is_file():
+        _die("缺 %s/%s/INCAR（S7.2 没生成完整？retry S7.2_odp）" % (SRC_DIR, REF_NAME))
     for n in ("KPOINTS", "POTCAR"):
         a, b = und / n, ref / n
         if not a.is_file():
@@ -125,7 +150,8 @@ def check_inputs(cwd, man):
 
 
 def check_s5(cwd, man):
-    """S5 现在的频率 vs 生成位移时记下的（只告警：位移用的本征矢已记进 manifest，D 仍是那组模的）。"""
+    """S5 现在的频率 vs 生成位移时记下的：差 > FREQ_WARN 告警，> FREQ_FAIL 或模数不同报错（位移用的是旧本征矢）。
+    S5 读不了（被清理）只告警。"""
     import numpy as np
     try:
         from pymatgen.io.vasp import Vasprun
@@ -138,10 +164,12 @@ def check_s5(cwd, man):
         old = np.asarray(man.get("s5_freq_THz") or [], float)
         f = np.sort(f)
         if len(old) != len(f):
-            print("[WARN] S5 的模数与生成 S7.2 时不同（%d vs %d）：S5 重算过？建议 retry S7.2" % (len(f), len(old)))
-            return None
+            _die("S5 的模数与生成 S7.2 时不同（%d vs %d）：结构变了，retry S7.2_odp" % (len(f), len(old)))
         opt = np.abs(old) > 1.0
         rel = float(np.max(np.abs(f[opt] - old[opt]) / np.abs(old[opt]))) if opt.any() else 0.0
+        if rel > FREQ_FAIL:
+            _die("S5 现在的光学模频率与生成 S7.2 时差 %.1f%%（> %.0f%%）：位移是按旧本征矢做的、ħω 也是旧的，"
+                 "retry S7.2_odp（重算单点）再重跑本步" % (100 * rel, 100 * FREQ_FAIL))
         if rel > FREQ_WARN:
             print("[WARN] S5 现在的光学模频率与生成 S7.2 时差 %.1f%%（> %.0f%%）：S5 重算过，建议 retry S7.2"
                   % (100 * rel, 100 * FREQ_WARN))
@@ -207,8 +235,20 @@ def carrier_params(car, valleys, cfg, man, s7ref, warns):
                 d2[i], d2raw[i] = [], []
                 for k in ks:
                     e0, ep, em = ref.bands(k, spin), cfg[cp].bands(k, spin), cfg[cm].bands(k, spin)
-                    r = of.edge_coupling(e0, ep, em, band, u, dvac_p=dvp, dvac_m=dvm)
-                    rr = of.edge_coupling(e0, ep, em, band, u)
+                    where = "%s 谷 %s（%s 带 %d，k=%s）模 %d" % (car, v["label"], spin, band,
+                                                            [round(float(x), 4) for x in k], i)
+                    try:
+                        r = of.edge_coupling(e0, ep, em, band, u, dvac_p=dvp, dvac_m=dvm)
+                    except of.BandCrossing as e:
+                        dm = float(man.get("disp_max_A") or 0.01)
+                        _die("%s：%s。把 S7.2 的 ODP_DISP_A 调小（现在 %.3g Å，可试 %.3g）后 retry S7.2_odp"
+                             % (where, e, dm, dm / 2))
+                    except ValueError as e:
+                        _die("%s：%s" % (where, e))
+                    try:
+                        rr = of.edge_coupling(e0, ep, em, band, u)
+                    except ValueError:                 # 不对齐的值只作参考：解不出来就记 nan
+                        rr = {"D2": float("nan")}
                     d2[i].append(r["D2"])
                     d2raw[i].append(rr["D2"])
                     info.append(r)
@@ -216,8 +256,7 @@ def carrier_params(car, valleys, cfg, man, s7ref, warns):
                         warns.append("%s %s 模 %d：带边移动 %.3f eV（> %.2f），可能出线性区，可把 ODP_DISP_A 调小"
                                      % (car, v["label"], i, r["shift_max_eV"], SHIFT_WARN_EV))
                     if r["widened"]:
-                        warns.append("%s %s 模 %d：带 %d 附近有近简并带（%s），按简并组 %d 条带处理"
-                                     % (car, v["label"], i, band, r["bands"], r["d"]))
+                        print("[..] %s：近邻带 %s 已核对，没有交叉" % (where, r["near"]))
             D, per, spread = of.combine_members(d2)
             Draw, _p, _s = of.combine_members(d2raw)
             if spread > of.SPREAD_WARN and D > of.DMIN_EV_A:
@@ -225,7 +264,7 @@ def carrier_params(car, valleys, cfg, man, s7ref, warns):
                              % (car, v["label"], g["group"], g["modes"], 100 * spread))
             grows.append({"group": g["group"], "modes": g["modes"], "hw_meV": round(float(g["hw_meV"]), 4),
                           "freq_THz": round(float(g["freq_THz"]), 5), "polar": g.get("polar"),
-                          "D_eV_A": round(D, 5), "D_raw_eV_A": round(Draw, 5),
+                          "D_eV_A": round(D, 5), "D_raw_eV_A": round(Draw, 5) if Draw == Draw else None,
                           "D2_members": [round(x, 6) for x in per], "spread": round(spread, 4),
                           "method": sorted({r["method"] for r in info}),
                           "shift_max_eV": round(max(r["shift_max_eV"] for r in info), 5),
@@ -236,8 +275,10 @@ def carrier_params(car, valleys, cfg, man, s7ref, warns):
 
 
 def main():
+    global of
     cwd = Path.cwd()
     kc.reexec_with_pymatgen(__file__)
+    import odp_frozen as of                                    # noqa: F811
     out = cwd / OUTDIR_NAME
     out.mkdir(exist_ok=True)
     src = cwd / SRC_DIR
@@ -255,12 +296,17 @@ def main():
     if dim != "2d":
         _die("本步只给 2D 用（%s 判为 %s）" % (SRC_DIR, dim))
     cfg = {}
+    try:
+        cache = json.loads((out / VAC_CACHE).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        cache = {}
     for nm in man["configs"]:
         d = src / nm
         if not d.is_dir():
             _die("缺 %s/%s（manifest 里有，目录没了）" % (SRC_DIR, nm))
-        cfg[nm] = Config(d, vac_axis)
+        cfg[nm] = Config(d, vac_axis, cache)
         print("[..] %-12s 真空能级 %.5f eV（std %.1e）" % (nm, cfg[nm].vac, cfg[nm].vac_std))
+    (out / VAC_CACHE).write_text(json.dumps(cache, indent=1), encoding="utf-8")
     s7ref = None
     und = cwd / DEFORM_DIR / "undeformed"
     if _vasprun(und) is not None:                       # 只要本征值（LOCPOT 在 S7.1 之后可能已清理）
@@ -306,9 +352,10 @@ def main():
             continue
         for v in c["valleys"]:
             for g in v["groups"]:
-                lines.append("%-8s %-10s ×%d  组%-2d 模 %-7s ħω=%6.2f meV  D=%6.3f eV/Å（不对齐 %6.3f）  成员离散 %.1f%%  %s"
+                raw = "—" if g["D_raw_eV_A"] is None else "%6.3f" % g["D_raw_eV_A"]
+                lines.append("%-8s %-10s ×%d  组%-2d 模 %-7s ħω=%6.2f meV  D=%6.3f eV/Å（不对齐 %s）  成员离散 %.1f%%  %s"
                              % (car, v["label"], v["g"], g["group"], ",".join(map(str, g["modes"])), g["hw_meV"],
-                                g["D_eV_A"], g["D_raw_eV_A"], 100 * g["spread"], "/".join(g["method"])))
+                                g["D_eV_A"], raw, 100 * g["spread"], "/".join(g["method"])))
     for w in warns:
         lines.append("[WARN] " + w)
         print("[WARN] " + w)

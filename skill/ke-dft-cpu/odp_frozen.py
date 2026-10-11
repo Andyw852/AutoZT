@@ -15,10 +15,12 @@ S7.2（gen_step9c_odp.py）用它选模、生成位移；S8.21（gen_step12c_odp
 
     非简并带：中心差分 D = [E(+u) − E(−u)] / 2u，二次项相消。对称性禁戒的模（该谷的小群下不是全对称表示）自动给 D ≈ 0。
     简并带（d 重，u = 0 时相差 < DEG_TOL_EV）：微扰把它们劈裂成 E₀ + λ_i u。按能量排序后
-        中心差分会把 +λ 和 −λ 配错对（得到 0），所以改用单侧斜率的平方和（两侧平均，线性误差项相消）：
-            Σλ² ≈ ½[Σ_i ((E_i(+u)−E₀)/u)² + Σ_i ((E_i(−u)−E₀)/(−u))²]
+        中心差分会把 +λ 和 −λ 配错对（得到 0），所以改用迹恒等式（与排序无关）：
+            Σλ² = Tr(V²) = [Σ_i(E_i(+u)−ē)² + Σ_i(E_i(−u)−ē)² − 2Σ_i(E_i(0)−ē)²] / 2u²
         dp_optical 的目标谷态密度 G 统计该谷的全部能带（d 条都算），每个态的散射率是 Σ_j|M_ij|²·G/d 的平均，
         即 D_eff² = Tr(M²)/d² = Σλ²/d²（d = 1 时退回 λ²）。
+    组外邻带近到位移下可能交叉时做核对（排序配对与迹恒等式一致才算数），不一致就报错要求减小位移：
+        非简并带的 D 是对角元 ⟨n|∂H/∂u|n⟩（小位移极限），交叉/强混合时它与位移大小有关，不能硬给一个数。
     同一组简并声子（ħω 相同）的各个伙伴模的 D² 相加 —— 和与简并子空间里本征矢的取法无关（正交变换不变）。
     星的各成员谷：对称等价，Σ_伙伴 D² 应相同；取平均并记录离散度。
 
@@ -32,7 +34,9 @@ import numpy as np
 
 THZ_TO_MEV = 4.135667696          # h·1 THz = 4.1357 meV
 DEG_TOL_EV = 0.005                # 带简并判据：u = 0 时同一 k 点、同一自旋两条带相差小于它
-GAP_MARGIN_EV = 0.002             # 简并组外最近的带离得太近（< 2·最大位移 + 它）就并进来，免得排序换位
+GAP_MARGIN_EV = 0.002             # 简并组外最近的带离得太近（< 2·最大位移 + 它）就做交叉核对
+CROSS_REL = 0.05                  # 交叉核对：排序配对平方和与迹恒等式的相对差上限
+CROSS_ABS = 0.05                  # 交叉核对：绝对差上限（(eV/Å)²）
 FREQ_DEG_THZ = 0.05               # 声子简并判据（ħω 相差 < 0.2 meV）
 ACOUSTIC_WEIGHT = 0.5             # 本征矢在平移子空间上的投影权重 > 它 = 声学模
 POLAR_TOL_E = 0.1                 # 模有效电荷 |Σ Z*·U|/|U|（e）> 它 = 极性模
@@ -139,8 +143,8 @@ def mode_table(freqs_thz, eigvecs, masses_amu, born=None, polar_tol=POLAR_TOL_E,
         why = None
         if min(by_index[i]["freq_THz"] for i in g["modes"]) <= fmin_thz:
             why = "频率 %.3f THz ≤ %.2f（虚频或太软）" % (fm, fmin_thz)
-        elif g["polar"] is None:
-            why = "没有 Born 有效电荷，判不了极性"
+        elif g["polar"] is None and not include_polar:
+            why = "没有 Born 有效电荷，判不了极性（ODP_POLAR=include 则不判、全算）"
         elif g["polar"] and not include_polar:
             why = "极性模（模有效电荷 %.2f e > %.2f）：长程耦合由 POP 管（ODP_POLAR=include 才算）" % (
                 max(by_index[i]["Z_mode_e"] for i in g["modes"]), polar_tol)
@@ -164,11 +168,35 @@ def displacement(e_mode, masses_amu, disp_max_a):
 # ---------------------------------------------------------------------------
 # 带边 D：一个 k 点、一个自旋
 # ---------------------------------------------------------------------------
+class BandCrossing(ValueError):
+    """简并组外的邻带在 ±u 构型里与本组交叉/强混合：这个位移下单带的 D 解不出来（与 u 有关），要减小位移重算。"""
+
+
+def trace_sq(e0, ep, em, u):
+    """一组能带的 Σλ²（迹恒等式，与排序、交叉无关）：Σ_i(E_i(+u)−ē)² + Σ_i(E_i(−u)−ē)² − 2Σ_i(E_i(0)−ē)² 除以 2u²，
+    ē = 该组 u = 0 的平均能量。H(u) = H₀ + uV 时它等于 Tr(V²)（含组内的非对角耦合），误差 O(u²)。"""
+    e0, ep, em = (np.asarray(x, float) for x in (e0, ep, em))
+    c = float(np.mean(e0))
+    return float((np.sum((ep - c) ** 2) + np.sum((em - c) ** 2) - 2.0 * np.sum((e0 - c) ** 2)) / (2.0 * u * u))
+
+
+def _sorted_sq(e0, ep, em, u):
+    """按能量排序逐条配对的斜率平方和（两侧平均）。不交叉、组内没有强非对角耦合时 = trace_sq（差 O(u²)）。"""
+    sp = (np.asarray(ep, float) - np.asarray(e0, float)) / u
+    sm = (np.asarray(em, float) - np.asarray(e0, float)) / (-u)
+    return 0.5 * (float(np.sum(sp * sp)) + float(np.sum(sm * sm)))
+
+
 def edge_coupling(e0, ep, em, band, u, dvac_p=0.0, dvac_m=0.0, deg_tol=DEG_TOL_EV, margin=GAP_MARGIN_EV):
     """e0/ep/em：该 k 点、该自旋全部能带的本征值（eV，升序）——u = 0、+u、−u 三个构型；
     dvac_p/dvac_m：+u/−u 构型的真空能级相对 u = 0 的变化（eV），从能量里扣掉（真空对齐）。
-    返回 dict：D2（(eV/Å)²，按模块说明的 D_eff²）、d（简并组带数）、bands [lo, hi]、method、
-              lam（一阶斜率：非简并为中心差分值；简并为 +u 侧排序斜率）、shift_max_eV、gap_out_eV、widened。"""
+
+    简并组 P = u = 0 时与 band 相差 ≤ deg_tol 的带（物理判据，与位移大小无关）：
+      d = 1：D² = λ²，λ = 中心差分；d > 1：D² = Σλ²/d²，Σλ² 用迹恒等式（与组内排序无关）。
+    组外邻带离得比 2×最大带边移动 + margin 还近（位移下可能交叉）时，把它们一起算一遍：排序配对的平方和与迹恒等式
+    一致（差 ≤ CROSS_REL·值 + CROSS_ABS）= 没交叉、没有强组间混合，P 的结果可信；不一致 -> 抛 BandCrossing
+    （这个位移下 P 的 D 与 u 有关，要减小 ODP_DISP_A 重算 S7.2）。
+    返回 dict：D2、d、bands [lo, hi]（P）、near [lo, hi]（参与交叉核对的范围）、method、lam、shift_max_eV、gap_out_eV。"""
     e0 = np.asarray(e0, float)
     ep = np.asarray(ep, float) - float(dvac_p)
     em = np.asarray(em, float) - float(dvac_m)
@@ -181,40 +209,47 @@ def edge_coupling(e0, ep, em, band, u, dvac_p=0.0, dvac_m=0.0, deg_tol=DEG_TOL_E
         lo -= 1
     while hi < nb - 1 and abs(e0[hi + 1] - e0[b]) <= deg_tol:
         hi += 1
-    widened = False
+    idx = slice(lo, hi + 1)
+    d = hi - lo + 1
+    shift = float(max(np.max(np.abs(ep[idx] - e0[idx])), np.max(np.abs(em[idx] - e0[idx]))))
+    wlo, whi = lo, hi
     for _ in range(nb):
-        idx = slice(lo, hi + 1)
-        shift = float(max(np.max(np.abs(ep[idx] - e0[idx])), np.max(np.abs(em[idx] - e0[idx]))))
-        need = 2.0 * shift + margin
+        w = slice(wlo, whi + 1)
+        sw = float(max(np.max(np.abs(ep[w] - e0[w])), np.max(np.abs(em[w] - e0[w]))))
+        need = 2.0 * sw + margin
         grow = False
-        if lo > 0 and e0[lo] - e0[lo - 1] < need:
-            lo -= 1
+        if wlo > 0 and e0[wlo] - e0[wlo - 1] < need:
+            wlo -= 1
             grow = True
-        if hi < nb - 1 and e0[hi + 1] - e0[hi] < need:
-            hi += 1
+        if whi < nb - 1 and e0[whi + 1] - e0[whi] < need:
+            whi += 1
             grow = True
         if not grow:
             break
-        widened = True
-    idx = slice(lo, hi + 1)
-    d = hi - lo + 1
     gaps = []
     if lo > 0:
         gaps.append(float(e0[lo] - e0[lo - 1]))
     if hi < nb - 1:
         gaps.append(float(e0[hi + 1] - e0[hi]))
-    shift = float(max(np.max(np.abs(ep[idx] - e0[idx])), np.max(np.abs(em[idx] - e0[idx]))))
-    out = {"d": d, "bands": [lo, hi], "shift_max_eV": shift, "gap_out_eV": min(gaps) if gaps else None,
-           "widened": widened}
+    out = {"d": d, "bands": [lo, hi], "near": [wlo, whi], "shift_max_eV": shift,
+           "gap_out_eV": min(gaps) if gaps else None, "widened": (wlo, whi) != (lo, hi)}
+    if out["widened"]:
+        w = slice(wlo, whi + 1)
+        s_w, t_w = _sorted_sq(e0[w], ep[w], em[w], u), trace_sq(e0[w], ep[w], em[w], u)
+        out["near_check"] = {"sorted": s_w, "trace": t_w}
+        if abs(s_w - t_w) > CROSS_REL * max(abs(s_w), abs(t_w)) + CROSS_ABS:
+            raise BandCrossing(
+                "带 %d 附近的带 %d–%d 在 ±u 构型里交叉或强混合（排序配对 Σλ² = %.3g，迹恒等式 %.3g (eV/Å)²；"
+                "带边移动 %.0f meV，邻带间隔 %.0f meV）：这个位移下单带的 D 解不出来"
+                % (b, wlo, whi, s_w, t_w, 1000 * shift, 1000 * min(gaps) if gaps else 0.0))
     if d == 1:
         lam = (ep[b] - em[b]) / (2.0 * u)
         out.update(D2=float(lam * lam), method="central", lam=[float(lam)])
         return out
-    sp = (np.sort(ep[idx]) - np.sort(e0[idx])) / u
-    sm = (np.sort(em[idx]) - np.sort(e0[idx])) / (-u)
-    s2 = 0.5 * (float(np.sum(sp * sp)) + float(np.sum(sm * sm)))
+    s2 = trace_sq(e0[idx], ep[idx], em[idx], u)
+    sp = (ep[idx] - e0[idx]) / u
     out.update(D2=s2 / (d * d), method="degenerate(%d)" % d, lam=[float(x) for x in sp],
-               trace_pm=[float(np.sum(sp)), float(np.sum(sm))])
+               trace_pm=[float(np.sum(sp)), float(np.sum((em[idx] - e0[idx]) / (-u)))])
     return out
 
 
@@ -269,34 +304,47 @@ def _carrier(params, carrier):
     return c if c.get("status") == "ok" else None
 
 
-def frozen_channels(params, carrier, keep=None, norm=None, dmin=DMIN_EV_A):
-    """odp_params.json 里某载流子的谷内参数 -> ([通道], [丢掉的])。
-    keep：S8.4 谷表合并（同中心星）后保留的标签集合（None = 全要）；norm：标签归一函数（dp_optical.norm_label）。
-    通道：{"from": L, "to": L, "kind": "intra", "D_eV_A", "hw_meV", "source": "frozen"}；同一谷、ħω 相同（四舍五入到
-    0.001 meV）的几组 D² 相加（dp_optical 不许重复通道）。D < dmin 的丢掉（对称性禁戒，记进第二个返回值）。"""
+def frozen_channels(params, carrier, keep=None, norm=None, dmin=DMIN_EV_A, alias=None):
+    """odp_params.json 里某载流子的谷内参数 -> ([通道], [丢掉的], [提示])。
+    keep：S8.4 谷表合并（同中心星）后保留的标签集合（None = 全要）；norm：标签归一函数（dp_optical.norm_label）；
+    alias：被合并掉的标签 -> 保留的标签（dp_optical.merge_coincident 的第二个返回值）。
+    同一个谷（含被并进来的星：同一组 k 上的另一条带或另一个自旋）的各星先把 ħω 相同（取到 0.001 meV）的组 D² 相加，
+    再在星之间取平均（插件对该谷的所有带、所有自旋用同一组通道）；星之间相差 > 10% 写进提示。
+    通道：{"from": L, "to": L, "kind": "intra", "D_eV_A", "hw_meV", "source": "frozen"}；D < dmin 的丢掉（对称性禁戒）。"""
     c = _carrier(params, carrier)
     if not c:
-        return [], []
+        return [], [], []
     norm = norm or (lambda s: s)
-    acc, dropped = {}, []
-    seen = set()
+    alias = alias or {}
+    per, hwv = {}, {}
     for v in c.get("valleys") or []:
         lab = norm(v.get("label"))
-        if keep is not None and lab not in keep:
+        tgt = alias.get(lab, lab)
+        if keep is not None and tgt not in keep:
             continue
-        if lab in seen:            # 同一个标签出现两次（S8.2 同中心的两个星归一后同名）：参数相同，只取第一份
-            continue
-        seen.add(lab)
+        src = per.setdefault(tgt, {}).setdefault(lab, {})
         for g in v.get("groups") or []:
             D, hw = float(g["D_eV_A"]), float(g["hw_meV"])
-            if not (D >= dmin and hw > 0 and math.isfinite(D)):
-                dropped.append({"valley": lab, "group": g.get("group"), "D_eV_A": D, "hw_meV": hw})
+            if not (hw > 0 and math.isfinite(D)):
                 continue
-            key = (lab, round(hw, 3))
-            acc[key] = acc.get(key, 0.0) + D * D
-    chs = [{"from": lab, "to": lab, "kind": "intra", "D_eV_A": math.sqrt(d2), "hw_meV": hw, "source": "frozen"}
-           for (lab, hw), d2 in sorted(acc.items(), key=lambda t: (t[0][0], t[0][1]))]
-    return chs, dropped
+            key = round(hw, 3)
+            src[key] = src.get(key, 0.0) + D * D
+            hwv.setdefault(key, hw)
+    chs, dropped, notes = [], [], []
+    for tgt in sorted(per):
+        srcs = per[tgt]
+        for key in sorted(set().union(*[set(x) for x in srcs.values()])):
+            vals = [srcs[s_].get(key, 0.0) for s_ in sorted(srcs)]
+            d2 = float(np.mean(vals))
+            D = math.sqrt(d2)
+            if D < dmin:
+                dropped.append({"valley": tgt, "hw_meV": hwv[key], "D_eV_A": D})
+                continue
+            if len(vals) > 1 and (max(vals) - min(vals)) / d2 > SPREAD_WARN:
+                notes.append("谷 %s（并进来的星 %s）ħω=%.1f meV：各星 D 相差大（%s eV/Å），取 D² 平均"
+                             % (tgt, ",".join(sorted(srcs)), hwv[key], "/".join("%.2f" % math.sqrt(x) for x in vals)))
+            chs.append({"from": tgt, "to": tgt, "kind": "intra", "D_eV_A": D, "hw_meV": hwv[key], "source": "frozen"})
+    return chs, dropped, notes
 
 
 def params_digest(params, carrier):
@@ -312,6 +360,6 @@ def params_digest(params, carrier):
     return hashlib.sha256(json.dumps(rows, ensure_ascii=False).encode("utf-8")).hexdigest()[:16]
 
 
-def describe(params, carrier, norm=None, keep=None, dmin=DMIN_EV_A):
-    chs, _ = frozen_channels(params, carrier, keep=keep, norm=norm, dmin=dmin)
+def describe(params, carrier, norm=None, keep=None, dmin=DMIN_EV_A, alias=None):
+    chs, _d, _n = frozen_channels(params, carrier, keep=keep, norm=norm, dmin=dmin, alias=alias)
     return ", ".join("%s %.2f eV/Å@%.1f meV" % (c["from"], c["D_eV_A"], c["hw_meV"]) for c in chs) or "无（全部 < %.2f eV/Å）" % dmin

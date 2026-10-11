@@ -23,7 +23,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import ke_common as kc  # noqa: E402
-import odp_frozen as of  # noqa: E402
+of = None                     # odp_frozen：main() 里切好 python 环境后再 import（它要 numpy）
 import stepconf  # noqa: E402
 from dim_common import require_dim, resolve_tpl  # noqa: E402
 
@@ -36,13 +36,13 @@ STEP_LABEL = "S7.2_odp"
 SUB_PREFIX = "odp-"            # 与 skill.yaml 的 fanout "odp-*" 一致
 REF_NAME = "odp-ref"
 MANIFEST = "odp_manifest.json"
-_SKILL_REV = "2026-10-11-0035"
+_SKILL_REV = "2026-10-11-0035-r1"
 # 最大原子位移（Å）。0.01 Å 时强耦合的带边移动 ~10–30 meV（线性区），EDIFF=1E-8 下本征值噪声 ~1e-5 eV。
 ODP_DISP_A = 0.01
 # 极性（红外活性）模：exclude（出厂：长程 Fröhlich 耦合由 POP 管）/ include（把它们的短程形变势也算进 ODP）。
 ODP_POLAR = "exclude"
-ODP_POLAR_TOL = of.POLAR_TOL_E       # 模有效电荷（e）大于它算极性
-ODP_FMIN_THZ = of.FMIN_THZ           # 低于它的光学模不算（虚频/太软）
+ODP_POLAR_TOL = 0.1                  # 模有效电荷（e）大于它算极性（= odp_frozen.POLAR_TOL_E）
+ODP_FMIN_THZ = 0.5                   # 低于它的光学模不算（虚频/太软）（= odp_frozen.FMIN_THZ）
 # auto = 全部合格的模；或者逗号分隔的模编号（按频率升序从 1 数，看 odp_manifest.json 的 modes），简并伙伴自动补全。
 ODP_MODES = "auto"
 # 单点数上限（1 + 2×模数）。大胞光学模多，超过就报错，确认后在 step.conf 调大。
@@ -153,13 +153,15 @@ def select(groups, modes):
 
 def write_poscar(path, structure):
     from pymatgen.io.vasp import Poscar
-    Path(path).write_text(Poscar(structure).get_str(significant_figures=12), encoding="utf-8", newline="\n")
+    Poscar(structure).write_file(str(path), significant_figures=12)       # write_file 新旧 pymatgen 都有
 
 
 def main():
     import numpy as np
+    global of
     cwd = Path.cwd()
     kc.reexec_with_pymatgen(__file__)          # 先切环境（exec 重跑整个脚本），再做任何有副作用的事
+    import odp_frozen as of                    # noqa: F811
     out = cwd / OUTDIR_NAME
     out.mkdir(exist_ok=True)
     # 本步重新生成 = 单点要重算：S8.21 读出的 odp_params.json 作废（S8.4 是否重排由 S8.21 比指纹决定）
@@ -198,6 +200,10 @@ def main():
         print("     组 %d 模 %-8s %7.3f THz = %6.2f meV  %s%s" % (
             g["group"], ",".join(map(str, g["modes"])), g["freq_THz"], g["hw_meV"],
             "极性 " if g["polar"] else "", "算" if g["use"] else "不算：%s" % g["why"]))
+    if not use and born is None and ODP_POLAR != "include":
+        sys.exit("[ERROR] 读不到 S5 的 Born 有效电荷（OUTCAR 里没有 BORN EFFECTIVE CHARGES？S5 要 LEPSILON=.TRUE.），"
+                 "判不了哪些模是极性的：先查/重跑 S5；确认要把全部光学模都算上（含极性模的短程形变势）就在 S7.2 的 "
+                 "step.conf 写 ODP_POLAR = include")
     if not use:
         sys.exit("[ERROR] 没有要算的光学模（全是声学/极性/软模）。本材料不需要冻声子 ODP：在 tf_*.yaml 关掉 odp_frozen，"
                  "或 step.conf 写 ODP_POLAR = include 把极性模的短程形变势也算上")

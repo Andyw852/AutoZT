@@ -653,7 +653,8 @@ DOWNSTREAM = {
     #   settings.yaml（不是软链）-> mode="always"；S8.2（DPT）读 step6_elastic/OUTCAR 的面内弹性；
     #   S5.1 的校验结论随 S5 一起作废。此前没有这两项：S5/S6 重算后旧 transport.json 仍被判"完成"。
     "step5_dielect": [("step5_dielect_validate", "always"), ("step8_amset", "always"),
-                      ("step8.4_amset2d", "always")],
+                      ("step8.4_amset2d", "always"),
+                      ("step8.21_odp_read", "always")],   # [0035] S8.21 重读时核对 S5 频率（差 >5% 报错要 retry S7.2）
     "step6_elastic": [("step8_amset", "always"), ("step8.4_amset2d", "always"),
                       ("step8.2_dpt", "always")],
     # [patch_gap_invalidate V148] S2 画图重新生成 = band_summary.json 的带隙可能变了。S8/S8.4 在 gen 时把带隙写进
@@ -1414,6 +1415,7 @@ POST_DERIVED = (
     ("step8.1_boltztrap", "boltztrap_crta.json", "step2_bandgap/step2.2_pbe_plot", ("band_summary.json",)),
     ("step8.1_boltztrap", "boltztrap_crta.json", "step2_bandgap/step2.3_hse_plot", ("band_summary.json",)),
     ("step8.21_odp_read", "odp_params.json", "step8.2_dpt", ("dpt_result.json",)),             # [0035]
+    ("step8.21_odp_read", "odp_params.json", "step5_dielect", ("OUTCAR",)),                    # [0035]
 )
 # [V163] link 边（S3/S3b/S4/S4b/S7.1 -> S8/S8.4）：S8 用的是哪一份（S4 还是 S4b）看它目录里的软链，按链接目标比新旧。
 LINKED_PRODUCTS = (("step8_amset", "transport.json"), ("step8.4_amset2d", "transport.json"))

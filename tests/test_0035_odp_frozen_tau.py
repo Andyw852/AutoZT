@@ -185,15 +185,44 @@ def test_degenerate_manifold_trace(of):
     assert r3["lam"][0] == pytest.approx(2.0) and r3["D2"] == pytest.approx(4.0)
 
 
-def test_near_degenerate_neighbour_is_absorbed(of):
-    """邻带离得比 2×最大位移还近：按能量排序会换位，必须并进简并组（否则中心差分配错带）。"""
-    e0 = np.array([0.0, 1.000, 1.008, 3.0])
-    u = 0.01
-    ep = np.array([0.0, 1.000 + 0.02, 1.008 - 0.02, 3.0])     # 两条带交叉
-    em = np.array([0.0, 1.000 - 0.02, 1.008 + 0.02, 3.0])
-    ep, em = np.sort(ep), np.sort(em)
-    r = of.edge_coupling(e0, ep, em, 1, u)
-    assert r["widened"] and r["d"] == 2
+def _lin(lams, e0, u):
+    e0, lams = np.array(e0, float), np.array(lams, float)
+    return e0, np.sort(e0 + lams * u), np.sort(e0 - lams * u)
+
+
+def test_near_band_crossing_is_refused_not_guessed(of):
+    """[0035-r1] 邻带近到位移下会交叉：排序配对配错带，给出的 D 随位移变（复审实测 9 / 2.25 / 1.75）。
+    现在：没交叉时 D 与位移无关；交叉时报 BandCrossing（要减小 ODP_DISP_A），不硬给一个数。"""
+    for u in (0.002, 0.005):                                      # λ=3 的带、20 meV 外 λ=0 的邻带
+        r = of.edge_coupling(*_lin([0, 3, 0, 0], [-1, 0, 0.02, 2], u), 1, u)
+        assert r["D2"] == pytest.approx(9.0, rel=1e-9) and r["d"] == 1
+    assert of.edge_coupling(*_lin([0, 3, 0, 0], [-1, 0, 0.02, 2], 0.005), 1, 0.005)["widened"]
+    with pytest.raises(of.BandCrossing):
+        of.edge_coupling(*_lin([0, 3, 0, 0], [-1, 0, 0.02, 2], 0.01), 1, 0.01)
+    with pytest.raises(of.BandCrossing):                          # 复审的第二个例子：8 meV、λ=±2
+        of.edge_coupling(*_lin([0, 2, -2, 0], [0, 1.0, 1.008, 3], 0.01), 1, 0.01)
+    r = of.edge_coupling(*_lin([0, 3, 3, 0], [-1, 0, 0.02, 2], 0.01), 1, 0.01)   # SOC 自旋劈裂型：平行移动、不交叉
+    assert r["D2"] == pytest.approx(9.0) and r["widened"]
+    # 非对角强混合（λ=0、组间耦合 a）：大位移解不出对角元 -> 拒绝；小位移给对角元 0
+    def offd(u, a=3.0, dl=0.02):
+        H = lambda x: np.array([[0.0, a * x], [a * x, dl]])           # noqa: E731
+        ev = [np.r_[-1.0, np.linalg.eigvalsh(H(x)), 2.0] for x in (0.0, u, -u)]
+        return of.edge_coupling(ev[0], ev[1], ev[2], 1, u)
+    with pytest.raises(of.BandCrossing):
+        offd(0.006)
+    assert offd(0.002)["D2"] == pytest.approx(0.0, abs=1e-9)
+
+
+def test_trace_sq_is_ordering_invariant(of):
+    rng = np.random.default_rng(5)
+    V = rng.normal(size=(3, 3))
+    V = (V + V.T) / 2
+    u = 1e-3
+    e0 = np.array([0.1, 0.13, 0.2])
+    ev = [np.linalg.eigvalsh(np.diag(e0) + x * V) for x in (0.0, u, -u)]
+    t = of.trace_sq(ev[0], ev[1], ev[2], u)
+    assert t == pytest.approx(np.trace(V @ V), rel=1e-6)
+    assert of.trace_sq(ev[0], ev[1][::-1], ev[2], u) == pytest.approx(t)
 
 
 def test_vacuum_level(of):
@@ -223,6 +252,8 @@ def test_mode_table_polar_and_soft_selection(of):
     assert all(("POP" in g["why"]) for g in g_ex if g["polar"])
     _m, g_nb, _n = of.mode_table(f, E, MASS, None)                   # 没有 Born 电荷：一律不算（判不了极性）
     assert not any(g["use"] for g in g_nb)
+    _m, g_nbi, _n = of.mode_table(f, E, MASS, None, include_polar=True)   # include：不判极性、全算
+    assert all(g["use"] for g in g_nbi)
     _m, g_soft, _n = of.mode_table(f, E, MASS, born, fmin_thz=1e6)
     assert not any(g["use"] for g in g_soft)
 
@@ -249,12 +280,19 @@ def _params(D_k=4.0, hw=50.0):
 def test_frozen_channels(of):
     p = _params()
     norm = lambda s: "Γ" if s == "G" else s                             # noqa: E731
-    chs, dropped = of.frozen_channels(p, "electron", keep={"K", "Γ"}, norm=norm)
+    chs, dropped, notes = of.frozen_channels(p, "electron", keep={"K", "Γ"}, norm=norm)
     assert [(c["from"], c["to"], c["kind"]) for c in chs] == [("K", "K", "intra"), ("Γ", "Γ", "intra")]
     k = chs[0]
     assert k["D_eV_A"] == pytest.approx(math.sqrt(16.0 + 1.0)) and k["source"] == "frozen"   # ħω 相同的两组 D² 相加
-    assert [d["group"] for d in dropped] == [1]                          # D < 0.05 丢掉
-    assert of.frozen_channels(p, "hole") == ([], [])
+    assert [d["hw_meV"] for d in dropped] == [35.0] and notes == []      # D < 0.05 丢掉
+    assert of.frozen_channels(p, "hole") == ([], [], [])
+    # [0035-r1] 被合并的同中心星（另一条带/另一自旋）不再被静默丢掉：与保留的星取 D² 平均
+    chs, _d, notes = of.frozen_channels(p, "electron", keep={"K", "Γ"}, norm=norm, alias={"K(up带27)": "K"})
+    assert chs[0]["D_eV_A"] == pytest.approx(math.sqrt((17.0 + 16.0) / 2)) and notes == []
+    p2 = _params()
+    p2["carriers"]["electron"]["valleys"][1]["groups"][0]["D_eV_A"] = 2.0
+    chs, _d, notes = of.frozen_channels(p2, "electron", keep={"K", "Γ"}, norm=norm, alias={"K(up带27)": "K"})
+    assert chs[0]["D_eV_A"] == pytest.approx(math.sqrt((17.0 + 4.0) / 2)) and len(notes) == 1
     assert of.params_digest(p, "hole") is None
     d0 = of.params_digest(p, "electron")
     assert of.params_digest(_params(D_k=4.0 + 1e-7), "electron") == d0    # 四舍五入以下的抖动不算变
@@ -330,7 +368,7 @@ def test_gen_frozen_used(tmp_path, monkeypatch, kc, capsys):
     assert g.SCATTERING == ["ADP", "IMP", "POP", "ODP"]
     chs = rec["electron"]["channels"]
     assert len(chs) == 1 and chs[0]["kind"] == "intra" and chs[0]["D_eV_A"] == pytest.approx(4.2)
-    assert rec["electron"]["frozen"]["dropped_below_dmin"][0]["group"] == 1
+    assert rec["electron"]["frozen"]["dropped_below_dmin"][0]["hw_meV"] == 35.0
     assert rec["adp_intravalley"] == {"electron": False, "hole": False}       # 只有谷内 ODP：ADP 不掩码
     fr = g._DP_OPTICAL_FROZEN_REC
     assert fr["frozen_use"] == {"electron": "used", "hole": "used"} and set(fr["digest"]) == {"electron", "hole"}
@@ -385,7 +423,9 @@ def test_gen_chain_and_record_source():
     src = (S84 / "gen_step14_amset2d.py").read_text(encoding="utf-8")
     assert "tau_energy.json mesh_*.h5; " in src                         # 链首清旧 τ
     i = src.index("python tau_energy.py ||")
-    assert src.index("python postprocess_intrinsic.py --check-reproduce") < i < src.index('" && python fermi_window_check.py"')
+    # [0035-r1] τ 在 transport.json 落成之后跑：它超时/被杀不会丢掉 AMSET 结果
+    assert src.index("_acmd = _acmd + AMSET_TAIL") < i
+    assert src.index("python postprocess_intrinsic.py --check-reproduce") < i
     assert '"dp_optical_frozen": _DP_OPTICAL_FROZEN_REC' in src
     assert "_install_tau_energy(out)" in src
 
@@ -500,6 +540,7 @@ def test_ke_common_tables(kc):
     assert ("step8.21_odp_read", "step8.4_amset2d") in kc.DOWNSTREAM_EXEMPT
     assert "step8.21_odp_read" not in kc.DOWNSTREAM                         # S8.4 只按指纹有条件失效
     assert ("step7c_odp_frozen", ("odp-ref/POSCAR",)) in kc.LINEAGE_POSCARS
+    assert ("step8.21_odp_read", "always") in kc.DOWNSTREAM["step5_dielect"]          # [0035-r1] S5 重算 -> 重读核对
 
 
 def test_gen_sources_wiring():

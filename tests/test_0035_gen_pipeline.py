@@ -124,7 +124,7 @@ def test_s72_gen_and_s821_read(mat, monkeypatch, capsys):
     kgrid = np.array([[i / NK, j / NK, 0.0] for i in range(NK) for j in range(NK)])
 
     class FakeConfig(r.Config):
-        def __init__(self, d, vac_axis=2):
+        def __init__(self, d, vac_axis=2, cache=None):
             st = Structure.from_file(str(d / "POSCAR"))
             pos = _cart(st)
             self.name, self.structure, self.kpts = d.name, st, kgrid
@@ -210,3 +210,50 @@ def test_s821_refuses_changed_s7_inputs(mat, monkeypatch):
     with pytest.raises(SystemExit) as e:
         r.main()
     assert "retry S7.2" in str(e.value)
+
+
+def test_s821_config_scf_and_vacuum_cache(mat, monkeypatch):
+    """[0035-r1] 读取端：电子步没收敛 -> 报错；第一次读 LOCPOT 的真空能级进缓存，LOCPOT 清掉后同一个 vasprun 用缓存，
+    vasprun 变了（重算过）就不认缓存。"""
+    import pymatgen.io.vasp as pv
+    from pymatgen.core import Structure
+    r = _load("gen821c_0035", mat / "gen_step12c_odp_read.py")
+    r.of = T._load("of_cache", KE / "odp_frozen.py")
+    st = Structure.from_str(POSCAR, fmt="poscar")
+    state = {"conv": True}
+
+    class FakeVR:
+        def __init__(self, *a, **k):
+            self.converged_electronic = state["conv"]
+            self.actual_kpoints = [[0, 0, 0]]
+            self.eigenvalues = {"up": np.zeros((1, 3, 2))}
+            self.final_structure = st
+
+    class FakeLP:
+        @staticmethod
+        def from_file(path):
+            class _L:
+                def get_average_along_axis(self, ax):
+                    z = np.arange(200) / 200.0
+                    return np.where((z > 0.65) | (z < 0.35), 2.5, -5.0)
+            return _L()
+    monkeypatch.setattr(pv, "Vasprun", FakeVR)
+    monkeypatch.setattr(pv, "Locpot", FakeLP)
+    d = mat / "step7c_odp_frozen" / "odp-ref"
+    d.mkdir(parents=True)
+    (d / "OUTCAR").write_text("General timing and accounting informations\n")
+    (d / "vasprun.xml").write_text("<run 1/>")
+    (d / "LOCPOT").write_text("x")
+    cache = {}
+    c = r.Config(d, 2, cache)
+    assert c.vac == pytest.approx(2.5) and cache["odp-ref"]["vac_eV"] == pytest.approx(2.5)
+    (d / "LOCPOT").unlink()
+    assert r.Config(d, 2, cache).vac == pytest.approx(2.5)                # LOCPOT 清了：用缓存
+    (d / "vasprun.xml").write_text("<run 2/>")
+    with pytest.raises(SystemExit):                                        # 重算过：不认缓存
+        r.Config(d, 2, cache)
+    (d / "LOCPOT").write_text("x")
+    state["conv"] = False
+    with pytest.raises(SystemExit) as e:
+        r.Config(d, 2, cache)
+    assert "没收敛" in str(e.value)
