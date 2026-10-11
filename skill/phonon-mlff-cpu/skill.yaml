@@ -47,7 +47,7 @@ steps:
      check: marker, marker: 'phonon_summary.json:"PHONON_DONE": true',
      gen: gen_step3_phonon.py,
      gen_need: [dim_common.py, stepconf.py, step.conf, klmlff_common.py, za_2d.py, imag_policy.py,
-                phonon_fit_driver.py, submit_mlff_relax.tpl]}
+                phonon_stability.py, phonon_fit_driver.py, submit_mlff_relax.tpl]}
 
 # S4 声子谱绘图（登录节点 run: gen，不提交作业）：读 step3_phonon/band-dft-cpu.yaml 画
 #   全范围 + 0~10 THz 低频放大两张（共享脚本 _common/mlff/plot_phonon_band.py）。

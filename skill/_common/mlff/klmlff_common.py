@@ -26,13 +26,9 @@ from dim_common import (detect_dimension, read_poscar_cell_frac,  # noqa: E402
 # 作业目录里两个文件是平铺的；把上一级（_common/）也放进 sys.path 以便仓库内直接 import。
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from za_2d import (  # noqa: E402
-    ZA_P_RANGE, ZA_ZFRAC_MIN,
     za_power_law as _za_power_law,
-    za_power_law_eig as _za_power_law_eig,
     inplane_qdirs as _za_inplane_qdirs,
     vacuum_axis_in_primitive as _za_vacuum_axis_in_primitive,
-    relaxed_symprec as _za_relaxed_symprec,
-    clone_phonopy as _za_clone_phonopy,
 )
 
 METHOD_FILE = "workflow_method.txt"   # step1 写 FUNC/DIM/MODEL，供后续步骤继承
@@ -447,99 +443,3 @@ def band_path_2d_prim(ph, npoints=101, cart_vac_axis=2):
     """
     vax_prim = _za_vacuum_axis_in_primitive(ph, cart_vac_axis)
     return band_path_2d(ph.primitive.cell, npoints, vax_prim)
-
-
-def za_check_2d(ph, cell=None, vac_axis=2, qmax=0.05, p_lo=None, p_hi=None):
-    """2D 的 ZA 二次性检查（P2-4 / P2-2）。实现在公共池 _common/za_2d.py，本函数只做编排。
-
-    schema 与旧版兼容（qmax/p_range/dirs/p/min_freq/ok/note，失败带 error），消费者
-    （phonon_fit_driver.py）不用改。三点行为修正（与 kl-dft-cpu 的 _za_check 同源）：
-      · ★ 方向：vac_axis 按 Cartesian 语义先映射到【原胞基矢】下标；旧版把它当 cell 行下标，
-        非正交（生产 primitive_matrix）原胞上会取到"真空方向 + Γ-M"。
-      · ★ ZA 支：改由【本征矢量面外占比 >= ZA_ZFRAC_MIN 的最低频支】识别（za_power_law_eig），
-        不再一律取"最低支"；拿不到本征矢量时自动退回最低支（旧行为，并列保留在 p_lowest）。
-      · ★ 数值微畸变：symprec 1e-5 与 1e-4 空间群不一致时，用 1e-4 的克隆做拟合；否则 ZA
-        会被假线性化（p≈1.19 而非 2.0）。
-    """
-    if p_lo is None:
-        p_lo = ZA_P_RANGE[0]
-    if p_hi is None:
-        p_hi = ZA_P_RANGE[1]
-    res = {"qmax": qmax, "p_range": [p_lo, p_hi], "dirs": [], "p": [], "min_freq": [],
-           "p_lowest": [], "za_symprec": None, "za_symmetry_relaxed": False,
-           "za_exponent_default_q1": None, "za_exponent_default_q2": None}
-    try:
-        vax_prim = _za_vacuum_axis_in_primitive(ph, vac_axis)
-        dirs = _za_inplane_qdirs(ph, vax_prim)
-    except Exception as e:
-        res["error"] = "ZA 面内方向解析失败：%s" % e
-        return res
-    res["dirs"] = [list(d) for d in dirs]
-    ph_za = ph
-    try:
-        _relaxed = _za_relaxed_symprec(ph)
-        if _relaxed is not None:
-            ph_za = _za_clone_phonopy(ph, _relaxed)
-            res["za_symprec"] = _relaxed
-    except Exception:
-        ph_za = ph
-    res["za_symmetry_relaxed"] = bool(ph_za is not ph)
-    had_nac = getattr(ph, "nac_params", None)
-    try:
-        ph.nac_params = None
-        try:
-            ph_za.nac_params = None
-        except Exception:
-            pass
-        for i, d in enumerate(dirs):
-            lp, lw = None, None
-            try:
-                lp, lw, _lf = _za_power_law(ph_za, qdir=d, qmax=qmax, n=12)
-            except Exception:
-                pass
-            p, wmin, extra = lp, lw, None
-            try:
-                got = _za_power_law_eig(ph_za, qdir=d, qmax=qmax, n=12,
-                                        cart_vac_axis=vac_axis)
-            except Exception as e:
-                got = None
-                res.setdefault("za_notes", []).append(
-                    "qdir %s 本征矢量 ZA 拟合失败：%s" % (list(d), e))
-            if got is not None:
-                p, wmin, _fit, extra = got
-            res["p_lowest"].append(lp)
-            if extra:
-                res.setdefault("za_branch_index", []).append(extra.get("branch_index"))
-                res.setdefault("za_zfrac_min", []).append(extra.get("zfrac_min"))
-                if extra.get("note"):
-                    res["za_branch_note"] = extra["note"]
-            if ph_za is not ph:                 # 默认 symprec 下的 p，供对照
-                dflt = None
-                try:
-                    dflt = _za_power_law_eig(ph, qdir=d, qmax=qmax, n=12,
-                                             cart_vac_axis=vac_axis)
-                except Exception:
-                    dflt = None
-                if i == 0:
-                    res["za_exponent_default_q1"] = dflt[0] if dflt is not None else None
-                elif i == 1:
-                    res["za_exponent_default_q2"] = dflt[0] if dflt is not None else None
-            res["p"].append(p)
-            res["min_freq"].append(wmin)
-    finally:
-        try:
-            ph.nac_params = had_nac
-        except Exception:
-            pass
-    if ph_za is ph:
-        res["za_exponent_default_q1"] = res["p"][0] if res["p"] else None
-        res["za_exponent_default_q2"] = res["p"][1] if len(res["p"]) > 1 else None
-    res["ok"] = all(p is not None and p_lo < p < p_hi for p in res["p"])
-    ps = ["%.2f" % p if p is not None else "None" for p in res["p"]]
-    res["note"] = ("ZA 二次性满足（p=%s；本征矢量判据）" % ps) if res["ok"] else (
-        "ZA 不是二次色散（p=%s，要求 %.1f~%.1f）：弯曲支被线性化或有虚频，2D 的 κ/稳定性不可信。"
-        "MACE 的 symfc fc2 没有施加 Born-Huang 旋转不变约束，2D 请改用 DFT 链（pheasy + BHH）。"
-        % (ps, p_lo, p_hi))
-    return res
-
-

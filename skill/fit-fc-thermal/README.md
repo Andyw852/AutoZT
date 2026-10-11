@@ -655,39 +655,38 @@ from a bad one; for a decent dataset it is well under 1 per cent relative.
 
 The optional S2_plot step writes `phonon_band_plot/phonon_band_summary.json`
 together with the two PNGs.  Besides the min/max frequencies it carries the ZA
-bending-branch exponent fitted along the two inequivalent in-plane directions of
-the cell - the same `za_power_law` fit and direction rule `kl-dft-cpu` uses:
+bending-branch analysis under a single `za` key, produced by the shared
+`_common/phonon_stability.py` implementation (the same code `kl-dft-cpu` /
+`kl-mlff` / `phonon-dft` use) - no per-skill copy.  Key fields:
 
-* `za_exponent_q1`, `za_exponent_q2` - log-log least-squares exponent p of the
-  lowest branch over q in (0, `za_qmax`]; `za_minfreq_q1_THz` /
-  `za_minfreq_q2_THz` are the corresponding lowest frequencies;
-* `za_qdir_q1` / `za_qdir_q2` - the reduced-coordinate directions, e.g.
-  (1,0,0) and (1,1,0) for a hexagonal cell, plus `za_qmax`, `za_n_qpoints` and
-  `za_p_range` recording the fit settings;
-* `za_ok` - the **coarse machine verdict**: true when both directions satisfy
+* `za.p` - list [p_q1, p_q2], the log-log least-squares exponent p of the ZA
+  branch (identified by its out-of-plane eigenvector weight) along the two
+  in-plane directions; `za.p_lowest` keeps the old lowest-branch fit for
+  comparison, `za.min_freq` the corresponding lowest frequencies and `za.dirs`
+  the reduced-coordinate directions; `za.qmax` / `za.p_range` record the fit
+  settings;
+* `za.ok` - the **coarse machine verdict**: true when both directions satisfy
   1.7 < p < 2.3, the un-stressed 2D Born-Huang/Huang quadratic ZA branch.  It is
   a one-bit decision and must not be read on its own when a direction is close
   to a bound or the fit is noisy - use the fields below;
-* `za_r2_q1` / `za_r2_q2` and `za_log_resid_rms_q1` / `za_log_resid_rms_q2` -
-  the goodness of each log-log fit: R^2 and the RMS residual in log space.  A low
-  R^2 (or a large residual) means the fitted p is uncertain whatever its value;
-* `za_margin_q1` / `za_margin_q2` - `min(p - 1.7, 2.3 - p)`, how far each p sits
-  from the nearer criterion bound.  A small margin means the verdict can flip on
-  a tiny change of dataset or q-window;
-* `za_needs_review` - true when some direction has `za_margin_qX < za_margin_min`
-  (default 0.20) **or** `za_r2_qX < za_r2_min` (default 0.98); the two thresholds
-  are recorded in the summary as `za_margin_min` / `za_r2_min`.  When true,
-  `za_note` explicitly says 建议人工复核，不要仅凭 za_ok 下结论 (manual review, do
-  not decide from `za_ok` alone) and the script prints a `[WARN]` line;
-* `za_is_2d` / `za_vacuum_axis` - the dimension and vacuum axis, taken from the
-  `dim` S1_fit already resolved and from the same `dim_common.detect_dimension`
-  the fit gen uses; `za_note` explains the verdict.
+* `za.za_r2_q1` / `za.za_r2_q2` and `za.za_log_resid_rms_q1` /
+  `za.za_log_resid_rms_q2` - the goodness of each log-log fit: R^2 and the RMS
+  residual in log space;
+* `za.za_margin_q1` / `za.za_margin_q2` - min(p - 1.7, 2.3 - p), how far each p
+  sits from the nearer criterion bound;
+* `za.za_needs_review` - true when some direction has
+  `za.za_margin_qX < za.za_margin_min` (default 0.20) **or**
+  `za.za_r2_qX < za.za_r2_min` (default 0.98); `za.note` then says to review by
+  hand and the script prints a [WARN] line;
+* `za.is_2d` / `za.vacuum_axis_cartesian` / `za.vacuum_axis_in_primitive` - the
+  dimension and vacuum axis (Cartesian and primitive-basis index); `za.note`
+  explains the verdict.
 
-The criterion is meaningful only for a 2D layer: for a 3D cell `za_is_2d` is
-false, the exponents are informational, `za_ok` should not be read as a
-stability verdict and no review is flagged.  A direction with no positive
-frequency (a linearised or imaginary ZA branch) gets `null` for its exponent plus
-a `za_note` saying so - it never aborts the plot step.
+The criterion is meaningful only for a 2D layer: for a 3D cell (e.g. Si) the
+`za` key is absent (the shared `za_check` returns None), the exponents are not
+computed and no review is flagged.  A 2D direction with no positive frequency
+gets `null` for its exponent plus a note saying so - it never aborts the plot
+step.
 
 The engines also report their own quality numbers, which the driver scrapes out
 of the log into `fit_metrics.json` and copies into both summaries:

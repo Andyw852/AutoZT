@@ -174,7 +174,8 @@ def main():
     if is2d:
         print("[WARN] 2D + symfc fc2：没有施加 Born-Huang 旋转不变约束，ZA 可能被线性化；"
               "2D 的稳定性/κ 请用 kl-dft-cpu 的 pheasy+BHH 链（PHEASY_RASR=auto）。")
-        za = kmc.za_check_2d(ph, uc.cell, vac_axis or 2)
+        import phonon_stability
+        za = phonon_stability.za_check(params, ph, vac_axis or 2, True)
         print("[..] ZA 检查：%s" % za.get("note", za.get("error", "")))
 
     # ---- 虚频判据统一走 imag_policy（唯一真源，2026-09-22）；阈值读 mlff conf 否则用公共默认 ----

@@ -37,16 +37,12 @@ P3PY_SUB   = "phono3py"
 SB_SUB     = "shengbte"
 
 # --- ZA 弯曲支二次性判据参数 -------------------------------------------------
-# ★ TODO（2026-09-20）：ZA 判据现在至少有【三份】各自独立的副本：
-#     1) skill/fit-fc-thermal/fc_plot_phonon.py       (_inplane_qdirs/_k_sum_sign/
-#        _vacuum_axis_in_primitive/_eig_out_of_plane/za_power_law_eig/_za_summary)
-#     2) 本文件 skill/kl-dft-cpu/kl_fc_backends.py（已与 1 对齐）
-#     3) skill/_common/mlff/klmlff_common.py  (inplane_qdirs/za_check_2d，
-#        仍是无条件 e_i+e_j、无 vac 轴映射、无本征矢量判据；被
-#        phonon-mlff-cpu/gpu 的 phonon_fit_driver 调用)
-#   这份重复已经直接造成过一次"只修了一侧"的测量 bug（本次只修了 2）。
-#   长期应把这段公共逻辑挪到 skill/_common/（例如 _common/za_common.py），
-#   三处 import 同一实现，否则下次修 ZA 判据仍要修三遍、且很容易漏边。
+# ★ 已收敛（2026-10）：ZA 判据不再有三份独立副本 —— 低层函数统一在
+#   _common/za_2d.py，编排统一在 _common/phonon_stability.za_check（本文件的
+#   _za_check 直接委托它）。三处消费者现已全部 import 同一实现：
+#     1) fit-fc-thermal fc_plot_phonon.py（S2_plot，调 phonon_stability.za_check）
+#     2) 本文件 kl_fc_backends.py（_za_check -> phonon_stability.za_check）
+#     3) phonon-mlff-cpu/gpu phonon_fit_driver.py（原 kmc.za_check_2d 已删）
 from za_2d import (ZA_P_RANGE, ZA_ZFRAC_MIN, ZA_MARGIN_MIN, ZA_R2_MIN,
                    ZA_SYMPREC_DEFAULT, ZA_SYMPREC_RELAX,
                    za_power_law, za_power_law_eig,
