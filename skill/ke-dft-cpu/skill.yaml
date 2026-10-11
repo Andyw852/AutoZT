@@ -294,6 +294,26 @@ optional_steps:
          fetch_all: true,
          needs: ["step3_uniform", "step6_elastic", "step7b_deform_read"]}
 
+  # --- [0035] 冻声子 ODP：S7.2 单点（扇出）+ S8.21 读取 -> S8.4 谷内光学形变势（ODP）的参数自动出 ---------------
+  #   默认关：每个材料多 1 + 2×光学模数个 VASP 单点（MoS₂：A1′ + E″ 共 3 个非极性模 -> 7 个）。
+  #   打开：本材料 tf_*.yaml 写一行 odp_frozen: true（只对 2D 有意义，S8.4 才有 ODP 机制）。
+  #   S7.2 照抄 S7 undeformed 的 INCAR/KPOINTS/POTCAR（同一套 k 网格，S8.2 谷表的 k_S7 点都在上面），
+  #   按 S5 DFPT 的 Γ 点本征矢做 ±u 位移；S8.21 按 S8.2 的谷表在各谷 k 点取带边能量，算 D（真空对齐）。
+  #   S8.4 的 ODP_FROZEN=auto（出厂）读 step8.21_odp_read/odp_params.json；手填了 DP_OPTICAL_E/H 谷内通道的载流子用手填的。
+  #   ★ LOCPOT：S7.2 各单点的 LOCPOT 在 S8.21 跑完之前不能清（真空能级对齐要它），与 S7 -> S7.1 同一条纪律。
+  odp_frozen:
+    default: false
+    steps:
+      - {seq: 7.2, name: step7c_odp_frozen, label: S7.2_odp, after: step7_deform,
+         src: step7c_odp_frozen, check: outcar, fanout: "odp-*", gen: gen_step9c_odp.py,
+         gen_need: [stepconf.py, step.conf, ke_common.py, dim_common.py, odp_frozen.py, submit_std_2d.tpl],
+         needs: ["step1_opt", "step5_dielect", "step7_deform"]}
+      - {seq: 8.21, name: "step8.21_odp_read", label: S8.21_odp, after: step7b_deform_read,
+         src: step7c_odp_frozen/odp_read, check: plot, run: gen, done_marker: odp_params.json,
+         gen: gen_step12c_odp_read.py, gen_need: [stepconf.py, step.conf, ke_common.py, dim_common.py, odp_frozen.py],
+         fetch_all: true,
+         needs: ["step7c_odp_frozen", "step8.2_dpt"]}
+
   # --- 8.1 BoltzTraP2 CRTA × DPT-τ：文献口径的完整实现 ---
   #   [0016] S8.x 各组的 after 一律锚在 step7b_deform_read（主步骤，一定在）：S8 现在可以被关掉
   #   （2D 默认关），锚在 step8* 上会让 S8.1/S8.2/S8.3/S8.4 跟着静默不注入。最终顺序按 seq 重排。
@@ -330,12 +350,14 @@ optional_steps:
          gen_need: [stepconf.py, step.conf, ke_common.py, dim_common.py, submit_amset.tpl, vdw_radii.py,
                     discriminant_common.py, amset2d_plugin.py, amset2d_pop_freq.py, dp_optical.py,
                     overlap_preflight.py, postprocess_intrinsic.py, fermi_window_check.py,
-                    amset_desym_fix.py, amset_ir_fix.py, amset_fermi_fix.py],
+                    amset_desym_fix.py, amset_ir_fix.py, amset_fermi_fix.py,
+                    odp_frozen.py, tau_energy.py],                       # [0035] 冻声子 ODP 参数 / τ(E)
          fetch_all: true,
          # [0032] mesh_*.h5（每机制每 k 点散射率，几十 MB 到 GB）只给作业内的本征后处理用，不回拉本地
          fetch_exclude: ["mesh_*.h5"],
+         # [0035] step8.21_odp_read?：开了 odp_frozen 组就等冻声子参数（没开不提示缺）
          needs: ["step4_wave", "step5_dielect", "step6_elastic", "step7b_deform_read",
-                 "step2_bandgap/step2.2_pbe_plot", "step2_bandgap/step2.3_hse_plot"]}
+                 "step2_bandgap/step2.2_pbe_plot", "step2_bandgap/step2.3_hse_plot", "step8.21_odp_read?"]}
 
   output_compare:
     default: true

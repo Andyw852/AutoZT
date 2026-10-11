@@ -47,6 +47,8 @@ slab 弹性常数（`C_2D/c`）即可，不要再乘 c/t。推导与各机制的
 | `test_gen_desym_wiring.py` | S8/S8.4 gen 的逐操作判据、命令、覆盖通道接线自检 |
 | `test_kernels.py` | 四类核的自检（旋转不变、极限行为、护栏），`python test_kernels.py` 应全 PASS |
 | `test_dp_optical_e2e.py` | [0033] ODP/IVS 与 ADP 谷内掩码的真 AMSET 端到端自检（合成双谷模型，5–15 分钟；需要 amset） |
+| `tau_energy.py` | [0035] 作业链尾部：从 mesh 出逐机制 τ(E) 与迁移率等效 τ，写 `tau_energy.json` |
+| `test_tau_energy_e2e.py` | [0035] τ 的真 AMSET 端到端自检（常数率精确性、复现、τ_σ 交叉核对、与 Bardeen–Shockley 对照；需要 amset） |
 | `example_2d_correction.json` | 自检用的最小 2d_correction.json 示例 |
 | `VERIFICATION.md` | 在真实 2D 数据上做的端到端验证记录（T1/T2 + 三材料对比） |
 
@@ -124,7 +126,10 @@ AMSET 只有 ADP / POP / IMP / PIE，**没有非极性光学声子（ODP）和�
 - 体积（含真空）在 D²·G/M 里抵消，与真空长度无关。
 - 走 AMSET 的 basic 接口（每 k 点直接给率），不经四面体积分，几乎不增加耗时。
 
-**开法**：材料的 step.conf 写通道表（`起>止:D@ħω`，D 单位 eV/Å = 1e8 eV/cm，ħω 单位 meV），**数值从文献表里抄**
+**参数从哪来**：谷内 ODP 可以用冻声子法自动算（[0035]，见下一节「冻声子 ODP 参数」，不用文献）；
+谷间 IVS 没有自动参数，只能手填文献值。
+
+**手填的开法**：材料的 step.conf 写通道表（`起>止:D@ħω`，D 单位 eV/Å = 1e8 eV/cm，ħω 单位 meV），**数值从文献表里抄**
 （Jin et al. PRB 90, 045422 (2014) 的 Table IV/V，arXiv:1406.4569；或 Kaasbjerg PRB 85, 115317 (2012)）：
 
 ```ini
@@ -182,6 +187,63 @@ DP_OPTICAL_H = K>K:<D>@<ħω>; K>K':<D>@<ħω>; K>Γ:<D>@<ħω>; Γ>K:<D>@<ħω>
 
 **局限**：常数形变势（q 无关、各向同性）是文献的简化模型，参数质量决定结果；不含一阶（∝q）谷间耦合；
 谷归属按「离谷中心最近」划分。SOC 能带（旋量带）下目标谷态密度含两种自旋，自旋守恒的通道（MoS₂ 价带 K↔K′）会偏大到 2 倍，日志有 WARN。通道里的谷标签要与 S8.2 谷表一致（Γ / K / M / Q / Γ–M；G、G-M 也认）。要发表的绝对值仍建议与 EPW/Perturbo 对照。
+
+## 冻声子 ODP 参数（[0035]，可选，出厂不开）
+
+谷内 ODP 的 D 与 ħω 不再需要文献：两个新步骤按材料自动算，S8.4 自动用上。
+
+**开法**：本材料 `tf_*.yaml` 写一行 `odp_frozen: true`（只对 2D 有意义）。多出两步：
+
+| 步骤 | 做什么 |
+|---|---|
+| S7.2_odp（`step7c_odp_frozen`，VASP 扇出 `odp-*`） | 读 S5 DFPT 的 Γ 点声子；每个**非极性光学模**做 ±u 两个位移单点，再加一个不位移的参考 `odp-ref`。INCAR/KPOINTS/POTCAR 照抄 `step7_deform/undeformed`（同一套 k 网格、泛函、ISYM=0、LVHAR） |
+| S8.21_odp（`step8.21_odp_read`，登录节点） | 按 S8.2 的谷表，在每个谷的 k 点（`k_S7`）取带边能量，算 D，写 `odp_params.json` + `odp_summary.txt` |
+
+S8.4 的 `ODP_FROZEN = auto`（出厂）读 `odp_params.json`，给每个谷加谷内通道 `X>X:D@ħω`（每组光学模一条），
+把 ODP 加进 SCATTERING。四套结果（只 ADP / overall / 本征 / overall 去 ODP）照旧，`overall_noODP.json` 正好看冻声子 ODP 的影响。
+
+**算法**（推导在 `odp_frozen.py` 文件头）：
+- 位移 Δ_κ = u·√(M/m_κ)·e_κ（e 为质量加权归一本征矢，M 原胞质量），u 取到最大原子位移 = `ODP_DISP_A`（出厂 0.01 Å）。
+  这样 D = dE/du 正好对上 dp_optical 的 |g|² = ħD²/(2NMω)，不用再换算。
+- 非简并带：中心差分 D = [E(+u) − E(−u)]/2u，二次项相消；对称性禁戒的模自动给 D ≈ 0。
+- 简并带（d 重）：用单侧斜率平方和，D² = Σλ²/d²（与 dp_optical 的态密度统计全部能带的口径一致）。
+- 同一组简并声子的各伙伴 D² 相加；星内各成员谷取平均，离散度 > 10% 告警。
+- 能量用真空能级对齐（LOCPOT 平面平均，与 S7.1/S8.2 的 E1 同一口径）；`odp_summary.txt` 同时列不对齐的 D。
+- 极性（红外活性）模默认不算：长程 Fröhlich 耦合由 POP 管。要把它们的短程形变势也算进来：S7.2 的 step.conf 写 `ODP_POLAR = include`。
+
+**核对**（不过就报错，不静默出数）：
+- S7.2 用的 INCAR（物理键）/KPOINTS/POTCAR 与 S7 undeformed 现在的一致（S7 重新生成过就要 retry S7.2）；
+- 参考构型与 S7 undeformed 在各谷 k 点、同一条带的本征值相差 < 5 meV（带号、自旋、网格都对上了）；
+- 每个构型真空区平面平均势平坦（std < 1 meV）；
+- S5 现在的频率与生成位移时的一致（差 > 2% 告警）。
+
+**和手填通道的关系**：某载流子在 `DP_OPTICAL_E/H` 手填了谷内通道（`X>X`）就用手填的；手填了谷表 `DP_OPTICAL_VALLEYS_*`
+的载流子不用冻声子参数（它是按 S8.2 谷表算的）；手填的谷间通道（`X>X'`、`X>Y`）与冻声子谷内通道可以同时用。
+`ODP_FROZEN = off` 不用，`on` 必须有（没有就报错）。`ODP_FROZEN_DMIN`（出厂 0.05 eV/Å）以下的模不进通道。
+
+**自动重排**：S7.2 重新生成 → S8.21 重读；S8.2 重算 → S8.21 重读；S8.21 的参数指纹变了（或刚出来、S8.4 还没用上）
+→ S8.4 的完成标记归档、重新排队。S8.4 正在排队/运行时只打 ★ 提示。
+
+**计算量**：1 + 2 × 非极性光学模数个单点，单点成本与 S7 的一个形变构型相同。MoS₂：A1′ + E″（二重）= 3 个模，7 个单点。
+超过 `ODP_MAX_JOBS`（出厂 40）报错；可用 `ODP_MODES` 只算一部分模（编号见 `odp_manifest.json`）。
+
+**局限**：只有零阶（q 无关）耦合；一阶（∝q）耦合与谷间参数都没有。SOC 下简并组按带能量 5 meV 判，劈裂更大的
+自旋分裂带按单带算，目标谷态密度含两条带，自旋守恒通道可能偏大（同 [0033] 的 SOC 告警）。
+**LOCPOT**：S7.2 各单点的 LOCPOT 在 S8.21 跑完之前不能清（与 S7 → S7.1 同一条纪律）。
+
+## τ(E) 与迁移率等效 τ（[0035]，出厂开，要 WRITE_MESH）
+
+作业链在本征后处理之后跑 `tau_energy.py`，同一份 mesh 出 `tau_energy.json`：
+
+- **τ(E)**：逐机制、按能量分箱（从带边量起，箱宽 10 meV，到 0.5 eV）。τ_m(E) = 1/⟨Γ_m⟩_E，即箱内各态 τ 的调和平均。
+  只统计 FD 窗口内 AMSET 真正算过散射的态。
+- **τ_eff**：常数 τ 的玻尔兹曼输运要复现 AMSET 迁移率所需的 τ，τ_eff = τ0·μ/μ_CRTA(τ0)，两个迁移率用 AMSET 同一个函数、
+  同一费米能级算，分 xx / yy / 面内。**τ_eff,ADP 与 S8.2 DPT 的 τ（S8.1 BT2 用的那个）同口径**，可以直接比。
+- **核对**：重算的 overall 迁移率必须复现 transport json（不复现就报错）；逐 k 点电导加权的 τ_σ 与 τ_eff 相差 > 10% 时写 ★ 注记。
+
+失败只影响 `tau_energy.json`（写 status = error 和原因），不影响 transport.json。`TAU_ENERGY = false` 关掉。
+S8.3 出 `tau/`：`tau_comparison.csv`（各温度、各掺杂档的 τ_eff 逐机制与 DPT τ、ADP/DPT 比值）、`tau_vs_E_300K.png`、
+`tau_eff_vs_T.png`、`tau_summary.txt`。
 
 ## 已知局限（写论文要写进方法学）
 

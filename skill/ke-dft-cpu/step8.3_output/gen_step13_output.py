@@ -37,10 +37,11 @@ from pathlib import Path
 # [SKILL_REV] 版本戳：写进 comparison_summary.txt。每次改本脚本逻辑后更新。
 #   陈旧副本已咬人三次（step12/step9b 盖戳后，step13 是最后一个没盖的），
 #   这里盖戳便于从产物反查到底跑的是哪份 skill 副本。
-_SKILL_REV = "2026-10-11-0035"
+_SKILL_REV = "2026-10-11-0035"   # [0035] transport_plots 合并 + τ 对比（tau/）
 #   bump 记录：2026-10-11-0035 —— transport_plots 合并：intrinsic 图并入 transport 图（4 条数据集
 #   overall / intrinsic / ADP only / BT2xDPT-tau），不再单独出 <M>_intrinsic*.{png,csv}，
 #   只留 <M>_transport.png + 每温度 CSV + <M>_params_<T>K.csv。
+#   bump 记录：2026-10-11-0035（Claude）—— 新增 τ 对比（tau/）：τ(E) / τ_eff vs DPT τ。
 #   bump 记录：2026-10-11-0034-r2 —— μ(T) 用第一份通过网格/同轮核对的 overall_no*.json（以前只看排序后的第一份）。
 #   bump 记录：2026-10-11-0034 —— comparison_300K 的可解读判据改每原子（与 S8.4、本征表同一判据，缺原子数才退回每原胞），
 #   csv 加 carriers_per_atom；本征表/图、μ(T) 加 S8.4 的 overall_no*.json（overall 去掉 OVERALL_WITHOUT，出厂去 ODP）。
@@ -1915,6 +1916,208 @@ def write_intrinsic_suite(out, cwd, is_2d):
     return [INTR_CSV, INTR_TXT] + files
 
 
+# ---------- [0035] 电子弛豫时间 τ：S8.4 的 tau_energy.json vs S8.2 DPT 的 τ ----------
+TAU_SUBDIR = "tau"
+TAU_JSON = "tau_energy.json"
+TAU_CSV = "tau_comparison.csv"
+TAU_TXT = "tau_summary.txt"
+_TAU_COLORS = {"ADP": "#1f77b4", "POP": "#d62728", "IMP": "#2ca02c", "PIE": "#9467bd", "ODP": "#ff7f0e", "IVS": "#8c564b"}
+
+
+def load_tau(cwd):
+    """tau_energy.json（status ok、且与当前 transport.json 同一次运行）-> dict；否则打印原因返回 None。"""
+    run_dir = Path(cwd) / AMSET2D_DIR
+    j = _load_json(run_dir / TAU_JSON)
+    if not j:
+        return None
+    if j.get("status") != "ok":
+        print("[WARN] %s/%s：τ 后处理失败（%s）—— 不出 τ 对比" % (AMSET2D_DIR, TAU_JSON, j.get("error", j.get("status"))))
+        return None
+    same, src = _intr_same_run(run_dir, j)
+    if not same:
+        print("[WARN] %s/%s 不是当前 transport.json 那次运行的（来自 %s）—— 不出 τ 对比" % (AMSET2D_DIR, TAU_JSON, src))
+        return None
+    return j
+
+
+def _dpt_tau_fs(cwd, T):
+    """S8.2 的分方向 τ（fs）在温度 T：{载流子: (τx, τy)}；读不到的方向为 None。"""
+    d = load_dpt(cwd, T=T, quiet=True)
+    out = {}
+    for car in ("electron", "hole"):
+        tx, ty = _dpt_tau_dir(d, car, "x"), _dpt_tau_dir(d, car, "y")
+        out[car] = tuple(None if v is None else v * 1e15 for v in (tx, ty))
+    return out
+
+
+def _mean_xy(t):
+    vals = [v for v in (t or ()) if isinstance(v, (int, float))]
+    return sum(vals) / len(vals) if vals else None
+
+
+def _lowest_doping(tj, car):
+    idx = [n for n, c in enumerate(tj["carrier"]) if c == car]
+    return min(idx, key=lambda n: abs(tj["doping_cm3"][n])) if idx else None
+
+
+def build_tau_rows(cwd, tj, geom):
+    rows = []
+    mechs = [m for m in tj["mechanisms"] if m in tj["tau_eff_fs"]]
+    for t, T in enumerate(tj["temperatures_K"]):
+        dpt = _dpt_tau_fs(cwd, T)
+        for n, car in enumerate(tj["carrier"]):
+            ov = tj["tau_eff_fs"]["overall"]
+            r = {"T_K": T, "carrier": car, "doping_cm-3": tj["doping_cm3"][n]}
+            if geom:
+                r["n_2D_cm-2"] = abs(tj["doping_cm3"][n]) * geom["c_A"] * 1e-8
+            for d in ("xx", "yy", "inplane"):
+                r["tau_eff_overall_%s_fs" % d] = ov[d][n][t]
+            for m in mechs:
+                r["tau_eff_%s_inplane_fs" % m] = tj["tau_eff_fs"][m]["inplane"][n][t]
+            r["tau_sigma_fs"] = tj["tau_sigma_fs"][n][t]
+            tx, ty = dpt.get(car, (None, None))
+            r["tau_DPT_x_fs"], r["tau_DPT_y_fs"] = tx, ty
+            r["tau_DPT_inplane_fs"] = _mean_xy((tx, ty))
+            a = r.get("tau_eff_ADP_inplane_fs")
+            r["ADP_over_DPT"] = (a / r["tau_DPT_inplane_fs"]) if (a and r["tau_DPT_inplane_fs"]) else None
+            rows.append(r)
+    return rows, mechs
+
+
+def write_tau_table(odir, rows):
+    import csv
+    keys = []
+    for r in rows:
+        for k in r:
+            if k not in keys:
+                keys.append(k)
+    with open(odir / TAU_CSV, "w", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=keys)
+        w.writeheader()
+        for r in rows:
+            w.writerow({k: ("" if r.get(k) is None else (("%.6g" % r[k]) if isinstance(r[k], float) else r[k]))
+                        for k in keys})
+
+
+def plot_tau_E(path, tj, T_idx, cwd):
+    """T 下每种载流子（最低掺杂档）的逐机制 τ(E)；横线：AMSET τ_eff（overall、ADP）与 S8.2 DPT 的 τ。"""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    T = tj["temperatures_K"][T_idx]
+    x = tj["energy_bins_eV"]["centers"]
+    dpt = _dpt_tau_fs(cwd, T)
+    cars = [c for c in ("electron", "hole") if _lowest_doping(tj, c) is not None]
+    fig, axes = plt.subplots(1, len(cars), figsize=(6.2 * len(cars), 4.6), squeeze=False)
+    for ax, car in zip(axes[0], cars):
+        n = _lowest_doping(tj, car)
+        for m in tj["mechanisms"]:
+            y = tj["tau_E_fs"][m][n][T_idx]
+            pts = [(a, b) for a, b in zip(x, y) if b is not None and b > 0]
+            if pts:
+                ax.plot(*zip(*pts), color=_TAU_COLORS.get(m), label="τ_%s(E)" % m)
+        pts = [(a, b) for a, b in zip(x, tj["tau_E_total_fs"][n][T_idx]) if b is not None and b > 0]
+        if pts:
+            ax.plot(*zip(*pts), color="k", lw=2, label="τ_total(E)")
+        te = tj["tau_eff_fs"]["overall"]["inplane"][n][T_idx]
+        if te:
+            ax.axhline(te, color="k", ls="--", lw=1, label="AMSET τ_eff overall = %.3g fs" % te)
+        ta = (tj["tau_eff_fs"].get("ADP") or {}).get("inplane")
+        if ta and ta[n][T_idx]:
+            ax.axhline(ta[n][T_idx], color=_TAU_COLORS["ADP"], ls="--", lw=1,
+                       label="AMSET τ_eff ADP = %.3g fs" % ta[n][T_idx])
+        td = _mean_xy(dpt.get(car))
+        if td:
+            ax.axhline(td, color="0.4", ls=":", lw=1.5, label="S8.2 DPT τ (used by BT2) = %.3g fs" % td)
+        ax.set_yscale("log")
+        ax.set_xlabel("E - CBM (eV)" if car == "electron" else "VBM - E (eV)")
+        ax.set_ylabel("τ (fs)")
+        ax.set_title("%s  %.0f K  doping %.2e cm$^{-3}$" % (car, T, tj["doping_cm3"][n]))
+        ax.grid(alpha=0.3, which="both")
+        ax.legend(fontsize=7)
+    fig.suptitle("τ(E) = 1/<Γ>_E (S8.4 mesh);  τ_eff = constant τ that reproduces the AMSET mobility", fontsize=9)
+    fig.tight_layout()
+    fig.savefig(path, dpi=150)
+    plt.close(fig)
+
+
+def plot_tau_T(path, rows, tj):
+    """最低掺杂档：τ_eff（overall、ADP）与 DPT τ 随温度。"""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    cars = [c for c in ("electron", "hole") if _lowest_doping(tj, c) is not None]
+    fig, axes = plt.subplots(1, len(cars), figsize=(5.4 * len(cars), 4.2), squeeze=False)
+    for ax, car in zip(axes[0], cars):
+        dop = tj["doping_cm3"][_lowest_doping(tj, car)]
+        rr = [r for r in rows if r["carrier"] == car and r["doping_cm-3"] == dop]
+        for key, lab, sty in (("tau_eff_overall_inplane_fs", "AMSET τ_eff overall", dict(color="k")),
+                              ("tau_eff_ADP_inplane_fs", "AMSET τ_eff ADP", dict(color=_TAU_COLORS["ADP"])),
+                              ("tau_DPT_inplane_fs", "S8.2 DPT τ", dict(color="0.4", ls=":"))):
+            pts = [(r["T_K"], r[key]) for r in rr if r.get(key)]
+            if pts:
+                ax.plot(*zip(*pts), marker="o", ms=3, label=lab, **sty)
+        ax.set_yscale("log")
+        ax.set_xlabel("T (K)")
+        ax.set_ylabel("τ (fs)")
+        ax.set_title("%s  doping %.2e cm$^{-3}$" % (car, dop))
+        ax.grid(alpha=0.3, which="both")
+        ax.legend(fontsize=8)
+    fig.tight_layout()
+    fig.savefig(path, dpi=150)
+    plt.close(fig)
+
+
+def write_tau_suite(out, cwd, is_2d):
+    """[0035] 入口：S8.4 有 tau_energy.json 才做。先清 tau/ 里上一轮的产物。返回生成的文件名列表。"""
+    odir = Path(out) / TAU_SUBDIR
+    if odir.is_dir():
+        for f in list(odir.glob("tau_*.png")) + [odir / TAU_CSV, odir / TAU_TXT]:
+            if f.is_file():
+                f.unlink()
+    if not is_2d:
+        return []
+    tj = load_tau(cwd)
+    if not tj:
+        print("[..] τ 对比：没有可用的 %s/%s（S8.4 没开 WRITE_MESH/TAU_ENERGY，或还是旧版作业），跳过" % (AMSET2D_DIR, TAU_JSON))
+        return []
+    odir.mkdir(exist_ok=True)
+    rows, mechs = build_tau_rows(cwd, tj, _geom_2d(cwd))
+    write_tau_table(odir, rows)
+    files = [TAU_CSV]
+    t_idx = min(range(len(tj["temperatures_K"])), key=lambda i: abs(tj["temperatures_K"][i] - TARGET_T))
+    for name, fn in (("tau_vs_E_%dK.png" % round(tj["temperatures_K"][t_idx]), lambda p: plot_tau_E(p, tj, t_idx, cwd)),
+                     ("tau_eff_vs_T.png", lambda p: plot_tau_T(p, rows, tj))):
+        try:
+            fn(odir / name)
+            files.append(name)
+        except Exception as e:                        # noqa: BLE001
+            print("[WARN] τ 图 %s 失败（%s: %s）" % (name, type(e).__name__, e))
+    T = tj["temperatures_K"][t_idx]
+    lines = ["# 电子弛豫时间（S8.4 tau_energy.json vs S8.2 DPT），%.0f K、各载流子最低掺杂档" % T,
+             "# τ_eff = 常数 τ 的玻尔兹曼输运复现 AMSET 迁移率所需的 τ（面内）；τ_eff,ADP 与 DPT 的 τ 同为声学形变势口径",
+             "# τ_σ/τ_eff 最大相对差 %.1f%%（核对项，见 tau_energy.json 的 notes）"
+             % (100 * tj["check"].get("tau_sigma_vs_eff_max_rel", float("nan")))]
+    for car in ("electron", "hole"):
+        n = _lowest_doping(tj, car)
+        if n is None:
+            continue
+        r = next(x for x in rows if x["carrier"] == car and x["T_K"] == T and x["doping_cm-3"] == tj["doping_cm3"][n])
+        f = lambda v: "—" if v is None else "%.3g" % v                                   # noqa: E731
+        lines.append("%-8s doping %.2e cm^-3：τ_eff overall %s fs；%s；DPT τ %s fs（x %s / y %s）；ADP/DPT = %s"
+                     % (car, r["doping_cm-3"], f(r["tau_eff_overall_inplane_fs"]),
+                        "；".join("%s %s" % (m, f(r.get("tau_eff_%s_inplane_fs" % m))) for m in mechs),
+                        f(r["tau_DPT_inplane_fs"]), f(r["tau_DPT_x_fs"]), f(r["tau_DPT_y_fs"]), f(r["ADP_over_DPT"])))
+    lines.append("# ADP/DPT 偏离 1：AMSET 的 ADP 逐 k 点算（含能量依赖、真实能带、波函数重叠），DPT 是抛物带解析式；"
+                 "相差 2 倍以内属正常口径差，差太多先查 S8.2 的 m*/E1")
+    (odir / TAU_TXT).write_text("\n".join(lines) + "\n", encoding="utf-8")
+    files.append(TAU_TXT)
+    for l_ in lines[3:]:
+        print("[..] " + l_)
+    print("[OK] τ 对比：%s/（%s）" % (TAU_SUBDIR, ", ".join(files)))
+    return files
+
+
 def make_figure(out, am, bt, dpt, am2=None, geom=None):
     """geom（[0032]，2D 才给）：横轴改成面密度 n_2D（cm^-2），上轴加文献口径 n_2D/t（cm^-3）。"""
     import matplotlib
@@ -2284,6 +2487,10 @@ def main():
         write_transport_plots(cwd, out, is_2d)
     except Exception as e:                            # noqa: BLE001
         print("[WARN] 规定格式绘图输出失败（%s: %s）——comparison_300K 不受影响" % (type(e).__name__, e))
+    try:                                              # [0035] τ(E) / τ_eff vs DPT τ，尽力而为，不影响完成标记
+        write_tau_suite(out, cwd, is_2d)
+    except Exception as e:                            # noqa: BLE001
+        print("[WARN] τ 对比失败（%s: %s）——300 K 对比不受影响" % (type(e).__name__, e))
     for _l in resolve_kappa_L(cwd)[2]:                # patch_kl_auto
         print("[..] " + _l)
 

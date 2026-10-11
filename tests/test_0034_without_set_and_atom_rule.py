@@ -74,7 +74,7 @@ def test_gen_chain_rm_spec_and_markers():
     j = src.index('_ow, _ow_name = overall_without_set(OVERALL_WITHOUT, SCATTERING)')
     k = src.index('" && python postprocess_intrinsic.py --drop %s --out %s" % (",".join(_ow), _ow_name)')
     assert i < j < k < src.index("_acmd = _acmd + AMSET_TAIL")              # 在落成 transport.json 之前
-    assert "rm -f transport.json intrinsic_transport.json intrinsic_ADP.json overall_no*.json mesh_*.h5;" in src
+    assert "rm -f transport.json intrinsic_transport.json intrinsic_ADP.json overall_no*.json tau_energy.json mesh_*.h5;" in src
     kc = _load("kc_0034", KE / "ke_common.py")
     assert {"overall_noODP.json", "overall_noODP_IVS.json"} <= set(kc.DONE_MARKERS["step8.4_amset2d"])
 

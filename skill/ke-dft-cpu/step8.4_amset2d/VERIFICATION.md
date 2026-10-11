@@ -8850,3 +8850,58 @@ test_0032 的链首 rm 断言随新文件名更新。
 - 作业在跑时只告警不归档；
 - 显式 SCATTERING + on 的日志。
 
+
+## V198（2026-10-11）：[0035] 冻声子法自动出谷内 ODP 参数（S7.2_odp + S8.21_odp）
+
+用户要求：ODP 参数不再依赖文献，按材料自动算；要保证正确。新增可选组 `odp_frozen`（默认关，tf_*.yaml 写 `odp_frozen: true` 开）。
+
+**流程**
+- S7.2（`step7c_odp_frozen`，VASP 扇出 `odp-*`）：读 S5 DFPT 的 Γ 点频率、质量加权本征矢、Born 电荷；去掉 3 个声学模（平移投影）、
+  极性模（模有效电荷 > 0.1 e，`ODP_POLAR = include` 才算）、软模（< 0.5 THz）；每个模 ±u 两个构型 + 参考 `odp-ref`。
+  INCAR/KPOINTS/POTCAR 照抄 S7 undeformed。
+- S8.21（`step8.21_odp_read`）：按 S8.2 谷表，在各谷 `k_S7` 取真空对齐的带边能量，算每谷 × 每组简并模的 D，写 `odp_params.json`。
+- S8.4：`ODP_FROZEN = auto` 读它，加谷内通道。手填的谷内通道优先；手填谷间通道照常并用。
+
+**归一化（关键）**：Δ_κ = u·√(M/m_κ)·e_κ ⇒ 质量加权简正坐标 Q = u√M ⇒ D = dE/du = √M·dE/dQ，代入
+|g|² = ħ|dE/dQ|²/(2Nω) 正好是 dp_optical 用的 ħD²/(2NMω)。单元测试直接验证 Q = u√M（随机质量、随机正交本征矢）。
+
+**验证**
+1. 紧束缚玩具（3 原子 MoS₂ 型 slab：中心弹簧声子 + 指数衰减跳跃的电子）：冻声子 D 与 Hellmann–Feynman 直接算的
+   √M·⟨n|∂H/∂Q|n⟩ 一致（相对差 < 1e-3；位移缩到 1/5 误差缩 > 10 倍，即 O(u²)）；σh 奇的面内反相模在 Γ 点给 D = 0；
+   模分类：3 个声学、非极性的 A1′/E″ 型被选中、M 对 X 的极性模被排除。
+2. 简并带：随机 3×3 耦合矩阵 V 放进三重简并块，D² = Tr(V²)/9（相对差 < 1e-4）；真空能级的线性平移从 D 里精确扣掉；
+   邻带离得比 2 倍位移还近时并入简并组（否则排序换位、中心差分配错带）。
+3. 生成/读取脚本真跑（pymatgen 环境，`tests/test_0035_gen_pipeline.py`）：S7.2 的子目录、位移（与 manifest 逐原子一致到 1e-8 Å）、
+   输入照抄；选模变了把不再算的子目录改名移出扇出范围、已算完的不归档；结构或 S7 输入不一致直接报错。
+   S8.21 用紧束缚模型充当各构型的 VASP：A1′ 型 D = 5.855 eV/Å（不对齐 4.907，人为真空项起作用），与
+   Hellmann–Feynman 参考相对差 < 2e-3；镜面相关的两个成员谷 ΣD² 相同（离散 0）；S8.4 把它变成谷内通道。
+4. 失效接线：S7.2 重新生成 → S8.21；S8.2 → S8.21；S8.21 的参数指纹变了 / 刚可用 → S8.4（作业在跑时只告警）；
+   S1 rerun → S7.2 整目录归档。test_downstream_wiring / test_lineage_post 的覆盖规则都满足。
+
+**发现并修掉的问题（实现过程中）**：声子简并按频率分组时，偶然近简并（8.777 / 8.812 THz）把非极性 A1′ 型与极性模并成一组，
+非极性的那个跟着被剔除。改为只合并极性相同的模（真简并伙伴属于同一不可约表示，极性必相同）。分组只影响汇报与选模补全，
+各模 D² 本来按 ħω 相加，拆开或并起来率都一样。
+
+**局限**：零阶（q 无关）谷内耦合；不含一阶耦合与谷间参数。SOC 自旋劈裂 > 5 meV 的两条带按单带算（同 [0033] 的 SOC 告警）。
+没有在真实材料上跑过 VASP（本环境没有 VASP）：上线后先用 MoS₂ 对照 Kaasbjerg 2012 的同极模 D 与 ħω（见本地测试指南）。
+
+## V199（2026-10-11）：[0035] τ(E) 与迁移率等效 τ（tau_energy.json，S8.3 tau/）
+
+用户要求：输出 τ，并与 BT2 用的 DPT τ 对比。S8.4 作业链在本征后处理之后跑 `tau_energy.py`（同一份 mesh），失败只写 status = error。
+
+- τ(E) = 1/⟨Γ⟩_E：按载流子能量分箱（电子导带从 CBM、空穴价带从 VBM 量起，与 AMSET `_get_band_idx` 同一选法），
+  只统计 FD 窗口内的态。
+- τ_eff = τ0·μ/μ_CRTA(τ0)：μ 与 μ_CRTA 都用 AMSET 的 `_calculate_mobility`、同一费米能级；τ_eff,ADP 与 S8.2 DPT 的 τ 同口径。
+- τ_σ（逐 k 点电导加权）只作交叉核对。
+
+**真 AMSET 验证**（`test_tau_energy_e2e.py`，合成六方双谷模型，amset 0.5.1，全部 PASS）：
+- 复现：重算 overall μ 与 AMSET 写的 transport json 相对差 0；
+- 常数率：两机制各自常数 τ_A = 20 fs、τ_B = 50 fs → τ_eff,A/B/overall = 20/50/14.29 fs，τ(E) 每个箱 = τ_A，τ_σ = overall
+  （只剩 json 6 位有效数字的取整）；
+- 真实率：300 K τ_σ 与 τ_eff,overall 最大相对差 0.7%；
+- 物理：电子（ADP 谷内掩码开）τ_eff,ADP = 87.4 fs，Bardeen–Shockley τ = ħ³C₂D/(k_BT m_d E1²) = 90.4 fs（比值 0.967）；
+  空穴（掩码关，K↔K′ 也在 ADP 里）比值 0.477 ≈ ½；
+- 电子 τ_ODP(E)：ħω = 50 meV 以下 292 fs（只能吸收）、以上 37 fs（发射通道打开）。
+
+S8.3：`tau/tau_comparison.csv`（各温度 × 掺杂档：τ_eff 逐机制、τ_σ、DPT τ 分方向、ADP/DPT）、`tau_vs_E_300K.png`、
+`tau_eff_vs_T.png`、`tau_summary.txt`；只用与当前 transport.json 同一次运行的 tau_energy.json。

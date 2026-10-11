@@ -452,7 +452,7 @@ _AMSET_ENV_SRC = "source %s && conda activate %s" % (CONDA_SH, AMSET_ENV)
 
 ### 6.3 ke-dft-cpu 电子热导率（v0.1，AMSET）
 
-16 步 DAG（`needs` 显式依赖，没写 needs 的步骤回退为"上一步"）：
+16 步 DAG（[0035] 起另有可选 S7.2/S8.21 两步；`needs` 显式依赖，没写 needs 的步骤回退为"上一步"）：
 
 | seq | 步骤 | label | 内容 | 判据 |
 |---|---|---|---|---|
@@ -464,13 +464,15 @@ _AMSET_ENV_SRC = "source %s && conda activate %s" % (CONDA_SH, AMSET_ENV)
 | 6 | `step6_elastic` | S6_elastic | 弹性常数（复用 elastic 脚本） | OUTCAR `TOTAL ELASTIC MODULI` |
 | 7 | `step7_deform` | S7_deform | 形变势（**fanout** `*deform*`） | `outcar` |
 | 7.1 | `step7b_deform_read` | S7.1_read | 形变势读取（登录节点）→ `deformation.h5` | plot |
+| 7.2 | `step7c_odp_frozen` | S7.2_odp | [0035] **2D 可选**（组 `odp_frozen`，默认关）：冻声子 ODP 单点（**fanout** `odp-*`）：S5 的 Γ 点非极性光学模各做 ±u 位移 + 一个参考构型，INCAR/KPOINTS/POTCAR 照抄 S7 undeformed | `outcar` |
+| 8.21 | `step8.21_odp_read` | S8.21_odp | [0035] 读冻声子单点 → `odp_params.json`：每个谷（S8.2 谷表）× 每组光学模的 D（真空对齐）与 ħω，供 S8.4 的谷内 ODP 用 | plot |
 | 8 | `step8_amset` | S8_kappa | AMSET 电子热导率 → `transport.json`（needs: wave+dielect+elastic+deform+带隙画图） | `transport.json:thermal_conductivity` |
-| 8.4 | `step8.4_amset2d` | S8.4_amset2d | **2D 专用**：二维散射核版 AMSET（插件 amset2d_plugin，可选组 `amset2d`，默认关） | `transport.json:thermal_conductivity` |
+| 8.4 | `step8.4_amset2d` | S8.4_amset2d | **2D 专用**：二维散射核版 AMSET（插件 amset2d_plugin，可选组 `amset2d`，默认关）；[0035] 开了 `odp_frozen` 时自动用 S8.21 的冻声子 ODP 参数（`ODP_FROZEN`），并出 `tau_energy.json`（逐机制 τ(E) 与迁移率等效 τ） | `transport.json:thermal_conductivity` |
 | 8.2 | `step8.2_dpt` | S8.2_dpt | DPT 形变势迁移率 → `dpt_result.json`（必须排在 8.1 前）；[0020] 另出 `mobility_vs_T`（默认 100–900 K，step.conf `TEMPERATURES` 可改）；[0022] 2D 另出 `multi_valley`：自动找离带边 `VALLEY_WINDOW_EV`（默认 0.30 eV）内的所有谷（K/Q/Γ/M…）、逐谷质量张量与 E1、按布居加权、逐温度算——带边在 Q 这类非高对称谷（WSe₂ 导带）时单谷拒绝出数，多谷照算，**不要手填 M_EFF_***；`DPT_VALLEYS = off` 关掉；[0023] 有贡献的谷之间等效 E1 相差 > `VALLEY_E1_RATIO_MAX`（默认 3）倍时多谷拒绝出数（TMD 电子 Q 谷真空口径 E1 只有 K 谷的 1/10，DPT 在这里失效），只留各谷带符号 dE/dε 诊断；[0024] 找到别的非等价谷时写 `single_valley_scope`：单谷值只代表哪个谷、各温度占多少载流子（只报布居，不拦截）；[0025] 3D 出 x/y/z 分方向（`by_direction` 的 x/y/z，C_α=C11/C22/C33，m_α 来自带边三维二次型拟合，E1_α 取 S7.1 `deformation.h5` 带边 3×3 张量的对角，S7/S7.1 不用改；带边有对称等价谷（Si 的 X、Bi₂Te₃ 的 6 个谷）时两者都对等价谷平均），3D 各向同性值的 C、E1 改取三个对角的平均、m* 改用三维拟合的 m_d=(det M)^(1/3)；[0027] 带边是否被对称性钉住改按晶体小群判断（以前查 ⅓/¼ 坐标表，矩形胞 Y–Γ 上的 (0,⅓) 被误判，线性项被关、拟合被拒，SS 电子）；[0028] 非磁体系用 ISPIN=2 算时两个自旋道能带相同，多谷只按一道算（以前同一个谷按 up/down 各算一次，单谷占比少报一半，CrS2/CrSe2 hex）；[0029] 只比较带边附近的带（最高空带两道不一致不再阻止合并） | plot |
 | 8.1 | `step8.1_boltztrap` | S8.1_bt2 | BoltzTraP2 CRTA × DPT-τ 文献口径完整实现；[0022] 单谷分方向 τ 不可用时用 S8.2 的多谷 τ_eff（逐温度取，不外推）；[0024] 用单谷 τ 时提示它只代表哪个谷、该温度占多少载流子（写进 boltztrap_summary.txt）；[0025] 3D 也用 S8.2 的分方向 τ_x/τ_y（以前退回各向同性 τ）；[0026] 3D 另写 zz 的 σ/τ、S、κe/τ，文献口径扫描加 zz 方向（τ_z、κL_zz → ZT_zz） | `boltztrap_crta.json` |
 | 8.3 | `step8.3_output` | S8.3_cmp | AMSET / amset2d / CRTA×DPT 对比图与表；[0020] 另出 μ(T) 三值表 `comparison_vs_T.csv/json` + `mobility_vs_T.png`（DPT / AMSET 只 ADP / 本征 / 全机制，最低掺杂）；[0022] 加多谷 DPT 一栏（`dpt_mv_mu_cm2/Vs`、`mu_DPT_mv`、`ADP_over_DPT_mv`），单谷算不出时 DPT 主栏与 BT2 的 τ 用多谷；[0024] 汇总写明单谷 DPT 代表的谷与占比（μ(T) 表 `DPT_edge_share` 列），并列出 AMSET 各散射机制的迁移率与限制因素；[0025] 3D 的 DPT 主栏取 (μx+μy+μz)/3；[0026] 3D 的 BT2 分方向加 zz 列（含 `bt2_ZT_zz`），3D 平均 ZT 用三方向 κL；恢复 `[DPT 单谷]` / `[AMSET 机制]` 汇总行 | `comparison_300K.png` |
 
-- 开关：`bandgap_steps: false` 完全不算带隙（手填 setting.yaml 的 bandgap）、`bandgap_hse: false`、`dpt: false`、`boltztrap_crta: false`、`amset2d`（**2D 材料 init/register 时自动写 `amset2d: true`**，老材料手写；zt-dft-cpu 对 2D 只认 S8.4）、`amset3d`（S8 原版三维核；**2D 材料新建时自动写 `amset3d: false`**，不跑 S8；层厚 `LAYER_THICKNESS` 写在本材料共用 step.conf，S8/S8.1/S8.4 共用）、`output_compare: false`。
+- 开关：`bandgap_steps: false` 完全不算带隙（手填 setting.yaml 的 bandgap）、`bandgap_hse: false`、`dpt: false`、`boltztrap_crta: false`、`amset2d`（**2D 材料 init/register 时自动写 `amset2d: true`**，老材料手写；zt-dft-cpu 对 2D 只认 S8.4）、`amset3d`（S8 原版三维核；**2D 材料新建时自动写 `amset3d: false`**，不跑 S8；层厚 `LAYER_THICKNESS` 写在本材料共用 step.conf，S8/S8.1/S8.4 共用）、`output_compare: false`、`odp_frozen`（[0035] 冻声子 ODP 参数 S7.2/S8.21，默认关；2D 材料要谷内光学形变势就在本材料 tf_*.yaml 写 `odp_frozen: true`）。
 - 依赖：`pymatgen, numpy, matplotlib, amset, BoltzTraP2` + `vaspkit`（conda 环境 `amset_clean`）。
 
 **8.4 amset2d（2D 项目专用）**：把 AMSET 的四种散射核（ADP/POP/IMP/PIE）换成二维形式

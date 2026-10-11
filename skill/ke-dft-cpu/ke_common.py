@@ -621,6 +621,7 @@ DOWNSTREAM = {
     "step1_opt": [("step2_bandgap/step2.1_static", "dir"), ("step3_uniform", "dir"),
                   ("step3b_uniform_full", "dir"), ("step3c_uniform_offgrid", "dir"),
                   ("step5_dielect", "dir"), ("step6_elastic", "dir"), ("step7_deform", "dir"),
+                  ("step7c_odp_frozen", "dir"),                 # [0035] 冻声子 ODP 单点（结构来自 S1）
                   ("step1_std_opt", "dir")],                    # 最后一个：zt 的 kl 分支（标准胞重新弛豫）
     "step2_bandgap/step2.1_static": [("step2_bandgap/step2.15_discriminant", "dir"),
                                      ("step2_bandgap/step2.2_pbe", "dir")],
@@ -645,6 +646,9 @@ DOWNSTREAM = {
     # [patch_rerun_invalidate V140] S7（形变单点）重新生成 -> S7.1 读出的形变势作废（递归到 S8/S8.4/S8.2）。
     #   S7.1 的产物在材料目录的 step7b_deform_read/，rerun S7 删不到它，此前一直是旧的"完成"。
     "step7_deform": [("step7b_deform_read", "always")],
+    # [0035] S7.2（冻声子 ODP 单点）重新生成 -> S8.21 读出的 odp_params.json 作废。S8.21 -> S8.4 不在这张表里：
+    #   S8.4 一跑几小时，只在它用过的冻声子参数真的变了时才重排（invalidate_odp_consumer，S8.21 的 gen 调）。
+    "step7c_odp_frozen": [("step8.21_odp_read", "always")],
     # [patch_stale_upstream V136] S5（介电）/ S6（弹性）重新生成：S8/S8.4 在 gen 时把它们的数值写进
     #   settings.yaml（不是软链）-> mode="always"；S8.2（DPT）读 step6_elastic/OUTCAR 的面内弹性；
     #   S5.1 的校验结论随 S5 一起作废。此前没有这两项：S5/S6 重算后旧 transport.json 仍被判"完成"。
@@ -669,7 +673,8 @@ DOWNSTREAM = {
     #   invalidate_downstream（以前只在表里、没有一个 gen 调：GaAs 的 S8.2 重跑了 4 次，S8.1 一直是旧 τ）。
     "step8.4_amset2d": [("step8.3_output", "always")],
     "step8.1_boltztrap": [("step8.3_output", "always")],
-    "step8.2_dpt": [("step8.1_boltztrap", "always"), ("step8.3_output", "always")],
+    "step8.2_dpt": [("step8.1_boltztrap", "always"), ("step8.3_output", "always"),
+                    ("step8.21_odp_read", "always")],          # [0035] 冻声子 D 按 S8.2 的谷表取（秒级，重读）
 }
 # skill.yaml 里不进 DOWNSTREAM 的 needs 边与理由（test_downstream_wiring.py：每条 needs 边要么在 DOWNSTREAM，
 #   要么在这里；"*" = 该上游的全部下游）。
@@ -682,6 +687,14 @@ DOWNSTREAM_EXEMPT = {
     ("step4_disp", "*"): "kl 技能的声子链（gen 在 kl-dft-cpu）",
     ("step5_fc", "*"): "kl 技能的声子链（gen 在 kl-dft-cpu）",
     ("step6_kappa", "*"): "kl 技能的声子链（gen 在 kl-dft-cpu）",
+    # [0035] 冻声子 ODP
+    ("step7_deform", "step7c_odp_frozen"): "S7.2 照抄 S7 undeformed 的 INCAR/KPOINTS/POTCAR（gen 时记 sha256）；"
+                                           "S8.21 读取时核对它们与 S7 现状一致、参考构型本征值与 S7 undeformed 一致，"
+                                           "不一致报错要求 retry S7.2（S7 每次 retry 都整目录归档 S7.2 代价太大）",
+    ("step5_dielect", "step7c_odp_frozen"): "S7.2 的位移用 gen 时的 S5 本征矢并记进 odp_manifest.json；S8.21 读取时"
+                                            "核对 S5 现在的频率（差 >2% 告警）。结构变了由 S1 -> S7.2 的 dir 边整目录归档",
+    ("step8.21_odp_read", "step8.4_amset2d"): "有条件失效：S8.21 的 gen 调 invalidate_odp_consumer，只在 S8.4 用过的"
+                                              "冻声子参数指纹变了（或 S8.4 还没用上新参数）时归档 S8.4",
 }
 # DOWNSTREAM 里 gen 不在本技能的上游（zt 的 kl 分支）：它们自己不调失效，只被 S1 的级联递归走到。
 DOWNSTREAM_FOREIGN = frozenset({"step1_std_opt", "step2_static"})
@@ -729,10 +742,12 @@ DONE_MARKERS = {
     "step5_dielect_validate": ("dielectric_check.json",),
     "step8_amset": ("transport.json",),
     "step8.4_amset2d": ("transport.json", "intrinsic_transport.json", "intrinsic_ADP.json",   # [0018]
-                        "overall_noODP.json", "overall_noODP_IVS.json"),                        # [0034]
+                        "overall_noODP.json", "overall_noODP_IVS.json",                         # [0034]
+                        "tau_energy.json"),                                                     # [0035]
     "step8.1_boltztrap": ("boltztrap_crta.json",),
     "step8.2_dpt": ("dpt_result.json",),
     "step8.3_output": ("comparison_300K.png",),
+    "step8.21_odp_read": ("odp_params.json",),                                                   # [0035]
 }
 
 
@@ -805,6 +820,99 @@ def invalidate_dp_optical_valleys(cwd, dpt_res, consumer="step8.4_amset2d"):
         print("[WARN] ★ S8.2 的谷表变了（%s），%s 生成过输入、还没有结果 —— 若它的作业已在排队/运行（这里查不到），"
               "用的是旧谷表：scancel 后 retry %s" % ("/".join(changed), consumer, consumer))
     return done
+
+
+ODP_PARAMS_SRC = "step8.21_odp_read/odp_params.json"   # [0035] 冻声子 ODP 参数（gen_step14 的 ODP_FROZEN_SRC）
+
+
+def odp_consumer_stale(rec, params):
+    """[0035] S8.4 的 2d_correction.json 里 dp_optical_frozen 记录 vs 新的 odp_params.json -> 需要重排的载流子列表。
+
+    rec = {"frozen_use": {载流子: 决定}, "digest": {载流子: 用过的参数指纹}}。每个载流子看 S8.4 当时的决定：
+      used（用了冻声子参数）  -> 指纹变了（或新参数不可用了）才重排；
+      manual / off / manual_valleys / not_in_scattering（手填优先、关掉、手填谷表、显式 SCATTERING 不含 ODP）-> 不动；
+      unavailable 或没有记录（S8.4 在参数出来之前跑的，或旧版 S8.4）-> 新参数可用就重排（开了 odp_frozen 就该用上）。"""
+    import odp_frozen as _of
+    use = (rec or {}).get("frozen_use") or {}
+    dig = (rec or {}).get("digest") or {}
+    out = []
+    for car in ("electron", "hole"):
+        new = _of.params_digest(params, car)
+        how = use.get(car)
+        if how == "used":
+            if dig.get(car) != new:
+                out.append(car)
+        elif how in (None, "unavailable") and new is not None:
+            out.append(car)
+    return out
+
+
+def invalidate_odp_consumer(cwd, params, consumer="step8.4_amset2d"):
+    """[0035] S8.21 写出新的 odp_params.json 之后调：S8.4 用过的冻声子参数变了（或它还没用上可用的参数）
+    -> 归档 S8.4 的完成标记（会重新生成、重新排队），递归让 S8.3 失效。S8.4 不存在 / 没生成过 -> 不动。"""
+    import json as _json
+    import time as _t
+    cwd = Path(cwd)
+    d = cwd / consumer
+    try:
+        rec = _json.loads((d / "2d_correction.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    changed = odp_consumer_stale(rec.get("dp_optical_frozen") or {}, params)
+    if not changed:
+        return []
+    busy = _dir_busy(d, _active_job_dirs())
+    if busy:
+        print("[WARN] ★ 冻声子 ODP 参数变了（%s），但 %s 的作业还在排队/运行（%s）—— 它用的是旧参数。"
+              "先 scancel 它，再 retry %s" % ("/".join(changed), consumer, busy, consumer))
+        return []
+    tag = "stale-upstream-step8.21_odp_read-%s" % _t.strftime("%Y%m%d%H%M%S")
+    done = []
+    for m in DONE_MARKERS.get(consumer, ()):
+        f = d / m
+        if f.is_file() or f.is_symlink():
+            f.rename(d / (m + "." + tag))
+            done.append((consumer, m))
+    if done:
+        print("[WARN] 冻声子 ODP 参数变了 / 刚可用（%s）—— %s 的完成标记已归档（*.%s），会重新生成、重新排队"
+              % ("/".join(changed), consumer, tag))
+        done += invalidate_downstream(cwd, consumer, "上游 S8.21 冻声子参数变了")
+    elif (d / "submit.sh").is_file():
+        print("[WARN] ★ 冻声子 ODP 参数变了（%s），%s 生成过输入、还没有结果 —— 若它的作业已在排队/运行，"
+              "用的是旧参数：scancel 后 retry %s" % ("/".join(changed), consumer, consumer))
+    return done
+
+
+def reexec_with_pymatgen(script=None, argv=None):
+    """[0035] 本进程 import 不了 pymatgen -> 用 step.conf 的 CONDA_SH/AMSET_ENV（autozt 从 setting/<集群>.yaml 注入）
+    切到 AMSET 环境、原样重跑本脚本（exec，进程号与继承的 gen 锁不变）。已在 AMSET 环境里还不行 -> 报错退出。"""
+    import shlex as _sh
+    try:
+        import pymatgen.io.vasp  # noqa: F401
+        return
+    except ImportError:
+        pass
+    if os.environ.get("AUTOZT_PMG_REEXEC"):
+        sys.exit("[ERROR] 切到 AMSET 环境后仍 import 不了 pymatgen")
+    try:
+        import stepconf as _sc
+        txt = Path(_sc.CONF_NAME).read_text(encoding="utf-8-sig")
+        p = {k.upper(): v for k, v, _ in _sc.parse(txt, _sc.CONF_NAME).get("params", [])}
+    except Exception as e:                                   # noqa: BLE001
+        p = {}
+        print("[WARN] 读 step.conf 失败（%s: %s）" % (type(e).__name__, e))
+    sh, env = p.get("CONDA_SH"), p.get("AMSET_ENV")
+    if not (sh and env):
+        sys.exit("[ERROR] 本步要 pymatgen：当前 python（%s）没有，step.conf 也没有 CONDA_SH/AMSET_ENV 可以切过去"
+                 % sys.executable)
+    script = os.path.abspath(script or sys.argv[0])
+    args = list(sys.argv[1:] if argv is None else argv)
+    cmd = "source %s && conda activate %s && AUTOZT_PMG_REEXEC=1 exec python %s %s" % (
+        _sh.quote(sh), _sh.quote(env), _sh.quote(script), " ".join(_sh.quote(a) for a in args))
+    print("[..] 当前 python 没有 pymatgen，切到 AMSET 环境 %s 重跑本脚本" % env)
+    sys.stdout.flush()
+    sys.stderr.flush()
+    os.execvp("bash", ["bash", "-c", cmd])
 
 
 def _links_into(d, upstream_dir):
@@ -1122,6 +1230,7 @@ LINEAGE_POSCARS = (
     ("step5_dielect", ("POSCAR",)),
     ("step6_elastic", ("POSCAR",)),
     ("step7_deform", ("undeformed/POSCAR",)),
+    ("step7c_odp_frozen", ("odp-ref/POSCAR",)),            # [0035] 参考构型 = S1 CONTCAR（其余是位移构型）
 )
 # (派生步骤, 它的产物, 来源步骤, 来源里的计算输出)：来源输出比产物新 = 产物是用旧来源做的。
 #   只看计算输出（VASP 重算才会变），不看 INCAR/POSCAR（gen 原地重写不代表重算）。
@@ -1133,6 +1242,7 @@ LINEAGE_DERIVED = (
     ("step2_bandgap/step2.3_hse_plot", "band_summary.json", "step2_bandgap/step2.3_hse",
      ("vasprun.xml", "*/vasprun.xml")),
     ("step5_dielect_validate", "dielectric_check.json", "step5_dielect", ("OUTCAR",)),
+    ("step8.21_odp_read", "odp_params.json", "step7c_odp_frozen", ("*/vasprun.xml",)),          # [0035]
 )
 LINEAGE_TOL_A = 1e-4        # Å：CONTCAR 与 POSCAR 的文本精度差远小于它；重新弛豫的差别远大于它
 LINEAGE_SLACK_S = 60.0
@@ -1303,6 +1413,7 @@ POST_DERIVED = (
     ("step8.1_boltztrap", "boltztrap_crta.json", "step3_uniform", ("vasprun.xml",)),
     ("step8.1_boltztrap", "boltztrap_crta.json", "step2_bandgap/step2.2_pbe_plot", ("band_summary.json",)),
     ("step8.1_boltztrap", "boltztrap_crta.json", "step2_bandgap/step2.3_hse_plot", ("band_summary.json",)),
+    ("step8.21_odp_read", "odp_params.json", "step8.2_dpt", ("dpt_result.json",)),             # [0035]
 )
 # [V163] link 边（S3/S3b/S4/S4b/S7.1 -> S8/S8.4）：S8 用的是哪一份（S4 还是 S4b）看它目录里的软链，按链接目标比新旧。
 LINKED_PRODUCTS = (("step8_amset", "transport.json"), ("step8.4_amset2d", "transport.json"))

@@ -32,7 +32,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 # [SKILL_REV] 版本戳：写进 settings.yaml 头，便于从结果反查跑的是哪份 skill 副本。
-_SKILL_REV = "2026-10-11-0034-r3"   # 二审：重复星按 S8.2 k_grid 合并；显式 SCATTERING+掩码的日志   # [0034-r2] 复审：同中心谷合并、显式 SCATTERING 照办、PIE 与 settings 一致   # [0034] OVERALL_WITHOUT（出厂 ODP）-> overall_noODP.json   # [0033] ODP/谷间散射（常数形变势，step.conf DP_OPTICAL_E/H）+ ADP 谷内掩码   # [0032-r2] 复审：链首清旧本征产物与 mesh；SCATTERING 无 ADP 不出只 ADP   # [0032] WRITE_MESH/INTRINSIC_ADP_ONLY 2D 默认开（旧：2026-09-28-desym-fix V115）
+_SKILL_REV = "2026-10-11-0035"   # [0035] 冻声子 ODP 参数（ODP_FROZEN）+ τ(E)（tau_energy.py）   # [0034-r3] 二审：重复星按 S8.2 k_grid 合并；显式 SCATTERING+掩码的日志   # [0034-r2] 复审：同中心谷合并、显式 SCATTERING 照办、PIE 与 settings 一致   # [0034] OVERALL_WITHOUT（出厂 ODP）-> overall_noODP.json   # [0033] ODP/谷间散射（常数形变势，step.conf DP_OPTICAL_E/H）+ ADP 谷内掩码   # [0032-r2] 复审：链首清旧本征产物与 mesh；SCATTERING 无 ADP 不出只 ADP   # [0032] WRITE_MESH/INTRINSIC_ADP_ONLY 2D 默认开（旧：2026-09-28-desym-fix V115）
 # 复制来源（gen_step10_amset.py 的 _SKILL_REV），用于人工比对两份文件是否同步
 _SOURCE_GEN_REV = "2026-10-08-2d-raw-elastic"   # [0014] S8 的 2D 弹性改为原始 slab 值，与本步一致
 import stepconf  # noqa: E402
@@ -107,7 +107,7 @@ STEP_LABEL  = "S8.4_amset2d"
 # [0032] 链首一并清掉上一轮的本征产物与 mesh：关掉 WRITE_MESH / INTRINSIC_ADP_ONLY 再 retry 时，
 #   旧 intrinsic_*.json 会留在目录里、被 S8.3 当成本轮结果（retry 不删目录）。mesh 本轮会重写。
 # [0034] 再加 overall_no*.json（OVERALL_WITHOUT 那一套）。
-AMSET_CMD   = ('rm -f transport.json intrinsic_transport.json intrinsic_ADP.json overall_no*.json mesh_*.h5; '
+AMSET_CMD   = ('rm -f transport.json intrinsic_transport.json intrinsic_ADP.json overall_no*.json tau_energy.json mesh_*.h5; '
                'python overlap_preflight.py --in-job || exit 1; '
                'python -c "import amset2d_plugin; @AMSET_PLUGINS@'
                'from amset.log import initialize_amset_logger as L; L(); '
@@ -155,6 +155,16 @@ ADP_INTRAVALLEY = "auto"
 DPT_RESULT = "step8.2_dpt/dpt_result.json"
 _DP_OPTICAL_REC = None          # resolve_dp_optical() 的结果，apply_2d_corrections 落进 2d_correction.json
 _SCATTERING_EXPLICIT = False    # [0034] step.conf 显式写了 SCATTERING：照它来，不自动补 ODP/IVS
+# [0035] 冻声子 ODP 参数（S7.2 单点 + S8.21 读取；本材料 tf_*.yaml 开 odp_frozen 组才会有）：
+#   ODP_FROZEN = auto（出厂：有 step8.21_odp_read/odp_params.json 就用它的谷内通道 X>X；某载流子在 DP_OPTICAL_E/H
+#                手填了谷内通道就用手填的；手填了谷表 DP_OPTICAL_VALLEYS_* 的载流子不用 —— 参数是按 S8.2 谷表算的）
+#              / on（必须有，没有就报错）/ off（不用）。
+#   ODP_FROZEN_DMIN：D 小于它（eV/Å）的模不进通道（对称性禁戒的模，D ≈ 0，贡献 < 0.1%）。
+#   谷间（IVS）没有自动参数：要开仍按 DP_OPTICAL_E/H 手填 X>X'、X>Y（与冻声子的 X>X 可以同时用）。
+ODP_FROZEN = "auto"
+ODP_FROZEN_SRC = "step8.21_odp_read/odp_params.json"
+ODP_FROZEN_DMIN = 0.05
+_DP_OPTICAL_FROZEN_REC = None   # 本步对冻声子参数的决定（逐载流子）+ 用过的参数指纹，落进 2d_correction.json
 MANUAL_BANDGAP = None                 # None=自动读；或写数值(eV) 覆盖 scissor
 # ★ patch_bandgap_override（2026-09-28）：scissor 带隙的 step.conf 覆盖通道（与 gen_step10 同款）。
 #   BANDGAP_OVERRIDE = <eV>、BANDGAP_NOTE = <来源说明>；优先级
@@ -281,6 +291,10 @@ INTRINSIC_ADP_ONLY = True
 #   出厂 "ODP"；逗号分隔可写多个（ODP,IVS -> overall_noODP_IVS.json）；off = 不出。
 #   列出的机制本次都没开（如没写 DP_OPTICAL_*）时这一套与 overall 相同，自动不出。需要 WRITE_MESH。
 OVERALL_WITHOUT = "ODP"
+# [0035] TAU_ENERGY：同一份 mesh 出电子弛豫时间 tau_energy.json —— 逐机制 τ(E)（按能量分箱）与迁移率等效 τ
+#   （τ_eff = 常数 τ 输运复现 AMSET 迁移率所需的 τ；τ_eff,ADP 与 S8.2 DPT 的 τ 同口径），S8.3 画图对比。
+#   出厂 True（需要 WRITE_MESH）；尽力而为：它失败不影响 transport.json（失败原因写在 tau_energy.json）。
+TAU_ENERGY = True
 # --- 弹性常数来源（amset run 的 ACD 散射需要）---
 #   MANUAL_ELASTIC 填了就用它，否则从 ELASTIC_DIR/OUTCAR 自动解析（kBar→GPa）。
 #   直接填：单个数（各向同性近似，GPa），或 6x6 列表（完整 Cij，GPa）。
@@ -371,6 +385,7 @@ SPEC = {
     "WRITE_MESH": (None, "bool"),
     "INTRINSIC_ADP_ONLY": (None, "bool"),   # [0018]
     "OVERALL_WITHOUT": (None, "str"),       # [0034] None = 没写（用出厂 ODP）；off = 不出
+    "TAU_ENERGY": (None, "bool"),           # [0035] None = 没写（出厂 True）
     # 掺杂/温度范围覆盖（B4/B5 缩减设置用）：默认顶部 DOPING/TEMPERATURES；step.conf 可覆盖。
     "DOPING": (DOPING, "str"),
     "TEMPERATURES": (TEMPERATURES, "str"),
@@ -400,6 +415,8 @@ SPEC = {
     "DP_OPTICAL_VALLEYS_E": ("", "str"),
     "DP_OPTICAL_VALLEYS_H": ("", "str"),
     "ADP_INTRAVALLEY": ("auto", "str"),
+    "ODP_FROZEN": ("auto", "str"),              # [0035]
+    "ODP_FROZEN_DMIN": (None, "float"),
 }
 # --- amset2d 插件相关（可改）---
 PLUGIN_SRC_NAME = "amset2d_plugin.py"   # 与本脚本同目录，运行时复制到 OUTDIR_NAME
@@ -1267,16 +1284,48 @@ def _mechanisms_2d(cwd: Path):
     return mechs
 
 
+def _load_frozen(cwd: Path):
+    """[0035] ODP_FROZEN -> (odp_params 字典 或 None, 模式)。auto 没有文件 -> None；on 没有文件 -> 报错。"""
+    import json
+    mode = str(ODP_FROZEN or "auto").strip().lower()
+    if mode not in ("auto", "on", "off"):
+        sys.exit("[ERROR] ODP_FROZEN=%r 无效，只允许 auto / on / off" % ODP_FROZEN)
+    if mode == "off":
+        return None, mode
+    f = cwd / ODP_FROZEN_SRC
+    if not f.is_file():
+        if mode == "on":
+            sys.exit("[ERROR] ODP_FROZEN=on，但 %s 不存在：本材料 tf_*.yaml 写 odp_frozen: true，跑完 S7.2_odp / S8.21_odp"
+                     % ODP_FROZEN_SRC)
+        return None, mode
+    try:
+        params = json.loads(f.read_text(encoding="utf-8"))
+    except ValueError as e:
+        sys.exit("[ERROR] %s 读不了：%s" % (ODP_FROZEN_SRC, e))
+    try:
+        import odp_frozen as of
+    except ImportError:
+        sys.exit("[ERROR] 有 %s，但找不到 odp_frozen.py（gen_need 里要有它）" % ODP_FROZEN_SRC)
+    if params.get("schema") != of.SCHEMA:
+        sys.exit("[ERROR] %s 的格式 %r 不是本脚本认的 %r：重跑 S8.21_odp" % (ODP_FROZEN_SRC, params.get("schema"), of.SCHEMA))
+    return params, mode
+
+
 def resolve_dp_optical(cwd: Path):
     """[0033] step.conf 的 DP_OPTICAL_* -> 2d_correction.json 的 dp_optical 记录，并把 ODP/IVS 补进 SCATTERING。
+    [0035] 再加冻声子参数（ODP_FROZEN，S8.21 的 odp_params.json）：没手填谷内通道的载流子用它的 X>X 通道。
 
-    没写通道表 -> None（与以前完全一样；SCATTERING 里手写了 ODP/IVS 却没通道 -> 报错）。
-    格式错、谷表缺、通道指向谷表里没有的谷 -> sys.exit 说清楚（不静默）。"""
-    global SCATTERING
+    没写通道表、也没有冻声子参数 -> None（与以前完全一样；SCATTERING 里手写了 ODP/IVS 却没通道 -> 报错）。
+    格式错、谷表缺、通道指向谷表里没有的谷、冻声子参数是按旧谷表算的 -> sys.exit 说清楚（不静默）。"""
+    global SCATTERING, _DP_OPTICAL_FROZEN_REC
     import json
     import dp_optical as dpo
     specs = {"electron": (DP_OPTICAL_E, DP_OPTICAL_VALLEYS_E, "DP_OPTICAL_E", "DP_OPTICAL_VALLEYS_E"),
              "hole": (DP_OPTICAL_H, DP_OPTICAL_VALLEYS_H, "DP_OPTICAL_H", "DP_OPTICAL_VALLEYS_H")}
+    frozen, fmode = _load_frozen(cwd)
+    if frozen is not None:
+        import odp_frozen as of                # _load_frozen 已确认能 import
+    f_use, f_digest, f_info = {}, {}, {}
     rec, kinds_on = {}, set()
     dpt = None
     for car, (ch_spec, v_spec, ch_key, v_key) in specs.items():
@@ -1284,25 +1333,53 @@ def resolve_dp_optical(cwd: Path):
             chs = dpo.parse_channels(ch_spec)
         except ValueError as e:
             sys.exit("[ERROR] %s：%s" % (ch_key, e))
-        if not chs:
+        manual_intra = any(c["kind"] == "intra" for c in chs)
+        fz_ok = frozen is not None and of.params_digest(frozen, car) is not None   # noqa: F821（frozen 非空才求值）
+        want_frozen = fz_ok and not manual_intra
+        if frozen is None:
+            f_use[car] = "off" if fmode == "off" else "unavailable"
+        elif not fz_ok:
+            f_use[car] = "unavailable"
+        elif manual_intra:
+            f_use[car] = "manual"
+            print("[..] %s：%s 手填了谷内通道，冻声子参数（%s）不用" % (car, ch_key, ODP_FROZEN_SRC))
+        if not chs and not want_frozen:
             continue
+        raw = None
         if str(v_spec or "").strip():
             try:
                 vs, src = dpo.parse_valleys(v_spec), "step.conf %s" % v_key
             except ValueError as e:
                 sys.exit("[ERROR] %s：%s" % (v_key, e))
+            if want_frozen:
+                print("[WARN] %s：手填了 %s，而冻声子参数是按 S8.2 谷表算的 —— 本载流子不用冻声子参数" % (car, v_key))
+                want_frozen = False
+                f_use[car] = "manual_valleys"
+                if not chs:
+                    continue
         else:
             if dpt is None:
                 f = cwd / DPT_RESULT
                 if not f.is_file():
-                    sys.exit("[ERROR] %s 写了通道，但没有谷表：%s 不存在（S8.2 没跑完）。\n"
+                    sys.exit("[ERROR] %s 写了通道（或要用冻声子参数），但没有谷表：%s 不存在（S8.2 没跑完）。\n"
                              "        处理：先跑 S8.2_dpt，或在 step.conf 手填 %s（K:kx,ky,kz|...; Q:...）。"
                              % (ch_key, DPT_RESULT, v_key))
                 dpt = json.loads(f.read_text(encoding="utf-8"))
             vs, src = dpo.valleys_from_dpt(dpt, car), DPT_RESULT
+            raw = next((((r.get("multi_valley") or {}).get("valleys")) or [] for r in dpt.get("results", [])
+                        if r.get("carrier") == car), [])
             if not vs:
-                sys.exit("[ERROR] %s 写了通道，但 %s 里没有 %s 的多谷谷表（multi_valley.valleys）。"
-                         "\n        处理：在 step.conf 手填 %s。" % (ch_key, DPT_RESULT, car, v_key))
+                sys.exit("[ERROR] %s %s，但 %s 里没有 %s 的多谷谷表（multi_valley.valleys）。"
+                         "\n        处理：在 step.conf 手填 %s%s。"
+                         % (ch_key, "写了通道" if chs else "要用冻声子参数", DPT_RESULT, car, v_key,
+                            "" if chs else "，或等 S8.21_odp 按新谷表重跑"))
+        if want_frozen:                       # 冻声子参数必须是按现在这份谷表算的
+            sig = frozen["carriers"][car].get("valley_sig") or {}
+            now = json.loads(json.dumps(kc._valley_sig(raw, bool(sig.get("use_grid"))))) if _HAS_KC else None
+            if now is None or now != sig.get("sig"):
+                sys.exit("[ERROR] %s 的 %s 参数是按旧谷表算的（S8.2 的谷后来变了）：等 S8.21_odp 重跑完再生成本步"
+                         "（autozt -tt ke-dft-cpu -p <材料> -j S8.21_odp start），或 step.conf 写 ODP_FROZEN = off"
+                         % (ODP_FROZEN_SRC, car))
         try:                                  # [0034] 同中心的星（S8.2 按带/自旋分的）并成一个谷
             vs, alias = dpo.merge_coincident(vs)
         except ValueError as e:
@@ -1314,18 +1391,38 @@ def resolve_dp_optical(cwd: Path):
                      % (ch_key, ",".join(used), ",".join(alias[u] for u in used), ",".join(alias[u] for u in used)))
         if alias:
             print("[..] %s 谷表：%s 与 %s 中心相同，并成一个谷" % (car, ",".join(alias), ",".join(set(alias.values()))))
+        if want_frozen:
+            keep = {v["label"] for v in vs}
+            fchs, dropped = of.frozen_channels(frozen, car, keep=keep, norm=dpo.norm_label, dmin=float(ODP_FROZEN_DMIN))
+            known = keep | set(alias)
+            stray = sorted({dpo.norm_label(v.get("label")) for v in frozen["carriers"][car].get("valleys") or []} - known)
+            if stray:
+                sys.exit("[ERROR] %s 里 %s 的谷 %s 不在现在的谷表里（%s）：重跑 S8.21_odp"
+                         % (ODP_FROZEN_SRC, car, ",".join(stray), ",".join(sorted(keep))))
+            chs = chs + fchs
+            f_use[car] = "used"
+            f_digest[car] = of.params_digest(frozen, car)
+            f_info[car] = {"digest": f_digest[car], "n_channels": len(fchs), "dropped_below_dmin": dropped,
+                           "summary": of.describe(frozen, car, norm=dpo.norm_label, keep=keep, dmin=float(ODP_FROZEN_DMIN))}
+            print("[OK] %s 冻声子 ODP（%s）：%s" % (car, ODP_FROZEN_SRC, f_info[car]["summary"]))
+            if not chs:
+                continue
         try:
             dpo.check_channels(chs, vs)
         except ValueError as e:
             sys.exit("[ERROR] %s（谷表来自 %s）：%s" % (ch_key, src, e))
         rec[car] = {"channels": chs, "valleys": vs, "valleys_source": src}
+        if car in f_info:
+            rec[car]["frozen"] = f_info[car]
         kinds_on |= {c["kind"] for c in chs}
+    _DP_OPTICAL_FROZEN_REC = {"mode": fmode, "source": ODP_FROZEN_SRC, "dmin_eV_A": float(ODP_FROZEN_DMIN),
+                              "frozen_use": f_use, "digest": f_digest}
     kinds_of = {"ODP": {"intra"}, "IVS": {"inter_star", "inter"}}
     want = [m for m in ("ODP", "IVS") if kinds_on & kinds_of[m]]
     asked = [m for m in ("ODP", "IVS") if m in SCATTERING and m not in want]
     if asked:
-        sys.exit("[ERROR] SCATTERING 含 %s，但 step.conf 的 DP_OPTICAL_E/H 里没有对应通道"
-                 "（ODP 要 X>X，IVS 要 X>X' 或 X>Y）" % ",".join(asked))
+        sys.exit("[ERROR] SCATTERING 含 %s，但没有对应通道（step.conf 的 DP_OPTICAL_E/H 或冻声子参数；"
+                 "ODP 要 X>X，IVS 要 X>X' 或 X>Y）" % ",".join(asked))
     if not rec:
         return None
     mode = str(ADP_INTRAVALLEY or "auto").strip().lower()
@@ -1334,12 +1431,16 @@ def resolve_dp_optical(cwd: Path):
     if _SCATTERING_EXPLICIT:      # [0034] 显式 SCATTERING（如严格对照只开 ADP）：照它来，不补 ODP/IVS
         skip = [m for m in want if m not in SCATTERING]
         if skip:
-            print("[WARN] step.conf 显式写了 SCATTERING = %s，不含 %s —— DP_OPTICAL 里对应的通道本次不生效"
+            print("[WARN] step.conf 显式写了 SCATTERING = %s，不含 %s —— 对应的通道（手填或冻声子）本次不生效"
                   % (",".join(SCATTERING), ",".join(skip)))
         want = [m for m in want if m in SCATTERING]
     active = set().union(*[kinds_of[m] for m in want]) if want else set()
     for car in list(rec):         # 不生效的通道不进记录（插件横幅/谷间掩码都按记录走）
         rec[car]["channels"] = [c for c in rec[car]["channels"] if c["kind"] in active]
+        if f_use.get(car) == "used" and "intra" not in active:     # [0035] 冻声子通道被显式 SCATTERING 关掉了
+            f_use[car] = "not_in_scattering"
+            f_digest.pop(car, None)
+            rec[car].pop("frozen", None)
         if not rec[car]["channels"] and mode != "on":
             rec.pop(car)
     if not rec:
@@ -1363,8 +1464,9 @@ def resolve_dp_optical(cwd: Path):
               "谷间散射没有任何机制承担，迁移率按'只谷内'口径（对照形变势理论/S8.2 DPT 用）" % ",".join(SCATTERING))
     for car in ("electron", "hole"):
         if car in rec:
-            print("[..]   %s 谷表来自 %s；ADP 谷内掩码 %s" % (car, rec[car]["valleys_source"],
-                                                    "开" if flags[car] else "关"))
+            print("[..]   %s 谷表来自 %s；ADP 谷内掩码 %s%s" % (car, rec[car]["valleys_source"],
+                                                      "开" if flags[car] else "关",
+                                                      "；谷内 ODP 参数来自冻声子" if f_use.get(car) == "used" else ""))
     return rec
 
 
@@ -1677,6 +1779,7 @@ def apply_2d_corrections(cwd: Path, elastic, eps_inf=None, eps_static=None):
         "pop_lo_dispersion": bool(POP_LO_DISPERSION),
         "mechanisms_2d": mechanisms,
         "dp_optical": _DP_OPTICAL_REC,          # [0033] None = 不开 ODP/IVS
+        "dp_optical_frozen": _DP_OPTICAL_FROZEN_REC,   # [0035] 冻声子参数用没用、用的哪份（S8.21 据此决定要不要让本步重排）
         "areal_density_factor_cm": c_len * 1e-8,
         "areal_density_note": "n_2D [cm^-2] = n_3D [cm^-3] x cell_c [cm]",
         "inplane_cell_area_cm2": _CELL_AREA_CM2,
@@ -2131,6 +2234,20 @@ def _install_postprocess(out):
 
 
 
+def _install_tau_energy(out):
+    """[0035] 把 tau_energy.py 复制进运行目录（它 import 同目录的 postprocess_intrinsic.py）。"""
+    here = Path(__file__).resolve().parent
+    name = "tau_energy.py"
+    src = next((p for p in (here / name, Path.cwd() / name) if p.is_file()), None)
+    if src is None:
+        if TAU_ENERGY and WRITE_MESH:
+            print("[WARN] 找不到 %s（gen_need 里要有它）—— 本次不出 tau_energy.json" % name)
+        return
+    dst = Path(out) / name
+    if src.resolve() != dst.resolve():
+        shutil.copyfile(src, dst)
+
+
 def _install_dp_optical(out):
     """[0033] 把 dp_optical.py（ODP/IVS 的率、ADP 谷内掩码）复制进运行目录。
     插件只在 2d_correction.json 开了 ODP/IVS/谷内掩码时才真正用它；开了却缺文件 -> 插件报错。"""
@@ -2576,14 +2693,14 @@ def main():
     cwd = Path.cwd()
     global LAYER_THICKNESS, NWORKERS, UNITY_OVERLAP, WAVEFUNCTION_FULL
     global INTERPOLATION_FACTOR, INTERPOLATION_FACTOR_EXPLICIT, SCATTERING, WRITE_MESH, DOPING, TEMPERATURES
-    global INTRINSIC_ADP_ONLY, OVERALL_WITHOUT
+    global INTRINSIC_ADP_ONLY, OVERALL_WITHOUT, TAU_ENERGY
     global DESYM_FIX, _DESYM_FIX_ON, BANDGAP_OVERRIDE, BANDGAP_NOTE
     global EPS_INF_OVERRIDE, EPS_INF_OVERRIDE_BASIS, SYMMETRIZE_ELASTIC, ELASTIC_GUARD
     global STRUCTURE_GUARD, ALLOW_COARSE_S3
     global IR_FIX, _IR_FIX_ON, KZ_CAP_2D, KZ_FLAT_TOL_EV, _KZ_CAP_RMAX
     global MEM_WARN_GIB, MEM_LIMIT_GIB, MEM_AUTO_EXCLUSIVE
     global DP_OPTICAL_E, DP_OPTICAL_H, DP_OPTICAL_VALLEYS_E, DP_OPTICAL_VALLEYS_H, ADP_INTRAVALLEY
-    global _DP_OPTICAL_REC, _SCATTERING_EXPLICIT
+    global _DP_OPTICAL_REC, _SCATTERING_EXPLICIT, ODP_FROZEN, ODP_FROZEN_DMIN
     _conf_nworkers = None
     if (cwd / "step.conf").is_file():
         # strict=False：材料级 step.conf 是【全技能共用】的一份，含别的步骤的键
@@ -2675,12 +2792,17 @@ def main():
                 _p["WRITE_MESH"], _p["INTRINSIC_ADP_ONLY"], WRITE_MESH, INTRINSIC_ADP_ONLY)
             if _p["OVERALL_WITHOUT"] is not None:           # [0034]
                 OVERALL_WITHOUT = str(_p["OVERALL_WITHOUT"])
+            if _p["TAU_ENERGY"] is not None:                # [0035]
+                TAU_ENERGY = bool(_p["TAU_ENERGY"])
             # [0033] ODP / IVS 的通道表、手填谷表、ADP 谷内掩码（解析与校验在 resolve_dp_optical）
             DP_OPTICAL_E = str(_p["DP_OPTICAL_E"] or "")
             DP_OPTICAL_H = str(_p["DP_OPTICAL_H"] or "")
             DP_OPTICAL_VALLEYS_E = str(_p["DP_OPTICAL_VALLEYS_E"] or "")
             DP_OPTICAL_VALLEYS_H = str(_p["DP_OPTICAL_VALLEYS_H"] or "")
             ADP_INTRAVALLEY = str(_p["ADP_INTRAVALLEY"] or "auto")
+            ODP_FROZEN = str(_p["ODP_FROZEN"] or "auto")                       # [0035]
+            if _p["ODP_FROZEN_DMIN"] is not None:
+                ODP_FROZEN_DMIN = float(_p["ODP_FROZEN_DMIN"])
             # patch_doping_override（B4/B5 缩减设置）：step.conf 可覆盖掺杂/温度范围
             if _p["DOPING"]:
                 _d = str(_p["DOPING"])
@@ -2806,6 +2928,7 @@ def main():
     _install_preflight(out)
     _install_postprocess(out)
     _install_dp_optical(out)    # [0033] 插件 import 它（ODP/IVS 与 ADP 谷内掩码）
+    _install_tau_energy(out)    # [0035] 作业链尾部的 τ(E) 后处理
     _install_fermi_check(out)   # patch_fermi_window（2026-09-28 用户批准）
     _install_symmetry_deps(out)  # patch_symmetry_gate：preflight 的判据来源
     _has_fix = _install_desym_fix(out)   # patch_desym_fix
@@ -2955,6 +3078,13 @@ def main():
             print("[OK] 另出 %s（overall 去掉 %s，同一份 mesh 重积分）" % (_ow_name, "+".join(_ow)))
         else:
             print("[..] 不出 overall 去掉机制的那一套：%s" % _ow_name)
+        # [0035] τ(E) 与迁移率等效 τ：尽力而为（子 shell 吞掉失败），失败原因写在 tau_energy.json，不挡 transport.json
+        if TAU_ENERGY:
+            _acmd = _acmd + (" && { python tau_energy.py || echo '[WARN] tau_energy.py 失败（原因见 tau_energy.json），"
+                             "不影响 transport.json' >&2; }")
+            print("[OK] 另出 tau_energy.json（逐机制 τ(E) + 迁移率等效 τ，同一份 mesh）")
+    elif TAU_ENERGY:
+        print("[..] WRITE_MESH=false：不出 tau_energy.json（τ(E) 要 mesh）")
     # ★ 2026-09-28 用户批准（patch_fermi_window）：不依赖 WRITE_MESH 的费米能级窗口检查，
     #   必须放在 cp 成 transport.json **之前** —— 否则失败时 transport.json 已存在，
     #   autozt marker 判据会把失败隐藏（V63 的教训）。
