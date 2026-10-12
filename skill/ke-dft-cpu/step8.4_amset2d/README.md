@@ -192,7 +192,9 @@ DP_OPTICAL_H = K>K:<D>@<ħω>; K>K':<D>@<ħω>; K>Γ:<D>@<ħω>; Γ>K:<D>@<ħω>
 
 谷内 ODP 的 D 与 ħω 不再需要文献：两个新步骤按材料自动算，S8.4 自动用上。
 
-**开法**：本材料 `tf_*.yaml` 写一行 `odp_frozen: true`（只对 2D 有意义）。多出两步：
+**开法**：本材料 `tf_*.yaml` 写一行 `odp_frozen: true`。多出两步：
+（[0036] 3D 材料也能开：参数给 S8（原版三维 AMSET + `step8_amset/amset_dpo3d.py`）；不对齐、谷表由 S8.21 在 S7 网格上
+自动找或用手填 `DP_OPTICAL_VALLEYS_E/H`，不需要 S8.2。规则同下：谷内 ODP 算出来的优先，谷间 IVS 只认手填。）
 
 | 步骤 | 做什么 |
 |---|---|

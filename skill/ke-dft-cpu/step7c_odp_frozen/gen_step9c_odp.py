@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """gen_step9c_odp.py —— [0035] 冻声子法 ODP 单点，扇出（step7c_odp_frozen，S7.2_odp）。
 
-做什么：给 S8.4 的谷内光学形变势（ODP）自动出参数（D、ħω），不再依赖文献。
+做什么：给 S8.4（2D）/ S8（3D，[0036]）的谷内光学形变势（ODP）自动出参数（D、ħω），不再依赖文献。
   1. 读 S5（step5_dielect，DFPT）的 Γ 点声子：频率、质量加权本征矢、Born 有效电荷；
   2. 选模：去掉 3 个声学模、虚频/太软的模；极性（红外活性）模默认不算（长程耦合在 POP 里，ODP_POLAR=include 才算）；
      简并的模整组一起算；
@@ -36,7 +36,7 @@ STEP_LABEL = "S7.2_odp"
 SUB_PREFIX = "odp-"            # 与 skill.yaml 的 fanout "odp-*" 一致
 REF_NAME = "odp-ref"
 MANIFEST = "odp_manifest.json"
-_SKILL_REV = "2026-10-11-0035-r3"
+_SKILL_REV = "2026-10-12-0036"   # [0036] 三维也能跑（S8 的 ODP）；[0035-r3]
 # 最大原子位移（Å）。0.01 Å 时强耦合的带边移动 ~10–30 meV（线性区），EDIFF=1E-8 下本征值噪声 ~1e-5 eV。
 ODP_DISP_A = 0.01
 # 极性（红外活性）模：exclude（出厂：长程 Fröhlich 耦合由 POP 管）/ include（把它们的短程形变势也算进 ODP）。
@@ -174,8 +174,8 @@ def main():
         sys.exit("[ERROR] 找不到含 CONTCAR 的上一步：%s" % PREV_CANDS)
     kc.relay_poscar(prev / "CONTCAR", out / "POSCAR", "step1_opt")
     dim = kc.read_method_dim(prev / kc.METHOD_FILE) or kc.resolve_dim_for(out / "POSCAR", "auto")[0]
-    require_dim(dim, ("2d",), OUTDIR_NAME,
-                why="冻声子 ODP 参数只给二维 S8.4（amset2d 插件的 ODP 机制）用；三维 S8 没有 ODP")
+    require_dim(dim, ("2d", "3d"), OUTDIR_NAME,
+                why="冻声子 ODP 参数给 S8.4（2D）/ S8（3D，[0036] amset_dpo3d 插件）的 ODP 机制用；0D 没有能带")
     kc.write_method(out / kc.METHOD_FILE, dim, "冻声子 ODP 单点（扇出）")
     und = cwd / DEFORM_DIR / "undeformed"
     for n in ("INCAR", "KPOINTS", "POTCAR", "POSCAR"):
@@ -192,14 +192,15 @@ def main():
     try:
         modes, groups, notes = of.mode_table(freqs, eig, masses, born, polar_tol=float(ODP_POLAR_TOL),
                                              fmin_thz=float(ODP_FMIN_THZ), include_polar=(ODP_POLAR == "include"),
-                                             polar_z_tol=float(ODP_POLAR_Z_TOL))
+                                             # [0036] 面外极性只对 2D 有意义（层法向 z）；3D 只按总模有效电荷判
+                                             polar_z_tol=float(ODP_POLAR_Z_TOL) if dim == "2d" else float("inf"))
     except ValueError as e:
         sys.exit("[ERROR] S5 的声子数据不能用：%s" % e)
     for n in notes:
         print("[WARN] %s" % n)
     use = select(groups, modes)
     by_index_ = {m["index"]: m for m in modes}
-    print("[..] Γ 点光学模（频率升序编号；Z = 模有效电荷，总 / 面外，e）：")
+    print("[..] Γ 点光学模（频率升序编号；Z = 模有效电荷，总 / 面外%s，e）：" % ("" if dim == "2d" else "（3D 不用）"))
     for g in groups:
         zt = max((by_index_[i]["Z_mode_e"] or 0.0) for i in g["modes"]) if born is not None else None
         zz = max((by_index_[i]["Z_mode_z_e"] or 0.0) for i in g["modes"]) if born is not None else None
@@ -277,7 +278,7 @@ def main():
     manifest = {
         "schema": "odp_manifest/1", "skill_rev": _SKILL_REV, "created": _time.strftime("%Y-%m-%d %H:%M:%S"),
         "disp_max_A": float(ODP_DISP_A), "polar": ODP_POLAR, "polar_tol_e": float(ODP_POLAR_TOL),
-        "polar_z_tol_e": float(ODP_POLAR_Z_TOL),
+        "polar_z_tol_e": float(ODP_POLAR_Z_TOL) if dim == "2d" else None, "dim": dim,
         "fmin_THz": float(ODP_FMIN_THZ), "overrides": overrides,
         "masses_amu": masses, "species": [str(s.specie) for s in base],
         "modes": [{k: v for k, v in m.items() if not k.startswith("_")} for m in modes],

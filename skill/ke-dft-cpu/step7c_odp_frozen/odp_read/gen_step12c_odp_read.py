@@ -7,6 +7,12 @@ run: gen 步骤（登录节点直接跑，秒级到分钟级）。输入：
   step8.2_dpt/dpt_result.json 的多谷谷表（每个谷的自旋、带号、各成员谷在 S7 网格上的 k_S7）
 产出：step8.21_odp_read/odp_params.json（done_marker）+ odp_summary.txt。S8.4 的 ODP_FROZEN=auto 读它。
 
+[0036] 三维（S8 的 ODP_FROZEN=auto 读它）：
+  · 不对齐（没有真空，D = dE/du 直接用本征值差分；理由见 odp_frozen.py 文件头），不要 LOCPOT；
+  · 谷表：材料 step.conf 手填了 DP_OPTICAL_VALLEYS_E/H 就用它（中心吸附到 S7 网格），否则在 odp-ref 的网格
+    （= S7 undeformed，ISYM=0）上自动找带边极值（odp_frozen.find_valleys_3d，窗口 ODP_VALLEY_WINDOW_EV）。
+    S8 直接用这里记下的谷中心（k_frac）作 ODP 的谷表，并按 valley_sig 核对手填谷表没改过。不需要 S8.2。
+
 每个谷 × 每组简并光学模：D = d(E − V_vac)/du（eV/Å），各成员谷平均（odp_frozen.py 有推导与归一化）。
 核对（不过就报错，绝不静默出数）：
   · S7.2 照抄的 S7 undeformed 输入（INCAR 物理键、KPOINTS、POTCAR）与 S7 现在的一致；
@@ -33,7 +39,9 @@ DIELECT_DIR = "step5_dielect"
 DPT_RESULT = "step8.2_dpt/dpt_result.json"
 MANIFEST = "odp_manifest.json"
 REF_NAME = "odp-ref"
-_SKILL_REV = "2026-10-11-0035-r3"
+_SKILL_REV = "2026-10-12-0036"   # [0036] 三维（不对齐、自动/手填谷表）；[0035-r3]
+VALLEY_SPEC = {"DP_OPTICAL_VALLEYS_E": ("", "str"), "DP_OPTICAL_VALLEYS_H": ("", "str"),
+               "ODP_VALLEY_WINDOW_EV": (None, "float")}     # [0036] 3D 谷表（材料 step.conf，与 S8 同名同义）
 REF_TOL_EV = 0.005            # odp-ref 与 S7 undeformed 同一 k、同一带的本征值差上限
 SNAP_TOL_INVA = 0.02          # 旧 S8.2（没有 k_S7）时把 k_grid 吸附到本步网格的容差（Å⁻¹）
 SHIFT_WARN_EV = 0.1           # 带边移动超过它：出线性区，建议减小 ODP_DISP_A
@@ -67,7 +75,7 @@ def _sha256(path):
 class Config(object):
     """一个单点构型：本征值（按自旋）、k 列表、真空能级。"""
 
-    def __init__(self, d, vac_axis=2, cache=None):
+    def __init__(self, d, vac_axis=2, cache=None, use_vac=True):
         import numpy as np
         from pymatgen.io.vasp import Locpot, Vasprun
         self.name = d.name
@@ -82,10 +90,14 @@ class Config(object):
             _die("%s/%s 的电子步没收敛（跑到 NELM 了）：本征值不可信，D 会是噪声。查 OSZICAR，调 NELM/ALGO 后 retry S7.2"
                  % (SRC_DIR, d.name))
         self.kpts = np.asarray(v.actual_kpoints, float)
-        self.eig = {}
+        self.eig, self.occ = {}, {}
         for sp, arr in v.eigenvalues.items():
             self.eig[str(getattr(sp, "name", sp)).lower()] = np.asarray(arr)[:, :, 0]
+            self.occ[str(getattr(sp, "name", sp)).lower()] = np.asarray(arr)[:, :, 1]
         self.structure = v.final_structure
+        if not use_vac:                     # [0036] 3D：没有真空，不对齐
+            self.vac, self.vac_std, self.vac_slope = 0.0, 0.0, 0.0
+            return
         lp = d / "LOCPOT"
         key = _sha256(vr)
         ent = (cache or {}).get(d.name) or {}
@@ -277,6 +289,58 @@ def carrier_params(car, valleys, cfg, man, s7ref, warns):
     return out
 
 
+def carriers_3d(cwd, cfg, man, s7ref, warns):
+    """[0036] 三维：谷表（手填优先，否则自动）-> 每个载流子的冻声子参数。"""
+    import numpy as np
+    import stepconf
+    p = {}
+    if (cwd / stepconf.CONF_NAME).is_file():
+        p = stepconf.load(VALLEY_SPEC, OUTDIR_NAME, str(cwd), strict=False)
+    win = float(p["ODP_VALLEY_WINDOW_EV"]) if p and p["ODP_VALLEY_WINDOW_EV"] is not None else of.VALLEY_WINDOW_EV
+    ref = cfg[REF_NAME]
+    spins = list(ref.eig)
+    nocc = {}
+    for sp in spins:
+        n_k = np.count_nonzero(ref.occ[sp] > 0.5, axis=1)
+        if int(n_k.min()) != int(n_k.max()):
+            _die("odp-ref 自旋 %s 各 k 点占据带数不同（%d..%d）：金属/半金属，ODP 常数形变势模型不适用"
+                 % (sp, int(n_k.min()), int(n_k.max())))
+        nocc[sp] = int(n_k[0])
+    recip = np.asarray(ref.structure.lattice.reciprocal_lattice.matrix)
+    out = {}
+    for car, key, sign in (("electron", "DP_OPTICAL_VALLEYS_E", 1), ("hole", "DP_OPTICAL_VALLEYS_H", -1)):
+        spec = str((p[key] if p else "") or "").strip()
+        if spec:
+            import dp_optical as dpo
+            try:
+                vs = dpo.parse_valleys(spec, full3d=True)
+            except ValueError as e:
+                _die("%s：%s" % (key, e))
+            src = "step.conf %s" % key
+            sp0 = spins[0]
+            band = nocc[sp0] if sign > 0 else nocc[sp0] - 1
+            for v in vs:
+                v.update(spin=sp0, band_index=band, dE_eV=None)
+        else:
+            try:
+                vs = of.find_valleys_3d(ref.kpts, ref.eig, nocc, sign, recip, window=win)
+            except ValueError as e:
+                _die("%s 自动找谷失败：%s。处理：在 step.conf 手填 %s" % (car, e, key))
+            src = "auto（odp-ref 网格，窗口 %.2f eV）" % win
+            print("[..] %s 谷表（自动）：%s" % (car, "; ".join(
+                "%s×%d dE=%.3f eV %s 带 %d" % (v["label"], v["g"], v["dE_eV"], v["spin"], v["band_index"]) for v in vs)))
+        if len(vs) > 1:
+            warns.append("%s：%d 个谷（%s）—— 只有谷内 ODP；谷间 IVS 不自动算，要的话按文献在 step.conf 写 DP_OPTICAL_%s 的 "
+                         "X>Y 通道（谷标签用本文件的）" % (car, len(vs), ",".join(v["label"] for v in vs),
+                                                         "E" if sign > 0 else "H"))
+        vals = carrier_params(car, vs, cfg, man, s7ref, warns)
+        for row, v in zip(vals, vs):
+            row["k_frac"] = [np.round(np.asarray(k, float), 6).tolist() for k in v["k_frac"]]
+        out[car] = {"status": "ok", "valleys_source": src,
+                    "valley_sig": {"dim": "3d", "sig": of.valley_sig_3d(vs)}, "valleys": vals}
+    return out
+
+
 def main():
     global of
     cwd = Path.cwd()
@@ -289,15 +353,18 @@ def main():
         man = json.loads((src / MANIFEST).read_text(encoding="utf-8"))
     except (OSError, ValueError) as e:
         _die("读不了 %s/%s（S7.2 没生成？）：%s" % (SRC_DIR, MANIFEST, e))
-    try:
-        dpt = json.loads((cwd / DPT_RESULT).read_text(encoding="utf-8"))
-    except (OSError, ValueError) as e:
-        _die("读不了 %s（S8.2 没跑完？）：%s" % (DPT_RESULT, e))
+    dim, vac_axis = kc.resolve_dim_for(src / "POSCAR", "auto")
+    if dim not in ("2d", "3d"):
+        _die("本步只给 2D/3D 用（%s 判为 %s）" % (SRC_DIR, dim))
+    is3d = dim == "3d"
+    dpt = None
+    if not is3d:
+        try:
+            dpt = json.loads((cwd / DPT_RESULT).read_text(encoding="utf-8"))
+        except (OSError, ValueError) as e:
+            _die("读不了 %s（S8.2 没跑完？）：%s" % (DPT_RESULT, e))
     check_inputs(cwd, man)
     s5_rel = check_s5(cwd, man)
-    dim, vac_axis = kc.resolve_dim_for(src / "POSCAR", "auto")
-    if dim != "2d":
-        _die("本步只给 2D 用（%s 判为 %s）" % (SRC_DIR, dim))
     cfg = {}
     try:
         cache = json.loads((out / VAC_CACHE).read_text(encoding="utf-8"))
@@ -307,7 +374,9 @@ def main():
         d = src / nm
         if not d.is_dir():
             _die("缺 %s/%s（manifest 里有，目录没了）" % (SRC_DIR, nm))
-        cfg[nm] = Config(d, vac_axis, cache)
+        cfg[nm] = Config(d, vac_axis, cache, use_vac=not is3d)
+        if is3d:
+            continue
         slope = float(getattr(cfg[nm], "vac_slope", 0.0))
         print("[..] %-12s 真空能级 %.5f eV（去斜坡残差 %.1e，真空区斜坡 %+.1f meV/胞）"
               % (nm, cfg[nm].vac, cfg[nm].vac_std, 1000 * slope))
@@ -328,7 +397,9 @@ def main():
         print("[WARN] 没有 %s/undeformed/vasprun.xml：跳过 odp-ref 与 S7 的本征值核对" % DEFORM_DIR)
 
     warns, carriers = [], {}
-    for r in dpt.get("results", []):
+    if is3d:
+        carriers = carriers_3d(cwd, cfg, man, s7ref, warns)
+    for r in ([] if is3d else dpt.get("results", [])):
         car = r.get("carrier")
         valleys = ((r.get("multi_valley") or {}).get("valleys")) or []
         if not valleys:
@@ -341,19 +412,21 @@ def main():
                          "valleys": carrier_params(car, valleys, cfg, man, s7ref, warns)}
     params = {
         "schema": of.SCHEMA, "skill_rev": _SKILL_REV, "created": _time.strftime("%Y-%m-%d %H:%M:%S"),
-        "valleys_source": DPT_RESULT, "manifest": "%s/%s" % (SRC_DIR, MANIFEST),
+        "dim": dim, "aligned": "none (3D)" if is3d else "vacuum",
+        "valleys_source": "3D：见 carriers.<载流子>.valleys_source" if is3d else DPT_RESULT,
+        "manifest": "%s/%s" % (SRC_DIR, MANIFEST),
         "disp_max_A": man.get("disp_max_A"), "polar": man.get("polar"),
         "groups": man["groups"], "modes": man["modes"],
-        "vacuum_levels_eV": {k: round(c.vac, 6) for k, c in cfg.items()},
+        "vacuum_levels_eV": None if is3d else {k: round(c.vac, 6) for k, c in cfg.items()},
         "s5_freq_rel_change": s5_rel, "warnings": warns, "carriers": carriers,
         "units": {"D_eV_A": "eV/Å（= 1e8 eV/cm），与 step.conf DP_OPTICAL_* 同单位", "hw_meV": "meV"},
-        "definition": ("D = d(E−V_vac)/du，位移 Δ_κ = u·√(M/m_κ)·e_κ（M 原胞质量、e 质量加权归一本征矢）；"
+        "definition": (("D = dE/du（3D 不对齐），" if is3d else "D = d(E−V_vac)/du，") + "位移 Δ_κ = u·√(M/m_κ)·e_κ（M 原胞质量、e 质量加权归一本征矢）；"
                        "简并组各伙伴 ΣD²、星内各成员谷平均；简并带 D² = Σλ²/d²（见 odp_frozen.py）"),
     }
     (out / "odp_params.json").write_text(json.dumps(params, ensure_ascii=False, indent=1), encoding="utf-8")
     lines = ["# 冻声子 ODP 参数（%s）" % params["created"],
-             "# D 单位 eV/Å（= 1e8 eV/cm），ħω 单位 meV；真空对齐；位移 %.3f Å；极性模 %s" % (
-                 float(man.get("disp_max_A") or 0), man.get("polar"))]
+             "# D 单位 eV/Å（= 1e8 eV/cm），ħω 单位 meV；%s；位移 %.3f Å；极性模 %s" % (
+                 "3D 不对齐" if is3d else "真空对齐", float(man.get("disp_max_A") or 0), man.get("polar"))]
     for car, c in carriers.items():
         if c["status"] != "ok":
             lines.append("%s: %s" % (car, c.get("note", c["status"])))
@@ -369,8 +442,11 @@ def main():
         print("[WARN] " + w)
     (out / "odp_summary.txt").write_text("\n".join(lines) + "\n", encoding="utf-8")
     print("\n".join(lines[2:]))
-    kc.invalidate_odp_consumer(cwd, params)                 # S8.4 用过的参数变了 / 刚可用 -> 让它重排
-    print("[DONE] %s/odp_params.json（S8.4 的 ODP_FROZEN=auto 会读它）" % OUTDIR_NAME)
+    if is3d:                                                # [0036] 3D 的消费者是 S8（记录在 dp_optical_3d.json）
+        kc.invalidate_odp_consumer(cwd, params, consumer="step8_amset", record="dp_optical_3d.json")
+    else:
+        kc.invalidate_odp_consumer(cwd, params)             # S8.4 用过的参数变了 / 刚可用 -> 让它重排
+    print("[DONE] %s/odp_params.json（%s 的 ODP_FROZEN=auto 会读它）" % (OUTDIR_NAME, "S8" if is3d else "S8.4"))
 
 
 if __name__ == "__main__":

@@ -696,6 +696,8 @@ DOWNSTREAM_EXEMPT = {
                                             "核对 S5 现在的频率（差 >2% 告警）。结构变了由 S1 -> S7.2 的 dir 边整目录归档",
     ("step8.21_odp_read", "step8.4_amset2d"): "有条件失效：S8.21 的 gen 调 invalidate_odp_consumer，只在 S8.4 用过的"
                                               "冻声子参数指纹变了（或 S8.4 还没用上新参数）时归档 S8.4",
+    ("step8.21_odp_read", "step8_amset"): "[0036] 3D 同上：S8.21 的 gen 调 invalidate_odp_consumer(consumer=step8_amset，"
+                                          "record=dp_optical_3d.json)，只在 S8 用过的参数指纹变了（或还没用上）时归档 S8",
 }
 # DOWNSTREAM 里 gen 不在本技能的上游（zt 的 kl 分支）：它们自己不调失效，只被 S1 的级联递归走到。
 DOWNSTREAM_FOREIGN = frozenset({"step1_std_opt", "step2_static"})
@@ -866,15 +868,16 @@ def odp_consumer_stale(rec, params, full=None):
     return out
 
 
-def invalidate_odp_consumer(cwd, params, consumer="step8.4_amset2d"):
+def invalidate_odp_consumer(cwd, params, consumer="step8.4_amset2d", record="2d_correction.json"):
     """[0035] S8.21 写出新的 odp_params.json 之后调：S8.4 用过的冻声子参数变了（或它还没用上可用的参数）
-    -> 归档 S8.4 的完成标记（会重新生成、重新排队），递归让 S8.3 失效。S8.4 不存在 / 没生成过 -> 不动。"""
+    -> 归档 S8.4 的完成标记（会重新生成、重新排队），递归让 S8.3 失效。S8.4 不存在 / 没生成过 -> 不动。
+    [0036] 3D：consumer="step8_amset"、record="dp_optical_3d.json"（S8 每次生成都写这份记录，含 dp_optical_frozen）。"""
     import json as _json
     import time as _t
     cwd = Path(cwd)
     d = cwd / consumer
     try:
-        rec = _json.loads((d / "2d_correction.json").read_text(encoding="utf-8"))
+        rec = _json.loads((d / record).read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return []
     changed = odp_consumer_stale(rec.get("dp_optical_frozen") or {}, params, full=rec)

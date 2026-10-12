@@ -216,8 +216,12 @@ kz>=3 的网格收敛测试完成前，仍建议用同 c（20 Å）的跨体系�
      原版三维 AMSET，谷归属用完整三维距离（27 个周期像）。材料 step.conf 写 `DP_OPTICAL_E/H` +
      **必须手填** `DP_OPTICAL_VALLEYS_E/H`（三维没有 S8.2 多谷谷表，k 点写 3 个分量），如 Si 空穴
      `DP_OPTICAL_H = G>G:6.0@63`、`DP_OPTICAL_VALLEYS_H = G:0,0,0`；`ADP_INTRAVALLEY` 规则同 2D。
-     transport.json 多出 ODP/IVS 单机制迁移率，S8.3 自动带上。冻声子自动参数（S7.2/S8.21）仍只有 2D。
-     自检 `step8_amset/test_dpo3d.py`（纯 numpy：2D 口径逐字节不变、3D 抛物带对 Conwell 解析式）。
+     transport.json 多出 ODP/IVS 单机制迁移率，S8.3 自动带上。
+     **谷内 ODP 出厂用冻声子参数**（与 2D 同一规则）：开 `odp_frozen` 组后 S7.2 在 3D 上照样跑（照抄 S7 undeformed），
+     S8.21 不对齐（没有真空）、谷表在 S7 网格（ISYM=0）上自动找带边极值（或用手填 `DP_OPTICAL_VALLEYS_E/H`），
+     S8 的 `ODP_FROZEN=auto` 读 `odp_params.json`：算出来的优先，手填谷内值只作对照（`ODP_FROZEN = off` 才用手填）；
+     **谷间 IVS 不自动算**，只有手填 `X>X'`/`X>Y` 才开（谷标签用 S8.21 的 `odp_summary.txt`）。
+     自检 `step8_amset/test_dpo3d.py`（纯 numpy：2D 口径逐字节不变、3D 抛物带对 Conwell 解析式、3D 自动谷表、冻声子接线、S8 重排）。
      与文献对照（T4）必须**分机制**做：POP 对 Sohier 2016 的 LO 模散射时间；ADP 需要一个
      **有出处**的 LA 声子限制迁移率目标值（"340 cm2/Vs"这个数找不到出处，已撤回）。
    - **3D 非极性半导体（Si、Ge、金刚石这类）**：**空穴迁移率高估约 4~5 倍，电子几乎不受影响。**

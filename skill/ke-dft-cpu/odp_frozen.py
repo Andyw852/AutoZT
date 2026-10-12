@@ -25,6 +25,12 @@ S7.2（gen_step9c_odp.py）用它选模、生成位移；S8.21（gen_step12c_odp
     星的各成员谷：对称等价，Σ_伙伴 D² 应相同；取平均并记录离散度。
 
 极性模（红外活性）默认不算：它们的长程（Fröhlich）耦合由 POP 管；短程部分要算就设 ODP_POLAR = include。
+
+[0036] 三维：模型与归一化不变（上式与维数无关）。区别只有两处：
+  · 没有真空：本征值不对齐、直接差分（dvac = 0）。Γ 点光学模不改变晶胞，VASP 的平均静电势（G = 0 分量）约定在 ±u
+    构型里相同；±u 互为对称像的模（如 Si 的 Γ25′）参考点的变化是 u 的偶函数，中心差分里本来就相消。
+  · 没有 S8.2 多谷谷表（只实现了 2D）：find_valleys_3d 直接在 S7 undeformed 的网格（ISYM=0，全网格、仅按 ±k 约化）上找
+    窗口内的带边极值点，按（能量、带、自旋）归星；或者用 step.conf 手填的 DP_OPTICAL_VALLEYS_E/H。
 """
 import hashlib
 import json
@@ -117,7 +123,8 @@ def mode_table(freqs_thz, eigvecs, masses_amu, born=None, polar_tol=POLAR_TOL_E,
                       "Z_mode_z_e": None if zz is None else float(zz[i]),
                       "polar": bool(zmode is not None and (zmode[i] > polar_tol or zz[i] > polar_z_tol)),
                       "polar_kind": (None if zmode is None or not (zmode[i] > polar_tol or zz[i] > polar_z_tol)
-                                     else ("面外" if zz[i] > polar_z_tol and zz[i] >= 0.5 * zmode[i] else "面内")),
+                                     else ("面外" if zz[i] > polar_z_tol and zz[i] >= 0.5 * zmode[i]
+                                           else ("体相" if math.isinf(polar_z_tol) else "面内"))),   # [0036] 3D 不分面内外
                       "group": None, "_src": int(i)})
     # 简并分组：频率相差 < deg_thz 且极性相同（真简并的伙伴属于同一个不可约表示，极性必相同；
     #   偶然近简并的极性/非极性两个模不能并组，否则非极性的那个会跟着被当成极性剔掉）。
@@ -383,3 +390,143 @@ def params_digest(params, carrier):
 def describe(params, carrier, norm=None, keep=None, dmin=DMIN_EV_A, alias=None):
     chs, _d, _n = frozen_channels(params, carrier, keep=keep, norm=norm, dmin=dmin, alias=alias)
     return ", ".join("%s %.2f eV/Å@%.1f meV" % (c["from"], c["D_eV_A"], c["hw_meV"]) for c in chs) or "无（全部 < %.2f eV/Å）" % dmin
+
+
+# ---------------------------------------------------------------------------
+# [0036] 三维谷表：S7 undeformed 网格上的带边极值点
+# ---------------------------------------------------------------------------
+VALLEY_WINDOW_EV = 0.30           # 只要离带边这么近的谷（900 K 时 e^(−0.3/kT) ≈ 2%）
+STAR_TOL_EV = 0.002               # 同一个星：同带、同自旋、极值能量相差小于它（对称等价的谷能量相同）
+
+
+def grid_from_kpoints(kpts):
+    """ISYM=0 的 k 列表（分数坐标，只按 ±k 约化）-> (N (3,), 偏移 (3,), {整数网格点: (k 下标, ±1)})。
+    网格由各方向的最小非零间隔推出；偏移 = k₀·N 的小数部分（Γ 心为 0，MP 偶网格为 ½）。不是规则网格 -> ValueError。"""
+    k = np.asarray(kpts, float)
+    N = []
+    for a in range(3):
+        x = np.mod(k[:, a], 1.0)
+        x = np.unique(np.round(np.concatenate([x, np.mod(-x, 1.0)]), 6))
+        d = np.diff(np.concatenate([x, [x[0] + 1.0]]))
+        d = d[d > 1e-5]
+        N.append(int(round(1.0 / float(d.min()))) if len(d) else 1)
+    N = np.asarray(N, int)
+    off = np.mod(k[0] * N, 1.0)
+    off = np.where(np.abs(off - 1.0) < 1e-4, 0.0, off)
+    table = {}
+    for i, kk in enumerate(k):
+        for sg in (1, -1):
+            g = sg * kk * N - off
+            gi = np.round(g)
+            if float(np.max(np.abs(g - gi))) > 1e-3:
+                raise ValueError("k 点 %s 不在推出的 %s 网格（偏移 %s）上：S7 的 k 列表不是规则网格"
+                                 % (np.round(kk, 5).tolist(), N.tolist(), np.round(off, 3).tolist()))
+            key = tuple(int(x) for x in np.mod(gi.astype(int), N))
+            table.setdefault(key, (i, sg))
+    if len(table) != int(np.prod(N)):
+        raise ValueError("S7 的 k 点（含 −k）只覆盖 %d / %d 个网格点：不是 ISYM=0 的全网格（ISYM≥1 约化过？）"
+                         % (len(table), int(np.prod(N))))
+    return N, off, table
+
+
+def _k_of(key, N, off):
+    f = (np.asarray(key, float) + off) / N
+    return f - np.round(f)                         # 取到 (−½, ½]
+
+
+def find_valleys_3d(kpts, eig, nocc, sign, recip, window=VALLEY_WINDOW_EV, star_tol=STAR_TOL_EV):
+    """三维带边谷表（S8.21 用；S8 的 ODP 通道用同一份谷中心）。
+    kpts：S7 undeformed 的 k（ISYM=0）；eig：{自旋: (nk, nb) eV}；nocc：{自旋: 占据带数}；sign：+1 电子、−1 空穴。
+    在每个自旋、本侧离带边 window 以内的每条带上找网格局部极值（26 个近邻里最小，载流子能量 x = sign·E），
+    相邻的极值点（平台）只留一个；同一 k 上多条带/两个自旋（非磁 ISPIN=2）都有极值时只留最靠近带隙的那条（同一个谷：
+    dp_optical 按谷中心归属 k 点、态密度统计全部带）；剩下的按（带、自旋、能量 ±star_tol）归星。
+    返回 [{"label","g","k_frac","k_grid","k_S7","spin","band_index","dE_eV"}]，按 dE 升序；标签 Γ 或 V1、V2…"""
+    N, off, table = grid_from_kpoints(kpts)
+    keys = list(table)
+    nbr = [(i, j, l) for i in (-1, 0, 1) for j in (-1, 0, 1) for l in (-1, 0, 1) if (i, j, l) != (0, 0, 0)]
+    xs = {}
+    edge = None
+    for sp, e in eig.items():
+        e = np.asarray(e, float)
+        side = range(nocc[sp], e.shape[1]) if sign > 0 else range(nocc[sp] - 1, -1, -1)
+        for b in side:
+            col = sign * e[:, b]
+            x = {key: float(col[table[key][0]]) for key in keys}
+            xs[(sp, b)] = x
+            m = min(x.values())
+            edge = m if edge is None else min(edge, m)
+    if edge is None:
+        raise ValueError("没有%s带" % ("导" if sign > 0 else "价"))
+    found = []
+    for (sp, b), x in xs.items():
+        if min(x.values()) > edge + window:
+            continue
+        seen = set()
+        for key in sorted(keys, key=lambda q: x[q]):
+            v = x[key]
+            if v > edge + window:
+                break
+            ok = True
+            for d in nbr:
+                q = tuple(int(t) for t in np.mod(np.asarray(key) + d, N))
+                if q != key and x[q] < v - 1e-6:
+                    ok = False
+                    break
+            if not ok or key in seen:
+                continue
+            # 平台：与之相连、能量相同的网格点都算这一个极值
+            stack = [key]
+            while stack:
+                c = stack.pop()
+                if c in seen:
+                    continue
+                seen.add(c)
+                for d in nbr:
+                    q = tuple(int(t) for t in np.mod(np.asarray(c) + d, N))
+                    if q not in seen and abs(x[q] - v) < 1e-6:
+                        stack.append(q)
+            found.append({"spin": sp, "band": b, "key": key, "x": v})
+    # 同一 k：只留最靠近带隙的带（电子最低、空穴最高的带号）、第一个自旋
+    best = {}
+    for f in found:
+        k0 = f["key"]
+        cur = best.get(k0)
+        rank = (f["band"] * sign, list(eig).index(f["spin"]))
+        if cur is None or rank < (cur["band"] * sign, list(eig).index(cur["spin"])):
+            best[k0] = f
+    pts = sorted(best.values(), key=lambda f: (f["x"], f["spin"], f["band"]))
+    stars = []
+    for f in pts:
+        for s_ in stars:
+            if s_["spin"] == f["spin"] and s_["band"] == f["band"] and abs(s_["x"] - f["x"]) < star_tol:
+                s_["keys"].append(f["key"])
+                break
+        else:
+            stars.append({"spin": f["spin"], "band": f["band"], "x": f["x"], "keys": [f["key"]]})
+    out, n = [], 0
+    for s_ in stars:
+        ks = [_k_of(q, N, off) for q in s_["keys"]]
+        if len(ks) == 1 and np.all(np.abs(ks[0]) < 1e-9):
+            lab = "Γ"
+        else:
+            n += 1
+            lab = "V%d" % n
+        kl = [np.round(k, 6).tolist() for k in ks]
+        out.append({"label": lab, "g": len(ks), "k_frac": kl, "k_grid": kl, "k_S7": kl,
+                    "spin": str(s_["spin"]), "band_index": int(s_["band"]), "dE_eV": round(s_["x"] - edge, 6)})
+    return out
+
+
+def valley_sig_3d(valleys):
+    """三维谷表签名：每个星的中心集合（三个分量、模 1、4 位），与标签、顺序无关。S8 用它核对谷表同源。"""
+    stars = set()
+    for v in valleys or []:
+        ks = []
+        for k in v.get("k_frac") or []:
+            f = []
+            for x in list(k)[:3]:
+                y = round(round(float(x), 4) % 1.0, 4)
+                f.append(0.0 if y >= 1.0 else y)
+            ks.append(tuple(f))
+        stars.add(tuple(sorted(ks)))
+    return [list(map(list, s_)) for s_ in sorted(stars)]

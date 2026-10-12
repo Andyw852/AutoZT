@@ -132,13 +132,21 @@ _ALLOWED_SCATTERING = {"ADP", "IMP", "POP", "PIE", "ODP", "IVS"}
 #     DP_OPTICAL_E          = X>X':...@...; ...               # 谷间（g/f 型）按文献每支写一条
 #     DP_OPTICAL_VALLEYS_E  = X:0.425,0,0.425|...             # 3D 没有 S8.2 多谷谷表，必须手填
 #     ADP_INTRAVALLEY       = auto                            # auto（开了 IVS 的载流子 ADP 只留谷内）/ on / off
-#   三维的谷表只能手填（S8.2 的 multi_valley 只实现 2D）；冻声子 ODP 参数（S7.2/S8.21）目前也只有 2D。
+#   谷内 ODP 的参数出厂由冻声子法自动算（开 odp_frozen 组：S7.2 单点 + S8.21 读取，见下面 ODP_FROZEN），
+#   算出来的优先、手填谷内值只作对照；谷间 IVS 只认手填（出厂不算）。没有冻声子参数时手填通道要配手填谷表
+#   （S8.2 的 multi_valley 只实现 2D）。
 #   2D 材料的 S8 是三维核对照，不接 ODP/IVS（DP_OPTICAL_* 只给 S8.4；共用的材料 step.conf 里写了也忽略）。
 DP_OPTICAL_E = ""
 DP_OPTICAL_H = ""
 DP_OPTICAL_VALLEYS_E = ""
 DP_OPTICAL_VALLEYS_H = ""
 ADP_INTRAVALLEY = "auto"
+# [0036] 冻声子 ODP 参数（S7.2/S8.21，本材料 tf_*.yaml 写 odp_frozen: true 才有）：ODP_FROZEN = auto（出厂：有
+#   step8.21_odp_read/odp_params.json 就用它的谷内通道 X>X，手填谷内值只作对照）/ on（必须有）/ off（用手填/文献值）。
+#   谷间 IVS 没有自动参数：手填 X>X'、X>Y 才开，出厂不算。ODP_FROZEN_DMIN（eV/Å）以下的模不进通道（对称性禁戒）。
+ODP_FROZEN = "auto"
+ODP_FROZEN_SRC = "step8.21_odp_read/odp_params.json"
+ODP_FROZEN_DMIN = 0.05
 DPO3D_RECORD = "dp_optical_3d.json"
 DPO3D_PLUGIN = "amset_dpo3d.py"
 DPO_MODULE = "dp_optical.py"
@@ -323,6 +331,8 @@ SPEC = {
     "DP_OPTICAL_VALLEYS_E": ("", "str"),
     "DP_OPTICAL_VALLEYS_H": ("", "str"),
     "ADP_INTRAVALLEY": ("auto", "str"),
+    "ODP_FROZEN": ("auto", "str"),              # [0036] 冻声子 ODP 参数 auto/on/off
+    "ODP_FROZEN_DMIN": (None, "float"),
     # patch_mem_guard：内存粗估阈值（GiB）与自动独占开关。
     "MEM_WARN_GIB": (MEM_WARN_GIB, "int"),
     "MEM_LIMIT_GIB": (None, "int"),
@@ -1579,6 +1589,20 @@ def _alloc_cores(cwd: Path):
 PREFLIGHT_SRC_NAME = "overlap_preflight.py"
 
 
+def _import_helper(modname):
+    """odp_frozen.py 在技能根目录（gen_need 推到 gen 目录）。"""
+    here = Path(__file__).resolve().parent
+    for d in (here, Path.cwd(), here.parent):
+        if (d / (modname + ".py")).is_file():
+            if str(d) not in sys.path:
+                sys.path.insert(0, str(d))
+            break
+    try:
+        return __import__(modname)
+    except ImportError:
+        sys.exit("[ERROR] 有冻声子参数（%s），但找不到 %s.py（gen_need 里要有它）" % (ODP_FROZEN_SRC, modname))
+
+
 def _import_dp_optical():
     """dp_optical.py 住在 step8.4_amset2d/（S8/S8.4 共用）；gen_need 会把它推到 gen 目录。"""
     here = Path(__file__).resolve().parent
@@ -1594,24 +1618,67 @@ def _import_dp_optical():
     return dp_optical
 
 
-def resolve_dp_optical_3d(is_2d):
-    """[0036] step.conf 的 DP_OPTICAL_* -> dp_optical_3d.json 的记录（None = 不开），并把 ODP/IVS 补进 SCATTERING。
-    与 S8.4 的 resolve_dp_optical 同一套规则（手填通道表 + 手填谷表；显式 SCATTERING 照办；ADP 谷内掩码 auto/on/off），
-    区别：三维没有 S8.2 谷表与冻声子参数，谷表必须手填、且每个 k 点 3 个分量；谷几何用完整 3D 距离。
-    格式错、谷表缺、通道指向谷表里没有的谷 -> sys.exit 说清楚（不静默）。"""
+def _load_frozen_3d(cwd):
+    """[0036] ODP_FROZEN -> (odp_params 字典 或 None, 模式)。auto 没有文件 -> None；on 没有文件 -> 报错。
+    参数是 2D 口径（S8.21 按 2D 算的）-> 不用（auto 告警、on 报错）。"""
+    import json
+    mode = str(ODP_FROZEN or "auto").strip().lower()
+    if mode not in ("auto", "on", "off"):
+        sys.exit("[ERROR] ODP_FROZEN=%r 无效，只允许 auto / on / off" % ODP_FROZEN)
+    if mode == "off":
+        return None, mode
+    f = Path(cwd) / ODP_FROZEN_SRC
+    if not f.is_file():
+        if mode == "on":
+            sys.exit("[ERROR] ODP_FROZEN=on，但 %s 不存在：本材料 tf_*.yaml 写 odp_frozen: true，跑完 S7.2_odp / S8.21_odp"
+                     % ODP_FROZEN_SRC)
+        return None, mode
+    try:
+        params = json.loads(f.read_text(encoding="utf-8"))
+    except ValueError as e:
+        sys.exit("[ERROR] %s 读不了：%s" % (ODP_FROZEN_SRC, e))
+    of = _import_helper("odp_frozen")
+    if params.get("schema") != of.SCHEMA:
+        sys.exit("[ERROR] %s 的格式 %r 不是本脚本认的 %r：重跑 S8.21_odp" % (ODP_FROZEN_SRC, params.get("schema"), of.SCHEMA))
+    if params.get("dim") != "3d":
+        msg = "%s 不是三维口径（dim=%s，S8.21 在 [0036] 之前或按 2D 算的）：重跑 S8.21_odp" % (ODP_FROZEN_SRC, params.get("dim"))
+        if mode == "on":
+            sys.exit("[ERROR] " + msg)
+        print("[WARN] " + msg + "；本次不用冻声子参数")
+        return None, mode
+    return params, mode
+
+
+def resolve_dp_optical_3d(is_2d, cwd=None):
+    """[0036] 三维 ODP/IVS -> dp_optical_3d.json 的记录（3D 时总返回 dict；2D 返回 None），并把 ODP/IVS 补进 SCATTERING。
+    规则与 S8.4 的 resolve_dp_optical 一致（[0035-r2] 算出来的优先）：
+      · 谷内 ODP：有冻声子参数（S8.21 的 odp_params.json，ODP_FROZEN=auto/on）就用它；DP_OPTICAL_E/H 里手填的谷内通道
+        只作对照（记进 frozen.manual_reference，不进散射率）；要用手填/文献值写 ODP_FROZEN = off。
+      · 谷间 IVS：没有自动参数，只有手填的 X>X'、X>Y 通道才开（出厂没有 = 不算）。
+      · 谷表：有冻声子参数时用 S8.21 记下的谷中心（S8.21 手填优先、否则自动找）；手填了 DP_OPTICAL_VALLEYS_* 就必须与
+        S8.21 用的那份相同（否则报错要求重跑 S8.21）。没有冻声子参数时，手填通道必须配手填谷表。
+    记录里 dp_optical 为 None = 不开 ODP/IVS（插件不 import）；dp_optical_frozen 总写（S8.21 据此决定要不要让 S8 重排）。"""
     global SCATTERING
     asked = [m for m in ("ODP", "IVS") if m in SCATTERING]
-    has_spec = any(str(x or "").strip() for x in (DP_OPTICAL_E, DP_OPTICAL_H))
     if is_2d:
-        if has_spec or asked:
-            print("[..] 2D 材料：S8 是三维核对照，不接 ODP/IVS（DP_OPTICAL_* 由 S8.4 用）")
+        if any(str(x or "").strip() for x in (DP_OPTICAL_E, DP_OPTICAL_H)) or asked:
+            print("[..] 2D 材料：S8 是三维核对照，不接 ODP/IVS（DP_OPTICAL_* 与冻声子参数由 S8.4 用）")
         SCATTERING = [m for m in SCATTERING if m not in ("ODP", "IVS")]
         return None
-    if not has_spec:
+    cwd = Path(cwd or Path.cwd())
+    frozen, fmode = _load_frozen_3d(cwd)
+    has_spec = any(str(x or "").strip() for x in (DP_OPTICAL_E, DP_OPTICAL_H))
+    frozen_rec = {"mode": fmode, "source": ODP_FROZEN_SRC, "dmin_eV_A": float(ODP_FROZEN_DMIN),
+                  "frozen_use": {}, "digest": {}, "odp_allowed": True, "info": {}}
+    out = {"mechanisms": [], "dp_optical": None, "dp_optical_frozen": frozen_rec, "skill_rev": _SKILL_REV}
+    if not has_spec and frozen is None:
+        frozen_rec["frozen_use"] = {c: ("off" if fmode == "off" else "unavailable") for c in ("electron", "hole")}
         if asked:
-            sys.exit("[ERROR] SCATTERING 含 %s，但 step.conf 没写 DP_OPTICAL_E/H 通道表" % ",".join(asked))
-        return None
+            sys.exit("[ERROR] SCATTERING 含 %s，但既没有 step.conf 的 DP_OPTICAL_E/H 通道表，也没有冻声子参数（%s）"
+                     % (",".join(asked), ODP_FROZEN_SRC))
+        return out
     dpo = _import_dp_optical()
+    of = _import_helper("odp_frozen") if frozen is not None else None
     specs = {"electron": (DP_OPTICAL_E, DP_OPTICAL_VALLEYS_E, "DP_OPTICAL_E", "DP_OPTICAL_VALLEYS_E"),
              "hole": (DP_OPTICAL_H, DP_OPTICAL_VALLEYS_H, "DP_OPTICAL_H", "DP_OPTICAL_VALLEYS_H")}
     rec, kinds_on = {}, set()
@@ -1620,40 +1687,97 @@ def resolve_dp_optical_3d(is_2d):
             chs = dpo.parse_channels(ch_spec)
         except ValueError as e:
             sys.exit("[ERROR] %s：%s" % (ch_key, e))
-        if not chs:
+        fz = ((frozen or {}).get("carriers") or {}).get(car) or {}
+        use_frozen = frozen is not None and fz.get("status") == "ok" and of.params_digest(frozen, car) is not None
+        frozen_rec["frozen_use"][car] = ("used" if use_frozen else ("off" if fmode == "off" else "unavailable"))
+        if not chs and not use_frozen:
             continue
-        if not str(v_spec or "").strip():
-            sys.exit("[ERROR] %s 写了通道，但没有谷表：三维没有 S8.2 多谷谷表，请在 step.conf 手填 %s\n"
-                     "        写法：标签:kx,ky,kz|kx,ky,kz; ...（S3 晶胞分数坐标，每个等价谷一个中心），"
-                     "如 Si 空穴 G:0,0,0；Si 电子 X:0.425,0,0.425|... 六个 Δ 谷" % (ch_key, v_key))
+        manual_vs = None
+        if str(v_spec or "").strip():
+            try:
+                manual_vs = dpo.parse_valleys(v_spec, full3d=True)
+            except ValueError as e:
+                sys.exit("[ERROR] %s：%s" % (v_key, e))
+        if use_frozen:
+            fvs = [{"label": dpo.norm_label(v["label"]), "g": len(v.get("k_frac") or v.get("k_used") or []),
+                    "k_frac": v.get("k_frac") or v.get("k_used")} for v in fz.get("valleys") or []]
+            if manual_vs is not None and of.valley_sig_3d(manual_vs) != (fz.get("valley_sig") or {}).get("sig"):
+                sys.exit("[ERROR] %s 现在的 %s 与 S8.21 算冻声子参数时用的谷表不同：重跑 S8.21_odp"
+                         "（autozt -tt ke-dft-cpu -p <材料> -j S8.21_odp start），或 step.conf 写 ODP_FROZEN = off"
+                         % (car, v_key))
+            vs, src = (manual_vs, "manual: step.conf %s（S8.21 同一份）" % v_key) if manual_vs is not None \
+                else (fvs, "odp_params.json（S8.21 自动谷表：%s）" % fz.get("valleys_source"))
+        elif manual_vs is not None:
+            vs, src = manual_vs, "manual: step.conf %s" % v_key
+        else:
+            sys.exit("[ERROR] %s 写了通道，但没有谷表：三维没有 S8.2 多谷谷表；开 odp_frozen（S8.21 会自动找谷）"
+                     "或在 step.conf 手填 %s\n        写法：标签:kx,ky,kz|kx,ky,kz; ...（S3 晶胞分数坐标，"
+                     "每个等价谷一个中心），如 Si 空穴 G:0,0,0" % (ch_key, v_key))
         try:
-            vs = dpo.parse_valleys(v_spec, full3d=True)
             vs, alias = dpo.merge_coincident(vs, full3d=True)
         except ValueError as e:
-            sys.exit("[ERROR] %s：%s" % (v_key, e))
+            sys.exit("[ERROR] %s 谷表（%s）：%s" % (car, src, e))
         if alias:
-            sys.exit("[ERROR] %s 里 %s 与 %s 的谷中心相同：同一个谷只写一次"
-                     % (v_key, ",".join(alias), ",".join(sorted(set(alias.values())))))
+            sys.exit("[ERROR] %s 谷表（%s）里 %s 与 %s 的谷中心相同：同一个谷只写一次"
+                     % (car, src, ",".join(alias), ",".join(sorted(set(alias.values())))))
+        if use_frozen:
+            manual_intra = [c for c in chs if c["kind"] == "intra"]
+            keep = {v["label"] for v in vs}
+            fchs, dropped, fnotes = of.frozen_channels(frozen, car, keep=keep, norm=dpo.norm_label,
+                                                        dmin=float(ODP_FROZEN_DMIN))
+            for n_ in fnotes:
+                print("[WARN] %s 冻声子：%s" % (car, n_))
+            if manual_intra:
+                try:
+                    dpo.check_channels(manual_intra, vs)
+                except ValueError as e:
+                    sys.exit("[ERROR] %s（谷表 %s）：%s" % (ch_key, src, e))
+            chs = [c for c in chs if c["kind"] != "intra"] + fchs
+            dig = of.params_digest(frozen, car)
+            frozen_rec["digest"][car] = dig
+            info = {"digest": dig, "n_channels": len(fchs), "dropped_below_dmin": dropped, "merge_notes": fnotes,
+                    "summary": of.describe(frozen, car, norm=dpo.norm_label, keep=keep, dmin=float(ODP_FROZEN_DMIN))}
+            if manual_intra:
+                info["manual_reference"] = [{"valley": c["from"], "D_eV_A": c["D_eV_A"], "hw_meV": c["hw_meV"]}
+                                            for c in manual_intra]
+                print("[..] %s：%s 里手填的谷内通道只作对照（不进散射率；要用它们写 ODP_FROZEN = off）：%s"
+                      % (car, ch_key, ", ".join("%s %.2f eV/Å@%.1f meV" % (c["from"], c["D_eV_A"], c["hw_meV"])
+                                                for c in manual_intra)))
+            frozen_rec["info"][car] = info
+            print("[OK] %s 冻声子 ODP（%s）：%s" % (car, ODP_FROZEN_SRC, info["summary"]))
         try:
             dpo.check_channels(chs, vs)
         except ValueError as e:
-            sys.exit("[ERROR] %s（谷表来自 %s）：%s" % (ch_key, v_key, e))
-        rec[car] = {"channels": chs, "valleys": vs, "valleys_source": "step.conf %s" % v_key}
+            sys.exit("[ERROR] %s（谷表 %s）：%s" % (ch_key, src, e))
+        rec[car] = {"channels": chs, "valleys": vs, "valleys_source": src}
+        if car in frozen_rec["info"]:
+            rec[car]["frozen"] = frozen_rec["info"][car]
         kinds_on |= {c["kind"] for c in chs}
+    odp_allowed = not (_SCATTERING_EXPLICIT and "ODP" not in SCATTERING)
+    frozen_rec["odp_allowed"] = odp_allowed
+    if not odp_allowed:
+        for car in list(frozen_rec["frozen_use"]):
+            if frozen_rec["frozen_use"][car] == "used":
+                frozen_rec["frozen_use"][car] = "not_in_scattering"
+                frozen_rec["digest"].pop(car, None)
+                frozen_rec["info"].pop(car, None)
+                if car in rec:
+                    rec[car].pop("frozen", None)
     kinds_of = {"ODP": {"intra"}, "IVS": {"inter_star", "inter"}}
     want = [m for m in ("ODP", "IVS") if kinds_on & kinds_of[m]]
     missing = [m for m in asked if m not in want]
     if missing:
-        sys.exit("[ERROR] SCATTERING 含 %s，但没有对应通道（ODP 要 X>X，IVS 要 X>X' 或 X>Y）" % ",".join(missing))
+        sys.exit("[ERROR] SCATTERING 含 %s，但没有对应通道（ODP 要 X>X 或冻声子参数，IVS 要手填 X>X' 或 X>Y）"
+                 % ",".join(missing))
     if not rec:
-        return None
+        return out
     mode = str(ADP_INTRAVALLEY or "auto").strip().lower()
     if mode not in ("auto", "on", "off"):
         sys.exit("[ERROR] ADP_INTRAVALLEY=%r 无效，只允许 auto / on / off" % ADP_INTRAVALLEY)
     if _SCATTERING_EXPLICIT:      # 显式 SCATTERING（如严格对照只开 ADP）：照它来，不补
         skip = [m for m in want if m not in SCATTERING]
         if skip:
-            print("[WARN] step.conf 显式写了 SCATTERING = %s，不含 %s —— 对应的通道本次不生效"
+            print("[WARN] step.conf 显式写了 SCATTERING = %s，不含 %s —— 对应的通道（手填或冻声子）本次不生效"
                   % (",".join(SCATTERING), ",".join(skip)))
         want = [m for m in want if m in SCATTERING]
     active = set().union(*[kinds_of[m] for m in want]) if want else set()
@@ -1662,7 +1786,7 @@ def resolve_dp_optical_3d(is_2d):
         if not rec[car]["channels"] and mode != "on":
             rec.pop(car)
     if not rec:
-        return None
+        return out
     for m in want:
         if m not in SCATTERING:
             SCATTERING = list(SCATTERING) + [m]
@@ -1686,21 +1810,29 @@ def resolve_dp_optical_3d(is_2d):
         print("[WARN] 不加 ODP/IVS（显式 SCATTERING = %s）；ADP_INTRAVALLEY=on：ADP 只留谷内" % ",".join(SCATTERING))
     for car in ("electron", "hole"):
         if car in rec:
-            print("[..]   %s 谷表来自 %s；ADP 谷内掩码 %s" % (car, rec[car]["valleys_source"],
-                                                   "开" if flags[car] else "关"))
-    return {"mechanisms": [m for m in want], "dp_optical": rec, "skill_rev": _SKILL_REV}
+            print("[..]   %s 谷表来自 %s；ADP 谷内掩码 %s%s" % (car, rec[car]["valleys_source"],
+                                                     "开" if flags[car] else "关",
+                                                     "；谷内 ODP 参数来自冻声子"
+                                                     if frozen_rec["frozen_use"].get(car) == "used" else ""))
+    out["mechanisms"] = list(want)
+    out["dp_optical"] = rec
+    return out
 
 
 def _install_dp_optical_3d(out, record):
-    """[0036] 有记录：写 dp_optical_3d.json、把 dp_optical.py + amset_dpo3d.py 复制进运行目录，返回 True。
-    没有记录：删掉旧运行目录里的残留（免得上一轮的 ODP/IVS 被静默带进这一轮），返回 False。"""
+    """[0036] 3D：写 dp_optical_3d.json（总写：S8.21 要读其中的 dp_optical_frozen 决定是否让 S8 重排）；
+    开了 ODP/IVS（record["dp_optical"] 非空）再把 dp_optical.py + amset_dpo3d.py 复制进运行目录，返回 True（作业里 import）。
+    record 为 None（2D）：删掉旧运行目录里的残留，返回 False。"""
     import json
     import shutil
     rec_f = Path(out) / DPO3D_RECORD
     if record is None:
         if rec_f.is_file():
             rec_f.unlink()
-            print("[..] 删掉旧的 %s（本次不开 ODP/IVS）" % DPO3D_RECORD)
+            print("[..] 删掉旧的 %s（2D 的 S8 不接 ODP/IVS）" % DPO3D_RECORD)
+        return False
+    rec_f.write_text(json.dumps(record, ensure_ascii=False, indent=1), encoding="utf-8")
+    if not record.get("dp_optical"):
         return False
     here = Path(__file__).resolve().parent
     for name in (DPO_MODULE, DPO3D_PLUGIN):
@@ -1711,7 +1843,6 @@ def _install_dp_optical_3d(out, record):
         dst = Path(out) / name
         if src.resolve() != dst.resolve():
             shutil.copyfile(src, dst)
-    rec_f.write_text(json.dumps(record, ensure_ascii=False, indent=1), encoding="utf-8")
     print("[OK] %s + %s 就位（作业里 import amset_dpo3d 注册 %s）"
           % (DPO3D_RECORD, DPO3D_PLUGIN, ",".join(record["mechanisms"]) or "ADP 谷内掩码"))
     return True
@@ -2145,6 +2276,10 @@ def main():
             DP_OPTICAL_VALLEYS_E = str(_p["DP_OPTICAL_VALLEYS_E"] or "")
             DP_OPTICAL_VALLEYS_H = str(_p["DP_OPTICAL_VALLEYS_H"] or "")
             ADP_INTRAVALLEY = str(_p["ADP_INTRAVALLEY"] or "auto")
+            global ODP_FROZEN, ODP_FROZEN_DMIN
+            ODP_FROZEN = str(_p["ODP_FROZEN"] or "auto")
+            if _p["ODP_FROZEN_DMIN"] is not None:
+                ODP_FROZEN_DMIN = float(_p["ODP_FROZEN_DMIN"])
             # patch_eps_inf_override：手动覆盖 ε∞（标量或 3 个对角值）
             if _p["EPS_INF_OVERRIDE"]:
                 EPS_INF_OVERRIDE = _p["EPS_INF_OVERRIDE"]
@@ -2302,7 +2437,7 @@ def main():
         kc.check_elastic_stability(elastic, is_2d=bool(is_2d), enabled=ELASTIC_GUARD,
                                    used="ADP" in SCATTERING, label="S8")
     # [0036] 三维 ODP/IVS：解析通道表并把机制补进 SCATTERING（必须在 write_settings 之前）
-    _dpo3d = resolve_dp_optical_3d(bool(is_2d))
+    _dpo3d = resolve_dp_optical_3d(bool(is_2d), cwd)
     # patch_mesh_min：按最终插值网格下限反算 INTERPOLATION_FACTOR（必须在 write_settings 之前）。
     _fm = apply_mesh_min(_vr, out)
     write_settings(out, eps_inf, eps_static, gap, elastic,

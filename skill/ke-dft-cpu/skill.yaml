@@ -278,9 +278,11 @@ optional_steps:
         #   gen 复制进运行目录、python -c 入口里 import（AZ_DESYM_FIX 未设时不打补丁 = 原行为）。
         #   dim_common.py：ke_common 顶层 import 它；gen 现在把两者一起复制进运行目录给作业内 preflight 用。
         # amset_fermi_fix.py（V132）：求费米能级的稳健化插件（S8/S8.4 共用，住在 step8.4_amset2d/），python -c 里 import。
-        # [0036] dp_optical.py（住在 step8.4_amset2d/）+ amset_dpo3d.py：三维 ODP/IVS（step.conf 写 DP_OPTICAL_E/H 才开）。
-        gen: gen_step10_amset.py, gen_need: [stepconf.py, step.conf, ke_common.py, dim_common.py, submit_amset.tpl, vdw_radii.py, discriminant_common.py, overlap_preflight.py, fermi_window_check.py, amset_desym_fix.py, amset_ir_fix.py, amset_fermi_fix.py, dp_optical.py, amset_dpo3d.py], fetch_all: true,
-         needs: ["step4_wave", "step5_dielect", "step6_elastic", "step7b_deform_read", "step2_bandgap/step2.2_pbe_plot", "step2_bandgap/step2.3_hse_plot"]}
+        # [0036] dp_optical.py（住在 step8.4_amset2d/）+ amset_dpo3d.py + odp_frozen.py：三维 ODP/IVS
+        #   （谷内 ODP 出厂用 S8.21 的冻声子参数，开了 odp_frozen 组才有；谷间 IVS 只认 step.conf 手填）。
+        gen: gen_step10_amset.py, gen_need: [stepconf.py, step.conf, ke_common.py, dim_common.py, submit_amset.tpl, vdw_radii.py, discriminant_common.py, overlap_preflight.py, fermi_window_check.py, amset_desym_fix.py, amset_ir_fix.py, amset_fermi_fix.py, dp_optical.py, amset_dpo3d.py, odp_frozen.py], fetch_all: true,
+         # [0036] step8.21_odp_read?：开了 odp_frozen 组就等冻声子参数（没开不提示缺）
+         needs: ["step4_wave", "step5_dielect", "step6_elastic", "step7b_deform_read", "step2_bandgap/step2.2_pbe_plot", "step2_bandgap/step2.3_hse_plot", "step8.21_odp_read?"]}
 
 # --- 8.2 DPT 形变势迁移率：给 8.1 提供分方向 τ，必须排在 8.1 前面 ---
   dpt:
@@ -297,7 +299,10 @@ optional_steps:
 
   # --- [0035] 冻声子 ODP：S7.2 单点（扇出）+ S8.21 读取 -> S8.4 谷内光学形变势（ODP）的参数自动出 ---------------
   #   默认关：每个材料多 1 + 2×光学模数个 VASP 单点（MoS₂：A1′ + E″ 共 3 个非极性模 -> 7 个）。
-  #   打开：本材料 tf_*.yaml 写一行 odp_frozen: true（只对 2D 有意义，S8.4 才有 ODP 机制）。
+  #   打开：本材料 tf_*.yaml 写一行 odp_frozen: true（2D -> S8.4；[0036] 3D -> S8，amset_dpo3d 插件）。
+  #   [0036] 3D：不对齐（没有真空，不要 LOCPOT）；谷表由 S8.21 在 S7 undeformed 网格上自动找（或用手填的
+  #   DP_OPTICAL_VALLEYS_E/H），不需要 S8.2 —— 所以 S8.21 对 S8.2 是软依赖（2D 照旧等它）。S8 的 ODP_FROZEN=auto 读它。
+  #   两种维度都一样：谷内 ODP 出厂用冻声子参数（手填谷内值只作对照，ODP_FROZEN = off 才用手填）；谷间 IVS 只认手填。
   #   S7.2 照抄 S7 undeformed 的 INCAR/KPOINTS/POTCAR（同一套 k 网格，S8.2 谷表的 k_S7 点都在上面），
   #   按 S5 DFPT 的 Γ 点本征矢做 ±u 位移；S8.21 按 S8.2 的谷表在各谷 k 点取带边能量，算 D（真空对齐）。
   #   S8.4 的 ODP_FROZEN=auto（出厂）读 step8.21_odp_read/odp_params.json，**算出来的优先**：DP_OPTICAL_E/H 里手填的谷内
@@ -310,13 +315,13 @@ optional_steps:
     steps:
       - {seq: 7.2, name: step7c_odp_frozen, label: S7.2_odp, after: step7_deform,
          src: step7c_odp_frozen, check: outcar, fanout: "odp-*", gen: gen_step9c_odp.py,
-         gen_need: [stepconf.py, step.conf, ke_common.py, dim_common.py, odp_frozen.py, submit_std_2d.tpl],
+         gen_need: [stepconf.py, step.conf, ke_common.py, dim_common.py, odp_frozen.py, submit_std_2d.tpl, submit_std_3d.tpl],
          needs: ["step1_opt", "step5_dielect", "step7_deform"]}
       - {seq: 8.21, name: "step8.21_odp_read", label: S8.21_odp, after: step7b_deform_read,
          src: step7c_odp_frozen/odp_read, check: plot, run: gen, done_marker: odp_params.json,
-         gen: gen_step12c_odp_read.py, gen_need: [stepconf.py, step.conf, ke_common.py, dim_common.py, odp_frozen.py],
+         gen: gen_step12c_odp_read.py, gen_need: [stepconf.py, step.conf, ke_common.py, dim_common.py, odp_frozen.py, dp_optical.py],
          fetch_all: true,
-         needs: ["step7c_odp_frozen", "step8.2_dpt"]}
+         needs: ["step7c_odp_frozen", "step8.2_dpt?"]}
 
   # --- 8.1 BoltzTraP2 CRTA × DPT-τ：文献口径的完整实现 ---
   #   [0016] S8.x 各组的 after 一律锚在 step7b_deform_read（主步骤，一定在）：S8 现在可以被关掉

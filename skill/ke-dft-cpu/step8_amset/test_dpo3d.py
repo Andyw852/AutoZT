@@ -129,7 +129,7 @@ class TestGenResolve(unittest.TestCase):
         self.g._SCATTERING_EXPLICIT = False
         for k in ("DP_OPTICAL_E", "DP_OPTICAL_H", "DP_OPTICAL_VALLEYS_E", "DP_OPTICAL_VALLEYS_H"):
             setattr(self.g, k, "")
-        self.g.ADP_INTRAVALLEY = "auto"
+        self.g.ADP_INTRAVALLEY, self.g.ODP_FROZEN = "auto", "off"     # 只测手填路径（冻声子路径见 TestGenFrozen3D）
 
     def _run(self, is_2d=False):
         buf = io.StringIO()
@@ -139,7 +139,7 @@ class TestGenResolve(unittest.TestCase):
 
     def test_off_by_default(self):
         rec, _ = self._run()
-        self.assertIsNone(rec)
+        self.assertIsNone(rec["dp_optical"])
         self.assertEqual(self.g.SCATTERING, ["ADP", "IMP", "POP"])
 
     def test_spec_keys(self):
@@ -156,6 +156,7 @@ class TestGenResolve(unittest.TestCase):
         self.assertIn("S8.4", log)
 
     def test_missing_valleys(self):
+        self.g.ODP_FROZEN = "off"
         self.g.DP_OPTICAL_H = "G>G:6@63"
         with self.assertRaises(SystemExit) as cm:
             self._run()
@@ -187,7 +188,7 @@ class TestGenResolve(unittest.TestCase):
         self.g.DP_OPTICAL_VALLEYS_H = "G:0,0,0"
         self.g.SCATTERING, self.g._SCATTERING_EXPLICIT = ["ADP"], True
         rec, log = self._run()
-        self.assertIsNone(rec)
+        self.assertIsNone(rec["dp_optical"])
         self.assertEqual(self.g.SCATTERING, ["ADP"])
         self.assertIn("不生效", log)
 
@@ -220,6 +221,261 @@ class TestGenResolve(unittest.TestCase):
         line = next(ln for ln in y.splitlines() if "gen_step10_amset.py" in ln and "gen_need" in ln)
         self.assertIn("dp_optical.py", line)
         self.assertIn("amset_dpo3d.py", line)
+
+
+def _isym0_kpoints(N):
+    """Γ 心 N³ 网格按 ±k 约化（VASP ISYM=0 的 k 列表）。"""
+    seen, out = set(), []
+    for i in range(N):
+        for j in range(N):
+            for l in range(N):
+                key = (i, j, l)
+                neg = tuple((-x) % N for x in key)
+                if neg in seen:
+                    continue
+                seen.add(key)
+                f = np.array(key, float) / N
+                out.append(f - np.round(f))
+    return np.array(out)
+
+
+class TestValleys3D(unittest.TestCase):
+    """[0036] S8.21 的三维自动谷表：类 Si 模型（导带 6 个 Δ 谷在 ±(3/8)·轴、价带 Γ 三重简并）。"""
+
+    def setUp(self):
+        import odp_frozen as of
+        self.of = of
+        N = 8
+        self.k = _isym0_kpoints(N)
+        kc = self.k * 2 * math.pi / 5.43
+        cen = [s_ * 0.375 * np.eye(3)[a] for a in range(3) for s_ in (1, -1)]
+        dmin = np.min([np.sum(((self.k - c) - np.round(self.k - c)) ** 2, 1) for c in cen], 0)
+        cb = 1.0 + 8.0 * dmin
+        cb2 = cb + 0.8
+        vb = -np.sum(kc ** 2, 1) * 1.5
+        e = np.stack([vb - 1.0, vb - 0.3, vb, vb, vb, cb, cb2], 1)          # 5 条占据带（后三条在 Γ 三重简并）
+        self.eig = {"up": e}
+        self.nocc = {"up": 5}
+
+    def test_grid(self):
+        N, off, table = self.of.grid_from_kpoints(self.k)
+        self.assertEqual(N.tolist(), [8, 8, 8])
+        self.assertEqual(len(table), 512)
+        with self.assertRaises(ValueError):
+            self.of.grid_from_kpoints(self.k[: len(self.k) // 2])
+
+    def test_electron_six_valleys(self):
+        vs = self.of.find_valleys_3d(self.k, self.eig, self.nocc, +1, np.eye(3))
+        self.assertEqual(len(vs), 1)
+        v = vs[0]
+        self.assertEqual((v["label"], v["g"], v["band_index"]), ("V1", 6, 5))
+        got = sorted(tuple(round(abs(x), 4) for x in k) for k in v["k_frac"])
+        self.assertEqual(got, sorted([(0.375, 0, 0)] * 2 + [(0, 0.375, 0)] * 2 + [(0, 0, 0.375)] * 2))
+
+    def test_hole_gamma_top_band(self):
+        vs = self.of.find_valleys_3d(self.k, self.eig, self.nocc, -1, np.eye(3))
+        self.assertEqual(len(vs), 1)
+        self.assertEqual((vs[0]["label"], vs[0]["g"], vs[0]["band_index"]), ("Γ", 1, 4))
+
+    def test_sig(self):
+        a = [{"k_frac": [[0.5, 0, 0], [-0.5, 0, 0]]}]
+        b = [{"k_frac": [[-0.5, 0, 0.0], [0.5, 0, 0]]}]
+        self.assertEqual(self.of.valley_sig_3d(a), self.of.valley_sig_3d(b))
+        self.assertNotEqual(self.of.valley_sig_3d(a), self.of.valley_sig_3d([{"k_frac": [[0.5, 0, 0.5]]}]))
+
+    def test_bulk_polar_kind(self):
+        import odp_frozen as of
+        e = np.zeros((6, 2, 3))
+        e[0, :, 0] = e[1, :, 1] = e[2, :, 2] = 1 / math.sqrt(2)
+        e[3, 0, 0], e[3, 1, 0] = 1 / math.sqrt(2), -1 / math.sqrt(2)
+        e[4, 0, 1], e[4, 1, 1] = 1 / math.sqrt(2), -1 / math.sqrt(2)
+        e[5, 0, 2], e[5, 1, 2] = 1 / math.sqrt(2), -1 / math.sqrt(2)
+        born = np.array([np.eye(3) * 2.0, -np.eye(3) * 2.0])
+        modes, groups, _n = of.mode_table([0, 0, 0, 8, 8, 8], e, [30.0, 30.0], born, polar_z_tol=float("inf"))
+        self.assertEqual({m["polar_kind"] for m in modes if m["polar"]}, {"体相"})
+        self.assertFalse(groups[0]["use"])
+
+
+def _frozen_params(of, valleys_hole, D=5.0, dim="3d", src="auto"):
+    return {"schema": of.SCHEMA, "dim": dim,
+            "carriers": {"hole": {"status": "ok", "valleys_source": src,
+                                  "valley_sig": {"dim": "3d", "sig": of.valley_sig_3d(valleys_hole)},
+                                  "valleys": [dict(v, groups=[{"group": 1, "modes": [4, 5, 6], "hw_meV": 63.0,
+                                                               "D_eV_A": D}]) for v in valleys_hole]},
+                         "electron": {"status": "ok", "valleys_source": src,
+                                      "valley_sig": {"dim": "3d", "sig": [[[0.375, 0.0, 0.0]]]},
+                                      "valleys": [{"label": "V1", "k_frac": [[0.375, 0, 0]],
+                                                   "groups": [{"group": 1, "modes": [4], "hw_meV": 63.0,
+                                                               "D_eV_A": 0.001}]}]}}}
+
+
+class TestGenFrozen3D(unittest.TestCase):
+    """[0036] S8 用 S8.21 的冻声子参数：出厂开 ODP、不开 IVS；手填谷内只作对照；谷表须同源。"""
+
+    def setUp(self):
+        import odp_frozen as of
+        self.of = of
+        self.g = _load("g10_frozen3d", HERE / "gen_step10_amset.py")
+        self.g.SCATTERING = ["ADP", "IMP", "POP"]
+        self.g._SCATTERING_EXPLICIT = False
+        for k in ("DP_OPTICAL_E", "DP_OPTICAL_H", "DP_OPTICAL_VALLEYS_E", "DP_OPTICAL_VALLEYS_H"):
+            setattr(self.g, k, "")
+        self.g.ADP_INTRAVALLEY, self.g.ODP_FROZEN, self.g.ODP_FROZEN_DMIN = "auto", "auto", 0.05
+        self.tmp = tempfile.TemporaryDirectory()
+        self.cwd = Path(self.tmp.name)
+        (self.cwd / "step8.21_odp_read").mkdir()
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _write(self, params):
+        (self.cwd / "step8.21_odp_read" / "odp_params.json").write_text(json.dumps(params), encoding="utf-8")
+
+    def _run(self):
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            rec = self.g.resolve_dp_optical_3d(False, self.cwd)
+        return rec, buf.getvalue()
+
+    def test_no_params_no_spec(self):
+        rec, _ = self._run()
+        self.assertIsNone(rec["dp_optical"])
+        self.assertEqual(rec["dp_optical_frozen"]["frozen_use"], {"electron": "unavailable", "hole": "unavailable"})
+
+    def test_default_frozen_odp_only(self):
+        self._write(_frozen_params(self.of, [{"label": "Γ", "k_frac": [[0, 0, 0]]}]))
+        rec, log = self._run()
+        self.assertEqual(rec["mechanisms"], ["ODP"])
+        self.assertEqual(self.g.SCATTERING, ["ADP", "IMP", "POP", "ODP"])
+        h = rec["dp_optical"]["hole"]
+        self.assertEqual([(c["from"], c["kind"], c["D_eV_A"], c["hw_meV"]) for c in h["channels"]],
+                         [("Γ", "intra", 5.0, 63.0)])
+        self.assertNotIn("electron", rec["dp_optical"])        # 电子 D < DMIN（对称性禁戒）-> 没有通道
+        self.assertEqual(rec["dp_optical"]["adp_intravalley"], {"electron": False, "hole": False})
+        self.assertEqual(rec["dp_optical_frozen"]["frozen_use"]["hole"], "used")
+        self.assertTrue(rec["dp_optical_frozen"]["digest"]["hole"])
+        self.assertIn("冻声子", log)
+
+    def test_manual_intra_is_reference_only(self):
+        self._write(_frozen_params(self.of, [{"label": "Γ", "k_frac": [[0, 0, 0]]}]))
+        self.g.DP_OPTICAL_H = "G>G:9.9@60"
+        rec, log = self._run()
+        h = rec["dp_optical"]["hole"]
+        self.assertEqual([c["D_eV_A"] for c in h["channels"]], [5.0])
+        self.assertEqual(h["frozen"]["manual_reference"][0]["D_eV_A"], 9.9)
+        self.assertIn("只作对照", log)
+
+    def test_manual_ivs_with_frozen_valleys(self):
+        vs = [{"label": "Γ", "k_frac": [[0, 0, 0]]}, {"label": "V1", "k_frac": [[0.5, 0.5, 0.5], [0.5, 0, 0]]}]
+        self._write(_frozen_params(self.of, vs))
+        self.g.DP_OPTICAL_H = "G>V1:1.5@40"
+        rec, _ = self._run()
+        self.assertEqual(rec["mechanisms"], ["ODP", "IVS"])
+        self.assertEqual(rec["dp_optical"]["adp_intravalley"]["hole"], True)
+
+    def test_off_uses_manual(self):
+        self._write(_frozen_params(self.of, [{"label": "Γ", "k_frac": [[0, 0, 0]]}]))
+        self.g.ODP_FROZEN = "off"
+        self.g.DP_OPTICAL_H, self.g.DP_OPTICAL_VALLEYS_H = "G>G:9.9@60", "G:0,0,0"
+        rec, _ = self._run()
+        self.assertEqual([c["D_eV_A"] for c in rec["dp_optical"]["hole"]["channels"]], [9.9])
+        self.assertEqual(rec["dp_optical_frozen"]["frozen_use"]["hole"], "off")
+
+    def test_manual_valleys_must_match(self):
+        self._write(_frozen_params(self.of, [{"label": "Γ", "k_frac": [[0, 0, 0]]}], src="step.conf"))
+        self.g.DP_OPTICAL_VALLEYS_H = "G:0,0,0.5"
+        with self.assertRaises(SystemExit) as cm:
+            self._run()
+        self.assertIn("S8.21", str(cm.exception))
+        self.g.DP_OPTICAL_VALLEYS_H = "G:0,0,0"
+        rec, _ = self._run()
+        self.assertTrue(rec["dp_optical"]["hole"]["valleys_source"].startswith("manual"))
+
+    def test_2d_params_ignored(self):
+        self._write(_frozen_params(self.of, [{"label": "Γ", "k_frac": [[0, 0, 0]]}], dim=None))
+        rec, log = self._run()
+        self.assertIsNone(rec["dp_optical"])
+        self.assertIn("不是三维口径", log)
+        self.g.ODP_FROZEN = "on"
+        with self.assertRaises(SystemExit):
+            self._run()
+
+    def test_explicit_scattering_excludes(self):
+        self._write(_frozen_params(self.of, [{"label": "Γ", "k_frac": [[0, 0, 0]]}]))
+        self.g.SCATTERING, self.g._SCATTERING_EXPLICIT = ["ADP", "IMP"], True
+        rec, _ = self._run()
+        self.assertIsNone(rec["dp_optical"])
+        self.assertEqual(rec["dp_optical_frozen"]["frozen_use"]["hole"], "not_in_scattering")
+        self.assertFalse(rec["dp_optical_frozen"]["odp_allowed"])
+
+    def test_record_written_even_without_odp(self):
+        rec, _ = self._run()
+        d = self.cwd / "run"
+        d.mkdir()
+        with redirect_stdout(io.StringIO()):
+            self.assertFalse(self.g._install_dp_optical_3d(d, rec))
+        self.assertTrue((d / "dp_optical_3d.json").is_file())
+        self.assertFalse((d / "amset_dpo3d.py").exists())
+
+    def test_requeue_s8_when_params_appear(self):
+        import ke_common as kc
+        rec, _ = self._run()                                 # 参数出来之前生成的 S8
+        d = self.cwd / "step8_amset"
+        d.mkdir()
+        with redirect_stdout(io.StringIO()):
+            self.g._install_dp_optical_3d(d, rec)
+        (d / "transport.json").write_text("{}", encoding="utf-8")
+        params = _frozen_params(self.of, [{"label": "Γ", "k_frac": [[0, 0, 0]]}])
+        with redirect_stdout(io.StringIO()):
+            done = kc.invalidate_odp_consumer(self.cwd, params, consumer="step8_amset", record="dp_optical_3d.json")
+        self.assertIn(("step8_amset", "transport.json"), done)
+        self.assertFalse((d / "transport.json").exists())
+
+
+class TestS821Read3D(unittest.TestCase):
+    """[0036] S8.21 的三维读取（carriers_3d）：合成 ±u 构型，D 已知。
+    导带 6 个 Δ 谷：带边随模 4 线性移动 c·u -> D = c；价带 Γ 三重简并劈裂 (+a, 0, −a)·u -> D² = 2a²/9。"""
+
+    def test_known_D(self):
+        from types import SimpleNamespace
+        r = _load("g12c_3d", ROOT / "step7c_odp_frozen" / "odp_read" / "gen_step12c_odp_read.py")
+        import odp_frozen as of
+        r.of = of
+        base = TestValleys3D("test_grid")
+        base.setUp()
+        k, e0 = base.k, base.eig["up"]
+        u, c, a = 0.004, 3.0, 4.5
+        gam = np.all(np.abs(k) < 1e-9, axis=1)
+
+        def conf(name, sg):
+            e = e0.copy()
+            e[:, 5] += sg * c * u
+            e[gam, 2] += sg * a * u
+            e[gam, 4] -= sg * a * u
+            e = np.sort(e, axis=1)
+            cf = object.__new__(r.Config)
+            cf.name, cf.kpts, cf.eig = name, k, {"up": e}
+            cf.occ = {"up": (np.arange(e.shape[1])[None, :] < 5).astype(float) * np.ones((len(k), 1))}
+            cf.structure = SimpleNamespace(lattice=SimpleNamespace(
+                reciprocal_lattice=SimpleNamespace(matrix=np.eye(3) * 2 * math.pi / 5.43)))
+            cf.vac = cf.vac_std = cf.vac_slope = 0.0
+            return cf
+        cfg = {"odp-ref": conf("odp-ref", 0), "odp-m04p": conf("p", 1), "odp-m04m": conf("m", -1)}
+        man = {"selected": [{"index": 4}], "groups": [{"group": 1, "modes": [4], "hw_meV": 63.0, "freq_THz": 15.2,
+                                                       "use": True, "polar": False}],
+               "configs": {"odp-ref": {"mode": None, "sign": 0, "u_A": 0.0},
+                           "odp-m04p": {"mode": 4, "sign": 1, "u_A": u}, "odp-m04m": {"mode": 4, "sign": -1, "u_A": u}}}
+        warns = []
+        with tempfile.TemporaryDirectory() as d, redirect_stdout(io.StringIO()):
+            out = r.carriers_3d(Path(d), cfg, man, None, warns)
+        e = out["electron"]
+        self.assertEqual((e["status"], len(e["valleys"]), e["valleys"][0]["g"]), ("ok", 1, 6))
+        self.assertAlmostEqual(e["valleys"][0]["groups"][0]["D_eV_A"], c, places=4)
+        self.assertEqual(len(e["valleys"][0]["k_frac"]), 6)
+        h = out["hole"]["valleys"][0]
+        self.assertEqual((h["label"], h["band_index"]), ("Γ", 4))
+        self.assertAlmostEqual(h["groups"][0]["D_eV_A"], math.sqrt(2 * a * a / 9), places=4)
+        self.assertEqual(out["hole"]["valley_sig"]["sig"], of.valley_sig_3d([{"k_frac": [[0, 0, 0]]}]))
 
 
 if __name__ == "__main__":

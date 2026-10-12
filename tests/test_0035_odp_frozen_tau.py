@@ -614,7 +614,11 @@ def test_skill_yaml_group_and_needs():
     assert s72["fanout"] == "odp-*" and s72["check"] == "outcar" and "odp_frozen.py" in s72["gen_need"]
     assert s72["needs"] == ["step1_opt", "step5_dielect", "step7_deform"]
     assert s821["run"] == "gen" and s821["done_marker"] == "odp_params.json"
-    assert s821["needs"] == ["step7c_odp_frozen", "step8.2_dpt"] and "odp_frozen.py" in s821["gen_need"]
+    # [0036] S8.2 改为软依赖：3D 的 S8.21 自己找谷、不用 S8.2；2D 时 S8.2 在工作流里照样等它
+    assert s821["needs"] == ["step7c_odp_frozen", "step8.2_dpt?"] and "odp_frozen.py" in s821["gen_need"]
+    assert "submit_std_3d.tpl" in s72["gen_need"] and "dp_optical.py" in s821["gen_need"]          # [0036] 3D
+    s8 = by["step8_amset"]
+    assert "step8.21_odp_read?" in s8["needs"] and "odp_frozen.py" in s8["gen_need"]               # [0036] 3D
     assert "step8.21_odp_read?" in s84["needs"]
     assert {"odp_frozen.py", "tau_energy.py"} <= set(s84["gen_need"])
     for s in (s72, s821):
