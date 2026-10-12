@@ -212,6 +212,9 @@ def test_assemble_cleans_stale_self_fit_artifacts(tmp_path):
     (out / "fc_fit_summary.json").write_bytes(b"old")
     (out / "fc_dataset.json").write_bytes(b"old")
     (out / "phono3py_params.yaml").write_bytes(b"old-params")   # bundle 只有 disp yaml
+    (out / "phono3py").mkdir()                                # 旧引擎 kl_fc_backends 残留的子目录
+    (out / "phono3py" / "phono3py_disp.yaml").write_bytes(b"old-p3py")
+    (out / "BORN").write_bytes(b"old-born")                   # 旧自拟留下的 BORN（NAC=auto 会误开 NAC）
     (out / "shengbte").mkdir()
     (out / "shengbte" / "FORCE_CONSTANTS_2ND").write_bytes(b"old-shengbte")
 
@@ -225,6 +228,8 @@ def test_assemble_cleans_stale_self_fit_artifacts(tmp_path):
     assert not (out / "cutoff_scan.json").exists()
     assert not (out / "cutoff_selection.json").exists()
     assert not (out / "phono3py_params.yaml").exists()
+    assert not (out / "phono3py").exists()
+    assert not (out / "BORN").exists()
     assert not (out / "shengbte").exists()
 
     # bundle 的内容就位（fc2/fc3 覆盖旧值；disp yaml / marker / 溯源都在）
@@ -234,6 +239,30 @@ def test_assemble_cleans_stale_self_fit_artifacts(tmp_path):
     assert (out / "phonon_summary.json").is_file()
     assert (out / "fc_fit_summary.json").is_file()
     assert (out / "fc_dataset.json").is_file()
+
+
+def test_find_disp_yaml_prefers_top_level(tmp_path):
+    """S6 找 phono3py YAML 时顶层优先；旧引擎 phono3py/ 子目录只当回退。
+
+    旧 kl 引擎（kl_fc_backends）把产物写在 step5_fc/phono3py/，gen_step2_kappa._find_disp_yaml
+    以前最先查 phono3py/ 子目录，S1 换结构/超胞后 S6 会拿旧 YAML 配新 fc2/fc3。
+    """
+    g2 = _load(FCFIT / "gen_step2_kappa.py", "g2_disp_yaml")
+    fit = tmp_path / "step5_fc"
+    out = tmp_path / "step6_kappa"
+    fit.mkdir()
+    out.mkdir()
+
+    # 只有旧引擎 phono3py/ 子目录时，仍能回退到它（老布局兼容）
+    (fit / "phono3py").mkdir()
+    (fit / "phono3py" / "phono3py_disp.yaml").write_text("stale")
+    assert g2._find_disp_yaml(fit, out) == "phono3py_disp.yaml"
+    assert (out / "phono3py_disp.yaml").read_text() == "stale"
+
+    # 顶层也有时，顶层必须优先
+    (fit / "phono3py_disp.yaml").write_text("fresh")
+    assert g2._find_disp_yaml(fit, out) == "phono3py_disp.yaml"
+    assert (out / "phono3py_disp.yaml").read_text() == "fresh"
 
 
 def test_structures_match_and_provenance(tmp_path):

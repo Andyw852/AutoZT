@@ -123,10 +123,13 @@ def _make_disp_yaml(fit_dir, out):
 
 
 def _find_disp_yaml(fit_dir, out):
-    cands = [fit_dir / "phono3py" / "phono3py_disp.yaml",
-             fit_dir / "phono3py" / "phono3py_params.yaml",
+    # 顶层 phono3py_params.yaml / phono3py_disp.yaml 优先；phono3py/ 子目录是旧引擎
+    # （kl_fc_backends）留下的布局，只在顶层没有时回退 —— 否则 S1 换结构/超胞后 S6
+    # 会拿旧 YAML 配新 fc2/fc3（可能报错，也可能悄悄算错 κ）。
+    cands = [fit_dir / "phono3py_params.yaml",
              fit_dir / "phono3py_disp.yaml",
-             fit_dir / "phono3py_params.yaml"]
+             fit_dir / "phono3py" / "phono3py_disp.yaml",
+             fit_dir / "phono3py" / "phono3py_params.yaml"]
     # FIT_METHODS with several methods: when the primary is a pheasy method its
     # prep writes no phono3py YAML, but the phono3py method (e.g. symfc) in
     # methods/<tag>/ does.  The cell/supercell YAML is method independent, so

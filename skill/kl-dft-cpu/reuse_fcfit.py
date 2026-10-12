@@ -110,18 +110,18 @@ def _clean_fit_artifacts(out):
 
     assemble 只覆盖同名文件：上一轮本技能自拟（或上次导入）残留的多余产物
     （cutoff_scan 里多出来的档、methods/、cutoff_selection.json、旧 fc2/fc3、
-    旧 phono3py YAML、旧 shengbte/ 等）不会被覆盖，S6 会按旧的逐档截断选截断、
+    旧 phono3py YAML、旧 BORN、旧 shengbte/ 等）不会被覆盖，S6 会按旧的逐档截断选截断、
     把旧拟合的 κ 当结果，还会读旧 methods.json 把旧方法的力常数也算一遍。
     装配前把这些拟合产物全部清掉（POSCAR / kl_params.txt 不在内，会重新写）。
     """
     out = Path(out)
     for name in ("fc2.hdf5", "fc3.hdf5", "cutoff_scan.json", "cutoff_selection.json",
                  "methods.json", "fc_fit_summary.json", "fc_dataset.json",
-                 "phono3py_disp.yaml", "phono3py_params.yaml"):
+                 "phono3py_disp.yaml", "phono3py_params.yaml", "BORN"):
         p = out / name
         if p.is_file():
             p.unlink()
-    for name in ("cutoff_scan", "methods", "shengbte"):
+    for name in ("cutoff_scan", "methods", "shengbte", "phono3py"):
         p = out / name
         if p.is_dir():
             shutil.rmtree(p)
