@@ -300,3 +300,16 @@ step8.x 的 `_SKILL_REV` 写进 comparison_summary.txt。改脚本即提交 GitH
   σ、S 差约 2 个数量级）；electron_conc / hole_conc 也不填（迁移率除以 0）。`amset_fermi_fix.py` 在 DOS 有带隙时改解
   ln n = ln p（log-sum-exp，不相消不下溢），与解析式 E_F = E_mid + (k_BT/2)·ln(N_v/N_c) 一致到 1e-6 Ha，并填好 n、p；
   无带隙（金属）照旧走原搜索。本征点 |n − p| ≈ 0，IMP 不起作用（全机制 ≈ 去掉 IMP 的那套）；μ 不画（AMSET 按 doping 符号取单一载流子）。
+
+## [0041] 缺陷平衡载流子浓度（DEFECT_DOPING）与 odp_frozen 默认开
+
+- **两种"未掺杂"浓度**：[0040] 的本征点是无缺陷理想晶体（n = p，完整 DFT 态密度）；defect-dft-cpu 给的是有本征缺陷时的
+  平衡浓度（p0 − n0 + Σq[D^q] = 0，单抛物带有效态密度，含化学势顶点与可选生长温度冻结）——后者才对应实际未掺杂样品。
+- **接线**：S8 / S8.4 的 gen 读 `../defect-dft-cpu/step4_analysis/formation_energy_results.json` 各顶点的 n0、p0，
+  把净浓度 p0 − n0 加进 AMSET 掺杂（3D cm⁻³；2D 换面密度 = 净浓度 × 缺陷超胞 V/A），记录写 `defect_doping.json`；
+  S8.3 出 `transport_plots/defect_equilibrium/<M>_defect_equilibrium.png/.csv`（σ、S、PF、κe 随温度，每顶点一色，
+  实线全部机制、虚线去掉 IMP）。带电态是垂直能量（NSW=0）时 auto 不用。
+- **局限**：缺陷平衡只在 defect 技能的温度下求；AMSET 各温度用同一净浓度（等价于缺陷冻结）。IMP 的杂质浓度按 |n−p| 计，
+  补偿缺陷没算进去（真实电离缺陷更多，IMP 偏低）。两边带隙要同源（defect 的 E_gap 与 ke 的 HSE scissor）。
+- **odp_frozen 默认开**（用户 2026-10-13 决定）：每材料多 1 + 2×非极性光学模数个 VASP 单点；已算完的材料补跑 S7.2/S8.21，
+  参数出来后 S8/S8.4 重排一次。材料 tf_*.yaml 写 `odp_frozen: false` 关。

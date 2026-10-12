@@ -2788,3 +2788,93 @@ def hybrid_params(incar):
         out["warning"] = ("★ 杂化参数不是标准 HSE06（AEXX=0.25, HFSCREEN=0.2 Å⁻¹）：AEXX=%g, HFSCREEN=%g%s。"
                           "带隙会随之改变；若不是有意为之，查 step.conf 的 [incar] 覆盖" % (aexx, hfs, hint))
     return out
+
+
+# ---------------------------------------------------------------------------
+# [0041] 缺陷平衡载流子浓度 -> AMSET 掺杂点（S8 / S8.4 共用）
+# ---------------------------------------------------------------------------
+DEFECT_SIBLING = "defect-dft-cpu"
+DEFECT_RESULT_CANDS = ("step4_analysis/formation_energy_results.json", "formation_energy_results.json")
+DEFECT_DOPING_RECORD = "defect_doping.json"
+
+
+def _poscar_lattice(path):
+    """POSCAR 的 3×3 晶格（Å）；读不到 -> None。"""
+    try:
+        ln = Path(path).read_text(errors="ignore").splitlines()
+        s = float(ln[1].split()[0])
+        return [[float(x) * s for x in ln[i].split()[:3]] for i in (2, 3, 4)]
+    except (OSError, IndexError, ValueError):
+        return None
+
+
+def defect_doping_points(cwd, is_2d, mode="auto", root=None):
+    """读同材料 defect-dft-cpu 的平衡载流子浓度（各化学势顶点），换成 AMSET 掺杂（带符号净浓度，负 = n 型）。
+
+    返回 (points, notes)。points：[{"vertex", "net", "unit", "carrier_type", "E_F_eq_eV", "T_K", "n0_cm3", "p0_cm3"}]，
+      3D：net 为 cm^-3（缺陷超胞体积口径 = 体材料浓度）；
+      2D：net 为面密度 cm^-2 = 每缺陷超胞净载流子数 / 超胞面内面积（与 S8.4 的 DOPING 同口径，gen 再按 c 折算）。
+    mode：auto（结果存在且带电态是热力学弛豫的才用）/ on（垂直能量也用，告警）/ off。
+    净浓度 = p0 − n0 = −Σ q·[D^q]（电中性），与 defect 技能的态密度近似无关的部分只有缺陷电荷；
+    AMSET 在所有温度用同一个净浓度（缺陷冻结），而缺陷平衡只在 defect 的 T 下求的 —— 写进 notes。"""
+    import json
+    notes = []
+    mode = str(mode or "auto").strip().lower()
+    if mode == "off":
+        return [], ["DEFECT_DOPING=off"]
+    base = Path(root) if root else Path(cwd).parent / DEFECT_SIBLING
+    src = next((base / c for c in DEFECT_RESULT_CANDS if (base / c).is_file()), None)
+    if src is None:
+        return [], ["没有 %s/{%s}（缺陷技能没跑完或不在同材料目录）" % (base, ",".join(DEFECT_RESULT_CANDS))]
+    try:
+        res = json.loads(src.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as e:
+        return [], ["读 %s 失败：%s" % (src, e)]
+    if res.get("status") != "done" or res.get("is_metal"):
+        return [], ["%s：status=%s is_metal=%s，不用" % (src, res.get("status"), res.get("is_metal"))]
+    if res.get("thermodynamic_charge_states") is False:
+        msg = ("%s：带电态是垂直能量（%s），平衡载流子浓度不是热力学结果"
+               % (src, res.get("energy_interpretation")))
+        if mode != "on":
+            return [], [msg + " —— 不用（DEFECT_DOPING = on 可强制）"]
+        notes.append(msg + " —— DEFECT_DOPING=on 强制使用")
+    vol_A3 = res.get("volume_AA3")
+    fac, unit = 1.0, "cm^-3"
+    if is_2d:
+        lat = None
+        for nm in ("step1_bulk/CONTCAR", "step1_bulk/POSCAR"):
+            lat = _poscar_lattice(base / nm)
+            if lat:
+                break
+        if not lat or not vol_A3:
+            return [], ["2D：缺陷超胞的晶格（step1_bulk/POSCAR）或体积读不到，没法换成面密度，不用"]
+        a, b = lat[0], lat[1]
+        area_A2 = abs(a[0] * b[1] - a[1] * b[0])
+        if area_A2 <= 0:
+            return [], ["2D：缺陷超胞面内面积为 0，不用"]
+        fac, unit = float(vol_A3) / area_A2 * 1e-8, "cm^-2"          # cm^-3 × (V/A) -> cm^-2
+        notes.append("2D：净浓度 × 缺陷超胞 V/A = %.4f Å 换成面密度（要求缺陷超胞是含真空的 slab）" % (fac * 1e8))
+    T_def = res.get("T")
+    if T_def is None:
+        try:
+            T_def = json.loads((base / "energies.json").read_text(encoding="utf-8")).get("T", 300.0)
+        except (OSError, ValueError):
+            T_def = None
+    verts = res.get("vertex_summary") or []
+    if not verts and "carrier_density_cm3" in res:
+        cd = res["carrier_density_cm3"]
+        verts = [{"vertex": 0, "E_F_eq": res.get("E_F_eq"), "carrier_type": res.get("carrier_type"),
+                  "n0_cm3": cd.get("n0"), "p0_cm3": cd.get("p0")}]
+    points = []
+    for v in verts:
+        try:
+            n0, p0 = float(v["n0_cm3"]), float(v["p0_cm3"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        points.append({"vertex": v.get("vertex"), "net": (p0 - n0) * fac, "unit": unit,
+                       "carrier_type": v.get("carrier_type"), "E_F_eq_eV": v.get("E_F_eq"),
+                       "T_K": T_def, "n0_cm3": n0, "p0_cm3": p0, "source": str(src)})
+    if not points:
+        return [], ["%s 里没有顶点的 n0/p0" % src]
+    notes.append("缺陷平衡只在 defect 技能的温度下求解；AMSET 各温度用同一净浓度（缺陷浓度冻结）")
+    return points, notes

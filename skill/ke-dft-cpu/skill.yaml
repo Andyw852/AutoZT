@@ -301,8 +301,9 @@ optional_steps:
          needs: ["step3_uniform", "step6_elastic", "step7b_deform_read"]}
 
   # --- [0035] 冻声子 ODP：S7.2 单点（扇出）+ S8.21 读取 -> S8.4 谷内光学形变势（ODP）的参数自动出 ---------------
-  #   默认关：每个材料多 1 + 2×光学模数个 VASP 单点（MoS₂：A1′ + E″ 共 3 个非极性模 -> 7 个）。
-  #   打开：本材料 tf_*.yaml 写一行 odp_frozen: true（2D -> S8.4；[0036] 3D -> S8，amset_dpo3d 插件）。
+  #   [0041] 默认开（用户 2026-10-13 决定）：每个材料多 1 + 2×光学模数个 VASP 单点（MoS₂：A1′ + E″ 共 3 个非极性模 -> 7 个），
+  #   已算完的材料会补跑 S7.2/S8.21，参数出来后 S8/S8.4 重排一次。关：本材料 tf_*.yaml 写一行 odp_frozen: false。
+  #   （2D -> S8.4；[0036] 3D -> S8，amset_dpo3d 插件。没有非极性光学模的材料 S7.2 只有 ref 一个单点。）
   #   [0036] 3D：不对齐（没有真空，不要 LOCPOT）；谷表由 S8.21 在 S7 undeformed 网格上自动找（或用手填的
   #   DP_OPTICAL_VALLEYS_E/H），不需要 S8.2 —— 所以 S8.21 对 S8.2 是软依赖（2D 照旧等它）。S8 的 ODP_FROZEN=auto 读它。
   #   两种维度都一样：谷内 ODP 出厂用冻声子参数（手填谷内值只作对照，ODP_FROZEN = off 才用手填）；谷间 IVS 只认手填。
@@ -314,7 +315,7 @@ optional_steps:
   #   ★ LOCPOT：S7.2 各单点的 LOCPOT 在 S8.21 第一次跑完之前不能清（真空能级对齐要它）；之后 S8.21 用自己记下的
   #     vacuum_levels.json（按 vasprun.xml 的 sha256 认），vasprun.xml 要留着。
   odp_frozen:
-    default: false
+    default: true
     steps:
       - {seq: 7.2, name: step7c_odp_frozen, label: S7.2_odp, after: step7_deform,
          src: step7c_odp_frozen, check: outcar, fanout: "odp-*", gen: gen_step9c_odp.py,

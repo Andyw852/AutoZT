@@ -37,7 +37,7 @@ from pathlib import Path
 # [SKILL_REV] 版本戳：写进 comparison_summary.txt。每次改本脚本逻辑后更新。
 #   陈旧副本已咬人三次（step12/step9b 盖戳后，step13 是最后一个没盖的），
 #   这里盖戳便于从产物反查到底跑的是哪份 skill 副本。
-_SKILL_REV = "2026-10-13-0040"   # [0040] transport_plots/intrinsic_carrier/（未掺杂本征载流子 σ/S/PF/κe vs T）；图例/文件名一律用实际机制组合 amset_<机制>；2026-10-13-0039   # [0039] transport_plots/datasets/：每个数据集单独一张 σ/S/PF/κe 图 + csv； [0038] 本征/子集图读 subset_*.json（SUBSETS）；[0036] transport_plots 加 bt2_muscan/ + amset_scan/ 两个扫描图子文件夹；[0035] transport_plots 合并 + τ 对比（tau/）
+_SKILL_REV = "2026-10-13-0041"   # [0041] transport_plots/defect_equilibrium/（缺陷平衡净浓度 σ/S/PF/κe vs T）   # 2026-10-13-0040   # [0040] transport_plots/intrinsic_carrier/（未掺杂本征载流子 σ/S/PF/κe vs T）；图例/文件名一律用实际机制组合 amset_<机制>；2026-10-13-0039   # [0039] transport_plots/datasets/：每个数据集单独一张 σ/S/PF/κe 图 + csv； [0038] 本征/子集图读 subset_*.json（SUBSETS）；[0036] transport_plots 加 bt2_muscan/ + amset_scan/ 两个扫描图子文件夹；[0035] transport_plots 合并 + τ 对比（tau/）
 #   bump 记录：2026-10-11-0035 —— transport_plots 合并：intrinsic 图并入 transport 图（4 条数据集
 #   overall / intrinsic / ADP only / BT2xDPT-tau），不再单独出 <M>_intrinsic*.{png,csv}，
 #   只留 <M>_transport.png + 每温度 CSV + <M>_params_<T>K.csv。
@@ -2400,6 +2400,12 @@ def _tavg(t, is_2d):
 
 
 def undoped_rows(cwd, is_2d):
+    """[0040] 本征载流子点（doping = 0）。见 _rows_at_doping。"""
+    return _rows_at_doping(cwd, is_2d, lambda d: d == 0,
+                           "掺杂网格里没有 0（S8/S8.4 的 UNDOPED_POINT 关了，或是 [0040] 之前的结果）")
+
+
+def _rows_at_doping(cwd, is_2d, match, why_missing):
     """[0040] 本征载流子（AMSET doping = 0，E_F 由 n = p 定）的 σ/S/PF/κe 随温度：
     返回 (rows, note)；transport.json 里没有 0 掺杂点 -> ([], 原因)。
     2D：S8.4 的全部可用数据集（overall / 去 IMP / ADP only / 子集），σ、κe 按层厚 t 归一（× c/t）；
@@ -2420,9 +2426,9 @@ def undoped_rows(cwd, is_2d):
         fac = 1.0
         sets = [("overall", {"S": _unwrap(j.get("seebeck")), "sigma": _unwrap(j.get("conductivity")),
                              "kappa": _unwrap(j.get("electronic_thermal_conductivity"))})]
-    i0 = next((i for i, x in enumerate(doping) if x == 0), None)
+    i0 = next((i for i, x in enumerate(doping) if match(x)), None)
     if i0 is None:
-        return [], "掺杂网格里没有 0（S8/S8.4 的 UNDOPED_POINT 关了，或是 [0040] 之前的结果）"
+        return [], why_missing
     rows = []
     for key, st in sets:
         if st.get("partial") or st.get("S") is None or st.get("sigma") is None:
@@ -2440,6 +2446,98 @@ def undoped_rows(cwd, is_2d):
             rows.append({"T_K": T, "dataset": key, "S_uV/K": S, "sigma_S/m": sg, "PF_W/mK2": pf,
                          "kappa_e_W/mK": kp})
     return rows, None
+
+
+DEFECT_DIR_OUT = "defect_equilibrium"   # [0041] transport_plots/ 下缺陷平衡载流子图的子目录
+
+
+def defect_rows(cwd, is_2d):
+    """[0041] 缺陷平衡净浓度点（S8/S8.4 运行目录的 defect_doping.json 记的各化学势顶点）的 σ/S/PF/κe 随温度。
+    返回 (rows, note)；每行多 "vertex"、"carrier_type"、"net"、"unit"。"""
+    run = Path(cwd) / (AMSET2D_DIR if is_2d else AMSET_DIR)
+    rec = _load_json(run / "defect_doping.json")
+    if not rec or not rec.get("points"):
+        return [], "运行目录里没有 defect_doping.json（DEFECT_DOPING 关了、缺陷技能没结果，或是 [0041] 之前的结果）"
+    rows, miss = [], []
+    for p in rec["points"]:
+        v = float(p["amset_doping_cm3"])
+        rr, why = _rows_at_doping(cwd, is_2d, lambda d, v=v: abs(d - v) <= 1e-6 * max(abs(v), 1.0),
+                                  "transport.json 的掺杂网格里没有 %.3e（与 defect_doping.json 不是同一轮）" % v)
+        if not rr:
+            miss.append(why)
+        for r in rr:
+            r.update({"vertex": p.get("vertex"), "carrier_type": p.get("carrier_type"),
+                      "net": p.get("net"), "unit": p.get("unit"), "E_F_eq_eV": p.get("E_F_eq_eV"),
+                      "T_defect_K": p.get("T_K")})
+            rows.append(r)
+    return rows, ("; ".join(miss) if miss and not rows else None)
+
+
+def write_defect_plots(cwd, plots, M, is_2d):
+    """[0041] transport_plots/defect_equilibrium/<M>_defect_equilibrium.png + .csv：缺陷平衡净浓度下
+    σ、S、PF、κe 随温度；每个化学势顶点一种颜色，实线 = 全部机制、虚线 = 去掉 IMP 的那套（若有）。"""
+    import csv
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    ddir = Path(plots) / DEFECT_DIR_OUT
+    rows, why = defect_rows(cwd, is_2d)
+    if ddir.is_dir():
+        for _old in ddir.glob("%s_*" % M):
+            _old.unlink()
+    if not rows:
+        print("[..] 缺陷平衡载流子图跳过：%s" % why)
+        return False
+    ddir.mkdir(parents=True, exist_ok=True)
+    if is_2d:
+        data = load_intrinsic_sets(cwd) or {}
+    else:
+        _j = _load_json(Path(cwd) / AMSET_DIR / "transport.json") or {}
+        data = {"overall_labels": [k for k in (_j.get("mobility") or {}) if str(k).lower() != "overall"]}
+    verts = list(dict.fromkeys(r["vertex"] for r in rows))
+    panels = [("sigma_S/m", "sigma (S/m)" + (", per layer t" if is_2d else ""), True),
+              ("S_uV/K", "S (uV/K)", False), ("PF_W/mK2", "PF (W/m/K$^2$)", True),
+              ("kappa_e_W/mK", "kappa_e (W/m/K)" + (", per layer t" if is_2d else ""), True)]
+    fig, axs = plt.subplots(1, len(panels), figsize=(4.2 * len(panels), 3.8), squeeze=False)
+    for j, (col, ttl, logy) in enumerate(panels):
+        a = axs[0][j]
+        for vi, vx in enumerate(verts):
+            for ds, ls in (("overall", "-"), ("intrinsic", "--")):
+                pts = sorted((r["T_K"], r[col]) for r in rows if r["vertex"] == vx and r["dataset"] == ds
+                             and r[col] is not None and (not logy or r[col] > 0))
+                if not pts:
+                    continue
+                r0 = next(r for r in rows if r["vertex"] == vx)
+                lab = "vertex %s %s %.2e %s, %s" % (vx, r0.get("carrier_type") or "", float(r0["net"]),
+                                                     r0.get("unit") or "", _intr_legend(ds, data, ds))
+                a.plot([p[0] for p in pts], [p[1] for p in pts], ls=ls, marker="o", ms=3, lw=1.3,
+                       color="C%d" % vi, label=lab)
+        a.set_title(ttl, fontsize=10)
+        a.set_xlabel("T (K)", fontsize=8)
+        a.grid(alpha=0.25, lw=0.4)
+        if logy:
+            a.set_yscale("log")
+        else:
+            a.axhline(0, color="k", lw=0.5)
+    h, l = axs[0][0].get_legend_handles_labels()
+    if h:
+        fig.legend(h, l, loc="lower center", ncol=2, fontsize=7.5, frameon=False)
+    fig.suptitle("%s  defect-equilibrium carriers (defect-dft-cpu net p0-n0, fixed over T)  —  AMSET" % M, fontsize=11)
+    fig.tight_layout(rect=[0, 0.08 + 0.035 * len(h) / 2, 1, 0.92])
+    fig.savefig(ddir / ("%s_defect_equilibrium.png" % M), dpi=130)
+    plt.close(fig)
+    cols = ["vertex", "carrier_type", "net", "unit", "E_F_eq_eV", "T_defect_K", "T_K", "dataset",
+            "sigma_S/m", "S_uV/K", "PF_W/mK2", "kappa_e_W/mK"]
+    with open(ddir / ("%s_defect_equilibrium.csv" % M), "w", newline="") as fh:
+        fh.write("# [0041] 缺陷平衡净浓度（defect-dft-cpu 各化学势顶点 p0-n0，在 T_defect_K 下求得）作为 AMSET 掺杂，各温度不变；"
+                 "dataset 键：overall = 全部机制，intrinsic = 去掉 IMP（IMP 按 |n-p| 计，未计补偿缺陷，偏低）\n")
+        w = csv.writer(fh)
+        w.writerow(cols)
+        for r in rows:
+            w.writerow([("%.6g" % r[c]) if isinstance(r.get(c), float) else ("" if r.get(c) is None else r[c])
+                        for c in cols])
+    print("[plots] %s/%s_defect_equilibrium.png" % (DEFECT_DIR_OUT, M))
+    return True
 
 
 def write_undoped_plots(cwd, plots, M, is_2d):
@@ -2816,6 +2914,10 @@ def write_transport_plots(cwd, out, is_2d):
         write_undoped_plots(cwd, plots, M, is_2d)
     except Exception as _e:                                       # noqa: BLE001
         print("[WARN] 本征载流子图失败（%s: %s）" % (type(_e).__name__, _e))
+    try:                                                          # [0041] 缺陷平衡载流子单独出图
+        write_defect_plots(cwd, plots, M, is_2d)
+    except Exception as _e:                                       # noqa: BLE001
+        print("[WARN] 缺陷平衡载流子图失败（%s: %s）" % (type(_e).__name__, _e))
     return True
 
 

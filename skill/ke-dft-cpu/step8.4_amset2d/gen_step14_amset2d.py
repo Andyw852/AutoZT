@@ -32,7 +32,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 # [SKILL_REV] 版本戳：写进 settings.yaml 头，便于从结果反查跑的是哪份 skill 副本。
-_SKILL_REV = "2026-10-13-0040-undoped"   # [0040] UNDOPED_POINT 本征点（doping=0）   # 2026-10-12-0038-subsets   # [0038] SUBSETS 散射机制子集（subset_<机制>.json）   # [0035-r3] 复审：not_in_scattering 只认显式排除、D 全低于阈值仍建记录、面外极性；[0035-r2] 冻声子优先、手填谷内只作对照；[0035-r1] 复审：交叉拒绝、并星平均、τ 挪到 transport.json 之后；[0035] 冻声子 ODP 参数（ODP_FROZEN）+ τ(E)（tau_energy.py）   # [0034-r3] 二审：重复星按 S8.2 k_grid 合并；显式 SCATTERING+掩码的日志   # [0034-r2] 复审：同中心谷合并、显式 SCATTERING 照办、PIE 与 settings 一致   # [0034] OVERALL_WITHOUT（出厂 ODP）-> overall_noODP.json   # [0033] ODP/谷间散射（常数形变势，step.conf DP_OPTICAL_E/H）+ ADP 谷内掩码   # [0032-r2] 复审：链首清旧本征产物与 mesh；SCATTERING 无 ADP 不出只 ADP   # [0032] WRITE_MESH/INTRINSIC_ADP_ONLY 2D 默认开（旧：2026-09-28-desym-fix V115）
+_SKILL_REV = "2026-10-13-0041-defectdop"   # [0041] DEFECT_DOPING 缺陷平衡载流子浓度进掺杂网格   # 2026-10-13-0040-undoped   # [0040] UNDOPED_POINT 本征点（doping=0）   # 2026-10-12-0038-subsets   # [0038] SUBSETS 散射机制子集（subset_<机制>.json）   # [0035-r3] 复审：not_in_scattering 只认显式排除、D 全低于阈值仍建记录、面外极性；[0035-r2] 冻声子优先、手填谷内只作对照；[0035-r1] 复审：交叉拒绝、并星平均、τ 挪到 transport.json 之后；[0035] 冻声子 ODP 参数（ODP_FROZEN）+ τ(E)（tau_energy.py）   # [0034-r3] 二审：重复星按 S8.2 k_grid 合并；显式 SCATTERING+掩码的日志   # [0034-r2] 复审：同中心谷合并、显式 SCATTERING 照办、PIE 与 settings 一致   # [0034] OVERALL_WITHOUT（出厂 ODP）-> overall_noODP.json   # [0033] ODP/谷间散射（常数形变势，step.conf DP_OPTICAL_E/H）+ ADP 谷内掩码   # [0032-r2] 复审：链首清旧本征产物与 mesh；SCATTERING 无 ADP 不出只 ADP   # [0032] WRITE_MESH/INTRINSIC_ADP_ONLY 2D 默认开（旧：2026-09-28-desym-fix V115）
 # 复制来源（gen_step10_amset.py 的 _SKILL_REV），用于人工比对两份文件是否同步
 _SOURCE_GEN_REV = "2026-10-08-2d-raw-elastic"   # [0014] S8 的 2D 弹性改为原始 slab 值，与本步一致
 import stepconf  # noqa: E402
@@ -332,6 +332,11 @@ _WF_EXPLICIT = None
 #   稳健求解——AMSET 原搜索对宽带隙材料会把 E_F 放到带隙里任意位置）。S8.3 据此单独出本征图
 #   transport_plots/intrinsic_carrier/。代价：多一个掺杂点（约 +1/11 计算量）。step.conf 写 UNDOPED_POINT = false 关。
 UNDOPED_POINT = True
+# [0041] DEFECT_DOPING：把同材料 defect-dft-cpu 的平衡载流子浓度（各化学势顶点的净浓度 p0 − n0）加进掺杂网格，
+#   S8.3 据此单独出 transport_plots/defect_equilibrium/。auto（出厂：有结果且带电态是热力学弛豫才用）/ on（垂直能量也用）/ off。
+#   DEFECT_ROOT 可指定缺陷技能的材料目录（默认 ../defect-dft-cpu）。缺陷技能比本步晚跑完时，本步要 retry 才会加上。
+DEFECT_DOPING = "auto"
+DEFECT_ROOT = ""
 WRITE_MESH = True
 # [0018] INTRINSIC_ADP_ONLY：true 时作业链在 IMP 剔除的本征后处理之后，再用同一份 mesh 跑一次
 #   postprocess_intrinsic.py --drop IMP,POP,PIE,ODP,IVS，写 intrinsic_ADP.json（只含 ADP 的 μ/S/σ/κe）。
@@ -436,6 +441,8 @@ SPEC = {
     #   旧写法（默认取常量、只认 true）会让 step.conf 写 false 也关不掉。
     "WRITE_MESH": (None, "bool"),
     "UNDOPED_POINT": (None, "bool"),          # [0040] None = 用出厂值
+    "DEFECT_DOPING": ("auto", "str"),          # [0041] auto/on/off
+    "DEFECT_ROOT": ("", "str"),
     "INTRINSIC_ADP_ONLY": (None, "bool"),   # [0018]
     "OVERALL_WITHOUT": (None, "str"),       # [0034] None = 没写（用出厂 ODP）；off = 不出
     "SUBSETS": (None, "str"),               # [0038] None = 出厂三套；off = 不出 subset_*.json
@@ -2126,6 +2133,8 @@ def write_settings(out: Path, eps_inf, eps_static, gap, elastic,
     _dop = [v / (c_len * 1e-8) for v in _dop_areal] if c_len else _dop_areal  # 体浓度 cm^-3
     if UNDOPED_POINT and 0.0 not in _dop:             # [0040] 本征点（未掺杂）
         _dop = list(_dop) + [0.0]
+    _dop, _defect_pts = _add_defect_doping(_dop, Path.cwd(), True,               # [0041] 面密度 -> 按 c 折体浓度
+                                           (1.0 / (c_len * 1e-8)) if c_len else 1.0)
     _tmp = expand_spec(TEMPERATURES, log=False)  # 温度线性
     lines += ["# deform_geometry: %s（形变势构型口径；ionrelax=离子弛豫、与 TOTAL ELASTIC"
               " MODULI 同源；clamped=离子固定，跨项目 ADP 不可直接比；mixed=两者混用）"
@@ -2202,6 +2211,13 @@ def write_settings(out: Path, eps_inf, eps_static, gap, elastic,
     lines.append("# AZ_DESYM_FIX=%d" % (1 if _DESYM_FIX_ON else 0))
     if _GATE_SUMMARY:
         lines.append("# desym_gate: %s" % _GATE_SUMMARY)
+    _rec_f = out / kc.DEFECT_DOPING_RECORD if _HAS_KC else None        # [0041] S8.3 读它出缺陷平衡图
+    if _rec_f is not None:
+        if _defect_pts and _defect_pts.get("points"):
+            import json as _json
+            _rec_f.write_text(_json.dumps(_defect_pts, ensure_ascii=False, indent=1), encoding="utf-8")
+        elif _rec_f.is_file():
+            _rec_f.unlink()
     (out / "settings.yaml").write_text("\n".join(lines) + "\n",
                                        encoding="utf-8", newline="\n")
     ela = ("标量%s" % elastic if isinstance(elastic, (int, float))
@@ -2878,6 +2894,9 @@ def main():
                     if _sc_list != SCATTERING:
                         print("[OK] SCATTERING = %s（step.conf 覆盖，出厂 %s）" % (_sc_list, SCATTERING))
                         SCATTERING = _sc_list
+            global DEFECT_DOPING, DEFECT_ROOT          # [0041]
+            DEFECT_DOPING = str(_p["DEFECT_DOPING"] or "auto").strip().lower()
+            DEFECT_ROOT = str(_p["DEFECT_ROOT"] or "")
             global UNDOPED_POINT                      # [0040]
             if _p["UNDOPED_POINT"] is not None:
                 UNDOPED_POINT = bool(_p["UNDOPED_POINT"])
@@ -3256,3 +3275,24 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+def _add_defect_doping(dop, cwd, is_2d, scale=1.0):
+    """[0041] 缺陷平衡净浓度 -> 追加到 AMSET 掺杂（AMSET 口径：面密度 cm^-2 按 c 折成体浓度）；返回 (dop, 记录)。"""
+    if not _HAS_KC:
+        return dop, None
+    pts, notes = kc.defect_doping_points(cwd, is_2d, DEFECT_DOPING, DEFECT_ROOT or None)
+    for n in notes:
+        print("[..] DEFECT_DOPING：%s" % n)
+    if not pts:
+        return dop, {"points": [], "notes": notes}
+    dop = list(dop)
+    for p in pts:
+        v = p["net"] * scale
+        p["amset_doping_cm3"] = v
+        if not any(abs(v - x) <= 1e-9 * max(abs(v), 1.0) for x in dop):
+            dop.append(v)
+        print("[OK] DEFECT_DOPING：顶点 %s %s 净浓度 %.3e %s（E_F = %s eV，%s K）-> AMSET doping %.3e cm^-3"
+              % (p["vertex"], p["carrier_type"], p["net"], p["unit"], p["E_F_eq_eV"], p["T_K"], v))
+    return dop, {"points": pts, "notes": notes, "skill_rev": _SKILL_REV}
+

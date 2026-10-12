@@ -17,7 +17,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 # [SKILL_REV] 版本戳：写进 settings.yaml 头，便于从结果反查跑的是哪份 skill 副本。
-_SKILL_REV = "2026-10-13-0040-undoped"   # [0040] UNDOPED_POINT 本征点（doping=0）   # 2026-10-13-0038-subsets   # [0038] SUBSETS 散射机制子集（subset_<机制>.json）   # [0037] 三维 PIE（读压电张量写 settings，插件 amset_pie3d.py 修正核）   # [0036] 三维 ODP/IVS（DP_OPTICAL_*，插件 amset_dpo3d.py）   # [0014] 2D 弹性用原始 slab 值（不乘 c/t）；V115 相位补丁
+_SKILL_REV = "2026-10-13-0041-defectdop"   # [0041] DEFECT_DOPING 缺陷平衡载流子浓度进掺杂网格   # 2026-10-13-0040-undoped   # [0040] UNDOPED_POINT 本征点（doping=0）   # 2026-10-13-0038-subsets   # [0038] SUBSETS 散射机制子集（subset_<机制>.json）   # [0037] 三维 PIE（读压电张量写 settings，插件 amset_pie3d.py 修正核）   # [0036] 三维 ODP/IVS（DP_OPTICAL_*，插件 amset_dpo3d.py）   # [0014] 2D 弹性用原始 slab 值（不乘 c/t）；V115 相位补丁
 import stepconf  # noqa: E402
 try:
     import ke_common as kc
@@ -318,6 +318,12 @@ UNITY_OVERLAP_2D = True
 #   稳健求解——AMSET 原搜索对宽带隙材料会把 E_F 放到带隙里任意位置）。S8.3 据此单独出本征图
 #   transport_plots/intrinsic_carrier/。代价：多一个掺杂点（约 +1/11 计算量）。step.conf 写 UNDOPED_POINT = false 关。
 UNDOPED_POINT = True
+# [0041] DEFECT_DOPING：把同材料 defect-dft-cpu 的平衡载流子浓度（各化学势顶点的净浓度 p0 − n0，cm^-3）加进掺杂网格，
+#   S8.3 据此单独出 transport_plots/defect_equilibrium/。auto（出厂：有结果且带电态是热力学弛豫才用）/ on（垂直能量也用）/ off。
+#   DEFECT_ROOT 可指定缺陷技能的材料目录（默认 ../defect-dft-cpu）。缺陷技能比本步晚跑完时，本步要 retry 才会加上。
+#   2D 材料的 S8 是三维核对照，不加（缺陷点只进 S8.4）。
+DEFECT_DOPING = "auto"
+DEFECT_ROOT = ""
 NWORKERS = None
 NWORKERS_FALLBACK = 24      # 提交模板里读不到 SLURM 分配（--ntasks/--cpus）时的兜底
 # ★ 2026-09-27：**nworkers 不影响数值**。同一套掺杂/温度，nw = 1/2/8/12/16/23/24(×2)
@@ -370,6 +376,8 @@ SPEC = {
     # 技能侧的落点是 skill/ke-dft-cpu/step8_amset/step.conf，不是技能全局 step.conf。
     "NWORKERS": (NWORKERS, "int"),
     "UNDOPED_POINT": (None, "bool"),          # [0040] None = 用出厂值
+    "DEFECT_DOPING": ("auto", "str"),          # [0041] auto/on/off
+    "DEFECT_ROOT": ("", "str"),
     # 全网格 h5 分支：出厂 auto（按有无反演中心自动判断）；可显式 true/false 覆盖。
     "WAVEFUNCTION_FULL": ("auto", "str"),
     # unity_overlap 覆盖（受控对照用）；默认 auto = 现行行为不变。
@@ -1519,6 +1527,9 @@ def write_settings(out: Path, eps_inf, eps_static, gap, elastic,
     _dop = expand_spec(DOPING, log=True)        # doping 对数均布
     if UNDOPED_POINT and 0.0 not in _dop:             # [0040] 本征点（未掺杂）
         _dop = list(_dop) + [0.0]
+    _defect_pts = None
+    if not is_2d:                                     # [0041] 缺陷平衡净浓度（2D 只进 S8.4）
+        _dop, _defect_pts = _add_defect_doping(_dop, Path.cwd(), False)
     _tmp = expand_spec(TEMPERATURES, log=False)  # 温度线性
     lines += ["doping: [%s]" % ", ".join("%.6e" % v for v in _dop),
               "temperatures: [%s]" % ", ".join("%g" % v for v in _tmp),
@@ -1592,6 +1603,13 @@ def write_settings(out: Path, eps_inf, eps_static, gap, elastic,
     lines.append("# AZ_DESYM_FIX=%d" % (1 if _DESYM_FIX_ON else 0))
     if _GATE_SUMMARY:
         lines.append("# desym_gate: %s" % _GATE_SUMMARY)
+    _rec_f = out / kc.DEFECT_DOPING_RECORD if _HAS_KC else None        # [0041] S8.3 读它出缺陷平衡图
+    if _rec_f is not None:
+        if _defect_pts and _defect_pts.get("points"):
+            import json as _json
+            _rec_f.write_text(_json.dumps(_defect_pts, ensure_ascii=False, indent=1), encoding="utf-8")
+        elif _rec_f.is_file():
+            _rec_f.unlink()
     (out / "settings.yaml").write_text("\n".join(lines) + "\n",
                                        encoding="utf-8", newline="\n")
     ela = ("标量%s" % elastic if isinstance(elastic, (int, float))
@@ -2480,6 +2498,9 @@ def main():
             ODP_FROZEN = str(_p["ODP_FROZEN"] or "auto")
             if _p["ODP_FROZEN_DMIN"] is not None:
                 ODP_FROZEN_DMIN = float(_p["ODP_FROZEN_DMIN"])
+            global DEFECT_DOPING, DEFECT_ROOT          # [0041]
+            DEFECT_DOPING = str(_p["DEFECT_DOPING"] or "auto").strip().lower()
+            DEFECT_ROOT = str(_p["DEFECT_ROOT"] or "")
             global UNDOPED_POINT                      # [0040]
             if _p["UNDOPED_POINT"] is not None:
                 UNDOPED_POINT = bool(_p["UNDOPED_POINT"])
@@ -2740,3 +2761,23 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+def _add_defect_doping(dop, cwd, is_2d, scale=1.0):
+    """[0041] 缺陷平衡净浓度 -> 追加到 AMSET 掺杂（cm^-3）；返回 (dop, 记录)。"""
+    if not _HAS_KC:
+        return dop, None
+    pts, notes = kc.defect_doping_points(cwd, is_2d, DEFECT_DOPING, DEFECT_ROOT or None)
+    for n in notes:
+        print("[..] DEFECT_DOPING：%s" % n)
+    if not pts:
+        return dop, {"points": [], "notes": notes}
+    dop = list(dop)
+    for p in pts:
+        v = p["net"] * scale
+        p["amset_doping_cm3"] = v
+        if not any(abs(v - x) <= 1e-9 * max(abs(v), 1.0) for x in dop):
+            dop.append(v)
+        print("[OK] DEFECT_DOPING：顶点 %s %s 净浓度 %.3e %s（E_F = %s eV，%s K）-> AMSET doping %.3e cm^-3"
+              % (p["vertex"], p["carrier_type"], p["net"], p["unit"], p["E_F_eq_eV"], p["T_K"], v))
+    return dop, {"points": pts, "notes": notes, "skill_rev": _SKILL_REV}
