@@ -124,12 +124,12 @@ def test_s72_gen_and_s821_read(mat, monkeypatch, capsys):
     kgrid = np.array([[i / NK, j / NK, 0.0] for i in range(NK) for j in range(NK)])
 
     class FakeConfig(r.Config):
-        def __init__(self, d, vac_axis=2, cache=None):
+        def __init__(self, d, vac_axis=2, cache=None, use_vac=True):      # [0036] 3D 不对齐（use_vac=False）
             st = Structure.from_file(str(d / "POSCAR"))
             pos = _cart(st)
             self.name, self.structure, self.kpts = d.name, st, kgrid
             self.eig = {"up": np.array([np.linalg.eigvalsh(T._H(k, pos)) for k in kgrid])}
-            self.vac, self.vac_std = _vac(pos), 0.0
+            self.vac, self.vac_std = (_vac(pos), 0.0) if use_vac else (0.0, 0.0)
     monkeypatch.setattr(r, "Config", FakeConfig)
     ka, kb = [3 / NK, 1 / NK, 0.0], [1 / NK, 3 / NK, 0.0]          # x↔y 镜面相关的两个成员谷
     valley = {"label": "X", "g": 2, "spin": "up", "band_index": 2, "dE_eV": 0.0,

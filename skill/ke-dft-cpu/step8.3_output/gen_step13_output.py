@@ -37,7 +37,7 @@ from pathlib import Path
 # [SKILL_REV] 版本戳：写进 comparison_summary.txt。每次改本脚本逻辑后更新。
 #   陈旧副本已咬人三次（step12/step9b 盖戳后，step13 是最后一个没盖的），
 #   这里盖戳便于从产物反查到底跑的是哪份 skill 副本。
-_SKILL_REV = "2026-10-12-0038"   # [0038] 本征/子集图读 subset_*.json（SUBSETS）；[0036] transport_plots 加 bt2_muscan/ + amset_scan/ 两个扫描图子文件夹；[0035] transport_plots 合并 + τ 对比（tau/）
+_SKILL_REV = "2026-10-13-0040"   # [0040] transport_plots/intrinsic_carrier/（未掺杂本征载流子 σ/S/PF/κe vs T）；图例/文件名一律用实际机制组合 amset_<机制>；2026-10-13-0039   # [0039] transport_plots/datasets/：每个数据集单独一张 σ/S/PF/κe 图 + csv； [0038] 本征/子集图读 subset_*.json（SUBSETS）；[0036] transport_plots 加 bt2_muscan/ + amset_scan/ 两个扫描图子文件夹；[0035] transport_plots 合并 + τ 对比（tau/）
 #   bump 记录：2026-10-11-0035 —— transport_plots 合并：intrinsic 图并入 transport 图（4 条数据集
 #   overall / intrinsic / ADP only / BT2xDPT-tau），不再单独出 <M>_intrinsic*.{png,csv}，
 #   只留 <M>_transport.png + 每温度 CSV + <M>_params_<T>K.csv。
@@ -1397,7 +1397,7 @@ INTR_SETS = (   # (键, 文件, 图例, 线型, 颜色, 标记)
     ("ADP_only", "intrinsic_ADP.json", "ADP only (acoustic limit)", ":", "C2", "^"),
     ("ADP_POP", "intrinsic_ADP_POP.json", "ADP+POP", "-", "C1", "v"),
     ("ADP_POP_ODP", "intrinsic_ADP_POP_ODP.json", "ADP+POP+ODP", "-", "C6", "P"),
-    ("intrinsic", "intrinsic_transport.json", "no IMP", "-", "C0", "o"),
+    ("intrinsic", "intrinsic_transport.json", "amset (all but IMP)", "-", "C0", "o"),
     ("overall", "transport.json", "overall", "-.", "C3", "s"),
 )
 # [0034] S8.4 的 OVERALL_WITHOUT 那一套（overall_no*.json，出厂 overall_noODP.json）：有就自动加进图、表、汇总。
@@ -1413,7 +1413,7 @@ def _overall_without_files(run_dir):
 
 # [0038] subset_*.json（SUBSETS 生成）的键分类：按 dropped 集合；全机制（dropped 空）= overall（跳过，transport.json 已覆盖）。
 _SUBSET_STYLE = {
-    "intrinsic": ("no IMP", "-", "C0", "o"),
+    "intrinsic": ("amset (all but IMP)", "-", "C0", "o"),
     "ADP_only": ("ADP only (acoustic limit)", ":", "C2", "^"),
     "ADP_POP": ("ADP+POP", "-", "C1", "v"),
     "ADP_POP_ODP": ("ADP+POP+ODP", "-", "C6", "P"),
@@ -1766,22 +1766,17 @@ def write_intrinsic_table(out_dir, rows, geom, data):
                             ("%.6g" % r[c] if isinstance(r[c], float) else r[c])) for c in INTR_COLS})
 
 
-def _intr_legend(key, data, default):
-    """图例用实际机制（SCATTERING 可被 step.conf 改；非极性材料没有 POP）。"""
-    if key in ("ADP_POP", "ADP_POP_ODP"):
-        lab = (data.get("sets") or {}).get(key, {}).get("labels")
-        return "amset_" + "+".join(lab) if lab else default
-    if key == "intrinsic":
-        lab = (data["sets"].get("intrinsic") or {}).get("labels")
-        return ("intrinsic %s (no IMP)" % "+".join(lab)) if lab else default
+def _intr_mechs(key, data):
+    """数据集实际包含的散射机制（列表）；不知道 -> None。"""
     if key == "overall":
-        lab = data.get("overall_labels")
-        return ("overall %s" % "+".join(lab)) if lab else default
-    st = data["sets"].get(key) or {}
-    if key.startswith("overall_no") and st.get("labels"):            # [0034]
-        return "overall w/o %s (%s)" % ("+".join(st.get("dropped") or []) or key[len("overall_no"):],
-                                        "+".join(st["labels"]))
-    return default
+        return data.get("overall_labels") or None
+    return ((data.get("sets") or {}).get(key) or {}).get("labels") or None
+
+
+def _intr_legend(key, data, default):
+    """[0040] 图例 = 实际散射机制组合 amset_<机制+机制>（SCATTERING 可被 step.conf 改；非极性材料没有 POP）。"""
+    lab = _intr_mechs(key, data)
+    return "amset_" + "+".join(lab) if lab else default
 
 
 def _intr_caption(geom, data):
@@ -1793,7 +1788,7 @@ def _intr_caption(geom, data):
             "so n_lit = n_cell x c/t (c/t = %.3f).\n"
             "sigma, kappa_e normalized by layer thickness t (cell value x c/t); mobility, S, Lorenz do not depend on it.  "
             "Shaded: %s (beyond rigid-band range).\n"
-            "ADP only: acoustic deformation potential only (upper limit)%s.  intrinsic: %s, ionized impurities removed.  "
+            "ADP only: acoustic deformation potential only (upper limit)%s.  amset_%s: all mechanisms except ionized impurities.  "
             "overall: all mechanisms incl. IMP%s.  BT2: BoltzTraP2 CRTA with DPT tau (S, Lorenz tau-free); "
             "BT2 mobility = sigma_total/(e|n_net|), masked where bipolar.  DPT: Bardeen-Shockley (single or multi-valley)."
             % (geom["t_A"], geom["t_method"], geom["c_A"], geom["c_over_t"], _interp_rule(geom)[0], part, lab,
@@ -2385,12 +2380,140 @@ def make_figure(out, am, bt, dpt, am2=None, geom=None):
 
 
 
+def _ds_file(ds, data):
+    """[0040] datasets/ 的文件名后缀 = 实际机制组合（如 ADP+POP+ODP）；不知道机制时用数据集键。"""
+    lab = _intr_mechs(ds, data or {})
+    return "+".join(lab) if lab else ds
+
+
+UNDOPED_DIR = "intrinsic_carrier"     # [0040] transport_plots/ 下本征载流子（doping = 0）图的子目录
+
+
+def _tavg(t, is_2d):
+    """3x3 -> 面内 (xx+yy)/2（2D）或 (xx+yy+zz)/3（3D）；坏值 -> None。"""
+    try:
+        d = [float(t[i][i]) for i in ((0, 1) if is_2d else (0, 1, 2))]
+    except (TypeError, IndexError, ValueError):
+        return None
+    v = sum(d) / len(d)
+    return v if v == v else None
+
+
+def undoped_rows(cwd, is_2d):
+    """[0040] 本征载流子（AMSET doping = 0，E_F 由 n = p 定）的 σ/S/PF/κe 随温度：
+    返回 (rows, note)；transport.json 里没有 0 掺杂点 -> ([], 原因)。
+    2D：S8.4 的全部可用数据集（overall / 去 IMP / ADP only / 子集），σ、κe 按层厚 t 归一（× c/t）；
+    3D：S8 的 transport.json（overall）。本征点 |n − p| ≈ 0，IMP 不起作用，overall ≈ 去 IMP。"""
+    if is_2d:
+        data = load_intrinsic_sets(cwd)
+        geom = _geom_2d(cwd)
+        if not data or not geom:
+            return [], "没有 S8.4 transport.json / 2d_correction.json"
+        doping, temps, fac = data["doping"], data["temps"], geom["c_over_t"]
+        sets = [(k, data["sets"][k]) for k, *_ in data.get("set_defs", INTR_SETS) if k in data["sets"]]
+    else:
+        j = _load_json(Path(cwd) / AMSET_DIR / "transport.json")
+        if not j:
+            return [], "没有 S8 transport.json"
+        doping = [float(x) for x in _unwrap(j["doping"])]
+        temps = [float(t) for t in _unwrap(j["temperatures"])]
+        fac = 1.0
+        sets = [("overall", {"S": _unwrap(j.get("seebeck")), "sigma": _unwrap(j.get("conductivity")),
+                             "kappa": _unwrap(j.get("electronic_thermal_conductivity"))})]
+    i0 = next((i for i, x in enumerate(doping) if x == 0), None)
+    if i0 is None:
+        return [], "掺杂网格里没有 0（S8/S8.4 的 UNDOPED_POINT 关了，或是 [0040] 之前的结果）"
+    rows = []
+    for key, st in sets:
+        if st.get("partial") or st.get("S") is None or st.get("sigma") is None:
+            continue
+        for k, T in enumerate(temps):
+            try:
+                S = _tavg(st["S"][i0][k], is_2d)
+                sg = _tavg(st["sigma"][i0][k], is_2d)
+                kp = _tavg(st["kappa"][i0][k], is_2d) if st.get("kappa") is not None else None
+            except (TypeError, IndexError):
+                continue
+            sg = None if sg is None else sg * fac
+            kp = None if kp is None else kp * fac
+            pf = (S * 1e-6) ** 2 * sg if (S is not None and sg is not None) else None
+            rows.append({"T_K": T, "dataset": key, "S_uV/K": S, "sigma_S/m": sg, "PF_W/mK2": pf,
+                         "kappa_e_W/mK": kp})
+    return rows, None
+
+
+def write_undoped_plots(cwd, plots, M, is_2d):
+    """[0040] transport_plots/intrinsic_carrier/<M>_intrinsic_carrier.png + .csv：本征载流子（未掺杂）
+    σ、S、PF、κe 随温度，每个数据集一条线。"""
+    import csv
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    udir = Path(plots) / UNDOPED_DIR
+    rows, why = undoped_rows(cwd, is_2d)
+    if udir.is_dir():
+        for _old in udir.glob("%s_*" % M):
+            _old.unlink()
+    if not rows:
+        print("[..] 本征载流子图跳过：%s" % why)
+        return False
+    udir.mkdir(parents=True, exist_ok=True)
+    names = {"overall": "amset (all mechanisms)", "intrinsic": "amset (all but IMP)", "ADP_only": "amset_ADP"}
+    if is_2d:
+        data = load_intrinsic_sets(cwd)
+    else:
+        _j = _load_json(Path(cwd) / AMSET_DIR / "transport.json") or {}
+        data = {"overall_labels": [k for k in (_j.get("mobility") or {}) if str(k).lower() != "overall"]}
+    if data:
+        for k in list(names) + [d[0] for d in data.get("set_defs", [])]:
+            names[k] = _intr_legend(k, data, names.get(k, k))
+    keys = list(dict.fromkeys(r["dataset"] for r in rows))
+    panels = [("sigma_S/m", "sigma (S/m)" + (", per layer t" if is_2d else ""), True),
+              ("S_uV/K", "S (uV/K)", False), ("PF_W/mK2", "PF (W/m/K$^2$)", True),
+              ("kappa_e_W/mK", "kappa_e (W/m/K)" + (", per layer t" if is_2d else ""), True)]
+    fig, axs = plt.subplots(1, len(panels), figsize=(4.2 * len(panels), 3.6), squeeze=False)
+    for j, (col, ttl, logy) in enumerate(panels):
+        a = axs[0][j]
+        for ci, key in enumerate(keys):
+            pts = sorted((r["T_K"], r[col]) for r in rows if r["dataset"] == key and r[col] is not None
+                         and (not logy or r[col] > 0))
+            if len(pts) >= 1:
+                a.plot([p[0] for p in pts], [p[1] for p in pts], marker="o", ms=3, lw=1.3,
+                       color="C%d" % ci, label=names.get(key, key))
+        a.set_title(ttl, fontsize=10)
+        a.set_xlabel("T (K)", fontsize=8)
+        a.grid(alpha=0.25, lw=0.4)
+        if logy:
+            a.set_yscale("log")
+        else:
+            a.axhline(0, color="k", lw=0.5)
+    h, l = axs[0][0].get_legend_handles_labels()
+    if h:
+        fig.legend(h, l, loc="lower center", ncol=min(5, len(h)), fontsize=8, frameon=False)
+    fig.suptitle("%s  intrinsic carriers (undoped, E_F from n = p)  —  AMSET" % M, fontsize=11)
+    fig.tight_layout(rect=[0, 0.1, 1, 0.92])
+    fig.savefig(udir / ("%s_intrinsic_carrier.png" % M), dpi=130)
+    plt.close(fig)
+    cols = ["T_K", "dataset", "sigma_S/m", "S_uV/K", "PF_W/mK2", "kappa_e_W/mK"]
+    with open(udir / ("%s_intrinsic_carrier.csv" % M), "w", newline="") as fh:
+        fh.write("# [0040] 本征载流子（AMSET doping = 0，E_F 由 n = p 定）；%s；|n-p|≈0 时 IMP 不起作用，全机制 ≈ 去掉 IMP 的那套\n"
+                 % ("2D：sigma、kappa_e、PF 按层厚 t 归一（元胞值 × c/t）" if is_2d else "3D：张量对角平均"))
+        w = csv.writer(fh)
+        w.writerow(cols)
+        for r in rows:
+            w.writerow([("%.6g" % r[c]) if isinstance(r[c], float) else ("" if r[c] is None else r[c]) for c in cols])
+    print("[plots] %s/%s_intrinsic_carrier.png" % (UNDOPED_DIR, M))
+    return True
+
+
 def write_transport_plots(cwd, out, is_2d):
     """[0033]-[0035] 规定格式绘图输出（图 + 同目录数据）到【材料根目录】的 transport_plots/：
       <M>_transport.png                        9温度(行)x5参数(列 mu/S/sigma/PF/kappa_e)；
                                                基础数据集：overall / 去 IMP / ADP only / BT2xDPT-tau；按可用结果加入机制对照
       <M>_transport_data_<T>K.csv               对应数据，每温度一个
       <M>_params_<T>K.csv                       每温度一张(E1/C2D/m*/tau/mu)
+      datasets/<M>_<数据集>.png/.csv             [0039] 每个数据集（overall / intrinsic / ADP_only / 子集 / BT2）
+                                               单独一张 σ/S/PF/κe 随浓度图，每温度一条线
     [0035] 原 <M>_intrinsic.png 与 <M>_transport.png 数据集重叠（overall/ADP/DPT 三套重复），
       已合并为一张 <M>_transport.png；额外机制对照按 S8.4 可用结果动态显示。
     [0034] 输出位置 = cwd.parent/transport_plots/（材料根，不在 step8.3_output 内）；
@@ -2479,7 +2602,7 @@ def write_transport_plots(cwd, out, is_2d):
         dsets = [("overall", "tab:red", "--", "s"), ("intrinsic", "tab:orange", "-.", "D"),
                  ("ADP_only", "tab:green", ":", "^"), ("BT2_DPTtau", "tab:blue", "-", "o")]
         _LBL = {"overall": "AMSET overall",
-                "intrinsic": "AMSET no IMP",
+                "intrinsic": "amset (all but IMP)",
                 "ADP_only": "amset_ADP",
                 "ADP_POP": "amset_ADP+POP",
                 "ADP_POP_ODP": "amset_ADP+POP+ODP",
@@ -2487,11 +2610,11 @@ def write_transport_plots(cwd, out, is_2d):
                 "BT2_DPTtau": "BT2_DPTtau"}
         _set_meta = load_intrinsic_sets(cwd) or {}
         _all_mechs = _set_meta.get("overall_labels") or []
-        _intr_mechs = ((_set_meta.get("sets") or {}).get("intrinsic") or {}).get("labels") or []
+        _im = ((_set_meta.get("sets") or {}).get("intrinsic") or {}).get("labels") or []
         if _all_mechs:
             _LBL["overall"] = "amset_" + "+".join(_all_mechs)
-        if _intr_mechs:
-            _LBL["intrinsic"] = "amset_" + "+".join(_intr_mechs)
+        if _im:
+            _LBL["intrinsic"] = "amset_" + "+".join(_im)
         for _k in ("ADP_POP", "ADP_POP_ODP"):
             _LBL[_k] = _intr_legend(_k, _set_meta, _LBL[_k])
         _have = {r["dataset"] for r in rows}                       # [0035] 动态加 ODP/IVS：长表里有才画
@@ -2522,6 +2645,60 @@ def write_transport_plots(cwd, out, is_2d):
         fig.tight_layout(rect=[0, 0.03, 1, 0.985])
         fig.savefig(plots / ("%s_transport.png" % M), dpi=130); plt.close(fig)
         print("[plots] %s_transport.png / _transport_data_<T>K.csv x%d" % (M, len(temps)))
+
+        # ---- [0039] 每个数据集单独一张 σ/S/PF/κe（随浓度，每温度一条线）：datasets/<M>_<数据集>.png + .csv ----
+        #   主图把 overall / intrinsic / ADP only / BT2 挤在一张 9x5 里，intrinsic（去 IMP）等子集没有单独的图。
+        try:
+            _ddir = plots / "datasets"
+            _ddir.mkdir(exist_ok=True)
+            for _old in _ddir.glob("%s_*" % M):                 # 清旧产物（数据集可能变了）
+                _old.unlink()
+            _dq = [("sigma_S/m", "sigma  (S/m)"), ("S_uV/K", "S  (uV/K)"),
+                   ("PF_W/mK2", "PF  (W/m/K$^2$)"), ("kappa_e_W/mK", "kappa_e  (W/m/K)")]
+            _cm = plt.get_cmap("viridis")
+            _dcols = ["T_K", "type", "n_cell_cm-3", "n_2D_cm-2", "carriers_per_atom", "in_interpret_range",
+                      "sigma_S/m", "S_uV/K", "PF_W/mK2", "kappa_e_W/mK", "mu_cm2/Vs", "flag"]
+            for ds, _c, _ls, _mk in dsets:
+                dd_all = [r for r in rows if r["dataset"] == ds]
+                if not dd_all:
+                    continue
+                _f, _axs = plt.subplots(1, len(_dq), figsize=(4.2 * len(_dq), 3.6), squeeze=False)
+                for jc, (col, ttl) in enumerate(_dq):
+                    a = _axs[0][jc]
+                    for it, T in enumerate(temps):
+                        dd = [r for r in dd_all if abs(float(r["T_K"]) - T) < 1e-6]
+                        n = np.array([fnum(r["n_cell_cm-3"]) for r in dd])
+                        y = np.array([fnum(r[col]) for r in dd])
+                        keep = np.abs(n) >= NFLOOR
+                        seg(a, n[keep], y[keep], color=_cm(it / max(1, len(temps) - 1)), lw=1.2,
+                            marker="o", ms=2.6, label=("%d K" % T))
+                    a.set_title(ttl, fontsize=10)
+                    a.set_xlim(-4.15, 4.15); a.set_xticks([-4, -3, -2, -1, 0, 1, 2, 3, 4])
+                    a.set_xticklabels(["1e21", "1e20", "1e19", "1e18", "1e17",
+                                       "1e18", "1e19", "1e20", "1e21"], fontsize=6.5)
+                    a.axvline(0, color="0.55", lw=0.6, ls=":")
+                    a.grid(alpha=0.25, lw=0.4)
+                    a.set_xlabel(r"$n$ (cm$^{-3}$)   n-type | p-type", fontsize=8)
+                    if col == "S_uV/K":
+                        a.set_ylim(-1000, 1000); a.axhline(0, color="k", lw=0.5)
+                    else:
+                        a.set_yscale("log")
+                _hh = [Line2D([], [], color=_cm(it / max(1, len(temps) - 1)), lw=1.4, label="%d K" % T)
+                       for it, T in enumerate(temps)]
+                _f.legend(handles=_hh, loc="lower center", ncol=min(9, len(_hh)), fontsize=8, frameon=False)
+                _f.suptitle("%s  %s" % (M, _LBL.get(ds, ds)), fontsize=11)
+                _f.tight_layout(rect=[0, 0.08, 1, 0.93])
+                _fn = _ds_file(ds, _set_meta)       # [0040] 文件名 = 实际机制组合（如 ADP+POP+ODP）
+                _f.savefig(_ddir / ("%s_%s.png" % (M, _fn)), dpi=130); plt.close(_f)
+                with open(_ddir / ("%s_%s.csv" % (M, _fn)), "w", newline="") as fh:
+                    w = csv.writer(fh)
+                    w.writerow(["# dataset=%s  label=%s" % (ds, _LBL.get(ds, ds))])
+                    w.writerow(_dcols)
+                    for r in dd_all:
+                        w.writerow([r.get(c, "") for c in _dcols])
+                print("[plots] datasets/%s_%s.png" % (M, _fn))
+        except Exception as _e:                                   # noqa: BLE001
+            print("[WARN] 分数据集图失败（%s: %s）" % (type(_e).__name__, _e))
 
     # ---- ③ 参数表（每温度一张，文献格式）----
     vp = out / MU_T_CSV
@@ -2635,6 +2812,10 @@ def write_transport_plots(cwd, out, is_2d):
     except Exception as _e:
         print("[WARN] amset 浓度扫描图失败（%s: %s）" % (type(_e).__name__, _e))
 
+    try:                                                          # [0040] 本征载流子（未掺杂）单独出图
+        write_undoped_plots(cwd, plots, M, is_2d)
+    except Exception as _e:                                       # noqa: BLE001
+        print("[WARN] 本征载流子图失败（%s: %s）" % (type(_e).__name__, _e))
     return True
 
 
