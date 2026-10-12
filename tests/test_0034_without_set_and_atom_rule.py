@@ -93,7 +93,7 @@ def test_s83_suite_picks_up_overall_without(tmp_path):
     assert [d[0] for d in data["set_defs"]] == ["ADP_only", "ADP_POP", "ADP_POP_ODP", "intrinsic", "overall", "overall_noODP"]
     r = T32._pick(rows, 300.0, "overall_noODP", "n", T32.N2D[0])
     assert r["mu_cm2/Vs"] == pytest.approx(150.0, rel=1e-6)
-    assert S._intr_legend("overall_noODP", data, "x") == "overall w/o ODP (ADP+POP+IMP+IVS)"
+    assert S._intr_legend("overall_noODP", data, "x") == "amset_ADP+POP+IMP+IVS"
     L = S._intr_summary(tmp_path, rows, geom, data, ["a.png"])
     assert any("mu_noODP" in ln for ln in L) and any(ln.startswith("# overall_noODP overall_noODP.json") for ln in L)
     assert "w/o ODP: same mesh with ODP removed" in S._intr_caption(geom, data)

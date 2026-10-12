@@ -288,14 +288,15 @@ step8.x 的 `_SKILL_REV` 写进 comparison_summary.txt。改脚本即提交 GitH
 
 ## [0040] 本征载流子点（UNDOPED_POINT）与"intrinsic"命名
 
-- **两个"本征"要分开**：输出里旧称 "intrinsic" 的是**去 IMP 的散射机制子集**（声子限制），对外图例/文件名改称
-  **no-IMP**（`datasets/<M>_noIMP.png`）；**本征载流子**指未掺杂、E_F 由 n = p 决定的状态，单独出
-  `transport_plots/intrinsic_carrier/<M>_intrinsic_carrier.png/.csv`（σ、S、PF、κe 随温度；2D 的 σ、κe、PF 按层厚 t 归一）。
-  S8.3 内部表 `step8.3_output/intrinsic/` 与 `intrinsic_*.json` 文件名不变（兼容）。
+- **命名**：S8.3 的图例与 `datasets/` 文件名一律用**实际散射机制组合** `amset_<机制+机制>`（如 `amset_ADP+POP+ODP`、
+  `datasets/<M>_ADP+POP+ODP.png`），不再用 "intrinsic / no IMP / overall" 这类代称；"intrinsic" 只指**本征载流子**
+  （未掺杂、E_F 由 n = p 决定），单独出 `transport_plots/intrinsic_carrier/<M>_intrinsic_carrier.png/.csv`
+  （σ、S、PF、κe 随温度；2D 的 σ、κe、PF 按层厚 t 归一）。S8.3 内部表 `step8.3_output/intrinsic/` 与 `intrinsic_*.json`
+  文件名不变（兼容）。
 - **掺杂网格**：S8 / S8.4 出厂在 DOPING 后加一个 0（`UNDOPED_POINT = true`）。1e11–1e14 cm⁻²（2D）/ 1e17–1e21 cm⁻³（3D）
   是人为扫描范围，不是本征浓度；本征浓度 n_i = √(N_c N_v)·exp(−E_g/2k_BT) 因材料、温度而异（MoS₂ 300 K 约 1e-2 cm⁻²）。
 - **AMSET doping = 0 的坑**：AmsetData 对 0 掺杂走 `get_fermi_from_num_electrons`（按总电子数相对误差贪心搜索）。
   有带隙时本征载流子每胞远少于容差，整个带隙"误差都为 0"，E_F 落在带隙内任意格点（合成抛物带 1.8 eV、300 K 实测偏 0.12 eV，
   σ、S 差约 2 个数量级）；electron_conc / hole_conc 也不填（迁移率除以 0）。`amset_fermi_fix.py` 在 DOS 有带隙时改解
   ln n = ln p（log-sum-exp，不相消不下溢），与解析式 E_F = E_mid + (k_BT/2)·ln(N_v/N_c) 一致到 1e-6 Ha，并填好 n、p；
-  无带隙（金属）照旧走原搜索。本征点 |n − p| ≈ 0，IMP 不起作用（overall ≈ no-IMP）；μ 不画（AMSET 按 doping 符号取单一载流子）。
+  无带隙（金属）照旧走原搜索。本征点 |n − p| ≈ 0，IMP 不起作用（全机制 ≈ 去掉 IMP 的那套）；μ 不画（AMSET 按 doping 符号取单一载流子）。

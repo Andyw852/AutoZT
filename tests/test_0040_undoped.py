@@ -143,3 +143,20 @@ def test_intrinsic_fermi_matches_parabolic_bands():
     # 金属（无带隙）：照旧走原搜索
     metal = FermiDos(0.0, E, {Spin.up: np.full_like(E, 1.0)}, st, atomic_units=True)
     assert F.band_gap_edges(metal) is None
+
+
+def test_dataset_files_named_by_mechanisms(tmp_path):
+    """[0040] datasets/ 文件名 = 实际机制组合；本征载流子图的图例也用 amset_<机制>。"""
+    pytest.importorskip("matplotlib")
+    S = _s83()
+    cwd = T32._material(tmp_path, doping0=True)
+    out = cwd / "step8.3_output"
+    out.mkdir()
+    S.write_intrinsic_suite(out, cwd, True)
+    S.write_transport_plots(cwd, out, True)
+    ddir = cwd.parent / "transport_plots" / "datasets"
+    names = sorted(p.name for p in ddir.glob("*.png"))
+    assert "MoS2_ADP+POP.png" in names                       # 去 IMP 那套（S8.4 记的 intrinsic_labels）
+    assert "MoS2_ADP.png" in names                           # 只 ADP
+    assert "MoS2_ADP+IMP+POP.png" in names                   # 全机制（transport.json 的 mobility 键）
+    assert not any("intrinsic" in n or "noIMP" in n for n in names)

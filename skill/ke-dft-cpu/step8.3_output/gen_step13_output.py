@@ -37,7 +37,7 @@ from pathlib import Path
 # [SKILL_REV] 版本戳：写进 comparison_summary.txt。每次改本脚本逻辑后更新。
 #   陈旧副本已咬人三次（step12/step9b 盖戳后，step13 是最后一个没盖的），
 #   这里盖戳便于从产物反查到底跑的是哪份 skill 副本。
-_SKILL_REV = "2026-10-13-0040"   # [0040] transport_plots/intrinsic_carrier/（未掺杂本征载流子 σ/S/PF/κe vs T）；"intrinsic" 子集对外改称 no-IMP；2026-10-13-0039"   # [0039] transport_plots/datasets/：每个数据集单独一张 σ/S/PF/κe 图 + csv； [0038] 本征/子集图读 subset_*.json（SUBSETS）；[0036] transport_plots 加 bt2_muscan/ + amset_scan/ 两个扫描图子文件夹；[0035] transport_plots 合并 + τ 对比（tau/）
+_SKILL_REV = "2026-10-13-0040"   # [0040] transport_plots/intrinsic_carrier/（未掺杂本征载流子 σ/S/PF/κe vs T）；图例/文件名一律用实际机制组合 amset_<机制>；2026-10-13-0039   # [0039] transport_plots/datasets/：每个数据集单独一张 σ/S/PF/κe 图 + csv； [0038] 本征/子集图读 subset_*.json（SUBSETS）；[0036] transport_plots 加 bt2_muscan/ + amset_scan/ 两个扫描图子文件夹；[0035] transport_plots 合并 + τ 对比（tau/）
 #   bump 记录：2026-10-11-0035 —— transport_plots 合并：intrinsic 图并入 transport 图（4 条数据集
 #   overall / intrinsic / ADP only / BT2xDPT-tau），不再单独出 <M>_intrinsic*.{png,csv}，
 #   只留 <M>_transport.png + 每温度 CSV + <M>_params_<T>K.csv。
@@ -1397,7 +1397,7 @@ INTR_SETS = (   # (键, 文件, 图例, 线型, 颜色, 标记)
     ("ADP_only", "intrinsic_ADP.json", "ADP only (acoustic limit)", ":", "C2", "^"),
     ("ADP_POP", "intrinsic_ADP_POP.json", "ADP+POP", "-", "C1", "v"),
     ("ADP_POP_ODP", "intrinsic_ADP_POP_ODP.json", "ADP+POP+ODP", "-", "C6", "P"),
-    ("intrinsic", "intrinsic_transport.json", "no IMP", "-", "C0", "o"),
+    ("intrinsic", "intrinsic_transport.json", "amset (all but IMP)", "-", "C0", "o"),
     ("overall", "transport.json", "overall", "-.", "C3", "s"),
 )
 # [0034] S8.4 的 OVERALL_WITHOUT 那一套（overall_no*.json，出厂 overall_noODP.json）：有就自动加进图、表、汇总。
@@ -1413,7 +1413,7 @@ def _overall_without_files(run_dir):
 
 # [0038] subset_*.json（SUBSETS 生成）的键分类：按 dropped 集合；全机制（dropped 空）= overall（跳过，transport.json 已覆盖）。
 _SUBSET_STYLE = {
-    "intrinsic": ("no IMP", "-", "C0", "o"),
+    "intrinsic": ("amset (all but IMP)", "-", "C0", "o"),
     "ADP_only": ("ADP only (acoustic limit)", ":", "C2", "^"),
     "ADP_POP": ("ADP+POP", "-", "C1", "v"),
     "ADP_POP_ODP": ("ADP+POP+ODP", "-", "C6", "P"),
@@ -1766,22 +1766,17 @@ def write_intrinsic_table(out_dir, rows, geom, data):
                             ("%.6g" % r[c] if isinstance(r[c], float) else r[c])) for c in INTR_COLS})
 
 
-def _intr_legend(key, data, default):
-    """图例用实际机制（SCATTERING 可被 step.conf 改；非极性材料没有 POP）。"""
-    if key in ("ADP_POP", "ADP_POP_ODP"):
-        lab = (data.get("sets") or {}).get(key, {}).get("labels")
-        return "amset_" + "+".join(lab) if lab else default
-    if key == "intrinsic":
-        lab = (data["sets"].get("intrinsic") or {}).get("labels")
-        return ("no-IMP %s" % "+".join(lab)) if lab else default
+def _intr_mechs(key, data):
+    """数据集实际包含的散射机制（列表）；不知道 -> None。"""
     if key == "overall":
-        lab = data.get("overall_labels")
-        return ("overall %s" % "+".join(lab)) if lab else default
-    st = data["sets"].get(key) or {}
-    if key.startswith("overall_no") and st.get("labels"):            # [0034]
-        return "overall w/o %s (%s)" % ("+".join(st.get("dropped") or []) or key[len("overall_no"):],
-                                        "+".join(st["labels"]))
-    return default
+        return data.get("overall_labels") or None
+    return ((data.get("sets") or {}).get(key) or {}).get("labels") or None
+
+
+def _intr_legend(key, data, default):
+    """[0040] 图例 = 实际散射机制组合 amset_<机制+机制>（SCATTERING 可被 step.conf 改；非极性材料没有 POP）。"""
+    lab = _intr_mechs(key, data)
+    return "amset_" + "+".join(lab) if lab else default
 
 
 def _intr_caption(geom, data):
@@ -1793,7 +1788,7 @@ def _intr_caption(geom, data):
             "so n_lit = n_cell x c/t (c/t = %.3f).\n"
             "sigma, kappa_e normalized by layer thickness t (cell value x c/t); mobility, S, Lorenz do not depend on it.  "
             "Shaded: %s (beyond rigid-band range).\n"
-            "ADP only: acoustic deformation potential only (upper limit)%s.  no-IMP: %s, ionized impurities removed.  "
+            "ADP only: acoustic deformation potential only (upper limit)%s.  amset_%s: all mechanisms except ionized impurities.  "
             "overall: all mechanisms incl. IMP%s.  BT2: BoltzTraP2 CRTA with DPT tau (S, Lorenz tau-free); "
             "BT2 mobility = sigma_total/(e|n_net|), masked where bipolar.  DPT: Bardeen-Shockley (single or multi-valley)."
             % (geom["t_A"], geom["t_method"], geom["c_A"], geom["c_over_t"], _interp_rule(geom)[0], part, lab,
@@ -2385,7 +2380,12 @@ def make_figure(out, am, bt, dpt, am2=None, geom=None):
 
 
 
-_DS_FILE = {"intrinsic": "noIMP"}     # [0040] datasets/ 文件名：去 IMP 子集叫 noIMP，"intrinsic" 留给本征载流子
+def _ds_file(ds, data):
+    """[0040] datasets/ 的文件名后缀 = 实际机制组合（如 ADP+POP+ODP）；不知道机制时用数据集键。"""
+    lab = _intr_mechs(ds, data or {})
+    return "+".join(lab) if lab else ds
+
+
 UNDOPED_DIR = "intrinsic_carrier"     # [0040] transport_plots/ 下本征载流子（doping = 0）图的子目录
 
 
@@ -2458,10 +2458,14 @@ def write_undoped_plots(cwd, plots, M, is_2d):
         print("[..] 本征载流子图跳过：%s" % why)
         return False
     udir.mkdir(parents=True, exist_ok=True)
-    names = {"overall": "overall (all mechanisms)", "intrinsic": "no IMP", "ADP_only": "ADP only"}
-    data = load_intrinsic_sets(cwd) if is_2d else None
+    names = {"overall": "amset (all mechanisms)", "intrinsic": "amset (all but IMP)", "ADP_only": "amset_ADP"}
+    if is_2d:
+        data = load_intrinsic_sets(cwd)
+    else:
+        _j = _load_json(Path(cwd) / AMSET_DIR / "transport.json") or {}
+        data = {"overall_labels": [k for k in (_j.get("mobility") or {}) if str(k).lower() != "overall"]}
     if data:
-        for k, *_ in data.get("set_defs", []):
+        for k in list(names) + [d[0] for d in data.get("set_defs", [])]:
             names[k] = _intr_legend(k, data, names.get(k, k))
     keys = list(dict.fromkeys(r["dataset"] for r in rows))
     panels = [("sigma_S/m", "sigma (S/m)" + (", per layer t" if is_2d else ""), True),
@@ -2492,7 +2496,7 @@ def write_undoped_plots(cwd, plots, M, is_2d):
     plt.close(fig)
     cols = ["T_K", "dataset", "sigma_S/m", "S_uV/K", "PF_W/mK2", "kappa_e_W/mK"]
     with open(udir / ("%s_intrinsic_carrier.csv" % M), "w", newline="") as fh:
-        fh.write("# [0040] 本征载流子（AMSET doping = 0，E_F 由 n = p 定）；%s；|n-p|≈0 时 IMP 不起作用，overall ≈ no IMP\n"
+        fh.write("# [0040] 本征载流子（AMSET doping = 0，E_F 由 n = p 定）；%s；|n-p|≈0 时 IMP 不起作用，全机制 ≈ 去掉 IMP 的那套\n"
                  % ("2D：sigma、kappa_e、PF 按层厚 t 归一（元胞值 × c/t）" if is_2d else "3D：张量对角平均"))
         w = csv.writer(fh)
         w.writerow(cols)
@@ -2598,7 +2602,7 @@ def write_transport_plots(cwd, out, is_2d):
         dsets = [("overall", "tab:red", "--", "s"), ("intrinsic", "tab:orange", "-.", "D"),
                  ("ADP_only", "tab:green", ":", "^"), ("BT2_DPTtau", "tab:blue", "-", "o")]
         _LBL = {"overall": "AMSET overall",
-                "intrinsic": "AMSET no IMP",
+                "intrinsic": "amset (all but IMP)",
                 "ADP_only": "amset_ADP",
                 "ADP_POP": "amset_ADP+POP",
                 "ADP_POP_ODP": "amset_ADP+POP+ODP",
@@ -2606,11 +2610,11 @@ def write_transport_plots(cwd, out, is_2d):
                 "BT2_DPTtau": "BT2_DPTtau"}
         _set_meta = load_intrinsic_sets(cwd) or {}
         _all_mechs = _set_meta.get("overall_labels") or []
-        _intr_mechs = ((_set_meta.get("sets") or {}).get("intrinsic") or {}).get("labels") or []
+        _im = ((_set_meta.get("sets") or {}).get("intrinsic") or {}).get("labels") or []
         if _all_mechs:
             _LBL["overall"] = "amset_" + "+".join(_all_mechs)
-        if _intr_mechs:
-            _LBL["intrinsic"] = "amset_%s (no IMP)" % "+".join(_intr_mechs)
+        if _im:
+            _LBL["intrinsic"] = "amset_" + "+".join(_im)
         for _k in ("ADP_POP", "ADP_POP_ODP"):
             _LBL[_k] = _intr_legend(_k, _set_meta, _LBL[_k])
         _have = {r["dataset"] for r in rows}                       # [0035] 动态加 ODP/IVS：长表里有才画
@@ -2684,7 +2688,7 @@ def write_transport_plots(cwd, out, is_2d):
                 _f.legend(handles=_hh, loc="lower center", ncol=min(9, len(_hh)), fontsize=8, frameon=False)
                 _f.suptitle("%s  %s" % (M, _LBL.get(ds, ds)), fontsize=11)
                 _f.tight_layout(rect=[0, 0.08, 1, 0.93])
-                _fn = _DS_FILE.get(ds, ds)          # [0040] 文件名不用 "intrinsic"（易与本征载流子浓度混淆）
+                _fn = _ds_file(ds, _set_meta)       # [0040] 文件名 = 实际机制组合（如 ADP+POP+ODP）
                 _f.savefig(_ddir / ("%s_%s.png" % (M, _fn)), dpi=130); plt.close(_f)
                 with open(_ddir / ("%s_%s.csv" % (M, _fn)), "w", newline="") as fh:
                     w = csv.writer(fh)
