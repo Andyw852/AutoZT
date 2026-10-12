@@ -211,7 +211,13 @@ kz>=3 的网格收敛测试完成前，仍建议用同 c（20 Å）的跨体系�
      S8.21 在 S8.2 各谷的 k 点取真空对齐的带边能量算 D = dE/du（位移 Δ_κ = u·√(M/m_κ)·e_κ，与常数形变势模型的
      |g|² = ħD²/(2NMω) 同一归一化），S8.4 自动用上。只有零阶（q 无关）谷内耦合；谷间 IVS 仍要文献参数。
      细节见 `step8.4_amset2d/README.md`「冻声子 ODP 参数」。
-     3D（S8）仍缺。
+     **[0036] 3D（S8）也可选补上**：同一常数形变势模型（公式本来与维数无关：|M|² 的 1/V 与末态求和的 V 抵消，
+     G 取每原胞态密度；三维即 Conwell 的非极性光学声子率），插件 `step8_amset/amset_dpo3d.py` 把 ODP/IVS 注册进
+     原版三维 AMSET，谷归属用完整三维距离（27 个周期像）。材料 step.conf 写 `DP_OPTICAL_E/H` +
+     **必须手填** `DP_OPTICAL_VALLEYS_E/H`（三维没有 S8.2 多谷谷表，k 点写 3 个分量），如 Si 空穴
+     `DP_OPTICAL_H = G>G:6.0@63`、`DP_OPTICAL_VALLEYS_H = G:0,0,0`；`ADP_INTRAVALLEY` 规则同 2D。
+     transport.json 多出 ODP/IVS 单机制迁移率，S8.3 自动带上。冻声子自动参数（S7.2/S8.21）仍只有 2D。
+     自检 `step8_amset/test_dpo3d.py`（纯 numpy：2D 口径逐字节不变、3D 抛物带对 Conwell 解析式）。
      与文献对照（T4）必须**分机制**做：POP 对 Sohier 2016 的 LO 模散射时间；ADP 需要一个
      **有出处**的 LA 声子限制迁移率目标值（"340 cm2/Vs"这个数找不到出处，已撤回）。
    - **3D 非极性半导体（Si、Ge、金刚石这类）**：**空穴迁移率高估约 4~5 倍，电子几乎不受影响。**

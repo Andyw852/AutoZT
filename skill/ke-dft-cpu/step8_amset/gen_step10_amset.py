@@ -17,7 +17,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 # [SKILL_REV] 版本戳：写进 settings.yaml 头，便于从结果反查跑的是哪份 skill 副本。
-_SKILL_REV = "2026-10-08-2d-raw-elastic"   # [0014] 2D 弹性用原始 slab 值（不乘 c/t）；V115 相位补丁
+_SKILL_REV = "2026-10-12-0036-odp3d"   # [0036] 三维 ODP/IVS（DP_OPTICAL_*，插件 amset_dpo3d.py）   # [0014] 2D 弹性用原始 slab 值（不乘 c/t）；V115 相位补丁
 import stepconf  # noqa: E402
 try:
     import ke_common as kc
@@ -122,7 +122,27 @@ SCATTERING  = ["ADP", "IMP", "POP"]   # 形变势声学 + 电离杂质 + 极性�
 #   逗号/空格分隔，如 SCATTERING = ADP,IMP 用于「只算弹性和电离杂质」的**快速收敛测试**
 #   （用户 D6：耗时的是 POP 这类非弹性散射，收敛测试可以先不算它）；
 #   空串 = 出厂 [ADP, IMP, POP] 行为不变；含不认识机制则整项忽略并告警。
-_ALLOWED_SCATTERING = {"ADP", "IMP", "POP", "PIE"}
+_ALLOWED_SCATTERING = {"ADP", "IMP", "POP", "PIE", "ODP", "IVS"}
+# [0036] 三维光学形变势（ODP，谷内）与谷间散射（IVS）：与 S8.4（2D，[0033]）同一常数形变势模型，
+#   率由 dp_optical.py（住在 step8.4_amset2d/）解析给出，运行期插件 amset_dpo3d.py 注册进原版 AMSET。
+#   公式 1/τ = πD²/(Mω)·[N·G(x+ħω) + (N+1)·G(x−ħω)] 与维数无关；三维只是谷几何用完整 3D 距离。
+#   材料 step.conf 写（D 单位 eV/Å = 1e8 eV/cm，ħω 单位 meV；谷中心是 S3 晶胞分数坐标，三维必须 3 个分量）：
+#     DP_OPTICAL_H          = G>G:6.0@63                      # 例：Si 空穴谷内 ODP（d0 ≈ 6 eV/Å = 6e8 eV/cm）
+#     DP_OPTICAL_VALLEYS_H  = G:0,0,0
+#     DP_OPTICAL_E          = X>X':...@...; ...               # 谷间（g/f 型）按文献每支写一条
+#     DP_OPTICAL_VALLEYS_E  = X:0.425,0,0.425|...             # 3D 没有 S8.2 多谷谷表，必须手填
+#     ADP_INTRAVALLEY       = auto                            # auto（开了 IVS 的载流子 ADP 只留谷内）/ on / off
+#   三维的谷表只能手填（S8.2 的 multi_valley 只实现 2D）；冻声子 ODP 参数（S7.2/S8.21）目前也只有 2D。
+#   2D 材料的 S8 是三维核对照，不接 ODP/IVS（DP_OPTICAL_* 只给 S8.4；共用的材料 step.conf 里写了也忽略）。
+DP_OPTICAL_E = ""
+DP_OPTICAL_H = ""
+DP_OPTICAL_VALLEYS_E = ""
+DP_OPTICAL_VALLEYS_H = ""
+ADP_INTRAVALLEY = "auto"
+DPO3D_RECORD = "dp_optical_3d.json"
+DPO3D_PLUGIN = "amset_dpo3d.py"
+DPO_MODULE = "dp_optical.py"
+_SCATTERING_EXPLICIT = False      # step.conf 显式写了 SCATTERING：照它来，不自动补 ODP/IVS
 MANUAL_BANDGAP = None                 # None=自动读；或写数值(eV) 覆盖 scissor
 # ★ patch_bandgap_override（2026-09-28）：scissor 带隙的 **step.conf 覆盖通道**。
 #   此前只有上面这个脚本常量（要改 gen 源码），默认读 HSE06 的 band_summary.json。
@@ -297,6 +317,12 @@ SPEC = {
     # patch_interp_factor（2026-09-28）：3D 的 factor 覆盖通道。None = 用出厂值。
     "INTERPOLATION_FACTOR": (None, "int"),
     "SCATTERING": ("", "str"),
+    # [0036] 三维 ODP / IVS（见顶部 DP_OPTICAL_* 说明；与 S8.4 同名同义）
+    "DP_OPTICAL_E": ("", "str"),
+    "DP_OPTICAL_H": ("", "str"),
+    "DP_OPTICAL_VALLEYS_E": ("", "str"),
+    "DP_OPTICAL_VALLEYS_H": ("", "str"),
+    "ADP_INTRAVALLEY": ("auto", "str"),
     # patch_mem_guard：内存粗估阈值（GiB）与自动独占开关。
     "MEM_WARN_GIB": (MEM_WARN_GIB, "int"),
     "MEM_LIMIT_GIB": (None, "int"),
@@ -1553,6 +1579,144 @@ def _alloc_cores(cwd: Path):
 PREFLIGHT_SRC_NAME = "overlap_preflight.py"
 
 
+def _import_dp_optical():
+    """dp_optical.py 住在 step8.4_amset2d/（S8/S8.4 共用）；gen_need 会把它推到 gen 目录。"""
+    here = Path(__file__).resolve().parent
+    for d in (here, Path.cwd(), here.parent / "step8.4_amset2d"):
+        if (d / DPO_MODULE).is_file():
+            if str(d) not in sys.path:
+                sys.path.insert(0, str(d))
+            break
+    try:
+        import dp_optical
+    except ImportError:
+        sys.exit("[ERROR] 写了 DP_OPTICAL_*（或 SCATTERING 含 ODP/IVS），但找不到 %s（gen_need 里要有它）" % DPO_MODULE)
+    return dp_optical
+
+
+def resolve_dp_optical_3d(is_2d):
+    """[0036] step.conf 的 DP_OPTICAL_* -> dp_optical_3d.json 的记录（None = 不开），并把 ODP/IVS 补进 SCATTERING。
+    与 S8.4 的 resolve_dp_optical 同一套规则（手填通道表 + 手填谷表；显式 SCATTERING 照办；ADP 谷内掩码 auto/on/off），
+    区别：三维没有 S8.2 谷表与冻声子参数，谷表必须手填、且每个 k 点 3 个分量；谷几何用完整 3D 距离。
+    格式错、谷表缺、通道指向谷表里没有的谷 -> sys.exit 说清楚（不静默）。"""
+    global SCATTERING
+    asked = [m for m in ("ODP", "IVS") if m in SCATTERING]
+    has_spec = any(str(x or "").strip() for x in (DP_OPTICAL_E, DP_OPTICAL_H))
+    if is_2d:
+        if has_spec or asked:
+            print("[..] 2D 材料：S8 是三维核对照，不接 ODP/IVS（DP_OPTICAL_* 由 S8.4 用）")
+        SCATTERING = [m for m in SCATTERING if m not in ("ODP", "IVS")]
+        return None
+    if not has_spec:
+        if asked:
+            sys.exit("[ERROR] SCATTERING 含 %s，但 step.conf 没写 DP_OPTICAL_E/H 通道表" % ",".join(asked))
+        return None
+    dpo = _import_dp_optical()
+    specs = {"electron": (DP_OPTICAL_E, DP_OPTICAL_VALLEYS_E, "DP_OPTICAL_E", "DP_OPTICAL_VALLEYS_E"),
+             "hole": (DP_OPTICAL_H, DP_OPTICAL_VALLEYS_H, "DP_OPTICAL_H", "DP_OPTICAL_VALLEYS_H")}
+    rec, kinds_on = {}, set()
+    for car, (ch_spec, v_spec, ch_key, v_key) in specs.items():
+        try:
+            chs = dpo.parse_channels(ch_spec)
+        except ValueError as e:
+            sys.exit("[ERROR] %s：%s" % (ch_key, e))
+        if not chs:
+            continue
+        if not str(v_spec or "").strip():
+            sys.exit("[ERROR] %s 写了通道，但没有谷表：三维没有 S8.2 多谷谷表，请在 step.conf 手填 %s\n"
+                     "        写法：标签:kx,ky,kz|kx,ky,kz; ...（S3 晶胞分数坐标，每个等价谷一个中心），"
+                     "如 Si 空穴 G:0,0,0；Si 电子 X:0.425,0,0.425|... 六个 Δ 谷" % (ch_key, v_key))
+        try:
+            vs = dpo.parse_valleys(v_spec, full3d=True)
+            vs, alias = dpo.merge_coincident(vs, full3d=True)
+        except ValueError as e:
+            sys.exit("[ERROR] %s：%s" % (v_key, e))
+        if alias:
+            sys.exit("[ERROR] %s 里 %s 与 %s 的谷中心相同：同一个谷只写一次"
+                     % (v_key, ",".join(alias), ",".join(sorted(set(alias.values())))))
+        try:
+            dpo.check_channels(chs, vs)
+        except ValueError as e:
+            sys.exit("[ERROR] %s（谷表来自 %s）：%s" % (ch_key, v_key, e))
+        rec[car] = {"channels": chs, "valleys": vs, "valleys_source": "step.conf %s" % v_key}
+        kinds_on |= {c["kind"] for c in chs}
+    kinds_of = {"ODP": {"intra"}, "IVS": {"inter_star", "inter"}}
+    want = [m for m in ("ODP", "IVS") if kinds_on & kinds_of[m]]
+    missing = [m for m in asked if m not in want]
+    if missing:
+        sys.exit("[ERROR] SCATTERING 含 %s，但没有对应通道（ODP 要 X>X，IVS 要 X>X' 或 X>Y）" % ",".join(missing))
+    if not rec:
+        return None
+    mode = str(ADP_INTRAVALLEY or "auto").strip().lower()
+    if mode not in ("auto", "on", "off"):
+        sys.exit("[ERROR] ADP_INTRAVALLEY=%r 无效，只允许 auto / on / off" % ADP_INTRAVALLEY)
+    if _SCATTERING_EXPLICIT:      # 显式 SCATTERING（如严格对照只开 ADP）：照它来，不补
+        skip = [m for m in want if m not in SCATTERING]
+        if skip:
+            print("[WARN] step.conf 显式写了 SCATTERING = %s，不含 %s —— 对应的通道本次不生效"
+                  % (",".join(SCATTERING), ",".join(skip)))
+        want = [m for m in want if m in SCATTERING]
+    active = set().union(*[kinds_of[m] for m in want]) if want else set()
+    for car in list(rec):
+        rec[car]["channels"] = [c for c in rec[car]["channels"] if c["kind"] in active]
+        if not rec[car]["channels"] and mode != "on":
+            rec.pop(car)
+    if not rec:
+        return None
+    for m in want:
+        if m not in SCATTERING:
+            SCATTERING = list(SCATTERING) + [m]
+    flags = {}
+    for car in ("electron", "hole"):
+        has_iv = any(c["kind"] != "intra" for c in (rec.get(car) or {}).get("channels") or [])
+        flags[car] = bool(car in rec and (mode == "on" or (mode == "auto" and has_iv)))
+    if any(flags.values()) and "ADP" not in SCATTERING:
+        print("[..] ADP_INTRAVALLEY：SCATTERING 不含 ADP，掩码不起作用")
+    rec["adp_intravalley"] = flags
+    rec["adp_intravalley_mode"] = mode
+    rec["geometry"] = "3d"
+    rec["model"] = ("常数形变势：1/τ_c(x) = π D_c²/(M ω_c)·[N·G_c(x+ħω) + (N+1)·G_c(x−ħω)]，"
+                    "G_c 为目标谷（星平均）每原胞每自旋态密度，M 为原胞质量；各向同性，动量弛豫率 = 散射率；"
+                    "谷归属按完整三维距离")
+    rec["reference"] = ("Conwell, High Field Transport in Semiconductors (1967); Jacoboni & Reggiani RMP 55, 645 (1983); "
+                        "Jin et al. PRB 90, 045422 (2014)")
+    if want:
+        print("[OK] ODP/IVS 开（3D）：%s；SCATTERING = %s" % (dpo.describe(rec), SCATTERING))
+    else:
+        print("[WARN] 不加 ODP/IVS（显式 SCATTERING = %s）；ADP_INTRAVALLEY=on：ADP 只留谷内" % ",".join(SCATTERING))
+    for car in ("electron", "hole"):
+        if car in rec:
+            print("[..]   %s 谷表来自 %s；ADP 谷内掩码 %s" % (car, rec[car]["valleys_source"],
+                                                   "开" if flags[car] else "关"))
+    return {"mechanisms": [m for m in want], "dp_optical": rec, "skill_rev": _SKILL_REV}
+
+
+def _install_dp_optical_3d(out, record):
+    """[0036] 有记录：写 dp_optical_3d.json、把 dp_optical.py + amset_dpo3d.py 复制进运行目录，返回 True。
+    没有记录：删掉旧运行目录里的残留（免得上一轮的 ODP/IVS 被静默带进这一轮），返回 False。"""
+    import json
+    import shutil
+    rec_f = Path(out) / DPO3D_RECORD
+    if record is None:
+        if rec_f.is_file():
+            rec_f.unlink()
+            print("[..] 删掉旧的 %s（本次不开 ODP/IVS）" % DPO3D_RECORD)
+        return False
+    here = Path(__file__).resolve().parent
+    for name in (DPO_MODULE, DPO3D_PLUGIN):
+        src = next((d / name for d in (here, Path.cwd(), here.parent / "step8.4_amset2d")
+                    if (d / name).is_file()), None)
+        if src is None:
+            sys.exit("[ERROR] 开了 ODP/IVS，但找不到 %s（gen_need 里要有它）" % name)
+        dst = Path(out) / name
+        if src.resolve() != dst.resolve():
+            shutil.copyfile(src, dst)
+    rec_f.write_text(json.dumps(record, ensure_ascii=False, indent=1), encoding="utf-8")
+    print("[OK] %s + %s 就位（作业里 import amset_dpo3d 注册 %s）"
+          % (DPO3D_RECORD, DPO3D_PLUGIN, ",".join(record["mechanisms"]) or "ADP 谷内掩码"))
+    return True
+
+
 def _install_preflight(out):
     """把 overlap_preflight.py 复制进运行目录（作业内 --in-job 要用）。"""
     here = Path(__file__).resolve().parent
@@ -1968,9 +2132,19 @@ def main():
                 if _bad:
                     print("[WARN] SCATTERING 含不认识的机制 %s（允许 %s），本项忽略，保持出厂 %s"
                           % (_bad, sorted(_ALLOWED_SCATTERING), SCATTERING), file=sys.stderr)
-                elif _sc_list != SCATTERING:
-                    print("[OK] SCATTERING = %s（step.conf 覆盖，出厂 %s）" % (_sc_list, SCATTERING))
+                else:
+                    global _SCATTERING_EXPLICIT
+                    _SCATTERING_EXPLICIT = True
+                    if _sc_list != SCATTERING:
+                        print("[OK] SCATTERING = %s（step.conf 覆盖，出厂 %s）" % (_sc_list, SCATTERING))
                     SCATTERING = _sc_list
+            # [0036] 三维 ODP / IVS
+            global DP_OPTICAL_E, DP_OPTICAL_H, DP_OPTICAL_VALLEYS_E, DP_OPTICAL_VALLEYS_H, ADP_INTRAVALLEY
+            DP_OPTICAL_E = str(_p["DP_OPTICAL_E"] or "")
+            DP_OPTICAL_H = str(_p["DP_OPTICAL_H"] or "")
+            DP_OPTICAL_VALLEYS_E = str(_p["DP_OPTICAL_VALLEYS_E"] or "")
+            DP_OPTICAL_VALLEYS_H = str(_p["DP_OPTICAL_VALLEYS_H"] or "")
+            ADP_INTRAVALLEY = str(_p["ADP_INTRAVALLEY"] or "auto")
             # patch_eps_inf_override：手动覆盖 ε∞（标量或 3 个对角值）
             if _p["EPS_INF_OVERRIDE"]:
                 EPS_INF_OVERRIDE = _p["EPS_INF_OVERRIDE"]
@@ -2127,6 +2301,8 @@ def main():
     elif _HAS_KC:   # patch_elastic_guard（V134）：最终张量（重排/对称化/2D 处理之后）必须力学稳定
         kc.check_elastic_stability(elastic, is_2d=bool(is_2d), enabled=ELASTIC_GUARD,
                                    used="ADP" in SCATTERING, label="S8")
+    # [0036] 三维 ODP/IVS：解析通道表并把机制补进 SCATTERING（必须在 write_settings 之前）
+    _dpo3d = resolve_dp_optical_3d(bool(is_2d))
     # patch_mesh_min：按最终插值网格下限反算 INTERPOLATION_FACTOR（必须在 write_settings 之前）。
     _fm = apply_mesh_min(_vr, out)
     write_settings(out, eps_inf, eps_static, gap, elastic,
@@ -2138,6 +2314,7 @@ def main():
     _has_fix = _install_desym_fix(out)   # patch_desym_fix
     _has_ir = _install_ir_fix(out)       # patch_ir_fix
     _has_fermi = _install_fermi_fix(out)  # patch_fermi_fix（V132）
+    _has_dpo3d = _install_dp_optical_3d(out, _dpo3d)   # [0036]
     _preflight_gate(cwd, out, UNITY_OVERLAP_2D if is_2d else False)
 
     # tf 把 submit_amset.tpl 与本脚本一起推到 gen 运行目录，但按原名推、不会改成
@@ -2157,7 +2334,9 @@ def main():
     #   开关用环境变量传进作业（preflight 也读它），命令最前面 export/unset。
     _acmd = AMSET_CMD.replace("@AMSET_PLUGINS@", ("import amset_fermi_fix; " if _has_fermi else "")
                               + ("import amset_ir_fix; " if _has_ir else "")
-                              + ("import amset_desym_fix; " if _has_fix else ""))
+                              + ("import amset_desym_fix; " if _has_fix else "")
+                              # [0036] 放最后：它包装散射 worker（开 ADP 谷内掩码时），子进程按引用导入它
+                              + ("import amset_dpo3d; " if _has_dpo3d else ""))
     if _HAS_KC:
         _acmd = kc.ir_fix_cmd_prefix(_IR_FIX_ON) + kc.desym_fix_cmd_prefix(_DESYM_FIX_ON) + _acmd
     text = (text.replace("{{JOBNAME}}", jobname)

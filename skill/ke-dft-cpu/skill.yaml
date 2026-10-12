@@ -278,7 +278,8 @@ optional_steps:
         #   gen 复制进运行目录、python -c 入口里 import（AZ_DESYM_FIX 未设时不打补丁 = 原行为）。
         #   dim_common.py：ke_common 顶层 import 它；gen 现在把两者一起复制进运行目录给作业内 preflight 用。
         # amset_fermi_fix.py（V132）：求费米能级的稳健化插件（S8/S8.4 共用，住在 step8.4_amset2d/），python -c 里 import。
-        gen: gen_step10_amset.py, gen_need: [stepconf.py, step.conf, ke_common.py, dim_common.py, submit_amset.tpl, vdw_radii.py, discriminant_common.py, overlap_preflight.py, fermi_window_check.py, amset_desym_fix.py, amset_ir_fix.py, amset_fermi_fix.py], fetch_all: true,
+        # [0036] dp_optical.py（住在 step8.4_amset2d/）+ amset_dpo3d.py：三维 ODP/IVS（step.conf 写 DP_OPTICAL_E/H 才开）。
+        gen: gen_step10_amset.py, gen_need: [stepconf.py, step.conf, ke_common.py, dim_common.py, submit_amset.tpl, vdw_radii.py, discriminant_common.py, overlap_preflight.py, fermi_window_check.py, amset_desym_fix.py, amset_ir_fix.py, amset_fermi_fix.py, dp_optical.py, amset_dpo3d.py], fetch_all: true,
          needs: ["step4_wave", "step5_dielect", "step6_elastic", "step7b_deform_read", "step2_bandgap/step2.2_pbe_plot", "step2_bandgap/step2.3_hse_plot"]}
 
 # --- 8.2 DPT 形变势迁移率：给 8.1 提供分方向 τ，必须排在 8.1 前面 ---

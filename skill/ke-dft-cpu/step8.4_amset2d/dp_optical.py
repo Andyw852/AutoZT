@@ -26,6 +26,11 @@ step.conf 写法（D 的单位 eV/Å = 1e8 eV/cm；ħω 单位 meV）：
     DP_OPTICAL_H = K>K:...; K>Γ:...; Γ>K:...
 可选手填谷中心（不写就读 S8.2 的 dpt_result.json multi_valley 谷表）：
     DP_OPTICAL_VALLEYS_E = K:0.333333,0.333333,0|-0.333333,-0.333333,0; Q:...
+
+[0036] 三维（S8 原版 AMSET 的 3D 路径，插件 step8_amset/amset_dpo3d.py）：模型与公式不变 —— 上式本来就与维数无关
+（|M|² 里的 1/V 与对末态求和得到的 V 抵消，G 用每原胞态密度）。三维只改"谷"的几何：谷中心不限 kz = 0，
+k 点归属与"同一个谷"的判断用完整三维距离（27 个周期像），函数统一加 full3d=True。full3d=False（出厂）与以前逐字节相同。
+    DP_OPTICAL_VALLEYS_E = X:0.425,0,0.425|... ; L:0.5,0.5,0.5|...     # 3D 必须写 3 个分量（S3 晶胞分数坐标）
 """
 import math
 import re
@@ -91,8 +96,9 @@ def parse_channels(spec):
     return out
 
 
-def parse_valleys(spec):
-    """'K:0.3333,0.3333,0|-0.3333,-0.3333,0; Q:...' -> [{"label","g","k_frac"}]。"""
+def parse_valleys(spec, full3d=False):
+    """'K:0.3333,0.3333,0|-0.3333,-0.3333,0; Q:...' -> [{"label","g","k_frac"}]。
+    full3d=True（[0036] 三维）：每个 k 点必须写 3 个分量（2 个分量会被当成 kz=0，三维里多半是漏写）。"""
     out = []
     for item in [p.strip() for p in str(spec or "").replace("\n", ";").split(";")]:
         if not item:
@@ -103,6 +109,8 @@ def parse_valleys(spec):
         ks = []
         for kk in rest.split("|"):
             v = [float(x) for x in kk.replace(" ", "").split(",") if x != ""]
+            if len(v) == 2 and full3d:
+                raise ValueError("谷 %r 的 k 点 %r 只有 2 个分量：三维谷中心必须写 kx,ky,kz" % (item, kk))
             if len(v) == 2:
                 v.append(0.0)
             if len(v) != 3:
@@ -132,31 +140,33 @@ def valleys_from_dpt(dpt, carrier):
     return []
 
 
-def _same_k(a, b, tol=1e-4):
+def _same_k(a, b, tol=1e-4, full3d=False):
     d = np.asarray(a, float) - np.asarray(b, float)
     d = d - np.rint(d)
-    d[2:] = 0.0
+    if not full3d:
+        d[2:] = 0.0
     return bool(np.all(np.abs(d) < tol))
 
 
-def grid_key(k):
-    """网格点的比较键：面内分数坐标取 5 位、模 1（S8.2 的 k_grid 是网格上的精确点，按带/自旋不浮动）。"""
+def grid_key(k, full3d=False):
+    """网格点的比较键：面内分数坐标取 5 位、模 1（S8.2 的 k_grid 是网格上的精确点，按带/自旋不浮动）。
+    full3d=True：三个分量都参与。"""
     out = []
-    for x in list(k)[:2]:
+    for x in list(k)[:3 if full3d else 2]:
         y = round(round(float(x), 5) % 1.0, 5)
         out.append(0.0 if y >= 1.0 else y)
     return tuple(out)
 
 
-def _member_match(v, u):
+def _member_match(v, u, full3d=False):
     """v 的每个成员是否落在 u 的某个成员上：两边都有 k_grid 就按网格点精确比，否则按拟合中心（容差 1e-4）。"""
     if v.get("k_grid") and u.get("k_grid"):
-        uk = {grid_key(w) for w in u["k_grid"]}
-        return [grid_key(k) in uk for k in v["k_grid"]]
-    return [any(_same_k(k, w) for w in u["k_frac"]) for k in (v.get("k_frac") or [])]
+        uk = {grid_key(w, full3d) for w in u["k_grid"]}
+        return [grid_key(k, full3d) in uk for k in v["k_grid"]]
+    return [any(_same_k(k, w, full3d=full3d) for w in u["k_frac"]) for k in (v.get("k_frac") or [])]
 
 
-def merge_coincident(valleys):
+def merge_coincident(valleys, full3d=False):
     """S8.2 按（自旋, 能带）分星：两条带（或两个自旋）在同一组 k 上都有极值时，会出现同一组谷的两个星，
     第二个标成 "K(up带27)" 这样。本模型按"离谷中心最近"归属 k 点、DOS 统计所有带，所以它们是同一个谷：
     后出现的那个并进前一个（返回 (新谷表, {被并掉的标签: 保留的标签})）。只部分重合 -> ValueError（谷表自相矛盾）。
@@ -167,7 +177,7 @@ def merge_coincident(valleys):
         ks = v.get("k_frac") or []
         hit = None
         for u in out:
-            same = _member_match(v, u)
+            same = _member_match(v, u, full3d)
             if same and all(same) and len(ks) == len(u["k_frac"]):
                 hit = u
                 break
@@ -204,22 +214,31 @@ def member_table(valleys):
     return np.asarray(centers, float), np.asarray(star_of, int), labels, np.asarray(g, int)
 
 
-def assign_members(kfrac, centers, rlat):
+def _image_shifts(full3d):
+    """最近像搜索用的分数坐标平移：2D 面内 9 个，3D 27 个。"""
+    if full3d:
+        return [(i, j, l) for i in (-1, 0, 1) for j in (-1, 0, 1) for l in (-1, 0, 1)]
+    return [(i, j, 0) for i in (-1, 0, 1) for j in (-1, 0, 1)]
+
+
+def assign_members(kfrac, centers, rlat, full3d=False):
     """每个 k 点（分数坐标 (n,3)）分给最近的谷中心（面内笛卡尔距离，含 ±1 周期像）。返回成员下标 (n,)。
-    rlat：倒格矢矩阵（行 = b1,b2,b3，任意长度单位）。只用面内（z 分量置零：中心都在 kz=0 层）。"""
+    rlat：倒格矢矩阵（行 = b1,b2,b3，任意长度单位）。只用面内（z 分量置零：中心都在 kz=0 层）。
+    full3d=True（[0036] 三维）：完整三维笛卡尔距离、27 个周期像。"""
     k = np.atleast_2d(np.asarray(kfrac, float))
     c = np.atleast_2d(np.asarray(centers, float))
     r = np.asarray(rlat, float)
     best = np.full(len(k), np.inf)
     idx = np.zeros(len(k), int)
-    shifts = [(i, j) for i in (-1, 0, 1) for j in (-1, 0, 1)]
+    shifts = _image_shifts(full3d)
     for ci, cc in enumerate(c):
         d = k - cc
         d = d - np.rint(d)
-        d[:, 2] = 0.0
+        if not full3d:
+            d[:, 2] = 0.0
         dmin = np.full(len(k), np.inf)
-        for i, j in shifts:
-            dd = d + np.array([i, j, 0.0])
+        for i, j, l in shifts:
+            dd = d + np.array([i, j, float(l)])
             dmin = np.minimum(dmin, np.einsum("ni,ni->n", dd @ r, dd @ r))
         better = dmin < best
         best[better] = dmin[better]
@@ -227,10 +246,10 @@ def assign_members(kfrac, centers, rlat):
     return idx
 
 
-def same_member(k0, kps, centers, rlat):
+def same_member(k0, kps, centers, rlat, full3d=False):
     """k0 (3,) 与每个 kps (n,3)（分数坐标）是否分到同一个成员谷 -> bool (n,)。ADP 谷内掩码用。"""
-    m0 = assign_members(np.asarray(k0, float)[None], centers, rlat)[0]
-    return assign_members(kps, centers, rlat) == m0
+    m0 = assign_members(np.asarray(k0, float)[None], centers, rlat, full3d)[0]
+    return assign_members(kps, centers, rlat, full3d) == m0
 
 
 def star_dos(x, star_of_k, n_star, n_k, grid):
@@ -257,7 +276,7 @@ def bose(hw_J, T):
         return 1.0 / np.expm1(hw_J / (KB * np.maximum(T, 1e-9)))
 
 
-def carrier_rates(energies, kfrac, rlat, valleys, channels, temps, cell_mass_kg, kinds, sign=+1):
+def carrier_rates(energies, kfrac, rlat, valleys, channels, temps, cell_mass_kg, kinds, sign=+1, full3d=False):
     """一种载流子（一组能带）的散射率。
     energies (nb, nk)：Hartree（AMSET 的 energies[spin][这些带]）；sign=+1 电子、−1 空穴。
     kinds：要算的通道种类集合（{"intra"} = ODP，{"inter_star","inter"} = IVS）。
@@ -270,7 +289,7 @@ def carrier_rates(energies, kfrac, rlat, valleys, channels, temps, cell_mass_kg,
     if not chs or not valleys:
         return rates
     centers, star_of_member, labels, g = member_table(valleys)
-    member = assign_members(kfrac, centers, rlat)
+    member = assign_members(kfrac, centers, rlat, full3d)
     star_k = star_of_member[member]
     lab_idx = {lab: i for i, lab in enumerate(labels)}
     hw_max = max(c["hw_meV"] for c in chs) * 1e-3 / HA_EV
@@ -303,7 +322,7 @@ def carrier_rates(energies, kfrac, rlat, valleys, channels, temps, cell_mass_kg,
     return rates
 
 
-def valley_report(energies, kfrac, rlat, valleys, sign=+1):
+def valley_report(energies, kfrac, rlat, valleys, sign=+1, full3d=False):
     """谷表与能带对得上吗：每个星的区域里载流子能量最低的 k 点，离本星最近成员中心多远（|Δk|/|b1|），
     比整体带边高多少（eV）。谷中心与 AMSET 网格错位（晶胞设置不同、手填错）时距离会很大。
     energies (nb, nk) Hartree；返回 [{"label", "dk_rel", "dE_eV"}]。"""
@@ -311,7 +330,7 @@ def valley_report(energies, kfrac, rlat, valleys, sign=+1):
     k = np.atleast_2d(np.asarray(kfrac, float))
     r = np.asarray(rlat, float)
     centers, star_of_member, labels, _ = member_table(valleys)
-    member = assign_members(k, centers, r)
+    member = assign_members(k, centers, r, full3d)
     star = star_of_member[member]
     b1 = float(np.linalg.norm(r[0]))
     gmin = float(np.nanmin(x))
@@ -324,9 +343,10 @@ def valley_report(energies, kfrac, rlat, valleys, sign=+1):
         j = idx[int(np.argmin(x[idx]))]
         d = k[j] - centers[member[j]]
         d = d - np.rint(d)
-        d[2] = 0.0
-        dk = min(float(np.linalg.norm((d + np.array([i, jj, 0.0])) @ r))
-                 for i in (-1, 0, 1) for jj in (-1, 0, 1))
+        if not full3d:
+            d[2] = 0.0
+        dk = min(float(np.linalg.norm((d + np.array([i, jj, float(ll)])) @ r))
+                 for i, jj, ll in _image_shifts(full3d))
         out.append({"label": lab, "dk_rel": dk / b1, "dE_eV": (float(x[j]) - gmin) * HA_EV})
     return out
 
@@ -342,6 +362,21 @@ def analytic_rate(x_J, valley_min_J, m_d, g_target, area_m2, D_eV_A, hw_meV, T, 
     ga = G if x_J + hw >= valley_min_J else 0.0
     ge = G if x_J - hw >= valley_min_J else 0.0
     return math.pi * D * D / (cell_mass_kg * om) * (N * ga + (N + 1) * ge)
+
+
+def analytic_rate_3d(x_J, valley_min_J, m_d, g_target, volume_m3, D_eV_A, hw_meV, T, cell_mass_kg):
+    """[0036] 解析参考（抛物带、三维 √E 态密度）：给单元测试和量级估算用（Conwell 的非极性光学声子公式）。
+    volume_m3：原胞体积；m_d：态密度有效质量（m_e）；其余同 analytic_rate。"""
+    pref_g = g_target * volume_m3 * (2 * m_d * 9.1093837015e-31) ** 1.5 / (4 * math.pi ** 2 * HBAR ** 3)
+
+    def G(e):                                      # 每原胞每自旋每焦耳
+        return pref_g * math.sqrt(e) if e > 0 else 0.0
+    D = D_eV_A * E_C / 1e-10
+    hw = hw_meV * 1e-3 * E_C
+    om = hw / HBAR
+    N = 1.0 / math.expm1(hw / (KB * T))
+    return math.pi * D * D / (cell_mass_kg * om) * (N * G(x_J + hw - valley_min_J)
+                                                    + (N + 1) * G(x_J - hw - valley_min_J))
 
 
 def describe(rec):
