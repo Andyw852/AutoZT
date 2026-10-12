@@ -189,6 +189,13 @@ def main():
             sys.exit("[ERROR] 从 fit-fc-thermal 产物装配 step5_fc 失败：%s\n"
                      "        （生成 phono3py_disp.yaml 需要 phono3py；本机 python=%s）"
                      % (_e, sys.executable))
+        # ---- NAC：导入不重拟、bundle 不带 BORN；_clean_fit_artifacts 已把旧 step5_fc/BORN
+        #   删掉（旧结构残留），这里按当前 step3_nac 补回（结构一致性前面已校验过）。
+        #   3D 极性材料 NAC=auto 需要它，否则 κ 少 LO-TO 修正。
+        _born = cwd / "step3_nac" / "BORN"
+        if _born.is_file():
+            shutil.copyfile(str(_born), str(out / "BORN"))
+            print("[OK] BORN <- step3_nac/BORN（导入模式补回，NAC=auto 才会开 NAC）", flush=True)
         import json as _json
         (out / "import_provenance.json").write_text(
             _json.dumps(_prov, ensure_ascii=False, indent=2), encoding="utf-8", newline="\n")
