@@ -2393,6 +2393,11 @@ def write_transport_plots(cwd, out, is_2d):
                   ("PF_W/mK2", "PF  (W/m/K$^2$)"), ("kappa_e_W/mK", "kappa_e  (W/m/K)")]
         dsets = [("overall", "tab:red", "--", "s"), ("intrinsic", "tab:orange", "-.", "D"),
                  ("ADP_only", "tab:green", ":", "^"), ("BT2_DPTtau", "tab:blue", "-", "o")]
+        _LBL = {"overall": "amset_ADP+POP+IMP+ODP+IVS",
+                "intrinsic": "amset_ADP+POP+ODP+IVS",
+                "ADP_only": "amset_ADP",
+                "ODP": "amset_ODP", "IVS": "amset_IVS",
+                "BT2_DPTtau": "BT2_DPTtau"}
         _have = {r["dataset"] for r in rows}                       # [0035] 动态加 ODP/IVS：长表里有才画
         for _k, _c, _ls, _mk in (("ODP", "tab:pink", ":", "P"), ("IVS", "tab:gray", "--", "X")):
             if _k in _have:
@@ -2414,9 +2419,9 @@ def write_transport_plots(cwd, out, is_2d):
                     ax.set_ylim(-1000, 1000); ax.axhline(0, color="k", lw=0.5)
                 else:
                     ax.set_yscale("log")
-        hh = [Line2D([], [], color=c, lw=1.4, ls=ls, marker=mk, ms=4, label=ds) for ds, c, ls, mk in dsets]
-        fig.legend(handles=hh, loc="lower center", ncol=4, fontsize=9, frameon=False)
-        fig.suptitle("%s  transport  (overall / ADP+POP / ADP only / BT2xDPT-tau)  100-900 K" % M, fontsize=12)
+        hh = [Line2D([], [], color=c, lw=1.4, ls=ls, marker=mk, ms=4, label=_LBL.get(ds, ds)) for ds, c, ls, mk in dsets]
+        fig.legend(handles=hh, loc="lower center", ncol=3, fontsize=9, frameon=False)
+        fig.suptitle("%s  transport  (amset: ADP+POP+IMP+ODP+IVS / ADP+POP+ODP+IVS / ADP / BT2xDPT-tau)  100-900 K" % M, fontsize=12)
         fig.tight_layout(rect=[0, 0.03, 1, 0.985])
         fig.savefig(plots / ("%s_transport.png" % M), dpi=130); plt.close(fig)
         print("[plots] %s_transport.png / _transport_data_<T>K.csv x%d" % (M, len(temps)))
@@ -2514,7 +2519,7 @@ def write_transport_plots(cwd, out, is_2d):
                     a.set_xticklabels(["1e21", "1e20", "1e19", "1e18", "1e17", "1e18", "1e19", "1e20", "1e21"], fontsize=6)
                     a.axvline(0, color="0.55", lw=0.6, ls=":")
                     a.set_xlabel("n (cm^-3)", fontsize=8)
-                _f2.suptitle("%s  amset  (concentration scan, 600 K, overall / intrinsic / ADP only)" % M, fontsize=11)
+                _f2.suptitle("%s  amset  (concentration scan, 600 K, amset: ADP+POP+IMP+ODP+IVS / ADP+POP+ODP+IVS / ADP)" % M, fontsize=11)
                 _f2.tight_layout(rect=[0, 0, 1, 0.93])
                 _f2.savefig(_adir / "amset_scan_600K.png", dpi=130); plt.close(_f2)
                 with open(_adir / "amset_scan_data_600K.csv", "w", newline="") as _fh:
