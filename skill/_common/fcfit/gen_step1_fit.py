@@ -63,6 +63,9 @@ SPEC = {
     "SUBTRACT_EQUILIBRIUM": (True, "bool"),  # subtract the equilibrium residual forces
     "EQ_FORCE_MAX": (0.2, "float"),          # max |F| of the equilibrium frame (eV/A); 0 = off
     "EQUILIBRIUM_FORCES_NPY": ("", "str"),   # optional explicit (natom,3) npy
+    # 缺帧门禁（仅 vasprun 数据集，随机位移回归）：成功帧占比 / 绝对帧数下限，低于即报错（0=不限）
+    "MIN_SUCCESS_RATIO": (0.9, "float"),
+    "MIN_SUCCESS_FRAMES": (0, "int"),
     "COORDS": ("auto", "str"),               # auto | cartesian | fractional (displacement input)
     "SUPERCELL": ("", "str"),                # 对角 "n n n"；或一般矩阵 9 个数
                                              # "n11 n12 n13 n21 n22 n23 n31 n32 n33"
@@ -177,8 +180,13 @@ SPEC = {
     "FC3_LOAD_GB_LIMIT": (8.0, "float"),     # skip materialising fc3 above this (ShengBTE/RMSE)
     "BAND_POINTS": (51, "int"),
     "IMAG_THR": (0.10, "float"),             # imaginary-frequency threshold (THz)
+    "IMAG_THR_STRICT": (0.10, "float"),      # 近 Γ 区外 / 光学支虚频上限（THz）
+    "IMAG_QGAMMA": (0.05, "float"),          # 近 Γ 半径（分数坐标，Petretto）
+    "IMAG_QGAMMA_GRACE": (1.2, "float"),     # 声学支有效近 Γ 窗口 = IMAG_QGAMMA × 它
     "IMAG_MESH_LENGTH": (100.0, "float"),    # 3D gate mesh length (A), full mesh, no symmetry reduction
     "FC2_SYM_TOL": (1e-3, "float"),          # max frequency spread between symmetry-equivalent q (THz)
+    "ZA_CHECK": ("auto", "str"),             # 2D ZA 二次性闸（auto/on/off）
+    "ZA_QMAX": (0.05, "float"),              # ZA 幂律拟合取样上限（分数坐标）
     "FIT_RMSE_FRAMES": (10, "int"),          # frames for the force residual (also per
                                              # cutoff -> S2 RMSE panel); 0 = off
     # ---- environment ----
@@ -829,6 +837,8 @@ def _gen_one(conf, out, job_label="S1fit"):
         "subtract_equilibrium": bool(conf["SUBTRACT_EQUILIBRIUM"]),
         "eq_force_max": float(conf["EQ_FORCE_MAX"] or 0.0),
         "equilibrium_forces_npy": str(conf["EQUILIBRIUM_FORCES_NPY"] or ""),
+        "min_success_ratio": float(conf["MIN_SUCCESS_RATIO"] or 0.9),
+        "min_success_frames": int(conf["MIN_SUCCESS_FRAMES"] or 0),
         "coords": coords,
         # shell / third-order cutoff determination
         "cut3_candidates": [float(x) for x in _cands],
@@ -881,7 +891,13 @@ def _gen_one(conf, out, job_label="S1fit"):
         "export_kl_bundle": bool(conf["EXPORT_KL_BUNDLE"]),
         "fc3_load_gb_limit": float(conf["FC3_LOAD_GB_LIMIT"] or 8.0),
         "band_points": int(conf["BAND_POINTS"]),
-        "imag_thr": float(conf["IMAG_THR"]),
+        # imag_policy 近 Γ 虚频判据：写大写键（imag_policy._get 只查大写 IMAG_THR 等）
+        "IMAG_THR": float(conf["IMAG_THR"]),
+        "IMAG_THR_STRICT": float(conf["IMAG_THR_STRICT"]),
+        "IMAG_QGAMMA": float(conf["IMAG_QGAMMA"]),
+        "IMAG_QGAMMA_GRACE": float(conf["IMAG_QGAMMA_GRACE"]),
+        "ZA_CHECK": str(conf["ZA_CHECK"] or "auto"),
+        "ZA_QMAX": float(conf["ZA_QMAX"]),
         "imag_mesh_length": float(conf["IMAG_MESH_LENGTH"]),
         "fc2_sym_tol": float(conf["FC2_SYM_TOL"]),
         "fit_rmse_frames": int(conf["FIT_RMSE_FRAMES"] or 0),
@@ -905,6 +921,13 @@ def _gen_one(conf, out, job_label="S1fit"):
         # autozt 在集群上把 _common 的依赖铺平成同目录（_eng），源码树里则在
         # 上一级 _common/（_base）——两个都试。
         for _src in (_eng / _dep, _base / _dep):
+            if _src.is_file():
+                shutil.copyfile(str(_src), str(out / _dep))
+                break
+    # symmetry_audit.py 在 _common/opt/：计算节点 prep 的"超胞保对称复查"也要 import 它，
+    # 数据集不带 POSCAR 时 gen 阶段查不了，只能靠节点端再查一次（2026-10 第 6 条）。
+    for _dep in ("symmetry_audit.py",):
+        for _src in (_eng / _dep, _base / _dep, _base / "opt" / _dep):
             if _src.is_file():
                 shutil.copyfile(str(_src), str(out / _dep))
                 break

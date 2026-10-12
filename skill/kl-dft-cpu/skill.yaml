@@ -6,12 +6,12 @@
 #   S2_static   原胞静态自洽：出带隙判金属、作声子参考胞
 #   S3_nac      NAC 介电/Born（LEPSILON DFPT）→ BORN 文件；金属/关 NAC 自动跳过（可选步）
 #   S4_disp     超胞 + 位移生成，扇出：
-#                 method=findiff → phono3py 对称有限位移（不需 ALM）
 #                 method=alm     → 随机位移，位移数由 ALM 自由力常数个数 × oversample 决定
+#                                 （findiff 已弃用：共享 S5 引擎只做随机位移回归）
 #               每个位移一个 disp-* 子目录，各自单点取力
 #   S5_fc       提交计算节点：收力 → 拟合 fc2/fc3 → 双格式导出 → 虚频做闸（FAIL 则 S6 不启动）
 #               拟合器 FIT_ENGINE=pheasy(ALASSO，默认；随机位移压缩感知，需 alm，pheasy-gpu 走 GPU 模板) | phono3py(symfc/alm)
-#               产出 step5_fc/phono3py/（fc2/fc3.hdf5）与 step5_fc/shengbte/（FORCE_CONSTANTS_2ND/3RD）
+#               产出 step5_fc/{fc2,fc3}.hdf5 与 step5_fc/shengbte/（FORCE_CONSTANTS_2ND/3RD）
 #   S6_kappa    提交计算节点跑 BTE：SOLVER=phono3py(rta/lbte) | shengbte → 晶格热导率
 #
 # 参数全部走 step.conf（stepconf.py 解析，三层合并：技能默认 → 技能本步默认 →
@@ -102,7 +102,7 @@ steps:
      marker: 'kappa_summary.json:"KAPPA_DONE": true',
      gen: gen_step6_kappa.py, fetch_all: true,
      gen_need: [stepconf.py, step.conf, gen_step2_kappa.py, fc_common.py, kappa_driver.py,
-                cut3_select.py, fc_fit_driver.py, imag_policy.py, phonon_stability.py, za_2d.py,
+                cut3_select.py, kappa_validation.py, fc_fit_driver.py, imag_policy.py, phonon_stability.py, za_2d.py,
                 submit_kappa.tpl, submit_shengbte_fcfit.tpl,
                 dim_common.py, thickness_2d.py, vdw_radii.py]}
 
@@ -172,20 +172,18 @@ io_schema:
     - {name: cutoff_selection.json, step: S6_kappa, type: json,
        desc: "截断选择报告（逐档 κ + 判据①②③，写在 step5_fc/ 下）"}
   params:
-    - {name: METHOD, values: [alm, findiff], default: alm, where: step.conf,
-       desc: "位移生成方式：alm = 随机位移+压缩感知（帧数少）；findiff = phono3py 对称有限位移"}
+    - {name: METHOD, values: [alm], default: alm, where: step.conf,
+       desc: "位移生成方式：alm = 随机位移+压缩感知（帧数少）。findiff 已弃用——共享 S5 引擎只做随机位移回归，读不了 phono3py 有限位移数据集"}
     - {name: FIT_ENGINE, values: [pheasy, phono3py, hiphive], default: pheasy, where: step.conf,
        desc: "力常数拟合引擎；默认 pheasy（ALASSO，2D 自动加 RASR=BHH），需要 METHOD=alm 且走 GPU 模板；纯 CPU 集群可改 phono3py。旧值 auto 按 pheasy 解析"}
     - {name: PHEASY_FIT_METHOD, values: [ALASSO, LASSO, RFE-OLS, RFE-OLS-TSQR, OLS, RIDGE, ARDR, RVM], default: ALASSO,
        where: step.conf, desc: "pheasy 的拟合方法；旧值 auto 按 ALASSO 解析"}
     - {name: FC_CALC, values: [symfc, alm], default: symfc, where: step.conf,
        desc: "phono3py 的拟合后端：symfc（对称性约束）或 alm"}
-    - {name: SOLVER, values: [phono3py, shengbte, fourphonon], default: phono3py, where: step.conf,
-       desc: "BTE 求解器；shengbte/fourphonon 走 FORCE_CONSTANTS_2ND/3RD 双格式导出，fourphonon 用 GPU 多卡 RTA"}
+    - {name: SOLVER, values: [phono3py, shengbte], default: phono3py, where: step.conf,
+       desc: "BTE 求解器：phono3py（自动网格收敛）| shengbte（FORCE_CONSTANTS_2ND/3RD 双格式）。fourphonon 未并入共享引擎"}
     - {name: BTE_METHOD, values: [rta, lbte], default: rta, where: step.conf,
        desc: "单模弛豫时间近似（快）或直接解线性化 BTE（准，内存 O(N_mode^2)）"}
-    - {name: KAPPA_MESH, default: auto, where: step.conf,
-       desc: "BTE q 网格：auto = 2D 按倒空间长度估（Q_LEN_2D/MESH_MIN，真空轴=1）、3D 用 15 15 15；也可写 auto3d 或 \"N N N\""}
     - {name: IMAG_THR, default: 0.10, where: step.conf,
        desc: "近 Γ 声学支上限(THz)=5 cm^-1：近 Γ 声学支虚频 ≤ 它 → warn（S6 放行）；> 它 → fail。语义已从'全局阈值'改为'近 Γ 声学支上限'（imag_policy，Petretto 2018）"}
     - {name: IMAG_THR_STRICT, default: 0.10, where: step.conf,

@@ -99,7 +99,7 @@ steps:
      check: marker, marker: 'kappa_summary.json:"KAPPA_DONE": true',
      gen: gen_step2_kappa.py, fetch_all: true,
      gen_need: [stepconf.py, step.conf, fc_common.py, kappa_driver.py,
-                cut3_select.py, submit_kappa.tpl,
+                cut3_select.py, kappa_validation.py, submit_kappa.tpl,
                 # SOLVER=shengbte：计算节点用 fc_fit_driver._shengbte_finalize 写 CONTROL
                 # 并校验（与 S1 同一函数），连同它 import 的模块一起带上
                 fc_fit_driver.py, imag_policy.py, phonon_stability.py, za_2d.py,

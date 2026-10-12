@@ -209,8 +209,13 @@ def test_kl_bundle_reuse():
         src = Path(d) / "step1_fit"
         src.mkdir()
         for f in ("fc2.hdf5", "fc3.hdf5", "phonon_summary.json",
-                  "cutoff_scan.json", "fc_dataset.json", "phono3py_disp.yaml"):
+                  "fc_fit_summary.json", "cutoff_scan.json", "fc_dataset.json",
+                  "phono3py_disp.yaml"):
             (src / f).write_bytes(b"x")
+        (src / "cutoff_scan").mkdir()
+        (src / "cutoff_scan" / "cut3_5p00").mkdir()
+        (src / "cutoff_scan" / "cut3_5p00" / "fc2.hdf5").write_bytes(b"z")
+        (src / "cutoff_scan" / "cut3_5p00" / "fc3.hdf5").write_bytes(b"z")
         (src / "shengbte").mkdir()
         (src / "shengbte" / "FORCE_CONSTANTS_2ND").write_bytes(b"y")
         drv._write_kl_bundle(src, {})
@@ -229,8 +234,16 @@ def test_kl_bundle_reuse():
             return
         out = Path(d) / "step5_fc"
         rf.assemble(b, out, supercell="3 3 1", dim="3d", mesh="24 24 24")
-        check("reuse_fcfit 产出 phono3py/fc2.hdf5",
-              (out / "phono3py" / "fc2.hdf5").is_file())
+        check("reuse_fcfit 产出顶层 fc2.hdf5/fc3.hdf5（S6 _gen_one 布局）",
+              (out / "fc2.hdf5").is_file() and (out / "fc3.hdf5").is_file())
+        check("reuse_fcfit 不再产出旧的 phono3py/ 子目录布局",
+              not (out / "phono3py").is_dir())
+        check("reuse_fcfit 产出 cutoff_scan/cut3_*（S6 逐档扫描布局）",
+              (out / "cutoff_scan" / "cut3_5p00" / "fc2.hdf5").is_file()
+              and (out / "cutoff_scan" / "cut3_5p00" / "fc3.hdf5").is_file())
+        check("reuse_fcfit 复制 fc_fit_summary.json / fc_dataset.json（溯源）",
+              (out / "fc_fit_summary.json").is_file()
+              and (out / "fc_dataset.json").is_file())
         check("reuse_fcfit 写 kl_params.txt（SUPERCELL 折叠成 3 3 1）",
               (out / "kl_params.txt").is_file()
               and "SUPERCELL=3 3 1" in (out / "kl_params.txt").read_text())

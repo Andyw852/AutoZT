@@ -40,6 +40,9 @@ SPEC.update({
     "FC_IMPORT_DIM": ("", "str"),
     "FC_IMPORT_MESH": ("", "str"),
     "FC_IMPORT_FUNCTIONAL": ("", "str"),
+    # 导入模式来源校验：bundle 的 dataset_dir 指向非本技能（kl-mlff/phonon-mlff 等）时，
+    # 默认拒绝导入；确要跨来源复用设 true（数据来源校验仍保留结构/超胞一致性）。
+    "FC_IMPORT_ALLOW_FOREIGN": (False, "bool"),
     # —— imag_policy 近 Γ 判据阈值（唯一真源 _common/imag_policy.py）——
     "IMAG_THR_STRICT": (0.10, "float"),
     "IMAG_QGAMMA": (0.05, "float"),
@@ -48,6 +51,99 @@ SPEC.update({
     "ZA_CHECK": ("auto", "str"),
     "ZA_QMAX": (0.05, "float"),
 })
+
+
+def _bundle_structure_signature(path):
+    """(lattice 3x3, symbols, wrapped scaled_positions Nx3)，解析不了返回 None。"""
+    try:
+        from phonopy.interface.vasp import read_vasp
+        import numpy as np
+        a = read_vasp(str(path))
+        frac = np.asarray(a.scaled_positions, float)
+        frac = frac - np.floor(frac)
+        return np.asarray(a.cell, float), list(a.symbols), frac
+    except Exception:
+        return None
+
+
+def _structures_match(sig_a, sig_b, tol=1e-3):
+    """比较两份结构签名 -> (bool|None, note)。None = 解析不了，跳过但不拦。"""
+    if sig_a is None or sig_b is None:
+        return None, "结构无法解析（缺 phonopy 或 POSCAR 异常）"
+    import numpy as np
+    la, sa, fa = sig_a
+    lb, sb, fb = sig_b
+    if sa != sb:
+        return False, "元素种类/顺序不一致：%s vs %s" % (sa, sb)
+    if fa.shape != fb.shape:
+        return False, "原子数不一致：%d vs %d" % (len(fa), len(fb))
+    _scale = max(float(np.abs(la).max()), 1.0)
+    if float(np.abs(la - lb).max()) > tol * _scale:
+        return False, "晶格矩阵不一致"
+    diff = np.abs(fa - fb)
+    diff = np.minimum(diff, 1.0 - diff)          # 周期等价
+    if float(diff.max()) > tol:
+        return False, "分数坐标不一致（max |Δ| = %.4f）" % diff.max()
+    return True, "结构一致"
+
+
+def _yaml_supercell_matrix(path):
+    try:
+        import numpy as np
+        import yaml
+        y = yaml.safe_load(Path(path).read_text(encoding="utf-8"))
+        m = y.get("supercell_matrix") if isinstance(y, dict) else None
+        return None if m is None else np.asarray(m, float)
+    except Exception:
+        return None
+
+
+def _bundle_provenance(src, cwd, allow_foreign):
+    """kl_bundle 来源校验（结构 / 超胞 / 数据来源），通过则返回 provenance dict。"""
+    import json
+    import numpy as np
+    prov = {"source": str(src), "allow_foreign": bool(allow_foreign)}
+    # 1) 数据来源：fc_dataset.json.dataset_dir(_abs) 必须指向本技能 step4_disp
+    fc_ds = {}
+    if (src / "fc_dataset.json").is_file():
+        try:
+            fc_ds = json.loads((src / "fc_dataset.json").read_text(encoding="utf-8"))
+        except Exception:
+            fc_ds = {}
+    ds_dir = str(fc_ds.get("dataset_dir_abs") or fc_ds.get("dataset_dir") or "")
+    prov["dataset_dir"] = ds_dir
+    is_kl = "kl-dft-cpu" in ds_dir
+    if not is_kl and not allow_foreign:
+        sys.exit("[ERROR] kl_bundle 的数据来源不是本技能的 step4_disp（dataset_dir=%s）。\n"
+                 "        它可能来自 kl-mlff / phonon-mlff 等其它技能，力常数与当前 DFT 数据集无关。\n"
+                 "        确要跨来源复用：设 FC_IMPORT_ALLOW_FOREIGN=true；否则核对数据来源后重推 bundle。"
+                 % (ds_dir or "（缺 fc_dataset.json）"))
+    prov["foreign_source"] = (not is_kl)
+    # 2) 结构一致：bundle POSCAR vs step4_disp POSCAR
+    sig_b = _bundle_structure_signature(src / "POSCAR")
+    sig_k = _bundle_structure_signature(cwd / "step4_disp" / "POSCAR")
+    ok, note = _structures_match(sig_b, sig_k)
+    prov["structure_check"] = note
+    if ok is False:
+        sys.exit("[ERROR] kl_bundle 的结构与 step4_disp 不一致：%s。\n"
+                 "        通常是 S1 换了结构 / bundle 来自另一材料，导入会得到错误力常数。\n"
+                 "        处置：按当前结构重跑 fit-fc-thermal 后再推 bundle。" % note)
+    if ok is None:
+        print("[WARN] %s（不拦）" % note, flush=True)
+    # 3) 超胞一致：bundle fc_dataset.json.supercell_matrix vs step4_disp phono3py_disp.yaml
+    sc_b = fc_ds.get("supercell_matrix")
+    sc_k = _yaml_supercell_matrix(cwd / "step4_disp" / "phono3py_disp.yaml")
+    prov["supercell_matrix"] = sc_b
+    if sc_b is not None and sc_k is not None:
+        _match = bool(np.allclose(np.asarray(sc_b, float), sc_k, atol=1e-6))
+        prov["supercell_check"] = "一致" if _match else "不一致"
+        if not _match:
+            sys.exit("[ERROR] kl_bundle 的超胞矩阵与 step4_disp 不一致（%s vs %s）。\n"
+                     "        超胞不同，力常数与当前数据集不对应，拒绝导入。"
+                     % (sc_b, sc_k.tolist()))
+    else:
+        prov["supercell_check"] = "跳过（缺 supercell_matrix 数据）"
+    return prov
 
 
 def main():
@@ -73,6 +169,11 @@ def main():
             sys.exit("[ERROR] FC_IMPORT_DIR=%s 里没有 fc2.hdf5/fc3.hdf5 —— 请指向 "
                      "fit-fc-thermal 的 step1_fit 产物目录（已拉回/已放到本集群）。" % _src)
         print("[..] S5_fc 导入模式：从 fit-fc-thermal 产物 %s 装配 step5_fc/（不重拟）" % _src)
+        # ---- 来源校验（结构 / 超胞 / 数据来源），通过才装配（第 4 条）----
+        _prov = _bundle_provenance(_src, cwd, bool(conf.get("FC_IMPORT_ALLOW_FOREIGN")))
+        print("[..] 导入来源校验通过：结构=%s；超胞=%s；来源=%s"
+              % (_prov["structure_check"], _prov["supercell_check"],
+                 _prov["dataset_dir"] or "（无 fc_dataset.json）"), flush=True)
         import reuse_fcfit
         _dim = str(conf.get("FC_IMPORT_DIM") or "").strip().lower() or None
         _mesh = str(conf.get("FC_IMPORT_MESH") or "").strip() or None
@@ -88,6 +189,9 @@ def main():
             sys.exit("[ERROR] 从 fit-fc-thermal 产物装配 step5_fc 失败：%s\n"
                      "        （生成 phono3py_disp.yaml 需要 phono3py；本机 python=%s）"
                      % (_e, sys.executable))
+        import json as _json
+        (out / "import_provenance.json").write_text(
+            _json.dumps(_prov, ensure_ascii=False, indent=2), encoding="utf-8", newline="\n")
         (out / "submit.sh").write_text(
             "#!/bin/bash\n"
             "# FC_IMPORT_DIR 导入模式：step5_fc/ 已在 gen 阶段装配完成，无需计算。\n"
@@ -129,9 +233,14 @@ def main():
 
     # ---- NAC：共享引擎的 prep 从【数据集目录】读 BORN；本技能的 BORN 在 step3_nac ----
     _born = cwd / "step3_nac" / "BORN"
+    _born_dst = disp / "BORN"
     if _born.is_file():
-        shutil.copyfile(str(_born), str(disp / "BORN"))
+        shutil.copyfile(str(_born), str(_born_dst))
         print("[OK] BORN <- step3_nac/BORN（供共享引擎 prep 拾取）", flush=True)
+    elif _born_dst.is_file():
+        # NAC 已关但 step4_disp 里还留着上一轮的旧 BORN —— 移除，避免共享引擎误加 NAC
+        _born_dst.unlink()
+        print("[WARN] step3_nac/BORN 不存在（NAC 已关），移除 step4_disp/ 里的旧 BORN", flush=True)
 
     # ---- 委托共享引擎（数据集 = 本技能的 step4_disp）----
     if str(conf.get("FIT_INPUT_DIR") or "auto").strip().lower() == "auto":

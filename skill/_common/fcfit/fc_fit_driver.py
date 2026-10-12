@@ -182,9 +182,14 @@ def _dataset_from_yaml(y):
     """Extract the displacement dataset from a parsed phono3py YAML.
 
     Returns (kind, disps, forces) where kind is 'random' (type-2, an
-    (n, Nsc, 3) pair of arrays) or 'findiff' (type-1, first_atoms)."""
+    (n, Nsc, 3) pair of arrays) or 'findiff' (type-1, first_atoms /
+    displacement_pairs)."""
     if not isinstance(y, dict):
         return None, None, None
+    # phono3py 有限位移（type-1）把位移存在顶层 displacement_pairs（没有 dataset 块）；
+    # 随机位移（type-2）才有 dataset.displacements。先判 findiff，避免走错分支。
+    if y.get("displacement_pairs") is not None or y.get("displacement_pair_info") is not None:
+        return "findiff", None, None
     for key in ("dataset", "displacement_dataset"):
         ds = y.get(key)
         if not isinstance(ds, dict):
@@ -773,14 +778,32 @@ def cmd_prep(cfg, out):
         y = _load_yaml(out / "phono3py_disp.yaml") if (out / "phono3py_disp.yaml").is_file() else None
         dkind, d, _ = _dataset_from_yaml(y)
         if d is None:
+            if dkind == "findiff":
+                sys.exit("[ERROR] 有限位移（findiff / type-1）数据集不能喂给共享引擎的 "
+                         "随机位移回归：phono3py 把位移记在顶层 displacement_pairs，"
+                         "这里没有 (n, Nsc, 3) 的随机位移数组可回归。\n"
+                         "        处理：把该数据集的生成方式改成随机位移（kl-dft-cpu S4 的 "
+                         "METHOD=alm），再 rerun S4_disp / S5_fc；有限位移重建 fc2/fc3 目前 "
+                         "只能走旧引擎（kl_fc_backends），共享 fc_fit_driver 尚未接入。")
             sys.exit("[ERROR] the vasprun source needs phono3py_disp.yaml with a "
                      "type-2 displacement array (finite-displacement datasets are "
                      "rebuilt by the phono3py engine, not here)")
         idx = [int(re.search(r"disp-(\d+)", f).group(1)) - 1 for f in files]
         disps = np.asarray(d, float)[idx]
         if missing:
-            print("[WARN] %d frame(s) missing (disp-%s); random-displacement "
-                  "regression tolerates this" % (len(missing), ",".join(missing[:8])))
+            head = ",".join(missing[:8]) + ("…" if len(missing) > 8 else "")
+            n_all = len(files) + len(missing)
+            ratio = len(files) / float(max(n_all, 1))
+            min_ratio = float(cfg.get("min_success_ratio") or 0.9)
+            min_frames = int(cfg.get("min_success_frames") or 0)
+            if ratio < min_ratio or len(files) < min_frames:
+                sys.exit("[ERROR] 成功帧 %d/%d（%.0f%%）低于缺帧门禁"
+                         "（MIN_SUCCESS_RATIO=%s，MIN_SUCCESS_FRAMES=%s）。\n"
+                         "        缺帧：disp-%s\n"
+                         "        处理：补算失败帧（retry），或调低门禁（0=不限）。"
+                         % (len(files), n_all, ratio * 100, min_ratio, min_frames, head))
+            print("[WARN] 缺 %d 帧（disp-%s）—— 随机位移法按 %d/%d（%.0f%%）继续拟合"
+                  % (len(missing), head, len(files), n_all, ratio * 100), flush=True)
         info["missing_frames"] = missing
         info["equilibrium_source"] = "disp-00000/vasprun.xml"
     elif kind == "arrays":

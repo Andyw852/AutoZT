@@ -593,6 +593,14 @@ def main():
     method = str(conf["METHOD"]).lower()
     if method not in ("findiff", "alm"):
         sys.exit("[ERROR] METHOD 只允许 findiff / alm")
+    if method == "findiff":
+        # 共享 S5 引擎（fc_fit_driver）只做随机位移回归，读不了 phono3py 的有限位移
+        # 数据集（位移在顶层 displacement_pairs）。在 S4 生成阶段就拦下，别白算 VASP 帧。
+        sys.exit("[ERROR] METHOD=findiff（有限位移）在共享 S5 引擎下已不可用：\n"
+                 "        共享 fc_fit_driver 只做随机位移回归，读不了 phono3py 的有限位移数据集。\n"
+                 "        请改成随机位移：autozt -tt kl-dft-cpu -p <材料> -j step4_disp "
+                 "conf --set params.METHOD=alm\n"
+                 "        （alm = 随机位移 + 压缩感知回归，帧数更少，是当前唯一受支持的路径。）")
 
     # ---- 三阶截断候选（2026-09-24 user 定）：取相邻壳层中点；生成按最大候选估帧 ----
     _cands, _shells, _cnote = kc.resolve_cut3_candidates(

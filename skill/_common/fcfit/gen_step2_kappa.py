@@ -480,7 +480,7 @@ def _gen_one(conf, fit, out, cwd, write_submit=True):
 
     here = Path(__file__).resolve().parent
     _eng = fc.engine_dir()
-    for _f in ("kappa_driver.py", "cut3_select.py"):
+    for _f in ("kappa_driver.py", "cut3_select.py", "kappa_validation.py"):
         if not (_eng / _f).is_file():
             sys.exit("[ERROR] %s missing -- is it listed in gen_need?" % _f)
         shutil.copyfile(str(_eng / _f), str(out / _f))

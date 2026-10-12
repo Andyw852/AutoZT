@@ -6,14 +6,16 @@ fit-fc-thermal（S1_fit）与 kl-dft-cpu（S5_fc）拟合出的力常数内容�
 本脚本做纯搬运 + 生成 kl 侧需要的 phono3py_disp.yaml / kl_params.txt，让 kl 的
 S6_kappa 直接吃 fit-fc-thermal 的拟合结果，不必在 kl 侧再把 S4 的力重拟一遍。
 
-映射（fit-fc-thermal step1_fit/  ->  kl step5_fc/）：
-    fc2.hdf5, fc3.hdf5            ->  phono3py/fc2.hdf5, phono3py/fc3.hdf5
-    phono3py_disp.yaml (若有)      ->  phono3py/phono3py_disp.yaml
-    没有则用 POSCAR + SUPERCELL 现生成（需要 phono3py）
-    cutoff_scan/cut3_<tag>/*       ->  phono3py/cut3_<tag>/*
-    cut3_<tag>/*（顶层，若有）      ->  phono3py/cut3_<tag>/*
+映射（fit-fc-thermal step1_fit/  ->  kl step5_fc/，与共享 S6 _gen_one 的顶层布局一致）：
+    fc2.hdf5, fc3.hdf5            ->  fc2.hdf5, fc3.hdf5（顶层）
+    phono3py_disp.yaml (若有)      ->  phono3py_disp.yaml（顶层）
+    phono3py_params.yaml (若有)    ->  phono3py_params.yaml（顶层）
+    都没有则用 POSCAR + SUPERCELL 现生成（需要 phono3py）
+    cutoff_scan/cut3_<tag>/*       ->  cutoff_scan/cut3_<tag>/*
+    cut3_<tag>/*（顶层，若有）      ->  cut3_<tag>/*
     shengbte/FORCE_CONSTANTS_*     ->  shengbte/FORCE_CONSTANTS_*
     phonon_summary.json            ->  phonon_summary.json（虚频闸 marker）
+    fc_fit_summary.json / fc_dataset.json ->  （溯源 / 超胞矩阵）
     cutoff_scan.json               ->  cutoff_scan.json
     cutoff_selection.json (若有)   ->  cutoff_selection.json
     POSCAR                         ->  POSCAR
@@ -114,25 +116,29 @@ def assemble(fcfit_dir, out, poscar=None, supercell=None, dim=None,
         src = src.resolve()
     out = out.resolve()
     out.mkdir(parents=True, exist_ok=True)
-    p3 = out / "phono3py"
-    p3.mkdir(exist_ok=True)
 
     missing = [f for f in ("fc2.hdf5", "fc3.hdf5") if not (src / f).is_file()]
     if missing:
         sys.exit("[ERROR] %s 缺 %s —— 不是完整的 fit-fc-thermal step1_fit 产物"
                  % (src, "、".join(missing)))
 
-    # ---- 力常数：phono3py 格式 + 逐档截断 ----
+    # ---- 力常数：顶层布局（共享 S6 _gen_one 只认 step5_fc/fc2.hdf5 等顶层文件）----
     for f in ("fc2.hdf5", "fc3.hdf5"):
-        shutil.copyfile(src / f, p3 / f)
+        shutil.copyfile(src / f, out / f)
+
+    # ---- 逐档截断：cutoff_scan/cut3_<tag> -> cutoff_scan/cut3_<tag>（顶层）----
     cut_dirs = 0
-    for base in (src / "cutoff_scan", src):
-        if not base.is_dir():
-            continue
-        for cd in sorted(base.glob("cut3_*")):
+    scan_root = src / "cutoff_scan"
+    if scan_root.is_dir():
+        for cd in sorted(scan_root.glob("cut3_*")):
             if cd.is_dir():
-                _copy_tree_files(cd, p3 / cd.name)
+                _copy_tree_files(cd, out / "cutoff_scan" / cd.name)
                 cut_dirs += 1
+    # 旧 bundle 也可能把 cut3_* 直接放顶层
+    for cd in sorted(src.glob("cut3_*")):
+        if cd.is_dir():
+            _copy_tree_files(cd, out / cd.name)
+            cut_dirs += 1
 
     # ---- 力常数：ShengBTE 格式 ----
     sb = src / "shengbte"
@@ -146,26 +152,30 @@ def assemble(fcfit_dir, out, poscar=None, supercell=None, dim=None,
     if pos.is_file():
         shutil.copyfile(pos, out / "POSCAR")
 
-    # ---- phono3py_disp.yaml（最好从源带过来，否则现生成）----
+    # ---- phono3py YAML（最好从源带过来，否则现生成；顶层布局）----
     scm = _parse_supercell(supercell) if supercell else None
     if scm is None:
         scm = _supercell_from_fcdataset(src)
-    if (src / "phono3py_disp.yaml").is_file():
-        shutil.copyfile(src / "phono3py_disp.yaml", p3 / "phono3py_disp.yaml")
-    elif (p3 / "phono3py_disp.yaml").is_file():
-        pass
-    else:
-        if scm is None:
-            sys.exit("[ERROR] 源里没有 phono3py_disp.yaml，fc_dataset.json 也没有 "
-                     "supercell_matrix —— 请用 --supercell 'n n n' 指定超胞")
-        n_uc, n_sc = _make_phono3py_disp(out / "POSCAR", scm,
-                                         p3 / "phono3py_disp.yaml")
-        if verbose:
-            print("[OK] 生成 phono3py/phono3py_disp.yaml（%d 原胞原子 -> %d 超胞原子）"
-                  % (n_uc, n_sc))
+    _got_yaml = False
+    for _y in ("phono3py_params.yaml", "phono3py_disp.yaml"):
+        if (src / _y).is_file():
+            shutil.copyfile(src / _y, out / _y)
+            _got_yaml = True
+            break
+    if not _got_yaml:
+        if not (out / "phono3py_params.yaml").is_file() and not (out / "phono3py_disp.yaml").is_file():
+            if scm is None:
+                sys.exit("[ERROR] 源里没有 phono3py YAML，fc_dataset.json 也没有 "
+                         "supercell_matrix —— 请用 --supercell 'n n n' 指定超胞")
+            n_uc, n_sc = _make_phono3py_disp(out / "POSCAR", scm,
+                                             out / "phono3py_disp.yaml")
+            if verbose:
+                print("[OK] 生成 phono3py_disp.yaml（%d 原胞原子 -> %d 超胞原子）"
+                      % (n_uc, n_sc))
 
-    # ---- marker / 截断记录 ----
-    for f in ("phonon_summary.json", "cutoff_scan.json", "cutoff_selection.json"):
+    # ---- marker / 溯源 / 截断记录 ----
+    for f in ("phonon_summary.json", "fc_fit_summary.json", "fc_dataset.json",
+              "cutoff_scan.json", "cutoff_selection.json"):
         if (src / f).is_file():
             shutil.copyfile(src / f, out / f)
     if not (out / "phonon_summary.json").is_file():
@@ -194,7 +204,7 @@ def assemble(fcfit_dir, out, poscar=None, supercell=None, dim=None,
                     FUNCTIONAL=functional)
     if verbose:
         print("[OK] 装配完成：%s" % out)
-        print("     phono3py/{fc2.hdf5,fc3.hdf5,phono3py_disp.yaml}"
+        print("     fc2.hdf5 / fc3.hdf5 / phono3py YAML"
               + ("；逐档截断 %d 份" % cut_dirs if cut_dirs else ""))
         print("     shengbte/ 与 phonon_summary.json / cutoff_scan.json / kl_params.txt")
     return out
