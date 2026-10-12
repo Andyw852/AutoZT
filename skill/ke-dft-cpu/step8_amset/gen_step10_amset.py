@@ -17,7 +17,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 # [SKILL_REV] 版本戳：写进 settings.yaml 头，便于从结果反查跑的是哪份 skill 副本。
-_SKILL_REV = "2026-10-12-0036-odp3d"   # [0036] 三维 ODP/IVS（DP_OPTICAL_*，插件 amset_dpo3d.py）   # [0014] 2D 弹性用原始 slab 值（不乘 c/t）；V115 相位补丁
+_SKILL_REV = "2026-10-12-0037-pie3d"   # [0037] 三维 PIE（读压电张量写 settings，插件 amset_pie3d.py 修正核）   # [0036] 三维 ODP/IVS（DP_OPTICAL_*，插件 amset_dpo3d.py）   # [0014] 2D 弹性用原始 slab 值（不乘 c/t）；V115 相位补丁
 import stepconf  # noqa: E402
 try:
     import ke_common as kc
@@ -151,6 +151,18 @@ DPO3D_RECORD = "dp_optical_3d.json"
 DPO3D_PLUGIN = "amset_dpo3d.py"
 DPO_MODULE = "dp_optical.py"
 _SCATTERING_EXPLICIT = False      # step.conf 显式写了 SCATTERING：照它来，不自动补 ODP/IVS
+# [0037] 三维压电散射（PIE，出厂不开；step.conf 写 SCATTERING = ADP,IMP,POP,PIE 才开）：
+#   压电张量从 step6_elastic/OUTCAR 读（取 including ionic 的弛豫离子总张量，按标准 Voigt 重排），写进
+#   settings.yaml 的 piezoelectric_constant。只对非中心对称、压电不为零的材料有意义（|e|max < PIE_EMIN
+#   直接去掉 PIE 并告警）；低温、低载流子浓度、弱屏蔽时值得评估。
+#   PIE_KERNEL = az（出厂，运行期插件 amset_pie3d.py：静态 ε0、q̂ 纵场投影、屏蔽 q²/(q²+β²)²）
+#              / amset（原版核：ε∞、1/(q²+β²)，且屏蔽跟随全局 free_carrier_screening，三维出厂 false ≈ 不屏蔽；只作对照）
+#   PIE_SCREENING = true（az 核的自由载流子屏蔽，独立于全局 free_carrier_screening，不影响 POP）
+PIE_KERNEL = "az"
+PIE_SCREENING = True
+PIE_EMIN = 1e-3                   # C/m²
+PIE3D_RECORD = "pie_3d.json"
+PIE3D_PLUGIN = "amset_pie3d.py"
 MANUAL_BANDGAP = None                 # None=自动读；或写数值(eV) 覆盖 scissor
 # ★ patch_bandgap_override（2026-09-28）：scissor 带隙的 **step.conf 覆盖通道**。
 #   此前只有上面这个脚本常量（要改 gen 源码），默认读 HSE06 的 band_summary.json。
@@ -333,6 +345,8 @@ SPEC = {
     "ADP_INTRAVALLEY": ("auto", "str"),
     "ODP_FROZEN": ("auto", "str"),              # [0036] 冻声子 ODP 参数 auto/on/off
     "ODP_FROZEN_DMIN": (None, "float"),
+    "PIE_KERNEL": ("az", "str"),                # [0037] 三维 PIE 核 az/amset
+    "PIE_SCREENING": (True, "bool"),
     # patch_mem_guard：内存粗估阈值（GiB）与自动独占开关。
     "MEM_WARN_GIB": (MEM_WARN_GIB, "int"),
     "MEM_LIMIT_GIB": (None, "int"),
@@ -1418,7 +1432,7 @@ def _grab_matrix3(txt, tag):
             return rows
     return None
 def write_settings(out: Path, eps_inf, eps_static, gap, elastic,
-                   is_2d=False, c_len=None):
+                   is_2d=False, c_len=None, piezo=None):
     lines = ["# amset settings.yaml（gen_step10 自动生成，可手改后重跑本步）",
              "# skill_rev: %s" % _SKILL_REV]
     if is_2d:
@@ -1502,6 +1516,13 @@ def write_settings(out: Path, eps_inf, eps_static, gap, elastic,
     else:
         lines.append("# elastic_constant: 未读到——step6_elastic 没算完，或手填 "
                      "MANUAL_ELASTIC。ACD 散射需要它。")
+    if piezo is not None and "PIE" in SCATTERING:      # [0037]
+        lines.append("# piezoelectric_constant = step6_elastic 弛豫离子压电张量（C/m²），标准 Voigt 列序；"
+                     "PIE 核 = %s" % ("amset_pie3d.py（静态 ε0、q̂ 纵场、屏蔽 q²/(q²+β²)²）" if PIE_KERNEL == "az"
+                                     else "原版 AMSET（ε∞、1/(q²+β²)，屏蔽跟随 free_carrier_screening）"))
+        lines.append("piezoelectric_constant:")
+        for row in piezo:
+            lines.append("  - [%s]" % ", ".join("%g" % v for v in row))
     if is_2d and FREE_CARRIER_SCREENING_2D:
         lines.append("free_carrier_screening: true")
     # patch_desym_fix：记下本次是否打相位补丁与判据摘要（gen 时的 preflight 读这一行；
@@ -1817,6 +1838,102 @@ def resolve_dp_optical_3d(is_2d, cwd=None):
     out["mechanisms"] = list(want)
     out["dp_optical"] = rec
     return out
+
+
+def read_piezo(cwd: Path):
+    """[0037] 从 ELASTIC_DIR/OUTCAR 读**弛豫离子**压电张量 e（3×6，C/m²），重排成标准 Voigt 列序。
+
+    与 S8.4 的 read_piezo 同一实现：优先取含 'including ionic contribution' 的总张量块，否则取最后一个块。
+    """
+    oc = Path(cwd) / ELASTIC_DIR / "OUTCAR"
+    if not oc.is_file():
+        return None
+    txt = oc.read_text(errors="ignore")
+    idxs = [m.start() for m in re.finditer("PIEZOELECTRIC TENSOR", txt)]
+    if not idxs:
+        return None
+    chosen, tag = None, None
+    for i in reversed(idxs):
+        head = txt[i:i + 200].splitlines()[0]
+        rows = []
+        for ln in txt[i:].splitlines()[1:]:
+            nums = re.findall(r"-?\d+\.\d+", ln)
+            if len(nums) >= 6:
+                rows.append([float(x) for x in nums[:6]])
+            if len(rows) == 3:
+                break
+        if len(rows) == 3:
+            chosen, tag = rows, head.strip()
+            if "including ionic" in head.lower():
+                break
+    if chosen is None:
+        return None
+    print("[OK] 压电张量来源：%s" % tag)
+    return vasp_to_voigt_piezo(chosen)
+
+
+def resolve_pie_3d(is_2d, cwd, elastic, eps_static):
+    """[0037] SCATTERING 含 PIE 时备好压电张量与插件记录：返回 (piezo 3×6 或 None, record 或 None)。
+
+    缺张量 / 压电为零（中心对称）/ 缺弹性 / az 核缺静态介电 -> 去掉 PIE 并告警（不让 AMSET 缺参数报错）。
+    2D 的 S8 是三维核对照：PIE 只在 S8.4 做（面内二维核），这里去掉。
+    """
+    global SCATTERING
+    if "PIE" not in SCATTERING:
+        return None, None
+
+    def drop(why):
+        global SCATTERING
+        print("[WARN] SCATTERING 含 PIE，但%s——本次去掉 PIE" % why)
+        SCATTERING = [m for m in SCATTERING if m != "PIE"]
+        return None, None
+
+    if is_2d:
+        return drop("2D 材料的 S8 是三维核对照（二维压电核在 S8.4）")
+    if PIE_KERNEL not in ("az", "amset"):
+        sys.exit("[ERROR] PIE_KERNEL=%r 无效，只允许 az / amset" % PIE_KERNEL)
+    piezo = read_piezo(cwd)
+    if piezo is None:
+        return drop(" %s/OUTCAR 没有 PIEZOELECTRIC TENSOR（DFPT/有限差分需 IBRION=6 + LEPSILON 或 LCALCEPS）"
+                    % ELASTIC_DIR)
+    emax = max(abs(v) for row in piezo for v in row)
+    if emax < PIE_EMIN:
+        return drop("压电张量全为零（|e|max = %.2g C/m² < %g：中心对称/无压电响应）" % (emax, PIE_EMIN))
+    if elastic is None:
+        return drop("没有弹性常数（PIE 要解 Christoffel 方程）")
+    if PIE_KERNEL == "az" and eps_static is None:
+        return drop("没有静态介电张量（az 核用静态 ε0 屏蔽压电势）")
+    rec = {"kernel": PIE_KERNEL, "screening": bool(PIE_SCREENING), "e_max_C_m2": round(emax, 6),
+           "piezo_voigt_C_m2": piezo, "source": "%s/OUTCAR" % ELASTIC_DIR, "skill_rev": _SKILL_REV}
+    print("[OK] PIE 开（3D）：|e|max = %.4g C/m²，核 = %s%s"
+          % (emax, PIE_KERNEL, "，自由载流子屏蔽 %s" % ("开" if PIE_SCREENING else "关")
+             if PIE_KERNEL == "az" else "（原版核，只作对照）"))
+    print("[..] PIE 的绝对归一化：az 核在 ε 各向同性、不屏蔽极限下与原版 AMSET 逐点相同（test_pie3d.py）；"
+          "端到端迁移率未做文献定量对照，结论慎用")
+    return piezo, rec
+
+
+def _install_pie_3d(out, record):
+    """[0037] az 核：写 pie_3d.json 并把 amset_pie3d.py 复制进运行目录，返回 True（作业里 import）。
+    不开 PIE 或原版核：删掉旧运行目录里的残留记录，返回 False。"""
+    import json
+    import shutil
+    rec_f = Path(out) / PIE3D_RECORD
+    if not record or record.get("kernel") != "az":
+        if rec_f.is_file():
+            rec_f.unlink()
+            print("[..] 删掉旧的 %s（本次不用三维 PIE 插件）" % PIE3D_RECORD)
+        return False
+    here = Path(__file__).resolve().parent
+    src = next((d / PIE3D_PLUGIN for d in (here, Path.cwd()) if (d / PIE3D_PLUGIN).is_file()), None)
+    if src is None:
+        sys.exit("[ERROR] SCATTERING 含 PIE（PIE_KERNEL=az），但找不到 %s（gen_need 里要有它）" % PIE3D_PLUGIN)
+    dst = Path(out) / PIE3D_PLUGIN
+    if src.resolve() != dst.resolve():
+        shutil.copyfile(src, dst)
+    rec_f.write_text(json.dumps(record, ensure_ascii=False, indent=1), encoding="utf-8")
+    print("[OK] %s + %s 就位（作业里 import amset_pie3d 替换 PIE 核）" % (PIE3D_RECORD, PIE3D_PLUGIN))
+    return True
 
 
 def _install_dp_optical_3d(out, record):
@@ -2280,6 +2397,9 @@ def main():
             ODP_FROZEN = str(_p["ODP_FROZEN"] or "auto")
             if _p["ODP_FROZEN_DMIN"] is not None:
                 ODP_FROZEN_DMIN = float(_p["ODP_FROZEN_DMIN"])
+            global PIE_KERNEL, PIE_SCREENING      # [0037]
+            PIE_KERNEL = str(_p["PIE_KERNEL"] or "az").strip().lower()
+            PIE_SCREENING = bool(_p["PIE_SCREENING"])
             # patch_eps_inf_override：手动覆盖 ε∞（标量或 3 个对角值）
             if _p["EPS_INF_OVERRIDE"]:
                 EPS_INF_OVERRIDE = _p["EPS_INF_OVERRIDE"]
@@ -2440,8 +2560,11 @@ def main():
     _dpo3d = resolve_dp_optical_3d(bool(is_2d), cwd)
     # patch_mesh_min：按最终插值网格下限反算 INTERPOLATION_FACTOR（必须在 write_settings 之前）。
     _fm = apply_mesh_min(_vr, out)
+    # [0037] 三维 PIE：压电张量（缺/为零就去掉 PIE，必须在 write_settings 之前）
+    _pie_src = eps_inf if (_is_nonpolar() and eps_inf is not None) else eps_static
+    _piezo, _pie3d = resolve_pie_3d(bool(is_2d), cwd, elastic, _pie_src)
     write_settings(out, eps_inf, eps_static, gap, elastic,
-                   is_2d=is_2d, c_len=c_len)
+                   is_2d=is_2d, c_len=c_len, piezo=_piezo)
     # patch_overlap_preflight（V24/V25.10）：gen 时的配置闸 + 把检查脚本带进运行目录
     _install_preflight(out)
     _install_fermi_check(out)   # patch_fermi_window（2026-09-28 用户批准）
@@ -2450,6 +2573,7 @@ def main():
     _has_ir = _install_ir_fix(out)       # patch_ir_fix
     _has_fermi = _install_fermi_fix(out)  # patch_fermi_fix（V132）
     _has_dpo3d = _install_dp_optical_3d(out, _dpo3d)   # [0036]
+    _has_pie3d = _install_pie_3d(out, _pie3d)          # [0037]
     _preflight_gate(cwd, out, UNITY_OVERLAP_2D if is_2d else False)
 
     # tf 把 submit_amset.tpl 与本脚本一起推到 gen 运行目录，但按原名推、不会改成
@@ -2470,6 +2594,7 @@ def main():
     _acmd = AMSET_CMD.replace("@AMSET_PLUGINS@", ("import amset_fermi_fix; " if _has_fermi else "")
                               + ("import amset_ir_fix; " if _has_ir else "")
                               + ("import amset_desym_fix; " if _has_fix else "")
+                              + ("import amset_pie3d; " if _has_pie3d else "")   # [0037] 换 PIE 核
                               # [0036] 放最后：它包装散射 worker（开 ADP 谷内掩码时），子进程按引用导入它
                               + ("import amset_dpo3d; " if _has_dpo3d else ""))
     if _HAS_KC:

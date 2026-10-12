@@ -99,6 +99,21 @@ AMSET 结果 = (2*pi/hbar) * Int d2q/(2*pi)^2 * (G_s/c) * delta(dE)
 其中张量 Keldysh 介电函数 `q.eps(q) = eps_env*|q| + q.r.q`，`r = c*(eps_slab,|| - 1)/2`
 （2x2 张量，bohr）；`q_TF = 2*pi*c*dn_3D/dmu`（二维 Thomas-Fermi）。
 
+**PIE 的推导核对（[0037]）**：面内压电极化 `P = e_2D:S`，面电荷 `ρ = -iq.P = q^2 (q q:e_2D.v) A`，
+二维泊松 `φ = 2*pi*ρ/(q.eps(q) + q_TF)`，均分 `|A|^2 = k_B T/(Area*C_2D*q^2)`，得表中 `G_2D`
+（与 Kaasbjerg 2013 的 `e11^2 [cos^2(3θ)/C_LA + sin^2(3θ)/C_TA]` 角分布一致）；代入 `e_2D = c*e`、`C_2D = c*C` 即插件 factor。
+不屏蔽、`r = 0` 时 PIE 核与 ADP 核同形（常数 |M|²，等效 `D = 2*pi*c*(q q:e.v)/eps_env`），绝对归一化继承 ADP 已验证的 `G_s = c*G_2D`；
+有 Keldysh 屏蔽时仍未端到端验证。
+
+**3D PIE（[0037]，S8，插件 `step8_amset/amset_pie3d.py`）**：原版 AMSET 的 PIE 有三处口径差——
+屏蔽写成 `1/(q^2+β^2)`（应为 `q^2/(q^2+β^2)^2`：压电势是库仑势，屏蔽后 `φ ∝ q^2/(q^2+β^2)`，再乘 `|A|^2 ∝ 1/q^2`）、
+用 ε∞（e 是弛豫离子总张量，应配静态 ε0）、纵场用 `ε^-1.q`（应为 `q.e:(q v)/(q.ε0.q)`，各向同性时相同）。插件核：
+`factor = (4*pi)^2 Σ_b [q.e:(q v_b)]^2/(c_b (q.ε0.q)^2) * q^2/(q^2 + κ/(q.ε0.q))^2`，`κ = 4*pi*dn/dμ`，prefactor 同原版 `k_B T`；
+屏蔽由 `PIE_SCREENING`（出厂开）单独控制，不碰全局 `free_carrier_screening`（POP 不变）。
+ε 各向同性、不屏蔽时与原版逐点相同（`test_pie3d.py`，锁住绝对归一化）。S8 从 `step6_elastic/OUTCAR` 读
+`PIEZOELECTRIC TENSOR (including ionic contribution)` 写 settings；**S6 出厂没开 `LCALCEPS`/`LEPSILON`，OUTCAR 里没有压电张量**，
+此时 PIE 自动去掉并告警（2D 的 S8.4 同样如此）。中心对称（`|e|max < 1e-3 C/m^2`）也去掉。`PIE_KERNEL = amset` 回到原版核作对照。
+
 **POP 的两个输入量 r∞ 与 Δr（2026-09-16 新增自检）**：由**同一次** DFPT 的原始 slab 张量给出
 `r∞ = c*(eps_inf,|| - 1)/2`、`r0 = c*(eps_0,|| - 1)/2`、`Δr = r0 - r∞ = c*(eps_0,|| - eps_inf,||)/2`。
 gen_step14 现在会算出这三个数、打印并落盘到 `2d_correction.json` 的 `r_inf_delta_r_check`，
@@ -175,7 +190,7 @@ reference（换成各构型 LOCPOT 的真空能级），再调用 AMSET 原版�
 | **POP 绝对归一化** | **通过**：与独立 TB 参考（\`pop2d_ref_tb.py\`）逐点比，散射率中位比值 1.014、标准差 0.025（63 点全部 ±20% 内）；μ 2226 vs 2445（-9%） |
 | **ADP 绝对归一化** | **通过**：同一 TB 台子上与独立解析参考比，μ 435.0 vs 444.3（**-2%**），逐能量散射率比值 1.03-1.2 |
 | **IMP 绝对归一化** | **基本一致**：μ 188.8 vs 224.9（**-16%**），差的来源是屏蔽口径（参考用非简并 q_TF = 2πn/kT，插件用态密度积分出的费米能处 q_TF） |
-| PIE 绝对归一化 | **未做定量验证**（默认关闭；只有单元测试覆盖极限行为），论文中如实写明 |
+| PIE 绝对归一化 | 2D：不屏蔽、r=0 极限下核与 ADP 同形，归一化继承 ADP 的 -2%；带 Keldysh 屏蔽的端到端**未验证**。3D（[0037]）：各向同性不屏蔽极限与原版 AMSET 逐点相同；端到端迁移率未与文献对照。默认关闭，论文中如实写明 |
 | r∞ / Δr 量级自检 | 已加入 gen（落盘 + 打印 + 闸门）与插件横幅；单元测试覆盖正常/零离子/缺张量三种输入 |
 | 真空不变性（映射系数 c） | **可控台子上通过到 ~7%**：同色散、同步标定下 μ(c=40)/μ(c=20) = 1.071，而固定 c 只改网格的散布 ±5%。真实 slab 数据上仍是"分辨率不足"（插值外推噪声 ±30-45%） |
 | 插值网格收敛 | **新查出的流程级问题**：interpolation_factor 6/10/15 给出 ~30% 差异；建议 2D 项目加收敛检查、DFT 侧 uniform 步 kz>=3 |
