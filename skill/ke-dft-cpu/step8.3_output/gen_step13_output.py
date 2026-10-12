@@ -37,7 +37,7 @@ from pathlib import Path
 # [SKILL_REV] 版本戳：写进 comparison_summary.txt。每次改本脚本逻辑后更新。
 #   陈旧副本已咬人三次（step12/step9b 盖戳后，step13 是最后一个没盖的），
 #   这里盖戳便于从产物反查到底跑的是哪份 skill 副本。
-_SKILL_REV = "2026-10-12-0038"   # [0038] 本征/子集图读 subset_*.json（SUBSETS）；[0036] transport_plots 加 bt2_muscan/ + amset_scan/ 两个扫描图子文件夹；[0035] transport_plots 合并 + τ 对比（tau/）
+_SKILL_REV = "2026-10-13-0039"   # [0039] transport_plots/datasets/：每个数据集单独一张 σ/S/PF/κe 图 + csv； [0038] 本征/子集图读 subset_*.json（SUBSETS）；[0036] transport_plots 加 bt2_muscan/ + amset_scan/ 两个扫描图子文件夹；[0035] transport_plots 合并 + τ 对比（tau/）
 #   bump 记录：2026-10-11-0035 —— transport_plots 合并：intrinsic 图并入 transport 图（4 条数据集
 #   overall / intrinsic / ADP only / BT2xDPT-tau），不再单独出 <M>_intrinsic*.{png,csv}，
 #   只留 <M>_transport.png + 每温度 CSV + <M>_params_<T>K.csv。
@@ -2391,6 +2391,8 @@ def write_transport_plots(cwd, out, is_2d):
                                                基础数据集：overall / 去 IMP / ADP only / BT2xDPT-tau；按可用结果加入机制对照
       <M>_transport_data_<T>K.csv               对应数据，每温度一个
       <M>_params_<T>K.csv                       每温度一张(E1/C2D/m*/tau/mu)
+      datasets/<M>_<数据集>.png/.csv             [0039] 每个数据集（overall / intrinsic / ADP_only / 子集 / BT2）
+                                               单独一张 σ/S/PF/κe 随浓度图，每温度一条线
     [0035] 原 <M>_intrinsic.png 与 <M>_transport.png 数据集重叠（overall/ADP/DPT 三套重复），
       已合并为一张 <M>_transport.png；额外机制对照按 S8.4 可用结果动态显示。
     [0034] 输出位置 = cwd.parent/transport_plots/（材料根，不在 step8.3_output 内）；
@@ -2522,6 +2524,59 @@ def write_transport_plots(cwd, out, is_2d):
         fig.tight_layout(rect=[0, 0.03, 1, 0.985])
         fig.savefig(plots / ("%s_transport.png" % M), dpi=130); plt.close(fig)
         print("[plots] %s_transport.png / _transport_data_<T>K.csv x%d" % (M, len(temps)))
+
+        # ---- [0039] 每个数据集单独一张 σ/S/PF/κe（随浓度，每温度一条线）：datasets/<M>_<数据集>.png + .csv ----
+        #   主图把 overall / intrinsic / ADP only / BT2 挤在一张 9x5 里，intrinsic（去 IMP）等子集没有单独的图。
+        try:
+            _ddir = plots / "datasets"
+            _ddir.mkdir(exist_ok=True)
+            for _old in _ddir.glob("%s_*" % M):                 # 清旧产物（数据集可能变了）
+                _old.unlink()
+            _dq = [("sigma_S/m", "sigma  (S/m)"), ("S_uV/K", "S  (uV/K)"),
+                   ("PF_W/mK2", "PF  (W/m/K$^2$)"), ("kappa_e_W/mK", "kappa_e  (W/m/K)")]
+            _cm = plt.get_cmap("viridis")
+            _dcols = ["T_K", "type", "n_cell_cm-3", "n_2D_cm-2", "carriers_per_atom", "in_interpret_range",
+                      "sigma_S/m", "S_uV/K", "PF_W/mK2", "kappa_e_W/mK", "mu_cm2/Vs", "flag"]
+            for ds, _c, _ls, _mk in dsets:
+                dd_all = [r for r in rows if r["dataset"] == ds]
+                if not dd_all:
+                    continue
+                _f, _axs = plt.subplots(1, len(_dq), figsize=(4.2 * len(_dq), 3.6), squeeze=False)
+                for jc, (col, ttl) in enumerate(_dq):
+                    a = _axs[0][jc]
+                    for it, T in enumerate(temps):
+                        dd = [r for r in dd_all if abs(float(r["T_K"]) - T) < 1e-6]
+                        n = np.array([fnum(r["n_cell_cm-3"]) for r in dd])
+                        y = np.array([fnum(r[col]) for r in dd])
+                        keep = np.abs(n) >= NFLOOR
+                        seg(a, n[keep], y[keep], color=_cm(it / max(1, len(temps) - 1)), lw=1.2,
+                            marker="o", ms=2.6, label=("%d K" % T))
+                    a.set_title(ttl, fontsize=10)
+                    a.set_xlim(-4.15, 4.15); a.set_xticks([-4, -3, -2, -1, 0, 1, 2, 3, 4])
+                    a.set_xticklabels(["1e21", "1e20", "1e19", "1e18", "1e17",
+                                       "1e18", "1e19", "1e20", "1e21"], fontsize=6.5)
+                    a.axvline(0, color="0.55", lw=0.6, ls=":")
+                    a.grid(alpha=0.25, lw=0.4)
+                    a.set_xlabel(r"$n$ (cm$^{-3}$)   n-type | p-type", fontsize=8)
+                    if col == "S_uV/K":
+                        a.set_ylim(-1000, 1000); a.axhline(0, color="k", lw=0.5)
+                    else:
+                        a.set_yscale("log")
+                _hh = [Line2D([], [], color=_cm(it / max(1, len(temps) - 1)), lw=1.4, label="%d K" % T)
+                       for it, T in enumerate(temps)]
+                _f.legend(handles=_hh, loc="lower center", ncol=min(9, len(_hh)), fontsize=8, frameon=False)
+                _f.suptitle("%s  %s" % (M, _LBL.get(ds, ds)), fontsize=11)
+                _f.tight_layout(rect=[0, 0.08, 1, 0.93])
+                _f.savefig(_ddir / ("%s_%s.png" % (M, ds)), dpi=130); plt.close(_f)
+                with open(_ddir / ("%s_%s.csv" % (M, ds)), "w", newline="") as fh:
+                    w = csv.writer(fh)
+                    w.writerow(["# dataset=%s  label=%s" % (ds, _LBL.get(ds, ds))])
+                    w.writerow(_dcols)
+                    for r in dd_all:
+                        w.writerow([r.get(c, "") for c in _dcols])
+                print("[plots] datasets/%s_%s.png" % (M, ds))
+        except Exception as _e:                                   # noqa: BLE001
+            print("[WARN] 分数据集图失败（%s: %s）" % (type(_e).__name__, _e))
 
     # ---- ③ 参数表（每温度一张，文献格式）----
     vp = out / MU_T_CSV
