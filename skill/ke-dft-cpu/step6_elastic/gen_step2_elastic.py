@@ -69,11 +69,13 @@ KSPACING = "0.02"      # 倒空间 K 点间距（static 用 0.03，弹性更密�
 
 # ---- 在"继承 step1 + 上面注入"之外，额外增删的 INCAR 标签 ----
 # 例：INCAR_SET_EXTRA = {"ALGO": "Normal", "SYMPREC": "1E-5"}
-# [0038] LCALCEPS = .TRUE.：IBRION=6 顺带算弛豫离子压电张量（PIEZOELECTRIC TENSOR，含
-#   "including ionic contribution"），供下游 ke/zt 的 PIE 散射用。代价：每个位移多做一次
-#   有限电场计算，S6 耗时约翻倍；中心对称材料压电张量为零（白付代价），要关掉在
-#   step.conf 写 [incar.final] LCALCEPS = .FALSE. 覆盖即可。
-INCAR_SET_EXTRA    = {"LCALCEPS": ".TRUE."}
+# [0038] LCALCEPS：出厂**关**。要算 PIE 的非中心对称压电材料，在本材料 S6 的 step.conf 写
+#     [incar.final]
+#     LCALCEPS = .TRUE.
+#   IBRION=6 会顺带算弛豫离子压电张量（PIEZOELECTRIC TENSOR，含 "including ionic contribution"），
+#   供下游 ke/zt 的 PIE 散射用。代价：每个位移多做一次有限电场计算，S6 耗时约翻倍。
+#   中心对称材料张量为零（白付代价），金属/窄带隙材料的 S6 还有失败风险，所以不要全局打开。
+INCAR_SET_EXTRA    = {}
 INCAR_REMOVE_EXTRA = []     # 例：["LDIPOL", "IDIPOL"]
 
 # ---- submit.sh Slurm 参数覆盖（渲染模板后再补丁；None=不改，保持模板原值）----
