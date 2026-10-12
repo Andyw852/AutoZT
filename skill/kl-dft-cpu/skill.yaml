@@ -200,6 +200,10 @@ io_schema:
        desc: "取力 INCAR 基准对照：on 时在 step4_disp/bench/<variant>/disp-* 额外生成 ≤8 变体 × INCAR_BENCH_FRAMES 帧（同一批位移），比较 {LREAL=.FALSE./Auto}×{ADDGRID 不加/.TRUE.} 与 ENCUT 1.5×/2.0× 的力；判据 max|ΔF| < 0.5 meV/Å。bench/ 隔离于生产 fanout 与 S5 帧校验，默认 off 不改变现有行为"}
     - {name: INCAR_BENCH_FRAMES, default: 2, where: step.conf,
        desc: "取力 INCAR 对照每个变体取生产前几帧（默认 2）"}
+    - {name: FC_IMPORT_DIR, default: "", where: step.conf,
+       desc: "fit-fc-thermal 力常数导入（跨技能复用 fc2/fc3）：非空时 S5_fc 跳过拟合、从该目录装配 step5_fc/（reuse_fcfit）；推送 kl_bundle/ 也会自动触发导入模式"}
+    - {name: FC_IMPORT_ALLOW_FOREIGN, values: ["false", "true"], default: false, where: step.conf,
+       desc: "导入模式来源校验开关：bundle 的数据来源不是本技能 step4_disp 时默认拒绝；确要跨来源（kl-mlff/phonon-mlff 等）复用设 true（结构/超胞一致性仍校验）"}
   steps:
     - {step: S1_opt, title: "Relax structure",
        tool: "VASP (vasp_std) · relax_common 三段式",

@@ -837,7 +837,9 @@ def _gen_one(conf, out, job_label="S1fit"):
         "subtract_equilibrium": bool(conf["SUBTRACT_EQUILIBRIUM"]),
         "eq_force_max": float(conf["EQ_FORCE_MAX"] or 0.0),
         "equilibrium_forces_npy": str(conf["EQUILIBRIUM_FORCES_NPY"] or ""),
-        "min_success_ratio": float(conf["MIN_SUCCESS_RATIO"] or 0.9),
+        # 0 = 不限：不能写成 conf["MIN_SUCCESS_RATIO"] or 0.9（0 是假值会被换成 0.9）
+        "min_success_ratio": float(0.9 if conf["MIN_SUCCESS_RATIO"] is None
+                                   else conf["MIN_SUCCESS_RATIO"]),
         "min_success_frames": int(conf["MIN_SUCCESS_FRAMES"] or 0),
         "coords": coords,
         # shell / third-order cutoff determination

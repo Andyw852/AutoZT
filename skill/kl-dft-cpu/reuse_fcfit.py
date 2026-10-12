@@ -12,7 +12,7 @@ S6_kappa 直接吃 fit-fc-thermal 的拟合结果，不必在 kl 侧再把 S4 �
     phono3py_params.yaml (若有)    ->  phono3py_params.yaml（顶层）
     都没有则用 POSCAR + SUPERCELL 现生成（需要 phono3py）
     cutoff_scan/cut3_<tag>/*       ->  cutoff_scan/cut3_<tag>/*
-    cut3_<tag>/*（顶层，若有）      ->  cut3_<tag>/*
+    cut3_<tag>/*（顶层，若有）      ->  cutoff_scan/cut3_<tag>/*
     shengbte/FORCE_CONSTANTS_*     ->  shengbte/FORCE_CONSTANTS_*
     phonon_summary.json            ->  phonon_summary.json（虚频闸 marker）
     fc_fit_summary.json / fc_dataset.json ->  （溯源 / 超胞矩阵）
@@ -105,6 +105,28 @@ def _copy_tree_files(srcdir, dstdir):
     return n
 
 
+def _clean_fit_artifacts(out):
+    """清掉 step5_fc/ 里上一轮拟合留下的产物，避免 S6 把它们当成本次导入结果。
+
+    assemble 只覆盖同名文件：上一轮本技能自拟（或上次导入）残留的多余产物
+    （cutoff_scan 里多出来的档、methods/、cutoff_selection.json、旧 fc2/fc3、
+    旧 phono3py YAML、旧 shengbte/ 等）不会被覆盖，S6 会按旧的逐档截断选截断、
+    把旧拟合的 κ 当结果，还会读旧 methods.json 把旧方法的力常数也算一遍。
+    装配前把这些拟合产物全部清掉（POSCAR / kl_params.txt 不在内，会重新写）。
+    """
+    out = Path(out)
+    for name in ("fc2.hdf5", "fc3.hdf5", "cutoff_scan.json", "cutoff_selection.json",
+                 "methods.json", "fc_fit_summary.json", "fc_dataset.json",
+                 "phono3py_disp.yaml", "phono3py_params.yaml"):
+        p = out / name
+        if p.is_file():
+            p.unlink()
+    for name in ("cutoff_scan", "methods", "shengbte"):
+        p = out / name
+        if p.is_dir():
+            shutil.rmtree(p)
+
+
 def assemble(fcfit_dir, out, poscar=None, supercell=None, dim=None,
              mesh=None, nac=False, functional="pbesol", verbose=True):
     """把 fit-fc-thermal 的 step1_fit 目录装配成 kl 的 step5_fc 目录（幂等）。"""
@@ -122,6 +144,10 @@ def assemble(fcfit_dir, out, poscar=None, supercell=None, dim=None,
         sys.exit("[ERROR] %s 缺 %s —— 不是完整的 fit-fc-thermal step1_fit 产物"
                  % (src, "、".join(missing)))
 
+    # ---- 装配前清掉 out 里上一轮拟合的残留（见 _clean_fit_artifacts）----
+    if src != out:
+        _clean_fit_artifacts(out)
+
     # ---- 力常数：顶层布局（共享 S6 _gen_one 只认 step5_fc/fc2.hdf5 等顶层文件）----
     for f in ("fc2.hdf5", "fc3.hdf5"):
         shutil.copyfile(src / f, out / f)
@@ -134,10 +160,10 @@ def assemble(fcfit_dir, out, poscar=None, supercell=None, dim=None,
             if cd.is_dir():
                 _copy_tree_files(cd, out / "cutoff_scan" / cd.name)
                 cut_dirs += 1
-    # 旧 bundle 也可能把 cut3_* 直接放顶层
+    # 旧 bundle 也可能把 cut3_* 直接放顶层：S6 只读 cutoff_scan/cut3_*，一并归位
     for cd in sorted(src.glob("cut3_*")):
         if cd.is_dir():
-            _copy_tree_files(cd, out / cd.name)
+            _copy_tree_files(cd, out / "cutoff_scan" / cd.name)
             cut_dirs += 1
 
     # ---- 力常数：ShengBTE 格式 ----

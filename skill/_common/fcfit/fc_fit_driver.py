@@ -794,7 +794,9 @@ def cmd_prep(cfg, out):
             head = ",".join(missing[:8]) + ("…" if len(missing) > 8 else "")
             n_all = len(files) + len(missing)
             ratio = len(files) / float(max(n_all, 1))
-            min_ratio = float(cfg.get("min_success_ratio") or 0.9)
+            _ratio = cfg.get("min_success_ratio")
+            # 0 = 不限：不能写成 cfg.get(...) or 0.9（0 是假值会被换成 0.9）
+            min_ratio = 0.9 if _ratio is None else float(_ratio)
             min_frames = int(cfg.get("min_success_frames") or 0)
             if ratio < min_ratio or len(files) < min_frames:
                 sys.exit("[ERROR] 成功帧 %d/%d（%.0f%%）低于缺帧门禁"
