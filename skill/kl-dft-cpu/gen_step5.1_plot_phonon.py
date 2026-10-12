@@ -32,7 +32,7 @@ import numpy as np   # 画低频放大图/写数据表用（原来本文件没�
 import imag_policy  # 虚频判据唯一真源（阈值常量与 THz→cm-1；gen_need 会带过来）
 
 OUT_NAME = "step5_phonon_plot"       # 步骤目录名，必须与 skill.yaml 的 name 一致
-FCSUB    = "phono3py"                # S5 拟合产物子目录
+FCSUB    = "phono3py"                # 旧版 S5 拟合产物子目录（[0019] 后 fc2.hdf5 直接落 step5_fc/，这里保留作回退）
 NPOINTS  = int(os.environ.get("KAPPA_PLOT_NPOINTS", "31"))
 # 每段路径采样点。128 原子胞在集群登录节点上算一条完整 band structure 要几分钟
 # （jzzn 实测 101 点/段 > 400 s，超过 tf 给 gen 的预算，步骤会被判失败），
@@ -58,6 +58,7 @@ PLOT_SPEC = {
     "PLOT_CORES": (16, "int"),          # 该作业要几个核（画图/建动力学矩阵是 CPU）
     "CONDA_SH": ("", "str"),            # 由集群配置注入
     "CONDA_ENV": ("", "str"),           # 由集群配置注入；留空让"读不到就报错"真正生效
+    "KL_ENV": ("", "str"),              # kl-dft-cpu 声子(phono3py)环境，由集群 kl_env 注入
 }
 STEP = "step5_phonon_plot"
 
@@ -125,13 +126,10 @@ def _write_submit(outdir):
             "QOS": str(conf["SBATCH_QOS"] or "premium"),
             "NTASKS": str(int(conf["PLOT_CORES"] or 16)),
             "CONDA_SH": str(conf["CONDA_SH"]),
-            # kl 技能的环境是 atomate2_p_a，【不是】集群级 conda_env（四个集群都把它
-            #   指向 MACE venv：/public/.../venvs/mace_cpu、mace、mace-gpu…）。原来透传
-            #   conf["CONDA_ENV"] 会让作业去 conda activate 一个 venv 路径 →
-            #   "EnvironmentLocationNotFound: Not a conda environment"（实测 hanhai25
-            #   2026-09-27；只是 base 环境恰好有 phono3py 才没炸）。与 S6_kappa 的
-            #   phono3py 分支同一处理；环境名见 skill.yaml 的 requires.conda。
-            "CONDA_ENV": "atomate2_p_a",
+            # kl-dft-cpu 声子(phono3py)环境：优先集群 kl_env（setting/<集群>.yaml 注入成
+            #   KL_ENV），回退 conda_env，再回退 requires.conda 的 atomate2_p_a。
+            #   （2026-10-12 修：原来写死 atomate2_p_a，3090 上环境名是 mace-gpu 会找不到。）
+            "CONDA_ENV": str(conf["KL_ENV"] or conf["CONDA_ENV"] or "atomate2_p_a"),
             # 作业的 cwd 是【步骤目录】，而本脚本在它的上一级（材料技能目录），
             # 所以必须写绝对路径——否则作业里 "can't open file" 直接失败。
             "PLOT_CMD": "python -u %s --work" % Path(__file__).resolve()}
@@ -180,7 +178,11 @@ def _locate():
       C. CWD = <mat>/kl-dft-cpu/step5_fc          —— 手动进 S5 目录里跑
     """
     cwd = Path.cwd().resolve()
-    cands = [(cwd / "step5_fc" / FCSUB,        cwd / OUT_NAME),
+    cands = [(cwd / "step5_fc",                cwd / OUT_NAME),      # [0019] fc2.hdf5 直接在 step5_fc/
+             (cwd.parent / "step5_fc",         cwd if cwd.name == OUT_NAME
+                                               else cwd.parent / OUT_NAME),
+             (cwd,                             cwd.parent / OUT_NAME),  # C 案 cwd 就是 step5_fc
+             (cwd / "step5_fc" / FCSUB,        cwd / OUT_NAME),      # 旧版 phono3py 子目录
              (cwd.parent / "step5_fc" / FCSUB, cwd if cwd.name == OUT_NAME
                                                else cwd.parent / OUT_NAME),
              (cwd / FCSUB,                     cwd.parent / OUT_NAME)]

@@ -849,6 +849,7 @@ def _cluster_conda_step_conf(m, hpc_name=None):
     env = hpc.get("conda_env")
     mdir = hpc.get("mlff_model_dir")
     aenv = hpc.get("amset_env")   # amset 专用环境名（如 amset / amset_clean）
+    kenv = hpc.get("kl_env")      # kl-dft-cpu 声子(phono3py)专用环境名
     pdir = hpc.get("potcar_dir")          # VASP POTCAR 库根目录（VASP 技能）
     rdir = hpc.get("references_dir")      # 凸包参考相共享目录（defect 技能）
     # 本机集群（ssh_host 为空，setting/local.yaml）里显式写空的 conda_sh/conda_env
@@ -857,7 +858,7 @@ def _cluster_conda_step_conf(m, hpc_name=None):
     _local = "ssh_host" in hpc and not hpc.get("ssh_host")
     clear = [k for k, y in (("CONDA_SH", "conda_sh"), ("CONDA_ENV", "conda_env"))
              if _local and y in hpc and not hpc.get(y)]
-    if not (sh or env or mdir or aenv or pdir or rdir or clear):
+    if not (sh or env or mdir or aenv or kenv or pdir or rdir or clear):
         return None
     lines = ["[params]"]
     for k in clear:
@@ -870,6 +871,8 @@ def _cluster_conda_step_conf(m, hpc_name=None):
         lines.append("MACE_MODEL_DIR = %s" % mdir)
     if aenv:
         lines.append("AMSET_ENV = %s" % aenv)
+    if kenv:
+        lines.append("KL_ENV = %s" % kenv)
     if pdir:
         lines.append("POTCAR_DIR = %s" % pdir)
     if rdir:
