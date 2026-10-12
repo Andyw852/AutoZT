@@ -39,15 +39,26 @@ def test_intrinsic_json_has_kappa_e(tmp_path):
 def test_s84_chain_runs_adp_only_postprocess_when_asked():
     src = (S84 / "gen_step14_amset2d.py").read_text(encoding="utf-8")
     assert '"INTRINSIC_ADP_ONLY": (None, "bool")' in src          # [0032] SPEC 默认 None（显式才覆盖）
-    i = src.index("if INTRINSIC_ADP_ONLY:")
-    assert "--drop IMP,POP,PIE" in src[i:i + 300] and "intrinsic_ADP.json" in src[i:i + 300]
-    j = src.index('_acmd = _acmd + " && python postprocess_intrinsic.py --check-reproduce"')
-    assert j < i < src.index("AMSET_TAIL", i)          # 在复现硬门之后、落成 transport.json 之前
+    assert '"SUBSETS": (None, "str")' in src                       # [0038] 子集生成
+    i = src.index("_specs = subset_specs(SUBSETS, SCATTERING)")
+    assert "for _keep, _drop, _name in _specs:" in src
+    assert "--drop" in src and "subset_" in src
+    assert i < src.index("AMSET_TAIL", i)          # 在落成 transport.json 之前
 
 
-def test_adp_only_json_is_archived_with_s84():
+def test_adp_only_json_is_archived_with_s84(tmp_path):
     sys.path.insert(0, str(ROOT / "skill" / "_common" / "opt"))
     spec = importlib.util.spec_from_file_location("kc_0018", str(ROOT / "skill" / "ke-dft-cpu" / "ke_common.py"))
     kc = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(kc)
-    assert "intrinsic_ADP.json" in kc.DONE_MARKERS["step8.4_amset2d"]
+    # [0038] subset_*.json 文件名随 SUBSETS 动态变化，归档由 _marker_files 的 glob 兜底
+    d = tmp_path / "step8.4_amset2d"
+    d.mkdir()
+    (d / "transport.json").write_text("{}")
+    (d / "subset_ADP+POP+IMP.json").write_text("{}")
+    (d / "subset_ADP.json").write_text("{}")
+    (d / "intrinsic_ADP.json").write_text("{}")            # 旧格式残留也要归档
+    names = kc._marker_files(d, "step8.4_amset2d")
+    assert "transport.json" in names
+    assert "subset_ADP+POP+IMP.json" in names and "subset_ADP.json" in names
+    assert "intrinsic_ADP.json" in names

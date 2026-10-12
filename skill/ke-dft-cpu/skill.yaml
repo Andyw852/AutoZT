@@ -281,7 +281,9 @@ optional_steps:
         # [0036] dp_optical.py（住在 step8.4_amset2d/）+ amset_dpo3d.py + odp_frozen.py：三维 ODP/IVS
         #   （谷内 ODP 出厂用 S8.21 的冻声子参数，开了 odp_frozen 组才有；谷间 IVS 只认 step.conf 手填）。
         # [0037] amset_pie3d.py：三维 PIE 核（SCATTERING 含 PIE、PIE_KERNEL=az 时复制进运行目录并 import）。
-        gen: gen_step10_amset.py, gen_need: [stepconf.py, step.conf, ke_common.py, dim_common.py, submit_amset.tpl, vdw_radii.py, discriminant_common.py, overlap_preflight.py, fermi_window_check.py, amset_desym_fix.py, amset_ir_fix.py, amset_fermi_fix.py, dp_optical.py, amset_dpo3d.py, odp_frozen.py, amset_pie3d.py], fetch_all: true,
+        gen: gen_step10_amset.py, gen_need: [stepconf.py, step.conf, ke_common.py, dim_common.py, submit_amset.tpl, vdw_radii.py, discriminant_common.py, overlap_preflight.py, fermi_window_check.py, amset_desym_fix.py, amset_ir_fix.py, amset_fermi_fix.py, dp_optical.py, amset_dpo3d.py, odp_frozen.py, amset_pie3d.py, postprocess_intrinsic.py], fetch_all: true,
+         # [0037] mesh_*.h5（每机制每 k 点散射率，3D 可达 GB 级）只给作业内本征后处理用，不回拉本地
+         fetch_exclude: ["mesh_*.h5"],
          # [0036] step8.21_odp_read?：开了 odp_frozen 组就等冻声子参数（没开不提示缺）
          needs: ["step4_wave", "step5_dielect", "step6_elastic", "step7b_deform_read", "step2_bandgap/step2.2_pbe_plot", "step2_bandgap/step2.3_hse_plot", "step8.21_odp_read?"]}
 

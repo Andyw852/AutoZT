@@ -69,12 +69,16 @@ def test_overall_without_set_logic():
 def test_gen_chain_rm_spec_and_markers():
     src = (S84 / "gen_step14_amset2d.py").read_text(encoding="utf-8")
     assert '"OVERALL_WITHOUT": (None, "str")' in src and '_p["OVERALL_WITHOUT"]' in src
+    assert '"SUBSETS": (None, "str")' in src and '_p["SUBSETS"]' in src            # [0038]
     assert "\nOVERALL_WITHOUT = \"ODP\"\n" in src
-    i = src.index('--drop IMP,POP,PIE,ODP,IVS"')
+    i = src.index('_specs = subset_specs(SUBSETS, SCATTERING)')     # [0038] 子集循环
     j = src.index('_ow, _ow_name = overall_without_set(OVERALL_WITHOUT, SCATTERING)')
     k = src.index('" && python postprocess_intrinsic.py --drop %s --out %s" % (",".join(_ow), _ow_name)')
     assert i < j < k < src.index("_acmd = _acmd + AMSET_TAIL")              # 在落成 transport.json 之前
-    assert "rm -f transport.json intrinsic_transport.json intrinsic_ADP.json overall_no*.json tau_energy.json mesh_*.h5;" in src
+    assert "rm -f transport.json subset_*.json intrinsic_*.json overall_no*.json tau_energy.json mesh_*.h5;" in src
+    assert "'rm -f subset_*.json intrinsic_*.json overall_no*.json tau_energy.json')" in src
+    assert "POSTPROCESS_ONLY requires WRITE_MESH = true" in src
+    assert "global INTRINSIC_ADP_ONLY, OVERALL_WITHOUT, TAU_ENERGY, POSTPROCESS_ONLY" in src
     kc = _load("kc_0034", KE / "ke_common.py")
     assert {"overall_noODP.json", "overall_noODP_IVS.json"} <= set(kc.DONE_MARKERS["step8.4_amset2d"])
 
@@ -82,10 +86,11 @@ def test_gen_chain_rm_spec_and_markers():
 # ---------------------------------------------------------------- S8.3 本征套件 / μ(T)
 def test_s83_suite_picks_up_overall_without(tmp_path):
     S = _s83()
+    assert S._intr_legend("ADP_POP", {"sets": {"ADP_POP": {"labels": ["ADP"]}}}, "ADP+POP") == "amset_ADP"
     cwd = T32._material(tmp_path)
     _add_without(cwd)
     data, geom, rows = T32._rows(S, cwd)
-    assert [d[0] for d in data["set_defs"]] == ["ADP_only", "intrinsic", "overall", "overall_noODP"]
+    assert [d[0] for d in data["set_defs"]] == ["ADP_only", "ADP_POP", "ADP_POP_ODP", "intrinsic", "overall", "overall_noODP"]
     r = T32._pick(rows, 300.0, "overall_noODP", "n", T32.N2D[0])
     assert r["mu_cm2/Vs"] == pytest.approx(150.0, rel=1e-6)
     assert S._intr_legend("overall_noODP", data, "x") == "overall w/o ODP (ADP+POP+IMP+IVS)"
@@ -98,7 +103,7 @@ def test_s83_without_set_absent_or_stale(tmp_path):
     S = _s83()
     cwd = T32._material(tmp_path)
     data, *_ = T32._rows(S, cwd)
-    assert [d[0] for d in data["set_defs"]] == ["ADP_only", "intrinsic", "overall"]      # 没有就不列
+    assert [d[0] for d in data["set_defs"]] == ["ADP_only", "ADP_POP", "ADP_POP_ODP", "intrinsic", "overall"]      # extra(overall_no*) 没有就不列
     _add_without(cwd, stale=True)
     data, *_ = T32._rows(S, cwd)
     assert "overall_noODP" not in data["sets"] and any("上一轮" in n for n in data["notes"])

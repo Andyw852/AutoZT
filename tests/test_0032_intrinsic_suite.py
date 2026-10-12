@@ -342,12 +342,15 @@ def test_s84_intrinsic_switches_default_on_and_explicit_off():
     assert f(None, False) == (True, False)
     assert f(False, True) == (True, True)                # 显式要只 ADP -> 隐含 mesh
     assert f(True, None, False, False) == (True, False)  # 旧出厂值 + 只开 mesh
-    # SCATTERING 不含 ADP 时不出只 ADP（否则全部机制置零、整步 FAIL）
-    i = src.index('if INTRINSIC_ADP_ONLY and "ADP" not in [str(x).upper() for x in SCATTERING]:')
-    assert i < src.index('_acmd = _acmd + (" && python postprocess_intrinsic.py --drop IMP,POP,PIE,ODP,IVS"')
-    # 链首清掉上一轮的本征产物与 mesh
-    assert ("rm -f transport.json intrinsic_transport.json intrinsic_ADP.json overall_no*.json tau_energy.json mesh_*.h5;"
-            in src)                                       # [0034] 加 overall_no*.json
+    # [0038] SUBSETS 驱动子集生成（subset_<机制>.json）；INTRINSIC_ADP_ONLY=false 摘掉"只 ADP"子集
+    assert '"SUBSETS": (None, "str")' in src
+    assert "def subset_specs(" in src
+    i = src.index("_specs = subset_specs(SUBSETS, SCATTERING)")
+    assert "for _keep, _drop, _name in _specs:" in src
+    assert "--drop" in src and "subset_" in src
+    assert "if not INTRINSIC_ADP_ONLY:" in src
+    # 链首清掉上一轮的子集/本征产物与 mesh
+    assert "rm -f transport.json subset_*.json intrinsic_*.json overall_no*.json tau_energy.json mesh_*.h5;" in src
 
 
 # ---------------------------------------------------------------- autozt fetch_exclude

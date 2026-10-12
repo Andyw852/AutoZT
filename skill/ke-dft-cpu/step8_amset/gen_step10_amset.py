@@ -17,7 +17,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 # [SKILL_REV] 版本戳：写进 settings.yaml 头，便于从结果反查跑的是哪份 skill 副本。
-_SKILL_REV = "2026-10-12-0037-pie3d"   # [0037] 三维 PIE（读压电张量写 settings，插件 amset_pie3d.py 修正核）   # [0036] 三维 ODP/IVS（DP_OPTICAL_*，插件 amset_dpo3d.py）   # [0014] 2D 弹性用原始 slab 值（不乘 c/t）；V115 相位补丁
+_SKILL_REV = "2026-10-13-0038-subsets"   # [0038] SUBSETS 散射机制子集（subset_<机制>.json）   # [0037] 三维 PIE（读压电张量写 settings，插件 amset_pie3d.py 修正核）   # [0036] 三维 ODP/IVS（DP_OPTICAL_*，插件 amset_dpo3d.py）   # [0014] 2D 弹性用原始 slab 值（不乘 c/t）；V115 相位补丁
 import stepconf  # noqa: E402
 try:
     import ke_common as kc
@@ -98,10 +98,11 @@ AMSET_RUN_PY = ('python -c "@AMSET_PLUGINS@'
                 'from amset.log import initialize_amset_logger as L; L(); '
                 'from amset.core.run import Runner; Runner.from_directory(\'.\').run()" '
                 '>> amset.log 2>&1')
-AMSET_CMD   = ('rm -f transport.json; '
+AMSET_CMD   = ('rm -f transport.json subset_*.json intrinsic_*.json overall_no*.json mesh_*.h5; '
                'python overlap_preflight.py --in-job || exit 1; '
-               + AMSET_RUN_PY + ' && python fermi_window_check.py && '
-               'cp -f "$(ls -t transport_*.json 2>/dev/null | head -1)" transport.json && ls -l transport.json')
+               + AMSET_RUN_PY + ' && python fermi_window_check.py'
+               '@POSTPROCESS@'
+               ' && cp -f "$(ls -t transport_*.json 2>/dev/null | head -1)" transport.json && ls -l transport.json')
 # patch_desym_fix：去对称化相位补丁开关（auto = ke_common.desym_fix_setting 的默认链：
 #   step.conf DESYM_FIX > 环境变量 AZ_DESYM_FIX > ke_common.DESYM_FIX_DEFAULT（验证期 False））。
 IR_FIX = "auto"           # patch_ir_fix（V125）：auto/on/off，auto = off（V130，见 ke_common.IR_FIX_DEFAULT）
@@ -123,6 +124,50 @@ SCATTERING  = ["ADP", "IMP", "POP"]   # 形变势声学 + 电离杂质 + 极性�
 #   （用户 D6：耗时的是 POP 这类非弹性散射，收敛测试可以先不算它）；
 #   空串 = 出厂 [ADP, IMP, POP] 行为不变；含不认识机制则整项忽略并告警。
 _ALLOWED_SCATTERING = {"ADP", "IMP", "POP", "PIE", "ODP", "IVS"}
+# [0038] SUBSETS —— 要输出的散射机制子集（每个子集生成一个 subset_<机制>.json）。
+#   分号分隔多个子集，每个子集内用 +/逗号/空格 分隔机制（写的是**保留**的机制）。
+#   出厂：ADP+POP+IMP+ODP+PIE（全机制）/ ADP+POP+ODP+PIE（去 IMP）/ ADP（只 ADP）。
+#   子集里本次没开的机制自动忽略：不开 ODP/PIE 时出厂自动退化为
+#   ADP+POP+IMP / ADP+POP / ADP，即 subset_ADP+POP+IMP.json / subset_ADP+POP.json / subset_ADP.json。
+#   需要 WRITE_MESH（同一份 mesh 去机制重积分）；off = 不出 subset_*.json。
+SUBSETS = "ADP+POP+IMP+ODP+PIE; ADP+POP+ODP+PIE; ADP"
+_SUBSET_ORDER = ["ADP", "POP", "IMP", "ODP", "PIE", "IVS"]
+
+
+def subset_specs(subsets_str, scattering):
+    """[0038] SUBSETS -> [(keep_list, drop_list, out_name), ...]。
+
+    每个子集只保留本次 SCATTERING 里开着的机制（没开的自动忽略）；文件名按
+    _SUBSET_ORDER 排序；空子集/重复子集跳过。返回的 keep 列表即子集文件名里的
+    机制顺序，drop 列表 = SCATTERING 里有、但该子集没保留的机制（喂给 --drop）。
+    """
+    raw = "ADP+POP+IMP+ODP+PIE; ADP+POP+ODP+PIE; ADP" if subsets_str is None else str(subsets_str)
+    if raw.strip().lower() in ("", "off", "none", "false", "no", "0"):
+        return []
+    active = [str(x).strip().upper() for x in scattering]
+    active_set = set(active)
+    seen, out = set(), []
+    for grp in raw.split(";"):
+        mechs = []
+        for x in grp.replace("+", " ").replace(",", " ").split():
+            x = x.strip().upper()
+            if x and x not in mechs:
+                mechs.append(x)
+        bad = [m for m in mechs if m not in _ALLOWED_SCATTERING]
+        if bad:
+            sys.exit("[ERROR] SUBSETS 含不认识的机制 %s（允许 %s）" % (bad, sorted(_ALLOWED_SCATTERING)))
+        keep = [m for m in mechs if m in active_set]
+        if not keep:
+            continue
+        keep = [m for m in _SUBSET_ORDER if m in set(keep)] + \
+               [m for m in keep if m not in set(_SUBSET_ORDER)]
+        key = tuple(keep)
+        if key in seen:
+            continue
+        seen.add(key)
+        drop = [m for m in active if m not in set(keep)]
+        out.append((keep, drop, "subset_%s.json" % "+".join(keep)))
+    return out
 # [0036] 三维光学形变势（ODP，谷内）与谷间散射（IVS）：与 S8.4（2D，[0033]）同一常数形变势模型，
 #   率由 dp_optical.py（住在 step8.4_amset2d/）解析给出，运行期插件 amset_dpo3d.py 注册进原版 AMSET。
 #   公式 1/τ = πD²/(Mω)·[N·G(x+ħω) + (N+1)·G(x−ħω)] 与维数无关；三维只是谷几何用完整 3D 距离。
@@ -147,6 +192,10 @@ ADP_INTRAVALLEY = "auto"
 ODP_FROZEN = "auto"
 ODP_FROZEN_SRC = "step8.21_odp_read/odp_params.json"
 ODP_FROZEN_DMIN = 0.05
+# [0038] 三维本征后处理：WRITE_MESH 写 mesh_*.h5，作业链尾部 postprocess_intrinsic.py 去机制重积分，
+#   按 SUBSETS 出 subset_<机制>.json，供 S8.3 出多机制对照图。关掉：step.conf 写 WRITE_MESH = false。
+WRITE_MESH = True
+INTRINSIC_ADP_ONLY = True
 DPO3D_RECORD = "dp_optical_3d.json"
 DPO3D_PLUGIN = "amset_dpo3d.py"
 DPO_MODULE = "dp_optical.py"
@@ -347,6 +396,10 @@ SPEC = {
     "ODP_FROZEN_DMIN": (None, "float"),
     "PIE_KERNEL": ("az", "str"),                # [0037] 三维 PIE 核 az/amset
     "PIE_SCREENING": (True, "bool"),
+    # [0037] 三维本征后处理（WRITE_MESH 写 mesh，postprocess 去机制重积分出多机制对照）
+    "WRITE_MESH": (WRITE_MESH, "bool"),
+    "INTRINSIC_ADP_ONLY": (INTRINSIC_ADP_ONLY, "bool"),
+    "SUBSETS": (None, "str"),               # [0038] None = 出厂三套；off = 不出 subset_*.json
     # patch_mem_guard：内存粗估阈值（GiB）与自动独占开关。
     "MEM_WARN_GIB": (MEM_WARN_GIB, "int"),
     "MEM_LIMIT_GIB": (None, "int"),
@@ -1492,6 +1545,8 @@ def write_settings(out: Path, eps_inf, eps_static, gap, elastic,
     # ★ 必须显式写 nworkers：不写则 AMSET 默认 -1 = 用满节点全部核，
     #   会超订 submit 模板申请的核数（见文件头 NWORKERS 处的实测记录）。
     lines.append("nworkers: %d" % int(NWORKERS))
+    # [0037] 三维本征后处理：写 mesh_*.h5 供 postprocess_intrinsic.py 去机制重积分。
+    lines.append("write_mesh: %s" % ("true" if WRITE_MESH else "false"))
     _popf = read_pop_frequency(Path.cwd() / DIELECT_DIR)
     if _popf is not None and "POP" in SCATTERING:
         lines.append("pop_frequency: %s" % _popf)
@@ -1984,6 +2039,27 @@ def _install_preflight(out):
 FERMI_CHECK_SRC_NAME = "fermi_window_check.py"
 
 
+POSTPROCESS_SRC_NAME = "postprocess_intrinsic.py"
+
+
+def _install_postprocess(out):
+    """[0037] 把 postprocess_intrinsic.py（住在 step8.4_amset2d/）复制进运行目录。
+    WRITE_MESH=true 时作业链尾部会自动执行它去机制重积分，出多机制对照 JSON。"""
+    name = POSTPROCESS_SRC_NAME
+    src = next((p for p in (Path(__file__).resolve().parent.parent / "step8.4_amset2d" / name,
+                            Path(__file__).resolve().parent / name,
+                            Path.cwd() / name) if p.is_file()), None)
+    if src is None:
+        if WRITE_MESH:
+            sys.exit("[ERROR] WRITE_MESH=true，但找不到 %s（gen_need 里要有它）" % name)
+        print("[WARN] 找不到 %s —— WRITE_MESH 关着，不影响本次运行" % name)
+        return
+    dst = Path(out) / name
+    if src.resolve() != dst.resolve():
+        shutil.copyfile(src, dst)
+    print("[OK] 本征后处理脚本就位：%s" % dst)
+
+
 def _install_fermi_check(out):
     """把 fermi_window_check.py 复制进运行目录（作业链末尾的费米能级窗口检查要用）。
 
@@ -2410,6 +2486,12 @@ def main():
             ELASTIC_GUARD = bool(_p["ELASTIC_GUARD"])
             STRUCTURE_GUARD = bool(_p["STRUCTURE_GUARD"])
             ALLOW_COARSE_S3 = bool(_p["ALLOW_COARSE_S3"])
+            # [0037] 三维本征后处理开关（step.conf 覆盖；出厂 True）
+            global WRITE_MESH, INTRINSIC_ADP_ONLY, SUBSETS
+            WRITE_MESH = bool(_p["WRITE_MESH"])
+            INTRINSIC_ADP_ONLY = bool(_p["INTRINSIC_ADP_ONLY"])
+            if _p["SUBSETS"] is not None:                   # [0038]
+                SUBSETS = str(_p["SUBSETS"])
             # patch_mesh_min：最终插值网格下限/上限（step.conf 覆盖；0/None = 不干预）
             global MESH_MIN, MESH_MIN_KZ, MESH_MIN_FMAX, MESH_MAX
             # ★ 2026-09-28：原来是 `if _v:` —— step.conf 写 0（注释说的"0 = 不干预"）会被当成
@@ -2574,6 +2656,7 @@ def main():
     _has_fermi = _install_fermi_fix(out)  # patch_fermi_fix（V132）
     _has_dpo3d = _install_dp_optical_3d(out, _dpo3d)   # [0036]
     _has_pie3d = _install_pie_3d(out, _pie3d)          # [0037]
+    _install_postprocess(out)   # [0037] 三维本征后处理（WRITE_MESH 时作业链尾部跑 postprocess_intrinsic.py）
     _preflight_gate(cwd, out, UNITY_OVERLAP_2D if is_2d else False)
 
     # tf 把 submit_amset.tpl 与本脚本一起推到 gen 运行目录，但按原名推、不会改成
@@ -2597,6 +2680,30 @@ def main():
                               + ("import amset_pie3d; " if _has_pie3d else "")   # [0037] 换 PIE 核
                               # [0036] 放最后：它包装散射 worker（开 ADP 谷内掩码时），子进程按引用导入它
                               + ("import amset_dpo3d; " if _has_dpo3d else ""))
+    # [0038] SUBSETS：每个子集（写的是**保留**的机制）用同一份 mesh 去机制重积分，写 subset_<机制>.json。
+    #   复现检查（--check-reproduce）挂在第一个子集上（硬门：重积分必须复现 transport.json）。
+    #   遗留 INTRINSIC_ADP_ONLY=false 时把"只 ADP"这个子集摘掉（旧语义：不出只 ADP 的一套）。
+    _post = ""
+    if WRITE_MESH:
+        _specs = subset_specs(SUBSETS, SCATTERING)
+        if not INTRINSIC_ADP_ONLY:
+            _specs = [s for s in _specs if s[0] != ["ADP"]]
+        if not _specs:
+            print("[..] SUBSETS=%s 没给出可用的子集（SCATTERING=%s）—— 不出 subset_*.json"
+                  % (SUBSETS, SCATTERING))
+        else:
+            _first = True
+            for _keep, _drop, _name in _specs:
+                _cmd = "python postprocess_intrinsic.py"
+                if _first:
+                    _cmd += " --check-reproduce"
+                    _first = False
+                _cmd += " --drop \"%s\" --out %s" % (",".join(_drop), _name)
+                _post += " && " + _cmd
+                print("[OK] 另出 %s（保留 %s%s）" % (
+                    _name, "+".join(_keep),
+                    "；剔除 %s" % "+".join(_drop) if _drop else "；全机制（复现 transport.json）"))
+    _acmd = _acmd.replace("@POSTPROCESS@", _post)
     if _HAS_KC:
         _acmd = kc.ir_fix_cmd_prefix(_IR_FIX_ON) + kc.desym_fix_cmd_prefix(_DESYM_FIX_ON) + _acmd
     text = (text.replace("{{JOBNAME}}", jobname)

@@ -32,7 +32,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 # [SKILL_REV] 版本戳：写进 settings.yaml 头，便于从结果反查跑的是哪份 skill 副本。
-_SKILL_REV = "2026-10-11-0035-r3"   # [0035-r3] 复审：not_in_scattering 只认显式排除、D 全低于阈值仍建记录、面外极性；[0035-r2] 冻声子优先、手填谷内只作对照；[0035-r1] 复审：交叉拒绝、并星平均、τ 挪到 transport.json 之后；[0035] 冻声子 ODP 参数（ODP_FROZEN）+ τ(E)（tau_energy.py）   # [0034-r3] 二审：重复星按 S8.2 k_grid 合并；显式 SCATTERING+掩码的日志   # [0034-r2] 复审：同中心谷合并、显式 SCATTERING 照办、PIE 与 settings 一致   # [0034] OVERALL_WITHOUT（出厂 ODP）-> overall_noODP.json   # [0033] ODP/谷间散射（常数形变势，step.conf DP_OPTICAL_E/H）+ ADP 谷内掩码   # [0032-r2] 复审：链首清旧本征产物与 mesh；SCATTERING 无 ADP 不出只 ADP   # [0032] WRITE_MESH/INTRINSIC_ADP_ONLY 2D 默认开（旧：2026-09-28-desym-fix V115）
+_SKILL_REV = "2026-10-12-0038-subsets"   # [0038] SUBSETS 散射机制子集（subset_<机制>.json）   # [0035-r3] 复审：not_in_scattering 只认显式排除、D 全低于阈值仍建记录、面外极性；[0035-r2] 冻声子优先、手填谷内只作对照；[0035-r1] 复审：交叉拒绝、并星平均、τ 挪到 transport.json 之后；[0035] 冻声子 ODP 参数（ODP_FROZEN）+ τ(E)（tau_energy.py）   # [0034-r3] 二审：重复星按 S8.2 k_grid 合并；显式 SCATTERING+掩码的日志   # [0034-r2] 复审：同中心谷合并、显式 SCATTERING 照办、PIE 与 settings 一致   # [0034] OVERALL_WITHOUT（出厂 ODP）-> overall_noODP.json   # [0033] ODP/谷间散射（常数形变势，step.conf DP_OPTICAL_E/H）+ ADP 谷内掩码   # [0032-r2] 复审：链首清旧本征产物与 mesh；SCATTERING 无 ADP 不出只 ADP   # [0032] WRITE_MESH/INTRINSIC_ADP_ONLY 2D 默认开（旧：2026-09-28-desym-fix V115）
 # 复制来源（gen_step10_amset.py 的 _SKILL_REV），用于人工比对两份文件是否同步
 _SOURCE_GEN_REV = "2026-10-08-2d-raw-elastic"   # [0014] S8 的 2D 弹性改为原始 slab 值，与本步一致
 import stepconf  # noqa: E402
@@ -107,7 +107,10 @@ STEP_LABEL  = "S8.4_amset2d"
 # [0032] 链首一并清掉上一轮的本征产物与 mesh：关掉 WRITE_MESH / INTRINSIC_ADP_ONLY 再 retry 时，
 #   旧 intrinsic_*.json 会留在目录里、被 S8.3 当成本轮结果（retry 不删目录）。mesh 本轮会重写。
 # [0034] 再加 overall_no*.json（OVERALL_WITHOUT 那一套）。
-AMSET_CMD   = ('rm -f transport.json intrinsic_transport.json intrinsic_ADP.json overall_no*.json tau_energy.json mesh_*.h5; '
+# [0037] POSTPROCESS_ONLY：True 时作业链复用现有 mesh/transport.json，只重跑 postprocess（不 rm mesh、不跑 AMSET，省 ~2.5h）。
+#   用于补跑新增本征组合（intrinsic_ADP_POP.json / intrinsic_ADP_POP_ODP.json）。前提：目录里已有本次 AMSET 写的 mesh_*.h5 + transport.json。
+POSTPROCESS_ONLY = False
+AMSET_CMD   = ('rm -f transport.json subset_*.json intrinsic_*.json overall_no*.json tau_energy.json mesh_*.h5; '
                'python overlap_preflight.py --in-job || exit 1; '
                'python -c "import amset2d_plugin; @AMSET_PLUGINS@'
                'from amset.log import initialize_amset_logger as L; L(); '
@@ -139,6 +142,50 @@ DOPING      = "-1e14:-1e11:5, 1e11:1e14:5"   # n 型 + p 型各 5 点（对数�
 TEMPERATURES = "100:900:9"            # 100,200,...,900 K，每 100 K 一个点
 SCATTERING  = ["ADP", "IMP", "POP"]   # 形变势声学 + 电离杂质 + 极性光学 "ADP", "IMP", "POP"
 _ALLOWED_SCATTERING = {"ADP", "IMP", "POP", "PIE", "ODP", "IVS"}   # step.conf SCATTERING 允许的机制
+# [0038] SUBSETS —— 要输出的散射机制子集（每个子集生成一个 subset_<机制>.json）。
+#   分号分隔多个子集，每个子集内用 +/逗号/空格 分隔机制（写的是**保留**的机制）。
+#   出厂：ADP+POP+IMP+ODP+PIE（全机制）/ ADP+POP+ODP+PIE（去 IMP）/ ADP（只 ADP）。
+#   子集里本次没开的机制自动忽略：不开 ODP/PIE 时出厂自动退化为
+#   ADP+POP+IMP / ADP+POP / ADP，即 subset_ADP+POP+IMP.json / subset_ADP+POP.json / subset_ADP.json。
+#   需要 WRITE_MESH（同一份 mesh 去机制重积分）；off = 不出 subset_*.json。
+SUBSETS = "ADP+POP+IMP+ODP+PIE; ADP+POP+ODP+PIE; ADP"
+_SUBSET_ORDER = ["ADP", "POP", "IMP", "ODP", "PIE", "IVS"]
+
+
+def subset_specs(subsets_str, scattering):
+    """[0038] SUBSETS -> [(keep_list, drop_list, out_name), ...]。
+
+    每个子集只保留本次 SCATTERING 里开着的机制（没开的自动忽略）；文件名按
+    _SUBSET_ORDER 排序；空子集/重复子集跳过。返回的 keep 列表即子集文件名里的
+    机制顺序，drop 列表 = SCATTERING 里有、但该子集没保留的机制（喂给 --drop）。
+    """
+    raw = "ADP+POP+IMP+ODP+PIE; ADP+POP+ODP+PIE; ADP" if subsets_str is None else str(subsets_str)
+    if raw.strip().lower() in ("", "off", "none", "false", "no", "0"):
+        return []
+    active = [str(x).strip().upper() for x in scattering]
+    active_set = set(active)
+    seen, out = set(), []
+    for grp in raw.split(";"):
+        mechs = []
+        for x in grp.replace("+", " ").replace(",", " ").split():
+            x = x.strip().upper()
+            if x and x not in mechs:
+                mechs.append(x)
+        bad = [m for m in mechs if m not in _ALLOWED_SCATTERING]
+        if bad:
+            sys.exit("[ERROR] SUBSETS 含不认识的机制 %s（允许 %s）" % (bad, sorted(_ALLOWED_SCATTERING)))
+        keep = [m for m in mechs if m in active_set]
+        if not keep:
+            continue
+        keep = [m for m in _SUBSET_ORDER if m in set(keep)] + \
+               [m for m in keep if m not in set(_SUBSET_ORDER)]
+        key = tuple(keep)
+        if key in seen:
+            continue
+        seen.add(key)
+        drop = [m for m in active if m not in set(keep)]
+        out.append((keep, drop, "subset_%s.json" % "+".join(keep)))
+    return out
 # [0033] 光学形变势（ODP，谷内）与谷间散射（IVS）：常数形变势模型（dp_optical.py，Jin 2014 / Kaasbjerg 2012）。
 #   出厂不开。step.conf 写了通道表就开，并自动把 ODP / IVS 加进 SCATTERING：
 #     DP_OPTICAL_E = K>K:4.1@50; K>K':2.6@46; K>Q:2.0@48; Q>Q:3.0@50; Q>Q':2.0@45; Q>K:2.0@48
@@ -277,9 +324,9 @@ _WF_EXPLICIT = None
 #   ★ true 时作业链尾部【自动】接 postprocess_intrinsic.py --check-reproduce
 #     （patch_intrinsic_auto，2026-09-22）——不再需要人工补跑，跑完即有
 #     intrinsic_transport.json；复现检查不过则整步失败，不产出不可信本征数。
-# ★ [0032] 2026-10-10 用户决定：2D 默认打开（S8.4 只跑 2D），每个材料自动产出三套结果
-#   transport.json（overall）/ intrinsic_transport.json（去 IMP = ADP+POP）/ intrinsic_ADP.json（只 ADP），
-#   S8.3 据此出本征五参数图与表。代价：多一个 mesh_*.h5（几十 MB 到 GB，不回拉本地，
+# ★ [0032] 2026-10-10 用户决定：2D 默认打开（S8.4 只跑 2D），每个材料自动产出 transport.json、
+#   去 IMP 的 intrinsic_transport.json 和只 ADP 的 intrinsic_ADP.json；启用 ADP+POP 时还有递增机制对照。
+#   S8.3 据此出输运五参数图与表。代价：多一个 mesh_*.h5（几十 MB 到 GB，不回拉本地，
 #   见 skill.yaml 的 fetch_exclude）和几分钟后处理。关掉：step.conf 写 WRITE_MESH = false。
 WRITE_MESH = True
 # [0018] INTRINSIC_ADP_ONLY：true 时作业链在 IMP 剔除的本征后处理之后，再用同一份 mesh 跑一次
@@ -386,7 +433,9 @@ SPEC = {
     "WRITE_MESH": (None, "bool"),
     "INTRINSIC_ADP_ONLY": (None, "bool"),   # [0018]
     "OVERALL_WITHOUT": (None, "str"),       # [0034] None = 没写（用出厂 ODP）；off = 不出
+    "SUBSETS": (None, "str"),               # [0038] None = 出厂三套；off = 不出 subset_*.json
     "TAU_ENERGY": (None, "bool"),           # [0035] None = 没写（出厂 True）
+    "POSTPROCESS_ONLY": (None, "bool"),     # [0037] None = 没写（出厂 False）；true = 复用 mesh 只跑 postprocess
     # 掺杂/温度范围覆盖（B4/B5 缩减设置用）：默认顶部 DOPING/TEMPERATURES；step.conf 可覆盖。
     "DOPING": (DOPING, "str"),
     "TEMPERATURES": (TEMPERATURES, "str"),
@@ -2216,10 +2265,10 @@ def resolve_intrinsic_switches(conf_mesh, conf_adp, default_mesh=True, default_a
         print("[..] WRITE_MESH=%s / INTRINSIC_ADP_ONLY=%s（step.conf 覆盖；出厂 %s / %s）"
               % (str(mesh).lower(), str(adp).lower(), str(default_mesh).lower(), str(default_adp).lower()))
     if mesh:
-        print("[..] 本征后处理：作业末尾写 intrinsic_transport.json（去 IMP）%s"
-              % ("+ intrinsic_ADP.json（只 ADP）" if adp else ""))
+        print("[..] 本征后处理：作业末尾按 SUBSETS 写 subset_<机制>.json%s"
+              % ("（INTRINSIC_ADP_ONLY=false：不写只 ADP 那套）" if not adp else ""))
     else:
-        print("[..] WRITE_MESH=false：不出本征文件，S8.3 的本征图表会跳过")
+        print("[..] WRITE_MESH=false：不出子集文件，S8.3 的本征图表会跳过")
     return mesh, adp
 
 
@@ -2728,7 +2777,8 @@ def main():
     cwd = Path.cwd()
     global LAYER_THICKNESS, NWORKERS, UNITY_OVERLAP, WAVEFUNCTION_FULL
     global INTERPOLATION_FACTOR, INTERPOLATION_FACTOR_EXPLICIT, SCATTERING, WRITE_MESH, DOPING, TEMPERATURES
-    global INTRINSIC_ADP_ONLY, OVERALL_WITHOUT, TAU_ENERGY
+    global INTRINSIC_ADP_ONLY, OVERALL_WITHOUT, TAU_ENERGY, POSTPROCESS_ONLY
+    global SUBSETS
     global DESYM_FIX, _DESYM_FIX_ON, BANDGAP_OVERRIDE, BANDGAP_NOTE
     global EPS_INF_OVERRIDE, EPS_INF_OVERRIDE_BASIS, SYMMETRIZE_ELASTIC, ELASTIC_GUARD
     global STRUCTURE_GUARD, ALLOW_COARSE_S3
@@ -2827,8 +2877,12 @@ def main():
                 _p["WRITE_MESH"], _p["INTRINSIC_ADP_ONLY"], WRITE_MESH, INTRINSIC_ADP_ONLY)
             if _p["OVERALL_WITHOUT"] is not None:           # [0034]
                 OVERALL_WITHOUT = str(_p["OVERALL_WITHOUT"])
+            if _p["SUBSETS"] is not None:                   # [0038]
+                SUBSETS = str(_p["SUBSETS"])
             if _p["TAU_ENERGY"] is not None:                # [0035]
                 TAU_ENERGY = bool(_p["TAU_ENERGY"])
+            if _p["POSTPROCESS_ONLY"] is not None:          # [0037]
+                POSTPROCESS_ONLY = bool(_p["POSTPROCESS_ONLY"])
             # [0033] ODP / IVS 的通道表、手填谷表、ADP 谷内掩码（解析与校验在 resolve_dp_optical）
             DP_OPTICAL_E = str(_p["DP_OPTICAL_E"] or "")
             DP_OPTICAL_H = str(_p["DP_OPTICAL_H"] or "")
@@ -3094,18 +3148,36 @@ def main():
     #   判成 finished(OK)，**后处理失败被隐藏**（VERIFICATION V63）。
     #   新顺序 AMSET -> postprocess -> cp transport.json：失败则 transport.json
     #   不生成，判据自然 not-done，失败可见。链首的 rm -f 清掉上次残留。
-    _acmd = AMSET_CMD
-    # [0032] 只 ADP 要求 SCATTERING 里有 ADP：没有时 --drop IMP,POP,PIE 会把全部机制置零，
-    #   重积分 1/0 失败、整条作业链中断（transport.json 不落盘、S8.4 判 FAIL）。
-    if INTRINSIC_ADP_ONLY and "ADP" not in [str(x).upper() for x in SCATTERING]:
-        INTRINSIC_ADP_ONLY = False
-        print("[WARN] SCATTERING=%s 不含 ADP —— 不出 intrinsic_ADP.json（只 ADP 无从谈起）" % SCATTERING)
+    if POSTPROCESS_ONLY:
+        if not WRITE_MESH:
+            sys.exit("[ERROR] POSTPROCESS_ONLY requires WRITE_MESH = true")
+        _acmd = ('echo "[POSTPROCESS_ONLY] 复用现有 mesh/transport，跳过 AMSET"; '
+                 'ls mesh_*.h5 transport_*.json transport.json >/dev/null 2>&1 || { echo "[ERROR] 缺 mesh/transport 源文件，不能 POSTPROCESS_ONLY"; exit 1; }; '
+                 'rm -f subset_*.json intrinsic_*.json overall_no*.json tau_energy.json')
+    else:
+        _acmd = AMSET_CMD
+    # [0038] SUBSETS：每个子集（写的是**保留**的机制）用同一份 mesh 去机制重积分，写 subset_<机制>.json。
+    #   复现检查（--check-reproduce）挂在第一个子集上（硬门：重积分必须复现 transport.json）。
+    #   遗留 INTRINSIC_ADP_ONLY=false 时把"只 ADP"这个子集摘掉（旧语义：不出只 ADP 的一套）。
     if WRITE_MESH:
-        _acmd = _acmd + " && python postprocess_intrinsic.py --check-reproduce"
-        # [0033] ODP/IVS 也是声子机制：只 ADP 时一并剔除（没开的机制 postprocess 自动忽略）
-        if INTRINSIC_ADP_ONLY:                  # [0018] 同一份 mesh 再出只含 ADP 的一套（复现已由上一条把关）
-            _acmd = _acmd + (" && python postprocess_intrinsic.py --drop IMP,POP,PIE,ODP,IVS"
-                             " --out intrinsic_ADP.json")
+        _specs = subset_specs(SUBSETS, SCATTERING)
+        if not INTRINSIC_ADP_ONLY:
+            _specs = [s for s in _specs if s[0] != ["ADP"]]
+        if not _specs:
+            print("[..] SUBSETS=%s 没给出可用的子集（SCATTERING=%s）—— 不出 subset_*.json"
+                  % (SUBSETS, SCATTERING))
+        else:
+            _first = True
+            for _keep, _drop, _name in _specs:
+                _cmd = "python postprocess_intrinsic.py"
+                if _first:
+                    _cmd += " --check-reproduce"
+                    _first = False
+                _cmd += " --drop \"%s\" --out %s" % (",".join(_drop), _name)
+                _acmd = _acmd + " && " + _cmd
+                print("[OK] 另出 %s（保留 %s%s）" % (
+                    _name, "+".join(_keep),
+                    "；剔除 %s" % "+".join(_drop) if _drop else "；全机制（复现 transport.json）"))
         # [0034] overall 去掉 OVERALL_WITHOUT 列的机制（出厂 ODP），看它对总结果的影响
         _ow, _ow_name = overall_without_set(OVERALL_WITHOUT, SCATTERING)
         if _ow:
@@ -3114,7 +3186,7 @@ def main():
         else:
             print("[..] 不出 overall 去掉机制的那一套：%s" % _ow_name)
     elif TAU_ENERGY:
-        print("[..] WRITE_MESH=false：不出 tau_energy.json（τ(E) 要 mesh）")
+        print("[..] WRITE_MESH=false：不出 subset_*.json / tau_energy.json（都要 mesh）")
     # ★ 2026-09-28 用户批准（patch_fermi_window）：不依赖 WRITE_MESH 的费米能级窗口检查，
     #   必须放在 cp 成 transport.json **之前** —— 否则失败时 transport.json 已存在，
     #   autozt marker 判据会把失败隐藏（V63 的教训）。

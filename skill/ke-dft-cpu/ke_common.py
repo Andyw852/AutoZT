@@ -744,14 +744,28 @@ DONE_MARKERS = {
     "step4b_wave_full": ("wavefunction.h5",),
     "step5_dielect_validate": ("dielectric_check.json",),
     "step8_amset": ("transport.json",),
-    "step8.4_amset2d": ("transport.json", "intrinsic_transport.json", "intrinsic_ADP.json",   # [0018]
-                        "overall_noODP.json", "overall_noODP_IVS.json",                         # [0034]
-                        "tau_energy.json"),                                                     # [0035]
+    "step8.4_amset2d": ("transport.json", "overall_noODP.json", "overall_noODP_IVS.json",   # [0034]
+                        "tau_energy.json"),                                                     # [0035]（subset_*.json / intrinsic_*.json 由 _marker_files glob 兜底）
     "step8.1_boltztrap": ("boltztrap_crta.json",),
     "step8.2_dpt": ("dpt_result.json",),
     "step8.3_output": ("comparison_300K.png",),
     "step8.21_odp_read": ("odp_params.json",),                                                   # [0035]
 }
+
+
+def _marker_files(d, consumer):
+    """完成标记文件：DONE_MARKERS 的精确名 + subset_*.json / intrinsic_*.json 的 glob 兜底。
+
+    [0038] subset_*.json 的文件名随 SUBSETS 动态变化（subset_ADP.json / subset_ADP+POP+IMP.json …），
+    写不进 DONE_MARKERS 的精确名单；归档下游完成标记时把它们一并归档，避免旧的子集残留被 S8.3 读到。"""
+    names = list(DONE_MARKERS.get(consumer, ()))
+    if consumer in ("step8_amset", "step8.4_amset2d"):
+        for pat in ("subset_*.json", "intrinsic_*.json"):
+            try:
+                names += [p.name for p in sorted(d.glob(pat))]
+            except OSError:
+                pass
+    return names
 
 
 DP_OPTICAL_DPT_SRC = "step8.2_dpt/dpt_result.json"     # [0034] S8.4 的 ODP/IVS 谷表来源（gen_step14 的 DPT_RESULT）
@@ -810,7 +824,7 @@ def invalidate_dp_optical_valleys(cwd, dpt_res, consumer="step8.4_amset2d"):
         return []
     tag = "stale-upstream-step8.2_dpt-%s" % _t.strftime("%Y%m%d%H%M%S")
     done = []
-    for m in DONE_MARKERS.get(consumer, ()):
+    for m in _marker_files(d, consumer):
         f = d / m
         if f.is_file() or f.is_symlink():
             f.rename(d / (m + "." + tag))
@@ -890,7 +904,7 @@ def invalidate_odp_consumer(cwd, params, consumer="step8.4_amset2d", record="2d_
         return []
     tag = "stale-upstream-step8.21_odp_read-%s" % _t.strftime("%Y%m%d%H%M%S")
     done = []
-    for m in DONE_MARKERS.get(consumer, ()):
+    for m in _marker_files(d, consumer):
         f = d / m
         if f.is_file() or f.is_symlink():
             f.rename(d / (m + "." + tag))
@@ -1045,7 +1059,7 @@ def invalidate_downstream(cwd, step, reason, _seen=None, gap=None, _jobs=None):
                 continue
         seen.add(down)
         hit = False
-        for m in DONE_MARKERS.get(down, ()):
+        for m in _marker_files(d, down):
             f = d / m
             if f.is_file() or f.is_symlink():
                 f.rename(d / (m + "." + tag))
@@ -1093,7 +1107,7 @@ def invalidate_ct_consumers(cwd, ct, step="step8_amset", rel_tol=1e-3):
     for down in CT_CONSUMERS:
         d = cwd / down
         hit = False
-        for m in DONE_MARKERS.get(down, ()):
+        for m in _marker_files(d, down):
             f = d / m
             if not f.is_file():
                 continue

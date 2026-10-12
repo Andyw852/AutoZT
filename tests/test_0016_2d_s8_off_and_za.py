@@ -59,10 +59,10 @@ def test_ke_default_steps_unchanged_and_2d_drops_only_s8():
     default = _expand(t0, {})
     assert "step8_amset" in default
     s8x = [n for n in default if n.startswith("step8")]
-    assert s8x == ["step8_amset", "step8.1_boltztrap", "step8.2_dpt", "step8.3_output"]
+    assert s8x == ["step8_amset", "step8.1_boltztrap", "step8.2_dpt", "step8.21_odp_read", "step8.3_output"]  # [0037] odp_frozen 默认开
     two_d = _expand(t0, {"amset3d": False, "amset2d": True})
     assert [n for n in two_d if n.startswith("step8")] == [
-        "step8.1_boltztrap", "step8.2_dpt", "step8.3_output", "step8.4_amset2d"]
+        "step8.1_boltztrap", "step8.2_dpt", "step8.21_odp_read", "step8.3_output", "step8.4_amset2d"]  # [0037] odp_frozen 默认开
     assert set(_expand(t0, {"amset2d": True})) - set(two_d) == {"step8_amset"}
 
 

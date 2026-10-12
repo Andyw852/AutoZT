@@ -74,11 +74,13 @@ python test_kernels.py          # 需要 amset + pymatgen 环境（如 conda ams
 没有这两行说明插件没生效（子进程尤其要看第二行 -- ADP 是以 reference 传给 spawn
 子进程的，插件没被导入就会**静默**退回原版）。
 
-## strict intrinsic（`WRITE_MESH`）—— 剔除 IMP 的严格本征结果
+## 去除 IMP 的无杂质结果（`WRITE_MESH`）
 
-S8.4 的 `transport.json` **含电离杂质（IMP）**，是「掺杂后」的迁移率，不是本征值。
+S8.4 默认 `SCATTERING = ADP,IMP,POP`。因此默认 `transport.json` 含电离杂质散射，对应给定载流子浓度下包含 IMP 的输运结果。
+`intrinsic_transport.json` 是把 IMP 散射率移除后、对其余已启用机制重新积分的结果：默认机制下为 ADP+POP；若启用 PIE、ODP 或 IVS，这些机制仍会保留。
+它表示当前模型和给定温度、载流子浓度下的无电离杂质结果。若 ODP、IVS、PIE 或其他重要耦合未纳入，不能把它解释成真实晶体迁移率的绝对上限。
 **[0032] 起 `WRITE_MESH` 与 `INTRINSIC_ADP_ONLY` 出厂即开**（S8.4 只跑 2D）：每个材料跑完自动有
-`intrinsic_transport.json`（去 IMP = ADP+POP）和 `intrinsic_ADP.json`（只 ADP），S8.3 据此出本征五参数图与表
+`intrinsic_transport.json`（移除 IMP，保留其余已启用机制）和 `intrinsic_ADP.json`（只保留 ADP；若 IVS 已启用，ADP 按默认掩码限制为谷内）。启用 ADP、POP 时还会生成 `intrinsic_ADP_POP.json`；同时启用 ODP 时再生成 `intrinsic_ADP_POP_ODP.json`。S8.3 会读取可用且与本轮输运结果匹配的文件，绘制分级散射对照图表
 （`step8.3_output/intrinsic/`，见 VERIFICATION V195）。mesh_*.h5 不回拉本地（skill.yaml 的 `fetch_exclude`）。
 要关掉，在 `project_setting/templates/step8.4_amset2d/step.conf` 写：
 
@@ -96,11 +98,13 @@ gen（`patch_write_mesh` + `patch_intrinsic_auto`）会：
 
 - 用 **mesh 自带**的 `ir_to_full_kpoint_mapping` 把不可约点散射率展开到全网格；`read_mesh_h5` 自己解析
   AMSET `write_mesh` 的**自旋 key bug**（down 被写成 `<name>_up_down`），不依赖 `amset.io.load_mesh`；
-- `--check-reproduce`：**先用全部机制重积分**，与 `transport.json` 逐位对比（容差 1e-6）。**不通过就整步失败、
+- `--check-reproduce`：**先用全部机制重积分**，与原始输运结果核对；默认最大绝对误差容差为 `1e-4`。检查迁移率、电导率和 Seebeck 系数，不是逐位比较，也不覆盖 κe。**不通过就整步失败、
   不写 `intrinsic_transport.json`**，防止 mesh/settings/vasprun 不同源时静默出错；
-- 置零（默认）IMP 后重积分，写 `intrinsic_transport.json`（schema `autozt.intrinsic_transport/1`）。
+- 置零（默认）IMP 后重积分，写 `intrinsic_transport.json`（schema `autozt.intrinsic_transport/1`）；按实际启用机制理解该文件，默认机制以外的 PIE、ODP、IVS 不会被自动删除。
 
 **注意**：`WRITE_MESH` 只负责产出 mesh；**正确性取决于这个后处理被套用**——直接换 AMSET 环境不会自动对。
+
+`POSTPROCESS_ONLY = true` 可跳过 AMSET、复用已有 mesh 和输运结果来补做后处理。仅当 `mesh_*.h5`、`transport_*.json`、`transport.json`、`settings.yaml`、vasprun、散射机制、掺杂和温度网格都来自同一次计算且配置一致时使用；文件存在本身不能证明来源一致。该模式会清理旧的派生 JSON，但保留 mesh 和输运源文件。
 
 **overall 去掉某些机制（[0034]）**：`OVERALL_WITHOUT`（出厂 `ODP`）列的机制本次开着时，作业链再跑
 `postprocess_intrinsic.py --drop <列表> --out overall_no<列表>.json`（如 `overall_noODP.json`），用来看该机制对总结果的影响。
@@ -108,8 +112,11 @@ gen（`patch_write_mesh` + `patch_intrinsic_auto`）会：
 **只含 ADP 的一套（[0018]）**：`INTRINSIC_ADP_ONLY`（[0032] 起 2D 出厂开，隐含 `WRITE_MESH = true`）。作业链在上面
 的后处理之后用**同一份 mesh** 再跑 `postprocess_intrinsic.py --drop IMP,POP,PIE,ODP,IVS --out intrinsic_ADP.json`
 （[0033] 起把 ODP/IVS 也剔除；没开的机制自动忽略）。各机制散射率彼此独立，等价于单独跑一次只有 ADP 的 AMSET
-（开了 IVS 时这个 ADP 是谷内 ADP，见下面「ODP 与谷间散射」），不用第二次 AMSET。于是一次 S8.4 出三套（开了 ODP 再加
-`overall_noODP.json`，共四套）：`transport.json`（overall）、`intrinsic_transport.json`（剔除 IMP）、`intrinsic_ADP.json`（只 ADP）。
+（开了 IVS 时这个 ADP 是谷内 ADP，见下面「ODP 与谷间散射」），不用第二次 AMSET。
+**递增机制对照（[0037]）**：当 `SCATTERING` 同时包含 ADP、POP 时，另用同一 mesh 生成
+`intrinsic_ADP_POP.json`（移除 IMP、PIE、ODP、IVS）；若 ODP 也启用，则生成
+`intrinsic_ADP_POP_ODP.json`（移除 IMP、PIE、IVS）。因此后两份分别保留 ADP+POP 和 ADP+POP+ODP，便于分辨加入 POP、ODP 后的变化；它们不含 IMP、PIE 或 IVS。启用条件不满足时不生成相应文件。
+`intrinsic_transport.json` 则保留所有实际启用机制、只移除 IMP；`transport.json` 保留全部实际启用机制。默认机制下分别是 ADP+POP 和 ADP+IMP+POP。`OVERALL_WITHOUT`（[0034]）可额外生成 overall 去除指定机制的结果。
 本征 JSON 含 μ、S、σ、κe（κe 自 [0018] 起写出）；PF 用 S²σ 自算。都在本步目录，不另建步骤目录。
 0.4.19 与 0.5.1 在真实 2 自旋 / 不可约网格数据上的端到端复现均 PASS（见 `VERIFICATION.md` V89/V90/V91）。
 
@@ -156,18 +163,20 @@ DP_OPTICAL_H = K>K:<D>@<ħω>; K>K':<D>@<ħω>; K>Γ:<D>@<ħω>; Γ>K:<D>@<ħω>
 - **ADP 谷内掩码**（`ADP_INTRAVALLEY = auto`，出厂）：开了 IVS 的载流子，ADP 只留谷内（k 与 k+q 落在同一个谷）。
   AMSET 的 ADP 对整个布里渊区的 q 积分，大 q 的 K→K′、K→Q 用长波声速和带边形变势算，既不物理、又和 IVS 重复计数。
   只开 ODP（没有谷间通道）时 auto 不掩。掩码同样作用于「只 ADP」那一套（同一个 ADP 机制）。
-- **四套结果**（同一次 AMSET、同一份 mesh 重积分，S8.3 的本征图/表/μ(T) 全部带上）：
+- **输运结果与分级对照**（以下派生 JSON 需 `WRITE_MESH = true`，同一次 AMSET、同一份 mesh 重积分；可用结果由本次 `SCATTERING` 机制决定，S8.3 读取有效文件）：
 
   | 文件 | 含哪些机制 | 用途 |
   |---|---|---|
-  | `intrinsic_ADP.json` | 只 ADP | 声学极限，对照文献的 ADP/DP 理论迁移率与 S8.2 DPT |
-  | `transport.json` | 全部（ADP+POP+IMP+ODP+IVS） | overall |
-  | `intrinsic_transport.json` | 去 IMP（ADP+POP+ODP+IVS） | 本征（声子限制） |
-  | `overall_noODP.json` | 去 ODP（ADP+POP+IMP+IVS） | 看 ODP 对总结果的影响（[0034]，`OVERALL_WITHOUT`） |
+  | `intrinsic_ADP.json` | 只 ADP；还需 `INTRINSIC_ADP_ONLY` | 声学散射参照，可与文献 ADP/DPT 对照 |
+  | `intrinsic_ADP_POP.json` | ADP+POP；需同时启用 ADP、POP | 分离 POP 对声学参考结果的增量 |
+  | `intrinsic_ADP_POP_ODP.json` | ADP+POP+ODP；需同时启用 ADP、POP、ODP | 分离 ODP 对 ADP+POP 结果的增量；不含 IVS |
+  | `transport.json` | 本次启用的全部机制 | overall；默认 ADP+IMP+POP |
+  | `intrinsic_transport.json` | 本次启用的全部机制减 IMP | 无电离杂质结果；默认 ADP+POP，不代表未纳入机制后的真实绝对上限 |
+  | `overall_noODP.json` | 本次启用的全部机制减 ODP | 看 ODP 对 overall 的影响（[0034]，默认 `OVERALL_WITHOUT = ODP`；仅在 ODP 启用时生成） |
 
   "只 ADP"就是把其余机制的散射率全部置零后重积分；ODP/IVS 是新加的机制，所以也在置零之列，
   否则那一套就成了 ADP+ODP+IVS。
-- `OVERALL_WITHOUT`（[0034]）：出厂 `ODP`。写 `ODP,IVS` 得到 `overall_noODP_IVS.json`（去掉全部新加的光学/谷间散射）；
+- `OVERALL_WITHOUT`（[0034]）：出厂 `ODP`。写 `ODP,IVS` 得到 `overall_noODP_IVS.json`（去掉 ODP 与 IVS）；
   写 `off` 不出。列出的机制本次都没开时这一套就是 overall，自动不出。
 - **"只 ADP"与文献对得上吗**：
   - 没写 `DP_OPTICAL_*`：ADP 与以前逐字节相同（不掩码）。
@@ -202,7 +211,7 @@ DP_OPTICAL_H = K>K:<D>@<ħω>; K>K':<D>@<ħω>; K>Γ:<D>@<ħω>; Γ>K:<D>@<ħω>
 | S8.21_odp（`step8.21_odp_read`，登录节点） | 按 S8.2 的谷表，在每个谷的 k 点（`k_S7`）取带边能量，算 D，写 `odp_params.json` + `odp_summary.txt` |
 
 S8.4 的 `ODP_FROZEN = auto`（出厂）读 `odp_params.json`，给每个谷加谷内通道 `X>X:D@ħω`（每组光学模一条），
-把 ODP 加进 SCATTERING。四套结果（只 ADP / overall / 本征 / overall 去 ODP）照旧，`overall_noODP.json` 正好看冻声子 ODP 的影响。
+把 ODP 加进 SCATTERING。满足机制条件时会生成 `intrinsic_ADP_POP_ODP.json`；默认 `OVERALL_WITHOUT = ODP` 也会生成 `overall_noODP.json`，可分别比较去杂质的 ODP 增量与包含杂质时 ODP 对 overall 的影响。
 
 **算法**（推导在 `odp_frozen.py` 文件头）：
 - 位移 Δ_κ = u·√(M/m_κ)·e_κ（e 为质量加权归一本征矢，M 原胞质量），u 取到最大原子位移 = `ODP_DISP_A`（出厂 0.01 Å）。

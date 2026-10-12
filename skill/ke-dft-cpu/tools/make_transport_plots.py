@@ -95,7 +95,10 @@ def make_transport(mdir, out, M):
     bt_p = os.path.join(mdir, "step8.1_boltztrap", "boltztrap_crta.json")
     dp_p = os.path.join(mdir, "step8.2_dpt", "dpt_result.json")
     am_p = os.path.join(mdir, "step8.4_amset2d", "transport.json")
-    ia_p = os.path.join(mdir, "step8.4_amset2d", "intrinsic_ADP.json")
+    # [0038] 只 ADP 的子集文件：subset_ADP.json（SUBSETS 生成）优先，退回旧的 intrinsic_ADP.json
+    ia_p = os.path.join(mdir, "step8.4_amset2d", "subset_ADP.json")
+    if not os.path.isfile(ia_p):
+        ia_p = os.path.join(mdir, "step8.4_amset2d", "intrinsic_ADP.json")
     if not (os.path.isfile(bt_p) and os.path.isfile(am_p)):
         print("[skip] %s: 缺 boltztrap_crta.json 或 transport.json" % M); return False
     d = json.load(open(bt_p)); fac = float(d["twoD_c_over_t"])
