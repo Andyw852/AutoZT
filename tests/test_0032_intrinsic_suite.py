@@ -245,10 +245,10 @@ def test_zero_doping_skipped_and_legends(tmp_path):
     cwd = _material(tmp_path, doping0=True)
     data, geom, rows = _rows(S, cwd)
     assert all(r.get("n_2D_cm-2") != 0 for r in rows if r["dataset"] != "DPT")
-    assert S._intr_legend("intrinsic", data, "x") == "intrinsic ADP+POP (no IMP)"
+    assert S._intr_legend("intrinsic", data, "x") == "no-IMP ADP+POP"
     assert S._intr_legend("overall", data, "x") == "overall ADP+IMP+POP"
     data["sets"]["intrinsic"]["labels"] = ["ADP"]                      # 非极性材料：没有 POP
-    assert S._intr_legend("intrinsic", data, "x") == "intrinsic ADP (no IMP)"
+    assert S._intr_legend("intrinsic", data, "x") == "no-IMP ADP"
 
 
 def test_bt2_mobility_masked_in_bipolar_region(tmp_path):

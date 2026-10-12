@@ -17,7 +17,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 # [SKILL_REV] 版本戳：写进 settings.yaml 头，便于从结果反查跑的是哪份 skill 副本。
-_SKILL_REV = "2026-10-13-0038-subsets"   # [0038] SUBSETS 散射机制子集（subset_<机制>.json）   # [0037] 三维 PIE（读压电张量写 settings，插件 amset_pie3d.py 修正核）   # [0036] 三维 ODP/IVS（DP_OPTICAL_*，插件 amset_dpo3d.py）   # [0014] 2D 弹性用原始 slab 值（不乘 c/t）；V115 相位补丁
+_SKILL_REV = "2026-10-13-0040-undoped"   # [0040] UNDOPED_POINT 本征点（doping=0）   # 2026-10-13-0038-subsets   # [0038] SUBSETS 散射机制子集（subset_<机制>.json）   # [0037] 三维 PIE（读压电张量写 settings，插件 amset_pie3d.py 修正核）   # [0036] 三维 ODP/IVS（DP_OPTICAL_*，插件 amset_dpo3d.py）   # [0014] 2D 弹性用原始 slab 值（不乘 c/t）；V115 相位补丁
 import stepconf  # noqa: E402
 try:
     import ke_common as kc
@@ -314,6 +314,10 @@ UNITY_OVERLAP_2D = True
 #     project_setting/templates/step8_amset/step.conf）；与本次分配不一致时打印 WARN。
 #     AMSET 在掺杂/温度维度上接近线性加速，想更快就把提交模板的核数提上去 ——
 #     自动模式会跟着走，不用再手动同步两个数。
+# [0040] UNDOPED_POINT：掺杂网格里加一个 0（未掺杂 = 本征载流子浓度，E_F 由 n = p 决定；amset_fermi_fix 负责
+#   稳健求解——AMSET 原搜索对宽带隙材料会把 E_F 放到带隙里任意位置）。S8.3 据此单独出本征图
+#   transport_plots/intrinsic_carrier/。代价：多一个掺杂点（约 +1/11 计算量）。step.conf 写 UNDOPED_POINT = false 关。
+UNDOPED_POINT = True
 NWORKERS = None
 NWORKERS_FALLBACK = 24      # 提交模板里读不到 SLURM 分配（--ntasks/--cpus）时的兜底
 # ★ 2026-09-27：**nworkers 不影响数值**。同一套掺杂/温度，nw = 1/2/8/12/16/23/24(×2)
@@ -365,6 +369,7 @@ SPEC = {
     # 静默回默认值，用户在 step.conf 里写了等于没写）。
     # 技能侧的落点是 skill/ke-dft-cpu/step8_amset/step.conf，不是技能全局 step.conf。
     "NWORKERS": (NWORKERS, "int"),
+    "UNDOPED_POINT": (None, "bool"),          # [0040] None = 用出厂值
     # 全网格 h5 分支：出厂 auto（按有无反演中心自动判断）；可显式 true/false 覆盖。
     "WAVEFUNCTION_FULL": ("auto", "str"),
     # unity_overlap 覆盖（受控对照用）；默认 auto = 现行行为不变。
@@ -1512,6 +1517,8 @@ def write_settings(out: Path, eps_inf, eps_static, gap, elastic,
     # patch_carrier_guard_3d（2026-09-28 用户批准）：每**原子**载流子数防护（3D 对称补口）。
     check_carriers_per_atom(DOPING, _cell_volume_cm3(Path.cwd()), _count_atoms(Path.cwd()), tag="3D S8")
     _dop = expand_spec(DOPING, log=True)        # doping 对数均布
+    if UNDOPED_POINT and 0.0 not in _dop:             # [0040] 本征点（未掺杂）
+        _dop = list(_dop) + [0.0]
     _tmp = expand_spec(TEMPERATURES, log=False)  # 温度线性
     lines += ["doping: [%s]" % ", ".join("%.6e" % v for v in _dop),
               "temperatures: [%s]" % ", ".join("%g" % v for v in _tmp),
@@ -2473,6 +2480,9 @@ def main():
             ODP_FROZEN = str(_p["ODP_FROZEN"] or "auto")
             if _p["ODP_FROZEN_DMIN"] is not None:
                 ODP_FROZEN_DMIN = float(_p["ODP_FROZEN_DMIN"])
+            global UNDOPED_POINT                      # [0040]
+            if _p["UNDOPED_POINT"] is not None:
+                UNDOPED_POINT = bool(_p["UNDOPED_POINT"])
             global PIE_KERNEL, PIE_SCREENING      # [0037]
             PIE_KERNEL = str(_p["PIE_KERNEL"] or "az").strip().lower()
             PIE_SCREENING = bool(_p["PIE_SCREENING"])

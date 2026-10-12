@@ -47,9 +47,10 @@ def test_one_figure_per_dataset(tmp_path):
     cwd, out = _material(tmp_path, ["overall", "intrinsic", "ADP_only", "BT2_DPTtau"])
     g.write_transport_plots(cwd, out, True)
     ddir = cwd.parent / "transport_plots" / "datasets"
-    for ds in ("overall", "intrinsic", "ADP_only", "BT2_DPTtau"):
-        assert (ddir / ("MoS2_%s.png" % ds)).is_file(), ds
-        rows = (ddir / ("MoS2_%s.csv" % ds)).read_text().splitlines()
+    for ds, fn in (("overall", "overall"), ("intrinsic", "noIMP"), ("ADP_only", "ADP_only"),
+                   ("BT2_DPTtau", "BT2_DPTtau")):
+        assert (ddir / ("MoS2_%s.png" % fn)).is_file(), ds          # [0040] 去 IMP 子集文件名 noIMP
+        rows = (ddir / ("MoS2_%s.csv" % fn)).read_text().splitlines()
         assert rows[0].startswith("# dataset=%s" % ds)
         assert rows[1].split(",")[:3] == ["T_K", "type", "n_cell_cm-3"]
         assert len(rows) == 2 + 2 * 6                      # 2 温度 x 6 浓度
@@ -64,4 +65,4 @@ def test_stale_dataset_removed(tmp_path):
     (ddir / "MoS2_ADP_POP.png").write_bytes(b"old")
     g.write_transport_plots(cwd, out, True)
     assert not (ddir / "MoS2_ADP_POP.png").exists()
-    assert (ddir / "MoS2_intrinsic.png").is_file()
+    assert (ddir / "MoS2_noIMP.png").is_file()

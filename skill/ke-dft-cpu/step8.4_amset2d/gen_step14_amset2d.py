@@ -32,7 +32,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 # [SKILL_REV] 版本戳：写进 settings.yaml 头，便于从结果反查跑的是哪份 skill 副本。
-_SKILL_REV = "2026-10-12-0038-subsets"   # [0038] SUBSETS 散射机制子集（subset_<机制>.json）   # [0035-r3] 复审：not_in_scattering 只认显式排除、D 全低于阈值仍建记录、面外极性；[0035-r2] 冻声子优先、手填谷内只作对照；[0035-r1] 复审：交叉拒绝、并星平均、τ 挪到 transport.json 之后；[0035] 冻声子 ODP 参数（ODP_FROZEN）+ τ(E)（tau_energy.py）   # [0034-r3] 二审：重复星按 S8.2 k_grid 合并；显式 SCATTERING+掩码的日志   # [0034-r2] 复审：同中心谷合并、显式 SCATTERING 照办、PIE 与 settings 一致   # [0034] OVERALL_WITHOUT（出厂 ODP）-> overall_noODP.json   # [0033] ODP/谷间散射（常数形变势，step.conf DP_OPTICAL_E/H）+ ADP 谷内掩码   # [0032-r2] 复审：链首清旧本征产物与 mesh；SCATTERING 无 ADP 不出只 ADP   # [0032] WRITE_MESH/INTRINSIC_ADP_ONLY 2D 默认开（旧：2026-09-28-desym-fix V115）
+_SKILL_REV = "2026-10-13-0040-undoped"   # [0040] UNDOPED_POINT 本征点（doping=0）   # 2026-10-12-0038-subsets   # [0038] SUBSETS 散射机制子集（subset_<机制>.json）   # [0035-r3] 复审：not_in_scattering 只认显式排除、D 全低于阈值仍建记录、面外极性；[0035-r2] 冻声子优先、手填谷内只作对照；[0035-r1] 复审：交叉拒绝、并星平均、τ 挪到 transport.json 之后；[0035] 冻声子 ODP 参数（ODP_FROZEN）+ τ(E)（tau_energy.py）   # [0034-r3] 二审：重复星按 S8.2 k_grid 合并；显式 SCATTERING+掩码的日志   # [0034-r2] 复审：同中心谷合并、显式 SCATTERING 照办、PIE 与 settings 一致   # [0034] OVERALL_WITHOUT（出厂 ODP）-> overall_noODP.json   # [0033] ODP/谷间散射（常数形变势，step.conf DP_OPTICAL_E/H）+ ADP 谷内掩码   # [0032-r2] 复审：链首清旧本征产物与 mesh；SCATTERING 无 ADP 不出只 ADP   # [0032] WRITE_MESH/INTRINSIC_ADP_ONLY 2D 默认开（旧：2026-09-28-desym-fix V115）
 # 复制来源（gen_step10_amset.py 的 _SKILL_REV），用于人工比对两份文件是否同步
 _SOURCE_GEN_REV = "2026-10-08-2d-raw-elastic"   # [0014] S8 的 2D 弹性改为原始 slab 值，与本步一致
 import stepconf  # noqa: E402
@@ -328,6 +328,10 @@ _WF_EXPLICIT = None
 #   去 IMP 的 intrinsic_transport.json 和只 ADP 的 intrinsic_ADP.json；启用 ADP+POP 时还有递增机制对照。
 #   S8.3 据此出输运五参数图与表。代价：多一个 mesh_*.h5（几十 MB 到 GB，不回拉本地，
 #   见 skill.yaml 的 fetch_exclude）和几分钟后处理。关掉：step.conf 写 WRITE_MESH = false。
+# [0040] UNDOPED_POINT：掺杂网格里加一个 0（未掺杂 = 本征载流子浓度，E_F 由 n = p 决定；amset_fermi_fix 负责
+#   稳健求解——AMSET 原搜索对宽带隙材料会把 E_F 放到带隙里任意位置）。S8.3 据此单独出本征图
+#   transport_plots/intrinsic_carrier/。代价：多一个掺杂点（约 +1/11 计算量）。step.conf 写 UNDOPED_POINT = false 关。
+UNDOPED_POINT = True
 WRITE_MESH = True
 # [0018] INTRINSIC_ADP_ONLY：true 时作业链在 IMP 剔除的本征后处理之后，再用同一份 mesh 跑一次
 #   postprocess_intrinsic.py --drop IMP,POP,PIE,ODP,IVS，写 intrinsic_ADP.json（只含 ADP 的 μ/S/σ/κe）。
@@ -431,6 +435,7 @@ SPEC = {
     # [0032] SPEC 默认 None ——「step.conf 里有没有写」才是判据：出厂值改成 True 之后，
     #   旧写法（默认取常量、只认 true）会让 step.conf 写 false 也关不掉。
     "WRITE_MESH": (None, "bool"),
+    "UNDOPED_POINT": (None, "bool"),          # [0040] None = 用出厂值
     "INTRINSIC_ADP_ONLY": (None, "bool"),   # [0018]
     "OVERALL_WITHOUT": (None, "str"),       # [0034] None = 没写（用出厂 ODP）；off = 不出
     "SUBSETS": (None, "str"),               # [0038] None = 出厂三套；off = 不出 subset_*.json
@@ -2119,6 +2124,8 @@ def write_settings(out: Path, eps_inf, eps_static, gap, elastic,
     check_carriers_per_atom(DOPING, _CELL_AREA_CM2, _count_atoms(Path.cwd()), tag="2D S8.4")
     _dop_areal = expand_spec(DOPING, log=True)   # 面密度 cm^-2
     _dop = [v / (c_len * 1e-8) for v in _dop_areal] if c_len else _dop_areal  # 体浓度 cm^-3
+    if UNDOPED_POINT and 0.0 not in _dop:             # [0040] 本征点（未掺杂）
+        _dop = list(_dop) + [0.0]
     _tmp = expand_spec(TEMPERATURES, log=False)  # 温度线性
     lines += ["# deform_geometry: %s（形变势构型口径；ionrelax=离子弛豫、与 TOTAL ELASTIC"
               " MODULI 同源；clamped=离子固定，跨项目 ADP 不可直接比；mixed=两者混用）"
@@ -2871,6 +2878,9 @@ def main():
                     if _sc_list != SCATTERING:
                         print("[OK] SCATTERING = %s（step.conf 覆盖，出厂 %s）" % (_sc_list, SCATTERING))
                         SCATTERING = _sc_list
+            global UNDOPED_POINT                      # [0040]
+            if _p["UNDOPED_POINT"] is not None:
+                UNDOPED_POINT = bool(_p["UNDOPED_POINT"])
             # patch_write_mesh：WRITE_MESH -> 落 mesh.h5，供 postprocess_intrinsic.py 重算严格本征迁移率。
             #   [0032] 出厂 True；step.conf 显式写 true/false 才覆盖（SPEC 默认 None）。
             WRITE_MESH, INTRINSIC_ADP_ONLY = resolve_intrinsic_switches(

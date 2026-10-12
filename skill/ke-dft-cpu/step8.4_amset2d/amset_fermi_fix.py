@@ -32,6 +32,12 @@ fermi_probe 实测（WS2）：DOS 正常（带隙内 0 态、本征 E_F 有限�
   · NaN 守卫（V131 从 amset2d_plugin 移来，3D 也生效）：原搜索返回 NaN（中间量 NaN 时
     "NaN > tol" 为假，不报错）-> 抛 ValueError。
 护栏：get_fermi 的签名里要有 tol / return_electron_hole_conc，对不上就不打补丁（stderr 说明）。
+
+[0040] 本征点（doping = 0）：AmsetData 对 doping=0 走 get_fermi_from_num_electrons —— 按"总电子数相对误差"
+贪心搜索。有带隙时整个带隙里的电子数都等于 nelect（本征载流子每胞 ~1e-17 个，远低于 1e-8 的容差），
+argmin 取到网格上第一个带隙内的点（靠价带一侧），E_F 位置任意，S/σ 差几个数量级；electron_conc/hole_conc
+也不填（= 0），迁移率除以 0。修法：DOS 在本征 E_F 处有带隙时，改解 n(E_F) = p(E_F)（log-sum-exp，
+不受相消/下溢影响），并把 n、p 填进 electron_conc / hole_conc。无带隙（金属）照旧走 AMSET 原搜索。
 ------------------------------------------------------------------------------
 """
 
@@ -71,6 +77,61 @@ def solve_fermi(dos, concentration, temperature, pad_ev=1.0, xtol_ha=1e-13):
         if not (np.isfinite(glo) and np.isfinite(ghi)) or glo * ghi > 0:
             return None
         return float(brentq(g, lo, hi, xtol=xtol_ha, maxiter=500))
+
+
+def _dos_arrays(dos):
+    """(E[Ha], g·dE[每胞态数], 本征 E_F[Ha])。"""
+    E = np.asarray(dos.energies, dtype=float)
+    ef0 = float(dos.efermi)
+    if not getattr(dos, "atomic_units", True):
+        E, ef0 = E / HA_EV, ef0 / HA_EV
+    g = np.asarray(dos.tdos, dtype=float) * abs(float(E[1] - E[0]))
+    return E, g, ef0
+
+
+def band_gap_edges(dos, rel_thr=1e-10, min_gap_ev=0.01):
+    """本征 E_F 两侧有态的最近能量 (VBM, CBM)（Ha）；E_F 不在带隙里（金属）或带隙 < min_gap_ev -> None。"""
+    E, g, ef0 = _dos_arrays(dos)
+    occ = g > rel_thr * max(float(g.max()), 1e-300)
+    below, above = E[occ & (E <= ef0)], E[occ & (E > ef0)]
+    if below.size == 0 or above.size == 0:
+        return None
+    vbm, cbm = float(below.max()), float(above.min())
+    return (vbm, cbm) if (cbm - vbm) * HA_EV >= min_gap_ev else None
+
+
+def log_carriers(dos, ef, temperature):
+    """(ln n, ln p)：每胞导带电子数 / 价带空穴数的自然对数（log-sum-exp，不相消、不下溢）。"""
+    from amset.constants import boltzmann_au
+    E, g, ef0 = _dos_arrays(dos)
+    kt = float(temperature) * boltzmann_au
+    pos = g > 0
+    cb, vb = pos & (E > ef0), pos & (E <= ef0)
+
+    def lse(v):
+        m = float(v.max())
+        return m + float(np.log(np.exp(v - m).sum()))
+
+    ln_n = lse(np.log(g[cb]) - np.logaddexp(0.0, (E[cb] - ef) / kt))
+    ln_p = lse(np.log(g[vb]) - np.logaddexp(0.0, (ef - E[vb]) / kt))
+    return ln_n, ln_p
+
+
+def intrinsic_fermi(dos, temperature, xtol_ha=1e-12):
+    """本征 E_F（Ha）：解 ln n = ln p（单调增），区间 [VBM, CBM]。无带隙 -> None。"""
+    from scipy.optimize import brentq
+    edges = band_gap_edges(dos)
+    if edges is None or not temperature > 0:
+        return None
+
+    def h(e):
+        ln_n, ln_p = log_carriers(dos, e, temperature)
+        return ln_n - ln_p
+
+    lo, hi = edges
+    if not (h(lo) < 0 < h(hi)):
+        return None
+    return float(brentq(h, lo, hi, xtol=xtol_ha, maxiter=500))
 
 
 def rel_error(dos, ef, concentration, temperature):
@@ -148,6 +209,59 @@ def _wrap(orig, sig):
     return get_fermi
 
 
+def _wrap_intrinsic(orig):
+    @functools.wraps(orig)
+    def get_fermi_from_num_electrons(self, num_electrons, temperature, *args, **kwargs):
+        if enabled():
+            try:
+                ef = intrinsic_fermi(self, temperature)
+            except Exception:                                      # noqa: BLE001
+                ef = None
+            if ef is not None:
+                STATE.setdefault("intrinsic", []).append({"T": float(temperature), "ef_ha": ef})
+                return ef
+        return orig(self, num_electrons, temperature, *args, **kwargs)
+
+    setattr(get_fermi_from_num_electrons, MARK, True)
+    return get_fermi_from_num_electrons
+
+
+def _wrap_set_doping(orig):
+    @functools.wraps(orig)
+    def set_doping_and_temperatures(self, doping, temperatures):
+        out = orig(self, doping, temperatures)
+        if enabled() and getattr(self, "dos", None) is not None and band_gap_edges(self.dos) is not None:
+            vol = float(self.dos.structure.volume)
+            for n, t in np.ndindex(self.fermi_levels.shape):
+                if self.doping[n] == 0:
+                    ln_n, ln_p = log_carriers(self.dos, self.fermi_levels[n, t], self.temperatures[t])
+                    self.electron_conc[n, t] = np.exp(ln_n) / vol
+                    self.hole_conc[n, t] = np.exp(ln_p) / vol
+                    if not _quiet():
+                        print("[fermi_fix] 本征点 %g K：E_F = %.4f eV，n = p = %.3e cm^-3（n=p 求解，log-sum-exp）"
+                              % (self.temperatures[t], self.fermi_levels[n, t] * HA_EV,
+                                 _to_cm3(self.electron_conc[n, t])), flush=True)
+        return out
+
+    setattr(set_doping_and_temperatures, MARK, True)
+    return set_doping_and_temperatures
+
+
+def apply_intrinsic():
+    """[0040] 本征点（doping = 0）的 E_F 与 n、p（幂等）。"""
+    try:
+        from amset.electronic_structure.dos import FermiDos
+        from amset.core.data import AmsetData
+    except Exception as e:                                         # noqa: BLE001
+        print("[fermi_fix] 导入 amset 失败（%s）—— 本征点不打补丁" % e, file=sys.stderr)
+        return False
+    if not getattr(FermiDos.get_fermi_from_num_electrons, MARK, False):
+        FermiDos.get_fermi_from_num_electrons = _wrap_intrinsic(FermiDos.get_fermi_from_num_electrons)
+    if not getattr(AmsetData.set_doping_and_temperatures, MARK, False):
+        AmsetData.set_doping_and_temperatures = _wrap_set_doping(AmsetData.set_doping_and_temperatures)
+    return True
+
+
 def apply():
     """给 FermiDos.get_fermi 套上外壳（幂等）。返回是否已套上。"""
     try:
@@ -185,6 +299,7 @@ def _quiet():
         return False
 
 
+apply_intrinsic()
 if apply() and not _quiet():
     print("[fermi_fix] 已挂上：AMSET 求不到费米能级时改用二分法、宽松解偏差 > 1%% 报错、NaN 报错%s"
           % ("" if enabled() else "（%s=%s -> 只留 NaN 守卫）" % (ENV_NAME, os.environ.get(ENV_NAME))),
