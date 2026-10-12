@@ -1402,7 +1402,7 @@ INTR_SETS = (   # (键, 文件, 图例, 线型, 颜色, 标记)
 )
 # [0034] S8.4 的 OVERALL_WITHOUT 那一套（overall_no*.json，出厂 overall_noODP.json）：有就自动加进图、表、汇总。
 INTR_WITHOUT_STYLE = (("--", "C4", "D"), ("--", "C5", "v"))
-BT2_KEY, BT2_LABEL = "BT2_DPTtau", "BT2 CRTA x DPT tau"
+BT2_KEY, BT2_LABEL = "BT2_DPTtau", "BT2×DPT-τ"
 
 
 def _overall_without_files(run_dir):
@@ -2705,7 +2705,7 @@ def write_transport_plots(cwd, out, is_2d):
                 "ADP_POP": "amset_ADP+POP",
                 "ADP_POP_ODP": "amset_ADP+POP+ODP",
                 "ODP": "amset_ODP", "IVS": "amset_IVS",
-                "BT2_DPTtau": "BT2_DPTtau"}
+                "BT2_DPTtau": "BT2×DPT-τ"}
         _set_meta = load_intrinsic_sets(cwd) or {}
         _all_mechs = _set_meta.get("overall_labels") or []
         _im = ((_set_meta.get("sets") or {}).get("intrinsic") or {}).get("labels") or []

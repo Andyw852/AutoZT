@@ -16,7 +16,7 @@
             也可直接给以 step* 开头的目录（即 <M>/ke-dft-cpu/ 本身）。
 <输出目录>  独立输出目录（约定: <M>/transport_plots/），生成:
               <M>_transport.png / <M>_transport_data_<T>K.csv   9温度x5参数(mu/S/sigma/PF/kappa_e)，
-                        数据集 4 条：overall / intrinsic(ADP+POP) / ADP_only / BT2xDPT-tau
+                        数据集 4 条：overall / intrinsic(去 IMP) / ADP_only / BT2×DPT-τ
                         （intrinsic 图已并入本图，不再单独输出）
               <M>_params_<T>K.csv                          每个温度一张参数表(E1/C2D/m*/tau/mu)
 
@@ -46,6 +46,8 @@ QUANTS_I = [("mu_cm2/Vs", "mu  (cm^2/V/s)"), ("S_uV/K", "S  (uV/K)"), ("sigma_S/
             ("PF_W/mK2", "PF  (W/m/K$^2$)"), ("kappa_e_W/mK", "kappa_e  (W/m/K)")]  # 与 QUANTS_T 同列
 DATASETS = [("overall", "tab:red", "--", "s"), ("intrinsic", "tab:orange", "-.", "D"),
             ("ADP_only", "tab:green", ":", "^"), ("BT2_DPTtau", "tab:blue", "-", "o")]
+DS_LABELS = {"overall": "AMSET overall", "intrinsic": "amset (all but IMP)",
+             "ADP_only": "amset_ADP", "BT2_DPTtau": "BT2×DPT-τ"}
 
 
 def fnum(x):
@@ -231,10 +233,10 @@ def make_intrinsic(mdir, out, M):
                 ax.set_ylim(-1000, 1000); ax.axhline(0, color="k", lw=0.5)
             else:
                 ax.set_yscale("log")
-    hh = [Line2D([], [], color=c, lw=1.4, ls=ls, marker=mk, ms=4, label=ds) for ds, c, ls, mk in DATASETS]
+    hh = [Line2D([], [], color=c, lw=1.4, ls=ls, marker=mk, ms=4, label=DS_LABELS.get(ds, ds)) for ds, c, ls, mk in DATASETS]
     hh.append(Line2D([], [], color="0.35", lw=1.0, ls=(0, (1, 1)), label="DPT (band-edge, mu only)"))
     fig.legend(handles=hh, loc="lower center", ncol=5, fontsize=9, frameon=False)
-    fig.suptitle("%s  transport  (overall / ADP+POP / ADP only / BT2xDPT-tau)  100-900 K" % M, fontsize=12)
+    fig.suptitle("%s  transport  (overall / intrinsic(no IMP) / ADP only / BT2×DPT-τ)  100-900 K" % M, fontsize=12)
     fig.tight_layout(rect=[0, 0.03, 1, 0.985])
     fig.savefig(os.path.join(out, "%s_transport.png" % M), dpi=130); plt.close(fig)
     return True
