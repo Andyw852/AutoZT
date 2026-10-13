@@ -317,11 +317,11 @@ optional_steps:
   odp_frozen:
     default: true
     steps:
-      - {seq: 7.2, name: step7c_odp_frozen, label: S7.2_odp, after: step7_deform,
+      - {seq: 7.2, name: step7c_odp_frozen, label: S7.2_odp, after: step7_deform, hpc: hanhai25,
          src: step7c_odp_frozen, check: outcar, fanout: "odp-*", gen: gen_step9c_odp.py,
          gen_need: [stepconf.py, step.conf, ke_common.py, dim_common.py, odp_frozen.py, submit_std_2d.tpl, submit_std_3d.tpl],
          needs: ["step1_opt", "step5_dielect", "step7_deform"]}
-      - {seq: 8.21, name: "step8.21_odp_read", label: S8.21_odp, after: step7b_deform_read,
+      - {seq: 8.21, name: "step8.21_odp_read", label: S8.21_odp, after: step7b_deform_read, hpc: hanhai25,
          src: step7c_odp_frozen/odp_read, check: plot, run: gen, done_marker: odp_params.json,
          gen: gen_step12c_odp_read.py, gen_need: [stepconf.py, step.conf, ke_common.py, dim_common.py, odp_frozen.py, dp_optical.py],
          fetch_all: true,
@@ -356,7 +356,7 @@ optional_steps:
     default: false
     auto_dim: 2d
     steps:
-      - {seq: 8.4, name: "step8.4_amset2d", label: S8.4_amset2d,
+      - {seq: 8.4, name: "step8.4_amset2d", label: S8.4_amset2d, hpc: hanhai25,
          after: step7b_deform_read,
          src: step8.4_amset2d, check: marker, marker: "transport.json:thermal_conductivity",
          gen: gen_step14_amset2d.py,
