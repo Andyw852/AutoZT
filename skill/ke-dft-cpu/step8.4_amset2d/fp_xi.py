@@ -138,23 +138,32 @@ def cmd_gen(a):
 
 
 # ---------------- EIGENVAL / 能量 ----------------
-def band_edges_from_eigenval(path, nbands_occ):
+def band_edges_from_eigenval(path, nbands_occ=None):
+    """极简 EIGENVAL 解析：返回 (E_CBM, E_VBM, nocc)。
+    头部有且仅有一行是 3 个整数：NELECT NKPTS NBANDS；nocc 缺省 = NELECT//2（非自旋）。"""
     lines = open(path, encoding="utf-8").read().splitlines()
-    if len(lines) < 8:
-        return None
-    nk, nb = [int(x) for x in lines[5].split()[:2]]
-    p = 7
+    nelect = nk = nb = hdr = None
+    for i in range(min(10, len(lines))):
+        t = lines[i].split()
+        if len(t) == 3 and all(x.lstrip("-").isdigit() for x in t) and int(t[2]) < 5000:
+            nelect, nk, nb, hdr = int(t[0]), int(t[1]), int(t[2]), i
+            break
+    if nk is None:
+        return None, None, None
+    if nbands_occ is None:
+        nbands_occ = nelect // 2
+    p = hdr + 1
     allE = []
     for _ in range(nk):
-        p += 1
-        p += 1
+        p += 1                                  # k 点行
+        p += 1                                  # 权重/能量行
         for _b in range(nb):
             allE.append(float(lines[p].split()[1]))
             p += 1
     E = np.array(allE).reshape(nk, nb)
     vb = E[:, :nbands_occ].max()
     cb = E[:, nbands_occ:].min() if nb > nbands_occ else float("nan")
-    return cb, vb
+    return cb, vb, nbands_occ
 
 
 def cmd_extract(a):
@@ -170,7 +179,10 @@ def cmd_extract(a):
                 vals = json.load(open(a.energies, encoding="utf-8"))[branch + "_" + tag]
                 cb, vb = float(vals[0]), float(vals[1])
             else:
-                cb, vb = band_edges_from_eigenval(os.path.join(d, "EIGENVAL"), a.nocc)
+                cb, vb, _nocc = band_edges_from_eigenval(
+                    os.path.join(d, "EIGENVAL"), a.nocc or None)
+                if cb is None:
+                    sys.exit("[ERROR] 读不了 %s/EIGENVAL" % d)
             E[tag] = (cb, vb)
         for label, idx in (("CBM", 0), ("VBM", 1)):
             dE = (E["p"][idx] - E["m"][idx]) / (2 * amp)
@@ -270,7 +282,8 @@ def main():
     e = sub.add_parser("extract")
     e.add_argument("--dir", required=True)
     e.add_argument("--branch", default="")
-    e.add_argument("--nocc", type=int, default=9, help="占据带数（无自旋 MoS2: NELECT/2=9）")
+    e.add_argument("--nocc", type=int, default=0,
+                   help="占据带数；0/不填 = 自动从 EIGENVAL 头部 NELECT//2")
     e.add_argument("--energies", default="")
     e.add_argument("--json-out", default="")
     e.set_defaults(func=cmd_extract)
