@@ -155,6 +155,15 @@ class GuardTests(unittest.TestCase):
                                    energies={Spin.up: np.zeros((2, 5))},
                                    velocities_product={Spin.up: np.zeros((2, 3, 3, 5))})
         rep = P.transport_report(ad)
+        rz = np.full((2, 1, 1, 2, 5), 1e13)
+        rz[1] = 0.0                                  # [0047] 子集里整行置零的机制：不是坏值
+        adz = types.SimpleNamespace(fermi_levels=np.array([[0.0]]), scattering_labels=["ADP", "IMP"],
+                                    kpoints=np.zeros((5, 3)), scattering_rates={Spin.up: rz},
+                                    energies={Spin.up: np.zeros((2, 5))},
+                                    velocities_product={Spin.up: np.zeros((2, 3, 3, 5))})
+        rep_zero = P.transport_report(adz)
+        rz[0] = 0.0                                  # 全部机制都为 0：总率为 0 -> 必须报
+        rep_all0 = P.transport_report(adz)
         def boom(amset_data):
             raise np.linalg.LinAlgError("SVD did not converge")
         g = P._guard_transport(boom)
@@ -163,7 +172,7 @@ class GuardTests(unittest.TestCase):
             err = None
         except RuntimeError as e:
             err = str(e)
-        print(json.dumps({"rep": rep, "err": err,
+        print(json.dumps({"rep": rep, "err": err, "rep_zero": rep_zero, "rep_all0": rep_all0,
                           "wrapped": [getattr(getattr(T, n), "_amset2d_guard", False)
                                       for n in ("_calculate_transport_properties", "_calculate_mobility")]}))
     ''')
@@ -180,6 +189,8 @@ class GuardTests(unittest.TestCase):
         self.assertIn("SVD did not converge", out["err"])
         self.assertIn("ADP[up]", out["err"])
         self.assertEqual(out["wrapped"], [True, True])
+        self.assertEqual(out["rep_zero"], [])
+        self.assertTrue(any("总率" in x for x in out["rep_all0"]))
 
 
 if __name__ == "__main__":

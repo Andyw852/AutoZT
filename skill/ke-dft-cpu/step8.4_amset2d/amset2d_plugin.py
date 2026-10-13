@@ -613,8 +613,23 @@ def transport_report(amset_data, max_lines=8):
         vv = np.asarray(amset_data.velocities_product[spin])
         if not np.all(np.isfinite(vv)):
             out.append("velocities_product[%s] 有非有限值 %d 个" % (spin.name, int(np.count_nonzero(~np.isfinite(vv)))))
+        for n, t in np.ndindex(r.shape[1:3]):
+            # [0047] 总率（各机制之和）才决定寿命：它 ≤ 0 / 非有限才必坏
+            tot = r[:, n, t].sum(axis=0)
+            badt = ~np.isfinite(tot) | (tot <= 0)
+            if badt.any():
+                b, k = np.argwhere(badt)[0]
+                out.append("总率[%s] 掺杂#%d 温度#%d：%d 个 ≤0 或非有限；首处 带 %d k=%s 值 %s"
+                           % (spin.name, n, t, int(np.count_nonzero(badt)), b, np.round(kp[k], 4).tolist(), tot[b, k]))
+                if len(out) >= max_lines:
+                    out.append("……（只列前 %d 处）" % max_lines)
+                    return out
         for m, n, t in np.ndindex(r.shape[:3]):
             sl = r[m, n, t]
+            # [0047] 整片精确为 0 = 有意置零（postprocess_intrinsic 的子集把被剔除的机制整行置 0）或前因子为 0，
+            #   不是坏值：总率由其它机制给（上面单独核对）。以前把它报成"≤0"，子集日志里每次都是满屏误报。
+            if not np.any(sl):
+                continue
             bad = ~np.isfinite(sl) | (sl <= 0)
             if not bad.any():
                 continue
