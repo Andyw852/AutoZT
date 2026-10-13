@@ -37,7 +37,7 @@ from pathlib import Path
 # [SKILL_REV] 版本戳：写进 comparison_summary.txt。每次改本脚本逻辑后更新。
 #   陈旧副本已咬人三次（step12/step9b 盖戳后，step13 是最后一个没盖的），
 #   这里盖戳便于从产物反查到底跑的是哪份 skill 副本。
-_SKILL_REV = "2026-10-13-0041"   # [0041] transport_plots/defect_equilibrium/（缺陷平衡净浓度 σ/S/PF/κe vs T）   # 2026-10-13-0040   # [0040] transport_plots/intrinsic_carrier/（未掺杂本征载流子 σ/S/PF/κe vs T）；图例/文件名一律用实际机制组合 amset_<机制>；2026-10-13-0039   # [0039] transport_plots/datasets/：每个数据集单独一张 σ/S/PF/κe 图 + csv； [0038] 本征/子集图读 subset_*.json（SUBSETS）；[0036] transport_plots 加 bt2_muscan/ + amset_scan/ 两个扫描图子文件夹；[0035] transport_plots 合并 + τ 对比（tau/）
+_SKILL_REV = "2026-10-13-0045"   # [0045] bt2_muscan 同时画 thickness(我们)/cell(文献) 两种口径；[0041] transport_plots/defect_equilibrium/（缺陷平衡净浓度 σ/S/PF/κe vs T）   # 2026-10-13-0040   # [0040] transport_plots/intrinsic_carrier/（未掺杂本征载流子 σ/S/PF/κe vs T）；图例/文件名一律用实际机制组合 amset_<机制>；2026-10-13-0039   # [0039] transport_plots/datasets/：每个数据集单独一张 σ/S/PF/κe 图 + csv； [0038] 本征/子集图读 subset_*.json（SUBSETS）；[0036] transport_plots 加 bt2_muscan/ + amset_scan/ 两个扫描图子文件夹；[0035] transport_plots 合并 + τ 对比（tau/）
 #   bump 记录：2026-10-11-0035 —— transport_plots 合并：intrinsic 图并入 transport 图（4 条数据集
 #   overall / intrinsic / ADP only / BT2xDPT-tau），不再单独出 <M>_intrinsic*.{png,csv}，
 #   只留 <M>_transport.png + 每温度 CSV + <M>_params_<T>K.csv。
@@ -2867,23 +2867,37 @@ def write_transport_plots(cwd, out, is_2d):
             _br = list(csv.DictReader([l for l in _mp.read_text(errors="ignore").splitlines()
                                         if l.strip() and not l.startswith("#")]))
             _T = int(_mp.stem.rsplit("_", 1)[1].rstrip("K"))
+            # [0045] 同时画两种口径：thickness（我们，S8.1 主口径）与 cell（文献 Fig.5/7 裸元胞口径）。
+            #   σ/PF/κe 差 c/t 倍（factor 记在 CSV 头部注释）；S/ZT 对口径不变。
+            _fac = None
+            for _hl in _mp.read_text(errors="ignore").splitlines():
+                if _hl.startswith("#") and "factor=" in _hl:
+                    _seg = _hl.split("factor=")[1].split(",")[0].split()[0]
+                    try:
+                        _fac = float(_seg)
+                    except ValueError:
+                        _fac = None
+                    break
             _muv = np.array([fnum(r["mu_rel_efermi_eV"]) for r in _br])
-            _bp = [("S_xx_uV/K", "S_yy_uV/K", "S (uV/K)"),
-                   ("sigma_xx_S/m", "sigma_yy_S/m", "sigma (S/m)"),
-                   ("PF_xx_W/mK2", "PF_yy_W/mK2", "PF (W/mK^2)"),
-                   ("kappa_e_WF_xx_W/mK", "kappa_e_WF_yy_W/mK", "kappa_e (W/mK)")]
+            # (x 列, y 列, 标题, 是否依赖口径)
+            _bp = [("S_xx_uV/K", "S_yy_uV/K", "S (uV/K)", False),
+                   ("sigma_xx_S/m", "sigma_yy_S/m", "sigma (S/m)", True),
+                   ("PF_xx_W/mK2", "PF_yy_W/mK2", "PF (W/mK^2)", True),
+                   ("kappa_e_WF_xx_W/mK", "kappa_e_WF_yy_W/mK", "kappa_e (W/mK)", True)]
             if "ZT_xx" in (_br[0] if _br else {}):
-                _bp.append(("ZT_xx", "ZT_yy", "ZT"))
+                _bp.append(("ZT_xx", "ZT_yy", "ZT", False))
             _f, _ax = _scan_grid(len(_bp), [p[2] for p in _bp])
-            for j, (cx, cy, _t) in enumerate(_bp):
+            for j, (cx, cy, _t, _dep) in enumerate(_bp):
                 a = _ax[j]
                 for col, ls, lab in ((cx, "-", "x"), (cy, "--", "y")):
                     v = np.array([fnum(r[col]) for r in _br])
                     msk = np.isfinite(_muv) & np.isfinite(v)
-                    a.plot(_muv[msk], v[msk], lw=1.15, ls=ls, label=lab)
+                    a.plot(_muv[msk], v[msk], lw=1.15, ls=ls, label=lab + " (thickness)")
+                    if _dep and _fac and abs(_fac - 1.0) > 1e-9:
+                        a.plot(_muv[msk], v[msk] / _fac, lw=0.9, ls=":", label=lab + " (cell)")
                 a.set_xlabel("mu (eV)", fontsize=8)
                 if j == 0:
-                    a.legend(fontsize=7.5, frameon=False, loc="upper right")
+                    a.legend(fontsize=6.5, frameon=False, loc="upper right")
             _f.suptitle("%s  bt2 CRTA x DPT-tau  (chemical-potential scan, %d K)" % (M, _T), fontsize=11)
             _f.tight_layout(rect=[0, 0, 1, 0.93])
             _f.savefig(_bdir / ("bt2_muscan_%dK.png" % _T), dpi=130); plt.close(_f)
