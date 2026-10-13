@@ -249,7 +249,7 @@ def test_plugin_symmetrizes_dpo_rates_and_warns_empty_star():
     i = src.index("def _dpo_rates(")
     body = src[i:src.index("\nclass _DPOptical2D", i)]
     assert 'r = r[..., np.asarray(ir)][..., np.asarray(i2f)]' in body           # 按 AMSET 不可约映射对称化
-    assert body.index("r += dpo.RATE_FLOOR") < body.index("np.asarray(ir)") < body.index("np.broadcast_to")
+    assert body.index("r += dpo.RATE_FLOOR") < body.index("np.asarray(ir)") < body.index("out[spin] = r")   # [0042] 逐掺杂，不再广播
     assert 'r["dk_rel"] is None and r["label"] in used' in src                 # 有通道却分不到 k 点 -> WARN
 
 
