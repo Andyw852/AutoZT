@@ -32,7 +32,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 # [SKILL_REV] 版本戳：写进 settings.yaml 头，便于从结果反查跑的是哪份 skill 副本。
-_SKILL_REV = "2026-10-13-0044-undoped-grid"   # [0044] 取消本征点独立运行的拆分脚本，回到主掺杂网格 doping=0（[0043] amset_fermi_fix 已修好 SVD）   # [0043] 本征点 + IMP 的 SVD 不收敛（amset_fermi_fix：n=p 严格相等 + 散射率插值死片保护）   # [0041] DEFECT_DOPING 缺陷平衡载流子浓度进掺杂网格   # 2026-10-13-0040-undoped   # [0040] UNDOPED_POINT 本征点（doping=0）   # 2026-10-12-0038-subsets   # [0038] SUBSETS 散射机制子集（subset_<机制>.json）   # [0035-r3] 复审：not_in_scattering 只认显式排除、D 全低于阈值仍建记录、面外极性；[0035-r2] 冻声子优先、手填谷内只作对照；[0035-r1] 复审：交叉拒绝、并星平均、τ 挪到 transport.json 之后；[0035] 冻声子 ODP 参数（ODP_FROZEN）+ τ(E)（tau_energy.py）   # [0034-r3] 二审：重复星按 S8.2 k_grid 合并；显式 SCATTERING+掩码的日志   # [0034-r2] 复审：同中心谷合并、显式 SCATTERING 照办、PIE 与 settings 一致   # [0034] OVERALL_WITHOUT（出厂 ODP）-> overall_noODP.json   # [0033] ODP/谷间散射（常数形变势，step.conf DP_OPTICAL_E/H）+ ADP 谷内掩码   # [0032-r2] 复审：链首清旧本征产物与 mesh；SCATTERING 无 ADP 不出只 ADP   # [0032] WRITE_MESH/INTRINSIC_ADP_ONLY 2D 默认开（旧：2026-09-28-desym-fix V115）
+_SKILL_REV = "2026-10-13-0044-reprotol"   # [0044] 复现检查改相对容差（单机制 μ 在零前因子处 ~1e47）；POSTPROCESS_ONLY 不再要求 transport.json；取消本征点独立拆分脚本、回到主掺杂网格 doping=0（[0043] amset_fermi_fix 已修好 SVD）   # 2026-10-13-0043-intrsvd   # [0043] 本征点 + IMP 的 SVD 不收敛（amset_fermi_fix：n=p 严格相等 + 散射率插值死片保护）   # 2026-10-13-0041-defectdop   # [0041] DEFECT_DOPING 缺陷平衡载流子浓度进掺杂网格   # 2026-10-13-0040-undoped   # [0040] UNDOPED_POINT 本征点（doping=0）   # 2026-10-12-0038-subsets   # [0038] SUBSETS 散射机制子集（subset_<机制>.json）   # [0035-r3] 复审：not_in_scattering 只认显式排除、D 全低于阈值仍建记录、面外极性；[0035-r2] 冻声子优先、手填谷内只作对照；[0035-r1] 复审：交叉拒绝、并星平均、τ 挪到 transport.json 之后；[0035] 冻声子 ODP 参数（ODP_FROZEN）+ τ(E)（tau_energy.py）   # [0034-r3] 二审：重复星按 S8.2 k_grid 合并；显式 SCATTERING+掩码的日志   # [0034-r2] 复审：同中心谷合并、显式 SCATTERING 照办、PIE 与 settings 一致   # [0034] OVERALL_WITHOUT（出厂 ODP）-> overall_noODP.json   # [0033] ODP/谷间散射（常数形变势，step.conf DP_OPTICAL_E/H）+ ADP 谷内掩码   # [0032-r2] 复审：链首清旧本征产物与 mesh；SCATTERING 无 ADP 不出只 ADP   # [0032] WRITE_MESH/INTRINSIC_ADP_ONLY 2D 默认开（旧：2026-09-28-desym-fix V115）
 # 复制来源（gen_step10_amset.py 的 _SKILL_REV），用于人工比对两份文件是否同步
 _SOURCE_GEN_REV = "2026-10-08-2d-raw-elastic"   # [0014] S8 的 2D 弹性改为原始 slab 值，与本步一致
 import stepconf  # noqa: E402
@@ -108,7 +108,8 @@ STEP_LABEL  = "S8.4_amset2d"
 #   旧 intrinsic_*.json 会留在目录里、被 S8.3 当成本轮结果（retry 不删目录）。mesh 本轮会重写。
 # [0034] 再加 overall_no*.json（OVERALL_WITHOUT 那一套）。
 # [0037] POSTPROCESS_ONLY：True 时作业链复用现有 mesh/transport.json，只重跑 postprocess（不 rm mesh、不跑 AMSET，省 ~2.5h）。
-#   用于补跑新增本征组合（intrinsic_ADP_POP.json / intrinsic_ADP_POP_ODP.json）。前提：目录里已有本次 AMSET 写的 mesh_*.h5 + transport.json。
+#   用于补跑新增本征组合（intrinsic_ADP_POP.json / intrinsic_ADP_POP_ODP.json），或后处理失败后抢救（[0044]）。
+#   前提：目录里已有本次 AMSET 写的 mesh_*.h5 + transport_<网格>.json（transport.json 不需要，链尾会重新复制）。
 POSTPROCESS_ONLY = False
 AMSET_CMD   = ('rm -f transport.json subset_*.json intrinsic_*.json overall_no*.json tau_energy.json mesh_*.h5; '
                'python overlap_preflight.py --in-job || exit 1; '
@@ -3188,7 +3189,9 @@ def main():
         if not WRITE_MESH:
             sys.exit("[ERROR] POSTPROCESS_ONLY requires WRITE_MESH = true")
         _acmd = ('echo "[POSTPROCESS_ONLY] 复用现有 mesh/transport，跳过 AMSET"; '
-                 'ls mesh_*.h5 transport_*.json transport.json >/dev/null 2>&1 || { echo "[ERROR] 缺 mesh/transport 源文件，不能 POSTPROCESS_ONLY"; exit 1; }; '
+                 # [0044] 只要 mesh_*.h5 + transport_*.json：transport.json 是后处理通过后才由 AMSET_TAIL 复制出来的，
+                 #   后处理失败的那一轮（正是要 POSTPROCESS_ONLY 抢救的情形）没有它 -> 旧检查让抢救必然失败。
+                 'ls mesh_*.h5 transport_*.json >/dev/null 2>&1 || { echo "[ERROR] 缺 mesh/transport 源文件，不能 POSTPROCESS_ONLY"; exit 1; }; '
                  'rm -f subset_*.json intrinsic_*.json overall_no*.json tau_energy.json')
     else:
         _acmd = AMSET_CMD

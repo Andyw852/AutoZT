@@ -724,6 +724,30 @@ def transport_fingerprint(run_dir):
     return {"file": os.path.basename(tf[0]), "sha256": h.hexdigest()}
 
 
+def reproduce_diffs(mob0, sig0, seeb0, j, labels):
+    """--check-reproduce 的逐项差：返回 (max|a−b|, max |a−b|/max(|b|, 1))，键 = 机制 μ / σ / S。
+
+    判据用后者（[0044]）：|b| ≤ 1 时就是旧的绝对差；|b| > 1 时是相对差。单机制 μ 在前因子为 0 的
+    (掺杂, 温度) 上是 ~1e47（本征点 IMP：率 = small_val 1e-32；非极性材料的 POP 同理），重积分与 AMSET
+    只差浮点舍入（相对 ~1e-15），绝对差却有 ~1e32，旧判据必 FAIL。真不同源时相对差 ≥ 1e-3，照样拦得住。"""
+    diffs, rels = {}, {}
+
+    def _one(name, a, b):
+        a = np.asarray(a, float)
+        b = np.asarray(b, float)
+        n = min(a.shape[0], b.shape[0])
+        d = np.abs(a[:n] - b[:n])
+        diffs[name] = float(np.nanmax(d))
+        rels[name] = float(np.nanmax(d / np.maximum(np.abs(b[:n]), 1.0)))
+
+    for name in ["overall"] + list(labels):
+        if name in j.get("mobility", {}) and name in mob0:
+            _one(name, mob0[name], j["mobility"][name])
+    _one("conductivity_S_m", sig0, j["conductivity"])
+    _one("seebeck_uV_K", seeb0, j["seebeck"])
+    return diffs, rels
+
+
 def find_mesh(run_dir, explicit=None):
     if explicit:
         p = Path(explicit)
@@ -756,7 +780,8 @@ def main(argv=None):
     ap.add_argument("--check-reproduce", action="store_true",
                     help="先用全部机制重积分并与 transport*.json 对比，验证逐位复现")
     ap.add_argument("--reproduce-tol", type=float, default=1e-4,
-                    help="复现检查的容差（绝对），默认 1e-4（覆盖双精度输运积分浮点噪声 ~1e-5；真正不同源会差 1e-3 以上）")
+                    help="复现检查的容差：|diff|/max(|ref|, 1) 的上限（|ref| ≤ 1 时即绝对差），默认 1e-4"
+                         "（覆盖双精度输运积分浮点噪声；真正不同源会差 1e-3 以上）")
     args = ap.parse_args(argv)
 
     run_dir = Path(args.run_dir).resolve()
@@ -793,19 +818,16 @@ def main(argv=None):
         reproduce = {"transport_json": os.path.basename(tf[0]) if tf else None}
         if tf:
             j = json.load(open(tf[0]))
-            diffs = {}
-            for name in ["overall"] + labels:
-                if name in j.get("mobility", {}) and name in mob0:
-                    a = np.asarray(mob0[name]); b = np.asarray(j["mobility"][name])
-                    n = min(a.shape[0], b.shape[0])
-                    diffs[name] = float(np.nanmax(np.abs(a[:n] - b[:n])))
-            diffs["conductivity_S_m"] = float(np.nanmax(np.abs(sig0 - np.asarray(j["conductivity"]))))
-            diffs["seebeck_uV_K"] = float(np.nanmax(np.abs(seeb0 - np.asarray(j["seebeck"]))))
+            diffs, rels = reproduce_diffs(mob0, sig0, seeb0, j, labels)
             reproduce["max_abs_diff"] = diffs
-            worst = max(diffs.values()) if diffs else 0.0
+            reproduce["max_rel_diff"] = rels
+            worst_k = max(rels, key=rels.get) if rels else None
+            worst = rels[worst_k] if rels else 0.0
             reproduce["passed"] = bool(worst <= args.reproduce_tol)
-            print("[..] 复现检查：max|diff|=%s -> %s"
-                  % ("%.3e" % worst, "PASS" if reproduce["passed"] else "FAIL"))
+            print("[..] 复现检查：max |diff|/max(|ref|,1) = %.3e（%s）-> %s"
+                  % (worst, worst_k, "PASS" if reproduce["passed"] else "FAIL"))
+            for k in sorted(rels, key=rels.get, reverse=True):
+                print("      %-22s rel %.2e  abs %.2e" % (k, rels[k], diffs[k]))
             if not reproduce["passed"]:
                 raise SystemExit("[ERROR] 重积分无法复现原 transport.json —— "
                                  "mesh/settings/vasprun 不同源，勿信本征结果。")

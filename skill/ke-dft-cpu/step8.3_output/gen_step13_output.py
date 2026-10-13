@@ -1907,7 +1907,7 @@ def _intr_summary(out_dir, rows, geom, data, files):
             L.append("# %-9s 缺：%s" % (key, fname))
             continue
         rep = st.get("reproduce") or {}
-        md = rep.get("max_abs_diff") or {}
+        md = rep.get("max_rel_diff") or rep.get("max_abs_diff") or {}     # [0044] 判据是相对差（旧文件只有绝对差）
         L.append("# %-9s %s%s%s" % (key, fname if not st.get("partial") else "transport.json mobility.ADP（只有 μ）",
                                     (" 机制=" + "+".join(st["labels"])) if st.get("labels") else "",
                                     ("；复现检查 %s（max|diff| %.1e）" % ("PASS" if rep.get("passed") else "FAIL",
