@@ -2400,9 +2400,33 @@ def _tavg(t, is_2d):
 
 
 def undoped_rows(cwd, is_2d):
-    """[0040] 本征载流子点（doping = 0）。见 _rows_at_doping。"""
-    return _rows_at_doping(cwd, is_2d, lambda d: d == 0,
-                           "掺杂网格里没有 0（S8/S8.4 的 UNDOPED_POINT 关了，或是 [0040] 之前的结果）")
+    """[0040] 两条线：本征点独立结果 transport_undoped.json（doping=[0]，去 IMP）。"""
+    run = Path(cwd) / (AMSET2D_DIR if is_2d else AMSET_DIR)
+    j = _load_json(run / "transport_undoped.json")
+    if not j:
+        return [], "没有 transport_undoped.json（UNDOPED_POINT 关了，或本征点独立运行没跑/失败）"
+    temps = [float(t) for t in _unwrap(j["temperatures"])]
+    fac = 1.0
+    if is_2d:
+        geom = _geom_2d(cwd)
+        fac = geom["c_over_t"] if geom else 1.0
+    S_arr = _unwrap(j.get("seebeck"))
+    sg_arr = _unwrap(j.get("conductivity"))
+    kp_arr = _unwrap(j.get("electronic_thermal_conductivity"))
+    rows = []
+    for k, T in enumerate(temps):
+        try:
+            S = _tavg(S_arr[0][k], is_2d)
+            sg = _tavg(sg_arr[0][k], is_2d)
+            kp = _tavg(kp_arr[0][k], is_2d)
+        except (TypeError, IndexError, KeyError):
+            continue
+        sg = None if sg is None else sg * fac
+        kp = None if kp is None else kp * fac
+        pf = (S * 1e-6) ** 2 * sg if (S is not None and sg is not None) else None
+        rows.append({"T_K": T, "dataset": "overall", "S_uV/K": S, "sigma_S/m": sg,
+                     "PF_W/mK2": pf, "kappa_e_W/mK": kp})
+    return rows, None
 
 
 def _rows_at_doping(cwd, is_2d, match, why_missing):

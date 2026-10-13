@@ -32,27 +32,21 @@ def _s83():
     return _load("s83_0040", KE / "step8.3_output" / "gen_step13_output.py")
 
 
-def _set_undoped_sigma(cwd, value):
-    p = cwd / "step8.4_amset2d" / "transport.json"
-    j = json.loads(p.read_text())
-    i0 = j["doping"].index(0.0)
-    for k in range(len(j["temperatures"])):
-        j["conductivity"][i0][k] = T32._t(value)
-        j["seebeck"][i0][k] = T32._t(-150.0)
-    txt = json.dumps(j)
-    p.write_text(txt)
-    import hashlib                      # 子集文件记的是 transport.json 指纹：改了内容要同步，否则被当成上一轮残留
-    sha = hashlib.sha256(txt.encode()).hexdigest()
-    for f in (cwd / "step8.4_amset2d").glob("intrinsic_*.json"):
-        q = json.loads(f.read_text())
-        q["transport_fingerprint"]["sha256"] = sha
-        f.write_text(json.dumps(q))
+def _set_undoped_transport(cwd, value, temps, dirname="step8.4_amset2d"):
+    """[0040] 写 transport_undoped.json（本征点独立结果：doping=[0]，σ=value，S=-150）。"""
+    p = cwd / dirname / "transport_undoped.json"
+    p.write_text(json.dumps({
+        "doping": [0.0], "temperatures": temps,
+        "seebeck": [[T32._t(-150.0) for _ in temps]],
+        "conductivity": [[T32._t(value) for _ in temps]],
+        "electronic_thermal_conductivity": [[T32._t(1.0) for _ in temps]],
+    }))
 
 
 def test_undoped_rows_2d_scaled_by_c_over_t(tmp_path):
     S = _s83()
-    cwd = T32._material(tmp_path, doping0=True)
-    _set_undoped_sigma(cwd, 2.0)
+    cwd = T32._material(tmp_path)
+    _set_undoped_transport(cwd, 2.0, T32.TEMPS)
     rows, why = S.undoped_rows(cwd, True)
     assert why is None
     geom = S._geom_2d(cwd)
@@ -61,27 +55,27 @@ def test_undoped_rows_2d_scaled_by_c_over_t(tmp_path):
     assert ov[0]["sigma_S/m"] == pytest.approx(2.0 * geom["c_over_t"])
     assert ov[0]["S_uV/K"] == pytest.approx(-150.0)
     assert ov[0]["PF_W/mK2"] == pytest.approx((150e-6) ** 2 * 2.0 * geom["c_over_t"])
-    assert {r["dataset"] for r in rows} >= {"overall", "intrinsic", "ADP_only"}
+    assert {r["dataset"] for r in rows} == {"overall"}   # [0040] 两条线：本征点独立运行只有 overall
 
 
 def test_undoped_plot_files(tmp_path):
     pytest.importorskip("matplotlib")
     S = _s83()
-    cwd = T32._material(tmp_path, doping0=True)
-    _set_undoped_sigma(cwd, 2.0)
+    cwd = T32._material(tmp_path)
+    _set_undoped_transport(cwd, 2.0, T32.TEMPS)
     plots = cwd.parent / "transport_plots"
     assert S.write_undoped_plots(cwd, plots, "MoS2", True)
     d = plots / S.UNDOPED_DIR
     assert (d / "MoS2_intrinsic_carrier.png").is_file()
     lines = [l for l in (d / "MoS2_intrinsic_carrier.csv").read_text().splitlines() if not l.startswith("#")]
     rows = list(csv.DictReader(lines))
-    assert {r["dataset"] for r in rows} >= {"overall", "intrinsic", "ADP_only"}
+    assert {r["dataset"] for r in rows} == {"overall"}
 
 
 def test_no_undoped_point_skips_and_cleans(tmp_path):
     pytest.importorskip("matplotlib")
     S = _s83()
-    cwd = T32._material(tmp_path, doping0=False)
+    cwd = T32._material(tmp_path)
     d = cwd.parent / "transport_plots" / S.UNDOPED_DIR
     d.mkdir(parents=True)
     (d / "MoS2_intrinsic_carrier.png").write_bytes(b"old")
@@ -93,14 +87,10 @@ def test_undoped_rows_3d(tmp_path):
     S = _s83()
     cwd = tmp_path / "Si" / "ke-dft-cpu"
     (cwd / "step8_amset").mkdir(parents=True)
-    t3 = [[3.0, 0, 0], [0, 3.0, 0], [0, 0, 6.0]]
-    (cwd / "step8_amset" / "transport.json").write_text(json.dumps({
-        "doping": [-1e18, 0.0, 1e18], "temperatures": [300.0, 600.0],
-        "seebeck": [[t3, t3]] * 3, "conductivity": [[t3, t3]] * 3,
-        "electronic_thermal_conductivity": [[t3, t3]] * 3}))
+    _set_undoped_transport(cwd, 3.0, [300.0, 600.0], dirname="step8_amset")
     rows, why = S.undoped_rows(cwd, False)
     assert why is None and len(rows) == 2
-    assert rows[0]["sigma_S/m"] == pytest.approx(4.0)          # (3+3+6)/3，3D 不乘 c/t
+    assert rows[0]["sigma_S/m"] == pytest.approx(2.0)          # (3+3+1e-9)/3，3D 不乘 c/t
 
 
 def test_gen_has_undoped_point():
@@ -108,7 +98,9 @@ def test_gen_has_undoped_point():
         src = p.read_text(encoding="utf-8")
         assert "UNDOPED_POINT = True" in src
         assert '"UNDOPED_POINT": (None, "bool")' in src
-        assert "if UNDOPED_POINT and 0.0 not in _dop:" in src
+    # [0040] 两条线：2D S8.4 用 run_undoped.py 独立跑本征点
+    src14 = (KE / "step8.4_amset2d" / "gen_step14_amset2d.py").read_text(encoding="utf-8")
+    assert "run_undoped.py" in src14
 
 
 def test_intrinsic_fermi_matches_parabolic_bands():

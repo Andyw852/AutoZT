@@ -6,7 +6,7 @@ postprocess_intrinsic 也会导入它）：
     python -c "import amset_fermi_fix; ...; Runner.from_directory('.').run()"
 
 开关：环境变量 AZ_FERMI_FIX。未设 = 开；0/false/off/no = 关（只用于复现旧结果做对照）。
-    NaN 守卫（V131）不受开关影响，始终生效。
+    NaN 守卫（V131）与散射率插值死片保护（[0043]）不受开关影响，始终生效。
 
 ------------------------------------------------------------------------------
 问题（V132，WS2 n 型 100 K 报 "Could not find fermi within 100.0% of concentration=-2.759e-07"）：
@@ -38,6 +38,12 @@ fermi_probe 实测（WS2）：DOS 正常（带隙内 0 态、本征 E_F 有限�
 argmin 取到网格上第一个带隙内的点（靠价带一侧），E_F 位置任意，S/σ 差几个数量级；electron_conc/hole_conc
 也不填（= 0），迁移率除以 0。修法：DOS 在本征 E_F 处有带隙时，改解 n(E_F) = p(E_F)（log-sum-exp，
 不受相消/下溢影响），并把 n、p 填进 electron_conc / hole_conc。无带隙（金属）照旧走 AMSET 原搜索。
+
+[0043] 本征点 + IMP 的 "SVD did not converge"：不是本征浓度下溢（n_i ∝ exp(−E_g/2kT) 本来就小，是物理值）。
+AMSET IMP 的 N_ii = |n − p|/Z，本征点 = 0 -> IMP 率整片为 0 -> _interpolate_zero_rates 的"任一掺杂/温度
+≤ 1e6 就标记"把该机制全部 k 点标成待插值、又无处可插，其它掺杂里 MRTA 留下的负率不再被替掉 ->
+fill_rates_outside_cutoffs 取 log 得 NaN -> pinv(L11) 的 SVD 不收敛。修法：本征点 n = p = √(np) 严格相等
+（N_ii 精确为 0），插值时把这种死片单独处理（见 _wrap_interp）。
 ------------------------------------------------------------------------------
 """
 
@@ -235,8 +241,11 @@ def _wrap_set_doping(orig):
             for n, t in np.ndindex(self.fermi_levels.shape):
                 if self.doping[n] == 0:
                     ln_n, ln_p = log_carriers(self.dos, self.fermi_levels[n, t], self.temperatures[t])
-                    self.electron_conc[n, t] = np.exp(ln_n) / vol
-                    self.hole_conc[n, t] = np.exp(ln_p) / vol
+                    # [0043] n = p = n_i = √(np)（质量作用定律）严格相等：AMSET IMP 的 N_ii = |n − p|/Z 才是 0，
+                    # 而不是 E_F 求解容差留下的残差（那点残差乘 q→0 处 1/(q_TF)⁴ 量级的因子 = 正负垃圾率）。
+                    n_i = np.exp(0.5 * (ln_n + ln_p)) / vol
+                    self.electron_conc[n, t] = n_i
+                    self.hole_conc[n, t] = n_i
                     if not _quiet():
                         print("[fermi_fix] 本征点 %g K：E_F = %.4f eV，n = p = %.3e cm^-3（n=p 求解，log-sum-exp）"
                               % (self.temperatures[t], self.fermi_levels[n, t] * HA_EV,
@@ -245,6 +254,71 @@ def _wrap_set_doping(orig):
 
     setattr(set_doping_and_temperatures, MARK, True)
     return set_doping_and_temperatures
+
+
+RATE_FLAG = 1e6            # = amset.scattering.calculate._interpolate_zero_rates 的"非零"阈值
+
+
+def _dead_slices(rates, masks):
+    """[0043] 某机制在某 (掺杂, 温度, 能带) 窗口内没有一个 > 1e6 的率（前因子为 0：本征点的 IMP，N_ii = 0）。"""
+    dead = []
+    for spin, r in rates.items():
+        for s, d, t, b in np.ndindex(r.shape[:-1]):
+            win = np.ones(r.shape[-1], bool) if masks is None else ~masks[spin][s, d, t, b]
+            if win.any() and not np.any(r[s, d, t, b, win] > RATE_FLAG):
+                dead.append((spin, (s, d, t, b), win))
+    return dead
+
+
+def _wrap_interp(orig):
+    """[0043] AMSET 的 _interpolate_zero_rates 按"任一掺杂/温度 ≤ 1e6"标记要插值的 k 点：只要某个
+    (掺杂, 温度) 的率整片为 0（本征点 IMP），这个机制所有 k 点都被标记 → "全零、无法插值" 分支只加 1e-32，
+    **其它掺杂**里 MRTA 因子留下的负率（正常情况下会被最近邻插值替掉）原样保留 →
+    fill_rates_outside_cutoffs 对负数取 log = NaN → 寿命 NaN → BoltzTraP2 pinv(L11) "SVD did not converge"。
+    修法：死片先垫占位值不参与标记，原函数照常插值其余各片；死片再还原，≤ 0 / 非有限的值换成 small_val
+    （= AMSET 对前因子为 0 的机制本来的处理）。没有死片时原样调用，结果逐位不变。"""
+    @functools.wraps(orig)
+    def _interpolate_zero_rates(rates, kpoints, masks=None, *args, **kwargs):
+        dead = _dead_slices(rates, masks)
+        if not dead:
+            return orig(rates, kpoints, masks, *args, **kwargs)
+        try:
+            from amset.constants import small_val
+        except Exception:                                          # noqa: BLE001
+            small_val = 1e-32
+        saved = []
+        for spin, idx, win in dead:
+            row = rates[spin][idx]
+            saved.append(row[win].copy())
+            row[win] = 1e14
+        out = orig(rates, kpoints, masks, *args, **kwargs)
+        for (spin, idx, win), val in zip(dead, saved):
+            out[spin][idx][win] = np.where(np.isfinite(val) & (val > 0), val, small_val)
+        if not _quiet():
+            labs = sorted({"%d/%d/%d" % idx[:3] for _, idx, _ in dead})
+            print("[fermi_fix] 散射率插值：%d 个 (机制/掺杂/温度) 片窗口内全 ≤ 1e6（前因子 0，如本征点 IMP），"
+                  "单独处理、不再拖垮其它掺杂的插值：%s" % (len(labs), ", ".join(labs[:12])), flush=True)
+        return out
+
+    setattr(_interpolate_zero_rates, MARK, True)
+    return _interpolate_zero_rates
+
+
+def apply_rate_guard():
+    """[0043] 散射率插值的死片保护（幂等；与 NaN 守卫一样不受 AZ_FERMI_FIX 开关影响：
+    没有死片时逐位不变，有死片时原版必然崩）。"""
+    try:
+        import amset.scattering.calculate as C
+    except Exception as e:                                         # noqa: BLE001
+        print("[fermi_fix] 导入 amset.scattering.calculate 失败（%s）—— 散射率插值不打补丁" % e, file=sys.stderr)
+        return False
+    cur = getattr(C, "_interpolate_zero_rates", None)
+    if cur is None:
+        print("[fermi_fix] AMSET 没有 _interpolate_zero_rates（版本不同）—— 散射率插值不打补丁", file=sys.stderr)
+        return False
+    if not getattr(cur, MARK, False):
+        C._interpolate_zero_rates = _wrap_interp(cur)
+    return True
 
 
 def apply_intrinsic():
@@ -300,6 +374,7 @@ def _quiet():
 
 
 apply_intrinsic()
+apply_rate_guard()
 if apply() and not _quiet():
     print("[fermi_fix] 已挂上：AMSET 求不到费米能级时改用二分法、宽松解偏差 > 1%% 报错、NaN 报错%s"
           % ("" if enabled() else "（%s=%s -> 只留 NaN 守卫）" % (ENV_NAME, os.environ.get(ENV_NAME))),

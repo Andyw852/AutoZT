@@ -32,7 +32,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 # [SKILL_REV] 版本戳：写进 settings.yaml 头，便于从结果反查跑的是哪份 skill 副本。
-_SKILL_REV = "2026-10-13-0041-defectdop"   # [0041] DEFECT_DOPING 缺陷平衡载流子浓度进掺杂网格   # 2026-10-13-0040-undoped   # [0040] UNDOPED_POINT 本征点（doping=0）   # 2026-10-12-0038-subsets   # [0038] SUBSETS 散射机制子集（subset_<机制>.json）   # [0035-r3] 复审：not_in_scattering 只认显式排除、D 全低于阈值仍建记录、面外极性；[0035-r2] 冻声子优先、手填谷内只作对照；[0035-r1] 复审：交叉拒绝、并星平均、τ 挪到 transport.json 之后；[0035] 冻声子 ODP 参数（ODP_FROZEN）+ τ(E)（tau_energy.py）   # [0034-r3] 二审：重复星按 S8.2 k_grid 合并；显式 SCATTERING+掩码的日志   # [0034-r2] 复审：同中心谷合并、显式 SCATTERING 照办、PIE 与 settings 一致   # [0034] OVERALL_WITHOUT（出厂 ODP）-> overall_noODP.json   # [0033] ODP/谷间散射（常数形变势，step.conf DP_OPTICAL_E/H）+ ADP 谷内掩码   # [0032-r2] 复审：链首清旧本征产物与 mesh；SCATTERING 无 ADP 不出只 ADP   # [0032] WRITE_MESH/INTRINSIC_ADP_ONLY 2D 默认开（旧：2026-09-28-desym-fix V115）
+_SKILL_REV = "2026-10-13-0043-intrsvd"   # [0041] DEFECT_DOPING 缺陷平衡载流子浓度进掺杂网格   # 2026-10-13-0040-undoped   # [0040] UNDOPED_POINT 本征点（doping=0）   # 2026-10-12-0038-subsets   # [0038] SUBSETS 散射机制子集（subset_<机制>.json）   # [0035-r3] 复审：not_in_scattering 只认显式排除、D 全低于阈值仍建记录、面外极性；[0035-r2] 冻声子优先、手填谷内只作对照；[0035-r1] 复审：交叉拒绝、并星平均、τ 挪到 transport.json 之后；[0035] 冻声子 ODP 参数（ODP_FROZEN）+ τ(E)（tau_energy.py）   # [0034-r3] 二审：重复星按 S8.2 k_grid 合并；显式 SCATTERING+掩码的日志   # [0034-r2] 复审：同中心谷合并、显式 SCATTERING 照办、PIE 与 settings 一致   # [0034] OVERALL_WITHOUT（出厂 ODP）-> overall_noODP.json   # [0033] ODP/谷间散射（常数形变势，step.conf DP_OPTICAL_E/H）+ ADP 谷内掩码   # [0032-r2] 复审：链首清旧本征产物与 mesh；SCATTERING 无 ADP 不出只 ADP   # [0032] WRITE_MESH/INTRINSIC_ADP_ONLY 2D 默认开（旧：2026-09-28-desym-fix V115）
 # 复制来源（gen_step10_amset.py 的 _SKILL_REV），用于人工比对两份文件是否同步
 _SOURCE_GEN_REV = "2026-10-08-2d-raw-elastic"   # [0014] S8 的 2D 弹性改为原始 slab 值，与本步一致
 import stepconf  # noqa: E402
@@ -2138,8 +2138,7 @@ def write_settings(out: Path, eps_inf, eps_static, gap, elastic,
     check_carriers_per_atom(DOPING, _CELL_AREA_CM2, _count_atoms(Path.cwd()), tag="2D S8.4")
     _dop_areal = expand_spec(DOPING, log=True)   # 面密度 cm^-2
     _dop = [v / (c_len * 1e-8) for v in _dop_areal] if c_len else _dop_areal  # 体浓度 cm^-3
-    if UNDOPED_POINT and 0.0 not in _dop:             # [0040] 本征点（未掺杂）
-        _dop = list(_dop) + [0.0]
+    # [0040] 本征点（doping=0）拆成独立运行：主 doping 网格【不加 0】；作业链尾部由 run_undoped.py 单跑
     _dop, _defect_pts = _add_defect_doping(_dop, Path.cwd(), True,               # [0041] 面密度 -> 按 c 折体浓度
                                            (1.0 / (c_len * 1e-8)) if c_len else 1.0)
     _tmp = expand_spec(TEMPERATURES, log=False)  # 温度线性
@@ -3228,6 +3227,10 @@ def main():
     #   autozt marker 判据会把失败隐藏（V63 的教训）。
     _acmd = _acmd + " && python fermi_window_check.py"
     _acmd = _acmd + AMSET_TAIL
+    # [0040] 两条线：主掺杂扫描(transport.json)之后，独立跑本征点(doping=0 去 IMP)，尽力而为
+    if UNDOPED_POINT and not POSTPROCESS_ONLY:
+        _acmd = _acmd + (' && { python run_undoped.py || echo "[WARN] run_undoped.py 失败，主 transport.json 不受影响" >&2; }')
+        print("[OK] 另跑本征点（doping=0 去 IMP）-> transport_undoped.json（两条线）")
     # [0035] τ(E) 与迁移率等效 τ：放在 transport.json 落成**之后**、尽力而为（子 shell 吞掉失败）——它超时或被杀
     #   也不会丢掉几个小时的 AMSET 结果；失败原因写在 tau_energy.json，S8.3 读到 status=error 就跳过 τ 对比。
     if WRITE_MESH and TAU_ENERGY:
@@ -3280,10 +3283,6 @@ def main():
           % (OUTDIR_NAME, PLUGIN_SRC_NAME))
 
 
-if __name__ == "__main__":
-    main()
-
-
 def _add_defect_doping(dop, cwd, is_2d, scale=1.0):
     """[0041] 缺陷平衡净浓度 -> 追加到 AMSET 掺杂（AMSET 口径：面密度 cm^-2 按 c 折成体浓度）；返回 (dop, 记录)。"""
     if not _HAS_KC:
@@ -3302,4 +3301,8 @@ def _add_defect_doping(dop, cwd, is_2d, scale=1.0):
         print("[OK] DEFECT_DOPING：顶点 %s %s 净浓度 %.3e %s（E_F = %s eV，%s K）-> AMSET doping %.3e cm^-3"
               % (p["vertex"], p["carrier_type"], p["net"], p["unit"], p["E_F_eq_eV"], p["T_K"], v))
     return dop, {"points": pts, "notes": notes, "skill_rev": _SKILL_REV}
+
+
+if __name__ == "__main__":
+    main()
 

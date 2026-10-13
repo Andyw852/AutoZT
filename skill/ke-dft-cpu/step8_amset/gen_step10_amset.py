@@ -17,7 +17,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 # [SKILL_REV] 版本戳：写进 settings.yaml 头，便于从结果反查跑的是哪份 skill 副本。
-_SKILL_REV = "2026-10-13-0041-defectdop"   # [0041] DEFECT_DOPING 缺陷平衡载流子浓度进掺杂网格   # 2026-10-13-0040-undoped   # [0040] UNDOPED_POINT 本征点（doping=0）   # 2026-10-13-0038-subsets   # [0038] SUBSETS 散射机制子集（subset_<机制>.json）   # [0037] 三维 PIE（读压电张量写 settings，插件 amset_pie3d.py 修正核）   # [0036] 三维 ODP/IVS（DP_OPTICAL_*，插件 amset_dpo3d.py）   # [0014] 2D 弹性用原始 slab 值（不乘 c/t）；V115 相位补丁
+_SKILL_REV = "2026-10-13-0043-intrsvd"   # [0041] DEFECT_DOPING 缺陷平衡载流子浓度进掺杂网格   # 2026-10-13-0040-undoped   # [0040] UNDOPED_POINT 本征点（doping=0）   # 2026-10-13-0038-subsets   # [0038] SUBSETS 散射机制子集（subset_<机制>.json）   # [0037] 三维 PIE（读压电张量写 settings，插件 amset_pie3d.py 修正核）   # [0036] 三维 ODP/IVS（DP_OPTICAL_*，插件 amset_dpo3d.py）   # [0014] 2D 弹性用原始 slab 值（不乘 c/t）；V115 相位补丁
 import stepconf  # noqa: E402
 try:
     import ke_common as kc
