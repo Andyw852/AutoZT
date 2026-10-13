@@ -11,8 +11,14 @@
     M = 原胞质量（kg）；G_c = 目标谷集合的态密度（每原胞、每自旋、每焦耳）；D_c 单位 J/m；
     N_c = 1/(e^{ħω/kT} − 1)。体积（含真空）在 D²·G/M 里抵消，与真空长度无关。
     x 是"载流子能量"：电子 x = E，空穴 x = −E —— 吸收声子 x 升高，发射声子 x 降低。
-    发射/吸收的能量阈值是精确的：目标谷在 x ± ħω 处没有态，G = 0。
+    发射/吸收的能量阈值：目标谷在 x ± ħω 处没有态，G = 0（G 做了 6 meV 高斯展宽，阈值附近 ±2σ 内被抹圆）。
     矩阵元与 q 无关 => 各向同性散射，动量弛豫率 = 散射率。
+    [0042] 简并统计（泡利阻塞）：传入 fermi_levels（每个掺杂、温度的电子费米能级）时，按线性化出射率
+        1/τ_c(x) = π D_c²/(M ω_c) · [ (N_c + f(x + ħω_c))·G_c(x + ħω_c) + (N_c + 1 − f(x − ħω_c))·G_c(x − ħω_c) ]
+    f 是载流子占据（电子 f_e；空穴 1 − f_e）。它与 Kaasbjerg Eq.30 的 Σ P_kk′(1 − f_k′)/(1 − f_k) 恒等，
+    也与 AMSET 自己的 POP（N + 1 − f / N + f）同一口径；不传 fermi_levels 时退回非简并极限（Kaasbjerg Eq.31）。
+    D 取冻声子 Γ 点（q = 0）的裸耦合时是速率的上限：真实 |M_q| 离开 Γ 点会下降（Kaasbjerg MoS₂ 同极模：
+    Γ 点 ≈4.8 eV/Å，拟合散射率的等效常数 4.1 eV/Å，速率差 ≈1.37 倍）。
 
 谷的约定（与 S8.2 multi_valley 的谷表一致）：
     星（star）= 一组对称等价的谷，如 K 星 2 个谷（K、K′）、Q 星 6 个、Γ 星 1 个。每个成员谷有自己的 k 中心。
@@ -270,21 +276,34 @@ def star_dos(x, star_of_k, n_star, n_k, grid):
     return out
 
 
+def occupation(x, x_f, kt):
+    """载流子占据 f_c(x) = 1/(exp((x − x_F)/kT) + 1)（x、x_F、kT 同单位）；tanh 形式不溢出。
+    电子 x = E、x_F = E_F；空穴 x = −E、x_F = −E_F（即 1 − f_e）。"""
+    return 0.5 * (1.0 - np.tanh((np.asarray(x, float) - x_f) / (2.0 * kt)))
+
+
 def bose(hw_J, T):
     T = np.asarray(T, float)
     with np.errstate(over="ignore", divide="ignore"):
         return 1.0 / np.expm1(hw_J / (KB * np.maximum(T, 1e-9)))
 
 
-def carrier_rates(energies, kfrac, rlat, valleys, channels, temps, cell_mass_kg, kinds, sign=+1, full3d=False):
+def carrier_rates(energies, kfrac, rlat, valleys, channels, temps, cell_mass_kg, kinds, sign=+1, full3d=False,
+                  fermi_levels=None):
     """一种载流子（一组能带）的散射率。
     energies (nb, nk)：Hartree（AMSET 的 energies[spin][这些带]）；sign=+1 电子、−1 空穴。
     kinds：要算的通道种类集合（{"intra"} = ODP，{"inter_star","inter"} = IVS）。
-    返回 (nT, nb, nk) 的散射率，单位 1/s（没有通道的态为 0）。"""
+    fermi_levels：None -> 非简并极限，返回 (nT, nb, nk)；
+                  (ndop, nT) 的电子费米能级（Hartree，AMSET 的 amset_data.fermi_levels）-> [0042] 带泡利阻塞，
+                  返回 (ndop, nT, nb, nk)。
+    单位 1/s（没有通道的态为 0）。"""
     x = sign * np.asarray(energies, float)
     nb, nk = x.shape
     temps = np.atleast_1d(np.asarray(temps, float))
-    rates = np.zeros((len(temps), nb, nk))
+    fl = None if fermi_levels is None else np.atleast_2d(np.asarray(fermi_levels, float))
+    if fl is not None and fl.shape[1] != len(temps):
+        raise ValueError("fermi_levels 形状 %s 与温度数 %d 不符（应为 (ndop, nT)）" % (fl.shape, len(temps)))
+    rates = np.zeros((len(temps), nb, nk) if fl is None else (fl.shape[0], len(temps), nb, nk))
     chs = [c for c in channels if c["kind"] in kinds]
     if not chs or not valleys:
         return rates
@@ -317,8 +336,17 @@ def carrier_rates(energies, kfrac, rlat, valleys, channels, temps, cell_mass_kg,
         g_abs = np.interp(xs + hw_H, grid, Gt, left=0.0, right=Gt[-1])
         g_em = np.interp(xs - hw_H, grid, Gt, left=0.0, right=Gt[-1])
         N = bose(hw_J, temps)
-        r = pref * (N[:, None, None] * g_abs[None] + (N[:, None, None] + 1.0) * g_em[None])
-        rates[:, :, sel] += r
+        if fl is None:
+            r = pref * (N[:, None, None] * g_abs[None] + (N[:, None, None] + 1.0) * g_em[None])
+            rates[:, :, sel] += r
+            continue
+        for it, T in enumerate(temps):                    # [0042] 末态占据：吸收 N + f(x+ħω)，发射 N + 1 − f(x−ħω)
+            kt = KB * max(float(T), 1e-9) / HA_J
+            for idop in range(fl.shape[0]):
+                xf = sign * fl[idop, it]
+                f_up = occupation(xs + hw_H, xf, kt)
+                f_dn = occupation(xs - hw_H, xf, kt)
+                rates[idop, it][:, sel] += pref * ((N[it] + f_up) * g_abs + (N[it] + 1.0 - f_dn) * g_em)
     return rates
 
 

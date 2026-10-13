@@ -291,7 +291,7 @@ def test_plugin_wiring_source():
     adp = src[i:src.index("# ---------------- ODP / IVS", i)]
     for s in ("def to_reference(self)", "def from_reference(cls, *ref)", "def _iv_keep(", "def _factor_core("):
         assert s in adp                                                 # 掩码数据带进 spawn 子进程
-    assert "dpo.RATE_FLOOR" in src and "np.broadcast_to" in src
+    assert "dpo.RATE_FLOOR" in src and "fermi_levels=fl" in src            # [0042] 逐掺杂（泡利阻塞），不再广播
     # FD 窗口外：AMSET 用全体态的对数平均填充；只给一种载流子写通道时另一种的下限率会把它拉到 ~1e9
     # （电子 IVS 单机制迁移率放大 ~40 倍）-> 填完后改回解析率
     assert "def _install_fill_keep_dpo()" in src and "_DPO_FULL[cls.name] = rates" in src

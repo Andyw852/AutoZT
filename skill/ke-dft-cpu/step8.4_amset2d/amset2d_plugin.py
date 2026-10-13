@@ -260,7 +260,7 @@ class AcousticDeformation2D(_ADP):
 
 # ---------------- ODP / IVS（[0033] 常数形变势，默认不开） ----------------
 # 谷内光学形变势（ODP）与谷间散射（IVS）：Jin 2014 / Kaasbjerg 2012 的常数形变势模型，率由
-# dp_optical.py 解析给出（发射/吸收阈值精确、各向同性 -> 动量弛豫率 = 散射率），走 AMSET 的
+# dp_optical.py 解析给出（发射/吸收阈值、[0042] 末态泡利阻塞、各向同性 -> 动量弛豫率 = 散射率），走 AMSET 的
 # basic 接口（每 k 点直接给率，1/s），不经过四面体积分与 worker。
 # 参数在 2d_correction.json 的 dp_optical 记录里（gen 从 step.conf 的 DP_OPTICAL_E/H 与 S8.2 谷表写入）：
 #   {"electron": {"valleys": [...], "channels": [...]}, "hole": {...},
@@ -344,7 +344,8 @@ def _valley_check(amset_data):
 
 def _dpo_rates(amset_data, kinds):
     """{spin: (ndop, ntemp, nbands, nk)} 的率（1/s），按载流子各用自己的谷表与通道；
-    没有通道的态加 RATE_FLOOR（> AMSET 的 1e6 零率阈值，免得被最近邻插值顶替）。与掺杂无关 -> 广播视图。"""
+    没有通道的态加 RATE_FLOOR（> AMSET 的 1e6 零率阈值，免得被最近邻插值顶替）。
+    [0042] 逐掺杂：末态占据（泡利阻塞）随费米能级变，与 AMSET 的 POP 同口径（以前与掺杂无关、广播同一份）。"""
     dpo = _need_dpo()
     _valley_check(amset_data)
     rlat = np.asarray(amset_data.structure.lattice.reciprocal_lattice.matrix, float)
@@ -355,12 +356,13 @@ def _dpo_rates(amset_data, kinds):
     out = {}
     for spin in amset_data.spins:
         E = np.asarray(amset_data.energies[spin], float)
-        r = np.zeros((len(temps),) + E.shape)
+        fl = np.asarray(amset_data.fermi_levels, float)            # [0042] (ndop, nT) Hartree：逐掺杂算泡利阻塞
+        r = np.zeros((ndop, len(temps)) + E.shape)
         for car, sel, sign in zip(_CARRIERS, _split_bands(amset_data, spin), (+1, -1)):
             c = _DPO_REC.get(car) or {}
             if sel.any() and c.get("channels"):
-                r[:, sel] = dpo.carrier_rates(E[sel], kf, rlat, c.get("valleys") or [], c["channels"],
-                                              temps, mass, kinds, sign)
+                r[:, :, sel] = dpo.carrier_rates(E[sel], kf, rlat, c.get("valleys") or [], c["channels"],
+                                                 temps, mass, kinds, sign, fermi_levels=fl)
         r += dpo.RATE_FLOOR
         # 按 AMSET 的不可约映射对称化：每个 k 点取它代表点的率。窗口内 AMSET 本来就只用代表点的率，
         # 窗口外由 _fill_keep_dpo 写回这份；mesh 只存代表点、postprocess 再按映射展开 —— 三处必须同一份。
@@ -369,7 +371,7 @@ def _dpo_rates(amset_data, kinds):
         ir, i2f = getattr(amset_data, "ir_kpoints_idx", None), getattr(amset_data, "ir_to_full_kpoint_mapping", None)
         if ir is not None and i2f is not None:
             r = r[..., np.asarray(ir)][..., np.asarray(i2f)]
-        out[spin] = np.broadcast_to(r[None], (ndop,) + r.shape)
+        out[spin] = r
     return out
 
 

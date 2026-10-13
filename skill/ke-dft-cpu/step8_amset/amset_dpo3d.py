@@ -135,18 +135,19 @@ def _dpo_rates(amset_data, kinds):
     out = {}
     for spin in amset_data.spins:
         E = np.asarray(amset_data.energies[spin], float)
-        r = np.zeros((len(temps),) + E.shape)
+        fl = np.asarray(amset_data.fermi_levels, float)            # [0042] (ndop, nT) Hartree：逐掺杂算泡利阻塞
+        r = np.zeros((ndop, len(temps)) + E.shape)
         for car, sel, sign in zip(_CARRIERS, _split_bands(amset_data, spin), (+1, -1)):
             c = _DPO_REC.get(car) or {}
             if sel.any() and c.get("channels"):
-                r[:, sel] = _DPO.carrier_rates(E[sel], kf, rlat, c.get("valleys") or [], c["channels"],
-                                               temps, mass, kinds, sign, full3d=True)
+                r[:, :, sel] = _DPO.carrier_rates(E[sel], kf, rlat, c.get("valleys") or [], c["channels"],
+                                                 temps, mass, kinds, sign, full3d=True, fermi_levels=fl)
         r += _DPO.RATE_FLOOR
         # 按 AMSET 的不可约映射对称化（与 2D 插件同理：最近中心归属在等距边界上的取舍不随对称操作协变）
         ir, i2f = getattr(amset_data, "ir_kpoints_idx", None), getattr(amset_data, "ir_to_full_kpoint_mapping", None)
         if ir is not None and i2f is not None:
             r = r[..., np.asarray(ir)][..., np.asarray(i2f)]
-        out[spin] = np.broadcast_to(r[None], (ndop,) + r.shape)
+        out[spin] = r
     return out
 
 

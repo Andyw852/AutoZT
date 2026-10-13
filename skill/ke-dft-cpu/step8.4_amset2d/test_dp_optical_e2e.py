@@ -197,8 +197,9 @@ def main():
         for car, b, sign in (("electron", vb + 1, +1), ("hole", vb, -1)):
             c = rec[car]
             for mech, kinds in (("ODP", {"intra"}), ("IVS", {"inter_star", "inter"})):
+                fl = np.asarray(m["fermi_levels"], float)[:1, :1] / D.HA_EV      # [0042] mesh 里是 eV；第 0 档掺杂、300 K
                 ref = D.carrier_rates(E[b:b + 1], m["kpoints"], rlat, c["valleys"], c["channels"], [300.0], mass,
-                                      kinds, sign)[0, 0] + D.RATE_FLOOR
+                                      kinds, sign, fermi_levels=fl)[0, 0, 0] + D.RATE_FLOOR
                 ref_ir = np.bincount(mp, weights=ref) / cnt
                 got = R[lab.index(mech), 0, 0, b]
                 rel = np.abs(got / ref_ir - 1)
