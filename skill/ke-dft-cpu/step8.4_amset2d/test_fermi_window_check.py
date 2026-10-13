@@ -111,6 +111,15 @@ class FermiWindowTests(unittest.TestCase):
         self.assertIn("[ERROR]", out)
         self.assertIn("-153.9000", out)
 
+    def test_prints_scissored_edges_and_lower_bound(self):
+        """AMSET 剪刀对半分：日志给出 CBM' = CBM + Δ/2、VBM' = VBM − Δ/2；下限随 VBM' 下移。"""
+        rc, out = self._run({"fermi_levels": [[-2.0]]}, vbm=-3.85, cbm=-2.03, delta=0.5)
+        self.assertEqual(rc, 0, out)
+        self.assertIn("VBM'=-4.1000 CBM'=-1.7800", out)
+        ok, lo, _, _ = fwc.check_window([((0, 0), -6.05)], -3.85, -2.03, 2.0, 0.5)
+        self.assertTrue(ok)
+        self.assertAlmostEqual(lo, -6.1)
+
     def test_metal_skips(self):
         rc, out = self._run({"fermi_levels": [[-1.0]]}, vbm=0.0, cbm=0.0)
         self.assertEqual(rc, 0, out)

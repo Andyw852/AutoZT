@@ -11,15 +11,17 @@
 本检查**不依赖 WRITE_MESH、也不依赖后处理**，直接读作业自己产出的两样东西：
   1. 运行目录里最新的 transport*.json 的 fermi_levels（eV，与 vasprun 同一参考零点）；
   2. 同目录 vasprun.xml 的 VBM / CBM；
-  3. 窗口 = [VBM - win, CBM + **Δ** + win]，Δ 是 AMSET 对导带的整体上移量；
+  3. 窗口 = [VBM - Δ/2 - win, CBM + Δ + win]，Δ 是 AMSET 的剪刀量（上限多留 Δ/2，只防离谱值）；
   4. 任一费米能级落在窗口外 -> 打印明细并 **退出码 1**（作业链失败）；
   5. 金属 / 零带隙 / 取不到带边 -> 打印跳过，退出码 0（不误杀金属体系）。
 
 ★ Δ 为什么必须算（2026-09-28 用户指正）：S8 默认 REQUIRE_BANDGAP=True，一律写 bandgap:，
-  AMSET 把导带整体上移 Δ = bandgap - DFT带隙（源码 amset/interpolation/bandstructure.py:716
-  `scissor = bandgap - interp_bandgap`）。n 型费米能级因此跑到 CBM_DFT + Δ 附近，
-  简并掺杂还会再进导带若干 —— 不算 Δ 会把**跑完好几个小时的正常作业误判为失败**。
-  GaAs Δ≈0.86 eV、GaN Δ≈1.5 eV，正好是这个量级。
+  AMSET 的剪刀量 Δ = bandgap - DFT带隙（源码 amset/interpolation/bandstructure.py:716
+  `scissor = bandgap - interp_bandgap`），并且**对半分**：导带 +Δ/2、价带 −Δ/2（同文件 :720-731）。
+  所以 transport.json 的 fermi_levels 要跟**剪刀后**的带边比：CBM' = CBM_DFT + Δ/2、VBM' = VBM_DFT − Δ/2
+  （下面日志行一并打印）。拿 vasprun 的 CBM_DFT 去比，n 型低掺杂的 E_F 会被误读成"已进导带"（2026-10-13 MoS₂
+  实例：E_F 比 CBM_DFT 高 0.126 eV，扣掉 Δ/2 后其实在 CBM' 下约 0.12 eV，非简并）。
+  不算 Δ 会把**跑完好几个小时的正常作业误判为失败**。GaAs Δ≈0.86 eV、GaN Δ≈1.5 eV，正好是这个量级。
 
 ★ 带边怎么取（2026-09-28 实测修正）：**不能**用 pymatgen 的 bs.get_vbm()/get_cbm() ——
   它们要先 is_metal()，而 is_metal() 依赖 bs.efermi；实测 GaAs/GaN 的 step3 vasprun.xml
@@ -62,7 +64,7 @@ def load_fermi_levels(path):
 
 
 def scissor_delta(settings_path, dft_gap):
-    """AMSET 对导带的整体上移量 Δ（eV）。
+    """AMSET 的剪刀量 Δ（eV；导带 +Δ/2、价带 −Δ/2）。
 
     优先级与 AMSET 一致（amset/interpolation/bandstructure.py:711-716）：
       写了 bandgap  ->  Δ = bandgap - DFT带隙；
@@ -90,9 +92,10 @@ def scissor_delta(settings_path, dft_gap):
 def check_window(pairs, vbm, cbm, win=WIN_DEFAULT, delta=0.0):
     """纯函数：返回 (是否全在窗口内, 下限, 上限, 越界的 [(索引, 值), ...])。
 
-    窗口 = [VBM - win, CBM + delta + win]（价带不上移，导带上移 Δ）。
+    窗口 = [VBM - delta/2 - win, CBM + delta + win]。AMSET 实际是导带 +Δ/2、价带 −Δ/2；上限多留 Δ/2
+    （这里只防离谱的费米能级，宁宽勿误杀）。
     """
-    lo, hi = vbm - win, cbm + delta + win
+    lo, hi = vbm - delta / 2.0 - win, cbm + delta + win
     bad = [(ix, f) for ix, f in pairs if not (lo <= f <= hi)]
     return (len(bad) == 0), lo, hi, bad
 
@@ -171,6 +174,8 @@ def main(argv=None):
     print("[..] 费米能级窗口：VBM=%.4f CBM=%.4f DFT带隙=%.4f Δ(scissor)=%.4f "
           "-> 允许 [%.4f, %.4f] eV；%d 个费米能级（%s）"
           % (vbm, cbm, cbm - vbm, delta, lo, hi, len(pairs), tf.name))
+    print("[..] AMSET 剪刀后带边（fermi_levels 与它们同一口径）：VBM'=%.4f CBM'=%.4f（导带 +Δ/2、价带 −Δ/2）"
+          % (vbm - delta / 2.0, cbm + delta / 2.0))
     if ok:
         print("[OK] 全部费米能级都在带边窗口内")
         return 0
