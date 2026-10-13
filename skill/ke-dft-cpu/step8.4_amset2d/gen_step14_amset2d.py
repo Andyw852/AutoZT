@@ -373,6 +373,35 @@ ELASTIC_DIR = "step6_elastic"
 # patch_deform_ref：形变势参考口径（2D 默认真空）。step7b 写出 deformation_vac.h5 就用它，
 # 否则退回 deformation.h5（AMSET 芯态对齐）。实测 CrS2：3.53 -> 5.86 eV，μ 差 2.76 倍。
 DEFORM_REF = "auto"      # auto = vacuum 优先（本步只服务 2D）；或强制 core 作对比
+# [0049] ADP 形变势口径开关（只影响 ADP 机制；**无量纲**，避免碰 h5 的单位）：
+#   "1.0"/"strain"（默认）= 用 h5 里的绝对形变势 D_vac 原样 —— 现状行为；
+#   "poisson"             = 面内 D 乘 (1 - C12/C11)：把"横向钳制的纯单轴"折算成
+#                           Wiktor & Pasquarello PRB 94, 245411 那种"横向泊松弛豫"口径；
+#   <数值>                 = 直接乘该因子（按文献/DFPT 有效声学耦合 Ξ 标定，例如
+#                           MoS2 Ξ_LA=2.4 eV / 我们 D_vac=8.54 eV -> 0.28）。
+#   由来：AMSET 的 ADP 把"应变法绝对形变势"直接当声学耦合常数用，比 DFPT 有效 Ξ 偏大
+#   ~2.5-3 倍（Wiktor 的绝对形变势 6.08 eV 同样比 Ξ=2.4 eV 大 2.5 倍，属**定义差**）。
+#   解析后的实际因子写进 2d_correction.json 的 adp_d_scale，插件按它缩放。
+ADP_D_SCALE = "1.0"
+
+
+def _resolve_adp_d_scale(elastic):
+    """[0049] ADP_D_SCALE 开关 -> (无量纲因子, 说明)。解析结果落进 2d_correction.json。"""
+    raw = str(ADP_D_SCALE if ADP_D_SCALE is not None else "1.0").strip().lower()
+    if raw in ("", "1", "1.0", "strain", "none", "off", "absolute"):
+        return 1.0, "strain（h5 绝对形变势 D_vac 原样，现状）"
+    if raw in ("poisson", "strain_poisson"):
+        try:
+            c11, c12 = float(elastic[0][0]), float(elastic[0][1])
+            f = 1.0 - c12 / c11
+            return f, "strain_poisson（1 - C12/C11 = 1 - %.3f/%.3f = %.4f）" % (c12, c11, f)
+        except (TypeError, IndexError, ValueError):
+            return 1.0, "poisson 解析失败（拿不到 C11/C12）-> 退回 1.0"
+    try:
+        return float(raw), "scale（直接乘 %.4f）" % float(raw)
+    except ValueError:
+        return 1.0, "无法解析 %r -> 退回 1.0" % (ADP_D_SCALE,)
+
 # --- patch_2d_amset：2D 修正 ---------------------------------------------
 # TWO_D_MODE: "auto" = 读 step1 的 workflow_method.txt 的 DIM=；"on"/"off" 强制。
 TWO_D_MODE = "on"   # 本步只服务 2D：main() 里另有 DIM 硬闸门（非 2d 直接退出）
@@ -449,6 +478,7 @@ SPEC = {
     "SUBSETS": (None, "str"),               # [0038] None = 出厂三套；off = 不出 subset_*.json
     "TAU_ENERGY": (None, "bool"),           # [0035] None = 没写（出厂 True）
     "POSTPROCESS_ONLY": (None, "bool"),     # [0037] None = 没写（出厂 False）；true = 复用 mesh 只跑 postprocess
+    "ADP_D_SCALE": (None, "str"),           # [0049] ADP 形变势缩放：None=出厂 1.0；"poisson" 或数值
     # 掺杂/温度范围覆盖（B4/B5 缩减设置用）：默认顶部 DOPING/TEMPERATURES；step.conf 可覆盖。
     "DOPING": (DOPING, "str"),
     "TEMPERATURES": (TEMPERATURES, "str"),
@@ -1859,6 +1889,10 @@ def apply_2d_corrections(cwd: Path, elastic, eps_inf=None, eps_static=None):
     _func = kc.material_functional(cwd) if _HAS_KC else None     # [V181] 结果里写明泛函
     if _func:
         print("[..] 泛函：%s（来源：%s）" % (_func["label"], _func["source"] or "—"))
+    _adp_scale, _adp_scale_note = _resolve_adp_d_scale(elastic)     # [0049]
+    if _adp_scale != 1.0:
+        print("[..] ADP_D_SCALE=%s -> 形变势缩放因子 %.4f（%s）"
+              % (ADP_D_SCALE, _adp_scale, _adp_scale_note))
     rec = {
         "cell_c_A": round(c_len, 4),
         "functional": _func,
@@ -1876,6 +1910,9 @@ def apply_2d_corrections(cwd: Path, elastic, eps_inf=None, eps_static=None):
         "eps_inf_override": _eps_ov,
         "r_inf_delta_r_check": r_check,
         "deform_geometry": _DEFORM_GEOM,
+        # [0049] ADP 形变势缩放（插件读它；无量纲）。1.0 = 现状；见 _resolve_adp_d_scale。
+        "adp_d_scale": _adp_scale,
+        "adp_d_scale_note": _adp_scale_note,
         # [0016] 二维核只用面内 2×2 Christoffel（不含 ZA）：没有 σh 的结构缺 ZA 一阶耦合这一项
         "za_coupling": _za_check(cwd),
         "eps_env": float(EPS_ENV),
@@ -2808,7 +2845,7 @@ def main():
     cwd = Path.cwd()
     global LAYER_THICKNESS, NWORKERS, UNITY_OVERLAP, WAVEFUNCTION_FULL
     global INTERPOLATION_FACTOR, INTERPOLATION_FACTOR_EXPLICIT, SCATTERING, WRITE_MESH, DOPING, TEMPERATURES
-    global INTRINSIC_ADP_ONLY, OVERALL_WITHOUT, TAU_ENERGY, POSTPROCESS_ONLY
+    global INTRINSIC_ADP_ONLY, OVERALL_WITHOUT, TAU_ENERGY, POSTPROCESS_ONLY, ADP_D_SCALE
     global SUBSETS
     global DESYM_FIX, _DESYM_FIX_ON, BANDGAP_OVERRIDE, BANDGAP_NOTE
     global EPS_INF_OVERRIDE, EPS_INF_OVERRIDE_BASIS, SYMMETRIZE_ELASTIC, ELASTIC_GUARD
@@ -2920,6 +2957,8 @@ def main():
                 TAU_ENERGY = bool(_p["TAU_ENERGY"])
             if _p["POSTPROCESS_ONLY"] is not None:          # [0037]
                 POSTPROCESS_ONLY = bool(_p["POSTPROCESS_ONLY"])
+            if _p["ADP_D_SCALE"] is not None:               # [0049]
+                ADP_D_SCALE = str(_p["ADP_D_SCALE"])
             # [0033] ODP / IVS 的通道表、手填谷表、ADP 谷内掩码（解析与校验在 resolve_dp_optical）
             DP_OPTICAL_E = str(_p["DP_OPTICAL_E"] or "")
             DP_OPTICAL_H = str(_p["DP_OPTICAL_H"] or "")

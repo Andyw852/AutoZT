@@ -160,7 +160,11 @@ ADP 迁移率 1.11x（低掺杂）~ 1.56x（高掺杂），理想值是 1.5x。�
 > 真正能定绝对归一化的做法是用**解析能带**（m* 精确已知）做参考，见 V11。
 
 闭式 2D Bardeen-Shockley（Takagi）：`mu = e*hbar^3*C_2D/(k_B T*m* *m_d*E1^2)`，
-输入全取同一次计算：`C_2D = c*C11_slab = 120.61 N/m`，`m* / m_d` 取 step8.2 的拟合值。
+输入全取同一次计算：`C_2D = c*C11_slab`，`m* / m_d` 取 step8.2 的拟合值。
+> ⚠️ **数值更正（2026-10-13）**：原文写 `120.61 N/m` 是**旧弹性结果**；按当前
+> `step8.4_amset2d/2d_correction.json`（`elastic_constant_raw_GPa` C11 = 41.319 GPa、c = 34.879 Å）
+> 应为 **C_2D = 144.1 N/m**（与本文档 line 1382 的"判据带"一致）。下面 Takagi 那一列 ∝ C_2D，
+> 需按 144.1/120.61 = 1.195 重算。"
 
 > ⚠️ **口径更正（2026-10-13）**：下表当年的 `E1` 取的是 `band_edges.json` 的 **`E1_xx`（芯能级）**，
 > 却被标成"AMSET 真正用的量" —— **这是错的**。`gen_step14_amset2d.py` 的 `_pick_deformation_h5()`

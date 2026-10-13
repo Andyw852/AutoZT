@@ -84,6 +84,13 @@ _EPS_ENV = float(_REC.get("eps_env", 1.0) or 1.0)
 _D_IMP = float(_REC.get("imp_distance_A", 0.0) or 0.0) * A2B
 _LO_DISP = bool(_REC.get("pop_lo_dispersion", True))
 _MECHS = set(_REC.get("mechanisms_2d", ["ADP", "POP", "IMP", "PIE"]))
+# [0049] ADP 形变势口径缩放（无量纲）：1.0 = 用 h5 的绝对形变势原样（现状）；
+#   "poisson" 或数值由 gen_step14 的 ADP_D_SCALE 解析后写进 2d_correction.json。
+#   只影响 ADP 机制。见 gen_step14_amset2d._resolve_adp_d_scale 的说明。
+try:
+    _ADP_D_SCALE = float(_REC.get("adp_d_scale", 1.0) or 1.0)
+except (TypeError, ValueError):
+    _ADP_D_SCALE = 1.0
 
 
 def _r_tensor(key):
@@ -233,16 +240,18 @@ class AcousticDeformation2D(_ADP):
         w, v = _inplane_modes(self.elastic_constant, u)
         if hasattr(self.deformation_potential, "interpolate"):
             D = np.abs(self.deformation_potential.interpolate(spin, [band_idx], [kpoint])[0])
+            if _ADP_D_SCALE != 1.0:                                # [0049] 口径缩放（缩放点在加 v⊗v 之前）
+                D = D * _ADP_D_SCALE
             D = D + np.outer(velocity, velocity)                   # 与 AMSET 原版一致
             f = np.zeros(len(unit_q))
             for b in range(2):                                     # 只求和面内两支
                 strain = u[:, :, None] * v[:, b, None, :]
                 f = f + np.tensordot(strain, D) ** 2 / w[:, b]
         elif self.is_metal:
-            f = self.deformation_potential ** 2 / w[:, 1]           # 金属：只留 LA 支
+            f = (self.deformation_potential * _ADP_D_SCALE) ** 2 / w[:, 1]   # [0049] 金属：只留 LA 支
         else:
             idx = 1 if band_idx > self.vb_idx[spin] else 0
-            f = self.deformation_potential[idx] ** 2 / w[:, 1]
+            f = (self.deformation_potential[idx] * _ADP_D_SCALE) ** 2 / w[:, 1]   # [0049]
         # [AMSET2D_DEBUG] 诊断用：把核里的量打出来，便于与解析参考逐项对齐
         # （默认关；只打前 3 次调用，不影响生产运行）
         if _DEBUG and _DBG_N[0] < 3:
