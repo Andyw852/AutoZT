@@ -160,8 +160,14 @@ ADP 迁移率 1.11x（低掺杂）~ 1.56x（高掺杂），理想值是 1.5x。�
 > 真正能定绝对归一化的做法是用**解析能带**（m* 精确已知）做参考，见 V11。
 
 闭式 2D Bardeen-Shockley（Takagi）：`mu = e*hbar^3*C_2D/(k_B T*m* *m_d*E1^2)`，
-输入全取同一次计算：`C_2D = c*C11_slab = 120.61 N/m`，`E1` 取 `deformation.h5` 带边 D_xx
-（= band_edges.json 的 E1_xx，AMSET 真正用的量），`m* / m_d` 取 step8.2 的拟合值。
+输入全取同一次计算：`C_2D = c*C11_slab = 120.61 N/m`，`m* / m_d` 取 step8.2 的拟合值。
+
+> ⚠️ **口径更正（2026-10-13）**：下表当年的 `E1` 取的是 `band_edges.json` 的 **`E1_xx`（芯能级）**，
+> 却被标成"AMSET 真正用的量" —— **这是错的**。`gen_step14_amset2d.py` 的 `_pick_deformation_h5()`
+> 在 `DEFORM_REF="auto"`（默认）下会把 `deformation_vac.h5` 软链成 `deformation.h5` 交给 AMSET，
+> 所以生产上生效的是 **`E1_vac_xx`（真空口径）**。以 CrS2 为例：表里 3.530 eV 是芯能级、生产用 5.86 eV；
+> Takagi 那列 ∝ 1/E1²，要按 `(5.86/3.53)² = 2.76` 重算（电子 241 → 87 cm²/Vs），"比值"列随之改变
+> （不再是 1.25 / 0.42，电子会变成 ~3.5）。**本表"绝对归一化无法判定"的结论不变，但必须写明用的是哪一列 E1。**
 
 | 载流子 | E1 (AMSET 口径) | Takagi 公式 | amset2d ADP-only | 比值 |
 |---|---|---|---|---|

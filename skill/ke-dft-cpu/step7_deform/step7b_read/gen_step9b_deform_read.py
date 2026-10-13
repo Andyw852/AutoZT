@@ -95,12 +95,17 @@ DEFORM_DIR   = "step7_deform"
 #   "vacuum" = 以真空静电势为零点（二维文献通行做法；C2DB 给的也是真空口径）。
 #   "core"   = AMSET 自带的"芯态平均势对齐"（官方文档写明，是为**体材料**设计的）。
 #   "auto"   = 2D 用 vacuum、其余用 core（默认）。
-# 实现：Δ_ij = -dE_vac/dε_ij 这一项**与能带无关**（真空势的应变导数只依赖构型），
-# 所以把它加到 deformation.h5 里所有能带、所有 k 点的 D 上即可得到真空口径张量：
-#     D_vac = D_core + Δ
-# 另写 deformation_vac.h5（core 版原样保留，便于对比与回退）。
-# 依据：二维文献普遍以真空为零点定义带能；AMSET 的芯势对齐在 slab 上会系统性偏小
-# （实测 CrS2 单层：E1_core=3.53 eV vs E1_vac=5.86 eV，μ 差 2.76 倍）。
+# 实现（2026-09-16 用户校对 AMSET 0.4.19 源码后指定）：**不是**事后往 h5 上加 Δ ——
+#   potentials.py 里 energy_diff = |diff/strain|（取了绝对值），加带符号的 Δ 只在
+#   D_core>0 时才对；且 D_vac - D_core 需要 d(E_core)/dε 与 d(E_vac)/dε 两项。
+#   正确做法：把各构型 parse_calculation 的 reference 换成 LOCPOT 的真空能级，再调
+#   AMSET 自己的 calculate_deformation_potentials（见下面的 _vac_code），符号、分量平均、
+#   噪声过滤与 AMSET 原版完全一致。产出 deformation_vac.h5（core 版原样保留供对照）。
+#   ★ json 里的 delta_eV_per_unit_strain = -dE_vac/dε 只是**诊断量**，不是实际换算因子
+#     （MoS2 实测 E1_vac-E1_core = 2.09 eV vs delta = 1.91 eV，差异属预期，不要拿它反推）。
+# 依据：二维文献以真空为零点定义带能 —— Wiktor & Pasquarello, PRB 94, 245411 (2016)
+#   即用真空参考，给出 MoS2 a_CBM(K) = -6.08(PBE)/-7.16(PBE0) eV、a_VBM(K)=-1.86/-1.71 eV；
+#   AMSET 的芯势对齐是为体材料设计的（实测 CrS2 单层：E1_core=3.53 vs E1_vac=5.86 eV）。
 DEFORM_REF   = "auto"
 # 只有这些应变分量有 LOCPOT 真空势可算；其余分量 Δ 留 0 并在 json 里标注。
 _DELTA_COMP  = {"xx": (0, 0), "yy": (1, 1), "zz": (2, 2),
