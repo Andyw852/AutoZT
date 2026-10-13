@@ -257,3 +257,20 @@ def test_s821_config_scf_and_vacuum_cache(mat, monkeypatch):
     with pytest.raises(SystemExit) as e:
         r.Config(d, 2, cache)
     assert "没收敛" in str(e.value)
+
+
+@pytest.mark.parametrize("sigma_h", [True, False, None])
+def test_s72_out_of_plane_polar_only_with_sigma_h(mat, monkeypatch, capsys, sigma_h):
+    """[0042] 面外极性判据只对有 σh 的 2D 材料成立；没有 σh（Janus/翘曲）不按面外剔除；判不出照旧并告警。"""
+    g, f, E = _gen72(mat, monkeypatch)
+    monkeypatch.setattr(g.kc, "za_coupling_check", lambda cwd, **k: {"sigma_h": sigma_h})
+    g.main()
+    man = json.loads((mat / "step7c_odp_frozen" / "odp_manifest.json").read_text())
+    log = capsys.readouterr().out
+    assert man["sigma_h"] is sigma_h
+    if sigma_h is False:
+        assert man["polar_z_tol_e"] is None and "没有水平镜面 σh" in log
+        assert not any(m.get("polar_kind") == "面外" for m in man.get("modes", []))
+    else:
+        assert man["polar_z_tol_e"] == pytest.approx(0.02)
+        assert ("判不出有没有水平镜面" in log) == (sigma_h is None)

@@ -76,8 +76,13 @@ def check_eigvecs(eigvecs, tol_norm=1e-3, tol_orth=1e-2):
 
 
 def mode_table(freqs_thz, eigvecs, masses_amu, born=None, polar_tol=POLAR_TOL_E, fmin_thz=FMIN_THZ,
-               deg_thz=FREQ_DEG_THZ, include_polar=False, polar_z_tol=POLAR_Z_TOL_E):
+               deg_thz=FREQ_DEG_THZ, include_polar=False, polar_z_tol=POLAR_Z_TOL_E, two_d=None):
     """Γ 点声子模 -> (modes, groups, notes)。按频率升序编号（index 从 1 起）。
+
+    [0042] 2D（two_d=True；不传时按 polar_z_tol 有限推断，兼容旧调用）：面内极性看**面内**模有效电荷（二维 POP 只含
+    面内极性模），面外极性看面外分量 > polar_z_tol（只对有 σh 的材料成立，gen 对没有 σh 的材料传 inf）。
+    以前面内判据用的是含面外分量的总模有效电荷，Janus 的同极类模（面外偶极）会被误当成面内极性剔掉。
+    3D：总模有效电荷 > polar_tol。
 
     modes[i]：index、freq_THz、hw_meV、trans_weight（平移子空间投影）、acoustic、Z_mode_e（模有效电荷，无 Born 电荷为 None）、
               Z_mode_z_e（面外分量）、polar、group（声学模为 None）。
@@ -115,16 +120,22 @@ def mode_table(freqs_thz, eigvecs, masses_amu, born=None, polar_tol=POLAR_TOL_E,
         un = np.sqrt(np.einsum("nka,nka->n", U, U))
         zmode = np.linalg.norm(dip, axis=1) / un
         zz = np.abs(dip[:, 2]) / un
+        zin = np.linalg.norm(dip[:, :2], axis=1) / un
+    if two_d is None:
+        two_d = math.isfinite(polar_z_tol)
+    if zmode is not None:
+        p_in = (zin if two_d else zmode) > polar_tol           # 面内极性（2D）/ 极性（3D）
+        p_out = (zz > polar_z_tol) if two_d else np.zeros(nmode, bool)
     modes = []
     for rank, i in enumerate(order):
         modes.append({"index": rank + 1, "freq_THz": float(f[i]), "hw_meV": float(f[i] * THZ_TO_MEV),
                       "trans_weight": float(tw[i]), "acoustic": bool(acoustic[i]),
                       "Z_mode_e": None if zmode is None else float(zmode[i]),
                       "Z_mode_z_e": None if zz is None else float(zz[i]),
-                      "polar": bool(zmode is not None and (zmode[i] > polar_tol or zz[i] > polar_z_tol)),
-                      "polar_kind": (None if zmode is None or not (zmode[i] > polar_tol or zz[i] > polar_z_tol)
-                                     else ("面外" if zz[i] > polar_z_tol and zz[i] >= 0.5 * zmode[i]
-                                           else ("体相" if math.isinf(polar_z_tol) else "面内"))),   # [0036] 3D 不分面内外
+                      "Z_mode_inplane_e": None if zmode is None else float(zin[i]),
+                      "polar": bool(zmode is not None and (p_in[i] or p_out[i])),
+                      "polar_kind": (None if zmode is None or not (p_in[i] or p_out[i])
+                                     else ("体相" if not two_d else ("面内" if p_in[i] else "面外"))),   # [0036] 3D 不分面内外
                       "group": None, "_src": int(i)})
     # 简并分组：频率相差 < deg_thz 且极性相同（真简并的伙伴属于同一个不可约表示，极性必相同；
     #   偶然近简并的极性/非极性两个模不能并组，否则非极性的那个会跟着被当成极性剔掉）。
@@ -160,13 +171,14 @@ def mode_table(freqs_thz, eigvecs, masses_amu, born=None, polar_tol=POLAR_TOL_E,
             why = "没有 Born 有效电荷，判不了极性（ODP_POLAR=include 则不判、全算）"
         elif g["polar"] and not include_polar:
             kinds = {by_index[i]["polar_kind"] for i in g["modes"]}
-            zt = max(by_index[i]["Z_mode_e"] for i in g["modes"])
+            zt = max(by_index[i]["Z_mode_inplane_e" if two_d else "Z_mode_e"] for i in g["modes"])
             zz = max(by_index[i]["Z_mode_z_e"] for i in g["modes"])
             if kinds == {"面外"}:
                 why = ("面外极性模（面外模有效电荷 %.3f e > %.2f）：二维 POP 不含它；有 σh 的材料里它对谷内一阶耦合是"
                        "对称性禁戒的（D≈0），位移还会产生面外偶极（ODP_POLAR=include 才算）" % (zz, polar_z_tol))
             else:
-                why = "极性模（模有效电荷 %.2f e > %.2f）：长程耦合由 POP 管（ODP_POLAR=include 才算）" % (zt, polar_tol)
+                why = "%s极性模（%s模有效电荷 %.2f e > %.2f）：长程耦合由 POP 管（ODP_POLAR=include 才算）" % (
+                    "面内" if two_d else "", "面内" if two_d else "", zt, polar_tol)
         g["use"] = why is None
         g["why"] = why
     return modes, groups, notes
