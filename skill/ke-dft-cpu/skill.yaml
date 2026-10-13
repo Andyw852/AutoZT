@@ -340,6 +340,10 @@ optional_steps:
     default: false
     steps:
       - {seq: 7.4, name: step7d_fp_acoustic, label: S7.4_fp, after: step7_deform,
+         # [分支 adp-xi-selfcalc] 只在打开了 fp_acoustic 的材料上注入；指向 hfeshell
+         #   （用户 2026-10-14："可以在hfeshell计算"）。步骤级 hpc 因该组默认关，
+         #   等价于只对显式打开的材料生效。
+         hpc: hfeshell,
          src: step7d_fp_acoustic, check: outcar, fanout: "fp-*", gen: gen_step9d_fp.py,
          gen_need: [stepconf.py, step.conf, ke_common.py, dim_common.py, submit_std_2d.tpl, submit_std_3d.tpl],
          needs: ["step1_opt", "step7_deform"]}
