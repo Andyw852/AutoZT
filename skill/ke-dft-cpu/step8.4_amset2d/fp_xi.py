@@ -185,6 +185,59 @@ def cmd_extract(a):
         print("[OK] -> %s" % a.json_out)
 
 
+# ---------------- 从 S7 冻声子 h5 直接取模式的 Xi ----------------
+def cmd_h5(a):
+    """读 deformation*.h5 的 (nb, nk, 3, 3) 形变势张量，在带边 k 点上做**声学模式投影**：
+        Xi_LA(n) = |D : (n̂⊗n̂)|          （纵向/膨胀）
+        Xi_TA(n) = |D : sym(n̂⊗t̂)|        （剪切/横向）
+    h5 就是 S7 的 ±0.5% 有限差分（= q→0 冻声子）产物，所以这是在读**自己的 DFT 冻声子**。
+    要求 h5py（在集群 amset051 环境里跑）。
+    """
+    import h5py
+    be = json.load(open(a.band_edges, encoding="utf-8"))
+    f = h5py.File(a.h5, "r")
+    dset = f[a.dataset] if a.dataset in f else f[[k for k in f.keys() if "deformation" in k][0]]
+    kpts = f["kpoints"][:]
+    zhat = np.array([0.0, 0.0, 1.0])
+    # 面内两个方向：n 与 t（用 a1 的方向；没有再退回 x 轴）
+    n = np.array([1.0, 0.0, 0.0])
+    print("[h5] %s   dataset=%s shape=%s" % (a.h5, dset.name, dset.shape))
+    for carrier in ("electron", "hole"):
+        h = (be.get(carrier) or {}).get("hits") or []
+        if not h:
+            print("[h5] %s：band_edges.json 里没有 hits，跳过" % carrier)
+            continue
+        hit = h[0]
+        bi, ki = int(hit["band_h5"]), int(hit["k_h5"])
+        T = np.array(dset[bi, ki, :, :], float)
+        diag = np.diag(T)
+        off = math.sqrt(max(T[0, 1] ** 2 + T[0, 2] ** 2 + T[1, 2] ** 2, 0.0))
+        print("=" * 78)
+        print("%-9s k=%s  band_h5=%d" % (carrier, np.round(kpts[ki], 4), bi))
+        with np.printoptions(precision=4, suppress=True, linewidth=120):
+            print(T)
+        print("  D_xx=%.4f D_yy=%.4f D_zz=%.4f |D_offdiag|=%.4f"
+              % (diag[0], diag[1], diag[2], off))
+        # 面内方向扫（每 15 度）
+        xla, xta = [], []
+        for deg in range(0, 180, 15):
+            th = math.radians(deg)
+            nn = np.array([math.cos(th), math.sin(th), 0.0])
+            tt = np.cross(zhat, nn)
+            epsL = np.outer(nn, nn)
+            epsT = 0.5 * (np.outer(nn, tt) + np.outer(tt, nn))
+            xla.append(abs(float(np.sum(T * epsL))))
+            xta.append(abs(float(np.sum(T * epsT))))
+        print("  Xi_LA(面内各向) = %.4f ~ %.4f eV   (均值 %.4f)"
+              % (min(xla), max(xla), float(np.mean(xla))))
+        print("  Xi_TA(面内各向) = %.4f ~ %.4f eV   (均值 %.4f)"
+              % (min(xta), max(xta), float(np.mean(xta))))
+    print("=" * 78)
+    print("[对照] Kaasbjerg PRB 87,235312 Tab.I（MoS2 电子）: Xi_LA=2.4 eV, Xi_TA=1.5 eV")
+    print("[注意] 连续介质 DP 模型里 TA 不耦合（该文 App.B 明说）—— 他们的 Xi_TA=1.5 来自")
+    print("       第一性原理耦合里的 umklapp，正是 q→0 冻声子取不到的部分。")
+
+
 def cmd_selftest(a):
     lat = np.array([[1.5686622, -2.7170026, 0.0],
                     [1.5686622, 2.7170026, 0.0],
@@ -221,6 +274,11 @@ def main():
     e.add_argument("--energies", default="")
     e.add_argument("--json-out", default="")
     e.set_defaults(func=cmd_extract)
+    h = sub.add_parser("h5")
+    h.add_argument("--h5", required=True)
+    h.add_argument("--band-edges", default="band_edges.json")
+    h.add_argument("--dataset", default="deformation_potentials_up")
+    h.set_defaults(func=cmd_h5)
     s = sub.add_parser("selftest")
     s.set_defaults(func=cmd_selftest)
     a = ap.parse_args()
