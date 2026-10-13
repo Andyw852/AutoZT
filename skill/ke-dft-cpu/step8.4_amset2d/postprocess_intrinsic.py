@@ -560,6 +560,30 @@ def inject_mesh_rates(ad, mesh, labels=None, perm=None):
     return rates_full, labels
 
 
+def scale_mechanism_rates(rates_full, labels, specs):
+    """[分支测试 adp-xi-test] 把指定机制的散射率按 "MECH=FACTOR" 缩放（返回说明列表）。
+
+    散射率 ∝ D^2（形变势的平方），所以"形变势缩放 f"对应 FACTOR = f^2。
+    用途：在同一份 mesh 上快速扫形变势口径（strain / poisson / Ξ ...），
+    不必为每个口径重跑 ~2h 的 AMSET。
+    注意：ADP 核里还有一项 v⊗v 的速度修正，f^2 缩放是**近似**（带边 v⊗v << D，
+    误差通常 <0.1%）。默认不传 = 与以前逐位相同。
+    """
+    out = []
+    for spec in (specs or []):
+        nm, _, val = str(spec).partition("=")
+        nm, val = nm.strip(), val.strip()
+        if nm not in labels:
+            sys.exit("[ERROR] --scale-mech：机制 %r 不在 %s" % (nm, labels))
+        f = float(val)
+        mi = labels.index(nm)
+        for spin in list(rates_full):
+            rates_full[spin] = rates_full[spin].copy()
+            rates_full[spin][mi] = rates_full[spin][mi] * f
+        out.append("%s x%g（等价形变势 x%g）" % (nm, f, f ** 0.5))
+    return out
+
+
 # =====================================================================
 # 输运积分
 # =====================================================================
@@ -775,6 +799,10 @@ def main(argv=None):
                     help="要剔除的机制，逗号分隔（默认 IMP）")
     ap.add_argument("--mode", choices=["zero", "drop"], default="zero",
                     help="zero=置零（默认，用户方案）/ drop=整行删除（overall 等价）")
+    ap.add_argument("--scale-mech", action="append", default=None, metavar="MECH=FACTOR",
+                    help="[分支测试] 把某机制的散射率乘 FACTOR（可重复），在重积分之前生效。"
+                         "散射率 ∝ D^2，所以 ADP 的形变势缩放 f 对应 --scale-mech ADP=f^2。"
+                         "用途：同一份 mesh 上快速扫形变势口径，不必重跑 2h 的 AMSET。")
     ap.add_argument("--out", default="intrinsic_transport.json", help="输出 JSON 文件名")
     ap.add_argument("--nworkers", type=int, default=None, help="插值并行数（默认用 settings）")
     ap.add_argument("--check-reproduce", action="store_true",
@@ -800,6 +828,10 @@ def main(argv=None):
     if perm is not None:
         print("[..] mesh 全网格顺序与重建不同（跨 spglib 版本），已按坐标重排")
     rates_full, labels = inject_mesh_rates(ad, mesh, labels, perm=perm)
+    if getattr(args, "scale_mech", None):                      # [分支测试 adp-xi-test]
+        _msgs = scale_mechanism_rates(rates_full, labels, args.scale_mech)
+        ad.set_scattering_rates(rates_full, labels)
+        print("[..] --scale-mech：%s" % "；".join(_msgs))
     print("[..] amset=%s  mechanisms=%s  spins=%s  n_full=%d"
           % (amset_version, labels, [str(s) for s in ad.spins], len(ad.kpoints)))
 
