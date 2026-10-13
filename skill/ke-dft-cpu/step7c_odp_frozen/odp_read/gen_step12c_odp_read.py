@@ -329,9 +329,9 @@ def carriers_3d(cwd, cfg, man, s7ref, warns):
             src = "auto（odp-ref 网格，窗口 %.2f eV）" % win
             print("[..] %s 谷表（自动）：%s" % (car, "; ".join(
                 "%s×%d dE=%.3f eV %s 带 %d" % (v["label"], v["g"], v["dE_eV"], v["spin"], v["band_index"]) for v in vs)))
-        if len(vs) > 1:
-            warns.append("%s：%d 个谷（%s）—— 只有谷内 ODP；谷间 IVS 不自动算，要的话按文献在 step.conf 写 DP_OPTICAL_%s 的 "
-                         "X>Y 通道（谷标签用本文件的）" % (car, len(vs), ",".join(v["label"] for v in vs),
+        if len(vs) > 1 or any(int(v.get("g", 1)) > 1 for v in vs):     # [0042] 单星多成员（Si X×6）也是多谷
+            warns.append("%s：%d 组谷（%s）—— 只有谷内 ODP；谷间 IVS 不自动算，要的话按文献在 step.conf 写 DP_OPTICAL_%s 的 "
+                         "X>X'（同星其它谷）或 X>Y 通道（谷标签用本文件的）" % (car, len(vs), ",".join("%s×%d" % (v["label"], int(v.get("g", 1))) for v in vs),
                                                          "E" if sign > 0 else "H"))
         vals = carrier_params(car, vs, cfg, man, s7ref, warns)
         for row, v in zip(vals, vs):

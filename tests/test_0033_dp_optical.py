@@ -328,3 +328,13 @@ def test_ir_fix_star_average_masks_after_averaging():
     out = s.factor(uq, np.array([0.01, 0.01]), None, 0, np.zeros(3), np.zeros(3))
     assert np.allclose(out[0, 0], [1.5, 0.0])                          # 平均 (2+1)/2，第二个 q 被掩掉
     assert np.allclose(s.seen, uq)                                     # 掩码用的是未旋转的 q
+
+
+def test_gen_warns_multivalley_without_ivs(tmp_path, monkeypatch, capsys):
+    """[0042] 多谷载流子只有谷内通道（IVS 出厂不算）-> WARN；写了谷间通道 -> 不报。"""
+    _dpt(tmp_path)
+    g = _gen(tmp_path, monkeypatch, DP_OPTICAL_E="K>K:4@50", DP_OPTICAL_H="K>K:4@48; K>K':2@46")
+    g.resolve_dp_optical(tmp_path)
+    out = capsys.readouterr().out
+    assert "electron 是多谷（K×2, Q×6）但没有谷间通道" in out
+    assert "hole 是多谷" not in out

@@ -1563,6 +1563,13 @@ def resolve_dp_optical(cwd: Path):
             print("[..]   %s 谷表来自 %s；ADP 谷内掩码 %s%s" % (car, rec[car]["valleys_source"],
                                                       "开" if flags[car] else "关",
                                                       "；谷内 ODP 参数来自冻声子" if f_use.get(car) == "used" else ""))
+            _vs = rec[car].get("valleys") or []                   # [0042] 多谷但没有谷间通道：提示 IVS 缺失
+            if (len(_vs) > 1 or any(int(v.get("g", 1)) > 1 for v in _vs)) and not any(
+                    h.get("kind") in ("inter", "inter_star") for h in rec[car].get("channels") or []):
+                print("[WARN]   %s 是多谷（%s）但没有谷间通道：IVS 不自动算，谷间光学散射缺失、迁移率偏高；"
+                      "要的话按文献在 step.conf 写 DP_OPTICAL_%s 的 X>X'、X>Y 通道"
+                      % (car, ", ".join("%s×%d" % (v["label"], int(v.get("g", 1))) for v in _vs),
+                         "E" if car == "electron" else "H"))
     return rec
 
 
