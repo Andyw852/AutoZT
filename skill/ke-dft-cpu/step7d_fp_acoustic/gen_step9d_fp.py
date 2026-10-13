@@ -74,7 +74,9 @@ def build_supercell(lat, frac, n):
     for m1 in range(n):
         for m2 in range(n):
             for f in frac:
-                fr.append(f / n + np.array([m1 / n, m2 / n, 0.0]))
+                # ★ 只把 a1/a2 两个方向的分数坐标除以 n；z 方向没扩胞，
+                #   f3 必须原样保留（早先写成 f/n 会把 z 压成 1/n，原子挤到 0.78 Å）。
+                fr.append(np.array([f[0] / n + m1 / n, f[1] / n + m2 / n, f[2]]))
                 cell.append((m1, m2))
     return sup_lat, np.array(fr), cell
 
