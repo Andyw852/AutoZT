@@ -325,3 +325,15 @@ step8.x 的 `_SKILL_REV` 写进 comparison_summary.txt。改脚本即提交 GitH
 - **2D 极性判据**：面内极性看面内模有效电荷；面外极性只对有 σh 的材料剔除（Janus 的同极类模以前会被误删）。
 未改、需在报数时注明的局限：常数 D 取 Γ 点裸值（速率上限，MoS₂ 约高 1.37 倍）；IVS 只认手填；极性模的短程零阶耦合缺失；
 G 的 6 meV 展宽抹圆阈值（只看 ODP 的 ⟨τ⟩ 偏低约 10%）；轻重带质量不同的简并带有偏差。
+
+## [V186] S7.1 读形变势：各构型 NBANDS 不一致
+
+- **现象**（LS，2026-10-13）：`Bulk calculation has more bands than deformation. Skipping deformation ...` →
+  `ERROR: Strains do not cover full tensor`。undeformed NBANDS = 132，deform-NN/ionrelax = 131。
+- **根因**：S7 的 INCAR 不写 NBANDS，VASP 默认值要向上取整到"能带并行组数"（核数 /(KPAR·NCORE)）的倍数，换机器或换核数
+  （LS 的 ionrelax 在 hanhai25 跑）就会差几条最顶上的空带。amset 的 `check_calculation` 对"形变构型带多"会裁掉多余的，
+  对"bulk 带多"却把整个构型跳过，面内分量一丢，应变张量就不全。
+- **修法**：S7.1 不直接调 amset CLI，经 `_NBANDS_FIX_CODE` 包一层：bulk 与已读构型统一裁到最小带数。被裁的带若落进 amset
+  的能量窗口（VBM − cutoff, CBM + cutoff），就报错退出（exit 3），不静默裁；各构型带数本来一致时什么都不做。差的只是窗口外的空带，
+  对形变势、band_edges.json、deformation.h5 的带轴都没有影响，所以**不用重算 ionrelax**，S7.1 重跑即可。
+- **不在 S7 的 INCAR 里补 NBANDS**：INCAR 一变，[V168] 的输入核对会把所有已算完的形变单点判成过期、整批重算。

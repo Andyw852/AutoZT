@@ -24,6 +24,67 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 sys.path.insert(0, os.getcwd())
 import ke_common as kc  # noqa: E402
 
+# [V186] amset deform read 的 NBANDS 对齐。没在 INCAR 里写 NBANDS 时，VASP 的默认值要向上取整到"能带并行组数"
+#   的倍数，所以同一个体系换了核数 / NCORE / KPAR 就会差几条空带（实测 LS：undeformed 132、deform-NN/ionrelax 131，
+#   ionrelax 换到 hanhai25 跑）。amset 的 check_calculation 对"形变构型带更多"会裁掉多余的，对"bulk 带更多"却
+#   整个跳过该构型 -> 面内分量丢失 -> "Strains do not cover full tensor"。差的只是最顶上的空带，和形变势无关：
+#   这里把 bulk 与已读入的构型统一裁到最小带数；被裁的带若落进 amset 的能量窗口（VBM − cutoff, CBM + cutoff）
+#   就报错退出（那说明 NBANDS 小得离谱，要查 INCAR），不静默裁。各构型 NBANDS 本来一致时什么都不做。
+#   不在 S7 的 INCAR 里补 NBANDS：那会让所有已算完的形变单点被判成"输入变了"而整批重算。
+_NBANDS_FIX_CODE = r'''
+import sys
+import numpy as np
+import amset.tools.deformation as T
+from amset.constants import defaults
+from amset.electronic_structure.common import get_energy_cutoffs
+
+_ECUT = defaults["energy_cutoff"]
+for _i, _a in enumerate(sys.argv):
+    if _a in ("-e", "--energy-cutoff") and _i + 1 < len(sys.argv):
+        _ECUT = float(sys.argv[_i + 1])
+_ORIG = T.check_calculation
+_SEEN = []
+
+
+def _nb(calc):
+    return min(len(b) for b in calc["bandstructure"].bands.values())
+
+
+def _trim(calc, n):
+    bs = calc["bandstructure"]
+    bs.bands = {s: b[:n] for s, b in bs.bands.items()}
+    if getattr(bs, "projections", None):
+        bs.projections = {s: p[:n] for s, p in bs.projections.items()}
+    bs.nb_bands = n
+
+
+def check_calculation(bulk, deformation):
+    nb, nd = _nb(bulk), _nb(deformation)
+    if nd < nb:
+        bs = bulk["bandstructure"]
+        lo, hi = get_energy_cutoffs(_ECUT, bs)
+        drop = np.concatenate([b[nd:].ravel() for b in bs.bands.values()])
+        if np.any((drop > lo) & (drop < hi)):
+            print("[nbands_fix][ERROR] 形变构型只有 %d 条带，bulk 有 %d 条；要裁掉的带落在能量窗口 "
+                  "(%.3f, %.3f) eV 内，不能裁 —— 检查各构型 INCAR 的 NBANDS" % (nd, nb, lo, hi), flush=True)
+            sys.exit(3)
+        print("[nbands_fix] bulk %d 条带 > 形变构型 %d 条（VASP 默认 NBANDS 随并行布局取整）：bulk 与已读构型统一裁到 %d"
+              "（裁掉的空带最低 %.3f eV，在窗口上限 %.3f eV 之上）" % (nb, nd, nd, float(drop.min()), hi), flush=True)
+        _trim(bulk, nd)
+        for c in _SEEN:
+            _trim(c, nd)
+    out = _ORIG(bulk, deformation)
+    if out is not False:
+        _SEEN.append(out)
+    return out
+
+
+T.check_calculation = check_calculation
+if __name__ == "__main__":
+    from amset.tools.cli import cli
+    cli.main(args=["deform", "read"] + sys.argv[1:], prog_name="amset")
+'''
+
 # =========================== 可改参数区 ===========================
 # [SKILL_REV] 版本戳：写进 band_edges.json，gen_step12_dpt.py 拿它与 ke_common.BAND_EDGES_REV 核对（V153：
 #   两边共用这一个常量；以前 S8.2 拿自己的 _SKILL_REV 比，永远不一致）。
@@ -270,9 +331,12 @@ def main():
     # 【未形变的必须排第一个】。原来写成 `read *deform* undeformed`，既顺序
     # 颠倒，又因为 "*deform*" 会匹配到 "undeformed" 自己，把第一个形变目录
     # 当成了 bulk。这个错不报异常，只会安静地给出错误的形变势。
-    cmd = ("%s && cd %s && amset deform read undeformed %s "
+    # 等价于 amset deform read undeformed <形变构型...>。
+    # [V186] 不直接调 amset CLI：经 _NBANDS_FIX_CODE 包一层，各构型 NBANDS 不同（VASP 默认值随并行布局
+    #   取整，如 ionrelax 换了机器/核数）时统一裁到最小带数，而不是把带少的构型整个跳过。
+    cmd = ("%s && cd %s && python3 -c %s undeformed %s "
            ">> deform_read.log 2>&1"
-           % (AMSET_ENV_SRC, str(dfm),
+           % (AMSET_ENV_SRC, str(dfm), shlex.quote(_NBANDS_FIX_CODE),
               " ".join(shlex.quote(r) for r in _rel)))
     print("[..] amset deform read ...")
     rc = subprocess.run(["bash", "-lc", cmd]).returncode
