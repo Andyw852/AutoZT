@@ -364,7 +364,7 @@ optional_steps:
                     discriminant_common.py, amset2d_plugin.py, amset2d_pop_freq.py, dp_optical.py,
                     overlap_preflight.py, postprocess_intrinsic.py, fermi_window_check.py,
                     amset_desym_fix.py, amset_ir_fix.py, amset_fermi_fix.py,
-                    odp_frozen.py, tau_energy.py, run_undoped.py],   # [0035] 冻声子 ODP 参数 / τ(E)；[0040] 本征点独立运行
+                    odp_frozen.py, tau_energy.py],   # [0035] 冻声子 ODP 参数 / τ(E)（[0044] 本征点回主掺杂网格，取消独立拆分脚本）
          fetch_all: true,
          # [0032] mesh_*.h5（每机制每 k 点散射率，几十 MB 到 GB）只给作业内的本征后处理用，不回拉本地
          fetch_exclude: ["mesh_*.h5"],

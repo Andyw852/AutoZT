@@ -2400,11 +2400,20 @@ def _tavg(t, is_2d):
 
 
 def undoped_rows(cwd, is_2d):
-    """[0040] 两条线：本征点独立结果 transport_undoped.json（doping=[0]，去 IMP）。"""
+    """[0044] 本征点（AMSET doping = 0，E_F 由 n = p 定）：从主 transport.json 取 0 掺杂行
+    （[0040] 起掺杂网格含 0；[0044] 取消独立拆分脚本）。2D 会带全部可用数据集（overall / 去 IMP / 子集）。
+    兼容旧结果：主网格没有 0 点时回退读 transport_undoped.json（[0040]~[0043] 的产物）。"""
+    try:
+        rows, _why = _rows_at_doping(cwd, is_2d, lambda d: abs(d) <= 1e-12,
+                                     "transport.json 的掺杂网格里没有 0（UNDOPED_POINT 关了）")
+    except Exception:
+        rows = []
+    if rows:
+        return rows, None
     run = Path(cwd) / (AMSET2D_DIR if is_2d else AMSET_DIR)
     j = _load_json(run / "transport_undoped.json")
     if not j:
-        return [], "没有 transport_undoped.json（UNDOPED_POINT 关了，或本征点独立运行没跑/失败）"
+        return [], "transport.json 的掺杂网格里没有 0（UNDOPED_POINT 关了），也没有旧的 transport_undoped.json"
     temps = [float(t) for t in _unwrap(j["temperatures"])]
     fac = 1.0
     if is_2d:

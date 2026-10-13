@@ -33,7 +33,7 @@ def _s83():
 
 
 def _set_undoped_transport(cwd, value, temps, dirname="step8.4_amset2d"):
-    """[0040] 写 transport_undoped.json（本征点独立结果：doping=[0]，σ=value，S=-150）。"""
+    """[0040] 写 transport_undoped.json（[0044] 起为兼容旧结果的回退路径：doping=[0]，σ=value，S=-150）。"""
     p = cwd / dirname / "transport_undoped.json"
     p.write_text(json.dumps({
         "doping": [0.0], "temperatures": temps,
@@ -55,7 +55,19 @@ def test_undoped_rows_2d_scaled_by_c_over_t(tmp_path):
     assert ov[0]["sigma_S/m"] == pytest.approx(2.0 * geom["c_over_t"])
     assert ov[0]["S_uV/K"] == pytest.approx(-150.0)
     assert ov[0]["PF_W/mK2"] == pytest.approx((150e-6) ** 2 * 2.0 * geom["c_over_t"])
-    assert {r["dataset"] for r in rows} == {"overall"}   # [0040] 两条线：本征点独立运行只有 overall
+    assert {r["dataset"] for r in rows} == {"overall"}   # [0044] 回退路径（transport_undoped.json）只有 overall
+
+
+def test_undoped_rows_from_main_grid_2d(tmp_path):
+    """[0044] 本征点回主掺杂网格：0 掺杂行就在 transport.json 里，2D 带全部数据集。"""
+    S = _s83()
+    cwd = T32._material(tmp_path, doping0=True)
+    assert not (cwd / "step8.4_amset2d" / "transport_undoped.json").exists()
+    rows, why = S.undoped_rows(cwd, True)
+    assert why is None
+    ov = [r for r in rows if r["dataset"] == "overall"]
+    assert len(ov) == len(T32.TEMPS)
+    assert len({r["dataset"] for r in rows}) >= 2     # overall + 去 IMP（子集）都在主网格
 
 
 def test_undoped_plot_files(tmp_path):
@@ -98,9 +110,10 @@ def test_gen_has_undoped_point():
         src = p.read_text(encoding="utf-8")
         assert "UNDOPED_POINT = True" in src
         assert '"UNDOPED_POINT": (None, "bool")' in src
-    # [0040] 两条线：2D S8.4 用 run_undoped.py 独立跑本征点
+    # [0044] 本征点回主掺杂网格 doping=0，取消独立拆分脚本
     src14 = (KE / "step8.4_amset2d" / "gen_step14_amset2d.py").read_text(encoding="utf-8")
-    assert "run_undoped.py" in src14
+    assert "run_undoped" not in src14
+    assert "if UNDOPED_POINT and 0.0 not in _dop" in src14
 
 
 def test_intrinsic_fermi_matches_parabolic_bands():
