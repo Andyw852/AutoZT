@@ -331,6 +331,19 @@ optional_steps:
          fetch_all: true,
          needs: ["step7c_odp_frozen", "step8.2_dpt?"]}
 
+  # --- [分支 adp-xi-selfcalc] 有限 q 声学冻声子（实验性，**默认关**）-------------------
+  #   目的：q→0 冻声子给不出 Xi_TA（四材料实测为 0，文献 1.5 eV 来自 umklapp），
+  #         也拿不到 Xi(q) 的 q 依赖；这一步在 N×N×1 超胞里做有限 q 冻声子。
+  #   只有材料 tf_*.yaml 写 fp_acoustic: true 才跑；默认 false 时不注入、不影响现有材料。
+  #   生成见 step7d_fp_acoustic/gen_step9d_fp.py；提取用 step8.4_amset2d/fp_xi.py extract。
+  fp_acoustic:
+    default: false
+    steps:
+      - {seq: 7.4, name: step7d_fp_acoustic, label: S7.4_fp, after: step7_deform,
+         src: step7d_fp_acoustic, check: outcar, fanout: "fp-*", gen: gen_step9d_fp.py,
+         gen_need: [stepconf.py, step.conf, ke_common.py, dim_common.py, submit_std_2d.tpl, submit_std_3d.tpl],
+         needs: ["step1_opt", "step7_deform"]}
+
   # --- 8.1 BoltzTraP2 CRTA × DPT-τ：文献口径的完整实现 ---
   #   [0016] S8.x 各组的 after 一律锚在 step7b_deform_read（主步骤，一定在）：S8 现在可以被关掉
   #   （2D 默认关），锚在 step8* 上会让 S8.1/S8.2/S8.3/S8.4 跟着静默不注入。最终顺序按 seq 重排。
