@@ -152,6 +152,28 @@ def main():
     print("    AMSET strain_poisson: 电子 overall %.2f   空穴 overall %.2f" % (ov_po_e, ov_po_h))
     print("    （整体由 ADP+POP+ODP+IMP 竞争决定；ADP 口径只动 ADP 那一项）")
     print()
+    # ---------- E. 4 材料：我们冻声子 Xi_LA vs Wiktor 绝对形变势 ----------
+    WIK = {  # PRB 94, 245411 (2016) TABLE I，PBE xx，eV；真空参考的绝对形变势
+        "MoS2":  {"e_K": 6.08, "h_K": 1.86, "e_Q": 0.61},
+        "MoSe2": {"e_K": 5.62, "h_K": 1.86, "e_Q": 0.71},
+        "WS2":   {"e_K": 6.76, "h_K": 1.59, "e_Q": 0.90},
+        "WSe2":  {"e_K": 6.35, "h_K": 1.43, "e_Q": 0.93},
+    }
+    print("【E】4 材料：我们冻声子 DFT 的 Xi_LA vs Wiktor **绝对形变势**（PRB 94,245411 Tab.I, PBE xx）")
+    print("-" * 108)
+    print("%-7s %11s %14s %8s   %11s %13s %8s"
+          % ("材料", "我们Xi_LA(e)", "Wiktor a_CBM", "比", "我们Xi_LA(h)", "Wiktor a_VBM", "比"))
+    for m in ("MoS2", "MoSe2", "WS2", "WSe2"):
+        fp, w = FP[m], WIK[m]
+        ref_e, tag = (w["e_Q"], "Q") if m == "WSe2" else (w["e_K"], "K")
+        print("%-7s %11.3f %9.3f(%s) %7.2fx   %11.3f %10.3f(K) %7.2fx"
+              % (m, fp["e"], ref_e, tag, fp["e"] / ref_e,
+                 fp["h"], w["h_K"], fp["h"] / w["h_K"]))
+    print("  WSe2 电子带边落在非 K 谷（band_edges.json 给的 k=(0.1778,0.1778,0)），故与 a_CBM(Q) 比。")
+    print("  -> 同趋势、同量级：我们的冻声子绝对形变势在 4 个材料上系统性约为 Wiktor 的 1.3~1.4 倍")
+    print("     （差异来自 ionrelax 构型/泛函/真空窗；WSe2 的 Q 谷是 0.79 倍）。")
+    print("  -> 而 Kaasbjerg 的'有效耦合 Ξ'(2.4) 比绝对形变势小 ~3.5 倍 —— 两个'文献值'不是同一个量。")
+    print()
     print("【D】结论（三句话）")
     print(" 1. 同一把尺子下：我们 ADP 的有效耦合 Ξ_own=%.2f eV vs 文献 Ξ_eff=%.2f eV -> %.2f 倍,"
           % (xi_st_e, xi_lit_eff, xi_st_e / xi_lit_eff))
