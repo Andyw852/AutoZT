@@ -146,22 +146,30 @@ slab 里会把面外极性模也算进去。二维 Fröhlich 只用面内极性�
 ADP 核分母是 Christoffel 刚度（VASP `TOTAL ELASTIC MODULI`，含离子弛豫）。实测 MoS2 单层
 xx 0.5%：电子 E1_vac 由 6.58（离子固定）变 8.51 eV（离子弛豫），差 **29%**。
 
-**但 `ionrelax/` 只有 2D 会生成**：step7（`gen_step9_deform.py`）只在 `dim == "2d"` 时给
-**面内**应变分量（xx/yy/xy）的形变目录建 `ionrelax/`；面外分量与**全部三维形变**都是
-离子固定的单点（`IBRION=-1, NSW=0`）。所以实际口径是：
+**哪些构型做离子弛豫（[V187] 起按维度）**：step7（`gen_step9_deform.py` 的 `select_ionrelax_dirs`）给形变目录建
+`ionrelax/`（固定晶胞 `ISIF=2`、`IBRION=2` 弛豫内坐标，不加选择性动力学，再接 `ISYM=0` 静态段）：
 
-| 体系 | 形变构型 | `deform_geometry` |
-|---|---|---|
-| 2D | 面内 ionrelax，面外 clamped（二维核只用面内分量） | `ionrelax(in-plane)+clamped(out-of-plane)` |
-| 3D | 全部 clamped（离子固定） | `clamped`（step7b 打 WARN） |
+| 体系 | 形变构型 | `deform_geometry` | z 方向 |
+|---|---|---|---|
+| 2D | 面内分量（xx/yy/xy）ionrelax，面外分量（zz/yz/xz）clamped | `ionrelax(in-plane)+clamped(out-of-plane)` | z 是真空：面外应变拉/剪的是真空，二维核不用，不弛豫；但面内应变下原子的 **z 坐标放开**（层厚随应变变化，是二维离子弛豫响应的一部分） |
+| 3D | 全部分量 ionrelax（[V187]；`IONRELAX_3D = false` 回到全 clamped） | `ionrelax` | z 是真实晶向，六个分量一视同仁 |
 
-> ⚠ 三维的形变势因此仍是**离子固定**口径，而弹性常数含离子弛豫 —— 两者不同源；
-> 内坐标自由度大的三维体系（如 225 相 tetradymite）E1 会系统性偏离。要改成三维也弛豫，
-> 需在 step7 放开 `dim == "2d"` 的限制（每个形变胞多一段离子弛豫，代价约 ×(1+NSW 步)），
-> 属口径变更，改前先评估存量三维结果。
+> [V187] 之前 3D 一律离子固定（`clamped`），与含离子弛豫的弹性常数不同源。受影响的是有内应变的结构：金刚石/闪锌矿的
+> 剪切分量（Kleinman 内应变 → TA 支 ADP）、R-3m（Bi₂Te₃ 类，有自由 z 参数）连正应变也受影响；原子都在反演中心的结构
+> （岩盐等）受力为零，弛豫段 1 步即停，结果不变。**已算完的 3D 项目不会自动重算**：retry S7_deform 才会给全部构型补
+> `ionrelax/`（ck_deform 判未完成 → 重交），再 S7.1 → S8 / S8.2。
 > ⚠ **回退不静默**：没有 `ionrelax/` 的构型按离子固定口径处理时，gen 会打 WARN 并把
 > `deform_geometry`（ionrelax / clamped / mixed）写进 `band_edges.json`，进而出现在
 > settings 注释、`2d_correction.json` 与 8.3 汇总表里，跨项目比较前先核对这一项。
+> 2D 的 `ionrelax(in-plane)+clamped(out-of-plane)` 是正常口径：S8.4（二维核）与 8.3 不再告警；只有 S8（三维核，2D 只作对照）
+> 会用到面外分量，那里单独注明。
+
+**弛豫力判据（[V187]）**：`IONRELAX_EDIFFG` 由 -0.02 收紧到 **-0.005 eV/Å**（与 S1 为弹性收紧的同值）。带边本征值对内坐标是
+**一阶**的（斜率 = 光学形变势 D_opt，1–10 eV/Å），残余位移 δu ≈ F_tol/k 落到 E1 上的误差上限 ≈ D_opt·δu/γ（γ = 0.005）：
+-0.02 → ~1 eV，-0.005 → ~0.3 eV。旧注释"残余力对带边影响 ~1E-4 eV"是把总能（二阶）的量级套到了本征值上。MoS₂ 粗估：
+±0.5% 应变诱导的内坐标力只有 ~0.04 eV/Å，与 -0.02 同量级。S7.1 逐构型写 `band_edges.json` 的 `ionrelax_check`
+（首/末步最大力、离子步数、是否跑满 NSW、判据是否偏松；末/首 > 0.25 记 `weak`）。判据偏松的旧结果默认复用、只告警；
+S7 的 step.conf 写 `IONRELAX_REBUILD_LOOSE = true` 再 retry 只重建这些构型（`IONRELAX_EDIFFG` 也可在那里改）。
 
 二维工作的通行做法是以**远离单层处的真空静电势**为零点定义带能，
 C2DB 给出的形变势也是真空口径。两者在本项目实测差 1.66 倍（CrS2 单层：芯势 3.53 eV、
@@ -337,3 +345,20 @@ G 的 6 meV 展宽抹圆阈值（只看 ODP 的 ⟨τ⟩ 偏低约 10%）；轻�
   的能量窗口（VBM − cutoff, CBM + cutoff），就报错退出（exit 3），不静默裁；各构型带数本来一致时什么都不做。差的只是窗口外的空带，
   对形变势、band_edges.json、deformation.h5 的带轴都没有影响，所以**不用重算 ionrelax**，S7.1 重跑即可。
 - **不在 S7 的 INCAR 里补 NBANDS**：INCAR 一变，[V168] 的输入核对会把所有已算完的形变单点判成过期、整批重算。
+
+## [V187] 形变势构型：3D 也做离子弛豫；弛豫力判据收紧；z 方向按维度处理
+
+- **3D 离子弛豫**：S7 对 3D 的全部形变构型建 `ionrelax/`（默认开，S7 的 step.conf `IONRELAX_3D = false` 关）。
+  理由与 2D 相同：q→0 声学声子含内坐标弛豫，ADP 分母是含离子弛豫的 `TOTAL ELASTIC MODULI`。细节见 4.4。
+- **力判据**：`IONRELAX_EDIFFG` -0.02 → -0.005；S7.1 的 `ionrelax_check` 核对回收是否充分；旧结果按
+  `IONRELAX_REBUILD_LOOSE` 由用户决定是否重算（不自动重算）。
+- **z 方向按维度（全技能核对后修的几处）**：
+  - S7.1 `band_edges.json`：带边 hits 加 `E1_zz_eV`；3D 的 `E1_iso_eV` 改为 (D_xx+D_yy+D_zz)/3（以前照搬 2D 只取面内两项），
+    `E1_iso_def` 写明口径；`BAND_EDGES_REV` 随之升级（S8.2 对旧文件告警"重跑 S7.1"）。S8.2 的 3D 主路径本来就直接读 h5 的
+    三个对角（[0025]），只改了回退路径的说明。
+  - S8.4 / S8.3：2D 的 `ionrelax(in-plane)+clamped(out-of-plane)` 不再误报"非离子弛豫口径"；8.3 的张量约化标签按 step1 的
+    DIM 判（2D 默认不跑 S8 时以前会被标成 "[3D] (xx+yy+zz)/3"）。
+  - S8（三维核）：读 `deform_geometry`，3D 非离子弛豫时告警；2D 注明面外分量离子固定、S8 只作对照。
+- **未改**：2D 的面外应变仍是离子固定单点 —— 只为让 AMSET 读到完整张量，二维核不用；未形变参考构型仍是 S1 CONTCAR 的单点
+  （中心差分里抵消；AMSET 逐应变取 |·| 后对 |D| 小于 ~s/γ 的分量会留下一个噪声底，s 为 S1/S7 设置差造成的残余力位移所致的带边漂移）。
+

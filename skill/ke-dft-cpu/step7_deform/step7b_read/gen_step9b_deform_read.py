@@ -249,8 +249,9 @@ def main():
     print("[..] 形变构型（%d 个，ionrelax 优先）：%s"
           % (len(_rel), ", ".join(_rel[:6]) + (" ..." if len(_rel) > 6 else "")))
     # ---- 口径分级（2026-09-16 二次修订，按维度区分处理）------------------
-    # 现实情况：step7 只对**面内**分量做了离子弛豫，所以一个项目里常常是
-    # "面内 ionrelax + 面外 clamped"。这不是可以含糊过去的细节：
+    # 现实情况：2D 的 step7 只对**面内**分量做离子弛豫（面外应变拉的是真空，二维核不用），所以
+    # 二维项目是"面内 ionrelax + 面外 clamped"；3D 自 [V187] 起全部分量都弛豫（旧的 3D 项目是全 clamped，
+    # retry S7 才会补）。这不是可以含糊过去的细节：
     #   · 二维核只用面内分量 → 面内全 ionrelax 即可放行，但标签必须写清楚；
     #   · 三维核要全部分量同源 → 出现混合口径直接报错（AMSET 会把不同来源的分量
     #     平均进同一个张量，结果没有物理意义）；
@@ -303,11 +304,44 @@ def main():
         print("[WARN] 全部 %d 个形变构型都是【离子固定】口径（没有 ionrelax/）：与弹性常数"
               "（TOTAL ELASTIC MODULI，含离子弛豫）不同源，ADP 绝对值跨项目不可直接比。"
               % len(_geom_map))
+        if _dim_now == "3d":
+            print("       [V187] 3D 现在默认也做离子弛豫：retry S7_deform 会给全部形变构型补 ionrelax/"
+                  "（step.conf 写 IONRELAX_3D = false 才保持离子固定），算完再重跑本步。")
     elif _def_geom.startswith("ionrelax(in-plane)"):
         print("[..] 面内分量取自离子弛豫构型、面外分量取自离子固定构型：二维核只用面内分量，"
               "可用；三维核若复用同一份 h5 需注意口径（本体系 DIM=%s）。" % (_dim_now or "?"))
         print("     面外 clamped 构型：%s" % ", ".join(_clamped_out[:8]))
     print("[..] 形变势构型口径 deform_geometry=%s（落盘到 band_edges.json）" % _def_geom)
+    # [V187] 弛豫段核对：内坐标响应回收得够不够（首/末步最大力）、有没有跑满 NSW、力判据是不是旧的松值。
+    #   只告警不拦：判据偏松的旧结果按 IONRELAX_REBUILD_LOOSE 由用户决定要不要重算。
+    _ir_check = {"ediffg_ref": -kc.IONRELAX_EDIFFG_REF,
+                 "ratio_warn": kc.IONRELAX_FORCE_RATIO_WARN, "folders": {}}
+    for _k, _v in sorted(_geom_map.items()):
+        if _v == "ionrelax":
+            _ir_check["folders"][_k] = kc.ionrelax_force_check(dfm / _k / "ionrelax")
+    _bad = {k: v for k, v in _ir_check["folders"].items() if v.get("status") not in ("ok",)}
+    _eds = sorted(set(v.get("ediffg") for v in _ir_check["folders"].values()), key=lambda x: (x is None, x))
+    _ir_check["ediffg_used"] = _eds
+    _ir_check["n_flagged"] = len(_bad)
+    if len(_eds) > 1:
+        print("[WARN] ionrelax 的力判据不统一：EDIFFG = %s（新旧结果混用；见 band_edges.json 的 ionrelax_check）" % _eds)
+    for _k, _v in sorted(_bad.items()):
+        _st = _v.get("status")
+        _why = {"nsw_hit": "跑满 NSW 仍未到 EDIFFG",
+                "weak": "末步/首步最大力 %s > %s，内坐标响应回收不足" % (_v.get("ratio_last_first"),
+                                                                     kc.IONRELAX_FORCE_RATIO_WARN),
+                "loose": "EDIFFG=%s 比参考值 -%g 松（旧结果）" % (_v.get("ediffg"), kc.IONRELAX_EDIFFG_REF),
+                "no_data": "没有 OUTCAR.relax，核对不了（旧版 submit.sh）"}.get(_st, _st)
+        print("[WARN] ionrelax %s：%s（fmax 首/末 = %s/%s eV/Å，%s 步）"
+              % (_k, _why, _v.get("fmax_first"), _v.get("fmax_last"), _v.get("n_ionic")))
+    if _bad:
+        _sts = set(v.get("status") for v in _bad.values())
+        print("       E1 的离子弛豫部分可能偏低。重算办法（S7 的 step.conf，写完 retry S7_deform 再重跑本步）：")
+        if _sts & {"loose"}:
+            print("         · 判据偏松的旧结果：IONRELAX_REBUILD_LOOSE = true（只重建比现行判据松的构型）")
+        if _sts & {"weak", "nsw_hit"}:
+            print("         · 回收不足 / 跑满 NSW：IONRELAX_EDIFFG 写更紧（如 -0.002）+ IONRELAX_REBUILD_LOOSE = true；"
+                  "跑满 NSW 的先看 OSZICAR.relax 是不是软模在晃")
     # [V169] 芯能级参考的来源逐构型判定（amset deform read 读的就是这些目录的 OUTCAR）：平均静电芯势 / 1s 芯能级。
     #   AMSET 缺前者时静默改用后者（ICORELEVEL=1 的旧 INCAR）；两种混用 -> 参考差无物理意义，直接报错。
     _core_ref = {str(Path(_f).relative_to(dfm)): kc.outcar_core_ref_kind(Path(_f) / "OUTCAR")
@@ -369,6 +403,8 @@ from pathlib import Path as _P
 sys.path.insert(0, str(_P.cwd().resolve().parent))   # 项目根（本步 cwd 是 step7_deform）
 import ke_common
 outdir = sys.argv[1]
+# [V187] 维度由外层传入（argv[3]）：只决定 E1_iso_eV 取面内两项还是三个对角；真空对齐段仍自己读 step1
+_DIM = (sys.argv[3] if len(sys.argv) > 3 else "").lower() or None
 
 def _as_dict(edge):
     edge = edge if isinstance(edge, dict) else {
@@ -474,24 +510,30 @@ for carrier, edge in (("electron", bs.get_cbm()), ("hole", bs.get_vbm())):
                         "带边 k 点 %s 在 h5 网格找不到（最近距离 %.3g）"
                         % (np.round(kf, 4), dd[kh5]))
                 t = dp[spin][b_local, kh5]
+                # [V187] 3D 的各向同性值取三个对角（z 是真实晶向）；2D 只取面内（z 是真空）
+                _iso = ((t[0, 0] + t[1, 1] + t[2, 2]) / 3 if _DIM == "3d"
+                        else (t[0, 0] + t[1, 1]) / 2)
                 hits.append({"spin": spin.name, "band_global": int(b_global),
                              "band_h5": b_local, "k_h5": int(kh5),
                              "k_frac": np.round(kf, 6).tolist(),
                              "E1_xx_eV": round(float(t[0, 0]), 4),
                              "E1_yy_eV": round(float(t[1, 1]), 4),
-                             "E1_iso_eV": round(float(abs((t[0, 0] + t[1, 1]) / 2)), 4)})
+                             "E1_zz_eV": round(float(t[2, 2]), 4),
+                             "E1_iso_eV": round(float(abs(_iso)), 4)})
     if hits:
         # [PATCH-DPT-R2] 简并 spin×band×k 的命中做 |D| 平均（h5 值已非负），
         # 并报告离散度；不再取 hits[0]（依赖 dict 迭代顺序、不可复现）。
         xs = [h["E1_xx_eV"] for h in hits]
         ys = [h["E1_yy_eV"] for h in hits]
+        zs = [h["E1_zz_eV"] for h in hits]
         iso = [h["E1_iso_eV"] for h in hits]
         avg = lambda v: round(float(sum(v)) / len(v), 4)
         spread = lambda v: (max(v) - min(v)) if v else 0.0
         out[carrier] = {
             "edge_energy_eV": round(float(ene), 4),
             "n_hits": len(hits),
-            "E1_xx_eV": avg(xs), "E1_yy_eV": avg(ys), "E1_iso_eV": avg(iso),
+            "E1_xx_eV": avg(xs), "E1_yy_eV": avg(ys), "E1_zz_eV": avg(zs), "E1_iso_eV": avg(iso),
+            "E1_iso_def": ("(D_xx+D_yy+D_zz)/3" if _DIM == "3d" else "(D_xx+D_yy)/2（面内）"),
             "spread_xx": round(spread(xs), 4), "spread_yy": round(spread(ys), 4),
             "hits": hits,
         }
@@ -879,10 +921,10 @@ with open(outdir + "/band_edges.json", "w") as fh:
 print("[OK] band_edges.json 已生成（amset 权威带边 E1 + 真空对齐 E1_vac）")
 '''
     be_out = out / "band_edges.json"
-    be_cmd = ("%s && cd %s && python3 -c %s %s %s > band_edges.log 2>&1"
+    be_cmd = ("%s && cd %s && python3 -c %s %s %s %s > band_edges.log 2>&1"
               % (AMSET_ENV_SRC, shlex.quote(str(dfm)),
                  shlex.quote(_be_code), shlex.quote(str(out)),
-                 shlex.quote(_SKILL_REV)))
+                 shlex.quote(_SKILL_REV), shlex.quote(_dim_now or "")))
     _rc = subprocess.run(["bash", "-lc", be_cmd]).returncode
     if _rc != 0 or not be_out.is_file():
         # [PATCH-DPT-R5] 硬失败：band_edges.json 是 step8.2_dpt 正确 E1 的唯一
@@ -905,6 +947,7 @@ print("[OK] band_edges.json 已生成（amset 权威带边 E1 + 真空对齐 E1_
         _be["deform_geometry_folders"] = _geom_map
         _be["core_reference"] = _core_kind                      # [V169] avg_core / 1s
         _be["core_reference_folders"] = _core_ref
+        _be["ionrelax_check"] = _ir_check                       # [V187] 弛豫段力判据核对
         Path(be_out).write_text(_json.dumps(_be, indent=2, ensure_ascii=False) + "\n")
         print("[OK] band_edges.json 记录 deform_geometry=%s（%d 个构型）"
               % (_def_geom, len(_geom_map)))
