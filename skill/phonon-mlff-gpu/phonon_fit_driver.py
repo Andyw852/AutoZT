@@ -45,7 +45,7 @@ def main():
     forces = np.load("forces.npy")
     ph.displacements = disps
     ph.forces = forces
-    print("[..] %d 帧 × %d 原子，symfc 拟合 fc2" % (len(disps), len(uc.numbers) * int(np.prod(dim))))
+    print("[..] %d 帧 × %d 原子，symfc 拟合 fc2" % (len(disps), len(uc.numbers) * int(round(abs(np.linalg.det(dim))))))
 
     ph.produce_force_constants(fc_calculator="symfc")
     print("[OK] fc2 拟合完成")
@@ -59,10 +59,13 @@ def main():
     except Exception as e:
         print("[WARN] 维度判定失败（按 3D 处理）：%s" % e)
     is2d = str(dimtag).lower().startswith("2")
+    # ★ 2026-10-14：原来到处写 `vac_axis or 2` —— 真空在 a（下标 0）时 0 被当成"没有"改成 2，
+    #   虚频网格把一个面内方向压成 1、路径被判成矩形格子。只在判不出（None）时才默认 c。
+    _vac_cart = vac_axis if vac_axis is not None else 2
     # ★ 2D 用显式整数网格（真空轴 1、面内 60）：float mesh 是"面间距长度"语义，
     #   实测得 [2,22,22]、面内最近 q 只 0.105 Å⁻¹，会漏掉近 Γ 软模（与 kl-dft-cpu 同一 bug）。
     if is2d:
-        _imag_mesh, _vaxp = kmc.imag_mesh_numbers(ph, vac_axis or 2)
+        _imag_mesh, _vaxp = kmc.imag_mesh_numbers(ph, _vac_cart)
         print("[..] 虚频门禁网格 mesh=%s（真空轴原胞下标=%d）"
               % (" ".join(str(x) for x in _imag_mesh), _vaxp))
         ph.run_mesh(mesh=_imag_mesh, with_eigenvectors=False, is_mesh_symmetry=True,
@@ -75,7 +78,7 @@ def main():
     try:
         if is2d:
             from phonopy.phonon.band_structure import get_band_qpoints_and_path_connections
-            paths, labels, lat = kmc.band_path_2d_prim(ph, 101, vac_axis or 2)
+            paths, labels, lat = kmc.band_path_2d_prim(ph, 101, _vac_cart)
             bands, conn = get_band_qpoints_and_path_connections(paths, npoints=101)
             ph.run_band_structure(bands, path_connections=conn, labels=labels)
             ph.write_yaml_band_structure(filename="band-dft-cpu.yaml")
@@ -91,7 +94,7 @@ def main():
               "线性化（ω∝q 而非 q²）。要做 2D 的稳定性/κ，请用 kl-dft-cpu 的 pheasy+BHH 链"
               "（PHEASY_RASR=auto）。")
         import phonon_stability
-        za = phonon_stability.za_check(params, ph, vac_axis or 2, True)
+        za = phonon_stability.za_check(params, ph, _vac_cart, True)
         print("[..] ZA 检查：%s" % za.get("note", za.get("error", "")))
 
     # ---- 虚频判据统一走 imag_policy（唯一真源，2026-09-22）；本文件不再硬编码阈值 ----
@@ -117,7 +120,7 @@ def main():
 
     _fr, _qp = _imag_samples(ph)
     try:
-        _vaxp = kmc.vacuum_axis_in_primitive(ph, vac_axis or 2) if is2d else None
+        _vaxp = kmc.vacuum_axis_in_primitive(ph, _vac_cart) if is2d else None
     except Exception:                              # noqa: BLE001
         _vaxp = None
     _imag = imag_policy.classify_imag(_fr, _qp, is2d, _vaxp, params)
