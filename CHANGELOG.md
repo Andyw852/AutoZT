@@ -18,6 +18,10 @@ This project adheres to Semantic Versioning; versions before 1.0.0 are developme
 - kl-dft-cpu / phonon-dft-cpu / kl-mlff / phonon-mlff 2D phonon path: on a hexagonal primitive
   cell with gamma = 60 deg the "K" point (1/3, 1/3) sat on the Gamma-M' line at 0.577 |K|; it is
   now chosen from the in-plane angle ((2/3, 1/3) for 60 deg, (1/3, 1/3) for 120 deg).
+- Shared fitting engine (`fc_fit_driver._stability_gate`, used by kl-dft-cpu S5 and fit-fc-thermal)
+  and fit-fc-thermal S2_plot: 2D band yaml/plots now use the kz=0 2D path (`za_2d.band_path_2d`,
+  new pool copy kept identical to the skill copies by tests) instead of seekpath, which added
+  Gamma-A segments along the vacuum direction. S2_plot records `band_path` in its summary.
 - kl-dft-cpu S5.1: no longer falls back silently to a hexagonal Gamma-M-K-Gamma path when seekpath
   is missing (3D) or the 2D path fails; the step now errors. seekpath added to `requires`.
   New S5.1 key `PLOT_BAND_POINTS` (default 31) replaces the environment-only setting.

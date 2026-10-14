@@ -355,3 +355,75 @@ def test_reserved_keys(path):
     sc = _load("stepconf_%d" % (abs(hash(str(path))) % 10000), path)
     for k in ("HYBRID", "HYBRID_GGA", "HYBRID_AEXX", "HYBRID_HFSCREEN", "FUNC_ALIGN"):
         assert k in sc.RESERVED_PARAMS
+
+
+# --------------------------------------------------------------------------- [G]
+# 共享拟合引擎（fc_fit_driver 判据出图）与 fit-fc-thermal S2_plot：2D 走 za_2d 的 kz=0 路径
+def _za():
+    return _load("za_2d_under_test", ROOT / "skill" / "_common" / "za_2d.py")
+
+
+@pytest.mark.parametrize("cell", [
+    [[3.2, 0, 0], [-1.6, 2.771281, 0], [0, 0, 25.0]],          # 六方 120°
+    [[3.2, 0, 0], [1.6, 2.771281, 0], [0, 0, 25.0]],           # 六方 60°
+    [[3.0, 0, 0], [0, 3.0, 0], [0, 0, 25.0]],                  # 正方
+    [[3.0, 0, 0], [0, 4.5, 0], [0, 0, 25.0]],                  # 矩形
+    [[3.0, 0, 0], [1.0, 2.8284, 0], [0, 0, 25.0]],             # 中心矩形（菱形原胞）
+    [[3.0, 0, 0], [0.7, 4.1, 0], [0, 0, 25.0]],                # 斜方
+])
+@pytest.mark.parametrize("vac_first", [False, True])
+def test_pool_band_path_matches_skill_copies(cell, vac_first):
+    za = _za()
+    cell = np.asarray(cell, float)
+    vax = 2
+    if vac_first:
+        cell, vax = cell[[2, 0, 1]], 0
+    ref = za.band_path_2d(cell, vax)
+    for path in (ROOT / "skill" / "kl-dft-cpu" / "kl_common.py",
+                 ROOT / "skill" / "phonon-dft-cpu" / "kl_common.py",
+                 ROOT / "skill" / "_common" / "mlff" / "klmlff_common.py"):
+        kc = _load("klc_cmp_%s" % path.parent.name.replace("-", "_"), path, [path.parent])
+        got = kc.band_path_2d(cell, 51, vax)
+        assert got[2] == ref[2] and got[1] == ref[1]
+        assert np.allclose(np.asarray(got[0], float), np.asarray(ref[0], float))
+    assert all(abs(p[vax]) < 1e-12 for seg in ref[0] for p in seg)    # kz=0
+
+
+@pytest.mark.parametrize("gamma", [120.0, 60.0])
+@pytest.mark.parametrize("vac_first", [False, True])
+def test_write_band_yaml_2d_real_phonopy(tmp_path, gamma, vac_first):
+    phonopy = pytest.importorskip("phonopy")
+    from phonopy.structure.atoms import PhonopyAtoms
+    za = _za()
+    a = 2.5
+    t = math.radians(gamma)
+    cell = np.array([[a, 0, 0], [a * math.cos(t), a * math.sin(t), 0], [0, 0, 20.0]])
+    pos = [[0, 0, 0.5], [1 / 3, 2 / 3, 0.5]] if gamma == 120.0 else [[0, 0, 0.5], [1 / 3, 1 / 3, 0.5]]
+    scm = np.diag([3, 3, 1])
+    cart = 2
+    if vac_first:                                          # 真空放在第 0 个基矢（Cartesian 仍是 z）
+        cell = cell[[2, 0, 1]]
+        pos = [[p[2], p[0], p[1]] for p in pos]
+        scm = np.diag([1, 3, 3])
+    uc = PhonopyAtoms(symbols=["B", "N"], cell=cell, scaled_positions=pos)
+    ph = phonopy.Phonopy(uc, supercell_matrix=scm)
+    n = len(ph.supercell)
+    ph.force_constants = np.zeros((n, n, 3, 3))
+    lat = za.write_band_yaml_2d(ph, tmp_path / "band.yaml", npoints=11, cart_axis=cart)
+    assert lat == "hexagonal" and (tmp_path / "band.yaml").is_file()
+    bd = ph.get_band_structure_dict()
+    B = 2 * np.pi * np.linalg.inv(np.asarray(ph.primitive.cell, float)).T
+    qcart = np.concatenate([np.asarray(q, float) for q in bd["qpoints"]]) @ B
+    assert np.max(np.abs(qcart[:, 2])) < 1e-9                          # 没有沿真空方向的线段
+    kmax = max(np.linalg.norm(q) for q in qcart)
+    assert abs(kmax - 4 * np.pi / (3 * a)) < 1e-6                     # 走到真 K（BZ 角）
+
+
+def test_engine_and_fit_plot_use_2d_path():
+    eng = (ROOT / "skill" / "_common" / "fcfit" / "fc_fit_driver.py").read_text(encoding="utf-8")
+    i = eng.index("def _stability_gate(")
+    body = eng[i:eng.index("\ndef ", i + 10)]
+    assert "za_2d.write_band_yaml_2d(ph_nonac" in body
+    assert body.index("if is2d:\n            # 2026-10-14") < body.index("auto_band_structure")
+    plot = (ROOT / "skill" / "fit-fc-thermal" / "fc_plot_phonon.py").read_text(encoding="utf-8")
+    assert "za_2d.write_band_yaml_2d(ph, dst" in plot
