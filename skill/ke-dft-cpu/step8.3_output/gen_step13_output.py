@@ -37,7 +37,7 @@ from pathlib import Path
 # [SKILL_REV] 版本戳：写进 comparison_summary.txt。每次改本脚本逻辑后更新。
 #   陈旧副本已咬人三次（step12/step9b 盖戳后，step13 是最后一个没盖的），
 #   这里盖戳便于从产物反查到底跑的是哪份 skill 副本。
-_SKILL_REV = "2026-10-14-0046"   # [0046] 本征五参数套件支持 3D（读 S8 的 step8_amset + subset_*.json；_geom_3d 体胞几何、c/t=1、对角 (xx+yy+zz)/3）；3D 也出 transport_plots/<M>_transport|<M>_intrinsic.png 9x5 面板   # [0045] bt2_muscan 同时画 thickness(我们)/cell(文献) 两种口径；[0041] transport_plots/defect_equilibrium/（缺陷平衡净浓度 σ/S/PF/κe vs T）   # 2026-10-13-0040   # [0040] transport_plots/intrinsic_carrier/（未掺杂本征载流子 σ/S/PF/κe vs T）；图例/文件名一律用实际机制组合 amset_<机制>；2026-10-13-0039   # [0039] transport_plots/datasets/：每个数据集单独一张 σ/S/PF/κe 图 + csv； [0038] 本征/子集图读 subset_*.json（SUBSETS）；[0036] transport_plots 加 bt2_muscan/ + amset_scan/ 两个扫描图子文件夹；[0035] transport_plots 合并 + τ 对比（tau/）
+_SKILL_REV = "2026-10-15-0047"   # [0047] <M>_intrinsic.png 只画基础 4 条本征曲线（此前与 <M>_transport.png 同图仅换标题）+ intrinsic CSV 同步只含 4 条   # [0046] 本征五参数套件支持 3D（读 S8 的 step8_amset + subset_*.json；_geom_3d 体胞几何、c/t=1、对角 (xx+yy+zz)/3）；3D 也出 transport_plots/<M>_transport|<M>_intrinsic.png 9x5 面板   # [0045] bt2_muscan 同时画 thickness(我们)/cell(文献) 两种口径；[0041] transport_plots/defect_equilibrium/（缺陷平衡净浓度 σ/S/PF/κe vs T）   # 2026-10-13-0040   # [0040] transport_plots/intrinsic_carrier/（未掺杂本征载流子 σ/S/PF/κe vs T）；图例/文件名一律用实际机制组合 amset_<机制>；2026-10-13-0039   # [0039] transport_plots/datasets/：每个数据集单独一张 σ/S/PF/κe 图 + csv； [0038] 本征/子集图读 subset_*.json（SUBSETS）；[0036] transport_plots 加 bt2_muscan/ + amset_scan/ 两个扫描图子文件夹；[0035] transport_plots 合并 + τ 对比（tau/）
 #   bump 记录：2026-10-11-0035 —— transport_plots 合并：intrinsic 图并入 transport 图（4 条数据集
 #   overall / intrinsic / ADP only / BT2xDPT-tau），不再单独出 <M>_intrinsic*.{png,csv}，
 #   只留 <M>_transport.png + 每温度 CSV + <M>_params_<T>K.csv。
@@ -2681,6 +2681,9 @@ def write_transport_plots(cwd, out, is_2d):
                                                单独一张 σ/S/PF/κe 随浓度图，每温度一条线
     [0035] 原 <M>_intrinsic.png 与 <M>_transport.png 数据集重叠（overall/ADP/DPT 三套重复），
       已合并为一张 <M>_transport.png；额外机制对照按 S8.4 可用结果动态显示。
+    [0047] 2026-10-15 用户选 2：<M>_intrinsic.png 恢复为【只画基础 4 条】(overall / 去 IMP /
+      ADP only / BT2×DPT-τ)，与带机制对照的 <M>_transport.png 内容真正区分；
+      _intrinsic_data_<T>K.csv 同步只含这 4 条（_transport_data_<T>K.csv 仍是全数据集）。
     [0034] 输出位置 = cwd.parent/transport_plots/（材料根，不在 step8.3_output 内）；
       skill.yaml 的 S8.3 用 fetch_extra 让 autozt fetch 一并把它拉回本地。
       绝不写 out 根目录的 comparison_300K.*。失败不阻断 S8.3 完成标记。"""
@@ -2756,19 +2759,24 @@ def write_transport_plots(cwd, out, is_2d):
         cols = ["T_K", "dataset", "type", "n_cell_cm-3", "n_2D_cm-2", "n_lit_cm-3",
                 "carriers_per_cell", "carriers_per_atom", "in_interpret_range",
                 "S_uV/K", "sigma_S/m", "PF_W/mK2", "kappa_e_W/mK", "mu_cm2/Vs", "flag"]
+        _base_names = {"overall", "intrinsic", "ADP_only", "BT2_DPTtau"}   # [选 2] intrinsic 产物只含这 4 条
         for T in temps:
-            # [用户 2026-10-14 选 B] 恢复独立 intrinsic 产物名：同一份数据同时写
-            #   <M>_transport_data_<T>K.csv 与 <M>_intrinsic_data_<T>K.csv
+            # [用户 2026-10-14 选 B / 2026-10-15 选 2] 独立 intrinsic 产物名：
+            #   transport CSV = 全数据集；intrinsic CSV = 仅基础 4 条（与 intrinsic 图一致）
             for _sfx in ("transport", "intrinsic"):
                 with open(plots / ("%s_%s_data_%dK.csv" % (M, _sfx, int(round(T)))), "w", newline="") as fh:
                     w = csv.writer(fh); w.writerow(cols)
                     for r in rows:
-                        if abs(float(r["T_K"]) - T) < 1e-6:
-                            w.writerow([r.get(c, "") for c in cols])
+                        if abs(float(r["T_K"]) - T) > 1e-6:
+                            continue
+                        if _sfx == "intrinsic" and r["dataset"] not in _base_names:
+                            continue
+                        w.writerow([r.get(c, "") for c in cols])
         quants = [("mu_cm2/Vs", "mu  (cm^2/V/s)"), ("S_uV/K", "S  (uV/K)"), ("sigma_S/m", "sigma  (S/m)"),
                   ("PF_W/mK2", "PF  (W/m/K$^2$)"), ("kappa_e_W/mK", "kappa_e  (W/m/K)")]
         dsets = [("overall", "tab:red", "--", "s"), ("intrinsic", "tab:orange", "-.", "D"),
                  ("ADP_only", "tab:green", ":", "^"), ("BT2_DPTtau", "tab:blue", "-", "o")]
+        _base_dsets = list(dsets)   # [用户 2026-10-15 选 2] 本征专用图只画这 4 条基础曲线
         _LBL = {"overall": "AMSET overall",
                 "intrinsic": "amset (all but IMP)",
                 "ADP_only": "amset_ADP",
@@ -2790,37 +2798,43 @@ def write_transport_plots(cwd, out, is_2d):
                                  ("ODP", "tab:pink", ":", "P"), ("IVS", "tab:gray", "--", "X")):
             if _k in _have:
                 dsets.append((_k, _c, _ls, _mk))
-        fig, axes = grid(len(temps), 5, ["%d K" % t for t in temps], [q[1] for q in quants])
-        for rr, T in enumerate(temps):
-            sub = [r for r in rows if abs(float(r["T_K"]) - T) < 1e-6]
-            for jc, (col, _) in enumerate(quants):
-                ax = axes[rr][jc]
-                for ds, color, ls, mk in dsets:
-                    dd = [r for r in sub if r["dataset"] == ds]
-                    if not dd:
-                        continue
-                    n = np.array([fnum(r["n_cell_cm-3"]) for r in dd])
-                    y = np.array([fnum(r[col]) for r in dd])
-                    keep = np.abs(n) >= NFLOOR
-                    seg(ax, n[keep], y[keep], color=color, lw=1.3, ls=ls, marker=mk, ms=3.2)
-                if col == "S_uV/K":
-                    ax.set_ylim(-1000, 1000); ax.axhline(0, color="k", lw=0.5)
-                else:
-                    ax.set_yscale("log")
-        hh = [Line2D([], [], color=c, lw=1.4, ls=ls, marker=mk, ms=4, label=_LBL.get(ds, ds)) for ds, c, ls, mk in dsets]
-        fig.legend(handles=hh, loc="lower center", ncol=3, fontsize=9, frameon=False)
-        fig.suptitle("%s  transport  (AMSET mechanisms from this run; BT2 x DPT tau)  100-900 K" % M, fontsize=12)
-        fig.tight_layout(rect=[0, 0.03, 1, 0.985])
-        fig.savefig(plots / ("%s_transport.png" % M), dpi=130)
-        # [用户 2026-10-14 选 B] [0035] 把 intrinsic 图并进 transport 后，<M>_intrinsic.png
-        #   不再更新，一直冻结在合并那天（集群上就是 10-11 那份）。这里把同一张 9x5 网格
-        #   再存一份 <M>_intrinsic.png，沿用合并前的标题措辞，让那张图重新随 S8.3 更新。
-        fig.suptitle("%s  intrinsic transport  (overall / intrinsic(no IMP) / ADP only / BT2xDPT-tau)"
-                     "  100-900 K" % M, fontsize=12)
-        fig.savefig(plots / ("%s_intrinsic.png" % M), dpi=130)
-        plt.close(fig)
-        print("[plots] %s_transport.png + %s_intrinsic.png / _transport|_intrinsic_data_<T>K.csv x%d"
-              % (M, M, len(temps)))
+        def _render_9x5(dsets_used, title, outpath):
+            """[用户 2026-10-15 选 2] 同一套 9x5 网格渲染器：transport 图带本轮机制对照、
+            intrinsic 图只画基础 4 条 —— 两张图内容真正不同（此前是同一张 fig 换标题存两次）。"""
+            fig, axes = grid(len(temps), 5, ["%d K" % t for t in temps], [q[1] for q in quants])
+            for rr, T in enumerate(temps):
+                sub = [r for r in rows if abs(float(r["T_K"]) - T) < 1e-6]
+                for jc, (col, _) in enumerate(quants):
+                    ax = axes[rr][jc]
+                    for ds, color, ls, mk in dsets_used:
+                        dd = [r for r in sub if r["dataset"] == ds]
+                        if not dd:
+                            continue
+                        n = np.array([fnum(r["n_cell_cm-3"]) for r in dd])
+                        y = np.array([fnum(r[col]) for r in dd])
+                        keep = np.abs(n) >= NFLOOR
+                        seg(ax, n[keep], y[keep], color=color, lw=1.3, ls=ls, marker=mk, ms=3.2)
+                    if col == "S_uV/K":
+                        ax.set_ylim(-1000, 1000); ax.axhline(0, color="k", lw=0.5)
+                    else:
+                        ax.set_yscale("log")
+            hh = [Line2D([], [], color=c, lw=1.4, ls=ls, marker=mk, ms=4, label=_LBL.get(ds, ds))
+                  for ds, c, ls, mk in dsets_used]
+            fig.legend(handles=hh, loc="lower center", ncol=3, fontsize=9, frameon=False)
+            fig.suptitle(title, fontsize=12)
+            fig.tight_layout(rect=[0, 0.03, 1, 0.985])
+            fig.savefig(outpath, dpi=130)
+            plt.close(fig)
+
+        _render_9x5(dsets,
+                    "%s  transport  (AMSET mechanisms from this run; BT2 x DPT tau)  100-900 K" % M,
+                    plots / ("%s_transport.png" % M))
+        _render_9x5(_base_dsets,
+                    "%s  intrinsic transport  (overall / intrinsic(no IMP) / ADP only / BT2xDPT-tau)"
+                    "  100-900 K" % M,
+                    plots / ("%s_intrinsic.png" % M))
+        print("[plots] %s_transport.png (基础 4 条 + 机制对照) + %s_intrinsic.png (仅基础 4 条) / "
+              "_transport|_intrinsic_data_<T>K.csv x%d" % (M, M, len(temps)))
 
         # ---- [0039] 每个数据集单独一张 σ/S/PF/κe（随浓度，每温度一条线）：datasets/<M>_<数据集>.png + .csv ----
         #   主图把 overall / intrinsic / ADP only / BT2 挤在一张 9x5 里，intrinsic（去 IMP）等子集没有单独的图。

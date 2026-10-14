@@ -17,8 +17,8 @@
 <输出目录>  独立输出目录（约定: <M>/transport_plots/），生成:
               <M>_transport.png / <M>_transport_data_<T>K.csv   9温度x5参数(mu/S/sigma/PF/kappa_e)，
                         数据集 4 条：overall / intrinsic(去 IMP) / ADP_only / BT2×DPT-τ
-              <M>_intrinsic.png / <M>_intrinsic_data_<T>K.csv   [B 2026-10-14] 同一张 9x5 网格
-                        再存一份旧名（[0035] 合并前 <M>_intrinsic.png 会永久冻结，故恢复输出）
+              <M>_intrinsic.png / <M>_intrinsic_data_<T>K.csv   [B 2026-10-14 / 2026-10-15 选 2]
+                        只含上列 4 条基础曲线（此前与 transport 图重复，现内容真正区分；恢复了 [0035] 合并前会永久冻结的旧名）
               <M>_params_<T>K.csv                          每个温度一张参数表(E1/C2D/m*/tau/mu)
 
 数据来源:
@@ -211,12 +211,14 @@ def make_intrinsic(mdir, out, M):
     cols = ["T_K", "dataset", "type", "n_cell_cm-3", "n_2D_cm-2", "n_lit_cm-3",
             "carriers_per_cell", "carriers_per_atom", "in_interpret_range",
             "S_uV/K", "sigma_S/m", "PF_W/mK2", "kappa_e_W/mK", "mu_cm2/Vs", "flag"]
+    _names = {ds for ds, _c, _ls, _mk in DATASETS}   # [2026-10-15 选 2] intrinsic CSV 只含 4 条基础曲线
     for T in temps:                                 # 每温度一个 CSV（[B] 用 intrinsic 名）
         with open(os.path.join(out, "%s_intrinsic_data_%dK.csv" % (M, int(round(T)))), "w", newline="") as fh:
             w = csv.writer(fh); w.writerow(cols)
             for r in rows:
-                if abs(float(r["T_K"]) - T) < 1e-6:
-                    w.writerow([r.get(c, "") for c in cols])
+                if abs(float(r["T_K"]) - T) > 1e-6 or r["dataset"] not in _names:
+                    continue
+                w.writerow([r.get(c, "") for c in cols])
     fig, axes = axes_grid(len(temps), 5, ["%d K" % t for t in temps], [q[1] for q in QUANTS_I])
     for rr, T in enumerate(temps):
         sub = [r for r in rows if abs(float(r["T_K"]) - T) < 1e-6]
