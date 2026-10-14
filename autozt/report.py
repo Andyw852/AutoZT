@@ -1224,10 +1224,15 @@ def _json_changes(data, state_path):
         "unchanged": not first_run and len(diffs) == 0,
     }
 
-def auto_off_reason(m):
+def auto_off_reason(m, default=None):
     """[V160] 这个材料为什么不会被 auto-advance 推进；会推进返回 None。
-    auto-advance 只推进 project_setting/setting.yaml 里显式写了 auto_advance: true 的材料（有意的，
-    防止只为别的技能 init 过的材料被误提交）。"""
+
+    推进判定（材料级优先、全局做缺省）：
+      · setting.yaml 显式 auto_advance: true  -> 推进（不管全局）
+      · 显式 false                            -> 不推进
+      · 没写这个键                             -> 回退 default：None=视为"手动不推进"；
+         default=True 表示全局 auto_advance 开启，此时推进
+    这样"给单个材料写 auto_advance: true 就能单独自动推进"，不必开全局总闸。"""
     ps = m.get("ps") or {}
     if not ps.get("dir"):
         return "未 init 本技能"
@@ -1235,9 +1240,11 @@ def auto_off_reason(m):
     v = st.get("auto_advance")
     if v is True:
         return None
-    if "auto_advance" not in st:
-        return "setting.yaml 没写 auto_advance"
-    return "auto_advance: %s" % ("false" if v is False else v)
+    if v is False:
+        return "auto_advance: false"
+    if default:
+        return None
+    return "setting.yaml 没写 auto_advance"
 
 
 def _summary_lines(data):

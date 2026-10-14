@@ -2372,22 +2372,23 @@ def tag_of(m, s):
 def auto_advance(cfg, data, force=False):
     from autozt import _AUTO_CASCADE_MAX, _BUSY_KINDS, _load_yaml_file, step_cfg
     from autozt.report import auto_off_reason
-    """status 时自动推进可开始的步骤（全局 tf.yaml 写 auto_advance: true 开启；
-    项目 setting.yaml 里 auto_advance: false 可单独关闭）。
+    """status 时自动推进可开始的步骤。推进判定逐材料做（见 auto_off_reason）：
+    · setting.yaml 显式 auto_advance: true -> 推进（即使全局 tf.yaml 关着）
+    · 显式 false -> 不推进
+    · 没写 -> 回退全局 tf.yaml 的 auto_advance
+    这样单个材料写 auto_advance: true 就能单独自动推进，不必开全局总闸。
     只推进 TODO/PREP（输入就绪/未生成）的活跃步骤；error 不自动重试；
     v1.4：SCANCEL（autozt stop 打了标记的）同样不推进，须显式 start/retry/rerun。
-    force=True 仅用于显式的一次性 advance，不写配置；项目级 auto_advance=false
+    force=True 仅用于显式的一次性 advance，不写配置；材料级 auto_advance=false
     仍然尊重。"""
-    if not force and not cfg.get("auto_advance"):
-        return
     # fixte⑬：磁盘复核 —— watch 是长驻进程，内存里的 cfg 可能是启动时的旧值
     # （热重载失败会被 except 吞掉，进程继续按旧配置提交作业）。这里每轮直接
-    # 读一次 tf.yaml：磁盘上关着就立刻返回，绝不提交。
+    # 读一次 tf.yaml 取全局缺省值（不再"关着就立刻返回"——那样会挡掉显式 true 的材料）。
+    _global_on = bool(cfg.get("auto_advance"))
     _cp = cfg.get("_config_path")
-    if not force and _cp and os.path.isfile(_cp):
+    if _cp and os.path.isfile(_cp):
         try:
-            if (_load_yaml_file(_cp) or {}).get("auto_advance") is False:
-                return
+            _global_on = bool((_load_yaml_file(_cp) or {}).get("auto_advance"))
         except Exception:
             pass
     _skipped = []
@@ -2398,8 +2399,8 @@ def auto_advance(cfg, data, force=False):
             st = (m.get("ps") or {}).get("setting") or {}
             # 未为本技能初始化的材料（无 project_setting -> ps.dir 为空）不自动推进：
             # 否则 band/ke 共用数据根时，ke 会把只 init 了 band 的材料也自动跑起来（误提交）。
-            # 显式 true 才推进；[V160] 原因写清楚（以前一律说"auto_advance: false"，没写这个键的也这么说）
-            _why = auto_off_reason(m)
+            # 显式 true 才推进；没写键回退全局 _global_on；false 关。
+            _why = auto_off_reason(m, _global_on)
             if _why:
                 _skipped.append("%s[%s]（%s）" % (m["name"], m["tt"], _why))
                 continue

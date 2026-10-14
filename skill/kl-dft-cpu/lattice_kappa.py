@@ -51,6 +51,7 @@
 
 from pathlib import Path
 from typing import Dict, Any, List, Optional
+import json
 import math
 import gzip
 import re
@@ -1203,7 +1204,47 @@ def _phonopy_primitive_to_pmg(phonon):
                          np.array(pcell.scaled_positions), coords_are_cartesian=False)
 
 
-def _resolve_band_path(phonon, band_yaml, npoints=101, symprec=1e-3):
+def _vacuum_axis_2d(phonon, C=None, vacuum_min=8.0):
+    """phonopy 原胞是不是 2D（单方向真空）；是则返回真空轴的【原胞基矢】下标，否则 None。
+
+    C["dim"] 显式给 "3d" 时直接按 3D；给 "2d" 时取真空最厚的基矢。没给时按原胞的真空间隙判
+    （与 dim_common.vacuum_per_axis 同一公式：垂直胞高 × 最大分数间隙，阈值 8 Å）。
+    直接在原胞上算，得到的就是原胞基矢下标 —— band_path_2d 要的正是它（primitive_matrix
+    可能把真空换到第 0 个基矢，用 POSCAR 的下标会取错方向）。"""
+    dim = str((C or {}).get("dim") or "").strip().lower()
+    if dim.startswith("3"):
+        return None
+    cell = np.asarray(phonon.primitive.cell, float)
+    frac = np.asarray(phonon.primitive.scaled_positions, float) % 1.0
+    vol = abs(float(np.linalg.det(cell)))
+    vacs = []
+    for i in range(3):
+        j, k = (i + 1) % 3, (i + 2) % 3
+        area = float(np.linalg.norm(np.cross(cell[j], cell[k])))
+        h = vol / area if area > 1e-12 else 0.0
+        f = np.sort(frac[:, i])
+        gaps = np.append(np.diff(f), f[0] + 1.0 - f[-1]) if len(f) > 1 else np.array([1.0])
+        vacs.append(float(gaps.max()) * h)
+    hit = [i for i, v in enumerate(vacs) if v >= vacuum_min]
+    if dim.startswith("2"):
+        return int(np.argmax(vacs))
+    return hit[0] if len(hit) == 1 else None
+
+
+def _resolve_band_path(phonon, band_yaml, npoints=101, symprec=1e-3, C=None):
+    # 2026-10-14：2D 走 kz=0 的二维路径（与 S5.1 / 共享引擎同一套格子分类与六方 K 点）。
+    #   原来一律 auto_band_structure（seekpath 是 3D 工具），2D 谱里多出 Γ-A 这类沿真空方向的线段。
+    vax = _vacuum_axis_2d(phonon, C)
+    if vax is not None:
+        from phonopy.phonon.band_structure import get_band_qpoints_and_path_connections
+        import kl_common as _kc
+        paths, labels, lat = _kc.band_path_2d(phonon.primitive.cell, npoints, vax)
+        qpoints, conn = get_band_qpoints_and_path_connections(paths, npoints=npoints)
+        phonon.run_band_structure(qpoints, path_connections=conn, labels=labels,
+                                  with_eigenvectors=False)
+        phonon.write_yaml_band_structure(filename=str(band_yaml))
+        logging.info("[q路径] 2D（%s 格子，真空=原胞第 %d 基矢）：kz=0 二维路径", lat, vax)
+        return
     try:
         phonon.auto_band_structure(plot=False, write_yaml=True, filename=str(band_yaml))
         logging.info("[q路径] 使用 seekpath 自动路径")
@@ -1221,6 +1262,15 @@ def _resolve_band_path(phonon, band_yaml, npoints=101, symprec=1e-3):
     logging.info("[q路径] 晶系=%s, 空间群=%s (No.%d)", sga.get_crystal_system(),
                  sga.get_space_group_symbol(), sga.get_space_group_number())
     kp = HighSymmKpath(struct, path_type="setyawan_curtarolo")
+    # ★ 2026-10-14：Setyawan-Curtarolo 的 k 点坐标是相对 pymatgen【标准原胞】的倒格子写的。
+    #   phonopy 原胞与它不是同一组基矢时（例如 γ=60° 的六方原胞），直接拿来用会把 K 点放到
+    #   Γ–M′ 线上（实测 |K| 只有正确值的 0.58 倍），图照样画出来。只在两组基矢逐分量相同时采用。
+    _kp_prim = getattr(kp, "prim", None)
+    if _kp_prim is None or not np.allclose(np.asarray(_kp_prim.lattice.matrix, float),
+                                           np.asarray(struct.lattice.matrix, float), atol=1e-4):
+        raise RuntimeError("seekpath 不可用，且 phonopy 原胞不是 pymatgen 的标准原胞，"
+                           "Setyawan-Curtarolo 路径坐标不能直接用（会画错路径）。"
+                           "请在本环境 pip install seekpath 后重跑。")
     kpts, branches = kp.kpath["kpoints"], kp.kpath["path"]
     band_paths, labels = [], []
     for br in branches:
@@ -1314,7 +1364,7 @@ def compute_band_and_check(phonon, band_dir, C, nac_vasprun=None):
                 logging.warning("重建无 NAC 动力学矩阵失败:%s", e2)
     logging.info("力常数 shape = %s", phonon.force_constants.shape)
     band_yaml = band_dir / "band-dft-cpu.yaml"
-    _resolve_band_path(phonon, band_yaml, npoints=C["band_npoints"], symprec=C["symprec_path"])
+    _resolve_band_path(phonon, band_yaml, npoints=C["band_npoints"], symprec=C["symprec_path"], C=C)
 
     bsobj = phonon.band_structure
     if bsobj is None:

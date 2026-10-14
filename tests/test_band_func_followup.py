@@ -231,3 +231,10 @@ def test_scissor_label_reads_hybrid_label():
         src = f.read_text(encoding="utf-8")
         assert '(d.get("hybrid") or {}).get("label")' in src
         assert '_fn = "HSE06" if "hse" in bs.parent.name' not in src
+
+
+def test_zt_main_records_functional_check():
+    """6074c71（zT 热图）在旧版文件上改，把 S20 的泛函一致性核对连调用一起删了 —— 防再丢。"""
+    src = (ROOT / "skill" / "zt-dft-cpu" / "step20_zt" / "gen_step20_zt.py").read_text(encoding="utf-8")
+    body = src[src.index("\ndef main("):]
+    assert "fcheck = functional_check(cwd)" in body and '"functional_check": fcheck' in body

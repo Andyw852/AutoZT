@@ -37,7 +37,7 @@ from pathlib import Path
 # [SKILL_REV] 版本戳：写进 comparison_summary.txt。每次改本脚本逻辑后更新。
 #   陈旧副本已咬人三次（step12/step9b 盖戳后，step13 是最后一个没盖的），
 #   这里盖戳便于从产物反查到底跑的是哪份 skill 副本。
-_SKILL_REV = "2026-10-13-0045"   # [0045] bt2_muscan 同时画 thickness(我们)/cell(文献) 两种口径；[0041] transport_plots/defect_equilibrium/（缺陷平衡净浓度 σ/S/PF/κe vs T）   # 2026-10-13-0040   # [0040] transport_plots/intrinsic_carrier/（未掺杂本征载流子 σ/S/PF/κe vs T）；图例/文件名一律用实际机制组合 amset_<机制>；2026-10-13-0039   # [0039] transport_plots/datasets/：每个数据集单独一张 σ/S/PF/κe 图 + csv； [0038] 本征/子集图读 subset_*.json（SUBSETS）；[0036] transport_plots 加 bt2_muscan/ + amset_scan/ 两个扫描图子文件夹；[0035] transport_plots 合并 + τ 对比（tau/）
+_SKILL_REV = "2026-10-14-0046"   # [0046] 本征五参数套件支持 3D（读 S8 的 step8_amset + subset_*.json；_geom_3d 体胞几何、c/t=1、对角 (xx+yy+zz)/3）；3D 也出 transport_plots/<M>_transport|<M>_intrinsic.png 9x5 面板   # [0045] bt2_muscan 同时画 thickness(我们)/cell(文献) 两种口径；[0041] transport_plots/defect_equilibrium/（缺陷平衡净浓度 σ/S/PF/κe vs T）   # 2026-10-13-0040   # [0040] transport_plots/intrinsic_carrier/（未掺杂本征载流子 σ/S/PF/κe vs T）；图例/文件名一律用实际机制组合 amset_<机制>；2026-10-13-0039   # [0039] transport_plots/datasets/：每个数据集单独一张 σ/S/PF/κe 图 + csv； [0038] 本征/子集图读 subset_*.json（SUBSETS）；[0036] transport_plots 加 bt2_muscan/ + amset_scan/ 两个扫描图子文件夹；[0035] transport_plots 合并 + τ 对比（tau/）
 #   bump 记录：2026-10-11-0035 —— transport_plots 合并：intrinsic 图并入 transport 图（4 条数据集
 #   overall / intrinsic / ADP only / BT2xDPT-tau），不再单独出 <M>_intrinsic*.{png,csv}，
 #   只留 <M>_transport.png + 每温度 CSV + <M>_params_<T>K.csv。
@@ -1510,8 +1510,27 @@ def _geom_2d(cwd):
                 "t_method": (lt.get("method") if isinstance(lt, dict) else None) or "?",
                 "area_cm2": _num(rec.get("inplane_cell_area_cm2")),
                 "num_atoms": _na,
-                "thr_atom": (_num(rec.get("carrier_per_atom_threshold")) or CARRIER_PER_ATOM_MAX) if _na else None}
+                "thr_atom": (_num(rec.get("carrier_per_atom_threshold")) or CARRIER_PER_ATOM_MAX) if _na else None,
+                "is_3d": False}
     return None
+
+
+def _geom_3d(cwd):
+    """[0046] 3D（体材料）浓度/归一化换算的几何：晶体胞没有真空层，
+    c = 胞高（= 体积/底面 = 三重积/|a×b|，正交胞即 c 轴长，Å）；t = c（不做层厚归一，c_over_t = 1）。
+    σ、κe、PF 用 AMSET 的体材料值；面密度列退化成「每胞截面」口径：
+    n_2D = n_cell × c，n_lit = n_2D / t = n_cell（即体浓度本身）。读不到结构文件 -> None。"""
+    A_cm2, V_cm3 = _cell_geometry(cwd)
+    if not A_cm2 or not V_cm3:
+        return None
+    c_A = V_cm3 / A_cm2 * 1e8                      # cm -> Å
+    if not c_A or c_A <= 0:
+        return None
+    _na = _cell_atoms(cwd)
+    return {"c_A": c_A, "t_A": c_A, "c_over_t": 1.0, "src": AMSET_DIR, "is_3d": True,
+            "t_method": "3D bulk cell (no layer thickness)",
+            "area_cm2": A_cm2, "num_atoms": _na,
+            "thr_atom": CARRIER_PER_ATOM_MAX if _na else None}
 
 
 def _sha256_file(p):
@@ -1546,12 +1565,13 @@ def _same_grid(q_dop, q_T, doping, temps):
         return False
 
 
-def load_intrinsic_sets(cwd):
-    """[0032][0038] 读 S8.4 可用结果集。返回 {"doping", "temps", "sets": {键: {...}}, "notes": [...]}；没有 S8.4 -> None。
+def load_intrinsic_sets(cwd, run_name=AMSET2D_DIR):
+    """[0032][0038][0046] 读可用结果集（2D 默认 S8.4 的 step8.4_amset2d；3D 传 run_name=step8_amset）。
+    返回 {"doping", "temps", "sets": {键: {...}}, "notes": [...]}；该目录没有可用 transport.json -> None。
     每套：{"S","sigma","kappa","mu": arr[nd][nT][3][3] 或 None, "partial": 只有 μ, "labels", "reproduce"}。
     本征文件的掺杂/温度网格必须与 transport.json 相同（同一次运行），否则不用。
     [0038] 优先读 subset_*.json（SUBSETS 生成）；没 subset 文件的键退回旧的 intrinsic_*.json。"""
-    j = _load_json(Path(cwd) / AMSET2D_DIR / "transport.json")
+    j = _load_json(Path(cwd) / run_name / "transport.json")
     if not j:
         return None
     doping = [float(x) for x in _unwrap(j["doping"])]
@@ -1561,7 +1581,7 @@ def load_intrinsic_sets(cwd):
     sets["overall"] = {"S": _unwrap(j.get("seebeck")), "sigma": _unwrap(j.get("conductivity")),
                        "kappa": _unwrap(j.get("electronic_thermal_conductivity")),
                        "mu": _unwrap(mob.get("overall") or mob.get("Overall")), "partial": False}
-    run_dir = Path(cwd) / AMSET2D_DIR
+    run_dir = Path(cwd) / run_name
     # [0038] 新格式 subset_*.json（按 dropped 集合分类，全机制 = overall 跳过）；没覆盖到的键退回旧的 intrinsic_*.json。
     sub_defs = _subset_file_defs(run_dir)
     covered = {d[0] for d in sub_defs}
@@ -1631,14 +1651,17 @@ def load_intrinsic_sets(cwd):
             "overall_labels": over_labels, "set_defs": set_defs}
 
 
-def _tv(arr, i, k):
-    """arr[nd][nT][3][3] -> (面内平均, xx, yy)；缺/NaN -> None。"""
+def _tv(arr, i, k, ndim=2):
+    """arr[nd][nT][3][3] -> (对角平均, xx, yy)；缺/NaN -> None。
+    [0046] 2D 取面内 (xx+yy)/2；3D 取对角 (xx+yy+zz)/3（立方/各向同性时两者相同）。"""
     try:
         t = arr[i][k]
         xx, yy = float(t[0][0]), float(t[1][1])
+        zz = float(t[2][2]) if ndim >= 3 else None
     except (TypeError, IndexError, ValueError):
         return None, None, None
-    v = [x if x == x else None for x in ((xx + yy) / 2.0, xx, yy)]
+    avg = (xx + yy) / 2.0 if zz is None else (xx + yy + zz) / 3.0
+    v = [x if x == x else None for x in (avg, xx, yy)]
     return v[0], v[1], v[2]
 
 
@@ -1693,6 +1716,7 @@ def build_intrinsic_rows(cwd, data, geom):
     DPT 每个温度、载流子一行（与掺杂无关，只有 μ）。返回 (rows, {T: (bt, dpt_T)})。"""
     A_cm2, V_cm3 = _cell_geometry(cwd)
     fac = geom["c_over_t"]
+    _nd = 3 if geom.get("is_3d") else 2            # [0046] 3D 的对角平均含 zz
     rows, extra, miss = [], {}, {"BT2": [], "DPT": []}
     marks = data.get("marks") or {}
     for k, T in enumerate(data["temps"]):
@@ -1714,7 +1738,7 @@ def build_intrinsic_rows(cwd, data, geom):
                 st = data["sets"].get(key)
                 if not st:
                     continue
-                vals = {q: _tv(st.get(q), i, k) for q in ("S", "sigma", "kappa", "mu")}
+                vals = {q: _tv(st.get(q), i, k, _nd) for q in ("S", "sigma", "kappa", "mu")}
                 rows.append(dict(base, dataset=key, **_row_from(vals, T, fac, geom)))
             if bt:
                 tau = _bt2_tau(dpt_T, "electron" if n3 < 0 else "hole")
@@ -1754,12 +1778,17 @@ def build_intrinsic_rows(cwd, data, geom):
 def write_intrinsic_table(out_dir, rows, geom, data):
     import csv
     with open(Path(out_dir) / INTR_CSV, "w", newline="", encoding="utf-8") as fh:
-        fh.write("# [0032] 本征输运参数表（S8.4 同一次运行；全部温度 × 原生掺杂档 × 数据集）\n")
-        fh.write("# 浓度：n_cell_cm-3 = AMSET/AutoZT 口径（含真空胞高 c=%.4f Å，负=n 型）；n_2D_cm-2 = n_cell×c；"
-                 "n_lit_cm-3 = n_2D/t（文献单层口径，t=%.4f Å，%s）；n_lit = n_cell × c/t（c/t=%.4f）\n"
-                 % (geom["c_A"], geom["t_A"], geom["t_method"], geom["c_over_t"]))
-        fh.write("# σ、κe、PF 按层厚 t 归一（= 元胞值 × c/t）；sheet_sigma_S = 片电导（与口径无关）；"
-                 "μ、S、Lorenz 与口径无关；分方向列为 xx/yy\n")
+        fh.write("# [0032][0046] 本征输运参数表（%s 同一次运行；全部温度 × 原生掺杂档 × 数据集）\n"
+                 % (AMSET_DIR if geom.get("is_3d") else AMSET2D_DIR))
+        fh.write("# 浓度：n_cell_cm-3 = AMSET/AutoZT 口径（%s c=%.4f Å，负=n 型）；n_2D_cm-2 = n_cell×c；"
+                 "n_lit_cm-3 = n_2D/t（%s，t=%.4f Å，%s）；n_lit = n_cell × c/t（c/t=%.4f）\n"
+                 % ("晶体胞高" if geom.get("is_3d") else "含真空胞高", geom["c_A"],
+                    "体材料浓度本身" if geom.get("is_3d") else "文献单层口径",
+                    geom["t_A"], geom["t_method"], geom["c_over_t"]))
+        fh.write("# %s；sheet_sigma_S = 片电导（与口径无关）；"
+                 "μ、S、Lorenz 与口径无关；分方向列为 xx/yy\n"
+                 % ("σ、κe、PF 用 AMSET 体材料值（3D，不做层厚归一，c/t = 1）" if geom.get("is_3d")
+                    else "σ、κe、PF 按层厚 t 归一（= 元胞值 × c/t）"))
         fh.write("# in_interpret_range：%s；S84_marks = S8.4 本征文件的 doping_marks；"
                  "BT2 的 μ = σ_总/(e|n_净|)，双极区（S 符号与类型相反）不给（flag 列）\n" % _interp_rule(geom)[1])
         fh.write("# dataset：ADP_only = 只 ADP（声学极限）；intrinsic = 去 IMP（%s）；overall = 全机制；"
@@ -1959,7 +1988,7 @@ def _intr_summary(out_dir, rows, geom, data, files):
 
 
 def write_intrinsic_suite(out, cwd, is_2d):
-    """[0032] 入口：2D 才做；缺 S8.4 / 几何时打印原因后跳过。返回生成的文件名列表。
+    """[0032][0046] 入口：2D 读 S8.4、3D 读 S8；缺结果 / 几何时打印原因后跳过。返回生成的文件名列表。
     先清掉 intrinsic/ 里上一轮的图表（温度网格变了、本轮跳过或失败时，旧文件不能冒充本轮结果）。"""
     odir = Path(out) / INTR_SUBDIR
     if odir.is_dir():
@@ -1971,16 +2000,15 @@ def write_intrinsic_suite(out, cwd, is_2d):
                 _n += 1
         if _n:
             print("[..] 本征五参数：清掉上一轮的 %d 个文件（%s/）" % (_n, INTR_SUBDIR))
-    if not is_2d:
-        print("[..] 本征五参数图：只做 2D（S8.4 只跑 2D），跳过")
-        return []
-    data = load_intrinsic_sets(cwd)
+    run_name = AMSET2D_DIR if is_2d else AMSET_DIR      # [0046] 3D 读 S8（step8_amset）
+    data = load_intrinsic_sets(cwd, run_name)
     if not data:
-        print("[..] 本征五参数图：没有 %s/transport.json，跳过" % AMSET2D_DIR)
+        print("[..] 本征五参数图：没有 %s/transport.json，跳过" % run_name)
         return []
-    geom = _geom_2d(cwd)
+    geom = _geom_2d(cwd) if is_2d else _geom_3d(cwd)
     if not geom:
-        print("[WARN] 本征五参数图：读不到 2d_correction.json 的 cell_c_A / c/t，无法换算浓度口径，跳过")
+        print("[WARN] 本征五参数图：%s，无法换算浓度口径，跳过"
+              % ("读不到 2d_correction.json 的 cell_c_A / c/t" if is_2d else "读不到结构文件（_cell_geometry）"))
         return []
     odir.mkdir(exist_ok=True)
     rows, extra = build_intrinsic_rows(cwd, data, geom)
@@ -2729,11 +2757,14 @@ def write_transport_plots(cwd, out, is_2d):
                 "carriers_per_cell", "carriers_per_atom", "in_interpret_range",
                 "S_uV/K", "sigma_S/m", "PF_W/mK2", "kappa_e_W/mK", "mu_cm2/Vs", "flag"]
         for T in temps:
-            with open(plots / ("%s_transport_data_%dK.csv" % (M, int(round(T)))), "w", newline="") as fh:
-                w = csv.writer(fh); w.writerow(cols)
-                for r in rows:
-                    if abs(float(r["T_K"]) - T) < 1e-6:
-                        w.writerow([r.get(c, "") for c in cols])
+            # [用户 2026-10-14 选 B] 恢复独立 intrinsic 产物名：同一份数据同时写
+            #   <M>_transport_data_<T>K.csv 与 <M>_intrinsic_data_<T>K.csv
+            for _sfx in ("transport", "intrinsic"):
+                with open(plots / ("%s_%s_data_%dK.csv" % (M, _sfx, int(round(T)))), "w", newline="") as fh:
+                    w = csv.writer(fh); w.writerow(cols)
+                    for r in rows:
+                        if abs(float(r["T_K"]) - T) < 1e-6:
+                            w.writerow([r.get(c, "") for c in cols])
         quants = [("mu_cm2/Vs", "mu  (cm^2/V/s)"), ("S_uV/K", "S  (uV/K)"), ("sigma_S/m", "sigma  (S/m)"),
                   ("PF_W/mK2", "PF  (W/m/K$^2$)"), ("kappa_e_W/mK", "kappa_e  (W/m/K)")]
         dsets = [("overall", "tab:red", "--", "s"), ("intrinsic", "tab:orange", "-.", "D"),
@@ -2745,7 +2776,7 @@ def write_transport_plots(cwd, out, is_2d):
                 "ADP_POP_ODP": "amset_ADP+POP+ODP",
                 "ODP": "amset_ODP", "IVS": "amset_IVS",
                 "BT2_DPTtau": "BT2×DPT-τ"}
-        _set_meta = load_intrinsic_sets(cwd) or {}
+        _set_meta = load_intrinsic_sets(cwd, AMSET2D_DIR if is_2d else AMSET_DIR) or {}
         _all_mechs = _set_meta.get("overall_labels") or []
         _im = ((_set_meta.get("sets") or {}).get("intrinsic") or {}).get("labels") or []
         if _all_mechs:
@@ -2780,8 +2811,16 @@ def write_transport_plots(cwd, out, is_2d):
         fig.legend(handles=hh, loc="lower center", ncol=3, fontsize=9, frameon=False)
         fig.suptitle("%s  transport  (AMSET mechanisms from this run; BT2 x DPT tau)  100-900 K" % M, fontsize=12)
         fig.tight_layout(rect=[0, 0.03, 1, 0.985])
-        fig.savefig(plots / ("%s_transport.png" % M), dpi=130); plt.close(fig)
-        print("[plots] %s_transport.png / _transport_data_<T>K.csv x%d" % (M, len(temps)))
+        fig.savefig(plots / ("%s_transport.png" % M), dpi=130)
+        # [用户 2026-10-14 选 B] [0035] 把 intrinsic 图并进 transport 后，<M>_intrinsic.png
+        #   不再更新，一直冻结在合并那天（集群上就是 10-11 那份）。这里把同一张 9x5 网格
+        #   再存一份 <M>_intrinsic.png，沿用合并前的标题措辞，让那张图重新随 S8.3 更新。
+        fig.suptitle("%s  intrinsic transport  (overall / intrinsic(no IMP) / ADP only / BT2xDPT-tau)"
+                     "  100-900 K" % M, fontsize=12)
+        fig.savefig(plots / ("%s_intrinsic.png" % M), dpi=130)
+        plt.close(fig)
+        print("[plots] %s_transport.png + %s_intrinsic.png / _transport|_intrinsic_data_<T>K.csv x%d"
+              % (M, M, len(temps)))
 
         # ---- [0039] 每个数据集单独一张 σ/S/PF/κe（随浓度，每温度一条线）：datasets/<M>_<数据集>.png + .csv ----
         #   主图把 overall / intrinsic / ADP only / BT2 挤在一张 9x5 里，intrinsic（去 IMP）等子集没有单独的图。
@@ -2847,11 +2886,11 @@ def write_transport_plots(cwd, out, is_2d):
             sub = [r for r in R if int(float(r["T_K"])) == T]
             with open(plots / ("%s_params_%dK.csv" % (M, T)), "w", newline="") as fh:
                 w = csv.writer(fh)
-                w.writerow(["Type", "Carrier", "Direction", "E1 (eV)", "C2D (N/m)", "m* (me)", "mu (cm2/V/s)", "tau (1e-15 s)"])
+                w.writerow(["Type", "Carrier", "Direction", "E1 (eV)", ("C2D (N/m)" if is_2d else "C3D (GPa)"), "m* (me)", "mu (cm2/V/s)", "tau (1e-15 s)"])
                 for c in ("electron", "hole"):
                     for r in [x for x in sub if x["carrier"] == c]:
                         w.writerow([M, "N" if c == "electron" else "P", r["direction"], r["E1_eV"],
-                                    r["C_2D_N_per_m"], r["m_eff_m0"], r["mu_DPT"], r["tau_DPT_fs"]])
+                                    r[_c_col(is_2d)], r["m_eff_m0"], r["mu_DPT"], r["tau_DPT_fs"]])
         print("[plots] %s_params_<T>K.csv x%d" % (M, len(temps)))
 
     # ---- ⑥ bt2 μ 扫描图 + amset 浓度扫描图（各放一个子文件夹）----

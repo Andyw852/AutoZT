@@ -36,6 +36,17 @@ STEP1_CANDS = (INPUTS + "/structure",)
 KL_STEP1 = INPUTS + "/kl_step1/workflow_method.txt"   # skill.yaml push_paths 推来的 kl S1 记录（可能没有）
 T_TARGETS = (300.0, 500.0, 700.0, 900.0)   # zt_vs_doping 想画的目标温度
 
+# ---- [0047] zT(n,T) 热图的【跨材料统一色板】 ---------------------------------------------
+# 同一套颜色 + 同一个数值范围 -> 不同材料的 zt_heatmap.png 颜色含义一致，可直接并排比较。
+# 单色相顺序色板「白 -> 浅粉 -> 酒红」（浅 = ZT 小，深 = ZT 大）。
+# 两端按用户 2026-10-14 指定：最深 #B8244A、浅 #F6D3DE；更浅端用近白 #FFF7FA（比纯白略粉，
+# 让 ZT≈0 的格子仍能看出边界，不和白格线融成一片）。中间为线性过渡。
+ZT_CMAP_COLORS = ("#FFF7FA", "#F6D3DE", "#EAB0C0", "#DD8DA3", "#D16A85", "#C44768", "#B8244A")
+ZT_CMAP = "autozt_zt"
+ZT_INK = "#B8244A"                     # 标题用的同色系深色
+ZT_AXIS = "#000000"                    # [0048] 坐标轴（带箭头的横/纵轴 + 刻度数字/轴名）用黑色
+ZT_CMAP_VMAX_DEFAULT = "0.3"           # 统一色标上限（ZT）；写 auto = 退回每材料自适应的旧行为
+
 
 def _params(cwd):
     """读 tf 合成并推下来的 step.conf 的 [params]（读不到就用默认值）。"""
@@ -257,7 +268,11 @@ def _have_matplotlib():
 
 
 def heatmap_data(grid):
-    """zT(n, T) 热图数据：按载流子类型分开，|n| 升序为列、T 为行；ZT 缺值为 None。"""
+    """zT(n, T) 热图数据：按载流子类型分开，|n| 升序为列、T 为行；ZT 缺值为 None。
+    [0050] 用户 2026-10-14：**整行全空**的温度从热图里剔除（图上不留空白横带）。
+    判据按实际数据：某个温度在 n/p 两栏都拿不到 ZT 才删 —— 例如 κ_L 只覆盖到 800 K 时
+    900 K 整行是空的（ZT 记 null）就不画；**有 900 K 数据的材料照常保留那一行**，
+    不写死温度、不按温度值硬筛。两栏共用同一套温度行，行距保持对齐。"""
     temps = list(grid["temperatures"])
     out = {}
     for kind in ("n", "p"):
@@ -268,56 +283,203 @@ def heatmap_data(grid):
         out[kind] = {"doping_cm-3": [abs(r["doping_cm-3"]) for r in rows],
                      "temperatures": temps,
                      "zt": [[r["ZT"][j] for r in rows] for j in range(len(temps))]}
+    if not out:
+        return out
+    keep = [j for j in range(len(temps))                      # 全栏都没值的温度 -> 剔除
+            if any(any(v is not None for v in d["zt"][j]) for d in out.values())]
+    for d in out.values():
+        d["temperatures"] = [temps[j] for j in keep]
+        d["zt"] = [d["zt"][j] for j in keep]
     return out
 
 
-def make_heatmap(out, grid, meta, plt):
-    """zT(n, T) 热图：n 型 / p 型两栏，横轴 |n|（对数刻度的档位）、纵轴 T。"""
+def _zt_cmap(plt):
+    """[0047] 统一色板：浅粉 -> 酒红的单色相顺序 cmap（所有材料共用）。"""
+    from matplotlib.colors import LinearSegmentedColormap
+    return LinearSegmentedColormap.from_list(ZT_CMAP, list(ZT_CMAP_COLORS))
+
+
+def _zt_vmax(par, data):
+    """[0047] 统一色标上限：默认所有材料同一把尺子（ZT_CMAP_VMAX，出厂 1.0）；
+    写成 auto 时退回「每材料取自身最大值」的旧行为。返回 (上限, 说明文字)。"""
+    amax = max((v for d in data.values() for row in d["zt"] for v in row if v is not None),
+               default=None)
+    spec = str((par or {}).get("ZT_CMAP_VMAX", ZT_CMAP_VMAX_DEFAULT) or "").strip().lower()
+    if spec and spec != "auto":
+        try:
+            v = float(spec)
+            if v > 0:
+                return v, "%.3g" % v
+        except ValueError:
+            pass
+    return amax, "auto"
+
+
+def _n_tick(x):
+    """浓度档位标签（对数档位）：1e17 -> $10^{17}$；0 档（未掺杂点）标 0。"""
+    try:
+        if abs(float(x)) < 1e-12:
+            return "0"
+        return "$10^{%d}$" % int(("%.0e" % float(x)).split("e")[1])
+    except (TypeError, ValueError, IndexError):
+        return str(x)
+
+
+def make_heatmap(out, grid, meta, plt, par=None):
+    """[0047] zT(n, T) 热图：n 型 / p 型两栏，横轴 |n|（对数档位）、纵轴 T。
+    色板与色标【跨材料统一】（ZT_CMAP / ZT_CMAP_VMAX）：浅粉->酒红、白格线分隔档位，
+    峰值打星并标数值；超过统一上限的点按上限上色（图下注明）。"""
     import numpy as np
     data = heatmap_data(grid)
     if not data:
-        return
+        return None
     kinds = [k for k in ("n", "p") if k in data]
-    vmax = max((v for d in data.values() for row in d["zt"] for v in row
-                if v is not None), default=None)
+    vmax, vsrc = _zt_vmax(par, data)
     if not vmax:
-        return
-    fig, axes = plt.subplots(1, len(kinds), figsize=(5.2 * len(kinds) + 1.0, 4.4),
-                             squeeze=False)
+        return None
+    clipped = any(v > vmax for d in data.values() for row in d["zt"] for v in row if v is not None)
+    cmap = _zt_cmap(plt)
+    fig, axes = plt.subplots(1, len(kinds), figsize=(4.7 * len(kinds), 4.6), squeeze=False)
     im = None
     for ax, kind in zip(axes[0], kinds):
         d = data[kind]
-        z = np.array([[np.nan if v is None else v for v in row] for row in d["zt"]], float)
-        im = ax.imshow(z, origin="lower", aspect="auto", cmap="magma", vmin=0, vmax=vmax,
+        nn, nt = len(d["doping_cm-3"]), len(d["temperatures"])
+        z = np.array([[np.nan if v is None else min(float(v), vmax) for v in row]
+                      for row in d["zt"]], float)
+        im = ax.imshow(z, origin="lower", aspect="auto", cmap=cmap, vmin=0.0, vmax=vmax,
                        interpolation="nearest")
-        ax.set_xticks(range(len(d["doping_cm-3"])))
-        ax.set_xticklabels(["%.0e" % x for x in d["doping_cm-3"]], rotation=45,
-                           ha="right", fontsize=7)
-        ax.set_yticks(range(len(d["temperatures"])))
-        ax.set_yticklabels(["%g" % t for t in d["temperatures"]], fontsize=7)
-        ax.set_xlabel("%s-type carrier concentration (cm$^{-3}$)" % kind)
-        ax.set_ylabel("T (K)")
-        ax.set_title("%s-type zT(n, T)" % kind)
-        j, i = np.unravel_index(np.nanargmax(z), z.shape) if np.isfinite(z).any() else (None, None)
-        if j is not None:
-            ax.plot(i, j, marker="*", ms=12, mfc="white", mec="black", mew=0.8)
-            ax.annotate("%.2f" % z[j, i], (i, j), xytext=(6, 6), textcoords="offset points",
-                        color="black" if z[j, i] > 0.6 * vmax else "white",
-                        fontsize=8, fontweight="bold")
-    fig.colorbar(im, ax=list(axes[0]), label="zT", shrink=0.9)
-    fig.suptitle("zT(n, T) — %s" % meta["material"])
+        ax.set_xticks(range(nn))
+        ax.set_xticklabels([_n_tick(x) for x in d["doping_cm-3"]], fontsize=8.5)
+        ax.set_yticks(range(nt))
+        ax.set_yticklabels(["%g" % t for t in d["temperatures"]], fontsize=8.5)
+        if nn > 6:                      # 档位多才转 45°，否则横排更清爽
+            for lb in ax.get_xticklabels():
+                lb.set_rotation(45)
+                lb.set_ha("right")
+                lb.set_rotation_mode("anchor")
+        ax.set_xticks(np.arange(-.5, nn, 1), minor=True)        # 白格线：分隔相邻档位
+        ax.set_yticks(np.arange(-.5, nt, 1), minor=True)
+        ax.grid(which="minor", color="white", linewidth=1.8)
+        ax.tick_params(which="minor", length=0)
+        ax.tick_params(length=2.5, width=0.8, colors=ZT_AXIS)
+        for lb in list(ax.get_xticklabels()) + list(ax.get_yticklabels()):
+            lb.set_color(ZT_AXIS)
+        for sp in ax.spines.values():
+            sp.set_visible(False)
+        ax.set_xlabel(r"$n$  (cm$^{-3}$)", fontsize=10.5, color=ZT_AXIS, labelpad=3)
+        ax.set_ylabel(r"$T$  (K)", fontsize=10.5, color=ZT_AXIS, labelpad=3)
+        # [0048] 黑色坐标轴：左/下两条带末端箭头的轴（参考图风格）；刻度数字与轴名同黑
+        _x0, _x1, _y0, _y1 = -0.5, nn - 0.5, -0.5, nt - 0.5
+        ax.set_xlim(_x0 - 0.06, _x1 + 0.62)
+        ax.set_ylim(_y0 - 0.06, _y1 + 0.62)
+        for _hd, _tl in (((_x1 + 0.48, _y0), (_x0, _y0)), ((_x0, _y1 + 0.48), (_x0, _y0))):
+            ax.annotate("", xy=_hd, xytext=_tl, annotation_clip=False,
+                        arrowprops=dict(arrowstyle="-|>", color=ZT_AXIS, lw=1.3,
+                                        shrinkA=0, shrinkB=0, mutation_scale=13),
+                        zorder=6)
+        ax.set_title("%s-type  zT($n$, $T$)" % kind, fontsize=13, pad=9,
+                     color=ZT_INK, fontweight="bold")
+        if np.isfinite(z).any():
+            j, i = np.unravel_index(np.nanargmax(z), z.shape)
+            ax.plot(i, j, marker="*", ms=13, mfc="white", mec=ZT_INK, mew=1.0, ls="none", zorder=3)
+            ax.annotate("%.2f" % z[j, i], (i, j), xytext=(7, 6), textcoords="offset points",
+                        color=("white" if z[j, i] > 0.55 * vmax else ZT_INK),
+                        fontsize=9, fontweight="bold", zorder=4)
+    cbar = fig.colorbar(im, ax=list(axes[0]), shrink=0.85, pad=0.035,
+                        extend=("max" if clipped else "neither"))
+    cbar.set_label("zT", fontsize=10, color=ZT_INK)
+    cbar.outline.set_visible(False)
+    cbar.ax.tick_params(length=2, width=0.7, colors=ZT_INK, labelsize=8.5)
+    # [0049] 用户 2026-10-14：去掉最上面的总标题 "zT(n, T) — <材料>"，
+    #   以及最下面那行 color scale 脚注（统一色标仍写进 zt_summary 的 notes，图面只留两栏面板）。
     fig.savefig(Path(out) / "zt_heatmap.png", dpi=150, bbox_inches="tight")
     plt.close(fig)
+    return {"vmax": vmax, "vsrc": vsrc, "clipped": clipped}
 
 
-def make_plots(out, grid, peaks, meta):
+def make_per_temperature(out, grid, meta, peaks):
+    """[0049] 每个温度点一个文件夹：report.txt + report.json。
+    每个文件夹放该温度下【所有掺杂档】的 ZT 及电子/声子输运参数（S/σ/κe/κL/κtot/PF），
+    并标出该温度的峰值 ZT（n/p 各一）。"""
+    import json as _json
+    temps = grid["temperatures"]
+    kl_used = grid.get("kappa_L_used") or [None] * len(temps)
+    rows = grid["rows"]
+    root = Path(out) / "per_temperature"
+    root.mkdir(exist_ok=True)
+    amset_note = next((n for n in grid.get("notes", []) if "散射机制" in n), "")
+    n_written = 0
+    for jT, T in enumerate(temps):
+        folder = root / ("%gK" % T)
+        folder.mkdir(exist_ok=True)
+        klT = kl_used[jT] if jT < len(kl_used) else None
+        recs = []
+        for r in rows:
+            j = jT if jT < len(r["ZT"]) else None
+            if j is None:
+                continue
+            recs.append({
+                "doping_cm-3": r["doping_cm-3"],
+                "type": r["type"],
+                "seebeck_uV/K": r["seebeck_uV/K"][j],
+                "sigma_S/m": r["sigma_S/m"][j],
+                "kappa_e_W/mK": r["kappa_e_W/mK"][j],
+                "kappa_L_W/mK": r["kappa_L_W/mK"][j],
+                "kappa_tot_W/mK": r["kappa_tot_W/mK"][j],
+                "PF_W/mK2": r["PF_W/mK2"][j],
+                "ZT": r["ZT"][j],
+            })
+        # 该温度的峰值：n / p 各取 ZT 最大（只取 ZT 非 None）
+        peak = {"n": None, "p": None}
+        for r in recs:
+            if r["ZT"] is None:
+                continue
+            k = r["type"] if r["type"] in ("n", "p") else "p"
+            if peak[k] is None or r["ZT"] > peak[k]["ZT"]:
+                peak[k] = r
+        # ---- report.txt ----
+        lines = []
+        lines.append("# ZT 与输运参数 @ T = %.1f K  —  %s" % (T, meta["material"]))
+        lines.append("# κ_L = %s W/m/K" % ("%.4g" % klT if klT is not None else "n/a"))
+        if amset_note:
+            lines.append("# %s" % amset_note)
+        lines.append("#")
+        lines.append("# %-14s %-4s %10s %11s %9s %9s %9s %10s %9s" % (
+            "doping(cm-3)", "type", "S(uV/K)", "sigma(S/m)", "kappa_e", "kappa_L",
+            "kappa_tot", "PF(W/mK2)", "ZT"))
+        _hdr = "%-14.3e  %-4s %10s %11s %9s %9s %9s %10s %9s"
+        for r in sorted(recs, key=lambda x: abs(x["doping_cm-3"])):
+            lines.append(_hdr % (
+                r["doping_cm-3"], r["type"],
+                "n/a" if r["seebeck_uV/K"] is None else "%.4g" % r["seebeck_uV/K"],
+                "n/a" if r["sigma_S/m"] is None else "%.4g" % r["sigma_S/m"],
+                "n/a" if r["kappa_e_W/mK"] is None else "%.4g" % r["kappa_e_W/mK"],
+                "n/a" if r["kappa_L_W/mK"] is None else "%.4g" % r["kappa_L_W/mK"],
+                "n/a" if r["kappa_tot_W/mK"] is None else "%.4g" % r["kappa_tot_W/mK"],
+                "n/a" if r["PF_W/mK2"] is None else "%.4g" % r["PF_W/mK2"],
+                "n/a" if r["ZT"] is None else "%.4g" % r["ZT"]))
+        for _k in ("n", "p"):
+            if peak[_k] is not None:
+                lines.append("# %s 型峰值 ZT = %.4g @ %s cm^-3" % (
+                    _k, peak[_k]["ZT"], "%.3g" % peak[_k]["doping_cm-3"]))
+        (folder / "report.txt").write_text("\n".join(lines) + "\n", encoding="utf-8")
+        # ---- report.json ----
+        (folder / "report.json").write_text(_json.dumps({
+            "material": meta["material"], "T_K": T, "kappa_L_W_mK": klT,
+            "rows": recs, "peak": peak,
+        }, ensure_ascii=False, indent=2), encoding="utf-8")
+        n_written += 1
+    return n_written
+
+
+def make_plots(out, grid, peaks, meta, par=None):
     """三张图；任何一张失败只告警，不影响 JSON/TXT 产物。"""
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
     temps = grid["temperatures"]
-    make_heatmap(out, grid, meta, plt)
+    make_heatmap(out, grid, meta, plt, par=par)
     # ---- 1) ZT(T) ----
     fig, ax = plt.subplots(figsize=(7.2, 5.0))
     for i, r in enumerate(grid["rows"]):
@@ -471,6 +633,12 @@ def main():
                              % (", ".join(map(str, _amset_s["scattering_type"])),
                                 _amset_s.get("bandgap", "?")))
     grid["notes"].append("电子段来自 ke-dft-cpu %s" % tr_step)
+    _hm = heatmap_data(grid)                      # [0047] 统一色板/色标也写进人读汇总
+    if _hm:
+        _v, _vsrc = _zt_vmax(par, _hm)
+        grid["notes"].append("zT(n,T) 热图：跨材料统一色板（浅粉→酒红）；色标 0–%s%s"
+                             % (_vsrc, "（各材料自身上限，未统一、不可横向比色）" if _vsrc == "auto"
+                                else "（所有材料同一把尺子，颜色可直接横向比较）"))
     if tr_warn:
         grid["notes"].append("★ " + tr_warn)
     if cal is not None:      # 闸门结论也进人读汇总（notes 同时进 JSON 与 TXT）
@@ -553,9 +721,16 @@ def main():
         else:
             print("[ZT] %s 型无可用点（κ_L 温区没覆盖电子段温度？）" % kind)
 
+    # [0049] 每个温度点一个文件夹（report.txt + report.json；不依赖 matplotlib）
+    try:
+        _npt = make_per_temperature(out, grid, meta, peaks)
+        print("[OK] per_temperature/ 下已生成 %d 个温度文件夹（report.txt / report.json）" % _npt)
+    except Exception as e:                            # noqa: BLE001
+        print("[WARN] 每温度文件夹生成失败（%s: %s）——ZT 汇总仍正常" % (type(e).__name__, e))
+
     if _have_matplotlib():
         try:
-            make_plots(out, grid, peaks, meta)
+            make_plots(out, grid, peaks, meta, par=par)
             print("[OK] zt_heatmap.png / zt_vs_T.png / zt_vs_doping.png / zt_components.png 已生成")
         except Exception as e:                          # noqa: BLE001
             print("[WARN] 画图失败（%s: %s）——JSON/TXT 已生成，图跳过"

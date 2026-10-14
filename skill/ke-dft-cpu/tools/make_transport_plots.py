@@ -17,7 +17,8 @@
 <输出目录>  独立输出目录（约定: <M>/transport_plots/），生成:
               <M>_transport.png / <M>_transport_data_<T>K.csv   9温度x5参数(mu/S/sigma/PF/kappa_e)，
                         数据集 4 条：overall / intrinsic(去 IMP) / ADP_only / BT2×DPT-τ
-                        （intrinsic 图已并入本图，不再单独输出）
+              <M>_intrinsic.png / <M>_intrinsic_data_<T>K.csv   [B 2026-10-14] 同一张 9x5 网格
+                        再存一份旧名（[0035] 合并前 <M>_intrinsic.png 会永久冻结，故恢复输出）
               <M>_params_<T>K.csv                          每个温度一张参数表(E1/C2D/m*/tau/mu)
 
 数据来源:
@@ -210,8 +211,8 @@ def make_intrinsic(mdir, out, M):
     cols = ["T_K", "dataset", "type", "n_cell_cm-3", "n_2D_cm-2", "n_lit_cm-3",
             "carriers_per_cell", "carriers_per_atom", "in_interpret_range",
             "S_uV/K", "sigma_S/m", "PF_W/mK2", "kappa_e_W/mK", "mu_cm2/Vs", "flag"]
-    for T in temps:                                 # 每温度一个 CSV
-        with open(os.path.join(out, "%s_transport_data_%dK.csv" % (M, int(round(T)))), "w", newline="") as fh:
+    for T in temps:                                 # 每温度一个 CSV（[B] 用 intrinsic 名）
+        with open(os.path.join(out, "%s_intrinsic_data_%dK.csv" % (M, int(round(T)))), "w", newline="") as fh:
             w = csv.writer(fh); w.writerow(cols)
             for r in rows:
                 if abs(float(r["T_K"]) - T) < 1e-6:
@@ -236,9 +237,10 @@ def make_intrinsic(mdir, out, M):
     hh = [Line2D([], [], color=c, lw=1.4, ls=ls, marker=mk, ms=4, label=DS_LABELS.get(ds, ds)) for ds, c, ls, mk in DATASETS]
     hh.append(Line2D([], [], color="0.35", lw=1.0, ls=(0, (1, 1)), label="DPT (band-edge, mu only)"))
     fig.legend(handles=hh, loc="lower center", ncol=5, fontsize=9, frameon=False)
-    fig.suptitle("%s  transport  (overall / intrinsic(no IMP) / ADP only / BT2×DPT-τ)  100-900 K" % M, fontsize=12)
+    fig.suptitle("%s  intrinsic transport  (overall / intrinsic(no IMP) / ADP only / BT2xDPT-tau)"
+                 "  100-900 K" % M, fontsize=12)
     fig.tight_layout(rect=[0, 0.03, 1, 0.985])
-    fig.savefig(os.path.join(out, "%s_transport.png" % M), dpi=130); plt.close(fig)
+    fig.savefig(os.path.join(out, "%s_intrinsic.png" % M), dpi=130); plt.close(fig)
     return True
 
 
@@ -266,9 +268,10 @@ def main():
     mdir = os.path.abspath(sys.argv[1]); out = os.path.abspath(sys.argv[2])
     M = sys.argv[3] if len(sys.argv) > 3 else os.path.basename(os.path.dirname(mdir).rstrip("/")) or os.path.basename(mdir.rstrip("/"))
     os.makedirs(out, exist_ok=True)
+    a = make_transport(mdir, out, M)          # [B] 两张图都要：transport + intrinsic
     b = make_intrinsic(mdir, out, M)
     c = make_params(mdir, out, M)
-    print("[%s] transport=%s params=%s -> %s" % (M, b, c, out))
+    print("[%s] transport=%s intrinsic=%s params=%s -> %s" % (M, a, b, c, out))
 
 
 if __name__ == "__main__":

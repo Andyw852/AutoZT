@@ -224,13 +224,29 @@ def main():
     outdir = root / OUTDIR
     outdir.mkdir(parents=True, exist_ok=True)
 
+    # 2026-10-14：2D 的声子谱走 kz=0 的二维路径（za_2d.band_path_2d，与 kl-dft-cpu S5.1 同一套）；
+    #   原来一律 auto_band_structure（seekpath 是 3D 工具），2D 图里多出 Γ-A 这类沿真空方向的线段。
+    try:
+        _plot2d, _plot_axis, _ = _dim_and_axis(src)
+    except Exception as e:  # noqa: BLE001 —— 判不出维度按 3D 画，并说明
+        print("[WARN] could not resolve the dimension for the band path (%s); using the 3D path" % e)
+        _plot2d, _plot_axis = False, None
+    band_path = {"kind": None}
+
     def _draw_band(fc2_path, dst):
         # band structure + the two figures for one set of fc2; |-> (fmin, fmax)
         dst.mkdir(parents=True, exist_ok=True)
         ph.force_constants = _read_fc2(fc2_path)
         try:
-            ph.auto_band_structure(plot=False, write_yaml=True, npoints=51,
-                                   filename=str(dst / "band-dft-cpu.yaml"))
+            if _plot2d:
+                import za_2d
+                _lat = za_2d.write_band_yaml_2d(ph, dst / "band-dft-cpu.yaml", npoints=51,
+                                                cart_axis=_plot_axis)
+                band_path["kind"] = "2d-%s" % _lat
+            else:
+                ph.auto_band_structure(plot=False, write_yaml=True, npoints=51,
+                                       filename=str(dst / "band-dft-cpu.yaml"))
+                band_path["kind"] = "seekpath"
             bd = ph.get_band_structure_dict()
         except Exception as e:
             _emit({"status": "error",
@@ -298,6 +314,7 @@ def main():
         "band_yaml": str((src / "band-dft-cpu.yaml").relative_to(root)),
         "stable_here": bool(fmin >= -0.10),
         "cut3_bands": cut_bands,
+        "band_path": band_path["kind"],
     }
     # ZA bending-branch exponent(s).  Strictly a 2D criterion; the analysis is the
     # single shared implementation in _common/phonon_stability.py (the same code
