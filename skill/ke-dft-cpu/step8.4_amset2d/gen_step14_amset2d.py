@@ -32,7 +32,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 # [SKILL_REV] 版本戳：写进 settings.yaml 头，便于从结果反查跑的是哪份 skill 副本。
-_SKILL_REV = "2026-10-14-0050-ivsfrozen"   # [0050] 冻声子谷间 IVS 参数（IVS_FROZEN，K↔K′ 零阶、非 SOC）   # 2026-10-13-0044-reprotol   # [0044] 复现检查改相对容差（单机制 μ 在零前因子处 ~1e47）；POSTPROCESS_ONLY 不再要求 transport.json；取消本征点独立拆分脚本、回到主掺杂网格 doping=0（[0043] amset_fermi_fix 已修好 SVD）   # 2026-10-13-0043-intrsvd   # [0043] 本征点 + IMP 的 SVD 不收敛（amset_fermi_fix：n=p 严格相等 + 散射率插值死片保护）   # 2026-10-13-0041-defectdop   # [0041] DEFECT_DOPING 缺陷平衡载流子浓度进掺杂网格   # 2026-10-13-0040-undoped   # [0040] UNDOPED_POINT 本征点（doping=0）   # 2026-10-12-0038-subsets   # [0038] SUBSETS 散射机制子集（subset_<机制>.json）   # [0035-r3] 复审：not_in_scattering 只认显式排除、D 全低于阈值仍建记录、面外极性；[0035-r2] 冻声子优先、手填谷内只作对照；[0035-r1] 复审：交叉拒绝、并星平均、τ 挪到 transport.json 之后；[0035] 冻声子 ODP 参数（ODP_FROZEN）+ τ(E)（tau_energy.py）   # [0034-r3] 二审：重复星按 S8.2 k_grid 合并；显式 SCATTERING+掩码的日志   # [0034-r2] 复审：同中心谷合并、显式 SCATTERING 照办、PIE 与 settings 一致   # [0034] OVERALL_WITHOUT（出厂 ODP）-> overall_noODP.json   # [0033] ODP/谷间散射（常数形变势，step.conf DP_OPTICAL_E/H）+ ADP 谷内掩码   # [0032-r2] 复审：链首清旧本征产物与 mesh；SCATTERING 无 ADP 不出只 ADP   # [0032] WRITE_MESH/INTRINSIC_ADP_ONLY 2D 默认开（旧：2026-09-28-desym-fix V115）
+_SKILL_REV = "2026-10-15-0050-r1-subsets"   # [0050-r1] 出厂 SUBSETS 带 IVS（开谷间时本征曲线不缺、多一套去 IVS 对照）   # 2026-10-14-0050-ivsfrozen   # [0050] 冻声子谷间 IVS 参数（IVS_FROZEN，K↔K′ 零阶、非 SOC）   # 2026-10-13-0044-reprotol   # [0044] 复现检查改相对容差（单机制 μ 在零前因子处 ~1e47）；POSTPROCESS_ONLY 不再要求 transport.json；取消本征点独立拆分脚本、回到主掺杂网格 doping=0（[0043] amset_fermi_fix 已修好 SVD）   # 2026-10-13-0043-intrsvd   # [0043] 本征点 + IMP 的 SVD 不收敛（amset_fermi_fix：n=p 严格相等 + 散射率插值死片保护）   # 2026-10-13-0041-defectdop   # [0041] DEFECT_DOPING 缺陷平衡载流子浓度进掺杂网格   # 2026-10-13-0040-undoped   # [0040] UNDOPED_POINT 本征点（doping=0）   # 2026-10-12-0038-subsets   # [0038] SUBSETS 散射机制子集（subset_<机制>.json）   # [0035-r3] 复审：not_in_scattering 只认显式排除、D 全低于阈值仍建记录、面外极性；[0035-r2] 冻声子优先、手填谷内只作对照；[0035-r1] 复审：交叉拒绝、并星平均、τ 挪到 transport.json 之后；[0035] 冻声子 ODP 参数（ODP_FROZEN）+ τ(E)（tau_energy.py）   # [0034-r3] 二审：重复星按 S8.2 k_grid 合并；显式 SCATTERING+掩码的日志   # [0034-r2] 复审：同中心谷合并、显式 SCATTERING 照办、PIE 与 settings 一致   # [0034] OVERALL_WITHOUT（出厂 ODP）-> overall_noODP.json   # [0033] ODP/谷间散射（常数形变势，step.conf DP_OPTICAL_E/H）+ ADP 谷内掩码   # [0032-r2] 复审：链首清旧本征产物与 mesh；SCATTERING 无 ADP 不出只 ADP   # [0032] WRITE_MESH/INTRINSIC_ADP_ONLY 2D 默认开（旧：2026-09-28-desym-fix V115）
 # 复制来源（gen_step10_amset.py 的 _SKILL_REV），用于人工比对两份文件是否同步
 _SOURCE_GEN_REV = "2026-10-08-2d-raw-elastic"   # [0014] S8 的 2D 弹性改为原始 slab 值，与本步一致
 import stepconf  # noqa: E402
@@ -149,7 +149,10 @@ _ALLOWED_SCATTERING = {"ADP", "IMP", "POP", "PIE", "ODP", "IVS"}   # step.conf S
 #   子集里本次没开的机制自动忽略：不开 ODP/PIE 时出厂自动退化为
 #   ADP+POP+IMP / ADP+POP / ADP，即 subset_ADP+POP+IMP.json / subset_ADP+POP.json / subset_ADP.json。
 #   需要 WRITE_MESH（同一份 mesh 去机制重积分）；off = 不出 subset_*.json。
-SUBSETS = "ADP+POP+IMP+ODP+PIE; ADP+POP+ODP+PIE; ADP"
+# [0050-r1] 出厂子集带上 IVS：开了谷间（ivs_frozen / 手填 X>X'、X>Y）时，"去 IMP" 这一套必须连 IVS 一起保留
+#   才是 S8.3 的本征曲线（amset (all but IMP)），另加一套"去 IMP、去 IVS"（ADP+POP+ODP+PIE）看谷间散射的影响；
+#   不开 IVS 时第三套与第二套相同、自动去重，产物与改动前完全一样。
+SUBSETS = "ADP+POP+IMP+ODP+PIE+IVS; ADP+POP+ODP+PIE+IVS; ADP+POP+ODP+PIE; ADP"
 _SUBSET_ORDER = ["ADP", "POP", "IMP", "ODP", "PIE", "IVS"]
 
 
@@ -160,7 +163,7 @@ def subset_specs(subsets_str, scattering):
     _SUBSET_ORDER 排序；空子集/重复子集跳过。返回的 keep 列表即子集文件名里的
     机制顺序，drop 列表 = SCATTERING 里有、但该子集没保留的机制（喂给 --drop）。
     """
-    raw = "ADP+POP+IMP+ODP+PIE; ADP+POP+ODP+PIE; ADP" if subsets_str is None else str(subsets_str)
+    raw = "ADP+POP+IMP+ODP+PIE+IVS; ADP+POP+ODP+PIE+IVS; ADP+POP+ODP+PIE; ADP" if subsets_str is None else str(subsets_str)
     if raw.strip().lower() in ("", "off", "none", "false", "no", "0"):
         return []
     active = [str(x).strip().upper() for x in scattering]
