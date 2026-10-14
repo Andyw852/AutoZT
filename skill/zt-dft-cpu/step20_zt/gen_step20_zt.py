@@ -45,6 +45,7 @@ ZT_CMAP_COLORS = ("#FFF7FA", "#F6D3DE", "#EAB0C0", "#DD8DA3", "#D16A85", "#C4476
 ZT_CMAP = "autozt_zt"
 ZT_INK = "#B8244A"                     # 标题用的同色系深色
 ZT_AXIS = "#000000"                    # [0048] 坐标轴（带箭头的横/纵轴 + 刻度数字/轴名）用黑色
+ZT_GRID = "#F2F2F2"                    # [0051] 档位格线：深色区读作白线，浅色区仍能看出边界
 ZT_CMAP_VMAX_DEFAULT = "0.3"           # 统一色标上限（ZT）；写 auto = 退回每材料自适应的旧行为
 
 
@@ -359,7 +360,8 @@ def make_heatmap(out, grid, meta, plt, par=None):
                 lb.set_rotation_mode("anchor")
         ax.set_xticks(np.arange(-.5, nn, 1), minor=True)        # 白格线：分隔相邻档位
         ax.set_yticks(np.arange(-.5, nt, 1), minor=True)
-        ax.grid(which="minor", color="white", linewidth=1.8)
+        ax.grid(which="minor", color=ZT_GRID, linewidth=1.8)      # [0051] 格线用极浅中性色：
+        #   深色区读作白线（同参考图），浅色区（ZT≈0，浅端 #FFF7FA）仍能看出格子边界，不会融成一片
         ax.tick_params(which="minor", length=0)
         ax.tick_params(length=2.5, width=0.8, colors=ZT_AXIS)
         for lb in list(ax.get_xticklabels()) + list(ax.get_yticklabels()):
