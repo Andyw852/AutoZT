@@ -3083,10 +3083,10 @@ def main():
                  "（迁移率偏低，仅看数量级）。" % _wdir)
     link(out, cwd / _wdir / "wavefunction.h5", "wavefunction.h5")
     link(out, cwd / READ_DIR / _pick_deformation_h5(cwd, READ_DIR), "deformation.h5")
-    if _HAS_KC and kc.deformation_h5_symmetrized(out / "deformation.h5") is False:   # patch_dp_symmetrize
-        print("[WARN] 形变势 h5 未按点群正确对称化（step7b_deform_read 早于 V188：要么没对称化 —— 六方 xx/yy "
-              "迁移率差 9–10%；要么是 V121 旧法 —— 把 AMSET 的幅值 |D| 当张量旋转，剪切形变势被抹成 0）。处理：重新 gen "
-              "step7b_deform_read（秒级、不提交作业），再重新生成本步。")
+    _dpi = kc.deformation_h5_issues(out / "deformation.h5") if _HAS_KC else None   # patch_dp_symmetrize / V189
+    if _dpi:
+        print("[WARN] 形变势 h5 早于 V189，不能直接用：%s。处理：重新 gen step7b_deform_read"
+              "（秒级、不提交作业），再重新生成本步。" % "；".join(_dpi))
     # patch_amset_vasprun：amset run 还需要密网格 vasprun.xml 拿能带色散
     # 全网格分支时 vasprun 必须同源（step3b_uniform_full）。
     # ★ 2026-09-27 修（MoS2 端到端实验暴露）：IBZ 分支也必须优先用 step3b_uniform_full

@@ -232,6 +232,8 @@ class AcousticDeformation2D(_ADP):
         _, _, u = _inplane(unit_q, norm_q_sq)
         w, v = _inplane_modes(self.elastic_constant, u)
         if hasattr(self.deformation_potential, "interpolate"):
+            # [V189] S7.1 的 h5 非对角已是张量分量 D_xy（dp_offdiag = "tensor"），下面 tensordot(q̂⊗v, D) 才是
+            #   物理的 Σ D_ij q_i v_j；AMSET 原生 h5（2·D_xy）会把剪切耦合算大一倍 —— gen 时 deformation_h5_issues 会告警。
             D = np.abs(self.deformation_potential.interpolate(spin, [band_idx], [kpoint])[0])
             D = D + np.outer(velocity, velocity)                   # 与 AMSET 原版一致
             f = np.zeros(len(unit_q))

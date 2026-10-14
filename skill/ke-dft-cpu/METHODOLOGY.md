@@ -377,8 +377,8 @@ G 的 6 meV 展宽抹圆阈值（只看 ODP 的 ⟨τ⟩ 偏低约 10%）；轻�
   1. S7.1 在同一次读取里（core：包一层 `amset deform read`；vac：自己的脚本）用与 AMSET 相同的 k 映射与分量归属
      再算一份**带符号中心差分**，连同各带与相邻带的能隙、应变幅度写进 `deformation_signed.h5` /
      `deformation_vac_signed.h5`（数据集名不含 `deformation_potentials`，AMSET 不会误读）；
-  2. 对称化：非对角先 ÷2 换成真张量，对带符号场做全 Laue 群平均，再 ×2、取 |·| 写回 h5（h5 仍是 AMSET 约定的幅值，
-     AMSET 运行期本来就取 `np.abs`，下游不用改）；
+  2. 对称化：非对角先 ÷2 换成真张量，对带符号场做全 Laue 群平均，再 ×2、取 |·| 写回 h5（AMSET 约定的幅值；
+     [V189] 之后紧接着再把非对角换成张量分量，见下一节）；
   3. 只在"近简并（能隙 < 2δ·max|D| + 1 meV）**且** ±应变符号相反"的 (带, k) 及其全部对称像上退回 AMSET 的幅值，
      并只用"带符号置换"类操作（对幅值精确：|r D rᵀ| = |r| |D| |r|ᵀ）；Kramers 简并（应变不劈裂）照用带符号；
   4. 没有带符号文件（旧产物）时只做第 3 步的置换子群对称化（精确，但六方的 xx/yy 拉不齐）。
@@ -388,4 +388,23 @@ G 的 6 meV 展宽抹圆阈值（只看 ODP 的 ⟨τ⟩ 偏低约 10%）；轻�
   非对角（剪切）形变势恢复（V121 之后的所有结果里它们都是 0）。立方/六方材料的 ADP 迁移率会变，L 谷/偏轴谷材料变化最大。
 - 验证见 `step8.4_amset2d/VERIFICATION.md` 的 V188；测试 `test_dp_symmetrize.py`（含真实 AMSET 函数的端到端）、
   `tests/test_v188_dp_symmetrize.py`（纯 numpy）。
+
+## [V189] 形变势 h5 的非对角换成张量分量（AMSET 运行期把剪切耦合算大一倍）
+
+- **问题**：AMSET 原生 h5 的非对角是 2·D_xy（[V188]）。运行期的 ADP（`amset/scattering/elastic.py`）与 S8.4 的
+  `amset2d_plugin` 都用 `tensordot(q̂⊗û, D)`（q̂⊗û 不对称化）。物理上 ΔE = Σ D_ij ε_ij，ε = sym(q̂⊗û)·A，D 对称，
+  所以 ΔE ∝ Σ D_ij q_i u_j —— D 必须是张量分量。用原生值缩并，剪切部分的耦合振幅大一倍（散射率里那部分 ×4）。
+  例：L 谷 LA[111] 应为 Ξd + Ξu，原生 h5 给 Ξd + 5Ξu/3。V121 把非对角抹成 0 时这个问题被掩盖；V188 恢复非对角后必须一起修。
+- **验证（第一性原理）**：紧束缚 GaN，沿随机 q̂、横向 û 施加声子应变 sym(q̂⊗û)·η，直接算带边移动斜率：
+  原生 h5 缩并最大偏差 **53%**，张量分量 **0.1%**（`test_dp_symmetrize.py` 的 test_v189_contraction_matches_true_band_shift）。
+- **改法（数据层，不碰运行期）**：S7.1 在对称化之后调 `dp_symmetrize.to_tensor_h5`，把 `deformation.h5` /
+  `deformation_vac.h5` 的非对角原地 ÷2，打 `dp_offdiag = "tensor"`。原版 AMSET、2D 插件、`amset_ir_fix` 的星平均
+  （对 D 做 R D Rᵀ，本来就要求张量）都自动变对；S8/S8.4 继续软链 S7.1 的文件，上游失效检测不受影响。
+  对角不变：band_edges.json、S8.2 的 E1 只读对角，不受影响。不选运行期补丁：AMSET 的散射子进程是 spawn，
+  补丁要靠包装 worker 链式导入（ir_fix / dpo3d / 2D 插件都在抢同一个 worker），脆弱。
+- **检查**：`ke_common.deformation_h5_issues` —— S8/S8.4 生成时 h5 没对称化（< 2）或不是张量约定都会告警；
+  `tools/regate_projects.py` 记 STALE-DP；`tools/compare_deformation_h5.py` 先把两份 h5 统一到张量约定再比，
+  旧 h5 不是张量约定且新场非对角权重 > 2% 时判"需要重跑"（旧运行的剪切耦合口径不同）。
+- **h5 不再是 AMSET 原生约定**：拿它喂原版 AMSET 正是想要的（物理正确）；但不要再把它当 `amset deform read`
+  的直接输出去和别的 AMSET 结果比非对角。带符号文件 `*_signed.h5` 仍是 AMSET 约定（只给 dp_symmetrize 用）。
 

@@ -252,6 +252,45 @@ class AmsetEndToEndTests(unittest.TestCase):
                 # AMSET 自己的 |·| 再平均在非简并的小分量上有曲率底，新法去掉了它
                 self.assertGreaterEqual(np.abs(A - X)[ok].max(), np.abs(new - X)[ok].max())
 
+    def test_v189_contraction_matches_true_band_shift(self):
+        """[V189] 沿随机 q̂、横向 û 施加声子应变 sym(q̂⊗û)·η，直接算带边移动斜率；AMSET 的 tensordot(q̂⊗û, D)
+        用原生 h5（非对角 2·D_xy）差到几十个百分点，换成张量分量后一致。"""
+        from pymatgen.analysis.elasticity.strain import Deformation
+        from pymatgen.core import Lattice, Structure
+        from pymatgen.electronic_structure.bandstructure import BandStructure
+        from pymatgen.electronic_structure.core import Spin
+        from amset.deformation.generation import get_strains
+        from amset.deformation.potentials import get_strain_mapping
+        tb = self._smooth_tb()
+        st, kp, g0 = tsg.gan_std(), TDF.full_mesh([4, 4, 2]), np.zeros((1, 3), int)
+
+        def E(s):
+            return tb(s, kp, g0)[1]
+
+        def bs(s):
+            return BandStructure(kp, {Spin.up: E(s)}, s.lattice.reciprocal_lattice, efermi=0.0, structure=s)
+        bulk = {"reference": 0.0, "bandstructure": bs(st)}
+        calcs = [{"reference": 0.0, "bandstructure": bs(Deformation(e.get_deformation_matrix()).apply_to_structure(st))}
+                 for e in get_strains(0.005)]
+        X = P.signed_deformation_potentials(bulk, get_strain_mapping(st, calcs))[Spin.up]   # 原生约定，-dE/dε
+        rng = np.random.default_rng(3)
+        q = rng.normal(size=3); q /= np.linalg.norm(q)
+        u = rng.normal(size=3); u -= u.dot(q) * q; u /= np.linalg.norm(u)
+        eta = 1e-4
+
+        def strained(sign):
+            eps = sign * eta * 0.5 * (np.outer(q, u) + np.outer(u, q))
+            return Structure(Lattice(st.lattice.matrix @ (np.eye(3) + eps).T), st.species, st.frac_coords)
+        slope = (E(strained(+1)) - E(strained(-1))) / (2 * eta)
+        gap = P.band_gaps(bulk["bandstructure"])[Spin.up]
+        ok = (gap > 0.05) & (np.abs(slope) > 0.1 * np.abs(slope).max())
+        self.assertGreater(ok.sum(), 5)
+        native = -np.einsum("i,j,bnij->bn", q, u, X)
+        tensor = -np.einsum("i,j,bnij->bn", q, u, P._to_tensor(X))
+        rel = lambda y: np.max(np.abs(y - slope)[ok] / np.abs(slope[ok]))      # noqa: E731
+        self.assertLess(rel(tensor), 0.01)
+        self.assertGreater(rel(native), 0.2)
+
 
 class S71WiringTests(unittest.TestCase):
     SRC = (HERE / "step7_deform" / "step7b_read" / "gen_step9b_deform_read.py").read_text(encoding="utf-8")
@@ -279,6 +318,13 @@ class S71WiringTests(unittest.TestCase):
         j_gate = vac.index("_gate_bad = []")
         self.assertLess(j_fix, j_sym)
         self.assertLess(j_sym, j_gate)
+        # [V189] 对称化之后把非对角换成张量分量（core 在读带边之前、vac 在硬闸门之前；两处都只读对角）
+        i_ten = be.index('dp_symmetrize.to_tensor_h5("deformation.h5")')
+        self.assertLess(i_sym, i_ten)
+        self.assertLess(i_ten, i_load)
+        j_ten = vac.index("dp_symmetrize.to_tensor_h5(h5_out)")
+        self.assertLess(j_sym, j_ten)
+        self.assertLess(j_ten, j_gate)
         # [V188] 带符号文件：vac 在写幅值 h5 的同一处写出，且在对称化之前
         j_sig = vac.index("dp_symmetrize.write_signed(dp_symmetrize.signed_name(h5_out)")
         self.assertLess(j_sig, j_sym)

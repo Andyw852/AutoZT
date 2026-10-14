@@ -2233,6 +2233,27 @@ def deformation_h5_symmetrized(path):
         return None
 
 
+def deformation_h5_issues(path):
+    """[V189] S8/S8.4 要用的形变势 h5 还差什么：返回问题列表（空 = 可用）；读不了返回 None（不告警）。
+      · dp_symmetrized < 2：没对称化，或 V121 旧法（把幅值当张量旋转，剪切形变势被抹成 0）；
+      · dp_offdiag != "tensor"：非对角还是 AMSET 原生的 2·D_xy，运行期 tensordot(q̂⊗û, D) 把剪切耦合算大一倍。
+    两条都由重新 gen S7.1（秒级、不提交作业）解决。"""
+    try:
+        import h5py
+        with h5py.File(str(path), "r") as f:
+            sym = int(f.attrs.get("dp_symmetrized", 0))
+            tensor = str(f.attrs.get("dp_offdiag", "")) == "tensor"
+    except Exception:                                          # noqa: BLE001
+        return None
+    out = []
+    if sym < 2:
+        out.append("未按点群正确对称化（%s）" % ("V121 旧法：把幅值 |D| 当张量旋转，剪切形变势被抹成 0"
+                                             if sym == 1 else "没对称化：六方 xx/yy 迁移率差 9–10%"))
+    if not tensor:
+        out.append("非对角是 AMSET 原生的 2·D_xy（不是张量分量），运行期剪切耦合被算大一倍")
+    return out
+
+
 def full_grid_ibz_count(structure, kpoints, symprec=AMSET_SYMPREC):
     """patch_full_grid_factor（V124）：vasprun 的 k 点是不是一整张 Γ/MP 网格（ISYM=-1 全网格）。
 

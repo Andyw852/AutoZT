@@ -201,5 +201,78 @@ class ConventionTests(unittest.TestCase):
         self.assertNotIn("deformation_potentials", P.SIGNED_KEY)
 
 
+
+# ============================ [V189] 非对角换成张量分量 ============================
+try:
+    import h5py  # noqa: F401
+    HAVE_H5 = True
+except ImportError:                                        # pragma: no cover
+    HAVE_H5 = False
+
+
+class TensorContractionTests(unittest.TestCase):
+    """AMSET 运行期用 tensordot(q̂⊗û, D)。物理：ΔE = Σ D_ij ε_ij，ε = sym(q̂⊗û)，D 对称 => Σ D_ij q_i u_j。
+    所以 D 必须是张量分量；AMSET 原生 h5 的非对角是 2·D_xy，剪切部分被算大一倍。"""
+
+    def test_contraction_needs_tensor_components(self):
+        rng = np.random.default_rng(7)
+        A = rng.normal(size=(3, 3))
+        D = 0.5 * (A + A.T)                                  # 张量
+        native = P._from_tensor(D)                         # AMSET h5 里的值（非对角 ×2）
+        for _ in range(20):
+            q = rng.normal(size=3); q /= np.linalg.norm(q)
+            u = rng.normal(size=3); u -= u.dot(q) * q; u /= np.linalg.norm(u)
+            eps = 0.5 * (np.outer(q, u) + np.outer(u, q))
+            dE = float(np.sum(D * eps))                        # 物理能移
+            self.assertAlmostEqual(float(np.tensordot(np.outer(q, u), P._to_tensor(native))), dE, places=12)
+            # 原生值直接缩并：差的正好是非对角那部分
+            off = float(np.tensordot(np.outer(q, u), native)) - dE
+            self.assertAlmostEqual(off, float(np.sum((D * ~np.eye(3, dtype=bool)) * eps)), places=12)
+
+    def test_l_valley_la_mode(self):
+        """L 谷 LA[111]：物理 Ξd + Ξu；原生 h5 直接缩并得 Ξd + 5Ξu/3。"""
+        q = N111
+        native = P._from_tensor(D_L)
+        self.assertAlmostEqual(float(np.tensordot(np.outer(q, q), D_L)), XI_D + XI_U, places=10)
+        self.assertAlmostEqual(float(np.tensordot(np.outer(q, q), native)), XI_D + 5 * XI_U / 3, places=10)
+
+
+@unittest.skipUnless(HAVE_H5, "需要 h5py")
+class ToTensorH5Tests(unittest.TestCase):
+    def _h5(self, A, attrs=None):
+        import h5py
+        import tempfile
+        p = Path(tempfile.mkdtemp()) / "deformation.h5"
+        with h5py.File(str(p), "w") as f:
+            f.create_dataset("deformation_potentials_up", data=A)
+            f["kpoints"] = np.zeros((A.shape[1], 3))
+            for k, v in (attrs or {}).items():
+                f.attrs[k] = v
+        return p
+
+    def test_inplace_halves_offdiag_once_and_keeps_attrs(self):
+        import h5py
+        rng = np.random.default_rng(0)
+        A = np.abs(rng.normal(size=(2, 5, 3, 3)))
+        A = 0.5 * (A + np.swapaxes(A, -1, -2))
+        p = self._h5(A, {P.ATTR: 2, "nspin_norm_fixed": 1})
+        self.assertFalse(P.is_tensor_convention(p))
+        P.to_tensor_h5(p)
+        self.assertTrue(P.is_tensor_convention(p))
+        self.assertIn("skipped", P.to_tensor_h5(p))          # 幂等
+        with h5py.File(str(p), "r") as f:
+            B = np.array(f["deformation_potentials_up"])
+            self.assertEqual(int(f.attrs["nspin_norm_fixed"]), 1)
+            self.assertEqual(int(f.attrs[P.ATTR]), 2)
+        off = ~np.eye(3, dtype=bool)
+        self.assertTrue(np.allclose(B[..., off], 0.5 * A[..., off]))
+        self.assertTrue(np.allclose(B[..., ~off], A[..., ~off]))
+
+    def test_symmetrize_refuses_tensor_file(self):
+        p = self._h5(np.ones((1, 2, 3, 3)), {P.OFFDIAG_ATTR: "tensor"})
+        rep = P.symmetrize_h5(p)
+        self.assertIn("to_tensor_h5 之前", rep["skipped"])
+
+
 if __name__ == "__main__":
     unittest.main()

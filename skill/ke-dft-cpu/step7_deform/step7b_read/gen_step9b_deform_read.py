@@ -496,6 +496,9 @@ print("[nspin_norm_fix] core deformation.h5: fixed=%s reason=%s (amset %s)"
 #   精确对称化；3/6 次轴用同目录 deformation_signed.h5 的带符号中心差分（符号不一致的简并点退回幅值）。见 dp_symmetrize.py。
 import dp_symmetrize
 print("[dp_symmetrize] core deformation.h5: %s" % dp_symmetrize.symmetrize_h5("deformation.h5"))
+# [V189] 对称化之后把非对角换成张量分量（AMSET 原生 h5 是 2·D_xy，运行期 tensordot(q̂⊗û, D) 会把剪切耦合算大一倍）。
+#   对角不动：下面的带边 E1 只读对角。见 dp_symmetrize.to_tensor_h5。
+print("[dp_tensor] core deformation.h5: %s" % dp_symmetrize.to_tensor_h5("deformation.h5"))
 dp, kpoints, structure = load_deformation_potentials("deformation.h5")
 bulk = parse_calculation("undeformed")
 bs = bulk["bandstructure"]
@@ -1171,6 +1174,8 @@ print("[nspin_norm_fix] vac %s: fixed=%s reason=%s (amset %s)"
 # [patch_dp_symmetrize V121] 与 core h5 同一处理；下面的闸门与已对称化的 band_edges E1_vac 比
 import dp_symmetrize
 print("[dp_symmetrize] vac %s: %s" % (h5_out, dp_symmetrize.symmetrize_h5(h5_out)))
+# [V189] 与 core h5 同一处理：非对角换成张量分量（下面的闸门只比对角）
+print("[dp_tensor] vac %s: %s" % (h5_out, dp_symmetrize.to_tensor_h5(h5_out)))
 
 # ==========================================================================
 # [nspin_norm_fix 硬闸门 2026-09-21] 为 AMSET<0.5.1 的「ISPIN=2 形变势减半」

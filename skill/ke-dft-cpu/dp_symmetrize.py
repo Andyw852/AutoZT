@@ -41,6 +41,12 @@ MoS₂ 的 -6m2 也是 6/mmm），rᵀ|D|r 的非对角元带着 ± 号被平均
 
 h5 原地修改（保留其它 attrs，例如 nspin_norm_fix 的标记），打 attrs["dp_symmetrized"] = 2，重复调用跳过；
 attrs = 1 是 V121 旧法对称化过的，无法复原，报告里提示重跑 S7.1。
+
+[V189] 对称化之后 S7.1 再调 to_tensor_h5，把 h5 的非对角原地 ÷2 换成**真张量分量**（attrs["dp_offdiag"] = "tensor"）。
+原因：AMSET 运行期（elastic.py 的 ADP，以及 S8.4 的 amset2d_plugin）用 tensordot(q̂⊗û, D) 做缩并；物理上
+ΔE = Σ D_ij ε_ij，ε = sym(q̂⊗û)·A，D 对称 => ΔE ∝ Σ D_ij q_i u_j，D 必须是张量分量。AMSET 原生 h5 的非对角是 2·D_xy，
+剪切部分的耦合被算大一倍（紧束缚 GaN 沿随机 q̂、横向 û：原生 h5 与真实带边移动差到 53%，张量约定 0.1%）。
+amset_ir_fix 的星平均对 D 做 R D Rᵀ，也要求张量。换成张量之后，原版 AMSET、2D 插件、ir_fix 都不用改。
 """
 import numpy as np
 
@@ -48,6 +54,7 @@ SYMPREC = 0.01            # 与 AMSET 取对称操作的口径一致
 KEY_TOL = 1e-4            # k 点匹配容差（分数坐标）
 ATTR = "dp_symmetrized"
 ATTR_VERSION = 2          # [V188]；1 = V121 旧法（把幅值当带符号张量旋转）
+OFFDIAG_ATTR = "dp_offdiag"   # [V189] "tensor" = 非对角是张量分量 D_xy；没有这个标记 = AMSET 原生（2·D_xy）
 # 带符号数据文件：deformation.h5 -> deformation_signed.h5。数据集名**不能**含 "deformation_potentials"：
 #   amset.deformation.io.load_deformation_potentials 把名字里含它的数据集都当成自旋道读。
 SIGNED_KEY = "signed_"
@@ -326,6 +333,8 @@ def symmetrize_h5(path, signed_path=None, symprec=SYMPREC):
         v = int(f.attrs.get(ATTR, 0))
         if v >= ATTR_VERSION:
             return {"skipped": "已对称化过"}
+        if str(f.attrs.get(OFFDIAG_ATTR, "")) == "tensor":
+            return {"skipped": "已换成张量约定（[V189]）却没对称化：对称化必须在 to_tensor_h5 之前 —— 重跑 S7.1"}
         if v:
             return {"skipped": "这份 h5 被 V121 旧法对称化过（把幅值当带符号张量旋转，非对角被抹成 0），"
                                "无法复原 —— 重跑 S7.1 重新读形变势"}
@@ -359,6 +368,30 @@ def symmetrize_h5(path, signed_path=None, symprec=SYMPREC):
         f.attrs["dp_sym_n_ops"] = len(rots)
         f.attrs["dp_sym_signed"] = 1 if signed else 0
     return rep
+
+
+def to_tensor_h5(path):
+    """[V189] 原地把 h5 的非对角 ÷2（AMSET 原生 2·D_xy -> 张量分量 D_xy），打 attrs["dp_offdiag"] = "tensor"。
+    幂等；对角不动（band_edges / S8.2 只读对角，不受影响）。返回报告 dict。"""
+    import h5py
+    with h5py.File(str(path), "r+") as f:
+        if str(f.attrs.get(OFFDIAG_ATTR, "")) == "tensor":
+            return {"skipped": "已是张量约定"}
+        keys = [k for k in f.keys() if k.startswith("deformation_potentials_")]
+        for key in keys:
+            f[key][...] = _to_tensor(np.array(f[key]))
+        f.attrs[OFFDIAG_ATTR] = "tensor"
+    return {"converted": keys}
+
+
+def is_tensor_convention(path):
+    """h5 的非对角是不是张量分量（[V189] 标记）；读不了返回 None。"""
+    try:
+        import h5py
+        with h5py.File(str(path), "r") as f:
+            return str(f.attrs.get(OFFDIAG_ATTR, "")) == "tensor"
+    except Exception:                                          # noqa: BLE001
+        return None
 
 
 def is_symmetrized(path):
