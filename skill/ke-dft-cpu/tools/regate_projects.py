@@ -12,8 +12,10 @@
             IBZ 且当次打了相位补丁
   ★ WRONG   IBZ + 真实重叠 + 原公式有坏操作 + 没打补丁 —— **静默算错**，要重算；
             全网格 h5 + 真实重叠 + 有 k 点标签不在 (-0.5, 0.5]（V117：from_data 贴错系数标签）
-  ⚠ STALE-DP 形变势 h5 没有 dp_symmetrized 标记 = S7.1 早于 V121 生成（V122：MoS2 同一批形变单点
-            新版 S7.1 重读后电子 ADP 迁移率 198 -> 406）-> 重新 gen S7.1（秒级）再重跑本步
+  ⚠ STALE-DP 形变势 h5 的 dp_symmetrized 标记 < 2 = S7.1 早于 V188 生成：没有标记是 V121 之前（V122：MoS2 同一批
+            形变单点新版 S7.1 重读后电子 ADP 迁移率 198 -> 406）；= 1 是 V121 旧法（把幅值 |D| 当张量旋转，
+            剪切形变势被抹成 0）；或 dp_offdiag ≠ "tensor"（V189 之前：非对角是 AMSET 原生 2·D_xy，运行期剪切耦合
+            算大一倍）-> 重新 gen S7.1（秒级）再重跑本步
   ★ WRONG   （V134）settings.yaml 的弹性张量不正定（2D 看面内块、3D 看 6×6）且散射含 ADP —— ADP 无意义
   ⚠ ELASTIC （V134）2D 面内剪切 C66 不到 max(C11, C22) 的 2% —— 疑似 VASP 顺序（XX YY ZZ XY YZ ZX）没重排，
             AMSET 拿到的面内剪切近零；核对 step6_elastic/OUTCAR 的表头后重新 gen 本步
@@ -169,7 +171,8 @@ def _run_info(run):
         try:
             import h5py
             with h5py.File(str(dh5), "r") as f:
-                dp_sym = bool(int(f.attrs.get("dp_symmetrized", 0)))
+                dp_sym = (int(f.attrs.get("dp_symmetrized", 0)) >= 2           # [V188] 1 = V121 旧法，算过期
+                          and str(f.attrs.get("dp_offdiag", "")) == "tensor")    # [V189] 非对角须是张量分量
         except Exception:                                        # noqa: BLE001
             dp_sym = None
     elastic, adp = None, True

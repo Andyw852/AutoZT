@@ -18,6 +18,10 @@ ADP 粗估因子 R = ⟨|D_new|²⟩ / ⟨|D_old|²⟩（全窗口等权；ADP �
 另报带边 hit 点的 D_xx/D_yy 新旧值。
 判定：|1 − R| > RERUN_R 或 p90 相对变化 > RERUN_P90 -> "需要重跑"；否则 "变化小，可不重跑"。
 这是**粗估**（没有按费米窗口加权）；拿不准时以重跑为准。退出码：0 = 变化小，1 = 需要重跑，2 = 输入问题。
+
+[V189] 两份 h5 先统一到张量约定再比（没有 attrs["dp_offdiag"] = "tensor" 的是 AMSET 原生，非对角 = 2·D_xy，读入时 ÷2），
+只比数据本身的变化。另外旧 h5 不是张量约定时，S8/S8.4 运行期的剪切耦合也变了（旧的算大一倍，V121 之后被抹成 0）：
+新场的非对角权重 offdiag_share = ⟨Σ_{i≠j} D_ij²⟩ / ⟨|D|²⟩ 超过 RERUN_OFFDIAG 也判"需要重跑"。
 """
 import argparse
 import json
@@ -27,6 +31,8 @@ import numpy as np
 
 RERUN_R = 0.05        # ⟨|D|²⟩ 变 5% ≈ ADP 迁移率变 5%
 RERUN_P90 = 0.10      # 九成 (带, k) 点的 D 变化都在 10% 以内才算"变化小"
+RERUN_OFFDIAG = 0.02  # [V189] 非对角（剪切）权重超过 2%：旧运行的剪切耦合口径不同，要重跑
+_OFF = ~np.eye(3, dtype=bool)
 
 
 def _attr(v):
@@ -45,11 +51,15 @@ def _attr(v):
 
 
 def _load(path):
+    """-> (张量约定的 D, kpoints, attrs)。AMSET 原生 h5（非对角 2·D_xy）读入时非对角 ÷2。"""
     import h5py
     with h5py.File(str(path), "r") as f:
-        d = {k: np.array(f[k]) for k in f.keys() if k.startswith("deformation_potentials_")}
+        d = {k: np.array(f[k], float) for k in f.keys() if k.startswith("deformation_potentials_")}
         kp = np.array(f["kpoints"])
         attrs = {k: _attr(v) for k, v in f.attrs.items()}
+    if str(attrs.get("dp_offdiag", "")) != "tensor":
+        for k in d:
+            d[k][..., _OFF] *= 0.5
     return d, kp, attrs
 
 
@@ -72,7 +82,10 @@ def compare(old_path, new_path, band_edges=None):
         s = {"R_mean_D2": round(R, 4), "mu_adp_factor_rough": round(1.0 / R, 3) if R else None,
              "rel_median": round(float(np.median(rel)), 4), "rel_p90": round(float(np.percentile(rel, 90)), 4),
              "rel_max": round(float(rel.max()), 4)}
-        s["rerun"] = bool(abs(1 - R) > RERUN_R or s["rel_p90"] > RERUN_P90)
+        s["offdiag_share"] = round(float((D1[..., _OFF] ** 2).sum(-1).mean() / max((n1 ** 2).mean(), 1e-30)), 4)
+        s["runtime_offdiag_changed"] = str(a0.get("dp_offdiag", "")) != "tensor"     # [V189]
+        s["rerun"] = bool(abs(1 - R) > RERUN_R or s["rel_p90"] > RERUN_P90
+                          or (s["runtime_offdiag_changed"] and s["offdiag_share"] > RERUN_OFFDIAG))
         need |= s["rerun"]
         rep["spins"][key] = s
     if band_edges:
@@ -105,9 +118,12 @@ def main(argv=None):
         print("[ERROR] %s" % e, file=sys.stderr)
         return 2
     for key, s in rep["spins"].items():
-        print("%s：⟨|D|²⟩ 新/旧 = %.3f（ADP 迁移率粗估 ×%.2f）；逐点相对变化 中位 %.1f%% p90 %.1f%% 最大 %.1f%% -> %s"
+        print("%s：⟨|D|²⟩ 新/旧 = %.3f（ADP 迁移率粗估 ×%.2f）；逐点相对变化 中位 %.1f%% p90 %.1f%% 最大 %.1f%%；"
+              "非对角权重 %.1f%%%s -> %s"
               % (key, s["R_mean_D2"], s["mu_adp_factor_rough"] or float("nan"), 100 * s["rel_median"],
-                 100 * s["rel_p90"], 100 * s["rel_max"], "需要重跑" if s["rerun"] else "变化小"))
+                 100 * s["rel_p90"], 100 * s["rel_max"], 100 * s["offdiag_share"],
+                 "（旧运行的剪切耦合口径不同）" if s["runtime_offdiag_changed"] else "",
+                 "需要重跑" if s["rerun"] else "变化小"))
     for r in rep.get("band_edge_hits", []):
         print("  带边 %-8s band=%d k=%d  D_xx/D_yy 旧 %s -> 新 %s" % (r["carrier"], r["band"], r["k"],
                                                                      r["old_xx_yy"], r["new_xx_yy"]))

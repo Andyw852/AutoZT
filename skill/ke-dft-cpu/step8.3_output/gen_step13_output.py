@@ -960,7 +960,9 @@ def write_table(out, rows, am, bt, dpt, am2=None):
 
     def fmt(v, f="%.4g"):
         return (f % v) if isinstance(v, (int, float)) and v == v else "—"
-    _red = "面内(xx+yy)/2 [2D]" if (am and am.get("is_2d")) else "对角(xx+yy+zz)/3 [3D]"
+    # [V187] 维度按 step1 的 DIM 判：2D 默认不跑 S8（amset3d 关），am 为空时旧写法会把 2D 标成 "[3D]"
+    _red = ("面内(xx+yy)/2 [2D]" if ((am and am.get("is_2d")) or _read_dim(Path.cwd()) == "2d")
+            else "对角(xx+yy+zz)/3 [3D]")
     lines = ["# 300 K 三方电子输运对比（详见 comparison_300K.csv）",
              "# skill_rev: %s" % _SKILL_REV,
              "# 有 amset=%s  amset2d=%s  BoltzTraP2=%s  DPT=%s"
@@ -985,8 +987,12 @@ def write_table(out, rows, am, bt, dpt, am2=None):
         lines.append("# [口径] 泛函 = %s（来源 %s）—— 和文献比较前先核对文献用的泛函%s"
                      % (_func, _func_src, _fnote))
     if _dgeom:
+        # [V187] 2D 的 "ionrelax(in-plane)+clamped(out-of-plane)" 是正常口径：面外应变拉的是真空，二维核（S8.4）
+        #   只用面内分量；只有 S8（三维核）会用到面外那几项，那一栏另注。
+        _ok2d = _read_dim(Path.cwd()) == "2d" and _dgeom.startswith("ionrelax(in-plane)")
         _warn = ("" if _dgeom == "ionrelax" else
-                 "  ⚠ 非离子弛豫口径：与 TOTAL ELASTIC MODULI 不同源，ADP 绝对值跨项目不可直接比")
+                 ("  （面外分量离子固定：二维核不用；只影响 S8 三维核的对照值）" if _ok2d else
+                  "  ⚠ 非离子弛豫口径：与 TOTAL ELASTIC MODULI 不同源，ADP 绝对值跨项目不可直接比"))
         lines.append("# [口径] 形变势构型 deform_geometry = %s（ionrelax=离子弛豫；clamped=离子固定）%s"
                      % (_dgeom, _warn))
     if _add_dose:

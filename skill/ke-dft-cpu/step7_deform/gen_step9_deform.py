@@ -6,6 +6,8 @@
   1. POSCAR ← step1_std_opt/CONTCAR
   2. amset deform create → 在本目录生成 undeformed/ + deform-01..NN/（各含形变 POSCAR）
   3. 给每个子目录补 INCAR（渲染 incar_deform_*.tpl）+ KPOINTS + POTCAR + submit.sh
+  4. 给需要离子弛豫的形变目录建 ionrelax/（固定晶胞弛豫内坐标 + 静态段）：
+     2D = 面内分量（xx/yy/xy），3D = 全部分量（[V187]，IONRELAX_3D 可关）
 tf 的扇出机制随后对每个 *deform* 子目录各自 sbatch。
 产出目录：step7_deform/{undeformed, deform-01, ...}
 """
@@ -352,17 +354,35 @@ def _reference_kpoints(out, dim, vac_axis, n_sub):
 # ===========================================================================
 #  [PATCH-IONRELAX] 参数
 # ===========================================================================
-# 弛豫段的力判据。★ 不要收紧 ★
-#   2026-09-13 实测（Mg4C60 单层形变胞，ISYM=0 → 58 个 k 点）：
-#     第 5 个离子步起能量已完全平（dE ~ 5E-4 eV/全胞 = 4E-6 eV/atom），
-#     残余力 max 0.03–0.05 eV/Å、RMS 0.016–0.027 eV/Å —— 早已优于常规判据。
-#   而旧代码写死 -1E-3，比它紧 30–50 倍，逼 VASP 跑满 NSW=60 个离子步
-#   （每步 ~48 min），11 个形变胞白烧约 5E4 core·h。
-#   力 0.03 eV/Å 对应残余位移 ~0.003 Å，对带边能量影响仅 ~1E-4 eV，
-#   而形变势信号在 0.1–1 eV —— 完全淹没。
-#   要更紧就改这一行（不要改下面那几处 re.sub）。
-IONRELAX_EDIFFG = "-0.02"
+# 弛豫段的力判据。[V187] -0.02 -> -0.005（与 S1 为弹性收紧的判据同值）。
+#   旧注释的理由「力 0.03 eV/Å 对应残余位移 ~0.003 Å，对带边能量影响仅 ~1E-4 eV」把**总能**的量级
+#   套到了**带边本征值**上：总能在平衡点附近对位移是二阶的，带边本征值对内坐标却是**一阶**的，
+#   斜率就是光学形变势 D_opt（1–10 eV/Å）。残余位移 δu ≈ F_tol/k（k 为内坐标力常数，~10–20 eV/Å²），
+#   落到 E1 上的误差上限 ≈ D_opt·δu/γ（γ = STRAIN_DISTANCE = 0.005）：
+#       F_tol = 0.02  -> δu ~ 1–2E-3 Å -> E1 误差上限 ~1 eV（MoS2 弛豫贡献本身才 1.9 eV）
+#       F_tol = 0.005 -> δu ~ 3–5E-4 Å -> E1 误差上限 ~0.3 eV（~5%）
+#   而 ±0.5% 应变诱导的内坐标力本身只有 ~0.04 eV/Å（MoS2 粗估），-0.02 与信号同量级，弛豫可能只回收一半。
+#   成本：2026-09-13 Mg4C60 在 -1E-3 下跑满 NSW=60（每步 ~48 min）；-0.005 比那松 5 倍，且弛豫段已
+#   ISYM=2（见下）。S7.1 会逐构型核对「末步/首步最大力」与是否跑满 NSW（band_edges.json 的
+#   ionrelax_check），回收不足的构型会告警。
+#   要改就在本步 step.conf 写 IONRELAX_EDIFFG = -0.003 之类（负数，eV/Å），不要改下面那几处 re.sub。
+IONRELAX_EDIFFG = "-%g" % kc.IONRELAX_EDIFFG_REF      # = -0.005；S7.1 的 ionrelax_check 用同一个参考值
 IONRELAX_NSW = "60"
+# [V187] 3D 也做离子弛豫（全部 6 个应变分量）。原来只有 2D 建 ionrelax/，3D 一律离子固定 ——
+#   但 ADP 分母是 S6 的 TOTAL ELASTIC MODULI（含离子弛豫），q→0 声学声子本身也带内坐标弛豫，
+#   分子分母必须同源。不受影响的只有"原子都在反演中心"的结构（岩盐等，弛豫段 1 步就停）；
+#   金刚石/闪锌矿的剪切分量（Kleinman 内应变）、R-3m（Bi2Te3 类，有自由 z 参数）的正应变都受影响。
+#   z 方向的处理按维度不同：
+#     3D：z 是真实晶向，xx/yy/zz/yz/xz/xy 六个分量一视同仁，全部弛豫；
+#     2D：z 是真空，面外应变（zz/yz/xz）只是为了让 AMSET 读到完整张量，二维核不用 -> 不弛豫；
+#         但面内应变下原子的 z 坐标必须放开（层厚随应变变化 = 二维的离子弛豫响应），
+#         所以 ionrelax 是固定晶胞（ISIF=2）+ 不加选择性动力学。
+#   想保留旧的三维离子固定口径（比对存量结果）就在本步 step.conf 写 IONRELAX_3D = false。
+IONRELAX_3D = True
+# [V187] 已算完、但力判据比现在松的 ionrelax/（如旧的 -0.02）默认**复用**（不自动重算，省机时）；
+#   S7.1 的 ionrelax_check 会标出来。要按新判据重算就在本步 step.conf 写 IONRELAX_REBUILD_LOOSE = true
+#   再 retry S7（只重建判据偏松的那些，其余照旧复用）。
+IONRELAX_REBUILD_LOOSE = False
 # 弛豫段的 ISYM。★ 只有弛豫段能放开 ★
 #   静态段必须保持模板的 ISYM=0：E1 是逐 k 差分出来的，各形变目录的 IBZ 必须一致
 #   （见 incar_deform_*.tpl 的注释），放开对称性会让各目录 IBZ 不同、差分对不上。
@@ -371,10 +391,33 @@ IONRELAX_NSW = "60"
 #   正是被这条卡在 24 h 墙钟上，2026-10-11 实测。
 IONRELAX_ISYM = "2"
 
-# ---- [PATCH-IONRELAX] 对 xx±/yy± 4 个形变目录生成 ionrelax/ 子目录 ----
-def _ionrelax_incars(base):
+def _ionrelax_params(proj):
+    """[V187] 本步 step.conf 覆盖 IONRELAX_EDIFFG / IONRELAX_3D / IONRELAX_REBUILD_LOOSE。
+    与 DK_MAX_3D 同一规矩：文件不存在才用默认值；存在就让解析错误照常抛出来。"""
+    ediffg, on3d, rebuild = IONRELAX_EDIFFG, IONRELAX_3D, IONRELAX_REBUILD_LOOSE
+    if (Path(proj) / "step.conf").is_file():
+        _c = stepconf.load({"IONRELAX_EDIFFG": (None, "float"),
+                            "IONRELAX_3D": (None, "bool"),
+                            "IONRELAX_REBUILD_LOOSE": (None, "bool")},
+                           OUTDIR_NAME, str(proj), strict=False)
+        if _c["IONRELAX_EDIFFG"] is not None:
+            _v = float(_c["IONRELAX_EDIFFG"])
+            if _v >= 0:
+                sys.exit("[ERROR] IONRELAX_EDIFFG=%s：必须是负数（按力判据，eV/Å）" % _v)
+            ediffg = "%g" % _v
+        if _c["IONRELAX_3D"] is not None:
+            on3d = bool(_c["IONRELAX_3D"])
+        if _c["IONRELAX_REBUILD_LOOSE"] is not None:
+            rebuild = bool(_c["IONRELAX_REBUILD_LOOSE"])
+    return ediffg, on3d, rebuild
+
+
+# ---- [PATCH-IONRELAX] 给形变目录生成 ionrelax/ 子目录（2D：面内分量；3D：全部分量，[V187]）----
+def _ionrelax_incars(base, ediffg=None):
     """主单点 INCAR -> (弛豫段, 静态段) INCAR 文本。[V168] 单独拿出来：判"已算完的 ionrelax 能不能复用"
-    要拿【现在会写的】静态段跟 ionrelax/vasprun.xml 的回显比，不能只看文件在不在。"""
+    要拿【现在会写的】静态段跟 ionrelax/vasprun.xml 的回显比，不能只看文件在不在。
+    ediffg：弛豫段力判据（None = IONRELAX_EDIFFG）。"""
+    ediffg = IONRELAX_EDIFFG if ediffg is None else ediffg
     # 弛豫段
     relax = re.sub(r"IBRION\s*=.*", "IBRION = 2            # 离子弛豫（固定晶格）", base)
     relax = re.sub(r"NSW\s*=.*", "NSW    = " + IONRELAX_NSW, relax)
@@ -388,13 +431,12 @@ def _ionrelax_incars(base):
         relax = re.sub(r"ISYM\s*=.*", "ISYM = " + IONRELAX_ISYM, relax)
     else:
         relax = relax.rstrip() + "\nISYM = " + IONRELAX_ISYM + "\n"
-    # 力判据：用 IONRELAX_EDIFFG（默认 -0.02）。两种情形都处理：
+    # 力判据：用 ediffg（默认 IONRELAX_EDIFFG = -0.005，[V187]；本步 step.conf 可改）。两种情形都处理：
     #   段 INCAR 里已有 EDIFFG（继承自模板）-> 覆盖；没有 -> 追加。
-    # 旧代码只在"没有"时追加 -1E-3，等于把一个过严值写死、且没有任何配置出口。
     if re.search(r"EDIFFG\s*=", relax):
-        relax = re.sub(r"EDIFFG\s*=.*", "EDIFFG = " + IONRELAX_EDIFFG, relax)
+        relax = re.sub(r"EDIFFG\s*=.*", "EDIFFG = " + ediffg, relax)
     else:
-        relax = relax.rstrip() + "\nEDIFFG = " + IONRELAX_EDIFFG + "\n"
+        relax = relax.rstrip() + "\nEDIFFG = " + ediffg + "\n"
     # 静态段
     stat = re.sub(r"IBRION\s*=.*", "IBRION = -1           # 静态段（弛豫后精确带边）", base)
     stat = re.sub(r"NSW\s*=.*", "NSW    = 0", stat)
@@ -405,15 +447,16 @@ def _ionrelax_incars(base):
     return relax, stat
 
 
-def _build_ionrelax(d: Path, encut, subs, submit_body):
-    """在 deform-NN 下建 ionrelax/：两段式（弛豫段 IBRION=2 + 静态段 LVHAR）。
+def _build_ionrelax(d: Path, encut, subs, submit_body, ediffg=None):
+    """在 deform-NN 下建 ionrelax/：两段式（弛豫段 IBRION=2 固定晶胞 + 静态段 LVHAR）。
 
-    E1 必须用「离子弛豫后的内坐标」取带边能量（刚性形变 S 原子不动，E1 系统性
-    偏小 24%），amset h5 仍用本级刚性单点（clamped-ion 口径不变）。弛豫段
-    EDIFF=1E-6 省时间，静态段读 CONTCAR+WAVECAR 取 EDIFF=1E-8 精确带边 + LOCPOT。
+    E1 必须用「离子弛豫后的内坐标」取带边能量（刚性形变时原子不动，MoS2 xx 的 E1 偏小 29%）。
+    S7.1 的两份 h5（芯势口径 deformation.h5、真空口径 deformation_vac.h5）与 band_edges.json
+    都优先读 ionrelax/；本级刚性单点只剩 ck_deform 的完成判据在用。
+    弛豫段 EDIFF=1E-6 省时间，静态段读 CONTCAR+WAVECAR 取 EDIFF=1E-8 精确带边 + LOCPOT。
     弛豫段 ISYM=IONRELAX_ISYM（默认 2，放开对称性提速）；静态段保持 ISYM=0 —— E1 逐 k
-    差分要求各形变目录 IBZ 一致。
-    力判据用 IONRELAX_EDIFFG（默认 -0.02）—— 详见文件头该常量的注释。"""
+    差分要求各形变目录 IBZ 一致。不加选择性动力学：原子三个方向都放开（2D 的层厚要能随面内应变弛豫）。
+    力判据 ediffg（默认 IONRELAX_EDIFFG = -0.005）—— 详见文件头该常量的注释。"""
     ir = d / "ionrelax"
     ir.mkdir(exist_ok=True)
     # 清理旧 SCF 产物（重跑/幂等时残留的 vasprun/LOCPOT/OUTCAR 等），避免
@@ -426,7 +469,7 @@ def _build_ionrelax(d: Path, encut, subs, submit_body):
     shutil.copy2(str(d / "KPOINTS"), str(ir / "KPOINTS"))
     shutil.copy2(str(d / "POTCAR"), str(ir / "POTCAR"))
 
-    relax, stat = _ionrelax_incars((d / "INCAR").read_text(encoding="utf-8"))
+    relax, stat = _ionrelax_incars((d / "INCAR").read_text(encoding="utf-8"), ediffg)
     (ir / "INCAR.relax").write_text(relax, encoding="utf-8", newline="\n")
     (ir / "INCAR.static").write_text(stat, encoding="utf-8", newline="\n")
 
@@ -464,6 +507,40 @@ def _build_ionrelax(d: Path, encut, subs, submit_body):
     )
     sub = sub.rstrip() + extra
     (d / "submit.sh").write_text(sub, encoding="utf-8", newline="\n")
+
+
+def select_ionrelax_dirs(out, dim, on3d=True, ediffg=None):
+    """[V187] 要建 ionrelax/ 的形变目录名集合（按维度）：
+      2D：主导 Green-Lagrange 应变分量在面内（xx/yy/xy）的目录；面外（zz/yz/xz）拉的是真空，不弛豫；
+      3D：on3d 时全部 deform-*（z 是真实晶向，六个分量一视同仁），否则空集（旧的离子固定口径）。"""
+    out = Path(out)
+    dirs = set()
+    if dim == "2d":
+        try:
+            import numpy as _np
+            _und = _np.array(kc.read_lattice_matrix(out / "undeformed" / "POSCAR"))
+            for _d in sorted(p for p in out.glob("deform-*") if p.is_dir()):
+                _L = _np.array(kc.read_lattice_matrix(_d / "POSCAR"))
+                _F = _np.transpose(_np.dot(_np.linalg.inv(_und), _L))
+                _E = (_np.dot(_F.T, _F) - _np.eye(3)) / 2.0
+                _i, _j = _np.unravel_index(_np.argmax(_np.abs(_E)), _E.shape)
+                if (_i, _j) in ((0, 0), (1, 1), (0, 1), (1, 0)):
+                    dirs.add(_d.name)
+        except Exception as _e:                                # noqa: BLE001
+            print("[WARN] 按应变量判面内分量失败（%s），退回 xx±/yy± 配对" % _e)
+            _pairs, _sm = kc.resolve_strain_pairs(out)
+            if _pairs:
+                dirs = {_pairs["xx"][0], _pairs["xx"][1],
+                        _pairs["yy"][0], _pairs["yy"][1]}
+    elif dim == "3d":
+        if on3d:
+            dirs = {p.name for p in out.glob("deform-*") if p.is_dir()}
+            print("[IONRELAX] 3D：全部 %d 个形变构型做离子弛豫（xx/yy/zz/yz/xz/xy，EDIFFG=%s）"
+                  % (len(dirs), ediffg if ediffg is not None else IONRELAX_EDIFFG))
+        else:
+            print("[WARN] IONRELAX_3D = false：3D 形变构型保持离子固定（与 TOTAL ELASTIC MODULI 不同源，"
+                  "S7.1 会把 deform_geometry 记为 clamped）")
+    return dirs
 
 
 def main():
@@ -569,92 +646,91 @@ def main():
             encoding="utf-8", newline="\n")
         stepconf.apply_submit(sub, stepconf.read_submit(stepconf.CONF_NAME, used_incar=True))
 
-    # [PATCH-IONRELAX] 给**所有面内分量**的形变目录生成 ionrelax/ 子目录。
-    # 2026-09-16 二次修订：原来只建 xx±/yy± 四个。但二维 ADP 核用的是张量面内 2×2
-    # 子块（D_xx/D_yy/**D_xy**），面内剪切分量（xy）若仍是离子固定口径，同一张量里
-    # 就混了两种来源 —— 按用户定的规则：**面内只要有一个分量是 clamped 就必须报错**。
-    # 所以这里按"主导应变分量是否面内"来选目录（而不是只看 xx/yy 配对），
-    # 判据与 step7b 的 _inplane_dirs 完全一致。
-    if dim == "2d":
-        _ir_dirs = set()
-        try:
-            import numpy as _np
-            _und = _np.array(kc.read_lattice_matrix(out / "undeformed" / "POSCAR"))
-            for _d in sorted(p for p in out.glob("deform-*") if p.is_dir()):
-                _L = _np.array(kc.read_lattice_matrix(_d / "POSCAR"))
-                _F = _np.transpose(_np.dot(_np.linalg.inv(_und), _L))
-                _E = (_np.dot(_F.T, _F) - _np.eye(3)) / 2.0
-                _i, _j = _np.unravel_index(_np.argmax(_np.abs(_E)), _E.shape)
-                if (_i, _j) in ((0, 0), (1, 1), (0, 1), (1, 0)):
-                    _ir_dirs.add(_d.name)
-        except Exception as _e:                                # noqa: BLE001
-            print("[WARN] 按应变量判面内分量失败（%s），退回 xx±/yy± 配对" % _e)
-            _pairs, _sm = kc.resolve_strain_pairs(out)
-            if _pairs:
-                _ir_dirs = {_pairs["xx"][0], _pairs["xx"][1],
-                            _pairs["yy"][0], _pairs["yy"][1]}
-        if _ir_dirs:
-            # patch_ionrelax_idempotent（2026-09-20）：ionrelax 已经算完的目录**不要重建**。
-            # _build_ionrelax 会清空 ionrelax/ 下除 POSCAR/KPOINTS/POTCAR 之外的全部文件
-            # （含 OUTCAR / LOCPOT / vasprun.xml / CONTCAR），所以 retry 只为"补新增的
-            # 面内分量"而重建时，会顺带毁掉已完成的旧分量（实测 CrSe2_hex：补 deform-09
-            # 的 xy 弛豫会把 deform-01..04 的 ionrelax 结果全删掉）。
-            _built, _skipped = [], []
-            for _name in sorted(_ir_dirs):
-                _irp = out / _name / "ionrelax"
-                # 判据与 autozt 的 ck_deform 一致：**必须**在 OUTCAR 末尾看到 VASP 收尾
-                # 横幅 "General timing and accounting informations" 才算完成。
-                # 只判"文件存在"会把中途挂掉/被杀的 ionrelax 误当完成而跳过（用户
-                # 2026-09-20 指出）——挂掉的 OUTCAR/vasprun 也是存在的。
-                _done = False
-                _oc = _irp / "OUTCAR"
-                if _oc.is_file() and (_irp / "vasprun.xml").is_file():
-                    try:
-                        _done = ("General timing and accounting informations"
-                                 in _oc.read_text(errors="ignore")[-400000:])
-                    except OSError:
+    # [PATCH-IONRELAX] 选要做离子弛豫的形变目录（[V187] 按维度）：
+    #   2D：主导应变分量在**面内**（xx/yy/xy）的目录。2026-09-16 二次修订：原来只建 xx±/yy± 四个；但二维
+    #       ADP 核用的是张量面内 2×2 子块（D_xx/D_yy/**D_xy**），面内剪切分量若仍是离子固定口径，同一张量里
+    #       就混了两种来源 —— 按用户定的规则：**面内只要有一个分量是 clamped 就必须报错**。判据与 step7b 的
+    #       _inplane_dirs 完全一致。面外分量（zz/yz/xz）拉伸/剪切的是真空，二维核不用，不弛豫。
+    #   3D：全部 deform-* 目录（6 个分量都是真实晶向，z 与 x/y 一视同仁）。原来 3D 一律离子固定，与含离子
+    #       弛豫的弹性常数不同源（METHODOLOGY 4.4）。IONRELAX_3D = false 时不建（已建的不会被删）。
+    _ir_ediffg, _ir_3d, _ir_rebuild = _ionrelax_params(cwd)
+    _ir_dirs = select_ionrelax_dirs(out, dim, _ir_3d, _ir_ediffg)
+    if _ir_dirs:
+        # patch_ionrelax_idempotent（2026-09-20）：ionrelax 已经算完的目录**不要重建**。
+        # _build_ionrelax 会清空 ionrelax/ 下除 POSCAR/KPOINTS/POTCAR 之外的全部文件
+        # （含 OUTCAR / LOCPOT / vasprun.xml / CONTCAR），所以 retry 只为"补新增的
+        # 面内分量"而重建时，会顺带毁掉已完成的旧分量（实测 CrSe2_hex：补 deform-09
+        # 的 xy 弛豫会把 deform-01..04 的 ionrelax 结果全删掉）。
+        _built, _skipped, _loose = [], [], []
+        for _name in sorted(_ir_dirs):
+            _irp = out / _name / "ionrelax"
+            # 判据与 autozt 的 ck_deform 一致：**必须**在 OUTCAR 末尾看到 VASP 收尾
+            # 横幅 "General timing and accounting informations" 才算完成。
+            # 只判"文件存在"会把中途挂掉/被杀的 ionrelax 误当完成而跳过（用户
+            # 2026-09-20 指出）——挂掉的 OUTCAR/vasprun 也是存在的。
+            _done = False
+            _oc = _irp / "OUTCAR"
+            if _oc.is_file() and (_irp / "vasprun.xml").is_file():
+                try:
+                    _done = ("General timing and accounting informations"
+                             in _oc.read_text(errors="ignore")[-400000:])
+                except OSError:
+                    _done = False
+            # patch_ionrelax_grid（2026-09-20）：**网格也必须一致**。
+            #   只判 VASP 横幅会在「升级网格后重跑」时静默保留旧网格的 ionrelax ——
+            #   实测 CrSe2_hex：deform-01..04 的 ionrelax 是 15x15x1，升到 46x46x3 后
+            #   主单点被刷新、ionrelax 却被跳过，形变势 E1 与其余量混口径。
+            #   判据：把 ionrelax/KPOINTS 第 4 行与基准网格（undeformed/KPOINTS 第 4 行）
+            #   逐轴比；不一致 -> 视为需重建（旧结果本就该作废）。
+            if _done:
+                try:
+                    # 修正（2026-09-21）：此处原写 und，但 main() 里没有这个局部名
+                    #   （und 只存在于 _reference_kpoints / run_amset_deform_create）。
+                    #   只要有 ionrelax 已跑完，这条 NameError 会让 gen 在归档之后、
+                    #   建 ionrelax/ 之前整个崩掉，retry 报 exit=1。
+                    _ref_ln = ((out / "undeformed" / "KPOINTS").read_text()
+                               .splitlines()[3].split()[:3])
+                    _ir_ln = (_irp / "KPOINTS").read_text().splitlines()[3].split()[:3]
+                    if [int(x) for x in _ir_ln] != [int(x) for x in _ref_ln]:
+                        print("[IONRELAX] %s：ionrelax 网格 %s 与基准 %s 不一致，重建。"
+                              % (_name, "x".join(_ir_ln), "x".join(_ref_ln)))
                         _done = False
-                # patch_ionrelax_grid（2026-09-20）：**网格也必须一致**。
-                #   只判 VASP 横幅会在「升级网格后重跑」时静默保留旧网格的 ionrelax ——
-                #   实测 CrSe2_hex：deform-01..04 的 ionrelax 是 15x15x1，升到 46x46x3 后
-                #   主单点被刷新、ionrelax 却被跳过，形变势 E1 与其余量混口径。
-                #   判据：把 ionrelax/KPOINTS 第 4 行与基准网格（undeformed/KPOINTS 第 4 行）
-                #   逐轴比；不一致 -> 视为需重建（旧结果本就该作废）。
-                if _done:
-                    try:
-                        # 修正（2026-09-21）：此处原写 und，但 main() 里没有这个局部名
-                        #   （und 只存在于 _reference_kpoints / run_amset_deform_create）。
-                        #   只要有 ionrelax 已跑完，这条 NameError 会让 gen 在归档之后、
-                        #   建 ionrelax/ 之前整个崩掉，retry 报 exit=1。
-                        _ref_ln = ((out / "undeformed" / "KPOINTS").read_text()
-                                   .splitlines()[3].split()[:3])
-                        _ir_ln = (_irp / "KPOINTS").read_text().splitlines()[3].split()[:3]
-                        if [int(x) for x in _ir_ln] != [int(x) for x in _ref_ln]:
-                            print("[IONRELAX] %s：ionrelax 网格 %s 与基准 %s 不一致，重建。"
-                                  % (_name, "x".join(_ir_ln), "x".join(_ref_ln)))
-                            _done = False
-                    except (OSError, IndexError, ValueError):
-                        _done = False   # 读不出就保守重建，不赌
-                if _done:
-                    # [V168] INCAR 也必须一致：拿现在会写的静态段跟 ionrelax/vasprun.xml（静态段的回显）比。
-                    #   主单点 INCAR 换了（如补 LVHAR）而 ionrelax 照旧复用，E1 与真空对齐就混了两套输入。
-                    _why = kc.run_incar_mismatch(
-                        _ionrelax_incars((out / _name / "INCAR").read_text(encoding="utf-8"))[1],
-                        _irp / "vasprun.xml")
-                    if _why:
-                        print("[IONRELAX] %s：已有结果是旧 INCAR 跑的（%s），重建。"
-                              % (_name, "; ".join(_why[:4])))
+                except (OSError, IndexError, ValueError):
+                    _done = False   # 读不出就保守重建，不赌
+            if _done:
+                # [V168] INCAR 也必须一致：拿现在会写的静态段跟 ionrelax/vasprun.xml（静态段的回显）比。
+                #   主单点 INCAR 换了（如补 LVHAR）而 ionrelax 照旧复用，E1 与真空对齐就混了两套输入。
+                _why = kc.run_incar_mismatch(
+                    _ionrelax_incars((out / _name / "INCAR").read_text(encoding="utf-8"))[1],
+                    _irp / "vasprun.xml")
+                if _why:
+                    print("[IONRELAX] %s：已有结果是旧 INCAR 跑的（%s），重建。"
+                          % (_name, "; ".join(_why[:4])))
+                    _done = False
+            if _done:
+                # [V187] 力判据比现在松的旧结果（如 -0.02）：默认复用并在这里点名（S7.1 的 ionrelax_check
+                #   会给出回收是否充分的证据）；IONRELAX_REBUILD_LOOSE = true 时重建。
+                _old_ed = kc.incar_value(_irp / "INCAR.relax", "EDIFFG")
+                if _old_ed is None or abs(_old_ed) > abs(float(_ir_ediffg)) + 1e-12:
+                    _loose.append("%s(%s)" % (_name, "?" if _old_ed is None else "%g" % _old_ed))
+                    if _ir_rebuild:
+                        print("[IONRELAX] %s：已有结果的 EDIFFG=%s 比现在的 %s 松，IONRELAX_REBUILD_LOOSE=true -> 重建。"
+                              % (_name, _old_ed, _ir_ediffg))
                         _done = False
-                if _done:
-                    _skipped.append(_name)
-                    continue
-                _build_ionrelax(out / _name, encut, _subs, submit_body)
-                _built.append(_name)
-            print("[IONRELAX] 生成 %d 个 ionrelax/（%s）；已存在结果、跳过重建的 %d 个（%s）"
-                  % (len(_built), ", ".join(_built) or "无",
-                     len(_skipped), ", ".join(_skipped) or "无"))
-        else:
-            print("[WARN] 认不出面内分量，跳过 ionrelax/（形变势退回刚性单点口径）")
+            if _done:
+                _skipped.append(_name)
+                continue
+            _build_ionrelax(out / _name, encut, _subs, submit_body, _ir_ediffg)
+            _built.append(_name)
+        print("[IONRELAX] 生成 %d 个 ionrelax/（%s）；已存在结果、跳过重建的 %d 个（%s）"
+              % (len(_built), ", ".join(_built) or "无",
+                 len(_skipped), ", ".join(_skipped) or "无"))
+        if _loose and not _ir_rebuild:
+            print("[WARN] [V187] 复用了力判据比现在（EDIFFG=%s）松的 ionrelax/：%s。\n"
+                  "       看 S7.1 的 ionrelax_check；要按新判据重算，本步 step.conf 写 IONRELAX_REBUILD_LOOSE = true 再 retry。"
+                  % (_ir_ediffg, ", ".join(_loose)))
+    elif dim == "2d":
+        print("[WARN] 认不出面内分量，跳过 ionrelax/（形变势退回刚性单点口径）")
 
     print("[DONE] %s：%d 个形变子目录输入就绪，tf 会各自提交" % (OUTDIR_NAME, len(subs)))
 

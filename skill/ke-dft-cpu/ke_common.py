@@ -707,7 +707,9 @@ GAP_TOL_EV = 1e-3
 #   以前两边各自拿脚本自己的 _SKILL_REV 比（S8.2 "2026-08-31-rscan" vs S7.1 "2026-09-16-deform-ref-vacuum"），
 #   从来没对上过，每次 S8.2 都告警"step7b 可能跑的是旧副本"——一条永远在响的告警等于没有告警。
 #   改 band_edges.json 的字段或口径时改这里，S8.2 会对旧文件告警。
-BAND_EDGES_REV = "2026-09-16-deform-ref-vacuum"
+#   [V187] 2026-10-13：带边 hits 加 E1_zz_eV；3D 的 E1_iso_eV 改为 (D_xx+D_yy+D_zz)/3（以前照搬 2D 的面内平均，
+#   漏了 zz），字段 E1_iso_def 写明口径；另加 ionrelax_check（离子弛豫力判据核对）。
+BAND_EDGES_REV = "2026-10-13-v187-3d-ionrelax"
 
 
 def consumer_bandgap(step_dir):
@@ -1627,6 +1629,91 @@ def render_tpl(tpl_path: Path, subs: dict, out_path: Path):
     print("[OK] %s" % out_path.name)
 
 
+# ---- [V187] ionrelax 弛豫段的力判据核对（S7.1 写进 band_edges.json 的 ionrelax_check）----
+# 判据参考值：S7 弛豫段的出厂力判据（gen_step9_deform.IONRELAX_EDIFFG = -0.005，与 S1 为弹性收紧的同值）。
+#   比它松的旧结果（如 -0.02）只告警、照旧使用；要重算见 gen_step9_deform 的 IONRELAX_REBUILD_LOOSE。
+IONRELAX_EDIFFG_REF = 0.005
+# 末步/首步最大力之比的告警线：首步的力 = 应变诱导的内坐标力（+ 未形变构型在 S7 设置下的残余力），
+#   末步还剩多少，内坐标响应就还差多少（二次势近似）。0.25 = 弛豫回收不足 75%。
+IONRELAX_FORCE_RATIO_WARN = 0.25
+
+
+def outcar_max_forces(outcar):
+    """OUTCAR 每个离子步 TOTAL-FORCE 块里原子受力模的最大值（eV/Å）列表；读不到返回 []。"""
+    import math
+    out, cur, state = [], None, 0
+    try:
+        with open(str(outcar), "r", encoding="utf-8", errors="ignore") as f:
+            for ln in f:
+                if state == 0:
+                    if "TOTAL-FORCE" in ln:
+                        state, cur = 1, 0.0
+                elif state == 1:                       # 表头下面那条虚线
+                    if ln.strip().startswith("---"):
+                        state = 2
+                else:                                  # 数据行，直到下一条虚线
+                    if ln.strip().startswith("---"):
+                        out.append(cur)
+                        state = 0
+                        continue
+                    xs = ln.split()
+                    if len(xs) >= 6:
+                        try:
+                            fx, fy, fz = float(xs[3]), float(xs[4]), float(xs[5])
+                        except ValueError:
+                            continue
+                        cur = max(cur, math.sqrt(fx * fx + fy * fy + fz * fz))
+    except OSError:
+        return []
+    return out
+
+
+def incar_value(path, key):
+    """INCAR 里某个数值键（读不到返回 None）。"""
+    try:
+        for ln in Path(path).read_text(encoding="utf-8", errors="ignore").splitlines():
+            m = re.match(r"\s*%s\s*=\s*([-+0-9.eEdD]+)" % key, ln, re.I)
+            if m:
+                return float(m.group(1).replace("d", "e").replace("D", "e"))
+    except (OSError, ValueError):
+        pass
+    return None
+
+
+def ionrelax_force_check(ionrelax_dir):
+    """一个 ionrelax/ 的弛豫段核对：首/末步最大力、离子步数、EDIFFG/NSW、是否跑满 NSW、回收比例。
+
+    读 OUTCAR.relax（submit.sh 在弛豫段结束时拷的）与 INCAR.relax。返回 dict，status：
+      ok        末步力 <= |EDIFFG| 且 末步/首步 <= IONRELAX_FORCE_RATIO_WARN（或首步力本来就小于判据）
+      weak      收敛了，但末步/首步 > 告警线：内坐标响应只回收了一部分（判据相对应变诱导的力偏松）
+      nsw_hit   跑满 NSW 还没到 EDIFFG
+      loose     EDIFFG 比 IONRELAX_EDIFFG_REF 松（其余正常）
+      no_data   没有 OUTCAR.relax（旧版 submit.sh 不留弛豫段 OUTCAR）"""
+    d = Path(ionrelax_dir)
+    ed = incar_value(d / "INCAR.relax", "EDIFFG")
+    nsw = incar_value(d / "INCAR.relax", "NSW")
+    rec = {"ediffg": ed, "nsw": int(nsw) if nsw is not None else None}
+    fs = outcar_max_forces(d / "OUTCAR.relax")
+    if not fs:
+        rec["status"] = "no_data"
+        return rec
+    f0, f1 = fs[0], fs[-1]
+    rec.update({"n_ionic": len(fs), "fmax_first": round(f0, 5), "fmax_last": round(f1, 5)})
+    tol = abs(ed) if (ed is not None and ed < 0) else None
+    rec["ratio_last_first"] = round(f1 / f0, 4) if f0 > 1e-8 else None
+    flags = []
+    if tol is not None and f1 > tol * 1.0001 and rec["nsw"] and len(fs) >= rec["nsw"]:
+        flags.append("nsw_hit")
+    if tol is not None and f0 > tol and rec["ratio_last_first"] is not None \
+            and rec["ratio_last_first"] > IONRELAX_FORCE_RATIO_WARN:
+        flags.append("weak")
+    if ed is None or (ed < 0 and abs(ed) > IONRELAX_EDIFFG_REF * 1.0001) or ed >= 0:
+        flags.append("loose")
+    rec["flags"] = flags
+    rec["status"] = flags[0] if flags else "ok"
+    return rec
+
+
 # ---- [PATCH-IONRELAX] 应变配对反解（gen 与 step7b 共用，单一真源）----
 def read_lattice_matrix(poscar):
     """读 POSCAR 晶格矩阵（3x3，含 scale）。纯 numpy，不碰 pymatgen。"""
@@ -2136,13 +2223,35 @@ def symmetrize_elastic_for(cwd, elastic, dirs, enabled=True):
 
 
 def deformation_h5_symmetrized(path):
-    """V121：形变势 h5 是否已按点群对称化（dp_symmetrize 打的 attrs）。读不了返回 None（不告警）。"""
+    """形变势 h5 是否已按点群**正确**对称化（dp_symmetrize 打的 attrs）。读不了返回 None（不告警）。
+    [V188] 要求版本 >= 2：= 1 是 V121 旧法（把 AMSET 的幅值 |D| 当带符号张量旋转，非对角被平均成 0），算作没对称化。"""
     try:
         import h5py
         with h5py.File(str(path), "r") as f:
-            return bool(int(f.attrs.get("dp_symmetrized", 0)))
+            return int(f.attrs.get("dp_symmetrized", 0)) >= 2
     except Exception:                                          # noqa: BLE001
         return None
+
+
+def deformation_h5_issues(path):
+    """[V189] S8/S8.4 要用的形变势 h5 还差什么：返回问题列表（空 = 可用）；读不了返回 None（不告警）。
+      · dp_symmetrized < 2：没对称化，或 V121 旧法（把幅值当张量旋转，剪切形变势被抹成 0）；
+      · dp_offdiag != "tensor"：非对角还是 AMSET 原生的 2·D_xy，运行期 tensordot(q̂⊗û, D) 把剪切耦合算大一倍。
+    两条都由重新 gen S7.1（秒级、不提交作业）解决。"""
+    try:
+        import h5py
+        with h5py.File(str(path), "r") as f:
+            sym = int(f.attrs.get("dp_symmetrized", 0))
+            tensor = str(f.attrs.get("dp_offdiag", "")) == "tensor"
+    except Exception:                                          # noqa: BLE001
+        return None
+    out = []
+    if sym < 2:
+        out.append("未按点群正确对称化（%s）" % ("V121 旧法：把幅值 |D| 当张量旋转，剪切形变势被抹成 0"
+                                             if sym == 1 else "没对称化：六方 xx/yy 迁移率差 9–10%"))
+    if not tensor:
+        out.append("非对角是 AMSET 原生的 2·D_xy（不是张量分量），运行期剪切耦合被算大一倍")
+    return out
 
 
 def full_grid_ibz_count(structure, kpoints, symprec=AMSET_SYMPREC):

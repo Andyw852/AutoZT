@@ -146,22 +146,30 @@ slab 里会把面外极性模也算进去。二维 Fröhlich 只用面内极性�
 ADP 核分母是 Christoffel 刚度（VASP `TOTAL ELASTIC MODULI`，含离子弛豫）。实测 MoS2 单层
 xx 0.5%：电子 E1_vac 由 6.58（离子固定）变 8.51 eV（离子弛豫），差 **29%**。
 
-**但 `ionrelax/` 只有 2D 会生成**：step7（`gen_step9_deform.py`）只在 `dim == "2d"` 时给
-**面内**应变分量（xx/yy/xy）的形变目录建 `ionrelax/`；面外分量与**全部三维形变**都是
-离子固定的单点（`IBRION=-1, NSW=0`）。所以实际口径是：
+**哪些构型做离子弛豫（[V187] 起按维度）**：step7（`gen_step9_deform.py` 的 `select_ionrelax_dirs`）给形变目录建
+`ionrelax/`（固定晶胞 `ISIF=2`、`IBRION=2` 弛豫内坐标，不加选择性动力学，再接 `ISYM=0` 静态段）：
 
-| 体系 | 形变构型 | `deform_geometry` |
-|---|---|---|
-| 2D | 面内 ionrelax，面外 clamped（二维核只用面内分量） | `ionrelax(in-plane)+clamped(out-of-plane)` |
-| 3D | 全部 clamped（离子固定） | `clamped`（step7b 打 WARN） |
+| 体系 | 形变构型 | `deform_geometry` | z 方向 |
+|---|---|---|---|
+| 2D | 面内分量（xx/yy/xy）ionrelax，面外分量（zz/yz/xz）clamped | `ionrelax(in-plane)+clamped(out-of-plane)` | z 是真空：面外应变拉/剪的是真空，二维核不用，不弛豫；但面内应变下原子的 **z 坐标放开**（层厚随应变变化，是二维离子弛豫响应的一部分） |
+| 3D | 全部分量 ionrelax（[V187]；`IONRELAX_3D = false` 回到全 clamped） | `ionrelax` | z 是真实晶向，六个分量一视同仁 |
 
-> ⚠ 三维的形变势因此仍是**离子固定**口径，而弹性常数含离子弛豫 —— 两者不同源；
-> 内坐标自由度大的三维体系（如 225 相 tetradymite）E1 会系统性偏离。要改成三维也弛豫，
-> 需在 step7 放开 `dim == "2d"` 的限制（每个形变胞多一段离子弛豫，代价约 ×(1+NSW 步)），
-> 属口径变更，改前先评估存量三维结果。
+> [V187] 之前 3D 一律离子固定（`clamped`），与含离子弛豫的弹性常数不同源。受影响的是有内应变的结构：金刚石/闪锌矿的
+> 剪切分量（Kleinman 内应变 → TA 支 ADP）、R-3m（Bi₂Te₃ 类，有自由 z 参数）连正应变也受影响；原子都在反演中心的结构
+> （岩盐等）受力为零，弛豫段 1 步即停，结果不变。**已算完的 3D 项目不会自动重算**：retry S7_deform 才会给全部构型补
+> `ionrelax/`（ck_deform 判未完成 → 重交），再 S7.1 → S8 / S8.2。
 > ⚠ **回退不静默**：没有 `ionrelax/` 的构型按离子固定口径处理时，gen 会打 WARN 并把
 > `deform_geometry`（ionrelax / clamped / mixed）写进 `band_edges.json`，进而出现在
 > settings 注释、`2d_correction.json` 与 8.3 汇总表里，跨项目比较前先核对这一项。
+> 2D 的 `ionrelax(in-plane)+clamped(out-of-plane)` 是正常口径：S8.4（二维核）与 8.3 不再告警；只有 S8（三维核，2D 只作对照）
+> 会用到面外分量，那里单独注明。
+
+**弛豫力判据（[V187]）**：`IONRELAX_EDIFFG` 由 -0.02 收紧到 **-0.005 eV/Å**（与 S1 为弹性收紧的同值）。带边本征值对内坐标是
+**一阶**的（斜率 = 光学形变势 D_opt，1–10 eV/Å），残余位移 δu ≈ F_tol/k 落到 E1 上的误差上限 ≈ D_opt·δu/γ（γ = 0.005）：
+-0.02 → ~1 eV，-0.005 → ~0.3 eV。旧注释"残余力对带边影响 ~1E-4 eV"是把总能（二阶）的量级套到了本征值上。MoS₂ 粗估：
+±0.5% 应变诱导的内坐标力只有 ~0.04 eV/Å，与 -0.02 同量级。S7.1 逐构型写 `band_edges.json` 的 `ionrelax_check`
+（首/末步最大力、离子步数、是否跑满 NSW、判据是否偏松；末/首 > 0.25 记 `weak`）。判据偏松的旧结果默认复用、只告警；
+S7 的 step.conf 写 `IONRELAX_REBUILD_LOOSE = true` 再 retry 只重建这些构型（`IONRELAX_EDIFFG` 也可在那里改）。
 
 二维工作的通行做法是以**远离单层处的真空静电势**为零点定义带能，
 C2DB 给出的形变势也是真空口径。两者在本项目实测差 1.66 倍（CrS2 单层：芯势 3.53 eV、
@@ -337,3 +345,66 @@ G 的 6 meV 展宽抹圆阈值（只看 ODP 的 ⟨τ⟩ 偏低约 10%）；轻�
   的能量窗口（VBM − cutoff, CBM + cutoff），就报错退出（exit 3），不静默裁；各构型带数本来一致时什么都不做。差的只是窗口外的空带，
   对形变势、band_edges.json、deformation.h5 的带轴都没有影响，所以**不用重算 ionrelax**，S7.1 重跑即可。
 - **不在 S7 的 INCAR 里补 NBANDS**：INCAR 一变，[V168] 的输入核对会把所有已算完的形变单点判成过期、整批重算。
+
+## [V187] 形变势构型：3D 也做离子弛豫；弛豫力判据收紧；z 方向按维度处理
+
+- **3D 离子弛豫**：S7 对 3D 的全部形变构型建 `ionrelax/`（默认开，S7 的 step.conf `IONRELAX_3D = false` 关）。
+  理由与 2D 相同：q→0 声学声子含内坐标弛豫，ADP 分母是含离子弛豫的 `TOTAL ELASTIC MODULI`。细节见 4.4。
+- **力判据**：`IONRELAX_EDIFFG` -0.02 → -0.005；S7.1 的 `ionrelax_check` 核对回收是否充分；旧结果按
+  `IONRELAX_REBUILD_LOOSE` 由用户决定是否重算（不自动重算）。
+- **z 方向按维度（全技能核对后修的几处）**：
+  - S7.1 `band_edges.json`：带边 hits 加 `E1_zz_eV`；3D 的 `E1_iso_eV` 改为 (D_xx+D_yy+D_zz)/3（以前照搬 2D 只取面内两项），
+    `E1_iso_def` 写明口径；`BAND_EDGES_REV` 随之升级（S8.2 对旧文件告警"重跑 S7.1"）。S8.2 的 3D 主路径本来就直接读 h5 的
+    三个对角（[0025]），只改了回退路径的说明。
+  - S8.4 / S8.3：2D 的 `ionrelax(in-plane)+clamped(out-of-plane)` 不再误报"非离子弛豫口径"；8.3 的张量约化标签按 step1 的
+    DIM 判（2D 默认不跑 S8 时以前会被标成 "[3D] (xx+yy+zz)/3"）。
+  - S8（三维核）：读 `deform_geometry`，3D 非离子弛豫时告警；2D 注明面外分量离子固定、S8 只作对照。
+- **未改**：2D 的面外应变仍是离子固定单点 —— 只为让 AMSET 读到完整张量，二维核不用；未形变参考构型仍是 S1 CONTCAR 的单点
+  （中心差分里抵消；AMSET 逐应变取 |·| 后对 |D| 小于 ~s/γ 的分量会留下一个噪声底，s 为 S1/S7 设置差造成的残余力位移所致的带边漂移）。
+
+## [V188] 形变势对称化改正：AMSET 的 h5 是幅值，不是带符号张量
+
+- **错在哪**：V121 的 `dp_symmetrize` 以为 h5 存的是带符号张量 D，对它做 rᵀ D(rk) r 的群平均。实际上 AMSET（0.4.19 与 0.5.1
+  相同）在 `get_strain_deformation_potential` 里 `np.abs(diff / strain_amount)`，**逐分量取绝对值**再对各应变平均 ——
+  h5 里是幅值 |D_ij|。把幅值当张量旋转：Laue 群里只要有垂直 x、y、z 的镜面（mmm、4/mmm、m-3m、6/mmm，MoS₂ 也是），
+  非对角幅值带着 ± 号被平均成 **0**（剪切形变势 → 横声学支 ADP 被抹掉；PbTe/SnTe/Ge 的 L 谷 Ξu/3 整个没了），
+  3/6 次轴还把非对角混进对角。另外 AMSET 的非对角存的是 **2·D_xy**（剪切应变取张量分量 ε_xy = δ，ΔE = 2D_xy δ），
+  不是张量分量，旧法的混合变换这一点也没处理。
+- **AMSET 自己的 |·| 再平均也有偏差**：±应变给 d± = −D ∓ ½Kδ（二阶曲率）或 −D ± s/δ（未形变参考的残差），
+  先取绝对值再平均得 max(|D|, ½|K|δ, |s|/δ) —— 小分量（多是非对角）被垫上一个虚假的底。带符号的中心差分把它精确抵消。
+  只有**简并能级被应变劈裂**处（Si 的 Γ 价带顶：排序后 E = E0 ± |a|δ），导数没有定义，AMSET 的 |a| 才是合理的幅值。
+- **改法**：
+  1. S7.1 在同一次读取里（core：包一层 `amset deform read`；vac：自己的脚本）用与 AMSET 相同的 k 映射与分量归属
+     再算一份**带符号中心差分**，连同各带与相邻带的能隙、应变幅度写进 `deformation_signed.h5` /
+     `deformation_vac_signed.h5`（数据集名不含 `deformation_potentials`，AMSET 不会误读）；
+  2. 对称化：非对角先 ÷2 换成真张量，对带符号场做全 Laue 群平均，再 ×2、取 |·| 写回 h5（AMSET 约定的幅值；
+     [V189] 之后紧接着再把非对角换成张量分量，见下一节）；
+  3. 只在"近简并（能隙 < 2δ·max|D| + 1 meV）**且** ±应变符号相反"的 (带, k) 及其全部对称像上退回 AMSET 的幅值，
+     并只用"带符号置换"类操作（对幅值精确：|r D rᵀ| = |r| |D| |r|ᵀ）；Kramers 简并（应变不劈裂）照用带符号；
+  4. 没有带符号文件（旧产物）时只做第 3 步的置换子群对称化（精确，但六方的 xx/yy 拉不齐）。
+- **标记**：h5 的 `dp_symmetrized` = 2；= 1 是 V121 旧法，S8/S8.4 会告警、`tools/regate_projects.py` 记 STALE-DP，
+  `dp_symmetrize` 不会再动它（无法复原）—— **重新 gen S7.1（秒级、不提交作业）再重跑 S8/S8.4/S8.2**。
+- **影响面**：带符号可信的点上，h5 的值从 AMSET 的 ⟨|d±|⟩ 变成 |中心差分|：主分量几乎不变，小分量的虚假底被去掉；
+  非对角（剪切）形变势恢复（V121 之后的所有结果里它们都是 0）。立方/六方材料的 ADP 迁移率会变，L 谷/偏轴谷材料变化最大。
+- 验证见 `step8.4_amset2d/VERIFICATION.md` 的 V188；测试 `test_dp_symmetrize.py`（含真实 AMSET 函数的端到端）、
+  `tests/test_v188_dp_symmetrize.py`（纯 numpy）。
+
+## [V189] 形变势 h5 的非对角换成张量分量（AMSET 运行期把剪切耦合算大一倍）
+
+- **问题**：AMSET 原生 h5 的非对角是 2·D_xy（[V188]）。运行期的 ADP（`amset/scattering/elastic.py`）与 S8.4 的
+  `amset2d_plugin` 都用 `tensordot(q̂⊗û, D)`（q̂⊗û 不对称化）。物理上 ΔE = Σ D_ij ε_ij，ε = sym(q̂⊗û)·A，D 对称，
+  所以 ΔE ∝ Σ D_ij q_i u_j —— D 必须是张量分量。用原生值缩并，剪切部分的耦合振幅大一倍（散射率里那部分 ×4）。
+  例：L 谷 LA[111] 应为 Ξd + Ξu，原生 h5 给 Ξd + 5Ξu/3。V121 把非对角抹成 0 时这个问题被掩盖；V188 恢复非对角后必须一起修。
+- **验证（第一性原理）**：紧束缚 GaN，沿随机 q̂、横向 û 施加声子应变 sym(q̂⊗û)·η，直接算带边移动斜率：
+  原生 h5 缩并最大偏差 **53%**，张量分量 **0.1%**（`test_dp_symmetrize.py` 的 test_v189_contraction_matches_true_band_shift）。
+- **改法（数据层，不碰运行期）**：S7.1 在对称化之后调 `dp_symmetrize.to_tensor_h5`，把 `deformation.h5` /
+  `deformation_vac.h5` 的非对角原地 ÷2，打 `dp_offdiag = "tensor"`。原版 AMSET、2D 插件、`amset_ir_fix` 的星平均
+  （对 D 做 R D Rᵀ，本来就要求张量）都自动变对；S8/S8.4 继续软链 S7.1 的文件，上游失效检测不受影响。
+  对角不变：band_edges.json、S8.2 的 E1 只读对角，不受影响。不选运行期补丁：AMSET 的散射子进程是 spawn，
+  补丁要靠包装 worker 链式导入（ir_fix / dpo3d / 2D 插件都在抢同一个 worker），脆弱。
+- **检查**：`ke_common.deformation_h5_issues` —— S8/S8.4 生成时 h5 没对称化（< 2）或不是张量约定都会告警；
+  `tools/regate_projects.py` 记 STALE-DP；`tools/compare_deformation_h5.py` 先把两份 h5 统一到张量约定再比，
+  旧 h5 不是张量约定且新场非对角权重 > 2% 时判"需要重跑"（旧运行的剪切耦合口径不同）。
+- **h5 不再是 AMSET 原生约定**：拿它喂原版 AMSET 正是想要的（物理正确）；但不要再把它当 `amset deform read`
+  的直接输出去和别的 AMSET 结果比非对角。带符号文件 `*_signed.h5` 仍是 AMSET 约定（只给 dp_symmetrize 用）。
+
