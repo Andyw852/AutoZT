@@ -1023,6 +1023,30 @@ def _gen_busy(out):
     return GEN_BUSY_TAG in (out or "")
 
 
+def push_file_entry_cmd(lp, step_dir, entry):
+    """push_paths 的 {from, to} 条目 -> (shell 片段, provenance 键, provenance 值)。
+
+    from 相对材料本地目录 lp（单个文件），to 相对步骤目录（不许绝对路径、不许 ..）。镜像语义：本地有就推（md5 相同
+    不重写），本地没有就删掉远端那份（免得过期的提示一直留着）。写法不对的条目跳过（返回空片段）。"""
+    import base64
+    import hashlib
+    _from, _to = str((entry or {}).get("from") or ""), str((entry or {}).get("to") or "")
+    if not _from or not _to or os.path.isabs(_to) or ".." in _to.replace("\\", "/").split("/"):
+        return "", None, None
+    src = os.path.normpath(os.path.join(lp, _from))
+    dst = os.path.join(step_dir, _to)
+    if not os.path.isfile(src):
+        return "rm -f %s ; " % shlex.quote(dst), None, None
+    with open(src, "rb") as fh:
+        data = fh.read()
+    cmd = "mkdir -p %s ; " % shlex.quote(os.path.dirname(dst))
+    cmd += ("[ -f %s ] && [ \"$(md5sum %s 2>/dev/null | cut -d' ' -f1)\" = %s ] "
+            "|| echo %s | base64 -d > %s ; "
+            % (shlex.quote(dst), shlex.quote(dst), hashlib.md5(data).hexdigest(),
+               base64.b64encode(data).decode(), shlex.quote(dst)))
+    return cmd, _to, {"sha256": hashlib.sha256(data).hexdigest(), "source": src, "origin": "push_paths"}
+
+
 def remote_gen(cfg, t, m, sname, host=None, wd=None):
     from autozt import (PROV_DIR, PROV_NAME, STEP_CONF, build_gen_provenance,
                        build_step_conf, find_asset, provenance_enabled, run_remote,
@@ -1204,9 +1228,19 @@ def remote_gen(cfg, t, m, sname, host=None, wd=None):
     #   （use_stdin=True），不受 argv 长度限制，大文件（fc3 数 MB）也能推。
     #   用途：跨技能/跨集群搬运成果——fit-fc-thermal 在 3090 拟合出的力常数 bundle，
     #   切到 jzzn/hanhai 提交 kl 时自动送上去，无需手动 scp。
+    #   2026-10-14：条目也可写成 {from: <相对 lpath 的单个文件>, to: <相对步骤目录的目标路径>}——
+    #   改名落地（几份同名文件互不覆盖），并且是镜像：本地没有这份文件就删掉远端那份（免得旧提示一直留着）。
+    #   用途：ke/kl 的 S1 把本地 result 里两条链的 workflow_method.txt 推过去，rerun / 换集群后 FUNC=auto
+    #   仍能沿用本材料原来的泛函、与另一条链对齐（relax_common.HINT_DIR）。
     for _rel in list(sc.get("push_paths") or []):
         if not lp:
             break
+        if isinstance(_rel, dict):
+            _cmd, _pkey, _pval = push_file_entry_cmd(lp, step_dir, _rel)
+            line += _cmd
+            if _pkey:
+                prov_files[_pkey] = _pval
+            continue
         _src = os.path.normpath(os.path.join(lp, _rel))
         if not os.path.exists(_src):
             continue

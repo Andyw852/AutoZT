@@ -55,7 +55,11 @@ steps:
      check: relax_injob, gen: gen_step1_std_opt.py, contcar_to_poscar: true,
      # thickness_2d/vdw_radii（2026-09-17 加）：2D 变胞稳定判据按层内口径换算需要
      gen_need: [ke_common.py, relax_common.py, method_select.py, mol_common.py, incar_0d.tpl, submit_std_0d.tpl, dim_common.py, stepconf.py, step.conf, check_common.py, step1_check_and_resubmit.py, thickness_2d.py, vdw_radii.py,
-                incar_2d.tpl, incar_3d.tpl, submit_std_2d.tpl, submit_std_3d.tpl]}
+                incar_2d.tpl, incar_3d.tpl, submit_std_2d.tpl, submit_std_3d.tpl],
+     # 2026-10-14：FUNC=auto 的依据——本地 result 里本链与 kl 链上次 S1 的泛函（rerun 删了远端 step1、换集群、
+     #   两链不在同一棵远端目录树时也能沿用 / 对齐；本地没有就删掉远端旧副本）。见 relax_common.HINT_DIR。
+     push_paths: [{from: ke-dft-cpu/result/step1_opt/workflow_method.txt, to: .autozt_hints/own_step1.txt},
+                  {from: kl-dft-cpu/result/step1_std_opt/workflow_method.txt, to: .autozt_hints/sibling_kl-dft-cpu.txt}]}
 
   - {seq: 3, name: step3_uniform, label: S3_uniform, src: step3_uniform,
      check: wavecar, gen: gen_step5_uniform.py,

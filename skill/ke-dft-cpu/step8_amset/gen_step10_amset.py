@@ -875,12 +875,17 @@ def read_bandgap(cwd: Path):
                         print("[WARN] band_summary 判为金属（gap=%.4f eV）——不写 bandgap"
                               % _g)
                         return None
-                    _fn = "HSE06" if "hse" in bs.parent.name else "PBE/PBEsol"
+                    # 2026-10-14：杂化泛函名读 band_summary.json 的 hybrid.label（S2.3 的 HYBRID 可选 hse06/hsesol/
+                    #   hse03/pbe0/custom），不再按目录名一律标 HSE06；旧摘要没有这一项才按目录名推断。
+                    _hyb = "hse" in bs.parent.name
+                    _fn = (((d.get("hybrid") or {}).get("label") or "HSE06（旧摘要未记杂化参数，按目录名推断）")
+                           if _hyb else "PBE/PBEsol")
                     _BANDGAP_SRC = "%s/band_summary.json（%s）" % (bs.parent.name, _fn)
                     print("[OK] 带隙 %.4f eV（键 %s，%s）" % (_g, k, _fn))
-                    if _fn == "HSE06":
-                        print("[..] scissor 带隙取自 HSE06。若该材料 HSE06 不适用（如 C60 网络要用 "
-                              "PBE0），在 step.conf 写 BANDGAP_OVERRIDE = <eV>（可配 BANDGAP_NOTE）。")
+                    if _hyb:
+                        print("[..] scissor 带隙取自杂化泛函 %s。若它对该材料不适用（如 C60 网络要用 PBE0）：在 S2.3 "
+                              "的 step.conf 写 HYBRID 选别的杂化泛函后 rerun S2.3（会让本步重排），或在 step.conf 写 "
+                              "BANDGAP_OVERRIDE = <eV>（可配 BANDGAP_NOTE）。" % _fn)
                     return _g
         except Exception as _e:
             # ★ 不静默：这里失败会**静默退回项目配置里的 bandgap**，即用了另一个

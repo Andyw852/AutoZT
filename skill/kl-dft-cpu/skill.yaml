@@ -58,7 +58,10 @@ steps:
      #   （tol_cell = 0.4 kbar /(h⊥/d)），relax_common 靠这两个模块现算 h⊥/d。
      gen_need: [relax_common.py, method_select.py, mol_common.py, incar_0d.tpl, submit_std_0d.tpl, dim_common.py, stepconf.py, step.conf,
                 check_common.py, step1_check_and_resubmit.py, thickness_2d.py, vdw_radii.py,
-                incar_2d.tpl, incar_3d.tpl, submit_std_2d.tpl, submit_std_3d.tpl]}
+                incar_2d.tpl, incar_3d.tpl, submit_std_2d.tpl, submit_std_3d.tpl],
+     # 2026-10-14：FUNC=auto 沿用 / 与 ke 链对齐的依据（本地 result 里两链上次 S1 的泛函），见 relax_common.HINT_DIR。
+     push_paths: [{from: kl-dft-cpu/result/step1_std_opt/workflow_method.txt, to: .autozt_hints/own_step1.txt},
+                  {from: ke-dft-cpu/result/step1_opt/workflow_method.txt, to: .autozt_hints/sibling_ke-dft-cpu.txt}]}
 
   - {seq: 2, name: step2_static, label: S2_static, check: outcar,
      gen: gen_step2_static.py,
@@ -148,10 +151,11 @@ optional_steps:
          done_marker: phonon_plot_summary.json, fetch_all: true}
 
 requires:
-  python: [phonopy, phono3py, numpy, spglib, pheasy, seekpath]   # [0019] 拟合默认 pheasy → 必需依赖（GPU 版）
-  # seekpath（2026-10-14 加）：3D 声子谱高对称路径（S5 判据出图、S5.1 画图）。以前缺它会静默退回
-  #   六方 Γ-M-K-Γ，立方/四方等晶系的声子谱路径是错的；现在缺了 S5.1 直接报错，check 也会提示。
-  optional_python: [symfc]   # 改 FIT_ENGINE=phono3py 时才需要
+  python: [phonopy, phono3py, numpy, spglib, pheasy]   # [0019] 拟合默认 pheasy → 必需依赖（GPU 版）
+  # seekpath（2026-10-14）：只有 3D 的 S5.1 画声子谱要它（以前缺它会静默退回六方 Γ-M-K-Γ，立方/四方等晶系路径是错的；
+  #   现在缺了 S5.1 直接报错说明）。放 optional_python：写进 python 会让本机后端缺它时整个 kl 技能（含 2D、
+  #   S1–S6）都拒绝提交，而只有 3D 的 S5.1 用得到它。autozt check 照样会列出来。
+  optional_python: [symfc, seekpath]   # symfc：改 FIT_ENGINE=phono3py 时才需要
   conda: atomate2_p_a
   exe: [vasp_std, vaspkit, phono3py]
 # =============================================================================

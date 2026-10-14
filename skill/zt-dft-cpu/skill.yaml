@@ -56,7 +56,9 @@ steps:
                    kl-mlff-cpu/result/step4_kappa/kappa_summary.json,
                    kl-mlff-gpu/result/step4_kappa/kappa_summary.json,
                    fit-fc-thermal/result/step2_kappa/kappa_summary.json],
-       structure: [ke-dft-cpu/result/step1_opt/workflow_method.txt]}}
+       structure: [ke-dft-cpu/result/step1_opt/workflow_method.txt]},
+     # 2026-10-14：ke/kl 泛函一致性核对的兜底——kl S6 早于 kl_method.json 时读 kl S1 的记录（可选，本地没有就不推）
+     push_paths: [{from: kl-dft-cpu/result/step1_std_opt/workflow_method.txt, to: inputs/kl_step1/workflow_method.txt}]}
 
 requires:
   # 本技能只做汇总；VASP/AMSET/phono3py 等依赖由上游 ke-dft-cpu / kl-dft-cpu 声明

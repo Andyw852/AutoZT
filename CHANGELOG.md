@@ -14,12 +14,34 @@ This project adheres to Semantic Versioning; versions before 1.0.0 are developme
 
 ## [Unreleased]
 
+### Fixed (2026-10-14: review follow-up to the band/functional settings)
+- SOC impact gate: reports `inconclusive` (warning) instead of `ok` when either run's real VBM/CBM
+  is not on the k points shared by the S2.2 SCF mesh and the S3 grid (PbTe without L, Bi2Te3).
+- Hybrid vs semilocal m* check: the semilocal bands are fitted on the k points the downsampled
+  hybrid path kept, with the same window; no more false "valley order changed" alarms for edges
+  between hybrid path points, and no ratio bias for non-parabolic bands.
+- FUNC=auto: autozt now pushes the local `result/step1*/workflow_method.txt` of both ke and kl into
+  `.autozt_hints/` before S1 gen (`push_paths` entries may be `{from, to}`; mirrored, deleted when
+  absent), so `rerun S1`, a cluster switch, or ke/kl on different clusters keep / align the
+  functional instead of silently re-deciding. FUNC_REASON keeps the original reason across retries,
+  names the script default correctly, a blank `FUNC_ALIGN` means true, and backup `step1*.xxx`
+  directories are ignored.
+- zt S20: falls back to kl S1's workflow_method.txt (when kappa_L comes from kl-dft-cpu) if
+  `kl_method.json` is missing; a non-object `kl_method.json` no longer crashes.
+- kl S5.1: the band cache fingerprint includes the segment end points and `PLOT_BAND_POINTS`, so the
+  60-degree K fix and a new point count take effect on `retry`; a bad step.conf value is reported
+  instead of falling back to defaults; a seekpath failure is no longer reported as "missing seekpath".
+- ke S8/S8.4: the scissor-gap source label comes from band_summary.json `hybrid.label`
+  (HSE06 / HSEsol / HSE03 / PBE0-type / custom) instead of "HSE06" for every hybrid run.
+  Docs: changing `HYBRID` on a finished material needs `rerun S2.3`.
+
 ### Fixed (2026-10-14: ke/kl band and functional settings)
 - kl-dft-cpu / phonon-dft-cpu / kl-mlff / phonon-mlff 2D phonon path: on a hexagonal primitive
   cell with gamma = 60 deg the "K" point (1/3, 1/3) sat on the Gamma-M' line at 0.577 |K|; it is
   now chosen from the in-plane angle ((2/3, 1/3) for 60 deg, (1/3, 1/3) for 120 deg).
 - kl-dft-cpu S5.1: no longer falls back silently to a hexagonal Gamma-M-K-Gamma path when seekpath
-  is missing (3D) or the 2D path fails; the step now errors. seekpath added to `requires`.
+  is missing (3D) or the 2D path fails; the step now errors. seekpath is listed under
+  `optional_python` (only 3D S5.1 needs it; as a hard requirement it blocked every kl step on the local backend).
   New S5.1 key `PLOT_BAND_POINTS` (default 31) replaces the environment-only setting.
 - ke-dft-cpu global `FUNC` changed from a hard-coded `pbesol` to `auto` (same as kl-dft-cpu).
   `FUNC=auto` in relax_common now resolves in order: this skill's existing step1 FUNC (retry keeps

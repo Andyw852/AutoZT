@@ -263,7 +263,8 @@ HSE_F_ELEMS = {
 #     LTHOMAS = .TRUE.  -> Thomas-Fermi 屏蔽，同上
 #     两者都没有         -> 非屏蔽 (PBE0 / 纯 HF / 自定义非屏蔽杂化) -> 必须 HFRCUT=-1
 #   只调 AEXX 而保留 HFSCREEN=0.2 仍然是屏蔽的，不需要 HFRCUT。
-#   把 HFSCREEN 从 INCAR_SET 里删掉（或设成 0）才会触发。
+#   2026-10-14 起：屏蔽与否由 HYBRID 预设决定（pbe0，或 custom 且 HYBRID_HFSCREEN=0/留空 才不屏蔽），
+#   预设会覆盖 INCAR_SET 的 AEXX/HFSCREEN —— 只删 INCAR_SET 里的 HFSCREEN 已经【不能】得到 PBE0（仍是 HSE06）。
 #
 # "auto" = 按上面判据自动决定（推荐）
 # 整数    = 强制写该值
@@ -287,6 +288,8 @@ HFRCUT_MODE = "auto"
 # "hse06"  无论上游是什么，一律 GGA=PE（旧行为）。好处是与绝大多数文献可比；
 #          代价是几何来自 PBEsol 而能带来自 PBE 基，两者不是同一泛函。
 # "hsesol" 一律 GGA=PS。
+# 2026-10-14：完整的选法用 step.conf 的 HYBRID（auto|hse06|hsesol|hse03|pbe0|custom，见 resolve_hybrid），
+#   它覆盖这里；这里只是 step.conf 没写 HYBRID 时的脚本默认值（只认 auto|hse06|hsesol）。
 HYBRID_FLAVOR = "auto"     # "auto" | "hse06" | "hsesol"
 
 # ---- 体系判别分支（step2.15）----
@@ -346,8 +349,8 @@ INCAR_SET = {
     "ALGO":     "Damped",     # HF 用 Damped/All；Normal/Fast 不适用
     "TIME":     "0.4",        # ALGO=Damped 的阻尼步长
     "LHFCALC":  ".TRUE.",     # 打开杂化
-    "HFSCREEN": "0.2",        # ★ 屏蔽参数，权威值在此（0.2=标准 HSE06/HSEsol；0.3=HSE03）
-    "AEXX":     "0.25",       # ★ 精确交换比例，权威值在此（0.25=标准 HSE06/HSEsol）
+    "HFSCREEN": "0.2",        # 屏蔽参数（0.2=HSE06/HSEsol）。2026-10-14 起被 HYBRID 预设覆盖，改它不生效：用 HYBRID
+    "AEXX":     "0.25",       # 精确交换比例（0.25）。同上，被 HYBRID 预设覆盖：改杂化参数用 HYBRID=custom
     "PRECFOCK": "Fast",       # 交换积分用粗档 FFT，HSE 主要提速点（定稿用 Normal 复核）
     "LORBIT":   "11",         # ★ 轨道投影：写 PROCAR/PROCAR_OPT（lm 分解权重）→ fat band-dft-cpu 必需
     "LWAVE":    ".TRUE.",     # ★ 存 WAVECAR（改自 .FALSE.）；因此 WAVECAR 一律拷贝、禁用符号链接（见 build_step4_dir）

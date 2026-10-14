@@ -33,6 +33,7 @@ INPUTS = "inputs"                 # autozt needs_results 推上来的上游结�
 AMSET_DIR = INPUTS + "/transport"
 KL_DIR = INPUTS + "/kappa_L"
 STEP1_CANDS = (INPUTS + "/structure",)
+KL_STEP1 = INPUTS + "/kl_step1/workflow_method.txt"   # skill.yaml push_paths 推来的 kl S1 记录（可能没有）
 T_TARGETS = (300.0, 500.0, 700.0, 900.0)   # zt_vs_doping 想画的目标温度
 
 
@@ -141,10 +142,18 @@ def functional_check(cwd):
     if p.is_file():
         try:
             d = _json.loads(p.read_text(encoding="utf-8"))
-            if d.get("func"):
+            if isinstance(d, dict) and d.get("func"):
                 kl = {"func": str(d["func"]).lower(), "reason": d.get("func_reason")}
         except (OSError, ValueError):
             kl = None
+    if kl is None:
+        # kl S6 早于 2026-10-14 没写 kl_method.json：κ_L 确实来自 kl-dft-cpu 时，改读 autozt 推来的 kl S1 记录
+        #   （skill.yaml push_paths -> inputs/kl_step1/）。MLFF / fit-fc-thermal 来源的 κ_L 不套用 kl S1 的泛函。
+        src = (_source(cwd, "kappa_L") or {}).get("from") or ""
+        kv = _read_kv(Path(cwd) / KL_STEP1) if str(src).startswith("kl-dft-cpu/") else None
+        if kv and kv.get("FUNC"):
+            kl = {"func": kv["FUNC"].lower(),
+                  "reason": "（kl S1 的 workflow_method.txt）%s" % (kv.get("FUNC_REASON") or "")}
     rec = {"ke_func": ke and ke["func"], "kl_func": kl and kl["func"],
            "ke_reason": ke and ke["reason"], "kl_reason": kl and kl["reason"]}
     if ke is None or kl is None:
