@@ -257,13 +257,14 @@ def test_soc_gate_consistent_when_both_nosoc(kc, tmp_path):
     assert kc.soc_impact_check(m)["status"] == "consistent"
 
 
-def _plot(d, mass_v, mass_c, soc=False, nelect=2, kv=(0, 0, 0)):
-    """抛物带边：价带 E=-ħ²k²/2m_v，导带 1+ħ²k²/2m_c，两侧对称，k 距离 0..0.5 Å⁻¹ 中心在 0.25。"""
+def _plot(d, mass_v, mass_c, soc=False, nelect=2, kv=(0, 0, 0), xs=None, cv=0.25, alpha=0.0):
+    """抛物带边：价带 E=-ħ²k²/2m_v，导带 1+ħ²k²/2m_c，两侧对称，k 距离 0..0.5 Å⁻¹，价带顶在 cv、导带底在 0.25。
+    xs：路径点（默认步长 0.01）；alpha > 0：导带用 Kane 非抛物色散 E(1+αE) = ħ²k²/2m。"""
     d.mkdir(parents=True)
-    xs = np.linspace(0.0, 0.5, 51)   # 步长 0.01，带边 0.25 落在采样点上
-    dk = xs - 0.25
-    vb = -kc_h2() * dk ** 2 / mass_v
-    cb = 1.0 + kc_h2() * dk ** 2 / mass_c
+    xs = np.linspace(0.0, 0.5, 51) if xs is None else np.asarray(xs, float)
+    vb = -kc_h2() * (xs - cv) ** 2 / mass_v
+    g = kc_h2() * (xs - 0.25) ** 2 / mass_c
+    cb = 1.0 + (g if alpha <= 0 else (-1 + np.sqrt(1 + 4 * alpha * g)) / (2 * alpha))
     lines = ["# x", "# y"] + ["%12.6f %10.6f %10.6f" % (x, v, c) for x, v, c in zip(xs, vb, cb)]
     (d / "band.dat").write_text("\n".join(lines) + "\n")
     (d / "band_summary.json").write_text(json.dumps({
@@ -282,7 +283,7 @@ def test_mass_check_flags_heavier_hybrid_mass(kc, tmp_path):
     _plot(m / "step2_bandgap" / "step2.3_hse_plot", 0.2, 0.15)     # 导带 m* 杂化重 50%
     r = kc.hybrid_mass_check(m)
     assert r["status"] == "warn"
-    assert abs(r["semilocal"]["CB"]["fwd"] - 0.1) < 1e-3
+    assert abs(r["fits"]["CB"]["semilocal"]["fwd"] - 0.1) < 1e-3
     assert abs(r["mass_ratio_hybrid_over_semilocal"]["CB_fwd"] - 1.5) < 1e-2
     assert abs(r["mass_ratio_hybrid_over_semilocal"]["VB_bwd"] - 1.0) < 1e-2
 
@@ -294,9 +295,40 @@ def test_mass_check_ok_and_valley_change(kc, tmp_path):
     assert kc.hybrid_mass_check(m)["status"] == "ok"
     m2 = tmp_path / "mat2"
     _plot(m2 / "step2_bandgap" / "step2.2_pbe_plot", 0.2, 0.1)
-    _plot(m2 / "step2_bandgap" / "step2.3_hse_plot", 0.2, 0.1, kv=(0.5, 0, 0))
+    _plot(m2 / "step2_bandgap" / "step2.3_hse_plot", 0.2, 0.1, kv=(0.5, 0, 0), cv=0.45)   # 杂化价带顶真的挪了
     r = kc.hybrid_mass_check(m2)
     assert r["status"] == "warn" and any("谷次序" in x for x in r["reasons"])
+
+
+def test_mass_check_downsampled_path_no_false_alarm(kc, tmp_path):
+    """杂化路径是降采样的（每段几个点），带边在两个采样点之间：同一条能带不能报"谷次序变了"，
+    非抛物（Kane）带也不能因为两边窗口不同报质量比。"""
+    full = np.linspace(0.0, 0.5, 51)
+    sub = full[::7]                                                    # 0, 0.07, ..., 0.49：不含 0.25
+    for i, alpha in enumerate((0.0, 2.0)):
+        m = tmp_path / ("mat%d" % i)
+        _plot(m / "step2_bandgap" / "step2.2_pbe_plot", 0.2, 0.1, xs=full, cv=0.37, alpha=alpha,
+              kv=(0.37, 0, 0))
+        _plot(m / "step2_bandgap" / "step2.3_hse_plot", 0.2, 0.1, xs=sub, cv=0.37, alpha=alpha,
+              kv=(0.35, 0, 0))
+        r = kc.hybrid_mass_check(m)
+        assert r["status"] in ("ok", "not_applicable"), r
+        assert "同一组 k 点" in r["basis"]
+        for k, v in r["mass_ratio_hybrid_over_semilocal"].items():
+            assert abs(v - 1.0) < 1e-6, (alpha, k, v)
+
+
+def test_soc_gate_inconclusive_when_edge_not_shared(kc, tmp_path):
+    """S3 的真实带边（k=0.25）不在 S2.2 的自洽网格里：不能说"SOC 影响小"。"""
+    m = _soc_case(tmp_path, 0.01)
+    u = m / "step3_uniform"
+    _eigenval(u / "EIGENVAL", 4, [(0, 0, 0), (0.5, 0, 0), (0.25, 0, 0)],
+              [[-1.0, 0.0, 1.0], [-1.5, -0.4, 1.3], [-1.2, 0.3, 0.6]])         # 带边在 0.25
+    r = kc.soc_impact_check(m)
+    assert r["status"] == "inconclusive", r
+    assert any("VBM" in x for x in r["missed_edges"]) and any("CBM" in x for x in r["missed_edges"])
+    res = kc.band_consistency_checks(m, m / "step8_amset", "S8")
+    assert res["soc_impact"]["status"] == "inconclusive"
 
 
 def test_band_consistency_writes_json(kc, tmp_path):

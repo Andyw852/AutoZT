@@ -74,6 +74,10 @@ FUNC_REASON = ""         # resolve_func 的决策依据，写进 workflow_method
 # 两条链的几何必须来自同一个泛函，否则 κ_e 与 κ_L 不在同一个晶格上。
 # 2026-10-14 前 ke 全局写死 pbesol、kl 是 auto：层状材料 kl 会选 pbe-d3，两边晶格常数不同。
 FUNC_SIBLINGS = {"ke-dft-cpu": ("kl-dft-cpu",), "kl-dft-cpu": ("ke-dft-cpu",)}
+# autozt 在 S1 gen 前把本地 result 里的 workflow_method.txt 推到这里（skill.yaml S1 的 push_paths {from, to}）：
+#   own_step1.txt = 本技能上次的 S1；sibling_<技能>.txt = 配对技能的 S1。远端 step1 目录被 rerun 删掉、
+#   换了集群、或两条链不在同一棵远端目录树里时，FUNC=auto 靠它沿用 / 对齐。本地没有就不推（远端旧的会被删）。
+HINT_DIR = ".autozt_hints"
 
 # VASPKIT 设置
 RUN_VASPKIT = True
@@ -595,13 +599,31 @@ def _read_func_file(path: Path):
     return None
 
 
+def _read_func_reason(path: Path):
+    """workflow_method.txt -> FUNC_REASON（没有返回 ""）。"""
+    try:
+        for ln in Path(path).read_text(encoding="utf-8", errors="ignore").splitlines():
+            if ln.strip().upper().startswith("FUNC_REASON="):
+                return ln.split("=", 1)[1].strip()
+    except OSError:
+        pass
+    return ""
+
+
+def _step1_files(base: Path):
+    """base 下各 step1 目录的 workflow_method.txt。目录名带点的（step1_opt.bak、*.stale-upstream-*）是备份/归档，不算。"""
+    return [f for f in sorted(Path(base).glob("step1*/workflow_method.txt")) if "." not in f.parent.name]
+
+
 def own_step1_func(cwd: Path, step_name=None):
-    """本技能 step1 上一次 gen 写下的 FUNC（retry / 分段重生成时沿用，不中途换泛函）。"""
+    """本技能 step1 上一次 gen 写下的 FUNC（retry / 分段重生成时沿用，不中途换泛函）。
+    远端 step1 目录没有（rerun 删了、换了集群）时看 autozt 推来的本地结果副本 HINT_DIR/own_step1.txt。"""
     cwd = Path(cwd)
     cands = []
     if step_name:
         cands.append(cwd / step_name / "workflow_method.txt")
-    cands += sorted(cwd.glob("step1*/workflow_method.txt"))
+    cands += _step1_files(cwd)
+    cands.append(cwd / HINT_DIR / "own_step1.txt")
     for f in cands:
         func = _read_func_file(f)
         if func:
@@ -616,11 +638,11 @@ def sibling_step1_func(cwd: Path):
     cwd = Path(cwd).resolve()
     for sib in FUNC_SIBLINGS.get(cwd.name, ()):
         base = cwd.parent / sib
-        for pat in ("step1*/workflow_method.txt", "result/step1*/workflow_method.txt"):
-            for f in sorted(base.glob(pat)):
-                func = _read_func_file(f)
-                if func:
-                    return func, f
+        cands = _step1_files(base) + _step1_files(base / "result") + [cwd / HINT_DIR / ("sibling_%s.txt" % sib)]
+        for f in cands:
+            func = _read_func_file(f)
+            if func:
+                return func, f
     return None, None
 
 
@@ -639,8 +661,11 @@ def resolve_func(incar_tpl: Path, step_name=None):
         load_step_params(step_name)
     if not STEP_PARAMS:
         want, where = FUNC_DEFAULT, "脚本默认值（无 step.conf，老材料兼容）"
+        how = "脚本默认值 FUNC_DEFAULT=%s（没有 step.conf）" % FUNC_DEFAULT
     else:
         want, where = STEP_PARAMS.get("FUNC"), stepconf.CONF_NAME
+        how = ("step.conf 显式指定" if str(want or "").strip()
+               else "step.conf 的 FUNC 为空，用脚本默认值 FUNC_DEFAULT=%s" % FUNC_DEFAULT)
     want = (want or FUNC_DEFAULT).strip().lower()
     if want != "auto":
         if want not in FUNC_MAP:
@@ -648,14 +673,21 @@ def resolve_func(incar_tpl: Path, step_name=None):
                      "        （PBE0/HSE 等杂化泛函不能用于几何链：S5 介电/声子的 DFPT 不支持杂化，"
                      "形变势与密网格也承受不起。带隙用的杂化泛函在 ke 的 S2.3 用 HYBRID 键选。）"
                      % (where, want, ", ".join(FUNC_MAP)))
-        FUNC_REASON = "step.conf 显式指定"
+        FUNC_REASON = how
         return want, where
     cwd = Path.cwd()
     own, own_f = own_step1_func(cwd, step_name)
     if own:
-        FUNC_REASON = "auto：沿用本技能 step1 上次的 FUNC（%s）" % own_f
+        prev = _read_func_reason(own_f)                    # 当初怎么选的要一路带下去，retry 不能把它冲掉
+        orig = prev.split("当初：", 1)[1] if "当初：" in prev else prev
+        src = ("本地 result 回传的上次 S1（远端 step1 目录已不在：rerun 或换了集群）"
+               if own_f.parent.name == HINT_DIR else str(own_f))
+        FUNC_REASON = "auto：沿用本技能 step1 上次的 FUNC（%s）%s" % (src, ("；当初：" + orig) if orig else "")
+        if own_f.parent.name == HINT_DIR:
+            print("[..] FUNC=auto：远端没有本技能的 step1，沿用本材料上次 S1 的 FUNC=%s（%s）" % (own, src))
         return own, FUNC_REASON
-    sib, sib_f = (sibling_step1_func(cwd) if STEP_PARAMS.get("FUNC_ALIGN", True)
+    align = STEP_PARAMS.get("FUNC_ALIGN")                   # 写成空值（None）按默认 true，不能当成 false
+    sib, sib_f = (sibling_step1_func(cwd) if (True if align is None else bool(align))
                   else (None, None))
     import method_select
     try:

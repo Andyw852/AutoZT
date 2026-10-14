@@ -33,6 +33,7 @@ INPUTS = "inputs"                 # autozt needs_results 推上来的上游结�
 AMSET_DIR = INPUTS + "/transport"
 KL_DIR = INPUTS + "/kappa_L"
 STEP1_CANDS = (INPUTS + "/structure",)
+KL_STEP1 = INPUTS + "/kl_step1/workflow_method.txt"   # skill.yaml push_paths 推来的 kl S1 记录（可能没有）
 T_TARGETS = (300.0, 500.0, 700.0, 900.0)   # zt_vs_doping 想画的目标温度
 
 # ---- [0047] zT(n,T) 热图的【跨材料统一色板】 ---------------------------------------------
@@ -120,6 +121,65 @@ def _cell_caliber_check(cwd, kl):
     rel = abs(c - lz) / lz
     return {"cell_c_A": c, "kappa_L_Lz_A": lz, "rel_diff": rel,
             "ok": rel <= 0.02}
+
+
+def _read_kv(path):
+    kv = {}
+    try:
+        for ln in Path(path).read_text(encoding="utf-8", errors="ignore").splitlines():
+            if "=" in ln:
+                k, v = ln.split("=", 1)
+                kv[k.strip().upper()] = v.strip()
+    except OSError:
+        return None
+    return kv
+
+
+def functional_check(cwd):
+    """2026-10-14：κ_e（ke）与 κ_L（kl）的几何是不是同一个泛函弛豫出来的。
+
+    ke 的 FUNC 读 inputs/structure/workflow_method.txt；kl 的读 inputs/kappa_L/kl_method.json
+    （kl-dft-cpu S6 起写；kl-mlff / fit-fc-thermal 的 κ_L 没有这个文件 -> 记"未知"，不拦）。
+    不一致时只告警、写进 notes（不拦截）：两条链晶格常数不同，κ_e + κ_L 不在同一个晶格上。"""
+    import json as _json
+    ke = None
+    for d in STEP1_CANDS:
+        kv = _read_kv(Path(cwd) / d / "workflow_method.txt")
+        if kv and kv.get("FUNC"):
+            ke = {"func": kv["FUNC"].lower(), "reason": kv.get("FUNC_REASON")}
+            break
+    kl = None
+    p = Path(cwd) / KL_DIR / "kl_method.json"
+    if p.is_file():
+        try:
+            d = _json.loads(p.read_text(encoding="utf-8"))
+            if isinstance(d, dict) and d.get("func"):
+                kl = {"func": str(d["func"]).lower(), "reason": d.get("func_reason")}
+        except (OSError, ValueError):
+            kl = None
+    if kl is None:
+        # kl S6 早于 2026-10-14 没写 kl_method.json：κ_L 确实来自 kl-dft-cpu 时，改读 autozt 推来的 kl S1 记录
+        #   （skill.yaml push_paths -> inputs/kl_step1/）。MLFF / fit-fc-thermal 来源的 κ_L 不套用 kl S1 的泛函。
+        src = (_source(cwd, "kappa_L") or {}).get("from") or ""
+        kv = _read_kv(Path(cwd) / KL_STEP1) if str(src).startswith("kl-dft-cpu/") else None
+        if kv and kv.get("FUNC"):
+            kl = {"func": kv["FUNC"].lower(),
+                  "reason": "（kl S1 的 workflow_method.txt）%s" % (kv.get("FUNC_REASON") or "")}
+    rec = {"ke_func": ke and ke["func"], "kl_func": kl and kl["func"],
+           "ke_reason": ke and ke["reason"], "kl_reason": kl and kl["reason"]}
+    if ke is None or kl is None:
+        rec["ok"] = None
+        rec["note"] = ("泛函一致性未核对：%s" % "；".join(
+            x for x in (("ke 的 workflow_method.txt 没有 FUNC" if ke is None else ""),
+                        ("κ_L 结果里没有 kl_method.json（MLFF 来源，或 kl S6 早于 2026-10-14）"
+                         if kl is None else "")) if x))
+    else:
+        rec["ok"] = ke["func"] == kl["func"]
+        rec["note"] = ("ke/kl 几何泛函一致：%s" % ke["func"] if rec["ok"] else
+                       "★ ke 用 %s、kl 用 %s：两条链晶格常数不同，κ_e+κ_L 不在同一晶格上，ZT 不可直接采信。"
+                       "处理：两边材料 step.conf 显式写同一个 FUNC，重跑泛函不对的那条链（S1 起）。"
+                       % (ke["func"], kl["func"]))
+    return rec
 
 
 def _amset_settings(cwd):
@@ -560,8 +620,13 @@ def main():
                   % (cal["cell_c_A"], cal["kappa_L_Lz_A"], cal["rel_diff"] * 100))
             print("       κ_L 与 σ/κ_e 可能不在同一个胞上，κ_e+κ_L 的 ZT 不可直接采信。")
 
+    fcheck = functional_check(cwd)
+    print("[%s] %s" % ("..", fcheck["note"]) if fcheck["ok"] is not False
+          else "[WARN] %s" % fcheck["note"])
+
     grid = zc.build_grid(tr, kl, is_2d=is_2d, ktemp_mode=ktemp_mode,
                          const_T=const_T)
+    grid["notes"].append(fcheck["note"])
     _amset_s = _amset_settings(cwd)
     if _amset_s and _amset_s.get("scattering_type"):
         grid["notes"].append("电子段 AMSET 散射机制 = %s；带隙 = %s eV"
@@ -636,6 +701,7 @@ def main():
             "ZT 只在 κ_L 温区内计算（不外推）；区域外的温度点 ZT 记 null。",
         ],
         "cell_caliber_check": cal,
+        "functional_check": fcheck,
         "sources": {"transport_json": meta["transport_src"], "kappa_src": kl_src,
                     # 来源戳：哪个材料目录、哪个结构、哪个技能的哪一步（防同名串读）
                     "inputs": {k: {"from": v.get("from"),

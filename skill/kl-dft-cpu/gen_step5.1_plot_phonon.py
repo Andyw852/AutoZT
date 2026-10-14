@@ -101,7 +101,10 @@ def _write_submit(outdir):
                 os.chdir(_cwd)
             print("[..] step.conf ← %s" % _cp)
         except BaseException as e:   # stepconf 用 sys.exit("[ERROR] ...") 报错
-            print("[..] step.conf 读取失败（%s），用默认值" % e)
+            # 2026-10-14：原来吞掉错误、全用默认值，后面再报"未配置 CONDA_SH"，看不出是哪个键写错了
+            #   （PLOT_BAND_POINTS = 101.0 之类）。直接报出 step.conf 的错误。
+            sys.exit("[ERROR] %s 解析失败：%s（检查 PLOT_BAND_POINTS / PLOT_CORES / SBATCH_QOS 等键的写法）"
+                     % (_cp, e))
     else:
         print("[..] 找不到 step.conf（cwd / 脚本同级 / 上一级 / step5_phonon_plot 都试过），"
               "用默认值：qos=%s cores=%s" % (conf["SBATCH_QOS"], conf["PLOT_CORES"]))
@@ -376,17 +379,22 @@ def _band_path(ph):
                              "（对非六方格子是错的）。检查 phono3py_disp.yaml 的原胞与真空轴。"
                              % (type(e).__name__, e)}, 40)
     try:
+        import seekpath  # noqa: F401
+    except ImportError as e:
+        # ★ 2026-10-14：原来退回"六方 Γ-M-K-Γ"并只打一行 [..]——立方/四方等体相的声子谱
+        #   路径是错的却照常出图。seekpath 是本步（3D）专用依赖（skill.yaml 的 optional_python，
+        #   autozt check 会列出），缺了就报错。
+        _emit({"status": "error",
+               "reason": "3D 高对称路径需要 seekpath（%s）。请在 kl 环境里 pip install seekpath 后重跑本步；"
+                         "不再退回六方通用路径（对非六方晶系是错的）。" % e}, 40)
+    try:
         from phonopy.phonon.band_structure import get_band_qpoints_by_seekpath
         bands, labels, connections = get_band_qpoints_by_seekpath(ph.primitive, NPOINTS)
         return bands, connections, labels, "seekpath"
     except Exception as e:
-        # ★ 2026-10-14：原来退回"六方 Γ-M-K-Γ"并只打一行 [..]——立方/四方等体相的声子谱
-        #   路径是错的却照常出图。seekpath 已列进 skill.yaml 的 requires（autozt check 会查），
-        #   缺了就报错。
         _emit({"status": "error",
-               "reason": "3D 高对称路径需要 seekpath（%s: %s）。请在 kl 环境里 "
-                         "pip install seekpath 后重跑本步；不再退回六方通用路径"
-                         "（对非六方晶系是错的）。" % (type(e).__name__, e)}, 40)
+               "reason": "seekpath 生成 3D 高对称路径失败（%s: %s）：seekpath 已安装，多半是原胞/对称性的问题，"
+                         "检查 phono3py_disp.yaml 的原胞（不再退回六方通用路径）。" % (type(e).__name__, e)}, 40)
 
 
 def _cached_band(tag):
@@ -436,7 +444,12 @@ def _plot(tag):
     ph = _build_phonopy()
     _set_nac(ph, tag == "nac")
     bands, conn, labels, src = _band_path(ph)
-    fp = json.dumps({"source": src, "labels": labels}, ensure_ascii=False, sort_keys=True)
+    # 2026-10-14：指纹里加每段的起止 q 点与每段点数——只比来源与标签时，同名标签换了坐标（γ=60° 六方 K 点的修正）
+    #   或改了 PLOT_BAND_POINTS，retry 仍会复用旧 yaml / 旧图。
+    ends = [[[round(float(x), 6) for x in np.asarray(seg)[0]], [round(float(x), 6) for x in np.asarray(seg)[-1]]]
+            for seg in bands]
+    fp = json.dumps({"source": src, "labels": labels, "npoints": int(NPOINTS), "segments": ends},
+                    ensure_ascii=False, sort_keys=True)
     side = Path("band_%s.path" % tag)
     bs = None
     if side.is_file():

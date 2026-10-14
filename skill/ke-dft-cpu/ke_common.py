@@ -2887,6 +2887,9 @@ def hybrid_params(incar):
             return default
     aexx, hfs = _f("AEXX", 0.25), _f("HFSCREEN", 0.0)
     std = HYBRID_STD.get((round(aexx, 4), round(hfs, 4)))
+    gga = kv.get("GGA", "").split()[0].upper() if kv.get("GGA", "").split() else ""
+    if std == "HSE06/HSEsol" and gga in ("PE", "PS"):          # 2026-10-14：INCAR 写了 GGA 就分得清（S8 剪刀来源标签用）
+        std = "HSEsol" if gga == "PS" else "HSE06"
     out = {"lhfcalc": True, "aexx": aexx, "hfscreen": hfs, "standard": bool(std),
            "label": std or ("PBE0 型（不屏蔽）" if hfs == 0 else "非标准杂化（AEXX=%g, HFSCREEN=%g Å⁻¹）" % (aexx, hfs)),
            "warning": None}
@@ -3005,6 +3008,9 @@ SOC_GAP_NOTE_EV = 0.1       # 两边带隙差超过它记一笔（数值已被�
 MASS_RATIO_TOL = 0.25       # 杂化 / 半局域 有效质量比偏离 1 超过它 -> 告警
 MASS_FIT_WINDOW = 0.08      # 带边拟合窗口（Å⁻¹，含 2π）
 MASS_FIT_WINDOW_MAX = 0.25  # 窗口内点不够时最多放宽到这里（杂化路径是降采样的）
+SOC_EDGE_TOL_EV = 0.005     # 共同 k 点上的带边比全网格带边低/高超过它 = 真实带边不在共同 k 点里（无法判断）
+EDGE_DEGEN_EV = 0.002       # 两处带边能量差在它以内算同一个（简并的等价谷），不当"带边位置变了"
+DAT_X_TOL = 2e-4            # 两份 .dat 的 k 距离（Å⁻¹）在它以内算同一个 k 点
 HBAR2_2ME = 3.80998         # ħ²/2mₑ，eV·Å²
 
 
@@ -3066,7 +3072,7 @@ def _levels_by_k(path, ncl):
 
 
 def soc_impact_check(cwd):
-    """① SOC 影响闸门。返回 dict（status: consistent / ok / warn / not_applicable）。"""
+    """① SOC 影响闸门。返回 dict（status: consistent / ok / warn / inconclusive / not_applicable）。"""
     cwd = Path(cwd)
     band_dir = cwd / "step2_bandgap" / "step2.2_pbe"
     tr_dirs = [d for d in ("step3_uniform", "step3b_uniform_full") if (cwd / d / "EIGENVAL").is_file()]
@@ -3118,6 +3124,26 @@ def soc_impact_check(cwd):
         return vbm, cbm, kv, kc
     va, ca, kva, kca = edges(ta)
     vb, cb, kvb, kcb = edges(tb)
+    # 共同 k 点上的带边必须就是各自全网格的带边，否则真实带边根本没比到（PbTe 的 L 点不在奇数网格里、
+    #   Bi₂Te₃ 的带边不在对称线上……），这时说"影响小"是错的 -> inconclusive
+    miss = []
+    for tag, t, v_c, c_c in (("SOC（S2.2）", ta, va, ca), ("无 SOC（%s）" % tr_dirs[0], tb, vb, cb)):
+        full = [k for k in t if len(t[k]) > nocc]
+        gv_k = max(full, key=lambda k: t[k][nocc - 1])
+        gc_k = min(full, key=lambda k: t[k][nocc])
+        if v_c < t[gv_k][nocc - 1] - SOC_EDGE_TOL_EV:
+            miss.append("%s 的 VBM（k=%s，比共同 k 点上的高 %.0f meV）"
+                        % (tag, list(gv_k), 1000 * (t[gv_k][nocc - 1] - v_c)))
+        if c_c > t[gc_k][nocc] + SOC_EDGE_TOL_EV:
+            miss.append("%s 的 CBM（k=%s，比共同 k 点上的低 %.0f meV）"
+                        % (tag, list(gc_k), 1000 * (c_c - t[gc_k][nocc])))
+    if miss:
+        rec["status"] = "inconclusive"
+        rec["missed_edges"] = miss
+        rec["note"] = ("★ 无法判断 SOC 对带边的影响：%s 不在两边共同的 %d 个 k 点里（S2.2 自洽网格与 S3 网格不重合），"
+                       "真实带边没比到。本材料能带步带 SOC、输运链不带 SOC，请人工核对（比如让 S2.2 的自洽网格包含带边 k 点）"
+                       % ("；".join(miss), len(common)))
+        return rec
     shift_v = shift_c = 0.0
     worst = None
     for k in common:
@@ -3203,8 +3229,8 @@ def _edge_side_mass(xs, es, i0, step):
     return HBAR2_2ME / abs(a), len(use), round(use[-1][0], 4)
 
 
-def _edge_masses(plot_dir):
-    """画图步目录 -> {"VB": {"k": [...], "fwd": m, "bwd": m}, "CB": {...}}；算不了返回 (None, 原因)。"""
+def _band_data(plot_dir):
+    """画图步目录 -> ({xs, rows, nocc, soc, functional, k_frac, dat}, None)；读不了返回 (None, 原因)。"""
     import json as _json
     sp = Path(plot_dir) / "band_summary.json"
     if not sp.is_file():
@@ -3231,64 +3257,107 @@ def _edge_masses(plot_dir):
     nocc = int(round(nel if s.get("soc") else nel / 2.0))
     if not rows or nocc < 1 or len(rows[0]) <= nocc:
         return None, "%s：带数不足或 NELECT 读不到" % dat.name
-    out = {}
-    for tag, col, pick in (("VB", nocc - 1, max), ("CB", nocc, min)):
-        es = [r[col] for r in rows]
+    return {"xs": xs, "rows": rows, "nocc": nocc, "soc": bool(s.get("soc")), "dat": dat.name,
+            "functional": (s.get("hybrid") or {}).get("label") or s.get("functional_display") or s.get("functional"),
+            "k_frac": {"VB": (s.get("vbm") or {}).get("k_frac"), "CB": (s.get("cbm") or {}).get("k_frac")}}, None
+
+
+def _match_subset(xs_ref, xs):
+    """xs_ref（杂化路径的 k 距离，降采样）按顺序在 xs（半局域路径）里逐个找同一个 k 点 -> 下标列表；对不上返回 None。
+    降采样只是从同一条路径里挑点，直线段上的累计距离不变，断点两侧的重复距离也按顺序各配一个。"""
+    idx, j = [], 0
+    for x in xs_ref:
+        while j < len(xs) and xs[j] < x - DAT_X_TOL:
+            j += 1
+        if j >= len(xs) or abs(xs[j] - x) > DAT_X_TOL:
+            return None
+        idx.append(j)
+        j += 1
+    return idx
+
+
+def _edge_fit(xs, rows, col, pick, i0=None):
+    """一条带（列 col）在带边（pick = max/min，或给定下标 i0）两侧拟合 m*。"""
+    es = [r[col] for r in rows]
+    if i0 is None:
         i0 = es.index(pick(es))
-        f_ = _edge_side_mass(xs, es, i0, +1)
-        b_ = _edge_side_mass(xs, es, i0, -1)
-        out[tag] = {"k_frac": (s.get("vbm" if tag == "VB" else "cbm") or {}).get("k_frac"),
-                    "fwd": f_ and round(f_[0], 4), "bwd": b_ and round(b_[0], 4),
-                    "fwd_window": f_ and f_[2], "bwd_window": b_ and b_[2]}
-    out["soc"] = bool(s.get("soc"))
-    out["functional"] = (s.get("hybrid") or {}).get("label") or s.get("functional_display") or s.get("functional")
-    return out, None
+    f_ = _edge_side_mass(xs, es, i0, +1)
+    b_ = _edge_side_mass(xs, es, i0, -1)
+    return {"i0": i0, "x0_invA": round(xs[i0], 5), "fwd": f_ and round(f_[0], 4), "bwd": b_ and round(b_[0], 4),
+            "fwd_window": f_ and f_[2], "bwd_window": b_ and b_[2]}
 
 
 def hybrid_mass_check(cwd):
-    """② 杂化 vs 半局域 带边有效质量核对。返回 dict（status: ok / warn / not_applicable）。"""
+    """② 杂化 vs 半局域 带边有效质量核对。返回 dict（status: ok / warn / not_applicable）。
+
+    杂化路径是从半局域路径里降采样来的（每段只留几个点）。两边若各用各的点拟合，窗口不同：杂化那边的窗口常常
+    放宽到 0.25 Å⁻¹，非抛物带（Kane 型轻带）的 m* 会被拟合得偏重，同一条能带也报 1.4–1.6 的比值；带边落在
+    路径中间（Si 导带在 Γ–X 的 0.85）时，杂化路径没算到那个点，两边的带边 k 也会对不上。所以半局域能带
+    只取杂化路径保留下来的那些 k 点，两边在同一组点、同一窗口上拟合、比带边位置。"""
     cwd = Path(cwd)
     rec = {"check": "hybrid_vs_semilocal_mass", "ratio_tol": MASS_RATIO_TOL,
            "fit_window_invA": MASS_FIT_WINDOW}
-    pbe, why_p = _edge_masses(cwd / "step2_bandgap" / "step2.2_pbe_plot")
-    hyb, why_h = _edge_masses(cwd / "step2_bandgap" / "step2.3_hse_plot")
+    pbe, why_p = _band_data(cwd / "step2_bandgap" / "step2.2_pbe_plot")
+    hyb, why_h = _band_data(cwd / "step2_bandgap" / "step2.3_hse_plot")
     if pbe is None or hyb is None:
         rec["status"] = "not_applicable"
         rec["note"] = "；".join(x for x in (why_p, why_h) if x)
         return rec
-    rec["semilocal"], rec["hybrid"] = pbe, hyb
     if pbe["soc"] != hyb["soc"]:
         rec["status"] = "not_applicable"
         rec["note"] = "两份能带 SOC 设置不同，质量不可比"
         return rec
-    reasons, ratios = [], {}
-    for tag in ("VB", "CB"):
-        kp = [round(x, 3) for x in (pbe[tag]["k_frac"] or [])]
-        kh = [round(x, 3) for x in (hyb[tag]["k_frac"] or [])]
-        if kp and kh and kp != kh:
-            reasons.append("%s 带边位置不同（半局域 %s vs 杂化 %s）：谷次序被杂化改了" % (tag, kp, kh))
+    if pbe["nocc"] != hyb["nocc"]:
+        rec["status"] = "not_applicable"
+        rec["note"] = "两份能带的占据带数不同（%d vs %d）" % (pbe["nocc"], hyb["nocc"])
+        return rec
+    idx = _match_subset(hyb["xs"], pbe["xs"])
+    if idx is not None:
+        pxs, prows = [pbe["xs"][i] for i in idx], [pbe["rows"][i] for i in idx]
+        rec["basis"] = "同一组 k 点：半局域能带只取杂化路径保留的 %d 个点，两边同一窗口" % len(idx)
+    else:
+        pxs, prows = pbe["xs"], pbe["rows"]
+        rec["basis"] = "两份路径的 k 点对不上，各用各的点（粗估：窗口可能不同）"
+    nocc = hyb["nocc"]
+    reasons, ratios, fits = [], {}, {}
+    for tag, col, pick in (("VB", nocc - 1, max), ("CB", nocc, min)):
+        h = _edge_fit(hyb["xs"], hyb["rows"], col, pick)
+        p = _edge_fit(pxs, prows, col, pick)
+        if idx is not None and p["i0"] != h["i0"]:
+            ep = [r[col] for r in prows]
+            if abs(ep[h["i0"]] - ep[p["i0"]]) <= EDGE_DEGEN_EV:      # 等价谷（路径上出现两次的 K 等）：同一处拟合
+                p = _edge_fit(pxs, prows, col, pick, i0=h["i0"])
+        moved = (p["i0"] != h["i0"]) if idx is not None else (
+            abs(p["x0_invA"] - h["x0_invA"]) > max(
+                [abs(hyb["xs"][j] - hyb["xs"][h["i0"]]) for j in (h["i0"] - 1, h["i0"] + 1)
+                 if 0 <= j < len(hyb["xs"])] or [0.0]) + DAT_X_TOL)
+        fits[tag] = {"semilocal": p, "hybrid": h}
+        if moved:
+            reasons.append("%s 带边位置不同（半局域 k=%s、路径距离 %.3f Å⁻¹ vs 杂化 k=%s、%.3f Å⁻¹）：谷次序被杂化改了"
+                           % (tag, pbe["k_frac"][tag], p["x0_invA"], hyb["k_frac"][tag], h["x0_invA"]))
             continue
         for side in ("fwd", "bwd"):
-            mp, mh = pbe[tag][side], hyb[tag][side]
+            mp, mh = p[side], h[side]
             if not mp or not mh:
                 continue
             r = mh / mp
             ratios["%s_%s" % (tag, side)] = round(r, 3)
             if abs(r - 1.0) > MASS_RATIO_TOL:
-                reasons.append("%s 沿路径%s侧 m*：杂化 %.3f vs 半局域 %.3f（比 %.2f）"
-                               % (tag, "前" if side == "fwd" else "后", mh, mp, r))
+                reasons.append("%s 沿路径%s侧 m*：杂化 %.3f vs 半局域 %.3f（比 %.2f，窗口 %s Å⁻¹）"
+                               % (tag, "前" if side == "fwd" else "后", mh, mp, r, h[side + "_window"]))
+    rec["fits"] = fits
+    rec["functionals"] = {"semilocal": pbe["functional"], "hybrid": hyb["functional"]}
     rec["mass_ratio_hybrid_over_semilocal"] = ratios
     if not ratios and not reasons:
         rec["status"] = "not_applicable"
-        rec["note"] = "带边两侧都没有足够的路径点拟合 m*"
+        rec["note"] = "带边两侧都没有足够的路径点拟合 m*（杂化路径点距 > %.2f Å⁻¹）" % MASS_FIT_WINDOW_MAX
         return rec
     rec["status"] = "warn" if reasons else "ok"
     rec["reasons"] = reasons
     rec["note"] = (("★ 带边有效质量对泛函敏感：%s。AMSET 用的是半局域能带 + 剪刀，剪刀不改曲率，"
                     "迁移率/Seebeck 会带着这个质量偏差（半局域质量偏轻 -> 迁移率偏高）。报数时注明，"
-                    "或改用杂化能带做输运。（杂化路径是降采样的，拟合窗口见 *_window，属粗估）"
-                    % "；".join(reasons)) if reasons else
-                   "杂化与半局域带边 m* 一致（比值在 1±%.2f 内）" % MASS_RATIO_TOL)
+                    "或改用杂化能带做输运。（%s）" % ("；".join(reasons), rec["basis"])) if reasons else
+                   "杂化与半局域带边 m* 一致（比值在 1±%.2f 内；%s）" % (MASS_RATIO_TOL, rec["basis"]))
     return rec
 
 
@@ -3302,7 +3371,7 @@ def band_consistency_checks(cwd, out_dir, label="S8"):
         except Exception as e:                                # noqa: BLE001 —— 检查失败不拦步
             res[name] = {"status": "error", "note": "%s: %s" % (type(e).__name__, e)}
         r = res[name]
-        tag = "[WARN]" if r.get("status") == "warn" else "[..]"
+        tag = "[WARN]" if r.get("status") in ("warn", "inconclusive") else "[..]"
         print("%s %s 能带一致性（%s）：%s" % (tag, label, name, r.get("note", r.get("status"))))
     try:
         Path(out_dir).mkdir(parents=True, exist_ok=True)
