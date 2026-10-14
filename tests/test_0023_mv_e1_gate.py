@@ -29,6 +29,7 @@ def _load(name, path):
 
 
 T22 = _load("t22_for_0023", ROOT / "tests" / "test_0022_multi_valley_dpt.py")
+HAVE = T22.HAVE
 E_C, HBAR, KB, M0, AMU = 1.602176634e-19, 1.054571817e-34, 1.380649e-23, 9.1093837015e-31, 1.66053906660e-27
 
 
@@ -129,6 +130,7 @@ class JinLiteratureTests(unittest.TestCase):
         self.assertAlmostEqual(info["K"]["E1_eff_eV"], 8.64, places=3)
 
 
+@unittest.skipUnless(HAVE, "需要 pymatgen + spglib")
 class GateEndToEndTests(unittest.TestCase):
     """合成六方单层（0022 的模型），把 Q 谷形变势改成实跑那样小：多谷拒绝出数、只留诊断；空穴不受影响。"""
 

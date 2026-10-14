@@ -32,6 +32,7 @@ def _load(name, path):
 
 T22 = _load("t22_for_0024", ROOT / "tests" / "test_0022_multi_valley_dpt.py")
 T23 = _load("t23_for_0024", ROOT / "tests" / "test_0023_mv_e1_gate.py")
+HAVE = T22.HAVE
 KB_EV = 1.380649e-23 / 1.602176634e-19
 
 
@@ -47,6 +48,7 @@ def _share_K(dQ, T, mK=0.40, mQ=math.sqrt(0.8 * 0.5)):
     return nK / (nK + nQ)
 
 
+@unittest.skipUnless(HAVE, "需要 pymatgen + spglib")
 class S82ScopeTests(unittest.TestCase):
     def setUp(self):
         self.D = _D()
@@ -101,6 +103,7 @@ class S82ScopeTests(unittest.TestCase):
         self.assertIsNone(self.D._single_valley_scope({"status": "off（step.conf DPT_VALLEYS = off）"}, 300.0))
 
 
+@unittest.skipUnless(HAVE, "需要 pymatgen + spglib")
 class S82MainTests(unittest.TestCase):
     def test_main_writes_scope_and_summary_line(self):
         import numpy as np

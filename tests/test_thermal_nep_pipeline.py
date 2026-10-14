@@ -17,6 +17,12 @@ STEPCONF = ROOT / "skill" / "_common" / "opt" / "stepconf.py"
 sys.path.insert(0, str(GPUMD))
 import thermal_md_sampler
 
+try:
+    import ase  # noqa: F401
+    HAVE_ASE = True
+except ImportError:
+    HAVE_ASE = False
+
 
 def fake_poscar():
     lines = ["synthetic Mn2In2Se5", "1.0", "10 0 0", "0 10 0", "0 0 20",
@@ -125,6 +131,7 @@ class ThermalNEPPipelineTests(unittest.TestCase):
         self.assertEqual(indices[0], {3, 6, 9})
         self.assertEqual(indices[3], {3, 6, 9})
 
+    @unittest.skipUnless(HAVE_ASE, "需要 ase")
     def test_periodic_dedup_ignores_translation_and_rejects_near_duplicates(self):
         from ase import Atoms
         base = Atoms("Mn2", positions=[[0.2, 0.3, 0.4], [1.1, 1.2, 1.3]],

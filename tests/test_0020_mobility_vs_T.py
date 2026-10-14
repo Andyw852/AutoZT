@@ -143,6 +143,7 @@ def test_s83_falls_back_to_transport_adp(tmp_path):
 
 
 def test_s83_write_outputs(tmp_path):
+    pytest.importorskip("matplotlib")
     S = _s83()
     mat = _material(tmp_path)
     out = mat / "step8.3_output"

@@ -468,6 +468,7 @@ def _run_gen_py(code, cwd=None):
 
 
 def test_phono3py_cmd_has_isotope_but_no_nac_flag():
+    pytest.importorskip("h5py")
     code = (
         "import sys; sys.path.insert(0, %r); sys.path.insert(0, %r);"
         "import gen_step1_lifetime as G;"

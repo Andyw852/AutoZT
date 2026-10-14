@@ -8,6 +8,7 @@ import json
 import sys
 from pathlib import Path
 
+import pytest
 import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -162,6 +163,7 @@ def test_s84_record_does_not_invalidate_s81_that_used_s8(tmp_path):
 
 # ---------------------------------------------------------------- σh / ZA
 def test_za_coupling_check_by_horizontal_mirror(tmp_path):
+    pytest.importorskip("spglib")
     kc = _kc()
     for name, txt, want in (("2H", MOS2_2H, True), ("1T", TIS2_1T, False), ("Janus", JANUS, False)):
         d = tmp_path / name / "step3_uniform"
