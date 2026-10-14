@@ -2061,7 +2061,9 @@ def _layer_factor(poscar, vac_axis=2):
         if str(_c) not in _s.path:
             _s.path.insert(0, str(_c))
         from thickness_2d import slab_geometry_from_poscar
-        g = slab_geometry_from_poscar(_P(poscar), int(vac_axis or 2))
+        # ★ 2026-10-14：原来写成 `or 2` —— 真空在 a（下标 0）时 0 被当成"没给"改成 c，
+        #   h⊥/d 按错的方向算。只在 None 时默认 c。
+        g = slab_geometry_from_poscar(_P(poscar), int(vac_axis if vac_axis is not None else 2))
         return float(g["h_perp_A"]) / float(g["thickness_d_A"])
     except BaseException:                                  # noqa: BLE001
         return None
@@ -2119,11 +2121,14 @@ def write_material_thickness(outdir, dim, vac_axis, tol=0.05):
                   "（既无 POSCAR，也 glob 不到 */*/step*）" % matdir)
             return
         t2d = _load_thickness2d(outdir)
-        geo = t2d.slab_geometry_from_poscar(outdir / "POSCAR", int(vac_axis or 2))
+        # ★ 2026-10-14：同上（原来 `or 2`）；而且下面 meta 的 vac_axis 用的是 is-not-None，
+        #   真空在 a 时记录 0、几何却按 c 算，thickness_2d.json 自相矛盾。
+        _vax = int(vac_axis if vac_axis is not None else 2)
+        geo = t2d.slab_geometry_from_poscar(outdir / "POSCAR", _vax)
         meta = dict(geo)
         meta.update({
             "dim": "2d",
-            "vac_axis": int(vac_axis if vac_axis is not None else 2),
+            "vac_axis": _vax,
             "poscar": "%s/%s/POSCAR" % (cwd.name, Path(outdir).name),
             "source": "%s:%s" % (cwd.name, Path(outdir).name),
         })

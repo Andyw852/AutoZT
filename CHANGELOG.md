@@ -22,6 +22,18 @@ This project adheres to Semantic Versioning; versions before 1.0.0 are developme
   and fit-fc-thermal S2_plot: 2D band yaml/plots now use the kz=0 2D path (`za_2d.band_path_2d`,
   new pool copy kept identical to the skill copies by tests) instead of seekpath, which added
   Gamma-A segments along the vacuum direction. S2_plot records `band_path` in its summary.
+- kl-dft-cpu lattice_kappa (reference engine) and phonon-mlff-cpu S5 cutoff_conv: 2D phonon bands use
+  the kz=0 2D path; cutoff_conv also uses the same explicit 2D q-mesh as S3 (vacuum 1, in-plane 60)
+  so its screening matches S3. lattice_kappa's pymatgen fallback now refuses non-standard primitive
+  cells (gamma = 60 deg put K at 0.58 |K|) and imports json (S5 phonon_summary.json was never read).
+- 2D band paths (all four band_path_2d copies) are returned as one connected path; as separate
+  two-point segments phonopy silently dropped the Gamma/M/K labels.
+- phonon-mlff-cpu S3 referenced an undefined `dim` (NameError before fitting); supercell size is now
+  |det(scm)| (np.prod of the matrix was 0, so the underdetermined-fit check always fired).
+  phonon-mlff cpu/gpu S3: `vac_axis or 2` turned a vacuum along a (index 0) into c.
+- relax_common 2D layer thickness (`_layer_factor`, `write_material_thickness`): same `vac_axis or 2`
+  bug (vacuum along a computed as c; thickness_2d.json recorded axis 0 but used c). Latent in the
+  S1 flow, which rejects or rotates a non-c vacuum before these run.
 - kl-dft-cpu S5.1: no longer falls back silently to a hexagonal Gamma-M-K-Gamma path when seekpath
   is missing (3D) or the 2D path fails; the step now errors. seekpath added to `requires`.
   New S5.1 key `PLOT_BAND_POINTS` (default 31) replaces the environment-only setting.

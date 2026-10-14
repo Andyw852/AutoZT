@@ -1146,7 +1146,7 @@ def _hex_k_point(cell, vac_axis=2):
 def band_path_2d(cell, npoints=101, vac_axis=2):
     """2D 高对称路径（kz=0 恒成立），返回 (paths, labels, lattice)。
 
-    paths 形如 [[[0,0,0],[0.5,0,0]], ...]，可直接喂
+    paths 形如 [[Γ, M, K, Γ]]（一条连通路径，每个点 [q1,q2,q3]），可直接喂
     phonopy.phonon.band_structure.get_band_qpoints_and_path_connections。
     """
     lat = classify_2d_lattice(cell, vac_axis)
@@ -1163,6 +1163,10 @@ def band_path_2d(cell, npoints=101, vac_axis=2):
         p2[inplane[0]], p2[inplane[1]] = q2
         paths.append([p1, p2])
     labels = [("$\\Gamma$" if n == "Γ" else n) for n, _ in hs]
+    # ★ 2026-10-14：返回【一条连通路径】[[Γ, M, K, Γ]]，不是三段各两点。phonopy 把每个子列表当一段、
+    #   子列表之间视为断开，于是要求 2×段数 个标签；原来 3 段配 4 个标签，标签被 phonopy 静默丢掉
+    #   （band yaml 没有 Γ/M/K 标注，lattice_kappa 读 bsobj.labels 还会出错）。
+    paths = [[seg[0] for seg in paths] + [paths[-1][1]]]
     return paths, labels, lat
 
 

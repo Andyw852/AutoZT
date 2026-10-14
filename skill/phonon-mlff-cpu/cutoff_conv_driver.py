@@ -18,6 +18,12 @@ from pathlib import Path
 
 import numpy as np
 
+# gen_need 的公共模块（za_2d / dim_common）推在材料技能目录，本脚本被拷到步骤子目录里跑：
+#   把上一级也放进 import 路径（2D 路径/维度判定要用）。
+for _d in (Path(__file__).resolve().parent, Path(__file__).resolve().parent.parent):
+    if str(_d) not in sys.path:
+        sys.path.append(str(_d))
+
 # ── 质检阈值（可被 klmlff_params.txt 里的同名键覆盖；设为 0 关闭该检查）──
 # ① 最高频绝对下限：C60 类材料分子内 C-C 伸缩在 40+ THz。若某 cutoff 下最高频
 #    远低于此，说明高频支崩坏（fc2 拟合病态），该 cutoff 的虚频结论不可用。
@@ -69,6 +75,19 @@ def _read_params(path):
     return d
 
 
+def _dim_2d(poscar="POSCAR"):
+    """(is_2d, Cartesian 真空轴)。与 S3（phonon_fit_driver）同一判据：dim_common.detect_dimension。
+    判不了就按 3D（与 S3 一致），并说明。"""
+    try:
+        from dim_common import detect_dimension
+        dimtag, vac_axis, _ = detect_dimension(poscar)
+    except Exception as e:  # noqa: BLE001
+        print("[WARN] 维度判定失败（按 3D 处理）：%s" % e)
+        return False, None
+    is2d = str(dimtag).lower().startswith("2")
+    return is2d, ((vac_axis if vac_axis is not None else 2) if is2d else None)
+
+
 def main():
     from phonopy import Phonopy
     from phonopy.interface.vasp import read_vasp
@@ -82,7 +101,7 @@ def main():
     params = _read_params(cwd / "klmlff_params.txt")
     _dim = np.array([int(x) for x in (params.get("SUPERCELL") or "1 1 1").split()],
                     dtype=int)
-    # 3 个数=对角；9 个数=3×3 矩阵（行主序，phono3py --dim 同义）；np.prod 对矩阵=行列式
+    # 3 个数=对角；9 个数=3×3 矩阵（行主序，phono3py --dim 同义）；超胞倍数 = |det|
     dim = _dim.reshape(3, 3) if _dim.size == 9 else np.diag(_dim)
     raw_list = str(params.get("CUTOFF_LIST") or "4.0,6.0,8.0")
     cutoffs = [float(x) for x in raw_list.replace(" ", "").split(",") if x.strip()]
@@ -95,9 +114,19 @@ def main():
     disps = np.ascontiguousarray(np.load("disps.npy"), dtype="double")
     forces = np.ascontiguousarray(np.load("forces.npy"), dtype="double")
     n_disp = int(len(disps))
-    n_sc = int(len(uc.numbers) * int(np.prod(dim)))
+    # ★ 2026-10-14：超胞倍数是 |det(dim)|。原来写 np.prod(dim)，对 3×3 对角矩阵是所有元素之积 = 0，
+    #   n_sc 恒为 0 -> ndof=0，装了 alm 时每个 cutoff 都被误报"拟合欠定"。
+    n_sc = int(len(uc.numbers) * int(round(abs(np.linalg.det(dim)))))
     print("[..] %d 帧 × %d 原子，cutoff 序列=%s" % (n_disp, n_sc, cutoffs))
 
+    # 2026-10-14：2D 与 S3 同口径 —— 虚频网格用显式整数网格（真空轴 1、面内 60），路径用 kz=0 的
+    #   二维路径。原来 mesh=60.0（float = 面间距长度语义，2D 实测只有 [2,22,22]，漏近 Γ 软模）
+    #   + auto_band_structure（seekpath 是 3D 工具，多出 Γ-A 等真空方向线段），同一个 cutoff 的
+    #   screening_min 可能与 S3 不一致。
+    is2d, cart_vax = _dim_2d()
+    if is2d:
+        import za_2d
+        print("[..] 2D（Cartesian 真空轴 %s）：显式整数网格 + kz=0 二维路径" % cart_vax)
     RX = re.compile(r"^\s*frequency:\s*([^\s#]+)", re.MULTILINE)
     results = []
     for cut in cutoffs:
@@ -123,11 +152,21 @@ def main():
             frame_margin = (round(ndof / float(nfree), 3)
                             if (nfree and nfree > 0) else None)
             underdet = (bool(ndof < nfree) if (nfree and nfree > 0) else None)
-            ph.run_mesh(mesh=60.0, with_eigenvectors=False, is_mesh_symmetry=True)
+            if is2d:
+                _vp = za_2d.vacuum_axis_in_primitive(ph, cart_vax)
+                _mesh = [60, 60, 60]
+                _mesh[_vp] = 1
+                ph.run_mesh(mesh=_mesh, with_eigenvectors=False, is_mesh_symmetry=True,
+                            is_gamma_center=True)
+            else:
+                ph.run_mesh(mesh=60.0, with_eigenvectors=False, is_mesh_symmetry=True)
             mfreqs = np.asarray(ph.get_mesh_dict()["frequencies"], dtype=float)
             mf, mx = float(mfreqs.min()), float(mfreqs.max())
             band_name = "band-cut%g.yaml" % cut
-            ph.auto_band_structure(plot=False, write_yaml=True, filename=band_name)
+            if is2d:
+                za_2d.write_band_yaml_2d(ph, cwd / band_name, npoints=101, cart_axis=cart_vax)
+            else:
+                ph.auto_band_structure(plot=False, write_yaml=True, filename=band_name)
             bt = (cwd / band_name).read_text(encoding="utf-8", errors="replace")
             bv = np.asarray([float(x) for x in RX.findall(bt)], dtype=float)
             bmf, bmx = float(bv.min()), float(bv.max())
@@ -204,6 +243,9 @@ def main():
         "supercell": " ".join(str(x) for x in dim),
         "supercell_atoms": n_sc,
         "cutoffs_A": cutoffs,
+        "dim": "2d" if is2d else "3d",
+        "q_path": "2d kz=0 (za_2d.band_path_2d)" if is2d else "seekpath (auto_band_structure)",
+        "imag_mesh": "explicit 60x60 in-plane, vacuum 1" if is2d else "length 60.0",
         "results": results,
         "converged": converged,
         "screening_spread_THz": round(spread, 6) if spread is not None else None,

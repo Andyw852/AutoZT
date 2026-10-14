@@ -107,7 +107,7 @@ def main():
     # r_max 不能证明 fc2 在其外严格为零，必须通过 cutoff 收敛性检查验证。
     fc_cutoff = params.get("FC_CUTOFF") or "6.0"
     print("[..] %d 帧 × %d 原子，symfc 拟合 fc2 (cutoff=%s A)"
-          % (len(disps), len(uc.numbers) * int(np.prod(dim)), fc_cutoff))
+          % (len(disps), len(uc.numbers) * int(round(abs(np.linalg.det(scm)))), fc_cutoff))
 
     if prefit.is_file():
         print("[..] 使用 pheasy-gpu 预拟合 fc2.hdf5")
@@ -129,10 +129,13 @@ def main():
     except Exception as e:
         print("[WARN] 维度判定失败（按 3D 处理）：%s" % e)
     is2d = str(dimtag).lower().startswith("2")
+    # ★ 2026-10-14：原来到处写 `vac_axis or 2` —— 真空在 a（下标 0）时 0 被当成"没有"改成 2，
+    #   虚频网格把一个面内方向压成 1、路径被判成矩形格子。只在判不出（None）时才默认 c。
+    _vac_cart = vac_axis if vac_axis is not None else 2
     # ★ 2D 用显式整数网格（真空轴 1、面内 60）：float mesh 是"面间距长度"语义，
     #   实测得 [2,22,22]、面内最近 q 只 0.105 Å⁻¹，会漏掉近 Γ 软模（与 kl-dft-cpu 同一 bug）。
     if is2d:
-        _imag_mesh, _vaxp = kmc.imag_mesh_numbers(ph, vac_axis or 2)
+        _imag_mesh, _vaxp = kmc.imag_mesh_numbers(ph, _vac_cart)
         print("[..] 虚频门禁网格 mesh=%s（真空轴原胞下标=%d）"
               % (" ".join(str(x) for x in _imag_mesh), _vaxp))
         ph.run_mesh(mesh=_imag_mesh, with_eigenvectors=False, is_mesh_symmetry=True,
@@ -149,7 +152,7 @@ def main():
     try:
         if is2d:
             from phonopy.phonon.band_structure import get_band_qpoints_and_path_connections
-            _paths, _labels, _lat = kmc.band_path_2d_prim(ph, 101, vac_axis or 2)
+            _paths, _labels, _lat = kmc.band_path_2d_prim(ph, 101, _vac_cart)
             _bands, _conn = get_band_qpoints_and_path_connections(_paths, npoints=101)
             ph.run_band_structure(_bands, path_connections=_conn, labels=_labels)
             ph.write_yaml_band_structure(filename="band-dft-cpu.yaml")
@@ -175,7 +178,7 @@ def main():
         print("[WARN] 2D + symfc fc2：没有施加 Born-Huang 旋转不变约束，ZA 可能被线性化；"
               "2D 的稳定性/κ 请用 kl-dft-cpu 的 pheasy+BHH 链（PHEASY_RASR=auto）。")
         import phonon_stability
-        za = phonon_stability.za_check(params, ph, vac_axis or 2, True)
+        za = phonon_stability.za_check(params, ph, _vac_cart, True)
         print("[..] ZA 检查：%s" % za.get("note", za.get("error", "")))
 
     # ---- 虚频判据统一走 imag_policy（唯一真源，2026-09-22）；阈值读 mlff conf 否则用公共默认 ----
@@ -201,7 +204,7 @@ def main():
 
     _fr, _qp = _imag_samples(ph)
     try:
-        _vaxp = kmc.vacuum_axis_in_primitive(ph, vac_axis or 2) if is2d else None
+        _vaxp = kmc.vacuum_axis_in_primitive(ph, _vac_cart) if is2d else None
     except Exception:                              # noqa: BLE001
         _vaxp = None
     _imag = imag_policy.classify_imag(
@@ -241,7 +244,9 @@ def main():
         fc_cutoff_A = None
 
     # 位移帧数是否足以确定 fc2：方程数 = n_disp × 3N_sc，未知数 = nfree_fc2(ALM)
-    n_sc = int(len(uc.numbers) * np.prod(dim))
+    # ★ 2026-10-14：超胞倍数是 |det(scm)|。原来写 np.prod(dim) —— dim 在本文件里根本没定义
+    #   （扩胞矩阵叫 scm），作业在上面的打印行就 NameError；即便有定义，np.prod 对对角矩阵也是 0。
+    n_sc = int(len(uc.numbers) * int(round(abs(np.linalg.det(scm)))))
     n_disp = int(len(disps))
     dof = 3 * n_sc
     nfree_fc2 = _nfree_fc2_alm(ph, fc_cutoff_A) if fc_cutoff_A else None
@@ -292,7 +297,7 @@ def main():
         "max_freq_lower_bound_THz": bound,
         "assessment_policy": "stable 由 imag_policy.classify_imag（mesh+band 合并；近 Γ 声学支 warn、其余 fail）与 ZA 结论中更坏者决定；可选 max-frequency bound 只标 fit_suspect；n_disp×3N_sc < nfree_fc2(ALM) 标 fit_underdetermined。阈值见 skill/_common/imag_policy.py。",
         "n_disp": n_disp,
-        "supercell": " ".join(str(x) for x in dim),
+        "supercell": " ".join(str(x) for x in scm),
         "supercell_atoms": n_sc,
         "nfree_fc2_est": nfree_fc2,
         "fit_frame_margin": frame_margin,
