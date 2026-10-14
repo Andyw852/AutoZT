@@ -131,7 +131,10 @@ _ALLOWED_SCATTERING = {"ADP", "IMP", "POP", "PIE", "ODP", "IVS"}
 #   子集里本次没开的机制自动忽略：不开 ODP/PIE 时出厂自动退化为
 #   ADP+POP+IMP / ADP+POP / ADP，即 subset_ADP+POP+IMP.json / subset_ADP+POP.json / subset_ADP.json。
 #   需要 WRITE_MESH（同一份 mesh 去机制重积分）；off = 不出 subset_*.json。
-SUBSETS = "ADP+POP+IMP+ODP+PIE; ADP+POP+ODP+PIE; ADP"
+# [0050-r1] 出厂子集带上 IVS：开了谷间（ivs_frozen / 手填 X>X'、X>Y）时，"去 IMP" 这一套必须连 IVS 一起保留
+#   才是 S8.3 的本征曲线（amset (all but IMP)），另加一套"去 IMP、去 IVS"（ADP+POP+ODP+PIE）看谷间散射的影响；
+#   不开 IVS 时第三套与第二套相同、自动去重，产物与改动前完全一样。
+SUBSETS = "ADP+POP+IMP+ODP+PIE+IVS; ADP+POP+ODP+PIE+IVS; ADP+POP+ODP+PIE; ADP"
 _SUBSET_ORDER = ["ADP", "POP", "IMP", "ODP", "PIE", "IVS"]
 
 
@@ -142,7 +145,7 @@ def subset_specs(subsets_str, scattering):
     _SUBSET_ORDER 排序；空子集/重复子集跳过。返回的 keep 列表即子集文件名里的
     机制顺序，drop 列表 = SCATTERING 里有、但该子集没保留的机制（喂给 --drop）。
     """
-    raw = "ADP+POP+IMP+ODP+PIE; ADP+POP+ODP+PIE; ADP" if subsets_str is None else str(subsets_str)
+    raw = "ADP+POP+IMP+ODP+PIE+IVS; ADP+POP+ODP+PIE+IVS; ADP+POP+ODP+PIE; ADP" if subsets_str is None else str(subsets_str)
     if raw.strip().lower() in ("", "off", "none", "false", "no", "0"):
         return []
     active = [str(x).strip().upper() for x in scattering]

@@ -89,3 +89,28 @@ def test_s83_subset_file_defs_skips_overall(tmp_path):
     defs = S._subset_file_defs(run)
     assert {d[0] for d in defs} == {"intrinsic", "ADP_only"}
     assert {d[1] for d in defs} == {"subset_ADP+POP.json", "subset_ADP.json"}
+
+
+def test_subset_specs_with_ivs():
+    """[0050-r1] 开了谷间（IVS）：出厂子集 = 全机制 / 去 IMP（含 IVS，S8.3 的本征曲线）/ 去 IMP 去 IVS / 只 ADP。
+    以前出厂子集不含 IVS，"去 IMP"那套连 IVS 一起去掉 -> S8.3 没有本征曲线，ADP+POP+ODP 也悄悄少了 IVS。"""
+    g14, g10, S = _g14(), _g10(), _s83()
+    sc = ["ADP", "IMP", "POP", "ODP", "IVS"]
+    specs = g14.subset_specs(None, sc)
+    assert specs == g10.subset_specs(None, sc)
+    assert [(k, d) for k, d, _ in specs] == [
+        (["ADP", "POP", "IMP", "ODP", "IVS"], []),
+        (["ADP", "POP", "ODP", "IVS"], ["IMP"]),
+        (["ADP", "POP", "ODP"], ["IMP", "IVS"]),
+        (["ADP"], ["IMP", "POP", "ODP", "IVS"]),
+    ]
+    keys = [S._subset_key({"intrinsic_labels": k, "intrinsic_dropped": d}) for k, d, _ in specs]
+    assert keys == ["overall", "intrinsic", "ADP_POP_ODP", "ADP_only"]
+
+
+def test_default_subsets_unchanged_without_ivs():
+    """不开 IVS 时第三套与第二套相同、自动去重：产物与 [0050-r1] 之前完全一样。"""
+    g = _g14()
+    old = "ADP+POP+IMP+ODP+PIE; ADP+POP+ODP+PIE; ADP"
+    for sc in (["ADP", "IMP", "POP"], ["ADP", "IMP", "POP", "ODP", "PIE"], ["ADP", "POP"]):
+        assert g.subset_specs(None, sc) == g.subset_specs(old, sc)
