@@ -32,7 +32,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 # [SKILL_REV] 版本戳：写进 settings.yaml 头，便于从结果反查跑的是哪份 skill 副本。
-_SKILL_REV = "2026-10-13-0044-reprotol"   # [0044] 复现检查改相对容差（单机制 μ 在零前因子处 ~1e47）；POSTPROCESS_ONLY 不再要求 transport.json；取消本征点独立拆分脚本、回到主掺杂网格 doping=0（[0043] amset_fermi_fix 已修好 SVD）   # 2026-10-13-0043-intrsvd   # [0043] 本征点 + IMP 的 SVD 不收敛（amset_fermi_fix：n=p 严格相等 + 散射率插值死片保护）   # 2026-10-13-0041-defectdop   # [0041] DEFECT_DOPING 缺陷平衡载流子浓度进掺杂网格   # 2026-10-13-0040-undoped   # [0040] UNDOPED_POINT 本征点（doping=0）   # 2026-10-12-0038-subsets   # [0038] SUBSETS 散射机制子集（subset_<机制>.json）   # [0035-r3] 复审：not_in_scattering 只认显式排除、D 全低于阈值仍建记录、面外极性；[0035-r2] 冻声子优先、手填谷内只作对照；[0035-r1] 复审：交叉拒绝、并星平均、τ 挪到 transport.json 之后；[0035] 冻声子 ODP 参数（ODP_FROZEN）+ τ(E)（tau_energy.py）   # [0034-r3] 二审：重复星按 S8.2 k_grid 合并；显式 SCATTERING+掩码的日志   # [0034-r2] 复审：同中心谷合并、显式 SCATTERING 照办、PIE 与 settings 一致   # [0034] OVERALL_WITHOUT（出厂 ODP）-> overall_noODP.json   # [0033] ODP/谷间散射（常数形变势，step.conf DP_OPTICAL_E/H）+ ADP 谷内掩码   # [0032-r2] 复审：链首清旧本征产物与 mesh；SCATTERING 无 ADP 不出只 ADP   # [0032] WRITE_MESH/INTRINSIC_ADP_ONLY 2D 默认开（旧：2026-09-28-desym-fix V115）
+_SKILL_REV = "2026-10-14-0050-ivsfrozen"   # [0050] 冻声子谷间 IVS 参数（IVS_FROZEN，K↔K′ 零阶、非 SOC）   # 2026-10-13-0044-reprotol   # [0044] 复现检查改相对容差（单机制 μ 在零前因子处 ~1e47）；POSTPROCESS_ONLY 不再要求 transport.json；取消本征点独立拆分脚本、回到主掺杂网格 doping=0（[0043] amset_fermi_fix 已修好 SVD）   # 2026-10-13-0043-intrsvd   # [0043] 本征点 + IMP 的 SVD 不收敛（amset_fermi_fix：n=p 严格相等 + 散射率插值死片保护）   # 2026-10-13-0041-defectdop   # [0041] DEFECT_DOPING 缺陷平衡载流子浓度进掺杂网格   # 2026-10-13-0040-undoped   # [0040] UNDOPED_POINT 本征点（doping=0）   # 2026-10-12-0038-subsets   # [0038] SUBSETS 散射机制子集（subset_<机制>.json）   # [0035-r3] 复审：not_in_scattering 只认显式排除、D 全低于阈值仍建记录、面外极性；[0035-r2] 冻声子优先、手填谷内只作对照；[0035-r1] 复审：交叉拒绝、并星平均、τ 挪到 transport.json 之后；[0035] 冻声子 ODP 参数（ODP_FROZEN）+ τ(E)（tau_energy.py）   # [0034-r3] 二审：重复星按 S8.2 k_grid 合并；显式 SCATTERING+掩码的日志   # [0034-r2] 复审：同中心谷合并、显式 SCATTERING 照办、PIE 与 settings 一致   # [0034] OVERALL_WITHOUT（出厂 ODP）-> overall_noODP.json   # [0033] ODP/谷间散射（常数形变势，step.conf DP_OPTICAL_E/H）+ ADP 谷内掩码   # [0032-r2] 复审：链首清旧本征产物与 mesh；SCATTERING 无 ADP 不出只 ADP   # [0032] WRITE_MESH/INTRINSIC_ADP_ONLY 2D 默认开（旧：2026-09-28-desym-fix V115）
 # 复制来源（gen_step10_amset.py 的 _SKILL_REV），用于人工比对两份文件是否同步
 _SOURCE_GEN_REV = "2026-10-08-2d-raw-elastic"   # [0014] S8 的 2D 弹性改为原始 slab 值，与本步一致
 import stepconf  # noqa: E402
@@ -214,6 +214,15 @@ ODP_FROZEN = "auto"
 ODP_FROZEN_SRC = "step8.21_odp_read/odp_params.json"
 ODP_FROZEN_DMIN = 0.05
 _DP_OPTICAL_FROZEN_REC = None   # 本步对冻声子参数的决定（逐载流子）+ 用过的参数指纹，落进 2d_correction.json
+# [0050] 冻声子谷间 IVS 参数（S7.3 超胞 DFPT + S7.4 单点 + S8.22 读取；本材料 tf_*.yaml 开 ivs_frozen 组才会有，出厂关）：
+#   IVS_FROZEN = auto（出厂：有 step8.22_ivs_read/ivs_params.json 就用它的 K↔K′ 零阶通道 K>K'；算出来的优先，DP_OPTICAL_E/H
+#                里手填的同一星的 X>X' 只作对照；手填的 X>Y（K↔Q 等）照用；手填了谷表的载流子不用）
+#              / on（必须有，没有就报错）/ off（不用：手填的 X>X' 照用）。只支持非 SOC 能带：S3/S3b 是 SOC 时有参数就报错。
+#   IVS_FROZEN_DMIN：D 小于它（eV/Å）的组不进通道（对称性禁戒，D ≈ 0）。
+IVS_FROZEN = "auto"
+IVS_FROZEN_SRC = "step8.22_ivs_read/ivs_params.json"
+IVS_FROZEN_DMIN = 0.05
+_DP_OPTICAL_IVS_REC = None      # 本步对谷间冻声子参数的决定 + 指纹，落进 2d_correction.json（S8.22 据此决定要不要让本步重排）
 MANUAL_BANDGAP = None                 # None=自动读；或写数值(eV) 覆盖 scissor
 # ★ patch_bandgap_override（2026-09-28）：scissor 带隙的 step.conf 覆盖通道（与 gen_step10 同款）。
 #   BANDGAP_OVERRIDE = <eV>、BANDGAP_NOTE = <来源说明>；优先级
@@ -518,6 +527,8 @@ SPEC = {
     "ADP_INTRAVALLEY": ("auto", "str"),
     "ODP_FROZEN": ("auto", "str"),              # [0035]
     "ODP_FROZEN_DMIN": (None, "float"),
+    "IVS_FROZEN": ("auto", "str"),              # [0050]
+    "IVS_FROZEN_DMIN": (None, "float"),
 }
 # --- amset2d 插件相关（可改）---
 PLUGIN_SRC_NAME = "amset2d_plugin.py"   # 与本脚本同目录，运行时复制到 OUTDIR_NAME
@@ -1417,6 +1428,38 @@ def _load_frozen(cwd: Path):
     return params, mode
 
 
+def _load_ivs(cwd: Path):
+    """[0050] IVS_FROZEN -> (ivs_params 字典 或 None, 模式)。auto 没有文件 -> None；on 没有文件 -> 报错。
+    有参数而本材料是 SOC 能带（S3/S3b）-> 报错：参数是按非 SOC 的 K/K′ 二重态算的（A 方案），套到 SOC 能带上不对。"""
+    import json
+    mode = str(IVS_FROZEN or "auto").strip().lower()
+    if mode not in ("auto", "on", "off"):
+        sys.exit("[ERROR] IVS_FROZEN=%r 无效，只允许 auto / on / off" % IVS_FROZEN)
+    if mode == "off":
+        return None, mode
+    f = cwd / IVS_FROZEN_SRC
+    if not f.is_file():
+        if mode == "on":
+            sys.exit("[ERROR] IVS_FROZEN=on，但 %s 不存在：本材料 tf_*.yaml 写 ivs_frozen: true，跑完 S7.3_ivsph / S7.4_ivs / "
+                     "S8.22_ivs" % IVS_FROZEN_SRC)
+        return None, mode
+    if _HAS_KC and kc.detect_ncl(cwd):
+        sys.exit("[ERROR] 有 %s，但本材料的能带是 SOC（S3/S3b 的 LSORBIT/LNONCOLLINEAR）：[0050] 谷间冻声子参数只支持非 SOC "
+                 "（SOC 下 K/K′ 二重态被自旋劈裂、谷间散射只落到同自旋子带，Xiao 等 PRL 108, 196802）。"
+                 "处理：step.conf 写 IVS_FROZEN = off，或本材料 tf_*.yaml 写 ivs_frozen: false" % IVS_FROZEN_SRC)
+    try:
+        params = json.loads(f.read_text(encoding="utf-8"))
+    except ValueError as e:
+        sys.exit("[ERROR] %s 读不了：%s" % (IVS_FROZEN_SRC, e))
+    try:
+        import ivs_frozen as iv
+    except ImportError:
+        sys.exit("[ERROR] 有 %s，但找不到 ivs_frozen.py（gen_need 里要有它）" % IVS_FROZEN_SRC)
+    if params.get("schema") != iv.SCHEMA:
+        sys.exit("[ERROR] %s 的格式 %r 不是本脚本认的 %r：重跑 S8.22_ivs" % (IVS_FROZEN_SRC, params.get("schema"), iv.SCHEMA))
+    return params, mode
+
+
 def resolve_dp_optical(cwd: Path):
     """[0033] step.conf 的 DP_OPTICAL_* -> 2d_correction.json 的 dp_optical 记录，并把 ODP/IVS 补进 SCATTERING。
     [0035] 再加冻声子参数（ODP_FROZEN，S8.21 的 odp_params.json）的 X>X 通道。[0035-r2] 有冻声子参数就用它，
@@ -1424,7 +1467,7 @@ def resolve_dp_optical(cwd: Path):
 
     没写通道表、也没有冻声子参数 -> None（与以前完全一样；SCATTERING 里手写了 ODP/IVS 却没通道 -> 报错）。
     格式错、谷表缺、通道指向谷表里没有的谷、冻声子参数是按旧谷表算的 -> sys.exit 说清楚（不静默）。"""
-    global SCATTERING, _DP_OPTICAL_FROZEN_REC
+    global SCATTERING, _DP_OPTICAL_FROZEN_REC, _DP_OPTICAL_IVS_REC
     import json
     import dp_optical as dpo
     specs = {"electron": (DP_OPTICAL_E, DP_OPTICAL_VALLEYS_E, "DP_OPTICAL_E", "DP_OPTICAL_VALLEYS_E"),
@@ -1432,7 +1475,11 @@ def resolve_dp_optical(cwd: Path):
     frozen, fmode = _load_frozen(cwd)
     if frozen is not None:
         import odp_frozen as of                # _load_frozen 已确认能 import
+    ivs, imode = _load_ivs(cwd)                # [0050] 冻声子谷间 IVS（K↔K′ 零阶）
+    if ivs is not None:
+        import ivs_frozen as iv                # _load_ivs 已确认能 import
     f_use, f_digest, f_info = {}, {}, {}
+    i_use, i_digest, i_info = {}, {}, {}
     rec, kinds_on = {}, set()
     dpt = None
     for car, (ch_spec, v_spec, ch_key, v_key) in specs.items():
@@ -1449,7 +1496,15 @@ def resolve_dp_optical(cwd: Path):
             f_use[car] = "unavailable"
         if str(v_spec or "").strip() and fmode != "off":
             f_use[car] = "manual_valleys"     # [0035-r3] 手填谷表：冻声子参数永远用不上（不论现在有没有），记下来免得以后误重排
-        if not chs and not want_frozen:
+        iv_ok = ivs is not None and iv.params_digest(ivs, car) is not None   # noqa: F821（ivs 非空才求值）
+        want_ivs = iv_ok                      # [0050] 算出来的 K↔K′ 优先；手填的同星 X>X' 只作对照
+        if ivs is None:
+            i_use[car] = "off" if imode == "off" else "unavailable"
+        elif not iv_ok:
+            i_use[car] = "unavailable"
+        if str(v_spec or "").strip() and imode != "off":
+            i_use[car] = "manual_valleys"
+        if not chs and not want_frozen and not want_ivs:
             continue
         raw = None
         if str(v_spec or "").strip():
@@ -1457,10 +1512,14 @@ def resolve_dp_optical(cwd: Path):
                 vs, src = dpo.parse_valleys(v_spec), "step.conf %s" % v_key
             except ValueError as e:
                 sys.exit("[ERROR] %s：%s" % (v_key, e))
-            if want_frozen:
-                print("[WARN] %s：手填了 %s，而冻声子参数是按 S8.2 谷表算的 —— 本载流子不用冻声子参数" % (car, v_key))
-                want_frozen = False
-                f_use[car] = "manual_valleys"
+            if want_frozen or want_ivs:
+                if want_frozen:
+                    print("[WARN] %s：手填了 %s，而冻声子参数是按 S8.2 谷表算的 —— 本载流子不用冻声子参数" % (car, v_key))
+                    f_use[car] = "manual_valleys"
+                if want_ivs:
+                    print("[WARN] %s：手填了 %s，而谷间冻声子参数是按 S8.2 谷表算的 —— 本载流子不用它" % (car, v_key))
+                    i_use[car] = "manual_valleys"
+                want_frozen = want_ivs = False
                 if not chs:
                     continue
         else:
@@ -1478,7 +1537,7 @@ def resolve_dp_optical(cwd: Path):
                 sys.exit("[ERROR] %s %s，但 %s 里没有 %s 的多谷谷表（multi_valley.valleys）。"
                          "\n        处理：在 step.conf 手填 %s%s。"
                          % (ch_key, "写了通道" if chs else "要用冻声子参数", DPT_RESULT, car, v_key,
-                            "" if chs else "，或等 S8.21_odp 按新谷表重跑"))
+                            "" if chs else "，或等 S8.21_odp / S8.22_ivs 按新谷表重跑"))
         if want_frozen:                       # 冻声子参数必须是按现在这份谷表算的
             sig = frozen["carriers"][car].get("valley_sig") or {}
             now = json.loads(json.dumps(kc._valley_sig(raw, bool(sig.get("use_grid"))))) if _HAS_KC else None
@@ -1486,6 +1545,13 @@ def resolve_dp_optical(cwd: Path):
                 sys.exit("[ERROR] %s 的 %s 参数是按旧谷表算的（S8.2 的谷后来变了）：等 S8.21_odp 重跑完再生成本步"
                          "（autozt -tt ke-dft-cpu -p <材料> -j S8.21_odp start），或 step.conf 写 ODP_FROZEN = off"
                          % (ODP_FROZEN_SRC, car))
+        if want_ivs:                          # [0050] 同上：谷间参数也必须是按现在这份谷表算的
+            sig = ivs["carriers"][car].get("valley_sig") or {}
+            now = json.loads(json.dumps(kc._valley_sig(raw, bool(sig.get("use_grid"))))) if _HAS_KC else None
+            if now is None or now != sig.get("sig"):
+                sys.exit("[ERROR] %s 的 %s 参数是按旧谷表算的（S8.2 的谷后来变了）：等 S8.22_ivs 重跑完再生成本步"
+                         "（autozt -tt ke-dft-cpu -p <材料> -j S8.22_ivs start），或 step.conf 写 IVS_FROZEN = off"
+                         % (IVS_FROZEN_SRC, car))
         try:                                  # [0034] 同中心的星（S8.2 按带/自旋分的）并成一个谷
             vs, alias = dpo.merge_coincident(vs)
         except ValueError as e:
@@ -1538,6 +1604,39 @@ def resolve_dp_optical(cwd: Path):
                              or "无（全部 D < %.2f eV/Å，对称性禁戒）" % float(ODP_FROZEN_DMIN)))
             # [0035-r3] 冻声子 D 全部低于阈值、又没有手填谷间通道时 chs 为空：照样建 rec[car]（ADP_INTRAVALLEY=on 的
             #   掩码要它；冻声子记录与手填对照也要落盘），没有通道的载流子由后面按 mode 统一处理。
+        if want_ivs:                          # [0050] 冻声子 K↔K′ 零阶：K 星的 X>X' 用算出来的，手填的同星 X>X' 只作对照
+            keep = {v["label"] for v in vs}
+            ichs, idropped, inotes = iv.inter_channels(ivs, car, keep=keep, norm=dpo.norm_label,
+                                                        dmin=float(IVS_FROZEN_DMIN), alias=alias)
+            for _n in inotes:
+                print("[WARN] %s 谷间冻声子：%s" % (car, _n))
+            known = keep | set(alias)
+            ivv = {dpo.norm_label(v.get("label")) for v in ivs["carriers"][car].get("valleys") or []}
+            stray = sorted(ivv - known)
+            if stray:
+                sys.exit("[ERROR] %s 里 %s 的谷 %s 不在现在的谷表里（%s）：重跑 S8.22_ivs"
+                         % (IVS_FROZEN_SRC, car, ",".join(stray), ",".join(sorted(keep))))
+            covered = {alias.get(lab, lab) for lab in ivv}
+            manual_star = [c for c in chs if c["kind"] == "inter_star" and c["from"] in covered]
+            if manual_star:                   # 先照常校验（写错的谷名要报出来），再只作对照
+                try:
+                    dpo.check_channels(manual_star, vs)
+                except ValueError as e:
+                    sys.exit("[ERROR] %s（谷表来自 %s）：%s" % (ch_key, src, e))
+            chs = [c for c in chs if not (c["kind"] == "inter_star" and c["from"] in covered)] + ichs
+            i_use[car] = "used"
+            i_digest[car] = iv.params_digest(ivs, car)
+            i_info[car] = {"digest": i_digest[car], "n_channels": len(ichs), "dropped_below_dmin": idropped,
+                           "merge_notes": inotes, "scope": ivs.get("scope"),
+                           "summary": iv.describe(ivs, car, norm=dpo.norm_label, keep=keep,
+                                                  dmin=float(IVS_FROZEN_DMIN), alias=alias)}
+            print("[OK] %s 冻声子谷间 IVS（%s）：%s" % (car, IVS_FROZEN_SRC, i_info[car]["summary"]))
+            if manual_star:
+                i_info[car]["manual_reference"] = [{"valley": c["from"], "D_eV_A": c["D_eV_A"], "hw_meV": c["hw_meV"]}
+                                                   for c in manual_star]
+                print("[..] %s：%s 里手填的 %s 只作对照（不进散射率；要用它们写 IVS_FROZEN = off）：手填 %s"
+                      % (car, ch_key, ",".join(sorted({"%s>%s'" % (c["from"], c["from"]) for c in manual_star})),
+                         ", ".join("%.2f eV/Å@%.1f meV" % (c["D_eV_A"], c["hw_meV"]) for c in manual_star)))
         try:
             dpo.check_channels(chs, vs)
         except ValueError as e:
@@ -1556,6 +1655,15 @@ def resolve_dp_optical(cwd: Path):
                 f_digest.pop(car, None)
                 if car in rec:
                     rec[car].pop("frozen", None)
+    ivs_allowed = not (_SCATTERING_EXPLICIT and "IVS" not in [str(x).upper() for x in SCATTERING])   # [0050]
+    if not ivs_allowed:
+        for car in list(i_use):
+            if i_use[car] == "used":
+                i_use[car] = "not_in_scattering"
+                i_digest.pop(car, None)
+    _DP_OPTICAL_IVS_REC = {"mode": imode, "source": IVS_FROZEN_SRC, "dmin_eV_A": float(IVS_FROZEN_DMIN),
+                           "frozen_use": i_use, "digest": i_digest, "ivs_allowed": ivs_allowed,
+                           "info": {c: i_info[c] for c in i_info if i_use.get(c) == "used"}}
     _DP_OPTICAL_FROZEN_REC = {"mode": fmode, "source": ODP_FROZEN_SRC, "dmin_eV_A": float(ODP_FROZEN_DMIN),
                               "frozen_use": f_use, "digest": f_digest, "odp_allowed": odp_allowed,
                               "info": {c: f_info[c] for c in f_info if f_use.get(c) == "used"}}
@@ -1604,14 +1712,15 @@ def resolve_dp_optical(cwd: Path):
               "谷间散射没有任何机制承担，迁移率按'只谷内'口径（对照形变势理论/S8.2 DPT 用）" % ",".join(SCATTERING))
     for car in ("electron", "hole"):
         if car in rec:
-            print("[..]   %s 谷表来自 %s；ADP 谷内掩码 %s%s" % (car, rec[car]["valleys_source"],
-                                                      "开" if flags[car] else "关",
-                                                      "；谷内 ODP 参数来自冻声子" if f_use.get(car) == "used" else ""))
+            print("[..]   %s 谷表来自 %s；ADP 谷内掩码 %s%s%s" % (car, rec[car]["valleys_source"],
+                                                        "开" if flags[car] else "关",
+                                                        "；谷内 ODP 参数来自冻声子" if f_use.get(car) == "used" else "",
+                                                        "；K↔K′ 谷间参数来自冻声子" if i_use.get(car) == "used" else ""))
             _vs = rec[car].get("valleys") or []                   # [0042] 多谷但没有谷间通道：提示 IVS 缺失
             if (len(_vs) > 1 or any(int(v.get("g", 1)) > 1 for v in _vs)) and not any(
                     h.get("kind") in ("inter", "inter_star") for h in rec[car].get("channels") or []):
-                print("[WARN]   %s 是多谷（%s）但没有谷间通道：IVS 不自动算，谷间光学散射缺失、迁移率偏高；"
-                      "要的话按文献在 step.conf 写 DP_OPTICAL_%s 的 X>X'、X>Y 通道"
+                print("[WARN]   %s 是多谷（%s）但没有谷间通道：谷间光学散射缺失、迁移率偏高；K↔K′ 零阶可开 ivs_frozen 组"
+                      "自动算（[0050]，非 SOC），其余按文献在 step.conf 写 DP_OPTICAL_%s 的 X>X'、X>Y 通道"
                       % (car, ", ".join("%s×%d" % (v["label"], int(v.get("g", 1))) for v in _vs),
                          "E" if car == "electron" else "H"))
     return rec
@@ -1934,6 +2043,7 @@ def apply_2d_corrections(cwd: Path, elastic, eps_inf=None, eps_static=None):
         "mechanisms_2d": mechanisms,
         "dp_optical": _DP_OPTICAL_REC,          # [0033] None = 不开 ODP/IVS
         "dp_optical_frozen": _DP_OPTICAL_FROZEN_REC,   # [0035] 冻声子参数用没用、用的哪份（S8.21 据此决定要不要让本步重排）
+        "dp_optical_ivs": _DP_OPTICAL_IVS_REC,         # [0050] 谷间冻声子参数用没用、用的哪份（S8.22 据此决定要不要让本步重排）
         "areal_density_factor_cm": c_len * 1e-8,
         "areal_density_note": "n_2D [cm^-2] = n_3D [cm^-3] x cell_c [cm]",
         "inplane_cell_area_cm2": _CELL_AREA_CM2,
@@ -2866,7 +2976,7 @@ def main():
     global IR_FIX, _IR_FIX_ON, KZ_CAP_2D, KZ_FLAT_TOL_EV, _KZ_CAP_RMAX
     global MEM_WARN_GIB, MEM_LIMIT_GIB, MEM_AUTO_EXCLUSIVE
     global DP_OPTICAL_E, DP_OPTICAL_H, DP_OPTICAL_VALLEYS_E, DP_OPTICAL_VALLEYS_H, ADP_INTRAVALLEY
-    global _DP_OPTICAL_REC, _SCATTERING_EXPLICIT, ODP_FROZEN, ODP_FROZEN_DMIN
+    global _DP_OPTICAL_REC, _SCATTERING_EXPLICIT, ODP_FROZEN, ODP_FROZEN_DMIN, IVS_FROZEN, IVS_FROZEN_DMIN
     _conf_nworkers = None
     if (cwd / "step.conf").is_file():
         # strict=False：材料级 step.conf 是【全技能共用】的一份，含别的步骤的键
@@ -2981,6 +3091,9 @@ def main():
             ODP_FROZEN = str(_p["ODP_FROZEN"] or "auto")                       # [0035]
             if _p["ODP_FROZEN_DMIN"] is not None:
                 ODP_FROZEN_DMIN = float(_p["ODP_FROZEN_DMIN"])
+            IVS_FROZEN = str(_p["IVS_FROZEN"] or "auto")                       # [0050]
+            if _p["IVS_FROZEN_DMIN"] is not None:
+                IVS_FROZEN_DMIN = float(_p["IVS_FROZEN_DMIN"])
             # patch_doping_override（B4/B5 缩减设置）：step.conf 可覆盖掺杂/温度范围
             if _p["DOPING"]:
                 _d = str(_p["DOPING"])

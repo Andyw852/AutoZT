@@ -452,7 +452,7 @@ _AMSET_ENV_SRC = "source %s && conda activate %s" % (CONDA_SH, AMSET_ENV)
 
 ### 6.3 ke-dft-cpu 电子热导率（v0.1，AMSET）
 
-16 步 DAG（[0035] 起另有可选 S7.2/S8.21 两步；`needs` 显式依赖，没写 needs 的步骤回退为"上一步"）：
+16 步 DAG（[0035] 起另有可选 S7.2/S8.21 两步，[0050] 起另有可选 S7.3/S7.4/S8.22 三步；`needs` 显式依赖，没写 needs 的步骤回退为"上一步"）：
 
 | seq | 步骤 | label | 内容 | 判据 |
 |---|---|---|---|---|
@@ -465,8 +465,11 @@ _AMSET_ENV_SRC = "source %s && conda activate %s" % (CONDA_SH, AMSET_ENV)
 | 7 | `step7_deform` | S7_deform | 形变势（**fanout** `*deform*`） | `outcar` |
 | 7.1 | `step7b_deform_read` | S7.1_read | 形变势读取（登录节点）→ `deformation.h5` | plot |
 | 7.2 | `step7c_odp_frozen` | S7.2_odp | [0035] 2D/3D（组 `odp_frozen`，[0041] 起默认开）：冻声子 ODP 单点（**fanout** `odp-*`）：S5 的 Γ 点非极性光学模各做 ±u 位移 + 一个参考构型，INCAR/KPOINTS/POTCAR 照抄 S7 undeformed | `outcar` |
+| 7.3 | `step7d_ivs_phonon` | S7.3_ivsph | [0050] 2D 六角、非 SOC（组 `ivs_frozen`，默认关）：√3×√3 超胞（K、K′ 折叠到 Γ̃）的 Γ̃ 点 DFPT，INCAR/POTCAR 照抄 S7 undeformed，网格按 S7 的 k 间距换算 | `outcar` |
+| 7.4 | `step7e_ivs_frozen` | S7.4_ivs | [0050] 谷间冻声子单点（**fanout** `ivs-*`）：区边界模各做 ±u 超胞单点 + 超胞参考 `ivs-ref` + 原胞 `ivs-prim`（给超胞能级标来源） | `outcar` |
 | 8.21 | `step8.21_odp_read` | S8.21_odp | [0035] 读冻声子单点 → `odp_params.json`：每个谷（S8.2 谷表）× 每组光学模的 D（真空对齐）与 ħω，供 S8.4 的谷内 ODP 用 | plot |
 | 8 | `step8_amset` | S8_kappa | AMSET 电子热导率 → `transport.json`（needs: wave+dielect+elastic+deform+带隙画图） | `transport.json:thermal_conductivity` |
+| 8.22 | `step8.22_ivs_read` | S8.22_ivs | [0050] 读谷间单点 → `ivs_params.json`：K/K′ 二重态劈裂 ±\|V\|u 给出 K↔K′ 零阶 D（与参考能级无关），按 S8.2 谷表找 K 星；只算 K↔K′，离 K 星 < 0.2 eV 的别的星（如 Q）告警 | plot |
 | 8.4 | `step8.4_amset2d` | S8.4_amset2d | **2D 专用**：二维散射核版 AMSET（插件 amset2d_plugin，可选组 `amset2d`，默认关）；[0035] 开了 `odp_frozen` 时自动用 S8.21 的冻声子 ODP 参数（`ODP_FROZEN`），并出 `tau_energy.json`（逐机制 τ(E) 与迁移率等效 τ） | `transport.json:thermal_conductivity` |
 | 8.2 | `step8.2_dpt` | S8.2_dpt | DPT 形变势迁移率 → `dpt_result.json`（必须排在 8.1 前）；[0020] 另出 `mobility_vs_T`（默认 100–900 K，step.conf `TEMPERATURES` 可改）；[0022] 2D 另出 `multi_valley`：自动找离带边 `VALLEY_WINDOW_EV`（默认 0.30 eV）内的所有谷（K/Q/Γ/M…）、逐谷质量张量与 E1、按布居加权、逐温度算——带边在 Q 这类非高对称谷（WSe₂ 导带）时单谷拒绝出数，多谷照算，**不要手填 M_EFF_***；`DPT_VALLEYS = off` 关掉；[0023] 有贡献的谷之间等效 E1 相差 > `VALLEY_E1_RATIO_MAX`（默认 3）倍时多谷拒绝出数（TMD 电子 Q 谷真空口径 E1 只有 K 谷的 1/10，DPT 在这里失效），只留各谷带符号 dE/dε 诊断；[0024] 找到别的非等价谷时写 `single_valley_scope`：单谷值只代表哪个谷、各温度占多少载流子（只报布居，不拦截）；[0025] 3D 出 x/y/z 分方向（`by_direction` 的 x/y/z，C_α=C11/C22/C33，m_α 来自带边三维二次型拟合，E1_α 取 S7.1 `deformation.h5` 带边 3×3 张量的对角，S7/S7.1 不用改；带边有对称等价谷（Si 的 X、Bi₂Te₃ 的 6 个谷）时两者都对等价谷平均），3D 各向同性值的 C、E1 改取三个对角的平均、m* 改用三维拟合的 m_d=(det M)^(1/3)；[0027] 带边是否被对称性钉住改按晶体小群判断（以前查 ⅓/¼ 坐标表，矩形胞 Y–Γ 上的 (0,⅓) 被误判，线性项被关、拟合被拒，SS 电子）；[0028] 非磁体系用 ISPIN=2 算时两个自旋道能带相同，多谷只按一道算（以前同一个谷按 up/down 各算一次，单谷占比少报一半，CrS2/CrSe2 hex）；[0029] 只比较带边附近的带（最高空带两道不一致不再阻止合并） | plot |
 | 8.1 | `step8.1_boltztrap` | S8.1_bt2 | BoltzTraP2 CRTA × DPT-τ 文献口径完整实现；[0022] 单谷分方向 τ 不可用时用 S8.2 的多谷 τ_eff（逐温度取，不外推）；[0024] 用单谷 τ 时提示它只代表哪个谷、该温度占多少载流子（写进 boltztrap_summary.txt）；[0025] 3D 也用 S8.2 的分方向 τ_x/τ_y（以前退回各向同性 τ）；[0026] 3D 另写 zz 的 σ/τ、S、κe/τ，文献口径扫描加 zz 方向（τ_z、κL_zz → ZT_zz） | `boltztrap_crta.json` |
@@ -476,10 +479,10 @@ _AMSET_ENV_SRC = "source %s && conda activate %s" % (CONDA_SH, AMSET_ENV)
 
 - **BT2 与 DPT 分工不同**：S8.1 的 BoltzTraP2 在常数弛豫时间近似（CRTA）下计算 `σ/τ`、Seebeck、`κe/τ` 等；S8.2 的 DPT（Bardeen–Shockley 形变势理论）用有效质量、形变势和面内弹性模量估算声学声子限制的迁移率/τ。AutoZT 将 DPT 的 τ 用于 BT2 的 CRTA 输运量（CRTA × DPT-τ）。这是简化的声学散射对标路径；它与 AMSET 的 ADP 都描述声学形变势散射，但计算模型不同，不能当作同一算法或同等精度。
 - **AMSET2D 默认 `SCATTERING = ADP,IMP,POP`**：ADP 是声学形变势散射，依赖形变势和弹性响应；POP 是极性光学声子（Fröhlich）散射，非极性材料中该通道可为零；IMP 是电离杂质散射。开启 `WRITE_MESH` 后，`intrinsic_ADP.json`（还需 `INTRINSIC_ADP_ONLY`）只保留 ADP；具备 ADP、POP 时另出 `intrinsic_ADP_POP.json`，若同时启用 ODP 再出 `intrinsic_ADP_POP_ODP.json`。这些分级结果用于比较逐步加入散射机制的影响。`intrinsic_transport.json` 去掉 IMP、保留其余已启用机制，默认即 ADP+POP；它表示给定载流子浓度、温度和机制集合下的无电离杂质结果，不是遗漏其他重要机制时真实材料迁移率的绝对上限。固定能带与条件时，增加独立正散射率通常会降低迁移率。
-- **可选散射**：PIE 是声学应变诱发的压电电势对载流子的散射，需体系允许且有非零压电张量；非中心对称是必要条件但本身不足以保证 PIE 非零。Janus、纤锌矿 GaN/ZnO 等可优先评估，低温、低载流子浓度或弱屏蔽时往往更值得检查；本技能默认关闭 PIE，二维核目前只含面内压电贡献，且 PIE 绝对归一化尚未做定量验证，结果应作为可选估算并谨慎解读。ODP 是非极性光学声子形变势散射，IVS 是谷间声子散射；二者需显式配置。可选 `odp_frozen` 组通过 S7.2/S8.21 自动提取 Γ 点**非极性**光学模对应的**零阶谷内 ODP** 参数（默认排除极性模），该组 [0041] 起默认开启；谷间 IVS 参数仍需按文献手填。该自动参数流程不等于完整的 q 依赖电子-声子计算。
+- **可选散射**：PIE 是声学应变诱发的压电电势对载流子的散射，需体系允许且有非零压电张量；非中心对称是必要条件但本身不足以保证 PIE 非零。Janus、纤锌矿 GaN/ZnO 等可优先评估，低温、低载流子浓度或弱屏蔽时往往更值得检查；本技能默认关闭 PIE，二维核目前只含面内压电贡献，且 PIE 绝对归一化尚未做定量验证，结果应作为可选估算并谨慎解读。ODP 是非极性光学声子形变势散射，IVS 是谷间声子散射；二者需显式配置。可选 `odp_frozen` 组通过 S7.2/S8.21 自动提取 Γ 点**非极性**光学模对应的**零阶谷内 ODP** 参数（默认排除极性模），该组 [0041] 起默认开启；谷间 IVS 参数仍需按文献手填；[0050] 起可选 `ivs_frozen` 组（默认关）通过 S7.3/S7.4/S8.22 自动提取六角 2D 材料**非 SOC** 能带的 **K↔K′ 零阶**谷间形变势（S8.4 `IVS_FROZEN=auto` 用它的 K>K' 通道；K↔Q、K↔Γ 与一阶谷间仍需手填，SOC 材料三步都拒绝）。这些自动参数流程不等于完整的 q 依赖电子-声子计算。
 - **文献**：BoltzTraP2 方法见 [Madsen et al., CPC 231, 140–145 (2018)](https://doi.org/10.1016/j.cpc.2018.05.010)；DPT 经典出处为 [Bardeen & Shockley, Phys. Rev. 80, 72–80 (1950)](https://doi.org/10.1103/PhysRev.80.72)；AMSET 散射率框架见 [Ganose et al., Nat. Commun. 12, 2224 (2021)](https://doi.org/10.1038/s41467-021-22440-5)。二维声学/压电散射可参考 [Kaasbjerg et al., Phys. Rev. B 87, 235312 (2013)](https://doi.org/10.1103/PhysRevB.87.235312)；MoS₂ 光学与谷间声子参数示例见 [Kaasbjerg et al., Phys. Rev. B 85, 115317 (2012)](https://doi.org/10.1103/PhysRevB.85.115317) 和 [Jin et al., Phys. Rev. B 90, 045422 (2014)](https://doi.org/10.1103/PhysRevB.90.045422)。二维极性光学耦合见 [Sohier et al., Phys. Rev. B 94, 085415 (2016)](https://doi.org/10.1103/PhysRevB.94.085415)。这些文献给出物理模型或材料参数依据；AutoZT 的冻声子 ODP 自动提取是本技能实现。
 
-- 开关：`bandgap_steps: false` 完全不算带隙（手填 setting.yaml 的 bandgap）、`bandgap_hse: false`、`dpt: false`、`boltztrap_crta: false`、`amset2d`（**2D 材料 init/register 时自动写 `amset2d: true`**，老材料手写；zt-dft-cpu 对 2D 只认 S8.4）、`amset3d`（S8 原版三维核；**2D 材料新建时自动写 `amset3d: false`**，不跑 S8；层厚 `LAYER_THICKNESS` 写在本材料共用 step.conf，S8/S8.1/S8.4 共用）、`output_compare: false`、`odp_frozen`（[0035] 冻声子 ODP 参数 S7.2/S8.21，[0041] 起默认开；不要就在本材料 tf_*.yaml 写 `odp_frozen: false`）。
+- 开关：`bandgap_steps: false` 完全不算带隙（手填 setting.yaml 的 bandgap）、`bandgap_hse: false`、`dpt: false`、`boltztrap_crta: false`、`amset2d`（**2D 材料 init/register 时自动写 `amset2d: true`**，老材料手写；zt-dft-cpu 对 2D 只认 S8.4）、`amset3d`（S8 原版三维核；**2D 材料新建时自动写 `amset3d: false`**，不跑 S8；层厚 `LAYER_THICKNESS` 写在本材料共用 step.conf，S8/S8.1/S8.4 共用）、`output_compare: false`、`odp_frozen`（[0035] 冻声子 ODP 参数 S7.2/S8.21，[0041] 起默认开；不要就在本材料 tf_*.yaml 写 `odp_frozen: false`）、`ivs_frozen`（[0050] 冻声子谷间 K↔K′ 零阶 S7.3/S7.4/S8.22，默认关；要就在本材料 tf_*.yaml 写 `ivs_frozen: true`，只支持六角、非 SOC）。
 - 依赖：`pymatgen, numpy, matplotlib, amset, BoltzTraP2` + `vaspkit`（conda 环境 `amset_clean`）。
 
 **8.4 amset2d（2D 项目专用）**：把 AMSET 的四种散射核（ADP/POP/IMP/PIE）换成二维形式
