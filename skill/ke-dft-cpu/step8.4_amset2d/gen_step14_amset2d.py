@@ -236,6 +236,14 @@ _EPS_OV_LAYER = None      # (eps_inf_layer, eps_static_layer)：覆盖后 settin
 # 形变势构型口径（apply_2d_corrections 从 step7b/band_edges.json 读）。★ 2026-09-28：原来没有
 #   模块级初值 —— band_edges.json 不在时 apply_2d_corrections 直接 NameError。
 _DEFORM_GEOM = None
+
+
+def _deform_geom_ok_2d(geom):
+    """[V187] 二维核只用面内分量（面外应变拉的是真空）：面内全离子弛豫就是正确口径。
+    "ionrelax(in-plane)+clamped(out-of-plane)" 是 2D 的正常状态，以前也被当成"非离子弛豫"告警。"""
+    return geom == "ionrelax" or str(geom or "").startswith("ionrelax(in-plane)")
+
+
 # patch_dielec_assert：介电产物必须通过物理性硬断言，否则直接停步（不静默往下传）。
 #   检查项：eps_inf 存在 / 对角项 >= 1 / 不是单位矩阵（DFPT 初值签名）/
 #   有 IONIC CONTRIBUTION 块（否则 Frohlich 耦合恒为 0、POP 静默丢失）。
@@ -1878,7 +1886,7 @@ def apply_2d_corrections(cwd: Path, elastic, eps_inf=None, eps_static=None):
     if _DEFORM_GEOM:
         print("[OK] 形变势构型口径 deform_geometry=%s（来自 step7b/band_edges.json）"
               % _DEFORM_GEOM)
-        if _DEFORM_GEOM != "ionrelax":
+        if not _deform_geom_ok_2d(_DEFORM_GEOM):
             print("[WARN] 形变势不是离子弛豫口径（%s）—— 与 TOTAL ELASTIC MODULI"
                   "（含离子弛豫）不同源，ADP 绝对值跨项目不可直接比。" % _DEFORM_GEOM)
     r_check = delta_r_check(c_len, inf33, stat33)
@@ -2184,7 +2192,7 @@ def write_settings(out: Path, eps_inf, eps_static, gap, elastic,
     lines += ["# deform_geometry: %s（形变势构型口径；ionrelax=离子弛豫、与 TOTAL ELASTIC"
               " MODULI 同源；clamped=离子固定，跨项目 ADP 不可直接比；mixed=两者混用）"
               % (_DEFORM_GEOM or "未知（step7b/band_edges.json 里没有这个字段）")]
-    if _DEFORM_GEOM and _DEFORM_GEOM != "ionrelax":
+    if _DEFORM_GEOM and not _deform_geom_ok_2d(_DEFORM_GEOM):
         lines.append("# [WARN] 本次形变势不是离子弛豫口径 —— 与弹性常数不同源，"
                      "与其它项目比较 ADP 绝对值时先核对这一行。")
     lines += ["doping: [%s]" % ", ".join("%.6e" % v for v in _dop),
@@ -3114,10 +3122,10 @@ def main():
                  "（迁移率偏低，仅看数量级）。" % _wdir)
     link(out, cwd / _wdir / "wavefunction.h5", "wavefunction.h5")
     link(out, cwd / READ_DIR / _pick_deformation_h5(cwd, READ_DIR), "deformation.h5")
-    if _HAS_KC and kc.deformation_h5_symmetrized(out / "deformation.h5") is False:   # patch_dp_symmetrize
-        print("[WARN] 形变势 h5 未按点群对称化（step7b_deform_read 在 V121 之前生成）—— 六方等体系会出现"
-              "本应各向同性方向上的迁移率差异（MoS2 实测 xx/yy 差 9–10%）。处理：重新 gen step7b_deform_read"
-              "（秒级、不提交作业），再重新生成本步。")
+    _dpi = kc.deformation_h5_issues(out / "deformation.h5") if _HAS_KC else None   # patch_dp_symmetrize / V189
+    if _dpi:
+        print("[WARN] 形变势 h5 早于 V189，不能直接用：%s。处理：重新 gen step7b_deform_read"
+              "（秒级、不提交作业），再重新生成本步。" % "；".join(_dpi))
     # patch_amset_vasprun：amset run 还需要密网格 vasprun.xml 拿能带色散
     # 全网格分支时 vasprun 必须同源（step3b_uniform_full）。
     # ★ 2026-09-27 修（MoS2 端到端实验暴露）：IBZ 分支也必须优先用 step3b_uniform_full

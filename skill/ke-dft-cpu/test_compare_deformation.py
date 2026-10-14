@@ -17,13 +17,16 @@ sys.path.insert(0, str(HERE / "tools"))
 import compare_deformation_h5 as C  # noqa: E402
 
 
-def _h5(path, D, kp, sym=0):
+def _h5(path, D, kp, sym=0, tensor=True):
+    """tensor=True：[V189] 张量约定（非对角 = D_xy）；False：AMSET 原生（非对角 = 2·D_xy，D 按原生值写入）。"""
     import h5py
     with h5py.File(str(path), "w") as f:
         f.create_dataset("deformation_potentials_up", data=D)
         f["kpoints"] = kp
         f["structure"] = np.bytes_("{}")
         f.attrs["dp_symmetrized"] = sym
+        if tensor:
+            f.attrs["dp_offdiag"] = "tensor"
 
 
 class CompareTests(unittest.TestCase):
@@ -55,6 +58,29 @@ class CompareTests(unittest.TestCase):
         _h5(self.d / "new.h5", self.D * noise, self.kp, sym=1)
         rep = C.compare(self.d / "old.h5", self.d / "new.h5")
         self.assertFalse(rep["rerun"], rep)
+
+    def test_v189_convention_change_with_shear_needs_rerun(self):
+        """旧 h5 是 AMSET 原生（非对角 2·D_xy），新 h5 是张量：数据本身没变（统一约定后逐点 0），
+        但旧运行的剪切耦合算大了一倍 —— 非对角权重大就要重跑。"""
+        off = ~np.eye(3, dtype=bool)
+        native = self.D.copy()
+        native[..., off] *= 2.0
+        _h5(self.d / "old_native.h5", native, self.kp, sym=1, tensor=False)
+        _h5(self.d / "new.h5", self.D, self.kp, sym=2)
+        rep = C.compare(self.d / "old_native.h5", self.d / "new.h5")
+        s = rep["spins"]["deformation_potentials_up"]
+        self.assertLess(s["rel_max"], 1e-9)                    # 统一到张量约定后完全相同
+        self.assertTrue(s["runtime_offdiag_changed"])
+        self.assertGreater(s["offdiag_share"], C.RERUN_OFFDIAG)
+        self.assertTrue(rep["rerun"])
+
+    def test_v189_convention_change_without_shear_is_small(self):
+        diag = self.D * np.eye(3)                               # 没有非对角：约定变不变都一样
+        _h5(self.d / "old_native.h5", diag, self.kp, sym=1, tensor=False)
+        _h5(self.d / "new.h5", diag, self.kp, sym=2)
+        rep = C.compare(self.d / "old_native.h5", self.d / "new.h5")
+        self.assertFalse(rep["rerun"], rep)
+        self.assertEqual(rep["spins"]["deformation_potentials_up"]["offdiag_share"], 0.0)
 
     def test_string_attrs_from_nspin_norm_fix(self):
         """V141：0.5.1 的 h5 带 nspin_norm_fixed='skipped' / reason='amset>=0.5.1'，原来 int() 直接崩。"""

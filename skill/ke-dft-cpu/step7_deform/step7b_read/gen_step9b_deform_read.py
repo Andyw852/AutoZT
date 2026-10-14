@@ -80,6 +80,47 @@ def check_calculation(bulk, deformation):
 
 
 T.check_calculation = check_calculation
+
+# [V188] 同一次读取里再算一份**带符号中心差分**（AMSET 的 h5 逐分量取了 |·|，dp_symmetrize 做 3/6 次轴的
+#   对称化需要符号），写成 deformation_signed.h5（数据集不叫 deformation_potentials_*，AMSET 不会误读）。
+#   AMSET 的 read() 在函数体里 import 这几个函数，所以改模块属性即可；算不出只告警，对称化退回置换子群。
+import os as _os
+sys.path.append(_os.path.dirname(_os.getcwd()))         # 项目根（gen_need 的 dp_symmetrize.py 在这；append 不遮蔽别的模块）
+try:
+    import dp_symmetrize as _DPS
+    import amset.deformation.potentials as _PT
+    import amset.deformation.io as _IO
+    _SIG = {}
+    _ORIG_CALC, _ORIG_EXTRACT, _ORIG_WRITE = (_PT.calculate_deformation_potentials, _PT.extract_bands,
+                                              _IO.write_deformation_potentials)
+
+    def _calc(bulk, sm):
+        out = _ORIG_CALC(bulk, sm)
+        try:
+            _SIG["dp"] = _DPS.signed_deformation_potentials(bulk, sm)
+            _SIG["gap"] = _DPS.band_gaps(bulk["bandstructure"])
+            _SIG["delta"] = _DPS.strain_amount(sm)
+        except Exception as _e:                              # noqa: BLE001
+            print("[dp_signed][WARN] 带符号形变势没算出来（%s: %s）：对称化退回置换子群" % (type(_e).__name__, _e),
+                  flush=True)
+        return out
+
+    def _extract(dp, ibands):
+        _SIG["ibands"] = ibands
+        return _ORIG_EXTRACT(dp, ibands)
+
+    def _write(dp, kpoints, structure, filename="deformation.h5"):
+        fn = _ORIG_WRITE(dp, kpoints, structure, filename=filename)
+        if "dp" in _SIG and "ibands" in _SIG:
+            _DPS.write_signed(_DPS.signed_name(fn), _SIG["dp"], kpoints, ibands=_SIG["ibands"],
+                              gaps=_SIG.get("gap"), delta=_SIG.get("delta"))
+            print("[dp_signed] 写出 %s" % _DPS.signed_name(fn), flush=True)
+        return fn
+
+    _PT.calculate_deformation_potentials, _PT.extract_bands, _IO.write_deformation_potentials = _calc, _extract, _write
+except ImportError as _e:
+    print("[dp_signed][WARN] 不能 import dp_symmetrize（%s）：不写带符号形变势，对称化退回置换子群" % _e, flush=True)
+
 if __name__ == "__main__":
     from amset.tools.cli import cli
     cli.main(args=["deform", "read"] + sys.argv[1:], prog_name="amset")
@@ -254,8 +295,9 @@ def main():
     print("[..] 形变构型（%d 个，ionrelax 优先）：%s"
           % (len(_rel), ", ".join(_rel[:6]) + (" ..." if len(_rel) > 6 else "")))
     # ---- 口径分级（2026-09-16 二次修订，按维度区分处理）------------------
-    # 现实情况：step7 只对**面内**分量做了离子弛豫，所以一个项目里常常是
-    # "面内 ionrelax + 面外 clamped"。这不是可以含糊过去的细节：
+    # 现实情况：2D 的 step7 只对**面内**分量做离子弛豫（面外应变拉的是真空，二维核不用），所以
+    # 二维项目是"面内 ionrelax + 面外 clamped"；3D 自 [V187] 起全部分量都弛豫（旧的 3D 项目是全 clamped，
+    # retry S7 才会补）。这不是可以含糊过去的细节：
     #   · 二维核只用面内分量 → 面内全 ionrelax 即可放行，但标签必须写清楚；
     #   · 三维核要全部分量同源 → 出现混合口径直接报错（AMSET 会把不同来源的分量
     #     平均进同一个张量，结果没有物理意义）；
@@ -308,11 +350,44 @@ def main():
         print("[WARN] 全部 %d 个形变构型都是【离子固定】口径（没有 ionrelax/）：与弹性常数"
               "（TOTAL ELASTIC MODULI，含离子弛豫）不同源，ADP 绝对值跨项目不可直接比。"
               % len(_geom_map))
+        if _dim_now == "3d":
+            print("       [V187] 3D 现在默认也做离子弛豫：retry S7_deform 会给全部形变构型补 ionrelax/"
+                  "（step.conf 写 IONRELAX_3D = false 才保持离子固定），算完再重跑本步。")
     elif _def_geom.startswith("ionrelax(in-plane)"):
         print("[..] 面内分量取自离子弛豫构型、面外分量取自离子固定构型：二维核只用面内分量，"
               "可用；三维核若复用同一份 h5 需注意口径（本体系 DIM=%s）。" % (_dim_now or "?"))
         print("     面外 clamped 构型：%s" % ", ".join(_clamped_out[:8]))
     print("[..] 形变势构型口径 deform_geometry=%s（落盘到 band_edges.json）" % _def_geom)
+    # [V187] 弛豫段核对：内坐标响应回收得够不够（首/末步最大力）、有没有跑满 NSW、力判据是不是旧的松值。
+    #   只告警不拦：判据偏松的旧结果按 IONRELAX_REBUILD_LOOSE 由用户决定要不要重算。
+    _ir_check = {"ediffg_ref": -kc.IONRELAX_EDIFFG_REF,
+                 "ratio_warn": kc.IONRELAX_FORCE_RATIO_WARN, "folders": {}}
+    for _k, _v in sorted(_geom_map.items()):
+        if _v == "ionrelax":
+            _ir_check["folders"][_k] = kc.ionrelax_force_check(dfm / _k / "ionrelax")
+    _bad = {k: v for k, v in _ir_check["folders"].items() if v.get("status") not in ("ok",)}
+    _eds = sorted(set(v.get("ediffg") for v in _ir_check["folders"].values()), key=lambda x: (x is None, x))
+    _ir_check["ediffg_used"] = _eds
+    _ir_check["n_flagged"] = len(_bad)
+    if len(_eds) > 1:
+        print("[WARN] ionrelax 的力判据不统一：EDIFFG = %s（新旧结果混用；见 band_edges.json 的 ionrelax_check）" % _eds)
+    for _k, _v in sorted(_bad.items()):
+        _st = _v.get("status")
+        _why = {"nsw_hit": "跑满 NSW 仍未到 EDIFFG",
+                "weak": "末步/首步最大力 %s > %s，内坐标响应回收不足" % (_v.get("ratio_last_first"),
+                                                                     kc.IONRELAX_FORCE_RATIO_WARN),
+                "loose": "EDIFFG=%s 比参考值 -%g 松（旧结果）" % (_v.get("ediffg"), kc.IONRELAX_EDIFFG_REF),
+                "no_data": "没有 OUTCAR.relax，核对不了（旧版 submit.sh）"}.get(_st, _st)
+        print("[WARN] ionrelax %s：%s（fmax 首/末 = %s/%s eV/Å，%s 步）"
+              % (_k, _why, _v.get("fmax_first"), _v.get("fmax_last"), _v.get("n_ionic")))
+    if _bad:
+        _sts = set(v.get("status") for v in _bad.values())
+        print("       E1 的离子弛豫部分可能偏低。重算办法（S7 的 step.conf，写完 retry S7_deform 再重跑本步）：")
+        if _sts & {"loose"}:
+            print("         · 判据偏松的旧结果：IONRELAX_REBUILD_LOOSE = true（只重建比现行判据松的构型）")
+        if _sts & {"weak", "nsw_hit"}:
+            print("         · 回收不足 / 跑满 NSW：IONRELAX_EDIFFG 写更紧（如 -0.002）+ IONRELAX_REBUILD_LOOSE = true；"
+                  "跑满 NSW 的先看 OSZICAR.relax 是不是软模在晃")
     # [V169] 芯能级参考的来源逐构型判定（amset deform read 读的就是这些目录的 OUTCAR）：平均静电芯势 / 1s 芯能级。
     #   AMSET 缺前者时静默改用后者（ICORELEVEL=1 的旧 INCAR）；两种混用 -> 参考差无物理意义，直接报错。
     _core_ref = {str(Path(_f).relative_to(dfm)): kc.outcar_core_ref_kind(Path(_f) / "OUTCAR")
@@ -343,6 +418,11 @@ def main():
            ">> deform_read.log 2>&1"
            % (AMSET_ENV_SRC, str(dfm), shlex.quote(_NBANDS_FIX_CODE),
               " ".join(shlex.quote(r) for r in _rel)))
+    # [V188] 旧的带符号文件先删：本次没算出来时不能让对称化读到上一次的（k 点可能还对得上）
+    for _old in (dfm / "deformation_signed.h5", out / "deformation_signed.h5",
+                 out / "deformation_vac_signed.h5"):
+        if _old.is_file():
+            _old.unlink()
     print("[..] amset deform read ...")
     rc = subprocess.run(["bash", "-lc", cmd]).returncode
     h5 = dfm / "deformation.h5"
@@ -374,6 +454,8 @@ from pathlib import Path as _P
 sys.path.insert(0, str(_P.cwd().resolve().parent))   # 项目根（本步 cwd 是 step7_deform）
 import ke_common
 outdir = sys.argv[1]
+# [V187] 维度由外层传入（argv[3]）：只决定 E1_iso_eV 取面内两项还是三个对角；真空对齐段仍自己读 step1
+_DIM = (sys.argv[3] if len(sys.argv) > 3 else "").lower() or None
 
 def _as_dict(edge):
     edge = edge if isinstance(edge, dict) else {
@@ -414,10 +496,14 @@ import nspin_norm_fix
 _fixed, _reason = nspin_norm_fix.fix_h5("deformation.h5", amset.__version__)
 print("[nspin_norm_fix] core deformation.h5: fixed=%s reason=%s (amset %s)"
       % (_fixed, _reason, amset.__version__))
-# [patch_dp_symmetrize V121] D(k) 场按 Laue 群对称化（ε_xx/ε_yy 各自独立有限差分的噪声，
-#   MoS2 带边 E1 xx/yy 差 4–6%）。原地改、幂等；带边 E1_xx/yy 随之对称。见 dp_symmetrize.py。
+# [patch_dp_symmetrize V121 -> V188] D(k) 场按 Laue 群对称化（ε_xx/ε_yy 各自独立有限差分的噪声，
+#   MoS2 带边 E1 xx/yy 差 4–6%）。原地改、幂等；带边 E1_xx/yy 随之对称。V188：h5 是幅值 |D|，只用置换类操作
+#   精确对称化；3/6 次轴用同目录 deformation_signed.h5 的带符号中心差分（符号不一致的简并点退回幅值）。见 dp_symmetrize.py。
 import dp_symmetrize
 print("[dp_symmetrize] core deformation.h5: %s" % dp_symmetrize.symmetrize_h5("deformation.h5"))
+# [V189] 对称化之后把非对角换成张量分量（AMSET 原生 h5 是 2·D_xy，运行期 tensordot(q̂⊗û, D) 会把剪切耦合算大一倍）。
+#   对角不动：下面的带边 E1 只读对角。见 dp_symmetrize.to_tensor_h5。
+print("[dp_tensor] core deformation.h5: %s" % dp_symmetrize.to_tensor_h5("deformation.h5"))
 dp, kpoints, structure = load_deformation_potentials("deformation.h5")
 bulk = parse_calculation("undeformed")
 bs = bulk["bandstructure"]
@@ -479,24 +565,30 @@ for carrier, edge in (("electron", bs.get_cbm()), ("hole", bs.get_vbm())):
                         "带边 k 点 %s 在 h5 网格找不到（最近距离 %.3g）"
                         % (np.round(kf, 4), dd[kh5]))
                 t = dp[spin][b_local, kh5]
+                # [V187] 3D 的各向同性值取三个对角（z 是真实晶向）；2D 只取面内（z 是真空）
+                _iso = ((t[0, 0] + t[1, 1] + t[2, 2]) / 3 if _DIM == "3d"
+                        else (t[0, 0] + t[1, 1]) / 2)
                 hits.append({"spin": spin.name, "band_global": int(b_global),
                              "band_h5": b_local, "k_h5": int(kh5),
                              "k_frac": np.round(kf, 6).tolist(),
                              "E1_xx_eV": round(float(t[0, 0]), 4),
                              "E1_yy_eV": round(float(t[1, 1]), 4),
-                             "E1_iso_eV": round(float(abs((t[0, 0] + t[1, 1]) / 2)), 4)})
+                             "E1_zz_eV": round(float(t[2, 2]), 4),
+                             "E1_iso_eV": round(float(abs(_iso)), 4)})
     if hits:
         # [PATCH-DPT-R2] 简并 spin×band×k 的命中做 |D| 平均（h5 值已非负），
         # 并报告离散度；不再取 hits[0]（依赖 dict 迭代顺序、不可复现）。
         xs = [h["E1_xx_eV"] for h in hits]
         ys = [h["E1_yy_eV"] for h in hits]
+        zs = [h["E1_zz_eV"] for h in hits]
         iso = [h["E1_iso_eV"] for h in hits]
         avg = lambda v: round(float(sum(v)) / len(v), 4)
         spread = lambda v: (max(v) - min(v)) if v else 0.0
         out[carrier] = {
             "edge_energy_eV": round(float(ene), 4),
             "n_hits": len(hits),
-            "E1_xx_eV": avg(xs), "E1_yy_eV": avg(ys), "E1_iso_eV": avg(iso),
+            "E1_xx_eV": avg(xs), "E1_yy_eV": avg(ys), "E1_zz_eV": avg(zs), "E1_iso_eV": avg(iso),
+            "E1_iso_def": ("(D_xx+D_yy+D_zz)/3" if _DIM == "3d" else "(D_xx+D_yy)/2（面内）"),
             "spread_xx": round(spread(xs), 4), "spread_yy": round(spread(ys), 4),
             "hits": hits,
         }
@@ -884,10 +976,10 @@ with open(outdir + "/band_edges.json", "w") as fh:
 print("[OK] band_edges.json 已生成（amset 权威带边 E1 + 真空对齐 E1_vac）")
 '''
     be_out = out / "band_edges.json"
-    be_cmd = ("%s && cd %s && python3 -c %s %s %s > band_edges.log 2>&1"
+    be_cmd = ("%s && cd %s && python3 -c %s %s %s %s > band_edges.log 2>&1"
               % (AMSET_ENV_SRC, shlex.quote(str(dfm)),
                  shlex.quote(_be_code), shlex.quote(str(out)),
-                 shlex.quote(_SKILL_REV)))
+                 shlex.quote(_SKILL_REV), shlex.quote(_dim_now or "")))
     _rc = subprocess.run(["bash", "-lc", be_cmd]).returncode
     if _rc != 0 or not be_out.is_file():
         # [PATCH-DPT-R5] 硬失败：band_edges.json 是 step8.2_dpt 正确 E1 的唯一
@@ -910,6 +1002,7 @@ print("[OK] band_edges.json 已生成（amset 权威带边 E1 + 真空对齐 E1_
         _be["deform_geometry_folders"] = _geom_map
         _be["core_reference"] = _core_kind                      # [V169] avg_core / 1s
         _be["core_reference_folders"] = _core_ref
+        _be["ionrelax_check"] = _ir_check                       # [V187] 弛豫段力判据核对
         Path(be_out).write_text(_json.dumps(_be, indent=2, ensure_ascii=False) + "\n")
         print("[OK] band_edges.json 记录 deform_geometry=%s（%d 个构型）"
               % (_def_geom, len(_geom_map)))
@@ -1056,11 +1149,24 @@ if not bz_coverage_ok([bulk["bandstructure"]] + [c["bandstructure"] for c in sm.
 
 print("[..] 用 AMSET 原版 calculate_deformation_potentials 计算（参考=真空）")
 dp = calculate_deformation_potentials(bulk, sm)
+# [V188] 同一批构型、同一参考（真空）再算一份带符号中心差分，供 dp_symmetrize 做 3/6 次轴的对称化
+sys.path.insert(0, str(Path.cwd().resolve().parent))
+import dp_symmetrize
+try:
+    dps = dp_symmetrize.signed_deformation_potentials(bulk, sm)
+    dps_gap, dps_delta = dp_symmetrize.band_gaps(bulk["bandstructure"]), dp_symmetrize.strain_amount(sm)
+except Exception as _e:                                       # noqa: BLE001
+    dps = None
+    print("[dp_signed][WARN] 带符号形变势没算出来（%s: %s）：对称化退回置换子群" % (type(_e).__name__, _e))
 ibands = get_ibands(defaults["energy_cutoff"], bulk["bandstructure"])
 dp = extract_bands(dp, ibands)
 kpts = np.array([k.frac_coords for k in bulk["bandstructure"].kpoints])
 write_deformation_potentials(dp, kpts, bulk_struct, filename=h5_out)
 print("[OK] 写出 %s（真空参考，AMSET 原版算法与符号约定）" % h5_out)
+if dps is not None:
+    dp_symmetrize.write_signed(dp_symmetrize.signed_name(h5_out), dps, kpts, ibands=ibands,
+                               gaps=dps_gap, delta=dps_delta)
+    print("[dp_signed] 写出 %s" % dp_symmetrize.signed_name(h5_out))
 
 # [nspin_norm_fix 2026-09-21] 与 core h5 同一处 AMSET<0.5.1 自旋减半缺陷：
 # 写出后原地把 vac h5 也乘回自旋道数，再进下面的硬闸门。幂等。
@@ -1073,6 +1179,8 @@ print("[nspin_norm_fix] vac %s: fixed=%s reason=%s (amset %s)"
 # [patch_dp_symmetrize V121] 与 core h5 同一处理；下面的闸门与已对称化的 band_edges E1_vac 比
 import dp_symmetrize
 print("[dp_symmetrize] vac %s: %s" % (h5_out, dp_symmetrize.symmetrize_h5(h5_out)))
+# [V189] 与 core h5 同一处理：非对角换成张量分量（下面的闸门只比对角）
+print("[dp_tensor] vac %s: %s" % (h5_out, dp_symmetrize.to_tensor_h5(h5_out)))
 
 # ==========================================================================
 # [nspin_norm_fix 硬闸门 2026-09-21] 为 AMSET<0.5.1 的「ISPIN=2 形变势减半」
@@ -1183,6 +1291,8 @@ if len(_shifts) == 2:
     if dst.exists():
         dst.unlink()
     os.replace(str(h5), str(dst))
+    if (dfm / "deformation_signed.h5").is_file():                # [V188] 带符号版随 h5 一起放进本步目录（留档）
+        os.replace(str(dfm / "deformation_signed.h5"), str(out / "deformation_signed.h5"))
     # ★ 最后一行是 autozt 唯一回显的一行，必须把"真空口径到底有没有生成"说清楚。
     print("[DONE] %s：deformation.h5 已生成（core 口径）；DIM=%s DEFORM_REF=%s -> %s"
           % (OUTDIR_NAME, _read_dim(cwd) or "未知", DEFORM_REF, _vac_state))

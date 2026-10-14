@@ -286,11 +286,10 @@ def ck_outcar(d, cfg):
     return True, "finished"
 
 def ck_deform(d, cfg):
-    """形变势单点（2D 才带 ionrelax/）：
+    """形变势单点（带 ionrelax/ 的：2D 的面内分量，3D 的全部分量 [V187]）：
     主单点 OUTCAR 完成 + 若存在 ionrelax/ 则其 OUTCAR 也必须完成。
-    2D 的 xx±/yy± 4 个点靠 ionrelax 取 E1（真空对齐）；ionrelax 缺失时
-    step7b 会静默回退到刚性口径（E1 偏小 ~24%），所以这里必须判未完成，
-    否则 tf 会把「主单点完成但 ionrelax 没跑」误判为 done、永不补算。"""
+    形变势取离子弛豫构型；ionrelax 缺失时 step7b 会回退到刚性口径（E1 偏小 ~24-29%），
+    所以这里必须判未完成，否则 tf 会把「主单点完成但 ionrelax 没跑」误判为 done、永不补算。"""
     ok, diag = ck_outcar(d, cfg)
     if not ok:
         return ok, diag

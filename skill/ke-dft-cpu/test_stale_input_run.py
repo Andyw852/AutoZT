@@ -169,7 +169,7 @@ class GenWiringTests(unittest.TestCase):
         # 静态段继承主单点的 LVHAR（真空对齐要 LOCPOT），弛豫段关掉
         tree = ast.parse(s)
         fn = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "_ionrelax_incars")
-        ns = {"re": re, "IONRELAX_NSW": "60", "IONRELAX_EDIFFG": "-0.02"}
+        ns = {"re": re, "IONRELAX_NSW": "60", "IONRELAX_EDIFFG": "-0.005", "IONRELAX_ISYM": "2"}
         exec(compile(ast.Module(body=[fn], type_ignores=[]), "gen", "exec"), ns)
         relax, stat = ns["_ionrelax_incars"](INCAR_NEW + "IBRION = -1\nNSW = 0\nLWAVE = .FALSE.\n")
         self.assertIn("LVHAR  = .TRUE.", stat)

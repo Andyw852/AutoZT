@@ -760,8 +760,13 @@ def get_E1(cwd, carrier):
         if e3 is not None:
             return round(sum(e3) / 3.0, 4), "deformation.h5 带边 3×3 张量 (D_xx+D_yy+D_zz)/3（芯势口径，%s）" % why
         if be and carrier in be and float(be[carrier].get("E1_iso_eV") or 0) > 0:
+            # [V187] 新版 S7.1 的 3D E1_iso_eV 已是三个对角的平均（E1_iso_def 写明）；旧版才是面内两项
+            _def = be[carrier].get("E1_iso_def")
+            if _def and "zz" in _def.lower():
+                return (round(abs(float(be[carrier]["E1_iso_eV"])), 4),
+                        "band_edges.json 的 %s（带边点本身，未做对称等价谷平均；h5 读不了：%s）" % (_def, why))
             return (round(abs(float(be[carrier]["E1_iso_eV"])), 4),
-                    "band_edges.json 的 (D_xx+D_yy)/2（3D 读不到 h5 的 D_zz：%s；非立方体系有偏差）" % why)
+                    "band_edges.json 的 (D_xx+D_yy)/2（旧版 S7.1，3D 漏了 D_zz：%s；非立方体系有偏差，重跑 S7.1）" % why)
     if be and carrier in be and be[carrier].get("n_hits", 0) > 0:
         n = int(be[carrier]["n_hits"])
         # [PATCH-DPT-R6] 按 E1_SOURCE 选口径（vac=真空对齐/amset=平均芯势）。

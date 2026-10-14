@@ -118,6 +118,7 @@ steps:
      # nspin_norm_fix.py（2026-09-21）：AMSET<0.5.1 + ISPIN=2 时两份 h5 的形变势
      # 被自旋道数除，gen_step9b 在 load/write h5 前后调它乘回自旋道数。
      # dp_symmetrize.py（V121，2026-09-29）：形变势 D(k) 按 Laue 群对称化，两段嵌入脚本 import 它。
+     #   V188（2026-10-14）：amset deform read 的包装也 import 它，同时写带符号中心差分 deformation*_signed.h5。
      gen: gen_step9b_deform_read.py, gen_need: [ke_common.py, nspin_norm_fix.py, dp_symmetrize.py], fetch_all: true,
      needs: ["step7_deform"]}
 

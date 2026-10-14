@@ -686,7 +686,30 @@ def _pick_deformation_h5(cwd, read_dir):
               % read_dir)
     else:
         print("[..] 形变势参考口径：core（AMSET 芯态对齐）")
+    _deform_geometry_note(read_dir, mode)
     return "deformation.h5"
+
+
+def _deform_geometry_note(read_dir, mode):
+    """[V187] 本步是三维核：形变势张量的**全部**分量都进 ADP（Christoffel 的三支声学模），口径要与
+    TOTAL ELASTIC MODULI（含离子弛豫）同源。3D 的旧 S7 是全部离子固定；2D 的面外分量（zz/yz/xz）
+    一直是离子固定（二维核不用它们，本步的三维核用）。只告警，不拦。"""
+    try:
+        import json as _json
+        _be = _json.loads((Path(read_dir) / "band_edges.json").read_text(encoding="utf-8"))
+        geom = _be.get("deform_geometry")
+    except Exception:                                          # noqa: BLE001
+        return
+    if not geom or geom == "ionrelax":
+        if geom:
+            print("[OK] 形变势构型口径 deform_geometry=ionrelax（与弹性常数同源）")
+        return
+    if mode == "2d" and str(geom).startswith("ionrelax(in-plane)"):
+        print("[..] 形变势构型 %s：面外分量离子固定 —— 二维核（S8.4）不用它们，本步三维核会用到，"
+              "S8 的 2D 结果只作对照。" % geom)
+        return
+    print("[WARN] 形变势构型口径 deform_geometry=%s：与 TOTAL ELASTIC MODULI（含离子弛豫）不同源，"
+          "ADP 绝对值偏离。3D 自 [V187] 起 S7 默认全部离子弛豫：retry S7_deform -> S7.1 后重跑本步。" % geom)
 
 
 def read_elastic(cwd: Path):
@@ -2077,6 +2100,7 @@ POSTPROCESS_SRC_NAME = "postprocess_intrinsic.py"
 def _install_postprocess(out):
     """[0037] 把 postprocess_intrinsic.py（住在 step8.4_amset2d/）复制进运行目录。
     WRITE_MESH=true 时作业链尾部会自动执行它去机制重积分，出多机制对照 JSON。"""
+    import shutil
     name = POSTPROCESS_SRC_NAME
     src = next((p for p in (Path(__file__).resolve().parent.parent / "step8.4_amset2d" / name,
                             Path(__file__).resolve().parent / name,
@@ -2616,10 +2640,10 @@ def main():
     _wdir = "step4b_wave_full" if WAVEFUNCTION_FULL else WAVE_DIR
     link(out, cwd / _wdir / "wavefunction.h5", "wavefunction.h5")
     link(out, cwd / READ_DIR / _pick_deformation_h5(cwd, READ_DIR), "deformation.h5")
-    if _HAS_KC and kc.deformation_h5_symmetrized(out / "deformation.h5") is False:   # patch_dp_symmetrize
-        print("[WARN] 形变势 h5 未按点群对称化（step7b_deform_read 在 V121 之前生成）—— 六方等体系会出现"
-              "本应各向同性方向上的迁移率差异（MoS2 实测 xx/yy 差 9–10%）。处理：重新 gen step7b_deform_read"
-              "（秒级、不提交作业），再重新生成本步。")
+    _dpi = kc.deformation_h5_issues(out / "deformation.h5") if _HAS_KC else None   # patch_dp_symmetrize / V189
+    if _dpi:
+        print("[WARN] 形变势 h5 早于 V189，不能直接用：%s。处理：重新 gen step7b_deform_read"
+              "（秒级、不提交作业），再重新生成本步。" % "；".join(_dpi))
     # patch_amset_vasprun：amset run 还需要密网格 vasprun.xml 拿能带色散
     _vdirs = (("step3b_uniform_full",) if WAVEFUNCTION_FULL
               else ("step3_uniform", "step4_wave"))

@@ -1,5 +1,5 @@
 # =====================================================================
-# incar_deform_3d.tpl —— 形变势单点（2D）。每个 deform-NN / undeformed 一份。
+# incar_deform_2d.tpl —— 形变势单点（2D）。每个 deform-NN / undeformed 一份。
 # 固定结构单点，收紧 EDIFF 取精确带边能量。占位符：{{SYSTEM}} {{ENCUT}} {{GGA}}
 # =====================================================================
 SYSTEM = {{SYSTEM}}
@@ -37,9 +37,9 @@ ISYM   = 0             # 形变构型对称性更低；ISYM>=1 时各目录
 LWAVE  = .FALSE.
 LCHARG = .FALSE.
 LORBIT = 0
-LVHAR  = .TRUE.         # 输出 LOCPOT：2D 真空能级对齐（Qiao 黑磷路线）——取真空区
-                       #   平面平均 Hartree 势为参考，从 raw dE_edge/dγ 刚性扣除
-                       #   dE_vac/dγ，消除形变导致的整体势能平移。
+LVHAR  = .TRUE.         # 输出 LOCPOT（Hartree + 离子势，不含交换关联）：2D 真空能级对齐。
+                       #   S7.1 取真空区平面平均势，替换 AMSET 的芯势参考重算形变势
+                       #   （deformation_vac.h5 / band_edges.json 的 E1_vac_*），不是事后加修正量。
 
 NCORE  = 6
 KPAR   = 2
