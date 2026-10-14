@@ -622,6 +622,7 @@ DOWNSTREAM = {
                   ("step3b_uniform_full", "dir"), ("step3c_uniform_offgrid", "dir"),
                   ("step5_dielect", "dir"), ("step6_elastic", "dir"), ("step7_deform", "dir"),
                   ("step7c_odp_frozen", "dir"),                 # [0035] 冻声子 ODP 单点（结构来自 S1）
+                  ("step7d_ivs_phonon", "dir"), ("step7e_ivs_frozen", "dir"),   # [0050] 谷间 IVS 超胞 DFPT / 单点
                   ("step1_std_opt", "dir")],                    # 最后一个：zt 的 kl 分支（标准胞重新弛豫）
     "step2_bandgap/step2.1_static": [("step2_bandgap/step2.15_discriminant", "dir"),
                                      ("step2_bandgap/step2.2_pbe", "dir")],
@@ -649,6 +650,9 @@ DOWNSTREAM = {
     # [0035] S7.2（冻声子 ODP 单点）重新生成 -> S8.21 读出的 odp_params.json 作废。S8.21 -> S8.4 不在这张表里：
     #   S8.4 一跑几小时，只在它用过的冻声子参数真的变了时才重排（invalidate_odp_consumer，S8.21 的 gen 调）。
     "step7c_odp_frozen": [("step8.21_odp_read", "always")],
+    # [0050] S7.4（谷间 IVS 单点）重新生成 -> S8.22 读出的 ivs_params.json 作废；S8.22 -> S8.4 同 ODP，有条件重排
+    #   （invalidate_ivs_consumer，S8.22 的 gen 调）。
+    "step7e_ivs_frozen": [("step8.22_ivs_read", "always")],
     # [patch_stale_upstream V136] S5（介电）/ S6（弹性）重新生成：S8/S8.4 在 gen 时把它们的数值写进
     #   settings.yaml（不是软链）-> mode="always"；S8.2（DPT）读 step6_elastic/OUTCAR 的面内弹性；
     #   S5.1 的校验结论随 S5 一起作废。此前没有这两项：S5/S6 重算后旧 transport.json 仍被判"完成"。
@@ -675,7 +679,8 @@ DOWNSTREAM = {
     "step8.4_amset2d": [("step8.3_output", "always")],
     "step8.1_boltztrap": [("step8.3_output", "always")],
     "step8.2_dpt": [("step8.1_boltztrap", "always"), ("step8.3_output", "always"),
-                    ("step8.21_odp_read", "always")],          # [0035] 冻声子 D 按 S8.2 的谷表取（秒级，重读）
+                    ("step8.21_odp_read", "always"),           # [0035] 冻声子 D 按 S8.2 的谷表取（秒级，重读）
+                    ("step8.22_ivs_read", "always")],          # [0050] K 星的自旋/带号来自 S8.2 谷表
 }
 # skill.yaml 里不进 DOWNSTREAM 的 needs 边与理由（test_downstream_wiring.py：每条 needs 边要么在 DOWNSTREAM，
 #   要么在这里；"*" = 该上游的全部下游）。
@@ -698,6 +703,15 @@ DOWNSTREAM_EXEMPT = {
                                               "冻声子参数指纹变了（或 S8.4 还没用上新参数）时归档 S8.4",
     ("step8.21_odp_read", "step8_amset"): "[0036] 3D 同上：S8.21 的 gen 调 invalidate_odp_consumer(consumer=step8_amset，"
                                           "record=dp_optical_3d.json)，只在 S8 用过的参数指纹变了（或还没用上）时归档 S8",
+    # [0050] 谷间 IVS 冻声子
+    ("step7_deform", "step7d_ivs_phonon"): "S7.3 照抄 S7 undeformed 的 INCAR/POTCAR 并记 sha256；S7.4 生成时核对它与 S7 现状一致，"
+                                           "S8.22 读取时再核对一次（不一致报错要求 retry S7.3/S7.4）",
+    ("step7_deform", "step7e_ivs_frozen"): "同上：S7.4 照抄 S7 undeformed 输入并记 sha256，S8.22 读取时核对",
+    ("step7d_ivs_phonon", "step7e_ivs_frozen"): "S7.4 的位移用 gen 时的 S7.3 本征矢并记进 ivs_manifest.json（含 vasprun.xml "
+                                                "sha256 与频率）；S8.22 读取时核对 S7.3 现在的频率（差 >5% 报错要 retry S7.4）。"
+                                                "结构变了由 S1 -> S7.3/S7.4 的 dir 边整目录归档",
+    ("step8.22_ivs_read", "step8.4_amset2d"): "有条件失效：S8.22 的 gen 调 invalidate_ivs_consumer，只在 S8.4 用过的谷间"
+                                              "参数指纹变了（或 S8.4 还没用上新参数）时归档 S8.4",
 }
 # DOWNSTREAM 里 gen 不在本技能的上游（zt 的 kl 分支）：它们自己不调失效，只被 S1 的级联递归走到。
 DOWNSTREAM_FOREIGN = frozenset({"step1_std_opt", "step2_static"})
@@ -752,6 +766,7 @@ DONE_MARKERS = {
     "step8.2_dpt": ("dpt_result.json",),
     "step8.3_output": ("comparison_300K.png",),
     "step8.21_odp_read": ("odp_params.json",),                                                   # [0035]
+    "step8.22_ivs_read": ("ivs_params.json",),                                                   # [0050]
 }
 
 
@@ -917,6 +932,76 @@ def invalidate_odp_consumer(cwd, params, consumer="step8.4_amset2d", record="2d_
         done += invalidate_downstream(cwd, consumer, "上游 S8.21 冻声子参数变了")
     elif (d / "submit.sh").is_file():
         print("[WARN] ★ 冻声子 ODP 参数变了（%s），%s 生成过输入、还没有结果 —— 若它的作业已在排队/运行，"
+              "用的是旧参数：scancel 后 retry %s" % ("/".join(changed), consumer, consumer))
+    return done
+
+
+IVS_PARAMS_SRC = "step8.22_ivs_read/ivs_params.json"   # [0050] 冻声子谷间 IVS 参数（gen_step14 的 IVS_FROZEN_SRC）
+
+
+def ivs_consumer_stale(rec, params, full=None):
+    """[0050] S8.4 的 2d_correction.json 里 dp_optical_ivs 记录 vs 新的 ivs_params.json -> 需要重排的载流子列表。
+    rec = {"frozen_use": {载流子: 决定}, "digest": {载流子: 用过的参数指纹}, "ivs_allowed": bool}。
+      used -> 指纹变了（或新参数不可用了）才重排；
+      off / manual_valleys / not_in_scattering / soc -> 不动（重排也用不上）；
+      unavailable 或没有记录（S8.4 在参数出来之前跑的）-> 新参数可用就重排，除非显式 SCATTERING 不含 IVS
+      （ivs_allowed=False）或该载流子用的是手填谷表。"""
+    import ivs_frozen as _iv
+    rec = rec or {}
+    full = full or {}
+    use = rec.get("frozen_use") or {}
+    dig = rec.get("digest") or {}
+    dp = full.get("dp_optical") or {}
+    out = []
+    for car in ("electron", "hole"):
+        new = _iv.params_digest(params, car)
+        how = use.get(car)
+        if how == "used":
+            if dig.get(car) != new:
+                out.append(car)
+            continue
+        if how not in (None, "unavailable") or new is None:
+            continue
+        if rec.get("ivs_allowed") is False:
+            continue
+        if str(((dp.get(car) or {}).get("valleys_source")) or "").startswith("step.conf"):
+            continue
+        out.append(car)
+    return out
+
+
+def invalidate_ivs_consumer(cwd, params, consumer="step8.4_amset2d", record="2d_correction.json"):
+    """[0050] S8.22 写出新的 ivs_params.json 之后调：S8.4 用过的谷间参数变了（或它还没用上可用的参数）
+    -> 归档 S8.4 的完成标记（会重新生成、重新排队），递归让 S8.3 失效。S8.4 不存在 / 没生成过 -> 不动。"""
+    import json as _json
+    import time as _t
+    cwd = Path(cwd)
+    d = cwd / consumer
+    try:
+        rec = _json.loads((d / record).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    changed = ivs_consumer_stale(rec.get("dp_optical_ivs") or {}, params, full=rec)
+    if not changed:
+        return []
+    busy = _dir_busy(d, _active_job_dirs())
+    if busy:
+        print("[WARN] ★ 冻声子谷间 IVS 参数变了（%s），但 %s 的作业还在排队/运行（%s）—— 它用的是旧参数。"
+              "先 scancel 它，再 retry %s" % ("/".join(changed), consumer, busy, consumer))
+        return []
+    tag = "stale-upstream-step8.22_ivs_read-%s" % _t.strftime("%Y%m%d%H%M%S")
+    done = []
+    for m in _marker_files(d, consumer):
+        f = d / m
+        if f.is_file() or f.is_symlink():
+            f.rename(d / (m + "." + tag))
+            done.append((consumer, m))
+    if done:
+        print("[WARN] 冻声子谷间 IVS 参数变了 / 刚可用（%s）—— %s 的完成标记已归档（*.%s），会重新生成、重新排队"
+              % ("/".join(changed), consumer, tag))
+        done += invalidate_downstream(cwd, consumer, "上游 S8.22 谷间参数变了")
+    elif (d / "submit.sh").is_file():
+        print("[WARN] ★ 冻声子谷间 IVS 参数变了（%s），%s 生成过输入、还没有结果 —— 若它的作业已在排队/运行，"
               "用的是旧参数：scancel 后 retry %s" % ("/".join(changed), consumer, consumer))
     return done
 
@@ -1269,6 +1354,8 @@ LINEAGE_POSCARS = (
     ("step6_elastic", ("POSCAR",)),
     ("step7_deform", ("undeformed/POSCAR",)),
     ("step7c_odp_frozen", ("odp-ref/POSCAR",)),            # [0035] 参考构型 = S1 CONTCAR（其余是位移构型）
+    ("step7d_ivs_phonon", ("POSCAR.prim",)),               # [0050] 原胞 = S1 CONTCAR（POSCAR 是超胞，不比）
+    ("step7e_ivs_frozen", ("ivs-prim/POSCAR",)),           # [0050] 原胞单点（ivs-ref 与位移构型是超胞）
 )
 # (派生步骤, 它的产物, 来源步骤, 来源里的计算输出)：来源输出比产物新 = 产物是用旧来源做的。
 #   只看计算输出（VASP 重算才会变），不看 INCAR/POSCAR（gen 原地重写不代表重算）。
@@ -1281,6 +1368,7 @@ LINEAGE_DERIVED = (
      ("vasprun.xml", "*/vasprun.xml")),
     ("step5_dielect_validate", "dielectric_check.json", "step5_dielect", ("OUTCAR",)),
     ("step8.21_odp_read", "odp_params.json", "step7c_odp_frozen", ("*/vasprun.xml",)),          # [0035]
+    ("step8.22_ivs_read", "ivs_params.json", "step7e_ivs_frozen", ("*/vasprun.xml",)),          # [0050]
 )
 LINEAGE_TOL_A = 1e-4        # Å：CONTCAR 与 POSCAR 的文本精度差远小于它；重新弛豫的差别远大于它
 LINEAGE_SLACK_S = 60.0
@@ -1453,6 +1541,7 @@ POST_DERIVED = (
     ("step8.1_boltztrap", "boltztrap_crta.json", "step2_bandgap/step2.3_hse_plot", ("band_summary.json",)),
     ("step8.21_odp_read", "odp_params.json", "step8.2_dpt", ("dpt_result.json",)),             # [0035]
     ("step8.21_odp_read", "odp_params.json", "step5_dielect", ("OUTCAR",)),                    # [0035]
+    ("step8.22_ivs_read", "ivs_params.json", "step8.2_dpt", ("dpt_result.json",)),             # [0050]
 )
 # [V163] link 边（S3/S3b/S4/S4b/S7.1 -> S8/S8.4）：S8 用的是哪一份（S4 还是 S4b）看它目录里的软链，按链接目标比新旧。
 LINKED_PRODUCTS = (("step8_amset", "transport.json"), ("step8.4_amset2d", "transport.json"))
