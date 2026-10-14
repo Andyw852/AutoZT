@@ -606,3 +606,47 @@ def test_phonon_mlff_s3_driver_runs(tmp_path):
     # 真空在 a（下标 0）：原来 `vac_axis or 2` 把它当成 c，网格成了 60 60 1、路径判成矩形
     assert "hexagonal 格子" in out, out
     assert "mesh=1 60 60" in out, out
+
+
+# --------------------------------------------------------------------------- [I]
+# relax_common 的 2D 层厚：原来 `int(vac_axis or 2)`，真空在 a（下标 0）时按 c 算
+def _mos2_like(path, vac_first):
+    """六方单层（Mo + 上下 S），真空 20 Å。vac_first=True 时真空放在第 0 个基矢。"""
+    a, c = 3.18, 20.0
+    lat = [[a, 0, 0], [-a / 2, a * math.sqrt(3) / 2, 0], [0, 0, c]]
+    fr = [[0, 0, 0.5], [1 / 3, 2 / 3, 0.5 + 1.56 / c], [1 / 3, 2 / 3, 0.5 - 1.56 / c]]
+    if vac_first:
+        lat = [lat[2], lat[0], lat[1]]
+        fr = [[f[2], f[0], f[1]] for f in fr]
+    txt = ["MoS2", "1.0"] + ["  %.8f %.8f %.8f" % tuple(v) for v in lat] + \
+          ["Mo S", "1 2", "Direct"] + ["  %.8f %.8f %.8f" % tuple(f) for f in fr]
+    path.write_text("\n".join(txt) + "\n")
+    return 0 if vac_first else 2
+
+
+def test_relax_common_layer_factor_vacuum_on_a(tmp_path):
+    pytest.importorskip("ase")
+    rc = _load("relax_common_layer_test", OPT / "relax_common.py")
+    pc, pa = tmp_path / "c.vasp", tmp_path / "a.vasp"
+    ax_c, ax_a = _mos2_like(pc, False), _mos2_like(pa, True)
+    fc, fa = rc._layer_factor(pc, ax_c), rc._layer_factor(pa, ax_a)
+    assert fc is not None and fa is not None
+    assert abs(fc - fa) < 1e-6, (fc, fa)          # 同一个单层，真空放 a 或 c 结果必须相同
+
+
+def test_relax_common_material_thickness_vacuum_on_a(tmp_path):
+    pytest.importorskip("ase")
+    rc = _load("relax_common_thick_test", OPT / "relax_common.py")
+    res = {}
+    for vac_first in (False, True):
+        mat = tmp_path / ("mat_a" if vac_first else "mat_c")
+        out = mat / "kl-dft-cpu" / "step1_std_opt"
+        out.mkdir(parents=True)
+        (mat / "POSCAR").write_text("x\n")
+        ax = _mos2_like(out / "POSCAR", vac_first)
+        rc.write_material_thickness(out, "2d", ax)
+        js = json.loads((mat / "thickness_2d.json").read_text(encoding="utf-8"))
+        assert js["vac_axis"] == ax                       # 记录的轴 = 实际算几何用的轴
+        res[vac_first] = js
+    for k in ("thickness_d_A", "h_perp_A"):
+        assert abs(float(res[True][k]) - float(res[False][k])) < 1e-6, (k, res)

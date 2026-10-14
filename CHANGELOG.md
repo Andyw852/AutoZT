@@ -31,6 +31,9 @@ This project adheres to Semantic Versioning; versions before 1.0.0 are developme
 - phonon-mlff-cpu S3 referenced an undefined `dim` (NameError before fitting); supercell size is now
   |det(scm)| (np.prod of the matrix was 0, so the underdetermined-fit check always fired).
   phonon-mlff cpu/gpu S3: `vac_axis or 2` turned a vacuum along a (index 0) into c.
+- relax_common 2D layer thickness (`_layer_factor`, `write_material_thickness`): same `vac_axis or 2`
+  bug (vacuum along a computed as c; thickness_2d.json recorded axis 0 but used c). Latent in the
+  S1 flow, which rejects or rotates a non-c vacuum before these run.
 - kl-dft-cpu S5.1: no longer falls back silently to a hexagonal Gamma-M-K-Gamma path when seekpath
   is missing (3D) or the 2D path fails; the step now errors. seekpath added to `requires`.
   New S5.1 key `PLOT_BAND_POINTS` (default 31) replaces the environment-only setting.
