@@ -80,6 +80,47 @@ def check_calculation(bulk, deformation):
 
 
 T.check_calculation = check_calculation
+
+# [V188] 同一次读取里再算一份**带符号中心差分**（AMSET 的 h5 逐分量取了 |·|，dp_symmetrize 做 3/6 次轴的
+#   对称化需要符号），写成 deformation_signed.h5（数据集不叫 deformation_potentials_*，AMSET 不会误读）。
+#   AMSET 的 read() 在函数体里 import 这几个函数，所以改模块属性即可；算不出只告警，对称化退回置换子群。
+import os as _os
+sys.path.append(_os.path.dirname(_os.getcwd()))         # 项目根（gen_need 的 dp_symmetrize.py 在这；append 不遮蔽别的模块）
+try:
+    import dp_symmetrize as _DPS
+    import amset.deformation.potentials as _PT
+    import amset.deformation.io as _IO
+    _SIG = {}
+    _ORIG_CALC, _ORIG_EXTRACT, _ORIG_WRITE = (_PT.calculate_deformation_potentials, _PT.extract_bands,
+                                              _IO.write_deformation_potentials)
+
+    def _calc(bulk, sm):
+        out = _ORIG_CALC(bulk, sm)
+        try:
+            _SIG["dp"] = _DPS.signed_deformation_potentials(bulk, sm)
+            _SIG["gap"] = _DPS.band_gaps(bulk["bandstructure"])
+            _SIG["delta"] = _DPS.strain_amount(sm)
+        except Exception as _e:                              # noqa: BLE001
+            print("[dp_signed][WARN] 带符号形变势没算出来（%s: %s）：对称化退回置换子群" % (type(_e).__name__, _e),
+                  flush=True)
+        return out
+
+    def _extract(dp, ibands):
+        _SIG["ibands"] = ibands
+        return _ORIG_EXTRACT(dp, ibands)
+
+    def _write(dp, kpoints, structure, filename="deformation.h5"):
+        fn = _ORIG_WRITE(dp, kpoints, structure, filename=filename)
+        if "dp" in _SIG and "ibands" in _SIG:
+            _DPS.write_signed(_DPS.signed_name(fn), _SIG["dp"], kpoints, ibands=_SIG["ibands"],
+                              gaps=_SIG.get("gap"), delta=_SIG.get("delta"))
+            print("[dp_signed] 写出 %s" % _DPS.signed_name(fn), flush=True)
+        return fn
+
+    _PT.calculate_deformation_potentials, _PT.extract_bands, _IO.write_deformation_potentials = _calc, _extract, _write
+except ImportError as _e:
+    print("[dp_signed][WARN] 不能 import dp_symmetrize（%s）：不写带符号形变势，对称化退回置换子群" % _e, flush=True)
+
 if __name__ == "__main__":
     from amset.tools.cli import cli
     cli.main(args=["deform", "read"] + sys.argv[1:], prog_name="amset")
@@ -372,6 +413,11 @@ def main():
            ">> deform_read.log 2>&1"
            % (AMSET_ENV_SRC, str(dfm), shlex.quote(_NBANDS_FIX_CODE),
               " ".join(shlex.quote(r) for r in _rel)))
+    # [V188] 旧的带符号文件先删：本次没算出来时不能让对称化读到上一次的（k 点可能还对得上）
+    for _old in (dfm / "deformation_signed.h5", out / "deformation_signed.h5",
+                 out / "deformation_vac_signed.h5"):
+        if _old.is_file():
+            _old.unlink()
     print("[..] amset deform read ...")
     rc = subprocess.run(["bash", "-lc", cmd]).returncode
     h5 = dfm / "deformation.h5"
@@ -445,8 +491,9 @@ import nspin_norm_fix
 _fixed, _reason = nspin_norm_fix.fix_h5("deformation.h5", amset.__version__)
 print("[nspin_norm_fix] core deformation.h5: fixed=%s reason=%s (amset %s)"
       % (_fixed, _reason, amset.__version__))
-# [patch_dp_symmetrize V121] D(k) 场按 Laue 群对称化（ε_xx/ε_yy 各自独立有限差分的噪声，
-#   MoS2 带边 E1 xx/yy 差 4–6%）。原地改、幂等；带边 E1_xx/yy 随之对称。见 dp_symmetrize.py。
+# [patch_dp_symmetrize V121 -> V188] D(k) 场按 Laue 群对称化（ε_xx/ε_yy 各自独立有限差分的噪声，
+#   MoS2 带边 E1 xx/yy 差 4–6%）。原地改、幂等；带边 E1_xx/yy 随之对称。V188：h5 是幅值 |D|，只用置换类操作
+#   精确对称化；3/6 次轴用同目录 deformation_signed.h5 的带符号中心差分（符号不一致的简并点退回幅值）。见 dp_symmetrize.py。
 import dp_symmetrize
 print("[dp_symmetrize] core deformation.h5: %s" % dp_symmetrize.symmetrize_h5("deformation.h5"))
 dp, kpoints, structure = load_deformation_potentials("deformation.h5")
@@ -1094,11 +1141,24 @@ if not bz_coverage_ok([bulk["bandstructure"]] + [c["bandstructure"] for c in sm.
 
 print("[..] 用 AMSET 原版 calculate_deformation_potentials 计算（参考=真空）")
 dp = calculate_deformation_potentials(bulk, sm)
+# [V188] 同一批构型、同一参考（真空）再算一份带符号中心差分，供 dp_symmetrize 做 3/6 次轴的对称化
+sys.path.insert(0, str(Path.cwd().resolve().parent))
+import dp_symmetrize
+try:
+    dps = dp_symmetrize.signed_deformation_potentials(bulk, sm)
+    dps_gap, dps_delta = dp_symmetrize.band_gaps(bulk["bandstructure"]), dp_symmetrize.strain_amount(sm)
+except Exception as _e:                                       # noqa: BLE001
+    dps = None
+    print("[dp_signed][WARN] 带符号形变势没算出来（%s: %s）：对称化退回置换子群" % (type(_e).__name__, _e))
 ibands = get_ibands(defaults["energy_cutoff"], bulk["bandstructure"])
 dp = extract_bands(dp, ibands)
 kpts = np.array([k.frac_coords for k in bulk["bandstructure"].kpoints])
 write_deformation_potentials(dp, kpts, bulk_struct, filename=h5_out)
 print("[OK] 写出 %s（真空参考，AMSET 原版算法与符号约定）" % h5_out)
+if dps is not None:
+    dp_symmetrize.write_signed(dp_symmetrize.signed_name(h5_out), dps, kpts, ibands=ibands,
+                               gaps=dps_gap, delta=dps_delta)
+    print("[dp_signed] 写出 %s" % dp_symmetrize.signed_name(h5_out))
 
 # [nspin_norm_fix 2026-09-21] 与 core h5 同一处 AMSET<0.5.1 自旋减半缺陷：
 # 写出后原地把 vac h5 也乘回自旋道数，再进下面的硬闸门。幂等。
@@ -1221,6 +1281,8 @@ if len(_shifts) == 2:
     if dst.exists():
         dst.unlink()
     os.replace(str(h5), str(dst))
+    if (dfm / "deformation_signed.h5").is_file():                # [V188] 带符号版随 h5 一起放进本步目录（留档）
+        os.replace(str(dfm / "deformation_signed.h5"), str(out / "deformation_signed.h5"))
     # ★ 最后一行是 autozt 唯一回显的一行，必须把"真空口径到底有没有生成"说清楚。
     print("[DONE] %s：deformation.h5 已生成（core 口径）；DIM=%s DEFORM_REF=%s -> %s"
           % (OUTDIR_NAME, _read_dim(cwd) or "未知", DEFORM_REF, _vac_state))

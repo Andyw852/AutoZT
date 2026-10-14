@@ -2223,11 +2223,12 @@ def symmetrize_elastic_for(cwd, elastic, dirs, enabled=True):
 
 
 def deformation_h5_symmetrized(path):
-    """V121：形变势 h5 是否已按点群对称化（dp_symmetrize 打的 attrs）。读不了返回 None（不告警）。"""
+    """形变势 h5 是否已按点群**正确**对称化（dp_symmetrize 打的 attrs）。读不了返回 None（不告警）。
+    [V188] 要求版本 >= 2：= 1 是 V121 旧法（把 AMSET 的幅值 |D| 当带符号张量旋转，非对角被平均成 0），算作没对称化。"""
     try:
         import h5py
         with h5py.File(str(path), "r") as f:
-            return bool(int(f.attrs.get("dp_symmetrized", 0)))
+            return int(f.attrs.get("dp_symmetrized", 0)) >= 2
     except Exception:                                          # noqa: BLE001
         return None
 

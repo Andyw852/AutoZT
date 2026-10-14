@@ -8979,3 +8979,28 @@ include 无 Born、S5 边、τ 链位置），tests/test_0035_gen_pipeline.py �
 
 S8.3：`tau/tau_comparison.csv`（各温度 × 掺杂档：τ_eff 逐机制、τ_σ、DPT τ 分方向、ADP/DPT）、`tau_vs_E_300K.png`、
 `tau_eff_vs_T.png`、`tau_summary.txt`；只用与当前 transport.json 同一次运行的 tau_energy.json。
+
+## V188（2026-10-14）：形变势对称化改正 —— AMSET 的 h5 是幅值，V121 把它当张量旋转
+
+**问题**：AMSET 0.4.19 / 0.5.1 的 `get_strain_deformation_potential` 返回 `np.abs(diff / strain_amount)`，h5 是逐分量幅值；
+V121 的 `dp_symmetrize` 当成带符号张量做 rᵀ D(rk) r。另：AMSET 非对角存 2·D_xy（`amset deform create` 的剪切应变是张量
+分量 ε_xy = δ）。改法见 METHODOLOGY [V188]。
+
+**检验（紧束缚模型 + AMSET 0.5.1 的 get_strain_mapping / calculate_deformation_potentials，±0.5% 应变；真值 = 同一模型
+±1e-5 中心差分的线性响应，换成 AMSET 约定的幅值；只比非简并点；跳跃积分加平滑截断，否则 0.5% 应变下近邻跨过 rcut、
+哈密顿量不连续）**，误差 eV：
+
+| 体系 | 真值最大 | 原始 AMSET 非对角 | V121 旧法非对角 | V188 非对角 | 4% xx 噪声下对角：原始 → V188 |
+|---|---|---|---|---|---|
+| MoS₂（6/mmm） | 0.65 | 0.010 | **0.674** | 0.000 | 0.026 → 0.013 |
+| GaN（6/mmm） | 1.17 | 0.015 | **1.233** | 0.000 | 0.042 → 0.021 |
+| 闪锌矿（m-3m） | 0.31 | 0.013 | **0.245** | 0.000 | 0.013 → 0.004 |
+
+- V121 旧法的非对角误差 ≈ 真值本身（被抹成 0）；闪锌矿非对角幅值平均 17.8 eV → 1e-14。六方还把非对角混进对角（0.14–0.26 eV）。
+- 原始 AMSET 的非对角误差 0.01–0.015 eV 是 |·| 再平均的曲率底；V188 在非简并点上精确到 0。
+- 噪声：六方 xx/yy 噪声减半（3/6 次轴的平均），立方由置换操作平均（三个对角）。
+- GaN 上 |S_xy| / |D_xy(张量)| = 2.0000，确认 AMSET 非对角 = 2·D_xy。
+
+**用户侧**：所有项目重新 gen S7.1（秒级、不提交作业）—— 旧 h5 的 `dp_symmetrized` = 1 会被 S8/S8.4 告警、regate 记 STALE-DP；
+再重跑 S8 / S8.4 / S8.2。先用 `tools/compare_deformation_h5.py 旧 新` 看整场变化（V123 的分诊办法）再决定重跑哪些。
+
