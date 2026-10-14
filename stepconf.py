@@ -30,7 +30,10 @@ _SECTION = re.compile(r"^\[([A-Za-z0-9_.\-]+)\]$")
 # 都误报"不认识的键"。新增工作流级开关往这里加即可。
 # LAYER_THICKNESS（[0016]）：ke-dft-cpu 的 2D 层厚，写在材料共用 step.conf，S8 / S8.1 / S8.4 同读。
 RESERVED_PARAMS = frozenset({"BANDGAP", "CONDA_SH", "CONDA_ENV", "MACE_MODEL_DIR", "AMSET_ENV", "POTCAR_DIR", "REFERENCES_DIR",
-                             "LAYER_THICKNESS"})
+                             "LAYER_THICKNESS",
+                             # 2026-10-14：ke S2.3 的带隙杂化泛函（写在材料共用 step.conf 也安全）
+                             "HYBRID", "HYBRID_GGA", "HYBRID_AEXX", "HYBRID_HFSCREEN",
+                             "FUNC_ALIGN"})  # FUNC_ALIGN（2026-10-14）：S1 的 FUNC=auto 是否与配对技能对齐（relax_common）
 
 
 def _strip(line):

@@ -59,6 +59,10 @@ PLOT_SPEC = {
     "CONDA_SH": ("", "str"),            # 由集群配置注入
     "CONDA_ENV": ("", "str"),           # 由集群配置注入；留空让"读不到就报错"真正生效
     "KL_ENV": ("", "str"),              # kl-dft-cpu 声子(phono3py)环境，由集群 kl_env 注入
+    # 每段路径采样点（写进 submit.sh 的 KAPPA_PLOT_NPOINTS；作业环境里已设的该变量仍优先）。
+    # ★ 2026-10-14：原来只能靠环境变量改，S5 step.conf 的 BAND_POINTS 对本步不起作用；
+    #   现在在本步 step.conf 写 PLOT_BAND_POINTS = 101 即可。
+    "PLOT_BAND_POINTS": (31, "int"),
 }
 STEP = "step5_phonon_plot"
 
@@ -132,7 +136,8 @@ def _write_submit(outdir):
             "CONDA_ENV": str(conf["KL_ENV"] or conf["CONDA_ENV"] or "atomate2_p_a"),
             # 作业的 cwd 是【步骤目录】，而本脚本在它的上一级（材料技能目录），
             # 所以必须写绝对路径——否则作业里 "can't open file" 直接失败。
-            "PLOT_CMD": "python -u %s --work" % Path(__file__).resolve()}
+            "PLOT_CMD": "KAPPA_PLOT_NPOINTS=${KAPPA_PLOT_NPOINTS:-%d} python -u %s --work"
+                        % (max(2, int(conf["PLOT_BAND_POINTS"] or 31)), Path(__file__).resolve())}
     for k, v in subs.items():
         text = text.replace("{{%s}}" % k, str(v))
     (outdir / "submit.sh").write_text(text, encoding="utf-8", newline=NL)
@@ -343,7 +348,7 @@ def _s5_imag(ph):
 
 
 def _band_path(ph):
-    """高对称路径：2D 走 kz=0 的二维路径表；3D 优先 seekpath，失败退回六方通用路径。
+    """高对称路径：2D 走 kz=0 的二维路径表；3D 用 seekpath。任何一路失败都报错（不再退回六方通用路径）。
 
     P2-1：seekpath/VASPKIT-301 是 3D 工具，用在 2D 上会给出 Γ-A 这类 kz 线段
     （真空方向的平凡色散，白占图幅还误导判读）。
@@ -364,17 +369,24 @@ def _band_path(ph):
                   % (lat, "-".join(l.replace("$\\Gamma$", "Γ") for l in labels)))
             return bands, connections, labels, "2d-%s" % lat
         except Exception as e:
-            print("[WARN] 2D 路径生成失败，退回六方通用路径：%s" % e)
+            # ★ 2026-10-14：原来退回"六方 Γ-M-K-Γ"——对正方/矩形/斜方格子路径全错、图照样画出来。
+            #   2D 路径是纯几何，失败说明原胞/真空轴有问题，直接报错让人查。
+            _emit({"status": "error",
+                   "reason": "2D 高对称路径生成失败（%s: %s）；不再退回六方通用路径"
+                             "（对非六方格子是错的）。检查 phono3py_disp.yaml 的原胞与真空轴。"
+                             % (type(e).__name__, e)}, 40)
     try:
         from phonopy.phonon.band_structure import get_band_qpoints_by_seekpath
         bands, labels, connections = get_band_qpoints_by_seekpath(ph.primitive, NPOINTS)
         return bands, connections, labels, "seekpath"
     except Exception as e:
-        print("[..] seekpath 不可用（%s），用通用路径 Γ-M-K-Γ" % type(e).__name__)
-        paths = [[[0, 0, 0], [0.5, 0, 0]], [[0.5, 0, 0], [1./3, 1./3, 0]],
-                 [[1./3, 1./3, 0], [0, 0, 0]]]
-        bands, connections = get_band_qpoints_and_path_connections(paths, npoints=NPOINTS)
-        return bands, connections, ["$\\Gamma$", "M", "K", "$\\Gamma$"], "fallback"
+        # ★ 2026-10-14：原来退回"六方 Γ-M-K-Γ"并只打一行 [..]——立方/四方等体相的声子谱
+        #   路径是错的却照常出图。seekpath 已列进 skill.yaml 的 requires（autozt check 会查），
+        #   缺了就报错。
+        _emit({"status": "error",
+               "reason": "3D 高对称路径需要 seekpath（%s: %s）。请在 kl 环境里 "
+                         "pip install seekpath 后重跑本步；不再退回六方通用路径"
+                         "（对非六方晶系是错的）。" % (type(e).__name__, e)}, 40)
 
 
 def _cached_band(tag):

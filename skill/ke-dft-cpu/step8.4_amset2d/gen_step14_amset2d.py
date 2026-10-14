@@ -3149,6 +3149,9 @@ def main():
     gap = read_bandgap(cwd)
     _warn_small_pbe_gap(cwd)
     elastic = read_elastic(cwd)
+    # 2026-10-14：能带一致性（SOC 影响闸门 + 杂化/半局域 m* 核对），只告警，写 band_consistency.json
+    if _HAS_KC:
+        kc.band_consistency_checks(cwd, out, "S8.4")
     # patch_tensor_symmetry（V120）：弹性张量对点群取平均；介电张量只诊断
     if _HAS_KC:
         if MANUAL_ELASTIC is None:

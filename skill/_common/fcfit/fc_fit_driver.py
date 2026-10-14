@@ -3193,9 +3193,22 @@ def _stability_gate(cfg, out):
                   flush=True)
 
     try:
-        ph_nonac.auto_band_structure(plot=False, write_yaml=True,
-                                     npoints=int(cfg.get("band_points") or 51),
-                                     filename=str(out / "band-dft-cpu.yaml"))
+        if is2d:
+            # 2026-10-14：2D 不再用 auto_band_structure（seekpath 是 3D 工具，会给出 Γ-A 这类
+            #   沿真空方向的线段：真空方向色散平凡，白占图幅还误导判读）。改走 za_2d 的 kz=0
+            #   二维路径表（与 kl-dft-cpu S5.1 同一套格子分类 / 六方 K 点）。
+            #   真空轴：最长的单胞格矢的主 Cartesian 分量，再映射成原胞基矢下标。
+            import za_2d
+            _cart_vax = int(np.argmax(np.abs(np.asarray(uc.cell, float)[vax])))
+            _lat = za_2d.write_band_yaml_2d(ph_nonac, out / "band-dft-cpu.yaml",
+                                            npoints=int(cfg.get("band_points") or 51),
+                                            cart_axis=_cart_vax)
+            print("[..] band-dft-cpu.yaml uses the 2D path (%s lattice, kz=0)" % _lat,
+                  flush=True)
+        else:
+            ph_nonac.auto_band_structure(plot=False, write_yaml=True,
+                                         npoints=int(cfg.get("band_points") or 51),
+                                         filename=str(out / "band-dft-cpu.yaml"))
         bf = _parse_min_freq(out / "band-dft-cpu.yaml")
         if bf is not None:
             mf_nonac = min(mf_nonac, bf)

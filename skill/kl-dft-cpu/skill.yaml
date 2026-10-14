@@ -36,7 +36,7 @@ defaults:
 fetch_files: [POSCAR, CONTCAR, INCAR, KPOINTS, POTCAR, submit.sh, OUTCAR,
               vasprun.xml, workflow_method.txt, kl_params.txt, BORN, provenance.json,
               phono3py_disp.yaml, fc2.hdf5, fc3.hdf5, band-dft-cpu.yaml,
-              phonon_summary.json, kappa_summary.json, thickness_2d.json,
+              phonon_summary.json, kappa_summary.json, kl_method.json, thickness_2d.json,
               phono3py_kappa.log, queue.out, queue.err,
               # 声子谱（S5.1）：数据(yaml/dat) + 图(png，含 0-10 THz 低频放大图)
               phonon_plot_summary.json, band_nac.yaml, band_nonac.yaml,
@@ -148,7 +148,9 @@ optional_steps:
          done_marker: phonon_plot_summary.json, fetch_all: true}
 
 requires:
-  python: [phonopy, phono3py, numpy, spglib, pheasy]   # [0019] 拟合默认 pheasy → 必需依赖（GPU 版）
+  python: [phonopy, phono3py, numpy, spglib, pheasy, seekpath]   # [0019] 拟合默认 pheasy → 必需依赖（GPU 版）
+  # seekpath（2026-10-14 加）：3D 声子谱高对称路径（S5 判据出图、S5.1 画图）。以前缺它会静默退回
+  #   六方 Γ-M-K-Γ，立方/四方等晶系的声子谱路径是错的；现在缺了 S5.1 直接报错，check 也会提示。
   optional_python: [symfc]   # 改 FIT_ENGINE=phono3py 时才需要
   conda: atomate2_p_a
   exe: [vasp_std, vaspkit, phono3py]

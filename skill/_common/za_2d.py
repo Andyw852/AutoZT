@@ -217,7 +217,83 @@ def clone_phonopy(ph, symprec):
     return ph2
 
 
+# ---------------------------------------------------------------------------
+# 2D 高对称路径（kz=0）—— 公共池版（2026-10-14）
+#   共享拟合引擎 fc_fit_driver 的虚频判据出图原来对 2D 也调 auto_band_structure（seekpath，
+#   3D 工具），band-dft-cpu.yaml 里多出 Γ-A 这类沿真空方向的线段。引擎只能 import 公共池，
+#   故在这里放一份；与 kl-dft-cpu/kl_common.py、phonon-dft-cpu/kl_common.py、
+#   _common/mlff/klmlff_common.py 的 band_path_2d 逐点一致（tests/test_band_func_consistency.py 核对）。
+# ---------------------------------------------------------------------------
+HS_2D = {
+    "hexagonal": [("Γ", (0, 0)), ("M", (0.5, 0)), ("K", (1.0 / 3, 1.0 / 3)), ("Γ", (0, 0))],
+    "square": [("Γ", (0, 0)), ("X", (0.5, 0)), ("M", (0.5, 0.5)), ("Γ", (0, 0))],
+    "rectangular": [("Γ", (0, 0)), ("X", (0.5, 0)), ("S", (0.5, 0.5)),
+                    ("Y", (0, 0.5)), ("Γ", (0, 0))],
+    "centered_rectangular": [("Γ", (0, 0)), ("X", (0.5, 0)), ("S", (0.5, 0.5)),
+                             ("Y", (0, 0.5)), ("Γ", (0, 0))],
+    "oblique": [("Γ", (0, 0)), ("X", (0.5, 0)), ("H", (0.5, 0.5)),
+                ("C", (0, 0.5)), ("Γ", (0, 0))],
+}
+
+
+def _inplane_cos(cell, vac_axis):
+    idx = [i for i in range(3) if i != int(vac_axis)]
+    a1 = np.asarray(cell[idx[0]], float)
+    a2 = np.asarray(cell[idx[1]], float)
+    l1, l2 = float(np.linalg.norm(a1)), float(np.linalg.norm(a2))
+    cosg = float(np.dot(a1, a2)) / max(l1 * l2, 1e-12)
+    return max(-1.0, min(1.0, cosg)), l1, l2
+
+
+def classify_2d_lattice(cell, vac_axis=2, tol=0.02):
+    """按面内两个原胞矢量判 2D 布拉维格子（五种）。cell 是 3×3（行=晶格矢量）。"""
+    cosg, l1, l2 = _inplane_cos(cell, vac_axis)
+    eq = abs(l1 - l2) / max(l1, l2) < tol
+    if eq and (abs(cosg - 0.5) < 0.03 or abs(cosg + 0.5) < 0.03):
+        return "hexagonal"
+    if abs(cosg) < 0.03:
+        return "square" if eq else "rectangular"
+    return "centered_rectangular" if eq else "oblique"
+
+
+def band_path_2d(cell, vac_axis=2):
+    """2D 高对称路径（kz=0），返回 (paths, labels, lattice)。
+
+    cell 用 phonopy 的【原胞】，vac_axis 是【原胞基矢】下标（vacuum_axis_in_primitive 给）。
+    六方 K 点按面内夹角取：γ=120° -> (1/3,1/3)，γ=60° -> (2/3,1/3)（与 M=(1/2,0) 相邻的角）。
+    paths 可直接喂 phonopy 的 get_band_qpoints_and_path_connections。
+    """
+    lat = classify_2d_lattice(cell, vac_axis)
+    hs = HS_2D[lat]
+    if lat == "hexagonal":
+        k = (2.0 / 3, 1.0 / 3) if _inplane_cos(cell, vac_axis)[0] > 0 else (1.0 / 3, 1.0 / 3)
+        hs = [(n, k if n == "K" else q) for n, q in hs]
+    inplane = [i for i in range(3) if i != int(vac_axis)]
+    paths = []
+    for (_, q1), (_, q2) in zip(hs[:-1], hs[1:]):
+        p1, p2 = [0.0, 0.0, 0.0], [0.0, 0.0, 0.0]
+        p1[inplane[0]], p1[inplane[1]] = q1
+        p2[inplane[0]], p2[inplane[1]] = q2
+        paths.append([p1, p2])
+    labels = [("$\\Gamma$" if n == "Γ" else n) for n, _ in hs]
+    return paths, labels, lat
+
+
+def write_band_yaml_2d(ph, filename, npoints=51, cart_axis=None):
+    """在 ph（Phonopy）上沿 2D 路径算声子谱并写 band yaml；返回格子类型。
+
+    cart_axis：Cartesian 真空轴下标；None = 原胞里最长的基矢当真空（共享引擎不携带真空轴）。"""
+    from phonopy.phonon.band_structure import get_band_qpoints_and_path_connections
+    vp = vacuum_axis_in_primitive(ph, cart_axis)
+    paths, labels, lat = band_path_2d(ph.primitive.cell, vp)
+    bands, conn = get_band_qpoints_and_path_connections(paths, npoints=int(npoints))
+    ph.run_band_structure(bands, path_connections=conn, labels=labels)
+    ph.write_yaml_band_structure(filename=str(filename))
+    return lat
+
+
 __all__ = ["ZA_P_RANGE", "ZA_ZFRAC_MIN", "ZA_MARGIN_MIN", "ZA_R2_MIN",
            "ZA_SYMPREC_DEFAULT", "ZA_SYMPREC_RELAX", "za_power_law", "k_sum_sign",
            "inplane_qdirs", "vacuum_axis_in_primitive", "eig_out_of_plane",
-           "za_power_law_eig", "cell_symmetry", "relaxed_symprec", "clone_phonopy"]
+           "za_power_law_eig", "cell_symmetry", "relaxed_symprec", "clone_phonopy",
+           "HS_2D", "classify_2d_lattice", "band_path_2d", "write_band_yaml_2d"]

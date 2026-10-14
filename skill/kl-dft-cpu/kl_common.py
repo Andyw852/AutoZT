@@ -1128,6 +1128,21 @@ def classify_2d_lattice(cell, vac_axis=2, tol=0.02):
     return "centered_rectangular" if eq else "oblique"
 
 
+
+def _hex_k_point(cell, vac_axis=2):
+    """六方 2D 的 K 点（面内约化坐标），按面内夹角 γ 选。
+
+    ★ 2026-10-14 修：原来固定写 K=(1/3, 1/3)，只在 γ=120° 时对。γ=60° 的原胞
+      （输入本来就是原胞时 S1 不会把它标准化）里 (1/3, 1/3) 落在 Γ–M′ 线上、
+      |q| 只有真 K 的 0.577 倍 —— Γ-M-K-Γ 漏掉 K 谷，声子谱图是错的。
+      γ=120° -> (1/3, 1/3)；γ=60° -> (2/3, 1/3)（与 M=(1/2, 0) 相邻的那个角）。
+    """
+    idx = [i for i in range(3) if i != int(vac_axis)]
+    a1 = [float(x) for x in cell[idx[0]]]
+    a2 = [float(x) for x in cell[idx[1]]]
+    cosg = sum(a1[i] * a2[i] for i in range(3)) / max(_norm(a1) * _norm(a2), 1e-12)
+    return (2.0 / 3, 1.0 / 3) if cosg > 0 else (1.0 / 3, 1.0 / 3)
+
 def band_path_2d(cell, npoints=101, vac_axis=2):
     """2D 高对称路径（kz=0 恒成立），返回 (paths, labels, lattice)。
 
@@ -1137,6 +1152,8 @@ def band_path_2d(cell, npoints=101, vac_axis=2):
     lat = classify_2d_lattice(cell, vac_axis)
     ax = int(vac_axis)
     hs = _HS_2D[lat]
+    if lat == "hexagonal":
+        hs = [(n, _hex_k_point(cell, vac_axis) if n == "K" else q) for n, q in hs]
     paths, labels = [], []
     for (n1, q1), (n2, q2) in zip(hs[:-1], hs[1:]):
         p1 = [0.0, 0.0, 0.0]
