@@ -101,7 +101,91 @@ KSPACING_HSE = None
 KSCHEME_HSE  = "2"        # 2 = Gamma-centered（与 step2.1_static / step3_uniform 一致）
 VASPKIT_EXE  = "vaspkit"  # 与 ke_common / 其它步骤同一约定
 # 本脚本认的 step.conf [params] 键（strict=False：其余键是别的步骤的，忽略）
-SPEC = {"KSPACING_HSE": (KSPACING_HSE, "str")}
+SPEC = {"KSPACING_HSE": (KSPACING_HSE, "str"),
+        # 2026-10-14：带隙用哪个杂化泛函（见下面 HYBRID_PRESETS / resolve_hybrid）
+        "HYBRID": ("", "str"),
+        "HYBRID_GGA": ("", "str"),
+        "HYBRID_AEXX": (None, "float"),
+        "HYBRID_HFSCREEN": (None, "float")}
+
+# ================= 带隙杂化泛函：step.conf 的 HYBRID（2026-10-14）=================
+# 只决定本步（带隙/能带）的杂化泛函，不改几何链（几何链的半局域 FUNC 见技能 step.conf）。
+#   HYBRID = auto | hse06 | hsesol | hse03 | pbe0 | custom
+#     auto    跟随上游 GGA（PBEsol 链 -> HSEsol，PBE 链 -> HSE06），即原 HYBRID_FLAVOR="auto"
+#     hse06   GGA=PE, AEXX=0.25, HFSCREEN=0.2 Å⁻¹
+#     hsesol  GGA=PS, AEXX=0.25, HFSCREEN=0.2 Å⁻¹
+#     hse03   GGA=PE, AEXX=0.25, HFSCREEN=0.3 Å⁻¹
+#     pbe0    GGA=PE, AEXX=0.25, 不屏蔽 -> HFRCUT_MODE="auto" 自动写 HFRCUT=-1（KPOINTS_OPT 必需）
+#     custom  HYBRID_GGA（PE/PS/...；留空 = 跟随上游）+ HYBRID_AEXX（0<AEXX<=1，必填）
+#             + HYBRID_HFSCREEN（Å⁻¹；0 或留空 = 不屏蔽）。例：PBEsol0 写
+#             HYBRID = custom / HYBRID_GGA = PS / HYBRID_AEXX = 0.25
+#   优先级：命令行 --hybrid-flavor > step.conf HYBRID > 脚本 HYBRID_FLAVOR。
+#   HFSCREEN 单位是 Å⁻¹（HSE06 = 0.2；写 0.106 是把 bohr⁻¹ 当成了 Å⁻¹，见 [V165]）。
+# gga=None 表示跟随上游；hfscreen=None 表示不屏蔽。
+HYBRID_PRESETS = {
+    "auto":   {"gga": None, "aexx": 0.25, "hfscreen": 0.2},
+    "hse06":  {"gga": "PE", "aexx": 0.25, "hfscreen": 0.2},
+    "hsesol": {"gga": "PS", "aexx": 0.25, "hfscreen": 0.2},
+    "hse03":  {"gga": "PE", "aexx": 0.25, "hfscreen": 0.3},
+    "pbe0":   {"gga": "PE", "aexx": 0.25, "hfscreen": None},
+}
+
+
+def resolve_hybrid(cwd=".", cli_flavor=None):
+    """-> {"name", "gga"(None=跟随上游), "aexx", "hfscreen"(None=不屏蔽), "source"}。"""
+    if cli_flavor:
+        h = dict(HYBRID_PRESETS[cli_flavor])
+        h.update(name=cli_flavor, source="命令行 --hybrid-flavor")
+        return h
+    conf = None
+    if (Path(cwd) / stepconf.CONF_NAME).is_file():
+        conf = stepconf.load(SPEC, None, str(cwd), strict=False)
+    name = str((conf["HYBRID"] if conf else "") or "").strip().lower()
+    if not name:
+        h = dict(HYBRID_PRESETS[HYBRID_FLAVOR])
+        h.update(name=HYBRID_FLAVOR, source="脚本 HYBRID_FLAVOR（step.conf 没写 HYBRID）")
+        return h
+    if name in HYBRID_PRESETS:
+        h = dict(HYBRID_PRESETS[name])
+        h.update(name=name, source="step.conf HYBRID")
+        if conf["HYBRID_AEXX"] is not None or conf["HYBRID_HFSCREEN"] is not None \
+                or str(conf["HYBRID_GGA"] or "").strip():
+            print("[WARN] HYBRID=%s 是预设，HYBRID_GGA/AEXX/HFSCREEN 被忽略（要自定义请写 HYBRID = custom）"
+                  % name, file=sys.stderr)
+        return h
+    if name != "custom":
+        raise SystemExit("[错误] step.conf HYBRID=%r 无效，只能是 %s / custom"
+                         % (name, " / ".join(HYBRID_PRESETS)))
+    aexx = conf["HYBRID_AEXX"]
+    if aexx is None or not (0.0 < float(aexx) <= 1.0):
+        raise SystemExit("[错误] HYBRID=custom 需要 HYBRID_AEXX（精确交换比例，0 < AEXX <= 1），收到 %r"
+                         % (aexx,))
+    hfs = conf["HYBRID_HFSCREEN"]
+    if hfs is not None and float(hfs) < 0:
+        raise SystemExit("[错误] HYBRID_HFSCREEN 不能为负（单位 Å⁻¹；0 或留空 = 不屏蔽），收到 %r" % (hfs,))
+    gga = str(conf["HYBRID_GGA"] or "").strip().upper() or None
+    if gga is not None and not re.match(r"^[A-Z0-9]{1,4}$", gga):
+        raise SystemExit("[错误] HYBRID_GGA=%r 不像 VASP 的 GGA 标签（PE / PS / RP / 91 …）" % gga)
+    if hfs is not None and 0.09 <= float(hfs) <= 0.12:
+        print("[WARN] HYBRID_HFSCREEN=%g 像是 HSE06 的 bohr⁻¹ 值；VASP 单位是 Å⁻¹，HSE06 应写 0.2"
+              % float(hfs), file=sys.stderr)
+    return {"name": "custom", "gga": gga, "aexx": float(aexx),
+            "hfscreen": (float(hfs) if hfs not in (None, 0, 0.0) else None),
+            "source": "step.conf HYBRID=custom"}
+
+
+def hybrid_label(h, gga):
+    """给 SYSTEM / 日志用的泛函名。"""
+    scr = h["hfscreen"]
+    std = {("PE", 0.2): "HSE06", ("PS", 0.2): "HSEsol", ("PE", 0.3): "HSE03"}
+    if abs(h["aexx"] - 0.25) < 1e-9:
+        if scr is None:
+            return "PBE0" if gga == "PE" else ("PBEsol0" if gga == "PS" else "%s0" % gga)
+        lab = std.get((gga, round(scr, 4)))
+        if lab:
+            return lab
+    return "hybrid(GGA=%s,AEXX=%g,HFSCREEN=%s)" % (gga, h["aexx"],
+                                                   "none" if scr is None else "%g" % scr)
 
 SUBMIT_TPL_NCL = "submit_ncl"   # SOC   -> vasp_ncl（按维度取 submit_ncl_2d/3d.tpl，回退 submit_ncl.tpl）
 SUBMIT_TPL_STD = "submit_std"   # 无SOC -> vasp_std（同上）
@@ -971,25 +1055,31 @@ def build_step4_dir(out_dir, args, ctx, part=None):
     # ---- 杂化泛函族：决定半局域部分用 PE 还是 PS ----
     # flavor_mode 由 main() 解析（--hybrid-flavor 优先，否则退回 HYBRID_FLAVOR），
     # 经 ctx 传入，不再直接读模块级常量，以便命令行开头选档位。
-    _flavor_mode = ctx.get("flavor_mode", HYBRID_FLAVOR)
+    # 2026-10-14：由 resolve_hybrid 解析（命令行 > step.conf HYBRID > 脚本 HYBRID_FLAVOR），
+    #   支持 hse06 / hsesol / hse03 / pbe0 / custom。
+    _hy = ctx.get("hybrid") or dict(HYBRID_PRESETS["auto"], name="auto", source="默认")
     _up_gga = {k.upper(): v for k, v in items}.get("GGA", "PE").strip().upper()
-    if _flavor_mode == "auto":
+    if _hy["gga"] is None:
         _gga = "PS" if _up_gga.startswith("PS") else "PE"
-    elif _flavor_mode == "hsesol":
-        _gga = "PS"
     else:
-        _gga = "PE"
-    _flavor = "HSEsol" if _gga == "PS" else "HSE06"
+        _gga = _hy["gga"]
     incar_set["GGA"] = _gga
-    # ★ AEXX / HFSCREEN 直接沿用 INCAR_SET 的值（dict(INCAR_SET) 已带入），
-    #   不再被模块级常量覆盖 —— 改屏蔽常数 / 精确交换比例请直接改 INCAR_SET 那两行。
-    if _flavor_mode == "auto" and _up_gga.startswith("PS"):
-        print("[..] 上游是 PBEsol，本步用 HSEsol（GGA=PS）保持泛函族一致。"
-              "想与 HSE06 文献对比请传 --hybrid-flavor hse06。", file=sys.stderr)
-    elif _flavor_mode == "hse06" and _up_gga.startswith("PS"):
-        print("[注意] 上游是 PBEsol 但 --hybrid-flavor=hse06 强制 GGA=PE：几何来自 "
-              "PBEsol、能带来自 PBE 基，两者不是同一泛函族（可与 HSE06 文献对比，"
-              "但非自洽路线）。要泛函族一致请用 auto 或 hsesol。", file=sys.stderr)
+    incar_set["AEXX"] = "%g" % _hy["aexx"]
+    _unscreened = _hy["hfscreen"] is None
+    if _unscreened:
+        incar_set.pop("HFSCREEN", None)      # 不屏蔽：不写 HFSCREEN（下面 HFRCUT 自动 -1）
+    else:
+        incar_set["HFSCREEN"] = "%g" % _hy["hfscreen"]
+    _flavor = hybrid_label(_hy, _gga)
+    log.append("杂化泛函: %s（HYBRID=%s，来源：%s；GGA=%s AEXX=%s HFSCREEN=%s）"
+               % (_flavor, _hy["name"], _hy["source"], _gga, incar_set["AEXX"],
+                  incar_set.get("HFSCREEN", "不屏蔽")))
+    if _hy["gga"] is None and _up_gga.startswith("PS"):
+        print("[..] 上游是 PBEsol，本步用 %s（GGA=PS）保持泛函族一致。"
+              "想与 HSE06 文献对比请在 step.conf 写 HYBRID = hse06。" % _flavor, file=sys.stderr)
+    elif _gga != ("PS" if _up_gga.startswith("PS") else "PE"):
+        print("[注意] 上游 GGA=%s，本步杂化用 GGA=%s（%s）：几何与能带不是同一泛函族"
+              "（可与对应文献对比，但非自洽路线）。" % (_up_gga, _gga, _flavor), file=sys.stderr)
 
     # ---- ISYM ----
     _isym4 = "3" if STEP4_ISYM == "auto" else str(STEP4_ISYM).strip()
@@ -1083,6 +1173,8 @@ def build_step4_dir(out_dir, args, ctx, part=None):
         incar_set["KPAR"] = str(kpar)
     # KPOINTS_OPT 驱动要求 NCORE=1：不写 NCORE/NPAR，并把 step3 继承来的删掉
     incar_remove = list(INCAR_REMOVE) + ["NCORE", "NPAR"]
+    if _unscreened:
+        incar_remove.append("HFSCREEN")      # 上游若残留 HFSCREEN 也删掉，否则就不是非屏蔽杂化
     if STEP4_VDW == "remove":
         incar_remove += INCAR_REMOVE_VDW
     if not soc:
@@ -1139,6 +1231,7 @@ def build_step4_dir(out_dir, args, ctx, part=None):
             log.append("step.conf [incar.delete] 删除 %s" % _k)
 
     ctx["flavor"], ctx["gga"], ctx["isym"] = _flavor, _gga, _isym4
+    ctx["aexx"], ctx["hfscreen"] = incar_set.get("AEXX", "?"), incar_set.get("HFSCREEN", "不屏蔽")
     text = build_incar(items, incar_remove, incar_set)
     with open(os.path.join(out_dir, "INCAR"), "w") as f:
         f.write(text)
@@ -1181,23 +1274,22 @@ def main():
                          "本版 LWAVE=.TRUE. 会自动忽略并改为拷贝，保护 step3 源")
     ap.add_argument("--kpar", type=int, default=None, help="手动指定 KPAR（默认自动）")
     ap.add_argument("--jobname", default=None, help="Slurm 作业名（默认 <label>_s4HSE）")
-    ap.add_argument("--hybrid-flavor", choices=["auto", "hse06", "hsesol"], default=None,
+    ap.add_argument("--hybrid-flavor", choices=sorted(HYBRID_PRESETS), default=None,
                     metavar="MODE",
-                    help="杂化泛函族：auto=跟随上游(PBEsol链→HSEsol, PBE链→HSE06)；"
-                         "hse06=无论上游一律 GGA=PE；hsesol=无论上游一律 GGA=PS。"
-                         "不传则沿用脚本内 HYBRID_FLAVOR（当前 %r）" % HYBRID_FLAVOR)
+                    help="杂化泛函：auto=跟随上游(PBEsol链→HSEsol, PBE链→HSE06)；"
+                         "hse06 / hsesol / hse03 / pbe0。不传则读 step.conf 的 HYBRID"
+                         "（可写 custom），再不行沿用脚本内 HYBRID_FLAVOR（当前 %r）" % HYBRID_FLAVOR)
     args = ap.parse_args()
     _cascade_on_rerun(STEP4_DIR)
 
     # 命令行开关优先于脚本内常量，让"开头选档位"不必回来改文件。
     # 不传 --hybrid-flavor 时退回 HYBRID_FLAVOR，保持旧的默认行为。
     flavor_mode = args.hybrid_flavor or HYBRID_FLAVOR
-    if flavor_mode not in ("auto", "hse06", "hsesol"):
-        raise SystemExit("[错误] HYBRID_FLAVOR/--hybrid-flavor 只能是 auto/hse06/hsesol，收到 %r"
-                         % flavor_mode)
-    if args.hybrid_flavor:
-        print("[..] 杂化泛函族：--hybrid-flavor %s（覆盖脚本内 HYBRID_FLAVOR=%r）"
-              % (flavor_mode, HYBRID_FLAVOR), file=sys.stderr)
+    if flavor_mode not in HYBRID_PRESETS:
+        raise SystemExit("[错误] HYBRID_FLAVOR/--hybrid-flavor 只能是 %s，收到 %r"
+                         % ("/".join(HYBRID_PRESETS), flavor_mode))
+    hybrid = resolve_hybrid(Path.cwd(), args.hybrid_flavor)
+    print("[..] 杂化泛函：HYBRID=%s（%s）" % (hybrid["name"], hybrid["source"]), file=sys.stderr)
 
     if not os.path.isdir(STEP3_DIR):
         raise SystemExit("[错误] 找不到 %s —— 请在父目录下运行本脚本" % STEP3_DIR)
@@ -1243,7 +1335,7 @@ def main():
            "label": label, "method": method, "items": items,
            "nb_actual": nb_actual, "soc": soc,
            "submit_tpl": tpl, "dim": dim,
-           "flavor_mode": flavor_mode}
+           "flavor_mode": flavor_mode, "hybrid": hybrid}
 
     # 2D 能带路径点少：切片并行收益小、却要多付 N 倍精确交换 SCF，默认不切（保持单作业）
     slice_spec = args.kpath_slice
@@ -1261,7 +1353,7 @@ def main():
     print("体系/结构方法 : %s / %s" % (label, method))
     print("step4 泛函    : %s%s  (GGA=%s, AEXX=%s, HFSCREEN=%s, ISYM=%s, IVDW %s)"
           % (ctx.get("flavor", "?"), "+SOC" if soc else "", ctx.get("gga", "?"),
-             INCAR_SET["AEXX"], INCAR_SET["HFSCREEN"], ctx.get("isym", "?"),
+             ctx.get("aexx", "?"), ctx.get("hfscreen", "?"), ctx.get("isym", "?"),
              "已删除" if STEP4_VDW == "remove" else "保留"))
     print("step4 二进制  : %s  [SOC 自动检测自 step3 LSORBIT]"
           % ("vasp_ncl" if soc else "vasp_std"))

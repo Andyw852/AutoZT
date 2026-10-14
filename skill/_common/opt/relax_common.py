@@ -56,7 +56,10 @@ except Exception:          # noqa: BLE001 —— 体检不可用绝不阻断 gen
 # 结构优化泛函 —— 【不要改这里】。
 # 真正生效的值来自项目的 step.conf：
 #     <材料>/<技能>/project_setting/templates/step.conf 的  [params] FUNC =
-#   "auto"   : 嗅探 incar_*.tpl 里写死的 GGA/IVDW 反推；都没写就用下面的默认值
+#   "auto"   : 按结构自动选（2026-10-14 起的顺序，详见 resolve_func）：
+#              ① 本技能 step1 已有 workflow_method.txt 的 FUNC=（retry/分段重生成不换泛函）
+#              ② 同材料配对技能（ke-dft-cpu <-> kl-dft-cpu）step1 的 FUNC=（ZT 两条链同一泛函）
+#              ③ method_select.default_method 的键网络判据（层/链/分子/多组分 -> pbe-d3，否则 pbesol）
 #   "pbe-d3" : PBE + DFT-D3(BJ)，写入 GGA=PE、IVDW=12
 #   "pbesol" : PBEsol，不启用经验色散修正，写入 GGA=PS
 #   "pbe"    : 纯 PBE，无色散修正，写入 GGA=PE
@@ -64,6 +67,13 @@ except Exception:          # noqa: BLE001 —— 体检不可用绝不阻断 gen
 # 查看/修改：  tf -tt bd -p <材料> -j 1 conf [--set params.FUNC=pbe-d3]
 FUNC_DEFAULT = "pbesol"
 FUNC = FUNC_DEFAULT      # main() 里按 step.conf 解析后重新赋值
+FUNC_REASON = ""         # resolve_func 的决策依据，写进 workflow_method.txt 的 FUNC_REASON=
+
+# FUNC=auto 时要互相对齐泛函的"配对技能"（同一材料目录下的兄弟技能目录名）。
+# ke-dft-cpu（电子输运）与 kl-dft-cpu（晶格热导）的结果会在 zt-dft-cpu 里直接相加成 ZT，
+# 两条链的几何必须来自同一个泛函，否则 κ_e 与 κ_L 不在同一个晶格上。
+# 2026-10-14 前 ke 全局写死 pbesol、kl 是 auto：层状材料 kl 会选 pbe-d3，两边晶格常数不同。
+FUNC_SIBLINGS = {"ke-dft-cpu": ("kl-dft-cpu",), "kl-dft-cpu": ("ke-dft-cpu",)}
 
 # VASPKIT 设置
 RUN_VASPKIT = True
@@ -437,6 +447,10 @@ KNOWN_PLACEHOLDERS = {"SYSTEM", "ENCUT", "GGA", "VDW_LINE", "JOBNAME"}
 #   mol_common 不再自己 stepconf.load()，改从 STEP_PARAMS 取。
 CONF_SPEC = {
     "FUNC": (FUNC_DEFAULT, "str"),
+    # FUNC=auto 时是否与同材料配对技能（FUNC_SIBLINGS：ke <-> kl）的 step1 泛函对齐。
+    #   true（默认）：配对技能已有 FUNC= 就照用，保证 ZT 两条链几何同一泛函。
+    #   false：只按本技能自己的判据选（两链可能不同，S20_zt 会告警）。
+    "FUNC_ALIGN": (True, "bool"),
     "HAS_ADSORBATE": (False, "bool"),
     "FIXED_CELL": (False, "bool"),
     # 2D 专用逃生阀：默认 false = 2D 优化必须真正弛豫面内晶格（IOPTCELL/OPTCELL/
@@ -568,8 +582,59 @@ def load_step_params(step_name=None):
     return True
 
 
+def _read_func_file(path: Path):
+    """workflow_method.txt -> FUNC（只认 FUNC_MAP 里的值）；读不到返回 None。"""
+    try:
+        for ln in Path(path).read_text(encoding="utf-8", errors="ignore").splitlines():
+            s = ln.strip()
+            if s.upper().startswith("FUNC="):
+                v = s.split("=", 1)[1].strip().lower()
+                return v if v in FUNC_MAP else None
+    except OSError:
+        return None
+    return None
+
+
+def own_step1_func(cwd: Path, step_name=None):
+    """本技能 step1 上一次 gen 写下的 FUNC（retry / 分段重生成时沿用，不中途换泛函）。"""
+    cwd = Path(cwd)
+    cands = []
+    if step_name:
+        cands.append(cwd / step_name / "workflow_method.txt")
+    cands += sorted(cwd.glob("step1*/workflow_method.txt"))
+    for f in cands:
+        func = _read_func_file(f)
+        if func:
+            return func, f
+    return None, None
+
+
+def sibling_step1_func(cwd: Path):
+    """同材料配对技能（FUNC_SIBLINGS）step1 的 FUNC；返回 (func, 文件) 或 (None, None)。
+
+    超算上是 <材料>/<配对技能>/step1*/，本地拉回的是 <材料>/<配对技能>/result/step1*/，两处都找。"""
+    cwd = Path(cwd).resolve()
+    for sib in FUNC_SIBLINGS.get(cwd.name, ()):
+        base = cwd.parent / sib
+        for pat in ("step1*/workflow_method.txt", "result/step1*/workflow_method.txt"):
+            for f in sorted(base.glob(pat)):
+                func = _read_func_file(f)
+                if func:
+                    return func, f
+    return None, None
+
+
 def resolve_func(incar_tpl: Path, step_name=None):
-    """返回 (func, 来源说明)。优先级：step.conf 显式值 > 模板反推 > 脚本默认值。"""
+    """返回 (func, 来源说明)。
+
+    显式 FUNC（pbesol / pbe / pbe-d3）原样采用。FUNC=auto 时按顺序：
+      ① 本技能 step1 已有的 FUNC（retry / 分段重生成不换泛函，免得已算完的下游整条作废）；
+      ② 同材料配对技能（ke <-> kl）step1 的 FUNC（FUNC_ALIGN=false 可关）；
+      ③ method_select.default_method：键网络维度 < 结构维度（层/链/分子）或多组分 -> pbe-d3，
+         等维单组分 -> pbesol；键网络分析不可用时保守取 pbe-d3。
+    ②/③ 结论不同时打 ★ 告警（配对技能是旧默认写死的值时常见），以 ② 为准。
+    """
+    global FUNC_REASON
     if not STEP_PARAMS:
         load_step_params(step_name)
     if not STEP_PARAMS:
@@ -579,20 +644,44 @@ def resolve_func(incar_tpl: Path, step_name=None):
     want = (want or FUNC_DEFAULT).strip().lower()
     if want != "auto":
         if want not in FUNC_MAP:
-            sys.exit("[ERROR] %s 的 FUNC=%r 无效，只允许：auto, %s"
+            sys.exit("[ERROR] %s 的 FUNC=%r 无效，只允许：auto, %s\n"
+                     "        （PBE0/HSE 等杂化泛函不能用于几何链：S5 介电/声子的 DFPT 不支持杂化，"
+                     "形变势与密网格也承受不起。带隙用的杂化泛函在 ke 的 S2.3 用 HYBRID 键选。）"
                      % (where, want, ", ".join(FUNC_MAP)))
+        FUNC_REASON = "step.conf 显式指定"
         return want, where
+    cwd = Path.cwd()
+    own, own_f = own_step1_func(cwd, step_name)
+    if own:
+        FUNC_REASON = "auto：沿用本技能 step1 上次的 FUNC（%s）" % own_f
+        return own, FUNC_REASON
+    sib, sib_f = (sibling_step1_func(cwd) if STEP_PARAMS.get("FUNC_ALIGN", True)
+                  else (None, None))
     import method_select
     try:
         from pymatgen.core import Structure
-        structure = Structure.from_file(str(Path.cwd() / "POSCAR"))
-        dimension = detect_dimension(Path.cwd() / "POSCAR", VACUUM_MIN)[0]
+        structure = Structure.from_file(str(cwd / "POSCAR"))
+        dimension = detect_dimension(cwd / "POSCAR", VACUUM_MIN)[0]
+        auto_func, auto_reason = method_select.default_method(
+            structure, dimension,
+            has_adsorbate=STEP_PARAMS.get("HAS_ADSORBATE", False),
+            uses_molecular_reference=STEP_PARAMS.get("USES_MOLECULAR_REFERENCE", False))
     except Exception as exc:
-        sys.exit(f"[ERROR] FUNC=auto 无法读取结构并确定维度：{exc}；请显式指定 FUNC")
-    return method_select.default_method(
-        structure, dimension,
-        has_adsorbate=STEP_PARAMS.get("HAS_ADSORBATE", False),
-        uses_molecular_reference=STEP_PARAMS.get("USES_MOLECULAR_REFERENCE", False))
+        if not sib:
+            sys.exit(f"[ERROR] FUNC=auto 无法读取结构并确定维度：{exc}；请显式指定 FUNC")
+        auto_func, auto_reason = None, "键网络判据没跑成（%s）" % exc
+    if sib:
+        if auto_func and auto_func != sib:
+            print("[WARN] ★ FUNC=auto：本技能的键网络判据给 %s（%s），但同材料配对技能已用 %s"
+                  "（%s）。为让 ZT 两条链在同一晶格上，本步跟随配对技能用 %s。\n"
+                  "       若配对技能的泛函是旧版写死的默认值、物理上应该用 %s：把两边 step.conf 都显式写 "
+                  "FUNC = %s 后重跑两边的 S1（及下游）。"
+                  % (auto_func, auto_reason, sib, sib_f, sib, auto_func, auto_func))
+        FUNC_REASON = ("auto：跟随同材料配对技能 %s 的 FUNC（键网络判据给 %s）"
+                       % (sib_f, auto_func or "?"))
+        return sib, FUNC_REASON
+    FUNC_REASON = "auto：" + str(auto_reason)
+    return auto_func, auto_reason
 
 
 def apply_step_params():
@@ -2356,6 +2445,8 @@ def write_method_file(path: Path, label: str, formula: str, prim_note: str = Non
         f"FORMULA={formula}",
     ]
     lines.append("STAGE_MODE=%s" % STAGE_MODE)
+    if FUNC_REASON:                  # 2026-10-14：泛函决策依据留痕（S20_zt 的一致性核对要看）
+        lines.append("FUNC_REASON=%s" % " ".join(str(FUNC_REASON).split()))
     if dim_line:
         lines.append(dim_line)
     if mag_line:
@@ -2677,7 +2768,7 @@ def main():
 # =====================================================================
 DEFAULTS = {k: v for k, v in list(globals().items())
             if k.isupper() and not k.startswith("_")
-            and k not in ("FUNC",)}
+            and k not in ("FUNC", "FUNC_REASON")}
 
 
 def run(**overrides):

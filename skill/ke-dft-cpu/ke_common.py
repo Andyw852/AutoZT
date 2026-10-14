@@ -2987,3 +2987,327 @@ def defect_doping_points(cwd, is_2d, mode="auto", root=None):
         return [], ["%s 里没有顶点的 n0/p0" % src]
     notes.append("缺陷平衡只在 defect 技能的温度下求解；AMSET 各温度用同一净浓度（缺陷浓度冻结）")
     return points, notes
+
+
+# ---------------------------------------------------------------------------
+# 2026-10-14 能带一致性检查（S8 / S8.4 共用；只告警、不改设置、不拦步）
+#   ① SOC 影响闸门：能带步（S2.2）按 Z>=50 自动开 SOC，输运链（S3/S3b/S4/S7）默认不开，
+#      S8 又拿带 SOC 的杂化带隙去剪无 SOC 的能带。剪刀只平移导带，SOC 改掉的劈裂、谷次序、
+#      简并度它修不了。这里用【现成数据】量 SOC 对带边的影响：S2.2 的自洽网格（SOC）对
+#      S3 的密网格（无 SOC），只比两边都有的 k 点（Γ 一定有）。
+#   ② 杂化/半局域有效质量核对：剪刀不改曲率，小带隙直接隙材料的半局域质量偏轻
+#      （迁移率偏高）。用 S2.3 已算好的杂化能带与 S2.2 的能带在带边拟合 m*，比值偏差大就告警。
+#   结论写 <输出目录>/band_consistency.json。没有数据的项写 not_applicable 并说明原因。
+# ---------------------------------------------------------------------------
+SOC_GATE_EV = 0.05          # ≈ 2kT@300K：SOC 让带边附近能级移动超过它 -> 告警
+SOC_GATE_WINDOW_EV = 0.3    # 只看带边以内这么宽的能级（价带往下 / 导带往上）
+SOC_GAP_NOTE_EV = 0.1       # 两边带隙差超过它记一笔（数值已被剪刀修正，只作背景）
+MASS_RATIO_TOL = 0.25       # 杂化 / 半局域 有效质量比偏离 1 超过它 -> 告警
+MASS_FIT_WINDOW = 0.08      # 带边拟合窗口（Å⁻¹，含 2π）
+MASS_FIT_WINDOW_MAX = 0.25  # 窗口内点不够时最多放宽到这里（杂化路径是降采样的）
+HBAR2_2ME = 3.80998         # ħ²/2mₑ，eV·Å²
+
+
+def _read_eigenval_levels(path):
+    """EIGENVAL -> (nelect, [(k_frac, [能级...]), ...], ispin)；读不了返回 None。
+
+    能级按"每个能级装 1 个电子"展开：ISPIN=1 的共线计算每个本征值重复两次，ISPIN=2 上下自旋各算一个，
+    SOC（非共线）原样。这样 SOC 与非 SOC 两边的第 nelect 个能级都是 VBM，可以逐个对齐比较。
+    非共线与否由调用方按 INCAR 传进来（EIGENVAL 本身看不出）。"""
+    try:
+        lines = Path(path).read_text(errors="ignore").splitlines()
+        ispin = int(lines[0].split()[3])
+        nelect = float(lines[5].split()[0])
+        nk, nb = int(lines[5].split()[1]), int(lines[5].split()[2])
+    except (OSError, IndexError, ValueError):
+        return None
+    out, i = [], 6
+    try:
+        for _ in range(nk):
+            while i < len(lines) and not lines[i].strip():
+                i += 1
+            t = lines[i].split()
+            k = (float(t[0]), float(t[1]), float(t[2]))
+            i += 1
+            lv = []
+            for _ in range(nb):
+                p = lines[i].split()
+                lv.append(float(p[1]))
+                if ispin == 2:
+                    lv.append(float(p[2]))
+                i += 1
+            out.append((k, lv))
+    except (IndexError, ValueError):
+        return None
+    return nelect, out, ispin
+
+
+def _kkey(k):
+    """k 点的比较键：约化到 [0,1) 并与 -k 取小（时间反演等价），4 位小数。"""
+    def red(v):
+        r = round(v % 1.0, 4)
+        return 0.0 if r in (1.0, -0.0) else r
+    a = tuple(red(x) for x in k)
+    b = tuple(red(-x) for x in k)
+    return min(a, b)
+
+
+def _levels_by_k(path, ncl):
+    got = _read_eigenval_levels(path)
+    if got is None:
+        return None
+    nelect, rows, ispin = got
+    table = {}
+    for k, lv in rows:
+        if not ncl and ispin == 1:
+            lv = [e for e in lv for _ in (0, 1)]
+        table.setdefault(_kkey(k), sorted(lv))
+    return nelect, table
+
+
+def soc_impact_check(cwd):
+    """① SOC 影响闸门。返回 dict（status: consistent / ok / warn / not_applicable）。"""
+    cwd = Path(cwd)
+    band_dir = cwd / "step2_bandgap" / "step2.2_pbe"
+    tr_dirs = [d for d in ("step3_uniform", "step3b_uniform_full") if (cwd / d / "EIGENVAL").is_file()]
+    rec = {"check": "soc_impact", "threshold_eV": SOC_GATE_EV}
+    band_soc = incar_is_ncl(band_dir / "INCAR")
+    tr_soc = detect_ncl(cwd)
+    rec.update(band_soc=band_soc, transport_soc=tr_soc)
+    if band_soc == tr_soc:
+        rec["status"] = "consistent"
+        rec["note"] = ("能带步与输运链 SOC 设置一致（%s）" % ("都开 SOC" if band_soc else "都不开 SOC")
+                       + ("" if band_soc else "；注意：Z<50 的材料（如 MoS₂ 价带 K 点约 0.15 eV 劈裂）"
+                          "能带步也不开 SOC，本检查看不到它的 SOC 影响"))
+        return rec
+    if not band_soc:
+        rec["status"] = "not_applicable"
+        rec["note"] = "输运链开了 SOC、能带步没开：剪刀带隙来自无 SOC 能带（与通常情形相反），请人工核对"
+        return rec
+    if not tr_dirs or not (band_dir / "EIGENVAL").is_file():
+        rec["status"] = "not_applicable"
+        rec["note"] = "缺 EIGENVAL（%s），没法比较；★ 能带步带 SOC、输运链不带 SOC 仍然成立" % (
+            "step2.2_pbe" if not (band_dir / "EIGENVAL").is_file() else "step3_uniform")
+        return rec
+    a = _levels_by_k(band_dir / "EIGENVAL", True)
+    b = _levels_by_k(cwd / tr_dirs[0] / "EIGENVAL", False)
+    if a is None or b is None:
+        rec["status"] = "not_applicable"
+        rec["note"] = "EIGENVAL 解析失败"
+        return rec
+    (ne_a, ta), (ne_b, tb) = a, b
+    nocc = int(round(ne_a))
+    if abs(ne_a - nocc) > 1e-6 or abs(ne_a - ne_b) > 1e-6:
+        rec["status"] = "not_applicable"
+        rec["note"] = "NELECT 非整数或两边不同（%g vs %g）" % (ne_a, ne_b)
+        return rec
+    common = sorted(set(ta) & set(tb))
+    common = [k for k in common if len(ta[k]) > nocc and len(tb[k]) > nocc]
+    rec["n_common_k"] = len(common)
+    rec["source"] = {"soc": "step2_bandgap/step2.2_pbe/EIGENVAL", "no_soc": "%s/EIGENVAL" % tr_dirs[0]}
+    if not common:
+        rec["status"] = "not_applicable"
+        rec["note"] = "两边网格没有共同 k 点"
+        return rec
+
+    def edges(t):
+        vbm = max(t[k][nocc - 1] for k in common)
+        cbm = min(t[k][nocc] for k in common)
+        kv = max(common, key=lambda k: t[k][nocc - 1])
+        kc = min(common, key=lambda k: t[k][nocc])
+        return vbm, cbm, kv, kc
+    va, ca, kva, kca = edges(ta)
+    vb, cb, kvb, kcb = edges(tb)
+    shift_v = shift_c = 0.0
+    worst = None
+    for k in common:
+        la, lb = ta[k], tb[k]
+        i = nocc - 1
+        while i >= 0 and (la[i] >= va - SOC_GATE_WINDOW_EV or lb[i] >= vb - SOC_GATE_WINDOW_EV):
+            d = abs((la[i] - va) - (lb[i] - vb))
+            if d > shift_v:
+                shift_v, worst = d, (k, "VB", i)
+            i -= 1
+        i = nocc
+        while i < min(len(la), len(lb)) and (la[i] <= ca + SOC_GATE_WINDOW_EV or lb[i] <= cb + SOC_GATE_WINDOW_EV):
+            d = abs((la[i] - ca) - (lb[i] - cb))
+            if d > shift_c:
+                shift_c, worst = d, (k, "CB", i)
+            i += 1
+    gap_a, gap_b = ca - va, cb - vb
+    rec.update(gap_soc_eV=round(gap_a, 4), gap_nosoc_eV=round(gap_b, 4),
+               gap_change_eV=round(gap_a - gap_b, 4),
+               vb_level_shift_max_eV=round(shift_v, 4), cb_level_shift_max_eV=round(shift_c, 4),
+               vbm_k_soc=list(kva), vbm_k_nosoc=list(kvb), cbm_k_soc=list(kca), cbm_k_nosoc=list(kcb),
+               max_shift_at=(None if worst is None else
+                             {"k_frac": list(worst[0]), "edge": worst[1], "level_index": worst[2]}))
+    reasons = []
+    if shift_v > SOC_GATE_EV:
+        reasons.append("价带边 %.2f eV 内的能级被 SOC 移动/劈裂最多 %.3f eV" % (SOC_GATE_WINDOW_EV, shift_v))
+    if shift_c > SOC_GATE_EV:
+        reasons.append("导带边 %.2f eV 内的能级被 SOC 移动/劈裂最多 %.3f eV" % (SOC_GATE_WINDOW_EV, shift_c))
+    if kva != kvb:
+        reasons.append("VBM 所在 k 点变了（SOC %s vs 无 SOC %s）" % (list(kva), list(kvb)))
+    if kca != kcb:
+        reasons.append("CBM 所在 k 点变了（SOC %s vs 无 SOC %s）" % (list(kca), list(kcb)))
+    if abs(gap_a - gap_b) > SOC_GAP_NOTE_EV:
+        reasons.append("带隙差 %.3f eV（数值已被剪刀修正，但说明 SOC 对带边重要）" % (gap_a - gap_b))
+    rec["status"] = "warn" if reasons else "ok"
+    rec["reasons"] = reasons
+    rec["note"] = (("★ SOC 对带边影响显著：%s。本材料输运链不带 SOC，剪刀只平移导带、修不了劈裂/谷次序/简并度，"
+                    "迁移率与 Seebeck 可能定性不对；应改用 SOC 输运链重算（需开 SOC_TRANSPORT，未上线前手改 "
+                    "S3/S4/S7 的 [incar] LSORBIT 并走全网格）。只比了 %d 个共同 k 点。" % ("；".join(reasons), len(common)))
+                   if reasons else
+                   "SOC 对带边影响小（%d 个共同 k 点，带边 %.2f eV 内能级移动 ≤ %.3f eV），无 SOC 输运 + SOC 带隙剪刀可接受"
+                   % (len(common), SOC_GATE_WINDOW_EV, max(shift_v, shift_c)))
+    return rec
+
+
+def _read_band_dat(path):
+    """S2.2/S2.3 画图步的 .dat：首列 k 距离（Å⁻¹，含 2π），其后每列一条带（能量相对零点）。"""
+    xs, rows = [], []
+    for ln in Path(path).read_text(errors="ignore").splitlines():
+        s = ln.strip()
+        if not s or s.startswith("#"):
+            continue
+        p = s.split()
+        try:
+            xs.append(float(p[0]))
+            rows.append([float(v) for v in p[1:]])
+        except ValueError:
+            continue
+    return xs, rows
+
+
+def _edge_side_mass(xs, es, i0, step):
+    """从带边 i0 往一侧（step=±1）取点拟合 E-E0 = a·dk²（顶点固定），返回 (m*/mₑ, 点数, 窗口) 或 None。
+    遇到路径断点（相邻 x 相同）就停：断点两边是不同的线段。"""
+    pts, j = [], i0 + step
+    while 0 <= j < len(xs):
+        if abs(xs[j] - xs[j - step]) < 1e-9:
+            break
+        dk = abs(xs[j] - xs[i0])
+        if dk > MASS_FIT_WINDOW_MAX:
+            break
+        pts.append((dk, es[j] - es[i0]))
+        j += step
+    use = [p for p in pts if p[0] <= MASS_FIT_WINDOW]
+    if len(use) < 2:
+        use = pts[:2]
+    if len(use) < 2 or use[-1][0] <= 0:
+        return None
+    s4 = sum(d ** 4 for d, _ in use)
+    a = sum(d * d * e for d, e in use) / s4 if s4 > 0 else 0.0
+    if abs(a) < 1e-6:
+        return None
+    return HBAR2_2ME / abs(a), len(use), round(use[-1][0], 4)
+
+
+def _edge_masses(plot_dir):
+    """画图步目录 -> {"VB": {"k": [...], "fwd": m, "bwd": m}, "CB": {...}}；算不了返回 (None, 原因)。"""
+    import json as _json
+    sp = Path(plot_dir) / "band_summary.json"
+    if not sp.is_file():
+        return None, "没有 %s" % sp
+    try:
+        s = _json.loads(sp.read_text(encoding="utf-8"))
+    except ValueError:
+        return None, "%s 读不了" % sp
+    if s.get("status") not in (None, "ok") or (s.get("gap_eV") or 0) <= 0:
+        return None, "%s：不是有隙体系或画图未成功" % Path(plot_dir).name
+    if int(s.get("nspin") or 1) == 2:
+        return None, "%s：ISPIN=2 不做（上下自旋混排）" % Path(plot_dir).name
+    dat = None
+    f = (s.get("files") or {}).get("dat")
+    if f and (Path(plot_dir) / Path(f).name).is_file():
+        dat = Path(plot_dir) / Path(f).name
+    else:
+        cands = sorted(Path(plot_dir).glob("*.dat"))
+        dat = cands[0] if cands else None
+    if dat is None:
+        return None, "%s 没有能带 .dat" % Path(plot_dir).name
+    xs, rows = _read_band_dat(dat)
+    nel = float(s.get("nelect") or 0)
+    nocc = int(round(nel if s.get("soc") else nel / 2.0))
+    if not rows or nocc < 1 or len(rows[0]) <= nocc:
+        return None, "%s：带数不足或 NELECT 读不到" % dat.name
+    out = {}
+    for tag, col, pick in (("VB", nocc - 1, max), ("CB", nocc, min)):
+        es = [r[col] for r in rows]
+        i0 = es.index(pick(es))
+        f_ = _edge_side_mass(xs, es, i0, +1)
+        b_ = _edge_side_mass(xs, es, i0, -1)
+        out[tag] = {"k_frac": (s.get("vbm" if tag == "VB" else "cbm") or {}).get("k_frac"),
+                    "fwd": f_ and round(f_[0], 4), "bwd": b_ and round(b_[0], 4),
+                    "fwd_window": f_ and f_[2], "bwd_window": b_ and b_[2]}
+    out["soc"] = bool(s.get("soc"))
+    out["functional"] = (s.get("hybrid") or {}).get("label") or s.get("functional_display") or s.get("functional")
+    return out, None
+
+
+def hybrid_mass_check(cwd):
+    """② 杂化 vs 半局域 带边有效质量核对。返回 dict（status: ok / warn / not_applicable）。"""
+    cwd = Path(cwd)
+    rec = {"check": "hybrid_vs_semilocal_mass", "ratio_tol": MASS_RATIO_TOL,
+           "fit_window_invA": MASS_FIT_WINDOW}
+    pbe, why_p = _edge_masses(cwd / "step2_bandgap" / "step2.2_pbe_plot")
+    hyb, why_h = _edge_masses(cwd / "step2_bandgap" / "step2.3_hse_plot")
+    if pbe is None or hyb is None:
+        rec["status"] = "not_applicable"
+        rec["note"] = "；".join(x for x in (why_p, why_h) if x)
+        return rec
+    rec["semilocal"], rec["hybrid"] = pbe, hyb
+    if pbe["soc"] != hyb["soc"]:
+        rec["status"] = "not_applicable"
+        rec["note"] = "两份能带 SOC 设置不同，质量不可比"
+        return rec
+    reasons, ratios = [], {}
+    for tag in ("VB", "CB"):
+        kp = [round(x, 3) for x in (pbe[tag]["k_frac"] or [])]
+        kh = [round(x, 3) for x in (hyb[tag]["k_frac"] or [])]
+        if kp and kh and kp != kh:
+            reasons.append("%s 带边位置不同（半局域 %s vs 杂化 %s）：谷次序被杂化改了" % (tag, kp, kh))
+            continue
+        for side in ("fwd", "bwd"):
+            mp, mh = pbe[tag][side], hyb[tag][side]
+            if not mp or not mh:
+                continue
+            r = mh / mp
+            ratios["%s_%s" % (tag, side)] = round(r, 3)
+            if abs(r - 1.0) > MASS_RATIO_TOL:
+                reasons.append("%s 沿路径%s侧 m*：杂化 %.3f vs 半局域 %.3f（比 %.2f）"
+                               % (tag, "前" if side == "fwd" else "后", mh, mp, r))
+    rec["mass_ratio_hybrid_over_semilocal"] = ratios
+    if not ratios and not reasons:
+        rec["status"] = "not_applicable"
+        rec["note"] = "带边两侧都没有足够的路径点拟合 m*"
+        return rec
+    rec["status"] = "warn" if reasons else "ok"
+    rec["reasons"] = reasons
+    rec["note"] = (("★ 带边有效质量对泛函敏感：%s。AMSET 用的是半局域能带 + 剪刀，剪刀不改曲率，"
+                    "迁移率/Seebeck 会带着这个质量偏差（半局域质量偏轻 -> 迁移率偏高）。报数时注明，"
+                    "或改用杂化能带做输运。（杂化路径是降采样的，拟合窗口见 *_window，属粗估）"
+                    % "；".join(reasons)) if reasons else
+                   "杂化与半局域带边 m* 一致（比值在 1±%.2f 内）" % MASS_RATIO_TOL)
+    return rec
+
+
+def band_consistency_checks(cwd, out_dir, label="S8"):
+    """S8 / S8.4 的 gen 调用：跑 ①② 两项，打印结论，写 <out_dir>/band_consistency.json。只告警。"""
+    import json as _json
+    res = {}
+    for name, fn in (("soc_impact", soc_impact_check), ("hybrid_mass", hybrid_mass_check)):
+        try:
+            res[name] = fn(cwd)
+        except Exception as e:                                # noqa: BLE001 —— 检查失败不拦步
+            res[name] = {"status": "error", "note": "%s: %s" % (type(e).__name__, e)}
+        r = res[name]
+        tag = "[WARN]" if r.get("status") == "warn" else "[..]"
+        print("%s %s 能带一致性（%s）：%s" % (tag, label, name, r.get("note", r.get("status"))))
+    try:
+        Path(out_dir).mkdir(parents=True, exist_ok=True)
+        (Path(out_dir) / "band_consistency.json").write_text(
+            _json.dumps(res, ensure_ascii=False, indent=1), encoding="utf-8")
+    except OSError as e:
+        print("[WARN] 写 band_consistency.json 失败：%s" % e)
+    return res

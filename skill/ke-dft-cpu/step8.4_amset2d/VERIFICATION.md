@@ -44,8 +44,10 @@ numpy 1.26.4 + numba 0.62.1 + BoltzTraP2 26.3.1，python 3.10）；另在 amset 
 3. **CrS2 型**（面外剪切 ≈0、符号是数值噪声）：AMSET 侧修法（面内 2×2 张量 / 面外剪切除零）批不批？
    在批之前 `overlap_preflight` 第 ⑤ 项会把这两个材料的 S8 **拦下**（它们现在跑出来的 ADP 是废的：
    CrS2 空穴 2×10⁴ / 0.0；Mo2S3 电子 6946）。
-4. **SOC 那批**的 unity 比值：原因已查明并记录（SOC 必须 `LSORBIT=.TRUE.` -> VASP 要求 `ISYM=-1`
-   -> 288 点全算 -> 本来就走 from_data）；它**不在 autozt ke-dft-cpu 清单内**（独立 `soc_workflow.yaml`），
+4. **SOC 那批**的 unity 比值：原因已查明并记录（那批 INCAR **手写了** `ISYM=-1`
+   -> 288 点全算 -> 本来就走 from_data）。★ 2026-10-14 更正：原文写"SOC 必须 `LSORBIT=.TRUE.` -> VASP 要求
+   `ISYM=-1`"是错的 —— VASP 非共线计算支持对称性（≥5.4.1），S2.2 的 SOC 能带就是 ISYM=2 跑的；ISYM=-1 是那批
+   手工设置，不是 SOC 的硬性要求（真正的约束是 AMSET 的 ncl 去对称化对 TR 操作有缺陷，需全网格，见 ke_common.symmetry_gate）；它**不在 autozt ke-dft-cpu 清单内**（独立 `soc_workflow.yaml`），
    要跑请告诉我用哪条链路。
 5. **排队中的冗余作业**：`Si-ke-dft-cpu-S8_kappa`（3849833）仍在 `Priority` 排队 ——
    Si 判定已由本地受控跑完成，它只剩"端到端再确认"；要停需你同意（`autozt stop`）。
