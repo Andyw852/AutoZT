@@ -37,7 +37,7 @@ from pathlib import Path
 # [SKILL_REV] 版本戳：写进 comparison_summary.txt。每次改本脚本逻辑后更新。
 #   陈旧副本已咬人三次（step12/step9b 盖戳后，step13 是最后一个没盖的），
 #   这里盖戳便于从产物反查到底跑的是哪份 skill 副本。
-_SKILL_REV = "2026-10-13-0045"   # [0045] bt2_muscan 同时画 thickness(我们)/cell(文献) 两种口径；[0041] transport_plots/defect_equilibrium/（缺陷平衡净浓度 σ/S/PF/κe vs T）   # 2026-10-13-0040   # [0040] transport_plots/intrinsic_carrier/（未掺杂本征载流子 σ/S/PF/κe vs T）；图例/文件名一律用实际机制组合 amset_<机制>；2026-10-13-0039   # [0039] transport_plots/datasets/：每个数据集单独一张 σ/S/PF/κe 图 + csv； [0038] 本征/子集图读 subset_*.json（SUBSETS）；[0036] transport_plots 加 bt2_muscan/ + amset_scan/ 两个扫描图子文件夹；[0035] transport_plots 合并 + τ 对比（tau/）
+_SKILL_REV = "2026-10-14-0046"   # [0046] 本征五参数套件支持 3D（读 S8 的 step8_amset + subset_*.json；_geom_3d 体胞几何、c/t=1、对角 (xx+yy+zz)/3）；3D 也出 transport_plots/<M>_transport|<M>_intrinsic.png 9x5 面板   # [0045] bt2_muscan 同时画 thickness(我们)/cell(文献) 两种口径；[0041] transport_plots/defect_equilibrium/（缺陷平衡净浓度 σ/S/PF/κe vs T）   # 2026-10-13-0040   # [0040] transport_plots/intrinsic_carrier/（未掺杂本征载流子 σ/S/PF/κe vs T）；图例/文件名一律用实际机制组合 amset_<机制>；2026-10-13-0039   # [0039] transport_plots/datasets/：每个数据集单独一张 σ/S/PF/κe 图 + csv； [0038] 本征/子集图读 subset_*.json（SUBSETS）；[0036] transport_plots 加 bt2_muscan/ + amset_scan/ 两个扫描图子文件夹；[0035] transport_plots 合并 + τ 对比（tau/）
 #   bump 记录：2026-10-11-0035 —— transport_plots 合并：intrinsic 图并入 transport 图（4 条数据集
 #   overall / intrinsic / ADP only / BT2xDPT-tau），不再单独出 <M>_intrinsic*.{png,csv}，
 #   只留 <M>_transport.png + 每温度 CSV + <M>_params_<T>K.csv。

@@ -12,6 +12,7 @@
 import glob
 import os
 import re
+import shutil
 import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -2793,10 +2794,6 @@ def main():
           % OUTDIR_NAME)
 
 
-if __name__ == "__main__":
-    main()
-
-
 def _add_defect_doping(dop, cwd, is_2d, scale=1.0):
     """[0041] 缺陷平衡净浓度 -> 追加到 AMSET 掺杂（cm^-3）；返回 (dop, 记录)。"""
     if not _HAS_KC:
@@ -2815,3 +2812,7 @@ def _add_defect_doping(dop, cwd, is_2d, scale=1.0):
         print("[OK] DEFECT_DOPING：顶点 %s %s 净浓度 %.3e %s（E_F = %s eV，%s K）-> AMSET doping %.3e cm^-3"
               % (p["vertex"], p["carrier_type"], p["net"], p["unit"], p["E_F_eq_eV"], p["T_K"], v))
     return dop, {"points": pts, "notes": notes, "skill_rev": _SKILL_REV}
+
+
+if __name__ == "__main__":
+    main()
