@@ -126,11 +126,14 @@ templates/` 里旧的同名模板（否则旧集群的 partition/qos 会盖住�
   `kappa_summary.json`（附 `cutoff_selection`）。
 
 三判据：① CV 误差 ≤ min + 1·SE（`CUT3_CV_1SE_MULT`）；② 候选 ≤ 数据能确定的最大截断
-（`CUT3_STABILITY_THR` 判最外可确定壳层）；③ 相邻档 300 K 面内 κ 变化 ≤ max(5%,
-两误差平方和根)（`CUT3_KAPPA_TOL_PCT`）。三判据都满足取**最小**截断
-（`CUT3_PICK=smallest`，总则）；κ 到能确定边界还在变 → 报最大可确定档并注明
-「更长程三阶相互作用当前数据无法确定」，不硬撑更大截断。`CUT3_PICK=largest` 是
-Mg8C120 口径（平就取能确定范围内最大）。方程数/参数数 < 3 的档标 `insufficient`，先补帧。
+（`CUT3_STABILITY_THR` 判最外可确定壳层）；③ κ 平台 = **连续稳定区间**：相邻档 300 K
+κ 变化与区间起点到区间内各档的累计变化都 ≤ max(5%, 两误差平方和根)
+（`CUT3_KAPPA_TOL_PCT`，有 xx/yy/zz 时逐分量）。在平台区间里取**最小**截断
+（`CUT3_PICK=smallest`，总则）或区间内最大（`CUT3_PICK=largest`，Mg8C120 口径）。
+平台之后的跳变（例：4.97–6.29 Å 平、7.74 Å 跌 17.7%）只写进
+`cutoff_selection.json` 的 `after_plateau`，不采用；多段平台取最长的一段。
+找不到任何平台（κ 一路在变）→ `not_converged`，报最大可确定档并注明
+「更长程三阶相互作用当前数据无法确定」。方程数/参数数 < 3 的档标 `insufficient`，先补帧。
 
 本地单测：`python3 tests/suite_kl_cut3.py`（壳层/候选/判据/选择，不碰集群）。
 ## 环境（务必核对）

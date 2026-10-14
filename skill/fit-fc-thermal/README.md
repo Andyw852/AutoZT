@@ -467,9 +467,13 @@ writing `kappa_summary.json`:
   per-shell stability (`cut <= stable_upper_cut`) and the kappa plateau
   (`CUT3_KAPPA_TOL_PCT`) - via `cut3_select.select_cutoff`, writing
   `cutoff_selection.json` and promoting the chosen cutoff's kappa to the
-  top-level `kappa_summary.json` (`chosen_cutoff_A`).  `CUT3_PICK = smallest`
-  (default) takes the smallest cutoff satisfying all three; `not_converged`
-  reports the largest data-determined cutoff.  A phono3py fit writes per-cut
+  top-level `kappa_summary.json` (`chosen_cutoff_A`).  The kappa plateau is a
+  contiguous stable interval: adjacent changes and the cumulative change from
+  the interval start both stay within the tolerance; a jump after the interval
+  (e.g. flat 4.97-6.29 A, -17.7 % at 7.74 A) is reported in `after_plateau` and
+  not used, and with several plateaus the longest wins.  `CUT3_PICK = smallest`
+  (default) takes the smallest cutoff of that interval, `largest` its largest;
+  `not_converged` (no plateau at all) reports the largest data-determined cutoff.  A phono3py fit writes per-cut
   dirs too (no bootstrap, so only the kappa plateau discriminates).  With
   `CUT3_SCAN = off` (or a hiphive fit, which does not write per-cut dirs yet) it
   falls back to the nominal cutoff.

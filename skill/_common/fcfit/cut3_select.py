@@ -39,6 +39,28 @@ def _plateau_pair(a, b, kappa_tol_pct, floor):
     return abs(kb - ka) <= tol + 1e-15
 
 
+def _plateau_runs(usable, pair_ok, kappa_tol_pct, floor):
+    """连续稳定区间 [(i, j), ...]（usable 下标，j > i）。
+
+    先按相邻判据 pair_ok 切出最长的连续段，再把每段起点右移到"与段内其后每一档
+    累计偏差都在容差内"的第一个位置——相邻都 <5% 但一路同向漂移的段不会整段算平。"""
+    runs, i, n = [], 0, len(usable)
+    while i < n - 1:
+        if not pair_ok[i]:
+            i += 1
+            continue
+        j = i + 1
+        while j < n - 1 and pair_ok[j]:
+            j += 1
+        for k in range(i, j):
+            if all(_plateau_pair(usable[k], usable[m], kappa_tol_pct, floor)
+                   for m in range(k + 1, j + 1)):
+                runs.append((k, j))
+                break
+        i = j
+    return runs
+
+
 def select_cutoff(records, kappa_tol_pct=5.0, se_mult=1.0, stability_thr=0.3,
                   pick="smallest", component_floor=0.1):
     """按三判据自动选最小可行截断。records 是每个候选截断一条 dict：
@@ -54,8 +76,11 @@ def select_cutoff(records, kappa_tol_pct=5.0, se_mult=1.0, stability_thr=0.3,
         kappa             300 K 面内 κ
         kappa_err         κ 的 bootstrap 误差棒（判据③；缺省 0）
 
-    pick：三判据都满足的截断有多个时，"smallest"（默认，总则：取最小）或
-          "largest"（Mg8C120 口径：平的就取能确定范围里最大的那个）。
+    判据③（κ 平台）找的是【连续稳定区间】：相邻 Δκ 与区间内累计 Δκ 都在容差内的一段
+    连续截断；区间之后的跳变只记进 report["after_plateau"]，不影响选择。
+
+    pick：平台区间里满足判据的截断有多个时，"smallest"（默认，总则：取区间内最小）或
+          "largest"（Mg8C120 口径：取区间内能确定的最大截断）。
 
     返回 (chosen_cut, report)：chosen_cut 为 None 表示无可用截断。report 给出
     每个截断是否 data_ok / stable_ok / err_ok / plateau_ok 与最终判定依据。
@@ -113,38 +138,43 @@ def select_cutoff(records, kappa_tol_pct=5.0, se_mult=1.0, stability_thr=0.3,
         else:
             err_ok = {r["cut"] for r in usable}
 
-    # 判据③：从某截断起到最外侧，相邻 Δκ ≤ max(5%·|κ|, 两误差的平方和根) 视为平台。
-    # ★ 最外侧可用截断**没有更大的可比对象**，不算"平台证据" —— 那正是 user 说的
-    #   "κ 到能确定的边界还在变"，必须判 not_converged 而不是假称收敛。
-    plateau = set()
-    for i, r in enumerate(usable):
-        pairs = list(zip(usable[i:], usable[i + 1:]))
-        if not pairs:
-            continue
-        ok = True
-        for a, b in pairs:
-            if not _plateau_pair(a, b, kappa_tol_pct, component_floor):
-                ok = False
-                break
-        if ok:
-            plateau.add(r["cut"])
+    # 判据③：κ 平台 = 一段【连续稳定区间】（2026-10-14 用户定）。
+    #   相邻两档 Δκ ≤ max(tol·|κ|, 误差) 的连续档组成平台段；段内再从小往大找起点：
+    #   起点与段内其后每一档的【累计】偏差也都在容差内（防小步慢漂）。
+    #   平台段之后的跳变（如 6.29→7.74 −17.7%：长程三阶项数据定不住）只写进报告，
+    #   不再像旧规则那样要求"一直平到最外侧"而把整条判成 not_converged、退回最外档。
+    #   有多段平台时取最长的一段（档数相同取截断小的一段）；单独一档不构成平台。
+    # κ 缺失（该档 BTE 没算出来）不算稳定——旧规则把 None 当"平"放行
+    pair_ok = [a["kappa"] is not None and b["kappa"] is not None
+               and _plateau_pair(a, b, kappa_tol_pct, component_floor)
+               for a, b in zip(usable, usable[1:])]
+    runs = _plateau_runs(usable, pair_ok, kappa_tol_pct, component_floor)
+    runs.sort(key=lambda ij: (-(ij[1] - ij[0]), ij[0]))
+    plateau, run_used = set(), None
+    for i, j in runs:
+        pts = {r["cut"] for r in usable[i:j + 1]}
+        if pts & err_ok:
+            plateau, run_used = pts, (i, j)
+            break
 
     for r in recs:
         r["err_ok"] = r["cut"] in err_ok
         r["plateau_ok"] = r["cut"] in plateau
 
     inter = sorted(err_ok & plateau)
+    after = []
     if inter:
         if str(pick).lower() == "largest":
-            # Mg8C120 口径：κ 平就取【能确定范围内】最大的截断 —— 条件是"倒数第二个
-            # 可用截断也在平台上"（说明趋势一路平到能确定的边界），否则退回 plateau 起点。
-            if len(usable) >= 2 and usable[-2]["cut"] in plateau:
-                chosen = usable[-1]["cut"]
-            else:
-                chosen = inter[-1]
+            chosen = inter[-1]     # Mg8C120 口径：平台区间内能确定的最大截断
         else:
-            chosen = inter[0]      # 总则：取满足三判据的最小截断
+            chosen = inter[0]      # 总则：取平台区间内满足判据的最小截断
         status = "ok"
+        _end = usable[run_used[1]]
+        for r in usable[run_used[1] + 1:]:
+            if _end["kappa"] and r["kappa"] is not None:
+                after.append({"cut": r["cut"], "kappa": r["kappa"],
+                              "change_pct_vs_plateau_end":
+                                  round(100.0 * (r["kappa"] - _end["kappa"]) / abs(_end["kappa"]), 2)})
     elif usable:
         chosen, status = usable[-1]["cut"], "not_converged"
     else:
@@ -156,8 +186,12 @@ def select_cutoff(records, kappa_tol_pct=5.0, se_mult=1.0, stability_thr=0.3,
         "criteria": {"rel_err_1se": ("train_rel_err <= min(train_rel_err) + %g*SE"
                                      "（err_kind=held-out 时才启用）" % float(se_mult)),
                      "stability": "sigma/|mean| < %g" % float(stability_thr),
-                     "plateau": "相邻 Δκ <= max(%g%%, sqrt(err_i^2+err_j^2))"
-                                % float(kappa_tol_pct)},
+                     "plateau": ("连续稳定区间：相邻 Δκ 且起点到区间内各档的累计 Δκ "
+                                 "<= max(%g%%, sqrt(err_i^2+err_j^2))" % float(kappa_tol_pct))},
+        "plateau_runs": [[usable[i]["cut"], usable[j]["cut"]] for i, j in sorted(runs)],
+        "plateau_interval": ([usable[run_used[0]]["cut"], usable[run_used[1]]["cut"]]
+                             if run_used else None),
+        "after_plateau": after,
         "records": [
             {"cut": r["cut"], "ratio": r["ratio"],
              "train_rel_err": r["train_rel_err"], "train_rel_se": r["train_rel_se"],
@@ -171,7 +205,9 @@ def select_cutoff(records, kappa_tol_pct=5.0, se_mult=1.0, stability_thr=0.3,
         "chosen_cut": chosen,
         "pick": str(pick).lower(),
         "kappa_tol_pct": float(kappa_tol_pct),
-        "reason": ("判据②③同时满足的最小截断 = %.2f Å%s" % (
+        "reason": ("κ 平台区间 %.2f–%.2f Å，取%s截断 = %.2f Å%s" % (
+                       usable[run_used[0]]["cut"], usable[run_used[1]]["cut"],
+                       "最大" if str(pick).lower() == "largest" else "最小",
                        chosen,
                        "" if err_gate else "（判据①为 in-sample 残差，已跳过否决）")
                    if status == "ok"
@@ -181,6 +217,10 @@ def select_cutoff(records, kappa_tol_pct=5.0, se_mult=1.0, stability_thr=0.3,
                          if status == "not_converged"
                          else "没有数据量/稳定性达标的截断：需补帧或加大位移")),
     }
+    if after:
+        report["reason"] += "；平台之后 %s 跳变（%s），长程三阶项数据定不住，未采用" % (
+            "、".join("%.2f Å" % a["cut"] for a in after),
+            "、".join("%+.1f%%" % a["change_pct_vs_plateau_end"] for a in after))
     if recs and not report["stability_gate_applied"]:
         report["reason"] += ("；未做 bootstrap 重拟合（CUT3_BOOTSTRAP=0），稳定性判据②"
                              "未参与，只按 κ 平台判断")

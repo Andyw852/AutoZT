@@ -302,6 +302,31 @@ def test_cut3_select():
     check("超 stable_upper_cut 的档 stable_ok=False", by[4.9]["stable_ok"] is False)
     _c2, rep2 = cs.select_cutoff([dict(recs[0], kappa=3.0), dict(recs[1], kappa=2.0)])
     check("κ 未平台 -> not_converged", rep2["status"] == "not_converged", rep2["status"])
+    # 稳定区间（2026-10-14）：平台后最外档跳变不再把整条判 not_converged、退回最外档
+    sv = [{"cut": c, "ratio": 10, "stability_measured": False, "kappa": k,
+           "kappa_vec": [k, k, k]}
+          for c, k in ((4.18, 119.49), (4.97, 124.36), (5.68, 127.49),
+                       (6.29, 126.22), (7.74, 103.89))]
+    cs1, rs1 = cs.select_cutoff(sv)
+    check("稳定区间 4.97–6.29：smallest 取 4.97，7.74 跳变不采用",
+          cs1 == 4.97 and rs1["status"] == "ok" and rs1["plateau_interval"] == [4.97, 6.29]
+          and [x["cut"] for x in rs1["after_plateau"]] == [7.74],
+          "%s %s %s" % (cs1, rs1["status"], rs1.get("plateau_interval")))
+    cs2, _ = cs.select_cutoff(sv, pick="largest")
+    check("稳定区间 largest 取区间内最大 6.29（不是 7.74）", cs2 == 6.29, str(cs2))
+    two = [{"cut": c, "ratio": 10, "stability_measured": False, "kappa": k}
+           for c, k in ((4.0, 10.0), (4.5, 10.2), (5.0, 13.0), (5.5, 13.1), (6.0, 13.2))]
+    cs3, rs3 = cs.select_cutoff(two)
+    check("两段平台取最长的一段（5.0–6.0）", cs3 == 5.0 and rs3["plateau_interval"] == [5.0, 6.0],
+          "%s %s" % (cs3, rs3.get("plateau_interval")))
+    drift = [{"cut": c, "ratio": 10, "stability_measured": False, "kappa": k}
+             for c, k in ((4.0, 10.0), (4.5, 10.4), (5.0, 10.8), (5.5, 11.2))]
+    cs4, _ = cs.select_cutoff(drift)
+    check("相邻都 <5% 但累计漂移：起点右移到 5.0", cs4 == 5.0, str(cs4))
+    miss = [{"cut": c, "ratio": 10, "stability_measured": False, "kappa": k}
+            for c, k in ((4.0, 10.0), (4.5, None), (5.0, 10.1))]
+    _c5, rs5 = cs.select_cutoff(miss)
+    check("中间档 κ 缺失不算平台", rs5["status"] == "not_converged", rs5["status"])
     c3, rep3 = cs.select_cutoff([dict(recs[0], ratio=1.0)])
     check("数据不足 -> no_usable_cutoff",
           c3 is None and rep3["status"] == "no_usable_cutoff", str(rep3["status"]))

@@ -212,8 +212,11 @@ def select_cutoff(records, kappa_tol_pct=5.0, se_mult=1.0, stability_thr=0.3,
         kappa_diag        300 K 各对角元 [xx, yy] 或 [xx, yy, zz]（可选；给出时判据③
                           逐分量比较、取最严的 —— 3D 的 zz 往往最难收敛，只看面内会漏）
 
-    pick：三判据都满足的截断有多个时，"smallest"（默认，总则：取最小）或
-          "largest"（Mg8C120 口径：平的就取能确定范围里最大的那个）。
+    判据③（κ 平台）找的是【连续稳定区间】：相邻 Δκ 与区间内累计 Δκ 都在容差内的一段
+    连续截断；区间之后的跳变只记进 report["after_plateau"]，不影响选择。
+
+    pick：平台区间里满足判据的截断有多个时，"smallest"（默认，总则：取区间内最小）或
+          "largest"（Mg8C120 口径：取区间内能确定的最大截断）。
 
     返回 (chosen_cut, report)：chosen_cut 为 None 表示无可用截断。report 给出
     每个截断是否 data_ok / stable_ok / err_ok / plateau_ok 与最终判定依据。
@@ -265,58 +268,64 @@ def select_cutoff(records, kappa_tol_pct=5.0, se_mult=1.0, stability_thr=0.3,
         else:
             err_ok = {r["cut"] for r in usable}
 
-    # 判据③：从某截断起到最外侧，相邻 Δκ ≤ max(5%·|κ|, 两误差的平方和根) 视为平台。
-    # ★ 最外侧可用截断**没有更大的可比对象**，不算"平台证据" —— 那正是 user 说的
-    #   "κ 到能确定的边界还在变"，必须判 not_converged 而不是假称收敛。
-    plateau = set()
-    for i, r in enumerate(usable):
-        pairs = list(zip(usable[i:], usable[i + 1:]))
-        if not pairs:
-            continue
-        ok = True
-        for a, b in pairs:
-            da, db = a.get("kappa_diag"), b.get("kappa_diag")
-            if da is None or db is None:
-                # 无对角分量时回退标量 kappa（旧行为）
-                ka, kb = a["kappa"], b["kappa"]
-                if ka is None or kb is None:
-                    continue
-                tol = max(float(kappa_tol_pct) / 100.0 * abs(ka),
-                          math.hypot(a["kappa_err"], b["kappa_err"]))
-                if abs(kb - ka) > tol + 1e-15:
-                    ok = False
-                    break
+    # 判据③：κ 平台 = 一段【连续稳定区间】（2026-10-14 用户定，与 _common/fcfit/
+    #   cut3_select.py 同一规则）：相邻 Δκ ≤ max(tol·|κ|, 误差) 的连续档组成平台段，
+    #   段内起点与其后每一档的累计偏差也须在容差内；平台段之后的跳变只记进报告，
+    #   不再要求"一直平到最外侧"。多段取最长（同长取截断小的）；单独一档不构成平台。
+    def _pair(a, b):
+        da, db = a.get("kappa_diag"), b.get("kappa_diag")
+        if da is None or db is None:
+            ka, kb = a["kappa"], b["kappa"]
+            if ka is None or kb is None:
+                return False           # 该档 κ 没算出来，不算稳定
+            tol = max(float(kappa_tol_pct) / 100.0 * abs(ka),
+                      math.hypot(a["kappa_err"], b["kappa_err"]))
+            return abs(kb - ka) <= tol + 1e-15
+        for k in range(min(len(da), len(db))):
+            ka, kb = float(da[k]), float(db[k])
+            if abs(ka) <= 1e-12:
                 continue
-            for k in range(min(len(da), len(db))):
-                ka, kb = float(da[k]), float(db[k])
-                if abs(ka) <= 1e-12:
-                    continue
-                tol = max(float(kappa_tol_pct) / 100.0 * abs(ka),
-                          math.hypot(a["kappa_err"], b["kappa_err"]))
-                if abs(kb - ka) > tol + 1e-15:
-                    ok = False
-                    break
-            if not ok:
+            tol = max(float(kappa_tol_pct) / 100.0 * abs(ka),
+                      math.hypot(a["kappa_err"], b["kappa_err"]))
+            if abs(kb - ka) > tol + 1e-15:
+                return False
+        return True
+
+    runs, i, n = [], 0, len(usable)
+    while i < n - 1:
+        if not _pair(usable[i], usable[i + 1]):
+            i += 1
+            continue
+        j = i + 1
+        while j < n - 1 and _pair(usable[j], usable[j + 1]):
+            j += 1
+        for k in range(i, j):
+            if all(_pair(usable[k], usable[m]) for m in range(k + 1, j + 1)):
+                runs.append((k, j))
                 break
-        if ok:
-            plateau.add(r["cut"])
+        i = j
+    plateau, run_used = set(), None
+    for i, j in sorted(runs, key=lambda ij: (-(ij[1] - ij[0]), ij[0])):
+        pts = {r["cut"] for r in usable[i:j + 1]}
+        if pts & err_ok:
+            plateau, run_used = pts, (i, j)
+            break
 
     for r in recs:
         r["err_ok"] = r["cut"] in err_ok
         r["plateau_ok"] = r["cut"] in plateau
 
     inter = sorted(err_ok & plateau)
+    after = []
     if inter:
-        if str(pick).lower() == "largest":
-            # Mg8C120 口径：κ 平就取【能确定范围内】最大的截断 —— 条件是"倒数第二个
-            # 可用截断也在平台上"（说明趋势一路平到能确定的边界），否则退回 plateau 起点。
-            if len(usable) >= 2 and usable[-2]["cut"] in plateau:
-                chosen = usable[-1]["cut"]
-            else:
-                chosen = inter[-1]
-        else:
-            chosen = inter[0]      # 总则：取满足三判据的最小截断
+        chosen = inter[-1] if str(pick).lower() == "largest" else inter[0]
         status = "ok"
+        _end = usable[run_used[1]]
+        for r in usable[run_used[1] + 1:]:
+            if _end["kappa"] and r["kappa"] is not None:
+                after.append({"cut": r["cut"], "kappa": r["kappa"],
+                              "change_pct_vs_plateau_end":
+                                  round(100.0 * (r["kappa"] - _end["kappa"]) / abs(_end["kappa"]), 2)})
     elif usable:
         chosen, status = usable[-1]["cut"], "not_converged"
     else:
@@ -327,8 +336,12 @@ def select_cutoff(records, kappa_tol_pct=5.0, se_mult=1.0, stability_thr=0.3,
         "criteria": {"rel_err_1se": ("train_rel_err <= min(train_rel_err) + %g*SE"
                                      "（err_kind=held-out 时才启用）" % float(se_mult)),
                      "stability": "sigma/|mean| < %g" % float(stability_thr),
-                     "plateau": "相邻 Δκ <= max(%g%%, sqrt(err_i^2+err_j^2))"
-                                % float(kappa_tol_pct)},
+                     "plateau": ("连续稳定区间：相邻 Δκ 且起点到区间内各档的累计 Δκ "
+                                 "<= max(%g%%, sqrt(err_i^2+err_j^2))" % float(kappa_tol_pct))},
+        "plateau_runs": [[usable[i]["cut"], usable[j]["cut"]] for i, j in sorted(runs)],
+        "plateau_interval": ([usable[run_used[0]]["cut"], usable[run_used[1]]["cut"]]
+                             if run_used else None),
+        "after_plateau": after,
         "records": [
             {"cut": r["cut"], "ratio": r["ratio"],
              "train_rel_err": r["train_rel_err"], "train_rel_se": r["train_rel_se"],
@@ -340,7 +353,9 @@ def select_cutoff(records, kappa_tol_pct=5.0, se_mult=1.0, stability_thr=0.3,
             for r in recs],
         "chosen_cut": chosen,
         "pick": str(pick).lower(),
-        "reason": ("判据②③同时满足的最小截断 = %.2f Å%s" % (
+        "reason": ("κ 平台区间 %.2f–%.2f Å，取%s截断 = %.2f Å%s" % (
+                       usable[run_used[0]]["cut"], usable[run_used[1]]["cut"],
+                       "最大" if str(pick).lower() == "largest" else "最小",
                        chosen,
                        "" if err_gate else "（判据①为 in-sample 残差，已跳过否决）")
                    if status == "ok"
@@ -350,6 +365,10 @@ def select_cutoff(records, kappa_tol_pct=5.0, se_mult=1.0, stability_thr=0.3,
                          if status == "not_converged"
                          else "没有数据量/稳定性达标的截断：需补帧或加大位移")),
     }
+    if after:
+        report["reason"] += "；平台之后 %s 跳变（%s），长程三阶项数据定不住，未采用" % (
+            "、".join("%.2f Å" % x["cut"] for x in after),
+            "、".join("%+.1f%%" % x["change_pct_vs_plateau_end"] for x in after))
     return chosen, report
 
 def fc3_shell_index(cell, frac, tol=0.05, r_max=None):
