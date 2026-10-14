@@ -52,17 +52,22 @@ class SummaryTests(unittest.TestCase):
 
 class AutoAdvanceSkipTests(unittest.TestCase):
     def test_skip_message_names_reason(self):
+        # [267a7fd] 推进判定改逐材料：显式 true 才推进（即使全局关）、显式 false 拦、
+        # 没写键回退全局缺省。这里令全局缺省为关，验证「没写键」和「显式 false」两种
+        # 跳过都要点名原因，而显式 true 的材料即使全局关也被推进、不出现在跳过名单里。
         data = {"types": [{"key": "ke-dft-cpu", "materials": [
-            _mat("Si_diamond", {}, ["PREP"]),
-            _mat("Mo2S3", {"auto_advance": False}, ["PREP"]),
+            _mat("Si_diamond", {}, ["PREP"]),                          # 没写键 → 回退全局关 → 拦
+            _mat("Mo2S3", {"auto_advance": False}, ["PREP"]),          # 显式 false → 拦
+            _mat("GaAs", {"auto_advance": True}, ["PREP"]),            # 显式 true → 推，不跳过
         ]}]}
         out = []
         with patch.object(wf, "_SkillGate", lambda cfg, data: None), \
                 patch("builtins.print", lambda *a, **k: out.append(" ".join(str(x) for x in a))):
-            wf.auto_advance({"auto_advance": True}, data)
+            wf.auto_advance({"auto_advance": False}, data)
         msg = "\n".join(out)
         self.assertIn("Si_diamond[ke-dft-cpu]（setting.yaml 没写 auto_advance）", msg)
         self.assertIn("Mo2S3[ke-dft-cpu]（auto_advance: false）", msg)
+        self.assertNotIn("GaAs[ke-dft-cpu]", msg)
         self.assertNotIn("项目级 auto_advance: false）：", msg)
 
 
