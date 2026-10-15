@@ -49,6 +49,10 @@ ODP_FMIN_THZ = 0.5                   # 低于它的光学模不算（虚频/太�
 ODP_MODES = "auto"
 # 单点数上限（1 + 2×模数）。大胞光学模多，超过就报错，确认后在 step.conf 调大。
 ODP_MAX_JOBS = 40
+# [kz=1] 2D 真空方向 kz：reduce（出厂）= 把 S7 的三层降到 1（能带沿 kz 平坦，LS 实测带边 ±1 eV 内
+#   |dE| ~0.07 meV；S7.2/S8.21 只在谷 k 点 kz=0 取值，多层纯属重复，且耗时/内存 ∝ kz 层数）；
+#   keep = 照抄 S7 网格不动（正在跑/已算完的材料、或真空薄且层间耦合不可忽略时用）。3D 无真空方向，本项无效。
+ODP_KZ_VACUUM = "reduce"
 
 SPEC = {
     "ODP_DISP_A": (None, "float"),
@@ -58,13 +62,14 @@ SPEC = {
     "ODP_FMIN_THZ": (None, "float"),
     "ODP_MODES": (None, "str"),
     "ODP_MAX_JOBS": (None, "int"),
+    "ODP_KZ_VACUUM": (None, "str"),
 }
 # =================================================================================================
 
 
 def apply_conf(cwd):
     """step.conf 覆盖写进全局参数，返回 {键: 值}（写进 manifest）。"""
-    global ODP_DISP_A, ODP_POLAR, ODP_POLAR_TOL, ODP_POLAR_Z_TOL, ODP_FMIN_THZ, ODP_MODES, ODP_MAX_JOBS
+    global ODP_DISP_A, ODP_POLAR, ODP_POLAR_TOL, ODP_POLAR_Z_TOL, ODP_FMIN_THZ, ODP_MODES, ODP_MAX_JOBS, ODP_KZ_VACUUM
     got = {}
     if (Path(cwd) / stepconf.CONF_NAME).is_file():
         p = stepconf.load(SPEC, OUTDIR_NAME, str(cwd), strict=False)
@@ -77,6 +82,9 @@ def apply_conf(cwd):
         sys.exit("[ERROR] ODP_POLAR=%r 无效，只允许 exclude / include" % ODP_POLAR)
     if not (0.0 < float(ODP_DISP_A) <= 0.05):
         sys.exit("[ERROR] ODP_DISP_A=%r 不合理（应在 (0, 0.05] Å；太大出线性区，太小被本征值噪声淹没）" % ODP_DISP_A)
+    ODP_KZ_VACUUM = str(ODP_KZ_VACUUM).strip().lower()
+    if ODP_KZ_VACUUM not in ("reduce", "keep"):
+        sys.exit("[ERROR] ODP_KZ_VACUUM=%r 无效，只允许 reduce / keep" % ODP_KZ_VACUUM)
     return got
 
 
@@ -264,6 +272,22 @@ def main():
         write_poscar(d / "POSCAR", st)
         for n in ("KPOINTS", "POTCAR"):
             shutil.copyfile(und / n, d / n)
+        if dim == "2d" and ODP_KZ_VACUUM == "reduce":
+            # [kz=1] 2D 有真空层，沿 kz 能带几乎完全平坦（LS 实测带边 ±1 eV 内 |dE| ~0.07 meV，
+            #   远小于 5 meV 判据与最弱耦合对应的 0.5 meV 灵敏度）；而 S7.2/S8.21 只在谷 k 点
+            #   （kz=0）取本征值，真空方向的多层 kz 纯属重复计算，且耗时/内存 ∝ kz 层数。
+            #   把真空方向降到 1（面内网格保持与 S7/S8.2 一致）。S8.21 的 check_inputs 已放行
+            #   「面内相同、仅真空方向=1」这一种差异；3D 不动（没有真空方向）。
+            _kp = (d / "KPOINTS").read_text(encoding="utf-8", errors="ignore").splitlines()
+            for _i, _ln in enumerate(_kp[1:6], 1):
+                _f = _ln.split()
+                if len(_f) == 3 and all(x.lstrip("+-").isdigit() for x in _f):
+                    if _f[2] != "1":
+                        _f[2] = "1"
+                        _kp[_i] = "  " + "  ".join(_f)
+                        (d / "KPOINTS").write_text("\n".join(_kp) + "\n",
+                                                   encoding="utf-8", newline="\n")
+                    break
         lines = [("SYSTEM = %s odp %s" % (cwd.name, name)) if ln.strip().upper().startswith("SYSTEM") else ln
                  for ln in incar_s7.splitlines()]
         (d / "INCAR").write_text("\n".join(lines) + "\n", encoding="utf-8", newline="\n")
@@ -301,6 +325,8 @@ def main():
         "inputs_from": {"dir": "%s/undeformed" % DEFORM_DIR,
                         "sha256": {n: _sha(und / n) for n in ("INCAR", "KPOINTS", "POTCAR", "POSCAR")}},
         "s5_freq_THz": [float(x) for x in sorted(freqs)],
+        "kz_vacuum_reduced": (dim == "2d" and ODP_KZ_VACUUM == "reduce"),   # [kz=1] 2D：真空方向 kz 已由 S7 的三层降到 1
+        "kz_vacuum_mode": ODP_KZ_VACUUM,
         "notes": notes,
     }
     (out / MANIFEST).write_text(json.dumps(manifest, ensure_ascii=False, indent=1), encoding="utf-8")

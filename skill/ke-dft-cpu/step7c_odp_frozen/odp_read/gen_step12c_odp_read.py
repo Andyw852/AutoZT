@@ -43,6 +43,8 @@ _SKILL_REV = "2026-10-12-0036"   # [0036] 三维（不对齐、自动/手填谷�
 VALLEY_SPEC = {"DP_OPTICAL_VALLEYS_E": ("", "str"), "DP_OPTICAL_VALLEYS_H": ("", "str"),
                "ODP_VALLEY_WINDOW_EV": (None, "float")}     # [0036] 3D 谷表（材料 step.conf，与 S8 同名同义）
 REF_TOL_EV = 0.005            # odp-ref 与 S7 undeformed 同一 k、同一带的本征值差上限
+REF_TOL_WARN_EV = 1e-4        # 更严告警（0.1 meV）：超过就提示。多半是两台机器的 VASP 编译版本不同
+                              #   （如 AOCC/AOCL vs Intel/MKL）；D=(E₊−E₋)/2u、u≤0.01 Å，会放大 ~50–100×
 SNAP_TOL_INVA = 0.02          # 旧 S8.2（没有 k_S7）时把 k_grid 吸附到本步网格的容差（Å⁻¹）
 SHIFT_WARN_EV = 0.1           # 带边移动超过它：出线性区，建议减小 ODP_DISP_A
 FREQ_WARN = 0.02              # S5 现在的频率与生成时相差超过它 -> 告警
@@ -140,6 +142,15 @@ class Config(object):
         return self.eig[spin][i]
 
 
+def _kpts_grid(text):
+    """KPOINTS 的网格行（生成方案的 n1 n2 n3）-> [int,int,int]；取不到返回 None。"""
+    for ln in (text or "").splitlines()[1:6]:
+        f = ln.split()
+        if len(f) == 3 and all(x.lstrip("+-").isdigit() for x in f):
+            return [int(x) for x in f]
+    return None
+
+
 def check_inputs(cwd, man):
     """S7.2 生成时照抄的 S7 undeformed 输入，与 S7 现在的输入比（INCAR 只比物理键）。"""
     und = cwd / DEFORM_DIR / "undeformed"
@@ -151,8 +162,22 @@ def check_inputs(cwd, man):
         a, b = und / n, ref / n
         if not a.is_file():
             bad.append("%s/undeformed/%s 不在了" % (DEFORM_DIR, n))
-        elif not b.is_file() or kc._input_key(n, a.read_text(errors="ignore")) != kc._input_key(n, b.read_text(errors="ignore")):
+            continue
+        if not b.is_file():
             bad.append(n)
+            continue
+        _ta, _tb = a.read_text(errors="ignore"), b.read_text(errors="ignore")
+        if kc._input_key(n, _ta) == kc._input_key(n, _tb):
+            continue
+        # [kz=1] 2D：放行「面内网格相同、仅真空方向 kz 被降到 1」这一种差异（见 gen_step9c_odp.py）。
+        #   真空方向能带平坦已由 LS 实测确认（带边 ±1 eV 内 |dE| ~0.07 meV）。
+        if n == "KPOINTS" and str((man or {}).get("dim")) == "2d":
+            _ga, _gb = _kpts_grid(_ta), _kpts_grid(_tb)
+            if _ga and _gb and _ga[:2] == _gb[:2] and _gb[2] == 1:
+                print("[..] KPOINTS：面内 %s 一致，真空方向 %d -> 1（kz=1 优化）放行"
+                      % (_gb[:2], _ga[2]))
+                continue
+        bad.append(n)
     if (und / "INCAR").is_file():
         ka = dict(kc._input_key("INCAR", (und / "INCAR").read_text(errors="ignore")))
         kb = dict(kc._input_key("INCAR", (ref / "INCAR").read_text(errors="ignore")))
@@ -236,6 +261,17 @@ def carrier_params(car, valleys, cfg, man, s7ref, warns):
             for k in ks:
                 e_a = float(ref.bands(k, spin)[band])
                 e_b = float(s7ref.bands(k, spin)[band])
+                # [kz=1] kz 被降过时（odp-ref 用 N1 N2 1、S7 undeformed 用 N1 N2 3）本身就有约
+                #   0.07 meV 的网格差（LS 实测），阈值放宽一倍，免得误报。
+                _wr = REF_TOL_WARN_EV * (2.0 if (man or {}).get("kz_vacuum_reduced") else 1.0)
+                if _wr < abs(e_a - e_b) <= REF_TOL_EV:
+                    warns.append("%s 谷 %s：odp-ref vs S7 undeformed 的带 %d 差 %.3f meV（> %.1f meV 严告警，"
+                                 "仍 < %.0f meV 判据）%s—— 若两者在不同机器/不同 VASP 编译版本上跑，"
+                                 "D=(E₊−E₋)/2u 会放大该偏差几十倍，建议同机重算"
+                                 % (car, v["label"], band, 1000 * abs(e_a - e_b),
+                                    1000 * _wr, 1000 * REF_TOL_EV,
+                                    "（kz=1 网格本身贡献约 0.07 meV，阈值已放宽）"
+                                    if (man or {}).get("kz_vacuum_reduced") else ""))
                 if abs(e_a - e_b) > REF_TOL_EV:
                     _die("%s 谷 %s：odp-ref 的带 %d 能量 %.4f eV ≠ S7 undeformed 的 %.4f eV（差 %.1f meV > %.0f）——"
                          "两边输入/结构不一致，retry S7.2" % (car, v["label"], band, e_a, e_b, 1000 * abs(e_a - e_b),
