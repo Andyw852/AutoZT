@@ -860,8 +860,8 @@ def vacuum_axis_in_primitive(cell, cart_axis):
     primitive_matrix 可以任意排列原胞基矢（生产 MoS₂ 的 a1=(0,0,-25)，真空在第 0 基矢）。
     band_path_2d / ZA 方向判据索引的都是"原胞基矢"，把 POSCAR 的 Cartesian 下标直接传进去
     会取错方向 —— 这是 kl 链方向 bug 的根源。cart_axis=None 退化为"最长基矢即真空"。
-    单一真源：kl_fc_backends._vacuum_axis_in_primitive 与
-    gen_step5.1_plot_phonon._band_path 都调它（2026-09-21）。
+    gen_step5.1_plot_phonon._band_path 等调用它（2026-09-21；原来的调用方 kl_fc_backends 已删，
+    共享引擎用的是同义的 za_2d.vacuum_axis_in_primitive）。
     """
     import numpy as np
     C = np.asarray(cell, float)

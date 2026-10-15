@@ -18,7 +18,7 @@ NAC 规则（按用户要求）：
   · 目录里有 BORN（材料考虑了 NAC）→ 画两张，命名区分：band_nac.* 和 band_nonac.*；
   · 没有 BORN → 只画 band_nonac.*。
 注意：2D 材料的 3D-NAC 在近 Γ 会有 LO-TO 假象，两张对照正好能看出 NAC 的影响
-（虚频闸判据对 2D 用的是无 NAC，见 kl_fc_backends._stability_gate）。
+（虚频闸判据对 2D 用的是无 NAC，见 _common/fcfit/fc_fit_driver._stability_gate）。
 
 产物（全部写入 step5_phonon_plot/）：
   band_nac.png/yaml、band_nonac.png/yaml（视有无 BORN）、phonon_plot_summary.json（done_marker）。
