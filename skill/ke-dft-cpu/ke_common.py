@@ -2488,9 +2488,12 @@ def symmetry_gate(structure, atol=TAU_TOL, symprec=AMSET_SYMPREC, desym_fix=Fals
         desym_fix / ncl / symprec / op_source
         reason          : str
 
-    裁决：
-      · ncl（SOC）且操作集里有 TR 操作 -> 必须全网格（AMSET 的 ncl 分支对 TR 操作不取共轭、
-        不乘 iσ_y，与相位无关、补丁也不修它 —— 从源码读出，未经数值验证）；
+    裁决（V200 起 SOC 分两种情况）：
+      · ncl（SOC）且未开补丁：只要操作集里有非平凡转动（真转动部分 != I）或 TR 操作 -> 必须全网格。
+        AMSET 原 ncl 分支两处错（V200 旋量模型检验 12/12 构型实测）：rotation_matrix_to_su2
+        转角无符号、转轴强制翻到 z>=0 半球，约一半操作的自旋转动反向；TR 操作不取共轭、不乘 iσ_y；
+      · ncl 且开了补丁（amset_desym_fix 修了相位 + SU(2) + 旋量 TR）-> IBZ 可用
+        （旋量模型 12/12 通过；SOC 实数据尚未验证，reason 里注明）；
       · bad_ops == 0 -> IBZ 精确（任何空间群、任何原点）；
       · bad_ops > 0 且 desym_fix（amset_desym_fix 补丁生效）-> IBZ 精确（模型检验 12/12）；
       · bad_ops > 0 且未开补丁 -> 必须全网格。
@@ -2498,7 +2501,8 @@ def symmetry_gate(structure, atol=TAU_TOL, symprec=AMSET_SYMPREC, desym_fix=Fals
     """
     import numpy as np
     out = {"has_inversion": None, "max_tau": None, "tau_ops": None, "total_ops": None,
-           "bad_ops": None, "tr_ops": None, "strict_ops": None, "needs_full_grid": True,
+           "bad_ops": None, "tr_ops": None, "spin_rot_ops": None, "strict_ops": None,
+           "needs_full_grid": True,
            "needs_full_grid_original": True, "desym_fix": bool(desym_fix),
            "ncl": bool(ncl), "symprec": symprec, "op_source": None}
     if structure is None:
@@ -2529,22 +2533,30 @@ def symmetry_gate(structure, atol=TAU_TOL, symprec=AMSET_SYMPREC, desym_fix=Fals
                  "（结构只是近似对称，去对称化用的是近似操作）"
                  % (symprec, len(rots_raw), out["strict_ops"]))
     _tr_bad = sum(1 for i in bad if ops[i][2])
-    out["needs_full_grid_original"] = bool(bad) or (bool(ncl) and out["tr_ops"] > 0)
-    if ncl and out["tr_ops"]:
+    # V200：自旋转动非平凡的操作（真转动部分不是 I；分数坐标下 R 不是 ±I）。AMSET 原 ncl 分支
+    #   在这些操作上 SU(2) 可能反向，TR 操作上又缺 iσ_y·K —— 不开补丁时 SOC 只有它们全不出现才精确。
+    out["spin_rot_ops"] = int(sum(1 for R, _t, _tr in ops
+                                  if not (np.allclose(R, np.eye(3), atol=1e-5)
+                                          or np.allclose(R, -np.eye(3), atol=1e-5))))
+    _ncl_orig_bad = bool(ncl) and (out["spin_rot_ops"] > 0 or out["tr_ops"] > 0)
+    out["needs_full_grid_original"] = bool(bad) or _ncl_orig_bad
+    if _ncl_orig_bad and not desym_fix:
         out.update(needs_full_grid=True, reason=(
-            "SOC（非共线）且操作集含 %d 个时间反演操作：AMSET 的 ncl 去对称化对 TR 操作"
-            "不取共轭、不乘 iσ_y（与相位补丁无关）-> 必须全网格；原公式另有 %d/%d 个操作相位错"
-            % (out["tr_ops"], len(bad), len(ops)) + _note))
-    elif not bad:
+            "SOC（非共线），未开 DESYM_FIX：AMSET 原 ncl 去对称化在 %d 个非平凡转动上 SU(2) 可能反向、"
+            "%d 个时间反演操作上不取共轭不乘 iσ_y -> 必须全网格（或开 DESYM_FIX）；"
+            "原公式另有 %d/%d 个操作相位错"
+            % (out["spin_rot_ops"], out["tr_ops"], len(bad), len(ops)) + _note))
+    elif not bad and not _ncl_orig_bad:
         out.update(needs_full_grid=False, reason=(
             "AMSET 原公式在全部 %d 个操作上精确（逐操作条件 (R±I)τ≡0 全满足）-> IBZ 即可"
-            % len(ops) + ("；SOC 分支未经实数据验证" if ncl else "") + _note))
+            % len(ops) + _note))
     elif desym_fix:
         out.update(needs_full_grid=False, reason=(
             "AMSET 原公式会在 %d/%d 个操作上算错（其中 TR 分支 %d 个），但 DESYM_FIX 已开"
             "（amset_desym_fix 相位补丁）-> IBZ 精确"
             % (len(bad), len(ops), _tr_bad)
-            + ("；★ SOC 分支同一相位因子、未经实数据验证" if ncl else "") + _note))
+            + ("；SOC：补丁同时修了 SU(2) 与旋量 TR（iσ_y·K），旋量模型检验 12/12 通过、"
+               "SOC 实数据未验证（V200）" if ncl else "") + _note))
     else:
         out.update(needs_full_grid=True, reason=(
             "AMSET 原公式会在 %d/%d 个操作上算错（其中 TR 分支 %d 个）"

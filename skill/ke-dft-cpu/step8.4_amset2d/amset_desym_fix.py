@@ -30,11 +30,15 @@ amset.interpolation.wavefunction 按名字导入（from ... import desymmetrize_
 在 WavefunctionOverlapCalculator.from_coefficients 里调用。所以两个模块的名字**都要替换**，
 只换一个不生效。0.4.19 与 0.5.1 的这个函数逐字节相同（已 diff 核对），同一份补丁两边通用。
 
-★ SOC（非共线，系数最后一维是 2）分支用同一个相位因子，但**未经实数据验证**。另外从源码
-  看 AMSET 的 ncl 分支在 TR 操作上**既不取复共轭也不乘 iσ_y**（第 145 行只对非 ncl 取共轭），
-  这与本补丁无关、补丁也不修它 —— 所以 SOC + 无反演（操作集里有 TR 操作）时，就算打了补丁
-  去对称化结果也不可信。运行时遇到这种情况会在 amset.log 里打 ★ 警告；gen/preflight 的
-  判据（ke_common.symmetry_gate(ncl=True)）对它仍要求全网格。
+SOC（非共线，系数最后一维是 2）分支另有两处错，V200（2026-10-15）一并修掉：
+  ② 自旋转动：AMSET 用 rotation_matrix_to_su2 —— get_rotation_angle 只给无符号转角、
+     get_rotation_axis 把轴强制翻到 z>=0 半球，两者组合约一半操作的 SU(2) 转反了方向
+     （Si 48 个操作里 40 个与正确 SU(2) 不等价）。改用四元数构造 su2_from_rotation。
+  ③ 时间反演：AMSET 的 ncl 分支对 TR 操作既不取复共轭也不乘 iσ_y（第 145 行只对非 ncl 取共轭）。
+     改为先共轭再 (c_up, c_dn) -> (c_dn, −c_up)，即 Θ = iσ_y·K。
+  检验：SOC 旋量紧束缚模型（Kane–Mele 型 iλ(d1×d2)·σ，天然满足空间群 + TR），12 个构型
+  （test_symmetry_gate.CASES）修正式最小 |cos| >= 0.999999，原 AMSET 式在 14–43 个 k 点上出错（多数 |cos|≈0）；
+  有反演、无 TR 操作的 Si/hcp 原式同样出错（②的后果）。**SOC 实数据尚未验证**。
 
 版本护栏：打补丁前核对原函数源码里确实有上面那行原式；对不上（AMSET 改了实现）就**抛异常
   停跑**，绝不静默 —— 因为开了 DESYM_FIX 之后判据会放行 IBZ，补丁没挂上就是静默算错。
@@ -79,6 +83,36 @@ def _op_exact(rot_recip, tau_amset, tr, atol=OP_TOL):
     return bool(np.allclose(v - np.rint(v), 0.0, atol=atol))
 
 
+def su2_from_rotation(rot_cart):
+    """笛卡尔 3×3（真/非真）转动 -> SU(2)：U = q0·I − i(q1σx + q2σy + q3σz)。
+
+    非真转动先乘反演（反演不作用于自旋）。用四元数（Shepperd 法）直接构造，带符号的转角与
+    转轴一次给出 —— 替代 AMSET 的 rotation_matrix_to_su2：后者的 get_rotation_angle 只给
+    无符号转角、get_rotation_axis 又把轴强制翻到 z≥0 半球，两者组合在约一半的操作上给出
+    反向转动（模型检验：Si 48 个操作里 40 个不对）。整体 ±1 不影响任何 |重叠|。
+    """
+    R = np.asarray(rot_cart, float)
+    if np.linalg.det(R) < 0:
+        R = -R
+    t = np.trace(R)
+    if t > 0:
+        s = 2.0 * np.sqrt(1.0 + t)
+        q = np.array([0.25 * s, (R[2, 1] - R[1, 2]) / s,
+                      (R[0, 2] - R[2, 0]) / s, (R[1, 0] - R[0, 1]) / s])
+    else:
+        i = int(np.argmax(np.diag(R)))
+        j, k = (i + 1) % 3, (i + 2) % 3
+        s = 2.0 * np.sqrt(max(1.0 + R[i, i] - R[j, j] - R[k, k], 0.0))
+        q = np.zeros(4)
+        q[0] = (R[k, j] - R[j, k]) / s
+        q[1 + i] = 0.25 * s
+        q[1 + j] = (R[j, i] + R[i, j]) / s
+        q[1 + k] = (R[k, i] + R[i, k]) / s
+    q = q / np.linalg.norm(q)
+    return np.array([[q[0] - 1j * q[3], -q[2] - 1j * q[1]],
+                     [q[2] - 1j * q[1], q[0] + 1j * q[3]]], dtype=np.complex128)
+
+
 def op_audit(rotations, translations, is_tr, op_mapping):
     """统计本次去对称化**实际用到**的操作里，原式会算错的有几个、影响多少个 k 点。"""
     rotations = np.asarray(rotations)
@@ -112,11 +146,9 @@ def desymmetrize_coefficients(
     kp_mapping,
     pbar=True,
 ):
-    """amset.wavefunction.common.desymmetrize_coefficients 的逐行拷贝，只改 factor 一行。"""
-    from amset.electronic_structure.symmetry import (
-        rotation_matrix_to_su2,
-        similarity_transformation,
-    )
+    """amset.wavefunction.common.desymmetrize_coefficients 的逐行拷贝：改 factor 一行（相位），
+    SOC 分支另改 SU(2) 构造与旋量 TR（见模块说明 ②③）。"""
+    from amset.electronic_structure.symmetry import similarity_transformation
     from amset.log import log_time_taken
     from amset.util import get_progress_bar
     from amset.wavefunction.common import is_ncl
@@ -138,15 +170,10 @@ def desymmetrize_coefficients(
            _audit["nk_full"], _audit["tr_ops_used"]))
     if ncl:
         logger.warning(
-            "  ★ desym_fix: SOC/non-collinear coefficients. The same phase fix is applied "
-            "but this branch is NOT validated on real data.")
-        if _audit["tr_ops_used"]:
-            logger.warning(
-                "  ★ desym_fix: non-collinear + %d time-reversal ops: AMSET's ncl branch "
-                "applies neither complex conjugation nor i*sigma_y for TR ops; this patch "
-                "does not change that -> desymmetrized spinors at TR-mapped k-points are "
-                "NOT trustworthy. Use a full-grid (ISYM=-1) wavefunction instead."
-                % _audit["tr_ops_used"])
+            "  ★ desym_fix: SOC/non-collinear coefficients: phase fix + quaternion SU(2) + "
+            "spinor time reversal (i*sigma_y*K, %d TR ops used). Validated on a spinor "
+            "tight-binding model (12/12 structures); NOT yet validated on real SOC data."
+            % _audit["tr_ops_used"])
 
     rots = rotations[op_mapping]
     taus = translations[op_mapping]
@@ -161,7 +188,9 @@ def desymmetrize_coefficients(
         ]
 
         # calculate SU(2)
-        su2_no_dagger = np.array([rotation_matrix_to_su2(r) for r in r_cart])
+        # ---- AutoZT 修正 ②（SOC）：不用 AMSET 的 rotation_matrix_to_su2（转角无符号、转轴强制翻
+        #      到 z>=0 半球，约一半操作给出反向转动），改用四元数构造 -------------------------
+        su2_no_dagger = np.array([su2_from_rotation(r) for r in r_cart])
 
         # calculate SU(2)^{dagger}
         su2 = np.conjugate(su2_no_dagger).transpose((0, 2, 1))
@@ -227,6 +256,12 @@ def desymmetrize_coefficients(
 
             if tr and not ncl:
                 rot_coeffs[:, k_idx] = np.conjugate(rot_coeffs[:, k_idx])
+            elif tr and ncl:
+                # ---- AutoZT 修正 ③（SOC）：旋量的时间反演 Θ = iσ_y·K —— 先取复共轭，
+                #      再 (c_up, c_dn) -> (c_dn, −c_up)。AMSET 原 ncl 分支对 TR 操作两样都没做。
+                rc_tr = np.conjugate(rot_coeffs[:, k_idx])
+                rot_coeffs[:, k_idx, ..., 0] = rc_tr[..., 1]
+                rot_coeffs[:, k_idx, ..., 1] = -rc_tr[..., 0]
 
         all_rot_coeffs[spin] = rot_coeffs[:, :, g1, g2, g3]
 
@@ -267,7 +302,7 @@ def apply(force=False):
     _wc.desymmetrize_coefficients = desymmetrize_coefficients
     _iw.desymmetrize_coefficients = desymmetrize_coefficients
     STATE["applied"] = True
-    print("[desym_fix] amset %s：去对称化相位已修正（%s）；SOC 分支同式但未验证"
+    print("[desym_fix] amset %s：去对称化相位已修正（%s）；SOC 分支另修 SU(2) 与 iσ_y·K（模型检验通过，实数据未验证）"
           % (getattr(amset, "__version__", "?"), FIXED_FACTOR_LINE),
           file=sys.stderr, flush=True)
     return True

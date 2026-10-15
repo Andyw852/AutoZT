@@ -91,6 +91,78 @@ def tb_coeffs(st, kpoints, gpoints, rcut=4.0, seed=0):
     return coeffs, energies
 
 
+def tb_spinor_coeffs(st, kpoints, gpoints, rcut=4.0, lam=0.4, seed=0):
+    """V200：SOC 旋量紧束缚模型的本征态平面波系数 (nb, nk, ng, 2) 与本征值。
+
+    tb_coeffs 的两个 s 轨道 ⊗ 自旋，加 Kane–Mele 型自旋轨道项
+        H_SO[a↔b, R] = iλ_m Σ_m w(d1)w(d2) (d1 × d2)·σ,  d1 = 原子 a→m, d2 = m→b
+    叉积是轴矢量、σ 也是轴矢量 -> 对全部空间群操作（含非真转动）不变；iλ A·σ 在 Θ = iσ_y K 下不变；
+    A_ba(−R) = −A_ab(R) 保证厄米。真值同样在每个全网格 k 点直接对角化，不经过任何对称变换公式。
+    """
+    sx = np.array([[0, 1], [1, 0]], complex)
+    sy = np.array([[0, -1j], [1j, 0]])
+    sz = np.diag([1, -1]).astype(complex)
+    rng = np.random.default_rng(seed)
+    species = sorted({s.Z for s in st.species})
+    par = {Z: [(rng.uniform(-3, 3), rng.uniform(0.45, 0.8)) for _ in range(2)] for Z in species}
+    lam_z = {Z: rng.uniform(0.5, 1.5) * lam for Z in species}
+    orbs = [(a, o) for a in range(len(st)) for o in range(2)]
+    zs = [st.species[a].Z for a in range(len(st))]
+    hop = {}
+    for Za in species:
+        for Zb in species:
+            for oa in range(2):
+                for ob in range(2):
+                    hop.setdefault(tuple(sorted([(Za, oa), (Zb, ob)])),
+                                   (rng.uniform(0.5, 1.5), rng.uniform(0.8, 1.6)))
+    lat, x = st.lattice.matrix, st.frac_coords
+    imgs = [np.array(v) - 2 for v in np.ndindex(5, 5, 5)]
+    near = {}                                                # a -> [(m, R, d_cart, |d|)]
+    for a in range(len(st)):
+        for b in range(len(st)):
+            for R in imgs:
+                d = (x[b] + R - x[a]) @ lat
+                n = np.linalg.norm(d)
+                if 1e-6 < n <= rcut:
+                    near.setdefault(a, []).append((b, R, d, n))
+    terms = []
+    for i, (a, oa) in enumerate(orbs):
+        for j, (b, ob) in enumerate(orbs):
+            for (bb, R, d, n) in near.get(a, []):
+                if bb == b:
+                    amp, l = hop[tuple(sorted([(zs[a], oa), (zs[b], ob)]))]
+                    terms.append((i, j, R, -amp * np.exp(-n / l)))
+    soc = []                                                 # 只在 o=0 轨道之间
+    for a in range(len(st)):
+        for (m, r1, d1, n1) in near.get(a, []):
+            for (b, r2, d2, n2) in near.get(m, []):
+                R = r1 + r2
+                if a == b and not np.any(R):
+                    continue
+                A = lam_z[zs[m]] * np.exp(-n1 - n2) * np.cross(d1, d2)
+                soc.append((2 * a, 2 * b, R, 1j * (A[0] * sx + A[1] * sy + A[2] * sz)))
+    rec = st.lattice.reciprocal_lattice.matrix
+    no = len(orbs)
+    coeffs = np.zeros((2 * no, len(kpoints), len(gpoints), 2), complex)
+    energies = np.zeros((2 * no, len(kpoints)))
+    for ik, k in enumerate(kpoints):
+        H0 = np.diag([par[zs[a]][o][0] for a, o in orbs]).astype(complex)
+        for i, j, R, t in terms:
+            H0[i, j] += t * np.exp(2j * np.pi * np.dot(k, R))
+        H = np.kron(H0, np.eye(2))
+        for i, j, R, blk in soc:
+            H[2 * i:2 * i + 2, 2 * j:2 * j + 2] += blk * np.exp(2j * np.pi * np.dot(k, R))
+        assert np.abs(H - H.conj().T).max() < 1e-9, "SOC 项不厄米"
+        w, v = np.linalg.eigh(0.5 * (H + H.conj().T))
+        kg = gpoints + k
+        q = np.linalg.norm(kg @ rec, axis=1)
+        basis = np.stack([np.exp(-0.5 * (q * par[zs[a]][o][1]) ** 2) * np.exp(-2j * np.pi * kg @ x[a])
+                          for a, o in orbs])
+        coeffs[:, ik] = np.einsum("osn,og->ngs", v.reshape(no, 2, 2 * no), basis)
+        energies[:, ik] = w
+    return coeffs, energies
+
+
 def gsphere(st, qmax=11.0):
     rec = st.lattice.reciprocal_lattice.matrix
     n = [int(np.ceil(qmax / np.linalg.norm(rec[i]))) + 1 for i in range(3)]
@@ -348,6 +420,50 @@ class DesymFixModelTests(unittest.TestCase):
         self.assertEqual(dc["eig_inconsistent_k"], len(bad_k), dc)
         self.assertGreater(rep["formulas"]["fixed"]["min_score_usable"], 1 - 1e-6, dc)
         self.assertLess(rep["formulas"]["fixed"]["min_score"], 0.5, dc)      # 原始最小值仍如实报
+
+    def test_soc_spinor_model(self):
+        """V200：SOC 旋量模型 12 个构型 —— 修正式（相位 + 四元数 SU(2) + iσ_y·K）全部 |cos| >= 1-1e-5；
+        AMSET 原式在每个构型上都有 k 点出错（有反演、无 TR 操作的 Si/hcp 也错：SU(2) 转反）。
+        2026-10-15 本地实测：修正式 12/12 最小 0.999999；原式出错 14–43 个 k 点。"""
+        for name, st, _bad, _need in self.tsg.CASES:
+            mesh = next(m for k, m in self.MESHES.items() if name.startswith(k))
+            with self.subTest(name=name):
+                kpts = full_mesh(mesh)
+                gp = gsphere(st, qmax=9.0)
+                cf, en = tb_spinor_coeffs(st, kpts, gp)
+                rep = self.V.validate({Spin.up: cf}, gp, kpts, st, energies={Spin.up: en},
+                                      mesh=mesh, verbose=False)
+                fx, og = rep["formulas"]["fixed"], rep["formulas"]["orig"]
+                self.assertGreater(fx["min_score"], 1 - 1e-5, "%s: %s" % (name, fx))
+                self.assertGreater(og["n_bad_k"], 0, "%s: 原式应当出错" % name)
+
+    def test_su2_from_rotation(self):
+        """四元数 SU(2)：同态 U(R1 R2) = ±U(R1)U(R2)，且 U σ_i U† = Σ_j R_ji σ_j（自旋按 R 转）。"""
+        import amset_desym_fix as fix
+        sig = [np.array([[0, 1], [1, 0]], complex), np.array([[0, -1j], [1j, 0]]),
+               np.diag([1, -1]).astype(complex)]
+        rng = np.random.default_rng(3)
+        mats = []
+        for _ in range(30):
+            q, _r = np.linalg.qr(rng.normal(size=(3, 3)))
+            mats.append(q * np.sign(np.linalg.det(q)))
+        for ang in (np.pi, 2 * np.pi / 3, np.pi / 2):        # 晶体里常见的 180°/120°/90°
+            for ax in np.eye(3).tolist() + [[1, 1, 0], [1, 1, 1], [1, -1, 0]]:
+                n = np.array(ax, float) / np.linalg.norm(ax)
+                K = np.array([[0, -n[2], n[1]], [n[2], 0, -n[0]], [-n[1], n[0], 0]])
+                mats.append(np.eye(3) + np.sin(ang) * K + (1 - np.cos(ang)) * K @ K)
+        for R in mats:
+            U = fix.su2_from_rotation(R)
+            self.assertLess(np.abs(U @ U.conj().T - np.eye(2)).max(), 1e-10)
+            for i in range(3):
+                lhs = U @ sig[i] @ U.conj().T
+                rhs = sum(R[j, i] * sig[j] for j in range(3))
+                self.assertLess(np.abs(lhs - rhs).max(), 1e-10)
+            self.assertLess(np.abs(fix.su2_from_rotation(-R) - U).max(), 1e-12)   # 反演不作用于自旋
+        for R1, R2 in zip(mats[:10], mats[10:20]):
+            U12 = fix.su2_from_rotation(R1 @ R2)
+            P = fix.su2_from_rotation(R1) @ fix.su2_from_rotation(R2)
+            self.assertLess(min(np.abs(U12 - P).max(), np.abs(U12 + P).max()), 1e-10)
 
     def test_noop_when_all_tau_zero(self):
         """V119：全部 τ=0（原点对齐的 MoS2 等）时补丁必须**逐位**不改变去对称化结果 ——

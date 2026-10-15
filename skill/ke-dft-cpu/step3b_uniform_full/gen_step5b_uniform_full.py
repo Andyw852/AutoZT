@@ -89,8 +89,8 @@ FULL_GRID_3D_SCALE = 0.5
 #   自洽（GaN 4800 k 点、MoS2 6912 k 点），项目里开着 wavefunction_full 组就会白算一遍。
 #   ⇒ gen 时先问同一个判据（ke_common.symmetry_gate，带 DESYM_FIX 与 SOC）：不需要全网格 -> 停，
 #     并说明原因；要做验证/受控对照（tools/desym_fix_validate.py 需要全网格 h5）写 FULL_GRID_FORCE = true。
-#   仍需要全网格的情形（判据照常放行本步）：SOC 且有时间反演操作（补丁的 SOC 分支未验证）；
-#     DESYM_FIX 被关掉且有坏操作。
+#   仍需要全网格的情形（判据照常放行本步）：DESYM_FIX 被关掉且有坏操作；SOC 且 DESYM_FIX 关掉
+#     （AMSET 原 ncl 分支 SU(2) 与 TR 都有错，V200 起补丁一并修了）。
 FULL_GRID_FORCE = False
 DESYM_FIX_CONF = "auto"   # 与 S8/S8.4 同名键；写在材料级 step.conf 时两边一致
 # ---- [patch_s3b_from_s3_density（V134，2026-10-01 用户批准）] 从 S3 的自洽电荷密度起步 ----

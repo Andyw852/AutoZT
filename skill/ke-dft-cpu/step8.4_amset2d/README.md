@@ -292,8 +292,9 @@ S8.3 出 `tau/`：`tau_comparison.csv`（各温度、各掺杂档的 τ_eff 逐�
     出生产结果前做 factor 收敛 f = 61 / 90 / 120（f=120 约 195 GB，gen 的内存粗估会告警，先确认节点内存）。
   - 2D POP 偏弱（μ_POP 约 1.9e4）**未验证**；kz=3 对照没做。
   - DPT 拟合有效质量的窗口随网格变（换网格要重看 m*）。
-  - **没有 SOC 路径**（Bi₂Te₃ / PbTe / SnSe 这类都需要）。相位补丁的 SOC 分支用同一因子、未测；
-    且 AMSET 的 ncl 去对称化对 TR 操作不取共轭、不乘 iσ_y —— SOC + 无反演一律要求全网格（V115 §5）。
+  - **SOC 路径未经实数据验证**（Bi₂Te₃ / PbTe / SnSe 这类都需要）。AMSET 原 ncl 去对称化有两处错：
+    SU(2) 约一半操作转反、TR 操作不取共轭不乘 iσ_y；V200 起 `amset_desym_fix` 一并修了（旋量模型 12/12），
+    开 DESYM_FIX 时 SOC 也可走 IBZ；关掉时 SOC 一律要求全网格。
   - AMSET 不含非极性光学声子与谷间散射（见下条），Si 空穴、MoS₂ 迁移率偏高；PBEsol 有效质量偏轻，
     GaAs 迁移率偏高。写进方法学即可，不是流程 bug。
 - **"去掉 ZA 支"只对有水平镜面（σh）的材料成立**：翘曲结构（硅烯、锗烯）与 Janus
@@ -366,8 +367,21 @@ S8.3 出 `tau/`：`tau_comparison.csv`（各温度、各掺杂档的 τ_eff 逐�
 - 第二行横幅的 r∞/Δr 是输入参数量级自检（VERIFICATION V14）：锚点 MoS2 r∞≈46.5 Å / Δr≈0.53 Å（1.1%）、
   h-BN r∞≈7.6 Å / Δr≈2.8 Å（37%）；老记录缺该字段会打 [WARN]。
 
-- **★★ 真实重叠的裁决已定论（2026-09-17，见 VERIFICATION V23/V24）：根因是去对称化**
-  - **默认配置**：`settings.yaml` 用 **`unity_overlap: true`**（生成器现已**显式写入**，
+- **★ 现行口径（2026-10-15 核对代码；下面 2026-09-17 那一大段是当时的记录，结论已被取代）**
+  - **重叠默认 = 真实重叠**：`gen_step14_amset2d.py` 的 `UNITY_OVERLAP = False`（2026-09-26 用户决定翻转）。
+    unity 只作**快速筛选**（step.conf 写 `UNITY_OVERLAP = true`）：它把谷间/大 q 当完全耦合
+    （MoS₂ 实测 K→K′ 真实 |I|² ≈ 0.25），迁移率**系统性偏低**，只能看数量级。
+  - **去对称化已修**：`amset_desym_fix.py`（V115 相位，`DESYM_FIX_DEFAULT = True`，V117/V118 起出厂默认开；
+    V200 起另修 SOC 分支的 SU(2) 与 iσ_y·K）。走 IBZ h5 + 补丁即为生产路径，不必 ISYM=-1 全网格；
+    全网格（`wavefunction_full`）只在关掉补丁、或做受控对照（`tools/desym_fix_validate.py`）时需要。
+    原点对齐、全部 τ=0 的结构（如 MoS₂ 单层）补丁逐位不改结果（V119）。
+  - **preflight**：按 `ke_common.symmetry_gate` 判，IBZ + 补丁放行；不再"2D 且非 unity 一律拦截"。
+  - **能否写进论文**：下文"desymmetrize_coefficients 修好之前不能写进论文"的前提（去对称化未修）已不成立；
+    但这条是用户定的要求，**是否解除由用户重新裁定**。现在的发表障碍是模型局限（见"已知局限"：
+    缺 ODP / 谷间声子、偶极近似、PBE 无 SOC），定量结论仍建议用 EPW / Perturbo 做 1–2 个材料对照。
+
+- **★★（历史记录，已被上面的现行口径取代）真实重叠的裁决（2026-09-17，见 VERIFICATION V23/V24）：当时认定根因是去对称化**
+  - **当时的默认配置**：`settings.yaml` 用 **`unity_overlap: true`**（生成器现已**显式写入**，
     以前根本没写 → AMSET 默认 False=真实重叠，所有 2D 项目都默认踩坑，见 V24.1）。
     已知偏差方向：多能谷材料的 ADP 迁移率**最多被低估 N_v 倍**（MoS₂ K+K′ 为 2）。
   - **要真实重叠就必须开 `wavefunction_full` 分支**（S3b 用 `ISYM=-1` 出全网格 WAVECAR，
@@ -445,7 +459,8 @@ S8.3 出 `tau/`：`tau_comparison.csv`（各温度、各掺杂档的 τ_eff 逐�
     **因此不要为二维项目在集群上升级到 0.5.1。**
   - **「只是缺一个 G 平移」也不成立**：把平移搜索扩到 ±4，30 个失败样例只救回 10 个。
   - **后果**：真实重叠路径把散射率系统性压低约 10~30 倍 → 迁移率被抬高同样倍数。
-  - **在 `desymmetrize_coefficients` 修好之前，S8.4 的绝对数值不能写进论文**
-    （用户要求，继续有效）；二维项目固定 `unity_overlap: true`。
+  - （当时）**在 `desymmetrize_coefficients` 修好之前，S8.4 的绝对数值不能写进论文**
+    （用户要求）；二维项目固定 `unity_overlap: true`。—— 2026-09-26 起重叠默认已改为真实重叠，
+    去对称化已修（见本节开头"现行口径"）；论文要求是否解除待用户裁定。
 
 要作为定量结论发表，建议选 1-2 个材料用 EPW / Perturbo（开二维库仑截断）对照。
