@@ -34,7 +34,9 @@ RESERVED_PARAMS = frozenset({"BANDGAP", "CONDA_SH", "CONDA_ENV", "MACE_MODEL_DIR
                              # 2026-10-14：ke S2.3 的带隙杂化泛函（写在材料共用 step.conf 也安全）
                              "HYBRID", "HYBRID_GGA", "HYBRID_AEXX", "HYBRID_HFSCREEN",
                              "FUNC_ALIGN",  # 2026-10-14：S1 的 FUNC=auto 是否与配对技能对齐（relax_common）
-                             "KL_ENV"})
+                             "KL_ENV",
+                             # DEFORM_REF（2026-10-15）：ke S7 / S7.1 的形变势参考口径（auto|vacuum|core），写在材料共用 step.conf 两步同读
+                             "DEFORM_REF"})
 
 
 def _strip(line):

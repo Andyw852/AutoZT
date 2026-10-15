@@ -163,8 +163,9 @@ class GenWiringTests(unittest.TestCase):
 
     def test_ionrelax_reuse_requires_same_static_incar(self):
         s = self.SRC
-        i = s.index("_why = kc.run_incar_mismatch(")
-        self.assertIn('_ionrelax_incars((out / _name / "INCAR")', s[i:i + 200])
+        i = s.index("_why = kc.run_incar_mismatch(_stat_now")
+        j = s.index('_stat_now = _ionrelax_incars((out / _name / "INCAR")')
+        self.assertLess(j, i)
         self.assertLess(i, s.index("_skipped.append(_name)"))
         # 静态段继承主单点的 LVHAR（真空对齐要 LOCPOT），弛豫段关掉
         tree = ast.parse(s)

@@ -147,6 +147,7 @@ DEFORM_DIR   = "step7_deform"
 # 依据：二维文献以真空为零点定义带能 —— Wiktor & Pasquarello, PRB 94, 245411 (2016)
 #   即用真空参考，给出 MoS2 a_CBM(K) = -6.08(PBE)/-7.16(PBE0) eV、a_VBM(K)=-1.86/-1.71 eV；
 #   AMSET 的芯势对齐是为体材料设计的（实测 CrS2 单层：E1_core=3.53 vs E1_vac=5.86 eV）。
+# step.conf 写 DEFORM_REF 可覆盖（见 _deform_ref_setting）；2D 的真空口径生不出来时本步报错、不退回 core。
 DEFORM_REF   = "auto"
 # 只有这些应变分量有 LOCPOT 真空势可算；其余分量 Δ 留 0 并在 json 里标注。
 _DELTA_COMP  = {"xx": (0, 0), "yy": (1, 1), "zz": (2, 2),
@@ -227,13 +228,26 @@ def _read_dim(cwd):
     return None
 
 
+def _deform_ref_setting(cwd):
+    """DEFORM_REF 的设定值（auto / vacuum / core）：本步 step.conf 写了就用它，否则用上面的常量。
+    [patch_ionrelax_locpot] 2D 真空口径 h5 生不出来时本步现在直接报错（见 main 末尾）；要用 core 口径
+    必须显式写 DEFORM_REF = core —— 写在材料共用 step.conf（project_setting/templates/step.conf），
+    S7_deform 也读同一个键（core 时不再为补 LOCPOT 只补静态段）。文件不存在才用默认值。"""
+    v = None
+    if (Path(cwd) / "step.conf").is_file():
+        import stepconf
+        v = stepconf.load({"DEFORM_REF": (None, "str")}, OUTDIR_NAME, str(cwd),
+                          strict=False)["DEFORM_REF"]
+    return str(v if v not in (None, "") else DEFORM_REF).strip().lower()
+
+
 def _resolve_deform_ref(cwd):
     """DEFORM_REF: auto -> 2D 用 vacuum、其余 core；显式值原样返回。"""
-    ref = str(DEFORM_REF).lower()
+    ref = _deform_ref_setting(cwd)
     if ref == "auto":
         return "vacuum" if _read_dim(cwd) == "2d" else "core"
     if ref not in ("vacuum", "core"):
-        sys.exit("[ERROR] DEFORM_REF=%r 无效，只允许 auto / vacuum / core" % DEFORM_REF)
+        sys.exit("[ERROR] DEFORM_REF=%r 无效，只允许 auto / vacuum / core" % ref)
     return ref
 
 
@@ -676,11 +690,19 @@ try:
     _resolved_paths = {}   # folder -> {filename: "ionrelax"|"rigid"}，写进 json 可查
 
     def _resolved(folder, filename):
-        """[PATCH-IONRELAX] 优先读 folder/ionrelax/filename（离子弛豫构型），
-        否则读本级。E1 用弛豫后构型（IBRION=2 弛豫内坐标），amset h5 仍用
-        本级刚性单点——两套口径并列，互不影响。实际读取口径记进 _resolved_paths。"""
-        p = _os.path.join(folder, "ionrelax", filename)
-        if _os.path.isfile(p):
+        """[PATCH-IONRELAX] folder/ionrelax/vasprun.xml 在 -> 该构型取离子弛豫口径，本征值、LOCPOT、POSCAR
+        **全部**只从 ionrelax/ 读；否则全部读本级（刚性构型）。实际读取口径记进 _resolved_paths。
+        [patch_ionrelax_locpot] 以前按文件逐个"ionrelax 有就用、没有就退回本级"：ionrelax 缺 LOCPOT 时
+        会悄悄拿刚性构型的 LOCPOT 去减弛豫构型的本征值，真空口径 E1 是两套构型拼出来的。
+        现在缺了就报 RuntimeError（外层只把 OSError 当"LOCPOT 没生成、合法跳过"，RuntimeError 让本步 FAIL）。"""
+        ir = _os.path.join(folder, "ionrelax")
+        if _os.path.isfile(_os.path.join(ir, "vasprun.xml")):
+            p = _os.path.join(ir, filename)
+            if not _os.path.isfile(p):
+                raise RuntimeError(
+                    "%s：本征值取自 ionrelax/vasprun.xml，但 ionrelax 缺 %s —— 不能退回刚性构型的 %s。"
+                    "ionrelax 缺 %s，retry S7_deform 补静态段（只重跑 ionrelax 静态段），再重跑 S7.1"
+                    % (folder, filename, filename, filename))
             _resolved_paths.setdefault(folder, {})[filename] = "ionrelax"
             return p
         _resolved_paths.setdefault(folder, {})[filename] = "rigid"
@@ -989,8 +1011,9 @@ print("[OK] band_edges.json 已生成（amset 权威带边 E1 + 真空对齐 E1_
         if _log.is_file():
             _tail = _log.read_text(errors="ignore")[-400:]
         sys.exit("[ERROR] band_edges.json 生成失败（step8.2_dpt 将无法取到带边 E1，"
-                 "请勿回退旧逻辑）。看 %s/band_edges.log：\n%s"
-                 % (dfm, _tail))
+                 "请勿回退旧逻辑）。%s看 %s/band_edges.log：\n%s"
+                 % ("ionrelax 缺 LOCPOT，retry S7_deform 补静态段（只重跑 ionrelax 静态段），再重跑本步。"
+                    if "补静态段" in _tail else "", dfm, _tail))
     print("[DONE] %s：band_edges.json 已生成" % OUTDIR_NAME)
 
     # [2026-09-16] 把**实际使用的**形变势构型口径落进 band_edges.json：settings 注释、
@@ -1011,9 +1034,10 @@ print("[OK] band_edges.json 已生成（amset 权威带边 E1 + 真空对齐 E1_
 
     # ---- patch_deform_ref：真空参考口径的 deformation_vac.h5 ----
     ref = _resolve_deform_ref(cwd)
+    _ref_set = _deform_ref_setting(cwd)
     _vac_state = "core（未生成 deformation_vac.h5）"
     print("[..] DEFORM_REF=%s（本体系 DIM=%s）-> %s 参考口径"
-          % (DEFORM_REF, _read_dim(cwd) or "未知", ref))
+          % (_ref_set, _read_dim(cwd) or "未知", ref))
     if ref == "vacuum":
         # 做法（用户 2026-09-16 校对 AMSET 0.4.19 源码后指定）：**直接替换参考能级**，
         # 而不是事后往 h5 上加 Δ。理由：potentials.py 里
@@ -1069,8 +1093,17 @@ def _vac_window(structure, axis=2, half_ratio=VAC_HALF):
 
 
 def _vacuum_level(folder, structure):
-    """该构型 LOCPOT 的真空区平面平均静电势（eV）。平坦度不达标直接报错。"""
-    lp = Locpot.from_file(str(Path(folder) / "LOCPOT"))
+    """该构型 LOCPOT 的真空区平面平均静电势（eV）。平坦度不达标直接报错。
+    [patch_ionrelax_locpot] folder 就是本征值所在目录（ionrelax/ 或本级），LOCPOT 只从这里读；
+    缺了报 RuntimeError 写明处理办法（不退回别的构型的 LOCPOT，也不让外层当成"LOCPOT 缺失、跳过"）。"""
+    _lp = Path(folder) / "LOCPOT"
+    if not _lp.is_file():
+        if Path(folder).name == "ionrelax":
+            raise RuntimeError("%s：本征值取自 ionrelax/vasprun.xml，但没有 LOCPOT。"
+                               "ionrelax 缺 LOCPOT，retry S7_deform 补静态段，再重跑 S7.1" % folder)
+        raise RuntimeError("%s 缺 LOCPOT（静态单点没开 LVHAR，或 LOCPOT 被清掉）：retry S7_deform 重算该构型，"
+                           "再重跑 S7.1" % folder)
+    lp = Locpot.from_file(str(_lp))
     vz = np.asarray(lp.get_average_along_axis(2))
     n = len(vz)
     win = _vac_window(structure)
@@ -1277,10 +1310,17 @@ if len(_shifts) == 2:
         if rc != 0 or not vac_h5.is_file():
             _tail = (_vlog.read_text(errors="ignore")[-600:]
                      if _vlog.is_file() else "(子进程没有留下日志)")
-            _vac_state = "core（deformation_vac.h5 生成失败 rc=%d）" % rc
-            print("[WARN] deformation_vac.h5 生成失败（rc=%d）-> 本步仍按 core 口径继续；"
-                  "把 LOCPOT 留在 step7_deform 各子目录里再重跑本步即可。"
-                  "看 %s：\n%s" % (rc, _vlog, _tail))
+            # [patch_ionrelax_locpot] 以前这里 WARN 一句就按 core 口径继续（LS 就是被这个静默退回坑的：
+            #   S7.1 判完成，S8/S8.4 拿 core h5 算，绝对值差 ~2.8 倍）。真空口径（DEFORM_REF=auto 的 2D，
+            #   或显式 vacuum）生不出来就让本步 FAIL；deformation.h5 留在 step7_deform/、不放进本步目录，
+            #   done_marker 不成立。确实要 core 口径就在 step.conf 显式写 DEFORM_REF = core。
+            _hint = ("ionrelax 缺 LOCPOT：retry S7_deform 补静态段（只重跑 ionrelax 静态段），再重跑本步"
+                     if "补静态段" in _tail else
+                     "多半是形变目录缺 LOCPOT（LVHAR 没开或被清掉）：retry S7_deform 后再重跑本步")
+            # 日志尾巴先打，ERROR 放最后一行（autozt 只回显最后一行）
+            print("[..] %s 末尾：\n%s" % (_vlog, _tail))
+            sys.exit("[ERROR] deformation_vac.h5 生成失败（rc=%d，DEFORM_REF=%s -> vacuum），不再退回 core 口径：%s；"
+                     "确实要用 core 口径请在 step.conf 显式写 DEFORM_REF = core" % (rc, _ref_set, _hint))
         else:
             _vac_state = "vacuum（deformation_vac.h5 已生成）"
             print("[DONE] %s：deformation_vac.h5（真空参考口径）已生成；"
@@ -1295,7 +1335,7 @@ if len(_shifts) == 2:
         os.replace(str(dfm / "deformation_signed.h5"), str(out / "deformation_signed.h5"))
     # ★ 最后一行是 autozt 唯一回显的一行，必须把"真空口径到底有没有生成"说清楚。
     print("[DONE] %s：deformation.h5 已生成（core 口径）；DIM=%s DEFORM_REF=%s -> %s"
-          % (OUTDIR_NAME, _read_dim(cwd) or "未知", DEFORM_REF, _vac_state))
+          % (OUTDIR_NAME, _read_dim(cwd) or "未知", _ref_set, _vac_state))
 
 
 if __name__ == "__main__":
