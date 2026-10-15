@@ -262,6 +262,27 @@ def test_gen_step_errors_when_kappa_range_disjoint(tmp_path):
     assert not (root / "step20_zt" / "zt_summary.json").exists()
 
 
+def test_gen_keeps_previous_products_when_inputs_missing(tmp_path):
+    """[0052-r1] 输入缺失时 gen 会 sys.exit —— 那一刻不能已经把上一轮的产物删掉。
+
+    （否则远端 done_marker 消失、步骤由 OK 变 error；下一轮 fetch 的镜像逻辑还会把本地
+     留存的那份一并删掉。输入问题不该毁掉上一轮的可用结果。）"""
+    root = tmp_path / "Si" / "zt-dft-cpu"
+    root.mkdir(parents=True)
+    for f in ("gen_step20_zt.py", "zt_common.py", "step.conf"):
+        shutil.copyfile(os.path.join(SKILL, "step20_zt", f), root / f)
+    out = root / "step20_zt"
+    out.mkdir()
+    (out / "zt_summary.json").write_text('{"old": true}', encoding="utf-8")
+    (out / "zt_vs_T.png").write_bytes(b"old")
+    r = subprocess.run([sys.executable, "gen_step20_zt.py", "--material", "Si"],
+                       cwd=str(root), capture_output=True, text=True)
+    assert r.returncode != 0                       # 没有 inputs/ -> 必须报错退出
+    assert "[ERROR]" in (r.stdout + r.stderr)
+    assert (out / "zt_summary.json").read_text(encoding="utf-8") == '{"old": true}'
+    assert (out / "zt_vs_T.png").read_bytes() == b"old"
+
+
 def test_gen_records_amset_settings(tmp_path):
     """S20_zt 要把电子段的散射机制/带隙记进产物（ZT 数字的口径可追溯）。"""
     tr = {"doping": [-1e20, 1e20], "temperatures": [300.0, 400.0],

@@ -75,17 +75,27 @@ def test_fetch_extra_pure_mirror(tmp_path):
     tp = remote.parent.parent / "transport_plots"
     tp.mkdir()
     (tp / "Si_transport.png").write_bytes(b"new")
+    (tp / "keep.csv").write_text("k")
     local = rd / "transport_plots"
     local.mkdir(parents=True)
-    (local / "Si_transport_data_1000K.csv").write_text("old")    # 旧版残留（还没有清单）
+    (local / "local_note.txt").write_text("mine")                # 用户自己放进来的：任何一轮都不删
     _fetch(m)
     assert (local / "Si_transport.png").read_bytes() == b"new"
-    assert not (local / "Si_transport_data_1000K.csv").exists()
+    assert (local / "keep.csv").is_file()
+    # [0052-r1] 还没有清单：第一次拉回只建立基线，不拿本地现有项当"上轮拉回的"去删
+    assert (local / "local_note.txt").is_file()
+    # 清单建立后：远端这轮已经没有的顶层项，本地跟着删；清单里没记的仍不碰
+    (tp / "Si_transport.png").unlink()
+    _fetch(m)
+    assert not (local / "Si_transport.png").exists()
+    assert (local / "keep.csv").is_file()
+    assert (local / "local_note.txt").is_file()
     # 远端目录没了：什么都没拉到 -> 本地不删
     import shutil
     shutil.rmtree(tp)
     _fetch(m)
-    assert (local / "Si_transport.png").is_file()
+    assert (local / "keep.csv").is_file()
+    assert (local / "local_note.txt").is_file()
 
 
 def test_zt_skill_declares_result_flat():

@@ -122,8 +122,11 @@ def load_undoped_ni(run_dir):
             return out, UNDOPED_NI_JSON
     except (OSError, ValueError, KeyError, TypeError):
         pass
-    rx = re.compile(r"\[fermi_fix\] 本征点 ([0-9.eE+-]+) K：E_F = ([0-9.eE+-]+) eV，"
-                    r"n = p = ([0-9.eE+-]+) cm\^-3")
+    # [0052-r1] 放宽：允许各种空白与全/半角冒号逗号（以前只认打印文案里那一种写法，
+    #   改一个空格就整条回退失效、n_i 全标不出来）
+    rx = re.compile(r"\[fermi_fix\]\s*本征点\s*([0-9.eE+-]+)\s*K\s*[：:]\s*"
+                    r"E_F\s*=\s*([0-9.eE+-]+)\s*eV\s*[，,;；]?\s*"
+                    r"n\s*=\s*p\s*=\s*([0-9.eE+-]+)\s*cm\^-3")
     logs = []
     try:
         for n in os.listdir(run_dir):

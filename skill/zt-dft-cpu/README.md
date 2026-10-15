@@ -89,6 +89,11 @@ needs_results:
   `zt-dft-cpu/step20_zt/`（autozt 每步需要一个工作目录）。
 - **先删旧结果（[0052]）**：每次 gen 先删上一轮的产物（zt_summary.*、图、`per_temperature/`、`intrinsic_carrier/`），
   温度网格 / 掺杂档变了不留旧文件；本地回拉按镜像处理，远端已删的项本地也删。
+  **[0052-r1] 删的时机**：等输入（transport.json / kappa_summary.json）都找到并解析通过、且确认至少有一个温度能算出
+  ZT 之后才删 —— 输入缺失/不重叠时 gen 会 `sys.exit`，那时若已经删掉 `zt_summary.json`（done_marker），
+  远端步骤会由 OK 变 error，下一轮 fetch 还会把本地留存的那份一并删掉。
+  **回拉镜像的边界**：没有 `.tf_fetched_manifest.json` 时只建立基线、不删任何本地项（否则升级后第一次拉回会误删
+  用户自己放进结果目录的文件）。
 - **本征点不再算 p 型（[0052]）**：doping = 0 以前被归成 p 型、混进 p 型峰值与热图；现在 `doping_type` 记 `i`，
   只出现在 `intrinsic_carrier/`、`zt_vs_T.png`（虚点线 "intrinsic (undoped)"）和逐档明细里。
 

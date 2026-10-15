@@ -411,7 +411,9 @@ def _mirror_prune(dest, listing, m=None, label="", pure=False):
     """[0052] 整目录回拉（fetch_all / fetch_extra）是远端目录的镜像：上一轮拉回、远端这轮已经没有的
     顶层项（重新生成时删掉的旧温度文件夹、旧图、旧子目录）从本地删掉，不再冒充当前结果。
     只删清单里记着的、autozt 自己拉回来的项；本地其它文件（.autozt_inputs/、provenance/ 等）不碰。
-    pure=True（fetch_extra 的 transport_plots/ 这种整目录都是回拉产物的）：还没有清单时按本地现有顶层项算。"""
+    pure=True 表示该目录整目录都是回拉产物（fetch_extra 的 transport_plots/）。[0052-r1] 无论 pure
+    与否，**没有清单就只记基线、不删**：以前 pure 时拿本地现有顶层项当基线，升级后第一次拉回会把
+    用户自己放进该目录的图/笔记一起删掉。"""
     from autozt import PROV_DIR
     got = {n.split("/", 1)[0] for n in _tar_names(listing)}
     if not got:          # 远端没这个目录 / 什么都没拉到：不当成"全删了"，本地保持原样
@@ -421,12 +423,7 @@ def _mirror_prune(dest, listing, m=None, label="", pure=False):
         with open(mp, encoding="utf-8") as f:
             prev = set(json.load(f).get("top") or [])
     except (OSError, ValueError, AttributeError):
-        prev = set()
-        if pure:
-            try:
-                prev = {n for n in os.listdir(dest) if not n.startswith(".")}
-            except OSError:
-                pass
+        prev = set()     # [0052-r1] 没有清单：本次只建立基线（见下方写清单），不删任何本地项
     gone = []
     for n in sorted(prev - got):
         if not n or n.startswith(".") or "/" in n or n in ("..", PROV_DIR):
@@ -2805,7 +2802,7 @@ def _relay_prev_across_host(cfg, m, s, t=None):
             continue
         if p.get("_host") == cur_host:
             continue   # 同集群：gen 就地能找到，无需回传
-        local = os.path.join(rdir, p["name"])
+        local = step_result_dir(m, p)   # [0052-r1] result_flat 步骤的结果直接放 result/，不能再拼 <步骤名>/
         if not os.path.isdir(local):
             # v1.13 fix：needs 步（如 step2.2_pbe）的 WAVECAR 不在 fetch_files，
             # 跨集群必须连同 WAVECAR 一起拉回，否则 gen 读到的是陈旧/缺失的大文件。

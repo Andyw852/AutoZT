@@ -2453,8 +2453,11 @@ def undoped_ni(cwd, is_2d):
         if out:
             return out, "%s/%s" % (run.name, UNDOPED_NI_JSON)
     if _NI_LOG_RE is None:
-        _NI_LOG_RE = re.compile(r"\[fermi_fix\] 本征点 ([0-9.eE+-]+) K：E_F = ([0-9.eE+-]+) eV，"
-                                r"n = p = ([0-9.eE+-]+) cm\^-3")
+        # [0052-r1] 放宽：允许各种空白与全/半角冒号逗号（以前只认打印文案里那一种写法，
+        #   改一个空格就整条回退失效、n_i 全标不出来）
+        _NI_LOG_RE = re.compile(r"\[fermi_fix\]\s*本征点\s*([0-9.eE+-]+)\s*K\s*[：:]"
+                                r"\s*E_F\s*=\s*([0-9.eE+-]+)\s*eV\s*[，,;；]?\s*"
+                                r"n\s*=\s*p\s*=\s*([0-9.eE+-]+)\s*cm\^-3")
     logs = []
     if run.is_dir():
         for f in run.iterdir():
@@ -2699,6 +2702,14 @@ def write_undoped_plots(cwd, plots, M, is_2d):
             r["n_i_lit_cm-3"] = r["n_i_cm-3"] * geom["c_over_t"] if ok else None
     if ni:
         print("[..] 本征浓度 n_i(T) 读自 %s" % ni_src)
+        _t_all = sorted({r["T_K"] for r in rows})
+        _t_ni = sorted({r["T_K"] for r in rows if r.get("n_i_cm-3") is not None})
+        if len(_t_ni) < len(_t_all):
+            # [0052-r1] 别静默只给半套 n_i：日志回退只认到部分温度（本轮没写完 / 日志被截断）时说清楚
+            print("[WARN] n_i 只覆盖 %d/%d 个温度点（缺 %s）—— 缺的点图上不标数值；"
+                  "重跑 ke-dft-cpu S8/S8.4 会写全 undoped_ni.json"
+                  % (len(_t_ni), len(_t_all),
+                     ", ".join("%gK" % T for T in _t_all if T not in _t_ni)))
     else:
         print("[..] 本征浓度 n_i 无法标注：%s" % ni_src)
     panels = [("sigma_S/m", "sigma (S/m)" + (", per layer t" if is_2d else ""), True),
@@ -2761,10 +2772,15 @@ def write_undoped_plots(cwd, plots, M, is_2d):
 
 
 def _clear_dir(d):
-    """[0052] 清空目录内容（保留目录本身）；删不掉的只告警。"""
+    """[0052] 清空目录内容（保留目录本身）；删不掉的只告警。
+    [0052-r1] 目录本身是符号链接时不动手：否则 rmtree/unlink 会顺着链接删到别处的产物。"""
     import shutil
+    p = Path(d)
+    if p.is_symlink():
+        print("[WARN] %s 是符号链接，跳过清空（避免顺着链接删到别处）" % d)
+        return 0
     n = 0
-    for f in list(Path(d).iterdir()) if Path(d).is_dir() else []:
+    for f in list(p.iterdir()) if p.is_dir() else []:
         try:
             if f.is_dir() and not f.is_symlink():
                 shutil.rmtree(f)

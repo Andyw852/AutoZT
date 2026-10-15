@@ -196,7 +196,9 @@ def make_transport(mdir, out, M):
           Line2D([], [], color="tab:blue", lw=1.0, ls="-.", label="DPT band-edge e-"),
           Line2D([], [], color="tab:purple", lw=1.0, ls="-.", label="DPT band-edge h+")]
     fig.legend(handles=hh, loc="lower center", ncol=5, fontsize=9, frameon=False)
-    fig.suptitle("%s  electronic transport  (100-900 K)   --   x = carrier conc. n,  left = n-type, right = p-type" % M, fontsize=12)
+    _trng = "%g-%g K" % (min(btT), max(btT)) if btT else ""     # [0052-r1] 温度范围按实际网格，不再写死 100-900 K
+    fig.suptitle("%s  electronic transport  (%s)   --   x = carrier conc. n,  left = n-type, right = p-type"
+                 % (M, _trng), fontsize=12)
     fig.tight_layout(rect=[0, 0.03, 1, 0.985])
     fig.savefig(os.path.join(out, "%s_transport.png" % M), dpi=130); plt.close(fig)
     return True
@@ -239,9 +241,14 @@ def make_intrinsic(mdir, out, M):
     hh = [Line2D([], [], color=c, lw=1.4, ls=ls, marker=mk, ms=4, label=DS_LABELS.get(ds, ds)) for ds, c, ls, mk in DATASETS]
     hh.append(Line2D([], [], color="0.35", lw=1.0, ls=(0, (1, 1)), label="DPT (band-edge, mu only)"))
     fig.legend(handles=hh, loc="lower center", ncol=5, fontsize=9, frameon=False)
+    # [0052-r1] 文案与权威脚本 gen_step13_output.py 对齐：温度范围按实际网格；写明 'intrinsic' 指
+    #   本征散射（去 IMP）而非本征载流子浓度（后者在 transport_plots/intrinsic_carrier/）。
+    _trng = "%g-%g K" % (min(temps), max(temps)) if temps else ""
     fig.suptitle("%s  intrinsic transport  (overall / intrinsic(no IMP) / ADP only / BT2xDPT-tau)"
-                 "  100-900 K" % M, fontsize=12)
-    fig.tight_layout(rect=[0, 0.03, 1, 0.985])
+                 "  %s\nx = doping concentration; 'intrinsic' = intrinsic SCATTERING (no impurity),"
+                 " not intrinsic carrier concentration -> see intrinsic_carrier/"
+                 % (M, _trng), fontsize=11)
+    fig.tight_layout(rect=[0, 0.03, 1, 0.985 - 0.012])   # 两行标题留位置（与权威脚本同法）
     fig.savefig(os.path.join(out, "%s_intrinsic.png" % M), dpi=130); plt.close(fig)
     return True
 

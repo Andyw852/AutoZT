@@ -511,6 +511,12 @@ def make_intrinsic(out, grid, meta, ni, ni_src):
     rows = zc.intrinsic_rows(grid, ni)
     if not rows:
         return None
+    if ni and any(r["n_i_cm-3"] is None for r in rows):
+        # [0052-r1] 别静默只给半套 n_i：日志回退只认到部分温度（本轮没写完 / 日志被截断）时说清楚
+        _miss = [r["T_K"] for r in rows if r["n_i_cm-3"] is None]
+        print("[WARN] n_i 只覆盖 %d/%d 个温度点（缺 %s）—— 缺的点不标数值"
+              % (len(rows) - len(_miss), len(rows),
+                 ", ".join("%gK" % t for t in _miss)))
     d = Path(out) / INTR_DIR
     d.mkdir(exist_ok=True)
     cols = ["T_K", "n_i_cm-3", "E_F_eV", "seebeck_uV/K", "sigma_S/m", "kappa_e_W/mK", "kappa_L_W/mK",
@@ -667,9 +673,6 @@ def main():
     cwd = Path.cwd()
     out = cwd / OUTDIR
     out.mkdir(exist_ok=True)
-    _nold = clear_old_products(out)               # [0052] 先删旧结果
-    if _nold:
-        print("[..] 已删除上一轮的 %d 项旧产物" % _nold)
 
     srcs = check_input_sources(cwd)
     tr_path, tr_src = _find_transport(cwd)
@@ -809,6 +812,13 @@ def main():
                                    "material_dir": v.get("material_dir"),
                                    "origin": v.get("origin")} for k, v in srcs.items()}},
     }
+    # [0052-r1] 旧产物等【输入全部校验/解析通过、且确认有可算的 ZT】之后再删：gen 在缺
+    #   transport.json / kappa_summary.json、解析失败、或没有任何温度能算 ZT 时会 sys.exit，
+    #   若先删掉上一轮的 zt_summary.*（done_marker），远端步骤会由 OK 变 error，下一轮 fetch
+    #   的镜像逻辑还会把本地留存的那份一并删掉 —— 输入问题不该毁掉上一轮的可用结果。
+    _nold = clear_old_products(out)
+    if _nold:
+        print("[..] 已删除上一轮的 %d 项旧产物" % _nold)
     (out / "zt_summary.json").write_text(
         json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
     (out / "zt_summary.txt").write_text(zc.text_report(grid, peaks, meta),
