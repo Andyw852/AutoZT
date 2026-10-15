@@ -133,16 +133,21 @@ class SymmetryGateTests(unittest.TestCase):
             self.assertEqual(g["bad_ops"], bad, "%s: %s" % (name, g))
             self.assertIn("bad_ops=%d/" % bad, kc.gate_log_line(g))
 
-    def test_soc_with_tr_ops_always_full_grid(self):
-        """SOC + 无反演（有 TR 操作）：ncl 分支不处理 TR -> 补丁开了也要全网格。"""
-        g = kc.symmetry_gate(gan_std(), desym_fix=True, ncl=True)
-        self.assertGreater(g["tr_ops"], 0, g)
-        self.assertTrue(g["needs_full_grid"], g)
-        # 有反演（TR 副本被去重，tr_ops=0）的 SOC 体系：补丁开了可以走 IBZ，但注明未验证
-        g = kc.symmetry_gate(shifted(si_on_atom(), [-.125] * 3), desym_fix=True, ncl=True)
-        self.assertEqual(g["tr_ops"], 0, g)
-        self.assertFalse(g["needs_full_grid"], g)
-        self.assertIn("未经实数据验证", g["reason"])
+    def test_soc_gate(self):
+        """V200：SOC 时 AMSET 原 ncl 分支 SU(2) 约一半操作转反、TR 缺 iσ_y·K。
+        不开补丁 -> 只要有非平凡转动或 TR 操作就要全网格（哪怕 bad_ops=0）；开补丁 -> IBZ，注明实数据未验证。"""
+        for st in (gan_std(), si_on_atom(), shifted(si_on_atom(), [-.125] * 3), mos2_aligned()):
+            g = kc.symmetry_gate(st, desym_fix=False, ncl=True)
+            self.assertGreater(g["spin_rot_ops"], 0, g)
+            self.assertTrue(g["needs_full_grid"], g)
+            self.assertTrue(g["needs_full_grid_original"], g)
+            g = kc.symmetry_gate(st, desym_fix=True, ncl=True)
+            self.assertFalse(g["needs_full_grid"], g)
+            self.assertIn("实数据未验证", g["reason"])
+        self.assertGreater(kc.symmetry_gate(gan_std(), ncl=True)["tr_ops"], 0)
+        self.assertEqual(kc.symmetry_gate(si_on_atom(), ncl=True)["tr_ops"], 0)
+        # 非 SOC 不受影响：对齐原点、不开补丁照样 IBZ
+        self.assertFalse(kc.symmetry_gate(si_on_atom(), desym_fix=False, ncl=False)["needs_full_grid"])
 
     def test_desym_fix_setting_priority(self):
         import os

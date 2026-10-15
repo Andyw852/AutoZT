@@ -283,8 +283,12 @@ class FullGridWasteGuardTests(unittest.TestCase):
         self.assertTrue(need, why)                                   # 补丁关 + 24/48 坏操作
         need, why = self._case(tsg.gan_std(), "off")
         self.assertFalse(need, why)                                  # 补丁关但 0 坏操作：也不需要
+        # V200：补丁修了 ncl 的 SU(2) 与 iσ_y·K -> SOC + TR 开补丁可走 IBZ；关补丁仍要全网格
         need, why = self._case(tsg.shifted(tsg.mos2_aligned(), [.1, .2, 0]), "on", soc=True)
-        self.assertTrue(need, why)                                   # SOC + TR 操作：补丁未验证
+        self.assertFalse(need, why)
+        self.assertIn("实数据未验证", why)
+        need, why = self._case(tsg.mos2_aligned(), "off", soc=True)
+        self.assertTrue(need, why)                                   # 0 坏相位操作，但 SOC 原式 SU(2)/TR 错
 
     def test_force_key_in_spec(self):
         self.assertIn("FULL_GRID_FORCE", self.G5B.SPEC)

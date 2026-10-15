@@ -9031,3 +9031,57 @@ V121 的 `dp_symmetrize` 当成带符号张量做 rᵀ D(rk) r。另：AMSET 非
 **用户侧**：与 V188 一起 —— 重新 gen S7.1（秒级）后重跑 S8/S8.4/S8.2；`compare_deformation_h5.py` 会把"旧运行剪切口径不同"
 单独判出来（非对角权重 > 2%）。
 
+
+## V200（2026-10-15）：[0051] SOC 去对称化修好 —— AMSET 的 ncl 分支 SU(2) 约一半操作转反 + TR 缺 iσ_y·K
+
+**缘起**：V115 的相位补丁只修了 `exp(±2πi(k+G)·τ)`，补丁说明里记着 ncl（SOC）分支"TR 操作不取共轭、
+不乘 iσ_y，补丁不修"，判据于是对 SOC + TR 操作一律要求全网格（ISYM=-1）。用户要求不走全网格、直接修。
+
+**检验台**：`test_desym_fix.tb_spinor_coeffs` —— tb_coeffs 的 s 轨道 ⊗ 自旋，加 Kane–Mele 型自旋轨道项
+`iλ_m Σ_m w(d1)w(d2) (d1×d2)·σ`（叉积与 σ 都是轴矢量 -> 对含非真转动的全部空间群操作不变；Θ = iσ_y K 下不变；
+`A_ba(−R) = −A_ab(R)` 保证厄米）。每个全网格 k 点直接对角化得真值，再走 `tools/desym_fix_validate.validate`。
+另写了与 AMSET 完全无关的独立参考 `[O_g ψ](r) = U(R) ψ(R⁻¹(r−τ))`（U 用 `exp(−iθ n·σ/2)`），
+48/48 个 Si 操作非 TR 与 TR（iσ_y K）全部 |cos| = 1 —— 模型本身无误。
+
+**查出两处错**（不止 TR）：
+1. **SU(2) 方向**：`rotation_matrix_to_su2` 的 `get_rotation_angle` 只给无符号转角、`get_rotation_axis` 把轴强制翻到
+   z≥0 半球，组合起来约一半转动给出 U(R⁻¹) 而不是 U(R)。Si 48 个操作：与正确 SU(2) 等价（差 ±1）的只有 8 个
+   （恒等、反演、部分 90°/180°），40 个不等价。于是**有反演、根本没有 TR 操作**的 SOC 体系（Si、hcp）
+   原式也错 —— 旧判据把它们放行到 IBZ 是错的。
+2. **TR**：ncl 分支对 TR 操作既不共轭也不乘 iσ_y（common.py 第 145 行 `if tr and not ncl`）。
+
+**修法**（`amset_desym_fix.py`，仍是 desymmetrize_coefficients 的逐行拷贝）：
+- `su2_from_rotation`：四元数（Shepperd 法）构造 `U = q0 − i q·σ`，非真转动先乘反演；
+- TR 且 ncl：先复共轭，再 `(c_up, c_dn) -> (c_dn, −c_up)`；
+- 非 SOC 路径一个字节不变（test_noop_when_all_tau_zero 逐位相同照旧通过）。
+
+**结果**（12 个构型 = test_symmetry_gate.CASES；旋量模型）：
+
+| 构型 | TR 操作 | 原 AMSET 式出错 k 点 | 修正式最小 \|cos\| |
+|---|---|---|---|
+| GaN 标准 / 原点在 Ga / 任意平移 | 8 | 28 / 28 / 38（共 48） | 0.999999 |
+| MoS₂ 对齐后 / 对齐前 | 6 | 25 / 29（共 36） | 0.999999 |
+| Si 原点在原子 / 反演中心 / 任意平移 | 0 | 35 / 40 / 41（共 64） | 1.000000 |
+| hcp 标准 / 任意平移 | 0 | 14 / 27（共 48） | 0.999999 |
+| 闪锌矿 标准 / 任意平移 | 12 | 41 / 43（共 64） | 0.999999 |
+
+（10⁻⁶ 的地板来自 G 球截断：旋转后的 G 有少数落在球外。）
+
+**判据改动**（`ke_common.symmetry_gate`）：新增 `spin_rot_ops`（真转动部分 ≠ I 的操作数）。
+- SOC 且未开补丁：有非平凡转动或 TR 操作 -> 全网格（以前只看 TR，Si/hcp 这类会被错放行）；
+- SOC 且开补丁（出厂默认）-> IBZ，reason 注明"旋量模型 12/12 通过、SOC 实数据未验证"；
+- 非 SOC 不变。
+
+**测试**：test_desym_fix 新增 `test_soc_spinor_model`、`test_su2_from_rotation`（U σ_i U† = Σ_j R_ji σ_j、同态、
+反演不作用于自旋）—— 13/13 通过；test_symmetry_gate 的 SOC 用例改为 `test_soc_gate` —— 11/11；
+test_gen_desym_wiring 的"SOC + TR 开补丁仍要全网格"改为"开补丁走 IBZ、关补丁要全网格"（其余 3 项报错是本地缺
+BoltzTraP2，改动前就有）。本地环境 amset 0.5.1 源码 + pymatgen/spglib 2.8，Python 3.13。
+
+**边界**：
+- **SOC 实数据没验证**：要在一个 SOC 材料上用 S3b/S4b 全网格 h5 跑一次 `tools/desym_fix_validate.py`
+  （它会同时报原式/修正式）才算闭环；之前 SOC 项目都被判据送去全网格，所以已有结果不受影响。
+- 本项目现有 2D 材料（MoS₂ 等）都不开 SOC，本次改动对它们的数值**没有任何影响**。
+
+**README**：S8.4 README 第 369 行起那段 2026-09-17 的重叠记录（"固定 unity_overlap: true"、
+"desymmetrize_coefficients 修好之前不能写进论文"）与现行代码（`UNITY_OVERLAP = False`、`DESYM_FIX_DEFAULT = True`）
+矛盾，已在段首加"现行口径"并把旧段标为历史记录；论文要求是否解除仍待用户裁定，未擅自改。
