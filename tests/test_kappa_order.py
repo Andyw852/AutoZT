@@ -64,10 +64,26 @@ def test_mesh_first_then_cutoffs_at_converged_mesh(tmp_path, monkeypatch):
     assert s["convergence_order"][0].startswith("q_mesh")
 
 
-def test_chosen_not_reference_rechecks_mesh(tmp_path, monkeypatch):
+def test_chosen_not_reference_reuses_reference_mesh(tmp_path, monkeypatch):
+    """[V190] 选中档 ≠ 参考档时不再从收敛长度起为它单独复核网格：网格只在参考档（标称截断）上收敛一次，
+    选中档直接用它在收敛网格 L* 上的结果，并在 kappa_summary.json 里写明网格是在哪个截断上收敛的。
+    （旧行为：tag != ref 时再调一次 _converge_mesh(first=L*)，在更密的网格上空转。）"""
     calls, s = _run(tmp_path, monkeypatch, chosen=4.0)
-    assert calls[-1] == ("conv", 4.0, 70.0)                   # 从收敛长度起复核
+    assert [c for c in calls if c[0] == "conv"] == [("conv", 5.0, None)]   # 只在参考档收敛一次
+    assert ("bte", 4.0, ("length", 70.0)) in calls                          # 选中档在收敛网格上跑过
     assert s["chosen_cutoff_A"] == 4.0
+    assert s["kappa_inplane_300K"] == 10.0 / 4.0                            # 用的是选中档自己的结果
+    assert s["mesh"] == "70 70 1" and s["mesh_converged"] is True           # 网格收敛结论来自参考档
+    assert s["mesh_converged_on_cut3_A"] == 5.0
+    assert s["mesh_reference_cut3_A"] == 5.0
+    assert s["mesh_reused_from_reference_cut"] is True
+
+
+def test_chosen_is_reference_not_marked_reused(tmp_path, monkeypatch):
+    calls, s = _run(tmp_path, monkeypatch, chosen=5.0)
+    assert [c for c in calls if c[0] == "conv"] == [("conv", 5.0, None)]
+    assert s["mesh_converged_on_cut3_A"] == 5.0
+    assert "mesh_reused_from_reference_cut" not in s
 
 
 def test_reference_falls_back_to_largest():
