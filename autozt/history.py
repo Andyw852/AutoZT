@@ -106,6 +106,8 @@ def history_record(cfg, data, force=False):
     for t in (data or {}).get("types", []):
         key = t.get("key")
         for m in t.get("materials", []):
+            if m.get("config_only"):
+                continue      # 未采集的占位数据（collect._config_only_result）：不记状态转移
             mname = m.get("name")
             host = m.get("host_eff")
             for s in m.get("steps", []):

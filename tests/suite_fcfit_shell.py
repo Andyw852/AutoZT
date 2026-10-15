@@ -78,6 +78,65 @@ def test_shells_and_candidates():
         check("候选都是相邻壳层中点、不落在壳层上", ok_mid, str((cands, sh)))
 
 
+def _write_quasi_poscar(d, n=48, a=8.0, dmin=1.3, seed=7):
+    """随机致密原胞（最小间距 dmin）：原子对距离准连续，没有壳层间隙。"""
+    import random
+    rng = random.Random(seed)
+    pts = []
+    while len(pts) < n:
+        f = [rng.random() for _ in range(3)]
+        if all(sum(min(abs(f[k] - g[k]), 1 - abs(f[k] - g[k])) ** 2
+                   for k in range(3)) ** 0.5 * a >= dmin for g in pts):
+            pts.append(f)
+    p = Path(d) / "POSCAR"
+    p.write_text("C\n1.0\n%.6f 0 0\n0 %.6f 0\n0 0 %.6f\nC\n%d\nDirect\n" % (a, a, a, n)
+                 + "".join("%.8f %.8f %.8f\n" % tuple(f) for f in pts), encoding="utf-8")
+    return p
+
+
+def test_quasi_continuous():
+    print("[1b] 准连续距离谱 → 显式半径网格")
+    with tempfile.TemporaryDirectory() as d:
+        poscar = _write_quasi_poscar(d)
+        cands, _, note = fc.cut3_candidates(poscar, r_max=7.0, tol=0.05)
+        check("准连续 → QUASI_GRID", cands == list(fc.QUASI_GRID), str(cands))
+        check("note 带准连续标记", fc.QUASI_TAG in note, note)
+        c_auto, _, n_auto = fc.resolve_cut3_candidates(poscar, "auto")
+        check("auto 同样走网格且带标记",
+              c_auto == list(fc.QUASI_GRID) and fc.QUASI_TAG in n_auto, str(c_auto))
+        c_lim, _, _ = fc.cut3_candidates(poscar, r_max=5.0, tol=0.05)
+        check("网格不越过 r_max(CUT3_MAX)", c_lim == [3.0, 3.5, 4.0, 4.5], str(c_lim))
+        c_exp, _, _ = fc.resolve_cut3_candidates(poscar, "3.0 6.0")
+        check("显式列表不受影响", c_exp == [3.0, 6.0], str(c_exp))
+    fx = ROOT / "tests" / "fixtures" / "mn2in2se5" / "POSCAR"
+    cands, sh, note = fc.cut3_candidates(fx, r_max=7.0, tol=0.05)
+    check("真实晶体（Mn2In2Se5）不判准连续",
+          fc.QUASI_TAG not in note and cands != list(fc.QUASI_GRID) and len(cands) >= 3,
+          str(cands))
+
+
+def test_nth_neighbor_candidates():
+    print("[1c] auto 候选 = thirdorder.py -n 第 N 近邻截断（N≥2）")
+    import bisect
+    si = ROOT / "test" / "tf_test" / "Si" / "POSCAR"
+    cands, _, _ = fc.cut3_candidates(si, r_max=7.0, tol=0.05)
+    check("Si：N=2..6 = 4.17/4.97/5.67/6.28/6.85",
+          cands == [4.17, 4.97, 5.67, 6.28, 6.85], str(cands))
+    fx = ROOT / "tests" / "fixtures" / "mn2in2se5" / "POSCAR"
+    cands, _, note = fc.cut3_candidates(fx, r_max=7.0, tol=0.05)
+    lat, frac = fc.read_poscar_cell_frac(fx)
+    per_atom = fc._per_atom_shells(lat, frac, 10.0, fc.NN_TOL)
+    exact = [max(0.5 * (u[n - 1] + u[n]) for u in per_atom) for n in range(2, 12)]
+    exact = [c for c in exact if c <= 7.0]
+    check("Mn2In2Se5：每个 N≥2 都有一档（近简并只提示不剔除）",
+          len(cands) == len(exact), str((cands, exact)))
+    pair_ds = sorted(d for u in per_atom for d in u)
+    same = all(bisect.bisect_left(pair_ds, c) == bisect.bisect_left(pair_ds, e)
+               for c, e in zip(cands, exact))
+    check("2 位小数截断与精确 -n 值包含同一组原子对", same, str((cands, exact)))
+    check("近简并档在 note 里提示", "N=2:3.88" in note, note)
+
+
 def test_resolve():
     print("[2] resolve_cut3_candidates 解析")
     with tempfile.TemporaryDirectory() as d:
@@ -815,6 +874,8 @@ def test_scan_flow_no_recheck_and_kappa_files():
 
 def main():
     test_shells_and_candidates()
+    test_quasi_continuous()
+    test_nth_neighbor_candidates()
     test_resolve()
     test_safe_cutoff()
     test_fc3_shell_stability()

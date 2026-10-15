@@ -271,6 +271,66 @@ def test_progress_file_roundtrip_merge_and_retry_escalation(tmp_path):
     assert view["projects"] == {"pilot": {"opt": {"materials": 1, "states": {"R": 1}}}}
 
 
+def test_fail_count_counts_attempts_not_flapping(tmp_path):
+    """fail_count 只统计"由一次尝试造成的 FAIL"（R/PD/TODO/PREP -> FAIL）。
+
+    OK/WAIT -> FAIL 是状态抖动（远端目录短暂不可见 dir missing、只读命令没采集），
+    不是重投。2026-10-15 实测：Si_hanhai S2.15_discr 的 fail_count 涨到 71，其中
+    66 次来自这种翻转，步骤被误升级成 human_review 而停止推进。"""
+    cfg = {"_config_dir": str(tmp_path), "max_auto_retries": 2}
+    P.write_progress(cfg, _data(), full_scope=True)
+
+    def ev(f, t, e="state"):
+        return json.dumps({"mat": "Al/X", "skill": "opt", "step": "S1",
+                           "ev": e, "f": f, "t": t}) + "\n"
+
+    def count():
+        doc = P.load_progress(cfg)
+        return [m for m in doc["materials"] if m["id"] == "batch/Al/X"][0]["fails"][0]
+
+    (tmp_path / "history.jsonl").write_text(
+        ev("OK", "FAIL") + ev("WAIT", "FAIL") * 30 + ev("R", "FAIL", "fail") + ev("TODO", "FAIL"))
+    P.write_progress(cfg, _data(), full_scope=False)
+    fail = count()
+    assert fail["fail_count"] == 2            # R->FAIL（真跑挂）+ TODO->FAIL（粗采集漏掉 R）
+    assert fail["action"] == "retry"          # 2 <= max_auto_retries：还没停机
+
+    (tmp_path / "history.jsonl").write_text(
+        ev("R", "FAIL", "fail") + ev("PREP", "FAIL") + ev("TODO", "FAIL"))
+    P.write_progress(cfg, _data(), full_scope=False)
+    fail = count()
+    assert fail["fail_count"] == 3            # 第三次尝试失败 -> 卡在 human_review
+    assert fail["action"] == "human_review"
+
+    (tmp_path / "history.jsonl").write_text("".join([ev("WAIT", "FAIL")] * 9))
+    P.write_progress(cfg, _data(), full_scope=False)
+    fail = [m for m in P.load_progress(cfg)["materials"] if m["id"] == "batch/Al/X"][0]["fails"][0]
+    assert fail["fail_count"] == 0            # 纯抖动 -> 0，不再虚增
+
+
+def test_config_only_round_is_not_recorded_as_state(tmp_path):
+    """conf/dir（只看配置）产出的"未采集"占位数据（config_only）不得写进
+    history.jsonl / .tf_progress.json —— 否则每跑一次 conf 都把所有步骤记成一次
+    WAIT 转移，下一轮真采集再翻回 FAIL，失败计数与状态视图双双被污染。"""
+    from autozt import history as H
+    cfg = {"_config_dir": str(tmp_path)}
+    P.write_progress(cfg, _data(kind="FAIL", diag="OUTCAR incomplete"), full_scope=True)
+    before = P.load_progress(cfg)["materials"][0]
+    assert before["state"] == "FAIL"
+    placeholder = {"queue": {}, "types": [{"key": "opt", "materials": [{
+        "name": "Al/X", "project": "batch", "qualified_name": "batch/Al/X",
+        "config_only": True, "hpc_name": "jzzn", "active": None,
+        "steps": [{"label": "S1", "name": "step1", "kind": "WAIT",
+                   "diag": "(未采集：只读配置)"}]}]}]}
+    assert H.history_record(cfg, placeholder) == 0
+    assert not (tmp_path / "history.jsonl").exists()
+    P.write_progress(cfg, placeholder, full_scope=False)
+    assert P.load_progress(cfg)["materials"][0] == before    # 旧条目原样保留
+    # 真采集照常记录状态转移（第一次只落基线，第二次才出事件）
+    assert H.history_record(cfg, _data(kind="FAIL", diag="OUTCAR incomplete")) == 0
+    assert H.history_record(cfg, _data(kind="OK", diag="finished")) == 1
+
+
 def test_progress_eta_from_history_medians(tmp_path):
     cfg = {"_config_dir": str(tmp_path)}
     (tmp_path / "history.jsonl").write_text("".join(

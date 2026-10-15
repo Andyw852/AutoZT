@@ -5,7 +5,7 @@
 背景：同一套「原胞基矢真空轴映射 + 60° 面内基的第二方向 + 本征矢量识别 ZA 支 +
 symprec 审计」逻辑此前在三个文件里各写了一份：
   · skill/fit-fc-thermal/fc_plot_phonon.py
-  · skill/kl-dft-cpu/kl_fc_backends.py
+  · skill/kl-dft-cpu/kl_fc_backends.py（2026-10-15 已删）
   · skill/_common/mlff/klmlff_common.py
 修一个 bug 要改三处，故收敛到这里。三份现已**全部**改为 import 本模块：
 mlff 第三份于 2026-09-22 迁移完成（HANDOVER §38），本模块是 ZA 判定的**唯一真源**。

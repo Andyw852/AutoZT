@@ -113,8 +113,20 @@ def load_progress_view(cfg):
     return doc
 
 
+# 计为"一次失败"的**前一状态**：必须是一次真正的尝试。R/PD = 在跑/排队；
+#   TODO = 输入已生成待提交（采集间隔较粗时，作业跑完并失败会表现为 TODO->FAIL）；
+#   PREP = 目录被重生成。OK/WAIT -> FAIL 是**状态抖动**（远端目录短暂不可见 dir missing、
+#   上游文件刷新、只读命令没采集等），不是重投 —— 以前把它们也计数，导致 Si_hanhai
+#   S2.15_discr 的 fail_count 涨到 71（其中 66 次是占位/抖动翻转），步骤被提前
+#   升级成 human_review 并停止推进。见 tests/test_ai_integration.py 的计数用例。
+_ATTEMPT_PREV = ("R", "PD", "TODO", "PREP")
+
+
 def _history_stats(cfg):
-    """从 history.jsonl 读出 (各 技能|步骤 的完成耗时列表, 各 材料|技能|步骤 的失败次数)。"""
+    """从 history.jsonl 读出 (各 技能|步骤 的完成耗时列表, 各 材料|技能|步骤 的失败次数)。
+
+    失败次数只统计"由一次尝试造成的 FAIL"（见 _ATTEMPT_PREV），语义对应
+    AGENTS.md 第五节的"同一步骤 retry 过 max_auto_retries 次仍 FAIL"。"""
     from autozt.history import history_path
     durs, fails = {}, {}
     path = history_path(cfg)
@@ -132,7 +144,7 @@ def _history_stats(cfg):
                 if e.get("ev") == "finish" and e.get("dur"):
                     durs.setdefault((e.get("skill"), e.get("step")), []).append(
                         int(e["dur"]))
-                elif e.get("t") == "FAIL" and e.get("f") != "FAIL" \
+                elif e.get("t") == "FAIL" and e.get("f") in _ATTEMPT_PREV \
                         and e.get("ev") in ("state", "fail"):
                     k = (e.get("mat"), e.get("skill"), e.get("step"))
                     fails[k] = fails.get(k, 0) + 1
@@ -187,6 +199,8 @@ def build_entries(cfg, data, now=None):
     for t in (data or {}).get("types") or []:
         key = t.get("key")
         for m in t.get("materials") or []:
+            if m.get("config_only"):
+                continue      # 未采集的占位（conf/dir）：保留进度文件里的旧条目，别覆盖成 WAIT
             mid = m.get("qualified_name") or m.get("name")
             a = m.get("active") if isinstance(m.get("active"), dict) else None
             steps = m.get("steps") or []

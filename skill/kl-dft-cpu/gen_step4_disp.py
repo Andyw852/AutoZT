@@ -73,15 +73,16 @@ SPEC = {
     "OVERSAMPLE":   (3,        "int"),   # alm 过采样系数（超定 3 倍）
     "ALM_CUT2":     (None,     "float"), # alm 二阶截断(Å)；空=不截断
     "ALM_CUT3":     (6.0,      "float"), # alm 三阶截断(Å)；CUT3_CANDIDATES=off 时用它
-    # ---- 三阶截断扫描（2026-09-24 user 定）：候选截断取【相邻壳层中点】，S5 逐个拟合、
+    # ---- 三阶截断扫描（2026-09-24 user 定）：候选截断取【thirdorder.py -n 第 N 近邻截断】
+    #   （2026-10-15 起，N≥CUT3_MIN_SHELLS；准连续谱改 3.0–6.0 Å 网格），S5 逐个拟合、
     #   S6 逐个算 κ，按三判据（CV 1-SE / 逐壳层 Φ³ bootstrap 稳定性 / κ 到平台）选最小可行。
     #   auto = 从结构枚举壳层自动生成；off/none = 不扫描（单截断）；也可显式 "3.6 4.2 4.8"。
     #   生成帧数按【最大候选截断】估 —— 一次把所有候选需要的帧都生成（小截断是子集）。
     "CUT3_CANDIDATES":     ("auto", "str"),
-    "CUT3_MAX":            (7.0,    "float"), # auto 枚举壳层的最大半径(Å)
-    "CUT3_MIN_SHELLS":     (2,      "int"),   # 候选至少含几个壳层（跳过最近邻中点）
-    "CUT3_GAP_TOL":        (0.05,   "float"), # 壳层聚类容差（防 6.34/6.36 夹缝）
-    "CUT3_MIN_GAP":        (0.05,   "float"), # 相邻壳层间距 < 它则跳过该中点
+    "CUT3_MAX":            (7.0,    "float"), # auto 候选的最大截断(Å)
+    "CUT3_MIN_SHELLS":     (2,      "int"),   # 从第几近邻起（-n 的 N，默认跳过只含最近邻那档）
+    "CUT3_GAP_TOL":        (0.05,   "float"), # 准连续判定用的壳层聚类容差(Å)
+    "CUT3_MIN_GAP":        (0.05,   "float"), # 截断离原子对距离 < 它/2 时提示近简并（不剔除）
     "CUT3_MAX_CANDIDATES": (12,     "int"),   # 候选上限，控制 S5 拟合次数
     "DISP_RMS":     (0.03,     "float"), # MC-rattle 目标位移模长 RMS(Å)
     "MC_DMIN_SCALE": (0.75,    "float"), # MC d_min = 最近邻 × 此系数
@@ -602,7 +603,7 @@ def main():
                  "conf --set params.METHOD=alm\n"
                  "        （alm = 随机位移 + 压缩感知回归，帧数更少，是当前唯一受支持的路径。）")
 
-    # ---- 三阶截断候选（2026-09-24 user 定）：取相邻壳层中点；生成按最大候选估帧 ----
+    # ---- 三阶截断候选（2026-09-24 user 定；2026-10-15 改 -n 定义）：生成按最大候选估帧 ----
     _cands, _shells, _cnote = kc.resolve_cut3_candidates(
         out / "POSCAR", conf["CUT3_CANDIDATES"],
         cut3_max=float(conf["CUT3_MAX"]), tol=float(conf["CUT3_GAP_TOL"]),

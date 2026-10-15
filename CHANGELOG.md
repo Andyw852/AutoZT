@@ -14,6 +14,18 @@ This project adheres to Semantic Versioning; versions before 1.0.0 are developme
 
 ## [Unreleased]
 
+### Fixed (2026-10-15: fail counter counted state flapping as retries; conf/dir polluted state)
+- autozt/progress.py: _history_stats now counts a failure only when the FAIL came from an actual
+  attempt (previous state R / PD / TODO / PREP). OK->FAIL and WAIT->FAIL are flapping (the remote step
+  directory is briefly invisible, an upstream file was refreshed, or a read-only command did not collect
+  the material) and used to inflate the count until the step was promoted to human_review and stopped
+  being advanced. Measured on Si_hanhai/ke-dft-cpu/S2.15_discr: 71 -> 2.
+- autozt/collect.py: the "not collected" placeholder from conf / dir (CONFIG_ONLY) is marked
+  config_only; autozt/history.py and autozt/progress.py skip it. Previously every conf/dir call
+  recorded a WAIT transition for every step of every material and the next real collect flipped it
+  back to FAIL - corrupting both the failure count and the progress view.
+- Regression tests: tests/test_ai_integration.py::test_fail_count_counts_attempts_not_flapping and
+  ::test_config_only_round_is_not_recorded_as_state.
 ### Fixed / Added (2026-10-15: ke S7.2 frozen-phonon ODP follow-up to the kz=1 change)
 - S7.2 `ODP_KZ_VACUUM` default is now `auto`: if the step already has single points that ran (or are
   running) on a kz>1 grid it behaves as `keep`, so regenerating an in-flight material no longer changes

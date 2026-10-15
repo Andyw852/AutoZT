@@ -443,7 +443,12 @@ def _config_only_result(types):
         mats = []
         for name in td.get("materials") or []:
             path = os.path.join(root, name)
-            mats.append({"name": name, "path": path, "dim": "", "steps": [
+            # config_only：这份数据是"没采集"的占位，**绝不能**当成真实状态写进
+            #   history.jsonl / .tf_progress.json —— 否则每跑一次 conf/dir（秒级的
+            #   只读命令）都会把该材料的所有步骤记成一次 WAIT 状态转移，下一轮真采集
+            #   再翻回 FAIL，失败计数被凭空 +1（2026-10-15 实测：Si_hanhai S2.15_discr
+            #   66/71 次"失败"来自这种占位翻转，把步骤误升级成 human_review）。
+            mats.append({"name": name, "path": path, "dim": "", "config_only": True, "steps": [
                 {"name": st["name"], "label": st.get("label") or st["name"],
                  "dir": os.path.normpath(os.path.join(path, st["name"])),
                  "exists": False, "has_incar": False, "has_outcar": False,

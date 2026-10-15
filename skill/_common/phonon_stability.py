@@ -3,8 +3,8 @@
 
 ## 为什么有它
 2 阶声子的「虚频判据 + 2D ZA 二次性」此前在 kl-dft-cpu(S5_fc)、phonon-dft-cpu(S3)、
-phonon-mlff-cpu/gpu、fit-fc-thermal 各处各写一份，改一处漏一处（kl_fc_backends.py 顶部 TODO
-早记了这事）。本模块把【编排】收成一份：网格选择 / mesh+band 采样 / imag_policy 判定 /
+phonon-mlff-cpu/gpu、fit-fc-thermal 各处各写一份，改一处漏一处（当年 kl_fc_backends.py 顶部
+TODO 早记了这事；该文件已于 2026-10-15 删除，编排现由本模块与 fc_fit_driver 承担）。本模块把【编排】收成一份：网格选择 / mesh+band 采样 / imag_policy 判定 /
 ZA 二次性；阈值与分类规则仍在 _common/imag_policy.py 与 _common/za_2d.py（各自唯一真源）。
 
 调用方需保证 ph 是已拟合 fc2 的 phonopy.Phonopy 对象；本模块不碰拟合。

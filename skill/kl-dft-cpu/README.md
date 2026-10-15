@@ -114,9 +114,17 @@ templates/` 里旧的同名模板（否则旧集群的 partition/qos 会盖住�
 ## 三阶截断自动选择（2026-09-24，S4/S5/S6 联动）
 
 κ 偏低的一个根因是三阶截断没人验证。现在按「候选 → 判据 → 选择」自动定：
-- **S4**（`step4_disp/step.conf` 的 `CUT3_CANDIDATES=auto`）：按原胞相邻壳层的**中点**生成
-  候选截断（不落在壳层距离上；两壳间距 < `CUT3_MIN_GAP` 的跳过，避免 WS₂ 6.34/6.36 Å
-  这种双壳）。S4 按**最大候选**估帧、定超胞，候选列表记进 `disp_plan.json`。
+- **S4**（`step4_disp/step.conf` 的 `CUT3_CANDIDATES=auto`）：候选 = ShengBTE
+  `thirdorder.py -n` 的**第 N 近邻截断**（2026-10-15 起，与 fit-fc-thermal `SWEEP_C3_SHELLS`
+  同一定义）：逐原子列不同近邻距离 u₁<u₂<…（容差 1e-4 Å），cutoff(N) = max_原子 (u_N+u_{N+1})/2，
+  N 从 `CUT3_MIN_SHELLS`(2) 到 `CUT3_MAX`。截断取 2 位小数且包含的原子对与精确值相同；离某原子
+  对距离 < `CUT3_MIN_GAP`/2 的档只提示「近简并」不剔除；越过超胞安全截断的档在 S5 剔除（不再补
+  「安全上限」档）。S4 按**最大候选**估帧、定超胞，候选列表记进 `disp_plan.json`。
+  **准连续距离谱**（低对称大原胞，如 128 原子富勒烯网络：1.37→7 Å 没有壳层间隙）时，
+  0.05 Å 链式合并会把几 Å 的距离串成一个「壳层」：任一壳层跨度 > 0.5 Å
+  （`QUASI_SPAN`）即打 `[WARN] [准连续]`，auto 改用显式半径网格 `3.0 3.5 4.0 4.5 5.0 5.5 6.0`
+  （`QUASI_GRID`，不超过 `CUT3_MAX`），交给 S6 的 κ 平台判据挑——此时「第 N 近邻」没有
+  物理含义（N=12 才 3.4 Å）；要别的网格就显式写 `CUT3_CANDIDATES`。
 - **S5**（`step5_fc/step.conf` 的 `CUT3_SCAN=auto`）：对每档各拟合一次，每档再做
   `CUT3_BOOTSTRAP` 次帧 bootstrap，逐壳层统计 Φ³ 的 σ/|mean|（判据②），并从 bootstrap
   相对误差分布估 CV 标准误（判据①；pheasy 不打印 fold-SE，故用 bootstrap 代理）。

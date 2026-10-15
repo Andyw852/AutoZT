@@ -445,7 +445,8 @@ def imag_mesh_numbers(ph, cart_vac_axis, mesh_n=60):
 
     ★ 不要用 float mesh：phonopy 把 float 当【面间距长度】(N_i = nint(l/d_i) 且强制 Γ 中心)，
       实测 mesh=60.0 -> [2,22,22]，面内最近 q 只有 0.105 Å⁻¹，会漏掉近 Γ 的软模。
-      与 kl-dft-cpu 的 kl_fc_backends.py 是同一个 bug，2026-09-22 同步修。
+      与 kl-dft-cpu 的旧引擎 kl_fc_backends.py（2026-10-15 已删，现为 fc_fit_driver）是同一个
+      bug，2026-09-22 同步修。
       （MoS₂ 的 ZA 软模在 0.133 Å⁻¹：float mesh 报 -6.5e-8，显式 60 网格报 -0.055。）
     """
     vax = _za_vacuum_axis_in_primitive(ph, cart_vac_axis)

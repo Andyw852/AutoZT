@@ -98,8 +98,62 @@ def _min_image_shifts(cell, r_max):
     return out
 
 
-def neighbor_shells(poscar, r_max=7.0, tol=0.05, max_atoms=600):
-    """把 r_max 内的原子对距离聚类成壳层，返回 (shell_distances, n_atoms)。
+# 准连续距离谱（低对称/大原胞网络，如 128 原子富勒烯网络：1.37→7 Å 的原子对距离
+# 首尾相接、没有壳层间隙）：tol 链式合并会把几 Å 的距离串成一个"壳层"，壳层均值的
+# 中点于是落在大量原子对距离中间，候选失去物理意义。任一壳层跨度 > QUASI_SPAN 即
+# 判准连续，auto 改用显式半径网格 QUASI_GRID，交给 κ 平台判据挑（2026-10-15 user 定）。
+# 高对称晶体壳层跨度 ≈ 0（Si 0.00、Mn2In2Se5 0.09 Å），0.5 Å 留足余量。
+QUASI_SPAN = 0.5
+QUASI_GRID = (3.0, 3.5, 4.0, 4.5, 5.0, 5.5, 6.0)
+QUASI_TAG = "[准连续]"
+# 普通晶体的 auto 候选 = ShengBTE thirdorder.py -n 的第 N 近邻截断（2026-10-15 user 定）：
+# 逐原子列不同近邻距离（容差 NN_TOL，同 thirdorder 的 np.allclose），
+# cutoff(N) = max_原子 (u_N + u_{N+1}) / 2。NN_PAD = 枚举半径比 CUT3_MAX 多出的余量，
+# 保证最后一档的 u_{N+1} 也在列表里。
+NN_TOL = 1e-4
+NN_PAD = 3.0
+
+
+def _per_atom_shells(lat, frac, r_max, tol):
+    """逐原子列出 r_max 内的不同近邻距离 u_1 < u_2 < …（tol 内算同一壳层）。"""
+    natom = len(frac)
+    cart_of = [[sum(f[k] * lat[k][m] for k in range(3)) for m in range(3)]
+               for f in frac]
+    shifts = _min_image_shifts(lat, r_max)
+    tvec = [[sum(s[k] * lat[k][m] for k in range(3)) for m in range(3)]
+            for s in shifts]
+    per_atom = []
+    for i in range(natom):
+        ds = []
+        for j in range(natom):
+            for t in tvec:
+                d = math.sqrt(sum((cart_of[j][m] + t[m] - cart_of[i][m]) ** 2
+                                  for m in range(3)))
+                if 1e-6 < d < r_max:
+                    ds.append(d)
+        ds.sort()
+        u = []
+        for d in ds:
+            if not u or d - u[-1] > tol:
+                u.append(d)
+        per_atom.append(u)
+    return per_atom
+
+
+def _snap_cut(c, pair_ds):
+    """把 -n 截断落到 2 位小数（目录名 cut3_<%.2f>），且不越过任何原子对距离：
+    四舍五入/向下/向上依次试，包含的原子对集合与精确值相同才用；都不行（两距离差
+    < 0.01 Å）返回 None。"""
+    import bisect
+    lo = bisect.bisect_left(pair_ds, c)
+    for x in (round(c, 2), math.floor(c * 100) / 100.0, math.ceil(c * 100) / 100.0):
+        if bisect.bisect_left(pair_ds, x) == lo and (lo == len(pair_ds) or pair_ds[lo] != x):
+            return round(x, 2)
+    return None
+
+
+def _shell_groups(poscar, r_max=7.0, tol=0.05, max_atoms=600):
+    """把 r_max 内的原子对距离聚类成壳层，返回 (每壳层的距离列表, n_atoms)。
 
     优先 ASE neighbor_list（自动处理周期镜像）；没有 ase/失败时回退纯标准库最小镜像。
     tol 内的距离并成一个壳层 —— WS₂ 第 8/9 壳层只差 0.02 Å，必须并成一个，否则候选
@@ -138,30 +192,64 @@ def neighbor_shells(poscar, r_max=7.0, tol=0.05, max_atoms=600):
             shells.append([x])
         else:
             shells[-1].append(x)
-    return [round(sum(s) / len(s), 4) for s in shells], natom
+    return shells, natom
+
+
+def neighbor_shells(poscar, r_max=7.0, tol=0.05, max_atoms=600):
+    """壳层均值列表，返回 (shell_distances, n_atoms)；聚类见 _shell_groups。"""
+    groups, natom = _shell_groups(poscar, r_max=r_max, tol=tol, max_atoms=max_atoms)
+    return [round(sum(s) / len(s), 4) for s in groups], natom
 
 
 def cut3_candidates(poscar, r_max=7.0, tol=0.05, min_shells=2, min_gap=0.05,
                     max_candidates=12):
-    """候选三阶截断 = 相邻壳层的中点（要求截止至少含 min_shells 个壳层）。
+    """候选三阶截断 = thirdorder.py -n 的第 N 近邻截断，N = min_shells … 到 r_max 为止。
 
-    - min_shells=2：跳过"只含最近邻壳层"的最小中点（WS₂ 的 2.8 就不要，从 3.6 起）。
-    - 相邻壳层间距 < min_gap 的中点跳过 —— 防截断落在夹缝里（WS₂ 6.34/6.36）。
+    - min_shells=2：从第 2 近邻起（只含最近邻的那档不要）。
+    - 截断取 2 位小数且保证包含的原子对集合与精确 -n 值相同（_snap_cut）；离某原子对
+      距离 < min_gap/2 的档照收，只在 note 里提示（近简并，结构微扰会跨档）。
     - 升序去重；候选数 > max_candidates 时只保留最小的一批（控制 S5 拟合次数）。
-    返回 (candidates, shells, note)。
+    - 距离谱准连续（tol 聚类后任一壳层跨度 > QUASI_SPAN）时第 N 近邻也无物理意义 →
+      改用 QUASI_GRID 显式半径网格并在 note 里带 QUASI_TAG 告警。
+    - 超胞安全截断在 S5（共享 gen_step1_fit）按实际超胞逐档剔除。
+    返回 (candidates, shells, note)；shells 仍是 tol 聚类的壳层均值（κ–截断图标注用）。
     """
-    shells, natom = neighbor_shells(poscar, r_max=r_max, tol=tol)
-    cands = []
-    for k in range(int(min_shells), len(shells)):
-        a, b = shells[k - 1], shells[k]
-        if (b - a) < float(min_gap):
+    groups, natom = _shell_groups(poscar, r_max=r_max, tol=tol)
+    shells = [round(sum(s) / len(s), 4) for s in groups]
+    wide = max(groups, key=lambda s: s[-1] - s[0]) if groups else None
+    if wide is not None and wide[-1] - wide[0] > QUASI_SPAN:
+        cands = [c for c in QUASI_GRID if c < r_max]
+        note = ("%s 距离谱准连续：%.2f–%.2f Å 被并成一个壳层（跨 %.2f Å > %.1f，共 %d 对），"
+                "壳层中点无物理意义 → 改用显式半径网格 %s，由 κ 平台判据挑；"
+                "要别的网格请显式设 CUT3_CANDIDATES" % (
+                    QUASI_TAG, wide[0], wide[-1], wide[-1] - wide[0], QUASI_SPAN,
+                    len(wide), cands))
+        print("[WARN] " + note)
+        return cands, shells, note
+    lat, frac = read_poscar_cell_frac(poscar)
+    per_atom = _per_atom_shells(lat, frac, float(r_max) + NN_PAD, NN_TOL)
+    nmax = min(len(u) for u in per_atom) - 1 if per_atom else 0
+    pair_ds = sorted(d for u in per_atom for d in u)
+    cands, tags, near, lost = [], [], [], []
+    for n in range(max(1, int(min_shells)), nmax + 1):
+        c_exact = max(0.5 * (u[n - 1] + u[n]) for u in per_atom)
+        if c_exact > float(r_max):
+            break
+        c = _snap_cut(c_exact, pair_ds)
+        if c is None:
+            lost.append("N=%d:%.4f" % (n, c_exact))
             continue
-        c = round((a + b) / 2.0, 2)
-        if not cands or abs(c - cands[-1]) > 1e-9:
+        if any(abs(c - d) < 0.5 * float(min_gap) for d in pair_ds):
+            near.append("N=%d:%.2f" % (n, c))
+        if not cands or c > cands[-1] + 1e-9:
             cands.append(c)
-    note = "壳层 %s（%d 个，最近邻 %.2f Å）→ 候选截断 %s" % (
-        ["%.2f" % x for x in shells], len(shells),
-        (shells[0] if shells else float("nan")), cands)
+            tags.append("N=%d:%.2f" % (n, c))
+    note = "thirdorder -n 第 N 近邻截断（N≥%d，≤ %.2f Å）：%s" % (
+        int(min_shells), float(r_max), " ".join(tags) or "无")
+    if near:
+        note += "；提示：%s 离某原子对距离 < %.3f Å（近简并）" % (" ".join(near), 0.5 * float(min_gap))
+    if lost:
+        note += "；%s 两侧原子对距离差 < 0.01 Å，2 位小数表示不了，跳过" % " ".join(lost)
     if len(cands) > int(max_candidates):
         note += "；候选 %d 个 > %d，只保留最小的 %d 个" % (
             len(cands), int(max_candidates), int(max_candidates))

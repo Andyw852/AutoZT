@@ -82,17 +82,18 @@ SPEC = {
     "DIM": ("auto", "str"),                  # auto | 2d | 3d (NAC verdict only)
     # ---- shell / third-order cutoff determination (ported from kl-dft-cpu
     #      S4/S5, 2026-09-24 user 流程) ----
-    # Candidates are the midpoints between adjacent neighbour shells of the
-    # unit cell (never on a shell distance).  With CUT3_SCAN on and >= 2
+    # Candidates are the thirdorder.py -n N-th neighbour cutoffs of the unit
+    # cell (N >= CUT3_MIN_SHELLS, 2026-10-15); a quasi-continuous distance
+    # spectrum uses the 3.0-6.0 A grid instead.  With CUT3_SCAN on and >= 2
     # candidates the pheasy engine refits each candidate, does a frame
     # bootstrap and reports, per shell, the scatter of |Phi^3| -- i.e. how far
     # the data can actually determine the fc3 (stable_upper_cut).  See
     # fc_fit_driver._shell_scan_pheasy and cutoff_scan.json.
     "CUT3_CANDIDATES": ("auto", "str"),      # auto | off | "3.6 4.2 4.8 ..."
-    "CUT3_MAX": (7.0, "float"),              # largest radius scanned for shells (A)
-    "CUT3_MIN_SHELLS": (2, "int"),           # skip the nearest-shell-only midpoint
-    "CUT3_GAP_TOL": (0.05, "float"),         # shell clustering tolerance (A)
-    "CUT3_MIN_GAP": (0.05, "float"),         # skip a midpoint in a split double shell
+    "CUT3_MAX": (7.0, "float"),              # largest auto candidate (A)
+    "CUT3_MIN_SHELLS": (2, "int"),           # first N of the -n candidates
+    "CUT3_GAP_TOL": (0.05, "float"),         # clustering tolerance of the quasi-continuous test (A)
+    "CUT3_MIN_GAP": (0.05, "float"),         # flag a cutoff within MIN_GAP/2 of a pair distance
     # 默认 auto，与 templates/step1_fit/step.conf 一致（以前代码里是 off：项目 step.conf
     # 没写这个键就悄悄不扫，S2 只剩单点、画不出 κ 随截断的变化图）
     "CUT3_SCAN": ("auto", "str"),            # off | auto/on: refit each candidate
@@ -728,7 +729,7 @@ def _gen_one(conf, out, job_label="S1fit"):
 
     # ---- shell / third-order cutoff candidates (ported from kl-dft-cpu S4/S5) ----
     #   Cheap and engine independent: enumerate the neighbour shells of the unit
-    #   cell and take the midpoints between adjacent shells as cutoff candidates.
+    #   cell and take the thirdorder.py -n N-th neighbour cutoffs as candidates.
     #   The compute-node driver then decides (pheasy: refit + frame bootstrap)
     #   how far the data can determine the fc3.  A failure here degrades to "no
     #   candidates" -- it must never block a fit that would otherwise run.
@@ -765,21 +766,8 @@ def _gen_one(conf, out, job_label="S1fit"):
             print("[WARN] 候选截断 %s 超过超胞安全截断 %.2f Å（周期镜像会重复计数），"
                   "已剔除" % (_over, _safe))
         _cands = [c for c in _cands if c <= _safe + 1e-9]
-        # 补齐「安全上限」候选：可能存在壳层落在最后一个中点候选之上、但在安全
-        # 截断之内（例 In2MnSe4：5.10 Å 壳层，安全上限 5.165 Å，而它到下一壳层
-        # 5.41 的中点 5.258 Å 已越界）——只取中点会把这条壳层整条漏掉。
-        # 仅在 CUT3_CANDIDATES=auto 时自动补，显式列表按用户给的跑。
-        if str(conf["CUT3_CANDIDATES"]).strip().lower() == "auto" \
-                and _shells:
-            _top = max([c for c in _cands], default=0.0)
-            _skipped = [s for s in _shells
-                        if _top + 1e-9 < s <= _safe + 1e-9]
-            _extra = float(int(_safe * 100)) / 100.0   # 2 位小数，仍 < safe
-            if _skipped and _extra > _top + 1e-9:
-                _cands = sorted(set(_cands + [_extra]))
-                print("[..] 补齐安全上限候选 %.2f Å（含安全范围内被中点方案漏掉的"
-                      "壳层 %s）" % (_extra,
-                                 ", ".join("%.2f" % s for s in _skipped)))
+        # 候选 = thirdorder -n 第 N 近邻截断（或准连续时的半径网格），越过安全截断
+        # 的档直接剔除，不再补「安全上限」档（它不是任何 N，2026-10-15 user 定）。
         print("[..] 超胞安全截断 = %.2f Å → 有效候选 %s" % (_safe, _cands))
         # 截断一律不越界：超过超胞安全截断的值自动压到安全截断（周期镜像会重复
         # 计数，力常数是错的）；fc3 截断留空（= 不截断，同样越界且大超胞内存爆）

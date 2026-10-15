@@ -8,7 +8,7 @@
 
 | 位置 | 旧阈值 | 作用 |
 |---|---|---|
-| kl-dft-cpu S5  kl_fc_backends._stability_gate | IMAG_THR = 0.10 THz | 挡 S6 的门禁 |
+| kl-dft-cpu S5  fc_fit_driver 虚频闸（旧 kl_fc_backends 已删） | IMAG_THR = 0.10 THz | 挡 S6 的门禁 |
 | kl-dft-cpu S5.1 gen_step5.1_plot_phonon | IMAG_TOL = -0.05 THz（硬编码） | 只标图 |
 | kl-dft-cpu S6  lattice_kappa | imag_thr = 0.5 THz | 另一套 |
 | mlff  phonon_fit_driver | 硬编码 -0.10 THz | 稳定判据 |

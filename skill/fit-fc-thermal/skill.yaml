@@ -3,7 +3,7 @@
 # pheasy | hiphive | phono3py.
 #
 # This skill is the force-constant-fitting branch lifted out of kl-dft-cpu S5_fc
-# (gen_step5_fc.py + kl_fc_backends.py + the submit_fit_* templates +
+# (gen_step5_fc.py + fc_fit_driver.py + the submit_fcfit_* templates +
 # templates/step5_fc/step.conf), turned into a standalone skill and extended
 # with a third engine.  It does NOT generate displacements and never runs VASP:
 # it consumes an existing displacement+force dataset produced by another skill
