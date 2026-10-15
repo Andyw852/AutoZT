@@ -49,6 +49,8 @@ fetch_files: [INCAR, POSCAR, CONTCAR, POTCAR, KPOINTS, KPOINTS_OPT, kpath.json,
 #   但**不能在 step7b 跑完之前清理**（含 step7_deform/{undeformed,deform-*}）；
 #   跑完 step7b 得到 deformation_vac.h5 之后，LOCPOT 就可以清了。
 #   autozt 目前没有全局 keep 名单，这条靠纪律：不要在 S7 之后、S7.1 之前 clean/删 LOCPOT。
+#   [patch_ionrelax_locpot] 2026-10-15：ionrelax/LOCPOT 已被删时 S7.1 报错（不退回刚性构型的 LOCPOT）；
+#   retry S7_deform 只补 ionrelax 静态段（2D 真空口径、且还没有 deformation_vac.h5 时才触发）。
 
 steps:
   - {seq: 1, name: step1_opt, label: S1_opt, src: step1_opt,
@@ -123,7 +125,8 @@ steps:
      # 被自旋道数除，gen_step9b 在 load/write h5 前后调它乘回自旋道数。
      # dp_symmetrize.py（V121，2026-09-29）：形变势 D(k) 按 Laue 群对称化，两段嵌入脚本 import 它。
      #   V188（2026-10-14）：amset deform read 的包装也 import 它，同时写带符号中心差分 deformation*_signed.h5。
-     gen: gen_step9b_deform_read.py, gen_need: [ke_common.py, nspin_norm_fix.py, dp_symmetrize.py], fetch_all: true,
+     # [patch_ionrelax_locpot] 2026-10-15：本步读 step.conf 的 DEFORM_REF（显式 core 才允许不生成真空口径 h5）。
+     gen: gen_step9b_deform_read.py, gen_need: [stepconf.py, step.conf, ke_common.py, nspin_norm_fix.py, dp_symmetrize.py], fetch_all: true,
      needs: ["step7_deform"]}
 
 

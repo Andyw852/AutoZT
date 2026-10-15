@@ -183,6 +183,16 @@ reference（换成各构型 LOCPOT 的真空能级），再调用 AMSET 原版�
 `calculate_deformation_potentials`，符号/分量平均/噪声过滤与官方一致，另写
 `deformation_vac.h5`（core 版保留作对比）；开关 `DEFORM_REF = auto|vacuum|core`，2D 默认 vacuum。
 
+**LOCPOT 与本征值同构型（[patch_ionrelax_locpot]，2026-10-15）**：某构型的本征值取自 `ionrelax/vasprun.xml`，
+它的 LOCPOT（以及 POSCAR）就只从 `ionrelax/` 读；`ionrelax/LOCPOT` 缺了 S7.1 报 `RuntimeError`
+（"ionrelax 缺 LOCPOT，retry S7_deform 补静态段"），不再退回刚性构型的 LOCPOT。真空口径 h5 生不出来时 S7.1 直接
+FAIL，不再静默退回 core 口径；确实要 core 就在**材料共用** step.conf 显式写 `DEFORM_REF = core`（S7 与 S7.1 同读）。
+retry S7_deform 时，2D + 真空口径 + ionrelax 已完成 + 缺 `ionrelax/LOCPOT` + gen 前还没有
+`step7b_deform_read/deformation_vac.h5` 的构型**只补静态段**：静态段的 OUTCAR/vasprun.xml/OSZICAR 改名
+`*.nolocpot-<时间>`，submit.sh 重写成只跑静态段（`CONTCAR.relax` → POSCAR、`INCAR.static` 改 `ISTART=0`/`ICHARG=2`），
+刚性单点与弛豫段不重算。已有真空口径 h5 时不触发 —— S7.1 跑完后清 LOCPOT 是允许的，此后 retry S7 不会整批重算静态段
+（但那次 retry 会让 S7.1 重排、重读时报缺 LOCPOT，届时再 retry S7 一次即只补静态段）。
+
 **两条运行期自检**（写进 gen_step9b，MoS2 实测都通过）：① 真空 h5 与 core h5 在带边必须**不同**
 （相同 = 参考替换静默失效，直接抛错）；② `D_vac − D_core` **与能带无关**，两种载流子必须给
 同一个值（MoS2：电子/空穴均 +2.0865 eV，相对差 0.00%；>5% 告警 —— 旧 clamped 数据在空穴上

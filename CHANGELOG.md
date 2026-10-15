@@ -14,6 +14,21 @@ This project adheres to Semantic Versioning; versions before 1.0.0 are developme
 
 ## [Unreleased]
 
+### Fixed (2026-10-15: ke S7.1 vacuum alignment with a missing ionrelax LOCPOT)
+- S7.1: when a configuration's eigenvalues come from `ionrelax/vasprun.xml`, its LOCPOT (and POSCAR) are
+  read only from `ionrelax/`; a missing `ionrelax/LOCPOT` raises `RuntimeError` ("retry S7_deform to add
+  the static segment") instead of silently using the rigid configuration's LOCPOT. The same rule applies
+  to the embedded vacuum-h5 script.
+- S7.1: if `deformation_vac.h5` cannot be built for a 2D material (`DEFORM_REF=auto`) or with explicit
+  `DEFORM_REF=vacuum`, the step fails instead of falling back to the core reference. `DEFORM_REF` can now be
+  set in step.conf (reserved key; write `DEFORM_REF = core` in the material-wide step.conf to opt out).
+- S7: `retry S7_deform` re-runs only the ionrelax static segment for 2D vacuum-reference materials whose
+  ionrelax finished but has no LOCPOT and no `deformation_vac.h5` yet: the static OUTCAR/vasprun.xml/OSZICAR
+  are renamed `*.nolocpot-<time>`, submit.sh is rewritten to run the static segment only (from
+  `CONTCAR.relax`, `ISTART=0`, `ICHARG=2`); the rigid single point and the relaxation are not repeated.
+- `autozt graph` text view: a WAIT step now lists its already-finished non-main dependencies
+  (the S8.22 -> S8.4 edge was missing from the text graph although the JSON had it).
+
 ### Fixed (2026-10-14: review follow-up to the band/functional settings)
 - SOC impact gate: reports `inconclusive` (warning) instead of `ok` when either run's real VBM/CBM
   is not on the k points shared by the S2.2 SCF mesh and the S3 grid (PbTe without L, Bi2Te3).

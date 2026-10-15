@@ -8,6 +8,8 @@
   3. 给每个子目录补 INCAR（渲染 incar_deform_*.tpl）+ KPOINTS + POTCAR + submit.sh
   4. 给需要离子弛豫的形变目录建 ionrelax/（固定晶胞弛豫内坐标 + 静态段）：
      2D = 面内分量（xx/yy/xy），3D = 全部分量（[V187]，IONRELAX_3D 可关）
+  5. [patch_ionrelax_locpot] 2D 真空口径下 ionrelax 已完成、但缺 LOCPOT（且还没有真空口径 h5）：
+     只补静态段（见 prepare_static_only），不重算刚性单点和弛豫段
 tf 的扇出机制随后对每个 *deform* 子目录各自 sbatch。
 产出目录：step7_deform/{undeformed, deform-01, ...}
 """
@@ -447,6 +449,142 @@ def _ionrelax_incars(base, ediffg=None):
     return relax, stat
 
 
+def _launcher_line(sub_text):
+    """submit.sh 里第一条真正的 VASP 启动命令（跳过注释：模板注释里也含 "mpirun" 字样）。"""
+    for _ln in sub_text.splitlines():
+        _s = _ln.strip()
+        if not _s or _s.startswith("#"):
+            continue
+        if _s.startswith(("mpirun", "srun", "mpiexec")):
+            return _s
+    return None
+
+
+# ===========================================================================
+#  [patch_ionrelax_locpot] 只补 ionrelax 静态段
+# ===========================================================================
+# 起因：S7.1 的真空对齐要 ionrelax/LOCPOT（本征值取自 ionrelax/vasprun.xml，LOCPOT 必须同一构型）。
+#   ionrelax 已算完、但 LOCPOT 被清掉（或旧版静态段没开 LVHAR）时，S7.1 现在会报错（不再退回刚性构型
+#   的 LOCPOT）；本段让 retry S7_deform 只重跑静态段（几分钟），而不是连弛豫段一起重算。
+# 触发条件（五条同时满足，见 static_only_wanted）：2D；DEFORM_REF 解析为 vacuum；ionrelax 已完成
+#   （OUTCAR 收尾 + 网格/INCAR 与现行一致，沿用下面主循环的判据）；ionrelax/LOCPOT 缺失；
+#   本次 gen 开始前 step7b_deform_read/deformation_vac.h5 不存在。
+#   最后一条防的是：S7.1 跑完后按规矩清掉 LOCPOT，以后任何一次 retry S7 都不该把静态段整批重算。
+#   ★ 它必须在 main() 开头、invalidate_downstream 归档下游标记【之前】取（那一步会把 vac h5 改名）。
+# 做法：静态段的 OUTCAR / vasprun.xml / OSZICAR 改名 *.nolocpot-<时间>（不删；*.relax、CONTCAR.relax 保留），
+#   ck_deform 于是判未完成、进 fan_todo；submit.sh 整体重写成"只跑静态段"（不能追加：原脚本的刚性单点
+#   和弛豫段会再跑一遍，还会覆盖刚性构型的结果）；INCAR.static 沿用，只把 ISTART/ICHARG 改成从头起算
+#   （弛豫段的 WAVECAR 可能已经不在），LVHAR=.TRUE. / EDIFF / ISYM 不动。
+NOLOCPOT_TAG = "nolocpot"
+STATIC_ONLY_ARCHIVE = ("OUTCAR", "vasprun.xml", "OSZICAR")
+VAC_H5_REL = Path("step7b_deform_read") / "deformation_vac.h5"
+DEFORM_REF = "auto"      # 与 S7.1 同一开关（auto -> 2D 用 vacuum）；材料共用 step.conf 写 DEFORM_REF=core 两步都生效
+
+
+def _deform_ref(proj, dim):
+    """DEFORM_REF 生效值 -> "vacuum" / "core"。本步 step.conf 写了就用它（文件不存在才用默认值）。"""
+    ref = DEFORM_REF
+    if (Path(proj) / "step.conf").is_file():
+        _v = stepconf.load({"DEFORM_REF": (None, "str")}, OUTDIR_NAME, str(proj),
+                           strict=False)["DEFORM_REF"]
+        if _v not in (None, ""):
+            ref = _v
+    ref = str(ref).strip().lower()
+    if ref == "auto":
+        return "vacuum" if dim == "2d" else "core"
+    if ref not in ("vacuum", "core"):
+        sys.exit("[ERROR] DEFORM_REF=%r 无效，只允许 auto / vacuum / core" % ref)
+    return ref
+
+
+def _set_incar_tag(text, key, value):
+    """INCAR 文本里把 key 改成 value（有就覆盖整行，没有就追加）。"""
+    pat = re.compile(r"^[ \t]*%s[ \t]*=.*$" % key, re.MULTILINE)
+    line = "%s = %s" % (key, value)
+    if pat.search(text):
+        return pat.sub(line, text)
+    return text.rstrip() + "\n" + line + "\n"
+
+
+def static_only_incar(stat):
+    """静态段 INCAR -> 只补静态段用的版本：ISTART=0 / ICHARG=2（不依赖弛豫段 WAVECAR），LVHAR=.TRUE.；其余不动。"""
+    for _k, _v in (("ISTART", "0"), ("ICHARG", "2")):
+        stat = _set_incar_tag(stat, _k, _v)
+    if not re.search(r"^[ \t]*LVHAR[ \t]*=[ \t]*\.?T", stat, re.MULTILINE | re.IGNORECASE):
+        stat = _set_incar_tag(stat, "LVHAR", ".TRUE.")          # 本来就开着的不碰
+    return stat
+
+
+def static_only_wanted(irp, dim, ref, vac_h5_existed):
+    """ionrelax 已完成（调用方判）之后，是否要只补静态段。五条里的其余四条在这里判。"""
+    return (dim == "2d" and ref == "vacuum" and not vac_h5_existed
+            and not (Path(irp) / "LOCPOT").is_file())
+
+
+def static_only_pending(irp):
+    """上一次 gen 已转入"只补静态段"、静态段还没跑完：有 OUTCAR.nolocpot-* 归档 + CONTCAR.relax，
+    静态段 OUTCAR 没有收尾标志。这种目录 retry 时继续只补静态段，不能整个重建（会毁掉弛豫段结果）。"""
+    irp = Path(irp)
+    if not any(irp.glob("OUTCAR.%s-*" % NOLOCPOT_TAG)) or not (irp / "CONTCAR.relax").is_file():
+        return False
+    _oc = irp / "OUTCAR"
+    try:
+        return not (_oc.is_file() and "General timing and accounting informations"
+                    in _oc.read_text(errors="ignore")[-400000:])
+    except OSError:
+        return True
+
+
+def prepare_static_only(d):
+    """deform-NN/：转成"只补 ionrelax 静态段"。成功返回 True；弛豫段结构都找不到时返回 False（调用方整个重建）。"""
+    d = Path(d)
+    irp = d / "ionrelax"
+    if not (irp / "CONTCAR.relax").is_file():
+        if not (irp / "CONTCAR").is_file():
+            return False
+        # 旧版 submit.sh 不留 *.relax：静态段 NSW=0，CONTCAR 就是弛豫后的结构。拷一份成 CONTCAR.relax，
+        #   VASP 重跑静态段会覆盖 CONTCAR，submit.sh 只认这份不会被覆盖的。
+        shutil.copy2(str(irp / "CONTCAR"), str(irp / "CONTCAR.relax"))
+    _st = irp / "INCAR.static"
+    if _st.is_file():
+        stat = _st.read_text(encoding="utf-8")
+    else:
+        stat = _ionrelax_incars((d / "INCAR").read_text(encoding="utf-8"))[1]
+    _st.write_text(static_only_incar(stat), encoding="utf-8", newline="\n")
+    _ts = _time.strftime("%Y%m%d%H%M%S")
+    _moved = []
+    for _nm in STATIC_ONLY_ARCHIVE:
+        _f = irp / _nm
+        if _f.is_file():
+            _f.rename(irp / ("%s.%s-%s" % (_nm, NOLOCPOT_TAG, _ts)))
+            _moved.append(_nm)
+    # submit.sh 整体重写：只留 SBATCH 头和环境设置（第一条启动命令之前的部分），再接静态段
+    sub = (d / "submit.sh").read_text(encoding="utf-8")
+    _mpi = _launcher_line(sub) or "mpirun -np $SLURM_NTASKS vasp_std"
+    head = []
+    for _ln in sub.splitlines():
+        if _ln.strip() == _mpi:
+            break
+        head.append(_ln)
+    body = (
+        "\n# ---- [patch_ionrelax_locpot] 只补 ionrelax 静态段（弛豫段已完成、缺 LOCPOT）----\n"
+        "# 刚性单点与弛豫段都不再跑：前者的结果保留，后者用 CONTCAR.relax。\n"
+        "cd ionrelax || exit 1\n"
+        "cp CONTCAR.relax POSCAR || exit 1\n"
+        "cp INCAR.static INCAR || exit 1\n"
+        "set -o pipefail\n"
+        + _mpi + " 2>&1 | tee vasp.static.log | tail -20\n"
+        "_rc=$?\n"
+        "[ \"$_rc\" -eq 0 ] || exit \"$_rc\"\n"
+        "[ -s LOCPOT ] || { echo \"ERROR: 静态段跑完仍没有 LOCPOT（查 INCAR 的 LVHAR）\" >&2; exit 1; }\n"
+    )
+    (d / "submit.sh").write_text("\n".join(head).rstrip() + "\n" + body,
+                                 encoding="utf-8", newline="\n")
+    print("[IONRELAX] %s：弛豫段已完成、缺 LOCPOT -> 只补静态段（归档 %s 为 *.%s-%s；submit.sh 只跑静态段）"
+          % (d.name, "/".join(_moved) or "无", NOLOCPOT_TAG, _ts))
+    return True
+
+
 def _build_ionrelax(d: Path, encut, subs, submit_body, ediffg=None):
     """在 deform-NN 下建 ionrelax/：两段式（弛豫段 IBRION=2 固定晶胞 + 静态段 LVHAR）。
 
@@ -475,17 +613,9 @@ def _build_ionrelax(d: Path, encut, subs, submit_body, ediffg=None):
 
     # deform-NN 的 submit.sh 追加 ionrelax 两段（跑完刚性单点后 cd ionrelax 续跑）
     sub = (d / "submit.sh").read_text(encoding="utf-8")
-    _mpi = None
-    for _ln in sub.splitlines():
-        _s = _ln.strip()
-        # 只认真正的启动命令：模板注释里也含 "mpirun" 字样
-        # （"…会让 mpirun 段错误…"）。不过滤注释会把注释当命令行，
-        # 导致 ionrelax 段丢失 VASP 调用、只剩 cp CONTCAR 而必然失败。
-        if not _s or _s.startswith("#"):
-            continue
-        if _s.startswith(("mpirun", "srun", "mpiexec")):
-            _mpi = _s
-            break
+    # 只认真正的启动命令：模板注释里也含 "mpirun" 字样（"…会让 mpirun 段错误…"）。
+    # 不过滤注释会把注释当命令行，导致 ionrelax 段丢失 VASP 调用、只剩 cp CONTCAR 而必然失败。
+    _mpi = _launcher_line(sub)
     if not _mpi:
         _mpi = "mpirun -np $SLURM_NTASKS vasp_std"
     extra = (
@@ -507,6 +637,27 @@ def _build_ionrelax(d: Path, encut, subs, submit_body, ediffg=None):
     )
     sub = sub.rstrip() + extra
     (d / "submit.sh").write_text(sub, encoding="utf-8", newline="\n")
+
+
+def _ionrelax_grid_ok(out, name, verbose=False):
+    """patch_ionrelax_grid（2026-09-20）：ionrelax/KPOINTS 第 4 行与基准网格（undeformed/KPOINTS 第 4 行）逐轴一致。
+    只判 VASP 横幅会在「升级网格后重跑」时静默保留旧网格的 ionrelax —— 实测 CrSe2_hex：deform-01..04 的
+    ionrelax 是 15x15x1，升到 46x46x3 后主单点被刷新、ionrelax 却被跳过，形变势 E1 与其余量混口径。
+    读不出就返回 False（保守重建，不赌）。
+    修正（2026-09-21）：基准原写 und，但 main() 里没有这个局部名 —— 只要有 ionrelax 已跑完，NameError 会让
+    gen 在归档之后、建 ionrelax/ 之前整个崩掉，retry 报 exit=1。"""
+    out = Path(out)
+    try:
+        _ref_ln = (out / "undeformed" / "KPOINTS").read_text().splitlines()[3].split()[:3]
+        _ir_ln = (out / name / "ionrelax" / "KPOINTS").read_text().splitlines()[3].split()[:3]
+        if [int(x) for x in _ir_ln] != [int(x) for x in _ref_ln]:
+            if verbose:
+                print("[IONRELAX] %s：ionrelax 网格 %s 与基准 %s 不一致，重建。"
+                      % (name, "x".join(_ir_ln), "x".join(_ref_ln)))
+            return False
+    except (OSError, IndexError, ValueError):
+        return False
+    return True
 
 
 def select_ionrelax_dirs(out, dim, on3d=True, ediffg=None):
@@ -546,6 +697,8 @@ def select_ionrelax_dirs(out, dim, on3d=True, ediffg=None):
 def main():
     import glob
     cwd = Path.cwd(); out = cwd / OUTDIR_NAME; out.mkdir(exist_ok=True)
+    # [patch_ionrelax_locpot] 必须在 invalidate_downstream 之前取：它会把这个 h5 改名归档
+    _vac_h5_existed = (cwd / VAC_H5_REL).is_file()
     # [patch_rerun_invalidate V140] 形变单点要重算：S7.1 读出的形变势（在材料目录的 step7b_deform_read/，
     #   rerun 本步删不到它）连同 S8/S8.4/S8.2 一并失效，等本步跑完由 auto-advance 重新读。
     kc.invalidate_downstream(cwd, OUTDIR_NAME, "%s 重新生成（形变单点重算）" % OUTDIR_NAME)
@@ -661,9 +814,16 @@ def main():
         # （含 OUTCAR / LOCPOT / vasprun.xml / CONTCAR），所以 retry 只为"补新增的
         # 面内分量"而重建时，会顺带毁掉已完成的旧分量（实测 CrSe2_hex：补 deform-09
         # 的 xy 弛豫会把 deform-01..04 的 ionrelax 结果全删掉）。
-        _built, _skipped, _loose = [], [], []
+        _built, _skipped, _loose, _static = [], [], [], []
+        _ref = _deform_ref(cwd, dim)
         for _name in sorted(_ir_dirs):
             _irp = out / _name / "ionrelax"
+            # [patch_ionrelax_locpot] 上次 gen 已转入"只补静态段"、静态段还没跑完：网格没变就继续只补静态段
+            #   （submit.sh 每次 gen 都被上面重写成刚性单点，这里必须再写一遍），不整个重建。
+            if static_only_pending(_irp) and _ionrelax_grid_ok(out, _name):
+                if prepare_static_only(out / _name):
+                    _static.append(_name)
+                    continue
             # 判据与 autozt 的 ck_deform 一致：**必须**在 OUTCAR 末尾看到 VASP 收尾
             # 横幅 "General timing and accounting informations" 才算完成。
             # 只判"文件存在"会把中途挂掉/被杀的 ionrelax 误当完成而跳过（用户
@@ -676,33 +836,18 @@ def main():
                              in _oc.read_text(errors="ignore")[-400000:])
                 except OSError:
                     _done = False
-            # patch_ionrelax_grid（2026-09-20）：**网格也必须一致**。
-            #   只判 VASP 横幅会在「升级网格后重跑」时静默保留旧网格的 ionrelax ——
-            #   实测 CrSe2_hex：deform-01..04 的 ionrelax 是 15x15x1，升到 46x46x3 后
-            #   主单点被刷新、ionrelax 却被跳过，形变势 E1 与其余量混口径。
-            #   判据：把 ionrelax/KPOINTS 第 4 行与基准网格（undeformed/KPOINTS 第 4 行）
-            #   逐轴比；不一致 -> 视为需重建（旧结果本就该作废）。
-            if _done:
-                try:
-                    # 修正（2026-09-21）：此处原写 und，但 main() 里没有这个局部名
-                    #   （und 只存在于 _reference_kpoints / run_amset_deform_create）。
-                    #   只要有 ionrelax 已跑完，这条 NameError 会让 gen 在归档之后、
-                    #   建 ionrelax/ 之前整个崩掉，retry 报 exit=1。
-                    _ref_ln = ((out / "undeformed" / "KPOINTS").read_text()
-                               .splitlines()[3].split()[:3])
-                    _ir_ln = (_irp / "KPOINTS").read_text().splitlines()[3].split()[:3]
-                    if [int(x) for x in _ir_ln] != [int(x) for x in _ref_ln]:
-                        print("[IONRELAX] %s：ionrelax 网格 %s 与基准 %s 不一致，重建。"
-                              % (_name, "x".join(_ir_ln), "x".join(_ref_ln)))
-                        _done = False
-                except (OSError, IndexError, ValueError):
-                    _done = False   # 读不出就保守重建，不赌
+            # patch_ionrelax_grid（2026-09-20）：**网格也必须一致**（见 _ionrelax_grid_ok），不一致 -> 重建。
+            if _done and not _ionrelax_grid_ok(out, _name, verbose=True):
+                _done = False
             if _done:
                 # [V168] INCAR 也必须一致：拿现在会写的静态段跟 ionrelax/vasprun.xml（静态段的回显）比。
                 #   主单点 INCAR 换了（如补 LVHAR）而 ionrelax 照旧复用，E1 与真空对齐就混了两套输入。
-                _why = kc.run_incar_mismatch(
-                    _ionrelax_incars((out / _name / "INCAR").read_text(encoding="utf-8"))[1],
-                    _irp / "vasprun.xml")
+                _stat_now = _ionrelax_incars((out / _name / "INCAR").read_text(encoding="utf-8"))[1]
+                _why = kc.run_incar_mismatch(_stat_now, _irp / "vasprun.xml")
+                # [patch_ionrelax_locpot] 只补过静态段的，回显是 ISTART=0/ICHARG=2：按那个版本比一致就算一致，
+                #   否则补完静态段后的下一次 retry 会把它当"旧 INCAR"整个重建。
+                if _why and kc.run_incar_mismatch(static_only_incar(_stat_now), _irp / "vasprun.xml") == []:
+                    _why = []
                 if _why:
                     print("[IONRELAX] %s：已有结果是旧 INCAR 跑的（%s），重建。"
                           % (_name, "; ".join(_why[:4])))
@@ -717,14 +862,22 @@ def main():
                         print("[IONRELAX] %s：已有结果的 EDIFFG=%s 比现在的 %s 松，IONRELAX_REBUILD_LOOSE=true -> 重建。"
                               % (_name, _old_ed, _ir_ediffg))
                         _done = False
+            if _done and static_only_wanted(_irp, dim, _ref, _vac_h5_existed):
+                if prepare_static_only(out / _name):
+                    _static.append(_name)
+                    continue
+                print("[IONRELAX] %s：缺 LOCPOT，但 CONTCAR.relax / CONTCAR 都不在，只补静态段做不了 -> 整个重建。"
+                      % _name)
+                _done = False
             if _done:
                 _skipped.append(_name)
                 continue
             _build_ionrelax(out / _name, encut, _subs, submit_body, _ir_ediffg)
             _built.append(_name)
-        print("[IONRELAX] 生成 %d 个 ionrelax/（%s）；已存在结果、跳过重建的 %d 个（%s）"
+        print("[IONRELAX] 生成 %d 个 ionrelax/（%s）；已存在结果、跳过重建的 %d 个（%s）；只补静态段的 %d 个（%s）"
               % (len(_built), ", ".join(_built) or "无",
-                 len(_skipped), ", ".join(_skipped) or "无"))
+                 len(_skipped), ", ".join(_skipped) or "无",
+                 len(_static), ", ".join(_static) or "无"))
         if _loose and not _ir_rebuild:
             print("[WARN] [V187] 复用了力判据比现在（EDIFFG=%s）松的 ionrelax/：%s。\n"
                   "       看 S7.1 的 ionrelax_check；要按新判据重算，本步 step.conf 写 IONRELAX_REBUILD_LOOSE = true 再 retry。"

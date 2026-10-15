@@ -303,8 +303,12 @@ def render_text(graph, marks=None, ascii_mode=None, legend=True, indent=""):
         else:
             body = n.get("status") or _status_text(n)
         extra = []
-        if n.get("extra_deps") and n.get("kind") != "WAIT":   # WAIT 的状态里已列出未完成的上游
-            extra.append("（另依赖 %s）" % "、".join(n["extra_deps"]))
+        # WAIT 的状态里已列出未完成的上游，这里只补已完成的那些 —— 以前 WAIT 时整段不写，
+        #   非主父的已完成上游（如 S8.22_ivs -> S8.4_amset2d）在文本图里就没有边了（JSON 里有）。
+        _ed = [d for d in (n.get("extra_deps") or [])
+               if n.get("kind") != "WAIT" or d not in (n.get("pending_deps") or [])]
+        if _ed:
+            extra.append("（另依赖 %s）" % "、".join(_ed))
         if n.get("missing_deps"):
             extra.append("（缺 %s：可选步骤已关）" % "、".join(n["missing_deps"]))
         mk = marks.get(n["label"])

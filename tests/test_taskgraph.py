@@ -65,6 +65,23 @@ def test_render_text_tree_marks_and_ascii_fallback():
     assert all(all(ord(c) < 128 for c in tok) for tok in icons), icons
 
 
+def test_render_text_wait_keeps_done_extra_deps():
+    # S8.4 在等 S8.21（主父），S8.22 已完成：S8.22 -> S8.4 这条边以前在文本图里被整段吞掉（JSON 里有）
+    m = {"name": "MoS2", "tt": "ke-dft-cpu", "steps": [
+        _st("step7b_deform_read", "S7.1_read", "OK", []),
+        _st("step8.22_ivs_read", "S8.22_ivs", "OK", ["step7b_deform_read"]),
+        _st("step8.21_odp_read", "S8.21_odp", "R", ["step7b_deform_read"], {"id": "1"}),
+        _st("step8.4_amset2d", "S8.4_amset2d", "WAIT",
+            ["step7b_deform_read", "step8.22_ivs_read", "step8.21_odp_read"]),
+    ]}
+    g = TG.material_graph({"key": "ke-dft-cpu"}, m)
+    assert ["S8.22_ivs", "S8.4_amset2d"] in g["edges"]
+    line = next(ln for ln in TG.render_text(g, ascii_mode=True).splitlines() if "S8.4_amset2d" in ln)
+    assert "等上游 S8.21_odp" in line
+    assert "另依赖" in line and "S8.22_ivs" in line and "S7.1_read" in line
+    assert line.count("S8.21_odp") == 1             # 未完成的上游不重复写
+
+
 def test_mermaid_keeps_line_breaks_and_escapes_quotes():
     m = _mat()
     m["steps"][3]["diag"] = 'bad "INCAR" <tag>'
