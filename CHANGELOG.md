@@ -15,6 +15,10 @@ This project adheres to Semantic Versioning; versions before 1.0.0 are developme
 ## [Unreleased]
 
 ### Fixed / Added (2026-10-15: ke S7.2 frozen-phonon ODP follow-up to the kz=1 change)
+- S7.2 `ODP_KZ_VACUUM` default is now `auto`: if the step already has single points that ran (or are
+  running) on a kz>1 grid it behaves as `keep`, so regenerating an in-flight material no longer changes
+  KPOINTS and archives finished points; fresh materials get `reduce`. Explicit `reduce` / `keep` still
+  win. The manifest records requested vs effective mode and the reason.
 - S7.2 `ODP_KZ_VACUUM=reduce` now records what actually happened: only automatic-mesh KPOINTS are
   reduced; an explicit k-point list is left alone and the manifest no longer claims `kz_vacuum_reduced`.
   The vacuum axis is taken from the structure instead of assuming the third component; the manifest has a

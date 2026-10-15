@@ -16,7 +16,6 @@
 import hashlib
 import json
 import math
-import os
 import shutil
 import sys
 import time as _time
@@ -49,10 +48,13 @@ ODP_FMIN_THZ = 0.5                   # 低于它的光学模不算（虚频/太�
 ODP_MODES = "auto"
 # 单点数上限（1 + 2×模数）。大胞光学模多，超过就报错，确认后在 step.conf 调大。
 ODP_MAX_JOBS = 40
-# [kz=1] 2D 真空方向 kz：reduce（出厂）= 把 S7 的三层降到 1（能带沿 kz 平坦，LS 实测带边 ±1 eV 内
-#   |dE| ~0.07 meV；S7.2/S8.21 只在谷 k 点 kz=0 取值，多层纯属重复，且耗时/内存 ∝ kz 层数）；
-#   keep = 照抄 S7 网格不动（正在跑/已算完的材料、或真空薄且层间耦合不可忽略时用）。3D 无真空方向，本项无效。
-ODP_KZ_VACUUM = "reduce"
+# [kz=1] 2D 真空方向 kz（能带沿 kz 平坦，LS 实测带边 ±1 eV 内 |dE| ~0.07 meV；S7.2/S8.21 只在谷 k 点 kz=0
+#   取值，多层纯属重复，且耗时/内存 ∝ kz 层数）：
+#   auto   （出厂）本步已有算过/正在算的单点、且用的是 kz>1 的网格 -> 按 keep（重新生成不改网格，已算的不被
+#          归档重算）；否则（新材料）按 reduce。
+#   reduce = 把 S7 的多层 kz 降到 1；keep = 照抄 S7 网格不动（真空薄、层间耦合不可忽略时也用它）。
+#   3D 无真空方向，本项无效。
+ODP_KZ_VACUUM = "auto"
 
 SPEC = {
     "ODP_DISP_A": (None, "float"),
@@ -83,8 +85,8 @@ def apply_conf(cwd):
     if not (0.0 < float(ODP_DISP_A) <= 0.05):
         sys.exit("[ERROR] ODP_DISP_A=%r 不合理（应在 (0, 0.05] Å；太大出线性区，太小被本征值噪声淹没）" % ODP_DISP_A)
     ODP_KZ_VACUUM = str(ODP_KZ_VACUUM).strip().lower()
-    if ODP_KZ_VACUUM not in ("reduce", "keep"):
-        sys.exit("[ERROR] ODP_KZ_VACUUM=%r 无效，只允许 reduce / keep" % ODP_KZ_VACUUM)
+    if ODP_KZ_VACUUM not in ("auto", "reduce", "keep"):
+        sys.exit("[ERROR] ODP_KZ_VACUUM=%r 无效，只允许 auto / reduce / keep" % ODP_KZ_VACUUM)
     return got
 
 
@@ -160,6 +162,25 @@ def select(groups, modes):
         else:
             g["use"], g["why"] = False, g["why"] or "ODP_MODES 没列"
     return out
+
+
+def kz_auto_mode(out, vac_axis):
+    """[kz=1-r3] ODP_KZ_VACUUM=auto 的判定 -> (reduce|keep, 原因)。
+
+    本步已有单点开始算过（有 OUTCAR / OSZICAR / vasprun.xml，含正在跑的）且它的 KPOINTS 真空方向 > 1：
+    按 keep —— 改成 kz=1 会让 inputs_changed 把这些点判成"输入变了"、归档后整批重算（LS 2026-10-15 的
+    61 个点就差点这样）。改名移走的 _stale_* 不算。其余（新材料、或已经是 kz=1）按 reduce。"""
+    for d in sorted(Path(out).glob(SUB_PREFIX + "*")):
+        if not d.is_dir() or not (d / "KPOINTS").is_file():
+            continue
+        if not any((d / n).exists() for n in ("OUTCAR", "OSZICAR", "vasprun.xml")):
+            continue
+        m = of.kpoints_mesh((d / "KPOINTS").read_text(encoding="utf-8", errors="ignore"))
+        if m is not None and m[int(vac_axis)] > 1:
+            return "keep", ("%s 已用 kz=%d 的网格算过/在算：保持原网格，不让已算的单点因输入变化被归档重算"
+                            "（要强制降到 1 就在 step.conf 写 ODP_KZ_VACUUM = reduce，已算的会重算）"
+                            % (d.name, m[int(vac_axis)]))
+    return "reduce", "没有用 kz>1 算过的单点：真空方向降到 1"
 
 
 def write_poscar(path, structure):
@@ -259,6 +280,10 @@ def main():
     submit_body = resolve_tpl(Path(__file__).resolve().parent, "submit_std", dim).read_text(encoding="utf-8")
     vac_axis = kc.resolve_dim_for(out / "POSCAR", dim)[1] if dim == "2d" else None
     kz_status, kz_grid = {}, (None, None)
+    kz_mode, kz_why = ODP_KZ_VACUUM, "step.conf / 脚本显式指定"
+    if dim == "2d" and kz_mode == "auto":
+        kz_mode, kz_why = kz_auto_mode(out, vac_axis)
+        print("[..] [kz=1] ODP_KZ_VACUUM=auto -> %s：%s" % (kz_mode, kz_why))
     incar_s7 = (und / "INCAR").read_text(encoding="utf-8", errors="ignore")
     rec_cfg = {}
     for name, idx, sign in configs:
@@ -274,7 +299,7 @@ def main():
         write_poscar(d / "POSCAR", st)
         for n in ("KPOINTS", "POTCAR"):
             shutil.copyfile(und / n, d / n)
-        if dim == "2d" and ODP_KZ_VACUUM == "reduce":
+        if dim == "2d" and kz_mode == "reduce":
             # [kz=1] 2D 有真空层，沿 kz 能带几乎完全平坦（LS 实测带边 ±1 eV 内 |dE| ~0.07 meV，
             #   远小于 5 meV 判据与最弱耦合对应的 0.5 meV 灵敏度）；而 S7.2/S8.21 只在谷 k 点
             #   （kz=0）取本征值，真空方向的多层 kz 纯属重复计算，且耗时/内存 ∝ kz 层数。
@@ -327,8 +352,8 @@ def main():
         "s5_freq_THz": [float(x) for x in sorted(freqs)],
         # [kz=1-r2] 按实际结果记：全部构型都真的降了才算 reduced（S8.21 据此放行网格差异、放宽严告警）
         "kz_vacuum_reduced": bool(kz_status) and all(s == "reduced" for s in kz_status.values()),
-        "kz_vacuum_mode": ODP_KZ_VACUUM,
-        "kz_vacuum": {"mode": ODP_KZ_VACUUM, "axis": vac_axis,
+        "kz_vacuum_mode": kz_mode,
+        "kz_vacuum": {"mode": kz_mode, "requested": ODP_KZ_VACUUM, "why": kz_why, "axis": vac_axis,
                       "status": (sorted(set(kz_status.values())) or None),
                       "s7_grid": kz_grid[0], "odp_grid": kz_grid[1]},
         "notes": notes,
