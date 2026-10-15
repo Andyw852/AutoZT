@@ -99,7 +99,7 @@ AMSET_RUN_PY = ('python -c "@AMSET_PLUGINS@'
                 'from amset.log import initialize_amset_logger as L; L(); '
                 'from amset.core.run import Runner; Runner.from_directory(\'.\').run()" '
                 '>> amset.log 2>&1')
-AMSET_CMD   = ('rm -f transport.json subset_*.json intrinsic_*.json overall_no*.json mesh_*.h5; '
+AMSET_CMD   = ('rm -f transport.json subset_*.json intrinsic_*.json undoped_ni.json overall_no*.json mesh_*.h5; '
                'python overlap_preflight.py --in-job || exit 1; '
                + AMSET_RUN_PY + ' && python fermi_window_check.py'
                '@POSTPROCESS@'

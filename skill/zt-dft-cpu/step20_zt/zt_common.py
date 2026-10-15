@@ -93,8 +93,73 @@ def power_factor(S_uVK, sigma_Sm):
 
 
 def carrier_type(doping_cm3):
-    """AMSET 约定：负 doping = n 型，正 = p 型。"""
-    return "n" if float(doping_cm3) < 0 else "p"
+    """AMSET 约定：负 doping = n 型，正 = p 型；0 = 本征点（未掺杂，E_F 由 n = p 定）。
+    [0052] 以前 0 被归成 p 型，混进 p 型峰值 / 热图；现在单独标 "i"，汇总到 intrinsic_carrier/。"""
+    d = float(doping_cm3)
+    if abs(d) < 1e-6:
+        return "i"
+    return "n" if d < 0 else "p"
+
+
+# ===== [0052] 本征点（doping = 0）=====
+UNDOPED_NI_JSON = "undoped_ni.json"     # ke-dft-cpu 的 amset_fermi_fix 写在 AMSET 运行目录的 n_i(T)
+_NI_LINE = "[fermi_fix] 本征点 "
+
+
+def load_undoped_ni(run_dir):
+    """本征浓度 n_i(T)：{T: {"n_i_cm-3", "E_F_eV"}}, 来源。先读 undoped_ni.json；旧结果退回解析
+    运行目录日志里的「[fermi_fix] 本征点 <T> K：E_F = … eV，n = p = … cm^-3」行（取最新的日志）。"""
+    import json
+    import os
+    import re
+    p = os.path.join(run_dir, UNDOPED_NI_JSON)
+    try:
+        with open(p, encoding="utf-8") as fh:
+            j = json.load(fh)
+        out = {float(T): {"n_i_cm-3": float(ni), "E_F_eV": float(ef)}
+               for T, ef, ni in zip(j["temperatures_K"], j["E_F_eV"], j["n_i_cm-3"])}
+        if out:
+            return out, UNDOPED_NI_JSON
+    except (OSError, ValueError, KeyError, TypeError):
+        pass
+    rx = re.compile(r"\[fermi_fix\] 本征点 ([0-9.eE+-]+) K：E_F = ([0-9.eE+-]+) eV，"
+                    r"n = p = ([0-9.eE+-]+) cm\^-3")
+    logs = []
+    try:
+        for n in os.listdir(run_dir):
+            f = os.path.join(run_dir, n)
+            if os.path.isfile(f) and (n.endswith((".out", ".log")) or n.startswith("queue")):
+                logs.append((os.path.getmtime(f), f))
+    except OSError:
+        pass
+    for _mt, f in sorted(logs, reverse=True):
+        try:
+            with open(f, encoding="utf-8", errors="ignore") as fh:
+                txt = fh.read()
+        except OSError:
+            continue
+        out = {float(m.group(1)): {"n_i_cm-3": float(m.group(3)), "E_F_eV": float(m.group(2))}
+               for m in rx.finditer(txt)}
+        if out:
+            return out, "%s（日志行）" % os.path.basename(f)
+    return {}, "没有 %s，日志里也没有 [fermi_fix] 本征点 行" % UNDOPED_NI_JSON
+
+
+def intrinsic_rows(grid, ni=None):
+    """本征点（type == "i"）每个温度一行：n_i、E_F、S/σ/κe/κL/κtot/PF/ZT。没有本征点 -> []。"""
+    ni = ni or {}
+    r = next((x for x in grid["rows"] if x.get("type") == "i"), None)
+    if r is None:
+        return []
+    out = []
+    for j, T in enumerate(grid["temperatures"]):
+        v = next((d for k, d in ni.items() if abs(k - T) < 0.5), {})
+        out.append({"T_K": T, "n_i_cm-3": v.get("n_i_cm-3"), "E_F_eV": v.get("E_F_eV"),
+                    "seebeck_uV/K": r["seebeck_uV/K"][j], "sigma_S/m": r["sigma_S/m"][j],
+                    "kappa_e_W/mK": r["kappa_e_W/mK"][j], "kappa_L_W/mK": r["kappa_L_W/mK"][j],
+                    "kappa_tot_W/mK": r["kappa_tot_W/mK"][j], "PF_W/mK2": r["PF_W/mK2"][j],
+                    "ZT": r["ZT"][j]})
+    return out
 
 
 # ===== 读入 =====
@@ -315,8 +380,9 @@ def text_report(grid, peaks, meta):
                     _fmt(p["kappa_L_W/mK"])))
     L.append("")
     for i, r in enumerate(grid["rows"]):
-        L.append("-- %s 型  %s cm^-3 -------------------------------------------------"
-                 % (r["type"], _fmt(r["doping_cm-3"], 3)))
+        L.append("-- %s  %s cm^-3 -------------------------------------------------"
+                 % ("本征点（未掺杂）" if r["type"] == "i" else "%s 型" % r["type"],
+                    _fmt(r["doping_cm-3"], 3)))
         if grid["rows"][i]["ZT"] and all(v is None for v in r["ZT"]):
             L.append("   （该档所有温度都缺 κ_L，ZT 不计算）")
             continue

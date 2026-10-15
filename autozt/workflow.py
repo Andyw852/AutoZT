@@ -389,9 +389,73 @@ def material_poscar_sha(m):
     return _sha256_file(os.path.join(lp, "POSCAR")) if lp else None
 
 
+def step_result_flat(m, sname):
+    """[0052] 步骤配置 result_flat: true -> 本地结果直接放 result/（不再套一层 result/<步骤>/）。
+    只给「一个技能只有一个汇总步」用（zt-dft-cpu 的 S20_zt）：多步技能都 flat 会互相覆盖。"""
+    sc = next((x for x in ((m or {}).get("_seg") or {}).get("steps_cfg") or []
+               if x.get("name") == sname), None) or {}
+    return bool(sc.get("result_flat"))
+
+
+def step_result_dir(m, s):
+    """本地结果目录：result_dir/<步骤名>/；result_flat 步骤 = result_dir 本身。s 可以是步骤 dict 或步骤名。"""
+    rd = (m or {}).get("result_dir") or ""
+    name = s if isinstance(s, str) else s["name"]
+    return rd if (rd and step_result_flat(m, name)) else os.path.join(rd, name)
+
+
+FETCH_MANIFEST = ".tf_fetched_manifest.json"   # [0052] 整目录回拉的镜像清单：上一轮拉回了哪些顶层项（.tf_ 前缀：不进 needs_results 推送与指纹）
+
+
+def _mirror_prune(dest, listing, m=None, label="", pure=False):
+    """[0052] 整目录回拉（fetch_all / fetch_extra）是远端目录的镜像：上一轮拉回、远端这轮已经没有的
+    顶层项（重新生成时删掉的旧温度文件夹、旧图、旧子目录）从本地删掉，不再冒充当前结果。
+    只删清单里记着的、autozt 自己拉回来的项；本地其它文件（.autozt_inputs/、provenance/ 等）不碰。
+    pure=True（fetch_extra 的 transport_plots/ 这种整目录都是回拉产物的）：还没有清单时按本地现有顶层项算。"""
+    from autozt import PROV_DIR
+    got = {n.split("/", 1)[0] for n in _tar_names(listing)}
+    if not got:          # 远端没这个目录 / 什么都没拉到：不当成"全删了"，本地保持原样
+        return []
+    mp = os.path.join(dest, FETCH_MANIFEST)
+    try:
+        with open(mp, encoding="utf-8") as f:
+            prev = set(json.load(f).get("top") or [])
+    except (OSError, ValueError, AttributeError):
+        prev = set()
+        if pure:
+            try:
+                prev = {n for n in os.listdir(dest) if not n.startswith(".")}
+            except OSError:
+                pass
+    gone = []
+    for n in sorted(prev - got):
+        if not n or n.startswith(".") or "/" in n or n in ("..", PROV_DIR):
+            continue
+        p = os.path.join(dest, n)
+        try:
+            if os.path.isdir(p) and not os.path.islink(p):
+                shutil.rmtree(p)
+            elif os.path.lexists(p):
+                os.remove(p)
+            else:
+                continue
+            gone.append(n)
+        except OSError:
+            pass
+    try:
+        with open(mp, "w", encoding="utf-8") as f:
+            json.dump({"top": sorted(x for x in got if not x.startswith("."))}, f, ensure_ascii=False)
+    except OSError:
+        pass
+    if gone:
+        print("%s: %s 远端已没有 %s —— 本地旧结果已删除"
+              % ((m or {}).get("name", "?"), label or os.path.basename(dest), ", ".join(gone)))
+    return gone
+
+
 def write_result_origin(m, s):
     """拉回结果时写来源戳：这份结果属于哪个材料目录、算的是哪个结构。"""
-    dest = os.path.join(m.get("result_dir") or "", s["name"])
+    dest = step_result_dir(m, s)
     if not m.get("result_dir") or not os.path.isdir(dest):
         return
     rec = {"schema": "autozt-origin/1",
@@ -1889,7 +1953,7 @@ def do_run_gen_step(cfg, t, m, s, tag):
             try:
                 if fetch_material(cfg, m, only_steps={s["name"]}, quiet=True):
                     print("%s: 已拉回 → %s"
-                          % (tag, os.path.join(m["result_dir"], s["name"])))
+                          % (tag, step_result_dir(m, s)))
             except Exception as _e:   # noqa: BLE001
                 print("警告：拉回 %s 失败：%s" % (s["name"], _e), file=sys.stderr)
         return True
@@ -2229,7 +2293,7 @@ def _remote_submit_preflight(cfg, m, s, t=None):
         if not required:
             required = (("POSCAR", "submit.sh") if is_mace
                         else ("INCAR", "POSCAR", "KPOINTS", "submit.sh"))
-    dest = os.path.join(m.get("result_dir") or "", s["name"])
+    dest = step_result_dir(m, s)
     # [0032] fetch_exclude 的文件（S8.4 的 mesh_*.h5：上一轮的产物，不是输入）永远不回拉本地，
     #   不能算"提交前必须存在"的输入 —— 否则 retry 后 start 会被"本地仍缺少 mesh_*.h5"拦下。
     _sc_ex = fetch_excludes(next((x for x in ((m.get("_seg") or {}).get("steps_cfg") or [])
@@ -2704,7 +2768,7 @@ def _fetch_stamp_clear(m, step_name):
     from autozt import FETCH_STAMP
     """步骤重提交/重生成后调用：清掉抓取戳记，让 auto-fetch 重拉新结果。"""
     try:
-        sp = os.path.join(m.get("result_dir") or "", step_name, FETCH_STAMP)
+        sp = os.path.join(step_result_dir(m, step_name), FETCH_STAMP)
         if os.path.isfile(sp):
             os.remove(sp)
     except OSError:
@@ -2806,7 +2870,7 @@ def _fetch_receipt_valid(cfg, m, s):
         return False
     from autozt import FETCH_STAMP
     try:
-        with open(os.path.join(m["result_dir"], s["name"], FETCH_STAMP),
+        with open(os.path.join(step_result_dir(m, s), FETCH_STAMP),
                   encoding="utf-8", errors="replace") as f:
             return json.load(f) == _fetch_receipt(cfg, m, s)
     except (OSError, ValueError, TypeError):
@@ -2817,7 +2881,7 @@ def _fetch_receipt_write(cfg, m, s):
     from autozt import FETCH_STAMP
     if not s.get("done") or s.get("job"):
         return
-    dest = os.path.join(m["result_dir"], s["name"])
+    dest = step_result_dir(m, s)
     try:
         os.makedirs(dest, exist_ok=True)
         import tempfile
@@ -2914,7 +2978,7 @@ def fetch_material(cfg, m, only_steps=None, quiet=False, all_files=False,
         if only_steps is not None and s["name"] not in only_steps:
             continue
         _fetch_stamp_clear(m, s["name"])
-        dest = os.path.join(m["result_dir"], s["name"])
+        dest = step_result_dir(m, s)
         os.makedirs(dest, exist_ok=True)
         sc2 = next((x for x in ((m.get("_seg") or {}).get("steps_cfg") or [])
                     if x.get("name") == s["name"]), {})
@@ -2953,6 +3017,14 @@ def fetch_material(cfg, m, only_steps=None, quiet=False, all_files=False,
         _prune_unreceived(dest, p2.stdout + "\n" + p2.stderr,
                           [sc2.get("done_marker")] if _whole else list(files) + [sc2.get("done_marker")],
                           m, s)
+        if _whole:                                   # [0052] 整目录镜像：远端已删的旧结果本地也删
+            _mirror_prune(dest, p2.stdout + "\n" + p2.stderr, m, s.get("label"))
+        if dest == m["result_dir"]:                  # [0052] result_flat：删掉旧版的 result/<步骤>/ 子目录
+            _legacy = os.path.join(m["result_dir"], s["name"])
+            if os.path.isdir(_legacy) and not os.path.islink(_legacy):
+                shutil.rmtree(_legacy, ignore_errors=True)
+                print("%s: %s 结果已改放 %s/，旧的 %s/ 已删除"
+                      % (m["name"], s.get("label"), m["result_dir"], _legacy))
         # [0034] fetch_extra：步骤产物之外的额外目录（相对步骤目录），例如 S8.3 规定格式绘图输出
         #   写在材料根的 transport_plots/。拉回本地 result/<basename(extra)>/；集群上没有则跳过。
         for _ex in (sc2.get("fetch_extra") or []):
@@ -2974,6 +3046,7 @@ def fetch_material(cfg, m, only_steps=None, quiet=False, all_files=False,
             _exok = (_exrc1 == 0 and (_exp2.returncode == 0
                                       or tar_meta_only_errors(_exp2.stderr)))
             if _exok:                                   # 9p/drvfs 的 chmod/utime 失败不算错
+                _mirror_prune(_exdest, _exp2.stdout + "\n" + _exp2.stderr, m, _ex, pure=True)   # [0052]
                 if not quiet:
                     print("%s: fetch_extra %s → %s" % (m["name"], _ex, _exdest))
             elif not quiet:

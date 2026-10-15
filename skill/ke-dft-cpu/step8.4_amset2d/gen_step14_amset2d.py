@@ -111,7 +111,7 @@ STEP_LABEL  = "S8.4_amset2d"
 #   用于补跑新增本征组合（intrinsic_ADP_POP.json / intrinsic_ADP_POP_ODP.json），或后处理失败后抢救（[0044]）。
 #   前提：目录里已有本次 AMSET 写的 mesh_*.h5 + transport_<网格>.json（transport.json 不需要，链尾会重新复制）。
 POSTPROCESS_ONLY = False
-AMSET_CMD   = ('rm -f transport.json subset_*.json intrinsic_*.json overall_no*.json tau_energy.json mesh_*.h5; '
+AMSET_CMD   = ('rm -f transport.json subset_*.json intrinsic_*.json undoped_ni.json overall_no*.json tau_energy.json mesh_*.h5; '
                'python overlap_preflight.py --in-job || exit 1; '
                'python -c "import amset2d_plugin; @AMSET_PLUGINS@'
                'from amset.log import initialize_amset_logger as L; L(); '

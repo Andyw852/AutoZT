@@ -232,12 +232,40 @@ def _wrap_intrinsic(orig):
     return get_fermi_from_num_electrons
 
 
+UNDOPED_NI_JSON = "undoped_ni.json"   # [0052] 本征点 n_i(T) 记录（S8.3 的 intrinsic_carrier/ 图表标注 n_i 用）
+
+
+def write_undoped_ni(rec, run_dir="."):
+    """[0052] 把本征点 (T, E_F, n_i) 写进运行目录的 undoped_ni.json —— transport.json 里没有载流子浓度
+    字段，S8.3 / ZT 要标注本征浓度只能靠这份记录（旧结果退回解析 queue.out 里的 [fermi_fix] 本征点 行）。
+    只在 AMSET 运行目录（有 settings.yaml）里写，单测/探针在别处调用时不落盘。n_i 是每胞体积口径 cm^-3
+    （2D = 含真空的元胞体积，换算面密度/文献口径由 S8.3 按 c、t 做）。"""
+    import json
+    if not os.path.isfile(os.path.join(run_dir, "settings.yaml")):
+        return None
+    rec = sorted(dict((r[0], r) for r in rec).values())
+    path = os.path.join(run_dir, UNDOPED_NI_JSON)
+    try:
+        tmp = path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump({"schema": "autozt-undoped-ni/1",
+                       "note": "AMSET doping = 0 点：E_F 由 n = p 求得，n = p = n_i（每胞体积口径 cm^-3）",
+                       "temperatures_K": [r[0] for r in rec], "E_F_eV": [r[1] for r in rec],
+                       "n_i_cm-3": [r[2] for r in rec]}, fh, indent=1)
+        os.replace(tmp, path)
+    except OSError as e:
+        print("[fermi_fix] 写 %s 失败（%s）—— 本征浓度只在日志里" % (UNDOPED_NI_JSON, e), file=sys.stderr)
+        return None
+    return path
+
+
 def _wrap_set_doping(orig):
     @functools.wraps(orig)
     def set_doping_and_temperatures(self, doping, temperatures):
         out = orig(self, doping, temperatures)
         if enabled() and getattr(self, "dos", None) is not None and band_gap_edges(self.dos) is not None:
             vol = float(self.dos.structure.volume)
+            rec = []
             for n, t in np.ndindex(self.fermi_levels.shape):
                 if self.doping[n] == 0:
                     ln_n, ln_p = log_carriers(self.dos, self.fermi_levels[n, t], self.temperatures[t])
@@ -246,10 +274,14 @@ def _wrap_set_doping(orig):
                     n_i = np.exp(0.5 * (ln_n + ln_p)) / vol
                     self.electron_conc[n, t] = n_i
                     self.hole_conc[n, t] = n_i
+                    rec.append((float(self.temperatures[t]), float(self.fermi_levels[n, t] * HA_EV),
+                                float(_to_cm3(self.electron_conc[n, t]))))
                     if not _quiet():
                         print("[fermi_fix] 本征点 %g K：E_F = %.4f eV，n = p = %.3e cm^-3（n=p 求解，log-sum-exp）"
                               % (self.temperatures[t], self.fermi_levels[n, t] * HA_EV,
                                  _to_cm3(self.electron_conc[n, t])), flush=True)
+            if rec and not _quiet():
+                write_undoped_ni(rec)
         return out
 
     setattr(set_doping_and_temperatures, MARK, True)

@@ -409,3 +409,54 @@ def test_s20_assets_resolve():
     sc = step_cfg(t, "step20_zt", m)
     for f in [sc["gen"].split()[0]] + list(sc.get("gen_need") or []):
         assert find_asset(cfg, t, m, f, "step20_zt"), f
+
+
+# ------------------------------------------------------------- [0052] 本征点 + 先删旧结果
+def test_zt_undoped_point_goes_to_intrinsic_folder(tmp_path):
+    """doping = 0 是本征点（type i）：不进 p 型峰值；单独出 intrinsic_carrier/ 表（带 n_i）；旧产物先删。"""
+    tr = {"doping": [-1e20, 0.0, 1e20], "temperatures": [300.0, 400.0],
+          "conductivity": [[_t33(1e5, 1e5, 1e5)] * 2, [_t33(1e-3, 1e-3, 1e-3)] * 2,
+                           [_t33(1e5, 1e5, 1e5)] * 2],
+          "seebeck": [[_t33(-200.0, -200.0, -200.0)] * 2, [_t33(900.0, 900.0, 900.0)] * 2,
+                      [_t33(200.0, 200.0, 200.0)] * 2],
+          "electronic_thermal_conductivity": [[_t33(1.0, 1.0, 1.0)] * 2] * 3}
+    kl = {"KAPPA_DONE": True, "temperatures": [200.0, 500.0],
+          "kappa_xx_yy_zz": [[50.0, 50.0, 50.0], [40.0, 40.0, 40.0]]}
+    root = tmp_path / "Si" / "zt-dft-cpu"
+    _gen_fixture(root, tr, kl)
+    (root / "inputs" / "transport" / "queue.out").write_text(
+        "[fermi_fix] 本征点 300 K：E_F = 6.1 eV，n = p = 1.000e+10 cm^-3（n=p 求解，log-sum-exp）\n"
+        "[fermi_fix] 本征点 400 K：E_F = 6.0 eV，n = p = 2.000e+12 cm^-3（n=p 求解，log-sum-exp）\n",
+        encoding="utf-8")
+    out = root / "step20_zt"
+    (out / "per_temperature" / "1000K").mkdir(parents=True)        # 上一轮的旧温度文件夹
+    r = subprocess.run([sys.executable, "gen_step20_zt.py", "--material", "Si"],
+                       cwd=str(root), capture_output=True, text=True)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert not (out / "per_temperature" / "1000K").exists()
+    d = json.loads((out / "zt_summary.json").read_text(encoding="utf-8"))
+    assert d["doping_type"] == ["n", "i", "p"]
+    assert d["peak_ZT"]["p"]["doping_cm-3"] == 1e20
+    lines = [l for l in (out / "intrinsic_carrier" / "zt_intrinsic.csv").read_text(encoding="utf-8").splitlines()
+             if not l.startswith("#")]
+    import csv as _csv
+    rows = list(_csv.DictReader(lines))
+    assert [float(x["T_K"]) for x in rows] == [300.0, 400.0]
+    assert float(rows[0]["n_i_cm-3"]) == 1e10 and float(rows[1]["n_i_cm-3"]) == 2e12
+    assert float(rows[0]["seebeck_uV/K"]) == 900.0 and rows[0]["ZT"]
+    assert (out / "intrinsic_carrier" / "zt_intrinsic.txt").is_file()
+    try:
+        import matplotlib  # noqa: F401
+    except Exception:
+        return
+    assert (out / "intrinsic_carrier" / "zt_intrinsic.png").is_file()
+
+
+def test_zt_no_undoped_point_no_intrinsic_folder(tmp_path):
+    tr, kl = _ok_tr_kl()
+    root = tmp_path / "Si" / "zt-dft-cpu"
+    _gen_fixture(root, tr, kl)
+    r = subprocess.run([sys.executable, "gen_step20_zt.py", "--material", "Si"],
+                       cwd=str(root), capture_output=True, text=True)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert not (root / "step20_zt" / "intrinsic_carrier").exists()

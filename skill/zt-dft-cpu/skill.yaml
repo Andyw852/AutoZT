@@ -38,12 +38,14 @@ defaults:
 companion_skills: [ke-dft-cpu, kl-dft-cpu]
 
 fetch_files: [zt_summary.json, zt_summary.txt, zt_vs_T.png, zt_vs_doping.png,
-              zt_heatmap.png, zt_components.png, inputs]
+              zt_heatmap.png, zt_components.png, per_temperature, intrinsic_carrier, inputs]
 
 steps:
   - {seq: 20, name: step20_zt, label: S20_zt,
      src: step20_zt, template_dir: ".",
      check: plot, run: gen, done_marker: zt_summary.json,
+     # [0052] 本地结果直接放 <材料>/zt-dft-cpu/result/（不再多一层 result/step20_zt/）；旧子目录拉回时自动删
+     result_flat: true,
      gen: gen_step20_zt.py, gen_need: [zt_common.py, stepconf.py], fetch_all: true,
      needs: [],
      needs_results: {

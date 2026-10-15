@@ -77,7 +77,20 @@ needs_results:
 | `kappa_L` | κ_L 来源、温区、xx/yy/zz、元胞口径标记、2D 厚度信息 |
 | `notes` | 口径说明（约化方式、插值方式、不外推区间…） |
 
-配套产物：`zt_summary.txt`（人读汇总 + 每档明细表）、`zt_vs_T.png`、`zt_vs_doping.png`、`zt_components.png`。
+配套产物：`zt_summary.txt`（人读汇总 + 每档明细表）、`zt_heatmap.png`、`zt_vs_T.png`、`zt_vs_doping.png`、
+`zt_components.png`、`per_temperature/<T>K/report.{txt,json}`，以及 [0052] 起的：
+
+| 产物 | 内容 |
+|---|---|
+| `intrinsic_carrier/zt_intrinsic.{png,csv,txt}` | 本征点（未掺杂，AMSET doping = 0，n = p = n_i）随温度：n_i、E_F、S、σ、κ_e、κ_L、κ_tot、PF、ZT；图第一栏标出每个温度的 n_i 数值。需要 ke-dft-cpu 的 `UNDOPED_POINT`（出厂开）；n_i 读 S8/S8.4 运行目录的 `undoped_ni.json`，旧结果从 `queue.out` 的 `[fermi_fix] 本征点` 行解析 |
+
+- **存放位置（[0052]）**：本地结果**直接放 `<材料>/zt-dft-cpu/result/`**（skill.yaml `result_flat: true`），
+  不再多一层 `result/step20_zt/`；拉回时旧版的 `result/step20_zt/` 自动删除。超算上的步骤目录仍是
+  `zt-dft-cpu/step20_zt/`（autozt 每步需要一个工作目录）。
+- **先删旧结果（[0052]）**：每次 gen 先删上一轮的产物（zt_summary.*、图、`per_temperature/`、`intrinsic_carrier/`），
+  温度网格 / 掺杂档变了不留旧文件；本地回拉按镜像处理，远端已删的项本地也删。
+- **本征点不再算 p 型（[0052]）**：doping = 0 以前被归成 p 型、混进 p 型峰值与热图；现在 `doping_type` 记 `i`，
+  只出现在 `intrinsic_carrier/`、`zt_vs_T.png`（虚点线 "intrinsic (undoped)"）和逐档明细里。
 
 ## 5. 历史记录（v0.1：在本技能里重抄 ke/kl 两段的版本）
 
