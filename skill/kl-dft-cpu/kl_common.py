@@ -196,8 +196,9 @@ def resolve_cut3_candidates(poscar, spec, cut3_max=7.0, tol=0.05, min_shells=2,
 
 
 def select_cutoff(records, kappa_tol_pct=5.0, se_mult=1.0, stability_thr=0.3,
-                  pick="smallest"):
-    """按三判据自动选最小可行截断。records 是每个候选截断一条 dict：
+                  pick="largest"):
+    """按三判据自动选可行截断（pick 默认 "largest"：取平台内最大档，2026-10-15 起；
+    与 cut3_select.select_cutoff 同一判据，改一处要同步另一处）。records 是每个候选截断一条 dict：
 
         cut               截断 (Å)
         ratio             方程数/参数数（<3 = 数据不足 → 不参与）

@@ -77,7 +77,7 @@ SPEC = {
     "CUT3_KAPPA_TOL_PCT": (5.0, "float"),
     "CUT3_CV_1SE_MULT":   (1.0, "float"),
     "CUT3_STABILITY_THR": (0.3, "float"),
-    "CUT3_PICK":          ("smallest", "str"),
+    "CUT3_PICK":          ("largest", "str"),
     # 2D 面内 κ 的层厚归一化（与 kl-dft-cpu S6 同一口径，真源 _common/thickness_2d.py）：
     #   phono3py 按整胞体积（含真空）归一，面内 κ 被 h⊥/d 稀释。kappa_summary.json 另写
     #   kappa_2d_normalized_* = 原始 κ × h⊥/d。vdw（默认：原子层跨度 + 上下 vdW 半径）|

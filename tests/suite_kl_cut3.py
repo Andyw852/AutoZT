@@ -5,7 +5,7 @@
 覆盖：
   1. neighbor_shells / cut3_candidates：壳层枚举 + 相邻壳层中点（不落在壳层距离上）
   2. resolve_cut3_candidates：auto / off / 显式列表 三种写法
-  3. select_cutoff：三判据都满足取最小、平的时候 largest 口径、κ 未收敛、无可用截断
+  3. select_cutoff：默认 largest（平台内最大档）、smallest 仍可选、κ 未收敛、无可用截断
   3b. 判据①的 err_kind 门：in-sample 残差不否决、held-out 才否决
   4. fc3_shell_stability：逐壳层 Φ³ 离散度 + stable_upper_cut
 不碰集群、不依赖 phono3py。
@@ -131,11 +131,11 @@ def test_select():
     for r in jump:
         r["kappa_err"] = 0.0
     cj, rj = kc.select_cutoff(jump, kappa_tol_pct=5.0)
-    check("平台后跳变：取稳定区间 4.97–6.29 的最小 4.97，不退回 7.74",
-          abs(cj - 4.97) < 1e-9 and rj["status"] == "ok"
+    check("平台后跳变：默认 largest 取稳定区间 4.97–6.29 的 6.29，不退回 7.74",
+          abs(cj - 6.29) < 1e-9 and rj["status"] == "ok"
           and rj["plateau_interval"] == [4.97, 6.29], str((cj, rj["status"])))
-    cjl, _ = kc.select_cutoff(jump, kappa_tol_pct=5.0, pick="largest")
-    check("平台后跳变 largest → 6.29", abs(cjl - 6.29) < 1e-9, str(cjl))
+    cjs, _ = kc.select_cutoff(jump, kappa_tol_pct=5.0, pick="smallest")
+    check("平台后跳变 smallest 仍可选 → 4.97", abs(cjs - 4.97) < 1e-9, str(cjs))
     bad = [_rec(4.8, 10.0, ratio=2.0), _rec(5.3, 10.0, ratio=2.5)]
     c4, r4 = kc.select_cutoff(bad)
     check("数据量全不足 → no_usable_cutoff", c4 is None

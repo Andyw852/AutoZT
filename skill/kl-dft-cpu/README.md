@@ -128,8 +128,9 @@ templates/` 里旧的同名模板（否则旧集群的 partition/qos 会盖住�
 三判据：① CV 误差 ≤ min + 1·SE（`CUT3_CV_1SE_MULT`）；② 候选 ≤ 数据能确定的最大截断
 （`CUT3_STABILITY_THR` 判最外可确定壳层）；③ κ 平台 = **连续稳定区间**：相邻档 300 K
 κ 变化与区间起点到区间内各档的累计变化都 ≤ max(5%, 两误差平方和根)
-（`CUT3_KAPPA_TOL_PCT`，有 xx/yy/zz 时逐分量）。在平台区间里取**最小**截断
-（`CUT3_PICK=smallest`，总则）或区间内最大（`CUT3_PICK=largest`，Mg8C120 口径）。
+（`CUT3_KAPPA_TOL_PCT`，有 xx/yy/zz 时逐分量）。在平台区间里取**最大**截断
+（`CUT3_PICK=largest`，2026-10-15 起默认：三阶相互作用最全、且与网格收敛的参考档更可能
+重合，故选中档不用再单独复核网格）或最小（`CUT3_PICK=smallest`，旧默认）。
 平台之后的跳变（例：4.97–6.29 Å 平、7.74 Å 跌 17.7%）只写进
 `cutoff_selection.json` 的 `after_plateau`，不采用；多段平台取最长的一段。
 找不到任何平台（κ 一路在变）→ `not_converged`，报最大可确定档并注明

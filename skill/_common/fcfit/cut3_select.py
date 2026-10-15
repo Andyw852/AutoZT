@@ -62,7 +62,7 @@ def _plateau_runs(usable, pair_ok, kappa_tol_pct, floor):
 
 
 def select_cutoff(records, kappa_tol_pct=5.0, se_mult=1.0, stability_thr=0.3,
-                  pick="smallest", component_floor=0.1):
+                  pick="largest", component_floor=0.1):
     """按三判据自动选最小可行截断。records 是每个候选截断一条 dict：
 
         cut               截断 (Å)
@@ -79,8 +79,9 @@ def select_cutoff(records, kappa_tol_pct=5.0, se_mult=1.0, stability_thr=0.3,
     判据③（κ 平台）找的是【连续稳定区间】：相邻 Δκ 与区间内累计 Δκ 都在容差内的一段
     连续截断；区间之后的跳变只记进 report["after_plateau"]，不影响选择。
 
-    pick：平台区间里满足判据的截断有多个时，"smallest"（默认，总则：取区间内最小）或
-          "largest"（Mg8C120 口径：取区间内能确定的最大截断）。
+    pick：平台区间里满足判据的截断有多个时，"largest"（2026-10-15 起默认：取区间内
+          能确定的最大截断 —— 三阶相互作用最全、平台内 κ 最稳，且与网格收敛的参考档更可能
+          重合，不再需要为选中档单独复核网格）或 "smallest"（旧默认：取区间内最小）。
 
     返回 (chosen_cut, report)：chosen_cut 为 None 表示无可用截断。report 给出
     每个截断是否 data_ok / stable_ok / err_ok / plateau_ok 与最终判定依据。

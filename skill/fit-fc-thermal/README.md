@@ -436,9 +436,10 @@ writing `kappa_summary.json`:
   converged on a reference cutoff (the nominal one, else the largest; report in
   `mesh_convergence_reference.json`), every candidate cutoff is then run at that
   converged mesh and the cutoff is picked there, and every BTE run carries all
-  of T_MIN..T_MAX, so the chosen cutoff's result is the full kappa(T).  If the
-  chosen cutoff is not the reference, its mesh is re-checked from the converged
-  length (at least one denser mesh).  `MESH = "n n n"` keeps the old fixed-mesh
+  of T_MIN..T_MAX, so the chosen cutoff's result is the full kappa(T).  The
+  chosen cutoff is NOT re-checked on a denser mesh: the reference cutoff (most
+  complete fc3, slowest to converge) already fixed L*, which errs on the
+  conservative side for other cutoffs; `mesh_converged_on_cut3_A` records it.  `MESH = "n n n"` keeps the old fixed-mesh
   behaviour (no convergence); `MESH = 60` is a fixed starting length.
   No single default length is safe for every material (high-kappa, light-atom
   or low-T work needs denser meshes than a low-kappa complex cell), which is
@@ -471,9 +472,13 @@ writing `kappa_summary.json`:
   contiguous stable interval: adjacent changes and the cumulative change from
   the interval start both stay within the tolerance; a jump after the interval
   (e.g. flat 4.97-6.29 A, -17.7 % at 7.74 A) is reported in `after_plateau` and
-  not used, and with several plateaus the longest wins.  `CUT3_PICK = smallest`
-  (default) takes the smallest cutoff of that interval, `largest` its largest;
-  `not_converged` (no plateau at all) reports the largest data-determined cutoff.  A phono3py fit writes per-cut
+  not used, and with several plateaus the longest wins.  `CUT3_PICK = largest`
+  (default since 2026-10-15) takes the largest cutoff of that interval, `smallest`
+  its smallest;
+  `not_converged` (no plateau at all) reports the largest data-determined cutoff.  Each
+  candidate's `kappa-m*.hdf5` lands in its own `cut3_<tag>/` and the chosen cutoff's is
+  copied to the top level, so the top-level products never disagree with
+  `chosen_cutoff_A`.  A phono3py fit writes per-cut
   dirs too (no bootstrap, so only the kappa plateau discriminates).  With
   `CUT3_SCAN = off` (or a hiphive fit, which does not write per-cut dirs yet) it
   falls back to the nominal cutoff.

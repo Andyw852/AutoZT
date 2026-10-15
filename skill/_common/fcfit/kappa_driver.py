@@ -26,8 +26,10 @@ converged pair is reported; mesh_convergence.json keeps every point.  With a
 cutoff scan the order is: (1) converge the mesh on a reference cutoff (the
 nominal one, else the largest), (2) run every cutoff at that converged mesh and
 pick the cutoff there, (3) every BTE run carries all temperatures, so the chosen
-cutoff's result is the full kappa(T).  If the chosen cutoff differs from the
-reference, its mesh is re-checked starting from the converged length.
+cutoff's result is the full kappa(T).  The chosen cutoff is NOT re-checked on a
+denser mesh: the reference cutoff (the most complete / slowest-converging fc3
+set) already fixed L*, which only errs on the conservative side for the other
+cutoffs; kappa_summary.json records it in mesh_converged_on_cut3_A.
 """
 import json
 import math
@@ -293,6 +295,37 @@ def _run_bte(out, yaml_name, fc2, fc3, cfg, source_fc, write_kappa, spec=None):
     s["mesh_axis_counts"] = _mesh_axis_counts(s)
     s.update(_kappa_symmetry_audit(ph3, s, cfg))
     return s
+
+
+_KAPPA_GLOB = "kappa-m*.hdf5"
+
+
+def _stash_kappa_files(out, dest):
+    """[V190] 把 phono3py 写在顶层（cwd）的 kappa-m*.hdf5 收进该档自己的目录。
+
+    扫描时每档截断各跑一次，而 phono3py 的文件名只带网格、不带截断：都留在顶层会互相
+    覆盖，最终顶层那份也未必属于选中档。收进 cut3_<tag>/ 后由 _promote_kappa_files 把
+    选中档的放回顶层（gen_step2_kappa 的产物约定仍是顶层 kappa-m<mesh>.hdf5）。"""
+    dest = Path(dest)
+    moved = []
+    for p in sorted(Path(out).glob(_KAPPA_GLOB)):
+        dest.mkdir(parents=True, exist_ok=True)
+        tgt = dest / p.name
+        if tgt.exists():
+            tgt.unlink()
+        p.replace(tgt)
+        moved.append(p.name)
+    return moved
+
+
+def _promote_kappa_files(src, out):
+    """把选中截断目录里的 kappa-m*.hdf5 复制回顶层（产物位置约定不变）。"""
+    src = Path(src)
+    put = []
+    for p in sorted(src.glob(_KAPPA_GLOB)):
+        shutil.copy2(str(p), str(Path(out) / p.name))
+        put.append(p.name)
+    return put
 
 
 def _kappa_symmetry_audit(ph3, s, cfg):
@@ -695,7 +728,7 @@ def _select(out, cfg, per_cut):
         kappa_tol_pct=float(cfg.get("cut3_kappa_tol_pct") or 5.0),
         se_mult=float(cfg.get("cut3_cv_1se_mult") or 1.0),
         stability_thr=float(cfg.get("cut3_stability_thr") or 0.3),
-        pick=str(cfg.get("cut3_pick") or "smallest"))
+        pick=str(cfg.get("cut3_pick") or "largest"))
     rep["kappa_err_source"] = ("fc3 per-shell sigma/|mean| propagated (coarse; "
                                "one kappa run per cutoff)")
     (out / "cutoff_selection.json").write_text(
@@ -1234,7 +1267,8 @@ def main():
         #       kappa_vs_cutoff 图上的数值也和最终报告的 κ 对不上）；
         #   ③ 温度：每次 BTE 都按 T_MIN..T_MAX 全部温度算（RTA 下多温度几乎不加成本），
         #      最终报告即选中截断 + 收敛网格的完整 κ(T)。
-        # 选中档若不是参考档，再从 L* 起对它复核一次网格（至少多一档加密）。
+        # [V190] 选中档不再复核网格（见下面选中后的注释）；各档的 kappa-m*.hdf5 收进自己的
+        #   cut3_<tag>/，最后把选中档的那份放回顶层，避免顶层文件跟选中截断对不上。
         tags = list(cfg["cut_scans"])
         ref = _reference_tag(tags, cfg.get("nominal_cut3_A"))
         kind, _L0 = _mesh_spec(cfg)
@@ -1242,6 +1276,7 @@ def main():
         s_ref = _converge_mesh(out, yaml_name, "cut3_%s/fc2.hdf5" % ref,
                                "cut3_%s/fc3.hdf5" % ref, cfg,
                                "cutoff_scan/cut3_%s" % ref)
+        _stash_kappa_files(out, out / ("cut3_%s" % ref))
         mesh_rep = s_ref.get("mesh_convergence")
         if mesh_rep:
             (out / "mesh_convergence_reference.json").write_text(
@@ -1259,8 +1294,9 @@ def main():
                 print("[..] BTE @ cutoff %s" % _cut_of_tag(tag), flush=True)
                 s = _run_bte(out, yaml_name, "cut3_%s/fc2.hdf5" % tag,
                              "cut3_%s/fc3.hdf5" % tag, cfg,
-                             "cutoff_scan/cut3_%s" % tag, write_kappa=False,
+                             "cutoff_scan/cut3_%s" % tag, write_kappa=True,
                              spec=spec)
+                _stash_kappa_files(out, out / ("cut3_%s" % tag))
             _cd = out / ("cut3_%s" % tag)
             _cd.mkdir(exist_ok=True)
             (_cd / "kappa_summary.json").write_text(
@@ -1280,19 +1316,27 @@ def main():
             sys.exit("[ERROR] 没有可用截断（数据量/稳定性不足）—— 见 cutoff_selection.json")
         tag = ("%.2f" % chosen).replace(".", "p")
         s = by_tag[tag]
-        if tag != ref and spec is not None:
-            print("[..] 选中截断 %.2f A ≠ 参考截断：从收敛网格起复核一次" % chosen, flush=True)
-            s = _converge_mesh(out, yaml_name, "cut3_%s/fc2.hdf5" % tag,
-                               "cut3_%s/fc3.hdf5" % tag, cfg,
-                               "cutoff_scan/cut3_%s" % tag, first=(spec[1], s))
-        elif mesh_rep:
+        _put = _promote_kappa_files(out / ("cut3_%s" % tag), out)
+        if _put:
+            print("[..] 选中档 %s 的 kappa 文件已放回顶层：%s"
+                  % (chosen, ", ".join(_put)), flush=True)
+        # [V190] 2026-10-15 用户定：选中档不再单独复核网格。
+        #   网格已在参考截断（标称档；无标称时取最大档 —— 三阶相互作用最全、最难收敛）上收敛到
+        #   L*，所有候选档都在 L* 上跑过；参考档定的网格对其它档只会偏保守。所以选中档直接用它
+        #   在 L* 上的结果，不再从 L* 起为它单独加密一轮（旧行为 tag != ref 时再触发一档加密，
+        #   会在更密的网格上空转）。网格是在哪个截断上收敛的，写进 kappa_summary.json。
+        if mesh_rep:
             s["mesh_converged"] = s_ref.get("mesh_converged")
             s["mesh_convergence"] = mesh_rep
+        s["mesh_converged_on_cut3_A"] = _cut_of_tag(ref)
+        if tag != ref:
+            s["mesh_reused_from_reference_cut"] = True
         s["convergence_order"] = ["q_mesh@reference_cut", "cutoff@converged_mesh",
                                   "temperatures"]
         s["mesh_reference_cut3_A"] = _cut_of_tag(ref)
         s["cutoff_selection"] = rep
         s["chosen_cutoff_A"] = chosen
+        s["kappa_files_top_level"] = _put
         (out / "kappa_summary.json").write_text(
             json.dumps(s, indent=2, ensure_ascii=False), encoding="utf-8",
             newline="\n")

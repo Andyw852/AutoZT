@@ -297,7 +297,10 @@ def test_cut3_select():
          "err_kind": "in-sample", "stable_upper_cut": 4.5, "kappa": 2.0, "kappa_err": 0.01},
     ]
     chosen, rep = cs.select_cutoff(recs)
-    check("选截断：稳定的最小平台档 (3.9)", chosen == 3.9, str((chosen, rep.get("status"))))
+    check("选截断：默认 largest，稳定平台取最大档 (4.3)", chosen == 4.3,
+          str((chosen, rep.get("status"))))
+    _cs, _rs = cs.select_cutoff(recs, pick="smallest")
+    check("选截断：smallest 仍可选 → 3.9", _cs == 3.9, str(_cs))
     by = {x["cut"]: x for x in rep["records"]}
     check("超 stable_upper_cut 的档 stable_ok=False", by[4.9]["stable_ok"] is False)
     _c2, rep2 = cs.select_cutoff([dict(recs[0], kappa=3.0), dict(recs[1], kappa=2.0)])
@@ -308,21 +311,23 @@ def test_cut3_select():
           for c, k in ((4.18, 119.49), (4.97, 124.36), (5.68, 127.49),
                        (6.29, 126.22), (7.74, 103.89))]
     cs1, rs1 = cs.select_cutoff(sv)
-    check("稳定区间 4.97–6.29：smallest 取 4.97，7.74 跳变不采用",
-          cs1 == 4.97 and rs1["status"] == "ok" and rs1["plateau_interval"] == [4.97, 6.29]
+    check("稳定区间 4.97–6.29：默认 largest 取 6.29，7.74 跳变不采用",
+          cs1 == 6.29 and rs1["status"] == "ok" and rs1["plateau_interval"] == [4.97, 6.29]
           and [x["cut"] for x in rs1["after_plateau"]] == [7.74],
           "%s %s %s" % (cs1, rs1["status"], rs1.get("plateau_interval")))
-    cs2, _ = cs.select_cutoff(sv, pick="largest")
-    check("稳定区间 largest 取区间内最大 6.29（不是 7.74）", cs2 == 6.29, str(cs2))
+    cs2, _ = cs.select_cutoff(sv, pick="smallest")
+    check("稳定区间 smallest 仍可选 → 4.97", cs2 == 4.97, str(cs2))
     two = [{"cut": c, "ratio": 10, "stability_measured": False, "kappa": k}
            for c, k in ((4.0, 10.0), (4.5, 10.2), (5.0, 13.0), (5.5, 13.1), (6.0, 13.2))]
     cs3, rs3 = cs.select_cutoff(two)
-    check("两段平台取最长的一段（5.0–6.0）", cs3 == 5.0 and rs3["plateau_interval"] == [5.0, 6.0],
+    check("两段平台取最长的一段（5.0–6.0），默认 largest → 6.0",
+          cs3 == 6.0 and rs3["plateau_interval"] == [5.0, 6.0],
           "%s %s" % (cs3, rs3.get("plateau_interval")))
     drift = [{"cut": c, "ratio": 10, "stability_measured": False, "kappa": k}
              for c, k in ((4.0, 10.0), (4.5, 10.4), (5.0, 10.8), (5.5, 11.2))]
-    cs4, _ = cs.select_cutoff(drift)
-    check("相邻都 <5% 但累计漂移：起点右移到 5.0", cs4 == 5.0, str(cs4))
+    cs4, rs4 = cs.select_cutoff(drift)
+    check("相邻都 <5% 但累计漂移：起点右移到 5.0，默认 largest → 5.5", cs4 == 5.5,
+          "%s %s" % (cs4, rs4.get("plateau_interval")))
     miss = [{"cut": c, "ratio": 10, "stability_measured": False, "kappa": k}
             for c, k in ((4.0, 10.0), (4.5, None), (5.0, 10.1))]
     _c5, rs5 = cs.select_cutoff(miss)
@@ -520,7 +525,7 @@ def test_cut3_without_bootstrap_and_curve():
              "stability_measured": False, "kappa": k}
             for c, k in ((4.2, 31.9), (4.7, 28.9), (5.2, 27.0), (5.9, 24.6), (6.5, 23.6))]
     ch, rep = cs.select_cutoff(recs)
-    check("bootstrap=0：跳过判据②，按 κ 平台选到 5.9", ch == 5.9 and rep["status"] == "ok"
+    check("bootstrap=0：跳过判据②，按 κ 平台默认 largest 选到 6.5", ch == 6.5 and rep["status"] == "ok"
           and rep["stability_gate_applied"] is False, "%s %s" % (ch, rep["status"]))
     for r in recs:
         r["stability_measured"] = True
@@ -537,7 +542,7 @@ def test_cut3_without_bootstrap_and_curve():
     for r in vrec:
         r["kappa_vec"][2] = 0.0
     ch5, rep5 = cs.select_cutoff(vrec)
-    check("2D 的 κzz≈0 不卡平台（按下限归一）", ch5 == 5.9 and rep5["status"] == "ok",
+    check("2D 的 κzz≈0 不卡平台（按下限归一），默认 largest → 6.5", ch5 == 6.5 and rep5["status"] == "ok",
           "%s %s" % (ch5, rep5["status"]))
     spec = importlib.util.spec_from_file_location("kd_curve", str(ROOT / "skill" / "_common" / "fcfit" / "kappa_driver.py"))
     kd = importlib.util.module_from_spec(spec)
@@ -558,7 +563,8 @@ def test_cut3_without_bootstrap_and_curve():
         finally:
             os.chdir(cwd)
         doc = kd._write_kappa_vs_cutoff(out, per, rep3)
-        check("旧 cutoff_scan.json（bootstrap=0）也能选截断", ch3 == 4.5, str(ch3))
+        check("旧 cutoff_scan.json（bootstrap=0）也能选截断，默认 largest → 5.5",
+              ch3 == 5.5, str(ch3))
         check("kappa_vs_cutoff.json 含每档 κ 与壳层数",
               (out / "kappa_vs_cutoff.json").is_file()
               and [r["n_shells"] for r in doc["rows"]] == [1, 2, 3])
@@ -710,6 +716,103 @@ def test_fit_methods_param():
               and d3["method"] == "pheasy RIDGE", str(d3["rows"]))
 
 
+def test_kappa_file_stash():
+    print("[14] 扫描时每档 kappa-m*.hdf5 收进 cut3_<tag>/，选中档放回顶层")
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        "kd_stash", str(ROOT / "skill" / "_common" / "fcfit" / "kappa_driver.py"))
+    kd = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(kd)
+    with tempfile.TemporaryDirectory() as td:
+        out = Path(td)
+        (out / "cut3_4p18").mkdir()
+        for m in ("131313", "252525"):
+            (out / ("kappa-m%s.hdf5" % m)).write_text("ref-%s" % m, encoding="utf-8")
+            (out / "cut3_4p18" / ("kappa-m%s.hdf5" % m)).write_text("old", encoding="utf-8")
+        moved = kd._stash_kappa_files(out, out / "cut3_4p18")
+        check("每档目录收走顶层 kappa 文件（同名覆盖旧的）",
+              sorted(moved) == ["kappa-m131313.hdf5", "kappa-m252525.hdf5"]
+              and not list(out.glob("kappa-m*.hdf5"))
+              and (out / "cut3_4p18" / "kappa-m131313.hdf5").read_text(encoding="utf-8")
+              == "ref-131313", str(moved))
+        (out / "cut3_6p29").mkdir()
+        (out / "cut3_6p29" / "kappa-m252525.hdf5").write_text("chosen", encoding="utf-8")
+        put = kd._promote_kappa_files(out / "cut3_6p29", out)
+        check("选中档的文件放回顶层（内容=选中档）",
+              put == ["kappa-m252525.hdf5"]
+              and (out / "kappa-m252525.hdf5").read_text(encoding="utf-8") == "chosen",
+              str(put))
+
+
+def test_scan_flow_no_recheck_and_kappa_files():
+    print("[15] 扫描主流程：选中档不再复核网格 + 每档 kappa 文件归位")
+    import importlib.util
+    import json
+    spec = importlib.util.spec_from_file_location(
+        "kd_scan", str(ROOT / "skill" / "_common" / "fcfit" / "kappa_driver.py"))
+    kd = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(kd)
+    tags = ["4p18", "4p97", "5p68", "6p29", "7p74"]
+    kap = {"4p18": 119.49, "4p97": 124.36, "5p68": 127.49, "6p29": 126.22, "7p74": 103.89}
+    calls = {"converge": 0, "bte": []}
+
+    def fake_converge(out, yaml_name, fc2, fc3, cfg, source_fc, first=None):
+        calls["converge"] += 1
+        tag = str(fc2).split("/")[0][len("cut3_"):]
+        (out / "kappa-m252525.hdf5").write_text("ref-%s" % tag, encoding="utf-8")
+        return {"kappa_inplane_300K": kap[tag], "kappa_300K_xx_yy_zz": [kap[tag]] * 3,
+                "mesh": "25 25 25", "mesh_converged": True,
+                "mesh_convergence": {"records": [{"length": 78.125}], "converged": True}}
+
+    def fake_run(out, yaml_name, fc2, fc3, cfg, source_fc, write_kappa, spec=None):
+        tag = str(fc2).split("/")[0][len("cut3_"):]
+        calls["bte"].append(tag)
+        if write_kappa:
+            (out / "kappa-m252525.hdf5").write_text("bte-%s" % tag, encoding="utf-8")
+        return {"kappa_inplane_300K": kap[tag], "kappa_300K_xx_yy_zz": [kap[tag]] * 3,
+                "mesh": "25 25 25"}
+
+    def fake_select(out, cfg, per_cut):
+        return (6.29, {"status": "ok", "chosen_cut": 6.29,
+                       "plateau_interval": [4.18, 6.29]}, dict(per_cut))
+
+    with tempfile.TemporaryDirectory() as td:
+        out = Path(td)
+        (out / "kappa_config.json").write_text(json.dumps({
+            "solver": "phono3py", "disp_yaml": "phono3py_disp.yaml", "scan": True,
+            "cut_scans": tags, "mesh": "8 8 8", "temperatures": [300.0],
+            "source_fc": td, "expect_fit_job_id": "j1", "nac": False}), encoding="utf-8")
+        (out / "fc_fit_summary.json").write_text(json.dumps({"job_id": "j1"}),
+                                                encoding="utf-8")
+        for t in tags:
+            (out / ("cut3_%s" % t)).mkdir()
+        kd._converge_mesh, kd._run_bte, kd._select = fake_converge, fake_run, fake_select
+        kd._write_kappa_vs_cutoff = lambda *a, **k: {"rows": []}
+        cwd = os.getcwd()
+        os.chdir(td)
+        try:
+            kd.main()
+        finally:
+            os.chdir(cwd)
+        d = json.loads((out / "kappa_summary.json").read_text(encoding="utf-8"))
+        check("选完截断只收敛过一次网格（不再为选中档复核）", calls["converge"] == 1,
+              str(calls))
+        check("顶层 kappa 文件 = 选中档（6.29）",
+              (out / "kappa-m252525.hdf5").read_text(encoding="utf-8") == "bte-6p29",
+              str((out / "kappa-m252525.hdf5").read_text(encoding="utf-8")))
+        check("summary 记下 chosen / 顶层文件 / 网格参考档 / 复用标记",
+              d.get("chosen_cutoff_A") == 6.29
+              and d.get("kappa_files_top_level") == ["kappa-m252525.hdf5"]
+              and d.get("mesh_converged_on_cut3_A") == 7.74
+              and d.get("mesh_reused_from_reference_cut") is True,
+              json.dumps({k: d.get(k) for k in (
+                  "chosen_cutoff_A", "kappa_files_top_level",
+                  "mesh_converged_on_cut3_A", "mesh_reused_from_reference_cut")}))
+        check("每档的 kappa 文件各留一份在 cut3_<tag>/",
+              all((out / ("cut3_%s" % t) / "kappa-m252525.hdf5").is_file()
+                  for t in tags), str(tags))
+
+
 def main():
     test_shells_and_candidates()
     test_resolve()
@@ -725,6 +828,8 @@ def main():
     test_cut3_without_bootstrap_and_curve()
     test_kappa_2d_thickness_norm()
     test_fit_methods_param()
+    test_kappa_file_stash()
+    test_scan_flow_no_recheck_and_kappa_files()
     print("\nsuite_fcfit_shell: %s（%d 项）"
           % ("ALL PASS" if not FAIL else "FAIL", N))
     return 1 if FAIL else 0
