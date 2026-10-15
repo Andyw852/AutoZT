@@ -783,8 +783,8 @@ def cmd_prep(cfg, out):
                          "随机位移回归：phono3py 把位移记在顶层 displacement_pairs，"
                          "这里没有 (n, Nsc, 3) 的随机位移数组可回归。\n"
                          "        处理：把该数据集的生成方式改成随机位移（kl-dft-cpu S4 的 "
-                         "METHOD=alm），再 rerun S4_disp / S5_fc；有限位移重建 fc2/fc3 目前 "
-                         "只能走旧引擎（kl_fc_backends），共享 fc_fit_driver 尚未接入。")
+                         "METHOD=alm），再 rerun S4_disp / S5_fc。共享 fc_fit_driver 不支持有限位移数据集"
+                         "（旧引擎 kl_fc_backends 已于 2026-10-15 删除，autozt 早已不再调用它）。")
             sys.exit("[ERROR] the vasprun source needs phono3py_disp.yaml with a "
                      "type-2 displacement array (finite-displacement datasets are "
                      "rebuilt by the phono3py engine, not here)")
@@ -3135,20 +3135,6 @@ def _stability_gate(cfg, out):
         return _bad("could not prepare the phonopy input: %s" % e)
     fc2 = _fc2_in_phonopy_order(fc2, uc, scm, pm, out / "SPOSCAR")
 
-    # 2D 真空轴：取最长的原胞格矢（近似 dim_common.detect_dimension；共享引擎不
-    #   携带真空轴）。用于显式整数网格的真空轴设 1 + ZA 面内方向投影。
-    vax = 2
-    if is2d:
-        _cell = np.asarray(uc.cell, float)
-        vax = int(np.argmax(np.linalg.norm(_cell, axis=1)))
-
-    def _mesh_numbers():
-        if not is2d:
-            return None
-        m = [60, 60, 60]
-        m[vax] = 1
-        return m
-
     # 网格（2026-10-07）：3D 原来 run_mesh(60.0, is_mesh_symmetry=True)，Mn2In2Se5 上
     #   只有 17x17x4、对称约化后只算 315 个 q 点，破对称 fc2 的假虚频全在区内低对称点上，
     #   一个没采到。改为更密的长度网格 + 不做对称约化（fc2 不对称时约化本身就不成立）。
@@ -3258,6 +3244,9 @@ def _stability_gate(cfg, out):
     if mf_nac is not None:
         parts.append("min_freq(NAC)=%.3f THz" % mf_nac)
     parts.append("imag_policy=%s/%s" % (imag["verdict"], imag["imag_class"]))
+    if imag.get("min_freq_THz") is not None:                   # §四：THz 与 cm-1 同打
+        parts.append("imag_policy min=%.4f THz (%.2f cm-1)"
+                     % (imag["min_freq_THz"], imag.get("min_freq_cm1") or 0.0))
     if is2d:
         parts.append("ZA verdict=%s" % _za_v)
     if sym.get("spread_THz") is not None:
@@ -3609,7 +3598,8 @@ def cmd_post(cfg, out):
         "fit_quality_gate_failed": bool(gate_fail),
         "tool_ok": tool_ok,
         "stability_verdict": g.get("stability_verdict"),
-        "imag": g.get("imag"),
+        "imag": g.get("imag"),                       # classify_imag 的完整结论（§四全部字段）
+        "imag_policy_refs": list(imag_policy.POLICY_REFS),
         "imag_class": (g.get("imag") or {}).get("imag_class"),
         "min_freq_THz": (g.get("imag") or {}).get("min_freq_THz"),
         "fc2_symmetry": g.get("fc2_symmetry"),

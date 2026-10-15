@@ -166,7 +166,7 @@ def main():
     lk = _src("skill/kl-dft-cpu/lattice_kappa.py")
     m_cpu = _src("skill/phonon-mlff-cpu/phonon_fit_driver.py")
     m_gpu = _src("skill/phonon-mlff-gpu/phonon_fit_driver.py")
-    kfb = _src("skill/kl-dft-cpu/kl_fc_backends.py")
+    kfb = _src("skill/_common/fcfit/fc_fit_driver.py")   # kl S5 的虚频闸（旧 kl_fc_backends 已删）
     check("S5.1 不再有 IMAG_TOL", "IMAG_TOL" not in s51)
     check("S5.1 引用 imag_policy", "imag_policy" in s51)
     check("lattice_kappa 不再有 imag_thr = 0.5", not re.search(r"imag_thr\s*=\s*0\.5", lk))
@@ -175,7 +175,7 @@ def main():
     check("mlff-gpu driver 不再硬编码 -0.10", "-0.10" not in m_gpu)
     check("mlff 两个 driver 都引用 imag_policy",
           "imag_policy" in m_cpu and "imag_policy" in m_gpu)
-    check("S5（kl_fc_backends）调用 classify_imag", "classify_imag" in kfb)
+    check("S5（共享引擎 fc_fit_driver._stability_gate）调用 classify_imag", "classify_imag" in kfb)
     # phonon-dft-cpu S3（2026-09-27 补守卫）：旧版用本地 -IMAG_THR 阈值 + 20³ mesh，
     # 现改走公共池 phonon_stability（编排）+ imag_policy（分类）。
     pd = _src("skill/phonon-dft-cpu/phonon_fit_driver.py")
@@ -186,10 +186,15 @@ def main():
 
     print("[8. §四/§五 字段与透传守卫]")
     # §四：S5 写进 phonon_summary.json 的字段必须覆盖 spec 第一条全部 + stability_verdict + imag_policy_refs
+    #   共享引擎（2026-10-15 起 kl S5 唯一实现）：classify_imag 的完整结论放在 phonon_summary["imag"]，
+    #   顶层另有 stability_verdict / imag_class / min_freq_THz（S5.1 读这几个）与 imag_policy_refs。
+    ipol = _src("skill/_common/imag_policy.py")
     for _k in ("verdict", "imag_class", "min_freq_THz", "min_freq_cm1", "q_at_min_frac",
-               "q_norm_at_min", "branch_at_min", "n_neg_qpoints", "thresholds",
-               "policy_version", "stability_verdict", "imag_policy_refs"):
-        check('phonon_summary.json 写 "%s"' % _k, ('"%s"' % _k) in kfb)
+               "q_norm_at_min", "branch_at_min", "n_neg_qpoints", "thresholds", "policy_version"):
+        check('classify_imag 结论含 "%s"（写进 phonon_summary["imag"]）' % _k, ('"%s"' % _k) in ipol)
+    check('phonon_summary.json 写 "imag"（完整结论）', '"imag": g.get("imag")' in kfb)
+    for _k in ("stability_verdict", "imag_class", "min_freq_THz", "imag_policy_refs"):
+        check('phonon_summary.json 顶层写 "%s"' % _k, ('"%s"' % _k) in kfb)
     check("S5 日志含 cm-1（THz 与 cm-1 同打）", "cm-1" in kfb)
     # §五：kappa_summary.json 透传 + warn_note（kl-dft-cpu 现委托共享引擎
     #   gen_step2_kappa / kappa_driver，故检查共享引擎源码）

@@ -503,7 +503,6 @@ def build_incar(src_items, remove, setd):
     """继承 src 键值，删除 remove，覆盖/新增 setd。SYSTEM 置顶。"""
     remove   = {k.upper() for k in remove}
     setd     = {k.upper(): v for k, v in setd.items()}
-    src_keys = {k for k, _ in src_items}
     body, seen = [], set()
     for k, v in src_items:
         if k in remove or k == "SYSTEM":
@@ -511,7 +510,7 @@ def build_incar(src_items, remove, setd):
         body.append((k, setd[k] if k in setd else v))
         seen.add(k)
     # ★ 修正: 同时出现在 remove 和 setd 里、且 step3 INCAR 也有的键会凭空消失
-    #   （被 remove 跳过 -> 没进 seen -> 又因在 src_keys 里而不补写）。
+    #   （旧版：被 remove 跳过 -> 没进 seen -> 又因在 step3 的键集合里而不补写）。
     #   语义应当是 setd 永远赢。
     for k, v in setd.items():
         if k != "SYSTEM" and k not in seen:
@@ -1055,11 +1054,9 @@ def build_step4_dir(out_dir, args, ctx, part=None):
     items = ctx["items"]
     kpar, npar_grp, nb_par, par_src = auto_parallel(out_dir, args.kpar, ctx["nb_actual"])
     incar_set = dict(INCAR_SET)
-    # ---- 杂化泛函族：决定半局域部分用 PE 还是 PS ----
-    # flavor_mode 由 main() 解析（--hybrid-flavor 优先，否则退回 HYBRID_FLAVOR），
-    # 经 ctx 传入，不再直接读模块级常量，以便命令行开头选档位。
-    # 2026-10-14：由 resolve_hybrid 解析（命令行 > step.conf HYBRID > 脚本 HYBRID_FLAVOR），
-    #   支持 hse06 / hsesol / hse03 / pbe0 / custom。
+    # ---- 杂化泛函：半局域部分（PE/PS）+ AEXX + HFSCREEN ----
+    # 由 main() 里的 resolve_hybrid 解析后经 ctx["hybrid"] 传入（命令行 --hybrid-flavor >
+    #   step.conf HYBRID > 脚本 HYBRID_FLAVOR），支持 auto / hse06 / hsesol / hse03 / pbe0 / custom。
     _hy = ctx.get("hybrid") or dict(HYBRID_PRESETS["auto"], name="auto", source="默认")
     _up_gga = {k.upper(): v for k, v in items}.get("GGA", "PE").strip().upper()
     if _hy["gga"] is None:
@@ -1338,7 +1335,7 @@ def main():
            "label": label, "method": method, "items": items,
            "nb_actual": nb_actual, "soc": soc,
            "submit_tpl": tpl, "dim": dim,
-           "flavor_mode": flavor_mode, "hybrid": hybrid}
+           "hybrid": hybrid}
 
     # 2D 能带路径点少：切片并行收益小、却要多付 N 倍精确交换 SCF，默认不切（保持单作业）
     slice_spec = args.kpath_slice

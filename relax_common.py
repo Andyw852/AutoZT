@@ -29,7 +29,6 @@ run() 把 overrides 写进本模块的全局量再调 main()；键名必须在 D
 """
 
 import math
-import os
 import re
 import subprocess
 import sys
@@ -534,38 +533,6 @@ CONF_SPEC = {
 
 STEP_PARAMS = {}      # step.conf [params] 的解析结果（resolve_func 里填）
 STEP_SUBMIT = {}      # step.conf [submit] 的解析结果（load_step_params 里填）
-
-
-def sniff_func_from_tpl(tpl_path: Path):
-    """FUNC=auto 时：从 incar 模板里【写死的】GGA/IVDW 反推泛函；推不出返回 None。
-    模板里写的是 GGA = {{GGA}} 占位符（正常情况）时也返回 None。"""
-    values = {}
-    for line in Path(tpl_path).read_text(encoding="utf-8-sig").splitlines():
-        s = line.strip()
-        if not s or s.startswith(("#", "!")):
-            continue
-        for mark in ("#", "!"):
-            if mark in s:
-                s = s.split(mark, 1)[0].strip()
-        for part in s.split(";"):
-            if "=" not in part:
-                continue
-            k, v = part.split("=", 1)
-            k, v = k.strip().upper(), v.strip()
-            if "{{" in v:            # 占位符，等本脚本填，不算"写死"
-                continue
-            values[k] = v
-    gga = values.get("GGA", "").upper().strip("\"'")
-    ivdw = values["IVDW"].split()[0] if values.get("IVDW") else None
-    if not gga:
-        return None
-    for name, spec in FUNC_MAP.items():
-        if spec["GGA"] == gga and spec["IVDW"] == ivdw:
-            return name
-    sys.exit("[ERROR] %s 里写死的 GGA=%s、IVDW=%s 不属于任何受支持泛函（%s）。\n"
-             "        请在 step.conf 的 [params] 里显式写 FUNC =。"
-             % (Path(tpl_path).name, gga, ivdw or "(none)",
-                ", ".join(FUNC_MAP)))
 
 
 def load_step_params(step_name=None):

@@ -55,7 +55,7 @@ disp-* 命名空间（生产帧在 step4_disp/disp-*，bench 在下一层 bench/
     - autozt fanout:      glob(os.path.join(step_dir, "disp-*"))      # workflow.py
     - kl_common.check_frames_match_displacements: d4.glob("disp-*")   # 非递归
     - gen_step4_disp.check_existing_matches_input: glob(out/"disp-*") # 非递归
-    - kl_fc_backends.collect_vaspruns: glob(disp_dir/"disp-*")        # 非递归
+    - fc_fit_driver._equilibrium_from_vasprun: glob(base/"disp-*")   # 非递归
     - gen_step5_fc: disp.glob("disp-*/vasprun.xml")                   # 非递归
 
 仓库里**没有任何** rglob / ** 递归遍历 kl 的 disp-*（已 grep 确认），所以

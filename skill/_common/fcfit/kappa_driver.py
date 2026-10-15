@@ -464,18 +464,14 @@ def _ref_coarser_everywhere(hist, cur, frozen=()):
     return None
 
 
-def _converge_mesh(out, yaml_name, fc2, fc3, cfg, source_fc, first=None):
+def _converge_mesh(out, yaml_name, fc2, fc3, cfg, source_fc):
     """Densify the mesh until kappa stops changing.  Returns the summary of the
     last (densest converged) mesh, with a mesh_convergence report attached.
-
-    first: optional (length, summary) already computed at the starting length
-    (reused so the cutoff scan's run is not repeated)."""
+    （[V190] 起只在参考截断上收敛一次，原来给"选中档从 L* 起复核"用的 first= 参数已删。）"""
     kind, L = _mesh_spec(cfg)
     conv = str(cfg.get("mesh_conv") or "off").lower() not in (
         "off", "false", "0", "no", "none", "")
     if kind == "explicit" or not conv:
-        if first is not None:
-            return first[1]
         return _run_bte(out, yaml_name, fc2, fc3, cfg, source_fc, True,
                         spec=(kind, L))
     tol = float(cfg.get("mesh_conv_tol_pct") or 3.0) / 100.0
@@ -516,23 +512,14 @@ def _converge_mesh(out, yaml_name, fc2, fc3, cfg, source_fc, first=None):
 
     # 在 [起始长度, MESH_CONV_MAX_LENGTH] 里根本不会变的轴（2D 真空轴、极长的轴）
     # 不要求加密；其余每个轴都必须比参照档密，才拿来判收敛。
-    L0 = float(first[0]) if first is not None else L
     try:
-        c_lo, c_hi = _counts_at(L0), _counts_at(lmax)
+        c_lo, c_hi = _counts_at(L), _counts_at(lmax)
         frozen = tuple(i for i in range(len(c_lo)) if c_lo[i] == c_hi[i]) \
             if c_lo and c_hi and len(c_lo) == len(c_hi) else ()
     except Exception:                            # noqa: BLE001
         frozen = ()
 
     recs, prev, converged, stop, unconv, hist = [], None, False, "", [], []
-    if first is not None:
-        prev = first[1]
-        hist.append(prev)
-        recs.append({"length": round(float(first[0]), 3), "mesh": prev["mesh"],
-                     "axis_counts": _mesh_axis_counts(prev),
-                     "kappa_at_T": _kappa_at(prev, t_chk)[0].tolist(),
-                     "rel_change": None})
-        L = float(first[0]) * fac
     while True:
         L, m = _next_length(L, prev["mesh"] if prev else None)
         if L is None:
