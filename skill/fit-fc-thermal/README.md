@@ -719,6 +719,15 @@ actually determine the fc3.
 * `CUT3_CANDIDATES = auto | off | "3.6 4.2 4.8 ..."` chooses them;
   `CUT3_MAX`, `CUT3_MIN_SHELLS`, `CUT3_GAP_TOL`, `CUT3_MIN_GAP` tune the
   enumeration (see `fc_common.neighbor_shells` / `cut3_candidates`).
+* **Quasi-continuous distance spectrum** (low symmetry, large cells, e.g. a
+  128-atom fullerene network with pair distances 1.37 -> 7 A and no shell gap):
+  the 0.05 A chaining merges several A into one "shell" and its midpoints are
+  meaningless.  A shell wider than 0.5 A (`QUASI_SPAN`) prints `[WARN]
+  [quasi-continuous]` and `auto` uses the explicit radius grid `3.0 3.5 4.0 4.5
+  5.0 5.5 6.0` (`QUASI_GRID`, capped by `CUT3_MAX`; no safe-cutoff top-up) for
+  the kappa plateau to pick.  The `thirdorder.py -n` N-th neighbour count
+  (`SWEEP_C3_SHELLS`) has no physical meaning there either; for another grid
+  set `CUT3_CANDIDATES` explicitly.
 * `CUT3_SCAN = off` by default. Set it to `auto`/`on` to run the determination:
 
   * **pheasy** (the full port): every candidate is refitted (`-s -c -d -f`) and

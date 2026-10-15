@@ -117,6 +117,11 @@ templates/` 里旧的同名模板（否则旧集群的 partition/qos 会盖住�
 - **S4**（`step4_disp/step.conf` 的 `CUT3_CANDIDATES=auto`）：按原胞相邻壳层的**中点**生成
   候选截断（不落在壳层距离上；两壳间距 < `CUT3_MIN_GAP` 的跳过，避免 WS₂ 6.34/6.36 Å
   这种双壳）。S4 按**最大候选**估帧、定超胞，候选列表记进 `disp_plan.json`。
+  **准连续距离谱**（低对称大原胞，如 128 原子富勒烯网络：1.37→7 Å 没有壳层间隙）时，
+  0.05 Å 链式合并会把几 Å 的距离串成一个「壳层」，中点无意义：任一壳层跨度 > 0.5 Å
+  （`QUASI_SPAN`）即打 `[WARN] [准连续]`，auto 改用显式半径网格 `3.0 3.5 4.0 4.5 5.0 5.5 6.0`
+  （`QUASI_GRID`，不超过 `CUT3_MAX`），交给 S6 的 κ 平台判据挑。此时「第 N 近邻」
+  （`thirdorder.py -n`）同样没有物理含义，别改用它；要别的网格就显式写 `CUT3_CANDIDATES`。
 - **S5**（`step5_fc/step.conf` 的 `CUT3_SCAN=auto`）：对每档各拟合一次，每档再做
   `CUT3_BOOTSTRAP` 次帧 bootstrap，逐壳层统计 Φ³ 的 σ/|mean|（判据②），并从 bootstrap
   相对误差分布估 CV 标准误（判据①；pheasy 不打印 fold-SE，故用 bootstrap 代理）。

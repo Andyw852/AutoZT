@@ -98,8 +98,18 @@ def _min_image_shifts(cell, r_max):
     return out
 
 
-def neighbor_shells(poscar, r_max=7.0, tol=0.05, max_atoms=600):
-    """把 r_max 内的原子对距离聚类成壳层，返回 (shell_distances, n_atoms)。
+# 准连续距离谱（低对称/大原胞网络，如 128 原子富勒烯网络：1.37→7 Å 的原子对距离
+# 首尾相接、没有壳层间隙）：tol 链式合并会把几 Å 的距离串成一个"壳层"，壳层均值的
+# 中点于是落在大量原子对距离中间，候选失去物理意义。任一壳层跨度 > QUASI_SPAN 即
+# 判准连续，auto 改用显式半径网格 QUASI_GRID，交给 κ 平台判据挑（2026-10-15 user 定）。
+# 高对称晶体壳层跨度 ≈ 0（Si 0.00、Mn2In2Se5 0.09 Å），0.5 Å 留足余量。
+QUASI_SPAN = 0.5
+QUASI_GRID = (3.0, 3.5, 4.0, 4.5, 5.0, 5.5, 6.0)
+QUASI_TAG = "[准连续]"
+
+
+def _shell_groups(poscar, r_max=7.0, tol=0.05, max_atoms=600):
+    """把 r_max 内的原子对距离聚类成壳层，返回 (每壳层的距离列表, n_atoms)。
 
     优先 ASE neighbor_list（自动处理周期镜像）；没有 ase/失败时回退纯标准库最小镜像。
     tol 内的距离并成一个壳层 —— WS₂ 第 8/9 壳层只差 0.02 Å，必须并成一个，否则候选
@@ -138,7 +148,13 @@ def neighbor_shells(poscar, r_max=7.0, tol=0.05, max_atoms=600):
             shells.append([x])
         else:
             shells[-1].append(x)
-    return [round(sum(s) / len(s), 4) for s in shells], natom
+    return shells, natom
+
+
+def neighbor_shells(poscar, r_max=7.0, tol=0.05, max_atoms=600):
+    """壳层均值列表，返回 (shell_distances, n_atoms)；聚类见 _shell_groups。"""
+    groups, natom = _shell_groups(poscar, r_max=r_max, tol=tol, max_atoms=max_atoms)
+    return [round(sum(s) / len(s), 4) for s in groups], natom
 
 
 def cut3_candidates(poscar, r_max=7.0, tol=0.05, min_shells=2, min_gap=0.05,
@@ -148,9 +164,22 @@ def cut3_candidates(poscar, r_max=7.0, tol=0.05, min_shells=2, min_gap=0.05,
     - min_shells=2：跳过"只含最近邻壳层"的最小中点（WS₂ 的 2.8 就不要，从 3.6 起）。
     - 相邻壳层间距 < min_gap 的中点跳过 —— 防截断落在夹缝里（WS₂ 6.34/6.36）。
     - 升序去重；候选数 > max_candidates 时只保留最小的一批（控制 S5 拟合次数）。
+    - 距离谱准连续（任一壳层跨度 > QUASI_SPAN）时壳层中点无意义 → 改用 QUASI_GRID
+      显式半径网格并在 note 里带 QUASI_TAG 告警。
     返回 (candidates, shells, note)。
     """
-    shells, natom = neighbor_shells(poscar, r_max=r_max, tol=tol)
+    groups, natom = _shell_groups(poscar, r_max=r_max, tol=tol)
+    shells = [round(sum(s) / len(s), 4) for s in groups]
+    wide = max(groups, key=lambda s: s[-1] - s[0]) if groups else None
+    if wide is not None and wide[-1] - wide[0] > QUASI_SPAN:
+        cands = [c for c in QUASI_GRID if c < r_max]
+        note = ("%s 距离谱准连续：%.2f–%.2f Å 被并成一个壳层（跨 %.2f Å > %.1f，共 %d 对），"
+                "壳层中点无物理意义 → 改用显式半径网格 %s，由 κ 平台判据挑；"
+                "要别的网格请显式设 CUT3_CANDIDATES" % (
+                    QUASI_TAG, wide[0], wide[-1], wide[-1] - wide[0], QUASI_SPAN,
+                    len(wide), cands))
+        print("[WARN] " + note)
+        return cands, shells, note
     cands = []
     for k in range(int(min_shells), len(shells)):
         a, b = shells[k - 1], shells[k]

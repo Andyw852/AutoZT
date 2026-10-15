@@ -73,6 +73,43 @@ def test_shells_and_candidates():
         check("候选都是相邻壳层中点、不落在壳层上", ok_mid, str((cands, sh)))
 
 
+def _write_quasi_poscar(d, n=48, a=8.0, dmin=1.3, seed=7):
+    """随机致密原胞（最小间距 dmin）：原子对距离准连续，没有壳层间隙。"""
+    import random
+    rng = random.Random(seed)
+    pts = []
+    while len(pts) < n:
+        f = [rng.random() for _ in range(3)]
+        if all(sum(min(abs(f[k] - g[k]), 1 - abs(f[k] - g[k])) ** 2
+                   for k in range(3)) ** 0.5 * a >= dmin for g in pts):
+            pts.append(f)
+    p = Path(d) / "POSCAR"
+    p.write_text("C\n1.0\n%.6f 0 0\n0 %.6f 0\n0 0 %.6f\nC\n%d\nDirect\n" % (a, a, a, n)
+                 + "".join("%.8f %.8f %.8f\n" % tuple(f) for f in pts), encoding="utf-8")
+    return p
+
+
+def test_quasi_continuous():
+    print("[1b] 准连续距离谱 → 显式半径网格")
+    with tempfile.TemporaryDirectory() as d:
+        poscar = _write_quasi_poscar(d)
+        cands, _, note = kc.cut3_candidates(poscar, r_max=7.0, tol=0.05)
+        check("准连续 → QUASI_GRID", cands == list(kc.QUASI_GRID), str(cands))
+        check("note 带准连续标记", kc.QUASI_TAG in note, note)
+        c_auto, _, n_auto = kc.resolve_cut3_candidates(poscar, "auto")
+        check("auto 同样走网格且带标记",
+              c_auto == list(kc.QUASI_GRID) and kc.QUASI_TAG in n_auto, str(c_auto))
+        c_lim, _, _ = kc.cut3_candidates(poscar, r_max=5.0, tol=0.05)
+        check("网格不越过 r_max(CUT3_MAX)", c_lim == [3.0, 3.5, 4.0, 4.5], str(c_lim))
+        c_exp, _, _ = kc.resolve_cut3_candidates(poscar, "3.0 6.0")
+        check("显式列表不受影响", c_exp == [3.0, 6.0], str(c_exp))
+    fx = ROOT / "tests" / "fixtures" / "mn2in2se5" / "POSCAR"
+    cands, sh, note = kc.cut3_candidates(fx, r_max=7.0, tol=0.05)
+    check("真实晶体（Mn2In2Se5）仍取壳层中点",
+          kc.QUASI_TAG not in note and cands != list(kc.QUASI_GRID) and len(cands) >= 3,
+          str(cands))
+
+
 def test_resolve():
     print("[2] resolve_cut3_candidates 解析")
     with tempfile.TemporaryDirectory() as d:
@@ -167,6 +204,7 @@ def test_fc3_stability():
 
 def main():
     test_shells_and_candidates()
+    test_quasi_continuous()
     test_resolve()
     test_select()
     test_err_gate()

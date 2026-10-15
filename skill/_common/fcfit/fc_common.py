@@ -354,10 +354,22 @@ def _min_image_shifts(cell, r_max):
     return out
 
 
-def neighbor_shells(poscar, r_max=7.0, tol=0.05, max_atoms=600):
+# Quasi-continuous distance spectrum (low symmetry / large cells, e.g. a 128-atom
+# fullerene network: pair distances 1.37 -> 7 A follow each other with no shell
+# gap): the tol chaining merges several A of distances into one "shell", and the
+# midpoints of shell means then land among many pair distances.  A shell wider
+# than QUASI_SPAN flags it; auto then uses the explicit radius grid QUASI_GRID
+# and lets the kappa plateau pick (2026-10-15).  Crystals have spans ~0 (Si
+# 0.00, Mn2In2Se5 0.09 A), so 0.5 A leaves a wide margin.
+QUASI_SPAN = 0.5
+QUASI_GRID = (3.0, 3.5, 4.0, 4.5, 5.0, 5.5, 6.0)
+QUASI_TAG = "[quasi-continuous]"
+
+
+def _shell_groups(poscar, r_max=7.0, tol=0.05, max_atoms=600):
     """Cluster the interatomic distances below r_max into shells.
 
-    Returns (shell_distances, n_atoms).  Distances within tol merge into one
+    Returns (list of distances per shell, n_atoms).  Distances within tol merge into one
     shell: WS2's 8th/9th shells differ by only 0.02 A and must not split, or a
     candidate cutoff would fall in the 6.34-6.36 gap.
     """
@@ -395,7 +407,13 @@ def neighbor_shells(poscar, r_max=7.0, tol=0.05, max_atoms=600):
             shells.append([x])
         else:
             shells[-1].append(x)
-    return [round(sum(s) / len(s), 4) for s in shells], natom
+    return shells, natom
+
+
+def neighbor_shells(poscar, r_max=7.0, tol=0.05, max_atoms=600):
+    """Shell mean distances (shell_distances, n_atoms); see _shell_groups."""
+    groups, natom = _shell_groups(poscar, r_max=r_max, tol=tol, max_atoms=max_atoms)
+    return [round(sum(s) / len(s), 4) for s in groups], natom
 
 
 def cut3_candidates(poscar, r_max=7.0, tol=0.05, min_shells=2, min_gap=0.05,
@@ -404,9 +422,24 @@ def cut3_candidates(poscar, r_max=7.0, tol=0.05, min_shells=2, min_gap=0.05,
 
     min_shells=2 skips the midpoint that only contains the nearest shell;
     a gap < min_gap is skipped so the cutoff never lands in a split shell.
+    A quasi-continuous spectrum (a shell wider than QUASI_SPAN) has no
+    meaningful midpoints: the candidates become QUASI_GRID and the note carries
+    QUASI_TAG.
     Returns (candidates, shells, note).
     """
-    shells, natom = neighbor_shells(poscar, r_max=r_max, tol=tol)
+    groups, natom = _shell_groups(poscar, r_max=r_max, tol=tol)
+    shells = [round(sum(s) / len(s), 4) for s in groups]
+    wide = max(groups, key=lambda s: s[-1] - s[0]) if groups else None
+    if wide is not None and wide[-1] - wide[0] > QUASI_SPAN:
+        cands = [c for c in QUASI_GRID if c < r_max]
+        note = ("%s distance spectrum: %.2f-%.2f A merged into one shell (span "
+                "%.2f A > %.1f, %d pairs), shell midpoints are meaningless -> "
+                "explicit radius grid %s, picked by the kappa plateau; set "
+                "CUT3_CANDIDATES explicitly for another grid" % (
+                    QUASI_TAG, wide[0], wide[-1], wide[-1] - wide[0], QUASI_SPAN,
+                    len(wide), cands))
+        print("[WARN] " + note)
+        return cands, shells, note
     cands = []
     for k in range(int(min_shells), len(shells)):
         a, b = shells[k - 1], shells[k]

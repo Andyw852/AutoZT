@@ -769,8 +769,9 @@ def _gen_one(conf, out, job_label="S1fit"):
         # 截断之内（例 In2MnSe4：5.10 Å 壳层，安全上限 5.165 Å，而它到下一壳层
         # 5.41 的中点 5.258 Å 已越界）——只取中点会把这条壳层整条漏掉。
         # 仅在 CUT3_CANDIDATES=auto 时自动补，显式列表按用户给的跑。
+        # 准连续谱已换成显式网格，壳层均值不是真壳层，也不补。
         if str(conf["CUT3_CANDIDATES"]).strip().lower() == "auto" \
-                and _shells:
+                and _shells and fc.QUASI_TAG not in _cnote:
             _top = max([c for c in _cands], default=0.0)
             _skipped = [s for s in _shells
                         if _top + 1e-9 < s <= _safe + 1e-9]
