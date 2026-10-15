@@ -401,7 +401,8 @@ SPEC = {
     "MESH_MAX": (MESH_MAX, "int"),
     # patch_scattering：散射机制覆盖（空串 = 出厂 [ADP,IMP,POP]）。
     # patch_interp_factor（2026-09-28）：3D 的 factor 覆盖通道。None = 用出厂值。
-    "INTERPOLATION_FACTOR": (None, "int"),
+    # [V124-fix] 允许小数：AMSET 的 interpolation_factor 本来就是 float（bandstructure.py:80）
+    "INTERPOLATION_FACTOR": (None, "float"),
     "SCATTERING": ("", "str"),
     # [0036] 三维 ODP / IVS（见顶部 DP_OPTICAL_* 说明；与 S8.4 同名同义）
     "DP_OPTICAL_E": ("", "str"),
@@ -1568,7 +1569,7 @@ def write_settings(out: Path, eps_inf, eps_static, gap, elastic,
               "scattering_type: [%s]" % ", ".join(_amset_scatterers()),
               "deformation_potential: deformation.h5"]
     if INTERPOLATION_FACTOR:     # patch_interp_factor
-        lines.append("interpolation_factor: %d" % int(INTERPOLATION_FACTOR))
+        lines.append("interpolation_factor: %g" % float(INTERPOLATION_FACTOR))
     # patch_unity_overlap_3d（V25）+ patch_unity_overlap_override（V26）：2D 默认 unity、3D 默认真实重叠，
     #   但 step.conf 的 UNITY_OVERLAP=true/false 可以显式覆盖（用于受控对照）。
     _uo_ov = None if UNITY_OVERLAP == "auto" else (UNITY_OVERLAP == "true")
@@ -2251,6 +2252,12 @@ def _interp_mesh(structure, nk, factor, magmom=None):
     return (2 * np.max(np.abs(equiv), axis=0) + 1).astype(int)
 
 
+def _fnum(v):
+    """[V124-fix] factor 的落盘形式：整数写 int（IBZ 路径逐字不变），小数保留 6 位。"""
+    f = float(v)
+    return int(f) if f.is_integer() else round(f, 6)
+
+
 def apply_mesh_min(vasprun_path, out):
     """patch_mesh_min：按最终插值网格下限反算 INTERPOLATION_FACTOR（模块级全局）。
     返回 (factor, mesh) 或 None。"""
@@ -2269,7 +2276,7 @@ def apply_mesh_min(vasprun_path, out):
         print("[WARN] patch_mesh_min：读不到 vasprun（%s），跳过网格下限" % e)
         return None
     need = [int(lo or 0), int(lo or 0), int(lo_z or 0)]
-    f0 = int(INTERPOLATION_FACTOR)
+    f0 = float(INTERPOLATION_FACTOR)      # [V124-fix] 小数 factor（全网格换算后可能 <1）
     # ★ patch_full_grid_factor（V124）：出厂 factor（和 MESH_MIN_FMAX）是按 **IBZ** k 点数定的口径；
     #   vasprun 是全网格（WAVEFUNCTION_FULL / S3b，ISYM=-1）时 nk 大十几倍，同一个 f 给的网格每方向
     #   大 (n_full/n_ir)^(1/3) 倍，而下面的自动调整只在不满足下限时往上加、超 MESH_MAX 才往下降 ->
@@ -2286,10 +2293,16 @@ def apply_mesh_min(vasprun_path, out):
     f_start = f0
     if _fg:
         _r = float(_fg[0]) / _fg[1]
-        f_start, fmax = max(1, int(round(f0 * _r))), max(1, int(np.ceil(fmax * _r)))
-        print("[..] patch_full_grid_factor：vasprun 是全网格 %s（%d 点，IBZ %d 点）—— 出厂 factor %d / "
-              "上限 %d 按 IBZ 口径换算成 %d / %d（与 IBZ 路径同样多的 equivalence）"
-              % ("x".join(map(str, _fg[2])), _fg[1], _fg[0], f0, int(MESH_MIN_FMAX), f_start, fmax))
+        # [V124-fix] factor 允许小数：网格由等价值 nk*factor 决定（AMSET bandstructure.py:105）。
+        #   旧代码 round+max(1,·) 在 3D 高对称体系会被钳到 1：Si 34^3 全网格/IBZ=37 倍、f0=10
+        #   换算得 0.269 -> 1，等价值 10590 -> 39304，插值网格 109^3 -> 167^3（静默变大 + OOM 风险）。
+        f_start = f0 * _r
+        f_start = max(f_start, 1.0 / max(1, int(nk)))      # 只保底：nk*factor >= 1
+        fmax = max(fmax * _r, f_start)
+        print("[..] patch_full_grid_factor：vasprun 是全网格 %s（%d 点，IBZ %d 点）—— 出厂 factor %g / "
+              "上限 %g 按 IBZ 口径换算成 %g / %g（等价值 %d ≈ IBZ 的 %d，与 IBZ 路径落同一张网格）"
+              % ("x".join(map(str, _fg[2])), _fg[1], _fg[0], f0, float(MESH_MIN_FMAX), f_start, fmax,
+                 int(round(_fg[1] * f_start)), int(round(_fg[0] * f0))))
     f, mesh = f_start, _interp_mesh(st, nk, f_start)
     # ★ 先处理上限：网格超 MESH_MAX 就把 factor 降下来。
     #   全网格 h5 的 k 点数大，同样 factor 会给更大的网格；不降就可能 OOM
@@ -2314,32 +2327,36 @@ def apply_mesh_min(vasprun_path, out):
     _capped = False
     if MESH_MAX:
         _cap = int(MESH_MAX)
-        while max(int(x) for x in mesh) > _cap and f > 1:
+        while max(int(x) for x in mesh) > _cap and f > (1 if float(f).is_integer() else 1e-6):
             _ratio = float(_cap) / max(int(x) for x in mesh)
-            _nf = int(np.floor(f * _ratio ** 3))
-            f = max(1, min(_nf, f - 1))
+            if float(f).is_integer():                      # 整数口径保持原行为（IBZ 路径逐字不变）
+                _nf = int(np.floor(f * _ratio ** 3))
+                f = max(1, min(_nf, f - 1))
+            else:                                          # [V124-fix] 小数 factor 按比例降
+                f = max(1.0 / max(1, int(nk)), min(f * _ratio ** 3, f * 0.9))
             mesh = _interp_mesh(st, nk, f)
             _capped = True
     while not all(int(mesh[i]) >= need[i] for i in range(3)) and f < fmax:
-        # 全网格口径下 f 只有个位数（MoS₂ 4、WSe2 7）：按 15% 步长会从 7 直接跳到 10，所以逐一加
-        f = min(fmax, (f + 1) if _fg else int(np.ceil(f * 1.15)) + 1)
+        # 全网格口径下 f 只有个位数（MoS₂ 4、WSe2 7）：按 15% 步长会从 7 直接跳到 10，所以逐一加。
+        # [V124-fix] f < 1 时逐一加会一步跨过头（0.269+1=1.269），改成按比例升。
+        f = min(fmax, (f * 1.25) if f < 1 else ((f + 1) if _fg else int(np.ceil(f * 1.15)) + 1))
         mesh = _interp_mesh(st, nk, f)
     okm = all(int(mesh[i]) >= need[i] for i in range(3))
     info = {"nk": int(nk), "mesh_min": lo, "mesh_min_kz": lo_z, "mesh_max": MESH_MAX,
-            "factor_factory": f0, "factor_used": int(f), "fmax": MESH_MIN_FMAX,
+            "factor_factory": _fnum(f0), "factor_used": _fnum(f), "fmax": MESH_MIN_FMAX,
             "mesh": [int(x) for x in mesh], "satisfied": bool(okm),
             "capped": bool(_capped), "full_grid": bool(_fg),
-            "nk_ir": (int(_fg[0]) if _fg else None), "factor_start": int(f_start), "fmax_used": int(fmax)}
+            "nk_ir": (int(_fg[0]) if _fg else None), "factor_start": _fnum(f_start), "fmax_used": _fnum(fmax)}
     try:
         (out / "interpolation_info.json").write_text(
             _json.dumps(info, ensure_ascii=False, indent=2))
     except Exception as _e:                          # noqa: BLE001
         print("[WARN] 写 interpolation_info.json 失败（%s: %s）——最终插值网格的溯源没留下" % (type(_e).__name__, _e))
-    if int(f) != f0:
-        INTERPOLATION_FACTOR = int(f)
+    if float(f) != f0:
+        INTERPOLATION_FACTOR = float(_fnum(f))
     if okm:
-        print("[OK] 最终插值网格 %s（factor %d -> %d，下限 %s/%s，上限 %s，nk=%d%s）"
-              % ("x".join(map(str, mesh)), f0, int(f), lo, lo_z, MESH_MAX, nk,
+        print("[OK] 最终插值网格 %s（factor %g -> %g，下限 %s/%s，上限 %s，nk=%d%s）"
+              % ("x".join(map(str, mesh)), f0, float(f), lo, lo_z, MESH_MAX, nk,
                  ("，**因上限自动降 factor**" if _capped else "")
                  + ("，全网格按 IBZ 口径（IBZ %d 点）" % _fg[0] if _fg else "")))
     else:
