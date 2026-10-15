@@ -542,3 +542,73 @@ def valley_sig_3d(valleys):
             ks.append(tuple(f))
         stars.add(tuple(sorted(ks)))
     return [list(map(list, s_)) for s_ in sorted(stars)]
+
+
+# ---------------------------------------------------------------------------
+# [kz=1-r2] KPOINTS 自动网格：解析 / 真空方向降到 1（S7.2 生成与 S8.21 核对共用这一份）
+# ---------------------------------------------------------------------------
+def kpoints_mesh(text):
+    """KPOINTS 文本 -> (N1, N2, N3)；只认自动网格格式（第 2 行 0、第 3 行 Gamma/Monkhorst、第 4 行三个整数），
+    显式 k 点列表、全自动（Auto）或读不懂返回 None。"""
+    ln = (text or "").splitlines()
+    if len(ln) < 4 or ln[1].split()[:1] != ["0"]:
+        return None
+    if not ln[2].strip()[:1].upper() in ("G", "M"):
+        return None
+    f = ln[3].split()[:3]
+    if len(f) != 3 or not all(x.lstrip("+").isdigit() for x in f):
+        return None
+    return tuple(int(x) for x in f)
+
+
+def reduce_vacuum_kz(text, vac_axis=2):
+    """把自动网格真空方向的分割数降到 1。返回 (新文本, 状态, 旧网格, 新网格)：
+    状态 reduced（改了）/ already_1（本来就是 1）/ not_mesh（不是自动网格，原样返回，不能降）。"""
+    old = kpoints_mesh(text)
+    if old is None:
+        return text, "not_mesh", None, None
+    ax = int(vac_axis)
+    if old[ax] == 1:
+        return text, "already_1", list(old), list(old)
+    new = list(old)
+    new[ax] = 1
+    ln = text.splitlines()
+    rest = ln[3].split()[3:]
+    ln[3] = "  " + "  ".join(str(x) for x in new) + (("  " + "  ".join(rest)) if rest else "")
+    return "\n".join(ln) + "\n", "reduced", list(old), new
+
+
+# ---------------------------------------------------------------------------
+# [kz=1-r2] 磁性解一致性：各冻声子构型要和 odp-ref 停在同一个磁性解上
+#   位移只有 ~0.01 Å，同一磁性解下总磁矩/各原子磁矩只变 ~1e-3 μB；换了磁性解（某个磁性原子翻转、高/低自旋）
+#   是 ≳0.5 μB 的跳变，带边能量随之整体改变，D = ΔE/2u 会被放大成一个假的大耦合。ISTART=0 从 MAGMOM 起步时可能发生。
+# ---------------------------------------------------------------------------
+MAG_TOTAL_TOL = 0.1               # μB：总磁矩与 odp-ref 之差上限
+MAG_SITE_TOL = 0.1                # μB：任一原子磁矩与 odp-ref 之差上限
+
+
+def magnetic_mismatch(ref, other, tol_total=MAG_TOTAL_TOL, tol_site=MAG_SITE_TOL):
+    """ref/other：{"total": [..] 或 None, "sites": [..] 或 None}（OSZICAR 的 mag= 与 OUTCAR 最后一个
+    magnetization 表的 tot 列）。返回问题列表（空 = 一致）；两边都没有某项就不比该项。"""
+    import numpy as _np
+    out = []
+    ta, tb = (ref or {}).get("total"), (other or {}).get("total")
+    if ta is not None and tb is not None:
+        if len(ta) != len(tb):
+            out.append("总磁矩分量数不同（%d vs %d）" % (len(ta), len(tb)))
+        else:
+            d = float(_np.max(_np.abs(_np.asarray(tb, float) - _np.asarray(ta, float))))
+            if d > tol_total:
+                out.append("总磁矩 %s vs odp-ref %s（差 %.3f μB > %.2f）"
+                           % ([round(float(x), 3) for x in tb], [round(float(x), 3) for x in ta], d, tol_total))
+    sa, sb = (ref or {}).get("sites"), (other or {}).get("sites")
+    if sa is not None and sb is not None:
+        if len(sa) != len(sb):
+            out.append("原子磁矩个数不同（%d vs %d）" % (len(sa), len(sb)))
+        else:
+            dd = _np.abs(_np.asarray(sb, float) - _np.asarray(sa, float))
+            i = int(_np.argmax(dd))
+            if float(dd[i]) > tol_site:
+                out.append("原子 %d 磁矩 %.3f vs odp-ref %.3f μB（差 %.3f > %.2f）"
+                           % (i + 1, float(sb[i]), float(sa[i]), float(dd[i]), tol_site))
+    return out

@@ -257,6 +257,8 @@ def main():
             print("[..] %s 这一轮不算（选模变了），改名为 _stale_%s_%s" % (d.name, d.name, stamp))
 
     submit_body = resolve_tpl(Path(__file__).resolve().parent, "submit_std", dim).read_text(encoding="utf-8")
+    vac_axis = kc.resolve_dim_for(out / "POSCAR", dim)[1] if dim == "2d" else None
+    kz_status, kz_grid = {}, (None, None)
     incar_s7 = (und / "INCAR").read_text(encoding="utf-8", errors="ignore")
     rec_cfg = {}
     for name, idx, sign in configs:
@@ -276,18 +278,16 @@ def main():
             # [kz=1] 2D 有真空层，沿 kz 能带几乎完全平坦（LS 实测带边 ±1 eV 内 |dE| ~0.07 meV，
             #   远小于 5 meV 判据与最弱耦合对应的 0.5 meV 灵敏度）；而 S7.2/S8.21 只在谷 k 点
             #   （kz=0）取本征值，真空方向的多层 kz 纯属重复计算，且耗时/内存 ∝ kz 层数。
-            #   把真空方向降到 1（面内网格保持与 S7/S8.2 一致）。S8.21 的 check_inputs 已放行
-            #   「面内相同、仅真空方向=1」这一种差异；3D 不动（没有真空方向）。
-            _kp = (d / "KPOINTS").read_text(encoding="utf-8", errors="ignore").splitlines()
-            for _i, _ln in enumerate(_kp[1:6], 1):
-                _f = _ln.split()
-                if len(_f) == 3 and all(x.lstrip("+-").isdigit() for x in _f):
-                    if _f[2] != "1":
-                        _f[2] = "1"
-                        _kp[_i] = "  " + "  ".join(_f)
-                        (d / "KPOINTS").write_text("\n".join(_kp) + "\n",
-                                                   encoding="utf-8", newline="\n")
-                    break
+            #   把真空方向降到 1（面内网格保持与 S7/S8.2 一致）。S8.21 的 check_inputs 只在 manifest
+            #   记了 kz_vacuum_reduced 时放行「面内相同、仅真空方向=1」这一种差异；3D 不动。
+            # [kz=1-r2] 只认自动网格（显式 k 点列表降不了，原样保留并如实记录，不再谎报"已降"）；
+            #   按真空轴降（ke 的 2D 真空必在 c，resolve_dim_for 已保证；这里仍按轴号写，不写死第 3 个分量）。
+            _txt, _st, _old, _new = of.reduce_vacuum_kz(
+                (d / "KPOINTS").read_text(encoding="utf-8", errors="ignore"), vac_axis)
+            if _st == "reduced":
+                (d / "KPOINTS").write_text(_txt, encoding="utf-8", newline="\n")
+            kz_status[name] = _st
+            kz_grid = (_old, _new)
         lines = [("SYSTEM = %s odp %s" % (cwd.name, name)) if ln.strip().upper().startswith("SYSTEM") else ln
                  for ln in incar_s7.splitlines()]
         (d / "INCAR").write_text("\n".join(lines) + "\n", encoding="utf-8", newline="\n")
@@ -325,11 +325,21 @@ def main():
         "inputs_from": {"dir": "%s/undeformed" % DEFORM_DIR,
                         "sha256": {n: _sha(und / n) for n in ("INCAR", "KPOINTS", "POTCAR", "POSCAR")}},
         "s5_freq_THz": [float(x) for x in sorted(freqs)],
-        "kz_vacuum_reduced": (dim == "2d" and ODP_KZ_VACUUM == "reduce"),   # [kz=1] 2D：真空方向 kz 已由 S7 的三层降到 1
+        # [kz=1-r2] 按实际结果记：全部构型都真的降了才算 reduced（S8.21 据此放行网格差异、放宽严告警）
+        "kz_vacuum_reduced": bool(kz_status) and all(s == "reduced" for s in kz_status.values()),
         "kz_vacuum_mode": ODP_KZ_VACUUM,
+        "kz_vacuum": {"mode": ODP_KZ_VACUUM, "axis": vac_axis,
+                      "status": (sorted(set(kz_status.values())) or None),
+                      "s7_grid": kz_grid[0], "odp_grid": kz_grid[1]},
         "notes": notes,
     }
     (out / MANIFEST).write_text(json.dumps(manifest, ensure_ascii=False, indent=1), encoding="utf-8")
+    _ks = set(kz_status.values())
+    if "reduced" in _ks:
+        print("[..] [kz=1] 2D：KPOINTS 真空方向 %s -> %s（面内与 S7 相同）" % (kz_grid[0], kz_grid[1]))
+    if "not_mesh" in _ks:
+        print("[WARN] [kz=1] %s/undeformed/KPOINTS 不是自动网格（显式 k 点列表？）：真空方向 kz 没法降，按原网格算"
+              "（结果不受影响，只是没省机时）" % DEFORM_DIR)
     print("[DONE] %s：%d 个单点（参考 + %d 个模 × ±%.3f Å），INCAR/KPOINTS/POTCAR 照抄 %s/undeformed，autozt 会各自提交"
           % (OUTDIR_NAME, njobs, len(use), float(ODP_DISP_A), DEFORM_DIR))
 

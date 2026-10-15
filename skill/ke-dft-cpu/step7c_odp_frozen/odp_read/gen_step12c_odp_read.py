@@ -142,15 +142,6 @@ class Config(object):
         return self.eig[spin][i]
 
 
-def _kpts_grid(text):
-    """KPOINTS 的网格行（生成方案的 n1 n2 n3）-> [int,int,int]；取不到返回 None。"""
-    for ln in (text or "").splitlines()[1:6]:
-        f = ln.split()
-        if len(f) == 3 and all(x.lstrip("+-").isdigit() for x in f):
-            return [int(x) for x in f]
-    return None
-
-
 def check_inputs(cwd, man):
     """S7.2 生成时照抄的 S7 undeformed 输入，与 S7 现在的输入比（INCAR 只比物理键）。"""
     und = cwd / DEFORM_DIR / "undeformed"
@@ -171,11 +162,16 @@ def check_inputs(cwd, man):
             continue
         # [kz=1] 2D：放行「面内网格相同、仅真空方向 kz 被降到 1」这一种差异（见 gen_step9c_odp.py）。
         #   真空方向能带平坦已由 LS 实测确认（带边 ±1 eV 内 |dE| ~0.07 meV）。
-        if n == "KPOINTS" and str((man or {}).get("dim")) == "2d":
-            _ga, _gb = _kpts_grid(_ta), _kpts_grid(_tb)
-            if _ga and _gb and _ga[:2] == _gb[:2] and _gb[2] == 1:
-                print("[..] KPOINTS：面内 %s 一致，真空方向 %d -> 1（kz=1 优化）放行"
-                      % (_gb[:2], _ga[2]))
+        # [kz=1-r2] 只在 S7.2 的 manifest 记了「真的降过」时放行，且按 manifest 记的真空轴比；
+        #   旧 manifest（没有这个标记）KPOINTS 不同照旧报错。
+        if n == "KPOINTS" and str((man or {}).get("dim")) == "2d" and (man or {}).get("kz_vacuum_reduced"):
+            _ax = ((man.get("kz_vacuum") or {}).get("axis"))
+            _ax = 2 if _ax is None else int(_ax)
+            _ga, _gb = of.kpoints_mesh(_ta), of.kpoints_mesh(_tb)
+            if (_ga and _gb and _gb[_ax] == 1
+                    and all(_ga[i] == _gb[i] for i in range(3) if i != _ax)):
+                print("[..] KPOINTS：面内一致（%s），真空方向 %d -> 1（kz=1 优化）放行"
+                      % ([_gb[i] for i in range(3) if i != _ax], _ga[_ax]))
                 continue
         bad.append(n)
     if (und / "INCAR").is_file():
@@ -187,6 +183,75 @@ def check_inputs(cwd, man):
     if bad:
         _die("S7.2 的单点用的输入与 S7 undeformed 现在的不同：%s。S7 重新生成过 -> 先 retry S7.2_odp（重算单点），"
              "再重跑本步。（step.conf 给 S7.2 单独改了 INCAR 也会这样：S7.2 必须与 S7 同一套参数）" % "；".join(bad))
+
+
+def _read_magnetism(d):
+    """[kz=1-r2] 一个构型的磁矩：OSZICAR 最后一个 mag=（总磁矩，非共线是 3 个分量）与 OUTCAR 最后一个
+    "magnetization (x)" 表的 tot 列（各原子）。非自旋极化（没有 mag=）返回 None。"""
+    tot = None
+    osz = d / "OSZICAR"
+    if osz.is_file():
+        for ln in osz.read_text(errors="ignore").splitlines():
+            if "mag=" in ln:
+                try:
+                    tot = [float(x) for x in ln.split("mag=", 1)[1].split()]
+                except ValueError:
+                    pass
+    if tot is None:
+        return None
+    sites = None
+    oc = d / "OUTCAR"
+    if oc.is_file():
+        with open(oc, "rb") as fh:                             # 只读文件尾：磁矩表在单点 OUTCAR 的末尾
+            fh.seek(0, 2)
+            fh.seek(max(0, fh.tell() - (8 << 20)))
+            tail = fh.read().decode(errors="ignore").splitlines()
+        start = max((i for i, ln in enumerate(tail) if ln.strip().startswith("magnetization (x)")), default=None)
+        if start is not None:
+            vals = []
+            for ln in tail[start + 1:]:
+                f = ln.split()
+                if not f or f[0].startswith(("#", "-")):
+                    if vals and f and f[0].startswith("-"):
+                        break
+                    continue
+                if f[0] == "tot":
+                    break
+                if f[0].isdigit():
+                    try:
+                        vals.append(float(f[-1]))
+                    except ValueError:
+                        break
+            sites = vals or None
+    return {"total": tot, "sites": sites}
+
+
+def check_magnetism(src, names):
+    """[kz=1-r2] 各构型与 odp-ref 是否停在同一个磁性解上（odp_frozen.magnetic_mismatch）。不一致就报错：
+    换了磁性解，带边能量整体改变，D = ΔE/2u 会变成一个假的大耦合。非自旋极化直接跳过。返回核对记录。"""
+    ref = _read_magnetism(src / REF_NAME)
+    if ref is None:
+        print("[..] 非自旋极化（odp-ref 的 OSZICAR 没有 mag=）：跳过磁性解一致性核对")
+        return {"checked": False}
+    bad = {}
+    for nm in names:
+        if nm == REF_NAME:
+            continue
+        m = _read_magnetism(src / nm)
+        if m is None:
+            bad[nm] = ["读不到磁矩（OSZICAR 没有 mag=），而 odp-ref 是自旋极化的"]
+            continue
+        probs = of.magnetic_mismatch(ref, m)
+        if probs:
+            bad[nm] = probs
+    if bad:
+        _die("下列冻声子构型与 odp-ref 不在同一个磁性解上（位移只有 ~0.01 Å，同一磁性解下磁矩只变 ~1e-3 μB）：\n  "
+             + "\n  ".join("%s：%s" % (k, "；".join(v)) for k, v in sorted(bad.items()))
+             + "\n这些点的 D 会是假的大耦合。处理：查它们的 OSZICAR/OUTCAR 磁矩；用 odp-ref 收敛后的各原子磁矩作 "
+               "MAGMOM（写进 S7.2 的 step.conf [incar]）重算这些点，再重跑本步")
+    print("[OK] 磁性解一致：%d 个构型与 odp-ref 的总磁矩/各原子磁矩差都在 %.2f/%.2f μB 内（odp-ref 总磁矩 %s）"
+          % (len(names) - 1, of.MAG_TOTAL_TOL, of.MAG_SITE_TOL, [round(x, 3) for x in ref["total"]]))
+    return {"checked": True, "ref_total": ref["total"], "tol_total": of.MAG_TOTAL_TOL, "tol_site": of.MAG_SITE_TOL}
 
 
 def check_s5(cwd, man):
@@ -420,6 +485,7 @@ def main():
             print("[..] %s 有面外偶极（真空区斜坡 %+.1f meV/胞）：取真空区中点为参考（两侧真空能级的平均）"
                   % (nm, 1000 * slope))
     (out / VAC_CACHE).write_text(json.dumps(cache, indent=1), encoding="utf-8")
+    mag_rec = check_magnetism(src, list(man["configs"]))        # [kz=1-r2] 各构型同一个磁性解
     s7ref = None
     und = cwd / DEFORM_DIR / "undeformed"
     if _vasprun(und) is not None:                       # 只要本征值（LOCPOT 在 S7.1 之后可能已清理）
@@ -454,7 +520,7 @@ def main():
         "disp_max_A": man.get("disp_max_A"), "polar": man.get("polar"),
         "groups": man["groups"], "modes": man["modes"],
         "vacuum_levels_eV": None if is3d else {k: round(c.vac, 6) for k, c in cfg.items()},
-        "s5_freq_rel_change": s5_rel, "warnings": warns, "carriers": carriers,
+        "s5_freq_rel_change": s5_rel, "magnetism_check": mag_rec, "warnings": warns, "carriers": carriers,
         "units": {"D_eV_A": "eV/Å（= 1e8 eV/cm），与 step.conf DP_OPTICAL_* 同单位", "hw_meV": "meV"},
         "definition": (("D = dE/du（3D 不对齐），" if is3d else "D = d(E−V_vac)/du，") + "位移 Δ_κ = u·√(M/m_κ)·e_κ（M 原胞质量、e 质量加权归一本征矢）；"
                        "简并组各伙伴 ΣD²、星内各成员谷平均；简并带 D² = Σλ²/d²（见 odp_frozen.py）"),

@@ -14,6 +14,18 @@ This project adheres to Semantic Versioning; versions before 1.0.0 are developme
 
 ## [Unreleased]
 
+### Fixed / Added (2026-10-15: ke S7.2 frozen-phonon ODP follow-up to the kz=1 change)
+- S7.2 `ODP_KZ_VACUUM=reduce` now records what actually happened: only automatic-mesh KPOINTS are
+  reduced; an explicit k-point list is left alone and the manifest no longer claims `kz_vacuum_reduced`.
+  The vacuum axis is taken from the structure instead of assuming the third component; the manifest has a
+  `kz_vacuum` record (mode, axis, status, S7 / ODP grids). Shared parser: `odp_frozen.kpoints_mesh` /
+  `reduce_vacuum_kz`.
+- S8.21 accepts the "in-plane equal, vacuum = 1" KPOINTS difference only when the manifest says the grid
+  was really reduced, and compares along the recorded vacuum axis.
+- S8.21 checks that every displaced configuration stays on the same magnetic solution as odp-ref (total
+  moment from OSZICAR, per-site moments from OUTCAR, 0.1 uB tolerance) and stops otherwise; a flipped or
+  high/low-spin configuration would otherwise turn into a spurious large D. Skipped when not spin-polarised.
+
 ### Fixed (2026-10-15: ke S7.1 vacuum alignment with a missing ionrelax LOCPOT)
 - S7.1: when a configuration's eigenvalues come from `ionrelax/vasprun.xml`, its LOCPOT (and POSCAR) are
   read only from `ionrelax/`; a missing `ionrelax/LOCPOT` raises `RuntimeError` ("retry S7_deform to add
