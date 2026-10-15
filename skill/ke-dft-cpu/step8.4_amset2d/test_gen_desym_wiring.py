@@ -14,6 +14,7 @@
   4) 2D ε∞ 覆盖的 layer/slab 口径换算与"离子部分不变"；带隙覆盖通道与来源记录。
 """
 import importlib.util
+import os
 import sys
 import tempfile
 import unittest
@@ -377,6 +378,84 @@ class FullGridFactorTests(unittest.TestCase):
         self.assertFalse(info["full_grid"])
         self.assertEqual(list(mesh), [int(x) for x in G14._interp_mesh(st, 432, 10)])
 
+    def test_v124fix_si_34cube_factor_below_one(self):
+        """[V124-fix] 全网格/IBZ 点数比大到把 factor 压到 **<1** 时必须留小数。
+
+        实例（Si，立方 34^3 全网格）：39304 点 / IBZ 1059 点 = 37.1 倍，出厂 f=10 换算得
+        **0.269438**。旧代码 max(1, round(f0*n_ir/n_full)) 把它钳到 1 -> 等价值 10590 -> 39304，
+        最终插值网格从 109^3 静默变成 **167^3**（点数 3.6 倍，白烧内存/机时；V124 的实际事故）。
+        这里锁三件事：① 换算出的 factor 是 <1 的小数并落盘；② 全网格与 IBZ 两条路径仍是同一张
+        109^3 网格；③ IBZ 路径逐字不变（factor_start 恒为 10）。"""
+        st = tsg.si_on_atom()
+        grid = [34, 34, 34]
+        kw = dict(INTERPOLATION_FACTOR=10, MESH_MIN=100, MESH_MIN_KZ=None, MESH_MAX=200,
+                  MESH_MIN_FMAX=60)
+        f_full, m_full, i_full = self._run(G10, st, self._grid(grid), **kw)
+        f_ibz, m_ibz, i_ibz = self._run(G10, st, self._ibz(st, grid), **kw)
+        # 全网格判定：IBZ 1059 点 / 全网格 39304 点
+        self.assertTrue(i_full["full_grid"])
+        self.assertEqual(i_full["nk_ir"], 1059)
+        self.assertEqual(i_full["nk"], 39304)
+        self.assertFalse(i_ibz["full_grid"])
+        # ① 小数 factor（旧代码在这里被钳成 1），且没有被上限二次改动
+        self.assertAlmostEqual(i_full["factor_start"], 10 * 1059 / 39304, places=6)
+        self.assertLess(i_full["factor_start"], 1)
+        self.assertAlmostEqual(i_full["factor_used"], i_full["factor_start"], places=6)
+        self.assertEqual(f_full, i_full["factor_start"])          # 返回值也是小数（旧 int(f) -> 0）
+        # ② 两条路径同一张网格 = 109^3
+        self.assertEqual([int(x) for x in m_full], [109, 109, 109])
+        self.assertEqual([int(x) for x in m_ibz], [109, 109, 109])
+        self.assertTrue(i_full["satisfied"] and i_ibz["satisfied"])
+        # ③ IBZ 路径（整数 factor）逐字不变
+        self.assertEqual(i_ibz["factor_start"], 10)
+        self.assertEqual(i_ibz["factor_used"], 10)
+        # 反向锁：钳到 1 的旧行为就是 167^3，防止有人把 max(1, round(...)) 改回来
+        self.assertEqual([int(x) for x in G10._interp_mesh(st, 39304, 1)], [167, 167, 167])
+
+
+
+class InterpFactorSettingsTests(unittest.TestCase):
+    """[V124-fix] factor 的**落盘**（补 FullGridFactorTests 没盖到的两条）：
+      ① IBZ 路径（整数 factor）写出的 settings.yaml 逐字不变 —— int 10 与 float 10.0 同输出；
+      ② 小数 factor 真写进 settings.yaml —— 旧代码 int(f) 把它截成 0，而 write_settings 里
+         `if INTERPOLATION_FACTOR:` 判假 -> 整行**不写** -> AMSET 静默用默认 10（换了一张网格）。"""
+
+    ELASTIC = [[150, 50, 50, 0, 0, 0], [50, 150, 50, 0, 0, 0], [50, 50, 150, 0, 0, 0],
+               [0, 0, 0, 70, 0, 0], [0, 0, 0, 0, 70, 0], [0, 0, 0, 0, 0, 70]]
+
+    def _settings_text(self, mod, st, factor, is_2d=False):
+        d = _matdir(st)                                   # tmp 目录 + step3_uniform/POSCAR
+        (d / "step.conf").write_text("[params]\nAMSET_ENV = amset\n")
+        out = d / "step8_amset"
+        out.mkdir()
+        keys = ("INTERPOLATION_FACTOR", "SCATTERING", "NWORKERS")
+        saved = {k: getattr(mod, k) for k in keys}
+        cwd = os.getcwd()
+        try:
+            os.chdir(d)
+            mod.INTERPOLATION_FACTOR = factor
+            mod.SCATTERING = ["ADP", "IMP"]               # 不写 POP -> 免 DFPT 依赖
+            mod.NWORKERS = 4
+            mod.write_settings(out, 11.9, 11.9, 1.1, self.ELASTIC,
+                               **({"is_2d": True, "c_len": 20.0} if is_2d else {}))
+            return (out / "settings.yaml").read_text(encoding="utf-8")
+        finally:
+            os.chdir(cwd)
+            for k, v in saved.items():
+                setattr(mod, k, v)
+
+    def test_ibz_path_settings_byte_identical(self):
+        for mod, st, is_2d in ((G10, tsg.si_on_atom(), False), (G14, tsg.mos2_aligned(), True)):
+            a = self._settings_text(mod, st, 10)
+            b = self._settings_text(mod, st, 10.0)        # _fnum(10.0) -> int 10
+            self.assertEqual(a, b)
+            self.assertIn("interpolation_factor: 10\n", a)
+
+    def test_fractional_factor_written(self):
+        for mod, st, is_2d, f in ((G10, tsg.si_on_atom(), False, 0.269438),
+                                  (G14, tsg.mos2_aligned(), True, 0.6321)):
+            txt = self._settings_text(mod, st, f, is_2d=is_2d)
+            self.assertIn("interpolation_factor: %g\n" % f, txt)
 
 
 class AmsetEnvLazyTests(unittest.TestCase):

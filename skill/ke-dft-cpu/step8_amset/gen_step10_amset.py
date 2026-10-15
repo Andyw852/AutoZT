@@ -136,6 +136,16 @@ _ALLOWED_SCATTERING = {"ADP", "IMP", "POP", "PIE", "ODP", "IVS"}
 #   不开 IVS 时第三套与第二套相同、自动去重，产物与改动前完全一样。
 SUBSETS = "ADP+POP+IMP+ODP+PIE+IVS; ADP+POP+ODP+PIE+IVS; ADP+POP+ODP+PIE; ADP"
 _SUBSET_ORDER = ["ADP", "POP", "IMP", "ODP", "PIE", "IVS"]
+# patch_imp_params [0053]（2026-10-15，用户批准）：把电离杂质（IMP）的口径**显式落盘**。
+#   AMSET 的 Brooks–Herring 核里，杂质浓度 N_ii = compensation_factor × |n−p| / defect_charge，
+#   电荷权重再乘 defect_charge²（amset/scattering/elastic.py:315-317）；
+#   两个量的 AMSET 默认值是 compensation_factor=2、defect_charge=1（amset/defaults.yaml:39-40）。
+#   以前本步完全不写这两行 —— 结果里看不出 IMP 是在什么口径下算的，
+#   而 IMP 正是重掺档对标文献时争议最大的一项。
+#   None = 不覆盖，**仍按 AMSET 默认 2 / 1 显式写进 settings.yaml**（便于溯源/写论文）；
+#   填数值 = 覆盖（会改 μ_IMP，别拿它当收敛旋钮）。
+COMPENSATION_FACTOR = None
+DEFECT_CHARGE = None
 
 
 def subset_specs(subsets_str, scattering):
@@ -404,6 +414,9 @@ SPEC = {
     # [V124-fix] 允许小数：AMSET 的 interpolation_factor 本来就是 float（bandstructure.py:80）
     "INTERPOLATION_FACTOR": (None, "float"),
     "SCATTERING": ("", "str"),
+    # [0053] IMP 口径显式化（见顶部 COMPENSATION_FACTOR / DEFECT_CHARGE 的说明）。
+    "COMPENSATION_FACTOR": (None, "float"),
+    "DEFECT_CHARGE": (None, "float"),
     # [0036] 三维 ODP / IVS（见顶部 DP_OPTICAL_* 说明；与 S8.4 同名同义）
     "DP_OPTICAL_E": ("", "str"),
     "DP_OPTICAL_H": ("", "str"),
@@ -1568,6 +1581,12 @@ def write_settings(out: Path, eps_inf, eps_static, gap, elastic,
               "temperatures: [%s]" % ", ".join("%g" % v for v in _tmp),
               "scattering_type: [%s]" % ", ".join(_amset_scatterers()),
               "deformation_potential: deformation.h5"]
+    # [0053] IMP 口径写出来：AMSET 默认 compensation_factor=2、defect_charge=1，
+    #   以前不写这两行 -> 结果无法溯源（N_ii = comp × |n−p| / Z，scattering/elastic.py:315-317）。
+    lines += ["compensation_factor: %g" % (2.0 if COMPENSATION_FACTOR is None else float(COMPENSATION_FACTOR)),
+              "defect_charge: %g" % (1.0 if DEFECT_CHARGE is None else float(DEFECT_CHARGE)),
+              "# ^ [0053] IMP 口径：N_ii = compensation_factor × |n−p| / defect_charge"
+              "（AMSET 默认 2 / 1；step.conf 可覆盖）"]
     if INTERPOLATION_FACTOR:     # patch_interp_factor
         lines.append("interpolation_factor: %g" % float(INTERPOLATION_FACTOR))
     # patch_unity_overlap_3d（V25）+ patch_unity_overlap_override（V26）：2D 默认 unity、3D 默认真实重叠，
@@ -1589,8 +1608,8 @@ def write_settings(out: Path, eps_inf, eps_static, gap, elastic,
         #   不写 -> unity_overlap=None -> 8.3 报"0 unity / 0 真实重叠，跳过"（三维黄色告警不会触发）。
         lines.append("unity_overlap: false")
         lines.append("# ^ 三维显式写 false = 真实重叠（与 AMSET 默认一致；写出来是为了让 8.3 能识别）。")
-        lines.append("# [WARN] 三维受影响面已确认；Si 全网格对照（V26）：ADP/overall 只差 3~9%、")
-        lines.append("#   IMP 逐机制高 1.3~1.7 倍 -> 结论值可用，逐机制值需注明。")
+        lines.append("# [WARN] 三维受影响面已确认；Si 全网格对照（V26/0.5.1 复跑）：ADP 0.92~1.01、")
+        lines.append("#   overall 0.92~1.06（重掺档 ±6% 内），IMP 逐机制 0.76~1.07 双向噪声不可靠。")
         lines.append("#   若要给某项目改 unity：在本步 step.conf 写 UNITY_OVERLAP = true")
         lines.append("#   （注意 Si 有 6 个谷，unity 最多低估约 6 倍）。")
     # ★ 必须显式写 nworkers：不写则 AMSET 默认 -1 = 用满节点全部核，
@@ -2369,7 +2388,7 @@ def apply_mesh_min(vasprun_path, out):
               "         2) 只有在内存也不够时才考虑加密 S3 的 K 间距 —— 那会让 SCF 贵 3~13 倍\n"
               "            （11^3 + f155 -> 1.0x SCF；17^3 + f51 -> 3.7x；22^3 + f28 -> 8.0x）。"
               % (fmax, "x".join(map(str, mesh)), need))
-    return int(f), [int(x) for x in mesh]
+    return _fnum(f), [int(x) for x in mesh]   # [V124-fix] 允许小数（旧 int(f) 会把它截成 0）
 
 
 def _symmetry_flags(structure):
@@ -2477,6 +2496,7 @@ def main():
     #   （GaAs 用 HSE ε∞ 重跑 S8 会跑出与覆盖前相同的数）。test_gen_conf_wiring.py 防回归。
     global EPS_INF_OVERRIDE, EPS_INF_OVERRIDE_BASIS, DESYM_FIX, _DESYM_FIX_ON, SYMMETRIZE_ELASTIC, ELASTIC_GUARD
     global STRUCTURE_GUARD, ALLOW_COARSE_S3
+    global COMPENSATION_FACTOR, DEFECT_CHARGE          # [0053]
     global IR_FIX, _IR_FIX_ON
     global BANDGAP_OVERRIDE, BANDGAP_NOTE
     global MEM_WARN_GIB, MEM_LIMIT_GIB, MEM_AUTO_EXCLUSIVE
@@ -2523,9 +2543,16 @@ def main():
             # patch_interp_factor：3D 的 factor 覆盖通道（SPEC 默认 None）。
             if _p["INTERPOLATION_FACTOR"] is not None:
                 INTERPOLATION_FACTOR_EXPLICIT = True
-                INTERPOLATION_FACTOR = int(_p["INTERPOLATION_FACTOR"])
-                print("[OK] INTERPOLATION_FACTOR = %d（step.conf 显式指定；不会被 MESH_MIN/MESH_MAX 自动改）"
-                      % INTERPOLATION_FACTOR)
+                INTERPOLATION_FACTOR = _fnum(_p["INTERPOLATION_FACTOR"])   # [V124-fix] 显式值也允许小数
+                print("[OK] INTERPOLATION_FACTOR = %g（step.conf 显式指定；不会被 MESH_MIN/MESH_MAX 自动改）"
+                      % float(INTERPOLATION_FACTOR))
+            # [0053] IMP 口径覆盖（None = 不覆盖，仍按 AMSET 默认 2 / 1 落盘）
+            if _p["COMPENSATION_FACTOR"] is not None:
+                COMPENSATION_FACTOR = float(_p["COMPENSATION_FACTOR"])
+                print("[..] COMPENSATION_FACTOR = %g（step.conf 覆盖；AMSET 默认 2）" % COMPENSATION_FACTOR)
+            if _p["DEFECT_CHARGE"] is not None:
+                DEFECT_CHARGE = float(_p["DEFECT_CHARGE"])
+                print("[..] DEFECT_CHARGE = %g（step.conf 覆盖；AMSET 默认 1）" % DEFECT_CHARGE)
             _sc_raw = _p["SCATTERING"]
             if isinstance(_sc_raw, (list, tuple)):
                 _sc_list = [str(x).strip().upper() for x in _sc_raw if str(x).strip()]

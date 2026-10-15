@@ -154,6 +154,14 @@ _ALLOWED_SCATTERING = {"ADP", "IMP", "POP", "PIE", "ODP", "IVS"}   # step.conf S
 #   不开 IVS 时第三套与第二套相同、自动去重，产物与改动前完全一样。
 SUBSETS = "ADP+POP+IMP+ODP+PIE+IVS; ADP+POP+ODP+PIE+IVS; ADP+POP+ODP+PIE; ADP"
 _SUBSET_ORDER = ["ADP", "POP", "IMP", "ODP", "PIE", "IVS"]
+# patch_imp_params [0053]（2026-10-15，用户批准）：把电离杂质（IMP）的口径**显式落盘**。
+#   与 3D 的 gen_step10_amset.py 同款：AMSET 的 Brooks–Herring 核里
+#   N_ii = compensation_factor × |n−p| / defect_charge，电荷权重再乘 defect_charge²
+#   （amset/scattering/elastic.py:315-317）；AMSET 默认 compensation_factor=2、defect_charge=1
+#   （amset/defaults.yaml:39-40）。以前本步不写这两行 -> 结果无法溯源。
+#   None = 不覆盖（仍按默认 2 / 1 显式写进 settings.yaml）；填数值 = 覆盖（会改 μ_IMP）。
+COMPENSATION_FACTOR = None
+DEFECT_CHARGE = None
 
 
 def subset_specs(subsets_str, scattering):
@@ -486,6 +494,9 @@ SPEC = {
     # 散射类型覆盖（2026-09-22 用户批准）：逗号/空格分隔，如 `SCATTERING = ADP,POP` 用于严格本征对照；
     # 空串 = 出厂 ["ADP","IMP","POP"] 行为不变。
     "SCATTERING": ("", "str"),
+    # [0053] IMP 口径显式化（见顶部 COMPENSATION_FACTOR / DEFECT_CHARGE 的说明）。
+    "COMPENSATION_FACTOR": (None, "float"),
+    "DEFECT_CHARGE": (None, "float"),
     # write_mesh 开关（2026-09-22 用户批准）：true = settings.yaml 写 write_mesh: true，
     # 产出 mesh_*.h5 供 postprocess_intrinsic.py 重积分。
     # [0032] SPEC 默认 None ——「step.conf 里有没有写」才是判据：出厂值改成 True 之后，
@@ -2318,6 +2329,11 @@ def write_settings(out: Path, eps_inf, eps_static, gap, elastic,
               "temperatures: [%s]" % ", ".join("%g" % v for v in _tmp),
               "scattering_type: [%s]" % ", ".join(_amset_scatterers()),
               "deformation_potential: deformation.h5"]
+    # [0053] IMP 口径写出来（同 3D）：AMSET 默认 compensation_factor=2、defect_charge=1。
+    lines += ["compensation_factor: %g" % (2.0 if COMPENSATION_FACTOR is None else float(COMPENSATION_FACTOR)),
+              "defect_charge: %g" % (1.0 if DEFECT_CHARGE is None else float(DEFECT_CHARGE)),
+              "# ^ [0053] IMP 口径：N_ii = compensation_factor × |n−p| / defect_charge"
+              "（AMSET 默认 2 / 1；step.conf 可覆盖）"]
     if INTERPOLATION_FACTOR:     # patch_interp_factor
         lines.append("interpolation_factor: %g" % float(INTERPOLATION_FACTOR))
     # patch_unity_overlap：显式写，别用 AMSET 的默认值（默认是 False = 真实重叠，
@@ -2872,7 +2888,7 @@ def apply_mesh_min(vasprun_path, out):
         INTERPOLATION_FACTOR = float(_fnum(f))
     if okm:
         print("[OK] 最终插值网格 %s（factor %g -> %g，下限 面内%s / kz%s，上限 %s，nk=%d%s）"
-              % ("x".join(map(str, mesh)), f0, int(f), lo, lo_z, MESH_MAX, nk,
+              % ("x".join(map(str, mesh)), f0, float(f), lo, lo_z, MESH_MAX, nk,   # [V124-fix] %g 配 float（旧 int(f) 会把 5.226 印成 5）
                  ("，**因上限自动降 factor**" if _capped else "")
                  + ("，全网格按 IBZ 口径（IBZ %d 点）" % _fg[0] if _fg else "")))
     else:
@@ -2885,7 +2901,7 @@ def apply_mesh_min(vasprun_path, out):
               "         2) 只有在内存也不够时才考虑加密 S3 的 K 间距 —— 那会让 SCF 贵 3~13 倍。\n"
               "         3) 二维还要单独看 kz：MESH_MIN_KZ 通常设 3（<3 时 kz 不内插、AMSET 沿 kz 外推）。"
               % (fmax, "x".join(map(str, mesh)), need))
-    return int(f), [int(x) for x in mesh]
+    return _fnum(f), [int(x) for x in mesh]   # [V124-fix] 允许小数（旧 int(f) 会把它截成 0）
 
 
 def _symmetry_flags(structure):
@@ -2990,6 +3006,7 @@ def main():
     global INTERPOLATION_FACTOR, INTERPOLATION_FACTOR_EXPLICIT, SCATTERING, WRITE_MESH, DOPING, TEMPERATURES
     global INTRINSIC_ADP_ONLY, OVERALL_WITHOUT, TAU_ENERGY, POSTPROCESS_ONLY, ADP_D_SCALE
     global SUBSETS
+    global COMPENSATION_FACTOR, DEFECT_CHARGE          # [0053]
     global DESYM_FIX, _DESYM_FIX_ON, BANDGAP_OVERRIDE, BANDGAP_NOTE
     global EPS_INF_OVERRIDE, EPS_INF_OVERRIDE_BASIS, SYMMETRIZE_ELASTIC, ELASTIC_GUARD
     global STRUCTURE_GUARD, ALLOW_COARSE_S3
@@ -3012,11 +3029,18 @@ def main():
             # patch_interp_factor 覆盖（2026-09-20）：与 NWORKERS 同款，缺省沿用常量。
             if _p["INTERPOLATION_FACTOR"] is not None:      # ★ 有键 = 显式（哪怕是 10）
                 INTERPOLATION_FACTOR_EXPLICIT = True
-                _conf_interp = int(_p["INTERPOLATION_FACTOR"])
-                if _conf_interp != INTERPOLATION_FACTOR:
-                    print("[OK] INTERPOLATION_FACTOR = %d（step.conf 覆盖，出厂 %d）"
-                          % (_conf_interp, INTERPOLATION_FACTOR))
+                _conf_interp = _fnum(_p["INTERPOLATION_FACTOR"])   # [V124-fix] 显式值也允许小数
+                if float(_conf_interp) != float(INTERPOLATION_FACTOR):
+                    print("[OK] INTERPOLATION_FACTOR = %g（step.conf 覆盖，出厂 %g）"
+                          % (float(_conf_interp), float(INTERPOLATION_FACTOR)))
                 INTERPOLATION_FACTOR = _conf_interp
+            # [0053] IMP 口径覆盖（None = 不覆盖，仍按 AMSET 默认 2 / 1 落盘）
+            if _p["COMPENSATION_FACTOR"] is not None:
+                COMPENSATION_FACTOR = float(_p["COMPENSATION_FACTOR"])
+                print("[..] COMPENSATION_FACTOR = %g（step.conf 覆盖；AMSET 默认 2）" % COMPENSATION_FACTOR)
+            if _p["DEFECT_CHARGE"] is not None:
+                DEFECT_CHARGE = float(_p["DEFECT_CHARGE"])
+                print("[..] DEFECT_CHARGE = %g（step.conf 覆盖；AMSET 默认 1）" % DEFECT_CHARGE)
             # 全网格 h5 分支：出厂 auto —— 由 _apply_inversion_rule() 按有无反演中心决定。
             global _WF_EXPLICIT
             _wf = str(_p["WAVEFUNCTION_FULL"]).strip().lower()

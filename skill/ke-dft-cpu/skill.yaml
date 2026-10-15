@@ -352,11 +352,11 @@ optional_steps:
   ivs_frozen:
     default: false
     steps:
-      - {seq: 7.3, name: step7d_ivs_phonon, label: S7.3_ivsph, after: step7_deform, hpc: hfeshell,   # [用户 2026-10-15 批准] S7.3 切 hfeshell（jzzn 排队到 2026-10-17）
+      - {seq: 7.3, name: step7d_ivs_phonon, label: S7.3_ivsph, after: step7_deform, hpc: "hfeshell",   # [用户 2026-10-15 批准] S7.3 切 hfeshell（jzzn 排队到 2026-10-17）；[用户 2026-10-16 指示] 回退 hfeshell（3090 改动因 ivs_frozen 关闭而不生效，避免配置与 DAG 状态不一致）
          src: step7d_ivs_phonon, check: outcar, gen: gen_step9d_ivs_ph.py,
          gen_need: [stepconf.py, step.conf, ke_common.py, dim_common.py, ivs_frozen.py, odp_frozen.py, submit_std_2d.tpl, submit_std_3d.tpl],
          needs: ["step1_opt", "step7_deform"]}
-      - {seq: 7.4, name: step7e_ivs_frozen, label: S7.4_ivs, after: step7d_ivs_phonon, hpc: hfeshell,   # [用户 2026-10-15 批准] S7.4 切 hfeshell（与 S7.3 同集群）
+      - {seq: 7.4, name: step7e_ivs_frozen, label: S7.4_ivs, after: step7d_ivs_phonon, hpc: "hfeshell",   # [用户 2026-10-15 批准] S7.4 切 hfeshell（与 S7.3 同集群）；[用户 2026-10-16 指示] 随 S7.3 一起回退 hfeshell
          src: step7e_ivs_frozen, check: outcar, fanout: "ivs-*", gen: gen_step9e_ivs.py,
          gen_need: [stepconf.py, step.conf, ke_common.py, dim_common.py, ivs_frozen.py, odp_frozen.py, submit_std_2d.tpl, submit_std_3d.tpl],
          needs: ["step7d_ivs_phonon", "step7_deform"]}

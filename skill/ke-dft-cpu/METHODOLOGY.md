@@ -341,8 +341,11 @@ step8.x 的 `_SKILL_REV` 写进 comparison_summary.txt。改脚本即提交 GitH
   把净浓度 p0 − n0 加进 AMSET 掺杂（3D cm⁻³；2D 换面密度 = 净浓度 × 缺陷超胞 V/A），记录写 `defect_doping.json`；
   S8.3 出 `transport_plots/defect_equilibrium/<M>_defect_equilibrium.png/.csv`（σ、S、PF、κe 随温度，每顶点一色，
   实线全部机制、虚线去掉 IMP）。带电态是垂直能量（NSW=0）时 auto 不用。
-- **局限**：缺陷平衡只在 defect 技能的温度下求；AMSET 各温度用同一净浓度（等价于缺陷冻结）。IMP 的杂质浓度按 |n−p| 计，
-  补偿缺陷没算进去（真实电离缺陷更多，IMP 偏低）。两边带隙要同源（defect 的 E_gap 与 ke 的 HSE scissor）。
+- **局限**：缺陷平衡只在 defect 技能的温度下求；AMSET 各温度用同一净浓度（等价于缺陷冻结）。IMP 的杂质浓度
+  **N_ii = compensation_factor × |n−p| / defect_charge**，其中 compensation_factor / defect_charge 是 AMSET 的设置项，
+  默认 **2 / 1**（`amset/defaults.yaml`）；[0053] 起这两个量**显式写进** S8/S8.4 的 `settings.yaml`（可在 step.conf 覆盖），
+  也就是实际按 **2×|n−p|** 计 —— 但它仍只是"净载流子浓度的倍数"，真实的补偿缺陷（施主受主成对）没算进去
+  （实际电离杂质更多 -> 这里的 IMP 偏低）。两边带隙要同源（defect 的 E_gap 与 ke 的 HSE scissor）。
 - **odp_frozen 默认开**（用户 2026-10-13 决定）：每材料多 1 + 2×非极性光学模数个 VASP 单点；已算完的材料补跑 S7.2/S8.21，
   参数出来后 S8/S8.4 重排一次。材料 tf_*.yaml 写 `odp_frozen: false` 关。
 
