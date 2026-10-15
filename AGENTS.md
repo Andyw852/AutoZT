@@ -35,7 +35,7 @@
 2. **破坏性操作必须先请示**：`stop`、`rerun`、`clean`、以及任何带 `-f` 或 `-y` 的命令，执行前必须向用户说明对象和后果，得到明确同意后才执行。
    **`-f`/`-y` 必须逐条单独请示**：批准"目标"（如"修 Mo2S3"）**不等于**批准具体命令里的 `-f`——不得从目标批准里推断 `-f` 的许可（2026-09-18 教训：以"修 Mo2S3"为由执行了 `start -f`）。**特别地：`mlff` 的 `step5_label`（及一切昂贵的扇出步骤）只用 `retry`/`start -f`，绝不 `rerun`/`clean`**——后两者会 `rm -rf` 步骤目录，毁掉已算完的 DFT 帧。用户说"以后这类都不用问了"才算预先授权。
    **请示的方式（2026-10-03 起）**：直接执行原命令（或 MCP `request_destructive_action`），网关不会执行，而是返回**审批卡片**（命令、后果、任务图里 `◀` 标出目标步骤、`↳` 标出受影响的下游）和请求号 → 把卡片原样给用户看并询问 → 用户明确同意后执行 `autozt approve --request <请求号> --reply "<用户原话>"`（MCP `approve_request`）就地批准并执行；用户拒绝则 `autozt approve --deny <请求号>`。**不要再让用户自己去终端敲 approve 命令**。请求号绑定整条命令（改任何参数要重新申请），所以 `-f`/`-y` 逐条请示天然成立；没问过用户、或用户没明确说同意，绝不调用 approve。
-3. **监控循环里自动执行的命令只有**：`autozt progress`（及 `autozt agent progress`，只读本地进度文件、不连超算，**巡检首选**）、`autozt doctor`（只读配置预检）、`autozt summary --diff`、`autozt summary`、`autozt list`、`autozt -status <状态> summary`、`autozt -tt <类型> summary`、`autozt -p X status`、`autozt skills`、`autozt auto on`、`autozt -tt <技能> auto on`、`autozt start`、`autozt -p X start`。其余一律先请示（包括 `autozt conf --set`——它会改项目配置）。**巡检严禁每轮拉 `autozt json`**——它是全量结构化数据，token 巨大，只在写工具/做批量分析时才用。
+3. **监控循环里自动执行的命令只有**：`autozt progress`（及 `autozt agent progress`，只读本地进度文件、不连超算，**巡检首选**）、`autozt doctor`（只读配置预检）、`autozt summary --diff`、`autozt summary`、`autozt list`、`autozt -status <状态> summary`、`autozt -tt <类型> summary`、`autozt -p X status`、`autozt skills`、`autozt auto on`、`autozt -tt <技能> auto on`、`autozt [-tt <技能>] -p <材料> auto on`（单材料，粒度最小）、`autozt start`、`autozt -p X start`。其余一律先请示（包括 `autozt conf --set`——它会改项目配置）。**巡检严禁每轮拉 `autozt json`**——它是全量结构化数据，token 巨大，只在写工具/做批量分析时才用。
 4. **只读诊断允许直接 ssh**：`tail`/`grep` 日志文件（如 `ssh jzzn 'tail -50 <步骤目录>/slurm-*.out'`、`grep -i error OUTCAR`）。只读，绝不改文件。材料目录下的 `stepN_check_and_resubmit.py`（autozt 已随生成推送到超算）也只允许加 `--check-only` 运行——它的重投功能**严禁使用**（重投一律走 `autozt retry`/`autozt rerun`，两套重投机制并用会打架）。其 stdout 是一行 JSON，退出码 0=converged / 10=not_converged / 20=running / 30=重启超限 / 40=error，可作为深度诊断依据。**注意 3090 服务器无 SLURM**：ssh 过去看到的 squeue 是 fakeslurm 垫片，作业状态一律以 `autozt` 采集为准，别用真 SLURM 语义判读。
 5. **用退出码判成败**：`autozt` 命令退出码 0 = 成功；非 0 = 失败或被拒绝。失败时把输出原文呈给用户，不要粉饰、不要假装成功。
 6. **不确定就报告并等待**。宁可少做，不要猜。
@@ -107,13 +107,34 @@ autozt skills                          # 只读列出全部技能（版本/步�
 autozt [-tt TT] check [--cluster C|all] [--json]   # 只读：技能在某机器上能否运行、缺什么、怎么补
 autozt [-tt TT] -p MAT -j STEP conf    # 查看该步骤 step.conf 合并后的最终值（只读）；--set 会写项目配置（先请示）
 autozt -p A,B hpc <集群>               # 换项目跑哪台超算（jzzn/a800/3090；改配置，先请示）
-autozt auto [on|off]                   # 一键开关全局 auto_advance（改全局配置，先请示）
+autozt auto [on|off]                   # 开关自动推进；范围三级（写配置，先请示）：
+                                       #   无 -tt/-p        -> 全局 tf.yaml
+                                       #   -tt TT           -> 该技能下全部材料
+                                       #   [-tt TT] -p MAT  -> ★ 只这一个材料（写它的 project_setting/setting.yaml）
+                                       #   on 会当场推进一轮；auto resume 必须配 -tt 和 -p（恢复被取消的步骤）
 ```
 
 `advance` 是模型或人工显式调用的一次性动作：本轮采集、拉回已完成结果并推进就绪步骤，
 不会修改持久化配置，也不会隐式开启挂死作业恢复。`auto on` 是长期配置开关，会写入
 `auto_advance` 并在本轮触发一次推进；后台 `monitor`/`auto_watch` 负责持续运行。两者不要
 在 agent 协议中混用。
+
+> **★ 按材料单独开推进（2026-10-15 补记：此前本文件漏写，导致 agent 只知道全局/技能两级）**
+> `auto_advance` 是**逐材料**判定的：材料自己的 `project_setting/setting.yaml` 写 `auto_advance: true`
+> 就推进**该材料**，**不必开全局总闸**（全局 `tf.yaml` 只当"该材料没写这个键"时的缺省）。
+>
+> | 范围 | 命令 | 写哪 | 影响谁 |
+> |---|---|---|---|
+> | 全局 | `autozt auto on` | 全局 `tf.yaml` | 所有没写该键的材料 |
+> | 技能 | `autozt -tt TT auto on` | 该技能下每个材料的 `project_setting/setting.yaml`（并顺手开全局） | 该技能全部材料 |
+> | **材料** | `autozt [-tt TT] -p MAT auto on` | **只写该材料的 `project_setting/setting.yaml`** | **只这一个材料** |
+>
+> 查询当前值：`autozt [-tt TT] -p MAT auto`（不带 on/off = 只查询，输出"开/关/（无配置）"，不改文件）。
+> 优先级：材料显式 `true` > 材料显式 `false` > 全局缺省；**未 init**（无 `project_setting/`）的材料永不自动推进。
+> 请示与巡检：`autozt [-tt 技能] -p 材料 auto on` 只改一个材料的项目配置，粒度最小，**是给单材料开推进的首选**；
+> 要给用户选项时，按"全局 / 技能 / 单材料"三级并列给出，别只给全局那一级。
+> 生效条件：`auto on` 只**翻开关 + 当场推进一轮**，**持续推进仍需后台 `monitor`/`auto_watch` 在跑**
+> （推进逻辑挂在 `status`/`watch` 的轮次里）；monitor 是长驻进程，改代码后**必须重启**才拿到新逻辑。
 > **改核数（含为缓解排队降核）的正确流程**（铁律 9，必须先请示）：
 > 1. 改提交模板 `setting/<hpc>/templates/submit_*.tpl` 的 `--ntasks-per-node`，及 `defects_common.build_job` 的 NCORE/KPAR（或项目级 `project_setting/templates/` 覆盖，优先级最高）；
 > 2. `autozt -p MAT -j STEP retry` —— 重新生成输入（保留 OUTCAR/CONTCAR，不删除产物）；
@@ -232,7 +253,7 @@ autozt auto [on|off]                   # 一键开关全局 auto_advance（改�
      - 有 `FAIL 材料 步骤` 行 → 单点诊断（`autozt -p X status` 或 ssh tail 该步日志），按第五节决策。
      - 有 `变更:` 段 → 这是唯一的"谁变了"来源，直接据此汇报进展。`todo→PD(Priority)`、`PD(Priority)→R`、`R→done` 都是正常推进，一句话带过即可；**不要**为它们再跑 list/squeue。
      - `队列(全部作业): R=X PD=Y` 里 `PD` 远大于 `R` → 集群排队积压，正常等待，提一次即可，别每轮重复。
-2. 需要推进：持续监控使用 `autozt auto on`（DAG 自动推进，按依赖找就绪步骤，S0 FAIL 不会阻塞 S3/S4；用 `-tt <技能> auto on` 限定技能）；一次性显式推进使用 `autozt advance`。`autozt start` 是顺序推进（只推 active 步骤，遇 FAIL 会卡住），仅用于显式推某材料/某步：`autozt -p X start`。只有这些明确的推进命令会提交作业，其余巡检步骤全只读。
+2. 需要推进：持续监控使用 `autozt auto on`（DAG 自动推进，按依赖找就绪步骤，S0 FAIL 不会阻塞 S3/S4；用 `-tt <技能> auto on` 限定技能，**用 `-p <材料> auto on` 只给一个材料开**——见第三节"按材料单独开推进"）；一次性显式推进使用 `autozt advance`。`autozt start` 是顺序推进（只推 active 步骤，遇 FAIL 会卡住），仅用于显式推某材料/某步：`autozt -p X start`。只有这些明确的推进命令会提交作业，其余巡检步骤全只读。
 3. 需要请示的操作 → 发汇报模板并等待回复；用户回"执行/同意/好"才执行。
 
 **深查纪律**：只有 ① 出现新 `FAIL`、② 某材料从 `run` 掉回 `wait`、③ 排队原因从 `Priority` 变成 `QOS*`/`Dependency` 之类，才深挖单点。其余"有变化"用 `变更:` 段现成的信息直接汇报，不深查、不复读。
@@ -241,7 +262,7 @@ autozt auto [on|off]                   # 一键开关全局 auto_advance（改�
 
 > 每 10 分钟：运行 `autozt summary --diff`；**无输出就静默**（autozt 已自动 diff，不用自己记上轮，也禁止再跑 list/squeue 去确认）；有输出才看——有 `FAIL` 行按第六节模板汇报并请示；有 `变更:` 段直接一句进展（用变更行里现成的"谁→什么"）；`队列:` 行只在 PD 异常偏高或排队原因变 `QOS*` 时提一句。**巡检里禁止运行 `autozt json`、`autozt list`、`squeue`、`autozt conf --set`。** 若用户开了 `auto_watch` 后台监控，巡检与它不冲突（巡检全只读）；agent 自己建的定时任务照常。
 
-> **推进谁来做**：提交作业（auto-advance）由用户自建的 `monitor.sh`（每 10 分钟 `autozt auto on` DAG 推进 + `autozt summary --diff`）或 `auto_watch` 后台监控完成，**agent 的巡检 cron 保持只读**。若两者都没开，agent 巡检发现就绪步骤（S2 完 → S3/S4 就绪）时应主动 `autozt -tt <技能> auto on` 推进，别让就绪步骤空等。
+> **推进谁来做**：提交作业（auto-advance）由用户自建的 `monitor.sh`（每 10 分钟 `autozt auto on` DAG 推进 + `autozt summary --diff`）或 `auto_watch` 后台监控完成，**agent 的巡检 cron 保持只读**。若两者都没开，agent 巡检发现就绪步骤（S2 完 → S3/S4 就绪）时应主动推进，别让就绪步骤空等；**只关心某个材料就用 `autozt [-tt 技能] -p <材料> auto on`**（只写该材料，不动全局总闸），要整技能才用 `-tt <技能> auto on`。
 
 ## 八、对话示例
 
@@ -251,6 +272,7 @@ autozt auto [on|off]                   # 一键开关全局 auto_advance（改�
 用户："qHPC20 弹性常数想跑 A800" → `autozt -tt elastic-dft-cpu -p qHPC20 hpc a800`（改配置，说明只影响之后提交的作业）。
 用户："mlff 的 Si 继续下一代" → 说明三步：`conf --set params.GENERATION=K`（请示后执行）→ `-j 4 retry`（保留 gen-* 历史清单，勿用 rerun）→ `start`；若 S5 有帧失败只 `retry`。
 用户："现在整体什么情况" → `autozt summary` 先给一句话总览，别一上来就 `autozt json`。
+用户："给 MoS2 开自动推进" → `autozt -tt ke-dft-cpu -p MoS2 auto on`（**只写该材料**的 `project_setting/setting.yaml`，不动全局总闸；要持续推进还得有 monitor 在跑）。查当前值：`autozt -tt ke-dft-cpu -p MoS2 auto`。
 
 ## 九、作业探测（autozt probe）—— 判「弛豫 / 崩溃 / 卡死」
 
