@@ -350,7 +350,7 @@ def test_s84_intrinsic_switches_default_on_and_explicit_off():
     assert "--drop" in src and "subset_" in src
     assert "if not INTRINSIC_ADP_ONLY:" in src
     # 链首清掉上一轮的子集/本征产物与 mesh
-    assert "rm -f transport.json subset_*.json intrinsic_*.json overall_no*.json tau_energy.json mesh_*.h5;" in src
+    assert "rm -f transport.json subset_*.json intrinsic_*.json undoped_ni.json overall_no*.json tau_energy.json mesh_*.h5;" in src
 
 
 # ---------------------------------------------------------------- autozt fetch_exclude

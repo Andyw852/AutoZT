@@ -17,6 +17,11 @@
   · zt_vs_T.png       各掺杂档 ZT(T)（n 型实线 / p 型虚线）
   · zt_vs_doping.png  各温度下 ZT(载流子浓度)
   · zt_components.png 最优档的 S/σ/κ/PF/ZT 五联图（诊断用）
+  · per_temperature/<T>K/report.{txt,json}   每个温度一份全掺杂档明细
+  · intrinsic_carrier/  [0052] 本征点（未掺杂，n = p = n_i）随温度的图 + 表：
+                      zt_intrinsic.png / zt_intrinsic.csv / zt_intrinsic.txt（含 n_i、E_F、S/σ/κe/κL/PF/ZT）
+  [0052] 每次 gen 先删上一轮的产物（温度网格/掺杂档变了不留旧文件）；本地拉回时 autozt 按
+  skill.yaml 的 result_flat 直接放进 <材料>/zt-dft-cpu/result/（不再多一层 result/step20_zt/）。
 
 判据：check: plot + done_marker zt_summary.json；画图失败只告警不失败。
 """
@@ -30,6 +35,7 @@ import zt_common as zc          # noqa: E402
 
 OUTDIR = "step20_zt"
 INPUTS = "inputs"                 # autozt needs_results 推上来的上游结果
+INTR_DIR = "intrinsic_carrier"    # [0052] 本征点（未掺杂）随温度的 ZT 图 + 表
 AMSET_DIR = INPUTS + "/transport"
 KL_DIR = INPUTS + "/kappa_L"
 STEP1_CANDS = (INPUTS + "/structure",)
@@ -434,9 +440,9 @@ def make_per_temperature(out, grid, meta, peaks):
         # 该温度的峰值：n / p 各取 ZT 最大（只取 ZT 非 None）
         peak = {"n": None, "p": None}
         for r in recs:
-            if r["ZT"] is None:
+            if r["ZT"] is None or r["type"] not in ("n", "p"):   # [0052] 本征点（i）不算 n/p 峰值
                 continue
-            k = r["type"] if r["type"] in ("n", "p") else "p"
+            k = r["type"]
             if peak[k] is None or r["ZT"] > peak[k]["ZT"]:
                 peak[k] = r
         # ---- report.txt ----
@@ -474,6 +480,95 @@ def make_per_temperature(out, grid, meta, peaks):
     return n_written
 
 
+OUT_PRODUCTS = ("zt_summary.json", "zt_summary.txt", "zt_heatmap.png", "zt_vs_T.png",
+                "zt_vs_doping.png", "zt_components.png", "per_temperature", INTR_DIR)
+
+
+def clear_old_products(out):
+    """[0052] 先删上一轮的产物（只删本脚本自己写的那些名字；温度网格 / 掺杂档变了以后
+    per_temperature/ 里的旧温度文件夹、旧图不再残留冒充当前结果）。返回删掉的项数。"""
+    import shutil
+    n = 0
+    for name in OUT_PRODUCTS:
+        f = Path(out) / name
+        try:
+            if f.is_dir() and not f.is_symlink():
+                shutil.rmtree(f)
+                n += 1
+            elif f.exists() or f.is_symlink():
+                f.unlink()
+                n += 1
+        except OSError as e:
+            print("[WARN] 删旧产物 %s 失败：%s" % (f, e))
+    return n
+
+
+def make_intrinsic(out, grid, meta, ni, ni_src):
+    """[0052] intrinsic_carrier/：本征点（AMSET doping = 0，未掺杂，E_F 由 n = p 定）随温度的
+    n_i、E_F、S、σ、κe、κL、κtot、PF、ZT —— 表（csv / txt）+ 图（zt_intrinsic.png，n_i 逐点标数值）。
+    transport.json 没有 0 掺杂点（ke-dft-cpu 的 UNDOPED_POINT 关了）-> 不建目录，返回 None。"""
+    import csv
+    rows = zc.intrinsic_rows(grid, ni)
+    if not rows:
+        return None
+    d = Path(out) / INTR_DIR
+    d.mkdir(exist_ok=True)
+    cols = ["T_K", "n_i_cm-3", "E_F_eV", "seebeck_uV/K", "sigma_S/m", "kappa_e_W/mK", "kappa_L_W/mK",
+            "kappa_tot_W/mK", "PF_W/mK2", "ZT"]
+    head = ["# %s 本征载流子（未掺杂，AMSET doping = 0，E_F 由 n = p = n_i 定）随温度" % meta["material"],
+            "# n_i 来源：%s" % (ni_src if ni else "无（%s；重跑 ke-dft-cpu S8/S8.4 后可得）" % ni_src),
+            "# n_i 为每胞体积口径 cm^-3%s；ZT = S^2 sigma T / (kappa_e + kappa_L)"
+            % ("（2D = 含真空元胞）" if meta.get("dim") == "2d" else "")]
+    with open(d / "zt_intrinsic.csv", "w", newline="", encoding="utf-8") as fh:
+        fh.write("\n".join(head) + "\n")
+        w = csv.writer(fh)
+        w.writerow(cols)
+        for r in rows:
+            w.writerow(["" if r[c] is None else ("%.6g" % r[c]) for c in cols])
+    L = head + ["#", "  %-7s %-11s %-9s %-10s %-11s %-10s %-10s %-10s %-11s %-8s" % (
+        "T(K)", "n_i(cm-3)", "E_F(eV)", "S(uV/K)", "sigma(S/m)", "k_e", "k_L", "k_tot", "PF(W/mK2)", "ZT")]
+    for r in rows:
+        L.append("  %-7s %-11s %-9s %-10s %-11s %-10s %-10s %-10s %-11s %-8s" % tuple(
+            zc._fmt(r[c], 0 if c == "T_K" else 4) for c in cols))
+    (d / "zt_intrinsic.txt").write_text("\n".join(L) + "\n", encoding="utf-8")
+    if not _have_matplotlib():
+        return d
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    panels = [("seebeck_uV/K", "S (uV/K)", False), ("sigma_S/m", "sigma (S/m)", True),
+              (("kappa_e_W/mK", "kappa_L_W/mK"), "kappa (W/m/K)", True),
+              ("PF_W/mK2", "PF (W/m/K$^2$)", True), ("ZT", "ZT", False)]
+    nip = [(r["T_K"], r["n_i_cm-3"]) for r in rows if r["n_i_cm-3"]]
+    if nip:
+        panels.insert(0, ("n_i_cm-3", "n_i = n = p (cm$^{-3}$)", True))
+    fig, axs = plt.subplots(1, len(panels), figsize=(3.9 * len(panels), 3.6), squeeze=False)
+    for a, (key, ttl, logy) in zip(axs[0], panels):
+        for k, lab in ((key, None),) if isinstance(key, str) else zip(key, ("kappa_e", "kappa_L")):
+            pts = [(r["T_K"], r[k]) for r in rows if r[k] is not None and (not logy or r[k] > 0)]
+            if pts:
+                a.plot([p[0] for p in pts], [p[1] for p in pts], "o-", ms=3.5, lw=1.3,
+                       color="k" if k == "n_i_cm-3" else None, label=lab)
+            if k == "n_i_cm-3":
+                for x, y in pts:
+                    a.annotate("%.2g" % y, (x, y), textcoords="offset points", xytext=(0, 5),
+                               ha="center", fontsize=6.5)
+                a.margins(y=0.25)
+        if logy:
+            a.set_yscale("log")
+        if not isinstance(key, str):
+            a.legend(fontsize=7)
+        a.set_title(ttl, fontsize=10)
+        a.set_xlabel("T (K)", fontsize=8)
+        a.grid(alpha=0.3)
+    fig.suptitle("%s  intrinsic carriers (undoped, n = p = n_i)  —  ZT vs T%s"
+                 % (meta["material"], "" if nip else "   [n_i not recorded: rerun ke-dft-cpu S8]"), fontsize=11)
+    fig.tight_layout(rect=[0, 0, 1, 0.92])
+    fig.savefig(d / "zt_intrinsic.png", dpi=130)
+    plt.close(fig)
+    return d
+
+
 def make_plots(out, grid, peaks, meta, par=None):
     """三张图；任何一张失败只告警，不影响 JSON/TXT 产物。"""
     import matplotlib
@@ -490,9 +585,10 @@ def make_plots(out, grid, peaks, meta, par=None):
             continue
         xs = [t for t, v in zip(temps, ys) if v is not None]
         yy = [v for v in ys if v is not None]
-        ls = "-" if r["type"] == "n" else "--"
+        ls = {"n": "-", "p": "--"}.get(r["type"], ":")
         ax.plot(xs, yy, ls, marker="o", ms=3.5, lw=1.3,
-                label="%s %s cm$^{-3}$" % (r["type"], zc._fmt(abs(r["doping_cm-3"]), 1)))
+                label=("intrinsic (undoped)" if r["type"] == "i" else
+                       "%s %s cm$^{-3}$" % (r["type"], zc._fmt(abs(r["doping_cm-3"]), 1))))
     ax.set_xlabel("T (K)")
     ax.set_ylabel("ZT")
     ax.set_title("ZT(T) — %s   (S$^2\\sigma$T/($\\kappa_e$+$\\kappa_L$))" % meta["material"])
@@ -571,6 +667,9 @@ def main():
     cwd = Path.cwd()
     out = cwd / OUTDIR
     out.mkdir(exist_ok=True)
+    _nold = clear_old_products(out)               # [0052] 先删旧结果
+    if _nold:
+        print("[..] 已删除上一轮的 %d 项旧产物" % _nold)
 
     srcs = check_input_sources(cwd)
     tr_path, tr_src = _find_transport(cwd)
@@ -729,6 +828,18 @@ def main():
         print("[OK] per_temperature/ 下已生成 %d 个温度文件夹（report.txt / report.json）" % _npt)
     except Exception as e:                            # noqa: BLE001
         print("[WARN] 每温度文件夹生成失败（%s: %s）——ZT 汇总仍正常" % (type(e).__name__, e))
+
+    # [0052] intrinsic_carrier/：本征点随温度的图 + 表（n_i 读 S8 运行目录的 undoped_ni.json / 日志）
+    try:
+        _ni, _ni_src = zc.load_undoped_ni(str(tr_path.parent))
+        _d = make_intrinsic(out, grid, meta, _ni, _ni_src)
+        if _d is None:
+            print("[..] transport.json 没有 0 掺杂点（ke-dft-cpu UNDOPED_POINT 关了）—— 不出 %s/" % INTR_DIR)
+        else:
+            print("[OK] %s/ 已生成（zt_intrinsic.png / .csv / .txt；n_i %s）"
+                  % (INTR_DIR, "读自 " + _ni_src if _ni else "缺：" + _ni_src))
+    except Exception as e:                            # noqa: BLE001
+        print("[WARN] 本征点图表生成失败（%s: %s）——ZT 汇总仍正常" % (type(e).__name__, e))
 
     if _have_matplotlib():
         try:

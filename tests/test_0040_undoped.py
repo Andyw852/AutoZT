@@ -165,3 +165,73 @@ def test_dataset_files_named_by_mechanisms(tmp_path):
     assert "MoS2_ADP.png" in names                           # 只 ADP
     assert "MoS2_ADP+IMP+POP.png" in names                   # 全机制（transport.json 的 mobility 键）
     assert not any("intrinsic" in n or "noIMP" in n for n in names)
+
+
+# ---------------------------------------------------------------- [0052] 本征浓度 n_i 标注 + 先删旧结果
+def test_undoped_ni_from_json_annotated_in_csv(tmp_path):
+    """[0052] amset_fermi_fix 写的 undoped_ni.json -> intrinsic_carrier CSV 每行带 n_i / E_F（2D 另给面密度、文献口径）。"""
+    pytest.importorskip("matplotlib")
+    S = _s83()
+    cwd = T32._material(tmp_path)
+    _set_undoped_transport(cwd, 2.0, T32.TEMPS)
+    ni = [1e10 * (k + 1) for k in range(len(T32.TEMPS))]
+    (cwd / "step8.4_amset2d" / "undoped_ni.json").write_text(json.dumps(
+        {"temperatures_K": list(T32.TEMPS), "E_F_eV": [5.0] * len(ni), "n_i_cm-3": ni}))
+    plots = cwd.parent / "transport_plots"
+    assert S.write_undoped_plots(cwd, plots, "MoS2", True)
+    lines = [l for l in (plots / S.UNDOPED_DIR / "MoS2_intrinsic_carrier.csv").read_text().splitlines()
+             if not l.startswith("#")]
+    rows = list(csv.DictReader(lines))
+    geom = S._geom_2d(cwd)
+    for r in rows:
+        k = list(T32.TEMPS).index(float(r["T_K"]))
+        assert float(r["n_i_cm-3"]) == pytest.approx(ni[k], rel=1e-5)
+        assert float(r["n_i_lit_cm-3"]) == pytest.approx(ni[k] * geom["c_over_t"], rel=1e-5)
+        assert float(r["n_i_2D_cm-2"]) == pytest.approx(ni[k] * geom["c_A"] * 1e-8, rel=1e-5)
+        assert float(r["E_F_eV"]) == pytest.approx(5.0)
+
+
+def test_undoped_ni_log_fallback(tmp_path):
+    """[0052] 旧结果没有 undoped_ni.json：从运行目录日志的 [fermi_fix] 本征点 行解析（取最新日志）。"""
+    S = _s83()
+    cwd = tmp_path / "Si" / "ke-dft-cpu"
+    run = cwd / "step8_amset"
+    run.mkdir(parents=True)
+    (run / "queue.out").write_text(
+        "[fermi_fix] 本征点 300 K：E_F = 6.1234 eV，n = p = 1.234e+10 cm^-3（n=p 求解，log-sum-exp）\n"
+        "[fermi_fix] 本征点 600 K：E_F = 6.0000 eV，n = p = 5.000e+15 cm^-3（n=p 求解，log-sum-exp）\n",
+        encoding="utf-8")
+    ni, src = S.undoped_ni(cwd, False)
+    assert "queue.out" in src
+    assert ni[300.0]["n_i_cm-3"] == pytest.approx(1.234e10)
+    assert ni[600.0]["E_F_eV"] == pytest.approx(6.0)
+    ni2, why = S.undoped_ni(tmp_path / "none" / "ke-dft-cpu", False)
+    assert ni2 == {} and "undoped_ni.json" in why
+
+
+def test_fermi_fix_writes_undoped_ni_only_in_run_dir(tmp_path):
+    """[0052] undoped_ni.json 只写进 AMSET 运行目录（有 settings.yaml）；别处调用不落盘。"""
+    F = _load("ff_0052", KE / "step8.4_amset2d" / "amset_fermi_fix.py")
+    rec = [(600.0, 6.0, 5e15), (300.0, 6.1, 1e10), (300.0, 6.1, 1e10)]
+    assert F.write_undoped_ni(rec, str(tmp_path)) is None
+    assert not (tmp_path / "undoped_ni.json").exists()
+    (tmp_path / "settings.yaml").write_text("doping: [0]\n")
+    p = F.write_undoped_ni(rec, str(tmp_path))
+    d = json.loads(Path(p).read_text())
+    assert d["temperatures_K"] == [300.0, 600.0] and d["n_i_cm-3"] == [1e10, 5e15]
+
+
+def test_transport_plots_cleared_before_regen(tmp_path):
+    """[0052] transport_plots/ 每次整目录重建：上一轮的旧文件 / 子目录不残留。"""
+    pytest.importorskip("matplotlib")
+    S = _s83()
+    cwd = T32._material(tmp_path)
+    plots = cwd.parent / "transport_plots"
+    (plots / "old_sub").mkdir(parents=True)
+    (plots / "old_sub" / "x.csv").write_text("old")
+    (plots / "MoS2_transport_data_1000K.csv").write_text("old")
+    out = cwd / "step8.3_output"
+    out.mkdir(exist_ok=True)
+    S.write_transport_plots(cwd, out, True)
+    assert not (plots / "old_sub").exists()
+    assert not (plots / "MoS2_transport_data_1000K.csv").exists()

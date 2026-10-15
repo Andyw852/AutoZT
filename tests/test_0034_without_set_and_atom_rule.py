@@ -75,7 +75,7 @@ def test_gen_chain_rm_spec_and_markers():
     j = src.index('_ow, _ow_name = overall_without_set(OVERALL_WITHOUT, SCATTERING)')
     k = src.index('" && python postprocess_intrinsic.py --drop %s --out %s" % (",".join(_ow), _ow_name)')
     assert i < j < k < src.index("_acmd = _acmd + AMSET_TAIL")              # 在落成 transport.json 之前
-    assert "rm -f transport.json subset_*.json intrinsic_*.json overall_no*.json tau_energy.json mesh_*.h5;" in src
+    assert "rm -f transport.json subset_*.json intrinsic_*.json undoped_ni.json overall_no*.json tau_energy.json mesh_*.h5;" in src
     assert "'rm -f subset_*.json intrinsic_*.json overall_no*.json tau_energy.json')" in src
     assert "POSTPROCESS_ONLY requires WRITE_MESH = true" in src
     assert "global INTRINSIC_ADP_ONLY, OVERALL_WITHOUT, TAU_ENERGY, POSTPROCESS_ONLY" in src

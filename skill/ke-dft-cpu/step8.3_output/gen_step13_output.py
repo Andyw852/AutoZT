@@ -37,7 +37,7 @@ from pathlib import Path
 # [SKILL_REV] 版本戳：写进 comparison_summary.txt。每次改本脚本逻辑后更新。
 #   陈旧副本已咬人三次（step12/step9b 盖戳后，step13 是最后一个没盖的），
 #   这里盖戳便于从产物反查到底跑的是哪份 skill 副本。
-_SKILL_REV = "2026-10-15-0047"   # [0047] <M>_intrinsic.png 只画基础 4 条本征曲线（此前与 <M>_transport.png 同图仅换标题）+ intrinsic CSV 同步只含 4 条   # [0046] 本征五参数套件支持 3D（读 S8 的 step8_amset + subset_*.json；_geom_3d 体胞几何、c/t=1、对角 (xx+yy+zz)/3）；3D 也出 transport_plots/<M>_transport|<M>_intrinsic.png 9x5 面板   # [0045] bt2_muscan 同时画 thickness(我们)/cell(文献) 两种口径；[0041] transport_plots/defect_equilibrium/（缺陷平衡净浓度 σ/S/PF/κe vs T）   # 2026-10-13-0040   # [0040] transport_plots/intrinsic_carrier/（未掺杂本征载流子 σ/S/PF/κe vs T）；图例/文件名一律用实际机制组合 amset_<机制>；2026-10-13-0039   # [0039] transport_plots/datasets/：每个数据集单独一张 σ/S/PF/κe 图 + csv； [0038] 本征/子集图读 subset_*.json（SUBSETS）；[0036] transport_plots 加 bt2_muscan/ + amset_scan/ 两个扫描图子文件夹；[0035] transport_plots 合并 + τ 对比（tau/）
+_SKILL_REV = "2026-10-15-0052"   # [0052] transport_plots/ 每次整目录重建（先删旧结果）；intrinsic_carrier/ 标注本征浓度 n_i(T)（undoped_ni.json / fermi_fix 日志）；<M>_intrinsic.png 标题写明 intrinsic = 本征散射、横轴 = 掺杂浓度   # [0047] <M>_intrinsic.png 只画基础 4 条本征曲线（此前与 <M>_transport.png 同图仅换标题）+ intrinsic CSV 同步只含 4 条   # [0046] 本征五参数套件支持 3D（读 S8 的 step8_amset + subset_*.json；_geom_3d 体胞几何、c/t=1、对角 (xx+yy+zz)/3）；3D 也出 transport_plots/<M>_transport|<M>_intrinsic.png 9x5 面板   # [0045] bt2_muscan 同时画 thickness(我们)/cell(文献) 两种口径；[0041] transport_plots/defect_equilibrium/（缺陷平衡净浓度 σ/S/PF/κe vs T）   # 2026-10-13-0040   # [0040] transport_plots/intrinsic_carrier/（未掺杂本征载流子 σ/S/PF/κe vs T）；图例/文件名一律用实际机制组合 amset_<机制>；2026-10-13-0039   # [0039] transport_plots/datasets/：每个数据集单独一张 σ/S/PF/κe 图 + csv； [0038] 本征/子集图读 subset_*.json（SUBSETS）；[0036] transport_plots 加 bt2_muscan/ + amset_scan/ 两个扫描图子文件夹；[0035] transport_plots 合并 + τ 对比（tau/）
 #   bump 记录：2026-10-11-0035 —— transport_plots 合并：intrinsic 图并入 transport 图（4 条数据集
 #   overall / intrinsic / ADP only / BT2xDPT-tau），不再单独出 <M>_intrinsic*.{png,csv}，
 #   只留 <M>_transport.png + 每温度 CSV + <M>_params_<T>K.csv。
@@ -2433,6 +2433,58 @@ def _tavg(t, is_2d):
     return v if v == v else None
 
 
+UNDOPED_NI_JSON = "undoped_ni.json"   # [0052] amset_fermi_fix 在 AMSET 运行目录写的本征点 n_i(T) 记录
+_NI_LOG_RE = None
+
+
+def undoped_ni(cwd, is_2d):
+    """[0052] 本征点的本征载流子浓度 n_i(T) 与 E_F(T)：{T: {"n_i_cm-3", "E_F_eV"}}, 来源说明。
+    transport.json 没有载流子浓度字段：先读 amset_fermi_fix 写的 undoped_ni.json；旧结果（[0052] 之前）
+    退回解析运行目录日志里的「[fermi_fix] 本征点 <T> K：E_F = … eV，n = p = … cm^-3」行（取最新的日志）。
+    n_i 是每胞体积口径（2D = 含真空的元胞）；都读不到 -> ({}, 原因)。"""
+    import re
+    global _NI_LOG_RE
+    run = Path(cwd) / (AMSET2D_DIR if is_2d else AMSET_DIR)
+    j = _load_json(run / UNDOPED_NI_JSON)
+    if j and j.get("temperatures_K"):
+        out = {}
+        for T, ef, ni in zip(j["temperatures_K"], j.get("E_F_eV") or [], j.get("n_i_cm-3") or []):
+            out[float(T)] = {"n_i_cm-3": _num(ni), "E_F_eV": _num(ef)}
+        if out:
+            return out, "%s/%s" % (run.name, UNDOPED_NI_JSON)
+    if _NI_LOG_RE is None:
+        _NI_LOG_RE = re.compile(r"\[fermi_fix\] 本征点 ([0-9.eE+-]+) K：E_F = ([0-9.eE+-]+) eV，"
+                                r"n = p = ([0-9.eE+-]+) cm\^-3")
+    logs = []
+    if run.is_dir():
+        for f in run.iterdir():
+            if f.is_file() and (f.suffix in (".out", ".log") or f.name.startswith("queue")):
+                try:
+                    logs.append((f.stat().st_mtime, f))
+                except OSError:
+                    pass
+    for _mt, f in sorted(logs, reverse=True):
+        try:
+            txt = f.read_text(encoding="utf-8", errors="ignore")
+        except OSError:
+            continue
+        out = {}
+        for m in _NI_LOG_RE.finditer(txt):
+            out[float(m.group(1))] = {"n_i_cm-3": float(m.group(3)), "E_F_eV": float(m.group(2))}
+        if out:
+            return out, "%s/%s（日志行）" % (run.name, f.name)
+    return {}, ("运行目录里没有 %s，日志里也没有 [fermi_fix] 本征点 行（本征点关了，或不是 amset_fermi_fix 跑的）"
+                % UNDOPED_NI_JSON)
+
+
+def _ni_lookup(ni, T):
+    """n_i 记录里与 T 最接近（差 < 0.5 K）的那条；没有 -> {}。"""
+    for k, v in ni.items():
+        if abs(k - float(T)) < 0.5:
+            return v
+    return {}
+
+
 def undoped_rows(cwd, is_2d):
     """[0044] 本征点（AMSET doping = 0，E_F 由 n = p 定）：从主 transport.json 取 0 掺杂行
     （[0040] 起掺杂网格含 0；[0044] 取消独立拆分脚本）。2D 会带全部可用数据集（overall / 去 IMP / 子集）。
@@ -2633,12 +2685,43 @@ def write_undoped_plots(cwd, plots, M, is_2d):
         for k in list(names) + [d[0] for d in data.get("set_defs", [])]:
             names[k] = _intr_legend(k, data, names.get(k, k))
     keys = list(dict.fromkeys(r["dataset"] for r in rows))
+    # [0052] 本征浓度 n_i(T)：transport.json 不带载流子浓度 -> 读 amset_fermi_fix 的记录；
+    #   第一栏单独画 n_i(T) 并在每个点标数值，CSV 每行带 n_i / E_F。2D 另给面密度与文献口径（× c/t）。
+    ni, ni_src = undoped_ni(cwd, is_2d)
+    geom = _geom_2d(cwd) if is_2d else None
+    for r in rows:
+        v = _ni_lookup(ni, r["T_K"])
+        r["n_i_cm-3"] = v.get("n_i_cm-3")
+        r["E_F_eV"] = v.get("E_F_eV")
+        if is_2d:
+            ok = geom and r["n_i_cm-3"] is not None
+            r["n_i_2D_cm-2"] = r["n_i_cm-3"] * geom["c_A"] * 1e-8 if ok else None
+            r["n_i_lit_cm-3"] = r["n_i_cm-3"] * geom["c_over_t"] if ok else None
+    if ni:
+        print("[..] 本征浓度 n_i(T) 读自 %s" % ni_src)
+    else:
+        print("[..] 本征浓度 n_i 无法标注：%s" % ni_src)
     panels = [("sigma_S/m", "sigma (S/m)" + (", per layer t" if is_2d else ""), True),
               ("S_uV/K", "S (uV/K)", False), ("PF_W/mK2", "PF (W/m/K$^2$)", True),
               ("kappa_e_W/mK", "kappa_e (W/m/K)" + (", per layer t" if is_2d else ""), True)]
+    ni_col = "n_i_lit_cm-3" if is_2d else "n_i_cm-3"
+    ni_pts = sorted({(r["T_K"], r[ni_col]) for r in rows if r.get(ni_col)})
+    if ni_pts:
+        panels.insert(0, (ni_col, ("n_i (cm$^{-3}$, per layer t)" if is_2d else "n_i = n = p (cm$^{-3}$)"), True))
     fig, axs = plt.subplots(1, len(panels), figsize=(4.2 * len(panels), 3.6), squeeze=False)
     for j, (col, ttl, logy) in enumerate(panels):
         a = axs[0][j]
+        if col == ni_col:
+            a.plot([p[0] for p in ni_pts], [p[1] for p in ni_pts], marker="o", ms=3, lw=1.3, color="k")
+            for x, y in ni_pts:
+                a.annotate("%.2g" % y, (x, y), textcoords="offset points", xytext=(0, 5),
+                           ha="center", fontsize=6.5)
+            a.set_title(ttl, fontsize=10)
+            a.set_xlabel("T (K)", fontsize=8)
+            a.grid(alpha=0.25, lw=0.4)
+            a.set_yscale("log")
+            a.margins(y=0.25)
+            continue
         for ci, key in enumerate(keys):
             pts = sorted((r["T_K"], r[col]) for r in rows if r["dataset"] == key and r[col] is not None
                          and (not logy or r[col] > 0))
@@ -2652,23 +2735,47 @@ def write_undoped_plots(cwd, plots, M, is_2d):
             a.set_yscale("log")
         else:
             a.axhline(0, color="k", lw=0.5)
-    h, l = axs[0][0].get_legend_handles_labels()
+    h, l = max((a.get_legend_handles_labels() for a in axs[0]), key=lambda hl: len(hl[0]))
     if h:
         fig.legend(h, l, loc="lower center", ncol=min(5, len(h)), fontsize=8, frameon=False)
-    fig.suptitle("%s  intrinsic carriers (undoped, E_F from n = p)  —  AMSET" % M, fontsize=11)
+    fig.suptitle("%s  intrinsic carriers (undoped, E_F from n = p = n_i)  —  AMSET%s"
+                 % (M, "" if ni_pts else "   [n_i not recorded: rerun S8 to get it]"), fontsize=11)
     fig.tight_layout(rect=[0, 0.1, 1, 0.92])
     fig.savefig(udir / ("%s_intrinsic_carrier.png" % M), dpi=130)
     plt.close(fig)
-    cols = ["T_K", "dataset", "sigma_S/m", "S_uV/K", "PF_W/mK2", "kappa_e_W/mK"]
+    cols = ["T_K", "n_i_cm-3"] + (["n_i_2D_cm-2", "n_i_lit_cm-3"] if is_2d else []) + [
+        "E_F_eV", "dataset", "sigma_S/m", "S_uV/K", "PF_W/mK2", "kappa_e_W/mK"]
     with open(udir / ("%s_intrinsic_carrier.csv" % M), "w", newline="") as fh:
         fh.write("# [0040] 本征载流子（AMSET doping = 0，E_F 由 n = p 定）；%s；|n-p|≈0 时 IMP 不起作用，全机制 ≈ 去掉 IMP 的那套\n"
                  % ("2D：sigma、kappa_e、PF 按层厚 t 归一（元胞值 × c/t）" if is_2d else "3D：张量对角平均"))
+        fh.write("# [0052] n_i = n = p（%s）：n_i_cm-3 为每胞体积口径%s；来源 %s\n"
+                 % ("本征浓度", "（含真空元胞）；n_i_2D_cm-2 = n_i × c，n_i_lit_cm-3 = n_i × c/t" if is_2d else "",
+                    ni_src if ni else "无（%s）" % ni_src))
         w = csv.writer(fh)
         w.writerow(cols)
         for r in rows:
-            w.writerow([("%.6g" % r[c]) if isinstance(r[c], float) else ("" if r[c] is None else r[c]) for c in cols])
+            w.writerow([("%.6g" % r[c]) if isinstance(r.get(c), float) else ("" if r.get(c) is None else r[c])
+                        for c in cols])
     print("[plots] %s/%s_intrinsic_carrier.png" % (UNDOPED_DIR, M))
     return True
+
+
+def _clear_dir(d):
+    """[0052] 清空目录内容（保留目录本身）；删不掉的只告警。"""
+    import shutil
+    n = 0
+    for f in list(Path(d).iterdir()) if Path(d).is_dir() else []:
+        try:
+            if f.is_dir() and not f.is_symlink():
+                shutil.rmtree(f)
+            else:
+                f.unlink()
+            n += 1
+        except OSError as e:
+            print("[WARN] 删旧产物 %s 失败：%s" % (f, e))
+    if n:
+        print("[plots] 已删除 %s/ 下上一轮的 %d 项旧结果" % (Path(d).name, n))
+    return n
 
 
 def write_transport_plots(cwd, out, is_2d):
@@ -2701,13 +2808,9 @@ def write_transport_plots(cwd, out, is_2d):
         plots.mkdir(exist_ok=True)
     M = cwd.parent.name
     NFLOOR = 5e17
-    # [0035] 清理旧格式（单文件长表）残留：现在按温度分文件，旧的 _transport_data.csv /
-    #   _intrinsic_data.csv 若还在，会被误当成新产物读。
-    for _old in (plots / ("%s_transport_data.csv" % M), plots / ("%s_intrinsic_data.csv" % M)):
-        try:
-            _old.unlink()
-        except OSError:
-            pass
+    # [0052] 先删旧结果：transport_plots/ 是 S8.3 独占的输出目录，每次整目录重建。以前只覆盖同名文件，
+    #   温度网格 / 数据集 / 子文件夹变了以后，上一轮的 <T>K.csv、旧格式长表、旧子目录会一直留着冒充当前结果。
+    _clear_dir(plots)
 
     def fnum(x):
         try:
@@ -2745,7 +2848,8 @@ def write_transport_plots(cwd, out, is_2d):
                 if j == 0:
                     ax.set_ylabel(rowlab[rr], fontsize=9, fontweight="bold")
                 if rr == nrow - 1:
-                    ax.set_xlabel(r"$n$ (cm$^{-3}$)", fontsize=7)
+                    ax.set_xlabel(r"doping $n$ (cm$^{-3}$):  n-type $\leftarrow$ | $\rightarrow$ p-type",
+                                  fontsize=7)
         return fig, axes
 
     # ---- 规定格式主图：从 S8.3 本征长表读（数据集最全）----
@@ -2822,16 +2926,22 @@ def write_transport_plots(cwd, out, is_2d):
                   for ds, c, ls, mk in dsets_used]
             fig.legend(handles=hh, loc="lower center", ncol=3, fontsize=9, frameon=False)
             fig.suptitle(title, fontsize=12)
-            fig.tight_layout(rect=[0, 0.03, 1, 0.985])
+            fig.tight_layout(rect=[0, 0.03, 1, 0.985 - 0.009 * title.count("\n")])
             fig.savefig(outpath, dpi=130)
             plt.close(fig)
 
+        _trng = "%g-%g K" % (temps[0], temps[-1]) if temps else ""
         _render_9x5(dsets,
-                    "%s  transport  (AMSET mechanisms from this run; BT2 x DPT tau)  100-900 K" % M,
+                    "%s  transport vs doping  (AMSET mechanisms from this run; BT2 x DPT tau)  %s" % (M, _trng),
                     plots / ("%s_transport.png" % M))
+        # [0052] 用户 2026-10-15 问「本征浓度横坐标不是定值吗」：这张图的 intrinsic 指【本征散射】（去掉 IMP
+        #   的散射机制组合），横轴仍是掺杂浓度扫描；本征【载流子浓度】（未掺杂，n = p = n_i）的图在
+        #   intrinsic_carrier/。标题与横轴名写明，免得两者混淆。
         _render_9x5(_base_dsets,
-                    "%s  intrinsic transport  (overall / intrinsic(no IMP) / ADP only / BT2xDPT-tau)"
-                    "  100-900 K" % M,
+                    "%s  transport vs doping, base 4 sets  (AMSET all mechanisms / AMSET without IMP"
+                    " = intrinsic scattering / ADP only / BT2xDPT-tau)  %s\n"
+                    "x = doping concentration; 'intrinsic' = intrinsic SCATTERING (no impurity), "
+                    "not intrinsic carrier concentration -> see intrinsic_carrier/" % (M, _trng),
                     plots / ("%s_intrinsic.png" % M))
         print("[plots] %s_transport.png (基础 4 条 + 机制对照) + %s_intrinsic.png (仅基础 4 条) / "
               "_transport|_intrinsic_data_<T>K.csv x%d" % (M, M, len(temps)))

@@ -305,6 +305,19 @@ step8.x 的 `_SKILL_REV` 写进 comparison_summary.txt。改脚本即提交 GitH
 
 > 结果文档（未发表，不进 git）：`/mnt/d/tf_data/jzz/jap/comparison_vs_literature.md`
 
+## [0052] 本征浓度 n_i 标注、`<M>_intrinsic.png` 的含义、先删旧结果（2026-10-15）
+
+- **`<M>_intrinsic.png` 横轴是掺杂浓度**：这里的 intrinsic 指**本征散射**（AMSET 去掉 IMP 的机制组合），
+  与 `<M>_transport.png` 一样是掺杂扫描；只画基础 4 条（全机制 / 去 IMP / ADP only / BT2×DPT-τ）。
+  图标题与横轴名已写明这一点。本征**载流子浓度**（未掺杂、n = p = n_i，随温度变）的图在 `intrinsic_carrier/`。
+- **n_i 的来源**：AMSET 的 transport.json 不带载流子浓度。`amset_fermi_fix` 解本征点时把
+  (T, E_F, n_i) 写进运行目录的 `undoped_ni.json`（只在有 settings.yaml 的 AMSET 运行目录写）；
+  旧结果退回解析 `queue.out` 里的 `[fermi_fix] 本征点 <T> K：E_F = … eV，n = p = … cm^-3` 行。
+  `intrinsic_carrier/<M>_intrinsic_carrier.png` 第一栏画 n_i(T) 并逐点标数值，CSV 每行带 `n_i_cm-3`、`E_F_eV`
+  （2D 另有 `n_i_2D_cm-2 = n_i × c`、`n_i_lit_cm-3 = n_i × c/t`）。两处都没有时图标题注明"重跑 S8 后可得"。
+- **先删旧结果**：`transport_plots/` 是 S8.3 独占的输出目录，每次 S8.3 先清空再重建；本地回拉
+  （fetch_extra / fetch_all 整目录）按镜像处理，远端已不存在的旧文件本地也删除（清单 `.tf_fetched_manifest.json`）。
+
 ## [0040] 本征载流子点（UNDOPED_POINT）与"intrinsic"命名
 
 - **命名**：S8.3 的图例与 `datasets/` 文件名一律用**实际散射机制组合** `amset_<机制+机制>`（如 `amset_ADP+POP+ODP`、
