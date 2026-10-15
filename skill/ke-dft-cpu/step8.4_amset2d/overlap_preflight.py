@@ -557,8 +557,9 @@ def run(cwd, out_dir=None, unity_overlap=False, desym_fix=None):
             _need_full3, _why3 = _structure_verdict(cwd, desym_fix=desym_fix)
             lines.append("     判据：%s -> %s" % (_why3, "需要全网格" if _need_full3 else "IBZ 即可"))
             lines.append("     [WARN] 3D + 真实重叠 + 非完整网格 -> AMSET 会对系数去对称化，"
-                         "二维实测 ADP 被抬高 10~30 倍（V23）；三维 Si 全网格对照（V26）："
-                         "ADP/overall 只差 3~9%%、IMP 逐机制高 1.3~1.7 倍 -> 结论值可用，逐机制值需注明。"
+                         "二维实测 ADP 被抬高 10~30 倍（V23）；三维 Si 全网格对照（V26/0.5.1 复跑）："
+                         "ADP 0.92~1.01、overall 0.92~1.06（重掺档 ±6%% 内），IMP 逐机制 0.76~1.07"
+                         "双向噪声不可靠 -> 结论值可用，逐机制值需注明。"
                          "当前 BLOCK_3D_REAL_OVERLAP=%s -> 只告警不拦。"
                          % BLOCK_3D_REAL_OVERLAP)
             lines.append("     ★ 2026-09-19 补充（VERIFICATION V33）：MoS2 二维偏差的**主因**已定位到"

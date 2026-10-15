@@ -405,7 +405,8 @@ S8.3 出 `tau/`：`tau_comparison.csv`（各温度、各掺杂档的 τ_eff 逐�
           gen 会在 settings 里写 `AZ_OVERLAP_CONTROLLED=1`，此时降为**告警放行**（结果只作对照、不作生产）。
        ① AMSET 版本 + 重叠模式；
        ② h5 完整性：k 点数 == 网格乘积（= `from_data`、不去对称化）；真实重叠 + 非完整网格：
-          **2D 拦截 / 3D 告警**（Si 全网格对照已完成：ADP/overall 只差 3~9%、IMP 逐机制 1.3~1.7x，见 VERIFICATION V26）；
+          **2D 拦截 / 3D 告警**（Si 全网格对照：ADP 0.92~1.01、overall 0.92~1.06（重掺档 ±6% 内），
+          IMP 逐机制 0.76~1.07 双向噪声不可靠 —— 2026-10-15 用 AMSET **0.5.1** 复跑更正，见 VERIFICATION §六）；
        ③ S3 vs S3b：NBANDS + 本征值一致性（<1 meV，窗口取运行日志实际值）；
        ④ `amset wave` 带窗口必须等于 AMSET 实际插值的窗口；
        ⑤ 弹性张量：**面内** Christoffel 特征值比 `<=0` 或 `<1e-2` -> **拦截**（多为 VASP 顺序未重排、C44/C66 互换）；
