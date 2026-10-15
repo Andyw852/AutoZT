@@ -191,3 +191,35 @@ def test_magnetic_mismatch_pure(of):
     assert of.magnetic_mismatch(ref, {"total": [2.0], "sites": [3.0, 3.0]})            # 总磁矩跳变
     assert of.magnetic_mismatch(ref, {"total": [6.0], "sites": [4.0, 2.0]})            # 总量不变、原子间转移
     assert of.magnetic_mismatch(ref, {"total": [6.0], "sites": None}) == []            # 缺 OUTCAR 表：只比总量
+
+
+# --------------------------------------------------------------------------- [kz=1-r3] auto 保护已算/在算的材料
+@pytest.mark.parametrize("evidence", ["OUTCAR", "OSZICAR"])          # 算完 / 还在跑
+def test_s72_auto_keeps_grid_of_computed_points(mat, monkeypatch, capsys, evidence):
+    _set_s7_kpoints(mat, "auto\n0\nGamma\n 12 12 3\n")
+    out, _ = _gen(mat, monkeypatch, "[params]\nODP_KZ_VACUUM = keep\n")   # 模拟 kz=1 代码之前生成的材料
+    done = out / "odp-m04p" / evidence
+    done.write_text("General timing and accounting informations\n")
+    out, man = _gen(mat, monkeypatch)                                       # 默认 auto 重新生成
+    for d in out.glob("odp-*"):
+        assert (d / "KPOINTS").read_text().splitlines()[3].split() == ["12", "12", "3"]
+    assert done.is_file() and not list(out.glob("odp-m04p/*stale*"))      # 没被归档
+    kv = man["kz_vacuum"]
+    assert kv["requested"] == "auto" and kv["mode"] == "keep" and "odp-m04p" in kv["why"]
+    assert man["kz_vacuum_reduced"] is False
+    assert "ODP_KZ_VACUUM=auto -> keep" in capsys.readouterr().out
+    _reader(mat).check_inputs(mat, man)                                     # 与 S7 逐字一致，照常通过
+
+
+def test_s72_auto_reduces_fresh_and_explicit_reduce_overrides(mat, monkeypatch):
+    _set_s7_kpoints(mat, "auto\n0\nGamma\n 12 12 3\n")
+    out, man = _gen(mat, monkeypatch)                                       # 新材料：auto -> reduce
+    assert man["kz_vacuum"]["requested"] == "auto" and man["kz_vacuum"]["mode"] == "reduce"
+    assert man["kz_vacuum_reduced"] is True
+    # 已有 kz=3 的算过的点，但显式写 reduce：照样降（代价是该点会重算）
+    _gen(mat, monkeypatch, "[params]\nODP_KZ_VACUUM = keep\n")
+    (out / "odp-ref" / "OUTCAR").write_text("General timing and accounting informations\n")
+    out, man = _gen(mat, monkeypatch, "[params]\nODP_KZ_VACUUM = reduce\n")
+    assert (out / "odp-ref" / "KPOINTS").read_text().splitlines()[3].split() == ["12", "12", "1"]
+    assert man["kz_vacuum"]["requested"] == "reduce" and man["kz_vacuum_reduced"] is True
+    assert not (out / "odp-ref" / "OUTCAR").is_file()                      # 输入变了：旧产物被归档
