@@ -105,9 +105,31 @@ def test_quasi_continuous():
         check("显式列表不受影响", c_exp == [3.0, 6.0], str(c_exp))
     fx = ROOT / "tests" / "fixtures" / "mn2in2se5" / "POSCAR"
     cands, sh, note = kc.cut3_candidates(fx, r_max=7.0, tol=0.05)
-    check("真实晶体（Mn2In2Se5）仍取壳层中点",
+    check("真实晶体（Mn2In2Se5）不判准连续",
           kc.QUASI_TAG not in note and cands != list(kc.QUASI_GRID) and len(cands) >= 3,
           str(cands))
+
+
+def test_nth_neighbor_candidates():
+    print("[1c] auto 候选 = thirdorder.py -n 第 N 近邻截断（N≥2）")
+    import bisect
+    si = ROOT / "test" / "tf_test" / "Si" / "POSCAR"
+    cands, _, _ = kc.cut3_candidates(si, r_max=7.0, tol=0.05)
+    check("Si：N=2..6 = 4.17/4.97/5.67/6.28/6.85",
+          cands == [4.17, 4.97, 5.67, 6.28, 6.85], str(cands))
+    fx = ROOT / "tests" / "fixtures" / "mn2in2se5" / "POSCAR"
+    cands, _, note = kc.cut3_candidates(fx, r_max=7.0, tol=0.05)
+    lat, frac = kc.read_poscar_cell_frac(fx)
+    per_atom = kc._per_atom_shells(lat, frac, 10.0, kc.NN_TOL)
+    exact = [max(0.5 * (u[n - 1] + u[n]) for u in per_atom) for n in range(2, 12)]
+    exact = [c for c in exact if c <= 7.0]
+    check("Mn2In2Se5：每个 N≥2 都有一档（近简并只提示不剔除）",
+          len(cands) == len(exact), str((cands, exact)))
+    pair_ds = sorted(d for u in per_atom for d in u)
+    same = all(bisect.bisect_left(pair_ds, c) == bisect.bisect_left(pair_ds, e)
+               for c, e in zip(cands, exact))
+    check("2 位小数截断与精确 -n 值包含同一组原子对", same, str((cands, exact)))
+    check("近简并档在 note 里提示", "N=2:3.88" in note, note)
 
 
 def test_resolve():
@@ -205,6 +227,7 @@ def test_fc3_stability():
 def main():
     test_shells_and_candidates()
     test_quasi_continuous()
+    test_nth_neighbor_candidates()
     test_resolve()
     test_select()
     test_err_gate()

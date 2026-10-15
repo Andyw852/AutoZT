@@ -364,6 +364,51 @@ def _min_image_shifts(cell, r_max):
 QUASI_SPAN = 0.5
 QUASI_GRID = (3.0, 3.5, 4.0, 4.5, 5.0, 5.5, 6.0)
 QUASI_TAG = "[quasi-continuous]"
+# Ordinary crystals: the auto candidates are the ShengBTE thirdorder.py -n
+# N-th neighbour cutoffs (2026-10-15), see nth_neighbor_cutoffs.  NN_PAD is the
+# extra enumeration radius beyond CUT3_MAX so the last u_{N+1} is listed.
+NN_TOL = 1e-4
+NN_PAD = 3.0
+
+
+def _per_atom_shells(lat, frac, r_max, tol):
+    """Per atom, the distinct neighbour distances u_1 < u_2 < ... below r_max
+    (distances within tol are one shell)."""
+    natom = len(frac)
+    cart_of = [[sum(f[k] * lat[k][m] for k in range(3)) for m in range(3)]
+               for f in frac]
+    shifts = _min_image_shifts(lat, r_max)
+    tvec = [[sum(s[k] * lat[k][m] for k in range(3)) for m in range(3)]
+            for s in shifts]
+    per_atom = []
+    for i in range(natom):
+        ds = []
+        for j in range(natom):
+            for t in tvec:
+                d = math.sqrt(sum((cart_of[j][m] + t[m] - cart_of[i][m]) ** 2
+                                  for m in range(3)))
+                if 1e-6 < d < r_max:
+                    ds.append(d)
+        ds.sort()
+        u = []
+        for d in ds:
+            if not u or d - u[-1] > tol:
+                u.append(d)
+        per_atom.append(u)
+    return per_atom
+
+
+def _snap_cut(c, pair_ds):
+    """Round a -n cutoff to 2 decimals (dir name cut3_<%.2f>) without crossing
+    a pair distance: round / floor / ceil are tried in turn and the first that
+    keeps the same set of pairs as the exact value wins; None when the
+    neighbouring distances are < 0.01 A apart."""
+    import bisect
+    lo = bisect.bisect_left(pair_ds, c)
+    for x in (round(c, 2), math.floor(c * 100) / 100.0, math.ceil(c * 100) / 100.0):
+        if bisect.bisect_left(pair_ds, x) == lo and (lo == len(pair_ds) or pair_ds[lo] != x):
+            return round(x, 2)
+    return None
 
 
 def _shell_groups(poscar, r_max=7.0, tol=0.05, max_atoms=600):
@@ -418,14 +463,18 @@ def neighbor_shells(poscar, r_max=7.0, tol=0.05, max_atoms=600):
 
 def cut3_candidates(poscar, r_max=7.0, tol=0.05, min_shells=2, min_gap=0.05,
                     max_candidates=12):
-    """Candidate third-order cutoffs = midpoints between adjacent shells.
+    """Candidate third-order cutoffs = the thirdorder.py -n N-th neighbour
+    cutoffs for N = min_shells ... up to r_max.
 
-    min_shells=2 skips the midpoint that only contains the nearest shell;
-    a gap < min_gap is skipped so the cutoff never lands in a split shell.
-    A quasi-continuous spectrum (a shell wider than QUASI_SPAN) has no
-    meaningful midpoints: the candidates become QUASI_GRID and the note carries
-    QUASI_TAG.
-    Returns (candidates, shells, note).
+    min_shells=2 starts at the 2nd neighbours.  Cutoffs are kept to 2 decimals
+    with the same pair set as the exact -n value (_snap_cut); one within
+    min_gap/2 of a pair distance is kept and only flagged in the note (nearly
+    degenerate, a small distortion crosses it).  A quasi-continuous spectrum (a tol-clustered shell wider than
+    QUASI_SPAN) has no meaningful N either: the candidates become QUASI_GRID
+    and the note carries QUASI_TAG.  The caller drops candidates beyond the
+    supercell safe cutoff.
+    Returns (candidates, shells, note); shells are still the tol-clustered
+    shell means (used to label the kappa-vs-cutoff figure).
     """
     groups, natom = _shell_groups(poscar, r_max=r_max, tol=tol)
     shells = [round(sum(s) / len(s), 4) for s in groups]
@@ -440,17 +489,32 @@ def cut3_candidates(poscar, r_max=7.0, tol=0.05, min_shells=2, min_gap=0.05,
                     len(wide), cands))
         print("[WARN] " + note)
         return cands, shells, note
-    cands = []
-    for k in range(int(min_shells), len(shells)):
-        a, b = shells[k - 1], shells[k]
-        if (b - a) < float(min_gap):
+    lat, frac = read_poscar_cell_frac(poscar)
+    per_atom = _per_atom_shells(lat, frac, float(r_max) + NN_PAD, NN_TOL)
+    nmax = min(len(u) for u in per_atom) - 1 if per_atom else 0
+    pair_ds = sorted(d for u in per_atom for d in u)
+    cands, tags, near, lost = [], [], [], []
+    for n in range(max(1, int(min_shells)), nmax + 1):
+        c_exact = max(0.5 * (u[n - 1] + u[n]) for u in per_atom)
+        if c_exact > float(r_max):
+            break
+        c = _snap_cut(c_exact, pair_ds)
+        if c is None:
+            lost.append("N=%d:%.4f" % (n, c_exact))
             continue
-        c = round((a + b) / 2.0, 2)
-        if not cands or abs(c - cands[-1]) > 1e-9:
+        if any(abs(c - d) < 0.5 * float(min_gap) for d in pair_ds):
+            near.append("N=%d:%.2f" % (n, c))
+        if not cands or c > cands[-1] + 1e-9:
             cands.append(c)
-    note = "shells %s (%d, nearest %.2f A) -> candidates %s" % (
-        ["%.2f" % x for x in shells], len(shells),
-        (shells[0] if shells else float("nan")), cands)
+            tags.append("N=%d:%.2f" % (n, c))
+    note = "thirdorder -n N-th neighbour cutoffs (N>=%d, <= %.2f A): %s" % (
+        int(min_shells), float(r_max), " ".join(tags) or "none")
+    if near:
+        note += "; note: %s within %.3f A of a pair distance (nearly degenerate)" % (
+            " ".join(near), 0.5 * float(min_gap))
+    if lost:
+        note += "; %s: pair distances < 0.01 A apart, not representable with 2 " \
+                "decimals, skipped" % " ".join(lost)
     if len(cands) > int(max_candidates):
         note += "; %d candidates > %d, keeping the %d smallest" % (
             len(cands), int(max_candidates), int(max_candidates))
@@ -511,31 +575,10 @@ def nth_neighbor_cutoffs(poscar, nmax, tol=1e-4, max_atoms=600):
     nmax = int(nmax)
     if nmax < 1:
         raise ValueError("nmax must be >= 1")
-    cart_of = [[sum(f[k] * lat[k][m] for k in range(3)) for m in range(3)]
-               for f in frac]
     r_max = 6.0
     while True:
-        shifts = _min_image_shifts(lat, r_max)
-        tvec = [[sum(s[k] * lat[k][m] for k in range(3)) for m in range(3)]
-                for s in shifts]
-        per_atom, short = [], False
-        for i in range(natom):
-            ds = []
-            for j in range(natom):
-                for t in tvec:
-                    d = math.sqrt(sum((cart_of[j][m] + t[m] - cart_of[i][m]) ** 2
-                                      for m in range(3)))
-                    if 1e-6 < d < r_max:
-                        ds.append(d)
-            ds.sort()
-            u = []
-            for d in ds:
-                if not u or d - u[-1] > tol:
-                    u.append(d)
-            if len(u) < nmax + 1:
-                short = True
-            per_atom.append(u[:nmax + 1])
-        if not short:
+        per_atom = [u[:nmax + 1] for u in _per_atom_shells(lat, frac, r_max, tol)]
+        if all(len(u) >= nmax + 1 for u in per_atom):
             break
         if r_max > 40.0:
             raise RuntimeError("could not find %d neighbour shells within %.0f A"

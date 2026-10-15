@@ -528,12 +528,10 @@ writing `kappa_summary.json`:
   dashed in every panel; no axis zooms below 10 % of its values, so a tiny
   wiggle never looks like a trend.  Written also when no cutoff is usable, which is when the curve is
   most needed.  The points are at the converged q-mesh, i.e. the same mesh as the reported kappa.
-* **Candidate spacing**: the candidates are the midpoints between *adjacent*
-  neighbour shells of the structure (all atom pairs, shells closer than 0.05 A
-  merged), so each step adds exactly one shell; a wide gap between two
-  candidates means a wide gap between two shells of that structure (MoS2
-  monolayer: 5.44 A = sqrt(3) a, 6.28 A = 2a -> candidates 5.86 / 6.50 A), not a
-  skipped shell.
+* **Candidate spacing**: the candidates are the `thirdorder.py -n` N-th
+  neighbour cutoffs (N = 2, 3, ...), so each step adds the next neighbour shell
+  of the atom that reaches furthest; a wide gap between two candidates means a
+  wide gap between two shells of that structure, not a skipped N.
 * **Cutoff cap**: fc3 can only be trusted up to half the supercell's smallest
   periodic width (5.27 A for the 3x3x3 / 189-atom cell).  Candidates beyond it
   are dropped.  To sweep larger cutoffs, regenerate the dataset with a larger
@@ -708,26 +706,30 @@ available and the driver acts on it (see the pheasy section).
 
 Ported from `kl-dft-cpu` S4/S5 (2026-09-24 user 流程). Setting the fc3 cutoff by
 hand is guesswork; instead the skill enumerates the neighbour shells of the unit
-cell and takes the **midpoints between adjacent shells** as candidate cutoffs
-(never on a shell distance), then lets the fit decide how far the data can
-actually determine the fc3.
+cell and takes the **ShengBTE `thirdorder.py -n` N-th neighbour cutoffs** as
+candidates (2026-10-15; the same definition as `SWEEP_C3_SHELLS`: per atom the
+distinct neighbour distances `u_1 < u_2 < ...` within 1e-4 A, `cutoff(N) = max
+over atoms of (u_N + u_{N+1}) / 2`, N from `CUT3_MIN_SHELLS` = 2 up to
+`CUT3_MAX`), then lets the fit decide how far the data can actually determine
+the fc3.  A cutoff is kept to 2 decimals with the same pair set as the exact
+value; one within `CUT3_MIN_GAP`/2 of a pair distance is only flagged as nearly
+degenerate.
 
 * The gen always enumerates the shells and stores the candidates in
   `fit_config.json` (it prints them). Candidates beyond the supercell safe
   cutoff (`0.5 x` the shortest cell height, minus 0.1 A) are dropped with a
-  `[WARN]` - a larger cutoff makes periodic images double-count.
+  `[WARN]` - a larger cutoff makes periodic images double-count.  No extra
+  "safe cap" candidate is added (it is no N).
 * `CUT3_CANDIDATES = auto | off | "3.6 4.2 4.8 ..."` chooses them;
   `CUT3_MAX`, `CUT3_MIN_SHELLS`, `CUT3_GAP_TOL`, `CUT3_MIN_GAP` tune the
   enumeration (see `fc_common.neighbor_shells` / `cut3_candidates`).
 * **Quasi-continuous distance spectrum** (low symmetry, large cells, e.g. a
   128-atom fullerene network with pair distances 1.37 -> 7 A and no shell gap):
-  the 0.05 A chaining merges several A into one "shell" and its midpoints are
-  meaningless.  A shell wider than 0.5 A (`QUASI_SPAN`) prints `[WARN]
+  the 0.05 A chaining merges several A into one "shell" and the N-th neighbour
+  count means nothing (N = 12 is only 3.4 A).  A shell wider than 0.5 A (`QUASI_SPAN`) prints `[WARN]
   [quasi-continuous]` and `auto` uses the explicit radius grid `3.0 3.5 4.0 4.5
-  5.0 5.5 6.0` (`QUASI_GRID`, capped by `CUT3_MAX`; no safe-cutoff top-up) for
-  the kappa plateau to pick.  The `thirdorder.py -n` N-th neighbour count
-  (`SWEEP_C3_SHELLS`) has no physical meaning there either; for another grid
-  set `CUT3_CANDIDATES` explicitly.
+  5.0 5.5 6.0` (`QUASI_GRID`, capped by `CUT3_MAX`) for the kappa plateau to
+  pick; for another grid set `CUT3_CANDIDATES` explicitly.
 * `CUT3_SCAN = off` by default. Set it to `auto`/`on` to run the determination:
 
   * **pheasy** (the full port): every candidate is refitted (`-s -c -d -f`) and
