@@ -305,6 +305,28 @@ step8.x 的 `_SKILL_REV` 写进 comparison_summary.txt。改脚本即提交 GitH
 
 > 结果文档（未发表，不进 git）：`/mnt/d/tf_data/jzz/jap/comparison_vs_literature.md`
 
+## [0055] 低浓度段 DOPING_LOW（2026-10-16 用户要求）
+
+- **为什么**：出厂掺杂网格 3D 1e17–1e21 cm⁻³、2D 1e11–1e14 cm⁻²，和本征点（n = p）之间空着好几个十年；
+  电声文献算 phonon-limited 迁移率用的正是低浓度、非简并、单载流子口径（固定低浓度，μ 只积一种能带——AMSET 的
+  `_calculate_mobility` 按掺杂符号只积导带/价带，本来就是分开的；σ、S、κe 对全部能带积分，含双极）。
+- **出厂值**：3D `DOPING_LOW = "-1e16:-1e10:4, 1e10:1e16:4"`（cm⁻³，n/p 各 1e10、1e12、1e14、1e16）；
+  2D `"-1e9:-1e3:4, 1e3:1e9:4"`（cm⁻²，n_2D ≈ n_3D × t、t ≈ 1 nm 取整；文献口径 n_lit = n_2D/t，MoS₂ t≈0.67 nm
+  即 1.5e10–1.5e16 cm⁻³）。掺杂点 11 → 19，AMSET 计算量约 ×1.7。step.conf `DOPING_LOW = off` 关，或写自己的范围串。
+  3D 的 S8 以前 step.conf 不能改 DOPING，DOPING_LOW 两边都能改。
+- **E_F 必须换解法**：AMSET `FermiDos.get_doping` = (nelect − Σ f·DOS·dE)/V，`hole_conc` = (nelect − Σ_VB)/V，
+  都是两个 ≈ nelect 的数相减。3D 1e10 cm⁻³ 每胞只有 ~4e-13 个载流子，理想合成 DOS 上相减式误差已 ~0.5%（逼近 1% 护栏），
+  真实 DOS 的 nelect 归一误差只会更大。`amset_fermi_fix.small_doping_fermi`：每胞 |d|·V < `SMALL_DOPING_PER_CELL`
+  （1e-7）时改解 ln n − ln(p + d) = 0（n 型）/ ln(n + d) − ln p = 0（p 型），n、p 分开 log-sum-exp，并把 n、p 直接填进
+  electron_conc / hole_conc（迁移率分母）。合成抛物带验证：每胞 4e-13、窄带隙 900 K（n_i/|d| ~ 1e8）下 (p−n)/d 误差 ≤ 4e-8，
+  E_F 与 Boltzmann 解析式差 ~1e-6 eV。出厂网格最小点每胞 ≥ ~1e-6，不进这条分支，结果逐位不变。
+- **出图**：S8.3 浓度轴（`_doping_axis`）跟着 AMSET 实际掺杂网格：最小非零 |n| ≥ 1e17（元胞口径）时与旧版逐字相同
+  （原点 1e17、下限 5e17、±4 十年）；有低浓度段时原点下探到最小点所在十年，全部 AMSET 点都画，每 2 个十年一个刻度，
+  S 纵轴 ±1000 → ±2500 μV/K。`tools/make_transport_plots.py` 同算法。mechanism-resolved 图的电子主值、μ(T) 表、τ 对比
+  都取 |掺杂| 最低的一档，有低浓度段后自动用到 1e10 cm⁻³ / 1e3 cm⁻² 这一档（更接近文献 f ≈ 0）。
+- **低浓度下的 IMP**：N_ii = |n − p| 很小，IMP 率可能低于 AMSET 插值的"非零"阈值 1e6 s⁻¹，按 [0043] 的死片规则处理（≈ 无 IMP），
+  物理上也可忽略。
+
 ## [0054] 命名与电声文献统一（2026-10-16 用户定）
 
 规则：**"intrinsic" 只指本征载流子**（未掺杂，n = p = n_i，教科书 intrinsic carrier concentration）；散射一律按

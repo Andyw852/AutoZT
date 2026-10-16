@@ -58,6 +58,12 @@ ENV_NAME = "AZ_FERMI_FIX"
 _OFF = ("0", "false", "off", "no")
 HA_EV = 27.211386245988
 MAX_REL_ERR = 0.01          # 与 postprocess_intrinsic.check_achieved_doping 的 1% 口径一致
+# [0055] 小掺杂（每胞净载流子 |d|·V < 1e-7）：AMSET 的 get_doping = (nelect − Σ f·DOS·dE)/V、hole_conc = (nelect − Σ_VB)/V
+#   都是两个 ≈ nelect 的数相减，|d|·V 接近 nelect·1e-16 时 E_F 与空穴浓度都失真（3D 1e10 cm^-3 ≈ 每胞 4e-13）。
+#   低于这个阈值改走 small_doping_fermi（n、p 分开 log-sum-exp）。出厂网格最小点（3D 1e17、2D 1e11 cm^-2）
+#   每胞 ≥ ~1e-6，不受影响、结果逐位不变。
+SMALL_DOPING_PER_CELL = 1e-7
+KB_AU = 3.166811563455e-06  # Ha/K（= amset.constants.boltzmann_au；单测在没装 amset 时用）
 MARK = "_az_fermi_fix"
 STATE = {"applied": False, "fallbacks": [], "refused": []}
 
@@ -65,6 +71,14 @@ STATE = {"applied": False, "fallbacks": [], "refused": []}
 def enabled():
     """未设 = 开；只有显式 0/false/off/no 才关。"""
     return os.environ.get(ENV_NAME, "").strip().lower() not in _OFF
+
+
+def _kb_au():
+    try:
+        from amset.constants import boltzmann_au
+        return float(boltzmann_au)
+    except Exception:                                              # noqa: BLE001
+        return KB_AU
 
 
 def solve_fermi(dos, concentration, temperature, pad_ev=1.0, xtol_ha=1e-13):
@@ -108,9 +122,8 @@ def band_gap_edges(dos, rel_thr=1e-10, min_gap_ev=0.01):
 
 def log_carriers(dos, ef, temperature):
     """(ln n, ln p)：每胞导带电子数 / 价带空穴数的自然对数（log-sum-exp，不相消、不下溢）。"""
-    from amset.constants import boltzmann_au
     E, g, ef0 = _dos_arrays(dos)
-    kt = float(temperature) * boltzmann_au
+    kt = float(temperature) * _kb_au()
     pos = g > 0
     cb, vb = pos & (E > ef0), pos & (E <= ef0)
 
@@ -138,6 +151,36 @@ def intrinsic_fermi(dos, temperature, xtol_ha=1e-12):
     if not (h(lo) < 0 < h(hi)):
         return None
     return float(brentq(h, lo, hi, xtol=xtol_ha, maxiter=500))
+
+
+def small_doping_fermi(dos, concentration, temperature):
+    """[0055] 小掺杂的 E_F：解 n − p = |d|（n 型，concentration < 0）或 p − n = d（p 型），d = |concentration|·V
+    为每胞净载流子数。n、p 由 log_carriers 分开算（log-sum-exp），不经 nelect − Σ 的相减。
+    写成 ln n − ln(p + d) = 0 / ln(n + d) − ln p = 0，两者都随 E_F 单调增，区间 [VBM, CBM]。
+    返回 (E_F[Ha], n, p)，n、p 为 1/bohr³（与 AMSET electron_conc / hole_conc 同单位）；无带隙 / 不变号 -> None。"""
+    import math
+    from scipy.optimize import brentq
+    edges = band_gap_edges(dos)
+    if edges is None or not temperature > 0 or concentration == 0:
+        return None
+    vol = float(dos.structure.volume)
+    ln_d = math.log(abs(float(concentration)) * vol)
+
+    def h(e):
+        ln_n, ln_p = log_carriers(dos, e, temperature)
+        if concentration < 0:
+            return ln_n - np.logaddexp(ln_p, ln_d)
+        return np.logaddexp(ln_n, ln_d) - ln_p
+
+    lo, hi = edges
+    with np.errstate(over="ignore", invalid="ignore"):
+        hlo, hhi = h(lo), h(hi)
+        if not (np.isfinite(hlo) and np.isfinite(hhi)) or hlo * hhi > 0:
+            return None
+        # rtol 取到双精度极限：n_i ≫ |d|（窄带隙高温）时 n − p 要在 E_F 上分辨 ~kT·d/n_i
+        ef = float(brentq(h, lo, hi, xtol=1e-16, rtol=4 * np.finfo(float).eps, maxiter=500))
+    ln_n, ln_p = log_carriers(dos, ef, temperature)
+    return ef, math.exp(ln_n) / vol, math.exp(ln_p) / vol
 
 
 def rel_error(dos, ef, concentration, temperature):
@@ -179,6 +222,22 @@ def _wrap(orig, sig):
         ba.apply_defaults()
         tol = float(ba.arguments["tol"])
         want_eh = bool(ba.arguments["return_electron_hole_conc"])
+        if (enabled() and concentration != 0 and np.isfinite(self.efermi)
+                and abs(float(concentration)) * float(self.structure.volume) < SMALL_DOPING_PER_CELL):
+            try:                                                   # [0055] 小掺杂：不走 nelect − Σ 的相减
+                res = small_doping_fermi(self, concentration, temperature)
+            except Exception:                                      # noqa: BLE001
+                res = None
+            if res is not None:
+                ef, ne, nh = res
+                key = float(concentration)
+                if key not in {x["conc"] for x in STATE.setdefault("small", [])} and not _quiet():
+                    print("[fermi_fix] 小掺杂 %.3e cm^-3（每胞 %.1e < %g）：n、p 分开 log-sum-exp 解 E_F"
+                          "（%g K：E_F = %.4f eV，n = %.3e，p = %.3e cm^-3）"
+                          % (_to_cm3(concentration), abs(key) * float(self.structure.volume),
+                             SMALL_DOPING_PER_CELL, temperature, ef * HA_EV, _to_cm3(ne), _to_cm3(nh)), flush=True)
+                STATE["small"].append({"conc": key, "T": float(temperature), "ef_ha": ef})
+                return (ef, ne, nh) if want_eh else ef
         try:
             out = orig(self, concentration, temperature, *args, **kwargs)
         except ValueError:

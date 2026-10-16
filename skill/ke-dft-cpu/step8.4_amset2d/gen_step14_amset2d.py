@@ -32,7 +32,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 # [SKILL_REV] 版本戳：写进 settings.yaml 头，便于从结果反查跑的是哪份 skill 副本。
-_SKILL_REV = "2026-10-15-0051-socdesym"   # [0051] amset_desym_fix 修 SOC 分支（四元数 SU(2) + iσ_y·K，V200）；README 过期重叠口径标注取代   # 2026-10-15-0050-r1-subsets   # [0050-r1] 出厂 SUBSETS 带 IVS（开谷间时本征曲线不缺、多一套去 IVS 对照）   # 2026-10-14-0050-ivsfrozen   # [0050] 冻声子谷间 IVS 参数（IVS_FROZEN，K↔K′ 零阶、非 SOC）   # 2026-10-13-0044-reprotol   # [0044] 复现检查改相对容差（单机制 μ 在零前因子处 ~1e47）；POSTPROCESS_ONLY 不再要求 transport.json；取消本征点独立拆分脚本、回到主掺杂网格 doping=0（[0043] amset_fermi_fix 已修好 SVD）   # 2026-10-13-0043-intrsvd   # [0043] 本征点 + IMP 的 SVD 不收敛（amset_fermi_fix：n=p 严格相等 + 散射率插值死片保护）   # 2026-10-13-0041-defectdop   # [0041] DEFECT_DOPING 缺陷平衡载流子浓度进掺杂网格   # 2026-10-13-0040-undoped   # [0040] UNDOPED_POINT 本征点（doping=0）   # 2026-10-12-0038-subsets   # [0038] SUBSETS 散射机制子集（subset_<机制>.json）   # [0035-r3] 复审：not_in_scattering 只认显式排除、D 全低于阈值仍建记录、面外极性；[0035-r2] 冻声子优先、手填谷内只作对照；[0035-r1] 复审：交叉拒绝、并星平均、τ 挪到 transport.json 之后；[0035] 冻声子 ODP 参数（ODP_FROZEN）+ τ(E)（tau_energy.py）   # [0034-r3] 二审：重复星按 S8.2 k_grid 合并；显式 SCATTERING+掩码的日志   # [0034-r2] 复审：同中心谷合并、显式 SCATTERING 照办、PIE 与 settings 一致   # [0034] OVERALL_WITHOUT（出厂 ODP）-> overall_noODP.json   # [0033] ODP/谷间散射（常数形变势，step.conf DP_OPTICAL_E/H）+ ADP 谷内掩码   # [0032-r2] 复审：链首清旧本征产物与 mesh；SCATTERING 无 ADP 不出只 ADP   # [0032] WRITE_MESH/INTRINSIC_ADP_ONLY 2D 默认开（旧：2026-09-28-desym-fix V115）
+_SKILL_REV = "2026-10-16-0055-dopinglow"   # [0055] DOPING_LOW 低浓度段 1e3–1e9 cm^-2（≈3D 1e10–1e16；amset_fermi_fix 小掺杂 log-sum-exp 解 E_F）；[0054] undoped_ni 记带边   # 2026-10-15-0051-socdesym   # [0051] amset_desym_fix 修 SOC 分支（四元数 SU(2) + iσ_y·K，V200）；README 过期重叠口径标注取代   # 2026-10-15-0050-r1-subsets   # [0050-r1] 出厂 SUBSETS 带 IVS（开谷间时本征曲线不缺、多一套去 IVS 对照）   # 2026-10-14-0050-ivsfrozen   # [0050] 冻声子谷间 IVS 参数（IVS_FROZEN，K↔K′ 零阶、非 SOC）   # 2026-10-13-0044-reprotol   # [0044] 复现检查改相对容差（单机制 μ 在零前因子处 ~1e47）；POSTPROCESS_ONLY 不再要求 transport.json；取消本征点独立拆分脚本、回到主掺杂网格 doping=0（[0043] amset_fermi_fix 已修好 SVD）   # 2026-10-13-0043-intrsvd   # [0043] 本征点 + IMP 的 SVD 不收敛（amset_fermi_fix：n=p 严格相等 + 散射率插值死片保护）   # 2026-10-13-0041-defectdop   # [0041] DEFECT_DOPING 缺陷平衡载流子浓度进掺杂网格   # 2026-10-13-0040-undoped   # [0040] UNDOPED_POINT 本征点（doping=0）   # 2026-10-12-0038-subsets   # [0038] SUBSETS 散射机制子集（subset_<机制>.json）   # [0035-r3] 复审：not_in_scattering 只认显式排除、D 全低于阈值仍建记录、面外极性；[0035-r2] 冻声子优先、手填谷内只作对照；[0035-r1] 复审：交叉拒绝、并星平均、τ 挪到 transport.json 之后；[0035] 冻声子 ODP 参数（ODP_FROZEN）+ τ(E)（tau_energy.py）   # [0034-r3] 二审：重复星按 S8.2 k_grid 合并；显式 SCATTERING+掩码的日志   # [0034-r2] 复审：同中心谷合并、显式 SCATTERING 照办、PIE 与 settings 一致   # [0034] OVERALL_WITHOUT（出厂 ODP）-> overall_noODP.json   # [0033] ODP/谷间散射（常数形变势，step.conf DP_OPTICAL_E/H）+ ADP 谷内掩码   # [0032-r2] 复审：链首清旧本征产物与 mesh；SCATTERING 无 ADP 不出只 ADP   # [0032] WRITE_MESH/INTRINSIC_ADP_ONLY 2D 默认开（旧：2026-09-28-desym-fix V115）
 # 复制来源（gen_step10_amset.py 的 _SKILL_REV），用于人工比对两份文件是否同步
 _SOURCE_GEN_REV = "2026-10-08-2d-raw-elastic"   # [0014] S8 的 2D 弹性改为原始 slab 值，与本步一致
 import stepconf  # noqa: E402
@@ -140,6 +140,12 @@ AMSET_TAIL  = (' && cp -f "$(ls -t transport_*.json 2>/dev/null | head -1)" '
                'transport.json && ls -l transport.json')
 # --- 输运设置（可改）---
 DOPING      = "-1e14:-1e11:5, 1e11:1e14:5"   # n 型 + p 型各 5 点（对数均布）cm^-2 面密度；gen 里按 c 折算成体浓度
+# [0055] DOPING_LOW：低浓度段（2026-10-16 用户要求），补本征点与 1e11 cm^-2 之间的空档（3D 对应 1e10–1e16 cm^-3：
+#   n_2D ≈ n_3D × t，t ≈ 1 nm 取整 -> 1e3–1e9 cm^-2；文献口径 n_lit = n_2D/t，MoS2 t≈0.67 nm 即 1.5e10–1.5e16 cm^-3）。
+#   出厂 n/p 各 4 点 1e3、1e5、1e7、1e9 cm^-2（面密度，gen 按 c 折体浓度）；每胞载流子 < 1e-7 的点由
+#   amset_fermi_fix.small_doping_fermi（n、p 分开 log-sum-exp）解 E_F。代价：掺杂点 11 -> 19（约 ×1.7）。
+#   step.conf 写 DOPING_LOW = off 关，或写自己的范围串（cm^-2）。
+DOPING_LOW = "-1e9:-1e3:4, 1e3:1e9:4"
 TEMPERATURES = "100:900:9"            # 100,200,...,900 K，每 100 K 一个点
 SCATTERING  = ["ADP", "IMP", "POP"]   # 形变势声学 + 电离杂质 + 极性光学 "ADP", "IMP", "POP"
 _ALLOWED_SCATTERING = {"ADP", "IMP", "POP", "PIE", "ODP", "IVS"}   # step.conf SCATTERING 允许的机制
@@ -503,6 +509,7 @@ SPEC = {
     #   旧写法（默认取常量、只认 true）会让 step.conf 写 false 也关不掉。
     "WRITE_MESH": (None, "bool"),
     "UNDOPED_POINT": (None, "bool"),          # [0040] None = 用出厂值
+    "DOPING_LOW": (None, "str"),              # [0055] None = 用出厂值；off = 关（面密度 cm^-2）
     "DEFECT_DOPING": ("auto", "str"),          # [0041] auto/on/off
     "DEFECT_ROOT": ("", "str"),
     "INTRINSIC_ADP_ONLY": (None, "bool"),   # [0018]
@@ -2090,6 +2097,13 @@ def _seg_expand(a, b, n, log):
     return [a + (b - a) * i / (n - 1) for i in range(n)]
 
 
+def _doping_low_list(spec):
+    """[0055] DOPING_LOW -> 掺杂值列表；off/none/false/空 -> []。"""
+    if spec is None or str(spec).strip().lower() in ("", "off", "none", "false", "no", "0"):
+        return []
+    return expand_spec(spec, log=True)
+
+
 def expand_spec(spec, log):
     """把 "a:b:n, c:d:m" 范围串或裸数值展开成 float 列表。已是数值则原样收下。"""
     out = []
@@ -2313,6 +2327,10 @@ def write_settings(out: Path, eps_inf, eps_static, gap, elastic,
     #   >0.5 报错、>0.05 告警（2026-09-27 MoS2 的 DOPING 单位事故就是这里该拦住的）。
     check_carriers_per_atom(DOPING, _CELL_AREA_CM2, _count_atoms(Path.cwd()), tag="2D S8.4")
     _dop_areal = expand_spec(DOPING, log=True)   # 面密度 cm^-2
+    _low = [v for v in _doping_low_list(DOPING_LOW) if v not in _dop_areal]   # [0055] 低浓度段（面密度）
+    if _low:
+        _dop_areal = list(_dop_areal) + _low
+        print("[OK] DOPING_LOW：加 %d 个低浓度点 %s cm^-2" % (len(_low), ", ".join("%.0e" % v for v in _low)))
     _dop = [v / (c_len * 1e-8) for v in _dop_areal] if c_len else _dop_areal  # 体浓度 cm^-3
     if UNDOPED_POINT and 0.0 not in _dop:             # [0040] 本征点（未掺杂，E_F 由 n = p 定；[0044] 回到主网格）
         _dop = list(_dop) + [0.0]
@@ -3112,6 +3130,11 @@ def main():
             global UNDOPED_POINT                      # [0040]
             if _p["UNDOPED_POINT"] is not None:
                 UNDOPED_POINT = bool(_p["UNDOPED_POINT"])
+            global DOPING_LOW                         # [0055]
+            if _p["DOPING_LOW"] is not None:
+                if str(_p["DOPING_LOW"]) != DOPING_LOW:
+                    print("[OK] DOPING_LOW = %s（step.conf 覆盖，出厂 %s）" % (_p["DOPING_LOW"], DOPING_LOW))
+                DOPING_LOW = str(_p["DOPING_LOW"])
             # patch_write_mesh：WRITE_MESH -> 落 mesh.h5，供 postprocess_intrinsic.py 重算严格本征迁移率。
             #   [0032] 出厂 True；step.conf 显式写 true/false 才覆盖（SPEC 默认 None）。
             WRITE_MESH, INTRINSIC_ADP_ONLY = resolve_intrinsic_switches(

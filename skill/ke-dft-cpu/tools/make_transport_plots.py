@@ -59,10 +59,46 @@ def fnum(x):
         return np.nan
 
 
+AX = {"NLO": 1e17, "XT": [-4, -3, -2, -1, 0, 1, 2, 3, 4],
+      "XTL": ["1e21", "1e20", "1e19", "1e18", "1e17", "1e18", "1e19", "1e20", "1e21"]}
+
+
+def set_axis(mdir, n_top=1e21):
+    """[0055] 浓度轴跟着 AMSET 掺杂网格（与 gen_step13_output._doping_axis 同算法）：最小非零 |n| ≥ 1e17 时与旧版相同；
+    有 DOPING_LOW 低浓度段时原点下探到最小点所在十年，十年数 > 4 时每 2 个十年一个刻度。"""
+    import math
+    global NFLOOR
+    nz = []
+    for run in ("step8.4_amset2d", "step8_amset"):
+        p = os.path.join(mdir, run, "transport.json")
+        if os.path.isfile(p):
+            try:
+                d = json.load(open(p))["doping"]
+                nz = [abs(float(x)) for x in d if float(x) != 0.0]
+            except (OSError, ValueError, KeyError, TypeError):
+                nz = []
+            break
+    if nz and min(nz) < 1e17:
+        nlo = 10.0 ** math.floor(math.log10(min(nz)) + 1e-9)
+        NFLOOR = nlo * 0.999
+    else:
+        nlo, NFLOOR = 1e17, 5e17
+    ndec = int(round(math.log10(n_top / nlo)))
+    step = 1 if ndec <= 4 else 2
+    pos = list(range(ndec, -1, -step))[::-1]
+    if pos[-1] != ndec:
+        pos.append(ndec)
+    if pos[0] != 0:
+        pos.insert(0, 0)
+    xt = [-k for k in pos[::-1] if k] + pos
+    lo = int(round(math.log10(nlo)))
+    AX.update(NLO=nlo, XT=xt, XTL=["1e%d" % (lo + abs(k)) for k in xt])
+
+
 def xs(n):
     n = np.asarray(n, float)
     with np.errstate(divide="ignore", invalid="ignore"):
-        return np.sign(n) * np.log10(np.maximum(np.abs(n), 1e17) / 1e17)
+        return np.sign(n) * np.log10(np.maximum(np.abs(n), AX["NLO"]) / AX["NLO"])
 
 
 def seg(ax, n, y, **kw):
@@ -80,10 +116,9 @@ def axes_grid(nrow, ncol, rowlab, collab):
     for rr in range(nrow):
         for j in range(ncol):
             ax = axes[rr][j]
-            ax.set_xlim(-4.15, 4.15)
-            ax.set_xticks([-4, -3, -2, -1, 0, 1, 2, 3, 4])
-            ax.set_xticklabels(["1e21", "1e20", "1e19", "1e18", "1e17",
-                                "1e18", "1e19", "1e20", "1e21"], fontsize=6.5)
+            ax.set_xlim(AX["XT"][0] - 0.15, AX["XT"][-1] + 0.15)
+            ax.set_xticks(AX["XT"])
+            ax.set_xticklabels(AX["XTL"], fontsize=6.5)
             ax.axvline(0, color="0.55", lw=0.6, ls=":")
             ax.grid(alpha=0.25, which="both", lw=0.4)
             if rr == 0:
@@ -96,6 +131,7 @@ def axes_grid(nrow, ncol, rowlab, collab):
 
 
 def make_transport(mdir, out, M):
+    set_axis(mdir)                                          # [0055]
     bt_p = os.path.join(mdir, "step8.1_boltztrap", "boltztrap_crta.json")
     dp_p = os.path.join(mdir, "step8.2_dpt", "dpt_result.json")
     am_p = os.path.join(mdir, "step8.4_amset2d", "transport.json")
@@ -187,7 +223,7 @@ def make_transport(mdir, out, M):
                         ax.axhline(muedge[c] * (T0 / T), color=col, ls="-.", lw=0.9, alpha=0.85)
                 ax.set_yscale("log"); ax.set_ylim(2, 50000)
             elif q == "S":
-                ax.set_ylim(-950, 950); ax.axhline(0, color="k", lw=0.5)
+                ax.set_ylim(-(950 if AX["NLO"] >= 1e17 else 2500), 950 if AX["NLO"] >= 1e17 else 2500); ax.axhline(0, color="k", lw=0.5)
             else:
                 ax.set_yscale("log")
                 ax.set_ylim({"sigma": (1e0, 1e10), "PF": (1e-6, 1e1), "kappa_e": (1e-4, 1e5)}[q])
@@ -206,6 +242,7 @@ def make_transport(mdir, out, M):
 
 
 def make_intrinsic(mdir, out, M):
+    set_axis(mdir)                                          # [0055]
     src = os.path.join(mdir, "step8.3_output", "intrinsic", "intrinsic_transport_table.csv")
     if not os.path.isfile(src):
         print("[skip] %s: 缺 intrinsic_transport_table.csv（S8.3 跑 0032+ 才有）" % M); return False
@@ -236,7 +273,7 @@ def make_intrinsic(mdir, out, M):
                 keep = np.abs(n) >= NFLOOR
                 seg(ax, n[keep], y[keep], color=color, lw=1.3, ls=ls, marker=mk, ms=3.2)
             if col == "S_uV/K":
-                ax.set_ylim(-1000, 1000); ax.axhline(0, color="k", lw=0.5)
+                ax.set_ylim(-(1000 if AX["NLO"] >= 1e17 else 2500), 1000 if AX["NLO"] >= 1e17 else 2500); ax.axhline(0, color="k", lw=0.5)
             else:
                 ax.set_yscale("log")
     hh = [Line2D([], [], color=c, lw=1.4, ls=ls, marker=mk, ms=4, label=DS_LABELS.get(ds, ds)) for ds, c, ls, mk in DATASETS]

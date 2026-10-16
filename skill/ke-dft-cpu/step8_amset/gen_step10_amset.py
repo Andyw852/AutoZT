@@ -18,7 +18,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 # [SKILL_REV] 版本戳：写进 settings.yaml 头，便于从结果反查跑的是哪份 skill 副本。
-_SKILL_REV = "2026-10-15-0051-socdesym"   # [0051] amset_desym_fix 修 SOC 分支（四元数 SU(2) + iσ_y·K，V200）   # 2026-10-13-0043-intrsvd   # [0041] DEFECT_DOPING 缺陷平衡载流子浓度进掺杂网格   # 2026-10-13-0040-undoped   # [0040] UNDOPED_POINT 本征点（doping=0）   # 2026-10-13-0038-subsets   # [0038] SUBSETS 散射机制子集（subset_<机制>.json）   # [0037] 三维 PIE（读压电张量写 settings，插件 amset_pie3d.py 修正核）   # [0036] 三维 ODP/IVS（DP_OPTICAL_*，插件 amset_dpo3d.py）   # [0014] 2D 弹性用原始 slab 值（不乘 c/t）；V115 相位补丁
+_SKILL_REV = "2026-10-16-0055-dopinglow"   # [0055] DOPING_LOW 低浓度段 1e10–1e16 cm^-3（amset_fermi_fix 小掺杂 log-sum-exp 解 E_F）；[0054] undoped_ni 记带边   # 2026-10-15-0051-socdesym   # [0051] amset_desym_fix 修 SOC 分支（四元数 SU(2) + iσ_y·K，V200）   # 2026-10-13-0043-intrsvd   # [0041] DEFECT_DOPING 缺陷平衡载流子浓度进掺杂网格   # 2026-10-13-0040-undoped   # [0040] UNDOPED_POINT 本征点（doping=0）   # 2026-10-13-0038-subsets   # [0038] SUBSETS 散射机制子集（subset_<机制>.json）   # [0037] 三维 PIE（读压电张量写 settings，插件 amset_pie3d.py 修正核）   # [0036] 三维 ODP/IVS（DP_OPTICAL_*，插件 amset_dpo3d.py）   # [0014] 2D 弹性用原始 slab 值（不乘 c/t）；V115 相位补丁
 import stepconf  # noqa: E402
 try:
     import ke_common as kc
@@ -118,6 +118,11 @@ _GATE_SUMMARY = None      # ke_common.gate_log_line() 的结果，写进 setting
 #   marker 判据会把失败隐藏（V63 的教训）。
 # --- 输运设置（可改）---
 DOPING      = "-1e21:-1e17:5, 1e17:1e21:5"   # n 型 + p 型各 5 点（对数均布）cm^-3
+# [0055] DOPING_LOW：低浓度段（2026-10-16 用户要求），补本征点与 1e17 之间的空档，对应电声文献算 phonon-limited
+#   迁移率的低浓度口径（非简并、单载流子；μ 按掺杂符号只积导带/价带）。出厂 n/p 各 4 点 1e10、1e12、1e14、1e16 cm^-3；
+#   每胞载流子 < 1e-7 的点由 amset_fermi_fix.small_doping_fermi（n、p 分开 log-sum-exp）解 E_F，避开 AMSET nelect − Σ 的相减。
+#   代价：掺杂点 11 -> 19（AMSET 计算量约 ×1.7）。step.conf 写 DOPING_LOW = off 关，或写自己的范围串。
+DOPING_LOW = "-1e16:-1e10:4, 1e10:1e16:4"
 TEMPERATURES = "100:900:9"            # 100,200,...,900 K，每 100 K 一个点
 SCATTERING  = ["ADP", "IMP", "POP"]   # 形变势声学 + 电离杂质 + 极性光学 "ADP", "IMP", "POP"
 # patch_scattering（2026-09-27，照搬 2D 版 gen_step14 的实现）：step.conf 覆盖散射机制。
@@ -390,6 +395,7 @@ SPEC = {
     # 技能侧的落点是 skill/ke-dft-cpu/step8_amset/step.conf，不是技能全局 step.conf。
     "NWORKERS": (NWORKERS, "int"),
     "UNDOPED_POINT": (None, "bool"),          # [0040] None = 用出厂值
+    "DOPING_LOW": (None, "str"),              # [0055] None = 用出厂值；off = 关
     "DEFECT_DOPING": ("auto", "str"),          # [0041] auto/on/off
     "DEFECT_ROOT": ("", "str"),
     # 全网格 h5 分支：出厂 auto（按有无反演中心自动判断）；可显式 true/false 覆盖。
@@ -1399,6 +1405,13 @@ def _seg_expand(a, b, n, log):
     return [a + (b - a) * i / (n - 1) for i in range(n)]
 
 
+def _doping_low_list(spec):
+    """[0055] DOPING_LOW -> 掺杂值列表；off/none/false/空 -> []。"""
+    if spec is None or str(spec).strip().lower() in ("", "off", "none", "false", "no", "0"):
+        return []
+    return expand_spec(spec, log=True)
+
+
 def expand_spec(spec, log):
     """把 "a:b:n, c:d:m" 范围串或裸数值展开成 float 列表。已是数值则原样收下。"""
     out = []
@@ -1571,6 +1584,10 @@ def write_settings(out: Path, eps_inf, eps_static, gap, elastic,
     # patch_carrier_guard_3d（2026-09-28 用户批准）：每**原子**载流子数防护（3D 对称补口）。
     check_carriers_per_atom(DOPING, _cell_volume_cm3(Path.cwd()), _count_atoms(Path.cwd()), tag="3D S8")
     _dop = expand_spec(DOPING, log=True)        # doping 对数均布
+    _low = [v for v in _doping_low_list(DOPING_LOW) if v not in _dop]   # [0055] 低浓度段
+    if _low:
+        _dop = list(_dop) + _low
+        print("[OK] DOPING_LOW：加 %d 个低浓度点 %s cm^-3" % (len(_low), ", ".join("%.0e" % v for v in _low)))
     if UNDOPED_POINT and 0.0 not in _dop:             # [0040] 本征点（未掺杂）
         _dop = list(_dop) + [0.0]
     _defect_pts = None
@@ -2588,6 +2605,11 @@ def main():
             global UNDOPED_POINT                      # [0040]
             if _p["UNDOPED_POINT"] is not None:
                 UNDOPED_POINT = bool(_p["UNDOPED_POINT"])
+            global DOPING_LOW                         # [0055]
+            if _p["DOPING_LOW"] is not None:
+                if str(_p["DOPING_LOW"]) != DOPING_LOW:
+                    print("[OK] DOPING_LOW = %s（step.conf 覆盖，出厂 %s）" % (_p["DOPING_LOW"], DOPING_LOW))
+                DOPING_LOW = str(_p["DOPING_LOW"])
             global PIE_KERNEL, PIE_SCREENING      # [0037]
             PIE_KERNEL = str(_p["PIE_KERNEL"] or "az").strip().lower()
             PIE_SCREENING = bool(_p["PIE_SCREENING"])

@@ -3072,6 +3072,33 @@ def write_mechanism_resolved_plot(cwd, plots, M, is_2d):
     return True
 
 
+def _doping_axis(cwd, is_2d, n_top=1e21):
+    """[0055] transport_plots 正负对数浓度轴（元胞口径 cm^-3）：(原点 NLO, 显示下限 NFLOOR, 刻度位置, 刻度文字)。
+    AMSET 掺杂网格最小非零 |n| ≥ 1e17 时与旧版逐字相同（原点 1e17、下限 5e17、±4 十年逐个刻度）；
+    有 DOPING_LOW 低浓度段时原点下探到最小点所在十年、全部 AMSET 点都画，十年数 > 4 时每 2 个十年一个刻度。"""
+    j = _load_json(Path(cwd) / (AMSET2D_DIR if is_2d else AMSET_DIR) / "transport.json") or {}
+    try:
+        nz = [abs(float(x)) for x in (_unwrap(j.get("doping")) or []) if float(x) != 0.0]
+    except (TypeError, ValueError):
+        nz = []
+    if nz and min(nz) < 1e17:
+        NLO = 10.0 ** math.floor(math.log10(min(nz)) + 1e-9)
+        NFLOOR = NLO * 0.999
+    else:
+        NLO, NFLOOR = 1e17, 5e17
+    ndec = int(round(math.log10(n_top / NLO)))
+    step = 1 if ndec <= 4 else 2
+    pos = list(range(ndec, -1, -step))[::-1]
+    if pos[-1] != ndec:
+        pos.append(ndec)
+    if pos[0] != 0:
+        pos.insert(0, 0)
+    XT = [-k for k in pos[::-1] if k] + pos
+    lo = int(round(math.log10(NLO)))
+    XTL = ["1e%d" % (lo + abs(k)) for k in XT]
+    return NLO, NFLOOR, XT, XTL
+
+
 def _clear_dir(d):
     """[0052] 清空目录内容（保留目录本身）；删不掉的只告警。
     [0052-r1] 目录本身是符号链接时不动手：否则 rmtree/unlink 会顺着链接删到别处的产物。"""
@@ -3124,7 +3151,8 @@ def write_transport_plots(cwd, out, is_2d):
         plots = out / "plots"                       # 回退：材料根不可写时仍写步骤目录
         plots.mkdir(exist_ok=True)
     M = cwd.parent.name
-    NFLOOR = 5e17
+    NLO, NFLOOR, XT, XTL = _doping_axis(cwd, is_2d)   # [0055] 浓度轴跟着 AMSET 实际掺杂网格（有 DOPING_LOW 时下探）
+    SLIM = 1000.0 if NLO >= 1e17 else 2500.0          # [0055] 低浓度段非简并 S 可到 ~2000 μV/K（k/e·ln(N_c/n)）
     # [0052] 先删旧结果：transport_plots/ 是 S8.3 独占的输出目录，每次整目录重建。以前只覆盖同名文件，
     #   温度网格 / 数据集 / 子文件夹变了以后，上一轮的 <T>K.csv、旧格式长表、旧子目录会一直留着冒充当前结果。
     _clear_dir(plots)
@@ -3138,7 +3166,7 @@ def write_transport_plots(cwd, out, is_2d):
     def xs(n):
         n = np.asarray(n, float)
         with np.errstate(divide="ignore", invalid="ignore"):
-            return np.sign(n) * np.log10(np.maximum(np.abs(n), 1e17) / 1e17)
+            return np.sign(n) * np.log10(np.maximum(np.abs(n), NLO) / NLO)
 
     def seg(ax, n, y, **kw):
         n = np.asarray(n, float); y = np.asarray(y, float)
@@ -3154,10 +3182,9 @@ def write_transport_plots(cwd, out, is_2d):
         for rr in range(nrow):
             for j in range(ncol):
                 ax = axes[rr][j]
-                ax.set_xlim(-4.15, 4.15)
-                ax.set_xticks([-4, -3, -2, -1, 0, 1, 2, 3, 4])
-                ax.set_xticklabels(["1e21", "1e20", "1e19", "1e18", "1e17",
-                                    "1e18", "1e19", "1e20", "1e21"], fontsize=6.5)
+                ax.set_xlim(XT[0] - 0.15, XT[-1] + 0.15)
+                ax.set_xticks(XT)
+                ax.set_xticklabels(XTL, fontsize=6.5)
                 ax.axvline(0, color="0.55", lw=0.6, ls=":")
                 ax.grid(alpha=0.25, which="both", lw=0.4)
                 if rr == 0:
@@ -3236,7 +3263,7 @@ def write_transport_plots(cwd, out, is_2d):
                         keep = np.abs(n) >= NFLOOR
                         seg(ax, n[keep], y[keep], color=color, lw=1.3, ls=ls, marker=mk, ms=3.2)
                     if col == "S_uV/K":
-                        ax.set_ylim(-1000, 1000); ax.axhline(0, color="k", lw=0.5)
+                        ax.set_ylim(-SLIM, SLIM); ax.axhline(0, color="k", lw=0.5)
                     else:
                         ax.set_yscale("log")
             hh = [Line2D([], [], color=c, lw=1.4, ls=ls, marker=mk, ms=4, label=_LBL.get(ds, ds))
@@ -3290,14 +3317,13 @@ def write_transport_plots(cwd, out, is_2d):
                         seg(a, n[keep], y[keep], color=_cm(it / max(1, len(temps) - 1)), lw=1.2,
                             marker="o", ms=2.6, label=("%d K" % T))
                     a.set_title(ttl, fontsize=10)
-                    a.set_xlim(-4.15, 4.15); a.set_xticks([-4, -3, -2, -1, 0, 1, 2, 3, 4])
-                    a.set_xticklabels(["1e21", "1e20", "1e19", "1e18", "1e17",
-                                       "1e18", "1e19", "1e20", "1e21"], fontsize=6.5)
+                    a.set_xlim(XT[0] - 0.15, XT[-1] + 0.15); a.set_xticks(XT)
+                    a.set_xticklabels(XTL, fontsize=6.5)
                     a.axvline(0, color="0.55", lw=0.6, ls=":")
                     a.grid(alpha=0.25, lw=0.4)
                     a.set_xlabel(r"$n$ (cm$^{-3}$)   n-type | p-type", fontsize=8)
                     if col == "S_uV/K":
-                        a.set_ylim(-1000, 1000); a.axhline(0, color="k", lw=0.5)
+                        a.set_ylim(-SLIM, SLIM); a.axhline(0, color="k", lw=0.5)
                     else:
                         a.set_yscale("log")
                 _hh = [Line2D([], [], color=_cm(it / max(1, len(temps) - 1)), lw=1.4, label="%d K" % T)
@@ -3418,11 +3444,11 @@ def write_transport_plots(cwd, out, is_2d):
                         keep = np.abs(n) >= NFLOOR
                         seg(a, n[keep], y[keep], color=cc, lw=1.3, ls=ls, marker="s", ms=3.0)
                     if col == "S_uV/K":
-                        a.set_ylim(-1000, 1000); a.axhline(0, color="k", lw=0.5)
+                        a.set_ylim(-SLIM, SLIM); a.axhline(0, color="k", lw=0.5)
                     else:
                         a.set_yscale("log")
-                    a.set_xlim(-4.15, 4.15); a.set_xticks([-4, -3, -2, -1, 0, 1, 2, 3, 4])
-                    a.set_xticklabels(["1e21", "1e20", "1e19", "1e18", "1e17", "1e18", "1e19", "1e20", "1e21"], fontsize=6)
+                    a.set_xlim(XT[0] - 0.15, XT[-1] + 0.15); a.set_xticks(XT)
+                    a.set_xticklabels(XTL, fontsize=6)
                     a.axvline(0, color="0.55", lw=0.6, ls=":")
                     a.set_xlabel("n (cm^-3)", fontsize=8)
                 _present = {r["dataset"] for r in _sub}
