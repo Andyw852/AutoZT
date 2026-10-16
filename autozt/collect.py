@@ -267,6 +267,9 @@ def collect_v3_batch(cfg, segs):
                           "log_dir", "fetch_files", "template_map",
                           "_subdir", "_skill_dir_local", "rpath"):
                     r[k] = m[k]
+                # work_dir 及其来源层：status 的"work_dir 来源"、gen 失败提示、brief 都要用
+                for k in ("work_dir_eff", "work_dir_src"):
+                    r[k] = m.get(k)
                 # v1.13：per-step hpc 拆分时材料会出现在多个 (host, work_dir) 组，
                 # 材料级 path 必须用「材料默认集群」的 rpath（work_dir_eff），
                 # 不能是采集顺序里第一个组的路径（否则 Dir 显示错集群、gen 推送错目录）。
