@@ -305,6 +305,32 @@ step8.x 的 `_SKILL_REV` 写进 comparison_summary.txt。改脚本即提交 GitH
 
 > 结果文档（未发表，不进 git）：`/mnt/d/tf_data/jzz/jap/comparison_vs_literature.md`
 
+## [0054] 命名与电声文献统一（2026-10-16 用户定）
+
+规则：**"intrinsic" 只指本征载流子**（未掺杂，n = p = n_i，教科书 intrinsic carrier concentration）；散射一律按
+物理含义 + 实际机制组合命名（`_phys_label`）：
+
+| 含义 | 图例 / 对外名 | 文献对应 | 内部键 / 文件（不改，兼容旧结果与 zt-dft-cpu） |
+|---|---|---|---|
+| 全部声子机制、不含电离杂质 | `phonon-limited (ADP+POP+…)` | phonon-limited mobility（Cheng & Liu 2018 也叫 intrinsic mobility） | 数据集键 `intrinsic`、`intrinsic_transport.json`、`subset_<去 IMP>.json` |
+| 含电离杂质 | `phonon + impurity (ADP+IMP+POP+…)` | — | 键 `overall`、`transport.json` |
+| 只 ADP | `ADP only (acoustic limit)` | DPT / Bardeen–Shockley 口径 | 键 `ADP_only`、`subset_ADP.json` |
+| 其余声子子集 | `partial phonon (ADP+POP)` | — | `subset_*.json` |
+| 本征载流子 | `intrinsic carriers (undoped, n = p = n_i)` | intrinsic carrier concentration | `intrinsic_carrier/`、`undoped_ni.json` |
+
+对外文件改名：`transport_plots/<M>_intrinsic.png` / `_intrinsic_data_<T>K.csv` → `<M>_phonon_limited.png` /
+`_phonon_limited_data_<T>K.csv`；`intrinsic_carrier/<M>_dilute_mobility.*` → `<M>_mechanism_resolved_mobility.*`。
+S8.3 每次重建 `transport_plots/`，旧名文件随之清掉。`step8.3_output/intrinsic/` 下的内部表、`comparison_vs_T.csv` 的
+列名 `mu_AMSET_intrinsic` / `mu_AMSET_all` 不改（图例已改）。datasets/ 的文件名仍是纯机制组合（如 `<M>_ADP+POP.png`）。
+
+- **本征点去重**：N_ii = |n − p| = 0，IMP 率为 0，含 IMP 的数据集与去掉 IMP 的同机制集逐点重合。
+  `<M>_intrinsic_carrier` 按"去掉 IMP 后的机制组合"去重，优先留本来不含 IMP 的那套；只剩含 IMP 的（旧回退文件）
+  图例标 `[IMP = 0 at n = p]`。出厂（IVS 默认关、PIE 需 step.conf 显式开）本征点通常剩：phonon-limited
+  （ADP+POP+ODP，有 S8.21 冻声子 ODP 时）、ADP+POP（来自 overall_noODP）、ADP only。
+- **f ≈ 0 判据 η**：`amset_fermi_fix` 在 `undoped_ni.json` 多记带边 `E_v_eV` / `E_c_eV`（与 E_F 同参考、含 scissor）。
+  S8.3 算 η_c = (E_c − E_F)/k_BT、η_v = (E_F − E_v)/k_BT 与 f(CBM)，写进 CSV；min(η) < 5（f > ~0.7%）的温度打 WARN、
+  图上灰底——窄带隙/高温时本征点不再是文献的稀薄极限。[0054] 之前的结果没有带边，重跑 S8/S8.4 后才有。
+
 ## [0053] 稀薄极限（f ≈ 0）迁移率的机制分解（2026-10-16）
 
 - **本征点 n = p 等价于稀薄极限 f ≈ 0**：E_F = E_mid + (k_BT/2)·ln(N_v/N_c) 在带隙中部，带边占据
@@ -314,7 +340,7 @@ step8.x 的 `_SKILL_REV` 写进 comparison_summary.txt。改脚本即提交 GitH
 - **AMSET 在 0 点给的是空穴迁移率**：`amset/core/transport.py` 的 `_get_band_idx` 对 doping ≥ 0 只取价带，
   `_calculate_mobility` 除以 `hole_conc`（`amset_fermi_fix` 已把它填成 n_i），所以 0 点的 `mobility[...]` = 空穴、只含价带。
   电子在 0 点拿不到，取 |掺杂| 最低的 n 型点（出厂 1e11 cm⁻²，非简并），总值用去 IMP 的子集。
-- **出图** `transport_plots/intrinsic_carrier/<M>_dilute_mobility.png/.csv`：只取这一个浓度，μ(T) 分电子/空穴两栏，
+- **出图** `transport_plots/intrinsic_carrier/<M>_mechanism_resolved_mobility.png/.csv`（[0054] 前叫 `dilute_mobility`）：只取这一个浓度，μ(T) 分电子/空穴两栏，
   画各单机制 μ_i（`transport.json` 的 `mobility[机制]`，即只开该机制）、去 IMP 总值、Matthiessen 倒数和 (Σ1/μ_i)⁻¹，
   CSV 带 `share_1/mu`（限制机制占比，对应文献"由 LO / LA 限制"的说法）。μ > 1e10 的机制（前因子 0，本征点 IMP、非极性 POP）不列。
   核对点：空穴另取最低 p 型、电子取次低 n 型（都去 IMP），与主值差 > 5% 打 WARN（未到非简并平台或屏蔽已起作用）。
@@ -322,7 +348,7 @@ step8.x 的 `_SKILL_REV` 写进 comparison_summary.txt。改脚本即提交 GitH
   文献取带边单态 μ = eτ/m*，Matthiessen 严格成立。两者差在热平均（高于 LO 发射阈值的态散射更强），不在占据数。
   AMSET 的 ADP ≈ LA+TA、POP ≈ LO，其余光学支与谷间散射要开 ODP/IVS 才有。
 
-## [0052] 本征浓度 n_i 标注、`<M>_intrinsic.png` 的含义、先删旧结果（2026-10-15）
+## [0052] 本征浓度 n_i 标注、`<M>_intrinsic.png`（[0054] 起改名 `<M>_phonon_limited.png`）的含义、先删旧结果（2026-10-15）
 
 - **`<M>_intrinsic.png` 横轴是掺杂浓度**：这里的 intrinsic 指**本征散射**（AMSET 去掉 IMP 的机制组合），
   与 `<M>_transport.png` 一样是掺杂扫描；只画基础 4 条（全机制 / 去 IMP / ADP only / BT2×DPT-τ）。
@@ -349,7 +375,7 @@ step8.x 的 `_SKILL_REV` 写进 comparison_summary.txt。改脚本即提交 GitH
   σ、S 差约 2 个数量级）；electron_conc / hole_conc 也不填（迁移率除以 0）。`amset_fermi_fix.py` 在 DOS 有带隙时改解
   ln n = ln p（log-sum-exp，不相消不下溢），与解析式 E_F = E_mid + (k_BT/2)·ln(N_v/N_c) 一致到 1e-6 Ha，并填好 n、p；
   无带隙（金属）照旧走原搜索。本征点 |n − p| ≈ 0，IMP 不起作用（全机制 ≈ 去掉 IMP 的那套）。
-  `<M>_intrinsic_carrier` 不画 μ（σ、S 是双极量）；本征点的单载流子迁移率见 [0053] 的 `<M>_dilute_mobility`。
+  `<M>_intrinsic_carrier` 不画 μ（σ、S 是双极量）；本征点的单载流子迁移率见 [0053] 的 `<M>_mechanism_resolved_mobility`。
 
 ## [0041] 缺陷平衡载流子浓度（DEFECT_DOPING）与 odp_frozen 默认开
 

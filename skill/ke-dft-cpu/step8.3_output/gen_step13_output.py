@@ -26,8 +26,12 @@ run:gen 步骤：登录节点直接跑、秒级。读取
   intrinsic_transport_<T>K.png（每个 AMSET 温度一张：n/p × S、σ、κe、Lorenz、μ；包含可用的 ADP、ADP+POP、
   ADP+POP+ODP 及去 IMP/overall 结果，并含 BT2×DPT τ / DPT 参照）、intrinsic_transport_table.csv（全部温度 × 原生掺杂档 × 数据集）、intrinsic_summary.txt。
   2D 图双横轴：下 n_2D（cm^-2），上文献口径 n_2D/t（cm^-3）；comparison_300K.png 同样处理。
-[0053] transport_plots/intrinsic_carrier/<M>_dilute_mobility.png/.csv：只取稀薄极限这一个浓度，μ(T) 按散射机制
-  拆开（单机制 μ、去 IMP 总值、Matthiessen 倒数和、限制机制占比）；空穴取 n = p 本征点，电子取最低 n 型点。
+[0053] transport_plots/intrinsic_carrier/<M>_mechanism_resolved_mobility.png/.csv（[0054] 前叫 dilute_mobility）：
+  只取稀薄极限这一个浓度，phonon-limited μ(T) 按散射机制拆开（单机制 μ、总值、Matthiessen 倒数和、限制机制占比）；
+  空穴取 n = p 本征点，电子取最低 n 型点。
+[0054] 命名与电声文献统一：去 IMP = phonon-limited（文献 phonon-limited / intrinsic mobility），含 IMP = phonon + impurity，
+  "intrinsic" 只指本征载流子（n = p = n_i）。<M>_intrinsic.png -> <M>_phonon_limited.png。内部数据文件名
+  （intrinsic_transport.json、step8.3_output/intrinsic/、数据集键 intrinsic/overall）不变，保证旧结果与 zt-dft-cpu 可读。
 缺任一输入都不崩，能画多少画多少。
 """
 import json
@@ -39,7 +43,7 @@ from pathlib import Path
 # [SKILL_REV] 版本戳：写进 comparison_summary.txt。每次改本脚本逻辑后更新。
 #   陈旧副本已咬人三次（step12/step9b 盖戳后，step13 是最后一个没盖的），
 #   这里盖戳便于从产物反查到底跑的是哪份 skill 副本。
-_SKILL_REV = "2026-10-16-0053"   # [0053] intrinsic_carrier/<M>_dilute_mobility.png：稀薄极限（f≈0）μ(T) 按散射机制拆开 + Matthiessen 对照（空穴取 n = p 本征点，电子取最低 n 型去 IMP）   # [0052] transport_plots/ 每次整目录重建（先删旧结果）；intrinsic_carrier/ 标注本征浓度 n_i(T)（undoped_ni.json / fermi_fix 日志）；<M>_intrinsic.png 标题写明 intrinsic = 本征散射、横轴 = 掺杂浓度   # [0047] <M>_intrinsic.png 只画基础 4 条本征曲线（此前与 <M>_transport.png 同图仅换标题）+ intrinsic CSV 同步只含 4 条   # [0046] 本征五参数套件支持 3D（读 S8 的 step8_amset + subset_*.json；_geom_3d 体胞几何、c/t=1、对角 (xx+yy+zz)/3）；3D 也出 transport_plots/<M>_transport|<M>_intrinsic.png 9x5 面板   # [0045] bt2_muscan 同时画 thickness(我们)/cell(文献) 两种口径；[0041] transport_plots/defect_equilibrium/（缺陷平衡净浓度 σ/S/PF/κe vs T）   # 2026-10-13-0040   # [0040] transport_plots/intrinsic_carrier/（未掺杂本征载流子 σ/S/PF/κe vs T）；图例/文件名一律用实际机制组合 amset_<机制>；2026-10-13-0039   # [0039] transport_plots/datasets/：每个数据集单独一张 σ/S/PF/κe 图 + csv； [0038] 本征/子集图读 subset_*.json（SUBSETS）；[0036] transport_plots 加 bt2_muscan/ + amset_scan/ 两个扫描图子文件夹；[0035] transport_plots 合并 + τ 对比（tau/）
+_SKILL_REV = "2026-10-16-0054"   # [0054] 与文献统一命名：去 IMP = phonon-limited（<M>_phonon_limited.png，原 <M>_intrinsic.png）、含 IMP = phonon + impurity、intrinsic 只指本征载流子；<M>_mechanism_resolved_mobility（原 dilute_mobility）；本征点按去 IMP 后机制去重；η=(E_c−E_F)/kT 判 f≈0   # [0053] intrinsic_carrier/<M>_dilute_mobility.png：稀薄极限（f≈0）μ(T) 按散射机制拆开 + Matthiessen 对照（空穴取 n = p 本征点，电子取最低 n 型去 IMP）   # [0052] transport_plots/ 每次整目录重建（先删旧结果）；intrinsic_carrier/ 标注本征浓度 n_i(T)（undoped_ni.json / fermi_fix 日志）；<M>_intrinsic.png 标题写明 intrinsic = 本征散射、横轴 = 掺杂浓度   # [0047] <M>_intrinsic.png 只画基础 4 条本征曲线（此前与 <M>_transport.png 同图仅换标题）+ intrinsic CSV 同步只含 4 条   # [0046] 本征五参数套件支持 3D（读 S8 的 step8_amset + subset_*.json；_geom_3d 体胞几何、c/t=1、对角 (xx+yy+zz)/3）；3D 也出 transport_plots/<M>_transport|<M>_intrinsic.png 9x5 面板   # [0045] bt2_muscan 同时画 thickness(我们)/cell(文献) 两种口径；[0041] transport_plots/defect_equilibrium/（缺陷平衡净浓度 σ/S/PF/κe vs T）   # 2026-10-13-0040   # [0040] transport_plots/intrinsic_carrier/（未掺杂本征载流子 σ/S/PF/κe vs T）；图例/文件名一律用实际机制组合 amset_<机制>；2026-10-13-0039   # [0039] transport_plots/datasets/：每个数据集单独一张 σ/S/PF/κe 图 + csv； [0038] 本征/子集图读 subset_*.json（SUBSETS）；[0036] transport_plots 加 bt2_muscan/ + amset_scan/ 两个扫描图子文件夹；[0035] transport_plots 合并 + τ 对比（tau/）
 #   bump 记录：2026-10-11-0035 —— transport_plots 合并：intrinsic 图并入 transport 图（4 条数据集
 #   overall / intrinsic / ADP only / BT2xDPT-tau），不再单独出 <M>_intrinsic*.{png,csv}，
 #   只留 <M>_transport.png + 每温度 CSV + <M>_params_<T>K.csv。
@@ -1334,7 +1338,7 @@ def write_mu_vs_T(out, cwd, is_2d):
              % ("2D：面内 x/y" if is_2d else "3D：x/y/z", MU_T_CSV),
              "# %-8s %4s %5s %8s %8s %7s %7s %8s %9s %9s %9s %9s %9s %9s" % (
                  "carrier", "dir", "T(K)", "E1", "C2D", "m*", "m_d", "tau",
-                 "DPT", "DPT_mv", "AMSET_ADP", "intrinsic", "all",
+                 "DPT", "DPT_mv", "AMSET_ADP", "ph_limit", "ph+imp",
                  ("w/o" + "+".join(res["meta"].get("all_without") or []))[:9] if res["meta"].get("all_without")
                  else "all_w/o")]
     for r in res["rows"]:
@@ -1361,8 +1365,8 @@ def _plot_mu_vs_T(out, res):
     import matplotlib.pyplot as plt
     style = {"mu_DPT": ("k", "-", "DPT"), "mu_DPT_mv": ("0.5", "-", "DPT multi-valley"),
              "mu_AMSET_ADP": ("C0", "--", "AMSET ADP"),
-             "mu_AMSET_intrinsic": ("C2", "-.", "AMSET intrinsic"), "mu_AMSET_all": ("C3", ":", "AMSET all"),
-             "mu_AMSET_all_without": ("C4", "--", "AMSET all w/o %s"                       # [0034]
+             "mu_AMSET_intrinsic": ("C2", "-.", "AMSET phonon-limited"), "mu_AMSET_all": ("C3", ":", "AMSET phonon + impurity"),
+             "mu_AMSET_all_without": ("C4", "--", "AMSET phonon + impurity w/o %s"         # [0034]
                                       % "+".join(res["meta"].get("all_without") or ["?"]))}
     cars = [c for c in ("electron", "hole") if any(r["carrier"] == c for r in res["rows"])]
     fig, axs = plt.subplots(1, len(cars), figsize=(5.5 * len(cars), 4.2), squeeze=False)
@@ -1405,8 +1409,8 @@ INTR_SETS = (   # (键, 文件, 图例, 线型, 颜色, 标记)
     ("ADP_only", "intrinsic_ADP.json", "ADP only (acoustic limit)", ":", "C2", "^"),
     ("ADP_POP", "intrinsic_ADP_POP.json", "ADP+POP", "-", "C1", "v"),
     ("ADP_POP_ODP", "intrinsic_ADP_POP_ODP.json", "ADP+POP+ODP", "-", "C6", "P"),
-    ("intrinsic", "intrinsic_transport.json", "amset (all but IMP)", "-", "C0", "o"),
-    ("overall", "transport.json", "overall", "-.", "C3", "s"),
+    ("intrinsic", "intrinsic_transport.json", "phonon-limited", "-", "C0", "o"),
+    ("overall", "transport.json", "phonon + impurity", "-.", "C3", "s"),
 )
 # [0034] S8.4 的 OVERALL_WITHOUT 那一套（overall_no*.json，出厂 overall_noODP.json）：有就自动加进图、表、汇总。
 INTR_WITHOUT_STYLE = (("--", "C4", "D"), ("--", "C5", "v"))
@@ -1421,7 +1425,7 @@ def _overall_without_files(run_dir):
 
 # [0038] subset_*.json（SUBSETS 生成）的键分类：按 dropped 集合；全机制（dropped 空）= overall（跳过，transport.json 已覆盖）。
 _SUBSET_STYLE = {
-    "intrinsic": ("amset (all but IMP)", "-", "C0", "o"),
+    "intrinsic": ("phonon-limited", "-", "C0", "o"),
     "ADP_only": ("ADP only (acoustic limit)", ":", "C2", "^"),
     "ADP_POP": ("ADP+POP", "-", "C1", "v"),
     "ADP_POP_ODP": ("ADP+POP+ODP", "-", "C6", "P"),
@@ -1793,7 +1797,8 @@ def write_intrinsic_table(out_dir, rows, geom, data):
                     else "σ、κe、PF 按层厚 t 归一（= 元胞值 × c/t）"))
         fh.write("# in_interpret_range：%s；S84_marks = S8.4 本征文件的 doping_marks；"
                  "BT2 的 μ = σ_总/(e|n_净|)，双极区（S 符号与类型相反）不给（flag 列）\n" % _interp_rule(geom)[1])
-        fh.write("# dataset：ADP_only = 只 ADP（声学极限）；intrinsic = 去 IMP（%s）；overall = 全机制；"
+        fh.write("# dataset（内部键 -> 图例）：ADP_only = ADP only（声学极限）；intrinsic = phonon-limited（去 IMP：%s）；"
+                 "overall = phonon + impurity（全机制）；"
                  "%s = BoltzTraP2 CRTA × DPT τ（同号插值到本档，L 为 BT2 自身）；DPT / DPT_mv = 单谷 / 多谷 Bardeen–Shockley μ\n"
                  % ("+".join((data["sets"].get("intrinsic") or {}).get("labels") or ["ADP", "POP"]), BT2_KEY))
         w = csv.DictWriter(fh, fieldnames=list(INTR_COLS), extrasaction="ignore")
@@ -1810,10 +1815,29 @@ def _intr_mechs(key, data):
     return ((data.get("sets") or {}).get(key) or {}).get("labels") or None
 
 
+def _phys_label(mechs, all_mechs=None):
+    """[0054] 统一命名（与电声文献一致）：物理含义 + 实际机制组合。
+    含 IMP -> "phonon + impurity (ADP+IMP+POP)"；只 ADP -> "ADP only (acoustic limit)"；
+    = 本轮全部声子机制（全机制去 IMP）-> "phonon-limited (ADP+POP+ODP)"（文献的 phonon-limited / intrinsic mobility）；
+    其余声子子集 -> "partial phonon (ADP+POP)"；不知道本轮全机制 -> "phonon (…)"。mechs 为空 -> None。
+    "intrinsic" 一词只留给本征载流子（n = p = n_i，intrinsic_carrier/）。"""
+    ms = [str(m).upper() for m in (mechs or [])]
+    if not ms:
+        return None
+    tag = "+".join(ms)
+    if "IMP" in ms:
+        return "phonon + impurity (%s)" % tag
+    if ms == ["ADP"]:
+        return "ADP only (acoustic limit)"
+    full = {str(m).upper() for m in (all_mechs or [])} - {"IMP"}
+    if not full:
+        return "phonon (%s)" % tag
+    return ("phonon-limited (%s)" if set(ms) == full else "partial phonon (%s)") % tag
+
+
 def _intr_legend(key, data, default):
-    """[0040] 图例 = 实际散射机制组合 amset_<机制+机制>（SCATTERING 可被 step.conf 改；非极性材料没有 POP）。"""
-    lab = _intr_mechs(key, data)
-    return "amset_" + "+".join(lab) if lab else default
+    """[0040][0054] 图例 = 物理含义 + 实际散射机制组合（SCATTERING 可被 step.conf 改；非极性材料没有 POP）。"""
+    return _phys_label(_intr_mechs(key, data), (data or {}).get("overall_labels")) or default
 
 
 def _intr_caption(geom, data):
@@ -1825,8 +1849,9 @@ def _intr_caption(geom, data):
             "so n_lit = n_cell x c/t (c/t = %.3f).\n"
             "sigma, kappa_e normalized by layer thickness t (cell value x c/t); mobility, S, Lorenz do not depend on it.  "
             "Shaded: %s (beyond rigid-band range).\n"
-            "ADP only: acoustic deformation potential only (upper limit)%s.  amset_%s: all mechanisms except ionized impurities.  "
-            "overall: all mechanisms incl. IMP%s.  BT2: BoltzTraP2 CRTA with DPT tau (S, Lorenz tau-free); "
+            "ADP only: acoustic deformation potential only (upper limit)%s.  phonon-limited (%s): all phonon mechanisms, "
+            "no ionized impurities (= 'intrinsic mobility' in e-ph literature).  "
+            "phonon + impurity: all mechanisms incl. IMP%s.  BT2: BoltzTraP2 CRTA with DPT tau (S, Lorenz tau-free); "
             "BT2 mobility = sigma_total/(e|n_net|), masked where bipolar.  DPT: Bardeen-Shockley (single or multi-valley)."
             % (geom["t_A"], geom["t_method"], geom["c_A"], geom["c_over_t"], _interp_rule(geom)[0], part, lab,
                "".join("; w/o %s: same mesh with %s removed" % ("+".join(sets[k].get("dropped") or []),
@@ -1923,7 +1948,7 @@ def plot_intrinsic_T(path, T, rows, geom, data, bt, dpt_T, material=""):
             a.set_xlabel("n_2D (cm$^{-2}$)", fontsize=9)
             if ci == 0 or col in ("mu_cm2/Vs", "Lorenz_WOhm/K2"):
                 a.legend(fontsize=7, loc="best")
-    fig.suptitle("Intrinsic transport @ %.0f K%s  (S8.4 ADP only / intrinsic / overall; BT2 x DPT tau)"
+    fig.suptitle("Phonon-limited transport @ %.0f K%s  (S8.4 ADP only / phonon-limited / phonon + impurity; BT2 x DPT tau)"
                  % (T, (" - " + material) if material else ""), fontsize=13)
     fig.text(0.006, 0.006, _intr_caption(geom, data), fontsize=8.2, va="bottom", ha="left", wrap=True)
     fig.tight_layout(rect=[0, 0.075, 1, 0.96])
@@ -2450,8 +2475,11 @@ def undoped_ni(cwd, is_2d):
     j = _load_json(run / UNDOPED_NI_JSON)
     if j and j.get("temperatures_K"):
         out = {}
-        for T, ef, ni in zip(j["temperatures_K"], j.get("E_F_eV") or [], j.get("n_i_cm-3") or []):
-            out[float(T)] = {"n_i_cm-3": _num(ni), "E_F_eV": _num(ef)}
+        _ev, _ec = j.get("E_v_eV") or [], j.get("E_c_eV") or []       # [0054] 带边（新记录才有）
+        for q, (T, ef, ni) in enumerate(zip(j["temperatures_K"], j.get("E_F_eV") or [], j.get("n_i_cm-3") or [])):
+            out[float(T)] = {"n_i_cm-3": _num(ni), "E_F_eV": _num(ef),
+                             "E_v_eV": _num(_ev[q]) if q < len(_ev) else None,
+                             "E_c_eV": _num(_ec[q]) if q < len(_ec) else None}
         if out:
             return out, "%s/%s" % (run.name, UNDOPED_NI_JSON)
     if _NI_LOG_RE is None:
@@ -2480,6 +2508,30 @@ def undoped_ni(cwd, is_2d):
             return out, "%s/%s（日志行）" % (run.name, f.name)
     return {}, ("运行目录里没有 %s，日志里也没有 [fermi_fix] 本征点 行（本征点关了，或不是 amset_fermi_fix 跑的）"
                 % UNDOPED_NI_JSON)
+
+
+KB_EV = 8.617333262e-5      # eV/K
+DILUTE_ETA_MIN = 5.0        # [0054] η = (E_c − E_F)/k_BT 与 (E_F − E_v)/k_BT 的下限：低于它 f(带边) > ~0.7%，不再是 f ≈ 0
+
+
+def _eta_of(v, T):
+    """[0054] 本征点记录 v（_ni_lookup 的结果）-> (η_c, η_v, f_CBM)；缺带边（旧记录）-> (None, None, None)。"""
+    ec, ev, ef = v.get("E_c_eV"), v.get("E_v_eV"), v.get("E_F_eV")
+    if ec is None or ev is None or ef is None or not T or T <= 0:
+        return None, None, None
+    kt = KB_EV * float(T)
+    eta_c, eta_v = (ec - ef) / kt, (ef - ev) / kt
+    return eta_c, eta_v, 1.0 / (1.0 + math.exp(min(eta_c, 700.0)))
+
+
+def _shade_not_dilute(ax, bad_T, all_T):
+    """[0054] 在 η < DILUTE_ETA_MIN 的温度段打灰底；横轴固定为全部温度（空面板也不被灰底撑歪）。"""
+    if not bad_T or not all_T:
+        return
+    ts = sorted(set(float(t) for t in all_T))         # 行按数据集重复，先去重再算半格宽
+    step = (ts[-1] - ts[0]) / max(len(ts) - 1, 1) / 2.0 if len(ts) > 1 else 10.0
+    ax.axvspan(min(bad_T) - step, max(bad_T) + step, color="0.88", zorder=0, lw=0)
+    ax.set_xlim(ts[0] - step, ts[-1] + step)
 
 
 def _ni_lookup(ni, T):
@@ -2654,7 +2706,8 @@ def write_defect_plots(cwd, plots, M, is_2d):
             "sigma_S/m", "S_uV/K", "PF_W/mK2", "kappa_e_W/mK"]
     with open(ddir / ("%s_defect_equilibrium.csv" % M), "w", newline="") as fh:
         fh.write("# [0041] 缺陷平衡净浓度（defect-dft-cpu 各化学势顶点 p0-n0，在 T_defect_K 下求得）作为 AMSET 掺杂，各温度不变；"
-                 "dataset 键：overall = 全部机制，intrinsic = 去掉 IMP（IMP 按 |n-p| 计，未计补偿缺陷，偏低）\n")
+                 "dataset 键：overall = phonon + impurity（全部机制），intrinsic = phonon-limited（去掉 IMP）；"
+                 "IMP 按 |n-p| 计，未计补偿缺陷，偏低\n")
         w = csv.writer(fh)
         w.writerow(cols)
         for r in rows:
@@ -2680,7 +2733,7 @@ def write_undoped_plots(cwd, plots, M, is_2d):
         print("[..] 本征载流子图跳过：%s" % why)
         return False
     udir.mkdir(parents=True, exist_ok=True)
-    names = {"overall": "amset (all mechanisms)", "intrinsic": "amset (all but IMP)", "ADP_only": "amset_ADP"}
+    names = {"overall": "phonon + impurity", "intrinsic": "phonon-limited", "ADP_only": "ADP only (acoustic limit)"}
     if is_2d:
         data = load_intrinsic_sets(cwd)
     else:
@@ -2689,7 +2742,28 @@ def write_undoped_plots(cwd, plots, M, is_2d):
     if data:
         for k in list(names) + [d[0] for d in data.get("set_defs", [])]:
             names[k] = _intr_legend(k, data, names.get(k, k))
-    keys = list(dict.fromkeys(r["dataset"] for r in rows))
+    # [0054] 本征点 N_ii = |n − p| = 0：IMP 率为 0，含 IMP 的数据集与去掉 IMP 的同机制集逐点重合 ->
+    #   按"去掉 IMP 后的机制组合"去重（优先留本来就不含 IMP 的那套），图例按去 IMP 后的机制命名（_phys_label）。
+    _all_m = (data or {}).get("overall_labels")
+    keep, eff_seen = {}, {}
+    for k in dict.fromkeys(r["dataset"] for r in rows):
+        ms = _intr_mechs(k, data) if data else None
+        if not ms:
+            keep[k] = names.get(k, k)                     # 机制未知（旧回退文件）：原样
+            continue
+        eff = tuple(m for m in ms if str(m).upper() != "IMP")
+        if not eff:
+            continue
+        has_imp = len(eff) < len(ms)
+        prev = eff_seen.get(eff)
+        if prev is None or (prev[1] and not has_imp):
+            if prev is not None:
+                keep.pop(prev[0], None)
+            eff_seen[eff] = (k, has_imp)
+            keep[k] = (_phys_label(list(eff), _all_m) or "+".join(eff)) + (" [IMP = 0 at n = p]" if has_imp else "")
+    rows = [r for r in rows if r["dataset"] in keep]
+    names.update(keep)
+    keys = list(keep)
     # [0052] 本征浓度 n_i(T)：transport.json 不带载流子浓度 -> 读 amset_fermi_fix 的记录；
     #   第一栏单独画 n_i(T) 并在每个点标数值，CSV 每行带 n_i / E_F。2D 另给面密度与文献口径（× c/t）。
     ni, ni_src = undoped_ni(cwd, is_2d)
@@ -2702,6 +2776,17 @@ def write_undoped_plots(cwd, plots, M, is_2d):
             ok = geom and r["n_i_cm-3"] is not None
             r["n_i_2D_cm-2"] = r["n_i_cm-3"] * geom["c_A"] * 1e-8 if ok else None
             r["n_i_lit_cm-3"] = r["n_i_cm-3"] * geom["c_over_t"] if ok else None
+        r["E_v_eV"], r["E_c_eV"] = v.get("E_v_eV"), v.get("E_c_eV")
+        r["eta_c"], r["eta_v"], r["f_CBM"] = _eta_of(v, r["T_K"])      # [0054] f ≈ 0 判据
+        r["label"] = names.get(r["dataset"], r["dataset"])
+    _eta_T = sorted({r["T_K"] for r in rows if r.get("eta_c") is not None})
+    bad_T = sorted({r["T_K"] for r in rows if r.get("eta_c") is not None
+                    and min(r["eta_c"], r["eta_v"]) < DILUTE_ETA_MIN})
+    if bad_T:
+        print("[WARN] 本征点在 %s 的 η = min(E_c−E_F, E_F−E_v)/k_BT < %g：带边占据不再 ≈ 0（窄带隙/高温），"
+              "这些温度不是稀薄极限（图上灰底）" % (", ".join("%gK" % T for T in bad_T), DILUTE_ETA_MIN))
+    elif not _eta_T:
+        print("[..] 本征点没有带边记录（[0054] 之前的 undoped_ni.json）—— η / f(CBM) 留空；重跑 S8/S8.4 后可得")
     if ni:
         print("[..] 本征浓度 n_i(T) 读自 %s" % ni_src)
         _t_all = sorted({r["T_K"] for r in rows})
@@ -2748,19 +2833,26 @@ def write_undoped_plots(cwd, plots, M, is_2d):
             a.set_yscale("log")
         else:
             a.axhline(0, color="k", lw=0.5)
+    for a in axs[0]:
+        _shade_not_dilute(a, bad_T, [r["T_K"] for r in rows])
     h, l = max((a.get_legend_handles_labels() for a in axs[0]), key=lambda hl: len(hl[0]))
     if h:
-        fig.legend(h, l, loc="lower center", ncol=min(5, len(h)), fontsize=8, frameon=False)
-    fig.suptitle("%s  intrinsic carriers (undoped, E_F from n = p = n_i)  —  AMSET%s"
-                 % (M, "" if ni_pts else "   [n_i not recorded: rerun S8 to get it]"), fontsize=11)
+        fig.legend(h, l, loc="lower center", ncol=min(3, len(h)), fontsize=8, frameon=False)
+    fig.suptitle("%s  intrinsic carriers (undoped, n = p = n_i; E_F near mid-gap, IMP = 0; S, sigma bipolar)  —  AMSET%s%s"
+                 % (M, "" if ni_pts else "   [n_i not recorded: rerun S8 to get it]",
+                    ("\nshaded: eta = (E_c - E_F)/kT < %g, band-edge occupation not ~ 0 (not the dilute limit)"
+                     % DILUTE_ETA_MIN) if bad_T else ""), fontsize=11)
     fig.tight_layout(rect=[0, 0.1, 1, 0.92])
     fig.savefig(udir / ("%s_intrinsic_carrier.png" % M), dpi=130)
     plt.close(fig)
     cols = ["T_K", "n_i_cm-3"] + (["n_i_2D_cm-2", "n_i_lit_cm-3"] if is_2d else []) + [
-        "E_F_eV", "dataset", "sigma_S/m", "S_uV/K", "PF_W/mK2", "kappa_e_W/mK"]
+        "E_F_eV", "E_v_eV", "E_c_eV", "eta_c", "eta_v", "f_CBM",
+        "dataset", "label", "sigma_S/m", "S_uV/K", "PF_W/mK2", "kappa_e_W/mK"]
     with open(udir / ("%s_intrinsic_carrier.csv" % M), "w", newline="") as fh:
-        fh.write("# [0040] 本征载流子（AMSET doping = 0，E_F 由 n = p 定）；%s；|n-p|≈0 时 IMP 不起作用，全机制 ≈ 去掉 IMP 的那套\n"
-                 % ("2D：sigma、kappa_e、PF 按层厚 t 归一（元胞值 × c/t）" if is_2d else "3D：张量对角平均"))
+        fh.write("# [0040][0054] 本征载流子（AMSET doping = 0，E_F 由 n = p 定）；%s；N_ii = |n-p| = 0，IMP 为零，"
+                 "含 IMP 的数据集与去 IMP 的同机制集重合、已去重（label 列按去 IMP 后的机制命名）；"
+                 "σ、S 是双极量（电子+空穴）；eta_c/eta_v = (E_c-E_F)/kT、(E_F-E_v)/kT，< %g 即不是稀薄极限 f≈0\n"
+                 % ("2D：sigma、kappa_e、PF 按层厚 t 归一（元胞值 × c/t）" if is_2d else "3D：张量对角平均", DILUTE_ETA_MIN))
         fh.write("# [0052] n_i = n = p（%s）：n_i_cm-3 为每胞体积口径%s；来源 %s\n"
                  % ("本征浓度", "（含真空元胞）；n_i_2D_cm-2 = n_i × c，n_i_lit_cm-3 = n_i × c/t" if is_2d else "",
                     ni_src if ni else "无（%s）" % ni_src))
@@ -2774,7 +2866,7 @@ def write_undoped_plots(cwd, plots, M, is_2d):
 
 
 # =====================================================================
-# [0053] 稀薄极限（f ≈ 0）迁移率按散射机制拆开（2026-10-16 用户要求；对照 Cheng & Liu, JACS 2018, 140, 17895
+# [0053][0054] phonon-limited 迁移率按散射机制拆开（mechanism-resolved，稀薄极限 f ≈ 0；2026-10-16 用户要求；对照 Cheng & Liu, JACS 2018, 140, 17895
 #   的分模式迁移率 + Matthiessen）。上面的 <M>_intrinsic_carrier 画的是 n = p 时的 σ/S/PF/κe —— 双极（电子+空穴
 #   一起）的量，不是单载流子迁移率；本节只取稀薄极限这一个浓度，画 μ(T) 的机制分解。
 #   · 空穴：本征点 doping = 0。AMSET 的 _calculate_mobility（_get_band_idx）对 doping ≥ 0 只积价带、除以 hole_conc，
@@ -2788,12 +2880,13 @@ def write_undoped_plots(cwd, plots, M, is_2d):
 DILUTE_MU_HUGE = 1e10      # cm²/Vs：单机制 μ 超过它 = 该机制前因子为 0（本征点 IMP、非极性材料 POP），不画、不进 Matthiessen
 DILUTE_CHECK_TOL = 0.05    # 主值与核对点相对差超过它打 WARN
 _DILUTE_COLORS = {"ADP": "C2", "POP": "C1", "ODP": "C6", "IVS": "C7", "PIE": "C9", "IMP": "C3"}
-TOTAL_NOIMP, MATTHIESSEN = "total (no IMP)", "Matthiessen sum"
+TOTAL_NOIMP, MATTHIESSEN = "phonon-limited total", "Matthiessen sum"   # [0054] 统一命名
 
 
-def dilute_mobility_rows(cwd, is_2d):
+def mechanism_resolved_rows(cwd, is_2d):
     """[0053] 稀薄极限迁移率行：[{T_K, carrier, role, source, doping_cm3, n_2D_cm-2, mechanism, mu_cm2/Vs,
-    share_1/mu}]；role = main（画实线）/ check（核对点）。没有 AMSET transport.json -> ([], 原因)。"""
+    share_1/mu, eta}]；role = main（画实线）/ check（核对点）。没有 AMSET transport.json -> ([], 原因)。
+    [0054] n = p 点带 eta = min(η_c, η_v)（undoped_ni.json 有带边时），< DILUTE_ETA_MIN 即不是 f ≈ 0。"""
     run = AMSET2D_DIR if is_2d else AMSET_DIR
     j = _load_json(Path(cwd) / run / "transport.json")
     if not j:
@@ -2812,6 +2905,7 @@ def dilute_mobility_rows(cwd, is_2d):
     if tot_arr is None and "IMP" not in labels:
         tot_arr, tot_src = _unwrap(mob.get("overall") or mob.get("Overall")), "overall（本轮没开 IMP）"
     c_cm = (_geom_2d(cwd) or {}).get("c_A", 0) * 1e-8 if is_2d else None
+    ni, _ni_src = undoped_ni(cwd, is_2d)
 
     def _lowest(sign, nth=0):
         idx = sorted((i for i, x in enumerate(doping) if (x < 0 if sign < 0 else x > 0)), key=lambda i: abs(doping[i]))
@@ -2840,7 +2934,11 @@ def dilute_mobility_rows(cwd, is_2d):
         x = doping[i]
         n2d = abs(x) * c_cm if c_cm else None
         for k, T in enumerate(temps):
-            base = {"T_K": T, "carrier": car, "role": role, "source": src, "doping_cm3": x, "n_2D_cm-2": n2d}
+            base = {"T_K": T, "carrier": car, "role": role, "source": src, "doping_cm3": x, "n_2D_cm-2": n2d,
+                    "eta": None}
+            if src.startswith("n = p"):
+                _ec, _ev, _f = _eta_of(_ni_lookup(ni, T), T)
+                base["eta"] = min(_ec, _ev) if _ec is not None else None
             mech = {}
             if role == "main":
                 for name in sorted(singles):
@@ -2867,16 +2965,21 @@ def dilute_mobility_rows(cwd, is_2d):
     return rows, None
 
 
-def write_dilute_mobility_plot(cwd, plots, M, is_2d):
-    """[0053] transport_plots/intrinsic_carrier/<M>_dilute_mobility.png + .csv：稀薄极限 μ(T) 的机制分解。"""
+MECH_RES_NAME = "mechanism_resolved_mobility"   # [0054] 原 dilute_mobility（文献：mode-/mechanism-resolved mobility）
+
+
+def write_mechanism_resolved_plot(cwd, plots, M, is_2d):
+    """[0053][0054] transport_plots/intrinsic_carrier/<M>_mechanism_resolved_mobility.png + .csv：
+    稀薄极限 phonon-limited μ(T) 的机制分解。"""
     import csv
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
     udir = Path(plots) / UNDOPED_DIR
-    for _old in (udir.glob("%s_dilute_mobility.*" % M) if udir.is_dir() else []):
-        _old.unlink()
-    rows, why = dilute_mobility_rows(cwd, is_2d)
+    for _pat in ("%s_%s.*" % (M, MECH_RES_NAME), "%s_dilute_mobility.*" % M):   # 连 [0053] 旧名一起清
+        for _old in (udir.glob(_pat) if udir.is_dir() else []):
+            _old.unlink()
+    rows, why = mechanism_resolved_rows(cwd, is_2d)
     if not rows:
         print("[..] 稀薄极限迁移率图跳过：%s" % why)
         return False
@@ -2915,12 +3018,17 @@ def write_dilute_mobility_plot(cwd, plots, M, is_2d):
             pts = sorted((r["T_K"], r["mu_cm2/Vs"]) for r in rc if r["role"] == "main" and r["mechanism"] == m)
             ax.plot(*zip(*pts), ls="--", marker="o", ms=3, lw=1.2,
                     color=_DILUTE_COLORS.get(m, "C%d" % (ci + 3)), label="%s only" % m)
+        _bad = sorted({r["T_K"] for r in rc if r.get("eta") is not None and r["eta"] < DILUTE_ETA_MIN})
+        if _bad:
+            _shade_not_dilute(ax, _bad, [r["T_K"] for r in rc])
+            print("[WARN] %s（n = p 点）在 %s 的 η < %g：不是稀薄极限，与文献 f ≈ 0 的值不可直接比（图上灰底）"
+                  % (car, ", ".join("%gK" % T for T in _bad), DILUTE_ETA_MIN))
         for m, kw in ((TOTAL_NOIMP, dict(color="k", ls="-", lw=2.0, marker="s", ms=3.5)),
                       (MATTHIESSEN, dict(color="0.45", ls=":", lw=1.6))):
             pts = sorted((r["T_K"], r["mu_cm2/Vs"]) for r in rc if r["role"] == "main" and r["mechanism"] == m)
             if pts:
                 ax.plot(*zip(*pts), label=("Matthiessen $(\\sum 1/\\mu_i)^{-1}$" if m == MATTHIESSEN
-                                           else "total (no IMP)"), **kw)
+                                           else "phonon-limited total (no IMP)"), **kw)
         chk = sorted((r["T_K"], r["mu_cm2/Vs"]) for r in rc if r["role"] == "check")
         if chk:
             src = next(r["source"] for r in rc if r["role"] == "check")
@@ -2939,15 +3047,18 @@ def write_dilute_mobility_plot(cwd, plots, M, is_2d):
         ax.set_ylabel("mobility (cm$^2$/Vs)" + (", in-plane" if is_2d else ""))
         ax.grid(alpha=0.25, lw=0.4)
         ax.legend(fontsize=7, loc="best", framealpha=0.85)
-    fig.suptitle("%s  dilute-limit (f ≈ 0) mobility by scattering mechanism — AMSET RTA (thermal average; "
-                 "Matthiessen sum is an upper bound)" % M, fontsize=10)
+    fig.suptitle("%s  mechanism-resolved phonon-limited mobility, dilute limit (f ≈ 0) — AMSET RTA "
+                 "(thermal average; Matthiessen sum is an upper bound; shaded: eta < %g, not dilute)"
+                 % (M, DILUTE_ETA_MIN), fontsize=10)
     fig.tight_layout(rect=[0, 0, 1, 0.94])
-    fig.savefig(udir / ("%s_dilute_mobility.png" % M), dpi=130)
+    fig.savefig(udir / ("%s_%s.png" % (M, MECH_RES_NAME)), dpi=130)
     plt.close(fig)
     cols = ["T_K", "carrier", "role", "source", "doping_cm3"] + (["n_2D_cm-2"] if is_2d else []) + [
-        "mechanism", "mu_cm2/Vs", "share_1/mu", "total_source"]
-    with open(udir / ("%s_dilute_mobility.csv" % M), "w", newline="") as fh:
-        fh.write("# [0053] 稀薄极限（f ≈ 0）迁移率按散射机制拆开；空穴取本征点 doping = 0（AMSET 对 doping ≥ 0 只积价带、"
+        "mechanism", "mu_cm2/Vs", "share_1/mu", "eta", "total_source"]
+    with open(udir / ("%s_%s.csv" % (M, MECH_RES_NAME)), "w", newline="") as fh:
+        fh.write("# [0053][0054] mechanism-resolved phonon-limited 迁移率（稀薄极限 f ≈ 0）；eta = n = p 点的 "
+                 "min(E_c-E_F, E_F-E_v)/kT（< %g 不是稀薄极限）；" % DILUTE_ETA_MIN)
+        fh.write("空穴取本征点 doping = 0（AMSET 对 doping ≥ 0 只积价带、"
                  "除以 hole_conc），电子取最低 n 型点（AMSET 在 0 点不给电子 μ）；总值去 IMP\n")
         fh.write("# 单机制 = AMSET transport.json 的 mobility[机制]（只开该机制）；share_1/mu = (1/μ_i)/Σ(1/μ_i)；"
                  "Matthiessen sum = (Σ 1/μ_i)^-1 ≥ 总值（RTA 热平均）；μ > %.0e 的机制（前因子 0）不列；"
@@ -2957,7 +3068,7 @@ def write_dilute_mobility_plot(cwd, plots, M, is_2d):
         for r in rows:
             w.writerow([("%.6g" % r[c]) if isinstance(r.get(c), float) else ("" if r.get(c) is None else r[c])
                         for c in cols])
-    print("[plots] %s/%s_dilute_mobility.png" % (UNDOPED_DIR, M))
+    print("[plots] %s/%s_%s.png" % (UNDOPED_DIR, M, MECH_RES_NAME))
     return True
 
 
@@ -3069,17 +3180,17 @@ def write_transport_plots(cwd, out, is_2d):
         cols = ["T_K", "dataset", "type", "n_cell_cm-3", "n_2D_cm-2", "n_lit_cm-3",
                 "carriers_per_cell", "carriers_per_atom", "in_interpret_range",
                 "S_uV/K", "sigma_S/m", "PF_W/mK2", "kappa_e_W/mK", "mu_cm2/Vs", "flag"]
-        _base_names = {"overall", "intrinsic", "ADP_only", "BT2_DPTtau"}   # [选 2] intrinsic 产物只含这 4 条
+        _base_names = {"overall", "intrinsic", "ADP_only", "BT2_DPTtau"}   # [选 2] phonon_limited 产物只含这 4 条
         for T in temps:
             # [用户 2026-10-14 选 B / 2026-10-15 选 2] 独立 intrinsic 产物名：
             #   transport CSV = 全数据集；intrinsic CSV = 仅基础 4 条（与 intrinsic 图一致）
-            for _sfx in ("transport", "intrinsic"):
+            for _sfx in ("transport", "phonon_limited"):            # [0054] 原 intrinsic -> phonon_limited
                 with open(plots / ("%s_%s_data_%dK.csv" % (M, _sfx, int(round(T)))), "w", newline="") as fh:
                     w = csv.writer(fh); w.writerow(cols)
                     for r in rows:
                         if abs(float(r["T_K"]) - T) > 1e-6:
                             continue
-                        if _sfx == "intrinsic" and r["dataset"] not in _base_names:
+                        if _sfx == "phonon_limited" and r["dataset"] not in _base_names:
                             continue
                         w.writerow([r.get(c, "") for c in cols])
         quants = [("mu_cm2/Vs", "mu  (cm^2/V/s)"), ("S_uV/K", "S  (uV/K)"), ("sigma_S/m", "sigma  (S/m)"),
@@ -3087,20 +3198,20 @@ def write_transport_plots(cwd, out, is_2d):
         dsets = [("overall", "tab:red", "--", "s"), ("intrinsic", "tab:orange", "-.", "D"),
                  ("ADP_only", "tab:green", ":", "^"), ("BT2_DPTtau", "tab:blue", "-", "o")]
         _base_dsets = list(dsets)   # [用户 2026-10-15 选 2] 本征专用图只画这 4 条基础曲线
-        _LBL = {"overall": "AMSET overall",
-                "intrinsic": "amset (all but IMP)",
-                "ADP_only": "amset_ADP",
-                "ADP_POP": "amset_ADP+POP",
-                "ADP_POP_ODP": "amset_ADP+POP+ODP",
-                "ODP": "amset_ODP", "IVS": "amset_IVS",
+        _LBL = {"overall": "phonon + impurity",                  # [0054] 统一命名（_phys_label）
+                "intrinsic": "phonon-limited",
+                "ADP_only": "ADP only (acoustic limit)",
+                "ADP_POP": "partial phonon (ADP+POP)",
+                "ADP_POP_ODP": "partial phonon (ADP+POP+ODP)",
+                "ODP": "ODP only (single-mech, mu only)", "IVS": "IVS only (single-mech, mu only)",
                 "BT2_DPTtau": "BT2×DPT-τ"}
         _set_meta = load_intrinsic_sets(cwd, AMSET2D_DIR if is_2d else AMSET_DIR) or {}
         _all_mechs = _set_meta.get("overall_labels") or []
         _im = ((_set_meta.get("sets") or {}).get("intrinsic") or {}).get("labels") or []
         if _all_mechs:
-            _LBL["overall"] = "amset_" + "+".join(_all_mechs)
+            _LBL["overall"] = _phys_label(_all_mechs, _all_mechs)
         if _im:
-            _LBL["intrinsic"] = "amset_" + "+".join(_im)
+            _LBL["intrinsic"] = _phys_label(_im, _all_mechs)
         for _k in ("ADP_POP", "ADP_POP_ODP"):
             _LBL[_k] = _intr_legend(_k, _set_meta, _LBL[_k])
         _have = {r["dataset"] for r in rows}                       # [0035] 动态加 ODP/IVS：长表里有才画
@@ -3140,17 +3251,17 @@ def write_transport_plots(cwd, out, is_2d):
         _render_9x5(dsets,
                     "%s  transport vs doping  (AMSET mechanisms from this run; BT2 x DPT tau)  %s" % (M, _trng),
                     plots / ("%s_transport.png" % M))
-        # [0052] 用户 2026-10-15 问「本征浓度横坐标不是定值吗」：这张图的 intrinsic 指【本征散射】（去掉 IMP
-        #   的散射机制组合），横轴仍是掺杂浓度扫描；本征【载流子浓度】（未掺杂，n = p = n_i）的图在
-        #   intrinsic_carrier/。标题与横轴名写明，免得两者混淆。
+        # [0052] 用户 2026-10-15 问「本征浓度横坐标不是定值吗」；[0054] 2026-10-16 用户定：与文献统一命名，
+        #   原 <M>_intrinsic.png（去 IMP 的掺杂扫描）改名 <M>_phonon_limited.png；"intrinsic" 只指本征载流子
+        #   （未掺杂，n = p = n_i，intrinsic_carrier/）。
         _render_9x5(_base_dsets,
-                    "%s  transport vs doping, base 4 sets  (AMSET all mechanisms / AMSET without IMP"
-                    " = intrinsic scattering / ADP only / BT2xDPT-tau)  %s\n"
-                    "x = doping concentration; 'intrinsic' = intrinsic SCATTERING (no impurity), "
-                    "not intrinsic carrier concentration -> see intrinsic_carrier/" % (M, _trng),
-                    plots / ("%s_intrinsic.png" % M))
-        print("[plots] %s_transport.png (基础 4 条 + 机制对照) + %s_intrinsic.png (仅基础 4 条) / "
-              "_transport|_intrinsic_data_<T>K.csv x%d" % (M, M, len(temps)))
+                    "%s  phonon-limited transport vs doping, base 4 sets  (phonon + impurity / phonon-limited"
+                    " / ADP only / BT2xDPT-tau)  %s\n"
+                    "x = doping concentration; phonon-limited = all phonon mechanisms, no ionized impurity"
+                    " (intrinsic carriers n = p = n_i -> see intrinsic_carrier/)" % (M, _trng),
+                    plots / ("%s_phonon_limited.png" % M))
+        print("[plots] %s_transport.png (基础 4 条 + 机制对照) + %s_phonon_limited.png (仅基础 4 条) / "
+              "_transport|_phonon_limited_data_<T>K.csv x%d" % (M, M, len(temps)))
 
         # ---- [0039] 每个数据集单独一张 σ/S/PF/κe（随浓度，每温度一条线）：datasets/<M>_<数据集>.png + .csv ----
         #   主图把 overall / intrinsic / ADP only / BT2 挤在一张 9x5 里，intrinsic（去 IMP）等子集没有单独的图。
@@ -3336,10 +3447,10 @@ def write_transport_plots(cwd, out, is_2d):
         write_undoped_plots(cwd, plots, M, is_2d)
     except Exception as _e:                                       # noqa: BLE001
         print("[WARN] 本征载流子图失败（%s: %s）" % (type(_e).__name__, _e))
-    try:                                                          # [0053] 稀薄极限 μ(T) 机制分解（只这一个浓度）
-        write_dilute_mobility_plot(cwd, plots, M, is_2d)
+    try:                                                          # [0053][0054] 稀薄极限 μ(T) 机制分解（只这一个浓度）
+        write_mechanism_resolved_plot(cwd, plots, M, is_2d)
     except Exception as _e:                                       # noqa: BLE001
-        print("[WARN] 稀薄极限迁移率图失败（%s: %s）" % (type(_e).__name__, _e))
+        print("[WARN] mechanism-resolved 迁移率图失败（%s: %s）" % (type(_e).__name__, _e))
     try:                                                          # [0041] 缺陷平衡载流子单独出图
         write_defect_plots(cwd, plots, M, is_2d)
     except Exception as _e:                                       # noqa: BLE001

@@ -233,6 +233,7 @@ def _wrap_intrinsic(orig):
 
 
 UNDOPED_NI_JSON = "undoped_ni.json"   # [0052] 本征点 n_i(T) 记录（S8.3 的 intrinsic_carrier/ 图表标注 n_i 用）
+#   [0054] 另记带边 E_v / E_c（与 E_F 同一能量参考、含 scissor），S8.3 据此算 η = (E_c − E_F)/k_BT，判本征点是否仍是 f ≈ 0
 
 
 def write_undoped_ni(rec, run_dir="."):
@@ -251,7 +252,9 @@ def write_undoped_ni(rec, run_dir="."):
             json.dump({"schema": "autozt-undoped-ni/1",
                        "note": "AMSET doping = 0 点：E_F 由 n = p 求得，n = p = n_i（每胞体积口径 cm^-3）",
                        "temperatures_K": [r[0] for r in rec], "E_F_eV": [r[1] for r in rec],
-                       "n_i_cm-3": [r[2] for r in rec]}, fh, indent=1)
+                       "n_i_cm-3": [r[2] for r in rec],
+                       "E_v_eV": [r[3] if len(r) > 4 else None for r in rec],
+                       "E_c_eV": [r[4] if len(r) > 4 else None for r in rec]}, fh, indent=1)
         os.replace(tmp, path)
     except OSError as e:
         print("[fermi_fix] 写 %s 失败（%s）—— 本征浓度只在日志里" % (UNDOPED_NI_JSON, e), file=sys.stderr)
@@ -265,6 +268,7 @@ def _wrap_set_doping(orig):
         out = orig(self, doping, temperatures)
         if enabled() and getattr(self, "dos", None) is not None and band_gap_edges(self.dos) is not None:
             vol = float(self.dos.structure.volume)
+            vbm, cbm = band_gap_edges(self.dos)          # [0054] 带边（Ha），写进 undoped_ni.json
             rec = []
             for n, t in np.ndindex(self.fermi_levels.shape):
                 if self.doping[n] == 0:
@@ -275,7 +279,7 @@ def _wrap_set_doping(orig):
                     self.electron_conc[n, t] = n_i
                     self.hole_conc[n, t] = n_i
                     rec.append((float(self.temperatures[t]), float(self.fermi_levels[n, t] * HA_EV),
-                                float(_to_cm3(self.electron_conc[n, t]))))
+                                float(_to_cm3(self.electron_conc[n, t])), vbm * HA_EV, cbm * HA_EV))
                     if not _quiet():
                         print("[fermi_fix] 本征点 %g K：E_F = %.4f eV，n = p = %.3e cm^-3（n=p 求解，log-sum-exp）"
                               % (self.temperatures[t], self.fermi_levels[n, t] * HA_EV,

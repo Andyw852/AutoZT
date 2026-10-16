@@ -16,15 +16,16 @@
             也可直接给以 step* 开头的目录（即 <M>/ke-dft-cpu/ 本身）。
 <输出目录>  独立输出目录（约定: <M>/transport_plots/），生成:
               <M>_transport.png / <M>_transport_data_<T>K.csv   9温度x5参数(mu/S/sigma/PF/kappa_e)，
-                        数据集 4 条：overall / intrinsic(去 IMP) / ADP_only / BT2×DPT-τ
-              <M>_intrinsic.png / <M>_intrinsic_data_<T>K.csv   [B 2026-10-14 / 2026-10-15 选 2]
+                        数据集 4 条：phonon + impurity / phonon-limited(去 IMP) / ADP only / BT2×DPT-τ
+              <M>_phonon_limited.png / <M>_phonon_limited_data_<T>K.csv   [B 2026-10-14 / 2026-10-15 选 2；
+                        [0054] 2026-10-16 起由 <M>_intrinsic.* 改名，与文献统一：去 IMP = phonon-limited]
                         只含上列 4 条基础曲线（此前与 transport 图重复，现内容真正区分；恢复了 [0035] 合并前会永久冻结的旧名）
               <M>_params_<T>K.csv                          每个温度一张参数表(E1/C2D/m*/tau/mu)
 
 数据来源:
     transport 图  <- step8.1_boltztrap/boltztrap_crta.json + step8.2_dpt/dpt_result.json
                    + step8.4_amset2d/transport.json + step8.4_amset2d/intrinsic_ADP.json
-    intrinsic 图  <- step8.3_output/intrinsic/intrinsic_transport_table.csv
+    phonon_limited 图 <- step8.3_output/intrinsic/intrinsic_transport_table.csv（内部文件名不变）
     params 表     <- step8.3_output/comparison_vs_T.csv
 
 输出位置约定: 只写 <输出目录>，绝不写进 ke-dft-cpu/step8.3_output/。
@@ -47,8 +48,8 @@ QUANTS_I = [("mu_cm2/Vs", "mu  (cm^2/V/s)"), ("S_uV/K", "S  (uV/K)"), ("sigma_S/
             ("PF_W/mK2", "PF  (W/m/K$^2$)"), ("kappa_e_W/mK", "kappa_e  (W/m/K)")]  # 与 QUANTS_T 同列
 DATASETS = [("overall", "tab:red", "--", "s"), ("intrinsic", "tab:orange", "-.", "D"),
             ("ADP_only", "tab:green", ":", "^"), ("BT2_DPTtau", "tab:blue", "-", "o")]
-DS_LABELS = {"overall": "AMSET overall", "intrinsic": "amset (all but IMP)",
-             "ADP_only": "amset_ADP", "BT2_DPTtau": "BT2×DPT-τ"}
+DS_LABELS = {"overall": "phonon + impurity", "intrinsic": "phonon-limited",      # [0054] 与 S8.3 统一命名
+             "ADP_only": "ADP only (acoustic limit)", "BT2_DPTtau": "BT2×DPT-τ"}
 
 
 def fnum(x):
@@ -191,7 +192,7 @@ def make_transport(mdir, out, M):
                 ax.set_yscale("log")
                 ax.set_ylim({"sigma": (1e0, 1e10), "PF": (1e-6, 1e1), "kappa_e": (1e-4, 1e5)}[q])
     hh = [Line2D([], [], color="tab:blue", lw=1.6, label="DPT route (S8.1 CRTA x DPT-tau)"),
-          Line2D([], [], color="tab:red", lw=1.2, ls="--", marker="s", ms=4, label="AMSET overall"),
+          Line2D([], [], color="tab:red", lw=1.2, ls="--", marker="s", ms=4, label="AMSET phonon + impurity"),
           Line2D([], [], color="tab:green", lw=1.2, ls=":", marker="^", ms=4, label="AMSET ADP only (intrinsic_ADP.json)"),
           Line2D([], [], color="tab:blue", lw=1.0, ls="-.", label="DPT band-edge e-"),
           Line2D([], [], color="tab:purple", lw=1.0, ls="-.", label="DPT band-edge h+")]
@@ -214,8 +215,8 @@ def make_intrinsic(mdir, out, M):
             "carriers_per_cell", "carriers_per_atom", "in_interpret_range",
             "S_uV/K", "sigma_S/m", "PF_W/mK2", "kappa_e_W/mK", "mu_cm2/Vs", "flag"]
     _names = {ds for ds, _c, _ls, _mk in DATASETS}   # [2026-10-15 选 2] intrinsic CSV 只含 4 条基础曲线
-    for T in temps:                                 # 每温度一个 CSV（[B] 用 intrinsic 名）
-        with open(os.path.join(out, "%s_intrinsic_data_%dK.csv" % (M, int(round(T)))), "w", newline="") as fh:
+    for T in temps:                                 # 每温度一个 CSV（[0054] phonon_limited 名）
+        with open(os.path.join(out, "%s_phonon_limited_data_%dK.csv" % (M, int(round(T)))), "w", newline="") as fh:
             w = csv.writer(fh); w.writerow(cols)
             for r in rows:
                 if abs(float(r["T_K"]) - T) > 1e-6 or r["dataset"] not in _names:
@@ -241,15 +242,15 @@ def make_intrinsic(mdir, out, M):
     hh = [Line2D([], [], color=c, lw=1.4, ls=ls, marker=mk, ms=4, label=DS_LABELS.get(ds, ds)) for ds, c, ls, mk in DATASETS]
     hh.append(Line2D([], [], color="0.35", lw=1.0, ls=(0, (1, 1)), label="DPT (band-edge, mu only)"))
     fig.legend(handles=hh, loc="lower center", ncol=5, fontsize=9, frameon=False)
-    # [0052-r1] 文案与权威脚本 gen_step13_output.py 对齐：温度范围按实际网格；写明 'intrinsic' 指
-    #   本征散射（去 IMP）而非本征载流子浓度（后者在 transport_plots/intrinsic_carrier/）。
+    # [0052-r1][0054] 文案与权威脚本 gen_step13_output.py 对齐：去 IMP = phonon-limited；
+    #   "intrinsic" 只指本征载流子（transport_plots/intrinsic_carrier/）。
     _trng = "%g-%g K" % (min(temps), max(temps)) if temps else ""
-    fig.suptitle("%s  intrinsic transport  (overall / intrinsic(no IMP) / ADP only / BT2xDPT-tau)"
-                 "  %s\nx = doping concentration; 'intrinsic' = intrinsic SCATTERING (no impurity),"
-                 " not intrinsic carrier concentration -> see intrinsic_carrier/"
+    fig.suptitle("%s  phonon-limited transport vs doping, base 4 sets  (phonon + impurity / phonon-limited"
+                 " / ADP only / BT2xDPT-tau)  %s\nx = doping concentration; phonon-limited = all phonon mechanisms,"
+                 " no ionized impurity (intrinsic carriers n = p = n_i -> see intrinsic_carrier/)"
                  % (M, _trng), fontsize=11)
     fig.tight_layout(rect=[0, 0.03, 1, 0.985 - 0.012])   # 两行标题留位置（与权威脚本同法）
-    fig.savefig(os.path.join(out, "%s_intrinsic.png" % M), dpi=130); plt.close(fig)
+    fig.savefig(os.path.join(out, "%s_phonon_limited.png" % M), dpi=130); plt.close(fig)
     return True
 
 
@@ -277,10 +278,10 @@ def main():
     mdir = os.path.abspath(sys.argv[1]); out = os.path.abspath(sys.argv[2])
     M = sys.argv[3] if len(sys.argv) > 3 else os.path.basename(os.path.dirname(mdir).rstrip("/")) or os.path.basename(mdir.rstrip("/"))
     os.makedirs(out, exist_ok=True)
-    a = make_transport(mdir, out, M)          # [B] 两张图都要：transport + intrinsic
+    a = make_transport(mdir, out, M)          # [B] 两张图都要：transport + phonon_limited
     b = make_intrinsic(mdir, out, M)
     c = make_params(mdir, out, M)
-    print("[%s] transport=%s intrinsic=%s params=%s -> %s" % (M, a, b, c, out))
+    print("[%s] transport=%s phonon_limited=%s params=%s -> %s" % (M, a, b, c, out))
 
 
 if __name__ == "__main__":
