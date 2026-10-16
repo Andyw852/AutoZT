@@ -26,6 +26,8 @@ run:gen 步骤：登录节点直接跑、秒级。读取
   intrinsic_transport_<T>K.png（每个 AMSET 温度一张：n/p × S、σ、κe、Lorenz、μ；包含可用的 ADP、ADP+POP、
   ADP+POP+ODP 及去 IMP/overall 结果，并含 BT2×DPT τ / DPT 参照）、intrinsic_transport_table.csv（全部温度 × 原生掺杂档 × 数据集）、intrinsic_summary.txt。
   2D 图双横轴：下 n_2D（cm^-2），上文献口径 n_2D/t（cm^-3）；comparison_300K.png 同样处理。
+[0053] transport_plots/intrinsic_carrier/<M>_dilute_mobility.png/.csv：只取稀薄极限这一个浓度，μ(T) 按散射机制
+  拆开（单机制 μ、去 IMP 总值、Matthiessen 倒数和、限制机制占比）；空穴取 n = p 本征点，电子取最低 n 型点。
 缺任一输入都不崩，能画多少画多少。
 """
 import json
@@ -37,7 +39,7 @@ from pathlib import Path
 # [SKILL_REV] 版本戳：写进 comparison_summary.txt。每次改本脚本逻辑后更新。
 #   陈旧副本已咬人三次（step12/step9b 盖戳后，step13 是最后一个没盖的），
 #   这里盖戳便于从产物反查到底跑的是哪份 skill 副本。
-_SKILL_REV = "2026-10-15-0052"   # [0052] transport_plots/ 每次整目录重建（先删旧结果）；intrinsic_carrier/ 标注本征浓度 n_i(T)（undoped_ni.json / fermi_fix 日志）；<M>_intrinsic.png 标题写明 intrinsic = 本征散射、横轴 = 掺杂浓度   # [0047] <M>_intrinsic.png 只画基础 4 条本征曲线（此前与 <M>_transport.png 同图仅换标题）+ intrinsic CSV 同步只含 4 条   # [0046] 本征五参数套件支持 3D（读 S8 的 step8_amset + subset_*.json；_geom_3d 体胞几何、c/t=1、对角 (xx+yy+zz)/3）；3D 也出 transport_plots/<M>_transport|<M>_intrinsic.png 9x5 面板   # [0045] bt2_muscan 同时画 thickness(我们)/cell(文献) 两种口径；[0041] transport_plots/defect_equilibrium/（缺陷平衡净浓度 σ/S/PF/κe vs T）   # 2026-10-13-0040   # [0040] transport_plots/intrinsic_carrier/（未掺杂本征载流子 σ/S/PF/κe vs T）；图例/文件名一律用实际机制组合 amset_<机制>；2026-10-13-0039   # [0039] transport_plots/datasets/：每个数据集单独一张 σ/S/PF/κe 图 + csv； [0038] 本征/子集图读 subset_*.json（SUBSETS）；[0036] transport_plots 加 bt2_muscan/ + amset_scan/ 两个扫描图子文件夹；[0035] transport_plots 合并 + τ 对比（tau/）
+_SKILL_REV = "2026-10-16-0053"   # [0053] intrinsic_carrier/<M>_dilute_mobility.png：稀薄极限（f≈0）μ(T) 按散射机制拆开 + Matthiessen 对照（空穴取 n = p 本征点，电子取最低 n 型去 IMP）   # [0052] transport_plots/ 每次整目录重建（先删旧结果）；intrinsic_carrier/ 标注本征浓度 n_i(T)（undoped_ni.json / fermi_fix 日志）；<M>_intrinsic.png 标题写明 intrinsic = 本征散射、横轴 = 掺杂浓度   # [0047] <M>_intrinsic.png 只画基础 4 条本征曲线（此前与 <M>_transport.png 同图仅换标题）+ intrinsic CSV 同步只含 4 条   # [0046] 本征五参数套件支持 3D（读 S8 的 step8_amset + subset_*.json；_geom_3d 体胞几何、c/t=1、对角 (xx+yy+zz)/3）；3D 也出 transport_plots/<M>_transport|<M>_intrinsic.png 9x5 面板   # [0045] bt2_muscan 同时画 thickness(我们)/cell(文献) 两种口径；[0041] transport_plots/defect_equilibrium/（缺陷平衡净浓度 σ/S/PF/κe vs T）   # 2026-10-13-0040   # [0040] transport_plots/intrinsic_carrier/（未掺杂本征载流子 σ/S/PF/κe vs T）；图例/文件名一律用实际机制组合 amset_<机制>；2026-10-13-0039   # [0039] transport_plots/datasets/：每个数据集单独一张 σ/S/PF/κe 图 + csv； [0038] 本征/子集图读 subset_*.json（SUBSETS）；[0036] transport_plots 加 bt2_muscan/ + amset_scan/ 两个扫描图子文件夹；[0035] transport_plots 合并 + τ 对比（tau/）
 #   bump 记录：2026-10-11-0035 —— transport_plots 合并：intrinsic 图并入 transport 图（4 条数据集
 #   overall / intrinsic / ADP only / BT2xDPT-tau），不再单独出 <M>_intrinsic*.{png,csv}，
 #   只留 <M>_transport.png + 每温度 CSV + <M>_params_<T>K.csv。
@@ -2771,6 +2773,194 @@ def write_undoped_plots(cwd, plots, M, is_2d):
     return True
 
 
+# =====================================================================
+# [0053] 稀薄极限（f ≈ 0）迁移率按散射机制拆开（2026-10-16 用户要求；对照 Cheng & Liu, JACS 2018, 140, 17895
+#   的分模式迁移率 + Matthiessen）。上面的 <M>_intrinsic_carrier 画的是 n = p 时的 σ/S/PF/κe —— 双极（电子+空穴
+#   一起）的量，不是单载流子迁移率；本节只取稀薄极限这一个浓度，画 μ(T) 的机制分解。
+#   · 空穴：本征点 doping = 0。AMSET 的 _calculate_mobility（_get_band_idx）对 doping ≥ 0 只积价带、除以 hole_conc，
+#     所以 0 点给的就是空穴迁移率；本征点 IMP 的 N_ii = |n − p| = 0、屏蔽来自 n_i（可忽略）、E_F 在带隙中部（f ≈ 0）。
+#   · 电子：AMSET 在 0 点拿不到 -> 取 |掺杂| 最低的 n 型点，总值用去 IMP 的那套（IMP 随掺杂变，不属于稀薄极限）。
+#   · 核对：空穴另取最低 p 型点（去 IMP）、电子取次低 n 型点（去 IMP），与主值差 > 5% 说明还没到非简并平台
+#     （或自由载流子屏蔽已起作用），打 WARN。
+#   · 口径差异（写进图注）：AMSET 是 RTA 对 −∂f/∂E 的热平均，单机制 μ 的倒数和 ≥ 总值的倒数（Matthiessen 只给上界）；
+#     Cheng & Liu 取带边单态 μ = eτ/m*，Matthiessen 严格成立。两者差在热平均，不在占据数。
+# =====================================================================
+DILUTE_MU_HUGE = 1e10      # cm²/Vs：单机制 μ 超过它 = 该机制前因子为 0（本征点 IMP、非极性材料 POP），不画、不进 Matthiessen
+DILUTE_CHECK_TOL = 0.05    # 主值与核对点相对差超过它打 WARN
+_DILUTE_COLORS = {"ADP": "C2", "POP": "C1", "ODP": "C6", "IVS": "C7", "PIE": "C9", "IMP": "C3"}
+TOTAL_NOIMP, MATTHIESSEN = "total (no IMP)", "Matthiessen sum"
+
+
+def dilute_mobility_rows(cwd, is_2d):
+    """[0053] 稀薄极限迁移率行：[{T_K, carrier, role, source, doping_cm3, n_2D_cm-2, mechanism, mu_cm2/Vs,
+    share_1/mu}]；role = main（画实线）/ check（核对点）。没有 AMSET transport.json -> ([], 原因)。"""
+    run = AMSET2D_DIR if is_2d else AMSET_DIR
+    j = _load_json(Path(cwd) / run / "transport.json")
+    if not j:
+        return [], "没有 %s/transport.json" % run
+    data = load_intrinsic_sets(cwd, run_name=run) or {}
+    doping = [float(x) for x in _unwrap(j["doping"])]
+    temps = [float(t) for t in _unwrap(j["temperatures"])]
+    mob = j.get("mobility") or {}
+    singles = {str(k).upper(): _unwrap(v) for k, v in mob.items()
+               if str(k).lower() != "overall" and v is not None}
+    labels = set(singles)
+    sets = data.get("sets") or {}
+    intr = sets.get("intrinsic") or {}
+    tot_arr = intr.get("mu") if not intr.get("partial") else None
+    tot_src = "去 IMP（%s）" % "+".join(intr.get("labels") or []) if tot_arr is not None else None
+    if tot_arr is None and "IMP" not in labels:
+        tot_arr, tot_src = _unwrap(mob.get("overall") or mob.get("Overall")), "overall（本轮没开 IMP）"
+    c_cm = (_geom_2d(cwd) or {}).get("c_A", 0) * 1e-8 if is_2d else None
+
+    def _lowest(sign, nth=0):
+        idx = sorted((i for i, x in enumerate(doping) if (x < 0 if sign < 0 else x > 0)), key=lambda i: abs(doping[i]))
+        return idx[nth] if len(idx) > nth else None
+
+    i0 = next((i for i, x in enumerate(doping) if abs(x) <= 1e-12), None)
+    plan = []                                   # (carrier, role, 掺杂索引, 来源说明, 总值数组, 总值说明)
+    e_main, e_chk = _lowest(-1), _lowest(-1, 1)
+    if e_main is not None:
+        plan.append(("electron", "main", e_main, "lowest n-type", tot_arr, tot_src))
+    if e_chk is not None and tot_arr is not None:
+        plan.append(("electron", "check", e_chk, "2nd-lowest n-type", tot_arr, tot_src))
+    h_low = _lowest(+1)
+    if i0 is not None:
+        # 本征点 |n − p| = 0：IMP 率为 0，overall 本身就是去 IMP 的（有子集用子集，没有用 overall）
+        h_tot = tot_arr if tot_arr is not None else _unwrap(mob.get("overall") or mob.get("Overall"))
+        plan.append(("hole", "main", i0, "n = p (undoped)", h_tot, tot_src or "overall（N_ii = 0）"))
+        if h_low is not None and tot_arr is not None:
+            plan.append(("hole", "check", h_low, "lowest p-type", tot_arr, tot_src))
+    elif h_low is not None:
+        plan.append(("hole", "main", h_low, "lowest p-type (no n = p point)", tot_arr, tot_src))
+    if not plan:
+        return [], "transport.json 的掺杂网格里没有可用的 n 型 / p 型 / 0 点"
+    rows = []
+    for car, role, i, src, tarr, tsrc in plan:
+        x = doping[i]
+        n2d = abs(x) * c_cm if c_cm else None
+        for k, T in enumerate(temps):
+            base = {"T_K": T, "carrier": car, "role": role, "source": src, "doping_cm3": x, "n_2D_cm-2": n2d}
+            mech = {}
+            if role == "main":
+                for name in sorted(singles):
+                    if name == "IMP":
+                        continue
+                    try:
+                        v = _tavg(singles[name][i][k], is_2d)
+                    except (TypeError, IndexError):
+                        v = None
+                    if v is not None and 0 < v < DILUTE_MU_HUGE:
+                        mech[name] = v
+                inv = sum(1.0 / v for v in mech.values())
+                for name, v in mech.items():
+                    rows.append(dict(base, mechanism=name, **{"mu_cm2/Vs": v, "share_1/mu": (1.0 / v) / inv}))
+                if mech:
+                    rows.append(dict(base, mechanism=MATTHIESSEN, **{"mu_cm2/Vs": 1.0 / inv, "share_1/mu": None}))
+            try:
+                tv = _tavg(tarr[i][k], is_2d) if tarr is not None else None
+            except (TypeError, IndexError):
+                tv = None
+            if tv is not None and 0 < tv < DILUTE_MU_HUGE:
+                rows.append(dict(base, mechanism=TOTAL_NOIMP, total_source=tsrc,
+                                 **{"mu_cm2/Vs": tv, "share_1/mu": None}))
+    return rows, None
+
+
+def write_dilute_mobility_plot(cwd, plots, M, is_2d):
+    """[0053] transport_plots/intrinsic_carrier/<M>_dilute_mobility.png + .csv：稀薄极限 μ(T) 的机制分解。"""
+    import csv
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    udir = Path(plots) / UNDOPED_DIR
+    for _old in (udir.glob("%s_dilute_mobility.*" % M) if udir.is_dir() else []):
+        _old.unlink()
+    rows, why = dilute_mobility_rows(cwd, is_2d)
+    if not rows:
+        print("[..] 稀薄极限迁移率图跳过：%s" % why)
+        return False
+    udir.mkdir(parents=True, exist_ok=True)
+
+    def _mu(car, role, mech, T):
+        return next((r["mu_cm2/Vs"] for r in rows if r["carrier"] == car and r["role"] == role
+                     and r["mechanism"] == mech and r["T_K"] == T), None)
+
+    temps = sorted({r["T_K"] for r in rows})
+    T_rep = min(temps, key=lambda t: abs(t - 300.0))
+    cars = [c for c in ("electron", "hole") if any(r["carrier"] == c and r["role"] == "main" for r in rows)]
+    for car in cars:                                       # 核对：主值 vs 核对点（去 IMP 总值）
+        for T in temps:
+            a, b = _mu(car, "main", TOTAL_NOIMP, T), _mu(car, "check", TOTAL_NOIMP, T)
+            if a and b and abs(a / b - 1.0) > DILUTE_CHECK_TOL:
+                src = next(r["source"] for r in rows if r["carrier"] == car and r["role"] == "check")
+                print("[WARN] %s 稀薄极限 μ 在 %g K 与 %s 差 %.0f%%（%.4g vs %.4g cm²/Vs）—— 还没到非简并平台，"
+                      "或自由载流子屏蔽已起作用" % (car, T, src, 100 * (a / b - 1.0), a, b))
+            m_ = _mu(car, "main", MATTHIESSEN, T)
+            if a and m_ and a > m_ * 1.01:
+                # RTA 下 <1/Σ(1/τ_i)> ≤ 1/Σ(1/<τ_i>)（调和平均凹性），总值高于倒数和说明单机制与去 IMP 子集口径不一致
+                print("[WARN] %s 稀薄极限 %g K：去 IMP 总值 %.4g > Matthiessen 倒数和 %.4g cm²/Vs —— RTA 下不应发生，"
+                      "核对单机制 μ 与子集是否同一轮、同一屏蔽设置" % (car, T, a, m_))
+        shares = sorted(((r["share_1/mu"], r["mechanism"]) for r in rows if r["carrier"] == car
+                         and r["role"] == "main" and r["T_K"] == T_rep and r["share_1/mu"] is not None), reverse=True)
+        if shares:
+            print("[..] 稀薄极限 %s @%gK 限制机制：%s" % (
+                car, T_rep, "，".join("%s %.0f%%" % (m, 100 * s) for s, m in shares)))
+    fig, axs = plt.subplots(1, len(cars), figsize=(5.6 * len(cars), 4.4), squeeze=False)
+    for ax, car in zip(axs[0], cars):
+        rc = [r for r in rows if r["carrier"] == car]
+        mechs = list(dict.fromkeys(r["mechanism"] for r in rc if r["role"] == "main"
+                                   and r["mechanism"] not in (TOTAL_NOIMP, MATTHIESSEN)))
+        for ci, m in enumerate(mechs):
+            pts = sorted((r["T_K"], r["mu_cm2/Vs"]) for r in rc if r["role"] == "main" and r["mechanism"] == m)
+            ax.plot(*zip(*pts), ls="--", marker="o", ms=3, lw=1.2,
+                    color=_DILUTE_COLORS.get(m, "C%d" % (ci + 3)), label="%s only" % m)
+        for m, kw in ((TOTAL_NOIMP, dict(color="k", ls="-", lw=2.0, marker="s", ms=3.5)),
+                      (MATTHIESSEN, dict(color="0.45", ls=":", lw=1.6))):
+            pts = sorted((r["T_K"], r["mu_cm2/Vs"]) for r in rc if r["role"] == "main" and r["mechanism"] == m)
+            if pts:
+                ax.plot(*zip(*pts), label=("Matthiessen $(\\sum 1/\\mu_i)^{-1}$" if m == MATTHIESSEN
+                                           else "total (no IMP)"), **kw)
+        chk = sorted((r["T_K"], r["mu_cm2/Vs"]) for r in rc if r["role"] == "check")
+        if chk:
+            src = next(r["source"] for r in rc if r["role"] == "check")
+            ax.plot(*zip(*chk), ls="none", marker="o", ms=7, mfc="none", mec="k", mew=0.8,
+                    label="check: total @ %s" % src)
+        r0 = next(r for r in rc if r["role"] == "main")
+        if r0["source"].startswith("n = p"):
+            where = "n = p (undoped, E_F mid-gap)"
+        elif r0.get("n_2D_cm-2"):
+            where = "%s, n$_{2D}$ = %.1e cm$^{-2}$" % (r0["source"], r0["n_2D_cm-2"])
+        else:
+            where = "%s, |doping| = %.1e cm$^{-3}$" % (r0["source"], abs(r0["doping_cm3"]))
+        ax.set_title("%s  (%s)" % (car, where), fontsize=9.5)
+        ax.set_yscale("log")
+        ax.set_xlabel("T (K)")
+        ax.set_ylabel("mobility (cm$^2$/Vs)" + (", in-plane" if is_2d else ""))
+        ax.grid(alpha=0.25, lw=0.4)
+        ax.legend(fontsize=7, loc="best", framealpha=0.85)
+    fig.suptitle("%s  dilute-limit (f ≈ 0) mobility by scattering mechanism — AMSET RTA (thermal average; "
+                 "Matthiessen sum is an upper bound)" % M, fontsize=10)
+    fig.tight_layout(rect=[0, 0, 1, 0.94])
+    fig.savefig(udir / ("%s_dilute_mobility.png" % M), dpi=130)
+    plt.close(fig)
+    cols = ["T_K", "carrier", "role", "source", "doping_cm3"] + (["n_2D_cm-2"] if is_2d else []) + [
+        "mechanism", "mu_cm2/Vs", "share_1/mu", "total_source"]
+    with open(udir / ("%s_dilute_mobility.csv" % M), "w", newline="") as fh:
+        fh.write("# [0053] 稀薄极限（f ≈ 0）迁移率按散射机制拆开；空穴取本征点 doping = 0（AMSET 对 doping ≥ 0 只积价带、"
+                 "除以 hole_conc），电子取最低 n 型点（AMSET 在 0 点不给电子 μ）；总值去 IMP\n")
+        fh.write("# 单机制 = AMSET transport.json 的 mobility[机制]（只开该机制）；share_1/mu = (1/μ_i)/Σ(1/μ_i)；"
+                 "Matthiessen sum = (Σ 1/μ_i)^-1 ≥ 总值（RTA 热平均）；μ > %.0e 的机制（前因子 0）不列；"
+                 "role = check 是非简并平台核对点\n" % DILUTE_MU_HUGE)
+        w = csv.writer(fh)
+        w.writerow(cols)
+        for r in rows:
+            w.writerow([("%.6g" % r[c]) if isinstance(r.get(c), float) else ("" if r.get(c) is None else r[c])
+                        for c in cols])
+    print("[plots] %s/%s_dilute_mobility.png" % (UNDOPED_DIR, M))
+    return True
+
+
 def _clear_dir(d):
     """[0052] 清空目录内容（保留目录本身）；删不掉的只告警。
     [0052-r1] 目录本身是符号链接时不动手：否则 rmtree/unlink 会顺着链接删到别处的产物。"""
@@ -3146,6 +3336,10 @@ def write_transport_plots(cwd, out, is_2d):
         write_undoped_plots(cwd, plots, M, is_2d)
     except Exception as _e:                                       # noqa: BLE001
         print("[WARN] 本征载流子图失败（%s: %s）" % (type(_e).__name__, _e))
+    try:                                                          # [0053] 稀薄极限 μ(T) 机制分解（只这一个浓度）
+        write_dilute_mobility_plot(cwd, plots, M, is_2d)
+    except Exception as _e:                                       # noqa: BLE001
+        print("[WARN] 稀薄极限迁移率图失败（%s: %s）" % (type(_e).__name__, _e))
     try:                                                          # [0041] 缺陷平衡载流子单独出图
         write_defect_plots(cwd, plots, M, is_2d)
     except Exception as _e:                                       # noqa: BLE001
