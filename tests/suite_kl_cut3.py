@@ -132,6 +132,23 @@ def test_nth_neighbor_candidates():
     check("近简并档在 note 里提示", "N=2:3.88" in note, note)
 
 
+def test_supercell_not_grown():
+    print("[1d] 超胞不随候选扩大：越过安全截断的候选剔除（Si 原胞 4×4×4）")
+    with tempfile.TemporaryDirectory() as d:
+        p = Path(d) / "POSCAR"
+        h = 5.47 / 2
+        p.write_text("Si\n1.0\n0 %f %f\n%f 0 %f\n%f %f 0\nSi\n2\nDirect\n"
+                     "0 0 0\n0.25 0.25 0.25\n" % (h, h, h, h, h, h), encoding="utf-8")
+        cands, _, _ = kc.cut3_candidates(p, r_max=7.0)
+        check("Si 原胞 -n 候选", cands == [4.2, 5.0, 5.72, 6.33, 6.9], str(cands))
+        reps = kc.supercell_matrix(p, "3d", 12.0, 6, 2, cutoff=None)
+        check("MIN_SC_LEN=12 → 4×4×4（不看候选）", reps == [4, 4, 4], str(reps))
+        kept, dropped, safe = kc.cap_cut3_candidates(p, cands, reps)
+        check("安全截断 6.22 Å 内保留 N=2..4", kept == [4.2, 5.0, 5.72]
+              and dropped == [6.33, 6.9] and abs(safe - 6.22) < 0.01,
+              str((kept, dropped, safe)))
+
+
 def test_resolve():
     print("[2] resolve_cut3_candidates 解析")
     with tempfile.TemporaryDirectory() as d:
@@ -228,6 +245,7 @@ def main():
     test_shells_and_candidates()
     test_quasi_continuous()
     test_nth_neighbor_candidates()
+    test_supercell_not_grown()
     test_resolve()
     test_select()
     test_err_gate()
