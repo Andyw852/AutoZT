@@ -614,13 +614,37 @@ def main():
         _conf_cut3 = conf["ALM_CUT3"]
     else:
         _conf_cut3 = conf["FC3_CUTOFF_PAIR"]
-    # 三阶截断半径（alm 的 ALM_CUT3 / findiff 的 FC3_CUTOFF_PAIR）用于超胞内切球判据：
-    # 截断半径必须 ≤ 超胞安全截断（0.5×内切球直径 − margin），否则周期镜像污染力常数。
-    cut3 = max(_cands) if _cands else _conf_cut3
     cut3_label = "ALM_CUT3" if method == "alm" else "FC3_CUTOFF_PAIR"
+    # 超胞不跟候选扩（2026-10-16 user 定）：超胞只由 SUPERCELL / MIN_SC_LEN 决定，候选里
+    #   越过该超胞安全截断（0.5×内切球直径 − margin，否则周期镜像污染力常数）的档直接
+    #   剔除；最大的保留候选当生成用截断（估帧）。要更远的截断就显式加大 SUPERCELL /
+    #   MIN_SC_LEN。CUT3_CANDIDATES=off 时仍按单一截断扩胞（旧行为不变）。
+    _vax = vac_axis if vac_axis is not None else 2
+    if conf["SUPERCELL"]:
+        reps = [int(x) for x in conf["SUPERCELL"]]
+        if dim == "2d":
+            reps[_vax] = 1
+    else:
+        reps = kc.supercell_matrix(out / "POSCAR", dim, conf["MIN_SC_LEN"],
+                                   conf["MAX_MULTIPLE"], _vax,
+                                   cutoff=None if _cands else _conf_cut3)
     if _cands:
-        print("[..] 生成按最大候选截断 %.2f Å 估帧/定超胞；候选 %s 记入 disp_plan.json 供 S5 逐个拟合"
-              % (cut3, _cands))
+        _cands, _over, _safe = kc.cap_cut3_candidates(out / "POSCAR", _cands, reps,
+                                                      dim=dim, vac_axis=_vax)
+        if _safe is not None:
+            if _over:
+                print("[WARN] 候选截断 %s 超过超胞 %s 的安全截断 %.2f Å，已剔除（超胞不随候选"
+                      "扩大；要这些档请显式加大 SUPERCELL / MIN_SC_LEN）"
+                      % (_over, kc.dim_str(reps), _safe))
+            if not _cands:
+                print("[WARN] 没有候选落在超胞 %s 的安全截断 %.2f Å 内 → 不做截断扫描，"
+                      "生成按安全截断估帧" % (kc.dim_str(reps), _safe))
+        cut3 = max(_cands) if _cands else float(int(_safe * 100)) / 100.0
+    else:
+        cut3 = _conf_cut3
+    if _cands:
+        print("[..] 超胞 %s；生成按最大候选截断 %.2f Å 估帧；候选 %s 记入 disp_plan.json 供 S5 逐个拟合"
+              % (kc.dim_str(reps), cut3, _cands))
     _s4plan = {"cut3": cut3, "cands": _cands, "shells": _shells}
     if dim == "2d":
         # P1-5：真空隙 ≤ 层厚 → 最近镜像跨真空（Born-Huang 的 r_ij 错）；截断 ≥ 真空隙
@@ -635,17 +659,10 @@ def main():
         else:
             print("[WARN] 找不到 S1 的 OUTCAR（%s/step1*/OUTCAR），2D 残余应力未核验"
                   % cwd)
-    if conf["SUPERCELL"]:
-        reps = [int(x) for x in conf["SUPERCELL"]]
-        if dim == "2d":
-            reps[vac_axis if vac_axis is not None else 2] = 1
+    if conf["SUPERCELL"] and not _cands:
         # 显式超胞不自动扩胞，只事后 WARN（对齐 validate_user_supercell 只 warning 语义）
         kc.warn_cutoff_vs_supercell(out / "POSCAR", reps, cut3, label=cut3_label,
                                     dim=dim, vac_axis=vac_axis)
-    else:
-        reps = kc.supercell_matrix(out / "POSCAR", dim, conf["MIN_SC_LEN"],
-                                   conf["MAX_MULTIPLE"], vac_axis if vac_axis is not None else 2,
-                                   cutoff=cut3)
     # 超胞保对称闸（2026-10-07 Mn2In2Se5）：超胞不保晶体全部点群操作时，拟合出的
     #   力常数必破对称（假虚频、kappa 随网格乱跳），在生成位移、花 DFT 机时之前拦下
     try:

@@ -607,6 +607,18 @@ def supercell_safe_cutoff(poscar, reps, dim="3d", vac_axis=2, margin=0.1):
     return 0.5 * insphere - margin
 
 
+def cap_cut3_candidates(poscar, cands, reps, dim="3d", vac_axis=2):
+    """候选截断按给定超胞的安全截断剔除（超胞不随候选扩大，2026-10-16 user 定）。
+
+    返回 (kept, dropped, safe)：safe 为 None（读不到结构）时原样保留。"""
+    safe = supercell_safe_cutoff(poscar, reps, dim=dim, vac_axis=vac_axis)
+    if safe is None:
+        return list(cands), [], None
+    kept = [c for c in cands if c <= safe + 1e-9]
+    dropped = [c for c in cands if c > safe + 1e-9]
+    return kept, dropped, safe
+
+
 def warn_cutoff_vs_supercell(poscar, reps, cutoff, label="cutoff", margin=0.1,
                              dim="3d", vac_axis=2):
     """截断半径必须 ≤ 超胞安全截断（0.5×内切球直径 − margin），否则周期性镜像让
