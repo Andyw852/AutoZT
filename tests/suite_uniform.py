@@ -77,6 +77,21 @@ ck("#SBATCH --ntasks-per-node=4" in read(os.path.join(nest, "submit.sh")),
 ck("NCORE = 4" in read(os.path.join(nest, "INCAR.s1")),
    "子目录 INCAR.s1（分阶段 INCAR）也归一")
 
+# DFPT（IBRION=7/8 或 LEPSILON）VASP 只认 NCORE=1：cores 归一化不能把它改成 4（Mg4C60 S5 实测被拒）
+dfpt = os.path.join(d, "step5_dielect")
+os.makedirs(dfpt)
+with open(os.path.join(dfpt, "INCAR"), "w", encoding="utf-8") as f:
+    f.write("IBRION   = 8           # DFPT\nLEPSILON = .TRUE.\nNCORE  = 1\nKPAR   = 2\n")
+nac = os.path.join(d, "step3_nac")
+os.makedirs(nac)
+with open(os.path.join(nac, "INCAR"), "w", encoding="utf-8") as f:
+    f.write("IBRION = -1\nlepsilon = .true.\nNCORE = 6\n")
+p = normalize(d, 24, "step5_dielect")
+i = read(os.path.join(dfpt, "INCAR"))
+ck("NCORE  = 1" in i and "KPAR   = 1" in i, "DFPT INCAR（IBRION=8）：NCORE 钉 1，KPAR 照常归一")
+p = normalize(d, 24, "step3_nac")
+ck("NCORE = 1" in read(os.path.join(nac, "INCAR")), "LEPSILON=.TRUE.（小写）的 INCAR：NCORE 6→1")
+
 p = normalize(d, 4, "step2_mlff")
 ck("#SBATCH --cpus-per-task=4" in read(os.path.join(mac, "submit.sh")),
    "单进程多线程型（只有 cpus-per-task）改 cpus-per-task 8→4")

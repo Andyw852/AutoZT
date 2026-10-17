@@ -114,7 +114,9 @@ def run_amset_deform_create(out: Path):
     opts = "-f POSCAR -d %s" % STRAIN_DISTANCE
     if SYMPREC is not None:
         opts += " -s %s" % SYMPREC
-    cmd = ("%s && cd %s && amset deform create %s >> deform_create.log 2>&1"
+    # [amset_env_python] 同 S7.1：激活后直接用 $CONDA_PREFIX/bin/amset，不靠 PATH 顺序（remote_path_prefix 会排在前面）
+    cmd = ('%s && cd %s && { echo "[env] CONDA_PREFIX=$CONDA_PREFIX"; '
+           '"${CONDA_PREFIX:?conda activate 没生效}/bin/amset" deform create %s ; } >> deform_create.log 2>&1'
            % (AMSET_ENV_SRC, str(out), opts))
     print("[..] amset deform create %s ..." % opts)
     rc = subprocess.run(["bash", "-lc", cmd]).returncode

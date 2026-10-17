@@ -186,6 +186,13 @@ def _amset_env_src():
         "（autozt 会从 setting/<集群>.yaml 自动注入）；直接跑脚本请自行 export "
         "AUTOZT_CONDA_SH/AUTOZT_AMSET_ENV。" % _why)
 AMSET_ENV_SRC = _amset_env_src()
+# [amset_env_python] conda activate 之后不靠 PATH 里的 python3：autozt 给远端命令前置的 remote_path_prefix
+#   （集群上的 pybin 之类）、或登录 shell 里已经激活过同一个环境（再 activate 只是"重新激活"、不重排 PATH）时，
+#   python3 会落到没有 numpy/amset 的解释器上（2026-10-17 Mg2C60/Mg4C60 S7.1：ModuleNotFoundError: numpy，
+#   手动 conda activate amset 后再跑却正常）。直接用 $CONDA_PREFIX/bin/python，并把实际环境写进日志。
+AMSET_PY = '"${CONDA_PREFIX:?conda activate 没生效}/bin/python"'
+_ENV_ECHO = ('echo "[env] CONDA_PREFIX=$CONDA_PREFIX python=${CONDA_PREFIX}/bin/python '
+             '(PATH 里的 python3=$(command -v python3))"')
 # =================================================================
 
 
@@ -428,9 +435,9 @@ def main():
     # 等价于 amset deform read undeformed <形变构型...>。
     # [V186] 不直接调 amset CLI：经 _NBANDS_FIX_CODE 包一层，各构型 NBANDS 不同（VASP 默认值随并行布局
     #   取整，如 ionrelax 换了机器/核数）时统一裁到最小带数，而不是把带少的构型整个跳过。
-    cmd = ("%s && cd %s && python3 -c %s undeformed %s "
+    cmd = ("%s && cd %s && { %s; %s -c %s undeformed %s ; } "
            ">> deform_read.log 2>&1"
-           % (AMSET_ENV_SRC, str(dfm), shlex.quote(_NBANDS_FIX_CODE),
+           % (AMSET_ENV_SRC, str(dfm), _ENV_ECHO, AMSET_PY, shlex.quote(_NBANDS_FIX_CODE),
               " ".join(shlex.quote(r) for r in _rel)))
     # [V188] 旧的带符号文件先删：本次没算出来时不能让对称化读到上一次的（k 点可能还对得上）
     for _old in (dfm / "deformation_signed.h5", out / "deformation_signed.h5",
@@ -998,8 +1005,8 @@ with open(outdir + "/band_edges.json", "w") as fh:
 print("[OK] band_edges.json 已生成（amset 权威带边 E1 + 真空对齐 E1_vac）")
 '''
     be_out = out / "band_edges.json"
-    be_cmd = ("%s && cd %s && python3 -c %s %s %s %s > band_edges.log 2>&1"
-              % (AMSET_ENV_SRC, shlex.quote(str(dfm)),
+    be_cmd = ("%s && cd %s && { %s; %s -c %s %s %s %s ; } > band_edges.log 2>&1"
+              % (AMSET_ENV_SRC, shlex.quote(str(dfm)), _ENV_ECHO, AMSET_PY,
                  shlex.quote(_be_code), shlex.quote(str(out)),
                  shlex.quote(_SKILL_REV), shlex.quote(_dim_now or "")))
     _rc = subprocess.run(["bash", "-lc", be_cmd]).returncode
@@ -1302,8 +1309,8 @@ if len(_shifts) == 2:
         # WARN，被 autozt 吞掉，只能看到最后那句 "deformation.h5 已生成（core 口径）"，
         # 根本不知道真空口径没生成）。
         _vlog = dfm / "deform_vac.log"
-        cmd = ("%s && cd %s && python3 -c %s %s %s %s >> %s 2>&1"
-               % (AMSET_ENV_SRC, shlex.quote(str(dfm)), shlex.quote(_vac_code),
+        cmd = ("%s && cd %s && { %s; %s -c %s %s %s %s ; } >> %s 2>&1"
+               % (AMSET_ENV_SRC, shlex.quote(str(dfm)), _ENV_ECHO, AMSET_PY, shlex.quote(_vac_code),
                   shlex.quote(str(dfm)), shlex.quote(str(be_out)),
                   shlex.quote(str(vac_h5)), shlex.quote(str(_vlog))))
         rc = subprocess.run(["bash", "-lc", cmd]).returncode

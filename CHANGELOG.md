@@ -14,6 +14,15 @@ This project adheres to Semantic Versioning; versions before 1.0.0 are developme
 
 ## [Unreleased]
 
+### Fixed (2026-10-17: DFPT NCORE, S7/S7.1 AMSET interpreter, relax watchdog)
+- `cores: N` normalisation no longer rewrites NCORE in linear-response INCARs (IBRION=7/8 or
+  LEPSILON=.TRUE.): VASP only accepts NCORE=1 there (Mg4C60 S5: template NCORE=1 became 4 and the job failed).
+- ke S7 / S7.1: after `conda activate` the scripts call `$CONDA_PREFIX/bin/python` / `$CONDA_PREFIX/bin/amset`
+  instead of whatever `python3` / `amset` comes first on PATH, and log the environment they used
+  (Mg2C60 / Mg4C60 S7.1 failed with "No module named 'numpy'" although the amset env has numpy).
+- run_relax.sh watchdog: `STALL_MINUTES = 0` means "off" again (since FREEZE_MIN was added the stall branch
+  used 0 as its threshold and killed the segment after one minute); `FREEZE_MINUTES` can be set in step.conf.
+
 ### Fixed (2026-10-15: fail counter counted state flapping as retries; conf/dir polluted state)
 - autozt/progress.py: _history_stats now counts a failure only when the FAIL came from an actual
   attempt (previous state R / PD / TODO / PREP). OK->FAIL and WAIT->FAIL are flapping (the remote step

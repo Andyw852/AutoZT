@@ -485,6 +485,8 @@ CONF_SPEC = {
     #   而杀掉，但单步 EDDAV 只有 1~3 秒、节点也不同 —— 是文件系统/节点侧的瞬时停顿。
     #   A4-3-1 提到 180 后一次跑通，所以默认值按证据放宽。
     "STALL_MINUTES": (180, "int"),
+    # 输出冻结兜底（OUTCAR+OSZICAR 同时不动，不看 CPU，治 MPI 忙等挂死）。不写 = FREEZE_MIN 出厂值；0 = 关。
+    "FREEZE_MINUTES": (None, "int"),
     "INPLANE_STRESS_TOL_KB": (0.2, "float"),   # 2D 变胞稳定判据③：面内分量阈值(kB,胞口径)
     # 变胞段（ISIF>=3）的两个数值旋钮，2026-09-17 加（Ti2S3 ZBRENT 故障的产物）：
     #   CELL_STAGE_EDIFFG     变胞段 EDIFFG。正数 = 能量判据(eV)；负数 = 力判据(eV/Å)。
@@ -694,6 +696,9 @@ def apply_step_params():
         globals()["STAGE_MODE"] = "single"
     if v is not None:
         globals()["STALL_MIN"] = int(v)
+    _fz = STEP_PARAMS.get("FREEZE_MINUTES")
+    if _fz is not None:
+        globals()["FREEZE_MIN"] = int(_fz)
     _ip = STEP_PARAMS.get("INPLANE_STRESS_TOL_KB")
     if _ip is not None:
         try:
@@ -1848,7 +1853,8 @@ _watchdog () {
         # 三个指纹里【任一】在涨 = 活着
         if [ "${now}" = "${last}" ] && [ "${now_o}" = "${last_o}" ] && [ "${now_cpu}" = "${last_cpu}" ]; then
             stall=$((stall + 1))
-            if [ "${stall}" -ge "${STALL_MIN}" ]; then
+            # STALL_MIN=0 是"关"：FREEZE_MIN 开着时循环照跑，这里不能拿 0 当阈值（否则 1 分钟就杀）
+            if [ "${STALL_MIN}" -gt 0 ] && [ "${stall}" -ge "${STALL_MIN}" ]; then
                 {
                     echo "[run_relax][watchdog] OUTCAR(${now}B)/OSZICAR(${now_o} 行)/CPU(${now_cpu}s) 已 ${STALL_MIN} 分钟同时无增长，判定卡死，终止本段"
                     echo "[run_relax][watchdog] 判定快照（供事后分辨缓存延迟 vs 真死）："

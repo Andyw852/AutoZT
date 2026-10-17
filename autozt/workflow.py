@@ -992,12 +992,17 @@ def norm_dir(d):
                 hits.append("%s: %d 核" % (os.path.relpath(p, root), n))
         elif f == "INCAR" or f.startswith("INCAR"):
             t = open(p, encoding="utf-8", errors="replace").read()
-            t2 = re.sub(r"^(\s*NCORE\s*=\s*)\d+", r"\g<1>%d" % ncore, t, flags=re.M)
+            # 线性响应（DFPT：IBRION=7/8，或 LEPSILON=.TRUE.）VASP 只认 NCORE=1：按核数改成 4 会被拒
+            # （2026-10-17 Mg4C60 S5：模板 NCORE=1，cores: 24 归一化成 4，作业起不来）。这类 INCAR 的 NCORE 钉 1。
+            _dfpt = (re.search(r"^\s*IBRION\s*=\s*[78]\b", t, flags=re.M | re.I)
+                     or re.search(r"^\s*LEPSILON\s*=\s*\.?T", t, flags=re.M | re.I))
+            t2 = re.sub(r"^(\s*NCORE\s*=\s*)\d+", r"\g<1>%d" % (1 if _dfpt else ncore), t, flags=re.M)
             t2 = re.sub(r"^(\s*KPAR\s*=\s*)\d+", r"\g<1>%d" % kpar, t2, flags=re.M)
             if t2 != t:
                 open(p, "w", encoding="utf-8").write(t2)
-                hits.append("%s: NCORE=%d KPAR=%d" % (os.path.relpath(p, root),
-                                                     ncore, kpar))
+                hits.append("%s: NCORE=%d KPAR=%d%s" % (os.path.relpath(p, root),
+                                                       1 if _dfpt else ncore, kpar,
+                                                       "（DFPT 钉 NCORE=1）" if _dfpt else ""))
 
 depth0 = root.rstrip("/").count(os.sep)
 for cur, dirs, _f in os.walk(root):
