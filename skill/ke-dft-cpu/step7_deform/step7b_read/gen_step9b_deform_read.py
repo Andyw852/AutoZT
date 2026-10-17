@@ -553,11 +553,18 @@ def _is_metal(obj):
         return False
 
 if _is_metal(bs):
-    raise RuntimeError(
-        "体系为金属（pymatgen is_metal=True，undeformed bandstructure 无 VBM/CBM）："
-        "带边形变势 E1 / ADP 对金属不适用 —— 本步不产出 band_edges.json，"
-        "也不应继续 S8.2_dpt。若材料确实有隙，先查 step2 的带隙判别是否被"
-        "零权重路径点或费米面穿过污染。")
+    # [metal_mode] 2026-10-17：金属不再 raise（那样 S7.1 判 FAIL，S8.1 的金属模式也被卡住）。
+    #   写 metal.json（金属判定的唯一来源，S8.1/S8.2/S8.3 读它），不写 band_edges.json，以退出码 3 告诉外层。
+    json.dump({"is_metal": True,
+               "reason": "pymatgen is_metal=True（undeformed bandstructure 无 VBM/CBM）",
+               "efermi_eV": float(getattr(bs, "efermi", float("nan"))),
+               "source": "step7_deform/undeformed（S7 网格，S1 泛函）",
+               "skill_rev": sys.argv[2] if len(sys.argv) > 2 else "UNKNOWN",
+               "note": ("带边形变势 E1 / ADP / DPT 对金属不适用：本步只产出 deformation.h5（不写 band_edges.json）。"
+                        "若材料确实有隙，先查 step2 的带隙判别是否被零权重路径点或费米面穿过污染。")},
+              open(outdir + "/metal.json", "w"), indent=2, ensure_ascii=False)
+    print("[METAL] 体系为金属：已写 metal.json，不产出 band_edges.json")
+    sys.exit(3)
 
 out = {}
 for carrier, edge in (("electron", bs.get_cbm()), ("hole", bs.get_vbm())):
@@ -1005,12 +1012,23 @@ with open(outdir + "/band_edges.json", "w") as fh:
 print("[OK] band_edges.json 已生成（amset 权威带边 E1 + 真空对齐 E1_vac）")
 '''
     be_out = out / "band_edges.json"
+    _metal_json = out / "metal.json"
+    if _metal_json.is_file():                     # 旧判定不能留到这次（材料可能被重新判成有隙）
+        _metal_json.unlink()
     be_cmd = ("%s && cd %s && { %s; %s -c %s %s %s %s ; } > band_edges.log 2>&1"
               % (AMSET_ENV_SRC, shlex.quote(str(dfm)), _ENV_ECHO, AMSET_PY,
                  shlex.quote(_be_code), shlex.quote(str(out)),
                  shlex.quote(_SKILL_REV), shlex.quote(_dim_now or "")))
     _rc = subprocess.run(["bash", "-lc", be_cmd]).returncode
-    if _rc != 0 or not be_out.is_file():
+    _metal = (_rc == 3 and _metal_json.is_file())
+    if _metal:
+        # [metal_mode] 金属：带边 E1 / 真空口径 / DPT 都不适用。deformation.h5 照常放进本步目录（完成标记），
+        #   band_edges.json 与 deformation_vac.h5 不产出；S8.1 读 metal.json 走金属模式。
+        if be_out.is_file():
+            be_out.unlink()
+        print("[METAL] 体系为金属（%s）：不产出 band_edges.json / deformation_vac.h5；"
+              "S8.2_dpt / S8.3_cmp 不适用，S8.1_bt2 走金属模式" % _metal_json)
+    elif _rc != 0 or not be_out.is_file():
         # [PATCH-DPT-R5] 硬失败：band_edges.json 是 step8.2_dpt 正确 E1 的唯一
         # 来源，缺失时回退旧逻辑 = 回退「全带中位数」bug。宁可显式报错。
         _tail = ""
@@ -1021,12 +1039,16 @@ print("[OK] band_edges.json 已生成（amset 权威带边 E1 + 真空对齐 E1_
                  "请勿回退旧逻辑）。%s看 %s/band_edges.log：\n%s"
                  % ("ionrelax 缺 LOCPOT，retry S7_deform 补静态段（只重跑 ionrelax 静态段），再重跑本步。"
                     if "补静态段" in _tail else "", dfm, _tail))
-    print("[DONE] %s：band_edges.json 已生成" % OUTDIR_NAME)
+    if not _metal:
+        print("[DONE] %s：band_edges.json 已生成" % OUTDIR_NAME)
 
     # [2026-09-16] 把**实际使用的**形变势构型口径落进 band_edges.json：settings 注释、
     # 8.3 汇总表、provenance 都从这里取。回退到 clamped 时这里就是证据（配合上面的 WARN）。
+    # [metal_mode] 金属没有 band_edges.json，这几项记进 metal.json。
     try:
         import json as _json
+        if _metal:
+            be_out = _metal_json
         _be = _json.loads(Path(be_out).read_text())
         _be["deform_geometry"] = _def_geom
         _be["deform_geometry_folders"] = _geom_map
@@ -1045,7 +1067,12 @@ print("[OK] band_edges.json 已生成（amset 权威带边 E1 + 真空对齐 E1_
     _vac_state = "core（未生成 deformation_vac.h5）"
     print("[..] DEFORM_REF=%s（本体系 DIM=%s）-> %s 参考口径"
           % (_ref_set, _read_dim(cwd) or "未知", ref))
-    if ref == "vacuum":
+    if _metal:
+        # 真空口径 h5 的闸门要和 band_edges.json 的带边 E1_vac 比，金属没有带边：不生成，旧的也清掉（免得 S8.4 捡到）
+        if (out / "deformation_vac.h5").is_file():
+            (out / "deformation_vac.h5").unlink()
+        _vac_state = "金属（metal.json；不产出 band_edges.json / deformation_vac.h5，S8.1 走金属模式）"
+    elif ref == "vacuum":
         # 做法（用户 2026-09-16 校对 AMSET 0.4.19 源码后指定）：**直接替换参考能级**，
         # 而不是事后往 h5 上加 Δ。理由：potentials.py 里
         #     diff = E_bulk - E_deform - (ref_bulk - ref_deform)

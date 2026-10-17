@@ -2449,6 +2449,10 @@ def _za_check(cwd):
 def main():
     cwd = Path.cwd()
     _guard_not_0d(cwd)
+    # [metal_mode] S7.1 判金属（metal.json）：DPT 建立在带边 E1 / 有效质量上，对金属不适用 -> 报错并给出关组办法
+    sys.path.insert(0, str(cwd))
+    import ke_common as _kc
+    _kc.metal_not_applicable(cwd, "S8.2_dpt", "形变势理论（Bardeen–Shockley）建立在非简并带边的 E1 与有效质量上")
     out = cwd / OUTDIR_NAME
     out.mkdir(exist_ok=True)
     invalidate_consumers(cwd)

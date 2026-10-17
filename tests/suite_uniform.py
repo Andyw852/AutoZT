@@ -92,6 +92,20 @@ ck("NCORE  = 1" in i and "KPAR   = 1" in i, "DFPT INCAR（IBRION=8）：NCORE �
 p = normalize(d, 24, "step3_nac")
 ck("NCORE = 1" in read(os.path.join(nac, "INCAR")), "LEPSILON=.TRUE.（小写）的 INCAR：NCORE 6→1")
 
+# 有限差分（IBRION=5/6：声子、弹性）同样只认 NCORE=1（Mg4C60 S6 弹性 IBRION=6 实测被拒）
+fd = os.path.join(d, "step6_elastic")
+os.makedirs(fd)
+with open(os.path.join(fd, "INCAR"), "w", encoding="utf-8") as f:
+    f.write("IBRION = 6\nISIF = 3\nNCORE = 6\n")
+p = normalize(d, 192, "step6_elastic")
+ck("NCORE = 1" in read(os.path.join(fd, "INCAR")), "有限差分 INCAR（IBRION=6）：NCORE 6→1")
+rel = os.path.join(d, "step1_relax")
+os.makedirs(rel)
+with open(os.path.join(rel, "INCAR"), "w", encoding="utf-8") as f:
+    f.write("IBRION = 2\nNCORE = 6\n")
+p = normalize(d, 24, "step1_relax")
+ck("NCORE = 4" in read(os.path.join(rel, "INCAR")), "普通弛豫（IBRION=2）照常按核数归一（不误伤）")
+
 p = normalize(d, 4, "step2_mlff")
 ck("#SBATCH --cpus-per-task=4" in read(os.path.join(mac, "submit.sh")),
    "单进程多线程型（只有 cpus-per-task）改 cpus-per-task 8→4")

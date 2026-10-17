@@ -14,6 +14,19 @@ This project adheres to Semantic Versioning; versions before 1.0.0 are developme
 
 ## [Unreleased]
 
+### Added (2026-10-17: ke-dft-cpu metal mode)
+- S7.1: a metallic undeformed band structure no longer fails the step. It writes `metal.json`, skips
+  `band_edges.json` / `deformation_vac.h5`, and still moves `deformation.h5` into the step directory.
+- S8.1: metal mode. Skips the band-type gate, the scissor and the DPT τ. Reports S, σ/τ, κ_e/τ and the Lorenz
+  number at the charge-neutral E_F(T); absolute σ, ρ, κ_e only when step.conf gives `METAL_LAMBDA_TR` (+ source;
+  high-temperature limit ħ/τ = 2πλ_tr k_B T, Allen 1978) or an assumed `METAL_TAU_FS`. Writes `metal_transport.json`.
+- S8.2 / S8.3 stop with "not applicable to metals" and list the groups to switch off in tf_<project>.yaml.
+- METHODOLOGY: section on how metals are treated without experimental data.
+
+### Fixed (2026-10-17)
+- `cores: N` normalisation also keeps NCORE=1 for finite-difference INCARs (IBRION=5/6): Mg4C60 S6 elastic
+  failed with "only possible if NPAR=number of nodes".
+
 ### Fixed (2026-10-17: DFPT NCORE, S7/S7.1 AMSET interpreter, relax watchdog)
 - `cores: N` normalisation no longer rewrites NCORE in linear-response INCARs (IBRION=7/8 or
   LEPSILON=.TRUE.): VASP only accepts NCORE=1 there (Mg4C60 S5: template NCORE=1 became 4 and the job failed).
