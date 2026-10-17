@@ -17,9 +17,10 @@
 <输出目录>  独立输出目录（约定: <M>/transport_plots/），生成:
               <M>_transport.png / <M>_transport_data_<T>K.csv   9温度x5参数(mu/S/sigma/PF/kappa_e)，
                         数据集 4 条：phonon + impurity / phonon-limited(去 IMP) / ADP only / BT2×DPT-τ
-              <M>_phonon_limited.png / <M>_phonon_limited_data_<T>K.csv   [B 2026-10-14 / 2026-10-15 选 2；
-                        [0054] 2026-10-16 起由 <M>_intrinsic.* 改名，与文献统一：去 IMP = phonon-limited]
-                        只含上列 4 条基础曲线（此前与 transport 图重复，现内容真正区分；恢复了 [0035] 合并前会永久冻结的旧名）
+              phonon_limited_carrier_tuning_1e17-1e21/<M>_phonon_limited_carrier_tuning.png + _<T>K.csv
+              phonon_limited_low_doping_<NLO>-1e16/<M>_phonon_limited_low_doping.png + _<T>K.csv
+                        [0056] 2026-10-17 起按浓度拆两段、各一个文件夹（载流子调控区 / 低浓度段，后者有 DOPING_LOW 才有），
+                        不再出整轴 <M>_phonon_limited.png；只含上列 4 条基础曲线
               <M>_params_<T>K.csv                          每个温度一张参数表(E1/C2D/m*/tau/mu)
 
 数据来源:
@@ -63,6 +64,33 @@ AX = {"NLO": 1e17, "XT": [-4, -3, -2, -1, 0, 1, 2, 3, 4],
       "XTL": ["1e21", "1e20", "1e19", "1e18", "1e17", "1e18", "1e19", "1e20", "1e21"]}
 
 
+def _axis_ticks(nlo, n_top):
+    """正负对数浓度轴刻度（与 gen_step13_output._axis_ticks 同算法）。"""
+    import math
+    ndec = int(round(math.log10(n_top / nlo)))
+    step = 1 if ndec <= 4 else 2
+    pos = list(range(ndec, -1, -step))[::-1]
+    if pos[-1] != ndec:
+        pos.append(ndec)
+    if pos[0] != 0:
+        pos.insert(0, 0)
+    xt = [-k for k in pos[::-1] if k] + pos
+    lo = int(round(math.log10(nlo)))
+    return xt, ["1e%d" % (lo + abs(k)) for k in xt]
+
+
+# [0056] 与 gen_step13_output._phonon_limited_ranges 同：(标签, 下限, 上限, S 纵轴半宽)，上下限含端点
+PL_TUNE_LO, PL_LOW_HI = 1e17, 1e16
+
+
+def phonon_limited_ranges(nlo, n_top=1e21):
+    import math
+    out = [("carrier_tuning_1e17-1e%d" % round(math.log10(n_top)), PL_TUNE_LO, float("inf"), 1000.0)]
+    if nlo < PL_LOW_HI:
+        out.append(("low_doping_1e%d-1e16" % round(math.log10(nlo)), nlo, PL_LOW_HI, 2500.0))
+    return out
+
+
 def set_axis(mdir, n_top=1e21):
     """[0055] 浓度轴跟着 AMSET 掺杂网格（与 gen_step13_output._doping_axis 同算法）：最小非零 |n| ≥ 1e17 时与旧版相同；
     有 DOPING_LOW 低浓度段时原点下探到最小点所在十年，十年数 > 4 时每 2 个十年一个刻度。"""
@@ -83,16 +111,8 @@ def set_axis(mdir, n_top=1e21):
         NFLOOR = nlo * 0.999
     else:
         nlo, NFLOOR = 1e17, 5e17
-    ndec = int(round(math.log10(n_top / nlo)))
-    step = 1 if ndec <= 4 else 2
-    pos = list(range(ndec, -1, -step))[::-1]
-    if pos[-1] != ndec:
-        pos.append(ndec)
-    if pos[0] != 0:
-        pos.insert(0, 0)
-    xt = [-k for k in pos[::-1] if k] + pos
-    lo = int(round(math.log10(nlo)))
-    AX.update(NLO=nlo, XT=xt, XTL=["1e%d" % (lo + abs(k)) for k in xt])
+    xt, xtl = _axis_ticks(nlo, n_top)
+    AX.update(NLO=nlo, XT=xt, XTL=xtl)
 
 
 def xs(n):
@@ -252,13 +272,30 @@ def make_intrinsic(mdir, out, M):
             "carriers_per_cell", "carriers_per_atom", "in_interpret_range",
             "S_uV/K", "sigma_S/m", "PF_W/mK2", "kappa_e_W/mK", "mu_cm2/Vs", "flag"]
     _names = {ds for ds, _c, _ls, _mk in DATASETS}   # [2026-10-15 选 2] intrinsic CSV 只含 4 条基础曲线
-    for T in temps:                                 # 每温度一个 CSV（[0054] phonon_limited 名）
-        with open(os.path.join(out, "%s_phonon_limited_data_%dK.csv" % (M, int(round(T)))), "w", newline="") as fh:
-            w = csv.writer(fh); w.writerow(cols)
-            for r in rows:
-                if abs(float(r["T_K"]) - T) > 1e-6 or r["dataset"] not in _names:
-                    continue
-                w.writerow([r.get(c, "") for c in cols])
+    nlo0 = AX["NLO"]
+    for tag, lo, hi, slim in phonon_limited_ranges(nlo0):   # [0056] 按浓度拆两段，各一个文件夹
+        _in = lambda n: (np.abs(n) >= lo * 0.999) & (np.abs(n) <= hi * 1.001)
+        xt, xtl = _axis_ticks(lo, 1e21 if hi == float("inf") else hi)
+        AX.update(NLO=lo, XT=xt, XTL=xtl)
+        kind = tag.split("_1e")[0]
+        pdir = os.path.join(out, "phonon_limited_" + tag)
+        os.makedirs(pdir, exist_ok=True)
+        for T in temps:                             # 每温度一个 CSV
+            with open(os.path.join(pdir, "%s_phonon_limited_%s_%dK.csv" % (M, kind, int(round(T)))), "w",
+                      newline="") as fh:
+                w = csv.writer(fh); w.writerow(cols)
+                for r in rows:
+                    if (abs(float(r["T_K"]) - T) > 1e-6 or r["dataset"] not in _names
+                            or not _in(np.array([fnum(r["n_cell_cm-3"])]))[0]):
+                        continue
+                    w.writerow([r.get(c, "") for c in cols])
+        _plot_phonon_limited(rows, temps, _in, slim, tag, os.path.join(pdir, "%s_phonon_limited_%s.png" % (M, kind)), M)
+    AX.update(NLO=nlo0)
+    set_axis(mdir)
+    return True
+
+
+def _plot_phonon_limited(rows, temps, _in, slim, tag, path, M):
     fig, axes = axes_grid(len(temps), 5, ["%d K" % t for t in temps], [q[1] for q in QUANTS_I])
     for rr, T in enumerate(temps):
         sub = [r for r in rows if abs(float(r["T_K"]) - T) < 1e-6]
@@ -270,25 +307,24 @@ def make_intrinsic(mdir, out, M):
                     continue
                 n = np.array([fnum(r["n_cell_cm-3"]) for r in dd])
                 y = np.array([fnum(r[col]) for r in dd])
-                keep = np.abs(n) >= NFLOOR
+                keep = _in(n)
                 seg(ax, n[keep], y[keep], color=color, lw=1.3, ls=ls, marker=mk, ms=3.2)
             if col == "S_uV/K":
-                ax.set_ylim(-(1000 if AX["NLO"] >= 1e17 else 2500), 1000 if AX["NLO"] >= 1e17 else 2500); ax.axhline(0, color="k", lw=0.5)
+                ax.set_ylim(-slim, slim); ax.axhline(0, color="k", lw=0.5)
             else:
                 ax.set_yscale("log")
     hh = [Line2D([], [], color=c, lw=1.4, ls=ls, marker=mk, ms=4, label=DS_LABELS.get(ds, ds)) for ds, c, ls, mk in DATASETS]
-    hh.append(Line2D([], [], color="0.35", lw=1.0, ls=(0, (1, 1)), label=r"DPT (band-edge, $\mu$ only)"))
     fig.legend(handles=hh, loc="lower center", ncol=5, fontsize=9, frameon=False)
     # [0052-r1][0054] 文案与权威脚本 gen_step13_output.py 对齐：去 IMP = phonon-limited；
     #   "intrinsic" 只指本征载流子（transport_plots/intrinsic_carrier/）。
     _trng = "%g-%g K" % (min(temps), max(temps)) if temps else ""
-    fig.suptitle("%s  phonon-limited transport vs doping, base 4 sets  (phonon + impurity / phonon-limited"
-                 " / ADP only / BT2xDPT-tau)  %s\nx = doping concentration; phonon-limited = all phonon mechanisms,"
-                 " no ionized impurity (intrinsic carriers n = p = n_i -> see intrinsic_carrier/)"
-                 % (M, _trng), fontsize=11)
+    _what = {"carrier_tuning": "carrier tuning (doping) range", "low_doping": "low-doping range (non-degenerate)"}
+    fig.suptitle("%s  phonon-limited transport vs doping, %s  n = %s - %s cm$^{-3}$  %s\n"
+                 "base 4 sets: phonon + impurity / phonon-limited / ADP only / BT2xDPT-tau;"
+                 " phonon-limited = all phonon mechanisms, no ionized impurity"
+                 % (M, _what[tag.split("_1e")[0]], AX["XTL"][len(AX["XTL"]) // 2], AX["XTL"][0], _trng), fontsize=11)
     fig.tight_layout(rect=[0, 0.03, 1, 0.985 - 0.012])   # 两行标题留位置（与权威脚本同法）
-    fig.savefig(os.path.join(out, "%s_phonon_limited.png" % M), dpi=130); plt.close(fig)
-    return True
+    fig.savefig(path, dpi=130); plt.close(fig)
 
 
 def make_params(mdir, out, M):

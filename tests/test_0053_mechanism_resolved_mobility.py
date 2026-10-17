@@ -196,5 +196,5 @@ def test_fermi_fix_writes_band_edges(tmp_path):
 
 def test_old_names_gone():
     src = (KE / "step8.3_output" / "gen_step13_output.py").read_text(encoding="utf-8")
-    assert '"%s_intrinsic.png" % M' not in src and '"%s_phonon_limited.png" % M' in src
+    assert '"%s_intrinsic.png" % M' not in src and '"%s_phonon_limited.png" % M' not in src   # [0056] 拆成两段文件夹
     assert "amset (all but IMP)" not in src and "AMSET overall" not in src

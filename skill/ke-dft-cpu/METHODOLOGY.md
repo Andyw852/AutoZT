@@ -305,6 +305,20 @@ step8.x 的 `_SKILL_REV` 写进 comparison_summary.txt。改脚本即提交 GitH
 
 > 结果文档（未发表，不进 git）：`/mnt/d/tf_data/jzz/jap/comparison_vs_literature.md`
 
+## [0056] phonon-limited 掺杂扫描按浓度拆两段（2026-10-17 用户定）
+
+- **为什么**：[0055] 加了低浓度段以后，`<M>_phonon_limited.png` 的 ± 浓度轴原点下探到 1e9，载流子调控区（1e17–1e21）
+  只占每格两端一小截，看不清。
+- **现在**：不再出整轴的 `<M>_phonon_limited.png` / `_phonon_limited_data_<T>K.csv`，改成两个文件夹，每个里面一张 9×5 图
+  （温度 × μ/S/σ/PF/κe，基础 4 条曲线）+ 每温度一张表：
+  - `transport_plots/phonon_limited_carrier_tuning_1e17-1e21/`：`<M>_phonon_limited_carrier_tuning.png` + `_<T>K.csv`，
+    |n| ∈ [1e17, ∞)，轴与 [0055] 之前逐字相同（原点 1e17，±4 十年），S 纵轴 ±1000 μV/K；
+  - `transport_plots/phonon_limited_low_doping_<NLO>-1e16/`：`<M>_phonon_limited_low_doping.png` + `_<T>K.csv`，
+    |n| ∈ [NLO, 1e16]，原点 NLO（最小点所在十年），S 纵轴 ±2500 μV/K；没有 DOPING_LOW 时不出这个文件夹。
+  - 两段上下限都含端点；(1e16, 1e17) 出厂网格上没有点（3D 低段止于 1e16、主网格起于 1e17；2D 换算后 ~2.9e15 / ~2.9e17）。
+    本征点 n = 0 不进任何一段（在 `intrinsic_carrier/`）。
+- `<M>_transport.png`（带机制对照）、`datasets/`、`amset_scan/` 仍用整轴，不变。`tools/make_transport_plots.py` 同步。
+
 ## [0055] 低浓度段 DOPING_LOW（2026-10-16 用户要求）
 
 - **为什么**：出厂掺杂网格 3D 1e17–1e21 cm⁻³、2D 1e11–1e14 cm⁻²，和本征点（n = p）之间空着好几个十年；
