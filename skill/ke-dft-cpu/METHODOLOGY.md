@@ -317,7 +317,12 @@ step8.x 的 `_SKILL_REV` 写进 comparison_summary.txt。改脚本即提交 GitH
     |n| ∈ [NLO, 1e16]，原点 NLO（最小点所在十年），S 纵轴 ±2500 μV/K；没有 DOPING_LOW 时不出这个文件夹。
   - 两段上下限都含端点；(1e16, 1e17) 出厂网格上没有点（3D 低段止于 1e16、主网格起于 1e17；2D 换算后 ~2.9e15 / ~2.9e17）。
     本征点 n = 0 不进任何一段（在 `intrinsic_carrier/`）。
-- `<M>_transport.png`（带机制对照）、`datasets/`、`amset_scan/` 仍用整轴，不变。`tools/make_transport_plots.py` 同步。
+- **r2（同日用户要求）**：`<M>_transport.png`（基础 4 条 + 本轮机制对照）同样拆成
+  `transport_carrier_tuning_1e17-1e21/<M>_transport_carrier_tuning.png + _<T>K.csv` 与
+  `transport_low_doping_<NLO>-1e16/<M>_transport_low_doping.png + _<T>K.csv`，表含全数据集（只截浓度段）；
+  顶层 `<M>_transport.png` / `_transport_data_<T>K.csv` 不再出。
+- `datasets/`、`amset_scan/` 仍用整轴，不变。`tools/make_transport_plots.py` 同步（它的 transport 图是 DPT 路线 +
+  AMSET phonon + impurity + ADP only；低浓度段 σ/PF/κe 纵轴改自动范围）。
 
 ## [0055] 低浓度段 DOPING_LOW（2026-10-16 用户要求）
 

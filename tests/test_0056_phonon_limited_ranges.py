@@ -1,5 +1,5 @@
-"""[0056] S8.3 phonon-limited 掺杂扫描按浓度拆两段，各一个文件夹（图 + 每温度表）：
-carrier_tuning_1e17-1e21/（载流子调控区）与 low_doping_<NLO>-1e16/（低浓度段，有 DOPING_LOW 才有）。
+"""[0056] S8.3 transport / phonon-limited 掺杂扫描按浓度拆两段，各一个文件夹（图 + 每温度表）：
+<前缀>_carrier_tuning_1e17-1e21/（载流子调控区）与 <前缀>_low_doping_<NLO>-1e16/（低浓度段，有 DOPING_LOW 才有）。
 合成 intrinsic_transport_table.csv + transport.json 掺杂网格，纯本地。"""
 import csv
 import importlib.util
@@ -68,8 +68,16 @@ def test_two_folders_with_low_doping(tmp_path):
     for T in (300, 600):
         assert _ns(hi / ("MoS2_phonon_limited_carrier_tuning_%dK.csv" % T)) == HIGH
         assert _ns(lo / ("MoS2_phonon_limited_low_doping_%dK.csv" % T)) == LOW   # 本征点 n = 0 不进任何一段
-    assert not list(tp.glob("MoS2_phonon_limited*"))          # 整轴旧图/旧表不再出
-    assert (tp / "MoS2_transport.png").is_file() and (tp / "MoS2_transport_data_300K.csv").is_file()
+    assert not list(tp.glob("MoS2_phonon_limited*")) and not list(tp.glob("MoS2_transport*"))   # 整轴旧图/旧表不再出
+    thi = tp / "transport_carrier_tuning_1e17-1e21"
+    tlo = tp / "transport_low_doping_1e10-1e16"
+    assert (thi / "MoS2_transport_carrier_tuning.png").is_file()
+    assert (tlo / "MoS2_transport_low_doping.png").is_file()
+    rows = list(csv.DictReader((thi / "MoS2_transport_carrier_tuning_300K.csv").read_text().splitlines()))
+    assert "ADP_POP" in {r["dataset"] for r in rows}            # transport 表含机制对照数据集
+    assert sorted({abs(float(r["n_cell_cm-3"])) for r in rows}) == HIGH
+    rows = list(csv.DictReader((tlo / "MoS2_transport_low_doping_300K.csv").read_text().splitlines()))
+    assert sorted({abs(float(r["n_cell_cm-3"])) for r in rows}) == LOW
 
 
 def test_only_carrier_tuning_without_low_doping(tmp_path):
@@ -78,6 +86,7 @@ def test_only_carrier_tuning_without_low_doping(tmp_path):
     g.write_transport_plots(cwd, out, True)
     tp = cwd.parent / "transport_plots"
     assert sorted(p.name for p in tp.glob("phonon_limited_*")) == ["phonon_limited_carrier_tuning_1e17-1e21"]
+    assert sorted(p.name for p in tp.glob("transport_*")) == ["transport_carrier_tuning_1e17-1e21"]
 
 
 def test_range_axes():
@@ -87,3 +96,45 @@ def test_range_axes():
     assert r[0][4] == ["1e21", "1e20", "1e19", "1e18", "1e17", "1e18", "1e19", "1e20", "1e21"]
     assert r[1][4][0] == "1e16" and r[1][4][len(r[1][4]) // 2] == "1e9" and r[1][4][-1] == "1e16"
     assert len(g._phonon_limited_ranges(1e17)) == 1
+
+
+def _tool():
+    spec = importlib.util.spec_from_file_location("mtp_0056", str(KE / "tools" / "make_transport_plots.py"))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_tool_transport_split(tmp_path):
+    """tools/make_transport_plots.py 的 transport 图（DPT 路线 + AMSET）同样按两段出文件夹。"""
+    t = _tool()
+    cwd, out = _material(tmp_path, LOW + HIGH)
+    grid = json.loads((cwd / "step8.4_amset2d" / "transport.json").read_text())["doping"]
+    temps = [300.0, 600.0]
+    t3 = lambda v: [[v, 0, 0], [0, v, 0], [0, 0, v]]
+    arr = lambda f: [[t3(f(n)) for _ in temps] for n in grid]
+    (cwd / "step8.4_amset2d" / "transport.json").write_text(json.dumps({
+        "doping": grid, "temperatures": temps, "conductivity": arr(lambda n: abs(n) * 1e-14 + 1e-6),
+        "seebeck": arr(lambda n: -200.0 if n < 0 else 200.0), "electronic_thermal_conductivity": arr(lambda n: 1e-3),
+        "mobility": {"overall": arr(lambda n: 100.0)}}))
+    (cwd / "step8.4_amset2d" / "subset_ADP.json").write_text(json.dumps({"intrinsic": {
+        "conductivity_S_m": arr(lambda n: abs(n) * 2e-14 + 1e-6), "seebeck_uV_K": arr(lambda n: 210.0),
+        "electronic_thermal_conductivity_W_mK": arr(lambda n: 2e-3), "mobility_cm2_Vs_s": {"ADP": arr(lambda n: 300.0)}}}))
+    (cwd / "step8.1_boltztrap").mkdir()
+    nb = [s * 10 ** k for s in (-1, 1) for k in range(9, 22)]
+    (cwd / "step8.1_boltztrap" / "boltztrap_crta.json").write_text(json.dumps({
+        "twoD_c_over_t": 1.0, "temperatures_K": temps, "mu_rel_efermi_eV": list(range(len(nb))),
+        "carrier_conc_cm-3": [nb for _ in temps], "sigma_over_tau_xx": [[abs(n) * 1e-1 for n in nb] for _ in temps],
+        "seebeck_xx_V_per_K": [[-2e-4 if n < 0 else 2e-4 for n in nb] for _ in temps]}))
+    od = tmp_path / "tp"
+    od.mkdir()
+    assert t.make_transport(str(cwd), str(od), "MoS2")
+    hi = od / "transport_carrier_tuning_1e17-1e21"
+    assert (hi / "MoS2_transport_carrier_tuning.png").is_file()
+    assert not list(od.glob("MoS2_transport*"))
+    rows = list(csv.reader((hi / "MoS2_transport_carrier_tuning_300K.csv").read_text().splitlines()))[1:]
+    assert rows and min(abs(float(r[3])) for r in rows) >= 1e17 * 0.999
+    lo = sorted(od.glob("transport_low_doping_*"))     # 原点 = AMSET 网格最小点所在十年
+    assert len(lo) == 1
+    rows = list(csv.reader((lo[0] / "MoS2_transport_low_doping_300K.csv").read_text().splitlines()))[1:]
+    assert rows and max(abs(float(r[3])) for r in rows) <= 1e16 * 1.001

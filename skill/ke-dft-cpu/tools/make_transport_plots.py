@@ -15,8 +15,10 @@
 <材料目录>  含各 step 目录的 ke-dft-cpu 根（本地已 fetch 的 result/ 或集群目录）；
             也可直接给以 step* 开头的目录（即 <M>/ke-dft-cpu/ 本身）。
 <输出目录>  独立输出目录（约定: <M>/transport_plots/），生成:
-              <M>_transport.png / <M>_transport_data_<T>K.csv   9温度x5参数(mu/S/sigma/PF/kappa_e)，
-                        数据集 4 条：phonon + impurity / phonon-limited(去 IMP) / ADP only / BT2×DPT-τ
+              transport_carrier_tuning_1e17-1e21/<M>_transport_carrier_tuning.png + _<T>K.csv
+              transport_low_doping_<NLO>-1e16/<M>_transport_low_doping.png + _<T>K.csv
+                        9温度x5参数(mu/S/sigma/PF/kappa_e)：DPT 路线 / AMSET phonon + impurity / ADP only；
+                        [0056] 与 phonon_limited 一样按浓度拆两段、各一个文件夹
               phonon_limited_carrier_tuning_1e17-1e21/<M>_phonon_limited_carrier_tuning.png + _<T>K.csv
               phonon_limited_low_doping_<NLO>-1e16/<M>_phonon_limited_low_doping.png + _<T>K.csv
                         [0056] 2026-10-17 起按浓度拆两段、各一个文件夹（载流子调控区 / 低浓度段，后者有 DOPING_LOW 才有），
@@ -219,34 +221,52 @@ def make_transport(mdir, out, M):
             for i in range(len(X["na"])):
                 br = "electron" if X["na"][i] < 0 else "hole"
                 rows_out.append([T, tag, br, X["na"][i], X["Sa"][i], X["ga"][i], X["pa"][i], X["ka"][i], X["ma"][i]])
-    for T in btT:                                   # 每温度一个 CSV
-        rows_T = [rows_out[0]] + [r for r in rows_out[1:] if abs(float(r[0]) - T) < 1e-6]
-        with open(os.path.join(out, "%s_transport_data_%dK.csv" % (M, int(round(T)))), "w", newline="") as fh:
-            csv.writer(fh).writerows(rows_T)
+    nlo0 = AX["NLO"]
+    for tag, lo, hi, slim in phonon_limited_ranges(nlo0):   # [0056] 按浓度拆两段，各一个文件夹（图 + 每温度表）
+        _in = lambda n: (np.abs(np.asarray(n, float)) >= lo * 0.999) & (np.abs(np.asarray(n, float)) <= hi * 1.001)
+        xt, xtl = _axis_ticks(lo, 1e21 if hi == float("inf") else hi)
+        AX.update(NLO=lo, XT=xt, XTL=xtl)
+        kind = tag.split("_1e")[0]
+        pdir = os.path.join(out, "transport_" + tag)
+        os.makedirs(pdir, exist_ok=True)
+        for T in btT:                               # 每温度一个 CSV
+            rows_T = [rows_out[0]] + [r for r in rows_out[1:] if abs(float(r[0]) - T) < 1e-6 and _in([r[3]])[0]]
+            with open(os.path.join(pdir, "%s_transport_%s_%dK.csv" % (M, kind, int(round(T)))), "w", newline="") as fh:
+                csv.writer(fh).writerows(rows_T)
+        _plot_transport(data, btT, muedge, _in, 950 if lo >= 1e17 else slim, tag,
+                        os.path.join(pdir, "%s_transport_%s.png" % (M, kind)), M)
+    set_axis(mdir)
+    return True
 
+
+def _plot_transport(data, btT, muedge, _in, slim, tag, path, M):
+    def cut(X, key):
+        k = _in(X["na"])
+        return X["na"][k], X[key][k]
     fig, axes = axes_grid(len(btT), 5, ["%d K" % t for t in btT], [q[1] for q in QUANTS_T])
     for rr, T in enumerate(btT):
         dd = data[T]
         for j, (q, _) in enumerate(QUANTS_T):
             ax = axes[rr][j]
-            n = dd["nd"]; keep = np.abs(n) >= NFLOOR
+            n = dd["nd"]; keep = _in(n)
             if q != "mu":
                 seg(ax, n[keep], {"S": dd["Sd"], "sigma": dd["gd"], "PF": dd["pd"], "kappa_e": dd["kd"]}[q][keep],
                     color="tab:blue", lw=1.4)
             key = {"mu": "ma", "S": "Sa", "sigma": "ga", "PF": "pa", "kappa_e": "ka"}[q]
-            seg(ax, dd["OV"]["na"], dd["OV"][key], color="tab:red", lw=1.2, ls="--", marker="s", ms=3.5)
+            seg(ax, *cut(dd["OV"], key), color="tab:red", lw=1.2, ls="--", marker="s", ms=3.5)
             if dd["AD"] is not None:
-                seg(ax, dd["AD"]["na"], dd["AD"][key], color="tab:green", lw=1.2, ls=":", marker="^", ms=3.5)
+                seg(ax, *cut(dd["AD"], key), color="tab:green", lw=1.2, ls=":", marker="^", ms=3.5)
             if q == "mu":
                 for c, col in (("electron", "tab:blue"), ("hole", "tab:purple")):
                     if c in muedge:
                         ax.axhline(muedge[c] * (T0 / T), color=col, ls="-.", lw=0.9, alpha=0.85)
                 ax.set_yscale("log"); ax.set_ylim(2, 50000)
             elif q == "S":
-                ax.set_ylim(-(950 if AX["NLO"] >= 1e17 else 2500), 950 if AX["NLO"] >= 1e17 else 2500); ax.axhline(0, color="k", lw=0.5)
+                ax.set_ylim(-slim, slim); ax.axhline(0, color="k", lw=0.5)
             else:
                 ax.set_yscale("log")
-                ax.set_ylim({"sigma": (1e0, 1e10), "PF": (1e-6, 1e1), "kappa_e": (1e-4, 1e5)}[q])
+                if tag.startswith("carrier_tuning"):        # 低浓度段 σ/PF/κe 低好几个量级，用自动范围
+                    ax.set_ylim({"sigma": (1e0, 1e10), "PF": (1e-6, 1e1), "kappa_e": (1e-4, 1e5)}[q])
     hh = [Line2D([], [], color="tab:blue", lw=1.6, label="DPT route (S8.1 CRTA x DPT-tau)"),
           Line2D([], [], color="tab:red", lw=1.2, ls="--", marker="s", ms=4, label="AMSET phonon + impurity"),
           Line2D([], [], color="tab:green", lw=1.2, ls=":", marker="^", ms=4, label="AMSET ADP only (intrinsic_ADP.json)"),
@@ -254,11 +274,11 @@ def make_transport(mdir, out, M):
           Line2D([], [], color="tab:purple", lw=1.0, ls="-.", label="DPT band-edge h+")]
     fig.legend(handles=hh, loc="lower center", ncol=5, fontsize=9, frameon=False)
     _trng = "%g-%g K" % (min(btT), max(btT)) if btT else ""     # [0052-r1] 温度范围按实际网格，不再写死 100-900 K
-    fig.suptitle("%s  electronic transport  (%s)   --   x = carrier conc. n,  left = n-type, right = p-type"
-                 % (M, _trng), fontsize=12)
+    _what = {"carrier_tuning": "carrier tuning (doping) range", "low_doping": "low-doping range (non-degenerate)"}
+    fig.suptitle("%s  electronic transport, %s  n = %s - %s cm$^{-3}$  (%s)   --   left = n-type, right = p-type"
+                 % (M, _what[tag.split("_1e")[0]], AX["XTL"][len(AX["XTL"]) // 2], AX["XTL"][0], _trng), fontsize=12)
     fig.tight_layout(rect=[0, 0.03, 1, 0.985])
-    fig.savefig(os.path.join(out, "%s_transport.png" % M), dpi=130); plt.close(fig)
-    return True
+    fig.savefig(path, dpi=130); plt.close(fig)
 
 
 def make_intrinsic(mdir, out, M):
