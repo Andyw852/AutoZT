@@ -55,7 +55,7 @@ LWAVE  = .FALSE.
 LCHARG = .TRUE.
 
 # ---- 并行 ----
-NCORE  = 6                # (总核数 / KPAR) 须能被 NCORE 整除；GPU(OpenACC) 版必须为 1
+NCORE  = 4                # (总核数 / KPAR) 须能被 NCORE 整除；GPU(OpenACC) 版必须为 1
 KPAR   = 4
 
 # ---- 3D 专属提示 ----

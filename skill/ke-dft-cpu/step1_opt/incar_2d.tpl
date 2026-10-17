@@ -53,7 +53,7 @@ LWAVE  = .FALSE.
 LCHARG = .TRUE.
 
 # ---- 并行 ----
-NCORE  = 6                # 总核数/KPAR 须被 NCORE 整除;GPU(OpenACC)版必须 NCORE=1
+NCORE  = 4                # 总核数/KPAR 须被 NCORE 整除;GPU(OpenACC)版必须 NCORE=1
 KPAR   = 2                # 内存 ×2,2D 大真空胞注意 OOM
 
 # ---- 非对称 2D(Janus / 单面吸附)按需开 ----

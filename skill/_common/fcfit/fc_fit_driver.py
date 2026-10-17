@@ -1343,9 +1343,13 @@ def _pheasy_scan(cfg, out, cands, base_for, rasr_flag, fit_flags, make_env):
             _fmp.unlink()   # 上一档 -f 的 manifest 不能混进来（-f 失败时尤其）
         rc, txt = _run_streaming("%s -f --ndata %d %s" % (base, nd, " ".join(fit_flags)),
                                  make_env("fit"))
-        (Path(out) / ("pheasy_f_%s.log" % tag)).write_text(txt, encoding="utf-8")
+        # 先落盘再判 rc；写失败（磁盘满）不得掩盖真正的失败原因。
+        try:
+            (Path(out) / ("pheasy_f_%s.log" % tag)).write_text(txt, encoding="utf-8")
+        except OSError as _we:
+            print("[WARN] 无法写入 pheasy_f_%s.log（磁盘满？）：%s" % (tag, _we), flush=True)
         if rc != 0:
-            sys.exit("[ERROR] pheasy -f (c3=%.2f) failed" % c3v)
+            sys.exit("[ERROR] pheasy -f (c3=%.2f) failed；完整输出见 pheasy_f_%s.log" % (c3v, tag))
         return txt
 
     records, shell_dist, bins = [], None, None
@@ -2195,7 +2199,16 @@ def cmd_fit_pheasy(cfg, out):
         _fmp.unlink()   # 截断扫描/bootstrap 的 manifest 不能混进主拟合
     rc, log_txt = _run_streaming(fit_step, env)
     if rc != 0:
-        sys.exit("[ERROR] pheasy fit failed (rc=%d)" % rc)
+        # 失败时务必先把完整输出落盘再退出：以前这里直接 sys.exit，捕获到的
+        # traceback 只存在于流式输出里，一旦磁盘写满（写不进去）或输出被截断，
+        # 完整栈就再也找不回来。2026-10-15 A800 /fs0 写满事故：ALASSO 的
+        # HARM_DENSE 崩溃栈就是这样丢的（queue.out 停在 _initial_estimate 中途，
+        # pheasy_f_*.log 为 0 字节），只能靠重跑才能拿到。
+        try:
+            (Path(out) / "pheasy_f_main.log").write_text(log_txt, encoding="utf-8")
+        except OSError as _we:
+            print("[WARN] 无法写入 pheasy_f_main.log（磁盘满？）：%s" % _we, flush=True)
+        sys.exit("[ERROR] pheasy fit failed (rc=%d)；完整输出见 pheasy_f_main.log" % rc)
     # Bring fc2/fc3 (+ SPOSCAR) back to the dataset atom order before anything
     # downstream reads them.
     apply_pheasy_fc_order(cfg, out)

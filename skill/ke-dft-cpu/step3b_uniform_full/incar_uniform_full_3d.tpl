@@ -46,5 +46,5 @@ LORBIT = 11
 NEDOS  = 5000
 LOPTICS = .FALSE.       # amset 自己算跃迁，不需要 VASP 的 LOPTICS
 
-NCORE  = 6
+NCORE  = 4
 KPAR   = 4

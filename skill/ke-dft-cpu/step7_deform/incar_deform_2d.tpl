@@ -41,5 +41,5 @@ LVHAR  = .TRUE.         # 输出 LOCPOT（Hartree + 离子势，不含交换关�
                        #   S7.1 取真空区平面平均势，替换 AMSET 的芯势参考重算形变势
                        #   （deformation_vac.h5 / band_edges.json 的 E1_vac_*），不是事后加修正量。
 
-NCORE  = 6
+NCORE  = 4
 KPAR   = 2

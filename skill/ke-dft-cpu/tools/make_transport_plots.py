@@ -44,8 +44,8 @@ NFLOOR = 5e17
 QUANTS_T = [("mu", r"$\mu$  (cm$^2$/V/s)"), ("S", "S  (uV/K)"),
             ("sigma", r"$\sigma$  (S/m)"), ("PF", r"PF  (W/m/K$^2$)"),
             ("kappa_e", r"$\kappa_e$  (W/m/K)")]
-QUANTS_I = [("mu_cm2/Vs", "mu  (cm^2/V/s)"), ("S_uV/K", "S  (uV/K)"), ("sigma_S/m", "sigma  (S/m)"),
-            ("PF_W/mK2", "PF  (W/m/K$^2$)"), ("kappa_e_W/mK", "kappa_e  (W/m/K)")]  # 与 QUANTS_T 同列
+QUANTS_I = [("mu_cm2/Vs", r"$\mu$  (cm$^2$/V/s)"), ("S_uV/K", "S  (uV/K)"), ("sigma_S/m", r"$\sigma$  (S/m)"),
+            ("PF_W/mK2", r"PF  (W/m/K$^2$)"), ("kappa_e_W/mK", r"$\kappa_e$  (W/m/K)")]  # 与 QUANTS_T 同列（符号统一为 mathtext）
 DATASETS = [("overall", "tab:red", "--", "s"), ("intrinsic", "tab:orange", "-.", "D"),
             ("ADP_only", "tab:green", ":", "^"), ("BT2_DPTtau", "tab:blue", "-", "o")]
 DS_LABELS = {"overall": "phonon + impurity", "intrinsic": "phonon-limited",      # [0054] 与 S8.3 统一命名
@@ -277,7 +277,7 @@ def make_intrinsic(mdir, out, M):
             else:
                 ax.set_yscale("log")
     hh = [Line2D([], [], color=c, lw=1.4, ls=ls, marker=mk, ms=4, label=DS_LABELS.get(ds, ds)) for ds, c, ls, mk in DATASETS]
-    hh.append(Line2D([], [], color="0.35", lw=1.0, ls=(0, (1, 1)), label="DPT (band-edge, mu only)"))
+    hh.append(Line2D([], [], color="0.35", lw=1.0, ls=(0, (1, 1)), label=r"DPT (band-edge, $\mu$ only)"))
     fig.legend(handles=hh, loc="lower center", ncol=5, fontsize=9, frameon=False)
     # [0052-r1][0054] 文案与权威脚本 gen_step13_output.py 对齐：去 IMP = phonon-limited；
     #   "intrinsic" 只指本征载流子（transport_plots/intrinsic_carrier/）。

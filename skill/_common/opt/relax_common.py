@@ -363,6 +363,10 @@ VACUUM_AXIS_POLICY = "error"
 STAGE_MODE = "in_job"
 STALL_MIN = 180                      # run_relax.sh 看门狗：输出停滞几分钟判卡死（0=关）
                                      # 2026-09-17 由 60 提到 180：见 CONF_SPEC 里 STALL_MINUTES 的实测依据
+FREEZE_MIN = 120                     # 兜底：OUTCAR+OSZICAR 同时冻结这么久就无条件杀本段（不看 CPU）。
+                                     # 2026-10-16 新增，治「忙等挂死」：MPI spin-wait 时 CPU 一直涨，
+                                     # STALL_MIN 那套（三指纹全不动）永不触发，作业白占整段墙钟
+                                     # （实测 4 个 qTPC20-r 各白占 47h 才被 48h 墙钟杀）。0=关。
 
 # 「某段已收敛就跳过后续段」——注意这个开关只对【不改晶胞】的段有意义。
 #   _converged() 判的是 OUTCAR 里的 "reached required accuracy"，那是【力】判据；
@@ -1834,8 +1838,8 @@ _cpu_seconds () {
 }
 
 _watchdog () {
-    local pid="$1" last=-1 last_o=-1 last_cpu=-1 now now_o now_cpu stall=0
-    [ "${STALL_MIN}" -le 0 ] && return 0
+    local pid="$1" last=-1 last_o=-1 last_cpu=-1 now now_o now_cpu stall=0 freeze=0
+    [ "${STALL_MIN}" -le 0 ] && [ "${FREEZE_MIN}" -le 0 ] && return 0
     while kill -0 "${pid}" 2>/dev/null; do
         sleep 60
         now=$(stat -c %s OUTCAR 2>/dev/null || echo 0)
@@ -1860,6 +1864,27 @@ _watchdog () {
             fi
         else
             stall=0
+        fi
+        # ★ 2026-10-16 新增：输出冻结兜底（不看 CPU 指纹）—— 治忙等挂死
+        #   忙等（MPI spin-wait）时 CPU 一直涨、上面 stall 永不触发；这里只看
+        #   OUTCAR+OSZICAR 是否同时冻结，超 FREEZE_MIN 分钟无条件杀，作业立即退出。
+        if [ "${now}" = "${last}" ] && [ "${now_o}" = "${last_o}" ]; then
+            freeze=$((freeze + 1))
+            if [ "${FREEZE_MIN}" -gt 0 ] && [ "${freeze}" -ge "${FREEZE_MIN}" ]; then
+                {
+                    echo "[run_relax][watchdog] OUTCAR(${now}B)/OSZICAR(${now_o} 行) 已 ${FREEZE_MIN} 分钟同时冻结（CPU 仍在涨=${now_cpu}s → 忙等挂死），终止本段"
+                    echo "[run_relax][watchdog] 判定快照："
+                    hostname; date
+                    ps -eo pid,ppid,stat,time,pcpu,rss,comm 2>/dev/null | head -40
+                    echo "--- uptime ---"; uptime
+                } >>queue.err 2>&1
+                kill -TERM "${pid}" 2>/dev/null || true
+                sleep 30
+                kill -KILL "${pid}" 2>/dev/null || true
+                return 0
+            fi
+        else
+            freeze=0
         fi
         last="${now}"
         last_o="${now_o}"
@@ -2328,6 +2353,7 @@ def build_in_job_stages(outdir: Path):
              "",
              'VASP_CMD="%s"' % vasp_cmd,
              "STALL_MIN=%d    # OUTCAR 停滞这么多分钟判定卡死（0=关）" % int(STALL_MIN),
+             "FREEZE_MIN=%d   # OUTCAR+OSZICAR 同时冻结这么久→无条件杀（治忙等挂死；0=关）" % int(FREEZE_MIN),
              'EARLY_EXIT=%s   # 不改胞的段：已收敛就跳过后续段' % ("1" if EARLY_EXIT_ON_CONVERGENCE else "0"),
              "PRESS_TOL=%s     # 稳定判据③(3D)：|external pressure| < 此值 (kB)" % PRESS_TOL_KB,
              # 2D 用面内分量判据（2026-09-17）：|P| 有 2/3 被受约束的 σzz 撑着，偏松。

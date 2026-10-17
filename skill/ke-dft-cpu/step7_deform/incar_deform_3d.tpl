@@ -38,5 +38,5 @@ LCHARG = .FALSE.
 LORBIT = 0
 LVHAR  = .TRUE.         # 输出 LOCPOT（2D 真空对齐用；3D 无真空，仅保持一致性）
 
-NCORE  = 6
+NCORE  = 4
 KPAR   = 4

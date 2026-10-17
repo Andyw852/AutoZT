@@ -84,7 +84,7 @@ steps:
 
   # S5_fc 现为【提交计算节点】作业（去掉 run: gen）：gen 只写 submit.sh + fit_config.json，
   #   拟合/导出/虚频闸在作业里由共享引擎 fc_fit_driver.py 执行（[0019] 起；旧 kl_fc_backends.py 已删）。marker 仍是 phonon_summary.json。
-  - {seq: 5, name: step5_fc, label: S5_fc, check: phonon,
+  - {seq: 5, name: step5_fc, label: S5_fc, check: phonon, hpc: "3090",   # [用户 2026-10-16] S5_fc 默认 FIT_ENGINE=pheasy 走 pheasy-gpu → 3090 GPU
      gen: gen_step5_fc.py, fetch_all: true,
      # v3.x：本地暂存的 fit-fc-thermal kl_bundle/ 在提交时自动推到目标集群（存在才推）。
      #   路径相对【材料本地目录】：<matroot>/fit-fc-thermal/result/step1_fit/kl_bundle。

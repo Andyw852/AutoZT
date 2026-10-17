@@ -54,7 +54,7 @@ LWAVE  = .FALSE.          # 多轮 Pulay 弛豫中晶胞在变,WAVECAR 无法跨
 LCHARG = .TRUE.
 
 # ---- 并行 ----
-NCORE  = 6                # (总核数 / KPAR) 须能被 NCORE 整除
+NCORE  = 4                # (总核数 / KPAR) 须能被 NCORE 整除
 KPAR   = 4                # 内存约 ×4;GPU(OpenACC)版必须 NCORE = 1
 
 
