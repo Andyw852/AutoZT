@@ -75,3 +75,9 @@ def test_freeze_minutes_from_step_conf(monkeypatch):
     rc.apply_step_params()
     assert rc.FREEZE_MIN == 0 and rc.STALL_MIN == 240
     assert "FREEZE_MINUTES" in rc.CONF_SPEC
+
+
+def test_freeze_default_not_below_stall():
+    # 冻结判据不看 CPU、比 STALL 宽：默认值小于 STALL_MIN 会把 09-17 实测的长时间文件系统停顿重新误杀
+    rc = _rc()
+    assert rc.FREEZE_MIN == 240 and rc.FREEZE_MIN >= rc.STALL_MIN

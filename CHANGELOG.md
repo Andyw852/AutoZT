@@ -22,6 +22,8 @@ This project adheres to Semantic Versioning; versions before 1.0.0 are developme
   (Mg2C60 / Mg4C60 S7.1 failed with "No module named 'numpy'" although the amset env has numpy).
 - run_relax.sh watchdog: `STALL_MINUTES = 0` means "off" again (since FREEZE_MIN was added the stall branch
   used 0 as its threshold and killed the segment after one minute); `FREEZE_MINUTES` can be set in step.conf.
+  The FREEZE_MIN default goes from 120 to 240 minutes so it no longer fires before STALL_MIN (180), which was
+  raised on 2026-09-17 because file-system pauses of 60-180 minutes killed healthy runs.
 
 ### Fixed (2026-10-15: fail counter counted state flapping as retries; conf/dir polluted state)
 - autozt/progress.py: _history_stats now counts a failure only when the FAIL came from an actual

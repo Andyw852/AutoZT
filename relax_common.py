@@ -363,10 +363,13 @@ VACUUM_AXIS_POLICY = "error"
 STAGE_MODE = "in_job"
 STALL_MIN = 180                      # run_relax.sh 看门狗：输出停滞几分钟判卡死（0=关）
                                      # 2026-09-17 由 60 提到 180：见 CONF_SPEC 里 STALL_MINUTES 的实测依据
-FREEZE_MIN = 120                     # 兜底：OUTCAR+OSZICAR 同时冻结这么久就无条件杀本段（不看 CPU）。
+FREEZE_MIN = 240                     # 兜底：OUTCAR+OSZICAR 同时冻结这么久就无条件杀本段（不看 CPU）。
                                      # 2026-10-16 新增，治「忙等挂死」：MPI spin-wait 时 CPU 一直涨，
                                      # STALL_MIN 那套（三指纹全不动）永不触发，作业白占整段墙钟
                                      # （实测 4 个 qTPC20-r 各白占 47h 才被 48h 墙钟杀）。0=关。
+                                     # 2026-10-17 由 120 提到 240（用户定）：必须 ≥ STALL_MIN（180）——冻结判据
+                                     #   不看 CPU、比 STALL 宽，取 120 会先于 STALL 触发，把 09-17 实测的
+                                     #   60~180 分钟文件系统停顿（作业本身正常）重新误杀。step.conf 可用 FREEZE_MINUTES 改。
 
 # 「某段已收敛就跳过后续段」——注意这个开关只对【不改晶胞】的段有意义。
 #   _converged() 判的是 OUTCAR 里的 "reached required accuracy"，那是【力】判据；
