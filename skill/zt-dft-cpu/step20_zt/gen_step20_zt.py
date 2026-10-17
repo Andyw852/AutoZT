@@ -542,8 +542,8 @@ def make_intrinsic(out, grid, meta, ni, ni_src):
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
-    panels = [("seebeck_uV/K", "S (uV/K)", False), ("sigma_S/m", "sigma (S/m)", True),
-              (("kappa_e_W/mK", "kappa_L_W/mK"), "kappa (W/m/K)", True),
+    panels = [("seebeck_uV/K", r"S ($\mu$V/K)", False), ("sigma_S/m", r"$\sigma$ (S/m)", True),
+              (("kappa_e_W/mK", "kappa_L_W/mK"), r"$\kappa$ (W/m/K)", True),
               ("PF_W/mK2", "PF (W/m/K$^2$)", True), ("ZT", "ZT", False)]
     nip = [(r["T_K"], r["n_i_cm-3"]) for r in rows if r["n_i_cm-3"]]
     if nip:
@@ -645,8 +645,8 @@ def make_plots(out, grid, peaks, meta, par=None):
         for ax, key, lab in zip(axes,
                                 ("seebeck_uV/K", "sigma_S/m", "kappa_tot_W/mK",
                                  "PF_W/mK2", "ZT"),
-                                ("S (uV/K)", "sigma (S/m)", "kappa_tot (W/m/K)",
-                                 "PF (W/m/K^2)", "ZT")):
+                                (r"S ($\mu$V/K)", r"$\sigma$ (S/m)", r"$\kappa_{tot}$ (W/m/K)",
+                                 r"PF (W/m/K$^2$)", "ZT")):
             ax.plot(temps, r[key], "o-", ms=3.5, lw=1.3)
             ax.set_xlabel("T (K)")
             ax.set_ylabel(lab)

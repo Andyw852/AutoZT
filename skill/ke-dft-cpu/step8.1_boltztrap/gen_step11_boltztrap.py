@@ -957,7 +957,7 @@ def write_paper_scan(out, cwd, res, is_2d):
                     ax.plot(x, [(v if v is not None else float("nan")) for v in y],
                             sty, label=nm)
                     got = True
-            ax.set_xlabel("mu - E_F (eV)")
+            ax.set_xlabel(r"$\mu$ - $E_F$ (eV)")
             ax.set_ylabel(lab)
             ax.axvline(0.0, color="0.7", lw=0.8)
             if got:

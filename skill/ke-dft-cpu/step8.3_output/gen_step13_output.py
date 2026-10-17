@@ -1383,7 +1383,7 @@ def _plot_mu_vs_T(out, res):
                             label="%s %s" % (lab, d))
         ax.set_yscale("log")
         ax.set_xlabel("T (K)")
-        ax.set_ylabel("mobility (cm$^2$/Vs)")
+        ax.set_ylabel(r"mobility (cm$^2$/V/s)")
         ax.set_title(car)
         ax.legend(fontsize=8)
     fig.tight_layout()
@@ -2300,7 +2300,7 @@ def make_figure(out, am, bt, dpt, am2=None, geom=None):
         if n: a.plot(*zip(*[(x, abs(y)) for x, y in n]), "--", c="C0", alpha=.7, label="BT2 n")
         if p: a.plot(*zip(*[(x, abs(y)) for x, y in p]), "--", c="C1", alpha=.7, label="BT2 p")
     a.set_xscale("log"); a.set_xlabel(XL); top_axis(a)
-    a.set_ylabel("|Seebeck| (uV/K)"); a.set_title("Seebeck @300K (directly comparable)")
+    a.set_ylabel(r"|Seebeck| ($\mu$V/K)"); a.set_title("Seebeck @300K (directly comparable)")
     a.legend(fontsize=8); a.grid(alpha=.3)
     # (0,1) Lorenz（[0032] 以 1e-8 为单位画：科学计数偏移文字会压住 2D 的上横轴）
     a = ax[0, 1]
@@ -2315,7 +2315,7 @@ def make_figure(out, am, bt, dpt, am2=None, geom=None):
         if p: a.plot(*zip(*p), "--", c="C1", alpha=.7, label="BT2 p")
     a.axhline(SOMMERFELD_L * (1e8 if geom else 1.0), ls=":", c="k", label="Sommerfeld 2.44e-8")
     a.set_xscale("log"); a.set_xlabel(XL); top_axis(a)
-    a.set_ylabel("Lorenz (1e-8 W.Ohm/K^2)" if geom else "Lorenz (W.Ohm/K^2)")
+    a.set_ylabel(r"Lorenz (1e-8 W.Ohm/K$^2$)" if geom else r"Lorenz (W.Ohm/K$^2$)")
     a.set_title("Lorenz @300K (directly comparable)")
     a.legend(fontsize=8); a.grid(alpha=.3)
     # (0,2) sigma: amset absolute + BT2 per-tau (right axis)
@@ -2324,19 +2324,19 @@ def make_figure(out, am, bt, dpt, am2=None, geom=None):
         n, p = split(am["doping_signed"], am["sigma"])
         if n: a.plot(*zip(*n), "o-", c="C0", label="amset n (abs)")
         if p: a.plot(*zip(*p), "s-", c="C1", label="amset p (abs)")
-        a.set_ylabel("amset sigma (S/m)")
+        a.set_ylabel(r"amset $\sigma$ (S/m)")
     if am2:                                   # patch_amset2d
         n, p = split(am2["doping_signed"], am2["sigma"])
         if n: a.plot(*zip(*n), "-.", c="C2", label="amset2d n (abs)")
         if p: a.plot(*zip(*p), "-.", c="C3", label="amset2d p (abs)")
     a.set_xscale("log"); a.set_yscale("log"); a.set_xlabel(XL); top_axis(a)
-    a.set_title("sigma @300K (amset abs; BT2 dashed=sigma/tau, shape only)")
+    a.set_title(r"$\sigma$ @300K (amset abs; BT2 dashed=$\sigma$/$\tau$, shape only)")
     if bt:
         a2 = a.twinx()
         n, p = split(bt["n_signed"], bt["sigma_over_tau"])
         if n: a2.plot(*zip(*n), "--", c="C0", alpha=.6)
         if p: a2.plot(*zip(*p), "--", c="C1", alpha=.6)
-        a2.set_yscale("log"); a2.set_ylabel("BT2 sigma/tau (S/m/s)")
+        a2.set_yscale("log"); a2.set_ylabel(r"BT2 $\sigma$/$\tau$ (S/m/s)")
     a.legend(fontsize=8); a.grid(alpha=.3)
     # (1,0) kappa_e 三方：amset真值 / BT2用DPT-τ反推 / DPT用WF估
     a = ax[1, 0]
@@ -2370,7 +2370,7 @@ def make_figure(out, am, bt, dpt, am2=None, geom=None):
                 a.plot(ntar * xf, SOMMERFELD_L * sig * 300.0, ":", c=col, alpha=.6,
                        label="DPT %s (WF)" % nm)
     a.set_xscale("log"); a.set_yscale("log"); a.set_xlabel(XL); top_axis(a)
-    a.set_ylabel("kappa_e (W/m/K)"); a.set_title("kappa_e @300K (3-way, see notes)")
+    a.set_ylabel(r"$\kappa_e$ (W/m/K)"); a.set_title(r"$\kappa_e$ @300K (3-way, see notes)")
     a.legend(fontsize=7); a.grid(alpha=.3)
     # (1,1) mobility: amset total(实线) + amset-ADP(点划,与DPT同为纯声学) + DPT(虚线水平)
     a = ax[1, 1]
@@ -2395,7 +2395,7 @@ def make_figure(out, am, bt, dpt, am2=None, geom=None):
         if isinstance(dpt.get("hole"), (int, float)):
             a.axhline(dpt["hole"], ls="--", c="C1", label="DPT p (ADP,300K)")
     a.set_xscale("log"); a.set_yscale("log"); a.set_xlabel(XL); top_axis(a)
-    a.set_ylabel("mobility (cm^2/Vs)"); a.set_title("Mobility @300K (amset vs DPT-ADP)")
+    a.set_ylabel(r"mobility (cm$^2$/V/s)"); a.set_title("Mobility @300K (amset vs DPT-ADP)")
     a.legend(fontsize=8); a.grid(alpha=.3)
     # (1,2) notes / provenance
     a = ax[1, 2]; a.axis("off")
@@ -2838,7 +2838,7 @@ def write_undoped_plots(cwd, plots, M, is_2d):
     h, l = max((a.get_legend_handles_labels() for a in axs[0]), key=lambda hl: len(hl[0]))
     if h:
         fig.legend(h, l, loc="lower center", ncol=min(3, len(h)), fontsize=8, frameon=False)
-    fig.suptitle("%s  intrinsic carriers (undoped, n = p = n_i; E_F near mid-gap, IMP = 0; S, sigma bipolar)  —  AMSET%s%s"
+    fig.suptitle("%s  intrinsic carriers (undoped, n = p = n_i; E_F near mid-gap, IMP = 0; S, $\\sigma$ bipolar)  —  AMSET%s%s"
                  % (M, "" if ni_pts else "   [n_i not recorded: rerun S8 to get it]",
                     ("\nshaded: eta = (E_c - E_F)/kT < %g, band-edge occupation not ~ 0 (not the dilute limit)"
                      % DILUTE_ETA_MIN) if bad_T else ""), fontsize=11)
@@ -3407,7 +3407,7 @@ def write_transport_plots(cwd, out, is_2d):
                     a.plot(_muv[msk], v[msk], lw=1.15, ls=ls, label=lab + " (thickness)")
                     if _dep and _fac and abs(_fac - 1.0) > 1e-9:
                         a.plot(_muv[msk], v[msk] / _fac, lw=0.9, ls=":", label=lab + " (cell)")
-                a.set_xlabel("mu (eV)", fontsize=8)
+                a.set_xlabel(r"$\mu$ (eV)", fontsize=8)
                 if j == 0:
                     a.legend(fontsize=6.5, frameon=False, loc="upper right")
             _f.suptitle("%s  bt2 CRTA x DPT-tau  (chemical-potential scan, %d K)" % (M, _T), fontsize=11)

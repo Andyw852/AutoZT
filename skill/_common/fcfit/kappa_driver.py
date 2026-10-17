@@ -653,7 +653,7 @@ def _write_kappa_vs_mesh(out, rep):
         ax.set_xticks(range(len(labels)))
         ax.set_xticklabels(labels)
         ax.set_xlabel("q-mesh")
-        ax.set_ylabel("kappa (W/mK)")
+        ax.set_ylabel(r"$\kappa$ (W m$^{-1}$ K$^{-1}$)")
         ax.set_title("q-mesh convergence @ %g K%s"
                      % (t, "" if rep.get("converged") else "  (NOT converged)"))
         ax.grid(True, alpha=0.3)

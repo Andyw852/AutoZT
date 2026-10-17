@@ -272,7 +272,7 @@ def build_extract(factor, meta):
         "        ax.set_xticks(range(len(_labels)))\n"
         "        ax.set_xticklabels(_labels)\n"
         "        ax.set_xlabel(\"q-mesh\")\n"
-        "        ax.set_ylabel(\"kappa (W/mK)\")\n"
+        "        ax.set_ylabel(r\"$\\kappa$ (W m$^{-1}$ K$^{-1}$)\")\n"
         "        ax.set_title(\"q-mesh convergence @ 300 K\")\n"
         "        ax.grid(True, alpha=0.3)\n"
         "        ax.legend(fontsize=8)\n"
