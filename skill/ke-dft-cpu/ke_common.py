@@ -755,7 +755,7 @@ def _gap_changed(step_dir, step, gap):
 DONE_MARKERS = {
     # S7.1：deformation_vac.h5 也要归档 —— 只归档 deformation.h5 的话，新 S7.1 没产出 vac 时
     #   _pick_deformation_h5 会捡到旧的 vac h5。
-    "step7b_deform_read": ("deformation.h5", "deformation_vac.h5", "band_edges.json"),
+    "step7b_deform_read": ("deformation.h5", "deformation_vac.h5", "band_edges.json", "metal.json"),
     "step4_wave": ("wavefunction.h5",),
     "step4b_wave_full": ("wavefunction.h5",),
     "step5_dielect_validate": ("dielectric_check.json",),
@@ -783,6 +783,39 @@ def _marker_files(d, consumer):
             except OSError:
                 pass
     return names
+
+
+# [metal_mode] 2026-10-17：金属判定的唯一来源 —— S7.1 在 undeformed 能带 is_metal 时写这份（不写 band_edges.json）。
+#   S8.1 据此走金属模式（不读 S8.2 的 DPT τ），S8.2 / S8.3 据此直接报"不适用"并给出关组的办法。
+METAL_MARKER = "step7b_deform_read/metal.json"
+
+
+def metal_status(mat_dir):
+    """材料是不是金属（S7.1 判的）：metal.json 的内容（dict）或 None。"""
+    import json as _json
+    p = Path(mat_dir) / METAL_MARKER
+    if not p.is_file():
+        return None
+    try:
+        d = _json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {"is_metal": True, "source": str(p), "note": "metal.json 解析失败，按金属处理"}
+    return d if isinstance(d, dict) and d.get("is_metal") else None
+
+
+METAL_GROUPS_OFF = ("amset3d", "dpt", "odp_frozen", "ivs_frozen", "output_compare")
+
+
+def metal_not_applicable(mat_dir, step_label, why):
+    """S8.2 / S8.3 这类半导体专用步骤遇到金属：打印原因 + 关组办法，退出（rc!=0，不写完成标记）。"""
+    m = metal_status(mat_dir)
+    if not m:
+        return
+    sys.exit("[ERROR] %s 不适用于金属（S7.1 判定：%s）—— %s。\n"
+             "        金属的电子输运走 S8.1_bt2 的金属模式（见 METHODOLOGY「金属」一节）。\n"
+             "        在本材料的 tf_<项目>.yaml 关掉半导体专用的组：%s"
+             % (step_label, m.get("reason") or "is_metal", why,
+                "、".join("%s: false" % g for g in METAL_GROUPS_OFF)))
 
 
 DP_OPTICAL_DPT_SRC = "step8.2_dpt/dpt_result.json"     # [0034] S8.4 的 ODP/IVS 谷表来源（gen_step14 的 DPT_RESULT）

@@ -52,7 +52,7 @@ AMSET_DIR   = "step8_amset"            # 读 2d_correction.json 拿 c/t（若有
 AMSET2D_DIR = "step8.4_amset2d"        # [0016] 2D 不跑 S8 时，c/t 与掺杂档改读 S8.4
 STEP = "step8.1_boltztrap"
 # [0016] 版本戳：写进 boltztrap_crta.json 与 paper_mu_scan_*.csv 首行（以前没有，跨材料核对只能看文件时间）
-_SKILL_REV = "2026-10-10-0026-zz"
+_SKILL_REV = "2026-10-17-metal"   # [metal_mode] 金属模式（metal_transport.json）；2026-10-10-0026-zz
 
 TEMPERATURES = [100, 200, 300, 400, 500, 600, 700, 800, 900]  # K
 # patch_mu_window：CRTA 类文献普遍把 μ 扫到带边上下 ±3 eV，ZT 峰
@@ -105,10 +105,24 @@ SOMMERFELD_L = 2.44e-8    # WΩ/K²
 DOPING_ALIGN = "amset"
 DOPING_LIST  = [-1e20, -1e19, -1e18, 1e18, 1e19, 1e20]   # 读不到 amset 时兜底
 # [0016] 以前本步不读 step.conf（THICKNESS_A / NORM_2D 只能改脚本）；现在按 SPEC 读 tf 推来的 step.conf。
+# ---- [metal_mode] 2026-10-17：金属（S7.1 写了 metal.json）的电子输运 ----
+#   CRTA 下 S、σ/τ、κ_e/τ、L=κ_e/(σT) 不需要 τ，总是输出（在电中性的 E_F(T) 处取值）。
+#   σ、ρ、κ_e 的绝对值要 τ；不给就只出上面那几项，不编一个 τ。两种 τ 二选一（step.conf）：
+#     METAL_LAMBDA_TR = λ_tr   输运电声耦合常数 -> 高温极限 ħ/τ = 2π λ_tr k_B T（Allen 1978；Grimvall 1981）。
+#                              λ_tr 来自第一性原理电声计算（EPW/Perturbo 的输运 Eliashberg 函数，或 λ_tr≈λ 近似），
+#                              METAL_LAMBDA_SOURCE 必须写明出处；只在高温区（T ≳ Θ_D/3 量级）成立，低温高估散射。
+#     METAL_TAU_FS    = τ(fs)  常数弛豫时间 —— 假设值（文献常取 10 fs 量级），结果按"假设 τ"标注。
+#   完整做法（IBTE/SERTA 逐态 τ_nk）不在本技能里，见 METHODOLOGY「金属」。
+METAL_TAU_FS = None
+METAL_LAMBDA_TR = None
+METAL_LAMBDA_SOURCE = ""
 SPEC = {
     "THICKNESS_A": (None, "float"),
     "NORM_2D": (NORM_2D, "str"),
     "LAYER_THICKNESS": (LAYER_THICKNESS, "str"),
+    "METAL_TAU_FS": (None, "float"),
+    "METAL_LAMBDA_TR": (None, "float"),
+    "METAL_LAMBDA_SOURCE": ("", "str"),
 }
 # =================================================================
 
@@ -152,7 +166,7 @@ def _find_vasprun(d):
 
 def _apply_conf(cwd):
     """[0016] 读 tf 推来的 step.conf 覆盖 THICKNESS_A / NORM_2D / LAYER_THICKNESS（没有 step.conf 不动）。"""
-    global THICKNESS_A, NORM_2D, LAYER_THICKNESS
+    global THICKNESS_A, NORM_2D, LAYER_THICKNESS, METAL_TAU_FS, METAL_LAMBDA_TR, METAL_LAMBDA_SOURCE
     if not (Path(cwd) / "step.conf").is_file():
         return
     try:
@@ -167,6 +181,12 @@ def _apply_conf(cwd):
         NORM_2D = str(p["NORM_2D"])
     if p["LAYER_THICKNESS"]:
         LAYER_THICKNESS = str(p["LAYER_THICKNESS"])
+    if p["METAL_TAU_FS"] is not None:
+        METAL_TAU_FS = float(p["METAL_TAU_FS"])
+    if p["METAL_LAMBDA_TR"] is not None:
+        METAL_LAMBDA_TR = float(p["METAL_LAMBDA_TR"])
+    if p["METAL_LAMBDA_SOURCE"]:
+        METAL_LAMBDA_SOURCE = str(p["METAL_LAMBDA_SOURCE"])
 
 
 def _layer_thickness_number():
@@ -975,6 +995,72 @@ def write_paper_scan(out, cwd, res, is_2d):
     return lines
 
 
+def _metal_status(cwd):
+    """[metal_mode] S7.1 的金属判定（metal.json）；不是金属 / 读不到 ke_common -> None。"""
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+        sys.path.insert(0, str(cwd))
+        import ke_common as _kc
+    except ImportError:
+        p = Path(cwd) / "step7b_deform_read" / "metal.json"
+        return {"is_metal": True, "source": str(p)} if p.is_file() else None
+    return _kc.metal_status(cwd)
+
+
+HBAR_JS = 1.054571817e-34
+KB_JK = 1.380649e-23
+
+
+def metal_tau_s(T, tau_fs=None, lambda_tr=None, lambda_source=""):
+    """[metal_mode] 金属的弛豫时间（s）与说明。都不给 -> (None, 说明)；两个都给 -> 报错（口径不明）。
+    λ_tr：高温极限 ħ/τ = 2π λ_tr k_B T（Allen, PRB 17, 3725 (1978)）。"""
+    if tau_fs is not None and lambda_tr is not None:
+        sys.exit("[ERROR] METAL_TAU_FS 与 METAL_LAMBDA_TR 只能给一个（一个是假设的常数 τ，一个是电声耦合算出的 τ(T)）")
+    if lambda_tr is not None:
+        if lambda_tr <= 0:
+            sys.exit("[ERROR] METAL_LAMBDA_TR=%s 必须 > 0" % lambda_tr)
+        if not str(lambda_source or "").strip():
+            sys.exit("[ERROR] 给了 METAL_LAMBDA_TR 就必须写 METAL_LAMBDA_SOURCE（λ_tr 的出处：哪次电声计算 / 哪篇文献）")
+        return (HBAR_JS / (2.0 * 3.141592653589793 * lambda_tr * KB_JK * float(T)),
+                "λ_tr=%g（%s），高温极限 ħ/τ=2πλ_tr k_B T" % (lambda_tr, lambda_source))
+    if tau_fs is not None:
+        if tau_fs <= 0:
+            sys.exit("[ERROR] METAL_TAU_FS=%s 必须 > 0" % tau_fs)
+        return float(tau_fs) * 1e-15, "假设的常数 τ=%g fs（不是算出来的）" % tau_fs
+    return None, "没给 τ：只输出与 τ 无关的 S、σ/τ、κ_e/τ、L"
+
+
+def metal_transport(res, factor=1.0, tau_fs=None, lambda_tr=None, lambda_source=""):
+    """[metal_mode] 在电中性的 E_F(T)（净载流子 = 0）处取 BoltzTraP2 CRTA 结果；有 τ 再给绝对值。
+    factor：2D 的口径因子（同 σ、κ_e 的 NORM_2D），3D 为 1。"""
+    import numpy as np
+    mu = np.asarray(res["mu_rel_efermi_eV"], float)
+    carr = res.get("carrier_conc_cm-3")
+    rows = []
+    for iT, T in enumerate(res["temperatures_K"]):
+        if carr is not None:
+            c = np.asarray(carr[iT], float)
+            order = np.argsort(c)                       # np.interp 要求 x 递增
+            mu0 = float(np.interp(0.0, c[order], mu[order]))
+        else:
+            mu0 = 0.0
+        at = lambda key: float(np.interp(mu0, mu, np.asarray(res[key][iT], float)))
+        sig_t = at("sigma_over_tau_S_per_m_s") * factor
+        kap_t = at("kappa_e_over_tau_W_per_m_K_s") * factor
+        S = at("seebeck_V_per_K")
+        r = {"T_K": T, "mu_rel_efermi_eV": round(mu0, 5), "seebeck_uV_per_K": S * 1e6,
+             "sigma_over_tau_S_per_m_s": sig_t, "kappa_e_over_tau_W_per_m_K_s": kap_t,
+             "lorenz_WOhm_per_K2": (kap_t / (sig_t * T) if sig_t > 0 else None)}
+        tau, why = metal_tau_s(T, tau_fs, lambda_tr, lambda_source)
+        r["tau_fs"] = tau * 1e15 if tau else None
+        if tau:
+            r["sigma_S_per_m"] = sig_t * tau
+            r["resistivity_uOhm_cm"] = (1e8 / (sig_t * tau)) if sig_t > 0 else None
+            r["kappa_e_W_per_m_K"] = kap_t * tau
+        rows.append(r)
+    return rows, why
+
+
 def _invalidate_consumers(cwd):
     """[patch_post_invalidate V148] 本步重新生成 -> S8.3 的对比图作废（归档完成标记，重新排队）。"""
     try:
@@ -1003,8 +1089,13 @@ def _s3_grid_note(cwd, dim):
 
 
 def main():
-    _disc_gate()
     cwd = Path.cwd()
+    metal = _metal_status(cwd)                         # [metal_mode]
+    if metal:
+        print("[METAL] S7.1 判为金属（%s）：走金属模式 —— 不读 S8.2 的 DPT τ、不加剪刀、不做文献口径掺杂扫描"
+              % (metal.get("reason") or "metal.json"))
+    else:
+        _disc_gate()
     _apply_conf(cwd)                                   # [0016]
     _guard_not_0d(cwd)
     out = cwd / OUTDIR_NAME
@@ -1038,7 +1129,7 @@ def main():
     res = run_boltztrap_crta(vr_dir, TEMPERATURES, MU_WINDOW_EV,
                              MU_NPTS, DOS_NPTS, KMESH_MULT, nelect=nelect,
                              is_2d=(dim == "2d"),
-                             scissor_gap_eV=_read_target_gap(cwd))
+                             scissor_gap_eV=(None if metal else _read_target_gap(cwd)))
 
     res["dim"] = dim
     res["skill_rev"] = _SKILL_REV
@@ -1053,11 +1144,18 @@ def main():
         res["twoD_note"] = ("2D：张量已取面内 (xx+yy)/2；σ、κ_e 仍按超胞体积口径"
                             "（与 amset 一致，可直接对比）。要面内薄片口径再乘 c/t=%s。" % ct)
 
+    if metal:
+        res["metal_mode"] = True
+        res["metal_status"] = metal
     (out / "boltztrap_crta.json").write_text(
         json.dumps(res, ensure_ascii=False, indent=2), encoding="utf-8")
 
     # 人读摘要：列 300 K 下最优功率因子附近的几个点
     _write_summary(out, res)
+    if metal:
+        _write_metal(out, cwd, res, dim)
+        print("[DONE] %s：金属模式，boltztrap_crta.json + metal_transport.json 已生成" % OUTDIR_NAME)
+        return
     if PAPER_SCAN:                                     # patch_merge81
         try:
             extra = write_paper_scan(out, cwd, res, dim == "2d")
@@ -1068,6 +1166,33 @@ def main():
             print("[WARN] 文献口径扫描失败（%s: %s）——per-τ 结果不受影响"
                   % (type(e).__name__, e))
     print("[DONE] %s：boltztrap_crta.json 已生成" % OUTDIR_NAME)
+
+
+def _write_metal(out, cwd, res, dim):
+    """[metal_mode] metal_transport.json + 摘要。2D 的 σ、κ_e 与半导体路径同一口径（NORM_2D）。"""
+    factor, ninfo = (_norm_2d(cwd, True) if dim == "2d" else (1.0, {"norm": "cell(3D)"}))
+    rows, why = metal_transport(res, factor, METAL_TAU_FS, METAL_LAMBDA_TR, METAL_LAMBDA_SOURCE)
+    rec = {"metal_mode": True, "skill_rev": _SKILL_REV, "dim": dim, "norm": ninfo,
+           "tau_source": why,
+           "tau_input": {"METAL_TAU_FS": METAL_TAU_FS, "METAL_LAMBDA_TR": METAL_LAMBDA_TR,
+                         "METAL_LAMBDA_SOURCE": METAL_LAMBDA_SOURCE or None},
+           "mu_definition": "电中性 E_F(T)：BoltzTraP2 净载流子 = 0 处（相对 DFT 费米能）",
+           "note": ("CRTA：S 与 τ 无关；σ/τ、κ_e/τ、L=κ_e/(σT) 也与 τ 无关。σ、ρ、κ_e 的绝对值取决于 τ 的来源，"
+                    "见 tau_source。L 与 Sommerfeld 值 2.44e-8 WΩ/K² 的偏离说明 Wiedemann–Franz 不严格成立。"),
+           "rows": rows}
+    (out / "metal_transport.json").write_text(json.dumps(rec, ensure_ascii=False, indent=2), encoding="utf-8")
+    lines = ["", "# ---- 金属模式（S7.1 判金属）：在电中性 E_F(T) 处，τ 来源：%s ----" % why,
+             "# T(K)  S(µV/K)  σ/τ(S/m/s)  κ_e/τ(W/m/K/s)  L(WΩ/K²)  τ(fs)  ρ(µΩ·cm)  κ_e(W/m/K)"]
+    for r in rows:
+        f = lambda v, fmt: (fmt % v) if v is not None else "-"
+        lines.append("  %5.0f  %+8.2f  %.3e  %.3e  %s  %s  %s  %s"
+                     % (r["T_K"], r["seebeck_uV_per_K"], r["sigma_over_tau_S_per_m_s"],
+                        r["kappa_e_over_tau_W_per_m_K_s"], f(r["lorenz_WOhm_per_K2"], "%.3e"),
+                        f(r["tau_fs"], "%.2f"), f(r.get("resistivity_uOhm_cm"), "%.3g"),
+                        f(r.get("kappa_e_W_per_m_K"), "%.3g")))
+    with open(out / "boltztrap_summary.txt", "a", encoding="utf-8") as fh:
+        fh.write("\n".join(lines) + "\n")
+    print("\n".join(lines))
 
 
 def _write_summary(out, res):

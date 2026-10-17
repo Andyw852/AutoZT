@@ -305,6 +305,45 @@ step8.x 的 `_SKILL_REV` 写进 comparison_summary.txt。改脚本即提交 GitH
 
 > 结果文档（未发表，不进 git）：`/mnt/d/tf_data/jzz/jap/comparison_vs_literature.md`
 
+## [metal_mode] 金属：没有实验数据时怎么算电子输运（2026-10-17 用户批准）
+
+**为什么半导体那条链不能用**：DPT（Bardeen–Shockley，S8.2）和 AMSET 的 ADP 都建立在**非简并带边**上（带边形变势 E1、
+有效质量、按掺杂浓度定费米能）。金属没有带边，费米面上是简并电子气，散射由整个费米面上的电声耦合决定。
+所以 S7.1 判金属后写 `metal.json`、不写 `band_edges.json`；S8.2 / S8.3 遇到它直接报"不适用"。
+
+**文献里不依赖实验数据的做法（由严到宽）**：
+
+1. **完整第一性原理电声 + 玻尔兹曼方程**（现在的标准做法）：DFPT 算电声矩阵元，Wannier 插值到细网格，
+   解 IBTE 或用 SERTA 得到逐态 τ_nk，再算 ρ(T)、σ、κ_e。工具 EPW、Perturbo；综述 Giustino, Rev. Mod. Phys. 89,
+   015003 (2017)。代价最高，大胞（如 Mg4C60）很难做；本技能**不包含**这一步（仓库的 `eph-qe-cpu` 只产出电声矩阵元
+   数据链，不产出 τ 和输运量）。
+2. **输运电声耦合常数 λ_tr + 最低阶变分（Allen）公式**：由输运 Eliashberg 函数 α²_tr F(ω) 得 λ_tr
+   （常用近似 λ_tr ≈ λ），高温极限 ħ/τ = 2π λ_tr k_B T，ρ(T) = 1/[(σ/τ)·τ]。Allen, PRB 17, 3725 (1978)；
+   用法与金属元素的验证见 Savrasov & Savrasov, PRB 54, 16487 (1996)。只在高温区（T 高于 Debye 温度的几分之一）
+   成立，低温（Bloch–Grüneisen 区）会高估散射。**本技能实现的就是这一档**：`METAL_LAMBDA_TR`。
+   λ_tr 本身仍要一次电声计算（或引用他人的第一性原理值），`METAL_LAMBDA_SOURCE` 必须写明出处。
+3. **常数弛豫时间（CRTA）**：BoltzTraP2 给 σ/τ、κ_e/τ，再取一个**假设**的 τ（文献常用 10 fs 量级）。
+   Madsen, Carrete & Verstraete, Comput. Phys. Commun. 231, 140 (2018)。这不是"算出来的"τ，只能给量级；
+   论文里必须写明是假设值。本技能的 `METAL_TAU_FS`。
+
+**与 τ 无关、可以直接报的量**（任何一档都一样，S8.1 金属模式总是输出）：Seebeck 系数 S（CRTA 下 τ 抵消）、
+σ/τ、κ_e/τ，以及 Lorenz 数 L = κ_e/(σT)（与 Sommerfeld 值 2.44×10⁻⁸ WΩ/K² 比，看 Wiedemann–Franz 是否成立）。
+要 κ_e 的绝对值，最省事的组合是 κ_e = L·σ·T，但 σ 仍要 τ。
+
+**本技能的金属模式（S8.1_bt2）**：
+
+- 触发：S7.1 写了 `step7b_deform_read/metal.json`（undeformed 能带 `is_metal`）。不过体系判别闸门、不加剪刀、
+  不读 S8.2 的 DPT τ、不做按掺杂的文献口径扫描。
+- 取值点：电中性的 E_F(T)（BoltzTraP2 净载流子 = 0 处）。
+- 输出：`metal_transport.json` + `boltztrap_summary.txt` 末尾一张表（T、S、σ/τ、κ_e/τ、L，有 τ 时再加 τ、ρ、κ_e）。
+- step.conf（本步或材料共用）：
+  - `METAL_LAMBDA_TR = 0.6` + `METAL_LAMBDA_SOURCE = "EPW, 2026-xx, 8x8x8 q 网格"` → τ(T) = ħ/(2πλ_tr k_B T)；
+  - 或 `METAL_TAU_FS = 10`（假设值）；
+  - 两个都不写 → 只出与 τ 无关的量，**不编 τ**；两个都写 → 报错。
+- 金属材料在 `tf_<项目>.yaml` 里关掉半导体专用的组：`amset3d / dpt / odp_frozen / ivs_frozen / output_compare: false`
+  （S8.2 / S8.3 遇到金属会报错并提示这一行）。S5 介电（DFPT）对金属也没有意义，只被 S8 用；关掉 `amset3d` 后它
+  不再被下游需要，已在跑的可以按需停掉（`stop` 先请示）。
+
 ## [0055] 低浓度段 DOPING_LOW（2026-10-16 用户要求）
 
 - **为什么**：出厂掺杂网格 3D 1e17–1e21 cm⁻³、2D 1e11–1e14 cm⁻²，和本征点（n = p）之间空着好几个十年；

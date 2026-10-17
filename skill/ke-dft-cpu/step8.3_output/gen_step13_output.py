@@ -3487,6 +3487,13 @@ def write_transport_plots(cwd, out, is_2d):
 
 def main():
     cwd = Path.cwd()
+    # [metal_mode] 本步对比的是 AMSET / DPT / CRTA×DPT-τ 三套半导体口径（按掺杂浓度对齐），金属不适用。
+    #   本步 gen_need 不带 ke_common，直接读 S7.1 的 metal.json（与 ke_common.metal_status 同一份）。
+    _mj = cwd / "step7b_deform_read" / "metal.json"
+    if _mj.is_file():
+        sys.exit("[ERROR] S8.3_cmp 不适用于金属（S7.1 判定，见 %s）—— 它按掺杂浓度对比 AMSET / DPT / CRTA×DPT-τ，"
+                 "都是半导体口径。金属结果看 S8.1_bt2 的 metal_transport.json；在本材料的 tf_<项目>.yaml "
+                 "写 output_compare: false（同时 amset3d / dpt / odp_frozen / ivs_frozen: false）。" % _mj)
     out = cwd / OUTDIR_NAME
     out.mkdir(exist_ok=True)
     dim = _read_dim(cwd)
