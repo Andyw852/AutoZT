@@ -1,0 +1,294 @@
+{
+ "schema": "ivs_qlist/1",
+ "created": "2026-10-18 12:58:29",
+ "structure": {
+  "lattice": [
+   [
+    0.0,
+    2.7155,
+    2.7155
+   ],
+   [
+    2.7155,
+    0.0,
+    2.7155
+   ],
+   [
+    2.7155,
+    2.7155,
+    0.0
+   ]
+  ],
+  "symbols": [
+   "Si",
+   "Si"
+  ],
+  "types": [
+   "Si"
+  ],
+  "counts": [
+   2
+  ],
+  "frac": [
+   [
+    0.0,
+    0.0,
+    0.0
+   ],
+   [
+    0.25,
+    0.25,
+    0.25
+   ]
+  ],
+  "source": "材料 POSCAR",
+  "sha256": "5e1b045c367f1627362667a7a07631f82c6e4e68d471c6f7db74369ad5e35231"
+ },
+ "dim": "3d",
+ "n_ops": 48,
+ "symprec_A": 0.01,
+ "qe": {
+  "prefix": "si2",
+  "pseudos": {
+   "Si": "Si_ONCV_PBE-1.2.upf"
+  },
+  "masses": {
+   "Si": 28.085
+  },
+  "input_dft": null,
+  "input_dft_note": "赝势自带的泛函（IVS_INPUT_DFT=none）",
+  "ecutwfc_Ry": 30.0,
+  "ecutrho_Ry": 120.0,
+  "kgrid": [
+   6,
+   6,
+   6
+  ],
+  "tr2_ph": 0.0
+ },
+ "inputs": {
+  "dpt_result_sha256": null
+ },
+ "carriers": {
+  "electron": {
+   "valleys_source": "step.conf IVS_VALLEYS_E",
+   "use_grid": false,
+   "multi_valley_status": null,
+   "valley_sig": [
+    [
+     [
+      0.0,
+      0.425,
+      0.425
+     ]
+    ]
+   ],
+   "valley_sig_full": [
+    [
+     [
+      0.0,
+      0.425,
+      0.425
+     ],
+     [
+      0.0,
+      0.575,
+      0.575
+     ],
+     [
+      0.425,
+      0.0,
+      0.425
+     ],
+     [
+      0.425,
+      0.425,
+      0.0
+     ],
+     [
+      0.575,
+      0.0,
+      0.575
+     ],
+     [
+      0.575,
+      0.575,
+      0.0
+     ]
+    ]
+   ],
+   "notes": [
+    "X：按对称性补全成员 1 -> 6"
+   ],
+   "valleys": [
+    {
+     "label": "X",
+     "g": 6,
+     "k_frac": [
+      [
+       0.0,
+       0.425,
+       0.425
+      ],
+      [
+       0.0,
+       -0.425,
+       -0.425
+      ],
+      [
+       -0.425,
+       0.0,
+       -0.425
+      ],
+      [
+       0.425,
+       0.0,
+       0.425
+      ],
+      [
+       -0.425,
+       -0.425,
+       0.0
+      ],
+      [
+       0.425,
+       0.425,
+       0.0
+      ]
+     ],
+     "dE_ref_eV": null
+    }
+   ]
+  }
+ },
+ "classes": [
+  {
+   "id": 0,
+   "carrier": "electron",
+   "from": "X",
+   "to": "X",
+   "kind": "inter_star",
+   "k_init": [
+    0.0,
+    0.425,
+    0.425
+   ],
+   "k_fin": [
+    0.0,
+    -0.425,
+    -0.425
+   ],
+   "q": [
+    0.0,
+    0.15,
+    0.15
+   ],
+   "run": 0,
+   "ik": 0,
+   "n_pairs": 1,
+   "pairs": [
+    {
+     "from": "X",
+     "to": "X",
+     "kind": "inter_star",
+     "j": 1,
+     "g_to": 6,
+     "g_from": 6
+    }
+   ]
+  },
+  {
+   "id": 1,
+   "carrier": "electron",
+   "from": "X",
+   "to": "X",
+   "kind": "inter_star",
+   "k_init": [
+    0.0,
+    0.425,
+    0.425
+   ],
+   "k_fin": [
+    -0.425,
+    0.0,
+    -0.425
+   ],
+   "q": [
+    -0.425,
+    -0.425,
+    0.15
+   ],
+   "run": 1,
+   "ik": 0,
+   "n_pairs": 4,
+   "pairs": [
+    {
+     "from": "X",
+     "to": "X",
+     "kind": "inter_star",
+     "j": 2,
+     "g_to": 6,
+     "g_from": 6
+    },
+    {
+     "from": "X",
+     "to": "X",
+     "kind": "inter_star",
+     "j": 3,
+     "g_to": 6,
+     "g_from": 6
+    },
+    {
+     "from": "X",
+     "to": "X",
+     "kind": "inter_star",
+     "j": 4,
+     "g_to": 6,
+     "g_from": 6
+    },
+    {
+     "from": "X",
+     "to": "X",
+     "kind": "inter_star",
+     "j": 5,
+     "g_to": 6,
+     "g_from": 6
+    }
+   ]
+  }
+ ],
+ "runs": [
+  {
+   "id": 0,
+   "q": [
+    0.0,
+    0.15,
+    0.15
+   ],
+   "k": [
+    [
+     0.0,
+     0.425,
+     0.425
+    ]
+   ],
+   "name": "q-01"
+  },
+  {
+   "id": 1,
+   "q": [
+    -0.425,
+    -0.425,
+    0.15
+   ],
+   "k": [
+    [
+     0.0,
+     0.425,
+     0.425
+    ]
+   ],
+   "name": "q-02"
+  }
+ ]
+}

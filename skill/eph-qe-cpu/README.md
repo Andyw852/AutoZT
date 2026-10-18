@@ -4,6 +4,15 @@
 
 `SCF → NSCF/Wannier90` 与 `DFPT phonon` 并行完成，随后 `qe2pert.x → perturbo.x ephmat`。
 
+两条链都是开关组（`skill.yaml` 主步骤为空）：
+
+| 组 | 默认 | 步骤 | 用途 |
+|---|---|---|---|
+| `perturbo` | 开 | S0_env–S6_summary | QE–Wannier90–Perturbo 电子–声子矩阵元数据链（下文，jzzn 环境） |
+| `ivs_dfpt` | 关 | S10_ivsq–S13_ivs | [0059] QE DFPT 直接算谷间零阶形变势，给 ke-dft-cpu 的 S8/S8.4 当 IVS 通道（见文末） |
+
+只算谷间散射的材料：本材料 `tf_*.yaml` 写 `ivs_dfpt: true`、`perturbo: false`。
+
 ## 适用范围和边界
 
 - 当前生成器支持任意元素数和原子数的 **3D 周期 VASP5 POSCAR**，包括 Direct/Cartesian 坐标和 Selective dynamics；QE、Wannier90、DFPT、qe2pert 和 Perturbo 的前缀、原子种类、质量、赝势和文件名均由材料上下文动态生成。
@@ -95,3 +104,52 @@ PERT_LIST_MODE=official, PERT_BAND_MIN=1, PERT_BAND_MAX=1, PHFREQ_CUTOFF=1
 | 电子带窗 | `NUM_BANDS=16/24`，同时检查 `dis_win_max` | 解缠是否稳定、插值误差是否下降 |
 
 收敛判据不是“作业退出码为 0” בלבד：Wannier `wout` 中不能再出现 `Disentanglement convergence criteria not satisfied`；Γ 点声学残差应接近数值零；矩阵元和网格/展宽变化应达到预先设定的相对容差。Perturbo `ephmat` 结果只证明电子–声子数据链和插值，不可解释为超导 `lambda/Tc`。
+
+## [0059] 可选组 ivs_dfpt：DFPT 谷间零阶形变势（给 ke-dft-cpu 的 S8 / S8.4）
+
+方案与验收见 `docs/PLAN-ivs-dfpt-20261018.md`，方法、QE 接口核实记录与局限见 `skill/ke-dft-cpu/METHODOLOGY.md` [0059]。
+
+| 步骤（方案编号） | 运行 | 产物 | 完成条件 |
+| --- | --- | --- | --- |
+| S10_ivsq（Q1） | gen | `step10_ivs_qlist/ivs_qlist.json` | 谷表 → 谷对 → 对称等价类 → q 作业 |
+| S11_ivsscf（Q2） | 作业 | `ivs_env.json`、`valley_check.json`、`ivs_scf_info.json` | 环境探针通过、`JOB DONE`、谷能差自检通过 → `ivs_scf.ok` |
+| S12_ivsph（Q3，扇出 `q-*`） | 每个 q 一个作业 | `dyn`、`ahc_dir/ahc_{gkk,etk,etq}_iq1.bin` | 二进制大小与维度一致 → `ivs_ph.ok` |
+| S13_ivs（Q4） | gen | `step13_ivs_read/ivs_dfpt_params.json`、`ivs_dfpt_table.txt` | 写出 schema `ivs_dfpt/1` |
+
+**输入**（S10 的 `push_paths` 从本地 result 推到 `ivs_inputs/`，本地没有就不推、远端旧的删掉）：ke-dft-cpu S1 的 `CONTCAR`（结构原样，
+不在 QE 里重新弛豫；没有时用材料 POSCAR 并告警，`IVS_STRUCTURE = ke` 强制要它）、S1 的 `workflow_method.txt`（`IVS_INPUT_DFT = auto`
+据 FUNC 设 QE 的 `input_dft`：pbesol → pbesol，pbe/pbe-d3 → pbe）、S8.2 的 `dpt_result.json`（2D 谷表）。3D 在本技能 step.conf
+手填 `IVS_VALLEYS_E/H`（每个星写一个成员即可，按对称性补全），例如 Si 电子 `IVS_VALLEYS_E = X:0,0.425,0.425`。
+
+**环境**：QE ≥ 6.7（`electron_phonon='ahc'`；推荐 7.3/7.4）+ 模守恒赝势（PseudoDojo/SG15；AHC 不支持 USPP/PAW）。
+集群配置 `setting/<集群>.yaml` 写：
+
+```yaml
+qe_bin: ~/software/AutoZT/qe-7.4/bin          # pw.x / ph.x 所在目录
+qe_pseudo_dir: ~/software/AutoZT/pseudo-nc    # 模守恒 UPF
+qe_setup: ""                                  # 可选：作业开头执行的命令（module load … / source …）；jzzn 写 jzzn 用本技能的 jzzn 环境
+```
+
+autozt 把它们注入 step.conf 的 `QE_BIN` / `QE_PSEUDO_DIR` / `QE_SETUP`（项目层可覆盖）。3090 上可以这样装（按铁律 11 装到
+`~/software/AutoZT/`）：`micromamba create -p ~/software/AutoZT/qe-7.4 -c conda-forge qe=7.4`。
+
+**提交**：通用模板 `submit_ivs_qe.tpl`（不含集群专用分区/模块），按 `IVS_NP` 申请 `--ntasks`（3090 的 fakeslurm 同样按它限核），
+`IVS_SBATCH` 加额外 `#SBATCH` 行（如 jzzn：`--partition=cpu192; --qos=regular`），`IVS_MPIRUN`（auto | none | 自定义 `{np}`）。
+集群确要专用模板：`setting/<集群>/templates/submit_ivs_qe.tpl` 同名覆盖。
+
+**主要参数**（`templates/step.conf`）：`IVS_ECUTWFC = 60` Ry、`IVS_KSPACING = 0.2` Å⁻¹（或 `IVS_SCF_KGRID`）、`IVS_TR2_PH = 1e-16`、
+`IVS_AHC_NB = 2`（带边上下各几条带进 AHC 窗口）、`IVS_VALLEY_TOL_MEV = 30` + `IVS_VALLEY_CHECK = error|warn`（QE 的各谷能差与 S8.2
+相差多少算一致）、`IVS_CARRIERS = auto|electron|hole|both`、`IVS_KEEP_TMP = false`（S12 完成后删 tmp/ 里的 dvscf 与波函数）。
+
+**用法**（Si，3090）：
+
+```bash
+# tf_<项目>.yaml 里 Si 材料：ivs_dfpt: true、perturbo: false；Si 的 step.conf 写 IVS_VALLEYS_E = X:0,0.425,0.425
+autozt -tt eph-qe-cpu -p Si hpc 3090          # 改配置，先请示
+autozt -tt eph-qe-cpu -p Si auto on           # 或逐步：-j S10_ivsq start …
+# S13 完成、结果拉回本地后，让 ke-dft-cpu 用上（gen 时自动推 ivs_dfpt_params.json，IVS_DFPT=auto）：
+autozt -tt ke-dft-cpu -p Si -j S8_kappa retry  # 2D 材料是 S8.4_amset2d；检查输入后 start
+```
+
+S12 的子目录可以单独补跑（`retry` 只重生成没完成的 q；q 列表或带窗变了，旧子目录移到 `.old_q-XX_<时间>`）。
+S13 只把结果写到本技能目录，**不会**自动让 ke-dft-cpu 的 S8/S8.4 重排（跨技能）—— 按上面最后一条手动 retry。

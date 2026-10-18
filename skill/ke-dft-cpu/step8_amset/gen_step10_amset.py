@@ -18,7 +18,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 # [SKILL_REV] 版本戳：写进 settings.yaml 头，便于从结果反查跑的是哪份 skill 副本。
-_SKILL_REV = "2026-10-16-0055-dopinglow"   # [0055] DOPING_LOW 低浓度段 1e10–1e16 cm^-3（amset_fermi_fix 小掺杂 log-sum-exp 解 E_F）；[0054] undoped_ni 记带边   # 2026-10-15-0051-socdesym   # [0051] amset_desym_fix 修 SOC 分支（四元数 SU(2) + iσ_y·K，V200）   # 2026-10-13-0043-intrsvd   # [0041] DEFECT_DOPING 缺陷平衡载流子浓度进掺杂网格   # 2026-10-13-0040-undoped   # [0040] UNDOPED_POINT 本征点（doping=0）   # 2026-10-13-0038-subsets   # [0038] SUBSETS 散射机制子集（subset_<机制>.json）   # [0037] 三维 PIE（读压电张量写 settings，插件 amset_pie3d.py 修正核）   # [0036] 三维 ODP/IVS（DP_OPTICAL_*，插件 amset_dpo3d.py）   # [0014] 2D 弹性用原始 slab 值（不乘 c/t）；V115 相位补丁
+_SKILL_REV = "2026-10-18-0059-ivsdfpt"   # [0059] IVS_DFPT：eph-qe-cpu QE DFPT 谷间零阶形变势（ivs_dfpt_params.json）优先于冻声子 K↔K′ 与手填   # 2026-10-16-0055-dopinglow   # [0055] DOPING_LOW 低浓度段 1e10–1e16 cm^-3（amset_fermi_fix 小掺杂 log-sum-exp 解 E_F）；[0054] undoped_ni 记带边   # 2026-10-15-0051-socdesym   # [0051] amset_desym_fix 修 SOC 分支（四元数 SU(2) + iσ_y·K，V200）   # 2026-10-13-0043-intrsvd   # [0041] DEFECT_DOPING 缺陷平衡载流子浓度进掺杂网格   # 2026-10-13-0040-undoped   # [0040] UNDOPED_POINT 本征点（doping=0）   # 2026-10-13-0038-subsets   # [0038] SUBSETS 散射机制子集（subset_<机制>.json）   # [0037] 三维 PIE（读压电张量写 settings，插件 amset_pie3d.py 修正核）   # [0036] 三维 ODP/IVS（DP_OPTICAL_*，插件 amset_dpo3d.py）   # [0014] 2D 弹性用原始 slab 值（不乘 c/t）；V115 相位补丁
 import stepconf  # noqa: E402
 try:
     import ke_common as kc
@@ -211,6 +211,15 @@ ADP_INTRAVALLEY = "auto"
 ODP_FROZEN = "auto"
 ODP_FROZEN_SRC = "step8.21_odp_read/odp_params.json"
 ODP_FROZEN_DMIN = 0.05
+# [0059] DFPT 谷间 IVS（eph-qe-cpu 可选组 ivs_dfpt 的 S13_ivs 产物；autozt 按 push_paths 把本地
+#   eph-qe-cpu/result/step13_ivs_read/ivs_dfpt_params.json 推到 ivs_dfpt/）：IVS_DFPT = auto（出厂：有就用）/ on（必须有）/ off。
+#   用上时它的 X>X'、X>Y 通道优先，step.conf 手填的谷间通道只作对照（不进散射率；要用手填写 IVS_DFPT = off）；
+#   谷表：有手填 DP_OPTICAL_VALLEYS_* 或冻声子 ODP 谷表就用它们（DFPT 的星按 k 中心配对，IVS_DFPT_KTOL 内算同一个谷），
+#   否则用 DFPT 的谷表。IVS_DFPT_DMIN（eV/Å）以下的通道不进散射率（对称性禁戒）。只支持非 SOC。
+IVS_DFPT = "auto"
+IVS_DFPT_SRC = "ivs_dfpt/ivs_dfpt_params.json"
+IVS_DFPT_DMIN = 0.05
+IVS_DFPT_KTOL = 0.08              # 分数坐标；粗网格上自动找的谷中心离 DFPT 用的中心可达半个网格步长
 # [0038] 三维本征后处理：WRITE_MESH 写 mesh_*.h5，作业链尾部 postprocess_intrinsic.py 去机制重积分，
 #   按 SUBSETS 出 subset_<机制>.json，供 S8.3 出多机制对照图。关掉：step.conf 写 WRITE_MESH = false。
 WRITE_MESH = True
@@ -431,6 +440,9 @@ SPEC = {
     "ADP_INTRAVALLEY": ("auto", "str"),
     "ODP_FROZEN": ("auto", "str"),              # [0036] 冻声子 ODP 参数 auto/on/off
     "ODP_FROZEN_DMIN": (None, "float"),
+    "IVS_DFPT": ("auto", "str"),                # [0059] DFPT 谷间 IVS 参数 auto/on/off
+    "IVS_DFPT_DMIN": (None, "float"),
+    "IVS_DFPT_KTOL": (None, "float"),
     "PIE_KERNEL": ("az", "str"),                # [0037] 三维 PIE 核 az/amset
     "PIE_SCREENING": (True, "bool"),
     # [0037] 三维本征后处理（WRITE_MESH 写 mesh，postprocess 去机制重积分出多机制对照）
@@ -1819,6 +1831,34 @@ def _load_frozen_3d(cwd):
     return params, mode
 
 
+def _load_ivs_dfpt_3d(cwd):
+    """[0059] IVS_DFPT -> (ivs_dfpt_params 字典 或 None, 模式, ivs_dfpt 模块 或 None)。auto 没有文件 -> None；
+    on 没有/格式不对 -> 报错。SOC 能带（S3/S3b）-> 报错（参数按非 SOC 算）。"""
+    mode = str(IVS_DFPT or "auto").strip().lower()
+    f = Path(cwd) / IVS_DFPT_SRC
+    if mode == "off" or (mode == "auto" and not f.is_file()):
+        if mode not in ("auto", "on", "off"):
+            sys.exit("[ERROR] IVS_DFPT=%r 无效，只允许 auto / on / off" % IVS_DFPT)
+        return None, mode, None
+    for d in (Path(__file__).resolve().parent, Path.cwd()):
+        if (d / "ivs_dfpt.py").is_file() and str(d) not in sys.path:
+            sys.path.insert(0, str(d))
+    try:
+        import ivs_dfpt as ivd
+    except ImportError:
+        sys.exit("[ERROR] 有 %s，但找不到 ivs_dfpt.py（gen_need 里要有它，住在 skill/_common/ivs/）" % IVS_DFPT_SRC)
+    try:
+        params, msg = ivd.load_consumer(str(f), mode, "3d")
+    except ValueError as e:
+        sys.exit("[ERROR] " + str(e))
+    if msg:
+        print("[WARN] " + msg)
+    if params is not None and _HAS_KC and kc.detect_ncl(cwd):
+        sys.exit("[ERROR] 有 %s，但本材料的能带是 SOC（S3/S3b 的 LSORBIT/LNONCOLLINEAR）：[0059] DFPT 谷间参数只支持非 SOC。"
+                 "处理：step.conf 写 IVS_DFPT = off" % IVS_DFPT_SRC)
+    return params, mode, ivd
+
+
 def resolve_dp_optical_3d(is_2d, cwd=None):
     """[0036] 三维 ODP/IVS -> dp_optical_3d.json 的记录（3D 时总返回 dict；2D 返回 None），并把 ODP/IVS 补进 SCATTERING。
     规则与 S8.4 的 resolve_dp_optical 一致（[0035-r2] 算出来的优先）：
@@ -1837,15 +1877,21 @@ def resolve_dp_optical_3d(is_2d, cwd=None):
         return None
     cwd = Path(cwd or Path.cwd())
     frozen, fmode = _load_frozen_3d(cwd)
+    dft, dmode, ivd = _load_ivs_dfpt_3d(cwd)              # [0059] DFPT 谷间 IVS
     has_spec = any(str(x or "").strip() for x in (DP_OPTICAL_E, DP_OPTICAL_H))
     frozen_rec = {"mode": fmode, "source": ODP_FROZEN_SRC, "dmin_eV_A": float(ODP_FROZEN_DMIN),
                   "frozen_use": {}, "digest": {}, "odp_allowed": True, "info": {}}
-    out = {"mechanisms": [], "dp_optical": None, "dp_optical_frozen": frozen_rec, "skill_rev": _SKILL_REV}
-    if not has_spec and frozen is None:
+    dft_rec = {"mode": dmode, "source": IVS_DFPT_SRC, "dmin_eV_A": float(IVS_DFPT_DMIN), "ktol": float(IVS_DFPT_KTOL),
+               "sha256": ivd.file_sha256(str(cwd / IVS_DFPT_SRC)) if dft is not None else None,
+               "dfpt_use": {}, "digest": {}, "ivs_allowed": True, "info": {}}
+    out = {"mechanisms": [], "dp_optical": None, "dp_optical_frozen": frozen_rec, "dp_optical_ivs_dfpt": dft_rec,
+           "skill_rev": _SKILL_REV}
+    if not has_spec and frozen is None and dft is None:
         frozen_rec["frozen_use"] = {c: ("off" if fmode == "off" else "unavailable") for c in ("electron", "hole")}
+        dft_rec["dfpt_use"] = {c: ("off" if dmode == "off" else "unavailable") for c in ("electron", "hole")}
         if asked:
             sys.exit("[ERROR] SCATTERING 含 %s，但既没有 step.conf 的 DP_OPTICAL_E/H 通道表，也没有冻声子参数（%s）"
-                     % (",".join(asked), ODP_FROZEN_SRC))
+                     "或 DFPT 谷间参数（%s）" % (",".join(asked), ODP_FROZEN_SRC, IVS_DFPT_SRC))
         return out
     dpo = _import_dp_optical()
     of = _import_helper("odp_frozen") if frozen is not None else None
@@ -1860,7 +1906,9 @@ def resolve_dp_optical_3d(is_2d, cwd=None):
         fz = ((frozen or {}).get("carriers") or {}).get(car) or {}
         use_frozen = frozen is not None and fz.get("status") == "ok" and of.params_digest(frozen, car) is not None
         frozen_rec["frozen_use"][car] = ("used" if use_frozen else ("off" if fmode == "off" else "unavailable"))
-        if not chs and not use_frozen:
+        use_dft = dft is not None and ivd.params_digest(dft, car) is not None           # [0059]
+        dft_rec["dfpt_use"][car] = ("used" if use_dft else ("off" if dmode == "off" else "unavailable"))
+        if not chs and not use_frozen and not use_dft:
             continue
         manual_vs = None
         if str(v_spec or "").strip():
@@ -1879,6 +1927,9 @@ def resolve_dp_optical_3d(is_2d, cwd=None):
                 else (fvs, "odp_params.json（S8.21 自动谷表：%s）" % fz.get("valleys_source"))
         elif manual_vs is not None:
             vs, src = manual_vs, "manual: step.conf %s" % v_key
+        elif use_dft:                                     # [0059] 只有 DFPT 参数：用它的谷表（已按对称性展开）
+            vs = ivd.valleys_for_consumer(dft, car)
+            src = "ivs_dfpt_params.json（eph-qe-cpu S10 谷表：%s）" % (dft["carriers"][car].get("valleys_source") or "?")
         else:
             sys.exit("[ERROR] %s 写了通道，但没有谷表：三维没有 S8.2 多谷谷表；开 odp_frozen（S8.21 会自动找谷）"
                      "或在 step.conf 手填 %s\n        写法：标签:kx,ky,kz|kx,ky,kz; ...（S3 晶胞分数坐标，"
@@ -1915,6 +1966,38 @@ def resolve_dp_optical_3d(is_2d, cwd=None):
                                                 for c in manual_intra)))
             frozen_rec["info"][car] = info
             print("[OK] %s 冻声子 ODP（%s）：%s" % (car, ODP_FROZEN_SRC, info["summary"]))
+        if use_dft:                                       # [0059] DFPT 谷间：X>X'、X>Y 用算出来的，手填的谷间通道只作对照
+            lab, err = ivd.match_stars(dft, car, vs, full3d=True, tol=float(IVS_DFPT_KTOL))
+            if err:
+                sys.exit("[ERROR] %s：%s 的谷表与本步谷表（%s）对不上：%s\n        处理：让 eph-qe-cpu 的 IVS_VALLEYS_%s 与本步谷表"
+                         "一致后重跑 S10–S13，或 step.conf 写 IVS_DFPT = off" % (car, IVS_DFPT_SRC, src, err, v_key[-1]))
+            keep = {v["label"] for v in vs}
+            dchs, ddrop, dnotes = ivd.inter_channels(dft, car, keep=keep, norm=dpo.norm_label,
+                                                     dmin=float(IVS_DFPT_DMIN), alias=lab)
+            if dnotes:
+                sys.exit("[ERROR] %s 的 %s 通道：%s" % (IVS_DFPT_SRC, car, "; ".join(dnotes)))
+            manual_inter = [c for c in chs if c["kind"] != "intra"]
+            if manual_inter:                              # 先照常校验（写错的谷名要报出来），再只作对照
+                try:
+                    dpo.check_channels(manual_inter, vs)
+                except ValueError as e:
+                    sys.exit("[ERROR] %s（谷表 %s）：%s" % (ch_key, src, e))
+            chs = [c for c in chs if c["kind"] == "intra"] + dchs
+            dig = ivd.params_digest(dft, car)
+            dft_rec["digest"][car] = dig
+            dinfo = {"digest": dig, "n_channels": len(dchs), "dropped_below_dmin": ddrop, "label_map": lab,
+                     "scope": dft.get("scope"), "provenance": dft.get("provenance"),
+                     "summary": ivd.describe(dft, car, norm=dpo.norm_label, keep=keep, dmin=float(IVS_DFPT_DMIN),
+                                             alias=lab)}
+            if manual_inter:
+                dinfo["manual_reference"] = [{"from": c["from"], "to": c["to"], "kind": c["kind"], "D_eV_A": c["D_eV_A"],
+                                              "hw_meV": c["hw_meV"]} for c in manual_inter]
+                print("[..] %s：%s 里手填的谷间通道只作对照（不进散射率；要用它们写 IVS_DFPT = off）：%s"
+                      % (car, ch_key, ", ".join("%s>%s%s %.2f eV/Å@%.1f meV" % (c["from"], c["to"],
+                                                 "'" if c["kind"] == "inter_star" else "", c["D_eV_A"], c["hw_meV"])
+                                                 for c in manual_inter)))
+            dft_rec["info"][car] = dinfo
+            print("[OK] %s DFPT 谷间 IVS（%s）：%s" % (car, IVS_DFPT_SRC, dinfo["summary"]))
         try:
             dpo.check_channels(chs, vs)
         except ValueError as e:
@@ -1922,7 +2005,16 @@ def resolve_dp_optical_3d(is_2d, cwd=None):
         rec[car] = {"channels": chs, "valleys": vs, "valleys_source": src}
         if car in frozen_rec["info"]:
             rec[car]["frozen"] = frozen_rec["info"][car]
+        if car in dft_rec["info"]:
+            rec[car]["ivs_dfpt"] = dft_rec["info"][car]
         kinds_on |= {c["kind"] for c in chs}
+    ivs_allowed = not (_SCATTERING_EXPLICIT and "IVS" not in SCATTERING)     # [0059]
+    dft_rec["ivs_allowed"] = ivs_allowed
+    if not ivs_allowed:
+        for car in list(dft_rec["dfpt_use"]):
+            if dft_rec["dfpt_use"][car] == "used":
+                dft_rec["dfpt_use"][car] = "not_in_scattering"
+                dft_rec["digest"].pop(car, None)
     odp_allowed = not (_SCATTERING_EXPLICIT and "ODP" not in SCATTERING)
     frozen_rec["odp_allowed"] = odp_allowed
     if not odp_allowed:
@@ -1937,7 +2029,7 @@ def resolve_dp_optical_3d(is_2d, cwd=None):
     want = [m for m in ("ODP", "IVS") if kinds_on & kinds_of[m]]
     missing = [m for m in asked if m not in want]
     if missing:
-        sys.exit("[ERROR] SCATTERING 含 %s，但没有对应通道（ODP 要 X>X 或冻声子参数，IVS 要手填 X>X' 或 X>Y）"
+        sys.exit("[ERROR] SCATTERING 含 %s，但没有对应通道（ODP 要 X>X 或冻声子参数，IVS 要手填 X>X'、X>Y 或 DFPT 参数）"
                  % ",".join(missing))
     if not rec:
         return out
@@ -1980,15 +2072,17 @@ def resolve_dp_optical_3d(is_2d, cwd=None):
         print("[WARN] 不加 ODP/IVS（显式 SCATTERING = %s）；ADP_INTRAVALLEY=on：ADP 只留谷内" % ",".join(SCATTERING))
     for car in ("electron", "hole"):
         if car in rec:
-            print("[..]   %s 谷表来自 %s；ADP 谷内掩码 %s%s" % (car, rec[car]["valleys_source"],
-                                                     "开" if flags[car] else "关",
-                                                     "；谷内 ODP 参数来自冻声子"
-                                                     if frozen_rec["frozen_use"].get(car) == "used" else ""))
+            print("[..]   %s 谷表来自 %s；ADP 谷内掩码 %s%s%s" % (car, rec[car]["valleys_source"],
+                                                       "开" if flags[car] else "关",
+                                                       "；谷内 ODP 参数来自冻声子"
+                                                       if frozen_rec["frozen_use"].get(car) == "used" else "",
+                                                       "；谷间 IVS 参数来自 DFPT（eph-qe-cpu）"
+                                                       if dft_rec["dfpt_use"].get(car) == "used" else ""))
             _vs = rec[car].get("valleys") or []                   # [0042] 多谷但没有谷间通道：提示 IVS 缺失
             if (len(_vs) > 1 or any(int(v.get("g", 1)) > 1 for v in _vs)) and not any(
                     h.get("kind") in ("inter", "inter_star") for h in rec[car].get("channels") or []):
-                print("[WARN]   %s 是多谷（%s）但没有谷间通道：IVS 不自动算，谷间光学散射缺失、迁移率偏高；"
-                      "要的话按文献在 step.conf 写 DP_OPTICAL_%s 的 X>X'、X>Y 通道"
+                print("[WARN]   %s 是多谷（%s）但没有谷间通道：谷间光学散射缺失、迁移率偏高；可开 eph-qe-cpu 的 ivs_dfpt 组"
+                      "用 DFPT 自动算（[0059]），或按文献在 step.conf 写 DP_OPTICAL_%s 的 X>X'、X>Y 通道"
                       % (car, ", ".join("%s×%d" % (v["label"], int(v.get("g", 1))) for v in _vs),
                          "E" if car == "electron" else "H"))
     out["mechanisms"] = list(want)
@@ -2599,6 +2693,12 @@ def main():
             ODP_FROZEN = str(_p["ODP_FROZEN"] or "auto")
             if _p["ODP_FROZEN_DMIN"] is not None:
                 ODP_FROZEN_DMIN = float(_p["ODP_FROZEN_DMIN"])
+            global IVS_DFPT, IVS_DFPT_DMIN, IVS_DFPT_KTOL      # [0059]
+            IVS_DFPT = str(_p["IVS_DFPT"] or "auto")
+            if _p["IVS_DFPT_DMIN"] is not None:
+                IVS_DFPT_DMIN = float(_p["IVS_DFPT_DMIN"])
+            if _p["IVS_DFPT_KTOL"] is not None:
+                IVS_DFPT_KTOL = float(_p["IVS_DFPT_KTOL"])
             global DEFECT_DOPING, DEFECT_ROOT          # [0041]
             DEFECT_DOPING = str(_p["DEFECT_DOPING"] or "auto").strip().lower()
             DEFECT_ROOT = str(_p["DEFECT_ROOT"] or "")

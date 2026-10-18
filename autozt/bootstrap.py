@@ -693,8 +693,14 @@ def _load_manifest(path):
     for k in _MANIFEST_TYPE_KEYS:
         if k in man and man[k] is not None:
             skel[k] = man[k]
-    if not skel.get("steps"):
+    # [0059] 主步骤可以为空（steps: []），只要可选组里有步骤：eph-qe-cpu 的 Perturbo 链与 IVS 链都是开关组，
+    #   只算 IVS 的材料要能把 Perturbo 链整个关掉（主步骤关不掉）。两边都没有步骤才拒绝。
+    _opt_any = any(isinstance(g, dict) and g.get("steps")
+                   for g in (skel.get("optional_steps") or {}).values())
+    if not skel.get("steps") and not _opt_any:
         return None, "没有 steps"
+    if skel.get("steps") is None:
+        skel["steps"] = []
     skel["skill_dir"] = sdir               # 绝对路径，find_asset 直接可用
     skel.setdefault("desc", key)
     skel["_skill_manifest"] = path

@@ -1,0 +1,801 @@
+# -*- coding: utf-8 -*-
+"""ivs_dfpt.py —— QE DFPT 直接算谷间零阶形变势（IVS）的纯 numpy 部分（[0059]）。
+
+生产端：eph-qe-cpu 可选组 ivs_dfpt（四步，方案 docs/PLAN-ivs-dfpt-20261018.md 里的 Q1–Q4）
+  S10_ivsq   （Q1，gen_step10_ivs_qlist.py）：谷表 -> 谷对 -> 按晶体对称性分等价类 -> 按 q 分组（ivs_qlist.json）；
+  S11_ivsscf （Q2，gen_step11_ivs_scf.py）  ：pw.x SCF（VASP 结构原样，不重新弛豫）+ 各谷能差自检；
+  S12_ivsph  （Q3，gen_step12_ivs_ph.py）   ：每个 q 一个子目录：ph.x 单 q DFPT -> pw.x nscf（初态 k）-> ph.x AHC 矩阵元；
+  S13_ivs    （Q4，gen_step13_ivs_read.py） ：ahc_gkk + 动力学矩阵 -> D0、ħω -> dp_optical 的星通道（ivs_dfpt_params.json）。
+消费端：ke-dft-cpu 的 S8（3D）/ S8.4（2D）的 IVS_DFPT 开关：inter_channels / params_digest / describe / valley_sig。
+本模块住在 skill/_common/ivs/，两个技能 gen_need 都写 ivs_dfpt.py（公共池按文件名找到它），只有一份、不会漂移。
+
+QE 接口（M0 核实，QE 7.3 与 7.4 的 PHonon/PH/ahc.f90 输出部分逐行相同；记录见 METHODOLOGY [0059]）：
+  ph.x 的 electron_phonon='ahc'（要 trans=.false.，读前一次 trans=.true. 存下的 dvscf 与位移模式）在 pw.x nscf 给的
+  每个 k 上写 ahc_dir/ahc_gkk_iq1.bin：直接存取、无记录头，每个 k 一条记录，Fortran 次序 ahc_gkk(ib, jb, imode)：
+      ahc_gkk(ib, jb, imode) = ⟨ψ_ib(k+q)| ∂V_SCF/∂u_{q,imode} |ψ_jb(k)⟩       单位 Ry/bohr
+  ib = 1..nbnd（k+q 的全部带）、jb = ahc_nbndskip+1..ahc_nbndskip+ahc_nbnd（k 上的带）、imode = 3(原子−1)+方向（笛卡尔，
+  一个原子沿一个方向按 e^{iq·R} 位移）。ahc_etk/etq_iq1.bin 是 k、k+q 上全部带的本征值（Ry）。
+  setup_nscf 在 AHC 模式下跳过 irreducible_BZ —— nscf 给的 k 原样保留（M0：Si 的 k、k+q 与输入一致）。
+  只支持模守恒赝势（ahc.f90：USPP/PAW/DFPT+U/磁性/2D 库仑截断未实现或未测试）。
+  核对：q = Γ 时 ⟨n|∂V/∂u_{2x}|n⟩ 与冻声子有限差分 dε/du 四位有效数字一致（Si，0.00963/0.05539/0.24525/−0.20993 vs
+  0.00962/0.05537/0.24520/−0.20987 eV/Å）；动力学矩阵按 fildyn 文件的 (na, nb) 块、行 = na 的方向解析，本征矢与 QE
+  dynmat.x 重叠 = 1（取共轭则否，无反演中心的结构上验证）—— 与 postahc.x 的投影（g_ν = Σ_j g_j u_jν，u = e/√M）同一口径。
+
+形变势（与 dp_optical / ivs_frozen 同一口径，|g|² = ħ D²/(2 N M_cell ω)）：
+  g_ν(m,n) = Σ_j ahc_gkk(m, n, j) · e_jν / √M_j        （e 为质量加权、归一的本征矢，M 用 QE 的 amass，Ry 质量单位）
+  D_ν² = M_cell · Σ_{n∈初态简并组} Σ_{m∈终态简并组} |g_ν(m,n)|² / (d_初 · d_终)      （规范不变；Ry/bohr -> eV/Å）
+  声子简并组（ħω 相差 < PH_DEG_MEV）按 D² 相加当一支。
+星通道（dp_optical 的态密度按星平均）：初态取星 X 的第一个成员 i0（等价成员的率相同），终态取所有星的所有成员 j：
+  X>Y（别的星）：每个（成员 j、声子组）一条，D_ch² = D_{i0 j}² / g_Y；
+  X>X'（同星其它成员）：D_ch² = D_{i0 j}² / (g_X − 1)；同一对星、ħω 相差 < HW_MERGE_MEV 的按 D² 相加（dp_optical 拒绝重复 ħω）。
+对称性约化：谷对 (k_a, k_b) 与 (S k_a, S k_b)、(−k_a, −k_b)（时间反演）、(k_b, k_a)（反向过程，厄米性）给出同一 |g|，
+  同一等价类只算一次；共用同一个 q 的类合进同一个 ph.x 作业（nscf 里放几个初态 k）。
+
+不做：SOC、一阶谷间耦合（∝|q−K|）、EPW 插值；谷内（q ≈ 0）的 ADP/ODP 不在这里（小 q 要 2D 库仑截断，AHC 不支持）。
+"""
+import hashlib
+import itertools
+import json
+import math
+import re
+
+import numpy as np
+
+SCHEMA = "ivs_dfpt/1"
+QLIST_SCHEMA = "ivs_qlist/1"
+
+RY_EV = 13.605693122994            # eV / Ry
+BOHR_A = 0.529177210903            # Å / bohr
+GKK_TO_EV_A = RY_EV / BOHR_A       # Ry/bohr -> eV/Å
+AMU_RY = 911.44424310865645        # 1 amu 在 Ry 质量单位（m_e/2 ... QE AMU_RY）
+RY_MEV = RY_EV * 1000.0
+
+DEG_TOL_EV = 0.001                 # 电子能级简并判据（QE ahc 的 e_degen_thr = 1e-4 Ry ≈ 1.4 meV）
+PH_DEG_MEV = 0.05                  # 声子简并判据
+HW_MERGE_MEV = 0.1                 # 同一对星的两条通道 ħω 相差小于它就合并
+HW_MIN_MEV = 0.5                   # ħω 低于它（或虚频）的模不进通道（失稳/数值零），记进 dropped
+DMIN_EV_A = 0.05                   # S8/S8.4 用：D 小于它的通道不进散射率（对称性禁戒）
+SYMPREC_A = 0.01                   # 找对称操作的原子位置容差（Å，与 AMSET 的 symprec 同量级）
+KEY_ND = 5                         # k 点比较键的小数位（模 1）
+VALLEY_TOL_MEV = 30.0              # Q2：QE 的谷能差与 S8.2 的差多少以内算一致
+CARRIERS = ("electron", "hole")
+
+
+# ---------------------------------------------------------------------------
+# 谷表（与 dp_optical 同一套写法与归一；这里复制最小必要部分，免得 eph-qe-cpu 依赖 ke-dft-cpu 的文件）
+# ---------------------------------------------------------------------------
+_ALIAS = {"G": "Γ", "GAMMA": "Γ", "Γ": "Γ", "GM": "Γ–M", "Γ-M": "Γ–M", "Γ–M": "Γ–M",
+          "G-M": "Γ–M", "G–M": "Γ–M", "GAMMA-M": "Γ–M"}
+
+
+def norm_label(s):
+    """谷标签归一（与 dp_optical.norm_label 逐字相同）：Γ 的各种写法统一成 Γ；其余去空白、ASCII 字母转大写。"""
+    t = str(s).strip()
+    u = t.upper()
+    if u in _ALIAS:
+        return _ALIAS[u]
+    return u if re.fullmatch(r"[A-Za-z0-9_()'.,+-]+", t) else t
+
+
+def parse_valleys(spec, full3d=False):
+    """'X:0,0.425,0.425|...; L:...' -> [{"label","g","k_frac"}]（与 dp_optical.parse_valleys 同一写法）。"""
+    out = []
+    for item in [p.strip() for p in str(spec or "").replace("\n", ";").split(";")]:
+        if not item:
+            continue
+        if ":" not in item:
+            raise ValueError("谷 %r 写法不对，应为 标签:kx,ky,kz|kx,ky,kz（分数坐标）" % item)
+        lab, rest = item.split(":", 1)
+        ks = []
+        for kk in rest.split("|"):
+            v = [float(x) for x in kk.replace(" ", "").split(",") if x != ""]
+            if len(v) == 2 and full3d:
+                raise ValueError("谷 %r 的 k 点 %r 只有 2 个分量：三维谷中心必须写 kx,ky,kz" % (item, kk))
+            if len(v) == 2:
+                v.append(0.0)
+            if len(v) != 3:
+                raise ValueError("谷 %r 的 k 点 %r 不是 2 或 3 个分量" % (item, kk))
+            ks.append(v)
+        out.append({"label": norm_label(lab), "g": len(ks), "k_frac": ks})
+    return out
+
+
+def valleys_from_dpt(dpt, carrier):
+    """S8.2 dpt_result.json 某载流子的谷表（multi_valley.valleys），与 dp_optical.valleys_from_dpt 同口径，外加 raw 原表。"""
+    for r in (dpt or {}).get("results", []):
+        if r.get("carrier") != carrier:
+            continue
+        raw = ((r.get("multi_valley") or {}).get("valleys")) or []
+        out = []
+        for v in raw:
+            ks = v.get("k_frac") or []
+            if not ks:
+                continue
+            row = {"label": norm_label(v.get("label")), "g": len(ks),
+                   "k_frac": [[float(x) for x in k] for k in ks], "dE_eV": v.get("dE_eV")}
+            kg = v.get("k_grid") or []
+            if len(kg) == len(ks):
+                row["k_grid"] = [[float(x) for x in k] for k in kg]
+            out.append(row)
+        return out, raw, (r.get("multi_valley") or {}).get("status")
+    return [], [], None
+
+
+def grid_key(k, full3d=False):
+    """分数坐标比较键：KEY_ND 位、模 1（与 dp_optical.grid_key 同口径；full3d 时三个分量都参与）。"""
+    out = []
+    for x in list(k)[:3 if full3d else 2]:
+        y = round(round(float(x), KEY_ND) % 1.0, KEY_ND)
+        out.append(0.0 if y >= 1.0 else y + 0.0)
+    return tuple(out)
+
+
+def _member_match(v, u, full3d=False):
+    if v.get("k_grid") and u.get("k_grid"):
+        uk = {grid_key(w, full3d) for w in u["k_grid"]}
+        return [grid_key(k, full3d) in uk for k in v["k_grid"]]
+
+    def same(a, b):
+        d = np.asarray(a, float) - np.asarray(b, float)
+        d = d - np.rint(d)
+        if not full3d:
+            d[2:] = 0.0
+        return bool(np.all(np.abs(d) < 1e-4))
+    return [any(same(k, w) for w in u["k_frac"]) for k in (v.get("k_frac") or [])]
+
+
+def merge_coincident(valleys, full3d=False):
+    """同一组 k 中心的重复星（S8.2 按能带/自旋分出来的）并成一个，与 dp_optical.merge_coincident 同一规则。
+    返回 (新谷表, {被并掉的标签: 保留的标签})；部分重合 -> ValueError。"""
+    out, alias = [], {}
+    for v in valleys:
+        ks = v.get("k_frac") or []
+        hit = None
+        for u in out:
+            same = _member_match(v, u, full3d)
+            if same and all(same) and len(ks) == len(u["k_frac"]):
+                hit = u
+                break
+            if any(same):
+                raise ValueError("谷表里 %s 与 %s 只有部分中心重合（%d/%d）——谷表自相矛盾"
+                                 % (v.get("label"), u["label"], sum(same), len(ks)))
+        if hit is None:
+            out.append(dict(v))
+        else:
+            alias[v["label"]] = hit["label"]
+    return out, alias
+
+
+def valley_sig(valleys, use_grid=False, full3d=False):
+    """谷表签名：每个星的中心集合（模 1），与标签、星顺序、重复星无关。2D 与 ke_common._valley_sig 相同
+    （面内两个分量；use_grid 用 k_grid、5 位，否则 k_frac、4 位）；full3d 取三个分量。"""
+    key, nd = ("k_grid", 5) if use_grid else ("k_frac", 4)
+    stars = set()
+    for v in valleys or []:
+        ks = []
+        for k in v.get(key) or []:
+            f = []
+            for x in list(k)[:3 if full3d else 2]:
+                y = round(round(float(x), nd) % 1.0, nd)
+                f.append(0.0 if y >= 1.0 else y + 0.0)
+            ks.append(tuple(f))
+        stars.add(tuple(sorted(ks)))
+    return [list(map(list, s)) for s in sorted(stars)]
+
+
+# ---------------------------------------------------------------------------
+# 结构
+# ---------------------------------------------------------------------------
+def read_poscar_text(text):
+    """VASP 5 POSCAR 文本 -> {"lattice" (3,3) Å 行矢量, "symbols" 每原子元素, "types" 元素顺序, "counts", "frac" (n,3)}。
+    支持缩放因子（含负的体积写法）、Selective dynamics、Direct/Cartesian。"""
+    ls = [x.strip() for x in str(text).splitlines() if x.strip()]
+    if len(ls) < 8:
+        raise ValueError("POSCAR 不完整")
+    scale = float(ls[1].split()[0])
+    raw = np.array([[float(x) for x in ls[i].split()[:3]] for i in range(2, 5)])
+    types = ls[5].split()
+    try:
+        counts = [int(x) for x in ls[6].split()]
+    except ValueError:
+        raise ValueError("只支持 VASP 5 格式 POSCAR（第 6 行元素名、第 7 行原子数）")
+    if len(types) != len(counts):
+        raise ValueError("POSCAR 元素数与原子数行不匹配")
+    det = float(np.linalg.det(raw))
+    if abs(det) < 1e-12:
+        raise ValueError("POSCAR 晶胞奇异")
+    s = scale if scale > 0 else (abs(scale) / abs(det)) ** (1.0 / 3.0)
+    lat = raw * s
+    pos = 7
+    if ls[pos].lower().startswith("s"):
+        pos += 1
+    direct = ls[pos].lower().startswith("d")
+    if not ls[pos].lower().startswith(("d", "c", "k")):
+        raise ValueError("POSCAR 缺 Direct/Cartesian 标记")
+    pos += 1
+    n = sum(counts)
+    xyz = np.array([[float(x) for x in ls[i].split()[:3]] for i in range(pos, pos + n)])
+    frac = xyz if direct else (xyz * s) @ np.linalg.inv(lat)
+    symbols = [t for t, c in zip(types, counts) for _ in range(c)]
+    return {"lattice": lat, "symbols": symbols, "types": types, "counts": counts, "frac": frac}
+
+
+def detect_dim(lattice, frac, vacuum_A=6.0):
+    """第三个晶格矢方向（c）上原子之间的最大空隙 > vacuum_A（Å）且 c 与面内基矢垂直 -> "2d"，否则 "3d"。"""
+    lat = np.asarray(lattice, float)
+    z = np.sort(np.mod(np.asarray(frac, float)[:, 2], 1.0))
+    gaps = np.diff(np.concatenate([z, [z[0] + 1.0]]))
+    c = lat[2]
+    n = np.cross(lat[0], lat[1])
+    n /= np.linalg.norm(n)
+    height = abs(float(c @ n))
+    perp = abs(float(c @ n)) / float(np.linalg.norm(c)) > 0.999
+    return "2d" if perp and float(gaps.max()) * height > vacuum_A else "3d"
+
+
+def recip_lattice(lattice):
+    """倒格矢（行 = b1,b2,b3，含 2π，单位 1/Å）。"""
+    return 2.0 * math.pi * np.linalg.inv(np.asarray(lattice, float)).T
+
+
+def auto_kgrid(lattice, kspacing, dim):
+    """VASP KSPACING 口径：N_i = max(1, ceil(|b_i| / kspacing))（|b| 含 2π，Å⁻¹）；2D 的 c 方向固定 1。"""
+    b = np.linalg.norm(recip_lattice(lattice), axis=1)
+    n = [max(1, int(math.ceil(float(x) / float(kspacing) - 1e-9))) for x in b]
+    if dim == "2d":
+        n[2] = 1
+    return n
+
+
+# ---------------------------------------------------------------------------
+# 对称性（不依赖 spglib：晶格度规不变的 {−1,0,1} 整数矩阵 + 原子映射；约化过的胞足够，漏操作只会少约化、不会出错）
+# ---------------------------------------------------------------------------
+def lattice_rotations(lattice, tol=1e-3):
+    """x' = W·x（直接晶格分数坐标）保持度规 G = A·Aᵀ 的整数矩阵 W（元素 −1/0/1，det = ±1）。"""
+    A = np.asarray(lattice, float)
+    G = A @ A.T
+    cand = np.array(list(itertools.product((-1, 0, 1), repeat=9)), dtype=int).reshape(-1, 3, 3)
+    det = np.rint(np.linalg.det(cand.astype(float))).astype(int)
+    cand = cand[np.abs(det) == 1]
+    gw = np.einsum("nji,jk,nkl->nil", cand, G, cand)
+    ok = np.all(np.abs(gw - G[None]) <= tol * float(np.abs(G).max()), axis=(1, 2))
+    return cand[ok]
+
+
+def point_group(lattice, frac, symbols, symprec=SYMPREC_A):
+    """结构的点群（直接空间分数坐标的整数旋转 W 列表；带分数平移的操作也算，k 空间只看旋转部分）。"""
+    A = np.asarray(lattice, float)
+    f = np.mod(np.asarray(frac, float), 1.0)
+    sp = np.array([str(s) for s in symbols])
+    same = sp[:, None] == sp[None, :]
+    ops = []
+    for W in lattice_rotations(A):
+        fp = f @ W.T
+        for j in np.where(sp == sp[0])[0]:
+            t = f[j] - fp[0]
+            d = (fp + t)[:, None, :] - f[None, :, :]
+            d = d - np.rint(d)
+            dist = np.linalg.norm(d @ A, axis=2)
+            if np.all(np.min(np.where(same, dist, np.inf), axis=1) < symprec):
+                ops.append(W.copy())
+                break
+    return ops
+
+
+def recip_ops(rotations):
+    """直接空间旋转 W -> 倒空间分数坐标上的作用 κ' = W⁻ᵀ κ（整数矩阵）。"""
+    out = []
+    for W in rotations:
+        R = np.rint(np.linalg.inv(np.asarray(W, float)).T).astype(int)
+        out.append(R)
+    return out
+
+
+def _k_images(k, rops):
+    """k 在点群 + 时间反演下的全部像（分数坐标，未取模）。"""
+    k = np.asarray(k, float)
+    out = []
+    for R in rops:
+        kk = R @ k
+        out.append(kk)
+        out.append(-kk)
+    return out
+
+
+def expand_star(ks, rops, full3d=False):
+    """星的成员 -> 对称轨道（点群 + 时间反演）。返回 (成员列表, 轨道数, 是否补了成员)。
+    成员按给出的顺序在前，补出来的接在后面；轨道数 > 1 说明给的成员不是同一个星（调用方报错）。"""
+    # 给出的成员原样在前（保留用户/S8.2 的坐标写法），补出来的取模到 (−0.5, 0.5]
+    out, seen, roots = [], set(), []
+    for k in [np.asarray(k, float) for k in ks]:
+        if grid_key(k, full3d) not in seen:
+            seen.add(grid_key(k, full3d))
+            out.append(k)
+    n_given = len(out)
+    for k in list(out[:n_given]):
+        imgs = [k] + _k_images(k, rops)
+        ikeys = {grid_key(im, full3d) for im in imgs}
+        if not any(r in ikeys for r in roots):          # 与已有的轨道代表都不等价 -> 新轨道
+            roots.append(grid_key(k, full3d))
+        for im in imgs:
+            if grid_key(im, full3d) not in seen:
+                seen.add(grid_key(im, full3d))
+                out.append(wrap_half(im))
+    return out, len(roots), len(out) > n_given
+
+
+def wrap_half(v):
+    """分数坐标取到 (−0.5, 0.5]。"""
+    v = np.asarray(v, float)
+    w = v - np.rint(v)
+    w[np.isclose(w, -0.5, atol=1e-9)] = 0.5
+    return w + 0.0
+
+
+def pair_key(a, b, rops, full3d=True):
+    """谷对 (a→b) 的等价类键：点群 S、时间反演（−）、反向（b→a）下所有像的最小键。"""
+    best = None
+    a = np.asarray(a, float)
+    b = np.asarray(b, float)
+    for R in rops:
+        for s in (1.0, -1.0):
+            ra, rb = s * (R @ a), s * (R @ b)
+            for x, y in ((ra, rb), (rb, ra)):
+                key = (grid_key(x, full3d), grid_key(y, full3d))
+                if best is None or key < best:
+                    best = key
+    return best
+
+
+def pair_images(a, b, rops):
+    """谷对的全部等价实现 [(k_初, k_终)]（含时间反演与反向），去重。"""
+    a = np.asarray(a, float)
+    b = np.asarray(b, float)
+    out, seen = [], set()
+    for R in rops:
+        for s in (1.0, -1.0):
+            ra, rb = s * (R @ a), s * (R @ b)
+            for x, y in ((ra, rb), (rb, ra)):
+                key = (grid_key(x, True), grid_key(y, True))
+                if key not in seen:
+                    seen.add(key)
+                    out.append((x, y))
+    return out
+
+
+def same_q(q1, q2, tol=1e-4):
+    d = np.asarray(q1, float) - np.asarray(q2, float)
+    d = d - np.rint(d)
+    return bool(np.all(np.abs(d) < tol))
+
+
+# ---------------------------------------------------------------------------
+# Q1：谷对 -> 等价类 -> q 作业
+# ---------------------------------------------------------------------------
+def plan_pairs(carriers, rops, full3d=True):
+    """carriers = {载流子: [{"label","k": [k...]}, ...]}（星，成员已是完整轨道）。
+    返回 (classes, runs)：
+      classes：[{"id","carrier","from","to","kind","k_init","k_fin","q","run","ik","n_pairs"}]，每个等价类一条；
+      runs：[{"id","q","k": [k...]}]，每个 q 一个 ph.x 作业，k = 该作业 nscf 里的初态 k（顺序即 ahc_gkk 的记录号）；
+      另外每条 pair 记录 [{"carrier","from","to","kind","j","cls"}] 挂在 classes 上（"pairs"）。
+    初态取每个星的第一个成员 i0；终态是全部星的全部成员（同星时跳过 i0 自己）。"""
+    classes, index = [], {}
+    for car in CARRIERS:
+        stars = carriers.get(car) or []
+        for X in stars:
+            a = np.asarray(X["k"][0], float)
+            for Y in stars:
+                for j, b in enumerate(Y["k"]):
+                    if Y is X and j == 0:
+                        continue
+                    b = np.asarray(b, float)
+                    key = (car, pair_key(a, b, rops, full3d=True))
+                    kind = "inter_star" if Y is X else "inter"
+                    if key not in index:
+                        index[key] = len(classes)
+                        classes.append({"id": len(classes), "carrier": car, "from": X["label"], "to": Y["label"],
+                                        "kind": kind, "a": a, "b": b, "pairs": []})
+                    classes[index[key]]["pairs"].append({"from": X["label"], "to": Y["label"], "kind": kind,
+                                                         "j": j, "g_to": len(Y["k"]), "g_from": len(X["k"])})
+    runs = []
+    for c in classes:
+        placed = False
+        for x, y in pair_images(c["a"], c["b"], rops):
+            for r in runs:
+                if same_q(y - x, r["q"]):
+                    ik = next((i for i, kk in enumerate(r["k"]) if same_q(kk, x, 1e-6)), None)
+                    if ik is None:
+                        r["k"].append(wrap_half(x))
+                        ik = len(r["k"]) - 1
+                    c.update(run=r["id"], ik=ik, k_init=wrap_half(x), k_fin=wrap_half(y))
+                    placed = True
+                    break
+            if placed:
+                break
+        if not placed:
+            q = wrap_half(c["b"] - c["a"])
+            runs.append({"id": len(runs), "q": q, "k": [wrap_half(c["a"])]})
+            c.update(run=runs[-1]["id"], ik=0, k_init=wrap_half(c["a"]), k_fin=wrap_half(c["b"]))
+    for c in classes:
+        c["q"] = wrap_half(np.asarray(c["k_fin"]) - np.asarray(c["k_init"]))
+        c["n_pairs"] = len(c["pairs"])
+    return classes, runs
+
+
+def jsonable(x):
+    """numpy -> 纯 Python（json.dump 用）。"""
+    if isinstance(x, dict):
+        return {k: jsonable(v) for k, v in x.items()}
+    if isinstance(x, (list, tuple)):
+        return [jsonable(v) for v in x]
+    if isinstance(x, np.ndarray):
+        return [jsonable(v) for v in x.tolist()]
+    if isinstance(x, (np.floating,)):
+        return float(x)
+    if isinstance(x, (np.integer,)):
+        return int(x)
+    if isinstance(x, float):
+        return round(x, 10) + 0.0
+    return x
+
+
+# ---------------------------------------------------------------------------
+# QE 输入
+# ---------------------------------------------------------------------------
+def xq_alat(q_frac, cell_bohr, alat_bohr):
+    """分数坐标 q -> ph.x 的 xq（笛卡尔，2π/alat 单位）。cell_bohr：行矢量 a1..a3（bohr，取自 QE 的 XML）。"""
+    A = np.asarray(cell_bohr, float)
+    B = np.linalg.inv(A).T * float(alat_bohr)
+    return np.asarray(q_frac, float) @ B
+
+
+def qe_structure(lattice, frac, symbols, types, masses, pseudos):
+    """CELL_PARAMETERS（Å）+ ATOMIC_SPECIES + ATOMIC_POSITIONS（crystal），与 VASP 结构逐位相同（不重新弛豫）。"""
+    lines = ["CELL_PARAMETERS angstrom"]
+    lines += ["  %.10f %.10f %.10f" % tuple(v) for v in np.asarray(lattice, float)]
+    lines += ["", "ATOMIC_SPECIES"]
+    lines += ["%s %.8g %s" % (t, float(masses[t]), pseudos[t]) for t in types]
+    lines += ["ATOMIC_POSITIONS crystal"]
+    lines += ["%s %.10f %.10f %.10f" % ((s,) + tuple(float(x) for x in f)) for s, f in zip(symbols, frac)]
+    return "\n".join(lines) + "\n"
+
+
+def kpoints_list(ks):
+    """显式 k 列表（crystal，权重 1）。"""
+    ks = [np.asarray(k, float) for k in ks]
+    return "K_POINTS crystal\n%d\n" % len(ks) + "".join("  %.10f %.10f %.10f 1.0\n" % tuple(k) for k in ks)
+
+
+# ---------------------------------------------------------------------------
+# Q4：读 QE 产物
+# ---------------------------------------------------------------------------
+def read_ahc(dirpath, nbnd, ahc_nbnd, nat, nk):
+    """ahc_dir/ahc_gkk_iq1.bin + ahc_etk/etq_iq1.bin -> (gkk (nk, 3nat, ahc_nbnd, nbnd) 复数 Ry/bohr,
+    etk (nk, nbnd) eV, etq (nk, nbnd) eV)。文件大小与维度对不上 -> ValueError（不猜）。"""
+    import os
+    nm = 3 * int(nat)
+    fg = os.path.join(dirpath, "ahc_gkk_iq1.bin")
+    want = int(nk) * nm * int(ahc_nbnd) * int(nbnd) * 16
+    have = os.path.getsize(fg) if os.path.isfile(fg) else -1
+    if have != want:
+        raise ValueError("%s 大小 %d 字节，按 nk=%d、3nat=%d、ahc_nbnd=%d、nbnd=%d 应为 %d" %
+                         (fg, have, nk, nm, ahc_nbnd, nbnd, want))
+    g = np.fromfile(fg, dtype="<c16").reshape(int(nk), nm, int(ahc_nbnd), int(nbnd))
+    out = [g]
+    for name in ("ahc_etk_iq1.bin", "ahc_etq_iq1.bin"):
+        fe = os.path.join(dirpath, name)
+        wante = int(nk) * int(nbnd) * 8
+        if not os.path.isfile(fe) or os.path.getsize(fe) != wante:
+            raise ValueError("%s 缺失或大小不是 %d 字节" % (fe, wante))
+        out.append(np.fromfile(fe, dtype="<f8").reshape(int(nk), int(nbnd)) * RY_EV)
+    return tuple(out)
+
+
+_NUM = r"[-+]?(?:\d+\.?\d*|\.\d+)(?:[eEdD][-+]?\d+)?"
+
+
+def read_dyn(path):
+    """ph.x 的 fildyn 文本（非 XML）-> {"masses_ry": (nat,), "q_list": [(3,)…], "C": [(3nat,3nat)…], "nat", "alat"}。
+    每个 "Dynamical  Matrix in cartesian axes" 块一个 q（ph.x 写 q 的整个星，第一个是输入的 q）；
+    块内 "na nb" 后三行 = 行方向 i（na 的笛卡尔分量）、每行 3 个复数 = 列方向 j（nb 的分量）。"""
+    lines = open(path, encoding="utf-8", errors="replace").read().splitlines()
+    head = lines[2].split()
+    ntyp, nat = int(head[0]), int(head[1])
+    alat = float(head[3])
+    i = 3
+    if lines[i].strip().lower().startswith("basis"):
+        i += 4
+    amass = {}
+    for t in range(ntyp):
+        parts = lines[i + t].split("'")
+        amass[int(parts[0])] = float(parts[2])
+    i += ntyp
+    ityp = [int(lines[i + a].split()[1]) for a in range(nat)]
+    masses = np.array([amass[t] for t in ityp], float)
+    qs, Cs = [], []
+    n = i + nat
+    while n < len(lines):
+        if "Dynamical  Matrix in cartesian axes" in lines[n]:
+            q = [float(x) for x in re.findall(_NUM, lines[n + 2])][:3]
+            C = np.zeros((3 * nat, 3 * nat), complex)
+            p = n + 4
+            for _ in range(nat * nat):
+                a, b = [int(x) for x in lines[p].split()[:2]]
+                p += 1
+                for r in range(3):
+                    v = [float(x) for x in lines[p].split()]
+                    p += 1
+                    C[3 * (a - 1) + r, 3 * (b - 1):3 * (b - 1) + 3] = np.array(v[0:6:2]) + 1j * np.array(v[1:6:2])
+            qs.append(np.array(q))
+            Cs.append(C)
+            n = p
+        else:
+            n += 1
+    if not Cs:
+        raise ValueError("%s 里没有 Dynamical Matrix 块" % path)
+    return {"masses_ry": masses, "q_list": qs, "C": Cs, "nat": nat, "alat": alat, "ityp": ityp}
+
+
+def phonon_modes(C, masses_ry):
+    """C(q)（Ry/bohr²）-> (ħω meV（虚频记负）, e 质量加权归一本征矢 (3nat, 3nat)，列 = 模，按 ħω 升序)。"""
+    mw = np.repeat(1.0 / np.sqrt(np.asarray(masses_ry, float)), 3)
+    D = np.asarray(C) * np.outer(mw, mw)
+    D = 0.5 * (D + D.conj().T)
+    w2, e = np.linalg.eigh(D)
+    hw = np.sign(w2) * np.sqrt(np.abs(w2)) * RY_MEV
+    return hw, e
+
+
+def degenerate_group(energies_ev, idx, tol=DEG_TOL_EV):
+    """与 idx 号能级简并（|ΔE| < tol，连成链）的全部能级下标（升序）。"""
+    e = np.asarray(energies_ev, float)
+    grp = {int(idx)}
+    changed = True
+    while changed:
+        changed = False
+        for j in range(len(e)):
+            if j not in grp and any(abs(e[j] - e[i]) < tol for i in grp):
+                grp.add(j)
+                changed = True
+    return sorted(grp)
+
+
+def phonon_groups(hw_mev, tol=PH_DEG_MEV):
+    """ħω 升序的模 -> 简并组 [[模号…]…]。"""
+    out = []
+    for nu, w in enumerate(hw_mev):
+        if out and abs(w - hw_mev[out[-1][-1]]) < tol:
+            out[-1].append(nu)
+        else:
+            out.append([nu])
+    return out
+
+
+def mode_D2(gkk_k, e, masses_ry, init_ahc, final_bands):
+    """一个 k 的 gkk (3nat, ahc_nbnd, nbnd) -> 每个模的 D²（(eV/Å)²），已对初/终态简并组求和并除以 d_初·d_终。
+    init_ahc：初态在 ahc 窗口里的下标（0 基，相对 ahc_nbndskip）；final_bands：终态在 k+q 全部带里的下标（0 基）。"""
+    m = np.asarray(masses_ry, float)
+    u = np.asarray(e) / np.repeat(np.sqrt(m), 3)[:, None]                  # 位移 u = e/√M
+    sub = np.asarray(gkk_k)[:, init_ahc, :][:, :, final_bands]           # (3nat, d_i, d_f)
+    gm = np.einsum("jab,jn->nab", sub, u)                                 # (模, d_i, d_f)
+    s = np.sum(np.abs(gm) ** 2, axis=(1, 2)) / (len(init_ahc) * len(final_bands))
+    return s * float(m.sum()) * GKK_TO_EV_A ** 2
+
+
+def edge_band(nocc, carrier):
+    """带边带号（0 基）：电子 = nocc（最低导带），空穴 = nocc − 1（最高价带）。"""
+    return int(nocc) if carrier == "electron" else int(nocc) - 1
+
+
+def class_couplings(gkk_k, etk_k, etq_k, hw, e, masses_ry, nocc, ahc_skip, ahc_nbnd, carrier,
+                    deg_tol=DEG_TOL_EV, ph_tol=PH_DEG_MEV):
+    """一个等价类（一个 k、一个 q）-> {"init_bands","final_bands","E_init_eV","E_final_eV","modes":[…],"groups":[…]}。
+    groups：声子简并组，{"modes","hw_meV","D_eV_A"}（D² 为组内相加）。初态简并组越出 ahc 窗口 -> ValueError。"""
+    nb = edge_band(nocc, carrier)
+    ib = degenerate_group(etk_k, nb, deg_tol)
+    fb = degenerate_group(etq_k, nb, deg_tol)
+    lo, hi = int(ahc_skip), int(ahc_skip) + int(ahc_nbnd)
+    if ib[0] < lo or ib[-1] >= hi:
+        raise ValueError("初态简并组（带 %s）越出 AHC 窗口 %d..%d：加大 IVS_AHC_NB" % ([x + 1 for x in ib], lo + 1, hi))
+    d2 = mode_D2(gkk_k, e, masses_ry, [x - lo for x in ib], fb)
+    hw = np.asarray(hw, float)
+    modes = [{"mode": int(nu) + 1, "hw_meV": float(hw[nu]), "D_eV_A": float(math.sqrt(max(d2[nu], 0.0)))}
+             for nu in range(len(hw))]
+    groups = []
+    for grp in phonon_groups(list(hw), ph_tol):
+        groups.append({"modes": [g + 1 for g in grp], "hw_meV": float(np.mean(hw[grp])),
+                       "D_eV_A": float(math.sqrt(max(float(np.sum(d2[grp])), 0.0)))})
+    return {"init_bands": [x + 1 for x in ib], "final_bands": [x + 1 for x in fb],
+            "E_init_eV": float(etk_k[nb]), "E_final_eV": float(etq_k[nb]), "modes": modes, "groups": groups}
+
+
+def fold_channels(classes_out, hw_min=HW_MIN_MEV, merge_mev=HW_MERGE_MEV):
+    """等价类结果 -> dp_optical 星通道（一个载流子）。
+    classes_out：[{"pairs": [{"from","to","kind","g_to","g_from"}…], "groups": [{"hw_meV","D_eV_A"}…]}…]。
+    返回 (channels, dropped)：channels = [{"from","to","kind","D_eV_A","hw_meV","n_terms"}]；
+    dropped = ħω < hw_min（含虚频）的组。"""
+    acc, dropped = {}, []
+    for c in classes_out:
+        for gr in c["groups"]:
+            hw, D = float(gr["hw_meV"]), float(gr["D_eV_A"])
+            if not (hw >= hw_min) or not math.isfinite(D):
+                dropped.append({"class": c.get("id"), "hw_meV": hw, "D_eV_A": D, "why": "ħω < %.2g meV 或虚频" % hw_min})
+                continue
+            for p in c["pairs"]:
+                gdiv = (p["g_from"] - 1) if p["kind"] == "inter_star" else p["g_to"]
+                acc.setdefault((p["from"], p["to"], p["kind"]), []).append((hw, D * D / float(gdiv)))
+    out = []
+    for (a, b, kind), terms in sorted(acc.items()):
+        terms.sort()
+        clusters = []
+        for hw, d2 in terms:
+            if clusters and hw - clusters[-1]["hw_last"] < merge_mev:
+                cl = clusters[-1]
+                cl["d2"] += d2
+                cl["w"] += hw * d2
+                cl["n"] += 1
+                cl["hw_last"] = hw
+                cl["hws"].append(hw)
+            else:
+                clusters.append({"d2": d2, "w": hw * d2, "n": 1, "hw_last": hw, "hws": [hw]})
+        for cl in clusters:
+            hw = cl["w"] / cl["d2"] if cl["d2"] > 0 else float(np.mean(cl["hws"]))
+            out.append({"from": a, "to": b, "kind": kind, "D_eV_A": math.sqrt(cl["d2"]),
+                        "hw_meV": round(hw, 2), "n_terms": cl["n"]})
+    return out, dropped
+
+
+# ---------------------------------------------------------------------------
+# 消费端（ke-dft-cpu S8 / S8.4）
+# ---------------------------------------------------------------------------
+def _carrier(params, carrier):
+    c = ((params or {}).get("carriers") or {}).get(carrier) or {}
+    return c if c.get("status") == "ok" else None
+
+
+def inter_channels(params, carrier, keep=None, norm=None, dmin=DMIN_EV_A, alias=None):
+    """ivs_dfpt_params.json 某载流子 -> ([dp_optical 通道], [D < dmin 丢掉的], [提示])。
+    通道：{"from","to","kind": inter|inter_star,"D_eV_A","hw_meV","source": "dfpt_ivs"}；alias（S8.4 并掉的重复星）先换成
+    保留的标签；keep 给了就只要两端都在 keep 里的（两端不在的记进提示，调用方据此报错）。同一对星换标签后 ħω 撞车的按 D² 相加。"""
+    c = _carrier(params, carrier)
+    if not c:
+        return [], [], []
+    norm = norm or (lambda s: s)
+    alias = alias or {}
+    acc, notes, dropped = {}, [], []
+    for ch in c.get("channels") or []:
+        a = alias.get(norm(ch["from"]), norm(ch["from"]))
+        b = alias.get(norm(ch["to"]), norm(ch["to"]))
+        if keep is not None and (a not in keep or b not in keep):
+            notes.append("通道 %s>%s 的谷不在现在的谷表里（%s）" % (a, b, ",".join(sorted(keep))))
+            continue
+        kind = ch["kind"]
+        key = (a, b, kind, round(float(ch["hw_meV"]), 2))
+        acc[key] = acc.get(key, 0.0) + float(ch["D_eV_A"]) ** 2
+    chs = []
+    for (a, b, kind, hw), d2 in sorted(acc.items()):
+        D = math.sqrt(d2)
+        if D < dmin:
+            dropped.append({"from": a, "to": b, "kind": kind, "hw_meV": hw, "D_eV_A": D})
+            continue
+        chs.append({"from": a, "to": b, "kind": kind, "D_eV_A": D, "hw_meV": hw, "source": "dfpt_ivs"})
+    return chs, dropped, notes
+
+
+def params_digest(params, carrier):
+    """某载流子通道表的指纹（S8/S8.4 记下来，参数变了才重排）；该载流子不可用 -> None。"""
+    c = _carrier(params, carrier)
+    if not c:
+        return None
+    rows = sorted([str(ch["from"]), str(ch["to"]), str(ch["kind"]), round(float(ch["D_eV_A"]), 4),
+                   round(float(ch["hw_meV"]), 2)] for ch in c.get("channels") or [])
+    return hashlib.sha256(json.dumps(rows, ensure_ascii=False).encode("utf-8")).hexdigest()[:16]
+
+
+def describe(params, carrier, norm=None, keep=None, dmin=DMIN_EV_A, alias=None):
+    chs, _d, _n = inter_channels(params, carrier, keep=keep, norm=norm, dmin=dmin, alias=alias)
+    if not chs:
+        return "无（全部 < %.2f eV/Å）" % dmin
+    by = {}
+    for ch in chs:
+        by.setdefault((ch["from"], ch["to"], ch["kind"]), []).append(ch)
+    parts = []
+    for (a, b, kind), lst in sorted(by.items()):
+        tot = math.sqrt(sum(x["D_eV_A"] ** 2 for x in lst))
+        parts.append("%s>%s%s %d 支(√ΣD² %.2f eV/Å)" % (a, b, "'" if kind == "inter_star" else "", len(lst), tot))
+    return "; ".join(parts)
+
+
+def valleys_for_consumer(params, carrier):
+    """3D 用：JSON 里的谷表（已展开成完整轨道）-> dp_optical 的谷表 [{"label","g","k_frac"}]。"""
+    c = _carrier(params, carrier)
+    if not c:
+        return []
+    return [{"label": norm_label(v["label"]), "g": len(v["k_frac"]), "k_frac": [list(map(float, k)) for k in v["k_frac"]]}
+            for v in c.get("valleys") or []]
+
+
+def match_stars(params, carrier, valleys, full3d=False, tol=0.08):
+    """DFPT 的谷表 vs 现在 dp_optical 用的谷表（已 merge_coincident）：按 k 中心一一配对星。
+    两个星对上 = 成员数相同、每个 DFPT 成员在 tol（分数坐标，模 1；2D 只看面内）内有一个成员对应（现在的谷表有 k_grid 就
+    也拿它比，2D 的 S8.2 谷表与 DFPT 用的是同一组网格点，精确相等）。返回 ({DFPT 标签: 现在的标签}, 错误说明或 None)：
+    DFPT 的星找不到对应、或现在的谷表多出 DFPT 没有的星，都算错误（谷表变了，参数要按新谷表重算）。"""
+    c = _carrier(params, carrier)
+    if not c:
+        return {}, "%s 没有可用的 DFPT 参数" % carrier
+
+    def _arr(ks):
+        return [np.asarray(k, float) for k in ks]
+
+    def _close(a, b):
+        d = a - b
+        d = d - np.rint(d)
+        if not full3d:
+            d[2:] = 0.0
+        return bool(np.all(np.abs(d) < tol))
+
+    def _same(A, B):
+        if len(A) != len(B):
+            return False
+        used = set()
+        for a in A:
+            j = next((j for j, b in enumerate(B) if j not in used and _close(a, b)), None)
+            if j is None:
+                return False
+            used.add(j)
+        return True
+    cur = [(v["label"], [_arr(v["k_frac"])] + ([_arr(v["k_grid"])] if v.get("k_grid") else [])) for v in valleys]
+    out, left = {}, list(range(len(cur)))
+    for dv in c.get("valleys") or []:
+        dk = _arr(dv["k_frac"])
+        hit = next((i for i in left if any(_same(dk, ks) for ks in cur[i][1])), None)
+        if hit is None:
+            return {}, ("DFPT 的星 %s（%d 个成员）在现在的谷表（%s）里找不到 k 中心对得上的星"
+                        % (dv["label"], len(dk), ", ".join("%s×%d" % (lab, len(ks[0])) for lab, ks in cur)))
+        out[norm_label(dv["label"])] = cur[hit][0]
+        left.remove(hit)
+    if left:
+        return out, ("现在的谷表里 %s 没有 DFPT 参数（DFPT 谷表：%s）" %
+                     (", ".join(cur[i][0] for i in left), ", ".join("%s×%d" % (v["label"], len(v["k_frac"]))
+                                                                  for v in c.get("valleys") or [])))
+    return out, None
+
+
+def load_consumer(path, mode, want_dim):
+    """S8 / S8.4 读 IVS_DFPT -> (params 或 None, 提示或 None)。
+    mode：auto（文件在就用）/ on（必须有）/ off。文件缺、读不了、schema 或维度不对：on -> ValueError；auto -> (None, 提示)。"""
+    import os
+    mode = str(mode or "auto").strip().lower()
+    if mode not in ("auto", "on", "off"):
+        raise ValueError("IVS_DFPT=%r 无效，只允许 auto / on / off" % mode)
+    if mode == "off":
+        return None, None
+    if not os.path.isfile(path):
+        if mode == "on":
+            raise ValueError("IVS_DFPT=on，但 %s 不存在：先跑完 eph-qe-cpu 的 ivs_dfpt 组（S10–S13），结果拉回本地后"
+                             "（eph-qe-cpu/result/step13_ivs_read/ivs_dfpt_params.json）retry 本步，autozt 会推过来" % path)
+        return None, None
+    try:
+        params = json.loads(open(path, encoding="utf-8").read())
+    except ValueError as e:
+        if mode == "on":
+            raise ValueError("%s 读不了：%s" % (path, e))
+        return None, "%s 读不了（%s）：本次不用" % (path, e)
+    msg = None
+    if params.get("schema") != SCHEMA:
+        msg = "%s 的格式 %r 不是本脚本认的 %r：重跑 eph-qe-cpu S13_ivs" % (path, params.get("schema"), SCHEMA)
+    elif params.get("dim") != want_dim:
+        msg = "%s 是 %s 口径，本步是 %s：材料对不上（或 eph-qe-cpu 的 IVS_DIM 写错）" % (path, params.get("dim"), want_dim)
+    if msg:
+        if mode == "on":
+            raise ValueError(msg)
+        return None, msg + "；本次不用"
+    return params, None
+
+
+def file_sha256(path):
+    h = hashlib.sha256()
+    with open(path, "rb") as fh:
+        for blk in iter(lambda: fh.read(1 << 20), b""):
+            h.update(blk)
+    return h.hexdigest()

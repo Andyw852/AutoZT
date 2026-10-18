@@ -28,7 +28,8 @@ _SECTION = re.compile(r"^\[([A-Za-z0-9_.\-]+)\]$")
 # 驱动层保留键：写在 [params] 里、供 tf 决定步骤图（如 BANDGAP=pbe|hse 增删
 # 整段 HSE），gen 脚本本身不消费。校验白名单时无条件放行，避免各 gen 脚本
 # 都误报"不认识的键"。新增工作流级开关往这里加即可。
-RESERVED_PARAMS = frozenset({"BANDGAP", "AMSET_ENV", "POTCAR_DIR", "REFERENCES_DIR"})  # 3090 集群级默认键（VASP 赝势/凸包参考），漏进 mlff 的 step.conf 需放行
+RESERVED_PARAMS = frozenset({"BANDGAP", "AMSET_ENV", "POTCAR_DIR", "REFERENCES_DIR",
+                             "QE_BIN", "QE_PSEUDO_DIR", "QE_SETUP"})  # 3090 集群级默认键（VASP 赝势/凸包参考），漏进 mlff 的 step.conf 需放行
 
 
 def _strip(line):

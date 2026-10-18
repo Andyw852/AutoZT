@@ -14,6 +14,23 @@ This project adheres to Semantic Versioning; versions before 1.0.0 are developme
 
 ## [Unreleased]
 
+### Added (2026-10-18: [0059] DFPT intervalley scattering)
+- eph-qe-cpu optional group `ivs_dfpt` (S10_ivsq, S11_ivsscf, S12_ivsph fan-out `q-*`, S13_ivs): zero-order intervalley
+  deformation potentials and phonon energies from QE single-q DFPT plus `ph.x electron_phonon='ahc'` matrix elements at
+  the valley k and k+q; valley pairs reduced by point group, time reversal and the reverse process; output
+  `ivs_dfpt_params.json` (schema `ivs_dfpt/1`) folded into dp_optical star channels. Shared math in
+  `skill/_common/ivs/ivs_dfpt.py`. Generic submit template `submit_ivs_qe.tpl`; QE paths from the cluster yaml
+  (`qe_bin`, `qe_pseudo_dir`, `qe_setup`, injected as `QE_BIN` / `QE_PSEUDO_DIR` / `QE_SETUP`).
+- ke-dft-cpu S8 (3D) and S8.4 (2D): `IVS_DFPT = auto|on|off` (+ `IVS_DFPT_DMIN`, `IVS_DFPT_KTOL`). DFPT channels take
+  priority over frozen-phonon K↔K′ and hand-written intervalley channels (those are kept as references); stars are
+  matched by k centres; the record `dp_optical_ivs_dfpt` goes into `2d_correction.json` / `dp_optical_3d.json`.
+  S8.3 writes the IVS parameter source into comparison_summary.txt.
+
+### Changed (2026-10-18: [0059])
+- eph-qe-cpu: the Perturbo chain S0–S6 is now the default-on group `perturbo` (`steps: []`); materials that only need the
+  intervalley chain set `perturbo: false`. Wannier90/Perturbo moved to `optional_exe`.
+- Skill loader accepts an empty main step list when an optional group provides steps.
+
 ### Added (2026-10-17: ke-dft-cpu metal mode)
 - S7.1: a metallic undeformed band structure no longer fails the step. It writes `metal.json`, skips
   `band_edges.json` / `deformation_vac.h5`, and still moves `deformation.h5` into the step directory.

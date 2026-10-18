@@ -344,6 +344,52 @@ step8.x 的 `_SKILL_REV` 写进 comparison_summary.txt。改脚本即提交 GitH
   （S8.2 / S8.3 遇到金属会报错并提示这一行）。S5 介电（DFPT）对金属也没有意义，只被 S8 用；关掉 `amset3d` 后它
   不再被下游需要，已在跑的可以按需停掉（`stop` 先请示）。
 
+## [0059] DFPT 直接算谷间零阶形变势（eph-qe-cpu 可选组 `ivs_dfpt`；S8 / S8.4 的 `IVS_DFPT`）（2026-10-18 用户批准）
+
+**决定**（方案 `docs/PLAN-ivs-dfpt-20261018.md` 的待确认 A–D）：A 放进 eph-qe-cpu（QE 环境在那里），ke-dft-cpu 的 S8/S8.4 读它的产物；
+B 同意新增步骤；C 与 DFPT 基准差 20–30% 以内算通过；D 用 3090、先拿 Si 测。这条取代 [0058] 里"流程本身不再扩展谷间散射的自动计算"
+那一句：[0058] 的文献参数入口（`DP_OPTICAL_E/H`）照旧可用，有 DFPT 结果时手填谷间通道只作对照。
+
+- **四步**（eph-qe-cpu，`ivs_dfpt: true` 开；只算 IVS 的材料再写 `perturbo: false` 关掉 S0–S6）：
+  S10_ivsq（谷表 → 谷对 → 对称等价类 → q 作业）→ S11_ivsscf（环境探针 + pw.x SCF，VASP 结构原样 + 谷能差自检）→
+  S12_ivsph（每个 q 一个作业：ph.x 单 q DFPT → pw.x nscf（初态 k）→ ph.x `electron_phonon='ahc'`）→ S13_ivs（D0、ħω → 星通道，
+  `ivs_dfpt_params.json`，schema `ivs_dfpt/1`）。数学在公共池 `skill/_common/ivs/ivs_dfpt.py`（生产、消费两端共用）。
+- **谷表**：2D 读本材料 ke-dft-cpu S8.2 的 `multi_valley.valleys`（用 `k_grid` 网格极值点，与 S8.4 的谷归属一致；重复星按
+  `merge_coincident` 合并）；3D 在 eph-qe-cpu 的 step.conf 手填 `IVS_VALLEYS_E/H`，每个星写一个成员即可，按晶体点群 + 时间反演补全
+  （Si：`X:0,0.425,0.425` → 6 个）。S8.2 的星成员不全（按对称性应更多）就拒绝：S8.4 的态密度按谷表成员数平均，补了会对不上。
+- **QE 接口（M0 核实，本机 conda QE 7.0 与 7.4 结果逐位相同；7.3/7.4 的 `PHonon/PH/ahc.f90` 输出部分只差 GPU 指令）**：
+  `ahc_dir/ahc_gkk_iq1.bin` 直接存取、无记录头，每个 k 一条记录，Fortran 次序 `ahc_gkk(ib, jb, imode)` =
+  ⟨ψ_ib(k+q)|∂V_SCF/∂u_{q,imode}|ψ_jb(k)⟩（Ry/bohr；ib 是 k+q 的全部带，jb 是 AHC 窗口里 k 的带，imode = 笛卡尔位移）；
+  `trans=.false.` 时读前一次 DFPT 存下的位移模式（`u_from_file`），`setup_nscf` 在 AHC 模式下跳过 `irreducible_BZ`，
+  nscf 给的 k 原样保留。只支持模守恒赝势（USPP/PAW/DFPT+U/磁性/2D 库仑截断未实现或未测试）。
+  核对 ①：q = Γ 时 ⟨n|∂V/∂u_{2x}|n⟩ 与冻声子有限差分 dε/du 四位有效数字一致（Si 一般 k 点，带 3–6：0.00963/0.05539/0.24525/−0.20993
+  vs 0.00962/0.05537/0.24520/−0.20987 eV/Å）—— 量纲与按原胞归一确认；② 动力学矩阵按 fildyn 的 (na, nb) 块、行 = na 的方向解析，
+  无反演中心的结构上本征矢与 QE `dynmat.x` 重叠 = 1（取共轭只有 0.46–0.95）—— 与 postahc.x 的投影 g_ν = Σ_j g_j u_jν 同一口径。
+- **形变势**：g_ν(m,n) = Σ_j ahc_gkk(m,n,j)·e_jν/√M_j，D_ν² = M_cell·Σ_{n∈初态简并组, m∈终态简并组}|g_ν|²/(d_初 d_终)，
+  与 dp_optical / ivs_frozen 的 |g|² = ħD²/(2NMω) 同一口径；声子简并组按 D² 相加当一支。规范不变（测试里对简并子空间做随机幺正变换不变）。
+- **星通道**：初态取星 X 的第一个成员（等价成员率相同），终态遍历所有星的所有成员：`X>Y` 每条 D² 除以 g_Y，`X>X'` 除以 g_X − 1，
+  同一对星 ħω 相差 < 0.1 meV 的按 D² 合并。对称性约化：(k_a, k_b) 与 (S k_a, S k_b)、(−k_a, −k_b)、(k_b, k_a) 同类（后两条来自时间反演
+  与厄米性），每类一个 ph.x 作业；MoS₂ 电子 6 类（K↔K′、K↔Q 近/远、Q↔Q′ 三种），Si 电子 2 类（g、f）。
+- **Si 验证（M0，SG15 PBE、30 Ry、6³ k，冒烟精度）**：g 过程（q = 0.3X）只有 LO（63.1 meV）耦合，D = 4.79 eV/Å，TA/LA = 0；
+  f 过程 48.5 meV 2.73、58.4 meV 4.42 eV/Å，TA = 0（零阶选择定则）。ħω 与 Jacoboni & Reggiani RMP 55, 645 (1983) 的 g/f 声子
+  （12/18.5/62、19/47/59 meV）一致；D 与其拟合值（g-LO 11、f-LA 2、f-TO 2 × 10⁸ eV/cm）同量级 —— 拟合值吸收了一阶过程，不要求逐条相等。
+  折成星通道：`X>X':2.141@63.06; X>X':2.443@48.48; X>X':3.953@58.40`（f 4 个终态 × D²/5，g 1 个 × D²/5）。
+- **S8 / S8.4 接线**：autozt 按 push_paths 把本地 `eph-qe-cpu/result/step13_ivs_read/ivs_dfpt_params.json` 推到 ke 材料目录的
+  `ivs_dfpt/`（本地没有就删掉远端旧的）；`IVS_DFPT = auto`（出厂）有就用。优先级 DFPT > 冻声子 K↔K′（`IVS_FROZEN`）> 手填：
+  用上时冻声子 `K>K'` 与手填 `X>X'`、`X>Y` 只打印对照、记进 `dp_optical_ivs_dfpt.info`，不进散射率（冻声子记 `superseded_dfpt`，
+  参数再变也不让 S8.4 重排）。谷表按 k 中心配对星（`IVS_DFPT_KTOL`：S8 0.08，粗网格上自动找的谷中心可差半个网格步长；S8.4 0.005，2D 两边都是 S8.2 的网格点；DFPT 与本步谷标签可以不同）；对不上（S8.2 谷表变了、
+  手填谷表不同）报错。3D 没有手填谷表、也没有冻声子 ODP 谷表时直接用 DFPT 的谷表。`ADP_INTRAVALLEY=auto` 随之把 ADP 收成谷内。
+  记录：S8.4 的 `2d_correction.json`、S8 的 `dp_optical_3d.json` 都写 `dp_optical_ivs_dfpt`（mode、sha256、逐载流子 used/指纹/摘要）；
+  S8.3 的 comparison_summary.txt 写一行 `[IVS 参数来源]`。参数是跨技能来的，S13 不会自动让 S8/S8.4 重排：结果拉回本地后对
+  S8_kappa / S8.4_amset2d 执行 retry（gen 时推过去）。SOC 能带一律拒绝。
+- **范围与局限**：零阶、常数 D（不含一阶 K↔K′，Filipovic Table 5：缺它 μ 偏高约 8%）；非 SOC（W 化合物 Q 谷的 SOC 劈裂大，WSe₂ 电子
+  可信度最低，见 [0058]）；K 谷 ADP 仍用真空 E1（8.54 vs DFPT 6.5）。验收（用户定 C）：与 DFPT 基准差 20–30% 以内算通过。
+- **3090 部署**（铁律 11：装到 `~/software/AutoZT/`）：QE 7.3/7.4（AHC 自 6.7 起；conda-forge 有 7.4：
+  `micromamba create -p ~/software/AutoZT/qe-7.4 -c conda-forge qe=7.4`）+ 模守恒赝势目录（PseudoDojo/SG15）；
+  `setting/3090.yaml` 写 `qe_bin` / `qe_pseudo_dir`（可选 `qe_setup`），autozt 注入 step.conf 的 `QE_BIN` / `QE_PSEUDO_DIR` / `QE_SETUP`。
+  通用提交模板 `submit_ivs_qe.tpl` 按 `IVS_NP` 申请 `--ntasks`（fakeslurm 同样按它限核）；S11 的作业先跑环境探针（pw.x/ph.x、
+  ph.x 是否支持 AHC、赝势是不是模守恒），缺东西直接失败并写 `ivs_env.json`。
+
 ## [0058] 形变势口径、多谷 TMD 电子的局限与文献参数入口（2026-10-18 用户定：保持现状，不上 EPW）
 
 **决定**：2D 继续用真空参考的形变势（`DEFORM_REF=auto` → vacuum）；ODP/IVS 的常数形变势通道（`DP_OPTICAL_E/H`）

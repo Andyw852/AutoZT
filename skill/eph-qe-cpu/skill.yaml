@@ -1,7 +1,7 @@
 schema: 2
 name: eph-qe-cpu
-desc: QE–Wannier90–Perturbo 电子–声子耦合（CPU）
-version: "0.2"
+desc: QE–Wannier90–Perturbo 电子–声子耦合（CPU）；可选 QE DFPT 谷间散射参数（ivs_dfpt）
+version: "0.3"
 
 template_layout: per_step
 template_dir: templates
@@ -21,32 +21,72 @@ fetch_files: [submit.sh, qe_env.json, scf.in, nscf.in, ph.in, qe2pert.in, pert.i
               eph_summary.json, eph_parameters.json, eph.h5, ephmat,
               ephmat.yml, queue.out, queue.err]
 
-steps:
-  - {seq: 0, name: step0_preflight, label: S0_env, check: marker, marker: "preflight.ok:OK",
-     gen: gen_step0_preflight.py, done_marker: preflight.ok, fetch_all: true,
-     gen_need: [eph_common.py, stepconf.py, step.conf, submit_qe_test.tpl, run_preflight.py]}
-  - {seq: 1, name: step1_scf, label: S1_scf, check: marker, marker: "scf.ok:OK", needs: [step0_preflight],
-     gen: gen_step1_scf.py, done_marker: scf.ok, fetch_all: true,
-     gen_need: [eph_common.py, stepconf.py, step.conf, submit_qe_test.tpl]}
-  - {seq: 2, name: step2_wannier, label: S2_wannier, check: marker, marker: "wannier.ok:OK", needs: [step1_scf],
-     gen: gen_step2_wannier.py, done_marker: wannier.ok, fetch_all: true,
-     gen_need: [eph_common.py, stepconf.py, step.conf, submit_qe_test.tpl]}
-  - {seq: 3, name: step3_phonon, label: S3_ph, check: marker, marker: "phonon.ok:OK", needs: [step1_scf],
-     gen: gen_step3_phonon.py, done_marker: phonon.ok, fetch_all: true,
-     gen_need: [eph_common.py, stepconf.py, step.conf, submit_qe_test.tpl]}
-  - {seq: 4, name: step4_qe2pert, label: S4_qe2pert, check: marker, marker: "qe2pert.ok:OK", needs: [step2_wannier, step3_phonon],
-     gen: gen_step4_qe2pert.py, done_marker: qe2pert.ok, fetch_all: true,
-     gen_need: [eph_common.py, stepconf.py, step.conf, submit_qe_test.tpl]}
-  - {seq: 5, name: step5_perturbo, label: S5_ephmat, check: marker, marker: "perturbo.ok:OK", needs: [step4_qe2pert],
-     gen: gen_step5_perturbo.py, done_marker: perturbo.ok, fetch_all: true,
-     gen_need: [eph_common.py, stepconf.py, step.conf, submit_qe_test.tpl]}
-  - {seq: 6, name: step6_summary, label: S6_summary, check: plot, run: gen, needs: [step5_perturbo],
-     gen: gen_step6_summary.py, done_marker: eph_summary.json, fetch_all: true,
-     gen_need: [eph_common.py]}
+# [0059] 两条链都是开关组（主步骤为空）：
+#   perturbo（默认开）：S0–S6 QE–Wannier90–Perturbo 电子–声子矩阵元数据链（原有流程，jzzn 环境）；
+#   ivs_dfpt（默认关）：S10–S13 QE DFPT 直接算谷间零阶形变势，给 ke-dft-cpu 的 S8/S8.4 当 IVS 通道。
+#   只算 IVS 的材料（如 3090 上的 Si/MoS2）：本材料 tf_*.yaml 写 ivs_dfpt: true、perturbo: false。
+steps: []
+
+optional_steps:
+  perturbo:
+    default: true
+    steps:
+      - {seq: 0, name: step0_preflight, label: S0_env, check: marker, marker: "preflight.ok:OK",
+         gen: gen_step0_preflight.py, done_marker: preflight.ok, fetch_all: true,
+         gen_need: [eph_common.py, stepconf.py, step.conf, submit_qe_test.tpl, run_preflight.py]}
+      - {seq: 1, name: step1_scf, label: S1_scf, check: marker, marker: "scf.ok:OK", needs: [step0_preflight],
+         gen: gen_step1_scf.py, done_marker: scf.ok, fetch_all: true,
+         gen_need: [eph_common.py, stepconf.py, step.conf, submit_qe_test.tpl]}
+      - {seq: 2, name: step2_wannier, label: S2_wannier, check: marker, marker: "wannier.ok:OK", needs: [step1_scf],
+         gen: gen_step2_wannier.py, done_marker: wannier.ok, fetch_all: true,
+         gen_need: [eph_common.py, stepconf.py, step.conf, submit_qe_test.tpl]}
+      - {seq: 3, name: step3_phonon, label: S3_ph, check: marker, marker: "phonon.ok:OK", needs: [step1_scf],
+         gen: gen_step3_phonon.py, done_marker: phonon.ok, fetch_all: true,
+         gen_need: [eph_common.py, stepconf.py, step.conf, submit_qe_test.tpl]}
+      - {seq: 4, name: step4_qe2pert, label: S4_qe2pert, check: marker, marker: "qe2pert.ok:OK", needs: [step2_wannier, step3_phonon],
+         gen: gen_step4_qe2pert.py, done_marker: qe2pert.ok, fetch_all: true,
+         gen_need: [eph_common.py, stepconf.py, step.conf, submit_qe_test.tpl]}
+      - {seq: 5, name: step5_perturbo, label: S5_ephmat, check: marker, marker: "perturbo.ok:OK", needs: [step4_qe2pert],
+         gen: gen_step5_perturbo.py, done_marker: perturbo.ok, fetch_all: true,
+         gen_need: [eph_common.py, stepconf.py, step.conf, submit_qe_test.tpl]}
+      - {seq: 6, name: step6_summary, label: S6_summary, check: plot, run: gen, needs: [step5_perturbo],
+         gen: gen_step6_summary.py, done_marker: eph_summary.json, fetch_all: true,
+         gen_need: [eph_common.py]}
+
+  # --- [0059] QE DFPT 谷间散射（方案 docs/PLAN-ivs-dfpt-20261018.md 的 Q1–Q4）------------------------------------
+  #   S10_ivsq（Q1，gen，不提交作业）：谷表（2D 读 ke S8.2 的 dpt_result.json；3D 手填 IVS_VALLEYS_E/H）-> 谷对 -> 对称等价类 -> q 作业；
+  #   S11_ivsscf（Q2）：环境探针（pw.x/ph.x、AHC 支持、模守恒赝势）+ pw.x SCF（ke S1 的 CONTCAR 原样，不重新弛豫）+ 谷能差自检；
+  #   S12_ivsph（Q3，扇出 q-*）：每个 q 一个作业：ph.x 单 q DFPT -> pw.x nscf（初态 k）-> ph.x electron_phonon='ahc'；
+  #   S13_ivs（Q4，gen）：ahc_gkk + 动力学矩阵 -> D0、ħω -> dp_optical 星通道 -> ivs_dfpt_params.json（schema ivs_dfpt/1）。
+  #   ke-dft-cpu 的 S8/S8.4 push_paths 把本地 result/step13_ivs_read/ivs_dfpt_params.json 推过去，IVS_DFPT=auto 读取。
+  #   push_paths（S10）：ke-dft-cpu 的本地 result 推到 ivs_inputs/（本地没有就不推，远端旧的删掉）。
+  ivs_dfpt:
+    default: false
+    steps:
+      - {seq: 10, name: step10_ivs_qlist, label: S10_ivsq, check: plot, run: gen, done_marker: ivs_qlist.json,
+         gen: gen_step10_ivs_qlist.py, fetch_all: true,
+         gen_need: [ivs_qe_common.py, ivs_dfpt.py, eph_common.py, stepconf.py, step.conf],
+         push_paths: [{from: ke-dft-cpu/result/step1_opt/CONTCAR, to: ivs_inputs/CONTCAR},
+                      {from: ke-dft-cpu/result/step1_opt/workflow_method.txt, to: ivs_inputs/workflow_method.txt},
+                      {from: ke-dft-cpu/result/step8.2_dpt/dpt_result.json, to: ivs_inputs/dpt_result.json}]}
+      - {seq: 11, name: step11_ivs_scf, label: S11_ivsscf, check: marker, marker: "ivs_scf.ok:OK",
+         needs: [step10_ivs_qlist], gen: gen_step11_ivs_scf.py, done_marker: ivs_scf.ok, fetch_all: true,
+         fetch_exclude: ["tmp", "tmp_valley", "pseudo"],
+         gen_need: [ivs_qe_common.py, ivs_dfpt.py, eph_common.py, stepconf.py, step.conf, ivs_qe_job.py, submit_ivs_qe.tpl]}
+      - {seq: 12, name: step12_ivs_ph, label: S12_ivsph, check: marker, marker: "ivs_ph.ok:OK", fanout: "q-*",
+         needs: [step10_ivs_qlist, step11_ivs_scf], gen: gen_step12_ivs_ph.py, fetch_all: true,
+         fetch_exclude: ["tmp", "pseudo"],
+         gen_need: [ivs_qe_common.py, ivs_dfpt.py, eph_common.py, stepconf.py, step.conf, ivs_qe_job.py, submit_ivs_qe.tpl]}
+      - {seq: 13, name: step13_ivs_read, label: S13_ivs, check: plot, run: gen, done_marker: ivs_dfpt_params.json,
+         needs: [step12_ivs_ph], gen: gen_step13_ivs_read.py, fetch_all: true,
+         gen_need: [ivs_qe_common.py, ivs_dfpt.py, eph_common.py, stepconf.py, step.conf]}
 
 requires:
-  exe: [pw.x, ph.x, wannier90.x, pw2wannier90.x, qe2pert.x, perturbo.x]
-  notes: "Perturbo 3.0.0 must be compiled against its compatible QE build and linked with HDF5."
+  # [0059] 两条链都要的只有 pw.x/ph.x；Wannier90/Perturbo 只给 perturbo 组（S0_env 探针仍按全套严格把关），
+  #   放 optional_exe：只算 ivs_dfpt 的机器（如 3090）不会因为没装 Perturbo 被 start 前的依赖检查拦下。
+  exe: [pw.x, ph.x]
+  optional_exe: [wannier90.x, pw2wannier90.x, qe2pert.x, perturbo.x]
+  notes: "perturbo 组：Perturbo 3.0.0 must be compiled against its compatible QE build and linked with HDF5. ivs_dfpt 组：QE >= 6.7 (electron_phonon='ahc') + norm-conserving UPF."
 
 io_schema:
   inputs:
@@ -57,6 +97,8 @@ io_schema:
     - {name: ephmat, step: S5_ephmat, type: binary, desc: "Perturbo 生成的电子–声子矩阵元。"}
     - {name: ephmat.yml, step: S5_ephmat, type: yaml, desc: "Perturbo 电子–声子矩阵元摘要。"}
     - {name: eph_summary.json, step: S6_summary, type: json, desc: "端到端工件与运行日志的可追溯摘要。"}
+    - {name: ivs_qlist.json, step: S10_ivsq, type: json, desc: "[0059] 谷表、对称等价谷对与 q 作业清单。"}
+    - {name: ivs_dfpt_params.json, step: S13_ivs, type: json, consumers: [ke-dft-cpu], desc: "[0059] DFPT 谷间零阶形变势与声子能量（schema ivs_dfpt/1），ke-dft-cpu S8/S8.4 的 IVS_DFPT 读取。"}
   params:
     - {name: QE_BIN, default: "$PATH", where: job environment, desc: "包含 pw.x、ph.x、pw2wannier90.x 的目录或 PATH。"}
     - {name: PERTURBO_BIN, default: "$PATH", where: job environment, desc: "包含 qe2pert.x、perturbo.x 的目录或 PATH。"}
@@ -99,6 +141,11 @@ io_schema:
     - {name: PERT_BAND_MAX, default: 1, where: step.conf, desc: "Perturbo ephmat 终止带。"}
     - {name: PHFREQ_CUTOFF, default: 1.0, where: step.conf, desc: "Perturbo 声子频率 cutoff (meV)。"}
     - {name: PERT_DELTA_SMEAR, default: 10.0, where: step.conf, desc: "Perturbo delta 函数展宽 (meV)，用于展宽敏感性扫描。"}
+    - {name: IVS_VALLEYS_E, default: "", where: step.conf, desc: "[0059] 手填电子谷表（2D 不写读 ke S8.2；3D 必填，每星一个成员即可）。"}
+    - {name: IVS_ECUTWFC, default: 60.0, where: step.conf, desc: "[0059] QE 截断能 (Ry)，模守恒赝势。"}
+    - {name: IVS_NP, default: 4, where: step.conf, desc: "[0059] S11/S12 每个作业的 MPI 进程数。"}
+    - {name: QE_BIN, default: "", where: "setting/<集群>.yaml qe_bin", desc: "[0059] pw.x/ph.x 所在目录。"}
+    - {name: QE_PSEUDO_DIR, default: "", where: "setting/<集群>.yaml qe_pseudo_dir", desc: "[0059] 模守恒 UPF 目录。"}
   steps:
     - {step: S0_env, title: "Environment preflight", tool: shell, outputs: [qe_env.json], validator: "all required executables and manifest-listed UPF files found"}
     - {step: S1_scf, title: "QE SCF", tool: pw.x, inputs: [POSCAR], outputs: [scf.ok], validator: "JOB DONE"}
@@ -107,6 +154,10 @@ io_schema:
     - {step: S4_qe2pert, title: "QE to Perturbo", tool: qe2pert.x, outputs: [eph.h5], validator: "stable eph.h5 alias exists"}
     - {step: S5_ephmat, title: "Interpolated e-ph matrix element", tool: perturbo.x, outputs: [perturbo.ok], validator: "Perturbo ephmat exits zero"}
     - {step: S6_summary, title: "Summarize", tool: Python, outputs: [eph_summary.json], validator: "JSON exists"}
+    - {step: S10_ivsq, title: "Intervalley q list", tool: Python, outputs: [ivs_qlist.json], validator: "JSON exists"}
+    - {step: S11_ivsscf, title: "QE SCF + valley check", tool: pw.x, outputs: [ivs_scf.ok], validator: "valley dE within tolerance"}
+    - {step: S12_ivsph, title: "Single-q DFPT + AHC matrix elements", tool: "ph.x + pw.x", outputs: [ivs_ph.ok], validator: "ahc_gkk size matches"}
+    - {step: S13_ivs, title: "Intervalley deformation potentials", tool: Python, outputs: [ivs_dfpt_params.json], validator: "JSON exists"}
 
 flow:
   summary: "QE SCF → NSCF/Wannier90 与 DFPT → qe2pert HDF5 → Perturbo e-ph matrix element"
@@ -114,5 +165,6 @@ flow:
     - {name: environment, steps: [S0_env], produces: [qe_env.json]}
     - {name: QE, steps: [S1_scf, S2_wannier, S3_ph], produces: [scf.ok, wannier.ok, phonon.ok]}
     - {name: coupling, steps: [S4_qe2pert, S5_ephmat, S6_summary], produces: [eph.h5, ephmat, ephmat.yml, eph_summary.json]}
+    - {name: intervalley, steps: [S10_ivsq, S11_ivsscf, S12_ivsph, S13_ivs], produces: [ivs_qlist.json, ivs_dfpt_params.json]}
   requires: {environment: "compatible QE, Wannier90, Perturbo and HDF5 installation"}
 corrections: [node_fail, dir_missing]

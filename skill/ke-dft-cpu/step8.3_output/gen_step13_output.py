@@ -43,7 +43,7 @@ from pathlib import Path
 # [SKILL_REV] 版本戳：写进 comparison_summary.txt。每次改本脚本逻辑后更新。
 #   陈旧副本已咬人三次（step12/step9b 盖戳后，step13 是最后一个没盖的），
 #   这里盖戳便于从产物反查到底跑的是哪份 skill 副本。
-_SKILL_REV = "2026-10-18-0057r4"   # [0057-r4] 分机制图超上限处画 ▲ 延伸；mu_scan 的 AMSET 点按载流子类型连细线   # [0057-r3] mu_scan：BT2 μ 带隙中央 ±5kT 内不给、κe 相减抵消到噪声（L < 0.1 L0）不画   # [0057-r2] temperature_series 相邻温度间色带填充 + 温度色标   # [0057-r1] 本征表 %.6g 浓度与 transport.json 掺杂档按相对 1e-4 配对（mu_scan 的 AMSET 点、分机制表的浓度列）；BT2 σ/τ=0 的点不画   # [0057] transport_plots 改版：phonon_limited_<段> -> transport_models_<段>；transport_<段> -> mobility_mechanisms_<段>（只画 μ，单机制 + 总值 + DPT）；datasets/ -> temperature_series/（蓝->红、分两段）；bt2_muscan/ + amset_scan/ -> mu_scan/（μ − E_VBM）；mechanism_resolved 去核对圆圈   # [0056] phonon-limited 掺杂扫描拆两段各一个文件夹（图 + 每温度表）：carrier_tuning_1e17-1e21 / low_doping_<NLO>-1e16，不再出整轴 <M>_phonon_limited.png；r2 <M>_transport.png 同样拆两段；r3 图注写明每条曲线的散射机制与缩写、刚性能带范围外灰底；r5 tools/make_transport_plots 直接调用本函数（统一算法），transport 图 μ 列加 DPT 带边横线（只画对应半边、标注在顶部空白）   # [0054] 与文献统一命名：去 IMP = phonon-limited（<M>_phonon_limited.png，原 <M>_intrinsic.png）、含 IMP = phonon + impurity、intrinsic 只指本征载流子；<M>_mechanism_resolved_mobility（原 dilute_mobility）；本征点按去 IMP 后机制去重；η=(E_c−E_F)/kT 判 f≈0   # [0053] intrinsic_carrier/<M>_dilute_mobility.png：稀薄极限（f≈0）μ(T) 按散射机制拆开 + Matthiessen 对照（空穴取 n = p 本征点，电子取最低 n 型去 IMP）   # [0052] transport_plots/ 每次整目录重建（先删旧结果）；intrinsic_carrier/ 标注本征浓度 n_i(T)（undoped_ni.json / fermi_fix 日志）；<M>_intrinsic.png 标题写明 intrinsic = 本征散射、横轴 = 掺杂浓度   # [0047] <M>_intrinsic.png 只画基础 4 条本征曲线（此前与 <M>_transport.png 同图仅换标题）+ intrinsic CSV 同步只含 4 条   # [0046] 本征五参数套件支持 3D（读 S8 的 step8_amset + subset_*.json；_geom_3d 体胞几何、c/t=1、对角 (xx+yy+zz)/3）；3D 也出 transport_plots/<M>_transport|<M>_intrinsic.png 9x5 面板   # [0045] bt2_muscan 同时画 thickness(我们)/cell(文献) 两种口径；[0041] transport_plots/defect_equilibrium/（缺陷平衡净浓度 σ/S/PF/κe vs T）   # 2026-10-13-0040   # [0040] transport_plots/intrinsic_carrier/（未掺杂本征载流子 σ/S/PF/κe vs T）；图例/文件名一律用实际机制组合 amset_<机制>；2026-10-13-0039   # [0039] transport_plots/datasets/：每个数据集单独一张 σ/S/PF/κe 图 + csv； [0038] 本征/子集图读 subset_*.json（SUBSETS）；[0036] transport_plots 加 bt2_muscan/ + amset_scan/ 两个扫描图子文件夹；[0035] transport_plots 合并 + τ 对比（tau/）
+_SKILL_REV = "2026-10-18-0059"   # [0059] 汇总写明 IVS 参数来源（DFPT / 冻声子 / 手填）   # 2026-10-18-0057r4   # [0057-r4] 分机制图超上限处画 ▲ 延伸；mu_scan 的 AMSET 点按载流子类型连细线   # [0057-r3] mu_scan：BT2 μ 带隙中央 ±5kT 内不给、κe 相减抵消到噪声（L < 0.1 L0）不画   # [0057-r2] temperature_series 相邻温度间色带填充 + 温度色标   # [0057-r1] 本征表 %.6g 浓度与 transport.json 掺杂档按相对 1e-4 配对（mu_scan 的 AMSET 点、分机制表的浓度列）；BT2 σ/τ=0 的点不画   # [0057] transport_plots 改版：phonon_limited_<段> -> transport_models_<段>；transport_<段> -> mobility_mechanisms_<段>（只画 μ，单机制 + 总值 + DPT）；datasets/ -> temperature_series/（蓝->红、分两段）；bt2_muscan/ + amset_scan/ -> mu_scan/（μ − E_VBM）；mechanism_resolved 去核对圆圈   # [0056] phonon-limited 掺杂扫描拆两段各一个文件夹（图 + 每温度表）：carrier_tuning_1e17-1e21 / low_doping_<NLO>-1e16，不再出整轴 <M>_phonon_limited.png；r2 <M>_transport.png 同样拆两段；r3 图注写明每条曲线的散射机制与缩写、刚性能带范围外灰底；r5 tools/make_transport_plots 直接调用本函数（统一算法），transport 图 μ 列加 DPT 带边横线（只画对应半边、标注在顶部空白）   # [0054] 与文献统一命名：去 IMP = phonon-limited（<M>_phonon_limited.png，原 <M>_intrinsic.png）、含 IMP = phonon + impurity、intrinsic 只指本征载流子；<M>_mechanism_resolved_mobility（原 dilute_mobility）；本征点按去 IMP 后机制去重；η=(E_c−E_F)/kT 判 f≈0   # [0053] intrinsic_carrier/<M>_dilute_mobility.png：稀薄极限（f≈0）μ(T) 按散射机制拆开 + Matthiessen 对照（空穴取 n = p 本征点，电子取最低 n 型去 IMP）   # [0052] transport_plots/ 每次整目录重建（先删旧结果）；intrinsic_carrier/ 标注本征浓度 n_i(T)（undoped_ni.json / fermi_fix 日志）；<M>_intrinsic.png 标题写明 intrinsic = 本征散射、横轴 = 掺杂浓度   # [0047] <M>_intrinsic.png 只画基础 4 条本征曲线（此前与 <M>_transport.png 同图仅换标题）+ intrinsic CSV 同步只含 4 条   # [0046] 本征五参数套件支持 3D（读 S8 的 step8_amset + subset_*.json；_geom_3d 体胞几何、c/t=1、对角 (xx+yy+zz)/3）；3D 也出 transport_plots/<M>_transport|<M>_intrinsic.png 9x5 面板   # [0045] bt2_muscan 同时画 thickness(我们)/cell(文献) 两种口径；[0041] transport_plots/defect_equilibrium/（缺陷平衡净浓度 σ/S/PF/κe vs T）   # 2026-10-13-0040   # [0040] transport_plots/intrinsic_carrier/（未掺杂本征载流子 σ/S/PF/κe vs T）；图例/文件名一律用实际机制组合 amset_<机制>；2026-10-13-0039   # [0039] transport_plots/datasets/：每个数据集单独一张 σ/S/PF/κe 图 + csv； [0038] 本征/子集图读 subset_*.json（SUBSETS）；[0036] transport_plots 加 bt2_muscan/ + amset_scan/ 两个扫描图子文件夹；[0035] transport_plots 合并 + τ 对比（tau/）
 #   bump 记录：2026-10-11-0035 —— transport_plots 合并：intrinsic 图并入 transport 图（4 条数据集
 #   overall / intrinsic / ADP only / BT2xDPT-tau），不再单独出 <M>_intrinsic*.{png,csv}，
 #   只留 <M>_transport.png + 每温度 CSV + <M>_params_<T>K.csv。
@@ -517,6 +517,30 @@ def _dpt_scope_lines(dpt):
     return out
 
 
+def _ivs_source_lines(cwd):
+    """[0059] 谷间散射（IVS）参数来源：按 S8.4 的 2d_correction.json / S8 的 dp_optical_3d.json 里通道的 source 判
+    DFPT（eph-qe-cpu ivs_dfpt）/ 冻声子 K↔K′（ivs_frozen）/ 手填。没开 IVS 的载流子不写。"""
+    out = []
+    for run, rec_name, tag in ((AMSET2D_DIR, "2d_correction.json", "S8.4"), (AMSET_DIR, "dp_optical_3d.json", "S8")):
+        rec = _load_json(Path(cwd) / run / rec_name) or {}
+        dp = rec.get("dp_optical") or {}
+        dft = rec.get("dp_optical_ivs_dfpt") or {}
+        for car in ("electron", "hole"):
+            chs = [c for c in ((dp.get(car) or {}).get("channels") or []) if c.get("kind") in ("inter", "inter_star")]
+            if not chs:
+                continue
+            src = {c.get("source") for c in chs}
+            if "dfpt_ivs" in src:
+                sha = str(dft.get("sha256") or "")[:12]
+                how = "DFPT（eph-qe-cpu ivs_dfpt，ivs_dfpt_params.json sha256 %s；零阶、非 SOC）" % (sha or "?")
+            elif "frozen_ivs" in src:
+                how = "冻声子 K↔K′ 零阶（ivs_frozen）" + ("＋手填 X>Y" if len(src) > 1 else "")
+            else:
+                how = "step.conf 手填（文献参数，报告里须注明出处）"
+            out.append("# [IVS 参数来源] %s %s：%s；%d 条通道" % (tag, car, how, len(chs)))
+    return out
+
+
 def _amset_mech_lines(cwd, is_2d, T=None):
     """[0024] AMSET 各散射机制单独的迁移率（每种载流子取 |掺杂| 最低一档、最接近 T 的温度）与限制因素。
     Matthiessen：1/μ ≈ Σ 1/μ_i，μ_i 最小的机制限制迁移率；"本征"不计 IMP（随掺杂变）。"""
@@ -985,6 +1009,7 @@ def write_table(out, rows, am, bt, dpt, am2=None):
                 if dpt.get("src_" + _c) == "multi_valley" else ""))
     lines += _dpt_scope_lines(dpt)                                     # [0024]
     lines += _amset_mech_lines(Path.cwd(), _read_dim(Path.cwd()) == "2d")
+    lines += _ivs_source_lines(Path.cwd())                             # [0059]
     if not _func:
         lines.append("# [口径] 泛函 = 未知（step1 的 workflow_method.txt 读不到）—— 先查 step1 INCAR 的 GGA/IVDW，"
                      "再和文献比")

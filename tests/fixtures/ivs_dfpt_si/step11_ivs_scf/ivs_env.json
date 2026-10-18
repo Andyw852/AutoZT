@@ -1,0 +1,20 @@
+{
+  "executables": {
+    "pw.x": "/opt/qe-7.4/bin/pw.x",
+    "ph.x": "/opt/qe-7.4/bin/ph.x"
+  },
+  "mpirun": "/usr/bin/mpirun",
+  "pseudo_dir": "/opt/pseudo",
+  "pseudos": {
+    "Si": {
+      "file": "Si_ONCV_PBE-1.2.upf",
+      "path": "/opt/pseudo/Si_ONCV_PBE-1.2.upf",
+      "exists": true,
+      "kind": "NC",
+      "sha256": "73d21061e1050ef8134ba50a20e61b9d0bcef98d0a9e0a110bbd076e47282eee"
+    }
+  },
+  "problems": [],
+  "ahc": "yes",
+  "ok": true
+}

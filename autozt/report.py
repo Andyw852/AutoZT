@@ -852,13 +852,17 @@ def _cluster_conda_step_conf(m, hpc_name=None):
     kenv = hpc.get("kl_env")      # kl-dft-cpu 声子(phono3py)专用环境名
     pdir = hpc.get("potcar_dir")          # VASP POTCAR 库根目录（VASP 技能）
     rdir = hpc.get("references_dir")      # 凸包参考相共享目录（defect 技能）
+    # [0059] eph-qe-cpu ivs_dfpt 的 QE：pw.x/ph.x 目录、模守恒赝势目录、作业开头的环境命令（module load / source …）
+    qbin = hpc.get("qe_bin")
+    qpse = hpc.get("qe_pseudo_dir")
+    qset = hpc.get("qe_setup")
     # 本机集群（ssh_host 为空，setting/local.yaml）里显式写空的 conda_sh/conda_env
     # = "用 PATH 里现成的 python"：要清掉技能 step.conf 里硬编码的集群 conda 路径，
     # 否则本机作业会去 source 一个不存在的 /public/.../conda.sh。
     _local = "ssh_host" in hpc and not hpc.get("ssh_host")
     clear = [k for k, y in (("CONDA_SH", "conda_sh"), ("CONDA_ENV", "conda_env"))
              if _local and y in hpc and not hpc.get(y)]
-    if not (sh or env or mdir or aenv or kenv or pdir or rdir or clear):
+    if not (sh or env or mdir or aenv or kenv or pdir or rdir or qbin or qpse or qset or clear):
         return None
     lines = ["[params]"]
     for k in clear:
@@ -877,6 +881,12 @@ def _cluster_conda_step_conf(m, hpc_name=None):
         lines.append("POTCAR_DIR = %s" % pdir)
     if rdir:
         lines.append("REFERENCES_DIR = %s" % rdir)
+    if qbin:
+        lines.append("QE_BIN = %s" % qbin)
+    if qpse:
+        lines.append("QE_PSEUDO_DIR = %s" % qpse)
+    if qset:
+        lines.append("QE_SETUP = %s" % qset)
     return "\n".join(lines) + "\n"
 
 def _drop_default_keys(mod, text, sdef):

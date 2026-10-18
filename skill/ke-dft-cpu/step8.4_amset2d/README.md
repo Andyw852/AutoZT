@@ -137,7 +137,10 @@ AMSET 只有 ADP / POP / IMP / PIE，**没有非极性光学声子（ODP）和�
 - 走 AMSET 的 basic 接口（每 k 点直接给率），不经四面体积分，几乎不增加耗时。
 
 **参数从哪来**：谷内 ODP 用冻声子法自动算（[0035]，见下一节「冻声子 ODP 参数」，不用文献；有算出来的值时手填的谷内值
-只作对照）；谷间 IVS 没有自动参数，只能手填文献值。`DP_OPTICAL_E/H` 就是**文献参数的接入入口**
+只作对照）；谷间 IVS 可以由 eph-qe-cpu 的可选组 `ivs_dfpt` 用 QE DFPT 直接算（[0059]，K↔K′、K↔Q、Q↔Q′ 等全部零阶通道，非 SOC）：
+结果 `ivs_dfpt_params.json` 拉回本地后对本步 retry，autozt 自动推到 `ivs_dfpt/`，`IVS_DFPT = auto`（出厂）就用它，优先级
+DFPT > 冻声子 K↔K′（`IVS_FROZEN`）> 手填（后两者只作对照，记进 `2d_correction.json` 的 `dp_optical_ivs_dfpt`）；
+`IVS_DFPT = off` 回到下面的手填。没有 DFPT 结果时谷间 IVS 只能手填文献值。`DP_OPTICAL_E/H` 就是**文献参数的接入入口**
 （ke-dft-cpu `METHODOLOGY.md` [0058]）：S8.2 多谷判"拒绝"的载流子（MoS₂/MoSe₂/WS₂/WSe₂ 的电子）不填谷间通道时迁移率偏高；
 MoS₂ 电子的推荐参数（Filipovic 2026，已按星平均换算）与"Jin 2014 的 K→Q 9.3 eV/Å 偏大、勿直接用"见该节。
 

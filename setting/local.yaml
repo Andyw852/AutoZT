@@ -37,3 +37,7 @@ vasp:
     ncl: vasp_ncl
 potcar_dir: ""               # VASP 赝势库根目录（含 PAW_PBE 等）；VASP 技能必填
 mlff_model_dir: ""           # MACE 模型目录（MLFF 技能必填）
+# ---- QE（eph-qe-cpu 的 ivs_dfpt 组，[0059]）：pw.x/ph.x 在 PATH 里就不用写 qe_bin ----
+qe_bin: ""                   # pw.x / ph.x 所在目录
+qe_pseudo_dir: ""            # 模守恒 UPF 目录（ivs_dfpt 必填）
+qe_setup: ""                 # 作业开头执行的命令（如 source 一个 conda 环境）

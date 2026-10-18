@@ -20,3 +20,7 @@ vasp:
 # ---- 赝势与模型（请自行准备，勿随代码分发）----
 potcar_dir: /path/to/potpaw_PBE
 mlff_model_dir: /path/to/mlff_models
+# ---- QE（eph-qe-cpu 的 ivs_dfpt 组，[0059]；不用可不写）----
+# qe_bin: ~/software/AutoZT/qe-7.4/bin        # pw.x / ph.x 所在目录（QE ≥ 6.7）
+# qe_pseudo_dir: ~/software/AutoZT/pseudo-nc  # 模守恒 UPF（AHC 不支持 USPP/PAW）
+# qe_setup: ""                                # 作业开头执行的命令（module load … / source …），可空

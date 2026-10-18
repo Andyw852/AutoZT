@@ -1,0 +1,19 @@
+{
+  "tol_meV": 30.0,
+  "mode": "error",
+  "nocc": 4,
+  "carriers": {
+    "electron": [
+      {
+        "label": "X",
+        "E_eV": 6.792061111863723,
+        "spread_meV": 1.5987211554602254e-11,
+        "dE_ref_eV": null,
+        "dE_qe_eV": 0.0
+      }
+    ]
+  },
+  "problems": [],
+  "warnings": [],
+  "status": "ok"
+}

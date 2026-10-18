@@ -1,7 +1,7 @@
 # 方案：用 QE DFPT 自动计算谷间散射（IVS）参数，接入 AMSET（2026-10-18）
 
-> 状态：**方案稿，未动代码**。用户 2026-10-18 要求出总体方案、交给其他执行者。
-> 按 AGENTS.md 铁律 10，给技能新增步骤/脚本属受控操作：执行方**动代码前**先把本方案里"待用户确认"的几项问给用户，得到同意再做。
+> 状态：**已实现（2026-10-18），等集群验证**。用户确认：A 放 eph-qe-cpu；B 同意新增步骤；C 与 DFPT 基准差 20–30% 以内算通过；
+> D 用 3090、先拿 Si 测（计算由用户跑）。实现与执行指南见第 9 节，方法与 M0 核实记录见 METHODOLOGY [0059]。
 > 背景与文献依据见 `skill/ke-dft-cpu/METHODOLOGY.md` [0058]。
 
 ---
@@ -187,3 +187,57 @@ S8.2 多谷判定结果：MoS₂、MoSe₂、WS₂、WSe₂ 的**电子**全部"
 - B. 是否同意给技能新增步骤（铁律 10）。M0、M1 不碰集群也不改 skill.yaml，可以先做。
 - C. 验收标准（第 5 节）是否认可，特别是"与 DFPT 基准差 20–30% 即通过"。
 - D. 集群与核数：jzzn 4 核测试模板只适合冒烟测试，正式 DFPT 用多少核、哪台机器。
+
+
+---
+
+## 9. 实施状态与执行指南（2026-10-18）
+
+**已完成**（M0、M1 与 M2–M6 的代码；集群计算由用户跑）：
+
+| 里程碑 | 状态 |
+|---|---|
+| M0 | 本机 conda QE 7.0 / 7.4 核实：AHC 矩阵元格式、量纲（冻声子有限差分四位一致）、本征矢口径（与 dynmat.x 重叠 = 1）；7.3 源码输出部分与 7.4 相同 |
+| M1 | `skill/_common/ivs/ivs_dfpt.py` + `tests/test_0059_ivs_dfpt.py`（含 Si 真实 QE 产物夹具） |
+| M2–M3 代码 | eph-qe-cpu 可选组 `ivs_dfpt`：S10_ivsq / S11_ivsscf / S12_ivsph（扇出 q-*）/ S13_ivs；Perturbo 链改成默认开的组 `perturbo` |
+| M4、M6 代码 | ke-dft-cpu S8.4 / S8 的 `IVS_DFPT`（auto/on/off）、push_paths、S8.3 来源标注 |
+| 待算 | Si（3090）→ MoS₂ → MoSe₂/WS₂/WSe₂；验收按第 5 节 |
+
+本机冒烟（Si，SG15 PBE、30 Ry、6³ k，2 个 q）：g 过程 LO 4.79 eV/Å @ 63.1 meV（TA/LA = 0），f 过程 2.73 @ 48.5、4.42 @ 58.4 meV；
+星通道 `X>X':2.141@63.06; X>X':2.443@48.48; X>X':3.953@58.40`。出厂参数（60 Ry、k 间距 0.2 Å⁻¹ → 11³）结果会略有不同。
+
+### 9.1 3090 上跑 Si（M2/M6）
+
+1. **装软件**（铁律 11）：
+   ```bash
+   micromamba create -p ~/software/AutoZT/qe-7.4 -c conda-forge qe=7.4     # 或自编 QE ≥ 6.7
+   mkdir -p ~/software/AutoZT/pseudo-nc && cd ~/software/AutoZT/pseudo-nc
+   wget http://www.quantum-simulation.org/potentials/sg15_oncv/upf/Si_ONCV_PBE-1.2.upf   # 或 PseudoDojo NC（PBEsol 版）
+   ```
+2. **集群配置** `setting/3090.yaml` 加：`qe_bin: ~/software/AutoZT/qe-7.4/bin`、`qe_pseudo_dir: ~/software/AutoZT/pseudo-nc`
+   （mpirun 不在 PATH 时加 `qe_setup: export PATH=~/software/AutoZT/qe-7.4/bin:$PATH`）。
+3. **材料配置**（与 ke-dft-cpu 的 Si 同一个材料目录，push_paths 才能互相找到结果）：
+   - 本材料 `tf_*.yaml` 的 `task_types.eph-qe-cpu` 下写 `ivs_dfpt: true`、`perturbo: false`；
+   - eph-qe-cpu 的项目级 `templates/step.conf` 写
+     `IVS_VALLEYS_E = X:0,0.425,0.425`、`IVS_PSEUDO_FILES = Si:Si_ONCV_PBE-1.2.upf`、`IVS_NP = <3090 给这个作业的核数>`；
+   - 切集群：`autozt -tt eph-qe-cpu -p Si hpc 3090`（改配置，请示）。
+4. **运行**（检查输入再提交）：
+   ```bash
+   autozt -tt eph-qe-cpu -p Si -j S10_ivsq start     # gen：谷对与 q 列表（Si 2 个 q）
+   autozt -tt eph-qe-cpu -p Si -j S11_ivsscf init    # 只生成输入，检查 scf.in / submit.sh
+   autozt -tt eph-qe-cpu -p Si -j S11_ivsscf start   # pw.x SCF + 谷能带 + 环境探针
+   autozt -tt eph-qe-cpu -p Si -j S12_ivsph start    # 每个 q：ph.x(DFPT) -> pw.x(nscf) -> ph.x(AHC)
+   autozt -tt eph-qe-cpu -p Si -j S13_ivs start      # 写 ivs_dfpt_params.json + ivs_dfpt_table.txt
+   ```
+   也可以 `autozt -tt eph-qe-cpu -p Si auto on` 让 monitor 推进。作业里实际调用的程序：S11 `pw.x`（scf、bands）+ `python3 ivs_qe_job.py`
+   （只用标准库）；S12 `ph.x`、`pw.x`、`ph.x`；S10/S13 是 gen（要 numpy）。
+5. **接进 ke-dft-cpu**：S13 结果拉回本地后 `autozt -tt ke-dft-cpu -p Si -j S8_kappa retry`（gen 时自动推 `ivs_dfpt_params.json`，
+   `IVS_DFPT=auto` 读取），检查后 `start`。看 `dp_optical_3d.json` 的 `dp_optical_ivs_dfpt` 与 comparison_summary.txt 的 `[IVS 参数来源]`。
+   验收：电子 μ(300 K) 从 ADP-only 约 2381 降到约 1400 的量级。
+
+### 9.2 之后的 MoS₂（M3–M5）
+
+谷表自动来自 ke-dft-cpu S8.2（push 到 `ivs_inputs/dpt_result.json`），不用手填。建议 PseudoDojo PBEsol NC（Mo 含半芯）、
+`IVS_ECUTWFC = 80`；k 网格 auto（12×12×1）。S11 自检 QE 的 K–Q 能差与 S8.2 的 129 meV 相差 ≤ 30 meV（超出就停，确认后可改
+`IVS_VALLEY_CHECK = warn`）。电子 6 个 q（K↔K′、K↔Q 近/远、Q↔Q′ 三种）。S13 后对 S8.4_amset2d retry；逐通道对照第 5 节的
+Filipovic Table S4/S8，端到端看 μ(300 K) 是否落在 150–280。

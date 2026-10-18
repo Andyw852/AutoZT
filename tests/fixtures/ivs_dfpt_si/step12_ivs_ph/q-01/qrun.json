@@ -1,0 +1,35 @@
+{
+ "id": 0,
+ "name": "q-01",
+ "q_frac": [
+  0.0,
+  0.15,
+  0.15
+ ],
+ "xq_2pi_alat": [
+  0.2121320344,
+  0.0,
+  0.0
+ ],
+ "k_frac": [
+  [
+   0.0,
+   0.425,
+   0.425
+  ]
+ ],
+ "nk": 1,
+ "nbnd": 12,
+ "ahc_nbndskip": 2,
+ "ahc_nbnd": 4,
+ "nat": 2,
+ "nocc": 4,
+ "prefix": "si2",
+ "classes": [
+  0
+ ],
+ "qlist_sha256": "e672fe7beb767d7d224857faacc465771210e919788ef5640323d141a153bf4c",
+ "scf_sha256": "cd101146d8a9ea380279466cd269d1e29bdd7f912a6378571a3637fb49224f53",
+ "ecutwfc": 30.0,
+ "tr2_ph": 0.0
+}
