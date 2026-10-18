@@ -43,7 +43,7 @@ from pathlib import Path
 # [SKILL_REV] 版本戳：写进 comparison_summary.txt。每次改本脚本逻辑后更新。
 #   陈旧副本已咬人三次（step12/step9b 盖戳后，step13 是最后一个没盖的），
 #   这里盖戳便于从产物反查到底跑的是哪份 skill 副本。
-_SKILL_REV = "2026-10-18-0057"   # [0057] transport_plots 改版：phonon_limited_<段> -> transport_models_<段>；transport_<段> -> mobility_mechanisms_<段>（只画 μ，单机制 + 总值 + DPT）；datasets/ -> temperature_series/（蓝->红、分两段）；bt2_muscan/ + amset_scan/ -> mu_scan/（μ − E_VBM）；mechanism_resolved 去核对圆圈   # [0056] phonon-limited 掺杂扫描拆两段各一个文件夹（图 + 每温度表）：carrier_tuning_1e17-1e21 / low_doping_<NLO>-1e16，不再出整轴 <M>_phonon_limited.png；r2 <M>_transport.png 同样拆两段；r3 图注写明每条曲线的散射机制与缩写、刚性能带范围外灰底；r5 tools/make_transport_plots 直接调用本函数（统一算法），transport 图 μ 列加 DPT 带边横线（只画对应半边、标注在顶部空白）   # [0054] 与文献统一命名：去 IMP = phonon-limited（<M>_phonon_limited.png，原 <M>_intrinsic.png）、含 IMP = phonon + impurity、intrinsic 只指本征载流子；<M>_mechanism_resolved_mobility（原 dilute_mobility）；本征点按去 IMP 后机制去重；η=(E_c−E_F)/kT 判 f≈0   # [0053] intrinsic_carrier/<M>_dilute_mobility.png：稀薄极限（f≈0）μ(T) 按散射机制拆开 + Matthiessen 对照（空穴取 n = p 本征点，电子取最低 n 型去 IMP）   # [0052] transport_plots/ 每次整目录重建（先删旧结果）；intrinsic_carrier/ 标注本征浓度 n_i(T)（undoped_ni.json / fermi_fix 日志）；<M>_intrinsic.png 标题写明 intrinsic = 本征散射、横轴 = 掺杂浓度   # [0047] <M>_intrinsic.png 只画基础 4 条本征曲线（此前与 <M>_transport.png 同图仅换标题）+ intrinsic CSV 同步只含 4 条   # [0046] 本征五参数套件支持 3D（读 S8 的 step8_amset + subset_*.json；_geom_3d 体胞几何、c/t=1、对角 (xx+yy+zz)/3）；3D 也出 transport_plots/<M>_transport|<M>_intrinsic.png 9x5 面板   # [0045] bt2_muscan 同时画 thickness(我们)/cell(文献) 两种口径；[0041] transport_plots/defect_equilibrium/（缺陷平衡净浓度 σ/S/PF/κe vs T）   # 2026-10-13-0040   # [0040] transport_plots/intrinsic_carrier/（未掺杂本征载流子 σ/S/PF/κe vs T）；图例/文件名一律用实际机制组合 amset_<机制>；2026-10-13-0039   # [0039] transport_plots/datasets/：每个数据集单独一张 σ/S/PF/κe 图 + csv； [0038] 本征/子集图读 subset_*.json（SUBSETS）；[0036] transport_plots 加 bt2_muscan/ + amset_scan/ 两个扫描图子文件夹；[0035] transport_plots 合并 + τ 对比（tau/）
+_SKILL_REV = "2026-10-18-0057r2"   # [0057-r2] temperature_series 相邻温度间色带填充 + 温度色标   # [0057-r1] 本征表 %.6g 浓度与 transport.json 掺杂档按相对 1e-4 配对（mu_scan 的 AMSET 点、分机制表的浓度列）；BT2 σ/τ=0 的点不画   # [0057] transport_plots 改版：phonon_limited_<段> -> transport_models_<段>；transport_<段> -> mobility_mechanisms_<段>（只画 μ，单机制 + 总值 + DPT）；datasets/ -> temperature_series/（蓝->红、分两段）；bt2_muscan/ + amset_scan/ -> mu_scan/（μ − E_VBM）；mechanism_resolved 去核对圆圈   # [0056] phonon-limited 掺杂扫描拆两段各一个文件夹（图 + 每温度表）：carrier_tuning_1e17-1e21 / low_doping_<NLO>-1e16，不再出整轴 <M>_phonon_limited.png；r2 <M>_transport.png 同样拆两段；r3 图注写明每条曲线的散射机制与缩写、刚性能带范围外灰底；r5 tools/make_transport_plots 直接调用本函数（统一算法），transport 图 μ 列加 DPT 带边横线（只画对应半边、标注在顶部空白）   # [0054] 与文献统一命名：去 IMP = phonon-limited（<M>_phonon_limited.png，原 <M>_intrinsic.png）、含 IMP = phonon + impurity、intrinsic 只指本征载流子；<M>_mechanism_resolved_mobility（原 dilute_mobility）；本征点按去 IMP 后机制去重；η=(E_c−E_F)/kT 判 f≈0   # [0053] intrinsic_carrier/<M>_dilute_mobility.png：稀薄极限（f≈0）μ(T) 按散射机制拆开 + Matthiessen 对照（空穴取 n = p 本征点，电子取最低 n 型去 IMP）   # [0052] transport_plots/ 每次整目录重建（先删旧结果）；intrinsic_carrier/ 标注本征浓度 n_i(T)（undoped_ni.json / fermi_fix 日志）；<M>_intrinsic.png 标题写明 intrinsic = 本征散射、横轴 = 掺杂浓度   # [0047] <M>_intrinsic.png 只画基础 4 条本征曲线（此前与 <M>_transport.png 同图仅换标题）+ intrinsic CSV 同步只含 4 条   # [0046] 本征五参数套件支持 3D（读 S8 的 step8_amset + subset_*.json；_geom_3d 体胞几何、c/t=1、对角 (xx+yy+zz)/3）；3D 也出 transport_plots/<M>_transport|<M>_intrinsic.png 9x5 面板   # [0045] bt2_muscan 同时画 thickness(我们)/cell(文献) 两种口径；[0041] transport_plots/defect_equilibrium/（缺陷平衡净浓度 σ/S/PF/κe vs T）   # 2026-10-13-0040   # [0040] transport_plots/intrinsic_carrier/（未掺杂本征载流子 σ/S/PF/κe vs T）；图例/文件名一律用实际机制组合 amset_<机制>；2026-10-13-0039   # [0039] transport_plots/datasets/：每个数据集单独一张 σ/S/PF/κe 图 + csv； [0038] 本征/子集图读 subset_*.json（SUBSETS）；[0036] transport_plots 加 bt2_muscan/ + amset_scan/ 两个扫描图子文件夹；[0035] transport_plots 合并 + τ 对比（tau/）
 #   bump 记录：2026-10-11-0035 —— transport_plots 合并：intrinsic 图并入 transport 图（4 条数据集
 #   overall / intrinsic / ADP only / BT2xDPT-tau），不再单独出 <M>_intrinsic*.{png,csv}，
 #   只留 <M>_transport.png + 每温度 CSV + <M>_params_<T>K.csv。
@@ -3140,6 +3140,14 @@ MECH_YCAP = 100.0      # 分机制图：单机制 μ 超过 总值/DPT 最大值
 T_COLORS = ("#2b6cb0", "#8e44ad", "#d7301f")   # 温度色带：低温蓝 -> 紫 -> 高温红（不经过浅色，白底上每条线都看得清）
 
 
+N_MATCH_RTOL = 1e-4   # 本征表按 %.6g 写浓度（相对误差 ≤ 5e-6），与 transport.json 全精度掺杂档按它配对；网格间距 ≥ ×1.5，不会配错
+
+
+def _same_n(a, b):
+    """[0057-r1] 两个带符号浓度是不是同一个掺杂档（本征表的 %.6g 舍入 vs transport.json 全精度）。"""
+    return bool(a) and bool(b) and (a < 0) == (b < 0) and abs(a - b) <= N_MATCH_RTOL * abs(a)
+
+
 def mobility_mechanism_rows(cwd, is_2d):
     """[0057] AMSET transport.json 的分机制迁移率（2D 面内平均 / 3D 对角平均）：
     [{"T_K", "n_cell_cm-3", "mu": {机制: μ 或 None}, "total": μ_overall 或 None}]（掺杂 0 点不要）。
@@ -3335,7 +3343,7 @@ def mu_scan_data(cwd, out, is_2d, T_want=MU_SCAN_T):
                 continue
             if abs(float(r["T_K"]) - T) > 1e-6 or r["dataset"] not in dict((d[0], 1) for d in MU_SCAN_SETS):
                 continue
-            i = next((q for q, x in enumerate(doping) if x and abs(x - n) <= 1e-9 * abs(x)), None)
+            i = next((q for q, x in enumerate(doping) if _same_n(x, n)), None)   # [0057-r1] 以前 1e-9：%.6g 舍入后全配不上
             if i is None:
                 continue
             ef = float(fl[i][k])
@@ -3358,8 +3366,11 @@ def mu_scan_data(cwd, out, is_2d, T_want=MU_SCAN_T):
                 continue
             typ = "n" if n < 0 else "p"
             tau = _bt2_tau(dpt_T, "electron" if typ == "n" else "hole")
+            sot = bt["sigma_over_tau"][i]
+            if not (sot == sot and sot > 0):
+                continue      # [0057-r1] 带隙深处 σ/τ 下溢成 0：BoltzTraP2 的 S 在那里是 0/0 的占位值（实测 MoS2 一段 S ≡ 0），不画
             S = bt["seebeck"][i]
-            sg = bt["sigma_over_tau"][i] * tau if tau else None
+            sg = sot * tau if tau else None
             kp = bt["kappa_e_over_tau"][i] * tau if tau else None
             bip = S == S and ((S > 0) if typ == "n" else (S < 0))
             r = {"mu_minus_VBM_eV": float(m) - bv, "mu_rel_efermi_eV": float(m), "n_cell_cm-3": float(n), "type": typ,
@@ -3717,7 +3728,7 @@ def write_transport_plots(cwd, out, is_2d, plots=None, M=None):
                 ax.set_xticks(xt)
                 ax.set_xticklabels(xtl, fontsize=6.5)
                 ax.axvline(0, color="0.55", lw=0.6, ls=":")
-                ax.grid(alpha=0.25, which="both", lw=0.4)
+                ax.grid(alpha=0.25, which="major", lw=0.4)
                 ax.set_title("%d K" % T, fontsize=10, fontweight="bold")
                 _shade(ax, _bad, nlo, _xe)
                 sub = [r for r in mm if abs(r["T_K"] - T) < 1e-6 and _in_rng(np.array([r["n_cell_cm-3"]]), rng)[0]]
@@ -3774,7 +3785,7 @@ def write_transport_plots(cwd, out, is_2d, plots=None, M=None):
             _pdir.mkdir(exist_ok=True)
             fig.savefig(_pdir / ("%s_%s_%s.png" % (M, MECH_PRE, _tag)), dpi=130)
             plt.close(fig)
-            _dose = {(round(float(r["T_K"]), 6), fnum(r["n_cell_cm-3"])): r for r in rows if r["dataset"] == "overall"}
+            _dose = [r for r in rows if r["dataset"] == "overall"]
             _mc = ["T_K", "type", "n_cell_cm-3", "n_2D_cm-2", "n_lit_cm-3", "carriers_per_atom", "in_interpret_range"]
             _hdr = _mc + ["mu_%s_only_cm2/Vs" % m for m in mechs] + ["mu_total_cm2/Vs", "mu_DPT_band_edge_cm2/Vs"]
             for T in temps:
@@ -3786,7 +3797,9 @@ def write_transport_plots(cwd, out, is_2d, plots=None, M=None):
                     for r in sorted((r for r in mm if abs(r["T_K"] - T) < 1e-6
                                      and _in_rng(np.array([r["n_cell_cm-3"]]), rng)[0]), key=lambda r: r["n_cell_cm-3"]):
                         typ = "n" if r["n_cell_cm-3"] < 0 else "p"
-                        d = dict(_dose.get((round(T, 6), r["n_cell_cm-3"])) or {}, T_K=T, type=typ,
+                        _dr = next((x for x in _dose if abs(float(x["T_K"]) - T) < 1e-6
+                                    and _same_n(fnum(x["n_cell_cm-3"]), r["n_cell_cm-3"])), {})
+                        d = dict(_dr, T_K=T, type=typ,
                                  **{"n_cell_cm-3": r["n_cell_cm-3"]})
                         w.writerow([d.get(c, "") for c in _mc] + ["" if r["mu"].get(m) is None else r["mu"][m] for m in mechs]
                                    + ["" if r["total"] is None else r["total"], _dp.get(typ, "")])
@@ -3837,6 +3850,43 @@ def write_transport_plots(cwd, out, is_2d, plots=None, M=None):
         # ---- [0039] 每个数据集单独一张 σ/S/PF/κe（随浓度，每温度一条线）----
         #   [0057] 用户 2026-10-18：目录 datasets/ -> temperature_series/；低温蓝、高温红；与主图一样按浓度分两段
         #   （<M>_<数据集>_carrier_tuning.png/.csv、<M>_<数据集>_low_doping.png/.csv，同一个文件夹）。
+        def _band(a, dd_r, col, nlo, tc):
+            """[0057-r2] 用户 2026-10-18「温度图更好看、类似阴影」：每个温度一条细线，相邻两温度之间按色带填充
+            （半透明），整组读成一条从蓝（低温）到红（高温）渐变的带子；n 型、p 型两支分开画。"""
+            byT = []
+            for T in temps:
+                dd = {fnum(r["n_cell_cm-3"]): fnum(r[col]) for r in dd_r if abs(float(r["T_K"]) - T) < 1e-6}
+                byT.append(dd)
+            for neg in (True, False):
+                ns = sorted({n for d in byT for n in d if (n < 0) == neg and n == n})
+                if len(ns) < 2:
+                    continue
+                xv = xs(np.array(ns), nlo)
+                ys = [np.array([d.get(n, np.nan) for n in ns], float) for d in byT]
+                if col != "S_uV/K":
+                    ys = [np.where(y > 0, y, np.nan) for y in ys]
+                for it in range(len(ys) - 1):
+                    ok = np.isfinite(ys[it]) & np.isfinite(ys[it + 1])
+                    if ok.sum() >= 2:
+                        a.fill_between(xv, ys[it], ys[it + 1], where=ok, color=tc(it + 0.5), alpha=0.28, lw=0,
+                                       interpolate=False)
+                for it, y in enumerate(ys):
+                    ok = np.isfinite(y)
+                    if ok.sum() >= 2:
+                        a.plot(xv[ok], y[ok], color=tc(it), lw=1.0, marker="o", ms=2.0)
+
+        def _cbar(fig, cmap):
+            """温度色标（代替 9 项图例）：横条，刻度 = 实际温度。"""
+            from matplotlib.cm import ScalarMappable
+            from matplotlib.colors import Normalize
+            sm = ScalarMappable(norm=Normalize(temps[0], temps[-1] if temps[-1] > temps[0] else temps[0] + 1), cmap=cmap)
+            cax = fig.add_axes([0.32, 0.115, 0.36, 0.035])
+            cb = fig.colorbar(sm, cax=cax, orientation="horizontal")
+            cb.set_ticks(temps)
+            cb.set_ticklabels(["%d" % t for t in temps])
+            cb.ax.tick_params(labelsize=7.5)
+            cb.set_label("T (K)   blue = low T, red = high T", fontsize=8.5)
+
         try:
             from matplotlib.colors import LinearSegmentedColormap
             _ddir = plots / TSERIES_DIR
@@ -3861,15 +3911,11 @@ def write_transport_plots(cwd, out, is_2d, plots=None, M=None):
                     if not dd_r:
                         continue
                     _bad = _bad_of(rng)
-                    _f, _axs = plt.subplots(1, len(_dq), figsize=(4.2 * len(_dq), 3.6), squeeze=False)
+                    _f, _axs = plt.subplots(1, len(_dq), figsize=(4.2 * len(_dq), 4.4), squeeze=False)
                     for jc, (col, ttl) in enumerate(_dq):
                         a = _axs[0][jc]
                         _shade(a, _bad, nlo, xt[-1] + 0.15)
-                        for it, T in enumerate(temps):
-                            dd = [r for r in dd_r if abs(float(r["T_K"]) - T) < 1e-6]
-                            n = np.array([fnum(r["n_cell_cm-3"]) for r in dd])
-                            y = np.array([fnum(r[col]) for r in dd])
-                            seg(a, n, y, nlo, color=_tc(it), lw=1.2, marker="o", ms=2.6)
+                        _band(a, dd_r, col, nlo, _tc)
                         a.set_title(ttl, fontsize=10)
                         a.set_xlim(xt[0] - 0.15, xt[-1] + 0.15); a.set_xticks(xt)
                         a.set_xticklabels(xtl, fontsize=6.5)
@@ -3880,11 +3926,10 @@ def write_transport_plots(cwd, out, is_2d, plots=None, M=None):
                             a.set_ylim(-slim, slim); a.axhline(0, color="k", lw=0.5)
                         else:
                             a.set_yscale("log")
-                    _hh = [Line2D([], [], color=_tc(it), lw=1.4, label="%d K" % T) for it, T in enumerate(temps)]
-                    _f.legend(handles=_hh, loc="lower center", ncol=min(9, len(_hh)), fontsize=8, frameon=False)
-                    _f.suptitle("%s  %s  -  %s, n = %s - %s cm$^{-3}$  (blue = low T, red = high T)"
+                    _f.suptitle("%s  %s  -  %s, n = %s - %s cm$^{-3}$"
                                 % (M, _LBL.get(ds, ds), _what[_tag], xtl[len(xtl) // 2], xtl[0]), fontsize=11)
-                    _f.tight_layout(rect=[0, 0.08, 1, 0.93])
+                    _f.tight_layout(rect=[0, 0.2, 1, 0.93])
+                    _cbar(_f, _cm)
                     _f.savefig(_ddir / ("%s_%s_%s.png" % (M, _fn, _tag)), dpi=130); plt.close(_f)
                     with open(_ddir / ("%s_%s_%s.csv" % (M, _fn, _tag)), "w", newline="") as fh:
                         w = csv.writer(fh)
