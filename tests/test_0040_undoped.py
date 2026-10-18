@@ -151,7 +151,7 @@ def test_intrinsic_fermi_matches_parabolic_bands():
 
 
 def test_dataset_files_named_by_mechanisms(tmp_path):
-    """[0040] datasets/ 文件名 = 实际机制组合；本征载流子图的图例也用 amset_<机制>。"""
+    """[0040] temperature_series/（原 datasets/）文件名 = 实际机制组合；本征载流子图的图例也用 amset_<机制>。"""
     pytest.importorskip("matplotlib")
     S = _s83()
     cwd = T32._material(tmp_path, doping0=True)
@@ -159,8 +159,8 @@ def test_dataset_files_named_by_mechanisms(tmp_path):
     out.mkdir()
     S.write_intrinsic_suite(out, cwd, True)
     S.write_transport_plots(cwd, out, True)
-    ddir = cwd.parent / "transport_plots" / "datasets"
-    names = sorted(p.name for p in ddir.glob("*.png"))
+    ddir = cwd.parent / "transport_plots" / "temperature_series"
+    names = sorted(p.name.replace("_carrier_tuning", "").replace("_low_doping", "") for p in ddir.glob("*.png"))
     assert "MoS2_ADP+POP.png" in names                       # 去 IMP 那套（S8.4 记的 intrinsic_labels）
     assert "MoS2_ADP.png" in names                           # 只 ADP
     assert "MoS2_ADP+IMP+POP.png" in names                   # 全机制（transport.json 的 mobility 键）

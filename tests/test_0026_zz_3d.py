@@ -33,7 +33,7 @@ L0 = 2.44e-8
 NELECT, VOL_BOHR3 = 8.0, 300.0
 T300 = 300.0
 
-BT2_2D_KEYS = ["scissor", "temperatures_K", "mu_rel_efermi_eV", "cell_volume_cm3", "nelect",
+BT2_2D_KEYS = ["scissor", "band_edges_rel_efermi_eV", "temperatures_K", "mu_rel_efermi_eV", "cell_volume_cm3", "nelect",
                "sigma_over_tau_S_per_m_s", "seebeck_V_per_K", "kappa_e_over_tau_W_per_m_K_s",
                "sigma_over_tau_xx", "sigma_over_tau_yy", "seebeck_xx_V_per_K", "seebeck_yy_V_per_K",
                "kappa_e_over_tau_xx", "kappa_e_over_tau_yy", "power_factor_over_tau", "lorenz_WOhm_per_K2",

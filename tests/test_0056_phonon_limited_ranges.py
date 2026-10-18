@@ -1,6 +1,7 @@
-"""[0056] S8.3 transport / phonon-limited 掺杂扫描按浓度拆两段，各一个文件夹（图 + 每温度表）：
-<前缀>_carrier_tuning_1e17-1e21/（载流子调控区）与 <前缀>_low_doping_<NLO>-1e16/（低浓度段，有 DOPING_LOW 才有）。
-合成 intrinsic_transport_table.csv + transport.json 掺杂网格，纯本地。"""
+"""[0056][0057] S8.3 掺杂扫描按浓度拆两段，各一个文件夹（图 + 每温度表）：
+<前缀>_carrier_tuning_1e17-1e21/（载流子调控区）与 <前缀>_low_doping_<NLO>-1e16/（低浓度段，有 DOPING_LOW 才有）；
+[0057] 前缀 transport_models（原 phonon_limited，基础 4 条 x 5 参数）与 mobility_mechanisms（原 transport，只画 μ：
+单机制 + 总值 + DPT 带边）。合成 intrinsic_transport_table.csv + transport.json，纯本地。"""
 import csv
 import importlib.util
 import json
@@ -38,7 +39,15 @@ def _material(tmp_path, dop):
     (out / "intrinsic").mkdir(parents=True)
     (cwd / "step8.4_amset2d").mkdir()
     grid = sorted([-x for x in dop] + [0.0] + dop)
-    (cwd / "step8.4_amset2d" / "transport.json").write_text(json.dumps({"doping": grid, "temperatures": [300.0]}))
+    temps = [300.0, 600.0]
+
+    def _t(f):                                       # [nd][nT][3][3]，面内各向同性
+        return [[[[f(n, T), 0, 0], [0, f(n, T), 0], [0, 0, 0]] for T in temps] for n in grid]
+    mob = {"ADP": _t(lambda n, T: 500.0 * 300 / T), "POP": _t(lambda n, T: 300.0 * 300 / T),
+           "IMP": _t(lambda n, T: 1e3 * (1e21 / max(abs(n), 1.0)) ** 0.5),
+           "overall": _t(lambda n, T: 1.0 / (T / 150000 + T / 90000 + 1.0 / (1e3 * (1e21 / max(abs(n), 1.0)) ** 0.5)))}
+    (cwd / "step8.4_amset2d" / "transport.json").write_text(json.dumps(
+        {"doping": grid, "temperatures": temps, "mobility": mob}))
     with open(out / "intrinsic" / "intrinsic_transport_table.csv", "w", newline="") as fh:
         w = csv.writer(fh)
         w.writerow(COLS)
@@ -61,23 +70,26 @@ def test_two_folders_with_low_doping(tmp_path):
     cwd, out = _material(tmp_path, LOW + HIGH)
     g.write_transport_plots(cwd, out, True)
     tp = cwd / "transport_plots"
-    hi = tp / "phonon_limited_carrier_tuning_1e17-1e21"
-    lo = tp / "phonon_limited_low_doping_1e10-1e16"
-    assert (hi / "MoS2_phonon_limited_carrier_tuning.png").is_file()
-    assert (lo / "MoS2_phonon_limited_low_doping.png").is_file()
+    hi = tp / "transport_models_carrier_tuning_1e17-1e21"
+    lo = tp / "transport_models_low_doping_1e10-1e16"
+    assert (hi / "MoS2_transport_models_carrier_tuning.png").is_file()
+    assert (lo / "MoS2_transport_models_low_doping.png").is_file()
     for T in (300, 600):
-        assert _ns(hi / ("MoS2_phonon_limited_carrier_tuning_%dK.csv" % T)) == HIGH
-        assert _ns(lo / ("MoS2_phonon_limited_low_doping_%dK.csv" % T)) == LOW   # 本征点 n = 0 不进任何一段
-    assert not list(tp.glob("MoS2_phonon_limited*")) and not list(tp.glob("MoS2_transport*"))   # 整轴旧图/旧表不再出
-    thi = tp / "transport_carrier_tuning_1e17-1e21"
-    tlo = tp / "transport_low_doping_1e10-1e16"
-    assert (thi / "MoS2_transport_carrier_tuning.png").is_file()
-    assert (tlo / "MoS2_transport_low_doping.png").is_file()
-    rows = list(csv.DictReader((thi / "MoS2_transport_carrier_tuning_300K.csv").read_text().splitlines()))
-    assert "ADP_POP" in {r["dataset"] for r in rows}            # transport 表含机制对照数据集
+        assert _ns(hi / ("MoS2_transport_models_carrier_tuning_%dK.csv" % T)) == HIGH
+        assert _ns(lo / ("MoS2_transport_models_low_doping_%dK.csv" % T)) == LOW   # 本征点 n = 0 不进任何一段
+    assert not list(tp.glob("MoS2_*.png"))                    # 整轴旧图不再出
+    assert not list(tp.glob("phonon_limited_*")) and not list(tp.glob("transport_carrier*"))   # [0057] 旧目录名不再出
+    mhi = tp / "mobility_mechanisms_carrier_tuning_1e17-1e21"
+    mlo = tp / "mobility_mechanisms_low_doping_1e10-1e16"
+    assert (mhi / "MoS2_mobility_mechanisms_carrier_tuning.png").is_file()
+    assert (mlo / "MoS2_mobility_mechanisms_low_doping.png").is_file()
+    rows = list(csv.DictReader((mhi / "MoS2_mobility_mechanisms_carrier_tuning_300K.csv").read_text().splitlines()))
+    assert {"mu_ADP_only_cm2/Vs", "mu_POP_only_cm2/Vs", "mu_IMP_only_cm2/Vs", "mu_total_cm2/Vs"} <= set(rows[0])
     assert sorted({abs(float(r["n_cell_cm-3"])) for r in rows}) == HIGH
-    rows = list(csv.DictReader((tlo / "MoS2_transport_low_doping_300K.csv").read_text().splitlines()))
+    assert float(rows[0]["mu_ADP_only_cm2/Vs"]) == pytest.approx(500.0)
+    rows = list(csv.DictReader((mlo / "MoS2_mobility_mechanisms_low_doping_600K.csv").read_text().splitlines()))
     assert sorted({abs(float(r["n_cell_cm-3"])) for r in rows}) == LOW
+    assert float(rows[0]["mu_ADP_only_cm2/Vs"]) == pytest.approx(250.0)
 
 
 def test_only_carrier_tuning_without_low_doping(tmp_path):
@@ -85,8 +97,8 @@ def test_only_carrier_tuning_without_low_doping(tmp_path):
     cwd, out = _material(tmp_path, HIGH)
     g.write_transport_plots(cwd, out, True)
     tp = cwd / "transport_plots"
-    assert sorted(p.name for p in tp.glob("phonon_limited_*")) == ["phonon_limited_carrier_tuning_1e17-1e21"]
-    assert sorted(p.name for p in tp.glob("transport_*")) == ["transport_carrier_tuning_1e17-1e21"]
+    assert sorted(p.name for p in tp.glob("transport_models_*")) == ["transport_models_carrier_tuning_1e17-1e21"]
+    assert sorted(p.name for p in tp.glob("mobility_mechanisms_*")) == ["mobility_mechanisms_carrier_tuning_1e17-1e21"]
 
 
 def test_range_axes():
@@ -130,7 +142,7 @@ def test_tool_is_s83(tmp_path):
     assert a == b and a
     for rel in a:
         assert (tp / rel).read_text() == (od / rel).read_text(), rel
-    assert (od / "transport_carrier_tuning_1e17-1e21" / "MoS2_transport_carrier_tuning.png").is_file()
+    assert (od / "mobility_mechanisms_carrier_tuning_1e17-1e21" / "MoS2_mobility_mechanisms_carrier_tuning.png").is_file()
 
 
 def test_tool_skips_without_s83_table(tmp_path):
@@ -141,7 +153,8 @@ def test_tool_skips_without_s83_table(tmp_path):
 
 
 def test_dpt_lines_half_side_and_label_headroom(tmp_path):
-    """DPT 带边 μ：电子线只在左半（x ≤ 0）、空穴只在右半（x ≥ 0）；μ 轴顶部留空白放标注，曲线不进标注区。"""
+    """DPT 带边 μ：电子线只在左半（x ≤ 0）、空穴只在右半（x ≥ 0）；μ 轴顶部留空白放标注，曲线不进标注区
+    （[0057] 在 mobility_mechanisms 图里；低浓度 IMP 远超总值的部分不画，也不能顶进标注区）。"""
     g = _s83()
     cwd, out = _material(tmp_path, LOW + HIGH)
     _add_dpt_rows(out)
@@ -150,8 +163,8 @@ def test_dpt_lines_half_side_and_label_headroom(tmp_path):
     orig = mf.Figure.savefig
 
     def spy(self, *a, **k):
-        if "transport_carrier_tuning" in str(a[0]):
-            got.append(self.axes[0])                  # 第一行第一列 = μ
+        if "mobility_mechanisms_carrier_tuning" in str(a[0]):
+            got.append(self.axes[0])                  # 第一个温度的面板
         return orig(self, *a, **k)
     mf.Figure.savefig = spy
     try:

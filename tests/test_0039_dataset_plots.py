@@ -1,4 +1,4 @@
-"""[0039] S8.3 transport_plots/datasets/：每个数据集（overall / intrinsic / ADP only / 子集 / BT2）单独一张
+"""[0039][0057] S8.3 transport_plots/temperature_series/（[0057] 前叫 datasets/）：每个数据集（overall / intrinsic / ADP only / 子集 / BT2）单独一张
 σ、S、PF、κe 随浓度图（每温度一条线）+ 同名 csv。合成 intrinsic_transport_table.csv，纯本地。"""
 import csv
 import importlib.util
@@ -46,24 +46,25 @@ def test_one_figure_per_dataset(tmp_path):
     g = _s83()
     cwd, out = _material(tmp_path, ["overall", "intrinsic", "ADP_only", "BT2_DPTtau"])
     g.write_transport_plots(cwd, out, True)
-    ddir = cwd / "transport_plots" / "datasets"
+    ddir = cwd / "transport_plots" / "temperature_series"
     for ds, fn in (("overall", "overall"), ("intrinsic", "intrinsic"), ("ADP_only", "ADP_only"),
                    ("BT2_DPTtau", "BT2_DPTtau")):
-        assert (ddir / ("MoS2_%s.png" % fn)).is_file(), ds          # 没有 S8.4 机制信息时退回数据集键
-        rows = (ddir / ("MoS2_%s.csv" % fn)).read_text().splitlines()
+        assert (ddir / ("MoS2_%s_carrier_tuning.png" % fn)).is_file(), ds   # 没有 S8.4 机制信息时退回数据集键
+        assert not (ddir / ("MoS2_%s_low_doping.png" % fn)).exists()       # 没有低浓度段
+        rows = (ddir / ("MoS2_%s_carrier_tuning.csv" % fn)).read_text().splitlines()
         assert rows[0].startswith("# dataset=%s" % ds)
         assert rows[1].split(",")[:3] == ["T_K", "type", "n_cell_cm-3"]
         assert len(rows) == 2 + 2 * 6                      # 2 温度 x 6 浓度
-    assert (cwd / "transport_plots" / "transport_carrier_tuning_1e17-1e21"
-            / "MoS2_transport_carrier_tuning.png").is_file()   # [0056] 主图按浓度分段进文件夹
+    assert (cwd / "transport_plots" / "transport_models_carrier_tuning_1e17-1e21"
+            / "MoS2_transport_models_carrier_tuning.png").is_file()   # [0056][0057] 主图按浓度分段进文件夹
 
 
 def test_stale_dataset_removed(tmp_path):
     g = _s83()
     cwd, out = _material(tmp_path, ["overall", "intrinsic", "ADP_only"])
-    ddir = cwd / "transport_plots" / "datasets"
+    ddir = cwd / "transport_plots" / "temperature_series"
     ddir.mkdir(parents=True)
-    (ddir / "MoS2_ADP_POP.png").write_bytes(b"old")
+    (ddir / "MoS2_ADP_POP_carrier_tuning.png").write_bytes(b"old")
     g.write_transport_plots(cwd, out, True)
-    assert not (ddir / "MoS2_ADP_POP.png").exists()
-    assert (ddir / "MoS2_intrinsic.png").is_file()
+    assert not (ddir / "MoS2_ADP_POP_carrier_tuning.png").exists()
+    assert (ddir / "MoS2_intrinsic_carrier_tuning.png").is_file()
