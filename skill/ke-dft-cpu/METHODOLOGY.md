@@ -324,6 +324,18 @@ step8.x 的 `_SKILL_REV` 写进 comparison_summary.txt。改脚本即提交 GitH
 - `datasets/`、`amset_scan/` 仍用整轴，不变。`tools/make_transport_plots.py` 同步（它的 transport 图是 DPT 路线 +
   AMSET phonon + impurity + ADP only；低浓度段 σ/PF/κe 纵轴改自动范围）。
 
+- **r3（2026-10-18 用户要求）图注**：四张分段图底部加图注 —— 每条曲线 = 哪种计算 + 用了哪些散射机制
+  （phonon + impurity = 本轮 transport.json 全部机制；phonon-limited = 去 IMP 的子集；ADP only；BT2×DPT-τ =
+  BoltzTraP2 常弛豫时间、τ 取 DPT 的 Bardeen–Shockley 值，只含声学形变势），并给出现过的机制缩写全称
+  （ADP/POP/ODP/IVS/IMP/PIE）。刚性能带近似不成立的浓度（本征表 `in_interpret_range = NO`，每原子载流子数 >
+  阈值，与 S8.4 同判据）灰底标出；以前 9×5 图不标，最外侧（最高浓度）那几档看起来像"数据有问题"，其实是这条判据外。
+  载流子调控段上限由 ∞ 改为轴端 1e21（轴外的点不再画出边框）。独立脚本的旧图例 `DPT route` / `DPT band-edge e- h+`
+  改为 `BT2×DPT-τ` / `DPT μ, electrons|holes (band edge)`，图注说明横线 = Bardeen–Shockley 带边迁移率
+  μ = eτ/m*，每个载流子、每个温度一个数，与浓度无关。
+- **化学势 μ 与浓度 n**：BoltzTraP2 扫化学势，每个 μ 由插值能带的 DOS 算净载流子 n(μ, T) =
+  (N(μ, T) + nelect)/V_cell（N 为 −∫DOS·f dE，负 = 电子）；固定 T 下一一对应、单调。S8.3 的 BT2×DPT-τ 曲线把
+  BT2 的 (n, 输运量) 在同号支上对 log|n| 插值到 AMSET 的掺杂档（不外推）。
+
 ## [0055] 低浓度段 DOPING_LOW（2026-10-16 用户要求）
 
 - **为什么**：出厂掺杂网格 3D 1e17–1e21 cm⁻³、2D 1e11–1e14 cm⁻²，和本征点（n = p）之间空着好几个十年；

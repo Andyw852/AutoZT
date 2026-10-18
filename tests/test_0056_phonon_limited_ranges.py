@@ -138,3 +138,40 @@ def test_tool_transport_split(tmp_path):
     assert len(lo) == 1
     rows = list(csv.reader((lo[0] / "MoS2_transport_low_doping_300K.csv").read_text().splitlines()))[1:]
     assert rows and max(abs(float(r[3])) for r in rows) <= 1e16 * 1.001
+
+
+def test_mech_caption_lists_mechanisms():
+    g = _s83()
+    meta = {"overall_labels": ["ADP", "IMP", "POP", "ODP"],
+            "sets": {"intrinsic": {"labels": ["ADP", "POP", "ODP"]}, "ADP_only": {"labels": ["ADP"]}}}
+    lab = {"overall": "phonon + impurity (ADP+IMP+POP+ODP)", "intrinsic": "phonon-limited (ADP+POP+ODP)",
+           "ADP_only": "ADP only (acoustic limit)", "BT2_DPTtau": "BT2×DPT-τ"}
+    ds = [(k, "", "", "") for k in ("overall", "intrinsic", "ADP_only", "BT2_DPTtau")]
+    cap = g._mech_caption(ds, meta, lab)
+    assert cap[0] == "phonon + impurity: AMSET, ADP+IMP+POP+ODP (all mechanisms of this run)"
+    assert cap[1] == "phonon-limited: AMSET, ADP+POP+ODP (IMP removed)"
+    assert "Bardeen-Shockley" in cap[3]
+    assert cap[4].startswith("ADP = ") and "IMP = ionized impurity" in cap[4] and "ODP = " in cap[4]
+
+
+def test_gray_shading_for_rigid_band_limit(tmp_path):
+    """in_interpret_range = NO 的档画灰底（只验证不崩、图注里有 Gray 说明）。"""
+    g = _s83()
+    cwd, out = _material(tmp_path, LOW + HIGH)
+    tab = out / "intrinsic" / "intrinsic_transport_table.csv"
+    rows = list(csv.DictReader(tab.read_text().splitlines()))
+    for r in rows:
+        r["in_interpret_range"] = "NO" if abs(float(r["n_cell_cm-3"])) >= 1e20 else "yes"
+    with open(tab, "w", newline="") as fh:
+        w = csv.DictWriter(fh, fieldnames=list(rows[0].keys()))
+        w.writeheader()
+        w.writerows(rows)
+    seen = []
+    import matplotlib.figure as mf
+    orig = mf.Figure.text
+    mf.Figure.text = lambda self, *a, **k: (seen.append(a[2]), orig(self, *a, **k))[1]
+    try:
+        g.write_transport_plots(cwd, out, True)
+    finally:
+        mf.Figure.text = orig
+    assert any("Gray: beyond rigid-band range" in t for t in seen)
