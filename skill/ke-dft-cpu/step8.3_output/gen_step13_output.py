@@ -43,7 +43,7 @@ from pathlib import Path
 # [SKILL_REV] 版本戳：写进 comparison_summary.txt。每次改本脚本逻辑后更新。
 #   陈旧副本已咬人三次（step12/step9b 盖戳后，step13 是最后一个没盖的），
 #   这里盖戳便于从产物反查到底跑的是哪份 skill 副本。
-_SKILL_REV = "2026-10-17-0056"   # [0056] phonon-limited 掺杂扫描拆两段各一个文件夹（图 + 每温度表）：carrier_tuning_1e17-1e21 / low_doping_<NLO>-1e16，不再出整轴 <M>_phonon_limited.png；r2 <M>_transport.png 同样拆两段；r3 图注写明每条曲线的散射机制与缩写、刚性能带范围外灰底；r5 tools/make_transport_plots 直接调用本函数（统一算法），transport 图 μ 列加 DPT 带边横线（只画对应半边、标注在顶部空白）   # [0054] 与文献统一命名：去 IMP = phonon-limited（<M>_phonon_limited.png，原 <M>_intrinsic.png）、含 IMP = phonon + impurity、intrinsic 只指本征载流子；<M>_mechanism_resolved_mobility（原 dilute_mobility）；本征点按去 IMP 后机制去重；η=(E_c−E_F)/kT 判 f≈0   # [0053] intrinsic_carrier/<M>_dilute_mobility.png：稀薄极限（f≈0）μ(T) 按散射机制拆开 + Matthiessen 对照（空穴取 n = p 本征点，电子取最低 n 型去 IMP）   # [0052] transport_plots/ 每次整目录重建（先删旧结果）；intrinsic_carrier/ 标注本征浓度 n_i(T)（undoped_ni.json / fermi_fix 日志）；<M>_intrinsic.png 标题写明 intrinsic = 本征散射、横轴 = 掺杂浓度   # [0047] <M>_intrinsic.png 只画基础 4 条本征曲线（此前与 <M>_transport.png 同图仅换标题）+ intrinsic CSV 同步只含 4 条   # [0046] 本征五参数套件支持 3D（读 S8 的 step8_amset + subset_*.json；_geom_3d 体胞几何、c/t=1、对角 (xx+yy+zz)/3）；3D 也出 transport_plots/<M>_transport|<M>_intrinsic.png 9x5 面板   # [0045] bt2_muscan 同时画 thickness(我们)/cell(文献) 两种口径；[0041] transport_plots/defect_equilibrium/（缺陷平衡净浓度 σ/S/PF/κe vs T）   # 2026-10-13-0040   # [0040] transport_plots/intrinsic_carrier/（未掺杂本征载流子 σ/S/PF/κe vs T）；图例/文件名一律用实际机制组合 amset_<机制>；2026-10-13-0039   # [0039] transport_plots/datasets/：每个数据集单独一张 σ/S/PF/κe 图 + csv； [0038] 本征/子集图读 subset_*.json（SUBSETS）；[0036] transport_plots 加 bt2_muscan/ + amset_scan/ 两个扫描图子文件夹；[0035] transport_plots 合并 + τ 对比（tau/）
+_SKILL_REV = "2026-10-18-0057"   # [0057] transport_plots 改版：phonon_limited_<段> -> transport_models_<段>；transport_<段> -> mobility_mechanisms_<段>（只画 μ，单机制 + 总值 + DPT）；datasets/ -> temperature_series/（蓝->红、分两段）；bt2_muscan/ + amset_scan/ -> mu_scan/（μ − E_VBM）；mechanism_resolved 去核对圆圈   # [0056] phonon-limited 掺杂扫描拆两段各一个文件夹（图 + 每温度表）：carrier_tuning_1e17-1e21 / low_doping_<NLO>-1e16，不再出整轴 <M>_phonon_limited.png；r2 <M>_transport.png 同样拆两段；r3 图注写明每条曲线的散射机制与缩写、刚性能带范围外灰底；r5 tools/make_transport_plots 直接调用本函数（统一算法），transport 图 μ 列加 DPT 带边横线（只画对应半边、标注在顶部空白）   # [0054] 与文献统一命名：去 IMP = phonon-limited（<M>_phonon_limited.png，原 <M>_intrinsic.png）、含 IMP = phonon + impurity、intrinsic 只指本征载流子；<M>_mechanism_resolved_mobility（原 dilute_mobility）；本征点按去 IMP 后机制去重；η=(E_c−E_F)/kT 判 f≈0   # [0053] intrinsic_carrier/<M>_dilute_mobility.png：稀薄极限（f≈0）μ(T) 按散射机制拆开 + Matthiessen 对照（空穴取 n = p 本征点，电子取最低 n 型去 IMP）   # [0052] transport_plots/ 每次整目录重建（先删旧结果）；intrinsic_carrier/ 标注本征浓度 n_i(T)（undoped_ni.json / fermi_fix 日志）；<M>_intrinsic.png 标题写明 intrinsic = 本征散射、横轴 = 掺杂浓度   # [0047] <M>_intrinsic.png 只画基础 4 条本征曲线（此前与 <M>_transport.png 同图仅换标题）+ intrinsic CSV 同步只含 4 条   # [0046] 本征五参数套件支持 3D（读 S8 的 step8_amset + subset_*.json；_geom_3d 体胞几何、c/t=1、对角 (xx+yy+zz)/3）；3D 也出 transport_plots/<M>_transport|<M>_intrinsic.png 9x5 面板   # [0045] bt2_muscan 同时画 thickness(我们)/cell(文献) 两种口径；[0041] transport_plots/defect_equilibrium/（缺陷平衡净浓度 σ/S/PF/κe vs T）   # 2026-10-13-0040   # [0040] transport_plots/intrinsic_carrier/（未掺杂本征载流子 σ/S/PF/κe vs T）；图例/文件名一律用实际机制组合 amset_<机制>；2026-10-13-0039   # [0039] transport_plots/datasets/：每个数据集单独一张 σ/S/PF/κe 图 + csv； [0038] 本征/子集图读 subset_*.json（SUBSETS）；[0036] transport_plots 加 bt2_muscan/ + amset_scan/ 两个扫描图子文件夹；[0035] transport_plots 合并 + τ 对比（tau/）
 #   bump 记录：2026-10-11-0035 —— transport_plots 合并：intrinsic 图并入 transport 图（4 条数据集
 #   overall / intrinsic / ADP only / BT2xDPT-tau），不再单独出 <M>_intrinsic*.{png,csv}，
 #   只留 <M>_transport.png + 每温度 CSV + <M>_params_<T>K.csv。
@@ -401,6 +401,7 @@ def load_bt2(cwd, T=None):
         # step8.1 修正后 carrier_conc 已是 amset 约定（负=n型电子、正=p型空穴），不再取负
         n_signed = list(carr[iT])
         res = {"T_used": temps[iT], "n_signed": n_signed,
+               "mu_rel": j.get("mu_rel_efermi_eV"),                       # [0057] 化学势网格（eV，相对 S8.1 的 E_F 零点）
                "seebeck": [v * 1e6 for v in j["seebeck_V_per_K"][iT]],  # V/K→µV/K
                "lorenz": j["lorenz_WOhm_per_K2"][iT],
                "sigma_over_tau": j["sigma_over_tau_S_per_m_s"][iT],
@@ -3029,11 +3030,8 @@ def write_mechanism_resolved_plot(cwd, plots, M, is_2d):
             if pts:
                 ax.plot(*zip(*pts), label=("Matthiessen $(\\sum 1/\\mu_i)^{-1}$" if m == MATTHIESSEN
                                            else "phonon-limited total (no IMP)"), **kw)
-        chk = sorted((r["T_K"], r["mu_cm2/Vs"]) for r in rc if r["role"] == "check")
-        if chk:
-            src = next(r["source"] for r in rc if r["role"] == "check")
-            ax.plot(*zip(*chk), ls="none", marker="o", ms=7, mfc="none", mec="k", mew=0.8,
-                    label="check: total @ %s" % src)
+        # [0057] 用户 2026-10-18：核对点（相邻掺杂档的同一总值）不再画圆圈 —— 只留在 CSV（role = check）
+        #   与上面的 WARN（相差 > DILUTE_CHECK_TOL 才打）。
         r0 = next(r for r in rc if r["role"] == "main")
         if r0["source"].startswith("n = p"):
             where = "n = p (undoped, E_F mid-gap)"
@@ -3047,10 +3045,11 @@ def write_mechanism_resolved_plot(cwd, plots, M, is_2d):
         ax.set_ylabel("mobility (cm$^2$/Vs)" + (", in-plane" if is_2d else ""))
         ax.grid(alpha=0.25, lw=0.4)
         ax.legend(fontsize=7, loc="best", framealpha=0.85)
-    fig.suptitle("%s  mechanism-resolved phonon-limited mobility, dilute limit (f ≈ 0) — AMSET RTA "
-                 "(thermal average; Matthiessen sum is an upper bound; shaded: eta < %g, not dilute)"
-                 % (M, DILUTE_ETA_MIN), fontsize=10)
-    fig.tight_layout(rect=[0, 0, 1, 0.94])
+    fig.suptitle("%s  mechanism-resolved phonon-limited mobility, dilute limit (f ≈ 0) — AMSET RTA;"
+                 " shaded: $\\eta$ < %g (not dilute)\n"
+                 "black = all phonon mechanisms together; dotted = Matthiessen sum $(\\sum 1/\\mu_i)^{-1}$"
+                 " of the dashed curves (upper bound)" % (M, DILUTE_ETA_MIN), fontsize=9.5)
+    fig.tight_layout(rect=[0, 0, 1, 0.93])
     fig.savefig(udir / ("%s_%s.png" % (M, MECH_RES_NAME)), dpi=130)
     plt.close(fig)
     cols = ["T_K", "carrier", "role", "source", "doping_cm3"] + (["n_2D_cm-2"] if is_2d else []) + [
@@ -3128,6 +3127,48 @@ def _phonon_limited_ranges(NLO, n_top=1e21):
     return out
 
 
+# [0057] 2026-10-18 用户定的 transport_plots 子目录名（按浓度两段各一个文件夹的那几组）：
+#   transport_models_<段>/     原 phonon_limited_<段>/：基础 4 条（phonon + impurity / phonon-limited / ADP only /
+#                              BT2×DPT-τ）× μ、S、σ、PF、κe
+#   mobility_mechanisms_<段>/  原 transport_<段>/：只画 μ，按散射机制拆开（单机制 μ + 总值 + DPT 带边）
+#   temperature_series/        原 datasets/：每个数据集一张、每温度一条线（低温蓝 -> 高温红），同样分两段
+#   mu_scan/                   原 bt2_muscan/ + amset_scan/：600 K，横轴 μ − E_VBM
+MODELS_PRE, MECH_PRE = "transport_models", "mobility_mechanisms"
+TSERIES_DIR = "temperature_series"
+MU_SCAN_DIR, MU_SCAN_T = "mu_scan", 600.0
+MECH_YCAP = 100.0      # 分机制图：单机制 μ 超过 总值/DPT 最大值 × 它就不画（低浓度 IMP 可到 1e7+，会把总值压成一条线）
+T_COLORS = ("#2b6cb0", "#8e44ad", "#d7301f")   # 温度色带：低温蓝 -> 紫 -> 高温红（不经过浅色，白底上每条线都看得清）
+
+
+def mobility_mechanism_rows(cwd, is_2d):
+    """[0057] AMSET transport.json 的分机制迁移率（2D 面内平均 / 3D 对角平均）：
+    [{"T_K", "n_cell_cm-3", "mu": {机制: μ 或 None}, "total": μ_overall 或 None}]（掺杂 0 点不要）。
+    单机制 μ ≥ DILUTE_MU_HUGE（该机制前因子为 0）或 ≤ 0 记 None。没有分机制 μ -> []。"""
+    j = _load_json(Path(cwd) / (AMSET2D_DIR if is_2d else AMSET_DIR) / "transport.json") or {}
+    mob = j.get("mobility") or {}
+    singles = {str(k).upper(): _unwrap(v) for k, v in mob.items() if str(k).lower() != "overall" and v is not None}
+    if not singles:
+        return []
+    tot = _unwrap(mob.get("overall") or mob.get("Overall"))
+    doping = [float(x) for x in _unwrap(j["doping"])]
+    temps = [float(t) for t in _unwrap(j["temperatures"])]
+
+    def _ok(arr, i, k):
+        try:
+            v = _tavg(arr[i][k], is_2d)
+        except (TypeError, IndexError):
+            return None
+        return v if (v is not None and 0 < v < DILUTE_MU_HUGE) else None
+
+    out = []
+    for k, T in enumerate(temps):
+        for i, n in enumerate(doping):
+            if n:
+                out.append({"T_K": T, "n_cell_cm-3": n, "mu": {m: _ok(a, i, k) for m, a in singles.items()},
+                            "total": _ok(tot, i, k) if tot is not None else None})
+    return out
+
+
 # [0056-r3] 2026-10-18 用户要求：图注写明每条曲线用了哪些散射机制，缩写给全称。
 MECH_DESC = {"ADP": "acoustic deformation potential (LA/TA acoustic phonons)",
              "POP": "polar optical phonon (LO, Fr\u00f6hlich)",
@@ -3188,15 +3229,257 @@ def _clear_dir(d):
     return n
 
 
+def _place_caption(fig, cap, hh, title, ncol_leg, fs=8.2, title_fs=12):
+    """[0056-r3] 按实际渲染高度排：图注（底部）-> 图例 -> 子图（tight_layout 只用剩下的高度）。"""
+    _ct = fig.text(0.5, 0.004, "\n".join(cap), ha="center", va="bottom", fontsize=fs, color="0.2", linespacing=1.35)
+    _rd = fig.canvas.get_renderer()
+    _y = _ct.get_window_extent(_rd).height / fig.bbox.height + 0.006
+    _lg = fig.legend(handles=hh, loc="lower center", bbox_to_anchor=(0.5, _y), ncol=ncol_leg, fontsize=fs + 0.8,
+                     frameon=False)
+    _y += _lg.get_window_extent(_rd).height / fig.bbox.height + 0.004
+    fig.suptitle(title, fontsize=title_fs)
+    fig.tight_layout(rect=[0, _y, 1, 0.985 - 0.009 * title.count("\n") * 12.0 / title_fs])
+
+
+def _bt2_edges(j):
+    """[0057] BT2 化学势零点（S8.1 的 data.fermi）下的 (VBM, CBM, 来源)，eV。
+    S8.1 新结果直接存 band_edges_rel_efermi_eV；旧结果做过剪刀时 S8.1 把 E_F 重新放到带隙正中
+    （data.fermi = VBM + Eg/2，gen_step11 _apply_scissor），所以 VBM = −Eg/2、CBM = +Eg/2；
+    都没有（没做剪刀，零点 = VASP 的 E_F，离 VBM 多远不知道）-> (None, None, 原因)。"""
+    e = j.get("band_edges_rel_efermi_eV") or {}
+    if e.get("vbm") is not None and e.get("cbm") is not None:
+        return float(e["vbm"]), float(e["cbm"]), "boltztrap_crta.json band_edges_rel_efermi_eV"
+    sc = j.get("scissor") or {}
+    if sc.get("applied") and sc.get("target_gap_eV"):
+        g = float(sc["target_gap_eV"])
+        return -g / 2.0, g / 2.0, "S8.1 scissor re-centred E_F at mid-gap: VBM = -Eg/2 (Eg = %.4f eV)" % g
+    return None, None, ("boltztrap_crta.json 没有带边、也没做剪刀（μ 零点 = VASP 的 E_F，离 VBM 多远不知道）"
+                        "—— 重跑 S8.1 后才有")
+
+
+def _amset_edges(cwd, is_2d, T):
+    """[0057] AMSET 的 (VBM, CBM, 来源)，eV，与 transport.json 的 fermi_levels 同一能量零点（剪刀后）。
+    首选 amset_fermi_fix 写的 undoped_ni.json（AMSET 自己 DOS 的带边，[0054] 起有）；退回运行目录
+    vasprun.xml 的 DFT 带边 + settings.yaml 的剪刀量（AMSET 对半分：价带 −Δ/2、导带 +Δ/2）。"""
+    ni, src = undoped_ni(cwd, is_2d)
+    v = _ni_lookup(ni, T) or next((x for x in ni.values() if x.get("E_v_eV") is not None), {})
+    if v.get("E_v_eV") is not None and v.get("E_c_eV") is not None:
+        return float(v["E_v_eV"]), float(v["E_c_eV"]), src
+    run = Path(cwd) / (AMSET2D_DIR if is_2d else AMSET_DIR)
+    vr = run / "vasprun.xml"
+    chk = next((q for q in (run / "fermi_window_check.py",
+                            Path(__file__).resolve().parent.parent / AMSET2D_DIR / "fermi_window_check.py")
+                if q.is_file()), None)
+    if not (vr.is_file() and chk):
+        return None, None, "undoped_ni.json 没有带边，运行目录也没有 vasprun.xml"
+    try:
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("_fwc", str(chk))
+        fwc = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(fwc)
+        vb, cb = fwc.band_edges(vr)
+        if vb is None:
+            return None, None, "vasprun.xml 取不到带边（金属？）"
+        d = fwc.scissor_delta(run / "settings.yaml", cb - vb)
+    except Exception as e:                                        # noqa: BLE001
+        return None, None, "读 vasprun.xml 带边失败（%s: %s）" % (type(e).__name__, e)
+    return vb - d / 2.0, cb + d / 2.0, "%s/vasprun.xml DFT edges, scissor %.3f eV split -/+ half" % (run.name, d)
+
+
+MU_SCAN_SETS = (("overall", "tab:red", "s"), ("intrinsic", "tab:orange", "D"), ("ADP_only", "tab:green", "^"),
+                ("ADP_POP", "tab:brown", "v"), ("ADP_POP_ODP", "tab:olive", "P"))
+
+
+def mu_scan_data(cwd, out, is_2d, T_want=MU_SCAN_T):
+    """[0057] 化学势扫描的数据（横轴 x = μ − E_VBM，eV）。
+    BT2：S8.1 的 μ 网格（零点 = S8.1 的 E_F）减去同一零点下的 VBM（_bt2_edges）；σ、κe = BoltzTraP2 的 σ/τ、κe/τ
+      × S8.3 同一个 DPT τ(T)（n < 0 电子 τ、n > 0 空穴 τ），口径同 S8.3 本征表（面内平均、层厚归一），双极区不给 μ。
+    AMSET：每个掺杂档 AMSET 自己解的 E_F（transport.json fermi_levels，eV）减去 AMSET 的 VBM（_amset_edges），
+      输运值取 S8.3 本征表同一温度、同一掺杂档。
+    返回 dict（T、带边、来源、bt2 行、amset 行、notes）；什么都没有 -> None。"""
+    import csv
+    run = Path(cwd) / (AMSET2D_DIR if is_2d else AMSET_DIR)
+    j = _load_json(run / "transport.json") or {}
+    temps = [float(t) for t in (_unwrap(j.get("temperatures")) or [])]
+    T = min(temps, key=lambda t: abs(t - T_want)) if temps else T_want
+    res = {"T": T, "bt2": [], "amset": [], "notes": []}
+    try:
+        geom = _geom_2d(cwd) if is_2d else _geom_3d(cwd)
+    except Exception:                                             # noqa: BLE001
+        geom = None
+    fac = (geom or {}).get("c_over_t")
+    # ---- AMSET ----
+    tab = Path(out) / INTR_SUBDIR / INTR_CSV
+    fl = _unwrap(j.get("fermi_levels"))
+    ev, ec, esrc = _amset_edges(cwd, is_2d, T)
+    res.update(amset_vbm=ev, amset_cbm=ec, amset_src=esrc)
+    if fl is None:
+        res["notes"].append("AMSET：transport.json 没有 fermi_levels，画不了 μ 轴")
+    elif ev is None:
+        res["notes"].append("AMSET：%s" % esrc)
+    elif tab.is_file():
+        doping = [float(x) for x in _unwrap(j["doping"])]
+        k = temps.index(T)
+        ni, _ = undoped_ni(cwd, is_2d)
+        i0 = next((i for i, x in enumerate(doping) if x == 0), None)
+        ef0 = _ni_lookup(ni, T).get("E_F_eV")
+        if i0 is not None and ef0 is not None and abs(float(fl[i0][k]) - ef0) > 1e-3:   # 两份记录零点一致性自检
+            res["notes"].append("WARN：transport.json 本征点 E_F = %.4f eV 与 undoped_ni.json 的 %.4f eV 不一致"
+                                % (float(fl[i0][k]), ef0))
+        R = list(csv.DictReader([l for l in tab.read_text(errors="ignore").splitlines()
+                                 if l.strip() and not l.startswith("#")]))
+        for r in R:
+            try:
+                n = float(r["n_cell_cm-3"])
+            except (TypeError, ValueError):
+                continue
+            if abs(float(r["T_K"]) - T) > 1e-6 or r["dataset"] not in dict((d[0], 1) for d in MU_SCAN_SETS):
+                continue
+            i = next((q for q, x in enumerate(doping) if x and abs(x - n) <= 1e-9 * abs(x)), None)
+            if i is None:
+                continue
+            ef = float(fl[i][k])
+            res["amset"].append(dict(r, **{"E_F_eV": ef, "mu_minus_VBM_eV": ef - ev}))
+    # ---- BT2 ----
+    bj = _load_json(Path(cwd) / BT2_DIR / "boltztrap_crta.json") or {}
+    bt = load_bt2(cwd, T=T)
+    bv, bc, bsrc = _bt2_edges(bj)
+    res.update(bt2_vbm=bv, bt2_cbm=bc, bt2_src=bsrc)
+    if not bt or abs(float(bt["T_used"]) - T) > 1.0 or not bt.get("mu_rel"):
+        res["notes"].append("BT2：boltztrap_crta.json 没有 %.0f K 的化学势网格" % T)
+    elif bv is None:
+        res["notes"].append("BT2：%s" % bsrc)
+    elif not fac:
+        res["notes"].append("BT2：取不到几何（c/t），σ/κe 无法换到层厚口径")
+    else:
+        dpt_T = load_dpt(cwd, T=T, quiet=True)
+        for i, (m, n) in enumerate(zip(bt["mu_rel"], bt["n_signed"])):
+            if n != n or not n:
+                continue
+            typ = "n" if n < 0 else "p"
+            tau = _bt2_tau(dpt_T, "electron" if typ == "n" else "hole")
+            S = bt["seebeck"][i]
+            sg = bt["sigma_over_tau"][i] * tau if tau else None
+            kp = bt["kappa_e_over_tau"][i] * tau if tau else None
+            bip = S == S and ((S > 0) if typ == "n" else (S < 0))
+            r = {"mu_minus_VBM_eV": float(m) - bv, "mu_rel_efermi_eV": float(m), "n_cell_cm-3": float(n), "type": typ,
+                 "S_uV/K": S, "sigma_S/m": None if sg is None else sg * fac,
+                 "kappa_e_W/mK": None if kp is None else kp * fac,
+                 "mu_cm2/Vs": (sg / (E_C * abs(n) * 1e6) * 1e4) if (sg and sg > 0 and not bip) else None}
+            if r["sigma_S/m"] is not None and S == S:
+                r["PF_W/mK2"] = (S * 1e-6) ** 2 * r["sigma_S/m"]
+            res["bt2"].append(r)
+    return res if (res["bt2"] or res["amset"]) else None
+
+
+def write_mu_scan(cwd, out, plots, M, is_2d):
+    """[0057] transport_plots/mu_scan/<M>_mu_scan_<T>K.png + .csv：BT2×DPT-τ（实线）与 AMSET（点）放在同一根
+    μ − E_VBM 轴上（用户 2026-10-18：原 bt2_muscan/ 随 μ、amset_scan/ 随 n，两者对不上点）。"""
+    import csv
+    import numpy as np
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    from matplotlib.lines import Line2D
+    d = mu_scan_data(cwd, out, is_2d)
+    if not d:
+        print("[..] μ 扫描图跳过：BT2 与 AMSET 都画不了")
+        return False
+    for n_ in d["notes"]:
+        print("[..] μ 扫描：%s" % n_)
+    T = d["T"]
+    odir = Path(plots) / MU_SCAN_DIR
+    odir.mkdir(parents=True, exist_ok=True)
+    xa = [r["mu_minus_VBM_eV"] for r in d["amset"]]
+    gaps = [g for g in ((d.get("amset_cbm") - d["amset_vbm"]) if d.get("amset_vbm") is not None else None,
+                        (d.get("bt2_cbm") - d["bt2_vbm"]) if d.get("bt2_vbm") is not None else None) if g]
+    lo = min(xa + [0.0]) - 0.3
+    hi = max(xa + gaps + [0.0]) + 0.3
+    qs = [("mu_cm2/Vs", "$\\mu$ (cm$^2$/V/s)"), ("S_uV/K", "S ($\\mu$V/K)"), ("sigma_S/m", "$\\sigma$ (S/m)"),
+          ("PF_W/mK2", "PF (W/m/K$^2$)"), ("kappa_e_W/mK", "$\\kappa_e$ (W/m/K)")]
+    fig, axs = plt.subplots(1, len(qs), figsize=(3.6 * len(qs), 3.4), squeeze=False)
+
+    def _f(v):
+        try:
+            return float(v)
+        except (TypeError, ValueError):
+            return float("nan")
+
+    for ax, (col, ttl) in zip(axs[0], qs):
+        ax.set_title(ttl, fontsize=10)
+        ax.grid(alpha=0.25, lw=0.4)
+        ax.axvline(0.0, color="0.35", lw=0.8, ls=":")
+        for g, c in ((d.get("amset_cbm") and d["amset_cbm"] - d["amset_vbm"], "0.35"),
+                     (d.get("bt2_cbm") and d["bt2_cbm"] - d["bt2_vbm"], "tab:blue")):
+            if g:
+                ax.axvline(g, color=c, lw=0.8, ls=":")
+        for typ in ("n", "p"):                                       # 分支分开画：两侧 τ 不同，不跨中线连线
+            pts = sorted((r["mu_minus_VBM_eV"], _f(r.get(col))) for r in d["bt2"]
+                         if r["type"] == typ and lo <= r["mu_minus_VBM_eV"] <= hi)
+            pts = [(x, y) for x, y in pts if y == y and (col == "S_uV/K" or y > 0)]
+            if pts:
+                ax.plot(*zip(*pts), color="tab:blue", lw=1.3)
+        for ds, c, mk in MU_SCAN_SETS:
+            pts = [(r["mu_minus_VBM_eV"], _f(r.get(col))) for r in d["amset"] if r["dataset"] == ds]
+            pts = [(x, y) for x, y in pts if y == y and (col == "S_uV/K" or y > 0)]
+            if pts:
+                ax.plot(*zip(*pts), ls="none", marker=mk, ms=4.5, mfc="none", mec=c, mew=1.1)
+        ax.set_xlim(lo, hi)
+        ax.set_xlabel("$\\mu - E_{VBM}$ (eV)", fontsize=8.5)
+        if col == "S_uV/K":
+            ax.set_ylim(-2500, 2500); ax.axhline(0, color="k", lw=0.5)
+        else:
+            ax.set_yscale("log")
+    _have = {r["dataset"] for r in d["amset"]}
+    _lbl = {"overall": "AMSET phonon + impurity", "intrinsic": "AMSET phonon-limited (no IMP)",
+            "ADP_only": "AMSET ADP only", "ADP_POP": "AMSET ADP+POP", "ADP_POP_ODP": "AMSET ADP+POP+ODP"}
+    hh = ([Line2D([], [], color="tab:blue", lw=1.3, label="BT2 x DPT-$\\tau$")] if d["bt2"] else []) + [
+        Line2D([], [], ls="none", marker=mk, ms=5, mfc="none", mec=c, mew=1.1, label=_lbl[ds])
+        for ds, c, mk in MU_SCAN_SETS if ds in _have]
+    cap = ["x = chemical potential minus valence-band maximum (dotted: 0 = VBM; right = CBM, gray AMSET / blue BT2);"
+           " near the VBM = p-type (holes), near the CBM = n-type (electrons)"]
+    if d.get("bt2_vbm") is not None:
+        cap.append("BT2: S8.1 $\\mu$ grid, zero = S8.1 E_F; VBM = %+.3f eV in that frame (%s)" % (d["bt2_vbm"], d["bt2_src"]))
+    if d.get("amset_vbm") is not None:
+        cap.append("AMSET: E_F solved per doping (transport.json fermi_levels) - VBM %.3f eV (%s)"
+                   % (d["amset_vbm"], d["amset_src"]))
+    cap.append("BT2 $\\sigma$, $\\kappa_e$ = BoltzTraP2 $\\sigma/\\tau$, $\\kappa_e/\\tau$ x DPT $\\tau$(T) (electron $\\tau$ where n < 0,"
+               " hole $\\tau$ where n > 0); $\\mu$ = $\\sigma$/(e|n|), masked where bipolar; same units as the S8.3 table")
+    fig.set_figheight(3.3 + 0.17 * len(cap) + 0.4)                 # 子图高度不被图注/图例挤掉
+    _place_caption(fig, cap, hh, "%s  chemical-potential scan, %.0f K: BT2 x DPT-$\\tau$ (line) vs AMSET (points)"
+                   % (M, T), min(len(hh), 6), fs=7.6, title_fs=11)
+    fig.savefig(odir / ("%s_mu_scan_%.0fK.png" % (M, T)), dpi=130)
+    plt.close(fig)
+    cols = ["source", "dataset", "type", "mu_minus_VBM_eV", "E_F_or_mu_raw_eV", "n_cell_cm-3",
+            "mu_cm2/Vs", "S_uV/K", "sigma_S/m", "PF_W/mK2", "kappa_e_W/mK"]
+    with open(odir / ("%s_mu_scan_%.0fK.csv" % (M, T)), "w", newline="") as fh:
+        fh.write("# [0057] mu_minus_VBM_eV = μ − E_VBM。BT2：E_F_or_mu_raw_eV = S8.1 μ（零点 = S8.1 E_F），VBM = %s（%s）；"
+                 "AMSET：E_F_or_mu_raw_eV = transport.json fermi_levels，VBM = %s（%s）\n"
+                 % (d.get("bt2_vbm"), d.get("bt2_src"), d.get("amset_vbm"), d.get("amset_src")))
+        w = csv.writer(fh)
+        w.writerow(cols)
+        for r in d["bt2"]:
+            w.writerow(["BT2", BT2_KEY, r["type"], r["mu_minus_VBM_eV"], r["mu_rel_efermi_eV"], r["n_cell_cm-3"]]
+                       + [r.get(c, "") if r.get(c) is not None else "" for c in cols[6:]])
+        for r in d["amset"]:
+            w.writerow(["AMSET", r["dataset"], r["type"], r["mu_minus_VBM_eV"], r["E_F_eV"], r["n_cell_cm-3"]]
+                       + [r.get(c, "") for c in cols[6:]])
+    print("[plots] %s/%s_mu_scan_%.0fK.png + .csv" % (MU_SCAN_DIR, M, T))
+    return True
+
+
 def write_transport_plots(cwd, out, is_2d, plots=None, M=None):
     """[0033]-[0035] 规定格式绘图输出（图 + 同目录数据）到【材料根目录】的 transport_plots/：
-      {transport,phonon_limited}_<段>/<M>_<前缀>_<段名>.png + _<T>K.csv   [0056] 按浓度两段各一个文件夹：
+      transport_models_<段>/<M>_transport_models_<段名>.png + _<T>K.csv   [0056][0057] 按浓度两段各一个文件夹：
                                                carrier_tuning_1e17-1e21 / low_doping_<NLO>-1e16；9温度(行)x5参数
-                                               (列 mu/S/sigma/PF/kappa_e)；transport = 基础 4 条 + 本轮机制对照，
-                                               phonon_limited = 只基础 4 条（overall / 去 IMP / ADP only / BT2xDPT-tau）
+                                               (列 mu/S/sigma/PF/kappa_e)；基础 4 条（overall / 去 IMP / ADP only /
+                                               BT2xDPT-tau）；[0057] 前叫 phonon_limited_<段>
+      mobility_mechanisms_<段>/<M>_mobility_mechanisms_<段名>.png + _<T>K.csv   [0057] 只画 μ（每温度一个面板）：
+                                               AMSET 单机制 μ + phonon + impurity 总值 + DPT 带边；前叫 transport_<段>
       <M>_params_<T>K.csv                       每温度一张(E1/C2D/m*/tau/mu)
-      datasets/<M>_<数据集>.png/.csv             [0039] 每个数据集（overall / intrinsic / ADP_only / 子集 / BT2）
-                                               单独一张 σ/S/PF/κe 随浓度图，每温度一条线
+      temperature_series/<M>_<数据集>_<段名>.png/.csv   [0039][0057] 每个数据集（overall / intrinsic / ADP_only / 子集 / BT2）
+                                               单独一张 σ/S/PF/κe 随浓度图，每温度一条线（低温蓝 -> 高温红）；前叫 datasets/
+      mu_scan/<M>_mu_scan_600K.png/.csv          [0057] BT2（线）与 AMSET（点）随 μ − E_VBM；前为 bt2_muscan/ + amset_scan/
     [0035] 原 <M>_intrinsic.png 与 <M>_transport.png 数据集重叠（overall/ADP/DPT 三套重复），
       已合并为一张 <M>_transport.png；额外机制对照按 S8.4 可用结果动态显示。
     [0047] 2026-10-15 用户选 2：<M>_intrinsic.png 恢复为【只画基础 4 条】(overall / 去 IMP /
@@ -3351,30 +3634,43 @@ def write_transport_plots(cwd, out, is_2d, plots=None, M=None):
                         transform=ax.transAxes, ha="left" if typ == "n" else "right", va="top", fontsize=6.8,
                         color=c, bbox=dict(fc="white", ec="none", alpha=0.85, pad=0.3))
 
-        def _render_9x5(dsets_used, title, outpath, rng=None, dpt=False):
-            """[用户 2026-10-15 选 2] 同一套 9x5 网格渲染器：transport 图带本轮机制对照、
-            intrinsic 图只画基础 4 条 —— 两张图内容真正不同（此前是同一张 fig 换标题存两次）。
-            [0056] rng = _phonon_limited_ranges() 的一项：只画该浓度段，轴原点 = 段下限。"""
-            nlo, xt, xtl, slim = (None, None, None, SLIM) if rng is None else (rng[1], rng[3], rng[4], rng[5])
-            fig, axes = grid(len(temps), 5, ["%d K" % t for t in temps], [q[1] for q in quants], xt, xtl)
-            # [0056-r3] 刚性能带近似不成立的浓度（表里 in_interpret_range = NO，与 S8.4 同判据）灰底：
-            #   每侧从最低的 NO 档到轴端。只跟掺杂有关，与温度无关。
-            _bad = {}
+        def _bad_of(rng):
+            """[0056-r3] 刚性能带近似不成立的浓度（表里 in_interpret_range = NO，与 S8.4 同判据）：
+            {n 型?: 该侧最低的 NO 档 |n|}。只跟掺杂有关，与温度无关。"""
+            bad = {}
             for r in rows:
                 if r.get("in_interpret_range") == "NO":
                     n0 = fnum(r["n_cell_cm-3"])
                     if n0 == n0 and _in_rng(np.array([n0]), rng)[0]:
-                        _k = n0 < 0
-                        _bad[_k] = min(_bad.get(_k, abs(n0)), abs(n0))
+                        bad[n0 < 0] = min(bad.get(n0 < 0, abs(n0)), abs(n0))
+            return bad
+
+        def _shade(ax, bad, nlo, xe):
+            """灰底：每侧从最低的 NO 档到轴端。"""
+            for _neg, _nb in bad.items():
+                _x0 = float(xs(np.array([-_nb if _neg else _nb]), nlo)[0])
+                ax.axvspan(min(_x0, -xe if _neg else xe), max(_x0, -xe if _neg else xe),
+                           color="0.85", alpha=0.6, lw=0, zorder=0)
+
+        def _x_caption():
+            return ("x: doping n_cell (cm$^{-3}$, AMSET cell volume%s); left = n-type (electrons),"
+                    " right = p-type (holes)" % ((" incl. vacuum; literature n = n_cell x c/t, c/t = %.3f"
+                                                  % _geo["c_over_t"]) if (_geo and not _geo.get("is_3d")) else ""))
+
+        _place = _place_caption
+
+        def _render_9x5(dsets_used, title, outpath, rng=None):
+            """[用户 2026-10-15 选 2] 9x5 网格渲染器（温度 x μ/S/σ/PF/κe）。
+            [0056] rng = _phonon_limited_ranges() 的一项：只画该浓度段，轴原点 = 段下限。"""
+            nlo, xt, xtl, slim = (None, None, None, SLIM) if rng is None else (rng[1], rng[3], rng[4], rng[5])
+            fig, axes = grid(len(temps), 5, ["%d K" % t for t in temps], [q[1] for q in quants], xt, xtl)
+            _bad = _bad_of(rng)
             _xe = (xt if xt is not None else XT)[-1] + 0.15
             for rr, T in enumerate(temps):
                 sub = [r for r in rows if abs(float(r["T_K"]) - T) < 1e-6]
                 for jc, (col, _) in enumerate(quants):
                     ax = axes[rr][jc]
-                    for _neg, _nb in _bad.items():
-                        _x0 = float(xs(np.array([-_nb if _neg else _nb]), nlo)[0])
-                        ax.axvspan(min(_x0, -_xe if _neg else _xe), max(_x0, -_xe if _neg else _xe),
-                                   color="0.85", alpha=0.6, lw=0, zorder=0)
+                    _shade(ax, _bad, nlo, _xe)
                     for ds, color, ls, mk in dsets_used:
                         dd = [r for r in sub if r["dataset"] == ds]
                         if not dd:
@@ -3387,36 +3683,114 @@ def write_transport_plots(cwd, out, is_2d, plots=None, M=None):
                         ax.set_ylim(-slim, slim); ax.axhline(0, color="k", lw=0.5)
                     else:
                         ax.set_yscale("log")
-                    if dpt and col == "mu_cm2/Vs":
-                        _dpt_lines(ax, sub, xt)
             hh = [Line2D([], [], color=c, lw=1.4, ls=ls, marker=mk, ms=4, label=_LBL.get(ds, ds))
                   for ds, c, ls, mk in dsets_used]
             cap = _mech_caption(dsets_used, _set_meta, _LBL)
-            if dpt and any(r["dataset"] in ("DPT", "DPT_mv") for r in rows):
-                hh += [Line2D([], [], color=_DPT_STYLE[t][0], lw=1.0, ls="-.",
-                              label="DPT $\\mu_{%s}$ (band edge)" % _DPT_STYLE[t][1]) for t in ("n", "p")]
-                cap.append("DPT $\\mu_e$ / $\\mu_h$ (dash-dot, $\\mu$ column only; electrons on the n-type half, holes on the p-type half):"
-                           " Bardeen-Shockley band-edge mobility $\\mu$ = e$\\tau$/m*, one number per carrier and T"
-                           " (value in cm$^2$/V/s written at the top) - independent of n, hence horizontal")
             if _bad:
                 cap.append("Gray: beyond rigid-band range (%s; in_interpret_range = NO in the CSV) - "
                            "results there are not reliable" % _rule_txt)
-            cap.append("x: doping n_cell (cm$^{-3}$, AMSET cell volume%s); left = n-type (electrons),"
-                       " right = p-type (holes); \u03c3, \u03bae, PF %s"
-                       % ((" incl. vacuum; literature n = n_cell x c/t, c/t = %.3f" % _geo["c_over_t"])
-                          if (_geo and not _geo.get("is_3d")) else "",
-                          "normalized by layer thickness t" if (_geo and not _geo.get("is_3d")) else "bulk values"))
-            _ct = fig.text(0.5, 0.004, "\n".join(cap), ha="center", va="bottom", fontsize=8.2, color="0.2",
-                           linespacing=1.35)
-            _rd = fig.canvas.get_renderer()                 # 按实际渲染高度排：图注 -> 图例 -> 子图
-            _y = _ct.get_window_extent(_rd).height / fig.bbox.height + 0.006
-            _lg = fig.legend(handles=hh, loc="lower center", bbox_to_anchor=(0.5, _y), ncol=3, fontsize=9,
-                             frameon=False)
-            _y += _lg.get_window_extent(_rd).height / fig.bbox.height + 0.004
-            fig.suptitle(title, fontsize=12)
-            fig.tight_layout(rect=[0, _y, 1, 0.985 - 0.009 * title.count("\n")])
+            cap.append("%s; \u03c3, \u03bae, PF %s" % (_x_caption(), "normalized by layer thickness t"
+                                                  if (_geo and not _geo.get("is_3d")) else "bulk values"))
+            _place(fig, cap, hh, title, 3)
             fig.savefig(outpath, dpi=130)
             plt.close(fig)
+
+        _MECH_ORDER = ("ADP", "POP", "ODP", "IVS", "PIE", "IMP")
+
+        def _render_mech(mm, rng):
+            """[0057] mobility_mechanisms_<段>/：每个温度一个面板，只画 μ —— AMSET 每个散射机制单独一条（虚线）
+            + phonon + impurity 总值（黑实线）+ DPT 带边横线（电子左半、空穴右半）；附每温度表。"""
+            nlo, xt, xtl = rng[1], rng[3], rng[4]
+            _tag = rng[0].split("_1e")[0]
+            mechs = sorted({m for r in mm for m, v in r["mu"].items() if v is not None},
+                           key=lambda m: (_MECH_ORDER.index(m) if m in _MECH_ORDER else 99, m))
+            nT = len(temps)
+            ncol = 3 if nT > 4 else max(nT, 1)
+            nrow = -(-nT // ncol)
+            fig, axes = plt.subplots(nrow, ncol, figsize=(5.4 * ncol, 3.4 * nrow), squeeze=False)
+            _bad = _bad_of(rng)
+            _xe = xt[-1] + 0.15
+            _cut = False
+            for q, T in enumerate(temps):
+                ax = axes[q // ncol][q % ncol]
+                ax.set_xlim(xt[0] - 0.15, xt[-1] + 0.15)
+                ax.set_xticks(xt)
+                ax.set_xticklabels(xtl, fontsize=6.5)
+                ax.axvline(0, color="0.55", lw=0.6, ls=":")
+                ax.grid(alpha=0.25, which="both", lw=0.4)
+                ax.set_title("%d K" % T, fontsize=10, fontweight="bold")
+                _shade(ax, _bad, nlo, _xe)
+                sub = [r for r in mm if abs(r["T_K"] - T) < 1e-6 and _in_rng(np.array([r["n_cell_cm-3"]]), rng)[0]]
+                tsub = [r for r in rows if abs(float(r["T_K"]) - T) < 1e-6]
+                n = np.array([r["n_cell_cm-3"] for r in sub], float)
+                yt = np.array([np.nan if r["total"] is None else r["total"] for r in sub], float)
+                ref = [v for v in yt if v == v] + [v for v in (fnum(r.get("mu_cm2/Vs")) for r in tsub
+                                                               if r["dataset"] in ("DPT", "DPT_mv")) if v == v and v > 0]
+                cap_hi = max(ref) * MECH_YCAP if ref else np.inf
+                _drawn = list(ref)
+                for m in mechs:
+                    y = np.array([np.nan if r["mu"].get(m) is None else r["mu"][m] for r in sub], float)
+                    _cut = _cut or bool(np.any(y > cap_hi))
+                    y[y > cap_hi] = np.nan                    # 超出上限的不画（值在表里），顶部标注区保持干净
+                    _drawn += [v for v in y if v == v and v > 0]
+                    seg(ax, n, y, nlo, color=_DILUTE_COLORS.get(m, "C%d" % (mechs.index(m) % 10)), ls="--",
+                        lw=1.2, marker="o", ms=2.8)
+                seg(ax, n, yt, nlo, color="k", lw=2.0, marker="s", ms=3.2)
+                ax.set_yscale("log")
+                if _drawn:
+                    ax.set_ylim(min(_drawn) / 2.0, max(_drawn) * 2.0)
+                _dpt_lines(ax, tsub, xt)
+                if q % ncol == 0:
+                    ax.set_ylabel("mobility (cm$^2$/V/s)" + (", in-plane" if is_2d else ""), fontsize=8.5)
+                if q >= nT - ncol:
+                    ax.set_xlabel(r"doping $n$ (cm$^{-3}$):  n-type $\leftarrow$ | $\rightarrow$ p-type", fontsize=7)
+            for q in range(nT, nrow * ncol):
+                axes[q // ncol][q % ncol].set_visible(False)
+            _all = [str(m).upper() for m in (_set_meta.get("overall_labels") or mechs)]
+            hh = [Line2D([], [], color=_DILUTE_COLORS.get(m, "C%d" % (mechs.index(m) % 10)), ls="--", lw=1.2,
+                         marker="o", ms=3.5, label="%s only" % m) for m in mechs]
+            hh.append(Line2D([], [], color="k", lw=2.0, marker="s", ms=4,
+                             label="phonon + impurity total (%s)" % "+".join(_all)))
+            hh += [Line2D([], [], color=_DPT_STYLE[t][0], lw=1.0, ls="-.",
+                          label="DPT $\\mu_{%s}$ (band edge)" % _DPT_STYLE[t][1]) for t in ("n", "p")]
+            cap = ["Dashed: AMSET mobility with only that scattering mechanism switched on (same run, same E_F);"
+                   " black: AMSET with all mechanisms together - rates add per electronic state before the"
+                   " thermal average, so it lies below the Matthiessen sum $(\\sum 1/\\mu_i)^{-1}$ of the dashed lines",
+                   "; ".join("%s = %s" % (m, MECH_DESC[m]) for m in mechs if m in MECH_DESC),
+                   "DPT $\\mu_e$ / $\\mu_h$ (dash-dot; electrons on the n-type half, holes on the p-type half):"
+                   " Bardeen-Shockley band-edge mobility $\\mu$ = e$\\tau$/m* (ADP only), one number per carrier and T"
+                   " (value in cm$^2$/V/s written at the top) - independent of n, hence horizontal"]
+            if _cut:
+                cap.append("Single-mechanism values more than %gx above the total / DPT are not drawn"
+                           " (e.g. IMP at low doping); all values are in the CSV" % MECH_YCAP)
+            if _bad:
+                cap.append("Gray: beyond rigid-band range (%s; in_interpret_range = NO in the CSV) - "
+                           "results there are not reliable" % _rule_txt)
+            cap.append(_x_caption())
+            _place(fig, cap, hh, "%s  mobility by scattering mechanism vs doping, %s  n = %s - %s cm$^{-3}$  %s\n"
+                   "AMSET single-mechanism $\\mu$ + phonon + impurity total + DPT band edge"
+                   % (M, _what[_tag], xtl[len(xtl) // 2], xtl[0], _trng), min(len(hh), 5))
+            _pdir = plots / ("%s_%s" % (MECH_PRE, rng[0]))
+            _pdir.mkdir(exist_ok=True)
+            fig.savefig(_pdir / ("%s_%s_%s.png" % (M, MECH_PRE, _tag)), dpi=130)
+            plt.close(fig)
+            _dose = {(round(float(r["T_K"]), 6), fnum(r["n_cell_cm-3"])): r for r in rows if r["dataset"] == "overall"}
+            _mc = ["T_K", "type", "n_cell_cm-3", "n_2D_cm-2", "n_lit_cm-3", "carriers_per_atom", "in_interpret_range"]
+            _hdr = _mc + ["mu_%s_only_cm2/Vs" % m for m in mechs] + ["mu_total_cm2/Vs", "mu_DPT_band_edge_cm2/Vs"]
+            for T in temps:
+                _dp = {r["type"]: r.get("mu_cm2/Vs") for r in rows if abs(float(r["T_K"]) - T) < 1e-6
+                       and r["dataset"] in ("DPT", "DPT_mv")}
+                with open(_pdir / ("%s_%s_%s_%dK.csv" % (M, MECH_PRE, _tag, int(round(T)))), "w", newline="") as fh:
+                    w = csv.writer(fh)
+                    w.writerow(_hdr)
+                    for r in sorted((r for r in mm if abs(r["T_K"] - T) < 1e-6
+                                     and _in_rng(np.array([r["n_cell_cm-3"]]), rng)[0]), key=lambda r: r["n_cell_cm-3"]):
+                        typ = "n" if r["n_cell_cm-3"] < 0 else "p"
+                        d = dict(_dose.get((round(T, 6), r["n_cell_cm-3"])) or {}, T_K=T, type=typ,
+                                 **{"n_cell_cm-3": r["n_cell_cm-3"]})
+                        w.writerow([d.get(c, "") for c in _mc] + ["" if r["mu"].get(m) is None else r["mu"][m] for m in mechs]
+                                   + ["" if r["total"] is None else r["total"], _dp.get(typ, "")])
+            print("[plots] %s/%s_%s_%s.png + _<T>K.csv x%d" % (_pdir.name, M, MECH_PRE, _tag, len(temps)))
 
         _trng = "%g-%g K" % (temps[0], temps[-1]) if temps else ""
         # [0052] 用户 2026-10-15 问「本征浓度横坐标不是定值吗」；[0054] 2026-10-16 用户定：与文献统一命名，
@@ -3428,81 +3802,97 @@ def write_transport_plots(cwd, out, is_2d, plots=None, M=None):
         #   {transport,phonon_limited}_low_doping_<NLO>-1e16/     低浓度段（有 DOPING_LOW 才有）
         #   transport = 基础 4 条 + 本轮机制对照、表含全数据集；phonon_limited = 只基础 4 条。
         _what = {"carrier_tuning": "carrier tuning (doping) range", "low_doping": "low-doping range (non-degenerate)"}
-        _figs = (("transport", dsets, None,
-                  "%s  transport vs doping, %s  n = %s - %s cm$^{-3}$  %s\n"
-                  "AMSET mechanisms from this run; BT2 x DPT tau"),
-                 ("phonon_limited", _base_dsets, _base_names,
-                  "%s  phonon-limited transport vs doping, %s  n = %s - %s cm$^{-3}$  %s\n"
-                  "base 4 sets: phonon + impurity / phonon-limited / ADP only / BT2xDPT-tau;"
-                  " phonon-limited = all phonon mechanisms, no ionized impurity"))
-        for _pre, _dsu, _names, _title in _figs:
-            for rng in _phonon_limited_ranges(NLO):
-                _tag = rng[0].split("_1e")[0]
-                _pdir = plots / ("%s_%s" % (_pre, rng[0]))
-                _pdir.mkdir(exist_ok=True)
-                _render_9x5(_dsu, _title % (M, _what[_tag], rng[4][len(rng[4]) // 2], rng[4][0], _trng),
-                            _pdir / ("%s_%s_%s.png" % (M, _pre, _tag)), rng, dpt=(_pre == "transport"))
-                for T in temps:
-                    with open(_pdir / ("%s_%s_%s_%dK.csv" % (M, _pre, _tag, int(round(T)))), "w",
-                              newline="") as fh:
-                        w = csv.writer(fh); w.writerow(cols)
-                        for r in rows:
-                            if (abs(float(r["T_K"]) - T) > 1e-6 or (_names and r["dataset"] not in _names)
-                                    or not _in_rng(np.array([fnum(r["n_cell_cm-3"])]), rng)[0]):
-                                continue
-                            w.writerow([r.get(c, "") for c in cols])
-                print("[plots] %s/%s_%s_%s.png + _<T>K.csv x%d" % (_pdir.name, M, _pre, _tag, len(temps)))
-
-        # ---- [0039] 每个数据集单独一张 σ/S/PF/κe（随浓度，每温度一条线）：datasets/<M>_<数据集>.png + .csv ----
-        #   主图把 overall / intrinsic / ADP only / BT2 挤在一张 9x5 里，intrinsic（去 IMP）等子集没有单独的图。
+        # [0057] 2026-10-18 用户定：
+        #   transport_models_<段>/      （原 phonon_limited_<段>/，改名）基础 4 条 x 5 参数（μ/S/σ/PF/κe），表只含这 4 条
+        #   mobility_mechanisms_<段>/   （原 transport_<段>/）只画 μ：AMSET 每个散射机制单独一条 + phonon + impurity 总值
+        #                               + DPT 带边横线；不再画 phonon-limited 线、不再重复 S/σ/PF/κe 四列
+        _title = ("%s  transport vs doping, %s  n = %s - %s cm$^{-3}$  %s\n"
+                  "4 models: phonon + impurity / phonon-limited (no IMP) / ADP only (AMSET)  vs  BT2 x DPT tau")
+        for rng in _phonon_limited_ranges(NLO):
+            _tag = rng[0].split("_1e")[0]
+            _pdir = plots / ("%s_%s" % (MODELS_PRE, rng[0]))
+            _pdir.mkdir(exist_ok=True)
+            _render_9x5(_base_dsets, _title % (M, _what[_tag], rng[4][len(rng[4]) // 2], rng[4][0], _trng),
+                        _pdir / ("%s_%s_%s.png" % (M, MODELS_PRE, _tag)), rng)
+            for T in temps:
+                with open(_pdir / ("%s_%s_%s_%dK.csv" % (M, MODELS_PRE, _tag, int(round(T)))), "w",
+                          newline="") as fh:
+                    w = csv.writer(fh); w.writerow(cols)
+                    for r in rows:
+                        if (abs(float(r["T_K"]) - T) > 1e-6 or r["dataset"] not in _base_names
+                                or not _in_rng(np.array([fnum(r["n_cell_cm-3"])]), rng)[0]):
+                            continue
+                        w.writerow([r.get(c, "") for c in cols])
+            print("[plots] %s/%s_%s_%s.png + _<T>K.csv x%d" % (_pdir.name, M, MODELS_PRE, _tag, len(temps)))
         try:
-            _ddir = plots / "datasets"
+            _mm = mobility_mechanism_rows(cwd, is_2d)
+            if _mm:
+                for rng in _phonon_limited_ranges(NLO):
+                    _render_mech(_mm, rng)
+            else:
+                print("[..] mobility_mechanisms 跳过：transport.json 没有分机制迁移率")
+        except Exception as _e:                                   # noqa: BLE001
+            print("[WARN] 分机制迁移率图失败（%s: %s）" % (type(_e).__name__, _e))
+
+        # ---- [0039] 每个数据集单独一张 σ/S/PF/κe（随浓度，每温度一条线）----
+        #   [0057] 用户 2026-10-18：目录 datasets/ -> temperature_series/；低温蓝、高温红；与主图一样按浓度分两段
+        #   （<M>_<数据集>_carrier_tuning.png/.csv、<M>_<数据集>_low_doping.png/.csv，同一个文件夹）。
+        try:
+            from matplotlib.colors import LinearSegmentedColormap
+            _ddir = plots / TSERIES_DIR
             _ddir.mkdir(exist_ok=True)
             for _old in _ddir.glob("%s_*" % M):                 # 清旧产物（数据集可能变了）
                 _old.unlink()
             _dq = [("sigma_S/m", "sigma  (S/m)"), ("S_uV/K", "S  (uV/K)"),
                    ("PF_W/mK2", "PF  (W/m/K$^2$)"), ("kappa_e_W/mK", "kappa_e  (W/m/K)")]
-            _cm = plt.get_cmap("viridis")
+            _cm = LinearSegmentedColormap.from_list("cold_hot", T_COLORS)
+            _tc = lambda it: _cm(it / max(1, len(temps) - 1))       # noqa: E731
             _dcols = ["T_K", "type", "n_cell_cm-3", "n_2D_cm-2", "carriers_per_atom", "in_interpret_range",
                       "sigma_S/m", "S_uV/K", "PF_W/mK2", "kappa_e_W/mK", "mu_cm2/Vs", "flag"]
             for ds, _c, _ls, _mk in dsets:
                 dd_all = [r for r in rows if r["dataset"] == ds]
                 if not dd_all:
                     continue
-                _f, _axs = plt.subplots(1, len(_dq), figsize=(4.2 * len(_dq), 3.6), squeeze=False)
-                for jc, (col, ttl) in enumerate(_dq):
-                    a = _axs[0][jc]
-                    for it, T in enumerate(temps):
-                        dd = [r for r in dd_all if abs(float(r["T_K"]) - T) < 1e-6]
-                        n = np.array([fnum(r["n_cell_cm-3"]) for r in dd])
-                        y = np.array([fnum(r[col]) for r in dd])
-                        keep = np.abs(n) >= NFLOOR
-                        seg(a, n[keep], y[keep], color=_cm(it / max(1, len(temps) - 1)), lw=1.2,
-                            marker="o", ms=2.6, label=("%d K" % T))
-                    a.set_title(ttl, fontsize=10)
-                    a.set_xlim(XT[0] - 0.15, XT[-1] + 0.15); a.set_xticks(XT)
-                    a.set_xticklabels(XTL, fontsize=6.5)
-                    a.axvline(0, color="0.55", lw=0.6, ls=":")
-                    a.grid(alpha=0.25, lw=0.4)
-                    a.set_xlabel(r"$n$ (cm$^{-3}$)   n-type | p-type", fontsize=8)
-                    if col == "S_uV/K":
-                        a.set_ylim(-SLIM, SLIM); a.axhline(0, color="k", lw=0.5)
-                    else:
-                        a.set_yscale("log")
-                _hh = [Line2D([], [], color=_cm(it / max(1, len(temps) - 1)), lw=1.4, label="%d K" % T)
-                       for it, T in enumerate(temps)]
-                _f.legend(handles=_hh, loc="lower center", ncol=min(9, len(_hh)), fontsize=8, frameon=False)
-                _f.suptitle("%s  %s" % (M, _LBL.get(ds, ds)), fontsize=11)
-                _f.tight_layout(rect=[0, 0.08, 1, 0.93])
                 _fn = _ds_file(ds, _set_meta)       # [0040] 文件名 = 实际机制组合（如 ADP+POP+ODP）
-                _f.savefig(_ddir / ("%s_%s.png" % (M, _fn)), dpi=130); plt.close(_f)
-                with open(_ddir / ("%s_%s.csv" % (M, _fn)), "w", newline="") as fh:
-                    w = csv.writer(fh)
-                    w.writerow(["# dataset=%s  label=%s" % (ds, _LBL.get(ds, ds))])
-                    w.writerow(_dcols)
-                    for r in dd_all:
-                        w.writerow([r.get(c, "") for c in _dcols])
-                print("[plots] datasets/%s_%s.png" % (M, _fn))
+                for rng in _phonon_limited_ranges(NLO):
+                    nlo, xt, xtl, slim = rng[1], rng[3], rng[4], rng[5]
+                    _tag = rng[0].split("_1e")[0]
+                    dd_r = [r for r in dd_all if _in_rng(np.array([fnum(r["n_cell_cm-3"])]), rng)[0]]
+                    if not dd_r:
+                        continue
+                    _bad = _bad_of(rng)
+                    _f, _axs = plt.subplots(1, len(_dq), figsize=(4.2 * len(_dq), 3.6), squeeze=False)
+                    for jc, (col, ttl) in enumerate(_dq):
+                        a = _axs[0][jc]
+                        _shade(a, _bad, nlo, xt[-1] + 0.15)
+                        for it, T in enumerate(temps):
+                            dd = [r for r in dd_r if abs(float(r["T_K"]) - T) < 1e-6]
+                            n = np.array([fnum(r["n_cell_cm-3"]) for r in dd])
+                            y = np.array([fnum(r[col]) for r in dd])
+                            seg(a, n, y, nlo, color=_tc(it), lw=1.2, marker="o", ms=2.6)
+                        a.set_title(ttl, fontsize=10)
+                        a.set_xlim(xt[0] - 0.15, xt[-1] + 0.15); a.set_xticks(xt)
+                        a.set_xticklabels(xtl, fontsize=6.5)
+                        a.axvline(0, color="0.55", lw=0.6, ls=":")
+                        a.grid(alpha=0.25, lw=0.4)
+                        a.set_xlabel(r"$n$ (cm$^{-3}$)   n-type | p-type", fontsize=8)
+                        if col == "S_uV/K":
+                            a.set_ylim(-slim, slim); a.axhline(0, color="k", lw=0.5)
+                        else:
+                            a.set_yscale("log")
+                    _hh = [Line2D([], [], color=_tc(it), lw=1.4, label="%d K" % T) for it, T in enumerate(temps)]
+                    _f.legend(handles=_hh, loc="lower center", ncol=min(9, len(_hh)), fontsize=8, frameon=False)
+                    _f.suptitle("%s  %s  -  %s, n = %s - %s cm$^{-3}$  (blue = low T, red = high T)"
+                                % (M, _LBL.get(ds, ds), _what[_tag], xtl[len(xtl) // 2], xtl[0]), fontsize=11)
+                    _f.tight_layout(rect=[0, 0.08, 1, 0.93])
+                    _f.savefig(_ddir / ("%s_%s_%s.png" % (M, _fn, _tag)), dpi=130); plt.close(_f)
+                    with open(_ddir / ("%s_%s_%s.csv" % (M, _fn, _tag)), "w", newline="") as fh:
+                        w = csv.writer(fh)
+                        w.writerow(["# dataset=%s  label=%s  range=%s" % (ds, _LBL.get(ds, ds), rng[0])])
+                        w.writerow(_dcols)
+                        for r in dd_r:
+                            w.writerow([r.get(c, "") for c in _dcols])
+                    print("[plots] %s/%s_%s_%s.png" % (TSERIES_DIR, M, _fn, _tag))
         except Exception as _e:                                   # noqa: BLE001
             print("[WARN] 分数据集图失败（%s: %s）" % (type(_e).__name__, _e))
 
@@ -3523,114 +3913,11 @@ def write_transport_plots(cwd, out, is_2d, plots=None, M=None):
                                     r[_c_col(is_2d)], r["m_eff_m0"], r["mu_DPT"], r["tau_DPT_fs"]])
         print("[plots] %s_params_<T>K.csv x%d" % (M, len(temps)))
 
-    # ---- ⑥ bt2 μ 扫描图 + amset 浓度扫描图（各放一个子文件夹）----
-    #   [0036] bt2 的 paper_mu_scan（随化学势 μ）与 amset 的输运（随载流子浓度 n）
-    #   各出一张图，分别放 transport_plots/{bt2_muscan, amset_scan}/，便于和文献 Fig.5/7/8 对点。
-    def _scan_grid(ncol, titles):
-        _f, _ax = plt.subplots(1, ncol, figsize=(3.15 * ncol, 2.9), squeeze=False)
-        for j in range(ncol):
-            _ax[0][j].set_title(titles[j], fontsize=9.5)
-            _ax[0][j].grid(alpha=0.25, lw=0.4)
-        return _f, _ax[0]
-
-    # ⑥a bt2 μ 扫描（CRTA×DPT-τ，随 μ，x/y 两方向）
+    # ---- ⑥ [0057] 化学势扫描（原 bt2_muscan/ + amset_scan/ 合并）：mu_scan/，横轴 μ − E_VBM ----
     try:
-        _mscan = sorted((cwd / BT2_DIR).glob("paper_mu_scan_*.csv"))
-        if _mscan:
-            _mp = _mscan[-1]
-            _bdir = plots / "bt2_muscan"; _bdir.mkdir(exist_ok=True)
-            _br = list(csv.DictReader([l for l in _mp.read_text(errors="ignore").splitlines()
-                                        if l.strip() and not l.startswith("#")]))
-            _T = int(_mp.stem.rsplit("_", 1)[1].rstrip("K"))
-            # [0045] 同时画两种口径：thickness（我们，S8.1 主口径）与 cell（文献 Fig.5/7 裸元胞口径）。
-            #   σ/PF/κe 差 c/t 倍（factor 记在 CSV 头部注释）；S/ZT 对口径不变。
-            _fac = None
-            for _hl in _mp.read_text(errors="ignore").splitlines():
-                if _hl.startswith("#") and "factor=" in _hl:
-                    _seg = _hl.split("factor=")[1].split(",")[0].split()[0]
-                    try:
-                        _fac = float(_seg)
-                    except ValueError:
-                        _fac = None
-                    break
-            _muv = np.array([fnum(r["mu_rel_efermi_eV"]) for r in _br])
-            # (x 列, y 列, 标题, 是否依赖口径)
-            _bp = [("S_xx_uV/K", "S_yy_uV/K", "S (uV/K)", False),
-                   ("sigma_xx_S/m", "sigma_yy_S/m", "sigma (S/m)", True),
-                   ("PF_xx_W/mK2", "PF_yy_W/mK2", "PF (W/mK^2)", True),
-                   ("kappa_e_WF_xx_W/mK", "kappa_e_WF_yy_W/mK", "kappa_e (W/mK)", True)]
-            if "ZT_xx" in (_br[0] if _br else {}):
-                _bp.append(("ZT_xx", "ZT_yy", "ZT", False))
-            _f, _ax = _scan_grid(len(_bp), [p[2] for p in _bp])
-            for j, (cx, cy, _t, _dep) in enumerate(_bp):
-                a = _ax[j]
-                for col, ls, lab in ((cx, "-", "x"), (cy, "--", "y")):
-                    v = np.array([fnum(r[col]) for r in _br])
-                    msk = np.isfinite(_muv) & np.isfinite(v)
-                    a.plot(_muv[msk], v[msk], lw=1.15, ls=ls, label=lab + " (thickness)")
-                    if _dep and _fac and abs(_fac - 1.0) > 1e-9:
-                        a.plot(_muv[msk], v[msk] / _fac, lw=0.9, ls=":", label=lab + " (cell)")
-                a.set_xlabel("mu (eV)", fontsize=8)
-                if j == 0:
-                    a.legend(fontsize=6.5, frameon=False, loc="upper right")
-            _f.suptitle("%s  bt2 CRTA x DPT-tau  (chemical-potential scan, %d K)" % (M, _T), fontsize=11)
-            _f.tight_layout(rect=[0, 0, 1, 0.93])
-            _f.savefig(_bdir / ("bt2_muscan_%dK.png" % _T), dpi=130); plt.close(_f)
-            (_bdir / ("bt2_muscan_%dK.csv" % _T)).write_text(_mp.read_text(errors="ignore"), encoding="utf-8")
-            print("[plots] bt2_muscan/bt2_muscan_%dK.png" % _T)
-    except Exception as _e:
-        print("[WARN] bt2 μ 扫描图失败（%s: %s）" % (type(_e).__name__, _e))
-
-    # ⑥b amset 浓度扫描（可用的分级机制结果，随 n，600 K）
-    try:
-        _adir = plots / "amset_scan"; _adir.mkdir(exist_ok=True)
-        _tab = out / "intrinsic" / "intrinsic_transport_table.csv"
-        if _tab.is_file():
-            _r2 = list(csv.DictReader([l for l in _tab.read_text(errors="ignore").splitlines()
-                                        if l.strip() and not l.startswith("#")]))
-            _sub = [r for r in _r2 if abs(fnum(r["T_K"]) - 600.0) < 1e-6]
-            if _sub:
-                _aq = [("mu_cm2/Vs", "mu (cm^2/V/s)"), ("S_uV/K", "S (uV/K)"),
-                       ("sigma_S/m", "sigma (S/m)"), ("PF_W/mK2", "PF (W/mK^2)"),
-                       ("kappa_e_W/mK", "kappa_e (W/mK)")]
-                _ads = [("overall", "tab:red", "-"), ("intrinsic", "tab:orange", "-."), ("ADP_only", "tab:green", ":"),
-        ("ADP_POP", "tab:brown", "-"), ("ADP_POP_ODP", "tab:olive", "-")]
-                _f2, _ax2 = _scan_grid(len(_aq), [q[1] for q in _aq])
-                for j, (col, _t) in enumerate(_aq):
-                    a = _ax2[j]
-                    for ds, cc, ls in _ads:
-                        dd = [r for r in _sub if r["dataset"] == ds]
-                        if not dd:
-                            continue
-                        n = np.array([fnum(r["n_cell_cm-3"]) for r in dd])
-                        y = np.array([fnum(r[col]) for r in dd])
-                        keep = np.abs(n) >= NFLOOR
-                        seg(a, n[keep], y[keep], color=cc, lw=1.3, ls=ls, marker="s", ms=3.0)
-                    if col == "S_uV/K":
-                        a.set_ylim(-SLIM, SLIM); a.axhline(0, color="k", lw=0.5)
-                    else:
-                        a.set_yscale("log")
-                    a.set_xlim(XT[0] - 0.15, XT[-1] + 0.15); a.set_xticks(XT)
-                    a.set_xticklabels(XTL, fontsize=6)
-                    a.axvline(0, color="0.55", lw=0.6, ls=":")
-                    a.set_xlabel("n (cm^-3)", fontsize=8)
-                _present = {r["dataset"] for r in _sub}
-                _handles = [Line2D([], [], color=cc, lw=1.3, ls=ls, marker="s", ms=3.0,
-                                   label=_LBL.get(ds, ds))
-                            for ds, cc, ls in _ads if ds in _present]
-                if _handles:
-                    _f2.legend(handles=_handles, loc="lower center", bbox_to_anchor=(0.5, 0.01),
-                               ncol=min(5, len(_handles)), fontsize=7, frameon=False)
-                _f2.suptitle("%s  AMSET concentration scan, 600 K" % M, fontsize=11)
-                _f2.tight_layout(rect=[0, 0.08, 1, 0.93])
-                _f2.savefig(_adir / "amset_scan_600K.png", dpi=130); plt.close(_f2)
-                with open(_adir / "amset_scan_data_600K.csv", "w", newline="") as _fh:
-                    _w = csv.writer(_fh); _w.writerow(list(_r2[0].keys()))
-                    for r in _sub:
-                        _w.writerow([r.get(c, "") for c in _r2[0].keys()])
-                print("[plots] amset_scan/amset_scan_600K.png")
-    except Exception as _e:
-        print("[WARN] amset 浓度扫描图失败（%s: %s）" % (type(_e).__name__, _e))
+        write_mu_scan(cwd, out, plots, M, is_2d)
+    except Exception as _e:                                       # noqa: BLE001
+        print("[WARN] μ 扫描图失败（%s: %s）" % (type(_e).__name__, _e))
 
     try:                                                          # [0040] 本征载流子（未掺杂）单独出图
         write_undoped_plots(cwd, plots, M, is_2d)

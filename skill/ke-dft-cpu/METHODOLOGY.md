@@ -305,6 +305,36 @@ step8.x 的 `_SKILL_REV` 写进 comparison_summary.txt。改脚本即提交 GitH
 
 > 结果文档（未发表，不进 git）：`/mnt/d/tf_data/jzz/jap/comparison_vs_literature.md`
 
+## [0057] transport_plots 改版：目录改名、μ 按机制拆、温度蓝→红、μ − E_VBM 扫描（2026-10-18 用户定）
+
+| 新目录 | 原目录 | 内容 |
+|---|---|---|
+| `transport_models_<段>/` | `phonon_limited_<段>/` | 不变：基础 4 条（phonon + impurity / phonon-limited / ADP only / BT2×DPT-τ）× μ、S、σ、PF、κe |
+| `mobility_mechanisms_<段>/` | `transport_<段>/` | **只画 μ**，每温度一个面板（3×3）：AMSET 每个散射机制单独一条（transport.json 的单机制 μ，虚线）+ phonon + impurity 总值（黑实线）+ DPT 带边横线；不再画 phonon-limited 线、不再重复 S/σ/PF/κe 四列 |
+| `temperature_series/` | `datasets/` | 每个数据集一张、每温度一条线；颜色低温蓝 → 高温红；按浓度两段 `<M>_<数据集>_{carrier_tuning,low_doping}.png/.csv`，同一个文件夹 |
+| `mu_scan/` | `bt2_muscan/` + `amset_scan/` | 600 K，横轴 μ − E_VBM：BT2×DPT-τ 连续曲线 + AMSET 点 |
+
+- **为什么**：`transport_<段>` 与 `phonon_limited_<段>` 的 S/σ/PF/κe 四列几乎一样（transport 只多了部分机制子集，
+  MoS2 的 ADP+POP+ODP 子集就是 phonon-limited 本身）；μ 列又没把每个机制拆开。
+- **mobility_mechanisms**：单机制 μ ≥ 1e10（该机制前因子为 0）不要；超过「总值 / DPT 最大值 × 100」的不画
+  （低浓度 IMP 可到 1e7+，会把总值压成一条线），图注写明、值全在表里（`mu_<机制>_only_cm2/Vs`、`mu_total_cm2/Vs`、
+  `mu_DPT_band_edge_cm2/Vs`）。黑线是 AMSET 全部机制一起算（每个态的散射率先相加再热平均），比单机制曲线的
+  Matthiessen 倒数和低 —— 两者不一样是 RTA 下的正常现象，不是错。
+- **mu_scan 的换算**（两边能量零点不同，必须各减各的 VBM）：
+  - BT2：x = μ_rel − VBM_rel，μ_rel 是 S8.1 网格（零点 = S8.1 的 `data.fermi`）。VBM_rel 优先读 boltztrap_crta.json 新增的
+    `band_edges_rel_efermi_eV`（S8.1 [0057] 起写，剪刀后的能带）；旧结果做过剪刀时 S8.1 把 E_F 放在带隙正中
+    （`data.fermi = VBM + Eg/2`），所以 VBM_rel = −Eg/2；两者都没有（没做剪刀，零点 = VASP E_F）就**不画 BT2**，不猜。
+  - AMSET：x = fermi_levels − E_v，fermi_levels 是 transport.json 里 AMSET 对每个掺杂档自己解的 E_F（eV）；
+    E_v 读 undoped_ni.json（amset_fermi_fix 用 AMSET 自己的 DOS 求的带边，剪刀后，与 fermi_levels 同零点）；
+    缺时退回运行目录 vasprun.xml 的 DFT 带边 − Δ/2（AMSET 剪刀对半分）。顺带自检：transport.json 本征点 E_F
+    与 undoped_ni.json 记录的 E_F 差 > 1 meV 打 WARN。
+  - BT2 的 σ、κe = BoltzTraP2 σ/τ、κe/τ × S8.3 同一个 DPT τ(T)（n < 0 电子 τ、n > 0 空穴 τ），面内平均、层厚归一，
+    与本征表 BT2 行同一口径（不再用 paper_mu_scan 的 x/y 分方向、WF κe）；双极区不给 μ。
+- **mechanism_resolved_mobility.png**：去掉核对圆圈（相邻掺杂档的同一总值，CSV 里 role = check 仍保留，
+  相差 > 5% 照旧打 WARN）；标题拆两行，写明黑线 / 点线的含义。
+- 只改出图：已有结果用 `tools/make_transport_plots.py <材料>/ke-dft-cpu` 重出即可，不用重跑 S8.3；mu_scan 的 BT2 曲线
+  对没做剪刀的旧 S8.1 结果要重跑 S8.1 才有。
+
 ## [0056] phonon-limited 掺杂扫描按浓度拆两段（2026-10-17 用户定）
 
 - **为什么**：[0055] 加了低浓度段以后，`<M>_phonon_limited.png` 的 ± 浓度轴原点下探到 1e9，载流子调控区（1e17–1e21）

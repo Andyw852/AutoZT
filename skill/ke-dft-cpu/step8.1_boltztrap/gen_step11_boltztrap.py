@@ -52,7 +52,7 @@ AMSET_DIR   = "step8_amset"            # 读 2d_correction.json 拿 c/t（若有
 AMSET2D_DIR = "step8.4_amset2d"        # [0016] 2D 不跑 S8 时，c/t 与掺杂档改读 S8.4
 STEP = "step8.1_boltztrap"
 # [0016] 版本戳：写进 boltztrap_crta.json 与 paper_mu_scan_*.csv 首行（以前没有，跨材料核对只能看文件时间）
-_SKILL_REV = "2026-10-10-0026-zz"
+_SKILL_REV = "2026-10-18-0057"   # [0057] boltztrap_crta.json 加 band_edges_rel_efermi_eV（S8.3 mu_scan 的 μ − E_VBM 要用）；之前 2026-10-10-0026-zz
 
 TEMPERATURES = [100, 200, 300, 400, 500, 600, 700, 800, 900]  # K
 # patch_mu_window：CRTA 类文献普遍把 μ 扫到带边上下 ±3 eV，ZT 峰
@@ -406,8 +406,17 @@ def run_boltztrap_crta(uniform_dir, temperatures, mu_window_ev, mu_npts,
         carr = (N + float(nelect)) / vuc_cm3
 
     mu_ev = (mur - efermi) * Ha    # 相对费米能，eV
+    # [0057] 带边（同一零点 = efermi，剪刀后）：S8.3 mu_scan 把 μ 换成 μ − E_VBM 要用。金属/带跨 E_F -> None。
+    _eb = np.asarray(getattr(data, "ebands", []), dtype=float)
+    edges = None
+    if _eb.ndim == 2 and _eb.size:
+        _vb, _cb = _eb[_eb.max(axis=1) <= efermi], _eb[_eb.min(axis=1) > efermi]
+        if _vb.size and _cb.size and len(_vb) + len(_cb) == _eb.shape[0]:
+            edges = {"vbm": round(float((_vb.max() - efermi) * Ha), 5),
+                     "cbm": round(float((_cb.min() - efermi) * Ha), 5)}
     res = {
         "scissor": scissor_info,          # patch_bt2_scissor
+        "band_edges_rel_efermi_eV": edges,
         "temperatures_K": [float(t) for t in Tr],
         "mu_rel_efermi_eV": [round(float(x), 5) for x in mu_ev],
         "cell_volume_cm3": vuc_cm3,
