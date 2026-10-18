@@ -288,8 +288,18 @@ def make_transport(mdir, out, M):
         OV = collect(cond, asbk, kap, mob["overall"])
         AD = collect(iad["conductivity_S_m"], iad["seebeck_uV_K"], iad["electronic_thermal_conductivity_W_mK"],
                      iad["mobility_cm2_Vs_s"]["ADP"]) if iad else None
-        data[T] = dict(nd=np.array(nd), Sd=np.array(Sd), gd=np.array(gd), pd=np.array(pd), kd=np.array(kd), OV=OV, AD=AD)
-        for i in range(len(nd)):
+        # [0056-r4] 2026-10-18 用户定：BT2 曲线只画到 AMSET 掺杂网格的范围（同号支，|n| 在 AMSET 最小~最大档之间，
+        #   与 S8.3 BT2×DPT-τ「不外推」同规则）。BT2 化学势扫描能一路扫到 1e21 以上，那一段 AMSET 没有点可比，
+        #   低温（100–200 K）还会因 DOS 直方图分辨率不够出现锯齿（kT 小于 / 接近能量格宽）。
+        nd = np.array(nd)
+        _ok = np.zeros(len(nd), bool)
+        for _neg in (True, False):
+            _a = np.abs(np.array([x for x in OV["na"] if x != 0 and (x < 0) == _neg]))
+            if _a.size:
+                _ok |= ((nd < 0) == _neg) & (nd != 0) & (np.abs(nd) >= _a.min() * 0.999) & (np.abs(nd) <= _a.max() * 1.001)
+        nd = np.where(_ok, nd, np.nan)
+        data[T] = dict(nd=nd, Sd=np.array(Sd), gd=np.array(gd), pd=np.array(pd), kd=np.array(kd), OV=OV, AD=AD)
+        for i in np.flatnonzero(_ok):
             br = "electron" if nd[i] < 0 else "hole"
             rows_out.append([T, "DPT", br, nd[i], Sd[i], gd[i], pd[i], kd[i], ""])
         for tag, X in (("AMSET_overall", OV), ("AMSET_ADP", AD)):
@@ -334,9 +344,16 @@ def _plot_transport(data, btT, muedge, _in, slim, tag, path, M, mdir):
             if dd["AD"] is not None:
                 seg(ax, *cut(dd["AD"], key), color="tab:green", lw=1.2, ls=":", marker="^", ms=3.5)
             if q == "mu":
-                for c, col in (("electron", "tab:blue"), ("hole", "tab:purple")):
+                # [0056-r4] 用户 2026-10-18：横轴是掺杂浓度，左半 = n 型只该有电子、右半 = p 型只该有空穴；线上直接标注
+                _xe = AX["XT"][-1] + 0.15
+                for c, col, x0, x1, txt in (("electron", "tab:blue", -_xe, 0.0, "DPT $\\mu_{e}$ (band edge)"),
+                                            ("hole", "tab:purple", 0.0, _xe, "DPT $\\mu_{h}$ (band edge)")):
                     if c in muedge:
-                        ax.axhline(muedge[c] * (T0 / T), color=col, ls="-.", lw=0.9, alpha=0.85)
+                        yv = muedge[c] * (T0 / T)
+                        ax.plot([x0, x1], [yv, yv], color=col, ls="-.", lw=0.9, alpha=0.85)
+                        ax.text(x0 + 0.1 if c == "electron" else x1 - 0.1, yv * 1.15, txt, color=col, fontsize=6.5,
+                                ha="left" if c == "electron" else "right", va="bottom",
+                                bbox=dict(fc="white", ec="none", alpha=0.7, pad=0.4))
                 ax.set_yscale("log"); ax.set_ylim(2, 50000)
             elif q == "S":
                 ax.set_ylim(-slim, slim); ax.axhline(0, color="k", lw=0.5)
@@ -357,8 +374,11 @@ def _plot_transport(data, btT, muedge, _in, slim, tag, path, M, mdir):
     cap = ["AMSET phonon + impurity: AMSET, %s (all mechanisms of this run).  AMSET ADP only: AMSET, ADP alone" % _ov,
            "BT2×DPT-τ: BoltzTraP2 band transport with one constant τ per carrier from DPT (Bardeen-Shockley, ADP only),"
            " τ(T) = τ(300 K)·300/T; x = BoltzTraP2 net carrier density n(μ) of each chemical-potential point",
-           "DPT μ (dash-dot horizontal lines, μ panel only): Bardeen-Shockley band-edge mobility μ = eτ/m*,"
-           " a single number per carrier and T - it does not depend on n, hence horizontal"]
+           "DPT μ (dash-dot horizontal lines, μ panel only; electrons on the n-type half, holes on the p-type half):"
+           " Bardeen-Shockley band-edge mobility μ = eτ/m*, μ(T) = μ(300 K)·300/T - one number per carrier and T,"
+           " independent of n, hence horizontal",
+           "BT2×DPT-τ is drawn only within the AMSET doping range of each side (no extrapolation);"
+           " κe of BT2×DPT-τ = L0·σ·T with L0 = 2.44e-8 W Ω/K² (Wiedemann-Franz)"]
     cap += _abbr(allm + ["ADP"])
     if bad:
         cap.append(GRAY_CAP)

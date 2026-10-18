@@ -126,6 +126,10 @@ def test_tool_transport_split(tmp_path):
         "twoD_c_over_t": 1.0, "temperatures_K": temps, "mu_rel_efermi_eV": list(range(len(nb))),
         "carrier_conc_cm-3": [nb for _ in temps], "sigma_over_tau_xx": [[abs(n) * 1e-1 for n in nb] for _ in temps],
         "seebeck_xx_V_per_K": [[-2e-4 if n < 0 else 2e-4 for n in nb] for _ in temps]}))
+    (cwd / "step8.2_dpt").mkdir()
+    (cwd / "step8.2_dpt" / "dpt_result.json").write_text(json.dumps({"results": [
+        {"carrier": c, "by_direction": {"status": "ok", "x": {"tau_s": 1e-13, "mobility_cm2_Vs": m}}}
+        for c, m in (("electron", 200.0), ("hole", 900.0))]}))
     od = tmp_path / "tp"
     od.mkdir()
     assert t.make_transport(str(cwd), str(od), "MoS2")
@@ -134,6 +138,9 @@ def test_tool_transport_split(tmp_path):
     assert not list(od.glob("MoS2_transport*"))
     rows = list(csv.reader((hi / "MoS2_transport_carrier_tuning_300K.csv").read_text().splitlines()))[1:]
     assert rows and min(abs(float(r[3])) for r in rows) >= 1e17 * 0.999
+    dpt = [r for r in rows if r[1] == "DPT"]          # [0056-r4] BT2 只在 AMSET 掺杂范围内（不外推，1e21 那一档不画）
+    assert dpt and max(abs(float(r[3])) for r in dpt) <= max(HIGH) * 1.001
+    assert min(abs(float(r[3])) for r in dpt) >= min(HIGH) * 0.999
     lo = sorted(od.glob("transport_low_doping_*"))     # 原点 = AMSET 网格最小点所在十年
     assert len(lo) == 1
     rows = list(csv.reader((lo[0] / "MoS2_transport_low_doping_300K.csv").read_text().splitlines()))[1:]

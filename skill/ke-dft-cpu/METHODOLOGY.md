@@ -336,6 +336,21 @@ step8.x 的 `_SKILL_REV` 写进 comparison_summary.txt。改脚本即提交 GitH
   (N(μ, T) + nelect)/V_cell（N 为 −∫DOS·f dE，负 = 电子）；固定 T 下一一对应、单调。S8.3 的 BT2×DPT-τ 曲线把
   BT2 的 (n, 输运量) 在同号支上对 log|n| 插值到 AMSET 的掺杂档（不外推）。
 
+- **r4（2026-10-18 用户要求）独立脚本 transport 图**：DPT 带边迁移率横线只画在对应半边（电子 = 左半 n 型，空穴 = 右半
+  p 型），线上标 `DPT μe / μh (band edge)`；BT2×DPT-τ 曲线只画 AMSET 掺杂网格范围内（同号支、最小~最大档之间，
+  与 S8.3「不外推」同规则），1e21 一带 AMSET 没有点、低温 DOS 直方图格宽 ≳ kT 出锯齿的那段不再画，表同步。
+- **两条 BT2 路线算法不同（核对后记录）**：
+
+  | | S8.3 `BT2_DPTtau`（`gen_step13_output`） | 独立脚本 `make_transport_plots` 的 BT2×DPT-τ |
+  |---|---|---|
+  | 横轴 | AMSET 掺杂档（BT2 的 (n, 量) 按 log\|n\| 插值过来，不外推） | BT2 每个化学势点自己的 n(μ) |
+  | σ/τ、S | 面内平均 (xx+yy)/2 | xx 分量 |
+  | τ | `load_dpt(T)` 的 μ·m*/e（每个温度） | DPT x 方向 τ(300 K) × 300/T |
+  | κe | BT2 自己的 κe/τ × τ | Wiedemann–Franz L0·σ·T（L0 = 2.44e-8） |
+  | AMSET | 面内平均 | xx 分量 |
+
+  AMSET 方向相反：给定掺杂浓度，求费米能级（`amset_fermi_fix`），没有 μ → n 换算。
+
 ## [0055] 低浓度段 DOPING_LOW（2026-10-16 用户要求）
 
 - **为什么**：出厂掺杂网格 3D 1e17–1e21 cm⁻³、2D 1e11–1e14 cm⁻²，和本征点（n = p）之间空着好几个十年；
