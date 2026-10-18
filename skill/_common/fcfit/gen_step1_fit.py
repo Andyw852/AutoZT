@@ -744,6 +744,21 @@ def _gen_one(conf, out, job_label="S1fit"):
             min_gap=float(conf["CUT3_MIN_GAP"]))
     except Exception as _e:                              # noqa: BLE001
         _cnote = "shell enumeration failed: %s" % _e
+    # 优先用 S4 的 disp_plan.json 里已按超胞安全截断剔过的候选（2026-10-18）：
+    #   S4 生成位移时就定了超胞并剔掉越界档；S5 这里若独立重算，会把越界档又拉
+    #   回来（Si 实测：S4 已剔到 [4.2,5.0,5.71]，S5 重算又给出 6.33/6.90）。
+    _plan = src / "disp_plan.json"
+    if _plan.is_file() and _cands:
+        try:
+            _pc = [float(x) for x in ((json.loads(
+                _plan.read_text(encoding="utf-8")) or {}).get("cut3_candidates") or [])]
+            if _pc:
+                if [round(c, 2) for c in _pc] != [round(c, 2) for c in _cands]:
+                    print("[..] 候选改取 S4 disp_plan.json 的记录 %s（本步独立重算得 %s）"
+                          % (_pc, _cands))
+                _cands = _pc
+        except Exception as _e:                          # noqa: BLE001
+            print("[WARN] 读 disp_plan.json 失败（按本步重算的候选继续）：%s" % _e)
     if not _shells and _pos.is_file():
         # explicit / off candidates: still record the shells, S2's kappa-vs-cutoff
         # figure labels every cutoff with the number of shells inside it
@@ -754,10 +769,32 @@ def _gen_one(conf, out, job_label="S1fit"):
             _shells = []
     print("[..] 壳层/截断候选：%s" % _cnote)
     _safe, _nsc, _eff = None, 0, {}
+    # 超胞结构（算安全截断用）：SPOSCAR → POSCAR → 任一 disp-*/POSCAR。
+    #   跨集群回传（S4 在 jzzn、S5 在 GPU 集群）只带 disp-*/，SPOSCAR 不在
+    #   fetch_files 里 → 以前这里直接异常 → _safe=None → 候选一档都不剔除，
+    #   S5 又按最大候选去拟合越界截断（2026-10-18 Si 实测：4×4×4 超胞却给出
+    #   6.33/6.90 两档）。disp-00000/POSCAR 就是未位移完美超胞，等价于 SPOSCAR。
+    #   顺序很重要：src/POSCAR 往往是【原胞】（2 原子），拿它算安全截断只有
+    #   1.47 Å → 候选被剔光（2026-10-18 实测）。超胞优先，原胞只当最后兜底。
+    _sc_src = None
+    for _cand in (src / "SPOSCAR",):
+        if _cand.is_file():
+            _sc_src = _cand
+            break
+    if _sc_src is None:
+        _frames = sorted(Path(src).glob("disp-*/POSCAR"))
+        if _frames:
+            _sc_src = _frames[0]
+    if _sc_src is None and (src / "POSCAR").is_file():
+        _sc_src = src / "POSCAR"
     try:
-        _sc_cell, _sc_frac = fc.read_poscar_cell_frac(src / "SPOSCAR")
+        _sc_cell, _sc_frac = fc.read_poscar_cell_frac(_sc_src)
         _nsc = len(_sc_frac)
         _safe = fc.supercell_safe_cutoff(_sc_cell)
+        if _sc_src is not None and _sc_src.name == "POSCAR" \
+                and _sc_src.parent.name.startswith("disp-"):
+            print("[..] 超胞结构取自 %s/%s（无 SPOSCAR，用未位移帧）"
+                  % (_sc_src.parent.name, _sc_src.name))
     except Exception:
         _safe = None
     if _safe is not None:
