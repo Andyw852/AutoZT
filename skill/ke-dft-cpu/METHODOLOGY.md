@@ -362,6 +362,37 @@ step8.x 的 `_SKILL_REV` 写进 comparison_summary.txt。改脚本即提交 GitH
 - `datasets/`、`amset_scan/` 仍用整轴，不变。`tools/make_transport_plots.py` 同步（它的 transport 图是 DPT 路线 +
   AMSET phonon + impurity + ADP only；低浓度段 σ/PF/κe 纵轴改自动范围）。
 
+- **r3（2026-10-18 用户要求）图注**：四张分段图底部加图注 —— 每条曲线 = 哪种计算 + 用了哪些散射机制
+  （phonon + impurity = 本轮 transport.json 全部机制；phonon-limited = 去 IMP 的子集；ADP only；BT2×DPT-τ =
+  BoltzTraP2 常弛豫时间、τ 取 DPT 的 Bardeen–Shockley 值，只含声学形变势），并给出现过的机制缩写全称
+  （ADP/POP/ODP/IVS/IMP/PIE）。刚性能带近似不成立的浓度（本征表 `in_interpret_range = NO`，每原子载流子数 >
+  阈值，与 S8.4 同判据）灰底标出；以前 9×5 图不标，最外侧（最高浓度）那几档看起来像"数据有问题"，其实是这条判据外。
+  载流子调控段上限由 ∞ 改为轴端 1e21（轴外的点不再画出边框）。独立脚本的旧图例 `DPT route` / `DPT band-edge e- h+`
+  改为 `BT2×DPT-τ` / `DPT μ, electrons|holes (band edge)`，图注说明横线 = Bardeen–Shockley 带边迁移率
+  μ = eτ/m*，每个载流子、每个温度一个数，与浓度无关。
+- **化学势 μ 与浓度 n**：BoltzTraP2 扫化学势，每个 μ 由插值能带的 DOS 算净载流子 n(μ, T) =
+  (N(μ, T) + nelect)/V_cell（N 为 −∫DOS·f dE，负 = 电子）；固定 T 下一一对应、单调。S8.3 的 BT2×DPT-τ 曲线把
+  BT2 的 (n, 输运量) 在同号支上对 log|n| 插值到 AMSET 的掺杂档（不外推）。
+
+- **r4/r5（2026-10-18 用户要求）统一 + DPT 横线**：`tools/make_transport_plots.py` 不再有自己的算法，直接调用
+  `gen_step13_output.write_transport_plots(cwd, out, is_2d, plots=<输出目录>, M=<材料名>)`，产物与 S8.3 逐字相同
+  （测试 test_0056 逐个 CSV 比对）。以前它自己算的 BT2×DPT-τ 与 S8.3 不是一回事：
+
+  | | 以前的独立脚本（已删） | S8.3（现在两边都用这套） |
+  |---|---|---|
+  | BT2 横轴 | BT2 每个化学势点自己的 n(μ)，一直扫到 1e21 以上 | BT2 的 (n, 量) 按 log\|n\| 插值到 AMSET 掺杂档，不外推 |
+  | σ/τ、S、AMSET | 只取 xx | 面内平均 (xx+yy)/2（3D 迹/3） |
+  | τ | DPT x 方向 τ(300 K) × 300/T | 每个温度的 DPT τ = μ·m*/e |
+  | BT2 κe | Wiedemann–Franz L0·σ·T（L0 = 2.44e-8） | BT2 自己的 κe/τ × τ |
+
+  AMSET 方向相反：给定掺杂浓度求费米能级（`amset_fermi_fix`），没有 μ → n 换算。
+  transport 图的 μ 列加 DPT 带边迁移率横线（本征表的 `DPT` / `DPT_mv` 行）：电子只画 n 型（左）半边、空穴只画
+  p 型（右）半边；μ 轴顶部留 22% 空白，数值标注写在空白里（左上电子、右上空穴），不压曲线。
+  目录名为 `transport_plots` 才清空旧结果（独立脚本指定别的输出目录时不删）。
+- **S8.1 低温锯齿**：BT2 自己的 μ 扫描在 100–200 K、高浓度出锯齿，可能是 DOS 直方图格宽（`DOS_NPTS = 4000`
+  覆盖全部能带）≳ kT。统一后 BT2 只在 AMSET 掺杂档取插值、不画 1e21 以外，影响已很小；要消掉需改脚本常量并
+  重跑 S8.1 → S8.3（全部材料），暂不做（用户 2026-10-18：没必要）。
+
 ## [0055] 低浓度段 DOPING_LOW（2026-10-16 用户要求）
 
 - **为什么**：出厂掺杂网格 3D 1e17–1e21 cm⁻³、2D 1e11–1e14 cm⁻²，和本征点（n = p）之间空着好几个十年；

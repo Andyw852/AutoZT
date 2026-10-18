@@ -105,36 +105,106 @@ def _tool():
     return mod
 
 
-def test_tool_transport_split(tmp_path):
-    """tools/make_transport_plots.py 的 transport 图（DPT 路线 + AMSET）同样按两段出文件夹。"""
-    t = _tool()
+def _add_dpt_rows(out):
+    tab = out / "intrinsic" / "intrinsic_transport_table.csv"
+    with open(tab, "a", newline="") as fh:
+        w = csv.writer(fh)
+        for T in (300.0, 600.0):
+            for typ, mu in (("n", 200.0 * 300 / T), ("p", 900.0 * 300 / T)):
+                w.writerow([T, "DPT", typ] + [""] * 10 + [mu, ""])
+
+
+def test_tool_is_s83(tmp_path):
+    """[0056-r5] 用户定「统一」：独立脚本 = S8.3 的 write_transport_plots，产物逐字相同。"""
+    g, t = _s83(), _tool()
     cwd, out = _material(tmp_path, LOW + HIGH)
-    grid = json.loads((cwd / "step8.4_amset2d" / "transport.json").read_text())["doping"]
-    temps = [300.0, 600.0]
-    t3 = lambda v: [[v, 0, 0], [0, v, 0], [0, 0, v]]
-    arr = lambda f: [[t3(f(n)) for _ in temps] for n in grid]
-    (cwd / "step8.4_amset2d" / "transport.json").write_text(json.dumps({
-        "doping": grid, "temperatures": temps, "conductivity": arr(lambda n: abs(n) * 1e-14 + 1e-6),
-        "seebeck": arr(lambda n: -200.0 if n < 0 else 200.0), "electronic_thermal_conductivity": arr(lambda n: 1e-3),
-        "mobility": {"overall": arr(lambda n: 100.0)}}))
-    (cwd / "step8.4_amset2d" / "subset_ADP.json").write_text(json.dumps({"intrinsic": {
-        "conductivity_S_m": arr(lambda n: abs(n) * 2e-14 + 1e-6), "seebeck_uV_K": arr(lambda n: 210.0),
-        "electronic_thermal_conductivity_W_mK": arr(lambda n: 2e-3), "mobility_cm2_Vs_s": {"ADP": arr(lambda n: 300.0)}}}))
-    (cwd / "step8.1_boltztrap").mkdir()
-    nb = [s * 10 ** k for s in (-1, 1) for k in range(9, 22)]
-    (cwd / "step8.1_boltztrap" / "boltztrap_crta.json").write_text(json.dumps({
-        "twoD_c_over_t": 1.0, "temperatures_K": temps, "mu_rel_efermi_eV": list(range(len(nb))),
-        "carrier_conc_cm-3": [nb for _ in temps], "sigma_over_tau_xx": [[abs(n) * 1e-1 for n in nb] for _ in temps],
-        "seebeck_xx_V_per_K": [[-2e-4 if n < 0 else 2e-4 for n in nb] for _ in temps]}))
-    od = tmp_path / "tp"
-    od.mkdir()
-    assert t.make_transport(str(cwd), str(od), "MoS2")
-    hi = od / "transport_carrier_tuning_1e17-1e21"
-    assert (hi / "MoS2_transport_carrier_tuning.png").is_file()
-    assert not list(od.glob("MoS2_transport*"))
-    rows = list(csv.reader((hi / "MoS2_transport_carrier_tuning_300K.csv").read_text().splitlines()))[1:]
-    assert rows and min(abs(float(r[3])) for r in rows) >= 1e17 * 0.999
-    lo = sorted(od.glob("transport_low_doping_*"))     # 原点 = AMSET 网格最小点所在十年
-    assert len(lo) == 1
-    rows = list(csv.reader((lo[0] / "MoS2_transport_low_doping_300K.csv").read_text().splitlines()))[1:]
-    assert rows and max(abs(float(r[3])) for r in rows) <= 1e16 * 1.001
+    _add_dpt_rows(out)
+    (cwd / "step1_opt").mkdir()
+    (cwd / "step1_opt" / "workflow_method.txt").write_text("DIM=2d\n")      # 独立脚本按 S1 判维（同 S8.3 main）
+    g.write_transport_plots(cwd, out, True)
+    od = tmp_path / "tool_out"
+    assert t.run(str(cwd), str(od), "MoS2")
+    tp = cwd.parent / "transport_plots"
+    a = sorted(str(x.relative_to(tp)) for x in tp.rglob("*.csv"))
+    b = sorted(str(x.relative_to(od)) for x in od.rglob("*.csv"))
+    assert a == b and a
+    for rel in a:
+        assert (tp / rel).read_text() == (od / rel).read_text(), rel
+    assert (od / "transport_carrier_tuning_1e17-1e21" / "MoS2_transport_carrier_tuning.png").is_file()
+
+
+def test_tool_skips_without_s83_table(tmp_path):
+    t = _tool()
+    cwd = tmp_path / "MoS2" / "ke-dft-cpu"
+    cwd.mkdir(parents=True)
+    assert t.run(str(cwd)) is False
+
+
+def test_dpt_lines_half_side_and_label_headroom(tmp_path):
+    """DPT 带边 μ：电子线只在左半（x ≤ 0）、空穴只在右半（x ≥ 0）；μ 轴顶部留空白放标注，曲线不进标注区。"""
+    g = _s83()
+    cwd, out = _material(tmp_path, LOW + HIGH)
+    _add_dpt_rows(out)
+    import matplotlib.figure as mf
+    got = []
+    orig = mf.Figure.savefig
+
+    def spy(self, *a, **k):
+        if "transport_carrier_tuning" in str(a[0]):
+            got.append(self.axes[0])                  # 第一行第一列 = μ
+        return orig(self, *a, **k)
+    mf.Figure.savefig = spy
+    try:
+        g.write_transport_plots(cwd, out, True)
+    finally:
+        mf.Figure.savefig = orig
+    ax = got[0]
+    dash = [l for l in ax.get_lines() if l.get_color() in ("navy", "tab:purple")]
+    assert len(dash) == 2
+    for l in dash:
+        x = l.get_xdata()
+        assert max(x) <= 0 or min(x) >= 0                   # 不跨过中线
+    lo, hi = ax.get_ylim()
+    import math
+    top_data = max(max(l.get_ydata()) for l in ax.get_lines() if len(l.get_ydata()))
+    frac = (math.log10(top_data) - math.log10(lo)) / (math.log10(hi) - math.log10(lo))
+    assert frac <= 0.80                                     # 标注区（顶部约 20%）里没有曲线
+    texts = [tx.get_text() for tx in ax.texts]
+    assert any("mu_{e}" in tx for tx in texts) and any("mu_{h}" in tx for tx in texts)
+
+
+def test_mech_caption_lists_mechanisms():
+    g = _s83()
+    meta = {"overall_labels": ["ADP", "IMP", "POP", "ODP"],
+            "sets": {"intrinsic": {"labels": ["ADP", "POP", "ODP"]}, "ADP_only": {"labels": ["ADP"]}}}
+    lab = {"overall": "phonon + impurity (ADP+IMP+POP+ODP)", "intrinsic": "phonon-limited (ADP+POP+ODP)",
+           "ADP_only": "ADP only (acoustic limit)", "BT2_DPTtau": "BT2×DPT-τ"}
+    ds = [(k, "", "", "") for k in ("overall", "intrinsic", "ADP_only", "BT2_DPTtau")]
+    cap = g._mech_caption(ds, meta, lab)
+    assert cap[0] == "phonon + impurity: AMSET, ADP+IMP+POP+ODP (all mechanisms of this run)"
+    assert cap[1] == "phonon-limited: AMSET, ADP+POP+ODP (IMP removed)"
+    assert "Bardeen-Shockley" in cap[3]
+    assert cap[4].startswith("ADP = ") and "IMP = ionized impurity" in cap[4] and "ODP = " in cap[4]
+
+
+def test_gray_shading_for_rigid_band_limit(tmp_path):
+    """in_interpret_range = NO 的档画灰底（只验证不崩、图注里有 Gray 说明）。"""
+    g = _s83()
+    cwd, out = _material(tmp_path, LOW + HIGH)
+    tab = out / "intrinsic" / "intrinsic_transport_table.csv"
+    rows = list(csv.DictReader(tab.read_text().splitlines()))
+    for r in rows:
+        r["in_interpret_range"] = "NO" if abs(float(r["n_cell_cm-3"])) >= 1e20 else "yes"
+    with open(tab, "w", newline="") as fh:
+        w = csv.DictWriter(fh, fieldnames=list(rows[0].keys()))
+        w.writeheader()
+        w.writerows(rows)
+    seen = []
+    import matplotlib.figure as mf
+    orig = mf.Figure.text
+    mf.Figure.text = lambda self, *a, **k: (seen.append(a[2]), orig(self, *a, **k))[1]
+    try:
+        g.write_transport_plots(cwd, out, True)
+    finally:
+        mf.Figure.text = orig
+    assert any("Gray: beyond rigid-band range" in t for t in seen)
