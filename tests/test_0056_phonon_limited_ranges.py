@@ -54,7 +54,7 @@ def _material(tmp_path, dop):
         for T in (300.0, 600.0):
             for ds in ("overall", "intrinsic", "ADP_only", "BT2_DPTtau", "ADP_POP"):
                 for n in grid:
-                    w.writerow([T, ds, "n" if n < 0 else "p", n, "", "", "", "", "yes",
+                    w.writerow([T, ds, "n" if n < 0 else "p", n, abs(n) * 1e-7, "", "", "", "yes",
                                 -200 if n < 0 else 200, 1e4 * (abs(n) + 1) / 1e18, 1e-3, 0.1, 100, ""])
     return cwd, out
 
@@ -87,6 +87,7 @@ def test_two_folders_with_low_doping(tmp_path):
     assert {"mu_ADP_only_cm2/Vs", "mu_POP_only_cm2/Vs", "mu_IMP_only_cm2/Vs", "mu_total_cm2/Vs"} <= set(rows[0])
     assert sorted({abs(float(r["n_cell_cm-3"])) for r in rows}) == HIGH
     assert float(rows[0]["mu_ADP_only_cm2/Vs"]) == pytest.approx(500.0)
+    assert all(r["n_2D_cm-2"] for r in rows)                  # 浓度口径列从本征表配上（[0057-r1]）
     rows = list(csv.DictReader((mlo / "MoS2_mobility_mechanisms_low_doping_600K.csv").read_text().splitlines()))
     assert sorted({abs(float(r["n_cell_cm-3"])) for r in rows}) == LOW
     assert float(rows[0]["mu_ADP_only_cm2/Vs"]) == pytest.approx(250.0)

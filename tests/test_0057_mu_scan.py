@@ -26,7 +26,7 @@ def _s83():
 
 
 EV, EC = -1.20, 0.60          # AMSET 带边（eV，与 fermi_levels 同零点）
-DOP = [-1e19, -1e17, 0.0, 1e17, 1e19]
+DOP = [-2.8670345e19, -2.8670345e17, 0.0, 2.8670345e17, 2.8670345e19]   # 2D 换算后的非整数档（真实 MoS2 形状）
 EF = [0.55, 0.40, -0.30, -1.05, -1.15]   # 每个掺杂档的 E_F（600 K）
 
 
@@ -49,13 +49,14 @@ def _material(tmp_path, bt2_edges=None, scissor=None):
         for ds in ("overall", "intrinsic", "BT2_DPTtau"):
             for n in DOP:
                 if n:
-                    w.writerow([600.0, ds, "n" if n < 0 else "p", n, "yes", -200 if n < 0 else 200, 1e4, 1e-3, 0.1, 100])
+                    w.writerow([600.0, ds, "n" if n < 0 else "p", "%.6g" % n, "yes", -200 if n < 0 else 200, 1e4, 1e-3,
+                                0.1, 100])     # 本征表按 %.6g 写浓度（[0057-r1] 以前 1e-9 容差全配不上）
     mu = [-2.0 + 0.01 * i for i in range(401)]           # μ_rel，-2 .. +2 eV
     j = {"temperatures_K": [300.0, 600.0], "mu_rel_efermi_eV": mu,
          "carrier_conc_cm-3": [[(-1e18 if m > 0 else 1e18) for m in mu]] * 2,
          "seebeck_V_per_K": [[(-2e-4 if m > 0 else 2e-4) for m in mu]] * 2,
          "lorenz_WOhm_per_K2": [[2e-8] * len(mu)] * 2,
-         "sigma_over_tau_S_per_m_s": [[1e18] * len(mu)] * 2,
+         "sigma_over_tau_S_per_m_s": [[0.0 if abs(m) < 0.05 else 1e18 for m in mu]] * 2,   # 带隙深处下溢成 0
          "kappa_e_over_tau_W_per_m_K_s": [[1e10] * len(mu)] * 2}
     if bt2_edges:
         j["band_edges_rel_efermi_eV"] = bt2_edges
@@ -78,13 +79,15 @@ def test_mu_scan_conversion(tmp_path):
     cwd, out = _material(tmp_path, scissor={"applied": True, "target_gap_eV": 1.8})
     d = g.mu_scan_data(cwd, out, True)
     assert d["T"] == 600.0 and d["amset_vbm"] == EV and d["bt2_vbm"] == -0.9
-    am = {(r["dataset"], float(r["n_cell_cm-3"])): r["mu_minus_VBM_eV"] for r in d["amset"]}
+    am = {(r["dataset"], round(float(r["n_cell_cm-3"]) / 1e15)): r["mu_minus_VBM_eV"] for r in d["amset"]}
+    assert len(am) == 8                                              # overall + intrinsic，各 4 个非零档
     for n, ef in zip(DOP, EF):
         if n:
-            assert am[("overall", n)] == pytest.approx(ef - EV)       # 600 K 那一列 fermi_levels，减 AMSET VBM
-    assert ("BT2_DPTtau", 1e17) not in am                            # BT2 不从表里取点，画自己的连续曲线
+            assert am[("overall", round(n / 1e15))] == pytest.approx(ef - EV)   # 600 K 那一列 fermi_levels，减 AMSET VBM
+    assert not any(k[0] == "BT2_DPTtau" for k in am)                 # BT2 不从表里取点，画自己的连续曲线
     bt = {round(r["mu_rel_efermi_eV"], 4): r["mu_minus_VBM_eV"] for r in d["bt2"]}
-    assert bt[0.0] == pytest.approx(0.9) and bt[-0.9] == pytest.approx(0.0)
+    assert bt[0.1] == pytest.approx(1.0) and bt[-0.9] == pytest.approx(0.0)
+    assert 0.0 not in bt and 0.04 not in bt                          # σ/τ = 0 的点（S 是 0/0 占位）不要
     assert not any("WARN" in n for n in d["notes"])                  # 本征点 E_F 两份记录一致
 
 

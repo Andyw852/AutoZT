@@ -334,6 +334,11 @@ step8.x 的 `_SKILL_REV` 写进 comparison_summary.txt。改脚本即提交 GitH
   相差 > 5% 照旧打 WARN）；标题拆两行，写明黑线 / 点线的含义。
 - 只改出图：已有结果用 `tools/make_transport_plots.py <材料>/ke-dft-cpu` 重出即可，不用重跑 S8.3；mu_scan 的 BT2 曲线
   对没做剪刀的旧 S8.1 结果要重跑 S8.1 才有。
+- **r1（2026-10-18 用户本地重出后报）**：MoS2 的 mu_scan 一个 AMSET 点都没有 —— 本征表按 `%.6g` 写浓度
+  （−2.86705e20），transport.json 是全精度（−2.867034…e20），配对容差写成了 1e-9。改为 `_same_n`：同号且相对差
+  ≤ 1e-4（网格间距至少 ×1.5，不会配错）；mobility_mechanisms 表的 n_2D / n_lit / in_interpret_range 列是同一个
+  问题（配不上就空着），一并修。另：BT2 在带隙深处 σ/τ 下溢成 0，S 是 0/0 占位值（实测一段 S ≡ 0），这些点不画；
+  分机制图对数轴只留主网格。
 
 ## [0056] phonon-limited 掺杂扫描按浓度拆两段（2026-10-17 用户定）
 
