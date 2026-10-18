@@ -159,7 +159,7 @@ def test_dataset_files_named_by_mechanisms(tmp_path):
     out.mkdir()
     S.write_intrinsic_suite(out, cwd, True)
     S.write_transport_plots(cwd, out, True)
-    ddir = cwd.parent / "transport_plots" / "temperature_series"
+    ddir = cwd / "transport_plots" / "temperature_series"     # [0057] 2d97c37：默认输出在 ke 目录内（原 cwd.parent）
     names = sorted(p.name.replace("_carrier_tuning", "").replace("_low_doping", "") for p in ddir.glob("*.png"))
     assert "MoS2_ADP+POP.png" in names                       # 去 IMP 那套（S8.4 记的 intrinsic_labels）
     assert "MoS2_ADP.png" in names                           # 只 ADP
@@ -226,7 +226,7 @@ def test_transport_plots_cleared_before_regen(tmp_path):
     pytest.importorskip("matplotlib")
     S = _s83()
     cwd = T32._material(tmp_path)
-    plots = cwd.parent / "transport_plots"
+    plots = cwd / "transport_plots"     # [0057] 2d97c37：默认输出在 ke 目录内（原 cwd.parent）
     (plots / "old_sub").mkdir(parents=True)
     (plots / "old_sub" / "x.csv").write_text("old")
     (plots / "MoS2_transport_data_1000K.csv").write_text("old")

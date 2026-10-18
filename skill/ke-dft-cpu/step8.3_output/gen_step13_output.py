@@ -4055,8 +4055,32 @@ def write_transport_plots(cwd, out, is_2d, plots=None, M=None):
 
 
 
+def metal_not_applicable(cwd):
+    """[metal_mode] S7.1 判金属（step7b_deform_read/metal.json）：S8.3 是对比表 / 本征五参数图，
+    建立在半导体带边、有效质量与散射机制口径上，对金属不适用 -> 报错并给出关组办法。
+    本步 gen_need 为空（不推 ke_common.py），判定与文案在这里自带一份，与
+    ke_common.metal_not_applicable 同口径（改那边输出的组清单时请同步这里）。"""
+    p = Path(cwd) / "step7b_deform_read" / "metal.json"
+    if not p.is_file():
+        return
+    try:
+        m = json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        m = {"is_metal": True, "note": "metal.json 解析失败，按金属处理"}
+    if not (isinstance(m, dict) and m.get("is_metal")):
+        return
+    groups = ("amset3d", "dpt", "odp_frozen", "ivs_frozen", "output_compare")
+    sys.exit("[ERROR] S8.3_cmp 不适用于金属（S7.1 判定：%s）—— 对比表/本征五参数图建立在"
+             "半导体带边与散射机制上。\n"
+             "        金属的电子输运走 S8.1_bt2 的金属模式（见 METHODOLOGY「金属」一节）。\n"
+             "        在本材料的 tf_<项目>.yaml 关掉半导体专用的组：%s"
+             % (m.get("reason") or m.get("note") or "is_metal",
+                "、".join("%s: false" % g for g in groups)))
+
+
 def main():
     cwd = Path.cwd()
+    metal_not_applicable(cwd)                     # [metal_mode] 金属先退，别走到"读不到结果"那步
     out = cwd / OUTDIR_NAME
     out.mkdir(exist_ok=True)
     dim = _read_dim(cwd)
