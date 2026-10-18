@@ -109,6 +109,14 @@ steps:
                 submit_kappa.tpl, submit_shengbte_fcfit.tpl,
                 dim_common.py, thickness_2d.py, vdw_radii.py]}
 
+  # S6.1_plot：全流程出图归集（run: gen，登录节点，不交作业）。
+  #   [用户 2026-10-18 定] 把绘图做成流程的正式一步：前面算完，这里自动做；
+  #   且**不改变**各步原有的自动出图（S5.1_plot 的声子谱照旧落 step5_phonon_plot/），
+  #   本步只把 S5.1 声子谱 + S6 κL 图/表**统一复制**到 <材料根>/phonon-transport_plot/。
+  - {seq: 6.1, name: step6.1_plot, label: S6.1_plot, after: step6_kappa,
+     check: plot, run: gen, gen: gen_step6.1_plot.py,
+     done_marker: plot_manifest.json, gen_need: []}
+
 # NAC 为可选步组：极性绝缘体默认开（LO-TO 劈裂需要）。
 #   关闭：项目配置写 nac: false —— tf 直接不注入 step3_nac，S5/S6 因无 BORN 自然无 NAC。
 #   金属：step2 判金属后会打印提示，请手动置 nac: false（金属无 LO-TO 劈裂，DFPT 介电发散）。
@@ -257,8 +265,10 @@ flow:
     - {name: "力常数", steps: [S5_fc], produces: [fc2.hdf5, fc3.hdf5],
        desc: "拟合二阶/三阶力常数并导出 phono3py + ShengBTE 两种格式；虚频超阈判不稳定"}
     - {name: "输运", steps: [S6_kappa], produces: [kappa_summary.json], desc: "BTE 求 κL(T)"}
-    - {name: "出图", steps: [S5.1_plot], produces: [phonon_band.png],
-       desc: "声子谱绘图（登录节点，秒级）"}
+    - {name: "声子谱", steps: [S5.1_plot], produces: [phonon_band.png, phonon_plot_summary.json],
+       desc: "声子色散谱（计算节点小作业，产物落 step5_phonon_plot/）"}
+    - {name: "出图归集", steps: [S6.1_plot], produces: [phonon-transport_plot/plot_manifest.json],
+       desc: "把 S5.1 声子谱原样复制 + S6 κL 图/表汇到 材料根/phonon-transport_plot/（run: gen，秒级）"}
   next_skills:
     - {skill: te-screen, via: kappa_summary.json,
        desc: "κL 与电输运一起进 zT 热电筛选"}
