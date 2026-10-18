@@ -46,7 +46,7 @@ def test_one_figure_per_dataset(tmp_path):
     g = _s83()
     cwd, out = _material(tmp_path, ["overall", "intrinsic", "ADP_only", "BT2_DPTtau"])
     g.write_transport_plots(cwd, out, True)
-    ddir = cwd.parent / "transport_plots" / "datasets"
+    ddir = cwd / "transport_plots" / "datasets"
     for ds, fn in (("overall", "overall"), ("intrinsic", "intrinsic"), ("ADP_only", "ADP_only"),
                    ("BT2_DPTtau", "BT2_DPTtau")):
         assert (ddir / ("MoS2_%s.png" % fn)).is_file(), ds          # 没有 S8.4 机制信息时退回数据集键
@@ -54,14 +54,14 @@ def test_one_figure_per_dataset(tmp_path):
         assert rows[0].startswith("# dataset=%s" % ds)
         assert rows[1].split(",")[:3] == ["T_K", "type", "n_cell_cm-3"]
         assert len(rows) == 2 + 2 * 6                      # 2 温度 x 6 浓度
-    assert (cwd.parent / "transport_plots" / "transport_carrier_tuning_1e17-1e21"
+    assert (cwd / "transport_plots" / "transport_carrier_tuning_1e17-1e21"
             / "MoS2_transport_carrier_tuning.png").is_file()   # [0056] 主图按浓度分段进文件夹
 
 
 def test_stale_dataset_removed(tmp_path):
     g = _s83()
     cwd, out = _material(tmp_path, ["overall", "intrinsic", "ADP_only"])
-    ddir = cwd.parent / "transport_plots" / "datasets"
+    ddir = cwd / "transport_plots" / "datasets"
     ddir.mkdir(parents=True)
     (ddir / "MoS2_ADP_POP.png").write_bytes(b"old")
     g.write_transport_plots(cwd, out, True)

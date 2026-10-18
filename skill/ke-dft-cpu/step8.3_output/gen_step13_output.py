@@ -3202,7 +3202,7 @@ def write_transport_plots(cwd, out, is_2d, plots=None, M=None):
     [0047] 2026-10-15 用户选 2：<M>_intrinsic.png 恢复为【只画基础 4 条】(overall / 去 IMP /
       ADP only / BT2×DPT-τ)，与带机制对照的 <M>_transport.png 内容真正区分；
       _intrinsic_data_<T>K.csv 同步只含这 4 条（_transport_data_<T>K.csv 仍是全数据集）。
-    [0034] 输出位置 = cwd.parent/transport_plots/（材料根，不在 step8.3_output 内）；
+    [0034] 输出位置 = cwd/transport_plots/（ke 目录内，不在 step8.3_output 内）；
       skill.yaml 的 S8.3 用 fetch_extra 让 autozt fetch 一并把它拉回本地。
       绝不写 out 根目录的 comparison_300K.*。失败不阻断 S8.3 完成标记。
     [0056-r5] plots / M 给了就写到 plots、用 M 作材料名（tools/make_transport_plots.py 补图用，同一套代码）；
@@ -3214,7 +3214,7 @@ def write_transport_plots(cwd, out, is_2d, plots=None, M=None):
     import matplotlib.pyplot as plt
     from matplotlib.lines import Line2D
     if plots is None:
-        plots = cwd.parent / "transport_plots"      # [0034] 材料根目录（cwd = <材料>/ke-dft-cpu）
+        plots = cwd / "transport_plots"             # [0034] ke 目录内（cwd = <材料>/ke-dft-cpu）
         try:
             plots.mkdir(parents=True, exist_ok=True)
         except OSError:

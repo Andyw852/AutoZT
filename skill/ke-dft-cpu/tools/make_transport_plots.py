@@ -13,7 +13,7 @@
 
 <材料目录>  ke-dft-cpu 根（含 step8.3_output/、step8.4_amset2d/ 等；本地已 fetch 的 result/ 或集群目录）。
             需要 S8.3 已经写出 step8.3_output/intrinsic/intrinsic_transport_table.csv（S8.3 [0032] 起都有）。
-<输出目录>  缺省 = <材料目录>/../transport_plots（与 S8.3 相同；目录名为 transport_plots 时先清空旧结果）。
+<输出目录>  缺省 = <材料目录>/transport_plots（ke 目录内，与 S8.3 相同；目录名 transport_plots 时先清空旧结果）。
 [材料名]    缺省 = <材料目录> 的上一级目录名。
 
 产物（与 S8.3 相同，详见 gen_step13_output.write_transport_plots 的说明）:
@@ -49,7 +49,7 @@ def run(mdir, out=None, M=None):
     if not (src / "intrinsic" / "intrinsic_transport_table.csv").is_file():
         print("[skip] %s: 缺 %s/intrinsic/intrinsic_transport_table.csv（先跑 S8.3）" % (M, S.OUTDIR_NAME))
         return False
-    out = Path(os.path.abspath(out)) if out else mdir.parent / "transport_plots"
+    out = Path(os.path.abspath(out)) if out else mdir / "transport_plots"
     S.write_transport_plots(mdir, src, S._read_dim(mdir) == "2d", plots=out, M=M)
     print("[%s] -> %s" % (M, out))
     return True

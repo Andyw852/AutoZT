@@ -60,7 +60,7 @@ def test_two_folders_with_low_doping(tmp_path):
     g = _s83()
     cwd, out = _material(tmp_path, LOW + HIGH)
     g.write_transport_plots(cwd, out, True)
-    tp = cwd.parent / "transport_plots"
+    tp = cwd / "transport_plots"
     hi = tp / "phonon_limited_carrier_tuning_1e17-1e21"
     lo = tp / "phonon_limited_low_doping_1e10-1e16"
     assert (hi / "MoS2_phonon_limited_carrier_tuning.png").is_file()
@@ -84,7 +84,7 @@ def test_only_carrier_tuning_without_low_doping(tmp_path):
     g = _s83()
     cwd, out = _material(tmp_path, HIGH)
     g.write_transport_plots(cwd, out, True)
-    tp = cwd.parent / "transport_plots"
+    tp = cwd / "transport_plots"
     assert sorted(p.name for p in tp.glob("phonon_limited_*")) == ["phonon_limited_carrier_tuning_1e17-1e21"]
     assert sorted(p.name for p in tp.glob("transport_*")) == ["transport_carrier_tuning_1e17-1e21"]
 
@@ -124,7 +124,7 @@ def test_tool_is_s83(tmp_path):
     g.write_transport_plots(cwd, out, True)
     od = tmp_path / "tool_out"
     assert t.run(str(cwd), str(od), "MoS2")
-    tp = cwd.parent / "transport_plots"
+    tp = cwd / "transport_plots"
     a = sorted(str(x.relative_to(tp)) for x in tp.rglob("*.csv"))
     b = sorted(str(x.relative_to(od)) for x in od.rglob("*.csv"))
     assert a == b and a
