@@ -112,7 +112,7 @@ steps:
   # S6.1_plot：全流程出图归集（run: gen，登录节点，不交作业）。
   #   [用户 2026-10-18 定] 把绘图做成流程的正式一步：前面算完，这里自动做；
   #   且**不改变**各步原有的自动出图（S5.1_plot 的声子谱照旧落 step5_phonon_plot/），
-  #   本步只把 S5.1 声子谱 + S6 κL 图/表**统一复制**到 <材料根>/phonon-transport_plot/。
+  #   本步只把 S5.1 声子谱 + S6 κL 图/表**统一复制**到 <材料>/kl-dft-cpu/phonon-transport_plot/。
   - {seq: 6.1, name: step6.1_plot, label: S6.1_plot, after: step6_kappa,
      check: plot, run: gen, gen: gen_step6.1_plot.py,
      done_marker: plot_manifest.json, gen_need: []}
@@ -268,7 +268,7 @@ flow:
     - {name: "声子谱", steps: [S5.1_plot], produces: [phonon_band.png, phonon_plot_summary.json],
        desc: "声子色散谱（计算节点小作业，产物落 step5_phonon_plot/）"}
     - {name: "出图归集", steps: [S6.1_plot], produces: [phonon-transport_plot/plot_manifest.json],
-       desc: "把 S5.1 声子谱原样复制 + S6 κL 图/表汇到 材料根/phonon-transport_plot/（run: gen，秒级）"}
+       desc: "把 S5.1 声子谱原样复制 + S6 κL 图/表汇到 <材料>/kl-dft-cpu/phonon-transport_plot/（run: gen，秒级）"}
   next_skills:
     - {skill: te-screen, via: kappa_summary.json,
        desc: "κL 与电输运一起进 zT 热电筛选"}

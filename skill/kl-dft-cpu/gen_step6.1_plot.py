@@ -4,11 +4,11 @@
 
 ★ 设计原则（2026-10-18 用户定）：
   1) **不改动**既有各步自动出的图（S5.1_plot 的声子谱 band_*.png 保持原样、仍在 step5_phonon_plot/）；
-  2) 本步只做**归集**：把 S5.1 声子谱 + S6 κL 图/表，统一复制到材料根的
-     `phonon-transport_plot/`，作为交付给用户/论文的成品目录；
+  2) 本步只做**归集**：把 S5.1 声子谱 + S6 κL 图/表，统一复制到
+     `<材料>/kl-dft-cpu/phonon-transport_plot/`，作为交付给用户/论文的成品目录；
   3) 幂等：重复跑只覆盖同名文件，不删其它内容。
 
-产物目录 `<材料根>/phonon-transport_plot/`:
+产物目录 `<材料>/kl-dft-cpu/phonon-transport_plot/`（与 stepN_* 同级）:
     phonon_band/            声子色散（S5.1 原图直拷，不改不重画）
     kappa/                  κL 图 + 表（本步绘制）
     README.md               说明（自动生成）
@@ -205,9 +205,18 @@ def plot_kappa(d, mat: str, out: Path):
 
 # ---------------- 主流程 ----------------
 def main():
+    # autozt 的 run: gen 步骤在【技能目录】内执行：cwd = <材料>/kl-dft-cpu/
+    # 所以产物必须写 cwd/phonon-transport_plot/（= <材料>/kl-dft-cpu/phonon-transport_plot/），
+    # 材料名取父目录名。兼容被手动从材料根或 result 目录调起的情况。
     cwd = Path.cwd()
-    mat = cwd.name
-    out_root = cwd / OUT_NAME
+    if (cwd / "step6_kappa" / "kappa_summary.json").is_file():
+        skill_dir = cwd                      # 正常：cwd 就是 kl-dft-cpu/
+    elif (cwd / "kl-dft-cpu" / "step6_kappa" / "kappa_summary.json").is_file():
+        skill_dir = cwd / "kl-dft-cpu"       # 从材料根调起
+    else:
+        skill_dir = cwd
+    mat = skill_dir.parent.name if skill_dir.name in ("kl-dft-cpu", "result") else skill_dir.name
+    out_root = skill_dir / OUT_NAME
     phonon_out = out_root / "phonon_band"
     kappa_out = out_root / "kappa"
     for d in (phonon_out, kappa_out):
@@ -217,7 +226,7 @@ def main():
                 "phonon_band": [], "kappa": [], "note": "S5.1 原图直拷、未重画"}
 
     # 1) 音子谱：原样复制（不改、不重画）
-    src = find_phonon_plot_dir(cwd)
+    src = find_phonon_plot_dir(skill_dir)
     if src:
         n = 0
         for f in sorted(src.iterdir()):
@@ -230,7 +239,7 @@ def main():
         print("[warn] 未找到 step5_phonon_plot 声子谱产物")
 
     # 2) κL 图/表
-    sp = find_kappa_summary(cwd)
+    sp = find_kappa_summary(skill_dir)
     d = json.loads(sp.read_text(encoding="utf-8"))
     if not str(d.get("KAPPA_DONE", "")).lower() in ("true", "1"):
         sys.exit(f"[ERROR] kappa_summary 未标记 KAPPA_DONE: {sp}")
