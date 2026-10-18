@@ -43,7 +43,7 @@ from pathlib import Path
 # [SKILL_REV] 版本戳：写进 comparison_summary.txt。每次改本脚本逻辑后更新。
 #   陈旧副本已咬人三次（step12/step9b 盖戳后，step13 是最后一个没盖的），
 #   这里盖戳便于从产物反查到底跑的是哪份 skill 副本。
-_SKILL_REV = "2026-10-18-0057r2"   # [0057-r2] temperature_series 相邻温度间色带填充 + 温度色标   # [0057-r1] 本征表 %.6g 浓度与 transport.json 掺杂档按相对 1e-4 配对（mu_scan 的 AMSET 点、分机制表的浓度列）；BT2 σ/τ=0 的点不画   # [0057] transport_plots 改版：phonon_limited_<段> -> transport_models_<段>；transport_<段> -> mobility_mechanisms_<段>（只画 μ，单机制 + 总值 + DPT）；datasets/ -> temperature_series/（蓝->红、分两段）；bt2_muscan/ + amset_scan/ -> mu_scan/（μ − E_VBM）；mechanism_resolved 去核对圆圈   # [0056] phonon-limited 掺杂扫描拆两段各一个文件夹（图 + 每温度表）：carrier_tuning_1e17-1e21 / low_doping_<NLO>-1e16，不再出整轴 <M>_phonon_limited.png；r2 <M>_transport.png 同样拆两段；r3 图注写明每条曲线的散射机制与缩写、刚性能带范围外灰底；r5 tools/make_transport_plots 直接调用本函数（统一算法），transport 图 μ 列加 DPT 带边横线（只画对应半边、标注在顶部空白）   # [0054] 与文献统一命名：去 IMP = phonon-limited（<M>_phonon_limited.png，原 <M>_intrinsic.png）、含 IMP = phonon + impurity、intrinsic 只指本征载流子；<M>_mechanism_resolved_mobility（原 dilute_mobility）；本征点按去 IMP 后机制去重；η=(E_c−E_F)/kT 判 f≈0   # [0053] intrinsic_carrier/<M>_dilute_mobility.png：稀薄极限（f≈0）μ(T) 按散射机制拆开 + Matthiessen 对照（空穴取 n = p 本征点，电子取最低 n 型去 IMP）   # [0052] transport_plots/ 每次整目录重建（先删旧结果）；intrinsic_carrier/ 标注本征浓度 n_i(T)（undoped_ni.json / fermi_fix 日志）；<M>_intrinsic.png 标题写明 intrinsic = 本征散射、横轴 = 掺杂浓度   # [0047] <M>_intrinsic.png 只画基础 4 条本征曲线（此前与 <M>_transport.png 同图仅换标题）+ intrinsic CSV 同步只含 4 条   # [0046] 本征五参数套件支持 3D（读 S8 的 step8_amset + subset_*.json；_geom_3d 体胞几何、c/t=1、对角 (xx+yy+zz)/3）；3D 也出 transport_plots/<M>_transport|<M>_intrinsic.png 9x5 面板   # [0045] bt2_muscan 同时画 thickness(我们)/cell(文献) 两种口径；[0041] transport_plots/defect_equilibrium/（缺陷平衡净浓度 σ/S/PF/κe vs T）   # 2026-10-13-0040   # [0040] transport_plots/intrinsic_carrier/（未掺杂本征载流子 σ/S/PF/κe vs T）；图例/文件名一律用实际机制组合 amset_<机制>；2026-10-13-0039   # [0039] transport_plots/datasets/：每个数据集单独一张 σ/S/PF/κe 图 + csv； [0038] 本征/子集图读 subset_*.json（SUBSETS）；[0036] transport_plots 加 bt2_muscan/ + amset_scan/ 两个扫描图子文件夹；[0035] transport_plots 合并 + τ 对比（tau/）
+_SKILL_REV = "2026-10-18-0057r4"   # [0057-r4] 分机制图超上限处画 ▲ 延伸；mu_scan 的 AMSET 点按载流子类型连细线   # [0057-r3] mu_scan：BT2 μ 带隙中央 ±5kT 内不给、κe 相减抵消到噪声（L < 0.1 L0）不画   # [0057-r2] temperature_series 相邻温度间色带填充 + 温度色标   # [0057-r1] 本征表 %.6g 浓度与 transport.json 掺杂档按相对 1e-4 配对（mu_scan 的 AMSET 点、分机制表的浓度列）；BT2 σ/τ=0 的点不画   # [0057] transport_plots 改版：phonon_limited_<段> -> transport_models_<段>；transport_<段> -> mobility_mechanisms_<段>（只画 μ，单机制 + 总值 + DPT）；datasets/ -> temperature_series/（蓝->红、分两段）；bt2_muscan/ + amset_scan/ -> mu_scan/（μ − E_VBM）；mechanism_resolved 去核对圆圈   # [0056] phonon-limited 掺杂扫描拆两段各一个文件夹（图 + 每温度表）：carrier_tuning_1e17-1e21 / low_doping_<NLO>-1e16，不再出整轴 <M>_phonon_limited.png；r2 <M>_transport.png 同样拆两段；r3 图注写明每条曲线的散射机制与缩写、刚性能带范围外灰底；r5 tools/make_transport_plots 直接调用本函数（统一算法），transport 图 μ 列加 DPT 带边横线（只画对应半边、标注在顶部空白）   # [0054] 与文献统一命名：去 IMP = phonon-limited（<M>_phonon_limited.png，原 <M>_intrinsic.png）、含 IMP = phonon + impurity、intrinsic 只指本征载流子；<M>_mechanism_resolved_mobility（原 dilute_mobility）；本征点按去 IMP 后机制去重；η=(E_c−E_F)/kT 判 f≈0   # [0053] intrinsic_carrier/<M>_dilute_mobility.png：稀薄极限（f≈0）μ(T) 按散射机制拆开 + Matthiessen 对照（空穴取 n = p 本征点，电子取最低 n 型去 IMP）   # [0052] transport_plots/ 每次整目录重建（先删旧结果）；intrinsic_carrier/ 标注本征浓度 n_i(T)（undoped_ni.json / fermi_fix 日志）；<M>_intrinsic.png 标题写明 intrinsic = 本征散射、横轴 = 掺杂浓度   # [0047] <M>_intrinsic.png 只画基础 4 条本征曲线（此前与 <M>_transport.png 同图仅换标题）+ intrinsic CSV 同步只含 4 条   # [0046] 本征五参数套件支持 3D（读 S8 的 step8_amset + subset_*.json；_geom_3d 体胞几何、c/t=1、对角 (xx+yy+zz)/3）；3D 也出 transport_plots/<M>_transport|<M>_intrinsic.png 9x5 面板   # [0045] bt2_muscan 同时画 thickness(我们)/cell(文献) 两种口径；[0041] transport_plots/defect_equilibrium/（缺陷平衡净浓度 σ/S/PF/κe vs T）   # 2026-10-13-0040   # [0040] transport_plots/intrinsic_carrier/（未掺杂本征载流子 σ/S/PF/κe vs T）；图例/文件名一律用实际机制组合 amset_<机制>；2026-10-13-0039   # [0039] transport_plots/datasets/：每个数据集单独一张 σ/S/PF/κe 图 + csv； [0038] 本征/子集图读 subset_*.json（SUBSETS）；[0036] transport_plots 加 bt2_muscan/ + amset_scan/ 两个扫描图子文件夹；[0035] transport_plots 合并 + τ 对比（tau/）
 #   bump 记录：2026-10-11-0035 —— transport_plots 合并：intrinsic 图并入 transport 图（4 条数据集
 #   overall / intrinsic / ADP only / BT2xDPT-tau），不再单独出 <M>_intrinsic*.{png,csv}，
 #   只留 <M>_transport.png + 每温度 CSV + <M>_params_<T>K.csv。
@@ -3294,6 +3294,9 @@ def _amset_edges(cwd, is_2d, T):
     return vb - d / 2.0, cb + d / 2.0, "%s/vasprun.xml DFT edges, scissor %.3f eV split -/+ half" % (run.name, d)
 
 
+MU_SCAN_MIDGAP_KT = 5.0   # [0057-r3] BT2 μ 只在离带隙中央 > 5 kT 处给（少子/多子 < e^-10）
+
+
 MU_SCAN_SETS = (("overall", "tab:red", "s"), ("intrinsic", "tab:orange", "D"), ("ADP_only", "tab:green", "^"),
                 ("ADP_POP", "tab:brown", "v"), ("ADP_POP_ODP", "tab:olive", "P"))
 
@@ -3361,6 +3364,7 @@ def mu_scan_data(cwd, out, is_2d, T_want=MU_SCAN_T):
         res["notes"].append("BT2：取不到几何（c/t），σ/κe 无法换到层厚口径")
     else:
         dpt_T = load_dpt(cwd, T=T, quiet=True)
+        x_mid, kt = (bc - bv) / 2.0, KB_EV * T
         for i, (m, n) in enumerate(zip(bt["mu_rel"], bt["n_signed"])):
             if n != n or not n:
                 continue
@@ -3372,7 +3376,12 @@ def mu_scan_data(cwd, out, is_2d, T_want=MU_SCAN_T):
             S = bt["seebeck"][i]
             sg = sot * tau if tau else None
             kp = bt["kappa_e_over_tau"][i] * tau if tau else None
-            bip = S == S and ((S > 0) if typ == "n" else (S < 0))
+            # [0057-r3] μ = σ_总/(e|n_净|) 只在单载流子区有意义：带隙中央 ±MU_SCAN_MIDGAP_KT·kT 内少子/多子
+            #   ~ exp(−2|x − x_mid|/kT) 不再可忽略，n_净 又是 N + nelect 的相减残差 —— 实测 MoS2 600 K 在中央两侧各有
+            #   一段竖直掉下去的假 μ。S 的符号判据（bip）只抓到一部分，这里按到带隙中央的距离一并不给。
+            bip = (S == S and ((S > 0) if typ == "n" else (S < 0))) or abs(float(m) - bv - x_mid) < MU_SCAN_MIDGAP_KT * kt
+            if kp is not None and sot > 0 and bt["kappa_e_over_tau"][i] / (sot * T) < 0.1 * SOMMERFELD_L:
+                kp = None     # [0057-r3] κe = κ0 − L1²/L0 相减抵消到噪声（Lorenz < 0.1·L0，实测掉到 1e-21 W/mK），不画
             r = {"mu_minus_VBM_eV": float(m) - bv, "mu_rel_efermi_eV": float(m), "n_cell_cm-3": float(n), "type": typ,
                  "S_uV/K": S, "sigma_S/m": None if sg is None else sg * fac,
                  "kappa_e_W/mK": None if kp is None else kp * fac,
@@ -3416,6 +3425,7 @@ def write_mu_scan(cwd, out, plots, M, is_2d):
         except (TypeError, ValueError):
             return float("nan")
 
+    x_mid_a = ((d["amset_cbm"] - d["amset_vbm"]) / 2.0) if d.get("amset_vbm") is not None else float("nan")
     for ax, (col, ttl) in zip(axs[0], qs):
         ax.set_title(ttl, fontsize=10)
         ax.grid(alpha=0.25, lw=0.4)
@@ -3435,6 +3445,15 @@ def write_mu_scan(cwd, out, plots, M, is_2d):
             pts = [(x, y) for x, y in pts if y == y and (col == "S_uV/K" or y > 0)]
             if pts:
                 ax.plot(*zip(*pts), ls="none", marker=mk, ms=4.5, mfc="none", mec=c, mew=1.1)
+            # [0057-r4] 用户问「为什么 AMSET 用点不用线」：AMSET 只在掺杂档上算（每档一个 E_F），没有连续的 μ 网格；
+            #   同一载流子类型的点按 μ 连细线，带隙中央 ±5 kT（E_F 钉住、点叠在一起）的不连。
+            for typ in ("n", "p"):
+                ln = sorted((r["mu_minus_VBM_eV"], _f(r.get(col))) for r in d["amset"]
+                            if r["dataset"] == ds and r.get("type") == typ
+                            and abs(r["mu_minus_VBM_eV"] - x_mid_a) > MU_SCAN_MIDGAP_KT * KB_EV * T)
+                ln = [(x, y) for x, y in ln if y == y and (col == "S_uV/K" or y > 0)]
+                if len(ln) >= 2:
+                    ax.plot(*zip(*ln), color=c, lw=0.9, alpha=0.6)
         ax.set_xlim(lo, hi)
         ax.set_xlabel("$\\mu - E_{VBM}$ (eV)", fontsize=8.5)
         if col == "S_uV/K":
@@ -3455,7 +3474,12 @@ def write_mu_scan(cwd, out, plots, M, is_2d):
         cap.append("AMSET: E_F solved per doping (transport.json fermi_levels) - VBM %.3f eV (%s)"
                    % (d["amset_vbm"], d["amset_src"]))
     cap.append("BT2 $\\sigma$, $\\kappa_e$ = BoltzTraP2 $\\sigma/\\tau$, $\\kappa_e/\\tau$ x DPT $\\tau$(T) (electron $\\tau$ where n < 0,"
-               " hole $\\tau$ where n > 0); $\\mu$ = $\\sigma$/(e|n|), masked where bipolar; same units as the S8.3 table")
+               " hole $\\tau$ where n > 0); $\\mu$ = $\\sigma$/(e|n|), masked where bipolar and within %g kT of mid-gap;"
+               " same units as the S8.3 table" % MU_SCAN_MIDGAP_KT)
+    if d["amset"]:
+        cap.append("AMSET is solved only at its doping grid (one E_F per doping), hence points; thin lines join the n-type /"
+                   " p-type points. Dopings below n_i(T) all have E_F pinned near mid-gap and stack there (not joined;"
+                   " S of either sign = bipolar)")
     fig.set_figheight(3.3 + 0.17 * len(cap) + 0.4)                 # 子图高度不被图注/图例挤掉
     _place_caption(fig, cap, hh, "%s  chemical-potential scan, %.0f K: BT2 x DPT-$\\tau$ (line) vs AMSET (points)"
                    % (M, T), min(len(hh), 6), fs=7.6, title_fs=11)
@@ -3708,6 +3732,28 @@ def write_transport_plots(cwd, out, is_2d, plots=None, M=None):
 
         _MECH_ORDER = ("ADP", "POP", "ODP", "IVS", "PIE", "IMP")
 
+        def _up_arrows(ax, n, y, cap, nlo, color):
+            """[0057-r4] 用户 2026-10-18 问「IMP 低浓度只有两个点连成线正常吗」：超出上限的点不画以后，线在最后一个
+            画得下的点就断了，看着像只有两个点。现在从该点按 log μ 线性延到上限处，末端画 ▲（= 继续往上，值在表里）。"""
+            hit = False
+            for msk in (n < 0, n > 0):
+                idx = np.where(msk & np.isfinite(y) & (y > 0))[0]
+                if len(idx) < 2:
+                    continue
+                xv = xs(n[idx], nlo)
+                o = np.argsort(xv)
+                xv, yv = xv[o], y[idx][o]
+                for a in range(len(xv) - 1):
+                    if (yv[a] <= cap) == (yv[a + 1] <= cap):
+                        continue
+                    f = (math.log(cap) - math.log(yv[a])) / (math.log(yv[a + 1]) - math.log(yv[a]))
+                    xc = xv[a] + f * (xv[a + 1] - xv[a])
+                    xin, yin = (xv[a], yv[a]) if yv[a] <= cap else (xv[a + 1], yv[a + 1])
+                    ax.plot([xin, xc], [yin, cap], color=color, ls="--", lw=1.2)
+                    ax.plot([xc], [cap], ls="none", marker="^", ms=5.5, color=color)
+                    hit = True
+            return hit
+
         def _render_mech(mm, rng):
             """[0057] mobility_mechanisms_<段>/：每个温度一个面板，只画 μ —— AMSET 每个散射机制单独一条（虚线）
             + phonon + impurity 总值（黑实线）+ DPT 带边横线（电子左半、空穴右半）；附每温度表。"""
@@ -3741,11 +3787,14 @@ def write_transport_plots(cwd, out, is_2d, plots=None, M=None):
                 _drawn = list(ref)
                 for m in mechs:
                     y = np.array([np.nan if r["mu"].get(m) is None else r["mu"][m] for r in sub], float)
-                    _cut = _cut or bool(np.any(y > cap_hi))
+                    _mc_ = _DILUTE_COLORS.get(m, "C%d" % (mechs.index(m) % 10))
+                    if bool(np.any(y > cap_hi)):
+                        _cut = True
+                        if _up_arrows(ax, n, y, cap_hi, nlo, _mc_):
+                            _drawn.append(cap_hi)
                     y[y > cap_hi] = np.nan                    # 超出上限的不画（值在表里），顶部标注区保持干净
                     _drawn += [v for v in y if v == v and v > 0]
-                    seg(ax, n, y, nlo, color=_DILUTE_COLORS.get(m, "C%d" % (mechs.index(m) % 10)), ls="--",
-                        lw=1.2, marker="o", ms=2.8)
+                    seg(ax, n, y, nlo, color=_mc_, ls="--", lw=1.2, marker="o", ms=2.8)
                 seg(ax, n, yt, nlo, color="k", lw=2.0, marker="s", ms=3.2)
                 ax.set_yscale("log")
                 if _drawn:
@@ -3772,8 +3821,9 @@ def write_transport_plots(cwd, out, is_2d, plots=None, M=None):
                    " Bardeen-Shockley band-edge mobility $\\mu$ = e$\\tau$/m* (ADP only), one number per carrier and T"
                    " (value in cm$^2$/V/s written at the top) - independent of n, hence horizontal"]
             if _cut:
-                cap.append("Single-mechanism values more than %gx above the total / DPT are not drawn"
-                           " (e.g. IMP at low doping); all values are in the CSV" % MECH_YCAP)
+                cap.append("Single-mechanism values more than %gx above the total / DPT are cut at that level"
+                           " ($\\blacktriangle$ = keeps rising, e.g. IMP at low doping, $\\mu_{IMP}$ ~ 1/N_ii); all values are in the CSV"
+                           % MECH_YCAP)
             if _bad:
                 cap.append("Gray: beyond rigid-band range (%s; in_interpret_range = NO in the CSV) - "
                            "results there are not reliable" % _rule_txt)

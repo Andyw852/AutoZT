@@ -57,7 +57,7 @@ def _material(tmp_path, bt2_edges=None, scissor=None):
          "seebeck_V_per_K": [[(-2e-4 if m > 0 else 2e-4) for m in mu]] * 2,
          "lorenz_WOhm_per_K2": [[2e-8] * len(mu)] * 2,
          "sigma_over_tau_S_per_m_s": [[0.0 if abs(m) < 0.05 else 1e18 for m in mu]] * 2,   # 带隙深处下溢成 0
-         "kappa_e_over_tau_W_per_m_K_s": [[1e10] * len(mu)] * 2}
+         "kappa_e_over_tau_W_per_m_K_s": [[1e-3 if abs(m - 1.5) < 0.005 else 1.2e13 for m in mu]] * 2}   # L≈2e-8；1.5 处相减抵消
     if bt2_edges:
         j["band_edges_rel_efermi_eV"] = bt2_edges
     if scissor:
@@ -77,6 +77,7 @@ def test_bt2_edges_sources():
 def test_mu_scan_conversion(tmp_path):
     g = _s83()
     cwd, out = _material(tmp_path, scissor={"applied": True, "target_gap_eV": 1.8})
+    g._bt2_tau = lambda dpt_T, carrier: 1e-14                         # 没有 S8.2：给个常数 τ
     d = g.mu_scan_data(cwd, out, True)
     assert d["T"] == 600.0 and d["amset_vbm"] == EV and d["bt2_vbm"] == -0.9
     am = {(r["dataset"], round(float(r["n_cell_cm-3"]) / 1e15)): r["mu_minus_VBM_eV"] for r in d["amset"]}
@@ -88,6 +89,10 @@ def test_mu_scan_conversion(tmp_path):
     bt = {round(r["mu_rel_efermi_eV"], 4): r["mu_minus_VBM_eV"] for r in d["bt2"]}
     assert bt[0.1] == pytest.approx(1.0) and bt[-0.9] == pytest.approx(0.0)
     assert 0.0 not in bt and 0.04 not in bt                          # σ/τ = 0 的点（S 是 0/0 占位）不要
+    byx = {round(r["mu_rel_efermi_eV"], 4): r for r in d["bt2"]}
+    assert byx[0.1]["mu_cm2/Vs"] is None and byx[-0.2]["mu_cm2/Vs"] is None   # 带隙中央 ±5kT（600 K 约 0.26 eV）不给 μ
+    assert byx[0.5]["mu_cm2/Vs"] is not None and byx[0.5]["kappa_e_W/mK"] is not None
+    assert byx[1.5]["kappa_e_W/mK"] is None                          # κe 相减抵消（L < 0.1 L0）不画
     assert not any("WARN" in n for n in d["notes"])                  # 本征点 E_F 两份记录一致
 
 
