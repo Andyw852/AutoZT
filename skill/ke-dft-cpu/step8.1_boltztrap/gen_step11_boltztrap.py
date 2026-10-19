@@ -1099,6 +1099,8 @@ def _s3_grid_note(cwd, dim):
 
 def main():
     cwd = Path.cwd()
+    import ke_common as _kc  # [V190]
+    _kc.check_functional_consistency(cwd, strict=False, label=OUTDIR_NAME)
     metal = _metal_status(cwd)                         # [metal_mode]
     if metal:
         print("[METAL] S7.1 判为金属（%s）：走金属模式 —— 不读 S8.2 的 DPT τ、不加剪刀、不做文献口径掺杂扫描"

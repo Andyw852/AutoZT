@@ -709,6 +709,7 @@ def main():
         sys.exit("[ERROR] 找不到含 CONTCAR 的上一步：%s" % PREV_CANDS)
     kc.relay_poscar(prev / "CONTCAR", out / "POSCAR", "step1_opt")
     _func, _subs = kc.resolve_func(prev, FUNC, OUTDIR_NAME)
+    kc.check_functional_consistency(cwd, strict=False, label=OUTDIR_NAME)  # [V190] 泛函匹配检查
     dim = kc.read_method_dim(prev / kc.METHOD_FILE) \
         or kc.resolve_dim_for(out / "POSCAR", DIMENSION)[0]
     _, vac_axis = kc.resolve_dim_for(out / "POSCAR", dim)

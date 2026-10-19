@@ -139,6 +139,7 @@ def main():
     kc.relay_poscar(prev / "CONTCAR", out / "POSCAR", "step1_opt")
     _func, _subs = kc.resolve_func(prev, FUNC, OUTDIR_NAME,
                                    drop_d3=not KEEP_D3_IN_DFPT)
+    kc.check_functional_consistency(cwd, strict=False, label=OUTDIR_NAME)  # [V190]
     dim = kc.read_method_dim(prev / kc.METHOD_FILE) \
         or kc.resolve_dim_for(out / "POSCAR", DIMENSION)[0]
     _, vac_axis = kc.resolve_dim_for(out / "POSCAR", dim)

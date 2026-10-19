@@ -258,6 +258,7 @@ def main():
             print("[OK] patch_align_origin(S3b)：|tau|max %.4f -> %.4f（平移 %s）"
                   % (_ao[0], _ao[1], _ao[2]))
     _func, _subs = kc.resolve_func(prev, FUNC, OUTDIR_NAME)
+    kc.check_functional_consistency(cwd, strict=False, label=OUTDIR_NAME)  # [V190] 泛函匹配检查
 
     dim = kc.read_method_dim(prev / kc.METHOD_FILE)
     if dim is None:

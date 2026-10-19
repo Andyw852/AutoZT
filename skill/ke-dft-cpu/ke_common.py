@@ -2991,6 +2991,82 @@ def resolve_func(prev_dir: Path, setting, step_name, drop_d3=False,
 
 
 # --------------------------------------------------------------------------
+# [V190] 泛函匹配检查（跨步骤）：resolve_func 只保证"生成时写对"，不保证
+#   "产物里的 INCAR 真的是这个泛函"。2026-10-18 实测：Mg2C60 的 step1
+#   workflow_method.txt 写 FUNC=pbe-d3，但 step2.1/2.2/step7 的 INCAR 是
+#   GGA=PS（PBEsol，PBE-D3 切换前的陈旧产物），带隙/形变势全部不自洽。
+#   这里把"各步 INCAR 的 GGA/IVDW"和 material_functional() 定出的泛函逐条核对。
+# --------------------------------------------------------------------------
+FUNCTIONAL_CHECK_STEPS = (
+    ("S1_opt", "step1_opt"),
+    ("S2.1_static", "step2_bandgap/step2.1_static"),
+    ("S2.2_pbe", "step2_bandgap/step2.2_pbe"),
+    ("S2.3_hse", "step2_bandgap/step2.3_hse"),
+    ("S3_uniform", "step3_uniform"),
+    ("S6_elastic", "step6_elastic"),
+    ("S7_deform", "step7_deform/undeformed"),
+)
+
+
+def _incar_kv_upper(incar):
+    """INCAR -> {KEY: 首个值}；读不到返回 {}。"""
+    kv = {}
+    try:
+        text = Path(incar).read_text(errors="ignore")
+    except OSError:
+        return kv
+    for ln in text.splitlines():
+        ln = ln.split("#", 1)[0].split("!", 1)[0]
+        for part in ln.split(";"):
+            if "=" in part:
+                k, v = part.split("=", 1)
+                kv[k.strip().upper()] = v.strip()
+    return kv
+
+
+def check_functional_consistency(mat_dir, steps=None, strict=False, label=""):
+    """核对各步 INCAR 的 GGA/IVDW 是否等于 material_functional() 定出的泛函。
+
+    返回 issues（list[dict]）。strict=True 且发现不一致时 sys.exit（汇聚点用）。
+    杂化步（LHFCALC=.T.）允许 IVDW 缺省（HSE 不带 D3），但 GGA 仍须一致。
+    """
+    info = material_functional(mat_dir)
+    func = info.get("func")
+    if not func:
+        return []
+    exp = FUNC_MAP[func]
+    exp_gga = exp["GGA"]
+    exp_ivdw = exp["IVDW"]
+    base = Path(mat_dir)
+    issues = []
+    for name, rel in (steps or FUNCTIONAL_CHECK_STEPS):
+        incar = base / rel / "INCAR"
+        if not incar.is_file():
+            continue
+        kv = _incar_kv_upper(incar)
+        got_gga = (kv.get("GGA", "").split() or [""])[0].upper()
+        got_ivdw = (kv.get("IVDW", "").split() or [""])[0] or None
+        lhfcalc = kv.get("LHFCALC", "").upper().lstrip(".").startswith("T")
+        if got_gga and got_gga != exp_gga:
+            issues.append({"step": name, "incar": str(incar),
+                           "field": "GGA", "want": exp_gga, "got": got_gga,
+                           "why": "泛函 %s 要求 GGA=%s" % (func, exp_gga)})
+        if not lhfcalc and str(got_ivdw) != str(exp_ivdw):
+            issues.append({"step": name, "incar": str(incar),
+                           "field": "IVDW", "want": exp_ivdw, "got": got_ivdw,
+                           "why": "泛函 %s 要求 IVDW=%s" % (func, exp_ivdw or "off")})
+    if issues:
+        print("[WARN] 泛函不一致（material_functional=%s，来源 %s）：" % (func, info.get("source")))
+        for it in issues:
+            print("  %-12s %s: %s 期望 %s，实际 %s" % (
+                it["step"], it["field"], it["why"], it["want"], it["got"]))
+        if strict:
+            sys.exit("[ERROR] 泛函不一致：%s 的产物不是用 %s 跑出来的（见上）。"
+                     "用 retry/rerun 重新生成；旧产物不可用于最终结果。" % (label or mat_dir, func))
+    return issues
+
+
+# --------------------------------------------------------------------------
 # [V165] 杂化泛函参数核对：Si 的 S2.3 是 HFSCREEN = 0.11（HSE06 的 0.2 Å⁻¹ 换成 bohr⁻¹ 才是 0.106），
 #   屏蔽变弱 -> 带隙 1.340 eV（标准 HSE06 是 1.091），进了 band_summary、S8 的剪刀差和手稿的表，一路没人报警。
 #   VASP 的 HFSCREEN 单位是 Å⁻¹：HSE06/HSEsol = 0.2，HSE03 = 0.3。

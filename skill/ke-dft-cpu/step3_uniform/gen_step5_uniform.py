@@ -160,6 +160,7 @@ def main():
     #   ★ 2026-09-28（V115）：判据的实际调用挪到本函数末尾（INCAR 定稿之后），
     #     以便带上 SOC（LSORBIT）与 DESYM_FIX（环境变量/出厂默认）—— 见 _write_gate_marker。
     _func, _subs = kc.resolve_func(prev, FUNC, OUTDIR_NAME)
+    kc.check_functional_consistency(cwd, strict=False, label=OUTDIR_NAME)  # [V190] 泛函匹配检查
 
     dim = kc.read_method_dim(prev / kc.METHOD_FILE)
     if dim is None:

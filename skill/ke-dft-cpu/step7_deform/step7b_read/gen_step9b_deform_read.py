@@ -260,6 +260,7 @@ def _resolve_deform_ref(cwd):
 
 def main():
     cwd = Path.cwd()
+    kc.check_functional_consistency(cwd, strict=False, label=OUTDIR_NAME)  # [V190]
     out = cwd / OUTDIR_NAME
     out.mkdir(exist_ok=True)
     _guard_not_0d(cwd, "step7b_deform_read",
