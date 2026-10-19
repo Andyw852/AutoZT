@@ -1,6 +1,6 @@
 # clus_xa（SCNet 西安）接入与 VASP 6.4.3 部署记录
 
-日期：2026-10-19　执行环境：eshell111（SCNet E-Shell 节点，用户 wangchao217）
+日期：2026-10-19　执行环境：eshell111（SCNet E-Shell 节点，用户 <user>）
 
 ## 1. 集群与配额
 
@@ -10,13 +10,13 @@
 | 登录 | `ssh eshell111`（eshell111.hpccube.com:65082，直连可达） |
 | 可用分区 | **仅 `xahctest`**：433 节点 × 64 核 / 255 GB，**纯 CPU**，最长 3 天 |
 | 账户配额 | 并发 **320 核**（`-N 5` 通过，512 核报 group max tres limit） |
-| 存储 | `/work` 43 PB、`/public` 554 TB；家目录 `/work/home/wangchao217` |
+| 存储 | `/work` 43 PB、`/public` 554 TB；家目录 `$HOME` |
 
 ### 1.1 并发与限额（2026-10-19 实测）
 
 | 项目 | 值 | 依据 |
 |---|---|---|
-| 同时最大核数 | **320 核**（账户级 GrpTRES cpu=320） | `-N 5 -n 320` 通过；`-N 8 -n 512` 报 `group max tres limit 320 for account wangchao217` |
+| 同时最大核数 | **320 核**（账户级 GrpTRES cpu=320） | `-N 5 -n 320` 通过；`-N 8 -n 512` 报 `group max tres limit 320 for account <user>` |
 | 单作业最大核数 | **320 核** | 同上 |
 | 节点规格 | 64 核 / 255 GB（默认 3.8 GB/核） | `scontrol show partition xahctest`：`TotalCPUs=27712 TotalNodes=433` |
 | 最大整节点数 | **5 个**（320 / 64） | 账户并发上限换算 |
@@ -70,23 +70,28 @@ work/              # AutoZT 项目根
 | S3_WAVECAR 波函数 | ✅ job 71903364 COMPLETED（1:03），WAVECAR 61 MB |
 | S3.1_plot 能带 | ✅ 已出图；PBEsol 带隙 **0.4589 eV（间接）**、最小直接隙 2.508 eV、209 路径 k 点 |
 | S3.2_vac 真空对齐 | ✅ vacuum_align_summary.json |
-| S4_HSE | ⏸ 按项目 `BANDGAP = pbe` 关闭（原因见下） |
+| S4_HSE | 🟡 已提交（job 71922548，32 核）正在跑：209 条路径 k 点的 HSEsol 杂化泛函较慢，预计数十分钟～数小时 |
 
 **结论：PBE 能带全链路（S1→S2→S3→S3.1→S3.2）在 clus_xa 上全部通过。**
 
-### 未跑 HSE 的原因（技能默认值不适用于 64 核小节点）
+### 小节点（64 核）跑 HSE 的处理方式
 
-`skill/band-dft-cpu/gen_step4_HSE.py:113\` 的 `NTASKS_PER_NODE_LARGE = 192`：当自洽 k 点 +
+`skill/band-dft-cpu/gen_step4_HSE.py:113` 的 `NTASKS_PER_NODE_LARGE = 192` 在自洽 k 点 +
 能带路径点总数 >100 时会硬写 `--ntasks-per-node=192`，而 xahctest 节点只有 64 核，
-sbatch 直接报 `CPU count per node can not be satisfied`。脚本支持用 step.conf `[submit]`
-覆盖，但 AutoZT 推送的合并 step.conf 不含该节，故未生效。
+sbatch 报 `CPU count per node can not be satisfied`。
 
-建议（需改 skill 源码，待批准）：
-1. `gen_step4_HSE.py` 的 192 改为“集群可提供核数”封顶（如读 step.conf 的 `[submit]` 或
-   `max(64, ...)`）。
-2. `gen_step3.1_plot_band.py` / `gen_step4.1_plot_band.py` 的 `--prefix` 默认值
-   `band-dft-cpu` 与 `skill.yaml` 的 `done_marker: band_summary.json` 名字不一致
-   （当前靠 check 的通配匹配才判 OK，建议统一）。
+**解决办法（无需改技能源码）**：在材料 `project_setting/templates/step.conf` 加
+```ini
+[submit]
+ntasks_per_node = 32
+```
+该节会被 AutoZT 合并进推送的 step.conf（`build_step_conf` 会保留 `[submit]`），
+`gen_step4_HSE.py` 在渲染后**最后**用 `stepconf.read_submit()` 覆盖 Slurm 参数，
+因此 192 被压回 32，作业正常提交。已实测生效（job 71922548）。
+
+另：`gen_step3.1_plot_band.py` 的 `--prefix` 默认 `band-dft-cpu` 与 skill.yaml 的
+`done_marker: band_summary.json` 名字不完全一致，目前靠 check 的通配匹配判 OK；
+若要严格一致，可在项目步骤定义里传 `--prefix band`（本项目已按此配置）。
 
 ## 6. 复现命令
 
@@ -94,4 +99,8 @@ sbatch 直接报 `CPU count per node can not be satisfied`。脚本支持用 ste
 ssh eshell111
 cd ~/software/AutoZT/vasp && bash build3.sh      # 或按 §3 手动 make
 cd ~/software/AutoZT && ./bin/autozt -tt band-dft-cpu check --cluster clus_xa
+
+# HSE 段（64 核节点）：项目 step.conf 里用 [submit] 覆盖技能的 192 核默认
+#   [submit]
+#   ntasks_per_node = 32
 ```
