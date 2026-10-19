@@ -499,7 +499,10 @@ def gen_ph(P):
         if old.is_file():
             try:
                 prev = json.loads(old.read_text(encoding="utf-8"))
-                same = iv.jsonable({k: prev.get(k) for k in key}) == iv.jsonable(key)
+                pk = {k: prev.get(k) for k in key}
+                if pk.get("tr2_ph") == 0.0:       # [0059-r1] 旧版把 1e-16 舍成 0.0 写进 qrun.json：当作没记录，不因此判输入变了
+                    pk["tr2_ph"] = key["tr2_ph"]
+                same = iv.jsonable(pk) == iv.jsonable(key)
             except ValueError:
                 same = False
             if same and (d / "ivs_ph.ok").is_file():

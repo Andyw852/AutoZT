@@ -435,7 +435,8 @@ def jsonable(x):
     if isinstance(x, (np.integer,)):
         return int(x)
     if isinstance(x, float):
-        return round(x, 10) + 0.0
+        # [0059-r1] 保留 12 位有效数字（原来 round(x, 10) 按小数位舍入，把 tr2_ph = 1e-16 写成了 0.0）
+        return float("%.12g" % x) + 0.0
     return x
 
 

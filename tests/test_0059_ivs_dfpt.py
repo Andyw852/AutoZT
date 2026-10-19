@@ -308,7 +308,13 @@ def test_gen_chain_si(eph):
         ahc = (d / "step12_ivs_ph" / q / "ph_ahc.in").read_text()
         assert "electron_phonon = 'ahc'" in ahc and "trans = .false." in ahc and "skip_upperfan = .true." in ahc
         assert "cp -r ../../step11_ivs_scf/tmp/si2.save tmp/" in (d / "step12_ivs_ph" / q / "submit.sh").read_text()
+    assert json.loads((d / "step12_ivs_ph" / "q-01" / "qrun.json").read_text())["tr2_ph"] == 1e-16   # [0059-r1] 不再舍成 0
+    assert iv.jsonable({"a": 1e-16, "b": 0.1 + 0.2, "c": -0.0}) == {"a": 1e-16, "b": 0.3, "c": 0.0}
     (d / "step12_ivs_ph" / "q-01" / "ivs_ph.ok").write_text("OK\n")
+    qf = d / "step12_ivs_ph" / "q-01" / "qrun.json"                   # 旧版写的 tr2_ph = 0.0：不算输入变了
+    legacy = json.loads(qf.read_text())
+    legacy["tr2_ph"] = 0.0
+    qf.write_text(json.dumps(legacy))
     marker = d / "step12_ivs_ph" / "q-01" / "keep.me"
     marker.write_text("x")
     buf = io.StringIO()

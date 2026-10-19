@@ -17,13 +17,23 @@ This project adheres to Semantic Versioning; versions before 1.0.0 are developme
 ### Added (2026-10-19: IVS-DFPT Si cluster run and acceptance)
 - `docs/RESULT-ivs-dfpt-Si-20261019.md`: first cluster run of the `ivs_dfpt` group on Si (hfeshell, QE 7.4, SG15 NC) and the
   ke-dft-cpu S8 integration on jzzn (AMSET 0.5.1). Per-pair D / ħω, star channels, comparison with the Si intervalley
-  deformation potentials compiled in Pop's thesis (Table 3.2, converted as D = ∆·√(Z_f/2)), and the acceptance number:
-  electron μ(300 K) at n = 1e10 cm⁻³ = 1459 cm²/Vs (ADP-only 3883), i.e. the ~1400 target is met; IVS (2747) is the
-  limiting phonon mechanism. Selection rules (TA/LA = 0) reproduce the local smoke run.
+  deformation potentials compiled in Pop's thesis (Table 3.2; per-pair D compared directly with ∆), and the acceptance
+  number: electron μ(300 K) at n = 1e10 cm⁻³ = 1459 cm²/Vs (ADP-only 3883), consistent with the experimental
+  lattice-limited ~1400–1450; IVS (2747) is the limiting phonon mechanism. Selection rules (TA/LA = 0) reproduce the
+  local smoke run.
 - Known issues recorded for follow-up: (1) `postprocess_intrinsic.py` prints `mobility[0][t300]`, whose index 0 is the
   -1e21 doping row rather than the intrinsic point; (2) the exact 0-doping row is unusable in AMSET (all mechanism
   subsets return the same 7610); (3) the IVS single-mechanism mobility is doping dependent (2747 @1e10 → 483 @1e21);
-  (4) summaries print "inactive" mechanism values (1e6–1e9) as if they were physical.
+  (4) summaries print "inactive" mechanism values (1e6–1e9) as if they were physical; (5) S8.21's 3D valley finder
+  merges Si's ±Δ valleys into one plateau on an 11³ grid (V1×3 instead of 6).
+
+### Fixed (2026-10-19: [0059-r1])
+- `ivs_dfpt.jsonable` rounded floats to 10 decimals, so `tr2_ph = 1e-16` was recorded as 0.0 in ivs_qlist.json /
+  qrun.json / ivs_dfpt_params.json (metadata only; ph.x inputs were correct). It now keeps 12 significant digits;
+  S12 regeneration treats an old 0.0 record as "not recorded", so finished q directories are not archived.
+- RESULT-ivs-dfpt-Si: the literature comparison used D = ∆·√(Z_f/2), which doubles the rate; per-pair D equals ∆.
+  The "2381 → ~1400" baseline came from the −1e21 row printed by postprocess_intrinsic and is replaced by the
+  experimental lattice-limited mobility. Conclusions unchanged.
 
 ### Added (2026-10-18: [0059] DFPT intervalley scattering)
 - eph-qe-cpu optional group `ivs_dfpt` (S10_ivsq, S11_ivsscf, S12_ivsph fan-out `q-*`, S13_ivs): zero-order intervalley

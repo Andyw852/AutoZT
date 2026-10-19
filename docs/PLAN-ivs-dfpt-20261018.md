@@ -127,7 +127,7 @@ ke-dft-cpu                                   eph-qe-cpu（新可选组 ivs_dfpt�
 | 文献逐通道 | MoS₂ 电子对照 Filipovic Table S4（K→K′ E′ 40.6 meV 1.66；K→Q：LA 22.2/1.15、LO 42.7/1.44、A1′ 49.3/1.04、TA 45.5/0.57）和 Table S8（Q→Q′、Q→K） | D > 1 eV/Å 的通道差 ≤ 30%，ħω 差 ≤ 3 meV |
 | 端到端 2D | MoS₂ 用干净的通用配置重跑 S8.4：`ODP_FROZEN=auto`、不手填 `DP_OPTICAL_*`、不显式写 SCATTERING、PIE 与当前版一致 | 声子限制 μ(300 K) 在 150–280；γ（μ∝T^−γ，300–600 K）在 1.4–1.8；高温 ADP-only 不再反常上升 |
 | 推广 2D | MoSe₂、WS₂、WSe₂ 电子（S8.2 判多谷"拒绝"的 4 个） | 与 MoS₂ 同样的端到端检查；有文献时对照（Jin 2014 Table IV 只作量级参考，其 K→Q 近邻声学偏大约 7 倍） |
-| 3D | Si 电子 X 谷 f/g 过程 | D0 与文献同量级（Jacoboni & Reggiani RMP 1983 的拟合值，需核对原文）；电子 μ(300 K) 从 ADP-only 约 2381 降到约 1400 左右的量级 |
+| 3D | Si 电子 X 谷 f/g 过程 | D0 与文献同量级（Jacoboni & Reggiani RMP 1983 的拟合值，逐谷对 D 与 ∆ 直接比）；低掺杂电子 μ(300 K) 与晶格限制实验值约 1400–1450 一致（原写"ADP-only 约 2381"是 −1e21 档，作废；见 RESULT-ivs-dfpt-Si-20261019.md） |
 
 ---
 
@@ -233,7 +233,7 @@ S8.2 多谷判定结果：MoS₂、MoSe₂、WS₂、WSe₂ 的**电子**全部"
    （只用标准库）；S12 `ph.x`、`pw.x`、`ph.x`；S10/S13 是 gen（要 numpy）。
 5. **接进 ke-dft-cpu**：S13 结果拉回本地后 `autozt -tt ke-dft-cpu -p Si -j S8_kappa retry`（gen 时自动推 `ivs_dfpt_params.json`，
    `IVS_DFPT=auto` 读取），检查后 `start`。看 `dp_optical_3d.json` 的 `dp_optical_ivs_dfpt` 与 comparison_summary.txt 的 `[IVS 参数来源]`。
-   验收：电子 μ(300 K) 从 ADP-only 约 2381 降到约 1400 的量级。
+   验收：低掺杂电子 μ(300 K) 与晶格限制实验值约 1400–1450 一致（2026-10-19 实测 1459，见 `docs/RESULT-ivs-dfpt-Si-20261019.md`）。
 
 ### 9.2 之后的 MoS₂（M3–M5）
 
