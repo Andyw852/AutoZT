@@ -6,7 +6,7 @@ Layout:
                                        |    with the skill and engine library it selects from)
     c (one workflow for 3D and 2D materials, full width)
 Units: 1 user unit = 0.1 mm, so the 1800-unit width prints at 180 mm (double column).
-Type sizes: 1 pt = 3.528 units; nothing is set below 5 pt (17.6 units).
+Type sizes: 1 pt = 3.528 units; nothing but sub/superscripts is set below 5 pt (17.6 units).
 Usage: python3 build_fig1_overview_npj.py [out.svg]   (reads fig1_logos.json next to this script; needs Pillow)
 Export: open the SVG in Inkscape / Illustrator, or print it to PDF from a browser, at 180 mm width.
 """
@@ -57,7 +57,6 @@ CRIMSON_BG = '#FCF0F3'
 RED = '#A3203F'
 PEACH = '#F8E0D1'
 PEACH_TX = '#7A3410'
-PINK = '#F8D7E1'
 USER_BG = '#F6E1E8'
 GATE = '#3A4654'
 
@@ -337,8 +336,8 @@ TH = 90                          # transport box height
 EL_Y, PH_Y = Y0 - 78, Y0 + 78
 ZY = (EL_Y - TH / 2, PH_Y + TH / 2)
 AS = (R_X[0] + 20, R_X[1] - 20, ZY[1] + 26, ZY[1] + 26 + 150)
-BY0 = AS[3] + 62                 # library boxes
-BY1 = BY0 + 188
+BY0 = AS[3] + 46                 # library boxes
+BY1 = BY0 + 176
 ROW_BOT = BY1 + 14               # bottom of panels a and b
 
 # panel c (3D and 2D) spans the width below
@@ -377,6 +376,28 @@ def hw_tags(cx, y, kinds):
         x += wd + 5
 
 
+HM = [['EEB2C6', 'D16388', 'B23C66', '8A1D46', 'B23C66', 'E38AA8'],
+      ['EEB2C6', 'E38AA8', 'D16388', 'B23C66', 'D16388', 'E38AA8'],
+      ['F6D3DE', 'E38AA8', 'D16388', 'D16388', 'E38AA8', 'EEB2C6'],
+      ['F6D3DE', 'EEB2C6', 'E38AA8', 'E38AA8', 'E38AA8', 'EEB2C6'],
+      ['F6D3DE', 'F6D3DE', 'EEB2C6', 'EEB2C6', 'EEB2C6', 'F6D3DE'],
+      ['F6D3DE', 'F6D3DE', 'F6D3DE', 'EEB2C6', 'F6D3DE', 'F6D3DE']]
+
+
+def zt_map(x0, y0, cell=16.0, cg=1.2, fs=FS_B):
+    """Schematic zT(n, T) map with its top-left cell at (x0, y0): T up, n to the right."""
+    gw = 6 * cell + 5 * cg
+    for r_, row in enumerate(HM):
+        for c_, colr in enumerate(row):
+            rect(x0 + c_ * (cell + cg), y0 + r_ * (cell + cg), cell, cell, fill='#' + colr)
+    k = cell / 16
+    axx, axy = x0 - 7 * k, y0 + gw + 7 * k
+    arrow([(axx, axy), (axx, y0 - 4 * k)], GATE, sw=2.2 * k, head=9 * k)
+    arrow([(axx, axy), (x0 + gw + 12 * k, axy)], GATE, sw=2.2 * k, head=9 * k)
+    text(axx - 8 * k, y0 + gw / 2 + fs * 0.36, 'T', fs, MUTED, italic=True, anchor='end')
+    text(x0 + gw + 22 * k, axy + fs * 0.36, 'n', fs, MUTED, italic=True)
+
+
 # ================================================================ canvas
 add(f'<svg xmlns="http://www.w3.org/2000/svg" width="180mm" height="{H / 10:.1f}mm" viewBox="0 0 {W} {H}" '
     f'font-family="{FONT}">')
@@ -388,21 +409,24 @@ group('panel-a')
 panel_title(A_X[0] + 2, TITLE_Y, 'a', ['LLM agent operates AutoZT'])
 panel(A_X[0], A_X[1], TOP, ROW_BOT)
 text(A_X[0] + 22, TOP + 38, 'Coding agents', FS_S, PURPLE, bold=True)
-cwl = (A_X[1] - A_X[0] - 40) / 3
-for k, (key, lab) in enumerate([('deepseek', 'DeepSeek'), ('kimi', 'Kimi'), ('glm', 'GLM'),
-                                ('claude', 'Claude'), ('chatgpt', 'ChatGPT'), (None, '…')]):
-    gx = A_X[0] + 20 + (k % 3) * cwl
-    gy = TOP + 58 + (k // 3) * 52
-    if key:
-        lw = tw(lab, FS_S, True)
-        x0 = gx + (cwl - (34 + 8 + lw)) / 2
-        logo(key, x0, gy, 34)
-        text(x0 + 42, gy + 17 + FS_S * 0.36, lab, FS_S, INK, bold=True)
-    else:
-        text(gx + cwl / 2, gy + 23, '…', FS_H, MUTED, bold=True, anchor='middle')
+AGENTS = [[('deepseek', 'DeepSeek'), ('kimi', 'Kimi'), ('glm', 'GLM')],
+          [('claude', 'Claude'), ('chatgpt', 'ChatGPT'), (None, '…')]]
+LG = 34                          # logo box; the name starts 8 units to its right
+col_w = [max(LG + 8 + tw(lab, FS_S, True) if key else LG for key, lab in col) for col in zip(*AGENTS)]
+gx0, gx1 = A_X[0] + 22, A_X[1] - 22
+gut = (gx1 - gx0 - sum(col_w)) / (len(col_w) - 1)
+for r_, row in enumerate(AGENTS):
+    gy = TOP + 58 + r_ * 52
+    for c_, (key, lab) in enumerate(row):
+        gx = gx0 + sum(col_w[:c_]) + c_ * gut
+        if key:
+            logo(key, gx, gy, LG)
+            text(gx + LG + 8, gy + LG / 2 + FS_S * 0.36, lab, FS_S, INK, bold=True)
+        else:
+            text(gx + LG / 2, gy + 23, '…', FS_H, MUTED, bold=True, anchor='middle')
 
 CH_X0, CH_X1 = A_X[0] + 14, A_X[1] - 14
-CH_Y0, CH_Y1 = TOP + 176, ROW_BOT - 14
+CH_Y0, CH_Y1 = TOP + 168, ROW_BOT - 14
 rect(CH_X0, CH_Y0, CH_X1 - CH_X0, CH_Y1 - CH_Y0, rx=14, fill=LAV)
 AV_X = CH_X0 + 22
 CARD_X0, CARD_X1 = CH_X0 + 42, CH_X1 - 8
@@ -424,9 +448,8 @@ def tool_row(y, stages):
     rect(IX0, y, IX1 - IX0, TB, rx=8, fill=LAV2)
     x = IX0 + 6
     for name in stages:
-        bg, fg = (PINK, RED) if name == 'Approval' else (PEACH, PEACH_TX)
         wd = tw(name, FS_XS, True) + 14
-        chip(x, y + 6, wd, 23, name, bg, fg)
+        chip(x, y + 6, wd, 23, name, PEACH, PEACH_TX)
         x += wd + 6
     rich(IX1 - 8, y + TB / 2 + FS_XS * 0.36, VIA, FS_XS, PURPLE, bold=True, anchor='end')
     return y + TB
@@ -441,12 +464,17 @@ def say(y, runs):
     rich(IX0 + 4, y, runs if isinstance(runs, list) else [runs], FS_B, INK, bold=True)
 
 
-H_MSG = [32, 10 + TB + 34 + 30 + 10, 10 + TB + 36, 32, 10 + TB + 72, 10 + TB + 36]
-# uniform gaps; the arrows to panel b are level with the "Submitted" card (message 3)
-GAP = (CH_Y1 - CH_Y0 - 24 - sum(H_MSG)) / (len(H_MSG) - 1)
+ATT_W, ATT_H = 164, 128          # the zT(n, T) map attached to the report
+H_MSG = [32, 10 + TB + 34 + 30 + 10, 10 + TB + 36, 10 + TB + 38 + ATT_H + 12]
+# the "Submitted" card (message 3) sits level with the automation loop in b, so the arrows run flat
+G1 = ((AS[2] + AS[3]) / 2 - H_MSG[2] / 2 - (CH_Y0 + 12) - H_MSG[0] - H_MSG[1]) / 2
+# spare height is split between the gap before the report and the bottom margin
+spare = CH_Y1 - CH_Y0 - 24 - sum(H_MSG) - 3 * G1
+assert spare >= 0, f'chat overflows by {-spare:.1f}'
+G2 = G1 + spare / 2
 ys = [CH_Y0 + 12]
-for h_ in H_MSG[:-1]:
-    ys.append(ys[-1] + h_ + GAP)
+for h_, g_ in zip(H_MSG[:-1], (G1, G1, G2)):
+    ys.append(ys[-1] + h_ + g_)
 # 1 user asks in plain language
 user_msg(ys[0], ['Compute '] + ZT + [' for this 2D POSCAR.'])
 # 2 agent: discover, plan, dry run; the user approves the plan
@@ -472,20 +500,14 @@ Y_MID = y + H_MSG[2] / 2
 agent_card(y, H_MSG[2])
 yy = tool_row(y + 10, ['Execution'])
 say(yy + 25, 'Submitted; AutoZT runs the jobs.')
-# 4 user asks for a destructive action
-user_msg(ys[3], ['Rerun the deformation step.'])
-# 5 agent: approval in chat
-y = ys[4]
-agent_card(y, H_MSG[4])
-yy = tool_row(y + 10, ['Approval'])
-say(yy + 25, 'Deletes its folder. Approve?')
-pill_button(IX0 + 4, yy + 36, 88, 'Approve', RED, '#FFFFFF')
-pill_button(IX0 + 100, yy + 36, 88, 'Deny', '#FFFFFF', RED, stroke=RED)
-# 6 agent: report
-y = ys[5]
-agent_card(y, H_MSG[5])
+# 4 agent: report, with the zT(n, T) map from b attached
+y = ys[3]
+agent_card(y, H_MSG[3])
 yy = tool_row(y + 10, ['Reporting'])
 say(yy + 25, ZTNT + [' is ready.'])
+ax0, ay0 = IX0 + 4, yy + 38
+rect(ax0, ay0, ATT_W, ATT_H, rx=8, fill=LAV2, stroke=LAV_LINE, sw=1.4)
+zt_map(ax0 + 34, ay0 + 14, cell=14.5, cg=1.1, fs=FS_XS)
 end()
 
 # ================================================================ b: AutoZT, from POSCAR to zT(n, T)
@@ -560,23 +582,7 @@ fx = ex0 + lw_ + 10
 rich(fx + fw / 2, eqy - 9, num, FZ, INK, anchor='middle')
 line(fx, eqy, fx + fw, eqy, INK, 2.2)
 rich(fx + fw / 2, eqy + 29, den, FZ, INK, anchor='middle')
-HM = [['EEB2C6', 'D16388', 'B23C66', '8A1D46', 'B23C66', 'E38AA8'],
-      ['EEB2C6', 'E38AA8', 'D16388', 'B23C66', 'D16388', 'E38AA8'],
-      ['F6D3DE', 'E38AA8', 'D16388', 'D16388', 'E38AA8', 'EEB2C6'],
-      ['F6D3DE', 'EEB2C6', 'E38AA8', 'E38AA8', 'E38AA8', 'EEB2C6'],
-      ['F6D3DE', 'F6D3DE', 'EEB2C6', 'EEB2C6', 'EEB2C6', 'F6D3DE'],
-      ['F6D3DE', 'F6D3DE', 'F6D3DE', 'EEB2C6', 'F6D3DE', 'F6D3DE']]
-cell, cg = 16, 1.2
-gw = 6 * cell + 5 * cg
-hmx0, hmy0 = zcx - gw / 2 + 12, ZY[0] + 96
-for r_, row in enumerate(HM):
-    for c_, colr in enumerate(row):
-        rect(hmx0 + c_ * (cell + cg), hmy0 + r_ * (cell + cg), cell, cell, fill='#' + colr)
-axx, axy = hmx0 - 7, hmy0 + gw + 7
-arrow([(axx, axy), (axx, hmy0 - 4)], GATE, sw=2.2, head=9)
-arrow([(axx, axy), (hmx0 + gw + 12, axy)], GATE, sw=2.2, head=9)
-text(axx - 8, hmy0 + gw / 2 + 7, 'T', FS_B, MUTED, italic=True, anchor='end')
-text(hmx0 + gw + 22, axy + 7, 'n', FS_B, MUTED, italic=True)
+zt_map(zcx - (6 * 16 + 5 * 1.2) / 2 + 12, ZY[0] + 96)
 
 # every step runs itself: the automation loop
 rect(AS[0], AS[2], AS[1] - AS[0], AS[3] - AS[2], rx=14, fill='#F3F5FA', stroke='#C9D1DA', sw=1.6)
@@ -633,7 +639,7 @@ for k, (name, col, tcol) in enumerate([('ke-dft-cpu', BLUE, BLUE_TX), ('kl-dft-c
                                        ('zt-dft-cpu', CRIMSON, CRIMSON), ('band-dft-cpu', GREEN_SOFT, INK),
                                        ('phonon-dft-cpu', GREEN_SOFT, INK), ('fit-fc-thermal', GREEN_SOFT, INK)]):
     x = SK[0] + 14 + (k % 3) * (cw + 10)
-    yk = BY0 + 48 + (k // 3) * 64
+    yk = BY0 + 46 + (k // 3) * 62
     feat = k < 3
     rect(x, yk, cw, 54, rx=9, fill='#FFFFFF', stroke=col, sw=2.6 if feat else 1.6)
     text(x + cw / 2, yk + 27 + FS_B * 0.36, name, FS_B, tcol, bold=feat, anchor='middle')
@@ -643,7 +649,7 @@ ce = (EN[1] - EN[0] - 28 - 20) / 3
 for k, (name, hw) in enumerate([('VASP', 'CPU GPU'), ('AMSET', 'CPU'), ('ShengBTE', 'CPU GPU'),
                                 ('Pheasy', 'CPU GPU'), ('phono3py', 'CPU'), (None, None)]):
     x = EN[0] + 14 + (k % 3) * (ce + 10)
-    yk = BY0 + 48 + (k // 3) * 64
+    yk = BY0 + 46 + (k // 3) * 62
     if name is None:
         rect(x, yk, ce, 54, rx=9, stroke='#A3ADB8', sw=1.6, dash='12 8')
         text(x + ce / 2, yk + 34, '…', FS_H, MUTED, bold=True, anchor='middle')
@@ -755,5 +761,5 @@ add('</svg>')
 dst = sys.argv[1] if len(sys.argv) > 1 else os.path.join(HERE, 'fig1_autozt_overview_npj.svg')
 with open(dst, 'w') as fh:
     fh.write('\n'.join(out) + '\n')
-print(f'wrote {dst}: H {H}, chat gap {GAP:.1f}, Submitted card centre {Y_MID:.0f} vs automation loop centre '
-      f'{(AS[2] + AS[3]) / 2:.0f}, panel c bottom {D_Y[1]}')
+print(f'wrote {dst}: H {H}, chat gaps {G1:.1f} / {G2:.1f}, Submitted card centre {Y_MID:.0f} vs automation loop '
+      f'centre {(AS[2] + AS[3]) / 2:.0f}, panel c bottom {D_Y[1]}')
