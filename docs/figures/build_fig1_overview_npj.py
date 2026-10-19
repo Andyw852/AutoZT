@@ -2,7 +2,7 @@
 """Fig. 1 of the AutoZT paper (npj Comput. Mater.): overview, 180 mm wide vector SVG.
 
 Layout follows the reference draft:
-    a (agent session) | centre (coding agents -> MCP server / agent CLI -> AutoZT) | b (skills, engines)
+    a (agent session) | centre (coding agents -> AutoZT; loads b, runs c)           | b (skills, engines)
     c (POSCAR -> zT(n, T) pipeline)                                               | d (3D vs 2D rules)
 Units: 1 user unit = 0.1 mm, so the 1800-unit width prints at 180 mm (double column).
 Type sizes: 1 pt = 3.528 units; nothing is set below 5 pt (17.6 units).
@@ -264,16 +264,6 @@ def cursor(x, y, s=0.8):
     path('M' + ' L'.join(f'{f(x + px * s)} {f(y + py * s)}' for px, py in pts) + ' Z', fill='#FFFFFF', stroke=INK, sw=1.8)
 
 
-def claw(x, y, dx, dy):
-    """Open gripper at (x, y), opening along the arm direction (dx, dy)."""
-    n = math.hypot(dx, dy)
-    ux, uy = dx / n, dy / n
-
-    def pt(a, b):
-        return f'{f(x + ux * a - uy * b)} {f(y + uy * a + ux * b)}'
-    path(f'M{pt(32, -13)} L{pt(12, -18)} L{pt(0, 0)} L{pt(12, 18)} L{pt(32, 13)}', stroke=INK, sw=4.4)
-
-
 def chip(x, y, w, h, label, bg, fg, size=FS_XS, bold=True):
     rect(x, y, w, h, rx=5, fill=bg)
     text(x + w / 2, y + h / 2 + size * 0.35, label, size, fg, bold=bold, anchor='middle')
@@ -299,6 +289,13 @@ COL_B = (1098, 1788)
 R1_TOP, R1_BOT = 60, 784
 R2_TOP, R2_BOT = 858, H - 12
 TITLE_Y1, TITLE_Y2 = 42, 840
+
+
+# panel b: skill box on top, engine box below; the hub in the centre column is level with the gap
+SY0 = R1_TOP + 16
+FEAT_H, SUP_H, MORE_H = 132, 88, 44
+SH = 56 + FEAT_H + 14 + SUP_H + 14 + MORE_H + 32
+EY0 = SY0 + SH + 16
 
 
 def panel(x0, x1, y0, y1):
@@ -341,12 +338,21 @@ def user_msg(y, runs):
     return y + h + GAP
 
 
+VIA = [('MCP', {'fill': PURPLE}), (' · ', {'fill': FAINT, 'b': False}), ('CLI', {'fill': SLATE})]
+
+
+def via(y):
+    """Small right-aligned tag: the same call is available as an MCP tool and an agent-CLI command."""
+    rich(IX1 - 10, y, VIA, FS_XS, PURPLE, bold=True, anchor='end')
+
+
 def tool_block(y, rows):
     rect(IX0, y, IX1 - IX0, tool_h(len(rows)), rx=8, fill=LAV2)
     yy = y + T_PAD
     for stage, bg, fg, tools in rows:
         chip(IX0 + 7, yy, 96, T_RH, stage, bg, fg)
         rich(IX0 + 114, yy + T_RH / 2 + FS_XS * 0.36, tools, FS_XS, CODE)
+        via(yy + T_RH / 2 + FS_XS * 0.36)
         yy += T_RH + T_GAP
     return y + tool_h(len(rows))
 
@@ -367,7 +373,7 @@ y = user_msg(y, ['Compute '] + ZT + [' for this 2D POSCAR.'])
 PLAN_H = 90
 h2 = 10 + tool_h(3) + 34 + PLAN_H + 10
 agent_card(y, h2)
-yy = tool_block(y + 10, [stage('Discovery') + (['list_skills · describe_skill · check_env'],),
+yy = tool_block(y + 10, [stage('Discovery') + (['list_skills · check_env'],),
                          stage('Planning') + (['research_plan · preflight'],),
                          stage('Execution') + (['cycle (dry run)'],)])
 text(IX0 + 4, yy + 25, 'Plan ready; the dry run is clean. Proceed?', FS_B, INK, bold=True)
@@ -390,7 +396,7 @@ y += h2 + GAP
 # 3 agent: submit; AutoZT owns the job loop
 h3 = 10 + tool_h(1) + 40
 agent_card(y, h3)
-yy = tool_block(y + 10, [stage('Execution') + (['register_material · cycle · get_progress'],)])
+yy = tool_block(y + 10, [stage('Execution') + (['register_material · cycle'],)])
 text(IX0 + 4, yy + 25, 'Submitted; AutoZT advances and resumes jobs.', FS_B, INK, bold=True)
 y += h3 + GAP
 # 4 user asks for a destructive action
@@ -403,6 +409,7 @@ text(IX0 + 4, yy + 25, 'This deletes its folder. Approve?', FS_B, INK, bold=True
 pill_button(IX0 + 4, yy + 36, 92, 'Approve', RED, '#FFFFFF')
 pill_button(IX0 + 106, yy + 36, 92, 'Deny', '#FFFFFF', RED, stroke=RED)
 rich(IX0 + 218, yy + 48 + FS_XS * 0.36, [('→ ', {'fill': MUTED}), 'approve_request'], FS_XS, CODE)
+via(yy + 48 + FS_XS * 0.36)
 y += h5 + GAP
 # 6 agent: report
 h6 = 10 + tool_h(1) + 40
@@ -412,74 +419,47 @@ rich(IX0 + 4, yy + 25, ZTNT + [' is ready, with units and provenance.'], FS_B, I
 SESSION_END = y + h6
 end()
 
-# ================================================================ centre: coding agents -> MCP / CLI -> AutoZT
-group('panel-a-interface')
+# ================================================================ centre: coding agents -> AutoZT; b -> AutoZT -> c
+group('panel-a-hub')
 MX = (COL_M[0] + COL_M[1]) / 2
+HUB_W, HUB_H = 300, 220
+HUB_CY = EY0 - 8                 # level with the gap between the two boxes of panel b
+HUB_CX = 818                     # over the gap between the transport boxes and the zT box of panel c
+HUB_X0, HUB_Y0 = HUB_CX - HUB_W / 2, HUB_CY - HUB_H / 2
+# coding agents: speech bubble whose tail points at AutoZT
 BX0, BX1 = COL_M[0] + 16, COL_M[1] - 16
-BY0, BH = R1_TOP, 146
+BY0 = R1_TOP
+BH = HUB_Y0 - 22 - BY0
 rect(BX0, BY0, BX1 - BX0, BH, rx=18, fill=LAV)
-path(f'M{f(MX - 20)} {f(BY0 + BH - 1)} L{f(MX + 20)} {f(BY0 + BH - 1)} L{f(MX)} {f(BY0 + BH + 18)} Z', fill=LAV)
-text(MX, BY0 + 33, 'Coding agents', FS_H, PURPLE, bold=True, anchor='middle')
+path(f'M{f(HUB_CX - 20)} {f(BY0 + BH - 1)} L{f(HUB_CX + 20)} {f(BY0 + BH - 1)} L{f(HUB_CX)} {f(BY0 + BH + 16)} Z',
+     fill=LAV)
+text(MX, BY0 + 42, 'Coding agents', FS_H, PURPLE, bold=True, anchor='middle')
 cw = (BX1 - BX0 - 24) / 3
+LOGO = 48
 for k, (key, lab) in enumerate([('deepseek', 'DeepSeek'), ('kimi', 'Kimi'), ('glm', 'GLM'),
                                 ('claude', 'Claude'), ('chatgpt', 'ChatGPT'), (None, '…')]):
-    gx = BX0 + 12 + (k % 3) * cw
-    gy = BY0 + 50 + (k // 3) * 44
+    ccx = BX0 + 12 + (k % 3 + 0.5) * cw
+    gy = BY0 + 70 + (k // 3) * 100
     if key:
-        lw = tw(lab, FS_S, bold=True)
-        x0 = gx + (cw - (32 + 9 + lw)) / 2
-        logo(key, x0, gy, 32)
-        text(x0 + 41, gy + 16 + FS_S * 0.36, lab, FS_S, INK, bold=True)
+        logo(key, ccx - LOGO / 2, gy, LOGO)
+        text(ccx, gy + LOGO + 22, lab, FS_B, INK, bold=True, anchor='middle')
     else:
-        text(gx + cw / 2, gy + 16 + FS_S * 0.36, '…', FS_H, MUTED, bold=True, anchor='middle')
-
-KX0, KX1 = COL_M[0] + 16, COL_M[1] - 16
-KY0 = BY0 + BH + 30
-ROWS = [('Tools', '#FCEDE3', PEACH_TX, 'actions the agent calls', '12 tools in 5 stages'),
-        ('Resources', '#DCEFE3', '#1E6B3A', 'knowledge it reads', 'skill.yaml · README'),
-        ('Prompts', '#E9E3F7', PURPLE, 'recipes the user picks', 'compute-zt · triage-failures · …'),
-        ('Rules', '#EFE8D6', '#6B5420', 'sent at connect', 'consent · provenance')]
-RH, RG = 46, 7
-KH = 80 + len(ROWS) * RH + (len(ROWS) - 1) * RG + 14
-rect(KX0, KY0, KX1 - KX0, KH, rx=16, fill='#FFFFFF', stroke='#B9AEDB', sw=2.2)
-hw1 = 36 + tw('MCP server', FS_H, True)
-hw2 = 32 + tw('agent CLI', FS_H, True)
-hx = MX - (hw1 + 40 + hw2) / 2
-logo('mcp_m', hx, KY0 + 15, 24)
-text(hx + 36, KY0 + 35, 'MCP server', FS_H, PURPLE, bold=True)
-line(hx + hw1 + 20, KY0 + 14, hx + hw1 + 20, KY0 + 42, LAV_LINE, 2)
-logo('cli_c', hx + hw1 + 40, KY0 + 16, 22)
-text(hx + hw1 + 40 + 32, KY0 + 35, 'agent CLI', FS_H, SLATE, bold=True)
-text(MX, KY0 + 63, 'one contract · one approval gate · one audit log', FS_XS, MUTED, italic=True, anchor='middle')
-ry = KY0 + 80
-for name, bg, fg, tag, ex in ROWS:
-    rect(KX0 + 12, ry, KX1 - KX0 - 24, RH, rx=10, fill=bg)
-    chip(KX0 + 20, ry + 9, 110, RH - 18, name, '#FFFFFF', fg, size=FS_S)
-    text(KX0 + 142, ry + 19, tag, FS_S, fg, bold=True)
-    text(KX0 + 142, ry + 38, ex, FS_XS, CODE)
-    ry += RH + RG
-KY1 = KY0 + KH
-
-# AutoZT: takes the calls, both arms reach into panel b
-HEAD_Y = KY1 + 36
-arrow([(MX, KY1 + 4), (MX, HEAD_Y - 4)], PURPLE, sw=3.2, head=12)
-BODY_W, BODY_H = 220, 92
-BODY_Y0 = HEAD_Y + 50
-rect(MX - 50, HEAD_Y, 100, 40, rx=12, fill=INK)
-rect(MX - 28, HEAD_Y + 9, 15, 22, rx=6, fill='#FFFFFF')
-rect(MX + 13, HEAD_Y + 9, 15, 22, rx=6, fill='#FFFFFF')
-rect(MX - 18, HEAD_Y + 40, 36, 11, fill=INK)
-rect(MX - BODY_W / 2, BODY_Y0, BODY_W, BODY_H, rx=22, fill='#FFFFFF', stroke=INK, sw=6)
-text(MX, BODY_Y0 + BODY_H / 2 + 14, 'AutoZT', 40, INK, bold=True, anchor='middle')
-SX = MX + BODY_W / 2
-for jy, ex, ey in [(BODY_Y0 + 24, COL_M[1] - 32, BODY_Y0 - 16),
-                   (BODY_Y0 + BODY_H - 24, COL_M[1] - 32, BODY_Y0 + BODY_H + 16)]:
-    rect(SX - 2, jy - 14, 14, 28, rx=4, fill=INK)
-    path(f'M{f(SX + 12)} {f(jy)} L{f(ex)} {f(ey)}', stroke=INK, sw=14)
-    path(f'M{f(SX + 12)} {f(jy)} L{f(ex)} {f(ey)}', stroke='#6B7785', sw=6.5)
-    circle(SX + 14, jy, 8.5, fill='#FFFFFF', stroke=INK, sw=3.2)
-    claw(ex, ey, ex - SX - 12, ey - jy)
-    circle(ex, ey, 8, fill='#FFFFFF', stroke=INK, sw=3.2)
+        text(ccx, gy + LOGO / 2 + 8, '…', FS_H, MUTED, bold=True, anchor='middle')
+# AutoZT hub: a small DAG in the colours of panel c, then the name
+rect(HUB_X0, HUB_Y0, HUB_W, HUB_H, rx=20, fill='#FFFFFF', stroke=INK, sw=5)
+dcx, dcy, ddx, ddy = HUB_CX, HUB_Y0 + 62, 52, 22
+nodes = {'s': (dcx - 1.5 * ddx, dcy, GREEN), 'r': (dcx - 0.5 * ddx, dcy, INK),
+         'e': (dcx + 0.5 * ddx, dcy - ddy, BLUE), 'p': (dcx + 0.5 * ddx, dcy + ddy, ORANGE),
+         'z': (dcx + 1.5 * ddx, dcy, CRIMSON)}
+for a_, b_ in [('s', 'r'), ('r', 'e'), ('r', 'p'), ('e', 'z'), ('p', 'z')]:
+    line(nodes[a_][0], nodes[a_][1], nodes[b_][0], nodes[b_][1], FAINT, 2.6)
+for nx, ny, ncol in nodes.values():
+    circle(nx, ny, 11, fill=ncol)
+text(HUB_CX, HUB_Y0 + 150, 'AutoZT', 44, INK, bold=True, anchor='middle')
+text(HUB_CX, HUB_Y0 + 190, 'workflow engine', FS_S, MUTED, anchor='middle')
+# AutoZT -> c
+arrow([(HUB_CX, HUB_Y0 + HUB_H + 4), (HUB_CX, R2_TOP - 2)], INK, sw=3.2, head=13)
+text(HUB_CX + 14, (HUB_Y0 + HUB_H + R2_TOP) / 2 + 6, 'runs', FS_S, INK, bold=True, italic=True)
 end()
 
 # ================================================================ b: skills and engines
@@ -489,13 +469,10 @@ panel(COL_B[0], COL_B[1], R1_TOP, R1_BOT)
 SX0, SX1 = COL_B[0] + 16, COL_B[1] - 16
 GX0, GX1 = SX0 + 18, SX1 - 18
 CW3 = (GX1 - GX0 - 2 * 12) / 3
-SY0 = R1_TOP + 16
-FEAT_H, SUP_H, MORE_H = 106, 72, 40
-SH = 54 + FEAT_H + 12 + SUP_H + 12 + MORE_H + 16
 rect(SX0, SY0, SX1 - SX0, SH, rx=14, fill=GREEN_BG, stroke=GREEN, sw=2.2)
 text(SX0 + 20, SY0 + 35, 'Workflow skills', FS_H, GREEN, bold=True)
 text(SX1 - 20, SY0 + 35, 'skill.yaml: steps + acceptance checks', FS_XS, MUTED, italic=True, anchor='end')
-fy = SY0 + 54
+fy = SY0 + 56
 for k, (name, col, tcol, role, q) in enumerate([
         ('ke-dft-cpu', BLUE, BLUE_TX, 'electron transport',
          [('σ', {'i': True}), ', ', ('S', {'i': True}), ', ', ('κ', {'i': True}), ('e', {'sub': True})]),
@@ -503,22 +480,21 @@ for k, (name, col, tcol, role, q) in enumerate([
         ('zt-dft-cpu', CRIMSON, CRIMSON, 'combine', ZTNT)]):
     x = GX0 + k * (CW3 + 12)
     rect(x, fy, CW3, FEAT_H, rx=10, fill='#FFFFFF', stroke=col, sw=3)
-    text(x + CW3 / 2, fy + 33, name, FS_H, tcol, bold=True, anchor='middle')
-    text(x + CW3 / 2, fy + 58, role, FS_XS, MUTED, anchor='middle')
-    rich(x + CW3 / 2, fy + 87, q, FS_B, tcol, bold=True, anchor='middle')
-sy = fy + FEAT_H + 12
+    text(x + CW3 / 2, fy + 42, name, FS_H, tcol, bold=True, anchor='middle')
+    text(x + CW3 / 2, fy + 72, role, FS_XS, MUTED, anchor='middle')
+    rich(x + CW3 / 2, fy + 106, q, FS_B, tcol, bold=True, anchor='middle')
+sy = fy + FEAT_H + 14
 for k, (name, role) in enumerate([('band-dft-cpu', 'band structure'), ('phonon-dft-cpu', 'phonon dispersion'),
                                   ('fit-fc-thermal', 'force-constant fitting')]):
     x = GX0 + k * (CW3 + 12)
     rect(x, sy, CW3, SUP_H, rx=10, fill='#FFFFFF', stroke=GREEN_SOFT, sw=1.8)
-    text(x + CW3 / 2, sy + 31, name, FS_B, INK, anchor='middle')
-    text(x + CW3 / 2, sy + 55, role, FS_XS, MUTED, anchor='middle')
-sy += SUP_H + 12
+    text(x + CW3 / 2, sy + 38, name, FS_B, INK, anchor='middle')
+    text(x + CW3 / 2, sy + 65, role, FS_XS, MUTED, anchor='middle')
+sy += SUP_H + 14
 rect(GX0, sy, GX1 - GX0, MORE_H, rx=10, stroke=GREEN_SOFT, sw=1.8, dash='14 9')
 text((GX0 + GX1) / 2, sy + MORE_H / 2 + FS_XS * 0.36, '…  plus MLFF, defect, elastic and screening skills',
      FS_XS, MUTED, anchor='middle')
 
-EY0 = SY0 + SH + 16
 EH = R1_BOT - 16 - EY0
 rect(SX0, EY0, SX1 - SX0, EH, rx=14, fill='#EFF1F4', stroke=MUTED, sw=2.2)
 text(SX0 + 20, EY0 + 35, 'Computational engines', FS_H, INK, bold=True)
@@ -549,6 +525,11 @@ for k, (name, role, rcol, hw) in enumerate([('VASP', 'DFT', MUTED, 'CPU GPU'),
         rect(tx0, mid + 16, wd, 22, rx=11, fill=bg)
         text(tx0 + wd / 2, mid + 27 + FS_XS * 0.36, t, FS_XS, fg, bold=True, anchor='middle')
         tx0 += wd + 6
+end()
+
+group('panel-a-hub-link')
+arrow([(COL_B[0] + 26, HUB_CY), (HUB_X0 + HUB_W + 4, HUB_CY)], INK, sw=3.2, head=13)
+text((HUB_X0 + HUB_W + COL_B[0]) / 2 + 2, HUB_CY - 12, 'loads', FS_S, INK, bold=True, italic=True, anchor='middle')
 end()
 
 # ================================================================ c: POSCAR -> zT(n, T)
@@ -739,5 +720,5 @@ add('</svg>')
 dst = sys.argv[1] if len(sys.argv) > 1 else os.path.join(HERE, 'fig1_autozt_overview_npj.svg')
 with open(dst, 'w') as fh:
     fh.write('\n'.join(out) + '\n')
-print(f'wrote {dst}: session ends {SESSION_END:.0f} (row bottom {R1_BOT}), robot body {BODY_Y0:.0f}-{BODY_Y0 + BODY_H:.0f}, '
+print(f'wrote {dst}: session ends {SESSION_END:.0f} (row bottom {R1_BOT}), hub {HUB_Y0:.0f}-{HUB_Y0 + HUB_H:.0f}, '
       f'skills box {SY0}-{SY0 + SH}, d table ends {D_END:.0f} (row bottom {R2_BOT})')
