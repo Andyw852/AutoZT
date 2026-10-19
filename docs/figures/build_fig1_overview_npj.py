@@ -2,8 +2,8 @@
 """Fig. 1 of the AutoZT paper (npj Comput. Mater.): overview, 180 mm wide vector SVG.
 
 Layout:
-    a (LLM agent session, left column) | b (workflow skills and engines)
-                                       | c (AutoZT logo; automated POSCAR -> zT(n, T) workflow)
+    a (LLM agent session, left column) | b (AutoZT mark; automated POSCAR -> zT(n, T) workflow)
+                                       | c (workflow skills and engines AutoZT selects from)
     d (one workflow for 3D and 2D materials, full width)
 Units: 1 user unit = 0.1 mm, so the 1800-unit width prints at 180 mm (double column).
 Type sizes: 1 pt = 3.528 units; nothing is set below 5 pt (17.6 units).
@@ -62,7 +62,7 @@ USER_BG = '#F6E1E8'
 GATE = '#3A4654'
 
 W = 1800
-H = 1350
+H = 1324
 
 # ---------------------------------------------------------------- text metrics (Arial, or Liberation Sans = same metrics)
 _FONTS = {}
@@ -333,13 +333,13 @@ rect(0, 0, W, H, fill='#FFFFFF')
 
 A_X = (12, 516)                  # a: left column
 R_X = (604, 1788)                # b and c: right column
-TITLE_Y = 42
-A_Y = (60, 970)
-B_Y = (60, 296)
-C_BASE = 392                     # baseline of the AutoZT masthead that titles panel c
-C_Y = (414, 970)
-D_TITLE = 1010
-D_Y = (1028, H - 12)
+TITLE_Y = 64                     # baseline of panel a's title and of the AutoZT masthead that titles panel b
+A_Y = (82, 944)
+W_Y = (82, 642)                  # b: the automated workflow
+L_TITLE = 690
+L_Y = (708, 944)                 # c: workflow skills and engines
+D_TITLE = 984
+D_Y = (1002, H - 12)
 
 
 def panel(x0, x1, y0, y1):
@@ -491,7 +491,6 @@ for k, (num, lab, col) in enumerate(steps):
 cursor(pbx + 88 - 10, py0 + 22)
 y += heights[1] + GAP
 # 3 agent: submit; from here AutoZT runs the workflow by itself
-Y_CALL = y + heights[2] / 2
 agent_card(y, heights[2])
 yy = tool_block(y + 10, [('Execution', 'register_material · cycle')])
 say(yy + 24, m3_lines)
@@ -507,28 +506,18 @@ pill_button(IX0 + 100, yy + 36, 88, 'Deny', '#FFFFFF', RED, stroke=RED)
 rich(IX0 + 204, yy + 48 + FS_XS * 0.36, [('→ ', {'fill': MUTED}), 'approve_request'], FS_XS, CODE)
 y += heights[4] + GAP
 # 6 agent: report
-Y_RESULT = y + heights[5] / 2
 agent_card(y, heights[5])
 yy = tool_block(y + 10, [('Reporting', 'results · task_graph')])
 say(yy + 24, m6_lines)
 end()
 
-# ================================================================ a <-> c: tool calls in, results out
-group('a-c-interface')
-GX0, GX1 = A_X[1] + 4, R_X[0] - 4
-for yv, lab, col, rightward in [(Y_CALL, 'tool calls', PURPLE, True), (Y_RESULT, 'results', CRIMSON, False)]:
-    x0, x1 = (GX0, GX1) if rightward else (GX1, GX0)
-    curve_arrow((x0, yv), (x0 + (x1 - x0) * 0.3, yv), (x0 + (x1 - x0) * 0.7, yv), (x1, yv), col, sw=3.2)
-    text((GX0 + GX1) / 2, yv - 12, lab, FS_XS, col, bold=True, anchor='middle')
-end()
-
-# ================================================================ b: workflow skills and engines
-group('panel-b')
-panel_title(R_X[0] + 2, TITLE_Y, 'b', ['Workflow skills and engines'])
-panel(R_X[0], R_X[1], B_Y[0], B_Y[1])
+# ================================================================ c: workflow skills and engines (the library AutoZT picks from)
+group('panel-c')
+panel_title(R_X[0] + 2, L_TITLE, 'c', ['Workflow skills and engines'])
+panel(R_X[0], R_X[1], L_Y[0], L_Y[1])
 SK = (R_X[0] + 16, R_X[0] + 16 + 566)
 EN = (SK[1] + 16, R_X[1] - 16)
-BY0, BY1 = B_Y[0] + 14, B_Y[1] - 14
+BY0, BY1 = L_Y[0] + 14, L_Y[1] - 14
 rect(SK[0], BY0, SK[1] - SK[0], BY1 - BY0, rx=14, fill=GREEN_BG, stroke=GREEN, sw=2.2)
 text(SK[0] + 16, BY0 + 30, 'Workflow skills', FS_H, GREEN, bold=True)
 text(SK[1] - 16, BY0 + 30, 'skill.yaml: steps + checks', FS_XS, MUTED, italic=True, anchor='end')
@@ -567,19 +556,17 @@ for k, (name, hw) in enumerate([('VASP', 'CPU GPU'), ('AMSET', 'CPU'), ('ShengBT
     hw_tags(x + ce / 2, yk + 32, hw.split())
 end()
 
-# ================================================================ c: AutoZT runs the zT workflow automatically
-group('panel-c')
-text(R_X[0] + 2, C_BASE, 'c', FS_LETTER, INK, bold=True)
-WM_SIZE = 62
-dag_icon(R_X[0] + 92, C_BASE - 0.365 * WM_SIZE, dx=30, dy=14, r=8.5)
-wl, wr, wtop = wordmark(R_X[0] + 156, C_BASE, WM_SIZE, anchor='start')
-tag_runs = ['fully automated '] + ZT + [' workflow']
-rich(wr + 20, C_BASE, tag_runs, FS_B, MUTED, italic=True)
-SEL_X = wr + 20 + rich_w(tag_runs, FS_B, italic=True) + 40
-panel(R_X[0], R_X[1], C_Y[0], C_Y[1])
+# ================================================================ b: AutoZT runs the zT workflow automatically
+group('panel-b')
+text(R_X[0] + 2, TITLE_Y, 'b', FS_LETTER, INK, bold=True)
+WM_SIZE = 58
+dag_icon(R_X[0] + 90, TITLE_Y - 0.365 * WM_SIZE, dx=28, dy=13, r=8)
+wl, wr, wtop = wordmark(R_X[0] + 150, TITLE_Y, WM_SIZE, anchor='start')
+SEL_X = SK[1] + 8                # between the skill box and the engine box of panel c
+panel(R_X[0], R_X[1], W_Y[0], W_Y[1])
 # pipeline
-Y0 = 600
-EL_Y, PH_Y = 506, 694
+Y0 = W_Y[0] + 186
+EL_Y, PH_Y = Y0 - 94, Y0 + 94
 TH = 112
 DCX = R_X[0] + 76
 dw, dh = 84, 104
@@ -670,7 +657,7 @@ text(axx - 8, hmy0 + gw / 2 + 7, 'T', FS_B, MUTED, italic=True, anchor='end')
 text(hmx0 + gw / 2, axy + 26, 'n', FS_B, MUTED, italic=True, anchor='middle')
 
 # every step runs itself: the automation loop
-AS = (R_X[0] + 20, R_X[1] - 20, ZY[1] + 26, C_Y[1] - 16)
+AS = (R_X[0] + 20, R_X[1] - 20, ZY[1] + 26, W_Y[1] - 16)
 rect(AS[0], AS[2], AS[1] - AS[0], AS[3] - AS[2], rx=14, fill='#F3F5FA', stroke='#C9D1DA', sw=1.6)
 text(AS[0] + 18, AS[2] + 28, 'Every step runs automatically', FS_S, INK, bold=True)
 text(AS[1] - 18, AS[2] + 28, 'no manual job handling', FS_XS, MUTED, italic=True, anchor='end')
@@ -722,10 +709,21 @@ rich((cx_ + sx) / 2, yb + 22, [('retry · resume', {'b': True}), ' if a gate fai
      anchor='middle')
 end()
 
-# b -> c: AutoZT picks the skills and engines a material needs
-group('b-c-link')
-curve_arrow((SEL_X, B_Y[1] + 3), (SEL_X, B_Y[1] + 40), (SEL_X, C_Y[0] - 40), (SEL_X, C_Y[0] - 3), INK, sw=3.2)
-text(SEL_X + 16, (B_Y[1] + C_Y[0]) / 2 + 7, 'auto-selects skills & engines', FS_S, INK, bold=True, italic=True)
+# c -> b: AutoZT picks the skills and engines a material needs
+group('c-b-link')
+curve_arrow((SEL_X, L_Y[0] - 3), (SEL_X, L_Y[0] - 30), (SEL_X, W_Y[1] + 30), (SEL_X, W_Y[1] + 3), INK, sw=3.2)
+text(SEL_X + 16, (W_Y[1] + L_Y[0]) / 2 + 7, 'auto-selects skills & engines', FS_S, INK, bold=True, italic=True)
+end()
+
+# a <-> b: the agent's tool calls go in, results come back (level with the pipeline)
+group('a-b-interface')
+GX0, GX1 = A_X[1] + 4, R_X[0] - 4
+Y_CALL, Y_RESULT = Y0 - 24, Y0 + 24
+for yv, lab, col, rightward, ly in [(Y_CALL, 'tool calls', PURPLE, True, Y_CALL - 12),
+                                    (Y_RESULT, 'results', CRIMSON, False, Y_RESULT + 26)]:
+    x0, x1 = (GX0, GX1) if rightward else (GX1, GX0)
+    curve_arrow((x0, yv), (x0 + (x1 - x0) * 0.3, yv), (x0 + (x1 - x0) * 0.7, yv), (x1, yv), col, sw=3.2)
+    text((GX0 + GX1) / 2, ly, lab, FS_XS, col, bold=True, anchor='middle')
 end()
 
 # ================================================================ d: one workflow for 3D and 2D materials
