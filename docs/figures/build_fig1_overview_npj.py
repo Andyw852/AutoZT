@@ -2,9 +2,9 @@
 """Fig. 1 of the AutoZT paper (npj Comput. Mater.): overview, 180 mm wide vector SVG.
 
 Layout:
-    a (LLM agent session, left column) | b (AutoZT mark; automated POSCAR -> zT(n, T) workflow)
-                                       | c (workflow skills and engines AutoZT selects from)
-    d (one workflow for 3D and 2D materials, full width)
+    a (LLM agent session, left column) | b (AutoZT: automated POSCAR -> zT(n, T) workflow,
+                                       |    with the skill and engine library it selects from)
+    c (one workflow for 3D and 2D materials, full width)
 Units: 1 user unit = 0.1 mm, so the 1800-unit width prints at 180 mm (double column).
 Type sizes: 1 pt = 3.528 units; nothing is set below 5 pt (17.6 units).
 Usage: python3 build_fig1_overview_npj.py [out.svg]   (reads fig1_logos.json next to this script; needs Pillow)
@@ -62,7 +62,7 @@ USER_BG = '#F6E1E8'
 GATE = '#3A4654'
 
 W = 1800
-H = 1324
+H = 1300
 
 # ---------------------------------------------------------------- text metrics (Arial, or Liberation Sans = same metrics)
 _FONTS = {}
@@ -333,13 +333,11 @@ rect(0, 0, W, H, fill='#FFFFFF')
 
 A_X = (12, 516)                  # a: left column
 R_X = (604, 1788)                # b and c: right column
-TITLE_Y = 64                     # baseline of panel a's title and of the AutoZT masthead that titles panel b
-A_Y = (82, 944)
-W_Y = (82, 642)                  # b: the automated workflow
-L_TITLE = 690
-L_Y = (708, 944)                 # c: workflow skills and engines
-D_TITLE = 984
-D_Y = (1002, H - 12)
+TITLE_Y = 42
+A_Y = (60, 920)
+W_Y = (60, 920)                  # b: AutoZT (workflow on top, skill and engine library below)
+D_TITLE = 960
+D_Y = (978, H - 12)
 
 
 def panel(x0, x1, y0, y1):
@@ -511,61 +509,16 @@ yy = tool_block(y + 10, [('Reporting', 'results · task_graph')])
 say(yy + 24, m6_lines)
 end()
 
-# ================================================================ c: workflow skills and engines (the library AutoZT picks from)
-group('panel-c')
-panel_title(R_X[0] + 2, L_TITLE, 'c', ['Workflow skills and engines'])
-panel(R_X[0], R_X[1], L_Y[0], L_Y[1])
-SK = (R_X[0] + 16, R_X[0] + 16 + 566)
-EN = (SK[1] + 16, R_X[1] - 16)
-BY0, BY1 = L_Y[0] + 14, L_Y[1] - 14
-rect(SK[0], BY0, SK[1] - SK[0], BY1 - BY0, rx=14, fill=GREEN_BG, stroke=GREEN, sw=2.2)
-text(SK[0] + 16, BY0 + 30, 'Workflow skills', FS_H, GREEN, bold=True)
-text(SK[1] - 16, BY0 + 30, 'skill.yaml: steps + checks', FS_XS, MUTED, italic=True, anchor='end')
-cw = (SK[1] - SK[0] - 28 - 20) / 3
-for k, (name, col, tcol, q) in enumerate([
-        ('ke-dft-cpu', BLUE, BLUE_TX, [('σ', {'i': True}), ', ', ('S', {'i': True}), ', ', ('κ', {'i': True}),
-                                       ('e', {'sub': True})]),
-        ('kl-dft-cpu', ORANGE, ORANGE_TX, [('κ', {'i': True}), ('L', {'sub': True})]),
-        ('zt-dft-cpu', CRIMSON, CRIMSON, ZTNT)]):
-    x = SK[0] + 14 + k * (cw + 10)
-    rect(x, BY0 + 44, cw, 58, rx=9, fill='#FFFFFF', stroke=col, sw=2.6)
-    text(x + cw / 2, BY0 + 68, name, FS_B, tcol, bold=True, anchor='middle')
-    rich(x + cw / 2, BY0 + 92, q, FS_B, tcol, bold=True, anchor='middle')
-for k, (name, role) in enumerate([('band-dft-cpu', 'band structure'), ('phonon-dft-cpu', 'phonon dispersion'),
-                                  ('fit-fc-thermal', 'force-constant fitting')]):
-    x = SK[0] + 14 + k * (cw + 10)
-    rect(x, BY0 + 112, cw, 58, rx=9, fill='#FFFFFF', stroke=GREEN_SOFT, sw=1.6)
-    text(x + cw / 2, BY0 + 136, name, FS_B, INK, anchor='middle')
-    text(x + cw / 2, BY0 + 158, role, FS_XS, MUTED, anchor='middle')
-text((SK[0] + SK[1]) / 2, BY0 + 194, '… plus MLFF, defect, elastic and screening skills', FS_XS, MUTED, anchor='middle')
-
-rect(EN[0], BY0, EN[1] - EN[0], BY1 - BY0, rx=14, fill='#EFF1F4', stroke=MUTED, sw=2.2)
-text(EN[0] + 16, BY0 + 30, 'Computational engines', FS_H, INK, bold=True)
-text(EN[1] - 16, BY0 + 30, 'CPU / GPU clusters', FS_XS, MUTED, italic=True, anchor='end')
-ce = (EN[1] - EN[0] - 28 - 20) / 3
-for k, (name, hw) in enumerate([('VASP', 'CPU GPU'), ('AMSET', 'CPU'), ('ShengBTE', 'CPU GPU'),
-                                ('Pheasy', 'CPU GPU'), ('phono3py', 'CPU'), (None, None)]):
-    x = EN[0] + 14 + (k % 3) * (ce + 10)
-    yk = BY0 + 44 + (k // 3) * 68
-    if name is None:
-        rect(x, yk, ce, 58, rx=9, stroke='#A3ADB8', sw=1.6, dash='12 8')
-        text(x + ce / 2, yk + 36, '…', FS_H, MUTED, bold=True, anchor='middle')
-        continue
-    rect(x, yk, ce, 58, rx=9, fill='#FFFFFF', stroke='#A3ADB8', sw=1.6)
-    text(x + ce / 2, yk + 24, name, FS_B, INK, bold=True, anchor='middle')
-    hw_tags(x + ce / 2, yk + 32, hw.split())
-end()
-
 # ================================================================ b: AutoZT runs the zT workflow automatically
 group('panel-b')
-text(R_X[0] + 2, TITLE_Y, 'b', FS_LETTER, INK, bold=True)
-WM_SIZE = 58
-dag_icon(R_X[0] + 90, TITLE_Y - 0.365 * WM_SIZE, dx=28, dy=13, r=8)
-wl, wr, wtop = wordmark(R_X[0] + 150, TITLE_Y, WM_SIZE, anchor='start')
-SEL_X = SK[1] + 8                # between the skill box and the engine box of panel c
+panel_title(R_X[0] + 2, TITLE_Y, 'b', ['From POSCAR to '] + ZTNT)
 panel(R_X[0], R_X[1], W_Y[0], W_Y[1])
+WM_SIZE = 58
+LOGO_BASE = W_Y[0] + 62
+dag_icon(R_X[0] + 78, LOGO_BASE - 0.365 * WM_SIZE, dx=28, dy=13, r=8)
+wl, wr, wtop = wordmark(R_X[0] + 136, LOGO_BASE, WM_SIZE, anchor='start')
 # pipeline
-Y0 = W_Y[0] + 186
+Y0 = W_Y[0] + 210
 EL_Y, PH_Y = Y0 - 94, Y0 + 94
 TH = 112
 DCX = R_X[0] + 76
@@ -657,7 +610,7 @@ text(axx - 8, hmy0 + gw / 2 + 7, 'T', FS_B, MUTED, italic=True, anchor='end')
 text(hmx0 + gw / 2, axy + 26, 'n', FS_B, MUTED, italic=True, anchor='middle')
 
 # every step runs itself: the automation loop
-AS = (R_X[0] + 20, R_X[1] - 20, ZY[1] + 26, W_Y[1] - 16)
+AS = (R_X[0] + 20, R_X[1] - 20, ZY[1] + 26, ZY[1] + 26 + 172)
 rect(AS[0], AS[2], AS[1] - AS[0], AS[3] - AS[2], rx=14, fill='#F3F5FA', stroke='#C9D1DA', sw=1.6)
 text(AS[0] + 18, AS[2] + 28, 'Every step runs automatically', FS_S, INK, bold=True)
 text(AS[1] - 18, AS[2] + 28, 'no manual job handling', FS_XS, MUTED, italic=True, anchor='end')
@@ -707,12 +660,53 @@ path(f'M{f(cx_)} {f(ly0 + lh + 2)} C{f(cx_)} {f(yb)} {f(cx_ - 30)} {f(yb)} {f((c
 stealth((sx, ly0 + lh + 3), 0, -1, RED, length=12, half=5.5)
 rich((cx_ + sx) / 2, yb + 22, [('retry · resume', {'b': True}), ' if a gate fails'], FS_XS, RED, italic=True,
      anchor='middle')
+# library AutoZT picks from: skills (left) and engines (right)
+SK = (R_X[0] + 16, R_X[0] + 16 + 566)
+EN = (SK[1] + 16, R_X[1] - 16)
+BY0, BY1 = W_Y[1] - 14 - 212, W_Y[1] - 14
+rect(SK[0], BY0, SK[1] - SK[0], BY1 - BY0, rx=14, fill=GREEN_BG, stroke=GREEN, sw=2.2)
+text(SK[0] + 16, BY0 + 30, 'Workflow skills', FS_H, GREEN, bold=True)
+text(SK[1] - 16, BY0 + 30, 'skill.yaml: steps + checks', FS_XS, MUTED, italic=True, anchor='end')
+cw = (SK[1] - SK[0] - 28 - 20) / 3
+for k, (name, col, tcol, q) in enumerate([
+        ('ke-dft-cpu', BLUE, BLUE_TX, [('σ', {'i': True}), ', ', ('S', {'i': True}), ', ', ('κ', {'i': True}),
+                                       ('e', {'sub': True})]),
+        ('kl-dft-cpu', ORANGE, ORANGE_TX, [('κ', {'i': True}), ('L', {'sub': True})]),
+        ('zt-dft-cpu', CRIMSON, CRIMSON, ZTNT)]):
+    x = SK[0] + 14 + k * (cw + 10)
+    rect(x, BY0 + 44, cw, 58, rx=9, fill='#FFFFFF', stroke=col, sw=2.6)
+    text(x + cw / 2, BY0 + 68, name, FS_B, tcol, bold=True, anchor='middle')
+    rich(x + cw / 2, BY0 + 92, q, FS_B, tcol, bold=True, anchor='middle')
+for k, (name, role) in enumerate([('band-dft-cpu', 'band structure'), ('phonon-dft-cpu', 'phonon dispersion'),
+                                  ('fit-fc-thermal', 'force-constant fitting')]):
+    x = SK[0] + 14 + k * (cw + 10)
+    rect(x, BY0 + 112, cw, 58, rx=9, fill='#FFFFFF', stroke=GREEN_SOFT, sw=1.6)
+    text(x + cw / 2, BY0 + 136, name, FS_B, INK, anchor='middle')
+    text(x + cw / 2, BY0 + 158, role, FS_XS, MUTED, anchor='middle')
+text((SK[0] + SK[1]) / 2, BY0 + 194, '… plus MLFF, defect, elastic and screening skills', FS_XS, MUTED, anchor='middle')
+
+rect(EN[0], BY0, EN[1] - EN[0], BY1 - BY0, rx=14, fill='#EFF1F4', stroke=MUTED, sw=2.2)
+text(EN[0] + 16, BY0 + 30, 'Computational engines', FS_H, INK, bold=True)
+text(EN[1] - 16, BY0 + 30, 'CPU / GPU clusters', FS_XS, MUTED, italic=True, anchor='end')
+ce = (EN[1] - EN[0] - 28 - 20) / 3
+for k, (name, hw) in enumerate([('VASP', 'CPU GPU'), ('AMSET', 'CPU'), ('ShengBTE', 'CPU GPU'),
+                                ('Pheasy', 'CPU GPU'), ('phono3py', 'CPU'), (None, None)]):
+    x = EN[0] + 14 + (k % 3) * (ce + 10)
+    yk = BY0 + 44 + (k // 3) * 68
+    if name is None:
+        rect(x, yk, ce, 58, rx=9, stroke='#A3ADB8', sw=1.6, dash='12 8')
+        text(x + ce / 2, yk + 36, '…', FS_H, MUTED, bold=True, anchor='middle')
+        continue
+    rect(x, yk, ce, 58, rx=9, fill='#FFFFFF', stroke='#A3ADB8', sw=1.6)
+    text(x + ce / 2, yk + 24, name, FS_B, INK, bold=True, anchor='middle')
+    hw_tags(x + ce / 2, yk + 32, hw.split())
+SEL_X = SK[1] + 8                # between the skill box and the engine box
 end()
 
-# c -> b: AutoZT picks the skills and engines a material needs
-group('c-b-link')
-curve_arrow((SEL_X, L_Y[0] - 3), (SEL_X, L_Y[0] - 30), (SEL_X, W_Y[1] + 30), (SEL_X, W_Y[1] + 3), INK, sw=3.2)
-text(SEL_X + 16, (W_Y[1] + L_Y[0]) / 2 + 7, 'auto-selects skills & engines', FS_S, INK, bold=True, italic=True)
+# library -> workflow: AutoZT picks the skills and engines a material needs
+group('b-select-link')
+curve_arrow((SEL_X, BY0 - 3), (SEL_X, BY0 - 26), (SEL_X, AS[3] + 26), (SEL_X, AS[3] + 3), INK, sw=3.2)
+text(SEL_X + 16, (AS[3] + BY0) / 2 + 7, 'auto-selects skills & engines', FS_S, INK, bold=True, italic=True)
 end()
 
 # a <-> b: the agent's tool calls go in, results come back (level with the pipeline)
@@ -726,9 +720,9 @@ for yv, lab, col, rightward, ly in [(Y_CALL, 'tool calls', PURPLE, True, Y_CALL 
     text((GX0 + GX1) / 2, ly, lab, FS_XS, col, bold=True, anchor='middle')
 end()
 
-# ================================================================ d: one workflow for 3D and 2D materials
-group('panel-d')
-panel_title(A_X[0] + 2, D_TITLE, 'd', ['One workflow for 3D and 2D materials'])
+# ================================================================ c: one workflow for 3D and 2D materials
+group('panel-c')
+panel_title(A_X[0] + 2, D_TITLE, 'c', ['One workflow for 3D and 2D materials'])
 panel(A_X[0], R_X[1], D_Y[0], D_Y[1])
 AT_O, AT_M = '#E0A43A', '#3B6FC4'
 
