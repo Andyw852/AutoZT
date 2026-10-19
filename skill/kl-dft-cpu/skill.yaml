@@ -55,7 +55,7 @@ fetch_files: [POSCAR, CONTCAR, INCAR, KPOINTS, POTCAR, submit.sh, OUTCAR,
               BTE.P3_total, BTE.P3_plus_total, BTE.P3_minus_total]
 
 steps:
-  - {seq: 1, name: step1_std_opt, label: S1_opt, check: relax_injob, hpc: "jzzn",   # 2D 变胞须 optcell 补丁版（仅 jzzn/hanhai 有）
+  - {seq: 1, name: step1_std_opt, label: S1_opt, check: relax_injob,
      gen: gen_step1_std_opt.py, contcar_to_poscar: true,
      # thickness_2d/vdw_radii（2026-09-17 加）：2D 变胞稳定判据要按【层内口径】换算
      #   （tol_cell = 0.4 kbar /(h⊥/d)），relax_common 靠这两个模块现算 h⊥/d。
@@ -66,7 +66,7 @@ steps:
      push_paths: [{from: kl-dft-cpu/result/step1_std_opt/workflow_method.txt, to: .autozt_hints/own_step1.txt},
                   {from: ke-dft-cpu/result/step1_opt/workflow_method.txt, to: .autozt_hints/sibling_ke-dft-cpu.txt}]}
 
-  - {seq: 2, name: step2_static, label: S2_static, check: outcar, hpc: "jzzn",   # 跟随 S1 用同一胞（optcell 版）
+  - {seq: 2, name: step2_static, label: S2_static, check: outcar,
      gen: gen_step2_static.py,
      # provenance_common.py（v1.0）：公共池的 provenance 补写器，gen 脚本可选调用
      gen_need: [dim_common.py, stepconf.py, step.conf, kl_common.py,
@@ -74,7 +74,7 @@ steps:
                 symmetry_audit.py,
                 incar_2d.tpl, incar_3d.tpl, submit_std_2d.tpl, submit_std_3d.tpl]}
 
-  - {seq: 4, name: step4_disp, label: S4_disp, check: outcar, fanout: "disp-*", hpc: "3090",   # [用户 2026-10-18] 超胞单点用 GPU 版 vasp.6.6.0（不变胞，GPU 加速）
+  - {seq: 4, name: step4_disp, label: S4_disp, check: outcar, fanout: "disp-*",
      gen: gen_step4_disp.py,
      # incar_bench.py：INCAR_BENCH=on 时的隔离对照 side-car（生成 bench/ 帧 + 分析报告），
      #   必须随 gen 推送（gen_step4_disp import 它）。
@@ -87,7 +87,7 @@ steps:
 
   # S5_fc 现为【提交计算节点】作业（去掉 run: gen）：gen 只写 submit.sh + fit_config.json，
   #   拟合/导出/虚频闸在作业里由共享引擎 fc_fit_driver.py 执行（[0019] 起；旧 kl_fc_backends.py 已删）。marker 仍是 phonon_summary.json。
-  - {seq: 5, name: step5_fc, label: S5_fc, check: phonon, hpc: "3090",   # [用户 2026-10-18] S5_fc 拟合走 3090 pheasy-gpu（Si 用 ALASSO/RFE-OLS 两轮）；S6_kappa 跟随材料默认集群 jzzn 算 κ
+  - {seq: 5, name: step5_fc, label: S5_fc, check: phonon, hpc: "a800",   # [用户 2026-10-18] S5_fc 拟合走 A800 pheasy-gpu（Si ALASSO/RFE-OLS 两轮）；S6_kappa 走材料默认（clus_xa）
      gen: gen_step5_fc.py, fetch_all: true,
      # v3.x：本地暂存的 fit-fc-thermal kl_bundle/ 在提交时自动推到目标集群（存在才推）。
      #   路径相对【材料本地目录】：<matroot>/fit-fc-thermal/result/step1_fit/kl_bundle。
