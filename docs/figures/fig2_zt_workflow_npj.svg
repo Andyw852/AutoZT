@@ -2,12 +2,24 @@
 <title>AutoZT zT workflow (Fig. 2)</title>
 <rect x="0" y="0" width="1800" height="968" fill="#FFFFFF" stroke="none"/>
 <g id="spotlights">
-<path d="M127.2 248 L472.8 248 L814.8 318 L614.8 318 Z" fill="#FBEEDF" stroke="none"/>
-<path d="M127.2 684 L472.8 684 L814.8 614 L614.8 614 Z" fill="#E6EEFA" stroke="none"/>
-<path d="M727.2 248 L1072.8 248 L1045.2 318 L845.2 318 Z" fill="#FBEEDF" stroke="none"/>
-<path d="M727.2 684 L1072.8 684 L1045.2 614 L845.2 614 Z" fill="#E6EEFA" stroke="none"/>
-<path d="M1327.2 248 L1672.8 248 L1275.6 318 L1075.6 318 Z" fill="#FBEEDF" stroke="none"/>
-<path d="M1327.2 684 L1672.8 684 L1275.6 614 L1075.6 614 Z" fill="#E6EEFA" stroke="none"/>
+<path d="M300 248 L588 248 L814.8 332 L614.8 332 Z" fill="#F6E3E1" stroke="none"/>
+<line x1="300" y1="248" x2="614.8" y2="332" fill="none" stroke="#C0392B" stroke-width="1.2"/>
+<line x1="588" y1="248" x2="814.8" y2="332" fill="none" stroke="#C0392B" stroke-width="1.2"/>
+<path d="M801.2 248 L1089.2 248 L1045.2 332 L845.2 332 Z" fill="#E6EAEE" stroke="none"/>
+<line x1="801.2" y1="248" x2="845.2" y2="332" fill="none" stroke="#4A6A86" stroke-width="1.2"/>
+<line x1="1089.2" y1="248" x2="1045.2" y2="332" fill="none" stroke="#4A6A86" stroke-width="1.2"/>
+<path d="M1212 248 L1500 248 L1275.6 332 L1075.6 332 Z" fill="#EAE5F4" stroke="none"/>
+<line x1="1212" y1="248" x2="1075.6" y2="332" fill="none" stroke="#6A44B0" stroke-width="1.2"/>
+<line x1="1500" y1="248" x2="1275.6" y2="332" fill="none" stroke="#6A44B0" stroke-width="1.2"/>
+<path d="M300 684 L588 684 L814.8 600 L614.8 600 Z" fill="#DDEDEE" stroke="none"/>
+<line x1="300" y1="684" x2="614.8" y2="600" fill="none" stroke="#0F7F86" stroke-width="1.2"/>
+<line x1="588" y1="684" x2="814.8" y2="600" fill="none" stroke="#0F7F86" stroke-width="1.2"/>
+<path d="M801.2 684 L1089.2 684 L1045.2 600 L845.2 600 Z" fill="#F4E3ED" stroke="none"/>
+<line x1="801.2" y1="684" x2="845.2" y2="600" fill="none" stroke="#B0367F" stroke-width="1.2"/>
+<line x1="1089.2" y1="684" x2="1045.2" y2="600" fill="none" stroke="#B0367F" stroke-width="1.2"/>
+<path d="M1212 684 L1500 684 L1275.6 600 L1075.6 600 Z" fill="#E1E3E4" stroke="none"/>
+<line x1="1212" y1="684" x2="1075.6" y2="600" fill="none" stroke="#2B3440" stroke-width="1.2"/>
+<line x1="1500" y1="684" x2="1275.6" y2="600" fill="none" stroke="#2B3440" stroke-width="1.2"/>
 </g>
 <g id="chains">
 <text x="14.7" y="412" font-family="Arial" font-size="21.17" fill="#1D2733" font-weight="bold">POSCAR</text>
@@ -43,7 +55,7 @@
 <path d="M169 342 L247.8 342 C250.6 342 252.8 344.2 252.8 347 L252.8 359 C252.8 361.8 250.6 364 247.8 364 L169 364 C166.2 364 164 361.8 164 359 L164 347 C164 344.2 166.2 342 169 342 Z" fill="#EEF1F5" stroke="none"/>
 <text x="172" y="359.2" font-family="Arial" font-size="17.71" fill="#2F4A5E">S2_static</text>
 <text x="201.1" y="392" font-family="Arial" font-size="21.17" fill="#1D2733" font-weight="bold">Static SCF</text>
-<text x="196.8" y="417" font-family="Arial" font-size="19.05" fill="#5B6673">reference cell</text>
+<text x="203.2" y="417" font-family="Arial" font-size="19.05" fill="#5B6673">metal check</text>
 <path d="M396.4 332 L572.4 332 C579 332 584.4 337.4 584.4 344 L584.4 416 C584.4 422.6 579 428 572.4 428 L396.4 428 C389.8 428 384.4 422.6 384.4 416 L384.4 344 C384.4 337.4 389.8 332 396.4 332 Z" fill="#FFFFFF" stroke="none"/>
 <path d="M396.4 333.1 L406.4 333.1 L406.4 330.9 L396.4 330.9 Z M413.4 333.1 L423.4 333.1 L423.4 330.9 L413.4 330.9 Z M430.4 333.1 L440.4 333.1 L440.4 330.9 L430.4 330.9 Z M447.4 333.1 L457.4 333.1 L457.4 330.9 L447.4 330.9 Z M464.4 333.1 L474.4 333.1 L474.4 330.9 L464.4 330.9 Z M481.4 333.1 L491.4 333.1 L491.4 330.9 L481.4 330.9 Z M498.4 333.1 L508.4 333.1 L508.4 330.9 L498.4 330.9 Z M515.4 333.1 L525.4 333.1 L525.4 330.9 L515.4 330.9 Z M532.4 333.1 L542.4 333.1 L542.4 330.9 L532.4 330.9 Z M549.4 333.1 L559.4 333.1 L559.4 330.9 L549.4 330.9 Z M566.4 333.1 L572.3 333.1 L574.5 333.3 L576 333.8 L576.6 331.7 L575 331.1 L572.5 330.9 L566.4 330.9 Z M581 337.4 L581.5 337.9 L582.5 339.8 L583.1 341.9 L583.3 344.1 L583.3 346.2 L585.5 346.2 L585.5 343.9 L585.3 341.4 L584.5 339 L583.3 336.7 L582.7 336 Z M583.3 353.2 L583.3 363.2 L585.5 363.2 L585.5 353.2 Z M583.3 370.2 L583.3 380.2 L585.5 380.2 L585.5 370.2 Z M583.3 387.2 L583.3 397.2 L585.5 397.2 L585.5 387.2 Z M583.3 404.2 L583.3 414.2 L585.5 414.2 L585.5 404.2 Z M582.3 420.5 L581.5 422.1 L580.1 423.7 L578.5 425.1 L576.6 426.1 L575.7 426.3 L576.3 428.4 L577.4 428.1 L579.7 426.9 L581.7 425.3 L583.3 423.3 L584.2 421.5 Z M569 426.9 L559 426.9 L559 429.1 L569 429.1 Z M552 426.9 L542 426.9 L542 429.1 L552 429.1 Z M535 426.9 L525 426.9 L525 429.1 L535 429.1 Z M518 426.9 L508 426.9 L508 429.1 L518 429.1 Z M501 426.9 L491 426.9 L491 429.1 L501 429.1 Z M484 426.9 L474 426.9 L474 429.1 L484 429.1 Z M467 426.9 L457 426.9 L457 429.1 L467 429.1 Z M450 426.9 L440 426.9 L440 429.1 L450 429.1 Z M433 426.9 L423 426.9 L423 429.1 L433 429.1 Z M416 426.9 L406 426.9 L406 429.1 L416 429.1 Z M399 426.9 L396.5 426.9 L394.3 426.7 L392.2 426.1 L390.3 425.1 L390.2 424.9 L388.8 426.6 L389.1 426.9 L391.4 428.1 L393.8 428.9 L396.3 429.1 L399 429.1 Z M386.3 420 L385.7 418.1 L385.5 415.9 L385.5 410.5 L383.3 410.5 L383.3 416.1 L383.5 418.6 L384.2 420.7 Z M385.5 403.5 L385.5 393.5 L383.3 393.5 L383.3 403.5 Z M385.5 386.5 L385.5 376.5 L383.3 376.5 L383.3 386.5 Z M385.5 369.5 L385.5 359.5 L383.3 359.5 L383.3 369.5 Z M385.5 352.5 L385.5 344.1 L385.6 342.6 L383.5 342.4 L383.3 343.9 L383.3 352.5 Z M388.2 336.9 L388.7 336.3 L390.3 334.9 L392.2 333.9 L394.3 333.3 L396.2 333.1 L396 330.9 L393.8 331.1 L391.4 331.9 L389.1 333.1 L387.1 334.7 L386.5 335.5 Z" fill="#1D2733" stroke="none"/>
 <path d="M399.4 342 L465.5 342 C468.2 342 470.5 344.2 470.5 347 L470.5 359 C470.5 361.8 468.2 364 465.5 364 L399.4 364 C396.6 364 394.4 361.8 394.4 359 L394.4 347 C394.4 344.2 396.6 342 399.4 342 Z" fill="#EEF1F5" stroke="none"/>
@@ -52,23 +64,29 @@
 <text x="413.2" y="417" font-family="Arial" font-size="19.05" fill="#5B6673" font-style="italic">ε</text>
 <text x="421.5" y="421.6" font-family="Arial" font-size="14.29" fill="#5B6673" class="sub">∞</text>
 <text x="431.7" y="417" font-family="Arial" font-size="19.05" fill="#5B6673">, Born charges</text>
-<path d="M642.8 320 L786.8 320 C793.4 320 798.8 325.4 798.8 332 L798.8 404 C798.8 410.6 793.4 416 786.8 416 L642.8 416 C636.2 416 630.8 410.6 630.8 404 L630.8 332 C630.8 325.4 636.2 320 642.8 320 Z" fill="#FFFFFF" stroke="#A3ADB8" stroke-width="1.6"/>
-<path d="M634.8 326 L794.8 326 C801.4 326 806.8 331.4 806.8 338 L806.8 410 C806.8 416.6 801.4 422 794.8 422 L634.8 422 C628.2 422 622.8 416.6 622.8 410 L622.8 338 C622.8 331.4 628.2 326 634.8 326 Z" fill="#FFFFFF" stroke="#7F8A96" stroke-width="1.6"/>
-<path d="M626.8 332 L802.8 332 C809.4 332 814.8 337.4 814.8 344 L814.8 416 C814.8 422.6 809.4 428 802.8 428 L626.8 428 C620.2 428 614.8 422.6 614.8 416 L614.8 344 C614.8 337.4 620.2 332 626.8 332 Z" fill="#FFFFFF" stroke="#1D2733" stroke-width="2.2"/>
-<path d="M629.8 342 L699.8 342 C702.6 342 704.8 344.2 704.8 347 L704.8 359 C704.8 361.8 702.6 364 699.8 364 L629.8 364 C627 364 624.8 361.8 624.8 359 L624.8 347 C624.8 344.2 627 342 629.8 342 Z" fill="#EEF1F5" stroke="none"/>
-<text x="632.8" y="359.2" font-family="Arial" font-size="17.71" fill="#2F4A5E">S4_disp</text>
+<path d="M642.8 320 L786.8 320 C793.4 320 798.8 325.4 798.8 332 L798.8 404 C798.8 410.6 793.4 416 786.8 416 L642.8 416 C636.2 416 630.8 410.6 630.8 404 L630.8 332 C630.8 325.4 636.2 320 642.8 320 Z" fill="#FFFFFF" stroke="#E3A6A0" stroke-width="1.6"/>
+<path d="M634.8 326 L794.8 326 C801.4 326 806.8 331.4 806.8 338 L806.8 410 C806.8 416.6 801.4 422 794.8 422 L634.8 422 C628.2 422 622.8 416.6 622.8 410 L622.8 338 C622.8 331.4 628.2 326 634.8 326 Z" fill="#FFFFFF" stroke="#D3746B" stroke-width="1.6"/>
+<path d="M626.8 332 L802.8 332 C809.4 332 814.8 337.4 814.8 344 L814.8 416 C814.8 422.6 809.4 428 802.8 428 L626.8 428 C620.2 428 614.8 422.6 614.8 416 L614.8 344 C614.8 337.4 620.2 332 626.8 332 Z" fill="#FFFFFF" stroke="#C0392B" stroke-width="2.6"/>
+<path d="M629.8 342 L699.8 342 C702.6 342 704.8 344.2 704.8 347 L704.8 359 C704.8 361.8 702.6 364 699.8 364 L629.8 364 C627 364 624.8 361.8 624.8 359 L624.8 347 C624.8 344.2 627 342 629.8 342 Z" fill="#F6E3E1" stroke="none"/>
+<text x="632.8" y="359.2" font-family="Arial" font-size="17.71" fill="#C0392B">S4_disp</text>
+<circle cx="810.8" cy="334" r="12" fill="#C0392B" stroke="#FFFFFF" stroke-width="2.4"/>
+<text x="805.9" y="340.4" font-family="Arial" font-size="17.71" fill="#FFFFFF" font-weight="bold">a</text>
 <text x="680.1" y="392" font-family="Arial" font-size="21.17" fill="#1D2733" font-weight="bold">Forces</text>
 <text x="643.3" y="417" font-family="Arial" font-size="19.05" fill="#5B6673">N displaced cells</text>
-<path d="M857.2 332 L1033.2 332 C1039.8 332 1045.2 337.4 1045.2 344 L1045.2 416 C1045.2 422.6 1039.8 428 1033.2 428 L857.2 428 C850.6 428 845.2 422.6 845.2 416 L845.2 344 C845.2 337.4 850.6 332 857.2 332 Z" fill="#FFFFFF" stroke="#1D2733" stroke-width="2.2"/>
-<path d="M860.2 342 L911.5 342 C914.2 342 916.5 344.2 916.5 347 L916.5 359 C916.5 361.8 914.2 364 911.5 364 L860.2 364 C857.4 364 855.2 361.8 855.2 359 L855.2 347 C855.2 344.2 857.4 342 860.2 342 Z" fill="#EEF1F5" stroke="none"/>
-<text x="863.2" y="359.2" font-family="Arial" font-size="17.71" fill="#2F4A5E">S5_fc</text>
+<path d="M857.2 332 L1033.2 332 C1039.8 332 1045.2 337.4 1045.2 344 L1045.2 416 C1045.2 422.6 1039.8 428 1033.2 428 L857.2 428 C850.6 428 845.2 422.6 845.2 416 L845.2 344 C845.2 337.4 850.6 332 857.2 332 Z" fill="#FFFFFF" stroke="#4A6A86" stroke-width="2.6"/>
+<path d="M860.2 342 L911.5 342 C914.2 342 916.5 344.2 916.5 347 L916.5 359 C916.5 361.8 914.2 364 911.5 364 L860.2 364 C857.4 364 855.2 361.8 855.2 359 L855.2 347 C855.2 344.2 857.4 342 860.2 342 Z" fill="#E6EAEE" stroke="none"/>
+<text x="863.2" y="359.2" font-family="Arial" font-size="17.71" fill="#4A6A86">S5_fc</text>
+<circle cx="1041.2" cy="334" r="12" fill="#4A6A86" stroke="#FFFFFF" stroke-width="2.4"/>
+<text x="1035.8" y="340.4" font-family="Arial" font-size="17.71" fill="#FFFFFF" font-weight="bold">b</text>
 <text x="863.4" y="392" font-family="Arial" font-size="21.17" fill="#1D2733" font-weight="bold">Force constants</text>
 <text x="898.9" y="417" font-family="Arial" font-size="19.05" fill="#5B6673">fc2 + fc3 fit</text>
-<path d="M1087.6 332 L1263.6 332 C1270.2 332 1275.6 337.4 1275.6 344 L1275.6 416 C1275.6 422.6 1270.2 428 1263.6 428 L1087.6 428 C1081 428 1075.6 422.6 1075.6 416 L1075.6 344 C1075.6 337.4 1081 332 1087.6 332 Z" fill="#FFFFFF" stroke="#1D2733" stroke-width="2.2"/>
-<path d="M1090.6 342 L1176.4 342 C1179.1 342 1181.4 344.2 1181.4 347 L1181.4 359 C1181.4 361.8 1179.1 364 1176.4 364 L1090.6 364 C1087.8 364 1085.6 361.8 1085.6 359 L1085.6 347 C1085.6 344.2 1087.8 342 1090.6 342 Z" fill="#EEF1F5" stroke="none"/>
-<text x="1093.6" y="359.2" font-family="Arial" font-size="17.71" fill="#2F4A5E">S6_kappa</text>
+<path d="M1087.6 332 L1263.6 332 C1270.2 332 1275.6 337.4 1275.6 344 L1275.6 416 C1275.6 422.6 1270.2 428 1263.6 428 L1087.6 428 C1081 428 1075.6 422.6 1075.6 416 L1075.6 344 C1075.6 337.4 1081 332 1087.6 332 Z" fill="#FFFFFF" stroke="#6A44B0" stroke-width="2.6"/>
+<path d="M1090.6 342 L1176.4 342 C1179.1 342 1181.4 344.2 1181.4 347 L1181.4 359 C1181.4 361.8 1179.1 364 1176.4 364 L1090.6 364 C1087.8 364 1085.6 361.8 1085.6 359 L1085.6 347 C1085.6 344.2 1087.8 342 1090.6 342 Z" fill="#EAE5F4" stroke="none"/>
+<text x="1093.6" y="359.2" font-family="Arial" font-size="17.71" fill="#6A44B0">S6_kappa</text>
+<circle cx="1271.6" cy="334" r="12" fill="#6A44B0" stroke="#FFFFFF" stroke-width="2.4"/>
+<text x="1266.7" y="340.4" font-family="Arial" font-size="17.71" fill="#FFFFFF" font-weight="bold">c</text>
 <text x="1112.1" y="392" font-family="Arial" font-size="21.17" fill="#1D2733" font-weight="bold">Phonon BTE</text>
-<text x="1091.4" y="417" font-family="Arial" font-size="19.05" fill="#5B6673">3-phonon scattering</text>
+<text x="1088.9" y="417" font-family="Arial" font-size="19.05" fill="#5B6673">phono3py, 3-phonon</text>
 <path d="M1318 332 L1494 332 C1500.6 332 1506 337.4 1506 344 L1506 416 C1506 422.6 1500.6 428 1494 428 L1318 428 C1311.4 428 1306 422.6 1306 416 L1306 344 C1306 337.4 1311.4 332 1318 332 Z" fill="#FDF3E7" stroke="#B8660F" stroke-width="2.8"/>
 <text x="1373.5" y="390.2" font-family="Arial" font-size="28.22" fill="#A3570A" font-weight="bold" font-style="italic">κ</text>
 <text x="1389.5" y="396.9" font-family="Arial" font-size="21.17" fill="#A3570A" font-weight="bold" class="sub">L</text>
@@ -90,25 +108,31 @@
 <text x="402.4" y="531.2" font-family="Arial" font-size="17.71" fill="#2F4A5E">S3 + S4</text>
 <text x="411.5" y="564" font-family="Arial" font-size="21.17" fill="#1D2733" font-weight="bold">Uniform k-grid</text>
 <text x="424" y="589" font-family="Arial" font-size="19.05" fill="#5B6673">wavefunctions</text>
-<path d="M626.8 504 L802.8 504 C809.4 504 814.8 509.4 814.8 516 L814.8 588 C814.8 594.6 809.4 600 802.8 600 L626.8 600 C620.2 600 614.8 594.6 614.8 588 L614.8 516 C614.8 509.4 620.2 504 626.8 504 Z" fill="#FFFFFF" stroke="#1D2733" stroke-width="2.2"/>
-<path d="M629.8 514 L699.3 514 C702.1 514 704.3 516.2 704.3 519 L704.3 531 C704.3 533.8 702.1 536 699.3 536 L629.8 536 C627 536 624.8 533.8 624.8 531 L624.8 519 C624.8 516.2 627 514 629.8 514 Z" fill="#EEF1F5" stroke="none"/>
-<text x="632.8" y="531.2" font-family="Arial" font-size="17.71" fill="#2F4A5E">S5 + S6</text>
+<path d="M626.8 504 L802.8 504 C809.4 504 814.8 509.4 814.8 516 L814.8 588 C814.8 594.6 809.4 600 802.8 600 L626.8 600 C620.2 600 614.8 594.6 614.8 588 L614.8 516 C614.8 509.4 620.2 504 626.8 504 Z" fill="#FFFFFF" stroke="#0F7F86" stroke-width="2.6"/>
+<path d="M629.8 514 L699.3 514 C702.1 514 704.3 516.2 704.3 519 L704.3 531 C704.3 533.8 702.1 536 699.3 536 L629.8 536 C627 536 624.8 533.8 624.8 531 L624.8 519 C624.8 516.2 627 514 629.8 514 Z" fill="#DDEDEE" stroke="none"/>
+<text x="632.8" y="531.2" font-family="Arial" font-size="17.71" fill="#0F7F86">S5 + S6</text>
+<circle cx="810.8" cy="506" r="12" fill="#0F7F86" stroke="#FFFFFF" stroke-width="2.4"/>
+<text x="805.4" y="512.4" font-family="Arial" font-size="17.71" fill="#FFFFFF" font-weight="bold">d</text>
 <text x="659.1" y="564" font-family="Arial" font-size="21.17" fill="#1D2733" font-weight="bold">Dielectric</text>
 <text x="760.3" y="564" font-family="Arial" font-size="21.17" fill="#1D2733" font-weight="bold" font-style="italic">ε</text>
 <text x="670.1" y="588" font-family="Arial" font-size="21.17" fill="#1D2733" font-weight="bold">Elastic</text>
 <text x="744.2" y="588" font-family="Arial" font-size="21.17" fill="#1D2733" font-weight="bold" font-style="italic">C</text>
-<path d="M873.2 492 L1017.2 492 C1023.8 492 1029.2 497.4 1029.2 504 L1029.2 576 C1029.2 582.6 1023.8 588 1017.2 588 L873.2 588 C866.6 588 861.2 582.6 861.2 576 L861.2 504 C861.2 497.4 866.6 492 873.2 492 Z" fill="#FFFFFF" stroke="#A3ADB8" stroke-width="1.6"/>
-<path d="M865.2 498 L1025.2 498 C1031.8 498 1037.2 503.4 1037.2 510 L1037.2 582 C1037.2 588.6 1031.8 594 1025.2 594 L865.2 594 C858.6 594 853.2 588.6 853.2 582 L853.2 510 C853.2 503.4 858.6 498 865.2 498 Z" fill="#FFFFFF" stroke="#7F8A96" stroke-width="1.6"/>
-<path d="M857.2 504 L1033.2 504 C1039.8 504 1045.2 509.4 1045.2 516 L1045.2 588 C1045.2 594.6 1039.8 600 1033.2 600 L857.2 600 C850.6 600 845.2 594.6 845.2 588 L845.2 516 C845.2 509.4 850.6 504 857.2 504 Z" fill="#FFFFFF" stroke="#1D2733" stroke-width="2.2"/>
-<path d="M860.2 514 L952.8 514 C955.6 514 957.8 516.2 957.8 519 L957.8 531 C957.8 533.8 955.6 536 952.8 536 L860.2 536 C857.4 536 855.2 533.8 855.2 531 L855.2 519 C855.2 516.2 857.4 514 860.2 514 Z" fill="#EEF1F5" stroke="none"/>
-<text x="863.2" y="531.2" font-family="Arial" font-size="17.71" fill="#2F4A5E">S7_deform</text>
+<path d="M873.2 492 L1017.2 492 C1023.8 492 1029.2 497.4 1029.2 504 L1029.2 576 C1029.2 582.6 1023.8 588 1017.2 588 L873.2 588 C866.6 588 861.2 582.6 861.2 576 L861.2 504 C861.2 497.4 866.6 492 873.2 492 Z" fill="#FFFFFF" stroke="#DBA5C5" stroke-width="1.6"/>
+<path d="M865.2 498 L1025.2 498 C1031.8 498 1037.2 503.4 1037.2 510 L1037.2 582 C1037.2 588.6 1031.8 594 1025.2 594 L865.2 594 C858.6 594 853.2 588.6 853.2 582 L853.2 510 C853.2 503.4 858.6 498 865.2 498 Z" fill="#FFFFFF" stroke="#C872A5" stroke-width="1.6"/>
+<path d="M857.2 504 L1033.2 504 C1039.8 504 1045.2 509.4 1045.2 516 L1045.2 588 C1045.2 594.6 1039.8 600 1033.2 600 L857.2 600 C850.6 600 845.2 594.6 845.2 588 L845.2 516 C845.2 509.4 850.6 504 857.2 504 Z" fill="#FFFFFF" stroke="#B0367F" stroke-width="2.6"/>
+<path d="M860.2 514 L952.8 514 C955.6 514 957.8 516.2 957.8 519 L957.8 531 C957.8 533.8 955.6 536 952.8 536 L860.2 536 C857.4 536 855.2 533.8 855.2 531 L855.2 519 C855.2 516.2 857.4 514 860.2 514 Z" fill="#F4E3ED" stroke="none"/>
+<text x="863.2" y="531.2" font-family="Arial" font-size="17.71" fill="#B0367F">S7_deform</text>
+<circle cx="1041.2" cy="506" r="12" fill="#B0367F" stroke="#FFFFFF" stroke-width="2.4"/>
+<text x="1036.3" y="512.4" font-family="Arial" font-size="17.71" fill="#FFFFFF" font-weight="bold">e</text>
 <text x="868.5" y="564" font-family="Arial" font-size="21.17" fill="#1D2733" font-weight="bold">Deformation</text>
 <text x="999" y="564" font-family="Arial" font-size="21.17" fill="#1D2733" font-weight="bold" font-style="italic">E</text>
 <text x="1013.1" y="569.1" font-family="Arial" font-size="15.88" fill="#1D2733" font-weight="bold" class="sub">1</text>
 <text x="880.1" y="589" font-family="Arial" font-size="19.05" fill="#5B6673">N strained cells</text>
-<path d="M1087.6 504 L1263.6 504 C1270.2 504 1275.6 509.4 1275.6 516 L1275.6 588 C1275.6 594.6 1270.2 600 1263.6 600 L1087.6 600 C1081 600 1075.6 594.6 1075.6 588 L1075.6 516 C1075.6 509.4 1081 504 1087.6 504 Z" fill="#FFFFFF" stroke="#1D2733" stroke-width="2.2"/>
-<path d="M1090.6 514 L1170.4 514 C1173.2 514 1175.4 516.2 1175.4 519 L1175.4 531 C1175.4 533.8 1173.2 536 1170.4 536 L1090.6 536 C1087.8 536 1085.6 533.8 1085.6 531 L1085.6 519 C1085.6 516.2 1087.8 514 1090.6 514 Z" fill="#EEF1F5" stroke="none"/>
-<text x="1093.6" y="531.2" font-family="Arial" font-size="17.71" fill="#2F4A5E">S8 · S8.4</text>
+<path d="M1087.6 504 L1263.6 504 C1270.2 504 1275.6 509.4 1275.6 516 L1275.6 588 C1275.6 594.6 1270.2 600 1263.6 600 L1087.6 600 C1081 600 1075.6 594.6 1075.6 588 L1075.6 516 C1075.6 509.4 1081 504 1087.6 504 Z" fill="#FFFFFF" stroke="#2B3440" stroke-width="2.6"/>
+<path d="M1090.6 514 L1170.4 514 C1173.2 514 1175.4 516.2 1175.4 519 L1175.4 531 C1175.4 533.8 1173.2 536 1170.4 536 L1090.6 536 C1087.8 536 1085.6 533.8 1085.6 531 L1085.6 519 C1085.6 516.2 1087.8 514 1090.6 514 Z" fill="#E1E3E4" stroke="none"/>
+<text x="1093.6" y="531.2" font-family="Arial" font-size="17.71" fill="#2B3440">S8 · S8.4</text>
+<circle cx="1271.6" cy="506" r="12" fill="#2B3440" stroke="#FFFFFF" stroke-width="2.4"/>
+<text x="1268.7" y="512.4" font-family="Arial" font-size="17.71" fill="#FFFFFF" font-weight="bold">f</text>
 <text x="1138.6" y="564" font-family="Arial" font-size="21.17" fill="#1D2733" font-weight="bold">AMSET</text>
 <text x="1108.4" y="589" font-family="Arial" font-size="19.05" fill="#5B6673">carrier transport</text>
 <path d="M1318 504 L1494 504 C1500.6 504 1506 509.4 1506 516 L1506 588 C1506 594.6 1500.6 600 1494 600 L1318 600 C1311.4 600 1306 594.6 1306 588 L1306 516 C1306 509.4 1311.4 504 1318 504 Z" fill="#EDF3FC" stroke="#2F5FA7" stroke-width="2.8"/>
@@ -179,97 +203,125 @@
 <text x="1758.4" y="593.1" font-family="Arial" font-size="21.17" fill="#5B6673" font-style="italic">n</text>
 </g>
 <g id="phonon-highlights">
-<path d="M26 12 L574 12 C581.7 12 588 18.3 588 26 L588 234 C588 241.7 581.7 248 574 248 L26 248 C18.3 248 12 241.7 12 234 L12 26 C12 18.3 18.3 12 26 12 Z" fill="#FFFFFF" stroke="#B8660F" stroke-width="2"/>
+<path d="M26 12 L574 12 C581.7 12 588 18.3 588 26 L588 234 C588 241.7 581.7 248 574 248 L26 248 C18.3 248 12 241.7 12 234 L12 26 C12 18.3 18.3 12 26 12 Z" fill="#FFFFFF" stroke="#C0392B" stroke-width="2.2"/>
 <text x="30" y="52" font-family="Arial" font-size="31.75" fill="#1D2733" font-weight="bold">a</text>
-<text x="60" y="52" font-family="Arial" font-size="24.7" fill="#A3570A" font-weight="bold">Random displacements</text>
-<text x="60" y="78" font-family="Arial" font-size="17.71" fill="#5B6673">S4_disp · METHOD = alm</text>
-<path d="M40 100 L124 100 C127.3 100 130 102.7 130 106 L130 190 C130 193.3 127.3 196 124 196 L40 196 C36.7 196 34 193.3 34 190 L34 106 C34 102.7 36.7 100 40 100 Z" fill="#FFFFFF" stroke="#A3ADB8" stroke-width="1.6"/>
-<circle cx="46" cy="112" r="7.5" fill="#3B6FC4" stroke="none"/>
-<circle cx="46" cy="136" r="7.5" fill="#E0A43A" stroke="none"/>
-<circle cx="46" cy="160" r="7.5" fill="#3B6FC4" stroke="none"/>
-<circle cx="46" cy="184" r="7.5" fill="#E0A43A" stroke="none"/>
-<circle cx="70" cy="112" r="7.5" fill="#E0A43A" stroke="none"/>
-<circle cx="70" cy="136" r="7.5" fill="none" stroke="#8A96A3" stroke-width="1.4"/>
-<circle cx="78" cy="131" r="7.5" fill="#3B6FC4" stroke="none"/>
-<circle cx="70" cy="160" r="7.5" fill="#E0A43A" stroke="none"/>
-<circle cx="70" cy="184" r="7.5" fill="#3B6FC4" stroke="none"/>
-<circle cx="94" cy="112" r="7.5" fill="#3B6FC4" stroke="none"/>
-<circle cx="94" cy="136" r="7.5" fill="#E0A43A" stroke="none"/>
-<circle cx="94" cy="160" r="7.5" fill="#3B6FC4" stroke="none"/>
-<circle cx="94" cy="184" r="7.5" fill="#E0A43A" stroke="none"/>
-<circle cx="118" cy="112" r="7.5" fill="#E0A43A" stroke="none"/>
-<circle cx="118" cy="136" r="7.5" fill="#3B6FC4" stroke="none"/>
-<circle cx="118" cy="160" r="7.5" fill="#E0A43A" stroke="none"/>
-<circle cx="118" cy="184" r="7.5" fill="#3B6FC4" stroke="none"/>
-<text x="63.3" y="222" font-family="Arial" font-size="17.71" fill="#5B6673">finite</text>
-<path d="M156 100 L240 100 C243.3 100 246 102.7 246 106 L246 190 C246 193.3 243.3 196 240 196 L156 196 C152.7 196 150 193.3 150 190 L150 106 C150 102.7 152.7 100 156 100 Z" fill="#FFFFFF" stroke="#A3ADB8" stroke-width="1.6"/>
-<circle cx="165" cy="108" r="7.5" fill="#3B6FC4" stroke="none"/>
-<circle cx="158" cy="138" r="7.5" fill="#E0A43A" stroke="none"/>
-<circle cx="166" cy="163" r="7.5" fill="#3B6FC4" stroke="none"/>
-<circle cx="160" cy="180" r="7.5" fill="#E0A43A" stroke="none"/>
-<circle cx="182" cy="109" r="7.5" fill="#E0A43A" stroke="none"/>
-<circle cx="189" cy="140" r="7.5" fill="#3B6FC4" stroke="none"/>
-<circle cx="183" cy="163" r="7.5" fill="#E0A43A" stroke="none"/>
-<circle cx="190" cy="182" r="7.5" fill="#3B6FC4" stroke="none"/>
-<circle cx="212" cy="116" r="7.5" fill="#3B6FC4" stroke="none"/>
-<circle cx="206" cy="135" r="7.5" fill="#E0A43A" stroke="none"/>
-<circle cx="207" cy="156" r="7.5" fill="#3B6FC4" stroke="none"/>
-<circle cx="214" cy="185" r="7.5" fill="#E0A43A" stroke="none"/>
-<circle cx="233" cy="116" r="7.5" fill="#E0A43A" stroke="none"/>
-<circle cx="237" cy="133" r="7.5" fill="#3B6FC4" stroke="none"/>
-<circle cx="230" cy="162" r="7.5" fill="#E0A43A" stroke="none"/>
-<circle cx="236" cy="180" r="7.5" fill="#3B6FC4" stroke="none"/>
-<text x="165.5" y="222" font-family="Arial" font-size="17.71" fill="#A3570A" font-weight="bold">random</text>
-<text x="266" y="130" font-family="Arial" font-size="19.05" fill="#1D2733" font-weight="bold">Every atom</text>
-<text x="374" y="130" font-family="Arial" font-size="19.05" fill="#1D2733">moves in each frame</text>
-<text x="266" y="164" font-family="Arial" font-size="19.05" fill="#1D2733" font-weight="bold">N frames</text>
-<text x="352.8" y="164" font-family="Arial" font-size="19.05" fill="#1D2733">= free FCs × oversample</text>
-<text x="266" y="198" font-family="Arial" font-size="19.05" fill="#5B6673">free FCs counted by ALM</text>
-<path d="M626 12 L1174 12 C1181.7 12 1188 18.3 1188 26 L1188 234 C1188 241.7 1181.7 248 1174 248 L626 248 C618.3 248 612 241.7 612 234 L612 26 C612 18.3 618.3 12 626 12 Z" fill="#FFFFFF" stroke="#B8660F" stroke-width="2"/>
+<text x="60" y="52" font-family="Arial" font-size="24.7" fill="#C0392B" font-weight="bold">Random displacements</text>
+<text x="60" y="78" font-family="Arial" font-size="17.71" fill="#5B6673">S4_disp · METHOD = alm (default)</text>
+<path d="M38 104 L112 104 C115.3 104 118 106.7 118 110 L118 184 C118 187.3 115.3 190 112 190 L38 190 C34.7 190 32 187.3 32 184 L32 110 C32 106.7 34.7 104 38 104 Z" fill="#FFFFFF" stroke="#A3ADB8" stroke-width="1.6"/>
+<circle cx="42.8" cy="114.8" r="7" fill="#3B6FC4" stroke="none"/>
+<circle cx="42.8" cy="136.2" r="7" fill="#E0A43A" stroke="none"/>
+<circle cx="42.8" cy="157.8" r="7" fill="#3B6FC4" stroke="none"/>
+<circle cx="42.8" cy="179.2" r="7" fill="#E0A43A" stroke="none"/>
+<circle cx="64.2" cy="114.8" r="7" fill="#E0A43A" stroke="none"/>
+<circle cx="64.2" cy="136.2" r="7" fill="none" stroke="#8A96A3" stroke-width="1.4"/>
+<circle cx="71.2" cy="131.2" r="7" fill="#3B6FC4" stroke="none"/>
+<circle cx="64.2" cy="157.8" r="7" fill="#E0A43A" stroke="none"/>
+<circle cx="64.2" cy="179.2" r="7" fill="#3B6FC4" stroke="none"/>
+<circle cx="85.8" cy="114.8" r="7" fill="#3B6FC4" stroke="none"/>
+<circle cx="85.8" cy="136.2" r="7" fill="#E0A43A" stroke="none"/>
+<circle cx="85.8" cy="157.8" r="7" fill="#3B6FC4" stroke="none"/>
+<circle cx="85.8" cy="179.2" r="7" fill="#E0A43A" stroke="none"/>
+<circle cx="107.2" cy="114.8" r="7" fill="#E0A43A" stroke="none"/>
+<circle cx="107.2" cy="136.2" r="7" fill="#3B6FC4" stroke="none"/>
+<circle cx="107.2" cy="157.8" r="7" fill="#E0A43A" stroke="none"/>
+<circle cx="107.2" cy="179.2" r="7" fill="#3B6FC4" stroke="none"/>
+<text x="56.3" y="216" font-family="Arial" font-size="17.71" fill="#5B6673">finite</text>
+<path d="M142 104 L216 104 C219.3 104 222 106.7 222 110 L222 184 C222 187.3 219.3 190 216 190 L142 190 C138.7 190 136 187.3 136 184 L136 110 C136 106.7 138.7 104 142 104 Z" fill="#FFFFFF" stroke="#A3ADB8" stroke-width="1.6"/>
+<circle cx="149.8" cy="110.8" r="7" fill="#3B6FC4" stroke="none"/>
+<circle cx="142.8" cy="138.2" r="7" fill="#E0A43A" stroke="none"/>
+<circle cx="150.8" cy="160.8" r="7" fill="#3B6FC4" stroke="none"/>
+<circle cx="144.8" cy="175.2" r="7" fill="#E0A43A" stroke="none"/>
+<circle cx="164.2" cy="111.8" r="7" fill="#E0A43A" stroke="none"/>
+<circle cx="171.2" cy="140.2" r="7" fill="#3B6FC4" stroke="none"/>
+<circle cx="165.2" cy="160.8" r="7" fill="#E0A43A" stroke="none"/>
+<circle cx="172.2" cy="177.2" r="7" fill="#3B6FC4" stroke="none"/>
+<circle cx="191.8" cy="118.8" r="7" fill="#3B6FC4" stroke="none"/>
+<circle cx="185.8" cy="135.2" r="7" fill="#E0A43A" stroke="none"/>
+<circle cx="186.8" cy="153.8" r="7" fill="#3B6FC4" stroke="none"/>
+<circle cx="193.8" cy="180.2" r="7" fill="#E0A43A" stroke="none"/>
+<circle cx="210.2" cy="118.8" r="7" fill="#E0A43A" stroke="none"/>
+<circle cx="214.2" cy="133.2" r="7" fill="#3B6FC4" stroke="none"/>
+<circle cx="207.2" cy="159.8" r="7" fill="#E0A43A" stroke="none"/>
+<circle cx="213.2" cy="175.2" r="7" fill="#3B6FC4" stroke="none"/>
+<text x="146.5" y="216" font-family="Arial" font-size="17.71" fill="#C0392B" font-weight="bold">random</text>
+<text x="244" y="128" font-family="Arial" font-size="19.05" fill="#1D2733" font-weight="bold">All atoms</text>
+<text x="335" y="128" font-family="Arial" font-size="19.05" fill="#1D2733">rattled, RMS 0.03 Å</text>
+<text x="244" y="162" font-family="Arial" font-size="19.05" fill="#1D2733" font-weight="bold" font-style="italic">N</text>
+<text x="263.1" y="162" font-family="Arial" font-size="19.05" fill="#1D2733" font-weight="bold">frames</text>
+<text x="330.8" y="162" font-family="Arial" font-size="19.05" fill="#1D2733">≈</text>
+<text x="346.6" y="162" font-family="Arial" font-size="19.05" fill="#1D2733" font-style="italic">n</text>
+<text x="357.2" y="166.6" font-family="Arial" font-size="14.29" fill="#1D2733" class="sub">free</text>
+<text x="387.1" y="162" font-family="Arial" font-size="19.05" fill="#1D2733">/ 3</text>
+<text x="408.3" y="162" font-family="Arial" font-size="19.05" fill="#1D2733" font-style="italic">N</text>
+<text x="422" y="166.6" font-family="Arial" font-size="14.29" fill="#1D2733" class="sub">sc</text>
+<text x="441.6" y="162" font-family="Arial" font-size="19.05" fill="#1D2733">× 3</text>
+<text x="244" y="196" font-family="Arial" font-size="19.05" fill="#5B6673" font-style="italic">n</text>
+<text x="254.6" y="200.6" font-family="Arial" font-size="14.29" fill="#5B6673" class="sub">free</text>
+<text x="284.5" y="196" font-family="Arial" font-size="19.05" fill="#5B6673">from ALM; 10 ≤</text>
+<text x="418.8" y="196" font-family="Arial" font-size="19.05" fill="#5B6673" font-style="italic">N</text>
+<text x="437.9" y="196" font-family="Arial" font-size="19.05" fill="#5B6673">≤ 500</text>
+<path d="M626 12 L1174 12 C1181.7 12 1188 18.3 1188 26 L1188 234 C1188 241.7 1181.7 248 1174 248 L626 248 C618.3 248 612 241.7 612 234 L612 26 C612 18.3 618.3 12 626 12 Z" fill="#FFFFFF" stroke="#4A6A86" stroke-width="2.2"/>
 <text x="630" y="52" font-family="Arial" font-size="31.75" fill="#1D2733" font-weight="bold">b</text>
-<text x="660" y="52" font-family="Arial" font-size="24.7" fill="#A3570A" font-weight="bold">Force-constant fit</text>
+<text x="660" y="52" font-family="Arial" font-size="24.7" fill="#4A6A86" font-weight="bold">Force-constant fit</text>
 <path d="M891.6 33 L923.9 33 C930 33 934.9 37.9 934.9 44 C934.9 50.1 930 55 923.9 55 L891.6 55 C885.5 55 880.6 50.1 880.6 44 C880.6 37.9 885.5 33 891.6 33 Z" fill="#DCEFE3" stroke="none"/>
 <text x="888.6" y="50.4" font-family="Arial" font-size="17.71" fill="#1E6B3A" font-weight="bold">GPU</text>
-<text x="660" y="78" font-family="Arial" font-size="17.71" fill="#5B6673">S5_fc · FIT_ENGINE = pheasy</text>
-<text x="630" y="130" font-family="Arial" font-size="19.05" fill="#1D2733" font-weight="bold">fc2 + fc3</text>
-<text x="712.1" y="130" font-family="Arial" font-size="19.05" fill="#1D2733">from random frames</text>
-<circle cx="640" cy="157" r="10" fill="#3A4654" stroke="#FFFFFF" stroke-width="2.6"/>
-<path d="M634.6 158 L639.1 162.6 L645.9 154.2 L646.2 153.6 L646.1 153 L645.8 152.5 L645.2 152.2 L644.6 152.3 L644.1 152.6 L638.9 159 L636.4 156.4 L635.8 156 L635.2 156 L634.7 156.3 L634.3 156.9 L634.3 157.5 Z" fill="#FFFFFF" stroke="none"/>
-<text x="658" y="164" font-family="Arial" font-size="19.05" fill="#1D2733" font-weight="bold">Gate:</text>
-<text x="712" y="164" font-family="Arial" font-size="19.05" fill="#1D2733">no imaginary modes</text>
-<text x="630" y="198" font-family="Arial" font-size="19.05" fill="#1D2733" font-weight="bold">GPU = CPU</text>
-<text x="738.5" y="198" font-family="Arial" font-size="19.05" fill="#1D2733">to ~10</text>
-<text x="792" y="191.1" font-family="Arial" font-size="14.29" fill="#1D2733" class="sup">−16</text>
-<path d="M1059.1 111 L1059.1 204.9 L1149 204.9 L1149 207.8 L1156 204 L1149 200.2 L1149 203.1 L1060.9 203.1 L1060.9 111 L1063.8 111 L1060 104 L1056.2 111 Z" fill="#3A4654" stroke="none"/>
-<text x="1038.2" y="118" font-family="Arial" font-size="17.71" fill="#5B6673" font-style="italic">ω</text>
-<text x="1146.2" y="226" font-family="Arial" font-size="17.71" fill="#5B6673" font-style="italic">q</text>
-<path d="M1060 204 L1066 197.9 L1072 191.9 L1078 186 L1084 180.3 L1090 174.8 L1096 169.6 L1102 164.7 L1108 160.2 L1114 156.1 L1120 152.4 L1126 149.3 L1132 146.7 L1138 144.7 L1144 143.2 L1150 142.3 L1156 142" fill="none" stroke="#B8660F" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-<path d="M1060 204 L1066 199.6 L1072 195.2 L1078 190.9 L1084 186.8 L1090 182.8 L1096 179 L1102 175.5 L1108 172.2 L1114 169.2 L1120 166.6 L1126 164.3 L1132 162.4 L1138 160.9 L1144 159.9 L1150 159.2 L1156 159" fill="none" stroke="#B8660F" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-<path d="M1060 204 L1066 203.7 L1072 202.8 L1078 201.3 L1084 199.3 L1090 196.9 L1096 194.1 L1102 191.1 L1108 188 L1114 184.9 L1120 181.9 L1126 179.1 L1132 176.7 L1138 174.7 L1144 173.2 L1150 172.3 L1156 172" fill="none" stroke="#B8660F" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-<path d="M1060 122 L1066 122 L1072 122.1 L1078 122.2 L1084 122.4 L1090 122.6 L1096 122.8 L1102 123.1 L1108 123.5 L1114 123.9 L1120 124.3 L1126 124.8 L1132 125.4 L1138 126 L1144 126.6 L1150 127.3 L1156 128" fill="none" stroke="#B8660F" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-<path d="M1060 132 L1066 132 L1072 132.1 L1078 132.2 L1084 132.4 L1090 132.6 L1096 132.8 L1102 133.1 L1108 133.5 L1114 133.9 L1120 134.3 L1126 134.8 L1132 135.4 L1138 136 L1144 136.6 L1150 137.3 L1156 138" fill="none" stroke="#B8660F" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-<path d="M1226 12 L1774 12 C1781.7 12 1788 18.3 1788 26 L1788 234 C1788 241.7 1781.7 248 1774 248 L1226 248 C1218.3 248 1212 241.7 1212 234 L1212 26 C1212 18.3 1218.3 12 1226 12 Z" fill="#FFFFFF" stroke="#B8660F" stroke-width="2"/>
+<text x="660" y="78" font-family="Arial" font-size="17.71" fill="#5B6673">S5_fc · FIT_ENGINE = pheasy (ALASSO)</text>
+<text x="630" y="120" font-family="Arial" font-size="19.05" fill="#1D2733" font-weight="bold">fc2 + fc3</text>
+<text x="712.1" y="120" font-family="Arial" font-size="19.05" fill="#1D2733">fitted on the GPU</text>
+<text x="630" y="150" font-family="Arial" font-size="19.05" fill="#1D2733" font-weight="bold">GPU matvec</text>
+<text x="747.5" y="150" font-family="Arial" font-size="19.05" fill="#1D2733">= CPU to ~10</text>
+<text x="863" y="143.1" font-family="Arial" font-size="14.29" fill="#1D2733" class="sup">−16</text>
+<circle cx="640" cy="174" r="10" fill="#3A4654" stroke="#FFFFFF" stroke-width="2.6"/>
+<path d="M634.6 175 L639.1 179.6 L645.9 171.2 L646.2 170.6 L646.1 170 L645.8 169.5 L645.2 169.2 L644.6 169.3 L644.1 169.6 L638.9 176 L636.4 173.4 L635.8 173 L635.2 173 L634.7 173.3 L634.3 173.9 L634.3 174.5 Z" fill="#FFFFFF" stroke="none"/>
+<text x="658" y="180" font-family="Arial" font-size="19.05" fill="#1D2733" font-weight="bold">Gate:</text>
+<text x="712" y="180" font-family="Arial" font-size="19.05" fill="#1D2733">no modes below −0.1 THz</text>
+<text x="630" y="210" font-family="Arial" font-size="19.05" fill="#1D2733" font-weight="bold">2D:</text>
+<text x="666" y="210" font-family="Arial" font-size="19.05" fill="#1D2733">ZA ∝</text>
+<text x="714.2" y="210" font-family="Arial" font-size="19.05" fill="#1D2733" font-style="italic">q</text>
+<text x="724.8" y="203.1" font-family="Arial" font-size="14.29" fill="#1D2733" font-style="italic" class="sup">p</text>
+<text x="732.7" y="210" font-family="Arial" font-size="19.05" fill="#1D2733">, 1.7 &lt;</text>
+<text x="791.5" y="210" font-family="Arial" font-size="19.05" fill="#1D2733" font-style="italic">p</text>
+<text x="807.4" y="210" font-family="Arial" font-size="19.05" fill="#1D2733">&lt; 2.3</text>
+<path d="M1067.1 111 L1067.1 204.9 L1153 204.9 L1153 207.8 L1160 204 L1153 200.2 L1153 203.1 L1068.9 203.1 L1068.9 111 L1071.8 111 L1068 104 L1064.2 111 Z" fill="#3A4654" stroke="none"/>
+<text x="1046.2" y="118" font-family="Arial" font-size="17.71" fill="#5B6673" font-style="italic">ω</text>
+<text x="1150.2" y="226" font-family="Arial" font-size="17.71" fill="#5B6673" font-style="italic">q</text>
+<path d="M1068 204 L1073.8 197.9 L1079.5 191.9 L1085.2 186 L1091 180.3 L1096.8 174.8 L1102.5 169.6 L1108.2 164.7 L1114 160.2 L1119.8 156.1 L1125.5 152.4 L1131.2 149.3 L1137 146.7 L1142.8 144.7 L1148.5 143.2 L1154.2 142.3 L1160 142" fill="none" stroke="#4A6A86" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M1068 204 L1073.8 199.6 L1079.5 195.2 L1085.2 190.9 L1091 186.8 L1096.8 182.8 L1102.5 179 L1108.2 175.5 L1114 172.2 L1119.8 169.2 L1125.5 166.6 L1131.2 164.3 L1137 162.4 L1142.8 160.9 L1148.5 159.9 L1154.2 159.2 L1160 159" fill="none" stroke="#4A6A86" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M1068 204 L1073.8 203.7 L1079.5 202.8 L1085.2 201.3 L1091 199.3 L1096.8 196.9 L1102.5 194.1 L1108.2 191.1 L1114 188 L1119.8 184.9 L1125.5 181.9 L1131.2 179.1 L1137 176.7 L1142.8 174.7 L1148.5 173.2 L1154.2 172.3 L1160 172" fill="none" stroke="#4A6A86" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M1068 122 L1073.8 122 L1079.5 122.1 L1085.2 122.2 L1091 122.4 L1096.8 122.6 L1102.5 122.8 L1108.2 123.1 L1114 123.5 L1119.8 123.9 L1125.5 124.3 L1131.2 124.8 L1137 125.4 L1142.8 126 L1148.5 126.6 L1154.2 127.3 L1160 128" fill="none" stroke="#4A6A86" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M1068 132 L1073.8 132 L1079.5 132.1 L1085.2 132.2 L1091 132.4 L1096.8 132.6 L1102.5 132.8 L1108.2 133.1 L1114 133.5 L1119.8 133.9 L1125.5 134.3 L1131.2 134.8 L1137 135.4 L1142.8 136 L1148.5 136.6 L1154.2 137.3 L1160 138" fill="none" stroke="#4A6A86" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M1226 12 L1774 12 C1781.7 12 1788 18.3 1788 26 L1788 234 C1788 241.7 1781.7 248 1774 248 L1226 248 C1218.3 248 1212 241.7 1212 234 L1212 26 C1212 18.3 1218.3 12 1226 12 Z" fill="#FFFFFF" stroke="#6A44B0" stroke-width="2.2"/>
 <text x="1230" y="52" font-family="Arial" font-size="31.75" fill="#1D2733" font-weight="bold">c</text>
-<text x="1260" y="52" font-family="Arial" font-size="24.7" fill="#A3570A" font-weight="bold">Phonon BTE</text>
-<path d="M1431.2 33 L1463.5 33 C1469.6 33 1474.5 37.9 1474.5 44 C1474.5 50.1 1469.6 55 1463.5 55 L1431.2 55 C1425.1 55 1420.2 50.1 1420.2 44 C1420.2 37.9 1425.1 33 1431.2 33 Z" fill="#DCEFE3" stroke="none"/>
-<text x="1428.2" y="50.4" font-family="Arial" font-size="17.71" fill="#1E6B3A" font-weight="bold">GPU</text>
-<text x="1260" y="78" font-family="Arial" font-size="17.71" fill="#5B6673">S6_kappa · SOLVER = shengbte</text>
-<text x="1230" y="130" font-family="Arial" font-size="19.05" fill="#1D2733" font-weight="bold">3-phonon BTE</text>
-<text x="1365.5" y="130" font-family="Arial" font-size="19.05" fill="#1D2733">(RTA), CUDA build</text>
-<text x="1230" y="164" font-family="Arial" font-size="19.05" fill="#1D2733" font-style="italic">κ</text>
-<text x="1239.5" y="168.6" font-family="Arial" font-size="14.29" fill="#1D2733" class="sub">L</text>
-<text x="1252.8" y="164" font-family="Arial" font-size="19.05" fill="#1D2733">= CPU to 4–6 digits</text>
-<text x="1230" y="198" font-family="Arial" font-size="19.05" fill="#1D2733" font-weight="bold">≈ 4.6× faster</text>
-<text x="1345.8" y="198" font-family="Arial" font-size="19.05" fill="#1D2733">on RTX 3090</text>
-<path d="M1659.1 111 L1659.1 204.9 L1749 204.9 L1749 207.8 L1756 204 L1749 200.2 L1749 203.1 L1660.9 203.1 L1660.9 111 L1663.8 111 L1660 104 L1656.2 111 Z" fill="#3A4654" stroke="none"/>
-<text x="1643.1" y="118" font-family="Arial" font-size="17.71" fill="#5B6673" font-style="italic">κ</text>
-<text x="1745.2" y="226" font-family="Arial" font-size="17.71" fill="#5B6673" font-style="italic">T</text>
-<path d="M1668 118 L1672.2 132.3 L1676.4 142.6 L1680.6 150.2 L1684.8 156.2 L1689 161 L1693.2 164.9 L1697.4 168.2 L1701.6 170.9 L1705.8 173.3 L1710 175.3 L1714.2 177.1 L1718.4 178.7 L1722.6 180.1 L1726.8 181.4 L1731 182.5 L1735.2 183.5 L1739.4 184.5 L1743.6 185.3 L1747.8 186.1 L1752 186.8" fill="none" stroke="#B8660F" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="1260" y="52" font-family="Arial" font-size="24.7" fill="#6A44B0" font-weight="bold">Phonon BTE</text>
+<text x="1260" y="78" font-family="Arial" font-size="17.71" fill="#5B6673">S6_kappa · phono3py, BTE_METHOD = rta</text>
+<text x="1230" y="120" font-family="Arial" font-size="19.05" fill="#1D2733" font-weight="bold">3-phonon BTE</text>
+<text x="1360.2" y="120" font-family="Arial" font-size="19.05" fill="#1D2733">, RTA (or LBTE)</text>
+<text x="1230" y="150" font-family="Arial" font-size="19.05" fill="#1D2733" font-weight="bold">q-mesh</text>
+<text x="1303" y="150" font-family="Arial" font-size="19.05" fill="#1D2733">converged automatically</text>
+<text x="1230" y="180" font-family="Arial" font-size="19.05" fill="#1D2733" font-weight="bold">Cutoff</text>
+<text x="1291.4" y="180" font-family="Arial" font-size="19.05" fill="#1D2733">= largest on the</text>
+<text x="1428.5" y="180" font-family="Arial" font-size="19.05" fill="#1D2733" font-style="italic">κ</text>
+<text x="1438" y="184.6" font-family="Arial" font-size="14.29" fill="#1D2733" class="sub">L</text>
+<text x="1451.3" y="180" font-family="Arial" font-size="19.05" fill="#1D2733">plateau</text>
+<text x="1230" y="210" font-family="Arial" font-size="19.05" fill="#1D2733" font-weight="bold">Isotopes</text>
+<text x="1313.6" y="210" font-family="Arial" font-size="19.05" fill="#1D2733">on;</text>
+<text x="1345.4" y="210" font-family="Arial" font-size="19.05" fill="#1D2733" font-weight="bold">NAC</text>
+<text x="1392" y="210" font-family="Arial" font-size="19.05" fill="#1D2733">off for 2D</text>
+<rect x="1705" y="110" width="52" height="90" fill="#EAE5F4" stroke="none"/>
+<path d="M1667.1 111 L1667.1 204.9 L1753 204.9 L1753 207.8 L1760 204 L1753 200.2 L1753 203.1 L1668.9 203.1 L1668.9 111 L1671.8 111 L1668 104 L1664.2 111 Z" fill="#3A4654" stroke="none"/>
+<text x="1651.1" y="118" font-family="Arial" font-size="17.71" fill="#5B6673" font-style="italic">κ</text>
+<text x="1716.7" y="226" font-family="Arial" font-size="17.71" fill="#5B6673" font-style="italic">cutoff</text>
+<path d="M1680 170 L1697 146 L1714 134 L1731 132 L1748 133" fill="none" stroke="#6A44B0" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+<circle cx="1680" cy="170" r="4.2" fill="#FFFFFF" stroke="#6A44B0" stroke-width="1.8"/>
+<circle cx="1697" cy="146" r="4.2" fill="#FFFFFF" stroke="#6A44B0" stroke-width="1.8"/>
+<circle cx="1714" cy="134" r="4.2" fill="#FFFFFF" stroke="#6A44B0" stroke-width="1.8"/>
+<circle cx="1731" cy="132" r="4.2" fill="#FFFFFF" stroke="#6A44B0" stroke-width="1.8"/>
+<circle cx="1748" cy="133" r="6" fill="#6A44B0" stroke="#6A44B0" stroke-width="1.8"/>
 </g>
 <g id="electron-highlights">
-<path d="M26 684 L574 684 C581.7 684 588 690.3 588 698 L588 942 C588 949.7 581.7 956 574 956 L26 956 C18.3 956 12 949.7 12 942 L12 698 C12 690.3 18.3 684 26 684 Z" fill="#FFFFFF" stroke="#2F5FA7" stroke-width="2"/>
+<path d="M26 684 L574 684 C581.7 684 588 690.3 588 698 L588 942 C588 949.7 581.7 956 574 956 L26 956 C18.3 956 12 949.7 12 942 L12 698 C12 690.3 18.3 684 26 684 Z" fill="#FFFFFF" stroke="#0F7F86" stroke-width="2.2"/>
 <text x="30" y="724" font-family="Arial" font-size="31.75" fill="#1D2733" font-weight="bold">d</text>
-<text x="60" y="724" font-family="Arial" font-size="24.7" fill="#1F4E9A" font-weight="bold">Scattering inputs</text>
+<text x="60" y="724" font-family="Arial" font-size="24.7" fill="#0F7F86" font-weight="bold">Scattering inputs</text>
 <text x="60" y="750" font-family="Arial" font-size="17.71" fill="#5B6673">S5_dielect · S6_elastic</text>
 <text x="30" y="782" font-family="Arial" font-size="19.05" fill="#1D2733" font-weight="bold">Dielectric</text>
 <text x="121.1" y="782" font-family="Arial" font-size="19.05" fill="#1D2733" font-weight="bold" font-style="italic">ε</text>
@@ -292,7 +344,7 @@
 <text x="38.7" y="902.2" font-family="Arial" font-size="17.71" fill="#FFFFFF" font-weight="bold">3D</text>
 <text x="82" y="902" font-family="Arial" font-size="19.05" fill="#1D2733" font-style="italic">C</text>
 <text x="95.8" y="906.6" font-family="Arial" font-size="14.29" fill="#1D2733" font-style="italic" class="sub">ij</text>
-<text x="107.4" y="902" font-family="Arial" font-size="19.05" fill="#1D2733">in GPa (Voigt)</text>
+<text x="107.4" y="902" font-family="Arial" font-size="19.05" fill="#1D2733">in GPa, Voigt order</text>
 <path d="M35 912 L65 912 C67.8 912 70 914.2 70 917 L70 931 C70 933.8 67.8 936 65 936 L35 936 C32.2 936 30 933.8 30 931 L30 917 C30 914.2 32.2 912 35 912 Z" fill="#238266" stroke="none"/>
 <text x="38.7" y="930.2" font-family="Arial" font-size="17.71" fill="#FFFFFF" font-weight="bold">2D</text>
 <text x="82" y="930" font-family="Arial" font-size="19.05" fill="#1D2733">in-plane 2 × 2,</text>
@@ -303,12 +355,12 @@
 <text x="277.1" y="930" font-family="Arial" font-size="19.05" fill="#1D2733">·</text>
 <text x="288.8" y="930" font-family="Arial" font-size="19.05" fill="#1D2733" font-style="italic">C</text>
 <text x="302.5" y="934.6" font-family="Arial" font-size="14.29" fill="#1D2733" class="sub">slab</text>
-<path d="M626 684 L1174 684 C1181.7 684 1188 690.3 1188 698 L1188 942 C1188 949.7 1181.7 956 1174 956 L626 956 C618.3 956 612 949.7 612 942 L612 698 C612 690.3 618.3 684 626 684 Z" fill="#FFFFFF" stroke="#2F5FA7" stroke-width="2"/>
+<path d="M626 684 L1174 684 C1181.7 684 1188 690.3 1188 698 L1188 942 C1188 949.7 1181.7 956 1174 956 L626 956 C618.3 956 612 949.7 612 942 L612 698 C612 690.3 618.3 684 626 684 Z" fill="#FFFFFF" stroke="#B0367F" stroke-width="2.2"/>
 <text x="630" y="724" font-family="Arial" font-size="31.75" fill="#1D2733" font-weight="bold">e</text>
-<text x="660" y="724" font-family="Arial" font-size="24.7" fill="#1F4E9A" font-weight="bold">Deformation potential</text>
-<text x="922.1" y="724" font-family="Arial" font-size="24.7" fill="#1F4E9A" font-weight="bold" font-style="italic">E</text>
-<text x="938.5" y="729.9" font-family="Arial" font-size="18.52" fill="#1F4E9A" font-weight="bold" class="sub">1</text>
-<text x="660" y="750" font-family="Arial" font-size="17.71" fill="#5B6673">S7_deform → S7.1_read</text>
+<text x="660" y="724" font-family="Arial" font-size="24.7" fill="#B0367F" font-weight="bold">Deformation potential</text>
+<text x="922.1" y="724" font-family="Arial" font-size="24.7" fill="#B0367F" font-weight="bold" font-style="italic">E</text>
+<text x="938.5" y="729.9" font-family="Arial" font-size="18.52" fill="#B0367F" font-weight="bold" class="sub">1</text>
+<text x="660" y="750" font-family="Arial" font-size="17.71" fill="#5B6673">S7_deform → S7.1_read · DEFORM_REF = auto</text>
 <path d="M635 764 L665 764 C667.8 764 670 766.2 670 769 L670 783 C670 785.8 667.8 788 665 788 L635 788 C632.2 788 630 785.8 630 783 L630 769 C630 766.2 632.2 764 635 764 Z" fill="#4A5563" stroke="none"/>
 <text x="638.7" y="782.2" font-family="Arial" font-size="17.71" fill="#FFFFFF" font-weight="bold">3D</text>
 <text x="682" y="782" font-family="Arial" font-size="19.05" fill="#1D2733">reference: core level</text>
@@ -322,20 +374,20 @@
 <text x="1014.7" y="898" font-family="Arial" font-size="17.71" fill="#5B6673" font-style="italic">core → 3D</text>
 <text x="1048.9" y="828" font-family="Arial" font-size="17.71" fill="#238266" font-weight="bold" font-style="italic">vacuum → 2D</text>
 <text x="630" y="934" font-family="Arial" font-size="17.71" fill="#5B6673" font-style="italic">ions relaxed: all strains (3D), in-plane strains (2D)</text>
-<path d="M1226 684 L1774 684 C1781.7 684 1788 690.3 1788 698 L1788 942 C1788 949.7 1781.7 956 1774 956 L1226 956 C1218.3 956 1212 949.7 1212 942 L1212 698 C1212 690.3 1218.3 684 1226 684 Z" fill="#FFFFFF" stroke="#2F5FA7" stroke-width="2"/>
+<path d="M1226 684 L1774 684 C1781.7 684 1788 690.3 1788 698 L1788 942 C1788 949.7 1781.7 956 1774 956 L1226 956 C1218.3 956 1212 949.7 1212 942 L1212 698 C1212 690.3 1218.3 684 1226 684 Z" fill="#FFFFFF" stroke="#2B3440" stroke-width="2.2"/>
 <text x="1230" y="724" font-family="Arial" font-size="31.75" fill="#1D2733" font-weight="bold">f</text>
-<text x="1260" y="724" font-family="Arial" font-size="24.7" fill="#1F4E9A" font-weight="bold">Carrier transport</text>
+<text x="1260" y="724" font-family="Arial" font-size="24.7" fill="#2B3440" font-weight="bold">Carrier transport</text>
 <text x="1260" y="750" font-family="Arial" font-size="17.71" fill="#5B6673">S8_kappa · S8.4_amset2d</text>
-<path d="M1235 768 L1280.4 768 C1283.2 768 1285.4 770.2 1285.4 773 L1285.4 789 C1285.4 791.8 1283.2 794 1280.4 794 L1235 794 C1232.2 794 1230 791.8 1230 789 L1230 773 C1230 770.2 1232.2 768 1235 768 Z" fill="#E3ECF8" stroke="none"/>
-<text x="1239" y="787.2" font-family="Arial" font-size="17.71" fill="#1F4E9A" font-weight="bold">ADP</text>
-<path d="M1298.4 768 L1343.8 768 C1346.6 768 1348.8 770.2 1348.8 773 L1348.8 789 C1348.8 791.8 1346.6 794 1343.8 794 L1298.4 794 C1295.6 794 1293.4 791.8 1293.4 789 L1293.4 773 C1293.4 770.2 1295.6 768 1298.4 768 Z" fill="#E3ECF8" stroke="none"/>
-<text x="1302.4" y="787.2" font-family="Arial" font-size="17.71" fill="#1F4E9A" font-weight="bold">POP</text>
-<path d="M1361.8 768 L1401.3 768 C1404 768 1406.3 770.2 1406.3 773 L1406.3 789 C1406.3 791.8 1404 794 1401.3 794 L1361.8 794 C1359 794 1356.8 791.8 1356.8 789 L1356.8 773 C1356.8 770.2 1359 768 1361.8 768 Z" fill="#E3ECF8" stroke="none"/>
-<text x="1365.8" y="787.2" font-family="Arial" font-size="17.71" fill="#1F4E9A" font-weight="bold">IMP</text>
-<path d="M1419.3 768 L1455.8 768 C1458.6 768 1460.8 770.2 1460.8 773 L1460.8 789 C1460.8 791.8 1458.6 794 1455.8 794 L1419.3 794 C1416.5 794 1414.3 791.8 1414.3 789 L1414.3 773 C1414.3 770.2 1416.5 768 1419.3 768 Z" fill="#E3ECF8" stroke="none"/>
-<text x="1423.3" y="787.2" font-family="Arial" font-size="17.71" fill="#1F4E9A" font-weight="bold">PIE</text>
-<path d="M1473.8 768 L1520.2 768 C1523 768 1525.2 770.2 1525.2 773 L1525.2 789 C1525.2 791.8 1523 794 1520.2 794 L1473.8 794 C1471.1 794 1468.8 791.8 1468.8 789 L1468.8 773 C1468.8 770.2 1471.1 768 1473.8 768 Z" fill="#E3ECF8" stroke="none"/>
-<text x="1477.8" y="787.2" font-family="Arial" font-size="17.71" fill="#1F4E9A" font-weight="bold">ODP</text>
+<path d="M1235 768 L1280.4 768 C1283.2 768 1285.4 770.2 1285.4 773 L1285.4 789 C1285.4 791.8 1283.2 794 1280.4 794 L1235 794 C1232.2 794 1230 791.8 1230 789 L1230 773 C1230 770.2 1232.2 768 1235 768 Z" fill="#E1E3E4" stroke="none"/>
+<text x="1239" y="787.2" font-family="Arial" font-size="17.71" fill="#2B3440" font-weight="bold">ADP</text>
+<path d="M1298.4 768 L1343.8 768 C1346.6 768 1348.8 770.2 1348.8 773 L1348.8 789 C1348.8 791.8 1346.6 794 1343.8 794 L1298.4 794 C1295.6 794 1293.4 791.8 1293.4 789 L1293.4 773 C1293.4 770.2 1295.6 768 1298.4 768 Z" fill="#E1E3E4" stroke="none"/>
+<text x="1302.4" y="787.2" font-family="Arial" font-size="17.71" fill="#2B3440" font-weight="bold">POP</text>
+<path d="M1361.8 768 L1401.3 768 C1404 768 1406.3 770.2 1406.3 773 L1406.3 789 C1406.3 791.8 1404 794 1401.3 794 L1361.8 794 C1359 794 1356.8 791.8 1356.8 789 L1356.8 773 C1356.8 770.2 1359 768 1361.8 768 Z" fill="#E1E3E4" stroke="none"/>
+<text x="1365.8" y="787.2" font-family="Arial" font-size="17.71" fill="#2B3440" font-weight="bold">IMP</text>
+<path d="M1419.3 768 L1455.8 768 C1458.6 768 1460.8 770.2 1460.8 773 L1460.8 789 C1460.8 791.8 1458.6 794 1455.8 794 L1419.3 794 C1416.5 794 1414.3 791.8 1414.3 789 L1414.3 773 C1414.3 770.2 1416.5 768 1419.3 768 Z" fill="#E1E3E4" stroke="none"/>
+<text x="1423.3" y="787.2" font-family="Arial" font-size="17.71" fill="#2B3440" font-weight="bold">PIE</text>
+<path d="M1473.8 768 L1520.2 768 C1523 768 1525.2 770.2 1525.2 773 L1525.2 789 C1525.2 791.8 1523 794 1520.2 794 L1473.8 794 C1471.1 794 1468.8 791.8 1468.8 789 L1468.8 773 C1468.8 770.2 1471.1 768 1473.8 768 Z" fill="#E1E3E4" stroke="none"/>
+<text x="1477.8" y="787.2" font-family="Arial" font-size="17.71" fill="#2B3440" font-weight="bold">ODP</text>
 <text x="1537.2" y="787.4" font-family="Arial" font-size="17.71" fill="#5B6673" font-style="italic">scattering</text>
 <path d="M1235 812 L1265 812 C1267.8 812 1270 814.2 1270 817 L1270 831 C1270 833.8 1267.8 836 1265 836 L1235 836 C1232.2 836 1230 833.8 1230 831 L1230 817 C1230 814.2 1232.2 812 1235 812 Z" fill="#4A5563" stroke="none"/>
 <text x="1238.7" y="830.2" font-family="Arial" font-size="17.71" fill="#FFFFFF" font-weight="bold">3D</text>

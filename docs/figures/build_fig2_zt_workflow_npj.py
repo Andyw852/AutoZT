@@ -501,13 +501,17 @@ Y_PH, Y_EL = (PB[0] + PB[1]) / 2, (EB[0] + EB[1]) / 2
 AT_O, AT_M = '#E0A43A', '#3B6FC4'
 GPU_BG, GPU_TX = '#DCEFE3', '#1E6B3A'
 TAG_BG = '#EEF1F5'
+# a-c over the phonon chain, d-f under the electron chain: one colour each, shared by the card,
+# its spotlight and the step it zooms into (plus the card's letter on that step)
+HL = {'a': '#C0392B', 'b': '#4A6A86', 'c': '#6A44B0', 'd': '#0F7F86', 'e': '#B0367F', 'f': '#2B3440'}
+HL_STEP = {'a': (PB, 2), 'b': (PB, 3), 'c': (PB, 4), 'd': (EB, 2), 'e': (EB, 3), 'f': (EB, 4)}
 
 
-def card(k, y, h, letter, title, col, tx, tag, gpu=False):
-    x = CX[k]
-    rect(x, y, CW, h, rx=14, fill='#FFFFFF', stroke=col, sw=2)
+def card(k, y, h, letter, title, tag, gpu=False):
+    x, col = CX[k], HL[letter]
+    rect(x, y, CW, h, rx=14, fill='#FFFFFF', stroke=col, sw=2.2)
     text(x + 18, y + 40, letter, FS_LETTER, INK, bold=True)
-    rich(x + 48, y + 40, title, FS_H, tx, bold=True)
+    rich(x + 48, y + 40, title, FS_H, col, bold=True)
     if gpu:
         gx = x + 48 + rich_w(title, FS_H, True) + 12
         rect(gx, y + 21, tw('GPU', FS_XS, True) + 16, 22, rx=11, fill=GPU_BG)
@@ -516,21 +520,37 @@ def card(k, y, h, letter, title, col, tx, tag, gpu=False):
     return x
 
 
-def wedge(k, y_card, x0, x1, y_box, fill):
-    """Spotlight from a step box to its highlight card."""
-    cx0, cx1 = CX[k] + 0.2 * CW, CX[k] + 0.8 * CW
-    shape([[(cx0, y_card), (cx1, y_card), (x1, y_box), (x0, y_box)]], fill)
+def wedge(letter):
+    """Spotlight from a step box to its highlight card, tinted with the card's colour."""
+    band, bk = HL_STEP[letter]
+    k = 'abcdef'.index(letter) % 3
+    top = band is PB
+    y_card, y_box = (TOP_Y + TOP_H, band[0] + 14) if top else (BOT_Y, band[0] + 14 + BOX_H)
+    x0, x1 = BXS[bk], BXS[bk] + BOX_W
+    cm = min(max((x0 + x1) / 2, CX[k] + 0.25 * CW), CX[k] + 0.75 * CW)
+    cx0, cx1 = cm - 0.25 * CW, cm + 0.25 * CW
+    col = HL[letter]
+    shape([[(cx0, y_card), (cx1, y_card), (x1, y_box), (x0, y_box)]], mix(col, '#FFFFFF', 0.86))
+    line(cx0, y_card, x0, y_box, col, 1.2)
+    line(cx1, y_card, x1, y_box, col, 1.2)
 
 
 def step(k, band, tag, title, sub=None, dashed=False, stack=False):
     x, y = BXS[k], band[0] + 14
+    hl = next((ltr for ltr, (b_, k_) in HL_STEP.items() if b_ is band and k_ == k), None)
+    col = HL[hl] if hl else INK
     if stack:                    # fan-out step: one job per displaced or strained cell
-        rect(x + 16, y - 12, BOX_W - 32, BOX_H, rx=12, fill='#FFFFFF', stroke='#A3ADB8', sw=1.6)
-        rect(x + 8, y - 6, BOX_W - 16, BOX_H, rx=12, fill='#FFFFFF', stroke='#7F8A96', sw=1.6)
-    rect(x, y, BOX_W, BOX_H, rx=12, fill='#FFFFFF', stroke=None if dashed else INK, sw=2.2)
+        rect(x + 16, y - 12, BOX_W - 32, BOX_H, rx=12, fill='#FFFFFF', stroke=mix(col, '#FFFFFF', 0.55), sw=1.6)
+        rect(x + 8, y - 6, BOX_W - 16, BOX_H, rx=12, fill='#FFFFFF', stroke=mix(col, '#FFFFFF', 0.3), sw=1.6)
+    rect(x, y, BOX_W, BOX_H, rx=12, fill='#FFFFFF', stroke=None if dashed else col, sw=2.6 if hl else 2.2)
     if dashed:                   # optional step
         dashed_rect(x, y, BOX_W, BOX_H, 12, INK, 2.2, 10, 7)
-    chip(x + 10, y + 10, tw(tag, FS_XS) + 16, 22, tag, TAG_BG, SLATE, bold=False)
+    if hl:
+        chip(x + 10, y + 10, tw(tag, FS_XS) + 16, 22, tag, mix(col, '#FFFFFF', 0.86), col, bold=False)
+        circle(x + BOX_W - 4, y + 2, 12, fill=col, stroke='#FFFFFF', sw=2.4)
+        text(x + BOX_W - 4, y + 2 + FS_XS * 0.36, hl, FS_XS, '#FFFFFF', bold=True, anchor='middle')
+    else:
+        chip(x + 10, y + 10, tw(tag, FS_XS) + 16, 22, tag, TAG_BG, SLATE, bold=False)
     lines = title if isinstance(title[0], list) else [title]
     if sub is None and len(lines) == 2:
         base = [y + 60, y + 84]
@@ -630,9 +650,8 @@ rect(0, 0, W, H, fill='#FFFFFF')
 
 # ================================================================ spotlights (drawn first, under everything)
 group('spotlights')
-for k, bk in enumerate((2, 3, 4)):
-    wedge(k, TOP_Y + TOP_H, BXS[bk], BXS[bk] + BOX_W, PB[0], '#FBEEDF')
-    wedge(k, BOT_Y, BXS[bk], BXS[bk] + BOX_W, EB[1], '#E6EEFA')
+for letter in 'abcdef':
+    wedge(letter)
 end()
 
 # ================================================================ centre: POSCAR -> two chains -> zT
@@ -650,11 +669,11 @@ skill_tag(BX0, EB[1] + 12, 'ke-dft-cpu', BLUE, BLUE_TX, 'Electrons')
 KL = [('κ', {'i': True}), ('L', {'sub': True})]
 KE = [('κ', {'i': True}), ('e', {'sub': True})]
 # phonons: one sequence of jobs
-step(0, PB, 'S2_static', ['Static SCF'], ['reference cell'])
+step(0, PB, 'S2_static', ['Static SCF'], ['metal check'])
 step(1, PB, 'S3_nac', ['NAC'], [('ε', {'i': True}), ('∞', {'sub': True}), ', Born charges'], dashed=True)
 step(2, PB, 'S4_disp', ['Forces'], ['N displaced cells'], stack=True)
 step(3, PB, 'S5_fc', ['Force constants'], ['fc2 + fc3 fit'])
-step(4, PB, 'S6_kappa', ['Phonon BTE'], ['3-phonon scattering'])
+step(4, PB, 'S6_kappa', ['Phonon BTE'], ['phono3py, 3-phonon'])
 output(5, PB, KL + ['(', ('T', {'i': True}), ')'], ORANGE, ORANGE_BG, ORANGE_TX)
 for k in range(5):
     link(k, Y_PH)
@@ -688,69 +707,79 @@ rich(fx + fw / 2, eqy + 31, den, FZ, INK, anchor='middle')
 zt_map(zcx - (6 * 17 + 5 * 1.2) / 2 + 12, eqy + 74, cell=17, cg=1.2)
 end()
 
-# ================================================================ a-c: phonon highlights
+# ================================================================ a-c: phonon highlights (kl-dft-cpu)
 group('phonon-highlights')
-# a random displacements: every atom moves, the frame count comes from ALM
-x = card(0, TOP_Y, TOP_H, 'a', ['Random displacements'], ORANGE, ORANGE_TX, 'S4_disp · METHOD = alm')
+NF = [('n', {'i': True}), ('free', {'sub': True})]
+NSC = [('N', {'i': True}), ('sc', {'sub': True})]
+# a S4_disp: MC-rattled frames; their number follows from the free force constants (step4_disp/step.conf)
+x = card(0, TOP_Y, TOP_H, 'a', ['Random displacements'], 'S4_disp · METHOD = alm (default)')
 JIT = [(3, -4), (-4, 2), (4, 3), (-2, -4), (-4, -3), (3, 4), (-3, 3), (4, -2),
        (2, 4), (-4, -1), (-3, -4), (4, 1), (-1, 4), (3, -3), (-4, 2), (2, -4)]
-for c_, (kind, lab) in enumerate((('finite', 'finite'), ('random', 'random'))):
-    gx, gy, gs = x + 22 + c_ * 116, TOP_Y + 88, 96
+for c_, kind in enumerate(('finite', 'random')):
+    gx, gy, gs = x + 20 + c_ * 104, TOP_Y + 92, 86
     rect(gx, gy, gs, gs, rx=6, fill='#FFFFFF', stroke='#A3ADB8', sw=1.6)
     for i in range(4):
         for j in range(4):
             px, py = gx + gs * (i + 0.5) / 4, gy + gs * (j + 0.5) / 4
-            dx, dy = (JIT[i * 4 + j] if kind == 'random' else ((8, -5) if (i, j) == (1, 1) else (0, 0)))
+            dx, dy = JIT[i * 4 + j] if kind == 'random' else ((7, -5) if (i, j) == (1, 1) else (0, 0))
             if kind == 'finite' and (i, j) == (1, 1):
-                circle(px, py, 7.5, stroke=FAINT, sw=1.4)
-            circle(px + dx, py + dy, 7.5, fill=AT_O if (i + j) % 2 else AT_M)
-    text(gx + gs / 2, gy + gs + 26, lab, FS_XS, ORANGE_TX if kind == 'random' else MUTED,
+                circle(px, py, 7, stroke=FAINT, sw=1.4)
+            circle(px + dx, py + dy, 7, fill=AT_O if (i + j) % 2 else AT_M)
+    text(gx + gs / 2, gy + gs + 26, kind, FS_XS, HL['a'] if kind == 'random' else MUTED,
          bold=kind == 'random', anchor='middle')
-tx_ = x + 254
-rich(tx_, TOP_Y + 118, [('Every atom', {'b': True}), ' moves in each frame'], FS_S, INK)
-rich(tx_, TOP_Y + 152, [('N frames', {'b': True}), ' = free FCs × oversample'], FS_S, INK)
-rich(tx_, TOP_Y + 186, ['free FCs counted by ALM'], FS_S, MUTED)
+tx_ = x + 232
+rich(tx_, TOP_Y + 116, [('All atoms', {'b': True}), ' rattled, RMS 0.03 Å'], FS_S, INK)
+rich(tx_, TOP_Y + 150, [('N', {'b': True, 'i': True}), (' frames', {'b': True}), ' ≈ '] + NF + [' / 3'] + NSC + [' × 3'],
+     FS_S, INK)
+rich(tx_, TOP_Y + 184, NF + [' from ALM; 10 ≤ ', ('N', {'i': True}), ' ≤ 500'], FS_S, MUTED)
 
-# b GPU force-constant fit with the imaginary-mode gate
-x = card(1, TOP_Y, TOP_H, 'b', ['Force-constant fit'], ORANGE, ORANGE_TX, 'S5_fc · FIT_ENGINE = pheasy', gpu=True)
-rich(x + 18, TOP_Y + 118, [('fc2 + fc3', {'b': True}), ' from random frames'], FS_S, INK)
-gate(x + 28, TOP_Y + 145, r=10)
-rich(x + 46, TOP_Y + 152, [('Gate:', {'b': True}), ' no imaginary modes'], FS_S, INK)
-rich(x + 18, TOP_Y + 186, [('GPU = CPU', {'b': True}), ' to ~10', ('−16', {'sup': True})], FS_S, INK)
-ax, ay, aw, ah = x + CW - 128, TOP_Y + 92, 96, 100
+# b S5_fc: pheasy (GPU-only build) fits fc2 + fc3 by ALASSO, then the phonon gate (step5_fc/step.conf)
+x = card(1, TOP_Y, TOP_H, 'b', ['Force-constant fit'], 'S5_fc · FIT_ENGINE = pheasy (ALASSO)', gpu=True)
+rich(x + 18, TOP_Y + 108, [('fc2 + fc3', {'b': True}), ' fitted on the GPU'], FS_S, INK)
+rich(x + 18, TOP_Y + 138, [('GPU matvec', {'b': True}), ' = CPU to ~10', ('−16', {'sup': True})], FS_S, INK)
+gate(x + 28, TOP_Y + 162, r=10)
+rich(x + 46, TOP_Y + 168, [('Gate:', {'b': True}), ' no modes below −0.1 THz'], FS_S, INK)
+rich(x + 18, TOP_Y + 198, [('2D:', {'b': True}), ' ZA ∝ ', ('q', {'i': True}), ('p', {'sup': True, 'i': True}),
+                           ', 1.7 < ', ('p', {'i': True}), ' < 2.3'], FS_S, INK)
+ax, ay, aw, ah = x + CW - 120, TOP_Y + 92, 92, 100
 mini_axes(ax, ay, aw, ah, 'q', 'ω')
-for amp, p in ((0.62, 1.0), (0.45, 1.0), (0.32, 2.0)):
-    curve([(ax + aw * t, ay + ah - ah * amp * math.sin(math.pi * t / 2) ** p) for t in [i / 16 for i in range(17)]],
-          ORANGE, 2)
+for amp, pw in ((0.62, 1.0), (0.45, 1.0), (0.32, 2.0)):
+    curve([(ax + aw * t, ay + ah - ah * amp * math.sin(math.pi * t / 2) ** pw) for t in [i / 16 for i in range(17)]],
+          HL['b'], 2)
 for lvl in (0.18, 0.28):
-    curve([(ax + aw * t, ay + ah * lvl + 6 * t * t) for t in [i / 16 for i in range(17)]], ORANGE, 2)
+    curve([(ax + aw * t, ay + ah * lvl + 6 * t * t) for t in [i / 16 for i in range(17)]], HL['b'], 2)
 
-# c GPU phonon BTE
-x = card(2, TOP_Y, TOP_H, 'c', ['Phonon BTE'], ORANGE, ORANGE_TX, 'S6_kappa · SOLVER = shengbte', gpu=True)
-rich(x + 18, TOP_Y + 118, [('3-phonon BTE', {'b': True}), ' (RTA), CUDA build'], FS_S, INK)
-rich(x + 18, TOP_Y + 152, KL + [' = CPU to 4–6 digits'], FS_S, INK, bold=False)
-rich(x + 18, TOP_Y + 186, [('≈ 4.6× faster', {'b': True}), ' on RTX 3090'], FS_S, INK)
-ax, ay, aw, ah = x + CW - 128, TOP_Y + 92, 96, 100
-mini_axes(ax, ay, aw, ah, 'T', 'κ')
-curve([(ax + 8 + (aw - 12) * t, ay + ah - ah * 0.86 / (1 + 4 * t)) for t in [i / 20 for i in range(21)]], ORANGE, 2.4)
+# c S6_kappa: phono3py 3-phonon BTE through the shared fit-fc-thermal engine (step6_kappa/step.conf)
+x = card(2, TOP_Y, TOP_H, 'c', ['Phonon BTE'], 'S6_kappa · phono3py, BTE_METHOD = rta')
+rich(x + 18, TOP_Y + 108, [('3-phonon BTE', {'b': True}), ', RTA (or LBTE)'], FS_S, INK)
+rich(x + 18, TOP_Y + 138, [('q-mesh', {'b': True}), ' converged automatically'], FS_S, INK)
+rich(x + 18, TOP_Y + 168, [('Cutoff', {'b': True}), ' = largest on the '] + KL + [' plateau'], FS_S, INK)
+rich(x + 18, TOP_Y + 198, [('Isotopes', {'b': True}), ' on; ', ('NAC', {'b': True}), ' off for 2D'], FS_S, INK)
+ax, ay, aw, ah = x + CW - 120, TOP_Y + 92, 92, 100
+pts = [(ax + 12 + 17 * i, ay + ah - ah * v) for i, v in enumerate((0.34, 0.58, 0.70, 0.72, 0.71))]
+rect(pts[2][0] - 9, ay + 6, pts[4][0] - pts[2][0] + 18, ah - 10, fill=mix(HL['c'], '#FFFFFF', 0.86))
+mini_axes(ax, ay, aw, ah, 'cutoff', 'κ')
+curve(pts, HL['c'], 2)
+for i, (px, py) in enumerate(pts):
+    circle(px, py, 6 if i == 4 else 4.2, fill=HL['c'] if i == 4 else '#FFFFFF', stroke=HL['c'], sw=1.8)
 end()
 
-# ================================================================ d-f: electron highlights
+# ================================================================ d-f: electron highlights (ke-dft-cpu)
 group('electron-highlights')
-# d scattering inputs, 3D and 2D
-x = card(0, BOT_Y, BOT_H, 'd', ['Scattering inputs'], BLUE, BLUE_TX, 'S5_dielect · S6_elastic')
+# d S5_dielect (DFPT, IBRION = 8) and S6_elastic (kBar -> GPa, VASP -> Voigt order); 2D rules from METHODOLOGY
+x = card(0, BOT_Y, BOT_H, 'd', ['Scattering inputs'], 'S5_dielect · S6_elastic')
 rich(x + 18, BOT_Y + 98, ['Dielectric ', ('ε', {'i': True})], FS_S, INK, bold=True)
 dd(0, BOT_Y + 126, '3D', ['DFPT ', ('ε', {'i': True}), ('0', {'sub': True}), ', ', ('ε', {'i': True}),
                           ('∞', {'sub': True})])
 dd(0, BOT_Y + 154, '2D', ['in-plane slab ', ('ε', {'i': True}), ', 2D screening'])
 rich(x + 18, BOT_Y + 190, ['Elastic ', ('C', {'i': True})], FS_S, INK, bold=True)
-dd(0, BOT_Y + 218, '3D', [('C', {'i': True}), ('ij', {'sub': True, 'i': True}), ' in GPa (Voigt)'])
+dd(0, BOT_Y + 218, '3D', [('C', {'i': True}), ('ij', {'sub': True, 'i': True}), ' in GPa, Voigt order'])
 dd(0, BOT_Y + 246, '2D', ['in-plane 2 × 2, ', ('C', {'i': True}), ('2D', {'sub': True}), ' = ', ('c', {'i': True}),
                           ' · ', ('C', {'i': True}), ('slab', {'sub': True})])
 
-# e deformation potential: the reference level is the 3D/2D difference
-x = card(1, BOT_Y, BOT_H, 'e', ['Deformation potential ', ('E', {'i': True}), ('1', {'sub': True})], BLUE, BLUE_TX,
-         'S7_deform → S7.1_read')
+# e S7_deform -> S7.1_read: DEFORM_REF = auto (core for 3D, vacuum for 2D); IONRELAX_3D = true
+x = card(1, BOT_Y, BOT_H, 'e', ['Deformation potential ', ('E', {'i': True}), ('1', {'sub': True})],
+         'S7_deform → S7.1_read · DEFORM_REF = auto')
 dd(1, BOT_Y + 98, '3D', ['reference: core level'])
 dd(1, BOT_Y + 126, '2D', ['reference: vacuum level (LOCPOT)'])
 vx0, vx1, vy0, vy1 = x + 62, x + CW - 22, BOT_Y + 146, BOT_Y + 220
@@ -767,12 +796,12 @@ text(slab[1] + 16, core_y + 6, 'core → 3D', FS_XS, MUTED, italic=True)
 text(vx1, vy0 - 2, 'vacuum → 2D', FS_XS, GREEN, bold=True, italic=True, anchor='end')
 text(x + 18, BOT_Y + 250, 'ions relaxed: all strains (3D), in-plane strains (2D)', FS_XS, MUTED, italic=True)
 
-# f carrier transport: same five mechanisms, 3D or 2D kernels, plus an independent cross-check
-x = card(2, BOT_Y, BOT_H, 'f', ['Carrier transport'], BLUE, BLUE_TX, 'S8_kappa · S8.4_amset2d')
+# f S8_kappa (3D) / S8.4_amset2d (2D); S8.1 BoltzTraP2 CRTA x S8.2 DPT as the cheap cross-check
+x = card(2, BOT_Y, BOT_H, 'f', ['Carrier transport'], 'S8_kappa · S8.4_amset2d')
 mx = x + 18
 for name in ('ADP', 'POP', 'IMP', 'PIE', 'ODP'):
     wd = tw(name, FS_XS, True) + 18
-    chip(mx, BOT_Y + 84, wd, 26, name, '#E3ECF8', BLUE_TX)
+    chip(mx, BOT_Y + 84, wd, 26, name, mix(HL['f'], '#FFFFFF', 0.86), HL['f'])
     mx += wd + 8
 text(mx + 4, BOT_Y + 97 + FS_XS * 0.36, 'scattering', FS_XS, MUTED, italic=True)
 dd(2, BOT_Y + 146, '3D', [('AMSET', {'b': True}), ', 3D kernels'])
