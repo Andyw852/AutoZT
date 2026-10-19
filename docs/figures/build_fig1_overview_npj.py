@@ -236,6 +236,53 @@ def logo(name, x, y, size):
     add('</g>')
 
 
+def stealth(tip, ux, uy, color, length=15.0, half=6.5):
+    """Arrowhead with swept-back barbs and a notch, pointing along (ux, uy)."""
+    tx, ty = tip
+    bx, by = tx - ux * length, ty - uy * length
+    nx, ny = -uy, ux
+    kx, ky = tx - ux * length * 0.7, ty - uy * length * 0.7
+    path(f'M{f(tx)} {f(ty)} L{f(bx + nx * half)} {f(by + ny * half)} L{f(kx)} {f(ky)} '
+         f'L{f(bx - nx * half)} {f(by - ny * half)} Z', fill=color)
+
+
+def curve_arrow(p0, c1, c2, p3, color, sw=3.4):
+    """Cubic Bezier ending in a stealth head at p3."""
+    dx, dy = p3[0] - c2[0], p3[1] - c2[1]
+    n = math.hypot(dx, dy)
+    ux, uy = dx / n, dy / n
+    end_ = (p3[0] - ux * 10, p3[1] - uy * 10)
+    path(f'M{f(p0[0])} {f(p0[1])} C{f(c1[0])} {f(c1[1])} {f(c2[0])} {f(c2[1])} {f(end_[0])} {f(end_[1])}',
+         stroke=color, sw=sw)
+    stealth(p3, ux, uy, color)
+
+
+def flow_arrow(x, y0, y1, gid, w0=20.0, w1=11.0, head_w=44.0, head_l=32.0):
+    """Tapered downward arrow, shaded like the ZT of the wordmark (blue to crimson)."""
+    add(f'<defs><linearGradient id="{gid}" gradientUnits="userSpaceOnUse" x1="0" y1="{f(y0)}" x2="0" y2="{f(y1)}">'
+        f'<stop offset="0" stop-color="{BLUE}" stop-opacity="0.35"/><stop offset="1" stop-color="{CRIMSON}"/>'
+        '</linearGradient></defs>')
+    hy = y1 - head_l
+    path(f'M{f(x - w0 / 2)} {f(y0)} L{f(x + w0 / 2)} {f(y0)} L{f(x + w1 / 2)} {f(hy)} L{f(x + head_w / 2)} {f(hy)} '
+         f'L{f(x)} {f(y1)} L{f(x - head_w / 2)} {f(hy)} L{f(x - w1 / 2)} {f(hy)} Z', fill=f'url(#{gid})')
+
+
+def wordmark(cx, baseline, size):
+    """AutoZT wordmark (outlined Sora) centred on cx; returns left, right and cap-top coordinates."""
+    wm = LOGOS['autozt_wordmark']
+    s = size / 100
+    bx0, by0, bx1, _ = wm['bbox']
+    tx = cx - (bx1 - bx0) * s / 2 - bx0 * s
+    add(f'<defs><linearGradient id="wm-zt" gradientUnits="userSpaceOnUse" x1="{wm["zt_x0"]}" y1="0" '
+        f'x2="{wm["zt_x1"]}" y2="0"><stop offset="0" stop-color="{BLUE}"/><stop offset="1" stop-color="{CRIMSON}"/>'
+        '</linearGradient></defs>')
+    add(f'<g id="autozt-wordmark" transform="translate({tx:.2f} {baseline:.2f}) scale({s:.4f})">')
+    add(f'<path d="{wm["auto"]}" fill="{INK}"/>')
+    add(f'<path d="{wm["zt"]}" fill="url(#wm-zt)"/>')
+    add('</g>')
+    return tx + bx0 * s, tx + bx1 * s, baseline + by0 * s
+
+
 def robot_avatar(cx, cy, s=0.58):
     w, h = 60 * s, 46 * s
     rect(cx - w / 2 - 8 * s, cy - 8 * s, 8 * s + 1, 16 * s, rx=3 * s, fill=INK)
@@ -419,47 +466,37 @@ rich(IX0 + 4, yy + 25, ZTNT + [' is ready, with units and provenance.'], FS_B, I
 SESSION_END = y + h6
 end()
 
-# ================================================================ centre: coding agents -> AutoZT; b -> AutoZT -> c
+# ================================================================ centre: agents call AutoZT; it picks from b and computes c
 group('panel-a-hub')
-MX = (COL_M[0] + COL_M[1]) / 2
-HUB_W, HUB_H = 300, 220
-HUB_CY = EY0 - 8                 # level with the gap between the two boxes of panel b
 HUB_CX = 818                     # over the gap between the transport boxes and the zT box of panel c
-HUB_X0, HUB_Y0 = HUB_CX - HUB_W / 2, HUB_CY - HUB_H / 2
-# coding agents: speech bubble whose tail points at AutoZT
-BX0, BX1 = COL_M[0] + 16, COL_M[1] - 16
-BY0 = R1_TOP
-BH = HUB_Y0 - 22 - BY0
+WM_SIZE = 80                     # wordmark font size (cap height ~0.73 em)
+WM_CY = EY0 - 8                  # cap middle, level with the gap between the two boxes of panel b
+WM_BASE = WM_CY + 0.365 * WM_SIZE
+# coding agents
+BX0, BX1 = HUB_CX - 172, HUB_CX + 172
+BY0, BH = R1_TOP, 290
 rect(BX0, BY0, BX1 - BX0, BH, rx=18, fill=LAV)
-path(f'M{f(HUB_CX - 20)} {f(BY0 + BH - 1)} L{f(HUB_CX + 20)} {f(BY0 + BH - 1)} L{f(HUB_CX)} {f(BY0 + BH + 16)} Z',
-     fill=LAV)
-text(MX, BY0 + 42, 'Coding agents', FS_H, PURPLE, bold=True, anchor='middle')
+text(HUB_CX, BY0 + 44, 'Coding agents', FS_H, PURPLE, bold=True, anchor='middle')
 cw = (BX1 - BX0 - 24) / 3
-LOGO = 48
+LOGO = 52
 for k, (key, lab) in enumerate([('deepseek', 'DeepSeek'), ('kimi', 'Kimi'), ('glm', 'GLM'),
                                 ('claude', 'Claude'), ('chatgpt', 'ChatGPT'), (None, '…')]):
     ccx = BX0 + 12 + (k % 3 + 0.5) * cw
-    gy = BY0 + 70 + (k // 3) * 100
+    gy = BY0 + 70 + (k // 3) * 106
     if key:
         logo(key, ccx - LOGO / 2, gy, LOGO)
-        text(ccx, gy + LOGO + 22, lab, FS_B, INK, bold=True, anchor='middle')
+        text(ccx, gy + LOGO + 24, lab, FS_B, INK, bold=True, anchor='middle')
     else:
         text(ccx, gy + LOGO / 2 + 8, '…', FS_H, MUTED, bold=True, anchor='middle')
-# AutoZT hub: a small DAG in the colours of panel c, then the name
-rect(HUB_X0, HUB_Y0, HUB_W, HUB_H, rx=20, fill='#FFFFFF', stroke=INK, sw=5)
-dcx, dcy, ddx, ddy = HUB_CX, HUB_Y0 + 62, 52, 22
-nodes = {'s': (dcx - 1.5 * ddx, dcy, GREEN), 'r': (dcx - 0.5 * ddx, dcy, INK),
-         'e': (dcx + 0.5 * ddx, dcy - ddy, BLUE), 'p': (dcx + 0.5 * ddx, dcy + ddy, ORANGE),
-         'z': (dcx + 1.5 * ddx, dcy, CRIMSON)}
-for a_, b_ in [('s', 'r'), ('r', 'e'), ('r', 'p'), ('e', 'z'), ('p', 'z')]:
-    line(nodes[a_][0], nodes[a_][1], nodes[b_][0], nodes[b_][1], FAINT, 2.6)
-for nx, ny, ncol in nodes.values():
-    circle(nx, ny, 11, fill=ncol)
-text(HUB_CX, HUB_Y0 + 150, 'AutoZT', 44, INK, bold=True, anchor='middle')
-text(HUB_CX, HUB_Y0 + 190, 'workflow engine', FS_S, MUTED, anchor='middle')
+# AutoZT wordmark + what it does
+wl, wr, wtop = wordmark(HUB_CX, WM_BASE, WM_SIZE)
+text(HUB_CX, WM_BASE + 36, 'auto-selects workflows & software', FS_S, MUTED, anchor='middle')
+curve_arrow((HUB_CX, BY0 + BH + 4), (HUB_CX, BY0 + BH + 30), (HUB_CX, wtop - 30), (HUB_CX, wtop - 10), PURPLE)
+text(HUB_CX + 14, (BY0 + BH + wtop) / 2 + 6, 'calls', FS_S, PURPLE, bold=True, italic=True)
 # AutoZT -> c
-arrow([(HUB_CX, HUB_Y0 + HUB_H + 4), (HUB_CX, R2_TOP - 2)], INK, sw=3.2, head=13)
-text(HUB_CX + 14, (HUB_Y0 + HUB_H + R2_TOP) / 2 + 6, 'runs', FS_S, INK, bold=True, italic=True)
+flow_arrow(HUB_CX, WM_BASE + 52, R2_TOP - 4, 'flow-c')
+text(HUB_CX + 26, (WM_BASE + 52 + R2_TOP) / 2 + 6, 'computes ', FS_S, CRIMSON, bold=True, italic=True)
+rich(HUB_CX + 26 + tw('computes ', FS_S, True, True), (WM_BASE + 52 + R2_TOP) / 2 + 6, ZT, FS_S, CRIMSON, bold=True)
 end()
 
 # ================================================================ b: skills and engines
@@ -528,8 +565,12 @@ for k, (name, role, rcol, hw) in enumerate([('VASP', 'DFT', MUTED, 'CPU GPU'),
 end()
 
 group('panel-a-hub-link')
-arrow([(COL_B[0] + 26, HUB_CY), (HUB_X0 + HUB_W + 4, HUB_CY)], INK, sw=3.2, head=13)
-text((HUB_X0 + HUB_W + COL_B[0]) / 2 + 2, HUB_CY - 12, 'loads', FS_S, INK, bold=True, italic=True, anchor='middle')
+mx = wr + 46                     # where the workflow and software links merge
+for y0, col in [(SY0 + SH / 2, GREEN), (EY0 + EH / 2, MUTED)]:
+    x0 = COL_B[0] + 16
+    circle(x0, y0, 5, fill=col)
+    path(f'M{f(x0)} {f(y0)} C{f(x0 - 62)} {f(y0)} {f(mx + 44)} {f(WM_CY)} {f(mx)} {f(WM_CY)}', stroke=col, sw=3.4)
+curve_arrow((mx, WM_CY), (mx - 10, WM_CY), (wr + 24, WM_CY), (wr + 12, WM_CY), INK)
 end()
 
 # ================================================================ c: POSCAR -> zT(n, T)
@@ -720,5 +761,5 @@ add('</svg>')
 dst = sys.argv[1] if len(sys.argv) > 1 else os.path.join(HERE, 'fig1_autozt_overview_npj.svg')
 with open(dst, 'w') as fh:
     fh.write('\n'.join(out) + '\n')
-print(f'wrote {dst}: session ends {SESSION_END:.0f} (row bottom {R1_BOT}), hub {HUB_Y0:.0f}-{HUB_Y0 + HUB_H:.0f}, '
+print(f'wrote {dst}: session ends {SESSION_END:.0f} (row bottom {R1_BOT}), wordmark x {wl:.0f}-{wr:.0f}, '
       f'skills box {SY0}-{SY0 + SH}, d table ends {D_END:.0f} (row bottom {R2_BOT})')
