@@ -7,12 +7,16 @@ Layout:
     c (one workflow for 3D and 2D materials, full width)
 Units: 1 user unit = 0.1 mm, so the 1800-unit width prints at 180 mm (double column).
 Type sizes: 1 pt = 3.528 units; nothing but sub/superscripts is set below 5 pt (17.6 units).
+PowerPoint: insert the SVG and use Convert to Shape; the primitives below are chosen so that this keeps
+sub/superscripts, arrows and rounded boxes as drawn (see 'svg primitives').
 Usage: python3 build_fig1_overview_npj.py [out.svg]   (reads fig1_logos.json next to this script; needs Pillow)
 Export: open the SVG in Inkscape / Illustrator, or print it to PDF from a browser, at 180 mm width.
 """
+import bisect
 import json
 import math
 import os
+import re
 import sys
 from xml.sax.saxutils import escape
 
@@ -23,7 +27,7 @@ with open(os.path.join(HERE, 'fig1_logos.json')) as _fh:
     LOGOS = json.load(_fh)
 
 # ---------------------------------------------------------------- tokens
-FONT = "Arial, Helvetica, 'Liberation Sans', sans-serif"
+FONT = 'Arial'          # a single family name, which PowerPoint keeps; fontconfig maps it to Liberation Sans
 PT = 3.528
 FS_LETTER = 9 * PT      # panel letters
 FS_TITLE = 8 * PT       # panel titles
@@ -110,6 +114,9 @@ def rich_w(runs, size, bold=False, italic=False):
 
 
 # ---------------------------------------------------------------- svg primitives
+# Kept plain so that PowerPoint's "Convert to Shape" (and Illustrator / Inkscape) reproduce the figure: every shape
+# states its fill and stroke, rounded boxes are explicit paths, arrows and small strokes are filled outlines, every
+# text run is its own left-anchored text object (sub/superscripts included) and no element carries a transform.
 out = []
 
 
@@ -123,75 +130,94 @@ def f(v):
     return str(v)
 
 
-def rect(x, y, w, h, rx=0, fill='none', stroke=None, sw=None, dash=None):
-    a = f'<rect x="{f(x)}" y="{f(y)}" width="{f(w)}" height="{f(h)}"'
+def fs(size):
+    return f'{size:.2f}'.rstrip('0').rstrip('.')
+
+
+def _paint(fill, stroke, sw, cap=None, join=None):
+    a = f' fill="{fill}"'
+    if not stroke:
+        return a + ' stroke="none"'
+    a += f' stroke="{stroke}" stroke-width="{f(sw or 1)}"'
+    if cap:
+        a += f' stroke-linecap="{cap}"'
+    if join:
+        a += f' stroke-linejoin="{join}"'
+    return a
+
+
+def rrect_d(x, y, w, h, r):
+    """Rounded rectangle as path data with cubic corners (an rx attribute gets reinterpreted on conversion)."""
+    r = min(r, w / 2, h / 2)
+    k = r * (1 - 0.5523)
+    x1, y1 = x + w, y + h
+    flat_w, flat_h = w - 2 * r > 0.05, h - 2 * r > 0.05
+    d = [f'M{f(x + r)} {f(y)}']
+    d += [f'L{f(x1 - r)} {f(y)}'] if flat_w else []
+    d += [f'C{f(x1 - k)} {f(y)} {f(x1)} {f(y + k)} {f(x1)} {f(y + r)}']
+    d += [f'L{f(x1)} {f(y1 - r)}'] if flat_h else []
+    d += [f'C{f(x1)} {f(y1 - k)} {f(x1 - k)} {f(y1)} {f(x1 - r)} {f(y1)}']
+    d += [f'L{f(x + r)} {f(y1)}'] if flat_w else []
+    d += [f'C{f(x + k)} {f(y1)} {f(x)} {f(y1 - k)} {f(x)} {f(y1 - r)}']
+    d += [f'L{f(x)} {f(y + r)}'] if flat_h else []
+    d += [f'C{f(x)} {f(y + k)} {f(x + k)} {f(y)} {f(x + r)} {f(y)} Z']
+    return ' '.join(d)
+
+
+def rect(x, y, w, h, rx=0, fill='none', stroke=None, sw=None):
     if rx:
-        a += f' rx="{f(rx)}"'
-    a += f' fill="{fill}"'
-    if stroke:
-        a += f' stroke="{stroke}" stroke-width="{f(sw or 1)}"'
-    if dash:
-        a += f' stroke-dasharray="{dash}"'
-    add(a + '/>')
+        add(f'<path d="{rrect_d(x, y, w, h, rx)}"{_paint(fill, stroke, sw)}/>')
+    else:
+        add(f'<rect x="{f(x)}" y="{f(y)}" width="{f(w)}" height="{f(h)}"{_paint(fill, stroke, sw)}/>')
 
 
 def circle(cx, cy, r, fill='none', stroke=None, sw=None):
-    a = f'<circle cx="{f(cx)}" cy="{f(cy)}" r="{f(r)}" fill="{fill}"'
-    if stroke:
-        a += f' stroke="{stroke}" stroke-width="{f(sw or 1)}"'
-    add(a + '/>')
+    add(f'<circle cx="{f(cx)}" cy="{f(cy)}" r="{f(r)}"{_paint(fill, stroke, sw)}/>')
 
 
 def line(x1, y1, x2, y2, stroke, sw):
-    add(f'<line x1="{f(x1)}" y1="{f(y1)}" x2="{f(x2)}" y2="{f(y2)}" stroke="{stroke}" stroke-width="{f(sw)}"/>')
+    add(f'<line x1="{f(x1)}" y1="{f(y1)}" x2="{f(x2)}" y2="{f(y2)}"{_paint("none", stroke, sw)}/>')
 
 
-def path(d, fill='none', stroke=None, sw=None, cap='round', join='round', dash=None):
-    a = f'<path d="{d}" fill="{fill}"'
-    if stroke:
-        a += f' stroke="{stroke}" stroke-width="{f(sw or 1)}" stroke-linecap="{cap}" stroke-linejoin="{join}"'
-    if dash:
-        a += f' stroke-dasharray="{dash}"'
-    add(a + '/>')
+def path(d, fill='none', stroke=None, sw=None, cap='round', join='round'):
+    add(f'<path d="{d}"{_paint(fill, stroke, sw, cap if stroke else None, join if stroke else None)}/>')
 
 
-def text(x, y, s, size, fill=INK, bold=False, italic=False, anchor='start'):
-    a = f'<text x="{f(x)}" y="{f(y)}" font-size="{f(size)}" fill="{fill}"'
+def _run(x, y, s, size, fill, bold, italic, cls=None):
+    """One left-anchored text object; edge spaces become offsets, so no converter can drop or double them."""
+    x += tw(s[:len(s) - len(s.lstrip(' '))], size, bold, italic)
+    s = s.strip(' ')
+    if not s:
+        return
+    a = f'<text x="{f(x)}" y="{f(y)}" font-family="{FONT}" font-size="{fs(size)}" fill="{fill}"'
     if bold:
         a += ' font-weight="bold"'
     if italic:
         a += ' font-style="italic"'
-    if anchor != 'start':
-        a += f' text-anchor="{anchor}"'
+    if cls:
+        a += f' class="{cls}"'
     add(a + f'>{escape(s)}</text>')
 
 
+def _x0(x, w, anchor):
+    return x - w / 2 if anchor == 'middle' else x - w if anchor == 'end' else x
+
+
+def text(x, y, s, size, fill=INK, bold=False, italic=False, anchor='start'):
+    _run(_x0(x, tw(s, size, bold, italic), anchor), y, s, size, fill, bold, italic)
+
+
 def rich(x, y, runs, size, fill=INK, bold=False, italic=False, anchor='start'):
-    """Inline runs: str or (str, {b, i, fill, sub, sup}); sub/sup via dy so editors keep one text flow."""
-    parts, cur = [], 0.0
+    """Inline runs: str or (str, {b, i, fill, sub, sup}). Each run is a separate text object at its measured x and
+    sub/superscripts sit on their own shifted baseline, so they survive conversion to shapes (no dy, no tspan)."""
+    x = _x0(x, rich_w(runs, size, bold, italic), anchor)
     for t, o in _runs(runs):
-        target = size * 0.24 if o.get('sub') else (-size * 0.36 if o.get('sup') else 0.0)
-        a = []
-        if abs(target - cur) > 1e-6:
-            a.append(f'dy="{target - cur:.1f}"')
-            cur = target
-        if o.get('sub') or o.get('sup'):
-            a.append(f'font-size="{size * SUBSUP:.1f}"')
-        if 'b' in o and o['b'] != bold:
-            a.append(f'font-weight="{"bold" if o["b"] else "normal"}"')
-        if 'i' in o and o['i'] != italic:
-            a.append(f'font-style="{"italic" if o["i"] else "normal"}"')
-        if 'fill' in o and o['fill'] != fill:
-            a.append(f'fill="{o["fill"]}"')
-        parts.append(f'<tspan {" ".join(a)}>{escape(t)}</tspan>' if a else escape(t))
-    a = f'<text x="{f(x)}" y="{f(y)}" font-size="{f(size)}" fill="{fill}"'
-    if bold:
-        a += ' font-weight="bold"'
-    if italic:
-        a += ' font-style="italic"'
-    if anchor != 'start':
-        a += f' text-anchor="{anchor}"'
-    add(a + '>' + ''.join(parts) + '</text>')
+        sub, sup = o.get('sub'), o.get('sup')
+        sz = size * SUBSUP if sub or sup else size
+        b, i = o.get('b', bold), o.get('i', italic)
+        yy = y + size * 0.24 if sub else y - size * 0.36 if sup else y
+        _run(x, yy, t, sz, o.get('fill', fill), b, i, 'sub' if sub else 'sup' if sup else None)
+        x += tw(t, sz, b, i)
 
 
 def group(id_):
@@ -202,17 +228,179 @@ def end():
     add('</g>')
 
 
-def arrow(points, color, sw=3.0, head=11.0):
-    """Polyline with a filled head at the last point (no SVG markers: they import badly into Illustrator/PowerPoint)."""
-    (x1, y1), (x2, y2) = points[-2], points[-1]
-    dx, dy = x2 - x1, y2 - y1
+# ---------------------------------------------------------------- strokes drawn as filled outlines
+def _unit(p, q):
+    dx, dy = q[0] - p[0], q[1] - p[1]
     n = math.hypot(dx, dy)
-    ux, uy = dx / n, dy / n
-    bx, by = x2 - ux * head, y2 - uy * head
-    pts = points[:-1] + [(bx, by)]
-    path('M' + ' L'.join(f'{f(px)} {f(py)}' for px, py in pts), stroke=color, sw=sw, cap='butt')
-    hw = head * 0.55
-    path(f'M{f(x2)} {f(y2)} L{f(bx - uy * hw)} {f(by + ux * hw)} L{f(bx + uy * hw)} {f(by - ux * hw)} Z', fill=color)
+    return dx / n, dy / n
+
+
+def _sides(pts, hw):
+    """The two offset lines of a polyline at half-width hw, mitred at the corners."""
+    left, right = [], []
+    for i, (px, py) in enumerate(pts):
+        ua = _unit(pts[i - 1], pts[i]) if i else _unit(pts[0], pts[1])
+        ub = _unit(pts[i], pts[i + 1]) if i < len(pts) - 1 else ua
+        k = hw / (1 + ua[0] * ub[0] + ua[1] * ub[1])
+        ox, oy = (-ua[1] - ub[1]) * k, (ua[0] + ub[0]) * k
+        left.append((px + ox, py + oy))
+        right.append((px - ox, py - oy))
+    return left, right
+
+
+def _cap(p, u, hw, steps=6):
+    """Round end at p facing u: the points between the left (+n) and the right (-n) side."""
+    nx, ny = -u[1], u[0]
+    angles = [math.pi * j / steps for j in range(1, steps)]
+    return [(p[0] + hw * (nx * math.cos(a) + u[0] * math.sin(a)), p[1] + hw * (ny * math.cos(a) + u[1] * math.sin(a)))
+            for a in angles]
+
+
+def stroke_pts(pts, sw, cap='butt'):
+    """Outline of an open polyline drawn sw wide (mitred corners, butt or round ends)."""
+    left, right = _sides(pts, sw / 2)
+    if cap != 'round':
+        return left + right[::-1]
+    return (left + _cap(pts[-1], _unit(pts[-2], pts[-1]), sw / 2) + right[::-1]
+            + _cap(pts[0], _unit(pts[1], pts[0]), sw / 2))
+
+
+def shape(polys, color):
+    """One filled path made of one or more outlines."""
+    d = ' '.join('M' + ' L'.join(f'{f(x)} {f(y)}' for x, y in p) + ' Z' for p in polys)
+    add(f'<path d="{d}"{_paint(color, None, None)}/>')
+
+
+def _head(tip, u, hw, kind, length, half):
+    """Arrowhead at tip pointing along u, for a shaft of half-width hw: the length of shaft it replaces and its
+    outline from the left barb over the tip to the right barb ('tri': flat base; 'stealth': swept back, notched)."""
+    nx, ny = -u[1], u[0]
+    bx, by = tip[0] - u[0] * length, tip[1] - u[1] * length
+    barbs = [(bx + nx * half, by + ny * half), tuple(tip), (bx - nx * half, by - ny * half)]
+    return (length * (0.7 + 0.3 * hw / half) if kind == 'stealth' else length), barbs
+
+
+def arrow(points, color, sw=3.0, head=11.0, both=False, kind='tri', half=None):
+    """Arrow along a polyline as ONE filled outline (mitred shaft plus head or heads): no markers, stroke caps or
+    loose heads that drift when the SVG is converted to shapes."""
+    pts = [tuple(p) for p in points]
+    hw, half = sw / 2, half or head * 0.55
+    u1 = _unit(pts[-2], pts[-1])
+    d1, h1 = _head(pts[-1], u1, hw, kind, head, half)
+    pts[-1] = (pts[-1][0] - u1[0] * d1, pts[-1][1] - u1[1] * d1)
+    h0 = []
+    if both:
+        u0 = _unit(pts[1], pts[0])
+        d0, h0 = _head(points[0], u0, hw, kind, head, half)
+        pts[0] = (pts[0][0] - u0[0] * d0, pts[0][1] - u0[1] * d0)
+    left, right = _sides(pts, hw)
+    shape([left + h1 + right[::-1] + h0], color)
+
+
+def bezier_pts(p0, c1, c2, p3, n=32):
+    pts = []
+    for j in range(n + 1):
+        t = j / n
+        a, b, c, d = (1 - t) ** 3, 3 * (1 - t) ** 2 * t, 3 * (1 - t) * t ** 2, t ** 3
+        pts.append((a * p0[0] + b * c1[0] + c * c2[0] + d * p3[0], a * p0[1] + b * c1[1] + c * c2[1] + d * p3[1]))
+    return pts
+
+
+def dash_pieces(pts, on, off):
+    """Cut a dense polyline into dashes, as stroke-dasharray would."""
+    cum = [0.0]
+    for p, q in zip(pts, pts[1:]):
+        cum.append(cum[-1] + math.dist(p, q))
+
+    def at(s):
+        i = min(bisect.bisect_right(cum, s) - 1, len(cum) - 2)
+        t = (s - cum[i]) / (cum[i + 1] - cum[i])
+        return pts[i][0] + t * (pts[i + 1][0] - pts[i][0]), pts[i][1] + t * (pts[i + 1][1] - pts[i][1])
+
+    pieces, s = [], 0.0
+    while s < cum[-1] - 1e-6:
+        e = min(s + on, cum[-1])
+        piece = [at(s)] + [p for p, c in zip(pts, cum) if s + 1e-6 < c < e - 1e-6] + [at(e)]
+        pieces.append(piece)
+        s += on + off
+    return pieces
+
+
+def rrect_pts(x, y, w, h, r, n=8):
+    """Closed outline of a (rounded) rectangle as points, clockwise from the left end of the top edge."""
+    if r <= 0:
+        return [(x, y), (x + w, y), (x + w, y + h), (x, y + h), (x, y)]
+    pts = [(x + r, y)]
+    for cx, cy, a0 in [(x + w - r, y + r, -90), (x + w - r, y + h - r, 0), (x + r, y + h - r, 90), (x + r, y + r, 180)]:
+        pts += [(cx + r * math.cos(math.radians(a0 + 90 * j / n)), cy + r * math.sin(math.radians(a0 + 90 * j / n)))
+                for j in range(n + 1)]
+    return pts
+
+
+def dashed_rect(x, y, w, h, r, color, sw, on, off):
+    """Dashed outline drawn as filled dashes (stroke-dasharray is lost by some shape converters)."""
+    shape([stroke_pts(d, sw) for d in dash_pieces(rrect_pts(x, y, w, h, r), on, off)], color)
+
+
+# ---------------------------------------------------------------- path data with the placement baked in
+_TOKENS = re.compile(r'[A-Za-z]|[-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?')
+
+
+def xform_d(d, s, tx, ty):
+    """Path data rewritten as absolute M/L/C/Z with (x, y) -> (tx + s x, ty + s y) applied, so no transform is left
+    for a converter to reinterpret (H/V become L, quadratic curves become cubic)."""
+    tok = _TOKENS.findall(d)
+    res, i, cmd = [], 0, ''
+    cx = cy = mx = my = 0.0
+
+    def nums(k):
+        nonlocal i
+        i += k
+        return [float(t) for t in tok[i - k:i]]
+
+    def pt(x, y):
+        return f'{f(tx + s * x)} {f(ty + s * y)}'
+
+    while i < len(tok):
+        if tok[i].isalpha():
+            cmd = tok[i]
+            i += 1
+            if cmd in 'Zz':
+                res.append('Z')
+                cx, cy = mx, my
+                continue
+        ox, oy = (cx, cy) if cmd.islower() else (0.0, 0.0)
+        c = cmd.upper()
+        if c in 'ML':
+            x, y = nums(2)
+            cx, cy = x + ox, y + oy
+            res.append(c + pt(cx, cy))
+            if c == 'M':
+                mx, my = cx, cy
+                cmd = 'l' if cmd == 'm' else 'L'          # further pairs after a moveto are linetos
+        elif c == 'H':
+            cx = nums(1)[0] + ox
+            res.append('L' + pt(cx, cy))
+        elif c == 'V':
+            cy = nums(1)[0] + oy
+            res.append('L' + pt(cx, cy))
+        elif c == 'C':
+            x1, y1, x2, y2, x, y = nums(6)
+            res.append(f'C{pt(x1 + ox, y1 + oy)} {pt(x2 + ox, y2 + oy)} {pt(x + ox, y + oy)}')
+            cx, cy = x + ox, y + oy
+        elif c == 'Q':
+            qx, qy, x, y = (v + o for v, o in zip(nums(4), (ox, oy, ox, oy)))
+            res.append(f'C{pt(cx + (qx - cx) * 2 / 3, cy + (qy - cy) * 2 / 3)} '
+                       f'{pt(x + (qx - x) * 2 / 3, y + (qy - y) * 2 / 3)} {pt(x, y)}')
+            cx, cy = x, y
+        else:
+            raise ValueError(f'path command {cmd!r} not supported')
+    return ' '.join(res)
+
+
+def mix(c0, c1, t):
+    a, b = (int(c0[k:k + 2], 16) for k in (1, 3, 5)), (int(c1[k:k + 2], 16) for k in (1, 3, 5))
+    return '#' + ''.join(f'{round(p + (q - p) * t):02X}' for p, q in zip(a, b))
 
 
 # ---------------------------------------------------------------- icons
@@ -226,59 +414,30 @@ def logo(name, x, y, size):
     s = size / max(x1 - x0, y1 - y0)
     tx = x + (size - (x1 - x0) * s) / 2 - x0 * s
     ty = y + (size - (y1 - y0) * s) / 2 - y0 * s
-    add(f'<g transform="translate({tx:.2f} {ty:.2f}) scale({s:.5f})">')
     for i in items:
+        d = xform_d(i['d'], s, tx, ty)
         if i.get('stroke'):
-            add(f'<path d="{i["d"]}" fill="none" stroke="{i["stroke"]}" stroke-width="{i["sw"]}" '
-                f'stroke-linecap="round" stroke-linejoin="round"/>')
+            add(f'<path d="{d}"{_paint("none", i["stroke"], i["sw"] * s, cap="round", join="round")}/>')
         else:
-            add(f'<path d="{i["d"]}" fill="{i.get("fill", "#000000")}" fill-rule="evenodd"/>')
-    add('</g>')
-
-
-def stealth(tip, ux, uy, color, length=15.0, half=6.5):
-    """Arrowhead with swept-back barbs and a notch, pointing along (ux, uy)."""
-    tx, ty = tip
-    bx, by = tx - ux * length, ty - uy * length
-    nx, ny = -uy, ux
-    kx, ky = tx - ux * length * 0.7, ty - uy * length * 0.7
-    path(f'M{f(tx)} {f(ty)} L{f(bx + nx * half)} {f(by + ny * half)} L{f(kx)} {f(ky)} '
-         f'L{f(bx - nx * half)} {f(by - ny * half)} Z', fill=color)
-
-
-def curve_arrow(p0, c1, c2, p3, color, sw=3.4):
-    """Cubic Bezier ending in a stealth head at p3."""
-    dx, dy = p3[0] - c2[0], p3[1] - c2[1]
-    n = math.hypot(dx, dy)
-    ux, uy = dx / n, dy / n
-    end_ = (p3[0] - ux * 10, p3[1] - uy * 10)
-    path(f'M{f(p0[0])} {f(p0[1])} C{f(c1[0])} {f(c1[1])} {f(c2[0])} {f(c2[1])} {f(end_[0])} {f(end_[1])}',
-         stroke=color, sw=sw)
-    stealth(p3, ux, uy, color)
-
-
-def flow_arrow(x, y0, y1, gid, w0=20.0, w1=11.0, head_w=44.0, head_l=32.0):
-    """Tapered downward arrow, shaded like the ZT of the wordmark (blue to crimson)."""
-    add(f'<defs><linearGradient id="{gid}" gradientUnits="userSpaceOnUse" x1="0" y1="{f(y0)}" x2="0" y2="{f(y1)}">'
-        f'<stop offset="0" stop-color="{BLUE}" stop-opacity="0.35"/><stop offset="1" stop-color="{CRIMSON}"/>'
-        '</linearGradient></defs>')
-    hy = y1 - head_l
-    path(f'M{f(x - w0 / 2)} {f(y0)} L{f(x + w0 / 2)} {f(y0)} L{f(x + w1 / 2)} {f(hy)} L{f(x + head_w / 2)} {f(hy)} '
-         f'L{f(x)} {f(y1)} L{f(x - head_w / 2)} {f(hy)} L{f(x - w1 / 2)} {f(hy)} Z', fill=f'url(#{gid})')
+            add(f'<path d="{d}" fill-rule="evenodd"{_paint(i.get("fill", "#000000"), None, None)}/>')
 
 
 def wordmark(x, baseline, size, anchor='middle'):
-    """AutoZT wordmark (outlined Sora) at x (centre or left edge); returns left, right and cap-top coordinates."""
+    """AutoZT wordmark (outlined Sora) at x (centre or left edge); returns left, right and cap-top coordinates.
+    The blue-to-crimson shade of "ZT" is one bounding-box gradient per letter, which converters map one to one."""
     wm = LOGOS['autozt_wordmark']
     s = size / 100
     bx0, by0, bx1, _ = wm['bbox']
     tx = (x - (bx1 - bx0) * s / 2 if anchor == 'middle' else x) - bx0 * s
-    add(f'<defs><linearGradient id="wm-zt" gradientUnits="userSpaceOnUse" x1="{wm["zt_x0"]}" y1="0" '
-        f'x2="{wm["zt_x1"]}" y2="0"><stop offset="0" stop-color="{BLUE}"/><stop offset="1" stop-color="{CRIMSON}"/>'
-        '</linearGradient></defs>')
-    add(f'<g id="autozt-wordmark" transform="translate({tx:.2f} {baseline:.2f}) scale({s:.4f})">')
-    add(f'<path d="{wm["auto"]}" fill="{INK}"/>')
-    add(f'<path d="{wm["zt"]}" fill="url(#wm-zt)"/>')
+    add('<g id="autozt-wordmark">')
+    add(f'<path d="{xform_d(wm["auto"], s, tx, baseline)}"{_paint(INK, None, None)}/>')
+    span = wm['zt_x1'] - wm['zt_x0']
+    for k, glyph in enumerate(re.findall(r'M[^M]+', wm['zt'])):
+        xs = [float(v) for v in _TOKENS.findall(xform_d(glyph, 1, 0, 0)) if not v.isalpha()][0::2]
+        c0, c1 = (mix(BLUE, CRIMSON, (v - wm['zt_x0']) / span) for v in (min(xs), max(xs)))
+        add(f'<defs><linearGradient id="wm-zt{k}" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="{c0}"/>'
+            f'<stop offset="1" stop-color="{c1}"/></linearGradient></defs>')
+        add(f'<path d="{xform_d(glyph, s, tx, baseline)}"{_paint(f"url(#wm-zt{k})", None, None)}/>')
     add('</g>')
     return tx + bx0 * s, tx + bx1 * s, baseline + by0 * s
 
@@ -302,8 +461,8 @@ def person(cx, cy, s=0.6):
 
 def gate(cx, cy, r=13.0):
     circle(cx, cy, r, fill=GATE, stroke='#FFFFFF', sw=2.6)
-    path(f'M{f(cx - r * 0.45)} {f(cy + r * 0.02)} L{f(cx - r * 0.1)} {f(cy + r * 0.38)} L{f(cx + r * 0.5)} {f(cy - r * 0.36)}',
-         stroke='#FFFFFF', sw=r * 0.24)
+    tick = [(cx - r * 0.45, cy + r * 0.02), (cx - r * 0.1, cy + r * 0.38), (cx + r * 0.5, cy - r * 0.36)]
+    shape([stroke_pts(tick, r * 0.24, 'round')], '#FFFFFF')
 
 
 def cursor(x, y, s=0.8):
@@ -323,7 +482,6 @@ def pill_button(x, y, w, label, fill, fg, stroke=None):
 
 ZT = [('zT', {'i': True})]
 ZTNT = [('zT', {'i': True}), '(', ('n', {'i': True}), ', ', ('T', {'i': True}), ')']
-
 # ================================================================ layout
 A_X = (12, 516)                  # a: left column
 R_X = (604, 1788)                # b: right column
@@ -335,7 +493,7 @@ Y0 = TOP + 190                   # pipeline centre line
 TH = 90                          # transport box height
 EL_Y, PH_Y = Y0 - 78, Y0 + 78
 ZY = (EL_Y - TH / 2, PH_Y + TH / 2)
-AS = (R_X[0] + 20, R_X[1] - 20, ZY[1] + 26, ZY[1] + 26 + 150)
+AS = (R_X[0] + 20, R_X[1] - 20, ZY[1] + 38, ZY[1] + 38 + 150)
 BY0 = AS[3] + 46                 # library boxes
 BY1 = BY0 + 176
 ROW_BOT = BY1 + 14               # bottom of panels a and b
@@ -384,7 +542,7 @@ HM = [['EEB2C6', 'D16388', 'B23C66', '8A1D46', 'B23C66', 'E38AA8'],
       ['F6D3DE', 'F6D3DE', 'F6D3DE', 'EEB2C6', 'F6D3DE', 'F6D3DE']]
 
 
-def zt_map(x0, y0, cell=16.0, cg=1.2, fs=FS_B):
+def zt_map(x0, y0, cell=16.0, cg=1.2, size=FS_B):
     """Schematic zT(n, T) map with its top-left cell at (x0, y0): T up, n to the right."""
     gw = 6 * cell + 5 * cg
     for r_, row in enumerate(HM):
@@ -392,10 +550,9 @@ def zt_map(x0, y0, cell=16.0, cg=1.2, fs=FS_B):
             rect(x0 + c_ * (cell + cg), y0 + r_ * (cell + cg), cell, cell, fill='#' + colr)
     k = cell / 16
     axx, axy = x0 - 7 * k, y0 + gw + 7 * k
-    arrow([(axx, axy), (axx, y0 - 4 * k)], GATE, sw=2.2 * k, head=9 * k)
-    arrow([(axx, axy), (x0 + gw + 12 * k, axy)], GATE, sw=2.2 * k, head=9 * k)
-    text(axx - 8 * k, y0 + gw / 2 + fs * 0.36, 'T', fs, MUTED, italic=True, anchor='end')
-    text(x0 + gw + 22 * k, axy + fs * 0.36, 'n', fs, MUTED, italic=True)
+    arrow([(axx, y0 - 4 * k), (axx, axy), (x0 + gw + 12 * k, axy)], GATE, sw=2.2 * k, head=9 * k, both=True)
+    text(axx - 8 * k, y0 + gw / 2 + size * 0.36, 'T', size, MUTED, italic=True, anchor='end')
+    text(x0 + gw + 22 * k, axy + size * 0.36, 'n', size, MUTED, italic=True)
 
 
 # ================================================================ canvas
@@ -408,25 +565,25 @@ rect(0, 0, W, H, fill='#FFFFFF')
 group('panel-a')
 panel_title(A_X[0] + 2, TITLE_Y, 'a', ['LLM agent operates AutoZT'])
 panel(A_X[0], A_X[1], TOP, ROW_BOT)
-text(A_X[0] + 22, TOP + 38, 'Coding agents', FS_S, PURPLE, bold=True)
+text(A_X[0] + 22, TOP + 34, 'Coding agents', FS_S, PURPLE, bold=True)
 AGENTS = [[('deepseek', 'DeepSeek'), ('kimi', 'Kimi'), ('glm', 'GLM')],
           [('claude', 'Claude'), ('chatgpt', 'ChatGPT'), (None, '…')]]
-LG = 34                          # logo box; the name starts 8 units to its right
+LG = 30                          # logo box; the name starts 8 units to its right
 col_w = [max(LG + 8 + tw(lab, FS_S, True) if key else LG for key, lab in col) for col in zip(*AGENTS)]
 gx0, gx1 = A_X[0] + 22, A_X[1] - 22
 gut = (gx1 - gx0 - sum(col_w)) / (len(col_w) - 1)
 for r_, row in enumerate(AGENTS):
-    gy = TOP + 58 + r_ * 52
+    gy = TOP + 48 + r_ * 44
     for c_, (key, lab) in enumerate(row):
         gx = gx0 + sum(col_w[:c_]) + c_ * gut
         if key:
             logo(key, gx, gy, LG)
             text(gx + LG + 8, gy + LG / 2 + FS_S * 0.36, lab, FS_S, INK, bold=True)
         else:
-            text(gx + LG / 2, gy + 23, '…', FS_H, MUTED, bold=True, anchor='middle')
+            text(gx + LG / 2, gy + LG / 2 + FS_S * 0.36, '…', FS_H, MUTED, bold=True, anchor='middle')
 
 CH_X0, CH_X1 = A_X[0] + 14, A_X[1] - 14
-CH_Y0, CH_Y1 = TOP + 168, ROW_BOT - 14
+CH_Y0, CH_Y1 = TOP + 142, ROW_BOT - 14
 rect(CH_X0, CH_Y0, CH_X1 - CH_X0, CH_Y1 - CH_Y0, rx=14, fill=LAV)
 AV_X = CH_X0 + 22
 CARD_X0, CARD_X1 = CH_X0 + 42, CH_X1 - 8
@@ -464,50 +621,48 @@ def say(y, runs):
     rich(IX0 + 4, y, runs if isinstance(runs, list) else [runs], FS_B, INK, bold=True)
 
 
-ATT_W, ATT_H = 164, 128          # the zT(n, T) map attached to the report
-H_MSG = [32, 10 + TB + 34 + 30 + 10, 10 + TB + 36, 10 + TB + 38 + ATT_H + 12]
+H_MSG = [32, 10 + TB + 76 + 24 + 12, 10 + TB + 36, 10 + TB + 36]
 # the "Submitted" card (message 3) sits level with the automation loop in b, so the arrows run flat
 G1 = ((AS[2] + AS[3]) / 2 - H_MSG[2] / 2 - (CH_Y0 + 12) - H_MSG[0] - H_MSG[1]) / 2
-# spare height is split between the gap before the report and the bottom margin
-spare = CH_Y1 - CH_Y0 - 24 - sum(H_MSG) - 3 * G1
-assert spare >= 0, f'chat overflows by {-spare:.1f}'
-G2 = G1 + spare / 2
 ys = [CH_Y0 + 12]
-for h_, g_ in zip(H_MSG[:-1], (G1, G1, G2)):
-    ys.append(ys[-1] + h_ + g_)
+for h_ in H_MSG[:-1]:
+    ys.append(ys[-1] + h_ + G1)
 # 1 user asks in plain language
 user_msg(ys[0], ['Compute '] + ZT + [' for this 2D POSCAR.'])
 # 2 agent: discover, plan, dry run; the user approves the plan
 y = ys[1]
 agent_card(y, H_MSG[1])
 yy = tool_row(y + 10, ['Discovery', 'Planning', 'Dry run'])
-say(yy + 25, 'Plan ready. Proceed?')
-pbx = IX1 - 8 - 100
-pill_button(pbx, yy + 7, 100, 'Proceed', PURPLE, '#FFFFFF')
-cursor(pbx + 89, yy + 15, s=0.7)  # tip right of the label, so no letter is hidden
+say(yy + 26, 'Plan ready. Proceed?')
 x = IX0 + 4
 for num, lab, col in [('1', 'structure', GREEN), ('2', 'electrons', BLUE), ('3', 'phonons', ORANGE), ('4', 'zT', CRIMSON)]:
     runs = ZT if lab == 'zT' else [lab]
     wd = rich_w(runs, FS_XS, True) + 30
-    rect(x, yy + 40, wd, 21, rx=10.5, fill='#FFFFFF', stroke='#C9C0E4', sw=1.3)
-    circle(x + 11, yy + 50.5, 8.5, fill=col)
-    text(x + 11, yy + 50.5 + FS_XS * 0.36, num, FS_XS, '#FFFFFF', bold=True, anchor='middle')
-    rich(x + 24, yy + 50.5 + FS_XS * 0.36, runs, FS_XS, INK, bold=True)
+    rect(x, yy + 41, wd, 21, rx=10.5, fill='#FFFFFF', stroke='#C9C0E4', sw=1.3)
+    circle(x + 11, yy + 51.5, 8.5, fill=col)
+    text(x + 11, yy + 51.5 + FS_XS * 0.36, num, FS_XS, '#FFFFFF', bold=True, anchor='middle')
+    rich(x + 24, yy + 51.5 + FS_XS * 0.36, runs, FS_XS, INK, bold=True)
     x += wd + 6
+pill_button(IX0 + 4, yy + 76, 100, 'Proceed', PURPLE, '#FFFFFF')
+cursor(IX0 + 4 + 89, yy + 84, s=0.7)  # tip right of the label, so no letter is hidden
 # 3 agent: submit; AutoZT now runs the workflow by itself
 y = ys[2]
 Y_MID = y + H_MSG[2] / 2
 agent_card(y, H_MSG[2])
 yy = tool_row(y + 10, ['Execution'])
 say(yy + 25, 'Submitted; AutoZT runs the jobs.')
-# 4 agent: report, with the zT(n, T) map from b attached
+# 4 agent: report
 y = ys[3]
 agent_card(y, H_MSG[3])
 yy = tool_row(y + 10, ['Reporting'])
 say(yy + 25, ZTNT + [' is ready.'])
-ax0, ay0 = IX0 + 4, yy + 38
-rect(ax0, ay0, ATT_W, ATT_H, rx=8, fill=LAV2, stroke=LAV_LINE, sw=1.4)
-zt_map(ax0 + 34, ay0 + 14, cell=14.5, cg=1.1, fs=FS_XS)
+# the chat closes with its input bar, as in any agent app
+IB_X0, IB_X1, IB_H = CH_X0 + 12, CH_X1 - 12, 40
+iby = CH_Y1 - 12 - IB_H
+rect(IB_X0, iby, IB_X1 - IB_X0, IB_H, rx=IB_H / 2, fill='#FFFFFF', stroke=LAV_LINE, sw=1.6)
+text(IB_X0 + 20, iby + IB_H / 2 + FS_S * 0.36, 'Ask the agent…', FS_S, FAINT)
+circle(IB_X1 - 22, iby + IB_H / 2, 14, fill=PURPLE)
+arrow([(IB_X1 - 22, iby + IB_H / 2 + 7), (IB_X1 - 22, iby + IB_H / 2 - 8)], '#FFFFFF', sw=2.6, head=8)
 end()
 
 # ================================================================ b: AutoZT, from POSCAR to zT(n, T)
@@ -604,8 +759,8 @@ def loop_icon(kind, cx, cy):
             rect(cx - 9, cy + dy_, 18, 7, rx=1.5, fill='#FFFFFF', stroke=SLATE, sw=1.6)
             circle(cx + 5, cy + dy_ + 3.5, 1.4, fill=GREEN)
     elif kind == 'pulse':
-        path(f'M{f(cx - 10)} {f(cy)} L{f(cx - 4)} {f(cy)} L{f(cx - 1)} {f(cy - 8)} L{f(cx + 3)} {f(cy + 8)} '
-             f'L{f(cx + 6)} {f(cy)} L{f(cx + 10)} {f(cy)}', stroke=SLATE, sw=2)
+        pulse = [(cx - 10, cy), (cx - 4, cy), (cx - 1, cy - 8), (cx + 3, cy + 8), (cx + 6, cy), (cx + 10, cy)]
+        shape([stroke_pts(pulse, 2, 'round')], SLATE)
     elif kind == 'gate':
         gate(cx, cy, r=11)
     else:
@@ -617,16 +772,19 @@ for k, (t1, kind) in enumerate([('generate inputs', 'doc'), ('submit', 'rack'), 
                                 ('check gate', 'gate'), ('advance', 'next')]):
     x = lx0 + k * (CW_ + CG_)
     rect(x, ly0, CW_, lh, rx=12, fill='#FFFFFF', stroke='#C9D1DA', sw=1.4)
-    loop_icon(kind, x + 28, ly0 + lh / 2)
-    text(x + 52, ly0 + lh / 2 + FS_S * 0.36, t1, FS_S, INK, bold=True)
+    gx = x + (CW_ - 40 - tw(t1, FS_S, True)) / 2       # icon (32) + gap (8) + label, centred in the box
+    loop_icon(kind, gx + 16, ly0 + lh / 2)
+    text(gx + 40, ly0 + lh / 2 + FS_S * 0.36, t1, FS_S, INK, bold=True)
     if k < 4:
         arrow([(x + CW_ + 3, ly0 + lh / 2), (x + CW_ + CG_ - 3, ly0 + lh / 2)], SLATE, sw=2.4, head=9)
 sx = lx0 + 1 * (CW_ + CG_) + CW_ / 2
 cx_ = lx0 + 3 * (CW_ + CG_) + CW_ / 2
 yb = ly0 + lh + 24
-path(f'M{f(cx_)} {f(ly0 + lh + 2)} C{f(cx_)} {f(yb)} {f(cx_ - 30)} {f(yb)} {f((cx_ + sx) / 2)} {f(yb)} '
-     f'C{f(sx + 30)} {f(yb)} {f(sx)} {f(yb)} {f(sx)} {f(ly0 + lh + 14)}', stroke=RED, sw=2.4, dash='7 6')
-stealth((sx, ly0 + lh + 3), 0, -1, RED, length=12, half=5.5)
+tip = (sx, ly0 + lh + 3)
+reach, barbs = _head(tip, (0, -1), 1.2, 'stealth', 12, 5.5)
+loop = (bezier_pts((cx_, ly0 + lh + 2), (cx_, yb), (cx_ - 30, yb), ((cx_ + sx) / 2, yb))
+        + bezier_pts(((cx_ + sx) / 2, yb), (sx + 30, yb), (sx, yb), (sx, tip[1] + reach))[1:])
+shape([stroke_pts(d, 2.4, 'round') for d in dash_pieces(loop, 7, 6)] + [barbs + [(sx, tip[1] + 12 * 0.7)]], RED)
 text((cx_ + sx) / 2, yb + 22, 'retry · resume', FS_XS, RED, bold=True, italic=True, anchor='middle')
 
 # library AutoZT picks from: skills (left) and engines (right)
@@ -651,7 +809,7 @@ for k, (name, hw) in enumerate([('VASP', 'CPU GPU'), ('AMSET', 'CPU'), ('ShengBT
     x = EN[0] + 14 + (k % 3) * (ce + 10)
     yk = BY0 + 46 + (k // 3) * 62
     if name is None:
-        rect(x, yk, ce, 54, rx=9, stroke='#A3ADB8', sw=1.6, dash='12 8')
+        dashed_rect(x, yk, ce, 54, 9, '#A3ADB8', 1.6, 12, 8)
         text(x + ce / 2, yk + 34, '…', FS_H, MUTED, bold=True, anchor='middle')
         continue
     rect(x, yk, ce, 54, rx=9, fill='#FFFFFF', stroke='#A3ADB8', sw=1.6)
@@ -662,7 +820,7 @@ end()
 
 # library -> workflow: AutoZT picks the skills and engines a material needs
 group('b-select-link')
-curve_arrow((SEL_X, BY0 - 3), (SEL_X, BY0 - 24), (SEL_X, AS[3] + 24), (SEL_X, AS[3] + 3), INK, sw=3.2)
+arrow([(SEL_X, BY0 - 3), (SEL_X, AS[3] + 3)], INK, sw=3.2, head=15, kind='stealth', half=6.5)
 text(SEL_X + 16, (AS[3] + BY0) / 2 + 7, 'auto-selects', FS_S, INK, bold=True, italic=True)
 end()
 
@@ -672,7 +830,7 @@ GX0, GX1 = A_X[1] + 4, R_X[0] - 4
 for yv, lab, col, rightward, ly in [(Y_MID - 14, 'tool calls', PURPLE, True, Y_MID - 26),
                                     (Y_MID + 14, 'results', CRIMSON, False, Y_MID + 40)]:
     x0, x1 = (GX0, GX1) if rightward else (GX1, GX0)
-    curve_arrow((x0, yv), (x0 + (x1 - x0) * 0.3, yv), (x0 + (x1 - x0) * 0.7, yv), (x1, yv), col, sw=3.2)
+    arrow([(x0, yv), (x1, yv)], col, sw=3.2, head=15, kind='stealth', half=6.5)
     text((GX0 + GX1) / 2, ly, lab, FS_XS, col, bold=True, anchor='middle')
 end()
 
@@ -693,24 +851,23 @@ def layer(x0, y0, w):
 
 
 def c_axis(x, y0, y1):
-    ym = (y0 + y1) / 2
-    arrow([(x, ym), (x, y0 + 2)], GATE, sw=2.4, head=10)
-    arrow([(x, ym), (x, y1 - 2)], GATE, sw=2.4, head=10)
-    text(x + 12, ym + 8, 'c', FS_B, INK, italic=True)
+    arrow([(x, y0 + 2), (x, y1 - 2)], GATE, sw=2.4, head=10, both=True)
+    text(x + 12, (y0 + y1) / 2 + 8, 'c', FS_B, INK, italic=True)
 
 
 SKW = 108
-bkx, bky, bkh = A_X[0] + 46, D_Y[0] + 26, 150
+bkx, bkh = A_X[0] + 46, 150
+slx, sly, slh = bkx + 214, D_Y[0] + 26, 212
+bky = sly + slh - bkh            # bottom-aligned with the slab
 rect(bkx, bky, SKW, bkh, rx=4, fill='#FFFFFF', stroke=FAINT, sw=2.2)
 layer(bkx + 4, bky + 20, SKW - 8)
 layer(bkx + 4, bky + 82, SKW - 8)
 c_axis(bkx + SKW + 22, bky, bky + bkh)
 text(bkx + SKW / 2, bky + bkh + 30, '3D bulk', FS_B, INK, bold=True, anchor='middle')
-slx, sly, slh = bkx + 214, bky, 212
 slab_y0, slab_h = sly + 69, 74
 rect(slx, sly, SKW, slh, fill='#FFFFFF')
 rect(slx, slab_y0, SKW, slab_h, fill='#E3F2EA')
-rect(slx, sly, SKW, slh, stroke=FAINT, sw=2.2, dash='12 9')
+dashed_rect(slx, sly, SKW, slh, 0, FAINT, 2.2, 12, 9)
 text(slx + SKW / 2, sly + 42, 'vacuum', FS_XS, FAINT, italic=True, anchor='middle')
 text(slx + SKW / 2, sly + slh - 28, 'vacuum', FS_XS, FAINT, italic=True, anchor='middle')
 layer(slx + 4, slab_y0 + 13, SKW - 8)
@@ -761,5 +918,5 @@ add('</svg>')
 dst = sys.argv[1] if len(sys.argv) > 1 else os.path.join(HERE, 'fig1_autozt_overview_npj.svg')
 with open(dst, 'w') as fh:
     fh.write('\n'.join(out) + '\n')
-print(f'wrote {dst}: H {H}, chat gaps {G1:.1f} / {G2:.1f}, Submitted card centre {Y_MID:.0f} vs automation loop '
-      f'centre {(AS[2] + AS[3]) / 2:.0f}, panel c bottom {D_Y[1]}')
+print(f'wrote {dst}: H {H}, chat gap {G1:.1f}, space above the input bar {iby - ys[-1] - H_MSG[-1]:.0f}, '
+      f'Submitted card centre {Y_MID:.0f} vs automation loop centre {(AS[2] + AS[3]) / 2:.0f}')
