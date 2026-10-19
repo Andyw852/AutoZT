@@ -555,6 +555,23 @@ def zt_map(x0, y0, cell=16.0, cg=1.2, size=FS_B):
     text(x0 + gw + 22 * k, axy + size * 0.36, 'n', size, MUTED, italic=True)
 
 
+def mini_icon(kind, cx, cy):
+    if kind == 'gate':
+        gate(cx, cy, r=10)
+    elif kind == 'lock':
+        rect(cx - 7.5, cy - 2, 15, 11, rx=2.5, fill=SLATE)
+        top, ro, ri = cy - 4.5, 5.2, 3.0
+        outer = [(cx + ro * math.cos(math.pi * j / 12), top - ro * math.sin(math.pi * j / 12)) for j in range(13)]
+        inner = [(cx - ri * math.cos(math.pi * j / 12), top - ri * math.sin(math.pi * j / 12)) for j in range(13)]
+        shape([[(cx + ro, cy - 1)] + outer + [(cx - ro, cy - 1), (cx - ri, cy - 1)] + inner + [(cx + ri, cy - 1)]], SLATE)
+        circle(cx, cy + 3.2, 1.8, fill='#FFFFFF')
+    else:
+        path(f'M{f(cx - 6.5)} {f(cy - 8.5)} L{f(cx + 2.5)} {f(cy - 8.5)} L{f(cx + 6.5)} {f(cy - 4.5)} '
+             f'L{f(cx + 6.5)} {f(cy + 8.5)} L{f(cx - 6.5)} {f(cy + 8.5)} Z', fill='#FFFFFF', stroke=SLATE, sw=1.6)
+        for dy_ in (-1, 3.5):
+            line(cx - 3, cy + dy_, cx + 3.5, cy + dy_, SLATE, 1.5)
+
+
 # ================================================================ canvas
 add(f'<svg xmlns="http://www.w3.org/2000/svg" width="180mm" height="{H / 10:.1f}mm" viewBox="0 0 {W} {H}" '
     f'font-family="{FONT}">')
@@ -565,26 +582,7 @@ rect(0, 0, W, H, fill='#FFFFFF')
 group('panel-a')
 panel_title(A_X[0] + 2, TITLE_Y, 'a', ['LLM agent operates AutoZT'])
 panel(A_X[0], A_X[1], TOP, ROW_BOT)
-text(A_X[0] + 22, TOP + 34, 'Coding agents', FS_S, PURPLE, bold=True)
-AGENTS = [[('deepseek', 'DeepSeek'), ('kimi', 'Kimi'), ('glm', 'GLM')],
-          [('claude', 'Claude'), ('chatgpt', 'ChatGPT'), (None, '…')]]
-LG = 30                          # logo box; the name starts 8 units to its right
-col_w = [max(LG + 8 + tw(lab, FS_S, True) if key else LG for key, lab in col) for col in zip(*AGENTS)]
-gx0, gx1 = A_X[0] + 22, A_X[1] - 22
-gut = (gx1 - gx0 - sum(col_w)) / (len(col_w) - 1)
-for r_, row in enumerate(AGENTS):
-    gy = TOP + 48 + r_ * 44
-    for c_, (key, lab) in enumerate(row):
-        gx = gx0 + sum(col_w[:c_]) + c_ * gut
-        if key:
-            logo(key, gx, gy, LG)
-            text(gx + LG + 8, gy + LG / 2 + FS_S * 0.36, lab, FS_S, INK, bold=True)
-        else:
-            text(gx + LG / 2, gy + LG / 2 + FS_S * 0.36, '…', FS_H, MUTED, bold=True, anchor='middle')
-
 CH_X0, CH_X1 = A_X[0] + 14, A_X[1] - 14
-CH_Y0, CH_Y1 = TOP + 142, ROW_BOT - 14
-rect(CH_X0, CH_Y0, CH_X1 - CH_X0, CH_Y1 - CH_Y0, rx=14, fill=LAV)
 AV_X = CH_X0 + 22
 CARD_X0, CARD_X1 = CH_X0 + 42, CH_X1 - 8
 USER_X1, USER_AV = CH_X1 - 42, CH_X1 - 20
@@ -621,16 +619,40 @@ def say(y, runs):
     rich(IX0 + 4, y, runs if isinstance(runs, list) else [runs], FS_B, INK, bold=True)
 
 
-H_MSG = [32, 10 + TB + 76 + 24 + 12, 10 + TB + 36, 10 + TB + 36]
-# the "Submitted" card (message 3) sits level with the automation loop in b, so the arrows run flat
-G1 = ((AS[2] + AS[3]) / 2 - H_MSG[2] / 2 - (CH_Y0 + 12) - H_MSG[0] - H_MSG[1]) / 2
+# the chat opens with the agent itself (any coding agent), then request, plan, submit and report
+H_MSG = [112, 32, 10 + TB + 76 + 24 + 12, 10 + TB + 36, 10 + TB + 36]
+CH_Y0 = TOP + 12
+# the "Submitted" card sits level with the automation loop in b, so the arrows between a and b run flat
+G1 = ((AS[2] + AS[3]) / 2 - H_MSG[3] / 2 - (CH_Y0 + 12) - sum(H_MSG[:3])) / 3
 ys = [CH_Y0 + 12]
 for h_ in H_MSG[:-1]:
     ys.append(ys[-1] + h_ + G1)
+CH_Y1 = ys[-1] + H_MSG[-1] + 12
+rect(CH_X0, CH_Y0, CH_X1 - CH_X0, CH_Y1 - CH_Y0, rx=14, fill=LAV)
+# one thread through the robots: every agent message comes from the agent named in the first card
+line(AV_X, ys[0] + 22, AV_X, ys[-1] + 22, '#C9C0E4', 2.4)
+# 0 the agent: any coding agent
+y = ys[0]
+agent_card(y, H_MSG[0])
+text(IX0 + 4, y + 26, 'Coding agents', FS_S, PURPLE, bold=True)
+AGENTS = [[('deepseek', 'DeepSeek'), ('kimi', 'Kimi'), ('glm', 'GLM')],
+          [('claude', 'Claude'), ('chatgpt', 'ChatGPT'), (None, '…')]]
+LG = 28                          # logo box; the name starts 8 units to its right
+col_w = [max(LG + 8 + tw(lab, FS_S, True) if key else LG for key, lab in col) for col in zip(*AGENTS)]
+gut = (IX1 - IX0 - 8 - sum(col_w)) / (len(col_w) - 1)
+for r_, row in enumerate(AGENTS):
+    gy = y + 38 + r_ * 36
+    for c_, (key, lab) in enumerate(row):
+        gx = IX0 + 4 + sum(col_w[:c_]) + c_ * gut
+        if key:
+            logo(key, gx, gy, LG)
+            text(gx + LG + 8, gy + LG / 2 + FS_S * 0.36, lab, FS_S, INK, bold=True)
+        else:
+            text(gx + LG / 2, gy + LG / 2 + FS_S * 0.36, '…', FS_H, MUTED, bold=True, anchor='middle')
 # 1 user asks in plain language
-user_msg(ys[0], ['Compute '] + ZT + [' for this 2D POSCAR.'])
+user_msg(ys[1], ['Compute '] + ZT + [' for this 2D POSCAR.'])
 # 2 agent: discover, plan, dry run; the user approves the plan
-y = ys[1]
+y = ys[2]
 agent_card(y, H_MSG[1])
 yy = tool_row(y + 10, ['Discovery', 'Planning', 'Dry run'])
 say(yy + 26, 'Plan ready. Proceed?')
@@ -643,26 +665,29 @@ for num, lab, col in [('1', 'structure', GREEN), ('2', 'electrons', BLUE), ('3',
     text(x + 11, yy + 51.5 + FS_XS * 0.36, num, FS_XS, '#FFFFFF', bold=True, anchor='middle')
     rich(x + 24, yy + 51.5 + FS_XS * 0.36, runs, FS_XS, INK, bold=True)
     x += wd + 6
-pill_button(IX0 + 4, yy + 76, 100, 'Proceed', PURPLE, '#FFFFFF')
-cursor(IX0 + 4 + 89, yy + 84, s=0.7)  # tip right of the label, so no letter is hidden
+pill_button(IX1 - 104, yy + 76, 100, 'Proceed', PURPLE, '#FFFFFF')
+cursor(IX1 - 104 + 89, yy + 84, s=0.7)  # tip right of the label, so no letter is hidden
 # 3 agent: submit; AutoZT now runs the workflow by itself
-y = ys[2]
-Y_MID = y + H_MSG[2] / 2
-agent_card(y, H_MSG[2])
+y = ys[3]
+Y_MID = y + H_MSG[3] / 2
+agent_card(y, H_MSG[3])
 yy = tool_row(y + 10, ['Execution'])
 say(yy + 25, 'Submitted; AutoZT runs the jobs.')
 # 4 agent: report
-y = ys[3]
-agent_card(y, H_MSG[3])
+y = ys[4]
+agent_card(y, H_MSG[4])
 yy = tool_row(y + 10, ['Reporting'])
 say(yy + 25, ZTNT + [' is ready.'])
-# the chat closes with its input bar, as in any agent app
-IB_X0, IB_X1, IB_H = CH_X0 + 12, CH_X1 - 12, 40
-iby = CH_Y1 - 12 - IB_H
-rect(IB_X0, iby, IB_X1 - IB_X0, IB_H, rx=IB_H / 2, fill='#FFFFFF', stroke=LAV_LINE, sw=1.6)
-text(IB_X0 + 20, iby + IB_H / 2 + FS_S * 0.36, 'Ask the agent…', FS_S, FAINT)
-circle(IB_X1 - 22, iby + IB_H / 2, 14, fill=PURPLE)
-arrow([(IB_X1 - 22, iby + IB_H / 2 + 7), (IB_X1 - 22, iby + IB_H / 2 - 8)], '#FFFFFF', sw=2.6, head=8)
+# what AutoZT guarantees whichever agent drives it
+SG_Y0 = CH_Y1 + 12
+rect(CH_X0, SG_Y0, CH_X1 - CH_X0, ROW_BOT - 14 - SG_Y0, rx=14, fill='#FFFFFF', stroke=LAV_LINE, sw=1.6)
+text(CH_X0 + 18, SG_Y0 + 28, 'Safeguards', FS_S, PURPLE, bold=True)
+for k, (kind, runs) in enumerate([('gate', [('Physical gates', {'b': True}), ' decide, not the model']),
+                                  ('lock', [('Destructive steps', {'b': True}), ' need user approval']),
+                                  ('doc', [('Every action', {'b': True}), ' is logged for audit'])]):
+    cy = SG_Y0 + 56 + k * 28
+    mini_icon(kind, CH_X0 + 30, cy)
+    rich(CH_X0 + 52, cy + FS_S * 0.36, runs, FS_S, INK)
 end()
 
 # ================================================================ b: AutoZT, from POSCAR to zT(n, T)
@@ -884,15 +909,22 @@ rich(RX0 + 52, ry, [('Bulk', {'b': True}), ': standard path'], FS_B, INK)
 x2d = RX0 + 52 + rich_w([('Bulk', {'b': True}), ': standard path'], FS_B) + 70
 chip(x2d, ry - 19, 40, 26, '2D', GREEN, '#FFFFFF')
 rich(x2d + 52, ry, [('Slab', {'b': True}), ': same path, plus'], FS_B, GREEN)
+rich(R_X[1] - 24, ry, [('Dimension', {'b': True, 'fill': GREEN}), ' auto-detected: ≥ 8 Å vacuum along one axis'],
+     FS_S, MUTED, anchor='end')
 EPS2D = [('ε', {'i': True}), ('2D', {'sub': True})]
 GROUPS = [
     (['Structure'], INK, [[('Vacuum', {'b': True}), ' along ', ('c', {'i': True})],
-                          [('Relaxation', {'b': True}), ' in-plane']]),
+                          [('Relaxation', {'b': True}), ' in-plane'],
+                          [('k-mesh', {'b': True}), ' 1 along ', ('c', {'i': True})],
+                          [('Thickness', {'b': True}), ' ', ('t', {'i': True}), ' from vdW radii']]),
     (['Electrons'], BLUE_TX, [[('Elastic constant', {'b': True}), ' in N m', ('−1', {'sup': True})],
                               [('Dielectric', {'b': True}), ' without vacuum'],
                               [('Deformation ', {'b': True}), ('E', {'b': True, 'i': True}), ('1', {'sub': True, 'b': True}),
-                               ' vs vacuum']]),
-    (['Phonons'], ORANGE_TX, [[('NAC', {'b': True}), ' off'], [('ZA branch', {'b': True}), ' quadratic']]),
+                               ' vs vacuum'],
+                              [('Scattering', {'b': True}), ' with 2D kernels']]),
+    (['Phonons'], ORANGE_TX, [[('NAC', {'b': True}), ' off'], [('ZA branch', {'b': True}), ' quadratic'],
+                              [('Supercell', {'b': True}), ' 1 along ', ('c', {'i': True})],
+                              [('Rotational sum rules', {'b': True}), ' on']]),
     (ZT + [' inputs'], CRIMSON, [[('σ', {'i': True, 'b': True}), (', ', {'b': True}), ('κ', {'i': True, 'b': True}),
                                   ('e', {'sub': True, 'b': True}), (', ', {'b': True}), ('κ', {'i': True, 'b': True}),
                                   ('L', {'sub': True, 'b': True}), ' × ', ('c', {'i': True}), ' / ', ('t', {'i': True})]]),
@@ -911,12 +943,12 @@ rect(fgx, fy0, GCW - 26, 54, rx=10, fill='#F3FAF6', stroke=GREEN, sw=2)
 rich(fgx + (GCW - 26) / 2, fy0 + 35, EPS2D + [' = 1 + (', ('c', {'i': True}), ' / ', ('t', {'i': True}), ') (',
                                                ('ε', {'i': True}), ('slab', {'sub': True}), ' − 1)'],
      FS_B, INK, anchor='middle')
-rich(fgx, fy0 + 82, [('t', {'i': True}), ': van der Waals thickness'], FS_XS, MUTED)
+rich(fgx, gy0 + 38 + 3 * 34, [('zT', {'i': True, 'b': True}), ' independent of ', ('t', {'i': True})], FS_B, CRIMSON)
 end()
 
 add('</svg>')
 dst = sys.argv[1] if len(sys.argv) > 1 else os.path.join(HERE, 'fig1_autozt_overview_npj.svg')
 with open(dst, 'w') as fh:
     fh.write('\n'.join(out) + '\n')
-print(f'wrote {dst}: H {H}, chat gap {G1:.1f}, space above the input bar {iby - ys[-1] - H_MSG[-1]:.0f}, '
+print(f'wrote {dst}: H {H}, chat gap {G1:.1f}, safeguards card height {ROW_BOT - 14 - SG_Y0:.0f}, '
       f'Submitted card centre {Y_MID:.0f} vs automation loop centre {(AS[2] + AS[3]) / 2:.0f}')
