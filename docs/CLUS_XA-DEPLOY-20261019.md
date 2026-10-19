@@ -12,6 +12,24 @@
 | 账户配额 | 并发 **320 核**（`-N 5` 通过，512 核报 group max tres limit） |
 | 存储 | `/work` 43 PB、`/public` 554 TB；家目录 `/work/home/wangchao217` |
 
+### 1.1 并发与限额（2026-10-19 实测）
+
+| 项目 | 值 | 依据 |
+|---|---|---|
+| 同时最大核数 | **320 核**（账户级 GrpTRES cpu=320） | `-N 5 -n 320` 通过；`-N 8 -n 512` 报 `group max tres limit 320 for account wangchao217` |
+| 单作业最大核数 | **320 核** | 同上 |
+| 节点规格 | 64 核 / 255 GB（默认 3.8 GB/核） | `scontrol show partition xahctest`：`TotalCPUs=27712 TotalNodes=433` |
+| 最大整节点数 | **5 个**（320 / 64） | 账户并发上限换算 |
+| 同时任务数 | **无 per-user 限制** | QOS/账户 `MaxJobsPU`、`MaxSubmitPU` 为空；实测 37 个 1 核任务并存 |
+| 单作业时长 | 最长 **3 天** | `MaxTime=3-00:00:00` |
+| 分区 MaxNodes | UNLIMITED（受 320 核额度约束） | `scontrol show partition` |
+
+按每任务核数换算的并发任务数：1 核 → 320 个；8 核 → 40；16 核 → 20；32 核 → 10；**64 核（整节点）→ 5 个**。
+
+> 实测注意：整节点（64 核）作业必须等**完全空闲**的节点；2026-10-19 分区只有约 652 空闲核
+> （`alloc 26690 / idle 652`）时，同时提 6 个整节点作业只有 1 个立刻 RUNNING，其余
+> `PENDING (Resources)`。想更快排上建议用 32 核左右的任务，或先 `sinfo -p xahctest` 看空闲节点。
+
 ## 2. 远端目录（`~/software/AutoZT/`，约 1.5 G）
 
 ```
