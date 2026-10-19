@@ -1,0 +1,211 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="2000" height="1440" viewBox="0 0 2000 1440" font-family="Arial, Helvetica, 'Liberation Sans', sans-serif">
+<defs>
+<marker id="m-ink" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="12" markerHeight="12" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path d="M0,0.5 L10,5 L0,9.5 z" fill="#3a4654"/></marker>
+<marker id="m-blue" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="12" markerHeight="12" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path d="M0,0.5 L10,5 L0,9.5 z" fill="#2f5fa7"/></marker>
+<marker id="m-orange" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="12" markerHeight="12" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path d="M0,0.5 L10,5 L0,9.5 z" fill="#b8660f"/></marker>
+<marker id="m-green" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="12" markerHeight="12" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path d="M0,0.5 L10,5 L0,9.5 z" fill="#238266"/></marker>
+<marker id="m-purple" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="12" markerHeight="12" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path d="M0,0.5 L10,5 L0,9.5 z" fill="#5b3fa0"/></marker>
+<marker id="m-crimson" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="12" markerHeight="12" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path d="M0,0.5 L10,5 L0,9.5 z" fill="#b8244a"/></marker>
+</defs>
+<rect width="2000" height="1440" fill="#ffffff"/>
+<text x="34" y="58" font-size="40" font-weight="700" fill="#1d2733">a</text>
+<text x="76" y="58" font-size="30" font-weight="700" fill="#1d2733">LLM operates AutoZT through MCP / CLI</text>
+<rect x="34" y="84" width="666" height="772" rx="16" fill="#f7f8fa" stroke="#d6dce3" stroke-width="2"/>
+<text x="58" y="128" font-size="26" font-weight="700" fill="#5b3fa0">Coding agent session</text>
+<rect x="54" y="146" width="626" height="692" rx="18" fill="#efebf9"/>
+<rect x="350" y="162" width="262" height="36" rx="18" fill="#f6e6f0"/>
+<text x="366" y="186" font-size="16" fill="#1d2733"><tspan>Compute </tspan><tspan font-style="italic">zT</tspan><tspan> for this 2D POSCAR.</tspan></text>
+<g transform="translate(642,182)" fill="#1d2733"><circle cx="0" cy="-7" r="7"/><path d="M-12 12 C-12 2 12 2 12 12 Z"/></g>
+<g transform="translate(80,234)"><line x1="0" y1="-16" x2="0" y2="-10" stroke="#1d2733" stroke-width="2.4" stroke-linecap="round"/><circle cx="0" cy="-17" r="2.6" fill="#1d2733"/><rect x="-15" y="-10" width="30" height="22" rx="6" fill="#1d2733"/><rect x="-19" y="-3" width="4" height="9" rx="1.5" fill="#1d2733"/><rect x="15" y="-3" width="4" height="9" rx="1.5" fill="#1d2733"/><rect x="-8" y="-3" width="5" height="6" rx="1.2" fill="#fff"/><rect x="3" y="-3" width="5" height="6" rx="1.2" fill="#fff"/></g>
+<rect x="108" y="212" width="556" height="276" rx="12" fill="#ffffff" stroke="#d8d0ee" stroke-width="1.4"/>
+<rect x="116" y="220" width="540" height="82" rx="8" fill="#f4f1fb"/>
+<rect x="124" y="228" width="76" height="20" rx="10" fill="#f8e0d1"/><text x="162.0" y="242.5" font-size="11.5" font-weight="700" text-anchor="middle" fill="#7a3413">Discovery</text><rect x="206" y="228" width="40" height="20" rx="10" fill="#5b3fa0"/><text x="226.0" y="242.5" font-size="11.5" font-weight="700" text-anchor="middle" fill="#ffffff">MCP</text><rect x="250" y="228" width="34" height="20" rx="10" fill="#3a4654"/><text x="267.0" y="242.5" font-size="11.5" font-weight="700" text-anchor="middle" fill="#ffffff">CLI</text><text x="294" y="243" font-size="13" fill="#24313a" font-family="'DejaVu Sans Mono', Menlo, Consolas, monospace">list_skills, describe_skill, check_env</text>
+<rect x="124" y="252" width="76" height="20" rx="10" fill="#f8e0d1"/><text x="162.0" y="266.5" font-size="11.5" font-weight="700" text-anchor="middle" fill="#7a3413">Planning</text><rect x="206" y="252" width="40" height="20" rx="10" fill="#5b3fa0"/><text x="226.0" y="266.5" font-size="11.5" font-weight="700" text-anchor="middle" fill="#ffffff">MCP</text><rect x="250" y="252" width="34" height="20" rx="10" fill="#3a4654"/><text x="267.0" y="266.5" font-size="11.5" font-weight="700" text-anchor="middle" fill="#ffffff">CLI</text><text x="294" y="267" font-size="13" fill="#24313a" font-family="'DejaVu Sans Mono', Menlo, Consolas, monospace">research_plan, preflight</text>
+<rect x="124" y="276" width="76" height="20" rx="10" fill="#f8e0d1"/><text x="162.0" y="290.5" font-size="11.5" font-weight="700" text-anchor="middle" fill="#7a3413">Execution</text><rect x="206" y="276" width="40" height="20" rx="10" fill="#5b3fa0"/><text x="226.0" y="290.5" font-size="11.5" font-weight="700" text-anchor="middle" fill="#ffffff">MCP</text><rect x="250" y="276" width="34" height="20" rx="10" fill="#3a4654"/><text x="267.0" y="290.5" font-size="11.5" font-weight="700" text-anchor="middle" fill="#ffffff">CLI</text><text x="294" y="291" font-size="13" fill="#24313a" font-family="'DejaVu Sans Mono', Menlo, Consolas, monospace">cycle (dry run)</text>
+<text x="124" y="326" font-size="16" fill="#1d2733">Here is the plan; the dry run is clean. Proceed?</text>
+<rect x="124" y="340" width="528" height="136" rx="10" fill="#ffffff" stroke="#cfc6ea" stroke-width="1.4"/>
+<text x="138" y="364" font-size="15" font-weight="700" fill="#1d2733">2D thermoelectric zT workflow</text>
+<rect x="138" y="376" width="240" height="26" rx="13" fill="#ffffff" stroke="#cfc6ea" stroke-width="1.3"/>
+<circle cx="152" cy="389" r="9" fill="#5b3fa0"/>
+<text x="152" y="393.5" font-size="12" font-weight="700" text-anchor="middle" fill="#fff">1</text>
+<text x="168" y="394" font-size="14" fill="#1d2733">structure</text>
+<rect x="392" y="376" width="240" height="26" rx="13" fill="#ffffff" stroke="#cfc6ea" stroke-width="1.3"/>
+<circle cx="406" cy="389" r="9" fill="#5b3fa0"/>
+<text x="406" y="393.5" font-size="12" font-weight="700" text-anchor="middle" fill="#fff">2</text>
+<text x="422" y="394" font-size="14" fill="#1d2733">electronic transport</text>
+<rect x="138" y="408" width="240" height="26" rx="13" fill="#ffffff" stroke="#cfc6ea" stroke-width="1.3"/>
+<circle cx="152" cy="421" r="9" fill="#5b3fa0"/>
+<text x="152" y="425.5" font-size="12" font-weight="700" text-anchor="middle" fill="#fff">3</text>
+<text x="168" y="426" font-size="14" fill="#1d2733">lattice transport</text>
+<rect x="392" y="408" width="240" height="26" rx="13" fill="#ffffff" stroke="#cfc6ea" stroke-width="1.3"/>
+<circle cx="406" cy="421" r="9" fill="#5b3fa0"/>
+<text x="406" y="425.5" font-size="12" font-weight="700" text-anchor="middle" fill="#fff">4</text>
+<text x="422" y="426" font-size="14" fill="#1d2733">combine</text>
+<rect x="552" y="444" width="92" height="26" rx="13" fill="#5b3fa0"/>
+<text x="598" y="462" font-size="14" font-weight="700" text-anchor="middle" fill="#fff">Proceed</text>
+<path d="M628 456 L628 476 L633 471 L637 480 L641 478 L637 469 L644 469 Z" fill="#ffffff" stroke="#1d2733" stroke-width="1.4" stroke-linejoin="round"/>
+<g transform="translate(80,522)"><line x1="0" y1="-16" x2="0" y2="-10" stroke="#1d2733" stroke-width="2.4" stroke-linecap="round"/><circle cx="0" cy="-17" r="2.6" fill="#1d2733"/><rect x="-15" y="-10" width="30" height="22" rx="6" fill="#1d2733"/><rect x="-19" y="-3" width="4" height="9" rx="1.5" fill="#1d2733"/><rect x="15" y="-3" width="4" height="9" rx="1.5" fill="#1d2733"/><rect x="-8" y="-3" width="5" height="6" rx="1.2" fill="#fff"/><rect x="3" y="-3" width="5" height="6" rx="1.2" fill="#fff"/></g>
+<rect x="108" y="500" width="556" height="72" rx="12" fill="#ffffff" stroke="#d8d0ee" stroke-width="1.4"/>
+<rect x="124" y="510" width="76" height="20" rx="10" fill="#f8e0d1"/><text x="162.0" y="524.5" font-size="11.5" font-weight="700" text-anchor="middle" fill="#7a3413">Execution</text><rect x="206" y="510" width="40" height="20" rx="10" fill="#5b3fa0"/><text x="226.0" y="524.5" font-size="11.5" font-weight="700" text-anchor="middle" fill="#ffffff">MCP</text><rect x="250" y="510" width="34" height="20" rx="10" fill="#3a4654"/><text x="267.0" y="524.5" font-size="11.5" font-weight="700" text-anchor="middle" fill="#ffffff">CLI</text><text x="294" y="525" font-size="13" fill="#24313a" font-family="'DejaVu Sans Mono', Menlo, Consolas, monospace">register_material · cycle · get_progress</text>
+<text x="124" y="558" font-size="16" fill="#1d2733">Submitted. AutoZT advances and resumes the jobs.</text>
+<rect x="416" y="584" width="196" height="36" rx="18" fill="#f6e6f0"/>
+<text x="432" y="608" font-size="16" fill="#1d2733"><tspan>Rerun the deformation.</tspan></text>
+<g transform="translate(642,604)" fill="#1d2733"><circle cx="0" cy="-7" r="7"/><path d="M-12 12 C-12 2 12 2 12 12 Z"/></g>
+<g transform="translate(80,654)"><line x1="0" y1="-16" x2="0" y2="-10" stroke="#1d2733" stroke-width="2.4" stroke-linecap="round"/><circle cx="0" cy="-17" r="2.6" fill="#1d2733"/><rect x="-15" y="-10" width="30" height="22" rx="6" fill="#1d2733"/><rect x="-19" y="-3" width="4" height="9" rx="1.5" fill="#1d2733"/><rect x="15" y="-3" width="4" height="9" rx="1.5" fill="#1d2733"/><rect x="-8" y="-3" width="5" height="6" rx="1.2" fill="#fff"/><rect x="3" y="-3" width="5" height="6" rx="1.2" fill="#fff"/></g>
+<rect x="108" y="632" width="556" height="110" rx="12" fill="#ffffff" stroke="#d8d0ee" stroke-width="1.4"/>
+<rect x="124" y="642" width="76" height="20" rx="10" fill="#fbe3ea"/><text x="162.0" y="656.5" font-size="11.5" font-weight="700" text-anchor="middle" fill="#a3214f">Approval</text><rect x="206" y="642" width="40" height="20" rx="10" fill="#5b3fa0"/><text x="226.0" y="656.5" font-size="11.5" font-weight="700" text-anchor="middle" fill="#ffffff">MCP</text><rect x="250" y="642" width="34" height="20" rx="10" fill="#3a4654"/><text x="267.0" y="656.5" font-size="11.5" font-weight="700" text-anchor="middle" fill="#ffffff">CLI</text><text x="294" y="657" font-size="13" fill="#24313a" font-family="'DejaVu Sans Mono', Menlo, Consolas, monospace">request_destructive_action</text>
+<text x="124" y="690" font-size="16" fill="#1d2733">This deletes its folder. Approve?</text>
+<rect x="466" y="672" width="82" height="26" rx="13" fill="#b8244a"/>
+<text x="507" y="690" font-size="14" font-weight="700" text-anchor="middle" fill="#fff">Approve</text>
+<rect x="556" y="672" width="82" height="26" rx="13" fill="#ffffff" stroke="#b8244a" stroke-width="1.6"/>
+<text x="597" y="690" font-size="14" font-weight="700" text-anchor="middle" fill="#b8244a">Deny</text>
+<rect x="140" y="712" width="40" height="20" rx="10" fill="#5b3fa0"/><text x="160.0" y="726.5" font-size="11.5" font-weight="700" text-anchor="middle" fill="#ffffff">MCP</text><rect x="184" y="712" width="34" height="20" rx="10" fill="#3a4654"/><text x="201.0" y="726.5" font-size="11.5" font-weight="700" text-anchor="middle" fill="#ffffff">CLI</text><text x="228" y="727" font-size="13" fill="#24313a" font-family="'DejaVu Sans Mono', Menlo, Consolas, monospace">approve_request</text>
+<g transform="translate(80,776)"><line x1="0" y1="-16" x2="0" y2="-10" stroke="#1d2733" stroke-width="2.4" stroke-linecap="round"/><circle cx="0" cy="-17" r="2.6" fill="#1d2733"/><rect x="-15" y="-10" width="30" height="22" rx="6" fill="#1d2733"/><rect x="-19" y="-3" width="4" height="9" rx="1.5" fill="#1d2733"/><rect x="15" y="-3" width="4" height="9" rx="1.5" fill="#1d2733"/><rect x="-8" y="-3" width="5" height="6" rx="1.2" fill="#fff"/><rect x="3" y="-3" width="5" height="6" rx="1.2" fill="#fff"/></g>
+<rect x="108" y="754" width="556" height="72" rx="12" fill="#ffffff" stroke="#d8d0ee" stroke-width="1.4"/>
+<rect x="124" y="764" width="76" height="20" rx="10" fill="#f8e0d1"/><text x="162.0" y="778.5" font-size="11.5" font-weight="700" text-anchor="middle" fill="#7a3413">Reporting</text><rect x="206" y="764" width="40" height="20" rx="10" fill="#5b3fa0"/><text x="226.0" y="778.5" font-size="11.5" font-weight="700" text-anchor="middle" fill="#ffffff">MCP</text><rect x="250" y="764" width="34" height="20" rx="10" fill="#3a4654"/><text x="267.0" y="778.5" font-size="11.5" font-weight="700" text-anchor="middle" fill="#ffffff">CLI</text><text x="294" y="779" font-size="13" fill="#24313a" font-family="'DejaVu Sans Mono', Menlo, Consolas, monospace">results · task_graph</text>
+<text x="124" y="812" font-size="16" fill="#1d2733"><tspan font-style="italic">zT</tspan><tspan>(</tspan><tspan font-style="italic">n</tspan><tspan>, </tspan><tspan font-style="italic">T</tspan><tspan>) is ready, with units and provenance.</tspan></text>
+<rect x="730" y="180" width="466" height="312" rx="26" fill="#efebf9"/>
+<path d="M945 491 L963 516 L981 491 Z" fill="#efebf9"/>
+<text x="963" y="230" font-size="27" font-weight="700" text-anchor="middle" fill="#5b3fa0">Coding Agents</text>
+<circle cx="823" cy="296" r="30" fill="#d97757"/>
+<text x="823" y="306" font-size="28" font-weight="700" text-anchor="middle" fill="#ffffff">C</text>
+<text x="823" y="352" font-size="16" text-anchor="middle" fill="#1d2733">Claude</text>
+<circle cx="963" cy="296" r="30" fill="#10a37f"/>
+<text x="963" y="306" font-size="28" font-weight="700" text-anchor="middle" fill="#ffffff">G</text>
+<text x="963" y="352" font-size="16" text-anchor="middle" fill="#1d2733">ChatGPT</text>
+<circle cx="1103" cy="296" r="30" fill="#4d6bfe"/>
+<text x="1103" y="306" font-size="28" font-weight="700" text-anchor="middle" fill="#ffffff">D</text>
+<text x="1103" y="352" font-size="16" text-anchor="middle" fill="#1d2733">DeepSeek</text>
+<circle cx="823" cy="414" r="30" fill="#1d2733"/>
+<text x="823" y="424" font-size="28" font-weight="700" text-anchor="middle" fill="#ffffff">K</text>
+<text x="823" y="470" font-size="16" text-anchor="middle" fill="#1d2733">Kimi</text>
+<circle cx="963" cy="414" r="30" fill="#3156d3"/>
+<text x="963" y="424" font-size="28" font-weight="700" text-anchor="middle" fill="#ffffff">Z</text>
+<text x="963" y="470" font-size="16" text-anchor="middle" fill="#1d2733">GLM</text>
+<circle cx="1103" cy="414" r="30" fill="#ffffff" stroke="#b9aee0" stroke-width="2" stroke-dasharray="5 5"/>
+<text x="1103" y="423" font-size="28" font-weight="700" text-anchor="middle" fill="#5b6673">…</text>
+<rect x="919" y="536" width="88" height="60" rx="14" fill="#1d2733"/>
+<rect x="937" y="554" width="20" height="22" rx="4" fill="#ffffff"/>
+<rect x="969" y="554" width="20" height="22" rx="4" fill="#ffffff"/>
+<rect x="954" y="596" width="18" height="14" rx="0" fill="#1d2733"/>
+<line x1="1081" y1="642" x2="1160" y2="560" stroke="#1d2733" stroke-width="6" stroke-linecap="round"/>
+<g transform="translate(1160,560) rotate(-46.06749968374021)"><path d="M0 0 C6 -14 18 -20 30 -18 C36 -17 40 -12 38 -8" fill="none" stroke="#1d2733" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"/><path d="M0 0 C6 -14 18 -20 30 -18 C36 -17 40 -12 38 -8" fill="none" stroke="#ffffff" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/><path d="M0 0 C6 14 18 20 30 18 C36 17 40 12 38 8" fill="none" stroke="#1d2733" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"/><path d="M0 0 C6 14 18 20 30 18 C36 17 40 12 38 8" fill="none" stroke="#ffffff" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/></g>
+<circle cx="1081" cy="642" r="9" fill="#ffffff" stroke="#1d2733" stroke-width="3.2"/>
+<circle cx="1160" cy="560" r="9" fill="#ffffff" stroke="#1d2733" stroke-width="3.2"/>
+<line x1="1081" y1="704" x2="1160" y2="772" stroke="#1d2733" stroke-width="6" stroke-linecap="round"/>
+<g transform="translate(1160,772) rotate(40.72053646975478)"><path d="M0 0 C6 -14 18 -20 30 -18 C36 -17 40 -12 38 -8" fill="none" stroke="#1d2733" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"/><path d="M0 0 C6 -14 18 -20 30 -18 C36 -17 40 -12 38 -8" fill="none" stroke="#ffffff" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/><path d="M0 0 C6 14 18 20 30 18 C36 17 40 12 38 8" fill="none" stroke="#1d2733" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"/><path d="M0 0 C6 14 18 20 30 18 C36 17 40 12 38 8" fill="none" stroke="#ffffff" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/></g>
+<circle cx="1081" cy="704" r="9" fill="#ffffff" stroke="#1d2733" stroke-width="3.2"/>
+<circle cx="1160" cy="772" r="9" fill="#ffffff" stroke="#1d2733" stroke-width="3.2"/>
+<rect x="845" y="610" width="236" height="124" rx="18" fill="#ffffff" stroke="#1d2733" stroke-width="5"/>
+<text x="963" y="688" font-size="46" font-weight="700" text-anchor="middle" fill="#1d2733">AutoZT</text>
+<text x="1236" y="58" font-size="40" font-weight="700" fill="#1d2733">b</text>
+<text x="1278" y="58" font-size="30" font-weight="700" fill="#1d2733">Workflow skills and computational engines</text>
+<rect x="1236" y="84" width="730" height="772" rx="16" fill="#f7f8fa" stroke="#d6dce3" stroke-width="2"/>
+<rect x="1262" y="131" width="678" height="340" rx="16" fill="#eef7f2" stroke="#238266" stroke-width="2"/>
+<text x="1284" y="171" font-size="23" font-weight="700" fill="#238266">Workflow skills</text>
+<rect x="1284" y="191" width="306" height="82" rx="12" fill="#edf3fc" stroke="#2f5fa7" stroke-width="2.6"/>
+<text x="1437" y="227" font-size="23" font-weight="700" text-anchor="middle" fill="#2f5fa7">ke-dft-cpu</text>
+<text x="1437" y="255" font-size="16" text-anchor="middle" fill="#24313a"><tspan>electrons: σ, S, κ</tspan><tspan dy="4.8" font-size="10.6">e</tspan></text>
+<rect x="1612" y="191" width="306" height="82" rx="12" fill="#fdf3e7" stroke="#b8660f" stroke-width="2.6"/>
+<text x="1765" y="227" font-size="23" font-weight="700" text-anchor="middle" fill="#b8660f">kl-dft-cpu</text>
+<text x="1765" y="255" font-size="16" text-anchor="middle" fill="#24313a"><tspan>phonons: κ</tspan><tspan dy="4.8" font-size="10.6">L</tspan></text>
+<rect x="1308" y="297" width="258" height="54" rx="10" fill="#ffffff" stroke="#8fb9a5" stroke-width="1.8"/>
+<text x="1437" y="331" font-size="17" text-anchor="middle" fill="#24313a">band-dft-cpu</text>
+<rect x="1636" y="297" width="258" height="54" rx="10" fill="#ffffff" stroke="#8fb9a5" stroke-width="1.8"/>
+<text x="1765" y="331" font-size="17" text-anchor="middle" fill="#24313a">phonon-dft-cpu</text>
+<rect x="1308" y="371" width="258" height="54" rx="10" fill="#ffffff" stroke="#8fb9a5" stroke-width="1.8"/>
+<text x="1437" y="405" font-size="17" text-anchor="middle" fill="#24313a">fit-fc-thermal</text>
+<rect x="1636" y="371" width="258" height="54" rx="10" fill="#ffffff" stroke="#8fb9a5" stroke-width="1.8" stroke-dasharray="6 5"/>
+<text x="1765" y="406" font-size="24" font-weight="700" text-anchor="middle" fill="#5b6673">…</text>
+<rect x="1262" y="509" width="678" height="300" rx="16" fill="#eff1f4" stroke="#5b6673" stroke-width="2"/>
+<text x="1284" y="549" font-size="23" font-weight="700" fill="#1d2733">Computational engines</text>
+<rect x="1284" y="571" width="202" height="90" rx="10" fill="#ffffff" stroke="#a3adb8" stroke-width="1.8"/>
+<text x="1385" y="615" font-size="21" font-weight="700" text-anchor="middle" fill="#1d2733">VASP</text>
+<text x="1385" y="641" font-size="15" font-weight="700" text-anchor="middle" fill="#1f8a7a">CPU / GPU</text>
+<rect x="1500" y="571" width="202" height="90" rx="10" fill="#ffffff" stroke="#a3adb8" stroke-width="1.8"/>
+<text x="1601" y="615" font-size="21" font-weight="700" text-anchor="middle" fill="#1d2733">ShengBTE</text>
+<text x="1601" y="641" font-size="15" font-weight="700" text-anchor="middle" fill="#1f8a7a">CPU / GPU</text>
+<rect x="1716" y="571" width="202" height="90" rx="10" fill="#ffffff" stroke="#a3adb8" stroke-width="1.8"/>
+<text x="1817" y="615" font-size="21" font-weight="700" text-anchor="middle" fill="#1d2733">AMSET</text>
+<text x="1817" y="641" font-size="15" font-weight="700" text-anchor="middle" fill="#1f8a7a">CPU</text>
+<rect x="1284" y="683" width="202" height="90" rx="10" fill="#ffffff" stroke="#a3adb8" stroke-width="1.8"/>
+<text x="1385" y="727" font-size="21" font-weight="700" text-anchor="middle" fill="#1d2733">Pheasy</text>
+<text x="1385" y="753" font-size="15" font-weight="700" text-anchor="middle" fill="#1f8a7a">CPU / GPU</text>
+<rect x="1500" y="683" width="202" height="90" rx="10" fill="#ffffff" stroke="#a3adb8" stroke-width="1.8"/>
+<text x="1601" y="727" font-size="21" font-weight="700" text-anchor="middle" fill="#1d2733">phono3py</text>
+<text x="1601" y="753" font-size="15" font-weight="700" text-anchor="middle" fill="#1f8a7a">CPU</text>
+<rect x="1716" y="683" width="202" height="90" rx="10" fill="#ffffff" stroke="#a3adb8" stroke-width="1.8" stroke-dasharray="6 5"/>
+<text x="1817" y="737" font-size="24" font-weight="700" text-anchor="middle" fill="#5b6673">…</text>
+<text x="34" y="914" font-size="40" font-weight="700" fill="#1d2733">c</text>
+<text x="76" y="914" font-size="30" font-weight="700" fill="#1d2733">From POSCAR to zT(n, T)</text>
+<rect x="34" y="940" width="1146" height="480" rx="16" fill="#f7f8fa" stroke="#d6dce3" stroke-width="2"/>
+<text x="118" y="990" font-size="22" font-weight="700" text-anchor="middle" fill="#1d2733">POSCAR</text>
+<path d="M70 1004 H144 L166 1026 V1116 H70 Z" fill="#fff" stroke="#1d2733" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M144 1004 V1026 H166" fill="none" stroke="#1d2733" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+<line x1="118.0" y1="1042.0" x2="137.1" y2="1053.0" stroke="#8aa0c0" stroke-width="2"/>
+<line x1="137.1" y1="1053.0" x2="137.1" y2="1075.0" stroke="#8aa0c0" stroke-width="2"/>
+<line x1="137.1" y1="1075.0" x2="118.0" y2="1086.0" stroke="#8aa0c0" stroke-width="2"/>
+<line x1="118.0" y1="1086.0" x2="98.9" y2="1075.0" stroke="#8aa0c0" stroke-width="2"/>
+<line x1="98.9" y1="1075.0" x2="98.9" y2="1053.0" stroke="#8aa0c0" stroke-width="2"/>
+<line x1="98.9" y1="1053.0" x2="118.0" y2="1042.0" stroke="#8aa0c0" stroke-width="2"/>
+<line x1="118.0" y1="1064.0" x2="118.0" y2="1042.0" stroke="#8aa0c0" stroke-width="2"/>
+<line x1="118.0" y1="1064.0" x2="137.1" y2="1075.0" stroke="#8aa0c0" stroke-width="2"/>
+<line x1="118.0" y1="1064.0" x2="98.9" y2="1075.0" stroke="#8aa0c0" stroke-width="2"/>
+<circle cx="118.0" cy="1042.0" r="5.2" fill="#d9534f"/>
+<circle cx="137.1" cy="1053.0" r="5.2" fill="#3b6fc4"/>
+<circle cx="137.1" cy="1075.0" r="5.2" fill="#d9534f"/>
+<circle cx="118.0" cy="1086.0" r="5.2" fill="#3b6fc4"/>
+<circle cx="98.9" cy="1075.0" r="5.2" fill="#d9534f"/>
+<circle cx="98.9" cy="1053.0" r="5.2" fill="#3b6fc4"/>
+<circle cx="118.0" cy="1064.0" r="5.2" fill="#3b6fc4"/>
+<path d="M118 1118 V1176" fill="none" stroke="#238266" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#m-green)"/>
+<rect x="52" y="1182" width="132" height="88" rx="10" fill="#eef7f2" stroke="#238266" stroke-width="2.5"/>
+<text x="118" y="1218" font-size="21" font-weight="700" text-anchor="middle" fill="#238266">Dimension</text>
+<text x="118" y="1250" font-size="19" text-anchor="middle" fill="#24313a">2D / 3D</text>
+<path d="M184 1226 H222 V1150 H254" fill="none" stroke="#3a4654" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#m-ink)"/>
+<rect x="258" y="1110" width="172" height="80" rx="10" fill="#ffffff" stroke="#1d2733" stroke-width="2.5"/>
+<text x="344" y="1158" font-size="23" font-weight="700" text-anchor="middle" fill="#1d2733">Relaxation</text>
+<g transform="translate(430,1110)"><circle r="13" fill="#3a4654" stroke="#fff" stroke-width="2.5"/><path d="M-5.9 0.5 L-1.3 4.7 L6.5 -4.4" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></g>
+<path d="M430 1138 H468 V1022 H514" fill="none" stroke="#b8660f" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#m-orange)"/>
+<path d="M430 1162 H468 V1278 H514" fill="none" stroke="#2f5fa7" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#m-blue)"/>
+<rect x="518" y="986" width="330" height="72" rx="10" fill="#fdf3e7" stroke="#b8660f" stroke-width="2.5"/>
+<text x="683" y="1031" font-size="24" font-weight="700" text-anchor="middle" fill="#a3570a">Phonon transport</text>
+<g transform="translate(848,986)"><circle r="13" fill="#3a4654" stroke="#fff" stroke-width="2.5"/><path d="M-5.9 0.5 L-1.3 4.7 L6.5 -4.4" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></g>
+<rect x="518" y="1242" width="330" height="72" rx="10" fill="#edf3fc" stroke="#2f5fa7" stroke-width="2.5"/>
+<text x="683" y="1287" font-size="24" font-weight="700" text-anchor="middle" fill="#1f4e9a">Electron transport</text>
+<g transform="translate(848,1242)"><circle r="13" fill="#3a4654" stroke="#fff" stroke-width="2.5"/><path d="M-5.9 0.5 L-1.3 4.7 L6.5 -4.4" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></g>
+<path d="M848 1022 H884 V1130 H916" fill="none" stroke="#b8660f" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#m-orange)"/>
+<path d="M848 1278 H884 V1170 H916" fill="none" stroke="#2f5fa7" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#m-blue)"/>
+<rect x="920" y="1086" width="236" height="128" rx="12" fill="#fcf0f3" stroke="#b8244a" stroke-width="2.5"/>
+<text x="938" y="1160" font-size="30" font-style="italic" fill="#1d2733">zT =</text>
+<text x="1078" y="1136" font-size="30" font-style="italic" text-anchor="middle" fill="#1f4e9a"><tspan>S</tspan><tspan dy="-12.6" font-size="19.8">2</tspan><tspan dy="12.6">σT</tspan></text>
+<path d="M1018 1149 H1140" fill="none" stroke="#1d2733" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="1078" y="1188" font-size="30" font-style="italic" text-anchor="middle" fill="#1d2733"><tspan fill="#1f4e9a">κ</tspan><tspan dy="9.0" font-size="19.8" fill="#1f4e9a">e</tspan><tspan dy="-9.0"> + </tspan><tspan fill="#a3570a">κ</tspan><tspan dy="9.0" font-size="19.8" fill="#a3570a">L</tspan></text>
+<g transform="translate(68,1390)"><circle r="11" fill="#3a4654" stroke="#fff" stroke-width="2.5"/><path d="M-5.0 0.5 L-1.1 4.0 L5.5 -3.7" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></g>
+<text x="88" y="1396" font-size="18" fill="#5b6673">consistency checks</text>
+<text x="1236" y="914" font-size="40" font-weight="700" fill="#1d2733">d</text>
+<text x="1278" y="914" font-size="30" font-weight="700" fill="#1d2733">One workflow for 3D and 2D materials</text>
+<rect x="1236" y="940" width="730" height="480" rx="16" fill="#f7f8fa" stroke="#d6dce3" stroke-width="2"/>
+<rect x="1330" y="1050" width="160" height="190" rx="4" fill="#fff" stroke="#8a96a3" stroke-width="2"/>
+<circle cx="1350" cy="1074" r="9" fill="#e0a43a"/><circle cx="1387" cy="1074" r="9" fill="#e0a43a"/><circle cx="1424" cy="1074" r="9" fill="#e0a43a"/><circle cx="1461" cy="1074" r="9" fill="#e0a43a"/>
+<circle cx="1368" cy="1102" r="11" fill="#3b6fc4"/><circle cx="1405" cy="1102" r="11" fill="#3b6fc4"/><circle cx="1442" cy="1102" r="11" fill="#3b6fc4"/>
+<circle cx="1350" cy="1130" r="9" fill="#e0a43a"/><circle cx="1387" cy="1130" r="9" fill="#e0a43a"/><circle cx="1424" cy="1130" r="9" fill="#e0a43a"/><circle cx="1461" cy="1130" r="9" fill="#e0a43a"/>
+<circle cx="1350" cy="1160" r="9" fill="#e0a43a"/><circle cx="1387" cy="1160" r="9" fill="#e0a43a"/><circle cx="1424" cy="1160" r="9" fill="#e0a43a"/><circle cx="1461" cy="1160" r="9" fill="#e0a43a"/>
+<circle cx="1368" cy="1188" r="11" fill="#3b6fc4"/><circle cx="1405" cy="1188" r="11" fill="#3b6fc4"/><circle cx="1442" cy="1188" r="11" fill="#3b6fc4"/>
+<circle cx="1350" cy="1216" r="9" fill="#e0a43a"/><circle cx="1387" cy="1216" r="9" fill="#e0a43a"/><circle cx="1424" cy="1216" r="9" fill="#e0a43a"/><circle cx="1461" cy="1216" r="9" fill="#e0a43a"/>
+<path d="M1520 1054 V1236" fill="none" stroke="#3a4654" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#m-ink)" marker-start="url(#m-ink)"/>
+<text x="1536" y="1152" font-size="22" font-style="italic" fill="#1d2733">c</text>
+<text x="1410" y="1284" font-size="23" font-weight="700" font-style="italic" text-anchor="middle" fill="#1d2733">3D bulk</text>
+<rect x="1690" y="966" width="160" height="390" rx="4" fill="#fff" stroke="#8a96a3" stroke-width="2" stroke-dasharray="7 6"/>
+<text x="1770" y="1026" font-size="19" font-style="italic" text-anchor="middle" fill="#8a96a3">vacuum</text>
+<text x="1770" y="1316" font-size="19" font-style="italic" text-anchor="middle" fill="#8a96a3">vacuum</text>
+<rect x="1691" y="1118" width="158" height="92" rx="0" fill="#e3f2ea"/>
+<circle cx="1710" cy="1138" r="9" fill="#e0a43a"/><circle cx="1747" cy="1138" r="9" fill="#e0a43a"/><circle cx="1784" cy="1138" r="9" fill="#e0a43a"/><circle cx="1821" cy="1138" r="9" fill="#e0a43a"/>
+<circle cx="1728" cy="1164" r="11" fill="#3b6fc4"/><circle cx="1765" cy="1164" r="11" fill="#3b6fc4"/><circle cx="1802" cy="1164" r="11" fill="#3b6fc4"/>
+<circle cx="1710" cy="1190" r="9" fill="#e0a43a"/><circle cx="1747" cy="1190" r="9" fill="#e0a43a"/><circle cx="1784" cy="1190" r="9" fill="#e0a43a"/><circle cx="1821" cy="1190" r="9" fill="#e0a43a"/>
+<path d="M1682 1118 H1672 V1210 H1682" fill="none" stroke="#238266" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="1654" y="1172" font-size="26" font-weight="700" font-style="italic" text-anchor="middle" fill="#238266">t</text>
+<path d="M1880 970 V1352" fill="none" stroke="#3a4654" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#m-ink)" marker-start="url(#m-ink)"/>
+<text x="1896" y="1168" font-size="22" font-style="italic" fill="#1d2733">c</text>
+<text x="1770" y="1394" font-size="23" font-weight="700" font-style="italic" text-anchor="middle" fill="#238266">2D slab</text>
+</svg>
