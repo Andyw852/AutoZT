@@ -389,6 +389,11 @@ B 同意新增步骤；C 与 DFPT 基准差 20–30% 以内算通过；D 用 309
   `setting/3090.yaml` 写 `qe_bin` / `qe_pseudo_dir`（可选 `qe_setup`），autozt 注入 step.conf 的 `QE_BIN` / `QE_PSEUDO_DIR` / `QE_SETUP`。
   通用提交模板 `submit_ivs_qe.tpl` 按 `IVS_NP` 申请 `--ntasks`（fakeslurm 同样按它限核）；S11 的作业先跑环境探针（pw.x/ph.x、
   ph.x 是否支持 AHC、赝势是不是模守恒），缺东西直接失败并写 `ivs_env.json`。
+- **Si 集群实测（2026-10-19，hfeshell + jzzn）**：完整记录见 `docs/RESULT-ivs-dfpt-Si-20261019.md`。要点：QE 7.4 + SG15
+  `Si_ONCV_PBE-1.2.upf` + pbesol + 60 Ry + 10³ k；g 过程（q-01）只有 61.4 meV LO 耦合、D=4.70 eV/Å，f 过程（q-02）47.1/56.9 meV、
+  D=2.61/4.28 eV/Å，TA/LA 严格为 0；三条通道的 D/ħω 都落在文献散布范围内。ke S8（AMSET 0.5.1）低掺杂电子
+  μ(300 K)=1459（ADP-only 3883）≈ 方案定的 ~1400，IVS 单机制 2747 为限制项。遗留 4 项见该文档第 5 节
+  （`postprocess_intrinsic.py` 的"本征"取值索引取到 −1e21 档、0 掺杂档不可用、IVS 掺杂依赖偏强、可忽略机制值显示）。
 
 ## [0058] 形变势口径、多谷 TMD 电子的局限与文献参数入口（2026-10-18 用户定：保持现状，不上 EPW）
 

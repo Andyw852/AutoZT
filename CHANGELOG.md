@@ -14,6 +14,17 @@ This project adheres to Semantic Versioning; versions before 1.0.0 are developme
 
 ## [Unreleased]
 
+### Added (2026-10-19: IVS-DFPT Si cluster run and acceptance)
+- `docs/RESULT-ivs-dfpt-Si-20261019.md`: first cluster run of the `ivs_dfpt` group on Si (hfeshell, QE 7.4, SG15 NC) and the
+  ke-dft-cpu S8 integration on jzzn (AMSET 0.5.1). Per-pair D / ħω, star channels, comparison with the Si intervalley
+  deformation potentials compiled in Pop's thesis (Table 3.2, converted as D = ∆·√(Z_f/2)), and the acceptance number:
+  electron μ(300 K) at n = 1e10 cm⁻³ = 1459 cm²/Vs (ADP-only 3883), i.e. the ~1400 target is met; IVS (2747) is the
+  limiting phonon mechanism. Selection rules (TA/LA = 0) reproduce the local smoke run.
+- Known issues recorded for follow-up: (1) `postprocess_intrinsic.py` prints `mobility[0][t300]`, whose index 0 is the
+  -1e21 doping row rather than the intrinsic point; (2) the exact 0-doping row is unusable in AMSET (all mechanism
+  subsets return the same 7610); (3) the IVS single-mechanism mobility is doping dependent (2747 @1e10 → 483 @1e21);
+  (4) summaries print "inactive" mechanism values (1e6–1e9) as if they were physical.
+
 ### Added (2026-10-18: [0059] DFPT intervalley scattering)
 - eph-qe-cpu optional group `ivs_dfpt` (S10_ivsq, S11_ivsscf, S12_ivsph fan-out `q-*`, S13_ivs): zero-order intervalley
   deformation potentials and phonon energies from QE single-q DFPT plus `ph.x electron_phonon='ahc'` matrix elements at
