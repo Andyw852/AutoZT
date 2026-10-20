@@ -142,9 +142,15 @@ def main():
     (out_root / "README.md").write_text("\n".join(readme), encoding="utf-8")
 
     manifest["done"] = True
-    (out_root / "plot_manifest.json").write_text(
-        json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
-    print(f"[DONE] 出图归集 -> {out_root}")
+    mjson = json.dumps(manifest, ensure_ascii=False, indent=2)
+    (out_root / "plot_manifest.json").write_text(mjson, encoding="utf-8")
+    # 同步写一份到步骤目录 step6.1_plot/，让 autozt 的 done_marker 判读
+    #（do_run_gen_step 找 <步骤目录>/plot_manifest.json）能通过。
+    #（2026-10-20：产物在 phonon-transport_plot/，但判读路径是 step6.1_plot/，需同步。）
+    step_dir = skill_dir / "step6.1_plot"
+    step_dir.mkdir(parents=True, exist_ok=True)
+    (step_dir / "plot_manifest.json").write_text(mjson, encoding="utf-8")
+    print(f"[DONE] 出图归集 -> {out_root}（marker 同步 -> {step_dir / 'plot_manifest.json'}）")
 
 
 if __name__ == "__main__":

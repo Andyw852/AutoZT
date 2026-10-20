@@ -104,7 +104,7 @@ steps:
                 submit_fcfit_p3py.tpl, submit_fcfit_hiphive.tpl,
                 submit_fcfit_pheasy.tpl, submit_fcfit_pheasy_gpu.tpl]}
 
-  - {seq: 6, name: step6_kappa, needs: [step5_fc], label: S6_kappa, check: marker,
+  - {seq: 6, name: step6_kappa, needs: [step5_fc], label: S6_kappa, check: marker, hpc: "clus_xa",   # [用户 2026-10-20] S6 κ 走 eshell111（jzzn regular 排队慢，clus_xa 配额空闲）
      marker: 'kappa_summary.json:"KAPPA_DONE": true',
      gen: gen_step6_kappa.py, fetch_all: true,
      gen_need: [stepconf.py, step.conf, gen_step2_kappa.py, fc_common.py, kappa_driver.py,
@@ -118,7 +118,7 @@ steps:
   #   本步只把 S5.1 声子谱 + S6 κL 图/表**统一复制**到 <材料>/kl-dft-cpu/phonon-transport_plot/。
   - {seq: 6.1, name: step6.1_plot, label: S6.1_plot, after: step6_kappa,
      check: plot, run: gen, gen: gen_step6.1_plot.py,
-     done_marker: plot_manifest.json, gen_need: []}
+     done_marker: plot_manifest.json, gen_need: [kappa_plots.py]}
 
 # NAC 为可选步组：极性绝缘体默认开（LO-TO 劈裂需要）。
 #   关闭：项目配置写 nac: false —— tf 直接不注入 step3_nac，S5/S6 因无 BORN 自然无 NAC。

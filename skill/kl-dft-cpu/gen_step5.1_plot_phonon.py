@@ -125,9 +125,15 @@ def _write_submit(outdir):
     text = tpl.read_text(encoding="utf-8")
     # ★ 不兜底个人路径/写死环境名（review 三）：集群的 conda_sh/conda_env 由
     #   setting/<集群>.yaml 经 step.conf 注入；读不到就报错，让用户去填。
-    if not str(conf["CONDA_SH"] or "").strip():
-        sys.exit("[ERROR] 未配置 CONDA_SH —— 请在 setting/<集群>.yaml 填 conda_sh（conda.sh 绝对路径）")
-    if not str(conf["CONDA_ENV"] or "").strip():
+    # venv 集群（conda_sh 留空、conda_env/kl_env 指向 venv 目录）放行：模板已支持
+    # 「CONDA_ENV 是 venv 目录 → 直接 source activate」，不强制 conda.sh。
+    #（2026-10-20：clus_xa 用 venv，conda_sh="" 被这段硬挡下。）
+    _env = str(conf["KL_ENV"] or conf["CONDA_ENV"] or "")
+    _is_venv = _env and Path(_env, "bin", "activate").is_file()
+    if not str(conf["CONDA_SH"] or "").strip() and not _is_venv:
+        sys.exit("[ERROR] 未配置 CONDA_SH —— 请在 setting/<集群>.yaml 填 conda_sh（conda.sh 绝对路径）；"
+                 "venv 集群请在 conda_env 或 kl_env 填 venv 目录（含 bin/activate）")
+    if not _env:
         sys.exit("[ERROR] 未配置 CONDA_ENV —— 请在 setting/<集群>.yaml 填 conda_env（phono3py 所在环境名）")
     subs = {"JOBNAME": "S51plot",
             "QOS": str(conf["SBATCH_QOS"] or "premium"),
