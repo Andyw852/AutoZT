@@ -14,6 +14,17 @@ This project adheres to Semantic Versioning; versions before 1.0.0 are developme
 
 ## [Unreleased]
 
+### Fixed (2026-10-19: [0059-r2] 打印/找谷口径)
+- `postprocess_intrinsic.py` printed "intrinsic mobility" from `mobility[0][t300]`, i.e. the **first doping row** (−1e21),
+  not the intrinsic point → now prints the **lowest non-zero doping** row ("本征近似"), Si = 1459 cm²/Vs at n = 1e10.
+  (The exact 0-doping row stays unusable in AMSET and is documented as such.)
+- S8.3 `[AMSET 机制]` summary printed AMSET's "inactive mechanism" mobilities (1e6–1e9, meaning scattering rate ≈ 0)
+  as real numbers → values above `INACTIVE_MU_CM2_VS = 1e5` now print "—" and never become the limiting mechanism.
+- `odp_frozen.find_valleys_3d` merged time-reversal partners into one plateau: on an 11³ grid Si's ±Δ valleys
+  (t = 0.909 / 1.091) are adjacent and degenerate, so 6 valleys became 3 (V1×3). The plateau flood fill now checks
+  each edge and refuses to absorb q ≡ −c (mod 1).
+- Tests: `tests/test_0060_ivs_fixes.py` (3 tests); `_SKILL_REV` bumped to 2026-10-19-0060, postprocess script v5.
+
 ### Added (2026-10-19: IVS-DFPT Si cluster run and acceptance)
 - `docs/RESULT-ivs-dfpt-Si-20261019.md`: first cluster run of the `ivs_dfpt` group on Si (hfeshell, QE 7.4, SG15 NC) and the
   ke-dft-cpu S8 integration on jzzn (AMSET 0.5.1). Per-pair D / ħω, star channels, comparison with the Si intervalley

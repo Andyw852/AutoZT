@@ -623,7 +623,12 @@ def fold_channels(classes_out, hw_min=HW_MIN_MEV, merge_mev=HW_MERGE_MEV):
                 dropped.append({"class": c.get("id"), "hw_meV": hw, "D_eV_A": D, "why": "ħω < %.2g meV 或虚频" % hw_min})
                 continue
             for p in c["pairs"]:
-                gdiv = (p["g_from"] - 1) if p["kind"] == "inter_star" else p["g_to"]
+                if p["kind"] == "inter_star":
+                    gdiv = p["g_from"] - 1
+                elif p["kind"] == "intra":          # [0059-r3] ODP：谷内光学耦合，每个谷的 D 不除星成员数
+                    gdiv = 1
+                else:
+                    gdiv = p["g_to"]  # inter：X→Y，除目标星成员 g_Y
                 acc.setdefault((p["from"], p["to"], p["kind"]), []).append((hw, D * D / float(gdiv)))
     out = []
     for (a, b, kind), terms in sorted(acc.items()):

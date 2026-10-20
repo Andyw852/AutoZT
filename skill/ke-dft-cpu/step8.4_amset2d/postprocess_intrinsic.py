@@ -62,7 +62,7 @@ from pathlib import Path
 import numpy as np
 
 __author__ = "AutoZT / DSH subagent"
-__version__ = "2026-10-11-intrinsic-v4"   # [0034] 说明按实际剔除机制写；[0032] 写 transport_fingerprint；[0018] 输出加 κe
+__version__ = "2026-10-19-intrinsic-v5"   # [0060] 打印"本征"迁移率改取最低非零掺杂档（原来取索引 0 = −1e21）   # [0034] 说明按实际剔除机制写；[0032] 写 transport_fingerprint；[0018] 输出加 κe
 
 # AMSET 的 write_mesh 对自旋向下数据集的 bug 编码："<name>_up_down"。
 # 顺序重要：先匹配最长的 "_up_down"，再 "_down"，最后 "_up"。
@@ -789,6 +789,19 @@ def find_mesh(run_dir, explicit=None):
     return Path(max(cands, key=os.path.getmtime))
 
 
+def display_doping_index(doping_cm3):
+    """打印"本征近似"迁移率时取哪一档掺杂 -> 索引。
+
+    [0060] AMSET 的 mobility 数组是 [掺杂档][温度]，索引 0 通常是 |掺杂| 最大的一档（−1e21），
+    不是本征点；而**恰好 0 掺杂**档 AMSET 给不出有意义的迁移率（不同机制集都返回同一个数，
+    见 docs/RESULT-ivs-dfpt-Si-20261019.md 第 5 节）。所以取绝对值最小的**非零**档：
+    低掺杂极限下 IMP 可忽略、就是声子限制的本征值。没有非零档时退回 0。
+    """
+    d = [abs(float(x)) for x in (doping_cm3 or [])]
+    nz = [i for i, x in enumerate(d) if x > 0]
+    return min(nz, key=lambda i: d[i]) if nz else 0
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(
         description="从 AMSET mesh.h5 严格重算本征（剔除 IMP）μ/S/σ")
@@ -911,9 +924,14 @@ def main(argv=None):
     print("[DONE] 本征输运已写出：%s" % out)
     mi = result["intrinsic"]["mobility_inplane_cm2_Vs_s"]
     if "overall" in mi:
-        t300 = list(np.asarray(result["temperatures_K"])).index(300) if 300 in list(np.asarray(result["temperatures_K"])) else 0
-        print("[..] T=%g K 面内本征迁移率 overall = %.3f cm^2/Vs"
-              % (result["temperatures_K"][t300], mi["overall"][0][t300]))
+        tks = list(np.asarray(result["temperatures_K"], float))
+        t300 = tks.index(300.0) if 300.0 in tks else 0
+        # [0060] 取"最低非零掺杂档"而不是索引 0：AMSET 的数组索引 0 是 |掺杂| 最大的一档
+        dop = list(result.get("doping_cm3") or [])
+        i_dop = display_doping_index(dop)
+        dop0 = float(dop[i_dop]) if i_dop < len(dop) else 0.0
+        print("[..] T=%g K 面内迁移率 overall（本征近似 = 最低非零掺杂 %.2e cm⁻³）= %.3f cm^2/Vs"
+              % (tks[t300], dop0, mi["overall"][i_dop][t300]))
     return 0
 
 

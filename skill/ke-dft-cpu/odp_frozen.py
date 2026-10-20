@@ -486,7 +486,15 @@ def find_valleys_3d(kpts, eig, nocc, sign, recip, window=VALLEY_WINDOW_EV, star_
                     break
             if not ok or key in seen:
                 continue
-            # 平台：与之相连、能量相同的网格点都算这一个极值
+            # 平台：与之相连、能量相同的网格点都算这一个极值。
+            # [0060] 但不跨 k 与 −k：时间反演等价的点是**不同的谷**。Si 的 ±Δ 谷在 11³ 网格上正好
+            #   相邻（5/11 与 6/11）、能量又严格相等，旧版把 6 个谷并成了 3 个平台（S8.21 的 V1×3）；
+            #   这里对平台的每条边做一次时间反演检查，q ≡ −c（模 1）时不并入。
+            def _is_tr(a, b):
+                fa, fb = _k_of(a, N, off), _k_of(b, N, off)
+                s = fa + fb
+                return bool(np.max(np.abs(s - np.round(s))) < 1e-6)
+
             stack = [key]
             while stack:
                 c = stack.pop()
@@ -495,8 +503,11 @@ def find_valleys_3d(kpts, eig, nocc, sign, recip, window=VALLEY_WINDOW_EV, star_
                 seen.add(c)
                 for d in nbr:
                     q = tuple(int(t) for t in np.mod(np.asarray(c) + d, N))
-                    if q not in seen and abs(x[q] - v) < 1e-6:
-                        stack.append(q)
+                    if q in seen or abs(x[q] - v) >= 1e-6:
+                        continue
+                    if any(_is_tr(q, s) for s in seen):
+                        continue
+                    stack.append(q)
             found.append({"spin": sp, "band": b, "key": key, "x": v})
     # 同一 k：只留最靠近带隙的带（电子最低、空穴最高的带号）、第一个自旋
     best = {}

@@ -280,7 +280,8 @@ def test_gen_chain_si(eph):
     shutil.copy(FIX / "POSCAR", d / "POSCAR")
     _conf(d, "IVS_VALLEYS_E = X:0,0.425,0.425\nIVS_ECUTWFC = 30\nIVS_SCF_KGRID = 6 6 6\nIVS_INPUT_DFT = none\n"
              "IVS_PSEUDO_FILES = Si:Si_ONCV_PBE-1.2.upf\nIVS_NP = 8\nIVS_SBATCH = --partition=cpu192; --qos=regular\n"
-             "QE_BIN = /opt/qe/bin\nQE_PSEUDO_DIR = /opt/pseudo\nQE_SETUP = module load qe/7.3\n")
+             "QE_BIN = /opt/qe/bin\nQE_PSEUDO_DIR = /opt/pseudo\nQE_SETUP = module load qe/7.3\n"
+             "IVS_ODP = off\n")
     assert c.main("qlist") == 0
     q1 = json.loads((d / "step10_ivs_qlist" / "ivs_qlist.json").read_text())
     ref = json.loads((FIX / "step10_ivs_qlist" / "ivs_qlist.json").read_text())
@@ -344,7 +345,7 @@ def test_gen_qlist_2d_from_s82(eph):
     (d / "ivs_inputs").mkdir()
     (d / "ivs_inputs" / "dpt_result.json").write_text(json.dumps(_dpt_json(Q)))
     (d / "ivs_inputs" / "workflow_method.txt").write_text("FUNC=pbesol\nDIM=2D\n")
-    _conf(d)
+    _conf(d, "IVS_ODP = off\n")
     assert c.main("qlist") == 0
     q1 = json.loads((d / "step10_ivs_qlist" / "ivs_qlist.json").read_text())
     assert q1["dim"] == "2d" and q1["qe"]["kgrid"] == [12, 12, 1] and q1["qe"]["input_dft"] == "pbesol"
@@ -362,6 +363,28 @@ def test_gen_qlist_2d_from_s82(eph):
     (d / "ivs_inputs" / "workflow_method.txt").write_text("FUNC=pbe-d3\n")
     P = c.load_params()
     assert c.input_dft(P)[0] == "pbe" and "D3" in c.input_dft(P)[1]
+
+
+def test_gen_qlist_odp_gamma(eph):
+    """[0059-r3] IVS_ODP=auto：q 列表末尾固定加 q=Γ 的谷内 ODP 类（kind=intra），每星一个初态 k。"""
+    d, c = eph
+    shutil.copy(FIX / "POSCAR", d / "POSCAR")
+    _conf(d, "IVS_VALLEYS_E = X:0,0.425,0.425\nIVS_ECUTWFC = 30\nIVS_SCF_KGRID = 6 6 6\nIVS_INPUT_DFT = none\n"
+             "IVS_PSEUDO_FILES = Si:Si_ONCV_PBE-1.2.upf\nIVS_NP = 8\n"
+             "QE_BIN = /opt/qe/bin\nQE_PSEUDO_DIR = /opt/pseudo\n")
+    assert c.main("qlist") == 0
+    q1 = json.loads((d / "step10_ivs_qlist" / "ivs_qlist.json").read_text())
+    runs = q1["runs"]
+    assert runs[-1]["q"] == [0.0, 0.0, 0.0] and runs[-1]["name"] == "q-odp"
+    assert len(runs[-1]["k"]) == 1                       # Si 电子只有一个星 -> 一个谷内 k
+    intra = [c for c in q1["classes"] if c["kind"] == "intra"]
+    assert len(intra) == 1 and intra[0]["from"] == intra[0]["to"] == "X" and intra[0]["run"] == runs[-1]["id"]
+    # off：不加 Γ 点
+    _conf(d, "IVS_ODP = off\nIVS_VALLEYS_E = X:0,0.425,0.425\nIVS_ECUTWFC = 30\nIVS_SCF_KGRID = 6 6 6\nIVS_INPUT_DFT = none\n"
+             "IVS_PSEUDO_FILES = Si:Si_ONCV_PBE-1.2.upf\n")
+    assert c.main("qlist") == 0
+    q2 = json.loads((d / "step10_ivs_qlist" / "ivs_qlist.json").read_text())
+    assert len(q2["runs"]) == 2 and not any(c["kind"] == "intra" for c in q2["classes"])
 
 
 def test_jzzn_env_preset(eph):

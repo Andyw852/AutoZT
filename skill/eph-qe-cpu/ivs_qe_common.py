@@ -55,6 +55,8 @@ PARAMS = {
     "IVS_SBATCH": ("", "str"),               # 额外 #SBATCH 选项，分号分隔
     "IVS_MPIRUN": ("auto", "str"),           # auto | none | 自定义（{np} 处填进程数）
     "IVS_KEEP_TMP": (False, "bool"),
+    # [0059-r3] ODP：沿带 Γ 点（q=000）AHC 顺带给谷内光学形变势；auto/on = 算，off = 不算（只保留冻声子）
+    "IVS_ODP": ("auto", "str"),     # auto | on | off
     "QE_BIN": ("", "str"),                   # autozt 从 setting/<集群>.yaml 的 qe_bin 注入
     "QE_PSEUDO_DIR": ("", "str"),            # qe_pseudo_dir
     "QE_SETUP": ("", "str"),                 # qe_setup：作业开头执行的 shell（module load / source …）；jzzn = 用 eph-qe-cpu 的 jzzn 环境
@@ -356,6 +358,32 @@ def gen_qlist(P):
     if not carriers:
         raise SystemExit("[ERROR] 没有多谷的载流子：不需要算谷间散射（IVS_CARRIERS=%s）" % want)
     classes, runs = iv.plan_pairs(carriers, rops)
+    # [0059-r3] ODP：加 q=Γ 的谷内光学耦合（kind="intra"）
+    odp_mode = str(P.get("IVS_ODP") or "auto").strip().lower()
+    if odp_mode not in ("auto", "on", "off"):
+        raise SystemExit("[ERROR] IVS_ODP=%r 无效，只允许 auto / on / off" % odp_mode)
+    if odp_mode in ("auto", "on") and carriers:
+        gamma_q = [0.0, 0.0, 0.0]
+        gamma_k, gamma_classes = [], []
+        for car in iv.CARRIERS:
+            for X in carriers.get(car) or []:
+                k0 = [float(x) for x in X["k"][0]]
+                gamma_k.append(k0)
+                gamma_classes.append({
+                    "id": len(classes) + len(gamma_classes), "carrier": car,
+                    "from": X["label"], "to": X["label"], "kind": "intra",
+                    "k_init": k0[:], "k_fin": k0[:], "q": gamma_q[:],
+                    "pairs": [{"from": X["label"], "to": X["label"], "kind": "intra",
+                               "j": 0, "g_to": len(X["k"]), "g_from": len(X["k"])}]})
+        if gamma_k:
+            gamma_run = {"id": len(runs), "q": gamma_q, "k": gamma_k, "name": "q-odp"}
+            for c, kk in zip(gamma_classes, gamma_k):
+                c.update(run=gamma_run["id"], ik=gamma_k.index(kk), n_pairs=1)
+            runs.append(gamma_run)
+            classes.extend(gamma_classes)
+            print("[OK] ODP（Γ 点谷内光学耦合）：%d 个谷，q = (0,0,0)" % len(gamma_k))
+        elif odp_mode == "on":
+            print("[WARN] IVS_ODP=on 但没有多谷载流子：跳过")
     pse, masses = species_maps(P, st["types"])
     dft, dft_note = input_dft(P)
     prefix = "".join("%s%d" % (t.lower(), c) for t, c in zip(st["types"], st["counts"]))
@@ -376,7 +404,8 @@ def gen_qlist(P):
            "carriers": cinfo,
            "classes": [{k: c[k] for k in ("id", "carrier", "from", "to", "kind", "k_init", "k_fin", "q", "run", "ik",
                                           "n_pairs", "pairs")} for c in classes],
-           "runs": [{"id": r["id"], "q": r["q"], "k": r["k"], "name": "%s%02d" % (FANOUT_PREFIX, r["id"] + 1)} for r in runs]}
+           "runs": [{"id": r["id"], "q": r["q"], "k": r["k"],
+                      "name": r.get("name") or "%s%02d" % (FANOUT_PREFIX, r["id"] + 1)} for r in runs]}
     dest = Path(STEP["qlist"])
     _write(dest / "ivs_qlist.json", json.dumps(iv.jsonable(out), indent=1, ensure_ascii=False) + "\n")
     for car in carriers:
@@ -384,7 +413,7 @@ def gen_qlist(P):
         print("[OK] %s：%s；%d 个等价谷对" % (car, ", ".join("%s×%d" % (s["label"], len(s["k"])) for s in carriers[car]),
                                            len(nc)))
     for r in runs:
-        print("[..]   %s%02d  q = (%s)  初态 k %d 个" % (FANOUT_PREFIX, r["id"] + 1,
+        print("[..]   %s  q = (%s)  初态 k %d 个" % (r.get("name") or "%s%02d" % (FANOUT_PREFIX, r["id"] + 1),
                                                     ", ".join("%.4f" % x for x in r["q"]), len(r["k"])))
     print("[DONE] %s/ivs_qlist.json：%d 个 q（每个一个 ph.x 作业，S12_ivsph 扇出）；QE 泛函：%s"
           % (dest, len(runs), dft or dft_note))
