@@ -485,15 +485,15 @@ ZTNT = [('zT', {'i': True}), '(', ('n', {'i': True}), ', ', ('T', {'i': True}), 
 M, CG = 12, 24                   # outer margin, gap between highlight cards
 CW = (W - 2 * M - 2 * CG) / 3    # highlight card width
 CX = [M + k * (CW + CG) for k in range(3)]
-TOP_Y, TOP_H = 12, 236           # a-c
-WEDGE = 70                       # room for the spotlight wedges
+LAB_H = 40                       # chain label rows (kl-dft-cpu above, ke-dft-cpu below)
 BAND_H, MID = 124, 48
-PB = (TOP_Y + TOP_H + WEDGE, TOP_Y + TOP_H + WEDGE + BAND_H)   # phonon band
+PB = (M + LAB_H, M + LAB_H + BAND_H)                            # phonon band
 EB = (PB[1] + MID, PB[1] + MID + BAND_H)                        # electron band
-BOT_Y, BOT_H = EB[1] + WEDGE, 272                               # d-f
+TOP_Y, TOP_H = EB[1] + LAB_H + 16, 236                          # a-c
+BOT_Y, BOT_H = TOP_Y + TOP_H + 18, 272                          # d-f
 H = BOT_Y + BOT_H + M
 BX0, BX1 = 140, 1520             # chain bands
-ZX = (1550, W - M)               # zT box
+ZX = (1576, W - M)               # zT box
 BOX_W, BOX_H = 200, 96
 GAPX = (BX1 - BX0 - 28 - 6 * BOX_W) / 5
 BXS = [BX0 + 14 + k * (BOX_W + GAPX) for k in range(6)]
@@ -501,8 +501,8 @@ Y_PH, Y_EL = (PB[0] + PB[1]) / 2, (EB[0] + EB[1]) / 2
 AT_O, AT_M = '#E0A43A', '#3B6FC4'
 GPU_BG, GPU_TX = '#DCEFE3', '#1E6B3A'
 TAG_BG = '#EEF1F5'
-# a-c over the phonon chain, d-f under the electron chain: one colour each, shared by the card,
-# its spotlight and the step it zooms into (plus the card's letter on that step)
+# a-c zoom into the phonon chain, d-f into the electron chain: one colour each, shared by the card
+# and the step it zooms into (outline, step tag and the card's letter on the step)
 HL = {'a': '#C0392B', 'b': '#4A6A86', 'c': '#6A44B0', 'd': '#0F7F86', 'e': '#B0367F', 'f': '#2B3440'}
 HL_STEP = {'a': (PB, 2), 'b': (PB, 3), 'c': (PB, 4), 'd': (EB, 2), 'e': (EB, 3), 'f': (EB, 4)}
 
@@ -518,21 +518,6 @@ def card(k, y, h, letter, title, tag, gpu=False):
         text(gx + 8, y + 32 + FS_XS * 0.36, 'GPU', FS_XS, GPU_TX, bold=True)
     text(x + 48, y + 66, tag, FS_XS, MUTED)
     return x
-
-
-def wedge(letter):
-    """Spotlight from a step box to its highlight card, tinted with the card's colour."""
-    band, bk = HL_STEP[letter]
-    k = 'abcdef'.index(letter) % 3
-    top = band is PB
-    y_card, y_box = (TOP_Y + TOP_H, band[0] + 14) if top else (BOT_Y, band[0] + 14 + BOX_H)
-    x0, x1 = BXS[bk], BXS[bk] + BOX_W
-    cm = min(max((x0 + x1) / 2, CX[k] + 0.25 * CW), CX[k] + 0.75 * CW)
-    cx0, cx1 = cm - 0.25 * CW, cm + 0.25 * CW
-    col = HL[letter]
-    shape([[(cx0, y_card), (cx1, y_card), (x1, y_box), (x0, y_box)]], mix(col, '#FFFFFF', 0.86))
-    line(cx0, y_card, x0, y_box, col, 1.2)
-    line(cx1, y_card, x1, y_box, col, 1.2)
 
 
 def step(k, band, tag, title, sub=None, dashed=False, stack=False):
@@ -617,27 +602,6 @@ def mini_axes(x, y, w, h, xl, yl):
     text(x + w, y + h + 22, xl, FS_XS, MUTED, italic=True, anchor='end')
 
 
-HM = [['EEB2C6', 'D16388', 'B23C66', '8A1D46', 'B23C66', 'E38AA8'],
-      ['EEB2C6', 'E38AA8', 'D16388', 'B23C66', 'D16388', 'E38AA8'],
-      ['F6D3DE', 'E38AA8', 'D16388', 'D16388', 'E38AA8', 'EEB2C6'],
-      ['F6D3DE', 'EEB2C6', 'E38AA8', 'E38AA8', 'E38AA8', 'EEB2C6'],
-      ['F6D3DE', 'F6D3DE', 'EEB2C6', 'EEB2C6', 'EEB2C6', 'F6D3DE'],
-      ['F6D3DE', 'F6D3DE', 'F6D3DE', 'EEB2C6', 'F6D3DE', 'F6D3DE']]
-
-
-def zt_map(x0, y0, cell=16.0, cg=1.2, size=FS_B):
-    """Schematic zT(n, T) map with its top-left cell at (x0, y0): T up, n to the right (as in Fig. 1)."""
-    gw = 6 * cell + 5 * cg
-    for r_, row in enumerate(HM):
-        for c_, colr in enumerate(row):
-            rect(x0 + c_ * (cell + cg), y0 + r_ * (cell + cg), cell, cell, fill='#' + colr)
-    k = cell / 16
-    axx, axy = x0 - 7 * k, y0 + gw + 7 * k
-    arrow([(axx, y0 - 4 * k), (axx, axy), (x0 + gw + 12 * k, axy)], GATE, sw=2.2 * k, head=9 * k, both=True)
-    text(axx - 8 * k, y0 + gw / 2 + size * 0.36, 'T', size, MUTED, italic=True, anchor='end')
-    text(x0 + gw + 22 * k, axy + size * 0.36, 'n', size, MUTED, italic=True)
-
-
 def curve(pts, col, sw=2.2):
     path('M' + ' L'.join(f'{f(px)} {f(py)}' for px, py in pts), stroke=col, sw=sw)
 
@@ -647,12 +611,6 @@ add(f'<svg xmlns="http://www.w3.org/2000/svg" width="180mm" height="{H / 10:.1f}
     f'font-family="{FONT}">')
 add('<title>AutoZT zT workflow (Fig. 2)</title>')
 rect(0, 0, W, H, fill='#FFFFFF')
-
-# ================================================================ spotlights (drawn first, under everything)
-group('spotlights')
-for letter in 'abcdef':
-    wedge(letter)
-end()
 
 # ================================================================ centre: POSCAR -> two chains -> zT
 group('chains')
@@ -687,10 +645,12 @@ output(5, EB, [('σ', {'i': True}), ', ', ('S', {'i': True}), ', '] + KE, BLUE, 
 for k in range(5):
     link(k, Y_EL, 'plus' if k < 3 else 'arrow')
 # zT
-rect(ZX[0], PB[0], ZX[1] - ZX[0], EB[1] - PB[0], rx=14, fill=CRIMSON_BG, stroke=CRIMSON, sw=2.8)
-for yc, col in ((Y_PH, ORANGE), (Y_EL, BLUE)):
-    arrow([(BXS[5] + BOX_W + 4, yc), (ZX[0] - 4, yc)], col, sw=2.8, head=11)
-zcx, eqy, FZ = (ZX[0] + ZX[1]) / 2, PB[0] + 78, 30
+Y_MID = (PB[1] + EB[0]) / 2
+rect(ZX[0], Y_MID - 75, ZX[1] - ZX[0], 150, rx=14, fill=CRIMSON_BG, stroke=CRIMSON, sw=2.8)
+XE = (BX1 + ZX[0]) / 2               # elbow between the band edge and the zT box
+for yc, ye, col in ((Y_PH, Y_MID - 40, ORANGE), (Y_EL, Y_MID + 40, BLUE)):
+    arrow([(BXS[5] + BOX_W + 4, yc), (XE, yc), (XE, ye), (ZX[0] - 4, ye)], col, sw=2.8, head=10)
+zcx, eqy, FZ = (ZX[0] + ZX[1]) / 2, Y_MID - 4, 30
 lhs = [('zT', {'i': True}), ' =']
 num = [('S', {'i': True, 'fill': BLUE}), ('2', {'sup': True, 'fill': BLUE}), ('σ', {'i': True, 'fill': BLUE}),
        ('T', {'i': True})]
@@ -704,7 +664,6 @@ fx = ex0 + lw_ + 10
 rich(fx + fw / 2, eqy - 9, num, FZ, INK, anchor='middle')
 line(fx, eqy, fx + fw, eqy, INK, 2.2)
 rich(fx + fw / 2, eqy + 31, den, FZ, INK, anchor='middle')
-zt_map(zcx - (6 * 17 + 5 * 1.2) / 2 + 12, eqy + 74, cell=17, cg=1.2)
 end()
 
 # ================================================================ a-c: phonon highlights (kl-dft-cpu)
