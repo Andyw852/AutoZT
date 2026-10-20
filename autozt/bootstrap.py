@@ -930,13 +930,20 @@ def expand_optional_steps(t):
         spec = spec or {}
         defs = spec.get("steps") or []
         names = {d.get("name") for d in defs}
+        # 项目 steps 里给可选组步骤写的 hpc（5.4.1 文档写明支持）：组定义重新插入时带上，
+        # 原来"先剔除再插入"把它静默丢掉了（S2.3_hse 切 jzzn 不生效，作业仍交到默认集群）。
+        carry = {x.get("name"): x.get("hpc") for x in steps
+                 if x.get("name") in names and x.get("hpc")}
         steps = [s for s in steps if s.get("name") not in names]
         if t.get(flag, spec.get("default", True)) is False:
-            off[flag] = [dict(d) for d in defs]
+            off[flag] = [dict(d, hpc=carry[d.get("name")]) if d.get("name") in carry else dict(d)
+                         for d in defs]
             continue
         for d in defs:
             anchor = d.get("after")
             d2 = {k: v for k, v in d.items() if k != "after"}
+            if d.get("name") in carry:
+                d2["hpc"] = carry[d.get("name")]
             pos = None
             if anchor:
                 for i, s in enumerate(steps):
@@ -1556,6 +1563,57 @@ def _filter_run_steps(t):
     kept.sort(key=lambda s: order[id(s)])
     t["steps"] = kept
 
+_STEP_HPC_WARNED = set()
+
+
+def apply_step_hpc(t):
+    """项目 tf_*.yaml 的 step_hpc：只给个别步骤换超算，不必整段抄 steps（抄了就整体接管，技能后续的修复进不来）。
+        step_hpc:
+          S2.3_hse: jzzn        # 键 = 步骤 label / name / seq；值 = setting/<集群>.yaml 的集群名
+    在可选组展开之后套用（可选组步骤也生效；被关掉、按需 -j 启用的组定义也带上）。
+    对不上任何步骤的键、没有 setting/<集群>.yaml 的集群都告警，不静默吞掉。"""
+    mp = t.get("step_hpc")
+    if not mp:
+        return
+    src = t.get("_from") or "tf_*.yaml"
+    if not isinstance(mp, dict):
+        _k = (src, "type")
+        if _k not in _STEP_HPC_WARNED:
+            _STEP_HPC_WARNED.add(_k)
+            print("警告：%s 的 step_hpc 要写成 {步骤: 集群} 映射，已忽略" % src, file=sys.stderr)
+        return
+    want = {str(k): str(v) for k, v in mp.items() if v not in (None, "")}
+    used = set()
+
+    def _hit(st):
+        for key in (st.get("label"), st.get("name"), st.get("seq")):
+            if key is not None and str(key) in want:
+                used.add(str(key))
+                return want[str(key)]
+        return None
+    new = []
+    for st in t.get("steps") or []:
+        h = _hit(st)
+        new.append(dict(st, hpc=h) if h else st)       # 复制一份：步骤 dict 在同技能各段之间共享
+    t["steps"] = new
+    for defs in (t.get("_optional_off") or {}).values():
+        for d in defs:                                 # 这些是展开时 dict(d) 出来的副本，可以原地改
+            h = _hit(d)
+            if h:
+                d["hpc"] = h
+    for key, cl in want.items():
+        msgs = []
+        if key not in used:
+            msgs.append("step_hpc 的键 %r 对不上任何步骤（写步骤 label 如 S2.3_hse，或完整名 "
+                        "step2_bandgap/step2.3_hse）" % key)
+        if not pkg_setting_path(cl + ".yaml"):
+            msgs.append("step_hpc 指定的集群 %r 没有 setting/%s.yaml，该步骤会留在默认集群" % (cl, cl))
+        for msg in msgs:
+            if (src, msg) not in _STEP_HPC_WARNED:
+                _STEP_HPC_WARNED.add((src, msg))
+                print("警告：%s：%s" % (src, msg), file=sys.stderr)
+
+
 def get_types(cfg, tt=None, root_override=None, quiet=False):
     """把配置归一化成类型列表；应用 -tt 过滤和 ROOT 覆盖。
     项目配置合并进来的同 key 段在此展开为多个类型实例（key 相同，local_root 不同）。"""
@@ -1614,6 +1672,7 @@ def get_types(cfg, tt=None, root_override=None, quiet=False):
         types[0]["root"] = root_override
     for t in types:
         expand_optional_steps(t)   # v1.2：按技能清单展开可选步骤组
+        apply_step_hpc(t)          # 项目 step_hpc：单步换超算（可选组步骤也生效）
         _filter_run_steps(t)    # v1.0：run_steps 自定义步骤子集
     for t in types:
         if not t.get("root") and not t.get("local_root"):
