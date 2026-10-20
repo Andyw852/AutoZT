@@ -84,6 +84,20 @@ _EPS_ENV = float(_REC.get("eps_env", 1.0) or 1.0)
 _D_IMP = float(_REC.get("imp_distance_A", 0.0) or 0.0) * A2B
 _LO_DISP = bool(_REC.get("pop_lo_dispersion", True))
 _MECHS = set(_REC.get("mechanisms_2d", ["ADP", "POP", "IMP", "PIE"]))
+# [0061] ADP 简并修正：gen_step14 写 "adp_degen"（mode / signed_h5 / deform_h5 / efit_eV / nang），运行期在主进程拟合。
+_DEGEN_REC = _REC.get("adp_degen") or {}
+_DEGEN_ON = (str(_DEGEN_REC.get("mode") or "off").lower() in ("auto", "on")
+             and _DEGEN_REC.get("status") == "pending_runtime")
+_DEGEN_REPORT = "adp_degen_fit.json"
+
+
+def _degen_setup(amset_data, adp):
+    """[0061] {spin.name: 修正表} 或 None（不适用：auto 打印原因照原版，on 报错）。"""
+    import adp_degen as _AD
+    return _AD.runtime_tables(amset_data, _DEGEN_REC, np.asarray(adp.elastic_constant, float), dim=2,
+                              tag="[amset2d]", report_path=_DEGEN_REPORT)
+
+
 # [0049] ADP 形变势口径缩放（无量纲）：1.0 = 用 h5 的绝对形变势原样（现状）；
 #   "poisson" 或数值由 gen_step14 的 ADP_D_SCALE 解析后写进 2d_correction.json。
 #   只影响 ADP 机制。见 gen_step14_amset2d._resolve_adp_d_scale 的说明。
@@ -198,6 +212,8 @@ class AcousticDeformation2D(_ADP):
     AMSET 的 ADP 对整个布里渊区的 q 积分，大 q 的 K→K′/K→Q 用长波声速和带边形变势算，
     既不物理、又与 IVS 的谷间通道重复计数。掩码数据在 _ivm（主进程 from_amset_data 建，
     经 to_reference/from_reference 带进散射子进程）；没有 _ivm 时与以前逐字节相同。
+    [0061] 开了 ADP 简并修正（2d_correction.json 的 "adp_degen"）时，_iv_keep 还乘上初态 (带, k) 的放大系数
+    （完整应变矩阵元 ÷ AMSET 写法，面内两支声学模，见 adp_degen.py；修正表在 _degen，同样随 reference 带进子进程）。
     """
     name = "ADP"
 
@@ -205,29 +221,37 @@ class AcousticDeformation2D(_ADP):
     def from_amset_data(cls, materials_properties, amset_data):
         obj = super().from_amset_data(materials_properties, amset_data)
         obj._ivm = _adp_mask_setup(amset_data)
+        obj._degen = _degen_setup(amset_data, obj) if _DEGEN_ON else None
         return obj
 
     def to_reference(self):
-        return super().to_reference() + (getattr(self, "_ivm", None),)
+        return super().to_reference() + (getattr(self, "_ivm", None), getattr(self, "_degen", None))
 
     @classmethod
     def from_reference(cls, *ref):
-        obj = super().from_reference(*ref[:-1])
-        obj._ivm = ref[-1]
+        obj = super().from_reference(*ref[:-2])
+        obj._ivm, obj._degen = ref[-2], ref[-1]
         return obj
 
     def _iv_keep(self, unit_q, norm_q_sq, spin, band_idx, kpoint):
-        """谷内掩码：k+q 与 k 在同一个成员谷 -> True。该载流子没开掩码 -> None（不掩）。"""
+        """谷内掩码（k+q 与 k 在同一个成员谷 -> True）× [0061] 简并修正的放大系数。都不开 -> None（不掩、不乘）。"""
+        keep = None
         ivm = getattr(self, "_ivm", None)
-        if not ivm or kpoint is None:
-            return None
-        vb = (getattr(self, "vb_idx", None) or {}).get(spin)
-        centers = ivm.get("electron" if (vb is not None and band_idx > vb) else "hole")
-        if centers is None:
-            return None
-        q = np.sqrt(norm_q_sq)[:, None] * np.asarray(unit_q)
-        kp = q @ ivm["rinv"] + np.asarray(kpoint, float)
-        return _DPO.same_member(kpoint, kp, centers, ivm["rlat"])
+        if ivm and kpoint is not None:
+            vb = (getattr(self, "vb_idx", None) or {}).get(spin)
+            centers = ivm.get("electron" if (vb is not None and band_idx > vb) else "hole")
+            if centers is not None:
+                q = np.sqrt(norm_q_sq)[:, None] * np.asarray(unit_q)
+                kp = q @ ivm["rinv"] + np.asarray(kpoint, float)
+                keep = _DPO.same_member(kpoint, kp, centers, ivm["rlat"])
+        tabs = getattr(self, "_degen", None)
+        if not tabs or kpoint is None:
+            return keep
+        import adp_degen as _AD
+        s = _AD.scale(tabs.get(getattr(spin, "name", spin)), band_idx, kpoint)
+        if s == 1.0:
+            return keep
+        return np.full(np.shape(norm_q_sq), s) if keep is None else keep * s
 
     def factor(self, unit_q, norm_q_sq, spin, band_idx, kpoint, velocity):
         f = self._factor_core(unit_q, norm_q_sq, spin, band_idx, kpoint, velocity)
@@ -567,6 +591,9 @@ _BANNER = ("[amset2d] amset %s | c=%.3f A | r_inf=%s | mechanisms=%s"
            % (amset.__version__, _C / A2B, np.round(_r_tensor("eps_inf_slab").tolist(), 3),
               ",".join(_ACTIVE)))
 print(_BANNER, flush=True)
+if _DEGEN_REC:
+    print("[amset2d] ADP 简并修正（[0061]）：%s" % (("开（%s，运行期拟合）" % _DEGEN_REC.get("mode")) if _DEGEN_ON
+                                                else "关（%s）" % _DEGEN_REC.get("status")), flush=True)
 if _DPO_REC and ({"ODP", "IVS"} & set(_ACTIVE) or any((_DPO_REC.get("adp_intravalley") or {}).values())):
     _need_dpo()
     _ivf = _DPO_REC.get("adp_intravalley") or {}

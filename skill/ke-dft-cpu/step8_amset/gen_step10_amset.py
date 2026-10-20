@@ -18,7 +18,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 # [SKILL_REV] 版本戳：写进 settings.yaml 头，便于从结果反查跑的是哪份 skill 副本。
-_SKILL_REV = "2026-10-21-0061-adpdegen"   # [0061] ADP_DEGEN：立方 Γ 三重简并价带的 ADP 带间修正（插件 + adp_degen.py）   # 2026-10-20-0059r3-dfptodp   # [0059-r3] DFPT 谷内 ODP（q=Γ）优先于冻声子/手填，不再两份叠加   # 2026-10-18-0059-ivsdfpt   # [0059] IVS_DFPT：eph-qe-cpu QE DFPT 谷间零阶形变势（ivs_dfpt_params.json）优先于冻声子 K↔K′ 与手填   # 2026-10-16-0055-dopinglow   # [0055] DOPING_LOW 低浓度段 1e10–1e16 cm^-3（amset_fermi_fix 小掺杂 log-sum-exp 解 E_F）；[0054] undoped_ni 记带边   # 2026-10-15-0051-socdesym   # [0051] amset_desym_fix 修 SOC 分支（四元数 SU(2) + iσ_y·K，V200）   # 2026-10-13-0043-intrsvd   # [0041] DEFECT_DOPING 缺陷平衡载流子浓度进掺杂网格   # 2026-10-13-0040-undoped   # [0040] UNDOPED_POINT 本征点（doping=0）   # 2026-10-13-0038-subsets   # [0038] SUBSETS 散射机制子集（subset_<机制>.json）   # [0037] 三维 PIE（读压电张量写 settings，插件 amset_pie3d.py 修正核）   # [0036] 三维 ODP/IVS（DP_OPTICAL_*，插件 amset_dpo3d.py）   # [0014] 2D 弹性用原始 slab 值（不乘 c/t）；V115 相位补丁
+_SKILL_REV = "2026-10-21-0061g-adpdegen"   # [0061-g] ADP_DEGEN 通用化：任意晶系 / 谷 / 价带导带 / SOC（vasprun + 波函数现拟合）   # 2026-10-21-0061-adpdegen   # [0061] ADP_DEGEN：立方 Γ 三重简并价带的 ADP 带间修正（插件 + adp_degen.py）   # 2026-10-20-0059r3-dfptodp   # [0059-r3] DFPT 谷内 ODP（q=Γ）优先于冻声子/手填，不再两份叠加   # 2026-10-18-0059-ivsdfpt   # [0059] IVS_DFPT：eph-qe-cpu QE DFPT 谷间零阶形变势（ivs_dfpt_params.json）优先于冻声子 K↔K′ 与手填   # 2026-10-16-0055-dopinglow   # [0055] DOPING_LOW 低浓度段 1e10–1e16 cm^-3（amset_fermi_fix 小掺杂 log-sum-exp 解 E_F）；[0054] undoped_ni 记带边   # 2026-10-15-0051-socdesym   # [0051] amset_desym_fix 修 SOC 分支（四元数 SU(2) + iσ_y·K，V200）   # 2026-10-13-0043-intrsvd   # [0041] DEFECT_DOPING 缺陷平衡载流子浓度进掺杂网格   # 2026-10-13-0040-undoped   # [0040] UNDOPED_POINT 本征点（doping=0）   # 2026-10-13-0038-subsets   # [0038] SUBSETS 散射机制子集（subset_<机制>.json）   # [0037] 三维 PIE（读压电张量写 settings，插件 amset_pie3d.py 修正核）   # [0036] 三维 ODP/IVS（DP_OPTICAL_*，插件 amset_dpo3d.py）   # [0014] 2D 弹性用原始 slab 值（不乘 c/t）；V115 相位补丁
 import stepconf  # noqa: E402
 try:
     import ke_common as kc
@@ -220,15 +220,16 @@ IVS_DFPT = "auto"
 IVS_DFPT_SRC = "ivs_dfpt/ivs_dfpt_params.json"
 IVS_DFPT_DMIN = 0.05
 IVS_DFPT_KTOL = 0.08              # 分数坐标；粗网格上自动找的谷中心离 DFPT 用的中心可达半个网格步长
-# [0061] 简并价带顶的 ADP 带间修正（立方晶体 Γ 点三重简并价带、无 SOC：Si/Ge/金刚石/闪锌矿的空穴）。AMSET 的 ADP 只用
-#   初态那条带的对角形变势 × 波函数重叠，丢了剪切应变在重/轻空穴之间的耦合，空穴 ADP 偏弱（Si 约 1.6–2 倍）。
+# [0061] 简并 / 近简并带边的 ADP 带间修正（通用：任意晶系、任意谷、价带与导带、含 SOC；Si/Ge/闪锌矿的 Γ 点 p 型价带
+#   是典型）。AMSET 的 ADP 只用初态那条带的对角形变势 × 波函数重叠，丢了应变在简并子空间里的带间耦合，ADP 偏弱
+#   （Si 空穴只算 ADP 时迁移率高估约 1.6–2 倍）。
 #   ADP_DEGEN = auto（出厂：适用就修正，不适用照原版）/ on（必须修正，不适用报错）/ off（原版 AMSET ADP）。
-#   修正参数在作业里用 AMSET 自己的能带 + S7.1 的形变势现拟合（adp_degen.py，插件 amset_dpo3d.py 接进 ADP），
-#   报告 adp_degen_fit.json。要 S7.1 的带符号形变势 deformation_signed.h5（V188 起才有：旧的重新 gen S7.1）。
-#   ADP_DEGEN_EFIT（eV）：k·p 拟合用的空穴能量上限；ADP_DEGEN_NANG：方向网格点数。
+#   作业里用 vasprun.xml + AMSET 的波函数系数 / 能带 + S7.1 的形变势现拟合 k·p 与应变算符（adp_degen.py，插件
+#   amset_dpo3d.py 接进 ADP），报告 adp_degen_fit.json。要 S7.1 的带符号形变势 deformation_signed.h5（V188 起才有）。
+#   ADP_DEGEN_EFIT（eV）：谷的能量窗口、比值表的载流子能量上限；ADP_DEGEN_NANG：方向网格点数（None = 模块默认 240）。
 ADP_DEGEN = "auto"
 ADP_DEGEN_EFIT = 0.15
-ADP_DEGEN_NANG = 240
+ADP_DEGEN_NANG = None
 ADP_DEGEN_MODULE = "adp_degen.py"
 # [0038] 三维本征后处理：WRITE_MESH 写 mesh_*.h5，作业链尾部 postprocess_intrinsic.py 去机制重积分，
 #   按 SUBSETS 出 subset_<机制>.json，供 S8.3 出多机制对照图。关掉：step.conf 写 WRITE_MESH = false。
@@ -453,7 +454,7 @@ SPEC = {
     "IVS_DFPT": ("auto", "str"),                # [0059] DFPT 谷间 IVS 参数 auto/on/off
     "IVS_DFPT_DMIN": (None, "float"),
     "IVS_DFPT_KTOL": (None, "float"),
-    "ADP_DEGEN": ("auto", "str"),               # [0061] 简并价带顶 ADP 带间修正 auto/on/off
+    "ADP_DEGEN": ("auto", "str"),               # [0061] 简并带边 ADP 带间修正 auto/on/off
     "ADP_DEGEN_EFIT": (None, "float"),
     "ADP_DEGEN_NANG": (None, "int"),
     "PIE_KERNEL": ("az", "str"),                # [0037] 三维 PIE 核 az/amset
@@ -2230,9 +2231,9 @@ def _install_pie_3d(out, record):
 
 
 def resolve_adp_degen_3d(is_2d, cwd, h5_name="deformation.h5"):
-    """[0061] 简并价带顶 ADP 带间修正 -> dp_optical_3d.json 的 "adp_degen" 记录（2D 返回 None）。
-    gen 只判开关、SOC、有没有 S7.1 的带符号形变势；是不是立方 Γ 三重简并、参数多少，在作业里用 AMSET 的数据定
-    （status = "pending_runtime" 才装插件）。"""
+    """[0061] 简并带边 ADP 带间修正 -> dp_optical_3d.json 的 "adp_degen" 记录（2D 返回 None：2D 由 S8.4 做）。
+    gen 只判开关、ADP 在不在、有没有 S7.1 的带符号形变势；有没有简并谷、参数多少，在作业里用 vasprun + 波函数 +
+    S7.1 数据定（status = "pending_runtime" 才装插件）。"""
     import json
     mode = str(ADP_DEGEN or "auto").strip().lower()
     if mode not in ("auto", "on", "off"):
@@ -2240,22 +2241,21 @@ def resolve_adp_degen_3d(is_2d, cwd, h5_name="deformation.h5"):
     if is_2d:
         return None
     signed = (h5_name[:-3] if h5_name.endswith(".h5") else h5_name) + "_signed.h5"
-    rec = {"mode": mode, "efit_eV": float(ADP_DEGEN_EFIT), "nang": int(ADP_DEGEN_NANG),
-           "deform_h5": "deformation.h5", "signed_h5": "deformation_signed.h5", "signed_src": signed}
+    rec = {"mode": mode, "efit_eV": float(ADP_DEGEN_EFIT), "nang": ADP_DEGEN_NANG,
+           "deform_h5": "deformation.h5", "signed_h5": "deformation_signed.h5", "signed_src": signed,
+           "vasprun": "vasprun.xml"}
 
     def _skip(status, msg):
         if mode == "on":
             sys.exit("[ERROR] ADP_DEGEN = on，但%s。确认不需要就在 step.conf 写 ADP_DEGEN = auto 或 off" % msg)
         rec["status"] = status
-        print("[..] ADP 简并价带修正：%s —— 不修正（ADP_DEGEN = auto）" % msg)
+        print("[..] ADP 简并修正：%s —— 不修正（ADP_DEGEN = auto）" % msg)
         return rec
     if mode == "off":
         rec["status"] = "off"
         return rec
     if "ADP" not in [str(x).upper() for x in SCATTERING]:
         return _skip("no_adp", "SCATTERING 不含 ADP")
-    if _HAS_KC and kc.detect_ncl(cwd):
-        return _skip("soc", "能带是 SOC（只做无 SOC 的 p 型三重态）")
     if not (Path(cwd) / READ_DIR / signed).is_file():
         return _skip("no_signed_h5", "没有 %s/%s（S7.1 早于 V188；重新 gen S7.1，秒级、不提交作业）" % (READ_DIR, signed))
     try:
@@ -2264,12 +2264,12 @@ def resolve_adp_degen_3d(is_2d, cwd, h5_name="deformation.h5"):
         geom = None
     rec["deform_geometry"] = geom
     if geom and geom != "ionrelax":
-        print("[WARN] ADP 简并价带修正：形变势构型 deform_geometry=%s。金刚石/闪锌矿的剪切形变势几乎全来自内应变"
+        print("[WARN] ADP 简并修正：形变势构型 deform_geometry=%s。金刚石/闪锌矿的剪切形变势几乎全来自内应变"
               "（Si 实测：钳位离子 |d| 只有离子弛豫的约 1/4），钳位口径下空穴 ADP 会严重偏弱 —— 先 retry S7_deform（[V187] "
               "起 3D 默认离子弛豫）-> S7.1，再重跑本步" % geom)
     rec["status"] = "pending_runtime"
-    print("[OK] ADP 简并价带修正（ADP_DEGEN = %s）：作业里按 AMSET 能带 + %s 拟合 k·p / Bir–Pikus，"
-          "适用（立方 Γ 三重简并价带）才修正，报告 adp_degen_fit.json" % (mode, signed))
+    print("[OK] ADP 简并修正（ADP_DEGEN = %s）：作业里按 vasprun + 波函数 + %s 拟合 k·p 与应变算符，"
+          "有简并 / 近简并谷才修正，报告 adp_degen_fit.json" % (mode, signed))
     return rec
 
 
@@ -2299,7 +2299,7 @@ def _install_dp_optical_3d(out, record):
         if src.resolve() != dst.resolve():
             shutil.copyfile(src, dst)
     print("[OK] %s + %s 就位（作业里 import amset_dpo3d 注册 %s）"
-          % (DPO3D_RECORD, DPO3D_PLUGIN, ",".join(record["mechanisms"] + (["ADP 简并价带修正"] if degen else []))
+          % (DPO3D_RECORD, DPO3D_PLUGIN, ",".join(record["mechanisms"] + (["ADP 简并修正"] if degen else []))
              or "ADP 谷内掩码"))
     return True
 

@@ -14,6 +14,29 @@ This project adheres to Semantic Versioning; versions before 1.0.0 are developme
 
 ## [Unreleased]
 
+### Changed (2026-10-21: [0061-g] ADP_DEGEN generalized; 2D support)
+- The ADP interband correction no longer assumes a cubic Γ triplet. `adp_degen.py` now finds band-edge valleys
+  (local extrema of the edge band on the full DFT mesh, grouped into stars by point group + time reversal; holes and
+  electrons), takes the bands within 50 meV at the valley centre as the subspace, and reads everything from the
+  material's own data:
+  - k·p matrices from projecting AMSET's wavefunction coefficients onto the k0 subspace (Löwdin; gauge-invariant).
+  - The little-group representation matrices are solved from those matrices (unitary and antiunitary ops, closed into a
+    group), and the subspace is split into common invariant blocks when it decouples.
+  - The k·p model and strain operator are fitted in the symmetry-allowed subspace. The k·p model is refined against
+    AMSET's dense bands. The strain operator reproduces S7.1's ±δ sorted central differences at k0 exactly and uses
+    the non-degenerate signed potentials near k0.
+  - The ratio table is energy-dependent, with 3 acoustic modes in 3D and 2 in-plane modes in 2D.
+- Works for any crystal system, non-Γ valley stars, SOC spinor manifolds (e.g. Γ8 + Γ7) and near-degenerate pairs.
+  Kramers pairs and non-degenerate valleys are left unchanged. When the S7 mesh cannot pin a sign, solutions whose
+  factors agree within 10% are averaged; otherwise the valley is skipped with a reason.
+- S8.4 (2D): `ADP_DEGEN` wired into `amset2d_plugin.AcousticDeformation2D` and `gen_step14_amset2d.py`. The signed file
+  matches the chosen h5 (`deformation_vac_signed.h5` for the vacuum reference). It needs real overlaps
+  (`UNITY_OVERLAP = false`). The S8.3 summary covers both runs.
+- S8 no longer refuses SOC band structures.
+- Validated on synthetic DFT data (known k·p + strain operator, random wavefunction gauges): cubic, SOC, 2D hexagonal
+  Γ/K, orthorhombic near-degenerate, 2D p_z + p_xy blocks, remote-band coupling (≤ 4%). Matches the first cubic
+  version to machine precision. Tests: `tests/test_0061_adp_degen.py` (20 tests, pure numpy).
+
 ### Added (2026-10-21: [0061] ADP interband correction for degenerate valence-band tops)
 - AMSET's ADP matrix element (diagonal deformation potential of the initial band × wavefunction overlap) misses the shear
   coupling between heavy and light holes of a cubic Γ-point p-like triplet (Si/Ge/diamond/zincblende holes, non-SOC).
