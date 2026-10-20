@@ -151,5 +151,10 @@ autozt -tt eph-qe-cpu -p Si auto on           # 或逐步：-j S10_ivsq start �
 autozt -tt ke-dft-cpu -p Si -j S8_kappa retry  # 2D 材料是 S8.4_amset2d；检查输入后 start
 ```
 
+**谷内 ODP（[0059-r3]）**：`IVS_ODP = auto`（出厂）在 q 列表末尾加一个 q=Γ 作业 `q-odp`，顺带给每个谷的谷内光学形变势，
+ke-dft-cpu S8/S8.4 里优先于冻声子与手填（不叠加）。只有一个谷的载流子也算（Si 空穴：`IVS_VALLEYS_H = G:0,0,0`）；Γ 的 3 个声学模
+不进通道；`IVS_ODP_POLAR = exclude`（出厂）时化合物的 q-odp 加 `epsil` 算 Born 电荷、极性模不算（长程由 POP 管）。
+S10 加了载流子后 S11 要重跑（谷能差自检要覆盖它），S12 据 S11 的谷能带只给需要的 q 放宽 AHC 带窗。
+
 S12 的子目录可以单独补跑（`retry` 只重生成没完成的 q；q 列表或带窗变了，旧子目录移到 `.old_q-XX_<时间>`）。
 S13 只把结果写到本技能目录，**不会**自动让 ke-dft-cpu 的 S8/S8.4 重排（跨技能）—— 按上面最后一条手动 retry。

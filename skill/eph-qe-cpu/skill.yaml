@@ -60,6 +60,8 @@ optional_steps:
   #   S13_ivs（Q4，gen）：ahc_gkk + 动力学矩阵 -> D0、ħω -> dp_optical 星通道 -> ivs_dfpt_params.json（schema ivs_dfpt/1）。
   #   ke-dft-cpu 的 S8/S8.4 push_paths 把本地 result/step13_ivs_read/ivs_dfpt_params.json 推过去，IVS_DFPT=auto 读取。
   #   push_paths（S10）：ke-dft-cpu 的本地 result 推到 ivs_inputs/（本地没有就不推，远端旧的删掉）。
+  #   [0059-r3] IVS_ODP=auto（出厂）：S10 在 q 列表末尾加 q=Γ 作业 q-odp，S13 顺带给谷内 ODP（单谷载流子也算；Γ 声学模、
+  #   极性模不进通道），ke 的 S8/S8.4 里优先于冻声子与手填。
   ivs_dfpt:
     default: false
     steps:

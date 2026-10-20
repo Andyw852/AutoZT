@@ -32,7 +32,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 # [SKILL_REV] 版本戳：写进 settings.yaml 头，便于从结果反查跑的是哪份 skill 副本。
-_SKILL_REV = "2026-10-18-0059-ivsdfpt"   # [0059] IVS_DFPT：eph-qe-cpu QE DFPT 谷间零阶形变势（ivs_dfpt_params.json）优先于冻声子 K↔K′ 与手填   # 2026-10-16-0055-dopinglow   # [0055] DOPING_LOW 低浓度段 1e3–1e9 cm^-2（≈3D 1e10–1e16；amset_fermi_fix 小掺杂 log-sum-exp 解 E_F）；[0054] undoped_ni 记带边   # 2026-10-15-0051-socdesym   # [0051] amset_desym_fix 修 SOC 分支（四元数 SU(2) + iσ_y·K，V200）；README 过期重叠口径标注取代   # 2026-10-15-0050-r1-subsets   # [0050-r1] 出厂 SUBSETS 带 IVS（开谷间时本征曲线不缺、多一套去 IVS 对照）   # 2026-10-14-0050-ivsfrozen   # [0050] 冻声子谷间 IVS 参数（IVS_FROZEN，K↔K′ 零阶、非 SOC）   # 2026-10-13-0044-reprotol   # [0044] 复现检查改相对容差（单机制 μ 在零前因子处 ~1e47）；POSTPROCESS_ONLY 不再要求 transport.json；取消本征点独立拆分脚本、回到主掺杂网格 doping=0（[0043] amset_fermi_fix 已修好 SVD）   # 2026-10-13-0043-intrsvd   # [0043] 本征点 + IMP 的 SVD 不收敛（amset_fermi_fix：n=p 严格相等 + 散射率插值死片保护）   # 2026-10-13-0041-defectdop   # [0041] DEFECT_DOPING 缺陷平衡载流子浓度进掺杂网格   # 2026-10-13-0040-undoped   # [0040] UNDOPED_POINT 本征点（doping=0）   # 2026-10-12-0038-subsets   # [0038] SUBSETS 散射机制子集（subset_<机制>.json）   # [0035-r3] 复审：not_in_scattering 只认显式排除、D 全低于阈值仍建记录、面外极性；[0035-r2] 冻声子优先、手填谷内只作对照；[0035-r1] 复审：交叉拒绝、并星平均、τ 挪到 transport.json 之后；[0035] 冻声子 ODP 参数（ODP_FROZEN）+ τ(E)（tau_energy.py）   # [0034-r3] 二审：重复星按 S8.2 k_grid 合并；显式 SCATTERING+掩码的日志   # [0034-r2] 复审：同中心谷合并、显式 SCATTERING 照办、PIE 与 settings 一致   # [0034] OVERALL_WITHOUT（出厂 ODP）-> overall_noODP.json   # [0033] ODP/谷间散射（常数形变势，step.conf DP_OPTICAL_E/H）+ ADP 谷内掩码   # [0032-r2] 复审：链首清旧本征产物与 mesh；SCATTERING 无 ADP 不出只 ADP   # [0032] WRITE_MESH/INTRINSIC_ADP_ONLY 2D 默认开（旧：2026-09-28-desym-fix V115）
+_SKILL_REV = "2026-10-20-0059r3-dfptodp"   # [0059-r3] DFPT 谷内 ODP（q=Γ）优先于冻声子/手填，不再两份叠加   # 2026-10-18-0059-ivsdfpt   # [0059] IVS_DFPT：eph-qe-cpu QE DFPT 谷间零阶形变势（ivs_dfpt_params.json）优先于冻声子 K↔K′ 与手填   # 2026-10-16-0055-dopinglow   # [0055] DOPING_LOW 低浓度段 1e3–1e9 cm^-2（≈3D 1e10–1e16；amset_fermi_fix 小掺杂 log-sum-exp 解 E_F）；[0054] undoped_ni 记带边   # 2026-10-15-0051-socdesym   # [0051] amset_desym_fix 修 SOC 分支（四元数 SU(2) + iσ_y·K，V200）；README 过期重叠口径标注取代   # 2026-10-15-0050-r1-subsets   # [0050-r1] 出厂 SUBSETS 带 IVS（开谷间时本征曲线不缺、多一套去 IVS 对照）   # 2026-10-14-0050-ivsfrozen   # [0050] 冻声子谷间 IVS 参数（IVS_FROZEN，K↔K′ 零阶、非 SOC）   # 2026-10-13-0044-reprotol   # [0044] 复现检查改相对容差（单机制 μ 在零前因子处 ~1e47）；POSTPROCESS_ONLY 不再要求 transport.json；取消本征点独立拆分脚本、回到主掺杂网格 doping=0（[0043] amset_fermi_fix 已修好 SVD）   # 2026-10-13-0043-intrsvd   # [0043] 本征点 + IMP 的 SVD 不收敛（amset_fermi_fix：n=p 严格相等 + 散射率插值死片保护）   # 2026-10-13-0041-defectdop   # [0041] DEFECT_DOPING 缺陷平衡载流子浓度进掺杂网格   # 2026-10-13-0040-undoped   # [0040] UNDOPED_POINT 本征点（doping=0）   # 2026-10-12-0038-subsets   # [0038] SUBSETS 散射机制子集（subset_<机制>.json）   # [0035-r3] 复审：not_in_scattering 只认显式排除、D 全低于阈值仍建记录、面外极性；[0035-r2] 冻声子优先、手填谷内只作对照；[0035-r1] 复审：交叉拒绝、并星平均、τ 挪到 transport.json 之后；[0035] 冻声子 ODP 参数（ODP_FROZEN）+ τ(E)（tau_energy.py）   # [0034-r3] 二审：重复星按 S8.2 k_grid 合并；显式 SCATTERING+掩码的日志   # [0034-r2] 复审：同中心谷合并、显式 SCATTERING 照办、PIE 与 settings 一致   # [0034] OVERALL_WITHOUT（出厂 ODP）-> overall_noODP.json   # [0033] ODP/谷间散射（常数形变势，step.conf DP_OPTICAL_E/H）+ ADP 谷内掩码   # [0032-r2] 复审：链首清旧本征产物与 mesh；SCATTERING 无 ADP 不出只 ADP   # [0032] WRITE_MESH/INTRINSIC_ADP_ONLY 2D 默认开（旧：2026-09-28-desym-fix V115）
 # 复制来源（gen_step10_amset.py 的 _SKILL_REV），用于人工比对两份文件是否同步
 _SOURCE_GEN_REV = "2026-10-08-2d-raw-elastic"   # [0014] S8 的 2D 弹性改为原始 slab 值，与本步一致
 import stepconf  # noqa: E402
@@ -1546,6 +1546,7 @@ def resolve_dp_optical(cwd: Path):
     f_use, f_digest, f_info = {}, {}, {}
     i_use, i_digest, i_info = {}, {}, {}
     d_use, d_digest, d_info = {}, {}, {}
+    d_odp = {}                                 # [0059-r3] DFPT 谷内 ODP（q=Γ）用没用上
     rec, kinds_on = {}, set()
     dpt = None
     for car, (ch_spec, v_spec, ch_key, v_key) in specs.items():
@@ -1572,6 +1573,7 @@ def resolve_dp_optical(cwd: Path):
             i_use[car] = "manual_valleys"
         want_dft = dft is not None and ivd.params_digest(dft, car) is not None    # [0059]
         d_use[car] = "pending" if want_dft else ("off" if dmode == "off" else "unavailable")
+        d_odp[car] = "off" if dmode == "off" else "unavailable"
         if not chs and not want_frozen and not want_ivs and not want_dft:
             continue
         raw = None
@@ -1711,10 +1713,13 @@ def resolve_dp_optical(cwd: Path):
                 sys.exit("[ERROR] %s：%s 的谷表与本步谷表（%s）对不上：%s\n        处理：S8.2 谷表变了就重跑 eph-qe-cpu 的 "
                          "S10–S13（结果拉回本地再 retry 本步），或 step.conf 写 IVS_DFPT = off" % (car, IVS_DFPT_SRC, src, err))
             keep = {v["label"] for v in vs}
-            dchs, ddrop, dnotes = ivd.inter_channels(dft, car, keep=keep, norm=dpo.norm_label,
+            dall, ddrop, dnotes = ivd.inter_channels(dft, car, keep=keep, norm=dpo.norm_label,
                                                      dmin=float(IVS_DFPT_DMIN), alias=lab)
             if dnotes:
                 sys.exit("[ERROR] %s 的 %s 通道：%s" % (IVS_DFPT_SRC, car, "; ".join(dnotes)))
+            dchs = [c for c in dall if c["kind"] != "intra"]
+            dodp = [c for c in dall if c["kind"] == "intra"]
+            has_odp = ivd.has_intra(dft, car)  # [0059-r3] DFPT 算了谷内 ODP（全部 < dmin 也算：结论就是 ≈ 0）
             ref_frozen = [c for c in chs if c.get("source") == "frozen_ivs"]
             ref_manual = [c for c in chs if c["kind"] != "intra" and c.get("source") != "frozen_ivs"]
             if ref_manual:                    # 先照常校验（写错的谷名要报出来），再只作对照
@@ -1722,17 +1727,42 @@ def resolve_dp_optical(cwd: Path):
                     dpo.check_channels(ref_manual, vs)
                 except ValueError as e:
                     sys.exit("[ERROR] %s（谷表来自 %s）：%s" % (ch_key, src, e))
-            chs = [c for c in chs if c["kind"] == "intra"] + dchs
+            # [0059-r3] 谷内 ODP：DFPT 算了就用它（优先于冻声子与手填），冻声子/手填的谷内通道只作对照，不两份叠加
+            ref_intra = [c for c in chs if c["kind"] == "intra"] if has_odp else []
+            if ref_intra and not any(c.get("source") == "frozen" for c in ref_intra):
+                try:                          # 手填的谷内通道：照常校验再只作对照
+                    dpo.check_channels(ref_intra, vs)
+                except ValueError as e:
+                    sys.exit("[ERROR] %s（谷表来自 %s）：%s" % (ch_key, src, e))
+            chs = (dodp if has_odp else [c for c in chs if c["kind"] == "intra"]) + dchs
             if i_use.get(car) == "used":      # 冻声子 K↔K′ 被 DFPT 取代：只作对照，参数再变也不让本步重排
                 i_use[car] = "superseded_dfpt"
                 i_digest.pop(car, None)
+            if has_odp:
+                d_odp[car] = "used"
+                if f_use.get(car) == "used":  # 冻声子谷内 ODP 同理
+                    f_use[car] = "superseded_dfpt"
+                    f_digest.pop(car, None)
+                    f_info[car]["superseded_by"] = "dfpt"
             d_use[car] = "used"
             d_digest[car] = ivd.params_digest(dft, car)
-            d_info[car] = {"digest": d_digest[car], "n_channels": len(dchs), "dropped_below_dmin": ddrop,
+            d_info[car] = {"digest": d_digest[car], "n_channels": len(dchs), "n_odp_channels": len(dodp) if has_odp else 0,
+                           "dropped_below_dmin": ddrop,
                            "label_map": lab, "scope": dft.get("scope"), "provenance": dft.get("provenance"),
                            "summary": ivd.describe(dft, car, norm=dpo.norm_label, keep=keep, dmin=float(IVS_DFPT_DMIN),
                                                    alias=lab)}
-            print("[OK] %s DFPT 谷间 IVS（%s）：%s" % (car, IVS_DFPT_SRC, d_info[car]["summary"]))
+            print("[OK] %s DFPT %s（%s）：%s" % (car, "谷间 IVS + 谷内 ODP" if has_odp else "谷间 IVS", IVS_DFPT_SRC,
+                                               d_info[car]["summary"]))
+            if ref_intra:
+                d_info[car]["odp_reference"] = [{"valley": c["from"], "D_eV_A": c["D_eV_A"], "hw_meV": c["hw_meV"],
+                                                 "source": c.get("source") or "manual"} for c in ref_intra]
+                print("[..] %s：谷内 ODP 用 DFPT 的，%s的谷内通道只作对照（不进散射率；要用它们写 IVS_DFPT = off，"
+                      "或 eph-qe-cpu 写 IVS_ODP = off 重跑 S10–S13）：%s"
+                      % (car, "冻声子" if any(c.get("source") == "frozen" for c in ref_intra) else "%s 里手填" % ch_key,
+                         ", ".join("%s %.2f eV/Å@%.1f meV" % (c["from"], c["D_eV_A"], c["hw_meV"]) for c in ref_intra)))
+            if has_odp and not dodp:
+                print("[..] %s：DFPT 谷内 D 全部 < %.2f eV/Å（对称性禁戒），本载流子没有谷内 ODP 通道"
+                      % (car, float(IVS_DFPT_DMIN)))
             for tag, lst in (("frozen_reference", ref_frozen), ("manual_reference", ref_manual)):
                 if lst:
                     d_info[car][tag] = [{"from": c["from"], "to": c["to"], "kind": c["kind"], "D_eV_A": c["D_eV_A"],
@@ -1774,12 +1804,16 @@ def resolve_dp_optical(cwd: Path):
             d_use[car] = "unavailable"
         if d_use[car] == "used" and not ivs_allowed:
             d_use[car] = "not_in_scattering"
+        if d_odp.get(car) == "used" and not odp_allowed:                                            # [0059-r3]
+            d_odp[car] = "not_in_scattering"
+        if "used" not in (d_use[car], d_odp.get(car)):
             d_digest.pop(car, None)
     _DP_OPTICAL_IVS_DFPT_REC = {"mode": dmode, "source": IVS_DFPT_SRC, "dmin_eV_A": float(IVS_DFPT_DMIN),
                                 "ktol": float(IVS_DFPT_KTOL),
                                 "sha256": ivd.file_sha256(str(cwd / IVS_DFPT_SRC)) if dft is not None else None,
-                                "dfpt_use": d_use, "digest": d_digest, "ivs_allowed": ivs_allowed,
-                                "info": {c: d_info[c] for c in d_info if d_use.get(c) == "used"}}
+                                "dfpt_use": d_use, "odp_use": d_odp, "digest": d_digest, "ivs_allowed": ivs_allowed,
+                                "odp_allowed": odp_allowed,
+                                "info": {c: d_info[c] for c in d_info if "used" in (d_use.get(c), d_odp.get(c))}}
     _DP_OPTICAL_IVS_REC = {"mode": imode, "source": IVS_FROZEN_SRC, "dmin_eV_A": float(IVS_FROZEN_DMIN),
                            "frozen_use": i_use, "digest": i_digest, "ivs_allowed": ivs_allowed,
                            "info": {c: i_info[c] for c in i_info if i_use.get(c) == "used"}}
@@ -1793,7 +1827,9 @@ def resolve_dp_optical(cwd: Path):
         sys.exit("[ERROR] SCATTERING 含 %s，但没有对应通道（step.conf 的 DP_OPTICAL_E/H 或冻声子参数；"
                  "ODP 要 X>X，IVS 要 X>X' 或 X>Y）%s" % (",".join(asked),
                  "。冻声子参数在用：它算出的谷内 D 全部 < ODP_FROZEN_DMIN（对称性禁戒），手填的谷内通道只作对照；"
-                 "确要用手填值写 ODP_FROZEN = off" if "used" in f_use.values() and "ODP" in asked else ""))
+                 "确要用手填值写 ODP_FROZEN = off" if "used" in f_use.values() and "ODP" in asked else
+                 ("。DFPT 谷内 ODP 在用：它算出的谷内 D 全部 < IVS_DFPT_DMIN（对称性禁戒），冻声子/手填的谷内通道只作对照"
+                  if "used" in d_odp.values() and "ODP" in asked else "")))
     if not rec:
         return None
     mode = str(ADP_INTRAVALLEY or "auto").strip().lower()
@@ -1835,7 +1871,8 @@ def resolve_dp_optical(cwd: Path):
                                                         "开" if flags[car] else "关",
                                                         "；谷内 ODP 参数来自冻声子" if f_use.get(car) == "used" else "",
                                                         "；K↔K′ 谷间参数来自冻声子" if i_use.get(car) == "used" else "")
-                  + ("；谷间 IVS 参数来自 DFPT（eph-qe-cpu）" if d_use.get(car) == "used" else ""))
+                  + ("；谷间 IVS 参数来自 DFPT（eph-qe-cpu）" if d_use.get(car) == "used" else "")
+                  + ("；谷内 ODP 参数来自 DFPT（eph-qe-cpu，q=Γ）" if d_odp.get(car) == "used" else ""))
             _vs = rec[car].get("valleys") or []                   # [0042] 多谷但没有谷间通道：提示 IVS 缺失
             if (len(_vs) > 1 or any(int(v.get("g", 1)) > 1 for v in _vs)) and not any(
                     h.get("kind") in ("inter", "inter_star") for h in rec[car].get("channels") or []):

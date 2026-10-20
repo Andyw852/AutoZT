@@ -55,8 +55,13 @@ PARAMS = {
     "IVS_SBATCH": ("", "str"),               # 额外 #SBATCH 选项，分号分隔
     "IVS_MPIRUN": ("auto", "str"),           # auto | none | 自定义（{np} 处填进程数）
     "IVS_KEEP_TMP": (False, "bool"),
-    # [0059-r3] ODP：沿带 Γ 点（q=000）AHC 顺带给谷内光学形变势；auto/on = 算，off = 不算（只保留冻声子）
+    # [0059-r3] ODP：q 列表加一个 q=Γ 作业（q-odp），AHC 顺带给每个谷的谷内光学形变势；单谷载流子也算。
+    #   auto/on = 算，off = 不算（只算谷间 IVS）
     "IVS_ODP": ("auto", "str"),     # auto | on | off
+    # 极性（红外活性）模：exclude（出厂，与冻声子 ODP_POLAR 同口径：长程 Fröhlich 由 POP 管）= q-odp 的 DFPT 加 epsil 算
+    #   Born 有效电荷判极性、不进谷内通道；include = 极性模的短程形变势也算进 ODP（不算 epsil，金属/零带隙也能跑）
+    "IVS_ODP_POLAR": ("exclude", "str"),
+    "IVS_ODP_POLAR_TOL": (0.1, "float"),   # 模有效电荷（e）大于它算极性（= ke-dft-cpu 的 ODP_POLAR_TOL）
     "QE_BIN": ("", "str"),                   # autozt 从 setting/<集群>.yaml 的 qe_bin 注入
     "QE_PSEUDO_DIR": ("", "str"),            # qe_pseudo_dir
     "QE_SETUP": ("", "str"),                 # qe_setup：作业开头执行的 shell（module load / source …）；jzzn = 用 eph-qe-cpu 的 jzzn 环境
@@ -268,6 +273,33 @@ def pw_input(calc, P, q1, prefix, outdir, kblock, nbnd=None, extra_sys=""):
 # ---------------------------------------------------------------------------
 # S10：谷表 -> q 作业
 # ---------------------------------------------------------------------------
+ODP_RUN = FANOUT_PREFIX + "odp"     # [0059-r3] q=Γ 作业的子目录名（与 q-01、q-02… 同一个扇出）
+
+
+def add_odp_gamma(carriers, classes, runs):
+    """[0059-r3] 每个载流子的每个星加一个谷内类（kind="intra"，q=Γ，初态 = 星的第一个成员），全部放进一个 q=Γ 作业。
+    同一个 k（直接带隙时电子、空穴都在 Γ）只算一次。返回加了几个类。"""
+    iv = _iv()
+    run = {"id": len(runs), "q": [0.0, 0.0, 0.0], "k": [], "name": ODP_RUN}
+    n = 0
+    for car in iv.CARRIERS:
+        for X in carriers.get(car) or []:
+            k0 = iv.wrap_half(X["k"][0])
+            ik = next((i for i, kk in enumerate(run["k"]) if iv.same_q(kk, k0, 1e-6)), None)
+            if ik is None:
+                run["k"].append(k0)
+                ik = len(run["k"]) - 1
+            g = len(X["k"])
+            classes.append({"id": len(classes), "carrier": car, "from": X["label"], "to": X["label"], "kind": "intra",
+                            "k_init": k0, "k_fin": k0, "q": [0.0, 0.0, 0.0], "run": run["id"], "ik": ik, "n_pairs": 1,
+                            "pairs": [{"from": X["label"], "to": X["label"], "kind": "intra", "j": 0,
+                                       "g_to": g, "g_from": g}]})
+            n += 1
+    if n:
+        runs.append(run)
+    return n
+
+
 def gen_qlist(P):
     iv = _iv()
     st = pick_structure(P)
@@ -283,6 +315,11 @@ def gen_qlist(P):
     want = str(P.get("IVS_CARRIERS") or "auto").strip().lower()
     if want not in ("auto", "electron", "hole", "both"):
         raise SystemExit("[ERROR] IVS_CARRIERS=%r 无效，只允许 auto / electron / hole / both" % want)
+    # [0059-r3] ODP：q=Γ 的谷内光学耦合。开着时单谷载流子（Si 空穴 Γ）也保留：它没有谷间散射，但有谷内 ODP
+    odp_mode = str(P.get("IVS_ODP") or "auto").strip().lower()
+    if odp_mode not in ("auto", "on", "off"):
+        raise SystemExit("[ERROR] IVS_ODP=%r 无效，只允许 auto / on / off" % odp_mode)
+    odp = odp_mode != "off"
     dpt, dpt_sha = None, None
     f = INPUTS / "dpt_result.json"
     if f.is_file():
@@ -344,8 +381,10 @@ def gen_qlist(P):
             raise SystemExit("[ERROR] " + bad)
         nmem = sum(len(s["k"]) for s in stars)
         if nmem <= 1:
-            print("[..] %s 只有一个谷（%s）：没有谷间散射，跳过" % (car, ", ".join(s["label"] for s in stars)))
-            continue
+            if not odp:
+                print("[..] %s 只有一个谷（%s）：没有谷间散射，跳过" % (car, ", ".join(s["label"] for s in stars)))
+                continue
+            notes.append("只有一个谷（%s）：没有谷间散射，只算谷内 ODP" % ", ".join(s["label"] for s in stars))
         carriers[car] = stars
         full_sig = iv.valley_sig([{"k_frac": s["k"]} for s in stars], use_grid=False, full3d=full3d)
         cinfo[car] = {"valleys_source": src, "use_grid": use_grid, "multi_valley_status": mv,
@@ -356,34 +395,15 @@ def gen_qlist(P):
         for n_ in notes:
             print("[..] %s：%s" % (car, n_))
     if not carriers:
-        raise SystemExit("[ERROR] 没有多谷的载流子：不需要算谷间散射（IVS_CARRIERS=%s）" % want)
-    classes, runs = iv.plan_pairs(carriers, rops)
-    # [0059-r3] ODP：加 q=Γ 的谷内光学耦合（kind="intra"）
-    odp_mode = str(P.get("IVS_ODP") or "auto").strip().lower()
-    if odp_mode not in ("auto", "on", "off"):
-        raise SystemExit("[ERROR] IVS_ODP=%r 无效，只允许 auto / on / off" % odp_mode)
-    if odp_mode in ("auto", "on") and carriers:
-        gamma_q = [0.0, 0.0, 0.0]
-        gamma_k, gamma_classes = [], []
-        for car in iv.CARRIERS:
-            for X in carriers.get(car) or []:
-                k0 = [float(x) for x in X["k"][0]]
-                gamma_k.append(k0)
-                gamma_classes.append({
-                    "id": len(classes) + len(gamma_classes), "carrier": car,
-                    "from": X["label"], "to": X["label"], "kind": "intra",
-                    "k_init": k0[:], "k_fin": k0[:], "q": gamma_q[:],
-                    "pairs": [{"from": X["label"], "to": X["label"], "kind": "intra",
-                               "j": 0, "g_to": len(X["k"]), "g_from": len(X["k"])}]})
-        if gamma_k:
-            gamma_run = {"id": len(runs), "q": gamma_q, "k": gamma_k, "name": "q-odp"}
-            for c, kk in zip(gamma_classes, gamma_k):
-                c.update(run=gamma_run["id"], ik=gamma_k.index(kk), n_pairs=1)
-            runs.append(gamma_run)
-            classes.extend(gamma_classes)
-            print("[OK] ODP（Γ 点谷内光学耦合）：%d 个谷，q = (0,0,0)" % len(gamma_k))
-        elif odp_mode == "on":
-            print("[WARN] IVS_ODP=on 但没有多谷载流子：跳过")
+        raise SystemExit("[ERROR] 没有%s的载流子：不需要算（IVS_CARRIERS=%s，IVS_ODP=%s）"
+                         % ("可算" if odp else "多谷", want, odp_mode))
+    multi = {car: stars for car, stars in carriers.items() if sum(len(s["k"]) for s in stars) > 1}
+    classes, runs = iv.plan_pairs(multi, rops)
+    if odp:
+        n_intra = add_odp_gamma(carriers, classes, runs)
+        print("[OK] ODP（Γ 点谷内光学耦合）：%d 个星，q = (0,0,0)，作业 %s" % (n_intra, ODP_RUN))
+    if not runs:
+        raise SystemExit("[ERROR] 没有要算的 q：没有多谷载流子，IVS_ODP=off")
     pse, masses = species_maps(P, st["types"])
     dft, dft_note = input_dft(P)
     prefix = "".join("%s%d" % (t.lower(), c) for t, c in zip(st["types"], st["counts"]))
@@ -488,14 +508,71 @@ def _valley_mode(P):
 # ---------------------------------------------------------------------------
 # S12：每个 q 一个子目录
 # ---------------------------------------------------------------------------
-def ahc_window(nocc, P):
+def ahc_window(nocc, P, need=0):
+    """AHC 带窗：带边上下各 nb 条（nb = max(IVS_AHC_NB, need)）。[0059-r3] need = 这个 q 的初态带边简并组要的条数
+    （Si 空穴 Γ 三重简并 -> 3），只放宽需要的那个 q，别的 q 的窗口不变（已算完的不因此重算）。"""
     nb = int(P["IVS_AHC_NB"])
     if nb < 1:
         raise SystemExit("[ERROR] IVS_AHC_NB 必须 ≥ 1")
+    nb = max(nb, int(need or 0))
     skip = max(0, int(nocc) - nb)
     nahc = int(nocc) - skip + nb
     nbnd = int(nocc) + nb + max(2, int(P["IVS_NBND_EXTRA"]))
     return skip, nahc, nbnd
+
+
+def edge_needs(nocc):
+    """[0059-r3] S11 的谷能带（valley_bands.xml + valley_ref.json 的 k 点）-> [(k, 电子要的 nb, 空穴要的 nb)]：
+    带边简并组（|ΔE| < 1 meV 连成链）有几条带。没有这两个文件（旧版 S11 的结果没拉回来）-> None。"""
+    iv = _iv()
+    d = Path(STEP["scf"])
+    if not ((d / "valley_bands.xml").is_file() and (d / "valley_ref.json").is_file()):
+        return None
+    import numpy as np
+    import ivs_qe_job as job
+    pts = json.loads((d / "valley_ref.json").read_text(encoding="utf-8"))["points"]
+    info = job._xml_info(str(d / "valley_bands.xml"))
+    ks = info["ks"]
+    # 谷能带的 k（笛卡尔 2π/alat）必须就是 valley_ref.json 的点：S11 重新生成后还没跑完时两者会对不上
+    B = np.linalg.inv(np.asarray(info["cell_bohr"], float)).T * float(info["alat_bohr"])
+    if len(ks) != len(pts) or any(np.max(np.abs(np.asarray(k, float) @ B - np.asarray(row["k_cart_2pi_alat"]))) > 1e-4
+                                  for k, row in zip(pts, ks)):
+        raise SystemExit("[ERROR] %s/valley_bands.xml 的 k 点与 valley_ref.json 对不上：S11 重新生成后还没跑完（或结果没拉回来）。"
+                         "先 start S11_ivsscf 跑完，再生成本步" % STEP["scf"])
+    out = []
+    for k, row in zip(pts, ks):
+        e = row["eig_eV"]
+        ge = iv.degenerate_group(e, nocc)
+        gh = iv.degenerate_group(e, nocc - 1)
+        out.append((k, max(ge) - nocc + 1, nocc - min(gh)))
+    return out
+
+
+def run_need(q1, run, needs):
+    """[0059-r3] 一个 q 作业的初态带边要多宽的 AHC 窗口；needs 为 None -> 0（用 IVS_AHC_NB）。
+    初态 k 不在 S11 的谷能带 k 点里 = S11 是按旧谷表跑的（S10 后来加了载流子/谷）-> 报错要求 retry S11。"""
+    if needs is None:
+        return 0
+    iv = _iv()
+    need = 0
+    for c in q1["classes"]:
+        if c["run"] != run["id"]:
+            continue
+        hit = next((n for n in needs if iv.same_q(n[0], c["k_init"], 1e-5)), None)
+        if hit is None:
+            raise SystemExit("[ERROR] %s 的初态 k (%s)（%s %s）不在 S11 谷能带的 k 点里：S11 是按旧的 S10 谷表跑的"
+                             "（后来加了载流子或谷，如 IVS_ODP 的单谷空穴）。先 retry + start S11_ivsscf（SCF + 谷能差自检，"
+                             "已算完的 q 不受影响），再生成本步"
+                             % (run["name"], ", ".join("%.4f" % x for x in c["k_init"]), c["carrier"], c["from"]))
+        need = max(need, hit[1] if c["carrier"] == "electron" else hit[2])
+    return need
+
+
+def odp_polar_mode(P):
+    m = str(P.get("IVS_ODP_POLAR") or "exclude").strip().lower()
+    if m not in ("exclude", "include"):
+        raise SystemExit("[ERROR] IVS_ODP_POLAR=%r 无效，只允许 exclude / include" % m)
+    return m
 
 
 def gen_ph(P):
@@ -506,7 +583,11 @@ def gen_ph(P):
         raise SystemExit("[ERROR] S11_ivsscf 还没完成（没有 ivs_scf.ok）")
     pre = q1["qe"]["prefix"]
     nocc = int(info["nocc"])
-    skip, nahc, nbnd = ahc_window(nocc, P)
+    needs = edge_needs(nocc)
+    if needs is None:
+        print("[WARN] 没有 S11 的谷能带（%s/valley_bands.xml、valley_ref.json）：AHC 带窗按 IVS_AHC_NB，"
+              "带边简并多于它时 S13 会报错" % STEP["scf"])
+    polar = odp_polar_mode(P)
     nat = len(q1["structure"]["symbols"])
     types = q1["structure"]["types"]
     dest = Path(STEP["ph"])
@@ -515,15 +596,21 @@ def gen_ph(P):
     for r in q1["runs"]:
         name = r["name"]
         names.append(name)
+        skip, nahc, nbnd = ahc_window(nocc, P, run_need(q1, r, needs))
+        gamma = all(abs(x) < 1e-9 for x in r["q"])
+        # [0059-r3] q=Γ 的谷内 ODP 要判极性模：DFPT 顺带算 Born 有效电荷（epsil；要有带隙）。单元素体系按非极性处理，不算
+        epsil = bool(gamma and polar == "exclude" and len(types) > 1
+                     and any(c["kind"] == "intra" for c in q1["classes"] if c["run"] == r["id"]))
         xq = iv.xq_alat(r["q"], info["cell_bohr"], info["alat_bohr"])
         qrun = {"id": r["id"], "name": name, "q_frac": r["q"], "xq_2pi_alat": xq, "k_frac": r["k"], "nk": len(r["k"]),
                 "nbnd": nbnd, "ahc_nbndskip": skip, "ahc_nbnd": nahc, "nat": nat, "nocc": nocc, "prefix": pre,
                 "classes": [c["id"] for c in q1["classes"] if c["run"] == r["id"]],
                 "qlist_sha256": _sha_file(Path(STEP["qlist"]) / "ivs_qlist.json"),
                 "scf_sha256": _sha_file(Path(STEP["scf"]) / "scf.in"),
-                "ecutwfc": float(P["IVS_ECUTWFC"]), "tr2_ph": float(P["IVS_TR2_PH"])}
+                "ecutwfc": float(P["IVS_ECUTWFC"]), "tr2_ph": float(P["IVS_TR2_PH"]), "epsil": epsil}
         d = dest / name
-        key = {k: qrun[k] for k in ("q_frac", "k_frac", "nbnd", "ahc_nbndskip", "ahc_nbnd", "scf_sha256", "ecutwfc", "tr2_ph")}
+        key = {k: qrun[k] for k in ("q_frac", "k_frac", "nbnd", "ahc_nbndskip", "ahc_nbnd", "scf_sha256", "ecutwfc", "tr2_ph",
+                                    "epsil")}
         old = d / "qrun.json"
         if old.is_file():
             try:
@@ -531,6 +618,8 @@ def gen_ph(P):
                 pk = {k: prev.get(k) for k in key}
                 if pk.get("tr2_ph") == 0.0:       # [0059-r1] 旧版把 1e-16 舍成 0.0 写进 qrun.json：当作没记录，不因此判输入变了
                     pk["tr2_ph"] = key["tr2_ph"]
+                if "epsil" not in prev:           # [0059-r3] 旧版没有这个键 = 没开 epsil
+                    pk["epsil"] = False
                 same = iv.jsonable(pk) == iv.jsonable(key)
             except ValueError:
                 same = False
@@ -544,7 +633,8 @@ def gen_ph(P):
         d.mkdir(parents=True, exist_ok=True)
         xqs = "%.12f %.12f %.12f" % tuple(xq)
         ph = ("&inputph\n  prefix = '%s'\n  outdir = './tmp'\n  fildyn = 'dyn'\n  fildvscf = 'dvscf'\n"
-              "  tr2_ph = %.3e\n  ldisp = .false.\n/\n%s\n" % (pre, float(P["IVS_TR2_PH"]), xqs))
+              "  tr2_ph = %.3e\n  ldisp = .false.\n%s/\n%s\n"
+              % (pre, float(P["IVS_TR2_PH"]), "  epsil = .true.\n" if epsil else "", xqs))
         ahc = ("&inputph\n  prefix = '%s'\n  outdir = './tmp'\n  fildyn = 'dyn.ahc'\n  fildvscf = 'dvscf'\n"
                "  ldisp = .false.\n  trans = .false.\n  electron_phonon = 'ahc'\n  ahc_nbnd = %d\n  ahc_nbndskip = %d\n"
                "  skip_upperfan = .true.\n  ahc_dir = 'ahc_dir/'\n/\n%s\n" % (pre, nahc, skip, xqs))
@@ -576,8 +666,9 @@ def gen_ph(P):
         _write(d / "qrun.json", json.dumps(iv.jsonable(qrun), indent=1) + "\n")
         _copy_job_helper(d)
         render_submit(d, "%s-ivs-%s" % (pre, name), cmd, P)
-        print("[DONE] %s：q = (%s)，xq = (%s) 2π/alat，初态 k %d 个，nbnd %d，AHC 带 %d..%d"
-              % (name, ", ".join("%.4f" % x for x in r["q"]), xqs, len(r["k"]), nbnd, skip + 1, skip + nahc))
+        print("[DONE] %s：q = (%s)，xq = (%s) 2π/alat，初态 k %d 个，nbnd %d，AHC 带 %d..%d%s"
+              % (name, ", ".join("%.4f" % x for x in r["q"]), xqs, len(r["k"]), nbnd, skip + 1, skip + nahc,
+                 "，epsil（Born 有效电荷判极性模）" if epsil else ""))
     for d in sorted(dest.glob(FANOUT_PREFIX + "*")):
         if d.is_dir() and d.name not in names:
             bak = dest / (".old_%s_%s" % (d.name, time.strftime("%Y%m%d%H%M%S")))
@@ -616,18 +707,25 @@ def gen_read(P):
             problems.append("%s：dyn 第一个 q %s 与输入 xq %s 不同" % (r["name"], dyn["q_list"][0].tolist(), qr["xq_2pi_alat"]))
             continue
         hw, e = iv.phonon_modes(dyn["C"][0], dyn["masses_ry"])
-        by_run[r["id"]] = {"qr": qr, "gkk": gkk, "etk": etk, "etq": etq, "hw": hw, "e": e, "masses": dyn["masses_ry"]}
+        by_run[r["id"]] = {"qr": qr, "gkk": gkk, "etk": etk, "etq": etq, "hw": hw, "e": e, "masses": dyn["masses_ry"],
+                           "zstar": dyn.get("zstar"), "epsilon": dyn.get("epsilon")}
     if problems:
         for p in problems:
             print("[ERROR] " + p)
         raise SystemExit("[ERROR] S12_ivsph 的产物不全/不对（见上）：retry S12_ivsph 只补没完成的 q")
+    odp_info = {}
+    for rid, R in by_run.items():                  # [0059-r3] q=Γ（谷内 ODP）：剔声学模与极性模
+        if not any(c["kind"] == "intra" for c in q1["classes"] if c["run"] == rid):
+            continue
+        R["exclude"], odp_info = odp_exclusions(R, q1, P)
     out_classes = []
     for c in q1["classes"]:
         R = by_run[c["run"]]
         qr = R["qr"]
         try:
             res = iv.class_couplings(R["gkk"][c["ik"]], R["etk"][c["ik"]], R["etq"][c["ik"]], R["hw"], R["e"], R["masses"],
-                                     qr["nocc"], qr["ahc_nbndskip"], qr["ahc_nbnd"], c["carrier"])
+                                     qr["nocc"], qr["ahc_nbndskip"], qr["ahc_nbnd"], c["carrier"],
+                                     exclude=R.get("exclude") if c["kind"] == "intra" else None)
         except ValueError as e:
             raise SystemExit("[ERROR] 等价类 %d（%s %s→%s）：%s" % (c["id"], c["carrier"], c["from"], c["to"], e))
         res.update({k: c[k] for k in ("id", "carrier", "from", "to", "kind", "k_init", "k_fin", "q", "n_pairs", "pairs")})
@@ -644,7 +742,8 @@ def gen_read(P):
     params = {"schema": iv.SCHEMA, "created": time.strftime("%Y-%m-%d %H:%M:%S"), "dim": q1["dim"],
               "structure_sha256": q1["structure"]["sha256"], "structure_source": q1["structure"]["source"],
               "valleys_source_sha256": (q1.get("inputs") or {}).get("dpt_result_sha256"),
-              "scope": "零阶谷间形变势（DFPT 直接矩阵元，非 SOC；不含一阶谷间耦合）",
+              "scope": ("零阶谷间形变势（DFPT 直接矩阵元，非 SOC；不含一阶谷间耦合）"
+                        + ("＋谷内零阶光学形变势 ODP（q=Γ）" if odp_info else "")),
               "provenance": {"qe_version": info.get("qe_version"), "input_dft": q1["qe"]["input_dft"],
                              "input_dft_note": q1["qe"]["input_dft_note"], "ecutwfc_Ry": q1["qe"]["ecutwfc_Ry"],
                              "ecutrho_Ry": q1["qe"]["ecutrho_Ry"], "kgrid": q1["qe"]["kgrid"], "tr2_ph": q1["qe"]["tr2_ph"],
@@ -654,7 +753,7 @@ def gen_read(P):
                                          for t in q1["structure"]["types"]},
                              "method": "ph.x electron_phonon='ahc'（trans=.false.，单 q），|g| 按初/终态简并组平均"},
               "checks": {"valley_check": (vchk or {}).get("status"), "valley_check_mode": (vchk or {}).get("mode")},
-              "carriers": carriers, "raw": out_classes}
+              "odp": odp_info or None, "carriers": carriers, "raw": out_classes}
     dest = Path(STEP["read"])
     _write(dest / "ivs_dfpt_params.json", json.dumps(iv.jsonable(params), indent=1, ensure_ascii=False) + "\n")
     _write(dest / "ivs_dfpt_table.txt", table_text(params))
@@ -662,6 +761,38 @@ def gen_read(P):
     print("[DONE] %s/ivs_dfpt_params.json（schema %s）。ke-dft-cpu 要用它：结果拉回本地后对 S8_kappa（3D）/ S8.4_amset2d（2D）"
           "执行 retry（gen 时自动推过去，IVS_DFPT=auto 读取）" % (dest, iv.SCHEMA))
     return 0
+
+
+def odp_exclusions(R, q1, P):
+    """[0059-r3] q=Γ 作业 -> ({模下标（0 基）: 不进谷内通道的原因}, 记录)。
+    声学模：平移权重最大的 3 个（ħω≈0，谷内声学耦合由 ADP 管；数值上不严格为 0，r3 初版在 Si 上漏进一条 0.58 meV 的）。
+    极性模：IVS_ODP_POLAR=exclude 时按 Born 有效电荷（q-odp 的 DFPT 开 epsil）的模有效电荷 > IVS_ODP_POLAR_TOL 判，
+    长程 Fröhlich 耦合由 POP 管（与冻声子 ODP_POLAR 同口径）。单元素体系没有 Born 电荷时按非极性处理。"""
+    iv = _iv()
+    ac, tw = iv.acoustic_modes(R["e"], R["masses"])
+    ex = {i: "声学模（q=Γ，平移权重 %.2f）" % tw[i] for i in ac}
+    polar = odp_polar_mode(P)
+    tol = float(P.get("IVS_ODP_POLAR_TOL") or iv.POLAR_TOL_E)
+    rec = {"acoustic_modes": [i + 1 for i in ac], "polar": polar, "polar_tol_e": tol, "polar_modes": [],
+           "zmode_e": None, "born_source": None}
+    if polar == "exclude":
+        if R.get("zstar") is not None:
+            two_d = q1["dim"] == "2d"
+            zm = iv.mode_charges(R["e"], R["masses"], R["zstar"], two_d=two_d)
+            rec["zmode_e"] = [round(float(z), 4) for z in zm]
+            rec["born_source"] = "ph.x epsil（%s）" % R["qr"]["name"]
+            for i, z in enumerate(zm):
+                if i not in ex and z > tol:
+                    ex[i] = "%s极性模（%s模有效电荷 %.2f e > %.2f；长程耦合由 POP 管，IVS_ODP_POLAR=include 才算）" % (
+                        "面内" if two_d else "", "面内" if two_d else "", z, tol)
+                    rec["polar_modes"].append(i + 1)
+        elif len(q1["structure"]["types"]) == 1:
+            rec["born_source"] = "单元素体系，按非极性处理（没有 Born 有效电荷）"
+        else:
+            raise SystemExit("[ERROR] %s 的 dyn 里没有 Born 有效电荷（DFPT 没开 epsil：旧版生成的输入？），判不了哪些模是极性的。"
+                             "retry + start S12_ivsph（只重算 %s），或 step.conf 写 IVS_ODP_POLAR = include（极性模的短程"
+                             "形变势也算进 ODP）" % (R["qr"]["name"], R["qr"]["name"]))
+    return ex, rec
 
 
 def table_text(params):
@@ -675,12 +806,12 @@ def table_text(params):
             lines.append("  %s→%s (%s) q=(%s) ×%d 对  带 %s→%s：%s" % (r["from"], r["to"], r["run"],
                                                                  ", ".join("%.3f" % x for x in r["q"]), r["n_pairs"],
                                                                  r["init_bands"], r["final_bands"], gr))
-        lines.append("#   dp_optical 星通道（X>Y：D²/g_Y；X>X'：D²/(g_X−1)；同 ħω 合并）")
+        lines.append("#   dp_optical 星通道（X>Y：D²/g_Y；X>X'：D²/(g_X−1)；X>X 谷内 ODP 不除；同 ħω 合并）")
         for ch in c["channels"]:
             lines.append("  %s>%s%s:%.3f@%.2f" % (ch["from"], ch["to"], "'" if ch["kind"] == "inter_star" else "",
                                                 ch["D_eV_A"], ch["hw_meV"]))
         if c.get("dropped"):
-            lines.append("#   丢掉（ħω 太低/虚频）：%s" % ", ".join("%.1f meV" % d["hw_meV"] for d in c["dropped"]))
+            lines.append("#   不进通道：%s" % "; ".join("%.1f meV（%s）" % (d["hw_meV"], d["why"]) for d in c["dropped"]))
     return "\n".join(lines) + "\n"
 
 

@@ -55,6 +55,8 @@ PH_DEG_MEV = 0.05                  # 声子简并判据
 HW_MERGE_MEV = 0.1                 # 同一对星的两条通道 ħω 相差小于它就合并
 HW_MIN_MEV = 0.5                   # ħω 低于它（或虚频）的模不进通道（失稳/数值零），记进 dropped
 DMIN_EV_A = 0.05                   # S8/S8.4 用：D 小于它的通道不进散射率（对称性禁戒）
+POLAR_TOL_E = 0.1                  # [0059-r3] 模有效电荷（e）大于它 = 极性模（= ke-dft-cpu odp_frozen.POLAR_TOL_E）
+N_ACOUSTIC = 3                     # [0059-r3] q=Γ 剔除平移权重最大的 3 个模（声学模，ħω≈0、耦合由 ADP 管）
 SYMPREC_A = 0.01                   # 找对称操作的原子位置容差（Å，与 AMSET 的 symprec 同量级）
 KEY_ND = 5                         # k 点比较键的小数位（模 1）
 VALLEY_TOL_MEV = 30.0              # Q2：QE 的谷能差与 S8.2 的差多少以内算一致
@@ -534,7 +536,24 @@ def read_dyn(path):
             n += 1
     if not Cs:
         raise ValueError("%s 里没有 Dynamical Matrix 块" % path)
-    return {"masses_ry": masses, "q_list": qs, "C": Cs, "nat": nat, "alat": alat, "ityp": ityp}
+    eps, zstar = None, None                    # [0059-r3] q=Γ 且 epsil=.true.：介电张量与 Born 有效电荷
+    for n, ln in enumerate(lines):
+        if "Dielectric Tensor:" in ln:
+            rows = [r for r in lines[n + 1:n + 6] if r.strip()][:3]
+            eps = np.array([[float(x) for x in re.findall(_NUM, r)[:3]] for r in rows])
+        elif "Effective Charges E-U" in ln:
+            # QE write_epsilon_and_zeu：每个原子 "atom #  na" + 3 行，第 α 行 = 电场方向 α，3 列 = 位移方向 β
+            z, p = [], n + 1
+            while len(z) < nat and p < len(lines):
+                if lines[p].strip().startswith("atom #"):
+                    z.append([[float(x) for x in re.findall(_NUM, lines[p + 1 + r])[:3]] for r in range(3)])
+                    p += 4
+                else:
+                    p += 1
+            if len(z) == nat:
+                zstar = np.array(z, float)
+    return {"masses_ry": masses, "q_list": qs, "C": Cs, "nat": nat, "alat": alat, "ityp": ityp,
+            "epsilon": eps, "zstar": zstar}
 
 
 def phonon_modes(C, masses_ry):
@@ -572,6 +591,34 @@ def phonon_groups(hw_mev, tol=PH_DEG_MEV):
     return out
 
 
+def acoustic_modes(e, masses_ry, n=N_ACOUSTIC):
+    """[0059-r3] q=Γ：平移子空间投影权重最大的 n 个模（0 基下标）+ 全部模的权重。
+    平移 T_α = √m_κ ê_α / √ΣM（与 ke-dft-cpu odp_frozen.mode_table 同口径）；e 是质量加权本征矢（列 = 模）。"""
+    m = np.repeat(np.asarray(masses_ry, float), 3)
+    nat = len(m) // 3
+    T = np.zeros((3 * nat, 3))
+    for a in range(3):
+        T[a::3, a] = np.sqrt(m[a::3] / m[a::3].sum())
+    tw = np.sum(np.abs(T.T @ np.asarray(e)) ** 2, axis=0)
+    return sorted(int(i) for i in np.argsort(-tw)[:n]), tw
+
+
+def mode_charges(e, masses_ry, zstar, two_d=False):
+    """[0059-r3] Born 有效电荷 zstar (nat, 3 电场, 3 位移) -> 每个模的模有效电荷 |Σ Z*·U|/|U|（e），U = e/√M。
+    2D 只看面内偶极（二维 POP 只含面内极性模；与 odp_frozen 的面内判据同口径），3D 看总偶极。"""
+    m = np.repeat(np.asarray(masses_ry, float), 3)
+    U = np.asarray(e) / np.sqrt(m)[:, None]                               # (3nat, 模)
+    Z = np.asarray(zstar, float)
+    nat = Z.shape[0]
+    Zm = np.zeros((3, 3 * nat))
+    for k in range(nat):
+        Zm[:, 3 * k:3 * k + 3] = Z[k]
+    dip = Zm @ U                                                           # (3, 模)
+    if two_d:
+        dip = dip[:2]
+    return np.sqrt(np.sum(np.abs(dip) ** 2, axis=0)) / np.sqrt(np.sum(np.abs(U) ** 2, axis=0))
+
+
 def mode_D2(gkk_k, e, masses_ry, init_ahc, final_bands):
     """一个 k 的 gkk (3nat, ahc_nbnd, nbnd) -> 每个模的 D²（(eV/Å)²），已对初/终态简并组求和并除以 d_初·d_终。
     init_ahc：初态在 ahc 窗口里的下标（0 基，相对 ahc_nbndskip）；final_bands：终态在 k+q 全部带里的下标（0 基）。"""
@@ -589,9 +636,11 @@ def edge_band(nocc, carrier):
 
 
 def class_couplings(gkk_k, etk_k, etq_k, hw, e, masses_ry, nocc, ahc_skip, ahc_nbnd, carrier,
-                    deg_tol=DEG_TOL_EV, ph_tol=PH_DEG_MEV):
+                    deg_tol=DEG_TOL_EV, ph_tol=PH_DEG_MEV, exclude=None):
     """一个等价类（一个 k、一个 q）-> {"init_bands","final_bands","E_init_eV","E_final_eV","modes":[…],"groups":[…]}。
-    groups：声子简并组，{"modes","hw_meV","D_eV_A"}（D² 为组内相加）。初态简并组越出 ahc 窗口 -> ValueError。"""
+    groups：声子简并组，{"modes","hw_meV","D_eV_A"}（D² 为组内相加）。初态简并组越出 ahc 窗口 -> ValueError。
+    [0059-r3] exclude = {模下标（0 基）: 原因}（q=Γ 的声学模、极性模）：模照样记下，所在的组标 "exclude": 原因，
+    fold_channels 不让它进通道。"""
     nb = edge_band(nocc, carrier)
     ib = degenerate_group(etk_k, nb, deg_tol)
     fb = degenerate_group(etq_k, nb, deg_tol)
@@ -600,12 +649,19 @@ def class_couplings(gkk_k, etk_k, etq_k, hw, e, masses_ry, nocc, ahc_skip, ahc_n
         raise ValueError("初态简并组（带 %s）越出 AHC 窗口 %d..%d：加大 IVS_AHC_NB" % ([x + 1 for x in ib], lo + 1, hi))
     d2 = mode_D2(gkk_k, e, masses_ry, [x - lo for x in ib], fb)
     hw = np.asarray(hw, float)
+    exclude = exclude or {}
     modes = [{"mode": int(nu) + 1, "hw_meV": float(hw[nu]), "D_eV_A": float(math.sqrt(max(d2[nu], 0.0)))}
              for nu in range(len(hw))]
+    for nu, why in exclude.items():
+        modes[int(nu)]["exclude"] = why
     groups = []
     for grp in phonon_groups(list(hw), ph_tol):
-        groups.append({"modes": [g + 1 for g in grp], "hw_meV": float(np.mean(hw[grp])),
-                       "D_eV_A": float(math.sqrt(max(float(np.sum(d2[grp])), 0.0)))})
+        g = {"modes": [x + 1 for x in grp], "hw_meV": float(np.mean(hw[grp])),
+             "D_eV_A": float(math.sqrt(max(float(np.sum(d2[grp])), 0.0)))}
+        why = sorted({exclude[x] for x in grp if x in exclude})
+        if why:
+            g["exclude"] = "；".join(why)
+        groups.append(g)
     return {"init_bands": [x + 1 for x in ib], "final_bands": [x + 1 for x in fb],
             "E_init_eV": float(etk_k[nb]), "E_final_eV": float(etq_k[nb]), "modes": modes, "groups": groups}
 
@@ -614,11 +670,15 @@ def fold_channels(classes_out, hw_min=HW_MIN_MEV, merge_mev=HW_MERGE_MEV):
     """等价类结果 -> dp_optical 星通道（一个载流子）。
     classes_out：[{"pairs": [{"from","to","kind","g_to","g_from"}…], "groups": [{"hw_meV","D_eV_A"}…]}…]。
     返回 (channels, dropped)：channels = [{"from","to","kind","D_eV_A","hw_meV","n_terms"}]；
-    dropped = ħω < hw_min（含虚频）的组。"""
+    dropped = ħω < hw_min（含虚频）的组、[0059-r3] 标了 exclude 的组（q=Γ 声学/极性模）。
+    星平均：X>Y 除 g_Y；X>X' 除 g_X − 1；X>X（谷内 ODP，[0059-r3]）不除（每个谷各自的 D）。"""
     acc, dropped = {}, []
     for c in classes_out:
         for gr in c["groups"]:
             hw, D = float(gr["hw_meV"]), float(gr["D_eV_A"])
+            if gr.get("exclude"):                  # [0059-r3] q=Γ 的声学模 / 极性模
+                dropped.append({"class": c.get("id"), "hw_meV": hw, "D_eV_A": D, "why": gr["exclude"]})
+                continue
             if not (hw >= hw_min) or not math.isfinite(D):
                 dropped.append({"class": c.get("id"), "hw_meV": hw, "D_eV_A": D, "why": "ħω < %.2g meV 或虚频" % hw_min})
                 continue
@@ -659,9 +719,18 @@ def _carrier(params, carrier):
     return c if c.get("status") == "ok" else None
 
 
+def has_intra(params, carrier):
+    """[0059-r3] 这份参数有没有算该载流子的谷内 ODP（q=Γ，IVS_ODP 开着）。算了但全部 < dmin（对称性禁戒，如 Si 电子
+    的 X 谷）也算"有"：DFPT 的结论就是谷内 ODP ≈ 0，冻声子/手填的谷内通道照样只作对照。"""
+    if not _carrier(params, carrier):
+        return False
+    return any(r.get("carrier") == carrier and r.get("kind") == "intra" for r in (params or {}).get("raw") or [])
+
+
 def inter_channels(params, carrier, keep=None, norm=None, dmin=DMIN_EV_A, alias=None):
     """ivs_dfpt_params.json 某载流子 -> ([dp_optical 通道], [D < dmin 丢掉的], [提示])。
-    通道：{"from","to","kind": inter|inter_star,"D_eV_A","hw_meV","source": "dfpt_ivs"}；alias（S8.4 并掉的重复星）先换成
+    通道：{"from","to","kind": inter|inter_star|intra,"D_eV_A","hw_meV","source": "dfpt_ivs"（谷间）/"dfpt_odp"（谷内，
+    [0059-r3]）}——谷内的也在里面，调用方按 kind 分开（DFPT 谷内优先于冻声子/手填，不能两份都进散射率）；alias（S8.4 并掉的重复星）先换成
     保留的标签；keep 给了就只要两端都在 keep 里的（两端不在的记进提示，调用方据此报错）。同一对星换标签后 ħω 撞车的按 D² 相加。"""
     c = _carrier(params, carrier)
     if not c:
@@ -684,7 +753,8 @@ def inter_channels(params, carrier, keep=None, norm=None, dmin=DMIN_EV_A, alias=
         if D < dmin:
             dropped.append({"from": a, "to": b, "kind": kind, "hw_meV": hw, "D_eV_A": D})
             continue
-        chs.append({"from": a, "to": b, "kind": kind, "D_eV_A": D, "hw_meV": hw, "source": "dfpt_ivs"})
+        chs.append({"from": a, "to": b, "kind": kind, "D_eV_A": D, "hw_meV": hw,
+                    "source": "dfpt_odp" if kind == "intra" else "dfpt_ivs"})
     return chs, dropped, notes
 
 
@@ -708,7 +778,8 @@ def describe(params, carrier, norm=None, keep=None, dmin=DMIN_EV_A, alias=None):
     parts = []
     for (a, b, kind), lst in sorted(by.items()):
         tot = math.sqrt(sum(x["D_eV_A"] ** 2 for x in lst))
-        parts.append("%s>%s%s %d 支(√ΣD² %.2f eV/Å)" % (a, b, "'" if kind == "inter_star" else "", len(lst), tot))
+        parts.append("%s>%s%s %d 支(√ΣD² %.2f eV/Å)%s" % (a, b, "'" if kind == "inter_star" else "", len(lst), tot,
+                                                         " 谷内 ODP" if kind == "intra" else ""))
     return "; ".join(parts)
 
 

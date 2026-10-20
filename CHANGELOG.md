@@ -14,6 +14,22 @@ This project adheres to Semantic Versioning; versions before 1.0.0 are developme
 
 ## [Unreleased]
 
+### Fixed (2026-10-20: [0059-r3] DFPT intravalley ODP)
+- S8 / S8.4 put the intravalley ODP into the rates twice when both DFPT (`ivs_dfpt_params.json`) and frozen-phonon/manual
+  parameters existed (e.g. Si holes 7.77 + 6.0). DFPT intravalley now wins; frozen/manual intravalley channels are reference
+  only (`odp_reference`), frozen is recorded as `superseded_dfpt` and no longer triggers a re-run.
+- eph-qe-cpu S13: the 3 acoustic modes at q=Γ are excluded explicitly (QE gives 0.6–0.8 meV, above the 0.5 meV threshold).
+- eph-qe-cpu S10: single-valley carriers (Si holes at Γ) are kept for ODP when `IVS_ODP` is on; electron/hole sharing a k
+  share one nscf k-point.
+
+### Added (2026-10-20: [0059-r3])
+- eph-qe-cpu S12: per-q AHC window widened from S11's valley bands when the band-edge degeneracy exceeds `IVS_AHC_NB`
+  (Si Γ holes → 3); other q's are untouched. A stale S11 (no valley bands for the new initial k) is an error.
+- `IVS_ODP_POLAR = exclude|include` (+ `IVS_ODP_POLAR_TOL`): polar modes at Γ are judged from Born charges computed by
+  `epsil` in the q-odp DFPT run (compounds only), consistent with frozen-phonon `ODP_POLAR`.
+- S8.3 summary prints an `[ODP 参数来源]` line. Local QE 7.4 check on Si: hole Γ ODP D = 7.89 eV/Å @ 63.9 meV vs frozen 7.77.
+- Tests: `test_r3_*` in `tests/test_0059_ivs_dfpt.py`.
+
 ### Fixed (2026-10-19: [0059-r2] 打印/找谷口径)
 - `postprocess_intrinsic.py` printed "intrinsic mobility" from `mobility[0][t300]`, i.e. the **first doping row** (−1e21),
   not the intrinsic point → now prints the **lowest non-zero doping** row ("本征近似"), Si = 1459 cm²/Vs at n = 1e10.

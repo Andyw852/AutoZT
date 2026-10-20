@@ -675,3 +675,346 @@ def test_cluster_injects_qe_keys(tmp_path, monkeypatch):
     assert "QE_SETUP = source ~/software/AutoZT/qe-7.4/env.sh" in txt
     import stepconf
     assert {"QE_BIN", "QE_PSEUDO_DIR", "QE_SETUP"} <= stepconf.RESERVED_PARAMS
+
+
+# ---------------------------------------------------------------------------
+# [0059-r3] DFPT 顺带算谷内 ODP（q=Γ）：单谷载流子、按 q 放宽的 AHC 窗口、Γ 声学/极性模、消费端不重复计数
+# ---------------------------------------------------------------------------
+SI_E = "IVS_VALLEYS_E = X:0,0.425,0.425\nIVS_ECUTWFC = 30\nIVS_SCF_KGRID = 6 6 6\nIVS_INPUT_DFT = none\n" \
+       "IVS_PSEUDO_FILES = Si:Si_ONCV_PBE-1.2.upf\nQE_BIN = /opt/qe/bin\nQE_PSEUDO_DIR = /opt/pseudo\n"
+
+
+def _qlist(d, c, extra):
+    _conf(d, SI_E + extra)
+    with redirect_stdout(io.StringIO()) as buf:
+        assert c.main("qlist") == 0
+    return json.loads((d / "step10_ivs_qlist" / "ivs_qlist.json").read_text()), buf.getvalue()
+
+
+def test_r3_qlist_single_valley_hole(eph):
+    d, c = eph
+    shutil.copy(FIX / "POSCAR", d / "POSCAR")
+    q1, log = _qlist(d, c, "IVS_VALLEYS_H = G:0,0,0\n")
+    assert [r["name"] for r in q1["runs"]] == ["q-01", "q-02", "q-odp"]          # 谷间 q 的编号不变
+    odp = q1["runs"][-1]
+    assert odp["q"] == [0.0, 0.0, 0.0] and len(odp["k"]) == 2                     # 电子 X、空穴 Γ 各一个初态
+    intra = sorted((x["carrier"], x["from"], x["ik"]) for x in q1["classes"] if x["kind"] == "intra")
+    assert intra == [("electron", "X", 0), ("hole", "Γ", 1)]
+    assert q1["carriers"]["hole"]["valleys"][0]["g"] == 1 and "只算谷内 ODP" in log
+    # 关掉 ODP：单谷的空穴照旧跳过
+    q1, log = _qlist(d, c, "IVS_VALLEYS_H = G:0,0,0\nIVS_ODP = off\n")
+    assert "hole" not in q1["carriers"] and len(q1["runs"]) == 2 and "跳过" in log
+    # 只要空穴：ODP 开着 = 只有 q-odp；关掉 = 没东西可算 -> 报错
+    q1, _ = _qlist(d, c, "IVS_VALLEYS_H = G:0,0,0\nIVS_CARRIERS = hole\n")
+    assert [r["name"] for r in q1["runs"]] == ["q-odp"] and len(q1["classes"]) == 1
+    _conf(d, SI_E + "IVS_VALLEYS_H = G:0,0,0\nIVS_CARRIERS = hole\nIVS_ODP = off\n")
+    with pytest.raises(SystemExit, match="多谷"):
+        with redirect_stdout(io.StringIO()):
+            c.main("qlist")
+    # 直接带隙（电子、空穴都在 Γ）：q-odp 里同一个 k 只算一次
+    _conf(d, SI_E.replace("X:0,0.425,0.425", "G:0,0,0") + "IVS_VALLEYS_H = G:0,0,0\n")
+    with redirect_stdout(io.StringIO()):
+        assert c.main("qlist") == 0
+    q1 = json.loads((d / "step10_ivs_qlist" / "ivs_qlist.json").read_text())
+    assert len(q1["runs"]) == 1 and q1["runs"][0]["k"] == [[0.0, 0.0, 0.0]]
+    assert [x["ik"] for x in q1["classes"]] == [0, 0]
+
+
+def _xml_k(path, pts, eigs_ha, nelec):
+    """谷能带 XML，k_point 按 QE 的口径写成笛卡尔 2π/alat（晶胞与 _xml 相同）。"""
+    A = np.array([[0, 5.0, 5.0], [5.0, 0, 5.0], [5.0, 5.0, 0]])
+    B = np.linalg.inv(A).T * 7.25
+    ks = "".join('<ks_energies><k_point weight="1">%s</k_point><eigenvalues size="%d">%s</eigenvalues></ks_energies>'
+                 % (" ".join(repr(float(x)) for x in np.asarray(k, float) @ B), len(e), " ".join(repr(x) for x in e))
+                 for k, e in zip(pts, eigs_ha))
+    path.write_text(
+        '<?xml version="1.0"?><qes:espresso xmlns:qes="x"><output><atomic_structure nat="2" alat="7.25">'
+        "<cell><a1>0 5 5</a1><a2>5 0 5</a2><a3>5 5 0</a3></cell></atomic_structure><band_structure>"
+        "<lsda>false</lsda><noncolin>false</noncolin><spinorbit>false</spinorbit><nbnd>%d</nbnd><nelec>%s</nelec>%s"
+        "</band_structure></output></qes:espresso>" % (len(eigs_ha[0]), nelec, ks), encoding="utf-8")
+
+
+def _s11(d, c, ha_by_point, nocc=4):
+    """S11 的产物：gen_scf 写 valley_ref.json，再按点给谷能带（Ha）写 valley_bands.xml。"""
+    with redirect_stdout(io.StringIO()):
+        assert c.main("scf") == 0
+    s11 = d / "step11_ivs_scf"
+    shutil.copy(FIX / "step11_ivs_scf" / "ivs_scf_info.json", s11)
+    (s11 / "ivs_scf.ok").write_text("OK\n")
+    pts = json.loads((s11 / "valley_ref.json").read_text())["points"]
+    _xml_k(s11 / "valley_bands.xml", pts, [ha_by_point(k) for k in pts], nelec=2.0 * nocc)
+    return pts
+
+
+def test_r3_ahc_window_per_q(eph):
+    d, c = eph
+    shutil.copy(FIX / "POSCAR", d / "POSCAR")
+    _qlist(d, c, "IVS_VALLEYS_H = G:0,0,0\n")
+    ha = 1 / 27.211386245988
+    gam = [x * ha for x in (-12.0, 0.0, 0.0, 0.0, 2.5, 2.5, 2.5, 3.3)]           # Γ：价带顶三重简并
+    xpt = [x * ha for x in (-8.0, -3.0, -2.0, -2.0, 0.6, 0.6, 3.0, 4.0)]         # X：导带底二重简并
+    _s11(d, c, lambda k: gam if max(abs(x) for x in k) < 1e-9 else xpt)
+    with redirect_stdout(io.StringIO()) as buf:
+        assert c.main("ph") == 0
+    qr = {n: json.loads((d / "step12_ivs_ph" / n / "qrun.json").read_text()) for n in ("q-01", "q-02", "q-odp")}
+    assert [(qr[n]["ahc_nbndskip"], qr[n]["ahc_nbnd"]) for n in ("q-01", "q-02")] == [(2, 4), (2, 4)]   # 不变
+    assert (qr["q-odp"]["ahc_nbndskip"], qr["q-odp"]["ahc_nbnd"]) == (1, 6)        # 空穴三重简并 -> 带边上下各 3 条
+    assert "epsil" not in (d / "step12_ivs_ph" / "q-odp" / "ph_dfpt.in").read_text()  # 单元素：不算 Born 电荷
+    assert "AHC 带 2..7" in buf.getvalue()
+    # 旧版 qrun.json（没有 epsil 键）+ 同样的输入：已完成的 q 不动
+    for n in ("q-01", "q-02"):
+        f = d / "step12_ivs_ph" / n / "qrun.json"
+        j = json.loads(f.read_text())
+        j.pop("epsil")
+        f.write_text(json.dumps(j))
+        (d / "step12_ivs_ph" / n / "ivs_ph.ok").write_text("OK\n")
+    with redirect_stdout(io.StringIO()) as buf:
+        assert c.main("ph") == 0
+    assert buf.getvalue().count("已完成且输入没变") == 2 and not list((d / "step12_ivs_ph").glob(".old_*"))
+    # S11 是按旧谷表跑的（谷能带里没有空穴的 Γ）-> 报错要求先重跑 S11
+    s11 = d / "step11_ivs_scf"
+    ref = json.loads((s11 / "valley_ref.json").read_text())
+    keep = [i for i, k in enumerate(ref["points"]) if max(abs(x) for x in k) > 1e-9]
+    ref["points"] = [ref["points"][i] for i in keep]
+    (s11 / "valley_ref.json").write_text(json.dumps(ref))
+    _xml_k(s11 / "valley_bands.xml", ref["points"], [xpt] * len(keep), nelec=8.0)
+    with pytest.raises(SystemExit, match="不在 S11 谷能带"):
+        with redirect_stdout(io.StringIO()):
+            c.main("ph")
+    # S11 重新生成了（valley_ref.json 换了点）但谷能带还是旧的 -> 报错，不按位置错配
+    pts2 = [[0.1, 0.0, 0.0]] + ref["points"][1:]
+    _xml_k(s11 / "valley_bands.xml", pts2, [xpt] * len(keep), nelec=8.0)
+    with pytest.raises(SystemExit, match="对不上"):
+        with redirect_stdout(io.StringIO()):
+            c.main("ph")
+    # 没有谷能带（旧版 S11 的结果）：按 IVS_AHC_NB，提示 S13 可能报错
+    (s11 / "valley_bands.xml").unlink()
+    with redirect_stdout(io.StringIO()) as buf:
+        assert c.main("ph") == 0
+    assert "IVS_AHC_NB" in buf.getvalue()
+
+
+def test_r3_epsil_for_compounds(eph):
+    d, c = eph
+    (d / "POSCAR").write_text(MOS2_POSCAR)
+    r_m = _rops(MOS2_LAT, MOS2_FRAC, ["Mo", "S", "S"])
+    (d / "ivs_inputs").mkdir()
+    Q = [list(map(float, k)) for k in _q_star(r_m)]
+    (d / "ivs_inputs" / "dpt_result.json").write_text(json.dumps(_dpt_json(Q)))
+    (d / "ivs_inputs" / "workflow_method.txt").write_text("FUNC=pbesol\nDIM=2D\n")
+    _conf(d)
+    with redirect_stdout(io.StringIO()):
+        assert c.main("qlist") == 0
+    s11 = d / "step11_ivs_scf"
+    s11.mkdir()
+    (s11 / "scf.in").write_text("x\n")
+    (s11 / "ivs_scf.ok").write_text("OK\n")
+    (s11 / "ivs_scf_info.json").write_text(json.dumps({"alat_bohr": 6.0, "nocc": 13,
+                                                        "cell_bohr": [[6.0, 0, 0], [-3.0, 5.196, 0], [0, 0, 34.0]]}))
+    with redirect_stdout(io.StringIO()):
+        assert c.main("ph") == 0
+    ph = d / "step12_ivs_ph"
+    assert "epsil = .true." in (ph / "q-odp" / "ph_dfpt.in").read_text()
+    assert "epsil" not in (ph / "q-01" / "ph_dfpt.in").read_text()
+    assert json.loads((ph / "q-odp" / "qrun.json").read_text())["epsil"] is True
+    _conf(d, "IVS_ODP_POLAR = include\n")                                         # include：不算 Born 电荷
+    with redirect_stdout(io.StringIO()) as buf:
+        assert c.main("ph") == 0
+    assert "epsil" not in (ph / "q-odp" / "ph_dfpt.in").read_text() and "q-odp 的输入变了" in buf.getvalue()
+
+
+def _diatomic(k_xy=0.3, k_z=0.5, m=(28.0, 16.0), noise=0.0):
+    """双原子（各向异性弹簧）Γ 点力常数（Ry/bohr²）+ 质量（Ry）：3 个声学模（ħω≈0）、面内 2 个 + 面外 1 个光学模。"""
+    K = np.diag([k_xy, k_xy, k_z])
+    C = np.block([[K, -K], [-K, K]]).astype(complex)
+    C += noise * np.eye(6)                                                       # 数值噪声：声学模不严格为 0
+    masses = np.array(m) * iv.AMU_RY
+    return C, masses
+
+
+def test_r3_gamma_acoustic_and_polar_modes():
+    C, masses = _diatomic(noise=1e-7)
+    hw, e = iv.phonon_modes(C, masses)
+    ac, tw = iv.acoustic_modes(e, masses)
+    assert ac == [0, 1, 2] and min(tw[ac]) > 0.99 and max(np.delete(tw, ac)) < 1e-6
+    assert max(abs(hw[ac])) < 2.0 and min(hw[3:]) > 20.0                          # 声学模 ħω 不严格为 0，但仍是声学
+    Z = np.array([np.eye(3) * 2.0, -np.eye(3) * 2.0])                            # 电中性：ΣZ* = 0
+    z3 = iv.mode_charges(e, masses, Z)
+    assert max(z3[ac]) < 1e-6 and min(np.delete(z3, ac)) > 1.0                   # 3D：光学模全是极性
+    z2 = iv.mode_charges(e, masses, Z, two_d=True)
+    zmode = int(np.argmax(hw))                                                    # k_z 最硬：最高的是面外光学模
+    assert z2[zmode] < 1e-6 and min(z2[[3, 4]]) > 1.0                            # 2D 只看面内：面外模不算极性
+    # dyn 文件里的介电张量与 Born 电荷（QE write_epsilon_and_zeu 的格式：第 α 行 = 电场方向）
+    lines = (FIX / "step12_ivs_ph" / "q-01" / "dyn").read_text().splitlines()
+    zz = np.array([[[1.9, 0.1, 0.0], [0.0, 2.0, 0.0], [0.0, 0.0, 2.1]], [[-1.9, -0.1, 0.0], [0.0, -2.0, 0.0],
+                                                                          [0.0, 0.0, -2.1]]])
+    blk = ["", "     Dielectric Tensor:", ""] + ["%24.12f%24.12f%24.12f" % (12.0, 0.0, 0.0)] * 3
+    blk += ["", "     Effective Charges E-U: Z_{alpha}{s,beta}", ""]
+    for na in range(2):
+        blk.append("     atom #    %d" % (na + 1))
+        blk += ["%24.12f%24.12f%24.12f" % tuple(r) for r in zz[na]]
+    cut = next(i for i, ln in enumerate(lines) if "Diagonalizing" in ln)           # 在频率表之前（dynmatrix 的顺序）
+    return_dyn = lines[:cut] + blk + lines[cut:]
+    import tempfile
+    with tempfile.TemporaryDirectory() as t:
+        f = Path(t) / "dyn"
+        f.write_text("\n".join(return_dyn) + "\n")
+        dyn = iv.read_dyn(str(f))
+    assert np.allclose(dyn["zstar"], zz) and np.allclose(dyn["epsilon"], [[12.0, 0.0, 0.0]] * 3)
+    assert len(dyn["C"]) == len(iv.read_dyn(str(FIX / "step12_ivs_ph" / "q-01" / "dyn"))["C"])
+    assert iv.read_dyn(str(FIX / "step12_ivs_ph" / "q-01" / "dyn"))["zstar"] is None
+
+
+def test_r3_exclude_and_fold_intra():
+    hw = np.array([0.6, 0.6, 0.7, 40.0, 40.0, 62.0])
+    gk = np.zeros((6, 2, 5), complex)
+    gk[:, 1, 3] = [0.05, 0.05, 0.05, 0.0, 0.0, 0.02]                            # 声学模上有数值噪声级的耦合
+    etk = np.array([-1.0, 0.0, 1.0, 2.0, 3.0])
+    ex = {0: "声学模", 1: "声学模", 2: "声学模", 5: "极性模"}
+    res = iv.class_couplings(gk, etk, etk, hw, np.eye(6), [iv.AMU_RY * 30] * 2, nocc=3, ahc_skip=2, ahc_nbnd=2,
+                             carrier="electron", exclude=ex)
+    assert [g.get("exclude") for g in res["groups"]] == ["声学模", "声学模", None, "极性模"]
+    assert res["modes"][5]["exclude"] == "极性模"
+    res.update(id=7, pairs=[{"from": "X", "to": "X", "kind": "intra", "g_to": 6, "g_from": 6}])
+    chs, dropped = iv.fold_channels([res])
+    assert [(c["kind"], c["hw_meV"]) for c in chs] == [("intra", 40.0)]          # 谷内：D 不除星成员数
+    assert chs[0]["D_eV_A"] == pytest.approx(res["groups"][2]["D_eV_A"])
+    assert sorted(d["why"] for d in dropped) == ["声学模", "声学模", "极性模"]
+
+
+def test_r3_odp_exclusions(eph):
+    d, c = eph
+    C, masses = _diatomic(noise=1e-7)
+    hw, e = iv.phonon_modes(C, masses)
+    R = {"e": e, "masses": masses, "hw": hw, "zstar": None, "qr": {"name": "q-odp"}}
+    P = c.load_params()
+    q1 = {"dim": "3d", "structure": {"types": ["Si"]}}
+    ex, rec = c.odp_exclusions(R, q1, P)
+    assert sorted(ex) == [0, 1, 2] and "单元素" in rec["born_source"]
+    q1 = {"dim": "3d", "structure": {"types": ["Ga", "As"]}}
+    with pytest.raises(SystemExit, match="Born"):
+        c.odp_exclusions(R, q1, P)
+    R["zstar"] = np.array([np.eye(3) * 2.0, -np.eye(3) * 2.0])
+    ex, rec = c.odp_exclusions(R, q1, P)
+    assert sorted(ex) == [0, 1, 2, 3, 4, 5] and rec["polar_modes"] == [4, 5, 6]
+    ex, rec = c.odp_exclusions(R, dict(q1, dim="2d"), P)
+    assert sorted(ex) == [0, 1, 2, 3, 4] and rec["polar_modes"] == [4, 5]       # 面外光学模不算极性
+    P["IVS_ODP_POLAR"] = "include"
+    ex, rec = c.odp_exclusions(R, q1, P)
+    assert sorted(ex) == [0, 1, 2] and rec["polar_modes"] == []
+
+
+def _with_odp(si_params, hole_D=6.0, e_intra=True):
+    """si_params（真实 QE 电子谷间）+ 假造的 DFPT 谷内结果：空穴 Γ（单谷）D=hole_D，电子 X 谷内 ≈ 0（对称性禁戒）。"""
+    p = copy.deepcopy(si_params)
+    p["carriers"]["hole"] = {"status": "ok", "valleys": [{"label": "Γ", "g": 1, "k_frac": [[0.0, 0.0, 0.0]]}],
+                             "valleys_source": "step.conf IVS_VALLEYS_H", "use_grid": False,
+                             "channels": [{"from": "Γ", "to": "Γ", "kind": "intra", "D_eV_A": hole_D, "hw_meV": 62.5}]}
+    p["raw"].append({"carrier": "hole", "kind": "intra", "from": "Γ", "to": "Γ"})
+    if e_intra:
+        p["carriers"]["electron"]["channels"].append({"from": "X", "to": "X", "kind": "intra", "D_eV_A": 0.002,
+                                                      "hw_meV": 63.0})
+        p["raw"].append({"carrier": "electron", "kind": "intra", "from": "X", "to": "X"})
+    return p
+
+
+def _frozen_hole(of, D=7.77):
+    vs = [{"label": "Γ", "k_frac": [[0, 0, 0]]}]
+    return {"schema": of.SCHEMA, "dim": "3d",
+            "carriers": {"hole": {"status": "ok", "valleys_source": "auto",
+                                  "valley_sig": {"dim": "3d", "sig": of.valley_sig_3d(vs)},
+                                  "valleys": [dict(v, groups=[{"group": 1, "modes": [4, 5, 6], "hw_meV": 63.0,
+                                                               "D_eV_A": D}]) for v in vs]}}}
+
+
+def test_r3_s8_dfpt_odp_supersedes_frozen(si_params, g10):
+    import ke_common as kc
+    import odp_frozen as of
+    g, cwd = g10
+    g.ODP_FROZEN, g.ODP_FROZEN_DMIN = "auto", 0.05
+    (cwd / "step8.21_odp_read").mkdir()
+    frozen = _frozen_hole(of)
+    (cwd / "step8.21_odp_read" / "odp_params.json").write_text(json.dumps(frozen))
+    f = cwd / "ivs_dfpt" / "ivs_dfpt_params.json"
+    f.write_text(json.dumps(si_params))                     # DFPT 没算空穴（IVS_ODP=off 的旧参数）：空穴用冻声子
+    rec, _ = _run3(g, cwd)
+    h = rec["dp_optical"]["hole"]
+    assert [(c["kind"], c["D_eV_A"], c["source"]) for c in h["channels"]] == [("intra", 7.77, "frozen")]
+    assert rec["dp_optical_frozen"]["frozen_use"]["hole"] == "used"
+    # DFPT 算了谷内：空穴只留 DFPT 的一条（不与冻声子叠加），冻声子只作对照、不再触发重排
+    g.SCATTERING = ["ADP", "IMP", "POP"]
+    f.write_text(json.dumps(_with_odp(si_params)))
+    rec, log = _run3(g, cwd)
+    h = rec["dp_optical"]["hole"]
+    assert [(c["kind"], c["D_eV_A"], c["source"]) for c in h["channels"]] == [("intra", 6.0, "dfpt_odp")]
+    assert h["ivs_dfpt"]["odp_reference"] == [{"valley": "Γ", "D_eV_A": 7.77, "hw_meV": 63.0, "source": "frozen"}]
+    fr, dr = rec["dp_optical_frozen"], rec["dp_optical_ivs_dfpt"]
+    assert fr["frozen_use"]["hole"] == "superseded_dfpt" and "hole" not in fr["digest"]
+    assert kc.odp_consumer_stale(fr, _frozen_hole(of, D=9.0), full=rec) == []
+    assert dr["odp_use"] == {"electron": "used", "hole": "used"} and dr["dfpt_use"]["hole"] == "used"
+    e = rec["dp_optical"]["electron"]                        # 电子谷内 ≈ 0（< DMIN）：只有 3 条谷间
+    assert all(c["kind"] != "intra" for c in e["channels"]) and len(e["channels"]) == 3
+    assert rec["mechanisms"] == ["ODP", "IVS"] and g.SCATTERING == ["ADP", "IMP", "POP", "ODP", "IVS"]
+    assert "只作对照" in log and "谷内 ODP 参数来自 DFPT" in log
+    # 手填的谷内通道（ODP_FROZEN=off）同样只作对照
+    g.SCATTERING, g.ODP_FROZEN = ["ADP", "IMP", "POP"], "off"
+    g.DP_OPTICAL_H, g.DP_OPTICAL_VALLEYS_H = "G>G:9.9@60", "G:0,0,0"
+    rec, _ = _run3(g, cwd)
+    h = rec["dp_optical"]["hole"]
+    assert [c["D_eV_A"] for c in h["channels"]] == [6.0] and h["ivs_dfpt"]["odp_reference"][0]["source"] == "manual"
+    # 显式 SCATTERING 不含 ODP：谷内不进，记录写明
+    g.SCATTERING, g._SCATTERING_EXPLICIT = ["ADP", "IMP", "IVS"], True
+    rec, _ = _run3(g, cwd)
+    assert "hole" not in rec["dp_optical"] and rec["dp_optical_ivs_dfpt"]["odp_use"]["hole"] == "not_in_scattering"
+    # S8.3 汇总的来源标注
+    g._SCATTERING_EXPLICIT, g.SCATTERING = False, ["ADP", "IMP", "POP"]
+    g.DP_OPTICAL_H = g.DP_OPTICAL_VALLEYS_H = ""
+    rec, _ = _run3(g, cwd)
+    g13 = _load("g13_r3", KE / "step8.3_output" / "gen_step13_output.py")
+    (cwd / "step8_amset").mkdir()
+    (cwd / "step8_amset" / "dp_optical_3d.json").write_text(json.dumps(rec, ensure_ascii=False))
+    lines = g13._ivs_source_lines(cwd)
+    assert any(x.startswith("# [ODP 参数来源] S8 hole：DFPT q=Γ") for x in lines)
+    assert any(x.startswith("# [IVS 参数来源] S8 electron：DFPT") for x in lines)
+
+
+def test_r3_s84_dfpt_odp_supersedes_frozen(tmp_path, monkeypatch):
+    import ke_common as kc
+    import odp_frozen as of
+    r_m = _rops(MOS2_LAT, MOS2_FRAC, ["Mo", "S", "S"])
+    params, Q = _mos2_params(r_m)
+    params["carriers"]["electron"]["channels"].append({"from": "K", "to": "K", "kind": "intra", "D_eV_A": 3.1,
+                                                       "hw_meV": 50.0})
+    params["raw"] = [{"carrier": "electron", "kind": "intra", "from": "K", "to": "K"}]
+    mat = tmp_path / "ke"
+    (mat / "step8.2_dpt").mkdir(parents=True)
+    dpt = _dpt_json(Q)
+    (mat / "step8.2_dpt" / "dpt_result.json").write_text(json.dumps(dpt))
+    raw = dpt["results"][0]["multi_valley"]["valleys"]
+    frozen = {"schema": of.SCHEMA, "dim": "2d",
+              "carriers": {"electron": {"status": "ok", "valley_sig": {"use_grid": True, "sig": kc._valley_sig(raw, True)},
+                                        "valleys": [{"label": "K", "groups": [{"group": 1, "modes": [9], "hw_meV": 52.0,
+                                                                               "D_eV_A": 4.4}]}]}}}
+    (mat / "step8.21_odp_read").mkdir()
+    (mat / "step8.21_odp_read" / "odp_params.json").write_text(json.dumps(frozen))
+    g14 = _load("g14_r3", KE / "step8.4_amset2d" / "gen_step14_amset2d.py")
+    monkeypatch.setattr(g14, "SCATTERING", ["ADP", "IMP", "POP"])
+    monkeypatch.setattr(g14, "IVS_FROZEN", "off")
+    with redirect_stdout(io.StringIO()):
+        rec = g14.resolve_dp_optical(mat)                    # 还没有 DFPT：冻声子 ODP
+    assert [(c["kind"], c["D_eV_A"]) for c in rec["electron"]["channels"]] == [("intra", 4.4)]
+    (mat / "ivs_dfpt").mkdir()
+    (mat / "ivs_dfpt" / "ivs_dfpt_params.json").write_text(json.dumps(params))
+    monkeypatch.setattr(g14, "SCATTERING", ["ADP", "IMP", "POP"])
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        rec = g14.resolve_dp_optical(mat)
+    intra = [c for c in rec["electron"]["channels"] if c["kind"] == "intra"]
+    assert [(c["from"], c["D_eV_A"], c["source"]) for c in intra] == [("K", 3.1, "dfpt_odp")]   # 不与冻声子 4.4 叠加
+    assert len(rec["electron"]["channels"]) == 5
+    fr = g14._DP_OPTICAL_FROZEN_REC
+    assert fr["frozen_use"]["electron"] == "superseded_dfpt" and "electron" not in fr["digest"]
+    assert kc.odp_consumer_stale(fr, frozen, full={"dp_optical": rec}) == []
+    dr = g14._DP_OPTICAL_IVS_DFPT_REC
+    assert dr["odp_use"]["electron"] == "used" and dr["info"]["electron"]["odp_reference"][0]["D_eV_A"] == 4.4
+    assert "谷间 IVS + 谷内 ODP" in buf.getvalue() and "只作对照" in buf.getvalue()
