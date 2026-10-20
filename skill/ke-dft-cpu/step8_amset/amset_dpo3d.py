@@ -18,6 +18,9 @@ dp_optical_3d.json：
                     "adp_intravalley": {"electron": bool, "hole": bool}, ...}}
 可选：ADP 谷内掩码（开了 IVS 的载流子，ADP 只留 k 与 k+q 在同一个谷的散射，免得与 IVS 重复计数），
 与 2D 插件同一做法：替换 AMSET 的 ADP 类（核不变，只乘掩码），worker 子进程里按引用重建。
+[0061] 可选：简并价带顶的 ADP 带间修正（dp_optical_3d.json 的 "adp_degen"，gen 按 step.conf 的 ADP_DEGEN 写）——
+立方 Γ 三重简并价带的 ADP 率按初态乘 adp_degen.scale（完整 Bir–Pikus 矩阵元 ÷ AMSET 写法，见 adp_degen.py），
+参数在本进程用 AMSET 自己的能带 + S7.1 的形变势现拟合，报告写 adp_degen_fit.json。
 没有 dp_optical_3d.json -> 什么都不做（打印一行）。
 """
 
@@ -52,6 +55,9 @@ else:
 _DPO_REC = (_REC or {}).get("dp_optical") or {}
 _MECHS = [m for m in ("ODP", "IVS") if m in ((_REC or {}).get("mechanisms") or [])]
 _MASK_ON = any((_DPO_REC.get("adp_intravalley") or {}).get(c) for c in _CARRIERS)
+_DEGEN_REC = (_REC or {}).get("adp_degen") or {}                     # [0061]
+_DEGEN_ON = str(_DEGEN_REC.get("mode") or "off").lower() in ("auto", "on") and _DEGEN_REC.get("status") == "pending_runtime"
+_DEGEN_REPORT = "adp_degen_fit.json"
 
 if _REC is not None:
     try:
@@ -216,38 +222,85 @@ def _install_fill_keep_dpo():
     _AD.AmsetData.fill_rates_outside_cutoffs = _fill_keep_dpo
 
 
+def _degen_setup(amset_data, adp):
+    """[0061] 每个自旋一张修正表 {spin.name: table}；不适用时按 mode 处理（auto：告警、不修正；on：报错）。"""
+    import adp_degen as _AD
+    mode = str(_DEGEN_REC.get("mode") or "auto").lower()
+    tables, reports = {}, {}
+    for spin in amset_data.spins:
+        table, rep = _AD.setup(
+            amset_data.energies[spin], amset_data.kpoints, (amset_data.vb_idx or {}).get(spin, -1),
+            amset_data.structure, np.asarray(adp.elastic_constant, float),
+            _DEGEN_REC.get("deform_h5") or "deformation.h5", _DEGEN_REC.get("signed_h5") or "deformation_signed.h5",
+            spin_name=spin.name, efit=float(_DEGEN_REC.get("efit_eV") or _AD.EFIT_EV),
+            nang=int(_DEGEN_REC.get("nang") or _AD.NANG), is_soc=bool(getattr(amset_data, "_soc", False)))
+        reports[spin.name] = rep
+        if table is not None:
+            tables[spin.name] = table
+    try:
+        with open(_DEGEN_REPORT, "w") as fh:
+            json.dump({"mode": mode, "spins": reports}, fh, indent=1, ensure_ascii=False, default=float)
+    except OSError:
+        pass
+    for sn, rep in reports.items():
+        if rep.get("status") == "ok":
+            kp, bp = rep["kp"], rep["bir_pikus"]
+            print("%s ADP 简并价带修正（%s）：k·p L/M/N = %.2f/%.2f/%.2f（残差 %.1f%%）；Bir–Pikus a/b/d = %.2f/%.2f/%.2f eV"
+                  "（d 的符号置信 %.2f）；散射率放大 %s"
+                  % (_TAG, sn, kp["L"], kp["M"], kp["N"], 100 * kp["rel_rms"], bp["a"], bp["b"], bp["d"],
+                     rep["n_sign"]["confidence"], " / ".join("%.2f" % x for x in rep["ratio_mean"])), flush=True)
+        else:
+            msg = "%s ADP 简并价带修正（%s）不适用：%s" % (_TAG, sn, rep.get("status"))
+            if mode == "on":
+                raise RuntimeError(msg + "（step.conf ADP_DEGEN = on；确认不需要就写 auto 或 off）")
+            print(msg + "（ADP_DEGEN = auto：照原版 ADP 算）", flush=True)
+    return tables or None
+
+
 class AcousticDeformation3DIntravalley(_ADP):
     """原版三维 ADP 核，开了掩码的载流子只留谷内（k 与 k+q 落在同一个成员谷）。
     核与 AMSET 原版逐字相同（_factor_core = 原版 factor）；amset_ir_fix 的星平均只平均 _factor_core，
-    掩码在平均之后按未旋转的 k、q 乘（与 2D 插件同一约定）。没有 _ivm 时与原版逐字节相同。"""
+    掩码在平均之后按未旋转的 k、q 乘（与 2D 插件同一约定）。没有 _ivm 时与原版逐字节相同。
+    [0061] 开了 ADP 简并修正时，_iv_keep 还乘上初态 (带, k) 的放大系数（星平均之后乘，同掩码）。"""
     name = "ADP"
 
     @classmethod
     def from_amset_data(cls, materials_properties, amset_data):
         obj = super().from_amset_data(materials_properties, amset_data)
-        obj._ivm = _adp_mask_setup(amset_data)
+        obj._ivm = _adp_mask_setup(amset_data) if _MASK_ON else None
+        obj._degen = _degen_setup(amset_data, obj) if _DEGEN_ON else None
         return obj
 
     def to_reference(self):
-        return super().to_reference() + (getattr(self, "_ivm", None),)
+        return super().to_reference() + (getattr(self, "_ivm", None), getattr(self, "_degen", None))
 
     @classmethod
     def from_reference(cls, *ref):
-        obj = super().from_reference(*ref[:-1])
-        obj._ivm = ref[-1]
+        obj = super().from_reference(*ref[:-2])
+        obj._ivm, obj._degen = ref[-2], ref[-1]
         return obj
 
+    def _degen_scale(self, spin, band_idx, kpoint):
+        tabs = getattr(self, "_degen", None)
+        if not tabs or kpoint is None:
+            return 1.0
+        import adp_degen as _AD
+        return _AD.scale(tabs.get(getattr(spin, "name", spin)), band_idx, kpoint)
+
     def _iv_keep(self, unit_q, norm_q_sq, spin, band_idx, kpoint):
+        keep = None
         ivm = getattr(self, "_ivm", None)
-        if not ivm or kpoint is None:
-            return None
-        vb = (getattr(self, "vb_idx", None) or {}).get(spin)
-        centers = ivm.get("electron" if (vb is not None and band_idx > vb) else "hole")
-        if centers is None:
-            return None
-        q = np.sqrt(norm_q_sq)[:, None] * np.asarray(unit_q)
-        kp = q @ ivm["rinv"] + np.asarray(kpoint, float)
-        return _DPO.same_member(kpoint, kp, centers, ivm["rlat"], full3d=True)
+        if ivm and kpoint is not None:
+            vb = (getattr(self, "vb_idx", None) or {}).get(spin)
+            centers = ivm.get("electron" if (vb is not None and band_idx > vb) else "hole")
+            if centers is not None:
+                q = np.sqrt(norm_q_sq)[:, None] * np.asarray(unit_q)
+                kp = q @ ivm["rinv"] + np.asarray(kpoint, float)
+                keep = _DPO.same_member(kpoint, kp, centers, ivm["rlat"], full3d=True)
+        s = self._degen_scale(spin, band_idx, kpoint)
+        if s == 1.0:
+            return keep
+        return np.full(np.shape(norm_q_sq), s) if keep is None else keep * s
 
     def _factor_core(self, unit_q, norm_q_sq, spin, band_idx, kpoint, velocity):
         return _ADP.factor(self, unit_q, norm_q_sq, spin, band_idx, kpoint, velocity)
@@ -280,16 +333,17 @@ def _install():
         C._scattering_mechanisms[k] = classes[k]
     if _MECHS:
         _install_fill_keep_dpo()
-    if _MASK_ON:
+    if _MASK_ON or _DEGEN_ON:
         C._scattering_mechanisms["ADP"] = AcousticDeformation3DIntravalley
         C.AcousticDeformationPotentialScattering = AcousticDeformation3DIntravalley   # worker 用此名重建 ADP
         if C.scattering_worker is not worker and _ORIG_WORKER[0] is None:
             _ORIG_WORKER[0] = C.scattering_worker
             C.scattering_worker = worker
     ivf = _DPO_REC.get("adp_intravalley") or {}
-    print("%s amset %s | 三维常数形变势 %s：%s | ADP 谷内掩码：电子 %s，空穴 %s"
-          % (_TAG, amset.__version__, ",".join(_MECHS) or "（无，只掩码）", _DPO.describe(_DPO_REC),
-             "开" if ivf.get("electron") else "关", "开" if ivf.get("hole") else "关"), flush=True)
+    print("%s amset %s | 三维常数形变势 %s：%s | ADP 谷内掩码：电子 %s，空穴 %s | ADP 简并价带修正：%s"
+          % (_TAG, amset.__version__, ",".join(_MECHS) or "（无）", _DPO.describe(_DPO_REC) if _DPO_REC else "—",
+             "开" if ivf.get("electron") else "关", "开" if ivf.get("hole") else "关",
+             ("开（%s，运行期拟合）" % _DEGEN_REC.get("mode")) if _DEGEN_ON else "关"), flush=True)
 
 
 if not getattr(C, "_az_dpo3d", False):

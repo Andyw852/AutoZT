@@ -14,6 +14,17 @@ This project adheres to Semantic Versioning; versions before 1.0.0 are developme
 
 ## [Unreleased]
 
+### Added (2026-10-21: [0061] ADP interband correction for degenerate valence-band tops)
+- AMSET's ADP matrix element (diagonal deformation potential of the initial band × wavefunction overlap) misses the shear
+  coupling between heavy and light holes of a cubic Γ-point p-like triplet (Si/Ge/diamond/zincblende holes, non-SOC).
+  `skill/ke-dft-cpu/adp_degen.py` fits a 3-band k·p (to AMSET's own bands) and Bir–Pikus l, m, n (from S7.1's signed/abs
+  deformation potentials at Γ; sign of n from nearby non-degenerate k), and scales each initial state's ADP rate by
+  full-matrix-element / AMSET-form (Si, relaxed ions: ADP-only mobility 1.6–2.1× too high without it).
+- `amset_dpo3d.py` applies the factor in the ADP class (after the ir_fix star average); S8 `ADP_DEGEN = auto|on|off`,
+  report `adp_degen_fit.json`, S8.3 summary line. Warns when S7.1 `deform_geometry` is not ionrelax (Si clamped-ion shear
+  potential is ~1/4 of relaxed; the 2026-10-19 Si hole ADP-only 7610 matches the clamped-ion AMSET form).
+- Conventions checked against local QE 7.4 strained Si (k·p L/M/N, b, |d|, sign of d). Tests: `tests/test_0061_adp_degen.py`.
+
 ### Fixed (2026-10-20: [0059-r3] DFPT intravalley ODP)
 - S8 / S8.4 put the intravalley ODP into the rates twice when both DFPT (`ivs_dfpt_params.json`) and frozen-phonon/manual
   parameters existed (e.g. Si holes 7.77 + 6.0). DFPT intravalley now wins; frozen/manual intravalley channels are reference

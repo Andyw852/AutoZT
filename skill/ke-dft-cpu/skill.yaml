@@ -291,7 +291,8 @@ optional_steps:
         # [0037] amset_pie3d.py：三维 PIE 核（SCATTERING 含 PIE、PIE_KERNEL=az 时复制进运行目录并 import）。
         # [0059] ivs_dfpt.py（公共池 skill/_common/ivs/）+ push_paths：eph-qe-cpu ivs_dfpt 组的 DFPT 谷间参数（本地 result 有才推，
         #   没有就删掉远端旧的），IVS_DFPT=auto 读 ivs_dfpt/ivs_dfpt_params.json。
-        gen: gen_step10_amset.py, gen_need: [stepconf.py, step.conf, ke_common.py, dim_common.py, submit_amset.tpl, vdw_radii.py, discriminant_common.py, overlap_preflight.py, fermi_window_check.py, amset_desym_fix.py, amset_ir_fix.py, amset_fermi_fix.py, dp_optical.py, amset_dpo3d.py, odp_frozen.py, amset_pie3d.py, postprocess_intrinsic.py, ivs_dfpt.py], fetch_all: true,
+        # [0061] adp_degen.py：立方 Γ 三重简并价带的 ADP 带间修正（ADP_DEGEN，插件 amset_dpo3d 在作业里拟合并接进 ADP）。
+        gen: gen_step10_amset.py, gen_need: [stepconf.py, step.conf, ke_common.py, dim_common.py, submit_amset.tpl, vdw_radii.py, discriminant_common.py, overlap_preflight.py, fermi_window_check.py, amset_desym_fix.py, amset_ir_fix.py, amset_fermi_fix.py, dp_optical.py, amset_dpo3d.py, odp_frozen.py, amset_pie3d.py, postprocess_intrinsic.py, ivs_dfpt.py, adp_degen.py], fetch_all: true,
          push_paths: [{from: eph-qe-cpu/result/step13_ivs_read/ivs_dfpt_params.json, to: ivs_dfpt/ivs_dfpt_params.json}],
          # [0037] mesh_*.h5（每机制每 k 点散射率，3D 可达 GB 级）只给作业内本征后处理用，不回拉本地
          fetch_exclude: ["mesh_*.h5"],
