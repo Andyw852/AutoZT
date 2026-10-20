@@ -113,3 +113,75 @@ autozt -tt ke-dft-cpu -p Si -j S8.3_cmp start      # 汇总写明 IVS 来源
 - `step13_ivs_read/{ivs_dfpt_params.json, ivs_dfpt_table.txt}`
 - `step8_amset/{dp_optical_3d.json, transport.json, subset_*.json}`
 - `step8.3_output/comparison_summary.txt`（含 `[IVS 参数来源]` 行）
+
+
+## 7. DFPT 谷内 ODP 验证（[0059-r3]，2026-10-20/21）
+
+r3 让 q 列表固定加 `q-odp (Γ, 0,0,0)`，用同一套 AHC 顺带算谷内光学形变势，替代冻声子 ODP。
+Si 是理想的验证对象：**电子（X 谷）ODP 按对称性严格为 0，空穴（Γ 谷，价带顶三重简并）ODP 非零**。
+
+### 7.1 Si 空穴 Γ 谷（非零情形，核心验证）
+
+| 方法 | D (eV/Å) | ħω (meV) | 差异 |
+|---|---|---|---|
+| **DFPT q=Γ（本轮）** | **7.734** | 62.34 | — |
+| 冻声子（S7c/S8.21） | 7.769 | 62.04 | **0.5%** |
+
+- 声学模（QE 在 Γ 给 0.58 meV，非严格 0）已按平移权重显式剔除，不进通道；
+- 价带顶 3 重简并需要 `IVS_AHC_NB` 放宽到上下各 3 条（S12 按 S11 谷能带只对需要的 q 放宽，已完成的 q 不重算）；
+- 单谷载流子（Si 空穴只有 Γ 一个谷）在 `IVS_ODP=auto` 时保留，只算谷内。
+
+### 7.2 Si 电子 X 谷（零情形，对称性对照）
+
+DFPT 给 `X>X D≈0 @62.3 meV`，与冻声子 0.000 一致。S8 里电子加 ODP 前后 μ 不变（3882.6），
+证明零通道不会被误加进散射率（`D²/ω` 不会因噪声爆掉）。
+
+### 7.3 S8 端到端结果（jzzn，S8_kappa job 4284923，1h19m，exit 0）
+
+`scattering_type = [ADP, IMP, ODP, IVS]`，`dfpt_use = {electron: used, hole: used}`，
+冻声子标 `superseded_dfpt`（只作对照，不再进散射率）。
+
+Si 300 K 迁移率（cm²/Vs，按机制子集逐项拆开）：
+
+| 数据集 | 空穴 p=1e10 | 空穴 p=1e18 | 电子 n=1e10 |
+|---|---|---|---|
+| ADP only | 7610.0 | 7623.1 | 3882.6 |
+| **+ DFPT ODP** | **1558.2**（↓4.9×） | 1544.0 | 3882.6（不变 ✓） |
+| + DFPT IVS | 1558.2（单谷无 IVS ✓） | — | **1459.2**（↓2.7×） |
+| 全机制（+IMP） | 1557.2 | 90.4 | 1458.6 |
+
+S8.3 汇总现在写明来源：
+```text
+# [AMSET 机制] electron 300 K（-1e10）：IVS 2747 < ADP 3883 < IMP — < ODP — → 限制因素 IVS
+# [AMSET 机制] hole     300 K（ 1e10）：ODP 2216 < ADP 7610 < IMP — < IVS — → 限制因素 ODP
+# [IVS 参数来源] S8 electron：DFPT（ivs_dfpt_params.json sha256 9fa72aa0b433；零阶、非 SOC）；3 条通道
+# [ODP 参数来源] S8 hole：DFPT q=Γ（ivs_dfpt_params.json sha256 9fa72aa0b433；零阶、非 SOC）；1 条通道
+```
+
+### 7.4 解读
+
+- **电子**：ADP 3883 → 加 DFPT IVS 后 **1459**，落在实验晶格限制值 1400–1450；ODP=0 不参与。
+- **空穴**：ADP 7610 → 加 DFPT ODP 后 **1558**，ODP 成为限制机制（此前 ODP 缺失导致空穴虚高）。
+  1558 仍高于实验（Si 空穴声子限制约 450–500），符合方案 7.6 的预期：**q=Γ 的 ODP 是散射率上限**
+  （未做小 q 平均），更准的等效常数归入"谷内 ADP"那一期。
+- 电子/空穴互不串扰：电子无 ODP、空穴无 IVS，两种情形都验证了"只加该加的"。
+
+### 7.5 复现（[0059-r3] 起）
+
+```bash
+# 1) 空穴谷表（3D 必须手填）：IVS_VALLEYS_H = G:0,0,0
+autozt -tt eph-qe-cpu -p Si -j S10_ivsq conf --set params.IVS_VALLEYS_H=G:0,0,0
+# 2) eph 链（q-odp 会作为第 3 个 q 作业扇出）
+autozt -tt eph-qe-cpu -p Si -j S10_ivsq start
+autozt -tt eph-qe-cpu -p Si -j S11_ivsscf retry && autozt -tt eph-qe-cpu -p Si -j S11_ivsscf start
+autozt -tt eph-qe-cpu -p Si -j S12_ivsph retry && autozt -tt eph-qe-cpu -p Si -j S12_ivsph start
+autozt -tt eph-qe-cpu -p Si -j S13_ivs retry && autozt -tt eph-qe-cpu -p Si -j S13_ivs start
+# 3) ke 链：S8 自动用 DFPT ODP（DFPT 优先于冻声子）
+autozt -tt ke-dft-cpu -p Si -j S8_kappa retry && autozt -tt ke-dft-cpu -p Si -j S8_kappa start
+autozt -tt ke-dft-cpu -p Si -j S8.3_cmp start
+```
+
+> ⚠️ gen 端跑 `MESH_MIN` 自动选网格时需要 `BoltzTraP2`。若目标集群的 gen python（`remote_path_prefix` 里的 python）
+> 没有 BoltzTraP2，可写 `MESH_MIN=0 / MESH_MAX=0 / INTERPOLATION_FACTOR=<显式值>` 跳过该步（本轮 hfeshell 的
+> `atomate2_p_a` py3.10 无 BoltzTraP2，就是用 factor=60 复现 jzzn 的 73³ 网格）。
+
