@@ -37,6 +37,11 @@
      其中已含固定分数坐标的运动学项（带内 + 带间），不再另减 T。Zk 在主进程里对 AMSET 网格上 rcut 以内的点预先算好，
      散射子进程只拿小数组。参考能级常数由带符号形变势的非简并态定（deform_wave.alignment），离散度大 / 图样不全 /
      与 k0 点的 S 对不上 -> 退回第 5 步的拟合，报告里写明。
+     网格公式（逐对替换可用、AMSET 缓存了波函数系数时）：有简并谷的那种载流子的**全部**初态，在 AMSET 的四面体积分里
+     对每个末态顶点算 A = ⟨f|[D̂^(P)(k)|i⟩…, |i⟩]（AMSET 自己的系数，0.5.1 的末态按 g_diff 平移，与 _get_overlap 逐字相同），
+     顶点上的双线性量 Re(A_μ A_ν*) 用 AMSET 原来的 get_cross_section_values 插到截面上，再与 e_λ = [ε_λ 的图样分量,
+     ε_λ:(v⊗v)] 收缩：F = Σ_λ e_λᵀ G e_λ / C_λ（|⟨f|i⟩|² 那一项与 AMSET 的截面重叠逐位相等，作为自检）；
+     核心区（min(rcut, CORE_CELLS 个 DFT 网格间距)）里子空间内的末态照用 k·p 态（外 20% 线性过渡）。
 
 约定（与 AMSET / S7.1 一致）：形变势存 −ΔE/δ（电子能量，含参考能级对齐）；带符号文件是原生约定（剪切 ε_ij = ε_ji = δ，
 存 −⟨X^(ij)⟩，X^(ij) = 2 Y_ij）；AMSET 运行期的幅值文件 V189 起是张量分量（D_ij，ΔE = Σ_ij D_ij ε_ij），运行期逐分量取 |·|。
@@ -74,6 +79,9 @@ ALIGN_TOL_EV = 0.1             # [0061-m] 参考能级对齐常数的离散度�
 ALIGN_TOL_REL = 0.05
 ZSYM_TOL = 0.1                 # [0061-m] DFT 应变算符投影到对称允许子空间的相对残差上限（超了用原始矩阵、报告里点名）
 COVER_MIN = 0.9                # [0061-m] 子空间基在 S7 网格基上的投影范数²下限（低了 = 窗口不够或倒格矢表示对不上）
+CORE_CELLS = 3.0               # [0061-m] 网格公式时 k·p 核心区半径 = min(rcut, CORE_CELLS × DFT 网格间距)：AMSET 的系数线性插值
+                               #   在简并点附近一两个网格单元里不可信，那里用 k·p 态；核心区外用 AMSET 自己的系数
+GRID_CHECK_TOL = 1e-6          # [0061-m] 自检：网格公式插出来的 |⟨f|i⟩|² 与 AMSET 的截面重叠的相对差上限（超了整体关掉网格公式）
 
 
 # ---------------------------------------------------------------------------
@@ -1344,9 +1352,32 @@ def install_pair_hooks():
                 out = orig_cs(values, *a, **kw)
                 if kw.get("average", True) and np.ndim(values) == 2:      # 第一次调用：顶点重叠 -> 截面重叠
                     _CTX["tet_overlap"] = out
+                    _CTX["tet_contrib"] = (a, {x: y for x, y in kw.items() if x != "average"})   # [0061-m] 网格公式插值用
                 return out
             _cs._az_pair = True
+            _cs._az_orig = orig_cs
             C.get_cross_section_values = _cs
+        _PAIR["cs"] = getattr(C.get_cross_section_values, "_az_orig", C.get_cross_section_values)
+        # [0061-m] 网格公式：记下 calculate_rate 的参数（初态、缓存的系数）；0.5.1 的末态系数按 g_diff 平移
+        sig = inspect.signature(getattr(C.calculate_rate, "_az_orig", C.calculate_rate))
+        _PAIR["gdiff"] = "g_diff" in src
+        _PAIR["grid_ok"] = all(n in sig.parameters for n in ("tbs", "coeffs", "coeffs_mapping", "spin", "b_idx", "k_idx"))
+        if not getattr(C.calculate_rate, "_az_pair", False):
+            orig_cr = C.calculate_rate
+
+            def _cr(*a, **kw):
+                _CTX.clear()
+                try:
+                    ar = sig.bind(*a, **kw).arguments
+                    _CTX["rate"] = tuple(ar.get(n) for n in ("tbs", "overlap_calculator", "coeffs", "coeffs_mapping",
+                                                             "spin", "b_idx", "k_idx"))
+                    _CTX["energy_diff"] = ar.get("energy_diff")
+                except TypeError:
+                    pass
+                return orig_cr(*a, **kw)
+            _cr._az_pair = True
+            _cr._az_orig = orig_cr
+            C.calculate_rate = _cr
         if not getattr(C.get_fine_mesh_qpoints, "_az_pair", False):
             orig_fm = C.get_fine_mesh_qpoints
 
@@ -1362,7 +1393,9 @@ def install_pair_hooks():
 
             def _gm(self, spin, tetrahedra_mask):
                 _CTX["tet_bands"] = np.asarray(tetrahedra_mask[0])
-                return orig_gm(self, spin, tetrahedra_mask)
+                out = orig_gm(self, spin, tetrahedra_mask)
+                _CTX["masks"] = out                                    # [0061-m] 网格公式的顶点（带, k）
+                return out
             _gm._az_pair = True
             cls.get_masks = _gm
         _PAIR.update(ok=True, why="ok")
@@ -1371,12 +1404,13 @@ def install_pair_hooks():
     return _PAIR["ok"], _PAIR["why"]
 
 
-def pair_factor(table, band_idx, kpoint, unit_q, norm_q_sq, C_au, velocity, d_scale=1.0):
+def pair_factor(table, band_idx, kpoint, unit_q, norm_q_sq, C_au, velocity, d_scale=1.0, core=False):
     """ADP 的 factor 里调：初态在修正过的子空间块里时 -> (q 点下标, F_full (Hartree²/C), AMSET 的重叠, 过渡权重 w)，
     否则 None。单位与 AMSET 的 ADP 核相同：k 用 amset_data.structure 的倒格子（bohr⁻¹），velocity 原子单位，C_au 原子单位。
     F_full = Σ_λ |d_scale·(⟨m,k′|H_ε|n,k⟩ − ε:T_n ⟨m,k′|n,k⟩) + ε:(v_n⊗v_n) ⟨m,k′|n,k⟩|² / C_λ，
     T_n = sym(δk⊗v_n)：S7 文件里固定分数坐标的运动学项（AMSET 的形变势里本来就有），v⊗v 与 AMSET 的 ADP 核相同（带内项）；
-    带间部分只来自应变算符（本征矢、算符在代表谷坐标里，ε 用 Mᵀ ε M 转过去）。d_scale：2D 的 ADP_D_SCALE。"""
+    带间部分只来自应变算符（本征矢、算符在代表谷坐标里，ε 用 Mᵀ ε M 转过去）。d_scale：2D 的 ADP_D_SCALE。
+    core：[0061-m] 网格公式在用时只在 k·p 核心区（谷表的 rcore）里换、过渡也按 rcore。"""
     if not table or not _PAIR["ok"]:
         return None
     mp = _CTX.get("mapping")
@@ -1386,7 +1420,8 @@ def pair_factor(table, band_idx, kpoint, unit_q, norm_q_sq, C_au, velocity, d_sc
     if not np.allclose(np.sum(np.asarray(_CTX["qpoints"]) ** 2, axis=-1), norm_q_sq, rtol=1e-10, atol=1e-30):
         return None                                                    # 不是这一次 calculate_rate 的中间量
     v, mi, dk0, r = _locate(table, kpoint)
-    if band_idx not in v["bands"] or r >= v["rcut"]:
+    rc = float(v.get("rcore", v["rcut"])) if core else float(v["rcut"])
+    if band_idx not in v["bands"] or r >= rc:
         return None
     dim = v["dim"]
     _dkr, _e, V0, i0, bi = _initial_state(v, mi, dk0, band_idx)
@@ -1405,7 +1440,7 @@ def pair_factor(table, band_idx, kpoint, unit_q, norm_q_sq, C_au, velocity, d_sc
     if dim == 2:
         qh[:, 2] = 0.0
     qn = np.linalg.norm(qh, axis=1)
-    elig = planep & (rp < v["rcut"]) & np.isin(mb, v["bands"]) & (qn > 0.5)
+    elig = planep & (rp < rc) & np.isin(mb, v["bands"]) & (qn > 0.5)
     if not elig.any():
         return None
     idx = np.where(elig)[0]
@@ -1431,7 +1466,7 @@ def pair_factor(table, band_idx, kpoint, unit_q, norm_q_sq, C_au, velocity, d_sc
     amp = d_scale * ampX + kin * ov[:, None]
     F = np.sum(np.abs(amp) ** 2 / np.where(Cl > 0, Cl, np.inf), axis=1)
     ovl = np.asarray(_CTX["tet_overlap"])[np.asarray(mp)[idx]]
-    w = _taper(r, v["rcut"]) * _taper(rp[idx], v["rcut"])
+    w = _taper(r, rc) * _taper(rp[idx], rc)
     return idx, F, ovl, w
 
 
@@ -1448,6 +1483,168 @@ def pair_apply(f, res):
     _PAIR["n_pairs"] = _PAIR.get("n_pairs", 0) + int(good.sum())
     _PAIR["n_lost"] = _PAIR.get("n_lost", 0) + int((~good).sum())
     return f
+
+
+def grid_amplitudes(grid, kf, cn, F, dim):
+    """[0061-m] 初态 |i⟩ = cn (NG[,2])、末态 F (nf, NG[,2])（同一套 Miller、同一个倒格矢表示）->
+    A (nf, P+1)：A[:, t] = ⟨f|D̂^(P_t)(k)|i⟩（eV，pairs(dim) 的顺序、原生约定），A[:, P] = ⟨f|i⟩。缺图样 / 缺格点 -> None。"""
+    idx = []
+    for P in pairs(dim):
+        if tuple(P) not in grid.pairs:
+            return None
+        idx.append(grid.pairs.index(tuple(P)))
+    cn = np.asarray(cn)
+    W = grid.apply(np.asarray(kf, float), cn[None])
+    if W is None:
+        return None
+    cols = np.concatenate([np.asarray(W)[idx, 0], cn[None]], 0).reshape(len(idx) + 1, -1)
+    F = np.asarray(F)
+    return np.conj(F.reshape(len(F), -1)) @ cols.T
+
+
+def _pbc_diff(a, b):
+    d = np.asarray(a, float) - np.asarray(b, float)
+    return d - np.round(d)
+
+
+def grid_pair_values(table, band_idx, kpoint, unit_q, norm_q_sq, C_au, velocity, d_scale=1.0):
+    """[0061-m] 网格公式（AMSET 自己的系数 + DFT 应变算符）：本次 calculate_rate 的全部细 q 点 ->
+    (F_full (nq,)（Hartree²/C，与 AMSET ADP 核同单位）, AMSET 的截面重叠 (nq,), 可用 (nq,) bool)；用不了 -> None。"""
+    g = table.get("grid") if table else None
+    if g is None or not _PAIR.get("grid_ok") or _PAIR.get("grid_off"):
+        return None
+    r, masks, tc = _CTX.get("rate"), _CTX.get("masks"), _CTX.get("tet_contrib")
+    mp, tov = _CTX.get("mapping"), _CTX.get("tet_overlap")
+    if r is None or masks is None or tc is None or mp is None or tov is None or _CTX.get("energy_diff"):
+        return None
+    tbs, oc, coeffs, cmap, spin, b, kidx = r
+    if coeffs is None or cmap is None or b != band_idx or len(mp) != len(norm_q_sq):
+        return None
+    sign = -1 if band_idx <= table.get("vb", -1) else 1
+    if sign not in table.get("grid_signs", ()):
+        return None
+    k = np.asarray(tbs.kpoints[kidx], float)
+    if not np.allclose(k, np.asarray(kpoint, float), atol=1e-8):
+        return None
+    dim = table["dim"]
+    sc, sm = coeffs[spin], cmap[spin]
+    cn = np.asarray(sc[sm[b, kidx]])
+    cov = g.coverage(k, cn[None]) if hasattr(g, "coverage") else np.ones(1)
+    if cov is None or float(cov[0]) < COVER_MIN:
+        _PAIR["n_grid_lowcov"] = _PAIR.get("n_grid_lowcov", 0) + 1
+        return None
+    pm, bkm, bm, km = masks
+    F = np.array(sc[sm[bm, km]])
+    if _PAIR.get("gdiff"):                                             # 与 AMSET 0.5.1 的 _get_overlap 逐字相同
+        kps = np.asarray(tbs.kpoints[km], float)
+        gd = ((kps - k) - _pbc_diff(kps, k)).astype(int)
+        for i in np.where(np.any(gd != 0, axis=1))[0]:
+            F[i] = align_coefficients(F[i], gd[i], oc.g_maps)
+    A = grid_amplitudes(g, k, cn, F, dim)
+    if A is None:
+        _PAIR["n_grid_miss"] = _PAIR.get("n_grid_miss", 0) + 1
+        return None
+    P = A.shape[1] - 1
+    iu0, iu1 = np.triu_indices(P + 1)
+    Gr = np.real(A[:, iu0] * np.conj(A[:, iu1]))
+    nk_all = int(np.shape(tbs.energies[spin])[1])                     # 只取顶点：不建 (带, 全部 k, 28) 的大数组
+    flat = np.asarray(bm, np.int64) * nk_all + np.asarray(km, np.int64)
+    order = np.argsort(flat, kind="stable")
+    vflat = np.asarray(pm[0], np.int64) * nk_all + np.asarray(pm[1], np.int64)
+    rows = order[np.searchsorted(flat[order], vflat)]
+    tetG = np.asarray(_PAIR["cs"](Gr[rows], *tc[0], **tc[1]))
+    mp = np.asarray(mp)
+    Gq = tetG[mp]
+    ovl = np.asarray(tov)[mp]
+    jl = int(np.where((iu0 == P) & (iu1 == P))[0][0])
+    dev = float(np.max(np.abs(Gq[:, jl] - ovl)) / (np.max(np.abs(ovl)) + 1e-30)) if len(ovl) else 0.0
+    if dev > GRID_CHECK_TOL:
+        _PAIR.update(grid_off=True, why_grid="自检不过：网格公式的 |⟨f|i⟩|² 与 AMSET 的截面重叠相对差 %.1e" % dev)
+        return None
+    qh = np.asarray(unit_q, float).copy()
+    if dim == 2:
+        qh[:, 2] = 0.0
+    qn = np.linalg.norm(qh, axis=1)
+    elig = qn > 0.5
+    qh = qh / np.where(qn > 0, qn, 1.0)[:, None]
+    Cl, U = acoustic_modes(C_au, qh, dim)
+    Es = 0.5 * (np.einsum("fi,fjl->flij", qh, U) + np.einsum("fj,fil->flij", qh, U))
+    vel = np.asarray(velocity, float)
+    e = np.zeros(Es.shape[:2] + (P + 1,))
+    for t, (a, bb) in enumerate(pairs(dim)):
+        e[..., t] = d_scale * Es[..., a, bb] / HARTREE_EV
+    e[..., P] = np.einsum("flij,ij->fl", Es, np.outer(vel, vel))
+    coef = np.where(iu0 == iu1, 1.0, 2.0)
+    Fl = np.einsum("flc,fc->fl", e[..., iu0] * e[..., iu1] * coef, Gq)
+    Fq = np.sum(Fl / np.where(Cl > 0, Cl, np.inf), axis=1)
+    _PAIR["n_grid"] = _PAIR.get("n_grid", 0) + 1
+    return Fq, ovl, elig
+
+
+def matrix_apply(f, keep, table, band_idx, kpoint, unit_q, norm_q_sq, C_au, velocity, d_scale=1.0):
+    """[0061-m] ADP factor 的最后一步（插件调）：网格公式能用 -> 全部细 q 点换成 F/重叠（核心区子空间内的末态按 k·p 态混合，
+    再乘谷内掩码 keep）；否则照 [0061-p] 只换 rcut 内子空间里的末态。f (..., nq) 已乘过 keep。"""
+    if not table or kpoint is None:
+        return f
+    res = grid_pair_values(table, band_idx, kpoint, unit_q, norm_q_sq, C_au, velocity, d_scale)
+    if res is None:
+        return pair_apply(f, pair_factor(table, band_idx, kpoint, unit_q, norm_q_sq, C_au, velocity, d_scale=d_scale))
+    Fg, ovl, elig = res
+    good = elig & (ovl > PAIR_OVL_MIN)
+    new = np.where(good, Fg / np.where(good, ovl, 1.0), 0.0)
+    kp = pair_factor(table, band_idx, kpoint, unit_q, norm_q_sq, C_au, velocity, d_scale=d_scale, core=True)
+    if kp is not None:
+        idx, Fk, ovk, w = kp
+        gk = ovk > PAIR_OVL_MIN
+        new[idx] = np.where(gk, w * Fk / np.where(gk, ovk, 1.0) + (1.0 - w) * new[idx], new[idx])
+        _PAIR["n_core_pairs"] = _PAIR.get("n_core_pairs", 0) + int(gk.sum())
+    if keep is not None:
+        new = new * np.broadcast_to(np.asarray(keep, float), new.shape)
+    f = np.array(f, float, copy=True)
+    f[..., good] = np.broadcast_to(new[good], f[..., good].shape)
+    _PAIR["n_lost"] = _PAIR.get("n_lost", 0) + int((elig & ~good).sum())
+    return f
+
+
+def _grid_ref(g):
+    """[0061-m] StrainGrid -> 能随 AMSET 的进程参数传进散射子进程的引用（大数组放共享内存，complex64 按 float32 存）。"""
+    try:
+        from amset.util import create_shared_array
+    except ImportError:
+        return g
+    C = np.ascontiguousarray(g.C)
+    c64 = C.dtype == np.complex64
+    Cb = create_shared_array(C.view(np.float32) if c64 else C.astype(np.complex128))
+    Xb = create_shared_array(np.ascontiguousarray(g.X, dtype=np.complex128))
+    return ("sgrid", Cb, c64, Xb, {"pairs": list(g.pairs), "ncl": g.ncl, "miller": g.miller, "kpoints": g.kf,
+                                   "gpoints": g.gpoints})
+
+
+def _grid_unref(ref):
+    if not (isinstance(ref, tuple) and ref and ref[0] == "sgrid"):
+        return ref
+    import deform_wave as DW
+    from amset.util import array_from_buffer
+    _tag, Cb, c64, Xb, meta = ref
+    C = array_from_buffer(Cb)
+    C = C.view(np.complex64) if c64 else C
+    X = array_from_buffer(Xb)
+    data = {"pairs": meta["pairs"], "ncl": meta["ncl"], "X": X, "coeff": C, "miller": meta["miller"],
+            "kpoints": meta["kpoints"], "bands": np.arange(X.shape[-1])}
+    return DW.StrainGrid(data, meta["gpoints"])
+
+
+def tables_to_reference(tabs):
+    """[0061-m] 插件 to_reference 用：修正表里的 StrainGrid 换成共享内存引用（没有网格时原样）。"""
+    if not tabs:
+        return tabs
+    return {sn: (dict(t, grid=_grid_ref(t["grid"])) if t and t.get("grid") is not None else t) for sn, t in tabs.items()}
+
+
+def tables_from_reference(ref):
+    if not ref:
+        return ref
+    return {sn: (dict(t, grid=_grid_unref(t["grid"])) if t and t.get("grid") is not None else t) for sn, t in ref.items()}
 
 
 # ---------------------------------------------------------------------------
@@ -1618,13 +1815,24 @@ def runtime_tables(amset_data, rec, cijkl, dim=3, tag="[adp_degen]", report_path
                           kunit="bohr", grid=grid)                     # amset_data.structure 是 bohr
             if minfo is not None:
                 rp["matrix"] = minfo
+            if t is not None and grid is not None:                     # [0061-m] 网格公式：有简并谷的那种载流子的全部带
+                t["grid"], t["vb"] = grid, vb
+                t["grid_signs"] = sorted({int(v["sign"]) for v in t["valleys"]})
+                dkm = _mesh_spacing(dft["kpoints"], rlat, dim)
+                for v in t["valleys"]:
+                    v["rcore"] = float(min(v["rcut"], CORE_CELLS * dkm))
+                rp["grid_formula"] = {"carriers": ["hole" if x < 0 else "electron" for x in t["grid_signs"]],
+                                      "core_cells": CORE_CELLS, "dk_mesh": dkm,
+                                      "rcore": [v["rcore"] for v in t["valleys"]]}
         except Exception as e:                                         # noqa: BLE001
             t, rp = None, {"status": "%s: %s" % (type(e).__name__, e)}
         reports[spin.name] = rp
         if t is not None:
             tables[spin.name] = t
     pair = bool(_PAIR["ok"]) and str(rec.get("pairwise") or "auto").lower() != "off"
-    how = "逐对替换矩阵元（AMSET 四面体积分里换子空间内的矩阵元）" if pair else (
+    gridf = pair and _PAIR.get("grid_ok") and any(t.get("grid") is not None for t in tables.values())
+    how = ("逐对替换矩阵元（AMSET 四面体积分里换子空间内的矩阵元）" + (
+        "；[0061-m] 网格公式：有简并谷的载流子全部末态用 AMSET 的系数 × DFT 应变算符，核心区 k·p" if gridf else "")) if pair else (
         "按初态乘比值" + ("" if str(rec.get("pairwise") or "auto").lower() == "off" else "（逐对不可用：%s）" % _PAIR["why"]))
     try:
         with open(report_path, "w") as fh:
@@ -1644,6 +1852,14 @@ def runtime_tables(amset_data, rec, cijkl, dim=3, tag="[adp_degen]", report_path
                 raise RuntimeError(msg + "（step.conf ADP_DEGEN = on；确认不需要就写 auto 或 off）")
             print(msg + "（ADP_DEGEN = auto：照原版 ADP 算）", flush=True)
     return tables or None
+
+
+def _mesh_spacing(kfrac, rlat, dim, vac_axis=2):
+    """DFT 网格（AMSET 波函数的网格）各周期方向的间距 |b_i|/N_i 的最大值（与 rlat 同单位）。"""
+    import deform_wave as DW
+    N, _sh = DW.infer_mesh(kfrac)
+    ax = [a for a in range(3) if dim == 3 or a != vac_axis]
+    return float(max(np.linalg.norm(np.asarray(rlat)[a]) / max(int(N[a]), 1) for a in ax))
 
 
 def summary_line(spin_name, v):

@@ -472,6 +472,7 @@ class StrainGrid:
         self.kf = np.asarray(data["kpoints"], float)
         self.N, self.shift = infer_mesh(self.kf)
         gp = np.asarray(gpoints, np.int64)
+        self.gpoints = gp
         self._gk = _gkey(gp)
         self._go = np.argsort(self._gk)
         self.ng = len(gp)

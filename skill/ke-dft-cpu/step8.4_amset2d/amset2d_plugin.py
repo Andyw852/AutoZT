@@ -226,12 +226,19 @@ class AcousticDeformation2D(_ADP):
         return obj
 
     def to_reference(self):
-        return super().to_reference() + (getattr(self, "_ivm", None), getattr(self, "_degen", None))
+        degen = getattr(self, "_degen", None)
+        if degen:                                                      # [0061-m] DFT 应变算符的大数组走共享内存
+            import adp_degen as _AD
+            degen = _AD.tables_to_reference(degen)
+        return super().to_reference() + (getattr(self, "_ivm", None), degen)
 
     @classmethod
     def from_reference(cls, *ref):
         obj = super().from_reference(*ref[:-2])
         obj._ivm, obj._degen = ref[-2], ref[-1]
+        if obj._degen:
+            import adp_degen as _AD
+            obj._degen = _AD.tables_from_reference(obj._degen)
         return obj
 
     def _iv_keep(self, unit_q, norm_q_sq, spin, band_idx, kpoint):
@@ -260,10 +267,9 @@ class AcousticDeformation2D(_ADP):
         f = f if keep is None else f * keep
         tabs = getattr(self, "_degen", None)
         if _PAIR_ON[0] and tabs and kpoint is not None:                 # [0061-p] 子空间内的末态换完整矩阵元（面内两支）
-            import adp_degen as _AD
-            f = _AD.pair_apply(f, _AD.pair_factor(tabs.get(getattr(spin, "name", spin)), band_idx, kpoint, unit_q,
-                                                  norm_q_sq, np.asarray(self.elastic_constant, float), velocity,
-                                                  d_scale=_ADP_D_SCALE))
+            import adp_degen as _AD                                    # [0061-m] 有 DFT 矩阵时全部末态走网格公式
+            f = _AD.matrix_apply(f, keep, tabs.get(getattr(spin, "name", spin)), band_idx, kpoint, unit_q,
+                                 norm_q_sq, np.asarray(self.elastic_constant, float), velocity, d_scale=_ADP_D_SCALE)
         return f
 
     def _factor_core(self, unit_q, norm_q_sq, spin, band_idx, kpoint, velocity):

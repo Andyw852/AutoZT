@@ -983,6 +983,6 @@ def test_plugin_2d_pairwise_source_wiring():
     src = (S84 / "amset2d_plugin.py").read_text(encoding="utf-8")
     i = src.index("class AcousticDeformation2D(_ADP)")
     adp = src[i:src.index("# ---------------- ODP / IVS", i)]
-    assert "_AD.pair_apply(f, _AD.pair_factor(" in adp and "d_scale=_ADP_D_SCALE" in adp
+    assert "_AD.matrix_apply(f, keep, " in adp and "d_scale=_ADP_D_SCALE" in adp        # [0061-m] 内含 pair_apply 的退路
     assert "or _PAIR_ON[0]:" in adp                                    # 逐对模式不再乘比值
     assert "_PAIR_ON[0], _why_pair = _AD_pair.install_pair_hooks()" in src

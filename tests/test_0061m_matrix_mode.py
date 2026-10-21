@@ -81,7 +81,6 @@ def test_synth_zk_kinematics(si):
     v = tab["valleys"][0]
     j0 = v["zk_keys"][ad._key(np.zeros(3))]
     assert np.allclose(v["zk"][j0], v["Z"], atol=1e-6)
-    rinv = np.linalg.inv(si.B)
     hits = 0
     for kk, j in v["zk_keys"].items():
         kf = np.array(kk, float) * ad.KEY_RES
@@ -106,7 +105,6 @@ def test_synth_zk_kinematics(si):
         if hits >= 6:
             break
     assert hits >= 3
-    _ = rinv
 
 
 def test_synth_grid_failure_falls_back_to_fit(si):

@@ -163,7 +163,7 @@ class GenWiringTests(unittest.TestCase):
 
     def test_ionrelax_reuse_requires_same_static_incar(self):
         s = self.SRC
-        i = s.index("_why = kc.run_incar_mismatch(_stat_now")
+        i = s.index("_why = _mismatch_wo_lwave(_stat_now")              # [0061-m] 同一核对，只是 LWAVE 不算
         j = s.index('_stat_now = _ionrelax_incars((out / _name / "INCAR")')
         self.assertLess(j, i)
         self.assertLess(i, s.index("_skipped.append(_name)"))
