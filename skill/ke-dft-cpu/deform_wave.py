@@ -373,7 +373,9 @@ def build(root, dirs, out="deformation_matrix.h5", und="undeformed", fname="defo
                     if len(Hs) >= 2:
                         Xp = (Hs[-1] - Hs[0]) / (am[-1] - am[0])
                     else:
-                        Xp = (Hs[0] - np.diag(E0all[j, bands[inn]])) / am[0]
+                        # E0all 的行是 jk 过滤后的顺序（0..len(jk)-1），不是 f0 里的绝对 k 号 j：
+                        # 各构型 IBZ k 点数不同（形变降对称性后常多几个 k），用绝对号会越界。
+                        Xp = (Hs[0] - np.diag(E0all[jj, bands[inn]])) / am[0]
                     X[ip, jj] = 0.5 * (Xp + Xp.conj().T)
             summ["spins"][sn] = {"bands": [int(bands[inn][0]), int(bands[inn][-1])], "q_min": float(qmin),
                                  "aug_offdiag_max": augmax}

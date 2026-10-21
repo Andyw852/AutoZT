@@ -205,3 +205,69 @@ def test_cli_extract_and_delete(tmp_path, capsys):
     assert (d / "deform_wave.h5").is_file() and not (d / "WAVECAR").exists()
     assert DW._cli(["extract", "--wavecar", str(d / "WAVECAR"), "--out", str(d / "o.h5")]) == 0
     assert "没有" in capsys.readouterr().out
+
+def _drop_k_rows(path, drop=(0,)):
+    """去掉 deform_wave.h5 里指定 k 行（模拟各构型 IBZ k 点数不同：形变降对称性后 k 集变化）。"""
+    import h5py
+    with h5py.File(str(path), "r") as f:
+        attrs = dict(f.attrs)
+        data = {k: np.array(f[k]) for k in f.keys()}
+    nk = data["kpoints"].shape[0]
+    keep = np.array([j for j in range(nk) if j not in drop], int)
+    for k in list(data):
+        if k == "kpoints" or k.startswith(("coeff_", "eig_")):
+            data[k] = data[k][keep]
+    with h5py.File(str(path), "w") as f:
+        f.attrs.update(attrs)
+        for k, v in data.items():
+            f[k] = v
+
+
+def _worst_vs_exact(m, dat, kpts):
+    lut = {tuple(np.round(k * 4).astype(int) % 4): j for j, k in enumerate(kpts)}
+    worst = 0.0
+    for jj, k in enumerate(m["kpoints"]):
+        G, _e, V = dat[lut[tuple(np.round(k * 4).astype(int) % 4)]]
+        for ip, P in enumerate(m["pairs"]):
+            Xe = _exact_X(k, G, V, m["bands"], [P])[0]
+            worst = max(worst, float(np.max(np.abs(m["X"][ip, jj] - Xe)) / np.max(np.abs(Xe))))
+    return worst
+
+
+def test_build_tolerates_different_ibz_k_counts(tmp_path):
+    """回归（[0061-m] 真数据 A1 崩溃）：各构型 IBZ k 点数不同（形变降对称性后 k 集变化）时，build 必须按 k
+    坐标对齐；旧代码拿"绝对 k 号"去索引 jk 过滤后的未形变数组（E0all[j]），在 Si 上表现为
+    IndexError: index 1224 is out of bounds for axis 0 with size 1223。"""
+    import shutil
+
+    root, dirs, data0 = _s7(tmp_path, n=4)
+    kpts, dat = data0
+    p0 = [d for d in dirs if d.startswith("deform-00")]
+    assert len(p0) == 2
+
+    # A) 中心差分（± 都在）：只让 pattern-00 的两个构型各少第 0 个 k -> 公共 k 减一
+    rootA = tmp_path / "nk_central"
+    shutil.copytree(str(root), str(rootA))
+    for d in p0:
+        _drop_k_rows(rootA / d / "deform_wave.h5", drop=(0,))
+    outA = tmp_path / "dm_central.h5"
+    summA = DW.build(rootA, dirs, outA, log=lambda *a: None)
+    assert summA["n_k"] == len(kpts) - 1
+    assert summA["one_sided"] == []
+    assert _worst_vs_exact(DW.load_matrix(outA, "up"), dat, kpts) < 1e-2
+
+    # B) 单侧差分 + k 数不同（真数据 Si 的现场）：pattern-00 只剩一侧，且它少了第 0 个 k
+    drop_dir = "deform-00p"
+    gone = [d for d in p0 if d != drop_dir][0]
+    rootB = tmp_path / "nk_onesided"
+    shutil.copytree(str(root), str(rootB))
+    shutil.rmtree(str(rootB / drop_dir))
+    _drop_k_rows(rootB / gone / "deform_wave.h5", drop=(0,))
+    dirsB = [d for d in dirs if d != drop_dir]
+    outB = tmp_path / "dm_onesided.h5"
+    summB = DW.build(rootB, dirsB, outB, log=lambda *a: None)
+    assert summB["n_k"] == len(kpts) - 1
+    assert summB["one_sided"] == [DW.PAT_NAMES[E.PATS[0]]]
+    mB = DW.load_matrix(outB, "up")
+    assert np.all(np.isfinite(mB["X"]))
+    assert _worst_vs_exact(mB, dat, kpts) < 0.2      # 单侧差分 O(δ) + 截断球 Pulay，比中心差分松一档
