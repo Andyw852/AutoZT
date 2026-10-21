@@ -1,6 +1,6 @@
 # 在新超算站点部署 AutoZT：移植与验收指南（中文版）
 
-**文档版本：** 1.1（事实性修订：第 5.2、7.1、7.2、8.1、8.3、9.1、9.3.1、10.1、11.3、13、14.6 节；修订记录见仓库历史）  
+**文档版本：** 1.1（事实性修订：第 5.2、7.1、7.2、8.1、8.3、9.1、9.3.1、10.1、11.3、13、14.6、15 节及附录 C；修订记录见仓库历史）  
 **适用版本：** AutoZT v2.0 及以后  
 **读者：** 负责在计算集群或独立节点上部署 AutoZT 的站点管理员与用户  
 **配套文件：** `tools/probe_cluster.sh`（只读站点勘察脚本）、`docs/DEPLOY-RECORD-TEMPLATE.md`（站点记录模板）、`docs/CONFIGURING.md`（配置参考）  
@@ -273,7 +273,8 @@ printf '1\n103\n' | vaspkit      # 应生成首行为 'PAW_PBE Si ...' 的 POTCA
 
 #### 9.3.1 以 `conda create -p` 创建的环境
 
-AutoZT 把含 `/` 的运行时环境路径视为 virtualenv，并以 `source <env>/bin/activate` 激活。
+运行时环境以目录给出时，AutoZT 将其视为 virtualenv，并以 `source <env>/bin/activate` 激活：
+提交模板的判据是 `<env>/bin/python` 可执行，部分输入生成模块的判据是取值含 `/`。
 新版 conda 创建的环境不含 virtualenv 风格的 `bin/activate`，激活静默失败后会退回系统解释器，
 表现为 `autozt check` 报告缺包、生成脚本导入失败。
 
@@ -313,7 +314,7 @@ chmod +x "$ENV/bin/activate"
 | `cores` | 否 | 作业默认核数；步骤级与技能级设置优先 |
 | `references_dir` | 条件 | `defect-dft-cpu` 的凸包参考相共享目录 |
 | `conda_sh` | 否 | `profile.d/conda.sh` 路径；仅用 virtualenv 的站点可留空 |
-| `conda_env` | 输入生成必填 | 供输入生成脚本使用的 Python 环境；含 `/` 的路径按 virtualenv 激活 |
+| `conda_env` | 输入生成必填 | 供输入生成脚本使用的 Python 环境；以目录路径给出时按 virtualenv 激活（见第 9.3.1 节） |
 | `kl_env` | 随技能 | 基于 phono3py 的声子计算专用环境，会被注入步骤配置；`autozt check` **不**评估该环境，需手工验证（见第 13 节） |
 | `amset_env` | 随技能 | AMSET 专用环境（应为独立环境）；`autozt check` 以 `py:<包名>@amset_env` 报告其缺项 |
 | `potcar_dir` | 条件 | 赝势库根目录，仅 `defect-dft-cpu` 读取；使用 VASPKIT 的技能读取 `~/.vaspkit`（布局见第 9.1 节） |
@@ -548,7 +549,7 @@ ELPA 的 Fortran 模块存在并行依赖竞争，需要多轮 `make -k -j N`。
 | `group max tres limit ...` | 超过账户并发上限 | 减少同时作业数或作业规模；记录该变更 |
 | 作业数秒内失败并报 `binding more processes than cpus` | OpenMPI 默认绑核 | `mpirun --bind-to none` |
 | `error while loading shared libraries` | 运行时缺少库 | 用 `ldd` 定位；以 `-Wl,-rpath` 重新构建，或加载对应模块 |
-| `undefined symbol: dgegv_` | LAPACK 3.8 及以后移除了该例程 | 从 netlib 取 `dgegv.f`、`dggsvd.f` 加入源码 |
+| `undefined symbol: dgegv_` | 所用 LAPACK 未提供已弃用例程（LAPACK 3.6.0 起默认不编译） | 从 netlib 取 `dgegv.f`、`dggsvd.f` 加入源码（第 8.1 节） |
 | 启动时报 `I REFUSE TO CONTINUE` | 结构不一致或 POSCAR 损坏 | 核对传输的 POSCAR 与本地文件一致（AutoZT 会做校验） |
 | VASPKIT 不生成 POTCAR | `~/.vaspkit` 使用了 `KEY = VALUE` | 改为 `KEY VALUE`；核对 `PBE_PATH` 根目录 |
 | `autozt check` 报告缺包但实际已安装 | 非交互 `PATH`；技能专用环境；conda 前缀缺少 `bin/activate` | 见第 5.2、13、9.3.1 节 |
@@ -622,7 +623,7 @@ remote_path_prefix: <根目录>/software/AutoZT/pybin:<根目录>/software/AutoZ
 | MPI 问题 | 部分节点 OpenMPI 默认绑核失败 | `mpirun --bind-to none` |
 | 编译器 | GCC 9.3.0（系统 7.3.1 会报内部编译错误） | 通过模块加载 |
 | MPI 库 | HPC-X 2.11 | 与编译器匹配 |
-| BLAS/LAPACK | 系统 3.4.2，并补入 `dgegv`/`dggsvd` 源码 | 新版 LAPACK 缺少这些例程 |
+| BLAS/LAPACK | 系统 3.4.2；链接时 `dgegv_`/`dggsvd_` 未解析 | 补入 netlib 源码（第 8.1 节） |
 | 引擎 | VASP 6.4.3，原版与 IOPTCELL 补丁版 | `standard` 与 `relax_2d` 两个 profile |
 | 赝势 | potpaw_PBE_64，346 个元素 | 解压后需调整权限 |
 | VASPKIT | 1.2.4，`~/.vaspkit` 使用空白分隔 | 用于生成 POTCAR |

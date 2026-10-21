@@ -1,6 +1,6 @@
 # Deploying AutoZT at a New HPC Site: Porting and Acceptance Guide
 
-**Document version:** 1.1 (factual corrections: Section 8.3, 7.1, 7.2, 9.1, 9.3.1, 10.1, 11.3, 13, 14.6; see the repository history)  
+**Document version:** 1.1 (factual corrections: Sections 5.2, 7.1, 7.2, 8.1, 8.3, 9.1, 9.3.1, 10.1, 11.3, 13, 14.6, 15 and Appendix C; see the repository history)  
 **Applies to:** AutoZT v2.0 and later  
 **Audience:** site administrators and users who deploy AutoZT on a compute cluster or standalone node  
 **Companion artifacts:** `tools/probe_cluster.sh` (read-only site survey), `docs/DEPLOY-RECORD-TEMPLATE.md` (per-site record), `docs/CONFIGURING.md` (configuration reference)  
@@ -315,8 +315,9 @@ Acceptance criterion:
 
 #### 9.3.1 Environments created with `conda create -p`
 
-AutoZT treats a runtime-environment path containing `/` as a virtualenv and activates it with
-`source <env>/bin/activate`. Conda environments created by recent conda versions do not contain
+AutoZT treats a runtime environment given as a directory as a virtualenv and activates it with
+`source <env>/bin/activate`: the submission templates do so when `<env>/bin/python` is
+executable, and some input-generation modules when the value contains `/`. Conda environments created by recent conda versions do not contain
 a virtualenv-style `bin/activate`; activation therefore fails silently and the system
 interpreter is used instead, which manifests as missing packages in `autozt check` and import
 failures in generation scripts.
@@ -359,7 +360,7 @@ configuration, in this order: `project_setting/` > user configuration > package 
 | `cores` | no | Default number of cores per job; step-level and skill-level settings take precedence. |
 | `references_dir` | defect-dft-cpu | Shared directory of convex-hull reference phases. |
 | `conda_sh` | no | Path to `profile.d/conda.sh`; leave empty for virtualenv-only sites. |
-| `conda_env` | yes (generation) | Python environment for input-generation scripts; a path containing `/` is activated as a virtualenv. |
+| `conda_env` | yes (generation) | Python environment for input-generation scripts; a directory path is activated as a virtualenv (Section 9.3.1). |
 | `kl_env` | kl-dft-cpu | Environment for the phono3py-based phonon calculation; injected into the step configuration. It is **not** evaluated by `autozt check`; verify it manually (Section 13). |
 | `amset_env` | ke-dft-cpu (S8) | AMSET environment; should be an isolated environment. `autozt check` reports its packages as `py:<package>@amset_env`. |
 | `potcar_dir` | defect-dft-cpu | Pseudopotential root, read by `defect-dft-cpu` only; the VASPKIT-based skills read `~/.vaspkit` instead. Layouts are listed in Section 9.1. |
@@ -631,7 +632,7 @@ of parallel module-dependency races. The skill parameters (`HAMGNN_DIR`, `UNI_MO
 | `group max tres limit ...` | Account concurrency limit exceeded | Reduce the number of simultaneous jobs or their size; document the change |
 | Job fails within seconds with `binding more processes than cpus` | OpenMPI default binding | `mpirun --bind-to none` |
 | `error while loading shared libraries` | Library not available at run time | Use `ldd` to identify the library; rebuild with `-Wl,-rpath`, or load the corresponding module |
-| `undefined symbol: dgegv_` | LAPACK 3.8 and later removed the routine | Add `dgegv.f` and `dggsvd.f` from netlib to the sources |
+| `undefined symbol: dgegv_` | The LAPACK in use does not provide the deprecated routines (not built by default since LAPACK 3.6.0) | Add `dgegv.f` and `dggsvd.f` from netlib to the sources (Section 8.1) |
 | `I REFUSE TO CONTINUE` at start-up | Inconsistent structure or corrupted POSCAR | Verify that the transferred POSCAR matches the local file (AutoZT performs a checksum) |
 | VASPKIT does not create POTCAR | `~/.vaspkit` uses `KEY = VALUE` | Use `KEY VALUE`; verify the `PBE_PATH` root |
 | `autozt check` reports missing packages although they are installed | Non-interactive `PATH`; a skill-specific environment; a conda prefix without `bin/activate` | Sections 5.2, 13 and 9.3.1 |
@@ -714,7 +715,7 @@ a configuration to copy.
 | MPI issue | OpenMPI default binding failed on some nodes | `mpirun --bind-to none` |
 | Compiler | GCC 9.3.0 (system 7.3.1 fails with an internal compiler error) | module load |
 | MPI library | HPC-X 2.11 | matched to the compiler |
-| BLAS/LAPACK | system 3.4.2 with `dgegv`/`dggsvd` sources | later LAPACK lacks the routines |
+| BLAS/LAPACK | system 3.4.2; `dgegv_`/`dggsvd_` unresolved at link time | netlib sources added (Section 8.1) |
 | Engine | VASP 6.4.3, pristine and IOPTCELL-patched | `standard` and `relax_2d` profiles |
 | Pseudopotentials | potpaw_PBE_64, 346 elements | extraction requires mode adjustment |
 | VASPKIT | 1.2.4, whitespace-separated `~/.vaspkit` | POTCAR generation |
