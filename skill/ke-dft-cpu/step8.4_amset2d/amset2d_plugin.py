@@ -84,6 +84,21 @@ _EPS_ENV = float(_REC.get("eps_env", 1.0) or 1.0)
 _D_IMP = float(_REC.get("imp_distance_A", 0.0) or 0.0) * A2B
 _LO_DISP = bool(_REC.get("pop_lo_dispersion", True))
 _MECHS = set(_REC.get("mechanisms_2d", ["ADP", "POP", "IMP", "PIE"]))
+# [0061] ADP 简并修正：gen_step14 写 "adp_degen"（mode / signed_h5 / deform_h5 / efit_eV / nang），运行期在主进程拟合。
+_DEGEN_REC = _REC.get("adp_degen") or {}
+_DEGEN_ON = (str(_DEGEN_REC.get("mode") or "off").lower() in ("auto", "on")
+             and _DEGEN_REC.get("status") == "pending_runtime")
+_DEGEN_REPORT = "adp_degen_fit.json"
+_PAIR_ON = [False]                # [0061-p] 逐对替换矩阵元（钩子装上才开；record 的 pairwise = "off" 退回按初态比值）
+
+
+def _degen_setup(amset_data, adp):
+    """[0061] {spin.name: 修正表} 或 None（不适用：auto 打印原因照原版，on 报错）。"""
+    import adp_degen as _AD
+    return _AD.runtime_tables(amset_data, _DEGEN_REC, np.asarray(adp.elastic_constant, float), dim=2,
+                              tag="[amset2d]", report_path=_DEGEN_REPORT)
+
+
 # [0049] ADP 形变势口径缩放（无量纲）：1.0 = 用 h5 的绝对形变势原样（现状）；
 #   "poisson" 或数值由 gen_step14 的 ADP_D_SCALE 解析后写进 2d_correction.json。
 #   只影响 ADP 机制。见 gen_step14_amset2d._resolve_adp_d_scale 的说明。
@@ -198,6 +213,8 @@ class AcousticDeformation2D(_ADP):
     AMSET 的 ADP 对整个布里渊区的 q 积分，大 q 的 K→K′/K→Q 用长波声速和带边形变势算，
     既不物理、又与 IVS 的谷间通道重复计数。掩码数据在 _ivm（主进程 from_amset_data 建，
     经 to_reference/from_reference 带进散射子进程）；没有 _ivm 时与以前逐字节相同。
+    [0061] 开了 ADP 简并修正（2d_correction.json 的 "adp_degen"）时，_iv_keep 还乘上初态 (带, k) 的放大系数
+    （完整应变矩阵元 ÷ AMSET 写法，面内两支声学模，见 adp_degen.py；修正表在 _degen，同样随 reference 带进子进程）。
     """
     name = "ADP"
 
@@ -205,34 +222,55 @@ class AcousticDeformation2D(_ADP):
     def from_amset_data(cls, materials_properties, amset_data):
         obj = super().from_amset_data(materials_properties, amset_data)
         obj._ivm = _adp_mask_setup(amset_data)
+        obj._degen = _degen_setup(amset_data, obj) if _DEGEN_ON else None
         return obj
 
     def to_reference(self):
-        return super().to_reference() + (getattr(self, "_ivm", None),)
+        degen = getattr(self, "_degen", None)
+        if degen:                                                      # [0061-m] DFT 应变算符的大数组走共享内存
+            import adp_degen as _AD
+            degen = _AD.tables_to_reference(degen)
+        return super().to_reference() + (getattr(self, "_ivm", None), degen)
 
     @classmethod
     def from_reference(cls, *ref):
-        obj = super().from_reference(*ref[:-1])
-        obj._ivm = ref[-1]
+        obj = super().from_reference(*ref[:-2])
+        obj._ivm, obj._degen = ref[-2], ref[-1]
+        if obj._degen:
+            import adp_degen as _AD
+            obj._degen = _AD.tables_from_reference(obj._degen)
         return obj
 
     def _iv_keep(self, unit_q, norm_q_sq, spin, band_idx, kpoint):
-        """谷内掩码：k+q 与 k 在同一个成员谷 -> True。该载流子没开掩码 -> None（不掩）。"""
+        """谷内掩码（k+q 与 k 在同一个成员谷 -> True）× [0061] 简并修正的放大系数。都不开 -> None（不掩、不乘）。"""
+        keep = None
         ivm = getattr(self, "_ivm", None)
-        if not ivm or kpoint is None:
-            return None
-        vb = (getattr(self, "vb_idx", None) or {}).get(spin)
-        centers = ivm.get("electron" if (vb is not None and band_idx > vb) else "hole")
-        if centers is None:
-            return None
-        q = np.sqrt(norm_q_sq)[:, None] * np.asarray(unit_q)
-        kp = q @ ivm["rinv"] + np.asarray(kpoint, float)
-        return _DPO.same_member(kpoint, kp, centers, ivm["rlat"])
+        if ivm and kpoint is not None:
+            vb = (getattr(self, "vb_idx", None) or {}).get(spin)
+            centers = ivm.get("electron" if (vb is not None and band_idx > vb) else "hole")
+            if centers is not None:
+                q = np.sqrt(norm_q_sq)[:, None] * np.asarray(unit_q)
+                kp = q @ ivm["rinv"] + np.asarray(kpoint, float)
+                keep = _DPO.same_member(kpoint, kp, centers, ivm["rlat"])
+        tabs = getattr(self, "_degen", None)
+        if not tabs or kpoint is None or _PAIR_ON[0]:                  # 逐对模式：不乘比值（factor 里换矩阵元）
+            return keep
+        import adp_degen as _AD
+        s = _AD.scale(tabs.get(getattr(spin, "name", spin)), band_idx, kpoint)
+        if s == 1.0:
+            return keep
+        return np.full(np.shape(norm_q_sq), s) if keep is None else keep * s
 
     def factor(self, unit_q, norm_q_sq, spin, band_idx, kpoint, velocity):
         f = self._factor_core(unit_q, norm_q_sq, spin, band_idx, kpoint, velocity)
         keep = self._iv_keep(unit_q, norm_q_sq, spin, band_idx, kpoint)
-        return f if keep is None else f * keep
+        f = f if keep is None else f * keep
+        tabs = getattr(self, "_degen", None)
+        if _PAIR_ON[0] and tabs and kpoint is not None:                 # [0061-p] 子空间内的末态换完整矩阵元（面内两支）
+            import adp_degen as _AD                                    # [0061-m] 有 DFT 矩阵时全部末态走网格公式
+            f = _AD.matrix_apply(f, keep, tabs.get(getattr(spin, "name", spin)), band_idx, kpoint, unit_q,
+                                 norm_q_sq, np.asarray(self.elastic_constant, float), velocity, d_scale=_ADP_D_SCALE)
+        return f
 
     def _factor_core(self, unit_q, norm_q_sq, spin, band_idx, kpoint, velocity):
         # （amset_ir_fix 的 ADP 星平均对本方法做旋转平均，谷内掩码在平均之后按未旋转的 q 乘）
@@ -567,6 +605,15 @@ _BANNER = ("[amset2d] amset %s | c=%.3f A | r_inf=%s | mechanisms=%s"
            % (amset.__version__, _C / A2B, np.round(_r_tensor("eps_inf_slab").tolist(), 3),
               ",".join(_ACTIVE)))
 print(_BANNER, flush=True)
+if _DEGEN_ON and str(_DEGEN_REC.get("pairwise") or "auto").lower() != "off":    # [0061-p] 子进程导入时也装钩子
+    import adp_degen as _AD_pair
+    _PAIR_ON[0], _why_pair = _AD_pair.install_pair_hooks()
+    if not _PAIR_ON[0]:
+        print("[amset2d][WARN] ADP 简并修正：逐对替换矩阵元不可用（%s），退回按初态乘比值" % _why_pair, flush=True)
+if _DEGEN_REC:
+    print("[amset2d] ADP 简并修正（[0061]）：%s" % (
+        ("开（%s，运行期拟合，%s）" % (_DEGEN_REC.get("mode"), "逐对替换矩阵元" if _PAIR_ON[0] else "按初态比值"))
+        if _DEGEN_ON else "关（%s）" % _DEGEN_REC.get("status")), flush=True)
 if _DPO_REC and ({"ODP", "IVS"} & set(_ACTIVE) or any((_DPO_REC.get("adp_intravalley") or {}).values())):
     _need_dpo()
     _ivf = _DPO_REC.get("adp_intravalley") or {}

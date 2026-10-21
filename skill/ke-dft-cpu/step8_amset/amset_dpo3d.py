@@ -18,9 +18,10 @@ dp_optical_3d.json：
                     "adp_intravalley": {"electron": bool, "hole": bool}, ...}}
 可选：ADP 谷内掩码（开了 IVS 的载流子，ADP 只留 k 与 k+q 在同一个谷的散射，免得与 IVS 重复计数），
 与 2D 插件同一做法：替换 AMSET 的 ADP 类（核不变，只乘掩码），worker 子进程里按引用重建。
-[0061] 可选：简并价带顶的 ADP 带间修正（dp_optical_3d.json 的 "adp_degen"，gen 按 step.conf 的 ADP_DEGEN 写）——
-立方 Γ 三重简并价带的 ADP 率按初态乘 adp_degen.scale（完整 Bir–Pikus 矩阵元 ÷ AMSET 写法，见 adp_degen.py），
-参数在本进程用 AMSET 自己的能带 + S7.1 的形变势现拟合，报告写 adp_degen_fit.json。
+[0061] 可选：简并 / 近简并带边的 ADP 带间修正（dp_optical_3d.json 的 "adp_degen"，gen 按 step.conf 的 ADP_DEGEN 写）——
+任意晶系、任意谷、价带与导带、含 SOC：简并子空间里的态的 ADP 率按初态乘 adp_degen.scale（完整应变矩阵元 ÷ AMSET 写法，
+见 adp_degen.py）。k·p、对称性、应变算符在本进程用 vasprun.xml + AMSET 的波函数系数 / 能带 + S7.1 的形变势现拟合，
+报告写 adp_degen_fit.json。
 没有 dp_optical_3d.json -> 什么都不做（打印一行）。
 """
 
@@ -58,6 +59,9 @@ _MASK_ON = any((_DPO_REC.get("adp_intravalley") or {}).get(c) for c in _CARRIERS
 _DEGEN_REC = (_REC or {}).get("adp_degen") or {}                     # [0061]
 _DEGEN_ON = str(_DEGEN_REC.get("mode") or "off").lower() in ("auto", "on") and _DEGEN_REC.get("status") == "pending_runtime"
 _DEGEN_REPORT = "adp_degen_fit.json"
+# [0061-p] 逐对替换矩阵元（出厂）：钩子装上了就在 AMSET 的四面体积分里换子空间内 (初态, 末态) 的矩阵元；
+#   record 的 pairwise = "off" 或 AMSET 内部结构对不上时，退回按初态乘比值。
+_PAIR_ON = [False]
 
 if _REC is not None:
     try:
@@ -223,45 +227,17 @@ def _install_fill_keep_dpo():
 
 
 def _degen_setup(amset_data, adp):
-    """[0061] 每个自旋一张修正表 {spin.name: table}；不适用时按 mode 处理（auto：告警、不修正；on：报错）。"""
+    """[0061] 每个自旋一张修正表 {spin.name: table}；不适用时按 mode 处理（auto：打印原因、不修正；on：报错）。"""
     import adp_degen as _AD
-    mode = str(_DEGEN_REC.get("mode") or "auto").lower()
-    tables, reports = {}, {}
-    for spin in amset_data.spins:
-        table, rep = _AD.setup(
-            amset_data.energies[spin], amset_data.kpoints, (amset_data.vb_idx or {}).get(spin, -1),
-            amset_data.structure, np.asarray(adp.elastic_constant, float),
-            _DEGEN_REC.get("deform_h5") or "deformation.h5", _DEGEN_REC.get("signed_h5") or "deformation_signed.h5",
-            spin_name=spin.name, efit=float(_DEGEN_REC.get("efit_eV") or _AD.EFIT_EV),
-            nang=int(_DEGEN_REC.get("nang") or _AD.NANG), is_soc=bool(getattr(amset_data, "_soc", False)))
-        reports[spin.name] = rep
-        if table is not None:
-            tables[spin.name] = table
-    try:
-        with open(_DEGEN_REPORT, "w") as fh:
-            json.dump({"mode": mode, "spins": reports}, fh, indent=1, ensure_ascii=False, default=float)
-    except OSError:
-        pass
-    for sn, rep in reports.items():
-        if rep.get("status") == "ok":
-            kp, bp = rep["kp"], rep["bir_pikus"]
-            print("%s ADP 简并价带修正（%s）：k·p L/M/N = %.2f/%.2f/%.2f（残差 %.1f%%）；Bir–Pikus a/b/d = %.2f/%.2f/%.2f eV"
-                  "（d 的符号置信 %.2f）；散射率放大 %s"
-                  % (_TAG, sn, kp["L"], kp["M"], kp["N"], 100 * kp["rel_rms"], bp["a"], bp["b"], bp["d"],
-                     rep["n_sign"]["confidence"], " / ".join("%.2f" % x for x in rep["ratio_mean"])), flush=True)
-        else:
-            msg = "%s ADP 简并价带修正（%s）不适用：%s" % (_TAG, sn, rep.get("status"))
-            if mode == "on":
-                raise RuntimeError(msg + "（step.conf ADP_DEGEN = on；确认不需要就写 auto 或 off）")
-            print(msg + "（ADP_DEGEN = auto：照原版 ADP 算）", flush=True)
-    return tables or None
+    return _AD.runtime_tables(amset_data, _DEGEN_REC, np.asarray(adp.elastic_constant, float), dim=3, tag=_TAG,
+                              report_path=_DEGEN_REPORT)
 
 
 class AcousticDeformation3DIntravalley(_ADP):
     """原版三维 ADP 核，开了掩码的载流子只留谷内（k 与 k+q 落在同一个成员谷）。
     核与 AMSET 原版逐字相同（_factor_core = 原版 factor）；amset_ir_fix 的星平均只平均 _factor_core，
     掩码在平均之后按未旋转的 k、q 乘（与 2D 插件同一约定）。没有 _ivm 时与原版逐字节相同。
-    [0061] 开了 ADP 简并修正时，_iv_keep 还乘上初态 (带, k) 的放大系数（星平均之后乘，同掩码）。"""
+    [0061] 开了 ADP 简并修正时，_iv_keep 还乘上初态 (带, k) 的放大系数（星平均之后乘，同掩码；谷星成员按对称操作映回代表谷）。"""
     name = "ADP"
 
     @classmethod
@@ -272,17 +248,24 @@ class AcousticDeformation3DIntravalley(_ADP):
         return obj
 
     def to_reference(self):
-        return super().to_reference() + (getattr(self, "_ivm", None), getattr(self, "_degen", None))
+        degen = getattr(self, "_degen", None)
+        if degen:                                                      # [0061-m] DFT 应变算符的大数组走共享内存
+            import adp_degen as _AD
+            degen = _AD.tables_to_reference(degen)
+        return super().to_reference() + (getattr(self, "_ivm", None), degen)
 
     @classmethod
     def from_reference(cls, *ref):
         obj = super().from_reference(*ref[:-2])
         obj._ivm, obj._degen = ref[-2], ref[-1]
+        if obj._degen:
+            import adp_degen as _AD
+            obj._degen = _AD.tables_from_reference(obj._degen)
         return obj
 
     def _degen_scale(self, spin, band_idx, kpoint):
         tabs = getattr(self, "_degen", None)
-        if not tabs or kpoint is None:
+        if not tabs or kpoint is None or _PAIR_ON[0]:                  # 逐对模式：不乘比值
             return 1.0
         import adp_degen as _AD
         return _AD.scale(tabs.get(getattr(spin, "name", spin)), band_idx, kpoint)
@@ -308,7 +291,13 @@ class AcousticDeformation3DIntravalley(_ADP):
     def factor(self, unit_q, norm_q_sq, spin, band_idx, kpoint, velocity):
         f = self._factor_core(unit_q, norm_q_sq, spin, band_idx, kpoint, velocity)
         keep = self._iv_keep(unit_q, norm_q_sq, spin, band_idx, kpoint)
-        return f if keep is None else f * keep
+        f = f if keep is None else f * keep
+        tabs = getattr(self, "_degen", None)
+        if _PAIR_ON[0] and tabs and kpoint is not None:                 # [0061-p] 子空间内的末态换完整矩阵元
+            import adp_degen as _AD                                    # [0061-m] 有 DFT 矩阵时全部末态走网格公式
+            f = _AD.matrix_apply(f, keep, tabs.get(getattr(spin, "name", spin)), band_idx, kpoint, unit_q,
+                                 norm_q_sq, np.asarray(self.elastic_constant, float), velocity)
+        return f
 
 
 def worker(*args, **kwargs):
@@ -333,6 +322,11 @@ def _install():
         C._scattering_mechanisms[k] = classes[k]
     if _MECHS:
         _install_fill_keep_dpo()
+    if _DEGEN_ON and str(_DEGEN_REC.get("pairwise") or "auto").lower() != "off":
+        import adp_degen as _AD
+        _PAIR_ON[0], _why = _AD.install_pair_hooks()
+        if not _PAIR_ON[0]:
+            print("%s[WARN] ADP 简并修正：逐对替换矩阵元不可用（%s），退回按初态乘比值" % (_TAG, _why), flush=True)
     if _MASK_ON or _DEGEN_ON:
         C._scattering_mechanisms["ADP"] = AcousticDeformation3DIntravalley
         C.AcousticDeformationPotentialScattering = AcousticDeformation3DIntravalley   # worker 用此名重建 ADP
@@ -340,10 +334,11 @@ def _install():
             _ORIG_WORKER[0] = C.scattering_worker
             C.scattering_worker = worker
     ivf = _DPO_REC.get("adp_intravalley") or {}
-    print("%s amset %s | 三维常数形变势 %s：%s | ADP 谷内掩码：电子 %s，空穴 %s | ADP 简并价带修正：%s"
+    print("%s amset %s | 三维常数形变势 %s：%s | ADP 谷内掩码：电子 %s，空穴 %s | ADP 简并修正：%s"
           % (_TAG, amset.__version__, ",".join(_MECHS) or "（无）", _DPO.describe(_DPO_REC) if _DPO_REC else "—",
              "开" if ivf.get("electron") else "关", "开" if ivf.get("hole") else "关",
-             ("开（%s，运行期拟合）" % _DEGEN_REC.get("mode")) if _DEGEN_ON else "关"), flush=True)
+             ("开（%s，运行期拟合，%s）" % (_DEGEN_REC.get("mode"), "逐对替换矩阵元" if _PAIR_ON[0] else "按初态比值"))
+              if _DEGEN_ON else "关"), flush=True)
 
 
 if not getattr(C, "_az_dpo3d", False):

@@ -32,7 +32,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 # [SKILL_REV] 版本戳：写进 settings.yaml 头，便于从结果反查跑的是哪份 skill 副本。
-_SKILL_REV = "2026-10-20-0059r3-dfptodp"   # [0059-r3] DFPT 谷内 ODP（q=Γ）优先于冻声子/手填，不再两份叠加   # 2026-10-18-0059-ivsdfpt   # [0059] IVS_DFPT：eph-qe-cpu QE DFPT 谷间零阶形变势（ivs_dfpt_params.json）优先于冻声子 K↔K′ 与手填   # 2026-10-16-0055-dopinglow   # [0055] DOPING_LOW 低浓度段 1e3–1e9 cm^-2（≈3D 1e10–1e16；amset_fermi_fix 小掺杂 log-sum-exp 解 E_F）；[0054] undoped_ni 记带边   # 2026-10-15-0051-socdesym   # [0051] amset_desym_fix 修 SOC 分支（四元数 SU(2) + iσ_y·K，V200）；README 过期重叠口径标注取代   # 2026-10-15-0050-r1-subsets   # [0050-r1] 出厂 SUBSETS 带 IVS（开谷间时本征曲线不缺、多一套去 IVS 对照）   # 2026-10-14-0050-ivsfrozen   # [0050] 冻声子谷间 IVS 参数（IVS_FROZEN，K↔K′ 零阶、非 SOC）   # 2026-10-13-0044-reprotol   # [0044] 复现检查改相对容差（单机制 μ 在零前因子处 ~1e47）；POSTPROCESS_ONLY 不再要求 transport.json；取消本征点独立拆分脚本、回到主掺杂网格 doping=0（[0043] amset_fermi_fix 已修好 SVD）   # 2026-10-13-0043-intrsvd   # [0043] 本征点 + IMP 的 SVD 不收敛（amset_fermi_fix：n=p 严格相等 + 散射率插值死片保护）   # 2026-10-13-0041-defectdop   # [0041] DEFECT_DOPING 缺陷平衡载流子浓度进掺杂网格   # 2026-10-13-0040-undoped   # [0040] UNDOPED_POINT 本征点（doping=0）   # 2026-10-12-0038-subsets   # [0038] SUBSETS 散射机制子集（subset_<机制>.json）   # [0035-r3] 复审：not_in_scattering 只认显式排除、D 全低于阈值仍建记录、面外极性；[0035-r2] 冻声子优先、手填谷内只作对照；[0035-r1] 复审：交叉拒绝、并星平均、τ 挪到 transport.json 之后；[0035] 冻声子 ODP 参数（ODP_FROZEN）+ τ(E)（tau_energy.py）   # [0034-r3] 二审：重复星按 S8.2 k_grid 合并；显式 SCATTERING+掩码的日志   # [0034-r2] 复审：同中心谷合并、显式 SCATTERING 照办、PIE 与 settings 一致   # [0034] OVERALL_WITHOUT（出厂 ODP）-> overall_noODP.json   # [0033] ODP/谷间散射（常数形变势，step.conf DP_OPTICAL_E/H）+ ADP 谷内掩码   # [0032-r2] 复审：链首清旧本征产物与 mesh；SCATTERING 无 ADP 不出只 ADP   # [0032] WRITE_MESH/INTRINSIC_ADP_ONLY 2D 默认开（旧：2026-09-28-desym-fix V115）
+_SKILL_REV = "2026-10-21-0061m-dftmatrix"   # [0061-m] ADP_DEGEN 的应变算符取 S7.1 的 DFT 形变势矩阵（deformation_matrix.h5，deform_wave.py）   # 2026-10-21-0061-adpdegen   # [0061] ADP_DEGEN：简并 / 近简并带边的 ADP 带间修正（2D 面内，adp_degen.py）   # 2026-10-20-0059r3-dfptodp   # [0059-r3] DFPT 谷内 ODP（q=Γ）优先于冻声子/手填，不再两份叠加   # 2026-10-18-0059-ivsdfpt   # [0059] IVS_DFPT：eph-qe-cpu QE DFPT 谷间零阶形变势（ivs_dfpt_params.json）优先于冻声子 K↔K′ 与手填   # 2026-10-16-0055-dopinglow   # [0055] DOPING_LOW 低浓度段 1e3–1e9 cm^-2（≈3D 1e10–1e16；amset_fermi_fix 小掺杂 log-sum-exp 解 E_F）；[0054] undoped_ni 记带边   # 2026-10-15-0051-socdesym   # [0051] amset_desym_fix 修 SOC 分支（四元数 SU(2) + iσ_y·K，V200）；README 过期重叠口径标注取代   # 2026-10-15-0050-r1-subsets   # [0050-r1] 出厂 SUBSETS 带 IVS（开谷间时本征曲线不缺、多一套去 IVS 对照）   # 2026-10-14-0050-ivsfrozen   # [0050] 冻声子谷间 IVS 参数（IVS_FROZEN，K↔K′ 零阶、非 SOC）   # 2026-10-13-0044-reprotol   # [0044] 复现检查改相对容差（单机制 μ 在零前因子处 ~1e47）；POSTPROCESS_ONLY 不再要求 transport.json；取消本征点独立拆分脚本、回到主掺杂网格 doping=0（[0043] amset_fermi_fix 已修好 SVD）   # 2026-10-13-0043-intrsvd   # [0043] 本征点 + IMP 的 SVD 不收敛（amset_fermi_fix：n=p 严格相等 + 散射率插值死片保护）   # 2026-10-13-0041-defectdop   # [0041] DEFECT_DOPING 缺陷平衡载流子浓度进掺杂网格   # 2026-10-13-0040-undoped   # [0040] UNDOPED_POINT 本征点（doping=0）   # 2026-10-12-0038-subsets   # [0038] SUBSETS 散射机制子集（subset_<机制>.json）   # [0035-r3] 复审：not_in_scattering 只认显式排除、D 全低于阈值仍建记录、面外极性；[0035-r2] 冻声子优先、手填谷内只作对照；[0035-r1] 复审：交叉拒绝、并星平均、τ 挪到 transport.json 之后；[0035] 冻声子 ODP 参数（ODP_FROZEN）+ τ(E)（tau_energy.py）   # [0034-r3] 二审：重复星按 S8.2 k_grid 合并；显式 SCATTERING+掩码的日志   # [0034-r2] 复审：同中心谷合并、显式 SCATTERING 照办、PIE 与 settings 一致   # [0034] OVERALL_WITHOUT（出厂 ODP）-> overall_noODP.json   # [0033] ODP/谷间散射（常数形变势，step.conf DP_OPTICAL_E/H）+ ADP 谷内掩码   # [0032-r2] 复审：链首清旧本征产物与 mesh；SCATTERING 无 ADP 不出只 ADP   # [0032] WRITE_MESH/INTRINSIC_ADP_ONLY 2D 默认开（旧：2026-09-28-desym-fix V115）
 # 复制来源（gen_step10_amset.py 的 _SKILL_REV），用于人工比对两份文件是否同步
 _SOURCE_GEN_REV = "2026-10-08-2d-raw-elastic"   # [0014] S8 的 2D 弹性改为原始 slab 值，与本步一致
 import stepconf  # noqa: E402
@@ -428,6 +428,20 @@ DEFORM_REF = "auto"      # auto = vacuum 优先（本步只服务 2D）；或强
 #   ~2.5-3 倍（Wiktor 的绝对形变势 6.08 eV 同样比 Ξ=2.4 eV 大 2.5 倍，属**定义差**）。
 #   解析后的实际因子写进 2d_correction.json 的 adp_d_scale，插件按它缩放。
 ADP_D_SCALE = "1.0"
+# [0061] 简并 / 近简并带边的 ADP 带间修正（与 S8 的 ADP_DEGEN 同义；面内两支声学模，二维 Γ 点 p_x/p_y 双重态、K 谷星……）。
+#   AMSET 的 ADP 只用初态那条带的对角形变势 × 波函数重叠，丢了应变在简并子空间里的带间耦合，ADP 偏弱。
+#   ADP_DEGEN = auto（出厂：适用就修正，不适用照原版）/ on（必须修正，不适用报错）/ off（原版 ADP）。
+#   作业里用 vasprun.xml + 真实波函数重叠 + S7.1 带符号形变势（与本步选的 h5 同口径：*_signed.h5）现拟合
+#   （adp_degen.py，插件 amset2d_plugin 接进 ADP），报告 adp_degen_fit.json。UNITY_OVERLAP = true 时做不了。
+ADP_DEGEN = "auto"
+ADP_DEGEN_EFIT = 0.15             # eV：谷的能量窗口、比值表的载流子能量上限
+ADP_DEGEN_NANG = None             # 方向网格点数（None = 模块默认：2D 96）
+ADP_DEGEN_MODULE = "adp_degen.py"
+ADP_DEGEN_PAIR = "auto"            # [0061-p] auto：在 AMSET 的四面体积分里逐对换矩阵元；off：按初态乘比值
+ADP_DEGEN_MATRIX = "auto"          # [0061-m] auto：S7.1 有 deformation_matrix.h5 就用 DFT 形变势矩阵；off：从本征值拟合
+DEFORM_MATRIX_H5 = "deformation_matrix.h5"
+DEFORM_WAVE_MODULE = "deform_wave.py"
+_ADP_DEGEN_REC = None             # resolve_adp_degen_2d() 的结果，apply_2d_corrections 落进 2d_correction.json
 
 
 def _resolve_adp_d_scale(elastic):
@@ -529,6 +543,11 @@ SPEC = {
     "TAU_ENERGY": (None, "bool"),           # [0035] None = 没写（出厂 True）
     "POSTPROCESS_ONLY": (None, "bool"),     # [0037] None = 没写（出厂 False）；true = 复用 mesh 只跑 postprocess
     "ADP_D_SCALE": (None, "str"),           # [0049] ADP 形变势缩放：None=出厂 1.0；"poisson" 或数值
+    "ADP_DEGEN": ("auto", "str"),           # [0061] 简并带边 ADP 带间修正 auto/on/off
+    "ADP_DEGEN_EFIT": (None, "float"),
+    "ADP_DEGEN_NANG": (None, "int"),
+    "ADP_DEGEN_PAIR": ("auto", "str"),       # [0061-p] auto = 逐对替换矩阵元（AMSET 内部对不上自动退回比值）/ off = 按初态比值
+    "ADP_DEGEN_MATRIX": ("auto", "str"),     # [0061-m] auto = 有 S7.1 的 deformation_matrix.h5 就用 / off = 从本征值拟合
     # 掺杂/温度范围覆盖（B4/B5 缩减设置用）：默认顶部 DOPING/TEMPERATURES；step.conf 可覆盖。
     "DOPING": (DOPING, "str"),
     "TEMPERATURES": (TEMPERATURES, "str"),
@@ -722,11 +741,11 @@ def _reorder_voigt(mat, col_labels, row_labels=None):
     return [[mat[pr[i]][pc[j]] for j in range(6)] for i in range(6)]
 
 
-def _pick_deformation_h5(cwd, read_dir):
+def _pick_deformation_h5(cwd, read_dir, quiet=False):
     """挑形变势文件：默认用真空口径 deformation_vac.h5（二维文献口径），缺失则 core。
 
     DEFORM_REF: "auto"（vacuum 优先）/ "vacuum" / "core"。口径写进 settings 注释，
-    因为两种口径的绝对值差 ~2.8 倍，必须能从产物反查。
+    因为两种口径的绝对值差 ~2.8 倍，必须能从产物反查。quiet：只返回文件名不打印（[0061] 配对带符号文件用）。
     """
     read_dir = Path(read_dir)
     ref = str(DEFORM_REF).lower()
@@ -734,15 +753,105 @@ def _pick_deformation_h5(cwd, read_dir):
         sys.exit("[ERROR] DEFORM_REF=%r 无效，只允许 auto / vacuum / core" % DEFORM_REF)
     want_vacuum = ref in ("auto", "vacuum")
     if want_vacuum and (read_dir / "deformation_vac.h5").is_file():
-        print("[OK] 形变势参考口径：**真空**（deformation_vac.h5，二维文献口径）")
+        if not quiet:
+            print("[OK] 形变势参考口径：**真空**（deformation_vac.h5，二维文献口径）")
         return "deformation_vac.h5"
-    if want_vacuum:
+    if quiet:
+        pass
+    elif want_vacuum:
         print("[WARN] 想要真空口径但 %s/deformation_vac.h5 不存在 -> 退回 **core** 口径"
               "（AMSET 芯态对齐，为体材料设计）。要真空口径请重跑 step7b"
               "（需要 step7_deform 形变目录里的 LOCPOT）。" % read_dir)
     else:
         print("[..] 形变势参考口径：core（按 DEFORM_REF=%s）" % ref)
     return "deformation.h5"
+
+
+def resolve_adp_degen_2d(cwd):
+    """[0061] 简并带边 ADP 带间修正 -> 2d_correction.json 的 "adp_degen" 记录。
+    gen 只判开关、ADP 在不在、是不是真实重叠、有没有与所选 h5 同口径的带符号形变势；有没有简并谷、参数多少，
+    在作业里用 vasprun + 波函数 + S7.1 数据定（status = "pending_runtime" 才装模块）。"""
+    import json
+    mode = str(ADP_DEGEN or "auto").strip().lower()
+    if mode not in ("auto", "on", "off"):
+        sys.exit("[ERROR] ADP_DEGEN=%r 无效，只允许 auto / on / off" % ADP_DEGEN)
+    h5 = _pick_deformation_h5(cwd, Path(cwd) / READ_DIR, quiet=True)
+    signed = h5[:-3] + "_signed.h5"
+    rec = {"mode": mode, "efit_eV": float(ADP_DEGEN_EFIT), "nang": ADP_DEGEN_NANG,
+           "deform_h5": "deformation.h5", "signed_h5": "deformation_signed.h5", "signed_src": signed,
+           "vasprun": "vasprun.xml", "pairwise": _pair_mode()}
+
+    def _skip(status, msg):
+        if mode == "on":
+            sys.exit("[ERROR] ADP_DEGEN = on，但%s。确认不需要就在 step.conf 写 ADP_DEGEN = auto 或 off" % msg)
+        rec["status"] = status
+        print("[..] ADP 简并修正：%s —— 不修正（ADP_DEGEN = auto）" % msg)
+        return rec
+    if mode == "off":
+        rec["status"] = "off"
+        return rec
+    if "ADP" not in [str(x).upper() for x in SCATTERING]:
+        return _skip("no_adp", "SCATTERING 不含 ADP")
+    if UNITY_OVERLAP:
+        return _skip("unity_overlap", "UNITY_OVERLAP = true（没有真实波函数重叠，读不到简并子空间的结构）")
+    if not (Path(cwd) / READ_DIR / signed).is_file():
+        return _skip("no_signed_h5", "没有 %s/%s（S7.1 早于 V188；重新 gen S7.1，秒级、不提交作业）" % (READ_DIR, signed))
+    try:
+        geom = json.loads((Path(cwd) / READ_DIR / "band_edges.json").read_text(encoding="utf-8")).get("deform_geometry")
+    except (OSError, ValueError):
+        geom = None
+    rec["deform_geometry"] = geom
+    if geom and geom != "ionrelax":
+        print("[WARN] ADP 简并修正：形变势构型 deform_geometry=%s。剪切形变势常常主要来自内应变，钳位离子口径下"
+              "带间耦合会偏弱 —— 先 retry S7_deform（离子弛豫）-> S7.1，再重跑本步" % geom)
+    rec["status"] = "pending_runtime"
+    print("[OK] ADP 简并修正（ADP_DEGEN = %s）：作业里按 vasprun + 波函数 + %s 拟合 k·p 与应变算符，"
+          "有简并 / 近简并谷才修正，报告 adp_degen_fit.json" % (mode, signed))
+    return _matrix_rec(rec, cwd)
+
+
+def _matrix_rec(rec, cwd):
+    """[0061-m] S7.1 有 deformation_matrix.h5（S7 写了波函数）就记进 rec：运行期应变算符直接取 DFT 矩阵（adp_degen.matrix_grid），
+    对不上（对齐离散度 / 覆盖度 / k0 残差）自动退回拟合并在 adp_degen_fit.json 写明。ADP_DEGEN_MATRIX = off 不用。"""
+    m = str(ADP_DEGEN_MATRIX or "auto").strip().lower()
+    if m not in ("auto", "off"):
+        sys.exit("[ERROR] ADP_DEGEN_MATRIX=%r 无效，只允许 auto / off" % ADP_DEGEN_MATRIX)
+    rec["matrix"] = m
+    if m == "off":
+        print("[..] ADP 简并修正：ADP_DEGEN_MATRIX = off —— 应变算符从本征值拟合")
+        return rec
+    if (Path(cwd) / READ_DIR / DEFORM_MATRIX_H5).is_file():
+        rec["matrix_h5"] = DEFORM_MATRIX_H5
+        print("[OK] ADP 简并修正：用 %s/%s（DFT 形变势矩阵，[0061-m]）—— 应变算符不再从本征值反推"
+              % (READ_DIR, DEFORM_MATRIX_H5))
+    else:
+        print("[..] ADP 简并修正：没有 %s/%s（S7 没写波函数：DEFORM_WAVE 关或是旧结果）—— 应变算符从本征值拟合"
+              % (READ_DIR, DEFORM_MATRIX_H5))
+    return rec
+
+
+def _pair_mode():
+    """[0061-p] ADP_DEGEN_PAIR -> "auto" / "off"。"""
+    m = str(ADP_DEGEN_PAIR or "auto").strip().lower()
+    if m not in ("auto", "off"):
+        sys.exit("[ERROR] ADP_DEGEN_PAIR=%r 无效，只允许 auto / off" % ADP_DEGEN_PAIR)
+    return m
+
+
+def _install_adp_degen(out):
+    """[0061] status = pending_runtime 时把 adp_degen.py 复制进运行目录（插件 import 它）。"""
+    if (_ADP_DEGEN_REC or {}).get("status") != "pending_runtime":
+        return False
+    here = Path(__file__).resolve().parent
+    names = (ADP_DEGEN_MODULE,) + ((DEFORM_WAVE_MODULE,) if _ADP_DEGEN_REC.get("matrix_h5") else ())   # [0061-m]
+    for name in names:
+        src = next((d / name for d in (here, Path.cwd(), here.parent) if (d / name).is_file()), None)
+        if src is None:
+            sys.exit("[ERROR] 开了 ADP 简并修正，但找不到 %s（gen_need 里要有它）" % name)
+        dst = Path(out) / name
+        if src.resolve() != dst.resolve():
+            shutil.copyfile(src, dst)
+    return True
 
 
 def vasp_to_voigt_6x6(m):
@@ -2203,6 +2312,7 @@ def apply_2d_corrections(cwd: Path, elastic, eps_inf=None, eps_static=None):
         "dp_optical_frozen": _DP_OPTICAL_FROZEN_REC,   # [0035] 冻声子参数用没用、用的哪份（S8.21 据此决定要不要让本步重排）
         "dp_optical_ivs": _DP_OPTICAL_IVS_REC,         # [0050] 谷间冻声子参数用没用、用的哪份（S8.22 据此决定要不要让本步重排）
         "dp_optical_ivs_dfpt": _DP_OPTICAL_IVS_DFPT_REC,   # [0059] DFPT 谷间参数用没用、用的哪份（sha256/指纹）
+        "adp_degen": _ADP_DEGEN_REC,            # [0061] None / status != pending_runtime = 不修正
         "areal_density_factor_cm": c_len * 1e-8,
         "areal_density_note": "n_2D [cm^-2] = n_3D [cm^-3] x cell_c [cm]",
         "inplane_cell_area_cm2": _CELL_AREA_CM2,
@@ -3287,6 +3397,15 @@ def main():
                 POSTPROCESS_ONLY = bool(_p["POSTPROCESS_ONLY"])
             if _p["ADP_D_SCALE"] is not None:               # [0049]
                 ADP_D_SCALE = str(_p["ADP_D_SCALE"])
+            global ADP_DEGEN, ADP_DEGEN_EFIT, ADP_DEGEN_NANG    # [0061]
+            ADP_DEGEN = str(_p["ADP_DEGEN"] or "auto")
+            if _p["ADP_DEGEN_EFIT"] is not None:
+                ADP_DEGEN_EFIT = float(_p["ADP_DEGEN_EFIT"])
+            if _p["ADP_DEGEN_NANG"] is not None:
+                ADP_DEGEN_NANG = int(_p["ADP_DEGEN_NANG"])
+            global ADP_DEGEN_PAIR, ADP_DEGEN_MATRIX
+            ADP_DEGEN_PAIR = str(_p["ADP_DEGEN_PAIR"] or "auto")
+            ADP_DEGEN_MATRIX = str(_p["ADP_DEGEN_MATRIX"] or "auto")
             # [0033] ODP / IVS 的通道表、手填谷表、ADP 谷内掩码（解析与校验在 resolve_dp_optical）
             DP_OPTICAL_E = str(_p["DP_OPTICAL_E"] or "")
             DP_OPTICAL_H = str(_p["DP_OPTICAL_H"] or "")
@@ -3392,6 +3511,8 @@ def main():
     # [0033] ODP / IVS：解析 step.conf 通道表 + 谷表（S8.2 或手填），把 ODP/IVS 补进 SCATTERING。
     #   必须在 apply_2d_corrections（落 mechanisms_2d）与 write_settings（scattering_type）之前。
     _DP_OPTICAL_REC = resolve_dp_optical(cwd)
+    global _ADP_DEGEN_REC
+    _ADP_DEGEN_REC = resolve_adp_degen_2d(cwd)                       # [0061]
     # patch_inversion_rule：把 WAVEFUNCTION_FULL 从 auto 解析成 True/False（必须在闸门与 _wdir 之前）。
     _apply_inversion_rule(cwd)
     # [guard-2026-09-25 / 强化 2026-09-26] 真实重叠 + 无反演 + 非全网格 h5 = 已知算坏的组合。
@@ -3429,6 +3550,7 @@ def main():
     _install_preflight(out)
     _install_postprocess(out)
     _install_dp_optical(out)    # [0033] 插件 import 它（ODP/IVS 与 ADP 谷内掩码）
+    _install_adp_degen(out)     # [0061] 插件 import 它（ADP 简并修正）
     _install_tau_energy(out)    # [0035] 作业链尾部的 τ(E) 后处理
     _install_fermi_check(out)   # patch_fermi_window（2026-09-28 用户批准）
     _install_symmetry_deps(out)  # patch_symmetry_gate：preflight 的判据来源
@@ -3450,6 +3572,10 @@ def main():
                  "（迁移率偏低，仅看数量级）。" % _wdir)
     link(out, cwd / _wdir / "wavefunction.h5", "wavefunction.h5")
     link(out, cwd / READ_DIR / _pick_deformation_h5(cwd, READ_DIR), "deformation.h5")
+    if (_ADP_DEGEN_REC or {}).get("status") == "pending_runtime":       # [0061] 与 deformation.h5 同口径
+        link(out, cwd / READ_DIR / _ADP_DEGEN_REC["signed_src"], "deformation_signed.h5")
+        if _ADP_DEGEN_REC.get("matrix_h5"):                            # [0061-m]
+            link(out, cwd / READ_DIR / DEFORM_MATRIX_H5, DEFORM_MATRIX_H5)
     _dpi = kc.deformation_h5_issues(out / "deformation.h5") if _HAS_KC else None   # patch_dp_symmetrize / V189
     if _dpi:
         print("[WARN] 形变势 h5 早于 V189，不能直接用：%s。处理：重新 gen step7b_deform_read"

@@ -296,6 +296,9 @@ def write_signed(path, deformation_potentials, kpoints, ibands=None, gaps=None, 
             for spin, arr in _ext(gaps).items():
                 f.create_dataset("gap_" + spin.name, data=np.asarray(arr, float), compression="gzip")
         f["kpoints"] = np.asarray(kpoints, float)
+        if ibands is not None:                     # [0061-m] 带轴 -> DFT 带号（运行期对齐形变势矩阵用）
+            for spin, idx in ibands.items():
+                f["ibands_" + spin.name] = np.asarray(idx, int)
         if delta:
             f.attrs["strain_amount"] = float(delta)
         f.attrs["note"] = ("signed central-difference deformation potentials (eV, AMSET convention: "
