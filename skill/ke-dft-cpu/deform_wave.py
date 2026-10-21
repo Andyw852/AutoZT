@@ -25,6 +25,7 @@ b、d，六方的 D3–D6，二维 Γ 点双重态的剪切项……）在本征
 不依赖 AMSET（extract / build 只要 numpy + h5py），S7 作业在 AMSET 的 conda 环境里跑。
 """
 import argparse
+import itertools
 import os
 import sys
 
@@ -256,6 +257,108 @@ def project_H(C0o, Cs, Es):
     return (M * np.asarray(Es, float)) @ M.conj().T, float(np.min(w))
 
 
+# ---------------------------------------------------------------------------
+# 只有一侧应变的图样：用未形变晶体的对称操作从 +δ 构型造出 −δ 构型的态
+# ---------------------------------------------------------------------------
+# AMSET deform create 按对称性约化：立方的剪切 ε_xy 与 −ε_xy 由镜面联系，常常只算 +δ（AMSET 自己读本征值时再用对称性补）。
+# 只用一侧做前向差分误差 O(δ)，简并点上（Si 价带顶三重态的剪切耦合）可达 10%。做法：找未形变晶体的操作
+# g: x -> W x + t（分数坐标，列向量），其笛卡尔转动 R = L0ᵀ W L0⁻ᵀ 满足 Rᵀ P R = −P（P 为图样的单位应变张量）。
+# 这时 −δ 晶体在分数坐标里就是 +δ 晶体经 g 变换（Wᵀ G₊ W = G₋），本征态 ψ₋(x) = ψ₊(W x + t)、本征值相同：
+# 平面波 e^{2πi κ·x}（κ = k + G 行向量）-> 系数乘 e^{2πi κ·t}、波矢变成 κ W。要 −δ 晶体在 k 的态，取 +δ 晶体在
+# k′ = k W⁻¹ 的态（抽取里没有 k′ 就用时间反演 −k′：系数取共轭、κ -> −κ）。非共线（自旋也要转）暂不做，退回前向差分。
+def read_poscar(path):
+    """POSCAR -> (晶格（行，Å）, 分数坐标 (n, 3), 每个原子的元素标签)。"""
+    ln = [x.rstrip() for x in open(os.fspath(path), encoding="utf-8", errors="ignore").read().splitlines()]
+    sc = float(ln[1].split()[0])
+    L = np.array([[float(x) for x in ln[i].split()[:3]] for i in (2, 3, 4)])
+    L = L * ((abs(sc) / abs(np.linalg.det(L))) ** (1.0 / 3.0) if sc < 0 else sc)
+    i = 5
+    if not ln[i].split()[0].lstrip("-").isdigit():
+        names, i = ln[i].split(), i + 1
+    else:
+        names = None
+    counts = [int(x) for x in ln[i].split()]
+    names = names or ["X%d" % j for j in range(len(counts))]
+    i += 1
+    if ln[i].strip()[:1] in "sS":
+        i += 1
+    cart = ln[i].strip()[:1] in "cCkK"
+    n = sum(counts)
+    X = np.array([[float(x) for x in ln[i + 1 + j].split()[:3]] for j in range(n)])
+    if cart:
+        X = (X * (sc if sc > 0 else 1.0)) @ np.linalg.inv(L)
+    labels = [nm for nm, c in zip(names, counts) for _ in range(c)]
+    return L, X - np.floor(X), labels
+
+
+def space_group_ops(L, X, labels, tol=1e-3):
+    """未形变晶体的空间群操作 [(W 整数 3×3, t (3,))]（x' = W x + t，列向量）。W 只在 {−1,0,1} 里找（原胞足够）。"""
+    G = L @ L.T
+    Ws = np.array(list(itertools.product((-1, 0, 1), repeat=9))).reshape(-1, 3, 3)
+    ok = np.all(np.abs(np.einsum("nji,jk,nkl->nil", Ws, G, Ws) - G) < tol * np.max(np.abs(G)), axis=(1, 2))
+    labels = np.asarray(labels)
+    sp0 = min(set(labels), key=lambda x: int(np.sum(labels == x)))
+    i0 = int(np.where(labels == sp0)[0][0])
+    ops = []
+    for W in Ws[ok]:
+        if abs(round(np.linalg.det(W))) != 1:
+            continue
+        WX = X @ W.T
+        for j in np.where(labels == sp0)[0]:
+            t = X[j] - WX[i0]
+            Y = WX + t
+            d = Y[:, None, :] - X[None, :, :]
+            d = np.linalg.norm(d - np.round(d), axis=2)
+            match = (d < tol) & (labels[:, None] == labels[None, :])
+            if np.all(match.any(axis=1)):
+                ops.append((W.astype(int), t - np.floor(t + tol)))
+                break
+    return ops
+
+
+def flip_op(ops, L, P):
+    """把图样 P 的应变变号的操作（Rᵀ P̂ R = −P̂）；没有 -> None。"""
+    Pm = np.zeros((3, 3))
+    Pm[P[0], P[1]] = Pm[P[1], P[0]] = 1.0
+    LT, LTi = L.T, np.linalg.inv(L.T)
+    for W, t in ops:
+        R = LT @ W @ LTi
+        if np.allclose(R.T @ R, np.eye(3), atol=1e-6) and np.allclose(R.T @ Pm @ R, -Pm, atol=1e-6):
+            return W, t
+    return None
+
+
+def _mapped_coeffs(f, sn, kmap, kf, op, mkey_sorted, mord, n0):
+    """−δ 晶体在 k（分数，行）处的态：由 +δ 构型（文件 f）在 k′ = k W⁻¹（或其时间反演）处的态经 g 变换，
+    放到未形变的 Miller 列表上。-> (系数 (nb, n0), 本征值 (nb,)) 或 None（k′ 两种表示都没抽到）。"""
+    W, t = op
+    kp = np.asarray(kf, float) @ np.linalg.inv(W)
+    tr = False
+    js = kmap.get(_keys(kp[None])[0])
+    if js is None:
+        js, tr = kmap.get(_keys(-kp[None])[0]), True
+        if js is None:
+            return None
+    ks = np.array(f["kpoints"][js], float)
+    M = np.array(f["miller"], float)
+    C = np.array(f["coeff_" + sn][js])
+    kap = ks + M
+    if tr:
+        kap, C = -kap, np.conj(C)
+    phase = np.exp(2j * np.pi * (kap @ np.asarray(t, float)))
+    Gn = kap @ W - np.asarray(kf, float)
+    Gi = np.round(Gn).astype(np.int64)
+    if np.max(np.abs(Gn - Gi)) > 1e-4:
+        raise ValueError("对称操作把 k′ 变不回 k（网格不对称？）")
+    kk = _gkey(Gi)
+    pos = np.clip(np.searchsorted(mkey_sorted, kk), 0, len(mkey_sorted) - 1)
+    hit = mkey_sorted[pos] == kk
+    out = np.zeros((len(C), n0), np.complex64)
+    out[:, mord[pos[hit]]] = (C * phase[None, :])[:, hit]
+    E = np.array(f["eig_" + sn][js])[np.array(f["bands_" + sn])]
+    return out, E
+
+
 def _keys(kf, n=10000):
     kf = np.asarray(kf, float)
     return [tuple(x) for x in np.round((kf - np.round(kf)) * n).astype(int) % n]
@@ -307,6 +410,23 @@ def build(root, dirs, out="deformation_matrix.h5", und="undeformed", fname="defo
         gmap[d] = (np.where(hit)[0], o[pos[hit]])
     kmaps = {d: {kk: j for j, kk in enumerate(_keys(np.array(f["kpoints"])))} for d, f in fs.items()}
     summ = {"patterns": [PAT_NAMES[P] for P in plist], "n_k": len(jk), "ncl": ncl, "spins": {}}
+    mirror = {}                                                        # 只有一侧的图样 -> 变号的对称操作
+    single = [P for P in plist if len({np.sign(a) for a, _d in pats[P]}) < 2]
+    if single and not ncl:
+        pos_ = os.path.join(root, und, "POSCAR")
+        if os.path.isfile(pos_):
+            Lp, Xp_, lab = read_poscar(pos_)
+            ops = space_group_ops(L0, Xp_, lab) if np.allclose(Lp, L0, atol=1e-4) else []
+            for P in single:
+                op = flip_op(ops, L0, P)
+                if op is not None:
+                    mirror[P] = op
+        else:
+            log("[deform_wave][WARN] %s 没有 POSCAR：只有一侧应变的图样 %s 只能前向差分（O(δ)）"
+                % (und, ",".join(PAT_NAMES[P] for P in single)))
+    mkey0 = _gkey(np.array(f0["miller"]))
+    mord0 = np.argsort(mkey0)
+    mkey0s = mkey0[mord0]
     with h5py.File(os.fspath(out), "w") as g:
         g.attrs.update(version=VERSION, ncl=int(ncl), nspin=nspin, encut_store=float(f0.attrs["encut_store"]),
                        vbm=float(f0.attrs["vbm"]), cbm=float(f0.attrs["cbm"]))
@@ -352,10 +472,13 @@ def build(root, dirs, out="deformation_matrix.h5", und="undeformed", fname="defo
             g["bands_" + sn] = bands[inn]
             g["eig_" + sn] = E0all[:, bands[inn]]
             qmin, augmax = np.inf, 0.0
-            for jj, j in enumerate(jk):
-                C0o, G0 = _orth(np.array(f0["coeff_" + sn][j])[inn])
+            n_fwd = {}
+            for jj, j in enumerate(jk):                                # j：未形变文件里的下标；jj：交集里的下标
+                C0all = np.array(f0["coeff_" + sn][j])
+                C0o, G0 = _orth(C0all[inn])
                 augmax = max(augmax, float(np.max(np.abs(G0 - np.diag(np.diag(G0))))))
                 Cd[jj] = C0o
+                H0 = None
                 for ip, P in enumerate(plist):
                     Hs, am = [], []
                     for amt, d in sorted(pats[P]):
@@ -370,21 +493,38 @@ def build(root, dirs, out="deformation_matrix.h5", und="undeformed", fname="defo
                         qmin = min(qmin, q)
                         Hs.append(H)
                         am.append(amt)
+                    if len(Hs) == 1 and P in mirror:                   # 对称操作造出另一侧 -> 中心差分
+                        amt, d = sorted(pats[P])[0]
+                        mc = _mapped_coeffs(fs[d], sn, kmaps[d], np.array(f0["kpoints"][j], float), mirror[P],
+                                            mkey0s, mord0, C0o.shape[1])
+                        if mc is not None:
+                            H, q = project_H(C0o, mc[0], mc[1])
+                            qmin = min(qmin, q)
+                            Hs.append(H)
+                            am.append(-amt)
+                            order = np.argsort(am)
+                            Hs, am = [Hs[i] for i in order], [am[i] for i in order]
+                        else:
+                            n_fwd[P] = n_fwd.get(P, 0) + 1
                     if len(Hs) >= 2:
                         Xp = (Hs[-1] - Hs[0]) / (am[-1] - am[0])
-                    else:
-                        # E0all 的行是 jk 过滤后的顺序（0..len(jk)-1），不是 f0 里的绝对 k 号 j：
-                        # 各构型 IBZ k 点数不同（形变降对称性后常多几个 k），用绝对号会越界。
-                        Xp = (Hs[0] - np.diag(E0all[jj, bands[inn]])) / am[0]
+                    else:                                              # 只有一侧（AMSET 按对称性约化掉了另一侧）：前向差分
+                        if H0 is None:                                 # 参照态走同一套投影：Löwdin 基一致，赝波函数非正交
+                            H0, _q0 = project_H(C0o, C0all, E0all[jj, bands])   # 带来的基矢旋转在差分里抵消
+                        Xp = (Hs[0] - H0) / am[0]
                     X[ip, jj] = 0.5 * (Xp + Xp.conj().T)
+            for P, n in sorted(n_fwd.items()):
+                log("[deform_wave][WARN] 自旋 %s 图样 %s：%d 个 k 点的对称像没抽到（能量窗口不对称？），这些点退回前向差分"
+                    % (sn, PAT_NAMES[P], n))
             summ["spins"][sn] = {"bands": [int(bands[inn][0]), int(bands[inn][-1])], "q_min": float(qmin),
-                                 "aug_offdiag_max": augmax}
+                                 "aug_offdiag_max": augmax, "n_forward": {PAT_NAMES[P]: n for P, n in n_fwd.items()}}
             g.attrs["q_min_" + sn] = float(qmin)
             g.attrs["aug_offdiag_max_" + sn] = augmax
             if qmin < Q_MIN:
                 log("[deform_wave][WARN] 自旋 %s：形变构型的窗口对未形变窗口覆盖度最低 %.3f < %.2f —— 窗口边上有带被应变推出，"
                     "加大 S7 step.conf 的 DEFORM_WAVE_MARGIN" % (sn, qmin, Q_MIN))
-        summ["one_sided"] = [PAT_NAMES[P] for P in plist if len(pats[P]) < 2]
+        summ["mirrored"] = [PAT_NAMES[P] for P in plist if P in mirror]
+        summ["one_sided"] = [PAT_NAMES[P] for P in plist if len(pats[P]) < 2 and P not in mirror]
     f0.close()
     for f in fs.values():
         f.close()
@@ -594,6 +734,9 @@ def _cli(argv=None):
         "；".join("%s 带 %d-%d 覆盖度 ≥ %.3f 赝波函数非正交 ≤ %.3f" % (sn, v["bands"][0], v["bands"][1], v["q_min"],
                                                                 v["aug_offdiag_max"]) for sn, v in s["spins"].items())),
         flush=True)
+    if s.get("mirrored"):
+        print("[deform_wave] 图样 %s 只有单侧应变：用把应变变号的对称操作补出另一侧，照样中心差分" % ",".join(s["mirrored"]),
+              flush=True)
     if s["one_sided"]:
         print("[deform_wave][WARN] 图样 %s 只有单侧应变：前向差分（O(δ)）" % ",".join(s["one_sided"]), flush=True)
     return 0

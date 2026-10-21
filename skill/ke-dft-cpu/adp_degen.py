@@ -1726,12 +1726,37 @@ def point_rotations(structure, symprec=0.01):
     return out
 
 
+def vasprun_efermi(path, vr=None):
+    """vasprun.xml 的费米能级（eV）：文件里最后一个 <i name="efermi">（只扫文件末尾的 DOS 段）；没有就用 vr 的带隙中点。"""
+    import re
+    try:
+        with open(str(path), "rb") as fh:
+            fh.seek(0, 2)
+            size = fh.tell()
+            fh.seek(max(0, size - (64 << 20)))
+            tail = fh.read().decode("utf-8", "ignore")
+        hits = re.findall(r'<i\s+name="efermi"\s*>\s*([-+0-9.eEdD]+)\s*</i>', tail)
+        if hits:
+            return float(hits[-1].replace("d", "e").replace("D", "e"))
+    except OSError:
+        pass
+    if vr is not None:
+        _gap, cbm, vbm, _direct = vr.eigenvalue_band_properties
+        return 0.5 * (float(cbm) + float(vbm))
+    raise ValueError("%s 里没有 efermi" % path)
+
+
 def load_dft_nodes(path="vasprun.xml", symprec=0.01):
     """vasprun.xml（AMSET 的输入，与 wavefunction.h5 同源）-> DFT 全网格能带：{"kpoints", "E": {spin: (nb, N) eV}, "vb": {spin: 带号}}。"""
     from pymatgen.io.vasp import Vasprun
     from amset.electronic_structure.common import get_band_structure
     from amset.electronic_structure.symmetry import expand_bandstructure
     vr = Vasprun(str(path), parse_dos=False, parse_projected_eigen=False, parse_potcar_file=False)
+    if getattr(vr, "efermi", None) is None:
+        # [0061-m] 新版 pymatgen 只在解析 DOS 时填 efermi；parse_dos=False 时是 None，AMSET 的 get_band_structure 拿它
+        #   和本征值比大小 -> TypeError（Si 实跑 2026-10-22：S8 的修正因此整个没生效）。直接从文件读 <i name="efermi">，
+        #   读不到退回带隙中点。
+        vr.efermi = vasprun_efermi(path, vr)
     bs = expand_bandstructure(get_band_structure(vr), symprec=symprec)
     vbm = bs.get_vbm()
     out = {"kpoints": np.array([k.frac_coords for k in bs.kpoints], float), "E": {}, "vb": {}}
