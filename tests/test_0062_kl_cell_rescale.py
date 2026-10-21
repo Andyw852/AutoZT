@@ -1,7 +1,7 @@
-"""[0062] S8.3 自动取 κ_L：2D 两链胞高不同（kl Lz ≠ ke c）时按片热导守恒 ×Lz/c 换到 ke 元胞口径。
+"""[0062] S8.3 / S8.1 自动取 κ_L：2D 两链胞高不同（kl Lz ≠ ke c）时按片热导守恒 ×Lz/c 换到 ke 元胞口径。
 
 以前只打印"元胞不一致"告警、原样拿 kl 胞的原始 κ_L 去配 ke 胞的 σ/κ_e，κ_L 放大 c/Lz 倍、
-ZT 偏低（MoS2：Lz 25.0 vs c 34.879）。纯本地。
+ZT 偏低（MoS2：Lz 25.0 vs c 34.879）；S8.1 则直接 SystemExit。纯本地。
 """
 import contextlib
 import importlib.util
@@ -99,3 +99,45 @@ def test_no_lz_metadata_unchanged(tmp_path):
     kxx, _, lines = g.resolve_kappa_L(_material(tmp_path, lz=None))
     assert kxx == KL_RAW
     assert not any("[换算]" in ln for ln in lines)
+
+
+# ---------------------------------------------------------------- S8.1（BoltzTraP）
+T_KE = 6.7201           # ke 的层厚（Å）
+
+
+def _g11():
+    spec = importlib.util.spec_from_file_location("g11_0062", str(KE / "step8.1_boltztrap" / "gen_step11_boltztrap.py"))
+    mod = importlib.util.module_from_spec(spec)
+    with contextlib.redirect_stdout(io.StringIO()):
+        spec.loader.exec_module(mod)
+    return mod
+
+
+def _ninfo(norm="thickness", c=C_KE):
+    f = c / T_KE if (c and norm == "thickness") else 1.0
+    return {"norm": norm, "cell_c_A": c, "thickness_A": T_KE if c else None, "factor_applied": f}
+
+
+def test_s81_2d_cell_mismatch_rescaled_then_thickness_factor(tmp_path):
+    """以前 SystemExit；现在 κ_raw × Lz/c × (c/t) = κ_raw × Lz/t（按 ke 的层厚归一）。"""
+    b = _g11()
+    kxx, kyy, lines = b._resolve_kappa_L(_material(tmp_path), 300.0, _ninfo())
+    want = KL_RAW * 25.0 / T_KE
+    assert abs(kxx - want) < 1e-9 and abs(kyy - want) < 1e-9
+    assert any("[换算]" in ln for ln in lines)
+
+
+def test_s81_2d_same_cell_unchanged(tmp_path):
+    b = _g11()
+    kxx, _, lines = b._resolve_kappa_L(_material(tmp_path, lz=C_KE * 1.005), 300.0, _ninfo())
+    assert abs(kxx - KL_RAW * C_KE / T_KE) < 1e-9
+    assert any("元胞一致" in ln for ln in lines)
+    assert not any("[换算]" in ln for ln in lines)
+
+
+def test_s81_3d_without_cell_height_skips_gate(tmp_path):
+    """3D：_norm_2d 不给 cell_c_A -> 闸门跳过，κ_L 原样（因子 1）。"""
+    b = _g11()
+    kxx, _, lines = b._resolve_kappa_L(_material(tmp_path, dim="3d"), 300.0, _ninfo(norm="cell(3D)", c=None))
+    assert kxx == KL_RAW
+    assert any("跳过元胞核对" in ln for ln in lines)
