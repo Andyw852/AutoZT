@@ -208,3 +208,21 @@ def test_kl_root_in_common_step_conf_does_not_break_strict_steps(tmp_path):
         assert R.load_step_params("step1_opt") is True
     finally:
         os.chdir(old)
+
+
+def test_summary_records_kappa_l_source_and_rescale(tmp_path):
+    """[0064] κ_L 来源 / 胞高闸门 / ×Lz/c 换算写进 comparison_summary.txt（以前只打 stdout，远端日志不回拉）。"""
+    g = _g13()
+    m = _material(tmp_path)
+    out = m / "step8.3_output"
+    out.mkdir()
+    old = os.getcwd()
+    os.chdir(m)
+    try:
+        g.write_table(out, [], None, None, None)
+    finally:
+        os.chdir(old)
+    kl = [ln for ln in (out / "comparison_summary.txt").read_text(encoding="utf-8").splitlines()
+          if ln.startswith("# [κ_L]")]
+    assert any("kappa_summary.json" in ln for ln in kl)
+    assert any("[换算]" in ln and "%.4f" % (KL_RAW * 25.0 / C_KE) in ln for ln in kl)
