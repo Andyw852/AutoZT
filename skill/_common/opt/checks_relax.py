@@ -283,4 +283,38 @@ def ck_relax_injob(d, sc):
     return False, note
 
 
-CHECKERS = {"relax_injob": ck_relax_injob}
+# ---------------------------------------------------------------------------
+# [hse_two_stage] ke-dft-cpu S2.28_hsescf：HSE 两段式的第 1 段（只跑 HSE SCF，存 WAVECAR）
+#   放在这个公共判据文件里只是因为 ke-dft-cpu 的 skill.yaml 只能挂一份 checks 文件。
+# ---------------------------------------------------------------------------
+_VASP_DONE = "General timing and accounting informations"
+HSE_SCF_SOURCE = "hse_scf_source.json"       # 第 2 段各片写的来源记录（gen_step4_HSE.py 同名常量）
+
+
+def _vasp_done(d):
+    p = os.path.join(d, "OUTCAR")
+    return os.path.isfile(p) and _VASP_DONE in _tail(p)
+
+
+def ck_hse_scf(d, sc):
+    """done：本目录 OUTCAR 有 VASP 收尾 + WAVECAR（> 1 MB）。
+    兼容老材料：同级 step2.3_hse 已按旧单段口径算完（全部 p*of* 或单目录 OUTCAR 收尾，且没有
+    hse_scf_source.json）-> 判完成、不再交一个昂贵的 SCF。"""
+    w = os.path.join(d, "WAVECAR")
+    if _vasp_done(d):
+        if os.path.isfile(w) and os.path.getsize(w) > 1024 * 1024:
+            return True, "HSE SCF 完成（WAVECAR %.1f MB）" % (os.path.getsize(w) / 1e6)
+        return False, "OUTCAR 收尾了但 WAVECAR 缺失/过小 —— 第 2 段没法重启"
+    s23 = os.path.join(os.path.dirname(d), "step2.3_hse")
+    if os.path.isdir(s23) and not os.path.isfile(os.path.join(d, "INCAR")):
+        subs = sorted(p for p in _glob.glob(os.path.join(s23, "*p*of*")) if os.path.isdir(p))
+        dirs = subs or [s23]
+        if all(_vasp_done(x) for x in dirs) and \
+                not any(os.path.isfile(os.path.join(x, HSE_SCF_SOURCE)) for x in dirs):
+            return True, "旧口径：S2.3_hse 已按单段方式算完（%d 个目录），本步跳过" % len(dirs)
+    if os.path.isfile(os.path.join(d, "OUTCAR")):
+        return False, "HSE SCF 未完成（OUTCAR 没有收尾）"
+    return False, "OUTCAR missing"
+
+
+CHECKERS = {"relax_injob": ck_relax_injob, "hse_scf": ck_hse_scf}

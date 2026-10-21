@@ -14,6 +14,17 @@ This project adheres to Semantic Versioning; versions before 1.0.0 are developme
 
 ## [Unreleased]
 
+### Changed (2026-10-21: ke-dft-cpu two-stage HSE band structure)
+- New step `S2.28_hsescf` (`step2_bandgap/step2.28_hse_scf`): one HSE SCF without KPOINTS_OPT, with NKRED on the
+  axes whose k mesh is even (`HSE_SCF_NKRED = auto|off|"a b c"` in step.conf), saving WAVECAR.
+- `S2.3_hse` now depends on it: every slice restarts from that HSE WAVECAR (ISTART=1, no NKRED, KPOINTS and
+  NBANDS taken from stage 1) and only computes its own path points. Previously each of the four slices redid the
+  full HSE SCF from the PBE WAVECAR; for large cells (Mg4C60, 128 atoms) one slice took 40-50 h, beyond the 48 h
+  wall clock.
+- Materials whose S2.3 already finished the old way: the new `hse_scf` check marks S2.28 complete, so no SCF job is
+  submitted. Regenerating S2.3 for them without a stage-1 directory falls back to the old per-slice SCF with a
+  warning; `rerun S2.28_hsescf` switches them to the two-stage route (S2.3 is archived and regenerated).
+
 ### Added (2026-10-21: [0061-m] ADP_DEGEN strain operator from DFT wavefunctions, plan A1)
 - `skill/ke-dft-cpu/deform_wave.py` (numpy + h5py): streams WAVECAR (standard / ISPIN=2 / non-collinear), extracts the
   band-edge k-points, an energy window of bands and coefficients up to 300 eV into `deform_wave.h5`, then builds

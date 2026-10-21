@@ -251,16 +251,28 @@ optional_steps:
   # 则整段跳过，只留 PBE 带隙。2.3 hse 从 2.2_pbe 继承，2.3_hse_plot 画 HSE 能带。
   # 2.3_hse 默认 --kpath-slice all/4 并行分段（fanout "*p*of*"）：3D 体相切 4 段并行；
   # 2D 体系在 gen 内自动跳过切片、保持单作业（能带路径点少，切片要多付 n 倍精确交换 SCF）。
+  # [hse_two_stage] 2026-10-21：两段式。S2.28_hsescf 只跑一次 HSE SCF（无 KPOINTS_OPT，HSE_SCF_NKRED 默认 auto 提速），
+  #   存 WAVECAR；S2.3_hse 各片从它重启（ISTART=1、不带 NKRED），SCF 几步收敛后只算本片路径点。
+  #   以前每片都从 PBE WAVECAR 重算一整遍 HSE SCF：4 片 = 4 遍，大胞（Mg4C60 128 原子）单片 40~50 h > 48 h 墙钟。
+  #   老材料（S2.3 已按单段算完）：判据 hse_scf（_common/opt/checks_relax.py）判 S2.28 已完成、不再交作业；
+  #   这些材料以后要重算 S2.3 就 rerun S2.28_hsescf（会归档 S2.3 目录、跑完后 S2.3 自动重新生成）。
   bandgap_hse:
     default: true
     steps:
-      - {seq: 2.3, name: "step2_bandgap/step2.3_hse", label: S2.3_hse,
+      - {seq: 2.28, name: "step2_bandgap/step2.28_hse_scf", label: S2.28_hsescf,
          group: S2_bandgap, after: "step2_bandgap/step2.2_pbe",
+         src: step2_bandgap/step2.3_hse, check: hse_scf, gen: "gen_step4_HSE.py --stage scf",
+         gen_need: [stepconf.py, step.conf, dim_common.py, ke_common.py, check_common.py,
+                    incar_2d.tpl, incar_3d.tpl, submit_std_2d.tpl, submit_std_3d.tpl,
+                    submit_ncl_2d.tpl, submit_ncl_3d.tpl],
+     needs: ["step2_bandgap/step2.2_pbe"]}
+      - {seq: 2.3, name: "step2_bandgap/step2.3_hse", label: S2.3_hse,
+         group: S2_bandgap, after: "step2_bandgap/step2.28_hse_scf",
          src: step2_bandgap/step2.3_hse, check: outcar, gen: "gen_step4_HSE.py --kpath-slice all/4", fanout: "*p*of*",
          gen_need: [stepconf.py, step.conf, dim_common.py, ke_common.py, check_common.py, step4_check_and_resubmit.py,
                     incar_2d.tpl, incar_3d.tpl, submit_std_2d.tpl, submit_std_3d.tpl,
                     submit_ncl_2d.tpl, submit_ncl_3d.tpl],
-     needs: ["step2_bandgap/step2.2_pbe"]}
+     needs: ["step2_bandgap/step2.2_pbe", "step2_bandgap/step2.28_hse_scf"]}
       - {seq: 2.35, name: "step2_bandgap/step2.3_hse_plot", label: S2.3_hseplot,
          group: S2_bandgap, after: "step2_bandgap/step2.3_hse",
          src: step2_bandgap/step2.3_hse_plot, check: plot, run: gen,

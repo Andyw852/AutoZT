@@ -28,6 +28,10 @@ SOC 自动检测（无手动开关，防止旋量/标量 WAVECAR 不匹配）:
                          kpath.json + KPOINTS_OPT 降采样。【默认开启，每腿 10 点】。
                          --line-density 0 关闭，用 step3 的完整路径。
                          HSE 成本对路径点数严格线性；出版级能带每腿 10~15 点足够。
+    --stage scf|bands    [hse_two_stage] scf = 第 1 段（step2_bandgap/step2.28_hse_scf）：只跑一次 HSE SCF
+                         （无 KPOINTS_OPT，HSE_SCF_NKRED 默认 auto），存 WAVECAR；bands（默认）= 第 2 段：
+                         各片从第 1 段的 HSE WAVECAR 重启（ISTART=1、不带 NKRED），只算本片路径点。
+                         第 1 段目录不存在（老材料）时退回旧口径（各片从 PBE WAVECAR 起算）并告警。
     --kpath-slice i/n    只生成第 i 段（共 n 段），切片目录 step2_bandgap/step2.3_hse/p{i}of{n}
                          （放在 step2.3_hse 内部，tf 的 fanout "*p*of*" 据此提交并行作业），
                          各段共享同一 step2.2_pbe WAVECAR、各自从预收敛波函数重跑一次 SCF，
@@ -83,6 +87,16 @@ import ke_common  # noqa: E402  ← 只用它的 vaspkit_kpoints（规范实现�
 # ============================== 配置 ==============================
 STEP3_DIR  = "step2_bandgap/step2.2_pbe"   # 源目录
 STEP4_DIR  = "step2_bandgap/step2.3_hse"      # 目标目录（切片时自动加 _p{i}of{n}）
+# [hse_two_stage] 2026-10-21：两段式。
+#   第 1 段 S2.28_hsescf（--stage scf）：只跑一次 HSE SCF（无 KPOINTS_OPT，可开 NKRED 提速），存 WAVECAR；
+#   第 2 段 S2.3_hse（--stage bands，默认）：各片从第 1 段的 HSE WAVECAR 重启（ISTART=1，不带 NKRED），
+#     SCF 几步就回到精确解，然后只算本片路径点。以前每片都从 PBE WAVECAR 重算一整遍 HSE SCF，
+#     4 片 = 4 遍（见下面"HSE 成本结构"），大胞单片就超 48 h 墙钟。
+HSE_SCF_DIR = "step2_bandgap/step2.28_hse_scf"
+HSE_SCF_SOURCE = "hse_scf_source.json"   # 第 2 段每个目录记一份 WAVECAR 来源（checks_relax.ck_hse_scf 据此区分新旧口径）
+# 第 1 段的 NKRED（精确交换的 q 网格降采样）："auto" = 自洽网格能被 2 整除的轴取 2、其余 1；"off" = 不用；
+#   也可写三个整数 "2 2 1"（必须整除对应轴的网格）。NKRED 与 KPOINTS_OPT 硬不兼容（见下），所以只用在第 1 段。
+HSE_SCF_NKRED = "auto"
 
 INCAR_FILE = "INCAR"
 OUTCAR_FILE = "OUTCAR"
@@ -102,6 +116,7 @@ KSCHEME_HSE  = "2"        # 2 = Gamma-centered（与 step2.1_static / step3_unif
 VASPKIT_EXE  = "vaspkit"  # 与 ke_common / 其它步骤同一约定
 # 本脚本认的 step.conf [params] 键（strict=False：其余键是别的步骤的，忽略）
 SPEC = {"KSPACING_HSE": (KSPACING_HSE, "str"),
+        "HSE_SCF_NKRED": (None, "str"),            # [hse_two_stage] 第 1 段 NKRED：auto / off / "2 2 1"
         # 2026-10-14：带隙用哪个杂化泛函（见下面 HYBRID_PRESETS / resolve_hybrid）
         "HYBRID": ("", "str"),
         "HYBRID_GGA": ("", "str"),
@@ -375,11 +390,13 @@ INCAR_SET = {
 # ---- 因此（按性价比排序）----
 #   1) 大体系的 HSE 优先【单段跑完整路径】，而不是切成 4 片并行。
 #      路径点数只影响那 10%，切 4 片却把 90% 的 SCF 乘 4。
-#   2) 若必须并行：让后续片从第 1 片的 WAVECAR/CHGCAR 重启
-#      （ISTART=1, ICHARG=11, 无 NKRED），只做自己那段的 KOPT。
+#   2) 若必须并行：让后续片从第 1 片的 WAVECAR 重启（ISTART=1, 无 NKRED），只做自己那段的 KOPT。
 #      实测路线 = SCF 用 NKRED 单独跑一次（~9.6 h） + 四片 KOPT-only 并行（~6.4 h）
 #      ≈ 16 h 墙钟 / ~3,400 core·h，比现状省 ~6 倍。
 #      **依据**：NKRED 崩只崩在 KPOINTS_OPT 段（见下），SCF 段完全正常。
+#      ★ [hse_two_stage] 2026-10-21 已实现：S2.28_hsescf（--stage scf）+ S2.3_hse（--stage bands）。
+#        第 2 段不用 ICHARG=11（杂化泛函不支持固定电荷的非自洽），而是 ISTART=1 读第 1 段收敛的 HSE
+#        WAVECAR、照常自洽 —— 去掉 NKRED 后几步就回到精确解，然后算本片路径点。
 #   3) 再谈降路径点数。
 #
 # ---- NKRED 与 KPOINTS_OPT 硬不兼容（实测两次）----
@@ -923,6 +940,69 @@ def write_kpoints_opt(out_dir, header, coord_subset, tag):
 
 
 # ---------------------------------------------------------------------------
+# [hse_two_stage] 第 1 段 NKRED / 第 1 段是否就绪
+# ---------------------------------------------------------------------------
+NKRED_TAGS = ("NKRED", "NKREDX", "NKREDY", "NKREDZ")
+
+
+def resolve_scf_nkred(cwd="."):
+    """step.conf 的 HSE_SCF_NKRED（没写 = 脚本常量）。"""
+    global HSE_SCF_NKRED
+    if (Path(cwd) / stepconf.CONF_NAME).is_file():
+        raw = stepconf.load(SPEC, None, str(cwd), strict=False)["HSE_SCF_NKRED"]
+        if raw not in (None, ""):
+            HSE_SCF_NKRED = str(raw).strip()
+    return HSE_SCF_NKRED
+
+
+def kpoints_mesh(path):
+    """自动网格 KPOINTS 第 4 行的三个整数；不是自动网格 / 读不出 -> None。"""
+    try:
+        lines = Path(path).read_text(encoding="utf-8-sig").splitlines()
+        mesh = [int(x) for x in lines[3].split()[:3]]
+        return mesh if len(mesh) == 3 and all(m > 0 for m in mesh) else None
+    except (OSError, IndexError, ValueError):
+        return None
+
+
+def nkred_tags(mesh, spec):
+    """-> ({"NKREDX": .., ...} 或 {}, 说明)。只在第 1 段（无 KPOINTS_OPT）用。"""
+    spec = str(spec or "auto").strip().lower()
+    if spec in ("off", "0", "1", "none", "false"):
+        return {}, "NKRED 关（HSE_SCF_NKRED=%s）" % spec
+    if not mesh:
+        return {}, "NKRED 关：自洽 KPOINTS 不是自动网格，判断不了能否整除"
+    if spec == "auto":
+        red = [2 if (m % 2 == 0 and m >= 2) else 1 for m in mesh]
+    else:
+        try:
+            red = [int(x) for x in spec.split()]
+        except ValueError:
+            raise SystemExit("[ERROR] HSE_SCF_NKRED=%r 应为 auto / off / 三个整数" % spec)
+        if len(red) != 3 or any(r < 1 or m % r for r, m in zip(red, mesh)):
+            raise SystemExit("[ERROR] HSE_SCF_NKRED=%r 不能整除自洽网格 %s" % (spec, mesh))
+    if red == [1, 1, 1]:
+        return {}, "NKRED 关：网格 %s 没有能被 2 整除的轴" % "x".join(map(str, mesh))
+    return ({"NKREDX": str(red[0]), "NKREDY": str(red[1]), "NKREDZ": str(red[2])},
+            "NKRED %s（网格 %s；只用在第 1 段 SCF）" % (" ".join(map(str, red)), "x".join(map(str, mesh))))
+
+
+def hse_scf_ready(scf_dir=HSE_SCF_DIR):
+    """第 1 段是否可用：OUTCAR 有 VASP 收尾 + WAVECAR > 1 MB。-> (ok, 说明)。"""
+    oc, wc = Path(scf_dir) / OUTCAR_FILE, Path(scf_dir) / "WAVECAR"
+    if not oc.is_file():
+        return False, "%s/OUTCAR 不存在" % scf_dir
+    try:
+        if "General timing and accounting informations" not in oc.read_text(errors="ignore")[-400000:]:
+            return False, "%s/OUTCAR 没有收尾（第 1 段还没跑完或被杀）" % scf_dir
+    except OSError as e:
+        return False, "读 %s/OUTCAR 失败：%s" % (scf_dir, e)
+    if not wc.is_file() or wc.stat().st_size < 1024 * 1024:
+        return False, "%s/WAVECAR 缺失或过小" % scf_dir
+    return True, "%s：HSE SCF 已收敛（WAVECAR %.1f MB）" % (scf_dir, wc.stat().st_size / 1e6)
+
+
+# ---------------------------------------------------------------------------
 # 搭建单个 step4 目录（整条路径或其中一段）
 # ---------------------------------------------------------------------------
 def build_step4_dir(out_dir, args, ctx, part=None):
@@ -931,9 +1011,14 @@ def build_step4_dir(out_dir, args, ctx, part=None):
     n_total = len(coords)
     os.makedirs(out_dir, exist_ok=True)
     log, warn = [], []
+    stage = ctx.get("stage", "bands")
+    wave_dir = ctx.get("wavecar_dir", STEP3_DIR)
 
     # --- 本段的路径点范围 ---
-    if part:
+    if stage == "scf":
+        s, e = 0, 0
+        tag = "  (HSE SCF stage)"
+    elif part:
         i, n = part
         b = slice_bounds(n_total, n)
         s, e = b[i - 1], b[i]
@@ -943,20 +1028,28 @@ def build_step4_dir(out_dir, args, ctx, part=None):
         tag = "  (%d pts)" % n_total
 
     # --- KPOINTS_OPT + kpath.json（完整路径元数据 + slice 字段）---
-    write_kpoints_opt(out_dir, header, coords[s:e], tag)
-    meta_out = dict(meta)
-    if part:
-        meta_out["slice"] = {"part": part[0], "n_parts": part[1],
-                             "offset": s, "count": e - s, "total": n_total}
+    if stage == "scf":
+        # 第 1 段只跑 SCF：不能有 KPOINTS_OPT（NKRED 与它硬不兼容，而且路径点是第 2 段的事）
+        for _f in (KPOPT_FILE, KPATH_FILE):
+            if (Path(out_dir) / _f).exists():
+                (Path(out_dir) / _f).unlink()
+        log.append("无 %s（第 1 段只跑 HSE SCF）" % KPOPT_FILE)
     else:
-        meta_out.pop("slice", None)
-    (Path(out_dir) / KPATH_FILE).write_text(
-        json.dumps(meta_out, ensure_ascii=False, indent=1), encoding="utf-8")
-    log.append("%s (%d 点)%s + %s" % (KPOPT_FILE, e - s, "" if not part else "", KPATH_FILE))
+        write_kpoints_opt(out_dir, header, coords[s:e], tag)
+        meta_out = dict(meta)
+        if part:
+            meta_out["slice"] = {"part": part[0], "n_parts": part[1],
+                                 "offset": s, "count": e - s, "total": n_total}
+        else:
+            meta_out.pop("slice", None)
+        (Path(out_dir) / KPATH_FILE).write_text(
+            json.dumps(meta_out, ensure_ascii=False, indent=1), encoding="utf-8")
+        log.append("%s (%d 点)%s + %s" % (KPOPT_FILE, e - s, "" if not part else "", KPATH_FILE))
 
     # --- 常规文件 ---
     for name in COPY_FILES:
-        src = os.path.join(STEP3_DIR, name)
+        # 第 2 段的 KPOINTS 照抄第 1 段（第 1 段可能按 KSPACING_HSE 改过网格，WAVECAR 是按它写的）
+        src = os.path.join(wave_dir if (name == "KPOINTS" and wave_dir == HSE_SCF_DIR) else STEP3_DIR, name)
         if not os.path.exists(src):
             warn.append("找不到 %s/%s" % (STEP3_DIR, name))
             continue
@@ -970,7 +1063,10 @@ def build_step4_dir(out_dir, args, ctx, part=None):
         log.append(name)
 
     # --- HSE 自洽网格：KSPACING_HSE 显式覆盖（默认关闭，即继承 step2.2_pbe）---
-    _ks_changed, _ks_note = rewrite_kspacing(out_dir, ctx.get("dim", "3d"))
+    if wave_dir == HSE_SCF_DIR:
+        _ks_changed, _ks_note = False, "KPOINTS 照抄第 1 段 %s（与其 WAVECAR 同一网格）" % HSE_SCF_DIR
+    else:
+        _ks_changed, _ks_note = rewrite_kspacing(out_dir, ctx.get("dim", "3d"))
     log.append(_ks_note)
     if _ks_changed:
         warn.append("KSPACING_HSE 改了自洽网格，但 WAVECAR 是从 %s 按旧网格拷来的；"
@@ -984,8 +1080,11 @@ def build_step4_dir(out_dir, args, ctx, part=None):
     #   【拷贝】、忽略 --link-wavecar，以保护 step3 源。仅当 LWAVE=.FALSE.（本步
     #   不写 WAVECAR）时符号链接才安全。
     _lwave_true = _incar_true(INCAR_SET.get("LWAVE"))
-    wsrc = Path(STEP3_DIR, "WAVECAR").resolve()
+    wsrc = Path(wave_dir, "WAVECAR").resolve()
     wdst = Path(out_dir, "WAVECAR")
+    if not wsrc.exists() and wave_dir == HSE_SCF_DIR:
+        # 第 2 段没有 HSE WAVECAR 就等于每片从头重算 HSE SCF（正是两段式要消掉的成本），不能只告警
+        raise SystemExit("[ERROR] 找不到 %s/WAVECAR —— 第 1 段 S2.28_hsescf 必须先跑完" % wave_dir)
     if not wsrc.exists():
         warn.append("找不到 %s/WAVECAR —— step3 必须先跑完" % STEP3_DIR)
     else:
@@ -1003,9 +1102,17 @@ def build_step4_dir(out_dir, args, ctx, part=None):
                        % (wsrc, size / 1e9))
         else:
             shutil.copyfile(wsrc, wdst)
-            log.append("WAVECAR 拷贝 (%.1f MB)%s" % (
-                size / 1e6,
-                "（LWAVE=.TRUE. 强制拷贝，保护 step3 源）" if _lwave_true else ""))
+            log.append("WAVECAR 拷贝 ← %s (%.1f MB)%s" % (
+                wave_dir, size / 1e6,
+                "（LWAVE=.TRUE. 强制拷贝，保护源文件）" if _lwave_true else ""))
+        if wave_dir == HSE_SCF_DIR:
+            (Path(out_dir) / HSE_SCF_SOURCE).write_text(json.dumps({
+                "wavecar_from": HSE_SCF_DIR, "wavecar_bytes": size,
+                "scf_outcar_mtime": os.path.getmtime(os.path.join(HSE_SCF_DIR, OUTCAR_FILE)),
+                "note": "两段式第 2 段：从第 1 段 HSE SCF 的 WAVECAR 重启（ISTART=1，不带 NKRED）"},
+                ensure_ascii=False, indent=1), encoding="utf-8")
+    if stage != "scf" and wave_dir != HSE_SCF_DIR and (Path(out_dir) / HSE_SCF_SOURCE).exists():
+        (Path(out_dir) / HSE_SCF_SOURCE).unlink()          # 旧口径重生成：别留着两段式的来源记录
 
     method_src = os.path.join(STEP3_DIR, METHOD_FILE)
     if os.path.exists(method_src):
@@ -1017,7 +1124,9 @@ def build_step4_dir(out_dir, args, ctx, part=None):
     tpl  = ctx["submit_tpl"]
     vasp = "vasp_ncl" if soc else "vasp_std"
     jobname = args.jobname or sanitize_label("%s_s4HSE" % label)
-    if part:
+    if stage == "scf":
+        jobname = "%s_scf" % jobname
+    elif part:
         jobname = "%s_p%dof%d" % (jobname, part[0], part[1])
     jobname = jobname[:80]
     render_submit(tpl, os.path.join(out_dir, "submit.sh"), {"JOBNAME": jobname})
@@ -1145,8 +1254,9 @@ def build_step4_dir(out_dir, args, ctx, part=None):
             print("[..] 没有体系判别结果（step2.15 未启用/未跑完），ALGO 沿用默认 %s"
                   "（向后兼容）" % incar_set.get("ALGO"), file=sys.stderr)
 
-    incar_set["SYSTEM"] = "%s %s%s band-dft-cpu (step4; geometry=%s)%s" % (
-        label, _flavor, "+SOC" if soc else "", method, tag)
+    incar_set["SYSTEM"] = "%s %s%s %s (geometry=%s)%s" % (
+        label, _flavor, "+SOC" if soc else "",
+        "HSE SCF stage 1" if stage == "scf" else "band-dft-cpu (step4)", method, tag)
     if soc:
         incar_set["LSORBIT"]    = ".TRUE."
         incar_set["GGA_COMPAT"] = ".FALSE."
@@ -1172,7 +1282,15 @@ def build_step4_dir(out_dir, args, ctx, part=None):
     if kpar:
         incar_set["KPAR"] = str(kpar)
     # KPOINTS_OPT 驱动要求 NCORE=1：不写 NCORE/NPAR，并把 step3 继承来的删掉
+    #   （第 1 段没有 KPOINTS_OPT，但两段用同一套并行，NBANDS 才对得上第 2 段要读的 WAVECAR）
     incar_remove = list(INCAR_REMOVE) + ["NCORE", "NPAR"]
+    if stage == "scf":
+        _nk, _nk_note = nkred_tags(kpoints_mesh(os.path.join(out_dir, "KPOINTS")), ctx.get("nkred", "auto"))
+        incar_remove += list(NKRED_TAGS)
+        incar_set.update(_nk)
+        log.append(_nk_note)
+    else:
+        incar_remove += list(NKRED_TAGS)                  # KPOINTS_OPT + NKRED 必崩（见文件头"HSE 成本结构"）
     if _unscreened:
         incar_remove.append("HFSCREEN")      # 上游若残留 HFSCREEN 也删掉，否则就不是非屏蔽杂化
     if STEP4_VDW == "remove":
@@ -1279,8 +1397,11 @@ def main():
                     help="杂化泛函：auto=跟随上游(PBEsol链→HSEsol, PBE链→HSE06)；"
                          "hse06 / hsesol / hse03 / pbe0。不传则读 step.conf 的 HYBRID"
                          "（可写 custom），再不行沿用脚本内 HYBRID_FLAVOR（当前 %r）" % HYBRID_FLAVOR)
+    ap.add_argument("--stage", choices=("scf", "bands"), default="bands",
+                    help="[hse_two_stage] scf = 第 1 段（S2.28_hsescf）：只跑 HSE SCF、存 WAVECAR；"
+                         "bands = 第 2 段（S2.3_hse，默认）：从第 1 段的 HSE WAVECAR 重启、只算路径点")
     args = ap.parse_args()
-    _cascade_on_rerun(STEP4_DIR)
+    _cascade_on_rerun(HSE_SCF_DIR if args.stage == "scf" else STEP4_DIR)
 
     # 命令行开关优先于脚本内常量，让"开头选档位"不必回来改文件。
     # 不传 --hybrid-flavor 时退回 HYBRID_FLAVOR，保持旧的默认行为。
@@ -1312,6 +1433,29 @@ def main():
     tpl = str(resolve_tpl(Path.cwd(), tpl_base, dim))
     nb_actual, nb_src = read_nbands_from_outcar(os.path.join(STEP3_DIR, OUTCAR_FILE))
 
+    # ---- [hse_two_stage] 第 2 段的 WAVECAR 从哪来 ----
+    #   第 1 段就绪 -> 读它（NBANDS 也取它 OUTCAR 里 VASP 实际用的值，与 WAVECAR 一致）；
+    #   第 1 段目录根本不存在（老材料：S2.3 按旧单段口径算完，S2.28 被判"跳过"，现在又要重生成 S2.3）
+    #     -> 退回旧口径（各片从 PBE WAVECAR 起算），大声告警；
+    #   第 1 段目录在、但没跑完 -> 报错等它（不能让 4 片各自从头重算 HSE SCF）。
+    wavecar_dir = STEP3_DIR
+    if args.stage == "bands":
+        _ok, _why = hse_scf_ready()
+        if _ok:
+            wavecar_dir = HSE_SCF_DIR
+            _nb2, _nb2_src = read_nbands_from_outcar(os.path.join(HSE_SCF_DIR, OUTCAR_FILE))
+            if _nb2:
+                nb_actual, nb_src = _nb2, _nb2_src
+            print("[..] 两段式第 2 段：%s" % _why, file=sys.stderr)
+        elif os.path.isdir(HSE_SCF_DIR):
+            raise SystemExit("[ERROR] 第 1 段 S2.28_hsescf 还不能用（%s）。等它跑完再生成 S2.3_hse；"
+                             "它失败了就先 retry S2.28_hsescf。" % _why)
+        else:
+            print("[WARN] ★ 没有第 1 段目录 %s（老材料：S2.3 当初按单段口径算的）—— 本次退回旧口径："
+                  "每片各自从 PBE WAVECAR 重算一整遍 HSE SCF（大胞会很慢、可能超墙钟）。"
+                  "要走两段式：rerun S2.28_hsescf（它会归档本步目录、跑完后本步自动重新生成）。"
+                  % HSE_SCF_DIR, file=sys.stderr)
+
     # 路径：读 step3 -> 降采样（默认开启，--line-density 0 关闭）
     meta, header, coords = load_kpath(STEP3_DIR)
     n_orig = len(coords)
@@ -1335,10 +1479,14 @@ def main():
            "label": label, "method": method, "items": items,
            "nb_actual": nb_actual, "soc": soc,
            "submit_tpl": tpl, "dim": dim,
-           "hybrid": hybrid}
+           "hybrid": hybrid,
+           "stage": args.stage, "wavecar_dir": wavecar_dir,
+           "nkred": resolve_scf_nkred(Path.cwd()) if args.stage == "scf" else None}
 
     # 2D 能带路径点少：切片并行收益小、却要多付 N 倍精确交换 SCF，默认不切（保持单作业）
     slice_spec = args.kpath_slice
+    if args.stage == "scf":
+        slice_spec = None                     # 第 1 段只有一个目录
     if slice_spec and dim == "2d":
         print("[..] 2D 体系跳过切片（忽略 --kpath-slice=%s）" % slice_spec, file=sys.stderr)
         slice_spec = None
@@ -1346,7 +1494,8 @@ def main():
     resolve_kspacing_hse(Path.cwd())   # step.conf 的 KSPACING_HSE（默认 None = 不改网格）
     results = []
     for part in parts:
-        out_dir = STEP4_DIR if part is None else os.path.join(STEP4_DIR, "p%dof%d" % (part[0], part[1]))
+        _base = HSE_SCF_DIR if args.stage == "scf" else STEP4_DIR
+        out_dir = _base if part is None else os.path.join(_base, "p%dof%d" % (part[0], part[1]))
         results.append(build_step4_dir(out_dir, args, ctx, part))
 
     # ---------------- 汇总打印 ----------------
@@ -1361,7 +1510,9 @@ def main():
           % (dim.upper(), os.path.basename(tpl), dim_note))
     print("输出文件      : LWAVE=.TRUE.（存 WAVECAR）  LORBIT=11（写 PROCAR/PROCAR_OPT，fat band-dft-cpu）"
           "  LCHARG=.TRUE.（存 CHGCAR）")
-    print("WAVECAR 处理  : 一律拷贝 step3 源（LWAVE=.TRUE. 下 --link-wavecar 被忽略以防覆盖源）")
+    print("WAVECAR 处理  : 拷贝自 %s（LWAVE=.TRUE. 下 --link-wavecar 被忽略以防覆盖源）%s"
+          % (wavecar_dir, "  [两段式第 1 段：只跑 HSE SCF]" if args.stage == "scf" else
+             ("  [两段式第 2 段]" if wavecar_dir == HSE_SCF_DIR else "  [旧口径：每片各自重算 HSE SCF]")))
     print("能带路径      : step3 共 %d 点%s -> 本次使用 %d 点，切 %d 个目录"
           % (n_orig,
              "，降采样后 %d 点（每腿 %d%s）" % (len(coords), args.line_density,
@@ -1389,8 +1540,13 @@ def main():
             print("   ! %s" % w)
 
     print("\n下一步:")
+    if args.stage == "scf":
+        print("   1. autozt 提交本目录（S2.28_hsescf）；跑完后 S2.3_hse 从它的 WAVECAR 生成各片")
+        return
     print("   1. 检查各目录 submit.sh（应调用 %s）后逐个 sbatch" % results[0]["vasp"])
-    print("   2. 每段各自重跑一次 SCF（Damped ~20 步，便宜），随后只算本段路径点")
+    print("   2. 每段%s，随后只算本段路径点"
+          % ("从第 1 段的 HSE WAVECAR 重启（SCF 几步就收敛）" if wavecar_dir == HSE_SCF_DIR
+             else "各自从 PBE WAVECAR 重跑一整遍 HSE SCF（旧口径）"))
     print("   3. 全部跑完后在父目录: python gen_step4_Band_structure.py"
           "  （自动发现 %s_p*of* 并拼接）" % STEP4_DIR)
 

@@ -627,7 +627,10 @@ DOWNSTREAM = {
     "step2_bandgap/step2.1_static": [("step2_bandgap/step2.15_discriminant", "dir"),
                                      ("step2_bandgap/step2.2_pbe", "dir")],
     "step2_bandgap/step2.15_discriminant": [("step2_bandgap/step2.155_discriminant_decide", "dir")],
-    "step2_bandgap/step2.2_pbe": [("step2_bandgap/step2.2_pbe_plot", "dir"), ("step2_bandgap/step2.3_hse", "dir")],
+    "step2_bandgap/step2.2_pbe": [("step2_bandgap/step2.2_pbe_plot", "dir"), ("step2_bandgap/step2.28_hse_scf", "dir"),
+                                  ("step2_bandgap/step2.3_hse", "dir")],
+    # [hse_two_stage] 第 1 段 HSE SCF 重算 -> 第 2 段各片（读它的 WAVECAR）整目录归档、等它跑完重新生成
+    "step2_bandgap/step2.28_hse_scf": [("step2_bandgap/step2.3_hse", "dir")],
     "step2_bandgap/step2.3_hse": [("step2_bandgap/step2.3_hse_plot", "dir")],
     # zt 的 kl 分支：这些步骤的 gen 在 kl-dft-cpu、不调本函数，只靠 S1 的级联递归走到。
     "step1_std_opt": [("step2_static", "dir")],
