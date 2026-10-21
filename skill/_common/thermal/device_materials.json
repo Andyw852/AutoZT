@@ -1,9 +1,9 @@
 {
   "_comment": "器件热仿真材料库。2D 材料 kappa_inplane/cross 单位 W/mK；厚度为单层有效厚度。rho_cp 为体积热容 J/m3K。数据为文献量级，供 KAPPA_SOURCE=literature 兜底；上游 kl-dft-cpu 有实测时优先用实测（KAPPA_SOURCE=auto）。",
   "materials": {
-    "MoS2": {"kind": "2d", "kappa_inplane_W_mK": 81.6, "kappa_cross_W_mK": 4.5,
+    "MoS2": {"kind": "2d", "kappa_inplane_W_mK": 93.5, "kappa_cross_W_mK": 4.5,
              "thickness_m": 6.74e-10, "rho_cp_J_m3K": 2.53e6,
-             "note": "2D 物理值 = 含真空胞 κ_L(5.90 Å, ALASSO/OLS, RTA 300K) 22.00 × h⊥/d(25.0/6.74 = 3.7092) = 81.60 W/mK。该截断判据标 not_converged（36 帧，κ 随截断未收敛，可能偏低约 10%）；RFE-OLS 同截断 25.21 → 93.53 W/mK，可作上界参考。2026-10-21 修正：旧条目的 2.973164 因子对应 h⊥=19.97 Å，与 25 Å 真空胞不符（低估面内 κ 约 22%）；同时删去未核实的文献锚点。"},
+             "note": "2D 物理值 = kl-dft-cpu MoS2_kl_v2 截断扫描选中值（FC3 截断 5.90 Å，RFE-OLS，RTA 300K）含真空胞 κ_L 25.21 × h⊥/d(25.0/6.74 = 3.7092) = 93.51 W/mK，与本表 thickness_m=6.74 Å 配套（κ·t 守恒，换厚度时同比换算）。按 kl-dft-cpu 截断判据 5.27/5.90 Å 两点平台（25.00/25.21）判 ok；6.54 Å 档为 15.81（→58.6 W/mK），仅作参考；同截断 ALASSO/OLS 为 22.00（→81.6）。2026-10-21 修正：旧条目 63.70 用的 h⊥/d=2.973164 对应 h⊥≈19.97 Å，与 25 Å 真空胞不符。文献（按检索摘要，未读原文；文献多按 t=6.15 Å，比较时本值 ×6.74/6.15 → 102.5）：理论 ~83 W/mK = Li, Carrete & Mingo, APL 103, 253103 (2013)，三声子 BTE、样品 1 μm；实验 84±17 W/mK = Zhang, Sun, …, Heinz & Hone, ACS Appl. Mater. Interfaces (2015)，悬空单层、光热拉曼。旧 note 的 PRB 87, 115418 是 MoS2 电子迁移率论文，引错已删。"},
     "WS2": {"kind": "2d", "kappa_inplane_W_mK": 32.0, "kappa_cross_W_mK": 4.0,
             "thickness_m": 6.5e-10, "rho_cp_J_m3K": 2.5e6, "note": "literature order"},
     "MoSe2": {"kind": "2d", "kappa_inplane_W_mK": 15.0, "kappa_cross_W_mK": 3.5,
