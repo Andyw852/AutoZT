@@ -43,7 +43,7 @@ from pathlib import Path
 # [SKILL_REV] 版本戳：写进 comparison_summary.txt。每次改本脚本逻辑后更新。
 #   陈旧副本已咬人三次（step12/step9b 盖戳后，step13 是最后一个没盖的），
 #   这里盖戳便于从产物反查到底跑的是哪份 skill 副本。
-_SKILL_REV = "2026-10-20-0059r3"   # [0059-r3] 汇总写明谷内 ODP 参数来源（DFPT q=Γ / 冻声子 / 手填）   # 2026-10-19-0060   # [0060] 汇总：可忽略机制印"—"、限制因素跳过可忽略项   # 2026-10-18-0059   # [0059] 汇总写明 IVS 参数来源（DFPT / 冻声子 / 手填）   # 2026-10-18-0057r4   # [0057-r4] 分机制图超上限处画 ▲ 延伸；mu_scan 的 AMSET 点按载流子类型连细线   # [0057-r3] mu_scan：BT2 μ 带隙中央 ±5kT 内不给、κe 相减抵消到噪声（L < 0.1 L0）不画   # [0057-r2] temperature_series 相邻温度间色带填充 + 温度色标   # [0057-r1] 本征表 %.6g 浓度与 transport.json 掺杂档按相对 1e-4 配对（mu_scan 的 AMSET 点、分机制表的浓度列）；BT2 σ/τ=0 的点不画   # [0057] transport_plots 改版：phonon_limited_<段> -> transport_models_<段>；transport_<段> -> mobility_mechanisms_<段>（只画 μ，单机制 + 总值 + DPT）；datasets/ -> temperature_series/（蓝->红、分两段）；bt2_muscan/ + amset_scan/ -> mu_scan/（μ − E_VBM）；mechanism_resolved 去核对圆圈   # [0056] phonon-limited 掺杂扫描拆两段各一个文件夹（图 + 每温度表）：carrier_tuning_1e17-1e21 / low_doping_<NLO>-1e16，不再出整轴 <M>_phonon_limited.png；r2 <M>_transport.png 同样拆两段；r3 图注写明每条曲线的散射机制与缩写、刚性能带范围外灰底；r5 tools/make_transport_plots 直接调用本函数（统一算法），transport 图 μ 列加 DPT 带边横线（只画对应半边、标注在顶部空白）   # [0054] 与文献统一命名：去 IMP = phonon-limited（<M>_phonon_limited.png，原 <M>_intrinsic.png）、含 IMP = phonon + impurity、intrinsic 只指本征载流子；<M>_mechanism_resolved_mobility（原 dilute_mobility）；本征点按去 IMP 后机制去重；η=(E_c−E_F)/kT 判 f≈0   # [0053] intrinsic_carrier/<M>_dilute_mobility.png：稀薄极限（f≈0）μ(T) 按散射机制拆开 + Matthiessen 对照（空穴取 n = p 本征点，电子取最低 n 型去 IMP）   # [0052] transport_plots/ 每次整目录重建（先删旧结果）；intrinsic_carrier/ 标注本征浓度 n_i(T)（undoped_ni.json / fermi_fix 日志）；<M>_intrinsic.png 标题写明 intrinsic = 本征散射、横轴 = 掺杂浓度   # [0047] <M>_intrinsic.png 只画基础 4 条本征曲线（此前与 <M>_transport.png 同图仅换标题）+ intrinsic CSV 同步只含 4 条   # [0046] 本征五参数套件支持 3D（读 S8 的 step8_amset + subset_*.json；_geom_3d 体胞几何、c/t=1、对角 (xx+yy+zz)/3）；3D 也出 transport_plots/<M>_transport|<M>_intrinsic.png 9x5 面板   # [0045] bt2_muscan 同时画 thickness(我们)/cell(文献) 两种口径；[0041] transport_plots/defect_equilibrium/（缺陷平衡净浓度 σ/S/PF/κe vs T）   # 2026-10-13-0040   # [0040] transport_plots/intrinsic_carrier/（未掺杂本征载流子 σ/S/PF/κe vs T）；图例/文件名一律用实际机制组合 amset_<机制>；2026-10-13-0039   # [0039] transport_plots/datasets/：每个数据集单独一张 σ/S/PF/κe 图 + csv； [0038] 本征/子集图读 subset_*.json（SUBSETS）；[0036] transport_plots 加 bt2_muscan/ + amset_scan/ 两个扫描图子文件夹；[0035] transport_plots 合并 + τ 对比（tau/）
+_SKILL_REV = "2026-10-21-0061"   # [0061] 2D 自动取 κ_L：kl/ke 胞高不同时 ×Lz/c 换到 ke 元胞口径（原来只告警，ZT 偏低）   # 2026-10-20-0059r3   # [0059-r3] 汇总写明谷内 ODP 参数来源（DFPT q=Γ / 冻声子 / 手填）   # 2026-10-19-0060   # [0060] 汇总：可忽略机制印"—"、限制因素跳过可忽略项   # 2026-10-18-0059   # [0059] 汇总写明 IVS 参数来源（DFPT / 冻声子 / 手填）   # 2026-10-18-0057r4   # [0057-r4] 分机制图超上限处画 ▲ 延伸；mu_scan 的 AMSET 点按载流子类型连细线   # [0057-r3] mu_scan：BT2 μ 带隙中央 ±5kT 内不给、κe 相减抵消到噪声（L < 0.1 L0）不画   # [0057-r2] temperature_series 相邻温度间色带填充 + 温度色标   # [0057-r1] 本征表 %.6g 浓度与 transport.json 掺杂档按相对 1e-4 配对（mu_scan 的 AMSET 点、分机制表的浓度列）；BT2 σ/τ=0 的点不画   # [0057] transport_plots 改版：phonon_limited_<段> -> transport_models_<段>；transport_<段> -> mobility_mechanisms_<段>（只画 μ，单机制 + 总值 + DPT）；datasets/ -> temperature_series/（蓝->红、分两段）；bt2_muscan/ + amset_scan/ -> mu_scan/（μ − E_VBM）；mechanism_resolved 去核对圆圈   # [0056] phonon-limited 掺杂扫描拆两段各一个文件夹（图 + 每温度表）：carrier_tuning_1e17-1e21 / low_doping_<NLO>-1e16，不再出整轴 <M>_phonon_limited.png；r2 <M>_transport.png 同样拆两段；r3 图注写明每条曲线的散射机制与缩写、刚性能带范围外灰底；r5 tools/make_transport_plots 直接调用本函数（统一算法），transport 图 μ 列加 DPT 带边横线（只画对应半边、标注在顶部空白）   # [0054] 与文献统一命名：去 IMP = phonon-limited（<M>_phonon_limited.png，原 <M>_intrinsic.png）、含 IMP = phonon + impurity、intrinsic 只指本征载流子；<M>_mechanism_resolved_mobility（原 dilute_mobility）；本征点按去 IMP 后机制去重；η=(E_c−E_F)/kT 判 f≈0   # [0053] intrinsic_carrier/<M>_dilute_mobility.png：稀薄极限（f≈0）μ(T) 按散射机制拆开 + Matthiessen 对照（空穴取 n = p 本征点，电子取最低 n 型去 IMP）   # [0052] transport_plots/ 每次整目录重建（先删旧结果）；intrinsic_carrier/ 标注本征浓度 n_i(T)（undoped_ni.json / fermi_fix 日志）；<M>_intrinsic.png 标题写明 intrinsic = 本征散射、横轴 = 掺杂浓度   # [0047] <M>_intrinsic.png 只画基础 4 条本征曲线（此前与 <M>_transport.png 同图仅换标题）+ intrinsic CSV 同步只含 4 条   # [0046] 本征五参数套件支持 3D（读 S8 的 step8_amset + subset_*.json；_geom_3d 体胞几何、c/t=1、对角 (xx+yy+zz)/3）；3D 也出 transport_plots/<M>_transport|<M>_intrinsic.png 9x5 面板   # [0045] bt2_muscan 同时画 thickness(我们)/cell(文献) 两种口径；[0041] transport_plots/defect_equilibrium/（缺陷平衡净浓度 σ/S/PF/κe vs T）   # 2026-10-13-0040   # [0040] transport_plots/intrinsic_carrier/（未掺杂本征载流子 σ/S/PF/κe vs T）；图例/文件名一律用实际机制组合 amset_<机制>；2026-10-13-0039   # [0039] transport_plots/datasets/：每个数据集单独一张 σ/S/PF/κe 图 + csv； [0038] 本征/子集图读 subset_*.json（SUBSETS）；[0036] transport_plots 加 bt2_muscan/ + amset_scan/ 两个扫描图子文件夹；[0035] transport_plots 合并 + τ 对比（tau/）
 #   bump 记录：2026-10-11-0035 —— transport_plots 合并：intrinsic 图并入 transport 图（4 条数据集
 #   overall / intrinsic / ADP only / BT2xDPT-tau），不再单独出 <M>_intrinsic*.{png,csv}，
 #   只留 <M>_transport.png + 每温度 CSV + <M>_params_<T>K.csv。
@@ -218,6 +218,7 @@ SOMMERFELD_L = 2.44e-8   # WΩ/K²
 #   "auto" = 自动读 kl-dft-cpu 技能的 step6_kappa/kappa_summary.json，取 TARGET_T 处的
 #            **原始** kappa_xx_yy_zz（元胞口径）。本步 amset 的 σ/κ_e 也是元胞
 #            口径，两边天然同口径，所以这里不做 c/t 重标度。
+#            例外 [0061]：2D 两链胞高不同（kl Lz ≠ ke c）时按片热导守恒 ×Lz/c 换到 ke 的元胞。
 #            （要文献口径的绝对值请看 step8.1 的 NORM_2D。）
 #   None   = 只用下面手填的值。
 KAPPA_L_SOURCE = "auto"
@@ -733,7 +734,8 @@ def _find_kl_kappa(cwd):
 
 def resolve_kappa_L(cwd):
     """返回 (kxx, kyy, lines)。手填优先；否则读 kl 链的 kappa_summary.json。
-    只取原始 kappa_xx_yy_zz（元胞口径），与 amset 的 σ/κ_e 同口径。"""
+    只取原始 kappa_xx_yy_zz（元胞口径），与 amset 的 σ/κ_e 同口径；2D 两链胞高
+    不同时按 ×Lz/c 换到 ke 的元胞（[0061]）。"""
     if "v" in _KL_CACHE:
         return _KL_CACHE["v"]
     if KAPPA_L_XX_W_MK is not None or KAPPA_L_YY_W_MK is not None:
@@ -783,7 +785,16 @@ def resolve_kappa_L(cwd):
         tag = "一致" if dc <= 1.0 else "★不一致★"
         lines.append("  [闸门] 元胞%s：kl-dft-cpu Lz=%.4f Å vs ke-dft-cpu c=%.4f Å（差 %.3f%%）"
                      % (tag, Lz, cA, dc))
-        if dc > 1.0:
+        if dc > 1.0 and _read_dim(cwd) != "3d":
+            # [0061] 2D：原始 κ 的分母是含真空的胞体积，与真空无关的是片热导 κ_raw×Lz。
+            #   两条链胞高不同（如 kl、ke 在不同材料目录各自建胞）时按片热导守恒换到
+            #   ke 的元胞口径 κ_L × Lz/c。以前只告警不换算：κ_L 放大 c/Lz 倍、ZT 偏低
+            #   （MoS2：Lz 25.0 vs c 34.879 → ZT 低约 28%）。
+            f = float(Lz) / float(cA)
+            kxx, kyy = kxx * f, kyy * f
+            lines.append("  [换算] 2D 胞高不同：按片热导守恒 ×Lz/c = %.4f 换到 ke 元胞口径 -> "
+                         "xx=%.4f  yy=%.4f W/mK（ZT 用这组）" % (f, kxx, kyy))
+        elif dc > 1.0:
             lines.append("         两边 step1 都冻结 c，同一份输入 POSCAR 不该出现"
                          "这种差异——查 step.conf 的 CELL_POLICY/VACUUM_AXIS_POLICY")
     r = (kxx, kyy, lines)
