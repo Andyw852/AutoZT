@@ -17,6 +17,7 @@ run:gen 步骤：登录节点直接跑、不提交 SLURM，秒~分钟级。
       不会抛难懂的异常。
 """
 import json
+import math
 import os
 import sys
 from pathlib import Path
@@ -123,6 +124,10 @@ SPEC = {
     "METAL_TAU_FS": (None, "float"),
     "METAL_LAMBDA_TR": (None, "float"),
     "METAL_LAMBDA_SOURCE": ("", "str"),
+    # [0063] kl 结果目录（ke/kl 不在同一材料目录时用）：KL_ROOT=kl 材料目录，
+    #   KL_KAPPA_DIRS=步目录名逗号分隔；缺省 None=按 sibling 探测。
+    "KL_ROOT": (None, "str"),
+    "KL_KAPPA_DIRS": (None, "str"),
 }
 # =================================================================
 
@@ -167,6 +172,7 @@ def _find_vasprun(d):
 def _apply_conf(cwd):
     """[0016] 读 tf 推来的 step.conf 覆盖 THICKNESS_A / NORM_2D / LAYER_THICKNESS（没有 step.conf 不动）。"""
     global THICKNESS_A, NORM_2D, LAYER_THICKNESS, METAL_TAU_FS, METAL_LAMBDA_TR, METAL_LAMBDA_SOURCE
+    global KL_ROOT, KL_KAPPA_DIRS
     if not (Path(cwd) / "step.conf").is_file():
         return
     try:
@@ -187,6 +193,10 @@ def _apply_conf(cwd):
         METAL_LAMBDA_TR = float(p["METAL_LAMBDA_TR"])
     if p["METAL_LAMBDA_SOURCE"]:
         METAL_LAMBDA_SOURCE = str(p["METAL_LAMBDA_SOURCE"])
+    if p.get("KL_ROOT"):
+        KL_ROOT = str(p["KL_ROOT"])
+    if p.get("KL_KAPPA_DIRS"):
+        KL_KAPPA_DIRS = tuple(x.strip() for x in str(p["KL_KAPPA_DIRS"]).split(",") if x.strip())
 
 
 def _layer_thickness_number():
@@ -653,6 +663,18 @@ def _interp_T(temps, vals, T):
     return ys[-1]
 
 
+def _cell_c_from_poscar(p):
+    """读结构胞高（第三条晶格矢量长度，Å）；读不到返回 None。[0063] 旧 kl 结果没有
+    Lz_ang 字段时用它兜底（KL_ROOT 指向的 kl 材料目录下应有 POSCAR）。"""
+    try:
+        ls = Path(p).read_text(errors="ignore").splitlines()
+        scale = float(ls[1].split()[0])
+        c = [float(x) for x in ls[4].split()[:3]]
+        return math.sqrt(sum(x * x for x in c)) * scale
+    except Exception:
+        return None
+
+
 def _find_kl_kappa(cwd):
     """多链探测 kl 的 kappa_summary.json。返回 (src, root) 或 (None, root)。"""
     if KL_ROOT:
@@ -722,6 +744,8 @@ def _resolve_kappa_L(cwd, T, ninfo):
 
     # ---- 自动闸门：元胞与厚度口径一致性 ----
     Lz, cA = j.get("Lz_ang"), ninfo.get("cell_c_A")
+    if not Lz:                      # [0063] 旧 kl 结果无 Lz_ang：退回读 KL_ROOT 下的 kl 结构
+        Lz = _cell_c_from_poscar(Path(root) / "POSCAR")
     if Lz and cA:
         dc = abs(float(Lz) - float(cA)) / float(cA) * 100
         if dc > 1.0 and ninfo.get("norm") != "cell(3D)":

@@ -79,7 +79,7 @@ def _tensor(v):
     return np.array([[xx, xy, xz], [xy, yy, yz], [xz, yz, zz]], float)
 
 
-def _summary(tc, cfg, source_fc, mesh=None):
+def _summary(tc, cfg, source_fc, mesh=None, cell=None):
     T = [float(x) for x in np.asarray(tc.temperatures, float).reshape(-1)]
     raw = [[float(v) for v in row] for row in _flat_kappa(tc.kappa)]
     n = min(len(T), len(raw))
@@ -98,7 +98,20 @@ def _summary(tc, cfg, source_fc, mesh=None):
                 float(x) for x in np.linalg.eigvalsh(_tensor(voigt[j]))),
             "kappa_avg_300K": float(np.trace(_tensor(voigt[j])) / 3.0),
         }
+    # [0063] 胞高（Å，phono3py 归一用的整胞高度）：2D 取 h_perp=V/A，3D 取 |c|。
+    # S8.3 output 用它和 ke 的 c 比对、按片热导守恒换算 κ_L（[0062]）；没有这个字段
+    # 那道闸门会静默跳过（以前只有手填才带 Lz，kl 结果里没有）。
+    lz = None
+    g2d = cfg.get("kappa_2d_norm") or {}
+    try:
+        if g2d.get("h_perp_A"):
+            lz = float(g2d["h_perp_A"])
+        elif cell is not None:
+            lz = float(np.linalg.norm(np.asarray(cell, float)[2]))
+    except Exception:
+        lz = None
     return {
+        "Lz_ang": lz,
         "KAPPA_DONE": True,
         "solver": "phono3py",
         "bte_method": str(cfg.get("bte_method") or "rta"),
@@ -287,7 +300,8 @@ def _run_bte(out, yaml_name, fc2, fc3, cfg, source_fc, write_kappa, spec=None):
         is_isotope=bool(cfg.get("isotope", True)),
         write_kappa=write_kappa, log_level=1)
     s = _summary(ph3.thermal_conductivity, cfg, source_fc,
-                 mesh=" ".join(str(x) for x in mesh))
+                 mesh=" ".join(str(x) for x in mesh),
+                 cell=getattr(getattr(ph3, "unitcell", None), "cell", None))
     # "mesh" is phono3py's D_diag; for a generalized grid it is not points per
     # axis, so keep the full grid matrix and the q-point count alongside.
     s["mesh_grid_matrix"] = gm

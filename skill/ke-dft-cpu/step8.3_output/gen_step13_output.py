@@ -231,6 +231,30 @@ KL_CHAIN_DIRS  = {
 KL_CHAIN_ORDER = ("kl-dft-cpu", "kl-mlff-cpu", "kl-mlff-gpu")
 KL_ROOT        = None   # None=按 KL_CHAIN_ORDER 探测 sibling；填路径=只找该目录（配 KL_KAPPA_DIRS）
 KL_KAPPA_DIRS  = ("step6_kappa", "step6_kappa_shengbte")   # 仅 KL_ROOT 手填时用
+# [0063] step.conf 可覆盖（项目级 templates/step.conf）：KL_ROOT 指向 kl 材料目录，
+#   KL_KAPPA_DIRS 用逗号分隔（如 "step6_kappa,step6_kappa_shengbte"）。
+SPEC = {
+    "KL_ROOT": (None, "str"),
+    "KL_KAPPA_DIRS": (None, "str"),
+}
+STEP = "step8.3_output"
+
+
+def _apply_conf(cwd):
+    """读 tf 推来的 step.conf 覆盖 KL_ROOT / KL_KAPPA_DIRS（没有 step.conf 不动）。"""
+    global KL_ROOT, KL_KAPPA_DIRS
+    if not (Path(cwd) / "step.conf").is_file():
+        return
+    try:
+        import stepconf
+    except ImportError:
+        print("[WARN] 有 step.conf 但没有 stepconf.py：KL_ROOT 覆盖未生效")
+        return
+    p = stepconf.load(SPEC, STEP, str(cwd), strict=False)
+    if p.get("KL_ROOT"):
+        KL_ROOT = str(p["KL_ROOT"])
+    if p.get("KL_KAPPA_DIRS"):
+        KL_KAPPA_DIRS = tuple(x.strip() for x in str(p["KL_KAPPA_DIRS"]).split(",") if x.strip())
 # 手填值（W/mK，元胞口径）。非 None 时优先于 auto。
 KAPPA_L_XX_W_MK = None
 KAPPA_L_YY_W_MK = None
@@ -742,6 +766,18 @@ def _interp_T(temps, vals, T):
     return ys[-1]
 
 
+def _cell_c_from_poscar(p):
+    """读结构胞高（第三条晶格矢量长度，Å）；读不到返回 None。[0063] 旧 kl 结果没有
+    Lz_ang 字段时用它兜底（KL_ROOT 指向的 kl 材料目录下应有 POSCAR）。"""
+    try:
+        ls = Path(p).read_text(errors="ignore").splitlines()
+        scale = float(ls[1].split()[0])
+        c = [float(x) for x in ls[4].split()[:3]]
+        return math.sqrt(sum(x * x for x in c)) * scale
+    except Exception:
+        return None
+
+
 def _find_kl_kappa(cwd):
     """多链探测 kl 的 kappa_summary.json。返回 (src, root) 或 (None, root)。"""
     if KL_ROOT:
@@ -809,6 +845,10 @@ def resolve_kappa_L(cwd):
     rec = (_load_json(Path(cwd) / AMSET_DIR / "2d_correction.json")
            or _load_json(Path(cwd) / AMSET2D_DIR / "2d_correction.json") or {})
     Lz, cA = j.get("Lz_ang"), rec.get("cell_c_A")
+    if not Lz:                      # [0063] 旧 kl 结果无 Lz_ang：退回读 KL_ROOT 下的 kl 结构
+        Lz = _cell_c_from_poscar(Path(root) / "POSCAR")
+        if Lz:
+            lines.append("  [Lz] kappa_summary.json 无 Lz_ang，改读 kl 结构 POSCAR：Lz=%.4f Å" % Lz)
     if Lz and cA:
         dc = abs(float(Lz) - float(cA)) / float(cA) * 100
         tag = "一致" if dc <= 1.0 else "★不一致★"
@@ -4142,6 +4182,7 @@ def metal_not_applicable(cwd):
 
 def main():
     cwd = Path.cwd()
+    _apply_conf(cwd)                              # [0063] KL_ROOT/KL_KAPPA_DIRS
     metal_not_applicable(cwd)                     # [metal_mode] 金属先退，别走到"读不到结果"那步
     out = cwd / OUTDIR_NAME
     out.mkdir(exist_ok=True)
