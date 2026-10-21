@@ -94,7 +94,7 @@ def _hex_C(C11=130.0, C12=30.0):
     return C
 
 
-def dkk(L, M, N):
+def dkk(L, M, N, h2m=H2M):
     def H(k):
         k = np.asarray(k, float)
         out = np.zeros((3, 3))
@@ -103,7 +103,7 @@ def dkk(L, M, N):
             for j in range(3):
                 if i != j:
                     out[i, j] = N * k[i] * k[j]
-        return H2M * out
+        return h2m * out
     return H
 
 
@@ -118,10 +118,10 @@ def bir_pikus(l, m, n):
     return Y
 
 
-def e_doublet(al, be):
+def e_doublet(al, be, h2m=H2M):
     def H(k):
         kx, ky = k[0], k[1]
-        return H2M * (al * (kx * kx + ky * ky) * np.eye(2)
+        return h2m * (al * (kx * kx + ky * ky) * np.eye(2)
                       + be * np.array([[kx * kx - ky * ky, 2 * kx * ky], [2 * kx * ky, ky * ky - kx * kx]]))
     return H
 
@@ -600,10 +600,10 @@ def _write_h5(sy, run):
         f.attrs["dp_offdiag"] = "tensor"
 
 
-def _prep_run(tmp_path, monkeypatch, files, record_name, record):
+def _prep_run(tmp_path, monkeypatch, files, record_name, record, stubs=None):
     run = tmp_path / "run"
     run.mkdir()
-    for rel, txt in _STUBS.items():
+    for rel, txt in dict(_STUBS, **(stubs or {})).items():
         (run / rel).parent.mkdir(parents=True, exist_ok=True)
         (run / rel).write_text(txt)
     for f in files:
@@ -825,3 +825,164 @@ def test_s83_summary_lines(tmp_path):
     lines = g13._adp_degen_lines(tmp_path)
     assert any("S8（自旋 up）：空穴谷" in x and "1.90/3.30/2.20" in x for x in lines)
     assert any("另有 1 个谷不修正" in x for x in lines) and any("S8.4（自旋 up）：不适用" in x for x in lines)
+
+
+# ---------------------------------------------------------------------------
+# [0061-p] 逐对替换矩阵元：在 AMSET 的四面体积分里换子空间内 (初态, 末态) 的矩阵元
+# ---------------------------------------------------------------------------
+BOHR = 0.529177210903
+H2M_BOHR = 13.605693122994                      # ħ²/2m_e（eV·bohr²）：AMSET 运行期 k 用 bohr⁻¹
+
+
+@pytest.mark.parametrize("case", ["si3d", "hex2d"])
+def test_pairwise_matches_ratio_table(case, monkeypatch):
+    """同一组等能面末态上：Σ_末态 F_full·w·(1 − v·v′/|v|²) ÷ Σ AMSET 写法·重叠·w·(…) 必须等于比值表（两条路独立实现，
+    同一口径：|固定分数坐标形变势| + m_e v⊗v、动量弛豫因子）。运行期单位：k 用 bohr⁻¹、速度原子单位、能量 Hartree。"""
+    if case == "si3d":
+        B = SI_B * BOHR
+        Hm, Ym, d, dim, ops, C = dkk(*KP_SI, h2m=H2M_BOHR), bir_pikus(*BP_SI), 3, 3, _oh(), _cubic_C()
+        sy = Synth(B, ops, Hm, Ym, d, n=12, m=8, nd=16)
+    else:
+        B = hex_B() * BOHR
+        Hm, Ym, d, dim, ops, C = e_doublet(-2.0, 0.8, h2m=H2M_BOHR), y_doublet(-3.0, 2.5, 0.5), 2, 2, _d6h(), _hex_C()
+        sy = Synth(B, ops, Hm, Ym, d, n=18, m=12, nd=24, dim=2)
+    tab, rep = ad.setup(sy.kf, sy.E, sy.coeff_fn, sy.d, B, sy.ops, C, sy.sign_h5, sy.amp_h5,
+                        dense=(sy.dense_kf, sy.dense_E), dim=dim, nang=24, kunit="bohr")
+    assert rep["status"] == "ok"
+    v = tab["valleys"][0]
+    bi = next(i for i, b in enumerate(v["blocks"]) if len(b) == d)
+    mb = v["block_models"][bi]
+    Y = ad.tensor_Y(v["Z"], dim)
+    E = 0.02
+    nang = 24
+    tt = ad.rate_ratio_table(mb, Y, C, -1, [E], nang, kunit="bohr")
+    dirs = ad.directions(nang, dim)
+    ts = np.linspace(0.0, mb["rmax"], ad.NT + 1)
+    eps = (-np.linalg.eigvalsh(ad.model_H(mb, dirs[:, None, :] * ts[None, :, None])))[..., ::-1]
+    t, ok = ad._crossings(eps, ts, E)
+    kk, cc, ww, ok = ad._ray_states(mb, dirs, t, ok, E, -1, mb["rmax"])
+    states = np.argwhere(ok)
+    kf, cf, wf = kk[ok], cc[ok], ww[ok]
+    g = np.real(np.einsum("fa,fxab,fb->fx", cf.conj(), ad.model_dH(mb, kf), cf))      # ∇E（eV·bohr）
+    bands_e = [v["bands"][d - 1 - r] for _i, r in states]                             # 载流子序 -> AMSET 带号
+    monkeypatch.setitem(ad._PAIR, "ok", True)
+    Binv = np.linalg.inv(B)
+    for n0 in (0, len(kf) // 3, len(kf) - 1):
+        i0, r0 = states[n0]
+        sel = np.arange(len(kf)) != n0
+        sel &= np.linalg.norm(kf - kf[n0], axis=1) > 1e-9
+        q = (kf - kf[n0])[sel]
+        ov = (cf.conj() @ cf[n0])[sel]
+        monkeypatch.setattr(ad, "_CTX", {"qpoints": q, "mapping": np.arange(len(q)),
+                                         "tet_bands": np.array(bands_e)[sel], "tet_overlap": np.abs(ov) ** 2})
+        vel = g[n0] / ad.HARTREE_EV
+        nq2 = np.sum(q ** 2, axis=1)
+        res = ad.pair_factor(tab, bands_e[n0], kf[n0] @ Binv, q / np.sqrt(nq2)[:, None], nq2, C, vel)
+        assert res is not None and len(res[0]) == len(q) and np.allclose(res[3], 1.0)  # 全在子空间、都在过渡区以内
+        idx, F, ovl, _w = res
+        qh = q / np.sqrt(nq2)[:, None]
+        Cl, U = ad.acoustic_modes(C, qh, dim)
+        Es = 0.5 * (np.einsum("fi,fjl->flij", qh, U) + np.einsum("fj,fil->flij", qh, U))
+        D0 = np.real(np.einsum("a,xyab,b->xy", cf[n0].conj(), Y, cf[n0])) / ad.HARTREE_EV
+        T0 = 0.5 * (np.outer(kf[n0], vel) + np.outer(vel, kf[n0]))
+        f_am = np.sum(np.einsum("flij,ij->fl", Es, np.abs(D0 - T0) + np.outer(vel, vel)) ** 2 / Cl, axis=1)
+        mrta = 1.0 - (g[sel] @ g[n0]) / (g[n0] @ g[n0])
+        r_pair = np.sum(F * wf[sel] * mrta) / np.sum(f_am * ovl * wf[sel] * mrta)
+        assert r_pair == pytest.approx(tt["ratio"][0, i0, r0], rel=1e-8)
+
+
+_FAKE_TET = (
+    "import numpy as np\n"
+    "def get_cross_section_values(values, *a, average=True):\n"
+    "    values = np.asarray(values)\n"
+    "    return values.mean(axis=1) if average else values\n"
+    "class TetrahedralBandStructure:\n"
+    "    def __init__(self, **kw):\n"
+    "        self.__dict__.update(kw)\n"
+    "    def get_masks(self, spin, tetrahedra_mask):\n"
+    "        return None, None, None, None\n")
+_FAKE_CALC = (
+    "import numpy as np\n"
+    "from amset.electronic_structure.tetrahedron import get_cross_section_values\n"
+    "from amset.scattering.elastic import AcousticDeformationPotentialScattering\n"
+    "_scattering_mechanisms = {'ADP': AcousticDeformationPotentialScattering}\n"
+    "def scattering_worker(*a, **k):\n"
+    "    return 'orig'\n"
+    "def get_fine_mesh_qpoints(tbs):\n"
+    "    return tbs.qpoints, tbs.weights, tbs.mapping\n"
+    "def calculate_rate(tbs, elastic_scatterers, spin, b_idx, k_idx, velocity):\n"
+    "    # 与 AMSET 0.4.19 / 0.5.1 的 calculate_rate 同样的调用顺序（只留插件钩子用到的几步）\n"
+    "    tet_mask = (tbs.tet_bands, None)\n"
+    "    property_mask, band_kpoint_mask, band_mask, kpoint_mask = tbs.get_masks(spin, tet_mask)\n"
+    "    k = tbs.kpoints[k_idx]\n"
+    "    vert_overlap, tet_contributions = tbs.vert_overlap, ()\n"
+    "    tet_overlap = get_cross_section_values(vert_overlap, *tet_contributions)\n"
+    "    intersections = get_cross_section_values(np.zeros(vert_overlap.shape + (3,)), *tet_contributions, average=False)\n"
+    "    qpoints, weights, mapping = get_fine_mesh_qpoints(tbs)\n"
+    "    qpoint_norm_sq = np.sum(qpoints ** 2, axis=-1)\n"
+    "    unit_q = qpoints / np.sqrt(qpoint_norm_sq)[:, None]\n"
+    "    mrta_factor = tbs.mrta\n"
+    "    rates = [s.factor(unit_q, qpoint_norm_sq, spin, b_idx, k, velocity) for s in elastic_scatterers]\n"
+    "    rates = np.array(rates)\n"
+    "    rates *= tet_overlap[mapping] * weights * mrta_factor\n"
+    "    return np.sum(rates, axis=-1)\n")
+
+
+def test_plugin_3d_pairwise_in_amset_integration(si, tmp_path, monkeypatch):
+    """AMSET 形状的 calculate_rate（同样的调用顺序）：钩子记下末态带号 / 截面重叠 / 细网格映射，ADP factor 对子空间内的
+    末态返回 F_full/重叠，AMSET 再乘重叠 -> 正好是 F_full（过渡区按 w 混合）；子空间外的末态、子空间外的初态原样。"""
+    rec = {"mechanisms": [], "dp_optical": None,
+           "adp_degen": {"mode": "on", "status": "pending_runtime", "efit_eV": 0.15, "nang": 24, "pairwise": "auto",
+                         "deform_h5": "deformation.h5", "signed_h5": "deformation_signed.h5"}}
+    run = _prep_run(tmp_path, monkeypatch, [KE / "step8_amset" / "amset_dpo3d.py", S84 / "dp_optical.py",
+                                            KE / "adp_degen.py"], "dp_optical_3d.json", rec,
+                    stubs={"amset/scattering/calculate.py": _FAKE_CALC,
+                           "amset/electronic_structure/tetrahedron.py": _FAKE_TET})
+    _write_h5(si, run)
+    with redirect_stdout(io.StringIO()) as buf:
+        import amset_dpo3d as P
+        import amset.scattering.calculate as C
+        import amset.electronic_structure.tetrahedron as TT
+    assert P._PAIR_ON[0] and "逐对替换矩阵元" in buf.getvalue()
+    rt = _patch_runtime(monkeypatch, si, off=0)
+    spin, data = _amset_data(si)
+    with redirect_stdout(io.StringIO()) as buf:
+        adp = P.AcousticDeformation3DIntravalley.from_amset_data({"elastic_constant": _cubic_C()}, data)
+    assert "方式：逐对替换矩阵元" in buf.getvalue()
+    assert "逐对替换矩阵元" in json.loads((run / "adp_degen_fit.json").read_text())["method"]
+    rng = np.random.default_rng(11)
+    k0 = np.array([0.02, 0.01, 0.0])
+    near = k0 + rng.normal(size=(40, 3)) * 0.02                      # Γ 附近（rcut 以内）
+    far = rng.uniform(-0.5, 0.5, size=(10, 3))                       # 离谷远
+    kp = np.vstack([near, far])
+    bands = np.concatenate([rng.choice([1, 2, 3, 4], size=40), rng.choice([1, 2, 3], size=10)])
+    ntet = len(kp)
+    tbs = TT.TetrahedralBandStructure(
+        tet_bands=bands, vert_overlap=rng.uniform(0.05, 1.0, size=(ntet, 4)), kpoints=np.array([k0]),
+        qpoints=(kp - k0) @ SI_B, weights=rng.uniform(0.5, 1.5, ntet), mapping=np.arange(ntet),
+        mrta=rng.uniform(0.2, 1.0, ntet))
+    vel = np.array([0.01, -0.02, 0.005])
+    for b0, inside in ((3, True), (4, False)):
+        got = C.calculate_rate(tbs, [adp], spin, b0, 0, vel)
+        ovl = tbs.vert_overlap.mean(axis=1)
+        base = ovl * tbs.weights * tbs.mrta
+        res = rt.pair_factor(adp._degen["up"], b0, k0, tbs.qpoints / np.linalg.norm(tbs.qpoints, axis=1)[:, None],
+                             np.sum(tbs.qpoints ** 2, axis=1), np.asarray(adp.elastic_constant, float), vel)
+        if not inside:
+            assert res is None and got[0] == pytest.approx(np.sum(base))
+            continue
+        idx, F, ov, w = res
+        assert 0 < len(idx) < 40 and np.all(idx < 40) and np.allclose(ov, ovl[idx])   # 带 4、远处的末态不换
+        exp = base.copy()
+        exp[idx] = (w * F + (1 - w) * ovl[idx]) * tbs.weights[idx] * tbs.mrta[idx]
+        assert got[0] == pytest.approx(np.sum(exp), rel=1e-10)
+        assert np.sum(exp) != pytest.approx(np.sum(base), rel=1e-3)
+
+
+def test_plugin_2d_pairwise_source_wiring():
+    src = (S84 / "amset2d_plugin.py").read_text(encoding="utf-8")
+    i = src.index("class AcousticDeformation2D(_ADP)")
+    adp = src[i:src.index("# ---------------- ODP / IVS", i)]
+    assert "_AD.pair_apply(f, _AD.pair_factor(" in adp and "d_scale=_ADP_D_SCALE" in adp
+    assert "or _PAIR_ON[0]:" in adp                                    # 逐对模式不再乘比值
+    assert "_PAIR_ON[0], _why_pair = _AD_pair.install_pair_hooks()" in src

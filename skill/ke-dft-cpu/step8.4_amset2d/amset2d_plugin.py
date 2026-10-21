@@ -89,6 +89,7 @@ _DEGEN_REC = _REC.get("adp_degen") or {}
 _DEGEN_ON = (str(_DEGEN_REC.get("mode") or "off").lower() in ("auto", "on")
              and _DEGEN_REC.get("status") == "pending_runtime")
 _DEGEN_REPORT = "adp_degen_fit.json"
+_PAIR_ON = [False]                # [0061-p] 逐对替换矩阵元（钩子装上才开；record 的 pairwise = "off" 退回按初态比值）
 
 
 def _degen_setup(amset_data, adp):
@@ -245,7 +246,7 @@ class AcousticDeformation2D(_ADP):
                 kp = q @ ivm["rinv"] + np.asarray(kpoint, float)
                 keep = _DPO.same_member(kpoint, kp, centers, ivm["rlat"])
         tabs = getattr(self, "_degen", None)
-        if not tabs or kpoint is None:
+        if not tabs or kpoint is None or _PAIR_ON[0]:                  # 逐对模式：不乘比值（factor 里换矩阵元）
             return keep
         import adp_degen as _AD
         s = _AD.scale(tabs.get(getattr(spin, "name", spin)), band_idx, kpoint)
@@ -256,7 +257,14 @@ class AcousticDeformation2D(_ADP):
     def factor(self, unit_q, norm_q_sq, spin, band_idx, kpoint, velocity):
         f = self._factor_core(unit_q, norm_q_sq, spin, band_idx, kpoint, velocity)
         keep = self._iv_keep(unit_q, norm_q_sq, spin, band_idx, kpoint)
-        return f if keep is None else f * keep
+        f = f if keep is None else f * keep
+        tabs = getattr(self, "_degen", None)
+        if _PAIR_ON[0] and tabs and kpoint is not None:                 # [0061-p] 子空间内的末态换完整矩阵元（面内两支）
+            import adp_degen as _AD
+            f = _AD.pair_apply(f, _AD.pair_factor(tabs.get(getattr(spin, "name", spin)), band_idx, kpoint, unit_q,
+                                                  norm_q_sq, np.asarray(self.elastic_constant, float), velocity,
+                                                  d_scale=_ADP_D_SCALE))
+        return f
 
     def _factor_core(self, unit_q, norm_q_sq, spin, band_idx, kpoint, velocity):
         # （amset_ir_fix 的 ADP 星平均对本方法做旋转平均，谷内掩码在平均之后按未旋转的 q 乘）
@@ -591,9 +599,15 @@ _BANNER = ("[amset2d] amset %s | c=%.3f A | r_inf=%s | mechanisms=%s"
            % (amset.__version__, _C / A2B, np.round(_r_tensor("eps_inf_slab").tolist(), 3),
               ",".join(_ACTIVE)))
 print(_BANNER, flush=True)
+if _DEGEN_ON and str(_DEGEN_REC.get("pairwise") or "auto").lower() != "off":    # [0061-p] 子进程导入时也装钩子
+    import adp_degen as _AD_pair
+    _PAIR_ON[0], _why_pair = _AD_pair.install_pair_hooks()
+    if not _PAIR_ON[0]:
+        print("[amset2d][WARN] ADP 简并修正：逐对替换矩阵元不可用（%s），退回按初态乘比值" % _why_pair, flush=True)
 if _DEGEN_REC:
-    print("[amset2d] ADP 简并修正（[0061]）：%s" % (("开（%s，运行期拟合）" % _DEGEN_REC.get("mode")) if _DEGEN_ON
-                                                else "关（%s）" % _DEGEN_REC.get("status")), flush=True)
+    print("[amset2d] ADP 简并修正（[0061]）：%s" % (
+        ("开（%s，运行期拟合，%s）" % (_DEGEN_REC.get("mode"), "逐对替换矩阵元" if _PAIR_ON[0] else "按初态比值"))
+        if _DEGEN_ON else "关（%s）" % _DEGEN_REC.get("status")), flush=True)
 if _DPO_REC and ({"ODP", "IVS"} & set(_ACTIVE) or any((_DPO_REC.get("adp_intravalley") or {}).values())):
     _need_dpo()
     _ivf = _DPO_REC.get("adp_intravalley") or {}

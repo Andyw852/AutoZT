@@ -14,6 +14,20 @@ This project adheres to Semantic Versioning; versions before 1.0.0 are developme
 
 ## [Unreleased]
 
+### Changed (2026-10-21: [0061-p] ADP_DEGEN replaces matrix elements pairwise inside AMSET's integration)
+- Default (`ADP_DEGEN_PAIR = auto`): instead of scaling each initial state's ADP rate by a model-computed ratio, the
+  plugins hook three intermediates of AMSET's `calculate_rate` (identical in 0.4.19 and 0.5.1): `tbs.get_masks` (final
+  band per tetrahedron), the cross-section overlap from `get_cross_section_values`, and `get_fine_mesh_qpoints` (q-point
+  → tetrahedron mapping). For (initial, final) pairs inside the degenerate subspace, ADP's `factor()` returns
+  F_full / AMSET's own overlap at that point. AMSET multiplies by exactly that overlap, so the full matrix element
+  remains. Tetrahedron weights, momentum-relaxation factors, DOS and the final-state set are AMSET's own.
+- Falls back to the per-initial-state ratio when the source structure does not match, or with `ADP_DEGEN_PAIR = off`.
+  `adp_degen_fit.json` records the `method`.
+- Fixed: the ratio table's m_e v⊗v term assumed Å; AMSET's runtime reciprocal lattice is in bohr (`kunit`).
+- Tests: pairwise and ratio paths agree to 1e-8 on the same final states (3D Si, 2D doublet), and a sign error in the
+  kinetic term breaks it. An AMSET-shaped `calculate_rate` checks the hooks, the exact overlap cancellation and the
+  untouched out-of-subspace states.
+
 ### Changed (2026-10-21: [0061-g] ADP_DEGEN generalized; 2D support)
 - The ADP interband correction no longer assumes a cubic Γ triplet. `adp_degen.py` now finds band-edge valleys
   (local extrema of the edge band on the full DFT mesh, grouped into stars by point group + time reversal; holes and

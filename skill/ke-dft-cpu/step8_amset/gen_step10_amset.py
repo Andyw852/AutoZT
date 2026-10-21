@@ -231,6 +231,7 @@ ADP_DEGEN = "auto"
 ADP_DEGEN_EFIT = 0.15
 ADP_DEGEN_NANG = None
 ADP_DEGEN_MODULE = "adp_degen.py"
+ADP_DEGEN_PAIR = "auto"            # [0061-p] auto：在 AMSET 的四面体积分里逐对换矩阵元；off：按初态乘比值
 # [0038] 三维本征后处理：WRITE_MESH 写 mesh_*.h5，作业链尾部 postprocess_intrinsic.py 去机制重积分，
 #   按 SUBSETS 出 subset_<机制>.json，供 S8.3 出多机制对照图。关掉：step.conf 写 WRITE_MESH = false。
 WRITE_MESH = True
@@ -457,6 +458,7 @@ SPEC = {
     "ADP_DEGEN": ("auto", "str"),               # [0061] 简并带边 ADP 带间修正 auto/on/off
     "ADP_DEGEN_EFIT": (None, "float"),
     "ADP_DEGEN_NANG": (None, "int"),
+    "ADP_DEGEN_PAIR": ("auto", "str"),       # [0061-p] auto = 逐对替换矩阵元（AMSET 内部对不上自动退回比值）/ off = 按初态比值
     "PIE_KERNEL": ("az", "str"),                # [0037] 三维 PIE 核 az/amset
     "PIE_SCREENING": (True, "bool"),
     # [0037] 三维本征后处理（WRITE_MESH 写 mesh，postprocess 去机制重积分出多机制对照）
@@ -2243,7 +2245,7 @@ def resolve_adp_degen_3d(is_2d, cwd, h5_name="deformation.h5"):
     signed = (h5_name[:-3] if h5_name.endswith(".h5") else h5_name) + "_signed.h5"
     rec = {"mode": mode, "efit_eV": float(ADP_DEGEN_EFIT), "nang": ADP_DEGEN_NANG,
            "deform_h5": "deformation.h5", "signed_h5": "deformation_signed.h5", "signed_src": signed,
-           "vasprun": "vasprun.xml"}
+           "vasprun": "vasprun.xml", "pairwise": _pair_mode()}
 
     def _skip(status, msg):
         if mode == "on":
@@ -2271,6 +2273,14 @@ def resolve_adp_degen_3d(is_2d, cwd, h5_name="deformation.h5"):
     print("[OK] ADP 简并修正（ADP_DEGEN = %s）：作业里按 vasprun + 波函数 + %s 拟合 k·p 与应变算符，"
           "有简并 / 近简并谷才修正，报告 adp_degen_fit.json" % (mode, signed))
     return rec
+
+
+def _pair_mode():
+    """[0061-p] ADP_DEGEN_PAIR -> "auto" / "off"。"""
+    m = str(ADP_DEGEN_PAIR or "auto").strip().lower()
+    if m not in ("auto", "off"):
+        sys.exit("[ERROR] ADP_DEGEN_PAIR=%r 无效，只允许 auto / off" % ADP_DEGEN_PAIR)
+    return m
 
 
 def _install_dp_optical_3d(out, record):
@@ -2794,6 +2804,8 @@ def main():
                 ADP_DEGEN_EFIT = float(_p["ADP_DEGEN_EFIT"])
             if _p["ADP_DEGEN_NANG"] is not None:
                 ADP_DEGEN_NANG = int(_p["ADP_DEGEN_NANG"])
+            global ADP_DEGEN_PAIR
+            ADP_DEGEN_PAIR = str(_p["ADP_DEGEN_PAIR"] or "auto")
             global DEFECT_DOPING, DEFECT_ROOT          # [0041]
             DEFECT_DOPING = str(_p["DEFECT_DOPING"] or "auto").strip().lower()
             DEFECT_ROOT = str(_p["DEFECT_ROOT"] or "")

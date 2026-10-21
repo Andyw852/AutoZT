@@ -437,6 +437,7 @@ ADP_DEGEN = "auto"
 ADP_DEGEN_EFIT = 0.15             # eV：谷的能量窗口、比值表的载流子能量上限
 ADP_DEGEN_NANG = None             # 方向网格点数（None = 模块默认：2D 96）
 ADP_DEGEN_MODULE = "adp_degen.py"
+ADP_DEGEN_PAIR = "auto"            # [0061-p] auto：在 AMSET 的四面体积分里逐对换矩阵元；off：按初态乘比值
 _ADP_DEGEN_REC = None             # resolve_adp_degen_2d() 的结果，apply_2d_corrections 落进 2d_correction.json
 
 
@@ -542,6 +543,7 @@ SPEC = {
     "ADP_DEGEN": ("auto", "str"),           # [0061] 简并带边 ADP 带间修正 auto/on/off
     "ADP_DEGEN_EFIT": (None, "float"),
     "ADP_DEGEN_NANG": (None, "int"),
+    "ADP_DEGEN_PAIR": ("auto", "str"),       # [0061-p] auto = 逐对替换矩阵元（AMSET 内部对不上自动退回比值）/ off = 按初态比值
     # 掺杂/温度范围覆盖（B4/B5 缩减设置用）：默认顶部 DOPING/TEMPERATURES；step.conf 可覆盖。
     "DOPING": (DOPING, "str"),
     "TEMPERATURES": (TEMPERATURES, "str"),
@@ -773,7 +775,7 @@ def resolve_adp_degen_2d(cwd):
     signed = h5[:-3] + "_signed.h5"
     rec = {"mode": mode, "efit_eV": float(ADP_DEGEN_EFIT), "nang": ADP_DEGEN_NANG,
            "deform_h5": "deformation.h5", "signed_h5": "deformation_signed.h5", "signed_src": signed,
-           "vasprun": "vasprun.xml"}
+           "vasprun": "vasprun.xml", "pairwise": _pair_mode()}
 
     def _skip(status, msg):
         if mode == "on":
@@ -802,6 +804,14 @@ def resolve_adp_degen_2d(cwd):
     print("[OK] ADP 简并修正（ADP_DEGEN = %s）：作业里按 vasprun + 波函数 + %s 拟合 k·p 与应变算符，"
           "有简并 / 近简并谷才修正，报告 adp_degen_fit.json" % (mode, signed))
     return rec
+
+
+def _pair_mode():
+    """[0061-p] ADP_DEGEN_PAIR -> "auto" / "off"。"""
+    m = str(ADP_DEGEN_PAIR or "auto").strip().lower()
+    if m not in ("auto", "off"):
+        sys.exit("[ERROR] ADP_DEGEN_PAIR=%r 无效，只允许 auto / off" % ADP_DEGEN_PAIR)
+    return m
 
 
 def _install_adp_degen(out):
@@ -3367,6 +3377,8 @@ def main():
                 ADP_DEGEN_EFIT = float(_p["ADP_DEGEN_EFIT"])
             if _p["ADP_DEGEN_NANG"] is not None:
                 ADP_DEGEN_NANG = int(_p["ADP_DEGEN_NANG"])
+            global ADP_DEGEN_PAIR
+            ADP_DEGEN_PAIR = str(_p["ADP_DEGEN_PAIR"] or "auto")
             # [0033] ODP / IVS 的通道表、手填谷表、ADP 谷内掩码（解析与校验在 resolve_dp_optical）
             DP_OPTICAL_E = str(_p["DP_OPTICAL_E"] or "")
             DP_OPTICAL_H = str(_p["DP_OPTICAL_H"] or "")

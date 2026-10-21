@@ -59,6 +59,9 @@ _MASK_ON = any((_DPO_REC.get("adp_intravalley") or {}).get(c) for c in _CARRIERS
 _DEGEN_REC = (_REC or {}).get("adp_degen") or {}                     # [0061]
 _DEGEN_ON = str(_DEGEN_REC.get("mode") or "off").lower() in ("auto", "on") and _DEGEN_REC.get("status") == "pending_runtime"
 _DEGEN_REPORT = "adp_degen_fit.json"
+# [0061-p] 逐对替换矩阵元（出厂）：钩子装上了就在 AMSET 的四面体积分里换子空间内 (初态, 末态) 的矩阵元；
+#   record 的 pairwise = "off" 或 AMSET 内部结构对不上时，退回按初态乘比值。
+_PAIR_ON = [False]
 
 if _REC is not None:
     try:
@@ -255,7 +258,7 @@ class AcousticDeformation3DIntravalley(_ADP):
 
     def _degen_scale(self, spin, band_idx, kpoint):
         tabs = getattr(self, "_degen", None)
-        if not tabs or kpoint is None:
+        if not tabs or kpoint is None or _PAIR_ON[0]:                  # 逐对模式：不乘比值
             return 1.0
         import adp_degen as _AD
         return _AD.scale(tabs.get(getattr(spin, "name", spin)), band_idx, kpoint)
@@ -281,7 +284,13 @@ class AcousticDeformation3DIntravalley(_ADP):
     def factor(self, unit_q, norm_q_sq, spin, band_idx, kpoint, velocity):
         f = self._factor_core(unit_q, norm_q_sq, spin, band_idx, kpoint, velocity)
         keep = self._iv_keep(unit_q, norm_q_sq, spin, band_idx, kpoint)
-        return f if keep is None else f * keep
+        f = f if keep is None else f * keep
+        tabs = getattr(self, "_degen", None)
+        if _PAIR_ON[0] and tabs and kpoint is not None:                 # [0061-p] 子空间内的末态换完整矩阵元
+            import adp_degen as _AD
+            f = _AD.pair_apply(f, _AD.pair_factor(tabs.get(getattr(spin, "name", spin)), band_idx, kpoint, unit_q,
+                                                  norm_q_sq, np.asarray(self.elastic_constant, float), velocity))
+        return f
 
 
 def worker(*args, **kwargs):
@@ -306,6 +315,11 @@ def _install():
         C._scattering_mechanisms[k] = classes[k]
     if _MECHS:
         _install_fill_keep_dpo()
+    if _DEGEN_ON and str(_DEGEN_REC.get("pairwise") or "auto").lower() != "off":
+        import adp_degen as _AD
+        _PAIR_ON[0], _why = _AD.install_pair_hooks()
+        if not _PAIR_ON[0]:
+            print("%s[WARN] ADP 简并修正：逐对替换矩阵元不可用（%s），退回按初态乘比值" % (_TAG, _why), flush=True)
     if _MASK_ON or _DEGEN_ON:
         C._scattering_mechanisms["ADP"] = AcousticDeformation3DIntravalley
         C.AcousticDeformationPotentialScattering = AcousticDeformation3DIntravalley   # worker 用此名重建 ADP
@@ -316,7 +330,8 @@ def _install():
     print("%s amset %s | 三维常数形变势 %s：%s | ADP 谷内掩码：电子 %s，空穴 %s | ADP 简并修正：%s"
           % (_TAG, amset.__version__, ",".join(_MECHS) or "（无）", _DPO.describe(_DPO_REC) if _DPO_REC else "—",
              "开" if ivf.get("electron") else "关", "开" if ivf.get("hole") else "关",
-             ("开（%s，运行期拟合）" % _DEGEN_REC.get("mode")) if _DEGEN_ON else "关"), flush=True)
+             ("开（%s，运行期拟合，%s）" % (_DEGEN_REC.get("mode"), "逐对替换矩阵元" if _PAIR_ON[0] else "按初态比值"))
+              if _DEGEN_ON else "关"), flush=True)
 
 
 if not getattr(C, "_az_dpo3d", False):
