@@ -53,7 +53,7 @@ AMSET_DIR   = "step8_amset"            # 读 2d_correction.json 拿 c/t（若有
 AMSET2D_DIR = "step8.4_amset2d"        # [0016] 2D 不跑 S8 时，c/t 与掺杂档改读 S8.4
 STEP = "step8.1_boltztrap"
 # [0016] 版本戳：写进 boltztrap_crta.json 与 paper_mu_scan_*.csv 首行（以前没有，跨材料核对只能看文件时间）
-_SKILL_REV = "2026-10-21-0062"   # [0062] 2D 自动取 κ_L：kl/ke 胞高不同时 ×Lz/c 换到 ke 元胞口径（原来直接报错退出）   # 2026-10-18-0057   # [0057] 加 band_edges_rel_efermi_eV（S8.3 mu_scan 的 μ − E_VBM）；[metal_mode] 金属模式（metal_transport.json）
+_SKILL_REV = "2026-10-21-0063r1"   # [0063-r1] KL_ROOT 相对路径按 ke 技能目录、支持 ~   # 2026-10-21-0062   # [0062] 2D 自动取 κ_L：kl/ke 胞高不同时 ×Lz/c 换到 ke 元胞口径（原来直接报错退出）   # 2026-10-18-0057   # [0057] 加 band_edges_rel_efermi_eV（S8.3 mu_scan 的 μ − E_VBM）；[metal_mode] 金属模式（metal_transport.json）
 
 TEMPERATURES = [100, 200, 300, 400, 500, 600, 700, 800, 900]  # K
 # patch_mu_window：CRTA 类文献普遍把 μ 扫到带边上下 ±3 eV，ZT 峰
@@ -678,7 +678,7 @@ def _cell_c_from_poscar(p):
 def _find_kl_kappa(cwd):
     """多链探测 kl 的 kappa_summary.json。返回 (src, root) 或 (None, root)。"""
     if KL_ROOT:
-        root = Path(KL_ROOT)
+        root = Path(cwd) / Path(KL_ROOT).expanduser()   # [0063-r1] 相对路径相对 ke 技能目录；支持 ~
         for d in KL_KAPPA_DIRS:
             p = root / d / "kappa_summary.json"
             if p.is_file():

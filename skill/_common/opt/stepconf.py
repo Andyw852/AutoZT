@@ -38,7 +38,10 @@ RESERVED_PARAMS = frozenset({"BANDGAP", "CONDA_SH", "CONDA_ENV", "MACE_MODEL_DIR
                              # DEFORM_REF（2026-10-15）：ke S7 / S7.1 的形变势参考口径（auto|vacuum|core），写在材料共用 step.conf 两步同读
                              "DEFORM_REF",
                              # [0059] eph-qe-cpu ivs_dfpt 的 QE 环境：autozt 从 setting/<集群>.yaml 的 qe_bin/qe_pseudo_dir/qe_setup 注入
-                             "QE_BIN", "QE_PSEUDO_DIR", "QE_SETUP"})
+                             "QE_BIN", "QE_PSEUDO_DIR", "QE_SETUP",
+                             # [0063-r1] ke S8.1 / S8.3 自动取 κ_L 的 kl 目录（kl 在别的材料目录时），写在材料共用 step.conf 两步同读；
+                             #   不放行的话，共用 step.conf 合并进 S1 后 relax_common 严格模式直接 SystemExit
+                             "KL_ROOT", "KL_KAPPA_DIRS"})
 
 
 def _strip(line):
