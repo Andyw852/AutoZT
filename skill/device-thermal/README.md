@@ -284,7 +284,7 @@
 
 - **14 种材料**：MoS2、WS2、MoSe2、WSe2、graphene、hBN、SiO2、Si、SiC、Al2O3、HfO2、Au、Cu、Al
 - **8 组界面 TBC**：`tbc_W_m2K.<"A|B">` = `{G: W/m²K, ref: 出处}`；7 个材料对 + `default` 兜底
-- 来源：MoS2 面内 κ = 63.7 W/mK 取本仓库 `kl-dft-cpu` 实测的 **2D 物理值**（含真空胞值 21.425 × h⊥/d 2.973164）；
+- 来源：MoS2 面内 κ = 93.5 W/mK 取本仓库 `kl-dft-cpu` 实测的 **2D 物理值**（含真空胞值 25.21 × h⊥/d = 25.0/6.74，厚度 6.74 Å；FC3 截断收敛未确认，见材料库 note）；
   MoS2/SiO2 G = 14 MW/m²K 取 Yalon et al., Nano Lett. 17, 3429 (2017)。**文献值只作量级兜底**。
 
 ---
@@ -396,7 +396,7 @@ autozt -tt device-thermal -p MoS2 -j S1_spec conf
 
 ## 8. 材料库与数据来源
 
-- 默认 MoS2 面内 κ = 63.7 W/mK（2D 物理值），取自 AutoZT `kl-dft-cpu` 实测（RTA 300 K 含真空胞值 21.425 按 h⊥/d=2.973164 归一化）。
+- 默认 MoS2 面内 κ = 93.5 W/mK（2D 物理值，厚度 6.74 Å），取自 AutoZT `kl-dft-cpu` 实测（RTA 300 K、FC3 截断 5.90 Å 含真空胞值 25.21 按 h⊥/d=25.0/6.74 归一化；截断收敛未确认，6.54 Å 降到 58.6）。
 - 默认 MoS2/SiO2 TBC = 14 MW/m²K，取自 Yalon et al., Nano Lett. 17, 3429 (2017)。
 - **文献值只作量级兜底**；正式投稿请用上游实测 κ，并在文中注明口径。
 
