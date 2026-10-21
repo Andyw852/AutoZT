@@ -144,7 +144,7 @@ def kappa_recipe(conf, vdir):
         "cut3_kappa_tol_pct": float(conf["CUT3_KAPPA_TOL_PCT"]),
         "cut3_cv_1se_mult": float(conf["CUT3_CV_1SE_MULT"]),
         "cut3_stability_thr": float(conf["CUT3_STABILITY_THR"]),
-        "cut3_min_ratio": (5.0 if conf["CUT3_MIN_RATIO"] is None
+        "cut3_min_ratio": (3.0 if conf["CUT3_MIN_RATIO"] is None
                            else float(conf["CUT3_MIN_RATIO"])),
         "cut3_pick": str(conf["CUT3_PICK"]),
         "temperatures": temps, "isotope": bool(conf["ISOTOPE"]),

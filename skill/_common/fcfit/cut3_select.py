@@ -61,10 +61,10 @@ def _plateau_runs(usable, pair_ok, kappa_tol_pct, floor):
     return runs
 
 
-# 数据量门槛（方程数/参数数）。2026-10-21 用户定 3 → 5：合成数据检验（2D 5x5 超胞，
-#   36 帧、1 meV/Å 噪声）里 ratio=3.5 的档 κ 仍被噪声系统性压低 10–13%，ratio=2.2 的档
-#   压低近 40%。可用 CUT3_MIN_RATIO 覆盖。
-MIN_RATIO_DEFAULT = 5.0
+# 数据量门槛（方程数/参数数），默认 3（用户定的标准，与 kl S4 的 OVERSAMPLE=3 对齐）。
+#   可用 CUT3_MIN_RATIO 调高：合成数据检验（2D 5x5 超胞、36 帧、1 meV/Å 噪声）里
+#   ratio≈3.5 的档 κ 仍被噪声压低约 10%，ratio≈2.2 压低近 40%。
+MIN_RATIO_DEFAULT = 3.0
 
 
 def select_cutoff(records, kappa_tol_pct=5.0, se_mult=1.0, stability_thr=0.3,
@@ -72,7 +72,7 @@ def select_cutoff(records, kappa_tol_pct=5.0, se_mult=1.0, stability_thr=0.3,
     """按三判据自动选最小可行截断。records 是每个候选截断一条 dict：
 
         cut               截断 (Å)
-        ratio             方程数/参数数（< min_ratio，默认 5 = 数据不足 → 不参与）
+        ratio             方程数/参数数（< min_ratio，默认 3 = 数据不足 → 不参与）
         train_rel_err     拟合残差（★in-sample，**不是**交叉验证）：pheasy -f 在【全部帧】
                           上的 Relative error；判据①的输入
         train_rel_se      该残差在帧 bootstrap 重抽样下的标准误（1-SE 用；缺省 0）

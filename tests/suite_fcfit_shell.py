@@ -391,17 +391,18 @@ def test_cut3_select():
             for c, k in ((4.0, 10.0), (4.5, None), (5.0, 10.1))]
     _c5, rs5 = cs.select_cutoff(miss)
     check("中间档 κ 缺失不算平台", rs5["status"] == "not_converged", rs5["status"])
-    # 数据量门槛 CUT3_MIN_RATIO（2026-10-21 由 3 提到 5）
+    # 数据量门槛 CUT3_MIN_RATIO（默认 3，可调高）
     rr = [{"cut": c, "ratio": r, "stability_measured": False, "kappa": k}
-          for c, r, k in ((4.0, 18.0, 30.0), (4.5, 8.5, 29.5), (5.0, 4.9, 29.4), (5.5, 3.5, 25.0))]
+          for c, r, k in ((4.0, 18.0, 30.0), (4.5, 8.5, 29.5), (5.0, 3.5, 29.4), (5.5, 2.2, 25.0))]
     cr1, rr1 = cs.select_cutoff(rr)
     by_r = {x["cut"]: x for x in rr1["records"]}
-    check("默认门槛 5：ratio 4.9/3.5 的档判数据不足，平台只在 4.0–4.5",
-          cr1 == 4.5 and by_r[5.0]["data_ok"] is False and by_r[5.5]["data_ok"] is False
-          and rr1["min_ratio"] == 5.0 and "方程数/参数数 < 5" in rr1["reason"],
+    check("默认门槛 3：ratio 3.5 参与、2.2 不参与，平台 4.0–5.0 取 5.0",
+          cr1 == 5.0 and by_r[5.0]["data_ok"] is True and by_r[5.5]["data_ok"] is False
+          and rr1["min_ratio"] == 3.0 and "方程数/参数数 < 3" in rr1["reason"],
           "%s %s" % (cr1, rr1["reason"]))
-    cr2, _ = cs.select_cutoff(rr, min_ratio=3.0)
-    check("CUT3_MIN_RATIO=3 时 ratio 4.9 的档重新参与（平台 4.0–5.0 取 5.0）", cr2 == 5.0, str(cr2))
+    cr2, rr2 = cs.select_cutoff(rr, min_ratio=5.0)
+    check("CUT3_MIN_RATIO=5 时 ratio 3.5 的档也被排除（平台只剩 4.0–4.5）",
+          cr2 == 4.5 and rr2["min_ratio"] == 5.0, str(cr2))
     c3, rep3 = cs.select_cutoff([dict(recs[0], ratio=1.0)])
     check("数据不足 -> no_usable_cutoff",
           c3 is None and rep3["status"] == "no_usable_cutoff", str(rep3["status"]))

@@ -715,7 +715,7 @@ def _select(out, cfg, per_cut):
         kappa_tol_pct=float(cfg.get("cut3_kappa_tol_pct") or 5.0),
         se_mult=float(cfg.get("cut3_cv_1se_mult") or 1.0),
         stability_thr=float(cfg.get("cut3_stability_thr") or 0.3),
-        # 旧 kappa_config.json 没这个键 -> 用 cut3_select 的默认（5）
+        # 旧 kappa_config.json 没这个键 -> 用 cut3_select 的默认（3）
         min_ratio=(None if cfg.get("cut3_min_ratio") is None
                    else float(cfg["cut3_min_ratio"])),
         pick=str(cfg.get("cut3_pick") or "largest"))
@@ -782,11 +782,11 @@ def _write_kappa_vs_cutoff(out, per_cut, rep=None, cfg=None):
     f2d = float(norm["kappa_2d_norm_factor"]) if norm and norm.get(
         "kappa_2d_norm_factor") else None
     flags = {round(float(r["cut"]), 3): r for r in ((rep or {}).get("records") or [])}
-    # 数据量门槛（CUT3_MIN_RATIO，默认 5）：不达标的档在图上空心点 + 灰底 + 灰色刻度标出
+    # 数据量门槛（CUT3_MIN_RATIO，默认 3）：不达标的档在图上空心点 + 灰底 + 灰色刻度标出
     _mr = (rep or {}).get("min_ratio")
     if _mr is None:
         _mr = cfg.get("cut3_min_ratio")
-    min_ratio = 5.0 if _mr is None else float(_mr)
+    min_ratio = 3.0 if _mr is None else float(_mr)
     rows = []
     for tag, s in sorted(per_cut, key=lambda x: _cut_of_tag(x[0])):
         cut = _cut_of_tag(tag)
