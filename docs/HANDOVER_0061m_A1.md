@@ -36,6 +36,7 @@
    `[adp_degen] 网格公式生效（进程 …）`，自检不过打 `[WARN] … 本进程关掉网格公式` —— 真跑时在作业输出里 grep 这两句。
 3. pymatgen 对照 WAVECAR 读法的脚本仍没进仓库（真实 VASP 样例只有 1 个 k 点的）。
 4. 合并 master：仍须用户明确同意。
+5. **S7 网格加密的验证工具**（用户 2026-10-21 要求）：`skill/ke-dft-cpu/tools/nscf_dp_check.py`。用户的本机会话在能找到 Si 的 S7（gen 过即可）的集群上 `make` -> 在每个构型目录 `sbatch submit.sh`（独立诊断作业，用户已同意）-> `analyze`。看三项：非自洽 OUTCAR 的芯能级参考、带边 D（含 Si 电子谷的静水值 Ξ_d + Ξ_u/3，xx 图样在谷星上的平均）、耗时。通过了再谈改 S7（自洽段多写 CHGCAR 不触发整批重算要照 LWAVE 的办法处理）。
 
 ## 0. 一句话
 
