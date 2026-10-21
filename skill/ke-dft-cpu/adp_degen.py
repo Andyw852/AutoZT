@@ -1029,17 +1029,22 @@ def _strain_from_grid(grid, B, k0f, model, Zq, blocks, dim, sign_h5, bands):
     info["k0_in_s7"] = j0 is not None
     info["k0_rel_res"] = None
     if j0 is not None:
+        # 简并点上 S7.1 是按能量排序后取 ±δ 中心差分：±δ 下排在同一个带号上的是不同的组合，二阶项不抵消，逐带的 S
+        #   带 O(δ·|X_远带|²/ΔE) 的污染（EPM 硅 Γ 三重态 ε_xx：逐带差 ±0.7 eV；子空间内求和只差 0.1%）。
+        #   子空间内的和与排序无关、二阶项抵消 -> 用它核对；逐带残差只作诊断（k0_rel_res_per_band）。
         S0 = np.asarray(sign_h5["S"])[np.asarray(bands, int)][:, j0]
-        ra, da = [], []
+        ra, rb, da = [], [], []
         for P in pairs(dim):
             Sm, _A = forward_k0(model["D0"], pattern_op(Z, dim, P), delta)
-            ra.append(Sm - S0[:, P[0], P[1]])
+            ra.append([np.sum(Sm) - np.sum(S0[:, P[0], P[1]])])
+            rb.append(Sm - S0[:, P[0], P[1]])
             da.append(S0[:, P[0], P[1]])
         na = float(np.linalg.norm(np.concatenate(da)))
         info["k0_rel_res"] = float(np.linalg.norm(np.concatenate(ra)) / na) if na > 0 else None
+        info["k0_rel_res_per_band"] = float(np.linalg.norm(np.concatenate(rb)) / na) if na > 0 else None
         if info["k0_rel_res"] is not None and info["k0_rel_res"] > STRAIN_REL_TOL:
-            info["status"] = ("DFT 应变算符与 k0 点的带符号形变势对不上（相对残差 %.0f%% > %.0f%%）：带号或参考能级对齐有问题"
-                              % (100 * info["k0_rel_res"], 100 * STRAIN_REL_TOL))
+            info["status"] = ("DFT 应变算符与 k0 点的带符号形变势对不上（子空间内求和的相对残差 %.0f%% > %.0f%%）：带号或参考能级"
+                              "对齐有问题" % (100 * info["k0_rel_res"], 100 * STRAIN_REL_TOL))
             return None, info
     info["status"] = "ok"
     return Z, info

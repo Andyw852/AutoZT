@@ -69,6 +69,10 @@ This project adheres to Semantic Versioning; versions before 1.0.0 are developme
   difference, < 1% on the EPM bench vs ~10% for a forward difference). `load_dft_nodes` set `efermi` from the file
   when pymatgen leaves it None with `parse_dos=False` (AMSET's `get_band_structure` raised TypeError, so ADP_DEGEN had
   silently fallen back to plain AMSET in real runs).
+- The matrix path's check at the valley centre now compares sums over the degenerate subspace. Per-band values of
+  S7.1's energy-sorted ±δ central differences carry an O(δ) second-order error at a degeneracy (EPM Si Γ, ε_xx:
+  ±0.7 eV per band, 0.1% on the sum), so the old per-band check could reject a correct DFT matrix; the per-band
+  residual is kept as a diagnostic. `tools/adp_k0_probe.py` replays both runtime checks from the three h5 files in seconds.
 - No published precedent for feeding a DFT strain-Hamiltonian matrix into AMSET's tetrahedron integration; this is
   the project's own construction.
 - Tests: `tests/test_0061m_deform_wave.py`, `test_0061m_matrix_mode.py`, `test_0061m_grid_formula.py` and
