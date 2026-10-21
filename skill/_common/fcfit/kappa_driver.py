@@ -782,6 +782,11 @@ def _write_kappa_vs_cutoff(out, per_cut, rep=None, cfg=None):
     f2d = float(norm["kappa_2d_norm_factor"]) if norm and norm.get(
         "kappa_2d_norm_factor") else None
     flags = {round(float(r["cut"]), 3): r for r in ((rep or {}).get("records") or [])}
+    # 数据量门槛（CUT3_MIN_RATIO，默认 5）：不达标的档在图上空心点 + 灰底 + 灰色刻度标出
+    _mr = (rep or {}).get("min_ratio")
+    if _mr is None:
+        _mr = cfg.get("cut3_min_ratio")
+    min_ratio = 5.0 if _mr is None else float(_mr)
     rows = []
     for tag, s in sorted(per_cut, key=lambda x: _cut_of_tag(x[0])):
         cut = _cut_of_tag(tag)
@@ -800,6 +805,10 @@ def _write_kappa_vs_cutoff(out, per_cut, rep=None, cfg=None):
                "force_rmse_relative": sr.get("force_rmse_relative"),
                "fit_rel_err": None if te is None else float(te),
                "stable_ok": f.get("stable_ok"), "plateau_ok": f.get("plateau_ok")}
+        _ratio = f.get("ratio") if f.get("ratio") is not None else sr.get("ratio")
+        row["ratio"] = None if _ratio in (None, "") else float(_ratio)
+        row["data_ok"] = (f.get("data_ok") if f.get("data_ok") is not None else
+                          (None if row["ratio"] is None else row["ratio"] >= min_ratio))
         if f2d:
             for k in ("kappa_xx", "kappa_yy", "kappa_inplane"):
                 row[k + "_2d_norm"] = None if row[k] is None else row[k] * f2d
@@ -824,7 +833,7 @@ def _write_kappa_vs_cutoff(out, per_cut, rep=None, cfg=None):
     big = max([abs(r[k] or 0.0) for r in rows for k in ("kappa_xx", "kappa_yy")] or [0])
     is_2d = bool(cfg.get("is_2d")) or (bool(rows) and all(
         abs(r["kappa_zz"] or 0.0) < 1e-3 * max(big, 1e-12) for r in rows))
-    doc = {"T_K": 300, "rows": rows, "is_2d": is_2d,
+    doc = {"T_K": 300, "rows": rows, "is_2d": is_2d, "min_ratio": min_ratio,
            "method": cfg.get("method_label"),
            "kappa_2d_norm_factor": f2d,
            "chosen_cut_A": (rep or {}).get("chosen_cut"),
@@ -875,7 +884,14 @@ def _write_kappa_vs_cutoff(out, per_cut, rep=None, cfg=None):
     else:
         ekey, elab = None, r"Force RMSE (meV $\AA^{-1}$)"
     xticks = (["%.2f\n(%d)" % (r["cut_A"], r["n_shells"]) for r in rows]
-              if rows and rows[0]["n_shells"] is not None else None)
+              if rows and rows[0]["n_shells"] is not None else
+              ["%.2f" % r["cut_A"] for r in rows])
+    low = {i for i, r in enumerate(rows) if r.get("data_ok") is False}
+    has_ratio = len(rows) > 1 and any(r.get("ratio") is not None for r in rows)
+    if has_ratio:
+        # 末行：方程数/参数数（不达标的档刻度标成灰色，见下）
+        xticks = ["%s\n%s" % (t, "" if r.get("ratio") is None else "%.2f" % r["ratio"])
+                  for t, r in zip(xticks, rows)]
     with plt.rc_context(_SCI_RC):
         _bbox = dict(boxstyle="round,pad=0.10", fc="white", ec="none", alpha=0.80)
 
@@ -911,8 +927,14 @@ def _write_kappa_vs_cutoff(out, per_cut, rep=None, cfg=None):
                 return []
             ax.plot([p[0] for p in pts], ys, color=color, lw=1.2, ls=ls, zorder=3,
                     label=label)
-            ax.plot([p[0] for p in pts], ys, ls="none", marker=marker, ms=4.5,
-                    mfc=color, mec=_INK, mew=0.6, zorder=4)
+            ok_p = [p for p in pts if p[0] not in low]
+            lo_p = [p for p in pts if p[0] in low]
+            if ok_p:
+                ax.plot([p[0] for p in ok_p], [p[1] for p in ok_p], ls="none",
+                        marker=marker, ms=4.5, mfc=color, mec=_INK, mew=0.6, zorder=4)
+            if lo_p:     # 数据量不达标：空心点
+                ax.plot([p[0] for p in lo_p], [p[1] for p in lo_p], ls="none",
+                        marker=marker, ms=4.5, mfc="white", mec=color, mew=1.0, zorder=4)
             if fmt is None:      # enough decimals to tell neighbouring values apart
                 diffs = [abs(b - a) for a, b in zip(ys, ys[1:]) if b != a]
                 dmin = min(diffs) if diffs else abs(max(ys)) or 1.0
@@ -1032,16 +1054,23 @@ def _write_kappa_vs_cutoff(out, per_cut, rep=None, cfg=None):
             if ch_idx is not None:
                 ax.axvline(float(ch_idx), color=_INK2, lw=0.7, ls=(0, (4, 2)),
                            zorder=1)
+            for i in low:
+                ax.axvspan(i - 0.5, i + 0.5, color=_INK, alpha=0.07, lw=0, zorder=0)
         panels[0].set_xlim(-0.6, len(rows) - 0.4)
         for ax in bottom_axes:
             ax.set_xlabel(r"Third-order cutoff $r_c$ ($\AA$)")
             ax.set_xticks(xpos)
             ax.set_xticklabels(xticks or ["%.2f" % x for x in xs])
             ax.tick_params(axis="x", labelsize=6.5, pad=1)
+            for i, tl in enumerate(ax.get_xticklabels()):
+                if i in low:
+                    tl.set_color("#9a9a9a")
         if is_2d:
-            fig.subplots_adjust(top=0.93, bottom=0.20, left=0.07, right=0.99)
+            fig.subplots_adjust(top=0.93, bottom=0.23 if has_ratio else 0.20,
+                                left=0.07, right=0.99)
         else:
-            fig.subplots_adjust(top=0.93, bottom=0.13, left=0.10, right=0.98)
+            fig.subplots_adjust(top=0.93, bottom=0.15 if has_ratio else 0.13,
+                                left=0.10, right=0.98)
         if doc.get("method"):
             # 方法名标注在底部说明区（图注）左上（不放面板内）
             fig.text(0.0, 0.0, doc["method"], ha="left", va="bottom",
@@ -1049,6 +1078,10 @@ def _write_kappa_vs_cutoff(out, per_cut, rep=None, cfg=None):
                      transform=fig.transFigure)
         notes = ["T = 300 K; (n) = neighbour shells within $r_c$; "
                  "bold: |change| $\\leq$ %g%%" % tol]
+        if has_ratio:
+            notes.append("bottom tick line: equations / parameters; hollow points, grey "
+                         "band: below %g (insufficient data, excluded from the cutoff "
+                         "choice)" % min_ratio)
         if len(rows) == 1:
             notes.insert(0, "single cutoff only (no cutoff scan): set CUT3_SCAN = auto "
                             "in step1_fit/step.conf to get kappa vs. cutoff")

@@ -680,6 +680,24 @@ def test_cut3_without_bootstrap_and_curve():
                   and "yy" in axes[0].get_legend().get_texts()[0].get_text()
                   and len(axes[0].get_legend().get_texts()) == 1)
 
+            # 数据量不达标的档：json 记 ratio/data_ok，图上刻度变灰 + 末行写比值
+            d3 = out / "low_ratio"
+            d3.mkdir()
+            (d3 / "cutoff_scan.json").write_text(json.dumps({"shells": [3.0, 4.0, 5.0],
+                "records": [{"cut": c, "ratio": q} for c, q in ((3.5, 12.0), (4.5, 6.0), (5.5, 4.97))]}))
+            made.clear()
+            _plt.subplots = _spy
+            try:
+                doc3 = kd._write_kappa_vs_cutoff(d3, per, {"chosen_cut": 4.5, "status": "ok",
+                                                           "min_ratio": 5.0}, {"is_2d": True})
+            finally:
+                _plt.subplots = _orig
+            tl = made[-1].axes[0].get_xticklabels()
+            check("数据量不达标：json 标 data_ok=False，刻度末行 4.97 且灰色",
+                  [r["data_ok"] for r in doc3["rows"]] == [True, True, False]
+                  and tl[2].get_text().endswith("4.97")
+                  and tl[2].get_color() == "#9a9a9a" and tl[0].get_color() != "#9a9a9a",
+                  str([(t.get_text(), t.get_color()) for t in tl]))
             # replot：不重跑 BTE，从 cut3_<tag>/kappa_summary.json + cutoff_selection.json 重画
             rp = out / "replot"
             rp.mkdir()

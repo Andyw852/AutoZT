@@ -526,7 +526,10 @@ writing `kappa_summary.json`:
   "xx .. % / yy .. %" change label per segment.  Without a normalisation factor
   the 2D figure is (a) raw + (b) RMSE.  The method name sits in the caption.
   Every point is labelled with its value and every kappa segment with its %
-  change (bold inside the plateau tolerance).  To redraw an existing run without
+  change (bold inside the plateau tolerance).  The bottom tick line gives each
+  cutoff's equations/parameters ratio; cutoffs below `CUT3_MIN_RATIO` are drawn
+  with hollow points on a grey band and grey tick labels (excluded from the
+  cutoff choice).  To redraw an existing run without
   rerunning any BTE: `cd step2_kappa && python kappa_driver.py replot` (kl-dft-cpu:
   the same inside `step6_kappa/`); it also redraws every `methods/<tag>/`.  Without a cutoff scan (e.g. the
   hiphive engine) the figure shows the single nominal cutoff, with the fit's
