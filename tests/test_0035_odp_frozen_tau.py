@@ -623,11 +623,14 @@ def test_skill_yaml_group_and_needs():
     assert {"odp_frozen.py", "tau_energy.py"} <= set(s84["gen_need"])
     for s in (s72, s821):
         assert (KE / s["src"] / s["gen"]).is_file()
-    gens = []
-    for grp in sk["optional_steps"].values():
-        gens += [str(s["gen"]).split()[0] for s in (grp or {}).get("steps") or [] if s.get("gen")]
-    gens += [str(s["gen"]).split()[0] for s in sk["steps"] if s.get("gen")]
-    assert len(gens) == len(set(gens))                                   # gen 都推到材料根目录：不许重名
+    gens = {}
+    for grp in list(sk["optional_steps"].values()) + [{"steps": sk["steps"]}]:
+        for s in (grp or {}).get("steps") or []:
+            if s.get("gen"):
+                gens.setdefault(str(s["gen"]).split()[0], set()).add(s.get("src"))
+    # gen 都推到材料根目录：同名必须是同一份文件（同 src）。多步共用一个脚本、只是参数不同
+    # （S2.28_hsescf / S2.3_hse 都用 step2.3_hse/gen_step4_HSE.py）不会互相覆盖，允许。
+    assert all(len(v) == 1 for v in gens.values()), {k: v for k, v in gens.items() if len(v) > 1}
 
 
 def test_ke_common_tables(kc):
