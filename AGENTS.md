@@ -384,3 +384,9 @@ project_setting/setting.yaml 的 work_dir   ← 最高，autozt hpc 不会改它
 1. **本仓库（AutoZT-v2.0）会话产生的临时文件一律放 `tmp/`**（仓库根目录下，已被 .gitignore 忽略，不污染 git）：调试/一次性脚本（probe/poll/scratch/冒烟测试等）、会话内导出、下载文件、临时日志等，**禁止散落仓库根目录或其它目录**。
 2. `tmp/` 是临时区，内容可随时清空；正式产物、模型文件、需长期留存的备份不放这里。确需留底的临时物按日期归档到 `tmp/_archive_<YYYYMMDD>/`（例：2026-09-05 把根目录旧调试残留归档到了 `tmp/_archive_20260905/`）。
 3. 发现旧会话遗留的根目录调试残留（poll_*/scratch_*/CONTROL.*/一次性 probe 脚本等）时，主动归档进 `tmp/_archive_<日期>/` 或删除，不让它们堆回根目录。
+
+### 十一.4 临时进程纪律（2026-10-21 user 定，自动兜底）
+
+1. **远程后台进程必须自限时**：在超算上用 `nohup ... &` 跑临时诊断脚本时，命令要带 `timeout`（或流程结束立即 `kill`），并在离开前确认已回收。ssh 断开的孤儿进程会长期空转占核——2026-10-20 一个 `/tmp` 下的诊断脚本（`diag_imag.py`）空转 17 小时、累计约 244 核·小时。
+2. **自动兜底**：`scripts/reap_stale_procs.py` 由 `monitor.sh` 第 3 步与 crontab 每 10 分钟自动运行，只回收【本人、PPID=1、命令行指向 `/tmp` 下 `.py`、存活 ≥12h、不在白名单】的进程；杀前在远端用 `ps` 复核 PID 命令行一致，防 PID 复用误杀。手动检查：`python3 scripts/reap_stale_procs.py`（默认 dry-run 只报告），加 `--kill` 才真正回收；日志追加在 `tmp/reap_stale_procs.log`。
+3. **不要**用宽泛的 `pkill -f python` 之类清理；一律走上述脚本，避免误伤其它会话/用户的作业。
