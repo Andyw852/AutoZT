@@ -6,6 +6,7 @@
   · EPM 端到端：S7 写 WAVECAR -> extract -> build -> StrainGrid，Γ 点价带顶三重态的 Bᴴ D̂ B 与精确 ∂H/∂ε 对上；
     AMSET 系数用了另一个倒格矢表示时 _grid_shift 认得出来；matrix_grid 的对齐与带号错位时拒绝。
 """
+import json
 import sys
 from pathlib import Path
 
@@ -192,3 +193,51 @@ def test_epm_matrix_grid_alignment(epm, tmp_path):
     # ibands 说带轴从 DFT 带 1 开始（错位一条）：以 ibands 为准、离散度变大 -> 拒绝
     bad, info2 = ad.matrix_grid(out, "up", dict(sgn, ibands=np.arange(1, NB + 1)), 0, gpts)
     assert bad is None and info2["band_offset"] == 1 and "band_offset_note" in info2
+
+
+# ---------------------------------------------------------------------------
+# AMSET 的 bandgap / scissor（Si 实跑 2026-10-22：Δ = 0.628 eV，价带顶差 0.314 eV 被误判成"带号对不上"）
+# ---------------------------------------------------------------------------
+def test_undo_scissor():
+    rng = np.random.default_rng(0)
+    En = np.sort(rng.normal(size=(6, 40)), axis=0)
+    En[:3] -= 2.0
+    En[3:] += 2.0
+    Ea = En.copy()
+    Ea[:3] -= 0.314
+    Ea[3:] += 0.314
+    back, d = ad.undo_scissor(En, Ea, 2)
+    assert d == pytest.approx(0.628) and np.allclose(back, En)
+    back, d = ad.undo_scissor(En, En, 2)
+    assert d == pytest.approx(0.0) and np.allclose(back, En)
+    with pytest.raises(ValueError, match="带号对不上"):               # 真的错一条带：不是一对 ±Δ/2
+        ad.undo_scissor(En, np.roll(Ea, 1, axis=0), 2)
+
+
+def test_runtime_tables_with_scissor(si, tmp_path, monkeypatch):
+    """AMSET 的能带被剪刀挪过（价带 −Δ/2、导带 +Δ/2）：照常出修正表，与不挪时一致，报告记下 Δ。"""
+    import io
+    from contextlib import redirect_stdout
+    T._write_h5(si, tmp_path)
+    monkeypatch.setattr(ad, "load_dft_nodes", lambda path="vasprun.xml", symprec=0.01: {
+        "kpoints": si.kf, "E": {"up": si.E}, "vb": {"up": si.d}})
+    monkeypatch.setattr(ad, "point_rotations", lambda structure, symprec=0.01: si.ops)
+    rec = {"mode": "on", "efit_eV": 0.15, "nang": 24, "signed_h5": str(tmp_path / "deformation_signed.h5"),
+           "deform_h5": str(tmp_path / "deformation.h5")}
+    out = {}
+    for scis in (0.0, 0.628):
+        spin, data = T._amset_data(si)
+        E = si.dense_E.copy()
+        E[:si.d + 1] -= scis / 2
+        E[si.d + 1:] += scis / 2
+        data.energies = {spin: E / ad.HARTREE_EV}
+        rep = tmp_path / ("r%.3f.json" % scis)
+        with redirect_stdout(io.StringIO()) as buf:
+            tabs = ad.runtime_tables(data, rec, T._cubic_C(), dim=3, report_path=str(rep))
+        assert tabs and "up" in tabs
+        r = json.loads(rep.read_text())["spins"]["up"]
+        assert r["status"] == "ok" and r["scissor_eV"] == pytest.approx(scis, abs=1e-6)
+        out[scis] = tabs["up"]["valleys"][0]["tables"][0]["ratio"]
+        if scis:
+            assert "剪刀 Δ = 0.628 eV" in buf.getvalue()
+    assert np.allclose(out[0.0], out[0.628])
