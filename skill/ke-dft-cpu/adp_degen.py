@@ -39,6 +39,7 @@ import numpy as np
 
 HARTREE_EV = 27.211386245988
 SQ2 = math.sqrt(2.0)
+HBAR2_2M_EV = 3.80998212       # ħ²/2m_e（eV·Å²）：m_e v⊗v = ∇E∇E / (2·ħ²/2m_e)
 WIN_EV = 0.05                  # 子空间：k0 处与带边带逐条相隔 < WIN（还要大于应变造成的能移，见 _win_eff）
 EFIT_EV = 0.15                 # 谷的能量窗口、k·p 拟合与比值表的载流子能量上限（eV）
 EFIT_STEPS = (1.0, 2.0, 4.0)   # 点不够时放宽到这些倍数
@@ -426,10 +427,17 @@ def _ray_states(model, dirs, t, ok, E, sign, rmax):
     return k, v, w, ok
 
 
-def rate_ratio_table(model, Y, C, sign, energies, nang=None, offdiag="tensor"):
-    """-> {"dirs", "E", "ratio" (nE, nd, d)}：初态（能量、方向、带）完整矩阵元总率 ÷ AMSET 写法总率。
+def rate_ratio_table(model, Y, C, sign, energies, nang=None, offdiag="tensor", amset_terms=True):
+    """-> {"dirs", "E", "ratio" (nE, nd, d)}：初态（能量、方向、带）完整矩阵元的率 ÷ AMSET 写法的率。
     带按载流子能量升序（空穴：电子能量降序）。没有这个初态（等能面不到这个方向 / 这条带）记 1。
-    Y (3,3,d,d) 张量约定；offdiag = "native" 时 AMSET 写法的非对角 |D| 取两倍（旧的 S7.1 h5）。"""
+    Y (3,3,d,d) 张量约定；offdiag = "native" 时 AMSET 写法的非对角 |D| 取两倍（旧的 S7.1 h5）。
+    amset_terms（出厂开）：两边都照 AMSET 弹性散射的实际算法 ——
+      · 末态乘动量弛豫因子 1 − v·v′/|v|²（AMSET calculate_rate 对弹性机制总是乘）；
+      · AMSET 写法的形变势是 S7 文件里固定分数坐标的值再取 |·|、加 m_e v⊗v：|Y_n − sym(δk⊗∇E_n)| + m_e v⊗v；
+        完整矩阵元 = ⟨m,k′|H_ε|n,k⟩ + ε:(m_e v⊗v − sym(δk⊗∇E))_n ⟨m,k′|n,k⟩（运动学项与 v⊗v 按初态的带内项，
+        与 AMSET 同口径；带间部分只来自应变算符）。
+    这样比值只差在"带间应变耦合"这一处，乘到 AMSET 自己的率上不引入别的口径差。amset_terms=False：两边都只用 H_ε
+    与总散射率（[0061] 首版的口径，测试用）。"""
     dim = model["dim"]
     d = np.shape(model["D0"])[0]
     nang = int(nang or NANG[dim])
@@ -450,7 +458,12 @@ def rate_ratio_table(model, Y, C, sign, energies, nang=None, offdiag="tensor"):
         idx = np.argwhere(ok)
         kf, cf, wf = k[ok], c[ok], w[ok]
         Zf = np.einsum("fa,pab->fpb", cf.conj(), Yf)                       # c_f† Y_p
-        Dall = np.real(np.einsum("fpb,fb->fp", Zf, cf)).reshape(-1, 3, 3)  # 各态的对角形变势张量
+        Dall = np.real(np.einsum("fpb,fb->fp", Zf, cf)).reshape(-1, 3, 3)  # 各态的对角形变势张量（本征）
+        if amset_terms:
+            g = np.real(np.einsum("fa,fxab,fb->fx", cf.conj(), model_dH(model, kf), cf))   # ∇E（eV·Å）
+            Tk = 0.5 * (np.einsum("fb,fa->fab", kf, g) + np.einsum("fa,fb->fab", kf, g))   # 固定分数坐标的运动学项
+            VV = np.einsum("fa,fb->fab", g, g) / (2.0 * HBAR2_2M_EV)       # m_e v⊗v = ∇E∇E/(ħ²/m_e)
+            g2 = np.einsum("fa,fa->f", g, g)
         for n0, (i0, b0) in enumerate(idx):
             q = kf - kf[n0]
             qn = np.linalg.norm(q, axis=1)
@@ -461,12 +474,19 @@ def rate_ratio_table(model, Y, C, sign, energies, nang=None, offdiag="tensor"):
             Cl, U = acoustic_modes(C, qh, dim)
             Es = 0.5 * (np.einsum("fi,fjl->flij", qh, U) + np.einsum("fj,fil->flij", qh, U))
             nb = U.shape[-1]
+            ov = cf.conj() @ cf[n0]
             amp = np.einsum("flp,fp->fl", Es.reshape(len(qh), nb, 9), Zf @ cf[n0])
-            proj = np.einsum("flij,ij->fl", Es, np.abs(Dall[n0]) * fac)
-            ovl = np.abs(cf.conj() @ cf[n0]) ** 2
             wt = (wf * sel)[:, None] / np.where(Cl > 0, Cl, np.inf)
+            if amset_terms:
+                amp = amp + np.einsum("flij,ij->fl", Es, VV[n0] - Tk[n0]) * ov[:, None]
+                Dam = np.abs(Dall[n0] - Tk[n0]) * fac + VV[n0]
+                if g2[n0] > 0:
+                    wt = wt * (1.0 - (g @ g[n0]) / g2[n0])[:, None]
+            else:
+                Dam = np.abs(Dall[n0]) * fac
+            proj = np.einsum("flij,ij->fl", Es, Dam)
             num = float(np.sum(np.abs(amp) ** 2 * wt))
-            den = float(np.sum(proj ** 2 * ovl[:, None] * wt))
+            den = float(np.sum(proj ** 2 * (np.abs(ov) ** 2)[:, None] * wt))
             ratio[ie, i0, b0] = num / den if den > 0 else 1.0
     return {"dirs": dirs, "E": np.asarray(energies, float), "ratio": ratio}
 

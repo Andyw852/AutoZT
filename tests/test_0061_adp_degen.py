@@ -9,7 +9,7 @@
   · 正交晶系近简并（劈裂 20 meV）的两条带；
   · 二维 p_z + p_x/p_y（面内 k 不耦合 -> 自动分块，只修正双重态）；
   · Kramers 对（处处简并）与不简并的谷：不修正；
-  · S7 网格太粗、符号定不住：几个解的放大系数相近取平均；
+  · S7 网格太粗、符号定不住：几个解的放大系数相近取平均，差得多不修正；
   · 远处有一条耦合的带（4×4 k·p）：三带子空间拟合只是近似，放大系数仍在 4% 以内。
 """
 import importlib.util
@@ -297,15 +297,28 @@ def test_strain_conventions_and_forward_k0():
 
 
 def test_ratio_table_matches_cubic_reference():
-    """只有静水形变势：完整矩阵元 = AMSET 写法（比值 ≡ 1）；Si：与旧版立方实现（QE 核对过约定）同一数值、与能量无关。"""
+    """只有静水形变势：完整矩阵元 = AMSET 写法（比值 ≡ 1）；Si：与旧版立方实现（QE 核对过约定）同一数值、与能量无关
+    （amset_terms=False = 首版口径：只用 H_ε、总散射率）。"""
     C = _cubic_C()
     m = true_model(dkk(*KP_SI), 3, 3, 0.5)
-    t = ad.rate_ratio_table(m, bir_pikus(1.74, 1.74, 0.0), C, -1, [0.02, 0.1], 48)
+    t = ad.rate_ratio_table(m, bir_pikus(1.74, 1.74, 0.0), C, -1, [0.02, 0.1], 48, amset_terms=False)
     assert np.allclose(t["ratio"], 1.0, atol=1e-9)
-    t = ad.rate_ratio_table(m, bir_pikus(*BP_SI), C, -1, [0.01, 0.05, 0.15], 48)
+    t = ad.rate_ratio_table(m, bir_pikus(*BP_SI), C, -1, [0.01, 0.05, 0.15], 48, amset_terms=False)
     mean = t["ratio"].mean(axis=1)
     assert np.allclose(mean, mean[0], rtol=1e-9)                     # 纯二次型：比值与能量无关
     assert np.allclose(mean[0], [1.93037739, 3.20945402, 2.26361053], rtol=1e-6)   # 旧版 rate_ratio（nang=48）
+
+
+def test_ratio_table_amset_terms():
+    """出厂口径照 AMSET 弹性散射的实际算法（动量弛豫因子、|固定分数坐标形变势| + m_e v⊗v）：只有静水时带边附近
+    仍 ≈ 1（剩下的是 AMSET 对"形变势 − 运动学项"逐分量取 |·| 的差）；Si 的放大系数与首版差几个百分点、随能量略降。"""
+    C = _cubic_C()
+    m = true_model(dkk(*KP_SI), 3, 3, 0.5)
+    t = ad.rate_ratio_table(m, bir_pikus(1.74, 1.74, 0.0), C, -1, [0.01], 48)
+    assert np.allclose(t["ratio"].mean(axis=1), 1.0, atol=0.01)
+    t = ad.rate_ratio_table(m, bir_pikus(*BP_SI), C, -1, [0.01, 0.1], 48)
+    mean = t["ratio"].mean(axis=1)
+    assert np.all(mean[1] < mean[0]) and np.allclose(mean[0], [1.93037739, 3.20945402, 2.26361053], rtol=0.08)
 
 
 def test_symmetry_helpers():
@@ -413,7 +426,7 @@ def test_setup_2d_block_decomposition():
     assert np.max(np.abs(t["ratio"] / tt["ratio"] - 1)) < 5e-3
     k = np.array([0.03, 0.01, 0.0])                                  # 带序：双重态下支、p_z、双重态上支
     f = [ad.scale(tab, b, k) for b in (1, 2, 3)]
-    assert f[0] > 1.1 and f[1] == 1.0 and f[2] > 1.0
+    assert f[0] > 1.1 and f[1] == 1.0 and f[2] > 0 and abs(f[2] - 1.0) > 0.05   # 上支也修正（动量弛豫后可 < 1）
 
 
 def test_setup_near_degenerate_orthorhombic():
@@ -457,13 +470,16 @@ def test_setup_not_needed_cases(si):
     assert tab is None and "带数" in rep["status"]
 
 
-def test_setup_ambiguous_sign_averages_close_solutions():
-    """S7 网格只有 2×2×2（Γ 附近没有别的点）：Bir–Pikus n 的符号定不住，两个解的放大系数差不多 -> 取平均并写明。"""
+def test_setup_ambiguous_sign(monkeypatch):
+    """S7 网格只有 2×2×2（Γ 附近没有别的点）：Bir–Pikus n 的符号定不住。两个解的放大系数差 15%（> AMBIG_SPREAD）
+    -> 不修正并说明要加密 S7；放宽阈值时取两解的平均并写明。"""
     sy = Synth(SI_B, _oh(), dkk(*KP_SI), bir_pikus(*BP_SI), 3, n=12, m=2, nd=24)
+    tab, rep = sy.run(_cubic_C(), nang=24)
+    assert tab is None and "分不开 2 个" in rep["valleys"][0]["status"] and "加密 S7" in rep["valleys"][0]["status"]
+    monkeypatch.setattr(ad, "AMBIG_SPREAD", 0.3)
     tab, rep = sy.run(_cubic_C(), nang=24)
     st = rep["valleys"][0]["strain"]
     assert rep["status"] == "ok" and st["ambiguous"]["n"] == 2 and "取平均" in st["pick"]
-    assert st["ambiguous"]["spread"] <= ad.AMBIG_SPREAD
     t = tab["valleys"][0]["tables"][0]
     tt = ad.rate_ratio_table(true_model(dkk(*KP_SI), 3, 3, 0.5), bir_pikus(*BP_SI), _cubic_C(), -1, t["E"], 24)
     assert np.allclose(t["ratio"].mean(axis=(0, 1)), tt["ratio"].mean(axis=(0, 1)), rtol=0.1)

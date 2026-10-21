@@ -33,6 +33,10 @@ This project adheres to Semantic Versioning; versions before 1.0.0 are developme
   matches the chosen h5 (`deformation_vac_signed.h5` for the vacuum reference). It needs real overlaps
   (`UNITY_OVERLAP = false`). The S8.3 summary covers both runs.
 - S8 no longer refuses SOC band structures.
+- The rate ratio now mirrors AMSET's elastic-rate formula on both sides: the momentum-relaxation factor
+  1 − v·v′/|v|², and the AMSET form |D(fixed fractional k)| + m_e v⊗v. The full element includes the same
+  intraband kinetic terms. Only the interband strain coupling differs. Si factors change by a few % (0.1 eV:
+  1.81/2.78/2.04 vs 1.93/3.21/2.26 before). `amset_terms=False` keeps the first-version convention for tests.
 - Validated on synthetic DFT data (known k·p + strain operator, random wavefunction gauges): cubic, SOC, 2D hexagonal
   Γ/K, orthorhombic near-degenerate, 2D p_z + p_xy blocks, remote-band coupling (≤ 4%). Matches the first cubic
   version to machine precision. Tests: `tests/test_0061_adp_degen.py` (20 tests, pure numpy).
