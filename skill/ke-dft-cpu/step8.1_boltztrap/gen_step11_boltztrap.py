@@ -52,7 +52,7 @@ AMSET_DIR   = "step8_amset"            # 读 2d_correction.json 拿 c/t（若有
 AMSET2D_DIR = "step8.4_amset2d"        # [0016] 2D 不跑 S8 时，c/t 与掺杂档改读 S8.4
 STEP = "step8.1_boltztrap"
 # [0016] 版本戳：写进 boltztrap_crta.json 与 paper_mu_scan_*.csv 首行（以前没有，跨材料核对只能看文件时间）
-_SKILL_REV = "2026-10-18-0057"   # [0057] 加 band_edges_rel_efermi_eV（S8.3 mu_scan 的 μ − E_VBM）；[metal_mode] 金属模式（metal_transport.json）
+_SKILL_REV = "2026-10-21-0062"   # [0062] 2D 自动取 κ_L：kl/ke 胞高不同时 ×Lz/c 换到 ke 元胞口径（原来直接报错退出）   # 2026-10-18-0057   # [0057] 加 band_edges_rel_efermi_eV（S8.3 mu_scan 的 μ − E_VBM）；[metal_mode] 金属模式（metal_transport.json）
 
 TEMPERATURES = [100, 200, 300, 400, 500, 600, 700, 800, 900]  # K
 # patch_mu_window：CRTA 类文献普遍把 μ 扫到带边上下 ±3 eV，ZT 峰
@@ -679,7 +679,7 @@ def _resolve_kappa_L(cwd, T, ninfo):
     """返回 (kxx, kyy, lines)。手填优先；否则读 kl 链的 kappa_summary.json。
 
     ★ 只取原始 kappa_xx_yy_zz（元胞口径），再乘 ninfo['factor_applied']，
-      保证与 σ、κ_e 用同一个 t。绝不使用 kl-dft-cpu 自己的 kappa_2d_normalized ——
+      保证与 σ、κ_e 用同一个 t。2D 两链胞高不同时先 ×Lz/c 换到 ke 的元胞（[0062]）。绝不使用 kl-dft-cpu 自己的 kappa_2d_normalized ——
       那用的是 kl-dft-cpu 的 vdW 表，未必等于 ke-dft-cpu 的 t。"""
     import json
     fac = ninfo.get("factor_applied", 1.0)
@@ -724,7 +724,16 @@ def _resolve_kappa_L(cwd, T, ninfo):
     Lz, cA = j.get("Lz_ang"), ninfo.get("cell_c_A")
     if Lz and cA:
         dc = abs(float(Lz) - float(cA)) / float(cA) * 100
-        if dc > 1.0:
+        if dc > 1.0 and ninfo.get("norm") != "cell(3D)":
+            # [0062] 2D：原始 κ 的分母是含真空的胞体积，与真空无关的是片热导 κ_raw×Lz。
+            #   两条链胞高不同（如 kl、ke 在不同材料目录各自建胞）时按片热导守恒换到
+            #   ke 的元胞口径 ×Lz/c，再套本步因子。以前这里直接 SystemExit。
+            f = float(Lz) / float(cA)
+            kxx, kyy = kxx * f, kyy * f
+            lines.append("#   [换算] 2D 胞高不同：kl-dft-cpu Lz=%.4f Å vs ke-dft-cpu c=%.4f Å（差 %.2f%%），"
+                         "按片热导守恒 ×Lz/c = %.4f 换到 ke 元胞口径：xx=%.4f yy=%.4f W/mK"
+                         % (Lz, cA, dc, f, kxx, kyy))
+        elif dc > 1.0:
             raise SystemExit(
                 "[ERROR] kl-dft-cpu 与 ke-dft-cpu 的元胞不一致：kl-dft-cpu Lz=%.4f Å，ke-dft-cpu c=%.4f Å（差 %.2f%%）。\n"
                 "        两边 step1 都是 ISIF=3 + IOPTCELL 冻结 c，同一份输入 POSCAR "
@@ -732,8 +741,9 @@ def _resolve_kappa_L(cwd, T, ninfo):
                 "        请查两个技能的 step.conf 里 CELL_POLICY / "
                 "VACUUM_AXIS_POLICY 是否被单边覆盖，或输入结构是否真的同一份。"
                 % (Lz, cA, dc))
-        lines.append("#   [闸门] 元胞一致：kl-dft-cpu Lz=%.4f Å vs ke-dft-cpu c=%.4f Å（差 %.3f%%）"
-                     % (Lz, cA, dc))
+        else:
+            lines.append("#   [闸门] 元胞一致：kl-dft-cpu Lz=%.4f Å vs ke-dft-cpu c=%.4f Å（差 %.3f%%）"
+                         % (Lz, cA, dc))
     else:
         lines.append("#   [闸门] 跳过元胞核对（kl-dft-cpu 或 ke-dft-cpu 缺 Lz/c 元数据）")
 
