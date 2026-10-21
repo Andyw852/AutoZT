@@ -61,6 +61,9 @@ tools/probe_cluster.sh <ssh别名> --test-only
 
 > 变体：集群没有 `sinfo`（PBS/SGE/LSF/裸机）→ 用 `qstat -Q` / `bqueues` / 问管理员；
 > AutoZT 的 `start` 需要 `sbatch/squeue/scancel` 语义，非 SLURM 需适配层（第 9.5 节）。
+>
+> 探测小提示：批量 `--test-only` 时每个分区之间 **sleep 1–2 s**（`tools/probe_cluster.sh` 已内置），
+> 否则可能被限流（`sbatch: request too frequently`）而把可用分区误判成不可用。
 
 ---
 
@@ -254,6 +257,27 @@ C) potcar_dir/<El>/POTCAR                   ← 解包时没建父目录的情�
 
 判据：`ssh <alias> 'python3 -c "import numpy,scipy,pymatgen,spglib,h5py;print(1)"'`。
 
+#### 7.3.1 用 `conda create -p <prefix>` 建的环境（新版 conda 没有 venv 风格 activate）
+
+AutoZT 对 **含 `/` 的 `CONDA_ENV` 按 venv 方式** 激活（`source <env>/bin/activate`）。
+新版 conda（≥4.6 之后创建的 env）**不生成 `bin/activate`**，于是激活失败、静默退回系统 python，
+表现为 `autozt check` 报"缺包"、gen 脚本 import 不到 amset/torch。
+
+修复（给这类环境补一个最小 activate shim，1 行命令）：
+
+```bash
+cat > <env>/bin/activate <<'EOF'
+_AZT_ENV="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
+export VIRTUAL_ENV="$_AZT_ENV" CONDA_PREFIX="$_AZT_ENV"
+export PATH="$_AZT_ENV/bin:$PATH"
+export LD_LIBRARY_PATH="$_AZT_ENV/lib:${LD_LIBRARY_PATH:-}"
+EOF
+chmod +x <env>/bin/activate
+```
+
+验证：`bash -c 'source <env>/bin/activate; python -V; python -c "import <关键包>"'` 用的是该环境的 python。
+（若该环境是 conda 前缀，`python -V` 应显示 env 自带的版本；`which python` 可能因 PATH 顺序不同而不同，以 `python -V`/`sys.executable` 为准。）
+
 ---
 
 ## 8. AutoZT 集群配置：`setting/<hpc>.yaml` 字段逐项
@@ -398,7 +422,15 @@ AutoZT 通过 `sbatch/squeue/scancel` 语义管理作业：
   只动指定步骤，其余留原集群；依赖产物由 AutoZT 按 needs 跨集群回传。
 - 项目级 step.conf 覆盖：`project_setting/templates/step.conf`（参数）与
   `project_setting/templates/<步骤>/step.conf`（步骤级，优先级最高）。
-- 改完**先在 `autozt list` 看 HPC 列/任务图**，再 `retry + start`。
+- 改单个参数（会写项目配置，按 AGENTS 铁律 3 先请示）：
+  `autozt -tt <技能> -p <材料> -j <步骤> conf --set params.<KEY>=<VALUE>`；
+  只读查看合并后的最终值：`autozt -tt <技能> -p <材料> -j <步骤> conf`（不带 --set）。
+- 改完**先看状态再动**：`autozt list`（HPC 列）→ `autozt -tt <技能> -p <材料> graph`（任务图：
+  每步 ✔完成/▶运行/◷排队/✖失败、等哪个上游）→ 再 `retry`/`start`。
+- **同一材料同一时间只允许一个会话操作**：`retry`/`init`/`rerun` 内部会做 `kill_if_queued`
+  （取消该材料还在排队的旧作业）；两个会话同时动，后动的一方会把先提交的作业全部 CANCELLED。
+  多人/多会话协作时用 git worktree 隔离`setting/`（各 worktree 的 `setting/*` 是独立文件），
+  或明确约定"谁在哪个材料上操作"。
 
 ---
 
@@ -415,6 +447,12 @@ AutoZT 通过 `sbatch/squeue/scancel` 语义管理作业：
 | 7 | 并行上限 | `--test-only` / 实提 2 个作业 | 不被 QOS/分区拒；同提交者作业互不影响 |
 | 8 | 清理 | `squeue -u <user>` | 0 个测试作业残留 |
 | 9 | 记录 | 写 `docs/<HPC>-DEPLOY-<date>.md` | 含实测配额/坑/验收数字 |
+
+> **`autozt check` 的 ❌ 要分两类看**：
+> - **硬缺**（技能根本跑不了）：VASP 二进制/POTCAR/核心 python 包/该技能专属 env（`amset_env`、`kl_env`…）；
+> - **可选缺**（只是某功能不可用）：面板会写"可选缺：exe:wannier90.x / py:hiphive / gpu"等，不影响主流程。
+> 每个技能用的是**哪个 env** 由 checks 报告里的 `@amset_env`/`@kl_env` 等后缀标明；报"明明装了却说缺包"时，
+> 先确认包装在了**那个** env 里，而不是 `conda_env`。
 
 ---
 
@@ -464,10 +502,29 @@ AutoZT 通过 `sbatch/squeue/scancel` 语义管理作业：
 - 集群 yaml 里通常要写 `mlff_model_dir` 之外的项目级 step.conf（`HAMGNN_DIR/UNI_MODEL/DFT_DATA/
   OPENMX_POSTPROCESS/READ_OPENMX`），因为这些是技能参数，不是集群字段。
 
-### 12.6 其它
+### 12.6 声子/拟合类（phonopy、phono3py、ALM、pheasy）
 
-- `POTCAR` 之外的赝势库（SSSP/ONCV/LDA）：按 `potcar_dir` 布局放；
-- `VASPKIT` 新版本、`phonopy/phono3py/ALM`、`pheasy`：装进对应技能环境，用 `autozt check` 暴露缺项。
+- 目标环境：集群 yaml 的 `kl_env`/`pheasy_env`（缺省同 `conda_env`）。`autozt check` 会按这些环境逐个判 import。
+- **phonopy / phono3py**：`pip install --only-binary=:all: phonopy phono3py`（有 wheel）；装完
+  `import phonopy, phono3py` 并确认 `<env>/bin/phono3py` 存在（check 的 `exe:phono3py` 要它）。
+- **ALM**：pip 上的 `alm` 是 2.4 KB 的**空包**（别装，import 必失败）。conda-forge 的 `alm`
+  只有 py3.6–3.8 的老构建（2.0.0_dev）；py3.10/3.11 的做法（实测可用）：
+  1. 从 conda-forge 取 **py311 的 linux-64 包**（`alm-2.0.0_dev.2-py311*.tar.bz2`），解包；
+  2. 把 `lib/python3.x/site-packages/alm/` 整目录拷进目标 venv 的 site-packages；
+  3. 它链 `libsymspg.so.1`：把 venv 自带 spglib 的 `libsymspg.so.2` 软链成 `.so.1`
+     （`ln -s .../spglib/lib64/libsymspg.so.2 <env>/lib/libsymspg.so.1`，扩展有 `$ORIGIN/../../..` rpath）；
+  4. `import alm` 验证。
+- **pheasy**：源码包（flat layout 的 `pyproject.toml` + console script `pheasy`）。装法：
+  `pip install wheel` 后 `pip install --no-deps --no-build-isolation .`（缺 wheel 会报
+  `invalid command 'bdist_wheel'`）；确认 `<env>/bin/pheasy --help` 可用。
+- 装完都跑一次 `autozt check --cluster <hpc>`，把仍缺的 ✅/❌ 记进部署记录。
+
+### 12.7 其它
+
+- `POTCAR` 之外的赝势库（SSSP/ONCV/LDA）：按 `potcar_dir` 布局放（第 7.1 节三种布局）；
+- `VASPKIT` 新版本、其它分析工具：装进对应技能环境，用 `autozt check` 暴露缺项；
+- **大文件（模型/数据/源码包）下载策略**：先在本机/快节点下载再 `scp` 上传，常比集群直连外网快
+  数倍（实测：Zenodo 900 MB 直连集群极慢，本机 72 s 下完再传）；上传前 `ls -lh` 校验大小。
 
 ---
 
@@ -483,9 +540,11 @@ AutoZT 通过 `sbatch/squeue/scancel` 语义管理作业：
 | `undefined symbol: dgegv_` | LAPACK≥3.8 删了老接口 | 补 `dgegv.f/dggsvd.f` 进源码（netlib） |
 | VASP 一启动就 `I REFUSE TO CONTINUE` | POSCAR 未更新/结构不一致 | 检查 push 的 POSCAR 与本地一致（AutoZT 有 sha 校验） |
 | vaspkit 不生成 POTCAR | `~/.vaspkit` 用了 `KEY = VALUE` | 改空格分隔；或检查 `PBE_PATH` 指向元素目录的父级 |
-| `autozt check` 说缺 python 包但明明装了 | 检查的是**非交互** PATH/指定环境 | 用 venv 绝对路径/软链到 PATH；或检查 yaml 的 `conda_env` |
+| `autozt check` 说缺 python 包但明明装了 | ① 检查的是**非交互** PATH；② 技能实际用的是 `amset_env`/`kl_env` 而不是 `conda_env`；③ 是 `conda create -p` 的环境但**缺 `bin/activate`**，激活静默失败 | 分别按第 2.3 节、第 11 节的 env 后缀说明、第 7.3.1 节的 activate shim 处理 |
+| `conda create` 被杀（exit 137）/ 求解极慢 | 求解器内存超限 / 索引网络慢 | 改 `micromamba` 或 `--solver=libmamba`；或直接取 conda 包解包；加国内镜像 |
+| `sbatch: request too frequently` | 短时间批量提交/探测被限流 | 提交/探测之间 sleep 1–2 s，分批做 |
 | 远端采集 `Connection closed` / `timeout` | 跳板/代理/ControlMaster 失效 | 重建连接（`ssh -O exit`）；检查跳板密钥有效期 |
-| 两个会话互相杀作业 | 同一材料被两个 autozt 会话 retry/start | **一个材料同一时间只留一个会话操作**；用 `step_hpc`/worktree 隔离 |
+| 两个会话互相杀作业 | 同一材料被两个 autozt 会话 retry/init（内部 `kill_if_queued` 会取消排队中的旧作业） | **一个材料同一时间只留一个会话**；用 worktree 隔离 `setting/`；操作前先 `autozt graph` 看谁在跑 |
 
 ---
 
@@ -537,3 +596,27 @@ remote_path_prefix: <work>/software/AutoZT/pybin:<work>/software/AutoZT/venvs/au
 7. `autozt doctor` → `autozt check --cluster <HPC>` → 冒烟作业（第 11 节）
 8. 写部署记录，跑第一批真实材料（小体系 1 步验证吞吐/排队/IO）
 9. 需要 QE/amset/MACE/COGITO/UniHamGNN 时按第 12 节逐个装，每装一个就 `autozt check` 一次
+
+## 附录 C：一次完整实例的关键数字（示例，不是要求）
+
+> 来自 SCNet 西安 clus_xa（2026-10-19 实测，详见 `docs/CLUS_XA-DEPLOY-20261019.md`）。
+> 照别人的集群部署时，这些数字只用来**对照量级**，不要照抄。
+
+| 项 | 实测值 | 备注 |
+|---|---|---|
+| 节点规格 | **64 核** / 255 GB / 节点 | 决定 `max_cpus: 64` 与模板核数 |
+| 分区时限 | **3 天** | 模板 `--time=3-00:00:00` |
+| 账户并发 | **320 核**（单作业也 ≤320） | `32 核 × 10 并发` 比整节点作业更容易排上 |
+| 提交模板 | `--ntasks-per-node=32` | 整节点 64 核要等完全空闲节点，忙时排队久 |
+| MPI 坑 | 部分节点 OpenMPI 默认绑核崩 → `--bind-to none` | 冒烟时逐节点类型验证 |
+| 编译器 | gcc **9.3.0**（默认 7.3.1 会 ICE） | module load |
+| MPI | **HPC-X 2.11**（ABI 与 gcc 匹配） | 与 VASP 编译同一套 |
+| BLAS/LAPACK | 系统 **3.4.2**（补 `dgegv/dggsvd` 源码） | 新 LAPACK 无老接口 |
+| VASP | 6.4.3 原版 + IOPTCELL 补丁版 | 各 std/gam/ncl |
+| POTCAR | potpaw_PBE_64，**346 元素** | 解包后注意只读权限 |
+| VASPKIT | **1.2.4**（`~/.vaspkit` 空格分隔） | 生成 POTCAR 用 |
+| QE | 集群 module **6.8**（impi）+ MKL 运行库 + `Si_ONCV_PBE-1.2.upf` | `eph-qe-cpu` 冒烟 6 步收敛 |
+| amset | **0.5.1**（独立 venv，pymatgen 2024.11 / numpy 1.26） | BoltzTraP2 用 conda-forge 包解包装 |
+| COGITO | cogito-dft **0.3.13**（独立 venv，numpy≥2） | `cohp-cogito` |
+| MACE | mace-torch 0.3.16 + torch 2.4.1+cpu + e3nn 0.4.4；模型 **MACE-matpes-pbe-omat-ft.model** | `mlff`/`opt-mlff-cpu` 冒烟 E(Si) 可复现 |
+| UniHamGNN | HamGNN 2.3.0 + 模型 885 MB + DFT_DATA19 + 自编译 openmx 工具 | 见 12.5 |

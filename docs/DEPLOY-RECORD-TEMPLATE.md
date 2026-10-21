@@ -26,6 +26,7 @@
 | <partition> | ✅/❌ | <n> | <c> | <m> GB | <gpu:N / 无> | <time> |
 
 > 判据：逐分区 `sbatch --test-only`；❌ 记下报错原文（如 `Invalid account or account/partition combination`）。
+> 批量探测时每分区 sleep 1–2 s，避免 `sbatch: request too frequently` 把可用分区误判成不可用。
 
 ### 1.2 账户限额（实测反推）
 
