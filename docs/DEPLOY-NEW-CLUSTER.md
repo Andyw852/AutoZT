@@ -4,6 +4,7 @@
 **Applies to:** AutoZT v2.0 and later  
 **Audience:** site administrators and users who deploy AutoZT on a compute cluster or standalone node  
 **Companion artifacts:** `tools/probe_cluster.sh` (read-only site survey), `docs/DEPLOY-RECORD-TEMPLATE.md` (per-site record), `docs/CONFIGURING.md` (configuration reference)  
+**Chinese edition (for the Chinese documentation set / paper supplement):** `docs/DEPLOY-NEW-CLUSTER.zh-CN.md`  
 **License:** MIT (see `LICENSE`)
 
 ---

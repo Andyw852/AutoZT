@@ -23,7 +23,8 @@ your queue system.
 > guide `docs/DEPLOY-NEW-CLUSTER.md` (scouting -> SSH -> compilers/libraries -> VASP ->
 > POTCAR/Python -> cluster yaml -> acceptance), and run `tools/probe_cluster.sh <ssh-alias>`
 > (read-only) to collect the facts. Per-cluster deployment records use
-> `docs/DEPLOY-RECORD-TEMPLATE.md`.
+> `docs/DEPLOY-RECORD-TEMPLATE.md`. A Chinese edition of the guide is available at
+> `docs/DEPLOY-NEW-CLUSTER.zh-CN.md`.
 
 ## 3. Keeping site-specific paths out of the code
 
