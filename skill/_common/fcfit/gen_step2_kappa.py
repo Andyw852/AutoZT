@@ -77,6 +77,8 @@ SPEC = {
     "CUT3_KAPPA_TOL_PCT": (5.0, "float"),
     "CUT3_CV_1SE_MULT":   (1.0, "float"),
     "CUT3_STABILITY_THR": (0.3, "float"),
+    # 数据量门槛：方程数/参数数 < 它的截断档不参与选择（默认 3；图上空心点标出）
+    "CUT3_MIN_RATIO":     (3.0, "float"),
     "CUT3_PICK":          ("largest", "str"),
     # 2D 面内 κ 的层厚归一化（与 kl-dft-cpu S6 同一口径，真源 _common/thickness_2d.py）：
     #   phono3py 按整胞体积（含真空）归一，面内 κ 被 h⊥/d 稀释。kappa_summary.json 另写
@@ -449,6 +451,8 @@ def _gen_one(conf, fit, out, cwd, write_submit=True):
         "cut3_kappa_tol_pct": float(conf["CUT3_KAPPA_TOL_PCT"]),
         "cut3_cv_1se_mult": float(conf["CUT3_CV_1SE_MULT"]),
         "cut3_stability_thr": float(conf["CUT3_STABILITY_THR"]),
+        "cut3_min_ratio": (3.0 if conf["CUT3_MIN_RATIO"] is None
+                           else float(conf["CUT3_MIN_RATIO"])),
         "cut3_pick": str(conf["CUT3_PICK"]),
         **mcfg,
         "temperatures": temps,

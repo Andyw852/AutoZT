@@ -464,14 +464,17 @@ writing `kappa_summary.json`:
 * **Cutoff chosen by kappa** (`CUT3_KAPPA_SCAN = auto`, default): when `S1_fit`
   ran with `CUT3_SCAN = auto` (default) it refits fc3 at every candidate cutoff
   into `cutoff_scan/cut3_<c>/`.  `S2_kappa` then runs the BTE once per candidate
-  and applies the **same three criteria as `kl-dft-cpu` S6** - residual 1-SE,
+  and applies the **same three criteria as `kl-dft-cpu` S6** - only on cutoffs
+  whose equations/parameters ratio is >= `CUT3_MIN_RATIO` (default 3; raise it
+  for a stricter check - a synthetic-noise test showed ratio ~3.5 still biasing
+  kappa ~10 % low) - residual 1-SE,
   per-shell stability (`cut <= stable_upper_cut`) and the kappa plateau
   (`CUT3_KAPPA_TOL_PCT`) - via `cut3_select.select_cutoff`, writing
   `cutoff_selection.json` and promoting the chosen cutoff's kappa to the
   top-level `kappa_summary.json` (`chosen_cutoff_A`).  The kappa plateau is a
   contiguous stable interval: adjacent changes and the cumulative change from
   the interval start both stay within the tolerance; a jump after the interval
-  (e.g. flat 4.97-6.29 A, -17.7 % at 7.74 A) is reported in `after_plateau` and
+  (e.g. flat over three cutoffs, then a ~20 % drop at the outermost one) is reported in `after_plateau` and
   not used, and with several plateaus the longest wins.  `CUT3_PICK = largest`
   (default since 2026-10-15) takes the largest cutoff of that interval, `smallest`
   its smallest;
@@ -514,12 +517,21 @@ writing `kappa_summary.json`:
   neighbour shells inside it, kappa xx/yy/zz and in-plane at 300 K, the
   per-component % change from the previous cutoff, the criteria flags) and
   `kappa_vs_cutoff.png` (300 dpi) + `kappa_vs_cutoff.pdf` (vector), journal
-  style, always 2 x 2: (a) kappa_xx top left, (b) kappa_zz top right,
-  (c) kappa_yy bottom left, (d) force RMSE bottom right; the method name sits
-  above (a).  Every point is labelled with its value and every kappa segment
-  with its % change (bold inside the plateau tolerance).  A 2D layer keeps
-  panel (b) as an empty frame (kappa_zz is not physical) and plots xx/yy
-  thickness-normalised; a 3D cell fills it.  Without a cutoff scan (e.g. the
+  style.  A 3D cell gets 2 x 2: (a) kappa_xx, (b) kappa_zz, (c) kappa_yy,
+  (d) force RMSE.  A 2D layer has no kappa_zz panel (it is not physical) and
+  gets one row: (a) the raw cell-volume kappa (vacuum included, phono3py's own
+  number), (b) the thickness-normalised kappa (raw x h_perp/d), (c) force RMSE;
+  xx and yy share a panel - an isotropic layer (xx = yy within 0.1 %) shows a
+  single "xx = yy" curve, an anisotropic one two curves with a two-line
+  "xx .. % / yy .. %" change label per segment.  Without a normalisation factor
+  the 2D figure is (a) raw + (b) RMSE.  The method name sits in the caption.
+  Every point is labelled with its value and every kappa segment with its %
+  change (bold inside the plateau tolerance).  The bottom tick line gives each
+  cutoff's equations/parameters ratio; cutoffs below `CUT3_MIN_RATIO` are drawn
+  with hollow points on a grey band and grey tick labels (excluded from the
+  cutoff choice).  To redraw an existing run without
+  rerunning any BTE: `cd step2_kappa && python kappa_driver.py replot` (kl-dft-cpu:
+  the same inside `step6_kappa/`); it also redraws every `methods/<tag>/`.  Without a cutoff scan (e.g. the
   hiphive engine) the figure shows the single nominal cutoff, with the fit's
   own RMSE.  Panel (d): the force RMSE (meV/A) of each cutoff's
   fit - S1 evaluates every `cutoff_scan/cut3_<c>/` on `FIT_RMSE_FRAMES` frames

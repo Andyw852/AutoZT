@@ -284,12 +284,13 @@ def resolve_cut3_candidates(poscar, spec, cut3_max=7.0, tol=0.05, min_shells=2,
 
 
 def select_cutoff(records, kappa_tol_pct=5.0, se_mult=1.0, stability_thr=0.3,
-                  pick="largest"):
+                  pick="largest", min_ratio=3.0):
     """按三判据自动选可行截断（pick 默认 "largest"：取平台内最大档，2026-10-15 起；
     与 cut3_select.select_cutoff 同一判据，改一处要同步另一处）。records 是每个候选截断一条 dict：
 
         cut               截断 (Å)
-        ratio             方程数/参数数（<3 = 数据不足 → 不参与）
+        ratio             方程数/参数数（< min_ratio，默认 3 = 数据不足 → 不参与；
+                          与 _common/fcfit/cut3_select.py 同步）
         train_rel_err     拟合残差（★in-sample，**不是**交叉验证）：pheasy -f 在【全部帧】
                           上的 Relative error；判据①的输入
         train_rel_se      该残差在帧 bootstrap 重抽样下的标准误（1-SE 用；缺省 0）
@@ -329,7 +330,7 @@ def select_cutoff(records, kappa_tol_pct=5.0, se_mult=1.0, stability_thr=0.3,
         recs.append(d)
     recs.sort(key=lambda r: r["cut"])
     for r in recs:
-        r["data_ok"] = r["ratio"] >= 3.0
+        r["data_ok"] = r["ratio"] >= float(3.0 if min_ratio is None else min_ratio)
         r["stable_ok"] = (r["stable_upper_cut"] is not None
                           and r["cut"] <= r["stable_upper_cut"] + 1e-9)
     usable = [r for r in recs if r["data_ok"] and r["stable_ok"]]
@@ -422,7 +423,9 @@ def select_cutoff(records, kappa_tol_pct=5.0, se_mult=1.0, stability_thr=0.3,
     report = {
         "status": status,
         "err_gate_applied": err_gate,
-        "criteria": {"rel_err_1se": ("train_rel_err <= min(train_rel_err) + %g*SE"
+        "min_ratio": float(3.0 if min_ratio is None else min_ratio),
+        "criteria": {"data": "方程数/参数数 >= %g" % float(3.0 if min_ratio is None else min_ratio),
+                     "rel_err_1se": ("train_rel_err <= min(train_rel_err) + %g*SE"
                                      "（err_kind=held-out 时才启用）" % float(se_mult)),
                      "stability": "sigma/|mean| < %g" % float(stability_thr),
                      "plateau": ("连续稳定区间：相邻 Δκ 且起点到区间内各档的累计 Δκ "
@@ -454,6 +457,11 @@ def select_cutoff(records, kappa_tol_pct=5.0, se_mult=1.0, stability_thr=0.3,
                          if status == "not_converged"
                          else "没有数据量/稳定性达标的截断：需补帧或加大位移")),
     }
+    _low = [r for r in recs if not r["data_ok"]]
+    if _low:
+        report["reason"] += "；%s 方程数/参数数 < %g（数据不足，未参与选择；补帧后可纳入）" % (
+            "、".join("%.2f Å（%.2f）" % (r["cut"], r["ratio"]) for r in _low),
+            float(3.0 if min_ratio is None else min_ratio))
     if after:
         report["reason"] += "；平台之后 %s 跳变（%s），长程三阶项数据定不住，未采用" % (
             "、".join("%.2f Å" % x["cut"] for x in after),

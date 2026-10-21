@@ -1,4 +1,4 @@
-"""[0061] S8.3 自动取 κ_L：2D 两链胞高不同（kl Lz ≠ ke c）时按片热导守恒 ×Lz/c 换到 ke 元胞口径。
+"""[0062] S8.3 自动取 κ_L：2D 两链胞高不同（kl Lz ≠ ke c）时按片热导守恒 ×Lz/c 换到 ke 元胞口径。
 
 以前只打印"元胞不一致"告警、原样拿 kl 胞的原始 κ_L 去配 ke 胞的 σ/κ_e，κ_L 放大 c/Lz 倍、
 ZT 偏低（MoS2：Lz 25.0 vs c 34.879）。纯本地。
@@ -22,7 +22,7 @@ C_KE = 34.879           # ke 胞高（Å）
 
 
 def _g13():
-    spec = importlib.util.spec_from_file_location("g13_0061", str(KE / "step8.3_output" / "gen_step13_output.py"))
+    spec = importlib.util.spec_from_file_location("g13_0062", str(KE / "step8.3_output" / "gen_step13_output.py"))
     mod = importlib.util.module_from_spec(spec)
     with contextlib.redirect_stdout(io.StringIO()):
         spec.loader.exec_module(mod)

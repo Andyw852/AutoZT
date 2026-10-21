@@ -367,15 +367,15 @@ def test_cut3_select():
     # 稳定区间（2026-10-14）：平台后最外档跳变不再把整条判 not_converged、退回最外档
     sv = [{"cut": c, "ratio": 10, "stability_measured": False, "kappa": k,
            "kappa_vec": [k, k, k]}
-          for c, k in ((4.18, 119.49), (4.97, 124.36), (5.68, 127.49),
-                       (6.29, 126.22), (7.74, 103.89))]
+          for c, k in ((4.0, 50.0), (4.5, 52.0), (5.0, 53.2),
+                       (5.5, 52.7), (6.5, 43.0))]
     cs1, rs1 = cs.select_cutoff(sv)
-    check("稳定区间 4.97–6.29：默认 largest 取 6.29，7.74 跳变不采用",
-          cs1 == 6.29 and rs1["status"] == "ok" and rs1["plateau_interval"] == [4.97, 6.29]
-          and [x["cut"] for x in rs1["after_plateau"]] == [7.74],
+    check("稳定区间 4.5–5.5：默认 largest 取 5.5，6.5 跳变不采用",
+          cs1 == 5.5 and rs1["status"] == "ok" and rs1["plateau_interval"] == [4.5, 5.5]
+          and [x["cut"] for x in rs1["after_plateau"]] == [6.5],
           "%s %s %s" % (cs1, rs1["status"], rs1.get("plateau_interval")))
     cs2, _ = cs.select_cutoff(sv, pick="smallest")
-    check("稳定区间 smallest 仍可选 → 4.97", cs2 == 4.97, str(cs2))
+    check("稳定区间 smallest 仍可选 → 4.5", cs2 == 4.5, str(cs2))
     two = [{"cut": c, "ratio": 10, "stability_measured": False, "kappa": k}
            for c, k in ((4.0, 10.0), (4.5, 10.2), (5.0, 13.0), (5.5, 13.1), (6.0, 13.2))]
     cs3, rs3 = cs.select_cutoff(two)
@@ -391,6 +391,18 @@ def test_cut3_select():
             for c, k in ((4.0, 10.0), (4.5, None), (5.0, 10.1))]
     _c5, rs5 = cs.select_cutoff(miss)
     check("中间档 κ 缺失不算平台", rs5["status"] == "not_converged", rs5["status"])
+    # 数据量门槛 CUT3_MIN_RATIO（默认 3，可调高）
+    rr = [{"cut": c, "ratio": r, "stability_measured": False, "kappa": k}
+          for c, r, k in ((4.0, 18.0, 30.0), (4.5, 8.5, 29.5), (5.0, 3.5, 29.4), (5.5, 2.2, 25.0))]
+    cr1, rr1 = cs.select_cutoff(rr)
+    by_r = {x["cut"]: x for x in rr1["records"]}
+    check("默认门槛 3：ratio 3.5 参与、2.2 不参与，平台 4.0–5.0 取 5.0",
+          cr1 == 5.0 and by_r[5.0]["data_ok"] is True and by_r[5.5]["data_ok"] is False
+          and rr1["min_ratio"] == 3.0 and "方程数/参数数 < 3" in rr1["reason"],
+          "%s %s" % (cr1, rr1["reason"]))
+    cr2, rr2 = cs.select_cutoff(rr, min_ratio=5.0)
+    check("CUT3_MIN_RATIO=5 时 ratio 3.5 的档也被排除（平台只剩 4.0–4.5）",
+          cr2 == 4.5 and rr2["min_ratio"] == 5.0, str(cr2))
     c3, rep3 = cs.select_cutoff([dict(recs[0], ratio=1.0)])
     check("数据不足 -> no_usable_cutoff",
           c3 is None and rep3["status"] == "no_usable_cutoff", str(rep3["status"]))
@@ -631,7 +643,81 @@ def test_cut3_without_bootstrap_and_curve():
               doc["rows"][1]["pct_change_from_prev"]["kappa_xx"] == round(-500 / 30, 3)
               and doc["rows"][1]["pct_change_from_prev"]["kappa_zz"] is None,
               str(doc["rows"][1].get("pct_change_from_prev")))
+        # 2D 出图：不画 κzz，一行 (a) 原始 κ (b) 层厚归一化 κ (c) RMSE；xx/yy 同图
+        try:
+            import matplotlib.pyplot as _plt
+        except Exception:
+            _plt = None
+        if _plt is not None:
+            made = []
+            _orig = _plt.subplots
 
+            def _spy(*a, **k):
+                fig, axs = _orig(*a, **k)
+                made.append(fig)
+                return fig, axs
+            _plt.subplots = _spy
+            try:
+                d2 = out / "two_d"
+                d2.mkdir()
+                (d2 / "cutoff_scan.json").write_text(
+                    (out / "cutoff_scan.json").read_text(encoding="utf-8"))
+                doc2 = kd._write_kappa_vs_cutoff(
+                    d2, per, rep3, {"is_2d": True, "kappa_2d_norm": {
+                        "kappa_2d_norm_factor": 3.7, "thickness_d_A": 6.74}})
+            finally:
+                _plt.subplots = _orig
+            axes = made[-1].axes if made else []
+            labels = [a.get_ylabel() for a in axes]
+            check("2D 图：一行三图（原始 κ / 归一化 κ / RMSE），没有 κzz 面板",
+                  len(axes) == 3 and not any("zz" in l for l in labels)
+                  and "raw" in labels[0] and "6.74" in labels[1], str(labels))
+            check("2D 图：原始 κ 与归一化 κ 都在 json 里",
+                  doc2["rows"][0]["kappa_xx"] == 30.0
+                  and abs(doc2["rows"][0]["kappa_xx_2d_norm"] - 111.0) < 1e-9)
+            check("2D 图：各向同性时 xx=yy 画成一条线",
+                  len(axes[0].get_lines()) >= 1 and axes[0].get_legend() is not None
+                  and "xx" in axes[0].get_legend().get_texts()[0].get_text()
+                  and "yy" in axes[0].get_legend().get_texts()[0].get_text()
+                  and len(axes[0].get_legend().get_texts()) == 1)
+
+            # 数据量不达标的档：json 记 ratio/data_ok，图上刻度变灰 + 末行写比值
+            d3 = out / "low_ratio"
+            d3.mkdir()
+            (d3 / "cutoff_scan.json").write_text(json.dumps({"shells": [3.0, 4.0, 5.0],
+                "records": [{"cut": c, "ratio": q} for c, q in ((3.5, 12.0), (4.5, 6.0), (5.5, 4.97))]}))
+            made.clear()
+            _plt.subplots = _spy
+            try:
+                doc3 = kd._write_kappa_vs_cutoff(d3, per, {"chosen_cut": 4.5, "status": "ok",
+                                                           "min_ratio": 5.0}, {"is_2d": True})
+            finally:
+                _plt.subplots = _orig
+            tl = made[-1].axes[0].get_xticklabels()
+            check("数据量不达标：json 标 data_ok=False，刻度末行 4.97 且灰色",
+                  [r["data_ok"] for r in doc3["rows"]] == [True, True, False]
+                  and tl[2].get_text().endswith("4.97")
+                  and tl[2].get_color() == "#9a9a9a" and tl[0].get_color() != "#9a9a9a",
+                  str([(t.get_text(), t.get_color()) for t in tl]))
+            # replot：不重跑 BTE，从 cut3_<tag>/kappa_summary.json + cutoff_selection.json 重画
+            rp = out / "replot"
+            rp.mkdir()
+            tags = [t for t, _ in per]
+            (rp / "kappa_config.json").write_text(json.dumps({
+                "cut_scans": tags, "is_2d": True, "method_label": "OLS",
+                "kappa_2d_norm": {"kappa_2d_norm_factor": 3.7, "thickness_d_A": 6.74}}))
+            (rp / "cutoff_selection.json").write_text(json.dumps(rep3))
+            (rp / "cutoff_scan.json").write_text(
+                (out / "cutoff_scan.json").read_text(encoding="utf-8"))
+            for t, sm in per:
+                (rp / ("cut3_%s" % t)).mkdir()
+                (rp / ("cut3_%s" % t) / "kappa_summary.json").write_text(json.dumps(sm))
+            n_re = kd.replot(rp)
+            jd = json.loads((rp / "kappa_vs_cutoff.json").read_text(encoding="utf-8"))
+            check("replot：用已有逐档结果重画（不跑 BTE）",
+                  n_re == 1 and (rp / "kappa_vs_cutoff.png").is_file()
+                  and [r["kappa_xx"] for r in jd["rows"]] == [30.0, 25.0, 24.5]
+                  and jd["chosen_cut_A"] == 5.5, str((n_re, jd.get("chosen_cut_A"))))
 
 def test_kappa_2d_thickness_norm():
     print("[14] 2D 面内 κ 层厚归一化（与 kl-dft-cpu 同口径 h⊥/d）")
@@ -784,19 +870,19 @@ def test_kappa_file_stash():
     spec.loader.exec_module(kd)
     with tempfile.TemporaryDirectory() as td:
         out = Path(td)
-        (out / "cut3_4p18").mkdir()
+        (out / "cut3_4p00").mkdir()
         for m in ("131313", "252525"):
             (out / ("kappa-m%s.hdf5" % m)).write_text("ref-%s" % m, encoding="utf-8")
-            (out / "cut3_4p18" / ("kappa-m%s.hdf5" % m)).write_text("old", encoding="utf-8")
-        moved = kd._stash_kappa_files(out, out / "cut3_4p18")
+            (out / "cut3_4p00" / ("kappa-m%s.hdf5" % m)).write_text("old", encoding="utf-8")
+        moved = kd._stash_kappa_files(out, out / "cut3_4p00")
         check("每档目录收走顶层 kappa 文件（同名覆盖旧的）",
               sorted(moved) == ["kappa-m131313.hdf5", "kappa-m252525.hdf5"]
               and not list(out.glob("kappa-m*.hdf5"))
-              and (out / "cut3_4p18" / "kappa-m131313.hdf5").read_text(encoding="utf-8")
+              and (out / "cut3_4p00" / "kappa-m131313.hdf5").read_text(encoding="utf-8")
               == "ref-131313", str(moved))
-        (out / "cut3_6p29").mkdir()
-        (out / "cut3_6p29" / "kappa-m252525.hdf5").write_text("chosen", encoding="utf-8")
-        put = kd._promote_kappa_files(out / "cut3_6p29", out)
+        (out / "cut3_5p50").mkdir()
+        (out / "cut3_5p50" / "kappa-m252525.hdf5").write_text("chosen", encoding="utf-8")
+        put = kd._promote_kappa_files(out / "cut3_5p50", out)
         check("选中档的文件放回顶层（内容=选中档）",
               put == ["kappa-m252525.hdf5"]
               and (out / "kappa-m252525.hdf5").read_text(encoding="utf-8") == "chosen",
@@ -811,8 +897,8 @@ def test_scan_flow_no_recheck_and_kappa_files():
         "kd_scan", str(ROOT / "skill" / "_common" / "fcfit" / "kappa_driver.py"))
     kd = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(kd)
-    tags = ["4p18", "4p97", "5p68", "6p29", "7p74"]
-    kap = {"4p18": 119.49, "4p97": 124.36, "5p68": 127.49, "6p29": 126.22, "7p74": 103.89}
+    tags = ["4p00", "4p50", "5p00", "5p50", "6p50"]
+    kap = {"4p00": 50.0, "4p50": 52.0, "5p00": 53.2, "5p50": 52.7, "6p50": 43.0}
     calls = {"converge": 0, "bte": []}
 
     def fake_converge(out, yaml_name, fc2, fc3, cfg, source_fc, first=None):
@@ -832,8 +918,8 @@ def test_scan_flow_no_recheck_and_kappa_files():
                 "mesh": "25 25 25"}
 
     def fake_select(out, cfg, per_cut):
-        return (6.29, {"status": "ok", "chosen_cut": 6.29,
-                       "plateau_interval": [4.18, 6.29]}, dict(per_cut))
+        return (5.5, {"status": "ok", "chosen_cut": 5.5,
+                       "plateau_interval": [4.0, 5.5]}, dict(per_cut))
 
     with tempfile.TemporaryDirectory() as td:
         out = Path(td)
@@ -856,13 +942,13 @@ def test_scan_flow_no_recheck_and_kappa_files():
         d = json.loads((out / "kappa_summary.json").read_text(encoding="utf-8"))
         check("选完截断只收敛过一次网格（不再为选中档复核）", calls["converge"] == 1,
               str(calls))
-        check("顶层 kappa 文件 = 选中档（6.29）",
-              (out / "kappa-m252525.hdf5").read_text(encoding="utf-8") == "bte-6p29",
+        check("顶层 kappa 文件 = 选中档（5.5）",
+              (out / "kappa-m252525.hdf5").read_text(encoding="utf-8") == "bte-5p50",
               str((out / "kappa-m252525.hdf5").read_text(encoding="utf-8")))
         check("summary 记下 chosen / 顶层文件 / 网格参考档 / 复用标记",
-              d.get("chosen_cutoff_A") == 6.29
+              d.get("chosen_cutoff_A") == 5.5
               and d.get("kappa_files_top_level") == ["kappa-m252525.hdf5"]
-              and d.get("mesh_converged_on_cut3_A") == 7.74
+              and d.get("mesh_converged_on_cut3_A") == 6.5
               and d.get("mesh_reused_from_reference_cut") is True,
               json.dumps({k: d.get(k) for k in (
                   "chosen_cutoff_A", "kappa_files_top_level",
