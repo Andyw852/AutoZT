@@ -34,11 +34,14 @@ VERSION = 1
 C_VASP = 0.262465831           # 2m/ħ²（eV⁻¹ Å⁻²），与 VASP / pymatgen 相同
 EWIN_K = 0.8                   # eV：只抽带边 ± EWIN_K 以内有态的 k 点（输运窗口；800 K 的 10 kT ≈ 0.7 eV）
 EWIN_B = 1.2                   # eV：能带窗口（这个范围里有态的带都要；带号连续）
-MARGIN = 2                     # 窗口两侧各多抽几条：形变构型那边投影时用（窗口边上的带被应变推出窗口也不丢）
+MARGIN = 6                     # 窗口两侧各多抽几条（偶数：SOC 的 Kramers 对不拆）：build 里给窗口扩简并组的余地，
+                               #   形变构型那边投影时也用（窗口边上的带被应变推出窗口也不丢）
+PAD = 2                        # build：形变构型抽到的带至少比窗口两侧各多 PAD 条（最低的带 0 下面没有带，不要求）
 ENCUT_STORE = 300.0            # eV：系数截断（文件 ENCUT 更低时用文件的）
 OCC_FRAC = 0.5                 # 占据 > 0.5 × 最大占据 = 占据态
-DEG_TOL = 0.05                 # eV：窗口边界两侧的带在某个 k 上相差小于它 = （近）简并，窗口往外扩；
-                               #   比应变造成的劈裂（δ·D ~ 0.03 eV）大，各构型才会扩得一样
+DEG_TOL = 0.05                 # eV：窗口边界两侧的带在某个 k 上相差小于它 = （近）简并，build 把窗口往外扩（只看未形变构型，
+                               #   有上限：各形变构型都还得剩 PAD 条余量）。extract 不扩 —— 各构型各自按能量扩，应变劈开的
+                               #   简并组两边扩得不一样，导带里到处是交叉，会一路连锁（[0061-m] 离格点测试失败的原因）
 Q_MIN = 0.9                    # 形变构型窗口对未形变窗口的覆盖（投影 S 的最小本征值）低于它 -> 报告里点名
 GAP_ND = 0.02                  # eV：对齐 / 核对只用离相邻带 > max(GAP_ND, 4δ|X|) 的非简并态
 SPIN_NAMES = ("up", "down")
@@ -177,11 +180,7 @@ def extract(wavecar="WAVECAR", out="deform_wave.h5", ewin_k=EWIN_K, ewin_b=EWIN_
     for s in range(w.nspin):
         e = w.eig[s][ksel]
         idx = np.where((e.max(axis=0) >= vbm - ewin_b) & (e.min(axis=0) <= cbm + ewin_b))[0]
-        lo, hi = int(idx.min()), int(idx.max())
-        while lo > 0 and np.min(np.abs(e[:, lo] - e[:, lo - 1])) < DEG_TOL:    # 窗口边界不切开简并组
-            lo -= 1                                                            # （否则边上的算符不满足时间反演）
-        while hi < w.nb - 1 and np.min(np.abs(e[:, hi + 1] - e[:, hi])) < DEG_TOL:
-            hi += 1
+        lo, hi = int(idx.min()), int(idx.max())                                # 只按能量；简并组在 build 里处理
         inner[s] = (lo, hi)
         bands[s] = np.arange(max(0, lo - margin), min(w.nb - 1, hi + margin) + 1)
     with h5py.File(str(out), "w") as f:
@@ -323,15 +322,28 @@ def build(root, dirs, out="deformation_matrix.h5", und="undeformed", fname="defo
             E0all = np.array(f0["eig_" + sn])[jk]
             slo = max(int(np.min(fs[d]["bands_" + sn])) for d in fs)          # 各形变构型都抽到的带
             shi = min(int(np.max(fs[d]["bands_" + sn])) for d in fs)
-            lo2, hi2 = max(lo, slo), min(hi, shi)
-            while lo2 <= hi2 and lo2 > 0 and np.min(np.abs(E0all[:, lo2] - E0all[:, lo2 - 1])) < DEG_TOL:
-                lo2 += 1                                                       # 缩窗口也不切开简并组
-            while hi2 >= lo2 and hi2 < E0all.shape[1] - 1 and np.min(np.abs(E0all[:, hi2 + 1] - E0all[:, hi2])) < DEG_TOL:
-                hi2 -= 1
+            blo = max(int(bands[0]), 0 if slo == 0 else slo + PAD)            # 窗口能到的范围：未形变抽到的带以内，
+            bhi = min(int(bands[-1]), shi - PAD)                               #   形变构型两侧各剩 PAD 条
+            if bhi < blo:
+                raise ValueError("自旋 %s：形变构型抽到的带（%d-%d）盖不住未形变的窗口（%d-%d）" % (sn, slo, shi, lo, hi))
+            lo2, hi2 = max(lo, blo), min(hi, bhi)
             if hi2 < lo2:
                 raise ValueError("自旋 %s：形变构型抽到的带（%d-%d）盖不住未形变的窗口（%d-%d）" % (sn, slo, shi, lo, hi))
             if (lo2, hi2) != (lo, hi):
-                log("[deform_wave][WARN] 自旋 %s：窗口 %d-%d 缩到 %d-%d（形变构型只抽到 %d-%d）" % (sn, lo, hi, lo2, hi2, slo, shi))
+                log("[deform_wave][WARN] 自旋 %s：窗口 %d-%d 缩到 %d-%d（形变构型只抽到 %d-%d；加大 S7 的 DEFORM_WAVE_MARGIN）"
+                    % (sn, lo, hi, lo2, hi2, slo, shi))
+
+            def _deg(i):                                                       # 带 i 与 i+1 在某个 k 上（近）简并
+                return np.min(np.abs(E0all[:, i + 1] - E0all[:, i])) < DEG_TOL
+
+            while lo2 > blo and _deg(lo2 - 1):                                 # 窗口边界不切开简并组（只看未形变构型，
+                lo2 -= 1                                                       #   到上限为止；不连锁缩）
+            while hi2 < bhi and _deg(hi2):
+                hi2 += 1
+            cut = [("%d|%d" % (i, i + 1)) for i in (lo2 - 1, hi2) if 0 <= i < E0all.shape[1] - 1 and _deg(i)]
+            if cut:
+                log("[deform_wave] 自旋 %s：窗口 %d-%d 的边界 %s 在个别 k 上近简并（已到可扩的上限）—— 边界带的矩阵元带规范依赖，"
+                    "量级同窗口截断误差" % (sn, lo2, hi2, "、".join(cut)))
             inn = np.where((bands >= lo2) & (bands <= hi2))[0]
             nw = len(inn)
             X = g.create_dataset("X_" + sn, (len(plist), len(jk), nw, nw), np.complex64)

@@ -161,14 +161,22 @@ def test_strain_grid_on_grid_exact_incl_time_reversal(s7):
 
 def test_strain_grid_off_grid_converges(tmp_path):
     """离格点：网格算符在价带上的矩阵元 vs 精确 ⟨m,k|∂H/∂ε|n,k⟩，网格从 3³ 加密到 6³ 误差至少降到 1/3（插值误差 O(Δk²)；
-    Si 实际的 S7 网格 Δk ≈ 0.06 Å⁻¹，比这里的 6³（≈ 0.33 Å⁻¹）细五倍多）。"""
+    Si 实际的 S7 网格 Δk ≈ 0.06 Å⁻¹，比这里的 6³（≈ 0.33 Å⁻¹）细五倍多）。
+    窗口只由未形变构型定、不连锁缩（EPM 的导带到处有交叉，应变把简并劈得各构型不一样）：6³ 时窗口要盖住价带 + 最低两条导带，
+    覆盖度 ~1，且不打"缩窗口"的告警。"""
     errs = []
     rng = np.random.default_rng(3)
     ks = (rng.random((4, 3)) - 0.5) * 0.5
     for n in (3, 6):
         root, dirs, _d0 = _s7(tmp_path / ("n%d" % n), n=n, ewin_b=0.8)
         out = root.parent / "m.h5"
-        DW.build(root, dirs, out)
+        logs = []
+        summ = DW.build(root, dirs, out, log=logs.append)
+        assert not [x for x in logs if "缩到" in x]
+        assert summ["spins"]["up"]["q_min"] > 0.99
+        if n == 6:
+            lo, hi = summ["spins"]["up"]["bands"]
+            assert lo == 0 and hi >= E.NOCC + 1
         m = DW.load_matrix(out, "up")
         gpts = np.unique(np.concatenate([E.gvecs(k, E.L0, ENCUT + 40) for k in ks]), axis=0)
         grid = DW.StrainGrid(m, gpts)
@@ -186,7 +194,7 @@ def test_strain_grid_off_grid_converges(tmp_path):
             e_rel.append(np.max(np.abs(Xg - Xe)) / np.max(np.abs(Xe)))
         errs.append(max(e_rel))
     assert errs[1] < errs[0] / 3
-    assert errs[1] < 0.3
+    assert errs[1] < 0.05
 
 
 def test_cli_extract_and_delete(tmp_path, capsys):
