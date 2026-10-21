@@ -54,10 +54,19 @@ def _vaspkit_potcar():
         return False
     kv = {}
     for ln in open(p, errors="ignore"):
-        ln = ln.split("#", 1)[0]
+        ln = ln.split("#", 1)[0].strip()
+        if not ln:
+            continue
+        # vaspkit 原生的 ~/.vaspkit 是「键 值」空格分隔（1.x 不接受 "="）；
+        # 也兼容部分用户写的 "键 = 值" 形式。
         if "=" in ln:
             k, v = ln.split("=", 1)
-            kv[k.strip().upper()] = v.strip().strip("'\"")
+        else:
+            parts = ln.split(None, 1)
+            if len(parts) < 2:
+                continue
+            k, v = parts
+        kv[k.strip().upper()] = v.strip().strip("'\"")
     t = (kv.get("POTCAR_TYPE") or "PBE").upper()
     path = kv.get(t + "_PATH") or kv.get("PBE_PATH")
     return bool(path) and os.path.isdir(os.path.expanduser(path))
