@@ -731,6 +731,7 @@ def _select(out, cfg, per_cut):
 
 # 作图（期刊风格）：默认参考配色第一槽（dataviz palette.md），黑色细框、刻度朝内
 _LINE = "#2a78d6"
+_LINE2 = "#d9622b"     # second curve in one panel (kappa_yy of an anisotropic layer)
 _INK, _INK2 = "#000000", "#4d4d4d"
 _SCI_RC = {
     "font.family": "sans-serif",
@@ -754,14 +755,17 @@ def _write_kappa_vs_cutoff(out, per_cut, rep=None, cfg=None):
     """kappa(300 K) and the fit error vs third-order cutoff.
 
     kappa_vs_cutoff.json always; kappa_vs_cutoff.png (300 dpi) + .pdf when
-    matplotlib is available.  Left column: one panel per component (xx, yy,
-    zz), every point labelled with its kappa and every segment with its
-    relative change (bold inside the plateau tolerance).  Right column: the
-    force RMSE of each cutoff's fit (cutoff_scan.json force_rmse_eV_per_A,
-    written by S1 when FIT_RMSE_FRAMES > 0), or pheasy's relative error when
-    that is all there is.  A 2D layer gets xx and yy only -- its zz has no
-    physical meaning -- thickness-normalised when the run carries the factor.
-    Written before the cutoff choice can fail."""
+    matplotlib is available.  Every point is labelled with its kappa and every
+    segment with its relative change (bold inside the plateau tolerance).
+      3D: 2 x 2 -- (a) kxx, (b) kzz, (c) kyy, (d) force RMSE.
+      2D: one row, no kzz (not physical) -- (a) raw cell-volume kappa,
+          (b) thickness-normalised kappa (only when the run carries the
+          factor), (c) force RMSE; xx and yy share a panel ("xx = yy" when
+          isotropic within 0.1 %).
+    The RMSE panel is each cutoff's force RMSE (cutoff_scan.json
+    force_rmse_eV_per_A, written by S1 when FIT_RMSE_FRAMES > 0), or pheasy's
+    relative error when that is all there is.  Written before the cutoff
+    choice can fail."""
     cfg = cfg or {}
     scan = {}
     try:
@@ -870,23 +874,15 @@ def _write_kappa_vs_cutoff(out, per_cut, rep=None, cfg=None):
     xticks = (["%.2f\n(%d)" % (r["cut_A"], r["n_shells"]) for r in rows]
               if rows and rows[0]["n_shells"] is not None else None)
     with plt.rc_context(_SCI_RC):
-        # always 2 x 2: (a) kxx | (b) kzz  /  (c) kyy | (d) force RMSE
-        fig, grid = plt.subplots(2, 2, figsize=(8.6, 6.0), sharex=True,
-                                 gridspec_kw={"wspace": 0.34, "hspace": 0.10})
-        ax_xx, ax_zz = grid[0]
-        ax_yy, ax_rm = grid[1]
+        _bbox = dict(boxstyle="round,pad=0.10", fc="white", ec="none", alpha=0.80)
 
-        def _series(ax, key, fmt, label_pct, log=False):
-            pts = [(i, rows[i][key]) for i in range(len(rows))
-                   if rows[i][key] is not None]
-            ys = [p[1] for p in pts]
-            if not ys:
-                return False
-            ax.plot([p[0] for p in pts], ys, color=_LINE, lw=1.2, zorder=3)
-            ax.plot([p[0] for p in pts], ys, ls="none", marker="o", ms=4.5,
-                    mfc=_LINE, mec=_INK, mew=0.6, zorder=4)
+        def _pts(key):
+            return [(i, rows[i][key]) for i in range(len(rows))
+                    if rows[i].get(key) is not None]
+
+        def _ylim(ax, ys, log=False):
             lo, hi = min(ys), max(ys)
-            if log:
+            if log and lo > 0:
                 # kappa spans 1-2 decades: a linear axis squashes the small
                 # (plateau-region) values onto the x axis and their labels pile
                 # up.  A log axis spreads them and keeps every label readable.
@@ -899,52 +895,133 @@ def _write_kappa_vs_cutoff(out, per_cut, rep=None, cfg=None):
                 span = max(hi - lo, 0.10 * max(abs(hi), abs(lo), 1e-12))
                 mid = 0.5 * (hi + lo)
                 ax.set_ylim(mid - 0.85 * span, mid + 0.95 * span)
+
+        def _series(ax, key, fmt, label_pct, color=_LINE, marker="o", ls="-",
+                    label=None, below=False):
+            """One curve.  Values sit above the points and the segment changes
+            below the segment midpoints; below=True swaps the two rows (second
+            curve in the same panel, so its labels never share a row with the
+            first one's)."""
+            pts = _pts(key)
+            ys = [p[1] for p in pts]
+            if not ys:
+                return []
+            ax.plot([p[0] for p in pts], ys, color=color, lw=1.2, ls=ls, zorder=3,
+                    label=label)
+            ax.plot([p[0] for p in pts], ys, ls="none", marker=marker, ms=4.5,
+                    mfc=color, mec=_INK, mew=0.6, zorder=4)
             if fmt is None:      # enough decimals to tell neighbouring values apart
                 diffs = [abs(b - a) for a, b in zip(ys, ys[1:]) if b != a]
-                dmin = min(diffs) if diffs else abs(hi) or 1.0
+                dmin = min(diffs) if diffs else abs(max(ys)) or 1.0
                 nd = max(1, min(4, int(math.ceil(-math.log10(dmin))) + 1)) \
                     if dmin > 0 else 2
                 fmt = "%%.%df" % nd
-            # Two label rows that never share a column: the point values run
-            # above the curve, the segment percentages below its midpoints, and
-            # both carry a translucent white box so the text stays readable even
-            # where the ~0.1 A-spaced candidates bring them close.  (The old
-            # to-scale x axis piled the tick labels, values and percentages on
-            # top of each other.)
-            _bbox = dict(boxstyle="round,pad=0.10", fc="white", ec="none",
-                         alpha=0.80)
+            vdy, vva = (-5, "top") if below else (5, "bottom")
+            pdy, pva = (12, "bottom") if below else (-12, "top")
             for x, y in pts:
-                ax.annotate(fmt % y, (x, y), xytext=(0, 5),
-                            textcoords="offset points", ha="center", va="bottom",
+                ax.annotate(fmt % y, (x, y), xytext=(0, vdy),
+                            textcoords="offset points", ha="center", va=vva,
                             fontsize=6.0, color=_INK, bbox=_bbox, zorder=5)
             if label_pct:
+                # every segment is labelled with its relative change -- bold and
+                # black inside the plateau tolerance, dark grey outside it
                 for (x0, y0), (x1, y1) in zip(pts, pts[1:]):
                     if abs(y0) < 1e-12:
                         continue
                     pct = 100.0 * (y1 - y0) / abs(y0)
                     inside = abs(pct) <= tol
                     ax.annotate("%+.1f%%" % pct, ((x0 + x1) / 2.0, (y0 + y1) / 2.0),
-                                xytext=(0, -12), textcoords="offset points",
-                                ha="center", va="top", fontsize=6.0,
+                                xytext=(0, pdy), textcoords="offset points",
+                                ha="center", va=pva, fontsize=6.0,
                                 color=_INK if inside else _INK2,
                                 fontweight="bold" if inside else "normal",
                                 bbox=_bbox, zorder=5)
-            return True
+            return ys
 
-        _series(ax_xx, "kappa_xx" + suf, "%.2f", True, log=True)
-        _series(ax_yy, "kappa_yy" + suf, "%.2f", True, log=True)
+        def _inplane(ax, kx, ky):
+            """kappa_xx and kappa_yy in one panel.  An isotropic layer (xx = yy
+            within 0.1 % everywhere) gets a single 'xx = yy' curve so the labels
+            are not printed twice on top of each other."""
+            px, py = _pts(kx), _pts(ky)
+            iso = (len(px) == len(py) and all(
+                abs(a[1] - b[1]) <= 1e-3 * max(abs(a[1]), 1e-12)
+                for a, b in zip(px, py)))
+            if iso:
+                ys = _series(ax, kx, "%.2f", True, label=r"$\kappa_{xx} = \kappa_{yy}$")
+            else:
+                # anisotropic: xx values above, yy values below the points, and
+                # ONE two-line change label per segment ("xx ...%" / "yy ...%")
+                # under the lower curve -- two separate percentage rows collide
+                # whenever the curves run close together.
+                ys = (_series(ax, kx, "%.2f", False, label=r"$\kappa_{xx}$")
+                      + _series(ax, ky, "%.2f", False, color=_LINE2, marker="s",
+                                ls=(0, (4, 2)), label=r"$\kappa_{yy}$", below=True))
+                dx, dy = dict(px), dict(py)
+                idx = [i for i in sorted(dx) if i in dy]
+                for i0, i1 in zip(idx, idx[1:]):
+                    if abs(dx[i0]) < 1e-12 or abs(dy[i0]) < 1e-12:
+                        continue
+                    cx = 100.0 * (dx[i1] - dx[i0]) / abs(dx[i0])
+                    cy = 100.0 * (dy[i1] - dy[i0]) / abs(dy[i0])
+                    inside = abs(cx) <= tol and abs(cy) <= tol
+                    ylow = min(dx[i0], dx[i1], dy[i0], dy[i1])
+                    ax.annotate("xx %+.1f%%\nyy %+.1f%%" % (cx, cy),
+                                ((i0 + i1) / 2.0, ylow), xytext=(0, -15),
+                                textcoords="offset points", ha="center", va="top",
+                                fontsize=5.5, linespacing=1.1,
+                                color=_INK if inside else _INK2,
+                                fontweight="bold" if inside else "normal",
+                                bbox=_bbox, zorder=5)
+            if ys:
+                _ylim(ax, ys, log=True)
+                ax.legend(loc="upper right", fontsize=6.5, handlelength=2.2)
+            return ys
+
+        def _blank(ax):
+            ax.set_yticks([])
+            ax.yaxis.set_minor_locator(plt.NullLocator())
+
         if is_2d:
-            ax_zz.set_yticks([])        # 2D: kappa_zz is not physical -> frame only
-            ax_zz.yaxis.set_minor_locator(plt.NullLocator())
+            # 2D layer: kappa_zz has no physical meaning, so no zz panel.
+            #   (a) raw kappa (phono3py's cell volume, vacuum included), xx + yy
+            #   (b) thickness-normalised kappa (= raw x h_perp/d), xx + yy
+            #   (c) force RMSE of each cutoff's fit
+            #   Without a normalisation factor (b) is dropped.
+            ncol = 3 if f2d else 2
+            fig, axs = plt.subplots(1, ncol, figsize=(3.9 * ncol, 3.5), sharex=True,
+                                    gridspec_kw={"wspace": 0.42})
+            axs = list(axs)
+            ax_raw, ax_rm = axs[0], axs[-1]
+            ax_norm = axs[1] if f2d else None
+            _inplane(ax_raw, "kappa_xx", "kappa_yy")
+            ax_raw.set_ylabel(r"$\kappa$, raw cell (W m$^{-1}$ K$^{-1}$)")
+            if ax_norm is not None:
+                _inplane(ax_norm, "kappa_xx_2d_norm", "kappa_yy_2d_norm")
+                ax_norm.set_ylabel(r"$\kappa$, d = %.2f $\AA$ (W m$^{-1}$ K$^{-1}$)"
+                                   % float(norm["thickness_d_A"]))
+            panels = [ax_raw] + ([ax_norm] if ax_norm is not None else []) + [ax_rm]
+            bottom_axes = panels
         else:
-            _series(ax_zz, "kappa_zz", "%.2f", True, log=True)
-        if not (ekey and _series(ax_rm, ekey, None, False)):
-            ax_rm.set_yticks([])
-            ax_rm.yaxis.set_minor_locator(plt.NullLocator())
-        for ax, lab in ((ax_xx, "xx"), (ax_yy, "yy"), (ax_zz, "zz")):
-            ax.set_ylabel(r"$\kappa_{%s}$ (W m$^{-1}$ K$^{-1}$)" % lab)
+            # 3D: (a) kxx | (b) kzz  /  (c) kyy | (d) force RMSE
+            fig, grid = plt.subplots(2, 2, figsize=(8.6, 6.0), sharex=True,
+                                     gridspec_kw={"wspace": 0.34, "hspace": 0.10})
+            ax_xx, ax_zz = grid[0]
+            ax_yy, ax_rm = grid[1]
+            for ax, key, lab in ((ax_xx, "kappa_xx", "xx"), (ax_zz, "kappa_zz", "zz"),
+                                 (ax_yy, "kappa_yy", "yy")):
+                ys = _series(ax, key, "%.2f", True)
+                if ys:
+                    _ylim(ax, ys, log=True)
+                ax.set_ylabel(r"$\kappa_{%s}$ (W m$^{-1}$ K$^{-1}$)" % lab)
+            panels = [ax_xx, ax_zz, ax_yy, ax_rm]
+            bottom_axes = [ax_yy, ax_rm]
+        ys_rm = _series(ax_rm, ekey, None, False) if ekey else []
+        if ys_rm:
+            _ylim(ax_rm, ys_rm)
+        else:
+            _blank(ax_rm)
         ax_rm.set_ylabel(elab)
-        for ax, let in ((ax_xx, "a"), (ax_zz, "b"), (ax_yy, "c"), (ax_rm, "d")):
+        for ax, let in zip(panels, "abcd"):
             ax.text(0.03, 0.95, "(%s)" % let, transform=ax.transAxes, ha="left",
                     va="top", fontsize=9, fontweight="bold")
             if ax.get_yticks().size and ax.get_yscale() != "log":
@@ -952,13 +1029,16 @@ def _write_kappa_vs_cutoff(out, per_cut, rep=None, cfg=None):
             if ch_idx is not None:
                 ax.axvline(float(ch_idx), color=_INK2, lw=0.7, ls=(0, (4, 2)),
                            zorder=1)
-        ax_xx.set_xlim(-0.6, len(rows) - 0.4)
-        for ax in (ax_yy, ax_rm):
+        panels[0].set_xlim(-0.6, len(rows) - 0.4)
+        for ax in bottom_axes:
             ax.set_xlabel(r"Third-order cutoff $r_c$ ($\AA$)")
             ax.set_xticks(xpos)
             ax.set_xticklabels(xticks or ["%.2f" % x for x in xs])
             ax.tick_params(axis="x", labelsize=6.5, pad=1)
-        fig.subplots_adjust(top=0.93, bottom=0.13, left=0.10, right=0.98)
+        if is_2d:
+            fig.subplots_adjust(top=0.93, bottom=0.20, left=0.07, right=0.99)
+        else:
+            fig.subplots_adjust(top=0.93, bottom=0.13, left=0.10, right=0.98)
         if doc.get("method"):
             # 方法名标注在底部说明区（图注）左上（不放面板内）
             fig.text(0.0, 0.0, doc["method"], ha="left", va="bottom",
@@ -974,10 +1054,12 @@ def _write_kappa_vs_cutoff(out, per_cut, rep=None, cfg=None):
                          % ("chosen" if len(rows) > 1 else "nominal", float(ch),
                             doc["status"] or "nominal"))
         if is_2d:
-            notes.append(("2D layer, d = %.2f $\\AA$; $\\kappa_{zz}$ not physical "
-                          "(frame left empty)" % float(norm["thickness_d_A"])) if f2d else
-                         "2D layer: raw cell-volume kappa (not thickness-normalised); "
-                         "$\\kappa_{zz}$ not physical (frame left empty)")
+            notes.append(("2D layer: (a) raw cell-volume kappa (vacuum included); "
+                          "(b) thickness-normalised, x %.4f (d = %.2f $\\AA$); "
+                          "$\\kappa_{zz}$ not physical (not shown)"
+                          % (f2d, float(norm["thickness_d_A"]))) if f2d else
+                         "2D layer: raw cell-volume kappa (no thickness normalisation "
+                         "available); $\\kappa_{zz}$ not physical (not shown)")
         fig.text(0.0, -0.01, "\n".join(notes), ha="left", va="top", fontsize=6.5,
                  color=_INK2, transform=fig.transFigure)
         fig.savefig(str(out / "kappa_vs_cutoff.png"))
@@ -1371,8 +1453,60 @@ def _load_cfg():
     return json.loads((Path.cwd() / "kappa_config.json").read_text(encoding="utf-8"))
 
 
+def replot(out):
+    """Redraw kappa_vs_cutoff.{json,png,pdf} from a finished kappa step without
+    rerunning any BTE: the per-cutoff numbers come from cut3_<tag>/kappa_summary.json
+    and the choice from cutoff_selection.json (nominal run: the top-level
+    kappa_summary.json).  Also redraws every FIT_METHODS method under methods/<tag>/
+    and refreshes figures/ via compare_methods.  Usage, inside step2_kappa/ (or
+    kl-dft-cpu step6_kappa/):  python kappa_driver.py replot"""
+    out = Path(out)
+    dirs = [out]
+    try:
+        for e in json.loads((out / "methods.json").read_text(
+                encoding="utf-8")).get("methods") or []:
+            if not e.get("primary") and (out / e.get("dir", "")).is_dir():
+                dirs.append(out / e["dir"])
+    except Exception:
+        pass
+    done = 0
+    for d in dirs:
+        try:
+            cfg = json.loads((d / "kappa_config.json").read_text(encoding="utf-8"))
+        except Exception:
+            print("[..] %s: no kappa_config.json -- skipped" % d, flush=True)
+            continue
+        per_cut = []
+        for tag in cfg.get("cut_scans") or []:
+            f = d / ("cut3_%s" % tag) / "kappa_summary.json"
+            if f.is_file():
+                per_cut.append((tag, json.loads(f.read_text(encoding="utf-8"))))
+        rep = None
+        if (d / "cutoff_selection.json").is_file():
+            rep = json.loads((d / "cutoff_selection.json").read_text(encoding="utf-8"))
+        if not per_cut:
+            try:
+                s = json.loads((d / "kappa_summary.json").read_text(encoding="utf-8"))
+            except Exception:
+                print("[..] %s: no kappa results -- skipped" % d, flush=True)
+                continue
+            c = cfg.get("nominal_cut3_A")
+            if c is None:
+                print("[..] %s: no cutoff scan and no nominal cutoff -- skipped" % d,
+                      flush=True)
+                continue
+            per_cut = [(("%.2f" % float(c)).replace(".", "p"), s)]
+            rep = rep or {"chosen_cut": float(c), "status": "nominal"}
+        _write_kappa_vs_cutoff(d, per_cut, rep, cfg)
+        done += 1
+    if len(dirs) > 1:
+        compare_methods(out)
+    print("[DONE] replot: %d figure(s) redrawn" % done, flush=True)
+    return done
+
+
 if __name__ == "__main__":
-    # 子命令（--prepare-shengbte / --collect-shengbte / compare）作为 argv 里的
+    # 子命令（--prepare-shengbte / --collect-shengbte / compare / replot）作为 argv 里的
     # 标志传入：submit 脚本调用形如 python kappa_driver.py kappa_config.json
     # --prepare-shengbte，所以按"是否在 argv 里出现"判断，而不是写死 argv[1]。
     args = sys.argv[1:]
@@ -1384,5 +1518,7 @@ if __name__ == "__main__":
         _collect_shengbte(_load_cfg(), out)
     elif "compare" in args:
         compare_methods(Path.cwd())
+    elif "replot" in args:
+        replot(Path.cwd())
     else:
         main()

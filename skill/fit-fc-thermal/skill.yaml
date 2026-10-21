@@ -167,7 +167,7 @@ io_schema:
     - {name: fc2.hdf5, step: S1_fit, type: hdf5, desc: "二阶力常数"}
     - {name: fc3.hdf5, step: S1_fit, type: hdf5, desc: "三阶力常数（有三阶数据时）"}
     - {name: fc_fit_summary.json, step: S1_fit, type: json, desc: "拟合与虚频判据摘要"}
-    - {name: kappa_vs_cutoff.png, step: S2_kappa, type: png, desc: "2×2 期刊风格：(a) κxx (b) κzz（2D 留空框）(c) κyy (d) 拟合力 RMSE，随三阶截断变化，每点标值、相邻变化%（另有 .pdf/.json）；多方法时每个方法一张，汇总在 figures/"}
+    - {name: kappa_vs_cutoff.png, step: S2_kappa, type: png, desc: "期刊风格，随三阶截断变化：3D 为 2×2 (a) κxx (b) κzz (c) κyy (d) 拟合力 RMSE；2D 不画 κzz，一行三图 (a) 原始 κ（含真空的整胞体积，xx/yy 同图）(b) 层厚归一化 κ (c) 拟合力 RMSE，每点标值、相邻变化%（另有 .pdf/.json）；多方法时每个方法一张，汇总在 figures/"}
     - {name: kappa_summary.json, step: S2_kappa, type: json, desc: "最终产物：晶格热导率 κ(T) 及 300K 各分量"}
     - {name: fit_compare.json, step: S4_compare, type: json, desc: "方法扫描对比表：每个 引擎×方法×近邻壳层 的虚频闸、拟合残差、κ(300K)"}
   params:

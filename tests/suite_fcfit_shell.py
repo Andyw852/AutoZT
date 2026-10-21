@@ -631,7 +631,63 @@ def test_cut3_without_bootstrap_and_curve():
               doc["rows"][1]["pct_change_from_prev"]["kappa_xx"] == round(-500 / 30, 3)
               and doc["rows"][1]["pct_change_from_prev"]["kappa_zz"] is None,
               str(doc["rows"][1].get("pct_change_from_prev")))
+        # 2D 出图：不画 κzz，一行 (a) 原始 κ (b) 层厚归一化 κ (c) RMSE；xx/yy 同图
+        try:
+            import matplotlib.pyplot as _plt
+        except Exception:
+            _plt = None
+        if _plt is not None:
+            made = []
+            _orig = _plt.subplots
 
+            def _spy(*a, **k):
+                fig, axs = _orig(*a, **k)
+                made.append(fig)
+                return fig, axs
+            _plt.subplots = _spy
+            try:
+                d2 = out / "two_d"
+                d2.mkdir()
+                (d2 / "cutoff_scan.json").write_text(
+                    (out / "cutoff_scan.json").read_text(encoding="utf-8"))
+                doc2 = kd._write_kappa_vs_cutoff(
+                    d2, per, rep3, {"is_2d": True, "kappa_2d_norm": {
+                        "kappa_2d_norm_factor": 3.7, "thickness_d_A": 6.74}})
+            finally:
+                _plt.subplots = _orig
+            axes = made[-1].axes if made else []
+            labels = [a.get_ylabel() for a in axes]
+            check("2D 图：一行三图（原始 κ / 归一化 κ / RMSE），没有 κzz 面板",
+                  len(axes) == 3 and not any("zz" in l for l in labels)
+                  and "raw" in labels[0] and "6.74" in labels[1], str(labels))
+            check("2D 图：原始 κ 与归一化 κ 都在 json 里",
+                  doc2["rows"][0]["kappa_xx"] == 30.0
+                  and abs(doc2["rows"][0]["kappa_xx_2d_norm"] - 111.0) < 1e-9)
+            check("2D 图：各向同性时 xx=yy 画成一条线",
+                  len(axes[0].get_lines()) >= 1 and axes[0].get_legend() is not None
+                  and "xx" in axes[0].get_legend().get_texts()[0].get_text()
+                  and "yy" in axes[0].get_legend().get_texts()[0].get_text()
+                  and len(axes[0].get_legend().get_texts()) == 1)
+
+            # replot：不重跑 BTE，从 cut3_<tag>/kappa_summary.json + cutoff_selection.json 重画
+            rp = out / "replot"
+            rp.mkdir()
+            tags = [t for t, _ in per]
+            (rp / "kappa_config.json").write_text(json.dumps({
+                "cut_scans": tags, "is_2d": True, "method_label": "OLS",
+                "kappa_2d_norm": {"kappa_2d_norm_factor": 3.7, "thickness_d_A": 6.74}}))
+            (rp / "cutoff_selection.json").write_text(json.dumps(rep3))
+            (rp / "cutoff_scan.json").write_text(
+                (out / "cutoff_scan.json").read_text(encoding="utf-8"))
+            for t, sm in per:
+                (rp / ("cut3_%s" % t)).mkdir()
+                (rp / ("cut3_%s" % t) / "kappa_summary.json").write_text(json.dumps(sm))
+            n_re = kd.replot(rp)
+            jd = json.loads((rp / "kappa_vs_cutoff.json").read_text(encoding="utf-8"))
+            check("replot：用已有逐档结果重画（不跑 BTE）",
+                  n_re == 1 and (rp / "kappa_vs_cutoff.png").is_file()
+                  and [r["kappa_xx"] for r in jd["rows"]] == [30.0, 25.0, 24.5]
+                  and jd["chosen_cut_A"] == 5.5, str((n_re, jd.get("chosen_cut_A"))))
 
 def test_kappa_2d_thickness_norm():
     print("[14] 2D 面内 κ 层厚归一化（与 kl-dft-cpu 同口径 h⊥/d）")
