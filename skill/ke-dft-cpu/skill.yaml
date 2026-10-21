@@ -398,8 +398,9 @@ optional_steps:
          # [0016] stepconf.py/step.conf：本步开始读 step.conf（THICKNESS_A / NORM_2D / 共用 LAYER_THICKNESS）
          gen: gen_step11_boltztrap.py, gen_need: [discriminant_common.py, ke_common.py, dim_common.py, thickness_2d.py, vdw_radii.py, stepconf.py, step.conf],
          fetch_all: true,
-         needs: ["step3_uniform", "step6_elastic", "step7b_deform_read",
-                 "step8.2_dpt"]}
+         # [0065] 不直接等 S6：S8.1 不读弹性常数（C 只进 S8.2 的 DPT τ，半导体经 S8.2 间接等 S6）；
+         #   金属模式关掉 dpt 组后，S8.1 不再被一个几天的 IBRION=6 卡住。
+         needs: ["step3_uniform", "step7b_deform_read", "step8.2_dpt"]}
 
   # --- 8.4 二维散射核（amset2d 插件）：2D 材料自动打开 -------------------------
   #   默认 false —— 3D 项目看不到这个步骤，零回归风险（S8.4 对 3D 直接退出）。
