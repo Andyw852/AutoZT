@@ -23,6 +23,7 @@ import base64
 import json
 import os
 import shlex
+import sys
 
 # pip 名 → import 名（不在表里的按 "-"→"_" 处理）
 IMPORT_NAME = {
@@ -184,24 +185,36 @@ def _plan(cfg, keys, cluster_name, cluster):
     return groups, items, alts, is_local
 
 
-def _probe_script(groups, alts):
+def _probe_script(groups, alts, fallback_py=None):
     lines = ["_act() { local SH=\"$1\" ENV=\"$2\"; SH=\"${SH/#\\~/$HOME}\"; ENV=\"${ENV/#\\~/$HOME}\";",
              "  if [ -n \"$ENV\" ] && [ -x \"$ENV/bin/python\" ]; then source \"$ENV/bin/activate\";",
              "  elif [ -n \"$SH\" ] && [ -f \"$SH\" ]; then source \"$SH\";",
              "    if [ -n \"$ENV\" ]; then conda activate \"$ENV\"; fi;",
              "  elif [ -n \"$ENV\" ] && command -v conda >/dev/null 2>&1; then",
              "    eval \"$(conda shell.bash hook 2>/dev/null)\"; conda activate \"$ENV\"; fi; }",
+             "_ORIG_PATH=\"$PATH\"",
+             # fallback_py：请求的环境没激活成功时退回的绝对解释器（本机 = 运行 autozt 的 python）。
+             # 只看 `command -v python3/python` 的旧逻辑在 conda hook 把 base 环境塞进 PATH 后会
+             # 用错 python：CI 上装了 numpy 的 job python 被挤掉，环境检查误报 numpy 缺失。
+             "_FB=%s" % shlex.quote(str(fallback_py or "")),
              "_PYB64=%s" % shlex.quote(base64.b64encode(_PROBE_PY.encode()).decode())]
     for i, ((sh, env), g) in enumerate(sorted(groups.items())):
         payload = json.dumps({"mods": sorted(g["mods"]), "exes": sorted(g["exes"]),
                               "paths": sorted(g["paths"]), "alts": alts})
         lines.append("echo '@@GROUP %d'" % i)
-        lines.append("( _act %s %s >/dev/null 2>&1; _py=$(command -v python3 || command -v python); "
-                     "if [ -z \"$_py\" ]; then echo '@@NOPY'; else "
-                     "echo \"$_PYB64\" | base64 -d > \"${TMPDIR:-/tmp}/.autozt_probe_$$.py\"; "
-                     "\"$_py\" \"${TMPDIR:-/tmp}/.autozt_probe_$$.py\" %s; "
-                     "rm -f \"${TMPDIR:-/tmp}/.autozt_probe_$$.py\"; fi ) 2>/dev/null"
-                     % (shlex.quote(sh), shlex.quote(env), shlex.quote(payload)))
+        lines.append(
+            "( _act %s %s >/dev/null 2>&1; _ok=1; "
+            "if [ -n %s ]; then _a=\"${CONDA_DEFAULT_ENV:-${VIRTUAL_ENV:-}}\"; "
+            "case \"$_a\" in *\"$(basename -- %s)\"*) ;; *) _ok=0;; esac; fi; "
+            "_py=\"\"; if [ \"$_ok\" = 0 ]; then export PATH=\"$_ORIG_PATH\"; _py=\"$_FB\"; "
+            "elif [ -z %s ]; then _py=\"$_FB\"; fi; "
+            "[ -n \"$_py\" ] || _py=$(command -v python3 || command -v python); "
+            "if [ -z \"$_py\" ]; then echo '@@NOPY'; else "
+            "echo \"$_PYB64\" | base64 -d > \"${TMPDIR:-/tmp}/.autozt_probe_$$.py\"; "
+            "\"$_py\" \"${TMPDIR:-/tmp}/.autozt_probe_$$.py\" %s; "
+            "rm -f \"${TMPDIR:-/tmp}/.autozt_probe_$$.py\"; fi ) 2>/dev/null"
+            % (shlex.quote(sh), shlex.quote(env), shlex.quote(env), shlex.quote(env),
+               shlex.quote(env), shlex.quote(payload)))
     return "\n".join(lines) + "\n"
 
 
@@ -266,7 +279,8 @@ def check(cfg, keys, cluster_name="local"):
     if order:
         rc, out = run_remote(dict(cfg, remote_path_prefix=cluster.get("remote_path_prefix")
                                   or cfg.get("remote_path_prefix")),
-                             _probe_script({k: groups[k] for k in order}, alts),
+                             _probe_script({k: groups[k] for k in order}, alts,
+                                            fallback_py=(sys.executable if is_local else None)),
                              host=host, use_stdin=True)
         probed = _parse(out, len(order))
         if not any(probed):
