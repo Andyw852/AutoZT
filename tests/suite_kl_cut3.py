@@ -212,6 +212,13 @@ def test_select():
           and rj["plateau_interval"] == [4.5, 5.5], str((cj, rj["status"])))
     cjs, _ = kc.select_cutoff(jump, kappa_tol_pct=5.0, pick="smallest")
     check("平台后跳变 smallest 仍可选 → 4.5", abs(cjs - 4.5) < 1e-9, str(cjs))
+    mid = [_rec(4.8, 10.0, ratio=8.0), _rec(5.3, 10.1, ratio=4.0), _rec(5.9, 10.2, ratio=3.2)]
+    cm, rm = kc.select_cutoff(mid, kappa_tol_pct=5.0)
+    check("门槛 5：ratio 4.0/3.2 的档不参与 → 只剩 4.8，not_converged",
+          abs(cm - 4.8) < 1e-9 and rm["status"] == "not_converged", str((cm, rm["status"])))
+    cm3, rm3 = kc.select_cutoff(mid, kappa_tol_pct=5.0, min_ratio=3.0)
+    check("min_ratio=3 时三档都参与、平台取最大 5.9", abs(cm3 - 5.9) < 1e-9 and rm3["status"] == "ok",
+          str((cm3, rm3["status"])))
     bad = [_rec(4.8, 10.0, ratio=2.0), _rec(5.3, 10.0, ratio=2.5)]
     c4, r4 = kc.select_cutoff(bad)
     check("数据量全不足 → no_usable_cutoff", c4 is None

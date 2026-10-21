@@ -715,6 +715,9 @@ def _select(out, cfg, per_cut):
         kappa_tol_pct=float(cfg.get("cut3_kappa_tol_pct") or 5.0),
         se_mult=float(cfg.get("cut3_cv_1se_mult") or 1.0),
         stability_thr=float(cfg.get("cut3_stability_thr") or 0.3),
+        # 旧 kappa_config.json 没这个键 -> 用 cut3_select 的默认（5）
+        min_ratio=(None if cfg.get("cut3_min_ratio") is None
+                   else float(cfg["cut3_min_ratio"])),
         pick=str(cfg.get("cut3_pick") or "largest"))
     rep["kappa_err_source"] = ("fc3 per-shell sigma/|mean| propagated (coarse; "
                                "one kappa run per cutoff)")

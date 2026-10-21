@@ -464,7 +464,10 @@ writing `kappa_summary.json`:
 * **Cutoff chosen by kappa** (`CUT3_KAPPA_SCAN = auto`, default): when `S1_fit`
   ran with `CUT3_SCAN = auto` (default) it refits fc3 at every candidate cutoff
   into `cutoff_scan/cut3_<c>/`.  `S2_kappa` then runs the BTE once per candidate
-  and applies the **same three criteria as `kl-dft-cpu` S6** - residual 1-SE,
+  and applies the **same three criteria as `kl-dft-cpu` S6** - only on cutoffs
+  whose equations/parameters ratio is >= `CUT3_MIN_RATIO` (default 5; raised from
+  3 on 2026-10-21 after a synthetic-noise test showed ratio ~3.5 still biasing
+  kappa 10-13 % low) - residual 1-SE,
   per-shell stability (`cut <= stable_upper_cut`) and the kappa plateau
   (`CUT3_KAPPA_TOL_PCT`) - via `cut3_select.select_cutoff`, writing
   `cutoff_selection.json` and promoting the chosen cutoff's kappa to the

@@ -61,12 +61,18 @@ def _plateau_runs(usable, pair_ok, kappa_tol_pct, floor):
     return runs
 
 
+# 数据量门槛（方程数/参数数）。2026-10-21 用户定 3 → 5：合成数据检验（2D 5x5 超胞，
+#   36 帧、1 meV/Å 噪声）里 ratio=3.5 的档 κ 仍被噪声系统性压低 10–13%，ratio=2.2 的档
+#   压低近 40%。可用 CUT3_MIN_RATIO 覆盖。
+MIN_RATIO_DEFAULT = 5.0
+
+
 def select_cutoff(records, kappa_tol_pct=5.0, se_mult=1.0, stability_thr=0.3,
-                  pick="largest", component_floor=0.1):
+                  pick="largest", component_floor=0.1, min_ratio=MIN_RATIO_DEFAULT):
     """按三判据自动选最小可行截断。records 是每个候选截断一条 dict：
 
         cut               截断 (Å)
-        ratio             方程数/参数数（<3 = 数据不足 → 不参与）
+        ratio             方程数/参数数（< min_ratio，默认 5 = 数据不足 → 不参与）
         train_rel_err     拟合残差（★in-sample，**不是**交叉验证）：pheasy -f 在【全部帧】
                           上的 Relative error；判据①的输入
         train_rel_se      该残差在帧 bootstrap 重抽样下的标准误（1-SE 用；缺省 0）
@@ -109,8 +115,9 @@ def select_cutoff(records, kappa_tol_pct=5.0, se_mult=1.0, stability_thr=0.3,
                           if kv else None)
         recs.append(d)
     recs.sort(key=lambda r: r["cut"])
+    _min_ratio = float(MIN_RATIO_DEFAULT if min_ratio is None else min_ratio)
     for r in recs:
-        r["data_ok"] = r["ratio"] >= 3.0
+        r["data_ok"] = r["ratio"] >= _min_ratio
         r["stable_ok"] = ((not r["stability_measured"])
                           or (r["stable_upper_cut"] is not None
                               and r["cut"] <= r["stable_upper_cut"] + 1e-9))
@@ -184,7 +191,9 @@ def select_cutoff(records, kappa_tol_pct=5.0, se_mult=1.0, stability_thr=0.3,
         "status": status,
         "err_gate_applied": err_gate,
         "stability_gate_applied": any(r["stability_measured"] for r in recs),
-        "criteria": {"rel_err_1se": ("train_rel_err <= min(train_rel_err) + %g*SE"
+        "min_ratio": _min_ratio,
+        "criteria": {"data": "方程数/参数数 >= %g" % _min_ratio,
+                     "rel_err_1se": ("train_rel_err <= min(train_rel_err) + %g*SE"
                                      "（err_kind=held-out 时才启用）" % float(se_mult)),
                      "stability": "sigma/|mean| < %g" % float(stability_thr),
                      "plateau": ("连续稳定区间：相邻 Δκ 且起点到区间内各档的累计 Δκ "
@@ -218,6 +227,11 @@ def select_cutoff(records, kappa_tol_pct=5.0, se_mult=1.0, stability_thr=0.3,
                          if status == "not_converged"
                          else "没有数据量/稳定性达标的截断：需补帧或加大位移")),
     }
+    _low = [r for r in recs if not r["data_ok"]]
+    if _low:
+        report["reason"] += "；%s 方程数/参数数 < %g（数据不足，未参与选择；补帧后可纳入）" % (
+            "、".join("%.2f Å（%.2f）" % (r["cut"], r["ratio"]) for r in _low),
+            _min_ratio)
     if after:
         report["reason"] += "；平台之后 %s 跳变（%s），长程三阶项数据定不住，未采用" % (
             "、".join("%.2f Å" % a["cut"] for a in after),
