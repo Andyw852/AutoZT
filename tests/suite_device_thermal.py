@@ -118,7 +118,8 @@ def test_validation():
     except SystemExit:
         ok(True, "N_GRID_X=1 报错")
     s0 = solve(make_spec(Q_joule_W_m2=0.0))
-    ok(s0["dT_peak_K"] == 0.0 and s0["dT_ratio_FVM_over_1D"] is None,
+    # 求解器解的是绝对温度，dT = T.max() - T_amb 带 ~1e-13 K 的舍入噪声，不能要求恰好 0.0
+    ok(abs(s0["dT_peak_K"]) < 1e-9 and s0["dT_ratio_FVM_over_1D"] is None,
        "Q_JOULE=0 行为明确：dT=0、ratio=n/a（不抛 TypeError）")
     tmp = tempfile.mkdtemp(prefix="dt_val_")
     try:
@@ -260,8 +261,9 @@ def test_param_flow():
         props = json.load(open(os.path.join(tmp, "step2_props/thermal_props.json")))
         approx(props["tbc_W_m2K"], 1.2e8, 1e-12, "S2 上设 TBC_OVERRIDE 真的生效")
         approx(props["channel"]["thickness_m"], 1e-9, 1e-12, "S2 上设 CHANNEL_THICKNESS 真的生效")
+        _m = DC.load_materials()["materials"]["MoS2"]   # 按材料库现值算，别写死（库值会修正）
         approx(props["channel"]["kx_W_mK"] * props["channel"]["thickness_m"],
-               63.7 * 6.7177e-10, 1e-9, "改厚度时 κ·t 保持（面内热导不变）")
+               _m["kappa_inplane_W_mK"] * _m["thickness_m"], 1e-9, "改厚度时 κ·t 保持（面内热导不变）")
 
         _write_conf(tmp, {"DO_TRANSIENT": "false"})
         r = _run_gen(tmp, "gen_step3_solve.py")
