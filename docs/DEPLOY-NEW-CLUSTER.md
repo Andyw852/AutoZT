@@ -1,81 +1,118 @@
-# 新超算 / 新账号接入 AutoZT —— 通用部署手册
+# Deploying AutoZT at a New HPC Site: Porting and Acceptance Guide
 
-> 目标：拿到一个新集群（或同集群新账号）后，按本手册可以**不靠原作者**把 AutoZT 布通：
-> 跑得了 `autozt check` → 提交得了作业 → 结果数值可对照。
->
-> 本手册**不假设**集群长什么样：SLURM / PBS / 无调度器、Intel / GCC、MKL / OpenBLAS、
-> NVIDIA / 海光 DCU / 无加速卡、有无 module 系统，都按“先侦察、再分支”的方式处理。
-> 每节都给了**判据**（怎么算这一步完成）和**常见变体**（别人集群不一样时怎么办）。
->
-> 配套实例：`docs/CLUS_XA-DEPLOY-20261019.md`（SCNet 西安 clus_xa 的实测记录，含所有坑的现场数据）。
-> 配套工具：`tools/probe_cluster.sh`（只读侦察，见第 1 节）。
+**Document version:** 1.0  
+**Applies to:** AutoZT v2.0 and later  
+**Audience:** site administrators and users who deploy AutoZT on a compute cluster or standalone node  
+**Companion artifacts:** `tools/probe_cluster.sh` (read-only site survey), `docs/DEPLOY-RECORD-TEMPLATE.md` (per-site record), `docs/CONFIGURING.md` (configuration reference)  
+**License:** MIT (see `LICENSE`)
 
 ---
 
-## 0. 总览：新集群要交付什么
+## 1. Scope
 
-| # | 交付物 | 位置 | 判据 |
-|---|--------|------|------|
-| 1 | SSH 别名可用（BatchMode 免密） | 本机 `~/.ssh/config` | `ssh <别名> true` 返回 0 |
-| 2 | 编译/运行环境 | 远端 `~/software/AutoZT/` | `ldd` 无 not found，二进制能跑 |
-| 3 | POTCAR 库 + VASPKIT 配置 | `~/software/AutoZT/vasp_pseudopotentials` + `~/.vaspkit` | `autozt check` 不报 potcar 缺失 |
-| 4 | Python 环境（venv/conda） | 远端 `~/software/AutoZT/venvs/<name>` | 非交互 `python3 -c "import numpy,pymatgen,spglib"` 通过 |
-| 5 | 集群配置 | 本机 `setting/<hpc>.yaml` | `autozt doctor` 认得出该集群 |
-| 6 | 提交模板 | 本机 `setting/<hpc>/templates/` | 生成的 `submit.sh` 能提交 |
-| 7 | 验收记录 | `docs/<HPC>-DEPLOY-<日期>.md` | `autozt check` 全绿 + 冒烟数据 |
+AutoZT is distributed with templates rather than with a working site configuration. Everything
+that identifies a machine -- scheduler, partition names, module system, compilers, mathematics
+and FFT libraries, pseudopotential locations, scratch directories -- is site specific and must
+be supplied by the operator. This guide describes a reproducible procedure for bringing up a new
+site, from a first read-only survey to a documented acceptance test.
 
-**原则**：
-1. **只读优先**：侦察阶段全部只读（`ssh` 跑 `sinfo/ldd/ls` 可以，`sbatch` 只用 `--test-only`）。
-2. **最小可用再扩展**：先 VASP 全链路，再 QE/amset/MACE 等可选组件。
-3. **每步留判据**：不要“看起来装好了”——用 `ldd`、`autozt check`、一个真实小作业说话。
-4. **集群私有信息不进仓库**：`setting/*` 默认被 `.gitignore` 排除；文档里用占位符代替个人路径。
+The guide deliberately makes no assumptions about the target machine. It covers:
 
----
+- batch schedulers (SLURM, PBS/SGE/LSF, or none);
+- compiler stacks (GNU, Intel, or mixed);
+- mathematics libraries (MKL, OpenBLAS, vendor BLAS/LAPACK);
+- accelerators (NVIDIA GPUs, Hygon DCUs, or none);
+- module systems (Lmod/Tcl modules, Spack, or plain environment variables).
 
-## 1. 第一步：侦察集群（不要凭经验猜）
+Each section states the acceptance criterion for that step and lists common site-to-site
+variations. A worked example with measured numbers is given in Appendix C.
+
+## 2. Terminology
+
+| Term | Meaning in this document |
+|---|---|
+| Site / cluster | A compute resource accessed over SSH (possibly several accounts on one machine). |
+| Site profile | The YAML file `setting/<cluster>.yaml` that describes a site to AutoZT. |
+| Skill | An AutoZT workflow module (`skill/<name>/skill.yaml`) defining steps, criteria and artifacts. |
+| Runtime environment | The Python environment (virtualenv or conda prefix) used by input-generation scripts. |
+| Work directory | A writable file-system root on the site where AutoZT creates material directories. |
+| Pseudopotential library | The POTCAR (or UPF) data set used by the electronic-structure engine. |
+| Template | A scheduler submission script in `setting/<cluster>/templates/`, rendered at input generation. |
+| Acceptance test | The evidence that the site is configured correctly (Sections 14 and 15). |
+
+## 3. Relation to existing practice
+
+AutoZT follows an established pattern in scientific software: the code is portable, while
+machine-specific parameters are isolated in a declarative profile and validated by a dedicated
+command. Representative examples:
+
+| Project | Site-specific configuration | Validation / diagnostics |
+|---|---|---|
+| ASE | `siteconfig.py` (shipped template, generated once per site) | `ase info`, import test |
+| AiiDA | `verdi computer setup` (hostname, scheduler, work directory, `mpirun` command, prepend/append text) | `verdi computer test` |
+| Quantum ESPRESSO | `make.inc` plus `arch/` machine files | build of the test suite |
+| CP2K | `arch/` files, one per platform | `make -j` and regression tests |
+| LAMMPS | `src/MAKE/MACHINES/Makefile.*` | unit tests in `unittest/` |
+| Snakemake | executor plugins and per-site profiles (`profiles/<site>/config.yaml`) | `--dry-run` |
+| Nextflow | `nextflow.config` with named `profiles` selected by `-profile` | `-preview` |
+| jobflow-remote | `jobflow.yaml` (runner, workers, scheduler, work directory, pre/post-run commands) | `jf runner check` |
+
+The conventions shared by these projects, and adopted here, are:
+
+1. **Ship a template, not a working configuration.** No site paths, host names or credentials
+   are committed; `setting/*` is excluded from version control.
+2. **One declarative file per site**, enumerating access details, scheduler, work directory,
+   runtime environment and launch commands.
+3. **Environment discovery over hard coding.** Compilers, MPI and libraries are selected through
+   the site's own mechanism (modules, Spack, or environment variables), never assumed.
+4. **A preflight command.** Configuration errors are reported before any job is submitted
+   (`autozt check`, Section 14).
+5. **Reference and tutorial are separate documents.** Field semantics live in
+   `docs/CONFIGURING.md` and Section 11 here; the step-by-step procedure is this guide.
+6. **Recorded acceptance evidence.** Version pins, build flags and smoke-test output are kept in
+   a per-site record (`docs/<SITE>-DEPLOY-<date>.md`), preserving reproducibility.
+
+## 4. Site survey (read-only)
+
+Perform the survey before changing anything on the site. `tools/probe_cluster.sh` collects the
+following items over SSH without submitting work (unless `--test-only` is given):
 
 ```bash
-# 本机
-tools/probe_cluster.sh
-
-# 远端（先把 SSH 别名配好，见第 2 节）
-tools/probe_cluster.sh <ssh别名>
-
-# 加 --test-only 时才会向调度器做“空提交预检”（不占资源）
-tools/probe_cluster.sh <ssh别名> --test-only
+tools/probe_cluster.sh                       # current machine
+tools/probe_cluster.sh <ssh-alias>           # remote site
+tools/probe_cluster.sh <ssh-alias> --test-only   # also probe scheduler acceptance
 ```
 
-侦察报告覆盖：基本信息、调度器、分区/GRES/时限、账户配额、存储、module/编译器/MPI、
-数学库/FFT、加速卡、Python/conda、AutoZT 现状、POTCAR 候选、可提交性预检。
+The report covers host and OS information; the available batch scheduler; SLURM partitions with
+node counts, cores, memory, GRES and time limits; account associations and QOS limits; file
+systems and quotas; module system and compiler/MPI versions; mathematics and FFT libraries;
+accelerators; the non-interactive Python environment; existing AutoZT installation; and
+candidate pseudopotential directories.
 
-### 1.1 必须手工确认的 6 个数
+### 4.1 Six quantities to determine manually
 
-| 问题 | 命令（只读） | 记到 yaml |
-|------|--------------|-----------|
-| 能提交哪个分区？ | 逐分区 `sbatch --test-only`（probe 的 --test-only） | `partition` |
-| 每节点多少核/多少内存？ | `sinfo -o "%c %m"`、`scontrol show node` | `max_cpus`（每节点上限） |
-| 账户并发上限？ | `sacctmgr show assoc` 的 GrpTRES；或超配提交报错反推 | 写进 yaml 注释 |
-| 单作业最长多久？ | `sinfo -o "%l"` / `scontrol show partition` | 模板 `--time` |
-| 有没有 GPU/DCU？几张？ | `nvidia-smi -L` / `hy-smi` / `sinfo GRES` | 是否用 GPU 技能 |
-| 家目录/工作目录在哪？多大？ | `df -h ~`、`quota` | `work_dir` |
+| Question | Read-only command | Recorded in |
+|---|---|---|
+| Which partitions accept jobs from this account? | per-partition `sbatch --test-only` | `partition` |
+| Cores and memory per node? | `sinfo -o "%c %m"`, `scontrol show node` | `max_cpus` |
+| Account-level concurrency limit? | `sacctmgr show assoc` (GrpTRES), or an oversized `--test-only` request | comment in the site profile |
+| Maximum job wall time? | `sinfo -o "%l"`, `scontrol show partition` | `--time` in templates |
+| Accelerators per node? | `nvidia-smi -L`, `hy-smi`, `sinfo` GRES | skills using GPUs/DCUs |
+| Work and home file systems, sizes and quotas? | `df -h`, `quota` | `work_dir` |
 
-> 变体：集群没有 `sinfo`（PBS/SGE/LSF/裸机）→ 用 `qstat -Q` / `bqueues` / 问管理员；
-> AutoZT 的 `start` 需要 `sbatch/squeue/scancel` 语义，非 SLURM 需适配层（第 9.5 节）。
->
-> 探测小提示：批量 `--test-only` 时每个分区之间 **sleep 1–2 s**（`tools/probe_cluster.sh` 已内置），
-> 否则可能被限流（`sbatch: request too frequently`）而把可用分区误判成不可用。
+When probing many partitions, pause for one to two seconds between requests; some schedulers
+throttle rapid submissions (`sbatch: request too frequently`), which would otherwise make
+available partitions appear unavailable.
 
----
+## 5. Access and non-interactive execution
 
-## 2. SSH：别名、密钥、直连与跳板
-
-### 2.1 最小可用
+### 5.1 SSH configuration
 
 ```sshconfig
 Host <alias>
     HostName <host>
     Port <port>
-    User <user>
+    User <account>
     IdentityFile ~/.ssh/id_rsa_<name>
     IdentitiesOnly yes
     ServerAliveInterval 30
@@ -85,185 +122,192 @@ Host <alias>
     ControlPersist 4h
 ```
 
-判据：`ssh -o BatchMode=yes <alias> true && echo OK`。密钥权限 `600`、目录 `700`。
+Acceptance criterion: `ssh -o BatchMode=yes <alias> true` exits with status 0. Private keys
+must be readable only by the owner (`chmod 600`) and the parent directory must be `chmod 700`.
 
-### 2.2 直连被墙/只能跳板
+If the cluster is reachable only through a bastion host, use
+`ProxyCommand ssh -W %h:%p <bastion-alias>` and verify each hop independently; a failure in
+either hop is otherwise reported only as a timeout.
 
-```sshconfig
-Host <alias>
-    HostName <real-host>
-    ProxyCommand ssh -W %h:%p <jump-alias>
-```
+### 5.2 Requirements of non-interactive sessions
 
-> 注意：跳板链上任何一跳的密钥/网络失效都会表现为“超时”，先分别验证每一跳。
+AutoZT invokes the remote host non-interactively (`ssh host 'python3 ...'`) for job collection
+and submission. Two conditions therefore apply:
 
-### 2.3 ★ 非交互会话的两个坑（AutoZT 采集/提交都离不开）
+1. **The runtime Python must be on the non-interactive `PATH`.** Variables exported only from
+   interactive start-up files are not visible. Two standard remedies are to write the `PATH`
+   to `~/.ssh/environment` (requires `PermitUserEnvironment yes` in `sshd_config`), or to
+   create a symbolic link to the interpreter in a directory that is already on the
+   non-interactive `PATH` and is writable by the account; the survey script reports the first
+   such directory.
+2. **Module commands are not inherited.** Every job script must load its modules explicitly; a
+   non-interactive SSH command does not run the login-shell module initialisation.
 
-1. **非交互 PATH 可能不含你的 venv**：AutoZT 远端采集用 `ssh host 'python3 ...'`，
-   若登录 shell 才 source 的 `.bashrc` 没生效，就找不到 python3。
-   - 方案 A（通用）：`mkdir -p ~/.ssh && echo 'PATH=...' > ~/.ssh/environment` 并让 sshd 允许（`PermitUserEnvironment yes`）；
-   - 方案 B（不依赖 sshd 配置）：把 `python3` 软链到**本来就非交互在 PATH 里**且你可写的目录，例如 `~/perl5/bin/python3`（先看 `probe_cluster.sh` 第 8 节的“第一个可写 PATH 目录”）。
-2. **module 只在交互 shell 生效**：作业脚本里必须显式 `module load ...`；`ssh host 'command'` 不会自动 load。
+Acceptance criterion: `ssh <alias> 'python3 -V && command -v python3'` succeeds and reports
+the intended runtime environment.
 
-判据：`ssh <alias> 'python3 -V && which python3'` 在**非登录式**命令里也能成功（AutoZT 的 collect 就长这样）。
+## 6. Directory layout and storage
 
----
-
-## 3. 远端目录布局（AGENTS 铁律 11）
+The following layout is the project convention:
 
 ```
 ~/software/AutoZT/
-├── vasp/                    # 源码 + 编译产物（每个版本一个子目录）
+├── vasp/                    # source trees and binaries, one directory per version
 │   ├── vasp.6.4.3-pristine/
-│   ├── vasp.6.4.3-optcell/  # 若需要 2D 变胞
-│   └── makefile.include     # 集群专用编译配置（留档）
-├── vasp_pseudopotentials/   # potpaw_PBE_64/ 等
-├── venvs/                   # 每个 Python 环境一个子目录（autozt / mace_cpu / cogito ...）
-├── conda_envs/              # 若用 conda（amset 等）
-├── mlff_models/             # 机器学习势权重
-├── qe-*/ pseudo-*/          # 可选组件
-└── work/                    # AutoZT 远端工作根（work_dir）
+│   ├── vasp.6.4.3-optcell/  # only if cell-constrained relaxation is required
+│   └── makefile.include     # site-specific build configuration, kept for provenance
+├── vasp_pseudopotentials/   # e.g. potpaw_PBE_64/
+├── venvs/                   # one Python environment per component
+├── conda_envs/              # conda prefixes, if used
+├── mlff_models/             # machine-learning interatomic potentials
+├── qe-*/ pseudo-*/          # optional components
+└── work/                    # work_dir for AutoZT
 ```
 
-容量估算：VASP 编译 ~2 GB（源码+对象+3 个二进制×2 版本）；POTCAR ~300 MB；venv 0.6–2 GB；
-MACE 模型 0.1–1 GB；QE ~0.6 GB；UniHamGNN 全套 ~3 GB。**先 `df -h` 确认家目录配额**。
+Sizing guidance: a VASP build tree occupies about 2 GB (sources, objects and six binaries for
+the pristine and cell-constrained variants); a pseudopotential library 0.3 GB; Python
+environments 0.6-2 GB each; machine-learning potentials 0.1-1 GB; optional components up to
+3 GB. Check quotas (`df -h`, `quota`) before installing.
 
-判据：`du -sh ~/software/AutoZT/*` 与 `df -h ~` 都在预算内。
+Acceptance criterion: `du -sh ~/software/AutoZT/*` remains within the available quota.
 
----
+## 7. Toolchain selection
 
-## 4. 编译/库选型决策表（不同集群差异最大的地方）
+### 7.1 Compiler stack
 
-### 4.1 编译器
+| Available on the site | Recommended choice |
+|---|---|
+| System GCC only (often 4.8-7.x) | Load a newer module (`gcc/9` or later) or a developer toolset; older compilers may fail with an internal compiler error |
+| Intel oneAPI / Parallel Studio | `mpiicc`/`mpiifort` with MKL; least configuration effort |
+| Mixed (GNU compilers with Intel MKL) | Supported; link the MKL variants explicitly (`gnu_thread`) |
 
-| 集群有啥 | 建议 |
-|----------|------|
-| 只有系统 gcc（常是 4.8/7.x 老版本） | 找 module（gcc/9+）或用 `scl enable devtoolset-*`；**老 gcc 会 ICE**（见 13 节） |
-| Intel oneAPI / parallel_studio | 用 `mpiicc/mpiifort`，数值库直接 MKL，最省事 |
-| 混合（gcc 编译 + Intel MKL） | 可行：`-mkl=sequential` 或手动链 MKL 的三件套 |
+ABI rule: the MPI library determines the compiler and Fortran runtime to use. Mixing
+`libgfortran` versions commonly produces binaries that link but fail at run time.
 
-**ABI 原则**：MPI 库由谁编译，就用谁家的编译器和 Fortran runtime；`libgfortran` 版本混用会
-“能编译、运行时报 undefined symbol / segfault”。
+### 7.2 Mathematics and FFT libraries
 
-### 4.2 BLAS / LAPACK / FFT
+| Source | Advantage | Caution |
+|---|---|---|
+| MKL | Fast and self-contained | With GNU compilers choose `intel_lp64` + `intel_thread` or `gnu_thread`; `libiomp5` resides in the compiler library directory |
+| System BLAS/LAPACK | No installation | Link as `-l:liblapack.so.3 -l:libblas.so.3`; LAPACK before 3.8 provides `dgegv_`, later versions removed it (Section 8) |
+| OpenBLAS | Good multithreaded performance | Account for thread oversubscription against MPI ranks |
+| FFTW3 | Portable | Use the double-precision installation |
 
-| 来源 | 优点 | 注意 |
-|------|------|------|
-| MKL | 最快、最省心 | 与 gcc 混用要选 `intel_lp64+intel_thread` 或 `gnu_thread` 变体；`libiomp5` 在 `compiler/lib/intel64*` 下 |
-| 系统 BLAS/LAPACK | `-l:liblapack.so.3 -l:libblas.so.3` | 老 LAPACK(<3.8) 有 `dgegv_`；新版本删了它 → 补源码（第 12.2 节） |
-| OpenBLAS | 多线程好 | 注意 `OPENBLAS_NUM_THREADS` 与 MPI 线程超订 |
-| FFTW3 | 通用 | 头文件/库分 double 版：`.../fftw3/double/gnu/{include,lib}` |
+Acceptance criterion: `ldd <binary> | grep "not found"` produces no output, and a smoke run
+completes without undefined-symbol errors.
 
-判据：`ldd <二进制> | grep "not found"` 为空；跑冒烟作业不出现 `undefined symbol`。
+## 8. Building the electronic-structure engine
 
----
-
-## 5. 源码构建通用流程（以 VASP 为例，其它同理）
+The procedure below is written for VASP and applies unchanged to other source-distributed
+engines.
 
 ```bash
-module load <compiler> <mpi>          # 显式加载；作业脚本里也要写
+module load <compiler> <mpi>            # also required inside job scripts
 cd ~/software/AutoZT/vasp
-# 1) 解包源码
-# 2) 写 makefile.include（本集群专用，留档在包里）
-# 3) 先小规模试编，再并行
+# 1) unpack the source tree
+# 2) write makefile.include for this site and keep it with the tree
+# 3) start with a single target, then increase parallelism
 make -k -j 16 std > build_std.log 2>&1 || true
 ```
 
-| 症状（build 日志） | 根因 | 处理 |
+### 8.1 Diagnostic table for build failures
+
+| Symptom in the build log | Probable cause | Remedy |
 |---|---|---|
-| `internal compiler error: Segmentation fault` | 编译器太老/与源码不兼容 | 换新版 gcc/Intel |
-| `cannot find -lxxx` | 库路径/名字不对 | 用 `ldconfig -p`、module show 找真实路径，必要时 `-L... -Wl,-rpath,...` |
-| `undefined reference to 'xxx_'`（Fortran 符号） | 缺库/链接顺序/ABI | 把库放最后；确认 MPI/Fortran runtime 与编译器同一套 |
-| 大量 `.mod` 找不到、并发编译时随机失败 | 并行 make 的模块依赖竞态 | `make -k -j N` **迭代多轮**直到收敛（每轮补一批） |
-| `invalid command 'bdist_wheel'`（Python 包） | 环境缺 wheel | `pip install wheel` 后重试 |
+| `internal compiler error: Segmentation fault` | Compiler too old for the source | Load a newer compiler |
+| `cannot find -lxxx` | Wrong library path or name | Locate the library (`ldconfig -p`, `module show`); add `-L` and preferably `-Wl,-rpath` |
+| `undefined reference to 'name_'` | Missing library, wrong link order, or ABI mismatch | Place libraries last; ensure MPI and Fortran runtime match the compiler |
+| Many missing `.mod` files under parallel make | Module-dependency race in parallel builds | Repeat `make -k -j N` until convergence; each pass completes another group of objects |
+| `invalid command 'bdist_wheel'` (Python packages) | `wheel` absent from the environment | `pip install wheel`, then retry |
 
-**安装后必做**：`ldd` 检查 + 用**最小输入**真跑一次（第 6.3 节），别只看“编过了”。
+After installation, verify dynamically: `ldd` for unresolved libraries, then a minimal
+calculation (Section 8.3). A successful link is not sufficient evidence of a working binary.
 
----
+### 8.2 Cell-constrained relaxation (optional)
 
-## 6. VASP 接入（第一个要通的东西）
+Materials requiring in-plane relaxation with a fixed vacuum axis need a variant built from a
+patched source tree. Keep both variants side by side and reference them through two VASP
+profiles in the site profile (`standard`, `relax_2d`).
 
-### 6.1 makefile.include 关键项（通用骨架）
+### 8.3 Smoke test and numerical baseline
 
-```make
-FC = mpif90
-FCL = mpif90
-CPP_OPTIONS = -DHOST=\"LinuxGNU\" -DMPI -DMPI_BLOCK=8000 -Duse_collective \
-              -DCACHE_SIZE=4000 -Davoidalloc -Dvasp6 -Duse_bse_te -Dtbdyn -Dfock_dblbuf
-BLASPACK = -L<blas/lapack dir> -l:liblapack.so.3 -l:libblas.so.3
-LLIBS   += $(BLASPACK) -L<fftw lib> -Wl,-rpath,<fftw lib> -l:libfftw3.so.3
-INCS    += -I<fftw include>
-OBJECTS_LIB = linpack_double.o dgegv.o dggsvd.o   # 仅当 LAPACK 太新、缺 dgegv/dggsvd 时
+Use a two-atom Si diamond cell with a minimal input set (`ENCUT=250`, `ISMEAR=0`, `SIGMA=0.05`,
+`EDIFF=1e-5`, `NELM=20`) submitted through the site template. Acceptance criteria: exit status
+0; `reached required accuracy` present in `OUTCAR`; a timing block written.
+
+Record the total energy and compare it with an established value obtained on another machine
+with identical inputs. A discrepancy larger than 1e-4 eV warrants checking the pseudopotential
+file, the plane-wave cutoff and the engine version.
+
+### 8.4 Parallel configuration
+
+- `NCORE` (VASP 5 and later) is usually chosen between four and eight, or approximately the
+  square root of the cores per node; use `KPAR` only when enough k-points are available.
+- Whole-node requests are more efficient but queue longer than partial-node requests on busy
+  systems; measure both policies (Section 12.2).
+- The account concurrency limit bounds the product of job size and the number of simultaneous
+  jobs; reserve one slot for debugging.
+
+## 9. Pseudopotentials, post-processing and the Python runtime
+
+### 9.1 Pseudopotential library layouts
+
+Three layouts occur in practice; `potcar_dir` must point to the correct level:
+
+```
+A) potcar_dir/potpaw_PBE_64/<element>/POTCAR     (recommended; expected by defect-type skills)
+B) potcar_dir/potpaw_PBE/<element>/POTCAR
+C) potcar_dir/<element>/POTCAR                   (result of extracting the official archive)
 ```
 
-> 别照抄别人的 `makefile.include`——库名/路径/可选宏都跟集群相关；用 `make -n` 或编译日志确认。
+The official archives extract as layout C (element directories directly beneath the current
+directory). Create the parent directory, move the content into it, and make the read-only
+directories writable first (`chmod -R u+w`), because the archives preserve restrictive modes.
 
-### 6.2 2D 变胞（optcell）
+Acceptance criterion: `autozt check` reports no missing pseudopotential data, and the
+post-processing tool generates a `POTCAR` whose first line names the expected potential.
 
-若材料需要“面内固定、真空方向放开”的变胞，用打过补丁的源码编一份（`relax_2d` profile 指向它），
-否则用原版。两份都保留在 `vasp/` 下，yaml 里用两个 profile 区分。
+### 9.2 VASPKIT configuration
 
-### 6.3 冒烟作业（每个新集群必做）
+VASPKIT 1.x reads `~/.vaspkit` in a whitespace-separated `KEY VALUE` format. Writing
+`KEY = VALUE` causes the value to be parsed as `=` and the pseudopotential is silently not
+generated. Verify with a single structure:
 
 ```bash
-# 目录里放 POSCAR(2 原子 Si 立方)/INCAR/KPOINTS/POTCAR，用集群模板提交
-# INCAR 最小集： ENCUT=250 ISMEAR=0 SIGMA=0.05 EDIFF=1e-5 NELM=20 NCORE=<核数>
-# 判据： exit code 0、OUTCAR 含 "reached required accuracy"、General timing 有数
+printf '1\n103\n' | vaspkit      # should create POTCAR starting with 'PAW_PBE Si ...'
 ```
 
-**数值基线**：同一材料在另一台机器上跑过的总能用同一个 POSCAR/INCAR/KPOINTS/POTCAR 比
-（Si 立方 2 原子、ENCUT 250、2×2×2 Γ 中心常作基准）。差 >1e-4 eV 要查 POTCAR/ENCUT/版本。
+A related diagnostic issue exists in early releases: `autozt check` parsed only `KEY = VALUE`
+lines and therefore reported `vaspkit_potcar` as missing although VASPKIT itself worked. Both
+formats are now accepted; the native whitespace-separated format remains required by VASPKIT.
 
-### 6.4 并行参数（通用原则）
+### 9.3 Python runtime environments
 
-- `NCORE`（VASP 5+）≈ sqrt(每节点核数) 或 4–8；`KPAR` 只在 k 点足够多时开。
-- 单节点核数 ≥ 64 时，整节点提交更划算；但**整节点要等完全空闲节点**，忙时排队更久。
-- 账户并发上限 = 核数预算：`jobcores × max_jobs ≤ 配额`。例：320 核 → 32 核×10 个作业。
-- 作业时长设账户/分区上限（如 3 天）；短作业（<1 天）通常排得更快。
+| Requirement | Recommended environment |
+|---|---|
+| Core AutoZT input generation | A virtualenv with numpy, scipy, matplotlib, spglib, pymatgen, h5py and seekpath |
+| Component-specific packages (amset, phonon codes, MACE, ...) | One isolated environment per component; version requirements frequently conflict |
 
----
+Version policy:
 
-## 7. POTCAR、VASPKIT 与 Python 环境
+- `numpy`: legacy scientific packages (amset 0.5.x, pheasy) generally require 1.x, whereas
+  `cogito-dft` 0.3.13 requires 2.x; such packages must not share an environment.
+- `pymatgen`: many older tools are incompatible with recent major versions; verify through the
+  component's own entry point, not only with `import pymatgen`.
+- After installation, always test through a non-interactive invocation (Section 5.2).
 
-### 7.1 POTCAR 三种布局（`potcar_dir` 要指向**哪一层**看你的目录结构）
+Acceptance criterion:
+`ssh <alias> 'python3 -c "import numpy,scipy,pymatgen,spglib,h5py; print(1)"'`.
 
-```
-A) potcar_dir/potpaw_PBE_64/<El>/POTCAR     ← 推荐（AutoZT/defect 类按这个找）
-B) potcar_dir/potpaw_PBE/<El>/POTCAR
-C) potcar_dir/<El>/POTCAR                   ← 解包时没建父目录的情况（要搬一层）
-```
-解包官方 tar 包通常得到的是 C 形态（元素目录直接铺开），记得 `mkdir potpaw_PBE_64 && mv */ potpaw_PBE_64/`，
-搬之前 `chmod -R u+w`（官方包目录常是只读 `r-x`）。
+#### 9.3.1 Environments created with `conda create -p`
 
-### 7.2 VASPKIT（生成 POTCAR 的工具，也是 `autozt check` 的检查点之一）
+AutoZT treats a runtime-environment path containing `/` as a virtualenv and activates it with
+`source <env>/bin/activate`. Conda environments created by recent conda versions do not contain
+a virtualenv-style `bin/activate`; activation therefore fails silently and the system
+interpreter is used instead, which manifests as missing packages in `autozt check` and import
+failures in generation scripts.
 
-- VASPKIT 1.x 的 `~/.vaspkit` 用**空格分隔**：`PBE_PATH    /abs/path/potpaw_PBE_64`；
-  写成 `KEY = VALUE` 时 vaspkit 会把值读成 `=`，**静默不生成 POTCAR**。
-- 生成 POTCAR 的快速验证：任意目录放 POSCAR，`printf '1\n103\n' | vaspkit`，看有没有 `POTCAR` 且首行是 `PAW_PBE Si ...`。
-- 若 `autozt check` 报 `vaspkit_potcar` 缺失但 vaspkit 明明能用：那是 check 的解析格式与 vaspkit 原生格式不一致
-  （仓库已修：两种格式都认）；老版本可用 `KEY = VALUE` 临时通过 check，但会破坏 vaspkit，**不推荐**。
-
-### 7.3 Python 环境（venv 还是 conda）
-
-| 场景 | 建议 |
-|------|------|
-| 只用 AutoZT 内置技能 | venv 足够：`python -m venv`，pip 装 numpy/scipy/matplotlib/spglib/pymatgen/h5py/seekpath |
-| 要用 amset / phonopy 链 / MACE | 组件各自独立环境（numpy 版本需求常冲突，见 12 节） |
-
-**版本原则**：
-- `numpy`：老 amset/pheasy/mace 生态多为 1.x；cogito-dft 0.3.13 要求 ≥2 → **不要塞同一个环境**；
-- `pymatgen`：许多老工具不兼容太新的主版本，装完用 `import pymatgen`+实际脚本验证；
-- 装完必须测**非交互**调用（第 2.3 节）。
-
-判据：`ssh <alias> 'python3 -c "import numpy,scipy,pymatgen,spglib,h5py;print(1)"'`。
-
-#### 7.3.1 用 `conda create -p <prefix>` 建的环境（新版 conda 没有 venv 风格 activate）
-
-AutoZT 对 **含 `/` 的 `CONDA_ENV` 按 venv 方式** 激活（`source <env>/bin/activate`）。
-新版 conda（≥4.6 之后创建的 env）**不生成 `bin/activate`**，于是激活失败、静默退回系统 python，
-表现为 `autozt check` 报"缺包"、gen 脚本 import 不到 amset/torch。
-
-修复（给这类环境补一个最小 activate shim，1 行命令）：
+Remedy: supply a minimal activation shim:
 
 ```bash
 cat > <env>/bin/activate <<'EOF'
@@ -275,348 +319,396 @@ EOF
 chmod +x <env>/bin/activate
 ```
 
-验证：`bash -c 'source <env>/bin/activate; python -V; python -c "import <关键包>"'` 用的是该环境的 python。
-（若该环境是 conda 前缀，`python -V` 应显示 env 自带的版本；`which python` 可能因 PATH 顺序不同而不同，以 `python -V`/`sys.executable` 为准。）
+Verification: `bash -c 'source <env>/bin/activate; python -V; python -c "import <package>"'`
+must use the interpreter of that environment.
+## 10. Cluster profile reference (`setting/<cluster>.yaml`)
 
----
+The site profile is the single source of truth for how AutoZT operates at a site. All keys are
+optional unless marked required; missing keys fall back to package defaults or to the project
+configuration, in this order: `project_setting/` > user configuration > package defaults
+(see `docs/CONFIGURING.md`).
 
-## 8. AutoZT 集群配置：`setting/<hpc>.yaml` 字段逐项
+### 10.1 Field reference
 
-> 这是“这台机器怎么跑”的唯一事实来源。字段不要求全填，按需；**必填**见下表。
-> 不同集群的例子（CPU/SLURM、GPU/SLURM、无调度器、DCU）见 8.2。
+| Key | Required | Meaning |
+|---|---|---|
+| `name` | yes | Cluster identifier, used by `setting/<name>.yaml`, `-hpc` and `check --cluster`. |
+| `ssh_host` | yes | SSH alias from `~/.ssh/config`; an empty string selects local execution. |
+| `template_map` | no | Logical-template-to-file mapping; normally `{}` because templates are resolved by name under `setting/<name>/templates/`. |
+| `vasp.<profile>` | yes (DFT skills) | VASP profiles: `standard` (`cell_constraint: none`) and optionally `relax_2d` (`cell_constraint: ioptcell_tag`), each with absolute paths to `std`, `gam`, `ncl`. |
+| `work_dir` | yes | Writable root on the site; must differ from other sites. |
+| `partition` | yes | Default submission partition. |
+| `max_cpus` | recommended | Cores per node; used by the preflight check to detect templates requesting more cores than a node provides. |
+| `conda_sh` | no | Path to `profile.d/conda.sh`; leave empty for virtualenv-only sites. |
+| `conda_env` | yes (generation) | Python environment for input-generation scripts; a path containing `/` is activated as a virtualenv. |
+| `pheasy_env`, `kl_env`, `amset_env` | per skill | Component-specific environments; each is validated separately by `autozt check`. |
+| `potcar_dir` | yes (DFT skills) | Pseudopotential root; see Section 9.1 for the three layouts. |
+| `mlff_model_dir` | MLFF skills | Directory holding machine-learning potential weights. |
+| `remote_path_prefix` | recommended | `PATH` prefix for remote commands (for example a `pybin` directory with tool links, followed by the environment's `bin`). |
+| `qe_bin`, `qe_pseudo_dir`, `qe_setup` | eph-qe skill | Quantum ESPRESSO executables, UPF directory and pre-run environment statements. |
+| Additional keys | as reported | `autozt check` names anything still missing; add keys as skills require them. |
 
-### 8.1 字段表
-
-| 字段 | 必填 | 含义 / 取值 |
-|------|------|-------------|
-| `name` | ✅ | 集群名（`setting/<name>.yaml`、`-hpc`、`check --cluster` 都用它） |
-| `ssh_host` | ✅ | `~/.ssh/config` 别名；**空字符串** = 本机模式（AutoZT 会接 fakeslurm） |
-| `template_map` | | 逻辑模板名→文件映射；一般留 `{}`，模板按 `setting/<name>/templates/` 同名取 |
-| `vasp.standard` | ✅* | 原版 VASP 的 `std/gam/ncl` 绝对路径 + `cell_constraint: none` |
-| `vasp.relax_2d` | | 变胞版（`cell_constraint: ioptcell_tag`）；没有 2D 需求可不写 |
-| `work_dir` | ✅ | 远端工作根（与 `setting` 里别的集群**不能相同**） |
-| `partition` | ✅ | 默认提交分区 |
-| `max_cpus` | | **每节点**核数上限（preflight 用来发现“模板申请超过单节点核数”） |
-| `conda_sh` | | conda 的 `profile.d/conda.sh`；纯 venv 可留空 |
-| `conda_env` | ✅* | gen 脚本用的 Python 环境；**含 `/` 按 venv 激活**，否则 conda env 名/前缀 |
-| `pheasy_env` / `kl_env` | | 拟合/声子专用环境（缺省同上） |
-| `amset_env` | | ke-dft-cpu S8 的 amset 环境（应为**独立**环境，见 12.2） |
-| `potcar_dir` | ✅* | POTCAR 根（第 7.1 节三种布局） |
-| `mlff_model_dir` | | MACE 权重目录（MLFF 技能用） |
-| `remote_path_prefix` | | 远端命令前缀 PATH（如放 vaspkit 软链的 `pybin` + venv `bin`） |
-| `qe_bin` / `qe_pseudo_dir` / `qe_setup` | | eph-qe-cpu 用：`pw.x/ph.x` 目录、UPF 目录、运行前 export/module 命令串 |
-| 其它（`mlff_*`/`amset_*`/`abc_*` 等） | | 新技能可能需要；以 `autozt check` 报告“缺什么”为准 |
-
-> ✅* = 该功能用到时才必填：只用 band → vasp+potcar+conda_env；用 ke → 再加 amset_env；用 eph → qe_*。
-
-### 8.2 四类集群的最小 yaml 骨架
+### 10.2 Example profiles
 
 ```yaml
-# A) CPU + SLURM + module（最常见）
-name: mycluster
-ssh_host: mycluster
-work_dir: /work/<user>/software/AutoZT/work
+# (a) CPU cluster with SLURM and modules
+name: examplecpu
+ssh_host: examplecpu
+work_dir: /work/<account>/software/AutoZT/work
 partition: cpu64
 max_cpus: 64
 vasp:
-  standard: {cell_constraint: none, std: /work/<user>/software/AutoZT/vasp/.../vasp_std, gam: .../vasp_gam, ncl: .../vasp_ncl}
+  standard:
+    cell_constraint: none
+    std: /work/<account>/software/AutoZT/vasp/vasp.6.4.3-pristine/bin/vasp_std
+    gam: .../vasp_gam
+    ncl: .../vasp_ncl
 conda_sh: ""
-conda_env: /work/<user>/software/AutoZT/venvs/autozt
-potcar_dir: /work/<user>/software/AutoZT/vasp_pseudopotentials
+conda_env: /work/<account>/software/AutoZT/venvs/autozt
+potcar_dir: /work/<account>/software/AutoZT/vasp_pseudopotentials
+remote_path_prefix: /work/<account>/software/AutoZT/pybin:/work/<account>/software/AutoZT/venvs/autozt/bin
 ```
 
 ```yaml
-# B) GPU + SLURM（模板要带 --gres=gpu:N）
-name: mygpu
-ssh_host: mygpu
-work_dir: /home/<user>/AutoZT/work
-partition: a800
+# (b) GPU cluster: templates carry --gres=gpu:N
+name: examplegpu
+ssh_host: examplegpu
+work_dir: /home/<account>/AutoZT/work
+partition: gpu
 max_cpus: 128
-conda_env: /home/<user>/AutoZT/venvs/mace_gpu   # 含 torch+cuda
-mlff_model_dir: /home/<user>/AutoZT/mlff_models
+conda_env: /home/<account>/AutoZT/venvs/mace_gpu
+mlff_model_dir: /home/<account>/AutoZT/mlff_models
 ```
 
 ```yaml
-# C) 无调度器（裸服务器）：ssh_host 仍写别名；模板用 tools/fakeslurm 语义
-name: myserver
-ssh_host: myserver
-work_dir: /home/<user>/AutoZT/work
-conda_env: /home/<user>/AutoZT/venvs/autozt
-# 提交模板用 setting/myserver/templates/ 下自备的（fakeslurm 兼容 #SBATCH 变量）
+# (c) Scheduler-less node: submission is emulated (tools/fakeslurm)
+name: exampleserver
+ssh_host: exampleserver
+work_dir: /home/<account>/AutoZT/work
+conda_env: /home/<account>/AutoZT/venvs/autozt
 ```
 
 ```yaml
-# D) 本机（local 模式）
+# (d) Local execution
 name: local
 ssh_host: ""
 work_dir: /tmp/autozt_work
 conda_env: ""
 ```
 
-### 8.3 模板目录
+## 11. Submission templates and resource policy
 
-```
-setting/<hpc>/templates/
-├── submit_std_3d.tpl   submit_std_2d.tpl   submit_std_0d.tpl
-├── submit_ncl_3d.tpl   submit_ncl_2d.tpl
-└── step1_opt/submit_std_2d.tpl
-```
+### 11.1 Templates and rendering
 
-模板里一般包含：`#SBATCH -p <partition>`、`-N/-n/--ntasks-per-node`、`--time`、`module load`、
-`export OMP_NUM_THREADS/OMPI_MCA_*`、`mpirun ... vasp_std`、可选 `cd $SLURM_SUBMIT_DIR`。
-**从别的集群复制模板时，逐项核对**：分区名、module 名、mpirun 路径/参数、VASP 路径（AutoZT 渲染时会按
-`setting/<hpc>.yaml` 的 vasp 路径替换，但模板里写死的 `module` 不会）。
+Templates live in `setting/<cluster>/templates/` (for example `submit_std_3d.tpl`,
+`submit_ncl_2d.tpl`, `step1_opt/submit_std_2d.tpl`). At input generation, AutoZT substitutes
+the VASP executable path according to the active VASP profile, but it does **not** interpret
+`module load` lines or scheduler directives. When copying templates from another site, verify
+at least: partition name, module names, MPI launcher and flags, and wall-time limit.
 
-判据：`autozt -p <材料> -j <步骤> init` 后，检查远端 `submit.sh` 的分区/核数/路径 都对，再 `start`。
+Acceptance criterion: after `autozt -t <skill> -p <material> -j <step> init` (generation
+without submission), inspect the generated `submit.sh` on the site and confirm partition,
+cores and executable paths before executing `start`.
 
----
+### 11.2 Resource sizing
 
-## 9. 提交与并行：跨集群差异最大的一节
+1. Determine the partition limits (`sinfo`) and the account concurrency limit (GrpTRES).
+2. Keep `job size x concurrent jobs` within the account limit; reserve one slot for debugging.
+3. For multi-node jobs specify `-N` and `-n` consistently with `--ntasks-per-node`.
+4. Set the wall-time limit below the partition maximum, otherwise submission is rejected.
 
-### 9.1 核数/时长/并发
+Operating policy for partial-node versus whole-node requests: on busy systems, requesting whole
+nodes forces the scheduler to wait for fully idle nodes and increases queueing time. A
+configuration with more, smaller jobs is often more efficient in aggregate; the optimal policy
+depends on the site and should be measured (Section 12.2).
 
-1. 先看分区上限（`sinfo`）、再看账户并发（`GrpTRES cpu=`）。
-2. `每作业核数 × 同时作业数 ≤ 账户并发`；预留 1 个槽给调试。
-3. 单作业跨节点：`-N n` + `-n n*ppn`，注意 `--ntasks-per-node` 与 MPI 进程数一致。
-4. 长作业上限：模板 `--time` 不要超过分区 `MaxTime`，否则 sbatch 直接拒。
+### 11.3 MPI launch
 
-### 9.2 module / 环境
-
-- 作业脚本里**显式** `module load`；不要依赖登录 shell。
-- 需要 venv/conda 的步骤：脚本里 `source <env>/bin/activate` 或 `conda activate`，
-  并在 `step.conf` 里用 `CONDA_ENV` 指定（AutoZT 会把集群 yaml 的 `conda_env` 注入）。
-- 运行时库路径：优先 `-Wl,-rpath` 写进二进制；其次 `module load`；最后才是 `export LD_LIBRARY_PATH`。
-
-### 9.3 ★ MPI 启动器与“绑核”坑（实测高频）
-
-| 现象 | 原因 | 处理 |
+| Observation | Probable cause | Remedy |
 |---|---|---|
-| 作业 3 秒失败，stderr `binding more processes than cpus` | OpenMPI 默认绑核与节点/cgroup 不一致 | `mpirun --bind-to none -np $SLURM_NTASKS ...`（先在一台节点上冒烟确认） |
-| Intel MPI 程序用 OpenMPI 的 `mpirun` 启动 | ABI 不匹配（能起进程、计算崩） | 用 Intel MPI 的 `mpiexec/mpirun`，或 `module load mpi/intelmpi` 后直接用 |
-| `mpirun -np N` 启动 N 个完整程序 | 模板写成了“每个进程算全量” | 确认 VASP 模板是 `mpirun -np $SLURM_NTASKS vasp_std` 一类；不要双重并行 |
-| 单节点共享内存 | `OMPI_MCA_btl=self,vader,tcp`、`pml=ob1` | 单节点作业常设（多节点作业不要设） |
+| Job fails within seconds; stderr contains `binding more processes than cpus` | OpenMPI default binding incompatible with the node or cgroup layout | `mpirun --bind-to none -np $SLURM_NTASKS ...`, after confirming on a single node |
+| Intel MPI program launched with OpenMPI `mpirun` | ABI mismatch | Use the `mpiexec`/`mpirun` of Intel MPI, or load the matching `mpi/intelmpi` module |
+| Several full copies of the program start | Template launches one full calculation per process | Ensure a single `mpirun -np <tasks> <binary>` invocation |
+| Single-node communication issues | InfiniBand/UCX initialisation | For single-node jobs set `OMPI_MCA_btl=self,vader,tcp` and `OMPI_MCA_pml=ob1` |
 
-### 9.4 GPU / DCU
+### 11.4 Accelerators
 
-- NVIDIA：模板 `#SBATCH --gres=gpu:N`；环境装 `torch+cuda`；检查 `nvidia-smi` 可见。
-- 海光 DCU：`--gres=dcu:N`，DTK 工具链（`compiler/dtk/*`），PyTorch 要用对应 DTK 版本（不是官方 CUDA wheel）。
-- 判据：作业里 `nvidia-smi -L`（或 `hy-smi`）看得到卡，且程序 `torch.cuda.is_available()` 为真。
+- NVIDIA GPUs: request with `#SBATCH --gres=gpu:N`, install a CUDA-enabled runtime, and verify
+  visibility with `nvidia-smi` inside the job.
+- Hygon DCUs: request with `#SBATCH --gres=dcu:N`, use the DTK toolchain (`compiler/dtk/...`),
+  and install the DTK-compatible PyTorch build rather than the upstream CUDA wheel.
+- Acceptance criterion: the accelerator is listed inside the job and the runtime reports it as
+  available (`torch.cuda.is_available()` or the vendor equivalent).
 
-### 9.5 非 SLURM 集群
+### 11.5 Sites without SLURM
 
-AutoZT 通过 `sbatch/squeue/scancel` 语义管理作业：
-- 裸服务器/无调度器：用仓库 `tools/fakeslurm`（AutoZT 自动接入本机模式；远端 `remote_path_prefix` 注入）；
-- PBS/SGE/LSF：需写一层适配脚本（把 `sbatch` 翻译成 `qsub`），或在文档中标注“不支持自动推进”。
+AutoZT manages jobs through `sbatch`, `squeue` and `scancel` semantics. For a scheduler-less
+server, the repository provides `tools/fakeslurm` (used automatically in local mode and
+injected through `remote_path_prefix` on remote nodes). For PBS/SGE/LSF, a translation layer
+from `sbatch` semantics to the local scheduler is required; until one exists, automatic job
+progression is not supported and this limitation must be recorded in the site record.
 
----
+## 12. Multi-cluster operation and project-level overrides
 
-## 10. 步骤级/材料级切换（同一材料跨集群跑）
+### 12.1 Step-level routing
 
-- 材料级：`autozt -p <材料> hpc <cluster>` 改全部步骤（会重跑/需产物）——大动作，先想清楚。
-- 步骤级：项目 `tf_<项目>.yaml` 里写
-  ```yaml
-  step_hpc:
-    S7_deform: clus_xa_yue
-    S7.1_read: clus_xa_yue
-  ```
-  只动指定步骤，其余留原集群；依赖产物由 AutoZT 按 needs 跨集群回传。
-- 项目级 step.conf 覆盖：`project_setting/templates/step.conf`（参数）与
-  `project_setting/templates/<步骤>/step.conf`（步骤级，优先级最高）。
-- 改单个参数（会写项目配置，按 AGENTS 铁律 3 先请示）：
-  `autozt -tt <技能> -p <材料> -j <步骤> conf --set params.<KEY>=<VALUE>`；
-  只读查看合并后的最终值：`autozt -tt <技能> -p <材料> -j <步骤> conf`（不带 --set）。
-- 改完**先看状态再动**：`autozt list`（HPC 列）→ `autozt -tt <技能> -p <材料> graph`（任务图：
-  每步 ✔完成/▶运行/◷排队/✖失败、等哪个上游）→ 再 `retry`/`start`。
-- **同一材料同一时间只允许一个会话操作**：`retry`/`init`/`rerun` 内部会做 `kill_if_queued`
-  （取消该材料还在排队的旧作业）；两个会话同时动，后动的一方会把先提交的作业全部 CANCELLED。
-  多人/多会话协作时用 git worktree 隔离`setting/`（各 worktree 的 `setting/*` 是独立文件），
-  或明确约定"谁在哪个材料上操作"。
-
----
-
-## 11. 验收清单（新集群布完必须逐条过）
-
-| # | 检查 | 命令 | 期望 |
-|---|------|------|------|
-| 1 | 连通 | `ssh -o BatchMode=yes <alias> true` | exit 0 |
-| 2 | 非交互 python | `ssh <alias> 'python3 -V'` | 打印版本 |
-| 3 | 配置预检 | `autozt doctor` | 无报错，认得出新集群 |
-| 4 | 技能就绪 | `autozt check --cluster <hpc>` | VASP 系技能 ✅（可选组件可先 ❌） |
-| 5 | 提交模板 | `autozt -p <材料> -j <步骤> init` 后看远端 submit.sh | 分区/核数/路径正确 |
-| 6 | 冒烟计算 | 最小 Si 作业（第 6.3 节） | OUTCAR reached required accuracy，能量与基线一致 |
-| 7 | 并行上限 | `--test-only` / 实提 2 个作业 | 不被 QOS/分区拒；同提交者作业互不影响 |
-| 8 | 清理 | `squeue -u <user>` | 0 个测试作业残留 |
-| 9 | 记录 | 写 `docs/<HPC>-DEPLOY-<date>.md` | 含实测配额/坑/验收数字 |
-
-> **`autozt check` 的 ❌ 要分两类看**：
-> - **硬缺**（技能根本跑不了）：VASP 二进制/POTCAR/核心 python 包/该技能专属 env（`amset_env`、`kl_env`…）；
-> - **可选缺**（只是某功能不可用）：面板会写"可选缺：exe:wannier90.x / py:hiphive / gpu"等，不影响主流程。
-> 每个技能用的是**哪个 env** 由 checks 报告里的 `@amset_env`/`@kl_env` 等后缀标明；报"明明装了却说缺包"时，
-> 先确认包装在了**那个** env 里，而不是 `conda_env`。
-
----
-
-## 12. 可选组件（用到再装，别一次全上）
-
-### 12.1 QE（quantum-espresso，eph-qe-cpu 用）
-
-1. 优先：集群已有 QE module（`module avail | grep -i quantum`）→ `qe_bin` 指向其 `bin`，
-   `qe_setup` 里写 `module load` 或显式 `LD_LIBRARY_PATH`（Intel MKL/impi 常需要）。
-2. 次选：conda-forge `quantum-espresso`（自包含，但要网络/镜像；注意 conda 求解内存）。
-3. 判据：`pw.x -h`、`ph.x -h` 正常；跑一个 Si SCF（ONCV 赝势），`convergence has been achieved`。
-4. 坑：集群 module 的 QE 常与已加载的 MPI 冲突（`module unload mpi/...` 后再 load），
-   或者用 `qe_setup` 显式给 `LD_LIBRARY_PATH`（MKL + Intel MPI 的 lib 目录）。
-
-### 12.2 amset（ke-dft-cpu 的 S8）
-
-- **独立环境**（amset 0.5.x 通常要 numpy 1.x、pymatgen 老版本；与 MACE 的 numpy/torch 常常冲突）。
-- pip 路线：`python -m venv` → `pip install amset==0.5.1 "pymatgen<2025" "numpy<2" scipy ...`；
-  装完 `import amset` 与 `amset deform create --help` 验证。
-- 坑：`BoltzTraP2` 从 PyPI sdist 编译常失败（自带 spglib 子模块缺 CMakeLists / 需要 netCDF4 头文件）。
-  解决：用 conda-forge 预编译包解包后拷进 venv 的 site-packages（见 clus_xa 记录），或干脆不用 BT2 的插值功能。
-- 集群 yaml：`amset_env: <env 绝对路径>`；`check` 会验证 `amset`/`BoltzTraP2` 可导入。
-
-### 12.3 MACE（MLFF 系列）
-
-- 环境：`torch`（CPU 集群装 `--index-url .../whl/cpu`）、`mace-torch`、`e3nn`、`ase`、`matscipy`；
-  **注意 torch 版本与 e3nn 兼容性**（torch≥2.6 默认 `weights_only=True`，老 e3nn 会报
-  `UnpicklingError: Unsupported global` → 降 torch 到 2.4.x 或升级 e3nn）。
-- 权重：技能默认模型名见 `skill/*/templates/step.conf` 的 `MACE_MODEL`；从官方 release 下载到
-  `mlff_model_dir`；`MACECalculator(model_paths=<file>)` 冒烟算一个 Si 单点。
-- 集群 yaml：`conda_env`（含 torch/mace 的环境）或单独 `mlff_env`（若技能支持）。
-
-### 12.4 COGITO（cohp-cogito）
-
-- `pip install cogito-dft==<版本>`（纯 Python + numpy2）；版本与 jzzn 对齐（如 0.3.13）。
-- **独立 venv**（要求 numpy≥2，别和 MACE/amset 混装）；把 `COGITO/COGITOanalyze/COGITOpost`
-  软链进集群 `conda_env` 的 `bin`，或在项目 step.conf 里指定专用环境。
-- 前置：VASP `LWAVE=.TRUE.` 的静态 WAVECAR、`ISYM` 用约化网格（不要 `ISYM=-1`）、NBANDS 足够。
-
-### 12.5 UniHamGNN（unihamgnn 技能）
-
-- 组件：HamGNN 仓库、通用模型 `.pkl`（~1 GB）、OpenMX 基组库 `DFT_DATA19`、自编译的
-  `openmx_postprocess/read_openmx`、Python 环境（torch CPU + torch_geometric + lightning + e3nn）。
-- 编译 `openmx_postprocess` 的坑：需要 GSL（静态链可省运行时 libcblas）、MPI、LAPACK、FFTW；
-  若缺 ScaLAPACK/BLACS，可链 MKL 的 scalapack+blacs；ELPA 的 Fortran 模块并行编译会竞态，用
-  `make -k -j N` 迭代多轮。
-- 集群 yaml 里通常要写 `mlff_model_dir` 之外的项目级 step.conf（`HAMGNN_DIR/UNI_MODEL/DFT_DATA/
-  OPENMX_POSTPROCESS/READ_OPENMX`），因为这些是技能参数，不是集群字段。
-
-### 12.6 声子/拟合类（phonopy、phono3py、ALM、pheasy）
-
-- 目标环境：集群 yaml 的 `kl_env`/`pheasy_env`（缺省同 `conda_env`）。`autozt check` 会按这些环境逐个判 import。
-- **phonopy / phono3py**：`pip install --only-binary=:all: phonopy phono3py`（有 wheel）；装完
-  `import phonopy, phono3py` 并确认 `<env>/bin/phono3py` 存在（check 的 `exe:phono3py` 要它）。
-- **ALM**：pip 上的 `alm` 是 2.4 KB 的**空包**（别装，import 必失败）。conda-forge 的 `alm`
-  只有 py3.6–3.8 的老构建（2.0.0_dev）；py3.10/3.11 的做法（实测可用）：
-  1. 从 conda-forge 取 **py311 的 linux-64 包**（`alm-2.0.0_dev.2-py311*.tar.bz2`），解包；
-  2. 把 `lib/python3.x/site-packages/alm/` 整目录拷进目标 venv 的 site-packages；
-  3. 它链 `libsymspg.so.1`：把 venv 自带 spglib 的 `libsymspg.so.2` 软链成 `.so.1`
-     （`ln -s .../spglib/lib64/libsymspg.so.2 <env>/lib/libsymspg.so.1`，扩展有 `$ORIGIN/../../..` rpath）；
-  4. `import alm` 验证。
-- **pheasy**：源码包（flat layout 的 `pyproject.toml` + console script `pheasy`）。装法：
-  `pip install wheel` 后 `pip install --no-deps --no-build-isolation .`（缺 wheel 会报
-  `invalid command 'bdist_wheel'`）；确认 `<env>/bin/pheasy --help` 可用。
-- 装完都跑一次 `autozt check --cluster <hpc>`，把仍缺的 ✅/❌ 记进部署记录。
-
-### 12.7 其它
-
-- `POTCAR` 之外的赝势库（SSSP/ONCV/LDA）：按 `potcar_dir` 布局放（第 7.1 节三种布局）；
-- `VASPKIT` 新版本、其它分析工具：装进对应技能环境，用 `autozt check` 暴露缺项；
-- **大文件（模型/数据/源码包）下载策略**：先在本机/快节点下载再 `scp` 上传，常比集群直连外网快
-  数倍（实测：Zenodo 900 MB 直连集群极慢，本机 72 s 下完再传）；上传前 `ls -lh` 校验大小。
-
----
-
-## 13. 故障速查表（症状 → 原因 → 处理）
-
-| 症状 | 可能原因 | 处理 |
-|------|----------|------|
-| `sbatch: error: Invalid account or account/partition combination` | 账户无该分区权限 | 用 `--test-only` 逐分区找可用分区；问管理员加权限 |
-| `CPU count per node can not be satisfied` | 单节点申请核数 > 节点核数（模板写死 192/256 等） | 改模板/step.conf 的每节点核数；或用 `max_cpus` 让 preflight 提前警告 |
-| `group max tres limit ...` | 超账户 GPU/CPU 配额 | 降并发或降核数（需说明影响，AGENTS 铁律 9） |
-| 作业 3 秒失败 + `binding more processes than cpus` | OpenMPI 绑核 | `mpirun --bind-to none` |
-| `error while loading shared libraries` | 编译机与运行机库不同 / 没 rpath | `ldd` 找缺的库；加 `-Wl,-rpath` 或 module |
-| `undefined symbol: dgegv_` | LAPACK≥3.8 删了老接口 | 补 `dgegv.f/dggsvd.f` 进源码（netlib） |
-| VASP 一启动就 `I REFUSE TO CONTINUE` | POSCAR 未更新/结构不一致 | 检查 push 的 POSCAR 与本地一致（AutoZT 有 sha 校验） |
-| vaspkit 不生成 POTCAR | `~/.vaspkit` 用了 `KEY = VALUE` | 改空格分隔；或检查 `PBE_PATH` 指向元素目录的父级 |
-| `autozt check` 说缺 python 包但明明装了 | ① 检查的是**非交互** PATH；② 技能实际用的是 `amset_env`/`kl_env` 而不是 `conda_env`；③ 是 `conda create -p` 的环境但**缺 `bin/activate`**，激活静默失败 | 分别按第 2.3 节、第 11 节的 env 后缀说明、第 7.3.1 节的 activate shim 处理 |
-| `conda create` 被杀（exit 137）/ 求解极慢 | 求解器内存超限 / 索引网络慢 | 改 `micromamba` 或 `--solver=libmamba`；或直接取 conda 包解包；加国内镜像 |
-| `sbatch: request too frequently` | 短时间批量提交/探测被限流 | 提交/探测之间 sleep 1–2 s，分批做 |
-| 远端采集 `Connection closed` / `timeout` | 跳板/代理/ControlMaster 失效 | 重建连接（`ssh -O exit`）；检查跳板密钥有效期 |
-| 两个会话互相杀作业 | 同一材料被两个 autozt 会话 retry/init（内部 `kill_if_queued` 会取消排队中的旧作业） | **一个材料同一时间只留一个会话**；用 worktree 隔离 `setting/`；操作前先 `autozt graph` 看谁在跑 |
-
----
-
-## 14. 文档与记录
-
-- 每个新集群写一份 `docs/<HPC>-DEPLOY-<YYYYMMDD>.md`：
-  **实测配额表**（并发/单作业/时限/存储）、**构建踩坑**（编译器/库/MPI）、**验收数字**（冒烟能量/带隙）、
-  **可选组件状态**（QE/amset/MACE/…）。直接复制 **`docs/DEPLOY-RECORD-TEMPLATE.md`** 按实测填
-  （模板已把"本集群特殊项 / 通用项"分开）。
-- `setting/*` 是本地文件（.gitignore）：可以在仓库里留一份**脱敏模板**（用 `<user>/<work_dir>` 占位），
-  真实路径不提交。
-- 与 AGENTS 的对应：安装位置=铁律 11；改核数流程=铁律 9；只读诊断=铁律 4；
-  临时代码/脚本放 `tmp/`。
-
----
-
-## 附录 A：最小 `setting/<hpc>.yaml` 模板（复制后填占位符）
+A material may run different steps on different sites. This is expressed in the project
+configuration (`tf_<project>.yaml`):
 
 ```yaml
-name: <HPC>
-ssh_host: <ssh别名>
+step_hpc:
+  S7_deform: examplegpu
+  S7.1_read: examplegpu
+```
+
+Only the listed steps are routed; all others remain on the material default. Artifacts required
+by downstream steps are transferred by AutoZT according to step dependencies. Switching the
+whole material (`autozt -p <material> hpc <cluster>`) affects every step and may therefore
+require re-running earlier steps; this decision should be recorded in the site record.
+
+### 12.2 Project-level step configuration
+
+Parameters can be overridden at project level, in increasing priority:
+`project_setting/templates/step.conf` (shared) and
+`project_setting/templates/<step>/step.conf` (step-specific). A single parameter can be changed
+with
+
+```bash
+autozt -t <skill> -p <material> -j <step> conf --set params.<KEY>=<VALUE>   # writes project config
+autozt -t <skill> -p <material> -j <step> conf                              # read-only, shows merged values
+```
+
+Writing project configuration is a controlled operation in AutoZT and must be requested from
+the operator of the material.
+
+### 12.3 Operational discipline
+
+Job submission commands are not idempotent with respect to one another. `retry`, `init` and
+`rerun` cancel queued jobs of the same material (`kill_if_queued`). If two operators or two
+sessions act on the same material concurrently, the later action will cancel the earlier
+jobs, so results are no longer attributable. The following rules avoid this:
+
+1. One operator at a time per material; inspect the task graph (`autozt graph`) before acting.
+2. Isolate site profiles between parallel worktrees. `setting/*` is excluded from version
+   control, so each git worktree has its own copy of the site profiles.
+3. Record the owner of a run in the site or project record.
+
+## 13. Acceptance criteria
+
+The site is considered operational when every item below passes. The evidence should be pasted
+into the per-site record.
+
+| # | Check | Command | Expected result |
+|---|---|---|---|
+| 1 | Connectivity | `ssh -o BatchMode=yes <alias> true` | exit status 0 |
+| 2 | Non-interactive Python | `ssh <alias> 'python3 -V'` | intended version printed |
+| 3 | Configuration preflight | `autozt doctor` | no errors; the new site is listed |
+| 4 | Skill readiness | `autozt check --cluster <site>` | DFT-related skills pass |
+| 5 | Template rendering | `autozt -p <material> -j <step> init` then inspect `submit.sh` | partition, cores and paths correct |
+| 6 | Smoke calculation | minimal Si job (Section 8.3) | `reached required accuracy`; energy matches the baseline |
+| 7 | Concurrency | submit two probe jobs | both accepted; no QOS or partition rejection |
+| 8 | Clean-up | `squeue -u <account>` | no test jobs remain |
+| 9 | Record | `docs/<SITE>-DEPLOY-<date>.md` | quotas, issues and acceptance numbers documented |
+
+Interpreting `autozt check` output:
+
+- **Hard failure**: the skill cannot run (missing engine binary, pseudopotential library, core
+  Python package, or the environment specific to that skill).
+- **Optional failure**: a secondary capability is unavailable (`optional exe:`/`optional py:`,
+  GPU absent). The main workflow is unaffected.
+- A missing package is reported **for the environment the skill uses** (suffixes such as
+  `@amset_env`, `@kl_env`). Confirm the package is installed in that environment, not only in
+  `conda_env`.
+
+## 14. Optional components
+
+Components are installed on demand. Each subsection gives the installation route, the
+acceptance test and known issues.
+
+### 14.1 Quantum ESPRESSO (skill `eph-qe-cpu`)
+
+1. Prefer a site module (`module avail | grep -i quantum-espresso`). Point `qe_bin` to its
+   `bin` directory and express the runtime environment in `qe_setup` (module loads, or explicit
+   `LD_LIBRARY_PATH` for MKL and Intel MPI).
+2. Otherwise use a conda-forge package (self-contained; requires network access and sufficient
+   memory for the conda solver).
+3. Acceptance: `pw.x -h` and `ph.x -h` run; a small Si SCF calculation reaches
+   `convergence has been achieved`; norm-conserving pseudopotentials are present in
+   `qe_pseudo_dir`.
+4. Known issues: preloaded MPI modules may conflict with the QE module (unload the former
+   first); MKL/Intel MPI runtime libraries sometimes need to be exported explicitly.
+
+### 14.2 AMSET (skill `ke-dft-cpu`)
+
+Use a dedicated environment: AMSET 0.5.x typically requires numpy 1.x and an older pymatgen,
+which conflicts with machine-learning environments. A pip-based installation is:
+
+```bash
+python -m venv <env>
+<env>/bin/pip install 'amset==0.5.1' 'pymatgen<2025' 'numpy<2' scipy matplotlib h5py numba interpolation sumo pyFFTW
+```
+
+Known issue: `BoltzTraP2` frequently fails to build from its PyPI source distribution (the
+bundled spglib submodule lacks a CMakeLists file, and netCDF4 headers are required). A
+conda-forge binary package can be unpacked and its module copied into the environment; the
+interpolation feature is otherwise not needed by the transport calculation.
+Acceptance: `import amset`, `amset deform create --help`, and the AMSET environment listed in
+the site profile as `amset_env`.
+
+### 14.3 MACE (MLFF skills)
+
+Install a CPU or CUDA PyTorch build, then `mace-torch`, `e3nn`, `ase` and `matscipy`. Note the
+PyTorch/e3nn compatibility: PyTorch 2.6 changed the default of `torch.load` to
+`weights_only=True`, which breaks older e3nn releases with `UnpicklingError`; either use
+PyTorch 2.4.x or a newer e3nn. The default model name expected by the skills is listed in
+`skill/*/templates/step.conf` (`MACE_MODEL`); download the corresponding weights to
+`mlff_model_dir` and verify with a single-point calculation.
+
+### 14.4 COGITO (skill `cohp-cogito`)
+
+Install `cogito-dft` (for example version 0.3.13) into a dedicated virtualenv, because it
+requires numpy 2.x. Expose `COGITO`, `COGITOanalyze` and `COGITOpost` to the environment used
+by the skill (symbolic links are sufficient). Prerequisites: a static VASP run with
+`LWAVE=.TRUE.`, a symmetry-reduced k-point grid (`ISYM` not `-1`) and a sufficient number of
+bands.
+
+### 14.5 UniHamGNN (skill `unihamgnn`)
+
+The component comprises the HamGNN source tree, the universal model weights (about 1 GB), the
+OpenMX basis-set library `DFT_DATA19`, the helper executables `openmx_postprocess` and
+`read_openmx`, and a Python environment with PyTorch (CPU), `torch_geometric`, `lightning` and
+`e3nn`.
+
+Building `openmx_postprocess` requires GSL, MPI, LAPACK and FFTW. Missing ScaLAPACK/BLACS
+symbols can be satisfied by the MKL ScaLAPACK and BLACS libraries; the `libiomp5` runtime is
+located in the Intel compiler library directory; and statically linking GSL avoids a runtime
+dependency on `libcblas`. ELPA Fortran modules require several passes of `make -k -j N` because
+of parallel module-dependency races. The skill parameters (`HAMGNN_DIR`, `UNI_MODEL`,
+`DFT_DATA`, `OPENMX_POSTPROCESS`, `READ_OPENMX`) are project-level step parameters and belong in
+`project_setting/templates/step.conf`, not in the site profile.
+
+### 14.6 Phonon and force-constant fitting (phonopy, phono3py, ALM, pheasy)
+
+- `phonopy` and `phono3py`: install binary wheels (`pip install --only-binary=:all: phonopy
+  phono3py`); verify that the `phono3py` executable exists and both modules import.
+- `ALM`: the PyPI package of this name is an empty 2.4 KB placeholder and must not be installed.
+  conda-forge provides builds only for Python 3.6-3.8. For Python 3.10/3.11, extract the
+  conda-forge Python 3.11 package, copy its `site-packages/alm/` into the environment, and
+  provide the required `libsymspg.so.1` by symbolic link to the `libsymspg.so.2` shipped with
+  the environment's `spglib` (the extension resolves libraries relative to `$ORIGIN/../../..`).
+- `pheasy`: install from source (`pip install wheel` first, then
+  `pip install --no-deps --no-build-isolation .`); verify that the `pheasy` executable runs.
+
+## 15. Troubleshooting matrix
+
+| Symptom | Probable cause | Remedy |
+|---|---|---|
+| `Invalid account or account/partition combination` | Account not authorised for the partition | Identify an authorised partition with `--test-only`; request access |
+| `CPU count per node can not be satisfied` | Requested cores exceed those of one node (e.g. a template with a hard-coded 192) | Adjust the per-node core count in the template or step configuration; keep `max_cpus` consistent |
+| `group max tres limit ...` | Account concurrency limit exceeded | Reduce the number of simultaneous jobs or their size; document the change |
+| Job fails within seconds with `binding more processes than cpus` | OpenMPI default binding | `mpirun --bind-to none` |
+| `error while loading shared libraries` | Library not available at run time | Use `ldd` to identify the library; rebuild with `-Wl,-rpath`, or load the corresponding module |
+| `undefined symbol: dgegv_` | LAPACK 3.8 and later removed the routine | Add `dgegv.f` and `dggsvd.f` from netlib to the sources |
+| `I REFUSE TO CONTINUE` at start-up | Inconsistent structure or corrupted POSCAR | Verify that the transferred POSCAR matches the local file (AutoZT performs a checksum) |
+| VASPKIT does not create POTCAR | `~/.vaspkit` uses `KEY = VALUE` | Use `KEY VALUE`; verify the `PBE_PATH` root |
+| `autozt check` reports missing packages although they are installed | Non-interactive `PATH`; a skill-specific environment; a conda prefix without `bin/activate` | Sections 5.2, 13 and 9.3.1 |
+| `conda create` killed (exit 137) or extremely slow | Solver memory or index access | Use micromamba or `--solver=libmamba`; unpack conda packages directly; use a local mirror |
+| `sbatch: request too frequently` | Submission throttling | Pause one to two seconds between submissions; submit in batches |
+| Remote collection reports `Connection closed` or a timeout | Intermediate host, proxy, or ControlMaster failure | Re-establish the connection (`ssh -O exit` and reconnect); check key expiry on each hop |
+| Jobs submitted by two sessions cancel each other | Both sessions operate on the same material (`kill_if_queued`) | One operator per material; isolate `setting/` in worktrees; inspect the task graph before acting |
+
+## 16. Site record and reproducibility
+
+For every site, create `docs/<SITE>-DEPLOY-<YYYYMMDD>.md` from
+`docs/DEPLOY-RECORD-TEMPLATE.md`. The record should contain the measured resource limits, the
+software versions and build flags, the acceptance output, and any remaining limitations. This
+is the document that makes the site reproducible by another group.
+
+Reproducibility requirements:
+
+1. Pin versions of the engine, libraries, Python packages and model weights.
+2. Keep site configuration out of version control (`setting/*` is ignored); templates and
+   placeholders are distributed instead.
+3. Cite the software version: see `README.md` and `CITATION.cff` for the version-specific DOI.
+4. When reporting results, name the site and the site-record document alongside the input
+   files.
+
+---
+
+## Appendix A: Minimal site profile template
+
+```yaml
+name: <SITE>
+ssh_host: <ssh-alias>
 template_map: {}
 vasp:
   standard:
     cell_constraint: none
-    std: <work>/software/AutoZT/vasp/<ver>/bin/vasp_std
-    gam: <work>/software/AutoZT/vasp/<ver>/bin/vasp_gam
-    ncl: <work>/software/AutoZT/vasp/<ver>/bin/vasp_ncl
-work_dir: <work>/software/AutoZT/work
-partition: <分区>
-max_cpus: <每节点核数>
+    std: <root>/software/AutoZT/vasp/<version>/bin/vasp_std
+    gam: <root>/software/AutoZT/vasp/<version>/bin/vasp_gam
+    ncl: <root>/software/AutoZT/vasp/<version>/bin/vasp_ncl
+work_dir: <root>/software/AutoZT/work
+partition: <partition>
+max_cpus: <cores-per-node>
 conda_sh: ""
-conda_env: <work>/software/AutoZT/venvs/autozt
-potcar_dir: <work>/software/AutoZT/vasp_pseudopotentials
-remote_path_prefix: <work>/software/AutoZT/pybin:<work>/software/AutoZT/venvs/autozt/bin
-# 用 ke 技能再加：amset_env: ...
-# 用 eph 技能再加：qe_bin/qe_pseudo_dir/qe_setup
-# 用 MLFF 技能再加：mlff_model_dir: ...
+conda_env: <root>/software/AutoZT/venvs/autozt
+potcar_dir: <root>/software/AutoZT/vasp_pseudopotentials
+remote_path_prefix: <root>/software/AutoZT/pybin:<root>/software/AutoZT/venvs/autozt/bin
+# add for ke-dft-cpu:      amset_env: ...
+# add for eph-qe-cpu:      qe_bin / qe_pseudo_dir / qe_setup
+# add for MLFF skills:     mlff_model_dir: ...
 ```
 
-## 附录 B：新集群部署顺序（一页纸）
+## Appendix B: Procedure on one page
 
-1. `tools/probe_cluster.sh <别名>` → 抄下 6 个数（第 1.1 节）
-2. 配 SSH + `~/.ssh/environment`/python3 软链（第 2 节）
-3. `mkdir -p ~/software/AutoZT/{vasp,vasp_pseudopotentials,venvs,work}`（第 3 节）
-4. 编 VASP（原版+可选 optcell），`ldd` 检查（第 5、6 节）
-5. 解包 POTCAR、配 `~/.vaspkit`、建 venv（第 7 节）
-6. 写 `setting/<HPC>.yaml` + 复制/改写提交模板（第 8、9 节）
-7. `autozt doctor` → `autozt check --cluster <HPC>` → 冒烟作业（第 11 节）
-8. 写部署记录，跑第一批真实材料（小体系 1 步验证吞吐/排队/IO）
-9. 需要 QE/amset/MACE/COGITO/UniHamGNN 时按第 12 节逐个装，每装一个就 `autozt check` 一次
+1. Survey the site: `tools/probe_cluster.sh <alias>`; record the six quantities of Section 4.1.
+2. Configure SSH and the non-interactive runtime (Section 5).
+3. Create `~/software/AutoZT/{vasp,vasp_pseudopotentials,venvs,work}` (Section 6).
+4. Build the engine (pristine and, if required, the cell-constrained variant); verify with
+   `ldd` (Sections 7-8).
+5. Install the pseudopotential library, configure VASPKIT and create the Python environment
+   (Section 9).
+6. Write the site profile and templates (Sections 10-11).
+7. Run `autozt doctor`, `autozt check --cluster <site>`, then the smoke calculation
+   (Section 13).
+8. Create the site record (Section 16).
+9. Run one real material through a short chain to measure throughput and queueing.
+10. Install optional components as required, re-running `autozt check` after each
+    (Section 14).
 
-## 附录 C：一次完整实例的关键数字（示例，不是要求）
+## Appendix C: Worked example (measured values)
 
-> 来自 SCNet 西安 clus_xa（2026-10-19 实测，详见 `docs/CLUS_XA-DEPLOY-20261019.md`）。
-> 照别人的集群部署时，这些数字只用来**对照量级**，不要照抄。
+The following values were measured on SCNet Xi'an `clus_xa` (2026-10-19); the detailed record is
+in `docs/CLUS_XA-DEPLOY-20261019.md`. They are given as an order-of-magnitude reference, not as
+a configuration to copy.
 
-| 项 | 实测值 | 备注 |
+| Item | Measured value | Consequence |
 |---|---|---|
-| 节点规格 | **64 核** / 255 GB / 节点 | 决定 `max_cpus: 64` 与模板核数 |
-| 分区时限 | **3 天** | 模板 `--time=3-00:00:00` |
-| 账户并发 | **320 核**（单作业也 ≤320） | `32 核 × 10 并发` 比整节点作业更容易排上 |
-| 提交模板 | `--ntasks-per-node=32` | 整节点 64 核要等完全空闲节点，忙时排队久 |
-| MPI 坑 | 部分节点 OpenMPI 默认绑核崩 → `--bind-to none` | 冒烟时逐节点类型验证 |
-| 编译器 | gcc **9.3.0**（默认 7.3.1 会 ICE） | module load |
-| MPI | **HPC-X 2.11**（ABI 与 gcc 匹配） | 与 VASP 编译同一套 |
-| BLAS/LAPACK | 系统 **3.4.2**（补 `dgegv/dggsvd` 源码） | 新 LAPACK 无老接口 |
-| VASP | 6.4.3 原版 + IOPTCELL 补丁版 | 各 std/gam/ncl |
-| POTCAR | potpaw_PBE_64，**346 元素** | 解包后注意只读权限 |
-| VASPKIT | **1.2.4**（`~/.vaspkit` 空格分隔） | 生成 POTCAR 用 |
-| QE | 集群 module **6.8**（impi）+ MKL 运行库 + `Si_ONCV_PBE-1.2.upf` | `eph-qe-cpu` 冒烟 6 步收敛 |
-| amset | **0.5.1**（独立 venv，pymatgen 2024.11 / numpy 1.26） | BoltzTraP2 用 conda-forge 包解包装 |
-| COGITO | cogito-dft **0.3.13**（独立 venv，numpy≥2） | `cohp-cogito` |
-| MACE | mace-torch 0.3.16 + torch 2.4.1+cpu + e3nn 0.4.4；模型 **MACE-matpes-pbe-omat-ft.model** | `mlff`/`opt-mlff-cpu` 冒烟 E(Si) 可复现 |
-| UniHamGNN | HamGNN 2.3.0 + 模型 885 MB + DFT_DATA19 + 自编译 openmx 工具 | 见 12.5 |
+| Node specification | 64 cores, 255 GB | determines `max_cpus` and template size |
+| Partition wall time | 3 days | `--time=3-00:00:00` |
+| Account concurrency | 320 cores (also per-job) | e.g. 32-core jobs x 10 concurrent |
+| Submission template | 32 cores per job | whole-node jobs queue for fully idle nodes |
+| MPI issue | OpenMPI default binding failed on some nodes | `mpirun --bind-to none` |
+| Compiler | GCC 9.3.0 (system 7.3.1 fails with an internal compiler error) | module load |
+| MPI library | HPC-X 2.11 | matched to the compiler |
+| BLAS/LAPACK | system 3.4.2 with `dgegv`/`dggsvd` sources | later LAPACK lacks the routines |
+| Engine | VASP 6.4.3, pristine and IOPTCELL-patched | `standard` and `relax_2d` profiles |
+| Pseudopotentials | potpaw_PBE_64, 346 elements | extraction requires mode adjustment |
+| VASPKIT | 1.2.4, whitespace-separated `~/.vaspkit` | POTCAR generation |
+| Quantum ESPRESSO | site module 6.8 (Intel MPI), MKL runtime, `Si_ONCV_PBE-1.2.upf` | SCF converged in 6 iterations |
+| AMSET | 0.5.1 in an isolated environment (pymatgen 2024.11, numpy 1.26) | `ke-dft-cpu` ready |
+| COGITO | cogito-dft 0.3.13 in an isolated environment (numpy 2.x) | `cohp-cogito` ready |
+| MACE | mace-torch 0.3.16, PyTorch 2.4.1 CPU, e3nn 0.4.4; `MACE-matpes-pbe-omat-ft.model` | `mlff`/`opt-mlff-cpu` ready |
+| UniHamGNN | HamGNN 2.3.0, 885 MB model, `DFT_DATA19`, self-built OpenMX tools | `unihamgnn` ready |
+
+## Appendix D: References
+
+- ASE, customising the installation (`siteconfig.py`): https://ase-lib.org/ase/installation.html
+- AiiDA, setting up and testing a computer: https://aiida.readthedocs.io/projects/aiida-core/en/latest/howto/run_codes.html
+- Quantum ESPRESSO user guide (installation, `make.inc`, `arch/`): https://www.quantum-espresso.org/Doc/user_guide/
+- CP2K, compiling with `arch/` files: https://manual.cp2k.org/
+- LAMMPS, machine makefiles: https://docs.lammps.org/Install.html
+- Snakemake executor plugins and profiles: https://snakemake.github.io/snakemake-plugin-catalog/
+- Nextflow configuration and profiles: https://www.nextflow.io/docs/latest/config.html
+- jobflow-remote configuration: https://matgenix.github.io/jobflow-remote/
+- AutoZT repository and version-specific DOI: see `README.md` and `CITATION.cff`.
