@@ -332,8 +332,8 @@ def check(cfg, keys, cluster_name="local"):
                     hints.append(_hint(kind, p, cluster_name, it["env"]))
             if it["vk_potcar"] and r["exes"].get("vaspkit") and not r.get("vaspkit_potcar"):
                 miss.append("vaspkit_potcar")
-                hints.append("在 ~/.vaspkit 配置 POTCAR 库路径（如 PBE_PATH = ~/POTCAR/PBE），"
-                             "vaspkit 103 要用它生成 POTCAR")
+                hints.append("在 ~/.vaspkit 配置 POTCAR 库路径（如 'PBE_PATH  /path/to/potpaw_PBE_64'），"
+                             "须为空白分隔的 KEY VALUE 格式；vaspkit 103 要用它生成 POTCAR")
             if it["gpu"] and not r.get("gpu"):
                 miss.append("gpu")
                 hints.append(_hint("gpu", "", cluster_name, it["env"]))

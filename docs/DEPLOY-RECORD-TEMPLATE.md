@@ -73,7 +73,7 @@ partitions (for example `Invalid account or account/partition combination`).
 | 1 | <error line> | <cause> | <change> | <how it was confirmed> |
 | 2 | | | | |
 
-Generic issues are listed in `DEPLOY-NEW-CLUSTER.md`, Section 15; record here only conditions
+Common issues are listed in `DEPLOY-NEW-CLUSTER.md`, Section 15; record here only conditions
 specific to this site (partition names, node models, module conflicts).
 
 ## 5. Site profile (redacted)
@@ -100,7 +100,7 @@ remote_path_prefix: <root>/software/AutoZT/pybin:<root>/software/AutoZT/venvs/au
 | 2 | non-interactive Python: `ssh <alias> 'python3 -V'` | pass, <version> |
 | 3 | `autozt doctor` | pass |
 | 4 | `autozt check --cluster <SITE>` | pass, <k>/<total> skills |
-| 5 | smoke calculation (two-atom Si, ENCUT 250) | converged, E = <value> eV (baseline delta <value>) |
+| 5 | smoke calculation (Si fcc primitive cell, 2 atoms, ENCUT 250) | electronic loop converged (`aborting loop because EDIFF is reached`), E = <value> eV (baseline delta <value>) |
 | 6 | concurrency probe | <n> jobs x <m> cores accepted |
 | 7 | clean-up | `squeue` empty |
 

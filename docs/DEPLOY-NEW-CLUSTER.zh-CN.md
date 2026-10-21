@@ -1,6 +1,6 @@
 # 在新超算站点部署 AutoZT：移植与验收指南（中文版）
 
-**文档版本：** 1.0  
+**文档版本：** 1.1（事实性修订：第 5.2、7.1、7.2、8.1、8.3、9.1、9.3.1、10.1、11.3、13、14.6 节；修订记录见仓库历史）  
 **适用版本：** AutoZT v2.0 及以后  
 **读者：** 负责在计算集群或独立节点上部署 AutoZT 的站点管理员与用户  
 **配套文件：** `tools/probe_cluster.sh`（只读站点勘察脚本）、`docs/DEPLOY-RECORD-TEMPLATE.md`（站点记录模板）、`docs/CONFIGURING.md`（配置参考）  
@@ -121,9 +121,10 @@ Host <别名>
 AutoZT 以非交互方式调用远端主机（`ssh host 'python3 ...'`）完成作业采集与提交，因此：
 
 1. **运行时 Python 必须位于非交互 `PATH` 中。** 仅在交互式启动文件中导出的变量不可见。
-   两种常用处理方式：把 `PATH` 写入 `~/.ssh/environment`（需在 `sshd_config` 中启用
-   `PermitUserEnvironment yes`）；或在已位于非交互 `PATH` 且账号可写的目录中创建解释器软链
-   （勘察脚本会报告第一个这样的目录）。
+   常用处理方式：把 `PATH` 写入 `~/.ssh/environment`（需在 `sshd_config` 中启用
+   `PermitUserEnvironment yes`，多数超算出于安全考虑不允许）；或在已位于非交互 `PATH` 且账号
+   可写的目录中创建解释器软链（勘察脚本会报告第一个这样的目录）；或把运行时环境的 `bin`
+   通过 `remote_path_prefix` 注入。
 2. **模块命令不会被继承。** 每个作业脚本都必须显式加载模块；非交互 SSH 命令不执行登录 shell 的模块初始化。
 
 验收判据：`ssh <别名> 'python3 -V && command -v python3'` 成功，且报告的解释器为预期运行时环境。
@@ -158,7 +159,7 @@ AutoZT 以非交互方式调用远端主机（`ssh host 'python3 ...'`）完成�
 | 站点条件 | 建议选择 |
 |---|---|
 | 仅有系统 GCC（常为 4.8–7.x） | 加载较新模块（`gcc/9` 或更高）或使用 developer toolset；过旧的编译器可能报内部编译错误 |
-| Intel oneAPI / Parallel Studio | `mpiicc`/`mpiifort` 配合 MKL，配置量最小 |
+| Intel oneAPI / Parallel Studio | 使用 Intel MPI 编译器包装（经典编译器为 `mpiicc`/`mpiifort`；oneAPI 2024 起 `ifort` 已移除，改用 `mpiifx`）并链接 MKL，配置量最小 |
 | 混合（GNU 编译器 + Intel MKL） | 可行；显式链接相应 MKL 变体（`gnu_thread`） |
 
 ABI 原则：MPI 库决定了应使用的编译器与 Fortran 运行时。混用不同版本的 `libgfortran` 常导致
@@ -168,8 +169,8 @@ ABI 原则：MPI 库决定了应使用的编译器与 Fortran 运行时。混用
 
 | 来源 | 优点 | 注意事项 |
 |---|---|---|
-| MKL | 性能好、自包含 | 与 GNU 编译器混用时选择 `intel_lp64` 配 `intel_thread` 或 `gnu_thread`；`libiomp5` 位于编译器库目录 |
-| 系统 BLAS/LAPACK | 无需安装 | 以 `-l:liblapack.so.3 -l:libblas.so.3` 链接；3.8 之前的 LAPACK 提供 `dgegv_`，之后被移除（见第 8 节） |
+| MKL | 性能好、自包含 | 与 GNU 编译器混用时须链接 `mkl_gf_lp64` 接口层（而非 `mkl_intel_lp64`），线程层选 `mkl_sequential` 或 `mkl_gnu_thread`，具体参数以 Intel MKL Link Line Advisor 为准；Intel 编译器使用 `-qmkl`（旧版为 `-mkl`）；`libiomp5` 位于编译器库目录 |
+| 系统 BLAS/LAPACK | 无需安装 | 以 `-l:liblapack.so.3 -l:libblas.so.3` 链接。LAPACK 3.6.0 起，已弃用的 `DGEGV`、`DGGSVD` 默认不再编译；若链接时缺少这些符号，处理方法见第 8.1 节 |
 | OpenBLAS | 多线程性能好 | 需注意与 MPI 进程的线程超订 |
 | FFTW3 | 可移植 | 使用双精度安装（`.../fftw3/double/...`） |
 
@@ -198,6 +199,10 @@ make -k -j 16 std > build_std.log 2>&1 || true
 | 并行编译时大量 `.mod` 文件缺失 | 并行构建的模块依赖竞争 | 重复执行 `make -k -j N` 直至收敛；每一轮补齐一批对象 |
 | `invalid command 'bdist_wheel'`（Python 包） | 环境中缺少 `wheel` | 先 `pip install wheel`，再重试 |
 
+若链接时报 `undefined reference to 'dgegv_'`（或 `dggsvd_`），说明所用 LAPACK 未编译这些已弃用例程：
+从 netlib 取回 `dgegv.f` 与 `dggsvd.f`，加入引擎源码树，并在 `makefile.include` 的
+`OBJECTS_LIB` 中加入相应对象。
+
 安装完成后必须动态验证：用 `ldd` 检查未解析库，再运行最小算例（第 8.3 节）。链接成功不足以证明二进制可用。
 
 ### 8.2 变胞弛豫（可选）
@@ -207,9 +212,10 @@ make -k -j 16 std > build_std.log 2>&1 || true
 
 ### 8.3 冒烟测试与数值基线
 
-使用两原子 Si 金刚石结构的最小输入集（`ENCUT=250`、`ISMEAR=0`、`SIGMA=0.05`、`EDIFF=1e-5`、
-`NELM=20`），经站点模板提交。验收判据：退出码为 0；`OUTCAR` 中出现
-`reached required accuracy`；写出计时信息。
+使用 Si 金刚石结构的面心立方（fcc）原胞（2 个原子；常规立方胞含 8 个原子）与最小输入集
+（`ENCUT=250`、`ISMEAR=0`、`SIGMA=0.05`、`EDIFF=1e-5`、`NELM=20`），经站点模板提交。验收判据：
+退出码为 0；`OUTCAR` 中出现 `aborting loop because EDIFF is reached`（电子步收敛）；写出计时信息。
+注：`reached required accuracy` 仅在离子弛豫（`NSW > 0`）收敛时输出，静态自洽计算不会出现该行。
 
 记录总能，并与另一台机器在相同输入下得到的结果比较。若偏差超过 1e-4 eV，应检查赝势文件、
 平面波截断能与引擎版本。
@@ -224,19 +230,20 @@ make -k -j 16 std > build_std.log 2>&1 || true
 
 ### 9.1 赝势库布局
 
-实践中存在三种布局；`potcar_dir` 必须指向与所选布局对应的层级：
+赝势有两种使用方式，两者要求的目录布局不同：
 
-```
-A) potcar_dir/potpaw_PBE_64/<元素>/POTCAR     （推荐；缺陷类技能按此查找）
-B) potcar_dir/potpaw_PBE/<元素>/POTCAR
-C) potcar_dir/<元素>/POTCAR                   （直接解压官方压缩包的结果）
-```
+- **`defect-dft-cpu`** 直接读取站点配置中的 `potcar_dir`，按元素/变体依次查找：
+  `potpaw_PBE_64/<变体>/POTCAR`、`potpaw_PBE_54/<变体>/POTCAR`、`potpaw_PBE/<变体>/POTCAR`、
+  `potpaw_PBE/POTCAR_<变体>` 与 `potpaw_PBE.54/POTCAR_<变体>`。
+- **使用 VASPKIT 的技能**（例如 `band-dft-cpu`）通过 VASPKIT 生成 `POTCAR`，VASPKIT 读取
+  `~/.vaspkit`（见第 9.2 节）；对这些技能而言 `potcar_dir` 不被使用。
 
-官方压缩包解压后为布局 C（元素目录直接位于当前目录下）。应创建父目录并将内容移入，
-且预先执行 `chmod -R u+w`，因为压缩包保留了只读权限。
+若元素目录直接位于 `potcar_dir` 之下（`potcar_dir/<元素>/POTCAR`，即官方压缩包解压后的常见形态），
+`defect-dft-cpu` **不会识别**。应把压缩包解压到以库名命名的子目录（例如 `potpaw_PBE_64/`），
+并预先执行 `chmod -R u+w`，因为压缩包保留了只读权限。
 
-验收判据：`autozt check` 不报告赝势缺失，且后处理工具生成的 `POTCAR` 首行给出预期的势名。
-
+验收判据：`autozt check --cluster <站点>` 对在用技能不报告赝势数据缺失，且后处理工具生成的 `POTCAR`
+首行给出预期的势名。
 ### 9.2 VASPKIT 配置
 
 VASPKIT 1.x 以空白分隔的 `KEY VALUE` 格式读取 `~/.vaspkit`。写成 `KEY = VALUE` 时其值会被解析为
@@ -273,13 +280,15 @@ AutoZT 把含 `/` 的运行时环境路径视为 virtualenv，并以 `source <en
 处理方式：补充一个最小激活脚本：
 
 ```bash
-cat > <env>/bin/activate <<'EOF'
-_AZT_ENV="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
-export VIRTUAL_ENV="$_AZT_ENV" CONDA_PREFIX="$_AZT_ENV"
-export PATH="$_AZT_ENV/bin:$PATH"
-export LD_LIBRARY_PATH="$_AZT_ENV/lib:${LD_LIBRARY_PATH:-}"
+# 环境路径在生成 activate 时直接写入：不要用 $0 推算，脚本被 source 时 $0 指向 shell 本身。
+ENV=<环境绝对路径>
+cat > "$ENV/bin/activate" <<EOF
+export VIRTUAL_ENV="$ENV"
+export CONDA_PREFIX="$ENV"
+export PATH="$ENV/bin:\$PATH"
+export LD_LIBRARY_PATH="$ENV/lib:\${LD_LIBRARY_PATH:-}"
 EOF
-chmod +x <env>/bin/activate
+chmod +x "$ENV/bin/activate"
 ```
 
 验证：`bash -c 'source <env>/bin/activate; python -V; python -c "import <包名>"'` 必须使用该环境的解释器。
@@ -300,11 +309,14 @@ chmod +x <env>/bin/activate
 | `vasp.<profile>` | DFT 技能必填 | VASP profile：`standard`（`cell_constraint: none`）与可选的 `relax_2d`（`cell_constraint: ioptcell_tag`），各自给出 `std`、`gam`、`ncl` 的绝对路径 |
 | `work_dir` | 是 | 站点可写根目录；不得与其他站点相同 |
 | `partition` | 是 | 默认提交分区 |
-| `max_cpus` | 建议 | 每节点核数；预检据此发现模板申请超过单节点核数的情形 |
+| `max_cpus` | 建议 | 每节点核数（亦可写作 `max_cpus_per_task`）；预检据此发现模板申请超过单节点核数的情形 |
+| `cores` | 否 | 作业默认核数；步骤级与技能级设置优先 |
+| `references_dir` | 条件 | `defect-dft-cpu` 的凸包参考相共享目录 |
 | `conda_sh` | 否 | `profile.d/conda.sh` 路径；仅用 virtualenv 的站点可留空 |
 | `conda_env` | 输入生成必填 | 供输入生成脚本使用的 Python 环境；含 `/` 的路径按 virtualenv 激活 |
-| `pheasy_env`、`kl_env`、`amset_env` | 随技能 | 组件专用环境；`autozt check` 逐一验证 |
-| `potcar_dir` | DFT 技能必填 | 赝势根目录；三种布局见第 9.1 节 |
+| `kl_env` | 随技能 | 基于 phono3py 的声子计算专用环境，会被注入步骤配置；`autozt check` **不**评估该环境，需手工验证（见第 13 节） |
+| `amset_env` | 随技能 | AMSET 专用环境（应为独立环境）；`autozt check` 以 `py:<包名>@amset_env` 报告其缺项 |
+| `potcar_dir` | 条件 | 赝势库根目录，仅 `defect-dft-cpu` 读取；使用 VASPKIT 的技能读取 `~/.vaspkit`（布局见第 9.1 节） |
 | `mlff_model_dir` | MLFF 技能 | 机器学习势权重目录 |
 | `remote_path_prefix` | 建议 | 远端命令的 `PATH` 前缀（例如存放工具软链的 `pybin`，其后接环境 `bin`） |
 | `qe_bin`、`qe_pseudo_dir`、`qe_setup` | eph-qe 技能 | Quantum ESPRESSO 可执行文件、UPF 目录与运行前置环境语句 |
@@ -386,7 +398,7 @@ MPI 启动器及其参数、时限。
 |---|---|---|
 | 作业在数秒内失败；stderr 出现 `binding more processes than cpus` | OpenMPI 默认绑核与节点或 cgroup 布局不兼容 | `mpirun --bind-to none -np $SLURM_NTASKS ...`，先在单节点确认 |
 | 以 OpenMPI 的 `mpirun` 启动 Intel MPI 程序 | ABI 不匹配 | 使用 Intel MPI 的 `mpiexec`/`mpirun`，或加载对应的 `mpi/intelmpi` 模块 |
-| 程序被启动了多份 | 模板为每个进程启动一个完整计算 | 确保只有一次 `mpirun -np <任务数> <二进制>` |
+| 程序被启动了多份，或输出互相覆盖 | 启动器与程序所链接的 MPI 实现不是同一套，导致每个进程各自启动一份完整实例 | 使用与程序所链接 MPI 实现一致的 `mpirun`/`mpiexec` 启动 |
 | 单节点通信异常 | InfiniBand/UCX 初始化问题 | 单节点作业可设 `OMPI_MCA_btl=self,vader,tcp` 与 `OMPI_MCA_pml=ob1` |
 
 ### 11.4 加速卡
@@ -452,7 +464,7 @@ autozt -t <技能> -p <材料> -j <步骤> conf                              # �
 | 3 | 配置预检 | `autozt doctor` | 无错误，且列出新站点 |
 | 4 | 技能就绪 | `autozt check --cluster <站点>` | DFT 相关技能通过 |
 | 5 | 模板渲染 | `autozt -p <材料> -j <步骤> init` 后检查 `submit.sh` | 分区、核数与路径正确 |
-| 6 | 冒烟计算 | 最小 Si 算例（第 8.3 节） | `reached required accuracy`；能量与基线一致 |
+| 6 | 冒烟计算 | 最小 Si 算例（第 8.3 节） | 电子步收敛（`aborting loop because EDIFF is reached`）；能量与基线一致 |
 | 7 | 并发 | 提交两个探测作业 | 均被接受；无 QOS 或分区拒绝 |
 | 8 | 清理 | `squeue -u <账号>` | 无测试作业残留 |
 | 9 | 记录 | `docs/<SITE>-DEPLOY-<日期>.md` | 配额、问题与验收数字齐备 |
@@ -461,8 +473,9 @@ autozt -t <技能> -p <材料> -j <步骤> conf                              # �
 
 - **硬性缺失**：技能无法运行（缺少引擎二进制、赝势库、核心 Python 包，或该技能专用环境）。
 - **可选项缺失**：次要功能不可用（`optional exe:`/`optional py:`、无 GPU 等），不影响主流程。
-- 缺包信息是**针对该技能实际使用的环境**报告的（带 `@amset_env`、`@kl_env` 等后缀）。
-  应确认包装在该环境中，而不只是装在 `conda_env` 中。
+- 缺包信息是**针对该技能实际使用的环境**报告的：AMSET 依赖在 `amset_env` 中检查，并带 `@amset_env` 后缀；
+  其余依赖在 `conda_env` 中检查（站点配置未设 `conda_env` 时，使用技能 `skill.yaml` 中 `requires.conda` 声明的环境）。
+  `kl_env` 当前不在 `autozt check` 的检查范围内，需手工验证。不带 `--cluster` 时，`autozt check` 检查的是本机。
 
 ## 14. 可选组件
 
@@ -519,8 +532,8 @@ ELPA 的 Fortran 模块存在并行依赖竞争，需要多轮 `make -k -j N`。
 
 - `phonopy`、`phono3py`：安装二进制 wheel（`pip install --only-binary=:all: phonopy phono3py`）；
   确认 `phono3py` 可执行文件存在且两个模块均可导入。
-- `ALM`：PyPI 上同名包是 2.4 KB 的空包，不可安装。conda-forge 仅提供 Python 3.6–3.8 的构建。
-  对 Python 3.10/3.11，可解包 conda-forge 的 Python 3.11 包，把其 `site-packages/alm/` 复制进环境，
+- `ALM`：PyPI 上同名包是 2.4 KB 的空包，不可安装。conda-forge 只提供较旧的构建（2.0.0_dev），且仅覆盖部分 Python 版本。
+  当无法把匹配的构建安装进目标环境时，可解包对应 Python 版本的 conda-forge 包，把其 `site-packages/alm/` 复制进环境，
   并将环境中 `spglib` 自带的 `libsymspg.so.2` 软链为所需的 `libsymspg.so.1`
   （扩展按 `$ORIGIN/../../..` 解析库）。
 - `pheasy`：从源码安装（先 `pip install wheel`，再 `pip install --no-deps --no-build-isolation .`）；

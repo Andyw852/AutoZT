@@ -1,6 +1,6 @@
 # Deploying AutoZT at a New HPC Site: Porting and Acceptance Guide
 
-**Document version:** 1.0  
+**Document version:** 1.1 (factual corrections: Section 8.3, 7.1, 7.2, 9.1, 9.3.1, 10.1, 11.3, 13, 14.6; see the repository history)  
 **Applies to:** AutoZT v2.0 and later  
 **Audience:** site administrators and users who deploy AutoZT on a compute cluster or standalone node  
 **Companion artifacts:** `tools/probe_cluster.sh` (read-only site survey), `docs/DEPLOY-RECORD-TEMPLATE.md` (per-site record), `docs/CONFIGURING.md` (configuration reference)  
@@ -137,10 +137,11 @@ and submission. Two conditions therefore apply:
 
 1. **The runtime Python must be on the non-interactive `PATH`.** Variables exported only from
    interactive start-up files are not visible. Two standard remedies are to write the `PATH`
-   to `~/.ssh/environment` (requires `PermitUserEnvironment yes` in `sshd_config`), or to
-   create a symbolic link to the interpreter in a directory that is already on the
-   non-interactive `PATH` and is writable by the account; the survey script reports the first
-   such directory.
+   to `~/.ssh/environment`, which requires `PermitUserEnvironment yes` in `sshd_config`; many HPC
+   sites do not enable this, so treat it as site dependent. Alternatives that do not depend on
+   the site are to create a symbolic link to the interpreter in a directory that is already on
+   the non-interactive `PATH` and is writable by the account (the survey script reports the
+   first such directory), or to provide the environment's `bin` through `remote_path_prefix`.
 2. **Module commands are not inherited.** Every job script must load its modules explicitly; a
    non-interactive SSH command does not run the login-shell module initialisation.
 
@@ -179,7 +180,7 @@ Acceptance criterion: `du -sh ~/software/AutoZT/*` remains within the available 
 | Available on the site | Recommended choice |
 |---|---|
 | System GCC only (often 4.8-7.x) | Load a newer module (`gcc/9` or later) or a developer toolset; older compilers may fail with an internal compiler error |
-| Intel oneAPI / Parallel Studio | `mpiicc`/`mpiifort` with MKL; least configuration effort |
+| Intel oneAPI / Parallel Studio | Use the Intel MPI compiler wrappers (`mpiicc`/`mpiifort`; on oneAPI 2024 and later, where `ifort` has been removed, `mpiifx`) and link MKL. Least configuration effort. |
 | Mixed (GNU compilers with Intel MKL) | Supported; link the MKL variants explicitly (`gnu_thread`) |
 
 ABI rule: the MPI library determines the compiler and Fortran runtime to use. Mixing
@@ -189,8 +190,8 @@ ABI rule: the MPI library determines the compiler and Fortran runtime to use. Mi
 
 | Source | Advantage | Caution |
 |---|---|---|
-| MKL | Fast and self-contained | With GNU compilers choose `intel_lp64` + `intel_thread` or `gnu_thread`; `libiomp5` resides in the compiler library directory |
-| System BLAS/LAPACK | No installation | Link as `-l:liblapack.so.3 -l:libblas.so.3`; LAPACK before 3.8 provides `dgegv_`, later versions removed it (Section 8) |
+| MKL | Fast and self-contained | With GNU compilers link the `mkl_gf_lp64` interface layer (not `mkl_intel_lp64`) together with `mkl_sequential` or `mkl_gnu_thread`; the Intel compilers accept `-qmkl` (legacy: `-mkl`). Consult the Intel MKL Link Line Advisor for the exact flags. `libiomp5` resides in the compiler library directory. |
+| System BLAS/LAPACK | No installation | Link as `-l:liblapack.so.3 -l:libblas.so.3`. Since LAPACK 3.6.0 the deprecated routines `DGEGV` and `DGGSVD` are no longer built by default; if these symbols are missing at link time, see Section 8.1 |
 | OpenBLAS | Good multithreaded performance | Account for thread oversubscription against MPI ranks |
 | FFTW3 | Portable | Use the double-precision installation |
 
@@ -221,6 +222,11 @@ make -k -j 16 std > build_std.log 2>&1 || true
 | Many missing `.mod` files under parallel make | Module-dependency race in parallel builds | Repeat `make -k -j N` until convergence; each pass completes another group of objects |
 | `invalid command 'bdist_wheel'` (Python packages) | `wheel` absent from the environment | `pip install wheel`, then retry |
 
+If the link step reports `undefined reference to 'dgegv_'` (or `dggsvd_`), the LAPACK
+implementation lacks these deprecated routines: obtain `dgegv.f` and `dggsvd.f` from netlib,
+add them to the engine's source tree, and add the resulting objects to `OBJECTS_LIB` in
+`makefile.include`.
+
 After installation, verify dynamically: `ldd` for unresolved libraries, then a minimal
 calculation (Section 8.3). A successful link is not sufficient evidence of a working binary.
 
@@ -232,9 +238,12 @@ profiles in the site profile (`standard`, `relax_2d`).
 
 ### 8.3 Smoke test and numerical baseline
 
-Use a two-atom Si diamond cell with a minimal input set (`ENCUT=250`, `ISMEAR=0`, `SIGMA=0.05`,
+Use the two-atom Si fcc primitive cell of the diamond structure (the conventional cubic cell
+contains eight atoms) with a minimal input set (`ENCUT=250`, `ISMEAR=0`, `SIGMA=0.05`,
 `EDIFF=1e-5`, `NELM=20`) submitted through the site template. Acceptance criteria: exit status
-0; `reached required accuracy` present in `OUTCAR`; a timing block written.
+0; `aborting loop because EDIFF is reached` present in `OUTCAR` (electronic convergence); a
+timing block written. Note: `reached required accuracy` is printed only when an ionic relaxation
+(`NSW > 0`) converges; a static SCF calculation does not produce it.
 
 Record the total energy and compare it with an established value obtained on another machine
 with identical inputs. A discrepancy larger than 1e-4 eV warrants checking the pseudopotential
@@ -253,21 +262,25 @@ file, the plane-wave cutoff and the engine version.
 
 ### 9.1 Pseudopotential library layouts
 
-Three layouts occur in practice; `potcar_dir` must point to the correct level:
+Pseudopotentials are consumed in two different ways, and the two mechanisms expect different
+layouts:
 
-```
-A) potcar_dir/potpaw_PBE_64/<element>/POTCAR     (recommended; expected by defect-type skills)
-B) potcar_dir/potpaw_PBE/<element>/POTCAR
-C) potcar_dir/<element>/POTCAR                   (result of extracting the official archive)
-```
+- **`defect-dft-cpu`** reads the site-profile key `potcar_dir` directly. It searches, in order,
+  per element and variant: `potpaw_PBE_64/<variant>/POTCAR`, `potpaw_PBE_54/<variant>/POTCAR`,
+  `potpaw_PBE/<variant>/POTCAR`, `potpaw_PBE/POTCAR_<variant>` and
+  `potpaw_PBE.54/POTCAR_<variant>`.
+- **Skills that use VASPKIT** (for example `band-dft-cpu`) generate the `POTCAR` through
+  VASPKIT, which reads `~/.vaspkit` (Section 9.2); for these skills `potcar_dir` is not used.
 
-The official archives extract as layout C (element directories directly beneath the current
-directory). Create the parent directory, move the content into it, and make the read-only
-directories writable first (`chmod -R u+w`), because the archives preserve restrictive modes.
+A flat layout, in which the element directories sit directly under `potcar_dir`
+(`potcar_dir/<element>/POTCAR`, the usual result of extracting the official archive), is **not
+recognised** by `defect-dft-cpu`. Extract the archive into a subdirectory named after the library
+(for example `potpaw_PBE_64/`) and make the read-only directories writable first
+(`chmod -R u+w`).
 
-Acceptance criterion: `autozt check` reports no missing pseudopotential data, and the
-post-processing tool generates a `POTCAR` whose first line names the expected potential.
-
+Acceptance criterion: `autozt check --cluster <site>` reports no missing pseudopotential data for
+the skills in use, and the post-processing tool generates a `POTCAR` whose first line names the
+expected potential.
 ### 9.2 VASPKIT configuration
 
 VASPKIT 1.x reads `~/.vaspkit` in a whitespace-separated `KEY VALUE` format. Writing
@@ -311,13 +324,16 @@ failures in generation scripts.
 Remedy: supply a minimal activation shim:
 
 ```bash
-cat > <env>/bin/activate <<'EOF'
-_AZT_ENV="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
-export VIRTUAL_ENV="$_AZT_ENV" CONDA_PREFIX="$_AZT_ENV"
-export PATH="$_AZT_ENV/bin:$PATH"
-export LD_LIBRARY_PATH="$_AZT_ENV/lib:${LD_LIBRARY_PATH:-}"
+# Write <env> literally: do not derive it from $0, which refers to the shell when this
+# script is sourced.
+ENV=<absolute-path-of-environment>
+cat > "$ENV/bin/activate" <<EOF
+export VIRTUAL_ENV="$ENV"
+export CONDA_PREFIX="$ENV"
+export PATH="$ENV/bin:\$PATH"
+export LD_LIBRARY_PATH="$ENV/lib:\${LD_LIBRARY_PATH:-}"
 EOF
-chmod +x <env>/bin/activate
+chmod +x "$ENV/bin/activate"
 ```
 
 Verification: `bash -c 'source <env>/bin/activate; python -V; python -c "import <package>"'`
@@ -339,11 +355,14 @@ configuration, in this order: `project_setting/` > user configuration > package 
 | `vasp.<profile>` | yes (DFT skills) | VASP profiles: `standard` (`cell_constraint: none`) and optionally `relax_2d` (`cell_constraint: ioptcell_tag`), each with absolute paths to `std`, `gam`, `ncl`. |
 | `work_dir` | yes | Writable root on the site; must differ from other sites. |
 | `partition` | yes | Default submission partition. |
-| `max_cpus` | recommended | Cores per node; used by the preflight check to detect templates requesting more cores than a node provides. |
+| `max_cpus` | recommended | Cores per node; also accepted as `max_cpus_per_task`. Used by the preflight check to detect templates requesting more cores than a node provides. |
+| `cores` | no | Default number of cores per job; step-level and skill-level settings take precedence. |
+| `references_dir` | defect-dft-cpu | Shared directory of convex-hull reference phases. |
 | `conda_sh` | no | Path to `profile.d/conda.sh`; leave empty for virtualenv-only sites. |
 | `conda_env` | yes (generation) | Python environment for input-generation scripts; a path containing `/` is activated as a virtualenv. |
-| `pheasy_env`, `kl_env`, `amset_env` | per skill | Component-specific environments; each is validated separately by `autozt check`. |
-| `potcar_dir` | yes (DFT skills) | Pseudopotential root; see Section 9.1 for the three layouts. |
+| `kl_env` | kl-dft-cpu | Environment for the phono3py-based phonon calculation; injected into the step configuration. It is **not** evaluated by `autozt check`; verify it manually (Section 13). |
+| `amset_env` | ke-dft-cpu (S8) | AMSET environment; should be an isolated environment. `autozt check` reports its packages as `py:<package>@amset_env`. |
+| `potcar_dir` | defect-dft-cpu | Pseudopotential root, read by `defect-dft-cpu` only; the VASPKIT-based skills read `~/.vaspkit` instead. Layouts are listed in Section 9.1. |
 | `mlff_model_dir` | MLFF skills | Directory holding machine-learning potential weights. |
 | `remote_path_prefix` | recommended | `PATH` prefix for remote commands (for example a `pybin` directory with tool links, followed by the environment's `bin`). |
 | `qe_bin`, `qe_pseudo_dir`, `qe_setup` | eph-qe skill | Quantum ESPRESSO executables, UPF directory and pre-run environment statements. |
@@ -429,7 +448,7 @@ depends on the site and should be measured (Section 12.2).
 |---|---|---|
 | Job fails within seconds; stderr contains `binding more processes than cpus` | OpenMPI default binding incompatible with the node or cgroup layout | `mpirun --bind-to none -np $SLURM_NTASKS ...`, after confirming on a single node |
 | Intel MPI program launched with OpenMPI `mpirun` | ABI mismatch | Use the `mpiexec`/`mpirun` of Intel MPI, or load the matching `mpi/intelmpi` module |
-| Several full copies of the program start | Template launches one full calculation per process | Ensure a single `mpirun -np <tasks> <binary>` invocation |
+| Several full copies of the program start, or output is overwritten | The launcher and the program were built against different MPI implementations, so each rank starts an independent instance | Launch with the `mpirun`/`mpiexec` of the MPI implementation the program was linked against |
 | Single-node communication issues | InfiniBand/UCX initialisation | For single-node jobs set `OMPI_MCA_btl=self,vader,tcp` and `OMPI_MCA_pml=ob1` |
 
 ### 11.4 Accelerators
@@ -506,7 +525,7 @@ into the per-site record.
 | 3 | Configuration preflight | `autozt doctor` | no errors; the new site is listed |
 | 4 | Skill readiness | `autozt check --cluster <site>` | DFT-related skills pass |
 | 5 | Template rendering | `autozt -p <material> -j <step> init` then inspect `submit.sh` | partition, cores and paths correct |
-| 6 | Smoke calculation | minimal Si job (Section 8.3) | `reached required accuracy`; energy matches the baseline |
+| 6 | Smoke calculation | minimal Si job (Section 8.3) | electronic loop converged (`aborting loop because EDIFF is reached`); energy matches the baseline |
 | 7 | Concurrency | submit two probe jobs | both accepted; no QOS or partition rejection |
 | 8 | Clean-up | `squeue -u <account>` | no test jobs remain |
 | 9 | Record | `docs/<SITE>-DEPLOY-<date>.md` | quotas, issues and acceptance numbers documented |
@@ -517,9 +536,11 @@ Interpreting `autozt check` output:
   Python package, or the environment specific to that skill).
 - **Optional failure**: a secondary capability is unavailable (`optional exe:`/`optional py:`,
   GPU absent). The main workflow is unaffected.
-- A missing package is reported **for the environment the skill uses** (suffixes such as
-  `@amset_env`, `@kl_env`). Confirm the package is installed in that environment, not only in
-  `conda_env`.
+- A missing package is reported **for the environment the skill uses**. AMSET dependencies are
+  checked in `amset_env` and appear with the suffix `@amset_env`; the other dependencies are
+  checked in `conda_env` (or in the environment declared by the skill's `requires.conda` when the
+  site profile sets no `conda_env`). `kl_env` is currently not evaluated by `autozt check` and
+  must be verified manually. Without `--cluster`, `autozt check` inspects the local machine.
 
 ## 14. Optional components
 
@@ -593,8 +614,9 @@ of parallel module-dependency races. The skill parameters (`HAMGNN_DIR`, `UNI_MO
 - `phonopy` and `phono3py`: install binary wheels (`pip install --only-binary=:all: phonopy
   phono3py`); verify that the `phono3py` executable exists and both modules import.
 - `ALM`: the PyPI package of this name is an empty 2.4 KB placeholder and must not be installed.
-  conda-forge provides builds only for Python 3.6-3.8. For Python 3.10/3.11, extract the
-  conda-forge Python 3.11 package, copy its `site-packages/alm/` into the environment, and
+  conda-forge provides only older builds (2.0.0_dev) and only for a limited set of Python
+  versions. When no matching build can be installed into the target environment, extract the
+  conda-forge package for that Python version, copy its `site-packages/alm/` into the environment, and
   provide the required `libsymspg.so.1` by symbolic link to the `libsymspg.so.2` shipped with
   the environment's `spglib` (the extension resolves libraries relative to `$ORIGIN/../../..`).
 - `pheasy`: install from source (`pip install wheel` first, then
