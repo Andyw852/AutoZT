@@ -493,7 +493,8 @@ AutoZT 通过 `sbatch/squeue/scancel` 语义管理作业：
 
 - 每个新集群写一份 `docs/<HPC>-DEPLOY-<YYYYMMDD>.md`：
   **实测配额表**（并发/单作业/时限/存储）、**构建踩坑**（编译器/库/MPI）、**验收数字**（冒烟能量/带隙）、
-  **可选组件状态**（QE/amset/MACE/…）。
+  **可选组件状态**（QE/amset/MACE/…）。直接复制 **`docs/DEPLOY-RECORD-TEMPLATE.md`** 按实测填
+  （模板已把"本集群特殊项 / 通用项"分开）。
 - `setting/*` 是本地文件（.gitignore）：可以在仓库里留一份**脱敏模板**（用 `<user>/<work_dir>` 占位），
   真实路径不提交。
 - 与 AGENTS 的对应：安装位置=铁律 11；改核数流程=铁律 9；只读诊断=铁律 4；

@@ -19,6 +19,12 @@ ssh_host, work_dir, remote_path_prefix (the python used by generation scripts),
 conda_sh / conda_env / amset_env, the vasp.<profile> binary paths, and templates/ for
 your queue system.
 
+> New to a machine you have never used? Start from the step-by-step, cluster-agnostic
+> guide `docs/DEPLOY-NEW-CLUSTER.md` (scouting -> SSH -> compilers/libraries -> VASP ->
+> POTCAR/Python -> cluster yaml -> acceptance), and run `tools/probe_cluster.sh <ssh-alias>`
+> (read-only) to collect the facts. Per-cluster deployment records use
+> `docs/DEPLOY-RECORD-TEMPLATE.md`.
+
 ## 3. Keeping site-specific paths out of the code
 
     grep -rn "/home/\|/public/home/" skill/ setting/ | grep -v template
