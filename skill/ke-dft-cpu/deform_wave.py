@@ -734,6 +734,9 @@ def _cli(argv=None):
         "；".join("%s 带 %d-%d 覆盖度 ≥ %.3f 赝波函数非正交 ≤ %.3f" % (sn, v["bands"][0], v["bands"][1], v["q_min"],
                                                                 v["aug_offdiag_max"]) for sn, v in s["spins"].items())),
         flush=True)
+    if s.get("mirrored"):
+        print("[deform_wave] 图样 %s 只有单侧应变：用把应变变号的对称操作补出另一侧，照样中心差分" % ",".join(s["mirrored"]),
+              flush=True)
     if s["one_sided"]:
         print("[deform_wave][WARN] 图样 %s 只有单侧应变：前向差分（O(δ)）" % ",".join(s["one_sided"]), flush=True)
     return 0
