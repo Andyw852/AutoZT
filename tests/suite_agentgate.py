@@ -32,10 +32,7 @@ def ok(cond, msg):
 
 def setup():
     shutil.rmtree(BASE, ignore_errors=True)
-    mat = os.path.join(PROJ, "Si_ag")
-    os.makedirs(mat, exist_ok=True)
-    shutil.copy(os.path.join(ROOT, "test", "tf_test", "Si", "POSCAR"),
-                os.path.join(mat, "POSCAR"))
+    os.makedirs(PROJ, exist_ok=True)
     with open(CFG, "w", encoding="utf-8") as f:
         f.write("host: \"\"\n"
                 "project_roots:\n  - %s\n"
@@ -43,8 +40,11 @@ def setup():
                 "task_types:\n  opt-dft-cpu:\n    max_jobs: 2\n" % PROJ)
     env = dict(os.environ)
     env.pop("AUTOZT_ACTOR", None)
-    subprocess.run([sys.executable, PROG, "-c", CFG, "-tt", "opt-dft-cpu",
-                    "-p", "Si_ag", "init"], capture_output=True, text=True, env=env)
+    # opt-dft-cpu 的技能默认 hpc: jzzn，init 会给材料写 jzzn 的 hpc.yaml（全局 host: "" 不决定技能跑哪台），
+    # 沙盒里的 clean 就会去 ssh jzzn 而失败。register --cluster local 把沙盒材料钉在本机。
+    subprocess.run([sys.executable, PROG, "-c", CFG, "-tt", "opt-dft-cpu", "-p", "Si_ag",
+                    "register", "--poscar", os.path.join(ROOT, "test", "tf_test", "Si", "POSCAR"),
+                    "--cluster", "local"], capture_output=True, text=True, env=env)
 
 
 def run(args, actor=None, strict=None, ttl=None, tty=False, answer="y\n"):

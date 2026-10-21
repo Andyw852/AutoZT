@@ -26,7 +26,7 @@ yaml = ["PyYAML>=5.4"]
 mace = ["numpy", "ase", "pymatgen", "phonopy", "phono3py", "mace-torch"]
 vasp = ["numpy", "ase", "pymatgen", "phonopy", "phono3py", "spglib"]
 hiphive = ["hiphive", "numpy", "ase"]
-dev = ["pytest>=7", "ruff", "build"]
+dev = ["pytest>=7", "ruff", "build", "numpy", "h5py"]   # numpy/h5py：tests/ 里的单测直接 import
 
 [project.scripts]
 autozt = "autozt.cli:main"

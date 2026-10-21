@@ -327,7 +327,6 @@ def symmetrize_h5(path, signed_path=None, symprec=SYMPREC):
     """原地对称化 AMSET 形变势 h5（幅值）。signed_path（缺省 = signed_name(path)）存在时走"带符号 + 回退"，
     否则只用置换子群。返回报告 dict；已对称化过则 {"skipped": ...}。"""
     import h5py
-    from pymatgen.core import Structure
     signed_path = signed_name(path) if signed_path is None else signed_path
     with h5py.File(str(path), "r+") as f:
         v = int(f.attrs.get(ATTR, 0))
@@ -341,6 +340,7 @@ def symmetrize_h5(path, signed_path=None, symprec=SYMPREC):
         raw = np.array(f["structure"])
         s = raw.item() if raw.shape == () else raw
         s = s.decode() if isinstance(s, (bytes, np.bytes_)) else str(s)
+        from pymatgen.core import Structure     # 用到才导入：上面几种"跳过"不需要 pymatgen
         st = Structure.from_str(s, fmt="json")
         kp = np.array(f["kpoints"])
         rots = laue_rotations(st, symprec)
