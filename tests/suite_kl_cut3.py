@@ -202,16 +202,16 @@ def test_select():
     c3, r3 = kc.select_cutoff(drop, kappa_tol_pct=5.0)
     check("κ 还在涨 → not_converged 且报最大可用", r3["status"] == "not_converged"
           and abs(c3 - 5.9) < 1e-9, str((c3, r3["status"])))
-    jump = [_rec(c, k, upper=8.0) for c, k in ((4.18, 119.49), (4.97, 124.36), (5.68, 127.49),
-                                    (6.29, 126.22), (7.74, 103.89))]
+    jump = [_rec(c, k, upper=8.0) for c, k in ((4.0, 50.0), (4.5, 52.0), (5.0, 53.2),
+                                    (5.5, 52.7), (6.5, 43.0))]
     for r in jump:
         r["kappa_err"] = 0.0
     cj, rj = kc.select_cutoff(jump, kappa_tol_pct=5.0)
-    check("平台后跳变：默认 largest 取稳定区间 4.97–6.29 的 6.29，不退回 7.74",
-          abs(cj - 6.29) < 1e-9 and rj["status"] == "ok"
-          and rj["plateau_interval"] == [4.97, 6.29], str((cj, rj["status"])))
+    check("平台后跳变：默认 largest 取稳定区间 4.5–5.5 的 5.5，不退回 6.5",
+          abs(cj - 5.5) < 1e-9 and rj["status"] == "ok"
+          and rj["plateau_interval"] == [4.5, 5.5], str((cj, rj["status"])))
     cjs, _ = kc.select_cutoff(jump, kappa_tol_pct=5.0, pick="smallest")
-    check("平台后跳变 smallest 仍可选 → 4.97", abs(cjs - 4.97) < 1e-9, str(cjs))
+    check("平台后跳变 smallest 仍可选 → 4.5", abs(cjs - 4.5) < 1e-9, str(cjs))
     bad = [_rec(4.8, 10.0, ratio=2.0), _rec(5.3, 10.0, ratio=2.5)]
     c4, r4 = kc.select_cutoff(bad)
     check("数据量全不足 → no_usable_cutoff", c4 is None

@@ -471,7 +471,7 @@ writing `kappa_summary.json`:
   top-level `kappa_summary.json` (`chosen_cutoff_A`).  The kappa plateau is a
   contiguous stable interval: adjacent changes and the cumulative change from
   the interval start both stay within the tolerance; a jump after the interval
-  (e.g. flat 4.97-6.29 A, -17.7 % at 7.74 A) is reported in `after_plateau` and
+  (e.g. flat over three cutoffs, then a ~20 % drop at the outermost one) is reported in `after_plateau` and
   not used, and with several plateaus the longest wins.  `CUT3_PICK = largest`
   (default since 2026-10-15) takes the largest cutoff of that interval, `smallest`
   its smallest;

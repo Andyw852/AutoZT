@@ -367,15 +367,15 @@ def test_cut3_select():
     # 稳定区间（2026-10-14）：平台后最外档跳变不再把整条判 not_converged、退回最外档
     sv = [{"cut": c, "ratio": 10, "stability_measured": False, "kappa": k,
            "kappa_vec": [k, k, k]}
-          for c, k in ((4.18, 119.49), (4.97, 124.36), (5.68, 127.49),
-                       (6.29, 126.22), (7.74, 103.89))]
+          for c, k in ((4.0, 50.0), (4.5, 52.0), (5.0, 53.2),
+                       (5.5, 52.7), (6.5, 43.0))]
     cs1, rs1 = cs.select_cutoff(sv)
-    check("稳定区间 4.97–6.29：默认 largest 取 6.29，7.74 跳变不采用",
-          cs1 == 6.29 and rs1["status"] == "ok" and rs1["plateau_interval"] == [4.97, 6.29]
-          and [x["cut"] for x in rs1["after_plateau"]] == [7.74],
+    check("稳定区间 4.5–5.5：默认 largest 取 5.5，6.5 跳变不采用",
+          cs1 == 5.5 and rs1["status"] == "ok" and rs1["plateau_interval"] == [4.5, 5.5]
+          and [x["cut"] for x in rs1["after_plateau"]] == [6.5],
           "%s %s %s" % (cs1, rs1["status"], rs1.get("plateau_interval")))
     cs2, _ = cs.select_cutoff(sv, pick="smallest")
-    check("稳定区间 smallest 仍可选 → 4.97", cs2 == 4.97, str(cs2))
+    check("稳定区间 smallest 仍可选 → 4.5", cs2 == 4.5, str(cs2))
     two = [{"cut": c, "ratio": 10, "stability_measured": False, "kappa": k}
            for c, k in ((4.0, 10.0), (4.5, 10.2), (5.0, 13.0), (5.5, 13.1), (6.0, 13.2))]
     cs3, rs3 = cs.select_cutoff(two)
@@ -784,19 +784,19 @@ def test_kappa_file_stash():
     spec.loader.exec_module(kd)
     with tempfile.TemporaryDirectory() as td:
         out = Path(td)
-        (out / "cut3_4p18").mkdir()
+        (out / "cut3_4p00").mkdir()
         for m in ("131313", "252525"):
             (out / ("kappa-m%s.hdf5" % m)).write_text("ref-%s" % m, encoding="utf-8")
-            (out / "cut3_4p18" / ("kappa-m%s.hdf5" % m)).write_text("old", encoding="utf-8")
-        moved = kd._stash_kappa_files(out, out / "cut3_4p18")
+            (out / "cut3_4p00" / ("kappa-m%s.hdf5" % m)).write_text("old", encoding="utf-8")
+        moved = kd._stash_kappa_files(out, out / "cut3_4p00")
         check("每档目录收走顶层 kappa 文件（同名覆盖旧的）",
               sorted(moved) == ["kappa-m131313.hdf5", "kappa-m252525.hdf5"]
               and not list(out.glob("kappa-m*.hdf5"))
-              and (out / "cut3_4p18" / "kappa-m131313.hdf5").read_text(encoding="utf-8")
+              and (out / "cut3_4p00" / "kappa-m131313.hdf5").read_text(encoding="utf-8")
               == "ref-131313", str(moved))
-        (out / "cut3_6p29").mkdir()
-        (out / "cut3_6p29" / "kappa-m252525.hdf5").write_text("chosen", encoding="utf-8")
-        put = kd._promote_kappa_files(out / "cut3_6p29", out)
+        (out / "cut3_5p50").mkdir()
+        (out / "cut3_5p50" / "kappa-m252525.hdf5").write_text("chosen", encoding="utf-8")
+        put = kd._promote_kappa_files(out / "cut3_5p50", out)
         check("选中档的文件放回顶层（内容=选中档）",
               put == ["kappa-m252525.hdf5"]
               and (out / "kappa-m252525.hdf5").read_text(encoding="utf-8") == "chosen",
@@ -811,8 +811,8 @@ def test_scan_flow_no_recheck_and_kappa_files():
         "kd_scan", str(ROOT / "skill" / "_common" / "fcfit" / "kappa_driver.py"))
     kd = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(kd)
-    tags = ["4p18", "4p97", "5p68", "6p29", "7p74"]
-    kap = {"4p18": 119.49, "4p97": 124.36, "5p68": 127.49, "6p29": 126.22, "7p74": 103.89}
+    tags = ["4p00", "4p50", "5p00", "5p50", "6p50"]
+    kap = {"4p00": 50.0, "4p50": 52.0, "5p00": 53.2, "5p50": 52.7, "6p50": 43.0}
     calls = {"converge": 0, "bte": []}
 
     def fake_converge(out, yaml_name, fc2, fc3, cfg, source_fc, first=None):
@@ -832,8 +832,8 @@ def test_scan_flow_no_recheck_and_kappa_files():
                 "mesh": "25 25 25"}
 
     def fake_select(out, cfg, per_cut):
-        return (6.29, {"status": "ok", "chosen_cut": 6.29,
-                       "plateau_interval": [4.18, 6.29]}, dict(per_cut))
+        return (5.5, {"status": "ok", "chosen_cut": 5.5,
+                       "plateau_interval": [4.0, 5.5]}, dict(per_cut))
 
     with tempfile.TemporaryDirectory() as td:
         out = Path(td)
@@ -856,13 +856,13 @@ def test_scan_flow_no_recheck_and_kappa_files():
         d = json.loads((out / "kappa_summary.json").read_text(encoding="utf-8"))
         check("选完截断只收敛过一次网格（不再为选中档复核）", calls["converge"] == 1,
               str(calls))
-        check("顶层 kappa 文件 = 选中档（6.29）",
-              (out / "kappa-m252525.hdf5").read_text(encoding="utf-8") == "bte-6p29",
+        check("顶层 kappa 文件 = 选中档（5.5）",
+              (out / "kappa-m252525.hdf5").read_text(encoding="utf-8") == "bte-5p50",
               str((out / "kappa-m252525.hdf5").read_text(encoding="utf-8")))
         check("summary 记下 chosen / 顶层文件 / 网格参考档 / 复用标记",
-              d.get("chosen_cutoff_A") == 6.29
+              d.get("chosen_cutoff_A") == 5.5
               and d.get("kappa_files_top_level") == ["kappa-m252525.hdf5"]
-              and d.get("mesh_converged_on_cut3_A") == 7.74
+              and d.get("mesh_converged_on_cut3_A") == 6.5
               and d.get("mesh_reused_from_reference_cut") is True,
               json.dumps({k: d.get(k) for k in (
                   "chosen_cutoff_A", "kappa_files_top_level",
