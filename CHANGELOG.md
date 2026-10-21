@@ -14,6 +14,45 @@ This project adheres to Semantic Versioning; versions before 1.0.0 are developme
 
 ## [Unreleased]
 
+### Added (2026-10-21: [0061-m] ADP_DEGEN strain operator from DFT wavefunctions, plan A1)
+- `skill/ke-dft-cpu/deform_wave.py` (numpy + h5py): streams WAVECAR (standard / ISPIN=2 / non-collinear), extracts the
+  band-edge k-points, an energy window of bands and coefficients up to 300 eV into `deform_wave.h5`, then builds
+  `deformation_matrix.h5` in S7.1. For each k-point it projects every strained configuration's states onto the
+  unstrained band basis (Löwdin) and takes the central difference: X^(P)_mn = ⟨m|∂H/∂ε_P|n⟩, i.e. the whole first-order
+  strain Hamiltonian at fixed fractional coordinates, including interband elements and their signs.
+  `StrainGrid` interpolates the operator itself trilinearly on the S7 mesh (gauge-invariant; time reversal fills the
+  ISYM=0 half mesh, spinors included).
+- The band window is fixed by the unstrained configuration only, and is widened over near-degenerate groups within
+  the bands every strained configuration still covers (`MARGIN` 6, `PAD` 2). Per-configuration energy windows used to
+  cascade-shrink the window down to the valence bands.
+- S7 (`DEFORM_WAVE`, default on; `DEFORM_WAVE_KEEP`, `DEFORM_WAVE_MARGIN`): WAVECAR is written only where the
+  eigenvalues come from — the ionrelax static stage, or the top-level single point when there is no ionrelax. It is
+  extracted in the job and then deleted. The INCAR templates are unchanged. LWAVE is ignored when deciding whether
+  an ionrelax result can be reused. A finished ionrelax without `deform_wave.h5` reruns only its static stage
+  (archive suffix `nowave`). Extraction failures only warn.
+- S7.1 runs `deform_wave.py build`; missing files or a failed build only warn. The signed h5 now stores `ibands_<spin>`.
+- S8 / S8.4 (`ADP_DEGEN_MATRIX = auto|off`): link `deformation_matrix.h5` and ship `deform_wave.py`.
+- Runtime behaviour:
+  - Reference-level alignment is taken from non-degenerate signed potentials; the matrix is rejected when the
+    spread is too large.
+  - At the valley centre, Z = Bᴴ D̂(k0) B. This step checks the reciprocal-lattice representation by coverage,
+    symmetrizes, and cross-checks against the signed potentials; on any failure it falls back to the eigenvalue fit.
+  - Pairwise replacement uses the precomputed Zk = Bᴴ D̂(k) B. This already includes the kinematic term, so T is no
+    longer subtracted.
+  - With cached coefficients, a grid formula replaces the ADP matrix element for every final state of the carrier type
+    that has a degenerate valley. It uses AMSET's coefficients × the DFT operator, interpolates the vertex bilinears
+    with AMSET's own `get_cross_section_values`, self-checks |⟨f|i⟩|² against AMSET's cross-section overlap, and keeps
+    k·p states within 3 DFT mesh spacings of the valley centre. Large arrays go through AMSET's shared memory.
+- No published precedent for feeding a DFT strain-Hamiltonian matrix into AMSET's tetrahedron integration; this is
+  the project's own construction.
+- Tests: `tests/test_0061m_deform_wave.py`, `test_0061m_matrix_mode.py`, `test_0061m_grid_formula.py` and
+  `test_0061m_wiring.py`. They use an empirical-pseudopotential Si test bench (`tests/_epm_si.py`), where ∂H/∂ε is
+  known exactly. Results:
+  - Projection is within 1% of the exact value.
+  - Off-grid interpolation error falls at second order with mesh refinement.
+  - Pairwise and grid paths are bitwise equal to the vertex sums.
+  - The S7/S7.1/S8/S8.4 wiring is covered.
+
 ### Changed (2026-10-21: [0061-p] ADP_DEGEN replaces matrix elements pairwise inside AMSET's integration)
 - Default (`ADP_DEGEN_PAIR = auto`): instead of scaling each initial state's ADP rate by a model-computed ratio, the
   plugins hook three intermediates of AMSET's `calculate_rate` (identical in 0.4.19 and 0.5.1): `tbs.get_masks` (final

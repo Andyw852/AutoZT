@@ -4,6 +4,39 @@
 
 ---
 
+## 续（2026-10-21 第二个会话）—— 先看这一节
+
+**A1 的代码已全部写完并通过本地测试**（第 1–5 节是上一次的交接，保留作背景；第 4 节的计划已逐条落实，偏差见下）。
+
+| 提交 | 内容 |
+|---|---|
+| `9b7acd0` | 修窗口选取（3.3 的失败）：extract 只按能量选、MARGIN 2→6；build 以未形变构型为准、在各形变构型两侧仍剩 PAD=2 条的范围内扩简并组，不再连锁缩。6³ 离格点误差 0.16→0.024。7/7 过。 |
+| `53c580c` | 4.2–4.4 接线 + 运行期核心区：S7 `DEFORM_WAVE*`、S7.1 build、`ibands` 进带符号 h5、S8/S8.4 `ADP_DEGEN_MATRIX` 与软链；`adp_degen` 的 `matrix_grid`（对齐）、k0 处 Z = Bᴴ D̂ B（覆盖度认倒格矢表示、对称化、与 S 核对，失败退回拟合）、rcut 内预算 Zk（不再减 T）。 |
+| `570eba3` | 4.5 网格公式：钩子多记 calculate_rate 参数 / masks / 截面插值参数；`grid_pair_values`、`matrix_apply`（核心区 3 个 DFT 网格间距内混 k·p）；共享内存进子进程；两个插件改走 `matrix_apply`。 |
+| （本提交） | 文档：METHODOLOGY [0061-m] 小节、CHANGELOG、step8 step.conf 的 `ADP_DEGEN_MATRIX`、本交接。 |
+
+与第 4 节计划的偏差：
+- `DEFORM_WAVE_MARGIN` 出厂 6（不是 2）；没有 `step7_deform/step.conf` 文件，三个键的说明写在 `gen_step9_deform.py` 里（与 IONRELAX_* 同）。
+- 运行期没有 `ADP_DEGEN_SCOPE`：网格公式只处理"有简并谷的那种载流子"（计划里的默认），没做 `all`。
+- Zk 不在子进程里现算，而是主进程对 rcut 内 AMSET 网格点预算好（子进程只拿小数组）；网格公式本身要 StrainGrid，走共享内存。
+- 网格公式只取四面体顶点（不建 (带, 全部 k, 28) 的数组 —— 细网格上每次几百 MB）。
+
+测试：新增 `tests/test_0061m_matrix_mode.py`（7）、`test_0061m_wiring.py`（15）、`test_0061m_grid_formula.py`（8），
+`test_0061m_deform_wave.py` 7/7，原 `test_0061_adp_degen.py` 25/25（改了一条源码断言：2D 插件现在调 `matrix_apply`）；
+`skill/ke-dft-cpu/test_stale_input_run.py` 改了一条源码断言（`_mismatch_wo_lwave`）。
+`skill/ke-dft-cpu/test_downstream_wiring.py::test_every_upstream_gen_invalidates` 在 master 与 a9d90e4 上同样失败，与本次无关。
+本地没有 AMSET：钩子对照的是下载的 0.4.19 / 0.5.1 源码（`calculate_rate`、`get_masks`、`get_cross_section_values`、`get_g_maps`、
+`create_shared_array`），用 0.5.1 形状的假 `calculate_rate` 测过；**真 AMSET 跑一次之前，网格公式只算"源码对照 + 合成测试"过关**。
+
+还没做 / 要用户定的：
+1. **真数据验证**：Si 要 retry S7_deform（undeformed 重算一个单点；12 个 ionrelax 只补静态段）→ S7.1 → S8。动集群作业要按 AGENTS.md
+   走审批卡片；另一个会话在跑 Si 的 S7 ionrelax（4298484–6），等它完再动。看 `adp_degen_fit.json` 的 `matrix`（对齐离散度、带号）、
+   各谷 `strain.source` 是不是 `deformation_matrix.h5`、`coverage_min`、`k0_rel_res`，以及 `method` 里有没有"网格公式"。
+2. 网格公式在散射子进程里的计数（`_PAIR["n_grid"]` / `n_grid_lowcov`）回不到主进程报告；现在每个进程第一次生效打一行
+   `[adp_degen] 网格公式生效（进程 …）`，自检不过打 `[WARN] … 本进程关掉网格公式` —— 真跑时在作业输出里 grep 这两句。
+3. pymatgen 对照 WAVECAR 读法的脚本仍没进仓库（真实 VASP 样例只有 1 个 k 点的）。
+4. 合并 master：仍须用户明确同意。
+
 ## 0. 一句话
 
 简并 / 近简并带边的 ADP 修正，已经做完"通用 k·p 版 + 在 AMSET 四面体积分里逐对替换矩阵元"，并已推送到分支。

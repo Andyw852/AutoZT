@@ -441,6 +441,62 @@ S8.4 还要求真实重叠（`UNITY_OVERLAP = true` 时做不了）；`deform_ge
 - 主进程一次性开销：3D d = 3 约 20 s / 谷，SOC d = 6 约 1–2 min（240 个方向）；要读一遍 vasprun.xml；
 - 弹性用 Christoffel、均分近似，与 AMSET ADP 核同口径；谷间散射不在这里（IVS / ADP 谷内掩码另管）。
 
+### [0061-m] 应变算符直接取 DFT 波函数：形变势矩阵（方案 A1；2026-10-21 用户选定）
+
+**为什么**：上面第 5 步从 S7 的**本征值**反推应变算符，简并点上本征值只给"劈裂"，非对角元的大小与符号要靠 k·p 模型 +
+邻近非简并点去猜（S7 太粗时定不住、只能取平均）。A1 把形变构型的**波函数**投影回未形变的能带基，应变一阶哈密顿量
+X^(P)_mn(k) = ⟨m,k|∂H/∂ε_P|n,k⟩（固定分数坐标，即约化坐标下的应变 DFPT 一阶哈密顿量，Hamann–Wu–Rabe–Vanderbilt
+PRB 71, 035117 (2005)）在能带基上的**整个矩阵**直接出来，没有歧义解。
+**说明**："把 DFT 形变势矩阵接进 AMSET 的四面体积分"这个组合**没有文献先例**，是本项目自己的实现（单独的部分各有出处：
+Bir & Pikus 1974；Khan & Allen PRB 29, 3341 (1984)；Li, Graziosi, Neophytou PRB 104, 195201 (2021) 的 Si 价带 3×3 声学耦合矩阵；
+Fang et al. PRB 98, 075106 (2018) 的应变 Wannier 哈密顿量）。
+
+**三段（`skill/ke-dft-cpu/deform_wave.py`，只依赖 numpy + h5py）**：
+1. **S7 作业里**（`gen_step9_deform.py`，step.conf `DEFORM_WAVE = true` 出厂）：只在"本征值取自它"的那次计算写 WAVECAR ——
+   ionrelax 的静态段（`INCAR.static` 加 `LWAVE`）、没有 ionrelax 的顶层单点（undeformed；3D 且 `IONRELAX_3D = false` 的形变目录）；
+   2D 面外的离子固定构型不要。**不改模板的 LWAVE**：`run_incar_mismatch` 把 LWAVE .F.→.T. 当"输入变了"，会整批重算；LWAVE
+   不算进 ionrelax 的复用核对。已完成但缺 `deform_wave.h5` 的 ionrelax 只补静态段（`prepare_static_only`，归档后缀 `nowave`）；
+   undeformed 的顶层 INCAR 变了，V168 会归档重算这一个单点。submit.sh 末尾 VASP 正常收尾才 `deform_wave.py extract`：
+   带边 ± 0.8 eV 内有态的 k 点、能带窗口（带边 ± 1.2 eV 的带，两侧各多抽 `DEFORM_WAVE_MARGIN` = 6 条）、系数截到 300 eV，
+   写 `deform_wave.h5` 后删 WAVECAR（`DEFORM_WAVE_KEEP = true` 不删）；抽取失败只告警。
+2. **S7.1**（`gen_step9b_deform_read.py`）：`amset deform read` 之后 `deform_wave.py build` → `step7b_deform_read/deformation_matrix.h5`。
+   窗口只由未形变构型定（在各形变构型两侧仍剩 2 条余量的范围内，把窗口边界扩到不切开近简并组；不再各构型各自按能量扩 ——
+   导带到处交叉，应变把简并劈得各构型不一样，会连锁缩窗口）。每个 k 点两组系数各自 Löwdin 正交化，
+   H^s = S^-½ O diag(E^s) O† S^-½（O = ⟨未形变|形变⟩），X^(P) = (H^+ − H^−)/(δ+ − δ−)。存未对齐的 X、未形变的正交化系数、
+   覆盖度 q_min 与赝波函数非正交度。缺文件 / build 失败只告警（S8 退回第 5 步的拟合）。带符号 h5 同时存 `ibands_<spin>`。
+3. **S8 / S8.4 运行期**（`adp_degen.py`，`ADP_DEGEN_MATRIX = auto` 出厂，有 `deformation_matrix.h5` 才用）：
+   - **对齐**：X 里混着参考能级（芯势 / 真空）的应变导数。非简并态的 X_nn + S_n = dref/dδ（S = 带符号形变势），逐图样取中位数
+     作常数 c_P；离散度 > max(0.1 eV, 5% × 对角形变势中位数) 就不用（带号错位一条时离散度立刻变大）。
+   - **网格算符**：在 S7 网格上对**算符本身**三线性插值 D̂(k) = Σ_i α_i Σ_ab |a,k_i⟩X_ab⟨b,k_i|（与规范无关）；ISYM = 0 只给半个
+     网格，缺的格点用时间反演补（SOC 的旋量 (c↑, c↓) → (c↓*, −c↑*)），跨布里渊区边界按 Miller 平移。作用在 AMSET 的 Miller 列表上。
+   - **k0（谷中心）**：Z = Bᴴ D̂(k0) B（B = AMSET 在 k0 的子空间系数 × 分块酉阵 W）。先按 B 在网格基上的投影范数²（≥ 0.9）认出
+     AMSET 系数用的是 k0 的哪个倒格矢表示；分块之间的元素置零；能投影到对称允许子空间（残差 ≤ 10%）就用投影后的；k0 在 S7 网格上
+     时与 S 核对（与拟合同一口径，≤ 20%）。任一不过 → 退回拟合，报告 `matrix_fallback` 写原因。
+   - **逐对替换**：rcut 以内 AMSET 网格点的 Zk = Bᴴ D̂(k_r) B 在主进程预算（散射子进程只拿小数组）；它已含固定分数坐标的
+     运动学项（带内 = 拟合模式的 −ε:T，外加带间部分），所以不再另减 T（测试：k0 处 Zk = Z，离开 k0 对角元 = Z 的对角元 − T）。
+   - **网格公式**（核心区外、有简并谷的那种载流子的全部初态、全部末态）：AMSET 缓存了波函数系数时，在它的四面体积分里对每个末态
+     顶点算 A = ⟨f|[D̂^(P)(k)|i⟩…, |i⟩]（末态按 g_diff 平移，与 0.5.1 `_get_overlap` 逐字相同），顶点双线性量 Re(A_μA_ν*) 用 AMSET
+     原来的 `get_cross_section_values` 插到截面上，F = Σ_λ e_λᵀ G e_λ / C_λ，e_λ = [ε_λ 的图样分量（剪切取 ε_ab，不乘 2）/Hartree,
+     ε_λ:(m_e v⊗v)]；返回 F / AMSET 截面重叠（再乘谷内掩码）。|⟨f|i⟩|² 那一项与 AMSET 的截面重叠逐位核对，不过就整体关掉网格公式。
+     核心区 min(rcut, 3 个 DFT 网格间距) 里子空间内的末态照用 k·p 态（AMSET 的系数线性插值在简并点附近不可信），外 20% 线性过渡。
+     StrainGrid 的大数组经 `amset.util.create_shared_array` 进子进程（complex64 按 float32 存）。
+
+**验证（`tests/test_0061m_*.py`，EPM 测试台 `tests/_epm_si.py`：金刚石结构经验赝势，∂H/∂ε 直接对平面波矩阵求导 = 精确值）**：
+WAVECAR 写读逐位一致（真实 VASP 文件的读法另对照过 pymatgen：标准 / 自旋极化 / 非共线）；投影 X 与精确值 < 1%（含 Γ 三重态
+非对角元与符号）；对齐读回混进去的参考常数，带号错位离散度变大；网格算符离格点误差随网格加密二阶下降（6³ 价带中位 3%，
+Si 实际 S7 网格比它细约 1.8 倍）；Γ 三重态 Bᴴ D̂ B 与精确 ∂H/∂ε < 1%；合成 k·p 模型 + 精确算符时比值表对上真模型、
+拟合分不开符号的粗 S7 直接定下来；网格公式与"逐顶点求和再插值"逐位相等，自检能抓住倒格矢表示错误。
+
+**近似与风险（汇报时要讲）**：
+- ADP 框架本身（长波应变、弹性、均分）与 AMSET 原版相同；只有 EPW 那条路（方案 B，未选）能去掉。
+- PAW 赝波函数系数（不含补偿项，与 AMSET 的波函数重叠同口径）；`build` 报告赝波函数非正交度。
+- 中心差分 O(δ²)（δ = 0.5%）；截断球随应变变（Pulay），S7 ENCUT = 1.5 × ENMAX 时较小。
+- 窗口截断：D̂ 只含窗口里的带，远带贡献 O(q·v/ΔE)；EPM 上窗口从 3³/1-7 带到 6³/0-9 带误差降一个量级。
+- 网格插值：S7 网格越粗误差越大（3D 默认 vaspkit 网格，Si 11³；设了 `DK_MAX_3D` 才与 S3 相同）。
+- AMSET 自己的系数插值在简并点附近不可信 → 核心区仍用 k·p 态；核心区半径取 3 个 DFT 网格间距（经验值）。
+- 成本：每个形变构型多一个静态 SCF 的 WAVECAR（作业里抽完就删）；`deform_wave.h5` 只含带边附近的 k 点，Si 每个几十 MB，
+  2D 大真空胞会到几百 MB（S7.1 的 `deformation_matrix.h5` 也随 fetch_all 回拉本地）。
+
 ## [0059] DFPT 直接算谷间零阶形变势（eph-qe-cpu 可选组 `ivs_dfpt`；S8 / S8.4 的 `IVS_DFPT`）（2026-10-18 用户批准）
 
 **决定**（方案 `docs/PLAN-ivs-dfpt-20261018.md` 的待确认 A–D）：A 放进 eph-qe-cpu（QE 环境在那里），ke-dft-cpu 的 S8/S8.4 读它的产物；

@@ -1560,6 +1560,7 @@ def grid_pair_values(table, band_idx, kpoint, unit_q, norm_q_sq, C_au, velocity,
     dev = float(np.max(np.abs(Gq[:, jl] - ovl)) / (np.max(np.abs(ovl)) + 1e-30)) if len(ovl) else 0.0
     if dev > GRID_CHECK_TOL:
         _PAIR.update(grid_off=True, why_grid="自检不过：网格公式的 |⟨f|i⟩|² 与 AMSET 的截面重叠相对差 %.1e" % dev)
+        print("[adp_degen][WARN] %s —— 本进程关掉网格公式，退回 [0061-p] 逐对替换" % _PAIR["why_grid"], flush=True)
         return None
     qh = np.asarray(unit_q, float).copy()
     if dim == 2:
@@ -1578,6 +1579,9 @@ def grid_pair_values(table, band_idx, kpoint, unit_q, norm_q_sq, C_au, velocity,
     Fl = np.einsum("flc,fc->fl", e[..., iu0] * e[..., iu1] * coef, Gq)
     Fq = np.sum(Fl / np.where(Cl > 0, Cl, np.inf), axis=1)
     _PAIR["n_grid"] = _PAIR.get("n_grid", 0) + 1
+    if _PAIR["n_grid"] == 1:                                           # 子进程的计数回不到主进程报告：日志里留一行
+        import os
+        print("[adp_degen] 网格公式生效（进程 %d，自检 |⟨f|i⟩|² 相对差 %.1e）" % (os.getpid(), dev), flush=True)
     return Fq, ovl, elig
 
 
