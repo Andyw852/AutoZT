@@ -111,7 +111,8 @@ steps:
   - {seq: 7, name: step7_deform, label: S7_deform, src: step7_deform,
      check: deform, fanout: "*deform*", gen: gen_step9_deform.py,
      gen_need: [stepconf.py, step.conf, ke_common.py, dim_common.py, incar_deform_2d.tpl, incar_deform_3d.tpl,
-                submit_std_2d.tpl, submit_std_3d.tpl],
+                submit_std_2d.tpl, submit_std_3d.tpl,
+                deform_wave.py],                    # [0061-m] 作业里就地 WAVECAR -> deform_wave.h5（DEFORM_WAVE）
      needs: ["step1_opt"]}
 
   - {seq: 7.1, name: step7b_deform_read, label: S7.1_read, src: step7_deform/step7b_read,
@@ -126,7 +127,7 @@ steps:
      # dp_symmetrize.py（V121，2026-09-29）：形变势 D(k) 按 Laue 群对称化，两段嵌入脚本 import 它。
      #   V188（2026-10-14）：amset deform read 的包装也 import 它，同时写带符号中心差分 deformation*_signed.h5。
      # [patch_ionrelax_locpot] 2026-10-15：本步读 step.conf 的 DEFORM_REF（显式 core 才允许不生成真空口径 h5）。
-     gen: gen_step9b_deform_read.py, gen_need: [stepconf.py, step.conf, ke_common.py, nspin_norm_fix.py, dp_symmetrize.py], fetch_all: true,
+     gen: gen_step9b_deform_read.py, gen_need: [stepconf.py, step.conf, ke_common.py, nspin_norm_fix.py, dp_symmetrize.py, deform_wave.py], fetch_all: true,   # [0061-m] deform_wave.py build -> deformation_matrix.h5
      needs: ["step7_deform"]}
 
 
@@ -293,7 +294,7 @@ optional_steps:
         #   没有就删掉远端旧的），IVS_DFPT=auto 读 ivs_dfpt/ivs_dfpt_params.json。
         # [0061] adp_degen.py：简并 / 近简并带边的 ADP 带间修正（ADP_DEGEN；任意晶系 / 谷 / 价带导带 / SOC，
         #   插件 amset_dpo3d 在作业里用 vasprun + 波函数 + S7.1 带符号形变势拟合并接进 ADP；S8.4 同一模块）。
-        gen: gen_step10_amset.py, gen_need: [stepconf.py, step.conf, ke_common.py, dim_common.py, submit_amset.tpl, vdw_radii.py, discriminant_common.py, overlap_preflight.py, fermi_window_check.py, amset_desym_fix.py, amset_ir_fix.py, amset_fermi_fix.py, dp_optical.py, amset_dpo3d.py, odp_frozen.py, amset_pie3d.py, postprocess_intrinsic.py, ivs_dfpt.py, adp_degen.py], fetch_all: true,
+        gen: gen_step10_amset.py, gen_need: [stepconf.py, step.conf, ke_common.py, dim_common.py, submit_amset.tpl, vdw_radii.py, discriminant_common.py, overlap_preflight.py, fermi_window_check.py, amset_desym_fix.py, amset_ir_fix.py, amset_fermi_fix.py, dp_optical.py, amset_dpo3d.py, odp_frozen.py, amset_pie3d.py, postprocess_intrinsic.py, ivs_dfpt.py, adp_degen.py, deform_wave.py], fetch_all: true,
          push_paths: [{from: eph-qe-cpu/result/step13_ivs_read/ivs_dfpt_params.json, to: ivs_dfpt/ivs_dfpt_params.json}],
          # [0037] mesh_*.h5（每机制每 k 点散射率，3D 可达 GB 级）只给作业内本征后处理用，不回拉本地
          fetch_exclude: ["mesh_*.h5"],
@@ -411,7 +412,8 @@ optional_steps:
                     odp_frozen.py, tau_energy.py,    # [0035] 冻声子 ODP 参数 / τ(E)（[0044] 本征点回主掺杂网格，取消独立拆分脚本）
                     ivs_frozen.py,                   # [0050] 冻声子谷间 IVS 参数（IVS_FROZEN）
                     ivs_dfpt.py,                     # [0059] DFPT 谷间 IVS 参数（IVS_DFPT，公共池 skill/_common/ivs/）
-                    adp_degen.py],                   # [0061] 简并带边 ADP 带间修正（ADP_DEGEN，插件 amset2d_plugin 在作业里拟合）
+                    adp_degen.py,                    # [0061] 简并带边 ADP 带间修正（ADP_DEGEN，插件 amset2d_plugin 在作业里拟合）
+                    deform_wave.py],                 # [0061-m] DFT 形变势矩阵的运行期（StrainGrid / 对齐）
          fetch_all: true,
          # [0059] eph-qe-cpu ivs_dfpt 组的结果（本地 result 有才推，没有就删掉远端旧的）-> ivs_dfpt/ivs_dfpt_params.json
          push_paths: [{from: eph-qe-cpu/result/step13_ivs_read/ivs_dfpt_params.json, to: ivs_dfpt/ivs_dfpt_params.json}],

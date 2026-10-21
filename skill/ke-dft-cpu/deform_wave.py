@@ -521,6 +521,20 @@ class StrainGrid:
             C = np.conj(C) if not self.ncl else np.stack([np.conj(C[..., 1]), -np.conj(C[..., 0])], -1)
         return i1, C
 
+    def coverage(self, kf, vecs):
+        """vecs (n, NG[, 2]) 在 k 处网格基（窗口里的带）上的投影范数² 按插值权重平均 -> (n,)；缺格点 -> None。
+        ≈1 = 这组态落在窗口里、且 Miller 约定与网格一致（运行期据此认 AMSET 系数的倒格矢表示）。"""
+        cs = self.corners(kf)
+        if cs is None:
+            return None
+        vecs = np.asarray(vecs)
+        out = np.zeros(len(vecs))
+        for wt, j, tr, g in cs:
+            pos, C = self._basis(j, tr, g)
+            proj = C.reshape(len(C), -1).conj() @ vecs[:, pos].reshape(len(vecs), -1).T
+            out += wt * np.sum(np.abs(proj) ** 2, axis=0)
+        return out
+
     def apply(self, kf, vecs):
         """D̂^(P)(k) 作用到行向量组 vecs (n, NG[, 2]) 上 -> (np, n, NG[, 2])（eV）；缺格点 -> None。"""
         cs = self.corners(kf)

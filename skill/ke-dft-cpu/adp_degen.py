@@ -31,6 +31,13 @@
      留下完整矩阵元；四面体权重、动量弛豫因子、态密度、末态集合都是 AMSET 自己的（pair_factor / pair_apply）。
      AMSET 内部结构对不上（或 ADP_DEGEN_PAIR = off）时退回按初态乘第 6 步的比值（scale）。谷星成员按对称操作映回代表谷。
 
+  8. [0061-m] 有 S7.1 的 deformation_matrix.h5（S7 写了波函数，deform_wave.py 投影）时，应变算符不再从本征值反推：
+     Z = Bᴴ D̂(k0) B（D̂ 是 DFT 形变构型的态投影回未形变能带基得到的应变一阶哈密顿量，在 S7 网格上插值算符本身，
+     B 是子空间基 = AMSET 在 k0 处的系数 × 分块酉阵 W），没有歧义解；逐对替换时初态 k 处用 Zk = Bᴴ D̂(k_r) B（k_r 映回代表谷），
+     其中已含固定分数坐标的运动学项（带内 + 带间），不再另减 T。Zk 在主进程里对 AMSET 网格上 rcut 以内的点预先算好，
+     散射子进程只拿小数组。参考能级常数由带符号形变势的非简并态定（deform_wave.alignment），离散度大 / 图样不全 /
+     与 k0 点的 S 对不上 -> 退回第 5 步的拟合，报告里写明。
+
 约定（与 AMSET / S7.1 一致）：形变势存 −ΔE/δ（电子能量，含参考能级对齐）；带符号文件是原生约定（剪切 ε_ij = ε_ji = δ，
 存 −⟨X^(ij)⟩，X^(ij) = 2 Y_ij）；AMSET 运行期的幅值文件 V189 起是张量分量（D_ij，ΔE = Σ_ij D_ij ε_ij），运行期逐分量取 |·|。
 """
@@ -63,6 +70,10 @@ NE = 8                         # 能量网格（对数均匀）
 E_MIN_EV = 0.005
 NT = 240                       # 射线上的采样点（找等能点）
 KEY_RES = 1e-4                 # k 点匹配的分辨率（分数坐标）
+ALIGN_TOL_EV = 0.1             # [0061-m] 参考能级对齐常数的离散度上限（eV；还要不超过 ALIGN_TOL_REL × 对角形变势中位数）
+ALIGN_TOL_REL = 0.05
+ZSYM_TOL = 0.1                 # [0061-m] DFT 应变算符投影到对称允许子空间的相对残差上限（超了用原始矩阵、报告里点名）
+COVER_MIN = 0.9                # [0061-m] 子空间基在 S7 网格基上的投影范数²下限（低了 = 窗口不够或倒格矢表示对不上）
 
 
 # ---------------------------------------------------------------------------
@@ -631,7 +642,7 @@ def _node_data(k0i, bands, E, kfrac, rlat, coeff_fn, rcut, dim, vac_axis, E_edge
                 ws.append(w)
     keep = np.array(keep, int)
     return {"idx": keep, "dk": dk[keep], "H": np.array(Hs).reshape(-1, d, d), "w": np.array(ws),
-            "keys": [_key(kfrac[i]) for i in keep]}
+            "keys": [_key(kfrac[i]) for i in keep], "C0": C0}
 
 
 def _little_group(k0f, rlat, rots, dim):
@@ -940,6 +951,117 @@ def _fit_strain(model, Zq, dim, sign, bands, k0f, rlat, sign_h5, amp_h5, vac_axi
     return np.einsum("q,qtab->tab", chosen, Zq), info
 
 
+def _grid_Z(grid, B, kf, dim):
+    """[0061-m] 子空间基 B (d, NG[, 2]) 上的 DFT 应变算符 Z (np, d, d)：Z_t = Bᴴ D̂^(P_t)(k) B（剪切 ÷√2，张量约定）。
+    grid：deform_wave.StrainGrid（或同接口：pairs、apply(k, vecs) -> (np_all, n, NG[, 2])）；缺图样 / 缺格点 -> None。"""
+    idx = []
+    for a, b in pairs(dim):
+        if (a, b) not in grid.pairs:
+            return None
+        idx.append(grid.pairs.index((a, b)))
+    Dv = grid.apply(np.asarray(kf, float), B)
+    if Dv is None:
+        return None
+    Bf = np.asarray(B).reshape(len(B), -1)
+    Dv = np.asarray(Dv).reshape(Dv.shape[0], len(B), -1)
+    Z = np.array([Bf.conj() @ Dv[ip].T / (1.0 if a == b else SQ2) for ip, (a, b) in zip(idx, pairs(dim))])
+    return 0.5 * (Z + np.conj(np.swapaxes(Z, -1, -2)))
+
+
+def _grid_shift(grid, B, k0f):
+    """[0061-m] AMSET 在 k0 处的系数对应的是 k0 的哪个倒格矢表示：在 {−1,0,1}³ 里找使子空间基投影范数²最大的平移 g0。
+    -> (g0 (3,) int, 最小投影范数²)。"""
+    best = (np.zeros(3, int), -1.0)
+    for g in itertools.product((0, -1, 1), repeat=3):
+        c = grid.coverage(np.asarray(k0f, float) + np.array(g), B) if hasattr(grid, "coverage") else np.ones(len(B))
+        if c is None:
+            continue
+        m = float(np.min(c))
+        if m > best[1] + 1e-9:
+            best = (np.array(g, int), m)
+        if m > 0.999:
+            break
+    return best
+
+
+def _strain_from_grid(grid, B, k0f, model, Zq, blocks, dim, sign_h5, bands):
+    """[0061-m] k0 处的 DFT 应变算符 -> (Z (np,d,d), 信息) 或 (None, 信息)。
+    分块之间的元素置零（报告其大小）；能投影到对称允许的子空间（残差 ≤ ZSYM_TOL）就用投影后的；k0 在 S7 网格上时与带符号
+    中心差分 S 核对（与 _fit_strain 的 k0_rel_res 同一口径）。"""
+    d = len(B)
+    info = {"source": "deformation_matrix.h5"}
+    g0, cov = _grid_shift(grid, B, k0f)
+    info["coverage_min"] = cov
+    info["g_shift"] = [int(x) for x in g0]
+    if cov < COVER_MIN:
+        info["status"] = ("子空间基在 S7 网格基上的投影只有 %.2f < %.2f（S7.1 的能带窗口没盖住，或 AMSET 系数的倒格矢表示对不上）"
+                          % (cov, COVER_MIN))
+        return None, info
+    k0f = np.asarray(k0f, float) + g0
+    Z = _grid_Z(grid, B, k0f, dim)
+    if Z is None:
+        info["status"] = "deformation_matrix.h5 缺图样或 k0 附近缺 S7 格点"
+        return None, info
+    mask = _block_mask(blocks, d)
+    zn = float(np.max(np.abs(Z))) or 1.0
+    info["cross_block_rel"] = float(np.max(np.abs(Z[:, ~mask])) / zn) if (~mask).any() else 0.0
+    Z[:, ~mask] = 0.0
+    A = np.array([herm_coords(Zq[q], herm_basis(d)).ravel() for q in range(Zq.shape[0])]).T
+    y = herm_coords(Z, herm_basis(d)).ravel()
+    g = np.linalg.lstsq(A, y, rcond=None)[0] if A.size else np.zeros(0)
+    Zs = np.einsum("q,qtab->tab", g, Zq) if A.size else np.zeros_like(Z)
+    info["sym_rel_res"] = float(np.linalg.norm(Zs - Z) / (np.linalg.norm(Z) + 1e-30))
+    if info["sym_rel_res"] <= ZSYM_TOL:
+        Z = Zs
+        info["symmetrized"] = True
+    else:
+        info["symmetrized"] = False
+    delta = float(sign_h5.get("delta") or 0.005)
+    j0 = {_key(k): j for j, k in enumerate(np.asarray(sign_h5["kpoints"], float))}.get(_key(k0f))
+    info["k0_in_s7"] = j0 is not None
+    info["k0_rel_res"] = None
+    if j0 is not None:
+        S0 = np.asarray(sign_h5["S"])[np.asarray(bands, int)][:, j0]
+        ra, da = [], []
+        for P in pairs(dim):
+            Sm, _A = forward_k0(model["D0"], pattern_op(Z, dim, P), delta)
+            ra.append(Sm - S0[:, P[0], P[1]])
+            da.append(S0[:, P[0], P[1]])
+        na = float(np.linalg.norm(np.concatenate(da)))
+        info["k0_rel_res"] = float(np.linalg.norm(np.concatenate(ra)) / na) if na > 0 else None
+        if info["k0_rel_res"] is not None and info["k0_rel_res"] > STRAIN_REL_TOL:
+            info["status"] = ("DFT 应变算符与 k0 点的带符号形变势对不上（相对残差 %.0f%% > %.0f%%）：带号或参考能级对齐有问题"
+                              % (100 * info["k0_rel_res"], 100 * STRAIN_REL_TOL))
+            return None, info
+    info["status"] = "ok"
+    return Z, info
+
+
+def _zk_table(grid, B, members, rlat, dense_kf, rcut, dim, vac_axis, g0=(0, 0, 0)):
+    """[0061-m] AMSET 网格上各谷星成员 rcut 以内的点 -> ({_key(k): 行}, Zk (n, np, d, d))：Zk = Bᴴ D̂(k_r) B，
+    k_r = 代表谷中心 + Mᵀ δk（与 pair_factor 同一映射）。缺格点的点不收（pair_factor 退回常数 Z + T）。"""
+    rinv = np.linalg.inv(rlat)
+    k0f = np.asarray(members[0][0], float) + np.asarray(g0, float)      # 与 _strain_from_grid 认出的表示一致
+    keys, Zs = {}, []
+    dense_kf = np.asarray(dense_kf, float)
+    for cen, M in members:
+        dk, pl = _dk_cart(dense_kf, cen, rlat, dim, vac_axis)
+        sel = np.where(pl & (np.linalg.norm(dk, axis=1) < rcut))[0]
+        for i in sel:
+            kk = _key(dense_kf[i])
+            if kk in keys:
+                continue
+            dkr = dk[i] @ M
+            if dim == 2:
+                dkr[2] = 0.0
+            Z = _grid_Z(grid, B, k0f + dkr @ rinv, dim)
+            if Z is None:
+                continue
+            keys[kk] = len(Zs)
+            Zs.append(Z)
+    return keys, (np.array(Zs) if Zs else None)
+
+
 def _win_eff(S, b, j0, delta):
     """子空间的带间判据：至少 WIN_EV，且大于 k0 处应变造成的能移（排序才不会和子空间外的带混）。"""
     if j0 is None:
@@ -949,8 +1071,8 @@ def _win_eff(S, b, j0, delta):
 
 
 def build_valley(k0i, members, edge_band, sign, E, kfrac, coeff_fn, rlat, rots, cijkl, sign_h5, amp_h5,
-                 dense, dim, vac_axis, efit, nang, rcut, kunit="A"):
-    """一个谷星 -> (谷表 dict 或 None, 报告)。"""
+                 dense, dim, vac_axis, efit, nang, rcut, kunit="A", grid=None):
+    """一个谷星 -> (谷表 dict 或 None, 报告)。grid：[0061-m] DFT 应变算符（deform_wave.StrainGrid，已对齐），None = 拟合。"""
     k0f = np.asarray(kfrac[k0i], float)
     E_edge = float(E[edge_band, k0i])
     rep = {"k0": [float(x) for x in _wrap(k0f)], "n_members": len(members), "rcut": float(rcut)}
@@ -1001,7 +1123,17 @@ def build_valley(k0i, members, edge_band, sign, E, kfrac, coeff_fn, rlat, rots, 
     if kinfo["rel_res"] > FIT_REL_TOL:
         rep["status"] = "k·p 拟合残差 %.1f%% > %.0f%%（%s）" % (100 * kinfo["rel_res"], 100 * FIT_REL_TOL, kinfo["source"])
         return None, rep
-    Z, sinfo = _fit_strain(model, Zq, dim, sign, bands, k0f, rlat, sign_h5, amp_h5, vac_axis, rcut, efit)
+    Z, B = None, None
+    if grid is not None:                                       # [0061-m] DFT 形变势矩阵：直接投影，失败才退回拟合
+        C0 = np.asarray(nodes["C0"])
+        B = (W.T @ C0.reshape(d, -1)).reshape(C0.shape)
+        Z, sinfo = _strain_from_grid(grid, B, k0f, model, Zq, blocks, dim, sign_h5, bands)
+        if Z is None:
+            why = sinfo["status"]
+            Z, sinfo = _fit_strain(model, Zq, dim, sign, bands, k0f, rlat, sign_h5, amp_h5, vac_axis, rcut, efit)
+            sinfo["matrix_fallback"] = why
+    else:
+        Z, sinfo = _fit_strain(model, Zq, dim, sign, bands, k0f, rlat, sign_h5, amp_h5, vac_axis, rcut, efit)
     rep["strain"] = sinfo
     if Z is None:
         rep["status"] = sinfo["status"]
@@ -1048,6 +1180,11 @@ def build_valley(k0i, members, edge_band, sign, E, kfrac, coeff_fn, rlat, rots, 
     valley = {"k0": k0f, "members": [(np.asarray(kfrac[m], float), np.asarray(M, float)) for m, M in members],
               "bands": [int(x) for x in bands], "sign": sign, "rcut": float(rcut), "dim": dim, "model": model,
               "Z": Z, "blocks": [list(b) for b in blocks], "block_models": bms, "tables": btabs}
+    if grid is not None and sinfo.get("source") == "deformation_matrix.h5" and dense is not None:
+        keys, zk = _zk_table(grid, B, valley["members"], rlat, dense[0], rcut, dim, vac_axis, sinfo.get("g_shift", (0, 0, 0)))
+        if zk is not None:
+            valley["zk_keys"], valley["zk"] = keys, zk
+        rep["strain"]["n_zk"] = len(keys)
     return valley, rep
 
 
@@ -1055,13 +1192,14 @@ def build_valley(k0i, members, edge_band, sign, E, kfrac, coeff_fn, rlat, rots, 
 # 总入口：DFT 全网格 + 波函数 + S7.1 形变势 -> 修正表
 # ---------------------------------------------------------------------------
 def setup(kfrac, E, coeff_fn, vb, rlat, rots, cijkl, sign_h5, amp_h5=None, dense=None, dim=3, vac_axis=2,
-          efit=EFIT_EV, nang=None, kunit="A"):
+          efit=EFIT_EV, nang=None, kunit="A", grid=None):
     """-> (修正表 dict 或 None, 报告 dict)。
     kfrac (N,3)：DFT 全网格（= AMSET 波函数的网格）；E (nb, N) eV，带号与 AMSET 相同（能量窗口里的带）；vb 价带顶带号；
     coeff_fn(带号列表, kfrac (n,3), 参考 kfrac) -> 逐对 (带, k) 的归一化波函数系数（已按参考点对齐倒格矢）；
     rlat (3,3) 倒格矢（行，任意单位）；rots 点群的笛卡尔旋转（含非真旋转，不含时间反演）；cijkl (3,3,3,3) 弹性张量（只用比例）；
     sign_h5 {"kpoints", "S" (nb, M, 3, 3) 原生约定, "delta", "gap"?}；amp_h5 {"kpoints", "A", "offdiag"} 运行期幅值文件（可缺）；
-    dense (kfrac (Nd,3), E (nb, Nd) eV)：AMSET 插值后的能带（可缺）；dim 3 / 2（2D 的真空方向 = 分数坐标 vac_axis，笛卡尔 z）。"""
+    dense (kfrac (Nd,3), E (nb, Nd) eV)：AMSET 插值后的能带（可缺）；dim 3 / 2（2D 的真空方向 = 分数坐标 vac_axis，笛卡尔 z）；
+    grid：[0061-m] DFT 应变算符（deform_wave.StrainGrid，已对齐；None = 从本征值拟合）。"""
     E = np.asarray(E, float)
     kfrac = np.asarray(kfrac, float)
     rlat = np.asarray(rlat, float)
@@ -1094,7 +1232,7 @@ def setup(kfrac, E, coeff_fn, vb, rlat, rots, cijkl, sign_h5, amp_h5=None, dense
             dist = dist[dist > 1e-9]
             rcut = min(KCUT_FRAC * bmin, 0.5 * float(np.min(dist)) if len(dist) else np.inf)
             v, vrep = build_valley(r, ms, b, sign, E, kfrac, coeff_fn, rlat, rots, cijkl, sign_h5, amp_h5,
-                                   dense, dim, vac_axis, efit, nang, rcut, kunit)
+                                   dense, dim, vac_axis, efit, nang, rcut, kunit, grid=grid)
             vrep.update(carrier=carrier, E_rel_edge_eV=float(E[b, r] - ext))
             report["valleys"].append(vrep)
             if v is not None:
@@ -1282,9 +1420,13 @@ def pair_factor(table, band_idx, kpoint, unit_q, norm_q_sq, C_au, velocity, d_sc
     Cl, U = acoustic_modes(C_au, qh, dim)
     Es = 0.5 * (np.einsum("fi,fjl->flij", qh, U) + np.einsum("fj,fil->flij", qh, U))    # 实验室系 sym(q̂⊗û_λ)
     Er = np.einsum("ai,flab,bj->flij", M, Es, M)                       # 代表谷坐标：Mᵀ ε M
-    ampX = np.einsum("fa,flab,b->fl", cf.conj(), strain_H(v["Z"], Er, dim), c0) / HARTREE_EV
+    Zuse, with_T = v["Z"], True
+    jz = (v.get("zk_keys") or {}).get(_key(kpoint))
+    if jz is not None:                                                 # [0061-m] DFT 的 Zk 已含运动学项（带内 + 带间）
+        Zuse, with_T = v["zk"][jz], False
+    ampX = np.einsum("fa,flab,b->fl", cf.conj(), strain_H(Zuse, Er, dim), c0) / HARTREE_EV
     vel = np.asarray(velocity, float)
-    T = 0.5 * (np.outer(dk0, vel) + np.outer(vel, dk0))
+    T = 0.5 * (np.outer(dk0, vel) + np.outer(vel, dk0)) if with_T else np.zeros((3, 3))
     kin = np.einsum("flij,ij->fl", Es, np.outer(vel, vel) - d_scale * T)
     amp = d_scale * ampX + kin * ov[:, None]
     F = np.sum(np.abs(amp) ** 2 / np.where(Cl > 0, Cl, np.inf), axis=1)
@@ -1321,7 +1463,45 @@ def read_signed(path, spin_name):
                "delta": float(f.attrs.get("strain_amount") or 0.005)}
         if ("gap_" + spin_name) in f:
             out["gap"] = np.array(f["gap_" + spin_name], float)
+        if ("ibands_" + spin_name) in f:                               # [0061-m] 带轴 -> DFT 带号
+            out["ibands"] = np.array(f["ibands_" + spin_name], int)
     return out
+
+
+def matrix_grid(path, spin_name, sgn, band_offset, gpoints):
+    """[0061-m] S7.1 的 deformation_matrix.h5 -> (deform_wave.StrainGrid（已对齐，作用在 AMSET 的 Miller 列表上）或 None, 信息)。
+    band_offset：DFT 带号 − 带符号文件的带下标（带符号文件有 ibands 就以它为准）。参考能级常数逐图样由非简并态定，
+    离散度超过 max(ALIGN_TOL_EV, ALIGN_TOL_REL × 对角形变势中位数) 就不用（带号错位时离散度会立刻变大）。"""
+    import deform_wave as DW
+    info = {"path": str(path)}
+    data = DW.load_matrix(path, spin_name)
+    ib = sgn.get("ibands")
+    if ib is not None and len(ib):
+        ib = np.asarray(ib, int)
+        if np.all(np.diff(ib) == 1):
+            if int(ib[0]) != int(band_offset):
+                info["band_offset_note"] = "带符号文件的 ibands 起点 %d ≠ vasprun 推出的偏移 %d：以 ibands 为准" % (
+                    int(ib[0]), int(band_offset))
+            band_offset = int(ib[0])
+    info["band_offset"] = int(band_offset)
+    info["bands"] = [int(data["bands"][0]), int(data["bands"][-1])]
+    info["q_min"] = data.get("q_min")
+    delta = float(sgn.get("delta") or 0.005)
+    c, spread, n = DW.alignment(data, sgn["S"], sgn["kpoints"], band_offset, delta)
+    info["n_align_states"] = int(n)
+    if c is None:
+        info["status"] = "对齐用不到任何非简并态（带号对不上？）"
+        return None, info
+    Xd = np.abs(np.real(np.einsum("pknn->pkn", data["X"])) - np.asarray(c)[:, None, None])
+    tol = np.maximum(ALIGN_TOL_EV, ALIGN_TOL_REL * np.median(Xd.reshape(len(c), -1), axis=1))
+    info["align_eV"] = {"%d%d" % P: float(x) for P, x in zip(data["pairs"], c)}
+    info["align_spread_eV"] = {"%d%d" % P: float(x) for P, x in zip(data["pairs"], spread)}
+    if np.any(np.asarray(spread) > tol):
+        info["status"] = "参考能级对齐的离散度过大（%s eV）：带号或窗口对不上" % ", ".join(
+            "%.3f" % x for x in spread)
+        return None, info
+    info["status"] = "ok"
+    return DW.StrainGrid(data, gpoints, offsets=c), info
 
 
 def read_amp(path, spin_name):
@@ -1423,9 +1603,21 @@ def runtime_tables(amset_data, rec, cijkl, dim=3, tag="[adp_degen]", report_path
                 amp = read_amp(rec.get("deform_h5") or "deformation.h5", spin.name)
             except (OSError, KeyError):
                 amp = None
+            grid, minfo = None, None
+            mh5 = rec.get("matrix_h5")
+            if mh5 and str(rec.get("matrix") or "auto").lower() != "off":      # [0061-m] DFT 形变势矩阵
+                try:
+                    grid, minfo = matrix_grid(mh5, spin.name, sgn, off, np.asarray(oc.gpoints))
+                except Exception as e:                                 # noqa: BLE001
+                    grid, minfo = None, {"status": "%s: %s" % (type(e).__name__, e)}
+                if grid is None:
+                    print("%s[WARN] DFT 形变势矩阵（%s）不用：%s —— 应变算符退回从本征值拟合" % (tag, spin.name, minfo["status"]),
+                          flush=True)
             t, rp = setup(dft["kpoints"], En, make_coeff_fn(oc, spin), vb, rlat, rots, np.asarray(cijkl, float), sgn,
                           amp, dense=(np.asarray(amset_data.kpoints, float), Ea), dim=dim, efit=efit, nang=nang,
-                          kunit="bohr")                                # amset_data.structure 是 bohr
+                          kunit="bohr", grid=grid)                     # amset_data.structure 是 bohr
+            if minfo is not None:
+                rp["matrix"] = minfo
         except Exception as e:                                         # noqa: BLE001
             t, rp = None, {"status": "%s: %s" % (type(e).__name__, e)}
         reports[spin.name] = rp
@@ -1458,9 +1650,11 @@ def summary_line(spin_name, v):
     """一个修正过的谷的一行摘要（插件日志与 S8.3 汇总共用）。"""
     kp, st = v["kp"], v["strain"]
     rm = [x for r in (v.get("ratio_mean") or []) if r for x in r]
-    return ("ADP 简并修正（%s，%s谷 k0=(%s)，%d 条带，分块 %s）：k·p 残差 %.1f%%，k0 形变势残差 %s，散射率放大 %s%s" % (
+    src = ("DFT 形变势矩阵" if st.get("source") == "deformation_matrix.h5"
+           else "本征值拟合" + ("（矩阵不可用：%s）" % st["matrix_fallback"] if st.get("matrix_fallback") else ""))
+    return ("ADP 简并修正（%s，%s谷 k0=(%s)，%d 条带，分块 %s）：k·p 残差 %.1f%%，应变算符 %s，k0 形变势残差 %s，散射率放大 %s%s" % (
         spin_name, "空穴" if v.get("carrier") == "hole" else "电子", ",".join("%.3f" % x for x in v["k0"]), v["d"],
-        v["blocks"], 100 * kp["rel_res"],
+        v["blocks"], 100 * kp["rel_res"], src,
         "—" if st.get("k0_rel_res") is None else "%.1f%%" % (100 * st["k0_rel_res"]),
         " / ".join("%.2f" % x for x in rm), "；" + st["pick"] if st.get("pick") else ""))
 

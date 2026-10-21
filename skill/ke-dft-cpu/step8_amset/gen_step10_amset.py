@@ -18,7 +18,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 # [SKILL_REV] 版本戳：写进 settings.yaml 头，便于从结果反查跑的是哪份 skill 副本。
-_SKILL_REV = "2026-10-21-0061g-adpdegen"   # [0061-g] ADP_DEGEN 通用化：任意晶系 / 谷 / 价带导带 / SOC（vasprun + 波函数现拟合）   # 2026-10-21-0061-adpdegen   # [0061] ADP_DEGEN：立方 Γ 三重简并价带的 ADP 带间修正（插件 + adp_degen.py）   # 2026-10-20-0059r3-dfptodp   # [0059-r3] DFPT 谷内 ODP（q=Γ）优先于冻声子/手填，不再两份叠加   # 2026-10-18-0059-ivsdfpt   # [0059] IVS_DFPT：eph-qe-cpu QE DFPT 谷间零阶形变势（ivs_dfpt_params.json）优先于冻声子 K↔K′ 与手填   # 2026-10-16-0055-dopinglow   # [0055] DOPING_LOW 低浓度段 1e10–1e16 cm^-3（amset_fermi_fix 小掺杂 log-sum-exp 解 E_F）；[0054] undoped_ni 记带边   # 2026-10-15-0051-socdesym   # [0051] amset_desym_fix 修 SOC 分支（四元数 SU(2) + iσ_y·K，V200）   # 2026-10-13-0043-intrsvd   # [0041] DEFECT_DOPING 缺陷平衡载流子浓度进掺杂网格   # 2026-10-13-0040-undoped   # [0040] UNDOPED_POINT 本征点（doping=0）   # 2026-10-13-0038-subsets   # [0038] SUBSETS 散射机制子集（subset_<机制>.json）   # [0037] 三维 PIE（读压电张量写 settings，插件 amset_pie3d.py 修正核）   # [0036] 三维 ODP/IVS（DP_OPTICAL_*，插件 amset_dpo3d.py）   # [0014] 2D 弹性用原始 slab 值（不乘 c/t）；V115 相位补丁
+_SKILL_REV = "2026-10-21-0061m-dftmatrix"   # [0061-m] ADP_DEGEN 的应变算符取 S7.1 的 DFT 形变势矩阵（deformation_matrix.h5，deform_wave.py）   # 2026-10-21-0061g-adpdegen   # [0061-g] ADP_DEGEN 通用化：任意晶系 / 谷 / 价带导带 / SOC（vasprun + 波函数现拟合）   # 2026-10-21-0061-adpdegen   # [0061] ADP_DEGEN：立方 Γ 三重简并价带的 ADP 带间修正（插件 + adp_degen.py）   # 2026-10-20-0059r3-dfptodp   # [0059-r3] DFPT 谷内 ODP（q=Γ）优先于冻声子/手填，不再两份叠加   # 2026-10-18-0059-ivsdfpt   # [0059] IVS_DFPT：eph-qe-cpu QE DFPT 谷间零阶形变势（ivs_dfpt_params.json）优先于冻声子 K↔K′ 与手填   # 2026-10-16-0055-dopinglow   # [0055] DOPING_LOW 低浓度段 1e10–1e16 cm^-3（amset_fermi_fix 小掺杂 log-sum-exp 解 E_F）；[0054] undoped_ni 记带边   # 2026-10-15-0051-socdesym   # [0051] amset_desym_fix 修 SOC 分支（四元数 SU(2) + iσ_y·K，V200）   # 2026-10-13-0043-intrsvd   # [0041] DEFECT_DOPING 缺陷平衡载流子浓度进掺杂网格   # 2026-10-13-0040-undoped   # [0040] UNDOPED_POINT 本征点（doping=0）   # 2026-10-13-0038-subsets   # [0038] SUBSETS 散射机制子集（subset_<机制>.json）   # [0037] 三维 PIE（读压电张量写 settings，插件 amset_pie3d.py 修正核）   # [0036] 三维 ODP/IVS（DP_OPTICAL_*，插件 amset_dpo3d.py）   # [0014] 2D 弹性用原始 slab 值（不乘 c/t）；V115 相位补丁
 import stepconf  # noqa: E402
 try:
     import ke_common as kc
@@ -232,6 +232,9 @@ ADP_DEGEN_EFIT = 0.15
 ADP_DEGEN_NANG = None
 ADP_DEGEN_MODULE = "adp_degen.py"
 ADP_DEGEN_PAIR = "auto"            # [0061-p] auto：在 AMSET 的四面体积分里逐对换矩阵元；off：按初态乘比值
+ADP_DEGEN_MATRIX = "auto"          # [0061-m] auto：S7.1 有 deformation_matrix.h5 就用 DFT 形变势矩阵；off：从本征值拟合
+DEFORM_MATRIX_H5 = "deformation_matrix.h5"
+DEFORM_WAVE_MODULE = "deform_wave.py"
 # [0038] 三维本征后处理：WRITE_MESH 写 mesh_*.h5，作业链尾部 postprocess_intrinsic.py 去机制重积分，
 #   按 SUBSETS 出 subset_<机制>.json，供 S8.3 出多机制对照图。关掉：step.conf 写 WRITE_MESH = false。
 WRITE_MESH = True
@@ -459,6 +462,7 @@ SPEC = {
     "ADP_DEGEN_EFIT": (None, "float"),
     "ADP_DEGEN_NANG": (None, "int"),
     "ADP_DEGEN_PAIR": ("auto", "str"),       # [0061-p] auto = 逐对替换矩阵元（AMSET 内部对不上自动退回比值）/ off = 按初态比值
+    "ADP_DEGEN_MATRIX": ("auto", "str"),     # [0061-m] auto = 有 S7.1 的 deformation_matrix.h5 就用 / off = 从本征值拟合
     "PIE_KERNEL": ("az", "str"),                # [0037] 三维 PIE 核 az/amset
     "PIE_SCREENING": (True, "bool"),
     # [0037] 三维本征后处理（WRITE_MESH 写 mesh，postprocess 去机制重积分出多机制对照）
@@ -2272,6 +2276,26 @@ def resolve_adp_degen_3d(is_2d, cwd, h5_name="deformation.h5"):
     rec["status"] = "pending_runtime"
     print("[OK] ADP 简并修正（ADP_DEGEN = %s）：作业里按 vasprun + 波函数 + %s 拟合 k·p 与应变算符，"
           "有简并 / 近简并谷才修正，报告 adp_degen_fit.json" % (mode, signed))
+    return _matrix_rec(rec, cwd)
+
+
+def _matrix_rec(rec, cwd):
+    """[0061-m] S7.1 有 deformation_matrix.h5（S7 写了波函数）就记进 rec：运行期应变算符直接取 DFT 矩阵（adp_degen.matrix_grid），
+    对不上（对齐离散度 / 覆盖度 / k0 残差）自动退回拟合并在 adp_degen_fit.json 写明。ADP_DEGEN_MATRIX = off 不用。"""
+    m = str(ADP_DEGEN_MATRIX or "auto").strip().lower()
+    if m not in ("auto", "off"):
+        sys.exit("[ERROR] ADP_DEGEN_MATRIX=%r 无效，只允许 auto / off" % ADP_DEGEN_MATRIX)
+    rec["matrix"] = m
+    if m == "off":
+        print("[..] ADP 简并修正：ADP_DEGEN_MATRIX = off —— 应变算符从本征值拟合")
+        return rec
+    if (Path(cwd) / READ_DIR / DEFORM_MATRIX_H5).is_file():
+        rec["matrix_h5"] = DEFORM_MATRIX_H5
+        print("[OK] ADP 简并修正：用 %s/%s（DFT 形变势矩阵，[0061-m]）—— 应变算符不再从本征值反推"
+              % (READ_DIR, DEFORM_MATRIX_H5))
+    else:
+        print("[..] ADP 简并修正：没有 %s/%s（S7 没写波函数：DEFORM_WAVE 关或是旧结果）—— 应变算符从本征值拟合"
+              % (READ_DIR, DEFORM_MATRIX_H5))
     return rec
 
 
@@ -2300,7 +2324,8 @@ def _install_dp_optical_3d(out, record):
     if not record.get("dp_optical") and not degen:
         return False
     here = Path(__file__).resolve().parent
-    for name in (DPO_MODULE, DPO3D_PLUGIN) + ((ADP_DEGEN_MODULE,) if degen else ()):
+    mat = degen and bool((record.get("adp_degen") or {}).get("matrix_h5"))       # [0061-m] adp_degen import deform_wave
+    for name in (DPO_MODULE, DPO3D_PLUGIN) + ((ADP_DEGEN_MODULE,) if degen else ()) + ((DEFORM_WAVE_MODULE,) if mat else ()):
         src = next((d / name for d in (here, Path.cwd(), here.parent / "step8.4_amset2d", here.parent)
                     if (d / name).is_file()), None)
         if src is None:
@@ -2804,8 +2829,9 @@ def main():
                 ADP_DEGEN_EFIT = float(_p["ADP_DEGEN_EFIT"])
             if _p["ADP_DEGEN_NANG"] is not None:
                 ADP_DEGEN_NANG = int(_p["ADP_DEGEN_NANG"])
-            global ADP_DEGEN_PAIR
+            global ADP_DEGEN_PAIR, ADP_DEGEN_MATRIX
             ADP_DEGEN_PAIR = str(_p["ADP_DEGEN_PAIR"] or "auto")
+            ADP_DEGEN_MATRIX = str(_p["ADP_DEGEN_MATRIX"] or "auto")
             global DEFECT_DOPING, DEFECT_ROOT          # [0041]
             DEFECT_DOPING = str(_p["DEFECT_DOPING"] or "auto").strip().lower()
             DEFECT_ROOT = str(_p["DEFECT_ROOT"] or "")
@@ -2993,6 +3019,8 @@ def main():
         _dpo3d["adp_degen"] = _degen
     if (_degen or {}).get("status") == "pending_runtime":
         link(out, cwd / READ_DIR / _degen["signed_src"], "deformation_signed.h5")
+        if _degen.get("matrix_h5"):                                    # [0061-m]
+            link(out, cwd / READ_DIR / DEFORM_MATRIX_H5, DEFORM_MATRIX_H5)
     # patch_mesh_min：按最终插值网格下限反算 INTERPOLATION_FACTOR（必须在 write_settings 之前）。
     _fm = apply_mesh_min(_vr, out)
     # [0037] 三维 PIE：压电张量（缺/为零就去掉 PIE，必须在 write_settings 之前）

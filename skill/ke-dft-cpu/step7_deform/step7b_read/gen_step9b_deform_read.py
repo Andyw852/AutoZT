@@ -258,6 +258,55 @@ def _resolve_deform_ref(cwd):
     return ref
 
 
+# [0061-m] DFT 形变势矩阵（方案 A1）：S7 各构型作业里抽好的 deform_wave.h5 -> deformation_matrix.h5（应变一阶
+#   哈密顿量在能带基上的完整矩阵，S8/S8.4 的 ADP_DEGEN 用）。目录清单与 amset deform read 同一份（ionrelax 优先），
+#   只取抽到了 deform_wave.h5 的（2D 面外的离子固定构型本来就不抽）。缺文件 / build 失败只告警：S8 退回 k·p 拟合。
+MATRIX_H5 = "deformation_matrix.h5"
+WAVE_H5 = "deform_wave.h5"
+WAVE_PY = "deform_wave.py"
+
+
+def build_deform_matrix(dfm, out, rel):
+    """-> 一句话状态（写进 [DONE] 行）。rel：amset deform read 用的构型目录（相对 dfm）。"""
+    dfm, out = Path(dfm), Path(out)
+    py = Path.cwd() / WAVE_PY
+    if not py.is_file():
+        print("[WARN] [0061-m] 材料目录没有 %s（gen_need 漏了？）：不生成 %s" % (WAVE_PY, MATRIX_H5))
+        return "未生成（缺 %s）" % WAVE_PY
+    if not (dfm / "undeformed" / WAVE_H5).is_file():
+        print("[..] [0061-m] undeformed/ 没有 %s（S7 没开 DEFORM_WAVE 或是旧结果）：不生成 %s，"
+              "S8 的 ADP_DEGEN 用 k·p 拟合的应变算符" % (WAVE_H5, MATRIX_H5))
+        return "未生成（S7 没有波函数）"
+    have = [r for r in rel if (dfm / r / WAVE_H5).is_file()]
+    miss = [r for r in rel if r not in have]
+    if miss:
+        print("[..] [0061-m] %d 个构型没有 %s（2D 面外的离子固定构型本来就不抽；3D 缺了的图样 S8 会退回）：%s"
+              % (len(miss), WAVE_H5, ", ".join(miss[:8]) + (" ..." if len(miss) > 8 else "")))
+    if not have:
+        print("[WARN] [0061-m] 形变构型都没有 %s：不生成 %s" % (WAVE_H5, MATRIX_H5))
+        return "未生成（形变构型没有波函数）"
+    log = dfm / "deform_wave_build.log"
+    cmd = ("%s && cd %s && { %s; %s %s build --root . --out %s %s ; } "
+           "> %s 2>&1" % (AMSET_ENV_SRC, shlex.quote(str(dfm)), _ENV_ECHO, AMSET_PY, shlex.quote(str(py)),
+                          shlex.quote(str(out / MATRIX_H5)), " ".join(shlex.quote(r) for r in have),
+                          shlex.quote(str(log))))
+    print("[..] [0061-m] deform_wave build（%d 个构型）..." % len(have))
+    rc = subprocess.run(["bash", "-lc", cmd]).returncode
+    try:
+        tail = [ln for ln in log.read_text(encoding="utf-8", errors="ignore").splitlines() if ln.strip()][-6:]
+    except OSError:
+        tail = []
+    for ln in tail:
+        print("    " + ln)
+    if rc != 0 or not (out / MATRIX_H5).is_file():
+        if (out / MATRIX_H5).is_file():
+            (out / MATRIX_H5).unlink()
+        print("[WARN] [0061-m] deform_wave build 失败（rc=%d，看 %s）：不生成 %s，S8 的 ADP_DEGEN 用 k·p 拟合的应变算符"
+              % (rc, log, MATRIX_H5))
+        return "build 失败（见 %s）" % log.name
+    return "%s（%d 个构型）" % (MATRIX_H5, len(have))
+
+
 def main():
     cwd = Path.cwd()
     kc.check_functional_consistency(cwd, strict=False, label=OUTDIR_NAME)  # [V190]
@@ -442,7 +491,7 @@ def main():
               " ".join(shlex.quote(r) for r in _rel)))
     # [V188] 旧的带符号文件先删：本次没算出来时不能让对称化读到上一次的（k 点可能还对得上）
     for _old in (dfm / "deformation_signed.h5", out / "deformation_signed.h5",
-                 out / "deformation_vac_signed.h5"):
+                 out / "deformation_vac_signed.h5", out / MATRIX_H5):     # [0061-m] 同理
         if _old.is_file():
             _old.unlink()
     print("[..] amset deform read ...")
@@ -1363,14 +1412,15 @@ if len(_shifts) == 2:
     else:
         print("[..] core 口径：不生成 deformation_vac.h5（三维默认；"
               "AMSET 官方口径就是芯态对齐）")
+    _mat_state = build_deform_matrix(dfm, out, _rel)              # [0061-m] 只告警、不让本步失败
     if dst.exists():
         dst.unlink()
     os.replace(str(h5), str(dst))
     if (dfm / "deformation_signed.h5").is_file():                # [V188] 带符号版随 h5 一起放进本步目录（留档）
         os.replace(str(dfm / "deformation_signed.h5"), str(out / "deformation_signed.h5"))
     # ★ 最后一行是 autozt 唯一回显的一行，必须把"真空口径到底有没有生成"说清楚。
-    print("[DONE] %s：deformation.h5 已生成（core 口径）；DIM=%s DEFORM_REF=%s -> %s"
-          % (OUTDIR_NAME, _read_dim(cwd) or "未知", _ref_set, _vac_state))
+    print("[DONE] %s：deformation.h5 已生成（core 口径）；DIM=%s DEFORM_REF=%s -> %s；形变势矩阵：%s"
+          % (OUTDIR_NAME, _read_dim(cwd) or "未知", _ref_set, _vac_state, _mat_state))
 
 
 if __name__ == "__main__":

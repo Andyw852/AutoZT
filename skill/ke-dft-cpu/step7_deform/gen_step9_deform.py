@@ -10,6 +10,8 @@
      2D = 面内分量（xx/yy/xy），3D = 全部分量（[V187]，IONRELAX_3D 可关）
   5. [patch_ionrelax_locpot] 2D 真空口径下 ionrelax 已完成、但缺 LOCPOT（且还没有真空口径 h5）：
      只补静态段（见 prepare_static_only），不重算刚性单点和弛豫段
+  6. [0061-m] DEFORM_WAVE：给 S7.1 投影形变势矩阵用的波函数。只在"本征值取自它"的那次计算写 WAVECAR
+     （ionrelax 的静态段 / 没有 ionrelax 的顶层单点），submit.sh 末尾就地抽成 deform_wave.h5 再删 WAVECAR
 tf 的扇出机制随后对每个 *deform* 子目录各自 sbatch。
 产出目录：step7_deform/{undeformed, deform-01, ...}
 """
@@ -417,10 +419,10 @@ def _ionrelax_params(proj):
 
 
 # ---- [PATCH-IONRELAX] 给形变目录生成 ionrelax/ 子目录（2D：面内分量；3D：全部分量，[V187]）----
-def _ionrelax_incars(base, ediffg=None):
+def _ionrelax_incars(base, ediffg=None, wave=False):
     """主单点 INCAR -> (弛豫段, 静态段) INCAR 文本。[V168] 单独拿出来：判"已算完的 ionrelax 能不能复用"
     要拿【现在会写的】静态段跟 ionrelax/vasprun.xml 的回显比，不能只看文件在不在。
-    ediffg：弛豫段力判据（None = IONRELAX_EDIFFG）。"""
+    ediffg：弛豫段力判据（None = IONRELAX_EDIFFG）。wave：[0061-m] 静态段写 WAVECAR（DEFORM_WAVE）。"""
     ediffg = IONRELAX_EDIFFG if ediffg is None else ediffg
     # 弛豫段
     relax = re.sub(r"IBRION\s*=.*", "IBRION = 2            # 离子弛豫（固定晶格）", base)
@@ -448,6 +450,8 @@ def _ionrelax_incars(base, ediffg=None):
     stat = re.sub(r"ICHARG\s*=.*", "ICHARG = 0", stat)
     if "ISTART" not in stat:
         stat = stat.rstrip() + "\nISTART = 1\n"
+    if wave:
+        stat = _set_incar_tag(stat, "LWAVE", ".TRUE.")
     return relax, stat
 
 
@@ -483,6 +487,71 @@ VAC_H5_REL = Path("step7b_deform_read") / "deformation_vac.h5"
 DEFORM_REF = "auto"      # 与 S7.1 同一开关（auto -> 2D 用 vacuum）；材料共用 step.conf 写 DEFORM_REF=core 两步都生效
 
 
+# [0061-m] DFT 形变势矩阵（方案 A1）：S7.1 用 deform_wave.py build 把各形变构型的态投影回未形变的能带基，
+#   得到应变一阶哈密顿量的完整矩阵（含简并带之间的非对角元），S8/S8.4 的 ADP_DEGEN 用它。
+#   ★ 不改 INCAR 模板的 LWAVE：kc.run_incar_mismatch 把 LWAVE .FALSE. -> .TRUE. 当"输入变了"，
+#     所有已算完的单点和 ionrelax 会整批重算。只在用得到波函数的那次计算里开：
+#       · ionrelax 目录：只开静态段（INCAR.static）；已完成但缺 deform_wave.h5 的走 prepare_static_only 只补静态段；
+#       · 没有 ionrelax 的目录（undeformed 总是；3D 且 IONRELAX_3D = false 时各形变目录）：顶层 INCAR 开，
+#         V168 会归档旧结果重算这一个单点；
+#       · 2D 面外（zz/yz/xz）的离子固定目录不要（二维核只用 xx/yy/xy）。
+#   本步 step.conf：DEFORM_WAVE = false 整个关掉（S8 退回 k·p 拟合的应变算符）；DEFORM_WAVE_KEEP = true 抽完不删
+#   WAVECAR（调试，Si 每个构型 GB 级）；DEFORM_WAVE_MARGIN 窗口两侧多抽的带数（S7.1 build 若告警"缩窗口"就加大）。
+DEFORM_WAVE = True
+DEFORM_WAVE_KEEP = False
+DEFORM_WAVE_MARGIN = 6            # = deform_wave.MARGIN
+WAVE_H5 = "deform_wave.h5"
+WAVE_PY = "deform_wave.py"        # gen_need 推到材料目录
+MATRIX_H5_REL = Path("step7b_deform_read") / "deformation_matrix.h5"
+NOWAVE_TAG = "nowave"
+
+
+def _deform_wave_params(proj):
+    """[0061-m] 本步 step.conf 覆盖 DEFORM_WAVE / DEFORM_WAVE_KEEP / DEFORM_WAVE_MARGIN（文件不存在才用默认值）。"""
+    on, keep, margin = DEFORM_WAVE, DEFORM_WAVE_KEEP, DEFORM_WAVE_MARGIN
+    if (Path(proj) / "step.conf").is_file():
+        _c = stepconf.load({"DEFORM_WAVE": (None, "bool"), "DEFORM_WAVE_KEEP": (None, "bool"),
+                            "DEFORM_WAVE_MARGIN": (None, "int")}, OUTDIR_NAME, str(proj), strict=False)
+        if _c["DEFORM_WAVE"] is not None:
+            on = bool(_c["DEFORM_WAVE"])
+        if _c["DEFORM_WAVE_KEEP"] is not None:
+            keep = bool(_c["DEFORM_WAVE_KEEP"])
+        if _c["DEFORM_WAVE_MARGIN"] is not None:
+            margin = int(_c["DEFORM_WAVE_MARGIN"])
+            if margin < 0:
+                sys.exit("[ERROR] DEFORM_WAVE_MARGIN=%d：不能是负数" % margin)
+    return on, keep, margin
+
+
+def wave_top_dirs(names, ir_dirs, dim):
+    """[0061-m] 要在顶层单点写 WAVECAR 的目录：undeformed 总是；3D 时没有 ionrelax 的形变目录（IONRELAX_3D = false）。
+    2D 没有 ionrelax 的是面外分量（真空方向），二维核用不到。"""
+    out = {n for n in names if n == "undeformed"}
+    if dim == "3d":
+        out |= {n for n in names if n.startswith("deform-") and n not in ir_dirs}
+    return out
+
+
+def wave_extract_block(rel_root, margin, keep):
+    """[0061-m] submit.sh 末尾的抽取段：VASP 正常收尾才抽；抽取失败只告警，不让作业判失败。
+    rel_root：材料目录相对于脚本最后所在目录（顶层单点 ../../，ionrelax ../../../）。"""
+    return (
+        "\n# ---- [0061-m] deform_wave：WAVECAR -> %s（S7.1 投影形变势矩阵用）----\n"
+        "if grep -q \"General timing and accounting informations\" OUTCAR 2>/dev/null && [ -s WAVECAR ]; then\n"
+        "  ( %s && \"${CONDA_PREFIX:?conda activate 没生效}/bin/python\" %s%s extract --margin %d%s ) \\\n"
+        "    || echo \"[deform_wave][WARN] $(pwd)：抽取失败 —— S7.1 缺这个构型的波函数，S8 退回 k·p 拟合的应变算符\" >&2\n"
+        "fi\n"
+        % (WAVE_H5, AMSET_ENV_SRC, rel_root, WAVE_PY, int(margin), "" if keep else " --delete"))
+
+
+def _mismatch_wo_lwave(incar_text, vasprun):
+    """kc.run_incar_mismatch，但不把 LWAVE 算进去（[0061-m] 静态段新开了 LWAVE，旧结果的物理输入没变）。"""
+    why = kc.run_incar_mismatch(incar_text, vasprun)
+    if why is None:
+        return None
+    return [w for w in why if not w.startswith("LWAVE:")]
+
+
 def _deform_ref(proj, dim):
     """DEFORM_REF 生效值 -> "vacuum" / "core"。本步 step.conf 写了就用它（文件不存在才用默认值）。"""
     ref = DEFORM_REF
@@ -508,12 +577,15 @@ def _set_incar_tag(text, key, value):
     return text.rstrip() + "\n" + line + "\n"
 
 
-def static_only_incar(stat):
-    """静态段 INCAR -> 只补静态段用的版本：ISTART=0 / ICHARG=2（不依赖弛豫段 WAVECAR），LVHAR=.TRUE.；其余不动。"""
+def static_only_incar(stat, wave=False):
+    """静态段 INCAR -> 只补静态段用的版本：ISTART=0 / ICHARG=2（不依赖弛豫段 WAVECAR），LVHAR=.TRUE.；其余不动。
+    wave：[0061-m] 同时写 WAVECAR（LWAVE=.TRUE.）。"""
     for _k, _v in (("ISTART", "0"), ("ICHARG", "2")):
         stat = _set_incar_tag(stat, _k, _v)
     if not re.search(r"^[ \t]*LVHAR[ \t]*=[ \t]*\.?T", stat, re.MULTILINE | re.IGNORECASE):
         stat = _set_incar_tag(stat, "LVHAR", ".TRUE.")          # 本来就开着的不碰
+    if wave:
+        stat = _set_incar_tag(stat, "LWAVE", ".TRUE.")
     return stat
 
 
@@ -527,7 +599,8 @@ def static_only_pending(irp):
     """上一次 gen 已转入"只补静态段"、静态段还没跑完：有 OUTCAR.nolocpot-* 归档 + CONTCAR.relax，
     静态段 OUTCAR 没有收尾标志。这种目录 retry 时继续只补静态段，不能整个重建（会毁掉弛豫段结果）。"""
     irp = Path(irp)
-    if not any(irp.glob("OUTCAR.%s-*" % NOLOCPOT_TAG)) or not (irp / "CONTCAR.relax").is_file():
+    if not any(any(irp.glob("OUTCAR.%s-*" % _t)) for _t in (NOLOCPOT_TAG, NOWAVE_TAG)) \
+            or not (irp / "CONTCAR.relax").is_file():
         return False
     _oc = irp / "OUTCAR"
     try:
@@ -537,8 +610,10 @@ def static_only_pending(irp):
         return True
 
 
-def prepare_static_only(d):
-    """deform-NN/：转成"只补 ionrelax 静态段"。成功返回 True；弛豫段结构都找不到时返回 False（调用方整个重建）。"""
+def prepare_static_only(d, wave=False, why="缺 LOCPOT"):
+    """deform-NN/：转成"只补 ionrelax 静态段"。成功返回 True；弛豫段结构都找不到时返回 False（调用方整个重建）。
+    wave：[0061-m] 静态段同时写 WAVECAR；why：打印用的原因（缺 LOCPOT / 缺 deform_wave.h5）。
+    归档后缀：缺 LOCPOT 用 nolocpot，只缺波函数用 nowave（static_only_pending 两种都认）。"""
     d = Path(d)
     irp = d / "ionrelax"
     if not (irp / "CONTCAR.relax").is_file():
@@ -552,13 +627,14 @@ def prepare_static_only(d):
         stat = _st.read_text(encoding="utf-8")
     else:
         stat = _ionrelax_incars((d / "INCAR").read_text(encoding="utf-8"))[1]
-    _st.write_text(static_only_incar(stat), encoding="utf-8", newline="\n")
+    _st.write_text(static_only_incar(stat, wave), encoding="utf-8", newline="\n")
     _ts = _time.strftime("%Y%m%d%H%M%S")
+    _tag = NOLOCPOT_TAG if "LOCPOT" in why else NOWAVE_TAG
     _moved = []
     for _nm in STATIC_ONLY_ARCHIVE:
         _f = irp / _nm
         if _f.is_file():
-            _f.rename(irp / ("%s.%s-%s" % (_nm, NOLOCPOT_TAG, _ts)))
+            _f.rename(irp / ("%s.%s-%s" % (_nm, _tag, _ts)))
             _moved.append(_nm)
     # submit.sh 整体重写：只留 SBATCH 头和环境设置（第一条启动命令之前的部分），再接静态段
     sub = (d / "submit.sh").read_text(encoding="utf-8")
@@ -569,7 +645,7 @@ def prepare_static_only(d):
             break
         head.append(_ln)
     body = (
-        "\n# ---- [patch_ionrelax_locpot] 只补 ionrelax 静态段（弛豫段已完成、缺 LOCPOT）----\n"
+        "\n# ---- [patch_ionrelax_locpot] 只补 ionrelax 静态段（弛豫段已完成、%s）----\n" % why +
         "# 刚性单点与弛豫段都不再跑：前者的结果保留，后者用 CONTCAR.relax。\n"
         "cd ionrelax || exit 1\n"
         "cp CONTCAR.relax POSCAR || exit 1\n"
@@ -582,12 +658,12 @@ def prepare_static_only(d):
     )
     (d / "submit.sh").write_text("\n".join(head).rstrip() + "\n" + body,
                                  encoding="utf-8", newline="\n")
-    print("[IONRELAX] %s：弛豫段已完成、缺 LOCPOT -> 只补静态段（归档 %s 为 *.%s-%s；submit.sh 只跑静态段）"
-          % (d.name, "/".join(_moved) or "无", NOLOCPOT_TAG, _ts))
+    print("[IONRELAX] %s：弛豫段已完成、%s -> 只补静态段（归档 %s 为 *.%s-%s；submit.sh 只跑静态段）"
+          % (d.name, why, "/".join(_moved) or "无", _tag, _ts))
     return True
 
 
-def _build_ionrelax(d: Path, encut, subs, submit_body, ediffg=None):
+def _build_ionrelax(d: Path, encut, subs, submit_body, ediffg=None, wave=False):
     """在 deform-NN 下建 ionrelax/：两段式（弛豫段 IBRION=2 固定晶胞 + 静态段 LVHAR）。
 
     E1 必须用「离子弛豫后的内坐标」取带边能量（刚性形变时原子不动，MoS2 xx 的 E1 偏小 29%）。
@@ -609,7 +685,7 @@ def _build_ionrelax(d: Path, encut, subs, submit_body, ediffg=None):
     shutil.copy2(str(d / "KPOINTS"), str(ir / "KPOINTS"))
     shutil.copy2(str(d / "POTCAR"), str(ir / "POTCAR"))
 
-    relax, stat = _ionrelax_incars((d / "INCAR").read_text(encoding="utf-8"), ediffg)
+    relax, stat = _ionrelax_incars((d / "INCAR").read_text(encoding="utf-8"), ediffg, wave)
     (ir / "INCAR.relax").write_text(relax, encoding="utf-8", newline="\n")
     (ir / "INCAR.static").write_text(stat, encoding="utf-8", newline="\n")
 
@@ -701,6 +777,7 @@ def main():
     cwd = Path.cwd(); out = cwd / OUTDIR_NAME; out.mkdir(exist_ok=True)
     # [patch_ionrelax_locpot] 必须在 invalidate_downstream 之前取：它会把这个 h5 改名归档
     _vac_h5_existed = (cwd / VAC_H5_REL).is_file()
+    _mat_h5_existed = (cwd / MATRIX_H5_REL).is_file()        # [0061-m] 同理：S7.1 已投影过就不再为波函数补算
     # [patch_rerun_invalidate V140] 形变单点要重算：S7.1 读出的形变势（在材料目录的 step7b_deform_read/，
     #   rerun 本步删不到它）连同 S8/S8.4/S8.2 一并失效，等本步跑完由 auto-advance 重新读。
     kc.invalidate_downstream(cwd, OUTDIR_NAME, "%s 重新生成（形变单点重算）" % OUTDIR_NAME)
@@ -731,6 +808,18 @@ def main():
     submit_body = submit_tpl.read_text(encoding="utf-8")
 
     ref_kpts = _reference_kpoints(out, dim, vac_axis, len(subs))   # patch_kpts_align
+
+    # [PATCH-IONRELAX] 选要做离子弛豫的形变目录（[V187] 按维度）—— [0061-m] 提到主循环之前：
+    #   顶层单点要不要写 WAVECAR 取决于它有没有 ionrelax。select_ionrelax_dirs 没有副作用（只打印一行）。
+    _ir_ediffg, _ir_3d, _ir_rebuild = _ionrelax_params(cwd)
+    _ir_dirs = select_ionrelax_dirs(out, dim, _ir_3d, _ir_ediffg)
+    _wave, _wave_keep, _wave_margin = _deform_wave_params(cwd)
+    if _wave and not (cwd / WAVE_PY).is_file():
+        print("[WARN] [0061-m] DEFORM_WAVE 开着，但材料目录没有 %s（skill.yaml 的 gen_need 漏了？）—— 本次不写 WAVECAR，"
+              "S8 退回 k·p 拟合的应变算符" % WAVE_PY)
+        _wave = False
+    _wave_top = wave_top_dirs([d.name for d in subs], _ir_dirs, dim) if _wave else set()
+    _wave_ir = set()                                         # submit.sh 停在 ionrelax/、静态段写 WAVECAR 的目录
 
     encut = None
     for d in subs:
@@ -788,6 +877,9 @@ def main():
         stepconf.apply_incar_file(d / "INCAR", log=_ic_log)
         for _m in _ic_log:
             print("[..] %s" % _m)
+        if d.name in _wave_top:                              # [0061-m] 放在 step.conf 覆盖之后：波函数非要不可
+            (d / "INCAR").write_text(_set_incar_tag((d / "INCAR").read_text(encoding="utf-8"), "LWAVE", ".TRUE."),
+                                     encoding="utf-8", newline="\n")
         # [V168] 已算完的单点是不是用现在这份 INCAR 跑的（vasprun.xml 回显）：不是 -> 归档，ck_deform 判未完成、
         #   进 fan_todo 重算。patch_stale_grid 只管 KPOINTS；以前换了 INCAR（如补 LVHAR）旧 OUTCAR 照样判完成。
         if kc.archive_if_run_mismatch(d) is None and _snap_in.get("INCAR") is not None \
@@ -802,15 +894,13 @@ def main():
             encoding="utf-8", newline="\n")
         stepconf.apply_submit(sub, stepconf.read_submit(stepconf.CONF_NAME, used_incar=True))
 
-    # [PATCH-IONRELAX] 选要做离子弛豫的形变目录（[V187] 按维度）：
+    # [PATCH-IONRELAX] 要做离子弛豫的形变目录（[V187] 按维度；在主循环之前已选好，见上）：
     #   2D：主导应变分量在**面内**（xx/yy/xy）的目录。2026-09-16 二次修订：原来只建 xx±/yy± 四个；但二维
     #       ADP 核用的是张量面内 2×2 子块（D_xx/D_yy/**D_xy**），面内剪切分量若仍是离子固定口径，同一张量里
     #       就混了两种来源 —— 按用户定的规则：**面内只要有一个分量是 clamped 就必须报错**。判据与 step7b 的
     #       _inplane_dirs 完全一致。面外分量（zz/yz/xz）拉伸/剪切的是真空，二维核不用，不弛豫。
     #   3D：全部 deform-* 目录（6 个分量都是真实晶向，z 与 x/y 一视同仁）。原来 3D 一律离子固定，与含离子
     #       弛豫的弹性常数不同源（METHODOLOGY 4.4）。IONRELAX_3D = false 时不建（已建的不会被删）。
-    _ir_ediffg, _ir_3d, _ir_rebuild = _ionrelax_params(cwd)
-    _ir_dirs = select_ionrelax_dirs(out, dim, _ir_3d, _ir_ediffg)
     if _ir_dirs:
         # patch_ionrelax_idempotent（2026-09-20）：ionrelax 已经算完的目录**不要重建**。
         # _build_ionrelax 会清空 ionrelax/ 下除 POSCAR/KPOINTS/POTCAR 之外的全部文件
@@ -824,7 +914,7 @@ def main():
             # [patch_ionrelax_locpot] 上次 gen 已转入"只补静态段"、静态段还没跑完：网格没变就继续只补静态段
             #   （submit.sh 每次 gen 都被上面重写成刚性单点，这里必须再写一遍），不整个重建。
             if static_only_pending(_irp) and _ionrelax_grid_ok(out, _name):
-                if prepare_static_only(out / _name):
+                if prepare_static_only(out / _name, _wave, "静态段补算未完成"):
                     _static.append(_name)
                     continue
             # 判据与 autozt 的 ck_deform 一致：**必须**在 OUTCAR 末尾看到 VASP 收尾
@@ -845,11 +935,12 @@ def main():
             if _done:
                 # [V168] INCAR 也必须一致：拿现在会写的静态段跟 ionrelax/vasprun.xml（静态段的回显）比。
                 #   主单点 INCAR 换了（如补 LVHAR）而 ionrelax 照旧复用，E1 与真空对齐就混了两套输入。
-                _stat_now = _ionrelax_incars((out / _name / "INCAR").read_text(encoding="utf-8"))[1]
-                _why = kc.run_incar_mismatch(_stat_now, _irp / "vasprun.xml")
+                #   [0061-m] LWAVE 不算：静态段新开了波函数输出，旧结果的物理输入没变（缺波函数另走只补静态段）。
+                _stat_now = _ionrelax_incars((out / _name / "INCAR").read_text(encoding="utf-8"), wave=_wave)[1]
+                _why = _mismatch_wo_lwave(_stat_now, _irp / "vasprun.xml")
                 # [patch_ionrelax_locpot] 只补过静态段的，回显是 ISTART=0/ICHARG=2：按那个版本比一致就算一致，
                 #   否则补完静态段后的下一次 retry 会把它当"旧 INCAR"整个重建。
-                if _why and kc.run_incar_mismatch(static_only_incar(_stat_now), _irp / "vasprun.xml") == []:
+                if _why and _mismatch_wo_lwave(static_only_incar(_stat_now, _wave), _irp / "vasprun.xml") == []:
                     _why = []
                 if _why:
                     print("[IONRELAX] %s：已有结果是旧 INCAR 跑的（%s），重建。"
@@ -865,17 +956,21 @@ def main():
                         print("[IONRELAX] %s：已有结果的 EDIFFG=%s 比现在的 %s 松，IONRELAX_REBUILD_LOOSE=true -> 重建。"
                               % (_name, _old_ed, _ir_ediffg))
                         _done = False
-            if _done and static_only_wanted(_irp, dim, _ref, _vac_h5_existed):
-                if prepare_static_only(out / _name):
+            # [0061-m] 缺 deform_wave.h5（且 S7.1 还没投影过）也只补静态段：与缺 LOCPOT 一并补一次
+            _need_lp = _done and static_only_wanted(_irp, dim, _ref, _vac_h5_existed)
+            _need_wv = _done and _wave and not (_irp / WAVE_H5).is_file() and not _mat_h5_existed
+            if _need_lp or _need_wv:
+                _why_s = "、".join((["缺 LOCPOT"] if _need_lp else []) + (["缺 %s" % WAVE_H5] if _need_wv else []))
+                if prepare_static_only(out / _name, _wave, _why_s):
                     _static.append(_name)
                     continue
-                print("[IONRELAX] %s：缺 LOCPOT，但 CONTCAR.relax / CONTCAR 都不在，只补静态段做不了 -> 整个重建。"
-                      % _name)
+                print("[IONRELAX] %s：%s，但 CONTCAR.relax / CONTCAR 都不在，只补静态段做不了 -> 整个重建。"
+                      % (_name, _why_s))
                 _done = False
             if _done:
                 _skipped.append(_name)
                 continue
-            _build_ionrelax(out / _name, encut, _subs, submit_body, _ir_ediffg)
+            _build_ionrelax(out / _name, encut, _subs, submit_body, _ir_ediffg, _wave)
             _built.append(_name)
         print("[IONRELAX] 生成 %d 个 ionrelax/（%s）；已存在结果、跳过重建的 %d 个（%s）；只补静态段的 %d 个（%s）"
               % (len(_built), ", ".join(_built) or "无",
@@ -885,8 +980,28 @@ def main():
             print("[WARN] [V187] 复用了力判据比现在（EDIFFG=%s）松的 ionrelax/：%s。\n"
                   "       看 S7.1 的 ionrelax_check；要按新判据重算，本步 step.conf 写 IONRELAX_REBUILD_LOOSE = true 再 retry。"
                   % (_ir_ediffg, ", ".join(_loose)))
+        _wave_ir = (set(_built) | set(_static)) if _wave else set()
     elif dim == "2d":
         print("[WARN] 认不出面内分量，跳过 ionrelax/（形变势退回刚性单点口径）")
+
+    # [0061-m] 最后统一给 submit.sh 追加抽取段（ionrelax 的段、只补静态段的重写都在上面做完了）。
+    #   ionrelax 已完成、复用（_skipped）的目录：submit.sh 只剩刚性单点、不写 WAVECAR，不追加。
+    if _wave:
+        for d in subs:
+            if d.name in _wave_ir:
+                _rel = "../../../"
+            elif d.name in _wave_top:
+                _rel = "../../"
+            else:
+                continue
+            _sp = d / "submit.sh"
+            _sp.write_text(_sp.read_text(encoding="utf-8").rstrip() + "\n"
+                           + wave_extract_block(_rel, _wave_margin, _wave_keep), encoding="utf-8", newline="\n")
+        print("[0061-m] DEFORM_WAVE：写 WAVECAR 并就地抽取 %s 的 %d 个（顶层 %s；ionrelax 静态段 %s）%s"
+              % (WAVE_H5, len(_wave_top) + len(_wave_ir), ", ".join(sorted(_wave_top)) or "无",
+                 ", ".join(sorted(_wave_ir)) or "无", "，保留 WAVECAR" if _wave_keep else ""))
+    else:
+        print("[..] [0061-m] DEFORM_WAVE 关：不写波函数（S8 的 ADP_DEGEN 用 k·p 拟合的应变算符）")
 
     print("[DONE] %s：%d 个形变子目录输入就绪，tf 会各自提交" % (OUTDIR_NAME, len(subs)))
 
