@@ -14,6 +14,15 @@ This project adheres to Semantic Versioning; versions before 1.0.0 are developme
 
 ## [Unreleased]
 
+### Changed (2026-10-21: [0065] ke-dft-cpu S6_elastic cheaper defaults; S8.1 no longer waits for S6)
+- `S8.1_bt2` drops `step6_elastic` from its needs: it never reads the elastic constants (C only enters the DPT τ of
+  `S8.2_dpt`, which S8.1 still needs, so semiconductors wait for S6 through S8.2 as before). Metals (dpt group off)
+  no longer sit behind a multi-day IBRION=6 run.
+- `S6_elastic` factory defaults: NFREE 4 -> 2, EDIFF 1E-7 -> 1E-6, KSPACING 0.02 -> 0.03. Mg2C60 with the old values
+  was 144 SCF steps x ~40 min (~4 days) and IBRION=6 cannot restart. Only newly generated S6 inputs change; finished
+  S6 runs are not recomputed. Per material, `[incar.final] NFREE = 4 / EDIFF = 1E-7` in step.conf restores the old
+  accuracy.
+
 ### Changed (2026-10-21: ke-dft-cpu two-stage HSE band structure)
 - New step `S2.28_hsescf` (`step2_bandgap/step2.28_hse_scf`): one HSE SCF without KPOINTS_OPT, with NKRED on the
   axes whose k mesh is even (`HSE_SCF_NKRED = auto|off|"a b c"` in step.conf), saving WAVECAR.

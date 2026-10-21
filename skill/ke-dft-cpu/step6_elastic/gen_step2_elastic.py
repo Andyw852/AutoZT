@@ -35,8 +35,16 @@ import stepconf  # noqa: E402
 
 # ---- IBRION=6 有限差分弹性参数 ----
 POTIM   = "0.015"      # 形变（应变）幅度
-NFREE   = "4"          # 每个独立应变的差分点数：2 或 4（4=四点中心差分，更准）
-EDIFF   = "1E-7"       # 电子自洽收敛（弹性对精度敏感）
+# [0065] 出厂 NFREE 4->2、EDIFF 1E-7->1E-6、KSPACING 0.02->0.03（用户 2026-10-21 决定）：
+#   Mg2C60 的 S6 按旧值是 144 次 SCF × ~40 min ≈ 4 天，IBRION=6 又不能续算，超墙时就全丢。
+#   NFREE=2（VASP 默认，两点中心差分）SCF 次数约减半，POTIM=0.015 下 C 的偏差一般 <1–2%；
+#   EDIFF=1E-6 每步 SCF 迭代少约 20–30%；k 网格与 S3 静态同密度。要更准：本材料 step.conf
+#     [incar.final]
+#     NFREE = 4
+#     EDIFF = 1E-7
+#   （KSPACING 走 CLI --kspacing 或本区）。只影响之后生成的 S6，已完成的不重算。
+NFREE   = "2"          # 每个独立应变的差分点数：2 或 4（4=四点中心差分，更准、SCF 次数翻倍）
+EDIFF   = "1E-6"       # 电子自洽收敛
 PREC    = "Accurate"
 NCORE_ELASTIC = "1"    # 有限差分并行安全值（=NPAR ranks）；KPAR 继承 step1
 # --- patch_elastic_2d -----------------------------------------------------
@@ -65,7 +73,7 @@ ELASTIC_STEP_FACTOR = 2.0
 RUN_VASPKIT = True
 VASPKIT_EXE = "vaspkit"
 KSCHEME  = "2"         # 1=Monkhorst-Pack, 2=Gamma-centered
-KSPACING = "0.02"      # 倒空间 K 点间距（static 用 0.03，弹性更密）
+KSPACING = "0.03"      # 倒空间 K 点间距（[0065] 与 static 同为 0.03；以前 0.02）
 
 # ---- 在"继承 step1 + 上面注入"之外，额外增删的 INCAR 标签 ----
 # 例：INCAR_SET_EXTRA = {"ALGO": "Normal", "SYMPREC": "1E-5"}
@@ -357,7 +365,7 @@ def _walltime_estimate(step1, step2):
            % (rec["t_step_s"] / 60.0, rec["s1_loop_median_s"], ELASTIC_STEP_FACTOR, rec["estimate_h"]))
     if rec["over"]:
         print("[WARN] ★ %s，超过上限 %.0f h 的 %.0f%%：照这样提交多半会被 SLURM 按 TIMEOUT 杀掉，IBRION=6 不能续算。"
-              "办法：conf --set submit.qos=premium（48 h）或 submit.time=…；或 NFREE=2（SCF 次数约减半，精度略降）；"
+              "办法：conf --set submit.qos=premium（48 h）或 submit.time=…；或 NFREE=2（出厂已是 2；若 step.conf 改回了 4，SCF 次数约翻倍）；"
               "或加节点。跑起来后用 tools/vasp_eta.py 复核" % (msg, limit_h, 100 * _kc.WALLTIME_WARN_FRAC))
     else:
         print("[OK] %s，在上限 %.0f h 之内" % (msg, limit_h))

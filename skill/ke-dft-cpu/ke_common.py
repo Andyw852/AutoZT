@@ -690,7 +690,6 @@ DOWNSTREAM = {
 DOWNSTREAM_EXEMPT = {
     ("step3_uniform", "step3b_uniform_full"): "S3b 从 S3 的 CHGCAR 起步后自洽到收敛（ICHARG=1），终点不依赖 S3；结构由 LINEAGE_POSCARS 管",
     ("step3b_uniform_full", "step3c_uniform_offgrid"): "S3c 段 1 自己自洽，不读 S3b 的产物；结构由 LINEAGE_POSCARS 管",
-    ("step6_elastic", "step8.1_boltztrap"): "S8.1 的 τ 来自 S8.2：S6 -> S8.2 -> S8.1 递归失效",
     ("step7b_deform_read", "step8.1_boltztrap"): "同上：S7.1 -> S8.2 -> S8.1 递归失效",
     # zt 的 kl 声子链：gen 在 kl-dft-cpu，不在本技能维护；位移数据集不来自 S1（step4_disp 没有 needs）
     ("step4_disp", "*"): "kl 技能的声子链（gen 在 kl-dft-cpu）",
