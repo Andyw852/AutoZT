@@ -43,6 +43,12 @@ This project adheres to Semantic Versioning; versions before 1.0.0 are developme
     that has a degenerate valley. It uses AMSET's coefficients × the DFT operator, interpolates the vertex bilinears
     with AMSET's own `get_cross_section_values`, self-checks |⟨f|i⟩|² against AMSET's cross-section overlap, and keeps
     k·p states within 3 DFT mesh spacings of the valley centre. Large arrays go through AMSET's shared memory.
+- Fixed after the first Si run (2026-10-22): `build()` crashed on patterns with only one strain sign (IndexError, wrong
+  index into the common-k eigenvalues). Such patterns (cubic shear after `amset deform create`'s symmetry reduction)
+  now get the missing side from the space-group operation that flips the strain (wavefunctions transformed, central
+  difference, < 1% on the EPM bench vs ~10% for a forward difference). `load_dft_nodes` set `efermi` from the file
+  when pymatgen leaves it None with `parse_dos=False` (AMSET's `get_band_structure` raised TypeError, so ADP_DEGEN had
+  silently fallen back to plain AMSET in real runs).
 - No published precedent for feeding a DFT strain-Hamiltonian matrix into AMSET's tetrahedron integration; this is
   the project's own construction.
 - Tests: `tests/test_0061m_deform_wave.py`, `test_0061m_matrix_mode.py`, `test_0061m_grid_formula.py` and
