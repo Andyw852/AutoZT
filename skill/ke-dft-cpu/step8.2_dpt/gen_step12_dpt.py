@@ -34,8 +34,8 @@ from pathlib import Path
 # =========================== 可改参数区 ===========================
 # [SKILL_REV] 版本戳：写进 dpt_result.json，铺开时验证跑的是哪份 skill 副本。
 # 每次改本脚本逻辑后更新（如 "2026-08-29-nstep-linear"）。
-_SKILL_REV = "2026-10-11-0034"   # 写完 dpt_result.json 后：S8.4 的 ODP/IVS 用了本步谷表且谷中心变了 -> S8.4 重排
-#   （上一版：2026-10-10-0029-spin-window）
+_SKILL_REV = "2026-10-22-0069-3d-valley-axis"   # [0069] 3D 多谷：E1 取谷轴 LA 形变势、C 取沿谷轴的纵向模量
+#   （上一版：2026-10-11-0034 写完 dpt_result.json 后 S8.4 的 ODP/IVS 用了本步谷表且谷中心变了 -> S8.4 重排）
 # [R-SCAN] 强制选点壳层 NSTEP（None=自动 2/3/4/5；填 2/3/4/5=只试该值，做 R-scan 用）。
 # 用法：tf -p <材料> -j step8.2_dpt conf --set FORCE_NSTEP=3 → retry + start，对比 dpt_result.json 的 m_d
 #   与 m_provenance 里的 R（V148 起写 step.conf，不改本脚本）。
@@ -65,6 +65,12 @@ VALLEY_WINDOW_EV = 0.30
 #   只 K 250 cm²/Vs）——不是 E1 取法能修的，DPT 在这里失效。3 倍 = 两谷 τ 差一个数量级。
 VALLEY_E1_RATIO_MAX = 3.0
 VALLEY_W_MIN = 0.01
+# [0069] 3D 多谷（带边谷有对称等价谷：Si 的 6 个 Δ 谷、Ge/PbTe 的 L 谷、Mg₂Si 的 X 谷）：E1 取带边谷沿谷轴 â（Γ 指向谷心）
+#   的 LA 形变势 |â·D·â|（Si 导带 = Ξ_d + Ξ_u，文献 Si 电子声学形变势 ≈ 9 eV 即此值），C 取沿 â 的纵向模量 C_L(â)，
+#   三个方向共用（τ 各向同性近似；各向异性只来自电导质量 m_α）。以前对等价谷**先平均张量再平方**：Si 的 E1 成了
+#   静水值 Ξ_d + Ξ_u/3（2.99 vs 8.72 eV），μ ∝ 1/E1² 高估 8.5 倍。简并带边（立方 Γ 价带顶）与单谷不受影响。
+#   关掉（复现旧结果）：step.conf 写 DPT_VALLEY_AXIS = off。
+DPT_VALLEY_AXIS = "auto"
 # E1 自动提取口径开关（手填 MANUAL/MANUAL_ANISO 时此开关失效）：
 #   "vac"   = 真空对齐 E1_vac（文献 Eq.9 dE_edge/dγ 口径，仅 2D 且 LOCPOT 可用）
 #   "amset" = amset h5 平均芯势口径（⟨|D|⟩）
@@ -112,6 +118,7 @@ SPEC = {
     "DPT_VALLEYS":    (None, "str"),      # [0022] auto / off
     "VALLEY_WINDOW_EV": (None, "float"),  # [0022] 多谷窗口（eV）
     "VALLEY_E1_RATIO_MAX": (None, "float"),  # [0023] 贡献谷之间 E1 最大/最小 超过它就拒绝
+    "DPT_VALLEY_AXIS": (None, "str"),     # [0069] auto / off：3D 多谷用谷轴形变势
 }
 _CONF_TO_MANUAL = {"M_EFF_ELECTRON": "m_eff_electron", "M_EFF_HOLE": "m_eff_hole",
                    "E1_ELECTRON_EV": "E1_electron_eV", "E1_HOLE_EV": "E1_hole_eV",
@@ -152,7 +159,7 @@ def apply_conf(cwd):
     """[V148] 读本材料 step.conf 的覆盖写进 MANUAL / E1_SOURCE / FORCE_NSTEP；脚本里 MANUAL 被改过就 ★ 告警。
     返回 {键: {"value", "source"}}（写进 dpt_result.json 的 overrides）。"""
     global E1_SOURCE, FORCE_NSTEP, ALLOW_COARSE_S3, TEMPERATURE_K, TEMPERATURES, DPT_VALLEYS, VALLEY_WINDOW_EV
-    global VALLEY_E1_RATIO_MAX
+    global VALLEY_E1_RATIO_MAX, DPT_VALLEY_AXIS
     rec = {}
     for k, v in MANUAL.items():
         if v is not None:
@@ -233,6 +240,13 @@ def apply_conf(cwd):
         VALLEY_E1_RATIO_MAX = float(p["VALLEY_E1_RATIO_MAX"])
         rec["VALLEY_E1_RATIO_MAX"] = {"value": VALLEY_E1_RATIO_MAX, "source": "step.conf VALLEY_E1_RATIO_MAX"}
         print("[OK] VALLEY_E1_RATIO_MAX = %g（step.conf）" % VALLEY_E1_RATIO_MAX)
+    if p["DPT_VALLEY_AXIS"]:                              # [0069]
+        v = str(p["DPT_VALLEY_AXIS"]).strip().lower()
+        if v not in ("auto", "off"):
+            sys.exit("[ERROR] step.conf 的 DPT_VALLEY_AXIS=%r：只能是 auto / off" % p["DPT_VALLEY_AXIS"])
+        DPT_VALLEY_AXIS = v
+        rec["DPT_VALLEY_AXIS"] = {"value": v, "source": "step.conf DPT_VALLEY_AXIS"}
+        print("[OK] DPT_VALLEY_AXIS = %s（step.conf）" % v)
     return rec
 
 
@@ -484,9 +498,8 @@ def read_elastic_inplane_GPa(cwd):
     return rows[0][0] / 10.0, rows[1][1] / 10.0   # kBar->GPa, C11 C22
 
 
-def read_elastic_diag_GPa(cwd):
-    """[0025] step6_elastic/OUTCAR 的 TOTAL ELASTIC MODULI 对角 (C11, C22, C33)，GPa；读不到返回 None。
-    VASP 的顺序是 XX YY ZZ XY YZ ZX，所以第三行第三列就是 C33。"""
+def _elastic_rows_kbar(cwd):
+    """step6_elastic/OUTCAR 最后一块 TOTAL ELASTIC MODULI 的 6×6（kBar，VASP 顺序 XX YY ZZ XY YZ ZX）；读不到 None。"""
     oc = Path(cwd) / ELASTIC_DIR / "OUTCAR"
     if not oc.is_file():
         return None
@@ -502,9 +515,36 @@ def read_elastic_diag_GPa(cwd):
             rows.append([float(x) for x in nums[:6]])
         if len(rows) == 6:
             break
-    if len(rows) < 6:
+    return rows if len(rows) == 6 else None
+
+
+def read_elastic_diag_GPa(cwd):
+    """[0025] step6_elastic/OUTCAR 的 TOTAL ELASTIC MODULI 对角 (C11, C22, C33)，GPa；读不到返回 None。
+    VASP 的顺序是 XX YY ZZ XY YZ ZX，所以第三行第三列就是 C33。"""
+    rows = _elastic_rows_kbar(cwd)
+    if rows is None:
         return None
     return rows[0][0] / 10.0, rows[1][1] / 10.0, rows[2][2] / 10.0   # kBar -> GPa
+
+
+def read_elastic_voigt_GPa(cwd):
+    """[0069] 全弹性张量，Voigt 顺序（11, 22, 33, 23, 13, 12），GPa；读不到 None。
+    VASP 的 XX YY ZZ XY YZ ZX 重排：Voigt 4 = YZ、5 = ZX、6 = XY。"""
+    rows = _elastic_rows_kbar(cwd)
+    if rows is None:
+        return None
+    perm = (0, 1, 2, 4, 5, 3)                     # Voigt 下标 -> VASP 下标
+    return [[rows[perm[i]][perm[j]] / 10.0 for j in range(6)] for i in range(6)]
+
+
+def longitudinal_modulus_GPa(Cv, a):
+    """[0069] 沿单位矢 â 的纵向模量 C_L(â) = Σ C_ijkl â_i â_j â_k â_l = eᵀ C e，e = (a1², a2², a3², 2a2a3, 2a1a3, 2a1a2)。
+    立方：[100] -> C11，[111] -> (C11 + 2C12 + 4C44)/3。"""
+    import numpy as np
+    a = np.asarray(a, float)
+    a = a / np.linalg.norm(a)
+    e = np.array([a[0] ** 2, a[1] ** 2, a[2] ** 2, 2 * a[1] * a[2], 2 * a[0] * a[2], 2 * a[0] * a[1]])
+    return float(e @ np.asarray(Cv, float) @ e)
 
 
 def _thickness_A(cwd):
@@ -2193,6 +2233,90 @@ def _e1_diag_3d(cwd, carrier, be=None):
         return None, "读 deformation.h5 异常：%s" % _exc_brief(e)
 
 
+def _valley_axis_3d(cwd, carrier, be=None):
+    """[0069] 3D 多谷的谷轴形变势与纵向模量。带边谷有对称等价谷（n_star > 1）且带边不简并时：
+    谷轴 â = Γ 指向带边谷心（最短等价 k 的方向）；E1 = |â·D·â|（沿谷轴传播的 LA 声子的形变势，Si 导带 = Ξ_d + Ξ_u）；
+    C = C_L(â)（沿谷轴的纵向模量，step6 全弹性张量）。D 取带边谷自己的 3×3 张量：优先 S7.1 的带符号中心差分
+    （deformation_signed.h5，AMSET 约定非对角 = 2·D_ij），没有就用 deformation.h5 的幅值 |D_ij| 并按 |â| 投影
+    （幅值丢了符号；D 的符号花样随谷轴走时——Δ、L 谷的 Ξ_d·I + Ξ_u·ââ 型，Ξ_u > 0——与带符号结果相同）。
+    返回 (dict, None)；不适用时 (None, 原因)（单谷、简并带边、缺文件、关掉）。"""
+    if str(DPT_VALLEY_AXIS).strip().lower() == "off":
+        return None, "DPT_VALLEY_AXIS = off"
+    be = be if be is not None else _band_edges_json(cwd)
+    hits = ((be or {}).get(carrier) or {}).get("hits") or []
+    if not hits:
+        return None, "band_edges.json 没有 %s 带边 hits" % carrier
+    bands = {(str(h.get("spin", "up")).lower(), h.get("band_h5")) for h in hits}
+    if len(bands) > 1:
+        return None, "带边 %d 重简并：单带 DPT 只是近似，不用谷轴口径" % len(bands)
+    h = hits[0]
+    if h.get("band_h5") is None or h.get("k_h5") is None:
+        return None, "hit 缺 band_h5/k_h5"
+    spin = str(h.get("spin", "up")).lower()
+    b, k = int(h["band_h5"]), int(h["k_h5"])
+    h5 = Path(cwd) / DEFORM_READ_DIR / "deformation.h5"
+    if not h5.is_file():
+        return None, "缺 %s/deformation.h5" % DEFORM_READ_DIR
+    try:
+        import itertools
+        import numpy as np
+        import h5py
+        from pymatgen.core import Structure
+        with h5py.File(str(h5), "r") as f:
+            ds = "deformation_potentials_%s" % spin
+            if ds not in f or "kpoints" not in f or "structure" not in f:
+                return None, "deformation.h5 缺 %s / kpoints / structure（判断不了等价谷）" % ds
+            raw = np.array(f["structure"])
+            sj = raw.item() if raw.shape == () else raw
+            sj = sj.decode() if isinstance(sj, (bytes, np.bytes_)) else str(sj)
+            st = Structure.from_str(sj, fmt="json")
+            kp = np.asarray(f["kpoints"], float)
+            amp = np.asarray(f[ds][b, k], float)
+            amp_tensor = str(f.attrs.get("dp_offdiag", "")) == "tensor"
+        rots = _cart_rots(st)
+        n_star = len(_star_images(kp[k], st, rots))
+        if n_star <= 1:
+            return None, "带边谷没有对称等价谷（单谷），沿用分方向口径"
+        B = np.asarray(st.lattice.reciprocal_lattice.matrix, float)
+        k0 = kp[k] - np.round(kp[k])
+        kc = min(((k0 + np.array(g)) @ B for g in itertools.product((-1, 0, 1), repeat=3)), key=np.linalg.norm)
+        if np.linalg.norm(kc) < 1e-6:
+            return None, "带边在 Γ，没有谷轴"
+        axis = kc / np.linalg.norm(kc)
+        off = ~np.eye(3, dtype=bool)
+        D, a_proj, src = None, axis, None
+        sp = Path(cwd) / DEFORM_READ_DIR / "deformation_signed.h5"
+        if sp.is_file():
+            with h5py.File(str(sp), "r") as g:
+                key = "signed_" + spin
+                if (key in g and "kpoints" in g and np.shape(g["kpoints"]) == kp.shape
+                        and np.allclose(np.asarray(g["kpoints"], float), kp, atol=1e-6)
+                        and g[key].shape[0] > b and g[key].shape[1] > k):
+                    D = -np.array(g[key][b, k], float)        # 文件存 −dE/dε，换成 dE/dε（本征值即 Ξ）
+                    D[off] *= 0.5
+                    src = "带符号中心差分（deformation_signed.h5，dE/dε）"
+        if D is None:
+            D = amp.copy()
+            if not amp_tensor:
+                D[off] *= 0.5
+            a_proj = np.abs(axis)
+            src = "幅值 |D_ij|（deformation.h5；没有可用的带符号文件，按 |â| 投影）"
+        D = 0.5 * (D + D.T)
+        e1 = abs(float(a_proj @ D @ a_proj))
+        Cv = read_elastic_voigt_GPa(cwd)
+        if Cv is None:
+            return None, "step6_elastic/OUTCAR 读不到全弹性张量"
+        C = longitudinal_modulus_GPa(Cv, axis)
+        if not C > 0:
+            return None, "沿谷轴的纵向模量 C_L = %.3g GPa 不正" % C
+        eig = np.linalg.eigvalsh(D)
+        return {"E1_eV": round(e1, 4), "C_GPa": round(C, 3), "axis": np.round(axis, 4).tolist(),
+                "k_frac": np.round(k0, 4).tolist(), "n_star": n_star, "tensor_source": src,
+                "D_eV": np.round(D, 4).tolist(), "D_eig_eV": np.round(eig, 4).tolist()}, None
+    except Exception as e:                       # noqa: BLE001
+        return None, "谷轴形变势异常：%s" % _exc_brief(e)
+
+
 def _quad_fit_3d(kfrac, recip, eband, k0, need_lin=None, mesh=None, kops=None):
     """[0025] 带边三维二次型拟合（_quad_fit_2d 的三维版，判据同构）：
     ΔE = a x² + b y² + c z² + d xy + e yz + f zx（+ q⁴）（+ 线性 gx + hy + iz + j）。
@@ -2355,6 +2479,20 @@ def _aniso_block_3d(cwd, carrier, T):
            "T_K": T,
            "formula": ("mu_a = 2*sqrt(2pi)*e*hbar^4*C_a/(3*(kB*T)^1.5*m_a*m_d^1.5*E1_a^2); "
                        "m_a = 1/W_aa（电导质量）, m_d = det(M)^(1/3); tau_a = mu_a*m_a/e")}
+    va, va_why = _valley_axis_3d(cwd, carrier) if (e3 is not None and cd is not None) else (None, None)
+    if va:                                       # [0069] 多谷：E1、C 取谷轴值，三个方向共用
+        blk["valley_axis"] = va
+        blk["E1_eV"] = [va["E1_eV"]] * 3
+        blk["E1_provenance"] = ("[0069] 多谷谷轴 E1 = |â·D·â|，â = %s（Γ→谷心，%d 个等价谷；%s）；旧口径的等价谷对角平均 "
+                                "%s 不再用（先平均张量再平方，Si 导带成了静水值 Ξ_d + Ξ_u/3）"
+                                % (va["axis"], va["n_star"], va["tensor_source"], list(e3)))
+        blk["C_3D_GPa"] = [va["C_GPa"]] * 3
+        blk["C_provenance"] = ("[0069] 沿谷轴的纵向模量 C_L(â) = %.1f GPa（step6 全弹性张量；对角 C11/C22/C33 = %s）"
+                               % (va["C_GPa"], [round(x, 1) for x in cd]))
+        blk["formula"] += "；[0069] 多谷：E1、C 取谷轴值，三个方向共用（τ 各向同性近似，各向异性只来自 m_α）"
+        cd, e3 = (va["C_GPa"],) * 3, (va["E1_eV"],) * 3
+    elif va_why:
+        blk["valley_axis_note"] = va_why
     miss = [n for n, v in (("C", cd), ("m*", mres), ("E1", e3)) if v is None]
     if miss:
         blk["status"] = "缺输入：%s" % "、".join(miss)
@@ -2408,6 +2546,14 @@ def _one_carrier(cwd, is_2d, carrier, T, temps=None):
             bd["m_provenance"], m, mprov)
         m = bd["m_d_m0"]
     e1, e1prov = get_E1(cwd, carrier)
+    ekey = "E1_electron_eV" if carrier == "electron" else "E1_hole_eV"
+    va = bd.get("valley_axis") if (not is_2d and bd.get("status") == "ok") else None
+    if va and not MANUAL["C_3D_GPa"]:                               # [0069] 多谷：表头与分方向同一口径（手填的项照手填）
+        C, Cprov = va["C_GPa"] * 1e9, bd["C_provenance"]
+    if va and not MANUAL[ekey]:
+        e1, e1prov = va["E1_eV"], bd["E1_provenance"]
+    if va and (MANUAL[key] or MANUAL[ekey] or MANUAL["C_3D_GPa"]):
+        va = None                                                   # 有手填项：表头照各向同性公式算
     rec = {"carrier": carrier,
            "inputs": {"C_%s" % ("2D_N_per_m" if is_2d else "3D_Pa"): C,
                       "C_provenance": Cprov,
@@ -2419,9 +2565,28 @@ def _one_carrier(cwd, is_2d, carrier, T, temps=None):
         rec["mobility_cm2_Vs"] = None
         rec["status"] = ("缺输入：%s —— 在本材料 step.conf 手填（M_EFF_*/E1_*_EV/C_*）后重跑（μ∝1/T，报 %.0fK）"
                          % ("、".join(miss), T))
+    elif va:
+        # 多谷的迁移率要用电导质量 m_α 与单谷态密度质量 m_d（μ_α ∝ 1/(m_α m_d^{3/2})），不是 m_d^{5/2}：取分方向的平均
+        rec["mobility_cm2_Vs"] = round(sum(bd[d]["mobility_cm2_Vs"] for d in ("x", "y", "z")) / 3.0, 3)
+        rec["inputs"]["m_c_m0"] = round(3.0 / sum(1.0 / bd[d]["m_eff_m0"] for d in ("x", "y", "z")), 4)
+        rec["formula"] = ("[0069] 多谷谷轴：μ = (μx+μy+μz)/3，μ_α = 2√(2π)eℏ⁴C_L(â)/(3(k_BT)^{3/2} m_α m_d^{3/2} E1²)，"
+                          "E1 = |â·D·â|")
+        rec["status"] = "ok"
     else:
         rec["mobility_cm2_Vs"] = round(mobility_dpt(is_2d, C, m, e1, T), 3)
         rec["status"] = "ok"
+    caveats = []                                                    # [0069] 结果可信度的明确标注
+    if not is_2d:
+        if _nd > 1:
+            caveats.append("带边 %d 重简并（如立方半导体 Γ 点价带顶）：单带 DPT 只是近似，μ 只作量级参考，"
+                           "与 AMSET / EPW 的差别不能当作问题" % _nd)
+        if bd.get("status") != "ok" and m is not None and not MANUAL[key]:
+            caveats.append("三维二次型拟合没出数（%s）：表头 m* = %s 是旧的方向分解 / 径向拟合回退值，不可靠"
+                           % (bd.get("m_provenance") or bd.get("status"), m))
+    if caveats:
+        rec["caveats"] = caveats
+        for c_ in caveats:
+            print("[WARN] %s：%s" % (carrier, c_))
     rec["by_direction"] = bd
     rec["multi_valley"] = _multi_valley_block(cwd, is_2d, carrier, T, temps or [T],     # [0022]
                                               rec["by_direction"])
@@ -2481,7 +2646,8 @@ def main():
            "skill_rev": _SKILL_REV, "env": _env, "overrides": overrides, "s3_grid": s3_grid,
            "functional": functional,
            "formula": ("2D Bardeen-Shockley: μ=eℏ³C_2D/(k_BT m* m_d E1²)" if is_2d
-                       else "3D: μ=2√(2π)eℏ⁴C_3D/(3(k_BT)^{3/2}m*^{5/2}E1²)"),
+                       else ("3D: μ=2√(2π)eℏ⁴C_3D/(3(k_BT)^{3/2}m*^{5/2}E1²)；[0069] 多谷（带边谷有对称等价谷）时 "
+                             "E1 = |â·D·â|（谷轴 LA 形变势）、C = C_L(â)、μ = (μx+μy+μz)/3（见各载流子的 formula）")),
            "results": [_one_carrier(cwd, is_2d, c, TEMPERATURE_K, temps) for c in carriers],
            "note": ("经典 DPT 声学支迁移率，用于和 amset(ADP) 对标。m*/E1 自动值精度"
                     "有限——务必核对，或在本材料 step.conf 手填。μ∝1/T。")}
@@ -2513,6 +2679,12 @@ def main():
         lines.append("           C=%s(%s)  m*=%s(%s)  E1=%s eV(%s)" % (
             i.get("C_2D_N_per_m", i.get("C_3D_Pa")), i["C_provenance"],
             i["m_eff_m0"], i["m_provenance"], i["E1_eV"], i["E1_provenance"]))
+        va_ = (r.get("by_direction") or {}).get("valley_axis")       # [0069]
+        if va_:
+            lines.append("           [谷轴] â=%s  %d 个等价谷  E1=|â·D·â|=%.3f eV  C_L(â)=%.1f GPa  D 本征值 %s eV（%s）" % (
+                va_["axis"], va_["n_star"], va_["E1_eV"], va_["C_GPa"], va_["D_eig_eV"], va_["tensor_source"]))
+        for c_ in r.get("caveats") or []:
+            lines.append("           ★ 注意：%s" % c_)
         bd = r.get("by_direction") or {}                      # patch_dpt_aniso
         if bd.get("status") == "ok":
             for d in [d for d in ("x", "y", "z") if isinstance(bd.get(d), dict)]:   # [0025] 3D 有 z

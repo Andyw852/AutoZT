@@ -19,6 +19,27 @@ This project adheres to Semantic Versioning; versions before 1.0.0 are developme
 - gen 端 apply_mesh_min 在 gen 环境没有 BoltzTraP2 / pymatgen.io.ase（或 C 扩展与 spglib ABI 不匹配）时不再 ModuleNotFoundError 硬崩：打 WARN 跳过自动选网格，沿用 step.conf 的 INTERPOLATION_FACTOR。
 - 生成阶段内存自检：submit.sh 无 --mem/--mem-per-cpu 且关掉自动选网格时，若 --ntasks-per-node >= 8 就提示补 --mem-per-cpu（yue 默认 3.8GB/核，16 workers 只拿到 61GB，实测 1:35 被 OOM Killer 杀；改 12000M 后正常）。
 
+### Fixed (2026-10-22: [0069] ke-dft-cpu S8.2 3D multi-valley DPT uses the valley-axis deformation potential)
+- For 3D band edges with symmetry-equivalent valleys (Si Δ, Ge/PbTe L, Mg₂Si X), S8.2 averaged the
+  deformation-potential tensor diagonals over the equivalent valleys and then squared the result. That average keeps
+  only the hydrostatic part. For the Si conduction band, E1 became Ξ_d + Ξ_u/3 = 2.99 eV instead of the valley-axis
+  value of 8.72 eV. Because μ ∝ 1/E1², the mobility was overestimated about 8.5× (DPT electron 36,135 vs experiment
+  ~1,450 cm²/Vs).
+- New behaviour:
+  - E1 = |â·D·â| along the valley axis â (from Γ to the valley centre). For Δ and L valleys this is Ξ_d + Ξ_u, the
+    usual literature convention for the acoustic deformation potential (~9 eV for Si electrons).
+  - C is the longitudinal modulus along â, taken from the full step6 elastic tensor.
+  - E1 and C are shared by x, y and z (isotropic-τ approximation). Anisotropy enters only through the conductivity
+    masses.
+  - The headline μ is (μx+μy+μz)/3.
+  - The valley's own tensor is read from deformation_signed.h5 when present. Otherwise the amplitude file is used,
+    projected on |â|.
+- Unchanged: single valleys, degenerate band edges (cubic Γ valence top), 2D, and manual inputs.
+  `DPT_VALLEY_AXIS = off` in step.conf restores the old behaviour.
+- dpt_result.json now has a per-carrier `caveats` field. It flags degenerate band edges, and a failed 3D mass fit that
+  leaves the headline m* as a fallback value. The Si hole DPT value falls under both.
+- Tests: tests/test_0069_dpt_valley_axis.py. The [0025] equivalent-valley case now runs with `DPT_VALLEY_AXIS = off`.
+
 ### Changed (2026-10-22: [0068] eph-qe-cpu IVS route: tr2_ph default 1e-16 -> 1e-14)
 - `IVS_TR2_PH` now defaults to 1e-14, the same as the Perturbo route (`TR2_PH`). The IVS route only needs the
   intervalley D0 and phonon energies, whose error from a 1e-14 induced-potential residual is far below the model

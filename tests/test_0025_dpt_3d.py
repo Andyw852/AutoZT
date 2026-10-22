@@ -232,14 +232,16 @@ def build_cubic_x(m, mesh=(12, 12, 12)):
 @unittest.skipUnless(HAVE, "需要 pymatgen + spglib + h5py")
 class EquivalentValley3DTests(unittest.TestCase):
     """立方晶体的带边在 X（三个等价谷）：晶体各方向必须相同。只取带边那一个谷会给 x 方向 m_l、y/z 方向 m_t
-    （μ 差几倍，立方晶体不可能）；按点群平均后各方向都是电导质量 3/(1/m_l+2/m_t)、E1 = Ξ_d + Ξ_u/3。"""
+    （μ 差几倍，立方晶体不可能）；按点群平均后各方向都是电导质量 3/(1/m_l+2/m_t)。
+    这里验证 DPT_VALLEY_AXIS = off（[0069] 之前的口径）：E1 = 等价谷对角平均 Ξ_d + Ξ_u/3（静水值，偏小）。
+    默认的谷轴口径（E1 = Ξ_d + Ξ_u）见 tests/test_0069_dpt_valley_axis.py。"""
 
     def test_cubic_x_valleys_isotropic(self):
         D = _D()
         m = Path(tempfile.mkdtemp())
         fake = build_cubic_x(m)
         with mock.patch("pymatgen.io.vasp.Vasprun", lambda *a, **k: fake), \
-                contextlib.redirect_stdout(io.StringIO()):
+                mock.patch.object(D, "DPT_VALLEY_AXIS", "off"), contextlib.redirect_stdout(io.StringIO()):
             bd = D._aniso_block(m, False, "electron", 300.0)
         self.assertEqual(bd["status"], "ok", bd.get("status"))
         mc = 3.0 / (1.0 / ML + 2.0 / MT)
