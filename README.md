@@ -135,5 +135,6 @@ bash scripts/tf-git-push.sh "你的提交说明"
 - 技能开发与模型契约：[总手册第 7 章](TASKFLOW.md#7-技能开发规范原-skill_devmd-内容)，其中 7.15–7.18 说明输入输出、报错、新技能适配和验收边界。
 - 模型调用与服务生命周期：[总手册第 9 章](TASKFLOW.md#9-给大语言模型用agent-接入)；支持本地 MCP 的客户端使用 [MCP](docs/mcp.md)，终端模型/脚本使用 [Agent CLI](docs/agent-cli.md)。两条路径可独立使用，`agent serve` 仅供高级 wrapper 集成。
 - 软件定位与模型接入：[AutoZT 的定位与 AI 智能体接入](docs/llm-plugin.md)
+- 部署到新超算/新账号：[通用移植与验收指南（英文版）](docs/DEPLOY-NEW-CLUSTER.md) / [中文版](docs/DEPLOY-NEW-CLUSTER.zh-CN.md)（配套只读站点侦察脚本 `tools/probe_cluster.sh`，每站点记录模板 [DEPLOY-RECORD-TEMPLATE.md](docs/DEPLOY-RECORD-TEMPLATE.md)）
 - AI/监控接入规范：[AGENTS.md](AGENTS.md)
 - 各技能细节：`skill/<技能>/README.md`

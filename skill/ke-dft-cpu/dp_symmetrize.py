@@ -7,6 +7,7 @@
 空穴 2.41/2.55（差 5.9%）；而 K 点有 C3，面内必须 D_xx = D_yy、D_xy = 0。弹性、介电张量都严格对称
 （VASP 已对称化），D 是 ADP 唯一不对称的输入 -> 六方晶体上出现 xx/yy 迁移率差 9–10% 的非物理结果。
 AMSET 的 get_symmetrized_strain_mapping 只补"没算过"的旋转等价应变，差异不会被平均掉。
+[0061-m 2026-10-22] 而且它补出来的应变对 3/4/6 次轴标错（立方 xy/xz 互换）-> symmetrized_strain_mapping 改正版，S7.1 用它。
 
 物理：应变 ε 下能移 ΔE_n(k) = D_n(k) : ε，在对称操作 r（笛卡尔旋转）下不变
     => D(r k) = r D(k) rᵀ。对 Laue 群（点群 × {±1}，时间反演给 D(-k) = D(k)）取平均：
@@ -280,6 +281,53 @@ def band_gaps(bandstructure):
 def strain_amount(strain_mapping):
     """应变幅度 δ（各应变最大分量的最大值，AMSET 默认 0.005）。"""
     return float(max(np.abs(np.asarray(s, float)).max() for s in strain_mapping.keys()))
+
+
+# ---------------------------------------------------------------------------
+# [0061-m 2026-10-22] AMSET get_symmetrized_strain_mapping 的应变标签改正（S7.1 两条读取路径都换成这个）
+# ---------------------------------------------------------------------------
+def strain_label_rotation(lattice_matrix, frac_rot):
+    """AMSET 的 frac_op（rotation_matrix M = spglib 的 Wᵀ，分数坐标）-> 补出来的应变该用的笛卡尔旋转。
+    rotate_bandstructure 把形变构型 E 的能带搬到 k' = M·k；这组能带属于应变 Rᵀ·E·R（R = Lᵀ W L⁻ᵀ 是 W 的笛卡尔旋转，
+    即 W⁻¹ 作用在 E 上），所以 tstrain = strain.rotate(Rᵀ)。AMSET 0.4.19 / 0.5.1 用 strain.rotate(R) = R·E·Rᵀ：
+    W 对合（R² = 1：镜面、2 次轴、反演）时两者相同；3 / 4 / 6 次轴（非对合）时标签错 —— 立方的 C3[111]
+    把 yz 补出来的 xy、xz 互换，C4 把剪切的正负号换掉。EPM Si 实测：原版标签本征值差 0.10 eV，改后 1e-13 eV。"""
+    L = np.asarray(lattice_matrix, float)
+    W = np.asarray(frac_rot, float).T
+    R = L.T @ W @ np.linalg.inv(L.T)
+    return R.T
+
+
+def symmetrized_strain_mapping(bulk_structure, strain_mapping, symprec=SYMPREC, symprec_deformation=SYMPREC / 100,
+                               report=None):
+    """AMSET get_symmetrized_strain_mapping（0.4.19 / 0.5.1 逐字相同）的改正版：只换补出来的应变标签
+    （strain_label_rotation），其余照搬 —— 先 expand_bandstructure、按 get_symmops 的顺序、只补"独立且没算过"的、
+    k 点对得上才收、边补边遍历（补出来的也继续当源）。report：dict，写回补了几个、其中几个原版会标成别的应变。"""
+    from amset.deformation.potentials import _mapping_tol
+    from amset.electronic_structure.kpoints import get_kpoints_from_bandstructure, kpoints_to_first_bz
+    from amset.electronic_structure.symmetry import expand_bandstructure, get_symmops, rotate_bandstructure
+
+    frac_ops = get_symmops(bulk_structure, symprec=symprec)
+    L = bulk_structure.lattice.matrix
+    for strain, calc in strain_mapping.items():
+        calc["bandstructure"] = expand_bandstructure(calc["bandstructure"], symprec=symprec_deformation)
+    n_add, n_diff = 0, 0
+    for strain, calc in strain_mapping.items():
+        k_old = kpoints_to_first_bz(get_kpoints_from_bandstructure(calc["bandstructure"], sort=True))
+        for frac_op in frac_ops:
+            rt = strain_label_rotation(L, frac_op.rotation_matrix)
+            tstrain = strain.rotate(rt)
+            independent = tstrain.get_deformation_matrix().is_independent(_mapping_tol)
+            if independent and tstrain not in strain_mapping:
+                rband = rotate_bandstructure(calc["bandstructure"], frac_op)
+                k_new = kpoints_to_first_bz(get_kpoints_from_bandstructure(rband, sort=True))
+                if np.max(np.linalg.norm(k_old - k_new, axis=1)) < 0.001:
+                    strain_mapping[tstrain] = {"reference": calc["reference"], "bandstructure": rband}
+                    n_add += 1
+                    n_diff += not np.allclose(np.asarray(strain.rotate(rt.T)), np.asarray(tstrain), atol=1e-8)
+    if report is not None:
+        report.update(added=n_add, relabeled=n_diff)
+    return strain_mapping
 
 
 def write_signed(path, deformation_potentials, kpoints, ibands=None, gaps=None, delta=None):

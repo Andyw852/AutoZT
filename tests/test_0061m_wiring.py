@@ -346,3 +346,57 @@ def test_skill_yaml_gen_need_deform_wave():
     walk(d)
     assert found == {"gen_step9_deform.py": True, "gen_step9b_deform_read.py": True, "gen_step10_amset.py": True,
                      "gen_step14_amset2d.py": True}
+
+
+# ---------------------------------------------------------------------------
+# 运行期读 vasprun：新版 pymatgen 在 parse_dos=False 时 efermi = None（Si 实跑 2026-10-22 的 bug2）
+# ---------------------------------------------------------------------------
+def _fake_vasprun_modules(monkeypatch, efermi_in_file=True):
+    import types
+
+    class Spin:
+        name = "up"
+    up = Spin()
+
+    class Vasprun:
+        def __init__(self, path, **kw):
+            assert kw.get("parse_dos") is False
+            self.efermi = None                                         # 新版 pymatgen：没解析 DOS 就是 None
+            self.eigenvalues = {up: np.array([[-5.0, 1.0, 2.0], [-4.0, 0.5, 3.0]])}
+            self.eigenvalue_band_properties = (1.5, 2.0, -0.4, False)
+
+    def get_band_structure(vr):                                        # AMSET 0.5.1：先拿本征值和 efermi 比大小
+        np.any(vr.eigenvalues[up] < vr.efermi)
+        return types.SimpleNamespace(efermi=vr.efermi)
+
+    def expand_bandstructure(bs, symprec=0.01):
+        return types.SimpleNamespace(
+            kpoints=[types.SimpleNamespace(frac_coords=np.zeros(3)), types.SimpleNamespace(frac_coords=np.ones(3) / 2)],
+            bands={up: np.array([[-5.0, -4.0], [1.0, 0.5], [2.0, 3.0]])},
+            get_vbm=lambda: {"band_index": {up: [0]}, "energy": -4.0}, efermi=bs.efermi)
+    mods = {"pymatgen": types.ModuleType("pymatgen"), "pymatgen.io": types.ModuleType("pymatgen.io"),
+            "pymatgen.io.vasp": types.ModuleType("pymatgen.io.vasp"), "amset": types.ModuleType("amset"),
+            "amset.electronic_structure": types.ModuleType("amset.electronic_structure"),
+            "amset.electronic_structure.common": types.ModuleType("amset.electronic_structure.common"),
+            "amset.electronic_structure.symmetry": types.ModuleType("amset.electronic_structure.symmetry")}
+    mods["pymatgen.io.vasp"].Vasprun = Vasprun
+    mods["amset.electronic_structure.common"].get_band_structure = get_band_structure
+    mods["amset.electronic_structure.symmetry"].expand_bandstructure = expand_bandstructure
+    for k, v in mods.items():
+        monkeypatch.setitem(sys.modules, k, v)
+    return get_band_structure, Vasprun
+
+
+def test_load_dft_nodes_efermi_none(tmp_path, monkeypatch):
+    import adp_degen as ad
+    gbs, Vasprun = _fake_vasprun_modules(monkeypatch)
+    with pytest.raises(TypeError):                                     # 这就是实跑里的报错（修之前 load_dft_nodes 直接调它）
+        gbs(Vasprun("x", parse_dos=False))
+    vr = tmp_path / "vasprun.xml"
+    vr.write_text('<modeling>\n<dos>\n  <i name="efermi">      0.73210000 </i>\n</dos>\n</modeling>\n')
+    out = ad.load_dft_nodes(vr)
+    assert out["vb"]["up"] == 0 and out["E"]["up"].shape == (3, 2)
+    assert ad.vasprun_efermi(vr) == pytest.approx(0.7321)
+    vr.write_text("<modeling></modeling>\n")                           # 文件里也没有：带隙中点
+    assert ad.vasprun_efermi(vr, Vasprun("x", parse_dos=False)) == pytest.approx(0.8)
+    assert ad.load_dft_nodes(vr)["vb"]["up"] == 0
