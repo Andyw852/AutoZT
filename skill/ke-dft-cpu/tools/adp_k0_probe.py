@@ -67,7 +67,7 @@ def probe(rundir, spin="up", carrier="hole", k0=(0.0, 0.0, 0.0), win=0.05, out=p
         out("   ★ 一个非简并态都对不上（带号偏移错？）")
         return 1
     Xd = np.abs(np.real(np.einsum("pknn->pkn", m["X"])) - np.asarray(c)[:, None, None])
-    tol = np.maximum(ad.ALIGN_TOL_EV, ad.ALIGN_TOL_REL * np.median(Xd.reshape(len(c), -1), axis=1))
+    tol = np.maximum(ad.ALIGN_TOL_EV, ad.ALIGN_TOL_REL * np.nanmedian(Xd.reshape(len(c), -1), axis=1))
     for P, cc, sp, tt in zip(m["pairs"], c, spread, tol):
         flag = "" if sp <= tt else "  ★ 超过门槛 %.3f（矩阵会被拒）" % tt
         ok &= sp <= tt
@@ -109,6 +109,10 @@ def probe(rundir, spin="up", carrier="hole", k0=(0.0, 0.0, 0.0), win=0.05, out=p
     jA = _find_k(amp["kpoints"], k0) if amp else None
     for ip, P in enumerate(m["pairs"]):
         a_, b_ = P
+        if not np.all(np.isfinite(m["X"][ip, jm])):
+            out("   %s：★ k0 这一格缺（两侧对称像都没抽到）" % DW.PAT_NAMES[P])
+            ok = False
+            continue
         Xb = (m["X"][ip, jm] - c[ip] * np.eye(len(E)))[np.ix_(blk, blk)]
         Xb = 0.5 * (Xb + Xb.conj().T)
         Sp, Ap = ad.forward_k0(D0, Xb, delta)

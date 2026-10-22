@@ -1699,7 +1699,7 @@ def matrix_grid(path, spin_name, sgn, band_offset, gpoints):
         info["status"] = "对齐用不到任何非简并态（带号对不上？）"
         return None, info
     Xd = np.abs(np.real(np.einsum("pknn->pkn", data["X"])) - np.asarray(c)[:, None, None])
-    tol = np.maximum(ALIGN_TOL_EV, ALIGN_TOL_REL * np.median(Xd.reshape(len(c), -1), axis=1))
+    tol = np.maximum(ALIGN_TOL_EV, ALIGN_TOL_REL * np.nanmedian(Xd.reshape(len(c), -1), axis=1))
     info["align_eV"] = {"%d%d" % P: float(x) for P, x in zip(data["pairs"], c)}
     info["align_spread_eV"] = {"%d%d" % P: float(x) for P, x in zip(data["pairs"], spread)}
     if np.any(np.asarray(spread) > tol):

@@ -28,7 +28,7 @@ DELTA = 0.005
 REF_SHIFT = np.array([1.3, -0.7, 0.4, 0.0, 0.25, -0.15])          # 每个图样混进去的参考能级常数（eV）
 
 
-def _s7(tmp, n=4, ewin_k=30.0, ewin_b=1.5, plus_only=()):
+def _s7(tmp, n=4, ewin_k=30.0, ewin_b=1.5, plus_only=(), configs=None):
     """一套 S7：undeformed + 6 个图样 × ±δ，各写 WAVECAR、抽 deform_wave.h5。-> (根目录, 目录清单, 未形变数据)。
     plus_only：只有 +δ 的图样（AMSET deform create 按对称性约化后，立方的剪切常常只剩一侧）。"""
     kpts = E.mesh(n)
@@ -36,7 +36,8 @@ def _s7(tmp, n=4, ewin_k=30.0, ewin_b=1.5, plus_only=()):
     dirs, data0 = [], None
     for name, Em in [("undeformed", None)] + [("deform-%02d%s" % (i, "p" if s > 0 else "m"), E.pattern(P, s * DELTA))
                                               for i, P in enumerate(E.PATS) for s in (1, -1)
-                                              if not (s < 0 and P in plus_only)]:
+                                              if not (s < 0 and P in plus_only)
+                                              and (configs is None or (P, s) in configs)]:
         d = root / name
         d.mkdir(parents=True)
         dat = E.write_wavecar(d / "WAVECAR", kpts, E.lattice(Em), ENCUT, NB)
@@ -236,6 +237,45 @@ def test_one_sided_patterns_with_different_k_sets(tmp_path):
     assert sorted(summ2["one_sided"]) == ["xy", "xz", "yz"] and any("前向差分" in x for x in logs)
 
 
+def test_amset_reduced_set_xx_yz_only(tmp_path):
+    """[0061-m] Si 实跑：AMSET deform create 对立方只算 xx± 与 yz+（其余 AMSET 读本征值时用对称性补），
+    deformation_matrix.h5 原来只有两个图样，运行期判"缺图样"。现在 yy、zz 由 xx 转来，xy、xz 由 yz 转来，
+    各自的另一侧由镜面补，六个图样齐、都按中心差分，误差与真算的同一量级（< 1%）。"""
+    cfg = [((0, 0), 1), ((0, 0), -1), ((1, 2), 1)]
+    root, dirs, (kpts, dat) = _s7(tmp_path, n=4, configs=cfg)
+    assert len(dirs) == 3
+    logs = []
+    summ = DW.build(root, dirs, root.parent / "m.h5", log=logs.append)
+    assert sorted(summ["patterns"]) == sorted(DW.PAT_NAMES.values()) and summ["missing_patterns"] == []
+    assert summ["one_sided"] == [] and summ["spins"]["up"]["n_forward"] == {} and summ["spins"]["up"]["n_missing"] == {}
+    assert sorted(summ["derived"]) == ["xy", "xz", "yy", "yz", "zz"]
+    m = DW.load_matrix(root.parent / "m.h5", "up")
+    lut = {tuple(np.round(k * 4).astype(int) % 4): j for j, k in enumerate(kpts)}
+    worst = 0.0
+    for jj, k in enumerate(m["kpoints"]):
+        G, _e, V = dat[lut[tuple(np.round(k * 4).astype(int) % 4)]]
+        Xe = _exact_X(k, G, V, m["bands"], m["pairs"])
+        worst = max(worst, float(np.max(np.abs(m["X"][:, jj] - Xe)) / np.max(np.abs(Xe))))
+    assert worst < 1e-2
+
+
+def test_missing_symmetry_images_become_nan_and_grid_skips_them(tmp_path):
+    """能量窗口很窄、各构型抽到的 k 点不对称时，个别 k 点两侧的对称像都没有：记 NaN，StrainGrid 当缺格点（不出 NaN 结果）。"""
+    cfg = [((0, 0), 1), ((0, 0), -1), ((1, 2), 1)]
+    root, dirs, (kpts, _dat) = _s7(tmp_path, n=4, ewin_k=0.55, configs=cfg)
+    summ = DW.build(root, dirs, root.parent / "m.h5", log=lambda m: None)
+    m = DW.load_matrix(root.parent / "m.h5", "up")
+    bad = ~np.all(np.isfinite(m["X"]), axis=(0, 2, 3))
+    assert bad.sum() == sum(summ["spins"]["up"]["n_missing"].values()) or bad.any() == bool(summ["spins"]["up"]["n_missing"])
+    gpts = np.unique(np.concatenate([E.gvecs(k, E.L0, ENCUT) for k in E.mesh(4, tr_reduce=False)]), axis=0)
+    grid = DW.StrainGrid(m, gpts)
+    rng = np.random.default_rng(0)
+    v = rng.normal(size=(2, len(gpts))) + 0j
+    for k in m["kpoints"]:
+        r = grid.apply(k, v)
+        assert r is None or np.all(np.isfinite(r))
+
+
 def test_space_group_ops_diamond():
     """金刚石原胞：48 个操作（含非点式的平移）；xy 剪切能被某个操作变号，xx 不能（正应变在立方里不能变号）。"""
     ops = DW.space_group_ops(E.L0, np.array([E.TAU, 1 - E.TAU]), ["Si", "Si"])
@@ -314,7 +354,8 @@ def test_build_tolerates_different_ibz_k_counts(tmp_path):
     outB = tmp_path / "dm_onesided.h5"
     summB = DW.build(rootB, dirsB, outB, log=lambda *a: None)
     assert summB["n_k"] == len(kpts) - 1
-    assert summB["one_sided"] == [DW.PAT_NAMES[E.PATS[0]]]
+    # [0061-m] 缺的 xx+ 由 yy+ / zz+ 经对称操作补出（立方），仍是中心差分 —— 不再退回单侧
+    assert summB["one_sided"] == [] and DW.PAT_NAMES[E.PATS[0]] in summB["derived"]
     mB = DW.load_matrix(outB, "up")
     assert np.all(np.isfinite(mB["X"]))
-    assert _worst_vs_exact(mB, dat, kpts) < 0.2      # 单侧差分 O(δ) + 截断球 Pulay，比中心差分松一档
+    assert _worst_vs_exact(mB, dat, kpts) < 1e-2

@@ -69,6 +69,11 @@ This project adheres to Semantic Versioning; versions before 1.0.0 are developme
   difference, < 1% on the EPM bench vs ~10% for a forward difference). `load_dft_nodes` set `efermi` from the file
   when pymatgen leaves it None with `parse_dos=False` (AMSET's `get_band_structure` raised TypeError, so ADP_DEGEN had
   silently fallen back to plain AMSET in real runs).
+- `build()` now reconstructs every strain component AMSET's symmetry reduction left out, not only the missing sign:
+  for cubic Si `amset deform create` computes only xx± and yz+, so `deformation_matrix.h5` had 2 of 6 patterns and the
+  runtime rejected it ("缺图样"). yy/zz now come from xx and xy/xz from yz via space-group operations
+  (strain a·E_P -> a·RᵀE_P R), each with both signs, still a central difference (< 1% on the EPM bench).
+  k-points where neither side's symmetry image was extracted are stored as NaN and treated as missing grid points.
 - The matrix path's check at the valley centre now compares sums over the degenerate subspace. Per-band values of
   S7.1's energy-sorted ±δ central differences carry an O(δ) second-order error at a degeneracy (EPM Si Γ, ε_xx:
   ±0.7 eV per band, 0.1% on the sum), so the old per-band check could reject a correct DFT matrix; the per-band
