@@ -373,6 +373,37 @@ class S7StaticOnlyTests(unittest.TestCase):
         (ir / "CONTCAR").unlink()
         self.assertFalse(g.prepare_static_only(d))                  # 弛豫结构都没有：调用方整个重建
 
+    def test_relax_done_static_dead(self):
+        # [0067] 弛豫段跑完、静态段被杀：只补静态段，弛豫结果（CONTCAR.relax 等）不动
+        g, C = self.g, self.C
+        d = _finished_deform(self.td.name, "deform-01", g)
+        ir = d / "ionrelax"
+        self.assertFalse(g.relax_done_static_dead(ir))                # 静态段也收尾了
+        (ir / "OUTCAR").write_text("static killed by OOM\n")
+        self.assertFalse(g.relax_done_static_dead(ir))                # OUTCAR.relax 没收尾（夹具里是假文本）
+        (ir / "OUTCAR.relax").write_text("relax\n" + DONE)
+        self.assertTrue(g.relax_done_static_dead(ir))
+        (ir / "OUTCAR").unlink()
+        self.assertTrue(g.relax_done_static_dead(ir))                 # 静态段还没写出 OUTCAR 就死了
+        (ir / "OUTCAR").write_text("static killed by OOM\n")
+        self.assertTrue(g.prepare_static_only(d, False, "静态段没跑完", tag=g.STATIC_DEAD_TAG))
+        names = sorted(p.name for p in ir.iterdir())
+        self.assertTrue(any(re.match(r"OUTCAR\.nostatic-\d{14}$", n) for n in names), names)
+        for nm in ("OUTCAR.relax", "CONTCAR.relax", "vasprun.xml.relax"):
+            self.assertIn(nm, names)
+        self.assertFalse(C.ck_deform(str(d), {})[0])                  # 进 fan_todo
+        self.assertTrue(g.static_only_pending(ir))                    # 再 retry 也继续只补静态段
+        (ir / "CONTCAR.relax").write_text("")
+        self.assertFalse(g.relax_done_static_dead(ir))                # 空的 CONTCAR.relax 不算
+
+    def test_static_dead_wiring(self):
+        s = (S7 / "gen_step9_deform.py").read_text(encoding="utf-8")
+        m = s[s.index("def main():"):]
+        i = m.index("relax_done_static_dead(_irp)")
+        self.assertLess(m.index("static_only_pending(_irp)"), i)
+        self.assertLess(i, m.index("_done = False"))                  # 先于完成判据 -> 不会落到 _build_ionrelax
+        self.assertLess(i, m.index("_build_ionrelax(out / _name"))
+
     def test_main_loop_wiring(self):
         s = (S7 / "gen_step9_deform.py").read_text(encoding="utf-8")
         m = s[s.index("def main():"):]
