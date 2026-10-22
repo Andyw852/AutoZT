@@ -249,7 +249,7 @@ def _main():
     _routed = route_subcommand(sys.argv[1:])
     if _routed is not None:
         sys.exit(_routed)
-    from autozt import cmd_doctor, cmd_progress, write_progress, _watch_running_pid, _watch_files, _seg_proj_name
+    from autozt import cmd_doctor, cmd_progress, write_progress, _watch_running_pid, _watch_files, _watch_all_running, _watch_scope_key, _seg_proj_name
     from autozt import EXAMPLE_CONFIG, JSON_SCHEMA, AUTOZT_VERSION, USAGE, USAGE_EN, _PKG_ROOT, _add_diag_codes, _json_changes, _json_errors_only, _json_paginate, _dbg_t, _state_cache_load, _state_cache_save, _summary_json, _watch_cron, _watch_daemon, _watch_ensure, _watch_stop, apply_exclude, apply_hide_done, apply_skills, auto_advance, auto_fetch, auto_recover_hung, cmd_adopt, cmd_auto, cmd_auto_project, cmd_auto_skill, cmd_clean, cmd_conf, cmd_diagnose, cmd_fetch, cmd_hpc, cmd_init, cmd_level, cmd_migrate_subdir, cmd_rerun, cmd_retry, cmd_skills, cmd_start, cmd_status, cmd_step_init, cmd_stop, cmd_summary, cmd_watch, collect_data, fill_local_dim, filter_projs, filter_status, find_material, find_step, find_uninited, get_types, load_config, merge_project_configs, render_table, status_spec_has_scancel, cmd_schema, cmd_skill_show, cmd_correct, cmd_correct_usage, cmd_history, history_record, cmd_prove, set_active_cfg, cmd_act, cmd_approve, agent_direct_gate, agent_audit, cmd_session
     if "--help-all" in sys.argv[1:]:
         # 英文帮助：AUTOZT_LANG=en 或命令行 --lang en
@@ -481,14 +481,28 @@ def _main():
             sys.exit(_watch_cron(True))
         if a.uninstall:
             sys.exit(_watch_cron(False))
+        _wkey = _watch_scope_key(a, mat_toks, root)
         if a.stop:
-            sys.exit(_watch_stop(cfg))
-        _pid, _ = _watch_running_pid(cfg)
-        if _pid:
-            print("autozt monitor 已在后台运行 (PID %d)" % _pid)
-            print("日志：%s（tail -f 查看）；停止：autozt monitor --stop"
-                  % _watch_files(cfg)[1])
-            return
+            # 不带 -tt/-p/--project/目录 → 停全部实例；带了 → 只停该作用域
+            sys.exit(_watch_stop(cfg, None if _wkey == "global" else _wkey))
+        if _wkey == "global":
+            # 全局实例仍走 _watch_running_pid（单测 mock 它；也覆盖旧版 cwd pid 文件）
+            _gpid, _gpf = _watch_running_pid(cfg)
+            if _gpid:
+                print("autozt monitor 已在后台运行 (PID %d)" % _gpid)
+                print("日志：%s（tail -f 查看）；停止：autozt monitor --stop"
+                      % _watch_files(cfg, "global")[1])
+                return
+        else:
+            _wrunning = _watch_all_running(cfg)
+            _skill = _wkey.split("-")[0]
+            for _k, _pid, _pf in _wrunning:
+                if _k == "global" or _k.split("-")[0] == _skill:
+                    print("autozt monitor 已在后台运行 (PID %d，作用域 %s)"
+                          % (_pid, _k))
+                    print("与本次作用域重叠，不再重复启动（避免重复提交）；"
+                          "先停掉它：autozt monitor --stop")
+                    return
     cfg = apply_skills(cfg, verbose=True)
     # 只读技能库的命令用不到项目配置，在扫描 project_roots 之前就分派：
     # merge_project_configs 要遍历全部项目目录，WSL 9p 上每次 1–2 分钟。以前
@@ -556,10 +570,11 @@ def _main():
             sys.exit(_watch_cron(True))
         if a.uninstall:
             sys.exit(_watch_cron(False))
+        _wkey = _watch_scope_key(a, mat_toks, root)
         if a.stop:
-            sys.exit(_watch_stop(cfg))
+            sys.exit(_watch_stop(cfg, None if _wkey == "global" else _wkey))
         if a.restart:
-            _watch_stop(cfg)
+            _watch_stop(cfg, None if _wkey == "global" else _wkey)
             _watch_daemon(a, mat_toks, root, cfg)
             return
         if a.daemon:

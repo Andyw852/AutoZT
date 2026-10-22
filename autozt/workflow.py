@@ -1382,12 +1382,34 @@ def remote_gen(cfg, t, m, sname, host=None, wd=None):
             except (OSError, ValueError):
                 pass
             for _full in _files:
-                if os.path.getsize(_full) > 200 * 1024 * 1024:
+                # [2026-10-21 修] 上游重算后本地缓存里可能出现悬空符号链接
+                # （如 step8_amset/deformation.h5 -> ../step7b_deform_read/deformation.h5，
+                #  而后者已被 fetch 改名成 *.stale-*）：以前 getsize 直接抛 FileNotFoundError
+                # 让整个 gen 崩掉，zt 这种「汇总步」就推不动了。读不到的文件跳过即可。
+                # [2026-10-22 修] 本地缓存里的输出很多是符号链接（step4_wave/vasprun.xml ->
+                #  ../step3_uniform/vasprun.xml、deformation.h5 软链等）。以前按路径 tar/base64
+                #  推送会**保留符号链接**，到了目标集群链接目标不存在（依赖步骤没被 relay）
+                #  → 下游 gen 报"找不到 vasprun.xml/deformation.h5"，换集群跑 S8 必踩。
+                #  现在推送时解引用成真实文件内容（目标名保持原相对路径）。
+                _read_from = _full
+                if os.path.islink(_full):
+                    _tgt = os.path.realpath(_full)
+                    if not os.path.isfile(_tgt):
+                        continue                  # 悬空链接：跳过
+                    _read_from = _tgt
+                try:
+                    _size = os.path.getsize(_read_from)
+                except OSError:
+                    continue
+                if _size > 200 * 1024 * 1024:
                     continue                      # 大文件（WAVECAR 等）不随汇总步推送
                 _sub = os.path.relpath(_full, _srcdir)
                 _dst = os.path.join(_dstroot, _sub)
-                with open(_full, "rb") as _fh:
-                    _data = _fh.read()
+                try:
+                    with open(_read_from, "rb") as _fh:
+                        _data = _fh.read()
+                except OSError:
+                    continue
                 if os.path.dirname(_sub):
                     line += "mkdir -p %s ; " % shlex.quote(os.path.dirname(_dst))
                 line += "echo %s | base64 -d > %s ; " % (

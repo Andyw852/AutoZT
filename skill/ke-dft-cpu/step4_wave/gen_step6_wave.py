@@ -27,9 +27,35 @@ STEP_LABEL  = "S4_wave"
 # amset wave 命令（--planewave-cutoff 可按体系加大；见 amset 文档）
 # patch_v63_port2（2026-09-23）：链首 rm -f wavefunction.h5 —— 判据是 marker(wavefunction.h5:)，
 #   只看“文件在 + 含子串”；若 amset wave 失败而旧 h5 还在，整步会被判 OK、失败被隐藏（同 V63）。
-AMSET_CMD   = "rm -f wavefunction.h5; amset wave >> amset.log 2>&1 && ls -l wavefunction.h5"
+# [patch_vasp_type-2026-10-22] 新版 pymatgen（实测 hfeshell amset 环境 2026.5.18）的 Wavecar
+#   不再自动识别 vasp_type，而 amset 的 wavefunction/vasp.py 传的仍是 None，于是直接
+#       ValueError: Incorrect vasp_type=None. Please open an issue if you are certain...
+#   旧 pymatgen 环境不受影响。amset wave 本身有 --vasp-type std|ncl|gam 选项，按 uniform 步
+#   INCAR 的 LSORBIT 判：.TRUE. -> ncl（vasp_ncl 写的非共线 WAVECAR），否则 std。
+#   gam 不判：uniform 步一律 vasp_std / vasp_ncl，不会产出 vasp_gam 的 WAVECAR。
+AMSET_CMD   = ("rm -f wavefunction.h5; amset wave --vasp-type %s "
+               ">> amset.log 2>&1 && ls -l wavefunction.h5")
 LINK_FILES  = ["vasprun.xml", "WAVECAR"]   # 从 uniform 步软链过来
 # =================================================================
+
+
+def _vasp_type(cwd):
+    """[patch_vasp_type-2026-10-22] WAVECAR 的类型：看 uniform 步 INCAR 的 LSORBIT。
+
+    新版 pymatgen 不再自动识别 vasp_type，必须显式给 amset wave --vasp-type。
+    读不到 INCAR 时退回 "std"（保守：本技能 uniform 步默认就是 vasp_std）。
+    """
+    inc = Path(cwd) / UNIFORM_DIR / "INCAR"
+    try:
+        for ln in inc.read_text(errors="ignore").splitlines():
+            s = ln.split("#", 1)[0]
+            if "=" in s:
+                k, v = s.split("=", 1)
+                if k.strip().upper() == "LSORBIT" and v.strip().upper().startswith(".T"):
+                    return "ncl"
+    except Exception:
+        pass
+    return "std"
 
 
 def main():
@@ -68,8 +94,10 @@ def main():
     jobname = ("%s-ke-dft-cpu-%s" % (cwd.name, STEP_LABEL)) if not _HAS_KC \
         else kc.new_jobname(cwd, STEP_LABEL)
     _amset_env = kc.amset_env_name(cwd) if _HAS_KC else sys.exit("[ERROR] 无法 import ke_common 且 step.conf 缺 AMSET_ENV；请写 AMSET_ENV=<本集群 0.5.1 环境名>（jzzn/hanhai25=amset051、a800=amset_env、3090/hfeshell=amset）")
+    _vt = _vasp_type(cwd)
+    print("[OK] WAVECAR 类型：%s（--vasp-type %s）" % (_vt, _vt))
     text = (text.replace("{{JOBNAME}}", jobname)
-                .replace("{{AMSET_CMD}}", AMSET_CMD)
+                .replace("{{AMSET_CMD}}", AMSET_CMD % _vt)
                 .replace("{{AMSET_ENV}}", _amset_env))
     if "{{AMSET_ENV}}" in text:
         sys.exit("[ERROR] submit_amset.tpl 的 {{AMSET_ENV}} 未填充（step.conf 缺 AMSET_ENV？）")

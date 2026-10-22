@@ -20,7 +20,7 @@ remote_path_prefix: ""       # 可选：本机跑 gen/驱动脚本用的 python 
 # 两项都留空 ""  = 不激活任何环境，直接用 PATH 里现成的 python（pip/venv 用户最简单）。
 conda_sh: ~/miniconda3/etc/profile.d/conda.sh
 conda_env: atomate2_p_a
-amset_env: ""                # ke/zt 的 AMSET 步：venv 目录或 conda 环境名（留空则这些步 gen 时报错提示）
+amset_env: ""
 # ---- 提交模板 ----
 # 本机通用模板在 setting/local/templates/（VASP std/gam/ncl、amset、MACE、fc、ShengBTE、hamgnn）。
 # 清空集群专用映射：从 jzzn 等切过来时，旧 hpc.yaml 里的 template_map 会把模板

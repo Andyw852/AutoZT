@@ -113,6 +113,10 @@ SPEC = {
     # from 0.62 % (none) to 8.9 % and produced spurious imaginary modes.
     "PHEASY_RASR": ("auto", "str"),          # auto | BH | H | BHH | none
     "PHEASY_STD": (False, "bool"),           # standardise the training data
+    # [2026-10-22] 稀疏方法（LASSO/ALASSO/RFE-OLS/RIDGE 等）拟合时，二阶（谐）块
+    #   不应该参与稀疏惩罚/剪枝，否则 fc2 也被稀疏化，声子与热导都带偏。
+    #   true -> 向 pheasy 传 PHEASY_HARM_DENSE=1（生产 pheasy-gpu 已支持）。
+    "PHEASY_HARM_DENSE": (False, "bool"),
     # '' = auto: on when the resident GPU LASSO is requested (that backend only
     # accepts a TwoLevelSM, and pheasy builds a dense/CSR matrix for LASSO unless
     # this is on).  true/false force it.
@@ -886,6 +890,7 @@ def _gen_one(conf, out, job_label="S1fit"):
         "null_space_eps": float(conf["NULL_SPACE_EPS"] or 0.001),
         "pheasy_rasr": str(conf["PHEASY_RASR"] or ""),
         "pheasy_std": bool(conf["PHEASY_STD"]),
+        "pheasy_harm_dense": bool(conf["PHEASY_HARM_DENSE"]),
         "pheasy_lasso_twolevel": str(conf["PHEASY_LASSO_TWOLEVEL"] or ""),
         "pheasy_ngpu": p_ngpu,
         "pheasy_gpu_lasso_resident": str(conf["PHEASY_GPU_LASSO_RESIDENT"] or ""),

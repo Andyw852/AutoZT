@@ -121,7 +121,11 @@ SPEC = {"KSPACING_HSE": (KSPACING_HSE, "str"),
         "HYBRID": ("", "str"),
         "HYBRID_GGA": ("", "str"),
         "HYBRID_AEXX": (None, "float"),
-        "HYBRID_HFSCREEN": (None, "float")}
+        "HYBRID_HFSCREEN": (None, "float"),
+        # [2026-10-21] HSE 核数可被材料级 step.conf 覆盖（默认仍 96）：集群排不上 96 核
+        #   （只有 64 核节点可用）时可写 HSE_NTASKS_PER_NODE = 64 降核跑；只影响并行度，
+        #   不改变数值结果。写 0 或留空 = 用脚本默认 96。
+        "HSE_NTASKS_PER_NODE": (None, "int")}
 
 # ================= 带隙杂化泛函：step.conf 的 HYBRID（2026-10-14）=================
 # 只决定本步（带隙/能带）的杂化泛函，不改几何链（几何链的半局域 FUNC 见技能 step.conf）。
@@ -1137,13 +1141,25 @@ def build_step4_dir(out_dir, args, ctx, part=None):
     _override = dict(SUBMIT_OVERRIDE)
     _nkpts_scf, _nk_src = resolve_nkpts_scf(out_dir)
     _n_band = e - s                                  # 本目录实际的能带路径点数
+    # [2026-10-21] 材料级 step.conf 可覆盖核数（默认 96）：集群没有 96 核空位时降到 64 等。
+    _ntasks_large = NTASKS_PER_NODE_LARGE
+    try:
+        _cf = Path(stepconf.CONF_NAME)
+        if _cf.is_file():
+            _ov = stepconf.load(SPEC, None, ".", strict=False).get("HSE_NTASKS_PER_NODE")
+            if _ov:
+                _ntasks_large = int(_ov)
+                log.append("step.conf 覆盖 HSE 核数：ntasks-per-node=%d（脚本默认 %d）"
+                           % (_ntasks_large, NTASKS_PER_NODE_LARGE))
+    except Exception:
+        pass
     if _nkpts_scf is not None:
         _total_kpts = _nkpts_scf + _n_band
         if _total_kpts > KPTS_TOTAL_THRESHOLD:
-            _override["ntasks_per_node"] = NTASKS_PER_NODE_LARGE
+            _override["ntasks_per_node"] = _ntasks_large
             log.append("总 k 点 %d（自洽 %d + 能带 %d）> %d → 覆盖 ntasks-per-node=%d"
                        % (_total_kpts, _nkpts_scf, _n_band,
-                          KPTS_TOTAL_THRESHOLD, NTASKS_PER_NODE_LARGE))
+                          KPTS_TOTAL_THRESHOLD, _ntasks_large))
         else:
             log.append("总 k 点 %d（自洽 %d + 能带 %d）≤ %d → ntasks-per-node 保持模板默认"
                        % (_total_kpts, _nkpts_scf, _n_band, KPTS_TOTAL_THRESHOLD))

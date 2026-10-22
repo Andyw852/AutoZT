@@ -504,6 +504,8 @@ WAVE_H5 = "deform_wave.h5"
 WAVE_PY = "deform_wave.py"        # gen_need 推到材料目录
 MATRIX_H5_REL = Path("step7b_deform_read") / "deformation_matrix.h5"
 NOWAVE_TAG = "nowave"
+# [0067] 弛豫段已跑完、静态段 VASP 没跑完（OOM / 超时 / 磁盘满被杀）：只补静态段，归档后缀用这个
+STATIC_DEAD_TAG = "nostatic"
 
 
 def _deform_wave_params(proj):
@@ -599,7 +601,7 @@ def static_only_pending(irp):
     """上一次 gen 已转入"只补静态段"、静态段还没跑完：有 OUTCAR.nolocpot-* 归档 + CONTCAR.relax，
     静态段 OUTCAR 没有收尾标志。这种目录 retry 时继续只补静态段，不能整个重建（会毁掉弛豫段结果）。"""
     irp = Path(irp)
-    if not any(any(irp.glob("OUTCAR.%s-*" % _t)) for _t in (NOLOCPOT_TAG, NOWAVE_TAG)) \
+    if not any(any(irp.glob("OUTCAR.%s-*" % _t)) for _t in (NOLOCPOT_TAG, NOWAVE_TAG, STATIC_DEAD_TAG)) \
             or not (irp / "CONTCAR.relax").is_file():
         return False
     _oc = irp / "OUTCAR"
@@ -610,7 +612,26 @@ def static_only_pending(irp):
         return True
 
 
-def prepare_static_only(d, wave=False, why="缺 LOCPOT"):
+def relax_done_static_dead(irp):
+    """[0067] 弛豫段跑完（OUTCAR.relax 收尾 + CONTCAR.relax 非空）、静态段 OUTCAR 却没有收尾横幅。
+    submit.sh 只在弛豫段 rc=0 后才进静态段，所以这种目录的弛豫结果是完整的；以前主循环把它当"没算完"
+    交给 _build_ionrelax 整个清空重建（Mg2C60 deform-001..003：31 h 的弛豫在静态段 OOM 后会被一次 retry 删光）。"""
+    irp = Path(irp)
+    _cr = irp / "CONTCAR.relax"
+    try:
+        if not (_cr.is_file() and _cr.stat().st_size > 0):
+            return False
+        if "General timing and accounting informations" not in \
+                (irp / "OUTCAR.relax").read_text(errors="ignore")[-400000:]:
+            return False
+        _oc = irp / "OUTCAR"
+        return not (_oc.is_file() and "General timing and accounting informations"
+                    in _oc.read_text(errors="ignore")[-400000:])
+    except OSError:
+        return False
+
+
+def prepare_static_only(d, wave=False, why="缺 LOCPOT", tag=None):
     """deform-NN/：转成"只补 ionrelax 静态段"。成功返回 True；弛豫段结构都找不到时返回 False（调用方整个重建）。
     wave：[0061-m] 静态段同时写 WAVECAR；why：打印用的原因（缺 LOCPOT / 缺 deform_wave.h5）。
     归档后缀：缺 LOCPOT 用 nolocpot，只缺波函数用 nowave（static_only_pending 两种都认）。"""
@@ -629,7 +650,7 @@ def prepare_static_only(d, wave=False, why="缺 LOCPOT"):
         stat = _ionrelax_incars((d / "INCAR").read_text(encoding="utf-8"))[1]
     _st.write_text(static_only_incar(stat, wave), encoding="utf-8", newline="\n")
     _ts = _time.strftime("%Y%m%d%H%M%S")
-    _tag = NOLOCPOT_TAG if "LOCPOT" in why else NOWAVE_TAG
+    _tag = tag or (NOLOCPOT_TAG if "LOCPOT" in why else NOWAVE_TAG)
     _moved = []
     for _nm in STATIC_ONLY_ARCHIVE:
         _f = irp / _nm
@@ -917,6 +938,25 @@ def main():
                 if prepare_static_only(out / _name, _wave, "静态段补算未完成"):
                     _static.append(_name)
                     continue
+            # [0067] 弛豫段已完成、静态段被杀：只补静态段（从头起算，ISYM=0 的静态段本来也接不上 ISYM=2 弛豫段的
+            #   WAVECAR）。弛豫段的输入要与现行一致（vasprun.xml.relax 的回显）；判不了（回显缺失）时保留弛豫结果并告警
+            #   —— 宁可让用户看一眼，也不默默删掉一天的弛豫。
+            if relax_done_static_dead(_irp) and _ionrelax_grid_ok(out, _name):
+                _relax_now, _stat_now = _ionrelax_incars((out / _name / "INCAR").read_text(encoding="utf-8"),
+                                                         _ir_ediffg, _wave)
+                _why_r = _mismatch_wo_lwave(_relax_now, _irp / "vasprun.xml.relax")
+                if _why_r:
+                    print("[IONRELAX] %s：弛豫段已完成，但是旧 INCAR 跑的（%s），重建。"
+                          % (_name, "; ".join(_why_r[:4])))
+                else:
+                    if _why_r is None:
+                        print("[WARN] [0067] %s：vasprun.xml.relax 读不出 INCAR 回显，无法核对弛豫段输入；"
+                              "按现有弛豫结果只补静态段。要整个重算就 rerun 本步。" % _name)
+                    (_irp / "INCAR.static").write_text(_stat_now, encoding="utf-8", newline="\n")
+                    if prepare_static_only(out / _name, _wave, "静态段没跑完（被杀/OOM），弛豫段已完成",
+                                           tag=STATIC_DEAD_TAG):
+                        _static.append(_name)
+                        continue
             # 判据与 autozt 的 ck_deform 一致：**必须**在 OUTCAR 末尾看到 VASP 收尾
             # 横幅 "General timing and accounting informations" 才算完成。
             # 只判"文件存在"会把中途挂掉/被杀的 ionrelax 误当完成而跳过（用户

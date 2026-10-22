@@ -1991,29 +1991,65 @@ def cmd_migrate_subdir(cfg, data, proj, yes, dry):
 #   L6982  _watch_cfg_sig
 #   L7013  cmd_watch
 
-def _watch_files(cfg=None):
-    from autozt import WATCH_LOG, WATCH_PID
-    """watch 的 pid/log 路径：v1.10 起锚定配置文件所在目录（setting/），
-    在任何目录执行 autozt monitor --stop 都找得到；旧版 cwd 下的 pid 文件由
-    _watch_stop 兜底识别。"""
-    base = (cfg or {}).get("_config_dir") or os.getcwd()
-    return (os.path.join(base, WATCH_PID), os.path.join(base, WATCH_LOG))
+def _watch_scope_key(a=None, mat_toks=None, root=None):
+    """把 monitor 的作用域归一成 key：'global' 或 '<技能|multi>-<hash8>'。
 
-def _watch_running_pid(cfg=None):
-    from autozt import WATCH_PID
-    """返回在跑的后台监控 PID（没有在跑返回 None）。先看锚定位置，再看 cwd。"""
-    cands = [_watch_files(cfg)[0], os.path.abspath(WATCH_PID)]
-    for pidfile in dict.fromkeys(cands):
-        if not os.path.isfile(pidfile):
-            continue
-        try:
-            pid = int(open(pidfile).read().strip())
-        except ValueError:
-            pid = None
-        if pid and _watch_pid_alive(pid):
-            return pid, pidfile
-        os.remove(pidfile)
-    return None, None
+    2026-10-21 新增（用户需求「单独给某个材料开自动推进」）：monitor 现在可以按
+    技能/材料/项目/目录起多个后台实例，各自独立的 pid/log/进度文件。
+    作用域重叠（同技能，或一方是全局）时拒绝重复启动，避免同一材料被两个实例
+    重复提交作业。"""
+    import hashlib as _hl
+    tt = getattr(a, "tt", None) if a is not None else None
+    projs = _watch_proj_list(getattr(a, "proj", None) if a is not None else None)
+    projs += list(mat_toks or [])
+    project = getattr(a, "project", None) if a is not None else None
+    exclude = getattr(a, "exclude", None) if a is not None else None
+    if not (tt or projs or project or exclude or root):
+        return "global"
+    raw = "|".join([str(tt or ""), ",".join(sorted(str(x) for x in projs)),
+                    str(project or ""), str(exclude or ""), str(root or "")])
+    return "%s-%s" % (tt or "multi", _hl.sha1(raw.encode("utf-8")).hexdigest()[:8])
+
+
+def _watch_proj_list(v):
+    """把 -p 的值归一成列表：'Si' / 'A,B' / None 都能吃（以前列表推导会把字符串拆成字符）。"""
+    if not v:
+        return []
+    if isinstance(v, str):
+        return [x for x in v.split(",") if x]
+    return [str(x) for x in v]
+
+
+def _watch_scope_desc(a=None, mat_toks=None, root=None):
+    """作用域的人类可读描述（pid 旁的 .scope 文件、启动/停止提示用）。"""
+    tt = getattr(a, "tt", None) if a is not None else None
+    projs = _watch_proj_list(getattr(a, "proj", None) if a is not None else None)
+    projs += list(mat_toks or [])
+    bits = []
+    if tt:
+        bits.append("-tt %s" % tt)
+    if projs:
+        bits.append("-p %s" % ",".join(str(x) for x in projs))
+    if getattr(a, "project", None):
+        bits.append("--project %s" % a.project)
+    if getattr(a, "exclude", None):
+        bits.append("-x %s" % a.exclude)
+    if root:
+        bits.append(str(root))
+    return " ".join(bits) or "全局"
+
+
+def _watch_files(cfg=None, key="global"):
+    from autozt import WATCH_LOG, WATCH_PID
+    """watch 的 pid/log 路径：v1.10 起锚定配置文件所在目录（setting/）。
+    2026-10-21：按作用域分文件——'global' 保持旧文件名（向后兼容），其余作用域
+    加 .<key> 后缀，多实例互不覆盖。"""
+    base = (cfg or {}).get("_config_dir") or os.getcwd()
+    if not key or key == "global":
+        return (os.path.join(base, WATCH_PID), os.path.join(base, WATCH_LOG))
+    return (os.path.join(base, WATCH_PID + "." + key),
+            os.path.join(base, WATCH_LOG + "." + key))
+
 
 def _watch_pid_alive(pid):
     try:
@@ -2022,14 +2058,150 @@ def _watch_pid_alive(pid):
     except OSError:
         return False
 
+
+def _watch_scope_from_cmdline(pid):
+    """从 /proc/<pid>/cmdline 反推一个在跑 monitor 的真实作用域（key, desc）。
+
+    2026-10-21：改造前启动的旧 monitor 用的是全局 pid 文件，光看文件名会误判成
+    "全局实例"，从而挡住新的作用域实例。读 cmdline 里的 -tt/-p/--project/-x 和
+    尾部 root/材料参数即可还原。解析失败返回 (None, None)。"""
+    try:
+        with open("/proc/%d/cmdline" % int(pid), "rb") as _f:
+            toks = [t.decode("utf-8", "replace")
+                    for t in _f.read().split(b"\0") if t]
+    except (OSError, ValueError, TypeError):
+        return None, None
+    if "monitor" not in toks:
+        return None, None
+    _i = toks.index("monitor")
+    head, tail = toks[:_i], toks[_i + 1:]
+    tt = proj = project = exclude = None
+    j = 0
+    while j < len(head):
+        t = head[j]
+        if t in ("-tt", "--tt") and j + 1 < len(head):
+            tt = head[j + 1]; j += 2; continue
+        if t in ("-p", "--proj", "--material") and j + 1 < len(head):
+            proj = head[j + 1]; j += 2; continue
+        if t == "--project" and j + 1 < len(head):
+            project = head[j + 1]; j += 2; continue
+        if t in ("-x", "--exclude") and j + 1 < len(head):
+            exclude = head[j + 1]; j += 2; continue
+        j += 1
+    rest, k = [], 0
+    while k < len(tail):
+        if tail[k] in ("-i", "--interval") and k + 1 < len(tail):
+            k += 2; continue
+        rest.append(tail[k]); k += 1
+    root = rest[0] if rest else None
+    mats = rest[1:] if rest else []
+    _S = type("_WatchScope", (), {})()
+    _S.tt = tt
+    _S.proj = _watch_proj_list(proj)
+    _S.project = project
+    _S.exclude = exclude
+    return _watch_scope_key(_S, mats, root), _watch_scope_desc(_S, mats, root)
+
+
+def _watch_all_running(cfg=None):
+    """[(key, pid, pidfile), ...]：所有在跑的 monitor 实例（含旧版 cwd 文件兜底）。
+
+    key 优先按 /proc/<pid>/cmdline 解析出的真实作用域，解析不到才退回 pid 文件名
+    后缀（兼容旧实例）。"""
+    import glob as _glob
+    from autozt import WATCH_PID
+    base = (cfg or {}).get("_config_dir") or os.getcwd()
+    cands = []
+    for pf in sorted(_glob.glob(os.path.join(base, WATCH_PID + "*"))):
+        if pf.endswith(".scope") or pf.endswith(".json"):
+            continue
+        suffix = os.path.basename(pf)[len(WATCH_PID):].lstrip(".")
+        cands.append(("global" if not suffix else suffix, pf))
+    legacy = os.path.abspath(WATCH_PID)
+    if legacy not in [p for _, p in cands]:
+        cands.append(("global", legacy))
+    out, seen = [], set()
+    for key, pidfile in cands:
+        if pidfile in seen:
+            continue
+        seen.add(pidfile)
+        if not os.path.isfile(pidfile):
+            continue
+        try:
+            pid = int(open(pidfile).read().strip())
+        except (OSError, ValueError):
+            pid = None
+        if pid and _watch_pid_alive(pid):
+            _ck, _cd = _watch_scope_from_cmdline(pid)
+            out.append((_ck or key, pid, pidfile))
+        else:
+            try:
+                os.remove(pidfile)
+            except OSError:
+                pass
+    return out
+
+
+def _watch_running_pid(cfg=None, key="global"):
+    """返回指定作用域在跑的后台监控 PID（没有返回 (None, None)）。
+    key='global' 时先看锚定位置，再看旧版 cwd 文件。"""
+    from autozt import WATCH_PID
+    pidfile, _log = _watch_files(cfg, key)
+    cands = [pidfile]
+    if key in (None, "global"):
+        cands.append(os.path.abspath(WATCH_PID))
+    for pf in dict.fromkeys(cands):
+        if not os.path.isfile(pf):
+            continue
+        try:
+            pid = int(open(pf).read().strip())
+        except (OSError, ValueError):
+            pid = None
+        if pid and _watch_pid_alive(pid):
+            return pid, pf
+        try:
+            os.remove(pf)
+        except OSError:
+            pass
+    # 2026-10-21：改造前起的实例 pid 文件名还是全局的，按文件名找不到；退一步
+    # 从 cmdline 反推真实作用域再匹配（作用域 key 已按同一规则归一）。
+    if key and key != "global":
+        for _k, _pid, _pf in _watch_all_running(cfg):
+            if _k == key:
+                return _pid, _pf
+    return None, None
+
 def _watch_daemon(a, mat_toks, root, cfg=None):
-    """autozt monitor -d：把监控作为 detached 子进程放后台，日志写配置目录下。"""
-    pidfile, logfile = _watch_files(cfg)
-    pid, _ = _watch_running_pid(cfg)
-    if pid:
-        print("autozt monitor 已在后台运行 (PID %d)" % pid)
-        print("日志：%s（tail -f 查看）；停止：autozt monitor --stop" % logfile)
-        return
+    """autozt monitor -d：把监控作为 detached 子进程放后台，日志写配置目录下。
+
+    2026-10-21：按作用域分实例。`autozt -tt ke-dft-cpu -p Si monitor -d` 只监控
+    这一个材料（采集/推进都窄化到它），写自己的 pid/log/进度文件；与已有的全局
+    monitor 或同技能实例重叠时拒绝启动，避免同一材料被重复提交。"""
+    key = _watch_scope_key(a, mat_toks, root)
+    desc = _watch_scope_desc(a, mat_toks, root)
+    _running = _watch_all_running(cfg)
+    if key == "global":
+        if _running:
+            _k, pid, _pf = _running[0]
+            print("autozt monitor 已在后台运行 (PID %d，作用域 %s)" % (pid, _k))
+            print("日志：%s（tail -f 查看）；停止：autozt monitor --stop"
+                  % _watch_files(cfg, _k)[1])
+            return
+    else:
+        _skill = key.split("-")[0]
+        for _k, pid, _pf in _running:
+            if _k == "global" or _k.split("-")[0] == _skill:
+                print("autozt monitor 已在后台运行 (PID %d，作用域 %s)" % (pid, _k))
+                print("与本次作用域（%s）重叠，不再重复启动（避免重复提交）。" % desc)
+                print("先停掉它再起新的：autozt monitor --stop")
+                return
+    pidfile, logfile = _watch_files(cfg, key)
+    if key != "global":
+        try:
+            with open(pidfile + ".scope", "w", encoding="utf-8") as _f:
+                _f.write(desc + "\n")
+        except OSError:
+            pass
     argv = [sys.executable, os.path.realpath(sys.argv[0])]
     if a.config:
         argv += ["-c", a.config]
@@ -2052,24 +2224,40 @@ def _watch_daemon(a, mat_toks, root, cfg=None):
                          stderr=subprocess.STDOUT, start_new_session=True)
     with open(pidfile, "w") as f:
         f.write(str(p.pid))
-    print("autozt monitor 已转入后台 (PID %d)" % p.pid)
+    print("autozt monitor 已转入后台 (PID %d，作用域：%s)" % (p.pid, desc))
     print("日志：%s（tail -f %s 查看）" % (logfile, logfile))
-    print("停止：autozt monitor --stop")
+    print("停止：autozt monitor --stop（不带 -tt/-p = 停全部实例）")
 
-def _watch_stop(cfg=None):
-    """autozt monitor --stop：按 pid 文件停止后台监控（任意目录可执行）。"""
+def _watch_stop(cfg=None, key=None):
+    """autozt monitor --stop：停止后台监控（任意目录可执行）。
+
+    2026-10-21：支持多作用域实例。
+    · 不带作用域参数（key=None）→ 停**全部**实例（旧行为是只停全局，现改为全停）；
+    · 带 -tt/-p/--project/目录 → 只停该作用域实例。"""
     import signal as _sig
-    pid, pidfile = _watch_running_pid(cfg)
-    if pid:
-        os.kill(pid, _sig.SIGTERM)
+    if key and key != "global":
+        pid, pidfile = _watch_running_pid(cfg, key)
+        targets = [(key, pid, pidfile)] if pid else []
+    elif key == "global":
+        pid, pidfile = _watch_running_pid(cfg, "global")
+        targets = [("global", pid, pidfile)] if pid else []
+    else:
+        targets = _watch_all_running(cfg)
+    if not targets:
+        print("没有运行中的 autozt monitor。")
+        return 1
+    for _k, pid, pidfile in targets:
         try:
-            os.remove(pidfile)
+            os.kill(pid, _sig.SIGTERM)
         except OSError:
             pass
-        print("已停止 autozt monitor (PID %d)。" % pid)
-        return 0
-    print("没有运行中的 autozt monitor。")
-    return 1
+        for _pf in (pidfile, pidfile + ".scope"):
+            try:
+                os.remove(_pf)
+            except OSError:
+                pass
+        print("已停止 autozt monitor (PID %d，作用域 %s)。" % (pid, _k))
+    return 0
 
 def _watch_ensure(cfg):
     """v1.10 auto_watch：任何 tf 命令顺带确保后台监控在跑（没在跑就拉起）。
@@ -2079,8 +2267,9 @@ def _watch_ensure(cfg):
     if not cfg.get("auto_watch"):
         return
     try:
-        pid, _ = _watch_running_pid(cfg)
-        if pid:
+        # 2026-10-21：多作用域实例——只要有任何 monitor 在跑就不再补拉（避免与
+        # 作用域实例重叠导致重复提交）。
+        if _watch_all_running(cfg):
             return
         pidfile, logfile = _watch_files(cfg)
         argv = [sys.executable, os.path.realpath(sys.argv[0])]
@@ -2143,6 +2332,11 @@ def _watch_cfg_sig(cfg):
             sig.append((os.path.realpath(cp), st.st_mtime_ns, st.st_size))
         except OSError:
             pass
+    # 2026-10-21：作用域 monitor（-tt 技能 -p 材料 起的那种）只签主配置，不扫
+    # project_roots —— 9p 上全扫一轮要数分钟，作用域实例每轮白等。材料自己的
+    # setting.yaml（auto_advance 等）本来每轮由 auto_advance 现读，不依赖这条签名。
+    if cfg.get("_watch_narrow"):
+        return sig
     for r in (cfg.get("project_roots") or []):
         r = os.path.realpath(os.path.expanduser(r))
         if not os.path.isdir(r):
@@ -2240,8 +2434,20 @@ def cmd_watch(cfg, types, projs, exclude, interval, tt=None, root=None,
     print("监控模式：每 %d 秒刷新（auto-fetch + %s；配置改动自动重载），"
           "Ctrl+C 退出。" % (interval, _banner(cfg)))
     last = None
-    sig = _watch_cfg_sig(cfg)
     full_scope = not (projs or exclude or tt or root or project)
+    # 2026-10-21：作用域 monitor（-tt/-p/--project/目录起的那类）各写自己的进度
+    # 文件（.tf_progress.json.<scope>），不覆盖全局 monitor 的 .tf_progress.json；
+    # 配置签名走轻量模式（不逐轮全扫 project_roots，9p 上一轮能省数分钟）。
+    # ★ 必须在下面第一次 _watch_cfg_sig 之前设置，否则首轮仍按全量扫。
+    try:
+        _sa = type("_WatchScope", (), {})()
+        _sa.tt, _sa.proj, _sa.project, _sa.exclude = tt, projs, project, exclude
+        cfg["_progress_scope"] = _watch_scope_key(_sa, None, root)
+        cfg["_watch_narrow"] = bool(
+            full_scope is False and (tt or projs or project or exclude or root))
+    except Exception:
+        pass
+    sig = _watch_cfg_sig(cfg)
     rnd, prev_kinds, n_err = 0, None, 0
     try:
         while True:

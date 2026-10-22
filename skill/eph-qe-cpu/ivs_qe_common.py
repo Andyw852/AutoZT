@@ -259,6 +259,12 @@ def pw_input(calc, P, q1, prefix, outdir, kblock, nbnd=None, extra_sys=""):
         sys_lines.append("  nbnd = %s" % (nbnd if isinstance(nbnd, str) else int(nbnd)))
     if extra_sys:
         sys_lines.append(extra_sys.rstrip())
+    if calc == "nscf":
+        # [0059-r4] AHC 的 nscf 必须原样保留给定 k 列表：pw.x 默认按对称性扩增 k，
+        #   会让 ahc_gkk/etk/etq 的记录数变成输入 k 数的整数倍（MoS2 q=Gamma：2 -> 4 个 k），
+        #   ivs_qe_job.py 的尺寸校验和 ivs_dfpt.py 的逐 k 映射都会错位（Si 单 k 不暴露）。
+        sys_lines.append("  nosym = .true.")
+        sys_lines.append("  noinv = .true.")
     el = ["  conv_thr = %.3e" % float(P["IVS_SCF_CONV_THR"]), "  mixing_beta = 0.4"]
     if calc != "scf":
         el.append("  diago_full_acc = .true.")

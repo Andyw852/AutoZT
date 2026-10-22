@@ -41,6 +41,9 @@ defaults:
 
 fetch_files: [INCAR, POSCAR, CONTCAR, POTCAR, KPOINTS, KPOINTS_OPT, kpath.json,
               submit.sh, OUTCAR, EIGENVAL, vasprun.xml, queue.out, queue.err,
+              # [2026-10-22 修] S8/S8.4 的 gen 要读 step4_wave/wavefunction.h5；不在 fetch_files
+              #   会导致本地缓存没有它 → 跨集群 relay 缺文件 → 换集群跑 S8 直接失败（已两次踩）。
+              wavefunction.h5,
               workflow_method.txt, band_summary.json, settings.yaml,
               deformation.h5, deformation_vac.h5, band_edges.json,
               transport.json, amset.log]
@@ -311,7 +314,10 @@ optional_steps:
          # [0037] mesh_*.h5（每机制每 k 点散射率，3D 可达 GB 级）只给作业内本征后处理用，不回拉本地
          fetch_exclude: ["mesh_*.h5"],
          # [0036] step8.21_odp_read?：开了 odp_frozen 组就等冻声子参数（没开不提示缺）
-         needs: ["step4_wave", "step5_dielect", "step6_elastic", "step7b_deform_read", "step2_bandgap/step2.2_pbe_plot", "step2_bandgap/step2.3_hse_plot", "step8.21_odp_read?"]}
+         # [2026-10-22 修] 加 step3_uniform：gen 要读 step3_uniform/vasprun.xml（step4_wave 里
+         #   那个是软链到 step3 的）。不写进 needs 时跨集群 relay 不会带 step3_uniform，
+         #   链接在目标集群悬空 → gen 报"找不到 vasprun.xml"（换集群跑 S8 必踩）。
+         needs: ["step3_uniform", "step4_wave", "step5_dielect", "step6_elastic", "step7b_deform_read", "step2_bandgap/step2.2_pbe_plot", "step2_bandgap/step2.3_hse_plot", "step8.21_odp_read?"]}
 
 # --- 8.2 DPT 形变势迁移率：给 8.1 提供分方向 τ，必须排在 8.1 前面 ---
   dpt:

@@ -725,7 +725,9 @@ GAP_TOL_EV = 1e-3
 #   改 band_edges.json 的字段或口径时改这里，S8.2 会对旧文件告警。
 #   [V187] 2026-10-13：带边 hits 加 E1_zz_eV；3D 的 E1_iso_eV 改为 (D_xx+D_yy+D_zz)/3（以前照搬 2D 的面内平均，
 #   漏了 zz），字段 E1_iso_def 写明口径；另加 ionrelax_check（离子弛豫力判据核对）。
-BAND_EDGES_REV = "2026-10-13-v187-3d-ionrelax"
+#   [0061-m] 2026-10-22：S7.1 的对称补应变改用 dp_symmetrize.symmetrized_strain_mapping（AMSET 原版对 3/4/6 次轴
+#   补出来的应变标签错，立方的 xy/xz 互换）-> 对称约化过的 S7（立方、四方…）D 张量变了，旧 band_edges.json 要重跑 S7.1。
+BAND_EDGES_REV = "2026-10-22-0061m-strain-label"
 
 
 def consumer_bandgap(step_dir):

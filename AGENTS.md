@@ -135,6 +135,20 @@ autozt auto [on|off]                   # 开关自动推进；范围三级（写
 > 要给用户选项时，按"全局 / 技能 / 单材料"三级并列给出，别只给全局那一级。
 > 生效条件：`auto on` 只**翻开关 + 当场推进一轮**，**持续推进仍需后台 `monitor`/`auto_watch` 在跑**
 > （推进逻辑挂在 `status`/`watch` 的轮次里）；monitor 是长驻进程，改代码后**必须重启**才拿到新逻辑。
+>
+> **★ 单材料/单技能作用域 monitor（2026-10-21 新增）**：后台 monitor 支持按作用域起**多个实例**，
+> 各自独立的 pid/log/进度文件（`setting/.tf_watch.pid.<scope>`、`.tf_watch.log.<scope>`、
+> `.tf_progress.json.<scope>`），互不覆盖：
+> ```bash
+> autozt -tt <技能> -p <材料> monitor -d -i 300   # 只监控/推进这一个材料（采集也窄化到它，轮次快）
+> autozt -tt <技能> -p <材料> monitor --stop        # 只停这个作用域实例
+> autozt monitor --stop                          # 不带 -tt/-p = 停【全部】实例
+> ```
+> 冲突规则：作用域重叠（同技能，或任一方是全局）**拒绝启动**，避免同一材料被两个实例重复提交；
+> 旧版遗留的全局 pid 文件会从 `/proc/<pid>/cmdline` 自动还原真实作用域。
+> 典型场景：已有的全局 monitor 只带 `-tt opt-dft-cpu`（旧实例），要单独让 ke 的某个材料自动前进，
+> 就起一个 `-tt ke-dft-cpu -p <材料>` 作用域实例——两者互不干扰、各自推进。
+> `autozt progress` 读全局 `.tf_progress.json`；作用域实例的进度在同名 `.<scope>` 后缀文件里。
 > **改核数（含为缓解排队降核）的正确流程**（铁律 9，必须先请示）：
 > 1. 改提交模板 `setting/<hpc>/templates/submit_*.tpl` 的 `--ntasks-per-node`，及 `defects_common.build_job` 的 NCORE/KPAR（或项目级 `project_setting/templates/` 覆盖，优先级最高）；
 > 2. `autozt -p MAT -j STEP retry` —— 重新生成输入（保留 OUTCAR/CONTCAR，不删除产物）；

@@ -45,7 +45,13 @@ _LEDGER_PRUNE_BYTES = 1 << 20
 
 
 def progress_path(cfg):
-    return os.path.join((cfg or {}).get("_config_dir") or os.getcwd(), PROGRESS_NAME)
+    """进度文件路径。2026-10-21：作用域 monitor（-tt/-p 起的那类）各写自己的
+    .tf_progress.json.<scope>，不覆盖全局 monitor 的 .tf_progress.json。"""
+    base = (cfg or {}).get("_config_dir") or os.getcwd()
+    scope = (cfg or {}).get("_progress_scope")
+    if scope and scope != "global":
+        return os.path.join(base, PROGRESS_NAME + "." + scope)
+    return os.path.join(base, PROGRESS_NAME)
 
 
 def _iso(ts):

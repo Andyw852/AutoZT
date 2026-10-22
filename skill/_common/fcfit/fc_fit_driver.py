@@ -1762,6 +1762,12 @@ def _pheasy_env(method, phase, ncpu, natom_super, tuning="safe", ols_ridge=None,
             env["PHEASY_OLS_MAXITER"] = str(ols_maxiter)
     elif method == "RIDGE":
         env["PHEASY_USE_CELER"] = "0"
+    # [HARM_DENSE] Every sparse method prunes columns; without this flag pheasy
+    # prunes the SECOND-order block too and silently delivers a non-physical,
+    # over-sparsified fc2 (measured on Mg4C60 RFE-OLS: 51-58% of the harmonic
+    # columns removed).  FIX_FC2 / MAX_ORDER=2 make pheasy ignore it harmlessly.
+    if method in _SPARSE_METHODS:
+        env["PHEASY_HARM_DENSE"] = "1"
     # RFE-OLS-TSQR only: the feature-count criterion (aic | bic | cv).  pheasy's
     # default since the rename is aic with n = the force-component rows; 'cv'
     # reproduces RFE-OLS exactly.  Empty = leave pheasy's default.
@@ -1806,6 +1812,20 @@ def _apply_cv_knobs(env, cfg):
         v = str(cfg.get(key) or "").strip()
         if v:
             env[env_key] = v
+
+
+def _apply_harm_dense(env, cfg):
+    """PHEASY_HARM_DENSE=1：二阶（谐）力常数块不参与稀疏惩罚/剪枝。
+
+    [2026-10-22 用户要求] LASSO/ALASSO/RFE-OLS 这类稀疏方法只该用在三阶块上；
+    不设这个变量时 pheasy 会把**二阶块也一起惩罚/剪枝**，fc2 被稀疏化 → 声子
+    色散/热导都带偏。生产 pheasy-gpu（=pheasy-gpu-gh）自 2026-10 起支持该开关
+    （core/optimizer.py: os.environ["PHEASY_HARM_DENSE"]），但 AutoZT 此前没有
+    透传通道，所有稀疏拟合实际都没开。
+    """
+    v = str(cfg.get("pheasy_harm_dense") or "").strip().lower()
+    if v in ("1", "true", "yes", "on"):
+        env["PHEASY_HARM_DENSE"] = "1"
 
 
 def _run_streaming(cmd, env):
@@ -1969,6 +1989,56 @@ def _rel_err_gate(engine, rel, thr, out):
             "pheasy relative error %.4f\n" % rel)
         return True
     return False
+
+
+_SPARSE_METHODS = ("LASSO", "ALASSO", "RFE-OLS", "RFE-OLS-TSQR", "ARDR", "RVM")
+
+
+def _harm_dense_gate(method, enable_fc, out, metrics=None):
+    """[HARM_DENSE gate] Sparse fits must keep every second-order (harmonic) column.
+
+    pheasy only reports nnz_unpenalized / unpenalized_columns when
+    PHEASY_HARM_DENSE is active.  A missing field therefore means either the flag
+    was off (fc2 pruned) or the pheasy build is too old to certify it: both are a
+    FAIL -- never a silent pass.  The counts are recorded so post folds them into
+    fc_fit_summary.json via fit_metrics.json.
+    """
+    if method not in _SPARSE_METHODS or int(enable_fc or 3) < 3:
+        return metrics
+    metrics = dict(metrics or {})
+    out = Path(out)
+    man = {}
+    p = out / "fit_manifest.json"
+    if p.is_file():
+        try:
+            man = json.loads(p.read_text(encoding="utf-8"))
+        except Exception:
+            man = {}
+    env_val = str((man.get("environment") or {}).get("PHEASY_HARM_DENSE") or "")
+    res = man.get("results") or {}
+    n_kept = res.get("nnz_unpenalized")
+    n_free = res.get("unpenalized_columns")
+    metrics["harm_dense_env"] = env_val or None
+    metrics["harm_free"] = int(n_free) if n_free is not None else None
+    metrics["harm_kept"] = int(n_kept) if n_kept is not None else None
+    ok = (env_val.strip().lower() in ("1", "true", "yes", "on")
+          and n_kept is not None and n_free is not None
+          and int(n_free) > 0 and int(n_kept) == int(n_free))
+    if ok:
+        print("[OK] HARM_DENSE gate: %d / %d second-order columns kept"
+              % (int(n_kept), int(n_free)), flush=True)
+    else:
+        if n_kept is None or n_free is None:
+            why = ("fit_manifest.json lacks nnz_unpenalized/unpenalized_columns "
+                   "(PHEASY_HARM_DENSE off, or pheasy too old to certify)")
+        else:
+            why = "second-order columns were pruned (%d / %d kept)" % (
+                int(n_kept), int(n_free))
+        print("[FAIL] HARM_DENSE gate: sparse fit %s must keep every second-order "
+              "column: %s (PHEASY_HARM_DENSE=%r).  Refit with "
+              "PHEASY_HARM_DENSE=1." % (method, why, env_val or None), flush=True)
+        (out / ".fit_gate_fail").write_text("HARM_DENSE gate: %s" % why)
+    return metrics
 
 
 def cmd_fit_pheasy(cfg, out):
@@ -2146,6 +2216,7 @@ def cmd_fit_pheasy(cfg, out):
                 tsqr_criterion=tsqr_criterion)
             if phase == "fit":
                 _apply_cv_knobs(e, cfg)
+                _apply_harm_dense(e, cfg)
                 _reconcile_gpu_env(e, method, cfg)
             return e
         print("[..] 三阶截断扫描：候选 %s，bootstrap=%d"
@@ -2193,6 +2264,7 @@ def cmd_fit_pheasy(cfg, out):
                       cv_tol=(str(cfg.get("pheasy_cv_tol") or "").strip() or None),
                       tsqr_criterion=tsqr_criterion)
     _apply_cv_knobs(env, cfg)
+    _apply_harm_dense(env, cfg)
     gpu_info = _reconcile_gpu_env(env, method, cfg)
     _fmp = Path(out) / "fit_manifest.json"
     if _fmp.is_file():
@@ -2224,6 +2296,32 @@ def cmd_fit_pheasy(cfg, out):
     #                 every legitimate ENABLE_FC=2 run would be rejected.
     metrics = _pheasy_metrics(log_txt, out=out)
     metrics["pheasy_method"] = method
+    # 记录「配置的方法」与「实际交付的方法」。ALASSO/LASSO 的 CV 把 alpha* 选到 0 时
+    # pheasy 交付的是 OLS（这是合法结论，不是错误），但汇总表若只写 ALASSO 会让人误以为
+    # 交付了一个稀疏解；同时记 alpha* 的来源，区分「CV 的结论」与「求解器没算出 OLS 极限
+    # 造成的假象」。pheasy 的拟合逻辑不做改动，这里只做记录。
+    _cv_txt = log_txt or ""
+    _alpha_star = metrics.get("pheasy_alpha_opt")
+    if "a CV conclusion, not an optimiser artefact" in _cv_txt:
+        _alpha_src = "cv_conclusion"
+    elif ("OLS-limit reference not resolved" in _cv_txt
+          or "OLS-limit reference skipped" in _cv_txt):
+        _alpha_src = "optimiser_artefact"
+    elif method in ("ALASSO", "LASSO"):
+        _alpha_src = "unknown"
+    else:
+        _alpha_src = "not_applicable"
+    _delivered = method
+    if "the delivered fit is OLS" in _cv_txt or (
+            _alpha_star == 0 and method in ("ALASSO", "LASSO")):
+        _delivered = "OLS"
+    metrics["fit_method_configured"] = method
+    metrics["fit_method_delivered"] = _delivered
+    metrics["alpha_star"] = _alpha_star
+    metrics["alpha_star_source"] = _alpha_src
+    if _delivered != method:
+        print("[..] 配置方法 %s，实际交付 %s（alpha*=%s，来源 %s）"
+              % (method, _delivered, _alpha_star, _alpha_src), flush=True)
     metrics.update(gpu_info)
     if gpu_info.get("pheasy_gpu_requested") and not metrics.get("pheasy_gpu_used"):
         print("[WARN] PHEASY_USE_GPU/PHEASY_GPU_SM were requested but pheasy's "
@@ -2251,6 +2349,7 @@ def cmd_fit_pheasy(cfg, out):
         print("[..] pheasy force correlation %.3f -- ordinary model error (fc2 "
               "only, or cutoffs too small); widen PHEASY_C2_CUTOFF / "
               "PHEASY_C3_CUTOFF or fit fc3 as well if it matters" % mort, flush=True)
+    metrics = _harm_dense_gate(method, cfg.get("enable_fc"), out, metrics)
     _write_fit_metrics(out, metrics)
 
     # Relative-error hard gate (pheasy only): an atom-order mismatch (~0.10) or
@@ -3378,18 +3477,32 @@ def _fit_rmse(cfg, out, fc_dir=None, quiet=False):
         # apply_pheasy_fc_order (called in cmd_fit_pheasy) already normalises
         # fc2/fc3.hdf5 and SPOSCAR back to the dataset atom order, so
         # dataset_*.npy, SPOSCAR and the force constants share one order.
+        _fc3_bytes = _fc3_load_bytes(fcd)
+        _fc3_limit = float(cfg.get("fc3_load_gb_limit") or 8.0) * 1e9
+        _fc3_hard = float(cfg.get("fc3_materialise_gb_hard") or 40.0) * 1e9
+        _fc3_sampled = False
+        if _fc3_bytes is not None and _fc3_bytes > _fc3_hard:
+            # Never compare a fc2-only model against pheasy's fc2+fc3 error: that
+            # is a guaranteed FAIL and trains everybody to ignore the signal.
+            print("[..] fc3 full array %.1f GB > hard cap %.1f GB: self-check "
+                  "NOT_EVALUATED (refusing an fc2-only verdict)"
+                  % (_fc3_bytes / 1e9, _fc3_hard / 1e9), flush=True)
+            return {"fit_self_check": "not_evaluated",
+                    "fit_self_check_reason":
+                        "fc3_full_array_%.1f_GB_exceeds_%.1f_GB"
+                        % (_fc3_bytes / 1e9, _fc3_hard / 1e9)}
+        if _fc3_bytes is not None and _fc3_bytes > _fc3_limit:
+            _sample = int(cfg.get("fc3_sampled_frames") or 8)
+            if n > _sample:
+                n = _sample
+            _fc3_sampled = True
+            print("[..] fc3 full array %.1f GB > %.1f GB: sampling %d frame(s) "
+                  "with fc2+fc3 (no fc2-only fallback)"
+                  % (_fc3_bytes / 1e9, _fc3_limit / 1e9, n), flush=True)
         idx = np.linspace(0, len(disps) - 1, min(n, len(disps))).round().astype(int)
         sc = _read_poscar(out / "SPOSCAR")
         fc2 = _read_fc2_any(fcd)
-        fc3 = None
-        _fc3_bytes = _fc3_load_bytes(fcd)
-        _fc3_limit = float(cfg.get("fc3_load_gb_limit") or 8.0) * 1e9
-        if _fc3_bytes is not None and _fc3_bytes > _fc3_limit:
-            print("[..] fc3.hdf5 too large to materialise (%.1f GB > %.1f GB); "
-                  "evaluating the fc2-only residual" % (_fc3_bytes / 1e9, _fc3_limit / 1e9),
-                  flush=True)
-        else:
-            fc3 = _read_fc3_any(fcd, prim_dir=out)
+        fc3 = _read_fc3_any(fcd, prim_dir=out)
         arrays = {"fc2_array": fc2}
         if fc3 is not None:
             arrays["fc3_array"] = fc3
@@ -3412,7 +3525,8 @@ def _fit_rmse(cfg, out, fc_dir=None, quiet=False):
                   % (len(idx), rmse, rel if rel is not None else float("nan")),
                   flush=True)
         return {"fit_rmse_eV_per_A": rmse, "fit_rmse_relative": rel,
-                "fit_rmse_frames_used": int(len(idx))}
+                "fit_rmse_frames_used": int(len(idx)),
+                "fit_rmse_fc3_sampled": bool(_fc3_sampled)}
     except Exception as e:
         print("[..] fit-residual evaluation skipped: %s" % e, flush=True)
         return {}
@@ -3445,6 +3559,16 @@ def _postfit_self_check(cfg, out):
     ds_disps, _ = _load_dataset(out)
     cfg2["fit_rmse_frames"] = len(ds_disps)
     r = _fit_rmse(cfg2, out, quiet=True)
+    if r.get("fit_self_check") == "not_evaluated":
+        # 不能只用 fc2 去判 PASS/FAIL：那是拿另一个模型来检查，必然 FAIL，
+        # 时间长了所有人都会习惯性忽略 FAIL。明确报 NOT_EVALUATED 并挡住交付。
+        print("[FAIL] fit self-check NOT_EVALUATED (%s): the exported fc still "
+              "cannot be verified against pheasy's reported error; refusing to "
+              "certify this run." % r.get("fit_self_check_reason"), flush=True)
+        (out / ".fit_gate_fail").write_text(
+            "fit self-check not evaluated: %s" % r.get("fit_self_check_reason"))
+        return {"self_check": "not_evaluated",
+                "self_check_reason": r.get("fit_self_check_reason")}
     re_hiphive = r.get("fit_rmse_relative")
     if re_hiphive is None:
         return {}
@@ -3453,9 +3577,12 @@ def _postfit_self_check(cfg, out):
     # 误差按平方和叠加 hiphive ≈ sqrt(R² + M²)，所以 M ≈ sqrt(re_h² - re_p²)。
     # 数据误差大时相对偏差会变迟钝（M²/2R²），excess 不受影响。
     excess = float(np.sqrt(abs(float(re_hiphive) ** 2 - float(re_pheasy) ** 2)))
-    print("[self-check] pheasy re=%.5f hiphive(all-frames) re=%.5f "
+    _frames = int(r.get("fit_rmse_frames_used") or 0)
+    print("[self-check] pheasy re=%.5f hiphive(%d frame(s)%s) re=%.5f "
           "(rel dev %.2f%%, excess %.4f)"
-          % (re_pheasy, re_hiphive, 100.0 * rel_dev, excess), flush=True)
+          % (re_pheasy, _frames,
+             ", fc3 sampled" if r.get("fit_rmse_fc3_sampled") else "",
+             re_hiphive, 100.0 * rel_dev, excess), flush=True)
     # 相对偏差 >5% 或 excess >0.5%（绝对阈值，先按此值，可据实测调整）都判 FAIL
     if rel_dev > 0.05 or excess > 0.005:
         print("[FAIL] fit self-check: hiphive re-evaluation diverges from "
@@ -3467,6 +3594,8 @@ def _postfit_self_check(cfg, out):
             % (re_hiphive, re_pheasy, excess))
     return {"self_check_pheasy_re": float(re_pheasy),
             "self_check_hiphive_re": float(re_hiphive),
+            "self_check_frames": _frames,
+            "self_check_fc3_sampled": bool(r.get("fit_rmse_fc3_sampled")),
             "self_check_rel_dev": float(rel_dev),
             "self_check_excess": float(excess)}
 

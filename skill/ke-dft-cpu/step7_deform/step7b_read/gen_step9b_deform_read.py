@@ -118,8 +118,20 @@ try:
         return fn
 
     _PT.calculate_deformation_potentials, _PT.extract_bands, _IO.write_deformation_potentials = _calc, _extract, _write
+
+    # [0061-m 2026-10-22] AMSET 对称补应变的标签改正（见 dp_symmetrize.strain_label_rotation）：原版对 3/4/6 次轴
+    #   补出来的应变标错（立方 C3[111] 把 xy、xz 互换），deformation.h5 与 *_signed.h5 的剪切分量跟着错。
+    def _symm(bulk_structure, strain_mapping, **kw):
+        rep = {}
+        out = _DPS.symmetrized_strain_mapping(bulk_structure, strain_mapping, report=rep, **kw)
+        print("[strain_label_fix] 对称补了 %d 个应变，其中 %d 个 AMSET 原版会标成别的应变（已按 Rᵀ·E·R 改正）"
+              % (rep.get("added", 0), rep.get("relabeled", 0)), flush=True)
+        return out
+
+    _PT.get_symmetrized_strain_mapping = _symm
 except ImportError as _e:
-    print("[dp_signed][WARN] 不能 import dp_symmetrize（%s）：不写带符号形变势，对称化退回置换子群" % _e, flush=True)
+    print("[dp_signed][WARN] 不能 import dp_symmetrize（%s）：不写带符号形变势，对称化退回置换子群；"
+          "对称补应变用 AMSET 原版（3/4/6 次轴补出来的标签会错）" % _e, flush=True)
 
 if __name__ == "__main__":
     from amset.tools.cli import cli
@@ -1145,7 +1157,7 @@ from amset.constants import defaults
 from amset.deformation.io import write_deformation_potentials
 from amset.deformation.potentials import (
     calculate_deformation_potentials, extract_bands,
-    get_strain_mapping, get_symmetrized_strain_mapping, strain_coverage_ok)
+    get_strain_mapping, strain_coverage_ok)
 from amset.electronic_structure.common import get_ibands
 from amset.electronic_structure.symmetry import expand_bandstructure
 # bz_coverage_ok 在 tools/deformation 里，不在 deformation/potentials
@@ -1257,8 +1269,14 @@ if not calcs:
 
 sm = get_strain_mapping(bulk_struct, calcs)
 bulk["bandstructure"] = expand_bandstructure(bulk["bandstructure"], symprec=symprec)
-sm = get_symmetrized_strain_mapping(bulk_struct, sm, symprec=symprec,
-                                    symprec_deformation=symprec_def)
+# [0061-m 2026-10-22] 对称补应变用 dp_symmetrize 的改正版（AMSET 原版对 3/4/6 次轴补出来的应变标签错）
+sys.path.insert(0, str(Path.cwd().resolve().parent))
+import dp_symmetrize
+_rep = {}
+sm = dp_symmetrize.symmetrized_strain_mapping(bulk_struct, sm, symprec=symprec,
+                                              symprec_deformation=symprec_def, report=_rep)
+print("[strain_label_fix] 对称补了 %d 个应变，其中 %d 个 AMSET 原版会标成别的应变（已按 Rᵀ·E·R 改正）"
+      % (_rep.get("added", 0), _rep.get("relabeled", 0)))
 if not strain_coverage_ok(list(sm.keys())):
     raise RuntimeError("应变没有覆盖完整张量")
 if not bz_coverage_ok([bulk["bandstructure"]] + [c["bandstructure"] for c in sm.values()]):

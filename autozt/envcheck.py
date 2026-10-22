@@ -186,8 +186,8 @@ def _plan(cfg, keys, cluster_name, cluster):
 
 
 def _probe_script(groups, alts, fallback_py=None):
-    lines = ["_act() { local SH=\"$1\" ENV=\"$2\"; SH=\"${SH/#\\~/$HOME}\"; ENV=\"${ENV/#\\~/$HOME}\";",
-             "  if [ -n \"$ENV\" ] && [ -x \"$ENV/bin/python\" ]; then source \"$ENV/bin/activate\";",
+    lines = ["_act() { local SH=\"$1\" ENV=\"$2\"; SH=\"${SH/#\\~/$HOME}\"; ENV=\"${ENV/#\\~/$HOME}\"; _ENVDIR=\"\";",
+             "  if [ -n \"$ENV\" ] && [ -x \"$ENV/bin/python\" ]; then _ENVDIR=\"$ENV\"; source \"$ENV/bin/activate\";",
              "  elif [ -n \"$SH\" ] && [ -f \"$SH\" ]; then source \"$SH\";",
              "    if [ -n \"$ENV\" ]; then conda activate \"$ENV\"; fi;",
              "  elif [ -n \"$ENV\" ] && command -v conda >/dev/null 2>&1; then",
@@ -203,18 +203,21 @@ def _probe_script(groups, alts, fallback_py=None):
                               "paths": sorted(g["paths"]), "alts": alts})
         lines.append("echo '@@GROUP %d'" % i)
         lines.append(
-            "( _act %s %s >/dev/null 2>&1; _ok=1; "
-            "if [ -n %s ]; then _a=\"${VIRTUAL_ENV:-${CONDA_DEFAULT_ENV:-}}\"; "
-            "case \"$_a\" in *\"$(basename -- %s)\"*) ;; *) _ok=0;; esac; fi; "
+            "( _act %s %s >/dev/null 2>&1; _ENVQ=%s; _ok=1; "
+            "if [ -n \"$_ENVQ\" ]; then "
+            "  _p=$(command -v python3 2>/dev/null || command -v python 2>/dev/null); "
+            "  if [ -n \"$_ENVDIR\" ]; then case \"$_p\" in \"$_ENVDIR\"/*) ;; *) _ok=0;; esac; "
+            "  else _a=\"${VIRTUAL_ENV:-${CONDA_DEFAULT_ENV:-}}\"; "
+            "    case \"$_a\" in *\"$(basename -- \"$_ENVQ\")\"*) ;; *) _ok=0;; esac; fi; fi; "
             "_py=\"\"; if [ \"$_ok\" = 0 ]; then export PATH=\"$_ORIG_PATH\"; _py=\"$_FB\"; "
-            "elif [ -z %s ]; then _py=\"$_FB\"; fi; "
+            "elif [ -z \"$_ENVQ\" ]; then _py=\"$_FB\"; fi; "
             "[ -n \"$_py\" ] || _py=$(command -v python3 || command -v python); "
             "if [ -z \"$_py\" ]; then echo '@@NOPY'; else "
             "echo \"$_PYB64\" | base64 -d > \"${TMPDIR:-/tmp}/.autozt_probe_$$.py\"; "
             "\"$_py\" \"${TMPDIR:-/tmp}/.autozt_probe_$$.py\" %s; "
             "rm -f \"${TMPDIR:-/tmp}/.autozt_probe_$$.py\"; fi ) 2>/dev/null"
-            % (shlex.quote(sh), shlex.quote(env), shlex.quote(env), shlex.quote(env),
-               shlex.quote(env), shlex.quote(payload)))
+            % (shlex.quote(sh), shlex.quote(env), shlex.quote(env),
+               shlex.quote(payload)))
     return "\n".join(lines) + "\n"
 
 

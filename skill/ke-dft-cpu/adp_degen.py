@@ -1029,17 +1029,22 @@ def _strain_from_grid(grid, B, k0f, model, Zq, blocks, dim, sign_h5, bands):
     info["k0_in_s7"] = j0 is not None
     info["k0_rel_res"] = None
     if j0 is not None:
+        # 简并点上 S7.1 是按能量排序后取 ±δ 中心差分：±δ 下排在同一个带号上的是不同的组合，二阶项不抵消，逐带的 S
+        #   带 O(δ·|X_远带|²/ΔE) 的污染（EPM 硅 Γ 三重态 ε_xx：逐带差 ±0.7 eV；子空间内求和只差 0.1%）。
+        #   子空间内的和与排序无关、二阶项抵消 -> 用它核对；逐带残差只作诊断（k0_rel_res_per_band）。
         S0 = np.asarray(sign_h5["S"])[np.asarray(bands, int)][:, j0]
-        ra, da = [], []
+        ra, rb, da = [], [], []
         for P in pairs(dim):
             Sm, _A = forward_k0(model["D0"], pattern_op(Z, dim, P), delta)
-            ra.append(Sm - S0[:, P[0], P[1]])
+            ra.append([np.sum(Sm) - np.sum(S0[:, P[0], P[1]])])
+            rb.append(Sm - S0[:, P[0], P[1]])
             da.append(S0[:, P[0], P[1]])
         na = float(np.linalg.norm(np.concatenate(da)))
         info["k0_rel_res"] = float(np.linalg.norm(np.concatenate(ra)) / na) if na > 0 else None
+        info["k0_rel_res_per_band"] = float(np.linalg.norm(np.concatenate(rb)) / na) if na > 0 else None
         if info["k0_rel_res"] is not None and info["k0_rel_res"] > STRAIN_REL_TOL:
-            info["status"] = ("DFT 应变算符与 k0 点的带符号形变势对不上（相对残差 %.0f%% > %.0f%%）：带号或参考能级对齐有问题"
-                              % (100 * info["k0_rel_res"], 100 * STRAIN_REL_TOL))
+            info["status"] = ("DFT 应变算符与 k0 点的带符号形变势对不上（子空间内求和的相对残差 %.0f%% > %.0f%%）：带号或参考能级"
+                              "对齐有问题" % (100 * info["k0_rel_res"], 100 * STRAIN_REL_TOL))
             return None, info
     info["status"] = "ok"
     return Z, info
@@ -1067,7 +1072,7 @@ def _zk_table(grid, B, members, rlat, dense_kf, rcut, dim, vac_axis, g0=(0, 0, 0
                 continue
             keys[kk] = len(Zs)
             Zs.append(Z)
-    return keys, (np.array(Zs) if Zs else None)
+    return keys, (np.array(Zs, np.complex64) if Zs else None)         # 随 reference 复制进每个散射子进程：单精度够用
 
 
 def _win_eff(S, b, j0, delta):
@@ -1694,7 +1699,7 @@ def matrix_grid(path, spin_name, sgn, band_offset, gpoints):
         info["status"] = "对齐用不到任何非简并态（带号对不上？）"
         return None, info
     Xd = np.abs(np.real(np.einsum("pknn->pkn", data["X"])) - np.asarray(c)[:, None, None])
-    tol = np.maximum(ALIGN_TOL_EV, ALIGN_TOL_REL * np.median(Xd.reshape(len(c), -1), axis=1))
+    tol = np.maximum(ALIGN_TOL_EV, ALIGN_TOL_REL * np.nanmedian(Xd.reshape(len(c), -1), axis=1))
     info["align_eV"] = {"%d%d" % P: float(x) for P, x in zip(data["pairs"], c)}
     info["align_spread_eV"] = {"%d%d" % P: float(x) for P, x in zip(data["pairs"], spread)}
     if np.any(np.asarray(spread) > tol):
@@ -1822,8 +1827,7 @@ def runtime_tables(amset_data, rec, cijkl, dim=3, tag="[adp_degen]", report_path
             if off < 0 or off + nb > Ed.shape[0]:
                 raise ValueError("DFT 带号对不上 AMSET 的能量窗口（偏移 %d，AMSET %d 条，DFT %d 条）" % (off, nb, Ed.shape[0]))
             En = Ed[off:off + nb]
-            if abs(np.max(En[vb]) - np.max(Ea[vb])) > 0.05:
-                raise ValueError("DFT 与 AMSET 的价带顶差 %.3f eV：带号对不上" % (np.max(En[vb]) - np.max(Ea[vb])))
+            Ea, scis = undo_scissor(En, Ea, vb)                        # AMSET 的 bandgap / scissor 挪过的带挪回 DFT
             sgn = read_signed(rec.get("signed_h5") or "deformation_signed.h5", spin.name)
             try:
                 amp = read_amp(rec.get("deform_h5") or "deformation.h5", spin.name)
@@ -1842,6 +1846,7 @@ def runtime_tables(amset_data, rec, cijkl, dim=3, tag="[adp_degen]", report_path
             t, rp = setup(dft["kpoints"], En, make_coeff_fn(oc, spin), vb, rlat, rots, np.asarray(cijkl, float), sgn,
                           amp, dense=(np.asarray(amset_data.kpoints, float), Ea), dim=dim, efit=efit, nang=nang,
                           kunit="bohr", grid=grid)                     # amset_data.structure 是 bohr
+            rp["scissor_eV"] = scis
             if minfo is not None:
                 rp["matrix"] = minfo
             if t is not None and grid is not None:                     # [0061-m] 网格公式：有简并谷的那种载流子的全部带
@@ -1872,6 +1877,9 @@ def runtime_tables(amset_data, rec, cijkl, dim=3, tag="[adp_degen]", report_path
     for sn, rp in reports.items():
         if rp.get("status") == "ok":
             print("%s ADP 简并修正（%s）方式：%s；下面的放大系数是按初态比值口径的诊断值" % (tag, sn, how), flush=True)
+            if abs(rp.get("scissor_eV") or 0.0) > 1e-3:
+                print("%s AMSET 的剪刀 Δ = %.3f eV：价带 / 导带已挪回 DFT 再比对、拟合（k·p 与应变算符与剪刀无关）"
+                      % (tag, rp["scissor_eV"]), flush=True)
             for v in rp["valleys"]:
                 if v.get("status") == "ok":
                     print("%s %s" % (tag, summary_line(sn, v)), flush=True)
@@ -1889,6 +1897,21 @@ def _mesh_spacing(kfrac, rlat, dim, vac_axis=2):
     N, _sh = DW.infer_mesh(kfrac)
     ax = [a for a in range(3) if dim == 3 or a != vac_axis]
     return float(max(np.linalg.norm(np.asarray(rlat)[a]) / max(int(N[a]), 1) for a in ax))
+
+
+def undo_scissor(En, Ea, vb, tol=0.05):
+    """AMSET 设了 bandgap / scissor 时把价带整体挪 −Δ/2、导带 +Δ/2（amset.interpolation.bandstructure._shift_energies，
+    0.4.19 / 0.5.1 同），vasprun 的 DFT 能带没挪。En：DFT（带号已对齐到 AMSET），Ea：AMSET（eV），vb：价带顶带号。
+    -> (挪回 DFT 的 AMSET 能带, Δ（eV）)。价带顶、导带底的差不是一对 ±Δ/2（容差 tol，插值网格比 DFT 密，谷不在 DFT 格点上时
+    差几 meV）-> 带号真的对不上，抛 ValueError。"""
+    Ea = np.array(Ea, float, copy=True)
+    sv = float(np.max(En[vb]) - np.max(Ea[vb]))                        # 价带：+Δ/2
+    sc = float(np.min(En[vb + 1]) - np.min(Ea[vb + 1])) if vb + 1 < Ea.shape[0] else -sv   # 导带：−Δ/2
+    if abs(sv + sc) > tol:
+        raise ValueError("DFT 与 AMSET 的价带顶差 %.3f eV、导带底差 %.3f eV，不是剪刀的一对 ±Δ/2：带号对不上" % (sv, sc))
+    Ea[:vb + 1] += sv
+    Ea[vb + 1:] += sc
+    return Ea, sv - sc
 
 
 def summary_line(spin_name, v):
