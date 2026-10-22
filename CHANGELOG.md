@@ -14,6 +14,28 @@ This project adheres to Semantic Versioning; versions before 1.0.0 are developme
 
 ## [Unreleased]
 
+### Changed (2026-10-22: ke-dft-cpu S8/S4 — 环境类失败改为"开头自检 + 优雅降级")
+- 作业内自检（overlap_preflight.py --in-job 的 job_env_check）：除核对 amset 版本外，再逐项 import ase / spglib / BoltzTraP2.sphere。任一失败立刻拦截并打印修法（缺 ase -> pip install ase；spg_free_dataset -> spglib/BoltzTraP2 ABI 不匹配，换/重建 AMSET 环境）。起因：yue 的 conda_envs/amset 缺 ase，作业排队后跑到 15 分钟才炸。
+- gen 端 apply_mesh_min 在 gen 环境没有 BoltzTraP2 / pymatgen.io.ase（或 C 扩展与 spglib ABI 不匹配）时不再 ModuleNotFoundError 硬崩：打 WARN 跳过自动选网格，沿用 step.conf 的 INTERPOLATION_FACTOR。
+- 生成阶段内存自检：submit.sh 无 --mem/--mem-per-cpu 且关掉自动选网格时，若 --ntasks-per-node >= 8 就提示补 --mem-per-cpu（yue 默认 3.8GB/核，16 workers 只拿到 61GB，实测 1:35 被 OOM Killer 杀；改 12000M 后正常）。
+
+### Fixed (2026-10-22: [0067] ke-dft-cpu S7 retry no longer wipes a finished ionrelax relaxation)
+- When the relaxation segment of `ionrelax/` finished (OUTCAR.relax with the closing banner, non-empty CONTCAR.relax)
+  but the static segment was killed (OOM, timeout, disk full), `retry S7_deform` treated the directory as unfinished
+  and `_build_ionrelax` cleared it, discarding the relaxation (Mg2C60: three configurations, 31 h each). It now
+  re-runs only the static segment from CONTCAR.relax (ISTART=0, archive suffix `nostatic`), provided the k grid
+  matches and the relaxation INCAR echoed in vasprun.xml.relax matches the current one (unreadable echo: reuse with
+  a warning; mismatch: rebuild as before).
+
+### Fixed (2026-10-22: [0066] ke-dft-cpu HSE ALGO falls back to the S2.2 PBE gap)
+- `gen_step4_HSE.py` picks ALGO (SEMICONDUCTOR -> All, METAL/SEMIMETAL -> Damped) from the S2.15 discriminant OUTCAR.
+  S2.28 only needs S2.2, so when S2.15 was still queued (or had died from OOM) the stage-1 HSE SCF silently got the
+  default Damped; Mg2C60 made 64 electronic steps in 14 h. It now falls back to the S2.2 PBE OUTCAR with the same
+  band-index metric (ALGO only; the gate and discriminant.json still come from S2.15), and an unparsable S2.15
+  OUTCAR no longer stops the search.
+- `discriminant_common.py` added to the gen_need of S2.28_hsescf and S2.3_hse (it was imported but only present
+  when another step had left a copy in the material directory).
+
 ### Fixed (2026-10-22: ke-dft-cpu S7.1 — AMSET's symmetry-derived strains were mislabeled)
 - AMSET 0.4.19 / 0.5.1 `get_symmetrized_strain_mapping` moves a computed configuration's bands to k' = M·k
   (M = spglib Wᵀ, fractional) but labels the result R·E·Rᵀ; those bands belong to Rᵀ·E·R. The two agree for involutory
@@ -32,23 +54,6 @@ This project adheres to Semantic Versioning; versions before 1.0.0 are developme
   and SnSe Pnma).
 - `tools/adp_k0_probe.py` section 1b matches each signed-file pattern against ±X_Q and ½(±X_Q1 ±X_Q2) of the DFT
   strain matrix and flags patterns that line up with a different strain component.
-
-### Fixed (2026-10-22: [0067] ke-dft-cpu S7 retry no longer wipes a finished ionrelax relaxation)
-- When the relaxation segment of `ionrelax/` finished (OUTCAR.relax with the closing banner, non-empty CONTCAR.relax)
-  but the static segment was killed (OOM, timeout, disk full), `retry S7_deform` treated the directory as unfinished
-  and `_build_ionrelax` cleared it, discarding the relaxation (Mg2C60: three configurations, 31 h each). It now
-  re-runs only the static segment from CONTCAR.relax (ISTART=0, archive suffix `nostatic`), provided the k grid
-  matches and the relaxation INCAR echoed in vasprun.xml.relax matches the current one (unreadable echo: reuse with
-  a warning; mismatch: rebuild as before).
-
-### Fixed (2026-10-22: [0066] ke-dft-cpu HSE ALGO falls back to the S2.2 PBE gap)
-- `gen_step4_HSE.py` picks ALGO (SEMICONDUCTOR -> All, METAL/SEMIMETAL -> Damped) from the S2.15 discriminant OUTCAR.
-  S2.28 only needs S2.2, so when S2.15 was still queued (or had died from OOM) the stage-1 HSE SCF silently got the
-  default Damped; Mg2C60 made 64 electronic steps in 14 h. It now falls back to the S2.2 PBE OUTCAR with the same
-  band-index metric (ALGO only; the gate and discriminant.json still come from S2.15), and an unparsable S2.15
-  OUTCAR no longer stops the search.
-- `discriminant_common.py` added to the gen_need of S2.28_hsescf and S2.3_hse (it was imported but only present
-  when another step had left a copy in the material directory).
 
 ### Changed (2026-10-21: [0065] ke-dft-cpu S6_elastic cheaper defaults; S8.1 no longer waits for S6)
 - `S8.1_bt2` drops `step6_elastic` from its needs: it never reads the elastic constants (C only enters the DPT τ of

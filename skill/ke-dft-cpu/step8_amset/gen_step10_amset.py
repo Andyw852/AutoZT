@@ -2512,12 +2512,39 @@ def _fnum(v):
     return int(f) if f.is_integer() else round(f, 6)
 
 
+def _gen_mesh_deps_ok():
+    """gen 端（登录节点 python）能不能算插值网格：要 pymatgen.io.ase + BoltzTraP2.sphere。
+
+    [2026-10-22] 返回 (ok, 错误串)。这两项只影响"自动选网格"，不该拦住生成输入。
+    """
+    import importlib
+    for mod in ("pymatgen.io.ase", "BoltzTraP2.sphere"):
+        try:
+            importlib.import_module(mod)
+        except Exception as e:                               # noqa: BLE001
+            return False, "%s 导入失败：%s: %s" % (mod, type(e).__name__, e)
+    return True, ""
+
+
 def apply_mesh_min(vasprun_path, out):
     """patch_mesh_min：按最终插值网格下限反算 INTERPOLATION_FACTOR（模块级全局）。
-    返回 (factor, mesh) 或 None。"""
+    返回 (factor, mesh) 或 None。
+
+    [2026-10-22] gen 环境没有 BoltzTraP2 / ase（或它们的 C 扩展与 spglib ABI 不匹配）时**不再硬崩**：
+    那两项只用于"自动选网格"，不该拦住生成输入 —— 打 WARN 后跳过自动调整，沿用 step.conf 的
+    INTERPOLATION_FACTOR。（yue 实测：gen 用 autozt venv，没有 BoltzTraP2，旧行为直接
+    ModuleNotFoundError 退出，整步卡死。）
+    """
     global INTERPOLATION_FACTOR
     lo, lo_z = MESH_MIN, MESH_MIN_KZ
     if not lo and not lo_z and not MESH_MAX:
+        return None
+    _dep_ok, _dep_err = _gen_mesh_deps_ok()
+    if not _dep_ok:
+        print("[WARN] gen 环境跑不了自动选网格（%s）—— 跳过 MESH_MIN/MESH_MAX，沿用 "
+              "INTERPOLATION_FACTOR=%s。要自动选网格：给 gen 用的 python 装齐 pymatgen/BoltzTraP2"
+              "（注意与 spglib 的 ABI 匹配），或在 step.conf [params] 显式写 INTERPOLATION_FACTOR，"
+              "或写 MESH_MIN = 0 关掉自动调整。" % (_dep_err, INTERPOLATION_FACTOR))
         return None
     try:
         import json as _json
@@ -3096,6 +3123,18 @@ def main():
         kc.check_amset_submit(_tpl_raw, text, _amset_env, tpl.name)
     submit.write_text(text, encoding="utf-8", newline="\n")
     stepconf.apply_submit(submit, stepconf.read_submit(stepconf.CONF_NAME))
+    # [2026-10-22] 显式内存自检：集群默认"按核给内存"（yue 是 3.8GB/核），AMSET workers 多时
+    #   会在算到中段被 OOM Killer 杀（实测 16 workers × 3.8GB = 61GB 不够，跑 1:35 才死，白占节点）。
+    #   MESH_MIN/MESH_MAX 关掉时 gen 拿不到网格、做不了内存粗估，这里退一步至少提示申请内存。
+    _sub_txt = submit.read_text(encoding="utf-8")
+    if "--mem" not in _sub_txt and _fm is None:
+        _m = re.search(r"--ntasks-per-node=(\d+)", _sub_txt)
+        _n = int(_m.group(1)) if _m else 0
+        if _n >= 8:
+            print("[WARN] submit.sh 没有显式内存申请（--mem / --mem-per-cpu），且本步关掉了自动选网格 —— "
+                  "无法做内存粗估。集群若按核给内存（如 3.8GB/核），%d 个 AMSET worker 可能中途被 "
+                  "OOM Killer 杀（yue 实测 16 workers 只拿到 61GB 不够）。修法：在该集群的 "
+                  "submit_amset.tpl 里加 #SBATCH --mem-per-cpu=12000M（或 --mem=180G），再 retry 生成。" % _n)
     # patch_mem_guard：最终网格 -> 作业级内存粗估（区间）；可选自动独占节点
     if _HAS_KC and _fm:
         _lo, _hi, _lvl = kc.mem_guard(_fm[1], MEM_WARN_GIB, MEM_LIMIT_GIB, label=STEP_LABEL)

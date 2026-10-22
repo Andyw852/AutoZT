@@ -686,6 +686,31 @@ def run(cwd, out_dir=None, unity_overlap=False, desym_fix=None):
 #   别的环境里别的版本 —— 后者不报错、结果口径不对。本项目只认 0.5.1（AZ_AMSET_REQUIRED=any 可跳过）。
 REQUIRED_AMSET = "0.5.1"
 
+# [2026-10-22] 作业内依赖自检：环境"能 import amset"不等于能算。实测两种漏检的坑：
+#   ① AMSET 环境缺 ase —— pymatgen.io.ase.AseAtomsAdaptor 在算到结构转换时才炸
+#      （yue conda_envs/amset：排队 2 小时、跑到 15 分钟才报，白占节点）；
+#   ② BoltzTraP2 的 C 扩展与 spglib ABI 不匹配（undefined symbol: spg_free_dataset）。
+#   这两种都能在作业开头几秒内测出来，直接拦掉、给出修法，别浪费排队时间。
+_AMSET_RUNTIME_MODS = (
+    ("ase", "缺 ase（pymatgen.io.ase.AseAtomsAdaptor 依赖）：在 AMSET 环境里 pip install ase"),
+    ("spglib", "缺 spglib：conda install -c conda-forge spglib=1.16.5（与 AMSET 0.5.1 配套）"),
+    ("BoltzTraP2.sphere", "BoltzTraP2 的 C 扩展导入失败（常见 undefined symbol: spg_free_dataset —— "
+                          "spglib 与 BoltzTraP2 的 ABI 不匹配）：换/重建 AMSET 环境"
+                          "（conda-forge amset=0.5.1 + spglib=1.16.5），别在同一环境混装两套 BoltzTraP2"),
+)
+
+
+def _amset_runtime_dep_problems():
+    """逐项 import AMSET 运行期必需的第三方模块，返回 [(模块, 异常, 修法)]。"""
+    import importlib
+    bad = []
+    for mod, hint in _AMSET_RUNTIME_MODS:
+        try:
+            importlib.import_module(mod)
+        except Exception as e:                               # noqa: BLE001
+            bad.append((mod, e, hint))
+    return bad
+
 
 def job_env_check():
     """返回 (ok, 说明)。只在 --in-job 时调（登录节点上本来就可能没装 AMSET）。"""
@@ -700,7 +725,14 @@ def job_env_check():
     if want.lower() != "any" and ver != want:
         return False, ("当前 python（%s）的 amset 是 %s，不是 %s —— 激活的不是本集群的 AMSET 0.5.1 环境"
                        "（看 submit.sh 的 conda activate 与 step.conf 的 AMSET_ENV）" % (sys.executable, ver, want))
-    return True, "amset %s（%s）" % (ver, sys.executable)
+    bad = _amset_runtime_dep_problems()
+    if bad:
+        return False, ("当前 python（%s）的 amset %s 能 import，但运行期依赖不全（作业中途必崩）：\n%s"
+                       "\n       修法：改好 AMSET 环境后重交本步即可（输入不用重新生成）。"
+                       % (sys.executable, ver,
+                          "\n".join("       - %s：%s: %s —— %s" % (m, type(e).__name__, e, h)
+                                    for m, e, h in bad)))
+    return True, "amset %s（%s）+ 运行期依赖齐全" % (ver, sys.executable)
 
 
 def main():
