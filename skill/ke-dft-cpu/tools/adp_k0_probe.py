@@ -8,6 +8,8 @@ S8 的 adp_degen_fit.json 报"形变势矩阵不用 / k0 点对不上"时用。�
   deformation_matrix.h5（deform_wave build 的 X，未对齐）
 打印：
   1. 对齐（adp_degen.matrix_grid 同一判据）：每个图样的参考能级常数 c_P、离散度、用到的态数；带号偏移来源；
+  1b. 标签核对（label_scan）：带符号文件的每个图样对上 X 的哪个 ±X_Q / ½(±X_Q1 ±X_Q2)；对上别的图样 = AMSET 对称补应变
+      标错（S7.1 早于 2026-10-22 的标签改正，立方 Si 的 xy、xz）；
   2. k0 处子空间（离带边 --win 以内、在 k0 简并的带）：每个图样
        · 带符号文件的 S0、幅值文件的 A0；
        · 矩阵块 X（对齐后）的本征值；
@@ -34,6 +36,55 @@ def _find_k(kf, k0, tol=1e-4):
     d = d - np.round(d)
     i = np.where(np.linalg.norm(d, axis=1) < tol)[0]
     return int(i[0]) if len(i) else None
+
+
+def label_scan(m, S, kS, off, delta):
+    """带符号文件的每个图样 q，拿矩阵的 ½(σ1·X_Q1 + σ2·X_Q2)（含单个 ±X_Q）逐一按对齐判据配：返回
+    {q: (对自己 X_q 的离散度, 最好的组合文字, 它的离散度, 门槛)}。AMSET 对称补应变标错（S7.1 早于 2026-10-22 的
+    标签改正）时，±两侧都标错的图样对上别的 ±X_Q，只错一侧的对上 ½(X_q ± X_Q)。态取所有图样都能用的非简并态。"""
+    import adp_degen as ad
+    import deform_wave as DW
+    S = np.asarray(S, float)
+    lut = {kk: j for j, kk in enumerate(DW._keys(kS))}
+    jS = np.array([lut.get(kk, -1) for kk in DW._keys(m["kpoints"])])
+    Xd = np.real(np.einsum("pknn->pkn", m["X"]))
+    E = m["eig"]
+    gap = np.full(E.shape, np.inf)
+    if E.shape[1] > 1:
+        dE = np.abs(np.diff(E, axis=1))
+        gap[:, :-1] = np.minimum(gap[:, :-1], dE)
+        gap[:, 1:] = np.minimum(gap[:, 1:], dE)
+    gap[:, 0] = gap[:, -1] = 0.0
+    sb = np.asarray(m["bands"], int) - off
+    ok = (jS[:, None] >= 0) & ((sb >= 0) & (sb < S.shape[0]))[None, :] & np.all(np.isfinite(Xd), axis=0)
+    ok &= gap > max(DW.GAP_ND, 4 * delta * float(np.nanmax(np.abs(Xd))))
+    jk, n = np.where(ok)
+    if not len(jk):
+        return {}
+    xv = Xd[:, jk, n]
+    pats = [tuple(P) for P in m["pairs"]]
+    cand = []
+    for i, Q1 in enumerate(pats):
+        for s1 in (1, -1):
+            cand.append(("%sX_%s" % ("+" if s1 > 0 else "−", DW.PAT_NAMES[Q1]), s1 * xv[i]))
+            for j in range(i + 1, len(pats)):
+                for s2 in (1, -1):
+                    cand.append(("½(%sX_%s %sX_%s)" % ("+" if s1 > 0 else "−", DW.PAT_NAMES[Q1], "+" if s2 > 0 else "−",
+                                                     DW.PAT_NAMES[pats[j]]), 0.5 * (s1 * xv[i] + s2 * xv[j])))
+
+    def _sp(v):
+        return float(1.4826 * np.median(np.abs(v - np.median(v))))
+
+    res = {}
+    for q in DW.ALL_PATS:
+        a, b = q
+        sv = S[sb[n], jS[jk], a, b]
+        own = _sp(xv[pats.index(q)] + sv) if q in pats else np.inf
+        sps = [_sp(c + sv) for _, c in cand]
+        ib = int(np.argmin(sps))
+        tol = max(ad.ALIGN_TOL_EV, ad.ALIGN_TOL_REL * float(np.median(np.abs(sv - np.median(sv)))))
+        res[q] = (own, cand[ib][0], sps[ib], tol)
+    return res
 
 
 def probe(rundir, spin="up", carrier="hole", k0=(0.0, 0.0, 0.0), win=0.05, out=print):
@@ -77,6 +128,21 @@ def probe(rundir, spin="up", carrier="hole", k0=(0.0, 0.0, 0.0), win=0.05, out=p
         c2, sp2, _n2 = DW.alignment(m, sgn["S"], sgn["kpoints"], off + d_, delta)
         if sp2 is not None:
             out("   （对照：带号偏移 %+d 时离散度最大 %.3f eV —— 应明显大于上面）" % (d_, float(np.max(sp2))))
+    # 1b. 标签核对
+    scan = label_scan(m, sgn["S"], sgn["kpoints"], off, delta)
+    if scan:
+        out("== 1b. 标签核对：带符号文件的每个图样实际对上 X 的哪个组合（AMSET 对称补应变标错时剪切会对到别的图样上）")
+        bad = []
+        for q, (own, best, sb_, tt) in scan.items():
+            nm = DW.PAT_NAMES[q]
+            wrong = own > tt and sb_ <= tt and best != "+X_" + nm
+            bad += [nm] if wrong else []
+            out("   S_%s：对 X_%s 离散度 %s；最好 %s %.4f eV%s" % (
+                nm, nm, "—" if not np.isfinite(own) else "%.4f" % own, best, sb_, "  ★ 标签错" if wrong else ""))
+        if bad:
+            ok = False
+            out("   ★ %s 是 AMSET 对称补应变标错的（S7.1 早于 2026-10-22 的标签改正）：deformation.h5 / *_signed.h5 的"
+                "这些分量都错，S7.1 换成新版后重跑（只是重读，不重算 S7）" % "、".join(bad))
     # 2. k0
     jm = _find_k(m["kpoints"], k0)
     jS = _find_k(sgn["kpoints"], k0)

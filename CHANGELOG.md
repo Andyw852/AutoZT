@@ -14,6 +14,25 @@ This project adheres to Semantic Versioning; versions before 1.0.0 are developme
 
 ## [Unreleased]
 
+### Fixed (2026-10-22: ke-dft-cpu S7.1 — AMSET's symmetry-derived strains were mislabeled)
+- AMSET 0.4.19 / 0.5.1 `get_symmetrized_strain_mapping` moves a computed configuration's bands to k' = M·k
+  (M = spglib Wᵀ, fractional) but labels the result R·E·Rᵀ; those bands belong to Rᵀ·E·R. The two agree for involutory
+  operations (mirrors, 2-fold axes, inversion) and differ for 3/4/6-fold axes: for cubic Si, `amset deform create`
+  computes only xx± and yz±, and the C3[111]-derived xy and xz are swapped (xy+, xz± bands off by 0.22 eV on the EPM
+  bench, replaying AMSET's own source). The Laue-group symmetrization in S7.1 does not average it out: the whole S7.1
+  chain on the EPM bench gave BZ-averaged shear |D| of 3.45 eV (valence top) and 1.37 eV (conduction bottom) against
+  7.23 / 5.04 eV with all 12 strains computed; diagonal components were unaffected.
+- S7.1 now uses `dp_symmetrize.symmetrized_strain_mapping` (AMSET's loop with the label changed to `strain.rotate(Rᵀ)`)
+  in both the `amset deform read` wrapper and the 2D vacuum-reference path; it matches the 12-strain result exactly.
+  The log line `[strain_label_fix]` reports how many derived strains AMSET would have labeled differently.
+- `BAND_EDGES_REV` is bumped, so S8.2 warns on band_edges.json from older S7.1 runs. Affected: cubic (shear xy/xz
+  swapped; yy/zz too, depending on which operation AMSET picks first) and tetragonal (C4 flips the sign of xz/yz). These
+  need S7.1 rerun (a re-read only, no S7 recomputation). Hexagonal, trigonal, orthorhombic and lower symmetries derive
+  single-component strains through involutory operations only and do not change (checked per operation for MoS2 P-6m2
+  and SnSe Pnma).
+- `tools/adp_k0_probe.py` section 1b matches each signed-file pattern against ±X_Q and ½(±X_Q1 ±X_Q2) of the DFT
+  strain matrix and flags patterns that line up with a different strain component.
+
 ### Changed (2026-10-21: [0065] ke-dft-cpu S6_elastic cheaper defaults; S8.1 no longer waits for S6)
 - `S8.1_bt2` drops `step6_elastic` from its needs: it never reads the elastic constants (C only enters the DPT τ of
   `S8.2_dpt`, which S8.1 still needs, so semiconductors wait for S6 through S8.2 as before). Metals (dpt group off)

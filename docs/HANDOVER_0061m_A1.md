@@ -4,7 +4,42 @@
 
 ---
 
-## 续（2026-10-21 第二个会话）—— 先看这一节
+## 续（2026-10-22，第三个会话）—— Si 真机跑出来的问题与修复（先看这一节）
+
+| 提交 | 内容 |
+|---|---|
+| `317a1f7` | 运行期把 AMSET 的剪刀挪回 DFT（`undo_scissor`，报告记 `scissor_eV`）。Si 价带顶差 0.314 eV = 剪刀 0.628 的一半，被误判成带号对不上。 |
+| `dd53cf8` | k0 核对改用简并子空间内求和（逐带的中心差分在简并点带 O(δ) 二阶污染）；新增 `tools/adp_k0_probe.py`。 |
+| `bae7ebb` | `build` 用空间群操作补齐 AMSET 约化掉的全部图样（Si 原来矩阵只有 xx、yz，运行期判"缺图样"）。 |
+| （本提交） | **AMSET 自己的对称补应变标签错**的改正 + probe 1b 标签核对 + `BAND_EDGES_REV` 改版。 |
+
+**bae7ebb 之后 Si 的 probe**：6 个图样齐、k0 残差 0.7% 过；但对齐 xy 离散度 2.69 eV、xz 3.87 eV 超门槛 → 矩阵仍被拒。
+**根因（已用 AMSET 0.5.1 源码在 EPM Si 上端到端重演）**：`get_symmetrized_strain_mapping` 把构型 E 的能带搬到 k' = M·k
+（M = spglib Wᵀ），这组能带属于 Rᵀ·E·R，它却标成 R·E·Rᵀ。立方 Si 由 yz 经 C3[111] 补出的 xy、xz 被互换（xy+、xz± 错 0.22 eV，
+xy− 碰巧走了对合操作是对的 —— 与实跑 xz 离散度大于 xy 一致）。所以错的是 S7.1 的 `deformation_signed.h5` 与 `deformation.h5`
+的剪切分量，DFT 矩阵是对的。S7.1 的 Laue 群对称化**平均不掉**：EPM Si 走完整个 S7.1 流程，剪切分量 BZ 平均 |D| 价带顶
+3.45 eV（12 个应变全算 7.23）、导带底 1.37（5.04）；对角分量不受影响。**这也影响 AMSET 基线**（ADP_DEGEN 关时）的形变势：
+剪切偏小 -> ADP 散射偏弱 -> 迁移率偏高。受影响的晶系：立方、四方（C4 换掉 xz/yz 的正负号）；六方 / 三方 / 正交及更低不受影响。
+
+**改正**：`dp_symmetrize.symmetrized_strain_mapping`（照搬 AMSET 的循环，只把标签换成 strain.rotate(Rᵀ)），S7.1 的
+`amset deform read` 包装（`_NBANDS_FIX_CODE` 里换 `amset.deformation.potentials.get_symmetrized_strain_mapping`）与 2D 真空参考
+路径（`_vac_code`）都用它；与"12 个应变全算"逐位一致。测试 `tests/test_0061m_strain_label.py`（桩 AMSET + EPM：改正版 8 个补出的
+应变全对、换回原版标签 xy/xz 错、S7.1 包装在桩 AMSET 里真装上补丁、真空路径不再调原版）；`test_adp_k0_probe.py` 加了模拟 AMSET
+标签错的一条（1b 节认出 S_xz 实为 X_xy、S_xy 实为 ½(X_xy+X_xz)）。
+
+**本地会话接下来（动集群 / 改状态都按 AGENTS.md 走审批卡片）**：
+1. **先确认假设，不改任何东西**：把新版 `adp_k0_probe.py`（连同 `adp_degen.py`、`deform_wave.py`）拷到现有 S8 运行目录跑
+   `python adp_k0_probe.py --dir .` —— 1b 节应出现 `S_xz：… 最好 ±X_xy … ★ 标签错` 和 `S_xy：… 最好 ½(…) … ★ 标签错`。
+2. 用户同意后合并到 master（本分支 fast-forward）。
+3. 重跑 S7.1（只是重读，几分钟；S7 不用重算）。日志里 grep `[strain_label_fix]`，Si 应是"对称补了 8 个应变，其中 M 个 AMSET 原版
+   会标成别的应变"（M > 0）。
+4. 在新 S7.1 产物上再跑 probe：1 节 6 个图样离散度都在门槛内，1b 全部"最好 = 自己"。
+5. 然后才跑 S8。**提醒用户**：AMSET 基线（ADP_DEGEN 关）结果也会变；其它立方 / 四方材料的 S7.1 也要重读，哪些重跑 S8 由用户定
+   （S8.2 会对旧 band_edges.json 告警，因为 `BAND_EDGES_REV` 改了）。
+
+---
+
+## 续（2026-10-21 第二个会话）
 
 **A1 的代码已全部写完并通过本地测试**（第 1–5 节是上一次的交接，保留作背景；第 4 节的计划已逐条落实，偏差见下）。
 
