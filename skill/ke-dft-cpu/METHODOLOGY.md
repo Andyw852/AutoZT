@@ -464,9 +464,21 @@ Fang et al. PRB 98, 075106 (2018) 的应变 Wannier 哈密顿量）。
    导带到处交叉，应变把简并劈得各构型不一样，会连锁缩窗口）。每个 k 点两组系数各自 Löwdin 正交化，
    H^s = S^-½ O diag(E^s) O† S^-½（O = ⟨未形变|形变⟩），X^(P) = (H^+ − H^−)/(δ+ − δ−)。存未对齐的 X、未形变的正交化系数、
    覆盖度 q_min 与赝波函数非正交度。缺文件 / build 失败只告警（S8 退回第 5 步的拟合）。带符号 h5 同时存 `ibands_<spin>`。
-   **只有一侧应变的图样**（`amset deform create` 按对称性约化，立方的剪切常常只剩 +δ）：从 undeformed/POSCAR 找出把该图样
-   变号的空间群操作 g（x → Wx + t），−δ 晶体的态 = +δ 晶体在 k W⁻¹（或其时间反演）处的态经 g 变换（系数乘 e^{2πiκ·t}，
-   波矢 κ → κW），仍做中心差分；找不到操作（非共线、没有 POSCAR）才退回前向差分（O(δ)，Si 价带顶剪切约 10%）并点名。
+   **AMSET 按对称性约化掉的图样与一侧**（立方 Si 只算 xx± 与 yz+）：对缺的每个图样、每一侧，从 undeformed/POSCAR 找出把该图样
+   找把某个真算构型的应变 a·E_P 变成它的空间群操作 g（x → Wx + t，应变变成 a·RᵀE_P R：yy/zz 由 xx 转来，xy/xz 由 yz 转来，
+   另一侧由镜面），新晶体的态 = 来源构型在 k W⁻¹（或其时间反演）处的态经 g 变换（系数乘 e^{2πiκ·t}，波矢 κ → κW），
+   全部中心差分；某个 k 点两侧的像都没抽到记为缺格点；找不到操作（非共线、没有 POSCAR）才退回前向差分（O(δ)）并点名。
+   **AMSET 自己的对称补应变标签错（2026-10-22 查实并改正，影响 AMSET 基线形变势，不只是本节）**：`get_symmetrized_strain_mapping`
+   把构型 E 的能带搬到 k' = M·k（M = spglib 的 Wᵀ），这组能带属于 Rᵀ·E·R，它却标成 R·E·Rᵀ（`strain.rotate(r_cart)`）。对合操作
+   （镜面、2 次轴、反演）两者相同；3/4/6 次轴不同 —— 立方 Si 的 C3[111] 把 yz 补出来的 xy、xz 互换（AMSET 0.4.19 / 0.5.1 源码在 EPM Si
+   上重演：xy+、xz± 能带与标签差 0.22 eV）。S7.1 后面的 Laue 群对称化平均不掉它：EPM Si 走完整个 S7.1 流程（AMSET 幅值 + 带符号
+   + `dp_symmetrize.combine`），剪切分量的 BZ 平均 |D| 价带顶 3.45 eV（12 个应变全算 7.23）、导带底 1.37（5.04），对角分量不受影响。
+   Si 实跑的信号：带符号文件的 xy、xz 与本节的 X 对齐离散度 2.7 / 3.9 eV（`tools/adp_k0_probe.py` 的 1b 节能认出"S_xz 实为 X_xy"）。
+   改正：`dp_symmetrize.symmetrized_strain_mapping`（照搬 AMSET 的循环，只把标签换成 strain.rotate(Rᵀ)），S7.1 的
+   `amset deform read` 包装与 2D 真空参考路径都用它，日志 `[strain_label_fix] 对称补了 N 个应变，其中 M 个 AMSET 原版会标成别的应变`；
+   改后与 12 个全算逐位一致。`BAND_EDGES_REV` 随之改版。受影响的：立方（剪切 xy/xz 互换；视 AMSET 取到的操作，yy/zz 也可能）、
+   四方（C4 把 xz/yz 的正负号换掉）——要重跑 S7.1（只是重读，不重算 S7）；六方 / 三方 / 正交及更低对称只靠对合操作补出单分量应变，
+   M = 0、结果不变（MoS₂ P-6m2、SnSe Pnma 逐个操作核过）。
 3. **S8 / S8.4 运行期**（`adp_degen.py`，`ADP_DEGEN_MATRIX = auto` 出厂，有 `deformation_matrix.h5` 才用）：
    - **对齐**：X 里混着参考能级（芯势 / 真空）的应变导数。非简并态的 X_nn + S_n = dref/dδ（S = 带符号形变势），逐图样取中位数
      作常数 c_P；离散度 > max(0.1 eV, 5% × 对角形变势中位数) 就不用（带号错位一条时离散度立刻变大）。

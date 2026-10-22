@@ -79,3 +79,27 @@ def test_probe_flags_wrong_band_offset(run, tmp_path, capsys):
         f["ibands_up"] = np.arange(1, TW.NB + 1)
     assert P.main(["--dir", str(rd)]) == 1
     assert "超过门槛" in capsys.readouterr().out
+
+
+def test_probe_label_scan_flags_amset_mislabel(run, tmp_path, capsys):
+    """AMSET get_symmetrized_strain_mapping 的标签错（2026-10-22 前的 S7.1）：Si 的 xz 两侧都由 C3 补、实为 xy；
+    xy 一侧对、一侧实为 xz -> 中心差分 = ½(S_xy + S_xz)。1b 节要把这两个认出来，别的图样对自己。"""
+    import shutil
+    rd = tmp_path / "mislabel"
+    shutil.copytree(run, rd)
+    with h5py.File(rd / "deformation_signed.h5", "r+") as f:
+        S = f["signed_up"][()]
+        xy, xz = S[:, :, 0, 1].copy(), S[:, :, 0, 2].copy()
+        S[:, :, 0, 2] = S[:, :, 2, 0] = xy
+        S[:, :, 0, 1] = S[:, :, 1, 0] = 0.5 * (xy + xz)
+        f["signed_up"][...] = S
+    assert P.main(["--dir", str(rd)]) == 1
+    log = capsys.readouterr().out
+    lines = {ln.split("：")[0].strip(): ln for ln in log.split("== 1b.")[1].split("== 2.")[0].splitlines()[1:]
+             if ln.strip().startswith("S_")}
+    assert "最好 +X_xy" in lines["S_xz"] and "★ 标签错" in lines["S_xz"]
+    assert "最好 ½(+X_xz +X_xy)" in lines["S_xy"] or "最好 ½(+X_xy +X_xz)" in lines["S_xy"]
+    assert "★ 标签错" in lines["S_xy"]
+    for nm in ("xx", "yy", "zz", "yz"):
+        assert "★" not in lines["S_" + nm] and "最好 +X_%s " % nm in lines["S_" + nm]
+    assert "xz、xy 是 AMSET 对称补应变标错的" in log or "xy、xz 是 AMSET 对称补应变标错的" in log
