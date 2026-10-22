@@ -34,8 +34,8 @@ from pathlib import Path
 # =========================== 可改参数区 ===========================
 # [SKILL_REV] 版本戳：写进 dpt_result.json，铺开时验证跑的是哪份 skill 副本。
 # 每次改本脚本逻辑后更新（如 "2026-08-29-nstep-linear"）。
-_SKILL_REV = "2026-10-22-0069-3d-valley-axis"   # [0069] 3D 多谷：E1 取谷轴 LA 形变势、C 取沿谷轴的纵向模量
-#   （上一版：2026-10-11-0034 写完 dpt_result.json 后 S8.4 的 ODP/IVS 用了本步谷表且谷中心变了 -> S8.4 重排）
+_SKILL_REV = "2026-10-22-0070-mass-energy-window"   # [0070] 3D 各向异性谷的带边质量改用能量窗口取点
+#   （上一版：2026-10-22-0069-3d-valley-axis 3D 多谷 E1 取谷轴 LA 形变势、C 取沿谷轴的纵向模量）
 # [R-SCAN] 强制选点壳层 NSTEP（None=自动 2/3/4/5；填 2/3/4/5=只试该值，做 R-scan 用）。
 # 用法：tf -p <材料> -j step8.2_dpt conf --set FORCE_NSTEP=3 → retry + start，对比 dpt_result.json 的 m_d
 #   与 m_provenance 里的 R（V148 起写 step.conf，不改本脚本）。
@@ -71,6 +71,22 @@ VALLEY_W_MIN = 0.01
 #   静水值 Ξ_d + Ξ_u/3（2.99 vs 8.72 eV），μ ∝ 1/E1² 高估 8.5 倍。简并带边（立方 Γ 价带顶）与单谷不受影响。
 #   关掉（复现旧结果）：step.conf 写 DPT_VALLEY_AXIS = off。
 DPT_VALLEY_AXIS = "auto"
+# [0070] 3D 带边质量：各向异性谷（谷的小群不强制质量张量各向同性：Si 的 Δ、L 谷、非立方晶体的 Γ 谷）改用**能量窗口**取点
+#   ——只拟合离带边 ≤ Ew 的网格点（Ew 从 0.05 eV 逐级放宽到 0.20 eV），二次型（带边不被对称性钉住时 + 线性项）。
+#   有效质量是带边极值点的曲率（Ashcroft–Mermin），抛物近似只在带边附近成立；文献做法是带边细网格有限差分（EMC）、
+#   DFPT Hessian（Laflamme Janssen et al., PRB 93, 205147 (2016)），或对带边附近的能带做最小二乘拟合（sumo；effmass
+#   让用户选拟合的能量范围与多项式阶数，Whalley JOSS 3, 797 (2018)）。Kane 非抛物 E(1+αE)、Si 导带 α ≈ 0.5 eV⁻¹：0.15 eV 处偏离抛物约 7.5%。
+#   旧做法按同一球半径取点 + 各向同性 q⁴：长椭球谷横向的点高出带边 ~0.6 eV（远出抛物区），q⁴ 又是各向同性的，
+#   纵向质量被拉小（EPM Si 34³：m_l 0.405 vs 真值 0.873；实跑 0.386）。立方 Γ 这类各向同性谷仍用旧做法（q⁴ 正好描述
+#   各向同性的非抛物性，GaAs 型轻谷更准）。各向异性谷在窗口内点不够时退回旧做法，并在 caveats 里标 m* 不可靠。
+#   只取本谷的 Voronoi 区域（离本谷谷心比离任何其它等价谷更近；2D 多谷的谷归属同一规则）：Si 的 Δ 谷离 X 只有
+#   0.15·2π/a，X 另一侧属于相邻等价谷，能量窗口会把它们包进来（EPM Si：不限区域时 m_l 拟合成 6–19）。
+#   每个窗口要相对残差 ≤ MASS_EW_REL（真正的抛物区 0.02–0.04）；再要求窗口收敛：相邻两个可用窗口主曲率相差
+#   ≤ MASS_EW_AGREE，取较小的窗口（同有限差分的步长收敛检查，Laflamme Janssen 2016 指出差分质量需要收敛研究）；
+#   只剩一个窗口可用（网格偏粗）时验不了收敛，同样退回并标注。
+MASS_EW_STEPS_EV = (0.05, 0.075, 0.10, 0.125, 0.15, 0.20)
+MASS_EW_REL = 0.10
+MASS_EW_AGREE = 0.15
 # E1 自动提取口径开关（手填 MANUAL/MANUAL_ANISO 时此开关失效）：
 #   "vac"   = 真空对齐 E1_vac（文献 Eq.9 dE_edge/dγ 口径，仅 2D 且 LOCPOT 可用）
 #   "amset" = amset h5 平均芯势口径（⟨|D|⟩）
@@ -2317,10 +2333,13 @@ def _valley_axis_3d(cwd, carrier, be=None):
         return None, "谷轴形变势异常：%s" % _exc_brief(e)
 
 
-def _quad_fit_3d(kfrac, recip, eband, k0, need_lin=None, mesh=None, kops=None):
+def _quad_fit_3d(kfrac, recip, eband, k0, need_lin=None, mesh=None, kops=None, window="radial", star=None):
     """[0025] 带边三维二次型拟合（_quad_fit_2d 的三维版，判据同构）：
     ΔE = a x² + b y² + c z² + d xy + e yz + f zx（+ q⁴）（+ 线性 gx + hy + iz + j）。
-    返回 ({"H": 3×3 Hessian（eV·Å²）, npt, n_shell, Rused, names, cond, rel, step_min}, None)；失败 (None, 原因)。"""
+    window="radial"：按球半径 2–5 个网格步长取点、加各向同性 q⁴（各向同性谷）；
+    window="energy"（[0070]）：只取 |ΔE| ≤ Ew 的点（MASS_EW_STEPS_EV 逐级放宽），不加 q⁴（各向异性谷）；
+    star（带边 k 的等价点，分数坐标）给出时只取本谷的 Voronoi 区域。
+    返回 ({"H": 3×3 Hessian（eV·Å²）, npt, n_shell, Rused, names, cond, rel, step_min[, Ew]}, None)；失败 (None, 原因)。"""
     import numpy as np
     kcart = kfrac @ recip
     dk = kcart - kcart[k0]
@@ -2348,6 +2367,8 @@ def _quad_fit_3d(kfrac, recip, eband, k0, need_lin=None, mesh=None, kops=None):
         bases = (0.0, 0.5, 1.0 / 3.0, 2.0 / 3.0, 0.25, 0.75)
         need_lin = not all(any(abs((c % 1.0) - b) < 1e-3 or abs((c % 1.0) - b - 1.0) < 1e-3 for b in bases)
                            for c in kfrac[k0])
+    if window == "energy":
+        return _quad_fit_3d_energy(kfrac, recip, de, k0, mesh, step_cart, need_lin, star)
     sel = Rused = n_shell = None
     for NSTEP in ((FORCE_NSTEP,) if FORCE_NSTEP else (2, 3, 4, 5)):
         Rmax = (NSTEP - 0.1) * float(step_cart.min())
@@ -2390,6 +2411,106 @@ def _quad_fit_3d(kfrac, recip, eband, k0, need_lin=None, mesh=None, kops=None):
     H = np.array([[2 * a, d, f], [d, 2 * b, e], [f, e, 2 * c]])
     return {"H": H, "npt": npt, "n_shell": n_shell, "Rused": Rused, "names": names, "cond": cond, "rel": rel,
             "step_min": float(step_cart.min())}, None
+
+
+def _valley_basin(kfrac, k0, recip, star, cand):
+    """[0070] cand 里哪些 k 点落在本谷的 Voronoi 区域：离本谷谷心比离任何其它等价谷谷心更近（最短等价矢量，含相邻倒格矢）。"""
+    import itertools
+    import numpy as np
+    G = np.array(list(itertools.product((-1, 0, 1), repeat=3)), float)
+
+    def dist(kf, s):
+        d = np.atleast_2d(kf) - np.asarray(s, float)
+        d = d - np.round(d)
+        return np.min(np.linalg.norm((d[:, None, :] + G[None]) @ recip, axis=2), axis=1)
+    own = int(np.argmin([dist(kfrac[k0], s)[0] for s in star]))
+    idx = np.where(cand)[0]
+    dd = np.stack([dist(kfrac[idx], s) for s in star], axis=1)
+    out = np.zeros(len(kfrac), bool)
+    out[idx] = np.argmin(dd, axis=1) == own
+    return out
+
+
+def _quad_fit_3d_energy(kfrac, recip, de, k0, mesh, step_cart, need_lin, star=None):
+    """[0070] 能量窗口取点的三维二次型拟合（_quad_fit_3d 的 window="energy"）。Δk 取最短等价（区边界上的谷两侧都要）；
+    star 给出时只取本谷的 Voronoi 区域；每个窗口要点数 ≥ 2 倍参数、三个倒格矢方向都有非零步、cond ≤ 1e5、相对残差
+    ≤ MASS_EW_REL；再要求与下一个可用窗口的主曲率相差 ≤ MASS_EW_AGREE（窗口收敛），取较小的窗口。
+    都不行返回 (None, 原因)。"""
+    import numpy as np
+    dfrac = kfrac - kfrac[k0]
+    dfrac = dfrac - np.round(dfrac)
+    dk = dfrac @ recip
+    q2 = np.sum(dk ** 2, axis=1)
+    qnz = np.sqrt(q2[q2 > 1e-9])
+    q_min = float(qnz.min()) if len(qnz) else 1.0
+    ade = np.abs(de)
+    if star is not None and len(star) > 1:
+        cand = ade <= MASS_EW_STEPS_EV[-1]
+        ade = np.where(_valley_basin(kfrac, k0, recip, star, cand), ade, np.inf)
+    npar = 6 + (4 if need_lin else 0)
+    fits, why = [], "能量窗口 ≤%.2f eV 内的网格点不足 %d 个（网格相对带边曲率太粗）" % (MASS_EW_STEPS_EV[-1], 2 * npar)
+    for Ew in MASS_EW_STEPS_EV:
+        m = (ade <= Ew) & (q2 > 1e-9)
+        n = int(np.count_nonzero(m))
+        if n < 2 * npar:
+            continue
+        steps = np.rint(dfrac[m] * mesh).astype(int)
+        if any(int(np.abs(steps[:, i]).max()) < 1 for i in range(3)):
+            why = "能量窗口 ≤%.2f eV 内某个倒格矢方向没有取到点" % Ew
+            continue
+        x, y, z = dk[m, 0], dk[m, 1], dk[m, 2]
+        cols = [x * x, y * y, z * z, x * y, y * z, z * x]
+        names = ["a", "b", "c", "d", "e", "f"]
+        if need_lin:
+            cols += [x, y, z, np.ones(n)]
+            names += ["g", "h", "i", "j"]
+        A = np.column_stack(cols)
+        cond = float(np.linalg.cond(A))
+        if cond > 1e5:
+            why = "能量窗口 ≤%.2f eV：设计矩阵病态 cond=%.1e" % (Ew, cond)
+            continue
+        sol, *_ = np.linalg.lstsq(A, de[m], rcond=None)
+        rel = float(np.linalg.norm(de[m] - A @ sol) / (np.linalg.norm(de[m]) + 1e-12))
+        if rel > MASS_EW_REL:
+            why = "能量窗口 ≤%.2f eV：二次型拟合残差 rel=%.2f（窗口内已非抛物）" % (Ew, rel)
+            continue
+        a, b, c, d, e, f = (float(v) for v in sol[:6])
+        H = np.array([[2 * a, d, f], [d, 2 * b, e], [f, e, 2 * c]])
+        fits.append({"H": H, "npt": n, "n_shell": int(len(np.unique(np.round(np.sqrt(q2[m]) / q_min, 3)))),
+                     "Rused": float(np.sqrt(q2[m].max())), "names": names, "cond": cond, "rel": rel,
+                     "step_min": float(step_cart.min()), "Ew": Ew})
+    for f1, f2 in zip(fits, fits[1:]):
+        e1, e2 = np.linalg.eigvalsh(f1["H"]), np.linalg.eigvalsh(f2["H"])
+        dev = float(np.max(np.abs(e1 - e2) / np.maximum(np.abs(e2), 1e-9)))
+        if np.all(np.sign(e1) == np.sign(e2)) and dev <= MASS_EW_AGREE:
+            f1["Ew_check"], f1["Ew_dev"] = f2["Ew"], round(dev, 3)
+            return f1, None
+    if len(fits) == 1:
+        why = ("只有 %.3g eV 一个能量窗口可用，做不了窗口收敛检查（网格相对带边曲率偏粗）" % fits[0]["Ew"])
+    elif fits:
+        why = ("能量窗口 %s eV 的主曲率互相不收敛（相邻窗口差 > %.0f%%）"
+               % ("/".join("%.3g" % f["Ew"] for f in fits), 100 * MASS_EW_AGREE))
+    return None, why
+
+
+def _site_isotropic(kf, structure, rots):
+    """[0070] k 点的小群（点群 ± 时间反演里把 k 映回自身、模倒格矢的操作）是否强制二阶张量各向同性
+    （立方晶体的 Γ、R 等）：把一个一般的对称张量对小群平均，看是否 ∝ 单位阵。"""
+    import numpy as np
+    B = np.asarray(structure.lattice.reciprocal_lattice.matrix, float)
+    Binv = np.linalg.inv(B)
+    kf = np.asarray(kf, float)
+    kc = kf @ B
+    keep = []
+    for r in rots:
+        g = (r @ kc) @ Binv - kf
+        if np.allclose(g - np.round(g), 0.0, atol=1e-5):
+            keep.append(np.asarray(r, float))
+    if not keep:
+        return False
+    S = np.array([[1.0, 0.3, 0.2], [0.3, 2.0, 0.4], [0.2, 0.4, 3.5]])
+    T = sum(r @ S @ r.T for r in keep) / len(keep)
+    return bool(np.allclose(T, np.trace(T) / 3.0 * np.eye(3), atol=1e-8))
 
 
 def _mass_from_hessian_3d(H, carrier, rots=None):
@@ -2440,21 +2561,38 @@ def get_effective_mass_3d(cwd, carrier):
             kops3 = _kops_3d(v.final_structure, _time_reversal_ok(v, cwd, carrier))
         except Exception:                                                # noqa: BLE001
             kops3 = None
-        fit, ferr = _quad_fit_3d(kfrac, recip, ene[:, b0], k0, kops=kops3)
-        if ferr:
-            return None, ferr
         rots = _cart_rots(v.final_structure)
+        iso = _site_isotropic(kfrac[k0], v.final_structure, rots)              # [0070]
+        fit, ew_err, caveat = None, None, None
+        if not iso:
+            star3 = _star_images(kfrac[k0], v.final_structure, rots)
+            fit, ew_err = _quad_fit_3d(kfrac, recip, ene[:, b0], k0, kops=kops3, window="energy", star=star3)
+        if fit is not None:
+            fit_how = "能量窗口取点 |ΔE| ≤ %.3g eV（各向异性谷；与 %.3g eV 窗口主曲率差 %.0f%%）" % (
+                fit["Ew"], fit["Ew_check"], 100 * fit["Ew_dev"])
+        else:
+            fit, ferr = _quad_fit_3d(kfrac, recip, ene[:, b0], k0, kops=kops3)
+            if ferr:
+                return None, ferr + (("；能量窗口拟合也不行：%s" % ew_err) if ew_err else "")
+            fit_how = "球形半径取点 + 各向同性 q⁴（%s）" % ("各向同性谷" if iso else "各向异性谷的回退")
+            if not iso:
+                caveat = ("各向异性谷的带边质量：%s，退回球形取点拟合——它对各向异性谷会把纵向质量拉小（EPM Si 34³："
+                          "m_l 0.405 vs 真值 0.873），m* 不可靠；加密 step3_uniform 网格后重跑" % ew_err)
+                print("[WARN] %s：%s" % (carrier, caveat))
         mres, merr = _mass_from_hessian_3d(fit["H"], carrier, rots)
         if merr:
             return None, merr
+        mres["fit_how"] = fit_how
+        if caveat:
+            mres["caveat"] = caveat
         mres["n_star"] = len(_star_images(kfrac[k0], v.final_structure, rots))
         mres["k0_frac"] = np.round(np.asarray(kfrac[k0], float) - np.round(kfrac[k0]), 4).tolist()
         star = ("；带边 k=%s 有 %d 个等价谷，m_α 取对它们平均的电导质量（单谷 %s）"
                 % (mres["k0_frac"], mres["n_star"], list(mres["m_valley"]))) if mres["n_star"] > 1 else ""
         return mres, (
-            "带边三维二次型拟合(%s, %d点/%d壳层, R<%.2f, 模型=%s, cond=%.0e, rel=%.3f, spin=%d)%s"
-            % (how, fit["npt"], fit["n_shell"], fit["Rused"], "+".join(fit["names"]), fit["cond"], fit["rel"], isp,
-               star))
+            "带边三维二次型拟合(%s, %s, %d点/%d壳层, R<%.2f, 模型=%s, cond=%.0e, rel=%.3f, spin=%d)%s"
+            % (how, fit_how, fit["npt"], fit["n_shell"], fit["Rused"], "+".join(fit["names"]), fit["cond"],
+               fit["rel"], isp, star))
     except Exception as e:                       # noqa: BLE001
         return None, "三维二次型拟合异常：%s" % _exc_brief(e)
 
@@ -2498,6 +2636,8 @@ def _aniso_block_3d(cwd, carrier, T):
         blk["status"] = "缺输入：%s" % "、".join(miss)
         return blk
     blk["m_d_m0"] = mres["m_d"]
+    if mres.get("caveat"):                       # [0070]
+        blk["m_caveat"] = mres["caveat"]
     blk["M_m0"] = mres["M"]                      # 带边那一个谷的质量张量
     blk["m_valley_m0"] = list(mres["m_valley"])
     blk["n_equiv_valleys"] = mres.get("n_star", 1)
@@ -2580,6 +2720,8 @@ def _one_carrier(cwd, is_2d, carrier, T, temps=None):
         if _nd > 1:
             caveats.append("带边 %d 重简并（如立方半导体 Γ 点价带顶）：单带 DPT 只是近似，μ 只作量级参考，"
                            "与 AMSET / EPW 的差别不能当作问题" % _nd)
+        if bd.get("m_caveat") and not MANUAL[key]:                   # [0070]
+            caveats.append(bd["m_caveat"])
         if bd.get("status") != "ok" and m is not None and not MANUAL[key]:
             caveats.append("三维二次型拟合没出数（%s）：表头 m* = %s 是旧的方向分解 / 径向拟合回退值，不可靠"
                            % (bd.get("m_provenance") or bd.get("status"), m))
