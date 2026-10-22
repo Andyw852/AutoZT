@@ -19,6 +19,14 @@ This project adheres to Semantic Versioning; versions before 1.0.0 are developme
 - gen 端 apply_mesh_min 在 gen 环境没有 BoltzTraP2 / pymatgen.io.ase（或 C 扩展与 spglib ABI 不匹配）时不再 ModuleNotFoundError 硬崩：打 WARN 跳过自动选网格，沿用 step.conf 的 INTERPOLATION_FACTOR。
 - 生成阶段内存自检：submit.sh 无 --mem/--mem-per-cpu 且关掉自动选网格时，若 --ntasks-per-node >= 8 就提示补 --mem-per-cpu（yue 默认 3.8GB/核，16 workers 只拿到 61GB，实测 1:35 被 OOM Killer 杀；改 12000M 后正常）。
 
+### Changed (2026-10-22: [0068] eph-qe-cpu IVS route: tr2_ph default 1e-16 -> 1e-14)
+- `IVS_TR2_PH` now defaults to 1e-14, the same as the Perturbo route (`TR2_PH`). The IVS route only needs the
+  intervalley D0 and phonon energies, whose error from a 1e-14 induced-potential residual is far below the model
+  uncertainty (frequencies are second order in it); MoS2 q points spent the last 2-4 SCF rounds of every irreducible
+  representation going from 1e-14 to 1e-16.
+- q jobs generated with a tighter threshold than the current one (finished or still running under the old 1e-16) are
+  no longer treated as "input changed" and moved to `.old_q-XX_*`; only a looser previous threshold triggers a rerun.
+
 ### Fixed (2026-10-22: [0067] ke-dft-cpu S7 retry no longer wipes a finished ionrelax relaxation)
 - When the relaxation segment of `ionrelax/` finished (OUTCAR.relax with the closing banner, non-empty CONTCAR.relax)
   but the static segment was killed (OOM, timeout, disk full), `retry S7_deform` treated the directory as unfinished

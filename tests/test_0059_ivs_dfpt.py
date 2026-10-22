@@ -10,6 +10,7 @@ S8（3D）/ S8.4（2D）读取与优先级（DFPT > 冻声子 K↔K′ > 手填�
 import copy
 import importlib.util
 import io
+import time
 import json
 import math
 import shutil
@@ -309,7 +310,7 @@ def test_gen_chain_si(eph):
         ahc = (d / "step12_ivs_ph" / q / "ph_ahc.in").read_text()
         assert "electron_phonon = 'ahc'" in ahc and "trans = .false." in ahc and "skip_upperfan = .true." in ahc
         assert "cp -r ../../step11_ivs_scf/tmp/si2.save tmp/" in (d / "step12_ivs_ph" / q / "submit.sh").read_text()
-    assert json.loads((d / "step12_ivs_ph" / "q-01" / "qrun.json").read_text())["tr2_ph"] == 1e-16   # [0059-r1] 不再舍成 0
+    assert json.loads((d / "step12_ivs_ph" / "q-01" / "qrun.json").read_text())["tr2_ph"] == 1e-14   # [0059-r1] 不再舍成 0；[0068] 出厂 1e-14
     assert iv.jsonable({"a": 1e-16, "b": 0.1 + 0.2, "c": -0.0}) == {"a": 1e-16, "b": 0.3, "c": 0.0}
     (d / "step12_ivs_ph" / "q-01" / "ivs_ph.ok").write_text("OK\n")
     qf = d / "step12_ivs_ph" / "q-01" / "qrun.json"                   # 旧版写的 tr2_ph = 0.0：不算输入变了
@@ -322,10 +323,27 @@ def test_gen_chain_si(eph):
     with redirect_stdout(buf):
         c.main("ph")
     assert marker.is_file() and "不动" in buf.getvalue()                       # 已完成且输入没变：不碰
+    legacy["tr2_ph"] = 1e-16                                            # [0068] 出厂 1e-16 时跑完的：比现在严，不重算
+    qf.write_text(json.dumps(legacy))
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        c.main("ph")
+    assert marker.is_file() and "不动" in buf.getvalue()
     _conf(d, "IVS_VALLEYS_E = X:0,0.425,0.425\nIVS_ECUTWFC = 30\nIVS_SCF_KGRID = 6 6 6\nIVS_AHC_NB = 3\n")
     with redirect_stdout(io.StringIO()):
         c.main("ph")
     assert not marker.exists() and list((d / "step12_ivs_ph").glob(".old_q-01_*"))   # 输入变了：旧目录移开
+    q1 = d / "step12_ivs_ph" / "q-01"                                   # [0068] 比现在松（1e-12）：要重算
+    (q1 / "ivs_ph.ok").write_text("OK\n")
+    (q1 / "keep.me").write_text("x")
+    loose = json.loads((q1 / "qrun.json").read_text())
+    loose["tr2_ph"] = 1e-12
+    (q1 / "qrun.json").write_text(json.dumps(loose))
+    n_old = len(list((d / "step12_ivs_ph").glob(".old_q-01_*")))
+    time.sleep(1.1)                                                     # .old_ 目录名按秒取时间戳
+    with redirect_stdout(io.StringIO()):
+        c.main("ph")
+    assert not (q1 / "keep.me").exists() and len(list((d / "step12_ivs_ph").glob(".old_q-01_*"))) == n_old + 1
 
 
 def _dpt_json(q_members, extra=None):
