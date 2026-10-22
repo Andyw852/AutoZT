@@ -137,7 +137,7 @@ autozt 把它们注入 step.conf 的 `QE_BIN` / `QE_PSEUDO_DIR` / `QE_SETUP`（�
 `IVS_SBATCH` 加额外 `#SBATCH` 行（如 jzzn：`--partition=cpu192; --qos=regular`），`IVS_MPIRUN`（auto | none | 自定义 `{np}`）。
 集群确要专用模板：`setting/<集群>/templates/submit_ivs_qe.tpl` 同名覆盖。
 
-**主要参数**（`templates/step.conf`）：`IVS_ECUTWFC = 60` Ry、`IVS_KSPACING = 0.2` Å⁻¹（或 `IVS_SCF_KGRID`）、`IVS_TR2_PH = 1e-16`、
+**主要参数**（`templates/step.conf`）：`IVS_ECUTWFC = 60` Ry、`IVS_KSPACING = 0.2` Å⁻¹（或 `IVS_SCF_KGRID`）、`IVS_TR2_PH = 1e-14`（[0068] 原 1e-16；按旧值跑完/在跑的 q 不会因此重算）、
 `IVS_AHC_NB = 2`（带边上下各几条带进 AHC 窗口）、`IVS_VALLEY_TOL_MEV = 30` + `IVS_VALLEY_CHECK = error|warn`（QE 的各谷能差与 S8.2
 相差多少算一致）、`IVS_CARRIERS = auto|electron|hole|both`、`IVS_KEEP_TMP = false`（S12 完成后删 tmp/ 里的 dvscf 与波函数）。
 

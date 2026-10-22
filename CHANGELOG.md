@@ -14,6 +14,14 @@ This project adheres to Semantic Versioning; versions before 1.0.0 are developme
 
 ## [Unreleased]
 
+### Changed (2026-10-22: [0068] eph-qe-cpu IVS route: tr2_ph default 1e-16 -> 1e-14)
+- `IVS_TR2_PH` now defaults to 1e-14, the same as the Perturbo route (`TR2_PH`). The IVS route only needs the
+  intervalley D0 and phonon energies, whose error from a 1e-14 induced-potential residual is far below the model
+  uncertainty (frequencies are second order in it); MoS2 q points spent the last 2-4 SCF rounds of every irreducible
+  representation going from 1e-14 to 1e-16.
+- q jobs generated with a tighter threshold than the current one (finished or still running under the old 1e-16) are
+  no longer treated as "input changed" and moved to `.old_q-XX_*`; only a looser previous threshold triggers a rerun.
+
 ### Fixed (2026-10-22: [0067] ke-dft-cpu S7 retry no longer wipes a finished ionrelax relaxation)
 - When the relaxation segment of `ionrelax/` finished (OUTCAR.relax with the closing banner, non-empty CONTCAR.relax)
   but the static segment was killed (OOM, timeout, disk full), `retry S7_deform` treated the directory as unfinished

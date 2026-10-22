@@ -45,7 +45,7 @@ PARAMS = {
     "IVS_KSPACING": (0.2, "float"),          # Å⁻¹（VASP KSPACING 口径，含 2π）
     "IVS_SCF_KGRID": ("auto", "str"),
     "IVS_SCF_CONV_THR": (1.0e-12, "float"),
-    "IVS_TR2_PH": (1.0e-16, "float"),
+    "IVS_TR2_PH": (1.0e-14, "float"),        # [0068] 原 1e-16；D₀/ħω 到 1e-14 已远低于模型误差，与 Perturbo 路线一致
     "IVS_AHC_NB": (2, "int"),                # AHC 窗口：带边上下各几条带
     "IVS_NBND_EXTRA": (6, "int"),
     "IVS_VALLEY_TOL_MEV": (30.0, "float"),
@@ -618,6 +618,13 @@ def gen_ph(P):
                 pk = {k: prev.get(k) for k in key}
                 if pk.get("tr2_ph") == 0.0:       # [0059-r1] 旧版把 1e-16 舍成 0.0 写进 qrun.json：当作没记录，不因此判输入变了
                     pk["tr2_ph"] = key["tr2_ph"]
+                # [0068] 旧作业收敛得比现在要求的更严（出厂 1e-16 -> 1e-14）：结果照样有效，不因此移走重算
+                #   （包括还在跑的 q：重新生成会把它的目录挪走）；比现在松才算输入变了。
+                try:
+                    if pk.get("tr2_ph") is not None and float(pk["tr2_ph"]) <= key["tr2_ph"]:
+                        pk["tr2_ph"] = key["tr2_ph"]
+                except (TypeError, ValueError):
+                    pass
                 if "epsil" not in prev:           # [0059-r3] 旧版没有这个键 = 没开 epsil
                     pk["epsil"] = False
                 same = iv.jsonable(pk) == iv.jsonable(key)
