@@ -308,6 +308,12 @@ def agent_audit(cfg, actor, cmd, argv, risk, decision, why=None,
                 exit_code=None, dur=None, approved_by=None, sig=None,
                 gateway="act", ev="call", note=None, extra=None):
     """追加一条审计记录。整段包 try/except：审计失败绝不影响命令本身。"""
+    # cwd 可能已被删除（例如 agent 在临时目录里运行、目录随后被清理）：
+    # os.getcwd() 会抛 FileNotFoundError，审计失败不应影响命令本身。
+    try:
+        _cwd = os.getcwd()
+    except OSError:
+        _cwd = os.environ.get("PWD") or os.path.expanduser("~")
     rec = {
         "ts": _now(),
         "ev": ev,
@@ -319,7 +325,7 @@ def agent_audit(cfg, actor, cmd, argv, risk, decision, why=None,
         "decision": decision,
         "exit_code": exit_code,
         "dur": round(dur, 2) if isinstance(dur, (int, float)) else None,
-        "cwd": os.getcwd(),
+        "cwd": _cwd,
         "approved_by": approved_by,
         "sig": sig,
         "why": list(why or []),
