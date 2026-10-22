@@ -262,7 +262,8 @@ optional_steps:
       - {seq: 2.28, name: "step2_bandgap/step2.28_hse_scf", label: S2.28_hsescf,
          group: S2_bandgap, after: "step2_bandgap/step2.2_pbe",
          src: step2_bandgap/step2.3_hse, check: hse_scf, gen: "gen_step4_HSE.py --stage scf",
-         gen_need: [stepconf.py, step.conf, dim_common.py, ke_common.py, check_common.py,
+         # [0066] discriminant_common.py：ALGO 按 S2.15（没跑完退回 S2.2 PBE）的带指标法选，以前漏声明、靠残留文件
+         gen_need: [stepconf.py, step.conf, dim_common.py, ke_common.py, check_common.py, discriminant_common.py,
                     incar_2d.tpl, incar_3d.tpl, submit_std_2d.tpl, submit_std_3d.tpl,
                     submit_ncl_2d.tpl, submit_ncl_3d.tpl],
      needs: ["step2_bandgap/step2.2_pbe"]}
@@ -270,6 +271,7 @@ optional_steps:
          group: S2_bandgap, after: "step2_bandgap/step2.28_hse_scf",
          src: step2_bandgap/step2.3_hse, check: outcar, gen: "gen_step4_HSE.py --kpath-slice all/4", fanout: "*p*of*",
          gen_need: [stepconf.py, step.conf, dim_common.py, ke_common.py, check_common.py, step4_check_and_resubmit.py,
+                    discriminant_common.py,
                     incar_2d.tpl, incar_3d.tpl, submit_std_2d.tpl, submit_std_3d.tpl,
                     submit_ncl_2d.tpl, submit_ncl_3d.tpl],
      needs: ["step2_bandgap/step2.2_pbe", "step2_bandgap/step2.28_hse_scf"]}

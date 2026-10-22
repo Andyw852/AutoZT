@@ -1216,32 +1216,38 @@ def build_step4_dir(out_dir, args, ctx, part=None):
         #   ("step2_bandgap/step2.15_discriminant") 恰好拼错。穷举后
         #   cwd / 各级祖先里只要能找到判别 OUTCAR 就取。
         _outd = Path(out_dir).resolve()
-        _roots = [Path.cwd().resolve()] + list(_outd.parents)
-        _seen_roots = set()
-        for _root in _roots:
-            if str(_root) in _seen_roots:
-                continue
-            _seen_roots.add(str(_root))
-            _oc = Path(_root) / DISCRIMINANT_DIR / "OUTCAR"
-            if not _oc.is_file():
+        _roots = []
+        for _root in [Path.cwd().resolve()] + list(_outd.parents):
+            if _root not in _roots:
+                _roots.append(_root)
+        # [0066] S2.15 没跑完（排队/OOM）时退回 S2.2 PBE 的 OUTCAR，用同一个带指标法判。
+        #   S2.28 只 needs S2.2、不等 S2.15：Mg2C60 的 S2.28 生成时 S2.15 还在 jzzn 排队 ->
+        #   ALGO 落到默认 Damped，14 h 只走了 64 个电子步（同 Mg4C60 的停滞）。S2.2 的网格比
+        #   S2.15 稀，带隙可能偏大（漏掉真极值点），所以这里只决定 ALGO，不写 discriminant.json、不当闸门。
+        for _src_dir, _src_tag in ((DISCRIMINANT_DIR, "S2.15"),
+                                   (STEP3_DIR, "S2.2 PBE（S2.15 未跑完，回退）")):
+            _oc = next((Path(_r) / _src_dir / "OUTCAR" for _r in _roots
+                        if (Path(_r) / _src_dir / "OUTCAR").is_file()), None)
+            if _oc is None:
                 continue
             try:
                 sys.path.insert(0, str(Path(__file__).resolve().parent))
                 import discriminant_common as _dc
                 _d = _dc.decide_from_outcar(_oc, _dc.read_mesh(_oc.parent))
-                if _d:
-                    incar_set["ALGO"] = ("All" if _d["label"] == "SEMICONDUCTOR"
-                                         else "Damped")
-                    _disc = (_d["label"], _d["functional"], _d["gap_eV"], str(_oc))
             except Exception as _e:
                 # 显式降级（不是静默继续）：解析失败只影响 ALGO 的选择，
-                # 退回 INCAR_SET 的 Damped 是记录在案的向后兼容行为，但必须高声报出来。
-                print("[WARN] 体系判别解析失败 —— ALGO 退回默认 %s（向后兼容）。"
-                      "注意这属于**静默失败类**问题：若 %s 存在却解析不出来，"
-                      "先查判别步的 OUTCAR 是不是没跑完，或 parse_kblocks 的阈值。\n"
+                # 先试下一个来源，都不行才退回 INCAR_SET 的 Damped，但必须高声报出来。
+                print("[WARN] 体系判别解析失败（%s）—— 试下一个来源 / 退回默认 %s。"
+                      "注意这属于**静默失败类**问题：若 OUTCAR 存在却解析不出来，"
+                      "先查它是不是没跑完，或 parse_kblocks 的阈值。\n"
                       "       原因：%s"
-                      % (incar_set.get("ALGO"), DISCRIMINANT_DIR, _e), file=sys.stderr)
-            break
+                      % (_oc, incar_set.get("ALGO"), _e), file=sys.stderr)
+                continue
+            if _d:
+                incar_set["ALGO"] = ("All" if _d["label"] == "SEMICONDUCTOR"
+                                     else "Damped")
+                _disc = (_d["label"], _d["functional"], _d["gap_eV"], "%s: %s" % (_src_tag, _oc))
+                break
         if _disc:
             print("[..] ALGO=%s —— 体系判别 %s@%s, gap=%+.4f eV（%s）"
                   % (incar_set["ALGO"], _disc[0], _disc[1], _disc[2], _disc[3]),
@@ -1251,7 +1257,7 @@ def build_step4_dir(out_dir, args, ctx, part=None):
                       "杂化跑完若开出隙，应在下一步重跑判别并以 @杂化 结果为准。"
                       % (_disc[0], _disc[1]), file=sys.stderr)
         else:
-            print("[..] 没有体系判别结果（step2.15 未启用/未跑完），ALGO 沿用默认 %s"
+            print("[..] 没有体系判别结果（step2.15 / step2.2 都读不出），ALGO 沿用默认 %s"
                   "（向后兼容）" % incar_set.get("ALGO"), file=sys.stderr)
 
     incar_set["SYSTEM"] = "%s %s%s %s (geometry=%s)%s" % (

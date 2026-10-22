@@ -14,6 +14,15 @@ This project adheres to Semantic Versioning; versions before 1.0.0 are developme
 
 ## [Unreleased]
 
+### Fixed (2026-10-22: [0066] ke-dft-cpu HSE ALGO falls back to the S2.2 PBE gap)
+- `gen_step4_HSE.py` picks ALGO (SEMICONDUCTOR -> All, METAL/SEMIMETAL -> Damped) from the S2.15 discriminant OUTCAR.
+  S2.28 only needs S2.2, so when S2.15 was still queued (or had died from OOM) the stage-1 HSE SCF silently got the
+  default Damped; Mg2C60 made 64 electronic steps in 14 h. It now falls back to the S2.2 PBE OUTCAR with the same
+  band-index metric (ALGO only; the gate and discriminant.json still come from S2.15), and an unparsable S2.15
+  OUTCAR no longer stops the search.
+- `discriminant_common.py` added to the gen_need of S2.28_hsescf and S2.3_hse (it was imported but only present
+  when another step had left a copy in the material directory).
+
 ### Changed (2026-10-21: [0065] ke-dft-cpu S6_elastic cheaper defaults; S8.1 no longer waits for S6)
 - `S8.1_bt2` drops `step6_elastic` from its needs: it never reads the elastic constants (C only enters the DPT τ of
   `S8.2_dpt`, which S8.1 still needs, so semiconductors wait for S6 through S8.2 as before). Metals (dpt group off)

@@ -22,6 +22,7 @@ REPO = Path(__file__).resolve().parents[1]
 KE = REPO / "skill" / "ke-dft-cpu"
 GEN = KE / "step2_bandgap" / "step2.3_hse" / "gen_step4_HSE.py"
 DONE = " General timing and accounting informations for this job:\n"
+DISC = KE / "step2_bandgap" / "step2.15_discriminant"
 
 INCAR_PBE = """SYSTEM = MgC PBE
 ISTART = 0
@@ -77,7 +78,8 @@ def _material(td, kmesh="4 4 3"):
 
 
 def _gen(mat, *args):
-    env = dict(os.environ, PYTHONPATH=os.pathsep.join([str(KE), str(REPO)]))
+    # discriminant_common.py 由 autozt 按 gen_need 推到材料目录；这里用 PYTHONPATH 代替
+    env = dict(os.environ, PYTHONPATH=os.pathsep.join([str(KE), str(REPO), str(DISC)]))
     return subprocess.run([sys.executable, str(GEN), *args], cwd=str(mat),
                           capture_output=True, text=True, env=env, timeout=120)
 
@@ -160,6 +162,63 @@ def test_stage2_legacy_fallback_without_stage1_dir(tmp_path):
     assert not (p / "hse_scf_source.json").exists()
 
 
+# ------------------------------------------------------------------ [0066] ALGO 来源
+def _eig_outcar(gap, nelect=20, nbands=24):
+    """两个 k 点的本征值块：占据带顶 -5.0 eV（k1），导带底 -5.0+gap（k2）。"""
+    nocc = nelect // 2
+    out = ["   NELECT =      %d.0000    total number of electrons" % nelect,
+           "   NBANDS=     %d" % nbands]
+    for k, (kv, shift) in enumerate((("0.0000    0.0000    0.0000", 0.0),
+                                     ("0.5000    0.0000    0.0000", 0.3)), 1):
+        out.append(" k-point     %d :       %s" % (k, kv))
+        for b in range(1, nbands + 1):
+            if b <= nocc:
+                e, f = -10.0 + 0.5 * b - shift, "2.00000"
+            else:
+                e, f = -5.0 + gap + 0.5 * (b - nocc - 1) + (0.3 - shift), "0.00000"
+            out.append("     %d     %.4f      %s" % (b, e, f))
+    return "\n".join(out) + "\n" + DONE
+
+
+def _algo(m):
+    return _incar(m / "step2_bandgap" / "step2.28_hse_scf" / "INCAR")["ALGO"]
+
+
+def test_algo_falls_back_to_pbe_gap(tmp_path):
+    m = _material(tmp_path)
+    (m / "step2_bandgap" / "step2.2_pbe" / "OUTCAR").write_text(_eig_outcar(0.0645))   # Mg2C60 的 PBE 隙
+    r = _gen(m, "--stage", "scf")
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert _algo(m) == "All" and "S2.2 PBE" in r.stderr
+
+
+def test_algo_pbe_overlap_stays_damped(tmp_path):
+    m = _material(tmp_path)
+    (m / "step2_bandgap" / "step2.2_pbe" / "OUTCAR").write_text(_eig_outcar(-0.2))
+    assert _gen(m, "--stage", "scf").returncode == 0
+    assert _algo(m) == "Damped"
+
+
+def test_algo_discriminant_wins_over_pbe(tmp_path):
+    m = _material(tmp_path)
+    (m / "step2_bandgap" / "step2.2_pbe" / "OUTCAR").write_text(_eig_outcar(0.5))
+    d = m / "step2_bandgap" / "step2.15_discriminant"
+    d.mkdir(parents=True)
+    (d / "OUTCAR").write_text(_eig_outcar(-0.1))                    # 密网格：带重叠
+    r = _gen(m, "--stage", "scf")
+    assert r.returncode == 0 and _algo(m) == "Damped" and "S2.15" in r.stderr
+
+
+def test_algo_unfinished_discriminant_falls_back(tmp_path):
+    m = _material(tmp_path)
+    (m / "step2_bandgap" / "step2.2_pbe" / "OUTCAR").write_text(_eig_outcar(0.5))
+    d = m / "step2_bandgap" / "step2.15_discriminant"
+    d.mkdir(parents=True)
+    (d / "OUTCAR").write_text("   NBANDS=     24\n running\n")        # 排队/OOM 留下的半截 OUTCAR
+    r = _gen(m, "--stage", "scf")
+    assert r.returncode == 0 and _algo(m) == "All"
+
+
 # ------------------------------------------------------------------ 判据
 @pytest.fixture()
 def ck():
@@ -209,6 +268,7 @@ def test_skill_yaml_and_cascade():
     steps = {s["label"]: s for s in man["optional_steps"]["bandgap_hse"]["steps"]}
     s1, s2 = steps["S2.28_hsescf"], steps["S2.3_hse"]
     assert s1["check"] == "hse_scf" and "--stage scf" in s1["gen"] and "fanout" not in s1
+    assert "discriminant_common.py" in s1["gen_need"] and "discriminant_common.py" in s2["gen_need"]
     assert "step2_bandgap/step2.28_hse_scf" in s2["needs"]
     assert s1["seq"] < s2["seq"]
     sys.path.insert(0, str(KE))
