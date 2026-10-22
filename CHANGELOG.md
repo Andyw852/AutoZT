@@ -14,6 +14,18 @@ This project adheres to Semantic Versioning; versions before 1.0.0 are developme
 
 ## [Unreleased]
 
+### Changed (2026-10-22: ke-dft-cpu S8/S4 — 环境类失败改为"开头自检 + 优雅降级")
+- 作业内自检（`overlap_preflight.py --in-job` 的 `job_env_check`）：除核对 amset 版本外，再逐项 import
+  `ase` / `spglib` / `BoltzTraP2.sphere`。任一失败立刻拦截并打印修法（缺 ase → `pip install ase`；
+  `spg_free_dataset` → spglib/BoltzTraP2 ABI 不匹配，换/重建 AMSET 环境）。起因：yue 的
+  `conda_envs/amset` 缺 ase，作业排队后跑到 15 分钟才炸，白占节点。
+- gen 端 `apply_mesh_min` 在 gen 环境没有 `BoltzTraP2` / `pymatgen.io.ase`（或 C 扩展与 spglib
+  ABI 不匹配）时不再 `ModuleNotFoundError` 硬崩：打 WARN 跳过自动选网格，沿用 step.conf 的
+  `INTERPOLATION_FACTOR`（yue 的 gen 用 autozt venv，旧行为直接退出）。
+- 生成阶段内存自检：submit.sh 无 `--mem`/`--mem-per-cpu` 且关掉自动选网格时，若 `--ntasks-per-node` ≥ 8
+  就提示补 `--mem-per-cpu`（yue 默认按核给 3.8GB，16 workers 只拿到 61GB，实测 1:35 被 OOM Killer 杀；
+  改 12000M 后正常）。集群模板同步补上（`setting/clus_xa_yue/templates/submit_amset.tpl`）。
+
 ### Fixed (2026-10-22: ke-dft-cpu S7.1 — AMSET's symmetry-derived strains were mislabeled)
 - AMSET 0.4.19 / 0.5.1 `get_symmetrized_strain_mapping` moves a computed configuration's bands to k' = M·k
   (M = spglib Wᵀ, fractional) but labels the result R·E·Rᵀ; those bands belong to Rᵀ·E·R. The two agree for involutory
