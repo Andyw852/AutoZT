@@ -204,7 +204,7 @@ def _probe_script(groups, alts, fallback_py=None):
         lines.append("echo '@@GROUP %d'" % i)
         lines.append(
             "( _act %s %s >/dev/null 2>&1; _ok=1; "
-            "if [ -n %s ]; then _a=\"${CONDA_DEFAULT_ENV:-${VIRTUAL_ENV:-}}\"; "
+            "if [ -n %s ]; then _a=\"${VIRTUAL_ENV:-${CONDA_DEFAULT_ENV:-}}\"; "
             "case \"$_a\" in *\"$(basename -- %s)\"*) ;; *) _ok=0;; esac; fi; "
             "_py=\"\"; if [ \"$_ok\" = 0 ]; then export PATH=\"$_ORIG_PATH\"; _py=\"$_FB\"; "
             "elif [ -z %s ]; then _py=\"$_FB\"; fi; "
