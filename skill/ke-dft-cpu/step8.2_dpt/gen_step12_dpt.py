@@ -34,8 +34,8 @@ from pathlib import Path
 # =========================== 可改参数区 ===========================
 # [SKILL_REV] 版本戳：写进 dpt_result.json，铺开时验证跑的是哪份 skill 副本。
 # 每次改本脚本逻辑后更新（如 "2026-08-29-nstep-linear"）。
-_SKILL_REV = "2026-10-22-0070-mass-energy-window"   # [0070] 3D 各向异性谷的带边质量改用能量窗口取点
-#   （上一版：2026-10-22-0069-3d-valley-axis 3D 多谷 E1 取谷轴 LA 形变势、C 取沿谷轴的纵向模量）
+_SKILL_REV = "2026-10-22-0071-2d-headline-md"   # [0071] 2D 面内各向异性谷的表头 m* 改用二次型拟合的 m_d
+#   （上一版：2026-10-22-0070-mass-energy-window 3D 各向异性谷的带边质量改用能量窗口取点）
 # [R-SCAN] 强制选点壳层 NSTEP（None=自动 2/3/4/5；填 2/3/4/5=只试该值，做 R-scan 用）。
 # 用法：tf -p <材料> -j step8.2_dpt conf --set FORCE_NSTEP=3 → retry + start，对比 dpt_result.json 的 m_d
 #   与 m_provenance 里的 R（V148 起写 step.conf，不改本脚本）。
@@ -450,6 +450,9 @@ _EDGE_DEGEN = {}
 #   AMSET 插值密网格（amset eff-mass）给 0.030；ADP ∝ m*^(−5/2) -> ADP/DPT 正好差 4 倍。
 NN_KT_MAX = 4.0
 _EDGE_NN_DE = {}
+# [0071] 2D 带边 k 点的小群是否强制面内质量张量各向同性（六方 K/Γ、四方 Γ 是；矩形胞、TMD Q 谷不是），
+#   get_effective_mass_aniso 写、_one_carrier 读；None = 没判出来（手填 / 拟合失败），表头照旧。
+_EDGE_SITE_ISO = {}
 
 
 def _find_band_edge(v, carrier, occ_tol=0.5):
@@ -1190,7 +1193,9 @@ def _quad_fit_2d(kfrac, recip, eband, k0, need_lin=None, mesh=None, kops=None):
     if A.shape[0] < 2 * A.shape[1]:
         return None, ("拟合点数不足：%d 点 / %d 参数（需 ≥2 倍冗余）——"
                       "加密 step3_uniform 网格" % (A.shape[0], A.shape[1]))
-    cond = float(np.linalg.cond(A))
+    # [0071] 先按列归一化再算 cond：各列量纲不同（Δk²、Δk、1），网格越密 Δk 越小，不归一化的 cond 随网格变大，
+    #   密网格（≥48、带线性项）上 cond > 1e5 被误判病态、直接报错；归一化后只反映取点是否单侧/共线。
+    cond = float(np.linalg.cond(A / np.maximum(np.linalg.norm(A, axis=0), 1e-300)))
     if cond > 1e5:
         return None, ("设计矩阵病态 cond=%.1e（k 点单侧/共线，"
                       "IBZ 楔形取点不对称）" % cond)
@@ -1300,6 +1305,11 @@ def get_effective_mass_aniso(cwd, carrier, is_2d):
         fit, _ferr = _quad_fit_2d(kfrac, recip, ene[:, b0], k0, kops=_kops)
         if _ferr:
             return None, _ferr
+        try:                                                             # [0071]
+            _EDGE_SITE_ISO[carrier] = _site_isotropic(kfrac[k0], v.final_structure,
+                                                      _cart_rots(v.final_structure), dim=2)
+        except Exception:                                                # noqa: BLE001
+            _EDGE_SITE_ISO[carrier] = None
         a, b, c, den = fit["a"], fit["b"], fit["c"], fit["den"]
         aa, bb = abs(a), abs(b)
         npt, n_shell, Rused, names, cond, rel = (fit[k] for k in ("npt", "n_shell", "Rused", "names", "cond", "rel"))
@@ -2493,9 +2503,10 @@ def _quad_fit_3d_energy(kfrac, recip, de, k0, mesh, step_cart, need_lin, star=No
     return None, why
 
 
-def _site_isotropic(kf, structure, rots):
+def _site_isotropic(kf, structure, rots, dim=3):
     """[0070] k 点的小群（点群 ± 时间反演里把 k 映回自身、模倒格矢的操作）是否强制二阶张量各向同性
-    （立方晶体的 Γ、R 等）：把一个一般的对称张量对小群平均，看是否 ∝ 单位阵。"""
+    （立方晶体的 Γ、R 等）：把一个一般的对称张量对小群平均，看是否 ∝ 单位阵。
+    [0071] dim=2 只看面内 2×2 块（六方 K/Γ、四方 Γ 是各向同性；矩形胞 Γ、TMD Q 谷不是）。"""
     import numpy as np
     B = np.asarray(structure.lattice.reciprocal_lattice.matrix, float)
     Binv = np.linalg.inv(B)
@@ -2509,8 +2520,8 @@ def _site_isotropic(kf, structure, rots):
     if not keep:
         return False
     S = np.array([[1.0, 0.3, 0.2], [0.3, 2.0, 0.4], [0.2, 0.4, 3.5]])
-    T = sum(r @ S @ r.T for r in keep) / len(keep)
-    return bool(np.allclose(T, np.trace(T) / 3.0 * np.eye(3), atol=1e-8))
+    T = (sum(r @ S @ r.T for r in keep) / len(keep))[:dim, :dim]
+    return bool(np.allclose(T, np.trace(T) / dim * np.eye(dim), atol=1e-8))
 
 
 def _mass_from_hessian_3d(H, carrier, rots=None):
@@ -2668,6 +2679,7 @@ def _one_carrier(cwd, is_2d, carrier, T, temps=None):
     C, Cunit, Cprov = get_C(cwd, is_2d)
     _EDGE_DEGEN.pop(carrier, None)
     _EDGE_NN_DE.pop(carrier, None)
+    _EDGE_SITE_ISO.pop(carrier, None)
     m, mprov = get_effective_mass(cwd, carrier, is_2d)
     _nd = _EDGE_DEGEN.get(carrier, 1)
     if m is not None and _nd > 1:                                   # [V145]
@@ -2683,6 +2695,16 @@ def _one_carrier(cwd, is_2d, carrier, T, temps=None):
         #   态密度质量 m_d = (det M)^(1/3)；拟合失败才保留旧值。
         print("[..] %s：3D 表头 m* 改用三维二次型拟合的 m_d=%.4f（旧方向分解值 %s）" % (carrier, bd["m_d_m0"], m))
         mprov = "三维二次型拟合 m_d=(det M)^(1/3)（%s）；旧的方向分解值 %s 不再用（3D 各向异性时偏轻）；%s" % (
+            bd["m_provenance"], m, mprov)
+        m = bd["m_d_m0"]
+    if is_2d and bd.get("status") == "ok" and not MANUAL[key] and _EDGE_SITE_ISO.get(carrier) is False:
+        # [0071] 2D 表头 m*：方向分解取"最轻两支"的几何平均，面内各向异性谷里最轻的两支都在轻轴上（+x 与 −x），
+        #   取到的是轻轴质量（磷烯型 0.17/1.1 给 0.170，m_d 应为 0.432），2D 表头 μ ∝ 1/m*² 虚高约 6 倍。与 [0025] 的 3D
+        #   同一口径：带边小群不强制面内各向同性时，改用面内二次型拟合的态密度质量 m_d = √(m_x·m_y)；
+        #   六方 K/Γ 这类各向同性谷两者一致，仍用方向分解值（不变）。
+        print("[..] %s：2D 面内各向异性谷，表头 m* 改用面内二次型拟合的 m_d=%.4f（旧方向分解值 %s）"
+              % (carrier, bd["m_d_m0"], m))
+        mprov = "面内二次型拟合 m_d=√(m_x·m_y)（%s）；旧的方向分解值 %s 不再用（面内各向异性时取到轻轴质量）；%s" % (
             bd["m_provenance"], m, mprov)
         m = bd["m_d_m0"]
     e1, e1prov = get_E1(cwd, carrier)

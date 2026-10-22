@@ -19,6 +19,21 @@ This project adheres to Semantic Versioning; versions before 1.0.0 are developme
 - gen 端 apply_mesh_min 在 gen 环境没有 BoltzTraP2 / pymatgen.io.ase（或 C 扩展与 spglib ABI 不匹配）时不再 ModuleNotFoundError 硬崩：打 WARN 跳过自动选网格，沿用 step.conf 的 INTERPOLATION_FACTOR。
 - 生成阶段内存自检：submit.sh 无 --mem/--mem-per-cpu 且关掉自动选网格时，若 --ntasks-per-node >= 8 就提示补 --mem-per-cpu（yue 默认 3.8GB/核，16 workers 只拿到 61GB，实测 1:35 被 OOM Killer 杀；改 12000M 后正常）。
 
+### Fixed (2026-10-22: [0071] ke-dft-cpu S8.2 2D headline m* of in-plane anisotropic valleys; 2D fit cond)
+- The 2D headline m* took the geometric mean of the two lightest directions from the direction decomposition. In an
+  in-plane anisotropic valley both lightest directions lie on the light axis (+x and −x), so the headline m* was the
+  light-axis mass. A phosphorene-type valley (0.17/1.1) gave 0.170 instead of √(m_x·m_y) = 0.432, and the 2D headline
+  μ (∝ 1/m*²) was about 6× too high. `by_direction` was not affected.
+- When the band-edge little group does not force an isotropic in-plane mass tensor, the headline now uses the
+  `by_direction` m_d = √(m_x·m_y), the same convention as the 3D fix in [0025]. Examples are rectangular-cell Γ
+  and SS/LS-type edges on Y–Γ. Hexagonal K/Γ and square Γ valleys are unchanged (MoS2, CrS2/CrSe2).
+  Manually set masses are also unchanged. Rectangular-cell materials such as SS/LS get a lower headline μ.
+- The `_quad_fit_2d` condition number is now computed on the column-normalised design matrix. Unnormalised, it grew
+  with grid density because the columns (Δk², Δk, 1) have different scales. With linear terms, 48 and 72 grids reached
+  cond = 1.5e5 / 7.7e5 and were rejected as ill-conditioned. Genuinely degenerate sampling, such as points only on the
+  two axes, is still rejected. The multi-valley path uses the same function. The 3D fits are unchanged.
+- Tests: tests/test_0071_2d_headline_md.py.
+
 ### Fixed (2026-10-22: [0070] ke-dft-cpu S8.2 3D band-edge mass of anisotropic valleys uses an energy-window fit)
 - The [0025] 3D quadratic fit took grid points inside a sphere |Δk| ≤ R and absorbed non-parabolicity with an isotropic
   q⁴ term. In a prolate valley (m_l ≫ m_t) the transverse points in that sphere sit far outside the parabolic region
