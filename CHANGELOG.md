@@ -14,6 +14,14 @@ This project adheres to Semantic Versioning; versions before 1.0.0 are developme
 
 ## [Unreleased]
 
+### Fixed (2026-10-22: [0067] ke-dft-cpu S7 retry no longer wipes a finished ionrelax relaxation)
+- When the relaxation segment of `ionrelax/` finished (OUTCAR.relax with the closing banner, non-empty CONTCAR.relax)
+  but the static segment was killed (OOM, timeout, disk full), `retry S7_deform` treated the directory as unfinished
+  and `_build_ionrelax` cleared it, discarding the relaxation (Mg2C60: three configurations, 31 h each). It now
+  re-runs only the static segment from CONTCAR.relax (ISTART=0, archive suffix `nostatic`), provided the k grid
+  matches and the relaxation INCAR echoed in vasprun.xml.relax matches the current one (unreadable echo: reuse with
+  a warning; mismatch: rebuild as before).
+
 ### Fixed (2026-10-22: [0066] ke-dft-cpu HSE ALGO falls back to the S2.2 PBE gap)
 - `gen_step4_HSE.py` picks ALGO (SEMICONDUCTOR -> All, METAL/SEMIMETAL -> Damped) from the S2.15 discriminant OUTCAR.
   S2.28 only needs S2.2, so when S2.15 was still queued (or had died from OOM) the stage-1 HSE SCF silently got the
