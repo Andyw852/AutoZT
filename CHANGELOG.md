@@ -19,6 +19,31 @@ This project adheres to Semantic Versioning; versions before 1.0.0 are developme
 - gen 端 apply_mesh_min 在 gen 环境没有 BoltzTraP2 / pymatgen.io.ase（或 C 扩展与 spglib ABI 不匹配）时不再 ModuleNotFoundError 硬崩：打 WARN 跳过自动选网格，沿用 step.conf 的 INTERPOLATION_FACTOR。
 - 生成阶段内存自检：submit.sh 无 --mem/--mem-per-cpu 且关掉自动选网格时，若 --ntasks-per-node >= 8 就提示补 --mem-per-cpu（yue 默认 3.8GB/核，16 workers 只拿到 61GB，实测 1:35 被 OOM Killer 杀；改 12000M 后正常）。
 
+### Fixed (2026-10-22: [0070] ke-dft-cpu S8.2 3D band-edge mass of anisotropic valleys uses an energy-window fit)
+- The [0025] 3D quadratic fit took grid points inside a sphere |Δk| ≤ R and absorbed non-parabolicity with an isotropic
+  q⁴ term. In a prolate valley (m_l ≫ m_t) the transverse points in that sphere sit far outside the parabolic region
+  while the longitudinal ones barely leave the band edge, so the fit pulled m_l down. Si on the 34³ S3 grid gave
+  m_l = 0.386 (experiment 0.916), and the electron DPT stayed at 4,477 cm²/Vs after [0069] (~2,600 with literature
+  masses).
+- New behaviour:
+  - Valleys whose little group does not force an isotropic mass tensor are fitted to the grid points within
+    |ΔE| ≤ Ew of the band edge, with Ew widened from 0.05 to 0.20 eV. This covers Si Δ, Ge/PbTe L, Mg₂Si X, Γ in
+    non-cubic crystals, and general k points. Fitting over a chosen energy range is the least-squares route of
+    effmass (Whalley, JOSS 3, 797 (2018)). The finite-difference (EMC, QuantumATK) and DFPT (Laflamme Janssen et al.,
+    PRB 93, 205147 (2016)) routes need extra k points or DFPT.
+  - Only points in the valley's own Voronoi region are used, and Δk is minimum-imaged so zone-boundary valleys get
+    both sides.
+  - Each window needs at least twice as many points as parameters, steps along all three reciprocal axes,
+    cond ≤ 1e5 and a relative residual ≤ 0.10. Its principal curvatures must agree with the next usable window
+    within 15% (window convergence).
+  - If no window qualifies, including the case where only one window is usable, the old sphere fit is used and
+    `caveats` says the m* is unreliable and S3 should be refined.
+  - Isotropic sites (cubic Γ, R) keep the sphere + q⁴ fit.
+- Synthetic Kane bands on 34³ and 48³ grids: the energy-window fit is within 9% for Si-Δ, Mg₂Si-X, Ge-L, oblate,
+  triaxial and hole valleys, where the old fit was off by up to 70%. EPM Si 34³: 0.183/0.183/0.854 (true m_l 0.873,
+  old fit 0.405). Very light, strongly non-parabolic valleys (PbTe type) fall back with a caveat at every grid tested.
+- Tests: tests/test_0070_mass_energy_window.py. The tests/test_0069 X-valley fixture now uses a 32³ grid.
+
 ### Fixed (2026-10-22: [0069] ke-dft-cpu S8.2 3D multi-valley DPT uses the valley-axis deformation potential)
 - For 3D band edges with symmetry-equivalent valleys (Si Δ, Ge/PbTe L, Mg₂Si X), S8.2 averaged the
   deformation-potential tensor diagonals over the equivalent valleys and then squared the result. That average keeps

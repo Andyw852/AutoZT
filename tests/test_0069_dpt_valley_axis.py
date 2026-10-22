@@ -188,7 +188,7 @@ class XValleyDPTTests(unittest.TestCase):
     def _run(self, fn):
         D = _D()
         m = Path(tempfile.mkdtemp())
-        fake = T25.build_cubic_x(m)
+        fake = T25.build_cubic_x(m, mesh=(32, 32, 32))                   # [0070] 网格够细，能量窗口能做收敛检查（不触发 m* 回退标注）
         with mock.patch("pymatgen.io.vasp.Vasprun", lambda *a, **k: fake), \
                 contextlib.redirect_stdout(io.StringIO()):
             return D, fn(D, m)
