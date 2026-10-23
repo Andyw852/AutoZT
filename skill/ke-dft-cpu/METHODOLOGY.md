@@ -239,9 +239,11 @@ kz>=3 的网格收敛测试完成前，仍建议用同 c（20 Å）的跨体系�
    - **2D**：MoS2 的同极 A1 模与谷间光学模耦合很重要 -> **总**迁移率系统偏高。
      **[0033] 起 S8.4 可选补上**：常数形变势模型（Jin 2014 / Kaasbjerg 2012）的谷内 ODP 与谷间 IVS，
      step.conf 写 `DP_OPTICAL_E/H` 通道表（参数抄文献表），谷表取自 S8.2 多谷；开了 IVS 的载流子 ADP 只留谷内，
-     避免重复计数。谷内 ODP 自 [0041] 起出厂由冻声子参数打开（`odp_frozen` 组默认开）；谷间 IVS 仍要手填，出厂不算。
+     避免重复计数。**谷内 ODP / 谷间 IVS 现在的正路是 DFPT 提取（[0059] eph-qe-cpu 的 `ivs_dfpt`）**；
+     冻声子那条自 [0075]（2026-10-23 用户决定）起**已隐藏**：`odp_frozen` 组默认关，只有显式写 `odp_frozen: true`
+     的历史材料（当前仅 MoS2）才会注出 S7.2/S8.21。
      细节见 `step8.4_amset2d/README.md`「ODP 与谷间散射」。
-     **[0035] 谷内 ODP 的参数可以自动算**：开 `odp_frozen` 组后，S7.2 对 S5 的 Γ 点非极性光学模做 ±u 冻声子单点，
+     **[0035][0075] 谷内 ODP 的参数（冻声子路，已隐藏）**：显式开 `odp_frozen` 后，S7.2 对 S5 的 Γ 点非极性光学模做 ±u 冻声子单点，
      S8.21 在 S8.2 各谷的 k 点取真空对齐的带边能量算 D = dE/du（位移 Δ_κ = u·√(M/m_κ)·e_κ，与常数形变势模型的
      |g|² = ħD²/(2NMω) 同一归一化），S8.4 自动用上。只有零阶（q 无关）谷内耦合；谷间 IVS 仍要文献参数。
      细节见 `step8.4_amset2d/README.md`「冻声子 ODP 参数」。
@@ -251,7 +253,7 @@ kz>=3 的网格收敛测试完成前，仍建议用同 c（20 Å）的跨体系�
      **必须手填** `DP_OPTICAL_VALLEYS_E/H`（三维没有 S8.2 多谷谷表，k 点写 3 个分量），如 Si 空穴
      `DP_OPTICAL_H = G>G:6.0@63`、`DP_OPTICAL_VALLEYS_H = G:0,0,0`；`ADP_INTRAVALLEY` 规则同 2D。
      transport.json 多出 ODP/IVS 单机制迁移率，S8.3 自动带上。
-     **谷内 ODP 出厂用冻声子参数**（与 2D 同一规则）：开 `odp_frozen` 组后 S7.2 在 3D 上照样跑（照抄 S7 undeformed），
+     **谷内 ODP（冻声子路，[0075] 起隐藏，改走 DFPT）**：显式开 `odp_frozen` 组后 S7.2 在 3D 上照样跑（照抄 S7 undeformed），
      S8.21 不对齐（没有真空）、谷表在 S7 网格（ISYM=0）上自动找带边极值（或用手填 `DP_OPTICAL_VALLEYS_E/H`），
      S8 的 `ODP_FROZEN=auto` 读 `odp_params.json`：算出来的优先，手填谷内值只作对照（`ODP_FROZEN = off` 才用手填）；
      **谷间 IVS 不自动算**，只有手填 `X>X'`/`X>Y` 才开（谷标签用 S8.21 的 `odp_summary.txt`）。

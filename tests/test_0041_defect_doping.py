@@ -113,6 +113,8 @@ def test_s83_defect_plot(tmp_path):
     assert not (d / "MoS2_defect_equilibrium.png").exists()
 
 
-def test_odp_frozen_default_on():
+def test_odp_frozen_default_off():
+    # [0075] 2026-10-23：冻声子 ODP 路已隐藏（默认关），正路是 DFPT（eph-qe-cpu 的 ivs_dfpt）。
+    #   组内步骤仍在，材料显式写 odp_frozen: true 才注出（当前仅 MoS2）。
     sk = yaml.safe_load((KE / "skill.yaml").read_text(encoding="utf-8"))
-    assert sk["optional_steps"]["odp_frozen"]["default"] is True
+    assert sk["optional_steps"]["odp_frozen"]["default"] is False

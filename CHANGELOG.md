@@ -14,6 +14,19 @@ This project adheres to Semantic Versioning; versions before 1.0.0 are developme
 
 ## [Unreleased]
 
+### Changed (2026-10-23: [0075] ke-dft-cpu hides the frozen-phonon ODP/IVS path)
+- The preferred route for the optical deformation potential (ODP) and the intervalley deformation potential (IVS) is
+  now **DFPT extraction** (eph-qe-cpu, optional group `ivs_dfpt`: ODP from the q=Γ AHC, IVS from the valley-pair q).
+  The frozen-phonon route in ke-dft-cpu (S7.2 single points + S8.21 read; S7.3 supercell DFPT + S7.4 + S8.22) is kept
+  in the code but hidden: `optional_steps.odp_frozen.default` flipped from `true` to `false`, so S7.2/S8.21 are no
+  longer injected for materials that do not ask for them. `ivs_frozen` was already default-off.
+- Materials that already opted in keep working: an explicit `odp_frozen: true` in the material `tf_*.yaml` is
+  unchanged (currently only MoS2).
+- Reason: the frozen-phonon cost explodes for large cells - Mg2C60 (62 atoms) needs 1 + 2x186 = 373 single points,
+  far above the `ODP_MAX_JOBS=40` guard, and IVS only ever applied to 2D hexagonal K/K' valleys (not 3D monoclinic
+  cells like Mg2C60), where DFPT is both cheaper and the physically appropriate method.
+- Docs updated: `skill.yaml` group headers, `METHODOLOGY.md` (ODP/IVS sections), `step8.4_amset2d/README.md`.
+
 ### Changed (2026-10-23: [0073] ke-dft-cpu S6_elastic sets its own wall-clock limit)
 - The S6 gen already estimated the IBRION=6 wall time (SCF count x S1 ionic-step time x 2.0). It now also scales the
   estimate by the S1/S6 core ratio and writes `#SBATCH --time` = estimate x 1.3 (whole hours, at least 2 h). An explicit

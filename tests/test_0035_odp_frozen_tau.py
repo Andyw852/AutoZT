@@ -609,7 +609,9 @@ def _steps():
 def test_skill_yaml_group_and_needs():
     sk, by = _steps()
     grp = sk["optional_steps"]["odp_frozen"]
-    assert grp["default"] is True and "auto_dim" not in grp             # [0041] 用户决定默认开（每材料多一批 VASP 单点）
+    # [0075] 2026-10-23 用户决定隐藏冻声子路：默认改关（ODP/IVS 正路是 DFPT，
+    #   见 eph-qe-cpu 的 ivs_dfpt）。组内步骤定义保留，显式 odp_frozen: true 仍可用。
+    assert grp["default"] is False and "auto_dim" not in grp
     s72, s821, s84 = by["step7c_odp_frozen"], by["step8.21_odp_read"], by["step8.4_amset2d"]
     assert s72["fanout"] == "odp-*" and s72["check"] == "outcar" and "odp_frozen.py" in s72["gen_need"]
     assert s72["needs"] == ["step1_opt", "step5_dielect", "step7_deform"]
