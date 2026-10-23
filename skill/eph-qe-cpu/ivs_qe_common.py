@@ -743,6 +743,10 @@ def gen_read(P):
         res.update({k: c[k] for k in ("id", "carrier", "from", "to", "kind", "k_init", "k_fin", "q", "n_pairs", "pairs")})
         res["run"] = qr["name"]
         out_classes.append(res)
+    st = q1["structure"]                           # [0074] 非 SOC 备注：无反演中心时 k↔−k 通道是上限（只备注，不拦）
+    inversion = iv.has_inversion(iv.recip_ops(iv.point_group(st["lattice"], st["frac"], st["symbols"],
+                                                             symprec=float(q1.get("symprec_A") or iv.SYMPREC_A))))
+    notes = iv.soc_notes(out_classes, q1["carriers"], inversion)
     carriers = {}
     for car, ci in q1["carriers"].items():
         cl = [c for c in out_classes if c["carrier"] == car]
@@ -750,7 +754,8 @@ def gen_read(P):
         carriers[car] = {"status": "ok", "valleys": ci["valleys"], "valleys_source": ci["valleys_source"],
                          "use_grid": ci["use_grid"], "valley_sig": ci["valley_sig"], "valley_sig_full": ci["valley_sig_full"],
                          "channels": chs, "dropped": dropped,
-                         "valley_check": (vchk or {}).get("carriers", {}).get(car)}
+                         "valley_check": (vchk or {}).get("carriers", {}).get(car),
+                         "soc_notes": notes.get(car, [])}
     params = {"schema": iv.SCHEMA, "created": time.strftime("%Y-%m-%d %H:%M:%S"), "dim": q1["dim"],
               "structure_sha256": q1["structure"]["sha256"], "structure_source": q1["structure"]["source"],
               "valleys_source_sha256": (q1.get("inputs") or {}).get("dpt_result_sha256"),
@@ -764,12 +769,16 @@ def gen_read(P):
                                              "kind": ((env.get("pseudos") or {}).get(t) or {}).get("kind")}
                                          for t in q1["structure"]["types"]},
                              "method": "ph.x electron_phonon='ahc'（trans=.false.，单 q），|g| 按初/终态简并组平均"},
-              "checks": {"valley_check": (vchk or {}).get("status"), "valley_check_mode": (vchk or {}).get("mode")},
+              "checks": {"valley_check": (vchk or {}).get("status"), "valley_check_mode": (vchk or {}).get("mode"),
+                         "inversion": inversion},
               "odp": odp_info or None, "carriers": carriers, "raw": out_classes}
     dest = Path(STEP["read"])
     _write(dest / "ivs_dfpt_params.json", json.dumps(iv.jsonable(params), indent=1, ensure_ascii=False) + "\n")
     _write(dest / "ivs_dfpt_table.txt", table_text(params))
     print(table_text(params))
+    for car, ns in notes.items():
+        for n_ in ns:
+            print("[NOTE] %s：%s" % (car, n_))
     print("[DONE] %s/ivs_dfpt_params.json（schema %s）。ke-dft-cpu 要用它：结果拉回本地后对 S8_kappa（3D）/ S8.4_amset2d（2D）"
           "执行 retry（gen 时自动推过去，IVS_DFPT=auto 读取）" % (dest, iv.SCHEMA))
     return 0
@@ -824,6 +833,8 @@ def table_text(params):
                                                 ch["D_eV_A"], ch["hw_meV"]))
         if c.get("dropped"):
             lines.append("#   不进通道：%s" % "; ".join("%.1f meV（%s）" % (d["hw_meV"], d["why"]) for d in c["dropped"]))
+        for n_ in c.get("soc_notes") or []:
+            lines.append("#   [备注] " + n_)
     return "\n".join(lines) + "\n"
 
 

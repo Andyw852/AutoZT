@@ -2038,9 +2038,12 @@ def resolve_dp_optical_3d(is_2d, cwd=None):
             if dft_odp and not dodp:
                 print("[..] %s：DFPT 谷内 D 全部 < %.2f eV/Å（对称性禁戒），本载流子没有谷内 ODP 通道"
                       % (car, float(IVS_DFPT_DMIN)))
+            dinfo["soc_notes"] = ivd.carrier_notes(dft, car)          # [0074] 非 SOC 口径备注（只记录、不拦）
             dft_rec["info"][car] = dinfo
             print("[OK] %s DFPT %s（%s）：%s" % (car, "谷间 IVS + 谷内 ODP" if dft_odp else "谷间 IVS", IVS_DFPT_SRC,
                                                dinfo["summary"]))
+            for n_ in dinfo["soc_notes"]:
+                print("[NOTE] %s DFPT：%s" % (car, n_))
         try:
             dpo.check_channels(chs, vs)
         except ValueError as e:

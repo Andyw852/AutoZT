@@ -380,7 +380,8 @@ project_setting/setting.yaml 的 work_dir   ← 最高，autozt hpc 不会改它
         S2.3_hse: jzzn      # 键 = 步骤 label（或完整名 step2_bandgap/step2.3_hse / seq）
   ```
   只动这一步：提交模板、ssh 目标、远端目录都走该集群；依赖步骤的产物（含 WAVECAR）由 autozt 按 needs 跨集群回传。
-  可选组里的步骤（如 S2.3_hse、S8.4）也生效。写错的键会告警。**不要**为此在项目 yaml 里写 `steps:`——写了就整体接管整条步骤链，
+  可选组里的步骤（如 S2.3_hse、S8.4）也生效。写错的键会告警。统一核数 `cores` 也按该集群：材料 hpc.yaml 那一档换成
+  `setting/<该集群>.yaml` 的 cores（[0075]；项目 setting.yaml / 技能 / 全局的 cores 照旧生效）。**不要**为此在项目 yaml 里写 `steps:`——写了就整体接管整条步骤链，
   技能后来的修复进不来；也**不要**复制别的集群的提交模板冒充 `submit_std_*.tpl`（只改了脚本内容，作业照样交到旧集群）。
   **切换前先在旧集群把该步骤的作业 stop 掉**：改完配置后 autozt 只在新集群找这一步，旧集群上的作业就管不到了。
 - **步骤级（全局）**：skill.yaml 该步骤加 `hpc: <集群>` 字段，影响所有材料的该步骤。
