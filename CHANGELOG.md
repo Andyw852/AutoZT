@@ -22,6 +22,7 @@ This project adheres to Semantic Versioning; versions before 1.0.0 are developme
 - `zt_vs_doping.png`：由一张 symlog 图（负浓度 = n 型）改为 n / p 两栏、对数横轴 |n|，温度越高线越深。
 - `zt_components.png`、`intrinsic_carrier/zt_intrinsic.png`：同一套轴 / 字色 / 线色。
 - `ZT_CMAP_VMAX = auto` 时上限取整到每档 1/2/2.5/5×10^k，档界是整齐数；默认 0.3 不变。
+- n 型改用绿色 6 档（`#CBE6D0 → #025F29`，与粉色逐档同 OKLab 明度），p 型保持粉色；热图与 zT(T) 每栏各带色标。
 
 ### Added (2026-10-23: [0072] intravalley ADP deformation potentials from DFPT acoustic slopes — experimental, off by default)
 - Validation on Si (QE 7.4, SG15 NC PBE, a = 5.479 Å) showed the small-q acoustic matrix elements carry a spurious 1/q

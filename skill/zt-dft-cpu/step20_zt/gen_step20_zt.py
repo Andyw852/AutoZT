@@ -14,7 +14,7 @@
   · zt_summary.json   机读全表：温度网格 × 掺杂网格的 S/σ/κ_e/κ_L/κ_tot/PF/ZT、
                       峰值 ZT、口径说明、来源路径
   · zt_summary.txt    人读汇总（含峰值 ZT 与每档明细表）
-  · zt_heatmap.png    zT(n, T) 热图（n / p 两栏，6 档离散色 + 统一色标）
+  · zt_heatmap.png    zT(n, T) 热图（n 绿 / p 粉两栏，6 档离散色 + 统一色标）
   · zt_vs_T.png       各掺杂档 ZT(T)（左 n 型 / 右 p 型，颜色按 |n| 深浅 + 色标）
   · zt_vs_doping.png  各温度下 ZT(|n|)（n / p 两栏，对数横轴）
   · zt_components.png 最优档的 S/σ/κ/PF/ZT 五联图（诊断用）
@@ -50,9 +50,11 @@ T_TARGETS = (300.0, 500.0, 700.0, 900.0)   # zt_vs_doping 想画的目标温度
 # 让 ZT≈0 的格子仍能看出边界，不和白格线融成一片）。中间为线性过渡。
 # [0076] 用户 2026-10-23 给参考图（分档色块 + 白缝 + 深灰箭头轴 + 灰色斜体轴名）重做全部 ZT 图：
 #   色板改为参考图的 6 档离散色（浅 -> 深），热图按档上色（不再连续渐变）；折线图沿用同一色阶。
-ZT_CMAP_COLORS = ("#F6D3DE", "#EEB2C6", "#E38AA8", "#D16388", "#B23C66", "#8A1D46")
+ZT_CMAP_COLORS = ("#F6D3DE", "#EEB2C6", "#E38AA8", "#D16388", "#B23C66", "#8A1D46")   # p 型（粉）
+# [0076] 用户 2026-10-23：n 型改用绿色。6 档逐档取与粉色同一 OKLab 明度、同色度（色相 150°），
+#   两套色阶深浅一一对应，同一 ZT 档在 n / p 两栏看起来一样深。
+ZT_CMAP_COLORS_N = ("#CBE6D0", "#A4D4AC", "#72BD83", "#3DA45C", "#02843B", "#025F29")
 ZT_CMAP = "autozt_zt"
-ZT_INK = "#8A1D46"                     # 峰值数字 / 单条曲线用的同色系深色
 ZT_AXIS = "#3A4654"                    # 坐标轴（带三角箭头的横/纵轴）：参考图的深灰蓝
 ZT_LABEL = "#5B6673"                   # 轴名 / 刻度数字 / 标题 / 图例文字：参考图的中灰
 ZT_GAP = 0.08                          # 热图色块之间的白缝（占一格的比例）
@@ -304,19 +306,25 @@ def heatmap_data(grid):
     return out
 
 
-def _zt_cmap(plt):
+def _ramp(kind):
+    """[0076] 载流子类型 -> 6 档色：n 型绿、p 型粉（本征 / 其它按 p）。"""
+    return ZT_CMAP_COLORS_N if kind == "n" else ZT_CMAP_COLORS
+
+
+def _zt_cmap(plt, kind="p"):
     """[0047/0076] 统一色板：参考图的 6 档离散色（浅 = ZT 小，深 = ZT 大），所有材料共用；
     超过统一上限的格子按最深档上色。"""
     from matplotlib.colors import ListedColormap
-    cm = ListedColormap(list(ZT_CMAP_COLORS), name=ZT_CMAP)
-    cm.set_over(ZT_CMAP_COLORS[-1])
+    cols = _ramp(kind)
+    cm = ListedColormap(list(cols), name="%s_%s" % (ZT_CMAP, kind))
+    cm.set_over(cols[-1])
     return cm
 
 
-def _line_cmap(plt):
+def _line_cmap(plt, kind="p"):
     """[0076] 折线图的连续色阶：同一套 6 色插值，去掉最浅档（白底上看不清）。"""
     from matplotlib.colors import LinearSegmentedColormap
-    return LinearSegmentedColormap.from_list(ZT_CMAP + "_line", list(ZT_CMAP_COLORS[1:]))
+    return LinearSegmentedColormap.from_list("%s_line_%s" % (ZT_CMAP, kind), list(_ramp(kind)[1:]))
 
 
 def _apply_style(plt):
@@ -393,17 +401,17 @@ def make_heatmap(out, grid, meta, plt, par=None):
     if not vmax:
         return None
     clipped = any(v > vmax for d in data.values() for row in d["zt"] for v in row if v is not None)
-    cmap = _zt_cmap(plt)
     nb = len(ZT_CMAP_COLORS)
     bounds = np.linspace(0.0, vmax, nb + 1)
     ncol = max(len(data[k]["doping_cm-3"]) for k in kinds)
     nrow = max(len(data[k]["temperatures"]) for k in kinds)
     cell = 0.42 if max(ncol, nrow) <= 10 else 0.3            # 每格边长（英寸），尽量接近正方形
     fig, axes = plt.subplots(1, len(kinds), squeeze=False,
-                             figsize=(len(kinds) * (ncol * cell + 1.3) + 1.2, nrow * cell + 1.6))
+                             figsize=(len(kinds) * (ncol * cell + 2.4), nrow * cell + 1.6))
     g = ZT_GAP / 2.0
     for ax, kind in zip(axes[0], kinds):
         d = data[kind]
+        cols = _ramp(kind)
         nn, nt = len(d["doping_cm-3"]), len(d["temperatures"])
         peak = None
         for j, row in enumerate(d["zt"]):
@@ -412,7 +420,7 @@ def make_heatmap(out, grid, meta, plt, par=None):
                     continue
                 k = min(int(max(float(v), 0.0) / vmax * nb), nb - 1)
                 ax.add_patch(Rectangle((i - 0.5 + g, j - 0.5 + g), 1 - 2 * g, 1 - 2 * g,
-                                       facecolor=ZT_CMAP_COLORS[k], edgecolor="none", zorder=2))
+                                       facecolor=cols[k], edgecolor="none", zorder=2))
                 if peak is None or v > peak[0]:
                     peak = (float(v), i, j, k)
         if peak is not None:
@@ -420,7 +428,7 @@ def make_heatmap(out, grid, meta, plt, par=None):
             ax.add_patch(Rectangle((i - 0.5 + g, j - 0.5 + g), 1 - 2 * g, 1 - 2 * g,
                                    facecolor="none", edgecolor=ZT_AXIS, lw=1.3, zorder=3))
             ax.text(i, j, "%.2g" % v, ha="center", va="center", fontsize=7.5, fontweight="bold",
-                    color=("white" if k >= nb // 2 else ZT_INK), zorder=4)
+                    color=("white" if k >= nb // 2 else cols[-1]), zorder=4)
         ax.set_xlim(-0.5 - 0.45, nn - 0.5 + 0.35)            # 色块与箭头轴之间留一点空（同参考图）
         ax.set_ylim(-0.5 - 0.3, nt - 0.5 + 0.55)
         ax.set_xticks(range(nn))
@@ -436,15 +444,16 @@ def make_heatmap(out, grid, meta, plt, par=None):
         ax.set_xlabel(r"$n$  (cm$^{-3}$)")
         ax.set_ylabel(r"$T$  (K)")
         ax.set_title("%s-type" % kind, pad=10)
-    sm = ScalarMappable(norm=BoundaryNorm(bounds, nb), cmap=cmap)
-    cbar = fig.colorbar(sm, ax=list(axes[0]), shrink=0.8, pad=0.03, aspect=22, ticks=bounds,
-                        drawedges=True, extend=("max" if clipped else "neither"))
-    cbar.set_label(r"$zT$", color=ZT_LABEL)
-    cbar.outline.set_visible(False)
-    cbar.dividers.set_color("white")
-    cbar.dividers.set_linewidth(2.5)
-    cbar.ax.set_yticklabels(["%g" % round(b, 6) for b in bounds])
-    cbar.ax.tick_params(length=0, labelsize=8.5, pad=4)
+        # 每栏各带一条色标（n 绿 / p 粉），档界相同
+        sm = ScalarMappable(norm=BoundaryNorm(bounds, nb), cmap=_zt_cmap(plt, kind))
+        cbar = fig.colorbar(sm, ax=ax, shrink=0.8, pad=0.04, aspect=22, ticks=bounds,
+                            drawedges=True, extend=("max" if clipped else "neither"))
+        cbar.set_label(r"$zT$", color=ZT_LABEL)
+        cbar.outline.set_visible(False)
+        cbar.dividers.set_color("white")
+        cbar.dividers.set_linewidth(2.5)
+        cbar.ax.set_yticklabels(["%g" % round(b, 6) for b in bounds])
+        cbar.ax.tick_params(length=0, labelsize=8.5, pad=4)
     # [0049] 不加总标题、不加色标脚注（统一色标写进 zt_summary 的 notes），图面只留两栏面板。
     fig.savefig(Path(out) / "zt_heatmap.png", dpi=150, bbox_inches="tight")
     plt.close(fig)
@@ -643,12 +652,11 @@ def make_plots(out, grid, peaks, meta, par=None):
     from matplotlib.colors import Normalize
 
     _apply_style(plt)
-    lcm = _line_cmap(plt)
     temps = grid["temperatures"]
     make_heatmap(out, grid, meta, plt, par=par)
     # ---- 1) ZT(T) ----
-    # 用户 2026-10-23：左 n 型、右 p 型两栏；[0076] 颜色按 |n| 走同一条粉色色阶（浓度越高越深），
-    #   掺杂档多（十几档）时用右侧色标读浓度，不再堆一长串图例；本征点（深灰虚线）两栏都画作参照。
+    # 用户 2026-10-23：左 n 型、右 p 型两栏；[0076] 颜色按 |n| 走色阶（n 绿 / p 粉，浓度越高越深），
+    #   掺杂档多（十几档）时用每栏右侧色标读浓度，不再堆一长串图例；本征点（深灰虚线）两栏都画作参照。
     groups = {"n": [], "p": [], "i": []}
     for r in grid["rows"]:
         if any(v is not None for v in r["ZT"]):
@@ -657,8 +665,9 @@ def make_plots(out, grid, peaks, meta, par=None):
             if abs(r["doping_cm-3"]) > 0]
     lo, hi = (min(logs), max(logs)) if logs else (0.0, 1.0)
     nrm = Normalize(lo, hi if hi > lo else lo + 1.0)
-    fig, axes = plt.subplots(1, 2, figsize=(11.0, 4.4), sharey=True)
+    fig, axes = plt.subplots(1, 2, figsize=(12.0, 4.4), sharey=True)
     for ax, kind in zip(axes, ("n", "p")):
+        lcm = _line_cmap(plt, kind)
         rs = sorted(groups[kind], key=lambda x: abs(x["doping_cm-3"]))   # 浅色先画，深色压在上面
         for r in rs + groups["i"]:
             xs = [t for t, v in zip(temps, r["ZT"]) if v is not None]
@@ -673,7 +682,7 @@ def make_plots(out, grid, peaks, meta, par=None):
         if best:                        # 只直标峰值那一档（不给每条线标数）
             ax.annotate("%.2g @ %s cm$^{-3}$" % (best[0], _n_tick(abs(best[1]["doping_cm-3"]))),
                         (best[2], best[0]), xytext=(-8, 0), textcoords="offset points",
-                        ha="right", va="center", fontsize=8.5, color=ZT_INK)
+                        ha="right", va="center", fontsize=8.5, color=_ramp(kind)[-1])
         _arrow_axes(ax)
         ax.set_title("%s-type" % kind, pad=10)
         ax.set_xlabel(r"$T$  (K)")
@@ -683,23 +692,23 @@ def make_plots(out, grid, peaks, meta, par=None):
         if not rs:
             ax.text(0.5, 0.5, "no %s-type doping" % kind, transform=ax.transAxes,
                     ha="center", va="center", color=ZT_LABEL)
+        elif logs:
+            cb = fig.colorbar(ScalarMappable(norm=nrm, cmap=lcm), ax=ax, shrink=0.8,
+                              pad=0.04, aspect=22)
+            ks = _log_ticks(lo, hi)
+            cb.set_ticks(ks)
+            cb.set_ticklabels(["$10^{%d}$" % k for k in ks])
+            cb.set_label(r"$|n|$  (cm$^{-3}$)", color=ZT_LABEL)
+            cb.outline.set_visible(False)
+            cb.ax.tick_params(length=0, labelsize=8.5, pad=4)
     axes[0].set_ylabel(r"$zT$")
     axes[1].tick_params(labelleft=True)
-    if logs:
-        cb = fig.colorbar(ScalarMappable(norm=nrm, cmap=lcm), ax=list(axes), shrink=0.8,
-                          pad=0.03, aspect=22)
-        ks = _log_ticks(lo, hi)
-        cb.set_ticks(ks)
-        cb.set_ticklabels(["$10^{%d}$" % k for k in ks])
-        cb.set_label(r"$|n|$  (cm$^{-3}$)", color=ZT_LABEL)
-        cb.outline.set_visible(False)
-        cb.ax.tick_params(length=0, labelsize=8.5, pad=4)
     fig.savefig(Path(out) / "zt_vs_T.png", dpi=150, bbox_inches="tight")
     plt.close(fig)
 
     # ---- 2) ZT(n) ----
     # [0076] 原来一张 symlog 图（负浓度 = n 型）改为 n / p 两栏、横轴 log|n|，与热图同向；
-    #   各目标温度一条线，温度越高颜色越深。
+    #   各目标温度一条线，温度越高颜色越深（n 绿 / p 粉）。
     tsel = []
     for T in T_TARGETS:
         jT = min(range(len(temps)), key=lambda k: abs(temps[k] - T)) if temps else None
@@ -707,6 +716,7 @@ def make_plots(out, grid, peaks, meta, par=None):
             tsel.append((T, jT))
     fig, axes = plt.subplots(1, 2, figsize=(10.0, 4.2), sharey=True)
     for ax, kind in zip(axes, ("n", "p")):
+        lcm = _line_cmap(plt, kind)
         rs = sorted((r for r in grid["rows"] if r.get("type") == kind and abs(r["doping_cm-3"]) > 0),
                     key=lambda x: abs(x["doping_cm-3"]))
         for m, (T, jT) in enumerate(tsel):
@@ -743,7 +753,7 @@ def make_plots(out, grid, peaks, meta, par=None):
                                 (r"$S$  ($\mu$V/K)", r"$\sigma$  (S/m)", r"$\kappa_{tot}$  (W/m/K)",
                                  r"PF  (W/m/K$^2$)", r"$zT$")):
             pts = [(t, v) for t, v in zip(temps, r[key]) if v is not None]
-            ax.plot([p[0] for p in pts], [p[1] for p in pts], "-", color=ZT_CMAP_COLORS[4], lw=1.6,
+            ax.plot([p[0] for p in pts], [p[1] for p in pts], "-", color=_ramp(r["type"])[4], lw=1.6,
                     marker="o", ms=3.2, mec="white", mew=0.5)
             _arrow_axes(ax)
             ax.set_xlabel(r"$T$  (K)")
