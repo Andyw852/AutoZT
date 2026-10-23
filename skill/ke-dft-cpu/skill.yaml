@@ -330,7 +330,7 @@ optional_steps:
          src: step8.2_dpt, check: plot, run: gen,
          done_marker: dpt_result.json,
          # V148：材料级覆盖读 step.conf；重跑时让 S8.1/S8.3 重排要 import ke_common
-         gen: gen_step12_dpt.py, gen_need: [stepconf.py, step.conf, ke_common.py, dim_common.py],
+         gen: gen_step12_dpt.py, gen_need: [stepconf.py, step.conf, ke_common.py, dim_common.py, adp_degen.py],   # [0061-d] 简并带边 E1 用 adp_degen 的声学支
          fetch_all: true,
          needs: ["step3_uniform", "step6_elastic", "step7b_deform_read"]}
 

@@ -34,7 +34,7 @@ from pathlib import Path
 # =========================== 可改参数区 ===========================
 # [SKILL_REV] 版本戳：写进 dpt_result.json，铺开时验证跑的是哪份 skill 副本。
 # 每次改本脚本逻辑后更新（如 "2026-08-29-nstep-linear"）。
-_SKILL_REV = "2026-10-22-0071-2d-headline-md"   # [0071] 2D 面内各向异性谷的表头 m* 改用二次型拟合的 m_d
+_SKILL_REV = "2026-10-23-0061d-dptdegen"   # [0061-d] DPT 简并带边 E1 修正（复用 S8 的 DFT 应变算符 + adp_degen 声学支）   # 2026-10-22-0071-2d-headline-md   # [0071] 2D 面内各向异性谷的表头 m* 改用二次型拟合的 m_d
 #   （上一版：2026-10-22-0070-mass-energy-window 3D 各向异性谷的带边质量改用能量窗口取点）
 # [R-SCAN] 强制选点壳层 NSTEP（None=自动 2/3/4/5；填 2/3/4/5=只试该值，做 R-scan 用）。
 # 用法：tf -p <材料> -j step8.2_dpt conf --set FORCE_NSTEP=3 → retry + start，对比 dpt_result.json 的 m_d
@@ -817,7 +817,13 @@ def get_E1(cwd, carrier):
         #   在带边处的 3×3 张量，取对角三项平均（形变势张量的膨胀部分）。h5 读不到才退回旧的面内平均并注明。
         e3, why = _e1_diag_3d(cwd, carrier, be)
         if e3 is not None:
-            return round(sum(e3) / 3.0, 4), "deformation.h5 带边 3×3 张量 (D_xx+D_yy+D_zz)/3（芯势口径，%s）" % why
+            e1n = sum(e3) / 3.0
+            # [0061-d] 带边简并时用 DFT 应变算符做等能面热平均，折算成单带公式的 E1_eff；d=1 返回 None
+            corr = _e1_degen_3d(cwd, carrier, e1n)
+            if corr is not None:
+                _DPT_DEGEN_INFO[carrier] = corr["info"]
+                return round(corr["e1"], 4), corr["prov"]
+            return round(e1n, 4), "deformation.h5 带边 3×3 张量 (D_xx+D_yy+D_zz)/3（芯势口径，%s）" % why
         if be and carrier in be and float(be[carrier].get("E1_iso_eV") or 0) > 0:
             # [V187] 新版 S7.1 的 3D E1_iso_eV 已是三个对角的平均（E1_iso_def 写明）；旧版才是面内两项
             _def = be[carrier].get("E1_iso_def")
@@ -2259,6 +2265,223 @@ def _e1_diag_3d(cwd, carrier, be=None):
         return None, "读 deformation.h5 异常：%s" % _exc_brief(e)
 
 
+# ---------- [0061-d] 简并带边 E1 修正（DPT 侧，数据全部来自本材料 DFT） ----------
+# DPT 单带公式里的 E1 只含带边那条带的对角形变势；带边多重简并时，应变算符在简并子空间里的
+# 非对角矩阵元（带间耦合）是额外散射通道，必须并进 E1。做法：
+#   1. 用 S8 生成的 deformation_matrix.h5（S7.1 波函数投影的 DFT 应变算符 X^(αβ)(k)，eV）取带边
+#      简并子空间里的 Y_αβ = X^(αβ)|_sub（d×d）；
+#   2. 声学支：step6_elastic/OUTCAR 的 6×6 弹性张量 → Christoffel；方向/极化复用 adp_degen 的
+#      directions()/acoustic_modes()（3D Fibonacci 球面 + 三支声学模，与 ADP_DEGEN 同口径）；
+#   3. 弹性、均分极限：初态 a、末态 b、声子支 λ、方向 q̂ 的矩阵元
+#      M_ab = Σ_αβ ε_αβ^(λ)(q̂) Y_αβ,   ε = ½(q̂⊗ê + ê⊗q̂)；
+#      对带边 ±DPT_DEGEN_KT_WIN·k_BT 内的 DFT 态按 Boltzmann 权重热平均：
+#      r = ⟨Σ_ab |M_ab|²⟩ / ⟨Σ_a |M_aa|²⟩（分母 = 单带对角参考；d=1 时 r≡1）；
+#   4. 折算回单带公式：DPT 的 μ ∝ 1/E1²，故 E1_eff = E1_naive·√r（把额外的带间散射通道等效成
+#      更大的 E1）。d=1 不修正，逐位沿用原路径；手填 E1_*_EV 优先且不改。
+ADP_DEGEN_DIR = "step8_amset"        # S8（gen_step10_amset）写 deformation_matrix.h5 的目录
+DPT_DEGEN_TOL_EV = 2.0e-3            # 带边简并判据（eV）
+DPT_DEGEN_KT_WIN = 6.0               # 热平均能量窗（×k_B T）
+DPT_DEGEN_NANG = 200                 # 声子方向数
+_KB_EV = 8.617333262145e-5
+_DPT_DEGEN_INFO = {}                 # carrier -> dict（写进 dpt_result.json 的 E1_degen）
+
+
+def _degen_matrix_h5(cwd):
+    """S8/S7.1 的 deformation_matrix.h5（有就用 DFT 应变算符）。"""
+    for d in (ADP_DEGEN_DIR, DEFORM_READ_DIR):
+        p = Path(cwd) / d / "deformation_matrix.h5"
+        if p.is_file():
+            return p
+    return None
+
+
+def _degen_cijkl(cwd):
+    """step6_elastic/OUTCAR 的 6×6 弹性张量（kBar）→ C_ijkl（Pa）；读不到 None。"""
+    import numpy as np
+    rows = _elastic_rows_kbar(cwd)
+    if rows is None:
+        return None
+    cv = np.asarray(rows, float) * 1e8
+    idx = [(0, 0), (1, 1), (2, 2), (1, 2), (0, 2), (0, 1)]
+    c = np.zeros((3, 3, 3, 3))
+    for a in range(6):
+        for b in range(6):
+            i, j = idx[a]
+            k, l = idx[b]
+            for p, q in ((i, j), (j, i)):
+                for r, s in ((k, l), (l, k)):
+                    c[p, q, r, s] = cv[a, b]
+    return c
+
+
+def _degen_strain_dirs(cwd, C4):
+    """三支声学模的方向/极化：优先 adp_degen（同一口径），不可用则返回 None。"""
+    try:
+        try:
+            import adp_degen as _AD
+        except ImportError:                      # gen 在材料目录跑，脚本目录可能不在 sys.path
+            import sys as _sys
+            _sys.path.insert(0, str(Path(cwd)))
+            import adp_degen as _AD
+        import numpy as np
+        dirs = _AD.directions(DPT_DEGEN_NANG, 3)
+        _w, U = _AD.acoustic_modes(C4, dirs, 3)
+        return np.asarray(dirs, float), np.asarray(U, float), "adp_degen.directions/acoustic_modes"
+    except Exception as e:                       # noqa: BLE001
+        return None, None, "adp_degen 不可用（%s）" % _exc_brief(e)
+
+
+def _degen_ratio_at(Ysub, pairs, C4, dirs, U):
+    """Ysub: (3,3,d,d) 的应变算符（对称化后）；返回 (r, full, diag) —— 三支声学模 × 方向平均。"""
+    import numpy as np
+    d = Ysub.shape[2]
+    M = np.zeros((len(dirs), 3, d, d), complex)
+    for ib in range(3):
+        e = U[:, :, ib]
+        for a in range(3):
+            for b in range(3):
+                eps = 0.5 * (dirs[:, a] * e[:, b] + dirs[:, b] * e[:, a])
+                M[:, ib] += eps[:, None, None] * Ysub[a, b][None, :, :]
+    full = float((np.abs(M) ** 2).sum())
+    diag = float((np.abs(np.diagonal(M, axis1=2, axis2=3)) ** 2).sum())
+    return (full / diag if diag > 0 else float("nan")), full, diag
+
+
+def _e1_degen_3d(cwd, carrier, e1_naive):
+    """[0061-d] 带边简并时的 E1_eff；d=1 / 数据缺失时返回 None（调用方保持原值逐位不变）。
+    -> {"e1": E1_eff, "prov": 文本, "info": dict} 或 None。"""
+    try:
+        import numpy as np
+        import h5py
+    except ImportError:
+        return None
+    h5p = _degen_matrix_h5(cwd)
+    if h5p is None:
+        print("[..] [0061-d] %s：没找到 deformation_matrix.h5，E1 不做简并修正" % carrier)
+        return None
+    C4 = _degen_cijkl(cwd)
+    if C4 is None:
+        print("[..] [0061-d] %s：step6_elastic/OUTCAR 读不到弹性张量，E1 不做简并修正" % carrier)
+        return None
+    try:
+        with h5py.File(str(h5p), "r") as h:
+            spin = "up" if "X_up" in h else ("down" if "X_down" in h else None)
+            if spin is None:
+                return None
+            X = np.asarray(h["X_" + spin], float if np.isrealobj(h["X_" + spin][:1]) else complex)
+            if np.iscomplexobj(h["X_" + spin]):
+                X = np.asarray(h["X_" + spin], complex)
+            eig = np.asarray(h["eig_" + spin], float)
+            kp = np.asarray(h["kpoints"], float)
+            pairs = [tuple(int(x) for x in p) for p in np.asarray(h["pairs"])]
+            bands = np.asarray(h["bands_" + spin], int)
+    except Exception as e:                       # noqa: BLE001
+        print("[..] [0061-d] %s：读 %s 失败（%s），E1 不做简并修正" % (carrier, h5p.name, _exc_brief(e)))
+        return None
+    E = eig
+    # 带边定位：优先用 S7.1 的 band_edges.json（带边能量 + k_frac，权威）；矩阵 h5 只有 6 条带窗口，
+    # 直接对全带取全局极值会取到导带（Si 的 9.95 eV）。没有 band_edges.json 时按"极值±tol 内简并度最高"兜底。
+    be = _band_edges_json(cwd)
+    edge = None
+    ik0 = None
+    sub = []
+    if be and carrier in be and be[carrier].get("edge_energy_eV") is not None \
+            and be[carrier].get("hits"):
+        edge = float(be[carrier]["edge_energy_eV"])
+        kf = (be[carrier]["hits"][0] or {}).get("k_frac")
+        if kf is not None:
+            kf = np.asarray(kf, float)
+            ik0 = int(np.argmin(np.linalg.norm(kp - kf, axis=1)))
+            sub = [b for b in range(E.shape[1])
+                   if abs(float(E[ik0, b]) - edge) <= DPT_DEGEN_TOL_EV]
+    if not sub:
+        if carrier == "hole":
+            gmax = float(E.max())
+            cand = np.argwhere(E >= gmax - DPT_DEGEN_TOL_EV)
+        else:
+            gmin = float(E.min())
+            cand = np.argwhere(E <= gmin + DPT_DEGEN_TOL_EV)
+        best = None
+        for ik, ib in cand:
+            ei = float(E[ik, ib])
+            sub_i = [b for b in range(E.shape[1]) if abs(float(E[ik, b]) - ei) <= DPT_DEGEN_TOL_EV]
+            if best is None or len(sub_i) > len(best[0]):
+                best = (sub_i, ei, int(ik))
+        if best is None:
+            return None
+        sub, edge, ik0 = best[0], best[1], best[2]
+    d = len(sub)
+    if d < 2:
+        print("[..] [0061-d] %s：带边 d=1（非简并），E1 保持 %.4f eV 不变" % (carrier, e1_naive))
+        return None
+    dirs, U, dirsrc = _degen_strain_dirs(cwd, C4)
+    if dirs is None:
+        print("[..] [0061-d] %s：%s；E1 不做简并修正" % (carrier, dirsrc))
+        return None
+    # 简并子空间的应变算符（对称化：pairs 只给 α≤β 的 6 个分量）
+    Y0 = np.zeros((3, 3, d, d), complex)
+    for ip, (a, b) in enumerate(pairs):
+        blk = X[ip][ik0][np.ix_(sub, sub)]
+        Y0[a, b] += blk / 2.0
+        Y0[b, a] += blk / 2.0
+    # 热平均：带边附近 ±win 内的 DFT 态（按带边附近子空间各带的能量，Boltzmann 权重）
+    kT = _KB_EV * float(TEMPERATURE_K)
+    win = DPT_DEGEN_KT_WIN * kT
+    num = den = wsum = 0.0
+    nk = 0
+    for j in range(E.shape[0]):
+        if carrier == "hole":
+            ej = max(float(E[j, b]) for b in sub)
+            de = edge - ej
+        else:
+            ej = min(float(E[j, b]) for b in sub)
+            de = ej - edge
+        if de < -1e-9 or de > win:
+            continue
+        w = float(np.exp(-de / kT))
+        Yj = np.zeros((3, 3, d, d), complex)
+        for ip, (a, b) in enumerate(pairs):
+            blk = X[ip][j][np.ix_(sub, sub)]
+            Yj[a, b] += blk / 2.0
+            Yj[b, a] += blk / 2.0
+        r_j, f_j, d_j = _degen_ratio_at(Yj, pairs, C4, dirs, U)
+        if not (r_j == r_j):
+            continue
+        num += w * f_j
+        den += w * d_j
+        wsum += w
+        nk += 1
+    if den <= 0 or nk == 0:
+        print("[..] [0061-d] %s：热平均没有可用的 DFT 态（n_k=%d），E1 不做简并修正" % (carrier, nk))
+        return None
+    ratio = num / den
+    e1_eff = float(e1_naive) * math.sqrt(ratio)
+    info = {
+        "provenance": "adp_degen",
+        "d": int(d),
+        "subspace": {"k": [float(x) for x in kp[ik0]], "bands_h5": [int(bands[b]) for b in sub],
+                     "E_edge_eV": round(edge, 6)},
+        "E1_naive_eV": round(float(e1_naive), 4),
+        "E1_eff_eV": round(e1_eff, 4),
+        "ratio": round(ratio, 6),
+        "thermal_nk": int(nk),
+        "window_eV": round(win, 5),
+        "nang": int(DPT_DEGEN_NANG),
+        "matrix_source": str(h5p),
+        "phonon_source": dirsrc,
+        "elastic_source": "step6_elastic/OUTCAR（6×6 Voigt → C_ijkl）",
+        "fold": "E1_eff = E1_naive·sqrt(r)，r=⟨Σ_ab|M_ab|²⟩/⟨Σ_a|M_aa|²⟩（DPT μ∝1/E1²）",
+        "skill_rev": _SKILL_REV,
+    }
+    prov = ("adp_degen(d=%d, 带边 k=%s bands=%s, E1 %.4f→%.4f eV, ratio=%.4f, 热平均 n_k=%d "
+            "窗=%.3f eV, 3 声学支×%d 方向, 应变算符=%s, rev=%s)"
+            % (d, np.round(kp[ik0], 4).tolist(), [int(bands[b]) for b in sub],
+               float(e1_naive), e1_eff, ratio, nk, win, DPT_DEGEN_NANG, h5p.name, _SKILL_REV))
+    print("[OK] [0061-d] %s：带边 %d 重简并，E1 %.4f → %.4f eV（r=%.4f，热平均 %d 个 DFT 态）"
+          % (carrier, d, float(e1_naive), e1_eff, ratio, nk))
+    return {"e1": e1_eff, "prov": prov, "info": info}
+
+
 def _valley_axis_3d(cwd, carrier, be=None):
     """[0069] 3D 多谷的谷轴形变势与纵向模量。带边谷有对称等价谷（n_star > 1）且带边不简并时：
     谷轴 â = Γ 指向带边谷心（最短等价 k 的方向）；E1 = |â·D·â|（沿谷轴传播的 LA 声子的形变势，Si 导带 = Ξ_d + Ξ_u）；
@@ -2707,6 +2930,7 @@ def _one_carrier(cwd, is_2d, carrier, T, temps=None):
         mprov = "面内二次型拟合 m_d=√(m_x·m_y)（%s）；旧的方向分解值 %s 不再用（面内各向异性时取到轻轴质量）；%s" % (
             bd["m_provenance"], m, mprov)
         m = bd["m_d_m0"]
+    _DPT_DEGEN_INFO.pop(carrier, None)                                  # [0061-d] 先清旧记录
     e1, e1prov = get_E1(cwd, carrier)
     ekey = "E1_electron_eV" if carrier == "electron" else "E1_hole_eV"
     va = bd.get("valley_axis") if (not is_2d and bd.get("status") == "ok") else None
@@ -2714,6 +2938,7 @@ def _one_carrier(cwd, is_2d, carrier, T, temps=None):
         C, Cprov = va["C_GPa"] * 1e9, bd["C_provenance"]
     if va and not MANUAL[ekey]:
         e1, e1prov = va["E1_eV"], bd["E1_provenance"]
+        _DPT_DEGEN_INFO.pop(carrier, None)                              # 谷轴口径覆盖了表头 E1：简并修正不参与
     if va and (MANUAL[key] or MANUAL[ekey] or MANUAL["C_3D_GPa"]):
         va = None                                                   # 有手填项：表头照各向同性公式算
     rec = {"carrier": carrier,
@@ -2722,6 +2947,8 @@ def _one_carrier(cwd, is_2d, carrier, T, temps=None):
                       "m_eff_m0": m, "m_provenance": mprov,
                       "E1_eV": e1, "E1_provenance": e1prov,
                       "T_K": T}}
+    if carrier in _DPT_DEGEN_INFO:                                     # [0061-d] 结构化溯源
+        rec["E1_degen"] = dict(_DPT_DEGEN_INFO[carrier])
     if None in (C, m, e1):
         miss = [n for n, v in (("C", C), ("m*", m), ("E1", e1)) if v is None]
         rec["mobility_cm2_Vs"] = None
