@@ -20,7 +20,7 @@ import pytest  # noqa: E402
 
 @pytest.fixture(autouse=True)
 def _full_profile_by_default(monkeypatch):
-    """这些用例测的是各个工具本身；默认档（core）只开放 12 个，统一切到 full 再测。
+    """这些用例测的是各个工具本身；默认档（core）只开放 13 个，统一切到 full 再测。
     专门测分档的用例会自己改/删 AUTOZT_MCP_PROFILE。"""
     monkeypatch.setenv("AUTOZT_MCP_PROFILE", "full")
 
@@ -184,11 +184,11 @@ def test_tools_have_output_schema_and_compact_profile():
 
 
 def test_default_profile_is_core_by_stage(monkeypatch):
-    """默认档 core：12 个工具，按 发现/规划/执行/审批/汇报 五段组织，每个都带 x-stage。"""
+    """默认档 core：13 个工具，按 发现/规划/执行/审批/汇报 五段组织，每个都带 x-stage。"""
     monkeypatch.delenv("AUTOZT_MCP_PROFILE", raising=False)
     tools = M._tools_list()
     names = {item["name"] for item in tools}
-    assert names == M.CORE_TOOLS and len(names) == 12
+    assert names == M.CORE_TOOLS and len(names) == 13
     assert list(M.STAGES) == ["discover", "plan", "execute", "approve", "report"]
     assert {t["name"]: t["x-stage"] for t in tools} == M.STAGE_OF
     # 破坏性动作只能「申请」+「用户同意后批准」，直接执行的工具不进默认档
@@ -309,13 +309,14 @@ def test_workflow_profile_has_fixed_eight_tools():
     os.environ["AUTOZT_MCP_PROFILE"] = "workflow"
     try:
         names = {item["name"] for item in M._tools_list()}
-        assert len(names) == 21
+        assert len(names) == 22
         assert names == {
             "schema", "capabilities", "list_skills", "describe_skill", "get_progress",
             "doctor", "get_snapshot", "inspect", "probe_step", "cycle", "apply_actions",
             "research_plan", "preflight", "results",
             "register_material", "conf_get", "conf_set", "check_env",
             "task_graph", "request_destructive_action", "approve_request",
+            "material_brief",
         }
     finally:
         if old is None:

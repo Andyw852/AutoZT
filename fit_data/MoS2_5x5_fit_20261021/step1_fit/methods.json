@@ -1,0 +1,18 @@
+{
+  "methods": [
+    {
+      "engine": "pheasy",
+      "method": "ALASSO",
+      "dir": ".",
+      "primary": true,
+      "tag": "m-pheasy-ALASSO"
+    },
+    {
+      "engine": "pheasy",
+      "method": "RFE-OLS",
+      "dir": "methods/m-pheasy-RFE-OLS",
+      "primary": false,
+      "tag": "m-pheasy-RFE-OLS"
+    }
+  ]
+}

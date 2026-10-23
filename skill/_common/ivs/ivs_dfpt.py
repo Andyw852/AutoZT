@@ -32,6 +32,8 @@ QE 接口（M0 核实，QE 7.3 与 7.4 的 PHonon/PH/ahc.f90 输出部分逐行�
   同一等价类只算一次；共用同一个 q 的类合进同一个 ph.x 作业（nscf 里放几个初态 k）。
 
 不做：SOC、一阶谷间耦合（∝|q−K|）、EPW 插值；谷内（q ≈ 0）的 ADP/ODP 不在这里（小 q 要 2D 库仑截断，AHC 不支持）。
+[0074] SOC 只备注不拦：电子、空穴都照算（非 SOC），soc_notes 给每个载流子写口径说明（无反演中心时时间反演对谷
+  k↔−k 的通道在 SOC 下要自旋翻转 -> 上限），进 ivs_dfpt_params.json / 表 / S8、S8.4 日志与 S8.3 报告。
 """
 import hashlib
 import itertools
@@ -666,6 +668,135 @@ def class_couplings(gkk_k, etk_k, etq_k, hw, e, masses_ry, nocc, ahc_skip, ahc_n
             "E_init_eV": float(etk_k[nb]), "E_final_eV": float(etq_k[nb]), "modes": modes, "groups": groups}
 
 
+# ---------------------------------------------------------------------------
+# [0072] 谷内声学形变势（ADP）：小 q 声学支矩阵元的斜率（Li, Graziosi, Neophytou, PRB 104, 195201 (2021)）
+# ---------------------------------------------------------------------------
+# 带边能量随应变的移动（S7 形变势）要芯势对齐，静水分量 Ξd 有绝对参考的不确定；长波声学声子的 DFPT 矩阵元
+# M_ν(q) = ⟨ψ(k+q)|∂V_SCF/∂u_ν|ψ(k)⟩ 自洽地含宏观势响应，不需要对齐（与 EPW 同口径）。对非简并带边：
+#   G_ν = √M_cell · Σ_j gkk_j u_jν （u = e/√m）= 每 Å 质心位移的耦合（eV/Å），p_ν = Σ_κ √m_κ e_κν / √M_cell = 模 ν 的质心位移；
+#   长波极限 G_ν = Σ_i p_ν,i w_i，w = i|q|·D·q̂ × 公共相位（电子波函数规范）——内应变（光学支混入，∝ q）随质心位移线性，已含在 w 里。
+#   每个方向 n̂ 一个 q = dq·n̂：解 3×3 得 w，去掉公共相位得实矢量 v_n = s_n |q| D n̂（s_n = ±1 未知），
+#   6 个方向（x、y、z、xy、xz、yz 对角）定对称张量 D（6 个分量，s_n 穷举），只差一个整体符号（ADP 率只用 D²）。
+ADP_DQ_A = 0.03                    # Å⁻¹（含 2π）：小 q 的模长；Si 约为 ΓX 的 2.6%，ħω_LA ≈ 2 meV
+ADP_DIRS = ((1, 0, 0), (0, 1, 0), (0, 0, 1), (1, 1, 0), (1, 0, 1), (0, 1, 1))
+ADP_FIT_TOL = 0.05                 # 拟合相对残差、虚部比例超过它就告警（status 仍 ok，记进 checks）
+ADP_RUN_PREFIX = "adp"
+
+
+def adp_q_fracs(lattice, dq=ADP_DQ_A, dirs=ADP_DIRS):
+    """笛卡尔方向（结构的笛卡尔系，QE 同系）-> [(单位方向 (3,), q 分数坐标 (3,))]：q_cart = dq·n̂，κ_i = a_i·q/(2π)。"""
+    A = np.asarray(lattice, float)
+    out = []
+    for d in dirs:
+        n = np.asarray(d, float)
+        n = n / np.linalg.norm(n)
+        out.append((n, A @ (float(dq) * n) / (2.0 * math.pi)))
+    return out
+
+
+def adp_polarizations(e, masses_ry, acoustic):
+    """声学模（下标列表）的质心位移 p_ν = Σ_κ √m_κ e_κν / √M_cell（复数，(模, 3)）。"""
+    m = np.asarray(masses_ry, float)
+    e = np.asarray(e)
+    sw = np.repeat(np.sqrt(m), 3)[:, None] * e / math.sqrt(float(m.sum()))
+    nat = len(m)
+    return np.array([[np.sum(sw[a::3, nu]) for a in range(3)] for nu in acoustic])
+
+
+def adp_vector(gkk_k, e, masses_ry, init_ahc, final_band, acoustic):
+    """一个 k、一个小 q：w（复数 (3,)，eV/Å，含公共相位）= 质心位移 1 Å 沿 x/y/z 时的耦合。
+    init_ahc：初态在 ahc 窗口里的下标（0 基）；final_band：k+q 上终态的带号（0 基）。"""
+    m = np.asarray(masses_ry, float)
+    u = np.asarray(e) / np.repeat(np.sqrt(m), 3)[:, None]
+    g = np.asarray(gkk_k)[:, int(init_ahc), int(final_band)]                # (3nat,)
+    G = math.sqrt(float(m.sum())) * GKK_TO_EV_A * (g @ u[:, list(acoustic)])  # (3,) 每个声学模
+    P = adp_polarizations(e, masses_ry, acoustic)                           # (3 模, 3 方向)
+    if abs(np.linalg.det(P)) < 1e-6:
+        raise ValueError("三个声学模的质心位移线性相关（小 q 的声学模没分出来：dq 太大或结构不稳定）")
+    return np.linalg.solve(P, G)
+
+
+def adp_real(w):
+    """去公共相位：v = Re(w·e^{−iθ})，θ 使 Σ w_i² 为实；返回 (v, |Im|/|w|)。"""
+    w = np.asarray(w, complex)
+    th = 0.5 * np.angle(np.sum(w * w))
+    z = w * np.exp(-1j * th)
+    nrm = float(np.linalg.norm(w))
+    return z.real, (float(np.linalg.norm(z.imag)) / nrm if nrm > 0 else 0.0)
+
+
+_SYM6 = ((0, 0), (1, 1), (2, 2), (1, 2), (0, 2), (0, 1))
+
+
+def adp_fit(dirs, vs, qnorm):
+    """v_n = s_n |q| D n̂ -> 对称 D（eV）。s_1 = +1，其余穷举。返回 (D (3,3), 相对残差, signs)。"""
+    dirs = np.asarray(dirs, float)
+    vs = np.asarray(vs, float) / float(qnorm)
+    rows = []
+    for n in dirs:
+        for i in range(3):
+            r = np.zeros(6)
+            for c, (a, b) in enumerate(_SYM6):
+                if a == i:
+                    r[c] += n[b]
+                if b == i and a != b:
+                    r[c] += n[a]
+            rows.append(r)
+    X = np.array(rows)
+    best = None
+    for tail in itertools.product((1.0, -1.0), repeat=len(dirs) - 1):
+        s = np.array((1.0,) + tail)
+        y = (vs * s[:, None]).ravel()
+        c, *_ = np.linalg.lstsq(X, y, rcond=None)
+        res = float(np.linalg.norm(X @ c - y))
+        if best is None or res < best[0] - 1e-12:
+            best = (res, c, s)
+    res, c, s = best
+    D = np.zeros((3, 3))
+    for k, (a, b) in enumerate(_SYM6):
+        D[a, b] = D[b, a] = c[k]
+    scale = float(np.linalg.norm(vs))
+    return D, (res / scale if scale > 0 else 0.0), [int(x) for x in s]
+
+
+def cart_rotation(lattice, W):
+    """直接空间分数坐标旋转 W -> 笛卡尔旋转 R = Aᵀ W A⁻ᵀ（A 行 = 晶格矢）。"""
+    A = np.asarray(lattice, float)
+    return A.T @ np.asarray(W, float) @ np.linalg.inv(A.T)
+
+
+def adp_member_tensors(D, k0, members, lattice, rots, full3d=True):
+    """参考谷 k0 的张量 D -> 星里每个成员 k_m 的张量 R D Rᵀ（R：把 k0 送到 ±k_m 的点群操作；时间反演不改 D）。
+    找不到操作 -> ValueError（谷表不是一个对称轨道）。"""
+    out = []
+    k0 = np.asarray(k0, float)
+    for km in members:
+        km = np.asarray(km, float)
+        hit = None
+        for W in rots:
+            kk = np.rint(np.linalg.inv(np.asarray(W, float)).T) @ k0
+            if any(grid_key(s * kk, full3d) == grid_key(km, full3d) for s in (1.0, -1.0)):
+                hit = W
+                break
+        if hit is None:
+            raise ValueError("成员 %s 不在 %s 的对称轨道上" % (list(km), list(k0)))
+        R = cart_rotation(lattice, hit)
+        out.append(R @ np.asarray(D, float) @ R.T)
+    return out
+
+
+def adp_summary(D, k0, lattice):
+    """张量的可读量：主值、沿谷轴（Γ→k0 的笛卡尔方向）的 â·D·â、静水 tr/3。k0 = Γ 时谷轴为 None。"""
+    D = np.asarray(D, float)
+    kc = np.asarray(k0, float) @ recip_lattice(lattice)
+    ax = None
+    if np.linalg.norm(kc) > 1e-8:
+        a = kc / np.linalg.norm(kc)
+        ax = float(a @ D @ a)
+    return {"principal_eV": sorted(float(x) for x in np.linalg.eigvalsh(D)), "axis_eV": ax,
+            "hydrostatic_eV": float(np.trace(D) / 3.0)}
+
+
 def fold_channels(classes_out, hw_min=HW_MIN_MEV, merge_mev=HW_MERGE_MEV):
     """等价类结果 -> dp_optical 星通道（一个载流子）。
     classes_out：[{"pairs": [{"from","to","kind","g_to","g_from"}…], "groups": [{"hw_meV","D_eV_A"}…]}…]。
@@ -709,6 +840,52 @@ def fold_channels(classes_out, hw_min=HW_MIN_MEV, merge_mev=HW_MERGE_MEV):
             out.append({"from": a, "to": b, "kind": kind, "D_eV_A": math.sqrt(cl["d2"]),
                         "hw_meV": round(hw, 2), "n_terms": cl["n"]})
     return out, dropped
+
+
+# ---------------------------------------------------------------------------
+# [0074] 非 SOC 备注：只说明口径，不改参数（指纹 params_digest 只看通道，加备注不让 S8/S8.4 重排）
+# ---------------------------------------------------------------------------
+SOC_TR_NOTE = ("非 SOC 口径：本结构无反演中心，%s 连的是时间反演对谷（k′ ≡ −k）。有 SOC 时这两个谷的带边自旋相反"
+               "（自旋-谷锁定），谷间散射要自旋翻转：该带边 SOC 劈裂 ≫ k_BT 时（如 MoS₂ 等 TMD 单层价带 K，约 0.15 eV）"
+               "该通道被强烈抑制，这里的值是上限；劈裂 ≪ k_BT 时（如 MoS₂ 导带 K，约 3 meV）影响小。定量要 SOC DFPT（本技能不做）")
+SOC_HOLE_NOTE = "非 SOC 口径：空穴按非 SOC 价带算，价带 SOC 劈裂（如 Γ 简并价带的劈裂带）及其自旋选择未计入，数值是非 SOC 近似"
+
+
+def has_inversion(rops):
+    """点群（倒空间整数矩阵）里有没有反演 −I。"""
+    m = -np.eye(3, dtype=int)
+    return any(np.array_equal(np.asarray(R, int), m) for R in rops)
+
+
+def tr_pair(a, b, tol=1e-4):
+    """b ≡ −a（模倒格矢）且 a 不是时间反演不变点（2a ≢ 0）：时间反演对谷。"""
+    a, b = np.asarray(a, float), np.asarray(b, float)
+    return same_q(a + b, np.zeros(3), tol) and not same_q(2.0 * a, np.zeros(3), tol)
+
+
+def soc_notes(classes_out, carriers, inversion):
+    """[0074] 每个载流子的非 SOC 备注 -> {载流子: [备注…]}（没有就不出现）。
+    无反演中心 + 有连时间反演对谷的谷间通道（MoS₂ 的 K↔K′、Q↔Q′）-> SOC_TR_NOTE（列出通道）；
+    空穴另外（没有上一条时）给一句 SOC_HOLE_NOTE。classes_out：gen_read 的逐类结果（carrier/from/to/kind/k_init/k_fin）。"""
+    out = {}
+    for car in carriers:
+        notes = []
+        if not inversion:
+            trp = sorted({"%s>%s%s" % (c["from"], c["to"], "'" if c["kind"] == "inter_star" else "")
+                          for c in classes_out if c["carrier"] == car and c["kind"] != "intra"
+                          and tr_pair(c["k_init"], c["k_fin"])})
+            if trp:
+                notes.append(SOC_TR_NOTE % "、".join(trp))
+        if car == "hole" and not notes:
+            notes.append(SOC_HOLE_NOTE)
+        if notes:
+            out[car] = notes
+    return out
+
+
+def carrier_notes(params, carrier):
+    """消费端：ivs_dfpt_params.json 里某载流子的非 SOC 备注（旧文件没有 -> []）。"""
+    return list((_carrier(params, carrier) or {}).get("soc_notes") or [])
 
 
 # ---------------------------------------------------------------------------
@@ -756,6 +933,23 @@ def inter_channels(params, carrier, keep=None, norm=None, dmin=DMIN_EV_A, alias=
         chs.append({"from": a, "to": b, "kind": kind, "D_eV_A": D, "hw_meV": hw,
                     "source": "dfpt_odp" if kind == "intra" else "dfpt_ivs"})
     return chs, dropped, notes
+
+
+def adp_params(params, carrier):
+    """[0072] ivs_dfpt_params.json 的 "adp" 块里某载流子可用的谷内 ADP 张量（status ok）-> 记录；否则 None。
+    记录：{"status": "ok", "valleys": [{"label", "members": [{"k_frac", "D_eV"}]}], "summary": [...], "checks": {...}}。"""
+    c = (((params or {}).get("adp") or {}).get("carriers") or {}).get(carrier) or {}
+    return c if c.get("status") == "ok" and c.get("valleys") else None
+
+
+def adp_digest(params, carrier):
+    """谷内 ADP 张量的指纹（S8 记下来，张量变了才重排）；不可用 -> None。"""
+    c = adp_params(params, carrier)
+    if not c:
+        return None
+    rows = sorted([str(v["label"])] + [round(float(x), 4) for m in v["members"] for r in m["D_eV"] for x in r]
+                  for v in c["valleys"])
+    return hashlib.sha256(json.dumps(rows, ensure_ascii=False).encode("utf-8")).hexdigest()[:16]
 
 
 def params_digest(params, carrier):

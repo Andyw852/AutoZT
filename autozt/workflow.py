@@ -1017,7 +1017,8 @@ print("[cores] 统一为 %d 核：%s" % (n, "; ".join(hits) if hits else "无 su
 
 def resolve_cores(cfg, t, m, sname=None):
     """统一核数来源（都不写就是 None=不动）：项目 setting.yaml > 项目/技能 hpc.yaml >
-    类型配置 task_types.<key>.cores > 全局 tf.yaml 的 cores。"""
+    类型配置 task_types.<key>.cores > 全局 tf.yaml 的 cores。
+    [0075] 步骤用 step_hpc 换了集群：hpc.yaml 那一档换成 setting/<步骤集群>.yaml 的 cores。"""
     from autozt import step_cfg
     ps = (m or {}).get("ps") or {}
     st = ps.get("setting") if isinstance(ps, dict) else None
@@ -1033,6 +1034,18 @@ def resolve_cores(cfg, t, m, sname=None):
             _shpc = _load_yaml_file(os.path.join(_sdir, "hpc.yaml")) or {}
             if isinstance(_shpc, dict):
                 hpc.update(_shpc)
+    except Exception:                       # noqa: BLE001
+        pass
+    # [0075] 步骤级集群（项目 tf_*.yaml 的 step_hpc）：hpc.yaml 是材料默认集群的配置（autozt hpc 整份抄
+    #   setting/<集群>.yaml），它的 cores 管不到换了集群的这一步 -> 这一档改取 setting/<步骤集群>.yaml 的 cores。
+    #   （2026-10-23：S2.15 换到 jzzn，ntasks-per-node 被 hfeshell 的 cores=48 改掉。）
+    try:
+        _shpc = str((step_cfg(t, sname, m) or {}).get("hpc") or "") if (t and sname) else ""
+        if _shpc and _shpc != str((m or {}).get("hpc_name") or ""):
+            from autozt import _load_yaml_file, pkg_setting_path
+            _f = pkg_setting_path(_shpc + ".yaml")
+            _c = (_load_yaml_file(_f) or {}) if _f else {}
+            hpc = {"cores": _c.get("cores")} if isinstance(_c, dict) else {}
     except Exception:                       # noqa: BLE001
         pass
     tt = (t or {}).get("key") or (m or {}).get("tt")
@@ -2218,7 +2231,11 @@ def _remote_submit_preflight(cfg, m, s, t=None):
     # 永远卡在 PD(PartitionConfig)——真跑 fit-fc-thermal 切集群时实测过这个坑。
     from autozt import (_PKG_ROOT as _PKGR, _load_yaml_file as _lyf,
                             run_remote as _rrm)
-    _pkg = os.path.join(_PKGR, "setting", str(m.get("hpc_name")) + ".yaml")
+    # [0075] 本步的集群：项目 step_hpc 换了集群的步骤按它查分区/资源（以前一律按材料默认集群，
+    #   S2.15 换到 jzzn 时拿 hfeshell 的分区表来对 jzzn 的模板）
+    _scl = str(((step_cfg_safe(t, s["name"], m) or {}).get("hpc") if t is not None else None)
+               or m.get("hpc_name"))
+    _pkg = os.path.join(_PKGR, "setting", _scl + ".yaml")
     try:
         _cc = _lyf(_pkg) or {}
     except Exception:                       # noqa: BLE001
@@ -2240,7 +2257,7 @@ def _remote_submit_preflight(cfg, m, s, t=None):
         # 集群没声明分区时，去该集群自带的模板里找实际使用的分区名，只做提示
         # （实测 3090 用 fakeslurm 时 --partition=cpu192 照样能跑，硬拦会误伤）
         _sugg = set()
-        for _f in glob.glob(os.path.join(_PKGR, "setting", str(m.get("hpc_name")),
+        for _f in glob.glob(os.path.join(_PKGR, "setting", _scl,
                                          "templates", "*.tpl")):
             try:
                 _t = open(_f, encoding="utf-8").read()
@@ -2251,8 +2268,8 @@ def _remote_submit_preflight(cfg, m, s, t=None):
                  if _sugg else "该集群自带模板里也没写分区。")
         print("提示：提交模板要求 --partition=%s，集群 %s 未声明分区。%s\n"
               "      若作业一直 PD(PartitionConfig)，把该步模板复制到项目级改成正确分区名，"
-              "或给 setting/%s.yaml 补 partition 字段。" % (_want, m.get("hpc_name"),
-                                                          _hint, m.get("hpc_name")),
+              "或给 setting/%s.yaml 补 partition 字段。" % (_want, _scl,
+                                                          _hint, _scl),
               file=sys.stderr)
     # 资源申请自检：--cpus-per-task × --ntasks-per-node 不能超过集群声明的上限。
     # 实测教训（2026-09-15 fit-fc-thermal 切 3090）：模板写 --cpus-per-task=48 而机器只给
@@ -2265,11 +2282,11 @@ def _remote_submit_preflight(cfg, m, s, t=None):
     if _mc:
         _rmsg = _pf.check_resources(_res, _mc)
         if _rmsg:
-            print(_pf.hint("resources", _rmsg, m.get("hpc_name")), file=sys.stderr)
+            print(_pf.hint("resources", _rmsg, _scl), file=sys.stderr)
     if _want and _declared and _want != _declared:
         print("提示：提交模板要求 --partition=%s，集群 %s 声明的是 %s；"
               "若作业卡在 PD(PartitionConfig) 就按这两处之一改。"
-              % (_want, m.get("hpc_name"), _declared), file=sys.stderr)
+              % (_want, _scl, _declared), file=sys.stderr)
         if _pf._i18n.is_en():
             print(_pf.hint("partition"), file=sys.stderr)
     # 提交模板的环境自检：模板里的 conda 环境/conda.sh 路径必须存在于目标集群。
@@ -2291,8 +2308,8 @@ def _remote_submit_preflight(cfg, m, s, t=None):
             print("提示：提交模板引用的环境/路径在集群 %s 上不存在：%s\n"
                   "      激活失败后脚本会继续跑，计算阶段可能'无日志死亡'。"
                   "把该步 step.conf 的 CONDA_SH/CONDA_ENV 改成该集群的值%s。"
-                  % (m.get("hpc_name"), ", ".join(_miss),
-                     ("（setting/%s.yaml 里写的是 %s）" % (m.get("hpc_name"), _env_hint)
+                  % (_scl, ", ".join(_miss),
+                     ("（setting/%s.yaml 里写的是 %s）" % (_scl, _env_hint)
                       if _env_hint else "")), file=sys.stderr)
     is_mace = "mace" in str(m.get("tt") or "").lower()
     # v3.24：不跑 VASP 的技能（力常数拟合等）没有 INCAR/KPOINTS，硬要求会让

@@ -18,7 +18,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 # [SKILL_REV] 版本戳：写进 settings.yaml 头，便于从结果反查跑的是哪份 skill 副本。
-_SKILL_REV = "2026-10-21-0061m-dftmatrix"   # [0061-m] ADP_DEGEN 的应变算符取 S7.1 的 DFT 形变势矩阵（deformation_matrix.h5，deform_wave.py）   # 2026-10-21-0061g-adpdegen   # [0061-g] ADP_DEGEN 通用化：任意晶系 / 谷 / 价带导带 / SOC（vasprun + 波函数现拟合）   # 2026-10-21-0061-adpdegen   # [0061] ADP_DEGEN：立方 Γ 三重简并价带的 ADP 带间修正（插件 + adp_degen.py）   # 2026-10-20-0059r3-dfptodp   # [0059-r3] DFPT 谷内 ODP（q=Γ）优先于冻声子/手填，不再两份叠加   # 2026-10-18-0059-ivsdfpt   # [0059] IVS_DFPT：eph-qe-cpu QE DFPT 谷间零阶形变势（ivs_dfpt_params.json）优先于冻声子 K↔K′ 与手填   # 2026-10-16-0055-dopinglow   # [0055] DOPING_LOW 低浓度段 1e10–1e16 cm^-3（amset_fermi_fix 小掺杂 log-sum-exp 解 E_F）；[0054] undoped_ni 记带边   # 2026-10-15-0051-socdesym   # [0051] amset_desym_fix 修 SOC 分支（四元数 SU(2) + iσ_y·K，V200）   # 2026-10-13-0043-intrsvd   # [0041] DEFECT_DOPING 缺陷平衡载流子浓度进掺杂网格   # 2026-10-13-0040-undoped   # [0040] UNDOPED_POINT 本征点（doping=0）   # 2026-10-13-0038-subsets   # [0038] SUBSETS 散射机制子集（subset_<机制>.json）   # [0037] 三维 PIE（读压电张量写 settings，插件 amset_pie3d.py 修正核）   # [0036] 三维 ODP/IVS（DP_OPTICAL_*，插件 amset_dpo3d.py）   # [0014] 2D 弹性用原始 slab 值（不乘 c/t）；V115 相位补丁
+_SKILL_REV = "2026-10-23-0072-adpdfpt"   # [0072] ADP_DFPT：非简并带边的谷内 ADP 张量用 DFPT 声学斜率（eph-qe-cpu IVS_ADP）   # 2026-10-21-0061m-dftmatrix   # [0061-m] ADP_DEGEN 的应变算符取 S7.1 的 DFT 形变势矩阵（deformation_matrix.h5，deform_wave.py）   # 2026-10-21-0061g-adpdegen   # [0061-g] ADP_DEGEN 通用化：任意晶系 / 谷 / 价带导带 / SOC（vasprun + 波函数现拟合）   # 2026-10-21-0061-adpdegen   # [0061] ADP_DEGEN：立方 Γ 三重简并价带的 ADP 带间修正（插件 + adp_degen.py）   # 2026-10-20-0059r3-dfptodp   # [0059-r3] DFPT 谷内 ODP（q=Γ）优先于冻声子/手填，不再两份叠加   # 2026-10-18-0059-ivsdfpt   # [0059] IVS_DFPT：eph-qe-cpu QE DFPT 谷间零阶形变势（ivs_dfpt_params.json）优先于冻声子 K↔K′ 与手填   # 2026-10-16-0055-dopinglow   # [0055] DOPING_LOW 低浓度段 1e10–1e16 cm^-3（amset_fermi_fix 小掺杂 log-sum-exp 解 E_F）；[0054] undoped_ni 记带边   # 2026-10-15-0051-socdesym   # [0051] amset_desym_fix 修 SOC 分支（四元数 SU(2) + iσ_y·K，V200）   # 2026-10-13-0043-intrsvd   # [0041] DEFECT_DOPING 缺陷平衡载流子浓度进掺杂网格   # 2026-10-13-0040-undoped   # [0040] UNDOPED_POINT 本征点（doping=0）   # 2026-10-13-0038-subsets   # [0038] SUBSETS 散射机制子集（subset_<机制>.json）   # [0037] 三维 PIE（读压电张量写 settings，插件 amset_pie3d.py 修正核）   # [0036] 三维 ODP/IVS（DP_OPTICAL_*，插件 amset_dpo3d.py）   # [0014] 2D 弹性用原始 slab 值（不乘 c/t）；V115 相位补丁
 import stepconf  # noqa: E402
 try:
     import ke_common as kc
@@ -233,6 +233,14 @@ ADP_DEGEN_NANG = None
 ADP_DEGEN_MODULE = "adp_degen.py"
 ADP_DEGEN_PAIR = "auto"            # [0061-p] auto：在 AMSET 的四面体积分里逐对换矩阵元；off：按初态乘比值
 ADP_DEGEN_MATRIX = "auto"          # [0061-m] auto：S7.1 有 deformation_matrix.h5 就用 DFT 形变势矩阵；off：从本征值拟合
+# [0072] 非简并带边的谷内 ADP 形变势用 DFPT 声学支斜率（eph-qe-cpu IVS_ADP，ivs_dfpt_params.json 的 "adp" 块；
+#   Li, Graziosi, Neophytou, PRB 104, 195201 (2021)）。S7 的形变势来自带边能量随应变的移动，静水分量要芯势对齐，
+#   有绝对参考的不确定；DFPT 的长波声学矩阵元自洽含宏观势响应，不需要对齐，与 EPW 同口径。
+#   ADP_DFPT = auto（出厂：有就用）/ on（必须有）/ off（照原版用 S7 的形变势）。替换范围：该载流子带边 ADP_DFPT_EWIN（eV）
+#   以内、按最近谷中心归属的态，形变势张量换成该谷的 DFPT 张量（其余态照旧）；带边简并的载流子不换（由 ADP_DEGEN 管）。
+#   ★ 实验性，出厂 off（Si 实算 Ξd 偏大，见 METHODOLOGY [0072]）：要试用写 ADP_DFPT = auto 或 on。
+ADP_DFPT = "off"
+ADP_DFPT_EWIN = 0.3
 DEFORM_MATRIX_H5 = "deformation_matrix.h5"
 DEFORM_WAVE_MODULE = "deform_wave.py"
 # [0038] 三维本征后处理：WRITE_MESH 写 mesh_*.h5，作业链尾部 postprocess_intrinsic.py 去机制重积分，
@@ -463,6 +471,8 @@ SPEC = {
     "ADP_DEGEN_NANG": (None, "int"),
     "ADP_DEGEN_PAIR": ("auto", "str"),       # [0061-p] auto = 逐对替换矩阵元（AMSET 内部对不上自动退回比值）/ off = 按初态比值
     "ADP_DEGEN_MATRIX": ("auto", "str"),     # [0061-m] auto = 有 S7.1 的 deformation_matrix.h5 就用 / off = 从本征值拟合
+    "ADP_DFPT": ("off", "str"),                 # [0072] 谷内 ADP 用 DFPT 声学斜率张量 auto/on/off（实验性，出厂 off）
+    "ADP_DFPT_EWIN": (None, "float"),
     "PIE_KERNEL": ("az", "str"),                # [0037] 三维 PIE 核 az/amset
     "PIE_SCREENING": (True, "bool"),
     # [0037] 三维本征后处理（WRITE_MESH 写 mesh，postprocess 去机制重积分出多机制对照）
@@ -2038,9 +2048,12 @@ def resolve_dp_optical_3d(is_2d, cwd=None):
             if dft_odp and not dodp:
                 print("[..] %s：DFPT 谷内 D 全部 < %.2f eV/Å（对称性禁戒），本载流子没有谷内 ODP 通道"
                       % (car, float(IVS_DFPT_DMIN)))
+            dinfo["soc_notes"] = ivd.carrier_notes(dft, car)          # [0074] 非 SOC 口径备注（只记录、不拦）
             dft_rec["info"][car] = dinfo
             print("[OK] %s DFPT %s（%s）：%s" % (car, "谷间 IVS + 谷内 ODP" if dft_odp else "谷间 IVS", IVS_DFPT_SRC,
                                                dinfo["summary"]))
+            for n_ in dinfo["soc_notes"]:
+                print("[NOTE] %s DFPT：%s" % (car, n_))
         try:
             dpo.check_channels(chs, vs)
         except ValueError as e:
@@ -2236,6 +2249,63 @@ def _install_pie_3d(out, record):
     return True
 
 
+def resolve_adp_dfpt_3d(cwd):
+    """[0072] ADP_DFPT -> dp_optical_3d.json 的 "adp_dfpt" 记录：{"mode","source","sha256","ewin_eV","lattice_A",
+    "carriers": {载流子: {"valleys": [{"label","members": [{"k_frac","D_eV"}]}], "digest","summary"}}, "use": {载流子: 状态}}。
+    carriers 为空 = 不替换（插件照原版）。on 而没有可用张量 -> 报错。"""
+    mode = str(ADP_DFPT or "auto").strip().lower()
+    if mode not in ("auto", "on", "off"):
+        sys.exit("[ERROR] ADP_DFPT=%r 无效，只允许 auto / on / off" % ADP_DFPT)
+    rec = {"mode": mode, "source": IVS_DFPT_SRC, "ewin_eV": float(ADP_DFPT_EWIN), "carriers": {}, "use": {}}
+    f = Path(cwd) / IVS_DFPT_SRC
+    if mode == "off" or not f.is_file():
+        if mode == "on":
+            sys.exit("[ERROR] ADP_DFPT = on，但没有 %s：先跑完 eph-qe-cpu 的 ivs_dfpt 组（IVS_ADP = auto/on），结果拉回本地后"
+                     "retry 本步" % IVS_DFPT_SRC)
+        rec["use"] = {c: ("off" if mode == "off" else "unavailable") for c in ("electron", "hole")}
+        return rec
+    for d in (Path(__file__).resolve().parent, Path.cwd()):
+        if (d / "ivs_dfpt.py").is_file() and str(d) not in sys.path:
+            sys.path.insert(0, str(d))
+    import ivs_dfpt as ivd
+    try:
+        params, msg = ivd.load_consumer(str(f), "on" if mode == "on" else "auto", "3d")
+    except ValueError as e:
+        sys.exit("[ERROR] ADP_DFPT：" + str(e))
+    if params is None:
+        print("[WARN] ADP_DFPT：%s" % (msg or "参数不可用"))
+        rec["use"] = {c: "unavailable" for c in ("electron", "hole")}
+        return rec
+    if _HAS_KC and kc.detect_ncl(cwd):
+        sys.exit("[ERROR] ADP_DFPT：本材料的能带是 SOC，%s 的张量按非 SOC 算。处理：step.conf 写 ADP_DFPT = off" % IVS_DFPT_SRC)
+    adp = params.get("adp") or {}
+    rec["sha256"] = ivd.file_sha256(str(f))
+    rec["lattice_A"] = adp.get("lattice_A")
+    for car in ("electron", "hole"):
+        c = ivd.adp_params(params, car)
+        st = ((adp.get("carriers") or {}).get(car) or {}).get("status")
+        if c is None:
+            rec["use"][car] = "degenerate" if st == "degenerate" else "unavailable"
+            continue
+        rec["carriers"][car] = {"valleys": [{"label": v["label"], "members": v["members"]} for v in c["valleys"]],
+                                "digest": ivd.adp_digest(params, car),
+                                "summary": [{"label": v["label"], **v["summary"],
+                                             "fit_rel_resid": v["checks"]["fit_rel_resid"]} for v in c["valleys"]]}
+        rec["use"][car] = "used"
+        for v in c["valleys"]:
+            sm = v["summary"]
+            print("[OK] %s 谷内 ADP 用 DFPT 声学斜率（%s）：%s 主值 %s eV%s；带边 %.2f eV 内的态替换 S7 形变势"
+                  % (car, IVS_DFPT_SRC, v["label"], "/".join("%.2f" % x for x in sm["principal_eV"]),
+                     "" if sm["axis_eV"] is None else "，谷轴 %.2f eV" % sm["axis_eV"], float(ADP_DFPT_EWIN)))
+    if mode == "on" and not rec["carriers"]:
+        sys.exit("[ERROR] ADP_DFPT = on，但 %s 里没有可用的谷内 ADP 张量（%s）：eph-qe-cpu 写 IVS_ADP = auto/on 重跑 S10–S13"
+                 % (IVS_DFPT_SRC, adp.get("status") or "无 adp 块"))
+    if not rec["carriers"]:
+        print("[..] ADP_DFPT：%s 没有可用的谷内 ADP 张量（%s），照原版用 S7 形变势"
+              % (IVS_DFPT_SRC, ", ".join("%s %s" % kv for kv in rec["use"].items())))
+    return rec
+
+
 def resolve_adp_degen_3d(is_2d, cwd, h5_name="deformation.h5"):
     """[0061] 简并带边 ADP 带间修正 -> dp_optical_3d.json 的 "adp_degen" 记录（2D 返回 None：2D 由 S8.4 做）。
     gen 只判开关、ADP 在不在、有没有 S7.1 的带符号形变势；有没有简并谷、参数多少，在作业里用 vasprun + 波函数 +
@@ -2321,7 +2391,8 @@ def _install_dp_optical_3d(out, record):
         return False
     rec_f.write_text(json.dumps(record, ensure_ascii=False, indent=1), encoding="utf-8")
     degen = (record.get("adp_degen") or {}).get("status") == "pending_runtime"      # [0061]
-    if not record.get("dp_optical") and not degen:
+    adpd = bool((record.get("adp_dfpt") or {}).get("carriers"))                      # [0072]
+    if not record.get("dp_optical") and not degen and not adpd:
         return False
     here = Path(__file__).resolve().parent
     mat = degen and bool((record.get("adp_degen") or {}).get("matrix_h5"))       # [0061-m] adp_degen import deform_wave
@@ -2334,7 +2405,8 @@ def _install_dp_optical_3d(out, record):
         if src.resolve() != dst.resolve():
             shutil.copyfile(src, dst)
     print("[OK] %s + %s 就位（作业里 import amset_dpo3d 注册 %s）"
-          % (DPO3D_RECORD, DPO3D_PLUGIN, ",".join(record["mechanisms"] + (["ADP 简并修正"] if degen else []))
+          % (DPO3D_RECORD, DPO3D_PLUGIN, ",".join(record["mechanisms"] + (["ADP 简并修正"] if degen else [])
+                                                  + (["ADP DFPT 张量"] if adpd else []))
              or "ADP 谷内掩码"))
     return True
 
@@ -2856,6 +2928,10 @@ def main():
                 ADP_DEGEN_EFIT = float(_p["ADP_DEGEN_EFIT"])
             if _p["ADP_DEGEN_NANG"] is not None:
                 ADP_DEGEN_NANG = int(_p["ADP_DEGEN_NANG"])
+            global ADP_DFPT, ADP_DFPT_EWIN                    # [0072]
+            ADP_DFPT = str(_p["ADP_DFPT"] or "off")
+            if _p["ADP_DFPT_EWIN"] is not None:
+                ADP_DFPT_EWIN = float(_p["ADP_DFPT_EWIN"])
             global ADP_DEGEN_PAIR, ADP_DEGEN_MATRIX
             ADP_DEGEN_PAIR = str(_p["ADP_DEGEN_PAIR"] or "auto")
             ADP_DEGEN_MATRIX = str(_p["ADP_DEGEN_MATRIX"] or "auto")
@@ -3044,6 +3120,7 @@ def main():
     _degen = resolve_adp_degen_3d(bool(is_2d), cwd, _h5name)          # [0061]
     if _dpo3d is not None:
         _dpo3d["adp_degen"] = _degen
+        _dpo3d["adp_dfpt"] = resolve_adp_dfpt_3d(cwd)                  # [0072]
     if (_degen or {}).get("status") == "pending_runtime":
         link(out, cwd / READ_DIR / _degen["signed_src"], "deformation_signed.h5")
         if _degen.get("matrix_h5"):                                    # [0061-m]

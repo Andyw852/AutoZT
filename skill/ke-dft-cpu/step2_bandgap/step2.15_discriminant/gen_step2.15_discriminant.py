@@ -37,7 +37,8 @@ step2.2_pbe 复用的是 step2.1_static 的网格，用它判"网格够不够"�
 INCAR / POSCAR / POTCAR 直接从 step2.1_static 复制 —— 那样泛函（pbe-d3 /
 pbesol / pbe）、磁性（ISPIN/MAGMOM）、维度、ENCUT 等与 step2.1 逐项一致，
 本步唯一的差别就是 k 网格。不重复实现 gen_step2_static.py 里那套继承逻辑。
-submit.sh 同样从 step2.1_static 复制后只改 --job-name，保证集群参数一致。
+submit.sh 按**本步所在集群**的 submit_std 模板渲染，再套本步 step.conf 的 [submit]（[0075]；
+以前从 step2.1_static 复制，本步用 step_hpc 换集群时会带着 S2.1 集群的分区）。
 """
 
 import argparse
@@ -134,6 +135,19 @@ def build_dense_mesh(nb, base, dim):
     return new
 
 
+def _apply_submit_conf(sub):
+    """[0075] 本步 step.conf 的 [submit]（partition/qos/time/ntasks_per_node…）套到 submit.sh；没有 stepconf.py -> 不改。"""
+    for d in (Path(__file__).resolve().parent, Path.cwd()):
+        if str(d) not in sys.path:
+            sys.path.insert(0, str(d))
+    try:
+        import stepconf
+    except ImportError:
+        return []
+    # used_incar=True：本步的 INCAR 原样抄 S2.1（S2.1 已套过 [incar*]），不该报"写了没人读"
+    return stepconf.apply_submit(str(sub), stepconf.read_submit(stepconf.CONF_NAME, used_incar=True)) or []
+
+
 def _cascade_on_rerun(step):
     """[patch_rerun_cascade V153] 本步目录是新建的（rerun）-> 下游步骤整目录归档、等本步跑完后重新生成。"""
     try:
@@ -193,17 +207,33 @@ def main():
            new[0], new[1], new[2], shift[0], shift[1], shift[2]),
         encoding="utf-8", newline="\n")
 
-    # --- submit.sh：从 step2.1 复制，只改 job-name（集群参数完全一致）---
+    # --- submit.sh：按本步集群的 submit_std 模板渲染 + 本步 step.conf [submit]（[0075]）---
+    #   以前从 step2.1 复制：项目 step_hpc 把本步换到别的集群（S2.1 在 hfeshell、本步在 jzzn）时，
+    #   复制来的 submit.sh 带着 S2.1 集群的分区 -> "sbatch: invalid partition specified: hfacexclu08"，
+    #   step.conf 的 [submit] 也从来没人读。autozt 按本步的集群推 submit_std_*.tpl（gen_need），
+    #   同集群时就是 S2.1 用的那份；模板没推过来（旧的 gen_need）才退回复制 step2.1 的。
+    jobname = args.jobname or ("%s-ke-dft-cpu-%s" % (cwd.name, STEP_LABEL))
+    tpl = next((cwd / n for n in ("submit_std_%dd.tpl" % dim, "submit_std.tpl") if (cwd / n).is_file()), None)
     src_sub = s21 / "submit.sh"
-    if src_sub.is_file():
-        jobname = args.jobname or ("%s-ke-dft-cpu-%s" % (cwd.name, STEP_LABEL))
+    if tpl is not None:
+        txt = tpl.read_text(encoding="utf-8", errors="ignore").replace("{{JOBNAME}}", jobname)
+        left = sorted(set(re.findall(r"\{\{(\w+)\}\}", txt)))
+        if left:
+            sys.exit("[ERROR] %s 里还有没填的占位符 %s：本脚本只填 {{JOBNAME}}，其余请直接写进模板" % (tpl.name, left))
+        how = "由本集群模板 %s 渲染" % tpl.name
+    elif src_sub.is_file():
         txt = src_sub.read_text(errors="ignore")
         txt = re.sub(r"(#SBATCH\s+--job-name=).*", r"\g<1>" + jobname, txt)
+        how = "由 step2.1_static 复制（没有 submit_std 模板；本步与 S2.1 不在同一集群时分区会错）"
+    else:
+        txt = None
+        log("[WARN] 没有 submit_std 模板，也没有 step2.1_static/submit.sh，请自行提供 submit.sh")
+    if txt is not None:
         (out / "submit.sh").write_text(txt, encoding="utf-8", newline="\n")
         (out / "submit.sh").chmod(0o755)
-        log("[OK] submit.sh 由 step2.1_static 复制，job-name=%s" % jobname)
-    else:
-        log("[WARN] 没有 step2.1_static/submit.sh，请自行提供 submit.sh")
+        changed = _apply_submit_conf(out / "submit.sh")
+        log("[OK] submit.sh %s，job-name=%s%s" % (how, jobname, ("；step.conf [submit]：%s" % ", ".join(changed))
+                                                if changed else ""))
 
     log("[DONE] %s 就绪：独立密网格 %s（step2.1 是 %s）" % (OUTDIR_NAME, new, base))
     log("       跑完后 check_discriminant.py 会写 discriminant.json")

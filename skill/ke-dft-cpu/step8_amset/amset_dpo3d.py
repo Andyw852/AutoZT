@@ -35,6 +35,10 @@ import amset
 import amset.scattering.calculate as C
 from amset.scattering.basic import AbstractBasicScattering as _ABS_BASIC
 from amset.scattering.elastic import AcousticDeformationPotentialScattering as _ADP
+try:                                                   # [0072] ADP_DFPT 的插值器代理要它（单元测试的 amset 桩可能没有）
+    from amset.interpolation.deformation import DeformationPotentialInterpolator
+except ImportError:
+    DeformationPotentialInterpolator = None
 
 # spawn 的散射子进程只导入 worker 所在模块：本插件包装 worker 时，其它插件（IR_FIX 的 ADP 星平均）也要在子进程里生效
 try:
@@ -59,6 +63,9 @@ _MASK_ON = any((_DPO_REC.get("adp_intravalley") or {}).get(c) for c in _CARRIERS
 _DEGEN_REC = (_REC or {}).get("adp_degen") or {}                     # [0061]
 _DEGEN_ON = str(_DEGEN_REC.get("mode") or "off").lower() in ("auto", "on") and _DEGEN_REC.get("status") == "pending_runtime"
 _DEGEN_REPORT = "adp_degen_fit.json"
+# [0072] 谷内 ADP 张量换成 DFPT 声学斜率（gen 按 ADP_DFPT 写 "adp_dfpt"）：带边 ewin 以内、按最近谷中心归属的态
+_ADPD_REC = (_REC or {}).get("adp_dfpt") or {}
+_ADPD_ON = bool(_ADPD_REC.get("carriers"))
 # [0061-p] 逐对替换矩阵元（出厂）：钩子装上了就在 AMSET 的四面体积分里换子空间内 (初态, 末态) 的矩阵元；
 #   record 的 pairwise = "off" 或 AMSET 内部结构对不上时，退回按初态乘比值。
 _PAIR_ON = [False]
@@ -100,6 +107,107 @@ def _adp_mask_setup(amset_data):
         _split_bands(amset_data, amset_data.spins[0])          # 金属直接拒绝
         return out
     return None
+
+
+def _adp_dfpt_setup(amset_data):
+    """[0072] {spin 名: {(带, k 键): 张量下标}, "_D": (n,3,3) Hartree（AMSET 的笛卡尔系）}；没有可替换的态 -> None。
+    k 键 = AMSET 全网格分数坐标取 5 位小数（AMSET 的 factor 拿到的 k 就是这些网格点；ir_fix 的星平均旋转后仍在网格上）。"""
+    from amset.constants import ev_to_hartree
+    A_a = np.asarray(amset_data.structure.lattice.matrix, float)
+    A_q = np.asarray(_ADPD_REC.get("lattice_A") or A_a, float)
+    R = A_a.T @ np.linalg.inv(A_q.T)                       # 分数坐标相同 -> 笛卡尔系之间的旋转
+    if np.max(np.abs(R @ R.T - np.eye(3))) > 1e-3:
+        raise ValueError("%s ADP_DFPT：DFPT 用的晶格与 AMSET 的晶格不是同一个胞（差的不只是转动）：eph-qe-cpu 要用 ke S1 的 "
+                         "CONTCAR 重跑 S10–S13，或 step.conf 写 ADP_DFPT = off" % _TAG)
+    rlat = np.asarray(amset_data.structure.lattice.reciprocal_lattice.matrix, float)
+    kf = np.asarray(amset_data.kpoints, float)
+    keys_k = [_kkey(k) for k in kf]
+    ewin = float(_ADPD_REC.get("ewin_eV") or 0.3) * ev_to_hartree
+    tensors, out, report = [], {}, []
+    for car, c in (_ADPD_REC.get("carriers") or {}).items():
+        centers, Ds = [], []
+        for v in c.get("valleys") or []:
+            for m in v.get("members") or []:
+                centers.append(m["k_frac"])
+                Ds.append(R @ np.asarray(m["D_eV"], float) @ R.T * ev_to_hartree)
+        if not centers:
+            continue
+        base = len(tensors)
+        tensors.extend(Ds)
+        own = np.asarray(_DPO.assign_members(kf, centers, rlat, full3d=True)) + base
+        for spin in amset_data.spins:
+            E = np.asarray(amset_data.energies[spin], float)
+            cb, vb = _split_bands(amset_data, spin)
+            sel = cb if car == "electron" else vb
+            edge = E[sel].min() if car == "electron" else E[sel].max()
+            tab = out.setdefault(getattr(spin, "name", spin), {})
+            n = 0
+            for b in np.where(sel)[0]:
+                near = np.where(np.abs(E[b] - edge) <= ewin)[0]
+                for ik in near:
+                    tab[(int(b), keys_k[ik])] = int(own[ik])
+                n += len(near)
+            report.append("%s %d 个态（%d 个谷成员）" % (car, n, len(centers)))
+        vs = [{"label": v["label"], "g": len(v["members"]), "k_frac": [m["k_frac"] for m in v["members"]]}
+              for v in c.get("valleys") or []]
+        spin = amset_data.spins[0]
+        sel = _split_bands(amset_data, spin)[0 if car == "electron" else 1]
+        for r in _DPO.valley_report(np.asarray(amset_data.energies[spin])[sel], kf, rlat, vs,
+                                    +1 if car == "electron" else -1, full3d=True):
+            if r["dk_rel"] is None or r["dk_rel"] > VALLEY_DK_WARN:
+                print("%s[WARN] ADP_DFPT %s %s：AMSET 网格上的谷底离 DFPT 的谷中心 %s —— 两边晶胞/谷表不同源？"
+                      % (_TAG, car, r["label"], "—" if r["dk_rel"] is None else "%.3f|b1|" % r["dk_rel"]), flush=True)
+    if not tensors:
+        return None
+    out["_D"] = np.asarray(tensors)
+    print("%s ADP_DFPT：谷内 ADP 张量换成 DFPT 声学斜率（带边 %.2f eV 内）：%s"
+          % (_TAG, float(_ADPD_REC.get("ewin_eV") or 0.3), "；".join(report)), flush=True)
+    return out
+
+
+def _kkey(k):
+    """网格 k 点的查表键：5 位小数、取模到 [0, 1)（先舍入再取模：0.999999999 与 −1e-9 都落到 0）。"""
+    r = np.mod(np.round(np.asarray(k, float), 5), 1.0)
+    return tuple(float(x) + 0.0 for x in np.round(r, 5))
+
+
+class _DFPTDeformation(DeformationPotentialInterpolator or object):
+    """[0072] AMSET 形变势插值器的代理：表里的 (带, k) 返回该谷的 DFPT 张量（Hartree），其余照原插值器。
+    放在插值器层（而不是改 factor）：AMSET 原版 factor 与 amset_ir_fix 的星平均都调 interpolate（后者在旋转后的星成员 k 上
+    重新插值），两条路径都拿到对应谷成员的张量；factor 本身（取绝对值、速度修正、Christoffel 三支）一字不改。"""
+
+    def __init__(self, inner, tabs):          # 不调父类 __init__：数据都在 inner 里
+        self.__dict__["_inner"] = inner
+        self.__dict__["_tabs"] = tabs
+
+    def __getattr__(self, name):
+        return getattr(self.__dict__["_inner"], name)
+
+    def to_reference(self):
+        return self._inner.to_reference()
+
+    def interpolate(self, spin, bands, kpoints, *args, **kwargs):
+        out = np.array(self._inner.interpolate(spin, bands, kpoints, *args, **kwargs), copy=True)
+        tab = self._tabs.get(getattr(spin, "name", spin))
+        if tab:
+            for i, (b, k) in enumerate(zip(bands, kpoints)):
+                j = tab.get((int(b), _kkey(k)))
+                if j is not None:
+                    out[i] = self._tabs["_D"][j]
+        return out
+
+
+def _wrap_deform(obj):
+    tabs = getattr(obj, "_adpd", None)
+    if not tabs:
+        return
+    if DeformationPotentialInterpolator is None:
+        raise ImportError("%s ADP_DFPT：本 AMSET 没有 amset.interpolation.deformation，替换不了形变势插值器" % _TAG)
+    dp = getattr(obj, "deformation_potential", None)
+    if tabs and isinstance(dp, DeformationPotentialInterpolator) and not isinstance(dp, _DFPTDeformation):
+        obj.deformation_potential = _DFPTDeformation(dp, tabs)
+    elif tabs and not isinstance(dp, DeformationPotentialInterpolator):
+        print("%s[WARN] ADP_DFPT：ADP 用的是常数形变势（settings 不是 deformation.h5），不替换" % _TAG, flush=True)
 
 
 _VALLEY_CHECKED = [False]
@@ -245,6 +353,8 @@ class AcousticDeformation3DIntravalley(_ADP):
         obj = super().from_amset_data(materials_properties, amset_data)
         obj._ivm = _adp_mask_setup(amset_data) if _MASK_ON else None
         obj._degen = _degen_setup(amset_data, obj) if _DEGEN_ON else None
+        obj._adpd = _adp_dfpt_setup(amset_data) if _ADPD_ON else None      # [0072]
+        _wrap_deform(obj)
         return obj
 
     def to_reference(self):
@@ -252,12 +362,13 @@ class AcousticDeformation3DIntravalley(_ADP):
         if degen:                                                      # [0061-m] DFT 应变算符的大数组走共享内存
             import adp_degen as _AD
             degen = _AD.tables_to_reference(degen)
-        return super().to_reference() + (getattr(self, "_ivm", None), degen)
+        return super().to_reference() + (getattr(self, "_ivm", None), degen, getattr(self, "_adpd", None))
 
     @classmethod
     def from_reference(cls, *ref):
-        obj = super().from_reference(*ref[:-2])
-        obj._ivm, obj._degen = ref[-2], ref[-1]
+        obj = super().from_reference(*ref[:-3])
+        obj._ivm, obj._degen, obj._adpd = ref[-3], ref[-2], ref[-1]
+        _wrap_deform(obj)
         if obj._degen:
             import adp_degen as _AD
             obj._degen = _AD.tables_from_reference(obj._degen)
@@ -327,18 +438,19 @@ def _install():
         _PAIR_ON[0], _why = _AD.install_pair_hooks()
         if not _PAIR_ON[0]:
             print("%s[WARN] ADP 简并修正：逐对替换矩阵元不可用（%s），退回按初态乘比值" % (_TAG, _why), flush=True)
-    if _MASK_ON or _DEGEN_ON:
+    if _MASK_ON or _DEGEN_ON or _ADPD_ON:
         C._scattering_mechanisms["ADP"] = AcousticDeformation3DIntravalley
         C.AcousticDeformationPotentialScattering = AcousticDeformation3DIntravalley   # worker 用此名重建 ADP
         if C.scattering_worker is not worker and _ORIG_WORKER[0] is None:
             _ORIG_WORKER[0] = C.scattering_worker
             C.scattering_worker = worker
     ivf = _DPO_REC.get("adp_intravalley") or {}
-    print("%s amset %s | 三维常数形变势 %s：%s | ADP 谷内掩码：电子 %s，空穴 %s | ADP 简并修正：%s"
+    print("%s amset %s | 三维常数形变势 %s：%s | ADP 谷内掩码：电子 %s，空穴 %s | ADP 简并修正：%s | ADP DFPT 张量：%s"
           % (_TAG, amset.__version__, ",".join(_MECHS) or "（无）", _DPO.describe(_DPO_REC) if _DPO_REC else "—",
              "开" if ivf.get("electron") else "关", "开" if ivf.get("hole") else "关",
              ("开（%s，运行期拟合，%s）" % (_DEGEN_REC.get("mode"), "逐对替换矩阵元" if _PAIR_ON[0] else "按初态比值"))
-              if _DEGEN_ON else "关"), flush=True)
+              if _DEGEN_ON else "关",
+             "/".join(sorted(_ADPD_REC.get("carriers") or {})) or "关"), flush=True)
 
 
 if not getattr(C, "_az_dpo3d", False):

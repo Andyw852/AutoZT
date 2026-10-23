@@ -190,7 +190,7 @@ def capabilities() -> Dict[str, Any]:
     the fixed agent protocol and its safety boundary.
     """
     read_commands = ["capabilities", "schema", "skills", "contract", "progress", "doctor",
-                     "setup", "snapshot", "inspect", "plan", "evidence", "propose",
+                     "setup", "brief", "snapshot", "inspect", "plan", "evidence", "propose",
                      "research_plan", "preflight", "results"]
     mutate_commands = ["cycle", "run", "apply"]
     commands = read_commands + mutate_commands + ["request"]
@@ -262,6 +262,12 @@ def capabilities() -> Dict[str, Any]:
                           "tty": "approval_mode: tty -- only a human in a real terminal"},
             },
         },
+        # 材料基础信息卡：hpc/work_dir（含来源层）、项目改过的参数、最近作业、自动推进
+        "brief": {"cli": "autozt [-tt T] -p M [-j S] brief [--json]",
+                  "agent": "autozt agent brief -p M [--step S]",
+                  "mcp": "material_brief",
+                  "use": "start every reply about a material with data.brief_md verbatim",
+                  "cost": "read-only, no ssh: configuration + .tf_progress.json + submit ledger"},
         "task_graph": {"cli": "autozt [-tt T] [-p M] graph [--json|--mermaid]",
                        "mcp": "task_graph",
                        "use": "show the user the step DAG with live status before asking "
@@ -276,7 +282,7 @@ def capabilities() -> Dict[str, Any]:
 
 
 REQUEST_OPS = ["capabilities", "schema", "skills", "contract", "progress", "doctor",
-               "setup", "snapshot", "inspect", "plan", "cycle", "run", "evidence", "propose",
+               "setup", "brief", "snapshot", "inspect", "plan", "cycle", "run", "evidence", "propose",
                "research_plan", "preflight", "results", "apply"]
 
 

@@ -62,6 +62,14 @@ PARAMS = {
     #   Born 有效电荷判极性、不进谷内通道；include = 极性模的短程形变势也算进 ODP（不算 epsil，金属/零带隙也能跑）
     "IVS_ODP_POLAR": ("exclude", "str"),
     "IVS_ODP_POLAR_TOL": (0.1, "float"),   # 模有效电荷（e）大于它算极性（= ke-dft-cpu 的 ODP_POLAR_TOL）
+    # [0072] 谷内声学形变势 ADP：每个谷中心 6 个小 q（q-adp1..6，x/y/z/xy/xz/yz）的声学支矩阵元斜率 -> 形变势张量
+    #   （Li et al. PRB 104, 195201 (2021)），ke-dft-cpu S8 的 ADP_DFPT 用它替换非简并带边的 AMSET 形变势。
+    #   auto = 三维且有反演中心（无压电长程项）才算；on = 三维都算（无反演中心时压电项会混进斜率，自行核对）；off = 不算。
+    #   二维不支持（AHC 没有二维库仑截断，小 q 的长程响应不对）。
+    #   ★ 实验性，出厂 off：Si 实算（2026-10-23）剪切 Ξu ≈ 8.5 eV 与文献一致，但静水 Ξd ≈ 4.5 eV（文献约 1.0–1.2），
+    #     且小 q 矩阵元里有 ASR 破缺的 1/q 长程项，见 ke-dft-cpu METHODOLOGY [0072]。
+    "IVS_ADP": ("off", "str"),
+    "IVS_ADP_DQ": (0.03, "float"),         # 小 q 的模长（Å⁻¹，含 2π）
     "QE_BIN": ("", "str"),                   # autozt 从 setting/<集群>.yaml 的 qe_bin 注入
     "QE_PSEUDO_DIR": ("", "str"),            # qe_pseudo_dir
     "QE_SETUP": ("", "str"),                 # qe_setup：作业开头执行的 shell（module load / source …）；jzzn = 用 eph-qe-cpu 的 jzzn 环境
@@ -300,6 +308,54 @@ def add_odp_gamma(carriers, classes, runs):
     return n
 
 
+def add_adp_runs(P, carriers, runs, st, rots, dim):
+    """[0072] 谷内 ADP 的小 q 作业：每个方向一个 q（q-adp1..6），nscf 里放各载流子各星的第一个成员。
+    返回 ivs_qlist.json 的 "adp" 记录（不开 -> {"mode", "status": 原因}）。"""
+    import numpy as np
+    iv = _iv()
+    mode = str(P.get("IVS_ADP") or "auto").strip().lower()
+    if mode not in ("auto", "on", "off"):
+        raise SystemExit("[ERROR] IVS_ADP=%r 无效，只允许 auto / on / off" % mode)
+    if mode == "off":
+        return {"mode": mode, "status": "off"}
+    if dim != "3d":
+        msg = "二维不支持（ph.x AHC 没有二维库仑截断，小 q 的长程响应不对）"
+        if mode == "on":
+            raise SystemExit("[ERROR] IVS_ADP = on，但%s。写 IVS_ADP = auto 或 off" % msg)
+        print("[..] 谷内 ADP（DFPT 斜率）：%s，不算" % msg)
+        return {"mode": mode, "status": "skipped", "why": msg}
+    inv = any(np.array_equal(np.asarray(W), -np.eye(3, dtype=int)) for W in rots)
+    if not inv:
+        msg = "结构没有反演中心：小 q 声学矩阵元里有压电长程项（∝ q⁰），斜率会被污染（压电散射由 AMSET 的 PIE 管）"
+        if mode == "auto":
+            print("[..] 谷内 ADP（DFPT 斜率）：%s，不算（确认无压电时写 IVS_ADP = on）" % msg)
+            return {"mode": mode, "status": "skipped", "why": msg}
+        print("[WARN] 谷内 ADP（DFPT 斜率）：%s —— IVS_ADP = on，照算，结果自行核对" % msg)
+    dq = float(P.get("IVS_ADP_DQ") or iv.ADP_DQ_A)
+    if not (0.0 < dq < 0.2):
+        raise SystemExit("[ERROR] IVS_ADP_DQ=%r 应在 (0, 0.2) Å⁻¹ 内" % dq)
+    ks, entries = [], []
+    for car in iv.CARRIERS:
+        for X in carriers.get(car) or []:
+            k0 = iv.wrap_half(X["k"][0])
+            ik = next((i for i, kk in enumerate(ks) if iv.same_q(kk, k0, 1e-6)), None)
+            if ik is None:
+                ks.append(k0)
+                ik = len(ks) - 1
+            entries.append({"carrier": car, "label": X["label"], "k0": k0, "ik": ik,
+                            "members": [list(map(float, k)) for k in X["k"]]})
+    if not entries:
+        return {"mode": mode, "status": "skipped", "why": "没有载流子谷"}
+    dirs = []
+    for j, (n, qf) in enumerate(iv.adp_q_fracs(st["lattice"], dq)):
+        run = {"id": len(runs), "q": qf, "k": [list(k) for k in ks], "name": "%s%s%d" % (FANOUT_PREFIX, iv.ADP_RUN_PREFIX, j + 1)}
+        runs.append(run)
+        dirs.append({"dir": n, "run": run["id"], "name": run["name"]})
+    print("[OK] 谷内 ADP（DFPT 声学支斜率）：%d 个谷 × %d 个方向，|q| = %.3f Å⁻¹，作业 %s…%s"
+          % (len(entries), len(dirs), dq, dirs[0]["name"], dirs[-1]["name"]))
+    return {"mode": mode, "status": "planned", "dq_A": dq, "dirs": dirs, "entries": entries}
+
+
 def gen_qlist(P):
     iv = _iv()
     st = pick_structure(P)
@@ -402,8 +458,9 @@ def gen_qlist(P):
     if odp:
         n_intra = add_odp_gamma(carriers, classes, runs)
         print("[OK] ODP（Γ 点谷内光学耦合）：%d 个星，q = (0,0,0)，作业 %s" % (n_intra, ODP_RUN))
+    adp_rec = add_adp_runs(P, carriers, runs, st, rots, dim)
     if not runs:
-        raise SystemExit("[ERROR] 没有要算的 q：没有多谷载流子，IVS_ODP=off")
+        raise SystemExit("[ERROR] 没有要算的 q：没有多谷载流子，IVS_ODP=off，IVS_ADP 没开")
     pse, masses = species_maps(P, st["types"])
     dft, dft_note = input_dft(P)
     prefix = "".join("%s%d" % (t.lower(), c) for t, c in zip(st["types"], st["counts"]))
@@ -425,7 +482,8 @@ def gen_qlist(P):
            "classes": [{k: c[k] for k in ("id", "carrier", "from", "to", "kind", "k_init", "k_fin", "q", "run", "ik",
                                           "n_pairs", "pairs")} for c in classes],
            "runs": [{"id": r["id"], "q": r["q"], "k": r["k"],
-                      "name": r.get("name") or "%s%02d" % (FANOUT_PREFIX, r["id"] + 1)} for r in runs]}
+                      "name": r.get("name") or "%s%02d" % (FANOUT_PREFIX, r["id"] + 1)} for r in runs],
+           "adp": adp_rec}
     dest = Path(STEP["qlist"])
     _write(dest / "ivs_qlist.json", json.dumps(iv.jsonable(out), indent=1, ensure_ascii=False) + "\n")
     for car in carriers:
@@ -565,6 +623,15 @@ def run_need(q1, run, needs):
                              "已算完的 q 不受影响），再生成本步"
                              % (run["name"], ", ".join("%.4f" % x for x in c["k_init"]), c["carrier"], c["from"]))
         need = max(need, hit[1] if c["carrier"] == "electron" else hit[2])
+    adp = q1.get("adp") or {}
+    if any(d["run"] == run["id"] for d in adp.get("dirs") or []):          # [0072] 小 q 作业：初态 = 各谷中心
+        for en in adp.get("entries") or []:
+            hit = next((n for n in needs if iv.same_q(n[0], en["k0"], 1e-5)), None)
+            if hit is None:
+                raise SystemExit("[ERROR] %s 的初态 k (%s)（%s %s）不在 S11 谷能带的 k 点里：先 retry + start S11_ivsscf，"
+                                 "再生成本步" % (run["name"], ", ".join("%.4f" % x for x in en["k0"]), en["carrier"],
+                                                 en["label"]))
+            need = max(need, hit[1] if en["carrier"] == "electron" else hit[2])
     return need
 
 
@@ -743,6 +810,10 @@ def gen_read(P):
         res.update({k: c[k] for k in ("id", "carrier", "from", "to", "kind", "k_init", "k_fin", "q", "n_pairs", "pairs")})
         res["run"] = qr["name"]
         out_classes.append(res)
+    st = q1["structure"]                           # [0074] 非 SOC 备注：无反演中心时 k↔−k 通道是上限（只备注，不拦）
+    inversion = iv.has_inversion(iv.recip_ops(iv.point_group(st["lattice"], st["frac"], st["symbols"],
+                                                             symprec=float(q1.get("symprec_A") or iv.SYMPREC_A))))
+    notes = iv.soc_notes(out_classes, q1["carriers"], inversion)
     carriers = {}
     for car, ci in q1["carriers"].items():
         cl = [c for c in out_classes if c["carrier"] == car]
@@ -750,12 +821,15 @@ def gen_read(P):
         carriers[car] = {"status": "ok", "valleys": ci["valleys"], "valleys_source": ci["valleys_source"],
                          "use_grid": ci["use_grid"], "valley_sig": ci["valley_sig"], "valley_sig_full": ci["valley_sig_full"],
                          "channels": chs, "dropped": dropped,
-                         "valley_check": (vchk or {}).get("carriers", {}).get(car)}
+                         "valley_check": (vchk or {}).get("carriers", {}).get(car),
+                         "soc_notes": notes.get(car, [])}
     params = {"schema": iv.SCHEMA, "created": time.strftime("%Y-%m-%d %H:%M:%S"), "dim": q1["dim"],
               "structure_sha256": q1["structure"]["sha256"], "structure_source": q1["structure"]["source"],
               "valleys_source_sha256": (q1.get("inputs") or {}).get("dpt_result_sha256"),
               "scope": ("零阶谷间形变势（DFPT 直接矩阵元，非 SOC；不含一阶谷间耦合）"
-                        + ("＋谷内零阶光学形变势 ODP（q=Γ）" if odp_info else "")),
+                        + ("＋谷内零阶光学形变势 ODP（q=Γ）" if odp_info else "")
+                        + ("＋谷内声学形变势张量 ADP（小 q 斜率）" if (q1.get("adp") or {}).get("status") == "planned"
+                           else "")),
               "provenance": {"qe_version": info.get("qe_version"), "input_dft": q1["qe"]["input_dft"],
                              "input_dft_note": q1["qe"]["input_dft_note"], "ecutwfc_Ry": q1["qe"]["ecutwfc_Ry"],
                              "ecutrho_Ry": q1["qe"]["ecutrho_Ry"], "kgrid": q1["qe"]["kgrid"], "tr2_ph": q1["qe"]["tr2_ph"],
@@ -764,15 +838,86 @@ def gen_read(P):
                                              "kind": ((env.get("pseudos") or {}).get(t) or {}).get("kind")}
                                          for t in q1["structure"]["types"]},
                              "method": "ph.x electron_phonon='ahc'（trans=.false.，单 q），|g| 按初/终态简并组平均"},
-              "checks": {"valley_check": (vchk or {}).get("status"), "valley_check_mode": (vchk or {}).get("mode")},
-              "odp": odp_info or None, "carriers": carriers, "raw": out_classes}
+              "checks": {"valley_check": (vchk or {}).get("status"), "valley_check_mode": (vchk or {}).get("mode"),
+                         "inversion": inversion},
+              "odp": odp_info or None, "adp": adp_read(q1, by_run), "carriers": carriers, "raw": out_classes}
     dest = Path(STEP["read"])
     _write(dest / "ivs_dfpt_params.json", json.dumps(iv.jsonable(params), indent=1, ensure_ascii=False) + "\n")
     _write(dest / "ivs_dfpt_table.txt", table_text(params))
     print(table_text(params))
+    for car, ns in notes.items():
+        for n_ in ns:
+            print("[NOTE] %s：%s" % (car, n_))
     print("[DONE] %s/ivs_dfpt_params.json（schema %s）。ke-dft-cpu 要用它：结果拉回本地后对 S8_kappa（3D）/ S8.4_amset2d（2D）"
           "执行 retry（gen 时自动推过去，IVS_DFPT=auto 读取）" % (dest, iv.SCHEMA))
     return 0
+
+
+def adp_read(q1, by_run):
+    """[0072] 小 q 作业 -> 每个谷的形变势张量（eV，笛卡尔）并按对称性展开到星的全部成员。
+    带边简并（初态或终态简并组 > 1 条带，如 Si 空穴 Γ）：标 degenerate，不给张量（简并价带由 ke-dft-cpu 的 ADP_DEGEN 处理）。"""
+    import numpy as np
+    iv = _iv()
+    plan = q1.get("adp") or {}
+    if plan.get("status") != "planned":
+        return {"status": plan.get("status") or "off", "why": plan.get("why"), "mode": plan.get("mode")}
+    st = q1["structure"]
+    rots = iv.point_group(st["lattice"], st["frac"], st["symbols"], symprec=float(q1.get("symprec_A") or iv.SYMPREC_A))
+    dq = float(plan["dq_A"])
+    out = {"status": "ok", "mode": plan.get("mode"), "dq_A": dq, "directions": [d["dir"] for d in plan["dirs"]],
+           "lattice_A": st["lattice"],                     # 张量所在的笛卡尔系（ke S8 按 AMSET 的晶格换系）
+           "method": ("小 q 声学支 DFPT 矩阵元斜率（Li, Graziosi, Neophytou, PRB 104, 195201 (2021)）：每个方向解 3 个声学模的"
+                      "质心位移得 w = |q|·D·q̂，6 个方向拟合对称张量 D（只差整体符号）；内应变已含在声学模本征矢里"),
+           "carriers": {}}
+    for en in plan["entries"]:
+        car = en["carrier"]
+        cr = out["carriers"].setdefault(car, {"status": "ok", "valleys": [], "notes": []})
+        vs, ims, hws, why = [], [], [], None
+        for d in plan["dirs"]:
+            R = by_run[d["run"]]
+            qr = R["qr"]
+            nocc, skip, nahc = int(qr["nocc"]), int(qr["ahc_nbndskip"]), int(qr["ahc_nbnd"])
+            nb = iv.edge_band(nocc, car)
+            etk, etq = R["etk"][en["ik"]], R["etq"][en["ik"]]
+            ib, fb = iv.degenerate_group(etk, nb), iv.degenerate_group(etq, nb)
+            if len(ib) > 1 or len(fb) > 1:
+                why = "带边简并（初态带 %s、终态带 %s）：单带斜率不适用，由 ke-dft-cpu 的 ADP_DEGEN 处理" % (
+                    [x + 1 for x in ib], [x + 1 for x in fb])
+                break
+            if not (skip <= nb < skip + nahc):
+                raise SystemExit("[ERROR] %s：带边 %d 不在 AHC 窗口 %d..%d" % (d["name"], nb + 1, skip + 1, skip + nahc))
+            ac, _tw = iv.acoustic_modes(R["e"], R["masses"])
+            hws.append([float(R["hw"][i]) for i in ac])
+            try:
+                w = iv.adp_vector(R["gkk"][en["ik"]], R["e"], R["masses"], nb - skip, nb, ac)
+            except ValueError as e:
+                raise SystemExit("[ERROR] %s（%s %s）：%s" % (d["name"], car, en["label"], e))
+            v, im = iv.adp_real(w)
+            vs.append(v)
+            ims.append(im)
+        row = {"label": en["label"], "k0": en["k0"]}
+        if why:
+            row.update(status="degenerate", why=why)
+            cr["valleys"].append(row)
+            cr["status"] = "degenerate"
+            continue
+        D, resid, signs = iv.adp_fit(out["directions"], vs, dq)
+        mem = iv.adp_member_tensors(D, en["k0"], en["members"], st["lattice"], rots)
+        checks = {"fit_rel_resid": resid, "im_ratio_max": max(ims), "acoustic_hw_meV": hws}
+        warn = []
+        if resid > iv.ADP_FIT_TOL:
+            warn.append("6 个方向拟合对称张量的相对残差 %.3f > %.2f（小 q 不够线性？减小 IVS_ADP_DQ 重算）" % (resid, iv.ADP_FIT_TOL))
+        if max(ims) > iv.ADP_FIT_TOL:
+            warn.append("去公共相位后虚部比例 %.3f > %.2f（矩阵元不是实张量形式：压电/极性长程项？）" % (max(ims), iv.ADP_FIT_TOL))
+        if min(min(h) for h in hws) <= 0:
+            warn.append("小 q 的声学模有虚频（结构/力常数不稳定），结果不可信")
+        row.update(status="ok", D_ref_eV=D, signs=signs, checks=checks, warnings=warn,
+                   summary=iv.adp_summary(D, en["k0"], st["lattice"]),
+                   members=[{"k_frac": k, "D_eV": M} for k, M in zip(en["members"], mem)])
+        for w_ in warn:
+            print("[WARN] %s %s 谷内 ADP：%s" % (car, en["label"], w_))
+        cr["valleys"].append(row)
+    return out
 
 
 def odp_exclusions(R, q1, P):
@@ -824,6 +969,23 @@ def table_text(params):
                                                 ch["D_eV_A"], ch["hw_meV"]))
         if c.get("dropped"):
             lines.append("#   不进通道：%s" % "; ".join("%.1f meV（%s）" % (d["hw_meV"], d["why"]) for d in c["dropped"]))
+        for n_ in c.get("soc_notes") or []:
+            lines.append("#   [备注] " + n_)
+    adp = params.get("adp") or {}
+    if adp.get("status") == "ok":
+        lines.append("## 谷内 ADP（DFPT 声学支斜率，|q| = %.3f Å⁻¹；张量单位 eV）" % adp["dq_A"])
+        for car, c in adp["carriers"].items():
+            for v in c["valleys"]:
+                if v["status"] != "ok":
+                    lines.append("  %s %s：%s" % (car, v["label"], v.get("why")))
+                    continue
+                sm = v["summary"]
+                lines.append("  %s %s：主值 %s；谷轴 %s；静水 %.3f；拟合残差 %.3f" % (
+                    car, v["label"], "/".join("%.3f" % x for x in sm["principal_eV"]),
+                    "—" if sm["axis_eV"] is None else "%.3f" % sm["axis_eV"], sm["hydrostatic_eV"],
+                    v["checks"]["fit_rel_resid"]))
+    elif adp:
+        lines.append("## 谷内 ADP（DFPT）：%s%s" % (adp.get("status"), "（%s）" % adp["why"] if adp.get("why") else ""))
     return "\n".join(lines) + "\n"
 
 

@@ -125,6 +125,14 @@ TOOLS = [
                                        "format": {"type": "string",
                                                   "enum": ["text", "mermaid"]}},
       "additionalProperties": False}, "read", ["graph"]),
+    ("material_brief", "材料基础信息卡：hpc（及来自哪层配置）、work_dir（及来源）、项目相对技能默认"
+     "改过的参数（如 FIT_ENGINE=phono3py）、最近提交的作业号/时间与排队/运行/失败状态、"
+     "自动推进开关。只读、不连超算（读配置 + 进度文件 + 提交账本），秒级。"
+     "回复里涉及某个材料时，先调它，并把返回文本（data.brief_md）原样放在回复开头",
+     {"type": "object", "properties": {"project": _PROJ, "tt": {"type": "string"},
+                                       "material": {"type": "string"},
+                                       "step": {"type": "string"}},
+      "required": ["material"], "additionalProperties": False}, "read", ["brief"]),
     ("request_destructive_action", "申请一个破坏性动作（cancel=取消作业 stop / rebuild=删目录重算 "
      "rerun / clean=清理回 PREP / force_start=强制提交 start -f）。**不会直接执行**："
      "客户端支持确认框（elicitation）时直接弹框让用户点；否则返回审批卡片（命令、后果、"
@@ -266,8 +274,8 @@ TOOLS = [
 ]
 BY_NAME = {t[0]: t for t in TOOLS}
 
-# 工具面分档（AUTOZT_MCP_PROFILE）：默认 core = 按 5 个阶段组织的 12 个工具，一一对应
-# 「发现 → 规划 → 执行 → 审批 → 汇报」；workflow（21 个）/ full（全部）/ compact / monitor /
+# 工具面分档（AUTOZT_MCP_PROFILE）：默认 core = 按 5 个阶段组织的 13 个工具，一一对应
+# 「发现 → 规划 → 执行 → 审批 → 汇报」；workflow（22 个）/ full（全部）/ compact / monitor /
 # readonly 仍可显式选择。分档只决定模型看到哪些工具，门禁与审计不变。
 COMPACT_TOOLS = {
     # Compatibility profile retained for existing clients.
@@ -290,6 +298,8 @@ WORKFLOW_TOOLS = {
     # 任务图 + 对话内审批：破坏性动作只能「申请」（返回审批卡片/弹确认框），
     # 用户同意后 approve_request 执行——不用用户自己去终端敲命令
     "task_graph", "request_destructive_action", "approve_request",
+    # 材料基础信息卡：回复开头先给用户看 hpc/work_dir/改过的参数/最近作业
+    "material_brief",
 }
 
 # 默认档：每个阶段只留做这件事必需的工具。观察+规划+执行都收在 cycle 里
@@ -299,7 +309,7 @@ STAGES = OrderedDict((
     ("plan", ("research_plan", "preflight")),
     ("execute", ("register_material", "cycle", "get_progress")),
     ("approve", ("request_destructive_action", "approve_request")),
-    ("report", ("results", "task_graph")),
+    ("report", ("material_brief", "results", "task_graph")),
 ))
 STAGE_OF = {tool: stage for stage, tools in STAGES.items() for tool in tools}
 CORE_TOOLS = set(STAGE_OF)
@@ -312,7 +322,8 @@ HARNESS_RULES = """AutoZT harness rules (MCP server `autozt mcp`; the same verbs
 3. Execute: register_material for a new material, then cycle(execute=false) to preview and cycle(execute=true) to submit; get_progress to follow jobs. deferred = queued behind max_jobs, not a failure.
 4. Approve: stop / rerun / clean / forced start are never automatic. request_destructive_action returns a consent card with the task graph; call approve_request only after the user explicitly agrees, passing their words as reply.
 5. Report: results gives values with unit, method, validator and provenance; task_graph shows where every step is. Show the task graph before asking for consent.
-6. Refer to materials by the stable id <project>/<name>. Do not hand-run gen scripts, ssh, or sbatch; everything goes through these tools."""
+6. Brief first: whenever a reply concerns a material, call material_brief first and open the reply with its text (data.brief_md) verbatim -- hpc, work_dir, changed parameters, the latest job and its state -- before anything else.
+7. Refer to materials by the stable id <project>/<name>. Do not hand-run gen scripts, ssh, or sbatch; everything goes through these tools."""
 
 TOOL_RESULT_SCHEMA = {
     "type": "object",
@@ -1152,6 +1163,15 @@ def call_tool(name, args, _internal=False):
         else:
             text = "\n\n".join(g.get("text", "") for g in graphs)
         return _result("read", data=parsed, text=text)
+    if name == "material_brief":
+        rc, out, err = _run(_mat_args(args) + ["brief", "--json"])
+        parsed, parse_error = _json_stdout(out) if rc == 0 else (None, None)
+        if rc != 0 or parse_error:
+            return _result("read", rc=rc or 1,
+                           error=((out or "") + (err or "")).strip()[:4000] or parse_error)
+        cards = parsed if isinstance(parsed, list) else [parsed]
+        return _result("read", data=parsed,
+                       text="\n\n".join(str(c.get("brief_md") or "") for c in cards))
     if name == "approve_request":
         return _run_approval(risk, str(args["request_id"]).strip(), str(args["reply"]),
                              "mcp", decision=args.get("decision") or "approve")

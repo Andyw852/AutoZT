@@ -26,6 +26,29 @@ This project adheres to Semantic Versioning; versions before 1.0.0 are developme
   far above the `ODP_MAX_JOBS=40` guard, and IVS only ever applied to 2D hexagonal K/K' valleys (not 3D monoclinic
   cells like Mg2C60), where DFPT is both cheaper and the physically appropriate method.
 - Docs updated: `skill.yaml` group headers, `METHODOLOGY.md` (ODP/IVS sections), `step8.4_amset2d/README.md`.
+### Added (2026-10-23: [0072] intravalley ADP deformation potentials from DFPT acoustic slopes — experimental, off by default)
+- Validation on Si (QE 7.4, SG15 NC PBE, a = 5.479 Å) showed the small-q acoustic matrix elements carry a spurious 1/q
+  long-range term (acoustic-sum-rule violation, ΣZ* ≈ 0.16 e), so the single-|q| slope fit is wrong by an order of
+  magnitude. Fitting M = A/q + B·q over three |q| gives Ξu ≈ 8.5 eV (Li 2021: 8.84) but Ξd ≈ 4.5 eV (Li 2021: 1.01).
+  `IVS_ADP` and `ADP_DFPT` therefore default to `off`; details in ke-dft-cpu METHODOLOGY [0072].
+- eph-qe-cpu `ivs_dfpt` group (`IVS_ADP = auto|on|off`, `IVS_ADP_DQ` = 0.03 Å⁻¹): S10 appends six small-q jobs
+  `q-adp1..6` (Cartesian x, y, z, xy, xz, yz) with the valley centres as initial states. S13 solves, per direction, the
+  three acoustic modes' centre-of-mass displacements for w = |q|·D·q̂ (internal strain is in the acoustic eigenvectors),
+  fits the symmetric deformation-potential tensor D from the six directions (one overall sign undetermined), expands
+  it over the valley star, and writes it to the `"adp"` block of `ivs_dfpt_params.json`. Method of Li, Graziosi and
+  Neophytou, PRB 104, 195201 (2021). `auto` runs only in 3D structures with an inversion centre (otherwise the
+  piezoelectric long-range term contaminates the slope); 2D is not supported (no 2D Coulomb truncation in ph.x AHC).
+  Degenerate band edges (Si holes at Γ) are marked `degenerate` and left to `ADP_DEGEN`.
+- ke-dft-cpu S8 (`ADP_DFPT = auto|on|off`, `ADP_DFPT_EWIN` = 0.3 eV): states within the window of a non-degenerate band
+  edge get the DFPT tensor of their nearest valley member instead of the S7 band-edge-shift tensor. The substitution
+  sits in a proxy around AMSET's deformation-potential interpolator, so AMSET's ADP kernel and amset_ir_fix's star
+  average are unchanged.
+- Reason: the hydrostatic part of the S7 deformation potential depends on the absolute (core-level) alignment. For Si
+  electrons S7 gives 8.72 eV along the valley axis against Ξd + Ξu = 9.85 eV from DFPT (Li 2021), and the electron
+  mobility with ADP + IVS is 1602 cm²/Vs against 1366–1383 (EPW) and 1327 (Li 2021).
+- Tests: `tests/test_0072_adp_dfpt.py` (synthetic acoustic modes with internal strain, degenerate-TA rotation and
+  arbitrary phases; Si Δ star expansion; S10 planning; S8 reading). Existing IVS/ODP tests that compare against the
+  pre-[0072] q list now set `IVS_ADP = off`.
 
 ### Changed (2026-10-23: [0073] ke-dft-cpu S6_elastic sets its own wall-clock limit)
 - The S6 gen already estimated the IBRION=6 wall time (SCF count x S1 ionic-step time x 2.0). It now also scales the
@@ -134,6 +157,17 @@ This project adheres to Semantic Versioning; versions before 1.0.0 are developme
   OUTCAR no longer stops the search.
 - `discriminant_common.py` added to the gen_need of S2.28_hsescf and S2.3_hse (it was imported but only present
   when another step had left a copy in the material directory).
+### Changed (2026-10-22: ke-dft-cpu S8/S4 — 环境类失败改为"开头自检 + 优雅降级")
+- 作业内自检（`overlap_preflight.py --in-job` 的 `job_env_check`）：除核对 amset 版本外，再逐项 import
+  `ase` / `spglib` / `BoltzTraP2.sphere`。任一失败立刻拦截并打印修法（缺 ase → `pip install ase`；
+  `spg_free_dataset` → spglib/BoltzTraP2 ABI 不匹配，换/重建 AMSET 环境）。起因：yue 的
+  `conda_envs/amset` 缺 ase，作业排队后跑到 15 分钟才炸，白占节点。
+- gen 端 `apply_mesh_min` 在 gen 环境没有 `BoltzTraP2` / `pymatgen.io.ase`（或 C 扩展与 spglib
+  ABI 不匹配）时不再 `ModuleNotFoundError` 硬崩：打 WARN 跳过自动选网格，沿用 step.conf 的
+  `INTERPOLATION_FACTOR`（yue 的 gen 用 autozt venv，旧行为直接退出）。
+- 生成阶段内存自检：submit.sh 无 `--mem`/`--mem-per-cpu` 且关掉自动选网格时，若 `--ntasks-per-node` ≥ 8
+  就提示补 `--mem-per-cpu`（yue 默认按核给 3.8GB，16 workers 只拿到 61GB，实测 1:35 被 OOM Killer 杀；
+  改 12000M 后正常）。集群模板同步补上（`setting/clus_xa_yue/templates/submit_amset.tpl`）。
 
 ### Fixed (2026-10-22: ke-dft-cpu S7.1 — AMSET's symmetry-derived strains were mislabeled)
 - AMSET 0.4.19 / 0.5.1 `get_symmetrized_strain_mapping` moves a computed configuration's bands to k' = M·k
@@ -368,6 +402,19 @@ This project adheres to Semantic Versioning; versions before 1.0.0 are developme
   used 0 as its threshold and killed the segment after one minute); `FREEZE_MINUTES` can be set in step.conf.
   The FREEZE_MIN default goes from 120 to 240 minutes so it no longer fires before STALL_MIN (180), which was
   raised on 2026-09-17 because file-system pauses of 60-180 minutes killed healthy runs.
+### Added (2026-10-16: material brief card for LLM replies)
+- `autozt [-tt T] -p M [-j S] brief [--json]` (autozt/brief.py): one card per material with the
+  cluster and which config layer set it, `work_dir` and its source, the step.conf keys the project
+  changed from the skill default (e.g. `FIT_ENGINE=phono3py`; values copied by init do not count),
+  the latest submitted job id/time with its queue/run/fail state, and `auto_advance`. Read-only and
+  without ssh: configuration via the conf/dir fast path, job state from `.tf_progress.json` plus the
+  submit ledger (the card says how old that data is).
+- `autozt agent brief` / request op `brief`, and MCP tool `material_brief` (core profile, report
+  stage; text content = `data.brief_md`). Rule cards (`initialize.instructions`, `agent setup
+  --rules`, AGENTS.md) tell the model to open every reply about a material with the card verbatim.
+- autozt/collect.py: collected materials now carry `work_dir_eff` / `work_dir_src`; previously they
+  were dropped, so `status` always printed the fallback "work_dir 来源" and gen-failure hints said
+  "(未解析)".
 
 ### Fixed (2026-10-15: fail counter counted state flapping as retries; conf/dir polluted state)
 - autozt/progress.py: _history_stats now counts a failure only when the FAIL came from an actual

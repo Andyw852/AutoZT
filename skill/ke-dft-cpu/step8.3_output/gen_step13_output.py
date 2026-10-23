@@ -567,6 +567,9 @@ def _ivs_source_lines(cwd):
             else:
                 how = "step.conf 手填（文献参数，报告里须注明出处）"
             out.append("# [IVS 参数来源] %s %s：%s；%d 条通道" % (tag, car, how, len(chs)))
+            if "dfpt_ivs" in src:                                     # [0074] 非 SOC 口径备注（ivs_dfpt_params 里带来的）
+                for n_ in ((dft.get("info") or {}).get(car) or {}).get("soc_notes") or []:
+                    out.append("# [IVS 备注] %s %s：%s" % (tag, car, n_))
         for car in ("electron", "hole"):                                  # [0059-r3] 谷内 ODP 的来源
             chs = [c for c in ((dp.get(car) or {}).get("channels") or []) if c.get("kind") == "intra"]
             if not chs:

@@ -49,3 +49,9 @@ fi
 
 # 2) 采集 + 变更检测：无变化 0 输出，有变化才打印汇总 + FAIL 清单
 AUTOZT_OP_WORKERS=8 timeout 600 python3 bin/autozt summary --diff 2>&1
+
+# 3) 回收 agent 遗留的临时后台进程（孤儿 + /tmp 下 .py + 存活≥12h；AUTOZT_REAP_STALE=0 关闭）
+if [ "${AUTOZT_REAP_STALE:-1}" != "0" ]; then
+    timeout 180 python3 scripts/reap_stale_procs.py --kill --min-age-hours 12 --quiet \
+        >> .tf_monitor.log 2>&1 || true
+fi

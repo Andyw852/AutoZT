@@ -45,6 +45,8 @@ autozt --help 输出（自动生成）
       act log           看审计流水（.tf_agent_log.jsonl）；act policy 看风险分档表
       approve --list | --request 号 --reply "同意" | --deny 号   审批卡片：看 / 同意并执行 / 拒绝
       graph              任务图：[-tt 技能] [-p 材料] graph（步骤依赖 + 每步状态；--json/--mermaid）
+      brief              材料基础信息卡：[-tt 技能] -p 材料 [-j 步骤] brief [--json]（hpc/work_dir 及来源、
+                         改过的参数、最近作业；只读不 ssh，LLM 回复开头原样输出）
     
     旧命令和别名继续兼容。高级命令、全部参数及示例：tf --help-all
     注意：status/auto/monitor 可提交作业；只看状态用 summary 或 list。
