@@ -24,7 +24,7 @@ and every failure mode is diagnosed instead of hidden.
   approval card (command, consequence, task graph with the target step marked); the user
   agrees in the conversation or in an MCP confirm dialog and the agent runs it — no terminal
   round trip. `autozt graph` shows any skill's step DAG with live status.
-- **Three agent transports.** MCP clients use `autozt mcp` (default `core` profile: 12 tools in five stages, rules sent as
+- **Three agent transports.** MCP clients use `autozt mcp` (default `core` profile: 13 tools in five stages, rules sent as
   `initialize.instructions`; `AUTOZT_MCP_PROFILE=workflow|full` widens it);
   one-shot callers can use `autozt agent request -`, and long-running wrappers can use
   `autozt agent serve` for one JSON request/response per line.

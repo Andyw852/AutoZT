@@ -28,6 +28,33 @@ autozt agent inspect --project my_batch_295 --status error
 autozt agent cycle --project my_batch_295 --execute
 ```
 
+### 回复开头的基础信息卡（`brief`）
+
+回复只要涉及某个材料，先取它的基础信息卡并**原样放在回复最前面**，再写分析：
+
+```bash
+autozt agent brief -p Si1                 # JSON：data.brief_md 是要原样输出的几行
+autozt agent brief -p Si1 --step S1_fit   # 只看某一步（参数与作业都按这一步）
+autozt -tt fit-fc-thermal -p Si1 brief    # 普通 CLI：直接打印卡片（--json 同 agent 的 data）
+```
+
+```text
+**【AutoZT 基础信息】proj/Si1（fit-fc-thermal）**
+1. hpc → hfeshell ✅（来源：fit-fc-thermal/project_setting/hpc.yaml；ssh：hfeshell）
+2. work_dir → `/public/home/<user>/taskflow/work/jzz/jap` ✅（来源：project_setting/setting.yaml）
+3. 参数 → FIT_ENGINE=phono3py（S1_fit） ✅
+4. 作业 → S1_opt 已提交（28903807，10-16 09:12） ⏳ 排队中（Priority）；进度 0/3（数据采于 3 分钟前）
+5. 自动推进 → 关（project_setting/setting.yaml）；monitor 在跑
+```
+
+- 只读、不连超算、秒级：hpc/work_dir 走 `conf`/`dir` 同一条只读配置快路径；作业状态读
+  monitor 写的 `.tf_progress.json` 和提交账本 `.tf_submit_ledger.jsonl`（卡里写明采于多久前；
+  monitor 没在跑时可能是旧的，需要实时就 `autozt -p <材料> list --refresh`）。
+- 「参数」只列项目层相对技能出厂默认**改过**的 step.conf 键（`[params]`/`[submit]`/`[incar]`/
+  `[incar.final]`）；init 原样拷来的默认值不算。JSON 里每项带 `default`（技能默认）和 `source`。
+- MCP 等价：`material_brief`（core 档 report 段），返回文本就是 `brief_md`；
+  `initialize.instructions` 的规则第 6 条要求回复开头先输出它。规则卡见 `autozt agent setup --rules`。
+
 ### 新材料接入、改参数、本机执行
 
 ```bash
@@ -208,7 +235,7 @@ cursor 不一致就返回 `stale_plan`，不会提交任何动作。这样队列
 
 | 场景 | 入口 |
 |---|---|
-| Claude、ChatGPT、Kimi 等支持 MCP 的客户端 | `autozt mcp`（默认 `core`：12 个工具分 发现/规划/执行/审批/汇报 五段）；要改参数或逐条看候选动作用 `AUTOZT_MCP_PROFILE=workflow`；长期巡检用 `monitor` |
+| Claude、ChatGPT、Kimi 等支持 MCP 的客户端 | `autozt mcp`（默认 `core`：13 个工具分 发现/规划/执行/审批/汇报 五段）；要改参数或逐条看候选动作用 `AUTOZT_MCP_PROFILE=workflow`；长期巡检用 `monitor` |
 | 不支持 MCP 的单次调用、Shell、cron、CI、人工排查 | `autozt agent ...` 或 `autozt agent request -` |
 | 需要保持进程、逐行收发 JSON 的 wrapper | `autozt agent serve` |
 | 10 分钟稳定巡检 | `autozt summary --diff`，不调用模型 |

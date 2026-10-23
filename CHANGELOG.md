@@ -368,6 +368,19 @@ This project adheres to Semantic Versioning; versions before 1.0.0 are developme
   used 0 as its threshold and killed the segment after one minute); `FREEZE_MINUTES` can be set in step.conf.
   The FREEZE_MIN default goes from 120 to 240 minutes so it no longer fires before STALL_MIN (180), which was
   raised on 2026-09-17 because file-system pauses of 60-180 minutes killed healthy runs.
+### Added (2026-10-16: material brief card for LLM replies)
+- `autozt [-tt T] -p M [-j S] brief [--json]` (autozt/brief.py): one card per material with the
+  cluster and which config layer set it, `work_dir` and its source, the step.conf keys the project
+  changed from the skill default (e.g. `FIT_ENGINE=phono3py`; values copied by init do not count),
+  the latest submitted job id/time with its queue/run/fail state, and `auto_advance`. Read-only and
+  without ssh: configuration via the conf/dir fast path, job state from `.tf_progress.json` plus the
+  submit ledger (the card says how old that data is).
+- `autozt agent brief` / request op `brief`, and MCP tool `material_brief` (core profile, report
+  stage; text content = `data.brief_md`). Rule cards (`initialize.instructions`, `agent setup
+  --rules`, AGENTS.md) tell the model to open every reply about a material with the card verbatim.
+- autozt/collect.py: collected materials now carry `work_dir_eff` / `work_dir_src`; previously they
+  were dropped, so `status` always printed the fallback "work_dir 来源" and gen-failure hints said
+  "(未解析)".
 
 ### Fixed (2026-10-15: fail counter counted state flapping as retries; conf/dir polluted state)
 - autozt/progress.py: _history_stats now counts a failure only when the FAIL came from an actual

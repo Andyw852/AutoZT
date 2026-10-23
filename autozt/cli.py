@@ -400,7 +400,9 @@ def _main():
                 # check = 运行依赖探测（技能 × 集群：缺哪些 python 包/程序/POTCAR/模型）
                 "check",
                 # graph = 任务图（步骤依赖 + 每步状态；带 -p 单材料，不带整技能）
-                "graph"}
+                "graph",
+                # brief = 材料基础信息卡（hpc/work_dir/改过的参数/最近作业；LLM 回复开头用）
+                "brief"}
     root, cmd, pos = None, "status", []
     for tok in a.args:  # v3.14：位置参数先收集，之后按"材料名/目录"消歧
         if tok == "help":
@@ -736,8 +738,9 @@ def _main():
             print("[采集] 以下技能全量采集（不能只采目标材料）：%s"
                   % "; ".join("%s: %s" % kv for kv in sorted(_nwhy.items())),
                   file=sys.stderr)
-    # conf（含 --set）/dir 只看配置：不采集远端，只解析 -p 目标材料（秒级）。
-    if cmd in ("conf", "dir") and a.proj and not mat_toks and not root:
+    # conf（含 --set）/dir/brief 只看配置：不采集远端，只解析 -p 目标材料（秒级）。
+    # brief 的作业状态读进度文件 + 提交账本，同样不 ssh。
+    if cmd in ("conf", "dir", "brief") and a.proj and not mat_toks and not root:
         from autozt.collect import CONFIG_ONLY
         CONFIG_ONLY["on"] = True
         _toks = [x.strip() for x in a.proj.split(",") if x.strip()]
@@ -979,6 +982,11 @@ def _main():
     if cmd == "graph":   # 任务图：只读（同 list 的采集/缓存口径），不提交、不拉文件
         from autozt.taskgraph import cmd_graph
         sys.exit(cmd_graph(data, projs=projs, json_out=a.json_out, mermaid=a.mermaid))
+    if cmd == "brief":   # 材料基础信息卡（只读、不 ssh）：LLM 回复开头原样输出 brief_md
+        if not projs:
+            sys.exit(_i18n.t("错误：", "error: ") + "brief 需要 -p 材料（如 autozt -p Si brief）。")
+        from autozt.brief import cmd_brief
+        sys.exit(cmd_brief(cfg, data, projs, jobs[0], json_out=a.json_out))
     if cmd == "diagnose":   # v2.0：一键结构化诊断（只读；默认输出 FAIL 步）
         if not projs:
             sys.exit(_i18n.t("错误：", "error: ") + "diagnose 需要 -p 材料（如 tf -p C24/qHPC24 diagnose）。")

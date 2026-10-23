@@ -381,6 +381,10 @@ def _cmd_progress(args: argparse.Namespace) -> Tuple[Dict[str, Any], int]:
 
 AGENT_RULES_MD = """# AutoZT 调用规则（给 LLM；由 `autozt agent setup --rules` 生成）
 
+0. **开场先给基础信息**：回复只要涉及某个材料，先跑 `autozt agent brief -p <材料>`
+   （MCP: material_brief；只读、不连超算、秒级），把返回的 `data.brief_md` 原样放在回复最前面——
+   hpc（及来源）、work_dir（及来源）、改过的参数、最近作业号与排队/运行/失败状态、自动推进；
+   然后再写分析和建议。操作完成后（提交/改参数/切集群）再跑一次，用新卡片收尾。
 1. 看状态先用 `autozt agent progress [--project P] [-status error]`（MCP: get_progress）：
    读 monitor 写的本地文件，秒级、不连超算。不要 grep 日志，不要解析 summary/list 的表格文本。
 2. FAIL 分诊看 `fail_summary` 和 `materials[].fails[].action`：retry 桶可以提议 prepare_step；
@@ -460,8 +464,8 @@ def _cmd_setup(args: argparse.Namespace) -> Tuple[Dict[str, Any], int]:
     data: Dict[str, Any] = {
         "mcp_server": {"mcpServers": {"autozt": {
             "command": argv[0], "args": argv[1:] + ["mcp"], "env": env}}},
-        "mcp_profiles": {"core": "默认：12 个工具，按 发现/规划/执行/审批/汇报 五段组织（tools/list 的 x-stage）",
-                         "workflow": "21 个：core + inspect/apply_actions/conf_get/conf_set/doctor 等",
+        "mcp_profiles": {"core": "默认：13 个工具，按 发现/规划/执行/审批/汇报 五段组织（tools/list 的 x-stage）",
+                         "workflow": "22 个：core + inspect/apply_actions/conf_get/conf_set/doctor 等",
                          "monitor": "最小：get_progress/get_snapshot/cycle",
                          "full": "全部工具（含需人工批准的破坏性工具）"},
         "cli": {"prefix": " ".join(argv + ["agent"]),
@@ -508,6 +512,21 @@ def _cmd_doctor(args: argparse.Namespace) -> Tuple[Dict[str, Any], int]:
     # doctor 有 error 级发现时退出码 1，但报告本身是完整有效的——照样返回
     return _envelope("doctor", payload, ok=rc == 0, returncode=rc,
                      error=None if rc == 0 else "doctor reported error-level findings"), rc
+
+
+def _cmd_brief(args: argparse.Namespace) -> Tuple[Dict[str, Any], int]:
+    """材料基础信息卡（只读、不 ssh）。data.brief_md 是 LLM 回复开头应原样输出的几行。"""
+    if not getattr(args, "material", None):
+        return _envelope("brief", ok=False,
+                         error="brief requires -p/--material", returncode=2), 2
+    argv = ["-tt", str(args.tt)] if getattr(args, "tt", None) else []
+    argv += ["-p", str(args.material)]
+    if getattr(args, "step", None):
+        argv += ["-j", str(args.step)]
+    payload, error, rc = _call_json(argv + ["brief", "--json"], getattr(args, "config", None))
+    if error:
+        return _envelope("brief", ok=False, error=error, returncode=rc or 1), rc or 1
+    return _envelope("brief", payload), 0
 
 
 def _cmd_evidence(args: argparse.Namespace) -> Tuple[Dict[str, Any], int]:
@@ -983,6 +1002,8 @@ def _dispatch_request(request: Any, base: argparse.Namespace
         return _cmd_run(child)
     if op == "evidence":
         return _cmd_evidence(child)
+    if op == "brief":
+        return _cmd_brief(child)
     if op == "research_plan":
         return _cmd_research_plan(child)
     if op == "preflight":
@@ -1101,6 +1122,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--cursor", help="上一轮 cursor；用于检测跨进程失效/重置")
     p.add_argument("--view", choices=("attention", "active", "all"), default="attention")
 
+    p = sub.add_parser("brief", help="材料基础信息卡：hpc/work_dir（含来源）/改过的参数/最近作业"
+                                     "（只读、不 ssh；回复开头原样输出 data.brief_md）")
+    _add_context_options(p)
+    p.add_argument("--step", dest="step", help="只看这一步（label 或序号）")
+
     p = sub.add_parser("evidence", help="读取一个材料/步骤的有界结构化诊断")
     _add_context_options(p)
     p.add_argument("--step", dest="step", help="步骤 label 或序号")
@@ -1216,6 +1242,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         result, rc = _cmd_snapshot(args)
     elif args.agent_command == "evidence":
         result, rc = _cmd_evidence(args)
+    elif args.agent_command == "brief":
+        result, rc = _cmd_brief(args)
     elif args.agent_command == "research_plan":
         result, rc = _cmd_research_plan(args)
     elif args.agent_command == "preflight":

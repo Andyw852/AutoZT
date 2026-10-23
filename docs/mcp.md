@@ -52,7 +52,7 @@ Names used in docs and figures: the **MCP server** is `autozt mcp` (`serverInfo.
 The MCP server only calls the agent CLI and the gateway, so both entry points share one
 contract, one approval gate and one audit log.
 
-The default profile is `core`: 12 tools grouped in five stages. `tools/list` tags each with
+The default profile is `core`: 13 tools grouped in five stages. `tools/list` tags each with
 `x-stage`, and the rules and prompts only cite these tools, so an agent that follows them
 never needs a tool outside the default profile.
 
@@ -62,10 +62,10 @@ never needs a tool outside the default profile.
 | plan | `research_plan`, `preflight` |
 | execute | `register_material`, `cycle` (`execute=false` previews, `true` submits), `get_progress` |
 | approve | `request_destructive_action` → user consents in chat → `approve_request` |
-| report | `results`, `task_graph` |
+| report | `material_brief`, `results`, `task_graph` |
 
-Larger surfaces stay available: `AUTOZT_MCP_PROFILE=workflow` (21 tools, adds `inspect`,
-`apply_actions`, `conf_get`/`conf_set`, `doctor`, …), `full` (all 32), `compact`, `monitor`,
+Larger surfaces stay available: `AUTOZT_MCP_PROFILE=workflow` (22 tools, adds `inspect`,
+`apply_actions`, `conf_get`/`conf_set`, `doctor`, …), `full` (all 33), `compact`, `monitor`,
 `readonly`. An unknown profile name falls back to `compact`, never to `full`. Profiles only
 choose what the model sees; a call to a tool outside the profile is refused and the gateway
 rules are the same in every profile.
@@ -92,6 +92,7 @@ rules are the same in every profile.
 | sync_results | mutate | pull finished results back |
 | run_ready_steps | mutate | one-shot fetch and submit dependency-ready steps; does not change `auto_advance` |
 | inspect | read | one call: scoped attention state + deterministic actions |
+| material_brief | read | **reply header**: cluster (+ which config layer set it), `work_dir` (+ source), step.conf keys the project changed from the skill default (e.g. `FIT_ENGINE=phono3py`), latest submitted job id/time and its queue/run/fail state, `auto_advance`; reads config + `.tf_progress.json` + submit ledger, no ssh. Text content = `data.brief_md`, meant to open the reply verbatim |
 | task_graph | read | step DAG of a skill with live status per step (job id, queue reason, FAIL diagnosis, which upstream it waits for); without `material` = per-step material counts of the whole skill; `format: mermaid` for clients that render Markdown |
 | request_destructive_action | destructive | ask for `cancel` / `rebuild` / `clean` / `force_start`; **never executes by itself** — shows a confirm dialog (elicitation) or returns an approval card + `request_id` |
 | approve_request | destructive | after the user explicitly agreed to the card: approve `request_id` and run it (`reply` = the user's words, audited; `decision: deny` voids it) |
@@ -116,7 +117,7 @@ addition to `tt`/`material`/`status`; scoping happens before collection. Materia
 a stable `id` = `<project>/<full name>` that `material` arguments accept, so identically
 named materials in different projects never collide.
 
-Profiles: `core` (default) = the 12 staged tools above; `workflow` = 21 tools incl. `get_progress`, `doctor`,
+Profiles: `core` (default) = the 13 staged tools above; `workflow` = 22 tools incl. `get_progress`, `doctor`,
 `register_material`, `conf_get`, `conf_set`, `check_env`, `task_graph`,
 `request_destructive_action` and `approve_request`;
 `monitor` = `get_progress`, `get_snapshot`, `cycle`; `compact` is unchanged for existing

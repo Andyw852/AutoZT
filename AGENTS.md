@@ -35,7 +35,7 @@
 2. **破坏性操作必须先请示**：`stop`、`rerun`、`clean`、以及任何带 `-f` 或 `-y` 的命令，执行前必须向用户说明对象和后果，得到明确同意后才执行。
    **`-f`/`-y` 必须逐条单独请示**：批准"目标"（如"修 Mo2S3"）**不等于**批准具体命令里的 `-f`——不得从目标批准里推断 `-f` 的许可（2026-09-18 教训：以"修 Mo2S3"为由执行了 `start -f`）。**特别地：`mlff` 的 `step5_label`（及一切昂贵的扇出步骤）只用 `retry`/`start -f`，绝不 `rerun`/`clean`**——后两者会 `rm -rf` 步骤目录，毁掉已算完的 DFT 帧。用户说"以后这类都不用问了"才算预先授权。
    **请示的方式（2026-10-03 起）**：直接执行原命令（或 MCP `request_destructive_action`），网关不会执行，而是返回**审批卡片**（命令、后果、任务图里 `◀` 标出目标步骤、`↳` 标出受影响的下游）和请求号 → 把卡片原样给用户看并询问 → 用户明确同意后执行 `autozt approve --request <请求号> --reply "<用户原话>"`（MCP `approve_request`）就地批准并执行；用户拒绝则 `autozt approve --deny <请求号>`。**不要再让用户自己去终端敲 approve 命令**。请求号绑定整条命令（改任何参数要重新申请），所以 `-f`/`-y` 逐条请示天然成立；没问过用户、或用户没明确说同意，绝不调用 approve。
-3. **监控循环里自动执行的命令只有**：`autozt progress`（及 `autozt agent progress`，只读本地进度文件、不连超算，**巡检首选**）、`autozt doctor`（只读配置预检）、`autozt summary --diff`、`autozt summary`、`autozt list`、`autozt -status <状态> summary`、`autozt -tt <类型> summary`、`autozt -p X status`、`autozt skills`、`autozt auto on`、`autozt -tt <技能> auto on`、`autozt [-tt <技能>] -p <材料> auto on`（单材料，粒度最小）、`autozt start`、`autozt -p X start`。其余一律先请示（包括 `autozt conf --set`——它会改项目配置）。**巡检严禁每轮拉 `autozt json`**——它是全量结构化数据，token 巨大，只在写工具/做批量分析时才用。
+3. **监控循环里自动执行的命令只有**：`autozt progress`（及 `autozt agent progress`，只读本地进度文件、不连超算，**巡检首选**）、`autozt doctor`（只读配置预检）、`autozt summary --diff`、`autozt summary`、`autozt list`、`autozt -status <状态> summary`、`autozt -tt <类型> summary`、`autozt -p X status`、`autozt [-tt <技能>] -p X brief`（及 `autozt agent brief`，只读不连超算）、`autozt skills`、`autozt auto on`、`autozt -tt <技能> auto on`、`autozt [-tt <技能>] -p <材料> auto on`（单材料，粒度最小）、`autozt start`、`autozt -p X start`。其余一律先请示（包括 `autozt conf --set`——它会改项目配置）。**巡检严禁每轮拉 `autozt json`**——它是全量结构化数据，token 巨大，只在写工具/做批量分析时才用。
 4. **只读诊断允许直接 ssh**：`tail`/`grep` 日志文件（如 `ssh jzzn 'tail -50 <步骤目录>/slurm-*.out'`、`grep -i error OUTCAR`）。只读，绝不改文件。材料目录下的 `stepN_check_and_resubmit.py`（autozt 已随生成推送到超算）也只允许加 `--check-only` 运行——它的重投功能**严禁使用**（重投一律走 `autozt retry`/`autozt rerun`，两套重投机制并用会打架）。其 stdout 是一行 JSON，退出码 0=converged / 10=not_converged / 20=running / 30=重启超限 / 40=error，可作为深度诊断依据。**注意 3090 服务器无 SLURM**：ssh 过去看到的 squeue 是 fakeslurm 垫片，作业状态一律以 `autozt` 采集为准，别用真 SLURM 语义判读。
 5. **用退出码判成败**：`autozt` 命令退出码 0 = 成功；非 0 = 失败或被拒绝。失败时把输出原文呈给用户，不要粉饰、不要假装成功。
 6. **不确定就报告并等待**。宁可少做，不要猜。
@@ -79,6 +79,9 @@ autozt status                          # 状态总表 + auto-fetch + auto-advanc
 autozt -tt band-dft-cpu summary                # 只看某类型（20 个技能全名见第一节）
 autozt -status error summary           # 只看有失败步骤的材料（error 可换 running/pd/waiting/scancel，逗号分隔）
 autozt -p MAT status                   # 单材料详情（含每步诊断信息、hpc、Dim）
+autozt [-tt TT] -p MAT [-j STEP] brief # ★ 材料基础信息卡（只读、不连超算、秒级；--json / MCP material_brief）：
+                                       #   hpc+来源层、work_dir+来源、项目改过的参数、最近作业号/状态、自动推进。
+                                       #   涉及具体材料的回复，开头先原样输出它（见第六节）
 autozt [-tt TT] -p MAT start           # 推进该材料：输入没生成先 gen 再提交
 autozt start                           # 推进所有材料（FAIL 的只报告不动）
 autozt [-tt TT] [-p MAT] advance       # 一次性采集、拉回已完成结果并推进就绪步骤；不改 auto_advance
@@ -225,6 +228,22 @@ autozt auto [on|off]                   # 开关自动推进；范围三级（写
 
 ## 六、汇报模板
 
+**涉及具体材料的回复，开头先输出基础信息卡**：先跑 `autozt [-tt 技能] -p <材料> brief`
+（AI 走 JSON 面时用 `autozt agent brief -p <材料>` 的 `data.brief_md`，MCP 用 `material_brief`），
+把卡片原样放在回复最前面，再写诊断/建议；执行了提交、改参数、切集群等操作后再跑一次，用新卡片收尾。卡片形如：
+
+```
+**【AutoZT 基础信息】proj/Si1（fit-fc-thermal）**
+1. hpc → hfeshell ✅（来源：fit-fc-thermal/project_setting/hpc.yaml；ssh：hfeshell）
+2. work_dir → `/public/home/<user>/taskflow/work/jzz/jap` ✅（来源：project_setting/setting.yaml）
+3. 参数 → FIT_ENGINE=phono3py（S1_fit） ✅
+4. 作业 → S1_opt 已提交（28903807，10-16 09:12） ⏳ 排队中（Priority）
+5. 自动推进 → 关（project_setting/setting.yaml）；monitor 在跑
+```
+
+作业状态取自进度文件（卡里写明"数据采于多久前"）；需要实时状态再 `autozt -p <材料> list --refresh`。
+定时巡检（无具体材料）不用输出卡片。
+
 定时巡检无异常 → 一句话：`HH:MM 巡检：band-dft-cpu 138(done=130 run=5 err=0)，无需处理。`
 有异常 →
 
@@ -280,7 +299,7 @@ autozt auto [on|off]                   # 开关自动推进；范围三级（写
 
 ## 八、对话示例
 
-用户："C60 怎么样了" → `autozt -tt band-dft-cpu -p C60/qHPC60 status`（单材料详情，用人话汇报各步骤）。
+用户："C60 怎么样了" → 先 `autozt -tt band-dft-cpu -p C60/qHPC60 brief` 把基础信息卡放在回复开头，再 `status`（单材料详情，用人话汇报各步骤）。
 用户："把 qTPC24 的第二步重交" → `autozt -tt band-dft-cpu -p C24/qTPC24 -j 2 retry`，核验输入后 `autozt -tt band-dft-cpu -p C24/qTPC24 -j 2 start`，分别报告生成和提交结果；只有 start 成功后才报告新 jobid。
 用户："kl-dft-cpu 那个 Sn2Bi2Te 从头再来" → 属破坏性：执行 `autozt -tt kl-dft-cpu -p Sn2Bi2Te rerun` 拿到审批卡片（后果 + 任务图）给用户看，用户回"同意"后 `autozt approve --request <号> --reply "同意"` 执行。
 用户："qHPC20 弹性常数想跑 A800" → `autozt -tt elastic-dft-cpu -p qHPC20 hpc a800`（改配置，说明只影响之后提交的作业）。

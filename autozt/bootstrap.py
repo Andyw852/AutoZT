@@ -290,6 +290,8 @@ AI 审计（v1.0 P0-1，agent 走网关：风险分档 + 每次调用留痕）�
   act log           看审计流水（.tf_agent_log.jsonl）；act policy 看风险分档表
   approve --list | --request 号 --reply "同意" | --deny 号   审批卡片：看 / 同意并执行 / 拒绝
   graph              任务图：[-tt 技能] [-p 材料] graph（步骤依赖 + 每步状态；--json/--mermaid）
+  brief              材料基础信息卡：[-tt 技能] -p 材料 [-j 步骤] brief [--json]（hpc/work_dir 及来源、
+                     改过的参数、最近作业；只读不 ssh，LLM 回复开头原样输出）
 
 旧命令和别名继续兼容。高级命令、全部参数及示例：tf --help-all
 注意：status/auto/monitor 可提交作业；只看状态用 summary 或 list。
@@ -331,6 +333,10 @@ USAGE = """\
   graph     任务图（只读，同 list 的采集/缓存口径）：tf [-tt 技能] [-p 材料] graph
             带 -p：单材料的步骤依赖树 + 每步状态（作业号/排队原因/失败诊断/等哪个上游）；
             不带 -p：整技能每步的材料计数。--json（含 text/mermaid）、--mermaid。
+  brief     材料基础信息卡（只读、不 ssh、秒级）：tf [-tt 技能] -p 材料 [-j 步骤] brief [--json]
+            ① hpc + 来自哪层配置 ② work_dir + 来源 ③ 项目相对技能默认改过的 step.conf 键
+            ④ 当前步骤、最近提交的作业号/时间、排队/运行/失败 ⑤ auto_advance 生效值。
+            作业状态读进度文件 + 提交账本（monitor 没在跑时可能是旧的，卡里写明采于多久前）。
   act       agent 动作网关（v1.0 P0-1）：agent 把命令交给 `autozt act <原命令>`——
             只读/推进类放行并记账；stop/rerun/clean 与任何 -f/-y 属破坏性：不执行，
             签发请求号并打印审批卡片（命令、后果、任务图里标出目标步骤）。
@@ -2110,9 +2116,9 @@ Reproducibility
 
 Agent interface (Model Context Protocol, stdio JSON-RPC)
   mcp                     MCP server: initialize / tools/list / tools/call
-  mcp --list-tools        print the tool table (default core: 12 tools in 5 stages
+  mcp --list-tools        print the tool table (default core: 13 tools in 5 stages
                           discover/plan/execute/approve/report; AUTOZT_MCP_PROFILE=
-                          workflow 21, full 32, compact 7, monitor 3)
+                          workflow 22, full 33, compact 7, monitor 3)
   mcp --call NAME JSON    call one tool directly (testing)
 
 Safety gate (agent sessions only)
@@ -2121,6 +2127,8 @@ Safety gate (agent sessions only)
                           relays the user's consent; approval_mode: tty = real TTY only)
   approve --list | --deny ID          pending approval cards / reject one
   graph [--json|--mermaid]            task graph: step DAG + live status (-p one material)
+  brief [--json]                      material brief (-p): cluster, work_dir, changed params,
+                                      latest job; read-only, no ssh (LLM replies open with it)
 
 Common options
   -tt SKILL               skill key (e.g. kl-mlff-gpu, band-dft-cpu); see 'autozt skills'
