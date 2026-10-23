@@ -32,7 +32,7 @@ vdW 口径 d = zspan + r_vdW(top) + r_vdW(bot)（S 1.80、Se 1.90 Å），
 ## 2. E1 真空对齐（根因）
 
 - ionrelax 两段式：`INCAR.relax IBRION=2` + `INCAR.static IBRION=-1 LVHAR=.TRUE.`，
-  取 band_edges.json 的 `E1_vac_*`。
+  取 band_edges.json 的 `E1_vac_*`。静态段 `ICHARG=1` 接弛豫段的 CHGCAR（电荷 + 磁化密度，[V191]）。
 - 成因：amset 的 `get_reference_energy` 用原子核处的平均静电势，对 2D slab
   不跟随真空能级——这正是本工作用 LVHAR + 真空对齐绕开的那件事。amset 没有原生
   真空对齐选项，**重跑 step8 也无法解决**（不是 ICORELEVEL 那次能修的）。
@@ -1039,6 +1039,39 @@ G 的 6 meV 展宽抹圆阈值（只看 ODP 的 ⟨τ⟩ 偏低约 10%）；轻�
   旧 h5 不是张量约定且新场非对角权重 > 2% 时判"需要重跑"（旧运行的剪切耦合口径不同）。
 - **h5 不再是 AMSET 原生约定**：拿它喂原版 AMSET 正是想要的（物理正确）；但不要再把它当 `amset deform read`
   的直接输出去和别的 AMSET 结果比非对角。带符号文件 `*_signed.h5` 仍是 AMSET 约定（只给 dp_symmetrize 用）。
+
+
+## [V191] ionrelax 静态段的起步磁态；形变构型的磁态 / SCF 核对（2026-10-23）
+
+- **现象（LS，8 个 Cr）**：S7 的 ionrelax 静态段跑不完。弛豫段已收敛到非磁（`OSZICAR.relax` mag = −0.0000，
+  E = −150.93 eV）；静态段从 ~25 μB 起步，能量在 −115 ~ −183 eV 之间振荡，510 s/电子步，跑满墙钟被杀。
+- **根因**：静态段从来没有接上弛豫段的电子态。
+  1. 自旋标签由 `kc.inherit_scf_tags` 从上游 INCAR 继承，`MAGMOM` 是**初猜**（高自旋 `8*4 8*0 8*0`），不是收敛磁态；
+  2. 静态段原来写的是 `ISTART=1 / ICHARG=0`（"接弛豫段 WAVECAR"），但弛豫段是 `ISYM=2`（约化 k 点集），
+     静态段 `ISYM=0`（全 k 点集），WAVECAR 接不上；只补静态段（`[patch_ionrelax_locpot]` / `[0067]` / `nowave`）
+     更是明着 `ISTART=0 / ICHARG=2` —— 两条路实际都按 MAGMOM 初猜从头起算；
+  3. `ISYM=0` 不再把等价 Cr 的磁矩绑在一起，`EDIFF=1E-8` 又极严，SCF 在几种磁态之间来回跳。
+  弛豫段同样从初猜起步却能收敛，是因为它 `ISYM=2`（对称化压住了破缺对称的磁性涨落）、`EDIFF=1E-6`。
+  即使静态段勉强收敛，落到与弛豫段 / 未形变构型不同的磁态，带边差就是磁性跃迁，形变势没有意义。
+- **改法（S7 gen，`gen_step9_deform.py`）**：
+  - 新建的 ionrelax：弛豫段 `LCHARG=.TRUE.` 写 CHGCAR（电荷 + 磁化密度，与 k 点集 / ISYM 无关），静态段
+    `ISTART=0 / ICHARG=1` 从它接（VASP 此时忽略 MAGMOM）；submit.sh 在静态段前核对 CHGCAR、静态段收尾后删掉它。
+  - 只补静态段：弛豫段的 CHGCAR 还在（静态段被杀）就 `ICHARG=1`；不在（老结果）就 `ICHARG=2`，`MAGMOM` 换成弛豫段的
+    收敛磁态（`kc.relaxed_magmom`：`OUTCAR.relax` 有逐离子磁矩就用；否则按 `OSZICAR.relax` 的总磁矩修初猜 ——
+    同号初猜 + |M| < 0.1 μB → 全 0，同号 + |M| ≥ 0.1 → 按 M/ΣMAGMOM 等比缩放；有正有负的反铁磁初猜不动，因为总磁矩
+    分不出反铁磁与非磁）。
+  - 已收尾的静态段 SCF 跑满 NELM，或末步总磁矩与弛豫段不是同一个磁态（`kc.same_mag_state`：差 >
+    max(0.5 μB, 20%·max|M|)）→ retry 时只补一次静态段（归档后缀 `badstatic`，不用残留 CHGCAR）；补过仍如此只告警。
+  - 复用判据（V168）不把 `LWAVE / LCHARG / ISTART / ICHARG(0/1/2)` 和静态段的 `MAGMOM` 当作输入变化 —— 它们只决定
+    SCF 从哪起步；否则这次改动会把所有已算完的 ionrelax（含一天量级的弛豫段）整个重建。
+- **核对（S7.1）**：取本征值的目录（undeformed、各 `deform-*/ionrelax/` 或本级单点）末步总磁矩必须与 undeformed 同一个
+  磁态、电子步数不能到 NELM；S3 / S3b（AMSET 插值的能带）也比磁态。不一致直接报错（附处理办法），结果写进
+  `band_edges.json` 的 `scf_state_check`。局限：只有总磁矩，反铁磁 ↔ 非磁分不出。
+- **不改的**：本级刚性单点（undeformed、2D 面外分量）仍按继承的 MAGMOM 从头起算 —— 改它会让所有材料的 S7 单点因 MAGMOM
+  变化整批重算。它们落进不同磁态时由 S7.1 的核对拦下，处理办法是在 S7 的 step.conf `[incar.final]` 把 MAGMOM 定成 S3 的
+  收敛磁态再 retry。
+- **对已有结果**：VASP 输入不变的已完成构型照旧复用；磁态不符 / 没收敛的静态段在下次 retry S7 时只补静态段。
+  S7.1 需要重跑一次才会做这道核对（核对通过则 h5 与以前相同）。
 
 
 ## [0050] 冻声子谷间 IVS：K↔K′ 零阶（可选组 `ivs_frozen`，默认关）

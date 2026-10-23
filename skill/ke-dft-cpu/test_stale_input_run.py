@@ -169,13 +169,18 @@ class GenWiringTests(unittest.TestCase):
         self.assertLess(i, s.index("_skipped.append(_name)"))
         # 静态段继承主单点的 LVHAR（真空对齐要 LOCPOT），弛豫段关掉
         tree = ast.parse(s)
-        fn = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "_ionrelax_incars")
+        fns = [n for n in tree.body if isinstance(n, ast.FunctionDef)
+               and n.name in ("_ionrelax_incars", "_set_incar_tag")]
         ns = {"re": re, "IONRELAX_NSW": "60", "IONRELAX_EDIFFG": "-0.005", "IONRELAX_ISYM": "2"}
-        exec(compile(ast.Module(body=[fn], type_ignores=[]), "gen", "exec"), ns)
-        relax, stat = ns["_ionrelax_incars"](INCAR_NEW + "IBRION = -1\nNSW = 0\nLWAVE = .FALSE.\n")
+        exec(compile(ast.Module(body=fns, type_ignores=[]), "gen", "exec"), ns)
+        relax, stat = ns["_ionrelax_incars"](INCAR_NEW + "IBRION = -1\nNSW = 0\nLWAVE = .FALSE.\nLCHARG = .FALSE.\n")
         self.assertIn("LVHAR  = .TRUE.", stat)
         self.assertIn("LVHAR  = .FALSE.", relax)
-        self.assertIn("ISTART = 1", stat)
+        # [V191] 静态段从弛豫段 CHGCAR 接电荷/磁化密度（ISYM=2 弛豫段的 WAVECAR 接不上 ISYM=0 静态段）
+        self.assertRegex(stat, r"(?m)^ISTART = 0$")
+        self.assertRegex(stat, r"(?m)^ICHARG = 1\b")
+        self.assertRegex(relax, r"(?m)^LCHARG = \.TRUE\.")
+        self.assertRegex(stat, r"(?m)^LCHARG = \.FALSE\.")
 
 
 if __name__ == "__main__":

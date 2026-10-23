@@ -486,6 +486,28 @@ def main():
         print("[WARN] 全部构型都只有 1s 芯能级、没有平均静电芯势（INCAR 带 ICORELEVEL=1）：deformation.h5 的芯能级参考"
               "不是 AMSET 的标准口径（元素依赖、非刚性），与其它项目的 core 口径不可直接比；真空口径不受影响。")
     print("[..] 芯能级参考来源 core_reference=%s（落盘到 band_edges.json）" % _core_kind)
+    # [V191] 磁态 / SCF 核对：取本征值的那个目录（ionrelax/ 静态段或本级单点）末步的总磁矩必须是同一个磁态，
+    #   SCF 不能跑满 NELM。混了磁态，带边差里是磁性跃迁不是形变势；没收敛的本征值本身就不对。
+    #   S3 / S3b 是 AMSET 插值用的能带，形变势要映射到它们上面，磁态也要一致（只比磁态，不比 NELM）。
+    _scf = {str(Path(_f).relative_to(dfm)): kc.scf_state(_f) for _f in [Path(und)] + list(dp_subs)}
+    _scf_up = {_n: kc.scf_state(cwd / _n) for _n in ("step3_uniform", "step3b_uniform_full")
+               if (cwd / _n / "OSZICAR").is_file()}
+    _scf_issues = kc.scf_state_issues(_scf, "undeformed", _scf_up)
+    _scf_check = {"tol_abs_muB": kc.MAG_STATE_TOL_ABS, "tol_rel": kc.MAG_STATE_TOL_REL,
+                  "folders": {k: (None if v is None else {"mag": v["mag"], "nelec": v["nelec"], "nelm": v["nelm"]})
+                              for k, v in sorted(list(_scf.items()) + list(_scf_up.items()))},
+                  "issues": _scf_issues}
+    if _scf_issues:
+        sys.exit("[ERROR] [V191] 形变构型的磁态 / SCF 不一致，形变势没有意义：\n        "
+                 + "\n        ".join(_scf_issues) +
+                 "\n        处理：retry S7_deform —— ionrelax 静态段会按弛豫段的收敛磁态只补一次（只重跑静态段）；"
+                 "\n        补完仍不一致（或是本级刚性单点 / S3 的磁态不同），说明初猜落进了不同磁态："
+                 "\n        在 S7 的 step.conf [incar.final] 把 MAGMOM 定成 S3 的收敛磁态（S3 OUTCAR 的 magnetization (x)）"
+                 "再 retry S7_deform，然后重跑本步。")
+    _mags = sorted(set(round(v["mag"], 1) for v in _scf.values() if v is not None and v["mag"] is not None))
+    if _mags:
+        print("[..] 磁态核对：%d 个构型总磁矩 %s μB，与 %s 一致；SCF 均收敛"
+              % (len(_scf), "/".join("%g" % m for m in _mags), "、".join(["undeformed"] + sorted(_scf_up))))
     # [V175] S7 的网格和 S3 不同（S3 重算过、S7 没跟着重跑）-> 先在这里告警；不合规的那种 S8/S8.4 的闸门会拦。
     for _lv, _msg in kc.s7_grid_issues(cwd, _dim_now if _dim_now in ("2d", "3d") else None):
         print("[WARN] S7.1：%s" % _msg)
@@ -1117,6 +1139,7 @@ print("[OK] band_edges.json 已生成（amset 权威带边 E1 + 真空对齐 E1_
         _be["core_reference"] = _core_kind                      # [V169] avg_core / 1s
         _be["core_reference_folders"] = _core_ref
         _be["ionrelax_check"] = _ir_check                       # [V187] 弛豫段力判据核对
+        _be["scf_state_check"] = _scf_check                     # [V191] 各构型末步总磁矩 / 电子步数
         Path(be_out).write_text(_json.dumps(_be, indent=2, ensure_ascii=False) + "\n")
         print("[OK] band_edges.json 记录 deform_geometry=%s（%d 个构型）"
               % (_def_geom, len(_geom_map)))
