@@ -259,12 +259,6 @@ def pw_input(calc, P, q1, prefix, outdir, kblock, nbnd=None, extra_sys=""):
         sys_lines.append("  nbnd = %s" % (nbnd if isinstance(nbnd, str) else int(nbnd)))
     if extra_sys:
         sys_lines.append(extra_sys.rstrip())
-    if calc == "nscf":
-        # [0059-r4] AHC 的 nscf 必须原样保留给定 k 列表：pw.x 默认按对称性扩增 k，
-        #   会让 ahc_gkk/etk/etq 的记录数变成输入 k 数的整数倍（MoS2 q=Gamma：2 -> 4 个 k），
-        #   ivs_qe_job.py 的尺寸校验和 ivs_dfpt.py 的逐 k 映射都会错位（Si 单 k 不暴露）。
-        sys_lines.append("  nosym = .true.")
-        sys_lines.append("  noinv = .true.")
     el = ["  conv_thr = %.3e" % float(P["IVS_SCF_CONV_THR"]), "  mixing_beta = 0.4"]
     if calc != "scf":
         el.append("  diago_full_acc = .true.")
@@ -651,7 +645,12 @@ def gen_ph(P):
         ahc = ("&inputph\n  prefix = '%s'\n  outdir = './tmp'\n  fildyn = 'dyn.ahc'\n  fildvscf = 'dvscf'\n"
                "  ldisp = .false.\n  trans = .false.\n  electron_phonon = 'ahc'\n  ahc_nbnd = %d\n  ahc_nbndskip = %d\n"
                "  skip_upperfan = .true.\n  ahc_dir = 'ahc_dir/'\n/\n%s\n" % (pre, nahc, skip, xqs))
-        nscf = pw_input("nscf", P, q1, pre, "./tmp", iv.kpoints_list(r["k"]), nbnd=nbnd)
+        # [0059-r4] q=Gamma（谷内 ODP 作业）：AHC 在 q=0 时 k 与 k+q 重合，若不关对称性，
+        #   pw.x 会把 nscf 的 k 列表按星扩增（MoS2：2 -> 4），ph.x ahc 会对每个 k 各写一条记录
+        #   -> ahc_gkk 正好 2 倍，尺寸校验失败。q!=0 不能关：qa 需要 nscf 里同时有 k 和 k+q。
+        nscf_extra = "  nosym = .true.\n  noinv = .true.\n" if gamma else ""
+        nscf = pw_input("nscf", P, q1, pre, "./tmp", iv.kpoints_list(r["k"]), nbnd=nbnd,
+                        extra_sys=nscf_extra)
         chk = ("python3 ivs_qe_job.py ahc --dir ahc_dir --nbnd %d --ahc-nbnd %d --nat %d --nk %d"
                % (nbnd, nahc, nat, len(r["k"])))
         scf_save = "../../%s/tmp/%s.save" % (STEP["scf"], pre)

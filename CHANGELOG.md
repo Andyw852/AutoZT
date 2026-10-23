@@ -14,6 +14,14 @@ This project adheres to Semantic Versioning; versions before 1.0.0 are developme
 
 ## [Unreleased]
 
+### Fixed (2026-10-23: [0059-r4] eph-qe-cpu IVS — q=Γ 的 AHC nscf 不再按对称性扩增 k 列表)
+- `ivs_qe_common.gen_ph` 生成 AHC 用的 `nscf.in` 时，**只在 q=Γ（`gamma`）作业**加 `nosym=.true.` / `noinv=.true.`。
+  原因：pw.x 默认按对称性扩增显式 k 列表，MoS2 的 q=Γ 作业从 2 个 k 扩成 4 个，ph.x ahc 对每个 k 各写一条记录，
+  `ahc_gkk/etk/etq` 正好是应有尺寸的 2 倍，`ivs_qe_job.py ahc` 的尺寸校验失败（q-odp 11h26m 后在收尾步骤失败）。
+  q≠0 作业**不能**关对称性：AHC 需要 nscf 里同时存在 k 和 k+q（`skip_upperfan` 只写 lower fan）。
+- 验证：MoS2 q=odp 重跑后 nscf 为 2 个 k、`ahc_gkk_iq1.bin` = 24192 字节（=期望值），`ivs_ph.ok` 正常写出；
+  q-01/02/03 的既有结果与记录顺序不受影响。
+
 ### Changed (2026-10-22: ke-dft-cpu S8/S4 — 环境类失败改为"开头自检 + 优雅降级")
 - 作业内自检（overlap_preflight.py --in-job 的 job_env_check）：除核对 amset 版本外，再逐项 import ase / spglib / BoltzTraP2.sphere。任一失败立刻拦截并打印修法（缺 ase -> pip install ase；spg_free_dataset -> spglib/BoltzTraP2 ABI 不匹配，换/重建 AMSET 环境）。起因：yue 的 conda_envs/amset 缺 ase，作业排队后跑到 15 分钟才炸。
 - gen 端 apply_mesh_min 在 gen 环境没有 BoltzTraP2 / pymatgen.io.ase（或 C 扩展与 spglib ABI 不匹配）时不再 ModuleNotFoundError 硬崩：打 WARN 跳过自动选网格，沿用 step.conf 的 INTERPOLATION_FACTOR。
