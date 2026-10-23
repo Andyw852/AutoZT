@@ -1742,7 +1742,14 @@ def _pheasy_env(method, phase, ncpu, natom_super, tuning="safe", ols_ridge=None,
             "PHEASY_USE_RFE": "1", "PHEASY_RFE_TWOLEVEL": "1",
             "MKL_INTERFACE_LAYER": "ILP64", "PHEASY_RFE_MKL": "1",
             "PHEASY_RFE_STEP": "0.1", "PHEASY_RFE_RIDGE_ALPHA": "1e-11",
-            "PHEASY_RFE_CV": "5", "PHEASY_RFE_LSMR_MAXITER": "60000",
+            "PHEASY_RFE_CV": "5",
+            # The final exact refit of the RFE coefficients can fall back to a
+            # full-data LSMR when the Gram matrix does not fit in memory
+            # (Mg4C60: ~66-70 GB needed).  That one solve decides acceptance, so
+            # give it its own iteration cap; ranking/fold solves keep the shared
+            # PHEASY_LSQR_MAXITER default (5000) -- raising that would slow every
+            # elimination round by up to 12x.
+            "PHEASY_RFE_FINAL_LSMR_MAXITER": "60000",
             "PHEASY_RFE_WARM_START": "1", "PHEASY_COLNORM_FRAMES": "24",
             "PHEASY_COLNORM_EXACT": "0", "PHEASY_RFE_ONE_SE": "1",
         })
@@ -2109,7 +2116,16 @@ def cmd_fit_pheasy(cfg, out):
             flags += ["--c2", str(c2)]
         if c3v is not None and enable >= 3:
             flags += ["--c3", str(c3v)]
-        return "%s --dim %s %s %s --eps %s" % (binary, dim, wflag, " ".join(flags), eps)
+        cmd = "%s --dim %s %s %s --eps %s" % (binary, dim, wflag, " ".join(flags), eps)
+        # [SYMPREC] pheasy's spglib tolerance decides which space group constrains
+        # the fit.  Its default 1e-5 sees a subgroup of a slightly distorted cell
+        # (MoS2: Amm2 instead of P-6m2) and the force constants are then only
+        # orthorhombic -> anisotropic kappa.  Pass the tolerance explicitly when
+        # the project asks for it; unset keeps pheasy's default.
+        _symprec = str(cfg.get("pheasy_symprec") or "").strip()
+        if _symprec:
+            cmd += " --symprec %s" % _symprec
+        return cmd
 
     base = base_for(c3)
 

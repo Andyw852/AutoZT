@@ -6,6 +6,7 @@
 import os
 
 from autozt import i18n as _i18n  # noqa: E402
+from autozt import preflight as _pf  # noqa: E402  [V192] QOS 槽位上限排队的解释
 import sys
 import re
 import json
@@ -164,6 +165,55 @@ def _sub_row_cell(ms):
     rem = "缺" + ",".join(rems)
     return rem if base in ("", "-") else "%s（%s）" % (base, rem)
 
+def qos_limit_hint_lines(all_mats):
+    """[V192] 把 QOS 作业数/提交数上限导致的排队整理成提示行（纯函数，便于单测）。
+
+    all_mats: [(type_dict, material_dict), ...]；读每个 step 的 kind/job。
+    返回 [] 表示没有这类排队。分开写是为了让"什么情况说什么话"能脱离终端单测。
+    """
+    groups = defaultdict(list)          # qos -> [(tt, name, label, reason)]
+    for _t, m in all_mats:
+        tt = m.get("tt") or (m.get("key") or "")
+        for s in m.get("steps") or []:
+            if s.get("kind") != "PD":
+                continue
+            # 扇出步骤（S7_deform 之类）：job.info 被压成 "4/10 0R 6PD"，排队原因在
+            #   fan_pd_reasons 明细里（[V192] 采集器新加）。没有明细就退回看 job.info。
+            _fan = s.get("fan_pd_reasons") or []
+            if _fan:
+                for _it in _fan:
+                    _r = (_it.get("reason") or "").strip().strip("()")
+                    if not _pf.is_qos_limit_reason(_r):
+                        continue
+                    groups[(_it.get("qos") or "").strip()].append(
+                        (tt, m.get("name") or "", s.get("label") or "", _r))
+                continue
+            j = s.get("job") or {}
+            reason = (j.get("info") or "").strip().strip("()")
+            if not _pf.is_qos_limit_reason(reason):
+                continue
+            groups[(j.get("qos") or "").strip()].append(
+                (tt, m.get("name") or "", s.get("label") or "", reason))
+    if not groups:
+        return []
+    out = ["\nQOS 槽位上限排队（不是集群没资源、也不是配置错）:"]
+    for q in sorted(groups):
+        items = groups[q]
+        shown = items[:5]
+        out.append("  QoS=%s：%d 个步骤被挡" % (q or "未采集", len(items)))
+        # 不把"被挡的步骤数"当成"已占槽位数"传进去（两者含义不同，会误导）；
+        # 真实 MaxJobsPU 要 sacctmgr 才知道，提示里让用户自查。
+        out.append("    " + _pf.qos_limit_message(items[0][3], q).replace(
+            "\n", "\n    "))
+        for tt, name, lab, _r in shown:
+            out.append("    [%-3s] %-22s %s" % (tt, name, lab))
+        if len(items) > 5:
+            out.append("    ... 另有 %d 个" % (len(items) - 5))
+    if _i18n.is_en():
+        out.append(_pf.hint("qos"))
+    return out
+
+
 def render_table(data):
     types = data["types"]
     # v1.3.3：多技能按类型分表——此前全局列 = 所有技能步骤的并集，
@@ -278,6 +328,11 @@ def render_table(data):
               "-status scancel start / rerun）:")
         for tt, name, lab in scl:
             print("  [%-3s] %-22s %s" % (tt, name, lab))
+    # [V192] QOS 槽位上限造成的排队：以前只显示 PD(QOSMaxJobsPerUserLimit)，不说为什么、怎么办。
+    #   2026-10-23 实测：jzzn premium 的 MaxJobsPU=5 被别的材料占满，LS 6 帧全排队、
+    #   --start 显示 N/A，看起来像"集群没资源"，实际是同一用户的其它项目在抢槽位。
+    for _ln in qos_limit_hint_lines(all_mats):
+        print(_ln)
 
 def render_detail(m):
     extra = ""
@@ -1310,6 +1365,13 @@ def _summary_lines(data):
                      % (q.get("R", 0), q.get("PD", 0), q.get("total", 0)))
     return lines
 
+def _qos_lines(data):
+    """[V192] 从采集 data 里取 QOS 限流排队，整理成提示行（无则 []）。"""
+    return qos_limit_hint_lines(
+        [(t, m) for t in (data.get("types") or [])
+         for m in (t.get("materials") or [])])
+
+
 def cmd_summary(data, diff=False, state_path=None):
     """只读极简汇总（省 token）：每类型一行计数（run/pd 分开）+ FAIL 清单（含
     诊断原因）+ 全局队列。供 agent 巡检用。
@@ -1340,10 +1402,16 @@ def cmd_summary(data, diff=False, state_path=None):
                 print("  %s %s: %s → %s" % (_mname, _lab, _o, _n))
             if len(changes) > 40:
                 print("  … 还有 %d 项变更" % (len(changes) - 40))
+            _q = _qos_lines(data)
+            if _q:
+                print("\n".join(_q))
         else:
             print("\n".join(lines))
         return
     print("\n".join(_summary_lines(data)))
+    _q = _qos_lines(data)
+    if _q:
+        print("\n".join(_q))
 
 
 # ===== 结构化错误码（v2.0：诊断文本 → 稳定 code，供 --json 机器判读）=====

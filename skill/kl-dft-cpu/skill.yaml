@@ -76,6 +76,10 @@ steps:
 
   - {seq: 4, name: step4_disp, label: S4_disp, check: outcar, fanout: "disp-*",
      gen: gen_step4_disp.py,
+     # [2026-10-22 修] 声明 needs：gen 要读 step1_std_opt/CONTCAR 当结构来源。
+     #   不写的话，换集群跑 S4 时 relay 不会把 S1 结构带过去，gen 直接报
+     #   "找不到 step1_std_opt 的结构"（hfeshell 上踩过）。
+     needs: ["step1_std_opt"],
      # incar_bench.py：INCAR_BENCH=on 时的隔离对照 side-car（生成 bench/ 帧 + 分析报告），
      #   必须随 gen 推送（gen_step4_disp import 它）。
      gen_need: [dim_common.py, stepconf.py, step.conf, kl_common.py, lattice_kappa.py,

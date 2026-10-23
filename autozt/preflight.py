@@ -43,6 +43,11 @@ EN_HINTS = {
               "CONDA_SH/CONDA_ENV in that step's step.conf at the cluster's environment."),
     "fail_step": ("hint: a FAIL step is not in the DAG's active set, so -f alone does not "
                   "pick it up. Resubmit it explicitly with -j STEP start -f."),
+    "qos": ("hint: the job is queued by a QOS per-user job/submit limit, not by cluster load. "
+            "That QoS only allows a fixed number of jobs for one user; the slots are currently "
+            "held by other materials. Check 'sacctmgr show qos format=Name,MaxJobsPU,MaxSubmitPU' "
+            "and either wait for slots, move this step back to a QoS with a larger limit, or "
+            "submit fewer configurations at a time. Do not lower the core count for this."),
 }
 
 
@@ -78,6 +83,61 @@ def check_partition(res, declared, cluster_partitions=()):
                  if cluster_partitions else "")
         return "提示：提交模板要求 --partition=%s，但集群未声明分区。%s" % (want, extra)
     return None
+
+
+# ---- QOS 作业数 / 提交数上限造成的排队（不是故障）--------------------------------
+# 2026-10-23 实测（LS 的 S7）：jzzn 的 premium QoS MaxJobsPU=5，把 2D VASP 模板全局切
+#   premium 后，LS 的 6 个 S7 帧全部 PD(QOSMaxJobsPerUserLimit)、--start 直接 N/A；
+#   而 regular 的 MaxJobsPU=50。同一个用户的多个项目在互相挤占 premium 的 5 个槽位。
+# 以前程序只把原因原样显示成 PD(...)，不说"为什么"和"怎么办"，只能靠人记。
+QOS_LIMIT_REASONS = (
+    "QOSMaxJobsPerUserLimit",
+    "QOSMaxSubmitJobPerUserLimit",
+    "QOSMaxJobsPerAccountLimit",
+    "QOSMaxSubmitJobPerAccountLimit",
+    "QOSMaxGRESPerUser",
+)
+
+
+def is_qos_limit_reason(reason):
+    """排队原因是不是 QOS 的作业数/提交数上限（槽位占满；不是配置错误，也不是没资源）。"""
+    r = (reason or "").strip().strip("()").strip()
+    return any(r.startswith(p) for p in QOS_LIMIT_REASONS)
+
+
+def qos_limit_message(reason="", qos="", in_use=0, limit=0):
+    """QOS 槽位占满时的中文说明（英文走 hint('qos')）。
+
+    reason：squeue 的 %R（如 QOSMaxJobsPerUserLimit）
+    qos：撞限的 QoS 名（采集带 %q 时才有）
+    in_use/limit：本账号在该 QoS 已占用的作业数 / 该 QoS 的 MaxJobsPU 或 MaxSubmitPU
+    """
+    r = (reason or "").strip().strip("()").strip()
+    kind = "提交数" if "Submit" in r else "作业数"
+    who = "账号" if "Account" in r else "用户"
+    head = "排队原因 %s：该 QoS 的每%s%s上限已满" % (r, who, kind)
+    if qos:
+        head += "（QoS=%s" % qos
+        if in_use or limit:
+            head += "，本账号已占 %s/%s" % (in_use or "?", limit or "?")
+        head += "）"
+    body = ("\n      这不是集群没资源，也不是配置错误——同一个 QoS 里的其它材料占满了槽位。"
+            "可以：① 等槽位（作业结束就释放）；② 把该步换到限额更大的 QoS"
+            "（如 regular 的 MaxJobsPU 通常大得多）；③ 少提交几帧、分批跑。"
+            "\n      别为这个降核数：核数不解决槽位上限，还会改变并行设置（铁律 9）。")
+    return head + body
+
+
+def qos_limit_groups(jobs):
+    """把 QOS 限流导致的排队按 QoS 归并 -> {qos: [job, ...]}（qos 可能为空串）。"""
+    out = {}
+    for j in jobs or []:
+        if (j.get("state") or "") != "PD":
+            continue
+        if not is_qos_limit_reason(j.get("info")):
+            continue
+        out.setdefault((j.get("qos") or "").strip(), []).append(j)
+    return out
 
 
 def parse_conda_activations(text):

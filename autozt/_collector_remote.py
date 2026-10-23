@@ -696,6 +696,18 @@ def collect_type(t, jobs_by_dir):
                 f["fan_running"] = [os.path.basename(p) for p in subs if jobs_by_dir.get(p)]   # [V168] -f 杀掉后要重交
                 f["fan_todo"] = todo          # 没作业也没完成 → 待提交/失败
                 f["fan_done"] = ndone
+                # [V192] 扇出步骤会把子作业压成一个 "4/10 0R 6PD" 的 info，排队原因就丢了。
+                #   单看 f["job"]["info"] 认不出 QOS 槽位上限（2026-10-23 LS 的 S7：
+                #   6 帧全 PD(QOSMaxJobsPerUserLimit)，表里只显示 pd，看不出原因）。
+                #   这里按 (原因, QoS) 归并一份 PD 子作业明细。
+                _pd_reasons = {}
+                for _x in fj:
+                    if _x.get("state") != "PD":
+                        continue
+                    _k = ((_x.get("info") or "").strip(), (_x.get("qos") or "").strip())
+                    _pd_reasons[_k] = _pd_reasons.get(_k, 0) + 1
+                f["fan_pd_reasons"] = [{"reason": _k[0], "qos": _k[1], "n": _v}
+                                       for _k, _v in _pd_reasons.items()]
                 f["has_incar"] = any(os.path.isfile(os.path.join(p, "INCAR"))
                                      for p in subs)
                 f["has_outcar"] = any(os.path.isfile(os.path.join(p, "OUTCAR"))
@@ -820,7 +832,11 @@ def main():
                               capture_output=True, text=True, encoding="utf-8",
                               errors="replace", timeout=60)
     try:
-        r = run_squeue("%i|%j|%T|%M|%D|%R|%Z")
+        # [V192] 末尾加 %q（QoS）：QOSMaxJobsPerUserLimit 这类排队要按 QoS 归并才说得清
+        #   "哪个队列的槽位满了"。老集群不认 %q 时逐级回退，不影响采集。
+        r = run_squeue("%i|%j|%T|%M|%D|%R|%Z|%q")
+        if r.returncode != 0:
+            r = run_squeue("%i|%j|%T|%M|%D|%R|%Z")
         if r.returncode != 0:
             r = run_squeue("%i|%j|%T|%M|%D|%R")
         if r.returncode != 0:
@@ -835,7 +851,9 @@ def main():
                 st = STATE_MAP.get(p[2], p[2])   # 兼容长状态名（RUNNING/PENDING）和缩写（R/PD）
                 jobs.append({"id": p[0], "name": p[1], "state": st, "time": p[3],
                              "nodes": p[4], "info": p[5],
-                             "workdir": os.path.normpath(p[6]) if len(p) > 6 and p[6] else ""})
+                             "workdir": os.path.normpath(p[6]) if len(p) > 6 and p[6] else "",
+                             # [V192] %q 只有在带它的格式下才有；老格式里 p[7] 不存在 -> ""
+                             "qos": (p[7].strip() if len(p) > 7 else "")})
     except Exception as e:
         squeue_err = str(e)
     jobs_by_dir = {}
