@@ -238,7 +238,8 @@ ADP_DEGEN_MATRIX = "auto"          # [0061-m] auto：S7.1 有 deformation_matrix
 #   有绝对参考的不确定；DFPT 的长波声学矩阵元自洽含宏观势响应，不需要对齐，与 EPW 同口径。
 #   ADP_DFPT = auto（出厂：有就用）/ on（必须有）/ off（照原版用 S7 的形变势）。替换范围：该载流子带边 ADP_DFPT_EWIN（eV）
 #   以内、按最近谷中心归属的态，形变势张量换成该谷的 DFPT 张量（其余态照旧）；带边简并的载流子不换（由 ADP_DEGEN 管）。
-ADP_DFPT = "auto"
+#   ★ 实验性，出厂 off（Si 实算 Ξd 偏大，见 METHODOLOGY [0072]）：要试用写 ADP_DFPT = auto 或 on。
+ADP_DFPT = "off"
 ADP_DFPT_EWIN = 0.3
 DEFORM_MATRIX_H5 = "deformation_matrix.h5"
 DEFORM_WAVE_MODULE = "deform_wave.py"
@@ -470,7 +471,7 @@ SPEC = {
     "ADP_DEGEN_NANG": (None, "int"),
     "ADP_DEGEN_PAIR": ("auto", "str"),       # [0061-p] auto = 逐对替换矩阵元（AMSET 内部对不上自动退回比值）/ off = 按初态比值
     "ADP_DEGEN_MATRIX": ("auto", "str"),     # [0061-m] auto = 有 S7.1 的 deformation_matrix.h5 就用 / off = 从本征值拟合
-    "ADP_DFPT": ("auto", "str"),                # [0072] 谷内 ADP 用 DFPT 声学斜率张量 auto/on/off
+    "ADP_DFPT": ("off", "str"),                 # [0072] 谷内 ADP 用 DFPT 声学斜率张量 auto/on/off（实验性，出厂 off）
     "ADP_DFPT_EWIN": (None, "float"),
     "PIE_KERNEL": ("az", "str"),                # [0037] 三维 PIE 核 az/amset
     "PIE_SCREENING": (True, "bool"),
@@ -2925,7 +2926,7 @@ def main():
             if _p["ADP_DEGEN_NANG"] is not None:
                 ADP_DEGEN_NANG = int(_p["ADP_DEGEN_NANG"])
             global ADP_DFPT, ADP_DFPT_EWIN                    # [0072]
-            ADP_DFPT = str(_p["ADP_DFPT"] or "auto")
+            ADP_DFPT = str(_p["ADP_DFPT"] or "off")
             if _p["ADP_DFPT_EWIN"] is not None:
                 ADP_DFPT_EWIN = float(_p["ADP_DFPT_EWIN"])
             global ADP_DEGEN_PAIR, ADP_DEGEN_MATRIX

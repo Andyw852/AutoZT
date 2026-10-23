@@ -66,7 +66,9 @@ PARAMS = {
     #   （Li et al. PRB 104, 195201 (2021)），ke-dft-cpu S8 的 ADP_DFPT 用它替换非简并带边的 AMSET 形变势。
     #   auto = 三维且有反演中心（无压电长程项）才算；on = 三维都算（无反演中心时压电项会混进斜率，自行核对）；off = 不算。
     #   二维不支持（AHC 没有二维库仑截断，小 q 的长程响应不对）。
-    "IVS_ADP": ("auto", "str"),
+    #   ★ 实验性，出厂 off：Si 实算（2026-10-23）剪切 Ξu ≈ 8.5 eV 与文献一致，但静水 Ξd ≈ 4.5 eV（文献约 1.0–1.2），
+    #     且小 q 矩阵元里有 ASR 破缺的 1/q 长程项，见 ke-dft-cpu METHODOLOGY [0072]。
+    "IVS_ADP": ("off", "str"),
     "IVS_ADP_DQ": (0.03, "float"),         # 小 q 的模长（Å⁻¹，含 2π）
     "QE_BIN": ("", "str"),                   # autozt 从 setting/<集群>.yaml 的 qe_bin 注入
     "QE_PSEUDO_DIR": ("", "str"),            # qe_pseudo_dir

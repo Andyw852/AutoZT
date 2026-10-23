@@ -14,7 +14,11 @@ This project adheres to Semantic Versioning; versions before 1.0.0 are developme
 
 ## [Unreleased]
 
-### Added (2026-10-23: [0072] intravalley ADP deformation potentials from DFPT acoustic slopes)
+### Added (2026-10-23: [0072] intravalley ADP deformation potentials from DFPT acoustic slopes — experimental, off by default)
+- Validation on Si (QE 7.4, SG15 NC PBE, a = 5.479 Å) showed the small-q acoustic matrix elements carry a spurious 1/q
+  long-range term (acoustic-sum-rule violation, ΣZ* ≈ 0.16 e), so the single-|q| slope fit is wrong by an order of
+  magnitude. Fitting M = A/q + B·q over three |q| gives Ξu ≈ 8.5 eV (Li 2021: 8.84) but Ξd ≈ 4.5 eV (Li 2021: 1.01).
+  `IVS_ADP` and `ADP_DFPT` therefore default to `off`; details in ke-dft-cpu METHODOLOGY [0072].
 - eph-qe-cpu `ivs_dfpt` group (`IVS_ADP = auto|on|off`, `IVS_ADP_DQ` = 0.03 Å⁻¹): S10 appends six small-q jobs
   `q-adp1..6` (Cartesian x, y, z, xy, xz, yz) with the valley centres as initial states. S13 solves, per direction, the
   three acoustic modes' centre-of-mass displacements for w = |q|·D·q̂ (internal strain is in the acoustic eigenvectors),
