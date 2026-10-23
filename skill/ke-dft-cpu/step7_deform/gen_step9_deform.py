@@ -396,6 +396,16 @@ IONRELAX_REBUILD_LOOSE = False
 #   从全 BZ 降到对称约化后的数量 —— LS（ISYM=0 → 6x42x3 = 756 点、24 核、~3.3 h/离子步）
 #   正是被这条卡在 24 h 墙钟上，2026-10-11 实测。
 IONRELAX_ISYM = "2"
+# [V191] 静态段从哪个电子态起步。★ 必须是弛豫段收敛出来的那个磁态 ★
+#   原来写的是 ISTART=1 / ICHARG=0（"接弛豫段 WAVECAR"）—— 但弛豫段是 ISYM=2（约化 k 点集）、静态段是 ISYM=0
+#   （全 k 点集），WAVECAR 接不上，静态段实际是按 INCAR 的 MAGMOM【初猜】从头起算；只补静态段（ISTART=0 /
+#   ICHARG=2）更是明着从初猜起算。初猜来自上游 INCAR（高自旋，如 8 个 Cr 各 4 μB），弛豫段若已塌缩到别的磁态
+#   （LS：弛豫段收敛到非磁），ISYM=0 + EDIFF=1E-8 的静态段就在磁态之间来回跳、跑满 NELM 也不收敛
+#   （2026-10-23 LS：510 s/电子步，能量 -115 ~ -183 eV 振荡）。
+#   现在：弛豫段写 CHGCAR（LCHARG=.TRUE.，电荷 + 磁化密度，与 k 点集 / ISYM 无关），静态段 ICHARG=1 从它接着算；
+#   静态段收尾后删掉 CHGCAR（几百 MB）。弛豫段 CHGCAR 不在了（老结果、只补静态段）就用 ICHARG=2，
+#   MAGMOM 换成弛豫段的收敛磁态（kc.relaxed_magmom）。已收尾的静态段磁态与弛豫段不符 / SCF 跑满 NELM
+#   -> retry 时只补一次静态段（BADSTATIC_TAG），S7.1 另有一道跨构型的磁态核对（kc.scf_state_issues）。
 
 def _ionrelax_params(proj):
     """[V187] 本步 step.conf 覆盖 IONRELAX_EDIFFG / IONRELAX_3D / IONRELAX_REBUILD_LOOSE。
@@ -430,7 +440,7 @@ def _ionrelax_incars(base, ediffg=None, wave=False):
     relax = re.sub(r"EDIFF\s*=.*", "EDIFF  = 1E-6", relax)
     relax = re.sub(r"LVHAR\s*=.*", "LVHAR  = .FALSE.", relax)
     relax = re.sub(r"LWAVE\s*=.*", "LWAVE  = .TRUE.", relax)
-    relax = re.sub(r"LCHARG\s*=.*", "LCHARG = .FALSE.", relax)
+    relax = _set_incar_tag(relax, "LCHARG", ".TRUE.          # [V191] 静态段 ICHARG=1 从它接电荷/磁化密度")
     # [IONRELAX_ISYM] 弛豫段放开对称性（静态段不动）。两种情形都处理：
     #   段 INCAR 里已有 ISYM（继承自模板的 0）-> 覆盖；没有 -> 追加。
     if re.search(r"ISYM\s*=", relax):
@@ -446,10 +456,9 @@ def _ionrelax_incars(base, ediffg=None, wave=False):
     # 静态段
     stat = re.sub(r"IBRION\s*=.*", "IBRION = -1           # 静态段（弛豫后精确带边）", base)
     stat = re.sub(r"NSW\s*=.*", "NSW    = 0", stat)
-    stat = re.sub(r"ISTART\s*=.*", "ISTART = 1            # 接弛豫段 WAVECAR", stat)
-    stat = re.sub(r"ICHARG\s*=.*", "ICHARG = 0", stat)
-    if "ISTART" not in stat:
-        stat = stat.rstrip() + "\nISTART = 1\n"
+    # [V191] 读弛豫段 CHGCAR（含磁化密度）起步；MAGMOM 此时被 VASP 忽略。见 IONRELAX_ISYM 下的说明
+    stat = _set_incar_tag(stat, "ISTART", "0")
+    stat = _set_incar_tag(stat, "ICHARG", "1            # [V191] 接弛豫段 CHGCAR（电荷 + 磁化密度）")
     if wave:
         stat = _set_incar_tag(stat, "LWAVE", ".TRUE.")
     return relax, stat
@@ -506,6 +515,9 @@ MATRIX_H5_REL = Path("step7b_deform_read") / "deformation_matrix.h5"
 NOWAVE_TAG = "nowave"
 # [0067] 弛豫段已跑完、静态段 VASP 没跑完（OOM / 超时 / 磁盘满被杀）：只补静态段，归档后缀用这个
 STATIC_DEAD_TAG = "nostatic"
+# [V191] 静态段收尾了，但 SCF 跑满 NELM 没收敛 / 磁态与弛豫段不符：只补一次静态段（按弛豫段磁态起步），归档后缀用这个。
+#   已经补过一次（有 OUTCAR.badstatic-*）仍如此就不再自动补，交给 S7.1 的磁态核对拦下、人工看。
+BADSTATIC_TAG = "badstatic"
 
 
 def _deform_wave_params(proj):
@@ -546,12 +558,36 @@ def wave_extract_block(rel_root, margin, keep):
         % (WAVE_H5, AMSET_ENV_SRC, rel_root, WAVE_PY, int(margin), "" if keep else " --delete"))
 
 
-def _mismatch_wo_lwave(incar_text, vasprun):
-    """kc.run_incar_mismatch，但不把 LWAVE 算进去（[0061-m] 静态段新开了 LWAVE，旧结果的物理输入没变）。"""
+def _icharg_scf(v):
+    """ICHARG 回显 / 新值是不是自洽起步方式（0/1/2，或没写 = 默认）；>=10 是非自洽，属于物理输入。"""
+    v = v.strip()
+    if v.startswith("("):                                   # "(删除)" = 回到默认
+        return True
+    try:
+        return int(float(v.split()[0])) < 10
+    except (ValueError, IndexError):
+        return False
+
+
+def _mismatch_wo_lwave(incar_text, vasprun, static=False):
+    """kc.run_incar_mismatch，去掉不改变收敛结果的键：
+      · LWAVE / LCHARG：只管输出（[0061-m] 静态段新开 LWAVE；[V191] 弛豫段新开 LCHARG）；
+      · ISTART / ICHARG（0/1/2）：只管 SCF 从哪起步（[V191] 静态段从 ISTART=1/ICHARG=0 改成 ICHARG=1）；
+      · static=True 时再去掉 MAGMOM：静态段的 MAGMOM 是起步猜测（[V191] 换成弛豫段的收敛磁态），
+        收敛到哪个磁态由 static_state_issue 按 OSZICAR 核对，不靠比 INCAR。
+    这些键变了就把已算完的 ionrelax 整个重建，会白白删掉一天的弛豫段。"""
     why = kc.run_incar_mismatch(incar_text, vasprun)
     if why is None:
         return None
-    return [w for w in why if not w.startswith("LWAVE:")]
+    keep = []
+    for w in why:
+        k, _, rest = w.partition(":")
+        if k in ("LWAVE", "LCHARG", "ISTART") or (static and k == "MAGMOM"):
+            continue
+        if k == "ICHARG" and all(_icharg_scf(x) for x in rest.split("->")):
+            continue
+        keep.append(w)
+    return keep
 
 
 def _deform_ref(proj, dim):
@@ -579,11 +615,39 @@ def _set_incar_tag(text, key, value):
     return text.rstrip() + "\n" + line + "\n"
 
 
-def static_only_incar(stat, wave=False):
-    """静态段 INCAR -> 只补静态段用的版本：ISTART=0 / ICHARG=2（不依赖弛豫段 WAVECAR），LVHAR=.TRUE.；其余不动。
+def _nonempty(p):
+    try:
+        return Path(p).is_file() and Path(p).stat().st_size > 0
+    except OSError:
+        return False
+
+
+def _static_magmom(stat, irp):
+    """[V191] ICHARG=2 从头起算的静态段：MAGMOM 换成弛豫段的收敛磁态（ISPIN=2 才动）。"""
+    _inc = kc.parse_incar(stat)
+    if str(_inc.get("ISPIN", "1")).split()[0] != "2":
+        return stat
+    irp = Path(irp)
+    nions = kc.poscar_nions(irp / "CONTCAR.relax") or kc.poscar_nions(irp / "POSCAR")
+    new, why = kc.relaxed_magmom(irp, _inc.get("MAGMOM"), nions)
+    print("[IONRELAX] %s：静态段 MAGMOM %s%s" % (irp.parent.name, why,
+                                              (" -> %s" % new) if new is not None else ""))
+    if new is None:
+        return stat
+    return _set_incar_tag(stat, "MAGMOM", new + "     # [V191] 弛豫段的收敛磁态（原初猜 %s）"
+                          % " ".join(str(_inc.get("MAGMOM", "缺省")).split()))
+
+
+def static_only_incar(stat, wave=False, irp=None, use_chg=True):
+    """静态段 INCAR -> 只补静态段用的版本：ISTART=0，LVHAR=.TRUE.；其余不动。
+    起步电子态（[V191]）：irp（ionrelax/ 目录）里有弛豫段留下的 CHGCAR 且 use_chg -> ICHARG=1 从它接；
+    否则 ICHARG=2 从头起算，irp 给了就把 MAGMOM 换成弛豫段的收敛磁态（_static_magmom）。
     wave：[0061-m] 同时写 WAVECAR（LWAVE=.TRUE.）。"""
-    for _k, _v in (("ISTART", "0"), ("ICHARG", "2")):
+    chg = irp is not None and use_chg and _nonempty(Path(irp) / "CHGCAR")
+    for _k, _v in (("ISTART", "0"), ("ICHARG", "1" if chg else "2")):
         stat = _set_incar_tag(stat, _k, _v)
+    if irp is not None and not chg:
+        stat = _static_magmom(stat, irp)
     if not re.search(r"^[ \t]*LVHAR[ \t]*=[ \t]*\.?T", stat, re.MULTILINE | re.IGNORECASE):
         stat = _set_incar_tag(stat, "LVHAR", ".TRUE.")          # 本来就开着的不碰
     if wave:
@@ -601,7 +665,8 @@ def static_only_pending(irp):
     """上一次 gen 已转入"只补静态段"、静态段还没跑完：有 OUTCAR.nolocpot-* 归档 + CONTCAR.relax，
     静态段 OUTCAR 没有收尾标志。这种目录 retry 时继续只补静态段，不能整个重建（会毁掉弛豫段结果）。"""
     irp = Path(irp)
-    if not any(any(irp.glob("OUTCAR.%s-*" % _t)) for _t in (NOLOCPOT_TAG, NOWAVE_TAG, STATIC_DEAD_TAG)) \
+    if not any(any(irp.glob("OUTCAR.%s-*" % _t)) for _t in (NOLOCPOT_TAG, NOWAVE_TAG, STATIC_DEAD_TAG,
+                                                             BADSTATIC_TAG)) \
             or not (irp / "CONTCAR.relax").is_file():
         return False
     _oc = irp / "OUTCAR"
@@ -631,10 +696,26 @@ def relax_done_static_dead(irp):
         return False
 
 
-def prepare_static_only(d, wave=False, why="缺 LOCPOT", tag=None):
+def static_state_issue(irp):
+    """[V191] 已收尾的静态段：SCF 跑满 NELM 没收敛，或末步总磁矩与弛豫段末步不是同一个磁态 -> 原因；
+    正常 / 判不了（没有 OSZICAR、ISPIN=1 没有 mag=）-> None。"""
+    irp = Path(irp)
+    st = kc.scf_state(irp)
+    if st is None:
+        return None
+    if not st["scf_ok"]:
+        return "SCF 跑满 NELM=%d 没收敛" % st["nelm"]
+    rx = kc.oszicar_state(irp / "OSZICAR.relax")
+    if rx is not None and not kc.same_mag_state(st["mag"], rx["mag"]):
+        return "磁态与弛豫段不符（总磁矩：静态段 %.2f、弛豫段 %.2f μB）" % (st["mag"], rx["mag"])
+    return None
+
+
+def prepare_static_only(d, wave=False, why="缺 LOCPOT", tag=None, use_chg=True):
     """deform-NN/：转成"只补 ionrelax 静态段"。成功返回 True；弛豫段结构都找不到时返回 False（调用方整个重建）。
     wave：[0061-m] 静态段同时写 WAVECAR；why：打印用的原因（缺 LOCPOT / 缺 deform_wave.h5）。
-    归档后缀：缺 LOCPOT 用 nolocpot，只缺波函数用 nowave（static_only_pending 两种都认）。"""
+    归档后缀：缺 LOCPOT 用 nolocpot，只缺波函数用 nowave（static_only_pending 两种都认）。
+    use_chg：[V191] 有弛豫段 CHGCAR 就 ICHARG=1 从它接（False：一律按弛豫段磁态 ICHARG=2 从头起算）。"""
     d = Path(d)
     irp = d / "ionrelax"
     if not (irp / "CONTCAR.relax").is_file():
@@ -648,7 +729,9 @@ def prepare_static_only(d, wave=False, why="缺 LOCPOT", tag=None):
         stat = _st.read_text(encoding="utf-8")
     else:
         stat = _ionrelax_incars((d / "INCAR").read_text(encoding="utf-8"))[1]
-    _st.write_text(static_only_incar(stat, wave), encoding="utf-8", newline="\n")
+    stat = static_only_incar(stat, wave, irp, use_chg)
+    _st.write_text(stat, encoding="utf-8", newline="\n")
+    _chg = kc.parse_incar(stat).get("ICHARG", "").split()[:1] == ["1"]
     _ts = _time.strftime("%Y%m%d%H%M%S")
     _tag = tag or (NOLOCPOT_TAG if "LOCPOT" in why else NOWAVE_TAG)
     _moved = []
@@ -671,16 +754,20 @@ def prepare_static_only(d, wave=False, why="缺 LOCPOT", tag=None):
         "cd ionrelax || exit 1\n"
         "cp CONTCAR.relax POSCAR || exit 1\n"
         "cp INCAR.static INCAR || exit 1\n"
-        "set -o pipefail\n"
+        + ("[ -s CHGCAR ] || { echo \"ERROR: INCAR.static 是 ICHARG=1，但弛豫段的 CHGCAR 不在了"
+           "（retry S7_deform 会改成按弛豫段磁态从头起算）\" >&2; exit 1; }\n" if _chg else "")
+        + "set -o pipefail\n"
         + _mpi + " 2>&1 | tee vasp.static.log | tail -20\n"
         "_rc=$?\n"
         "[ \"$_rc\" -eq 0 ] || exit \"$_rc\"\n"
         "[ -s LOCPOT ] || { echo \"ERROR: 静态段跑完仍没有 LOCPOT（查 INCAR 的 LVHAR）\" >&2; exit 1; }\n"
+        "rm -f CHGCAR            # [V191] 弛豫段的电荷/磁化密度只给静态段起步用\n"
     )
     (d / "submit.sh").write_text("\n".join(head).rstrip() + "\n" + body,
                                  encoding="utf-8", newline="\n")
-    print("[IONRELAX] %s：弛豫段已完成、%s -> 只补静态段（归档 %s 为 *.%s-%s；submit.sh 只跑静态段）"
-          % (d.name, why, "/".join(_moved) or "无", _tag, _ts))
+    print("[IONRELAX] %s：弛豫段已完成、%s -> 只补静态段（归档 %s 为 *.%s-%s；submit.sh 只跑静态段；%s）"
+          % (d.name, why, "/".join(_moved) or "无", _tag, _ts,
+             "ICHARG=1 接弛豫段 CHGCAR" if _chg else "ICHARG=2 按弛豫段磁态起步"))
     return True
 
 
@@ -690,7 +777,8 @@ def _build_ionrelax(d: Path, encut, subs, submit_body, ediffg=None, wave=False):
     E1 必须用「离子弛豫后的内坐标」取带边能量（刚性形变时原子不动，MoS2 xx 的 E1 偏小 29%）。
     S7.1 的两份 h5（芯势口径 deformation.h5、真空口径 deformation_vac.h5）与 band_edges.json
     都优先读 ionrelax/；本级刚性单点只剩 ck_deform 的完成判据在用。
-    弛豫段 EDIFF=1E-6 省时间，静态段读 CONTCAR+WAVECAR 取 EDIFF=1E-8 精确带边 + LOCPOT。
+    弛豫段 EDIFF=1E-6 省时间，静态段读 CONTCAR + 弛豫段 CHGCAR（[V191] ICHARG=1：电荷和磁化密度都接上，
+    不再按 MAGMOM 初猜从头起算）取 EDIFF=1E-8 精确带边 + LOCPOT。
     弛豫段 ISYM=IONRELAX_ISYM（默认 2，放开对称性提速）；静态段保持 ISYM=0 —— E1 逐 k
     差分要求各形变目录 IBZ 一致。不加选择性动力学：原子三个方向都放开（2D 的层厚要能随面内应变弛豫）。
     力判据 ediffg（默认 IONRELAX_EDIFFG = -0.005）—— 详见文件头该常量的注释。"""
@@ -730,9 +818,12 @@ def _build_ionrelax(d: Path, encut, subs, submit_body, ediffg=None, wave=False):
         "[ \"$_relax_rc\" -eq 0 ] || exit \"$_relax_rc\"\n"
         "set +o pipefail\n"
         "cp CONTCAR POSCAR\n"
+        "[ -s CHGCAR ] || { echo \"ERROR: 弛豫段没留下 CHGCAR（静态段 ICHARG=1 要从它接磁态）\" >&2; exit 1; }\n"
         "cp INCAR.static INCAR\n"
         + _mpi + " 2>&1 | tail -20\n"
         "cp CONTCAR POSCAR\n"
+        "# [V191] 静态段收尾才删弛豫段的 CHGCAR（没收尾时 retry 只补静态段还要用它起步）\n"
+        "grep -q \"General timing and accounting informations\" OUTCAR 2>/dev/null && rm -f CHGCAR\n"
     )
     sub = sub.rstrip() + extra
     (d / "submit.sh").write_text(sub, encoding="utf-8", newline="\n")
@@ -938,8 +1029,8 @@ def main():
                 if prepare_static_only(out / _name, _wave, "静态段补算未完成"):
                     _static.append(_name)
                     continue
-            # [0067] 弛豫段已完成、静态段被杀：只补静态段（从头起算，ISYM=0 的静态段本来也接不上 ISYM=2 弛豫段的
-            #   WAVECAR）。弛豫段的输入要与现行一致（vasprun.xml.relax 的回显）；判不了（回显缺失）时保留弛豫结果并告警
+            # [0067] 弛豫段已完成、静态段被杀：只补静态段（[V191] 弛豫段 CHGCAR 还在就 ICHARG=1 接它，否则按弛豫段的
+            #   收敛磁态从头起算）。弛豫段的输入要与现行一致（vasprun.xml.relax 的回显）；判不了（回显缺失）时保留弛豫结果并告警
             #   —— 宁可让用户看一眼，也不默默删掉一天的弛豫。
             if relax_done_static_dead(_irp) and _ionrelax_grid_ok(out, _name):
                 _relax_now, _stat_now = _ionrelax_incars((out / _name / "INCAR").read_text(encoding="utf-8"),
@@ -977,10 +1068,11 @@ def main():
                 #   主单点 INCAR 换了（如补 LVHAR）而 ionrelax 照旧复用，E1 与真空对齐就混了两套输入。
                 #   [0061-m] LWAVE 不算：静态段新开了波函数输出，旧结果的物理输入没变（缺波函数另走只补静态段）。
                 _stat_now = _ionrelax_incars((out / _name / "INCAR").read_text(encoding="utf-8"), wave=_wave)[1]
-                _why = _mismatch_wo_lwave(_stat_now, _irp / "vasprun.xml")
+                _why = _mismatch_wo_lwave(_stat_now, _irp / "vasprun.xml", static=True)
                 # [patch_ionrelax_locpot] 只补过静态段的，回显是 ISTART=0/ICHARG=2：按那个版本比一致就算一致，
                 #   否则补完静态段后的下一次 retry 会把它当"旧 INCAR"整个重建。
-                if _why and _mismatch_wo_lwave(static_only_incar(_stat_now, _wave), _irp / "vasprun.xml") == []:
+                if _why and _mismatch_wo_lwave(static_only_incar(_stat_now, _wave), _irp / "vasprun.xml",
+                                               static=True) == []:
                     _why = []
                 if _why:
                     print("[IONRELAX] %s：已有结果是旧 INCAR 跑的（%s），重建。"
@@ -996,6 +1088,17 @@ def main():
                         print("[IONRELAX] %s：已有结果的 EDIFFG=%s 比现在的 %s 松，IONRELAX_REBUILD_LOOSE=true -> 重建。"
                               % (_name, _old_ed, _ir_ediffg))
                         _done = False
+            # [V191] 静态段收尾了但 SCF 没收敛 / 磁态与弛豫段不符：只补一次静态段（按弛豫段磁态起步）。
+            #   不能用这份残留的 CHGCAR（若有，是这次坏掉的静态段写的）。补过一次仍如此 -> 只告警，S7.1 会拦。
+            _bad = _done and static_state_issue(_irp)
+            if _bad:
+                if any(_irp.glob("OUTCAR.%s-*" % BADSTATIC_TAG)):
+                    print("[WARN] [V191] %s：静态段%s；已按弛豫段磁态补算过一次仍如此，不再自动补 —— "
+                          "看 ionrelax/OSZICAR，必要时在本步 step.conf 的 [incar.final] 定 MAGMOM / 混合参数再 retry。"
+                          % (_name, _bad))
+                elif prepare_static_only(out / _name, _wave, "静态段" + _bad, tag=BADSTATIC_TAG, use_chg=False):
+                    _static.append(_name)
+                    continue
             # [0061-m] 缺 deform_wave.h5（且 S7.1 还没投影过）也只补静态段：与缺 LOCPOT 一并补一次
             _need_lp = _done and static_only_wanted(_irp, dim, _ref, _vac_h5_existed)
             _need_wv = _done and _wave and not (_irp / WAVE_H5).is_file() and not _mat_h5_existed

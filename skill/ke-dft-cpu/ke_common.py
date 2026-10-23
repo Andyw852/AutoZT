@@ -1840,6 +1840,193 @@ def ionrelax_force_check(ionrelax_dir):
     return rec
 
 
+# ---- [V191] 形变构型的磁态 / SCF 收敛核对（S7 gen 与 S7.1 共用）----
+# 起因（2026-10-23 LS，8 个 Cr）：ionrelax 静态段从上游 INCAR 的高自旋【初猜】（MAGMOM = 8*4 8*0 8*0）从头起算，
+#   而同一构型的弛豫段已收敛到非磁（mag≈0）。ISYM=0 + EDIFF=1E-8 下每个 Cr 的磁矩都能各自晃，SCF 在几个磁态之间
+#   来回跳（能量 -115 ~ -183 eV 振荡，510 s/电子步），永不收敛。就算收敛了，落到与弛豫段 / 未形变构型不同的磁态，
+#   带边差里就混进了磁性跃迁，形变势没有意义。
+#   OSZICAR 只有总磁矩：铁磁 <-> 非磁、磁矩大小变了都分得出；反铁磁 <-> 非磁（总磁矩都是 0）分不出。
+MAG_STATE_TOL_ABS = 0.5      # μB/胞：总磁矩差 > max(这个, MAG_STATE_TOL_REL·max|M|) -> 不是同一个磁态
+MAG_STATE_TOL_REL = 0.2      #   （1% 应变下铁磁金属的磁矩会连续变一点，不能卡死在 0.1 μB）
+MAG_ZERO_TOL = 0.1           # 与 S2.1 同口径：|M| 低于此视作非磁
+NELM_DEFAULT = 60            # VASP 默认 NELM
+_OSZ_ELEC = re.compile(r"^\s*[A-Za-z]{2,3}\s?:\s+(\d+)\s")
+_OSZ_ION = re.compile(r"^\s*(\d+)\s+F=\s*(\S+)")
+_NUM = r"[-+]?(?:\d+\.?\d*|\.\d+)(?:[eEdD][-+]?\d+)?"
+
+
+def oszicar_state(path):
+    """OSZICAR -> 最后一个离子步 {"mag": 总磁矩（μB；ISPIN=1 时 None）, "nelec": 该步电子步数, "n_ionic": 离子步数,
+    "tail_nelec": 最后一个 F= 之后还在跑的电子步数}；没有 F= 行（没跑完第一步）或读不到 -> None。
+    非共线的 mag= 是三个分量，取模。"""
+    try:
+        lines = Path(path).read_text(encoding="utf-8", errors="ignore").splitlines()
+    except OSError:
+        return None
+    last, n_ionic, trailing = None, 0, 0
+    for ln in lines:
+        m = _OSZ_ELEC.match(ln)
+        if m:
+            trailing = int(m.group(1))
+            continue
+        m = _OSZ_ION.match(ln)
+        if not m:
+            continue
+        n_ionic += 1
+        mag = None
+        mg = re.search(r"mag=\s*((?:%s\s*){1,3})" % _NUM, ln)
+        if mg:
+            comps = [float(x.replace("d", "e").replace("D", "e")) for x in re.findall(_NUM, mg.group(1))]
+            mag = comps[0] if len(comps) == 1 else sum(c * c for c in comps) ** 0.5
+        try:
+            energy = float(m.group(2).replace("d", "e").replace("D", "e"))
+        except ValueError:
+            energy = None
+        last = {"F": energy, "mag": mag, "nelec": trailing}
+        trailing = 0
+    if last is None:
+        return None
+    last["n_ionic"] = n_ionic
+    last["tail_nelec"] = trailing
+    return last
+
+
+def scf_state(calc_dir, oszicar="OSZICAR", incar="INCAR"):
+    """一个计算目录末步的磁态与 SCF 收敛：oszicar_state 的字段 + {"nelm", "scf_ok"}（电子步数到了 NELM = 没收敛）。
+    读不到 OSZICAR 末步 -> None。"""
+    st = oszicar_state(Path(calc_dir) / oszicar)
+    if st is None:
+        return None
+    nelm = incar_value(Path(calc_dir) / incar, "NELM")
+    st["nelm"] = int(nelm) if nelm else NELM_DEFAULT
+    st["scf_ok"] = st["nelec"] < st["nelm"]
+    return st
+
+
+def same_mag_state(m1, m2):
+    """两个总磁矩是不是同一个磁态（任一为 None = 判不了，按一致处理）。"""
+    if m1 is None or m2 is None:
+        return True
+    return abs(m1 - m2) <= max(MAG_STATE_TOL_ABS, MAG_STATE_TOL_REL * max(abs(m1), abs(m2)))
+
+
+def scf_state_issues(states, ref, extra_refs=None):
+    """states：{构型名: scf_state(...) 或 None}；ref：参考构型名（undeformed）；extra_refs：{名字: scf_state}
+    （S3 等别的步骤，只比磁态）。返回问题列表（空 = 都一致）。"""
+    issues = []
+    for k, st in sorted(states.items()):
+        if st is not None and not st["scf_ok"]:
+            issues.append("%s：SCF 跑满 NELM=%d 没收敛（末步 %d 个电子步）" % (k, st["nelm"], st["nelec"]))
+    r = states.get(ref)
+    m_ref = r["mag"] if r else None
+    if m_ref is None:
+        return issues
+    for k, st in sorted(states.items()):
+        if k != ref and st is not None and not same_mag_state(st["mag"], m_ref):
+            issues.append("%s：总磁矩 %.2f μB，与 %s 的 %.2f μB 不是同一个磁态" % (k, st["mag"], ref, m_ref))
+    for k, st in sorted((extra_refs or {}).items()):
+        if st is not None and not same_mag_state(st["mag"], m_ref):
+            issues.append("%s：总磁矩 %.2f μB，与 %s 的 %.2f μB 不是同一个磁态（形变势要映射到它的能带上）"
+                          % (k, st["mag"], ref, m_ref))
+    return issues
+
+
+def expand_magmom(text):
+    """MAGMOM 文本 -> 浮点列表（展开 n*v）。解析不了 -> None。"""
+    out = []
+    try:
+        for t in str(text).split():
+            n, star, v = t.partition("*")
+            if star:
+                out.extend([float(v)] * int(n))
+            else:
+                out.append(float(t))
+    except ValueError:
+        return None
+    return out
+
+
+def compress_magmom(vals):
+    """浮点列表 -> MAGMOM 文本（连续相同值写成 n*v，保留 3 位小数）。"""
+    runs = []
+    for v in vals:
+        v = round(float(v), 3) + 0.0                 # + 0.0：-0.0 -> 0.0
+        if runs and runs[-1][1] == v:
+            runs[-1][0] += 1
+        else:
+            runs.append([1, v])
+    return " ".join(("%d*%g" % (n, v)) if n > 1 else ("%g" % v) for n, v in runs)
+
+
+def outcar_ion_moments(outcar, nions):
+    """OUTCAR 最后一个 "magnetization (x)" 块的逐离子 tot 磁矩（LORBIT>=10 才有）；没有 / 个数不够 -> None。"""
+    try:
+        lines = Path(outcar).read_text(encoding="utf-8", errors="ignore").splitlines()
+    except OSError:
+        return None
+    last = None
+    for i, ln in enumerate(lines):
+        if ln.strip().startswith("magnetization (x)"):
+            last = i
+    if last is None:
+        return None
+    moms, seen = [], False
+    for ln in lines[last + 1:]:
+        t = ln.split()
+        if t and t[0].isdigit():
+            try:
+                moms.append(float(t[-1]))
+            except ValueError:
+                return None
+            seen = True
+        elif seen:
+            break
+    return moms[:nions] if len(moms) >= nions else None
+
+
+def poscar_nions(path):
+    """POSCAR/CONTCAR 的原子总数（读不到 -> None）。"""
+    try:
+        ln = Path(path).read_text(encoding="utf-8", errors="ignore").splitlines()
+        row = ln[5].split()
+        if not (row and row[0].isdigit()):
+            row = ln[6].split()
+        return sum(int(x) for x in row)
+    except (OSError, IndexError, ValueError):
+        return None
+
+
+def relaxed_magmom(irp, magmom_text, nions):
+    """[V191] ionrelax 弛豫段收敛后的磁态 -> 静态段从头起算（ICHARG=2）用的共线 MAGMOM。
+    返回 (新 MAGMOM 文本 或 None=不改, 说明)。
+      1) OUTCAR.relax 有逐离子磁矩（LORBIT>=10）-> 直接用；
+      2) 否则用 OSZICAR.relax 末步的总磁矩 M 修初猜：
+           初猜全同号（铁磁型）：|M| < MAG_ZERO_TOL -> 全 0（弛豫段塌缩到非磁）；否则按 M/ΣMAGMOM 等比缩放；
+           初猜有正有负（反铁磁型）：不改（总磁矩分不出反铁磁与非磁）；
+      3) 都读不到、非共线（3·NIONS 个分量）、个数对不上 -> 不改。"""
+    irp = Path(irp)
+    init = expand_magmom(magmom_text) if magmom_text is not None else ([1.0] * nions if nions else None)
+    if not nions or init is None or len(init) != nions:
+        return None, "MAGMOM 个数与原子数对不上（非共线？），沿用 INCAR 的 MAGMOM"
+    ion = outcar_ion_moments(irp / "OUTCAR.relax", nions)
+    if ion is not None:
+        return compress_magmom(ion), "取弛豫段 OUTCAR.relax 的逐离子收敛磁矩"
+    st = oszicar_state(irp / "OSZICAR.relax")
+    if st is None or st["mag"] is None:
+        return None, "读不到弛豫段的收敛磁矩（OSZICAR.relax），沿用 INCAR 的 MAGMOM"
+    m = st["mag"]
+    pos, neg = any(v > 1e-6 for v in init), any(v < -1e-6 for v in init)
+    if pos and neg:
+        return None, "初猜是反铁磁型，弛豫段总磁矩 %.3f μB 分不出是否塌缩，沿用 INCAR 的 MAGMOM" % m
+    if not (pos or neg):
+        return None, "初猜全 0，沿用"
+    if abs(m) < MAG_ZERO_TOL:
+        return compress_magmom([0.0] * nions), "弛豫段已塌缩到非磁（总磁矩 %.3f μB）-> 静态段从非磁起步" % m
+    s = sum(init)
+    return compress_magmom([v * m / s for v in init]), \
+        "初猜按弛豫段总磁矩 %.2f μB 等比缩放（原初猜合计 %.2f μB）" % (m, s)
+
+
 # ---- [PATCH-IONRELAX] 应变配对反解（gen 与 step7b 共用，单一真源）----
 def read_lattice_matrix(poscar):
     """读 POSCAR 晶格矩阵（3x3，含 scale）。纯 numpy，不碰 pymatgen。"""
