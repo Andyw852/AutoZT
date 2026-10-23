@@ -1,0 +1,1390 @@
+{
+  "cell_c_A": 34.879,
+  "functional": {
+    "func": "pbesol",
+    "label": "PBEsol（GGA=PS，无色散修正）",
+    "source": "step1_opt/workflow_method.txt",
+    "note": "和文献比较前先核对文献用的泛函：GGA=PS 是 PBEsol，不是 PBE。PBEsol 的晶格通常比 PBE 小约 1%，C_2D 随之偏硬，m*、形变势和谷间能差也会变，不能直接当作 PBE 结果比。"
+  },
+  "layer_normal": [
+    -0.0,
+    0.0,
+    1.0
+  ],
+  "layer_thickness": {
+    "source_file": "step3_uniform/CONTCAR",
+    "z_span_A": 3.1201,
+    "top_species": "S",
+    "top_vdw_radius_A": 1.8,
+    "bottom_species": "S",
+    "bottom_vdw_radius_A": 1.8,
+    "vdw_radii_source": "Bondi 1964 / Alvarez 2013",
+    "thickness_A": 6.7201,
+    "method": "vdw",
+    "thickness_used_A": 6.7201
+  },
+  "elastic_rescale_factor_c_over_t": 5.1903,
+  "elastic_constant_raw_GPa": [
+    [
+      41.319,
+      9.505,
+      0.064,
+      0.0,
+      0.0,
+      0.0
+    ],
+    [
+      9.505,
+      41.319,
+      0.064,
+      0.0,
+      0.0,
+      0.0
+    ],
+    [
+      0.064,
+      0.064,
+      0.357,
+      0.0,
+      0.0,
+      0.0
+    ],
+    [
+      0.0,
+      0.0,
+      0.0,
+      0.473,
+      0.0,
+      0.0
+    ],
+    [
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.473,
+      0.0
+    ],
+    [
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      15.907
+    ]
+  ],
+  "elastic_constant_rescaled_GPa": null,
+  "elastic_constant_convention": "standard Voigt (XX YY ZZ YZ XZ XY)，已由 read_elastic 从 VASP 的 (XX YY ZZ XY YZ ZX) 重排",
+  "elastic_constant_note": "插件用原始 slab 值（= C_2D/c），不乘 c/t；c/t 只用于 σ/κ 的厚度归一化（见 elastic_rescale_factor_c_over_t）",
+  "eps_inf_slab": [
+    [
+      3.426845,
+      0.0,
+      0.0
+    ],
+    [
+      -0.0,
+      3.426845,
+      -0.0
+    ],
+    [
+      0.0,
+      -0.0,
+      1.171692
+    ]
+  ],
+  "eps_static_slab": [
+    [
+      3.462241,
+      0.0,
+      0.0
+    ],
+    [
+      -0.0,
+      3.462241,
+      -0.0
+    ],
+    [
+      0.0,
+      -0.0,
+      1.171861
+    ]
+  ],
+  "eps_inf_override": null,
+  "r_inf_delta_r_check": {
+    "available": true,
+    "eps_inf_inplane_mean": 3.4268,
+    "eps_static_inplane_mean": 3.4622,
+    "r_inf_A": 42.323,
+    "r_0_A": 42.9403,
+    "delta_r_A": 0.6173,
+    "delta_r_over_r_inf": 0.01459,
+    "definition": "r = c*(eps_slab,inplane - 1)/2 (Angstrom); Delta r = r0 - r_inf = c*(eps0-eps_inf)/2",
+    "anchors": {
+      "MoS2": {
+        "r_inf_A": 46.5,
+        "delta_r_A": 0.53
+      },
+      "h-BN": {
+        "r_inf_A": 7.64,
+        "delta_r_A": 2.84
+      }
+    },
+    "delta_r_crosscheck": {
+      "route1_dielectric_A": 0.617289,
+      "route2_mode_sum_A": 0.617319,
+      "route2_tensor_A": [
+        [
+          0.617319,
+          0.0
+        ],
+        [
+          0.0,
+          0.617319
+        ]
+      ],
+      "deviation_pct": 0.005,
+      "modes_used": 6,
+      "acoustic_removed": 3,
+      "r_inf_A": 42.323,
+      "eps_inf_inplane": 3.42685,
+      "eps_ionic_inplane": 0.0354,
+      "anchors_literature": {
+        "MoS2_delta_r_A": 0.53,
+        "MoS2_r_inf_A": 46.5
+      },
+      "note": "路线①= c(ε0-ε∞)/2（DFPT 介电）；路线②= (2π/A)ΣX²/ω²（声子模求和，原子单位、M 用电子质量、e 用质量加权归一的本征矢）。两条应一致；差几个百分点以上说明本征矢口径或声学模剔除有问题。"
+    }
+  },
+  "deform_geometry": "ionrelax(in-plane)+clamped(out-of-plane)",
+  "adp_d_scale": 0.7699605508361771,
+  "adp_d_scale_note": "strain_poisson（1 - C12/C11 = 1 - 9.505/41.319 = 0.7700）",
+  "za_coupling": {
+    "sigma_h": true,
+    "structure": "step3_uniform/POSCAR",
+    "symprec": 0.01,
+    "note": "有水平镜面 σh：ZA 一阶耦合被对称性禁止，只算面内声学支成立"
+  },
+  "eps_env": 1.0,
+  "imp_distance_A": 0.0,
+  "pop_lo_dispersion": true,
+  "mechanisms_2d": [
+    "ADP",
+    "IMP",
+    "POP",
+    "ODP",
+    "IVS"
+  ],
+  "dp_optical": {
+    "electron": {
+      "channels": [
+        {
+          "from": "K",
+          "to": "K",
+          "kind": "intra",
+          "D_eV_A": 5.75979064068,
+          "hw_meV": 50.54,
+          "source": "dfpt_odp"
+        },
+        {
+          "from": "Q",
+          "to": "Q",
+          "kind": "intra",
+          "D_eV_A": 3.90930424832,
+          "hw_meV": 50.54,
+          "source": "dfpt_odp"
+        },
+        {
+          "from": "K",
+          "to": "K",
+          "kind": "inter_star",
+          "D_eV_A": 1.73109273308,
+          "hw_meV": 41.89,
+          "source": "dfpt_ivs"
+        },
+        {
+          "from": "K",
+          "to": "Q",
+          "kind": "inter",
+          "D_eV_A": 0.070195773198,
+          "hw_meV": 17.69,
+          "source": "dfpt_ivs"
+        },
+        {
+          "from": "K",
+          "to": "Q",
+          "kind": "inter",
+          "D_eV_A": 1.14787258648,
+          "hw_meV": 19.45,
+          "source": "dfpt_ivs"
+        },
+        {
+          "from": "K",
+          "to": "Q",
+          "kind": "inter",
+          "D_eV_A": 0.714566885762,
+          "hw_meV": 23.41,
+          "source": "dfpt_ivs"
+        },
+        {
+          "from": "K",
+          "to": "Q",
+          "kind": "inter",
+          "D_eV_A": 3.4308185234,
+          "hw_meV": 29.31,
+          "source": "dfpt_ivs"
+        },
+        {
+          "from": "K",
+          "to": "Q",
+          "kind": "inter",
+          "D_eV_A": 0.819843660735,
+          "hw_meV": 43.98,
+          "source": "dfpt_ivs"
+        },
+        {
+          "from": "K",
+          "to": "Q",
+          "kind": "inter",
+          "D_eV_A": 2.16510998025,
+          "hw_meV": 45.9,
+          "source": "dfpt_ivs"
+        },
+        {
+          "from": "K",
+          "to": "Q",
+          "kind": "inter",
+          "D_eV_A": 0.538859459593,
+          "hw_meV": 47.38,
+          "source": "dfpt_ivs"
+        },
+        {
+          "from": "K",
+          "to": "Q",
+          "kind": "inter",
+          "D_eV_A": 3.84525720531,
+          "hw_meV": 51.04,
+          "source": "dfpt_ivs"
+        },
+        {
+          "from": "Q",
+          "to": "K",
+          "kind": "inter",
+          "D_eV_A": 0.070195773198,
+          "hw_meV": 17.69,
+          "source": "dfpt_ivs"
+        },
+        {
+          "from": "Q",
+          "to": "K",
+          "kind": "inter",
+          "D_eV_A": 1.14787258648,
+          "hw_meV": 19.45,
+          "source": "dfpt_ivs"
+        },
+        {
+          "from": "Q",
+          "to": "K",
+          "kind": "inter",
+          "D_eV_A": 0.714566885762,
+          "hw_meV": 23.41,
+          "source": "dfpt_ivs"
+        },
+        {
+          "from": "Q",
+          "to": "K",
+          "kind": "inter",
+          "D_eV_A": 3.4308185234,
+          "hw_meV": 29.31,
+          "source": "dfpt_ivs"
+        },
+        {
+          "from": "Q",
+          "to": "K",
+          "kind": "inter",
+          "D_eV_A": 0.819843660735,
+          "hw_meV": 43.98,
+          "source": "dfpt_ivs"
+        },
+        {
+          "from": "Q",
+          "to": "K",
+          "kind": "inter",
+          "D_eV_A": 2.16510998025,
+          "hw_meV": 45.9,
+          "source": "dfpt_ivs"
+        },
+        {
+          "from": "Q",
+          "to": "K",
+          "kind": "inter",
+          "D_eV_A": 0.538859459593,
+          "hw_meV": 47.38,
+          "source": "dfpt_ivs"
+        },
+        {
+          "from": "Q",
+          "to": "K",
+          "kind": "inter",
+          "D_eV_A": 3.84525720531,
+          "hw_meV": 51.04,
+          "source": "dfpt_ivs"
+        },
+        {
+          "from": "Q",
+          "to": "Q",
+          "kind": "inter_star",
+          "D_eV_A": 0.482638341526,
+          "hw_meV": 17.69,
+          "source": "dfpt_ivs"
+        },
+        {
+          "from": "Q",
+          "to": "Q",
+          "kind": "inter_star",
+          "D_eV_A": 1.42197095275,
+          "hw_meV": 23.12,
+          "source": "dfpt_ivs"
+        },
+        {
+          "from": "Q",
+          "to": "Q",
+          "kind": "inter_star",
+          "D_eV_A": 2.63767244324,
+          "hw_meV": 23.41,
+          "source": "dfpt_ivs"
+        },
+        {
+          "from": "Q",
+          "to": "Q",
+          "kind": "inter_star",
+          "D_eV_A": 2.6057748692,
+          "hw_meV": 29.23,
+          "source": "dfpt_ivs"
+        },
+        {
+          "from": "Q",
+          "to": "Q",
+          "kind": "inter_star",
+          "D_eV_A": 0.939337411771,
+          "hw_meV": 41.89,
+          "source": "dfpt_ivs"
+        },
+        {
+          "from": "Q",
+          "to": "Q",
+          "kind": "inter_star",
+          "D_eV_A": 2.32149152148,
+          "hw_meV": 44.05,
+          "source": "dfpt_ivs"
+        },
+        {
+          "from": "Q",
+          "to": "Q",
+          "kind": "inter_star",
+          "D_eV_A": 1.10259322964,
+          "hw_meV": 47.38,
+          "source": "dfpt_ivs"
+        },
+        {
+          "from": "Q",
+          "to": "Q",
+          "kind": "inter_star",
+          "D_eV_A": 0.278591883599,
+          "hw_meV": 47.87,
+          "source": "dfpt_ivs"
+        },
+        {
+          "from": "Q",
+          "to": "Q",
+          "kind": "inter_star",
+          "D_eV_A": 1.34405816087,
+          "hw_meV": 49.28,
+          "source": "dfpt_ivs"
+        },
+        {
+          "from": "Q",
+          "to": "Q",
+          "kind": "inter_star",
+          "D_eV_A": 2.17062073696,
+          "hw_meV": 51.03,
+          "source": "dfpt_ivs"
+        }
+      ],
+      "valleys": [
+        {
+          "label": "K",
+          "g": 2,
+          "k_frac": [
+            [
+              0.333333,
+              0.333333,
+              0.0
+            ],
+            [
+              -0.333333,
+              -0.333333,
+              0.0
+            ]
+          ],
+          "dE_eV": 0.0,
+          "k_grid": [
+            [
+              0.333333,
+              0.333333,
+              0.0
+            ],
+            [
+              -0.333333,
+              -0.333333,
+              0.0
+            ]
+          ]
+        },
+        {
+          "label": "Q",
+          "g": 6,
+          "k_frac": [
+            [
+              0.170083,
+              0.170083,
+              0.0
+            ],
+            [
+              0.170083,
+              -0.340167,
+              0.0
+            ],
+            [
+              0.340167,
+              -0.170083,
+              0.0
+            ],
+            [
+              -0.340167,
+              0.170083,
+              0.0
+            ],
+            [
+              -0.170083,
+              0.340167,
+              0.0
+            ],
+            [
+              -0.170083,
+              -0.170083,
+              0.0
+            ]
+          ],
+          "dE_eV": 0.1277,
+          "k_grid": [
+            [
+              0.166667,
+              0.166667,
+              0.0
+            ],
+            [
+              0.166667,
+              -0.333333,
+              0.0
+            ],
+            [
+              0.333333,
+              -0.166667,
+              0.0
+            ],
+            [
+              -0.333333,
+              0.166667,
+              0.0
+            ],
+            [
+              -0.166667,
+              0.333333,
+              0.0
+            ],
+            [
+              -0.166667,
+              -0.166667,
+              0.0
+            ]
+          ]
+        }
+      ],
+      "valleys_source": "step8.2_dpt/dpt_result.json",
+      "frozen": {
+        "digest": "71f52735f38a9e6f",
+        "n_channels": 2,
+        "dropped_below_dmin": [
+          {
+            "valley": "K",
+            "hw_meV": 35.3901,
+            "D_eV_A": 0.00841
+          },
+          {
+            "valley": "Q",
+            "hw_meV": 35.3901,
+            "D_eV_A": 0.00841
+          }
+        ],
+        "merge_notes": [],
+        "summary": "K 5.80 eV/Å@50.3 meV, Q 3.82 eV/Å@50.3 meV",
+        "superseded_by": "dfpt"
+      },
+      "ivs_dfpt": {
+        "digest": "0885233b11ad6e2a",
+        "n_channels": 27,
+        "n_odp_channels": 2,
+        "dropped_below_dmin": [
+          {
+            "from": "K",
+            "to": "K",
+            "kind": "inter_star",
+            "hw_meV": 22.33,
+            "D_eV_A": 4.82053984065e-05
+          },
+          {
+            "from": "K",
+            "to": "K",
+            "kind": "inter_star",
+            "hw_meV": 23.12,
+            "D_eV_A": 6.52735789544e-06
+          },
+          {
+            "from": "K",
+            "to": "K",
+            "kind": "inter_star",
+            "hw_meV": 29.21,
+            "D_eV_A": 0.000145935784621
+          },
+          {
+            "from": "K",
+            "to": "K",
+            "kind": "inter_star",
+            "hw_meV": 40.33,
+            "D_eV_A": 0.000463068506259
+          },
+          {
+            "from": "K",
+            "to": "K",
+            "kind": "inter_star",
+            "hw_meV": 47.02,
+            "D_eV_A": 0.00111944854772
+          },
+          {
+            "from": "K",
+            "to": "K",
+            "kind": "inter_star",
+            "hw_meV": 47.87,
+            "D_eV_A": 0.000929666600655
+          },
+          {
+            "from": "K",
+            "to": "K",
+            "kind": "inter_star",
+            "hw_meV": 49.28,
+            "D_eV_A": 0.000326972913396
+          },
+          {
+            "from": "K",
+            "to": "K",
+            "kind": "intra",
+            "hw_meV": 35.56,
+            "D_eV_A": 0.000221423021197
+          },
+          {
+            "from": "K",
+            "to": "K",
+            "kind": "intra",
+            "hw_meV": 58.76,
+            "D_eV_A": 0.000764994633498
+          },
+          {
+            "from": "K",
+            "to": "Q",
+            "kind": "inter",
+            "hw_meV": 13.05,
+            "D_eV_A": 0.00028089790473
+          },
+          {
+            "from": "K",
+            "to": "Q",
+            "kind": "inter",
+            "hw_meV": 21.38,
+            "D_eV_A": 0.000394840388824
+          },
+          {
+            "from": "K",
+            "to": "Q",
+            "kind": "inter",
+            "hw_meV": 37.83,
+            "D_eV_A": 6.05960373357e-05
+          },
+          {
+            "from": "K",
+            "to": "Q",
+            "kind": "inter",
+            "hw_meV": 38.23,
+            "D_eV_A": 1.11563645248e-05
+          },
+          {
+            "from": "K",
+            "to": "Q",
+            "kind": "inter",
+            "hw_meV": 40.97,
+            "D_eV_A": 0.000638696044014
+          },
+          {
+            "from": "K",
+            "to": "Q",
+            "kind": "inter",
+            "hw_meV": 41.65,
+            "D_eV_A": 0.000260219611174
+          },
+          {
+            "from": "K",
+            "to": "Q",
+            "kind": "inter",
+            "hw_meV": 48.46,
+            "D_eV_A": 0.00116907181805
+          },
+          {
+            "from": "K",
+            "to": "Q",
+            "kind": "inter",
+            "hw_meV": 51.87,
+            "D_eV_A": 0.000318328841365
+          },
+          {
+            "from": "Q",
+            "to": "K",
+            "kind": "inter",
+            "hw_meV": 13.05,
+            "D_eV_A": 0.00028089790473
+          },
+          {
+            "from": "Q",
+            "to": "K",
+            "kind": "inter",
+            "hw_meV": 21.38,
+            "D_eV_A": 0.000394840388824
+          },
+          {
+            "from": "Q",
+            "to": "K",
+            "kind": "inter",
+            "hw_meV": 37.83,
+            "D_eV_A": 6.05960373357e-05
+          },
+          {
+            "from": "Q",
+            "to": "K",
+            "kind": "inter",
+            "hw_meV": 38.23,
+            "D_eV_A": 1.11563645248e-05
+          },
+          {
+            "from": "Q",
+            "to": "K",
+            "kind": "inter",
+            "hw_meV": 40.97,
+            "D_eV_A": 0.000638696044014
+          },
+          {
+            "from": "Q",
+            "to": "K",
+            "kind": "inter",
+            "hw_meV": 41.65,
+            "D_eV_A": 0.000260219611174
+          },
+          {
+            "from": "Q",
+            "to": "K",
+            "kind": "inter",
+            "hw_meV": 48.46,
+            "D_eV_A": 0.00116907181805
+          },
+          {
+            "from": "Q",
+            "to": "K",
+            "kind": "inter",
+            "hw_meV": 51.87,
+            "D_eV_A": 0.000318328841365
+          },
+          {
+            "from": "Q",
+            "to": "Q",
+            "kind": "inter_star",
+            "hw_meV": 13.05,
+            "D_eV_A": 0.00114313354724
+          },
+          {
+            "from": "Q",
+            "to": "Q",
+            "kind": "inter_star",
+            "hw_meV": 19.45,
+            "D_eV_A": 0.000274657943167
+          },
+          {
+            "from": "Q",
+            "to": "Q",
+            "kind": "inter_star",
+            "hw_meV": 21.38,
+            "D_eV_A": 0.000163826409884
+          },
+          {
+            "from": "Q",
+            "to": "Q",
+            "kind": "inter_star",
+            "hw_meV": 22.33,
+            "D_eV_A": 0.00151123871557
+          },
+          {
+            "from": "Q",
+            "to": "Q",
+            "kind": "inter_star",
+            "hw_meV": 37.83,
+            "D_eV_A": 5.43687229039e-05
+          },
+          {
+            "from": "Q",
+            "to": "Q",
+            "kind": "inter_star",
+            "hw_meV": 38.23,
+            "D_eV_A": 8.91853624952e-06
+          },
+          {
+            "from": "Q",
+            "to": "Q",
+            "kind": "inter_star",
+            "hw_meV": 40.33,
+            "D_eV_A": 0.000402907149716
+          },
+          {
+            "from": "Q",
+            "to": "Q",
+            "kind": "inter_star",
+            "hw_meV": 40.97,
+            "D_eV_A": 0.00103369235789
+          },
+          {
+            "from": "Q",
+            "to": "Q",
+            "kind": "inter_star",
+            "hw_meV": 41.65,
+            "D_eV_A": 0.00153063223112
+          },
+          {
+            "from": "Q",
+            "to": "Q",
+            "kind": "inter_star",
+            "hw_meV": 45.9,
+            "D_eV_A": 0.000163143668516
+          },
+          {
+            "from": "Q",
+            "to": "Q",
+            "kind": "inter_star",
+            "hw_meV": 47.02,
+            "D_eV_A": 0.000798002426405
+          },
+          {
+            "from": "Q",
+            "to": "Q",
+            "kind": "inter_star",
+            "hw_meV": 48.46,
+            "D_eV_A": 0.000805134647789
+          },
+          {
+            "from": "Q",
+            "to": "Q",
+            "kind": "inter_star",
+            "hw_meV": 51.87,
+            "D_eV_A": 0.00102597233288
+          },
+          {
+            "from": "Q",
+            "to": "Q",
+            "kind": "intra",
+            "hw_meV": 35.56,
+            "D_eV_A": 8.04428872237e-05
+          },
+          {
+            "from": "Q",
+            "to": "Q",
+            "kind": "intra",
+            "hw_meV": 58.76,
+            "D_eV_A": 0.000609099857433
+          }
+        ],
+        "label_map": {
+          "K": "K",
+          "Q": "Q"
+        },
+        "scope": "零阶谷间形变势（DFPT 直接矩阵元，非 SOC；不含一阶谷间耦合）＋谷内零阶光学形变势 ODP（q=Γ）",
+        "provenance": {
+          "qe_version": "7.4",
+          "input_dft": "pbesol",
+          "input_dft_note": "ke-dft-cpu S1 FUNC=pbesol",
+          "ecutwfc_Ry": 80.0,
+          "ecutrho_Ry": 320.0,
+          "kgrid": [
+            12,
+            12,
+            1
+          ],
+          "tr2_ph": 1e-16,
+          "pseudos": {
+            "Mo": {
+              "file": "Mo-PBE.upf",
+              "sha256": "7a392dee2cc7088d02184ddefa73b709f11e266fdde348a08eeaf8ea2870e448",
+              "kind": "NC"
+            },
+            "S": {
+              "file": "S-PBE.upf",
+              "sha256": "27df09dca075b822b66fb3eae40890b717e7abf4348a47180bcff2378e958286",
+              "kind": "NC"
+            }
+          },
+          "method": "ph.x electron_phonon='ahc'（trans=.false.，单 q），|g| 按初/终态简并组平均"
+        },
+        "summary": "K>K' 1 支(√ΣD² 1.73 eV/Å); K>K 1 支(√ΣD² 5.76 eV/Å) 谷内 ODP; K>Q 8 支(√ΣD² 5.83 eV/Å); Q>K 8 支(√ΣD² 5.83 eV/Å); Q>Q' 10 支(√ΣD² 5.49 eV/Å); Q>Q 1 支(√ΣD² 3.91 eV/Å) 谷内 ODP",
+        "odp_reference": [
+          {
+            "valley": "K",
+            "D_eV_A": 5.80336,
+            "hw_meV": 50.333,
+            "source": "frozen"
+          },
+          {
+            "valley": "Q",
+            "D_eV_A": 3.81811,
+            "hw_meV": 50.333,
+            "source": "frozen"
+          }
+        ]
+      }
+    },
+    "hole": {
+      "channels": [
+        {
+          "from": "K",
+          "to": "K",
+          "kind": "intra",
+          "D_eV_A": 3.03857,
+          "hw_meV": 50.333,
+          "source": "frozen"
+        },
+        {
+          "from": "Γ",
+          "to": "Γ",
+          "kind": "intra",
+          "D_eV_A": 4.50536,
+          "hw_meV": 50.333,
+          "source": "frozen"
+        }
+      ],
+      "valleys": [
+        {
+          "label": "K",
+          "g": 2,
+          "k_frac": [
+            [
+              0.333333,
+              0.333333,
+              0.0
+            ],
+            [
+              -0.333333,
+              -0.333333,
+              0.0
+            ]
+          ],
+          "dE_eV": 0.0,
+          "k_grid": [
+            [
+              0.333333,
+              0.333333,
+              0.0
+            ],
+            [
+              -0.333333,
+              -0.333333,
+              0.0
+            ]
+          ]
+        },
+        {
+          "label": "Γ",
+          "g": 1,
+          "k_frac": [
+            [
+              0.0,
+              0.0,
+              0.0
+            ]
+          ],
+          "dE_eV": 0.0956,
+          "k_grid": [
+            [
+              0.0,
+              0.0,
+              0.0
+            ]
+          ]
+        }
+      ],
+      "valleys_source": "step8.2_dpt/dpt_result.json",
+      "frozen": {
+        "digest": "4772105b3d92fff7",
+        "n_channels": 2,
+        "dropped_below_dmin": [
+          {
+            "valley": "K",
+            "hw_meV": 35.3901,
+            "D_eV_A": 0.00841
+          },
+          {
+            "valley": "Γ",
+            "hw_meV": 35.3901,
+            "D_eV_A": 0.00841
+          }
+        ],
+        "merge_notes": [],
+        "summary": "K 3.04 eV/Å@50.3 meV, Γ 4.51 eV/Å@50.3 meV"
+      }
+    },
+    "adp_intravalley": {
+      "electron": true,
+      "hole": false
+    },
+    "adp_intravalley_mode": "auto",
+    "model": "常数形变势：1/τ_c(x) = π D_c²/(M ω_c)·[N·G_c(x+ħω) + (N+1)·G_c(x−ħω)]，G_c 为目标谷（星平均）每原胞每自旋态密度，M 为原胞质量；各向同性，动量弛豫率 = 散射率",
+    "reference": "Jin et al. PRB 90, 045422 (2014); Kaasbjerg et al. PRB 85, 115317 (2012)"
+  },
+  "dp_optical_frozen": {
+    "mode": "auto",
+    "source": "step8.21_odp_read/odp_params.json",
+    "dmin_eV_A": 0.05,
+    "frozen_use": {
+      "electron": "superseded_dfpt",
+      "hole": "used"
+    },
+    "digest": {
+      "hole": "4772105b3d92fff7"
+    },
+    "odp_allowed": true,
+    "info": {
+      "hole": {
+        "digest": "4772105b3d92fff7",
+        "n_channels": 2,
+        "dropped_below_dmin": [
+          {
+            "valley": "K",
+            "hw_meV": 35.3901,
+            "D_eV_A": 0.00841
+          },
+          {
+            "valley": "Γ",
+            "hw_meV": 35.3901,
+            "D_eV_A": 0.00841
+          }
+        ],
+        "merge_notes": [],
+        "summary": "K 3.04 eV/Å@50.3 meV, Γ 4.51 eV/Å@50.3 meV"
+      }
+    }
+  },
+  "dp_optical_ivs": {
+    "mode": "auto",
+    "source": "step8.22_ivs_read/ivs_params.json",
+    "dmin_eV_A": 0.05,
+    "frozen_use": {
+      "electron": "unavailable",
+      "hole": "unavailable"
+    },
+    "digest": {},
+    "ivs_allowed": true,
+    "info": {}
+  },
+  "dp_optical_ivs_dfpt": {
+    "mode": "auto",
+    "source": "ivs_dfpt/ivs_dfpt_params.json",
+    "dmin_eV_A": 0.05,
+    "ktol": 0.005,
+    "sha256": "ccc350b799be12e5a3e00be7617efbbbd9b44cee1d57157f62d448a77d0cd47b",
+    "dfpt_use": {
+      "electron": "used",
+      "hole": "unavailable"
+    },
+    "odp_use": {
+      "electron": "used",
+      "hole": "unavailable"
+    },
+    "digest": {
+      "electron": "0885233b11ad6e2a"
+    },
+    "ivs_allowed": true,
+    "odp_allowed": true,
+    "info": {
+      "electron": {
+        "digest": "0885233b11ad6e2a",
+        "n_channels": 27,
+        "n_odp_channels": 2,
+        "dropped_below_dmin": [
+          {
+            "from": "K",
+            "to": "K",
+            "kind": "inter_star",
+            "hw_meV": 22.33,
+            "D_eV_A": 4.82053984065e-05
+          },
+          {
+            "from": "K",
+            "to": "K",
+            "kind": "inter_star",
+            "hw_meV": 23.12,
+            "D_eV_A": 6.52735789544e-06
+          },
+          {
+            "from": "K",
+            "to": "K",
+            "kind": "inter_star",
+            "hw_meV": 29.21,
+            "D_eV_A": 0.000145935784621
+          },
+          {
+            "from": "K",
+            "to": "K",
+            "kind": "inter_star",
+            "hw_meV": 40.33,
+            "D_eV_A": 0.000463068506259
+          },
+          {
+            "from": "K",
+            "to": "K",
+            "kind": "inter_star",
+            "hw_meV": 47.02,
+            "D_eV_A": 0.00111944854772
+          },
+          {
+            "from": "K",
+            "to": "K",
+            "kind": "inter_star",
+            "hw_meV": 47.87,
+            "D_eV_A": 0.000929666600655
+          },
+          {
+            "from": "K",
+            "to": "K",
+            "kind": "inter_star",
+            "hw_meV": 49.28,
+            "D_eV_A": 0.000326972913396
+          },
+          {
+            "from": "K",
+            "to": "K",
+            "kind": "intra",
+            "hw_meV": 35.56,
+            "D_eV_A": 0.000221423021197
+          },
+          {
+            "from": "K",
+            "to": "K",
+            "kind": "intra",
+            "hw_meV": 58.76,
+            "D_eV_A": 0.000764994633498
+          },
+          {
+            "from": "K",
+            "to": "Q",
+            "kind": "inter",
+            "hw_meV": 13.05,
+            "D_eV_A": 0.00028089790473
+          },
+          {
+            "from": "K",
+            "to": "Q",
+            "kind": "inter",
+            "hw_meV": 21.38,
+            "D_eV_A": 0.000394840388824
+          },
+          {
+            "from": "K",
+            "to": "Q",
+            "kind": "inter",
+            "hw_meV": 37.83,
+            "D_eV_A": 6.05960373357e-05
+          },
+          {
+            "from": "K",
+            "to": "Q",
+            "kind": "inter",
+            "hw_meV": 38.23,
+            "D_eV_A": 1.11563645248e-05
+          },
+          {
+            "from": "K",
+            "to": "Q",
+            "kind": "inter",
+            "hw_meV": 40.97,
+            "D_eV_A": 0.000638696044014
+          },
+          {
+            "from": "K",
+            "to": "Q",
+            "kind": "inter",
+            "hw_meV": 41.65,
+            "D_eV_A": 0.000260219611174
+          },
+          {
+            "from": "K",
+            "to": "Q",
+            "kind": "inter",
+            "hw_meV": 48.46,
+            "D_eV_A": 0.00116907181805
+          },
+          {
+            "from": "K",
+            "to": "Q",
+            "kind": "inter",
+            "hw_meV": 51.87,
+            "D_eV_A": 0.000318328841365
+          },
+          {
+            "from": "Q",
+            "to": "K",
+            "kind": "inter",
+            "hw_meV": 13.05,
+            "D_eV_A": 0.00028089790473
+          },
+          {
+            "from": "Q",
+            "to": "K",
+            "kind": "inter",
+            "hw_meV": 21.38,
+            "D_eV_A": 0.000394840388824
+          },
+          {
+            "from": "Q",
+            "to": "K",
+            "kind": "inter",
+            "hw_meV": 37.83,
+            "D_eV_A": 6.05960373357e-05
+          },
+          {
+            "from": "Q",
+            "to": "K",
+            "kind": "inter",
+            "hw_meV": 38.23,
+            "D_eV_A": 1.11563645248e-05
+          },
+          {
+            "from": "Q",
+            "to": "K",
+            "kind": "inter",
+            "hw_meV": 40.97,
+            "D_eV_A": 0.000638696044014
+          },
+          {
+            "from": "Q",
+            "to": "K",
+            "kind": "inter",
+            "hw_meV": 41.65,
+            "D_eV_A": 0.000260219611174
+          },
+          {
+            "from": "Q",
+            "to": "K",
+            "kind": "inter",
+            "hw_meV": 48.46,
+            "D_eV_A": 0.00116907181805
+          },
+          {
+            "from": "Q",
+            "to": "K",
+            "kind": "inter",
+            "hw_meV": 51.87,
+            "D_eV_A": 0.000318328841365
+          },
+          {
+            "from": "Q",
+            "to": "Q",
+            "kind": "inter_star",
+            "hw_meV": 13.05,
+            "D_eV_A": 0.00114313354724
+          },
+          {
+            "from": "Q",
+            "to": "Q",
+            "kind": "inter_star",
+            "hw_meV": 19.45,
+            "D_eV_A": 0.000274657943167
+          },
+          {
+            "from": "Q",
+            "to": "Q",
+            "kind": "inter_star",
+            "hw_meV": 21.38,
+            "D_eV_A": 0.000163826409884
+          },
+          {
+            "from": "Q",
+            "to": "Q",
+            "kind": "inter_star",
+            "hw_meV": 22.33,
+            "D_eV_A": 0.00151123871557
+          },
+          {
+            "from": "Q",
+            "to": "Q",
+            "kind": "inter_star",
+            "hw_meV": 37.83,
+            "D_eV_A": 5.43687229039e-05
+          },
+          {
+            "from": "Q",
+            "to": "Q",
+            "kind": "inter_star",
+            "hw_meV": 38.23,
+            "D_eV_A": 8.91853624952e-06
+          },
+          {
+            "from": "Q",
+            "to": "Q",
+            "kind": "inter_star",
+            "hw_meV": 40.33,
+            "D_eV_A": 0.000402907149716
+          },
+          {
+            "from": "Q",
+            "to": "Q",
+            "kind": "inter_star",
+            "hw_meV": 40.97,
+            "D_eV_A": 0.00103369235789
+          },
+          {
+            "from": "Q",
+            "to": "Q",
+            "kind": "inter_star",
+            "hw_meV": 41.65,
+            "D_eV_A": 0.00153063223112
+          },
+          {
+            "from": "Q",
+            "to": "Q",
+            "kind": "inter_star",
+            "hw_meV": 45.9,
+            "D_eV_A": 0.000163143668516
+          },
+          {
+            "from": "Q",
+            "to": "Q",
+            "kind": "inter_star",
+            "hw_meV": 47.02,
+            "D_eV_A": 0.000798002426405
+          },
+          {
+            "from": "Q",
+            "to": "Q",
+            "kind": "inter_star",
+            "hw_meV": 48.46,
+            "D_eV_A": 0.000805134647789
+          },
+          {
+            "from": "Q",
+            "to": "Q",
+            "kind": "inter_star",
+            "hw_meV": 51.87,
+            "D_eV_A": 0.00102597233288
+          },
+          {
+            "from": "Q",
+            "to": "Q",
+            "kind": "intra",
+            "hw_meV": 35.56,
+            "D_eV_A": 8.04428872237e-05
+          },
+          {
+            "from": "Q",
+            "to": "Q",
+            "kind": "intra",
+            "hw_meV": 58.76,
+            "D_eV_A": 0.000609099857433
+          }
+        ],
+        "label_map": {
+          "K": "K",
+          "Q": "Q"
+        },
+        "scope": "零阶谷间形变势（DFPT 直接矩阵元，非 SOC；不含一阶谷间耦合）＋谷内零阶光学形变势 ODP（q=Γ）",
+        "provenance": {
+          "qe_version": "7.4",
+          "input_dft": "pbesol",
+          "input_dft_note": "ke-dft-cpu S1 FUNC=pbesol",
+          "ecutwfc_Ry": 80.0,
+          "ecutrho_Ry": 320.0,
+          "kgrid": [
+            12,
+            12,
+            1
+          ],
+          "tr2_ph": 1e-16,
+          "pseudos": {
+            "Mo": {
+              "file": "Mo-PBE.upf",
+              "sha256": "7a392dee2cc7088d02184ddefa73b709f11e266fdde348a08eeaf8ea2870e448",
+              "kind": "NC"
+            },
+            "S": {
+              "file": "S-PBE.upf",
+              "sha256": "27df09dca075b822b66fb3eae40890b717e7abf4348a47180bcff2378e958286",
+              "kind": "NC"
+            }
+          },
+          "method": "ph.x electron_phonon='ahc'（trans=.false.，单 q），|g| 按初/终态简并组平均"
+        },
+        "summary": "K>K' 1 支(√ΣD² 1.73 eV/Å); K>K 1 支(√ΣD² 5.76 eV/Å) 谷内 ODP; K>Q 8 支(√ΣD² 5.83 eV/Å); Q>K 8 支(√ΣD² 5.83 eV/Å); Q>Q' 10 支(√ΣD² 5.49 eV/Å); Q>Q 1 支(√ΣD² 3.91 eV/Å) 谷内 ODP",
+        "odp_reference": [
+          {
+            "valley": "K",
+            "D_eV_A": 5.80336,
+            "hw_meV": 50.333,
+            "source": "frozen"
+          },
+          {
+            "valley": "Q",
+            "D_eV_A": 3.81811,
+            "hw_meV": 50.333,
+            "source": "frozen"
+          }
+        ]
+      }
+    }
+  },
+  "adp_degen": {
+    "mode": "auto",
+    "efit_eV": 0.15,
+    "nang": null,
+    "deform_h5": "deformation.h5",
+    "signed_h5": "deformation_signed.h5",
+    "signed_src": "deformation_vac_signed.h5",
+    "vasprun": "vasprun.xml",
+    "pairwise": "auto",
+    "deform_geometry": "ionrelax(in-plane)+clamped(out-of-plane)",
+    "status": "pending_runtime",
+    "matrix": "auto"
+  },
+  "areal_density_factor_cm": 3.4879004000000003e-07,
+  "areal_density_note": "n_2D [cm^-2] = n_3D [cm^-3] x cell_c [cm]",
+  "inplane_cell_area_cm2": 8.524118625362687e-16,
+  "carrier_per_atom_threshold": 0.02,
+  "num_atoms": 3,
+  "free_carrier_screening": true,
+  "skill_rev": "2026-10-21-0061m-dftmatrix",
+  "plugin": "amset2d_plugin.py",
+  "limitation": "单一有效极性模、偶极近似（无四极矩、无面外偶极/Janus 耦合）；屏蔽用局域场 + 二维 Thomas–Fermi。模型级近似，适合筛选与趋势；要发表的绝对值建议用 EPW/Perturbo 对照。",
+  "kz_cap_rmax": 1,
+  "kz_flat_tol_ev": 0.005
+}

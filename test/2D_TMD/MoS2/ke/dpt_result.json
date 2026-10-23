@@ -1,0 +1,1232 @@
+{
+  "dim": "2d",
+  "is_2d": true,
+  "temperature_K": 300.0,
+  "skill_rev": "2026-10-23-0061d-dptdegen",
+  "env": {
+    "python": "/public/home/wangchao/miniconda3/envs/atomate2_p_a/bin/python",
+    "amset": "N/A",
+    "host": "login01"
+  },
+  "overrides": {},
+  "s3_grid": {
+    "mesh": [
+      48,
+      48,
+      3
+    ],
+    "issues": [],
+    "allow_coarse": false
+  },
+  "functional": {
+    "func": "pbesol",
+    "label": "PBEsol（GGA=PS，无色散修正）",
+    "source": "step1_opt/workflow_method.txt",
+    "note": "和文献比较前先核对文献用的泛函：GGA=PS 是 PBEsol，不是 PBE。PBEsol 的晶格通常比 PBE 小约 1%，C_2D 随之偏硬，m*、形变势和谷间能差也会变，不能直接当作 PBE 结果比。"
+  },
+  "formula": "2D Bardeen-Shockley: μ=eℏ³C_2D/(k_BT m* m_d E1²)",
+  "results": [
+    {
+      "carrier": "electron",
+      "inputs": {
+        "C_2D_N_per_m": 144.11631247457203,
+        "C_provenance": "step6 面内(C11+C22)/2 × h(V/A)=34.879Å",
+        "m_eff_m0": 0.4485,
+        "m_provenance": "带边方向分解+q^4外推(面内, 3方向, 最轻两支 0.4428/0.4543, 全组 0.4428..0.4691, spin=0)",
+        "E1_eV": 8.5359,
+        "E1_provenance": "band_edges.json 真空对齐(n=1)面内对角",
+        "T_K": 300.0
+      },
+      "mobility_cm2_Vs": 209.423,
+      "status": "ok",
+      "by_direction": {
+        "C_2D_N_per_m": [
+          144.11631247457206,
+          144.11631247457206
+        ],
+        "C_provenance": "step6 C11/C22 × h(V/A)=34.879A",
+        "m_eff_m0": [
+          0.4533,
+          0.4533
+        ],
+        "m_provenance": "带边二次型拟合(amset-subproc, 12点/2壳层, R<0.09, 模型=a+b+c+q4, 交叉项/主项=0.00, cond=1e+01, rel=0.031, spin=0)",
+        "E1_eV": [
+          8.5359,
+          8.5358
+        ],
+        "E1_provenance": "band_edges.json 真空对齐(n=1) D_xx/D_yy",
+        "T_K": 300.0,
+        "formula": "mu_a = e*hbar^3*C_2D,a/(kB*T*m_a*m_d*E1_a^2); tau_a = mu_a*m_a/e",
+        "m_d_m0": 0.4533,
+        "x": {
+          "C_2D_N_per_m": 144.116,
+          "m_eff_m0": 0.4533,
+          "E1_eV": 8.5359,
+          "mobility_cm2_Vs": 205.012,
+          "tau_s": 5.283758347256458e-14
+        },
+        "y": {
+          "C_2D_N_per_m": 144.116,
+          "m_eff_m0": 0.4533,
+          "E1_eV": 8.5358,
+          "mobility_cm2_Vs": 205.016,
+          "tau_s": 5.283882150281315e-14
+        },
+        "status": "ok"
+      },
+      "multi_valley": {
+        "status": "拒绝：有贡献的谷之间形变势相差 23.7 倍（Q E1=0.36 eV、最大布居 50.1%；K E1=8.54 eV；阈值 VALLEY_E1_RATIO_MAX=3）。τ∝1/E1²，E1 小的谷 τ 长约 559 倍，布居再小也会主导电导；它的 LA 膨胀形变势耦合几乎抵消，真实输运由 DPT 不含的 TA/谷间/光学散射决定（Jin et al. PRB 90, 045422：DFPT 拟合的 Q/K 声学形变势比 0.6–0.9，WSe2 电子含谷间 30、只 K 250 cm²/Vs），多谷 DPT 给不出可信数。单谷结果（若有）照旧可用；各谷带符号的 dE/dε 见 valleys[].E1_signed_xy_eV / dEdeps_raw_xy_eV",
+        "window_eV": 0.3,
+        "valleys": [
+          {
+            "label": "K",
+            "g": 2,
+            "spin": "up",
+            "band_index": 13,
+            "dE_eV": 0.0,
+            "k_frac": [
+              [
+                0.333333,
+                0.333333,
+                0.0
+              ],
+              [
+                -0.333333,
+                -0.333333,
+                0.0
+              ]
+            ],
+            "k_grid": [
+              [
+                0.333333,
+                0.333333,
+                0.0
+              ],
+              [
+                -0.333333,
+                -0.333333,
+                0.0
+              ]
+            ],
+            "m_d_m0": 0.4533,
+            "M_m0": [
+              [
+                0.4533,
+                0.0
+              ],
+              [
+                0.0,
+                0.4533
+              ]
+            ],
+            "E1_xy_eV": [
+              [
+                8.5359,
+                8.5359
+              ],
+              [
+                8.5359,
+                8.5359
+              ]
+            ],
+            "E1_xy_raw_eV": [
+              [
+                8.5299,
+                8.5418
+              ],
+              [
+                8.5299,
+                8.5418
+              ]
+            ],
+            "E1_signed_xy_eV": [
+              [
+                -8.5299,
+                -8.5418
+              ],
+              [
+                -8.5299,
+                -8.5418
+              ]
+            ],
+            "dEdeps_raw_xy_eV": [
+              [
+                -10.44,
+                -10.45
+              ],
+              [
+                -10.44,
+                -10.45
+              ]
+            ],
+            "E1_eff_eV": 8.5359,
+            "pop_max": 1.0,
+            "k_S7": [
+              [
+                0.333333,
+                0.333333,
+                0.0
+              ],
+              [
+                -0.333333,
+                -0.333333,
+                0.0
+              ]
+            ],
+            "k_offset_S7_invA": 0.0,
+            "extremum_shift_invA": 0.0,
+            "fit": "12点/2壳层, 模型=a+b+c+q4, rel=0.031",
+            "weight_T0": 0.9641
+          },
+          {
+            "label": "Q",
+            "g": 6,
+            "spin": "up",
+            "band_index": 13,
+            "dE_eV": 0.1277,
+            "k_frac": [
+              [
+                0.170083,
+                0.170083,
+                0.0
+              ],
+              [
+                0.170083,
+                -0.340167,
+                0.0
+              ],
+              [
+                0.340167,
+                -0.170083,
+                0.0
+              ],
+              [
+                -0.340167,
+                0.170083,
+                0.0
+              ],
+              [
+                -0.170083,
+                0.340167,
+                0.0
+              ],
+              [
+                -0.170083,
+                -0.170083,
+                0.0
+              ]
+            ],
+            "k_grid": [
+              [
+                0.166667,
+                0.166667,
+                0.0
+              ],
+              [
+                0.166667,
+                -0.333333,
+                0.0
+              ],
+              [
+                0.333333,
+                -0.166667,
+                0.0
+              ],
+              [
+                -0.333333,
+                0.166667,
+                0.0
+              ],
+              [
+                -0.166667,
+                0.333333,
+                0.0
+              ],
+              [
+                -0.166667,
+                -0.166667,
+                0.0
+              ]
+            ],
+            "m_d_m0": 0.7866,
+            "M_m0": [
+              [
+                0.613,
+                0.0
+              ],
+              [
+                0.0,
+                1.0092
+              ]
+            ],
+            "E1_xy_eV": [
+              [
+                1.0701,
+                0.6618
+              ],
+              [
+                0.2299,
+                0.6282
+              ],
+              [
+                0.2299,
+                0.6282
+              ],
+              [
+                0.2299,
+                0.6282
+              ],
+              [
+                0.2299,
+                0.6282
+              ],
+              [
+                1.0701,
+                0.6618
+              ]
+            ],
+            "E1_xy_raw_eV": [
+              [
+                1.0701,
+                0.6618
+              ],
+              [
+                0.2299,
+                0.6282
+              ],
+              [
+                0.2299,
+                0.6282
+              ],
+              [
+                0.2299,
+                0.6282
+              ],
+              [
+                0.2299,
+                0.6282
+              ],
+              [
+                1.0701,
+                0.6618
+              ]
+            ],
+            "E1_signed_xy_eV": [
+              [
+                1.0701,
+                -0.6618
+              ],
+              [
+                -0.2299,
+                0.6282
+              ],
+              [
+                -0.2299,
+                0.6282
+              ],
+              [
+                -0.2299,
+                0.6282
+              ],
+              [
+                -0.2299,
+                0.6282
+              ],
+              [
+                1.0701,
+                -0.6618
+              ]
+            ],
+            "dEdeps_raw_xy_eV": [
+              [
+                -0.84,
+                -2.57
+              ],
+              [
+                -2.14,
+                -1.28
+              ],
+              [
+                -2.14,
+                -1.28
+              ],
+              [
+                -2.14,
+                -1.28
+              ],
+              [
+                -2.14,
+                -1.28
+              ],
+              [
+                -0.84,
+                -2.57
+              ]
+            ],
+            "E1_eff_eV": 0.3609,
+            "pop_max": 0.5006,
+            "k_S7": [
+              [
+                0.166667,
+                0.166667,
+                0.0
+              ],
+              [
+                0.166667,
+                -0.333333,
+                0.0
+              ],
+              [
+                0.333333,
+                -0.166667,
+                0.0
+              ],
+              [
+                -0.333333,
+                0.166667,
+                0.0
+              ],
+              [
+                -0.166667,
+                0.333333,
+                0.0
+              ],
+              [
+                -0.166667,
+                -0.166667,
+                0.0
+              ]
+            ],
+            "k_offset_S7_invA": 0.0137,
+            "extremum_shift_invA": 0.0137,
+            "fit": "30点/4壳层, 模型=a+b+c+q4+d+e+f, rel=0.030",
+            "weight_T0": 0.0359
+          }
+        ],
+        "edge_star": "K",
+        "populations_vs_T": [
+          {
+            "T_K": 100.0,
+            "weights": {
+              "Q": 0.0,
+              "K": 1.0
+            }
+          },
+          {
+            "T_K": 200.0,
+            "weights": {
+              "Q": 0.0031,
+              "K": 0.9969
+            }
+          },
+          {
+            "T_K": 300.0,
+            "weights": {
+              "Q": 0.0359,
+              "K": 0.9641
+            }
+          },
+          {
+            "T_K": 400.0,
+            "weights": {
+              "Q": 0.1134,
+              "K": 0.8866
+            }
+          },
+          {
+            "T_K": 500.0,
+            "weights": {
+              "Q": 0.2116,
+              "K": 0.7884
+            }
+          },
+          {
+            "T_K": 600.0,
+            "weights": {
+              "Q": 0.3055,
+              "K": 0.6945
+            }
+          },
+          {
+            "T_K": 700.0,
+            "weights": {
+              "Q": 0.3851,
+              "K": 0.6149
+            }
+          },
+          {
+            "T_K": 800.0,
+            "weights": {
+              "Q": 0.4493,
+              "K": 0.5507
+            }
+          },
+          {
+            "T_K": 900.0,
+            "weights": {
+              "Q": 0.5006,
+              "K": 0.4994
+            }
+          }
+        ],
+        "dvac_eV_per_unit_strain": {
+          "xx": -1.91008,
+          "yy": -1.90816
+        },
+        "E1_selfcheck": {
+          "xx": {
+            "recomputed_eV": 8.5299,
+            "S7.1_eV": 8.5299
+          },
+          "yy": {
+            "recomputed_eV": 8.5418,
+            "S7.1_eV": 8.5418
+          }
+        },
+        "S7_files": {
+          "undeformed": "/public/home/wangchao/Fullerene_Network/work/MoS2/ke-dft-cpu/step7_deform/undeformed/vasprun.xml",
+          "deform-01": "/public/home/wangchao/Fullerene_Network/work/MoS2/ke-dft-cpu/step7_deform/deform-01/ionrelax/vasprun.xml",
+          "deform-02": "/public/home/wangchao/Fullerene_Network/work/MoS2/ke-dft-cpu/step7_deform/deform-02/ionrelax/vasprun.xml",
+          "deform-03": "/public/home/wangchao/Fullerene_Network/work/MoS2/ke-dft-cpu/step7_deform/deform-03/ionrelax/vasprun.xml",
+          "deform-04": "/public/home/wangchao/Fullerene_Network/work/MoS2/ke-dft-cpu/step7_deform/deform-04/ionrelax/vasprun.xml"
+        },
+        "warnings": []
+      },
+      "single_valley_scope": {
+        "edge_star": "K",
+        "T_K": 300.0,
+        "share": 0.9641,
+        "others": {
+          "Q": 0.0359
+        },
+        "shares_vs_T": [
+          {
+            "T_K": 100.0,
+            "share": 1.0
+          },
+          {
+            "T_K": 200.0,
+            "share": 0.9969
+          },
+          {
+            "T_K": 300.0,
+            "share": 0.9641
+          },
+          {
+            "T_K": 400.0,
+            "share": 0.8866
+          },
+          {
+            "T_K": 500.0,
+            "share": 0.7884
+          },
+          {
+            "T_K": 600.0,
+            "share": 0.6945
+          },
+          {
+            "T_K": 700.0,
+            "share": 0.6149
+          },
+          {
+            "T_K": 800.0,
+            "share": 0.5507
+          },
+          {
+            "T_K": 900.0,
+            "share": 0.4994
+          }
+        ],
+        "note": "单谷值只代表 K 谷：300 K 时占载流子 96.4%（Q 3.6% 未计入），900 K 时降到 49.9%；这些谷和谷间散射单谷 DPT 都不含，材料的迁移率以 S8.4（AMSET）为准"
+      },
+      "mobility_vs_T": [
+        {
+          "T_K": 100.0,
+          "mobility_cm2_Vs": 628.269,
+          "mobility_x_cm2_Vs": 615.036,
+          "tau_x_s": 1.5851275041769374e-13,
+          "mobility_y_cm2_Vs": 615.048,
+          "tau_y_s": 1.5851646450843945e-13,
+          "mobility_inplane_cm2_Vs": 615.042
+        },
+        {
+          "T_K": 200.0,
+          "mobility_cm2_Vs": 314.135,
+          "mobility_x_cm2_Vs": 307.518,
+          "tau_x_s": 7.925637520884687e-14,
+          "mobility_y_cm2_Vs": 307.524,
+          "tau_y_s": 7.925823225421973e-14,
+          "mobility_inplane_cm2_Vs": 307.521
+        },
+        {
+          "T_K": 300.0,
+          "mobility_cm2_Vs": 209.423,
+          "mobility_x_cm2_Vs": 205.012,
+          "tau_x_s": 5.283758347256458e-14,
+          "mobility_y_cm2_Vs": 205.016,
+          "tau_y_s": 5.283882150281315e-14,
+          "mobility_inplane_cm2_Vs": 205.014
+        },
+        {
+          "T_K": 400.0,
+          "mobility_cm2_Vs": 157.067,
+          "mobility_x_cm2_Vs": 153.759,
+          "tau_x_s": 3.9628187604423435e-14,
+          "mobility_y_cm2_Vs": 153.762,
+          "tau_y_s": 3.9629116127109863e-14,
+          "mobility_inplane_cm2_Vs": 153.76
+        },
+        {
+          "T_K": 500.0,
+          "mobility_cm2_Vs": 125.654,
+          "mobility_x_cm2_Vs": 123.007,
+          "tau_x_s": 3.170255008353875e-14,
+          "mobility_y_cm2_Vs": 123.01,
+          "tau_y_s": 3.170329290168789e-14,
+          "mobility_inplane_cm2_Vs": 123.008
+        },
+        {
+          "T_K": 600.0,
+          "mobility_cm2_Vs": 104.712,
+          "mobility_x_cm2_Vs": 102.506,
+          "tau_x_s": 2.641879173628229e-14,
+          "mobility_y_cm2_Vs": 102.508,
+          "tau_y_s": 2.6419410751406573e-14,
+          "mobility_inplane_cm2_Vs": 102.507
+        },
+        {
+          "T_K": 700.0,
+          "mobility_cm2_Vs": 89.753,
+          "mobility_x_cm2_Vs": 87.862,
+          "tau_x_s": 2.2644678631099105e-14,
+          "mobility_y_cm2_Vs": 87.864,
+          "tau_y_s": 2.264520921549135e-14,
+          "mobility_inplane_cm2_Vs": 87.863
+        },
+        {
+          "T_K": 800.0,
+          "mobility_cm2_Vs": 78.534,
+          "mobility_x_cm2_Vs": 76.88,
+          "tau_x_s": 1.9814093802211718e-14,
+          "mobility_y_cm2_Vs": 76.881,
+          "tau_y_s": 1.9814558063554932e-14,
+          "mobility_inplane_cm2_Vs": 76.88
+        },
+        {
+          "T_K": 900.0,
+          "mobility_cm2_Vs": 69.808,
+          "mobility_x_cm2_Vs": 68.337,
+          "tau_x_s": 1.761252782418819e-14,
+          "mobility_y_cm2_Vs": 68.339,
+          "tau_y_s": 1.7612940500937714e-14,
+          "mobility_inplane_cm2_Vs": 68.338
+        }
+      ]
+    },
+    {
+      "carrier": "hole",
+      "inputs": {
+        "C_2D_N_per_m": 144.11631247457203,
+        "C_provenance": "step6 面内(C11+C22)/2 × h(V/A)=34.879Å",
+        "m_eff_m0": 0.5476,
+        "m_provenance": "带边方向分解+q^4外推(面内, 3方向, 最轻两支 0.5329/0.5628, 全组 0.5329..0.6049, spin=0)",
+        "E1_eV": 2.4809,
+        "E1_provenance": "band_edges.json 真空对齐(n=1)面内对角",
+        "T_K": 300.0
+      },
+      "mobility_cm2_Vs": 1663.042,
+      "status": "ok",
+      "by_direction": {
+        "C_2D_N_per_m": [
+          144.11631247457206,
+          144.11631247457206
+        ],
+        "C_provenance": "step6 C11/C22 × h(V/A)=34.879A",
+        "m_eff_m0": [
+          0.5606,
+          0.5606
+        ],
+        "m_provenance": "带边二次型拟合(amset-subproc, 12点/2壳层, R<0.09, 模型=a+b+c+q4, 交叉项/主项=0.00, cond=1e+01, rel=0.079, spin=0)",
+        "E1_eV": [
+          2.4809,
+          2.4808
+        ],
+        "E1_provenance": "band_edges.json 真空对齐(n=1) D_xx/D_yy",
+        "T_K": 300.0,
+        "formula": "mu_a = e*hbar^3*C_2D,a/(kB*T*m_a*m_d*E1_a^2); tau_a = mu_a*m_a/e",
+        "m_d_m0": 0.5606,
+        "x": {
+          "C_2D_N_per_m": 144.116,
+          "m_eff_m0": 0.5606,
+          "E1_eV": 2.4809,
+          "mobility_cm2_Vs": 1586.807,
+          "tau_s": 5.057730583775854e-13
+        },
+        "y": {
+          "C_2D_N_per_m": 144.116,
+          "m_eff_m0": 0.5606,
+          "E1_eV": 2.4808,
+          "mobility_cm2_Vs": 1586.935,
+          "tau_s": 5.058138341960414e-13
+        },
+        "status": "ok"
+      },
+      "multi_valley": {
+        "status": "ok",
+        "method": "多谷 DPT：S3 全 BZ（kz=0 层）找窗口内各带各自旋的谷、按点群(+TR)归星；逐谷二次型拟合 W=M⁻¹、m_d=√det M；逐谷 E1_α=|dE/dε_αα − dE_vac/dε_αα|（S7 形变构型本征值中心差分，与 S7.1 E1_vac 同一定义）；μ_αα(T)=(e/m0)Σ n_v τ_α,v W_αα,v/Σ n_v，n_v∝m_d,v·exp(−ΔE_v/k_BT)，τ_α,v=ħ³C_α/(k_BT m_d,v E1_α,v²)",
+        "window_eV": 0.3,
+        "expand": "amset-subproc",
+        "grid_plane": [
+          48,
+          48
+        ],
+        "C_2D_N_per_m": [
+          144.116,
+          144.116
+        ],
+        "C_provenance": "step6 C11/C22 × h(V/A)=34.879A",
+        "valleys": [
+          {
+            "label": "K",
+            "g": 2,
+            "spin": "up",
+            "band_index": 12,
+            "dE_eV": 0.0,
+            "k_frac": [
+              [
+                0.333333,
+                0.333333,
+                0.0
+              ],
+              [
+                -0.333333,
+                -0.333333,
+                0.0
+              ]
+            ],
+            "k_grid": [
+              [
+                0.333333,
+                0.333333,
+                0.0
+              ],
+              [
+                -0.333333,
+                -0.333333,
+                0.0
+              ]
+            ],
+            "m_d_m0": 0.5606,
+            "M_m0": [
+              [
+                0.5606,
+                0.0
+              ],
+              [
+                0.0,
+                0.5606
+              ]
+            ],
+            "E1_xy_eV": [
+              [
+                2.4809,
+                2.4809
+              ],
+              [
+                2.4809,
+                2.4809
+              ]
+            ],
+            "E1_xy_raw_eV": [
+              [
+                2.4699,
+                2.4918
+              ],
+              [
+                2.4699,
+                2.4918
+              ]
+            ],
+            "E1_signed_xy_eV": [
+              [
+                -2.4699,
+                -2.4918
+              ],
+              [
+                -2.4699,
+                -2.4918
+              ]
+            ],
+            "dEdeps_raw_xy_eV": [
+              [
+                -4.38,
+                -4.4
+              ],
+              [
+                -4.38,
+                -4.4
+              ]
+            ],
+            "E1_eff_eV": 2.4809,
+            "pop_max": 0.9999,
+            "k_S7": [
+              [
+                0.333333,
+                0.333333,
+                0.0
+              ],
+              [
+                -0.333333,
+                -0.333333,
+                0.0
+              ]
+            ],
+            "k_offset_S7_invA": 0.0,
+            "extremum_shift_invA": 0.0,
+            "fit": "12点/2壳层, 模型=a+b+c+q4, rel=0.079",
+            "weight_T0": 0.913
+          },
+          {
+            "label": "Γ",
+            "g": 1,
+            "spin": "up",
+            "band_index": 12,
+            "dE_eV": 0.0956,
+            "k_frac": [
+              [
+                0.0,
+                0.0,
+                0.0
+              ]
+            ],
+            "k_grid": [
+              [
+                0.0,
+                0.0,
+                0.0
+              ]
+            ],
+            "m_d_m0": 4.3139,
+            "M_m0": [
+              [
+                4.3139,
+                -0.0
+              ],
+              [
+                -0.0,
+                4.3139
+              ]
+            ],
+            "E1_xy_eV": [
+              [
+                4.2341,
+                4.2341
+              ]
+            ],
+            "E1_xy_raw_eV": [
+              [
+                4.2401,
+                4.2282
+              ]
+            ],
+            "E1_signed_xy_eV": [
+              [
+                4.2401,
+                4.2282
+              ]
+            ],
+            "dEdeps_raw_xy_eV": [
+              [
+                2.33,
+                2.32
+              ]
+            ],
+            "E1_eff_eV": 4.2341,
+            "pop_max": 0.5287,
+            "k_S7": [
+              [
+                0.0,
+                0.0,
+                0.0
+              ]
+            ],
+            "k_offset_S7_invA": 0.0,
+            "extremum_shift_invA": 0.0,
+            "fit": "12点/2壳层, 模型=a+b+c+q4, rel=0.000",
+            "weight_T0": 0.087
+          }
+        ],
+        "T_K": 300.0,
+        "x": {
+          "mobility_cm2_Vs": 1449.558,
+          "tau_s": 4.998718230560884e-13,
+          "m_c_m0": 0.6065
+        },
+        "y": {
+          "mobility_cm2_Vs": 1449.558,
+          "tau_s": 4.998718230560884e-13,
+          "m_c_m0": 0.6065
+        },
+        "mobility_inplane_cm2_Vs": 1449.558,
+        "inplane_isotropic_by_symmetry": true,
+        "mobility_vs_T": [
+          {
+            "T_K": 100.0,
+            "mobility_x_cm2_Vs": 4760.275,
+            "mobility_y_cm2_Vs": 4760.275,
+            "mobility_inplane_cm2_Vs": 4760.275,
+            "tau_x_s": 1.5173414251630528e-12,
+            "tau_y_s": 1.5173414251630528e-12,
+            "weights": {
+              "Γ": 0.0001,
+              "K": 0.9999
+            }
+          },
+          {
+            "T_K": 200.0,
+            "mobility_x_cm2_Vs": 2345.297,
+            "mobility_y_cm2_Vs": 2345.297,
+            "mobility_inplane_cm2_Vs": 2345.297,
+            "tau_x_s": 7.572658123579297e-13,
+            "tau_y_s": 7.572658123579297e-13,
+            "weights": {
+              "Γ": 0.0148,
+              "K": 0.9852
+            }
+          },
+          {
+            "T_K": 300.0,
+            "mobility_x_cm2_Vs": 1449.558,
+            "mobility_y_cm2_Vs": 1449.558,
+            "mobility_inplane_cm2_Vs": 1449.558,
+            "tau_x_s": 4.998718230560884e-13,
+            "tau_y_s": 4.998718230560884e-13,
+            "weights": {
+              "Γ": 0.087,
+              "K": 0.913
+            }
+          },
+          {
+            "T_K": 400.0,
+            "mobility_x_cm2_Vs": 960.926,
+            "mobility_y_cm2_Vs": 960.926,
+            "mobility_inplane_cm2_Vs": 960.926,
+            "tau_x_s": 3.6836534377052473e-13,
+            "tau_y_s": 3.6836534377052473e-13,
+            "weights": {
+              "Γ": 0.1937,
+              "K": 0.8063
+            }
+          },
+          {
+            "T_K": 500.0,
+            "mobility_x_cm2_Vs": 672.89,
+            "mobility_y_cm2_Vs": 672.89,
+            "mobility_inplane_cm2_Vs": 672.89,
+            "tau_x_s": 2.885196177942026e-13,
+            "tau_y_s": 2.885196177942026e-13,
+            "weights": {
+              "Γ": 0.295,
+              "K": 0.705
+            }
+          },
+          {
+            "T_K": 600.0,
+            "mobility_x_cm2_Vs": 495.899,
+            "mobility_y_cm2_Vs": 495.899,
+            "mobility_inplane_cm2_Vs": 495.899,
+            "tau_x_s": 2.3526502988518786e-13,
+            "tau_y_s": 2.3526502988518786e-13,
+            "weights": {
+              "Γ": 0.3772,
+              "K": 0.6228
+            }
+          },
+          {
+            "T_K": 700.0,
+            "mobility_x_cm2_Vs": 381.953,
+            "mobility_y_cm2_Vs": 381.953,
+            "mobility_inplane_cm2_Vs": 381.953,
+            "tau_x_s": 1.9751275687150916e-13,
+            "tau_y_s": 1.9751275687150916e-13,
+            "weights": {
+              "Γ": 0.4409,
+              "K": 0.5591
+            }
+          },
+          {
+            "T_K": 800.0,
+            "mobility_x_cm2_Vs": 305.072,
+            "mobility_y_cm2_Vs": 305.072,
+            "mobility_inplane_cm2_Vs": 305.072,
+            "tau_x_s": 1.6954289697504012e-13,
+            "tau_y_s": 1.6954289697504012e-13,
+            "weights": {
+              "Γ": 0.4902,
+              "K": 0.5098
+            }
+          },
+          {
+            "T_K": 900.0,
+            "mobility_x_cm2_Vs": 250.935,
+            "mobility_y_cm2_Vs": 250.935,
+            "mobility_inplane_cm2_Vs": 250.935,
+            "tau_x_s": 1.4810370426642664e-13,
+            "tau_y_s": 1.4810370426642664e-13,
+            "weights": {
+              "Γ": 0.5287,
+              "K": 0.4713
+            }
+          }
+        ],
+        "window_truncation_T_K": [
+          800.0,
+          900.0
+        ],
+        "E1_selfcheck": {
+          "xx": {
+            "recomputed_eV": 2.4699,
+            "S7.1_eV": 2.4699
+          },
+          "yy": {
+            "recomputed_eV": 2.4918,
+            "S7.1_eV": 2.4918
+          }
+        },
+        "S7_files": {
+          "undeformed": "/public/home/wangchao/Fullerene_Network/work/MoS2/ke-dft-cpu/step7_deform/undeformed/vasprun.xml",
+          "deform-01": "/public/home/wangchao/Fullerene_Network/work/MoS2/ke-dft-cpu/step7_deform/deform-01/ionrelax/vasprun.xml",
+          "deform-02": "/public/home/wangchao/Fullerene_Network/work/MoS2/ke-dft-cpu/step7_deform/deform-02/ionrelax/vasprun.xml",
+          "deform-03": "/public/home/wangchao/Fullerene_Network/work/MoS2/ke-dft-cpu/step7_deform/deform-03/ionrelax/vasprun.xml",
+          "deform-04": "/public/home/wangchao/Fullerene_Network/work/MoS2/ke-dft-cpu/step7_deform/deform-04/ionrelax/vasprun.xml"
+        },
+        "dvac_eV_per_unit_strain": {
+          "xx": -1.91008,
+          "yy": -1.90816
+        },
+        "edge_star": "K",
+        "populations_vs_T": [
+          {
+            "T_K": 100.0,
+            "weights": {
+              "Γ": 0.0001,
+              "K": 0.9999
+            }
+          },
+          {
+            "T_K": 200.0,
+            "weights": {
+              "Γ": 0.0148,
+              "K": 0.9852
+            }
+          },
+          {
+            "T_K": 300.0,
+            "weights": {
+              "Γ": 0.087,
+              "K": 0.913
+            }
+          },
+          {
+            "T_K": 400.0,
+            "weights": {
+              "Γ": 0.1937,
+              "K": 0.8063
+            }
+          },
+          {
+            "T_K": 500.0,
+            "weights": {
+              "Γ": 0.295,
+              "K": 0.705
+            }
+          },
+          {
+            "T_K": 600.0,
+            "weights": {
+              "Γ": 0.3772,
+              "K": 0.6228
+            }
+          },
+          {
+            "T_K": 700.0,
+            "weights": {
+              "Γ": 0.4409,
+              "K": 0.5591
+            }
+          },
+          {
+            "T_K": 800.0,
+            "weights": {
+              "Γ": 0.4902,
+              "K": 0.5098
+            }
+          },
+          {
+            "T_K": 900.0,
+            "weights": {
+              "Γ": 0.5287,
+              "K": 0.4713
+            }
+          }
+        ],
+        "edge_star_vs_by_direction": {
+          "star": "K",
+          "x": 1.0,
+          "y": 0.9999
+        },
+        "skipped_band_crossings": [],
+        "warnings": [],
+        "note": "不含谷间散射（K↔Q、K↔K' 的大波矢声子），只有谷内 LA 形变势散射，是上限；窗口外的谷不计（window_truncation_T_K 列出窗口边缘玻尔兹曼因子 >1% 的温度）。"
+      },
+      "single_valley_scope": {
+        "edge_star": "K",
+        "T_K": 300.0,
+        "share": 0.913,
+        "others": {
+          "Γ": 0.087
+        },
+        "shares_vs_T": [
+          {
+            "T_K": 100.0,
+            "share": 0.9999
+          },
+          {
+            "T_K": 200.0,
+            "share": 0.9852
+          },
+          {
+            "T_K": 300.0,
+            "share": 0.913
+          },
+          {
+            "T_K": 400.0,
+            "share": 0.8063
+          },
+          {
+            "T_K": 500.0,
+            "share": 0.705
+          },
+          {
+            "T_K": 600.0,
+            "share": 0.6228
+          },
+          {
+            "T_K": 700.0,
+            "share": 0.5591
+          },
+          {
+            "T_K": 800.0,
+            "share": 0.5098
+          },
+          {
+            "T_K": 900.0,
+            "share": 0.4713
+          }
+        ],
+        "note": "单谷值只代表 K 谷：300 K 时占载流子 91.3%（Γ 8.7% 未计入），900 K 时降到 47.1%；这些谷和谷间散射单谷 DPT 都不含，材料的迁移率以 S8.4（AMSET）为准"
+      },
+      "mobility_vs_T": [
+        {
+          "T_K": 100.0,
+          "mobility_cm2_Vs": 4989.126,
+          "mobility_x_cm2_Vs": 4760.421,
+          "tau_x_s": 1.5173191751327562e-12,
+          "mobility_y_cm2_Vs": 4760.805,
+          "tau_y_s": 1.5174415025881242e-12,
+          "mobility_inplane_cm2_Vs": 4760.613
+        },
+        {
+          "T_K": 200.0,
+          "mobility_cm2_Vs": 2494.563,
+          "mobility_x_cm2_Vs": 2380.211,
+          "tau_x_s": 7.586595875663781e-13,
+          "mobility_y_cm2_Vs": 2380.403,
+          "tau_y_s": 7.587207512940621e-13,
+          "mobility_inplane_cm2_Vs": 2380.307
+        },
+        {
+          "T_K": 300.0,
+          "mobility_cm2_Vs": 1663.042,
+          "mobility_x_cm2_Vs": 1586.807,
+          "tau_x_s": 5.057730583775854e-13,
+          "mobility_y_cm2_Vs": 1586.935,
+          "tau_y_s": 5.058138341960414e-13,
+          "mobility_inplane_cm2_Vs": 1586.871
+        },
+        {
+          "T_K": 400.0,
+          "mobility_cm2_Vs": 1247.282,
+          "mobility_x_cm2_Vs": 1190.105,
+          "tau_x_s": 3.7932979378318905e-13,
+          "mobility_y_cm2_Vs": 1190.201,
+          "tau_y_s": 3.7936037564703106e-13,
+          "mobility_inplane_cm2_Vs": 1190.153
+        },
+        {
+          "T_K": 500.0,
+          "mobility_cm2_Vs": 997.825,
+          "mobility_x_cm2_Vs": 952.084,
+          "tau_x_s": 3.0346383502655124e-13,
+          "mobility_y_cm2_Vs": 952.161,
+          "tau_y_s": 3.0348830051762486e-13,
+          "mobility_inplane_cm2_Vs": 952.122
+        },
+        {
+          "T_K": 600.0,
+          "mobility_cm2_Vs": 831.521,
+          "mobility_x_cm2_Vs": 793.404,
+          "tau_x_s": 2.528865291887927e-13,
+          "mobility_y_cm2_Vs": 793.467,
+          "tau_y_s": 2.529069170980207e-13,
+          "mobility_inplane_cm2_Vs": 793.436
+        },
+        {
+          "T_K": 700.0,
+          "mobility_cm2_Vs": 712.732,
+          "mobility_x_cm2_Vs": 680.06,
+          "tau_x_s": 2.167598821618223e-13,
+          "mobility_y_cm2_Vs": 680.115,
+          "tau_y_s": 2.1677735751258917e-13,
+          "mobility_inplane_cm2_Vs": 680.087
+        },
+        {
+          "T_K": 800.0,
+          "mobility_cm2_Vs": 623.641,
+          "mobility_x_cm2_Vs": 595.053,
+          "tau_x_s": 1.8966489689159452e-13,
+          "mobility_y_cm2_Vs": 595.101,
+          "tau_y_s": 1.8968018782351553e-13,
+          "mobility_inplane_cm2_Vs": 595.077
+        },
+        {
+          "T_K": 900.0,
+          "mobility_cm2_Vs": 554.347,
+          "mobility_x_cm2_Vs": 528.936,
+          "tau_x_s": 1.6859101945919512e-13,
+          "mobility_y_cm2_Vs": 528.978,
+          "tau_y_s": 1.6860461139868047e-13,
+          "mobility_inplane_cm2_Vs": 528.957
+        }
+      ]
+    }
+  ],
+  "note": "经典 DPT 声学支迁移率，用于和 amset(ADP) 对标。m*/E1 自动值精度有限——务必核对，或在本材料 step.conf 手填。μ∝1/T。",
+  "temperatures_K": [
+    100.0,
+    200.0,
+    300.0,
+    400.0,
+    500.0,
+    600.0,
+    700.0,
+    800.0,
+    900.0
+  ],
+  "za_coupling": {
+    "sigma_h": true,
+    "structure": "step3_uniform/POSCAR",
+    "symprec": 0.01,
+    "note": "有水平镜面 σh：ZA 一阶耦合被对称性禁止，只算面内声学支成立"
+  }
+}

@@ -1,0 +1,394 @@
+{
+  "electron": {
+    "edge_energy_eV": -1.8256,
+    "n_hits": 1,
+    "E1_xx_eV": 6.4433,
+    "E1_yy_eV": 6.4433,
+    "E1_zz_eV": 4.7133,
+    "E1_iso_eV": 6.4433,
+    "E1_iso_def": "(D_xx+D_yy)/2（面内）",
+    "spread_xx": 0.0,
+    "spread_yy": 0.0,
+    "hits": [
+      {
+        "spin": "up",
+        "band_global": 13,
+        "band_h5": 3,
+        "k_h5": 5734,
+        "k_frac": [
+          0.333333,
+          0.333333,
+          0.0
+        ],
+        "E1_xx_eV": 6.4433,
+        "E1_yy_eV": 6.4433,
+        "E1_zz_eV": 4.7133,
+        "E1_iso_eV": 6.4433
+      }
+    ],
+    "E1_vac_xx_raw_eV": 8.5299,
+    "E1_vac_yy_raw_eV": 8.5418,
+    "E1_vac_xx_eV": 8.5359,
+    "E1_vac_yy_eV": 8.5358,
+    "E1_vac_iso_eV": 8.5359,
+    "vac_window_scan": {
+      "0.1": {
+        "xx": 8.5301,
+        "yy": 8.5421,
+        "iso": 8.5361
+      },
+      "0.15": {
+        "xx": 8.5301,
+        "yy": 8.5421,
+        "iso": 8.5361
+      },
+      "0.2": {
+        "xx": 8.53,
+        "yy": 8.542,
+        "iso": 8.536
+      },
+      "0.3": {
+        "xx": 8.5296,
+        "yy": 8.5414,
+        "iso": 8.5355
+      },
+      "0.35": {
+        "xx": 8.5288,
+        "yy": 8.5403,
+        "iso": 8.5345
+      },
+      "0.4": {
+        "xx": 8.5265,
+        "yy": 8.5375,
+        "iso": 8.532
+      }
+    },
+    "scan_verdict": {
+      "n_windows": 6,
+      "mean_iso_eV": 8.535,
+      "std_eV": 0.0015,
+      "CV": 0.0002,
+      "sign_flips": 0,
+      "recommend": "窗口依赖弱（CV < 5%），生产值可靠"
+    }
+  },
+  "hole": {
+    "edge_energy_eV": -3.6505,
+    "n_hits": 1,
+    "E1_xx_eV": 0.3883,
+    "E1_yy_eV": 0.3883,
+    "E1_zz_eV": 1.9733,
+    "E1_iso_eV": 0.3883,
+    "E1_iso_def": "(D_xx+D_yy)/2（面内）",
+    "spread_xx": 0.0,
+    "spread_yy": 0.0,
+    "hits": [
+      {
+        "spin": "up",
+        "band_global": 12,
+        "band_h5": 2,
+        "k_h5": 5734,
+        "k_frac": [
+          0.333333,
+          0.333333,
+          0.0
+        ],
+        "E1_xx_eV": 0.3883,
+        "E1_yy_eV": 0.3883,
+        "E1_zz_eV": 1.9733,
+        "E1_iso_eV": 0.3883
+      }
+    ],
+    "E1_vac_xx_raw_eV": 2.4699,
+    "E1_vac_yy_raw_eV": 2.4918,
+    "E1_vac_xx_eV": 2.4809,
+    "E1_vac_yy_eV": 2.4808,
+    "E1_vac_iso_eV": 2.4809,
+    "vac_window_scan": {
+      "0.1": {
+        "xx": 2.4701,
+        "yy": 2.4921,
+        "iso": 2.4811
+      },
+      "0.15": {
+        "xx": 2.4701,
+        "yy": 2.4921,
+        "iso": 2.4811
+      },
+      "0.2": {
+        "xx": 2.47,
+        "yy": 2.492,
+        "iso": 2.481
+      },
+      "0.3": {
+        "xx": 2.4696,
+        "yy": 2.4914,
+        "iso": 2.4805
+      },
+      "0.35": {
+        "xx": 2.4688,
+        "yy": 2.4903,
+        "iso": 2.4795
+      },
+      "0.4": {
+        "xx": 2.4665,
+        "yy": 2.4875,
+        "iso": 2.477
+      }
+    },
+    "scan_verdict": {
+      "n_windows": 6,
+      "mean_iso_eV": 2.48,
+      "std_eV": 0.0015,
+      "CV": 0.0006,
+      "sign_flips": 0,
+      "recommend": "窗口依赖弱（CV < 5%），生产值可靠"
+    }
+  },
+  "vac_align": {
+    "status": "ok",
+    "window_half": 0.25,
+    "flat_tol_eV": 0.001,
+    "strain_mag": {
+      "xx": 0.005,
+      "yy": 0.005
+    },
+    "pairs": {
+      "xx": [
+        "deform-01",
+        "deform-02"
+      ],
+      "yy": [
+        "deform-03",
+        "deform-04"
+      ]
+    },
+    "dvac_eV_per_unit_strain": {
+      "xx": -1.91008,
+      "yy": -1.90816
+    }
+  },
+  "deform_ref": {
+    "delta_eV_per_unit_strain": [
+      [
+        1.910079803049181,
+        0.0,
+        0.0
+      ],
+      [
+        0.0,
+        1.9081597645292252,
+        0.0
+      ],
+      [
+        0.0,
+        0.0,
+        0.0
+      ]
+    ],
+    "dvac_eV_per_unit_strain": {
+      "xx": -1.91008,
+      "yy": -1.90816
+    },
+    "components_applied": [
+      "xx",
+      "yy"
+    ],
+    "formula": "D_vac = D_core + delta,  delta_ij = -dE_vac/deps_ij",
+    "note": "Δ 与能带无关（真空势的应变导数只依赖构型），加到 deformation.h5 的所有带×所有 k 上即得真空口径；未施加的应变分量 Δ 留 0。"
+  },
+  "skill_rev": "2026-10-22-0061m-strain-label",
+  "read_paths": {
+    "undeformed": {
+      "vasprun.xml": "rigid",
+      "LOCPOT": "rigid"
+    },
+    "deform-01": {
+      "POSCAR": "ionrelax",
+      "LOCPOT": "ionrelax",
+      "vasprun.xml": "ionrelax"
+    },
+    "deform-02": {
+      "POSCAR": "ionrelax",
+      "LOCPOT": "ionrelax",
+      "vasprun.xml": "ionrelax"
+    },
+    "deform-03": {
+      "POSCAR": "ionrelax",
+      "LOCPOT": "ionrelax",
+      "vasprun.xml": "ionrelax"
+    },
+    "deform-04": {
+      "POSCAR": "ionrelax",
+      "LOCPOT": "ionrelax",
+      "vasprun.xml": "ionrelax"
+    }
+  },
+  "validity": "UNKNOWN: no discriminant.json",
+  "deform_geometry": "ionrelax(in-plane)+clamped(out-of-plane)",
+  "deform_geometry_folders": {
+    "deform-01": "ionrelax",
+    "deform-02": "ionrelax",
+    "deform-03": "ionrelax",
+    "deform-04": "ionrelax",
+    "deform-05": "clamped",
+    "deform-06": "clamped",
+    "deform-07": "clamped",
+    "deform-08": "clamped",
+    "deform-09": "ionrelax"
+  },
+  "core_reference": "avg_core",
+  "core_reference_folders": {
+    "undeformed": "avg_core",
+    "deform-01/ionrelax": "avg_core",
+    "deform-02/ionrelax": "avg_core",
+    "deform-03/ionrelax": "avg_core",
+    "deform-04/ionrelax": "avg_core",
+    "deform-05": "avg_core",
+    "deform-06": "avg_core",
+    "deform-07": "avg_core",
+    "deform-08": "avg_core",
+    "deform-09/ionrelax": "avg_core"
+  },
+  "ionrelax_check": {
+    "ediffg_ref": -0.005,
+    "ratio_warn": 0.25,
+    "folders": {
+      "deform-01": {
+        "ediffg": -0.02,
+        "nsw": 60,
+        "n_ionic": 2,
+        "fmax_first": 0.06089,
+        "fmax_last": 0.01701,
+        "ratio_last_first": 0.2794,
+        "flags": [
+          "weak",
+          "loose"
+        ],
+        "status": "weak"
+      },
+      "deform-02": {
+        "ediffg": -0.02,
+        "nsw": 60,
+        "n_ionic": 2,
+        "fmax_first": 0.05063,
+        "fmax_last": 0.01915,
+        "ratio_last_first": 0.3783,
+        "flags": [
+          "weak",
+          "loose"
+        ],
+        "status": "weak"
+      },
+      "deform-03": {
+        "ediffg": -0.02,
+        "nsw": 60,
+        "n_ionic": 2,
+        "fmax_first": 0.06079,
+        "fmax_last": 0.01632,
+        "ratio_last_first": 0.2685,
+        "flags": [
+          "weak",
+          "loose"
+        ],
+        "status": "weak"
+      },
+      "deform-04": {
+        "ediffg": -0.02,
+        "nsw": 60,
+        "n_ionic": 2,
+        "fmax_first": 0.05075,
+        "fmax_last": 0.01994,
+        "ratio_last_first": 0.3928,
+        "flags": [
+          "weak",
+          "loose"
+        ],
+        "status": "weak"
+      },
+      "deform-09": {
+        "ediffg": -0.02,
+        "nsw": 60,
+        "n_ionic": 3,
+        "fmax_first": 0.06847,
+        "fmax_last": 0.00283,
+        "ratio_last_first": 0.0413,
+        "flags": [
+          "loose"
+        ],
+        "status": "loose"
+      }
+    },
+    "ediffg_used": [
+      -0.02
+    ],
+    "n_flagged": 5
+  },
+  "scf_state_check": {
+    "tol_abs_muB": 0.5,
+    "tol_rel": 0.2,
+    "folders": {
+      "deform-01/ionrelax": {
+        "mag": null,
+        "nelec": 6,
+        "nelm": 200
+      },
+      "deform-02/ionrelax": {
+        "mag": null,
+        "nelec": 6,
+        "nelm": 200
+      },
+      "deform-03/ionrelax": {
+        "mag": null,
+        "nelec": 6,
+        "nelm": 200
+      },
+      "deform-04/ionrelax": {
+        "mag": null,
+        "nelec": 6,
+        "nelm": 200
+      },
+      "deform-05": {
+        "mag": null,
+        "nelec": 34,
+        "nelm": 200
+      },
+      "deform-06": {
+        "mag": null,
+        "nelec": 34,
+        "nelm": 200
+      },
+      "deform-07": {
+        "mag": null,
+        "nelec": 34,
+        "nelm": 200
+      },
+      "deform-08": {
+        "mag": null,
+        "nelec": 34,
+        "nelm": 200
+      },
+      "deform-09/ionrelax": {
+        "mag": null,
+        "nelec": 6,
+        "nelm": 200
+      },
+      "step3_uniform": {
+        "mag": null,
+        "nelec": 32,
+        "nelm": 200
+      },
+      "step3b_uniform_full": {
+        "mag": null,
+        "nelec": 32,
+        "nelm": 200
+      },
+      "undeformed": {
+        "mag": null,
+        "nelec": 34,
+        "nelm": 200
+      }
+    },
+    "issues": []
+  }
+}
