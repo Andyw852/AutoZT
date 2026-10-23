@@ -26,6 +26,29 @@ This project adheres to Semantic Versioning; versions before 1.0.0 are developme
   far above the `ODP_MAX_JOBS=40` guard, and IVS only ever applied to 2D hexagonal K/K' valleys (not 3D monoclinic
   cells like Mg2C60), where DFPT is both cheaper and the physically appropriate method.
 - Docs updated: `skill.yaml` group headers, `METHODOLOGY.md` (ODP/IVS sections), `step8.4_amset2d/README.md`.
+### Added (2026-10-23: [0072] intravalley ADP deformation potentials from DFPT acoustic slopes — experimental, off by default)
+- Validation on Si (QE 7.4, SG15 NC PBE, a = 5.479 Å) showed the small-q acoustic matrix elements carry a spurious 1/q
+  long-range term (acoustic-sum-rule violation, ΣZ* ≈ 0.16 e), so the single-|q| slope fit is wrong by an order of
+  magnitude. Fitting M = A/q + B·q over three |q| gives Ξu ≈ 8.5 eV (Li 2021: 8.84) but Ξd ≈ 4.5 eV (Li 2021: 1.01).
+  `IVS_ADP` and `ADP_DFPT` therefore default to `off`; details in ke-dft-cpu METHODOLOGY [0072].
+- eph-qe-cpu `ivs_dfpt` group (`IVS_ADP = auto|on|off`, `IVS_ADP_DQ` = 0.03 Å⁻¹): S10 appends six small-q jobs
+  `q-adp1..6` (Cartesian x, y, z, xy, xz, yz) with the valley centres as initial states. S13 solves, per direction, the
+  three acoustic modes' centre-of-mass displacements for w = |q|·D·q̂ (internal strain is in the acoustic eigenvectors),
+  fits the symmetric deformation-potential tensor D from the six directions (one overall sign undetermined), expands
+  it over the valley star, and writes it to the `"adp"` block of `ivs_dfpt_params.json`. Method of Li, Graziosi and
+  Neophytou, PRB 104, 195201 (2021). `auto` runs only in 3D structures with an inversion centre (otherwise the
+  piezoelectric long-range term contaminates the slope); 2D is not supported (no 2D Coulomb truncation in ph.x AHC).
+  Degenerate band edges (Si holes at Γ) are marked `degenerate` and left to `ADP_DEGEN`.
+- ke-dft-cpu S8 (`ADP_DFPT = auto|on|off`, `ADP_DFPT_EWIN` = 0.3 eV): states within the window of a non-degenerate band
+  edge get the DFPT tensor of their nearest valley member instead of the S7 band-edge-shift tensor. The substitution
+  sits in a proxy around AMSET's deformation-potential interpolator, so AMSET's ADP kernel and amset_ir_fix's star
+  average are unchanged.
+- Reason: the hydrostatic part of the S7 deformation potential depends on the absolute (core-level) alignment. For Si
+  electrons S7 gives 8.72 eV along the valley axis against Ξd + Ξu = 9.85 eV from DFPT (Li 2021), and the electron
+  mobility with ADP + IVS is 1602 cm²/Vs against 1366–1383 (EPW) and 1327 (Li 2021).
+- Tests: `tests/test_0072_adp_dfpt.py` (synthetic acoustic modes with internal strain, degenerate-TA rotation and
+  arbitrary phases; Si Δ star expansion; S10 planning; S8 reading). Existing IVS/ODP tests that compare against the
+  pre-[0072] q list now set `IVS_ADP = off`.
 
 ### Changed (2026-10-23: [0073] ke-dft-cpu S6_elastic sets its own wall-clock limit)
 - The S6 gen already estimated the IBRION=6 wall time (SCF count x S1 ionic-step time x 2.0). It now also scales the
