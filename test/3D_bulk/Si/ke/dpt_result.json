@@ -1,0 +1,354 @@
+{
+  "dim": "3d",
+  "is_2d": false,
+  "temperature_K": 300.0,
+  "skill_rev": "2026-10-22-0071-2d-headline-md",
+  "env": {
+    "python": "/public/home/wangchao/miniconda3/envs/atomate2_p_a/bin/python",
+    "amset": "N/A",
+    "host": "login01"
+  },
+  "overrides": {
+    "ALLOW_COARSE_S3": {
+      "value": true,
+      "source": "step.conf ALLOW_COARSE_S3"
+    }
+  },
+  "s3_grid": {
+    "mesh": [
+      34,
+      34,
+      34
+    ],
+    "issues": [],
+    "allow_coarse": true
+  },
+  "functional": {
+    "func": "pbesol",
+    "label": "PBEsol（GGA=PS，无色散修正）",
+    "source": "step1_opt/workflow_method.txt",
+    "note": "和文献比较前先核对文献用的泛函：GGA=PS 是 PBEsol，不是 PBE。PBEsol 的晶格通常比 PBE 小约 1%，C_2D 随之偏硬，m*、形变势和谷间能差也会变，不能直接当作 PBE 结果比。"
+  },
+  "formula": "3D: μ=2√(2π)eℏ⁴C_3D/(3(k_BT)^{3/2}m*^{5/2}E1²)；[0069] 多谷（带边谷有对称等价谷）时 E1 = |â·D·â|（谷轴 LA 形变势）、C = C_L(â)、μ = (μx+μy+μz)/3（见各载流子的 formula）",
+  "results": [
+    {
+      "carrier": "electron",
+      "inputs": {
+        "C_3D_Pa": 151707000000.0,
+        "C_provenance": "[0069] 沿谷轴的纵向模量 C_L(â) = 151.7 GPa（step6 全弹性张量；对角 C11/C22/C33 = [151.7, 151.7, 151.7]）",
+        "m_eff_m0": 0.3309,
+        "m_provenance": "三维二次型拟合 m_d=(det M)^(1/3)（带边三维二次型拟合(amset-subproc, 能量窗口取点 |ΔE| ≤ 0.1 eV（各向异性谷；与 0.125 eV 窗口主曲率差 4%）, 24点/5壳层, R<0.14, 模型=a+b+c+d+e+f+g+h+i+j, cond=1e+03, rel=0.023, spin=0)；带边 k=[0.4118, 0.4118, 0.0] 有 6 个等价谷，m_α 取对它们平均的电导质量（单谷 [0.1928, 0.1928, 0.9738]））；旧的方向分解值 0.3025 不再用（3D 各向异性时偏轻）；能带边抛物拟合(3D, 8点, R<0.10, spin=0)",
+        "E1_eV": 8.72,
+        "E1_provenance": "[0069] 多谷谷轴 E1 = |â·D·â|，â = [-0.0, 0.0, 1.0]（Γ→谷心，6 个等价谷；带符号中心差分（deformation_signed.h5，dE/dε））；旧口径的等价谷对角平均 [2.9933, 2.9933, 2.9933] 不再用（先平均张量再平方，Si 导带成了静水值 Ξ_d + Ξ_u/3）",
+        "T_K": 300.0,
+        "m_c_m0": 0.2632
+      },
+      "mobility_cm2_Vs": 2433.354,
+      "formula": "[0069] 多谷谷轴：μ = (μx+μy+μz)/3，μ_α = 2√(2π)eℏ⁴C_L(â)/(3(k_BT)^{3/2} m_α m_d^{3/2} E1²)，E1 = |â·D·â|",
+      "status": "ok",
+      "by_direction": {
+        "dim": "3d",
+        "C_3D_GPa": [
+          151.707,
+          151.707,
+          151.707
+        ],
+        "C_provenance": "[0069] 沿谷轴的纵向模量 C_L(â) = 151.7 GPa（step6 全弹性张量；对角 C11/C22/C33 = [151.7, 151.7, 151.7]）",
+        "m_eff_m0": [
+          0.2632,
+          0.2632,
+          0.2632
+        ],
+        "m_provenance": "带边三维二次型拟合(amset-subproc, 能量窗口取点 |ΔE| ≤ 0.1 eV（各向异性谷；与 0.125 eV 窗口主曲率差 4%）, 24点/5壳层, R<0.14, 模型=a+b+c+d+e+f+g+h+i+j, cond=1e+03, rel=0.023, spin=0)；带边 k=[0.4118, 0.4118, 0.0] 有 6 个等价谷，m_α 取对它们平均的电导质量（单谷 [0.1928, 0.1928, 0.9738]）",
+        "E1_eV": [
+          8.72,
+          8.72,
+          8.72
+        ],
+        "E1_provenance": "[0069] 多谷谷轴 E1 = |â·D·â|，â = [-0.0, 0.0, 1.0]（Γ→谷心，6 个等价谷；带符号中心差分（deformation_signed.h5，dE/dε））；旧口径的等价谷对角平均 [2.9933, 2.9933, 2.9933] 不再用（先平均张量再平方，Si 导带成了静水值 Ξ_d + Ξ_u/3）",
+        "T_K": 300.0,
+        "formula": "mu_a = 2*sqrt(2pi)*e*hbar^4*C_a/(3*(kB*T)^1.5*m_a*m_d^1.5*E1_a^2); m_a = 1/W_aa（电导质量）, m_d = det(M)^(1/3); tau_a = mu_a*m_a/e；[0069] 多谷：E1、C 取谷轴值，三个方向共用（τ 各向同性近似，各向异性只来自 m_α）",
+        "valley_axis": {
+          "E1_eV": 8.72,
+          "C_GPa": 151.707,
+          "axis": [
+            -0.0,
+            0.0,
+            1.0
+          ],
+          "k_frac": [
+            0.4118,
+            0.4118,
+            0.0
+          ],
+          "n_star": 6,
+          "tensor_source": "带符号中心差分（deformation_signed.h5，dE/dε）",
+          "D_eV": [
+            [
+              -0.13,
+              -0.0,
+              -0.0
+            ],
+            [
+              -0.0,
+              -0.13,
+              -0.0
+            ],
+            [
+              -0.0,
+              -0.0,
+              8.72
+            ]
+          ],
+          "D_eig_eV": [
+            -0.13,
+            -0.13,
+            8.72
+          ]
+        },
+        "m_d_m0": 0.3309,
+        "M_m0": [
+          [
+            0.1928,
+            -0.0,
+            0.0
+          ],
+          [
+            -0.0,
+            0.1928,
+            0.0
+          ],
+          [
+            0.0,
+            0.0,
+            0.9738
+          ]
+        ],
+        "m_valley_m0": [
+          0.1928,
+          0.1928,
+          0.9738
+        ],
+        "n_equiv_valleys": 6,
+        "x": {
+          "C_3D_GPa": 151.707,
+          "m_eff_m0": 0.2632,
+          "E1_eV": 8.72,
+          "mobility_cm2_Vs": 2433.354,
+          "tau_s": 3.6414112618874956e-13
+        },
+        "y": {
+          "C_3D_GPa": 151.707,
+          "m_eff_m0": 0.2632,
+          "E1_eV": 8.72,
+          "mobility_cm2_Vs": 2433.354,
+          "tau_s": 3.6414112618874956e-13
+        },
+        "z": {
+          "C_3D_GPa": 151.707,
+          "m_eff_m0": 0.2632,
+          "E1_eV": 8.72,
+          "mobility_cm2_Vs": 2433.354,
+          "tau_s": 3.6414112618874956e-13
+        },
+        "status": "ok"
+      },
+      "multi_valley": {
+        "status": "多谷 DPT 只实现 2D（3D 用上面的各向同性值）"
+      },
+      "mobility_vs_T": [
+        {
+          "T_K": 100.0,
+          "mobility_cm2_Vs": 12644.078,
+          "mobility_x_cm2_Vs": 12644.078,
+          "tau_x_s": 1.8921327950527926e-12,
+          "mobility_y_cm2_Vs": 12644.078,
+          "tau_y_s": 1.8921327950527926e-12,
+          "mobility_z_cm2_Vs": 12644.078,
+          "tau_z_s": 1.8921327950527926e-12,
+          "mobility_mean_cm2_Vs": 12644.078
+        },
+        {
+          "T_K": 200.0,
+          "mobility_cm2_Vs": 4470.357,
+          "mobility_x_cm2_Vs": 4470.357,
+          "tau_x_s": 6.689699651436428e-13,
+          "mobility_y_cm2_Vs": 4470.357,
+          "tau_y_s": 6.689699651436428e-13,
+          "mobility_z_cm2_Vs": 4470.357,
+          "tau_z_s": 6.689699651436428e-13,
+          "mobility_mean_cm2_Vs": 4470.357
+        },
+        {
+          "T_K": 300.0,
+          "mobility_cm2_Vs": 2433.354,
+          "mobility_x_cm2_Vs": 2433.354,
+          "tau_x_s": 3.6414112618874956e-13,
+          "mobility_y_cm2_Vs": 2433.354,
+          "tau_y_s": 3.6414112618874956e-13,
+          "mobility_z_cm2_Vs": 2433.354,
+          "tau_z_s": 3.6414112618874956e-13,
+          "mobility_mean_cm2_Vs": 2433.354
+        },
+        {
+          "T_K": 400.0,
+          "mobility_cm2_Vs": 1580.51,
+          "mobility_x_cm2_Vs": 1580.51,
+          "tau_x_s": 2.365165993815991e-13,
+          "mobility_y_cm2_Vs": 1580.51,
+          "tau_y_s": 2.365165993815991e-13,
+          "mobility_z_cm2_Vs": 1580.51,
+          "tau_z_s": 2.365165993815991e-13,
+          "mobility_mean_cm2_Vs": 1580.51
+        },
+        {
+          "T_K": 500.0,
+          "mobility_cm2_Vs": 1130.921,
+          "mobility_x_cm2_Vs": 1130.921,
+          "tau_x_s": 1.6923750208778886e-13,
+          "mobility_y_cm2_Vs": 1130.921,
+          "tau_y_s": 1.6923750208778886e-13,
+          "mobility_z_cm2_Vs": 1130.921,
+          "tau_z_s": 1.6923750208778886e-13,
+          "mobility_mean_cm2_Vs": 1130.921
+        },
+        {
+          "T_K": 600.0,
+          "mobility_cm2_Vs": 860.321,
+          "mobility_x_cm2_Vs": 860.321,
+          "tau_x_s": 1.2874332981848556e-13,
+          "mobility_y_cm2_Vs": 860.321,
+          "tau_y_s": 1.2874332981848556e-13,
+          "mobility_z_cm2_Vs": 860.321,
+          "tau_z_s": 1.2874332981848556e-13,
+          "mobility_mean_cm2_Vs": 860.321
+        },
+        {
+          "T_K": 700.0,
+          "mobility_cm2_Vs": 682.716,
+          "mobility_x_cm2_Vs": 682.716,
+          "tau_x_s": 1.0216556782080068e-13,
+          "mobility_y_cm2_Vs": 682.716,
+          "tau_y_s": 1.0216556782080068e-13,
+          "mobility_z_cm2_Vs": 682.716,
+          "tau_z_s": 1.0216556782080068e-13,
+          "mobility_mean_cm2_Vs": 682.716
+        },
+        {
+          "T_K": 800.0,
+          "mobility_cm2_Vs": 558.795,
+          "mobility_x_cm2_Vs": 558.795,
+          "tau_x_s": 8.362124564295535e-14,
+          "mobility_y_cm2_Vs": 558.795,
+          "tau_y_s": 8.362124564295535e-14,
+          "mobility_z_cm2_Vs": 558.795,
+          "tau_z_s": 8.362124564295535e-14,
+          "mobility_mean_cm2_Vs": 558.795
+        },
+        {
+          "T_K": 900.0,
+          "mobility_cm2_Vs": 468.299,
+          "mobility_x_cm2_Vs": 468.299,
+          "tau_x_s": 7.007899240936268e-14,
+          "mobility_y_cm2_Vs": 468.299,
+          "tau_y_s": 7.007899240936268e-14,
+          "mobility_z_cm2_Vs": 468.299,
+          "tau_z_s": 7.007899240936268e-14,
+          "mobility_mean_cm2_Vs": 468.299
+        }
+      ]
+    },
+    {
+      "carrier": "hole",
+      "inputs": {
+        "C_3D_Pa": 151706650000.0,
+        "C_provenance": "step6 (C11+C22+C33)/3",
+        "m_eff_m0": 0.4778,
+        "m_provenance": "带边方向分解+q^4外推(3D, 3方向, 最轻两支 0.4347/0.5253, 全组 0.4347..1.7383, spin=0)；带边 3 重简并，取重带（单带 DPT 对简并带边只是近似）",
+        "E1_eV": 3.47,
+        "E1_provenance": "deformation.h5 带边 3×3 张量 (D_xx+D_yy+D_zz)/3（芯势口径，n=3，带边点 3 个，连同对称等价点共 3 个）",
+        "T_K": 300.0
+      },
+      "mobility_cm2_Vs": 4878.586,
+      "status": "ok",
+      "caveats": [
+        "带边 3 重简并（如立方半导体 Γ 点价带顶）：单带 DPT 只是近似，μ 只作量级参考，与 AMSET / EPW 的差别不能当作问题",
+        "三维二次型拟合没出数（三维二次型拟合残差过大 rel=0.44（带边附近非二次型））：表头 m* = 0.4778 是旧的方向分解 / 径向拟合回退值，不可靠"
+      ],
+      "by_direction": {
+        "dim": "3d",
+        "C_3D_GPa": [
+          151.70665,
+          151.70665,
+          151.70665
+        ],
+        "C_provenance": "step6 C11/C22/C33",
+        "m_eff_m0": null,
+        "m_provenance": "三维二次型拟合残差过大 rel=0.44（带边附近非二次型）",
+        "E1_eV": [
+          3.47,
+          3.47,
+          3.47
+        ],
+        "E1_provenance": "deformation.h5 带边 3×3 张量对角（芯势口径，n=3，带边点 3 个，连同对称等价点共 3 个）",
+        "T_K": 300.0,
+        "formula": "mu_a = 2*sqrt(2pi)*e*hbar^4*C_a/(3*(kB*T)^1.5*m_a*m_d^1.5*E1_a^2); m_a = 1/W_aa（电导质量）, m_d = det(M)^(1/3); tau_a = mu_a*m_a/e",
+        "valley_axis_note": "带边 3 重简并：单带 DPT 只是近似，不用谷轴口径",
+        "status": "缺输入：m*"
+      },
+      "multi_valley": {
+        "status": "多谷 DPT 只实现 2D（3D 用上面的各向同性值）"
+      },
+      "mobility_vs_T": [
+        {
+          "T_K": 100.0,
+          "mobility_cm2_Vs": 25349.876
+        },
+        {
+          "T_K": 200.0,
+          "mobility_cm2_Vs": 8962.535
+        },
+        {
+          "T_K": 300.0,
+          "mobility_cm2_Vs": 4878.586
+        },
+        {
+          "T_K": 400.0,
+          "mobility_cm2_Vs": 3168.735
+        },
+        {
+          "T_K": 500.0,
+          "mobility_cm2_Vs": 2267.362
+        },
+        {
+          "T_K": 600.0,
+          "mobility_cm2_Vs": 1724.841
+        },
+        {
+          "T_K": 700.0,
+          "mobility_cm2_Vs": 1368.765
+        },
+        {
+          "T_K": 800.0,
+          "mobility_cm2_Vs": 1120.317
+        },
+        {
+          "T_K": 900.0,
+          "mobility_cm2_Vs": 938.884
+        }
+      ]
+    }
+  ],
+  "note": "经典 DPT 声学支迁移率，用于和 amset(ADP) 对标。m*/E1 自动值精度有限——务必核对，或在本材料 step.conf 手填。μ∝1/T。",
+  "temperatures_K": [
+    100.0,
+    200.0,
+    300.0,
+    400.0,
+    500.0,
+    600.0,
+    700.0,
+    800.0,
+    900.0
+  ]
+}
