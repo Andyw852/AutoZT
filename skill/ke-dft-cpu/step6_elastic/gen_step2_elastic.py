@@ -68,6 +68,18 @@ ISYM_FORCE = None
 #   用 tools/vasp_eta.py 的实测再校准）。超过墙时上限的 80% 就告警，并列出办法。
 #   Mo2S3（20 原子、NFREE=4、ISYM 关）= 265 次 SCF，实测每步约 6.5 min ≈ 29 h > regular 的 24 h。
 ELASTIC_STEP_FACTOR = 2.0
+# [0073] 自动墙时：submit.sh 的 --time 设成"预计 × WALLTIME_SAFETY"（取整到小时，至少 WALLTIME_MIN_H）。
+#   起因：hfeshell 模板不写 --time，SLURM 按分区默认 33 天申请，调度器没法拿它填空档，Mg₂C₆₀ 单层 S6 排到 2027 年；
+#   手动 conf --set submit.time=3-00:00:00 后当天就起跑。规则（只缩短、不越过已知上限）：
+#     · 材料 step.conf 的 [submit] 写了 time：照它，不动；
+#     · 模板 / QoS 已有上限（--time 或 regular/premium 查表）：预计 × 1.3 比上限短才改成它，否则保持上限并告警；
+#     · 模板没写 --time、QoS 也查不到：直接写预计 × 1.3（不写就是分区默认，往往几十天）。
+#   预计按 S1 每离子步耗时 × ELASTIC_STEP_FACTOR，再按 S6 / S1 的总核数比缩放（Mg₂C₆₀ 62 原子：1 → 3 节点实测约 3.1 倍）。
+#   设 None 关掉（回到只告警）。
+WALLTIME_SAFETY = 1.3
+WALLTIME_MIN_H = 2.0
+# 预计超过这么多小时就提示加节点（只提示，不改）
+WALLTIME_NODES_HINT_H = 24.0
 
 # ---- KPOINTS（VASPKIT；弹性比静态更密）----
 RUN_VASPKIT = True
@@ -327,11 +339,51 @@ def main():
     for name in ["POSCAR", "INCAR", "submit.sh", "KPOINTS", "POTCAR", METHOD_FILE]:
         print(f"[{'OK' if (step2 / name).exists() else 'MISSING'}] {name}")
     print("\n[DONE] step2_elastic 已生成，可用 vasp_std 提交")
-    _walltime_estimate(step1, step2)      # 放在最后：autozt 回显的是 gen 的末几行
+    _walltime_estimate(step1, step2, explicit_time=sub_ov.get("time"))   # 放在最后：autozt 回显的是 gen 的末几行
 
 
-def _walltime_estimate(step1, step2):
-    """patch_walltime（V144）：IBRION=6 的 SCF 次数 × S1 每步耗时 -> 预计墙时，与 submit.sh 的上限比。"""
+def _submit_cores(submit_sh):
+    """submit.sh 申请的总 MPI 进程数（--ntasks，或 --nodes × --ntasks-per-node）；读不到 None。"""
+    try:
+        text = Path(submit_sh).read_text(errors="ignore")
+    except OSError:
+        return None
+
+    def _get(flag):
+        m = re.search(r"^#SBATCH\s+--%s[=\s](\d+)" % flag, text, re.M)
+        return int(m.group(1)) if m else None
+    nt = _get("ntasks")
+    if nt:
+        return nt
+    npn = _get("ntasks-per-node")
+    return (_get("nodes") or 1) * npn if npn else None
+
+
+def _slurm_time(hours):
+    """小时 -> SLURM 的 D-HH:MM:SS（向上取整到整小时）。"""
+    import math
+    h = max(1, int(math.ceil(hours)))
+    return "%d-%02d:00:00" % divmod(h, 24)
+
+
+def _auto_time(step2, est_h, explicit_time, limit_h, limit_src):
+    """[0073] 按预计墙时设 --time。返回 (新 --time 或 None, 说明)。"""
+    if WALLTIME_SAFETY is None:
+        return None, "自动墙时已关（WALLTIME_SAFETY = None）"
+    if explicit_time:
+        return None, "step.conf 的 [submit] 写了 time=%s，照它" % explicit_time
+    target = max(WALLTIME_MIN_H, est_h * WALLTIME_SAFETY)
+    known_cap = limit_src.startswith("submit.sh --time") or limit_src.startswith("QoS ")
+    if known_cap and target >= limit_h:
+        return None, "预计 × %.1f = %.0f h 不短于上限 %.0f h（%s），保持上限" % (WALLTIME_SAFETY, target, limit_h, limit_src)
+    t = _slurm_time(target)
+    stepconf.apply_submit(step2 / "submit.sh", {"time": t})
+    return t, "预计 %.1f h × %.1f -> --time=%s（原来：%s）" % (est_h, WALLTIME_SAFETY, t, limit_src)
+
+
+def _walltime_estimate(step1, step2, explicit_time=None):
+    """patch_walltime（V144）：IBRION=6 的 SCF 次数 × S1 每步耗时 -> 预计墙时，与 submit.sh 的上限比。
+    [0073] 再按 S6 / S1 的核数比缩放，并据此自动设 --time（见 WALLTIME_SAFETY）。"""
     try:
         import json as _json
         import statistics as _st
@@ -349,10 +401,21 @@ def _walltime_estimate(step1, step2):
     rec = {"scf_steps_upper_bound": steps, "n_atoms": n_atoms, "n_inequivalent": n_ineq,
            "NFREE": inc.get("NFREE", NFREE), "ISYM": isym, "limit_h": limit_h, "limit_source": limit_src}
     if t1:
-        t_step = _st.median(t1) * ELASTIC_STEP_FACTOR
+        c1, c6 = _submit_cores(step1 / "submit.sh"), _submit_cores(step2 / "submit.sh")
+        core_ratio = (c1 / c6) if (c1 and c6) else 1.0
+        t_step = _st.median(t1) * ELASTIC_STEP_FACTOR * core_ratio
         est_h, over = _kc.walltime_verdict(steps, t_step, limit_h)
         rec.update({"t_step_s": round(t_step, 1), "s1_loop_median_s": round(_st.median(t1), 1),
-                    "factor": ELASTIC_STEP_FACTOR, "estimate_h": round(est_h, 1), "over": bool(over)})
+                    "factor": ELASTIC_STEP_FACTOR, "cores_s1": c1, "cores_s6": c6,
+                    "core_ratio": round(core_ratio, 3), "estimate_h": round(est_h, 1)})
+        new_t, why_t = _auto_time(step2, est_h, explicit_time, limit_h, limit_src)
+        rec["time_policy"] = why_t
+        if new_t:
+            rec["time_set"] = new_t
+            limit_h, limit_src = _kc.walltime_limit_h(step2 / "submit.sh")
+            rec.update({"limit_h": limit_h, "limit_source": limit_src})
+            est_h, over = _kc.walltime_verdict(steps, t_step, limit_h)
+        rec["over"] = bool(over)
     (step2 / "walltime_estimate.json").write_text(_json.dumps(rec, ensure_ascii=False, indent=1),
                                                   encoding="utf-8")
     head = ("[..] 墙时预估（V144）：IBRION=6 共约 %d 次 SCF（%d 原子，不等价 %d，NFREE=%s，ISYM=%s）；上限 %.0f h（%s）"
@@ -361,8 +424,13 @@ def _walltime_estimate(step1, step2):
         print(head + "；S1 的 OUTCAR 里没有 LOOP+，无法估每步耗时 —— 跑起来后用 tools/vasp_eta.py 看")
         return rec
     print(head)
-    msg = ("每步约 %.1f min（S1 离子步中位数 %.0f s × %.1f）-> 预计 %.1f h"
-           % (rec["t_step_s"] / 60.0, rec["s1_loop_median_s"], ELASTIC_STEP_FACTOR, rec["estimate_h"]))
+    msg = ("每步约 %.1f min（S1 离子步中位数 %.0f s × %.1f × 核数比 %s）-> 预计 %.1f h"
+           % (rec["t_step_s"] / 60.0, rec["s1_loop_median_s"], ELASTIC_STEP_FACTOR,
+              "%s/%s" % (rec["cores_s1"], rec["cores_s6"]) if rec["core_ratio"] != 1.0 else "1", rec["estimate_h"]))
+    print("[..] [0073] 墙时：%s" % rec["time_policy"])
+    if rec["estimate_h"] > WALLTIME_NODES_HINT_H:
+        print("[..] [0073] 预计超过 %.0f h：可以加节点（conf --set submit.nodes=N；Mg₂C₆₀ 62 原子 1 -> 3 节点实测约 3.1 倍）。"
+              "IBRION=6 只能用 NCORE=1，KPAR 未验证，不要改" % WALLTIME_NODES_HINT_H)
     if rec["over"]:
         print("[WARN] ★ %s，超过上限 %.0f h 的 %.0f%%：照这样提交多半会被 SLURM 按 TIMEOUT 杀掉，IBRION=6 不能续算。"
               "办法：conf --set submit.qos=premium（48 h）或 submit.time=…；或 NFREE=2（出厂已是 2；若 step.conf 改回了 4，SCF 次数约翻倍）；"

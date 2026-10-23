@@ -163,7 +163,52 @@ class GenTests(unittest.TestCase):
         self.assertIn("vasp_eta", buf.getvalue())
         src = (ROOT / "step6_elastic" / "gen_step2_elastic.py").read_text(encoding="utf-8")
         i_done = src.index('print("\\n[DONE] step2_elastic 已生成')
-        self.assertLess(i_done, src.index("_walltime_estimate(step1, step2)"))
+        self.assertLess(i_done, src.index("_walltime_estimate(step1, step2, explicit_time=sub_ov.get(\"time\"))"))
+
+    # ---- [0073] 自动墙时 ----
+    def _dirs2(self, s6_sbatch, s1_sbatch="#SBATCH --nodes=1\n#SBATCH --ntasks-per-node=64\n", loop_s=195.0):
+        s1, s2 = self._dirs("regular", loop_s)
+        (s1 / "submit.sh").write_text("#!/bin/bash\n" + s1_sbatch)
+        (s2 / "submit.sh").write_text("#!/bin/bash\n" + s6_sbatch + "mpirun vasp_std\n")
+        return s1, s2
+
+    def test_auto_time_without_time_line(self):
+        # hfeshell 式模板：不写 --time、没有 QoS -> 写预计 × 1.3（265 × 390 s ≈ 28.7 h -> 38 h）
+        import gen_step2_elastic as G
+        s1, s2 = self._dirs2("#SBATCH --nodes=1\n#SBATCH --ntasks-per-node=64\n")
+        with contextlib.redirect_stdout(io.StringIO()) as buf:
+            rec = G._walltime_estimate(s1, s2)
+        self.assertEqual(rec["time_set"], "1-14:00:00")
+        self.assertIn("#SBATCH --time=1-14:00:00", (s2 / "submit.sh").read_text())
+        self.assertFalse(rec["over"])
+        self.assertIn("加节点", buf.getvalue())                      # 预计 > 24 h 提示加节点
+        self.assertEqual(json.loads((s2 / "walltime_estimate.json").read_text())["time_set"], "1-14:00:00")
+
+    def test_auto_time_scales_with_cores_and_lowers_long_template_time(self):
+        # S6 用 3 倍核数 -> 预计 /3（≈ 9.6 h -> 13 h）；模板写了 10 天 -> 缩短
+        import gen_step2_elastic as G
+        s1, s2 = self._dirs2("#SBATCH --nodes=3\n#SBATCH --ntasks-per-node=64\n#SBATCH --time=10-00:00:00\n")
+        with contextlib.redirect_stdout(io.StringIO()) as buf:
+            rec = G._walltime_estimate(s1, s2)
+        self.assertAlmostEqual(rec["core_ratio"], 1 / 3.0, places=3)
+        self.assertEqual(rec["time_set"], "0-13:00:00")
+        self.assertIn("--time=0-13:00:00", (s2 / "submit.sh").read_text())
+        self.assertNotIn("加节点", buf.getvalue())
+
+    def test_auto_time_respects_explicit_and_never_exceeds_cap(self):
+        import gen_step2_elastic as G
+        s1, s2 = self._dirs2("#SBATCH --nodes=1\n#SBATCH --ntasks-per-node=64\n#SBATCH --time=3-00:00:00\n")
+        with contextlib.redirect_stdout(io.StringIO()):
+            rec = G._walltime_estimate(s1, s2, explicit_time="3-00:00:00")
+        self.assertNotIn("time_set", rec)
+        self.assertIn("--time=3-00:00:00", (s2 / "submit.sh").read_text())    # step.conf 显式写的，不动
+        s1, s2 = self._dirs2("#SBATCH --qos=regular\n#SBATCH --ntasks-per-node=64\n")
+        with contextlib.redirect_stdout(io.StringIO()) as buf:
+            rec = G._walltime_estimate(s1, s2)                             # 38 h > regular 24 h：不越过上限
+        self.assertNotIn("time_set", rec)
+        self.assertNotIn("--time", (s2 / "submit.sh").read_text())
+        self.assertTrue(rec["over"])
+        self.assertIn("★", buf.getvalue())
 
 
 if __name__ == "__main__":

@@ -14,6 +14,15 @@ This project adheres to Semantic Versioning; versions before 1.0.0 are developme
 
 ## [Unreleased]
 
+### Changed (2026-10-23: [0073] ke-dft-cpu S6_elastic sets its own wall-clock limit)
+- The S6 gen already estimated the IBRION=6 wall time (SCF count x S1 ionic-step time x 2.0). It now also scales the
+  estimate by the S1/S6 core ratio and writes `#SBATCH --time` = estimate x 1.3 (whole hours, at least 2 h). An explicit
+  `[submit] time` in the material step.conf is kept as is; a known ceiling (a template --time or the regular/premium
+  QoS table) is only ever shortened, never exceeded (the existing "will time out" warning still fires).
+- Reason: the hfeshell template has no --time, so SLURM requested the 33-day partition default and the scheduler could
+  not backfill it; the Mg2C60 monolayer S6 showed a start time in 2027 until --time was set to 3 days by hand.
+- Estimates above 24 h print a hint to add nodes (measured 3.1x from 1 to 3 nodes for 62-atom Mg2C60); NCORE stays 1.
+
 ### Fixed (2026-10-23: [0059-r4] eph-qe-cpu IVS — q=Γ 的 AHC nscf 不再按对称性扩增 k 列表)
 - `ivs_qe_common.gen_ph` 生成 AHC 用的 `nscf.in` 时，**只在 q=Γ（`gamma`）作业**加 `nosym=.true.` / `noinv=.true.`。
   原因：pw.x 默认按对称性扩增显式 k 列表，MoS2 的 q=Γ 作业从 2 个 k 扩成 4 个，ph.x ahc 对每个 k 各写一条记录，
