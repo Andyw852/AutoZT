@@ -1,0 +1,260 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="2000" height="1304" viewBox="0 0 2000 1304" font-family="Arial, Helvetica, 'Liberation Sans', sans-serif">
+<defs>
+<marker id="m-ink" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="12" markerHeight="12" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path d="M0,0.5 L10,5 L0,9.5 z" fill="#3a4654"/></marker>
+<marker id="m-blue" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="12" markerHeight="12" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path d="M0,0.5 L10,5 L0,9.5 z" fill="#2f5fa7"/></marker>
+<marker id="m-orange" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="12" markerHeight="12" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path d="M0,0.5 L10,5 L0,9.5 z" fill="#b8660f"/></marker>
+<marker id="m-green" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="12" markerHeight="12" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path d="M0,0.5 L10,5 L0,9.5 z" fill="#238266"/></marker>
+<marker id="m-purple" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="12" markerHeight="12" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path d="M0,0.5 L10,5 L0,9.5 z" fill="#5b3fa0"/></marker>
+<marker id="m-crimson" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="12" markerHeight="12" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path d="M0,0.5 L10,5 L0,9.5 z" fill="#b8244a"/></marker>
+<marker id="m-red" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="12" markerHeight="12" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path d="M0,0.5 L10,5 L0,9.5 z" fill="#c0392b"/></marker>
+<marker id="m-gray" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="12" markerHeight="12" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path d="M0,0.5 L10,5 L0,9.5 z" fill="#8a96a3"/></marker>
+</defs>
+<rect width="2000" height="1304" fill="#ffffff"/>
+<path d="M470 266 L894 332 L1073 332 L860 266 Z" fill="#c0392b" fill-opacity="0.07" stroke="none"/><path d="M470 266 L894 332" fill="none" stroke="#c0392b" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="6 5"/><path d="M860 266 L1073 332" fill="none" stroke="#c0392b" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="6 5"/>
+<path d="M470 1038 L894 972 L1073 972 L860 1038 Z" fill="#2f5fa7" fill-opacity="0.07" stroke="none"/><path d="M470 1038 L894 972" fill="none" stroke="#2f5fa7" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="6 5"/><path d="M860 1038 L1073 972" fill="none" stroke="#2f5fa7" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="6 5"/>
+<path d="M890 266 L1097 332 L1276 332 L1280 266 Z" fill="#3a4654" fill-opacity="0.07" stroke="none"/><path d="M890 266 L1097 332" fill="none" stroke="#3a4654" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="6 5"/><path d="M1280 266 L1276 332" fill="none" stroke="#3a4654" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="6 5"/>
+<path d="M890 1038 L1097 972 L1276 972 L1280 1038 Z" fill="#2f5fa7" fill-opacity="0.07" stroke="none"/><path d="M890 1038 L1097 972" fill="none" stroke="#2f5fa7" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="6 5"/><path d="M1280 1038 L1276 972" fill="none" stroke="#2f5fa7" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="6 5"/>
+<path d="M1310 266 L1300 332 L1479 332 L1700 266 Z" fill="#5b3fa0" fill-opacity="0.07" stroke="none"/><path d="M1310 266 L1300 332" fill="none" stroke="#5b3fa0" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="6 5"/><path d="M1700 266 L1479 332" fill="none" stroke="#5b3fa0" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="6 5"/>
+<path d="M1310 1038 L1300 972 L1479 972 L1700 1038 Z" fill="#2f5fa7" fill-opacity="0.07" stroke="none"/><path d="M1310 1038 L1300 972" fill="none" stroke="#2f5fa7" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="6 5"/><path d="M1700 1038 L1479 972" fill="none" stroke="#2f5fa7" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="6 5"/>
+<g transform="translate(0,6)">
+<rect x="470" y="20" width="390" height="240" rx="12" fill="#fffafa" stroke="#c0392b" stroke-width="2"/>
+<text x="488" y="52" font-size="21" font-weight="700" fill="#c0392b">Random displacements</text><text x="488" y="74" font-size="14" fill="#5b6673" font-family="'DejaVu Sans Mono', Menlo, Consolas, monospace">S4_disp · METHOD=alm</text>
+<rect x="488" y="100" width="60" height="60" rx="4" fill="#fff" stroke="#9aa3ad" stroke-width="1.6"/><circle cx="500" cy="112" r="4.4" fill="#e0a43a"/><circle cx="518" cy="112" r="4.4" fill="#3b6fc4"/><circle cx="536" cy="112" r="4.4" fill="#e0a43a"/><circle cx="500" cy="130" r="4.4" fill="#3b6fc4"/><circle cx="518" cy="130" r="4.4" fill="#e0a43a"/><circle cx="536" cy="130" r="4.4" fill="#3b6fc4"/><circle cx="500" cy="148" r="4.4" fill="#e0a43a"/><circle cx="518" cy="148" r="4.4" fill="#3b6fc4"/><circle cx="536" cy="148" r="4.4" fill="#e0a43a"/><path d="M500 112 H512" fill="none" stroke="#c0392b" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+<rect x="562" y="100" width="60" height="60" rx="4" fill="#fff" stroke="#9aa3ad" stroke-width="1.6"/><line x1="574" y1="112" x2="569.8" y2="112.7" stroke="#c0392b" stroke-width="1.6"/><circle cx="574" cy="112" r="4.4" fill="#e0a43a"/><line x1="592" y1="112" x2="589.9" y2="113.7" stroke="#c0392b" stroke-width="1.6"/><circle cx="592" cy="112" r="4.4" fill="#3b6fc4"/><line x1="610" y1="112" x2="612.0" y2="105.0" stroke="#c0392b" stroke-width="1.6"/><circle cx="610" cy="112" r="4.4" fill="#e0a43a"/><line x1="574" y1="130" x2="566.2" y2="135.4" stroke="#c0392b" stroke-width="1.6"/><circle cx="574" cy="130" r="4.4" fill="#3b6fc4"/><line x1="592" y1="130" x2="588.1" y2="125.7" stroke="#c0392b" stroke-width="1.6"/><circle cx="592" cy="130" r="4.4" fill="#e0a43a"/><line x1="610" y1="130" x2="617.9" y2="129.5" stroke="#c0392b" stroke-width="1.6"/><circle cx="610" cy="130" r="4.4" fill="#3b6fc4"/><line x1="574" y1="148" x2="579.4" y2="147.6" stroke="#c0392b" stroke-width="1.6"/><circle cx="574" cy="148" r="4.4" fill="#e0a43a"/><line x1="592" y1="148" x2="594.2" y2="142.4" stroke="#c0392b" stroke-width="1.6"/><circle cx="592" cy="148" r="4.4" fill="#3b6fc4"/><line x1="610" y1="148" x2="612.2" y2="153.9" stroke="#c0392b" stroke-width="1.6"/><circle cx="610" cy="148" r="4.4" fill="#e0a43a"/>
+<text x="518" y="180" font-size="15" text-anchor="middle" fill="#5b6673">finite</text>
+<text x="592" y="180" font-size="15" font-weight="700" text-anchor="middle" fill="#c0392b">random</text>
+<text x="646" y="104" font-size="14" font-weight="700" fill="#1d2733">DFT supercells (fc2 + fc3)</text>
+<text x="646" y="128" font-size="13" fill="#5b6673">SnSe, 144 atoms</text>
+<rect x="646" y="134" width="196" height="13" rx="2" fill="#c9d0d8"/>
+<rect x="646" y="151" width="6" height="13" rx="1" fill="#c0392b"/>
+<text x="658" y="162" font-size="13" font-weight="700" fill="#c0392b">21</text>
+<text x="646" y="188" font-size="13" fill="#5b6673"><tspan>MoS</tspan><tspan dy="3.9" font-size="8.6">2</tspan><tspan dy="-3.9"> 1L, 48 atoms</tspan></text>
+<rect x="646" y="195" width="80" height="13" rx="2" fill="#c9d0d8"/>
+<text x="721" y="206" font-size="11" font-weight="700" text-anchor="end" fill="#1d2733">13</text>
+<rect x="646" y="212" width="6" height="13" rx="1" fill="#c0392b"/>
+<text x="658" y="223" font-size="13" font-weight="700" fill="#c0392b">21</text>
+<rect x="488" y="232" width="12" height="10" rx="1" fill="#c9d0d8"/>
+<text x="504" y="241" font-size="13" fill="#5b6673">finite</text>
+<rect x="552" y="232" width="12" height="10" rx="1" fill="#c0392b"/>
+<text x="568" y="241" font-size="13" fill="#5b6673">random</text>
+<rect x="890" y="20" width="390" height="240" rx="12" fill="#fbfcfd" stroke="#3a4654" stroke-width="2"/>
+<text x="908" y="52" font-size="21" font-weight="700" fill="#1d2733">pheasy-gpu</text><rect x="1034" y="34" width="46" height="22" rx="4" fill="#5b3fa0"/><text x="1057" y="50" font-size="14" font-weight="700" text-anchor="middle" fill="#fff">GPU</text><text x="908" y="74" font-size="14" fill="#5b6673" font-family="'DejaVu Sans Mono', Menlo, Consolas, monospace">S5_fc · FIT_ENGINE=pheasy</text>
+<text x="908" y="108" font-size="15" fill="#24313a">fc2 + fc3 fit from random displacements</text>
+<text x="908" y="130" font-size="15" fill="#24313a"><tspan>same result as CPU (Δ ≈ 10</tspan><tspan dy="-6.3" font-size="9.9">−16</tspan><tspan dy="6.3">)</tspan></text>
+<text x="1262" y="160" font-size="13" text-anchor="end" fill="#5b6673">wall time</text>
+<text x="908" y="186" font-size="15" font-weight="700" fill="#1d2733">CPU</text>
+<rect x="956" y="172" width="306" height="18" rx="2" fill="#c9d0d8"/>
+<text x="908" y="224" font-size="15" font-weight="700" fill="#5b3fa0">GPU</text>
+<rect x="956" y="210" width="110" height="18" rx="2" fill="#fff" stroke="#5b3fa0" stroke-width="1.6" stroke-dasharray="5 4"/>
+<text x="1076" y="224" font-size="15" font-weight="700" fill="#5b3fa0">× ?</text>
+<rect x="1310" y="20" width="390" height="240" rx="12" fill="#fbfaff" stroke="#5b3fa0" stroke-width="2"/>
+<text x="1328" y="52" font-size="21" font-weight="700" fill="#5b3fa0">shengbte-gpu</text><rect x="1476" y="34" width="46" height="22" rx="4" fill="#5b3fa0"/><text x="1499" y="50" font-size="14" font-weight="700" text-anchor="middle" fill="#fff">GPU</text><text x="1328" y="74" font-size="14" fill="#5b6673" font-family="'DejaVu Sans Mono', Menlo, Consolas, monospace">S6_kappa · SOLVER=shengbte</text>
+<text x="1328" y="108" font-size="15" fill="#24313a">3-phonon BTE (RTA), CUDA build</text>
+<text x="1328" y="130" font-size="15" fill="#24313a"><tspan>κ</tspan><tspan dy="4.5" font-size="9.9">L</tspan><tspan dy="-4.5"> matches CPU to 4–6 digits</tspan></text>
+<text x="1682" y="160" font-size="13" text-anchor="end" fill="#5b6673">wall time</text>
+<text x="1328" y="186" font-size="15" font-weight="700" fill="#1d2733">CPU</text>
+<rect x="1376" y="172" width="306" height="18" rx="2" fill="#c9d0d8"/>
+<text x="1328" y="224" font-size="15" font-weight="700" fill="#5b3fa0">GPU</text>
+<rect x="1376" y="210" width="67" height="18" rx="2" fill="#5b3fa0"/>
+<text x="1453" y="224" font-size="15" font-weight="700" fill="#5b3fa0">≈ 4.6× faster</text>
+<text x="1682" y="248" font-size="13" text-anchor="end" fill="#5b6673">measured on RTX 3090</text>
+</g>
+<text x="154" y="456" font-size="21" font-weight="700" text-anchor="middle" fill="#1d2733">POSCAR</text>
+<path d="M109 468 H177 L199 490 V572 H109 Z" fill="#fff" stroke="#1d2733" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M177 468 V490 H199" fill="none" stroke="#1d2733" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+<line x1="154.0" y1="502.0" x2="173.1" y2="513.0" stroke="#8aa0c0" stroke-width="2"/>
+<line x1="173.1" y1="513.0" x2="173.1" y2="535.0" stroke="#8aa0c0" stroke-width="2"/>
+<line x1="173.1" y1="535.0" x2="154.0" y2="546.0" stroke="#8aa0c0" stroke-width="2"/>
+<line x1="154.0" y1="546.0" x2="134.9" y2="535.0" stroke="#8aa0c0" stroke-width="2"/>
+<line x1="134.9" y1="535.0" x2="134.9" y2="513.0" stroke="#8aa0c0" stroke-width="2"/>
+<line x1="134.9" y1="513.0" x2="154.0" y2="502.0" stroke="#8aa0c0" stroke-width="2"/>
+<line x1="154.0" y1="524.0" x2="154.0" y2="502.0" stroke="#8aa0c0" stroke-width="2"/>
+<line x1="154.0" y1="524.0" x2="173.1" y2="535.0" stroke="#8aa0c0" stroke-width="2"/>
+<line x1="154.0" y1="524.0" x2="134.9" y2="535.0" stroke="#8aa0c0" stroke-width="2"/>
+<circle cx="154.0" cy="502.0" r="5.2" fill="#d9534f"/>
+<circle cx="173.1" cy="513.0" r="5.2" fill="#3b6fc4"/>
+<circle cx="173.1" cy="535.0" r="5.2" fill="#d9534f"/>
+<circle cx="154.0" cy="546.0" r="5.2" fill="#3b6fc4"/>
+<circle cx="134.9" cy="535.0" r="5.2" fill="#d9534f"/>
+<circle cx="134.9" cy="513.0" r="5.2" fill="#3b6fc4"/>
+<circle cx="154.0" cy="524.0" r="5.2" fill="#3b6fc4"/>
+<path d="M154 574 V602" fill="none" stroke="#3a4654" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#m-ink)"/>
+<rect x="70" y="606" width="168" height="92" rx="10" fill="#fff" stroke="#1d2733" stroke-width="2.5"/>
+<rect x="78" y="614" width="66" height="22" rx="4" fill="#f1f3f5" stroke="#c3cad2" stroke-width="1"/>
+<text x="83" y="630" font-size="14" fill="#1d2733" font-family="'DejaVu Sans Mono', Menlo, Consolas, monospace">S1_opt</text>
+<text x="154" y="676" font-size="21" font-weight="700" text-anchor="middle" fill="#1d2733">Relaxation</text>
+<g transform="translate(238,606)"><circle r="13" fill="#3a4654" stroke="#fff" stroke-width="2.5"/><path d="M-5.9 0.5 L-1.3 4.7 L6.5 -4.4" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></g>
+<path d="M238 642 H300 V378 H484" fill="none" stroke="#b8660f" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#m-orange)"/>
+<path d="M238 662 H300 V926 H484" fill="none" stroke="#2f5fa7" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#m-blue)"/>
+<text x="320" y="332" font-size="18" font-weight="700" fill="#a3570a">Phonons</text>
+<text x="320" y="360" font-size="26" font-weight="700" fill="#a3570a">kl-dft-cpu</text>
+<text x="320" y="880" font-size="18" font-weight="700" fill="#1f4e9a">Electrons</text>
+<text x="320" y="908" font-size="26" font-weight="700" fill="#1f4e9a">ke-dft-cpu</text>
+<rect x="470" y="322" width="1230" height="112" rx="14" fill="#f4f6f8" stroke="#d6dce3" stroke-width="1.5"/><path d="M668 378 H688" fill="none" stroke="#3a4654" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#m-ink)"/><path d="M871 378 H891" fill="none" stroke="#3a4654" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#m-ink)"/><path d="M1074 378 H1094" fill="none" stroke="#3a4654" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#m-ink)"/><path d="M1277 378 H1297" fill="none" stroke="#3a4654" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#m-ink)"/><path d="M1480 378 H1500" fill="none" stroke="#3a4654" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#m-ink)"/>
+<rect x="488" y="332" width="179" height="92" rx="10" fill="#fff" stroke="#1d2733" stroke-width="2"/><rect x="496" y="340" width="87.39999999999999" height="22" rx="4" fill="#f1f3f5" stroke="#c3cad2" stroke-width="1"/><text x="501" y="356" font-size="14" fill="#1d2733" font-family="'DejaVu Sans Mono', Menlo, Consolas, monospace">S2_static</text><text x="577.5" y="400" font-size="19" font-weight="700" text-anchor="middle" fill="#1d2733">Static SCF</text>
+<rect x="691" y="332" width="179" height="92" rx="10" fill="#fff" stroke="#1d2733" stroke-width="2" stroke-dasharray="7 5"/><rect x="699" y="340" width="61.599999999999994" height="22" rx="4" fill="#f1f3f5" stroke="#c3cad2" stroke-width="1"/><text x="704" y="356" font-size="14" fill="#1d2733" font-family="'DejaVu Sans Mono', Menlo, Consolas, monospace">S3_nac</text><text x="780.5" y="390" font-size="19" font-weight="700" text-anchor="middle" fill="#1d2733">NAC</text><text x="780.5" y="413" font-size="16" text-anchor="middle" fill="#5b6673">dielectric</text>
+<rect x="894" y="332" width="179" height="92" rx="10" fill="#fff" stroke="#c0392b" stroke-width="2.5"/><rect x="902" y="340" width="70.19999999999999" height="22" rx="4" fill="#f1f3f5" stroke="#c3cad2" stroke-width="1"/><text x="907" y="356" font-size="14" fill="#1d2733" font-family="'DejaVu Sans Mono', Menlo, Consolas, monospace">S4_disp</text><text x="983.5" y="390" font-size="19" font-weight="700" text-anchor="middle" fill="#1d2733">Forces</text><text x="983.5" y="413" font-size="17" font-weight="700" text-anchor="middle" fill="#c0392b">(× N)</text>
+<rect x="1097" y="332" width="179" height="92" rx="10" fill="#fff" stroke="#1d2733" stroke-width="2"/><rect x="1105" y="340" width="53.0" height="22" rx="4" fill="#f1f3f5" stroke="#c3cad2" stroke-width="1"/><text x="1110" y="356" font-size="14" fill="#1d2733" font-family="'DejaVu Sans Mono', Menlo, Consolas, monospace">S5_fc</text><text x="1186.5" y="400" font-size="19" font-weight="700" text-anchor="middle" fill="#1d2733">Force constants</text>
+<rect x="1300" y="332" width="179" height="92" rx="10" fill="#fff" stroke="#1d2733" stroke-width="2"/><rect x="1308" y="340" width="78.8" height="22" rx="4" fill="#f1f3f5" stroke="#c3cad2" stroke-width="1"/><text x="1313" y="356" font-size="14" fill="#1d2733" font-family="'DejaVu Sans Mono', Menlo, Consolas, monospace">S6_kappa</text><text x="1389.5" y="400" font-size="19" font-weight="700" text-anchor="middle" fill="#1d2733">Phonon BTE</text>
+<rect x="1503" y="332" width="179" height="92" rx="10" fill="#fdf3e7" stroke="#b8660f" stroke-width="2.5"/><text x="1592.5" y="390" font-size="28" font-weight="700" text-anchor="middle" fill="#a3570a"><tspan>κ</tspan><tspan dy="8.4" font-size="18.5">L</tspan><tspan dy="-8.4">(T)</tspan></text><text x="1592.5" y="413" font-size="15" text-anchor="middle" fill="#24313a">→ te-screen, zT</text>
+<rect x="470" y="870" width="1230" height="112" rx="14" fill="#f4f6f8" stroke="#d6dce3" stroke-width="1.5"/><path d="M668 926 H688" fill="none" stroke="#3a4654" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#m-ink)"/><path d="M871 926 H891" fill="none" stroke="#3a4654" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#m-ink)"/><path d="M1074 926 H1094" fill="none" stroke="#3a4654" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#m-ink)"/><path d="M1277 926 H1297" fill="none" stroke="#3a4654" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#m-ink)"/><path d="M1480 926 H1500" fill="none" stroke="#3a4654" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#m-ink)"/>
+<rect x="488" y="880" width="179" height="92" rx="10" fill="#fff" stroke="#1d2733" stroke-width="2"/><rect x="496" y="888" width="96.0" height="22" rx="4" fill="#f1f3f5" stroke="#c3cad2" stroke-width="1"/><text x="501" y="904" font-size="14" fill="#1d2733" font-family="'DejaVu Sans Mono', Menlo, Consolas, monospace">S2_bandgap</text><text x="577.5" y="938" font-size="19" font-weight="700" text-anchor="middle" fill="#1d2733">Bands</text><text x="577.5" y="961" font-size="16" text-anchor="middle" fill="#5b6673">PBE / HSE</text>
+<rect x="691" y="880" width="179" height="92" rx="10" fill="#fff" stroke="#1d2733" stroke-width="2"/><rect x="699" y="888" width="70.19999999999999" height="22" rx="4" fill="#f1f3f5" stroke="#c3cad2" stroke-width="1"/><text x="704" y="904" font-size="14" fill="#1d2733" font-family="'DejaVu Sans Mono', Menlo, Consolas, monospace">S3 + S4</text><text x="780.5" y="938" font-size="18" font-weight="700" text-anchor="middle" fill="#1d2733">Uniform k-grid</text><text x="780.5" y="961" font-size="16" text-anchor="middle" fill="#5b6673">wavefunction</text>
+<rect x="894" y="880" width="179" height="92" rx="10" fill="#fff" stroke="#1d2733" stroke-width="2"/><rect x="902" y="888" width="70.19999999999999" height="22" rx="4" fill="#f1f3f5" stroke="#c3cad2" stroke-width="1"/><text x="907" y="904" font-size="14" fill="#1d2733" font-family="'DejaVu Sans Mono', Menlo, Consolas, monospace">S5 + S6</text><text x="983.5" y="938" font-size="18" font-weight="700" text-anchor="middle" fill="#1d2733">Dielectric ε</text><text x="983.5" y="961" font-size="18" font-weight="700" text-anchor="middle" fill="#1d2733">Elastic C</text>
+<rect x="1097" y="880" width="179" height="92" rx="10" fill="#fff" stroke="#c0392b" stroke-width="2.5"/><rect x="1105" y="888" width="87.39999999999999" height="22" rx="4" fill="#f1f3f5" stroke="#c3cad2" stroke-width="1"/><text x="1110" y="904" font-size="14" fill="#1d2733" font-family="'DejaVu Sans Mono', Menlo, Consolas, monospace">S7_deform</text><text x="1186.5" y="938" font-size="18" font-weight="700" text-anchor="middle" fill="#1d2733"><tspan>Deformation E</tspan><tspan dy="5.4" font-size="11.9">1</tspan></text><text x="1186.5" y="961" font-size="17" font-weight="700" text-anchor="middle" fill="#c0392b">(× N)</text>
+<rect x="1300" y="880" width="179" height="92" rx="10" fill="#fff" stroke="#1d2733" stroke-width="2"/><rect x="1308" y="888" width="78.8" height="22" rx="4" fill="#f1f3f5" stroke="#c3cad2" stroke-width="1"/><text x="1313" y="904" font-size="14" fill="#1d2733" font-family="'DejaVu Sans Mono', Menlo, Consolas, monospace">S8_kappa</text><text x="1389.5" y="938" font-size="19" font-weight="700" text-anchor="middle" fill="#1d2733">AMSET</text><text x="1389.5" y="961" font-size="15" text-anchor="middle" fill="#5b6673">carrier transport</text>
+<rect x="1503" y="880" width="179" height="92" rx="10" fill="#edf3fc" stroke="#2f5fa7" stroke-width="2.5"/><text x="1592.5" y="938" font-size="26" font-weight="700" text-anchor="middle" fill="#1f4e9a"><tspan>σ, S, κ</tspan><tspan dy="7.8" font-size="17.2">e</tspan></text><text x="1592.5" y="961" font-size="15" text-anchor="middle" fill="#24313a">→ zT</text>
+<path d="M1700 378 H1870 V466" fill="none" stroke="#b8660f" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#m-orange)"/>
+<path d="M1700 926 H1870 V838" fill="none" stroke="#2f5fa7" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#m-blue)"/>
+<rect x="1760" y="470" width="220" height="364" rx="12" fill="#fcf0f3" stroke="#b8244a" stroke-width="2.5"/>
+<text x="1870" y="510" font-size="26" font-weight="700" text-anchor="middle" fill="#b8244a">zT(n, T)</text>
+<text x="1776" y="594" font-size="23" font-style="italic" fill="#1d2733">zT =</text>
+<text x="1906" y="574" font-size="23" font-style="italic" text-anchor="middle" fill="#1d2733"><tspan>S</tspan><tspan dy="-9.7" font-size="15.2">2</tspan><tspan dy="9.7">σT</tspan></text>
+<path d="M1856 586 H1958" fill="none" stroke="#1d2733" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="1906" y="618" font-size="23" font-style="italic" text-anchor="middle" fill="#1d2733"><tspan>κ</tspan><tspan dy="6.9" font-size="15.2">e</tspan><tspan dy="-6.9"> + κ</tspan><tspan dy="6.9" font-size="15.2">L</tspan></text>
+<rect x="1822" y="648" width="18.5" height="18.5" fill="#eeb2c6"/>
+<rect x="1842" y="648" width="18.5" height="18.5" fill="#d16388"/>
+<rect x="1862" y="648" width="18.5" height="18.5" fill="#b23c66"/>
+<rect x="1882" y="648" width="18.5" height="18.5" fill="#8a1d46"/>
+<rect x="1902" y="648" width="18.5" height="18.5" fill="#b23c66"/>
+<rect x="1922" y="648" width="18.5" height="18.5" fill="#e38aa8"/>
+<rect x="1822" y="668" width="18.5" height="18.5" fill="#eeb2c6"/>
+<rect x="1842" y="668" width="18.5" height="18.5" fill="#e38aa8"/>
+<rect x="1862" y="668" width="18.5" height="18.5" fill="#d16388"/>
+<rect x="1882" y="668" width="18.5" height="18.5" fill="#b23c66"/>
+<rect x="1902" y="668" width="18.5" height="18.5" fill="#d16388"/>
+<rect x="1922" y="668" width="18.5" height="18.5" fill="#e38aa8"/>
+<rect x="1822" y="688" width="18.5" height="18.5" fill="#f6d3de"/>
+<rect x="1842" y="688" width="18.5" height="18.5" fill="#e38aa8"/>
+<rect x="1862" y="688" width="18.5" height="18.5" fill="#d16388"/>
+<rect x="1882" y="688" width="18.5" height="18.5" fill="#d16388"/>
+<rect x="1902" y="688" width="18.5" height="18.5" fill="#e38aa8"/>
+<rect x="1922" y="688" width="18.5" height="18.5" fill="#eeb2c6"/>
+<rect x="1822" y="708" width="18.5" height="18.5" fill="#f6d3de"/>
+<rect x="1842" y="708" width="18.5" height="18.5" fill="#eeb2c6"/>
+<rect x="1862" y="708" width="18.5" height="18.5" fill="#e38aa8"/>
+<rect x="1882" y="708" width="18.5" height="18.5" fill="#e38aa8"/>
+<rect x="1902" y="708" width="18.5" height="18.5" fill="#e38aa8"/>
+<rect x="1922" y="708" width="18.5" height="18.5" fill="#eeb2c6"/>
+<rect x="1822" y="728" width="18.5" height="18.5" fill="#f6d3de"/>
+<rect x="1842" y="728" width="18.5" height="18.5" fill="#f6d3de"/>
+<rect x="1862" y="728" width="18.5" height="18.5" fill="#eeb2c6"/>
+<rect x="1882" y="728" width="18.5" height="18.5" fill="#eeb2c6"/>
+<rect x="1902" y="728" width="18.5" height="18.5" fill="#eeb2c6"/>
+<rect x="1922" y="728" width="18.5" height="18.5" fill="#f6d3de"/>
+<rect x="1822" y="748" width="18.5" height="18.5" fill="#f6d3de"/>
+<rect x="1842" y="748" width="18.5" height="18.5" fill="#f6d3de"/>
+<rect x="1862" y="748" width="18.5" height="18.5" fill="#f6d3de"/>
+<rect x="1882" y="748" width="18.5" height="18.5" fill="#eeb2c6"/>
+<rect x="1902" y="748" width="18.5" height="18.5" fill="#f6d3de"/>
+<rect x="1922" y="748" width="18.5" height="18.5" fill="#f6d3de"/>
+<path d="M1810 784 V650" fill="none" stroke="#3a4654" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#m-ink)"/>
+<path d="M1810 784 H1950" fill="none" stroke="#3a4654" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#m-ink)"/>
+<text x="1794" y="722" font-size="20" font-style="italic" text-anchor="middle" fill="#5b6673">T</text>
+<text x="1882" y="812" font-size="20" font-style="italic" text-anchor="middle" fill="#5b6673">n</text>
+<rect x="470" y="470" width="1230" height="364" rx="16" fill="#f6f7fb" stroke="#aeb8c4" stroke-width="2"/>
+<rect x="486" y="458" width="396" height="26" rx="4" fill="#ffffff"/>
+<text x="494" y="477" font-size="18" fill="#1d2733"><tspan font-weight="700">Shared step lifecycle</tspan><tspan fill="#5b6673" font-size="15">  ·  every step of both skills</tspan></text>
+<path d="M1625 600 V494 H545 V596" fill="none" stroke="#238266" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#m-green)"/>
+<text x="574" y="520" font-size="16" fill="#238266"><tspan font-weight="700">passed → next step</tspan><tspan>  ·  monitor every 300 s</tspan></text>
+<rect x="490" y="600" width="110" height="64" rx="10" fill="#fff" stroke="#b5bec8" stroke-width="2.2"/><text x="545.0" y="633" font-size="24" font-weight="700" text-anchor="middle" fill="#9aa3ad">WAIT</text><text x="545.0" y="654" font-size="14" text-anchor="middle" fill="#5b6673">blocked</text>
+<rect x="670" y="600" width="110" height="64" rx="10" fill="#fff" stroke="#1d2733" stroke-width="2.2"/><text x="725.0" y="633" font-size="24" font-weight="700" text-anchor="middle" fill="#1d2733">PREP</text><text x="725.0" y="654" font-size="14" text-anchor="middle" fill="#5b6673">no inputs</text>
+<rect x="850" y="600" width="110" height="64" rx="10" fill="#fff" stroke="#1d2733" stroke-width="2.2"/><text x="905.0" y="633" font-size="24" font-weight="700" text-anchor="middle" fill="#1d2733">TODO</text><text x="905.0" y="654" font-size="14" text-anchor="middle" fill="#5b6673">inputs ready</text>
+<rect x="1030" y="600" width="110" height="64" rx="10" fill="#fff" stroke="#2f5fa7" stroke-width="2.2"/><text x="1085.0" y="633" font-size="24" font-weight="700" text-anchor="middle" fill="#1f4e9a">PD</text><text x="1085.0" y="654" font-size="14" text-anchor="middle" fill="#5b6673">queued</text>
+<rect x="1210" y="600" width="110" height="64" rx="10" fill="#fff" stroke="#2f5fa7" stroke-width="2.2"/><text x="1265.0" y="633" font-size="24" font-weight="700" text-anchor="middle" fill="#1f4e9a">R</text><text x="1265.0" y="654" font-size="14" text-anchor="middle" fill="#5b6673">running</text>
+<rect x="1390" y="600" width="110" height="64" rx="10" fill="#fff" stroke="#1d2733" stroke-width="2.6"/><g transform="translate(1407,625)"><circle r="9" fill="#3a4654" stroke="#fff" stroke-width="2.5"/><path d="M-4.0 0.5 L-0.9 3.2 L4.5 -3.1" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></g><text x="1458.0" y="633" font-size="22" font-weight="700" text-anchor="middle" fill="#1d2733">Check</text><text x="1445.0" y="654" font-size="14" text-anchor="middle" fill="#5b6673">validator</text>
+<rect x="1570" y="600" width="110" height="64" rx="10" fill="#238266" stroke="#238266" stroke-width="2.2"/><text x="1625.0" y="633" font-size="24" font-weight="700" text-anchor="middle" fill="#fff">OK</text><text x="1625.0" y="654" font-size="14" text-anchor="middle" fill="#dff2e9">passed</text>
+<path d="M601 640 H667" fill="none" stroke="#3a4654" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#m-ink)"/>
+<text x="635.0" y="630" font-size="13" text-anchor="middle" fill="#5b6673">unblocked</text>
+<path d="M781 640 H847" fill="none" stroke="#3a4654" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#m-ink)"/>
+<text x="815.0" y="630" font-size="13" text-anchor="middle" fill="#5b6673">generate</text>
+<path d="M961 640 H1027" fill="none" stroke="#3a4654" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#m-ink)"/>
+<text x="995.0" y="630" font-size="13" text-anchor="middle" fill="#5b6673">submit</text>
+<path d="M1141 640 H1207" fill="none" stroke="#3a4654" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#m-ink)"/>
+<text x="1175.0" y="630" font-size="13" text-anchor="middle" fill="#5b6673">start</text>
+<path d="M1321 640 H1387" fill="none" stroke="#3a4654" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#m-ink)"/>
+<text x="1355.0" y="630" font-size="13" text-anchor="middle" fill="#5b6673">fetch</text>
+<path d="M1501 640 H1567" fill="none" stroke="#3a4654" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#m-ink)"/>
+<text x="1535.0" y="630" font-size="13" text-anchor="middle" fill="#5b6673">pass</text>
+<text x="995" y="688" font-size="14" font-weight="700" text-anchor="middle" fill="#5b6673">max_jobs</text>
+<rect x="945" y="696" width="100" height="26" rx="13" fill="#fff" stroke="#c0392b" stroke-width="1.8"/>
+<text x="995" y="714" font-size="14" font-weight="700" text-anchor="middle" fill="#c0392b">fan-out × N</text>
+<rect x="1000" y="510" width="350" height="52" rx="10" fill="#fff8ee" stroke="#b8660f" stroke-width="2"/>
+<text x="1016" y="531" font-size="17" font-weight="700" fill="#a3570a">Hang recovery</text>
+<text x="1016" y="552" font-size="14" fill="#24313a">stalled ≥ 1.5 h → patch INCAR / node → resume</text>
+<path d="M1265 598 V566" fill="none" stroke="#b8660f" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#m-orange)"/>
+<path d="M1085 562 V596" fill="none" stroke="#b8660f" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#m-orange)"/>
+<rect x="1380" y="720" width="130" height="56" rx="10" fill="#fcecea" stroke="#c0392b" stroke-width="2.4"/>
+<text x="1445" y="745" font-size="22" font-weight="700" text-anchor="middle" fill="#c0392b">FAIL</text>
+<text x="1445" y="766" font-size="14" text-anchor="middle" fill="#c0392b">diagnosed</text>
+<path d="M1430 665 V716" fill="none" stroke="#c0392b" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#m-red)"/>
+<text x="1420" y="698" font-size="14" font-weight="700" text-anchor="end" fill="#c0392b">fail</text>
+<rect x="1560" y="720" width="130" height="56" rx="10" fill="#fdf3e7" stroke="#b8660f" stroke-width="2.4"/>
+<text x="1625" y="745" font-size="22" font-weight="700" text-anchor="middle" fill="#a3570a">IMAG</text>
+<text x="1625" y="766" font-size="13" text-anchor="middle" fill="#a3570a">unstable · S5_fc</text>
+<path d="M1470 665 V690 H1625 V716" fill="none" stroke="#b8660f" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#m-orange)"/>
+<text x="1548" y="684" font-size="14" text-anchor="middle" fill="#a3570a">imag. modes</text>
+<path d="M1378 740 H905 V668" fill="none" stroke="#b8660f" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#m-orange)"/>
+<text x="1200" y="732" font-size="16" text-anchor="middle" fill="#a3570a"><tspan font-weight="700">Known cause: </tspan><tspan>rule-based fix → retry</tspan></text>
+<rect x="655" y="690" width="140" height="46" rx="10" fill="#fff" stroke="#1d2733" stroke-width="2"/>
+<g transform="translate(667,701) scale(0.9)"><path d="M4 9 V5 a6 6 0 0 1 12 0 V9" fill="none" stroke="#1d2733" stroke-width="2.6"/><rect x="1" y="9" width="18" height="14" rx="3" fill="#1d2733"/></g>
+<text x="694" y="711" font-size="18" font-weight="700" fill="#1d2733">Gateway</text>
+<text x="694" y="728" font-size="13" fill="#5b6673">risk tiers</text>
+<path d="M725 688 V668" fill="none" stroke="#3a4654" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#m-ink)"/>
+<text x="736" y="684" font-size="13" fill="#5b6673">retry / rerun</text>
+<rect x="655" y="760" width="140" height="50" rx="10" fill="#efebf9" stroke="#5b3fa0" stroke-width="2"/>
+<g transform="translate(664,766) scale(0.95)" fill="none" stroke="#5b3fa0" stroke-width="2.6" stroke-linecap="round"><line x1="18" y1="3" x2="18" y2="9"/><circle cx="18" cy="2.5" r="2.5" fill="#5b3fa0" stroke="none"/><rect x="2" y="9" width="32" height="26" rx="7" fill="#fff"/><circle cx="12" cy="20" r="2.6" fill="#5b3fa0" stroke="none"/><circle cx="24" cy="20" r="2.6" fill="#5b3fa0" stroke="none"/><path d="M11 27 Q18 32 25 27"/></g>
+<text x="706" y="783" font-size="19" font-weight="700" fill="#5b3fa0">LLM</text>
+<text x="706" y="801" font-size="13" fill="#5b3fa0">via MCP / CLI</text>
+<path d="M725 758 V740" fill="none" stroke="#5b3fa0" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#m-purple)"/>
+<text x="733" y="753" font-size="13" fill="#5b3fa0">call</text>
+<rect x="490" y="760" width="100" height="50" rx="10" fill="#fff" stroke="#1d2733" stroke-width="2"/>
+<g transform="translate(514,787) scale(0.9)" fill="none" stroke="#1d2733" stroke-width="2.6"><circle cx="0" cy="-9" r="9"/><path d="M-15 16 C-15 3 15 3 15 16"/></g>
+<text x="552" y="791" font-size="18" font-weight="700" text-anchor="middle" fill="#1d2733">user</text>
+<path d="M592 776 H651" fill="none" stroke="#3a4654" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#m-ink)"/>
+<text x="621" y="770" font-size="13" text-anchor="middle" fill="#5b6673">task</text>
+<path d="M653 796 H594" fill="none" stroke="#3a4654" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#m-ink)"/>
+<text x="624" y="824" font-size="13" text-anchor="middle" fill="#5b6673">report</text>
+<path d="M540 758 V713 H651" fill="none" stroke="#b8244a" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="5 4" marker-end="url(#m-crimson)"/>
+<text x="548" y="706" font-size="13" fill="#b8244a">approve</text>
+<path d="M1445 778 V800 H799" fill="none" stroke="#5b3fa0" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#m-purple)"/>
+<text x="1120" y="792" font-size="16" text-anchor="middle" fill="#5b3fa0"><tspan font-weight="700">Unknown cause: </tspan><tspan>evidence → LLM proposes a fix</tspan></text>
+<rect x="470" y="1038" width="390" height="240" rx="12" fill="#f8fbff" stroke="#2f5fa7" stroke-width="2"/>
+<text x="488" y="1070" font-size="21" font-weight="700" fill="#1f4e9a"><tspan>Scattering inputs</tspan></text><text x="488" y="1092" font-size="14" fill="#5b6673" font-family="'DejaVu Sans Mono', Menlo, Consolas, monospace">S5_dielect · S6_elastic</text>
+<text x="488" y="1120" font-size="15" font-weight="700" fill="#1d2733">Dielectric ε</text>
+<rect x="488" y="1130" width="38" height="22" rx="4" fill="#4a5563"/><text x="507" y="1146" font-size="13" font-weight="700" text-anchor="middle" fill="#fff">3D</text>
+<text x="536" y="1146" font-size="15" fill="#24313a"><tspan>DFPT ε</tspan><tspan dy="4.5" font-size="9.9">0</tspan><tspan dy="-4.5">, ε</tspan><tspan dy="4.5" font-size="9.9">∞</tspan><tspan dy="-4.5"> used as computed</tspan></text>
+<rect x="488" y="1156" width="38" height="22" rx="4" fill="#238266"/><text x="507" y="1172" font-size="13" font-weight="700" text-anchor="middle" fill="#fff">2D</text>
+<text x="536" y="1172" font-size="15" fill="#24313a"><tspan>vacuum removed: ε = 1 + (c / t)(ε</tspan><tspan dy="4.5" font-size="9.9">slab</tspan><tspan dy="-4.5"> − 1)</tspan></text>
+<text x="488" y="1204" font-size="15" font-weight="700" fill="#1d2733">Elastic C</text>
+<rect x="488" y="1214" width="38" height="22" rx="4" fill="#4a5563"/><text x="507" y="1230" font-size="13" font-weight="700" text-anchor="middle" fill="#fff">3D</text>
+<text x="536" y="1230" font-size="15" fill="#24313a"><tspan>C</tspan><tspan dy="4.5" font-size="9.9">ij</tspan><tspan dy="-4.5"> in GPa, Voigt-reordered</tspan></text>
+<rect x="488" y="1240" width="38" height="22" rx="4" fill="#238266"/><text x="507" y="1256" font-size="13" font-weight="700" text-anchor="middle" fill="#fff">2D</text>
+<text x="536" y="1256" font-size="15" fill="#24313a"><tspan>in-plane 2×2: C</tspan><tspan dy="4.5" font-size="9.9">2D</tspan><tspan dy="-4.5"> = c · C</tspan><tspan dy="4.5" font-size="9.9">slab</tspan><tspan dy="-4.5">  (N/m)</tspan></text>
+<rect x="890" y="1038" width="390" height="240" rx="12" fill="#f8fbff" stroke="#2f5fa7" stroke-width="2"/>
+<text x="908" y="1070" font-size="21" font-weight="700" fill="#1f4e9a"><tspan>Deformation potential E</tspan><tspan dy="6.3" font-size="13.9">1</tspan></text><text x="908" y="1092" font-size="14" fill="#5b6673" font-family="'DejaVu Sans Mono', Menlo, Consolas, monospace">S7_deform → S7.1_read</text>
+<rect x="908" y="1104" width="38" height="22" rx="4" fill="#4a5563"/><text x="927" y="1120" font-size="13" font-weight="700" text-anchor="middle" fill="#fff">3D</text>
+<text x="956" y="1120" font-size="15" fill="#24313a">reference: core-level potential</text>
+<rect x="908" y="1130" width="38" height="22" rx="4" fill="#238266"/><text x="927" y="1146" font-size="13" font-weight="700" text-anchor="middle" fill="#fff">2D</text>
+<text x="956" y="1146" font-size="15" fill="#24313a">reference: vacuum level (LOCPOT)</text>
+<rect x="1036" y="1162" width="104" height="76" rx="0" fill="#e3f2ea"/>
+<path d="M914 1174 H1262" fill="none" stroke="#238266" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="6 4"/>
+<path d="M1030 1224 H1262" fill="none" stroke="#8a96a3" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="2 4"/>
+<path d="M914 1174 H1030 C1040 1174 1044 1224 1054 1224 C1064 1224 1066.0 1188 1071.0 1188 C1076.0 1188 1078 1224 1088 1224 C1098 1224 1100.0 1188 1105.0 1188 C1110.0 1188 1112 1224 1122 1224 C1132 1224 1136 1174 1146 1174 H1262" fill="none" stroke="#1d2733" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="920" y="1196" font-size="13" font-style="italic" fill="#5b6673">V(z)</text>
+<text x="1260" y="1167" font-size="13" font-weight="700" text-anchor="end" fill="#238266">vacuum → 2D</text>
+<text x="1260" y="1217" font-size="13" font-weight="700" text-anchor="end" fill="#5b6673">core → 3D</text>
+<text x="908" y="1264" font-size="14" fill="#5b6673">both: ion-relaxed strained cells (× N)</text>
+<rect x="1310" y="1038" width="390" height="240" rx="12" fill="#f8fbff" stroke="#2f5fa7" stroke-width="2"/>
+<text x="1328" y="1070" font-size="21" font-weight="700" fill="#1f4e9a"><tspan>AMSET transport</tspan></text><text x="1328" y="1092" font-size="14" fill="#5b6673" font-family="'DejaVu Sans Mono', Menlo, Consolas, monospace">S8_kappa / S8.4_amset2d</text>
+<rect x="1328" y="1106" width="38" height="22" rx="4" fill="#4a5563"/><text x="1347" y="1122" font-size="13" font-weight="700" text-anchor="middle" fill="#fff">3D</text>
+<text x="1376" y="1122" font-size="15" fill="#24313a">S8_kappa: 3D scattering kernels</text>
+<rect x="1328" y="1134" width="38" height="22" rx="4" fill="#238266"/><text x="1347" y="1150" font-size="13" font-weight="700" text-anchor="middle" fill="#fff">2D</text>
+<text x="1376" y="1150" font-size="15" fill="#24313a"><tspan>S8.4_amset2d: G</tspan><tspan dy="4.5" font-size="9.9">s</tspan><tspan dy="-4.5"> = c · G</tspan><tspan dy="4.5" font-size="9.9">2D</tspan></text>
+<text x="1376" y="1171" font-size="14" fill="#5b6673">ADP · POP · IMP · PIE in 2D form</text>
+<rect x="1328" y="1184" width="38" height="22" rx="4" fill="#238266"/><text x="1347" y="1200" font-size="13" font-weight="700" text-anchor="middle" fill="#fff">2D</text>
+<text x="1376" y="1200" font-size="15" fill="#24313a"><tspan>σ, κ</tspan><tspan dy="4.5" font-size="9.9">e</tspan><tspan dy="-4.5"> in-plane, × c / t</tspan></text>
+<text x="1376" y="1221" font-size="14" fill="#5b6673">t: van der Waals thickness</text>
+<rect x="1328" y="1238" width="280" height="26" rx="13" fill="#fff" stroke="#2f5fa7" stroke-width="1.5" stroke-dasharray="5 4"/>
+<text x="1468" y="1256" font-size="14" text-anchor="middle" fill="#1f4e9a">cross-check: S8.2_dpt (CRTA × DPT)</text>
+</svg>
