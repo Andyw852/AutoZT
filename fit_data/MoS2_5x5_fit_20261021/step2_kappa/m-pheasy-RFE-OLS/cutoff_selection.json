@@ -1,0 +1,103 @@
+{
+  "status": "ok",
+  "err_gate_applied": false,
+  "stability_gate_applied": false,
+  "criteria": {
+    "rel_err_1se": "train_rel_err <= min(train_rel_err) + 1*SE（err_kind=held-out 时才启用）",
+    "stability": "sigma/|mean| < 0.3",
+    "plateau": "连续稳定区间：相邻 Δκ 且起点到区间内各档的累计 Δκ <= max(5%, sqrt(err_i^2+err_j^2))"
+  },
+  "plateau_runs": [
+    [
+      5.27,
+      5.9
+    ]
+  ],
+  "plateau_interval": [
+    5.27,
+    5.9
+  ],
+  "after_plateau": [],
+  "records": [
+    {
+      "cut": 3.57,
+      "ratio": 18.040089086859687,
+      "train_rel_err": 0.006078669801099406,
+      "train_rel_se": 0.0,
+      "err_kind": "in-sample",
+      "stable_upper_cut": null,
+      "kappa": 33.4364105611006,
+      "kappa_err": 0.0,
+      "stability_measured": false,
+      "data_ok": true,
+      "stable_ok": true,
+      "err_ok": true,
+      "plateau_ok": false
+    },
+    {
+      "cut": 4.52,
+      "ratio": 8.544303797468354,
+      "train_rel_err": 0.0038706264345620195,
+      "train_rel_se": 0.0,
+      "err_kind": "in-sample",
+      "stable_upper_cut": null,
+      "kappa": 35.65340410380274,
+      "kappa_err": 0.0,
+      "stability_measured": false,
+      "data_ok": true,
+      "stable_ok": true,
+      "err_ok": true,
+      "plateau_ok": false
+    },
+    {
+      "cut": 5.27,
+      "ratio": 4.972375690607735,
+      "train_rel_err": 0.0030539746533119905,
+      "train_rel_se": 0.0,
+      "err_kind": "in-sample",
+      "stable_upper_cut": null,
+      "kappa": 25.0038838974786,
+      "kappa_err": 0.0,
+      "stability_measured": false,
+      "data_ok": true,
+      "stable_ok": true,
+      "err_ok": true,
+      "plateau_ok": true
+    },
+    {
+      "cut": 5.9,
+      "ratio": 3.515625,
+      "train_rel_err": 0.002876836842327686,
+      "train_rel_se": 0.0,
+      "err_kind": "in-sample",
+      "stable_upper_cut": null,
+      "kappa": 25.21478464076905,
+      "kappa_err": 0.0,
+      "stability_measured": false,
+      "data_ok": true,
+      "stable_ok": true,
+      "err_ok": true,
+      "plateau_ok": true
+    },
+    {
+      "cut": 6.54,
+      "ratio": 2.1571238348868174,
+      "train_rel_err": 0.0025470121974606177,
+      "train_rel_se": 0.0,
+      "err_kind": "in-sample",
+      "stable_upper_cut": null,
+      "kappa": 15.808005248027927,
+      "kappa_err": 0.0,
+      "stability_measured": false,
+      "data_ok": false,
+      "stable_ok": true,
+      "err_ok": false,
+      "plateau_ok": false
+    }
+  ],
+  "chosen_cut": 5.9,
+  "pick": "largest",
+  "kappa_tol_pct": 5.0,
+  "reason": "κ 平台区间 5.27–5.90 Å，取最大截断 = 5.90 Å（判据①为 in-sample 残差，已跳过否决）；未做 bootstrap 重拟合（CUT3_BOOTSTRAP=0），稳定性判据②未参与，只按 κ 平台判断",
+  "kappa_err_source": "fc3 per-shell sigma/|mean| propagated (coarse; one kappa run per cutoff)"
+}

@@ -1,0 +1,50 @@
+{
+  "T_K": 300,
+  "kappa_key": "kappa_2d_normalized_inplane_300K",
+  "rows": [
+    {
+      "tag": "m-pheasy-ALASSO",
+      "engine": "pheasy",
+      "method": "ALASSO",
+      "primary": true,
+      "skipped": null,
+      "kappa_done": true,
+      "stable": true,
+      "chosen_cutoff_A": 5.9,
+      "kappa_inplane_300K": 21.999675040383256,
+      "kappa_2d_normalized_inplane_300K": 81.60117266011453,
+      "kappa_avg_300K": 14.66645002692217,
+      "kappa_300K_xx_yy_zz": [
+        21.999675040383256,
+        21.999675040383256,
+        0.0
+      ],
+      "sheet_conductance_inplane_300K_W_per_K": 5.499918760095814e-08,
+      "fit_rmse_meV_per_A": 0.8779900142938809,
+      "fit_rmse_relative": 0.0023975666282981685,
+      "pheasy_relative_error": 0.002472196923401443
+    },
+    {
+      "tag": "m-pheasy-RFE-OLS",
+      "engine": "pheasy",
+      "method": "RFE-OLS",
+      "primary": false,
+      "skipped": null,
+      "kappa_done": true,
+      "stable": true,
+      "chosen_cutoff_A": 5.9,
+      "kappa_inplane_300K": 25.21478464076905,
+      "kappa_2d_normalized_inplane_300K": 93.52665397475592,
+      "kappa_avg_300K": 16.809856427179366,
+      "kappa_300K_xx_yy_zz": [
+        25.214784640769047,
+        25.214784640769054,
+        0.0
+      ],
+      "sheet_conductance_inplane_300K_W_per_K": 6.303696160192263e-08,
+      "fit_rmse_meV_per_A": 1.0218808011912792,
+      "fit_rmse_relative": 0.0027904956402097915,
+      "pheasy_relative_error": 0.0028768348263380874
+    }
+  ]
+}
