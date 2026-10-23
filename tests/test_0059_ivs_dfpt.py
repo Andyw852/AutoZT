@@ -282,7 +282,7 @@ def test_gen_chain_si(eph):
     _conf(d, "IVS_VALLEYS_E = X:0,0.425,0.425\nIVS_ECUTWFC = 30\nIVS_SCF_KGRID = 6 6 6\nIVS_INPUT_DFT = none\n"
              "IVS_PSEUDO_FILES = Si:Si_ONCV_PBE-1.2.upf\nIVS_NP = 8\nIVS_SBATCH = --partition=cpu192; --qos=regular\n"
              "QE_BIN = /opt/qe/bin\nQE_PSEUDO_DIR = /opt/pseudo\nQE_SETUP = module load qe/7.3\n"
-             "IVS_ODP = off\n")
+             "IVS_ODP = off\nIVS_ADP = off\n")                    # [0072] 夹具是只算谷间 IVS 时的 q 列表
     assert c.main("qlist") == 0
     q1 = json.loads((d / "step10_ivs_qlist" / "ivs_qlist.json").read_text())
     ref = json.loads((FIX / "step10_ivs_qlist" / "ivs_qlist.json").read_text())
@@ -389,7 +389,7 @@ def test_gen_qlist_odp_gamma(eph):
     shutil.copy(FIX / "POSCAR", d / "POSCAR")
     _conf(d, "IVS_VALLEYS_E = X:0,0.425,0.425\nIVS_ECUTWFC = 30\nIVS_SCF_KGRID = 6 6 6\nIVS_INPUT_DFT = none\n"
              "IVS_PSEUDO_FILES = Si:Si_ONCV_PBE-1.2.upf\nIVS_NP = 8\n"
-             "QE_BIN = /opt/qe/bin\nQE_PSEUDO_DIR = /opt/pseudo\n")
+             "QE_BIN = /opt/qe/bin\nQE_PSEUDO_DIR = /opt/pseudo\nIVS_ADP = off\n")   # [0072] 小 q 作业由 test_0072 管
     assert c.main("qlist") == 0
     q1 = json.loads((d / "step10_ivs_qlist" / "ivs_qlist.json").read_text())
     runs = q1["runs"]
@@ -399,7 +399,7 @@ def test_gen_qlist_odp_gamma(eph):
     assert len(intra) == 1 and intra[0]["from"] == intra[0]["to"] == "X" and intra[0]["run"] == runs[-1]["id"]
     # off：不加 Γ 点
     _conf(d, "IVS_ODP = off\nIVS_VALLEYS_E = X:0,0.425,0.425\nIVS_ECUTWFC = 30\nIVS_SCF_KGRID = 6 6 6\nIVS_INPUT_DFT = none\n"
-             "IVS_PSEUDO_FILES = Si:Si_ONCV_PBE-1.2.upf\n")
+             "IVS_PSEUDO_FILES = Si:Si_ONCV_PBE-1.2.upf\nIVS_ADP = off\n")
     assert c.main("qlist") == 0
     q2 = json.loads((d / "step10_ivs_qlist" / "ivs_qlist.json").read_text())
     assert len(q2["runs"]) == 2 and not any(c["kind"] == "intra" for c in q2["classes"])
@@ -699,7 +699,8 @@ def test_cluster_injects_qe_keys(tmp_path, monkeypatch):
 # [0059-r3] DFPT 顺带算谷内 ODP（q=Γ）：单谷载流子、按 q 放宽的 AHC 窗口、Γ 声学/极性模、消费端不重复计数
 # ---------------------------------------------------------------------------
 SI_E = "IVS_VALLEYS_E = X:0,0.425,0.425\nIVS_ECUTWFC = 30\nIVS_SCF_KGRID = 6 6 6\nIVS_INPUT_DFT = none\n" \
-       "IVS_PSEUDO_FILES = Si:Si_ONCV_PBE-1.2.upf\nQE_BIN = /opt/qe/bin\nQE_PSEUDO_DIR = /opt/pseudo\n"
+       "IVS_PSEUDO_FILES = Si:Si_ONCV_PBE-1.2.upf\nQE_BIN = /opt/qe/bin\nQE_PSEUDO_DIR = /opt/pseudo\n" \
+       "IVS_ADP = off\n"                                   # [0072] 小 q 作业由 test_0072 管
 
 
 def _qlist(d, c, extra):
