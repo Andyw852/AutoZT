@@ -30,6 +30,7 @@ import kl_common as kc      # noqa: E402  (帧一致性/SCF 门禁)
 OUTDIR = "step5_fc"
 STEP = "step5_fc"
 DISP_DIR = "step4_disp"
+NAC_VASPRUN = "NAC_vasprun.xml"   # 与 _common/fcfit/fc_fit_driver.NAC_VASPRUN 同名（gen 端不 import 引擎：它要 numpy）
 
 SPEC = dict(g1.SPEC)
 SPEC.update({
@@ -146,6 +147,36 @@ def _bundle_provenance(src, cwd, allow_foreign):
     return prov
 
 
+def _stage_nac(cwd, disp):
+    """[0077] NAC 输入交给共享引擎：prep 从【数据集目录】（step4_disp）拾取。
+
+    以前只认 step3_nac/BORN，可 S3 只算 LEPSILON、没有任何一步生成 BORN -> NAC=auto 永远是关的。
+    现在：step3_nac/BORN 有就用它；否则把 step3_nac/vasprun.xml 放成 step4_disp/NAC_vasprun.xml，
+    拟合作业的 prep（有 phonopy 的环境）按拟合用的原胞生成 BORN，并做物理检查
+    （ε∞ 有限且为正、晶胞与数据集一致），不合格就退回无 NAC 并告警。
+    两样都没有（nac: false 或 S3 没跑）-> 清掉上一轮遗留的，避免误加 NAC。返回所用来源。"""
+    nac = cwd / "step3_nac"
+    born_dst, vr_dst = disp / "BORN", disp / NAC_VASPRUN
+    for f in (born_dst, vr_dst):
+        if f.is_file():
+            f.unlink()
+    if (nac / "BORN").is_file():
+        shutil.copyfile(str(nac / "BORN"), str(born_dst))
+        print("[OK] NAC：BORN <- step3_nac/BORN（供共享引擎 prep 拾取）", flush=True)
+        return "BORN"
+    if (nac / "vasprun.xml").is_file():
+        shutil.copyfile(str(nac / "vasprun.xml"), str(vr_dst))
+        print("[OK] NAC：step3_nac/vasprun.xml -> %s/%s（拟合作业的 prep 生成 BORN）"
+              % (DISP_DIR, NAC_VASPRUN), flush=True)
+        return "vasprun"
+    if nac.is_dir():
+        print("[WARN] NAC：step3_nac 存在但没有 BORN / vasprun.xml（S3 没算完或没拉回）—— 本轮无 NAC",
+              flush=True)
+    else:
+        print("[..] NAC：无 step3_nac（nac: false 或 2D 关闭）—— 本轮无 NAC", flush=True)
+    return None
+
+
 def main():
     cwd = Path.cwd()
     out = cwd / OUTDIR
@@ -196,6 +227,11 @@ def main():
         if _born.is_file():
             shutil.copyfile(str(_born), str(out / "BORN"))
             print("[OK] BORN <- step3_nac/BORN（导入模式补回，NAC=auto 才会开 NAC）", flush=True)
+        elif (cwd / "step3_nac" / "vasprun.xml").is_file():
+            # [0077] 导入模式没有拟合作业，没人从 vasprun 生成 BORN：说清楚，别静默无 NAC
+            print("[WARN] 导入模式：step3_nac 只有 vasprun.xml、没有 BORN —— 本轮 κ 不含 NAC。\n"
+                  "       要 NAC 就去掉 FC_IMPORT_DIR / kl_bundle 走正常拟合（prep 会自动生成 BORN）。",
+                  flush=True)
         import json as _json
         (out / "import_provenance.json").write_text(
             _json.dumps(_prov, ensure_ascii=False, indent=2), encoding="utf-8", newline="\n")
@@ -238,16 +274,7 @@ def main():
                  "-j S4_disp retry 只补这些帧。"
                  % (_scf["n_bad"], _scf["n_frames"], _bad))
 
-    # ---- NAC：共享引擎的 prep 从【数据集目录】读 BORN；本技能的 BORN 在 step3_nac ----
-    _born = cwd / "step3_nac" / "BORN"
-    _born_dst = disp / "BORN"
-    if _born.is_file():
-        shutil.copyfile(str(_born), str(_born_dst))
-        print("[OK] BORN <- step3_nac/BORN（供共享引擎 prep 拾取）", flush=True)
-    elif _born_dst.is_file():
-        # NAC 已关但 step4_disp 里还留着上一轮的旧 BORN —— 移除，避免共享引擎误加 NAC
-        _born_dst.unlink()
-        print("[WARN] step3_nac/BORN 不存在（NAC 已关），移除 step4_disp/ 里的旧 BORN", flush=True)
+    _stage_nac(cwd, disp)
 
     # ---- 委托共享引擎（数据集 = 本技能的 step4_disp）----
     if str(conf.get("FIT_INPUT_DIR") or "auto").strip().lower() == "auto":

@@ -3,7 +3,9 @@
 """gen_step3_nac.py —— NAC 介电/Born（step3_nac，可选步）。
 
 在原胞上做 LEPSILON DFPT，得高频介电张量 ε∞ + Born 有效电荷，供声子/热导率的
-非解析项修正（极性绝缘体 Γ 点 LO-TO 劈裂）。BORN 文件在 step5 从本步 vasprun 生成。
+非解析项修正（极性绝缘体 Γ 点 LO-TO 劈裂）。[0077] 本步只出 vasprun.xml；S5_fc 的 gen 把它放成
+step4_disp/NAC_vasprun.xml，拟合作业的 prep（_common/fcfit/fc_fit_driver._born_from_vasprun）
+按拟合原胞生成 BORN，随 step5_fc/ 传给 S5.1 声子谱与 S6 κ（NAC=auto 见到 BORN 才开）。
 
 金属：step2 的带隙≈0 时本步会打印提示——金属无 LO-TO 劈裂、DFPT 介电发散，
 应在项目配置写 nac: false 把本步整个关掉（tf 就不注入它）。若仍跑，step5 会校验
