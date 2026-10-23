@@ -77,7 +77,7 @@ needs_results:
 | `kappa_L` | κ_L 来源、温区、xx/yy/zz、元胞口径标记、2D 厚度信息 |
 | `notes` | 口径说明（约化方式、插值方式、不外推区间…） |
 
-配套产物：`zt_summary.txt`（人读汇总 + 每档明细表）、`zt_heatmap.png`、`zt_vs_T.png`、`zt_vs_doping.png`、
+配套产物：`zt_summary.txt`（人读汇总 + 每档明细表）、`zt_heatmap.png`、`zt_vs_T.png`（n 型蓝色系实线 / p 型红色系虚线，浓度越高颜色越深；本征黑点线；图例左栏 n、右栏 p）、`zt_vs_doping.png`、
 `zt_components.png`、`per_temperature/<T>K/report.{txt,json}`，以及 [0052] 起的：
 
 | 产物 | 内容 |
