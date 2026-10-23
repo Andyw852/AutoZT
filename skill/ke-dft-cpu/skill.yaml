@@ -223,8 +223,10 @@ optional_steps:
          group: S2_bandgap, after: "step2_bandgap/step2.1_static",
          src: step2_bandgap/step2.15_discriminant, check: outcar,
          gen: gen_step2.15_discriminant.py,
+         # [0075] submit_std_*.tpl：submit.sh 按本步集群的模板渲染（以前复制 S2.1 的，step_hpc 换集群时分区错）
          gen_need: [ke_common.py, check_common.py, check_discriminant.py, decide_discriminant.py,
-                    discriminant_common.py, stepconf.py, step.conf, dim_common.py],
+                    discriminant_common.py, stepconf.py, step.conf, dim_common.py,
+                    submit_std_2d.tpl, submit_std_3d.tpl],
      needs: ["step2_bandgap/step2.1_static"]}
       - {seq: 2.155, name: "step2_bandgap/step2.155_discriminant_decide", label: S2.155_discr,
          group: S2_bandgap, after: "step2_bandgap/step2.15_discriminant",
