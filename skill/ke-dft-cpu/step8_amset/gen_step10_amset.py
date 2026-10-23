@@ -235,7 +235,7 @@ ADP_DEGEN_PAIR = "auto"            # [0061-p] auto：在 AMSET 的四面体积�
 ADP_DEGEN_MATRIX = "auto"          # [0061-m] auto：S7.1 有 deformation_matrix.h5 就用 DFT 形变势矩阵；off：从本征值拟合
 # [0072] 非简并带边的谷内 ADP 形变势用 DFPT 声学支斜率（eph-qe-cpu IVS_ADP，ivs_dfpt_params.json 的 "adp" 块；
 #   Li, Graziosi, Neophytou, PRB 104, 195201 (2021)）。S7 的形变势来自带边能量随应变的移动，静水分量要芯势对齐，
-#   有绝对参考的不确定；DFPT 的长波声学矩阵元自洽含宏观势响应，不需要对齐，与 EPW 同口径。
+#   有绝对参考的不确定；DFPT 的长波声学矩阵元不用应变前后的能量对齐（但 Si 实算静水分量仍偏大，见 METHODOLOGY [0072]）。
 #   ADP_DFPT = auto（出厂：有就用）/ on（必须有）/ off（照原版用 S7 的形变势）。替换范围：该载流子带边 ADP_DFPT_EWIN（eV）
 #   以内、按最近谷中心归属的态，形变势张量换成该谷的 DFPT 张量（其余态照旧）；带边简并的载流子不换（由 ADP_DEGEN 管）。
 #   ★ 实验性，出厂 off（Si 实算 Ξd 偏大，见 METHODOLOGY [0072]）：要试用写 ADP_DFPT = auto 或 on。
