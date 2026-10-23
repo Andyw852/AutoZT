@@ -270,6 +270,7 @@ def test_gen_read_si_fixture(eph, capsys):
     assert chs == pytest.approx({48.5: 2.443, 58.4: 3.953, 63.1: 2.141}, abs=2e-3)   # f：√(4/5)·D，g：√(1/5)·D
     assert all(x["kind"] == "inter_star" for x in p["carriers"]["electron"]["channels"])
     assert "X>X':2.141@63.06" in (d / "step13_ivs_read" / "ivs_dfpt_table.txt").read_text()
+    assert p["checks"]["inversion"] is True and p["carriers"]["electron"]["soc_notes"] == []    # [0074] Si 有反演中心
     shutil.rmtree(d / "step12_ivs_ph" / "q-02" / "ahc_dir")
     (d / "step12_ivs_ph" / "q-02" / "ahc_dir").mkdir()
     with pytest.raises(SystemExit, match="retry S12_ivsph"):
@@ -532,7 +533,14 @@ def test_s8_uses_dfpt(si_params, g10):
     dr = rec["dp_optical_ivs_dfpt"]
     assert dr["dfpt_use"] == {"electron": "used", "hole": "unavailable"} and len(dr["sha256"]) == 64
     assert "DFPT 谷间 IVS" in log
+    assert e["ivs_dfpt"]["soc_notes"] == [] and "[NOTE]" not in log              # [0074] 旧参数没有备注：照旧
     json.dumps(rec, ensure_ascii=False)
+    sp = copy.deepcopy(si_params)                                                 # [0074] 有备注：日志与记录里都带上
+    sp["carriers"]["electron"]["soc_notes"] = ["备注甲"]
+    (cwd / "ivs_dfpt" / "ivs_dfpt_params.json").write_text(json.dumps(sp))
+    rec, log = _run3(g, cwd)
+    assert rec["dp_optical"]["electron"]["ivs_dfpt"]["soc_notes"] == ["备注甲"] and "[NOTE] electron DFPT：备注甲" in log
+    (cwd / "ivs_dfpt" / "ivs_dfpt_params.json").write_text(json.dumps(si_params))
     # 手填谷间通道只作对照；手填谷表（不同标签、中心在 0.0083 内）按 k 中心配对
     g.DP_OPTICAL_E = "Δ>Δ':11@62"
     g.DP_OPTICAL_VALLEYS_E = "|".join("%.4f,%.4f,%.4f" % tuple(np.asarray(k) * 0.4167 / 0.425)
@@ -1036,3 +1044,56 @@ def test_r3_s84_dfpt_odp_supersedes_frozen(tmp_path, monkeypatch):
     dr = g14._DP_OPTICAL_IVS_DFPT_REC
     assert dr["odp_use"]["electron"] == "used" and dr["info"]["electron"]["odp_reference"][0]["D_eV_A"] == 4.4
     assert "谷间 IVS + 谷内 ODP" in buf.getvalue() and "只作对照" in buf.getvalue()
+
+
+# ---------------------------------------------------------------------------
+# [0074] 非 SOC 备注：空穴照算，只备注（无反演中心时 k↔−k 通道是上限）
+# ---------------------------------------------------------------------------
+def test_0074_soc_notes():
+    r_si = _rops(SI_LAT, SI_FRAC, ["Si", "Si"])
+    r_m = _rops(MOS2_LAT, MOS2_FRAC, ["Mo", "S", "S"])
+    assert iv.has_inversion(r_si) and not iv.has_inversion(r_m)
+    assert iv.tr_pair(K_STAR[0], K_STAR[1]) and iv.tr_pair([1 / 3, 1 / 3, 0], [2 / 3, 2 / 3, 0])
+    assert not iv.tr_pair([0.5, 0, 0], [0.5, 0, 0])                    # M 是时间反演不变点
+    K = iv.expand_star([K_STAR[0]], r_m)[0]
+    stars = [{"label": "K", "k": K}, {"label": "Q", "k": _q_star(r_m)}]
+    cl, _runs = iv.plan_pairs({"electron": stars, "hole": [{"label": "K", "k": K}]}, r_m)
+    for c in cl:
+        c["k_init"], c["k_fin"] = list(map(float, c["k_init"])), list(map(float, c["k_fin"]))
+    notes = iv.soc_notes(cl, ["electron", "hole"], iv.has_inversion(r_m))
+    assert len(notes["hole"]) == 1 and "K>K'" in notes["hole"][0] and "上限" in notes["hole"][0]
+    assert "K>K'" in notes["electron"][0] and "Q>Q'" in notes["electron"][0] and "K>Q" not in notes["electron"][0]
+    notes = iv.soc_notes(cl, ["electron", "hole"], True)                # 有反演中心：只剩空穴的一般备注
+    assert "electron" not in notes and notes["hole"] == [iv.SOC_HOLE_NOTE]
+    p = _params([], [])
+    p["carriers"]["hole"] = {"status": "ok", "channels": [], "soc_notes": ["x"]}
+    assert iv.carrier_notes(p, "hole") == ["x"] and iv.carrier_notes(p, "electron") == []
+    p2 = copy.deepcopy(p)
+    del p2["carriers"]["hole"]["soc_notes"]
+    assert iv.params_digest(p, "hole") == iv.params_digest(p2, "hole")   # 备注不进指纹：不让 S8/S8.4 重排
+
+
+def test_0074_s84_and_s83_show_notes(tmp_path, monkeypatch):
+    r_m = _rops(MOS2_LAT, MOS2_FRAC, ["Mo", "S", "S"])
+    params, Q = _mos2_params(r_m)
+    params["carriers"]["electron"]["soc_notes"] = [iv.SOC_TR_NOTE % "K>K'"]
+    mat = tmp_path / "ke"
+    (mat / "step8.2_dpt").mkdir(parents=True)
+    (mat / "step8.2_dpt" / "dpt_result.json").write_text(json.dumps(_dpt_json(Q)))
+    (mat / "ivs_dfpt").mkdir()
+    (mat / "ivs_dfpt" / "ivs_dfpt_params.json").write_text(json.dumps(params))
+    g14 = _load("g14_soc", KE / "step8.4_amset2d" / "gen_step14_amset2d.py")
+    monkeypatch.setattr(g14, "SCATTERING", ["ADP", "IMP", "POP"])
+    monkeypatch.setattr(g14, "IVS_FROZEN", "off")
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        rec = g14.resolve_dp_optical(mat)
+    assert {c["source"] for c in rec["electron"]["channels"]} == {"dfpt_ivs"}
+    assert rec["electron"]["ivs_dfpt"]["soc_notes"] == params["carriers"]["electron"]["soc_notes"]
+    assert "[NOTE] electron DFPT：非 SOC 口径" in buf.getvalue()
+    g13 = _load("g13_soc", KE / "step8.3_output" / "gen_step13_output.py")
+    (mat / "step8.4_amset2d").mkdir()
+    (mat / "step8.4_amset2d" / "2d_correction.json").write_text(json.dumps(
+        {"dp_optical": rec, "dp_optical_ivs_dfpt": g14._DP_OPTICAL_IVS_DFPT_REC}))
+    lines = g13._ivs_source_lines(mat)
+    assert len(lines) == 2 and "[IVS 备注] S8.4 electron：非 SOC 口径" in lines[1] and "K>K'" in lines[1]

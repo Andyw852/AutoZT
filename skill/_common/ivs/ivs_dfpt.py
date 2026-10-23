@@ -32,6 +32,8 @@ QE 接口（M0 核实，QE 7.3 与 7.4 的 PHonon/PH/ahc.f90 输出部分逐行�
   同一等价类只算一次；共用同一个 q 的类合进同一个 ph.x 作业（nscf 里放几个初态 k）。
 
 不做：SOC、一阶谷间耦合（∝|q−K|）、EPW 插值；谷内（q ≈ 0）的 ADP/ODP 不在这里（小 q 要 2D 库仑截断，AHC 不支持）。
+[0074] SOC 只备注不拦：电子、空穴都照算（非 SOC），soc_notes 给每个载流子写口径说明（无反演中心时时间反演对谷
+  k↔−k 的通道在 SOC 下要自旋翻转 -> 上限），进 ivs_dfpt_params.json / 表 / S8、S8.4 日志与 S8.3 报告。
 """
 import hashlib
 import itertools
@@ -709,6 +711,52 @@ def fold_channels(classes_out, hw_min=HW_MIN_MEV, merge_mev=HW_MERGE_MEV):
             out.append({"from": a, "to": b, "kind": kind, "D_eV_A": math.sqrt(cl["d2"]),
                         "hw_meV": round(hw, 2), "n_terms": cl["n"]})
     return out, dropped
+
+
+# ---------------------------------------------------------------------------
+# [0074] 非 SOC 备注：只说明口径，不改参数（指纹 params_digest 只看通道，加备注不让 S8/S8.4 重排）
+# ---------------------------------------------------------------------------
+SOC_TR_NOTE = ("非 SOC 口径：本结构无反演中心，%s 连的是时间反演对谷（k′ ≡ −k）。有 SOC 时这两个谷的带边自旋相反"
+               "（自旋-谷锁定），谷间散射要自旋翻转：该带边 SOC 劈裂 ≫ k_BT 时（如 MoS₂ 等 TMD 单层价带 K，约 0.15 eV）"
+               "该通道被强烈抑制，这里的值是上限；劈裂 ≪ k_BT 时（如 MoS₂ 导带 K，约 3 meV）影响小。定量要 SOC DFPT（本技能不做）")
+SOC_HOLE_NOTE = "非 SOC 口径：空穴按非 SOC 价带算，价带 SOC 劈裂（如 Γ 简并价带的劈裂带）及其自旋选择未计入，数值是非 SOC 近似"
+
+
+def has_inversion(rops):
+    """点群（倒空间整数矩阵）里有没有反演 −I。"""
+    m = -np.eye(3, dtype=int)
+    return any(np.array_equal(np.asarray(R, int), m) for R in rops)
+
+
+def tr_pair(a, b, tol=1e-4):
+    """b ≡ −a（模倒格矢）且 a 不是时间反演不变点（2a ≢ 0）：时间反演对谷。"""
+    a, b = np.asarray(a, float), np.asarray(b, float)
+    return same_q(a + b, np.zeros(3), tol) and not same_q(2.0 * a, np.zeros(3), tol)
+
+
+def soc_notes(classes_out, carriers, inversion):
+    """[0074] 每个载流子的非 SOC 备注 -> {载流子: [备注…]}（没有就不出现）。
+    无反演中心 + 有连时间反演对谷的谷间通道（MoS₂ 的 K↔K′、Q↔Q′）-> SOC_TR_NOTE（列出通道）；
+    空穴另外（没有上一条时）给一句 SOC_HOLE_NOTE。classes_out：gen_read 的逐类结果（carrier/from/to/kind/k_init/k_fin）。"""
+    out = {}
+    for car in carriers:
+        notes = []
+        if not inversion:
+            trp = sorted({"%s>%s%s" % (c["from"], c["to"], "'" if c["kind"] == "inter_star" else "")
+                          for c in classes_out if c["carrier"] == car and c["kind"] != "intra"
+                          and tr_pair(c["k_init"], c["k_fin"])})
+            if trp:
+                notes.append(SOC_TR_NOTE % "、".join(trp))
+        if car == "hole" and not notes:
+            notes.append(SOC_HOLE_NOTE)
+        if notes:
+            out[car] = notes
+    return out
+
+
+def carrier_notes(params, carrier):
+    """消费端：ivs_dfpt_params.json 里某载流子的非 SOC 备注（旧文件没有 -> []）。"""
+    return list((_carrier(params, carrier) or {}).get("soc_notes") or [])
 
 
 # ---------------------------------------------------------------------------

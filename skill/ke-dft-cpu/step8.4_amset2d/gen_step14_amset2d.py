@@ -1862,6 +1862,9 @@ def resolve_dp_optical(cwd: Path):
                                                    alias=lab)}
             print("[OK] %s DFPT %s（%s）：%s" % (car, "谷间 IVS + 谷内 ODP" if has_odp else "谷间 IVS", IVS_DFPT_SRC,
                                                d_info[car]["summary"]))
+            d_info[car]["soc_notes"] = ivd.carrier_notes(dft, car)     # [0074] 非 SOC 口径备注（只记录、不拦）
+            for n_ in d_info[car]["soc_notes"]:
+                print("[NOTE] %s DFPT：%s" % (car, n_))
             if ref_intra:
                 d_info[car]["odp_reference"] = [{"valley": c["from"], "D_eV_A": c["D_eV_A"], "hw_meV": c["hw_meV"],
                                                  "source": c.get("source") or "manual"} for c in ref_intra]
