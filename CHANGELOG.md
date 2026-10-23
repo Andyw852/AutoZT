@@ -14,6 +14,39 @@ This project adheres to Semantic Versioning; versions before 1.0.0 are developme
 
 ## [Unreleased]
 
+### Changed (2026-10-23: [0076] zt-dft-cpu 出图统一为参考图风格)
+
+- `zt_heatmap.png`：6 档离散色块（`#F6D3DE → #8A1D46`）+ 白缝，替换连续渐变与越界格线；深灰 `#3A4654`
+  三角箭头轴、中灰斜体轴名；峰值格描边并在格内标数值；色标分档、档界之间留白。
+- `zt_vs_T.png`：线色按 |n| 走同一条粉色色阶，右侧色标读浓度（不再堆十几项图例），只直标峰值档。
+- `zt_vs_doping.png`：由一张 symlog 图（负浓度 = n 型）改为 n / p 两栏、对数横轴 |n|，温度越高线越深。
+- `zt_components.png`、`intrinsic_carrier/zt_intrinsic.png`：同一套轴 / 字色 / 线色。
+- `ZT_CMAP_VMAX = auto` 时上限取整到每档 1/2/2.5/5×10^k，档界是整齐数；默认 0.3 不变。
+- n 型改用绿色 6 档（`#CBE6D0 → #025F29`，与粉色逐档同 OKLab 明度），p 型保持粉色；热图与 zT(T) 每栏各带色标。
+
+### Added (2026-10-23: [0072] intravalley ADP deformation potentials from DFPT acoustic slopes — experimental, off by default)
+- Validation on Si (QE 7.4, SG15 NC PBE, a = 5.479 Å) showed the small-q acoustic matrix elements carry a spurious 1/q
+  long-range term (acoustic-sum-rule violation, ΣZ* ≈ 0.16 e), so the single-|q| slope fit is wrong by an order of
+  magnitude. Fitting M = A/q + B·q over three |q| gives Ξu ≈ 8.5 eV (Li 2021: 8.84) but Ξd ≈ 4.5 eV (Li 2021: 1.01).
+  `IVS_ADP` and `ADP_DFPT` therefore default to `off`; details in ke-dft-cpu METHODOLOGY [0072].
+- eph-qe-cpu `ivs_dfpt` group (`IVS_ADP = auto|on|off`, `IVS_ADP_DQ` = 0.03 Å⁻¹): S10 appends six small-q jobs
+  `q-adp1..6` (Cartesian x, y, z, xy, xz, yz) with the valley centres as initial states. S13 solves, per direction, the
+  three acoustic modes' centre-of-mass displacements for w = |q|·D·q̂ (internal strain is in the acoustic eigenvectors),
+  fits the symmetric deformation-potential tensor D from the six directions (one overall sign undetermined), expands
+  it over the valley star, and writes it to the `"adp"` block of `ivs_dfpt_params.json`. Method of Li, Graziosi and
+  Neophytou, PRB 104, 195201 (2021). `auto` runs only in 3D structures with an inversion centre (otherwise the
+  piezoelectric long-range term contaminates the slope); 2D is not supported (no 2D Coulomb truncation in ph.x AHC).
+  Degenerate band edges (Si holes at Γ) are marked `degenerate` and left to `ADP_DEGEN`.
+- ke-dft-cpu S8 (`ADP_DFPT = auto|on|off`, `ADP_DFPT_EWIN` = 0.3 eV): states within the window of a non-degenerate band
+  edge get the DFPT tensor of their nearest valley member instead of the S7 band-edge-shift tensor. The substitution
+  sits in a proxy around AMSET's deformation-potential interpolator, so AMSET's ADP kernel and amset_ir_fix's star
+  average are unchanged.
+- Reason: the hydrostatic part of the S7 deformation potential depends on the absolute (core-level) alignment. For Si
+  electrons S7 gives 8.72 eV along the valley axis against Ξd + Ξu = 9.85 eV from DFPT (Li 2021), and the electron
+  mobility with ADP + IVS is 1602 cm²/Vs against 1366–1383 (EPW) and 1327 (Li 2021).
+- Tests: `tests/test_0072_adp_dfpt.py` (synthetic acoustic modes with internal strain, degenerate-TA rotation and
+  arbitrary phases; Si Δ star expansion; S10 planning; S8 reading). Existing IVS/ODP tests that compare against the
+  pre-[0072] q list now set `IVS_ADP = off`.
 ### Changed (2026-10-23: [0075] ke-dft-cpu hides the frozen-phonon ODP/IVS path)
 - The preferred route for the optical deformation potential (ODP) and the intervalley deformation potential (IVS) is
   now **DFPT extraction** (eph-qe-cpu, optional group `ivs_dfpt`: ODP from the q=Γ AHC, IVS from the valley-pair q).
