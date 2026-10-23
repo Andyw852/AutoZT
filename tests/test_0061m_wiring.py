@@ -303,7 +303,7 @@ def test_gen_s8_matrix(tmp_path):
     assert "ADP_DEGEN_MATRIX" in g.SPEC
     src = (KE / "step8_amset" / "gen_step10_amset.py").read_text(encoding="utf-8")
     assert "link(out, cwd / READ_DIR / DEFORM_MATRIX_H5, DEFORM_MATRIX_H5)" in src
-    assert g._SKILL_REV.startswith("2026-10-21-0061m")
+    assert g._SKILL_REV[:10] >= "2026-10-21"          # [0072] 之后的版本号只会更新
 
 
 def test_gen_s84_matrix(tmp_path, monkeypatch):

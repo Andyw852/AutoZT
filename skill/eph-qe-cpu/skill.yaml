@@ -62,6 +62,8 @@ optional_steps:
   #   push_paths（S10）：ke-dft-cpu 的本地 result 推到 ivs_inputs/（本地没有就不推，远端旧的删掉）。
   #   [0059-r3] IVS_ODP=auto（出厂）：S10 在 q 列表末尾加 q=Γ 作业 q-odp，S13 顺带给谷内 ODP（单谷载流子也算；Γ 声学模、
   #   极性模不进通道），ke 的 S8/S8.4 里优先于冻声子与手填。
+  #   [0072] IVS_ADP=auto（出厂，三维有反演中心）：S10 再加 6 个小 q 作业 q-adp1..6，S13 拟合谷内声学形变势张量（"adp" 块），
+  #   ke 的 S8 用 ADP_DFPT 替换非简并带边的 AMSET 形变势（Li et al. PRB 104, 195201 (2021)）。
   ivs_dfpt:
     default: false
     steps:
