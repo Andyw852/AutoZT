@@ -14,6 +14,15 @@ This project adheres to Semantic Versioning; versions before 1.0.0 are developme
 
 ## [Unreleased]
 
+### Changed (2026-10-23: [0076] zt-dft-cpu 出图统一为参考图风格)
+
+- `zt_heatmap.png`：6 档离散色块（`#F6D3DE → #8A1D46`）+ 白缝，替换连续渐变与越界格线；深灰 `#3A4654`
+  三角箭头轴、中灰斜体轴名；峰值格描边并在格内标数值；色标分档、档界之间留白。
+- `zt_vs_T.png`：线色按 |n| 走同一条粉色色阶，右侧色标读浓度（不再堆十几项图例），只直标峰值档。
+- `zt_vs_doping.png`：由一张 symlog 图（负浓度 = n 型）改为 n / p 两栏、对数横轴 |n|，温度越高线越深。
+- `zt_components.png`、`intrinsic_carrier/zt_intrinsic.png`：同一套轴 / 字色 / 线色。
+- `ZT_CMAP_VMAX = auto` 时上限取整到每档 1/2/2.5/5×10^k，档界是整齐数；默认 0.3 不变。
+
 ### Added (2026-10-23: [0072] intravalley ADP deformation potentials from DFPT acoustic slopes — experimental, off by default)
 - Validation on Si (QE 7.4, SG15 NC PBE, a = 5.479 Å) showed the small-q acoustic matrix elements carry a spurious 1/q
   long-range term (acoustic-sum-rule violation, ΣZ* ≈ 0.16 e), so the single-|q| slope fit is wrong by an order of

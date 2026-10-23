@@ -14,8 +14,9 @@
   · zt_summary.json   机读全表：温度网格 × 掺杂网格的 S/σ/κ_e/κ_L/κ_tot/PF/ZT、
                       峰值 ZT、口径说明、来源路径
   · zt_summary.txt    人读汇总（含峰值 ZT 与每档明细表）
-  · zt_vs_T.png       各掺杂档 ZT(T)（n 型实线 / p 型虚线）
-  · zt_vs_doping.png  各温度下 ZT(载流子浓度)
+  · zt_heatmap.png    zT(n, T) 热图（n / p 两栏，6 档离散色 + 统一色标）
+  · zt_vs_T.png       各掺杂档 ZT(T)（左 n 型 / 右 p 型，颜色按 |n| 深浅 + 色标）
+  · zt_vs_doping.png  各温度下 ZT(|n|)（n / p 两栏，对数横轴）
   · zt_components.png 最优档的 S/σ/κ/PF/ZT 五联图（诊断用）
   · per_temperature/<T>K/report.{txt,json}   每个温度一份全掺杂档明细
   · intrinsic_carrier/  [0052] 本征点（未掺杂，n = p = n_i）随温度的图 + 表：
@@ -47,11 +48,14 @@ T_TARGETS = (300.0, 500.0, 700.0, 900.0)   # zt_vs_doping 想画的目标温度
 # 单色相顺序色板「白 -> 浅粉 -> 酒红」（浅 = ZT 小，深 = ZT 大）。
 # 两端按用户 2026-10-14 指定：最深 #B8244A、浅 #F6D3DE；更浅端用近白 #FFF7FA（比纯白略粉，
 # 让 ZT≈0 的格子仍能看出边界，不和白格线融成一片）。中间为线性过渡。
-ZT_CMAP_COLORS = ("#FFF7FA", "#F6D3DE", "#EAB0C0", "#DD8DA3", "#D16A85", "#C44768", "#B8244A")
+# [0076] 用户 2026-10-23 给参考图（分档色块 + 白缝 + 深灰箭头轴 + 灰色斜体轴名）重做全部 ZT 图：
+#   色板改为参考图的 6 档离散色（浅 -> 深），热图按档上色（不再连续渐变）；折线图沿用同一色阶。
+ZT_CMAP_COLORS = ("#F6D3DE", "#EEB2C6", "#E38AA8", "#D16388", "#B23C66", "#8A1D46")
 ZT_CMAP = "autozt_zt"
-ZT_INK = "#B8244A"                     # 标题用的同色系深色
-ZT_AXIS = "#000000"                    # [0048] 坐标轴（带箭头的横/纵轴 + 刻度数字/轴名）用黑色
-ZT_GRID = "#F2F2F2"                    # [0051] 档位格线：深色区读作白线，浅色区仍能看出边界
+ZT_INK = "#8A1D46"                     # 峰值数字 / 单条曲线用的同色系深色
+ZT_AXIS = "#3A4654"                    # 坐标轴（带三角箭头的横/纵轴）：参考图的深灰蓝
+ZT_LABEL = "#5B6673"                   # 轴名 / 刻度数字 / 标题 / 图例文字：参考图的中灰
+ZT_GAP = 0.08                          # 热图色块之间的白缝（占一格的比例）
 ZT_CMAP_VMAX_DEFAULT = "0.3"           # 统一色标上限（ZT）；写 auto = 退回每材料自适应的旧行为
 
 
@@ -301,14 +305,50 @@ def heatmap_data(grid):
 
 
 def _zt_cmap(plt):
-    """[0047] 统一色板：浅粉 -> 酒红的单色相顺序 cmap（所有材料共用）。"""
+    """[0047/0076] 统一色板：参考图的 6 档离散色（浅 = ZT 小，深 = ZT 大），所有材料共用；
+    超过统一上限的格子按最深档上色。"""
+    from matplotlib.colors import ListedColormap
+    cm = ListedColormap(list(ZT_CMAP_COLORS), name=ZT_CMAP)
+    cm.set_over(ZT_CMAP_COLORS[-1])
+    return cm
+
+
+def _line_cmap(plt):
+    """[0076] 折线图的连续色阶：同一套 6 色插值，去掉最浅档（白底上看不清）。"""
     from matplotlib.colors import LinearSegmentedColormap
-    return LinearSegmentedColormap.from_list(ZT_CMAP, list(ZT_CMAP_COLORS))
+    return LinearSegmentedColormap.from_list(ZT_CMAP + "_line", list(ZT_CMAP_COLORS[1:]))
+
+
+def _apply_style(plt):
+    """[0076] 全部 ZT 图共用的字体 / 文字颜色（参考图：Arial 系无衬线、中灰文字）。"""
+    plt.rcParams.update({
+        "font.family": "sans-serif",
+        "font.sans-serif": ["Arial", "Liberation Sans", "DejaVu Sans"],
+        "text.color": ZT_LABEL, "axes.labelcolor": ZT_LABEL, "axes.titlecolor": ZT_LABEL,
+        "xtick.color": ZT_AXIS, "ytick.color": ZT_AXIS,
+        "xtick.labelcolor": ZT_LABEL, "ytick.labelcolor": ZT_LABEL,
+        "axes.titlesize": 12, "axes.labelsize": 11, "xtick.labelsize": 9, "ytick.labelsize": 9,
+        "legend.frameon": False, "legend.fontsize": 8.5,
+    })
+
+
+def _arrow_axes(ax, ticks=True):
+    """[0076] 参考图的坐标轴：去掉边框，只留左 / 下两条带实心三角箭头的深灰轴。"""
+    for sp in ax.spines.values():
+        sp.set_visible(False)
+    kw = dict(xycoords="axes fraction", textcoords="axes fraction", annotation_clip=False,
+              arrowprops=dict(arrowstyle="-|>,head_length=0.75,head_width=0.38", color=ZT_AXIS,
+                              lw=1.6, shrinkA=0, shrinkB=0, capstyle="round"), zorder=6)
+    ax.annotate("", xy=(1.0, 0.0), xytext=(0.0, 0.0), **kw)
+    ax.annotate("", xy=(0.0, 1.0), xytext=(0.0, 0.0), **kw)
+    ax.tick_params(length=(3 if ticks else 0), width=0.8, pad=4)
 
 
 def _zt_vmax(par, data):
-    """[0047] 统一色标上限：默认所有材料同一把尺子（ZT_CMAP_VMAX，出厂 1.0）；
-    写成 auto 时退回「每材料取自身最大值」的旧行为。返回 (上限, 说明文字)。"""
+    """[0047] 统一色标上限：默认所有材料同一把尺子（ZT_CMAP_VMAX，出厂 0.3）；
+    写成 auto 时退回「每材料按自身最大值」：[0076] 上限取整到每档 1/2/2.5/5×10^k，档界是整齐数。
+    返回 (上限, 说明文字)。"""
+    import math
     amax = max((v for d in data.values() for row in d["zt"] for v in row if v is not None),
                default=None)
     spec = str((par or {}).get("ZT_CMAP_VMAX", ZT_CMAP_VMAX_DEFAULT) or "").strip().lower()
@@ -319,7 +359,12 @@ def _zt_vmax(par, data):
                 return v, "%.3g" % v
         except ValueError:
             pass
-    return amax, "auto"
+    if not amax or amax <= 0:
+        return amax, "auto"
+    raw = amax / len(ZT_CMAP_COLORS)
+    e = 10.0 ** math.floor(math.log10(raw))
+    step = next(m * e for m in (1, 2, 2.5, 5, 10) if m * e >= raw * (1 - 1e-9))
+    return step * len(ZT_CMAP_COLORS), "auto"
 
 
 def _n_tick(x):
@@ -333,10 +378,13 @@ def _n_tick(x):
 
 
 def make_heatmap(out, grid, meta, plt, par=None):
-    """[0047] zT(n, T) 热图：n 型 / p 型两栏，横轴 |n|（对数档位）、纵轴 T。
-    色板与色标【跨材料统一】（ZT_CMAP / ZT_CMAP_VMAX）：浅粉->酒红、白格线分隔档位，
-    峰值打星并标数值；超过统一上限的点按上限上色（图下注明）。"""
+    """[0047/0076] zT(n, T) 热图：n 型 / p 型两栏，横轴 |n|（对数档位）、纵轴 T。
+    参考图风格：6 档离散色块 + 白缝、深灰三角箭头轴、灰色斜体轴名；色标【跨材料统一】
+    （ZT_CMAP / ZT_CMAP_VMAX）。峰值格描深灰边并在格内标数值；超过统一上限的格按最深档上色。"""
     import numpy as np
+    from matplotlib.cm import ScalarMappable
+    from matplotlib.colors import BoundaryNorm
+    from matplotlib.patches import Rectangle
     data = heatmap_data(grid)
     if not data:
         return None
@@ -346,60 +394,58 @@ def make_heatmap(out, grid, meta, plt, par=None):
         return None
     clipped = any(v > vmax for d in data.values() for row in d["zt"] for v in row if v is not None)
     cmap = _zt_cmap(plt)
-    fig, axes = plt.subplots(1, len(kinds), figsize=(4.7 * len(kinds), 4.6), squeeze=False)
-    im = None
+    nb = len(ZT_CMAP_COLORS)
+    bounds = np.linspace(0.0, vmax, nb + 1)
+    ncol = max(len(data[k]["doping_cm-3"]) for k in kinds)
+    nrow = max(len(data[k]["temperatures"]) for k in kinds)
+    cell = 0.42 if max(ncol, nrow) <= 10 else 0.3            # 每格边长（英寸），尽量接近正方形
+    fig, axes = plt.subplots(1, len(kinds), squeeze=False,
+                             figsize=(len(kinds) * (ncol * cell + 1.3) + 1.2, nrow * cell + 1.6))
+    g = ZT_GAP / 2.0
     for ax, kind in zip(axes[0], kinds):
         d = data[kind]
         nn, nt = len(d["doping_cm-3"]), len(d["temperatures"])
-        z = np.array([[np.nan if v is None else min(float(v), vmax) for v in row]
-                      for row in d["zt"]], float)
-        im = ax.imshow(z, origin="lower", aspect="auto", cmap=cmap, vmin=0.0, vmax=vmax,
-                       interpolation="nearest")
+        peak = None
+        for j, row in enumerate(d["zt"]):
+            for i, v in enumerate(row):
+                if v is None:
+                    continue
+                k = min(int(max(float(v), 0.0) / vmax * nb), nb - 1)
+                ax.add_patch(Rectangle((i - 0.5 + g, j - 0.5 + g), 1 - 2 * g, 1 - 2 * g,
+                                       facecolor=ZT_CMAP_COLORS[k], edgecolor="none", zorder=2))
+                if peak is None or v > peak[0]:
+                    peak = (float(v), i, j, k)
+        if peak is not None:
+            v, i, j, k = peak
+            ax.add_patch(Rectangle((i - 0.5 + g, j - 0.5 + g), 1 - 2 * g, 1 - 2 * g,
+                                   facecolor="none", edgecolor=ZT_AXIS, lw=1.3, zorder=3))
+            ax.text(i, j, "%.2g" % v, ha="center", va="center", fontsize=7.5, fontweight="bold",
+                    color=("white" if k >= nb // 2 else ZT_INK), zorder=4)
+        ax.set_xlim(-0.5 - 0.45, nn - 0.5 + 0.35)            # 色块与箭头轴之间留一点空（同参考图）
+        ax.set_ylim(-0.5 - 0.3, nt - 0.5 + 0.55)
         ax.set_xticks(range(nn))
-        ax.set_xticklabels([_n_tick(x) for x in d["doping_cm-3"]], fontsize=8.5)
+        ax.set_xticklabels([_n_tick(x) for x in d["doping_cm-3"]])
         ax.set_yticks(range(nt))
-        ax.set_yticklabels(["%g" % t for t in d["temperatures"]], fontsize=8.5)
-        if nn > 6:                      # 档位多才转 45°，否则横排更清爽
+        ax.set_yticklabels(["%g" % t for t in d["temperatures"]])
+        if nn > 7:                      # 档位多才转 45°，否则横排更清爽
             for lb in ax.get_xticklabels():
                 lb.set_rotation(45)
                 lb.set_ha("right")
                 lb.set_rotation_mode("anchor")
-        ax.set_xticks(np.arange(-.5, nn, 1), minor=True)        # 白格线：分隔相邻档位
-        ax.set_yticks(np.arange(-.5, nt, 1), minor=True)
-        ax.grid(which="minor", color=ZT_GRID, linewidth=1.8)      # [0051] 格线用极浅中性色：
-        #   深色区读作白线（同参考图），浅色区（ZT≈0，浅端 #FFF7FA）仍能看出格子边界，不会融成一片
-        ax.tick_params(which="minor", length=0)
-        ax.tick_params(length=2.5, width=0.8, colors=ZT_AXIS)
-        for lb in list(ax.get_xticklabels()) + list(ax.get_yticklabels()):
-            lb.set_color(ZT_AXIS)
-        for sp in ax.spines.values():
-            sp.set_visible(False)
-        ax.set_xlabel(r"$n$  (cm$^{-3}$)", fontsize=10.5, color=ZT_AXIS, labelpad=3)
-        ax.set_ylabel(r"$T$  (K)", fontsize=10.5, color=ZT_AXIS, labelpad=3)
-        # [0048] 黑色坐标轴：左/下两条带末端箭头的轴（参考图风格）；刻度数字与轴名同黑
-        _x0, _x1, _y0, _y1 = -0.5, nn - 0.5, -0.5, nt - 0.5
-        ax.set_xlim(_x0 - 0.06, _x1 + 0.62)
-        ax.set_ylim(_y0 - 0.06, _y1 + 0.62)
-        for _hd, _tl in (((_x1 + 0.48, _y0), (_x0, _y0)), ((_x0, _y1 + 0.48), (_x0, _y0))):
-            ax.annotate("", xy=_hd, xytext=_tl, annotation_clip=False,
-                        arrowprops=dict(arrowstyle="-|>", color=ZT_AXIS, lw=1.3,
-                                        shrinkA=0, shrinkB=0, mutation_scale=13),
-                        zorder=6)
-        ax.set_title("%s-type  zT($n$, $T$)" % kind, fontsize=13, pad=9,
-                     color=ZT_INK, fontweight="bold")
-        if np.isfinite(z).any():
-            j, i = np.unravel_index(np.nanargmax(z), z.shape)
-            ax.plot(i, j, marker="*", ms=13, mfc="white", mec=ZT_INK, mew=1.0, ls="none", zorder=3)
-            ax.annotate("%.2f" % z[j, i], (i, j), xytext=(7, 6), textcoords="offset points",
-                        color=("white" if z[j, i] > 0.55 * vmax else ZT_INK),
-                        fontsize=9, fontweight="bold", zorder=4)
-    cbar = fig.colorbar(im, ax=list(axes[0]), shrink=0.85, pad=0.035,
-                        extend=("max" if clipped else "neither"))
-    cbar.set_label("zT", fontsize=10, color=ZT_INK)
+        _arrow_axes(ax, ticks=False)
+        ax.set_xlabel(r"$n$  (cm$^{-3}$)")
+        ax.set_ylabel(r"$T$  (K)")
+        ax.set_title("%s-type" % kind, pad=10)
+    sm = ScalarMappable(norm=BoundaryNorm(bounds, nb), cmap=cmap)
+    cbar = fig.colorbar(sm, ax=list(axes[0]), shrink=0.8, pad=0.03, aspect=22, ticks=bounds,
+                        drawedges=True, extend=("max" if clipped else "neither"))
+    cbar.set_label(r"$zT$", color=ZT_LABEL)
     cbar.outline.set_visible(False)
-    cbar.ax.tick_params(length=2, width=0.7, colors=ZT_INK, labelsize=8.5)
-    # [0049] 用户 2026-10-14：去掉最上面的总标题 "zT(n, T) — <材料>"，
-    #   以及最下面那行 color scale 脚注（统一色标仍写进 zt_summary 的 notes，图面只留两栏面板）。
+    cbar.dividers.set_color("white")
+    cbar.dividers.set_linewidth(2.5)
+    cbar.ax.set_yticklabels(["%g" % round(b, 6) for b in bounds])
+    cbar.ax.tick_params(length=0, labelsize=8.5, pad=4)
+    # [0049] 不加总标题、不加色标脚注（统一色标写进 zt_summary 的 notes），图面只留两栏面板。
     fig.savefig(Path(out) / "zt_heatmap.png", dpi=150, bbox_inches="tight")
     plt.close(fig)
     return {"vmax": vmax, "vsrc": vsrc, "clipped": clipped}
@@ -542,113 +588,147 @@ def make_intrinsic(out, grid, meta, ni, ni_src):
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
-    panels = [("seebeck_uV/K", r"S ($\mu$V/K)", False), ("sigma_S/m", r"$\sigma$ (S/m)", True),
-              (("kappa_e_W/mK", "kappa_L_W/mK"), r"$\kappa$ (W/m/K)", True),
-              ("PF_W/mK2", "PF (W/m/K$^2$)", True), ("ZT", "ZT", False)]
+    _apply_style(plt)
+    panels = [("seebeck_uV/K", r"$S$  ($\mu$V/K)", False), ("sigma_S/m", r"$\sigma$  (S/m)", True),
+              (("kappa_e_W/mK", "kappa_L_W/mK"), r"$\kappa$  (W/m/K)", True),
+              ("PF_W/mK2", "PF  (W/m/K$^2$)", True), ("ZT", r"$zT$", False)]
     nip = [(r["T_K"], r["n_i_cm-3"]) for r in rows if r["n_i_cm-3"]]
     if nip:
-        panels.insert(0, ("n_i_cm-3", "n_i = n = p (cm$^{-3}$)", True))
-    fig, axs = plt.subplots(1, len(panels), figsize=(3.9 * len(panels), 3.6), squeeze=False)
+        panels.insert(0, ("n_i_cm-3", r"$n_i = n = p$  (cm$^{-3}$)", True))
+    colors = {"n_i_cm-3": ZT_AXIS, "kappa_L_W/mK": ZT_CMAP_COLORS[2]}
+    fig, axs = plt.subplots(1, len(panels), figsize=(3.7 * len(panels), 3.4), squeeze=False)
     for a, (key, ttl, logy) in zip(axs[0], panels):
-        for k, lab in ((key, None),) if isinstance(key, str) else zip(key, ("kappa_e", "kappa_L")):
+        for k, lab in ((key, None),) if isinstance(key, str) else zip(key, (r"$\kappa_e$", r"$\kappa_L$")):
             pts = [(r["T_K"], r[k]) for r in rows if r[k] is not None and (not logy or r[k] > 0)]
             if pts:
-                a.plot([p[0] for p in pts], [p[1] for p in pts], "o-", ms=3.5, lw=1.3,
-                       color="k" if k == "n_i_cm-3" else None, label=lab)
+                a.plot([p[0] for p in pts], [p[1] for p in pts], "-", lw=1.6, marker="o", ms=3.2,
+                       mec="white", mew=0.5, color=colors.get(k, ZT_CMAP_COLORS[4]), label=lab)
             if k == "n_i_cm-3":
                 for x, y in pts:
-                    a.annotate("%.2g" % y, (x, y), textcoords="offset points", xytext=(0, 5),
-                               ha="center", fontsize=6.5)
+                    a.annotate("%.2g" % y, (x, y), textcoords="offset points", xytext=(0, 6),
+                               ha="center", fontsize=6.5, color=ZT_LABEL)
                 a.margins(y=0.25)
         if logy:
             a.set_yscale("log")
         if not isinstance(key, str):
-            a.legend(fontsize=7)
-        a.set_title(ttl, fontsize=10)
-        a.set_xlabel("T (K)", fontsize=8)
-        a.grid(alpha=0.3)
-    fig.suptitle("%s  intrinsic carriers (undoped, n = p = n_i)  —  ZT vs T%s"
-                 % (meta["material"], "" if nip else "   [n_i not recorded: rerun ke-dft-cpu S8]"), fontsize=11)
-    fig.tight_layout(rect=[0, 0, 1, 0.92])
-    fig.savefig(d / "zt_intrinsic.png", dpi=130)
+            a.legend()
+        _arrow_axes(a)
+        a.set_ylabel(ttl)
+        a.set_xlabel(r"$T$  (K)")
+    fig.suptitle("%s  intrinsic carriers (undoped, n = p = n_i)%s"
+                 % (meta["material"], "" if nip else "   [n_i not recorded: rerun ke-dft-cpu S8]"),
+                 fontsize=11, color=ZT_LABEL)
+    fig.tight_layout(rect=[0, 0, 1, 0.92], w_pad=2.0)
+    fig.savefig(d / "zt_intrinsic.png", dpi=150)
     plt.close(fig)
     return d
 
 
+def _log_ticks(lo, hi):
+    """log10|n| 区间内的整数次幂刻度（档位跨度大时隔一个取一个）。"""
+    import math
+    ks = list(range(int(math.ceil(lo - 1e-9)), int(math.floor(hi + 1e-9)) + 1))
+    step = 1 if len(ks) <= 7 else 2
+    return ks[::step] or [round(lo)]
+
+
 def make_plots(out, grid, peaks, meta, par=None):
-    """三张图；任何一张失败只告警，不影响 JSON/TXT 产物。"""
+    """热图 + 三张折线图；任何一张失败只告警，不影响 JSON/TXT 产物。
+    [0076] 折线图与热图同一视觉语言：粉色单色相色阶（浅 = 低、深 = 高）、深灰三角箭头轴、灰色文字。"""
+    import math
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
+    from matplotlib.cm import ScalarMappable
+    from matplotlib.colors import Normalize
 
+    _apply_style(plt)
+    lcm = _line_cmap(plt)
     temps = grid["temperatures"]
     make_heatmap(out, grid, meta, plt, par=par)
     # ---- 1) ZT(T) ----
-    # 用户 2026-10-23：默认色环只有 10 色，19 档掺杂时颜色重复（两条蓝实线分不清）。
-    #   改为左右两栏：左 n 型（蓝色系实线）、右 p 型（红色系虚线），浓度越高颜色越深；
-    #   本征点（黑色点线）两栏都画作参照；两栏共用 y 轴便于对比 n/p。
+    # 用户 2026-10-23：左 n 型、右 p 型两栏；[0076] 颜色按 |n| 走同一条粉色色阶（浓度越高越深），
+    #   掺杂档多（十几档）时用右侧色标读浓度，不再堆一长串图例；本征点（深灰虚线）两栏都画作参照。
     groups = {"n": [], "p": [], "i": []}
     for r in grid["rows"]:
         if any(v is not None for v in r["ZT"]):
             groups.get(r["type"], groups["i"]).append(r)
-    fig, axes = plt.subplots(1, 2, figsize=(12.0, 5.0), sharey=True)
-    for ax, kind, cmap, ls in ((axes[0], "n", plt.cm.Blues, "-"),
-                               (axes[1], "p", plt.cm.Reds, "--")):
-        rs = sorted(groups[kind], key=lambda x: -abs(x["doping_cm-3"]))
-        for k, r in enumerate(rs + groups["i"]):
+    logs = [math.log10(abs(r["doping_cm-3"])) for k in ("n", "p") for r in groups[k]
+            if abs(r["doping_cm-3"]) > 0]
+    lo, hi = (min(logs), max(logs)) if logs else (0.0, 1.0)
+    nrm = Normalize(lo, hi if hi > lo else lo + 1.0)
+    fig, axes = plt.subplots(1, 2, figsize=(11.0, 4.4), sharey=True)
+    for ax, kind in zip(axes, ("n", "p")):
+        rs = sorted(groups[kind], key=lambda x: abs(x["doping_cm-3"]))   # 浅色先画，深色压在上面
+        for r in rs + groups["i"]:
             xs = [t for t, v in zip(temps, r["ZT"]) if v is not None]
             yy = [v for v in r["ZT"] if v is not None]
             if r["type"] == "i":
-                color, lst, lab = "k", ":", "intrinsic (undoped)"
-            else:
-                color, lst = cmap(0.95 - 0.6 * k / max(len(rs) - 1, 1)), ls
-                lab = "%s %s cm$^{-3}$" % (kind, zc._fmt(abs(r["doping_cm-3"]), 1))
-            ax.plot(xs, yy, lst, color=color, marker="o", ms=3.5, lw=1.3, label=lab)
-        ax.set_title("%s-type" % kind)
-        ax.set_xlabel("T (K)")
-        ax.grid(alpha=0.3)
-        if rs or groups["i"]:
-            ax.legend(fontsize=7)
+                ax.plot(xs, yy, "--", color=ZT_AXIS, lw=1.2, label="intrinsic (undoped)", zorder=3)
+                continue
+            c = lcm(nrm(math.log10(abs(r["doping_cm-3"])))) if abs(r["doping_cm-3"]) > 0 else ZT_AXIS
+            ax.plot(xs, yy, "-", color=c, lw=1.6, marker="o", ms=3.2, mec="white", mew=0.5, zorder=2)
+        best = max(((v, r, t) for r in rs for t, v in zip(temps, r["ZT"]) if v is not None),
+                   key=lambda x: x[0], default=None)
+        if best:                        # 只直标峰值那一档（不给每条线标数）
+            ax.annotate("%.2g @ %s cm$^{-3}$" % (best[0], _n_tick(abs(best[1]["doping_cm-3"]))),
+                        (best[2], best[0]), xytext=(-8, 0), textcoords="offset points",
+                        ha="right", va="center", fontsize=8.5, color=ZT_INK)
+        _arrow_axes(ax)
+        ax.set_title("%s-type" % kind, pad=10)
+        ax.set_xlabel(r"$T$  (K)")
+        ax.set_ylim(bottom=0)
+        if groups["i"]:
+            ax.legend(loc="upper left")
         if not rs:
             ax.text(0.5, 0.5, "no %s-type doping" % kind, transform=ax.transAxes,
-                    ha="center", va="center", color="0.5")
-    axes[0].set_ylabel("ZT")
+                    ha="center", va="center", color=ZT_LABEL)
+    axes[0].set_ylabel(r"$zT$")
     axes[1].tick_params(labelleft=True)
-    fig.suptitle("ZT(T) — %s   (S$^2\\sigma$T/($\\kappa_e$+$\\kappa_L$))" % meta["material"])
-    fig.tight_layout()
-    fig.savefig(Path(out) / "zt_vs_T.png", dpi=140)
+    if logs:
+        cb = fig.colorbar(ScalarMappable(norm=nrm, cmap=lcm), ax=list(axes), shrink=0.8,
+                          pad=0.03, aspect=22)
+        ks = _log_ticks(lo, hi)
+        cb.set_ticks(ks)
+        cb.set_ticklabels(["$10^{%d}$" % k for k in ks])
+        cb.set_label(r"$|n|$  (cm$^{-3}$)", color=ZT_LABEL)
+        cb.outline.set_visible(False)
+        cb.ax.tick_params(length=0, labelsize=8.5, pad=4)
+    fig.savefig(Path(out) / "zt_vs_T.png", dpi=150, bbox_inches="tight")
     plt.close(fig)
 
     # ---- 2) ZT(n) ----
-    fig, ax = plt.subplots(figsize=(7.2, 5.0))
+    # [0076] 原来一张 symlog 图（负浓度 = n 型）改为 n / p 两栏、横轴 log|n|，与热图同向；
+    #   各目标温度一条线，温度越高颜色越深。
+    tsel = []
     for T in T_TARGETS:
-        xs, ys, marks = [], [], []
-        for i, r in enumerate(grid["rows"]):
-            if T not in temps:
-                jT = min(range(len(temps)), key=lambda k: abs(temps[k] - T))
-                if abs(temps[jT] - T) > 1e-6:
-                    continue
-            else:
-                jT = temps.index(T)
-            v = r["ZT"][jT]
-            if v is None:
-                continue
-            xs.append(r["doping_cm-3"])
-            ys.append(v)
-        if not xs:
-            continue
-        order = sorted(range(len(xs)), key=lambda k: xs[k])
-        ax.plot([xs[k] for k in order], [ys[k] for k in order], "o-", ms=3.5,
-                lw=1.3, label="%g K" % T)
-    ax.axvline(0, color="k", lw=0.6)
-    ax.set_xscale("symlog", linthresh=1e16)
-    ax.set_xlabel("carrier concentration (cm$^{-3}$, negative = n-type)")
-    ax.set_ylabel("ZT")
-    ax.set_title("ZT vs doping — %s" % meta["material"])
-    ax.grid(alpha=0.3)
-    ax.legend(fontsize=8)
-    fig.tight_layout()
-    fig.savefig(Path(out) / "zt_vs_doping.png", dpi=140)
+        jT = min(range(len(temps)), key=lambda k: abs(temps[k] - T)) if temps else None
+        if jT is not None and abs(temps[jT] - T) <= 1e-6:
+            tsel.append((T, jT))
+    fig, axes = plt.subplots(1, 2, figsize=(10.0, 4.2), sharey=True)
+    for ax, kind in zip(axes, ("n", "p")):
+        rs = sorted((r for r in grid["rows"] if r.get("type") == kind and abs(r["doping_cm-3"]) > 0),
+                    key=lambda x: abs(x["doping_cm-3"]))
+        for m, (T, jT) in enumerate(tsel):
+            pts = [(abs(r["doping_cm-3"]), r["ZT"][jT]) for r in rs if r["ZT"][jT] is not None]
+            if pts:
+                ax.plot([p[0] for p in pts], [p[1] for p in pts], "-", lw=1.6, marker="o", ms=3.2,
+                        mec="white", mew=0.5, label="%g K" % T,
+                        color=lcm(0.15 + 0.85 * m / max(len(tsel) - 1, 1)))
+        ax.set_xscale("log")
+        _arrow_axes(ax)
+        ax.set_title("%s-type" % kind, pad=10)
+        ax.set_xlabel(r"$n$  (cm$^{-3}$)")
+        ax.set_ylim(bottom=0)
+        if ax.get_legend_handles_labels()[0]:
+            ax.legend(loc="upper left")
+        else:
+            ax.text(0.5, 0.5, "no %s-type doping" % kind, transform=ax.transAxes,
+                    ha="center", va="center", color=ZT_LABEL)
+    axes[0].set_ylabel(r"$zT$")
+    axes[1].tick_params(labelleft=True)
+    fig.tight_layout(w_pad=3.0)
+    fig.savefig(Path(out) / "zt_vs_doping.png", dpi=150)
     plt.close(fig)
 
     # ---- 3) 最优档五联图 ----
@@ -656,20 +736,22 @@ def make_plots(out, grid, peaks, meta, par=None):
     if best:
         i = grid["doping"].index(best["doping_cm-3"])
         r = grid["rows"][i]
-        fig, axes = plt.subplots(1, 5, figsize=(19, 3.6))
+        fig, axes = plt.subplots(1, 5, figsize=(18, 3.5))
         for ax, key, lab in zip(axes,
                                 ("seebeck_uV/K", "sigma_S/m", "kappa_tot_W/mK",
                                  "PF_W/mK2", "ZT"),
-                                (r"S ($\mu$V/K)", r"$\sigma$ (S/m)", r"$\kappa_{tot}$ (W/m/K)",
-                                 r"PF (W/m/K$^2$)", "ZT")):
-            ax.plot(temps, r[key], "o-", ms=3.5, lw=1.3)
-            ax.set_xlabel("T (K)")
+                                (r"$S$  ($\mu$V/K)", r"$\sigma$  (S/m)", r"$\kappa_{tot}$  (W/m/K)",
+                                 r"PF  (W/m/K$^2$)", r"$zT$")):
+            pts = [(t, v) for t, v in zip(temps, r[key]) if v is not None]
+            ax.plot([p[0] for p in pts], [p[1] for p in pts], "-", color=ZT_CMAP_COLORS[4], lw=1.6,
+                    marker="o", ms=3.2, mec="white", mew=0.5)
+            _arrow_axes(ax)
+            ax.set_xlabel(r"$T$  (K)")
             ax.set_ylabel(lab)
-            ax.grid(alpha=0.3)
-        fig.suptitle("best %s-type doping %s cm^-3" %
-                     (r["type"], zc._fmt(r["doping_cm-3"], 2)))
-        fig.tight_layout(rect=[0, 0, 1, 0.93])
-        fig.savefig(Path(out) / "zt_components.png", dpi=130)
+        fig.suptitle("best %s-type doping %s cm$^{-3}$" %
+                     (r["type"], _n_tick(abs(r["doping_cm-3"]))), color=ZT_LABEL)
+        fig.tight_layout(rect=[0, 0, 1, 0.92], w_pad=2.5)
+        fig.savefig(Path(out) / "zt_components.png", dpi=150)
         plt.close(fig)
 
 
@@ -755,8 +837,8 @@ def main():
     _hm = heatmap_data(grid)                      # [0047] 统一色板/色标也写进人读汇总
     if _hm:
         _v, _vsrc = _zt_vmax(par, _hm)
-        grid["notes"].append("zT(n,T) 热图：跨材料统一色板（浅粉→酒红）；色标 0–%s%s"
-                             % (_vsrc, "（各材料自身上限，未统一、不可横向比色）" if _vsrc == "auto"
+        grid["notes"].append("zT(n,T) 热图：跨材料统一色板（6 档，浅粉→酒红）；色标 0–%s%s"
+                             % (_vsrc if _vsrc != "auto" else "%.3g（auto）" % _v, "（各材料自身上限，未统一、不可横向比色）" if _vsrc == "auto"
                                 else "（所有材料同一把尺子，颜色可直接横向比较）"))
     if tr_warn:
         grid["notes"].append("★ " + tr_warn)

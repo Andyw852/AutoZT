@@ -77,8 +77,10 @@ needs_results:
 | `kappa_L` | κ_L 来源、温区、xx/yy/zz、元胞口径标记、2D 厚度信息 |
 | `notes` | 口径说明（约化方式、插值方式、不外推区间…） |
 
-配套产物：`zt_summary.txt`（人读汇总 + 每档明细表）、`zt_heatmap.png`、`zt_vs_T.png`（左右两栏：左 n 型蓝色系实线、右 p 型红色系虚线，浓度越高颜色越深；本征黑点线两栏都画作参照；共用 y 轴）、`zt_vs_doping.png`、
+配套产物：`zt_summary.txt`（人读汇总 + 每档明细表）、`zt_heatmap.png`（n / p 两栏，6 档离散粉色色块 + 白缝，峰值格描边标数）、`zt_vs_T.png`（左 n 型 / 右 p 型，线色按 |n| 走同一条粉色色阶、右侧色标读浓度，峰值档直标；本征深灰虚线两栏都画作参照；共用 y 轴）、`zt_vs_doping.png`（n / p 两栏、对数横轴 |n|，温度越高线越深）、
 `zt_components.png`、`per_temperature/<T>K/report.{txt,json}`，以及 [0052] 起的：
+
+> [0076] 全部 ZT 图统一用参考图风格：6 档色 `#F6D3DE → #8A1D46`、深灰 `#3A4654` 三角箭头轴（无边框）、中灰 `#5B6673` 斜体轴名；色值集中在 `gen_step20_zt.py` 顶部的 `ZT_CMAP_COLORS` / `ZT_AXIS` / `ZT_LABEL`。热图色标仍按 `ZT_CMAP_VMAX`（出厂 0.3，跨材料统一；`auto` = 按本材料最大值取整齐上限）。
 
 | 产物 | 内容 |
 |---|---|
@@ -95,7 +97,7 @@ needs_results:
   **回拉镜像的边界**：没有 `.tf_fetched_manifest.json` 时只建立基线、不删任何本地项（否则升级后第一次拉回会误删
   用户自己放进结果目录的文件）。
 - **本征点不再算 p 型（[0052]）**：doping = 0 以前被归成 p 型、混进 p 型峰值与热图；现在 `doping_type` 记 `i`，
-  只出现在 `intrinsic_carrier/`、`zt_vs_T.png`（虚点线 "intrinsic (undoped)"）和逐档明细里。
+  只出现在 `intrinsic_carrier/`、`zt_vs_T.png`（虚线 "intrinsic (undoped)"）和逐档明细里。
 
 ## 5. 历史记录（v0.1：在本技能里重抄 ke/kl 两段的版本）
 
