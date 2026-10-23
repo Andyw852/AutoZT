@@ -585,41 +585,36 @@ def make_plots(out, grid, peaks, meta, par=None):
     make_heatmap(out, grid, meta, plt, par=par)
     # ---- 1) ZT(T) ----
     # 用户 2026-10-23：默认色环只有 10 色，19 档掺杂时颜色重复（两条蓝实线分不清）。
-    #   改为 n 型蓝色系 / p 型红色系，浓度越高颜色越深；本征点黑色点线。
-    #   图例左栏 n、右栏 p（+本征），各自按浓度从高到低排。
-    fig, ax = plt.subplots(figsize=(7.2, 5.0))
+    #   改为左右两栏：左 n 型（蓝色系实线）、右 p 型（红色系虚线），浓度越高颜色越深；
+    #   本征点（黑色点线）两栏都画作参照；两栏共用 y 轴便于对比 n/p。
     groups = {"n": [], "p": [], "i": []}
     for r in grid["rows"]:
         if any(v is not None for v in r["ZT"]):
             groups.get(r["type"], groups["i"]).append(r)
-    handles = {"n": [], "p": [], "i": []}
-    for kind, cmap in (("n", plt.cm.Blues), ("p", plt.cm.Reds), ("i", None)):
+    fig, axes = plt.subplots(1, 2, figsize=(12.0, 5.0), sharey=True)
+    for ax, kind, cmap, ls in ((axes[0], "n", plt.cm.Blues, "-"),
+                               (axes[1], "p", plt.cm.Reds, "--")):
         rs = sorted(groups[kind], key=lambda x: -abs(x["doping_cm-3"]))
-        for k, r in enumerate(rs):
+        for k, r in enumerate(rs + groups["i"]):
             xs = [t for t, v in zip(temps, r["ZT"]) if v is not None]
             yy = [v for v in r["ZT"] if v is not None]
-            if cmap is None:
-                color, ls, lab = "k", ":", "intrinsic (undoped)"
+            if r["type"] == "i":
+                color, lst, lab = "k", ":", "intrinsic (undoped)"
             else:
-                color = cmap(0.95 - 0.6 * k / max(len(rs) - 1, 1))
-                ls = "-" if kind == "n" else "--"
+                color, lst = cmap(0.95 - 0.6 * k / max(len(rs) - 1, 1)), ls
                 lab = "%s %s cm$^{-3}$" % (kind, zc._fmt(abs(r["doping_cm-3"]), 1))
-            h, = ax.plot(xs, yy, ls, color=color, marker="o", ms=3.5, lw=1.3, label=lab)
-            handles[kind].append(h)
-    ax.set_xlabel("T (K)")
-    ax.set_ylabel("ZT")
-    ax.set_title("ZT(T) — %s   (S$^2\\sigma$T/($\\kappa_e$+$\\kappa_L$))" % meta["material"])
-    ax.grid(alpha=0.3)
-    left, right = handles["n"], handles["p"] + handles["i"]
-    if left and right:
-        # 图例按列填充：两栏补齐到等长（空白占位），保证 n 全在左栏、p 全在右栏
-        blank = matplotlib.lines.Line2D([], [], linestyle="none", label=" ")
-        nrow = max(len(left), len(right))
-        hs = (left + [blank] * (nrow - len(left))
-              + right + [blank] * (nrow - len(right)))
-        ax.legend(handles=hs, labels=[h.get_label() for h in hs], fontsize=7, ncol=2)
-    else:
-        ax.legend(fontsize=7, ncol=2)
+            ax.plot(xs, yy, lst, color=color, marker="o", ms=3.5, lw=1.3, label=lab)
+        ax.set_title("%s-type" % kind)
+        ax.set_xlabel("T (K)")
+        ax.grid(alpha=0.3)
+        if rs or groups["i"]:
+            ax.legend(fontsize=7)
+        if not rs:
+            ax.text(0.5, 0.5, "no %s-type doping" % kind, transform=ax.transAxes,
+                    ha="center", va="center", color="0.5")
+    axes[0].set_ylabel("ZT")
+    axes[1].tick_params(labelleft=True)
+    fig.suptitle("ZT(T) — %s   (S$^2\\sigma$T/($\\kappa_e$+$\\kappa_L$))" % meta["material"])
     fig.tight_layout()
     fig.savefig(Path(out) / "zt_vs_T.png", dpi=140)
     plt.close(fig)
