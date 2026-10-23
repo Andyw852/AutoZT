@@ -239,6 +239,15 @@ def test_s8_reads_adp_tensor(g10):
     assert "ADP_DFPT" in g.SPEC
 
 
+def test_defaults_off(g10):
+    """Si 实算静水分量 Ξd 不对（METHODOLOGY [0072]）：两端都出厂关。"""
+    g, _cwd = g10
+    assert g.ADP_DFPT == "off" and g.SPEC["ADP_DFPT"][0] == "off"
+    import ivs_qe_common as c
+    assert c.PARAMS["IVS_ADP"][0] == "off"
+    assert "IVS_ADP = off" in (EPH / "templates" / "step.conf").read_text(encoding="utf-8")
+
+
 def test_s8_adp_modes(g10):
     g, cwd = g10
     g.ADP_DFPT = "auto"
