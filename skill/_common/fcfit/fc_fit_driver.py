@@ -672,6 +672,82 @@ def _stage_yaml_cells(src, out):
     return info
 
 
+NAC_VASPRUN = "NAC_vasprun.xml"   # LEPSILON DFPT vasprun staged next to the dataset (kl-dft-cpu S3_nac)
+
+
+def _born_from_vasprun(src, out, info):
+    """[0077] BORN from a LEPSILON DFPT vasprun.xml shipped as <dataset>/NAC_vasprun.xml.
+
+    Runs only when the dataset brought no BORN of its own.  The tensors are
+    reduced onto phonopy's primitive cell exactly like ``phonopy-vasp-born``
+    (same primitive_matrix / supercell_matrix as the fit, tensors symmetrised).
+    Anything unphysical -- a different cell, a non-finite or non-positive
+    epsilon_inf (metal / DFPT blow-up) -- leaves BORN absent, so the fit and the
+    BTE run without NAC instead of with a wrong one.  Returns a status dict."""
+    vr = src / NAC_VASPRUN
+    born = out / "BORN"
+    if (src / "BORN").is_file() or not vr.is_file():
+        return None
+    if born.is_file():                     # left over from an earlier prep: rebuild from the vasprun
+        born.unlink()
+    st = {"source": str(vr), "written": False}
+    try:
+        from phonopy.interface.vasp import VasprunxmlExpat, elaborate_borns_and_epsilon
+        with open(str(vr), "rb") as fh:
+            run = VasprunxmlExpat(fh)
+            run.parse()
+        cell, zs, eps = run.cell, np.asarray(run.born, float), np.asarray(run.epsilon, float)
+    except Exception as e:
+        st["reason"] = "could not read %s: %s" % (vr.name, e)
+        print("[WARN] NAC: %s -- running without NAC" % st["reason"], flush=True)
+        return st
+    if eps.shape != (3, 3) or not np.all(np.isfinite(eps)) or not np.all(np.isfinite(zs)):
+        st["reason"] = "epsilon_inf / Born charges missing or non-finite"
+    elif np.any(np.diag(eps) <= 0) or np.any(np.diag(eps) > 1e3):
+        st["reason"] = ("epsilon_inf diagonal %s is not physical (metal or DFPT blow-up)"
+                        % np.round(np.diag(eps), 3).tolist())
+    else:
+        try:
+            uc = _read_poscar(out / "POSCAR")
+            if list(uc.symbols) != list(cell.symbols):
+                st["reason"] = ("NAC cell %s differs from the dataset unit cell %s"
+                                % (list(cell.symbols), list(uc.symbols)))
+            elif (np.abs(np.asarray(uc.cell, float) - np.asarray(cell.cell, float)).max()
+                  > 1e-2 * max(float(np.abs(np.asarray(uc.cell, float)).max()), 1.0)):
+                st["reason"] = "NAC cell lattice differs from the dataset unit cell (>1%)"
+        except Exception as e:
+            st["reason"] = "could not compare the NAC cell with POSCAR: %s" % e
+    if st.get("reason"):
+        print("[WARN] NAC: %s -- running without NAC" % st["reason"], flush=True)
+        return st
+    asr = float(np.abs(zs.sum(axis=0)).max())
+    st["epsilon_inf_diag"] = [float(x) for x in np.diag(eps)]
+    st["born_asr_max"] = asr
+    if asr > 0.1:
+        print("[WARN] NAC: Born charges violate the acoustic sum rule by %.3f e "
+              "(symmetrised below, check the S3_nac k-mesh)" % asr, flush=True)
+    try:
+        pm = info.get("primitive_matrix")
+        sm = info.get("supercell_matrix")
+        zp, ep, idx = elaborate_borns_and_epsilon(
+            cell, zs, eps,
+            primitive_matrix=None if pm is None else np.asarray(pm, float),
+            supercell_matrix=None if sm is None else np.asarray(sm, float),
+            symmetrize_tensors=True)
+    except Exception as e:
+        st["reason"] = "phonopy could not reduce the tensors: %s" % e
+        print("[WARN] NAC: %s -- running without NAC" % st["reason"], flush=True)
+        return st
+    lines = ["# epsilon and Z* of atoms " + " ".join("%d" % (n + 1) for n in idx),
+             ("%13.8f " * 9) % tuple(np.asarray(ep, float).flatten())]
+    lines += [("%13.8f " * 9) % tuple(np.asarray(z, float).flatten()) for z in zp]
+    born.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    st["written"] = True
+    print("[OK] NAC: BORN written from %s (eps_inf diag %s, |sum Z*| %.3f e)"
+          % (vr.name, np.round(np.diag(eps), 3).tolist(), asr), flush=True)
+    return st
+
+
 def _min_image_cart(frac_delta, cell):
     u = np.asarray(frac_delta, float)
     u = u - np.round(u)
@@ -884,6 +960,9 @@ def cmd_prep(cfg, out):
     if not (out / "POSCAR").is_file() or not (out / "SPOSCAR").is_file():
         sys.exit("[ERROR] could not obtain POSCAR/SPOSCAR from %s (signature %s). "
                  "The fit needs both the unit cell and the supercell." % (src, kind))
+    _nac = _born_from_vasprun(src, out, info)      # [0077] BORN from the staged DFPT vasprun
+    if _nac is not None:
+        info["nac_born"] = _nac
     sc = _read_poscar(out / "SPOSCAR")
     nsc = len(sc)
     if n_frames and disps.shape[1] != nsc:

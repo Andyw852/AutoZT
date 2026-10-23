@@ -14,6 +14,22 @@ This project adheres to Semantic Versioning; versions before 1.0.0 are developme
 
 ## [Unreleased]
 
+### Fixed (2026-10-24: [0077] kl-dft-cpu NAC 链接通：S3_nac 的 vasprun.xml 自动生成 BORN)
+
+- **问题**：S3_nac 只算 LEPSILON，没有任何一步生成 `BORN`（`gen_step3_nac.py` 注释说"在 step5 生成"，
+  但 S5 只复制现成的 `step3_nac/BORN`）；S5_fc 固定在 3090、`needs` 只回传 S4，也拿不到别的集群的
+  `step3_nac/`。结果 `NAC=auto` 永远判为关，3D 极性材料（MgO、NaCl…）的 κ 都没有 LO-TO 修正。
+- S5_fc gen（`_stage_nac`）：`step3_nac/BORN` 有就用；否则把 `step3_nac/vasprun.xml` 放成
+  `step4_disp/NAC_vasprun.xml`；都没有时清掉上一轮遗留。
+- 共享引擎 `fc_fit_driver` prep（`_born_from_vasprun`）：数据集没带 BORN 而有 `NAC_vasprun.xml` 时，
+  用 phonopy（同 `phonopy-vasp-born`，按拟合的 primitive/supercell 矩阵、对称化张量）写 `BORN`；
+  ε∞ 非有限/非正、晶胞与数据集不一致 → 不写、告警、退回无 NAC；Born 电荷 ASR 偏差 > 0.1 e 告警。
+  结果记进 prep 的 `nac_born`。
+- `skill.yaml`：S5_fc `needs: [step4_disp, "step3_nac?"]`（软依赖，nac 步组关掉时不等）。
+- 导入模式（kl_bundle）只有 vasprun 时明确告警"本轮无 NAC"。
+- 已算完的材料补 NAC：S5_fc `retry` → `start`，再 S6_kappa `retry` → `start`（S4 不用重跑）。
+- 测试：`tests/test_0077_kl_nac_born.py`（7 项）。
+
 ### Changed (2026-10-23: [0076] zt-dft-cpu 出图统一为参考图风格)
 
 - `zt_heatmap.png`：6 档离散色块（`#F6D3DE → #8A1D46`）+ 白缝，替换连续渐变与越界格线；深灰 `#3A4654`

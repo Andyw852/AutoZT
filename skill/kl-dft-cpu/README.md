@@ -28,7 +28,15 @@
 | S6 | step6_kappa | BTE 解晶格热导率 | 计算节点 | kappa_summary.json KAPPA_DONE |
 
 S3_nac 是可选步组：默认开；关掉在项目配置写 `nac: false`，autozt 直接不注入 S3，S5/S6 因无
-BORN 自然不加 NAC。2D 材料即使有 BORN，S6 的 `NAC=auto` 也不加（phono3py 只有 3D-NAC，
+BORN 自然不加 NAC。
+
+**NAC 链（[0077] 起才真正接通）**：S3 只出 LEPSILON 的 `vasprun.xml`；S5_fc 的 gen 把它放成
+`step4_disp/NAC_vasprun.xml`，拟合作业的 prep 用 phonopy 按拟合原胞生成 `BORN`（ε∞ 须有限且为正、
+晶胞须与位移数据集一致，否则告警并退回无 NAC），`BORN` 随 `step5_fc/` 传给 S5.1 声子谱和 S6（`NAC=auto`
+见到它才开）。S5_fc 写了 `needs: [step4_disp, "step3_nac?"]`，S5 在另一台集群时 autozt 会把 S3 结果一起
+回传。[0077] 之前没有任何一步生成 BORN、S5 在 3090 上也拿不到 `step3_nac/`，所以**之前算的 3D 极性材料
+κ 全部不含 NAC**。补算不用重跑 S4：`autozt -tt kl-dft-cpu -p <材料> -j S5_fc retry` → `start`，
+S5 完成后对 S6_kappa 同样 `retry` → `start`。看 `step5_fc/` 下有没有 `BORN`、S6 日志里 `NAC=True` 确认。2D 材料即使有 BORN，S6 的 `NAC=auto` 也不加（phono3py 只有 3D-NAC，
 LO-TO 在 2D 应趋零）；BORN 只用于对照，要强制加写 `NAC=on`。
 
 S1 的起始结构建议复用其它链已优化好的 CONTCAR：`python3 reuse_structure.py <材料名>`
