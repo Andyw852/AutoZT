@@ -38,3 +38,22 @@ Si/
 ```
 
 注意：旧版（2026-09-18）ZT 峰值 n 0.3163 / p 0.2386 已被覆盖（旧版仅 ADP+IMP、κ_L 不同），勿引用。
+
+## 2026-10-23 更新：[0061-d] DPT 简并带边 E1 修正（Si 空穴）
+
+- **代码**：`skill/ke-dft-cpu/step8.2_dpt/gen_step12_dpt.py` —— 用 S8 的 `deformation_matrix.h5`（S7.1 DFT 应变算符）
+  在带边简并子空间取 `Y_αβ`，复用 `adp_degen.directions/acoustic_modes`（3D 三支声学模，弹性/均分），
+  对带边 ±6 k_BT 内的 DFT 态做 Boltzmann 热平均：`r=⟨Σ_ab|M_ab|²⟩/⟨Σ_a|M_aa|²⟩`，
+  折算 `E1_eff = E1_naive·√r`（DPT μ∝1/E1²）。d=1 时原路径逐位不变；手填 E1 优先（manual）。
+- **结果（300 K）**：
+  - 空穴：E1 **3.4700 → 3.7872 eV**（d=3，k=Γ，bands [1,2,3]，ratio=1.1912，热平均 42 个 DFT 态）；
+    DPT μ **4878.586 → 4095.589 cm²/V·s（−16.1%）**
+  - 电子：E1=8.72 eV、μ=2433.354 cm²/V·s（不变）
+  - BT2 τ（来自 DPT）：τ_hole **393.4 fs**（原约 469 fs），τ_electron 128.7 fs（不变）；
+    BT2 文献口径 ZT_xx 峰值（600 K，空穴支）0.973
+  - S8.3 对照表 dptμ：p 侧 **4096**（n 侧 2433）
+- **与 AMSET ADP-only 对比**（p 1e18/1e19/1e20 = 1441/1378/1019）：DPT 仍高 2.8–4.0×。
+  原因：AMSET 的修正是费米海内逐对矩阵元替换（含动量弛豫因子），DPT 是带边单带闭式公式，只能吸收带边热平均的 1.19×。
+  两者方法口径不同，不能互相校准。
+- **溯源**：`dpt_result.json` 的 `E1_provenance` 前缀 `adp_degen(...)`，并有结构化 `E1_degen`；
+  `_SKILL_REV = 2026-10-23-0061d-dptdegen`。

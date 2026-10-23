@@ -1,0 +1,25 @@
+# BoltzTraP2 CRTA 摘要（详见 boltztrap_crta.json）
+# dim=3d  nelect=8.0
+300 K 处 PF/τ 最大点：
+  μ-E_F = +1.894 eV
+  σ/τ   = 1.199e+21 S/m/s
+  S     = -14.4 µV/K
+  κ_e/τ = 8.756e+15 W/m/K/s
+  Lorenz= 2.435e-08 WΩ/K²（Sommerfeld=2.44e-8）
+  n     = -1.721e+22 cm^-3（负=n型电子 / 正=p型空穴）
+
+# ---- 文献口径（CRTA x DPT-tau）：paper_mu_scan_600K.csv ----
+# T=600 K；sigma_a=(sigma_a/tau)*tau_a 分方向；kappa_e=L*sigma*T（WF, 文献 Eq.5）
+# 2D 口径 cell(3D)（c=None A, t=None A, 因子=1.0000）—— ZT 对口径不变
+# kappa_L 来源：step6_kappa/kappa_summary.json（原始元胞口径 → 套本步 cell(3D) 因子 1.0000）
+#   kappa_L(600 K) 元胞口径 xx=52.3174 yy=52.3174 W/mK  zz=52.3174
+#   [闸门] 跳过元胞核对（kl-dft-cpu 或 ke-dft-cpu 缺 Lz/c 元数据）
+# tau_electron x=128.7 fs  y=128.7 fs  z=128.7 fs
+# tau_hole     x=393.4 fs  y=393.4 fs  z=393.4 fs
+# ZT_xx          峰值 0.973 @ mu=-0.543 eV（n=5.567e+19 cm^-3，hole 支）
+# ZT_yy          峰值 0.973 @ mu=-0.543 eV（n=5.567e+19 cm^-3，hole 支）
+# ZT_zz          峰值 0.973 @ mu=-0.543 eV（n=5.567e+19 cm^-3，hole 支）
+# PF_xx_W/mK2    峰值 0.1768 @ mu=-0.658 eV（n=2.599e+20 cm^-3，hole 支）
+# PF_yy_W/mK2    峰值 0.1768 @ mu=-0.658 eV（n=2.599e+20 cm^-3，hole 支）
+# PF_zz_W/mK2    峰值 0.1768 @ mu=-0.658 eV（n=2.599e+20 cm^-3，hole 支）
+# 掺杂对齐失败：ValueError: math domain error

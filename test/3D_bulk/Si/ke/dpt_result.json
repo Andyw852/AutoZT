@@ -2,7 +2,7 @@
   "dim": "3d",
   "is_2d": false,
   "temperature_K": 300.0,
-  "skill_rev": "2026-10-22-0071-2d-headline-md",
+  "skill_rev": "2026-10-23-0061d-dptdegen",
   "env": {
     "python": "/public/home/wangchao/miniconda3/envs/atomate2_p_a/bin/python",
     "amset": "N/A",
@@ -265,11 +265,39 @@
         "C_provenance": "step6 (C11+C22+C33)/3",
         "m_eff_m0": 0.4778,
         "m_provenance": "带边方向分解+q^4外推(3D, 3方向, 最轻两支 0.4347/0.5253, 全组 0.4347..1.7383, spin=0)；带边 3 重简并，取重带（单带 DPT 对简并带边只是近似）",
-        "E1_eV": 3.47,
-        "E1_provenance": "deformation.h5 带边 3×3 张量 (D_xx+D_yy+D_zz)/3（芯势口径，n=3，带边点 3 个，连同对称等价点共 3 个）",
+        "E1_eV": 3.7872,
+        "E1_provenance": "adp_degen(d=3, 带边 k=[0.0, 0.0, 0.0] bands=[1, 2, 3], E1 3.4700→3.7872 eV, ratio=1.1912, 热平均 n_k=42 窗=0.155 eV, 3 声学支×200 方向, 应变算符=deformation_matrix.h5, rev=2026-10-23-0061d-dptdegen)",
         "T_K": 300.0
       },
-      "mobility_cm2_Vs": 4878.586,
+      "E1_degen": {
+        "provenance": "adp_degen",
+        "d": 3,
+        "subspace": {
+          "k": [
+            1.2623786234348807e-15,
+            1.2623786234348803e-15,
+            1.2623786234348805e-15
+          ],
+          "bands_h5": [
+            1,
+            2,
+            3
+          ],
+          "E_edge_eV": 5.5937
+        },
+        "E1_naive_eV": 3.47,
+        "E1_eff_eV": 3.7872,
+        "ratio": 1.191192,
+        "thermal_nk": 42,
+        "window_eV": 0.15511,
+        "nang": 200,
+        "matrix_source": "/public/home/wangchao/Fullerene_Network/work/Si/ke-dft-cpu/step8_amset/deformation_matrix.h5",
+        "phonon_source": "adp_degen.directions/acoustic_modes",
+        "elastic_source": "step6_elastic/OUTCAR（6×6 Voigt → C_ijkl）",
+        "fold": "E1_eff = E1_naive·sqrt(r)，r=⟨Σ_ab|M_ab|²⟩/⟨Σ_a|M_aa|²⟩（DPT μ∝1/E1²）",
+        "skill_rev": "2026-10-23-0061d-dptdegen"
+      },
+      "mobility_cm2_Vs": 4095.589,
       "status": "ok",
       "caveats": [
         "带边 3 重简并（如立方半导体 Γ 点价带顶）：单带 DPT 只是近似，μ 只作量级参考，与 AMSET / EPW 的差别不能当作问题",
@@ -302,39 +330,39 @@
       "mobility_vs_T": [
         {
           "T_K": 100.0,
-          "mobility_cm2_Vs": 25349.876
+          "mobility_cm2_Vs": 21281.305
         },
         {
           "T_K": 200.0,
-          "mobility_cm2_Vs": 8962.535
+          "mobility_cm2_Vs": 7524.077
         },
         {
           "T_K": 300.0,
-          "mobility_cm2_Vs": 4878.586
+          "mobility_cm2_Vs": 4095.589
         },
         {
           "T_K": 400.0,
-          "mobility_cm2_Vs": 3168.735
+          "mobility_cm2_Vs": 2660.163
         },
         {
           "T_K": 500.0,
-          "mobility_cm2_Vs": 2267.362
+          "mobility_cm2_Vs": 1903.458
         },
         {
           "T_K": 600.0,
-          "mobility_cm2_Vs": 1724.841
+          "mobility_cm2_Vs": 1448.009
         },
         {
           "T_K": 700.0,
-          "mobility_cm2_Vs": 1368.765
+          "mobility_cm2_Vs": 1149.082
         },
         {
           "T_K": 800.0,
-          "mobility_cm2_Vs": 1120.317
+          "mobility_cm2_Vs": 940.51
         },
         {
           "T_K": 900.0,
-          "mobility_cm2_Vs": 938.884
+          "mobility_cm2_Vs": 788.196
         }
       ]
     }
