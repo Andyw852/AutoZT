@@ -325,7 +325,8 @@ def test_gen_s84_matrix(tmp_path, monkeypatch):
     assert (out / "adp_degen.py").is_file() and (out / "deform_wave.py").is_file()
     src = (S84 / "gen_step14_amset2d.py").read_text(encoding="utf-8")
     assert "link(out, cwd / READ_DIR / DEFORM_MATRIX_H5, DEFORM_MATRIX_H5)" in src
-    assert "ADP_DEGEN_MATRIX" in g.SPEC and g._SKILL_REV.startswith("2026-10-21-0061m")
+    assert "ADP_DEGEN_MATRIX" in g.SPEC and g._SKILL_REV[:10] >= "2026-10-21"   # [0077] 之后的版本号只会更新
+    assert "2026-10-21-0061m" in src                  # 版本戳历史里留着 0061m
 
 
 def test_skill_yaml_gen_need_deform_wave():

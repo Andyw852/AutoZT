@@ -1,5 +1,6 @@
 """[0056][0057] S8.3 掺杂扫描按浓度拆两段，各一个文件夹（图 + 每温度表）：
-<前缀>_carrier_tuning_1e17-1e21/（载流子调控区）与 <前缀>_low_doping_<NLO>-1e16/（低浓度段，有 DOPING_LOW 才有）；
+<前缀>_carrier_tuning_1e16-1e21/（载流子调控区）与 <前缀>_low_doping_<NLO>-1e15/（低浓度段，有 DOPING_LOW 才有；
+[0077] 前是 1e17-1e21 / <NLO>-1e16）；
 [0057] 前缀 transport_models（原 phonon_limited，基础 4 条 x 5 参数）与 mobility_mechanisms（原 transport，只画 μ：
 单机制 + 总值 + DPT 带边）。合成 intrinsic_transport_table.csv + transport.json，纯本地。"""
 import csv
@@ -29,8 +30,8 @@ def _s83():
     spec.loader.exec_module(mod)
     return mod
 
-LOW = [1e10, 1e12, 1e14, 1e16]
-HIGH = [1e17, 1e18, 1e19, 1e20, 1e21]
+LOW = [1e11, 1e12, 1e13, 1e14, 1e15]                  # [0077] 出厂低浓度段（近本征）
+HIGH = [1e16, 1e17, 1e18, 1e19, 1e20, 1e21]           # [0077] 出厂掺杂段
 
 
 def _material(tmp_path, dop):
@@ -70,8 +71,8 @@ def test_two_folders_with_low_doping(tmp_path):
     cwd, out = _material(tmp_path, LOW + HIGH)
     g.write_transport_plots(cwd, out, True)
     tp = cwd / "transport_plots"
-    hi = tp / "transport_models_carrier_tuning_1e17-1e21"
-    lo = tp / "transport_models_low_doping_1e10-1e16"
+    hi = tp / "transport_models_carrier_tuning_1e16-1e21"
+    lo = tp / "transport_models_low_doping_1e11-1e15"
     assert (hi / "MoS2_transport_models_carrier_tuning.png").is_file()
     assert (lo / "MoS2_transport_models_low_doping.png").is_file()
     for T in (300, 600):
@@ -79,8 +80,8 @@ def test_two_folders_with_low_doping(tmp_path):
         assert _ns(lo / ("MoS2_transport_models_low_doping_%dK.csv" % T)) == LOW   # 本征点 n = 0 不进任何一段
     assert not list(tp.glob("MoS2_*.png"))                    # 整轴旧图不再出
     assert not list(tp.glob("phonon_limited_*")) and not list(tp.glob("transport_carrier*"))   # [0057] 旧目录名不再出
-    mhi = tp / "mobility_mechanisms_carrier_tuning_1e17-1e21"
-    mlo = tp / "mobility_mechanisms_low_doping_1e10-1e16"
+    mhi = tp / "mobility_mechanisms_carrier_tuning_1e16-1e21"
+    mlo = tp / "mobility_mechanisms_low_doping_1e11-1e15"
     assert (mhi / "MoS2_mobility_mechanisms_carrier_tuning.png").is_file()
     assert (mlo / "MoS2_mobility_mechanisms_low_doping.png").is_file()
     rows = list(csv.DictReader((mhi / "MoS2_mobility_mechanisms_carrier_tuning_300K.csv").read_text().splitlines()))
@@ -98,17 +99,19 @@ def test_only_carrier_tuning_without_low_doping(tmp_path):
     cwd, out = _material(tmp_path, HIGH)
     g.write_transport_plots(cwd, out, True)
     tp = cwd / "transport_plots"
-    assert sorted(p.name for p in tp.glob("transport_models_*")) == ["transport_models_carrier_tuning_1e17-1e21"]
-    assert sorted(p.name for p in tp.glob("mobility_mechanisms_*")) == ["mobility_mechanisms_carrier_tuning_1e17-1e21"]
+    assert sorted(p.name for p in tp.glob("transport_models_*")) == ["transport_models_carrier_tuning_1e16-1e21"]
+    assert sorted(p.name for p in tp.glob("mobility_mechanisms_*")) == ["mobility_mechanisms_carrier_tuning_1e16-1e21"]
 
 
 def test_range_axes():
     g = _s83()
     r = g._phonon_limited_ranges(1e9)
-    assert [x[0] for x in r] == ["carrier_tuning_1e17-1e21", "low_doping_1e9-1e16"]
-    assert r[0][4] == ["1e21", "1e20", "1e19", "1e18", "1e17", "1e18", "1e19", "1e20", "1e21"]
-    assert r[1][4][0] == "1e16" and r[1][4][len(r[1][4]) // 2] == "1e9" and r[1][4][-1] == "1e16"
-    assert len(g._phonon_limited_ranges(1e17)) == 1
+    assert [x[0] for x in r] == ["carrier_tuning_1e16-1e21", "low_doping_1e9-1e15"]
+    assert r[0][4] == ["1e21", "1e20", "1e19", "1e18", "1e17", "1e16", "1e17", "1e18", "1e19", "1e20", "1e21"]
+    assert r[1][4][0] == "1e15" and r[1][4][len(r[1][4]) // 2] == "1e9" and r[1][4][-1] == "1e15"
+    assert [x[0] for x in g._phonon_limited_ranges(1e11)] == ["carrier_tuning_1e16-1e21", "low_doping_1e11-1e15"]
+    assert len(g._phonon_limited_ranges(1e16)) == 1
+    assert g._phonon_limited_ranges(1e11, 1e22)[0][0] == "carrier_tuning_1e16-1e22"   # 网格超出 1e21 时上端跟着放
 
 
 def _tool():
@@ -143,7 +146,7 @@ def test_tool_is_s83(tmp_path):
     assert a == b and a
     for rel in a:
         assert (tp / rel).read_text() == (od / rel).read_text(), rel
-    assert (od / "mobility_mechanisms_carrier_tuning_1e17-1e21" / "MoS2_mobility_mechanisms_carrier_tuning.png").is_file()
+    assert (od / "mobility_mechanisms_carrier_tuning_1e16-1e21" / "MoS2_mobility_mechanisms_carrier_tuning.png").is_file()
 
 
 def test_tool_skips_without_s83_table(tmp_path):

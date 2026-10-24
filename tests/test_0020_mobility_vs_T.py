@@ -124,7 +124,10 @@ def test_s83_mu_vs_T_three_values(tmp_path):
     assert e600["mu_AMSET_ADP"] == pytest.approx(60.0 / 2)       # intrinsic_ADP.json，不是 transport 的 61
     assert e600["mu_AMSET_intrinsic"] == pytest.approx(45.0 / 2)
     assert e600["mu_AMSET_all"] == pytest.approx(30.0 / 2)
-    assert e600["m_d_m0"] == 0.95 and e600["tau_DPT_fs"] == pytest.approx(10.0)
+    assert e600["m_d_m0"] == 0.95
+    assert e600["tau_DPT_fs"] == pytest.approx(10.0 / 2)        # τ 与 mu_DPT 同标度换温（以前原样抄 300 K 的 10 fs）
+    assert rows[(300.0, "electron", "x")]["tau_DPT_fs"] == pytest.approx(10.0)
+    assert rows[(600.0, "hole", "y")]["tau_DPT_fs"] == pytest.approx(20.0 / 2)
     assert e600["E1_eV"] is None and e600["C_2D_N_per_m"] is None  # 夹具 by_direction 未带这些字段
     assert "ADP_over_DPT" not in e600                            # [0030] 不再输出比值
     assert rows[(600.0, "electron", "y")]["mu_DPT"] == pytest.approx(120.0 / 2)

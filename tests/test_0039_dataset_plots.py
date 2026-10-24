@@ -55,7 +55,7 @@ def test_one_figure_per_dataset(tmp_path):
         assert rows[0].startswith("# dataset=%s" % ds)
         assert rows[1].split(",")[:3] == ["T_K", "type", "n_cell_cm-3"]
         assert len(rows) == 2 + 2 * 6                      # 2 温度 x 6 浓度
-    assert (cwd / "transport_plots" / "transport_models_carrier_tuning_1e17-1e21"
+    assert (cwd / "transport_plots" / "transport_models_carrier_tuning_1e16-1e21"
             / "MoS2_transport_models_carrier_tuning.png").is_file()   # [0056][0057] 主图按浓度分段进文件夹
 
 

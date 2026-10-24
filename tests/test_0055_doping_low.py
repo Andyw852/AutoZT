@@ -1,4 +1,4 @@
-"""[0055] 低浓度段 DOPING_LOW（3D 1e10–1e16 cm^-3，2D 1e3–1e9 cm^-2）：
+"""[0055] 低浓度段 DOPING_LOW（[0077] 起 3D 与 2D 三维等效都是 1e11–1e15 cm^-3）：
 1. amset_fermi_fix.small_doping_fermi：n、p 分开 log-sum-exp 解 p − n = d，每胞 4e-13 个载流子也准；
 2. get_fermi 外壳：每胞 < SMALL_DOPING_PER_CELL 走小掺杂解，否则原样交给 AMSET（出厂网格逐位不变）；
 3. S8 / S8.4 gen 的 DOPING_LOW 出厂值与 off；
@@ -91,10 +91,12 @@ def test_get_fermi_wrapper_routes_small_doping_only():
 
 
 def test_gen_doping_low_defaults_and_off():
-    for path, want in ((KE / "step8.4_amset2d" / "gen_step14_amset2d.py", [1e3, 1e5, 1e7, 1e9]),
-                       (KE / "step8_amset" / "gen_step10_amset.py", [1e10, 1e12, 1e14, 1e16])):
+    """[0077] 两步出厂同一套低浓度段：三维（等效）1e11–1e15 cm^-3，每十年一个点；2D 由 DOPING_LOW_3D × t 换算。"""
+    want = [1e11, 1e12, 1e13, 1e14, 1e15]
+    for path, key in ((KE / "step8.4_amset2d" / "gen_step14_amset2d.py", "DOPING_LOW_3D"),
+                      (KE / "step8_amset" / "gen_step10_amset.py", "DOPING_LOW")):
         g = _load("gen_0055_%s" % path.stem, path)
-        vals = g._doping_low_list(g.DOPING_LOW)
+        vals = g._doping_low_list(getattr(g, key))
         assert sorted(v for v in vals if v > 0) == pytest.approx(want)
         assert sorted(-v for v in vals if v < 0) == pytest.approx(want)
         assert g._doping_low_list("off") == [] and g._doping_low_list("") == []
@@ -104,10 +106,11 @@ def test_gen_doping_low_defaults_and_off():
 
 
 def test_fermi_fix_threshold_keeps_factory_grid_untouched():
-    """出厂网格最小点每胞载流子 ≥ 1e-7（不进小掺杂分支）：3D 1e17 cm^-3 × 10 Å^3、2D 1e11 cm^-2 × 5 Å^2。"""
+    """出厂掺杂段最小点每胞载流子 ≥ 1e-7（不进小掺杂分支）。[0077] 掺杂段下限 1e16 cm^-3：
+    3D × 10 Å^3 元胞；2D 三维等效 1e16 × t（≥ 3 Å）× 面内面积（≥ 5 Å^2）。"""
     F = _ff()
-    assert 1e17 * 10e-24 >= F.SMALL_DOPING_PER_CELL
-    assert 1e11 * 5e-16 >= F.SMALL_DOPING_PER_CELL
+    assert 1e16 * 10e-24 >= F.SMALL_DOPING_PER_CELL
+    assert 1e16 * 3e-8 * 5e-16 >= F.SMALL_DOPING_PER_CELL
 
 
 def _write_transport(cwd, dop, run="step8.4_amset2d"):
@@ -115,13 +118,14 @@ def _write_transport(cwd, dop, run="step8.4_amset2d"):
     (cwd / run / "transport.json").write_text(json.dumps({"doping": dop, "temperatures": [300.0]}))
 
 
-def test_doping_axis_unchanged_without_low_points(tmp_path):
+def test_doping_axis_without_low_points(tmp_path):
+    """[0077] 没有低浓度点：原点 = 掺杂段下限 1e16，±5 个十年逐个刻度。"""
     S = _load("s83_0055", KE / "step8.3_output" / "gen_step13_output.py")
     _write_transport(tmp_path, [-2.87e20, -2.87e17, 0.0, 2.87e17, 2.87e20])
     NLO, NFLOOR, XT, XTL = S._doping_axis(tmp_path, True)
-    assert (NLO, NFLOOR) == (1e17, 5e17)
-    assert XT == [-4, -3, -2, -1, 0, 1, 2, 3, 4]
-    assert XTL == ["1e21", "1e20", "1e19", "1e18", "1e17", "1e18", "1e19", "1e20", "1e21"]
+    assert NLO == 1e16 and NFLOOR == pytest.approx(0.999e16)
+    assert XT == [-5, -4, -3, -2, -1, 0, 1, 2, 3, 4, 5]
+    assert XTL == ["1e21", "1e20", "1e19", "1e18", "1e17", "1e16", "1e17", "1e18", "1e19", "1e20", "1e21"]
 
 
 def test_doping_axis_extends_with_low_points(tmp_path):
