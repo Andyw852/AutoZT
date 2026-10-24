@@ -32,7 +32,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 # [SKILL_REV] 版本戳：写进 settings.yaml 头，便于从结果反查跑的是哪份 skill 副本。
-_SKILL_REV = "2026-10-21-0061m-dftmatrix"   # [0061-m] ADP_DEGEN 的应变算符取 S7.1 的 DFT 形变势矩阵（deformation_matrix.h5，deform_wave.py）   # 2026-10-21-0061-adpdegen   # [0061] ADP_DEGEN：简并 / 近简并带边的 ADP 带间修正（2D 面内，adp_degen.py）   # 2026-10-20-0059r3-dfptodp   # [0059-r3] DFPT 谷内 ODP（q=Γ）优先于冻声子/手填，不再两份叠加   # 2026-10-18-0059-ivsdfpt   # [0059] IVS_DFPT：eph-qe-cpu QE DFPT 谷间零阶形变势（ivs_dfpt_params.json）优先于冻声子 K↔K′ 与手填   # 2026-10-16-0055-dopinglow   # [0055] DOPING_LOW 低浓度段 1e3–1e9 cm^-2（≈3D 1e10–1e16；amset_fermi_fix 小掺杂 log-sum-exp 解 E_F）；[0054] undoped_ni 记带边   # 2026-10-15-0051-socdesym   # [0051] amset_desym_fix 修 SOC 分支（四元数 SU(2) + iσ_y·K，V200）；README 过期重叠口径标注取代   # 2026-10-15-0050-r1-subsets   # [0050-r1] 出厂 SUBSETS 带 IVS（开谷间时本征曲线不缺、多一套去 IVS 对照）   # 2026-10-14-0050-ivsfrozen   # [0050] 冻声子谷间 IVS 参数（IVS_FROZEN，K↔K′ 零阶、非 SOC）   # 2026-10-13-0044-reprotol   # [0044] 复现检查改相对容差（单机制 μ 在零前因子处 ~1e47）；POSTPROCESS_ONLY 不再要求 transport.json；取消本征点独立拆分脚本、回到主掺杂网格 doping=0（[0043] amset_fermi_fix 已修好 SVD）   # 2026-10-13-0043-intrsvd   # [0043] 本征点 + IMP 的 SVD 不收敛（amset_fermi_fix：n=p 严格相等 + 散射率插值死片保护）   # 2026-10-13-0041-defectdop   # [0041] DEFECT_DOPING 缺陷平衡载流子浓度进掺杂网格   # 2026-10-13-0040-undoped   # [0040] UNDOPED_POINT 本征点（doping=0）   # 2026-10-12-0038-subsets   # [0038] SUBSETS 散射机制子集（subset_<机制>.json）   # [0035-r3] 复审：not_in_scattering 只认显式排除、D 全低于阈值仍建记录、面外极性；[0035-r2] 冻声子优先、手填谷内只作对照；[0035-r1] 复审：交叉拒绝、并星平均、τ 挪到 transport.json 之后；[0035] 冻声子 ODP 参数（ODP_FROZEN）+ τ(E)（tau_energy.py）   # [0034-r3] 二审：重复星按 S8.2 k_grid 合并；显式 SCATTERING+掩码的日志   # [0034-r2] 复审：同中心谷合并、显式 SCATTERING 照办、PIE 与 settings 一致   # [0034] OVERALL_WITHOUT（出厂 ODP）-> overall_noODP.json   # [0033] ODP/谷间散射（常数形变势，step.conf DP_OPTICAL_E/H）+ ADP 谷内掩码   # [0032-r2] 复审：链首清旧本征产物与 mesh；SCATTERING 无 ADP 不出只 ADP   # [0032] WRITE_MESH/INTRINSIC_ADP_ONLY 2D 默认开（旧：2026-09-28-desym-fix V115）
+_SKILL_REV = "2026-10-24-0077"   # [0077] 出厂掺杂网格按三维等效浓度 DOPING_3D=±1e16–1e21 / DOPING_LOW_3D=±1e11–1e15（cm^-3）× 层厚 t 换算成面密度；DOPING/DOPING_LOW 仍可直接写面密度覆盖   # 2026-10-21-0061m-dftmatrix   # [0061-m] ADP_DEGEN 的应变算符取 S7.1 的 DFT 形变势矩阵（deformation_matrix.h5，deform_wave.py）   # 2026-10-21-0061-adpdegen   # [0061] ADP_DEGEN：简并 / 近简并带边的 ADP 带间修正（2D 面内，adp_degen.py）   # 2026-10-20-0059r3-dfptodp   # [0059-r3] DFPT 谷内 ODP（q=Γ）优先于冻声子/手填，不再两份叠加   # 2026-10-18-0059-ivsdfpt   # [0059] IVS_DFPT：eph-qe-cpu QE DFPT 谷间零阶形变势（ivs_dfpt_params.json）优先于冻声子 K↔K′ 与手填   # 2026-10-16-0055-dopinglow   # [0055] DOPING_LOW 低浓度段 1e3–1e9 cm^-2（≈3D 1e10–1e16；amset_fermi_fix 小掺杂 log-sum-exp 解 E_F）；[0054] undoped_ni 记带边   # 2026-10-15-0051-socdesym   # [0051] amset_desym_fix 修 SOC 分支（四元数 SU(2) + iσ_y·K，V200）；README 过期重叠口径标注取代   # 2026-10-15-0050-r1-subsets   # [0050-r1] 出厂 SUBSETS 带 IVS（开谷间时本征曲线不缺、多一套去 IVS 对照）   # 2026-10-14-0050-ivsfrozen   # [0050] 冻声子谷间 IVS 参数（IVS_FROZEN，K↔K′ 零阶、非 SOC）   # 2026-10-13-0044-reprotol   # [0044] 复现检查改相对容差（单机制 μ 在零前因子处 ~1e47）；POSTPROCESS_ONLY 不再要求 transport.json；取消本征点独立拆分脚本、回到主掺杂网格 doping=0（[0043] amset_fermi_fix 已修好 SVD）   # 2026-10-13-0043-intrsvd   # [0043] 本征点 + IMP 的 SVD 不收敛（amset_fermi_fix：n=p 严格相等 + 散射率插值死片保护）   # 2026-10-13-0041-defectdop   # [0041] DEFECT_DOPING 缺陷平衡载流子浓度进掺杂网格   # 2026-10-13-0040-undoped   # [0040] UNDOPED_POINT 本征点（doping=0）   # 2026-10-12-0038-subsets   # [0038] SUBSETS 散射机制子集（subset_<机制>.json）   # [0035-r3] 复审：not_in_scattering 只认显式排除、D 全低于阈值仍建记录、面外极性；[0035-r2] 冻声子优先、手填谷内只作对照；[0035-r1] 复审：交叉拒绝、并星平均、τ 挪到 transport.json 之后；[0035] 冻声子 ODP 参数（ODP_FROZEN）+ τ(E)（tau_energy.py）   # [0034-r3] 二审：重复星按 S8.2 k_grid 合并；显式 SCATTERING+掩码的日志   # [0034-r2] 复审：同中心谷合并、显式 SCATTERING 照办、PIE 与 settings 一致   # [0034] OVERALL_WITHOUT（出厂 ODP）-> overall_noODP.json   # [0033] ODP/谷间散射（常数形变势，step.conf DP_OPTICAL_E/H）+ ADP 谷内掩码   # [0032-r2] 复审：链首清旧本征产物与 mesh；SCATTERING 无 ADP 不出只 ADP   # [0032] WRITE_MESH/INTRINSIC_ADP_ONLY 2D 默认开（旧：2026-09-28-desym-fix V115）
 # 复制来源（gen_step10_amset.py 的 _SKILL_REV），用于人工比对两份文件是否同步
 _SOURCE_GEN_REV = "2026-10-08-2d-raw-elastic"   # [0014] S8 的 2D 弹性改为原始 slab 值，与本步一致
 import stepconf  # noqa: E402
@@ -139,13 +139,20 @@ _GATE_SUMMARY = None
 AMSET_TAIL  = (' && cp -f "$(ls -t transport_*.json 2>/dev/null | head -1)" '
                'transport.json && ls -l transport.json')
 # --- 输运设置（可改）---
-DOPING      = "-1e14:-1e11:5, 1e11:1e14:5"   # n 型 + p 型各 5 点（对数均布）cm^-2 面密度；gen 里按 c 折算成体浓度
-# [0055] DOPING_LOW：低浓度段（2026-10-16 用户要求），补本征点与 1e11 cm^-2 之间的空档（3D 对应 1e10–1e16 cm^-3：
-#   n_2D ≈ n_3D × t，t ≈ 1 nm 取整 -> 1e3–1e9 cm^-2；文献口径 n_lit = n_2D/t，MoS2 t≈0.67 nm 即 1.5e10–1.5e16 cm^-3）。
-#   出厂 n/p 各 4 点 1e3、1e5、1e7、1e9 cm^-2（面密度，gen 按 c 折体浓度）；每胞载流子 < 1e-7 的点由
-#   amset_fermi_fix.small_doping_fermi（n、p 分开 log-sum-exp）解 E_F。代价：掺杂点 11 -> 19（约 ×1.7）。
-#   step.conf 写 DOPING_LOW = off 关，或写自己的范围串（cm^-2）。
-DOPING_LOW = "-1e9:-1e3:4, 1e3:1e9:4"
+# [0077] 掺杂网格（2026-10-24 用户定）：2D 与 3D 算同两段"三维等效浓度"（cm^-3），只是 2D 要换算：
+#   低浓度段（近本征）±1e11–1e15、掺杂段 ±1e16–1e21，每十年一个点（与 S8 的 DOPING_LOW / DOPING 同值）。
+#   2D 的三维等效浓度按层厚 t 定义（= 文献口径 n_lit = n_2D / t，与 σ、κ 的厚度归一化同一个 t，
+#   LAYER_THICKNESS / vdW）：面密度 n_2D = n_3D × t，AMSET 的 doping（元胞体积口径）= n_2D / c。
+#   以前 2D 直接给面密度 1e11–1e14 cm^-2（≈ 三维等效 1.5e18–1.5e21）、低段 1e3–1e9 cm^-2（t ≈ 1 nm 取整），
+#   两段和 3D 的十年刻度对不齐。
+#   step.conf：DOPING_3D / DOPING_LOW_3D 改三维等效范围（cm^-3）；DOPING / DOPING_LOW 仍可直接写面密度（cm^-2），
+#   写了就以它为准（旧项目的覆盖照旧生效）；DOPING_LOW_3D = off（或 DOPING_LOW = off）关低浓度段。
+#   每胞载流子 < 1e-7 的点由 amset_fermi_fix.small_doping_fermi（n、p 分开 log-sum-exp）解 E_F。
+DOPING_3D     = "-1e21:-1e16:6, 1e16:1e21:6"   # 掺杂段，三维等效 cm^-3（n 型 + p 型各 6 点）
+DOPING_LOW_3D = "-1e15:-1e11:5, 1e11:1e15:5"   # 低浓度段（近本征），三维等效 cm^-3（各 5 点）
+DOPING      = None   # 面密度 cm^-2 显式覆盖（step.conf）；None = 由 DOPING_3D × t 换算
+DOPING_LOW  = None   # 同上（低浓度段）；None = 由 DOPING_LOW_3D × t 换算
+_LAYER_T_CM = None   # [0077] 层厚 t（cm），_prepare_2d 定下后写这里，write_settings 用它换算
 TEMPERATURES = "100:900:9"            # 100,200,...,900 K，每 100 K 一个点
 SCATTERING  = ["ADP", "IMP", "POP"]   # 形变势声学 + 电离杂质 + 极性光学 "ADP", "IMP", "POP"
 _ALLOWED_SCATTERING = {"ADP", "IMP", "POP", "PIE", "ODP", "IVS"}   # step.conf SCATTERING 允许的机制
@@ -534,7 +541,9 @@ SPEC = {
     #   旧写法（默认取常量、只认 true）会让 step.conf 写 false 也关不掉。
     "WRITE_MESH": (None, "bool"),
     "UNDOPED_POINT": (None, "bool"),          # [0040] None = 用出厂值
-    "DOPING_LOW": (None, "str"),              # [0055] None = 用出厂值；off = 关（面密度 cm^-2）
+    "DOPING_LOW": (None, "str"),              # [0055] 面密度 cm^-2 显式覆盖；None = 由 DOPING_LOW_3D 换算；off = 关
+    "DOPING_3D": (None, "str"),               # [0077] 掺杂段三维等效浓度 cm^-3；None = 出厂 DOPING_3D
+    "DOPING_LOW_3D": (None, "str"),           # [0077] 低浓度段三维等效浓度 cm^-3；None = 出厂；off = 关
     "DEFECT_DOPING": ("auto", "str"),          # [0041] auto/on/off
     "DEFECT_ROOT": ("", "str"),
     "INTRINSIC_ADP_ONLY": (None, "bool"),   # [0018]
@@ -549,7 +558,7 @@ SPEC = {
     "ADP_DEGEN_PAIR": ("auto", "str"),       # [0061-p] auto = 逐对替换矩阵元（AMSET 内部对不上自动退回比值）/ off = 按初态比值
     "ADP_DEGEN_MATRIX": ("auto", "str"),     # [0061-m] auto = 有 S7.1 的 deformation_matrix.h5 就用 / off = 从本征值拟合
     # 掺杂/温度范围覆盖（B4/B5 缩减设置用）：默认顶部 DOPING/TEMPERATURES；step.conf 可覆盖。
-    "DOPING": (DOPING, "str"),
+    "DOPING": (None, "str"),                  # [0077] 面密度 cm^-2 显式覆盖；None = 由 DOPING_3D × t 换算
     "TEMPERATURES": (TEMPERATURES, "str"),
     # patch_mem_guard：内存粗估阈值（GiB）与自动独占开关。
     "MEM_WARN_GIB": (MEM_WARN_GIB, "int"),
@@ -1390,7 +1399,10 @@ def check_carriers_per_atom(doping_spec, per_cell_factor, n_atoms, tag="2D"):
     """
     if not per_cell_factor or not n_atoms:
         return
-    vals = [abs(float(v)) for v in _doping_endpoints(doping_spec)]
+    if isinstance(doping_spec, (list, tuple)):          # [0077] 已展开的面密度列表
+        vals = [abs(float(v)) for v in doping_spec if v]
+    else:
+        vals = [abs(float(v)) for v in _doping_endpoints(doping_spec)]
     if not vals:
         return
     worst_cell = max(vals) * per_cell_factor
@@ -1401,7 +1413,8 @@ def check_carriers_per_atom(doping_spec, per_cell_factor, n_atoms, tag="2D"):
     if worst > 0.5:
         sys.exit(
             "[ERROR] %s 每原子载流子数 = %.4g > 0.5（%s；原胞 %d 原子，最大 %.4g/原胞）——"
-            "DOPING 是**面密度 cm^-2**，这个量级说明填成了体浓度 cm^-3（或单位写错）。"
+            "DOPING / DOPING_LOW 是**面密度 cm^-2**、DOPING_3D / DOPING_LOW_3D 是**三维等效 cm^-3**（按层厚 t 换算），"
+            "这个量级说明单位填错（把体浓度填进了 DOPING，或三维等效值写大了）。"
             "每原子多得 >0.5 个额外载流子在原子数有限的体系里不可能，AMSET 会解出荒谬的"
             "费米能级并崩在 zero-size array。请按 cm^-2 重填（例如 1e13 cm^-2 量级）。"
             % (tag, worst, detail, int(n_atoms), worst_cell)
@@ -2237,6 +2250,8 @@ def apply_2d_corrections(cwd: Path, elastic, eps_inf=None, eps_static=None):
 
     factor = c_len / t                     # 只用于记录与 σ/κ 的厚度归一化
     t_info["thickness_used_A"] = round(t, 4)
+    global _LAYER_T_CM
+    _LAYER_T_CM = t * 1e-8                 # [0077] 掺杂网格的三维等效浓度按这个 t 换算成面密度
     if elastic is None:
         print("[WARN] 2D：没读到弹性常数——ADP 散射无法计算（settings 里不写 "
               "elastic_constant）")
@@ -2318,6 +2333,10 @@ def apply_2d_corrections(cwd: Path, elastic, eps_inf=None, eps_static=None):
         "adp_degen": _ADP_DEGEN_REC,            # [0061] None / status != pending_runtime = 不修正
         "areal_density_factor_cm": c_len * 1e-8,
         "areal_density_note": "n_2D [cm^-2] = n_3D [cm^-3] x cell_c [cm]",
+        # [0077] 掺杂网格按三维等效浓度（按层厚 t）出厂：n_2D = n_3D_eq × t，AMSET doping = n_2D / c；
+        #   step.conf 直接写了面密度 DOPING 时记 areal_override
+        "doping_basis": "areal_override" if DOPING is not None else "3d_equivalent_per_layer_thickness",
+        "doping_thickness_cm": t * 1e-8,
         "inplane_cell_area_cm2": _CELL_AREA_CM2,
         # ★ 2026-09-28 用户批准：阈值口径从"每原胞"改成"每原子"（每原胞取决于晶胞大小，
         #   C60 网络在出厂掺杂上限下会被误拦）。postprocess_intrinsic._doping_marks 读这个键。
@@ -2345,6 +2364,23 @@ def _seg_expand(a, b, n, log):
         la, lb = math.log10(abs(a)), math.log10(abs(b))
         return [s * 10 ** (la + (lb - la) * i / (n - 1)) for i in range(n)]
     return [a + (b - a) * i / (n - 1) for i in range(n)]
+
+
+def doping_areal_grid(t_cm):
+    """[0077] -> (掺杂段面密度列表, 低浓度段面密度列表, 来源说明)，单位 cm^-2。
+    显式面密度（step.conf 的 DOPING / DOPING_LOW）优先；否则三维等效浓度（DOPING_3D / DOPING_LOW_3D，cm^-3）× 层厚 t。
+    t_cm 为 None（不是 2D）时三维等效值原样返回（调用方当体浓度用）。"""
+    f = t_cm if t_cm else 1.0
+    if DOPING is not None:
+        main, src_m = expand_spec(DOPING, log=True), "DOPING（面密度 cm^-2）"
+    else:
+        main, src_m = [v * f for v in expand_spec(DOPING_3D, log=True)], "DOPING_3D（三维等效 cm^-3）× t"
+    if DOPING_LOW is not None:
+        low, src_l = _doping_low_list(DOPING_LOW), "DOPING_LOW（面密度 cm^-2）"
+    else:
+        low, src_l = [v * f for v in _doping_low_list(DOPING_LOW_3D)], "DOPING_LOW_3D（三维等效 cm^-3）× t"
+    low = [v for v in low if not any(abs(v - x) <= 1e-9 * abs(x) for x in main)]
+    return main, low, "%s；%s" % (src_m, src_l)
 
 
 def _doping_low_list(spec):
@@ -2547,7 +2583,8 @@ def write_settings(out: Path, eps_inf, eps_static, gap, elastic,
             % ("vacuum" if (str(DEFORM_REF).lower() in ("auto", "vacuum")
                            and (Path.cwd() / READ_DIR / "deformation_vac.h5").is_file())
                else "core"),
-            "# 4) 下面的 doping 是体浓度 cm^-3；面密度在 DOPING 里按 cm^-2 定义，gen 按 c 折算",
+            "# 4) 下面的 doping 是 AMSET 的元胞体积口径 cm^-3（= 面密度 / c）。[0077] 出厂网格按三维等效浓度"
+            " （按层厚 t）定义：n_2D = n_3D × t，doping = n_2D / c",
         ]
         if c_len:
             _ccm = c_len * 1e-8   # c 轴长度（cm），体浓度按含真空的 slab 体积折算
@@ -2555,8 +2592,13 @@ def write_settings(out: Path, eps_inf, eps_static, gap, elastic,
             lines.append("#    本体系 c = %.4f Å = %.4e cm" % (c_len, _ccm))
             if _acm:
                 lines.append("#    原胞面内面积 = %.4e cm²；每原胞载流子数 = 面密度 × 面内面积" % _acm)
-            lines.append("#    面密度(cm^-2) -> 体浓度(cm^-3, 按 c 折算) -> 每原胞载流子数")
-            for v in _doping_endpoints(DOPING):
+            _tcm = _LAYER_T_CM
+            if _tcm:
+                lines.append("#    层厚 t = %.4f Å（三维等效浓度 = 面密度 / t，与 σ 的厚度归一化同一个 t）" % (_tcm * 1e8))
+            lines.append("#    三维等效(cm^-3, /t) -> 面密度(cm^-2) -> AMSET doping(cm^-3, /c) -> 每原胞载流子数")
+            _m, _l, _ = doping_areal_grid(_tcm)
+            _pos = sorted(v for v in _m + _l if v > 0)
+            for v in ([_pos[0], _pos[-1]] if _pos else []):
                 _bulk = v / _ccm
                 if _acm:
                     _cell = v * _acm
@@ -2564,7 +2606,8 @@ def write_settings(out: Path, eps_inf, eps_static, gap, elastic,
                     _cell_s = "%.3g" % _cell
                 else:
                     _cell_s, _mark = "?", ""
-                lines.append("#      %+.3e  ->  %+.3e  ->  %s%s" % (v, _bulk, _cell_s, _mark))
+                lines.append("#      %s  ->  %+.3e  ->  %+.3e  ->  %s%s"
+                             % (("%+.3e" % (v / _tcm)) if _tcm else "?", v, _bulk, _cell_s, _mark))
         lines += [
             "# 【局限】单一有效极性模；偶极近似（无四极矩；Poncé PRL 2023 给 MoS2 室温",
             "#   Hall 迁移率误差：电子 23%、空穴 76%）；",
@@ -2575,12 +2618,12 @@ def write_settings(out: Path, eps_inf, eps_static, gap, elastic,
         ]
     # patch_carrier_guard（2026-09-28 用户批准）：每**原子**载流子数防护。
     #   >0.5 报错、>0.05 告警（2026-09-27 MoS2 的 DOPING 单位事故就是这里该拦住的）。
-    check_carriers_per_atom(DOPING, _CELL_AREA_CM2, _count_atoms(Path.cwd()), tag="2D S8.4")
-    _dop_areal = expand_spec(DOPING, log=True)   # 面密度 cm^-2
-    _low = [v for v in _doping_low_list(DOPING_LOW) if v not in _dop_areal]   # [0055] 低浓度段（面密度）
+    _dop_areal, _low, _src = doping_areal_grid(_LAYER_T_CM if c_len else None)   # [0077] 面密度 cm^-2
+    check_carriers_per_atom(list(_dop_areal) + list(_low), _CELL_AREA_CM2, _count_atoms(Path.cwd()), tag="2D S8.4")
+    print("[OK] 掺杂网格来源：%s" % _src)
     if _low:
         _dop_areal = list(_dop_areal) + _low
-        print("[OK] DOPING_LOW：加 %d 个低浓度点 %s cm^-2" % (len(_low), ", ".join("%.0e" % v for v in _low)))
+        print("[OK] 低浓度段：加 %d 个点 %s cm^-2" % (len(_low), ", ".join("%.2e" % v for v in _low)))
     _dop = [v / (c_len * 1e-8) for v in _dop_areal] if c_len else _dop_areal  # 体浓度 cm^-3
     if UNDOPED_POINT and 0.0 not in _dop:             # [0040] 本征点（未掺杂，E_F 由 n = p 定；[0044] 回到主网格）
         _dop = list(_dop) + [0.0]
@@ -3381,11 +3424,16 @@ def main():
             global UNDOPED_POINT                      # [0040]
             if _p["UNDOPED_POINT"] is not None:
                 UNDOPED_POINT = bool(_p["UNDOPED_POINT"])
-            global DOPING_LOW                         # [0055]
+            global DOPING_LOW, DOPING_3D, DOPING_LOW_3D   # [0055] [0077]
             if _p["DOPING_LOW"] is not None:
-                if str(_p["DOPING_LOW"]) != DOPING_LOW:
-                    print("[OK] DOPING_LOW = %s（step.conf 覆盖，出厂 %s）" % (_p["DOPING_LOW"], DOPING_LOW))
+                print("[OK] DOPING_LOW = %s cm^-2（step.conf 面密度覆盖，不用三维等效 DOPING_LOW_3D）" % _p["DOPING_LOW"])
                 DOPING_LOW = str(_p["DOPING_LOW"])
+            if _p["DOPING_3D"] is not None and str(_p["DOPING_3D"]) != DOPING_3D:
+                print("[OK] DOPING_3D = %s cm^-3（step.conf 覆盖，出厂 %s）" % (_p["DOPING_3D"], DOPING_3D))
+                DOPING_3D = str(_p["DOPING_3D"])
+            if _p["DOPING_LOW_3D"] is not None and str(_p["DOPING_LOW_3D"]) != DOPING_LOW_3D:
+                print("[OK] DOPING_LOW_3D = %s cm^-3（step.conf 覆盖，出厂 %s）" % (_p["DOPING_LOW_3D"], DOPING_LOW_3D))
+                DOPING_LOW_3D = str(_p["DOPING_LOW_3D"])
             # patch_write_mesh：WRITE_MESH -> 落 mesh.h5，供 postprocess_intrinsic.py 重算严格本征迁移率。
             #   [0032] 出厂 True；step.conf 显式写 true/false 才覆盖（SPEC 默认 None）。
             WRITE_MESH, INTRINSIC_ADP_ONLY = resolve_intrinsic_switches(
@@ -3428,10 +3476,8 @@ def main():
                 IVS_DFPT_KTOL = float(_p["IVS_DFPT_KTOL"])
             # patch_doping_override（B4/B5 缩减设置）：step.conf 可覆盖掺杂/温度范围
             if _p["DOPING"]:
-                _d = str(_p["DOPING"])
-                if _d != DOPING:
-                    print("[OK] DOPING = %s（step.conf 覆盖，出厂 %s）" % (_d, DOPING))
-                DOPING = _d
+                DOPING = str(_p["DOPING"])
+                print("[OK] DOPING = %s cm^-2（step.conf 面密度覆盖，不用三维等效 DOPING_3D）" % DOPING)
             if _p["TEMPERATURES"]:
                 _t = str(_p["TEMPERATURES"])
                 if _t != TEMPERATURES:

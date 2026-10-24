@@ -350,6 +350,34 @@ step8.x 的 `_SKILL_REV` 写进 comparison_summary.txt。改脚本即提交 GitH
   （S8.2 / S8.3 遇到金属会报错并提示这一行）。S5 介电（DFPT）对金属也没有意义，只被 S8 用；关掉 `amset3d` 后它
   不再被下游需要，已在跑的可以按需停掉（`stop` 先请示）。
 
+## [0077] 掺杂网格两段：近本征 ±1e11–1e15、掺杂 ±1e16–1e21 cm⁻³，2D 按层厚换算（S8 / S8.4 / S8.3；2026-10-24 用户定）
+
+- **为什么**：设计本意是对 3D，±1e11–1e15 cm⁻³ 是本征浓度附近（近本征、非简并），±1e16–1e21 cm⁻³ 是掺杂情况；
+  2D、3D 都算这两段，只是 2D 要换算。以前 3D 是 1e17–1e21（5 点）+ 低段 1e10–1e16（每两个十年一个点）；2D 直接给面密度
+  1e11–1e14 cm⁻²（三维等效约 1.5e18–1.5e21，掺杂段 1e16–1e18 缺失）+ 低段 1e3–1e9 cm⁻²，两边十年刻度对不齐，
+  和文献比还要手工换算浓度。
+- **S8（3D）**：`DOPING = "-1e21:-1e16:6, 1e16:1e21:6"`、`DOPING_LOW = "-1e15:-1e11:5, 1e11:1e15:5"`（cm⁻³），每十年一个点；
+  加本征点共 23 档（以前 19，AMSET 计算量约 ×1.2）。
+- **S8.4（2D）**：新键 `DOPING_3D` / `DOPING_LOW_3D`（三维等效 cm⁻³，出厂与 S8 两段相同）。三维等效浓度按层厚 t 定义
+  （= 文献口径 n_lit = n_2D/t；t 与 σ、κe 厚度归一化是同一个，`LAYER_THICKNESS`，出厂 vdW）：
+  面密度 n_2D = n_3D × t，AMSET doping（元胞体积口径，含真空）= n_2D / c（`doping_areal_grid`）。
+  例：MoS₂ t = 6.539 Å、c = 20 Å：1e11 → 6.54e3 cm⁻² → 3.27e10 cm⁻³（每原胞 5e-12）；
+  1e21 → 6.54e13 cm⁻² → 3.27e20 cm⁻³（每原胞 0.052，超出刚带近似，S8.3 灰底）。settings.yaml 文件头逐级打印这条换算。
+  - step.conf 已写 `DOPING` / `DOPING_LOW`（面密度 cm⁻²）的旧项目照旧以它为准（settings.yaml / stdout 打印网格来源，
+    2d_correction.json `doping_basis = areal_override`）；`DOPING_LOW_3D = off`（或 `DOPING_LOW = off`）关低浓度段。
+  - 2d_correction.json 新增 `doping_basis`（出厂 `3d_equivalent_per_layer_thickness`）与 `doping_thickness_cm`（= t）。
+  - 拿不到层厚（不是 2D）时三维等效值原样当体浓度用。
+- **S8.3**：两段分界改为 1e16 / 1e15（`PL_TUNE_LO = 1e16`、`PL_LOW_HI = 1e15`），文件夹
+  `<前缀>_carrier_tuning_1e16-1e21/` 与 `<前缀>_low_doping_<NLO>-1e15/`（出厂 NLO = 1e11）；掺杂段 ±5 个十年逐个刻度。
+  2D 浓度轴改为三维等效 n_cell × c/t（`_n_scale`，读 2d_correction.json；读不到退回元胞口径），分段也按它，刻度正好落在
+  十年上；表里 `n_cell_cm-3` / `n_2D_cm-2` / `n_lit_cm-3` 列不变，轴口径只用于画图。3D 轴不变（元胞 = 体浓度）。
+  - 旧 2D 结果（面密度网格）三维等效最大约 1.5e21：轴上端跟着放到 1e22（`_doping_top`），文件夹名为
+    `carrier_tuning_1e16-1e22`；重跑 S8.4 后回到 1e21。
+- **E_F 解法**：低浓度段整段走 `amset_fermi_fix.small_doping_fermi`（[0055]）；掺杂段最低点 1e16 每胞仍 ≥ 1e-7
+  （3D 元胞 ≥ 10 Å³；2D 为 1e16 × t × 面内面积，MoS₂ 约 6e-7），走 AMSET 原搜索。
+- **生效**：只影响之后生成的 settings.yaml 与图，已有结果不动。要用新网格：2D 重跑 S8.4（3D 重跑 S8，开了 amset3d 时），
+  再跑 S8.3。
+
 ## [0072] 谷内 ADP 形变势的 DFPT 声学支斜率（eph-qe-cpu `IVS_ADP` → S8 的 `ADP_DFPT`；2026-10-23；**实验性，出厂关**）
 
 **为什么改**：S7/S7.1 的形变势是带边能量随应变的移动 dE/dε。剪切分量（Ξu）不依赖能量参考，静水分量（Ξd）要把应变前后的
@@ -851,6 +879,7 @@ B 同意新增步骤；C 与 DFPT 基准差 20–30% 以内算通过；D 用 309
   - `transport_plots/phonon_limited_low_doping_<NLO>-1e16/`：`<M>_phonon_limited_low_doping.png` + `_<T>K.csv`，
     |n| ∈ [NLO, 1e16]，原点 NLO（最小点所在十年），S 纵轴 ±2500 μV/K；没有 DOPING_LOW 时不出这个文件夹。
   - 两段上下限都含端点；(1e16, 1e17) 出厂网格上没有点（3D 低段止于 1e16、主网格起于 1e17；2D 换算后 ~2.9e15 / ~2.9e17）。
+  - **[0077] 起**分界改为 1e16 / 1e15：`<前缀>_carrier_tuning_1e16-1e21/` 与 `<前缀>_low_doping_<NLO>-1e15/`，2D 轴按三维等效浓度（见 [0077]）。
     本征点 n = 0 不进任何一段（在 `intrinsic_carrier/`）。
 - **r2（同日用户要求）**：`<M>_transport.png`（基础 4 条 + 本轮机制对照）同样拆成
   `transport_carrier_tuning_1e17-1e21/<M>_transport_carrier_tuning.png + _<T>K.csv` 与
@@ -898,6 +927,7 @@ B 同意新增步骤；C 与 DFPT 基准差 20–30% 以内算通过；D 用 309
 - **出厂值**：3D `DOPING_LOW = "-1e16:-1e10:4, 1e10:1e16:4"`（cm⁻³，n/p 各 1e10、1e12、1e14、1e16）；
   2D `"-1e9:-1e3:4, 1e3:1e9:4"`（cm⁻²，n_2D ≈ n_3D × t、t ≈ 1 nm 取整；文献口径 n_lit = n_2D/t，MoS₂ t≈0.67 nm
   即 1.5e10–1.5e16 cm⁻³）。掺杂点 11 → 19，AMSET 计算量约 ×1.7。step.conf `DOPING_LOW = off` 关，或写自己的范围串。
+  **[0077] 起**出厂改为 3D `-1e15:-1e11:5, 1e11:1e15:5`（cm⁻³），2D 用同值的 `DOPING_LOW_3D` 按层厚 t 换算成面密度。
   3D 的 S8 以前 step.conf 不能改 DOPING，DOPING_LOW 两边都能改。
 - **E_F 必须换解法**：AMSET `FermiDos.get_doping` = (nelect − Σ f·DOS·dE)/V，`hole_conc` = (nelect − Σ_VB)/V，
   都是两个 ≈ nelect 的数相减。3D 1e10 cm⁻³ 每胞只有 ~4e-13 个载流子，理想合成 DOS 上相减式误差已 ~0.5%（逼近 1% 护栏），
@@ -976,7 +1006,7 @@ S8.3 每次重建 `transport_plots/`，旧名文件随之清掉。`step8.3_outpu
   （σ、S、PF、κe 随温度；2D 的 σ、κe、PF 按层厚 t 归一）。S8.3 内部表 `step8.3_output/intrinsic/` 与 `intrinsic_*.json`
   文件名不变（兼容）。
 - **掺杂网格**：S8 / S8.4 出厂在 DOPING 后加一个 0（`UNDOPED_POINT = true`）。1e11–1e14 cm⁻²（2D）/ 1e17–1e21 cm⁻³（3D）
-  是人为扫描范围，不是本征浓度；本征浓度 n_i = √(N_c N_v)·exp(−E_g/2k_BT) 因材料、温度而异（MoS₂ 300 K 约 1e-2 cm⁻²）。
+  是人为扫描范围（[0077] 起两边都是三维等效 ±1e16–1e21 + 低浓度段 ±1e11–1e15 cm⁻³，2D 按层厚换算），不是本征浓度；本征浓度 n_i = √(N_c N_v)·exp(−E_g/2k_BT) 因材料、温度而异（MoS₂ 300 K 约 1e-2 cm⁻²）。
 - **AMSET doping = 0 的坑**：AmsetData 对 0 掺杂走 `get_fermi_from_num_electrons`（按总电子数相对误差贪心搜索）。
   有带隙时本征载流子每胞远少于容差，整个带隙"误差都为 0"，E_F 落在带隙内任意格点（合成抛物带 1.8 eV、300 K 实测偏 0.12 eV，
   σ、S 差约 2 个数量级）；electron_conc / hole_conc 也不填（迁移率除以 0）。`amset_fermi_fix.py` 在 DOS 有带隙时改解

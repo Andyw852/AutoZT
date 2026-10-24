@@ -18,7 +18,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 # [SKILL_REV] 版本戳：写进 settings.yaml 头，便于从结果反查跑的是哪份 skill 副本。
-_SKILL_REV = "2026-10-23-0072-adpdfpt"   # [0072] ADP_DFPT：非简并带边的谷内 ADP 张量用 DFPT 声学斜率（eph-qe-cpu IVS_ADP）   # 2026-10-21-0061m-dftmatrix   # [0061-m] ADP_DEGEN 的应变算符取 S7.1 的 DFT 形变势矩阵（deformation_matrix.h5，deform_wave.py）   # 2026-10-21-0061g-adpdegen   # [0061-g] ADP_DEGEN 通用化：任意晶系 / 谷 / 价带导带 / SOC（vasprun + 波函数现拟合）   # 2026-10-21-0061-adpdegen   # [0061] ADP_DEGEN：立方 Γ 三重简并价带的 ADP 带间修正（插件 + adp_degen.py）   # 2026-10-20-0059r3-dfptodp   # [0059-r3] DFPT 谷内 ODP（q=Γ）优先于冻声子/手填，不再两份叠加   # 2026-10-18-0059-ivsdfpt   # [0059] IVS_DFPT：eph-qe-cpu QE DFPT 谷间零阶形变势（ivs_dfpt_params.json）优先于冻声子 K↔K′ 与手填   # 2026-10-16-0055-dopinglow   # [0055] DOPING_LOW 低浓度段 1e10–1e16 cm^-3（amset_fermi_fix 小掺杂 log-sum-exp 解 E_F）；[0054] undoped_ni 记带边   # 2026-10-15-0051-socdesym   # [0051] amset_desym_fix 修 SOC 分支（四元数 SU(2) + iσ_y·K，V200）   # 2026-10-13-0043-intrsvd   # [0041] DEFECT_DOPING 缺陷平衡载流子浓度进掺杂网格   # 2026-10-13-0040-undoped   # [0040] UNDOPED_POINT 本征点（doping=0）   # 2026-10-13-0038-subsets   # [0038] SUBSETS 散射机制子集（subset_<机制>.json）   # [0037] 三维 PIE（读压电张量写 settings，插件 amset_pie3d.py 修正核）   # [0036] 三维 ODP/IVS（DP_OPTICAL_*，插件 amset_dpo3d.py）   # [0014] 2D 弹性用原始 slab 值（不乘 c/t）；V115 相位补丁
+_SKILL_REV = "2026-10-24-0077"   # [0077] 出厂掺杂网格 DOPING=±1e16–1e21（6 点）、DOPING_LOW=±1e11–1e15（5 点），每十年一个点   # 2026-10-23-0072-adpdfpt   # [0072] ADP_DFPT：非简并带边的谷内 ADP 张量用 DFPT 声学斜率（eph-qe-cpu IVS_ADP）   # 2026-10-21-0061m-dftmatrix   # [0061-m] ADP_DEGEN 的应变算符取 S7.1 的 DFT 形变势矩阵（deformation_matrix.h5，deform_wave.py）   # 2026-10-21-0061g-adpdegen   # [0061-g] ADP_DEGEN 通用化：任意晶系 / 谷 / 价带导带 / SOC（vasprun + 波函数现拟合）   # 2026-10-21-0061-adpdegen   # [0061] ADP_DEGEN：立方 Γ 三重简并价带的 ADP 带间修正（插件 + adp_degen.py）   # 2026-10-20-0059r3-dfptodp   # [0059-r3] DFPT 谷内 ODP（q=Γ）优先于冻声子/手填，不再两份叠加   # 2026-10-18-0059-ivsdfpt   # [0059] IVS_DFPT：eph-qe-cpu QE DFPT 谷间零阶形变势（ivs_dfpt_params.json）优先于冻声子 K↔K′ 与手填   # 2026-10-16-0055-dopinglow   # [0055] DOPING_LOW 低浓度段 1e10–1e16 cm^-3（amset_fermi_fix 小掺杂 log-sum-exp 解 E_F）；[0054] undoped_ni 记带边   # 2026-10-15-0051-socdesym   # [0051] amset_desym_fix 修 SOC 分支（四元数 SU(2) + iσ_y·K，V200）   # 2026-10-13-0043-intrsvd   # [0041] DEFECT_DOPING 缺陷平衡载流子浓度进掺杂网格   # 2026-10-13-0040-undoped   # [0040] UNDOPED_POINT 本征点（doping=0）   # 2026-10-13-0038-subsets   # [0038] SUBSETS 散射机制子集（subset_<机制>.json）   # [0037] 三维 PIE（读压电张量写 settings，插件 amset_pie3d.py 修正核）   # [0036] 三维 ODP/IVS（DP_OPTICAL_*，插件 amset_dpo3d.py）   # [0014] 2D 弹性用原始 slab 值（不乘 c/t）；V115 相位补丁
 import stepconf  # noqa: E402
 try:
     import ke_common as kc
@@ -117,12 +117,15 @@ _GATE_SUMMARY = None      # ke_common.gate_log_line() 的结果，写进 setting
 #   transport.json **之前** —— 否则检查失败时 transport.json 已存在，autozt
 #   marker 判据会把失败隐藏（V63 的教训）。
 # --- 输运设置（可改）---
-DOPING      = "-1e21:-1e17:5, 1e17:1e21:5"   # n 型 + p 型各 5 点（对数均布）cm^-3
-# [0055] DOPING_LOW：低浓度段（2026-10-16 用户要求），补本征点与 1e17 之间的空档，对应电声文献算 phonon-limited
-#   迁移率的低浓度口径（非简并、单载流子；μ 按掺杂符号只积导带/价带）。出厂 n/p 各 4 点 1e10、1e12、1e14、1e16 cm^-3；
+# [0077] 掺杂网格（2026-10-24 用户定，2D 的 S8.4 用同两段、按层厚换算）：
+#   掺杂段 ±1e16–1e21 cm^-3（实际掺杂能达到的范围），低浓度段（近本征）±1e11–1e15 cm^-3，每十年一个点。
+#   以前是 1e17–1e21（5 点）+ 低段 1e10–1e16（每两个十年一个点）。
+DOPING      = "-1e21:-1e16:6, 1e16:1e21:6"   # n 型 + p 型各 6 点（对数均布）cm^-3
+# [0055] DOPING_LOW：低浓度段（2026-10-16 用户要求），补本征点与掺杂段之间的空档，对应电声文献算 phonon-limited
+#   迁移率的低浓度口径（非简并、单载流子；μ 按掺杂符号只积导带/价带）。[0077] 出厂 n/p 各 5 点 1e11–1e15 cm^-3；
 #   每胞载流子 < 1e-7 的点由 amset_fermi_fix.small_doping_fermi（n、p 分开 log-sum-exp）解 E_F，避开 AMSET nelect − Σ 的相减。
-#   代价：掺杂点 11 -> 19（AMSET 计算量约 ×1.7）。step.conf 写 DOPING_LOW = off 关，或写自己的范围串。
-DOPING_LOW = "-1e16:-1e10:4, 1e10:1e16:4"
+#   代价：掺杂点 12 + 10 + 本征点 = 23（[0077] 前 19）。step.conf 写 DOPING_LOW = off 关，或写自己的范围串。
+DOPING_LOW = "-1e15:-1e11:5, 1e11:1e15:5"
 TEMPERATURES = "100:900:9"            # 100,200,...,900 K，每 100 K 一个点
 SCATTERING  = ["ADP", "IMP", "POP"]   # 形变势声学 + 电离杂质 + 极性光学 "ADP", "IMP", "POP"
 # patch_scattering（2026-09-27，照搬 2D 版 gen_step14 的实现）：step.conf 覆盖散射机制。

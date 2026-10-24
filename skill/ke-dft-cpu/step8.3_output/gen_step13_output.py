@@ -43,7 +43,7 @@ from pathlib import Path
 # [SKILL_REV] 版本戳：写进 comparison_summary.txt。每次改本脚本逻辑后更新。
 #   陈旧副本已咬人三次（step12/step9b 盖戳后，step13 是最后一个没盖的），
 #   这里盖戳便于从产物反查到底跑的是哪份 skill 副本。
-_SKILL_REV = "2026-10-21-0064"   # [0064] 汇总写 κ_L 来源与胞高换算（原来只打到 stdout）   # 2026-10-21-0063r1   # [0063-r1] KL_ROOT 相对路径按 ke 技能目录、支持 ~   # 2026-10-21-0062m   # [0062] 2D 自动取 κ_L：kl/ke 胞高不同时 ×Lz/c 换到 ke 元胞口径（原来只告警，ZT 偏低）   # [0061-g/m] 汇总写 S8 / S8.4 的 ADP 简并修正（每个修正过的谷一行）   # 2026-10-21-0061   # [0061] 汇总写 ADP 简并价带修正（adp_degen_fit.json）   # 2026-10-20-0059r3   # [0059-r3] 汇总写明谷内 ODP 参数来源（DFPT q=Γ / 冻声子 / 手填）   # 2026-10-19-0060   # [0060] 汇总：可忽略机制印"—"、限制因素跳过可忽略项   # 2026-10-18-0059   # [0059] 汇总写明 IVS 参数来源（DFPT / 冻声子 / 手填）   # 2026-10-18-0057r4   # [0057-r4] 分机制图超上限处画 ▲ 延伸；mu_scan 的 AMSET 点按载流子类型连细线   # [0057-r3] mu_scan：BT2 μ 带隙中央 ±5kT 内不给、κe 相减抵消到噪声（L < 0.1 L0）不画   # [0057-r2] temperature_series 相邻温度间色带填充 + 温度色标   # [0057-r1] 本征表 %.6g 浓度与 transport.json 掺杂档按相对 1e-4 配对（mu_scan 的 AMSET 点、分机制表的浓度列）；BT2 σ/τ=0 的点不画   # [0057] transport_plots 改版：phonon_limited_<段> -> transport_models_<段>；transport_<段> -> mobility_mechanisms_<段>（只画 μ，单机制 + 总值 + DPT）；datasets/ -> temperature_series/（蓝->红、分两段）；bt2_muscan/ + amset_scan/ -> mu_scan/（μ − E_VBM）；mechanism_resolved 去核对圆圈   # [0056] phonon-limited 掺杂扫描拆两段各一个文件夹（图 + 每温度表）：carrier_tuning_1e17-1e21 / low_doping_<NLO>-1e16，不再出整轴 <M>_phonon_limited.png；r2 <M>_transport.png 同样拆两段；r3 图注写明每条曲线的散射机制与缩写、刚性能带范围外灰底；r5 tools/make_transport_plots 直接调用本函数（统一算法），transport 图 μ 列加 DPT 带边横线（只画对应半边、标注在顶部空白）   # [0054] 与文献统一命名：去 IMP = phonon-limited（<M>_phonon_limited.png，原 <M>_intrinsic.png）、含 IMP = phonon + impurity、intrinsic 只指本征载流子；<M>_mechanism_resolved_mobility（原 dilute_mobility）；本征点按去 IMP 后机制去重；η=(E_c−E_F)/kT 判 f≈0   # [0053] intrinsic_carrier/<M>_dilute_mobility.png：稀薄极限（f≈0）μ(T) 按散射机制拆开 + Matthiessen 对照（空穴取 n = p 本征点，电子取最低 n 型去 IMP）   # [0052] transport_plots/ 每次整目录重建（先删旧结果）；intrinsic_carrier/ 标注本征浓度 n_i(T)（undoped_ni.json / fermi_fix 日志）；<M>_intrinsic.png 标题写明 intrinsic = 本征散射、横轴 = 掺杂浓度   # [0047] <M>_intrinsic.png 只画基础 4 条本征曲线（此前与 <M>_transport.png 同图仅换标题）+ intrinsic CSV 同步只含 4 条   # [0046] 本征五参数套件支持 3D（读 S8 的 step8_amset + subset_*.json；_geom_3d 体胞几何、c/t=1、对角 (xx+yy+zz)/3）；3D 也出 transport_plots/<M>_transport|<M>_intrinsic.png 9x5 面板   # [0045] bt2_muscan 同时画 thickness(我们)/cell(文献) 两种口径；[0041] transport_plots/defect_equilibrium/（缺陷平衡净浓度 σ/S/PF/κe vs T）   # 2026-10-13-0040   # [0040] transport_plots/intrinsic_carrier/（未掺杂本征载流子 σ/S/PF/κe vs T）；图例/文件名一律用实际机制组合 amset_<机制>；2026-10-13-0039   # [0039] transport_plots/datasets/：每个数据集单独一张 σ/S/PF/κe 图 + csv； [0038] 本征/子集图读 subset_*.json（SUBSETS）；[0036] transport_plots 加 bt2_muscan/ + amset_scan/ 两个扫描图子文件夹；[0035] transport_plots 合并 + τ 对比（tau/）
+_SKILL_REV = "2026-10-24-0077"   # [0077] 掺杂两段改 1e16–1e21（掺杂）/ NLO–1e15（近本征）；2D 浓度轴按层厚 t 的三维等效浓度（n_cell×c/t）分段画图   # 2026-10-21-0064   # [0064] 汇总写 κ_L 来源与胞高换算（原来只打到 stdout）   # 2026-10-21-0063r1   # [0063-r1] KL_ROOT 相对路径按 ke 技能目录、支持 ~   # 2026-10-21-0062m   # [0062] 2D 自动取 κ_L：kl/ke 胞高不同时 ×Lz/c 换到 ke 元胞口径（原来只告警，ZT 偏低）   # [0061-g/m] 汇总写 S8 / S8.4 的 ADP 简并修正（每个修正过的谷一行）   # 2026-10-21-0061   # [0061] 汇总写 ADP 简并价带修正（adp_degen_fit.json）   # 2026-10-20-0059r3   # [0059-r3] 汇总写明谷内 ODP 参数来源（DFPT q=Γ / 冻声子 / 手填）   # 2026-10-19-0060   # [0060] 汇总：可忽略机制印"—"、限制因素跳过可忽略项   # 2026-10-18-0059   # [0059] 汇总写明 IVS 参数来源（DFPT / 冻声子 / 手填）   # 2026-10-18-0057r4   # [0057-r4] 分机制图超上限处画 ▲ 延伸；mu_scan 的 AMSET 点按载流子类型连细线   # [0057-r3] mu_scan：BT2 μ 带隙中央 ±5kT 内不给、κe 相减抵消到噪声（L < 0.1 L0）不画   # [0057-r2] temperature_series 相邻温度间色带填充 + 温度色标   # [0057-r1] 本征表 %.6g 浓度与 transport.json 掺杂档按相对 1e-4 配对（mu_scan 的 AMSET 点、分机制表的浓度列）；BT2 σ/τ=0 的点不画   # [0057] transport_plots 改版：phonon_limited_<段> -> transport_models_<段>；transport_<段> -> mobility_mechanisms_<段>（只画 μ，单机制 + 总值 + DPT）；datasets/ -> temperature_series/（蓝->红、分两段）；bt2_muscan/ + amset_scan/ -> mu_scan/（μ − E_VBM）；mechanism_resolved 去核对圆圈   # [0056] phonon-limited 掺杂扫描拆两段各一个文件夹（图 + 每温度表）：carrier_tuning_1e17-1e21 / low_doping_<NLO>-1e16，不再出整轴 <M>_phonon_limited.png；r2 <M>_transport.png 同样拆两段；r3 图注写明每条曲线的散射机制与缩写、刚性能带范围外灰底；r5 tools/make_transport_plots 直接调用本函数（统一算法），transport 图 μ 列加 DPT 带边横线（只画对应半边、标注在顶部空白）   # [0054] 与文献统一命名：去 IMP = phonon-limited（<M>_phonon_limited.png，原 <M>_intrinsic.png）、含 IMP = phonon + impurity、intrinsic 只指本征载流子；<M>_mechanism_resolved_mobility（原 dilute_mobility）；本征点按去 IMP 后机制去重；η=(E_c−E_F)/kT 判 f≈0   # [0053] intrinsic_carrier/<M>_dilute_mobility.png：稀薄极限（f≈0）μ(T) 按散射机制拆开 + Matthiessen 对照（空穴取 n = p 本征点，电子取最低 n 型去 IMP）   # [0052] transport_plots/ 每次整目录重建（先删旧结果）；intrinsic_carrier/ 标注本征浓度 n_i(T)（undoped_ni.json / fermi_fix 日志）；<M>_intrinsic.png 标题写明 intrinsic = 本征散射、横轴 = 掺杂浓度   # [0047] <M>_intrinsic.png 只画基础 4 条本征曲线（此前与 <M>_transport.png 同图仅换标题）+ intrinsic CSV 同步只含 4 条   # [0046] 本征五参数套件支持 3D（读 S8 的 step8_amset + subset_*.json；_geom_3d 体胞几何、c/t=1、对角 (xx+yy+zz)/3）；3D 也出 transport_plots/<M>_transport|<M>_intrinsic.png 9x5 面板   # [0045] bt2_muscan 同时画 thickness(我们)/cell(文献) 两种口径；[0041] transport_plots/defect_equilibrium/（缺陷平衡净浓度 σ/S/PF/κe vs T）   # 2026-10-13-0040   # [0040] transport_plots/intrinsic_carrier/（未掺杂本征载流子 σ/S/PF/κe vs T）；图例/文件名一律用实际机制组合 amset_<机制>；2026-10-13-0039   # [0039] transport_plots/datasets/：每个数据集单独一张 σ/S/PF/κe 图 + csv； [0038] 本征/子集图读 subset_*.json（SUBSETS）；[0036] transport_plots 加 bt2_muscan/ + amset_scan/ 两个扫描图子文件夹；[0035] transport_plots 合并 + τ 对比（tau/）
 #   bump 记录：2026-10-11-0035 —— transport_plots 合并：intrinsic 图并入 transport 图（4 条数据集
 #   overall / intrinsic / ADP only / BT2xDPT-tau），不再单独出 <M>_intrinsic*.{png,csv}，
 #   只留 <M>_transport.png + 每温度 CSV + <M>_params_<T>K.csv。
@@ -3208,28 +3208,54 @@ def write_mechanism_resolved_plot(cwd, plots, M, is_2d):
     return True
 
 
-def _doping_axis(cwd, is_2d, n_top=1e21):
-    """[0055] transport_plots 正负对数浓度轴（元胞口径 cm^-3）：(原点 NLO, 显示下限 NFLOOR, 刻度位置, 刻度文字)。
-    AMSET 掺杂网格最小非零 |n| ≥ 1e17 时与旧版逐字相同（原点 1e17、下限 5e17、±4 十年逐个刻度）；
-    有 DOPING_LOW 低浓度段时原点下探到最小点所在十年、全部 AMSET 点都画，十年数 > 4 时每 2 个十年一个刻度。"""
+def _n_scale(cwd, is_2d):
+    """[0077] transport_plots 浓度轴的口径 -> (因子, 几何)：轴上的 n = n_cell × 因子。
+    3D：元胞 = 体浓度，因子 1。2D：三维等效浓度（按层厚 t，= 文献口径 n_lit = n_2D/t），因子 c/t ——
+    与 S8.4 出厂掺杂网格（三维等效 1e11–1e15 / 1e16–1e21）、以及图里按层厚归一的 σ、κe 同一口径。
+    2D 读不到几何（2d_correction.json）时退回元胞口径（因子 1）。"""
+    try:
+        geo = _geom_2d(cwd) if is_2d else _geom_3d(cwd)
+    except Exception:                                          # noqa: BLE001
+        geo = None
+    fac = float(geo["c_over_t"]) if (is_2d and geo and geo.get("c_over_t")) else 1.0
+    return fac, geo
+
+
+def _amset_nz(cwd, is_2d, nfac=1.0):
+    """AMSET 掺杂网格的非零 |n|（乘口径因子）。"""
     j = _load_json(Path(cwd) / (AMSET2D_DIR if is_2d else AMSET_DIR) / "transport.json") or {}
     try:
-        nz = [abs(float(x)) for x in (_unwrap(j.get("doping")) or []) if float(x) != 0.0]
+        return [abs(float(x)) * nfac for x in (_unwrap(j.get("doping")) or []) if float(x) != 0.0]
     except (TypeError, ValueError):
-        nz = []
-    if nz and min(nz) < 1e17:
-        NLO = 10.0 ** math.floor(math.log10(min(nz)) + 1e-9)
-        NFLOOR = NLO * 0.999
+        return []
+
+
+def _doping_top(cwd, is_2d, nfac=1.0):
+    """[0077] 浓度轴上端：出厂 1e21；网格超出 1e21（旧 2D 网格换成三维等效最大 ~1.5e21）时取上一个十年，点不被截掉。"""
+    nz = _amset_nz(cwd, is_2d, nfac)
+    if nz and max(nz) > 1e21 * 1.01:
+        return 10.0 ** math.ceil(math.log10(max(nz)) - 1e-3)
+    return 1e21
+
+
+def _doping_axis(cwd, is_2d, n_top=1e21, nfac=1.0):
+    """[0055] transport_plots 正负对数浓度轴：(原点 NLO, 显示下限 NFLOOR, 刻度位置, 刻度文字)。
+    浓度 = AMSET 元胞口径 × nfac（[0077] 2D 传 c/t = 三维等效；3D 为 1）。
+    原点 = 最小点所在十年（没有低浓度段时 = 掺杂段下限 PL_TUNE_LO），十年数 > 4 时每 2 个十年一个刻度。"""
+    nz = _amset_nz(cwd, is_2d, nfac)
+    if nz and min(nz) < PL_TUNE_LO * 0.999:
+        NLO = 10.0 ** math.floor(math.log10(min(nz)) + 0.01)   # +0.01：换算舍入（如 0.99995e11）仍归 1e11 这一档
     else:
-        NLO, NFLOOR = 1e17, 5e17
+        NLO = PL_TUNE_LO
+    NFLOOR = NLO * 0.999
     XT, XTL = _axis_ticks(NLO, n_top)
     return NLO, NFLOOR, XT, XTL
 
 
 def _axis_ticks(NLO, n_top):
-    """正负对数浓度轴的刻度：原点 NLO、两端 n_top；十年数 > 4 时每 2 个十年一个刻度。"""
+    """正负对数浓度轴的刻度：原点 NLO、两端 n_top；十年数 > 5 时每 2 个十年一个刻度（[0077] 掺杂段 1e16–1e21 是 5 个十年）。"""
     ndec = int(round(math.log10(n_top / NLO)))
-    step = 1 if ndec <= 4 else 2
+    step = 1 if ndec <= 5 else 2
     pos = list(range(ndec, -1, -step))[::-1]
     if pos[-1] != ndec:
         pos.append(ndec)
@@ -3241,17 +3267,17 @@ def _axis_ticks(NLO, n_top):
     return XT, XTL
 
 
-# [0056] 2026-10-17 用户定：phonon-limited 掺杂扫描按浓度拆两段，各自一个文件夹（图 + 每温度表）：
-#   1e17–1e21 = 载流子调控区（实际掺杂能达到的范围）；NLO–1e16 = 低浓度段（DOPING_LOW，非简并/近本征）。
+# [0056] 2026-10-17 用户定：phonon-limited 掺杂扫描按浓度拆两段，各自一个文件夹（图 + 每温度表）。
 #   以前一张图把两段挤在同一根 ±轴上（原点 1e9），载流子调控区只占两端一小截。
-#   出厂网格两段之间（1e16, 1e17）没有点（3D DOPING_LOW 止于 1e16、主网格起于 1e17；2D 换算后 ~2.9e15 / ~2.9e17）。
-PL_TUNE_LO = 1e17
-PL_LOW_HI = 1e16
+# [0077] 2026-10-24 用户定：两段改为 1e16–1e21 = 载流子调控区（掺杂）、NLO–1e15 = 低浓度段（近本征），
+#   与 S8 / S8.4 的出厂网格（每十年一个点）一致；2D 按三维等效浓度（按层厚 t）分段（_n_scale）。
+PL_TUNE_LO = 1e16
+PL_LOW_HI = 1e15
 
 
 def _phonon_limited_ranges(NLO, n_top=1e21):
     """[0056] (文件夹/文件名标签, 下限, 上限, 刻度, 刻度文字, S 纵轴半宽)，上下限都含端点；
-    没有低浓度段时只有载流子调控区一段。低段 [NLO, 1e16]（用户 2026-10-17 定），高段 [1e17, n_top]
+    没有低浓度段时只有载流子调控区一段。[0077] 低段 [NLO, 1e15]，高段 [1e16, n_top]
     （[0056-r3] 以前高段上限是 ∞，轴外 > 1e21 的点也画进去、贴在边框外）。"""
     out = []
     xt, xtl = _axis_ticks(PL_TUNE_LO, n_top)
@@ -3643,7 +3669,7 @@ def write_mu_scan(cwd, out, plots, M, is_2d):
 def write_transport_plots(cwd, out, is_2d, plots=None, M=None):
     """[0033]-[0035] 规定格式绘图输出（图 + 同目录数据）到【材料根目录】的 transport_plots/：
       transport_models_<段>/<M>_transport_models_<段名>.png + _<T>K.csv   [0056][0057] 按浓度两段各一个文件夹：
-                                               carrier_tuning_1e17-1e21 / low_doping_<NLO>-1e16；9温度(行)x5参数
+                                               carrier_tuning_1e16-1e21 / low_doping_<NLO>-1e15；9温度(行)x5参数
                                                (列 mu/S/sigma/PF/kappa_e)；基础 4 条（overall / 去 IMP / ADP only /
                                                BT2xDPT-tau）；[0057] 前叫 phonon_limited_<段>
       mobility_mechanisms_<段>/<M>_mobility_mechanisms_<段名>.png + _<T>K.csv   [0057] 只画 μ（每温度一个面板）：
@@ -3679,8 +3705,10 @@ def write_transport_plots(cwd, out, is_2d, plots=None, M=None):
         plots = Path(plots)
         plots.mkdir(parents=True, exist_ok=True)
     M = M or cwd.parent.name
-    NLO, NFLOOR, XT, XTL = _doping_axis(cwd, is_2d)   # [0055] 浓度轴跟着 AMSET 实际掺杂网格（有 DOPING_LOW 时下探）
-    SLIM = 1000.0 if NLO >= 1e17 else 2500.0          # [0055] 低浓度段非简并 S 可到 ~2000 μV/K（k/e·ln(N_c/n)）
+    NFAC = _n_scale(cwd, is_2d)[0]                  # [0077] 浓度轴口径：2D 三维等效（n_cell × c/t），3D 元胞
+    N_TOP = _doping_top(cwd, is_2d, NFAC)
+    NLO, NFLOOR, XT, XTL = _doping_axis(cwd, is_2d, N_TOP, NFAC)   # [0055] 浓度轴跟着 AMSET 实际掺杂网格
+    SLIM = 1000.0 if NLO >= PL_TUNE_LO else 2500.0          # [0055] 低浓度段非简并 S 可到 ~2000 μV/K（k/e·ln(N_c/n)）
     # [0052] 先删旧结果：transport_plots/ 是 S8.3 独占的输出目录，每次整目录重建。以前只覆盖同名文件，
     #   温度网格 / 数据集 / 子文件夹变了以后，上一轮的 <T>K.csv、旧格式长表、旧子目录会一直留着冒充当前结果。
     if plots.name == "transport_plots":
@@ -3735,6 +3763,8 @@ def write_transport_plots(cwd, out, is_2d, plots=None, M=None):
         rows = list(csv.DictReader([l for l in itab.read_text(errors="ignore").splitlines()
                                     if l.strip() and not l.startswith("#")]))
         temps = sorted(set(float(r["T_K"]) for r in rows))
+        for r in rows:                                   # [0077] 轴上的浓度（2D 三维等效 / 3D 元胞），只用于画图和分段
+            r["_nax"] = fnum(r["n_cell_cm-3"]) * NFAC
         cols = ["T_K", "dataset", "type", "n_cell_cm-3", "n_2D_cm-2", "n_lit_cm-3",
                 "carriers_per_cell", "carriers_per_atom", "in_interpret_range",
                 "S_uV/K", "sigma_S/m", "PF_W/mK2", "kappa_e_W/mK", "mu_cm2/Vs", "flag"]
@@ -3812,7 +3842,7 @@ def write_transport_plots(cwd, out, is_2d, plots=None, M=None):
             bad = {}
             for r in rows:
                 if r.get("in_interpret_range") == "NO":
-                    n0 = fnum(r["n_cell_cm-3"])
+                    n0 = r["_nax"]
                     if n0 == n0 and _in_rng(np.array([n0]), rng)[0]:
                         bad[n0 < 0] = min(bad.get(n0 < 0, abs(n0)), abs(n0))
             return bad
@@ -3825,6 +3855,9 @@ def write_transport_plots(cwd, out, is_2d, plots=None, M=None):
                            color="0.85", alpha=0.6, lw=0, zorder=0)
 
         def _x_caption():
+            if NFAC != 1.0:                                  # [0077] 2D：三维等效浓度
+                return ("x: doping n (cm$^{-3}$), 3D-equivalent per layer thickness t = n_cell x c/t (c/t = %.3f;"
+                        " CSV: n_cell, n_2D); left = n-type (electrons), right = p-type (holes)" % NFAC)
             return ("x: doping n_cell (cm$^{-3}$, AMSET cell volume%s); left = n-type (electrons),"
                     " right = p-type (holes)" % ((" incl. vacuum; literature n = n_cell x c/t, c/t = %.3f"
                                                   % _geo["c_over_t"]) if (_geo and not _geo.get("is_3d")) else ""))
@@ -3847,7 +3880,7 @@ def write_transport_plots(cwd, out, is_2d, plots=None, M=None):
                         dd = [r for r in sub if r["dataset"] == ds]
                         if not dd:
                             continue
-                        n = np.array([fnum(r["n_cell_cm-3"]) for r in dd])
+                        n = np.array([r["_nax"] for r in dd])
                         y = np.array([fnum(r[col]) for r in dd])
                         keep = _in_rng(n, rng)
                         seg(ax, n[keep], y[keep], nlo, color=color, lw=1.3, ls=ls, marker=mk, ms=3.2)
@@ -3914,9 +3947,9 @@ def write_transport_plots(cwd, out, is_2d, plots=None, M=None):
                 ax.grid(alpha=0.25, which="major", lw=0.4)
                 ax.set_title("%d K" % T, fontsize=10, fontweight="bold")
                 _shade(ax, _bad, nlo, _xe)
-                sub = [r for r in mm if abs(r["T_K"] - T) < 1e-6 and _in_rng(np.array([r["n_cell_cm-3"]]), rng)[0]]
+                sub = [r for r in mm if abs(r["T_K"] - T) < 1e-6 and _in_rng(np.array([r["_nax"]]), rng)[0]]
                 tsub = [r for r in rows if abs(float(r["T_K"]) - T) < 1e-6]
-                n = np.array([r["n_cell_cm-3"] for r in sub], float)
+                n = np.array([r["_nax"] for r in sub], float)
                 yt = np.array([np.nan if r["total"] is None else r["total"] for r in sub], float)
                 ref = [v for v in yt if v == v] + [v for v in (fnum(r.get("mu_cm2/Vs")) for r in tsub
                                                                if r["dataset"] in ("DPT", "DPT_mv")) if v == v and v > 0]
@@ -3982,7 +4015,7 @@ def write_transport_plots(cwd, out, is_2d, plots=None, M=None):
                     w = csv.writer(fh)
                     w.writerow(_hdr)
                     for r in sorted((r for r in mm if abs(r["T_K"] - T) < 1e-6
-                                     and _in_rng(np.array([r["n_cell_cm-3"]]), rng)[0]), key=lambda r: r["n_cell_cm-3"]):
+                                     and _in_rng(np.array([r["_nax"]]), rng)[0]), key=lambda r: r["_nax"]):
                         typ = "n" if r["n_cell_cm-3"] < 0 else "p"
                         _dr = next((x for x in _dose if abs(float(x["T_K"]) - T) < 1e-6
                                     and _same_n(fnum(x["n_cell_cm-3"]), r["n_cell_cm-3"])), {})
@@ -3998,8 +4031,8 @@ def write_transport_plots(cwd, out, is_2d, plots=None, M=None):
         #   （未掺杂，n = p = n_i，intrinsic_carrier/）。
         # [0056] 2026-10-17 用户定：按浓度拆成两段、各一个文件夹（图 + 每温度表），不再出整轴的
         #   <M>_phonon_limited.png / <M>_transport.png（及其 _data_<T>K.csv）：
-        #   {transport,phonon_limited}_carrier_tuning_1e17-1e21/  载流子调控区
-        #   {transport,phonon_limited}_low_doping_<NLO>-1e16/     低浓度段（有 DOPING_LOW 才有）
+        #   {transport,phonon_limited}_carrier_tuning_1e16-1e21/  载流子调控区（[0077] 前 1e17-1e21）
+        #   {transport,phonon_limited}_low_doping_<NLO>-1e15/     低浓度段（有 DOPING_LOW 才有；[0077] 前止于 1e16）
         #   transport = 基础 4 条 + 本轮机制对照、表含全数据集；phonon_limited = 只基础 4 条。
         _what = {"carrier_tuning": "carrier tuning (doping) range", "low_doping": "low-doping range (non-degenerate)"}
         # [0057] 2026-10-18 用户定：
@@ -4008,7 +4041,7 @@ def write_transport_plots(cwd, out, is_2d, plots=None, M=None):
         #                               + DPT 带边横线；不再画 phonon-limited 线、不再重复 S/σ/PF/κe 四列
         _title = ("%s  transport vs doping, %s  n = %s - %s cm$^{-3}$  %s\n"
                   "4 models: phonon + impurity / phonon-limited (no IMP) / ADP only (AMSET)  vs  BT2 x DPT tau")
-        for rng in _phonon_limited_ranges(NLO):
+        for rng in _phonon_limited_ranges(NLO, N_TOP):
             _tag = rng[0].split("_1e")[0]
             _pdir = plots / ("%s_%s" % (MODELS_PRE, rng[0]))
             _pdir.mkdir(exist_ok=True)
@@ -4020,14 +4053,16 @@ def write_transport_plots(cwd, out, is_2d, plots=None, M=None):
                     w = csv.writer(fh); w.writerow(cols)
                     for r in rows:
                         if (abs(float(r["T_K"]) - T) > 1e-6 or r["dataset"] not in _base_names
-                                or not _in_rng(np.array([fnum(r["n_cell_cm-3"])]), rng)[0]):
+                                or not _in_rng(np.array([r["_nax"]]), rng)[0]):
                             continue
                         w.writerow([r.get(c, "") for c in cols])
             print("[plots] %s/%s_%s_%s.png + _<T>K.csv x%d" % (_pdir.name, M, MODELS_PRE, _tag, len(temps)))
         try:
             _mm = mobility_mechanism_rows(cwd, is_2d)
+            for r in _mm:
+                r["_nax"] = r["n_cell_cm-3"] * NFAC                 # [0077] 同主图口径
             if _mm:
-                for rng in _phonon_limited_ranges(NLO):
+                for rng in _phonon_limited_ranges(NLO, N_TOP):
                     _render_mech(_mm, rng)
             else:
                 print("[..] mobility_mechanisms 跳过：transport.json 没有分机制迁移率")
@@ -4042,7 +4077,7 @@ def write_transport_plots(cwd, out, is_2d, plots=None, M=None):
             （半透明），整组读成一条从蓝（低温）到红（高温）渐变的带子；n 型、p 型两支分开画。"""
             byT = []
             for T in temps:
-                dd = {fnum(r["n_cell_cm-3"]): fnum(r[col]) for r in dd_r if abs(float(r["T_K"]) - T) < 1e-6}
+                dd = {r["_nax"]: fnum(r[col]) for r in dd_r if abs(float(r["T_K"]) - T) < 1e-6}
                 byT.append(dd)
             for neg in (True, False):
                 ns = sorted({n for d in byT for n in d if (n < 0) == neg and n == n})
@@ -4091,10 +4126,10 @@ def write_transport_plots(cwd, out, is_2d, plots=None, M=None):
                 if not dd_all:
                     continue
                 _fn = _ds_file(ds, _set_meta)       # [0040] 文件名 = 实际机制组合（如 ADP+POP+ODP）
-                for rng in _phonon_limited_ranges(NLO):
+                for rng in _phonon_limited_ranges(NLO, N_TOP):
                     nlo, xt, xtl, slim = rng[1], rng[3], rng[4], rng[5]
                     _tag = rng[0].split("_1e")[0]
-                    dd_r = [r for r in dd_all if _in_rng(np.array([fnum(r["n_cell_cm-3"])]), rng)[0]]
+                    dd_r = [r for r in dd_all if _in_rng(np.array([r["_nax"]]), rng)[0]]
                     if not dd_r:
                         continue
                     _bad = _bad_of(rng)
