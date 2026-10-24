@@ -810,6 +810,80 @@ def metal_status(mat_dir):
 METAL_GROUPS_OFF = ("amset3d", "dpt", "odp_frozen", "ivs_frozen", "output_compare")
 
 
+# [0076] 2026-10-24：窄隙半导体被 AMSET 判成金属。amset.electronic_structure.common.get_band_structure：VASP 的
+#   E-fermi 落进某条带时（窄隙 + 展宽常见）改用 pymatgen eigenvalue_band_properties 的"带隙"；后者按占据数
+#   > occu_tol（1e-8）找 VBM —— SIGMA=0.05、带隙 0.077 eV 时导带底的高斯尾巴占据 ~1e-2，"VBM"落进导带，
+#   E_F 被放到导带里 -> is_metal=True。后果不只是 S7.1 写 metal.json（没有 ADP 带边 / DPT）：
+#   parse_calculation 的 get_reference_energy 对"金属"用 E_F 当参考、不用芯能级，deformation.h5 的形变势参考错了。
+#   这里按带指标法（每个 k 上数满 NELECT 个电子）重判：有隙就把 E_F 放回带隙中间；真金属 / 半金属不动。
+EFERMI_FIX_GAP_MIN = 1e-3     # eV：带指标法带隙大于它才算有隙
+
+
+def bandindex_gap(bands, nelect, ispin=1, noncollinear=False):
+    """带指标法带隙：bands = {自旋: (nbands, nk) 本征值 eV}。每个 k 上按能量从低到高填满 nocc 个态
+    （ISPIN=1 每态 2 个电子；ISPIN=2 两个自旋道合起来、非共线：每态 1 个）。
+    -> (gap, vbm, cbm)；NELECT 不是整数 / 带数不够 -> (None, None, None)。gap ≤ 0 = 带重叠（金属 / 半金属）。"""
+    import numpy as np
+    try:
+        per = 2.0 if (int(ispin) == 1 and not noncollinear) else 1.0
+        nocc = float(nelect) / per
+    except (TypeError, ValueError):
+        return None, None, None
+    if abs(nocc - round(nocc)) > 1e-6 or round(nocc) < 1:
+        return None, None, None
+    nocc = int(round(nocc))
+    arrs = [np.asarray(v, float) for v in bands.values()]
+    if not arrs:
+        return None, None, None
+    E = np.concatenate(arrs, axis=0) if (int(ispin) == 2 and not noncollinear) else arrs[0]
+    if E.ndim != 2 or E.shape[0] <= nocc:
+        return None, None, None
+    S = np.sort(E, axis=0)
+    vbm, cbm = float(S[nocc - 1].max()), float(S[nocc].min())
+    return cbm - vbm, vbm, cbm
+
+
+def amset_efermi_fix(io_mod, log=print):
+    """[0076] 包一层 io_mod.get_band_structure（amset.deformation.io 的，parse_calculation 用它）：AMSET 判金属而
+    带指标法有隙 -> E_F 放回带隙中间（is_metal / get_reference_energy / get_ibands 随之按半导体）。幂等。
+    同一进程里有的构型有隙、有的没隙（形变把带隙关上了）-> SystemExit：两种参考（芯能级 / E_F）混着减没有意义。"""
+    orig = io_mod.get_band_structure
+    if getattr(orig, "_efermi_fix", False):
+        return
+    seen = []
+
+    def get_band_structure(vasprun, *a, **kw):
+        bs = orig(vasprun, *a, **kw)
+        metal = bool(bs.is_metal())
+        get_band_structure.last = {"bandindex_gap_eV": None, "efermi_fixed": False}
+        if metal:
+            p = getattr(vasprun, "parameters", None) or {}
+            gap, vbm, cbm = bandindex_gap(bs.bands, p.get("NELECT"), p.get("ISPIN", 1),
+                                          bool(p.get("LNONCOLLINEAR", False)))
+            get_band_structure.last["bandindex_gap_eV"] = gap
+            if gap is not None and gap > EFERMI_FIX_GAP_MIN:
+                old = float(bs.efermi)
+                bs.efermi = 0.5 * (vbm + cbm)
+                metal = bool(bs.is_metal())
+                get_band_structure.last["efermi_fixed"] = True
+                log("[efermi_fix] 带指标法带隙 %.4f eV（VBM %.4f / CBM %.4f eV）：AMSET 的 E_F %.4f eV 落在能带里"
+                    "（窄隙 + 展宽），改放带隙中间 %.4f eV -> 按半导体处理（形变势用芯能级参考）"
+                    % (gap, vbm, cbm, old, bs.efermi))
+            else:
+                log("[efermi_fix] 带指标法带隙 %s：确实是金属 / 半金属，不改 E_F"
+                    % ("%.4f eV" % gap if gap is not None else "算不出（NELECT 非整数或带数不够）"))
+        seen.append(metal)
+        if len(set(seen)) > 1:
+            raise SystemExit("[efermi_fix][ERROR] 构型之间金属 / 半导体判定不一致（%s）：形变把带隙关上了，"
+                             "AMSET 对两类构型用不同的参考能级（E_F / 芯能级），deformation.h5 没有意义。"
+                             "减小 S7 的应变幅度，或确认体系是不是半金属" % "/".join("金属" if x else "有隙" for x in seen))
+        return bs
+
+    get_band_structure._efermi_fix = True
+    get_band_structure.last = {}               # 最近一次：{"bandindex_gap_eV", "efermi_fixed"}（S7.1 写 metal.json 用）
+    io_mod.get_band_structure = get_band_structure
+
+
 def metal_not_applicable(mat_dir, step_label, why):
     """S8.2 / S8.3 这类半导体专用步骤遇到金属：打印原因 + 关组办法，退出（rc!=0，不写完成标记）。"""
     m = metal_status(mat_dir)

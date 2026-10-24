@@ -317,6 +317,14 @@ step8.x 的 `_SKILL_REV` 写进 comparison_summary.txt。改脚本即提交 GitH
 有效质量、按掺杂浓度定费米能）。金属没有带边，费米面上是简并电子气，散射由整个费米面上的电声耦合决定。
 所以 S7.1 判金属后写 `metal.json`、不写 `band_edges.json`；S8.2 / S8.3 遇到它直接报"不适用"。
 
+**金属怎么判（[0076]，2026-10-24）**：按**带指标法**——每个 k 上填满 NELECT 个电子，min_k E[nocc+1] − max_k E[nocc] ≤ 0
+（带重叠）才是金属 / 半金属。以前直接用 AMSET/pymatgen 的 `is_metal`：VASP 的 E-fermi 落进某条带时（窄隙 + 展宽常见），
+AMSET 改用按占据数 > 1e-8 定的"带隙"，SIGMA = 0.05、带隙 0.077 eV 时导带底的高斯尾巴占据约 1e-2，"VBM"落进导带、
+E_F 被放进导带，**窄隙半导体被判成金属**；而且 `parse_calculation` 对"金属"拿 E_F 当形变势参考、不用芯能级，
+deformation.h5 的参考跟着错。现在 S7.1 的两处 AMSET 调用（deform read 与带边段）都打 `ke_common.amset_efermi_fix`：
+带指标法有隙就把 E_F 放回带隙中间（日志 `[efermi_fix]`），真金属不动；构型之间判定不一致（形变把带隙关上了）直接报错。
+`metal.json` 记 `bandindex_gap_eV`。已按旧判据写了 `metal.json` 的窄隙材料：retry S7.1（不用重算 S7）。
+
 **文献里不依赖实验数据的做法（由严到宽）**：
 
 1. **完整第一性原理电声 + 玻尔兹曼方程**（现在的标准做法）：DFPT 算电声矩阵元，Wannier 插值到细网格，

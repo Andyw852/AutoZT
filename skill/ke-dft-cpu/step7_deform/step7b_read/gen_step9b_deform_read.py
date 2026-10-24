@@ -86,6 +86,14 @@ T.check_calculation = check_calculation
 #   AMSET 的 read() 在函数体里 import 这几个函数，所以改模块属性即可；算不出只告警，对称化退回置换子群。
 import os as _os
 sys.path.append(_os.path.dirname(_os.getcwd()))         # 项目根（gen_need 的 dp_symmetrize.py 在这；append 不遮蔽别的模块）
+# [0076] 窄隙半导体别被 AMSET 判成金属（判成金属就拿 E_F 当形变势参考）：带指标法重判、E_F 放回带隙中间
+#   （ke_common.amset_efermi_fix；下面带边段的 parse_calculation 打同一个补丁，两处的 E_F / 能带窗口一致）
+try:
+    import ke_common as _KC
+    import amset.deformation.io as _IO0
+    _KC.amset_efermi_fix(_IO0, log=lambda m: print(m, flush=True))
+except ImportError as _e:
+    print("[efermi_fix][WARN] 不能 import ke_common（%s）：窄隙半导体可能被判成金属" % _e, flush=True)
 try:
     import dp_symmetrize as _DPS
     import amset.deformation.potentials as _PT
@@ -558,6 +566,9 @@ from pathlib import Path as _P
 # [PATCH-IONRELAX] 共用 ke_common.resolve_strain_pairs（与 gen_step9_deform.py 单一真源）
 sys.path.insert(0, str(_P.cwd().resolve().parent))   # 项目根（本步 cwd 是 step7_deform）
 import ke_common
+import amset.deformation.io as _IO0
+ke_common.amset_efermi_fix(_IO0)                      # [0076] 与上面 deform read 同一个补丁（E_F / 能带窗口一致）
+parse_calculation = _IO0.parse_calculation
 outdir = sys.argv[1]
 # [V187] 维度由外层传入（argv[3]）：只决定 E1_iso_eV 取面内两项还是三个对角；真空对齐段仍自己读 step1
 _DIM = (sys.argv[3] if len(sys.argv) > 3 else "").lower() or None
@@ -639,8 +650,12 @@ def _is_metal(obj):
 if _is_metal(bs):
     # [metal_mode] 2026-10-17：金属不再 raise（那样 S7.1 判 FAIL，S8.1 的金属模式也被卡住）。
     #   写 metal.json（金属判定的唯一来源，S8.1/S8.2/S8.3 读它），不写 band_edges.json，以退出码 3 告诉外层。
+    #   [0076] 走到这里时 amset_efermi_fix 已按带指标法重判过：带隙 ≤ 0（带重叠）才是金属
+    _bg = (getattr(_IO0.get_band_structure, "last", None) or {}).get("bandindex_gap_eV")
     json.dump({"is_metal": True,
-               "reason": "pymatgen is_metal=True（undeformed bandstructure 无 VBM/CBM）",
+               "reason": ("带指标法带隙 %s（undeformed，S7 网格）：带重叠 -> 金属 / 半金属"
+                          % ("%.4f eV" % _bg if _bg is not None else "算不出")),
+               "bandindex_gap_eV": _bg,
                "efermi_eV": float(getattr(bs, "efermi", float("nan"))),
                "source": "step7_deform/undeformed（S7 网格，S1 泛函）",
                "skill_rev": sys.argv[2] if len(sys.argv) > 2 else "UNKNOWN",
