@@ -130,7 +130,8 @@ steps:
      # dp_symmetrize.py（V121，2026-09-29）：形变势 D(k) 按 Laue 群对称化，两段嵌入脚本 import 它。
      #   V188（2026-10-14）：amset deform read 的包装也 import 它，同时写带符号中心差分 deformation*_signed.h5。
      # [patch_ionrelax_locpot] 2026-10-15：本步读 step.conf 的 DEFORM_REF（显式 core 才允许不生成真空口径 h5）。
-     gen: gen_step9b_deform_read.py, gen_need: [stepconf.py, step.conf, ke_common.py, nspin_norm_fix.py, dp_symmetrize.py, deform_wave.py], fetch_all: true,   # [0061-m] deform_wave.py build -> deformation_matrix.h5
+     # [0076] dim_common.py：ke_common 顶层 import 它（以前靠别的步骤推过去的那份）；amset 包装与带边段都 import ke_common（efermi_fix）
+     gen: gen_step9b_deform_read.py, gen_need: [stepconf.py, step.conf, ke_common.py, dim_common.py, nspin_norm_fix.py, dp_symmetrize.py, deform_wave.py], fetch_all: true,   # [0061-m] deform_wave.py build -> deformation_matrix.h5
      needs: ["step7_deform"]}
 
 

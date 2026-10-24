@@ -75,13 +75,18 @@ def test_s71_metal_block_writes_marker_and_exits_3(tmp_path):
 
         def is_metal(self):
             return True
+    def _gbs():
+        pass
+    _gbs.last = {"bandindex_gap_eV": -0.0765, "efermi_fixed": False}            # [0076] efermi_fix 记下的带指标法带隙
     ns = {"json": json, "sys": type("S", (), {"argv": ["x", str(tmp_path), "rev-1"], "exit": sys.exit}),
-          "outdir": str(tmp_path), "bs": BS(), "_is_metal": lambda b: b.is_metal()}
+          "outdir": str(tmp_path), "bs": BS(), "_is_metal": lambda b: b.is_metal(),
+          "_IO0": type("IO", (), {"get_band_structure": staticmethod(_gbs)})}
     with pytest.raises(SystemExit) as e:
         exec(compile(ast.Module(body=[node], type_ignores=[]), "be_code", "exec"), ns)
     assert e.value.code == 3
     rec = json.loads((tmp_path / "metal.json").read_text())
     assert rec["is_metal"] is True and rec["efermi_eV"] == 1.25 and rec["skill_rev"] == "rev-1"
+    assert rec["bandindex_gap_eV"] == -0.0765 and "-0.0765 eV" in rec["reason"]
 
 
 def test_s71_outer_handles_metal():
@@ -171,3 +176,84 @@ def test_s83_refuses_metal(tmp_path):
         pytest.skip("S8.3 依赖的包不在本环境：%s" % r.stderr.strip().splitlines()[-1])
     assert r.returncode != 0 and "S8.3_cmp 不适用于金属" in r.stderr
     assert "output_compare: false" in r.stderr
+
+
+# ------------------------------------------------------------------ [0076] 窄隙半导体别被判成金属
+class _BS:
+    """pymatgen BandStructure 的最小替身：bands {自旋: (nb, nk)}、efermi、is_metal()（与 pymatgen 同一判据）。"""
+
+    def __init__(self, bands, efermi):
+        import numpy as np
+        self.bands = {k: np.asarray(v, float) for k, v in bands.items()}
+        self.efermi = efermi
+
+    def is_metal(self, tol=1e-4):
+        import numpy as np
+        return any(np.any(b - self.efermi < -tol) and np.any(b - self.efermi > tol)
+                   for v in self.bands.values() for b in v)
+
+
+def _vr(nelect, ispin=1, ncl=False):
+    return type("VR", (), {"parameters": {"NELECT": nelect, "ISPIN": ispin, "LNONCOLLINEAR": ncl}})()
+
+
+GAPPED = {"up": [[-3.0, -2.5, -2.8], [-0.2, 0.0, -0.1], [0.10, 0.077, 0.3], [1.0, 1.2, 1.1]]}
+# 半金属（VASP 的本征值每个 k 上已排好序）：第 2 条带在 k0 最高 0.05，第 3 条带在 k1 最低 -0.02 -> 带重叠 0.07
+OVERLAP = {"up": [[-3.0, -2.5], [0.05, -0.3], [0.40, -0.02], [1.0, 1.2]]}
+
+
+def test_0076_bandindex_gap():
+    import ke_common as kc
+    gap, vbm, cbm = kc.bandindex_gap(GAPPED, 4.0, 1)                  # 4 电子、非自旋：占 2 条带
+    assert gap == pytest.approx(0.077) and vbm == 0.0 and cbm == 0.077
+    assert kc.bandindex_gap(OVERLAP, 4.0, 1)[0] == pytest.approx(-0.07)   # 带重叠（半金属）
+    b3 = {"up": [[-3.0, -3.0], [-0.1, 0.0]], "down": [[-2.9, -2.9], [0.2, 0.3]]}
+    assert kc.bandindex_gap(b3, 3.0, 2)[0] == pytest.approx(0.2)       # ISPIN=2：两自旋道合起来每态 1 个电子
+    assert kc.bandindex_gap(GAPPED, 3.0, 1) == (None, None, None)     # 非自旋、奇数电子
+    assert kc.bandindex_gap(GAPPED, 8.0, 1) == (None, None, None)     # 带数不够
+
+
+def test_0076_efermi_fix_moves_fermi_to_midgap():
+    import ke_common as kc
+    io = type("IO", (), {})()
+    io.get_band_structure = lambda vr, *a, **k: _BS(GAPPED, 0.09)     # AMSET 把 E_F 放进了导带（0.09 eV）
+    logs = []
+    kc.amset_efermi_fix(io, log=logs.append)
+    kc.amset_efermi_fix(io, log=logs.append)                          # 幂等
+    bs = io.get_band_structure(_vr(4.0))
+    assert bs.efermi == pytest.approx(0.0385) and not bs.is_metal()
+    assert io.get_band_structure.last == {"bandindex_gap_eV": pytest.approx(0.077), "efermi_fixed": True}
+    assert len(logs) == 1 and "按半导体处理" in logs[0]
+    io2 = type("IO", (), {})()                                        # 真半金属：不改 E_F
+    io2.get_band_structure = lambda vr, *a, **k: _BS(OVERLAP, 0.0)
+    kc.amset_efermi_fix(io2, log=logs.append)
+    bs2 = io2.get_band_structure(_vr(4.0))
+    assert bs2.efermi == 0.0 and bs2.is_metal() and "确实是金属" in logs[-1]
+    io3 = type("IO", (), {})()                                        # 正常半导体（AMSET 没判金属）：原样
+    io3.get_band_structure = lambda vr, *a, **k: _BS(GAPPED, 0.03)
+    kc.amset_efermi_fix(io3, log=logs.append)
+    n = len(logs)
+    assert io3.get_band_structure(_vr(4.0)).efermi == 0.03 and len(logs) == n
+
+
+def test_0076_efermi_fix_mixed_configs_fail():
+    import ke_common as kc
+    seq = iter([GAPPED, OVERLAP])
+    io = type("IO", (), {})()
+    io.get_band_structure = lambda vr, *a, **k: _BS(next(seq), 0.0)
+    kc.amset_efermi_fix(io, log=lambda m: None)
+    io.get_band_structure(_vr(4.0))                                   # undeformed：有隙
+    with pytest.raises(SystemExit, match="判定不一致"):
+        io.get_band_structure(_vr(4.0))                               # 形变构型：带重叠
+
+
+def test_0076_s71_patched_in_both_amset_calls():
+    s = _s71_src()
+    q = "'" * 3
+    a = s.index("_NBANDS_FIX_CODE = r" + q)
+    wrap = s[a:s.index(q, a + 30)]
+    assert "amset_efermi_fix(_IO0" in wrap and wrap.index("amset_efermi_fix") < wrap.index('cli.main(args=["deform", "read"]')
+    i = s.index("_be_code = r" + q) + len("_be_code = r" + q)
+    be = s[i:s.index(q, i)]
+    assert be.index("ke_common.amset_efermi_fix(_IO0)") < be.index('bulk = parse_calculation("undeformed")')
+    assert "parse_calculation = _IO0.parse_calculation" in be
