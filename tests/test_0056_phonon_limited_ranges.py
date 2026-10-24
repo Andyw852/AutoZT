@@ -194,14 +194,15 @@ def test_mech_caption_lists_mechanisms():
     g = _s83()
     meta = {"overall_labels": ["ADP", "IMP", "POP", "ODP"],
             "sets": {"intrinsic": {"labels": ["ADP", "POP", "ODP"]}, "ADP_only": {"labels": ["ADP"]}}}
-    lab = {"overall": "phonon + impurity (ADP+IMP+POP+ODP)", "intrinsic": "phonon-limited (ADP+POP+ODP)",
-           "ADP_only": "ADP only (acoustic limit)", "BT2_DPTtau": "BT2×DPT-τ"}
+    lab = dict(g.amset_labels(meta), BT2_DPTtau=g.BT2_LABEL)          # [0079] 图例 = 实际散射机制组合
+    assert lab["overall"] == "AMSET ADP+POP+ODP+IMP" and lab["BT2_DPTtau"] == "BT2×DPT-τ (ADP)"
     ds = [(k, "", "", "") for k in ("overall", "intrinsic", "ADP_only", "BT2_DPTtau")]
-    cap = g._mech_caption(ds, meta, lab)
-    assert cap[0] == "phonon + impurity: AMSET, ADP+IMP+POP+ODP (all mechanisms of this run)"
-    assert cap[1] == "phonon-limited: AMSET, ADP+POP+ODP (IMP removed)"
-    assert "Bardeen-Shockley" in cap[3]
-    assert cap[4].startswith("ADP = ") and "IMP = ionized impurity" in cap[4] and "ODP = " in cap[4]
+    cap = g._mech_caption(ds, meta, lab)                              # [0080] 精简：图例已是机制组合
+    assert cap[0].startswith("AMSET: scattering mechanisms as labeled")
+    assert cap[1].startswith("BT2×DPT-τ (ADP): BoltzTraP2") and "Bardeen-Shockley" in cap[1] and len(cap) == 3
+    assert not any(w in c for c in cap for w in ("phonon +", "phonon-limited", "partial phonon", "together"))
+    assert cap[2] == ("ADP = acoustic deformation potential; POP = polar optical phonon; "
+                      "ODP = optical deformation potential; IMP = ionized impurity")   # 按 MECH_ORDER
 
 
 def test_gray_shading_for_rigid_band_limit(tmp_path):
@@ -224,4 +225,4 @@ def test_gray_shading_for_rigid_band_limit(tmp_path):
         g.write_transport_plots(cwd, out, True)
     finally:
         mf.Figure.text = orig
-    assert any("Gray: beyond rigid-band range" in t for t in seen)
+    assert any("Gray: beyond the rigid-band range" in t for t in seen)

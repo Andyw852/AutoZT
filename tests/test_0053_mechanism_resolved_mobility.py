@@ -144,13 +144,25 @@ def _write_ni(cwd, Ev, Ec, EF, run="step8.4_amset2d"):
 
 
 def test_phys_label_naming():
+    """[0079] 用户 2026-10-24：图例按实际散射机制组合命名（按 MECH_ORDER 排），不用 phonon + impurity 这类代称。"""
     S = _s83()
     full = ["ADP", "IMP", "POP", "ODP"]
-    assert S._phys_label(full, full) == "phonon + impurity (ADP+IMP+POP+ODP)"
-    assert S._phys_label(["ADP", "POP", "ODP"], full) == "phonon-limited (ADP+POP+ODP)"
-    assert S._phys_label(["ADP", "POP"], full) == "partial phonon (ADP+POP)"
-    assert S._phys_label(["ADP"], full) == "ADP only (acoustic limit)"
+    assert S._phys_label(full, full) == "ADP+POP+ODP+IMP"
+    assert S._phys_label(["ADP", "POP", "ODP"], full) == "ADP+POP+ODP"
+    assert S._phys_label(["pop", "ADP"], full) == "ADP+POP"
+    assert S._phys_label(["ADP"], full) == "ADP"
     assert S._phys_label([], full) is None
+    assert S.mech_tag(["XYZ", "IMP", "ADP"]) == "ADP+IMP+XYZ"           # 未知机制排最后
+    lab = S.amset_labels({"overall_labels": full, "sets": {"intrinsic": {"labels": ["ADP", "POP", "ODP"]},
+                                                           "ODP": {"labels": ["ODP"], "partial": True}}})
+    assert lab["overall"] == "AMSET ADP+POP+ODP+IMP" and lab["intrinsic"] == "AMSET ADP+POP+ODP"
+    assert lab["ADP_only"] == "AMSET ADP" and lab["ODP"] == "AMSET ODP (single mechanism, mu only)"
+    assert S.amset_labels({})["overall"] == "AMSET all mechanisms"     # 机制未知时的兜底
+    src = (KE / "step8.3_output" / "gen_step13_output.py").read_text(encoding="utf-8")
+    body = src[src.index("def mech_tag"):]
+    for old in ("phonon + impurity", "phonon-limited", "partial phonon", "acoustic limit"):   # 图里不再出现
+        assert not any(old in ln for ln in body.splitlines()
+                       if ("label" in ln or "suptitle" in ln or "_title" in ln) and not ln.lstrip().startswith("#")), old
 
 
 def test_undoped_plot_dedupes_imp_and_reports_eta(tmp_path, capsys):
@@ -167,7 +179,7 @@ def test_undoped_plot_dedupes_imp_and_reports_eta(tmp_path, capsys):
              if not l.startswith("#")]
     rows = list(csv.DictReader(lines))
     assert "overall" not in {r["dataset"] for r in rows}             # 与 intrinsic 重合，去重
-    assert "phonon-limited (ADP+POP)" in {r["label"] for r in rows}
+    assert "ADP+POP" in {r["label"] for r in rows}                   # [0079] 按实际机制组合命名
     r600 = next(r for r in rows if float(r["T_K"]) == 600.0)
     assert float(r600["eta_c"]) == pytest.approx(0.15 / (S.KB_EV * 600.0), rel=1e-4)
     assert float(r600["f_CBM"]) == pytest.approx(1 / (1 + __import__("math").exp(0.15 / (S.KB_EV * 600.0))), rel=1e-3)

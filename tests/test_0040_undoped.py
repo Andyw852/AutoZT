@@ -163,7 +163,7 @@ def test_dataset_files_named_by_mechanisms(tmp_path):
     names = sorted(p.name.replace("_carrier_tuning", "").replace("_low_doping", "") for p in ddir.glob("*.png"))
     assert "MoS2_ADP+POP.png" in names                       # 去 IMP 那套（S8.4 记的 intrinsic_labels）
     assert "MoS2_ADP.png" in names                           # 只 ADP
-    assert "MoS2_ADP+IMP+POP.png" in names                   # 全机制（transport.json 的 mobility 键）
+    assert "MoS2_ADP+POP+IMP.png" in names                   # 全机制（transport.json 的 mobility 键；[0079] 按 MECH_ORDER 排）
     assert not any("intrinsic" in n or "noIMP" in n for n in names)
 
 
