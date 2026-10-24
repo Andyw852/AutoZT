@@ -19,7 +19,8 @@
 产物（与 S8.3 相同，详见 gen_step13_output.write_transport_plots 的说明）:
     {transport_models,mobility_mechanisms}_carrier_tuning_1e16-1e21/<M>_<前缀>_carrier_tuning.png + _<T>K.csv
     {transport_models,mobility_mechanisms}_low_doping_<NLO>-1e15/<M>_<前缀>_low_doping.png + _<T>K.csv
-    <M>_params_<T>K.csv、temperature_series/、mu_scan/、intrinsic_carrier/、defect_equilibrium/
+    <M>_params_<T>K.csv、temperature_series/、mu_scan/、mu_compare/、intrinsic_carrier/、defect_equilibrium/
+    [0078] mu_compare/ 的文献线读 <材料目录>/literature/*.csv（或其上一、两级目录的 literature/），格式见 METHODOLOGY [0078]。
 
 输出位置约定: 只写 <输出目录>，绝不写进 ke-dft-cpu/step8.3_output/。
 """

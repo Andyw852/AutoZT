@@ -350,6 +350,42 @@ step8.x 的 `_SKILL_REV` 写进 comparison_summary.txt。改脚本即提交 GitH
   （S8.2 / S8.3 遇到金属会报错并提示这一行）。S5 介电（DFPT）对金属也没有意义，只被 S8 用；关掉 `amset3d` 后它
   不再被下游需要，已在跑的可以按需停掉（`stop` 先请示）。
 
+## [0078] 化学势扫描对比图 mu_compare/（S8.3；2026-10-24 用户要求）
+
+- **为什么**：用户要文献口径的对比图——横轴化学势 u（带隙中点 = 0），上横轴该 u 处的载流子浓度，
+  BT2×DPT-τ、AMSET ADP only、文献三条放一起；每个随浓度变化的量都要，再加一张带 AMSET 各机制组合的。
+  已有的 `mu_scan/`（[0057]）是一张 5 联图、横轴 μ − E_VBM、只取面内平均、没有文献和上横轴，保留不动。
+- **产物**（`transport_plots/mu_compare/`，温度同 `mu_scan`，600 K）：
+  - `<M>_<量>_vs_u_600K.png`，量 = sigma / S / PF / kappa_e / mu：BT2×DPT-τ（蓝线）+ AMSET ADP only（橙点线）+ 文献（灰虚线，有数据时）；
+  - `<M>_<量>_vs_u_mechanisms_600K.png`：上面三条 + 本轮 AMSET 的各机制组合（全机制 = phonon + impurity、去 IMP =
+    phonon-limited、各 SUBSETS 子集、overall_no*；按材料实际开的机制，有什么画什么）；
+  - `<M>_vs_u_600K.csv`：图里每条曲线的数据（source / dataset / axis / u / n_cell / 轴口径 n / 五个量）。
+  - 每张图：列 = 方向（2D xx、yy；3D 加 zz），上行全范围（|u| ≤ 3 eV 与 BT2 网格取交集）、下行带边放大（带边外 0.6 eV）。
+    灰底 = 深能带区（离带边 > 0.5 eV），橙底 = AMSET 掺杂网格覆盖的 u 区间，点线 = 带边 ±Eg/2。
+- **口径**：
+  - BT2：u = S8.1 μ 网格 − BT2 带隙中点；σ_a = (σ/τ)_a × τ_a × c/t，τ_a 取 DPT 分方向（n 型电子 τ、p 型空穴 τ；没有分方向退回
+    面内平均 τ）；κe = BoltzTraP2 自己的 κe/τ × τ（文献用 κe = LσT）；μ = σ/(e|n|)，双极区与带隙中央 ±5 kT 内不给。
+  - AMSET：u = 每个掺杂档 AMSET 自己解的 E_F（transport.json `fermi_levels`）− AMSET 带隙中点（`undoped_ni.json` 带边）；
+    各数据集取张量对角分量，σ、κe × c/t。E_F 离本征能级 < 2 kT 的档（掺杂 < n_i，`U_CMP_PIN_KT`）只画点不连线；
+    ADP only 只有 μ（没开 WRITE_MESH）时 σ = |n|·e·μ_ADP，钉在本征能级的档不给 σ，没有 S、κe、PF。
+  - 上横轴 |n|（2D 三维等效 = n_cell × c/t，与 [0077] 同口径；3D 体浓度）：AMSET 掺杂网格内按 AMSET 自己的 (掺杂, E_F)
+    插值（点正好落在刻度下），网格外（≥ 1e16）按 BT2 的 n(u)；太挤的刻度丢掉（十年高的优先）。
+- **文献数据**：放 `<项目>/<材料>/literature/*.csv`（材料根目录，与 ke-dft-cpu/ 同级）。S8.3 的 `push_paths: ["literature"]`
+  在 gen 时把它推到远端 ke 目录（本地没有就不推，缺了不报错）；本地补图（`tools/make_transport_plots.py`）在 ke 目录或其上
+  一、两级找 `literature/`。格式（`#` 开头为注释）：
+
+  | 列 | 必填 | 说明 |
+  |---|---|---|
+  | quantity | ✓ | sigma / S / PF / kappa_e / mu（也认 seebeck、mobility、sigma_S/m 等别名） |
+  | axis | ✓ | xx / yy / zz；avg = 各方向都画 |
+  | u_eV | ✓ | 化学势，带隙中点 = 0（与本图同） |
+  | value | ✓ | 单位同本图：S/m、μV/K、W/m/K²、W/m/K、cm²/V/s；2D 的 σ、κe、PF 按层厚 t 归一 |
+  | T_K | | 非空时只取与图温度差 ≤ 1 K 的行 |
+  | label | | 图例文字，缺省 literature |
+  | material | | 非空时只取等于材料名的行（一个文件可放多个材料） |
+
+  数字化曲线的断档（相邻点间距 > 5 倍中位间距）不连线；不足 40 点的曲线加点标出读数位置。
+
 ## [0077] 掺杂网格两段：近本征 ±1e11–1e15、掺杂 ±1e16–1e21 cm⁻³，2D 按层厚换算（S8 / S8.4 / S8.3；2026-10-24 用户定）
 
 - **为什么**：设计本意是对 3D，±1e11–1e15 cm⁻³ 是本征浓度附近（近本征、非简并），±1e16–1e21 cm⁻³ 是掺杂情况；
