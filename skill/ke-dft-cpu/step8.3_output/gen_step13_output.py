@@ -43,7 +43,7 @@ from pathlib import Path
 # [SKILL_REV] 版本戳：写进 comparison_summary.txt。每次改本脚本逻辑后更新。
 #   陈旧副本已咬人三次（step12/step9b 盖戳后，step13 是最后一个没盖的），
 #   这里盖戳便于从产物反查到底跑的是哪份 skill 副本。
-_SKILL_REV = "2026-10-24-0077"   # [0077] 掺杂两段改 1e16–1e21（掺杂）/ NLO–1e15（近本征）；2D 浓度轴按层厚 t 的三维等效浓度（n_cell×c/t）分段画图   # 2026-10-21-0064   # [0064] 汇总写 κ_L 来源与胞高换算（原来只打到 stdout）   # 2026-10-21-0063r1   # [0063-r1] KL_ROOT 相对路径按 ke 技能目录、支持 ~   # 2026-10-21-0062m   # [0062] 2D 自动取 κ_L：kl/ke 胞高不同时 ×Lz/c 换到 ke 元胞口径（原来只告警，ZT 偏低）   # [0061-g/m] 汇总写 S8 / S8.4 的 ADP 简并修正（每个修正过的谷一行）   # 2026-10-21-0061   # [0061] 汇总写 ADP 简并价带修正（adp_degen_fit.json）   # 2026-10-20-0059r3   # [0059-r3] 汇总写明谷内 ODP 参数来源（DFPT q=Γ / 冻声子 / 手填）   # 2026-10-19-0060   # [0060] 汇总：可忽略机制印"—"、限制因素跳过可忽略项   # 2026-10-18-0059   # [0059] 汇总写明 IVS 参数来源（DFPT / 冻声子 / 手填）   # 2026-10-18-0057r4   # [0057-r4] 分机制图超上限处画 ▲ 延伸；mu_scan 的 AMSET 点按载流子类型连细线   # [0057-r3] mu_scan：BT2 μ 带隙中央 ±5kT 内不给、κe 相减抵消到噪声（L < 0.1 L0）不画   # [0057-r2] temperature_series 相邻温度间色带填充 + 温度色标   # [0057-r1] 本征表 %.6g 浓度与 transport.json 掺杂档按相对 1e-4 配对（mu_scan 的 AMSET 点、分机制表的浓度列）；BT2 σ/τ=0 的点不画   # [0057] transport_plots 改版：phonon_limited_<段> -> transport_models_<段>；transport_<段> -> mobility_mechanisms_<段>（只画 μ，单机制 + 总值 + DPT）；datasets/ -> temperature_series/（蓝->红、分两段）；bt2_muscan/ + amset_scan/ -> mu_scan/（μ − E_VBM）；mechanism_resolved 去核对圆圈   # [0056] phonon-limited 掺杂扫描拆两段各一个文件夹（图 + 每温度表）：carrier_tuning_1e17-1e21 / low_doping_<NLO>-1e16，不再出整轴 <M>_phonon_limited.png；r2 <M>_transport.png 同样拆两段；r3 图注写明每条曲线的散射机制与缩写、刚性能带范围外灰底；r5 tools/make_transport_plots 直接调用本函数（统一算法），transport 图 μ 列加 DPT 带边横线（只画对应半边、标注在顶部空白）   # [0054] 与文献统一命名：去 IMP = phonon-limited（<M>_phonon_limited.png，原 <M>_intrinsic.png）、含 IMP = phonon + impurity、intrinsic 只指本征载流子；<M>_mechanism_resolved_mobility（原 dilute_mobility）；本征点按去 IMP 后机制去重；η=(E_c−E_F)/kT 判 f≈0   # [0053] intrinsic_carrier/<M>_dilute_mobility.png：稀薄极限（f≈0）μ(T) 按散射机制拆开 + Matthiessen 对照（空穴取 n = p 本征点，电子取最低 n 型去 IMP）   # [0052] transport_plots/ 每次整目录重建（先删旧结果）；intrinsic_carrier/ 标注本征浓度 n_i(T)（undoped_ni.json / fermi_fix 日志）；<M>_intrinsic.png 标题写明 intrinsic = 本征散射、横轴 = 掺杂浓度   # [0047] <M>_intrinsic.png 只画基础 4 条本征曲线（此前与 <M>_transport.png 同图仅换标题）+ intrinsic CSV 同步只含 4 条   # [0046] 本征五参数套件支持 3D（读 S8 的 step8_amset + subset_*.json；_geom_3d 体胞几何、c/t=1、对角 (xx+yy+zz)/3）；3D 也出 transport_plots/<M>_transport|<M>_intrinsic.png 9x5 面板   # [0045] bt2_muscan 同时画 thickness(我们)/cell(文献) 两种口径；[0041] transport_plots/defect_equilibrium/（缺陷平衡净浓度 σ/S/PF/κe vs T）   # 2026-10-13-0040   # [0040] transport_plots/intrinsic_carrier/（未掺杂本征载流子 σ/S/PF/κe vs T）；图例/文件名一律用实际机制组合 amset_<机制>；2026-10-13-0039   # [0039] transport_plots/datasets/：每个数据集单独一张 σ/S/PF/κe 图 + csv； [0038] 本征/子集图读 subset_*.json（SUBSETS）；[0036] transport_plots 加 bt2_muscan/ + amset_scan/ 两个扫描图子文件夹；[0035] transport_plots 合并 + τ 对比（tau/）
+_SKILL_REV = "2026-10-24-0078"   # [0078] transport_plots/mu_compare/：σ/S/PF/κe/μ 随化学势 u（带隙中点 = 0、上横轴浓度）的分方向对比图（BT2×DPT-τ + AMSET ADP only + 文献；再加 AMSET 各机制组合）+ 数据表；文献读 <材料>/literature/*.csv   # 2026-10-24-0077   # [0077] 掺杂两段改 1e16–1e21（掺杂）/ NLO–1e15（近本征）；2D 浓度轴按层厚 t 的三维等效浓度（n_cell×c/t）分段画图   # 2026-10-21-0064   # [0064] 汇总写 κ_L 来源与胞高换算（原来只打到 stdout）   # 2026-10-21-0063r1   # [0063-r1] KL_ROOT 相对路径按 ke 技能目录、支持 ~   # 2026-10-21-0062m   # [0062] 2D 自动取 κ_L：kl/ke 胞高不同时 ×Lz/c 换到 ke 元胞口径（原来只告警，ZT 偏低）   # [0061-g/m] 汇总写 S8 / S8.4 的 ADP 简并修正（每个修正过的谷一行）   # 2026-10-21-0061   # [0061] 汇总写 ADP 简并价带修正（adp_degen_fit.json）   # 2026-10-20-0059r3   # [0059-r3] 汇总写明谷内 ODP 参数来源（DFPT q=Γ / 冻声子 / 手填）   # 2026-10-19-0060   # [0060] 汇总：可忽略机制印"—"、限制因素跳过可忽略项   # 2026-10-18-0059   # [0059] 汇总写明 IVS 参数来源（DFPT / 冻声子 / 手填）   # 2026-10-18-0057r4   # [0057-r4] 分机制图超上限处画 ▲ 延伸；mu_scan 的 AMSET 点按载流子类型连细线   # [0057-r3] mu_scan：BT2 μ 带隙中央 ±5kT 内不给、κe 相减抵消到噪声（L < 0.1 L0）不画   # [0057-r2] temperature_series 相邻温度间色带填充 + 温度色标   # [0057-r1] 本征表 %.6g 浓度与 transport.json 掺杂档按相对 1e-4 配对（mu_scan 的 AMSET 点、分机制表的浓度列）；BT2 σ/τ=0 的点不画   # [0057] transport_plots 改版：phonon_limited_<段> -> transport_models_<段>；transport_<段> -> mobility_mechanisms_<段>（只画 μ，单机制 + 总值 + DPT）；datasets/ -> temperature_series/（蓝->红、分两段）；bt2_muscan/ + amset_scan/ -> mu_scan/（μ − E_VBM）；mechanism_resolved 去核对圆圈   # [0056] phonon-limited 掺杂扫描拆两段各一个文件夹（图 + 每温度表）：carrier_tuning_1e17-1e21 / low_doping_<NLO>-1e16，不再出整轴 <M>_phonon_limited.png；r2 <M>_transport.png 同样拆两段；r3 图注写明每条曲线的散射机制与缩写、刚性能带范围外灰底；r5 tools/make_transport_plots 直接调用本函数（统一算法），transport 图 μ 列加 DPT 带边横线（只画对应半边、标注在顶部空白）   # [0054] 与文献统一命名：去 IMP = phonon-limited（<M>_phonon_limited.png，原 <M>_intrinsic.png）、含 IMP = phonon + impurity、intrinsic 只指本征载流子；<M>_mechanism_resolved_mobility（原 dilute_mobility）；本征点按去 IMP 后机制去重；η=(E_c−E_F)/kT 判 f≈0   # [0053] intrinsic_carrier/<M>_dilute_mobility.png：稀薄极限（f≈0）μ(T) 按散射机制拆开 + Matthiessen 对照（空穴取 n = p 本征点，电子取最低 n 型去 IMP）   # [0052] transport_plots/ 每次整目录重建（先删旧结果）；intrinsic_carrier/ 标注本征浓度 n_i(T)（undoped_ni.json / fermi_fix 日志）；<M>_intrinsic.png 标题写明 intrinsic = 本征散射、横轴 = 掺杂浓度   # [0047] <M>_intrinsic.png 只画基础 4 条本征曲线（此前与 <M>_transport.png 同图仅换标题）+ intrinsic CSV 同步只含 4 条   # [0046] 本征五参数套件支持 3D（读 S8 的 step8_amset + subset_*.json；_geom_3d 体胞几何、c/t=1、对角 (xx+yy+zz)/3）；3D 也出 transport_plots/<M>_transport|<M>_intrinsic.png 9x5 面板   # [0045] bt2_muscan 同时画 thickness(我们)/cell(文献) 两种口径；[0041] transport_plots/defect_equilibrium/（缺陷平衡净浓度 σ/S/PF/κe vs T）   # 2026-10-13-0040   # [0040] transport_plots/intrinsic_carrier/（未掺杂本征载流子 σ/S/PF/κe vs T）；图例/文件名一律用实际机制组合 amset_<机制>；2026-10-13-0039   # [0039] transport_plots/datasets/：每个数据集单独一张 σ/S/PF/κe 图 + csv； [0038] 本征/子集图读 subset_*.json（SUBSETS）；[0036] transport_plots 加 bt2_muscan/ + amset_scan/ 两个扫描图子文件夹；[0035] transport_plots 合并 + τ 对比（tau/）
 #   bump 记录：2026-10-11-0035 —— transport_plots 合并：intrinsic 图并入 transport 图（4 条数据集
 #   overall / intrinsic / ADP only / BT2xDPT-tau），不再单独出 <M>_intrinsic*.{png,csv}，
 #   只留 <M>_transport.png + 每温度 CSV + <M>_params_<T>K.csv。
@@ -3296,6 +3296,7 @@ def _phonon_limited_ranges(NLO, n_top=1e21):
 #   mobility_mechanisms_<段>/  原 transport_<段>/：只画 μ，按散射机制拆开（单机制 μ + 总值 + DPT 带边）
 #   temperature_series/        原 datasets/：每个数据集一张、每温度一条线（低温蓝 -> 高温红），同样分两段
 #   mu_scan/                   原 bt2_muscan/ + amset_scan/：600 K，横轴 μ − E_VBM
+#   mu_compare/                [0078] 文献口径：横轴化学势 u（带隙中点 = 0）+ 上横轴浓度，每个量两张（见 U_CMP_DIR）
 MODELS_PRE, MECH_PRE = "transport_models", "mobility_mechanisms"
 TSERIES_DIR = "temperature_series"
 MU_SCAN_DIR, MU_SCAN_T = "mu_scan", 600.0
@@ -3666,6 +3667,469 @@ def write_mu_scan(cwd, out, plots, M, is_2d):
     return True
 
 
+# [0078] 2026-10-24 用户要求：化学势扫描对比图（文献口径：横轴 u = 化学势，带隙中点 = 0；上横轴 = 该 u 处的载流子浓度），
+#   每个随浓度变化的量（σ、S、PF、κe、μ）各两张，列 = 方向（2D xx / yy，3D 加 zz），上行全范围、下行带边放大：
+#   mu_compare/<M>_<量>_vs_u_<T>K.png             BT2×DPT-τ（线）+ AMSET ADP only（点）+ 文献（虚线，有数字化数据时）
+#   mu_compare/<M>_<量>_vs_u_mechanisms_<T>K.png  上面三条 + AMSET 各机制组合（本轮全机制、去 IMP、各子集，有什么画什么）
+#   mu_compare/<M>_vs_u_<T>K.csv                  图里每条曲线的数据（长表）
+#   文献数据：<材料>/literature/*.csv（S8.3 的 push_paths 推到 ke 目录；本地补图在 ke 目录或其上两级找 literature/），
+#     列 quantity, axis, u_eV, value [, T_K, label, material]；u_eV 同本图（带隙中点 = 0），单位同本图（2D 的 σ、κe、PF 按层厚 t 归一）。
+U_CMP_DIR = "mu_compare"
+U_CMP_QUANTS = (   # (文件名用的键, 行字典里的列, y 轴标签, 对数 y)
+    ("sigma", "sigma_S/m", "$\\sigma$ (S/m)", True),
+    ("S", "S_uV/K", "S ($\\mu$V/K)", False),
+    ("PF", "PF_W/mK2", "PF (W/m/K$^2$)", True),
+    ("kappa_e", "kappa_e_W/mK", "$\\kappa_e$ (W/m/K)", True),
+    ("mu", "mu_cm2/Vs", "$\\mu$ (cm$^2$/V/s)", True),
+)
+U_CMP_XMAX = 3.0        # 全范围行：|u| ≤ 3 eV（文献 Fig. 5 的范围）与 BT2 网格取交集
+U_CMP_ZOOM_EV = 0.6     # 带边放大行：带边外 0.6 eV
+U_CMP_DEEP_EV = 0.5     # 深能带区：离带边 > 0.5 eV（刚带 + 单一 τ 的近似越来越差），灰底
+U_CMP_PIN_KT = 2.0      # AMSET 掺杂档的 E_F 离本征能级 < 2 kT（少子/多子 > e^-4）= 钉在本征能级：只画点不连线，
+                        #   只有 μ 的数据集（σ = |n| e μ）不给 σ
+LIT_DIR = "literature"
+_LIT_Q = {"sigma": "sigma", "sigma_s/m": "sigma", "s": "S", "seebeck": "S", "s_uv/k": "S", "pf": "PF",
+          "pf_w/mk2": "PF", "kappa_e": "kappa_e", "kappa_e_w/mk": "kappa_e", "ke": "kappa_e", "mu": "mu",
+          "mobility": "mu", "mu_cm2/vs": "mu"}
+_UCMP_PALETTE = ("tab:red", "tab:purple", "tab:brown", "tab:olive", "tab:cyan", "tab:pink", "tab:gray")
+C_BT2_U, C_ADP_U, C_LIT_U = "#2a78d6", "#eb6834", "#52514e"
+
+
+def load_literature(cwd, M, T):
+    """[0078] 文献数字化曲线 -> ({(量, 方向): {图例: [(u, 值), ...]}}, [来源说明])。
+    在 <cwd>/literature/、<cwd>/../literature/、<cwd>/../../literature/ 里找第一个有 *.csv 的目录；
+    '#' 开头的行是注释。material 列非空时只取等于 M 的行，T_K 列非空时只取 |T_K − T| ≤ 1 K 的行。"""
+    import csv
+    c = Path(cwd)
+    files = []
+    for d in (c / LIT_DIR, c.parent / LIT_DIR, c.parent.parent / LIT_DIR):
+        files = sorted(d.glob("*.csv")) if d.is_dir() else []
+        if files:
+            break
+    out, src = {}, []
+    for fp in files:
+        lines = [l for l in fp.read_text(encoding="utf-8-sig", errors="ignore").splitlines()
+                 if l.strip() and not l.lstrip().startswith("#")]
+        n = 0
+        for r in csv.DictReader(lines):
+            r = {str(k).strip().lower(): str(v or "").strip() for k, v in r.items() if k}
+            q = _LIT_Q.get(r.get("quantity", "").lower())
+            try:
+                u, v = float(r.get("u_ev")), float(r.get("value"))
+            except (TypeError, ValueError):
+                continue
+            if q is None or (r.get("material") and r["material"] != M):
+                continue
+            try:
+                if r.get("t_k") and abs(float(r["t_k"]) - T) > 1.0:
+                    continue
+            except ValueError:
+                continue
+            out.setdefault((q, (r.get("axis") or "avg").lower()), {}).setdefault(
+                r.get("label") or "literature", []).append((u, v))
+            n += 1
+        if n:
+            src.append("%s/%s (%d pts)" % (fp.parent.name, fp.name, n))
+    for g in out.values():
+        for lab in g:
+            g[lab].sort()
+    return out, src
+
+
+def _ucmp_tau(dpt_T, carrier, d):
+    """BT2 用的 τ（秒）：DPT 分方向（by_direction 的 x/y/z）优先，没有退回面内平均 τ。"""
+    bd = (dpt_T or {}).get("dir_" + carrier)
+    if isinstance(bd, dict) and bd.get("status") == "ok" and isinstance(bd.get(d), dict):
+        t = bd[d].get("tau_s")
+        if isinstance(t, (int, float)) and t > 0:
+            return t
+    return _bt2_tau(dpt_T, carrier)
+
+
+def u_compare_data(cwd, is_2d, T_want=MU_SCAN_T):
+    """[0078] 化学势对比图的数据（横轴 u，eV，带隙中点 = 0；分方向）。
+    BT2：S8.1 的 μ 网格减 BT2 带隙中点；σ_a = (σ/τ)_a × τ_a × c/t（τ_a = DPT 分方向，n < 0 电子 τ、n > 0 空穴 τ），
+      κe 同理（BoltzTraP2 自己的 κe/τ），S 与 τ 无关；μ = σ/(e|n|)，双极区与带隙中央 ±5 kT 内不给（同 mu_scan）。
+    AMSET：每个掺杂档 AMSET 自己解的 E_F（transport.json fermi_levels）减 AMSET 的带隙中点；各数据集（全机制 / 去 IMP /
+      ADP only / 子集）取同一掺杂档的张量对角分量，σ、κe × c/t。返回 dict；什么都没有 -> None。"""
+    run = AMSET2D_DIR if is_2d else AMSET_DIR
+    j = _load_json(Path(cwd) / run / "transport.json") or {}
+    temps = [float(t) for t in (_unwrap(j.get("temperatures")) or [])]
+    T = min(temps, key=lambda t: abs(t - T_want)) if temps else float(T_want)
+    try:
+        geom = _geom_2d(cwd) if is_2d else _geom_3d(cwd)
+    except Exception:                                             # noqa: BLE001
+        geom = None
+    fac = float(geom["c_over_t"]) if (geom and geom.get("c_over_t")) else 1.0
+    dirs = ("xx", "yy") if is_2d else ("xx", "yy", "zz")
+    res = {"T": T, "dirs": dirs, "fac": fac, "nfac": _n_scale(cwd, is_2d)[0], "geom": geom, "bt2": None,
+           "amset": {}, "pairs": [], "notes": [], "set_meta": {}}
+    if is_2d and not geom:
+        res["notes"].append("no 2d_correction.json: sigma, kappa_e, PF per AMSET cell (not per layer thickness)")
+    kt = KB_EV * T
+    # ---- BT2 ----
+    bj = _load_json(Path(cwd) / BT2_DIR / "boltztrap_crta.json") or {}
+    bv, bc, bsrc = _bt2_edges(bj) if bj else (None, None, "no boltztrap_crta.json")
+    res.update(bt2_vbm=bv, bt2_cbm=bc, bt2_src=bsrc)
+    if bj and bv is not None:
+        bT = [float(t) for t in bj.get("temperatures_K") or []]
+        iT = _nearest_T_index(bT, T) if bT else None
+        carr = bj.get("carrier_conc_cm-3")
+        if iT is None or abs(bT[iT] - T) > 1.0 or not carr or not bj.get("mu_rel_efermi_eV"):
+            res["notes"].append("BT2: boltztrap_crta.json has no %.0f K scan" % T)
+        else:
+            mid = (bv + bc) / 2.0
+            u = [float(m) - mid for m in bj["mu_rel_efermi_eV"]]
+            n = [float(x) for x in carr[iT]]
+            dpt_T = load_dpt(cwd, T=T, quiet=True)
+            avg = []
+            vals = {}
+            for a in dirs:
+                sot = (bj.get("sigma_over_tau_" + a) or [None] * (iT + 1))[iT]
+                see = (bj.get("seebeck_%s_V_per_K" % a) or [None] * (iT + 1))[iT]
+                kot = (bj.get("kappa_e_over_tau_" + a) or [None] * (iT + 1))[iT]
+                if sot is None or see is None:                     # 旧 S8.1 没有分方向数组：用平均张量
+                    sot, see = bj["sigma_over_tau_S_per_m_s"][iT], bj["seebeck_V_per_K"][iT]
+                    kot = bj["kappa_e_over_tau_W_per_m_K_s"][iT]
+                    avg.append(a)
+                col = {q[1]: [] for q in U_CMP_QUANTS}
+                for i in range(len(u)):
+                    typ = "n" if n[i] < 0 else "p"
+                    tau = _ucmp_tau(dpt_T, "electron" if typ == "n" else "hole", a[0])
+                    S = float(see[i]) * 1e6
+                    s0 = float(sot[i])
+                    ok = bool(n[i] == n[i] and n[i] and tau and s0 == s0 and s0 > 0)
+                    sg = s0 * tau * fac if ok else None
+                    ke = float(kot[i]) * tau * fac if (ok and kot is not None) else None
+                    if ke is not None and float(kot[i]) / (s0 * T) < 0.1 * SOMMERFELD_L:
+                        ke = None                                  # [0057-r3] κe 相减抵消到噪声，不画
+                    bip = (S == S and ((S > 0) if typ == "n" else (S < 0))) or abs(u[i]) < MU_SCAN_MIDGAP_KT * kt
+                    col["sigma_S/m"].append(sg)
+                    col["S_uV/K"].append(S if (ok and S == S) else None)
+                    col["PF_W/mK2"].append((S * 1e-6) ** 2 * sg if (sg is not None and S == S) else None)
+                    col["kappa_e_W/mK"].append(ke)
+                    col["mu_cm2/Vs"].append(s0 * tau / (E_C * abs(n[i]) * 1e6) * 1e4 if (ok and not bip) else None)
+                vals[a] = col
+            if avg:
+                res["notes"].append("BT2: no direction-resolved arrays for %s (old S8.1) - average tensor used"
+                                    % "/".join(avg))
+            if not (dpt_T and (_bt2_tau(dpt_T, "electron") or _bt2_tau(dpt_T, "hole"))):
+                res["notes"].append("BT2: no DPT tau (S8.2) - only S plotted")
+            res["bt2"] = {"u": u, "n": n, "vals": vals}
+    elif bj:
+        res["notes"].append("BT2: %s" % bsrc)
+    # ---- AMSET ----
+    fl = _unwrap(j.get("fermi_levels")) if j else None
+    ev, ec, esrc = _amset_edges(cwd, is_2d, T) if j else (None, None, "no transport.json")
+    res.update(amset_vbm=ev, amset_cbm=ec, amset_src=esrc)
+    if not j:
+        res["notes"].append("AMSET: no %s/transport.json" % run)
+    elif fl is None:
+        res["notes"].append("AMSET: transport.json has no fermi_levels")
+    elif ev is None:
+        res["notes"].append("AMSET: %s" % esrc)
+    else:
+        sm = load_intrinsic_sets(cwd, run) or {}
+        res["set_meta"] = sm
+        doping = [float(x) for x in _unwrap(j["doping"])]
+        k = temps.index(T)
+        mid = (ev + ec) / 2.0
+        i0 = next((i for i, x in enumerate(doping) if x == 0), None)
+        u_int = (float(fl[i0][k]) - mid) if i0 is not None else 0.0
+        res["u_intrinsic"] = u_int
+        res["pairs"] = [(x, float(fl[i][k]) - mid) for i, x in enumerate(doping) if x]
+        for key, st in (sm.get("sets") or {}).items():
+            if st.get("partial") and key != "ADP_only":
+                continue                                           # ODP / IVS 单机制只有 μ：在 mobility_mechanisms_* 里
+            pts = []
+            for i, x in enumerate(doping):
+                if not x:
+                    continue
+                uA = float(fl[i][k]) - mid
+                pinned = abs(uA - u_int) < U_CMP_PIN_KT * kt
+                r = {"u": uA, "n": x, "type": "n" if x < 0 else "p", "pinned": pinned, "vals": {}}
+                for ia, a in enumerate(dirs):
+                    def _g(arr, scale=1.0):
+                        try:
+                            v = float(arr[i][k][ia][ia]) * scale
+                        except (TypeError, IndexError, ValueError):
+                            return None
+                        return v if v == v else None
+                    mu = _g(st.get("mu"))
+                    if st.get("partial"):                          # 只有 μ_ADP：σ = |n| e μ，单载流子区才成立
+                        sg = (abs(x) * 1e6 * E_C * mu * 1e-4 * fac) if (mu and not pinned) else None
+                        S = ke = None
+                    else:
+                        sg, S, ke = _g(st.get("sigma"), fac), _g(st.get("S")), _g(st.get("kappa"), fac)
+                    r["vals"][a] = {"sigma_S/m": sg, "S_uV/K": S, "kappa_e_W/mK": ke, "mu_cm2/Vs": mu,
+                                    "PF_W/mK2": (S * 1e-6) ** 2 * sg if (S is not None and sg is not None) else None}
+                pts.append(r)
+            res["amset"][key] = pts
+        res["notes"] += ["AMSET: " + x for x in (sm.get("notes") or [])]
+    return res if (res["bt2"] or res["amset"]) else None
+
+
+def _bt2_u_of_n(bt2, x):
+    """BT2 同一套能带的 n(u) 反查：带符号元胞浓度 x（负 = n 型）-> u；超出 BT2 网格 -> None。"""
+    import numpy as np
+    u, n = np.array(bt2["u"], float), np.array(bt2["n"], float)
+    ok = np.isfinite(n) & (n != 0) & (np.sign(n) == np.sign(x))
+    ok &= (u > 0) if x < 0 else (u < 0)                           # 只取对应半边（中点以外，避开本征区的符号翻转）
+    if ok.sum() < 2:
+        return None
+    a, b = np.log10(np.abs(n[ok])), u[ok]
+    o = np.argsort(a)
+    lx = np.log10(abs(x))
+    if not (a[o][0] <= lx <= a[o][-1]):
+        return None
+    return float(np.interp(lx, a[o], b[o]))
+
+
+def _ucmp_ticks(d, xlim, min_frac=0.055):
+    """[0078] 上横轴浓度刻度 [(u, 十年指数)]：AMSET 掺杂网格内按 AMSET 自己的 (掺杂, E_F) 插值（点正好落在刻度下），
+    网格外（≥ 1e16）按 BT2 的 n(u)；十年高的优先，彼此间距 < min_frac × 轴宽的丢掉。浓度口径 = n_cell × nfac。"""
+    import numpy as np
+    nf = d["nfac"]
+    cands = []
+    for side in (-1.0, 1.0):
+        ap = sorted((abs(x) * nf, u) for x, u in d["pairs"] if x * side > 0)
+        hi = ap[-1][0] if ap else 0.0
+        for p in range(10, 25):
+            v, u = 10.0 ** p, None
+            if ap and ap[0][0] * 0.999 <= v <= hi * 1.001:
+                u = float(np.interp(math.log10(v), [math.log10(a) for a, _ in ap], [b for _, b in ap]))
+            elif v > hi * 1.001 and p >= 16 and d.get("bt2"):
+                u = _bt2_u_of_n(d["bt2"], -v / nf if side < 0 else v / nf)
+            if u is not None and xlim[0] < u < xlim[1]:
+                cands.append((p, u))
+    keep, sep = [], min_frac * (xlim[1] - xlim[0])
+    for p, u in sorted(cands, key=lambda c: -c[0]):
+        if all(abs(u - k[1]) >= sep for k in keep):
+            keep.append((p, u))
+    return [(u, p) for p, u in keep]
+
+
+def _ucmp_labels(sm):
+    """数据集键 -> 图例（物理含义 + 实际机制组合，同 transport_models 图）。"""
+    allm = sm.get("overall_labels") or []
+    lab = {}
+    for key in (sm.get("sets") or {}):
+        if key == "ADP_only":
+            lab[key] = "AMSET ADP only"
+        elif key == "overall":
+            lab[key] = "AMSET " + (_phys_label(allm, allm) or "all mechanisms")
+        else:
+            lab[key] = "AMSET " + _intr_legend(key, sm, key)
+    return lab
+
+
+def write_u_compare(cwd, plots, M, is_2d):
+    """[0078] transport_plots/mu_compare/：σ、S、PF、κe、μ 各两张随化学势 u 的对比图 + 一张数据表（见 U_CMP_DIR 处说明）。"""
+    import csv
+    import textwrap
+    import numpy as np
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    from matplotlib.lines import Line2D
+    from matplotlib.patches import Patch
+    d = u_compare_data(cwd, is_2d)
+    if not d:
+        print("[..] u 对比图跳过：BT2 与 AMSET 都画不了")
+        return False
+    for n_ in d["notes"]:
+        print("[..] u 对比：%s" % n_)
+    T, dirs, nf = d["T"], d["dirs"], d["nfac"]
+    lit, lit_src = load_literature(cwd, M, T)
+    odir = Path(plots) / U_CMP_DIR
+    odir.mkdir(parents=True, exist_ok=True)
+    bt = d["bt2"]
+    gap = ((d["bt2_cbm"] - d["bt2_vbm"]) if bt else
+           (d["amset_cbm"] - d["amset_vbm"]) if d.get("amset_vbm") is not None else None)
+    us = list(bt["u"]) if bt else []
+    us += [r["u"] for pts in d["amset"].values() for r in pts]
+    full = (max(min(us), -U_CMP_XMAX), min(max(us), U_CMP_XMAX))
+    full = (min(full[0], -0.5), max(full[1], 0.5))
+    zoom = ((-gap / 2 - U_CMP_ZOOM_EV, gap / 2 + U_CMP_ZOOM_EV) if gap else full)
+    labels = _ucmp_labels(d["set_meta"])
+    others = [k for k in d["amset"] if k != "ADP_only"]
+    order = [k for k in ("overall", "intrinsic") if k in others] + sorted(k for k in others
+                                                                          if k not in ("overall", "intrinsic"))
+    colors = dict(zip(order, _UCMP_PALETTE * 3))
+    adp_partial = bool(((d["set_meta"].get("sets") or {}).get("ADP_only") or {}).get("partial"))
+    nz = sorted(abs(x) * nf for x, _ in d["pairs"])
+    unit_n = ("3D-equivalent per layer thickness t = n_cell x c/t" if (is_2d and nf != 1.0)
+              else "AMSET cell volume" if is_2d else "bulk")
+
+    def _xy(pts, a, col, keep=lambda r: True):
+        o = sorted((r["u"], r["vals"][a].get(col)) for r in pts if keep(r))
+        return [(x, y) for x, y in o if y is not None and y == y]
+
+    def _seg(ax, xy, **kw):
+        if xy:
+            ax.plot([p[0] for p in xy], [p[1] for p in xy], **kw)
+
+    def _panel(ax, q, col, logy, a, xlim, mech, top_label):
+        ax.set_xlim(*xlim)
+        ax.grid(alpha=0.3, lw=0.5)
+        ax.set_axisbelow(True)
+        if gap:
+            for x0 in (-gap / 2, gap / 2):
+                ax.axvline(x0, color="0.45", lw=0.8, ls=":")
+            ax.axvspan(xlim[0], -gap / 2 - U_CMP_DEEP_EV, color="0.5", alpha=0.08, lw=0)
+            ax.axvspan(gap / 2 + U_CMP_DEEP_EV, xlim[1], color="0.5", alpha=0.08, lw=0)
+        for side in (-1, 1):                                       # AMSET 掺杂网格覆盖的 u 区间
+            uu = [u for x, u in d["pairs"] if x * side > 0]
+            if uu:
+                ax.axvspan(min(uu), max(uu), color=C_ADP_U, alpha=0.09, lw=0)
+        ys = []
+        if bt:                                                     # BT2：n、p 两支分开（两侧 τ 不同，不跨中线连线）
+            for typ in ("n", "p"):
+                xy = [(x, y) for x, y, n in zip(bt["u"], bt["vals"][a][col], bt["n"])
+                      if y is not None and (n < 0) == (typ == "n") and (not logy or y > 0)]
+                _seg(ax, xy, color=C_BT2_U, lw=2.0, zorder=3)
+                ys += [y for x, y in xy if xlim[0] <= x <= xlim[1]]
+        for lab, pts in sorted((lit.get((q, a)) or lit.get((q, "avg")) or {}).items()):
+            xs = np.array([p[0] for p in pts], float)
+            yv = np.array([p[1] for p in pts], float)
+            if len(xs) > 2:                                        # 数字化曲线的断档（> 5 倍中位间距）不连
+                gapx = np.diff(xs) > 5 * max(np.median(np.diff(xs)), 1e-6)
+                xs = np.insert(xs, np.where(gapx)[0] + 1, np.nan)
+                yv = np.insert(yv, np.where(gapx)[0] + 1, np.nan)
+            ax.plot(xs, yv, color=C_LIT_U, lw=1.8, ls=(0, (4, 2)), zorder=4,     # 稀疏的（< 40 点）加点标出读数位置
+                    marker="x" if len(pts) < 40 else None, ms=4)
+            ys += [y for x, y in zip(xs, yv) if y == y and xlim[0] <= x <= xlim[1]]
+        if mech:
+            for key in order:
+                for typ in ("n", "p"):
+                    pts = [r for r in d["amset"][key] if r["type"] == typ]
+                    line = [p for p in _xy(pts, a, col, lambda r: not r["pinned"]) if not logy or p[1] > 0]
+                    dots = [p for p in _xy(pts, a, col) if not logy or p[1] > 0]
+                    _seg(ax, line, color=colors[key], lw=1.2, zorder=5)
+                    if dots:
+                        ax.plot([p[0] for p in dots], [p[1] for p in dots], ls="none", marker=".", ms=6,
+                                color=colors[key], zorder=5)
+                    ys += [y for x, y in dots if xlim[0] <= x <= xlim[1]]
+        adp = d["amset"].get("ADP_only") or []
+        for typ in ("n", "p"):
+            pts = [r for r in adp if r["type"] == typ]
+            line = [p for p in _xy(pts, a, col, lambda r: not r["pinned"]) if not logy or p[1] > 0]
+            dots = [p for p in _xy(pts, a, col) if not logy or p[1] > 0]
+            _seg(ax, line, color=C_ADP_U, lw=1.4, zorder=6)
+            if dots:
+                ax.plot([p[0] for p in dots], [p[1] for p in dots], ls="none", marker="o", ms=6.5,
+                        mfc=C_ADP_U, mec="white", mew=1.2, zorder=7)
+            ys += [y for x, y in dots if xlim[0] <= x <= xlim[1]]
+        if logy:
+            ax.set_yscale("log")
+            pos = [y for y in ys if y > 0]
+            if pos:
+                top = 10 ** math.ceil(math.log10(max(pos)) + 0.05)
+                ax.set_ylim(max(10 ** math.floor(math.log10(min(pos))), top * 1e-6), top)
+        else:
+            m = max([abs(y) for y in ys] + [1.0])
+            ax.set_ylim(-min(1.1 * m, 2500), min(1.1 * m, 2500))
+            ax.axhline(0, color="k", lw=0.5)
+        tw = ax.twiny()
+        tw.set_xlim(*xlim)
+        tk = _ucmp_ticks(d, xlim)
+        tw.set_xticks([u for u, _ in tk])
+        tw.set_xticklabels(["$10^{%d}$" % p for _, p in tk], fontsize=7)
+        tw.tick_params(axis="x", length=3, pad=1, colors="0.35")
+        if top_label:
+            tw.set_xlabel("|n| (cm$^{-3}$, %s)    $\\leftarrow$ p-type | n-type $\\rightarrow$" % unit_n,
+                          fontsize=8, color="0.35")
+
+    made = 0
+    for q, col, ylab, logy in U_CMP_QUANTS:
+        for mech in (False, True):
+            if mech and not order:
+                continue
+            fig, axs = plt.subplots(2, len(dirs), figsize=(5.2 * len(dirs), 8.0), squeeze=False)
+            for ia, a in enumerate(dirs):
+                for ir, xl in enumerate((full, zoom)):
+                    ax = axs[ir][ia]
+                    _panel(ax, q, col, logy, a, xl, mech, ir == 0)
+                    ax.text(0.015, 0.97, "%s_%s%s" % (q, a, "" if ir == 0 else "  (band edges)"),
+                            transform=ax.transAxes, fontsize=9, va="top")
+                    if ia == 0:
+                        ax.set_ylabel(ylab, fontsize=9)
+                    ax.set_xlabel("chemical potential u (eV, mid-gap = 0)", fontsize=8.5)
+            hh = []
+            if bt:
+                hh.append(Line2D([], [], color=C_BT2_U, lw=2, label="BT2 x DPT-$\\tau$ (S8.1)"))
+            if any(r["vals"][a].get(col) is not None for r in d["amset"].get("ADP_only") or [] for a in dirs):
+                hh.append(Line2D([], [], color=C_ADP_U, lw=1.4, marker="o", ms=6, mfc=C_ADP_U, mec="white",
+                                 label="AMSET ADP only (%s)" % ("S8.4" if is_2d else "S8")))
+            if any(lit.get((q, a)) or lit.get((q, "avg")) for a in dirs):
+                labs = sorted({lb for a in dirs for lb in (lit.get((q, a)) or lit.get((q, "avg")) or {})})
+                hh.append(Line2D([], [], color=C_LIT_U, lw=1.8, ls=(0, (4, 2)), label=", ".join(labs)))
+            if mech:
+                hh += [Line2D([], [], color=colors[k], lw=1.2, marker=".", ms=5, label=labels.get(k, k))
+                       for k in order if any(r["vals"][a].get(col) is not None for r in d["amset"][k] for a in dirs)]
+            if nz:
+                hh.append(Patch(color=C_ADP_U, alpha=0.18, lw=0, label="AMSET doping grid (|n| = %s - %s cm$^{-3}$)"
+                                % tuple(("%.2g" % v).replace("e+", "e") for v in (nz[0], nz[-1]))))
+            if gap:
+                hh.append(Patch(color="0.5", alpha=0.16, lw=0, label="deep bands (> %.1f eV beyond the band edges)"
+                                % U_CMP_DEEP_EV))
+            cap = ["x: chemical potential u, mid-gap = 0 (dotted: band edges +/-Eg/2, Eg = %s). BT2: S8.1 mu grid - its"
+                   " mid-gap (%s); AMSET: E_F solved per doping (transport.json fermi_levels) - its mid-gap (%s)"
+                   % (("%.3f eV" % gap) if gap else "?", d.get("bt2_src") or "-", d.get("amset_src") or "-"),
+                   "top axis: |n| at that u (%s) - from the AMSET (doping, E_F) pairs inside its doping grid, from BT2"
+                   " n(u) beyond it; dopings below n_i(T) all sit at the intrinsic level" % unit_n,
+                   "BT2 x DPT-$\\tau$: BoltzTraP2 CRTA, per direction (sigma/tau)_a x DPT tau_a (electron tau for n-type,"
+                   " hole tau for p-type); kappa_e = BoltzTraP2 kappa_e/tau x tau; mu = sigma/(e|n|), masked where"
+                   " bipolar or within %g kT of mid-gap" % MU_SCAN_MIDGAP_KT,
+                   "AMSET ADP only: %s; AMSET points within %g kT of the intrinsic level (doping < n_i) not joined"
+                   % ("mobility only (no mesh): sigma = |n| e mu_ADP, no S/kappa_e" if adp_partial else
+                      "acoustic deformation potential only (subset of the same run)", U_CMP_PIN_KT)]
+            if mech:
+                cap += _mech_caption([(k,) for k in order], d["set_meta"], {k: labels.get(k, k) for k in order})
+            if is_2d:
+                cap.append("2D: sigma, kappa_e, PF normalized by layer thickness t (cell value x c/t = %.3f)" % d["fac"]
+                           if d.get("geom") else "2D: per AMSET cell (no 2d_correction.json)")
+            cap.append("literature: %s" % ("; ".join(lit_src) if lit_src else
+                                           "none - put digitized curves in <material>/literature/*.csv (columns"
+                                           " quantity,axis,u_eV,value[,T_K,label,material]; u with mid-gap = 0)"))
+            title = ("%s  %s vs chemical potential, %.0f K: BT2 x DPT-$\\tau$ / AMSET ADP only / literature%s"
+                     % (M, ylab.split(" (")[0], T, " + AMSET by mechanism" if mech else ""))
+            cap = [w for c in cap for w in textwrap.wrap(c, int(31 * len(dirs) * 2.6))]
+            fig.set_figheight(8.0 + 0.16 * len(cap))
+            _place_caption(fig, cap, hh, title, min(len(hh), len(dirs) + 1), fs=7.4, title_fs=11)
+            fig.savefig(odir / ("%s_%s_vs_u%s_%.0fK.png" % (M, q, "_mechanisms" if mech else "", T)), dpi=130)
+            plt.close(fig)
+            made += 1
+    cols = ["source", "dataset", "label", "axis", "type", "u_eV", "n_cell_cm-3", "n_axis_cm-3"] + [q[1] for q in
+                                                                                                  U_CMP_QUANTS]
+    with open(odir / ("%s_vs_u_%.0fK.csv" % (M, T)), "w", newline="") as fh:
+        fh.write("# [0078] u = chemical potential, mid-gap = 0 (eV); n_axis = n_cell x %.4f (%s); sigma, kappa_e, PF %s;"
+                 " BT2 mid-gap from %s; AMSET mid-gap from %s\n"
+                 % (nf, unit_n, ("x c/t = %.4f" % d["fac"]) if (is_2d and d.get("geom")) else "as computed",
+                    d.get("bt2_src"), d.get("amset_src")))
+        w = csv.writer(fh)
+        w.writerow(cols)
+        if bt:
+            for a in dirs:
+                for i, (u, n) in enumerate(zip(bt["u"], bt["n"])):
+                    w.writerow(["BT2", BT2_KEY, BT2_LABEL, a, "n" if n < 0 else "p", u, n, n * nf]
+                               + ["" if bt["vals"][a][q[1]][i] is None else bt["vals"][a][q[1]][i]
+                                  for q in U_CMP_QUANTS])
+        for key, pts in d["amset"].items():
+            for r in pts:
+                for a in dirs:
+                    w.writerow(["AMSET", key, labels.get(key, key), a, r["type"], r["u"], r["n"], r["n"] * nf]
+                               + ["" if r["vals"][a].get(q[1]) is None else r["vals"][a][q[1]] for q in U_CMP_QUANTS])
+        for (q, a), g in sorted(lit.items()):
+            col = dict((x[0], x[1]) for x in U_CMP_QUANTS)[q]
+            for lab, pts in g.items():
+                for u, v in pts:
+                    w.writerow(["literature", "", lab, a, "", u, "", ""] + [v if c[1] == col else "" for c in U_CMP_QUANTS])
+    print("[plots] %s/%s_<量>_vs_u[_mechanisms]_%.0fK.png x%d + .csv%s"
+          % (U_CMP_DIR, M, T, made, "（含文献：%s）" % "; ".join(lit_src) if lit_src else "（无文献数据）"))
+    return True
+
+
 def write_transport_plots(cwd, out, is_2d, plots=None, M=None):
     """[0033]-[0035] 规定格式绘图输出（图 + 同目录数据）到【材料根目录】的 transport_plots/：
       transport_models_<段>/<M>_transport_models_<段名>.png + _<T>K.csv   [0056][0057] 按浓度两段各一个文件夹：
@@ -3678,6 +4142,9 @@ def write_transport_plots(cwd, out, is_2d, plots=None, M=None):
       temperature_series/<M>_<数据集>_<段名>.png/.csv   [0039][0057] 每个数据集（overall / intrinsic / ADP_only / 子集 / BT2）
                                                单独一张 σ/S/PF/κe 随浓度图，每温度一条线（低温蓝 -> 高温红）；前叫 datasets/
       mu_scan/<M>_mu_scan_600K.png/.csv          [0057] BT2（线）与 AMSET（点）随 μ − E_VBM；前为 bt2_muscan/ + amset_scan/
+      mu_compare/<M>_<量>_vs_u[_mechanisms]_600K.png + <M>_vs_u_600K.csv   [0078] 文献口径：横轴化学势 u（带隙中点 = 0）、
+                                               上横轴载流子浓度；σ/S/PF/κe/μ 各两张（BT2×DPT-τ + AMSET ADP only + 文献；
+                                               再加 AMSET 各机制组合），列 = 方向，下行带边放大
     [0035] 原 <M>_intrinsic.png 与 <M>_transport.png 数据集重叠（overall/ADP/DPT 三套重复），
       已合并为一张 <M>_transport.png；额外机制对照按 S8.4 可用结果动态显示。
     [0047] 2026-10-15 用户选 2：<M>_intrinsic.png 恢复为【只画基础 4 条】(overall / 去 IMP /
@@ -4185,6 +4652,10 @@ def write_transport_plots(cwd, out, is_2d, plots=None, M=None):
         write_mu_scan(cwd, out, plots, M, is_2d)
     except Exception as _e:                                       # noqa: BLE001
         print("[WARN] μ 扫描图失败（%s: %s）" % (type(_e).__name__, _e))
+    try:                                                          # [0078] 文献口径化学势对比：mu_compare/
+        write_u_compare(cwd, plots, M, is_2d)
+    except Exception as _e:                                       # noqa: BLE001
+        print("[WARN] u 对比图失败（%s: %s）" % (type(_e).__name__, _e))
 
     try:                                                          # [0040] 本征载流子（未掺杂）单独出图
         write_undoped_plots(cwd, plots, M, is_2d)
