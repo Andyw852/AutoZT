@@ -86,17 +86,18 @@ def test_gen_chain_rm_spec_and_markers():
 # ---------------------------------------------------------------- S8.3 本征套件 / μ(T)
 def test_s83_suite_picks_up_overall_without(tmp_path):
     S = _s83()
-    assert S._intr_legend("ADP_POP", {"sets": {"ADP_POP": {"labels": ["ADP"]}}}, "ADP+POP") == "ADP only (acoustic limit)"   # [0054]
+    assert S._intr_legend("ADP_POP", {"sets": {"ADP_POP": {"labels": ["ADP"]}}}, "ADP+POP") == "ADP"   # [0079]
     cwd = T32._material(tmp_path)
     _add_without(cwd)
     data, geom, rows = T32._rows(S, cwd)
     assert [d[0] for d in data["set_defs"]] == ["ADP_only", "ADP_POP", "ADP_POP_ODP", "intrinsic", "overall", "overall_noODP"]
     r = T32._pick(rows, 300.0, "overall_noODP", "n", T32.N2D[0])
     assert r["mu_cm2/Vs"] == pytest.approx(150.0, rel=1e-6)
-    assert S._intr_legend("overall_noODP", data, "x") == "phonon + impurity (ADP+POP+IMP+IVS)"
+    assert S._intr_legend("overall_noODP", data, "x") == "ADP+POP+IVS+IMP"          # [0079] 按 MECH_ORDER 排
+    assert dict((d[0], d[2]) for d in data["set_defs"])["overall_noODP"] == "ADP+POP+IVS+IMP"   # 不再写 overall w/o ODP
     L = S._intr_summary(tmp_path, rows, geom, data, ["a.png"])
     assert any("mu_noODP" in ln for ln in L) and any(ln.startswith("# overall_noODP overall_noODP.json") for ln in L)
-    assert "w/o ODP: same mesh with ODP removed" in S._intr_caption(geom, data)
+    assert "ADP+POP+IVS+IMP (same mesh with ODP removed)" in S._intr_caption(geom, data)
 
 
 def test_s83_without_set_absent_or_stale(tmp_path):

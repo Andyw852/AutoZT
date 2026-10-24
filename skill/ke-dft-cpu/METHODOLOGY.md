@@ -350,15 +350,41 @@ step8.x 的 `_SKILL_REV` 写进 comparison_summary.txt。改脚本即提交 GitH
   （S8.2 / S8.3 遇到金属会报错并提示这一行）。S5 介电（DFPT）对金属也没有意义，只被 S8 用；关掉 `amset3d` 后它
   不再被下游需要，已在跑的可以按需停掉（`stop` 先请示）。
 
+## [0079] 图例一律按实际散射机制组合命名（S8.3 全部图；2026-10-24 用户定）
+
+- **为什么**：用户：「phonon + impurity 这个名称并不好，应该按照实际的散射机制叠加命名，所有流程所有图片都是」。
+  [0054] 的代称（phonon + impurity / phonon-limited / partial phonon / ADP only (acoustic limit)）要读者自己去对
+  这一轮开了哪些机制，换个材料（非极性没有 POP、开了 ODP/IVS）含义就变。
+- **现在**：图例 = 实际机制组合（`mech_tag`），按 ADP → POP → ODP → IVS → PIE → IMP 排、`+` 连接，AMSET 曲线加前缀 `AMSET `：
+
+  | 内部键（不变） | 以前的图例 | 现在的图例（例：本轮 ADP+POP+IMP） |
+  |---|---|---|
+  | `overall` | phonon + impurity (ADP+IMP+POP) | `AMSET ADP+POP+IMP` |
+  | `intrinsic` | phonon-limited (ADP+POP) | `AMSET ADP+POP` |
+  | `ADP_only` | ADP only (acoustic limit) | `AMSET ADP` |
+  | `ADP_POP` 等子集 | partial phonon (ADP+POP) | `AMSET ADP+POP` |
+  | `overall_no*` | overall w/o ODP | 去掉后的实际组合，如 `AMSET ADP+POP+IVS+IMP` |
+  | `BT2_DPTtau` | BT2×DPT-τ | `BT2×DPT-τ (ADP)`（DPT τ 只含声学形变势） |
+  | DPT 横线 / μ(T) | DPT | `DPT (ADP)` |
+
+  - 单机制 μ（mobility_mechanisms_*/、mechanism_resolved）：`ADP`、`POP`、`IMP` …；总值 `ADP+POP+IMP together`；
+    mechanism_resolved 的总值行键改为 `combined`，新增 `total_mechs` 列写实际组合；n = p 点（N_ii = 0）写
+    `ADP+POP [IMP = 0 at n = p]`（同本征载流子图）。
+  - comparison_300K.png：`AMSET <组合>`（S8）/ `AMSET-2D <组合>`（S8.4）/ `AMSET ADP` / `BT2×DPT-τ (ADP)` / `DPT (ADP)`。
+  - temperature_series/ 的文件名后缀同样按 `mech_tag` 排序（如 `<M>_ADP+POP+IMP_<段>.png`，以前是 AMSET 的键序 ADP+IMP+POP）。
+  - transport_models_* 标题 "N models: …" 与图例只列本轮真有数据的数据集（以前没有子集时也列出 phonon-limited）。
+  - 机制未知（旧回退文件没有 intrinsic_labels）才退回说明性文字：`AMSET all mechanisms` / `AMSET w/o IMP`。
+- **不变**：数据集键（overall / intrinsic / ADP_only …）、CSV 列名、文件夹名、zt-dft-cpu 读取的表。
+
 ## [0078] 化学势扫描对比图 mu_compare/（S8.3；2026-10-24 用户要求）
 
 - **为什么**：用户要文献口径的对比图——横轴化学势 u（带隙中点 = 0），上横轴该 u 处的载流子浓度，
-  BT2×DPT-τ、AMSET ADP only、文献三条放一起；每个随浓度变化的量都要，再加一张带 AMSET 各机制组合的。
+  BT2×DPT-τ、AMSET ADP、文献三条放一起；每个随浓度变化的量都要，再加一张带 AMSET 各机制组合的。
   已有的 `mu_scan/`（[0057]）是一张 5 联图、横轴 μ − E_VBM、只取面内平均、没有文献和上横轴，保留不动。
 - **产物**（`transport_plots/mu_compare/`，温度同 `mu_scan`，600 K）：
-  - `<M>_<量>_vs_u_600K.png`，量 = sigma / S / PF / kappa_e / mu：BT2×DPT-τ（蓝线）+ AMSET ADP only（橙点线）+ 文献（灰虚线，有数据时）；
-  - `<M>_<量>_vs_u_mechanisms_600K.png`：上面三条 + 本轮 AMSET 的各机制组合（全机制 = phonon + impurity、去 IMP =
-    phonon-limited、各 SUBSETS 子集、overall_no*；按材料实际开的机制，有什么画什么）；
+  - `<M>_<量>_vs_u_600K.png`，量 = sigma / S / PF / kappa_e / mu：BT2×DPT-τ (ADP)（蓝线）+ AMSET ADP（橙点线）+ 文献（灰虚线，有数据时）；
+  - `<M>_<量>_vs_u_mechanisms_600K.png`：上面三条 + 本轮 AMSET 的各机制组合（全机制、去 IMP、各 SUBSETS 子集、overall_no*；
+    按材料实际开的机制，有什么画什么，图例按实际机制组合命名，见 [0079]）；
   - `<M>_vs_u_600K.csv`：图里每条曲线的数据（source / dataset / axis / u / n_cell / 轴口径 n / 五个量）。
   - 每张图：列 = 方向（2D xx、yy；3D 加 zz），上行全范围（|u| ≤ 3 eV 与 BT2 网格取交集）、下行带边放大（带边外 0.6 eV）。
     灰底 = 深能带区（离带边 > 0.5 eV），橙底 = AMSET 掺杂网格覆盖的 u 区间，点线 = 带边 ±Eg/2。
@@ -981,7 +1007,7 @@ B 同意新增步骤；C 与 DFPT 基准差 20–30% 以内算通过；D 用 309
 ## [0054] 命名与电声文献统一（2026-10-16 用户定）
 
 规则：**"intrinsic" 只指本征载流子**（未掺杂，n = p = n_i，教科书 intrinsic carrier concentration）；散射一律按
-物理含义 + 实际机制组合命名（`_phys_label`）：
+物理含义 + 实际机制组合命名（`_phys_label`；**[0079] 起图例只写实际机制组合，下表左两列仅作历史对照**）：
 
 | 含义 | 图例 / 对外名 | 文献对应 | 内部键 / 文件（不改，兼容旧结果与 zt-dft-cpu） |
 |---|---|---|---|
