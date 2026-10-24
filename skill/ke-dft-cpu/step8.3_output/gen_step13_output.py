@@ -1423,6 +1423,10 @@ def build_mu_vs_T(cwd, is_2d):
                     row[c] = v if (v is not None and v == v) else None
                 for c in _param_cols(is_2d):                            # [0030] 分方向参数
                     row[c] = (params.get(d) or {}).get(c)
+                # τ 与 mu_DPT 同标度（m* 不随 T 变，τ = μ m*/e）：dpt_result.json 里是 T0 的值，换到本行温度。
+                #   以前原样抄 T0 的 τ，600 K 的参数表里 μ 换了温、τ 还是 300 K 的（差 2 倍）。
+                if row.get("tau_DPT_fs") is not None and f:
+                    row["tau_DPT_fs"] = row["tau_DPT_fs"] * f
                 _ts, _sh = _scope_share(scopes.get(car), T)             # [0024] mu_DPT 代表的谷占多少载流子
                 row["DPT_edge_share"] = (_sh if (row["mu_DPT"] is not None and _ts is not None
                                                  and abs(_ts - T) < 1e-6) else None)
