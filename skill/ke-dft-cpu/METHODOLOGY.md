@@ -350,6 +350,25 @@ step8.x 的 `_SKILL_REV` 写进 comparison_summary.txt。改脚本即提交 GitH
   （S8.2 / S8.3 遇到金属会报错并提示这一行）。S5 介电（DFPT）对金属也没有意义，只被 S8 用；关掉 `amset3d` 后它
   不再被下游需要，已在跑的可以按需停掉（`stop` 先请示）。
 
+## [0080] 图标题 / 图注精简；横轴为掺杂浓度时近本征段与掺杂段分开（S8.3；2026-10-24 用户定）
+
+- **用户原话**：「每个图的标题太复杂了，可以简单明了一点，然后下面的图注写上合适的内容，也简洁点」；
+  「本征和掺杂在以化学势为横坐标时（上面是浓度）需要画在一起，横坐标为掺杂浓度的时候应该分开绘制」；「不要搞 together 这种」。
+- **标题**只写"材料 + 是什么 + 范围/温度"，模型、口径、判据都挪进图注或图例，例如：
+  `CrS2  transport vs doping  (n = 1e16 - 1e21 cm⁻³, 100-900 K)`、`CrS2  mobility by scattering mechanism  (…)`、
+  `CrS2  σ vs chemical potential, 600 K`、`CrS2  transport at 300 K: AMSET / BT2 / DPT  (n ≥ 1e16 cm⁻³)`、
+  `CrS2  intrinsic carriers (n = p = n_i)`、`CrS2  mobility by scattering mechanism, dilute limit`。
+- **图注** 2–4 行：AMSET / BT2×DPT-τ (ADP) 各是什么、本图用到的机制缩写、横轴口径（三维等效浓度 / 化学势）、灰底含义。
+- **总值图例**直接写机制组合（`ADP+POP+IMP`），不再写 "… together"；单机制写 `ADP`、`POP`…，含义写在图注
+  （"Dashed: AMSET with one mechanism; solid: AMSET with ADP+POP+IMP in one run"）。
+- **分段原则**：
+  - 横轴 = 掺杂浓度 → 近本征段（n ≤ 1e15，三维等效）与掺杂段（n ≥ 1e16）分开：transport_models_* / mobility_mechanisms_* /
+    temperature_series（[0056] 起已分）；本次补上 `step8.3_output/intrinsic/intrinsic_transport_<T>K.png`（掺杂段）+
+    `intrinsic_transport_<T>K_low_doping.png`，`comparison_300K.png`（掺杂段，仍是完成标记）+ `comparison_300K_low_doping.png`。
+    某段没有点就不出那张。
+  - 横轴 = 化学势（上横轴浓度）→ 两段画在一起：mu_scan/、mu_compare/（低浓度档在 600 K 多半钉在本征能级附近，只画点不连线）。
+  - 横轴 = 温度（intrinsic_carrier、mechanism_resolved、defect_equilibrium、mobility_vs_T、τ）不涉及。
+
 ## [0079] 图例一律按实际散射机制组合命名（S8.3 全部图；2026-10-24 用户定）
 
 - **为什么**：用户：「phonon + impurity 这个名称并不好，应该按照实际的散射机制叠加命名，所有流程所有图片都是」。

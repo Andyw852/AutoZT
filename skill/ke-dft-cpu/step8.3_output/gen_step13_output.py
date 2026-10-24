@@ -46,7 +46,7 @@ from pathlib import Path
 # [SKILL_REV] 版本戳：写进 comparison_summary.txt。每次改本脚本逻辑后更新。
 #   陈旧副本已咬人三次（step12/step9b 盖戳后，step13 是最后一个没盖的），
 #   这里盖戳便于从产物反查到底跑的是哪份 skill 副本。
-_SKILL_REV = "2026-10-24-0079"   # [0079] 所有图的图例/标题/图注按实际散射机制组合命名（ADP+POP+IMP、ADP+POP、ADP；AMSET 前缀；BT2×DPT-τ/DPT 标 ADP），不再用 phonon + impurity / phonon-limited / partial phonon / ADP only (acoustic limit)；没有数据的数据集不进图例   # 2026-10-24-0078   # [0078] transport_plots/mu_compare/：σ/S/PF/κe/μ 随化学势 u（带隙中点 = 0、上横轴浓度）的分方向对比图（BT2×DPT-τ + AMSET ADP only + 文献；再加 AMSET 各机制组合）+ 数据表；文献读 <材料>/literature/*.csv   # 2026-10-24-0077   # [0077] 掺杂两段改 1e16–1e21（掺杂）/ NLO–1e15（近本征）；2D 浓度轴按层厚 t 的三维等效浓度（n_cell×c/t）分段画图   # 2026-10-21-0064   # [0064] 汇总写 κ_L 来源与胞高换算（原来只打到 stdout）   # 2026-10-21-0063r1   # [0063-r1] KL_ROOT 相对路径按 ke 技能目录、支持 ~   # 2026-10-21-0062m   # [0062] 2D 自动取 κ_L：kl/ke 胞高不同时 ×Lz/c 换到 ke 元胞口径（原来只告警，ZT 偏低）   # [0061-g/m] 汇总写 S8 / S8.4 的 ADP 简并修正（每个修正过的谷一行）   # 2026-10-21-0061   # [0061] 汇总写 ADP 简并价带修正（adp_degen_fit.json）   # 2026-10-20-0059r3   # [0059-r3] 汇总写明谷内 ODP 参数来源（DFPT q=Γ / 冻声子 / 手填）   # 2026-10-19-0060   # [0060] 汇总：可忽略机制印"—"、限制因素跳过可忽略项   # 2026-10-18-0059   # [0059] 汇总写明 IVS 参数来源（DFPT / 冻声子 / 手填）   # 2026-10-18-0057r4   # [0057-r4] 分机制图超上限处画 ▲ 延伸；mu_scan 的 AMSET 点按载流子类型连细线   # [0057-r3] mu_scan：BT2 μ 带隙中央 ±5kT 内不给、κe 相减抵消到噪声（L < 0.1 L0）不画   # [0057-r2] temperature_series 相邻温度间色带填充 + 温度色标   # [0057-r1] 本征表 %.6g 浓度与 transport.json 掺杂档按相对 1e-4 配对（mu_scan 的 AMSET 点、分机制表的浓度列）；BT2 σ/τ=0 的点不画   # [0057] transport_plots 改版：phonon_limited_<段> -> transport_models_<段>；transport_<段> -> mobility_mechanisms_<段>（只画 μ，单机制 + 总值 + DPT）；datasets/ -> temperature_series/（蓝->红、分两段）；bt2_muscan/ + amset_scan/ -> mu_scan/（μ − E_VBM）；mechanism_resolved 去核对圆圈   # [0056] phonon-limited 掺杂扫描拆两段各一个文件夹（图 + 每温度表）：carrier_tuning_1e17-1e21 / low_doping_<NLO>-1e16，不再出整轴 <M>_phonon_limited.png；r2 <M>_transport.png 同样拆两段；r3 图注写明每条曲线的散射机制与缩写、刚性能带范围外灰底；r5 tools/make_transport_plots 直接调用本函数（统一算法），transport 图 μ 列加 DPT 带边横线（只画对应半边、标注在顶部空白）   # [0054] 与文献统一命名：去 IMP = phonon-limited（<M>_phonon_limited.png，原 <M>_intrinsic.png）、含 IMP = phonon + impurity、intrinsic 只指本征载流子；<M>_mechanism_resolved_mobility（原 dilute_mobility）；本征点按去 IMP 后机制去重；η=(E_c−E_F)/kT 判 f≈0   # [0053] intrinsic_carrier/<M>_dilute_mobility.png：稀薄极限（f≈0）μ(T) 按散射机制拆开 + Matthiessen 对照（空穴取 n = p 本征点，电子取最低 n 型去 IMP）   # [0052] transport_plots/ 每次整目录重建（先删旧结果）；intrinsic_carrier/ 标注本征浓度 n_i(T)（undoped_ni.json / fermi_fix 日志）；<M>_intrinsic.png 标题写明 intrinsic = 本征散射、横轴 = 掺杂浓度   # [0047] <M>_intrinsic.png 只画基础 4 条本征曲线（此前与 <M>_transport.png 同图仅换标题）+ intrinsic CSV 同步只含 4 条   # [0046] 本征五参数套件支持 3D（读 S8 的 step8_amset + subset_*.json；_geom_3d 体胞几何、c/t=1、对角 (xx+yy+zz)/3）；3D 也出 transport_plots/<M>_transport|<M>_intrinsic.png 9x5 面板   # [0045] bt2_muscan 同时画 thickness(我们)/cell(文献) 两种口径；[0041] transport_plots/defect_equilibrium/（缺陷平衡净浓度 σ/S/PF/κe vs T）   # 2026-10-13-0040   # [0040] transport_plots/intrinsic_carrier/（未掺杂本征载流子 σ/S/PF/κe vs T）；图例/文件名一律用实际机制组合 amset_<机制>；2026-10-13-0039   # [0039] transport_plots/datasets/：每个数据集单独一张 σ/S/PF/κe 图 + csv； [0038] 本征/子集图读 subset_*.json（SUBSETS）；[0036] transport_plots 加 bt2_muscan/ + amset_scan/ 两个扫描图子文件夹；[0035] transport_plots 合并 + τ 对比（tau/）
+_SKILL_REV = "2026-10-24-0080"   # [0080] 标题只写"是什么 + 范围"、图注精简；掺杂浓度横轴的 intrinsic_transport_<T>K / comparison_300K 按近本征段（_low_doping）与掺杂段分开；总值图例不用 together   # 2026-10-24-0079   # [0079] 所有图的图例/标题/图注按实际散射机制组合命名（ADP+POP+IMP、ADP+POP、ADP；AMSET 前缀；BT2×DPT-τ/DPT 标 ADP），不再用 phonon + impurity / phonon-limited / partial phonon / ADP only (acoustic limit)；没有数据的数据集不进图例   # 2026-10-24-0078   # [0078] transport_plots/mu_compare/：σ/S/PF/κe/μ 随化学势 u（带隙中点 = 0、上横轴浓度）的分方向对比图（BT2×DPT-τ + AMSET ADP only + 文献；再加 AMSET 各机制组合）+ 数据表；文献读 <材料>/literature/*.csv   # 2026-10-24-0077   # [0077] 掺杂两段改 1e16–1e21（掺杂）/ NLO–1e15（近本征）；2D 浓度轴按层厚 t 的三维等效浓度（n_cell×c/t）分段画图   # 2026-10-21-0064   # [0064] 汇总写 κ_L 来源与胞高换算（原来只打到 stdout）   # 2026-10-21-0063r1   # [0063-r1] KL_ROOT 相对路径按 ke 技能目录、支持 ~   # 2026-10-21-0062m   # [0062] 2D 自动取 κ_L：kl/ke 胞高不同时 ×Lz/c 换到 ke 元胞口径（原来只告警，ZT 偏低）   # [0061-g/m] 汇总写 S8 / S8.4 的 ADP 简并修正（每个修正过的谷一行）   # 2026-10-21-0061   # [0061] 汇总写 ADP 简并价带修正（adp_degen_fit.json）   # 2026-10-20-0059r3   # [0059-r3] 汇总写明谷内 ODP 参数来源（DFPT q=Γ / 冻声子 / 手填）   # 2026-10-19-0060   # [0060] 汇总：可忽略机制印"—"、限制因素跳过可忽略项   # 2026-10-18-0059   # [0059] 汇总写明 IVS 参数来源（DFPT / 冻声子 / 手填）   # 2026-10-18-0057r4   # [0057-r4] 分机制图超上限处画 ▲ 延伸；mu_scan 的 AMSET 点按载流子类型连细线   # [0057-r3] mu_scan：BT2 μ 带隙中央 ±5kT 内不给、κe 相减抵消到噪声（L < 0.1 L0）不画   # [0057-r2] temperature_series 相邻温度间色带填充 + 温度色标   # [0057-r1] 本征表 %.6g 浓度与 transport.json 掺杂档按相对 1e-4 配对（mu_scan 的 AMSET 点、分机制表的浓度列）；BT2 σ/τ=0 的点不画   # [0057] transport_plots 改版：phonon_limited_<段> -> transport_models_<段>；transport_<段> -> mobility_mechanisms_<段>（只画 μ，单机制 + 总值 + DPT）；datasets/ -> temperature_series/（蓝->红、分两段）；bt2_muscan/ + amset_scan/ -> mu_scan/（μ − E_VBM）；mechanism_resolved 去核对圆圈   # [0056] phonon-limited 掺杂扫描拆两段各一个文件夹（图 + 每温度表）：carrier_tuning_1e17-1e21 / low_doping_<NLO>-1e16，不再出整轴 <M>_phonon_limited.png；r2 <M>_transport.png 同样拆两段；r3 图注写明每条曲线的散射机制与缩写、刚性能带范围外灰底；r5 tools/make_transport_plots 直接调用本函数（统一算法），transport 图 μ 列加 DPT 带边横线（只画对应半边、标注在顶部空白）   # [0054] 与文献统一命名：去 IMP = phonon-limited（<M>_phonon_limited.png，原 <M>_intrinsic.png）、含 IMP = phonon + impurity、intrinsic 只指本征载流子；<M>_mechanism_resolved_mobility（原 dilute_mobility）；本征点按去 IMP 后机制去重；η=(E_c−E_F)/kT 判 f≈0   # [0053] intrinsic_carrier/<M>_dilute_mobility.png：稀薄极限（f≈0）μ(T) 按散射机制拆开 + Matthiessen 对照（空穴取 n = p 本征点，电子取最低 n 型去 IMP）   # [0052] transport_plots/ 每次整目录重建（先删旧结果）；intrinsic_carrier/ 标注本征浓度 n_i(T)（undoped_ni.json / fermi_fix 日志）；<M>_intrinsic.png 标题写明 intrinsic = 本征散射、横轴 = 掺杂浓度   # [0047] <M>_intrinsic.png 只画基础 4 条本征曲线（此前与 <M>_transport.png 同图仅换标题）+ intrinsic CSV 同步只含 4 条   # [0046] 本征五参数套件支持 3D（读 S8 的 step8_amset + subset_*.json；_geom_3d 体胞几何、c/t=1、对角 (xx+yy+zz)/3）；3D 也出 transport_plots/<M>_transport|<M>_intrinsic.png 9x5 面板   # [0045] bt2_muscan 同时画 thickness(我们)/cell(文献) 两种口径；[0041] transport_plots/defect_equilibrium/（缺陷平衡净浓度 σ/S/PF/κe vs T）   # 2026-10-13-0040   # [0040] transport_plots/intrinsic_carrier/（未掺杂本征载流子 σ/S/PF/κe vs T）；图例/文件名一律用实际机制组合 amset_<机制>；2026-10-13-0039   # [0039] transport_plots/datasets/：每个数据集单独一张 σ/S/PF/κe 图 + csv； [0038] 本征/子集图读 subset_*.json（SUBSETS）；[0036] transport_plots 加 bt2_muscan/ + amset_scan/ 两个扫描图子文件夹；[0035] transport_plots 合并 + τ 对比（tau/）
 #   bump 记录：2026-10-11-0035 —— transport_plots 合并：intrinsic 图并入 transport 图（4 条数据集
 #   overall / intrinsic / ADP only / BT2xDPT-tau），不再单独出 <M>_intrinsic*.{png,csv}，
 #   只留 <M>_transport.png + 每温度 CSV + <M>_params_<T>K.csv。
@@ -2012,29 +2012,14 @@ def _intr_legend(key, data, default):
 
 
 def _intr_caption(geom, data):
+    """[0080] 图注精简：横轴口径、灰底判据、AMSET / BT2 / DPT 各是什么（图例已是实际散射机制组合）。"""
     sets = data["sets"]
-    # [0079] 图例 = 各 AMSET 曲线的实际散射机制组合；只列本轮有的数据集
-    leg = []
-    if "ADP_only" in sets:
-        leg.append("ADP alone%s" % (" (mobility only, no mesh)" if sets["ADP_only"].get("partial") else ""))
-    if "intrinsic" in sets:
-        leg.append("%s (IMP removed)" % (mech_tag(sets["intrinsic"].get("labels")) or "mechanisms unknown"))
-    for k in sets:
-        if k in ("ADP_POP", "ADP_POP_ODP"):
-            leg.append("%s (subset)" % (mech_tag(sets[k].get("labels")) or k))
-    if "overall" in sets:
-        leg.append("%s (all mechanisms of this run)" % (mech_tag(data.get("overall_labels")) or "mechanisms unknown"))
-    leg += ["%s (same mesh with %s removed)" % (mech_tag(sets[k].get("labels")) or k, "+".join(sets[k].get("dropped") or []))
-            for k in sets if k.startswith("overall_no")]
-    return ("Bottom axis: areal density n_2D (cm^-2).  Top axis: literature 3D density n_2D/t (cm^-3), "
-            "t = %.3f A (%s).  AutoZT/AMSET files use n_cell = n_2D/c with c = %.3f A incl. vacuum, "
-            "so n_lit = n_cell x c/t (c/t = %.3f).\n"
-            "sigma, kappa_e normalized by layer thickness t (cell value x c/t); mobility, S, Lorenz do not depend on it.  "
-            "Shaded: %s (beyond rigid-band range).\n"
-            "Legend = scattering mechanisms in each AMSET curve: %s.  BT2: BoltzTraP2 CRTA with DPT tau (ADP; S, Lorenz "
-            "tau-free); BT2 mobility = sigma_total/(e|n_net|), masked where bipolar.  DPT: Bardeen-Shockley (ADP; single or "
-            "multi-valley)."
-            % (geom["t_A"], geom["t_method"], geom["c_A"], geom["c_over_t"], _interp_rule(geom)[0], "; ".join(leg) or "-"))
+    part = "; AMSET ADP has mobility only (no mesh)" if (sets.get("ADP_only") or {}).get("partial") else ""
+    return ("x: n_2D (bottom, cm^-2) and 3D-equivalent n_2D/t (top, cm^-3, t = %.3f A); sigma, kappa_e per layer "
+            "thickness (cell value x c/t = %.3f).  Shaded: %s (beyond rigid-band range).\n"
+            "AMSET: scattering mechanisms as labeled (one run; subsets re-integrated on the same mesh)%s.  %s: BoltzTraP2 "
+            "with the DPT relaxation time, mobility masked where bipolar.  DPT (ADP): Bardeen-Shockley."
+            % (geom["t_A"], geom["c_over_t"], _interp_rule(geom)[0], part, BT2_LABEL))
 
 
 def _bt2_curve(bt, dpt_T, typ, geom, xr):
@@ -2067,12 +2052,14 @@ def _bt2_curve(bt, dpt_T, typ, geom, xr):
     return {k: sorted(v) for k, v in out.items() if v}
 
 
-def plot_intrinsic_T(path, T, rows, geom, data, bt, dpt_T, material=""):
-    """[0032] 一个温度一张 2×5 图：行 n 型 / p 型，列 S、σ、κe、Lorenz、μ。2D 双横轴。"""
+def plot_intrinsic_T(path, T, rows, geom, data, bt, dpt_T, material="", nrange=None):
+    """[0032] 一个温度一张 2×5 图：行 n 型 / p 型，列 S、σ、κe、Lorenz、μ。2D 双横轴。
+    [0080] nrange = (下限, 上限)（三维等效 n_lit，cm^-3）：只画该浓度段（掺杂段 / 近本征段分开）。"""
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
-    rT = [r for r in rows if abs(r["T_K"] - T) < 1e-6]
+    rT = [r for r in rows if abs(r["T_K"] - T) < 1e-6
+          and (nrange is None or not r.get("n_lit_cm-3") or nrange[0] <= r["n_lit_cm-3"] <= nrange[1])]
     c_t_cm = geom["t_A"] * 1e-8
     fig, ax = plt.subplots(2, len(INTR_PANELS), figsize=(23, 9.6))
     for ri, (typ, tname) in enumerate((("n", "n-type (electrons)"), ("p", "p-type (holes)"))):
@@ -2127,11 +2114,8 @@ def plot_intrinsic_T(path, T, rows, geom, data, bt, dpt_T, material=""):
             a.set_xlabel("n_2D (cm$^{-2}$)", fontsize=9)
             if ci == 0 or col in ("mu_cm2/Vs", "Lorenz_WOhm/K2"):
                 a.legend(fontsize=7, loc="best")
-    _al = amset_labels(data)
-    fig.suptitle("AMSET transport by scattering mechanisms @ %.0f K%s  (%s; %s)"
-                 % (T, (" - " + material) if material else "",
-                    " / ".join(_al[k] for k in ("ADP_only", "intrinsic", "overall") if k in (data.get("sets") or {})),
-                    BT2_LABEL), fontsize=13)
+    fig.suptitle("%s  transport vs doping, %.0f K%s"                         # [0080] 标题精简
+                 % (material, T, "" if nrange is None else _rng_title(nrange)), fontsize=13)
     fig.text(0.006, 0.006, _intr_caption(geom, data), fontsize=8.2, va="bottom", ha="left", wrap=True)
     fig.tight_layout(rect=[0, 0.075, 1, 0.96])
     fig.savefig(path, dpi=130)
@@ -2201,7 +2185,7 @@ def write_intrinsic_suite(out, cwd, is_2d):
     先清掉 intrinsic/ 里上一轮的图表（温度网格变了、本轮跳过或失败时，旧文件不能冒充本轮结果）。"""
     odir = Path(out) / INTR_SUBDIR
     if odir.is_dir():
-        _old = list(odir.glob("intrinsic_transport_*K.png")) + [odir / INTR_CSV, odir / INTR_TXT]
+        _old = list(odir.glob("intrinsic_transport_*.png")) + [odir / INTR_CSV, odir / INTR_TXT]
         _n = 0
         for f in _old:
             if f.is_file():
@@ -2224,14 +2208,21 @@ def write_intrinsic_suite(out, cwd, is_2d):
     write_intrinsic_table(odir, rows, geom, data)
     material = Path(cwd).resolve().parent.name
     files = []
+    # [0080] 用户 2026-10-24：横轴是掺杂浓度时，近本征段与掺杂段分开画（同 transport_plots 的两段）：
+    #   intrinsic_transport_<T>K.png = 掺杂段 n ≥ 1e16，intrinsic_transport_<T>K_low_doping.png = 低浓度段 n ≤ 1e15
+    #   （三维等效 n_lit，3D 即体浓度）。没有该段的点就不出那张。
     for T in data["temps"]:
-        name = "intrinsic_transport_%dK.png" % round(T)
-        try:
-            bt, dpt_T = extra.get(T, (None, None))
-            plot_intrinsic_T(odir / name, T, rows, geom, data, bt, dpt_T, material=material)
-            files.append(name)
-        except Exception as e:                        # noqa: BLE001
-            print("[WARN] 本征五参数图 %.0f K 失败（%s: %s）" % (T, type(e).__name__, e))
+        for suf, nr in (("", (PL_TUNE_LO * 0.999, float("inf"))), ("_low_doping", (0.0, PL_LOW_HI * 1.001))):
+            if not any(r.get("n_lit_cm-3") and nr[0] <= r["n_lit_cm-3"] <= nr[1] for r in rows
+                       if abs(r["T_K"] - T) < 1e-6):
+                continue
+            name = "intrinsic_transport_%dK%s.png" % (round(T), suf)
+            try:
+                bt, dpt_T = extra.get(T, (None, None))
+                plot_intrinsic_T(odir / name, T, rows, geom, data, bt, dpt_T, material=material, nrange=nr)
+                files.append(name)
+            except Exception as e:                    # noqa: BLE001
+                print("[WARN] 本征五参数图 %s 失败（%s: %s）" % (name, type(e).__name__, e))
     for l_ in _intr_summary(odir, rows, geom, data, files)[:6]:
         print("[..] " + l_)
     print("[OK] 本征五参数：%s/%s + %s + %d 张图（%s）"
@@ -2359,8 +2350,10 @@ def plot_tau_E(path, tj, T_idx, cwd):
         ax.set_title("%s  %.0f K  doping %.2e cm$^{-3}$" % (car, T, tj["doping_cm3"][n]))
         ax.grid(alpha=0.3, which="both")
         ax.legend(fontsize=7)
-    fig.suptitle("τ(E) = 1/<Γ>_E (S8.4 mesh);  τ_eff = constant τ that reproduces the AMSET mobility", fontsize=9)
-    fig.tight_layout()
+    fig.suptitle("Relaxation time vs energy, %.0f K" % T, fontsize=10)               # [0080] 标题精简
+    fig.text(0.5, 0.005, "τ(E) = 1/<Γ>_E on the S8.4 mesh; τ_eff = constant τ that reproduces the AMSET mobility",
+             ha="center", va="bottom", fontsize=7.5, color="0.25")
+    fig.tight_layout(rect=[0, 0.05, 1, 0.95])
     fig.savefig(path, dpi=150)
     plt.close(fig)
 
@@ -2443,13 +2436,18 @@ def write_tau_suite(out, cwd, is_2d):
     return files
 
 
-def make_figure(out, am, bt, dpt, am2=None, geom=None):
-    """geom（[0032]，2D 才给）：横轴改成面密度 n_2D（cm^-2），上轴加文献口径 n_2D/t（cm^-3）。"""
+def make_figure(out, am, bt, dpt, am2=None, geom=None, nrange=None, fname="comparison_300K.png", M=""):
+    """geom（[0032]，2D 才给）：横轴改成面密度 n_2D（cm^-2），上轴加文献口径 n_2D/t（cm^-3）。
+    [0080] nrange = (下限, 上限)（三维等效 n_lit = n_cell × c/t，3D 即体浓度）：只画该浓度段；fname 输出文件名。"""
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
     xf = geom["c_A"] * 1e-8 if geom else 1.0          # n_cell(cm^-3) -> n_2D(cm^-2)
+    _nf = float(geom["c_over_t"]) if geom else 1.0
+
+    def inr(n_cell):                                   # [0080] 是否落在本张图的浓度段
+        return nrange is None or nrange[0] <= abs(n_cell) * _nf <= nrange[1]
     # [0079] 图例 = 实际散射机制组合（S8：AMSET；S8.4：AMSET-2D）
     A1 = "AMSET " + ((mech_tag(am.get("mechs")) or "all mechanisms") if am else "")
     A2 = "AMSET-2D " + ((mech_tag(am2.get("mechs")) or "all mechanisms") if am2 else "")
@@ -2457,9 +2455,9 @@ def make_figure(out, am, bt, dpt, am2=None, geom=None):
 
     def split(sig, y):
         n = [(abs(sig[i]) * xf, y[i]) for i in range(len(sig))
-             if sig[i] < 0 and y[i] == y[i]]
+             if sig[i] < 0 and y[i] == y[i] and inr(sig[i])]
         p = [(abs(sig[i]) * xf, y[i]) for i in range(len(sig))
-             if sig[i] > 0 and y[i] == y[i]]
+             if sig[i] > 0 and y[i] == y[i] and inr(sig[i])]
         return sorted(n), sorted(p)
 
     def top_axis(a):                                   # [0032] 2D：上轴 = 文献口径 n_2D/t
@@ -2487,7 +2485,7 @@ def make_figure(out, am, bt, dpt, am2=None, geom=None):
         if n: a.plot(*zip(*[(x, abs(y)) for x, y in n]), "--", c="C0", alpha=.7, label="BT2 n")
         if p: a.plot(*zip(*[(x, abs(y)) for x, y in p]), "--", c="C1", alpha=.7, label="BT2 p")
     a.set_xscale("log"); a.set_xlabel(XL); top_axis(a)
-    a.set_ylabel("|Seebeck| (uV/K)"); a.set_title("Seebeck @300K (directly comparable)")
+    a.set_ylabel("|Seebeck| (uV/K)"); a.set_title("|S|")
     a.legend(fontsize=8); a.grid(alpha=.3)
     # (0,1) Lorenz（[0032] 以 1e-8 为单位画：科学计数偏移文字会压住 2D 的上横轴）
     a = ax[0, 1]
@@ -2503,7 +2501,7 @@ def make_figure(out, am, bt, dpt, am2=None, geom=None):
     a.axhline(SOMMERFELD_L * (1e8 if geom else 1.0), ls=":", c="k", label="Sommerfeld 2.44e-8")
     a.set_xscale("log"); a.set_xlabel(XL); top_axis(a)
     a.set_ylabel("Lorenz (1e-8 W.Ohm/K^2)" if geom else "Lorenz (W.Ohm/K^2)")
-    a.set_title("Lorenz @300K (directly comparable)")
+    a.set_title("Lorenz number")
     a.legend(fontsize=8); a.grid(alpha=.3)
     # (0,2) sigma: amset absolute + BT2 per-tau (right axis)
     a = ax[0, 2]
@@ -2517,7 +2515,7 @@ def make_figure(out, am, bt, dpt, am2=None, geom=None):
         if n: a.plot(*zip(*n), "-.", c="C2", label="%s n (abs)" % A2)
         if p: a.plot(*zip(*p), "-.", c="C3", label="%s p (abs)" % A2)
     a.set_xscale("log"); a.set_yscale("log"); a.set_xlabel(XL); top_axis(a)
-    a.set_title("sigma @300K (amset abs; BT2 dashed=sigma/tau, shape only)")
+    a.set_title("$\\sigma$ (BT2: $\\sigma/\\tau$, right axis)")
     if bt:
         a2 = a.twinx()
         n, p = split(bt["n_signed"], bt["sigma_over_tau"])
@@ -2543,21 +2541,21 @@ def make_figure(out, am, bt, dpt, am2=None, geom=None):
                 continue
             pts = sorted((abs(bt["n_signed"][i]) * xf, bt["kappa_e_over_tau"][i] * tau)
                          for i in range(len(bt["n_signed"]))
-                         if (bt["n_signed"][i] < 0) == neg
+                         if (bt["n_signed"][i] < 0) == neg and inr(bt["n_signed"][i])
                          and bt["kappa_e_over_tau"][i] == bt["kappa_e_over_tau"][i])
             if pts:
                 a.plot(*zip(*pts), "--", c=col, alpha=.7, label="BT2×DPT-τ (ADP) %s" % nm)
     if dpt:                              # DPT κ_e = L·σ·T (WF), σ=n e μ_DPT
         import numpy as np
-        ntar = np.logspace(17, 21, 25)
+        ntar = np.array([x for x in np.logspace(17, 21, 25) if inr(x)])
         for carr, col, nm in (("electron", "C0", "n"), ("hole", "C1", "p")):
             mu = dpt.get(carr)
-            if isinstance(mu, (int, float)) and mu > 0:
+            if isinstance(mu, (int, float)) and mu > 0 and len(ntar):
                 sig = ntar * 1e6 * E_C * (mu * 1e-4)
                 a.plot(ntar * xf, SOMMERFELD_L * sig * 300.0, ":", c=col, alpha=.6,
                        label="DPT (ADP) %s, WF" % nm)
     a.set_xscale("log"); a.set_yscale("log"); a.set_xlabel(XL); top_axis(a)
-    a.set_ylabel("kappa_e (W/m/K)"); a.set_title("kappa_e @300K (3-way, see notes)")
+    a.set_ylabel("kappa_e (W/m/K)"); a.set_title("$\\kappa_e$")
     a.legend(fontsize=7); a.grid(alpha=.3)
     # (1,1) mobility: amset total(实线) + amset-ADP(点划,与DPT同为纯声学) + DPT(虚线水平)
     a = ax[1, 1]
@@ -2582,46 +2580,30 @@ def make_figure(out, am, bt, dpt, am2=None, geom=None):
         if isinstance(dpt.get("hole"), (int, float)):
             a.axhline(dpt["hole"], ls="--", c="C1", label="DPT p (ADP,300K)")
     a.set_xscale("log"); a.set_yscale("log"); a.set_xlabel(XL); top_axis(a)
-    a.set_ylabel("mobility (cm^2/Vs)"); a.set_title("Mobility @300K (amset vs DPT-ADP)")
+    a.set_ylabel("mobility (cm^2/Vs)"); a.set_title("$\\mu$")
     a.legend(fontsize=8); a.grid(alpha=.3)
     # (1,2) notes / provenance
     a = ax[1, 2]; a.axis("off")
-    notes = (
-        "Mobility comparison key:\n"
-        "  DPT is ADP-only (acoustic).\n"
-        "  Compare DPT vs AMSET ADP\n"
-        "  (dotted), NOT vs AMSET %s\n"
-        "  (all mechanisms of the run).\n"
-        "  If that << ADP, the others\n"
-        "  suppress mobility (esp. polar).\n"
-        "\n"
-        "kappa_e provenance:\n"
-        "  amset : true (full scattering).\n"
-        "  BT2   : (kappa_e/tau)*tau_DPT.\n"
-        "  DPT   : WF, L*sigma*T (rough).\n"
-        "\n"
-        "Caveat: the 'amset' curves (S8)\n"
-        "use the 3D Frohlich kernel ->\n"
-        "its total may be over-suppressed\n"
-        "for polar 2D; 'amset2d' (S8.4)\n"
-        "uses the 2D kernel.\n"
-        "S & Lorenz (tau-free) are the\n"
-        "clean amset-vs-BT2 check."
+    notes = (                                          # [0080] 精简
+        "Notes\n"
+        "  DPT (ADP) compares with AMSET ADP,\n"
+        "  not with AMSET %s.\n"
+        "  S, Lorenz: independent of tau.\n"
+        "  kappa_e: AMSET full; BT2 (ke/tau) x tau_DPT;\n"
+        "    DPT L0 sigma T.\n"
+        "  AMSET (S8): 3D Frohlich kernel;\n"
+        "  AMSET-2D (S8.4): 2D kernel."
     ) % (mech_tag((am2 or am or {}).get("mechs")) or "all")
     if geom:                                           # [0032] 2D 浓度口径图注
-        notes += ("\n\n2D: bottom n_2D (cm^-2); top n_2D/t\n"
-                  " (lit. cm^-3, t=%.2f A %s). AMSET\n"
-                  " cm^-3 = n_2D/c (c=%.2f A, vacuum):\n"
-                  " n_lit = n_cell x c/t (x%.3f).\n"
-                  " sigma, kappa_e: per cell (x c/t)."
-                  % (geom["t_A"], geom["t_method"], geom["c_A"], geom["c_over_t"]))
+        notes += ("\n\n2D: bottom n_2D (cm^-2), top n_2D/t\n"
+                  "  (t = %.2f A); sigma, kappa_e per cell." % geom["t_A"])
     a.text(0.0, (1.0 if geom else 0.98), notes, va="top", ha="left", fontsize=(7.2 if geom else 8.5),
            family="monospace", transform=a.transAxes)
 
-    fig.suptitle("Electronic transport comparison @ ~300 K "
-                 "(amset / BoltzTraP2-CRTA / DPT)", fontsize=13)
+    fig.suptitle("%s  transport at 300 K: AMSET / BT2 / DPT%s"               # [0080] 标题精简
+                 % (M, "" if nrange is None else _rng_title(nrange)), fontsize=13)
     fig.tight_layout(rect=[0, 0, 1, 0.97])
-    fig.savefig(out / "comparison_300K.png", dpi=130)
+    fig.savefig(out / fname, dpi=130)
     plt.close(fig)
 
 
@@ -2883,9 +2865,11 @@ def write_defect_plots(cwd, plots, M, is_2d):
             a.axhline(0, color="k", lw=0.5)
     h, l = axs[0][0].get_legend_handles_labels()
     if h:
-        fig.legend(h, l, loc="lower center", ncol=2, fontsize=7.5, frameon=False)
-    fig.suptitle("%s  defect-equilibrium carriers (defect-dft-cpu net p0-n0, fixed over T)  —  AMSET" % M, fontsize=11)
-    fig.tight_layout(rect=[0, 0.08 + 0.035 * len(h) / 2, 1, 0.92])
+        fig.legend(h, l, loc="lower center", ncol=2, fontsize=7.5, frameon=False, bbox_to_anchor=(0.5, 0.04))
+    fig.suptitle("%s  defect-equilibrium carriers" % M, fontsize=11)               # [0080] 标题精简
+    fig.text(0.5, 0.005, "AMSET at doping = net p0 - n0 from defect-dft-cpu (fixed over T); solid: all mechanisms,"
+             " dashed: without IMP", ha="center", va="bottom", fontsize=7.5, color="0.25")
+    fig.tight_layout(rect=[0, 0.12 + 0.035 * len(h) / 2, 1, 0.92])
     fig.savefig(ddir / ("%s_defect_equilibrium.png" % M), dpi=130)
     plt.close(fig)
     cols = ["vertex", "carrier_type", "net", "unit", "E_F_eq_eV", "T_defect_K", "T_K", "dataset",
@@ -3024,12 +3008,13 @@ def write_undoped_plots(cwd, plots, M, is_2d):
         _shade_not_dilute(a, bad_T, [r["T_K"] for r in rows])
     h, l = max((a.get_legend_handles_labels() for a in axs[0]), key=lambda hl: len(hl[0]))
     if h:
-        fig.legend(h, l, loc="lower center", ncol=min(3, len(h)), fontsize=8, frameon=False)
-    fig.suptitle("%s  intrinsic carriers (undoped, n = p = n_i; E_F near mid-gap, IMP = 0; S, sigma bipolar)  —  AMSET%s%s"
-                 % (M, "" if ni_pts else "   [n_i not recorded: rerun S8 to get it]",
-                    ("\nshaded: eta = (E_c - E_F)/kT < %g, band-edge occupation not ~ 0 (not the dilute limit)"
-                     % DILUTE_ETA_MIN) if bad_T else ""), fontsize=11)
-    fig.tight_layout(rect=[0, 0.1, 1, 0.92])
+        fig.legend(h, l, loc="lower center", ncol=min(3, len(h)), fontsize=8, frameon=False, bbox_to_anchor=(0.5, 0.05))
+    fig.suptitle("%s  intrinsic carriers (n = p = n_i)" % M, fontsize=11)          # [0080] 标题精简，说明进图注
+    fig.text(0.5, 0.005, "AMSET at zero doping: E_F near mid-gap, IMP = 0; S and $\\sigma$ include electrons and holes%s%s"
+             % ("" if ni_pts else "; n_i not recorded (rerun S8)",
+                ("; gray: $\\eta$ < %g (not dilute)" % DILUTE_ETA_MIN) if bad_T else ""),
+             ha="center", va="bottom", fontsize=7.5, color="0.25")
+    fig.tight_layout(rect=[0, 0.15, 1, 0.92])
     fig.savefig(udir / ("%s_intrinsic_carrier.png" % M), dpi=130)
     plt.close(fig)
     cols = ["T_K", "n_i_cm-3"] + (["n_i_2D_cm-2", "n_i_lit_cm-3"] if is_2d else []) + [
@@ -3201,6 +3186,7 @@ def write_mechanism_resolved_plot(cwd, plots, M, is_2d):
             print("[..] 稀薄极限 %s @%gK 限制机制：%s" % (
                 car, T_rep, "，".join("%s %.0f%%" % (m, 100 * s) for s, m in shares)))
     fig, axs = plt.subplots(1, len(cars), figsize=(5.6 * len(cars), 4.4), squeeze=False)
+    _any_bad = False
     for ax, car in zip(axs[0], cars):
         rc = [r for r in rows if r["carrier"] == car]
         mechs = list(dict.fromkeys(r["mechanism"] for r in rc if r["role"] == "main"
@@ -3210,6 +3196,7 @@ def write_mechanism_resolved_plot(cwd, plots, M, is_2d):
             ax.plot(*zip(*pts), ls="--", marker="o", ms=3, lw=1.2,
                     color=_DILUTE_COLORS.get(m, "C%d" % (ci + 3)), label=m)
         _bad = sorted({r["T_K"] for r in rc if r.get("eta") is not None and r["eta"] < DILUTE_ETA_MIN})
+        _any_bad = _any_bad or bool(_bad)
         if _bad:
             _shade_not_dilute(ax, _bad, [r["T_K"] for r in rc])
             print("[WARN] %s（n = p 点）在 %s 的 η < %g：不是稀薄极限，与文献 f ≈ 0 的值不可直接比（图上灰底）"
@@ -3220,8 +3207,7 @@ def write_mechanism_resolved_plot(cwd, plots, M, is_2d):
             if pts:
                 _tt = next((r.get("total_mechs") for r in rc if r["mechanism"] == TOTAL_NOIMP and r.get("total_mechs")),
                            None) or "+".join(mechs)
-                ax.plot(*zip(*pts), label=("Matthiessen $(\\sum 1/\\mu_i)^{-1}$ of %s" % ", ".join(mechs)
-                                           if m == MATTHIESSEN else "%s together (AMSET)" % _tt), **kw)
+                ax.plot(*zip(*pts), label=("Matthiessen $(\\sum 1/\\mu_i)^{-1}$" if m == MATTHIESSEN else _tt), **kw)
         # [0057] 用户 2026-10-18：核对点（相邻掺杂档的同一总值）不再画圆圈 —— 只留在 CSV（role = check）
         #   与上面的 WARN（相差 > DILUTE_CHECK_TOL 才打）。
         r0 = next(r for r in rc if r["role"] == "main")
@@ -3237,13 +3223,12 @@ def write_mechanism_resolved_plot(cwd, plots, M, is_2d):
         ax.set_ylabel("mobility (cm$^2$/Vs)" + (", in-plane" if is_2d else ""))
         ax.grid(alpha=0.25, lw=0.4)
         ax.legend(fontsize=7, loc="best", framealpha=0.85)
-    _tt = next((r.get("total_mechs") for r in rows if r["mechanism"] == TOTAL_NOIMP and r.get("total_mechs")), None)
-    fig.suptitle("%s  mechanism-resolved mobility%s, dilute limit (f ≈ 0) — AMSET RTA;"
-                 " shaded: $\\eta$ < %g (not dilute)\n"
-                 "black = %s together (one AMSET run); dotted = Matthiessen sum $(\\sum 1/\\mu_i)^{-1}$"
-                 " of the dashed curves (upper bound)"
-                 % (M, (" (%s)" % _tt) if _tt else "", DILUTE_ETA_MIN, _tt or "all mechanisms w/o IMP"), fontsize=9.5)
-    fig.tight_layout(rect=[0, 0, 1, 0.93])
+    fig.suptitle("%s  mobility by scattering mechanism, dilute limit" % M, fontsize=11)   # [0080] 标题精简
+    fig.text(0.5, 0.01, "Dashed: AMSET with one mechanism; solid: AMSET with all of them in one run (no IMP); dotted:"
+             " Matthiessen sum (upper bound). Electron: lowest n-type doping; hole: n = p point%s"
+             % (("; gray: $\\eta$ < %g (not dilute)" % DILUTE_ETA_MIN) if _any_bad else ""),
+             ha="center", va="bottom", fontsize=7.5, color="0.25", wrap=True)
+    fig.tight_layout(rect=[0, 0.06, 1, 0.95])
     fig.savefig(udir / ("%s_%s.png" % (M, MECH_RES_NAME)), dpi=130)
     plt.close(fig)
     cols = ["T_K", "carrier", "role", "source", "doping_cm3"] + (["n_2D_cm-2"] if is_2d else []) + [
@@ -3333,6 +3318,13 @@ PL_TUNE_LO = 1e16
 PL_LOW_HI = 1e15
 
 
+def _rng_title(nrange):
+    """[0080] 标题里的浓度段：(n ≤ 1e15 cm^-3) / (n ≥ 1e16 cm^-3)。"""
+    lo = nrange[1] < PL_TUNE_LO
+    return "  (n $\\%s$ %s cm$^{-3}$)" % ("leq" if lo else "geq",
+                                         ("%.0e" % (PL_LOW_HI if lo else PL_TUNE_LO)).replace("e+", "e"))
+
+
 def _phonon_limited_ranges(NLO, n_top=1e21):
     """[0056] (文件夹/文件名标签, 下限, 上限, 刻度, 刻度文字, S 纵轴半宽)，上下限都含端点；
     没有低浓度段时只有载流子调控区一段。[0077] 低段 [NLO, 1e15]，高段 [1e16, n_top]
@@ -3400,43 +3392,36 @@ def mobility_mechanism_rows(cwd, is_2d):
 
 
 # [0056-r3] 2026-10-18 用户要求：图注写明每条曲线用了哪些散射机制，缩写给全称。
-MECH_DESC = {"ADP": "acoustic deformation potential (LA/TA acoustic phonons)",
-             "POP": "polar optical phonon (LO, Fr\u00f6hlich)",
-             "ODP": "optical deformation potential (non-polar optical phonons)",
-             "IVS": "intervalley scattering",
-             "IMP": "ionized impurity (N_ii = |n - p|)",
+MECH_DESC = {"ADP": "acoustic deformation potential",            # [0080] 图注精简
+             "POP": "polar optical phonon",
+             "ODP": "optical deformation potential",
+             "IVS": "intervalley",
+             "IMP": "ionized impurity",
              "PIE": "piezoelectric"}
 
 
 def _mech_caption(dsets_used, set_meta, labels):
-    """[0056-r3] 9x5 图的图注（多行）：每条曲线 = 哪种计算 + 哪些散射机制；再列出出现过的机制缩写全称。
+    """[0056-r3] 图注（多行）；[0080] 精简：图例已是实际机制组合，图注只说 AMSET / BT2 是什么 + 用到的机制缩写。
     set_meta = load_intrinsic_sets() 的结果（可为 {}）；labels = 图例文字。"""
     allm = [str(m).upper() for m in (set_meta.get("overall_labels") or [])]
     sets = set_meta.get("sets") or {}
+    keys = [d[0] for d in dsets_used]
     used, lines = [], []
-    for ds, *_ in dsets_used:
+    for ds in keys:
         if ds == "BT2_DPTtau":
-            lines.append("%s: BoltzTraP2 band transport, constant relaxation time; \u03c4 from DPT (Bardeen-Shockley,"
-                         " ADP only, one energy-independent \u03c4 per carrier); \u03bc masked where bipolar"
-                         % labels.get(ds, ds))
             used.append("ADP")
             continue
         ms = allm if ds == "overall" else [str(m).upper() for m in ((sets.get(ds) or {}).get("labels") or [])]
-        if not ms and ds in ("ADP_only", "ODP", "IVS"):
-            ms = ["ADP" if ds == "ADP_only" else ds]
-        used += ms
-        what = ("all mechanisms of this run" if ds == "overall" else
-                "IMP removed" if ds == "intrinsic" else
-                "single mechanism, \u03bc only" if ds in ("ODP", "IVS") else "subset of the same run")
-        name = str(labels.get(ds, ds)).split(" (single")[0]
-        tag = mech_tag(ms)                                       # [0079] 图例本身就是机制组合，不再重复写
-        lines.append("%s: %s" % (name, what) if (tag and tag in name) else
-                     "%s: AMSET, %s (%s)" % (name, tag or "mechanisms unknown", what))
-    abbr = [m for m in dict.fromkeys(used) if m in MECH_DESC]
+        used += ms or (["ADP"] if ds == "ADP_only" else [ds] if ds in ("ODP", "IVS") else [])
+    if any(k != "BT2_DPTtau" for k in keys):
+        lines.append("AMSET: scattering mechanisms as labeled (one run; subsets re-integrated on the same mesh)")
+    if "BT2_DPTtau" in keys:
+        lines.append("%s: BoltzTraP2 with the DPT (Bardeen-Shockley) relaxation time; \u03bc masked where bipolar"
+                     % labels.get("BT2_DPTtau", BT2_LABEL))
+    abbr = [m for m in MECH_ORDER if m in used and m in MECH_DESC]
     if abbr:
         lines.append("; ".join("%s = %s" % (m, MECH_DESC[m]) for m in abbr))
     return lines
-
 
 def _clear_dir(d):
     """[0052] 清空目录内容（保留目录本身）；删不掉的只告警。
@@ -3689,23 +3674,13 @@ def write_mu_scan(cwd, out, plots, M, is_2d):
     hh = ([Line2D([], [], color="tab:blue", lw=1.3, label=BT2_LABEL)] if d["bt2"] else []) + [
         Line2D([], [], ls="none", marker=mk, ms=5, mfc="none", mec=c, mew=1.1, label=_lbl[ds])
         for ds, c, mk in MU_SCAN_SETS if ds in _have]
-    cap = ["x = chemical potential minus valence-band maximum (dotted: 0 = VBM; right = CBM, gray AMSET / blue BT2);"
-           " near the VBM = p-type (holes), near the CBM = n-type (electrons)"]
-    if d.get("bt2_vbm") is not None:
-        cap.append("BT2: S8.1 $\\mu$ grid, zero = S8.1 E_F; VBM = %+.3f eV in that frame (%s)" % (d["bt2_vbm"], d["bt2_src"]))
-    if d.get("amset_vbm") is not None:
-        cap.append("AMSET: E_F solved per doping (transport.json fermi_levels) - VBM %.3f eV (%s)"
-                   % (d["amset_vbm"], d["amset_src"]))
-    cap.append("BT2 $\\sigma$, $\\kappa_e$ = BoltzTraP2 $\\sigma/\\tau$, $\\kappa_e/\\tau$ x DPT $\\tau$(T) (electron $\\tau$ where n < 0,"
-               " hole $\\tau$ where n > 0); $\\mu$ = $\\sigma$/(e|n|), masked where bipolar and within %g kT of mid-gap;"
-               " same units as the S8.3 table" % MU_SCAN_MIDGAP_KT)
-    if d["amset"]:
-        cap.append("AMSET is solved only at its doping grid (one E_F per doping), hence points; thin lines join the n-type /"
-                   " p-type points. Dopings below n_i(T) all have E_F pinned near mid-gap and stack there (not joined;"
-                   " S of either sign = bipolar)")
+    cap = ["x: chemical potential minus VBM (dotted: VBM at 0, CBM: gray AMSET / blue BT2); p-type near the VBM,"
+           " n-type near the CBM"]                                  # [0080] 图注精简
+    cap.append("%s: BoltzTraP2 with DPT $\\tau$ (electron $\\tau$ for n, hole $\\tau$ for p); $\\mu$ masked where bipolar."
+               " AMSET: one E_F per doping (points); dopings below n_i sit near mid-gap (not joined)" % BT2_LABEL)
     fig.set_figheight(3.3 + 0.17 * len(cap) + 0.4)                 # 子图高度不被图注/图例挤掉
-    _place_caption(fig, cap, hh, "%s  chemical-potential scan, %.0f K: BT2 x DPT-$\\tau$ (line) vs AMSET (points)"
-                   % (M, T), min(len(hh), 6), fs=7.6, title_fs=11)
+    _place_caption(fig, cap, hh, "%s  transport vs chemical potential, %.0f K" % (M, T), min(len(hh), 6),
+                   fs=7.6, title_fs=11)
     fig.savefig(odir / ("%s_mu_scan_%.0fK.png" % (M, T)), dpi=130)
     plt.close(fig)
     cols = ["source", "dataset", "type", "mu_minus_VBM_eV", "E_F_or_mu_raw_eV", "n_cell_cm-3",
@@ -4118,28 +4093,18 @@ def write_u_compare(cwd, plots, M, is_2d):
             if gap:
                 hh.append(Patch(color="0.5", alpha=0.16, lw=0, label="deep bands (> %.1f eV beyond the band edges)"
                                 % U_CMP_DEEP_EV))
-            cap = ["x: chemical potential u, mid-gap = 0 (dotted: band edges +/-Eg/2, Eg = %s). BT2: S8.1 mu grid - its"
-                   " mid-gap (%s); AMSET: E_F solved per doping (transport.json fermi_levels) - its mid-gap (%s)"
-                   % (("%.3f eV" % gap) if gap else "?", d.get("bt2_src") or "-", d.get("amset_src") or "-"),
-                   "top axis: |n| at that u (%s) - from the AMSET (doping, E_F) pairs inside its doping grid, from BT2"
-                   " n(u) beyond it; dopings below n_i(T) all sit at the intrinsic level" % unit_n,
-                   BT2_LABEL + ": BoltzTraP2 CRTA, per direction (sigma/tau)_a x DPT tau_a (electron tau for n-type,"
-                   " hole tau for p-type); kappa_e = BoltzTraP2 kappa_e/tau x tau; mu = sigma/(e|n|), masked where"
-                   " bipolar or within %g kT of mid-gap" % MU_SCAN_MIDGAP_KT,
-                   "AMSET ADP: %s; AMSET points within %g kT of the intrinsic level (doping < n_i) not joined"
-                   % ("mobility only (no mesh): sigma = |n| e mu_ADP, no S/kappa_e" if adp_partial else
-                      "acoustic deformation potential only (subset of the same run)", U_CMP_PIN_KT)]
+            cap = ["u: chemical potential, mid-gap = 0 (dotted: band edges, Eg = %s); top: |n| (%s)%s"   # [0080] 精简
+                   % (("%.3f eV" % gap) if gap else "?", unit_n,
+                      "; $\\sigma$, $\\kappa_e$, PF per layer thickness" if (is_2d and d.get("geom")) else ""),
+                   "%s: BoltzTraP2 with DPT $\\tau$ per direction. AMSET: one E_F per doping; dopings below n_i sit at the"
+                   " intrinsic level (not joined)%s" % (BT2_LABEL, "; AMSET ADP has mobility only, $\\sigma$ = |n|e$\\mu$"
+                                                         if adp_partial else "")]
             if mech:
-                cap += _mech_caption([(k,) for k in order], d["set_meta"], {k: labels.get(k, k) for k in order})
-            if is_2d:
-                cap.append("2D: sigma, kappa_e, PF normalized by layer thickness t (cell value x c/t = %.3f)" % d["fac"]
-                           if d.get("geom") else "2D: per AMSET cell (no 2d_correction.json)")
-            cap.append("literature: %s" % ("; ".join(lit_src) if lit_src else
-                                           "none - put digitized curves in <material>/literature/*.csv (columns"
-                                           " quantity,axis,u_eV,value[,T_K,label,material]; u with mid-gap = 0)"))
-            title = ("%s  %s vs chemical potential, %.0f K: %s / %s / literature%s"
-                     % (M, ylab.split(" (")[0], T, BT2_LABEL, labels.get("ADP_only", "AMSET ADP"),
-                        " + AMSET by scattering mechanisms" if mech else ""))
+                cap += _mech_caption([(k,) for k in order], d["set_meta"], {k: labels.get(k, k) for k in order})[-1:]
+            cap.append("Literature: %s" % ("; ".join(lit_src) if lit_src else
+                                           "none (put digitized curves in <material>/literature/*.csv)"))
+            title = "%s  %s vs chemical potential, %.0f K%s" % (M, ylab.split(" (")[0], T,
+                                                               ", by scattering mechanism" if mech else "")
             cap = [w for c in cap for w in textwrap.wrap(c, int(31 * len(dirs) * 2.6))]
             fig.set_figheight(8.0 + 0.16 * len(cap))
             _place_caption(fig, cap, hh, title, min(len(hh), len(dirs) + 1), fs=7.4, title_fs=11)
@@ -4354,13 +4319,13 @@ def write_transport_plots(cwd, out, is_2d, plots=None, M=None):
                 ax.axvspan(min(_x0, -xe if _neg else xe), max(_x0, -xe if _neg else xe),
                            color="0.85", alpha=0.6, lw=0, zorder=0)
 
-        def _x_caption():
+        def _x_caption():                                    # [0080] 图注精简
             if NFAC != 1.0:                                  # [0077] 2D：三维等效浓度
-                return ("x: doping n (cm$^{-3}$), 3D-equivalent per layer thickness t = n_cell x c/t (c/t = %.3f;"
-                        " CSV: n_cell, n_2D); left = n-type (electrons), right = p-type (holes)" % NFAC)
-            return ("x: doping n_cell (cm$^{-3}$, AMSET cell volume%s); left = n-type (electrons),"
-                    " right = p-type (holes)" % ((" incl. vacuum; literature n = n_cell x c/t, c/t = %.3f"
-                                                  % _geo["c_over_t"]) if (_geo and not _geo.get("is_3d")) else ""))
+                return ("x: doping n (cm$^{-3}$, 3D-equivalent per layer thickness, n_cell x c/t = %.3f);"
+                        " left n-type, right p-type; $\\sigma$, $\\kappa_e$, PF per layer thickness" % NFAC)
+            if _geo and not _geo.get("is_3d"):
+                return "x: doping n_cell (cm$^{-3}$, AMSET cell incl. vacuum); left n-type, right p-type"
+            return "x: doping n (cm$^{-3}$); left n-type, right p-type"
 
         _place = _place_caption
 
@@ -4393,10 +4358,8 @@ def write_transport_plots(cwd, out, is_2d, plots=None, M=None):
                   for ds, c, ls, mk in dsets_used]
             cap = _mech_caption(dsets_used, _set_meta, _LBL)
             if _bad:
-                cap.append("Gray: beyond rigid-band range (%s; in_interpret_range = NO in the CSV) - "
-                           "results there are not reliable" % _rule_txt)
-            cap.append("%s; \u03c3, \u03bae, PF %s" % (_x_caption(), "normalized by layer thickness t"
-                                                  if (_geo and not _geo.get("is_3d")) else "bulk values"))
+                cap.append("Gray: beyond the rigid-band range (%s)" % _rule_txt)
+            cap.append(_x_caption())
             _place(fig, cap, hh, title, 3)
             fig.savefig(outpath, dpi=130)
             plt.close(fig)
@@ -4480,29 +4443,20 @@ def write_transport_plots(cwd, out, is_2d, plots=None, M=None):
             _all = [str(m).upper() for m in (_set_meta.get("overall_labels") or mechs)]
             hh = [Line2D([], [], color=_DILUTE_COLORS.get(m, "C%d" % (mechs.index(m) % 10)), ls="--", lw=1.2,
                          marker="o", ms=3.5, label=m) for m in mechs]
-            hh.append(Line2D([], [], color="k", lw=2.0, marker="s", ms=4,
-                             label="%s together" % (mech_tag(_all) or "all mechanisms")))
+            _tg = mech_tag(_all) or "all mechanisms"
+            hh.append(Line2D([], [], color="k", lw=2.0, marker="s", ms=4, label=_tg))
             hh += [Line2D([], [], color=_DPT_STYLE[t][0], lw=1.0, ls="-.",
-                          label="DPT (ADP) $\\mu_{%s}$ (band edge)" % _DPT_STYLE[t][1]) for t in ("n", "p")]
-            cap = ["Dashed: AMSET mobility with only that scattering mechanism switched on (same run, same E_F);"
-                   " black: AMSET with all mechanisms together - rates add per electronic state before the"
-                   " thermal average, so it lies below the Matthiessen sum $(\\sum 1/\\mu_i)^{-1}$ of the dashed lines",
-                   "; ".join("%s = %s" % (m, MECH_DESC[m]) for m in mechs if m in MECH_DESC),
-                   "DPT $\\mu_e$ / $\\mu_h$ (dash-dot; electrons on the n-type half, holes on the p-type half):"
-                   " Bardeen-Shockley band-edge mobility $\\mu$ = e$\\tau$/m* (ADP only), one number per carrier and T"
-                   " (value in cm$^2$/V/s written at the top) - independent of n, hence horizontal"]
+                          label="DPT (ADP) $\\mu_{%s}$" % _DPT_STYLE[t][1]) for t in ("n", "p")]
+            cap = ["Dashed: AMSET with one mechanism; solid: AMSET with %s in one run; dash-dot: DPT (ADP)"
+                   " band-edge $\\mu$ (value at top)" % _tg,
+                   "; ".join("%s = %s" % (m, MECH_DESC[m]) for m in mechs if m in MECH_DESC)]
             if _cut:
-                cap.append("Single-mechanism values more than %gx above the total / DPT are cut at that level"
-                           " ($\\blacktriangle$ = keeps rising, e.g. IMP at low doping, $\\mu_{IMP}$ ~ 1/N_ii); all values are in the CSV"
-                           % MECH_YCAP)
+                cap.append("$\\blacktriangle$: continues above the plot (values in the CSV)")
             if _bad:
-                cap.append("Gray: beyond rigid-band range (%s; in_interpret_range = NO in the CSV) - "
-                           "results there are not reliable" % _rule_txt)
+                cap.append("Gray: beyond the rigid-band range (%s)" % _rule_txt)
             cap.append(_x_caption())
-            _place(fig, cap, hh, "%s  mobility by scattering mechanism vs doping, %s  n = %s - %s cm$^{-3}$  %s\n"
-                   "AMSET single-mechanism $\\mu$ + all of them together (%s) + DPT (ADP) band edge"
-                   % (M, _what[_tag], xtl[len(xtl) // 2], xtl[0], _trng, mech_tag(_all) or "all mechanisms"),
-                   min(len(hh), 5))
+            _place(fig, cap, hh, "%s  mobility by scattering mechanism  (n = %s - %s cm$^{-3}$, %s)"
+                   % (M, xtl[len(xtl) // 2], xtl[0], _trng), min(len(hh), 6))
             _pdir = plots / ("%s_%s" % (MECH_PRE, rng[0]))
             _pdir.mkdir(exist_ok=True)
             fig.savefig(_pdir / ("%s_%s_%s.png" % (M, MECH_PRE, _tag)), dpi=130)
@@ -4536,22 +4490,17 @@ def write_transport_plots(cwd, out, is_2d, plots=None, M=None):
         #   {transport,phonon_limited}_carrier_tuning_1e16-1e21/  载流子调控区（[0077] 前 1e17-1e21）
         #   {transport,phonon_limited}_low_doping_<NLO>-1e15/     低浓度段（有 DOPING_LOW 才有；[0077] 前止于 1e16）
         #   transport = 基础 4 条 + 本轮机制对照、表含全数据集；phonon_limited = 只基础 4 条。
-        _what = {"carrier_tuning": "carrier tuning (doping) range", "low_doping": "low-doping range (non-degenerate)"}
         # [0057] 2026-10-18 用户定：
         #   transport_models_<段>/      （原 phonon_limited_<段>/，改名）基础 4 条 x 5 参数（μ/S/σ/PF/κe），表只含这 4 条
         #   mobility_mechanisms_<段>/   （原 transport_<段>/）只画 μ：AMSET 每个散射机制单独一条 + 全部机制一起的总值
         #                               + DPT 带边横线；不再画去 IMP 线、不再重复 S/σ/PF/κe 四列
         # [0079] 图例 / 标题按实际散射机制组合命名，只列有数据的
-        _used = [d for d in _base_dsets if d[0] in _have]
-        _models = (" / ".join(_LBL.get(d[0], d[0]) for d in _used if d[0] != BT2_KEY)
-                   + (("  vs  " + _LBL[BT2_KEY]) if any(d[0] == BT2_KEY for d in _used) else ""))
-        _title = ("%s  transport vs doping, %s  n = %s - %s cm$^{-3}$  %s\n"
-                  + ("%d models: " % len(_used)) + _models.replace("%", "%%"))
+        _title = "%s  transport vs doping  (n = %s - %s cm$^{-3}$, %s)"    # [0080] 标题只写是什么、范围；模型看图例
         for rng in _phonon_limited_ranges(NLO, N_TOP):
             _tag = rng[0].split("_1e")[0]
             _pdir = plots / ("%s_%s" % (MODELS_PRE, rng[0]))
             _pdir.mkdir(exist_ok=True)
-            _render_9x5(_base_dsets, _title % (M, _what[_tag], rng[4][len(rng[4]) // 2], rng[4][0], _trng),
+            _render_9x5(_base_dsets, _title % (M, rng[4][len(rng[4]) // 2], rng[4][0], _trng),
                         _pdir / ("%s_%s_%s.png" % (M, MODELS_PRE, _tag)), rng)
             for T in temps:
                 with open(_pdir / ("%s_%s_%s_%dK.csv" % (M, MODELS_PRE, _tag, int(round(T)))), "w",
@@ -4654,8 +4603,8 @@ def write_transport_plots(cwd, out, is_2d, plots=None, M=None):
                             a.set_ylim(-slim, slim); a.axhline(0, color="k", lw=0.5)
                         else:
                             a.set_yscale("log")
-                    _f.suptitle("%s  %s  -  %s, n = %s - %s cm$^{-3}$"
-                                % (M, _LBL.get(ds, ds), _what[_tag], xtl[len(xtl) // 2], xtl[0]), fontsize=11)
+                    _f.suptitle("%s  %s  (n = %s - %s cm$^{-3}$)"
+                                % (M, _LBL.get(ds, ds), xtl[len(xtl) // 2], xtl[0]), fontsize=11)
                     _f.tight_layout(rect=[0, 0.2, 1, 0.93])
                     _cbar(_f, _cm)
                     _f.savefig(_ddir / ("%s_%s_%s.png" % (M, _fn, _tag)), dpi=130); plt.close(_f)
@@ -4768,7 +4717,16 @@ def main():
     rows = build_table(am, bt, dpt, am2=am2)
     write_table(out, rows, am, bt, dpt, am2=am2)
     try:
-        make_figure(out, am, bt, dpt, am2=am2, geom=(_geom_2d(cwd) if is_2d else None))   # [0032] 2D 双横轴
+        _g = _geom_2d(cwd) if is_2d else None                    # [0032] 2D 双横轴
+        _M = Path(cwd).resolve().parent.name
+        # [0080] 掺杂浓度横轴：掺杂段（完成标记 comparison_300K.png）与近本征段（_low_doping）分开画
+        make_figure(out, am, bt, dpt, am2=am2, geom=_g, nrange=(PL_TUNE_LO * 0.999, float("inf")), M=_M)
+        _nf = float(_g["c_over_t"]) if _g else 1.0
+        if any(0 < abs(x) * _nf <= PL_LOW_HI * 1.001 for a_ in (am, am2) if a_ for x in a_["doping_signed"]):
+            make_figure(out, am, bt, dpt, am2=am2, geom=_g, nrange=(0.0, PL_LOW_HI * 1.001),
+                        fname="comparison_300K_low_doping.png", M=_M)
+        elif (out / "comparison_300K_low_doping.png").is_file():
+            (out / "comparison_300K_low_doping.png").unlink()
     except Exception as e:
         print("[WARN] 画图失败（%s: %s）——表已生成，图跳过" % (type(e).__name__, e))
     try:                                              # [0020] μ(T)，尽力而为，不影响完成标记

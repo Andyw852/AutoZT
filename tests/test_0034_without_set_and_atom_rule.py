@@ -97,7 +97,7 @@ def test_s83_suite_picks_up_overall_without(tmp_path):
     assert dict((d[0], d[2]) for d in data["set_defs"])["overall_noODP"] == "ADP+POP+IVS+IMP"   # 不再写 overall w/o ODP
     L = S._intr_summary(tmp_path, rows, geom, data, ["a.png"])
     assert any("mu_noODP" in ln for ln in L) and any(ln.startswith("# overall_noODP overall_noODP.json") for ln in L)
-    assert "ADP+POP+IVS+IMP (same mesh with ODP removed)" in S._intr_caption(geom, data)
+    assert "AMSET: scattering mechanisms as labeled" in S._intr_caption(geom, data)   # [0080] 图注精简
 
 
 def test_s83_without_set_absent_or_stale(tmp_path):
